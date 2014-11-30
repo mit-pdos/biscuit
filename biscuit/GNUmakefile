@@ -1,7 +1,7 @@
 TOP := .
 
 ASFLAGS := -Wall -Werror -nostdinc -nopie -I$(TOP) -m32
-CFLAGS := $(ASFLAGS) -MMD -MP -fno-stack-protector
+CFLAGS := $(ASFLAGS) -MMD -MP -fno-stack-protector -fno-builtin
 
 ASMS := boot.S
 CS   := bootmain.c main.c
@@ -36,4 +36,7 @@ clean:
 qemu: d.img
 	qemu-system-i386 -hda d.img
 
-.PHONY: clean
+gqemu:
+	qemu-system-i386 -hda go.img
+
+.PHONY: clean qemu gqemu

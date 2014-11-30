@@ -59,6 +59,35 @@ struct Proghdr {
 	uint32_t p_align;
 };
 
+struct Elf64 {
+	uint32_t 	e_magic;
+	uint8_t		e_ident[12];		/* Id bytes */
+	uint16_t	e_type;			/* file type */
+	uint16_t	e_machine;		/* machine type */
+	uint32_t	e_version;		/* version number */
+	uint64_t	e_entry;		/* entry point */
+	uint64_t	e_phoff;		/* Program hdr offset */
+	uint64_t	e_shoff;		/* Section hdr offset */
+	uint32_t	e_flags;		/* Processor flags */
+	uint16_t	e_ehsize;		/* sizeof ehdr */
+	uint16_t	e_phentsize;		/* Program header entry size */
+	uint16_t	e_phnum;		/* Number of program headers */
+	uint16_t	e_shentsize;		/* Section header entry size */
+	uint16_t	e_shnum;		/* Number of section headers */
+	uint16_t	e_shstrndx;		/* String table index */
+};
+
+struct Proghdr64 {
+	uint32_t	p_type;		/* entry type */
+	uint32_t	p_flags;	/* flags */
+	uint64_t	p_offset;	/* offset */
+	uint64_t	p_va;		/* virtual address */
+	uint64_t	p_pa;		/* physical address */
+	uint64_t	p_filesz;	/* file size */
+	uint64_t	p_memsz;	/* memory size */
+	uint64_t	p_align;	/* memory & file alignment */
+};
+
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
