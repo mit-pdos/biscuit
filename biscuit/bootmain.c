@@ -93,6 +93,8 @@ struct Proghdr64 {
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
 #define ELFSTART	((uint32_t)0x10000)
 
+#define SAVE	((uint32_t *)0x7e00)
+
 void readsect(void*, uint32_t);
 void readseg(uint32_t, uint32_t, uint32_t);
 
@@ -134,6 +136,14 @@ bootmain(void)
 			goto bad;
 
 		readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
+
+		// stash away bss start and size to zero it later
+		// XXX should zero bss before loading, but 512 bytes is not
+		// enough.
+		if (ph->p_memsz != ph->p_filesz) {
+			SAVE[0] = ph->p_pa + ph->p_filesz;
+			SAVE[1] = ph->p_pa + ph->p_memsz;
+		}
 	}
 
 	// call the entry point from the ELF header
