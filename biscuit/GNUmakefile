@@ -1,10 +1,11 @@
 TOP := .
 
-ASFLAGS := -Wall -Werror -nostdinc -I$(TOP) -m32
-CFLAGS := $(ASFLAGS) -MMD -MP -fno-stack-protector -fno-builtin
+BASEFLAGS := -Wall -Werror -MMD -MP
+ASFLAGS := $(BASEFLAGS) -nostdinc -I$(TOP) -m32
+CFLAGS := $(ASFLAGS) -fno-stack-protector -fno-builtin
 
 ASMS := boot.S
-CS   := bootmain.c main.c
+CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
@@ -40,11 +41,16 @@ d.img: main boot
 go.img: boot main.gobin
 	cat boot main.gobin > $@
 
-main.gobin: $(GOBIN) main.go
+main.gobin: chentry $(GOBIN) main.go
 	$(GOBIN) build -o $@ main.go
+	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
+		./chentry $@ $$ADDR
 
 main: main.o
 	$(LD) -m elf_i386 -static -e main -Ttext 0x1000 -o $@ $<
+
+chentry: chentry.c
+	$(CC) $(BASEFLAGS) -o $@ chentry.c
 
 clean:
 	rm -f $(OBJS) $(RFS) $@.elf d.img main boot main.gobin go.img
