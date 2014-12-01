@@ -1,6 +1,6 @@
 TOP := .
 
-ASFLAGS := -Wall -Werror -nostdinc -nopie -I$(TOP) -m32
+ASFLAGS := -Wall -Werror -nostdinc -I$(TOP) -m32
 CFLAGS := $(ASFLAGS) -MMD -MP -fno-stack-protector -fno-builtin
 
 ASMS := boot.S
@@ -10,7 +10,17 @@ OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
 RFS  := $(patsubst %.c,%.d,$(CS))
 
-all: d.img
+GOBIN := /opt/cody/go/go/bin/go
+
+QOPTS := -m 256M
+
+OS := $(shell uname -s)
+
+ifeq ($(OS), OpenBSD)
+	ASFLAGS += -nopie
+endif
+
+all: d.img go.img
 
 -include $(RFS)
 
@@ -25,18 +35,27 @@ bootmain.o: bootmain.c
 	$(CC) -c $(CFLAGS) -Os $<
 
 d.img: main boot
-	cat boot main > d.img
+	cat boot main > $@
+
+go.img: boot main.gobin
+	cat boot main.gobin > $@
+
+main.gobin: $(GOBIN) main.go
+	$(GOBIN) build -o $@ main.go
 
 main: main.o
 	$(LD) -m elf_i386 -static -e main -Ttext 0x1000 -o $@ $<
 
 clean:
-	rm -f $(OBJS) $(RFS) $@.elf d.img main boot
+	rm -f $(OBJS) $(RFS) $@.elf d.img main boot main.gobin go.img
 
 qemu: d.img
-	qemu-system-i386 -hda d.img
+	qemu-system-i386 $(QOPTS) -hda d.img
 
-gqemu:
-	qemu-system-i386 -hda go.img
+gqemu: go.img
+	qemu-system-i386 $(QOPTS) -hda go.img
+
+gqemu-gdb: go.img
+	qemu-system-i386 $(QOPTS) -S -s -hda go.img
 
 .PHONY: clean qemu gqemu
