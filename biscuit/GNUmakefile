@@ -47,7 +47,7 @@ main.gobin: chentry $(GOBIN) main.go
 		./chentry $@ $$ADDR
 
 main: main.o
-	$(LD) -m elf_i386 -static -e main -Ttext 0x1000 -o $@ $<
+	$(LD) -m elf_i386 -static -e main -Tdata 0x11000 -Ttext 0x20000 -o $@ $<
 
 chentry: chentry.c
 	$(CC) $(BASEFLAGS) -o $@ chentry.c

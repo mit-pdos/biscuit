@@ -91,6 +91,7 @@ struct Proghdr64 {
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
+#define ELFSTART	((uint32_t)0x10000)
 
 void readsect(void*, uint32_t);
 void readseg(uint32_t, uint32_t, uint32_t);
@@ -98,6 +99,10 @@ void readseg(uint32_t, uint32_t, uint32_t);
 void
 bootmain(void)
 {
+	// XXX it would be better to have the bootloader load the segments
+	// contiguously but setup a page table at the expected virtual address.
+	// then it is easier to figure out which memory is free.
+
 	struct Proghdr *ph, *eph;
 
 	// read 1st page off disk
@@ -107,13 +112,29 @@ bootmain(void)
 	if (ELFHDR->e_magic != ELF_MAGIC)
 		goto bad;
 
+	uint32_t elfend = ELFSTART + ELFHDR->e_ehsize +
+	    ELFHDR->e_phnum * ELFHDR->e_phentsize +
+	    ELFHDR->e_shnum * ELFHDR->e_shentsize;
+
 	// load each program segment (ignores ph flags)
 	ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
 	eph = ph + ELFHDR->e_phnum;
-	for (; ph < eph; ph++)
+	for (; ph < eph; ph++) {
 		// p_pa is the load address of this segment (as well
 		// as the physical address)
+		if (ph->p_type != 1)	// PT_LOAD
+			continue;
+
+		// make sure ELF header is preserved since out go runtime init
+		// code depends on it
+		uint32_t sstart = ph->p_pa;
+		uint32_t send = ph->p_pa + ph->p_memsz;
+		if ((sstart >= ELFSTART && sstart < elfend) ||
+		    (send >= ELFSTART && send < elfend))
+			goto bad;
+
 		readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
+	}
 
 	// call the entry point from the ELF header
 	// note: does not return!
