@@ -27,13 +27,18 @@ all: d.img go.img
 
 boot: boot.o bootmain.o
 	$(LD) --omagic -o $@.elf -m elf_i386 -static -e start -Ttext 0x7c00 $^
-	objcopy -O binary -j .text $@.elf $@.bin
+	# i want data in the bootloader now too
+	@#objcopy -O binary -j .text $@.elf $@.bin
+	objcopy -O binary $@.elf $@.bin
 	./stamp.py $@.bin
 	mv $@.bin $@
-	rm -f $@.elf
 
 bootmain.o: bootmain.c
-	$(CC) -c $(CFLAGS) -Os $<
+	# don't use -Os because it rearranges code in .text such that start
+	# isn't first. htf do i force ld to put a specific function first in
+	# the section?
+	@#$(CC) -c $(CFLAGS) -Os $<
+	$(CC) -c $(CFLAGS) $<
 
 d.img: main boot
 	cat boot main > $@
@@ -57,6 +62,9 @@ clean:
 
 qemu: d.img
 	qemu-system-i386 $(QOPTS) -hda d.img
+
+qemu-gdb: d.img
+	qemu-system-i386 $(QOPTS) -S -s -hda d.img
 
 gqemu: go.img
 	qemu-system-i386 $(QOPTS) -hda go.img

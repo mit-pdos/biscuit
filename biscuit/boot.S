@@ -6,6 +6,8 @@
 .set PROT_MODE_CSEG, 0x8         # kernel code segment selector
 .set PROT_MODE_DSEG, 0x10        # kernel data segment selector
 .set CR0_PE_ON,      0x1         # protected mode enable flag
+.set BOOTBLOCKS,     4
+.set SECTSIZE,       512
 
 .globl start
 start:
@@ -64,11 +66,92 @@ protcseg:
   
   # Set up the stack pointer and call into C.
   movl    $start, %esp
+
+  # Read the remaining sectors of the boot loader; the first was loaded for us.
+  movl  $BOOTBLOCKS-1, %ecx
+  movl  $0x7c00 + SECTSIZE, %eax
+  movl  $1, %ebx
+
+1:
+  pushl %ebx
+  pushl %eax
+  call  readsect
+  addl  $SECTSIZE, %eax
+  incl  %ebx
+  decl  %ecx
+  jnz   1b
+
   call bootmain
 
   # If bootmain returns (it shouldn't), loop.
 spin:
   jmp spin
+
+# void waitdisk(void)
+.globl waitdisk
+waitdisk:
+  movw  $0x1f7, %dx
+1:
+  inb   %dx, %al
+  andb  $0xc0, %al
+  cmpb  $0x40, %al
+  jne   1b
+  ret
+
+#define OUTB(p, v)  \
+  movw  $p, %dx;     \
+  movb  $v, %al;     \
+  outb  %al, %dx;
+
+# void readsect(void *dst, uint32_t offset)
+.globl readsect
+readsect:
+  pushl %ebp
+  movl  %esp, %ebp
+
+  pushl %eax
+  pushl %edx
+  pushl %ecx
+
+  call waitdisk
+
+  OUTB(0x1F2, 1)
+
+  movw  $0x1F3, %dx
+  movl  12(%ebp), %eax   // offset
+  outb  %al, %dx
+
+  movw  $0x1F4, %dx
+  shr  $8, %eax
+  outb  %al, %dx
+
+  movw  $0x1F5, %dx
+  shr  $8, %eax
+  outb  %al, %dx
+
+  movw  $0x1F6, %dx
+  shr  $8, %eax
+  orb   $0xe0, %al
+  outb  %al, %dx
+
+  OUTB(0x1F7, 0x20)
+
+  call waitdisk
+
+  movl  $(SECTSIZE/4), %ecx  // divide by 4 because we move one long at a time
+  movl  8(%ebp), %edi
+  movw  $0x1f0, %dx
+  cld
+  repnz insl
+
+  popl  %ecx
+  popl  %edx
+  popl  %eax
+
+  movl  %ebp, %esp
+  popl  %ebp
+
+  ret
 
 # Bootstrap GDT
 .p2align 2                                # force 4 byte alignment
@@ -97,3 +180,6 @@ gdt:
 gdtdesc:
   .word   0x17                            # sizeof(gdt) - 1
   .long   gdt                             # address gdt
+
+.org 510
+  .byte 0x55, 0xaa

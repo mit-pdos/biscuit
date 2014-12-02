@@ -93,10 +93,19 @@ struct Proghdr64 {
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
 #define ELFSTART	((uint32_t)0x10000)
 
-#define SAVE	((uint32_t *)0x7e00)
-
 void readsect(void*, uint32_t);
 void readseg(uint32_t, uint32_t, uint32_t);
+void waitdisk(void);
+void readsect(void *, uint32_t);
+
+static void memset(void *, char, uint32_t);
+static void putch(uint32_t);
+static void pnum(uint32_t);
+static void pmsg(char *);
+
+// # of sectors this code takes up; i set this after compiling and observing
+// the size of the text
+#define BOOTBLOCKS     4
 
 void
 bootmain(void)
@@ -104,8 +113,6 @@ bootmain(void)
 	// XXX it would be better to have the bootloader load the segments
 	// contiguously but setup a page table at the expected virtual address.
 	// then it is easier to figure out which memory is free.
-
-	struct Proghdr *ph, *eph;
 
 	// read 1st page off disk
 	readseg((uint32_t) ELFHDR, SECTSIZE*8, 0);
@@ -119,6 +126,7 @@ bootmain(void)
 	    ELFHDR->e_shnum * ELFHDR->e_shentsize;
 
 	// load each program segment (ignores ph flags)
+	struct Proghdr *ph, *eph;
 	ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
 	eph = ph + ELFHDR->e_phnum;
 	for (; ph < eph; ph++) {
@@ -127,8 +135,8 @@ bootmain(void)
 		if (ph->p_type != 1)	// PT_LOAD
 			continue;
 
-		// make sure ELF header is preserved since out go runtime init
-		// code depends on it
+		// make sure the segment doesn't overwrite the ELF header that
+		// we are reading
 		uint32_t sstart = ph->p_pa;
 		uint32_t send = ph->p_pa + ph->p_memsz;
 		if ((sstart >= ELFSTART && sstart < elfend) ||
@@ -136,14 +144,10 @@ bootmain(void)
 			goto bad;
 
 		readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
-
-		// stash away bss start and size to zero it later
-		// XXX should zero bss before loading, but 512 bytes is not
-		// enough.
-		if (ph->p_memsz != ph->p_filesz) {
-			SAVE[0] = ph->p_pa + ph->p_filesz;
-			SAVE[1] = ph->p_pa + ph->p_memsz;
-		}
+		// zero bss
+		if (ph->p_filesz != ph->p_memsz)
+			memset((void *)ph->p_pa + ph->p_filesz, 0,
+			    ph->p_memsz - ph->p_filesz);
 	}
 
 	// call the entry point from the ELF header
@@ -169,8 +173,9 @@ readseg(uint32_t pa, uint32_t count, uint32_t offset)
 	// round down to sector boundary
 	pa &= ~(SECTSIZE - 1);
 
-	// translate from bytes to sectors, and kernel starts at sector 1
-	offset = (offset / SECTSIZE) + 1;
+	// translate from bytes to sectors, and kernel starts at sector
+	// "BOOTBLOCKS"
+	offset = (offset / SECTSIZE) + BOOTBLOCKS;
 
 	// If this is too slow, we could read lots of sectors at a time.
 	// We'd write more to memory than asked, but it doesn't matter --
@@ -186,30 +191,55 @@ readseg(uint32_t pa, uint32_t count, uint32_t offset)
 	}
 }
 
-void
-waitdisk(void)
+static void
+memset(void *p, char c, uint32_t sz)
 {
-	// wait for disk reaady
-	while ((inb(0x1F7) & 0xC0) != 0x40)
-		/* do nothing */;
+	char *np = (char *)p;
+	while (sz--)
+		*np++ = c;
 }
 
-void
-readsect(void *dst, uint32_t offset)
+static void
+putch(uint32_t mark)
 {
-	// wait for disk to be ready
-	waitdisk();
+        static uint8_t x;
+        static uint8_t y;
 
-	outb(0x1F2, 1);		// count = 1
-	outb(0x1F3, offset);
-	outb(0x1F4, offset >> 8);
-	outb(0x1F5, offset >> 16);
-	outb(0x1F6, (offset >> 24) | 0xE0);
-	outb(0x1F7, 0x20);	// cmd 0x20 - read sectors
+        uint16_t *cons = (uint16_t *)0xb8000;
 
-	// wait for disk to be ready
-	waitdisk();
+        cons[y*80 + x++] = (0x07 << 8) | (mark & 0xff);
 
-	// read a sector
-	insl(0x1F0, dst, SECTSIZE/4);
+        if (x >= 79) {
+                x = 0;
+                y++;
+        }
+
+	if (y >= 29)
+		y = 0;
+}
+
+__attribute__((unused))
+static void
+pnum(uint32_t n)
+{
+	uint32_t nn = (uint32_t)n;
+	int i;
+
+	//for (i = 60; i >= 0; i -= 4) {
+	for (i = 28; i >= 0; i -= 4) {
+		uint32_t cn = (nn >> i) & 0xf;
+
+		if (cn >= 0 && cn <= 9)
+			putch('0' + cn);
+		else
+			putch('A' + cn - 10);
+	}
+}
+
+__attribute__((unused))
+static void
+pmsg(char *msg)
+{
+	while (*msg)
+		putch(*msg++);
 }
