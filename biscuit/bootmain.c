@@ -158,7 +158,7 @@ bootmain(void)
 	void (*entry)(uint32_t, uint32_t) =
 	    (void (*)(uint32_t, uint32_t))ELFHDR->e_entry;
 
-	// goodbye, zero physical pages in getpg()
+	// goodbye, zeroing physical pages in getpg()
 	uint32_t firstfree = getpg();
 
 	lcr3(pgdir);

@@ -64,7 +64,7 @@ protcseg:
   movw    %ax, %gs                # -> GS
   movw    %ax, %ss                # -> SS: Stack Segment
   
-  # Set up the stack pointer and call into C.
+  # Set up the stack pointer
   movl    $start, %esp
 
   # Read the remaining sectors of the boot loader; the first was loaded for us.
