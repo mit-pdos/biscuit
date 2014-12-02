@@ -6,7 +6,7 @@
 .set PROT_MODE_CSEG, 0x8         # kernel code segment selector
 .set PROT_MODE_DSEG, 0x10        # kernel data segment selector
 .set CR0_PE_ON,      0x1         # protected mode enable flag
-.set BOOTBLOCKS,     4
+.set BOOTBLOCKS,     6
 .set SECTSIZE,       512
 
 .globl start

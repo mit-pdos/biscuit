@@ -58,7 +58,7 @@ chentry: chentry.c
 	$(CC) $(BASEFLAGS) -o $@ chentry.c
 
 clean:
-	rm -f $(OBJS) $(RFS) $@.elf d.img main boot main.gobin go.img
+	rm -f $(OBJS) $(RFS) boot.elf d.img main boot main.gobin go.img chentry
 
 qemu: d.img
 	qemu-system-i386 $(QOPTS) -hda d.img
