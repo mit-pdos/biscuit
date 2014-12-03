@@ -109,6 +109,7 @@ readsect:
   pushl %ebp
   movl  %esp, %ebp
 
+  pushl %edi
   pushl %eax
   pushl %edx
   pushl %ecx
@@ -147,6 +148,7 @@ readsect:
   popl  %ecx
   popl  %edx
   popl  %eax
+  popl  %edi
 
   movl  %ebp, %esp
   popl  %ebp
