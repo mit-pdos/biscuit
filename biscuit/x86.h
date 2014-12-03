@@ -115,7 +115,7 @@ ljmp(uint16_t sel, uint32_t entry, uint32_t a1, uint32_t a2)
 
 	// 64bit code segment is setup in boot.S
 	asm volatile(
-		"andl	$~0x7, %%esp\n" // make sure rsp will be 8-byte aligned
+		//"andl	$~0x7, %%esp\n" // make sure rsp will be 8-byte aligned
 		"ljmp	*%0\n"
 		:
 		: "m"(fa), "D"(a1), "S"(a2)

@@ -30,6 +30,22 @@
  *  * bootmain() in this file takes over, reads in the kernel and jumps to it.
  **********************************************************************/
 
+void waitdisk(void);
+void readsect(void *, uint32_t);
+
+static void *allocphys(uint64_t *, uint64_t);
+static void checkmach(void);
+static uint32_t getpg(void);
+static uint32_t ensure_pg(uint64_t *);
+static void mapone(uint64_t *, uint64_t, uint64_t);
+static void memset(void *, char, uint64_t);
+static void pancake(char *msg, uint64_t addr);
+static uint64_t *pgdir_walk(uint64_t *, uint64_t);
+static void pmsg(char *);
+static void pnum(uint64_t);
+static void putch(char);
+static void readseg(uint64_t *, uint64_t, uint64_t, uint64_t);
+
 struct Elf {
 	uint32_t 	e_magic;
 #define ELF_MAGIC 0x464C457FU	/* "\x7FELF" in little endian */
@@ -67,22 +83,6 @@ struct Proghdr {
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
 #define ALLOCSTART      0x100000 // where to start grabbing pages; this must be
-
-void waitdisk(void);
-void readsect(void *, uint32_t);
-
-static void *allocphys(uint64_t *, uint64_t);
-static void checkmach(void);
-static uint32_t getpg(void);
-static uint32_t ensure_pg(uint64_t *);
-static void mapone(uint64_t *, uint64_t, uint64_t);
-static void memset(void *, char, uint64_t);
-static void pancake(char *msg, uint64_t addr);
-static uint64_t *pgdir_walk(uint64_t *, uint64_t);
-static void pmsg(char *);
-static void pnum(uint64_t);
-static void putch(char);
-static void readseg(uint64_t *, uint64_t, uint64_t, uint64_t);
 
 void
 bootmain(void)

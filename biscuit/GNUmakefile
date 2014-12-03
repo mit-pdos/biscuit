@@ -1,6 +1,6 @@
 TOP := .
 
-BASEFLAGS := -Wall -Werror -MMD -MP -O
+BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdinc -I$(TOP) -m32
 CFLAGS := $(BASEFLAGS) -nostdinc -I$(TOP) -fno-stack-protector -fno-builtin
 
@@ -47,7 +47,8 @@ go.img: boot main.gobin
 main.gobin: chentry $(GOBIN) main.go
 	$(GOBIN) build -o $@ main.go
 	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
-		./chentry $@ $$ADDR
+		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
+		else ./chentry $@ $$ADDR; fi \
 
 main: main.o
 	$(LD) -static -e main -o $@ $<
