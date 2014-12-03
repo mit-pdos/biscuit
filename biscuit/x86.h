@@ -54,6 +54,74 @@ enable_paging()
 		: "memory", "eax", "cc");
 }
 
+static __inline void
+enable_pae()
+{
+	asm volatile(
+		"movl	%%cr4, %%eax\n"
+		"orl	$(1 << 5), %%eax\n"
+		"movl	%%eax, %%cr4\n"
+		:
+		:
+		: "memory", "eax", "cc");
+}
+
+static __inline void
+cpuid(uint32_t n, uint32_t *a, uint32_t *d)
+{
+	asm volatile(
+		"cpuid\n"
+		: "=a"(*a), "=d"(*d)
+		: "0"(n)
+		: "memory");
+}
+
+static __inline uint64_t
+rdmsr(uint32_t reg)
+{
+	uint32_t high, low;
+
+	asm volatile(
+		"rdmsr\n"
+		: "=a"(low), "=d"(high)
+		: "c"(reg)
+		: "memory");
+	return ((uint64_t)high << 32) | low;
+}
+
+static __inline void
+wrmsr(uint32_t reg, uint64_t v)
+{
+	uint32_t low = (uint32_t)v;
+	uint32_t high = (uint32_t)(v >> 32);
+
+	asm volatile(
+		"wrmsr\n"
+		:
+		: "a"(low), "d"(high), "c"(reg)
+		: "memory");
+}
+
+static __inline void
+ljmp(uint16_t sel, uint32_t entry, uint32_t a1, uint32_t a2)
+{
+	struct __attribute__((packed)) {
+		uint32_t addr;
+		uint16_t seg;
+	} fa;
+
+	fa.seg = sel << 3;
+	fa.addr = entry;
+
+	// 64bit code segment is setup in boot.S
+	asm volatile(
+		"andl	$~0x7, %%esp\n" // make sure rsp will be 8-byte aligned
+		"ljmp	*%0\n"
+		:
+		: "m"(fa), "D"(a1), "S"(a2)
+		: "memory");
+}
+
 #define PGSIZE          (1UL << 12)
 #define PGOFFMASK       (PGSIZE - 1)
 #define PGMASK          (~PGOFFMASK)
@@ -61,13 +129,18 @@ enable_paging()
 #define ROUNDDOWN(x, y) ((x) & ~((y) - 1))
 #define ROUNDUP(x, y)   (((x) + ((y) - 1)) & ~((y) - 1))
 
-#define PDX(x)          (((x) >> 22) & 0x3ff)
-#define PTX(x)          (((x) >> 12) & 0x3ff)
+#define PML4X(x)        (((x) >> 39) & 0x1ff)
+#define PDPTX(x)        (((x) >> 30) & 0x1ff)
+#define PDX(x)          (((x) >> 21) & 0x1ff)
+#define PTX(x)          (((x) >> 12) & 0x1ff)
 
-#define PTE_P           (1 << 0)
-#define PTE_W           (1 << 1)
-#define PTE_U           (1 << 2)
+#define PTE_P           (1UL << 0)
+#define PTE_W           (1UL << 1)
+#define PTE_U           (1UL << 2)
 
 #define PTE_ADDR(x)     ((x) & ~0x3ff)
+
+#define IA32_EFER       (0xc0000080)
+#define IA32_EFER_LME   (1UL << 8)
 
 #endif

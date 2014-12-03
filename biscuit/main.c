@@ -30,7 +30,7 @@ put(char c)
 }
 
 int
-main()
+main(void)
 {
 	uint16_t b[] = {'B', 'i', 's', 'c', 'u', 'i', 't'};
 	char bar[] = {'/', '-', '\\', '|'};

@@ -6,7 +6,7 @@
 .set PROT_MODE_CSEG, 0x8         # kernel code segment selector
 .set PROT_MODE_DSEG, 0x10        # kernel data segment selector
 .set CR0_PE_ON,      0x1         # protected mode enable flag
-.set BOOTBLOCKS,     6
+.set BOOTBLOCKS,     5
 .set SECTSIZE,       512
 
 .globl start
@@ -163,6 +163,10 @@ readsect:
 	.word (((lim) >> 12) & 0xffff), ((base) & 0xffff);	\
 	.byte (((base) >> 16) & 0xff), (0x90 | (type)),		\
 		(0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
+#define SEG64(type,base,lim)					\
+	.word (((lim) >> 12) & 0xffff), ((base) & 0xffff);	\
+	.byte (((base) >> 16) & 0xff), (0x90 | (type)),		\
+		(0xA0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
 
 // Application segment type bits
 #define STA_X		0x8	    // Executable segment
@@ -176,9 +180,10 @@ gdt:
   SEG_NULL				# null seg
   SEG(STA_X|STA_R, 0x0, 0xffffffff)	# code seg
   SEG(STA_W, 0x0, 0xffffffff)	        # data seg
+  SEG64(STA_X|STA_R, 0x0, 0xffffffff)	# 64bit code seg
 
 gdtdesc:
-  .word   0x17                            # sizeof(gdt) - 1
+  .word   31                              # sizeof(gdt) - 1
   .long   gdt                             # address gdt
 
 .org 510

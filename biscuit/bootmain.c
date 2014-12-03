@@ -31,37 +31,8 @@
  **********************************************************************/
 
 struct Elf {
-	uint32_t e_magic;
-#define ELF_MAGIC 0x464C457FU	/* "\x7FELF" in little endian */
-	uint8_t e_elf[12];
-	uint16_t e_type;
-	uint16_t e_machine;
-	uint32_t e_version;
-	uint32_t e_entry;
-	uint32_t e_phoff;
-	uint32_t e_shoff;
-	uint32_t e_flags;
-	uint16_t e_ehsize;
-	uint16_t e_phentsize;
-	uint16_t e_phnum;
-	uint16_t e_shentsize;
-	uint16_t e_shnum;
-	uint16_t e_shstrndx;
-};
-
-struct Proghdr {
-	uint32_t p_type;
-	uint32_t p_offset;
-	uint32_t p_va;
-	uint32_t p_pa;
-	uint32_t p_filesz;
-	uint32_t p_memsz;
-	uint32_t p_flags;
-	uint32_t p_align;
-};
-
-struct Elf64 {
 	uint32_t 	e_magic;
+#define ELF_MAGIC 0x464C457FU	/* "\x7FELF" in little endian */
 	uint8_t		e_ident[12];		/* Id bytes */
 	uint16_t	e_type;			/* file type */
 	uint16_t	e_machine;		/* machine type */
@@ -78,7 +49,7 @@ struct Elf64 {
 	uint16_t	e_shstrndx;		/* String table index */
 };
 
-struct Proghdr64 {
+struct Proghdr {
 	uint32_t	p_type;		/* entry type */
 	uint32_t	p_flags;	/* flags */
 	uint64_t	p_offset;	/* offset */
@@ -91,25 +62,27 @@ struct Proghdr64 {
 
 // # of sectors this code takes up; i set this after compiling and observing
 // the size of the text
-#define BOOTBLOCKS     6
+#define BOOTBLOCKS     5
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
-#define ALLOCSTART      0x100000 // where to start grabbing pages
+#define ALLOCSTART      0x100000 // where to start grabbing pages; this must be
 
 void waitdisk(void);
 void readsect(void *, uint32_t);
 
-static void readseg(uint32_t *, uint32_t, uint32_t, uint32_t);
-static void memset(void *, char, uint32_t);
-static void putch(char);
-static void pnum(uint32_t);
-static void pmsg(char *);
-static void pancake(char *msg, uint32_t addr);
-static void mapone(uint32_t *, uint32_t, uint32_t);
+static void *allocphys(uint64_t *, uint64_t);
+static void checkmach(void);
 static uint32_t getpg(void);
-static void *ensure_mapped(uint32_t *, uint32_t);
-static uint32_t *pgdir_walk(uint32_t *, uint32_t);
+static uint32_t ensure_pg(uint64_t *);
+static void mapone(uint64_t *, uint64_t, uint64_t);
+static void memset(void *, char, uint64_t);
+static void pancake(char *msg, uint64_t addr);
+static uint64_t *pgdir_walk(uint64_t *, uint64_t);
+static void pmsg(char *);
+static void pnum(uint64_t);
+static void putch(char);
+static void readseg(uint64_t *, uint64_t, uint64_t, uint64_t);
 
 void
 bootmain(void)
@@ -119,16 +92,18 @@ bootmain(void)
 	for (i = 0; i < 8; i++)
 		readsect((char *)ELFHDR + i*SECTSIZE, BOOTBLOCKS+i);
 
+	checkmach();
+
 	// is this a valid ELF?
 	if (ELFHDR->e_magic != ELF_MAGIC)
 		goto bad;
 
-	// pgdir is always at 0x11000
-	uint32_t *pgdir = (uint32_t *)getpg();
+	// pgdir is always at ALLOCSTART
+	uint64_t *pgdir = (uint64_t *)(uint32_t)getpg();
 
 	// load each program segment (ignores ph flags)
 	struct Proghdr *ph, *eph;
-	ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
+	ph = (struct Proghdr *)((uint8_t *) ELFHDR + ELFHDR->e_phoff);
 	eph = ph + ELFHDR->e_phnum;
 	for (; ph < eph; ph++) {
 		// p_pa is the load address of this segment (as well
@@ -139,14 +114,16 @@ bootmain(void)
 		readseg(pgdir, ph->p_va, ph->p_memsz, ph->p_offset);
 
 		// zero bss
-		if (ph->p_filesz != ph->p_memsz)
-			memset((void *)ph->p_pa + ph->p_filesz, 0,
+		if (ph->p_filesz != ph->p_memsz) {
+			void *addr = allocphys(pgdir, ph->p_va);
+			memset(addr + ph->p_filesz, 0,
 			    ph->p_memsz - ph->p_filesz);
+		}
 	}
 
 	// map the bootloader; this also maps our stack
 	for (i = 0; i < BOOTBLOCKS; i++) {
-		uint32_t addr = ROUNDDOWN(0x7c00 + i*SECTSIZE, PGSIZE);
+		uint64_t addr = ROUNDDOWN(0x7c00 + i*SECTSIZE, PGSIZE);
 		mapone(pgdir, addr, addr);
 	}
 
@@ -154,19 +131,26 @@ bootmain(void)
 	mapone(pgdir, 0xb8000, 0xb8000);
 	mapone(pgdir, 0xb9000, 0xb9000);
 
+	// XXX setup tramp if entry is 64bit address...
+	if (ELFHDR->e_entry & ~((1ULL << 32) - 1))
+		pancake("fixme: entry is 64 bit!", ELFHDR->e_entry);
+
 	// goodbye, elf header
-	void (*entry)(uint32_t, uint32_t) =
-	    (void (*)(uint32_t, uint32_t))ELFHDR->e_entry;
+	uint32_t entry = (uint32_t)ELFHDR->e_entry;
 
 	// goodbye, zeroing physical pages in getpg()
 	uint32_t firstfree = getpg();
 
+	// enter long mode
+	enable_pae();
 	lcr3(pgdir);
+	uint64_t efer = rdmsr(IA32_EFER);
+	wrmsr(IA32_EFER, efer | IA32_EFER_LME);
 	enable_paging();
 
-	// call the entry point from the ELF header
-	// note: does not return!
-	entry((uint32_t)pgdir, firstfree);
+	// goto ELF town
+#define CODE64    3
+	ljmp(CODE64, entry, (uint32_t)pgdir, firstfree);
 
 bad:
 	outw(0x8A00, 0x8A00);
@@ -175,12 +159,68 @@ bad:
 		/* do nothing */;
 }
 
+static void *
+allocphys(uint64_t *pgdir, uint64_t va)
+{
+	if (va & ~((1ULL << 32) - 1))
+		pancake("va too large for poor ol' 32-bit me", va);
+
+	uint64_t *pte = pgdir_walk(pgdir, va);
+	uint32_t ma = ensure_pg(pte);
+
+	return (void *)(ma | ((uint32_t)va & PGOFFMASK));
+}
+
+static void
+checkmach(void)
+{
+	uint32_t eax, edx;
+	cpuid(0x80000001, &eax, &edx);
+	if ((edx & (1UL << 29)) == 0)
+		pancake("not a 64 bit machine?", edx);
+}
+
+// XXX many assumptions about memory layout
+static uint32_t
+getpg(void)
+{
+	static uint64_t last = ALLOCSTART;
+
+	uint64_t ret = last;
+	last += PGSIZE;
+
+	if (ret & PGOFFMASK)
+		pancake("not aligned", ret);
+
+	if (ret > 0x00f00000) {
+		ret = 0x01000000;
+		last = ret + PGSIZE;
+	}
+
+	if (ret >= 0xc0000000)
+		pancake("oom?", ret);
+
+	void *p = (void *)(uint32_t)ret;
+	memset(p, 0, PGSIZE);
+
+	return ret;
+}
+
+static uint32_t
+ensure_pg(uint64_t *entry)
+{
+	if (!(*entry & PTE_P))
+		*entry = getpg() | PTE_P | PTE_W;
+
+	return PTE_ADDR(*entry);
+}
+
 // Read 'count' bytes at 'offset' from kernel and map to virtual address 'va'.
 // Might copy more than asked
 static void
-readseg(uint32_t *pgdir, uint32_t va, uint32_t count, uint32_t offset)
+readseg(uint64_t *pgdir, uint64_t va, uint64_t count, uint64_t offset)
 {
-	uint32_t end_va;
+	uint64_t end_va;
 
 	end_va = va + count;
 
@@ -195,7 +235,7 @@ readseg(uint32_t *pgdir, uint32_t va, uint32_t count, uint32_t offset)
 	// We'd write more to memory than asked, but it doesn't matter --
 	// we load in increasing order.
 	while (va < end_va) {
-		void *pa = ensure_mapped(pgdir, va);
+		void *pa = allocphys(pgdir, va);
 		readsect(pa, offset);
 		va += SECTSIZE;
 		offset++;
@@ -203,7 +243,7 @@ readseg(uint32_t *pgdir, uint32_t va, uint32_t count, uint32_t offset)
 }
 
 static void
-memset(void *p, char c, uint32_t sz)
+memset(void *p, char c, uint64_t sz)
 {
 	char *np = (char *)p;
 	while (sz--)
@@ -231,14 +271,13 @@ putch(char mark)
 
 __attribute__((unused))
 static void
-pnum(uint32_t n)
+pnum(uint64_t n)
 {
-	uint32_t nn = (uint32_t)n;
+	uint64_t nn = (uint64_t)n;
 	int i;
 
-	//for (i = 60; i >= 0; i -= 4) {
-	for (i = 28; i >= 0; i -= 4) {
-		uint32_t cn = (nn >> i) & 0xf;
+	for (i = 60; i >= 0; i -= 4) {
+		uint64_t cn = (nn >> i) & 0xf;
 
 		if (cn >= 0 && cn <= 9)
 			putch('0' + cn);
@@ -257,7 +296,7 @@ pmsg(char *msg)
 }
 
 static void
-pancake(char *msg, uint32_t addr)
+pancake(char *msg, uint64_t addr)
 {
 	putch(' ');
 
@@ -265,71 +304,34 @@ pancake(char *msg, uint32_t addr)
 
 	putch(' ');
 	pnum(addr);
-	pmsg(" BPANCAKE");
+	pmsg(" PANCAKE");
 	while (1);
 }
 
-// XXX many assumptions about memory layout
-static uint32_t
-getpg(void)
+static uint64_t *
+pgdir_walk(uint64_t *pgdir, uint64_t va)
 {
-	static uint32_t last = ALLOCSTART;
+	uint64_t *curpage;
+	uint64_t *pml4e = &pgdir[PML4X(va)];
+	curpage = (uint64_t *)ensure_pg(pml4e);
+	uint64_t *pdpte = &curpage[PDPTX(va)];
+	curpage = (uint64_t *)ensure_pg(pdpte);
+	uint64_t *pde = &curpage[PDX(va)];
+	curpage = (uint64_t *)ensure_pg(pde);
 
-	uint32_t ret = last;
-	last += PGSIZE;
-
-	if (ret & PGOFFMASK)
-		pancake("not aligned", ret);
-
-	if (ret > 0x00f00000) {
-		ret = 0x01000000;
-		last = ret + PGSIZE;
-	}
-
-	if (ret >= 0xc0000000)
-		pancake("oom?", ret);
-
-	memset((void *)ret, 0, PGSIZE);
-
-	return ret;
-}
-
-static uint32_t *
-pgdir_walk(uint32_t *pgdir, uint32_t va)
-{
-	uint32_t pde = pgdir[PDX(va)];
-
-	if (!(pde & PTE_P)) {
-		pde = getpg() | PTE_P | PTE_W;
-		pgdir[PDX(va)] = pde;
-	}
-
-	uint32_t *pgt = (uint32_t *)PTE_ADDR(pde);
-	return &pgt[PTX(va)];
+	return &curpage[PTX(va)];
 }
 
 static void
-mapone(uint32_t *pgdir, uint32_t va, uint32_t pa)
+mapone(uint64_t *pgdir, uint64_t va, uint64_t pa)
 {
 	if (pa & PGOFFMASK)
 		pancake("pa not aligned", pa);
 
-	uint32_t *pte = pgdir_walk(pgdir, va);
+	uint64_t *pte = pgdir_walk(pgdir, va);
 
 	if ((*pte & PTE_P) && PTE_ADDR(*pte) != pa)
-		pancake("already mapped?", PTE_ADDR(pgdir[PTX(va)]));
+		pancake("already mapped?", *pte);
 
 	*pte = pa | PTE_P | PTE_W;
-}
-
-static void *
-ensure_mapped(uint32_t *pgdir, uint32_t va)
-{
-	uint32_t *pte = pgdir_walk(pgdir, va);
-
-	if (!(*pte & PTE_P)) {
-		*pte = getpg() | PTE_P | PTE_W;
-	}
-
-	return (void *)(PTE_ADDR(*pte) | (va & PGOFFMASK));
 }
