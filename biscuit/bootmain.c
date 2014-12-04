@@ -83,6 +83,7 @@ struct Proghdr {
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
 #define ALLOCSTART      0x100000 // where to start grabbing pages; this must be
+				 // 32-bit addressable
 
 void
 bootmain(void)
