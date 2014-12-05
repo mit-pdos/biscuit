@@ -70,10 +70,12 @@ static __inline void
 cpuid(uint32_t n, uint32_t *a, uint32_t *d)
 {
 	asm volatile(
+		"pushl	%%ebx\n"
 		"cpuid\n"
+		"popl	%%ebx\n"
 		: "=a"(*a), "=d"(*d)
 		: "0"(n)
-		: "memory");
+		: "memory", "ecx");
 }
 
 static __inline uint64_t
