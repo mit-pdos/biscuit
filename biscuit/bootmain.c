@@ -36,11 +36,12 @@ void readsect(void *, uint32_t);
 static void *allocphys(uint64_t *, uint64_t);
 static void checkmach(void);
 static uint32_t getpg(void);
-static uint32_t ensure_pg(uint64_t *);
+static void ensure_empty(uint64_t *, uint64_t);
+static uint32_t ensure_pg(uint64_t *, int);
 static void mapone(uint64_t *, uint64_t, uint64_t);
 static void memset(void *, char, uint64_t);
 static void pancake(char *msg, uint64_t addr);
-static uint64_t *pgdir_walk(uint64_t *, uint64_t);
+static uint64_t *pgdir_walk(uint64_t *, uint64_t, int);
 static void pmsg(char *);
 static void pnum(uint64_t);
 static void putch(char);
@@ -78,12 +79,13 @@ struct Proghdr {
 
 // # of sectors this code takes up; i set this after compiling and observing
 // the size of the text
-#define BOOTBLOCKS     5
+#define BOOTBLOCKS     6
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
 #define ALLOCSTART      0x100000 // where to start grabbing pages; this must be
 				 // 32-bit addressable
+#define	NEWSTACK	0x80000000 // VA for new stack
 
 void
 bootmain(void)
@@ -132,6 +134,11 @@ bootmain(void)
 	mapone(pgdir, 0xb8000, 0xb8000);
 	mapone(pgdir, 0xb9000, 0xb9000);
 
+	// get a new stack with guard page
+	ensure_empty(pgdir, NEWSTACK - PGSIZE);
+	ensure_empty(pgdir, NEWSTACK - 2*PGSIZE);
+	allocphys(pgdir, NEWSTACK - 1);
+
 	// XXX setup tramp if entry is 64bit address...
 	if (ELFHDR->e_entry & ~((1ULL << 32) - 1))
 		pancake("fixme: entry is 64 bit!", ELFHDR->e_entry);
@@ -151,7 +158,7 @@ bootmain(void)
 
 	// goto ELF town
 #define CODE64    3
-	ljmp(CODE64, entry, (uint32_t)pgdir, firstfree);
+	ljmp(CODE64, entry, (uint32_t)pgdir, firstfree, NEWSTACK);
 
 bad:
 	outw(0x8A00, 0x8A00);
@@ -166,8 +173,8 @@ allocphys(uint64_t *pgdir, uint64_t va)
 	if (va & ~((1ULL << 32) - 1))
 		pancake("va too large for poor ol' 32-bit me", va);
 
-	uint64_t *pte = pgdir_walk(pgdir, va);
-	uint32_t ma = ensure_pg(pte);
+	uint64_t *pte = pgdir_walk(pgdir, va, 1);
+	uint32_t ma = ensure_pg(pte, 1);
 
 	return (void *)(ma | ((uint32_t)va & PGOFFMASK));
 }
@@ -208,12 +215,29 @@ getpg(void)
 }
 
 static uint32_t
-ensure_pg(uint64_t *entry)
+ensure_pg(uint64_t *entry, int create)
 {
-	if (!(*entry & PTE_P))
+	if (!(*entry & PTE_P)) {
+		if (!create)
+			return 0;
+
 		*entry = getpg() | PTE_P | PTE_W;
+	}
 
 	return PTE_ADDR(*entry);
+}
+
+__attribute__((unused))
+static void
+ensure_empty(uint64_t *pgdir, uint64_t va)
+{
+	uint64_t *pte = pgdir_walk(pgdir, va, 0);
+
+	if (pte == 0)
+		return;
+
+	if (*pte & PTE_P)
+		pancake("page is mapped", va);
 }
 
 // Read 'count' bytes at 'offset' from kernel and map to virtual address 'va'.
@@ -310,15 +334,15 @@ pancake(char *msg, uint64_t addr)
 }
 
 static uint64_t *
-pgdir_walk(uint64_t *pgdir, uint64_t va)
+pgdir_walk(uint64_t *pgdir, uint64_t va, int create)
 {
 	uint64_t *curpage;
 	uint64_t *pml4e = &pgdir[PML4X(va)];
-	curpage = (uint64_t *)ensure_pg(pml4e);
+	curpage = (uint64_t *)ensure_pg(pml4e, create);
 	uint64_t *pdpte = &curpage[PDPTX(va)];
-	curpage = (uint64_t *)ensure_pg(pdpte);
+	curpage = (uint64_t *)ensure_pg(pdpte, create);
 	uint64_t *pde = &curpage[PDX(va)];
-	curpage = (uint64_t *)ensure_pg(pde);
+	curpage = (uint64_t *)ensure_pg(pde, create);
 
 	return &curpage[PTX(va)];
 }
@@ -329,7 +353,7 @@ mapone(uint64_t *pgdir, uint64_t va, uint64_t pa)
 	if (pa & PGOFFMASK)
 		pancake("pa not aligned", pa);
 
-	uint64_t *pte = pgdir_walk(pgdir, va);
+	uint64_t *pte = pgdir_walk(pgdir, va, 1);
 
 	if ((*pte & PTE_P) && PTE_ADDR(*pte) != pa)
 		pancake("already mapped?", *pte);
