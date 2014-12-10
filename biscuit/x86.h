@@ -55,11 +55,12 @@ enable_paging()
 }
 
 static __inline void
-enable_pae()
+enable_pae_wp()
 {
 	asm volatile(
 		"movl	%%cr4, %%eax\n"
 		"orl	$(1 << 5), %%eax\n"
+		"orl	$(1 << 16), %%eax\n"
 		"movl	%%eax, %%cr4\n"
 		:
 		:

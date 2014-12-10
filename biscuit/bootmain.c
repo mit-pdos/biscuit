@@ -150,7 +150,7 @@ bootmain(void)
 	uint32_t firstfree = getpg();
 
 	// enter long mode
-	enable_pae();
+	enable_pae_wp();
 	lcr3(pgdir);
 	uint64_t efer = rdmsr(IA32_EFER);
 	wrmsr(IA32_EFER, efer | IA32_EFER_LME);
