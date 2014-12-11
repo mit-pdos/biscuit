@@ -159,11 +159,11 @@ bootmain(void)
 		pancake("VTEMP is present?", pgdir[VTEMP]);
 
 	// enter long mode
-	enable_pae_wp();
+	enable_pae();
 	lcr3(pgdir);
 	uint64_t efer = rdmsr(IA32_EFER);
 	wrmsr(IA32_EFER, efer | IA32_EFER_LME);
-	enable_paging();
+	enable_paging_wp();
 
 	// goto ELF town
 #define CODE64    3

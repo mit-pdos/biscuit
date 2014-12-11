@@ -43,11 +43,12 @@ lcr3(void *pg)
 }
 
 static __inline void
-enable_paging()
+enable_paging_wp()
 {
 	asm volatile(
 		"movl	%%cr0, %%eax\n"
 		"orl	$(1 << 31), %%eax\n"
+		"orl	$(1 << 16), %%eax\n"
 		"movl	%%eax, %%cr0\n"
 		:
 		:
@@ -55,12 +56,11 @@ enable_paging()
 }
 
 static __inline void
-enable_pae_wp()
+enable_pae()
 {
 	asm volatile(
 		"movl	%%cr4, %%eax\n"
 		"orl	$(1 << 5), %%eax\n"
-		"orl	$(1 << 16), %%eax\n"
 		"movl	%%eax, %%cr4\n"
 		:
 		:
