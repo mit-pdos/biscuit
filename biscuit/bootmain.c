@@ -200,7 +200,7 @@ getpg(void)
 	if (ret & PGOFFMASK)
 		pancake("not aligned", ret);
 
-	if (ret > 0x00f00000) {
+	if (ret >= 0x00f00000 && ret < 0x01000000) {
 		ret = 0x01000000;
 		last = ret + PGSIZE;
 	}
