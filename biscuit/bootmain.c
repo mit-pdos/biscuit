@@ -87,6 +87,9 @@ struct Proghdr {
 				 // 32-bit addressable
 #define	NEWSTACK	0x80000000 // VA for new stack
 
+#define	VREC		0x42	// recursive mapping slot
+#define	VTEMP		0x43
+
 void
 bootmain(void)
 {
@@ -148,6 +151,12 @@ bootmain(void)
 
 	// goodbye, zeroing physical pages in getpg()
 	uint32_t firstfree = getpg();
+
+	// enter recursive mapping
+	pgdir[VREC] = (uint64_t)(uint32_t)pgdir | PTE_P | PTE_W;
+	// make sure VTEMP is empty
+	if (pgdir[VTEMP] & PTE_P)
+		pancake("VTEMP is present?", pgdir[VTEMP]);
 
 	// enter long mode
 	enable_pae_wp();
