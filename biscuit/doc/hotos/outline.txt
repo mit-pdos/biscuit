@@ -39,6 +39,28 @@ servers, which argues for the Rust approach. On the other hand, if kernel uses
 lots of fine-grained parallelism, automatic garbage collection is more
 desirable. Furthermore, kernels are often more stylized and maybe with a more
 kernel-aware garbage collector, automatic garbage collection will work fine.
+(XXX maybe phrase this more as linear types versus general-purpose GC, brings in
+Singularity too.)
 
+Potential outline (maybe more for SOSP?):
+
+1. Intro (articulating the above points better)
+
+2. Design (parallelism, interfaces, extensibility, GC)
+
+3. Impl (what it takes to use Go to implement design)
+
+4. Eval (focussing on parallelism and GC?)
+
+Another outline for hotos which explores the 3 reasons in more depth by
+argument (instead of design/impl/eval):
+
+1. Intro (articulating the above points better)
+
+2. Why lots of parallelism and how it leads to a different kernel design
+
+3. Why look at fat kernels
+
+4. Linear types versus general-purpose GC
 
 
