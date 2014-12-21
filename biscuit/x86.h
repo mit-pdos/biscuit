@@ -119,10 +119,10 @@ ljmp(uint16_t sel, uint32_t entry, uint32_t a1, uint32_t a2, uint32_t sp)
 	// 64bit code segment is setup in boot.S
 	asm volatile(
 		"movl	$0, %%ebp\n"
-		"movl	%%ebx, %%esp\n"
+		"movl	%%ecx, %%esp\n"
 		"ljmp	*(%%eax)\n"
 		:
-		: "a"(&fa), "D"(a1), "S"(a2), "b"(sp)
+		: "a"(&fa), "D"(a1), "S"(a2), "c"(sp)
 		: "memory");
 }
 
