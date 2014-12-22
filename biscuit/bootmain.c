@@ -38,7 +38,7 @@ static void checkmach(void);
 static uint32_t getpg(void);
 static void ensure_empty(uint64_t *, uint64_t);
 static uint32_t ensure_pg(uint64_t *, int);
-static void mapone(uint64_t *, uint64_t, uint64_t);
+static void mapone(uint64_t *, uint64_t, uint64_t, int);
 static void memset(void *, char, uint64_t);
 static void pancake(char *msg, uint64_t addr);
 static uint64_t *pgdir_walk(uint64_t *, uint64_t, int);
@@ -130,12 +130,12 @@ bootmain(void)
 	// map the bootloader; this also maps our stack
 	for (i = 0; i < BOOTBLOCKS; i++) {
 		uint64_t addr = ROUNDDOWN(0x7c00 + i*SECTSIZE, PGSIZE);
-		mapone(pgdir, addr, addr);
+		mapone(pgdir, addr, addr, 0);
 	}
 
 	// give us VGA so we can print
-	mapone(pgdir, 0xb8000, 0xb8000);
-	mapone(pgdir, 0xb9000, 0xb9000);
+	mapone(pgdir, 0xb8000, 0xb8000, 1);
+	mapone(pgdir, 0xb9000, 0xb9000, 1);
 
 	// get a new stack with guard page
 	ensure_empty(pgdir, NEWSTACK - PGSIZE);
@@ -357,7 +357,7 @@ pgdir_walk(uint64_t *pgdir, uint64_t va, int create)
 }
 
 static void
-mapone(uint64_t *pgdir, uint64_t va, uint64_t pa)
+mapone(uint64_t *pgdir, uint64_t va, uint64_t pa, int cd)
 {
 	if (pa & PGOFFMASK)
 		pancake("pa not aligned", pa);
@@ -367,5 +367,6 @@ mapone(uint64_t *pgdir, uint64_t va, uint64_t pa)
 	if ((*pte & PTE_P) && PTE_ADDR(*pte) != pa)
 		pancake("already mapped?", *pte);
 
-	*pte = pa | PTE_P | PTE_W;
+	uint64_t perms = PTE_P | PTE_W | (cd ? PTE_PCD : 0);
+	*pte = pa | perms;
 }
