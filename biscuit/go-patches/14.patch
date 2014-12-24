@@ -1,0 +1,4987 @@
+changeset:   21874:7fbeea021a7d
+parent:      21811:ffe33f1f1f17
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Mon Dec 01 19:25:36 2014 -0500
+summary:     clear bss, enable paging
+
+diff -r ffe33f1f1f17 -r 7fbeea021a7d src/runtime/asm_386.s
+--- a/src/runtime/asm_386.s	Tue Nov 25 15:41:33 2014 +1100
++++ b/src/runtime/asm_386.s	Mon Dec 01 19:25:36 2014 -0500
+@@ -115,6 +115,43 @@
+ DATA	runtime·main·f+0(SB)/4,$runtime·main(SB)
+ GLOBL	runtime·main·f(SB),RODATA,$4
+ 
++//DATA	runtime·pgd+0(SB)/4,$0
++GLOBL	runtime·pgd(SB),NOPTR,$4
++
++TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
++	MOVL	$0x7c00, SP
++
++	CALL	runtime·pginit(SB)
++
++	PUSHL	$0x20
++	CALL	runtime·doc(SB)
++	PUSHL	$0x31
++	CALL	runtime·doc(SB)
++	PUSHL	$0x31
++	CALL	runtime·doc(SB)
++	PUSHL	$0x31
++	CALL	runtime·doc(SB)
++	PUSHL	$0x31
++	CALL	runtime·doc(SB)
++fleabag:
++	JMP	fleabag
++
++TEXT runtime·lcr3(SB),NOSPLIT,$0-4
++	MOVL	pgt+0(FP), AX
++	MOVL	AX, CR3
++	RET
++
++TEXT runtime·rcr3(SB),NOSPLIT,$0-4
++	MOVL	CR3, AX
++	MOVL	AX, ret+0(FP)
++	RET
++
++TEXT runtime·enable_paging(SB),NOSPLIT,$0-0
++	MOVL	CR0, AX
++	ORL	$(1 << 31), AX	// PAGING ENABLE
++	MOVL	AX, CR0
++	RET
++
+ TEXT runtime·breakpoint(SB),NOSPLIT,$0-0
+ 	INT $3
+ 	RET
+diff -r ffe33f1f1f17 -r 7fbeea021a7d src/runtime/hackstuff.h
+--- /dev/null	Thu Jan 01 00:00:00 1970 +0000
++++ b/src/runtime/hackstuff.h	Mon Dec 01 19:25:36 2014 -0500
+@@ -0,0 +1,50 @@
++#ifndef _HACKSTUFF_H
++#define _HACKSTUFF_H
++
++struct Elf {
++	uint32 e_magic;
++#define ELF_MAGIC 0x464C457FU	/* "\x7FELF" in little endian */
++	uint8 e_elf[12];
++	uint16 e_type;
++	uint16 e_machine;
++	uint32 e_version;
++	uint32 e_entry;
++	uint32 e_phoff;
++	uint32 e_shoff;
++	uint32 e_flags;
++	uint16 e_ehsize;
++	uint16 e_phentsize;
++	uint16 e_phnum;
++	uint16 e_shentsize;
++	uint16 e_shnum;
++	uint16 e_shstrndx;
++};
++
++struct Proghdr {
++	uint32 p_type;
++	uint32 p_offset;
++	uint32 p_va;
++	uint32 p_pa;
++	uint32 p_filesz;
++	uint32 p_memsz;
++	uint32 p_flags;
++	uint32 p_align;
++};
++
++#define PGSIZE          (1UL << 12)
++#define PGOFFMASK       (PGSIZE - 1)
++#define PGMASK          (~PGOFFMASK)
++
++#define ROUNDDOWN(x, y) ((x) & ~((y) - 1))
++#define ROUNDUP(x, y)   (((x) + ((y) - 1)) & ~((y) - 1))
++
++#define PDX(x)          (((x) >> 22) & 0x3ff)
++#define PTX(x)          (((x) >> 12) & 0x3ff)
++
++#define PTE_P           (1 << 0)
++#define PTE_W           (1 << 1)
++#define PTE_U           (1 << 2)
++
++#define PTE_ADDR(x)     ((x) & ~0x3ff)
++
++#endif
+diff -r ffe33f1f1f17 -r 7fbeea021a7d src/runtime/os_linux_386.c
+--- a/src/runtime/os_linux_386.c	Tue Nov 25 15:41:33 2014 +1100
++++ b/src/runtime/os_linux_386.c	Mon Dec 01 19:25:36 2014 -0500
+@@ -36,3 +36,197 @@
+ 		}
+ 	}
+ }
++
++#pragma textflag NOSPLIT
++static void
++putch(int8 x, int8 y, int8 c)
++{
++        int16 *cons = (int16 *)0xb8000;
++        cons[y*80 + x] = 0x07 << 8 | c;
++}
++
++#pragma textflag NOSPLIT
++void
++runtime·doc(int64 mark)
++{
++        static int8 x;
++        static int8 y;
++
++        putch(x++, y, mark & 0xff);
++        //putch(x++, y, ' ');
++        if (x >= 79) {
++                x = 0;
++                y++;
++        }
++
++	if (y >= 29)
++		y = 0;
++}
++
++#pragma textflag NOSPLIT
++static void
++pnum(int64 n)
++{
++	int32 nn = (int32)n;
++	int32 i;
++
++	//for (i = 60; i >= 0; i -= 4) {
++	for (i = 28; i >= 0; i -= 4) {
++		int32 cn = (nn >> i) & 0xf;
++
++		if (cn >= 0 && cn <= 9)
++			runtime·doc('0' + cn);
++		else
++			runtime·doc('A' + cn - 10);
++	}
++}
++
++#pragma textflag NOSPLIT
++static void
++pmsg(int8 *msg)
++{
++	while (*msg)
++		runtime·doc(*msg++);
++}
++
++
++#pragma textflag NOSPLIT
++static void
++pancake(int8 *msg, int64 addr)
++{
++	runtime·doc(' ');
++
++	pmsg(msg);
++
++	runtime·doc(' ');
++	pnum(addr);
++	pmsg(" PANCAKE");
++	while (1);
++}
++
++#include "hackstuff.h"
++
++#pragma textflag NOSPLIT
++static uint32
++getpg(void)
++{
++	static uint32 last;
++
++	extern uint8 runtime·end[];
++	if (!last)
++		last = ROUNDUP((uint32)runtime·end, PGSIZE);
++
++	uint32 ret = last;
++	last += PGSIZE;
++
++	if (ret & PGOFFMASK)
++		pancake("not aligned", ret);
++
++	if (ret >= 0xc0000000 || ret < 0x01000000)
++		pancake("weird addr", ret);
++
++	int32 i;
++	for (i = 0; i < PGSIZE/4; i++)
++		((uint32 *)ret)[i] = 0;
++
++	return ret;
++}
++
++#pragma textflag NOSPLIT
++static void
++mapone(uint32 *pgd, uint32 va, uint32 pa)
++{
++	if (pa & PGOFFMASK)
++		pancake("pa not aligned", pa);
++
++	uint32 pde = pgd[PDX(va)];
++
++	if (!(pde & PTE_P)) {
++		pde = getpg() | PTE_P | PTE_W;
++		pgd[PDX(va)] = pde;
++	}
++
++	uint32 *pgt = (uint32 *)PTE_ADDR(pde);
++
++	if (pgt[PTX(va)] & PTE_P)
++		pancake("already mapped?", PTE_ADDR(pgt[PTX(va)]));
++
++	pgt[PTX(va)] = pa | PTE_P | PTE_W;
++}
++
++#pragma textflag NOSPLIT
++static void
++bootmap(uint32 *pgd, uint32 va, uint32 pa, uint32 sz)
++{
++	int32 i;
++	for (i = 0; i < sz; i += PGSIZE)
++		mapone(pgd, va + i, pa + i);
++}
++
++#pragma textflag NOSPLIT
++static void
++addsegs(struct Elf *e, uint32 *pgd)
++{
++	struct Proghdr *ph = (struct Proghdr *)((int8 *)e + e->e_phoff);
++	struct Proghdr *eph = ph + e->e_phnum;
++
++	for (; ph < eph; ph++) {
++		if (ph->p_type != 1) // PT_LOAD
++			continue;
++
++		bootmap(pgd, ph->p_pa, ph->p_pa, ph->p_memsz);
++	}
++}
++
++#pragma textflag NOSPLIT
++static void
++bsshack(void)
++{
++#define SAVE(x)	((uint32 *)(((uint32 *)0x7e00)[x]))
++	uint32 *start = SAVE(0);
++	uint32 *end = SAVE(1);
++#undef SAVE
++	while (start < end)
++		*start++ = 0;
++}
++
++extern uint32 *runtime·pgd;
++extern void runtime·lcr3(uint32);
++extern uint32 runtime·rcr3(void);
++extern void runtime·enable_paging(void);
++
++#pragma textflag NOSPLIT
++void
++runtime·pginit(void)
++{
++	int32 i;
++
++	// XXX the bootloader and this code assume there is at least ~130 MB of
++	// physical memory. should parse the e820 map.
++	bsshack();
++
++	runtime·pgd = (uint32 *)getpg();
++	if ((uint32)runtime·pgd & PGOFFMASK)
++		pancake("pgd not aligned?", (uint32)runtime·pgd);
++
++	for (i = 0; i < 1024; i++)
++		runtime·pgd[i] = 0;
++
++	// sweet hack -- header is still at physical address 0x10000
++	struct Elf *e = (struct Elf *)0x10000;
++	addsegs(e, runtime·pgd);
++	// give us VGA so we can print
++	mapone(runtime·pgd, 0xb8000, 0xb8000);
++	// and our stack
++	mapone(runtime·pgd, 0x7000, 0x7000);
++
++	runtime·lcr3((uint32)runtime·pgd);
++	pmsg("loaded cr3 ");
++	runtime·enable_paging();
++	pmsg("paging enabled ");
++	uint32 cr3 = runtime·rcr3();
++	pmsg("cr3 is ");
++	pnum(cr3);
++	//*(byte *)0 = 1;
++	//pmsg("wut");
++}
+diff -r ffe33f1f1f17 -r 7fbeea021a7d src/runtime/rt0_linux_386.s
+--- a/src/runtime/rt0_linux_386.s	Tue Nov 25 15:41:33 2014 +1100
++++ b/src/runtime/rt0_linux_386.s	Mon Dec 01 19:25:36 2014 -0500
+@@ -12,6 +12,7 @@
+ 	CALL	runtime·linux_setup_vdso(SB)
+ 	CALL	main(SB)
+ 	INT	$3
++	CALL	_rt0_hack(SB)
+ 
+ TEXT main(SB),NOSPLIT,$0
+ 	JMP	runtime·rt0_go(SB)
+@@ -23,3 +24,6 @@
+ DATA	runtime·_vdso(SB)/4, $_fallback_vdso(SB)
+ GLOBL	runtime·_vdso(SB), NOPTR, $4
+ 
++TEXT _rt0_hack(SB),NOSPLIT,$0
++	CALL	runtime·rt0_go_hack(SB)
++	INT	$3
+
+changeset:   21875:c2306e1c8f08
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Tue Dec 02 21:38:36 2014 -0500
+summary:     use amd64 instead
+
+diff -r 7fbeea021a7d -r c2306e1c8f08 src/runtime/asm_386.s
+--- a/src/runtime/asm_386.s	Mon Dec 01 19:25:36 2014 -0500
++++ b/src/runtime/asm_386.s	Tue Dec 02 21:38:36 2014 -0500
+@@ -115,43 +115,6 @@
+ DATA	runtime·main·f+0(SB)/4,$runtime·main(SB)
+ GLOBL	runtime·main·f(SB),RODATA,$4
+ 
+-//DATA	runtime·pgd+0(SB)/4,$0
+-GLOBL	runtime·pgd(SB),NOPTR,$4
+-
+-TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+-	MOVL	$0x7c00, SP
+-
+-	CALL	runtime·pginit(SB)
+-
+-	PUSHL	$0x20
+-	CALL	runtime·doc(SB)
+-	PUSHL	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHL	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHL	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHL	$0x31
+-	CALL	runtime·doc(SB)
+-fleabag:
+-	JMP	fleabag
+-
+-TEXT runtime·lcr3(SB),NOSPLIT,$0-4
+-	MOVL	pgt+0(FP), AX
+-	MOVL	AX, CR3
+-	RET
+-
+-TEXT runtime·rcr3(SB),NOSPLIT,$0-4
+-	MOVL	CR3, AX
+-	MOVL	AX, ret+0(FP)
+-	RET
+-
+-TEXT runtime·enable_paging(SB),NOSPLIT,$0-0
+-	MOVL	CR0, AX
+-	ORL	$(1 << 31), AX	// PAGING ENABLE
+-	MOVL	AX, CR0
+-	RET
+-
+ TEXT runtime·breakpoint(SB),NOSPLIT,$0-0
+ 	INT $3
+ 	RET
+diff -r 7fbeea021a7d -r c2306e1c8f08 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Mon Dec 01 19:25:36 2014 -0500
++++ b/src/runtime/asm_amd64.s	Tue Dec 02 21:38:36 2014 -0500
+@@ -119,6 +119,26 @@
+ 	// No per-thread init.
+ 	RET
+ 
++TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
++	//MOVL	$0x7c00, SP
++
++	//CALL	runtime·pginit(SB)
++
++	PUSHQ	$0x20
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0xdeadbeef
++	PUSHQ	$0
++	CALL	runtime·pancake(SB)
++	INT	$3
++
+ /*
+  *  go-routine
+  */
+diff -r 7fbeea021a7d -r c2306e1c8f08 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Mon Dec 01 19:25:36 2014 -0500
++++ b/src/runtime/os_linux.c	Tue Dec 02 21:38:36 2014 -0500
+@@ -340,3 +340,69 @@
+ {
+ 	return runtime·sigtab[sig].name;
+ }
++
++#pragma textflag NOSPLIT
++static void
++putch(int8 x, int8 y, int8 c)
++{
++        int16 *cons = (int16 *)0xb8000;
++        cons[y*80 + x] = 0x07 << 8 | c;
++}
++
++#pragma textflag NOSPLIT
++void
++runtime·doc(int64 mark)
++{
++        static int8 x;
++        static int8 y;
++
++        putch(x++, y, mark & 0xff);
++        //putch(x++, y, ' ');
++        if (x >= 79) {
++                x = 0;
++                y++;
++        }
++
++	if (y >= 29)
++		y = 0;
++}
++
++#pragma textflag NOSPLIT
++static void
++pnum(uint64 n)
++{
++	uint64 nn = (uint64)n;
++	int64 i;
++
++	for (i = 60; i >= 0; i -= 4) {
++		uint64 cn = (nn >> i) & 0xf;
++
++		if (cn >= 0 && cn <= 9)
++			runtime·doc('0' + cn);
++		else
++			runtime·doc('A' + cn - 10);
++	}
++}
++
++#pragma textflag NOSPLIT
++static void
++pmsg(int8 *msg)
++{
++	if (msg)
++		while (*msg)
++			runtime·doc(*msg++);
++}
++
++#pragma textflag NOSPLIT
++void
++runtime·pancake(int8 *msg, int64 addr)
++{
++	runtime·doc(' ');
++
++	pmsg(msg);
++
++	runtime·doc(' ');
++	pnum(addr);
++	pmsg(" PANCAKE");
++	while (1);
++}
+diff -r 7fbeea021a7d -r c2306e1c8f08 src/runtime/os_linux_386.c
+--- a/src/runtime/os_linux_386.c	Mon Dec 01 19:25:36 2014 -0500
++++ b/src/runtime/os_linux_386.c	Tue Dec 02 21:38:36 2014 -0500
+@@ -36,197 +36,3 @@
+ 		}
+ 	}
+ }
+-
+-#pragma textflag NOSPLIT
+-static void
+-putch(int8 x, int8 y, int8 c)
+-{
+-        int16 *cons = (int16 *)0xb8000;
+-        cons[y*80 + x] = 0x07 << 8 | c;
+-}
+-
+-#pragma textflag NOSPLIT
+-void
+-runtime·doc(int64 mark)
+-{
+-        static int8 x;
+-        static int8 y;
+-
+-        putch(x++, y, mark & 0xff);
+-        //putch(x++, y, ' ');
+-        if (x >= 79) {
+-                x = 0;
+-                y++;
+-        }
+-
+-	if (y >= 29)
+-		y = 0;
+-}
+-
+-#pragma textflag NOSPLIT
+-static void
+-pnum(int64 n)
+-{
+-	int32 nn = (int32)n;
+-	int32 i;
+-
+-	//for (i = 60; i >= 0; i -= 4) {
+-	for (i = 28; i >= 0; i -= 4) {
+-		int32 cn = (nn >> i) & 0xf;
+-
+-		if (cn >= 0 && cn <= 9)
+-			runtime·doc('0' + cn);
+-		else
+-			runtime·doc('A' + cn - 10);
+-	}
+-}
+-
+-#pragma textflag NOSPLIT
+-static void
+-pmsg(int8 *msg)
+-{
+-	while (*msg)
+-		runtime·doc(*msg++);
+-}
+-
+-
+-#pragma textflag NOSPLIT
+-static void
+-pancake(int8 *msg, int64 addr)
+-{
+-	runtime·doc(' ');
+-
+-	pmsg(msg);
+-
+-	runtime·doc(' ');
+-	pnum(addr);
+-	pmsg(" PANCAKE");
+-	while (1);
+-}
+-
+-#include "hackstuff.h"
+-
+-#pragma textflag NOSPLIT
+-static uint32
+-getpg(void)
+-{
+-	static uint32 last;
+-
+-	extern uint8 runtime·end[];
+-	if (!last)
+-		last = ROUNDUP((uint32)runtime·end, PGSIZE);
+-
+-	uint32 ret = last;
+-	last += PGSIZE;
+-
+-	if (ret & PGOFFMASK)
+-		pancake("not aligned", ret);
+-
+-	if (ret >= 0xc0000000 || ret < 0x01000000)
+-		pancake("weird addr", ret);
+-
+-	int32 i;
+-	for (i = 0; i < PGSIZE/4; i++)
+-		((uint32 *)ret)[i] = 0;
+-
+-	return ret;
+-}
+-
+-#pragma textflag NOSPLIT
+-static void
+-mapone(uint32 *pgd, uint32 va, uint32 pa)
+-{
+-	if (pa & PGOFFMASK)
+-		pancake("pa not aligned", pa);
+-
+-	uint32 pde = pgd[PDX(va)];
+-
+-	if (!(pde & PTE_P)) {
+-		pde = getpg() | PTE_P | PTE_W;
+-		pgd[PDX(va)] = pde;
+-	}
+-
+-	uint32 *pgt = (uint32 *)PTE_ADDR(pde);
+-
+-	if (pgt[PTX(va)] & PTE_P)
+-		pancake("already mapped?", PTE_ADDR(pgt[PTX(va)]));
+-
+-	pgt[PTX(va)] = pa | PTE_P | PTE_W;
+-}
+-
+-#pragma textflag NOSPLIT
+-static void
+-bootmap(uint32 *pgd, uint32 va, uint32 pa, uint32 sz)
+-{
+-	int32 i;
+-	for (i = 0; i < sz; i += PGSIZE)
+-		mapone(pgd, va + i, pa + i);
+-}
+-
+-#pragma textflag NOSPLIT
+-static void
+-addsegs(struct Elf *e, uint32 *pgd)
+-{
+-	struct Proghdr *ph = (struct Proghdr *)((int8 *)e + e->e_phoff);
+-	struct Proghdr *eph = ph + e->e_phnum;
+-
+-	for (; ph < eph; ph++) {
+-		if (ph->p_type != 1) // PT_LOAD
+-			continue;
+-
+-		bootmap(pgd, ph->p_pa, ph->p_pa, ph->p_memsz);
+-	}
+-}
+-
+-#pragma textflag NOSPLIT
+-static void
+-bsshack(void)
+-{
+-#define SAVE(x)	((uint32 *)(((uint32 *)0x7e00)[x]))
+-	uint32 *start = SAVE(0);
+-	uint32 *end = SAVE(1);
+-#undef SAVE
+-	while (start < end)
+-		*start++ = 0;
+-}
+-
+-extern uint32 *runtime·pgd;
+-extern void runtime·lcr3(uint32);
+-extern uint32 runtime·rcr3(void);
+-extern void runtime·enable_paging(void);
+-
+-#pragma textflag NOSPLIT
+-void
+-runtime·pginit(void)
+-{
+-	int32 i;
+-
+-	// XXX the bootloader and this code assume there is at least ~130 MB of
+-	// physical memory. should parse the e820 map.
+-	bsshack();
+-
+-	runtime·pgd = (uint32 *)getpg();
+-	if ((uint32)runtime·pgd & PGOFFMASK)
+-		pancake("pgd not aligned?", (uint32)runtime·pgd);
+-
+-	for (i = 0; i < 1024; i++)
+-		runtime·pgd[i] = 0;
+-
+-	// sweet hack -- header is still at physical address 0x10000
+-	struct Elf *e = (struct Elf *)0x10000;
+-	addsegs(e, runtime·pgd);
+-	// give us VGA so we can print
+-	mapone(runtime·pgd, 0xb8000, 0xb8000);
+-	// and our stack
+-	mapone(runtime·pgd, 0x7000, 0x7000);
+-
+-	runtime·lcr3((uint32)runtime·pgd);
+-	pmsg("loaded cr3 ");
+-	runtime·enable_paging();
+-	pmsg("paging enabled ");
+-	uint32 cr3 = runtime·rcr3();
+-	pmsg("cr3 is ");
+-	pnum(cr3);
+-	//*(byte *)0 = 1;
+-	//pmsg("wut");
+-}
+diff -r 7fbeea021a7d -r c2306e1c8f08 src/runtime/rt0_linux_386.s
+--- a/src/runtime/rt0_linux_386.s	Mon Dec 01 19:25:36 2014 -0500
++++ b/src/runtime/rt0_linux_386.s	Tue Dec 02 21:38:36 2014 -0500
+@@ -12,7 +12,6 @@
+ 	CALL	runtime·linux_setup_vdso(SB)
+ 	CALL	main(SB)
+ 	INT	$3
+-	CALL	_rt0_hack(SB)
+ 
+ TEXT main(SB),NOSPLIT,$0
+ 	JMP	runtime·rt0_go(SB)
+@@ -23,7 +22,3 @@
+ 
+ DATA	runtime·_vdso(SB)/4, $_fallback_vdso(SB)
+ GLOBL	runtime·_vdso(SB), NOPTR, $4
+-
+-TEXT _rt0_hack(SB),NOSPLIT,$0
+-	CALL	runtime·rt0_go_hack(SB)
+-	INT	$3
+diff -r 7fbeea021a7d -r c2306e1c8f08 src/runtime/rt0_linux_amd64.s
+--- a/src/runtime/rt0_linux_amd64.s	Mon Dec 01 19:25:36 2014 -0500
++++ b/src/runtime/rt0_linux_amd64.s	Tue Dec 02 21:38:36 2014 -0500
+@@ -8,8 +8,14 @@
+ 	LEAQ	8(SP), SI // argv
+ 	MOVQ	0(SP), DI // argc
+ 	MOVQ	$main(SB), AX
+-	JMP	AX
++	CALL	AX
++	CALL	_rt0_hack(SB)
++	INT	$3
+ 
+ TEXT main(SB),NOSPLIT,$-8
+ 	MOVQ	$runtime·rt0_go(SB), AX
+ 	JMP	AX
++
++TEXT _rt0_hack(SB),NOSPLIT,$0
++	CALL	runtime·rt0_go_hack(SB)
++	INT	$3
+
+changeset:   21876:3a1f8ad32b44
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Mon Dec 08 11:02:40 2014 -0500
+summary:     checkpoint segmentation setup
+
+diff -r c2306e1c8f08 -r 3a1f8ad32b44 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Tue Dec 02 21:38:36 2014 -0500
++++ b/src/runtime/asm_amd64.s	Mon Dec 08 11:02:40 2014 -0500
+@@ -119,10 +119,173 @@
+ 	// No per-thread init.
+ 	RET
+ 
++TEXT retardtown(SB),NOSPLIT,$0
++	MOVQ	(SP), AX
++	PUSHQ	$(3 << 3)
++	PUSHQ	AX
++	// lret
++	BYTE	$0xcb
++
+ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+-	//MOVL	$0x7c00, SP
+ 
+-	//CALL	runtime·pginit(SB)
++//	CMPQ	DI, $0
++//	JEQ	duder
++//dud:
++//	JMP dud
++//duder:
++
++	// save page table and first free address from bootloader.
++	MOVL	DI, runtime·pgtbl(SB)
++	MOVL	SI, runtime·first_free(SB)
++
++	ANDQ	$~15, SP
++
++	// create istack out of the given (operating system) stack.
++	// _cgo_init may update stackguard.
++	MOVQ	$runtime·g0(SB), DI
++	LEAQ	(-64*1024+104)(SP), BX
++	MOVQ	BX, g_stackguard0(DI)
++	MOVQ	BX, g_stackguard1(DI)
++	MOVQ	BX, (g_stack+stack_lo)(DI)
++	MOVQ	SP, (g_stack+stack_hi)(DI)
++
++	// find out information about the processor we're on
++	MOVQ	$0, AX
++	CPUID
++	CMPQ	AX, $0
++	JE	h_nocpuinfo
++	MOVQ	$1, AX
++	CPUID
++	MOVL	CX, runtime·cpuid_ecx(SB)
++	MOVL	DX, runtime·cpuid_edx(SB)
++h_nocpuinfo:
++
++	PUSHQ	$0x20
++	CALL	runtime·doc(SB)
++	POPQ	AX
++
++	PUSHQ	$0x39
++	CALL	runtime·doc(SB)
++	CALL	runtime·doc(SB)
++	POPQ	AX
++
++	// if there is an _cgo_init, call it.
++	//MOVQ	_cgo_init(SB), AX
++	//TESTQ	AX, AX
++	//JZ	needtls
++	//// g0 already in DI
++	//MOVQ	DI, CX	// Win64 uses CX for first parameter
++	//MOVQ	$setg_gcc<>(SB), SI
++	//CALL	AX
++
++	//// update stackguard after _cgo_init
++	//MOVQ	$runtime·g0(SB), CX
++	//MOVQ	(g_stack+stack_lo)(CX), AX
++	//ADDQ	$const_StackGuard, AX
++	//MOVQ	AX, g_stackguard0(CX)
++	//MOVQ	AX, g_stackguard1(CX)
++
++	//CMPL	runtime·iswindows(SB), $0
++	//JEQ ok
++h_needtls:
++
++	//// skip TLS setup on Plan 9
++	//CMPL	runtime·isplan9(SB), $1
++	//JEQ ok
++	//// skip TLS setup on Solaris
++	//CMPL	runtime·issolaris(SB), $1
++	//JEQ ok
++
++//	CMPQ	AX, $0
++//	JEQ	duder
++//dud:
++//	JMP dud
++//duder:
++
++	// setup tls
++	LEAQ	runtime·tls0(SB), DI
++	PUSHQ	DI
++	CALL	runtime·segsetup(SB)
++
++	MOVQ	8(AX), DI
++	PUSHQ	DI
++	MOVQ	(AX), DI
++	PUSHQ	DI
++	// lgdt (%rsp)
++	BYTE	$0x0f
++	BYTE	$0x01
++	BYTE	$0x14
++	BYTE	$0x24
++	POPQ	AX
++	POPQ	AX
++
++	MOVQ	$(2 << 3), AX
++	PUSHQ	AX
++	POPQ	FS
++
++	//CALL retardtown(SB)
++
++	// store through it, to make sure it works
++	get_tls(BX)
++	MOVQ	$0x123, g(BX)
++	MOVQ	runtime·tls0(SB), AX
++	CMPQ	AX, $0x123
++	JEQ	h_ok
++	PUSHQ	$0xdeadbeed
++	PUSHQ	$0
++	CALL	runtime·pancake(SB)
++h_ok:
++	PUSHQ	$0x20
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0x31
++	CALL	runtime·doc(SB)
++	PUSHQ	$0xdeadbeef
++	PUSHQ	$0
++	CALL	runtime·pancake(SB)
++	INT	$3
++
++
++	// set the per-goroutine and per-mach "registers"
++	get_tls(BX)
++	LEAQ	runtime·g0(SB), CX
++	MOVQ	CX, g(BX)
++	LEAQ	runtime·m0(SB), AX
++
++	// save m->g0 = g0
++	MOVQ	CX, m_g0(AX)
++	// save m0 to g0->m
++	MOVQ	AX, g_m(CX)
++
++	CLD				// convention is D is always left cleared
++	CALL	runtime·check(SB)
++
++	MOVL	16(SP), AX		// copy argc
++	MOVL	AX, 0(SP)
++	MOVQ	24(SP), AX		// copy argv
++	MOVQ	AX, 8(SP)
++	CALL	runtime·args(SB)
++	CALL	runtime·osinit(SB)
++	CALL	runtime·schedinit(SB)
++
++	// create a new goroutine to start program
++	MOVQ	$runtime·main·f(SB), BP		// entry
++	PUSHQ	BP
++	PUSHQ	$0			// arg size
++	CALL	runtime·newproc(SB)
++	POPQ	AX
++	POPQ	AX
++
++	// start this M
++	CALL	runtime·mstart(SB)
++
++	MOVL	$0xf1, 0xf1  // crash
++	RET
+ 
+ 	PUSHQ	$0x20
+ 	CALL	runtime·doc(SB)
+@@ -134,7 +297,7 @@
+ 	CALL	runtime·doc(SB)
+ 	PUSHQ	$0x31
+ 	CALL	runtime·doc(SB)
+-	PUSHQ	$0xdeadbeef
++	PUSHQ	$0xc001d00d
+ 	PUSHQ	$0
+ 	CALL	runtime·pancake(SB)
+ 	INT	$3
+diff -r c2306e1c8f08 -r 3a1f8ad32b44 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Tue Dec 02 21:38:36 2014 -0500
++++ b/src/runtime/os_linux.c	Mon Dec 08 11:02:40 2014 -0500
+@@ -368,7 +368,7 @@
+ }
+ 
+ #pragma textflag NOSPLIT
+-static void
++void
+ pnum(uint64 n)
+ {
+ 	uint64 nn = (uint64)n;
+@@ -377,7 +377,7 @@
+ 	for (i = 60; i >= 0; i -= 4) {
+ 		uint64 cn = (nn >> i) & 0xf;
+ 
+-		if (cn >= 0 && cn <= 9)
++		if (cn <= 9)
+ 			runtime·doc('0' + cn);
+ 		else
+ 			runtime·doc('A' + cn - 10);
+@@ -395,7 +395,7 @@
+ 
+ #pragma textflag NOSPLIT
+ void
+-runtime·pancake(int8 *msg, int64 addr)
++runtime·pancake(void *msg, int64 addr)
+ {
+ 	runtime·doc(' ');
+ 
+@@ -406,3 +406,166 @@
+ 	pmsg(" PANCAKE");
+ 	while (1);
+ }
++
++// gee i wish i could pack structs with plan9 compiler
++struct pdesc_t {
++	uint8 dur[10];
++};
++
++struct seg64_t {
++	uint8 dur[8];
++	// 0,1 low limit
++	// 2,3 low base
++	// 4   mid base
++	// 5   p, dpl, s, type
++	// 6   g, d/b, l, avl, mid limit
++	// 7   high base
++};
++
++#define	G	0x80
++#define	D	0x40
++#define	L	0x20
++
++#define	CODE	0xa
++#define	DATA	0x2
++
++static struct seg64_t segs[4] = {
++	// NULL seg
++	{0, 0, 0, 0, 0, 0, 0, 0},
++
++	// data
++	{0xff, 0xff,	// limit
++	 0, 0, 0,	// base
++	 0x90 | DATA,	// p, dpl, s, type
++	 G | D | 0xf,	// g, d/b, l, avail, mid limit
++	 0},		// base high
++
++	// fs seg
++	{0xff, 0xff,	// limit
++	 0, 0, 0,	// base
++	 0x90 | DATA,	// p, dpl, s, type
++	 G | D | 0xf,	// g, d/b, l, avail, mid limit
++	 0},		// base high
++
++	// 64 bit code
++	{0xff, 0xff,	// limit
++	 0, 0, 0,	// base
++	 0x90 | CODE,	// p, dpl, s, type
++	 G | L | 0xf,	// g, d/b, l, avail, mid limit
++	 0},		// base high
++
++};
++
++static struct pdesc_t pd;
++
++#define	FS_SEG		2
++
++#pragma textflag NOSPLIT
++static void
++seg_set_base(struct seg64_t *seg, uint32 base, uint32 lim)
++{
++	uint8 b1 = base & 0xff;
++	uint8 b2 = (base >>  8) & 0xff;
++	uint8 b3 = (base >> 16) & 0xff;
++	uint8 b4 = (base >> 24) & 0xff;
++
++	uint8 l1 = lim & 0xff;
++	uint8 l2 = (lim >>  8) & 0xff;
++	uint8 l3 = (lim >> 16) & 0xff;
++
++	seg->dur[0] = l1;
++	seg->dur[1] = l2;
++	seg->dur[6] = l3 | G | D;
++
++	seg->dur[2] = b1;
++	seg->dur[3] = b2;
++	seg->dur[4] = b3;
++	seg->dur[7] = b4;
++}
++
++#undef DATA
++#undef CODE
++#undef G
++#undef D
++#undef L
++
++#define	CHECK32(x)	(x & ~((1ULL << 32) - 1))
++
++#pragma textflag NOSPLIT
++static void
++pdsetup(struct pdesc_t *pd, struct seg64_t *s, uint64 lim)
++{
++	uint64 addr = (uint64)s;
++
++	pd->dur[0] = lim & 0xff;
++	pd->dur[1] = (lim >> 8) & 0xff;
++
++	pd->dur[2] = addr & 0xff;
++	pd->dur[3] = (addr >>  8) & 0xff;
++	pd->dur[4] = (addr >> 16) & 0xff;
++	pd->dur[5] = (addr >> 24) & 0xff;
++	pd->dur[6] = (addr >> 32) & 0xff;
++	pd->dur[7] = (addr >> 40) & 0xff;
++	pd->dur[8] = (addr >> 48) & 0xff;
++	pd->dur[9] = (addr >> 56) & 0xff;
++}
++
++#pragma textflag NOSPLIT
++static void
++memcpy(void *dst, void *src, uint64 sz)
++{
++	uint8 *t = dst;
++	uint8 *f = src;
++
++	while (sz--)
++		*t++ = *f++;
++}
++
++struct pdesc_t duhee;
++
++#pragma textflag NOSPLIT
++uint64
++runtime·segsetup(void *tls0)
++{
++	uint64 tlsaddr = (uint64)tls0;
++
++	// TLS assembles to -16(%fs)
++	tlsaddr += 16;
++	pmsg("tls0 is ");
++	pnum(tlsaddr);
++
++	if (sizeof(struct pdesc_t) != 10)
++		runtime·pancake("pdesc not packed", sizeof(struct pdesc_t));
++
++	if (sizeof(struct seg64_t) != 8)
++		runtime·pancake("seg64 not packed", sizeof(struct seg64_t));
++	if (sizeof(struct seg64_t)*4 != 32)
++		runtime·pancake("wut?", sizeof(struct seg64_t)*4);
++
++	// gee i wish i could align data with plan9 compiler
++	if ((uint64)&pd & 0x7)
++		runtime·pancake("pdesc not aligned", (uint64)&pd);
++
++	if (CHECK32(tlsaddr))
++		runtime·pancake("tlsaddr > 32bits, use msrs", tlsaddr);
++
++	seg_set_base(&segs[FS_SEG], (uint32)tlsaddr, 0xffffffff);
++	//extern uint32 runtime·first_free;
++	//struct seg64_t *fleabag = (struct seg64_t *)runtime·first_free;
++	//memcpy(fleabag, segs, sizeof(segs));
++	//pdsetup(&pd, fleabag, sizeof(segs) - 1);
++	pdsetup(&pd, segs, sizeof(segs) - 1);
++
++	//{
++	//uint32 *p = (uint32 *)&segs[3];
++	//pmsg("stuff ");
++	//pnum(*p++);
++	//pmsg(" ");
++	//pnum(*p++);
++	//while(1);
++	//}
++
++	pmsg("set segs");
++
++	return (uint64)&pd;
++}
+diff -r c2306e1c8f08 -r 3a1f8ad32b44 src/runtime/panic.go
+--- a/src/runtime/panic.go	Tue Dec 02 21:38:36 2014 -0500
++++ b/src/runtime/panic.go	Mon Dec 08 11:02:40 2014 -0500
+@@ -482,6 +482,7 @@
+ 
+ //go:nosplit
+ func throw(s *byte) {
++	pancake(s, 0x31337)
+ 	gp := getg()
+ 	if gp.m.throwing == 0 {
+ 		gp.m.throwing = 1
+diff -r c2306e1c8f08 -r 3a1f8ad32b44 src/runtime/proc.c
+--- a/src/runtime/proc.c	Tue Dec 02 21:38:36 2014 -0500
++++ b/src/runtime/proc.c	Mon Dec 08 11:02:40 2014 -0500
+@@ -51,6 +51,10 @@
+ uintptr runtime·allglen;
+ ForceGCState	runtime·forcegc;
+ 
++// biscuit stuff
++int32 pgtbl;
++int32 first_free;
++
+ void runtime·mstart(void);
+ static void runqput(P*, G*);
+ static G* runqget(P*);
+diff -r c2306e1c8f08 -r 3a1f8ad32b44 src/runtime/rt0_linux_amd64.s
+--- a/src/runtime/rt0_linux_amd64.s	Tue Dec 02 21:38:36 2014 -0500
++++ b/src/runtime/rt0_linux_amd64.s	Mon Dec 08 11:02:40 2014 -0500
+@@ -9,6 +9,7 @@
+ 	MOVQ	0(SP), DI // argc
+ 	MOVQ	$main(SB), AX
+ 	CALL	AX
++	MOVL	$1, 0	// abort
+ 	CALL	_rt0_hack(SB)
+ 	INT	$3
+ 
+diff -r c2306e1c8f08 -r 3a1f8ad32b44 src/runtime/stubs.go
+--- a/src/runtime/stubs.go	Tue Dec 02 21:38:36 2014 -0500
++++ b/src/runtime/stubs.go	Mon Dec 08 11:02:40 2014 -0500
+@@ -122,6 +122,8 @@
+ func readmemstats_m()
+ func writeheapdump_m()
+ 
++func pancake(*byte, int)
++
+ // memclr clears n bytes starting at ptr.
+ // in memclr_*.s
+ //go:noescape
+
+changeset:   21877:0a7171e4df71
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Mon Dec 08 15:45:49 2014 -0500
+summary:     finish segmentation
+
+diff -r 3a1f8ad32b44 -r 0a7171e4df71 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Mon Dec 08 11:02:40 2014 -0500
++++ b/src/runtime/asm_amd64.s	Mon Dec 08 15:45:49 2014 -0500
+@@ -119,21 +119,25 @@
+ 	// No per-thread init.
+ 	RET
+ 
+-TEXT retardtown(SB),NOSPLIT,$0
+-	MOVQ	(SP), AX
++TEXT fixcs(SB),NOSPLIT,$0
++	POPQ	AX
+ 	PUSHQ	$(3 << 3)
+ 	PUSHQ	AX
+-	// lret
++	// lretq
++	BYTE	$0x48
+ 	BYTE	$0xcb
++	MOVQ	$1, 0
++	//POPQ	DX
++	//MOVQ	$(3 << 3), AX
++	//SHLQ	$32, AX
++	//ORQ	DX, AX
++	//PUSHQ	AX
++	//// lret
++	//BYTE	$0xcb
++	//MOVQ	$1, 0
+ 
+ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+ 
+-//	CMPQ	DI, $0
+-//	JEQ	duder
+-//dud:
+-//	JMP dud
+-//duder:
+-
+ 	// save page table and first free address from bootloader.
+ 	MOVL	DI, runtime·pgtbl(SB)
+ 	MOVL	SI, runtime·first_free(SB)
+@@ -196,12 +200,6 @@
+ 	//CMPL	runtime·issolaris(SB), $1
+ 	//JEQ ok
+ 
+-//	CMPQ	AX, $0
+-//	JEQ	duder
+-//dud:
+-//	JMP dud
+-//duder:
+-
+ 	// setup tls
+ 	LEAQ	runtime·tls0(SB), DI
+ 	PUSHQ	DI
+@@ -218,12 +216,24 @@
+ 	BYTE	$0x24
+ 	POPQ	AX
+ 	POPQ	AX
++	POPQ	AX
+ 
+ 	MOVQ	$(2 << 3), AX
+ 	PUSHQ	AX
+ 	POPQ	FS
+ 
+-	//CALL retardtown(SB)
++	MOVL	$(1 << 3), AX
++	//MOVL	AX, ES
++	BYTE	$0x8e
++	BYTE	$0xd8
++	//MOVL	AX, DS
++	BYTE	$0x8e
++	BYTE	$0xc0
++	//MOVL	AX, SS
++	BYTE	$0x8e
++	BYTE	$0xd0
++
++	CALL fixcs(SB)
+ 
+ 	// store through it, to make sure it works
+ 	get_tls(BX)
+@@ -231,22 +241,16 @@
+ 	MOVQ	runtime·tls0(SB), AX
+ 	CMPQ	AX, $0x123
+ 	JEQ	h_ok
+-	PUSHQ	$0xdeadbeed
++	MOVQ	$0x4242424242424242, AX
++	PUSHQ	AX
+ 	PUSHQ	$0
+ 	CALL	runtime·pancake(SB)
++
+ h_ok:
+-	PUSHQ	$0x20
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0xdeadbeef
+-	PUSHQ	$0
++	MOVQ	$0xc001d00ddeadbeef, AX
++	PUSHQ	AX
++	MOVQ	$runtime·madeit(SB), AX
++	PUSHQ	AX
+ 	CALL	runtime·pancake(SB)
+ 	INT	$3
+ 
+diff -r 3a1f8ad32b44 -r 0a7171e4df71 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Mon Dec 08 11:02:40 2014 -0500
++++ b/src/runtime/os_linux.c	Mon Dec 08 15:45:49 2014 -0500
+@@ -393,6 +393,8 @@
+ 			runtime·doc(*msg++);
+ }
+ 
++uint8 runtime·madeit[] = "We made it!";
++
+ #pragma textflag NOSPLIT
+ void
+ runtime·pancake(void *msg, int64 addr)
+@@ -414,12 +416,6 @@
+ 
+ struct seg64_t {
+ 	uint8 dur[8];
+-	// 0,1 low limit
+-	// 2,3 low base
+-	// 4   mid base
+-	// 5   p, dpl, s, type
+-	// 6   g, d/b, l, avl, mid limit
+-	// 7   high base
+ };
+ 
+ #define	G	0x80
+@@ -453,7 +449,6 @@
+ 	 0x90 | CODE,	// p, dpl, s, type
+ 	 G | L | 0xf,	// g, d/b, l, avail, mid limit
+ 	 0},		// base high
+-
+ };
+ 
+ static struct pdesc_t pd;
+@@ -511,19 +506,6 @@
+ }
+ 
+ #pragma textflag NOSPLIT
+-static void
+-memcpy(void *dst, void *src, uint64 sz)
+-{
+-	uint8 *t = dst;
+-	uint8 *f = src;
+-
+-	while (sz--)
+-		*t++ = *f++;
+-}
+-
+-struct pdesc_t duhee;
+-
+-#pragma textflag NOSPLIT
+ uint64
+ runtime·segsetup(void *tls0)
+ {
+@@ -531,8 +513,6 @@
+ 
+ 	// TLS assembles to -16(%fs)
+ 	tlsaddr += 16;
+-	pmsg("tls0 is ");
+-	pnum(tlsaddr);
+ 
+ 	if (sizeof(struct pdesc_t) != 10)
+ 		runtime·pancake("pdesc not packed", sizeof(struct pdesc_t));
+@@ -549,23 +529,8 @@
+ 	if (CHECK32(tlsaddr))
+ 		runtime·pancake("tlsaddr > 32bits, use msrs", tlsaddr);
+ 
+-	seg_set_base(&segs[FS_SEG], (uint32)tlsaddr, 0xffffffff);
+-	//extern uint32 runtime·first_free;
+-	//struct seg64_t *fleabag = (struct seg64_t *)runtime·first_free;
+-	//memcpy(fleabag, segs, sizeof(segs));
+-	//pdsetup(&pd, fleabag, sizeof(segs) - 1);
++	seg_set_base(&segs[FS_SEG], (uint32)tlsaddr, 15);
+ 	pdsetup(&pd, segs, sizeof(segs) - 1);
+ 
+-	//{
+-	//uint32 *p = (uint32 *)&segs[3];
+-	//pmsg("stuff ");
+-	//pnum(*p++);
+-	//pmsg(" ");
+-	//pnum(*p++);
+-	//while(1);
+-	//}
+-
+-	pmsg("set segs");
+-
+ 	return (uint64)&pd;
+ }
+
+changeset:   21878:f2eefaeb0220
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Mon Dec 08 16:02:07 2014 -0500
+summary:     x
+
+diff -r 0a7171e4df71 -r f2eefaeb0220 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Mon Dec 08 15:45:49 2014 -0500
++++ b/src/runtime/os_linux.c	Mon Dec 08 16:02:07 2014 -0500
+@@ -429,25 +429,27 @@
+ 	// NULL seg
+ 	{0, 0, 0, 0, 0, 0, 0, 0},
+ 
++	// limits and base are ignored (except for fs/gs) in long mode.
++
+ 	// data
+-	{0xff, 0xff,	// limit
++	{0, 0,		// limit
+ 	 0, 0, 0,	// base
+ 	 0x90 | DATA,	// p, dpl, s, type
+-	 G | D | 0xf,	// g, d/b, l, avail, mid limit
++	 G | D,	// g, d/b, l, avail, mid limit
+ 	 0},		// base high
+ 
+ 	// fs seg
+-	{0xff, 0xff,	// limit
++	{0, 0,		// limit
+ 	 0, 0, 0,	// base
+ 	 0x90 | DATA,	// p, dpl, s, type
+-	 G | D | 0xf,	// g, d/b, l, avail, mid limit
++	 G | D | 0,	// g, d/b, l, avail, mid limit
+ 	 0},		// base high
+ 
+ 	// 64 bit code
+-	{0xff, 0xff,	// limit
++	{0, 0,		// limit
+ 	 0, 0, 0,	// base
+ 	 0x90 | CODE,	// p, dpl, s, type
+-	 G | L | 0xf,	// g, d/b, l, avail, mid limit
++	 G | L | 0,	// g, d/b, l, avail, mid limit
+ 	 0},		// base high
+ };
+ 
+
+changeset:   21879:bec1a051a8a2
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Tue Dec 09 16:58:57 2014 -0500
+summary:     64bit interrupts
+
+diff -r f2eefaeb0220 -r bec1a051a8a2 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Mon Dec 08 16:02:07 2014 -0500
++++ b/src/runtime/asm_amd64.s	Tue Dec 09 16:58:57 2014 -0500
+@@ -119,9 +119,13 @@
+ 	// No per-thread init.
+ 	RET
+ 
++#define		CODESEG		1
++#define		DATASEG		2
++#define		FSSEG		3
++
+ TEXT fixcs(SB),NOSPLIT,$0
+ 	POPQ	AX
+-	PUSHQ	$(3 << 3)
++	PUSHQ	$(CODESEG << 3)
+ 	PUSHQ	AX
+ 	// lretq
+ 	BYTE	$0x48
+@@ -136,11 +140,22 @@
+ 	//BYTE	$0xcb
+ 	//MOVQ	$1, 0
+ 
++TEXT runtime·deray(SB),NOSPLIT,$8
++	MOVQ	times+0(FP), CX
++	MOVQ	$0x80, DX
++	MOVQ	$0, AX
++back:
++	// outb	%al, (%dx)
++	BYTE	$0xee
++	LOOP	back
++	RET
++
+ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+ 
+ 	// save page table and first free address from bootloader.
+ 	MOVL	DI, runtime·pgtbl(SB)
+ 	MOVL	SI, runtime·first_free(SB)
++	MOVL	$1, hackmode(SB)
+ 
+ 	ANDQ	$~15, SP
+ 
+@@ -218,11 +233,11 @@
+ 	POPQ	AX
+ 	POPQ	AX
+ 
+-	MOVQ	$(2 << 3), AX
++	MOVQ	$(FSSEG << 3), AX
+ 	PUSHQ	AX
+ 	POPQ	FS
+ 
+-	MOVL	$(1 << 3), AX
++	MOVL	$(DATASEG << 3), AX
+ 	//MOVL	AX, ES
+ 	BYTE	$0x8e
+ 	BYTE	$0xd8
+@@ -233,7 +248,9 @@
+ 	BYTE	$0x8e
+ 	BYTE	$0xd0
+ 
+-	CALL fixcs(SB)
++	// i cannot fix CS via far call to a label because i don't know how to
++	// call a label with plan9 compiler.
++	CALL	fixcs(SB)
+ 
+ 	// store through it, to make sure it works
+ 	get_tls(BX)
+@@ -245,15 +262,7 @@
+ 	PUSHQ	AX
+ 	PUSHQ	$0
+ 	CALL	runtime·pancake(SB)
+-
+ h_ok:
+-	MOVQ	$0xc001d00ddeadbeef, AX
+-	PUSHQ	AX
+-	MOVQ	$runtime·madeit(SB), AX
+-	PUSHQ	AX
+-	CALL	runtime·pancake(SB)
+-	INT	$3
+-
+ 
+ 	// set the per-goroutine and per-mach "registers"
+ 	get_tls(BX)
+@@ -266,6 +275,26 @@
+ 	// save m0 to g0->m
+ 	MOVQ	AX, g_m(CX)
+ 
++	CALL	intsetup(SB)
++
++	// TS is set?
++	//MOVQ	CR0, AX
++	//ANDQ	$~(1 << 3), AX
++	//MOVQ	AX, CR0
++
++	//MOVQ	CR0, AX
++	//// MP
++	//ORL	$(1 << 1), AX
++	//// NE
++	////ORL	$(1 << 5), AX
++	//MOVQ	AX, CR0
++	FINIT
++	//fninit
++	//BYTE	$0xdb
++	//BYTE	$0xe3
++
++	CALL	wemadeit(SB)
++
+ 	CLD				// convention is D is always left cleared
+ 	CALL	runtime·check(SB)
+ 
+@@ -291,20 +320,80 @@
+ 	MOVL	$0xf1, 0xf1  // crash
+ 	RET
+ 
+-	PUSHQ	$0x20
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0x31
+-	CALL	runtime·doc(SB)
+-	PUSHQ	$0xc001d00d
+-	PUSHQ	$0
+-	CALL	runtime·pancake(SB)
+-	INT	$3
++TEXT lidt(SB), NOSPLIT, $0-8
++	MOVQ	idtpd+0(FP), AX
++	MOVQ	8(AX), DI
++	PUSHQ	DI
++	MOVQ	(AX), DI
++	PUSHQ	DI
++	// lidt	(%rsp)
++	BYTE	$0x0f
++	BYTE	$0x01
++	BYTE	$0x1c
++	BYTE	$0x24
++	POPQ	AX
++	POPQ	AX
++	RET
++
++TEXT ltr(SB), NOSPLIT, $0-8
++	MOVQ	seg+0(FP), AX
++	// ltr	%ax
++	BYTE $0x0f
++	BYTE $0x00
++	BYTE $0xd8
++	RET
++
++#define IH_NOEC(num, fn)		\
++TEXT fn(SB), NOSPLIT, $0-0;		\
++	PUSHQ	$0;			\
++	PUSHQ	$num;			\
++	JMP	alltraps(SB);		\
++	BYTE	$0xeb;			\
++	BYTE	$0xfe;			\
++	POPQ	AX;			\
++	POPQ	AX;			\
++	RET
++
++#define IH_EC(num, fn)			\
++TEXT fn(SB), NOSPLIT, $0-0;		\
++	PUSHQ	$num;			\
++	JMP	alltraps(SB);		\
++	BYTE	$0xeb;			\
++	BYTE	$0xfe;			\
++	POPQ	AX;			\
++	POPQ	AX;			\
++	RET
++
++IH_NOEC( 0,Xdz )
++IH_NOEC( 1,Xrz )
++IH_NOEC( 2,Xnmi )
++IH_NOEC( 3,Xbp )
++IH_NOEC( 4,Xov )
++IH_NOEC( 5,Xbnd )
++IH_NOEC( 6,Xuo )
++IH_NOEC( 7,Xnm )
++IH_EC  ( 8,Xdf )
++IH_NOEC( 9,Xrz2 )
++IH_EC  (10,Xtss )
++IH_EC  (11,Xsnp )
++IH_EC  (12,Xssf )
++IH_EC  (13,Xgp )
++IH_EC  (14,Xpf )
++IH_NOEC(15,Xrz3 )
++IH_NOEC(16,Xmf )
++IH_EC  (17,Xac )
++IH_NOEC(18,Xmc )
++IH_NOEC(19,Xfp )
++IH_NOEC(20,Xve )
++
++TEXT alltraps(SB), NOSPLIT, $0-0
++	MOVQ	SP, AX
++	PUSHQ	AX
++	CALL	trap(SB)
++	BYTE	$0xeb
++	BYTE	$0xfe
++	POPQ	AX
++	RET
+ 
+ /*
+  *  go-routine
+diff -r f2eefaeb0220 -r bec1a051a8a2 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Mon Dec 08 16:02:07 2014 -0500
++++ b/src/runtime/os_linux.c	Tue Dec 09 16:58:57 2014 -0500
+@@ -385,7 +385,7 @@
+ }
+ 
+ #pragma textflag NOSPLIT
+-static void
++void
+ pmsg(int8 *msg)
+ {
+ 	if (msg)
+@@ -393,8 +393,6 @@
+ 			runtime·doc(*msg++);
+ }
+ 
+-uint8 runtime·madeit[] = "We made it!";
+-
+ #pragma textflag NOSPLIT
+ void
+ runtime·pancake(void *msg, int64 addr)
+@@ -409,6 +407,13 @@
+ 	while (1);
+ }
+ 
++#pragma textflag NOSPLIT
++static void
++bw(uint8 *d, uint64 data, uint64 off)
++{
++	*d = (data >> off*8) & 0xff;
++}
++
+ // gee i wish i could pack structs with plan9 compiler
+ struct pdesc_t {
+ 	uint8 dur[10];
+@@ -424,12 +429,20 @@
+ 
+ #define	CODE	0xa
+ #define	DATA	0x2
++#define	TSS	0x9
+ 
+-static struct seg64_t segs[4] = {
++static struct seg64_t segs[6] = {
+ 	// NULL seg
+ 	{0, 0, 0, 0, 0, 0, 0, 0},
+ 
+-	// limits and base are ignored (except for fs/gs) in long mode.
++	// limits and base are ignored for CS, DS, and ES in long mode.
++
++	// 64 bit code
++	{0, 0,		// limit
++	 0, 0, 0,	// base
++	 0x90 | CODE,	// p, dpl, s, type
++	 G | L,		// g, d/b, l, avail, mid limit
++	 0},		// base high
+ 
+ 	// data
+ 	{0, 0,		// limit
+@@ -442,37 +455,46 @@
+ 	{0, 0,		// limit
+ 	 0, 0, 0,	// base
+ 	 0x90 | DATA,	// p, dpl, s, type
+-	 G | D | 0,	// g, d/b, l, avail, mid limit
++	 G | D,		// g, d/b, l, avail, mid limit
+ 	 0},		// base high
+ 
+-	// 64 bit code
++	// tss seg
+ 	{0, 0,		// limit
+ 	 0, 0, 0,	// base
+-	 0x90 | CODE,	// p, dpl, s, type
+-	 G | L | 0,	// g, d/b, l, avail, mid limit
++	 0x80 | TSS,	// p, dpl, s, type
++	 G,		// g, d/b, l, avail, mid limit
+ 	 0},		// base high
++	// 64 bit tss takes up two segment descriptor entires. the high 32bits
++	// of the base are written in this seg desc.
++	{0, 0, 0, 0, 0, 0, 0, 0},
+ };
+ 
+ static struct pdesc_t pd;
+ 
+-#define	FS_SEG		2
++#define	CODE_SEG	1
++#define	FS_SEG		3
++#define	TSS_SEG		4
+ 
+ #pragma textflag NOSPLIT
+ static void
+-seg_set_base(struct seg64_t *seg, uint32 base, uint32 lim)
++seg_set(struct seg64_t *seg, uint32 base, uint32 lim, uint32 data)
+ {
+ 	uint8 b1 = base & 0xff;
+ 	uint8 b2 = (base >>  8) & 0xff;
+ 	uint8 b3 = (base >> 16) & 0xff;
+ 	uint8 b4 = (base >> 24) & 0xff;
+ 
++	// correct limit
+ 	uint8 l1 = lim & 0xff;
+ 	uint8 l2 = (lim >>  8) & 0xff;
+-	uint8 l3 = (lim >> 16) & 0xff;
++	uint8 l3 = (lim >> 16) & 0xf;
+ 
+ 	seg->dur[0] = l1;
+ 	seg->dur[1] = l2;
+-	seg->dur[6] = l3 | G | D;
++	if (data)
++		seg->dur[6] = l3 | G | D;
++	else
++		seg->dur[6] = l3 | G;
+ 
+ 	seg->dur[2] = b1;
+ 	seg->dur[3] = b2;
+@@ -482,6 +504,7 @@
+ 
+ #undef DATA
+ #undef CODE
++#undef TSS
+ #undef G
+ #undef D
+ #undef L
+@@ -490,7 +513,7 @@
+ 
+ #pragma textflag NOSPLIT
+ static void
+-pdsetup(struct pdesc_t *pd, struct seg64_t *s, uint64 lim)
++pdsetup(struct pdesc_t *pd, uint64 s, uint64 lim)
+ {
+ 	uint64 addr = (uint64)s;
+ 
+@@ -531,8 +554,213 @@
+ 	if (CHECK32(tlsaddr))
+ 		runtime·pancake("tlsaddr > 32bits, use msrs", tlsaddr);
+ 
+-	seg_set_base(&segs[FS_SEG], (uint32)tlsaddr, 15);
+-	pdsetup(&pd, segs, sizeof(segs) - 1);
++	seg_set(&segs[FS_SEG], (uint32)tlsaddr, 15, 1);
++	pdsetup(&pd, (uint64)segs, sizeof(segs) - 1);
+ 
+ 	return (uint64)&pd;
+ }
++
++#pragma textflag NOSPLIT
++void
++marksleep(int8 *msg)
++{
++	pmsg(" ");
++	pmsg(msg);
++	extern void runtime·deray(uint64);
++	runtime·deray(5000000);
++}
++
++struct idte_t {
++	uint8 dur[16];
++};
++
++#define	INT		0xe
++#define	TRAP		0xf
++
++/*
++{0, 0,		// 0-1   low offset
++ CODE_SEG, 0,	// 2-3   segment
++ 0,		// 4     ist
++ 0x80 | INT,	// 5     p, dpl, type
++ 0, 0,		// 6-7   mid offset
++ 0, 0, 0, 0,	// 8-11  high offset
++ 0, 0, 0, 0},	// 12-15 resreved
++ */
++#define INTR	\
++	{0, 0,		\
++	 CODE_SEG, 0,	\
++	 0,		\
++	 0x80 | INT,	\
++	 0, 0,		\
++	 0, 0, 0, 0,	\
++	 0, 0, 0, 0},	\
++
++#define	NIDTE		64
++struct idte_t idt[NIDTE];
++
++#pragma textflag NOSPLIT
++static void
++int_set(struct idte_t *i, uint64 addr, uint64 trap)
++{
++	uint16 lowoff  = (uint16)addr;
++	uint16 midoff  = (addr >> 16) & 0xffff;
++	uint32 highoff = addr >> 32;
++
++	bw(&i->dur[0],  lowoff, 0);
++	bw(&i->dur[1],  lowoff, 1);
++	bw(&i->dur[2], CODE_SEG << 3, 0);
++	bw(&i->dur[3], CODE_SEG << 3, 1);
++	i->dur[4] = 0;
++	if (trap)
++		i->dur[5] = 0x80 | TRAP;
++	else
++		i->dur[5] = 0x80 | INT;
++	bw(&i->dur[6],  midoff, 0);
++	bw(&i->dur[7],  midoff, 1);
++	bw(&i->dur[8],  highoff, 0);
++	bw(&i->dur[9],  highoff, 1);
++	bw(&i->dur[10], highoff, 2);
++	bw(&i->dur[11], highoff, 3);
++}
++
++#undef INT
++#undef TRAP
++
++struct tss_t {
++	uint8 dur[26];
++};
++
++struct tss_t tss;
++
++static void
++tss_set(struct tss_t *tss, uint64 rsp0)
++{
++	uint32 off = 4;		// offset to rsp0 field
++
++	bw(&tss->dur[off + 0], rsp0, 0);
++	bw(&tss->dur[off + 1], rsp0, 1);
++	bw(&tss->dur[off + 2], rsp0, 2);
++	bw(&tss->dur[off + 3], rsp0, 3);
++	bw(&tss->dur[off + 4], rsp0, 4);
++	bw(&tss->dur[off + 5], rsp0, 5);
++	bw(&tss->dur[off + 6], rsp0, 6);
++	bw(&tss->dur[off + 7], rsp0, 7);
++
++	// disable io bitmap
++	uint64 d = sizeof(struct tss_t);
++	bw(&tss->dur[102], d, 0);
++	bw(&tss->dur[103], d, 1);
++}
++
++#pragma textflag NOSPLIT
++static void
++tss_setup(void)
++{
++	// alignment is for performance
++	uint64 addr = (uint64)&tss;
++	if (addr & (16 - 1))
++		runtime·pancake("tss not aligned", addr);
++
++	// XXX get real stack
++	uint64 rsp = 0x80000000 - 8;
++	// XXX dur
++	*(uint64 *)rsp = 0;
++
++	tss_set(&tss, rsp);
++	seg_set(&segs[TSS_SEG], (uint32)addr, sizeof(tss) - 1, 0);
++
++	// set high bits (TSS64 uses two segment descriptors
++	uint32 haddr = addr >> 32;
++	bw(&segs[TSS_SEG + 1].dur[0], haddr, 0);
++	bw(&segs[TSS_SEG + 1].dur[1], haddr, 1);
++	bw(&segs[TSS_SEG + 1].dur[2], haddr, 2);
++	bw(&segs[TSS_SEG + 1].dur[3], haddr, 3);
++
++	extern void ltr(uint64);
++	ltr(TSS_SEG << 3);
++}
++
++extern void lidt(struct pdesc_t *);
++
++#pragma textflag NOSPLIT
++void
++intsetup(void)
++{
++	struct pdesc_t p;
++
++	if (sizeof(struct idte_t) != 16)
++		runtime·pancake("idte not packed", sizeof(struct idte_t));
++	if (sizeof(idt) != 16*NIDTE)
++		runtime·pancake("idt not packed", sizeof(idt));
++
++	if ((uint64)idt & 0x7)
++		runtime·pancake("idt not aligned", (uint64)idt);
++
++	extern void Xdz (void);
++	extern void Xrz (void);
++	extern void Xnmi(void);
++	extern void Xbp (void);
++	extern void Xov (void);
++	extern void Xbnd(void);
++	extern void Xuo (void);
++	extern void Xnm (void);
++	extern void Xdf (void);
++	extern void Xrz2(void);
++	extern void Xtss(void);
++	extern void Xsnp(void);
++	extern void Xssf(void);
++	extern void Xgp (void);
++	extern void Xpf (void);
++	extern void Xrz3(void);
++	extern void Xmf (void);
++	extern void Xac (void);
++	extern void Xmc (void);
++	extern void Xfp (void);
++	extern void Xve (void);
++
++	int_set(&idt[ 0], (uint64) Xdz , 0);
++	int_set(&idt[ 1], (uint64) Xrz , 0);
++	int_set(&idt[ 2], (uint64) Xnmi, 0);
++	int_set(&idt[ 3], (uint64) Xbp , 0);
++	int_set(&idt[ 4], (uint64) Xov , 0);
++	int_set(&idt[ 5], (uint64) Xbnd, 0);
++	int_set(&idt[ 6], (uint64) Xuo , 0);
++	int_set(&idt[ 7], (uint64) Xnm , 0);
++	int_set(&idt[ 8], (uint64) Xdf , 0);
++	int_set(&idt[ 9], (uint64) Xrz2, 0);
++	int_set(&idt[10], (uint64) Xtss, 0);
++	int_set(&idt[11], (uint64) Xsnp, 0);
++	int_set(&idt[12], (uint64) Xssf, 0);
++	int_set(&idt[13], (uint64) Xgp , 0);
++	int_set(&idt[14], (uint64) Xpf , 0);
++	int_set(&idt[15], (uint64) Xrz3, 0);
++	int_set(&idt[16], (uint64) Xmf , 0);
++	int_set(&idt[17], (uint64) Xac , 0);
++	int_set(&idt[18], (uint64) Xmc , 0);
++	int_set(&idt[19], (uint64) Xfp , 0);
++	int_set(&idt[20], (uint64) Xve , 0);
++
++	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
++	lidt(&p);
++
++	tss_setup();
++}
++
++#pragma textflag NOSPLIT
++void
++trap(uint64 *tf)
++{
++	pmsg("trap frame at ");
++	pnum((uint64)tf);
++
++	uint64 trapno = *tf;
++	runtime·pancake("interrupt ", trapno);
++}
++
++#pragma textflag NOSPLIT
++void
++wemadeit(void)
++{
++	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
++	while(1);
++}
+diff -r f2eefaeb0220 -r bec1a051a8a2 src/runtime/proc.c
+--- a/src/runtime/proc.c	Mon Dec 08 16:02:07 2014 -0500
++++ b/src/runtime/proc.c	Tue Dec 09 16:58:57 2014 -0500
+@@ -54,6 +54,7 @@
+ // biscuit stuff
+ int32 pgtbl;
+ int32 first_free;
++int32 hackmode;
+ 
+ void runtime·mstart(void);
+ static void runqput(P*, G*);
+diff -r f2eefaeb0220 -r bec1a051a8a2 src/runtime/runtime.c
+--- a/src/runtime/runtime.c	Mon Dec 08 16:02:07 2014 -0500
++++ b/src/runtime/runtime.c	Tue Dec 09 16:58:57 2014 -0500
+@@ -193,6 +193,11 @@
+ 		byte y;
+ 	};
+ 
++	extern int32 hackmode;
++	extern void marksleep(int8 *);
++	if (hackmode)
++		marksleep("check start");
++
+ 	if(sizeof(a) != 1) runtime·throw("bad a");
+ 	if(sizeof(b) != 1) runtime·throw("bad b");
+ 	if(sizeof(c) != 2) runtime·throw("bad c");
+@@ -209,6 +214,9 @@
+ 	if(offsetof(struct y1, y) != 1) runtime·throw("bad offsetof y1.y");
+ 	if(sizeof(struct y1) != 2) runtime·throw("bad sizeof y1");
+ 
++	if (hackmode)
++		marksleep("mark 1");
++
+ 	if(runtime·timediv(12345LL*1000000000+54321, 1000000000, &e) != 12345 || e != 54321)
+ 		runtime·throw("bad timediv");
+ 
+@@ -225,23 +233,42 @@
+ 	if(z != 4)
+ 		runtime·throw("cas4");
+ 
++	if (hackmode)
++		marksleep("mark 2");
++
+ 	k = (byte*)0xfedcb123;
+ 	if(sizeof(void*) == 8)
+ 		k = (byte*)((uintptr)k<<10);
+ 	if(runtime·casp((void**)&k, nil, nil))
+ 		runtime·throw("casp1");
++
+ 	k1 = k+1;
+ 	if(!runtime·casp((void**)&k, k, k1))
+ 		runtime·throw("casp2");
++
+ 	if(k != k1)
+ 		runtime·throw("casp3");
+ 
++	if (hackmode)
++		marksleep("mark 2.3");
++
+ 	*(uint64*)&j = ~0ULL;
+-	if(j == j)
++	if (hackmode)
++		while(1);	// hit!
++	if(j == j) {
++		while(1);	// not hit!
+ 		runtime·throw("float64nan");
++	}
++
++	if (hackmode)
++		marksleep("mark 2.4");
++
+ 	if(!(j != j))
+ 		runtime·throw("float64nan1");
+ 
++	if (hackmode)
++		marksleep("mark 3");
++
+ 	*(uint64*)&j1 = ~1ULL;
+ 	if(j == j1)
+ 		runtime·throw("float64nan2");
+@@ -254,6 +281,9 @@
+ 	if(!(i != i))
+ 		runtime·throw("float32nan1");
+ 
++	if (hackmode)
++		marksleep("mark 4");
++
+ 	*(uint32*)&i1 = ~1UL;
+ 	if(i == i1)
+ 		runtime·throw("float32nan2");
+@@ -264,6 +294,9 @@
+ 
+ 	if(FixedStack != runtime·round2(FixedStack))
+ 		runtime·throw("FixedStack is not power-of-2");
++
++	if (hackmode)
++		marksleep("mark 5");
+ }
+ 
+ #pragma dataflag NOPTR
+
+changeset:   21880:f9a608b20946
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Tue Dec 09 19:09:32 2014 -0500
+summary:     fpu init, args, fake osinit
+
+diff -r bec1a051a8a2 -r f9a608b20946 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Tue Dec 09 16:58:57 2014 -0500
++++ b/src/runtime/asm_amd64.s	Tue Dec 09 19:09:32 2014 -0500
+@@ -150,6 +150,12 @@
+ 	LOOP	back
+ 	RET
+ 
++// i do it this strange way because if i declare fakeargv in C i get 'missing
++// golang type information'.
++DATA	fakeargv+0(SB)/8,$gostr(SB)
++DATA	fakeargv+8(SB)/8,$0
++GLOBL	fakeargv(SB),RODATA,$16
++
+ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+ 
+ 	// save page table and first free address from bootloader.
+@@ -277,33 +283,33 @@
+ 
+ 	CALL	intsetup(SB)
+ 
+-	// TS is set?
+-	//MOVQ	CR0, AX
+-	//ANDQ	$~(1 << 3), AX
+-	//MOVQ	AX, CR0
++	FINIT
++	MOVQ	CR4, AX
++	PUSHQ	AX
++	MOVQ	CR0, AX
++	PUSHQ	AX
++	CALL	fpuinit(SB)
++	POPQ	AX
++	POPQ	AX
+ 
+ 	//MOVQ	CR0, AX
+-	//// MP
+-	//ORL	$(1 << 1), AX
+-	//// NE
+-	////ORL	$(1 << 5), AX
+-	//MOVQ	AX, CR0
+-	FINIT
+-	//fninit
+-	//BYTE	$0xdb
+-	//BYTE	$0xe3
+-
+-	CALL	wemadeit(SB)
++	//PUSHQ	AX
++	//CALL	exam(SB)
++	//POPQ	AX
+ 
+ 	CLD				// convention is D is always left cleared
+ 	CALL	runtime·check(SB)
+ 
+-	MOVL	16(SP), AX		// copy argc
+-	MOVL	AX, 0(SP)
+-	MOVQ	24(SP), AX		// copy argv
+-	MOVQ	AX, 8(SP)
++	//MOVL	16(SP), AX		// copy argc
++	//MOVL	AX, 0(SP)
++	//MOVQ	24(SP), AX		// copy argv
++	//MOVQ	AX, 8(SP)
++	MOVQ	$fakeargv(SB), AX
++	PUSHQ	AX
++	PUSHQ	$1
+ 	CALL	runtime·args(SB)
+ 	CALL	runtime·osinit(SB)
++	CALL	wemadeit(SB)
+ 	CALL	runtime·schedinit(SB)
+ 
+ 	// create a new goroutine to start program
+@@ -343,6 +349,16 @@
+ 	BYTE $0xd8
+ 	RET
+ 
++TEXT lcr0(SB), NOSPLIT, $0-8
++	MOVQ	val+0(FP), AX
++	MOVQ	AX, CR0
++	RET
++
++TEXT lcr4(SB), NOSPLIT, $0-8
++	MOVQ	val+0(FP), AX
++	MOVQ	AX, CR4
++	RET
++
+ #define IH_NOEC(num, fn)		\
+ TEXT fn(SB), NOSPLIT, $0-0;		\
+ 	PUSHQ	$0;			\
+diff -r bec1a051a8a2 -r f9a608b20946 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Tue Dec 09 16:58:57 2014 -0500
++++ b/src/runtime/os_linux.c	Tue Dec 09 19:09:32 2014 -0500
+@@ -174,7 +174,13 @@
+ void
+ runtime·osinit(void)
+ {
+-	runtime·ncpu = getproccount();
++	extern uint32 hackmode;
++	if (hackmode) {
++		// XXX duur
++		runtime·ncpu = 1;
++	} else {
++		runtime·ncpu = getproccount();
++	}
+ }
+ 
+ // Random bytes initialized at startup.  These come
+@@ -577,24 +583,6 @@
+ #define	INT		0xe
+ #define	TRAP		0xf
+ 
+-/*
+-{0, 0,		// 0-1   low offset
+- CODE_SEG, 0,	// 2-3   segment
+- 0,		// 4     ist
+- 0x80 | INT,	// 5     p, dpl, type
+- 0, 0,		// 6-7   mid offset
+- 0, 0, 0, 0,	// 8-11  high offset
+- 0, 0, 0, 0},	// 12-15 resreved
+- */
+-#define INTR	\
+-	{0, 0,		\
+-	 CODE_SEG, 0,	\
+-	 0,		\
+-	 0x80 | INT,	\
+-	 0, 0,		\
+-	 0, 0, 0, 0,	\
+-	 0, 0, 0, 0},	\
+-
+ #define	NIDTE		64
+ struct idte_t idt[NIDTE];
+ 
+@@ -602,6 +590,16 @@
+ static void
+ int_set(struct idte_t *i, uint64 addr, uint64 trap)
+ {
++	/*
++	{0, 0,		// 0-1   low offset
++	 CODE_SEG, 0,	// 2-3   segment
++	 0,		// 4     ist
++	 0x80 | INT,	// 5     p, dpl, type
++	 0, 0,		// 6-7   mid offset
++	 0, 0, 0, 0,	// 8-11  high offset
++	 0, 0, 0, 0},	// 12-15 resreved
++	 */
++
+ 	uint16 lowoff  = (uint16)addr;
+ 	uint16 midoff  = (addr >> 16) & 0xffff;
+ 	uint32 highoff = addr >> 32;
+@@ -661,10 +659,9 @@
+ 	if (addr & (16 - 1))
+ 		runtime·pancake("tss not aligned", addr);
+ 
+-	// XXX get real stack
+-	uint64 rsp = 0x80000000 - 8;
+-	// XXX dur
+-	*(uint64 *)rsp = 0;
++	// XXX if we ever use a CPL != 0, we need to use a diff stack;
++	// otherwise we will overwrite pre-trap stack
++	uint64 rsp = 0x80000000;
+ 
+ 	tss_set(&tss, rsp);
+ 	seg_set(&segs[TSS_SEG], (uint32)addr, sizeof(tss) - 1, 0);
+@@ -754,7 +751,14 @@
+ 	pnum((uint64)tf);
+ 
+ 	uint64 trapno = *tf;
+-	runtime·pancake("interrupt ", trapno);
++	pmsg(" trapno ");
++	pnum(trapno);
++
++	uint64 rip = *(tf + 2);
++	pmsg(" rip ");
++	pnum(rip);
++
++	runtime·pancake("trap", 0);
+ }
+ 
+ #pragma textflag NOSPLIT
+@@ -762,5 +766,50 @@
+ wemadeit(void)
+ {
+ 	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
+-	while(1);
+ }
++
++#pragma textflag NOSPLIT
++void
++exam(uint64 cr0)
++{
++	pmsg(" inspect cr0 ");
++
++	if (cr0 & (1UL << 30))
++		pmsg("CD set ");
++	if (cr0 & (1UL << 29))
++		pmsg("NW set ");
++	if (cr0 & (1UL << 5))
++		pmsg("NE set ");
++	if (cr0 & (1UL << 3))
++		pmsg("TS set ");
++	if (cr0 & (1UL << 2))
++		pmsg("EM set ");
++	if (cr0 & (1UL << 1))
++		pmsg("MP set ");
++}
++
++#pragma textflag NOSPLIT
++void
++fpuinit(uint64 cr0, uint64 cr4)
++{
++	// for VEX prefixed instructions
++	//// set NE and MP
++	//cr0 |= 1 << 5;
++	//cr0 |= 1 << 1;
++
++	//// set OSXSAVE
++	//cr4 |= 1 << 18;
++
++	// clear EM
++	cr0 &= ~(1 << 2);
++
++	// set OSFXSR
++	cr4 |= 1 << 9;
++
++	extern void lcr0(uint64);
++	extern void lcr4(uint64);
++	lcr0(cr0);
++	lcr4(cr4);
++}
++
++int8 gostr[] = "go";
+diff -r bec1a051a8a2 -r f9a608b20946 src/runtime/runtime.c
+--- a/src/runtime/runtime.c	Tue Dec 09 16:58:57 2014 -0500
++++ b/src/runtime/runtime.c	Tue Dec 09 19:09:32 2014 -0500
+@@ -193,11 +193,6 @@
+ 		byte y;
+ 	};
+ 
+-	extern int32 hackmode;
+-	extern void marksleep(int8 *);
+-	if (hackmode)
+-		marksleep("check start");
+-
+ 	if(sizeof(a) != 1) runtime·throw("bad a");
+ 	if(sizeof(b) != 1) runtime·throw("bad b");
+ 	if(sizeof(c) != 2) runtime·throw("bad c");
+@@ -214,9 +209,6 @@
+ 	if(offsetof(struct y1, y) != 1) runtime·throw("bad offsetof y1.y");
+ 	if(sizeof(struct y1) != 2) runtime·throw("bad sizeof y1");
+ 
+-	if (hackmode)
+-		marksleep("mark 1");
+-
+ 	if(runtime·timediv(12345LL*1000000000+54321, 1000000000, &e) != 12345 || e != 54321)
+ 		runtime·throw("bad timediv");
+ 
+@@ -233,9 +225,6 @@
+ 	if(z != 4)
+ 		runtime·throw("cas4");
+ 
+-	if (hackmode)
+-		marksleep("mark 2");
+-
+ 	k = (byte*)0xfedcb123;
+ 	if(sizeof(void*) == 8)
+ 		k = (byte*)((uintptr)k<<10);
+@@ -249,26 +238,13 @@
+ 	if(k != k1)
+ 		runtime·throw("casp3");
+ 
+-	if (hackmode)
+-		marksleep("mark 2.3");
+-
+ 	*(uint64*)&j = ~0ULL;
+-	if (hackmode)
+-		while(1);	// hit!
+-	if(j == j) {
+-		while(1);	// not hit!
++	if(j == j)
+ 		runtime·throw("float64nan");
+-	}
+-
+-	if (hackmode)
+-		marksleep("mark 2.4");
+ 
+ 	if(!(j != j))
+ 		runtime·throw("float64nan1");
+ 
+-	if (hackmode)
+-		marksleep("mark 3");
+-
+ 	*(uint64*)&j1 = ~1ULL;
+ 	if(j == j1)
+ 		runtime·throw("float64nan2");
+@@ -281,9 +257,6 @@
+ 	if(!(i != i))
+ 		runtime·throw("float32nan1");
+ 
+-	if (hackmode)
+-		marksleep("mark 4");
+-
+ 	*(uint32*)&i1 = ~1UL;
+ 	if(i == i1)
+ 		runtime·throw("float32nan2");
+@@ -294,9 +267,6 @@
+ 
+ 	if(FixedStack != runtime·round2(FixedStack))
+ 		runtime·throw("FixedStack is not power-of-2");
+-
+-	if (hackmode)
+-		marksleep("mark 5");
+ }
+ 
+ #pragma dataflag NOPTR
+
+changeset:   21881:a6551ffbe396
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Thu Dec 11 12:56:56 2014 -0500
+summary:     pgdir_walk
+
+diff -r f9a608b20946 -r a6551ffbe396 src/cmd/ld/lib.c
+--- a/src/cmd/ld/lib.c	Tue Dec 09 19:09:32 2014 -0500
++++ b/src/cmd/ld/lib.c	Thu Dec 11 12:56:56 2014 -0500
+@@ -1102,6 +1102,14 @@
+ 	limit = up->limit;
+ 	s = up->sym;
+ 	
++	// don't check my fancy recursive page mapping functions. i could do it
++	// iteratively but the recursion is more elegant. our stack uses a
++	// guardpage so we will fault if we overflow our stack.
++	if(strcmp(s->name, "pgdir_walk") == 0)
++		return 0;
++	if(strcmp(s->name, "pgdir_walk1") == 0)
++		return 0;
++
+ 	// Don't duplicate work: only need to consider each
+ 	// function at top of safe zone once.
+ 	if(limit == StackLimit-callsize()) {
+diff -r f9a608b20946 -r a6551ffbe396 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Tue Dec 09 19:09:32 2014 -0500
++++ b/src/runtime/asm_amd64.s	Thu Dec 11 12:56:56 2014 -0500
+@@ -159,8 +159,8 @@
+ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+ 
+ 	// save page table and first free address from bootloader.
+-	MOVL	DI, runtime·pgtbl(SB)
+-	MOVL	SI, runtime·first_free(SB)
++	MOVL	DI, pgtbl(SB)
++	MOVL	SI, first_free(SB)
+ 	MOVL	$1, hackmode(SB)
+ 
+ 	ANDQ	$~15, SP
+@@ -297,6 +297,8 @@
+ 	//CALL	exam(SB)
+ 	//POPQ	AX
+ 
++	//CALL	pgtest(SB)
++
+ 	CLD				// convention is D is always left cleared
+ 	CALL	runtime·check(SB)
+ 
+@@ -309,8 +311,8 @@
+ 	PUSHQ	$1
+ 	CALL	runtime·args(SB)
+ 	CALL	runtime·osinit(SB)
++	CALL	runtime·schedinit(SB)
+ 	CALL	wemadeit(SB)
+-	CALL	runtime·schedinit(SB)
+ 
+ 	// create a new goroutine to start program
+ 	MOVQ	$runtime·main·f(SB), BP		// entry
+@@ -326,6 +328,16 @@
+ 	MOVL	$0xf1, 0xf1  // crash
+ 	RET
+ 
++TEXT tlbflush(SB), NOSPLIT, $0-0
++	MOVQ	CR3, AX
++	MOVQ	AX, CR3
++	RET
++
++TEXT invlpg(SB), NOSPLIT, $0-8
++	MOVQ	va+0(FP), AX
++	INVLPG	(AX)
++	RET
++
+ TEXT lidt(SB), NOSPLIT, $0-8
+ 	MOVQ	idtpd+0(FP), AX
+ 	MOVQ	8(AX), DI
+diff -r f9a608b20946 -r a6551ffbe396 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Tue Dec 09 19:09:32 2014 -0500
++++ b/src/runtime/os_linux.c	Thu Dec 11 12:56:56 2014 -0500
+@@ -401,6 +401,19 @@
+ 
+ #pragma textflag NOSPLIT
+ void
++nmsg(int8 *msg)
++{
++	extern uint64 hackmode;
++	if (!hackmode)
++		return;
++
++	if (msg)
++		while (*msg)
++			runtime·doc(*msg++);
++}
++
++#pragma textflag NOSPLIT
++void
+ runtime·pancake(void *msg, int64 addr)
+ {
+ 	runtime·doc(' ');
+@@ -768,16 +781,29 @@
+ 	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
+ }
+ 
++// given to us by bootloader
++uint64 first_free;
++int32 pgtbl;
++
++int32 hackmode;
++int8 gostr[] = "go";
++
+ #pragma textflag NOSPLIT
+ void
+ exam(uint64 cr0)
+ {
++	USED(cr0);
++	//pmsg(" first free ");
++	//pnum(first_free);
++
+ 	pmsg(" inspect cr0 ");
+ 
+ 	if (cr0 & (1UL << 30))
+ 		pmsg("CD set ");
+ 	if (cr0 & (1UL << 29))
+ 		pmsg("NW set ");
++	if (cr0 & (1UL << 16))
++		pmsg("WP set ");
+ 	if (cr0 & (1UL << 5))
+ 		pmsg("NE set ");
+ 	if (cr0 & (1UL << 3))
+@@ -812,4 +838,147 @@
+ 	lcr4(cr4);
+ }
+ 
+-int8 gostr[] = "go";
++#define PGSIZE          (1ULL << 12)
++#define PGOFFMASK       (PGSIZE - 1)
++#define PGMASK          (~PGOFFMASK)
++
++#define ROUNDDOWN(x, y) ((x) & ~((y) - 1))
++#define ROUNDUP(x, y)   (((x) + ((y) - 1)) & ~((y) - 1))
++
++#define PML4X(x)        (((x) >> 39) & 0x1ff)
++#define PDPTX(x)        (((x) >> 30) & 0x1ff)
++#define PDX(x)          (((x) >> 21) & 0x1ff)
++#define PTX(x)          (((x) >> 12) & 0x1ff)
++
++#define PTE_P           (1ULL << 0)
++#define PTE_W           (1ULL << 1)
++#define PTE_U           (1ULL << 2)
++
++#define PTE_ADDR(x)     ((x) & ~0x3ff)
++
++// slot for recursive mapping
++#define	VREC	0x42ULL
++#define	VTEMP	0x43ULL
++
++#define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
++#define SLOTNEXT(v)	((v << 9) & ((1ULL << 48) - 1))
++
++#pragma textflag NOSPLIT
++uint64
++get_pg(void)
++{
++	// XXX use e820 map
++	uint64 ret = first_free;
++	if (ret & PGOFFMASK)
++		runtime·pancake(" ret not aligned? ", ret);
++
++	first_free += PGSIZE;
++
++	if (ret >= 0x00f00000 && ret < 0x01000000) {
++		ret = 0x01000000;
++		first_free = ret + PGSIZE;
++	}
++
++	if (ret >= 0xc0000000)
++		runtime·pancake("oom?", ret);
++
++	return ret;
++}
++
++#pragma textflag NOSPLIT
++void
++memset(void *va, uint32 c, uint64 sz)
++{
++	uint8 b = (uint32)c;
++	uint8 *p = (uint8 *)va;
++	while (sz--)
++		*p++ = b;
++}
++
++extern invlpg(uint64 *);
++
++#pragma textflag NOSPLIT
++void
++zero_phys(uint64 phys)
++{
++	phys = ROUNDDOWN(phys, PGSIZE);
++
++	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
++	if (recva[VTEMP] & PTE_P)
++		runtime·pancake(" vtemp in use? ", recva[VTEMP]);
++	recva[VTEMP] = phys | PTE_P | PTE_W;
++
++	uint64 *va = CADDR(VREC, VREC, VREC, VTEMP);
++
++	memset(va, 0, PGSIZE);
++
++	recva[VTEMP] = 0;
++	invlpg(va);
++}
++
++#pragma textflag NOSPLIT
++static uint64 *
++pgdir_walk1(uint64 *slot, uint64 van, int32 create)
++{
++	if (!van)
++		return slot;
++
++	if (!(*slot & PTE_P)) {
++		if (!create)
++			return nil;
++		uint64 np = get_pg();
++		zero_phys(np);
++		*slot = np | PTE_P | PTE_W;
++	}
++
++	slot = (uint64 *)SLOTNEXT((uint64)slot);
++	slot += PML4X(van);
++	return pgdir_walk1(slot, SLOTNEXT(van), create);
++}
++
++#pragma textflag NOSPLIT
++uint64 *
++pgdir_walk(uint64 *va, int32 create)
++{
++	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
++	uint64 *pml4 = (uint64 *)CADDR(VREC, VREC, VREC, VREC);
++	pml4 += PML4X(v);
++	return pgdir_walk1(pml4, SLOTNEXT(v), create);
++}
++
++#pragma textflag NOSPLIT
++void
++pgtest(void)
++{
++	pmsg(" PAGE TEST ");
++	uint64 phys = get_pg();
++	zero_phys(phys);
++
++	uint64 *va = (uint64 *)0xc001d00d000ULL;
++	uint64 *pte = pgdir_walk(va, 0);
++	if (pte != nil)
++		runtime·pancake(" something mapped? ", (uint64)va);
++
++	pmsg(" no mapping ");
++	pte = pgdir_walk(va, 1);
++	*pte = phys | PTE_P | PTE_W;
++	int32 i;
++	for (i = 0; i < 512; i++)
++		if (va[i] != 0)
++			runtime·pancake(" new page not zero? ", va[i]);
++
++	pmsg(" zeroed ");
++	va[0] = 31337;
++	va[256] = 31337;
++	va[511] = 31337;
++
++	//*pte = phys | PTE_P;
++	//invlpg(va);
++	//va[0] = 31337;
++
++	//*pte = 0;
++	//invlpg(va);
++	//pnum(va[0]);
++
++	pmsg(" GUT ");
++}
+diff -r f9a608b20946 -r a6551ffbe396 src/runtime/proc.c
+--- a/src/runtime/proc.c	Tue Dec 09 19:09:32 2014 -0500
++++ b/src/runtime/proc.c	Thu Dec 11 12:56:56 2014 -0500
+@@ -51,11 +51,6 @@
+ uintptr runtime·allglen;
+ ForceGCState	runtime·forcegc;
+ 
+-// biscuit stuff
+-int32 pgtbl;
+-int32 first_free;
+-int32 hackmode;
+-
+ void runtime·mstart(void);
+ static void runqput(P*, G*);
+ static G* runqget(P*);
+
+changeset:   21882:01c1aa25240e
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Thu Dec 11 20:28:47 2014 -0500
+summary:     vm stuffs
+
+diff -r a6551ffbe396 -r 01c1aa25240e src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Thu Dec 11 12:56:56 2014 -0500
++++ b/src/runtime/asm_amd64.s	Thu Dec 11 20:28:47 2014 -0500
+@@ -298,7 +298,13 @@
+ 	//POPQ	AX
+ 
+ 	//CALL	pgtest(SB)
++	//CALL	mmap_test(SB)
+ 
++//	CMPQ	AX, $31337
++//	JZ	forward
++//me:
++//	JMP	me
++//forward:
+ 	CLD				// convention is D is always left cleared
+ 	CALL	runtime·check(SB)
+ 
+@@ -310,6 +316,8 @@
+ 	PUSHQ	AX
+ 	PUSHQ	$1
+ 	CALL	runtime·args(SB)
++	POPQ	AX
++	POPQ	AX
+ 	CALL	runtime·osinit(SB)
+ 	CALL	runtime·schedinit(SB)
+ 	CALL	wemadeit(SB)
+diff -r a6551ffbe396 -r 01c1aa25240e src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Thu Dec 11 12:56:56 2014 -0500
++++ b/src/runtime/os_linux.c	Thu Dec 11 20:28:47 2014 -0500
+@@ -174,7 +174,7 @@
+ void
+ runtime·osinit(void)
+ {
+-	extern uint32 hackmode;
++	extern uint64 hackmode;
+ 	if (hackmode) {
+ 		// XXX duur
+ 		runtime·ncpu = 1;
+@@ -785,7 +785,7 @@
+ uint64 first_free;
+ int32 pgtbl;
+ 
+-int32 hackmode;
++int64 hackmode;
+ int8 gostr[] = "go";
+ 
+ #pragma textflag NOSPLIT
+@@ -845,10 +845,10 @@
+ #define ROUNDDOWN(x, y) ((x) & ~((y) - 1))
+ #define ROUNDUP(x, y)   (((x) + ((y) - 1)) & ~((y) - 1))
+ 
+-#define PML4X(x)        (((x) >> 39) & 0x1ff)
+-#define PDPTX(x)        (((x) >> 30) & 0x1ff)
+-#define PDX(x)          (((x) >> 21) & 0x1ff)
+-#define PTX(x)          (((x) >> 12) & 0x1ff)
++#define PML4X(x)        (((uint64)(x) >> 39) & 0x1ff)
++#define PDPTX(x)        (((uint64)(x) >> 30) & 0x1ff)
++#define PDX(x)          (((uint64)(x) >> 21) & 0x1ff)
++#define PTX(x)          (((uint64)(x) >> 12) & 0x1ff)
+ 
+ #define PTE_P           (1ULL << 0)
+ #define PTE_W           (1ULL << 1)
+@@ -860,6 +860,8 @@
+ #define	VREC	0x42ULL
+ #define	VTEMP	0x43ULL
+ 
++#define	VUMAX	0x42ULL		// highest "user" mapping
++
+ #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
+ #define SLOTNEXT(v)	((v << 9) & ((1ULL << 48) - 1))
+ 
+@@ -895,7 +897,7 @@
+ 		*p++ = b;
+ }
+ 
+-extern invlpg(uint64 *);
++extern invlpg(void *);
+ 
+ #pragma textflag NOSPLIT
+ void
+@@ -920,9 +922,6 @@
+ static uint64 *
+ pgdir_walk1(uint64 *slot, uint64 van, int32 create)
+ {
+-	if (!van)
+-		return slot;
+-
+ 	if (!(*slot & PTE_P)) {
+ 		if (!create)
+ 			return nil;
+@@ -931,16 +930,25 @@
+ 		*slot = np | PTE_P | PTE_W;
+ 	}
+ 
+-	slot = (uint64 *)SLOTNEXT((uint64)slot);
+-	slot += PML4X(van);
+-	return pgdir_walk1(slot, SLOTNEXT(van), create);
++	uint64 *ns = (uint64 *)SLOTNEXT((uint64)slot);
++	ns += PML4X(van);
++	if (PML4X(ns) != VREC) {
++		USED(ns);
++		return slot;
++	}
++
++	return pgdir_walk1(ns, SLOTNEXT(van), create);
+ }
+ 
+ #pragma textflag NOSPLIT
+ uint64 *
+-pgdir_walk(uint64 *va, int32 create)
++pgdir_walk(void *va, int32 create)
+ {
+ 	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
++
++	if (PML4X(v) == VREC)
++		runtime·pancake(" va collides w/VREC ", v);
++
+ 	uint64 *pml4 = (uint64 *)CADDR(VREC, VREC, VREC, VREC);
+ 	pml4 += PML4X(v);
+ 	return pgdir_walk1(pml4, SLOTNEXT(v), create);
+@@ -948,16 +956,100 @@
+ 
+ #pragma textflag NOSPLIT
+ void
+-pgtest(void)
++alloc_map(void *va, int32 perms)
+ {
++	uint64 *pte = pgdir_walk(va, 1);
++	uint64 old = *pte;
++	// XXX goodbye, memory
++	*pte = get_pg() | perms | PTE_P;
++	if (old & PTE_P)
++		invlpg(va);
++}
++
++#pragma textflag NOSPLIT
++void *
++find_empty(void)
++{
++	uint8 *v = (uint8 *)CADDR(0, 0, 0, 1);
++	uint64 *pte;
++	do {
++		pte = pgdir_walk(v, 0);
++		v += PGSIZE;
++	} while (pte != nil);
++	return pte;
++}
++
++#pragma textflag NOSPLIT
++void*
++hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
++{
++	USED(fd);
++	USED(offset);
++	uint8 *v = (uint8 *)va;
++
++	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0)) {
++		runtime·pancake(" high addr? ", (uint64)v);
++		v = nil;
++	}
++	if (v == nil)
++		v = find_empty();
++
++	if (!(flags & MAP_ANON))
++		runtime·pancake(" not anon? ", flags);
++	if (!(flags & MAP_PRIVATE))
++		runtime·pancake(" not private? ", flags);
++
++	int32 perms = PTE_P;
++	if (prot == PROT_NONE) {
++		//hack_munmap(va, sz);
++		return v;
++	}
++
++	if (prot & PROT_WRITE)
++		perms |= PTE_W;
++
++	int32 i;
++	sz = ROUNDUP(sz, PGSIZE);
++	for (i = 0; i < sz ; i += PGSIZE)
++		alloc_map(v + i, perms);
++
++	return v;
++}
++
++#pragma textflag NOSPLIT
++int32
++hack_munmap(void *va, uint64 sz)
++{
++	uint8 *v = (uint8 *)va;
++	int32 i;
++	sz = ROUNDUP(sz, PGSIZE);
++	for (i = 0; i < sz; i+= PGSIZE) {
++		uint64 *pte = pgdir_walk(v + i, 0);
++		if (PML4X(v + i) >= VUMAX)
++			runtime·pancake(" unmap too high ", (uint64)(v + i));
++		// XXX goodbye, memory
++		if (pte && *pte & PTE_P) {
++			*pte = 0;
++			invlpg(v + i);
++		}
++	}
++	pmsg(" POOF ");
++
++	return 0;
++}
++
++#pragma textflag NOSPLIT
++void
++pgtest1(uint64 v)
++{
++	uint64 *va = (uint64 *)v;
+ 	pmsg(" PAGE TEST ");
+ 	uint64 phys = get_pg();
+ 	zero_phys(phys);
+ 
+-	uint64 *va = (uint64 *)0xc001d00d000ULL;
+ 	uint64 *pte = pgdir_walk(va, 0);
+ 	if (pte != nil)
+-		runtime·pancake(" something mapped? ", (uint64)va);
++		runtime·pancake(" something mapped? ", (uint64)pte);
+ 
+ 	pmsg(" no mapping ");
+ 	pte = pgdir_walk(va, 1);
+@@ -979,6 +1071,39 @@
+ 	//*pte = 0;
+ 	//invlpg(va);
+ 	//pnum(va[0]);
++}
+ 
+-	pmsg(" GUT ");
++#pragma textflag NOSPLIT
++void
++pgtest(void)
++{
++	uint64 va[] = {0xc001d00d000ULL, 0xfffffffffffff000ULL,
++	    0x1000ULL, 0x313371000ULL, 0x7f0000000000ULL,
++	    (uint64)CADDR(0, 0xc, 0, 0) };
++
++	int32 i;
++	for (i = 0; i < sizeof(va)/sizeof(va[0]); i++)
++		pgtest1(va[i]);
++	runtime·pancake(" GUT GUT GUT ", 0);
+ }
++
++#pragma textflag NOSPLIT
++void
++mmap_test(void)
++{
++	pmsg(" mmap TEST ");
++
++	uint64 *va = (uint64 *)0xc001d00d000ULL;
++
++	uint64 *ret = hack_mmap(va, 100*PGSIZE, PROT_READ|PROT_WRITE,
++	    MAP_ANON | MAP_PRIVATE, -1, 0);
++
++	if (ret != va)
++		runtime·pancake(" mmap failed? ", (uint64)ret);
++
++	int32 i;
++	for (i = 0; i < 100*PGSIZE/sizeof(uint64); i++)
++		ret[i] = 0;
++
++	pmsg(" mmap passed ");
++}
+diff -r a6551ffbe396 -r 01c1aa25240e src/runtime/panic.go
+--- a/src/runtime/panic.go	Thu Dec 11 12:56:56 2014 -0500
++++ b/src/runtime/panic.go	Thu Dec 11 20:28:47 2014 -0500
+@@ -482,7 +482,6 @@
+ 
+ //go:nosplit
+ func throw(s *byte) {
+-	pancake(s, 0x31337)
+ 	gp := getg()
+ 	if gp.m.throwing == 0 {
+ 		gp.m.throwing = 1
+diff -r a6551ffbe396 -r 01c1aa25240e src/runtime/proc.c
+--- a/src/runtime/proc.c	Thu Dec 11 12:56:56 2014 -0500
++++ b/src/runtime/proc.c	Thu Dec 11 20:28:47 2014 -0500
+@@ -135,6 +135,10 @@
+ 	runtime·symtabinit();
+ 	runtime·stackinit();
+ 	runtime·mallocinit();
++	extern int64 hackmode;
++	extern void pmsg(int8 *);
++	if (hackmode)
++		pmsg(" MALLOC ");
+ 	mcommoninit(g->m);
+ 	
+ 	runtime·goargs();
+@@ -144,11 +148,13 @@
+ 
+ 	runtime·sched.lastpoll = runtime·nanotime();
+ 	procs = 1;
+-	p = runtime·getenv("GOMAXPROCS");
+-	if(p != nil && (n = runtime·atoi(p)) > 0) {
+-		if(n > MaxGomaxprocs)
+-			n = MaxGomaxprocs;
+-		procs = n;
++	if (!hackmode) {
++		p = runtime·getenv("GOMAXPROCS");
++		if(p != nil && (n = runtime·atoi(p)) > 0) {
++			if(n > MaxGomaxprocs)
++				n = MaxGomaxprocs;
++			procs = n;
++		}
+ 	}
+ 	procresize(procs);
+ 
+diff -r a6551ffbe396 -r 01c1aa25240e src/runtime/sys_linux_amd64.s
+--- a/src/runtime/sys_linux_amd64.s	Thu Dec 11 12:56:56 2014 -0500
++++ b/src/runtime/sys_linux_amd64.s	Thu Dec 11 20:28:47 2014 -0500
+@@ -229,6 +229,11 @@
+ 	INT $3	// not reached
+ 
+ TEXT runtime·mmap(SB),NOSPLIT,$0
++	MOVQ	hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	mmap_skip
++	JMP	hack_mmap(SB)
++mmap_skip:
+ 	MOVQ	addr+0(FP), DI
+ 	MOVQ	n+8(FP), SI
+ 	MOVL	prot+16(FP), DX
+@@ -246,6 +251,11 @@
+ 	RET
+ 
+ TEXT runtime·munmap(SB),NOSPLIT,$0
++	MOVQ	hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	munmap_skip
++	JMP	hack_munmap(SB)
++munmap_skip:
+ 	MOVQ	addr+0(FP), DI
+ 	MOVQ	n+8(FP), SI
+ 	MOVQ	$11, AX	// munmap
+
+changeset:   21883:9599c41ea797
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Sun Dec 14 22:39:32 2014 -0500
+summary:     pass schedinit
+
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/asm_amd64.s	Sun Dec 14 22:39:32 2014 -0500
+@@ -151,19 +151,22 @@
+ 	RET
+ 
+ // i do it this strange way because if i declare fakeargv in C i get 'missing
+-// golang type information'.
++// golang type information'. need two 0 entries because go checks for
++// environment variables too.
+ DATA	fakeargv+0(SB)/8,$gostr(SB)
+ DATA	fakeargv+8(SB)/8,$0
+-GLOBL	fakeargv(SB),RODATA,$16
++DATA	fakeargv+16(SB)/8,$0
++GLOBL	fakeargv(SB),RODATA,$24
+ 
+ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+ 
+ 	// save page table and first free address from bootloader.
+ 	MOVL	DI, pgtbl(SB)
+ 	MOVL	SI, first_free(SB)
+-	MOVL	$1, hackmode(SB)
++	MOVQ	$1, runtime·hackmode(SB)
+ 
+ 	ANDQ	$~15, SP
++	//SUBQ	$8, SP	// traceback assumes the initial rsp is writable
+ 
+ 	// create istack out of the given (operating system) stack.
+ 	// _cgo_init may update stackguard.
+@@ -336,6 +339,12 @@
+ 	MOVL	$0xf1, 0xf1  // crash
+ 	RET
+ 
++
++TEXT rcr2(SB), NOSPLIT, $0-8
++	MOVQ	CR2, AX
++	MOVQ	AX, ret+0(FP)
++	RET
++
+ TEXT tlbflush(SB), NOSPLIT, $0-0
+ 	MOVQ	CR3, AX
+ 	MOVQ	AX, CR3
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/mheap.c
+--- a/src/runtime/mheap.c	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/mheap.c	Sun Dec 14 22:39:32 2014 -0500
+@@ -549,7 +549,12 @@
+ 	runtime·MSpanList_Remove(s);
+ 	// Stamp newly unused spans. The scavenger will use that
+ 	// info to potentially give back some pages to the OS.
+-	s->unusedsince = runtime·nanotime();
++	extern int64 runtime·hackmode;
++	if (runtime·hackmode) {
++		// XXX breaks scavenge
++		s->unusedsince = 0;
++	} else
++		s->unusedsince = runtime·nanotime();
+ 	s->npreleased = 0;
+ 
+ 	// Coalesce with earlier, later spans.
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/mprof.go
+--- a/src/runtime/mprof.go	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/mprof.go	Sun Dec 14 22:39:32 2014 -0500
+@@ -191,6 +191,9 @@
+ }
+ 
+ func sysAlloc(n uintptr, stat *uint64) unsafe.Pointer
++func pancake(n []byte, o uint64)
++func pnum(n uint64)
++func nmsg(n *byte)
+ 
+ func eqslice(x, y []uintptr) bool {
+ 	if len(x) != len(y) {
+@@ -352,7 +355,10 @@
+ // memory profiling rate should do so just once, as early as
+ // possible in the execution of the program (for example,
+ // at the beginning of main).
+-var MemProfileRate int = 512 * 1024
++//var MemProfileRate int = 512 * 1024
++// XXX profiling uses "callers" which uses gentraceback, which seems broken for
++// some reason...track this down!
++var MemProfileRate int = 0
+ 
+ // A MemProfileRecord describes the live objects allocated
+ // by a particular call sequence (stack trace).
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/os_linux.c	Sun Dec 14 22:39:32 2014 -0500
+@@ -174,8 +174,8 @@
+ void
+ runtime·osinit(void)
+ {
+-	extern uint64 hackmode;
+-	if (hackmode) {
++	extern uint64 runtime·hackmode;
++	if (runtime·hackmode) {
+ 		// XXX duur
+ 		runtime·ncpu = 1;
+ 	} else {
+@@ -392,6 +392,30 @@
+ 
+ #pragma textflag NOSPLIT
+ void
++runtime·pnum(uint64 n)
++{
++	extern uint64 runtime·hackmode;
++	if (!runtime·hackmode)
++		return;
++
++	runtime·doc(' ');
++
++	uint64 nn = (uint64)n;
++	int64 i;
++
++	for (i = 60; i >= 0; i -= 4) {
++		uint64 cn = (nn >> i) & 0xf;
++
++		if (cn <= 9)
++			runtime·doc('0' + cn);
++		else
++			runtime·doc('A' + cn - 10);
++	}
++}
++
++
++#pragma textflag NOSPLIT
++void
+ pmsg(int8 *msg)
+ {
+ 	if (msg)
+@@ -401,15 +425,13 @@
+ 
+ #pragma textflag NOSPLIT
+ void
+-nmsg(int8 *msg)
++runtime·nmsg(int8 *msg)
+ {
+-	extern uint64 hackmode;
+-	if (!hackmode)
++	extern uint64 runtime·hackmode;
++	if (!runtime·hackmode)
+ 		return;
+ 
+-	if (msg)
+-		while (*msg)
+-			runtime·doc(*msg++);
++	pmsg(msg);
+ }
+ 
+ #pragma textflag NOSPLIT
+@@ -768,9 +790,47 @@
+ 	pnum(trapno);
+ 
+ 	uint64 rip = *(tf + 2);
++	uint64 rsp = *(tf + 5);
+ 	pmsg(" rip ");
+ 	pnum(rip);
+ 
++	if (trapno == 14) {
++		extern uint64 rcr2(void);
++		uint64 cr2 = rcr2();
++		pmsg(" cr2 ");
++		pnum(cr2);
++	}
++
++	if (1)
++	{
++		//uint64 buf[8];
++		//int32 i;
++		//for (i = 0; i < 8; i++)
++		//	buf[i] = 0;
++		//runtime·callers(0, buf, 8);
++		//pmsg(" PCS ");
++		//for (i = 0; i < 8; i++) {
++		//	pnum(buf[i]);
++		//	pmsg(" ");
++		//}
++		pmsg(" STACK DUMP      ");
++		const uint64 is = 0x80000000;
++		uint64 *isp = (uint64 *)is - 8;
++		if (rsp < is && rsp >= is - 4096) {
++			int32 i;
++			uint64 *p = (uint64 *)rsp;
++			for (i = 0; i < 32; i++) {
++				if (p <= isp) {
++					pnum(*p++);
++					pmsg(" ");
++				}
++			}
++		} else {
++			pmsg(" bad stack ");
++			pnum(rsp);
++		}
++	}
++
+ 	runtime·pancake("trap", 0);
+ }
+ 
+@@ -785,7 +845,7 @@
+ uint64 first_free;
+ int32 pgtbl;
+ 
+-int64 hackmode;
++int64 runtime·hackmode;
+ int8 gostr[] = "go";
+ 
+ #pragma textflag NOSPLIT
+@@ -922,6 +982,13 @@
+ static uint64 *
+ pgdir_walk1(uint64 *slot, uint64 van, int32 create)
+ {
++	uint64 *ns = (uint64 *)SLOTNEXT((uint64)slot);
++	ns += PML4X(van);
++	if (PML4X(ns) != VREC) {
++		USED(ns);
++		return slot;
++	}
++
+ 	if (!(*slot & PTE_P)) {
+ 		if (!create)
+ 			return nil;
+@@ -930,13 +997,6 @@
+ 		*slot = np | PTE_P | PTE_W;
+ 	}
+ 
+-	uint64 *ns = (uint64 *)SLOTNEXT((uint64)slot);
+-	ns += PML4X(van);
+-	if (PML4X(ns) != VREC) {
+-		USED(ns);
+-		return slot;
+-	}
+-
+ 	return pgdir_walk1(ns, SLOTNEXT(van), create);
+ }
+ 
+@@ -956,27 +1016,44 @@
+ 
+ #pragma textflag NOSPLIT
+ void
+-alloc_map(void *va, int32 perms)
++alloc_map(void *va, int32 perms, int32 fempty)
+ {
+ 	uint64 *pte = pgdir_walk(va, 1);
+ 	uint64 old = *pte;
+ 	// XXX goodbye, memory
+ 	*pte = get_pg() | perms | PTE_P;
+-	if (old & PTE_P)
++	if (old & PTE_P) {
+ 		invlpg(va);
++		if (fempty)
++			runtime·pancake(" was not empty ", (uint64)va);
++	}
+ }
+ 
+ #pragma textflag NOSPLIT
+ void *
+-find_empty(void)
++find_empty(uint64 sz)
+ {
+ 	uint8 *v = (uint8 *)CADDR(0, 0, 0, 1);
+ 	uint64 *pte;
+-	do {
++	// XXX sweet
++	while (1) {
+ 		pte = pgdir_walk(v, 0);
++		if (!pte) {
++			int32 i, failed = 0;
++			for (i = 0; i < sz; i += PGSIZE) {
++				pte = pgdir_walk(v + i, 0);
++				if (pte) {
++					failed = 1;
++					v = v + i;
++					break;
++				}
++			}
++
++			if (!failed)
++				return v;
++		}
+ 		v += PGSIZE;
+-	} while (pte != nil);
+-	return pte;
++	}
+ }
+ 
+ #pragma textflag NOSPLIT
+@@ -991,8 +1068,10 @@
+ 		runtime·pancake(" high addr? ", (uint64)v);
+ 		v = nil;
+ 	}
++	sz = ROUNDUP((uint64)v+sz, PGSIZE);
++	sz -= ROUNDDOWN((uint64)v, PGSIZE);
+ 	if (v == nil)
+-		v = find_empty();
++		v = find_empty(sz);
+ 
+ 	if (!(flags & MAP_ANON))
+ 		runtime·pancake(" not anon? ", flags);
+@@ -1009,9 +1088,8 @@
+ 		perms |= PTE_W;
+ 
+ 	int32 i;
+-	sz = ROUNDUP(sz, PGSIZE);
+ 	for (i = 0; i < sz ; i += PGSIZE)
+-		alloc_map(v + i, perms);
++		alloc_map(v + i, perms, 1);
+ 
+ 	return v;
+ }
+@@ -1034,6 +1112,7 @@
+ 		}
+ 	}
+ 	pmsg(" POOF ");
++	pnum((uint64)va);
+ 
+ 	return 0;
+ }
+@@ -1043,13 +1122,13 @@
+ pgtest1(uint64 v)
+ {
+ 	uint64 *va = (uint64 *)v;
+-	pmsg(" PAGE TEST ");
+ 	uint64 phys = get_pg();
+ 	zero_phys(phys);
+ 
+ 	uint64 *pte = pgdir_walk(va, 0);
+-	if (pte != nil)
++	if (pte && *pte & PTE_P) {
+ 		runtime·pancake(" something mapped? ", (uint64)pte);
++	}
+ 
+ 	pmsg(" no mapping ");
+ 	pte = pgdir_walk(va, 1);
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/panic.go
+--- a/src/runtime/panic.go	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/panic.go	Sun Dec 14 22:39:32 2014 -0500
+@@ -494,6 +494,9 @@
+ 
+ //go:nosplit
+ func gothrow(s string) {
++	if (hackmode != 0) {
++		pancake(bytes(s), 0xbad);
++	}
+ 	gp := getg()
+ 	if gp.m.throwing == 0 {
+ 		gp.m.throwing = 1
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/print1.go
+--- a/src/runtime/print1.go	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/print1.go	Sun Dec 14 22:39:32 2014 -0500
+@@ -24,6 +24,7 @@
+ // type information would not add anything.
+ //go:nosplit
+ func printf(s *byte) {
++	nmsg(s)
+ 	vprintf(gostringnocopy(s), add(unsafe.Pointer(&s), unsafe.Sizeof(s)))
+ }
+ 
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/proc.c
+--- a/src/runtime/proc.c	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/proc.c	Sun Dec 14 22:39:32 2014 -0500
+@@ -135,20 +135,21 @@
+ 	runtime·symtabinit();
+ 	runtime·stackinit();
+ 	runtime·mallocinit();
+-	extern int64 hackmode;
+-	extern void pmsg(int8 *);
+-	if (hackmode)
+-		pmsg(" MALLOC ");
+ 	mcommoninit(g->m);
+ 	
+ 	runtime·goargs();
+ 	runtime·goenvs();
+ 	runtime·parsedebugvars();
+ 	runtime·gcinit();
+-
+-	runtime·sched.lastpoll = runtime·nanotime();
++	extern int64 runtime·hackmode;
++
++	// XXX -- i think we need nanotime, probably dont care about polling
++	// though
++	//runtime·sched.lastpoll = runtime·nanotime();
++	runtime·sched.lastpoll = 0;
+ 	procs = 1;
+-	if (!hackmode) {
++	extern int64 runtime·hackmode;
++	if (!runtime·hackmode) {
+ 		p = runtime·getenv("GOMAXPROCS");
+ 		if(p != nil && (n = runtime·atoi(p)) > 0) {
+ 			if(n > MaxGomaxprocs)
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/stubs.go
+--- a/src/runtime/stubs.go	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/stubs.go	Sun Dec 14 22:39:32 2014 -0500
+@@ -122,8 +122,6 @@
+ func readmemstats_m()
+ func writeheapdump_m()
+ 
+-func pancake(*byte, int)
+-
+ // memclr clears n bytes starting at ptr.
+ // in memclr_*.s
+ //go:noescape
+diff -r 01c1aa25240e -r 9599c41ea797 src/runtime/sys_linux_amd64.s
+--- a/src/runtime/sys_linux_amd64.s	Thu Dec 11 20:28:47 2014 -0500
++++ b/src/runtime/sys_linux_amd64.s	Sun Dec 14 22:39:32 2014 -0500
+@@ -113,6 +113,11 @@
+ 	// We're guaranteed 128 bytes on entry, and we've taken 16, and the
+ 	// call uses another 8.
+ 	// That leaves 104 for the gettime code to use. Hope that's enough!
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	now_skip
++	INT	$3
++now_skip:
+ 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
+ 	CMPQ	AX, $0
+ 	JEQ	fallback_gtod
+@@ -139,6 +144,11 @@
+ TEXT runtime·nanotime(SB),NOSPLIT,$16
+ 	// Duplicate time.now here to avoid using up precious stack space.
+ 	// See comment above in time.now.
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	nnow_skip
++	INT	$3
++nnow_skip:
+ 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
+ 	CMPQ	AX, $0
+ 	JEQ	fallback_gtod_nt
+@@ -229,7 +239,7 @@
+ 	INT $3	// not reached
+ 
+ TEXT runtime·mmap(SB),NOSPLIT,$0
+-	MOVQ	hackmode(SB), DI
++	MOVQ	runtime·hackmode(SB), DI
+ 	TESTQ	DI, DI
+ 	JZ	mmap_skip
+ 	JMP	hack_mmap(SB)
+@@ -251,7 +261,7 @@
+ 	RET
+ 
+ TEXT runtime·munmap(SB),NOSPLIT,$0
+-	MOVQ	hackmode(SB), DI
++	MOVQ	runtime·hackmode(SB), DI
+ 	TESTQ	DI, DI
+ 	JZ	munmap_skip
+ 	JMP	hack_munmap(SB)
+
+changeset:   21884:e3afee780165
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Mon Dec 22 12:59:38 2014 -0500
+summary:     timer init, trapret
+
+diff -r 9599c41ea797 -r e3afee780165 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Sun Dec 14 22:39:32 2014 -0500
++++ b/src/runtime/asm_amd64.s	Mon Dec 22 12:59:38 2014 -0500
+@@ -227,7 +227,7 @@
+ 	// setup tls
+ 	LEAQ	runtime·tls0(SB), DI
+ 	PUSHQ	DI
+-	CALL	runtime·segsetup(SB)
++	CALL	segsetup(SB)
+ 
+ 	MOVQ	8(AX), DI
+ 	PUSHQ	DI
+@@ -285,6 +285,7 @@
+ 	MOVQ	AX, g_m(CX)
+ 
+ 	CALL	intsetup(SB)
++	CALL	timersetup(SB)
+ 
+ 	FINIT
+ 	MOVQ	CR4, AX
+@@ -323,7 +324,6 @@
+ 	POPQ	AX
+ 	CALL	runtime·osinit(SB)
+ 	CALL	runtime·schedinit(SB)
+-	CALL	wemadeit(SB)
+ 
+ 	// create a new goroutine to start program
+ 	MOVQ	$runtime·main·f(SB), BP		// entry
+@@ -335,6 +335,7 @@
+ 
+ 	// start this M
+ 	CALL	runtime·mstart(SB)
++	CALL	wemadeit(SB)
+ 
+ 	MOVL	$0xf1, 0xf1  // crash
+ 	RET
+@@ -388,6 +389,21 @@
+ 	MOVQ	AX, CR4
+ 	RET
+ 
++TEXT rdmsr(SB), NOSPLIT, $0-16
++	MOVQ	reg+0(FP), CX
++	// rdmsr
++	RDMSR
++	MOVL	DX, ret2+12(FP)
++	MOVL	AX, ret1+8(FP)
++	RET
++
++TEXT outb(SB), NOSPLIT, $0-8
++	MOVL	reg+0(FP), DX
++	MOVL	val+4(FP), AX
++	// outb	%al, (%dx)
++	BYTE	$0xee
++	RET
++
+ #define IH_NOEC(num, fn)		\
+ TEXT fn(SB), NOSPLIT, $0-0;		\
+ 	PUSHQ	$0;			\
+@@ -430,8 +446,38 @@
+ IH_NOEC(18,Xmc )
+ IH_NOEC(19,Xfp )
+ IH_NOEC(20,Xve )
++IH_NOEC(32,Xtimer )
++IH_NOEC(47,Xspur )
+ 
+ TEXT alltraps(SB), NOSPLIT, $0-0
++	// tf[15] = trapno
++	// 15 + 1 pushes
++	// pusha is not valid in 64bit mode!
++	PUSHQ	AX
++
++	MOVQ	$(0x80000000 - 4096 + 14*8), AX
++	CMPQ	SP, AX
++	JA	sgut
++	MOVQ	$0xf1, 0xf1
++	BYTE	$0xeb
++	BYTE	$0xfe
++
++sgut:
++	PUSHQ	BX
++	PUSHQ	CX
++	PUSHQ	DX
++	PUSHQ	DI
++	PUSHQ	SI
++	PUSHQ	BP
++	PUSHQ	R8
++	PUSHQ	R9
++	PUSHQ	R10
++	PUSHQ	R11
++	PUSHQ	R12
++	PUSHQ	R13
++	PUSHQ	R14
++	PUSHQ	R15
++
+ 	MOVQ	SP, AX
+ 	PUSHQ	AX
+ 	CALL	trap(SB)
+@@ -440,6 +486,33 @@
+ 	POPQ	AX
+ 	RET
+ 
++TEXT trapret(SB), NOSPLIT, $0-8
++	MOVQ	fp+0(FP), AX
++	MOVQ	AX, SP
++
++	POPQ	R15
++	POPQ	R14
++	POPQ	R13
++	POPQ	R12
++	POPQ	R11
++	POPQ	R10
++	POPQ	R9
++	POPQ	R8
++	POPQ	BP
++	POPQ	SI
++	POPQ	DI
++	POPQ	DX
++	POPQ	CX
++	POPQ	BX
++	POPQ	AX
++	// skip trapno and error code
++	ADDQ	$16, SP
++
++	// iretq
++	BYTE	$0x48
++	BYTE	$0xcf
++	MOVQ	$0xf1, 0xf1
++
+ /*
+  *  go-routine
+  */
+diff -r 9599c41ea797 -r e3afee780165 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Sun Dec 14 22:39:32 2014 -0500
++++ b/src/runtime/os_linux.c	Mon Dec 22 12:59:38 2014 -0500
+@@ -573,7 +573,7 @@
+ 
+ #pragma textflag NOSPLIT
+ uint64
+-runtime·segsetup(void *tls0)
++segsetup(void *tls0)
+ {
+ 	uint64 tlsaddr = (uint64)tls0;
+ 
+@@ -601,13 +601,13 @@
+ 	return (uint64)&pd;
+ }
+ 
++extern void runtime·deray(uint64);
+ #pragma textflag NOSPLIT
+ void
+ marksleep(int8 *msg)
+ {
+ 	pmsg(" ");
+ 	pmsg(msg);
+-	extern void runtime·deray(uint64);
+ 	runtime·deray(5000000);
+ }
+ 
+@@ -749,6 +749,8 @@
+ 	extern void Xmc (void);
+ 	extern void Xfp (void);
+ 	extern void Xve (void);
++	extern void Xtimer(void);
++	extern void Xspur(void);
+ 
+ 	int_set(&idt[ 0], (uint64) Xdz , 0);
+ 	int_set(&idt[ 1], (uint64) Xrz , 0);
+@@ -772,6 +774,9 @@
+ 	int_set(&idt[19], (uint64) Xfp , 0);
+ 	int_set(&idt[20], (uint64) Xve , 0);
+ 
++	int_set(&idt[32], (uint64) Xtimer, 0);
++	int_set(&idt[47], (uint64) Xspur, 0);
++
+ 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
+ 	lidt(&p);
+ 
+@@ -780,22 +785,39 @@
+ 
+ #pragma textflag NOSPLIT
+ void
++wemadeit(void)
++{
++	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
++}
++
++#pragma textflag NOSPLIT
++void
+ trap(uint64 *tf)
+ {
++	uint64 trapno = tf[15];
++
++	if (trapno == 32) {
++		runtime·pancake(" TIMER INT ", trapno);
++
++		void lap_eoi(void);
++		lap_eoi();
++		void trapret(uint64 *);
++		trapret(tf);
++	}
++
+ 	pmsg("trap frame at ");
+ 	pnum((uint64)tf);
+ 
+-	uint64 trapno = *tf;
+ 	pmsg(" trapno ");
+ 	pnum(trapno);
+ 
+-	uint64 rip = *(tf + 2);
+-	uint64 rsp = *(tf + 5);
++	uint64 rip = tf[15 + 2];
++	uint64 rsp = tf[15 + 5];
+ 	pmsg(" rip ");
+ 	pnum(rip);
+ 
+ 	if (trapno == 14) {
+-		extern uint64 rcr2(void);
++		uint64 rcr2(void);
+ 		uint64 cr2 = rcr2();
+ 		pmsg(" cr2 ");
+ 		pnum(cr2);
+@@ -813,6 +835,7 @@
+ 		//	pnum(buf[i]);
+ 		//	pmsg(" ");
+ 		//}
++		//pnum(rsp);
+ 		pmsg(" STACK DUMP      ");
+ 		const uint64 is = 0x80000000;
+ 		uint64 *isp = (uint64 *)is - 8;
+@@ -834,13 +857,6 @@
+ 	runtime·pancake("trap", 0);
+ }
+ 
+-#pragma textflag NOSPLIT
+-void
+-wemadeit(void)
+-{
+-	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
+-}
+-
+ // given to us by bootloader
+ uint64 first_free;
+ int32 pgtbl;
+@@ -892,8 +908,8 @@
+ 	// set OSFXSR
+ 	cr4 |= 1 << 9;
+ 
+-	extern void lcr0(uint64);
+-	extern void lcr4(uint64);
++	void lcr0(uint64);
++	void lcr4(uint64);
+ 	lcr0(cr0);
+ 	lcr4(cr4);
+ }
+@@ -913,6 +929,7 @@
+ #define PTE_P           (1ULL << 0)
+ #define PTE_W           (1ULL << 1)
+ #define PTE_U           (1ULL << 2)
++#define PTE_PCD         (1ULL << 4)
+ 
+ #define PTE_ADDR(x)     ((x) & ~0x3ff)
+ 
+@@ -957,7 +974,7 @@
+ 		*p++ = b;
+ }
+ 
+-extern invlpg(void *);
++void invlpg(void *);
+ 
+ #pragma textflag NOSPLIT
+ void
+@@ -1112,11 +1129,34 @@
+ 		}
+ 	}
+ 	pmsg(" POOF ");
+-	pnum((uint64)va);
++	//pnum((uint64)va);
+ 
+ 	return 0;
+ }
+ 
++int64
++hack_write(int32 fd, const void *buf, uint64 c)
++{
++	if (fd != 1 && fd != 2)
++		runtime·pancake(" weird fd ", (uint64)fd);
++
++	pmsg(" C> ");
++	pnum(c);
++	pmsg(" <C ");
++	runtime·deray(5000000);
++	int64 ret = (int64)c;
++	byte *p = (byte *)buf;
++	int32 i = 0;
++	while(c--) {
++		runtime·doc(*p++);
++		if ((++i % 20) == 0)
++			runtime·deray(5000000);
++	}
++
++	runtime·deray(5000000);
++	return ret;
++}
++
+ #pragma textflag NOSPLIT
+ void
+ pgtest1(uint64 v)
+@@ -1186,3 +1226,118 @@
+ 
+ 	pmsg(" mmap passed ");
+ }
++
++static uint64 lapaddr;
++
++#pragma textflag NOSPLIT
++uint32
++rlap(uint32 reg)
++{
++	if (!lapaddr)
++		runtime·pancake(" lapaddr null? ", lapaddr);
++	volatile uint32 *p = (uint32 *)lapaddr;
++	return p[reg];
++}
++
++#pragma textflag NOSPLIT
++void
++wlap(uint32 reg, uint32 val)
++{
++	if (!lapaddr)
++		runtime·pancake(" lapaddr null? ", lapaddr);
++	volatile uint32 *p = (uint32 *)lapaddr;
++	p[reg] = val;
++}
++
++#pragma textflag NOSPLIT
++void
++lap_eoi(void)
++{
++	if (!lapaddr)
++		runtime·pancake(" lapaddr null? ", lapaddr);
++
++#define EOIREG      (0xb0/4)
++	wlap(EOIREG, 0);
++}
++
++#pragma textflag NOSPLIT
++void
++timersetup(void)
++{
++
++	lapaddr = (uint64)0xfee00000;
++
++	// map lapic IO mem
++	uint64 *pte = pgdir_walk((void *)lapaddr, 0);
++	if (pte)
++		runtime·pancake(" lapic mem mapped? ", (uint64)pte);
++	pte = pgdir_walk((void *)lapaddr, 1);
++	*pte = (uint64)lapaddr | PTE_W | PTE_P | PTE_PCD;
++
++#define LVTIMER     (0x320/4)
++#define DCREG       (0x3e0/4)
++#define DIVONE      0xb
++#define ICREG       (0x380/4)
++
++	// timer: periodic, int 32
++	wlap(LVTIMER, 1 << 17 | 32);
++	// divide by
++	wlap(DCREG, DIVONE);
++	// initial count
++	wlap(ICREG, 10000000);
++
++#define LVCMCI      (0x2f0/4)
++#define LVINT0      (0x350/4)
++#define LVINT1      (0x360/4)
++#define LVERROR     (0x370/4)
++#define LVPERF      (0x340/4)
++#define LVTHERMAL   (0x330/4)
++
++#define MASKSHIFT   16
++
++	// mask cmci, lint[01], error, perf counters, and thermal sensor
++	wlap(LVCMCI,    1 << MASKSHIFT);
++	// masking LVINT0 somewhow results in a GPfault?
++	//wlap(LVINT0,    1 << MASKSHIFT);
++	wlap(LVINT1,    1 << MASKSHIFT);
++	wlap(LVERROR,   1 << MASKSHIFT);
++	wlap(LVPERF,    1 << MASKSHIFT);
++	wlap(LVTHERMAL, 1 << MASKSHIFT);
++
++#define IA32_APIC_BASE   0x1b
++	uint64 rdmsr(uint64);
++	uint64 reg = rdmsr(IA32_APIC_BASE);
++	if (!(reg & (1 << 11)))
++		runtime·pancake(" lapic disabled? ", reg);
++	if (reg >> 12 != 0xfee00)
++		runtime·pancake(" weird base addr? ", reg >> 12);
++
++#define LVSPUR     (0xf0/4)
++	uint32 lreg = rlap(LVSPUR);
++	if (lreg & (1 << 12))
++		pmsg(" EOI broadcast surpression ");
++	if (lreg & (1 << 9))
++		pmsg(" focus processor checking ");
++	if (!(lreg & (1 << 8)))
++		pmsg(" apic disabled ");
++
++	wlap(LVSPUR, 1 << 8 | 47);
++
++	// 8259a - mask all ints. skipping this step results in GPfault too?
++	void outb(uint32, uint32);
++	outb(0x20 + 1, 0xff);
++	outb(0xa0 + 1, 0xff);
++}
++
++#pragma textflag NOSPLIT
++int32
++hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
++{
++	USED(mp);
++	USED(gp);
++	USED(flags);
++	USED(stack);
++	runtime·pancake(" in crone ", (uint64)fn);
++
++	return 0;
++}
+diff -r 9599c41ea797 -r e3afee780165 src/runtime/sys_linux_amd64.s
+--- a/src/runtime/sys_linux_amd64.s	Sun Dec 14 22:39:32 2014 -0500
++++ b/src/runtime/sys_linux_amd64.s	Mon Dec 22 12:59:38 2014 -0500
+@@ -38,6 +38,12 @@
+ 	RET
+ 
+ TEXT runtime·write(SB),NOSPLIT,$0-28
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	write_skip
++	JMP	hack_write(SB)
++	RET
++write_skip:
+ 	MOVQ	fd+0(FP), DI
+ 	MOVQ	p+8(FP), SI
+ 	MOVL	n+16(FP), DX
+@@ -179,6 +185,11 @@
+ 	RET
+ 
+ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	spm_skip
++	RET
++spm_skip:
+ 	MOVL	sig+0(FP), DI
+ 	MOVQ	new+8(FP), SI
+ 	MOVQ	old+16(FP), DX
+@@ -191,6 +202,12 @@
+ 	RET
+ 
+ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	sa_skip
++	MOVL	$0, ret+32(FP)
++	RET
++sa_skip:
+ 	MOVQ	sig+0(FP), DI
+ 	MOVQ	new+8(FP), SI
+ 	MOVQ	old+16(FP), DX
+@@ -300,6 +317,12 @@
+ 
+ // int32 clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void));
+ TEXT runtime·clone(SB),NOSPLIT,$0
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	clone_skip
++	JMP	hack_clone(SB)
++	RET
++clone_skip:
+ 	MOVL	flags+8(SP), DI
+ 	MOVQ	stack+16(SP), SI
+ 
+@@ -346,6 +369,11 @@
+ 	JMP	-3(PC)	// keep exiting
+ 
+ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
++	MOVQ	runtime·hackmode(SB), DI
++	TESTQ	DI, DI
++	JZ	sas_skip
++	RET
++sas_skip:
+ 	MOVQ	new+8(SP), DI
+ 	MOVQ	old+16(SP), SI
+ 	MOVQ	$131, AX
+
+changeset:   21885:24ef204fd8b1
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Mon Dec 22 15:57:02 2014 -0500
+summary:     multitasking
+
+diff -r e3afee780165 -r 24ef204fd8b1 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Mon Dec 22 12:59:38 2014 -0500
++++ b/src/runtime/asm_amd64.s	Mon Dec 22 15:57:02 2014 -0500
+@@ -334,8 +334,8 @@
+ 	POPQ	AX
+ 
+ 	// start this M
++	STI
+ 	CALL	runtime·mstart(SB)
+-	CALL	wemadeit(SB)
+ 
+ 	MOVL	$0xf1, 0xf1  // crash
+ 	RET
+@@ -404,6 +404,18 @@
+ 	BYTE	$0xee
+ 	RET
+ 
++TEXT rflags(SB), NOSPLIT, $0-8
++	// pushf
++	BYTE	$0x9c
++	POPQ	AX
++	MOVQ	AX, ret+8(FP)
++	RET
++
++TEXT rrsp(SB), NOSPLIT, $0-8
++	MOVQ	SP, AX
++	MOVQ	AX, ret+0(FP)
++	RET
++
+ #define IH_NOEC(num, fn)		\
+ TEXT fn(SB), NOSPLIT, $0-0;		\
+ 	PUSHQ	$0;			\
+@@ -455,14 +467,13 @@
+ 	// pusha is not valid in 64bit mode!
+ 	PUSHQ	AX
+ 
+-	MOVQ	$(0x80000000 - 4096 + 14*8), AX
+-	CMPQ	SP, AX
+-	JA	sgut
+-	MOVQ	$0xf1, 0xf1
+-	BYTE	$0xeb
+-	BYTE	$0xfe
+-
+-sgut:
++//	MOVQ	$(0x80000000 - 4096 + 14*8), AX
++//	CMPQ	SP, AX
++//	JA	sgut
++//	BYTE	$0xeb
++//	BYTE	$0xfe
++//
++//sgut:
+ 	PUSHQ	BX
+ 	PUSHQ	CX
+ 	PUSHQ	DX
+diff -r e3afee780165 -r 24ef204fd8b1 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Mon Dec 22 12:59:38 2014 -0500
++++ b/src/runtime/os_linux.c	Mon Dec 22 15:57:02 2014 -0500
+@@ -380,6 +380,7 @@
+ 	uint64 nn = (uint64)n;
+ 	int64 i;
+ 
++	runtime·doc(' ');
+ 	for (i = 60; i >= 0; i -= 4) {
+ 		uint64 cn = (nn >> i) & 0xf;
+ 
+@@ -397,20 +398,7 @@
+ 	extern uint64 runtime·hackmode;
+ 	if (!runtime·hackmode)
+ 		return;
+-
+-	runtime·doc(' ');
+-
+-	uint64 nn = (uint64)n;
+-	int64 i;
+-
+-	for (i = 60; i >= 0; i -= 4) {
+-		uint64 cn = (nn >> i) & 0xf;
+-
+-		if (cn <= 9)
+-			runtime·doc('0' + cn);
+-		else
+-			runtime·doc('A' + cn - 10);
+-	}
++	pnum(n);
+ }
+ 
+ 
+@@ -418,6 +406,7 @@
+ void
+ pmsg(int8 *msg)
+ {
++	runtime·doc(' ');
+ 	if (msg)
+ 		while (*msg)
+ 			runtime·doc(*msg++);
+@@ -438,16 +427,15 @@
+ void
+ runtime·pancake(void *msg, int64 addr)
+ {
+-	runtime·doc(' ');
+-
+ 	pmsg(msg);
+ 
+-	runtime·doc(' ');
+ 	pnum(addr);
+ 	pmsg(" PANCAKE");
+ 	while (1);
+ }
+ 
++#define assert(x, y, z)        do { if (!(x)) runtime·pancake(y, z); } while (0)
++
+ #pragma textflag NOSPLIT
+ static void
+ bw(uint8 *d, uint64 data, uint64 off)
+@@ -464,13 +452,13 @@
+ 	uint8 dur[8];
+ };
+ 
+-#define	G	0x80
+-#define	D	0x40
+-#define	L	0x20
++#define	G       0x80
++#define	D       0x40
++#define	L       0x20
+ 
+-#define	CODE	0xa
+-#define	DATA	0x2
+-#define	TSS	0x9
++#define	CODE    0xa
++#define	DATA    0x2
++#define	TSS     0x9
+ 
+ static struct seg64_t segs[6] = {
+ 	// NULL seg
+@@ -512,9 +500,9 @@
+ 
+ static struct pdesc_t pd;
+ 
+-#define	CODE_SEG	1
+-#define	FS_SEG		3
+-#define	TSS_SEG		4
++#define	CODE_SEG        1
++#define	FS_SEG          3
++#define	TSS_SEG         4
+ 
+ #pragma textflag NOSPLIT
+ static void
+@@ -550,7 +538,7 @@
+ #undef D
+ #undef L
+ 
+-#define	CHECK32(x)	(x & ~((1ULL << 32) - 1))
++#define	CHECK32(x)     (x & ~((1ULL << 32) - 1))
+ 
+ #pragma textflag NOSPLIT
+ static void
+@@ -606,7 +594,6 @@
+ void
+ marksleep(int8 *msg)
+ {
+-	pmsg(" ");
+ 	pmsg(msg);
+ 	runtime·deray(5000000);
+ }
+@@ -615,10 +602,10 @@
+ 	uint8 dur[16];
+ };
+ 
+-#define	INT		0xe
+-#define	TRAP		0xf
++#define	INT     0xe
++#define	TRAP    0xf
+ 
+-#define	NIDTE		64
++#define	NIDTE   64
+ struct idte_t idt[NIDTE];
+ 
+ #pragma textflag NOSPLIT
+@@ -790,36 +777,79 @@
+ 	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
+ }
+ 
++struct thread {
++#define TFREGS       15
++#define TFHW         7
++#define TFSIZE       ((TFREGS + TFHW)*8)
++	uint64 tf[TFREGS + TFHW];
++#define TF_RSP       (TFREGS + 5)
++#define TF_RIP       (TFREGS + 2)
++#define TF_CS        (TFREGS + 3)
++#define TF_RFLAGS    (TFREGS + 4)
++#define TF_SS        (TFREGS + 6)
++#define TF_TRAPNO    TFREGS
++
++	int32 valid;
++};
++
++#define NTHREADS        5
++struct thread threads[NTHREADS];
++static int32 th_cur;
++
++#pragma textflag NOSPLIT
++void
++memcpy(void *dst, void *src, uint64 sz)
++{
++	uint8 *to = (uint8 *)dst;
++	uint8 *from = (uint8 *)src;
++	while (sz--)
++		*to++ = *from++;
++}
++
++#define TRAP_TIMER      32
+ #pragma textflag NOSPLIT
+ void
+ trap(uint64 *tf)
+ {
+-	uint64 trapno = tf[15];
++	uint64 trapno = tf[TF_TRAPNO];
+ 
+-	if (trapno == 32) {
+-		runtime·pancake(" TIMER INT ", trapno);
++	if (trapno == TRAP_TIMER) {
++		void lap_eoi(void);
++		void trapret(uint64 *);
+ 
+-		void lap_eoi(void);
++		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
++
++		memcpy(threads[th_cur].tf, tf, TFSIZE);
++
++		int32 i;
++		for (i = (th_cur + 1) % NTHREADS;
++		     !threads[i].valid;
++		     i = (i + 1) % NTHREADS)
++		     	;
++
++		uint64 *tnext = (uint64 *)threads[i].tf;
++		assert(tnext[TF_RFLAGS] & (1 << 9), "no interrupts?", 0);
++		th_cur = i;
++
+ 		lap_eoi();
+-		void trapret(uint64 *);
+-		trapret(tf);
++		trapret(tnext);
+ 	}
+ 
+-	pmsg("trap frame at ");
++	pmsg("trap frame at");
+ 	pnum((uint64)tf);
+ 
+-	pmsg(" trapno ");
++	pmsg("trapno");
+ 	pnum(trapno);
+ 
+-	uint64 rip = tf[15 + 2];
+-	uint64 rsp = tf[15 + 5];
+-	pmsg(" rip ");
++	uint64 rip = tf[TF_RIP];
++	uint64 rsp = tf[TF_RSP];
++	pmsg("rip");
+ 	pnum(rip);
+ 
+ 	if (trapno == 14) {
+ 		uint64 rcr2(void);
+ 		uint64 cr2 = rcr2();
+-		pmsg(" cr2 ");
++		pmsg("cr2");
+ 		pnum(cr2);
+ 	}
+ 
+@@ -836,20 +866,18 @@
+ 		//	pmsg(" ");
+ 		//}
+ 		//pnum(rsp);
+-		pmsg(" STACK DUMP      ");
++		pmsg("STACK DUMP      ");
+ 		const uint64 is = 0x80000000;
+ 		uint64 *isp = (uint64 *)is - 8;
+ 		if (rsp < is && rsp >= is - 4096) {
+ 			int32 i;
+ 			uint64 *p = (uint64 *)rsp;
+ 			for (i = 0; i < 32; i++) {
+-				if (p <= isp) {
++				if (p <= isp)
+ 					pnum(*p++);
+-					pmsg(" ");
+-				}
+ 			}
+ 		} else {
+-			pmsg(" bad stack ");
++			pmsg("bad stack");
+ 			pnum(rsp);
+ 		}
+ 	}
+@@ -872,7 +900,7 @@
+ 	//pmsg(" first free ");
+ 	//pnum(first_free);
+ 
+-	pmsg(" inspect cr0 ");
++	pmsg("inspect cr0");
+ 
+ 	if (cr0 & (1UL << 30))
+ 		pmsg("CD set ");
+@@ -934,13 +962,13 @@
+ #define PTE_ADDR(x)     ((x) & ~0x3ff)
+ 
+ // slot for recursive mapping
+-#define	VREC	0x42ULL
+-#define	VTEMP	0x43ULL
++#define	VREC    0x42ULL
++#define	VTEMP   0x43ULL
+ 
+-#define	VUMAX	0x42ULL		// highest "user" mapping
++#define	VUMAX   0x42ULL		// highest "user" mapping
+ 
+ #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
+-#define SLOTNEXT(v)	((v << 9) & ((1ULL << 48) - 1))
++#define SLOTNEXT(v)       ((v << 9) & ((1ULL << 48) - 1))
+ 
+ #pragma textflag NOSPLIT
+ uint64
+@@ -949,7 +977,7 @@
+ 	// XXX use e820 map
+ 	uint64 ret = first_free;
+ 	if (ret & PGOFFMASK)
+-		runtime·pancake(" ret not aligned? ", ret);
++		runtime·pancake("ret not aligned?", ret);
+ 
+ 	first_free += PGSIZE;
+ 
+@@ -984,7 +1012,7 @@
+ 
+ 	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
+ 	if (recva[VTEMP] & PTE_P)
+-		runtime·pancake(" vtemp in use? ", recva[VTEMP]);
++		runtime·pancake("vtemp in use?", recva[VTEMP]);
+ 	recva[VTEMP] = phys | PTE_P | PTE_W;
+ 
+ 	uint64 *va = CADDR(VREC, VREC, VREC, VTEMP);
+@@ -1024,7 +1052,7 @@
+ 	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
+ 
+ 	if (PML4X(v) == VREC)
+-		runtime·pancake(" va collides w/VREC ", v);
++		runtime·pancake("va collides w/VREC", v);
+ 
+ 	uint64 *pml4 = (uint64 *)CADDR(VREC, VREC, VREC, VREC);
+ 	pml4 += PML4X(v);
+@@ -1042,7 +1070,7 @@
+ 	if (old & PTE_P) {
+ 		invlpg(va);
+ 		if (fempty)
+-			runtime·pancake(" was not empty ", (uint64)va);
++			runtime·pancake("was not empty", (uint64)va);
+ 	}
+ }
+ 
+@@ -1082,7 +1110,7 @@
+ 	uint8 *v = (uint8 *)va;
+ 
+ 	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0)) {
+-		runtime·pancake(" high addr? ", (uint64)v);
++		runtime·pancake("high addr?", (uint64)v);
+ 		v = nil;
+ 	}
+ 	sz = ROUNDUP((uint64)v+sz, PGSIZE);
+@@ -1091,9 +1119,9 @@
+ 		v = find_empty(sz);
+ 
+ 	if (!(flags & MAP_ANON))
+-		runtime·pancake(" not anon? ", flags);
++		runtime·pancake("not anon?", flags);
+ 	if (!(flags & MAP_PRIVATE))
+-		runtime·pancake(" not private? ", flags);
++		runtime·pancake("not private?", flags);
+ 
+ 	int32 perms = PTE_P;
+ 	if (prot == PROT_NONE) {
+@@ -1121,14 +1149,14 @@
+ 	for (i = 0; i < sz; i+= PGSIZE) {
+ 		uint64 *pte = pgdir_walk(v + i, 0);
+ 		if (PML4X(v + i) >= VUMAX)
+-			runtime·pancake(" unmap too high ", (uint64)(v + i));
++			runtime·pancake("unmap too high", (uint64)(v + i));
+ 		// XXX goodbye, memory
+ 		if (pte && *pte & PTE_P) {
+ 			*pte = 0;
+ 			invlpg(v + i);
+ 		}
+ 	}
+-	pmsg(" POOF ");
++	pmsg("POOF");
+ 	//pnum((uint64)va);
+ 
+ 	return 0;
+@@ -1138,11 +1166,11 @@
+ hack_write(int32 fd, const void *buf, uint64 c)
+ {
+ 	if (fd != 1 && fd != 2)
+-		runtime·pancake(" weird fd ", (uint64)fd);
++		runtime·pancake("weird fd", (uint64)fd);
+ 
+-	pmsg(" C> ");
++	pmsg("C>");
+ 	pnum(c);
+-	pmsg(" <C ");
++	pmsg("<C");
+ 	runtime·deray(5000000);
+ 	int64 ret = (int64)c;
+ 	byte *p = (byte *)buf;
+@@ -1167,18 +1195,18 @@
+ 
+ 	uint64 *pte = pgdir_walk(va, 0);
+ 	if (pte && *pte & PTE_P) {
+-		runtime·pancake(" something mapped? ", (uint64)pte);
++		runtime·pancake("something mapped?", (uint64)pte);
+ 	}
+ 
+-	pmsg(" no mapping ");
++	pmsg("no mapping");
+ 	pte = pgdir_walk(va, 1);
+ 	*pte = phys | PTE_P | PTE_W;
+ 	int32 i;
+ 	for (i = 0; i < 512; i++)
+ 		if (va[i] != 0)
+-			runtime·pancake(" new page not zero? ", va[i]);
++			runtime·pancake("new page not zero?", va[i]);
+ 
+-	pmsg(" zeroed ");
++	pmsg("zeroed");
+ 	va[0] = 31337;
+ 	va[256] = 31337;
+ 	va[511] = 31337;
+@@ -1203,14 +1231,14 @@
+ 	int32 i;
+ 	for (i = 0; i < sizeof(va)/sizeof(va[0]); i++)
+ 		pgtest1(va[i]);
+-	runtime·pancake(" GUT GUT GUT ", 0);
++	runtime·pancake("GUT GUT GUT", 0);
+ }
+ 
+ #pragma textflag NOSPLIT
+ void
+ mmap_test(void)
+ {
+-	pmsg(" mmap TEST ");
++	pmsg("mmap TEST");
+ 
+ 	uint64 *va = (uint64 *)0xc001d00d000ULL;
+ 
+@@ -1218,13 +1246,13 @@
+ 	    MAP_ANON | MAP_PRIVATE, -1, 0);
+ 
+ 	if (ret != va)
+-		runtime·pancake(" mmap failed? ", (uint64)ret);
++		runtime·pancake("mmap failed?", (uint64)ret);
+ 
+ 	int32 i;
+ 	for (i = 0; i < 100*PGSIZE/sizeof(uint64); i++)
+ 		ret[i] = 0;
+ 
+-	pmsg(" mmap passed ");
++	pmsg("mmap passed");
+ }
+ 
+ static uint64 lapaddr;
+@@ -1234,7 +1262,7 @@
+ rlap(uint32 reg)
+ {
+ 	if (!lapaddr)
+-		runtime·pancake(" lapaddr null? ", lapaddr);
++		runtime·pancake("lapaddr null?", lapaddr);
+ 	volatile uint32 *p = (uint32 *)lapaddr;
+ 	return p[reg];
+ }
+@@ -1244,7 +1272,7 @@
+ wlap(uint32 reg, uint32 val)
+ {
+ 	if (!lapaddr)
+-		runtime·pancake(" lapaddr null? ", lapaddr);
++		runtime·pancake("lapaddr null?", lapaddr);
+ 	volatile uint32 *p = (uint32 *)lapaddr;
+ 	p[reg] = val;
+ }
+@@ -1253,8 +1281,7 @@
+ void
+ lap_eoi(void)
+ {
+-	if (!lapaddr)
+-		runtime·pancake(" lapaddr null? ", lapaddr);
++	assert(lapaddr, "lapaddr null?", lapaddr);
+ 
+ #define EOIREG      (0xb0/4)
+ 	wlap(EOIREG, 0);
+@@ -1265,12 +1292,16 @@
+ timersetup(void)
+ {
+ 
++	assert(th_cur == 0, "th_cur not zero", th_cur);
++	assert(sizeof(threads[0].tf) == TFSIZE, "weird size", sizeof(threads[0].tf));
++	threads[th_cur].valid = 1;
++
+ 	lapaddr = (uint64)0xfee00000;
+ 
+ 	// map lapic IO mem
+ 	uint64 *pte = pgdir_walk((void *)lapaddr, 0);
+ 	if (pte)
+-		runtime·pancake(" lapic mem mapped? ", (uint64)pte);
++		runtime·pancake("lapic mem mapped?", (uint64)pte);
+ 	pte = pgdir_walk((void *)lapaddr, 1);
+ 	*pte = (uint64)lapaddr | PTE_W | PTE_P | PTE_PCD;
+ 
+@@ -1280,11 +1311,11 @@
+ #define ICREG       (0x380/4)
+ 
+ 	// timer: periodic, int 32
+-	wlap(LVTIMER, 1 << 17 | 32);
++	wlap(LVTIMER, 1 << 17 | TRAP_TIMER);
+ 	// divide by
+ 	wlap(DCREG, DIVONE);
+ 	// initial count
+-	wlap(ICREG, 10000000);
++	wlap(ICREG, 1000000000UL);
+ 
+ #define LVCMCI      (0x2f0/4)
+ #define LVINT0      (0x350/4)
+@@ -1308,18 +1339,18 @@
+ 	uint64 rdmsr(uint64);
+ 	uint64 reg = rdmsr(IA32_APIC_BASE);
+ 	if (!(reg & (1 << 11)))
+-		runtime·pancake(" lapic disabled? ", reg);
++		runtime·pancake("lapic disabled?", reg);
+ 	if (reg >> 12 != 0xfee00)
+-		runtime·pancake(" weird base addr? ", reg >> 12);
++		runtime·pancake("weird base addr?", reg >> 12);
+ 
+ #define LVSPUR     (0xf0/4)
+ 	uint32 lreg = rlap(LVSPUR);
+ 	if (lreg & (1 << 12))
+-		pmsg(" EOI broadcast surpression ");
++		pmsg("EOI broadcast surpression");
+ 	if (lreg & (1 << 9))
+-		pmsg(" focus processor checking ");
++		pmsg("focus processor checking");
+ 	if (!(lreg & (1 << 8)))
+-		pmsg(" apic disabled ");
++		pmsg("apic disabled");
+ 
+ 	wlap(LVSPUR, 1 << 8 | 47);
+ 
+@@ -1330,6 +1361,16 @@
+ }
+ 
+ #pragma textflag NOSPLIT
++void
++dummy(void)
++{
++	while (1) {
++		pmsg("child!");
++		runtime·deray(500000);
++	}
++}
++
++#pragma textflag NOSPLIT
+ int32
+ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
+ {
+@@ -1337,7 +1378,27 @@
+ 	USED(gp);
+ 	USED(flags);
+ 	USED(stack);
+-	runtime·pancake(" in crone ", (uint64)fn);
++	USED(fn);
+ 
+-	return 0;
++	int32 i;
++	for (i = 0; i < NTHREADS && threads[i].valid; i++);
++
++	assert(i != NTHREADS, "no free threads", i);
++
++	struct thread *mt = &threads[i];
++	mt->tf[TF_CS] = CODE_SEG << 3;
++	mt->tf[TF_SS] = 2 << 3;
++	assert(pgdir_walk(stack, 0), "stack not mapped", (uint64)stack);
++	mt->tf[TF_RSP] = (uint64)stack;
++	mt->tf[TF_RIP] = (uint64)dummy;
++	uint64 rflags(void);
++	mt->tf[TF_RFLAGS] = rflags();
++	mt->valid = 1;
++
++	while (1) {
++		pmsg("parent!");
++		runtime·deray(500000);
++	}
++
++	//return 0;
+ }
+
+changeset:   21886:6c823e778ec8
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Tue Dec 23 17:59:24 2014 -0500
+summary:     save/restore fsbase and cleanup
+
+diff -r 24ef204fd8b1 -r 6c823e778ec8 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Mon Dec 22 15:57:02 2014 -0500
++++ b/src/runtime/asm_amd64.s	Tue Dec 23 17:59:24 2014 -0500
+@@ -391,12 +391,19 @@
+ 
+ TEXT rdmsr(SB), NOSPLIT, $0-16
+ 	MOVQ	reg+0(FP), CX
+-	// rdmsr
+ 	RDMSR
+ 	MOVL	DX, ret2+12(FP)
+ 	MOVL	AX, ret1+8(FP)
+ 	RET
+ 
++// void wrmsr(uint64 reg, uint64 val)
++TEXT wrmsr(SB), NOSPLIT, $0-16
++	MOVQ	reg+0(FP), CX
++	MOVL	vlo+8(FP), AX
++	MOVL	vhi+12(FP), DX
++	WRMSR
++	RET
++
+ TEXT outb(SB), NOSPLIT, $0-8
+ 	MOVL	reg+0(FP), DX
+ 	MOVL	val+4(FP), AX
+@@ -416,6 +423,14 @@
+ 	MOVQ	AX, ret+0(FP)
+ 	RET
+ 
++TEXT cli(SB), NOSPLIT, $0-0
++	CLI
++	RET
++
++TEXT sti(SB), NOSPLIT, $0-0
++	STI
++	RET
++
+ #define IH_NOEC(num, fn)		\
+ TEXT fn(SB), NOSPLIT, $0-0;		\
+ 	PUSHQ	$0;			\
+@@ -461,6 +476,8 @@
+ IH_NOEC(32,Xtimer )
+ IH_NOEC(47,Xspur )
+ 
++#define IA32_FS_BASE   $0xc0000100UL
++
+ TEXT alltraps(SB), NOSPLIT, $0-0
+ 	// tf[15] = trapno
+ 	// 15 + 1 pushes
+@@ -489,6 +506,12 @@
+ 	PUSHQ	R14
+ 	PUSHQ	R15
+ 
++	// save fsbase
++	MOVQ	IA32_FS_BASE, CX
++	RDMSR
++	ORQ	DX, AX
++	PUSHQ	AX
++
+ 	MOVQ	SP, AX
+ 	PUSHQ	AX
+ 	CALL	trap(SB)
+@@ -501,6 +524,14 @@
+ 	MOVQ	fp+0(FP), AX
+ 	MOVQ	AX, SP
+ 
++	// restore fsbase
++	MOVQ	IA32_FS_BASE, CX
++	POPQ	AX
++	MOVQ	AX, DX
++	ANDQ	$((1 << 32) - 1), AX
++	SHRQ	$32, DX
++	WRMSR
++
+ 	POPQ	R15
+ 	POPQ	R14
+ 	POPQ	R13
+diff -r 24ef204fd8b1 -r 6c823e778ec8 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Mon Dec 22 15:57:02 2014 -0500
++++ b/src/runtime/os_linux.c	Tue Dec 23 17:59:24 2014 -0500
+@@ -171,10 +171,11 @@
+ 	}
+ }
+ 
++int64 runtime·hackmode;
++
+ void
+ runtime·osinit(void)
+ {
+-	extern uint64 runtime·hackmode;
+ 	if (runtime·hackmode) {
+ 		// XXX duur
+ 		runtime·ncpu = 1;
+@@ -347,6 +348,18 @@
+ 	return runtime·sigtab[sig].name;
+ }
+ 
++// src/runtime/asm_amd64.s
++void cli(void);
++void sti(void);
++void trapret(uint64 *);
++void lcr0(uint64);
++void lcr4(uint64);
++void outb(uint32, uint32);
++void ltr(uint64);
++
++// this file
++void lap_eoi(void);
++
+ #pragma textflag NOSPLIT
+ static void
+ putch(int8 x, int8 y, int8 c)
+@@ -395,7 +408,6 @@
+ void
+ runtime·pnum(uint64 n)
+ {
+-	extern uint64 runtime·hackmode;
+ 	if (!runtime·hackmode)
+ 		return;
+ 	pnum(n);
+@@ -416,7 +428,6 @@
+ void
+ runtime·nmsg(int8 *msg)
+ {
+-	extern uint64 runtime·hackmode;
+ 	if (!runtime·hackmode)
+ 		return;
+ 
+@@ -695,7 +706,6 @@
+ 	bw(&segs[TSS_SEG + 1].dur[2], haddr, 2);
+ 	bw(&segs[TSS_SEG + 1].dur[3], haddr, 3);
+ 
+-	extern void ltr(uint64);
+ 	ltr(TSS_SEG << 3);
+ }
+ 
+@@ -778,7 +788,7 @@
+ }
+ 
+ struct thread {
+-#define TFREGS       15
++#define TFREGS       16
+ #define TFHW         7
+ #define TFSIZE       ((TFREGS + TFHW)*8)
+ 	uint64 tf[TFREGS + TFHW];
+@@ -788,6 +798,7 @@
+ #define TF_RFLAGS    (TFREGS + 4)
+ #define TF_SS        (TFREGS + 6)
+ #define TF_TRAPNO    TFREGS
++#define TF_FSBASE    0
+ 
+ 	int32 valid;
+ };
+@@ -814,9 +825,6 @@
+ 	uint64 trapno = tf[TF_TRAPNO];
+ 
+ 	if (trapno == TRAP_TIMER) {
+-		void lap_eoi(void);
+-		void trapret(uint64 *);
+-
+ 		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
+ 
+ 		memcpy(threads[th_cur].tf, tf, TFSIZE);
+@@ -889,7 +897,6 @@
+ uint64 first_free;
+ int32 pgtbl;
+ 
+-int64 runtime·hackmode;
+ int8 gostr[] = "go";
+ 
+ #pragma textflag NOSPLIT
+@@ -936,8 +943,6 @@
+ 	// set OSFXSR
+ 	cr4 |= 1 << 9;
+ 
+-	void lcr0(uint64);
+-	void lcr4(uint64);
+ 	lcr0(cr0);
+ 	lcr4(cr4);
+ }
+@@ -1355,7 +1360,6 @@
+ 	wlap(LVSPUR, 1 << 8 | 47);
+ 
+ 	// 8259a - mask all ints. skipping this step results in GPfault too?
+-	void outb(uint32, uint32);
+ 	outb(0x20 + 1, 0xff);
+ 	outb(0xa0 + 1, 0xff);
+ }
+@@ -1374,25 +1378,30 @@
+ int32
+ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
+ {
++	//cli();
++
+ 	USED(mp);
+ 	USED(gp);
+-	USED(flags);
+-	USED(stack);
+ 	USED(fn);
+ 
++	uint64 chk = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
++
++	assert(flags == chk, "weird flags", flags);
++
+ 	int32 i;
+ 	for (i = 0; i < NTHREADS && threads[i].valid; i++);
+ 
+ 	assert(i != NTHREADS, "no free threads", i);
+ 
+ 	struct thread *mt = &threads[i];
++	memset(mt, 0, sizeof(*mt));
+ 	mt->tf[TF_CS] = CODE_SEG << 3;
+-	mt->tf[TF_SS] = 2 << 3;
+ 	assert(pgdir_walk(stack, 0), "stack not mapped", (uint64)stack);
+ 	mt->tf[TF_RSP] = (uint64)stack;
+ 	mt->tf[TF_RIP] = (uint64)dummy;
+ 	uint64 rflags(void);
+ 	mt->tf[TF_RFLAGS] = rflags();
++	mt->tf[TF_FSBASE] = (uint64)mp->tls + 16;
+ 	mt->valid = 1;
+ 
+ 	while (1) {
+@@ -1400,5 +1409,7 @@
+ 		runtime·deray(500000);
+ 	}
+ 
++	//sti();
++
+ 	//return 0;
+ }
+diff -r 24ef204fd8b1 -r 6c823e778ec8 src/runtime/sys_linux_amd64.s
+--- a/src/runtime/sys_linux_amd64.s	Mon Dec 22 15:57:02 2014 -0500
++++ b/src/runtime/sys_linux_amd64.s	Tue Dec 23 17:59:24 2014 -0500
+@@ -317,12 +317,6 @@
+ 
+ // int32 clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void));
+ TEXT runtime·clone(SB),NOSPLIT,$0
+-	MOVQ	runtime·hackmode(SB), DI
+-	TESTQ	DI, DI
+-	JZ	clone_skip
+-	JMP	hack_clone(SB)
+-	RET
+-clone_skip:
+ 	MOVL	flags+8(SP), DI
+ 	MOVQ	stack+16(SP), SI
+ 
+@@ -333,6 +327,24 @@
+ 	MOVQ	fn+40(SP), R12
+ 
+ 	MOVL	$56, AX
++	MOVQ	runtime·hackmode(SB), DX
++	TESTQ	DX, DX
++	JZ	clone_skip
++	PUSHQ	R12
++	PUSHQ	R9
++	PUSHQ	R8
++	PUSHQ	SI
++	PUSHQ	DI
++	// takes care of stuff below too
++	CALL	hack_clone(SB)
++	POPQ	AX
++	POPQ	AX
++	POPQ	AX
++	POPQ	AX
++	POPQ	AX
++	MOVQ	$0, AX
++	RET
++clone_skip:
+ 	SYSCALL
+ 
+ 	// In parent, return.
+
+changeset:   21887:a5196347d604
+tag:         tip
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Wed Dec 24 03:14:15 2014 -0500
+summary:     clone
+
+diff -r 6c823e778ec8 -r a5196347d604 src/runtime/asm_amd64.s
+--- a/src/runtime/asm_amd64.s	Tue Dec 23 17:59:24 2014 -0500
++++ b/src/runtime/asm_amd64.s	Wed Dec 24 03:14:15 2014 -0500
+@@ -335,6 +335,7 @@
+ 
+ 	// start this M
+ 	STI
++	//CALL	clone_test(SB)
+ 	CALL	runtime·mstart(SB)
+ 
+ 	MOVL	$0xf1, 0xf1  // crash
+diff -r 6c823e778ec8 -r a5196347d604 src/runtime/os_linux.c
+--- a/src/runtime/os_linux.c	Tue Dec 23 17:59:24 2014 -0500
++++ b/src/runtime/os_linux.c	Wed Dec 24 03:14:15 2014 -0500
+@@ -356,6 +356,9 @@
+ void lcr4(uint64);
+ void outb(uint32, uint32);
+ void ltr(uint64);
++void runtime·stackcheck(void);
++uint64 rflags(void);
++uint64 rrsp(void);
+ 
+ // this file
+ void lap_eoi(void);
+@@ -796,6 +799,7 @@
+ #define TF_RIP       (TFREGS + 2)
+ #define TF_CS        (TFREGS + 3)
+ #define TF_RFLAGS    (TFREGS + 4)
++	#define		TF_FL_IF	(1 << 9)
+ #define TF_SS        (TFREGS + 6)
+ #define TF_TRAPNO    TFREGS
+ #define TF_FSBASE    0
+@@ -836,7 +840,7 @@
+ 		     	;
+ 
+ 		uint64 *tnext = (uint64 *)threads[i].tf;
+-		assert(tnext[TF_RFLAGS] & (1 << 9), "no interrupts?", 0);
++		assert(tnext[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
+ 		th_cur = i;
+ 
+ 		lap_eoi();
+@@ -1375,41 +1379,75 @@
+ }
+ 
+ #pragma textflag NOSPLIT
+-int32
++static void
++clone_wrap(void (*fn)(void))
++{
++	runtime·stackcheck();
++	fn();
++	assert(0, "thread returned?", 0);
++}
++
++#pragma textflag NOSPLIT
++void
+ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
+ {
+-	//cli();
++	cli();
+ 
+-	USED(mp);
+-	USED(gp);
+-	USED(fn);
++	pmsg("fn is");
++	pnum((uint64)fn);
+ 
++	uint64 *sp = stack;
+ 	uint64 chk = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
+ 
+ 	assert(flags == chk, "weird flags", flags);
++	assert(pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)sp - 1);
++	assert(pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)sp - 2);
+ 
+ 	int32 i;
+ 	for (i = 0; i < NTHREADS && threads[i].valid; i++);
+ 
+ 	assert(i != NTHREADS, "no free threads", i);
+ 
++	sp--;
++	*(sp--) = (uint64)fn;	// provide fn as arg
++	//*sp-- = (uint64)dummy;
++	*sp = 0xf1eaf1ea;	// fake return addr (clone_wrap never returns)
++
+ 	struct thread *mt = &threads[i];
+ 	memset(mt, 0, sizeof(*mt));
+ 	mt->tf[TF_CS] = CODE_SEG << 3;
+-	assert(pgdir_walk(stack, 0), "stack not mapped", (uint64)stack);
+-	mt->tf[TF_RSP] = (uint64)stack;
+-	mt->tf[TF_RIP] = (uint64)dummy;
+-	uint64 rflags(void);
+-	mt->tf[TF_RFLAGS] = rflags();
++	mt->tf[TF_RSP] = (uint64)sp;
++	mt->tf[TF_RIP] = (uint64)clone_wrap;
++	mt->tf[TF_RFLAGS] = rflags() | TF_FL_IF;
+ 	mt->tf[TF_FSBASE] = (uint64)mp->tls + 16;
++
++	gp->m = mp;
++	mp->tls[0] = (uintptr)gp;
++	mp->procid = i;
++
+ 	mt->valid = 1;
+ 
++	sti();
++}
++
++#pragma textflag NOSPLIT
++void
++clone_test(void)
++{
++	// XXX figure out what "missing go type information" means
++	static uint8 mdur[sizeof(M)];
++	static uint8 gdur[sizeof(G)];
++	M *tm = (M *)mdur;
++	G *tg = (G *)gdur;
++
++	uint64 flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
++
++	tg->stack.lo = 0x80000000 - PGSIZE;
++	tg->stack.hi = 0x80000000;
++	hack_clone(flags, (void *)(0x80000000 - (4096/2)), tm, tg, dummy);
++
+ 	while (1) {
+ 		pmsg("parent!");
+ 		runtime·deray(500000);
+ 	}
+-
+-	//sti();
+-
+-	//return 0;
+ }
+diff -r 6c823e778ec8 -r a5196347d604 src/runtime/sys_linux_amd64.s
+--- a/src/runtime/sys_linux_amd64.s	Tue Dec 23 17:59:24 2014 -0500
++++ b/src/runtime/sys_linux_amd64.s	Wed Dec 24 03:14:15 2014 -0500
+@@ -337,6 +337,7 @@
+ 	PUSHQ	DI
+ 	// takes care of stuff below too
+ 	CALL	hack_clone(SB)
++	// child does not return here but starts executing fn
+ 	POPQ	AX
+ 	POPQ	AX
+ 	POPQ	AX
+
