@@ -4985,7 +4985,6 @@ diff -r 6c823e778ec8 -r a5196347d604 src/runtime/sys_linux_amd64.s
  	POPQ	AX
 
 changeset:   21888:cb98bbe902dd
-tag:         tip
 user:        Cody Cutler <ccutler@csail.mit.edu>
 date:        Sat Dec 27 18:23:17 2014 -0500
 summary:     hack nanotime, Syscall, bugfixes
@@ -5533,4 +5532,65 @@ diff -r a5196347d604 -r cb98bbe902dd src/syscall/asm_linux_amd64.s
  	CALL	runtime·entersyscall(SB)
  	MOVQ	16(SP), DI
  	MOVQ	24(SP), SI
+
+changeset:   21889:6115736a3b02
+tag:         tip
+user:        Cody Cutler <ccutler@csail.mit.edu>
+date:        Sat Dec 27 18:55:07 2014 -0500
+summary:     remove old header
+
+diff -r cb98bbe902dd -r 6115736a3b02 src/runtime/hackstuff.h
+--- a/src/runtime/hackstuff.h	Sat Dec 27 18:23:17 2014 -0500
++++ /dev/null	Thu Jan 01 00:00:00 1970 +0000
+@@ -1,50 +0,0 @@
+-#ifndef _HACKSTUFF_H
+-#define _HACKSTUFF_H
+-
+-struct Elf {
+-	uint32 e_magic;
+-#define ELF_MAGIC 0x464C457FU	/* "\x7FELF" in little endian */
+-	uint8 e_elf[12];
+-	uint16 e_type;
+-	uint16 e_machine;
+-	uint32 e_version;
+-	uint32 e_entry;
+-	uint32 e_phoff;
+-	uint32 e_shoff;
+-	uint32 e_flags;
+-	uint16 e_ehsize;
+-	uint16 e_phentsize;
+-	uint16 e_phnum;
+-	uint16 e_shentsize;
+-	uint16 e_shnum;
+-	uint16 e_shstrndx;
+-};
+-
+-struct Proghdr {
+-	uint32 p_type;
+-	uint32 p_offset;
+-	uint32 p_va;
+-	uint32 p_pa;
+-	uint32 p_filesz;
+-	uint32 p_memsz;
+-	uint32 p_flags;
+-	uint32 p_align;
+-};
+-
+-#define PGSIZE          (1UL << 12)
+-#define PGOFFMASK       (PGSIZE - 1)
+-#define PGMASK          (~PGOFFMASK)
+-
+-#define ROUNDDOWN(x, y) ((x) & ~((y) - 1))
+-#define ROUNDUP(x, y)   (((x) + ((y) - 1)) & ~((y) - 1))
+-
+-#define PDX(x)          (((x) >> 22) & 0x3ff)
+-#define PTX(x)          (((x) >> 12) & 0x3ff)
+-
+-#define PTE_P           (1 << 0)
+-#define PTE_W           (1 << 1)
+-#define PTE_U           (1 << 2)
+-
+-#define PTE_ADDR(x)     ((x) & ~0x3ff)
+-
+-#endif
 
