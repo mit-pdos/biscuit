@@ -40,6 +40,7 @@ func goprintf(s string) {
 // and type tables.
 //go:nosplit
 func printf(s *byte) {
+	nmsg(s)
 	vprintf(gostringnocopy(s), add(unsafe.Pointer(&s), unsafe.Sizeof(s)))
 }
 
