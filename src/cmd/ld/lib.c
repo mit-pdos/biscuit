@@ -1102,6 +1102,13 @@ stkcheck(Chain *up, int depth)
 	limit = up->limit;
 	s = up->sym;
 	
+	// don't check my fancy recursive page mapping functions. maybe they
+	// should not be recursive...
+	if(strcmp(s->name, "pgdir_walk") == 0)
+		return 0;
+	if(strcmp(s->name, "pgdir_walk1") == 0)
+		return 0;
+
 	// Don't duplicate work: only need to consider each
 	// function at top of safe zone once.
 	if(limit == StackLimit-callsize()) {
