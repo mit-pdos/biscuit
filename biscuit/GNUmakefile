@@ -11,7 +11,7 @@ OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
 RFS  := $(patsubst %.c,%.d,$(CS))
 
-GOBIN := /opt/cody/go/go/bin/go
+GOBIN := ../bin/go
 
 QOPTS := -m 256M
 
@@ -43,6 +43,13 @@ d.img: main boot
 
 go.img: boot main.gobin
 	cat boot main.gobin > $@
+
+$(GOBIN):
+	@echo; echo; echo; \
+		echo 'You need to build go:'; \
+		echo 'cd ../src && ./all.bash'; \
+		echo; echo; echo; \
+		false
 
 main.gobin: chentry $(GOBIN) main.go
 	$(GOBIN) build -o $@ main.go
