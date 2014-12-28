@@ -347,3 +347,1205 @@ runtime·signame(int32 sig)
 {
 	return runtime·sigtab[sig].name;
 }
+
+// src/runtime/asm_amd64.s
+void cli(void);
+void sti(void);
+void trapret(uint64 *);
+void lcr0(uint64);
+void lcr4(uint64);
+void outb(uint32, uint32);
+void ltr(uint64);
+void runtime·stackcheck(void);
+uint64 rflags(void);
+uint64 rrsp(void);
+
+// this file
+void lap_eoi(void);
+
+#pragma textflag NOSPLIT
+static void
+putch(int8 x, int8 y, int8 c)
+{
+        int16 *cons = (int16 *)0xb8000;
+        cons[y*80 + x] = 0x07 << 8 | c;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·doc(int64 mark)
+{
+        static int8 x;
+        static int8 y;
+
+        putch(x++, y, mark & 0xff);
+        //putch(x++, y, ' ');
+        if (x >= 79) {
+                x = 0;
+                y++;
+        }
+
+	if (y >= 29)
+		y = 0;
+}
+
+#pragma textflag NOSPLIT
+void
+pnum(uint64 n)
+{
+	uint64 nn = (uint64)n;
+	int64 i;
+
+	runtime·doc(' ');
+	for (i = 60; i >= 0; i -= 4) {
+		uint64 cn = (nn >> i) & 0xf;
+
+		if (cn <= 9)
+			runtime·doc('0' + cn);
+		else
+			runtime·doc('A' + cn - 10);
+	}
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·pnum(uint64 n)
+{
+	if (!runtime·hackmode)
+		return;
+	pnum(n);
+}
+
+
+#pragma textflag NOSPLIT
+void
+pmsg(int8 *msg)
+{
+	runtime·doc(' ');
+	if (msg)
+		while (*msg)
+			runtime·doc(*msg++);
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·nmsg(int8 *msg)
+{
+	if (!runtime·hackmode)
+		return;
+
+	pmsg(msg);
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·pancake(void *msg, int64 addr)
+{
+	pmsg(msg);
+
+	pnum(addr);
+	pmsg(" PANCAKE");
+	while (1);
+}
+
+#define assert(x, y, z)        do { if (!(x)) runtime·pancake(y, z); } while (0)
+
+#pragma textflag NOSPLIT
+static void
+bw(uint8 *d, uint64 data, uint64 off)
+{
+	*d = (data >> off*8) & 0xff;
+}
+
+// gee i wish i could pack structs with plan9 compiler
+struct pdesc_t {
+	uint8 dur[10];
+};
+
+struct seg64_t {
+	uint8 dur[8];
+};
+
+#define	G       0x80
+#define	D       0x40
+#define	L       0x20
+
+#define	CODE    0xa
+#define	DATA    0x2
+#define	TSS     0x9
+
+static struct seg64_t segs[6] = {
+	// NULL seg
+	{0, 0, 0, 0, 0, 0, 0, 0},
+
+	// limits and base are ignored for CS, DS, and ES in long mode.
+
+	// 64 bit code
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | CODE,	// p, dpl, s, type
+	 G | L,		// g, d/b, l, avail, mid limit
+	 0},		// base high
+
+	// data
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | DATA,	// p, dpl, s, type
+	 G | D,	// g, d/b, l, avail, mid limit
+	 0},		// base high
+
+	// fs seg
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | DATA,	// p, dpl, s, type
+	 G | D,		// g, d/b, l, avail, mid limit
+	 0},		// base high
+
+	// tss seg
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x80 | TSS,	// p, dpl, s, type
+	 G,		// g, d/b, l, avail, mid limit
+	 0},		// base high
+	// 64 bit tss takes up two segment descriptor entires. the high 32bits
+	// of the base are written in this seg desc.
+	{0, 0, 0, 0, 0, 0, 0, 0},
+};
+
+static struct pdesc_t pd;
+
+#define	CODE_SEG        1
+#define	FS_SEG          3
+#define	TSS_SEG         4
+
+#pragma textflag NOSPLIT
+static void
+seg_set(struct seg64_t *seg, uint32 base, uint32 lim, uint32 data)
+{
+	uint8 b1 = base & 0xff;
+	uint8 b2 = (base >>  8) & 0xff;
+	uint8 b3 = (base >> 16) & 0xff;
+	uint8 b4 = (base >> 24) & 0xff;
+
+	// correct limit
+	uint8 l1 = lim & 0xff;
+	uint8 l2 = (lim >>  8) & 0xff;
+	uint8 l3 = (lim >> 16) & 0xf;
+
+	seg->dur[0] = l1;
+	seg->dur[1] = l2;
+	if (data)
+		seg->dur[6] = l3 | G | D;
+	else
+		seg->dur[6] = l3 | G;
+
+	seg->dur[2] = b1;
+	seg->dur[3] = b2;
+	seg->dur[4] = b3;
+	seg->dur[7] = b4;
+}
+
+#undef DATA
+#undef CODE
+#undef TSS
+#undef G
+#undef D
+#undef L
+
+#define	CHECK32(x)     (x & ~((1ULL << 32) - 1))
+
+#pragma textflag NOSPLIT
+static void
+pdsetup(struct pdesc_t *pd, uint64 s, uint64 lim)
+{
+	uint64 addr = (uint64)s;
+
+	pd->dur[0] = lim & 0xff;
+	pd->dur[1] = (lim >> 8) & 0xff;
+
+	pd->dur[2] = addr & 0xff;
+	pd->dur[3] = (addr >>  8) & 0xff;
+	pd->dur[4] = (addr >> 16) & 0xff;
+	pd->dur[5] = (addr >> 24) & 0xff;
+	pd->dur[6] = (addr >> 32) & 0xff;
+	pd->dur[7] = (addr >> 40) & 0xff;
+	pd->dur[8] = (addr >> 48) & 0xff;
+	pd->dur[9] = (addr >> 56) & 0xff;
+}
+
+#pragma textflag NOSPLIT
+uint64
+segsetup(void *tls0)
+{
+	uint64 tlsaddr = (uint64)tls0;
+
+	// TLS assembles to -16(%fs)
+	tlsaddr += 16;
+
+	if (sizeof(struct pdesc_t) != 10)
+		runtime·pancake("pdesc not packed", sizeof(struct pdesc_t));
+
+	if (sizeof(struct seg64_t) != 8)
+		runtime·pancake("seg64 not packed", sizeof(struct seg64_t));
+	if (sizeof(struct seg64_t)*4 != 32)
+		runtime·pancake("wut?", sizeof(struct seg64_t)*4);
+
+	// gee i wish i could align data with plan9 compiler
+	if ((uint64)&pd & 0x7)
+		runtime·pancake("pdesc not aligned", (uint64)&pd);
+
+	if (CHECK32(tlsaddr))
+		runtime·pancake("tlsaddr > 32bits, use msrs", tlsaddr);
+
+	seg_set(&segs[FS_SEG], (uint32)tlsaddr, 15, 1);
+	pdsetup(&pd, (uint64)segs, sizeof(segs) - 1);
+
+	return (uint64)&pd;
+}
+
+extern void runtime·deray(uint64);
+#pragma textflag NOSPLIT
+void
+marksleep(int8 *msg)
+{
+	pmsg(msg);
+	runtime·deray(5000000);
+}
+
+struct idte_t {
+	uint8 dur[16];
+};
+
+#define	INT     0xe
+#define	TRAP    0xf
+
+#define	NIDTE   64
+struct idte_t idt[NIDTE];
+
+#pragma textflag NOSPLIT
+static void
+int_set(struct idte_t *i, uint64 addr, uint64 trap)
+{
+	/*
+	{0, 0,		// 0-1   low offset
+	 CODE_SEG, 0,	// 2-3   segment
+	 0,		// 4     ist
+	 0x80 | INT,	// 5     p, dpl, type
+	 0, 0,		// 6-7   mid offset
+	 0, 0, 0, 0,	// 8-11  high offset
+	 0, 0, 0, 0},	// 12-15 resreved
+	 */
+
+	uint16 lowoff  = (uint16)addr;
+	uint16 midoff  = (addr >> 16) & 0xffff;
+	uint32 highoff = addr >> 32;
+
+	bw(&i->dur[0],  lowoff, 0);
+	bw(&i->dur[1],  lowoff, 1);
+	bw(&i->dur[2], CODE_SEG << 3, 0);
+	bw(&i->dur[3], CODE_SEG << 3, 1);
+	i->dur[4] = 0;
+	if (trap)
+		i->dur[5] = 0x80 | TRAP;
+	else
+		i->dur[5] = 0x80 | INT;
+	bw(&i->dur[6],  midoff, 0);
+	bw(&i->dur[7],  midoff, 1);
+	bw(&i->dur[8],  highoff, 0);
+	bw(&i->dur[9],  highoff, 1);
+	bw(&i->dur[10], highoff, 2);
+	bw(&i->dur[11], highoff, 3);
+}
+
+#undef INT
+#undef TRAP
+
+struct tss_t {
+	uint8 dur[26];
+};
+
+struct tss_t tss;
+
+static void
+tss_set(struct tss_t *tss, uint64 rsp0)
+{
+	uint32 off = 4;		// offset to rsp0 field
+
+	bw(&tss->dur[off + 0], rsp0, 0);
+	bw(&tss->dur[off + 1], rsp0, 1);
+	bw(&tss->dur[off + 2], rsp0, 2);
+	bw(&tss->dur[off + 3], rsp0, 3);
+	bw(&tss->dur[off + 4], rsp0, 4);
+	bw(&tss->dur[off + 5], rsp0, 5);
+	bw(&tss->dur[off + 6], rsp0, 6);
+	bw(&tss->dur[off + 7], rsp0, 7);
+
+	// disable io bitmap
+	uint64 d = sizeof(struct tss_t);
+	bw(&tss->dur[102], d, 0);
+	bw(&tss->dur[103], d, 1);
+}
+
+#pragma textflag NOSPLIT
+static void
+tss_setup(void)
+{
+	// alignment is for performance
+	uint64 addr = (uint64)&tss;
+	if (addr & (16 - 1))
+		runtime·pancake("tss not aligned", addr);
+
+	// XXX if we ever use a CPL != 0, we need to use a diff stack;
+	// otherwise we will overwrite pre-trap stack
+	uint64 rsp = 0x80000000;
+
+	tss_set(&tss, rsp);
+	seg_set(&segs[TSS_SEG], (uint32)addr, sizeof(tss) - 1, 0);
+
+	// set high bits (TSS64 uses two segment descriptors
+	uint32 haddr = addr >> 32;
+	bw(&segs[TSS_SEG + 1].dur[0], haddr, 0);
+	bw(&segs[TSS_SEG + 1].dur[1], haddr, 1);
+	bw(&segs[TSS_SEG + 1].dur[2], haddr, 2);
+	bw(&segs[TSS_SEG + 1].dur[3], haddr, 3);
+
+	ltr(TSS_SEG << 3);
+}
+
+extern void lidt(struct pdesc_t *);
+
+#pragma textflag NOSPLIT
+void
+intsetup(void)
+{
+	struct pdesc_t p;
+
+	if (sizeof(struct idte_t) != 16)
+		runtime·pancake("idte not packed", sizeof(struct idte_t));
+	if (sizeof(idt) != 16*NIDTE)
+		runtime·pancake("idt not packed", sizeof(idt));
+
+	if ((uint64)idt & 0x7)
+		runtime·pancake("idt not aligned", (uint64)idt);
+
+	extern void Xdz (void);
+	extern void Xrz (void);
+	extern void Xnmi(void);
+	extern void Xbp (void);
+	extern void Xov (void);
+	extern void Xbnd(void);
+	extern void Xuo (void);
+	extern void Xnm (void);
+	extern void Xdf (void);
+	extern void Xrz2(void);
+	extern void Xtss(void);
+	extern void Xsnp(void);
+	extern void Xssf(void);
+	extern void Xgp (void);
+	extern void Xpf (void);
+	extern void Xrz3(void);
+	extern void Xmf (void);
+	extern void Xac (void);
+	extern void Xmc (void);
+	extern void Xfp (void);
+	extern void Xve (void);
+	extern void Xtimer(void);
+	extern void Xspur(void);
+
+	int_set(&idt[ 0], (uint64) Xdz , 0);
+	int_set(&idt[ 1], (uint64) Xrz , 0);
+	int_set(&idt[ 2], (uint64) Xnmi, 0);
+	int_set(&idt[ 3], (uint64) Xbp , 0);
+	int_set(&idt[ 4], (uint64) Xov , 0);
+	int_set(&idt[ 5], (uint64) Xbnd, 0);
+	int_set(&idt[ 6], (uint64) Xuo , 0);
+	int_set(&idt[ 7], (uint64) Xnm , 0);
+	int_set(&idt[ 8], (uint64) Xdf , 0);
+	int_set(&idt[ 9], (uint64) Xrz2, 0);
+	int_set(&idt[10], (uint64) Xtss, 0);
+	int_set(&idt[11], (uint64) Xsnp, 0);
+	int_set(&idt[12], (uint64) Xssf, 0);
+	int_set(&idt[13], (uint64) Xgp , 0);
+	int_set(&idt[14], (uint64) Xpf , 0);
+	int_set(&idt[15], (uint64) Xrz3, 0);
+	int_set(&idt[16], (uint64) Xmf , 0);
+	int_set(&idt[17], (uint64) Xac , 0);
+	int_set(&idt[18], (uint64) Xmc , 0);
+	int_set(&idt[19], (uint64) Xfp , 0);
+	int_set(&idt[20], (uint64) Xve , 0);
+
+	int_set(&idt[32], (uint64) Xtimer, 0);
+	int_set(&idt[47], (uint64) Xspur, 0);
+
+	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
+	lidt(&p);
+
+	tss_setup();
+}
+
+#pragma textflag NOSPLIT
+void
+wemadeit(void)
+{
+	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
+}
+
+struct thread {
+#define TFREGS       16
+#define TFHW         7
+#define TFSIZE       ((TFREGS + TFHW)*8)
+	uint64 tf[TFREGS + TFHW];
+#define TF_RSP       (TFREGS + 5)
+#define TF_RIP       (TFREGS + 2)
+#define TF_CS        (TFREGS + 3)
+#define TF_RFLAGS    (TFREGS + 4)
+	#define		TF_FL_IF	(1 << 9)
+#define TF_SS        (TFREGS + 6)
+#define TF_TRAPNO    TFREGS
+#define TF_FSBASE    0
+
+	int32 valid;
+};
+
+#define NTHREADS        5
+struct thread threads[NTHREADS];
+static int32 th_cur;
+
+#pragma textflag NOSPLIT
+void
+memcpy(void *dst, void *src, uint64 sz)
+{
+	uint8 *to = (uint8 *)dst;
+	uint8 *from = (uint8 *)src;
+	while (sz--)
+		*to++ = *from++;
+}
+
+// given to us by bootloader
+uint64 first_free;
+int32 pgtbl;
+
+int8 gostr[] = "go";
+
+#pragma textflag NOSPLIT
+void
+exam(uint64 cr0)
+{
+	USED(cr0);
+	//pmsg(" first free ");
+	//pnum(first_free);
+
+	pmsg("inspect cr0");
+
+	if (cr0 & (1UL << 30))
+		pmsg("CD set ");
+	if (cr0 & (1UL << 29))
+		pmsg("NW set ");
+	if (cr0 & (1UL << 16))
+		pmsg("WP set ");
+	if (cr0 & (1UL << 5))
+		pmsg("NE set ");
+	if (cr0 & (1UL << 3))
+		pmsg("TS set ");
+	if (cr0 & (1UL << 2))
+		pmsg("EM set ");
+	if (cr0 & (1UL << 1))
+		pmsg("MP set ");
+}
+
+#pragma textflag NOSPLIT
+void
+fpuinit(uint64 cr0, uint64 cr4)
+{
+	// for VEX prefixed instructions
+	//// set NE and MP
+	//cr0 |= 1 << 5;
+	//cr0 |= 1 << 1;
+
+	//// set OSXSAVE
+	//cr4 |= 1 << 18;
+
+	// clear EM
+	cr0 &= ~(1 << 2);
+
+	// set OSFXSR
+	cr4 |= 1 << 9;
+
+	lcr0(cr0);
+	lcr4(cr4);
+}
+
+#define PGSIZE          (1ULL << 12)
+#define PGOFFMASK       (PGSIZE - 1)
+#define PGMASK          (~PGOFFMASK)
+
+#define ROUNDDOWN(x, y) ((x) & ~((y) - 1))
+#define ROUNDUP(x, y)   (((x) + ((y) - 1)) & ~((y) - 1))
+
+#define PML4X(x)        (((uint64)(x) >> 39) & 0x1ff)
+#define PDPTX(x)        (((uint64)(x) >> 30) & 0x1ff)
+#define PDX(x)          (((uint64)(x) >> 21) & 0x1ff)
+#define PTX(x)          (((uint64)(x) >> 12) & 0x1ff)
+
+#define PTE_P           (1ULL << 0)
+#define PTE_W           (1ULL << 1)
+#define PTE_U           (1ULL << 2)
+#define PTE_PCD         (1ULL << 4)
+
+#define PTE_ADDR(x)     ((x) & ~0x3ff)
+
+// slot for recursive mapping
+#define	VREC    0x42ULL
+#define	VTEMP   0x43ULL
+
+#define	VUMAX   0x42ULL		// highest "user" mapping
+
+#define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
+#define SLOTNEXT(v)       ((v << 9) & ((1ULL << 48) - 1))
+
+#pragma textflag NOSPLIT
+uint64
+get_pg(void)
+{
+	// XXX use e820 map
+	uint64 ret = first_free;
+	if (ret & PGOFFMASK)
+		runtime·pancake("ret not aligned?", ret);
+
+	first_free += PGSIZE;
+
+	if (ret >= 0x00f00000 && ret < 0x01000000) {
+		ret = 0x01000000;
+		first_free = ret + PGSIZE;
+	}
+
+	if (ret >= 0xc0000000)
+		runtime·pancake("oom?", ret);
+
+	return ret;
+}
+
+#pragma textflag NOSPLIT
+void
+memset(void *va, uint32 c, uint64 sz)
+{
+	uint8 b = (uint32)c;
+	uint8 *p = (uint8 *)va;
+	while (sz--)
+		*p++ = b;
+}
+
+void invlpg(void *);
+
+#pragma textflag NOSPLIT
+void
+zero_phys(uint64 phys)
+{
+	phys = ROUNDDOWN(phys, PGSIZE);
+
+	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
+	if (recva[VTEMP] & PTE_P)
+		runtime·pancake("vtemp in use?", recva[VTEMP]);
+	recva[VTEMP] = phys | PTE_P | PTE_W;
+
+	uint64 *va = CADDR(VREC, VREC, VREC, VTEMP);
+
+	memset(va, 0, PGSIZE);
+
+	recva[VTEMP] = 0;
+	invlpg(va);
+}
+
+#pragma textflag NOSPLIT
+static uint64 *
+pgdir_walk1(uint64 *slot, uint64 van, int32 create)
+{
+	uint64 *ns = (uint64 *)SLOTNEXT((uint64)slot);
+	ns += PML4X(van);
+	if (PML4X(ns) != VREC) {
+		USED(ns);
+		return slot;
+	}
+
+	if (!(*slot & PTE_P)) {
+		if (!create)
+			return nil;
+		uint64 np = get_pg();
+		zero_phys(np);
+		*slot = np | PTE_P | PTE_W;
+	}
+
+	return pgdir_walk1(ns, SLOTNEXT(van), create);
+}
+
+#pragma textflag NOSPLIT
+uint64 *
+pgdir_walk(void *va, int32 create)
+{
+	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
+
+	if (PML4X(v) == VREC)
+		runtime·pancake("va collides w/VREC", v);
+
+	uint64 *pml4 = (uint64 *)CADDR(VREC, VREC, VREC, VREC);
+	pml4 += PML4X(v);
+	return pgdir_walk1(pml4, SLOTNEXT(v), create);
+}
+
+#pragma textflag NOSPLIT
+void
+alloc_map(void *va, int32 perms, int32 fempty)
+{
+	uint64 *pte = pgdir_walk(va, 1);
+	uint64 old = *pte;
+	// XXX goodbye, memory
+	*pte = get_pg() | perms | PTE_P;
+	if (old & PTE_P) {
+		invlpg(va);
+		if (fempty)
+			runtime·pancake("was not empty", (uint64)va);
+	}
+}
+
+#pragma textflag NOSPLIT
+void *
+find_empty(uint64 sz)
+{
+	uint8 *v = (uint8 *)CADDR(0, 0, 0, 1);
+	uint64 *pte;
+	// XXX sweet
+	while (1) {
+		pte = pgdir_walk(v, 0);
+		if (!pte) {
+			int32 i, failed = 0;
+			for (i = 0; i < sz; i += PGSIZE) {
+				pte = pgdir_walk(v + i, 0);
+				if (pte) {
+					failed = 1;
+					v = v + i;
+					break;
+				}
+			}
+
+			if (!failed)
+				return v;
+		}
+		v += PGSIZE;
+	}
+}
+
+#pragma textflag NOSPLIT
+void*
+hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
+{
+	USED(fd);
+	USED(offset);
+	uint8 *v = (uint8 *)va;
+
+	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0)) {
+		runtime·pancake("high addr?", (uint64)v);
+		v = nil;
+	}
+	sz = ROUNDUP((uint64)v+sz, PGSIZE);
+	sz -= ROUNDDOWN((uint64)v, PGSIZE);
+	if (v == nil)
+		v = find_empty(sz);
+
+	if (!(flags & MAP_ANON))
+		runtime·pancake("not anon?", flags);
+	if (!(flags & MAP_PRIVATE))
+		runtime·pancake("not private?", flags);
+
+	int32 perms = PTE_P;
+	if (prot == PROT_NONE) {
+		//hack_munmap(va, sz);
+		return v;
+	}
+
+	if (prot & PROT_WRITE)
+		perms |= PTE_W;
+
+	int32 i;
+	for (i = 0; i < sz ; i += PGSIZE)
+		alloc_map(v + i, perms, 1);
+
+	return v;
+}
+
+#pragma textflag NOSPLIT
+int32
+hack_munmap(void *va, uint64 sz)
+{
+	uint8 *v = (uint8 *)va;
+	int32 i;
+	sz = ROUNDUP(sz, PGSIZE);
+	for (i = 0; i < sz; i+= PGSIZE) {
+		uint64 *pte = pgdir_walk(v + i, 0);
+		if (PML4X(v + i) >= VUMAX)
+			runtime·pancake("unmap too high", (uint64)(v + i));
+		// XXX goodbye, memory
+		if (pte && *pte & PTE_P) {
+			*pte = 0;
+			invlpg(v + i);
+		}
+	}
+	pmsg("POOF ");
+
+	return 0;
+}
+
+#pragma textflag NOSPLIT
+void
+stack_dump(uint64 rsp)
+{
+	//uint64 buf[8];
+	//int32 i;
+	//for (i = 0; i < 8; i++)
+	//	buf[i] = 0;
+	//runtime·callers(0, buf, 8);
+	//pmsg(" PCS ");
+	//for (i = 0; i < 8; i++) {
+	//	pnum(buf[i]);
+	//	pmsg(" ");
+	//}
+	//pnum(rsp);
+
+	uint64 *pte = pgdir_walk((void *)rsp, 0);
+	pmsg("STACK DUMP      ");
+	if (pte && *pte & PTE_P) {
+		int32 i;
+		uint64 *p = (uint64 *)rsp;
+		for (i = 0; i < 32; i++) {
+			pte = pgdir_walk(p, 0);
+			if (pte && *pte & PTE_P)
+				pnum(*p++);
+		}
+	} else {
+		pmsg("bad stack");
+		pnum(rsp);
+	}
+}
+
+#pragma textflag NOSPLIT
+int64
+hack_write(int32 fd, const void *buf, uint64 c)
+{
+	if (fd != 1 && fd != 2)
+		runtime·pancake("weird fd", (uint64)fd);
+
+	//pmsg("C>");
+	//pnum(c);
+	//pmsg("<C");
+	if (c > 10000) {
+		stack_dump(rrsp());
+		runtime·pancake("weird len (expected)", c);
+	}
+
+	int64 ret = (int64)c;
+	byte *p = (byte *)buf;
+	while(c--) {
+		runtime·doc(*p++);
+		//if ((++i % 20) == 0)
+		//	runtime·deray(5000000);
+	}
+
+	return ret;
+}
+
+#pragma textflag NOSPLIT
+void
+pgtest1(uint64 v)
+{
+	uint64 *va = (uint64 *)v;
+	uint64 phys = get_pg();
+	zero_phys(phys);
+
+	uint64 *pte = pgdir_walk(va, 0);
+	if (pte && *pte & PTE_P) {
+		runtime·pancake("something mapped?", (uint64)pte);
+	}
+
+	pmsg("no mapping");
+	pte = pgdir_walk(va, 1);
+	*pte = phys | PTE_P | PTE_W;
+	int32 i;
+	for (i = 0; i < 512; i++)
+		if (va[i] != 0)
+			runtime·pancake("new page not zero?", va[i]);
+
+	pmsg("zeroed");
+	va[0] = 31337;
+	va[256] = 31337;
+	va[511] = 31337;
+
+	//*pte = phys | PTE_P;
+	//invlpg(va);
+	//va[0] = 31337;
+
+	//*pte = 0;
+	//invlpg(va);
+	//pnum(va[0]);
+}
+
+#pragma textflag NOSPLIT
+void
+pgtest(void)
+{
+	uint64 va[] = {0xc001d00d000ULL, 0xfffffffffffff000ULL,
+	    0x1000ULL, 0x313371000ULL, 0x7f0000000000ULL,
+	    (uint64)CADDR(0, 0xc, 0, 0) };
+
+	int32 i;
+	for (i = 0; i < sizeof(va)/sizeof(va[0]); i++)
+		pgtest1(va[i]);
+	runtime·pancake("GUT GUT GUT", 0);
+}
+
+#pragma textflag NOSPLIT
+void
+mmap_test(void)
+{
+	pmsg("mmap TEST");
+
+	uint64 *va = (uint64 *)0xc001d00d000ULL;
+
+	uint64 *ret = hack_mmap(va, 100*PGSIZE, PROT_READ|PROT_WRITE,
+	    MAP_ANON | MAP_PRIVATE, -1, 0);
+
+	if (ret != va)
+		runtime·pancake("mmap failed?", (uint64)ret);
+
+	int32 i;
+	for (i = 0; i < 100*PGSIZE/sizeof(uint64); i++)
+		ret[i] = 0;
+
+	pmsg("mmap passed");
+}
+
+uint64 durnanotime;
+
+#define TRAP_TIMER      32
+#pragma textflag NOSPLIT
+void
+trap(uint64 *tf)
+{
+	uint64 trapno = tf[TF_TRAPNO];
+
+	if (trapno == TRAP_TIMER) {
+		// XXX 
+		durnanotime += 1000000000;
+
+		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
+
+		memcpy(threads[th_cur].tf, tf, TFSIZE);
+
+		int32 i;
+		for (i = (th_cur + 1) % NTHREADS;
+		     !threads[i].valid;
+		     i = (i + 1) % NTHREADS)
+		     	;
+
+		uint64 *tnext = (uint64 *)threads[i].tf;
+		assert(tnext[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
+		th_cur = i;
+
+		lap_eoi();
+		trapret(tnext);
+	}
+
+	pmsg("trap frame at");
+	pnum((uint64)tf);
+
+	pmsg("trapno");
+	pnum(trapno);
+
+	uint64 rip = tf[TF_RIP];
+	pmsg("rip");
+	pnum(rip);
+
+	if (trapno == 14) {
+		uint64 rcr2(void);
+		uint64 cr2 = rcr2();
+		pmsg("cr2");
+		pnum(cr2);
+	}
+
+	uint64 rsp = tf[TF_RSP];
+	stack_dump(rsp);
+
+	runtime·pancake("trap", 0);
+}
+
+static uint64 lapaddr;
+
+#pragma textflag NOSPLIT
+uint32
+rlap(uint32 reg)
+{
+	if (!lapaddr)
+		runtime·pancake("lapaddr null?", lapaddr);
+	volatile uint32 *p = (uint32 *)lapaddr;
+	return p[reg];
+}
+
+#pragma textflag NOSPLIT
+void
+wlap(uint32 reg, uint32 val)
+{
+	if (!lapaddr)
+		runtime·pancake("lapaddr null?", lapaddr);
+	volatile uint32 *p = (uint32 *)lapaddr;
+	p[reg] = val;
+}
+
+#pragma textflag NOSPLIT
+void
+lap_eoi(void)
+{
+	assert(lapaddr, "lapaddr null?", lapaddr);
+
+#define EOIREG      (0xb0/4)
+	wlap(EOIREG, 0);
+}
+
+#pragma textflag NOSPLIT
+void
+timersetup(void)
+{
+
+	assert(th_cur == 0, "th_cur not zero", th_cur);
+	assert(sizeof(threads[0].tf) == TFSIZE, "weird size", sizeof(threads[0].tf));
+	threads[th_cur].valid = 1;
+
+	lapaddr = (uint64)0xfee00000;
+
+	// map lapic IO mem
+	uint64 *pte = pgdir_walk((void *)lapaddr, 0);
+	if (pte)
+		runtime·pancake("lapic mem mapped?", (uint64)pte);
+	pte = pgdir_walk((void *)lapaddr, 1);
+	*pte = (uint64)lapaddr | PTE_W | PTE_P | PTE_PCD;
+
+#define LVTIMER     (0x320/4)
+#define DCREG       (0x3e0/4)
+#define DIVONE      0xb
+#define ICREG       (0x380/4)
+
+	// timer: periodic, int 32
+	wlap(LVTIMER, 1 << 17 | TRAP_TIMER);
+	// divide by
+	wlap(DCREG, DIVONE);
+	// initial count
+	wlap(ICREG, 1000000000UL);
+
+#define LVCMCI      (0x2f0/4)
+#define LVINT0      (0x350/4)
+#define LVINT1      (0x360/4)
+#define LVERROR     (0x370/4)
+#define LVPERF      (0x340/4)
+#define LVTHERMAL   (0x330/4)
+
+#define MASKSHIFT   16
+
+	// mask cmci, lint[01], error, perf counters, and thermal sensor
+	wlap(LVCMCI,    1 << MASKSHIFT);
+	// masking LVINT0 somewhow results in a GPfault?
+	//wlap(LVINT0,    1 << MASKSHIFT);
+	wlap(LVINT1,    1 << MASKSHIFT);
+	wlap(LVERROR,   1 << MASKSHIFT);
+	wlap(LVPERF,    1 << MASKSHIFT);
+	wlap(LVTHERMAL, 1 << MASKSHIFT);
+
+#define IA32_APIC_BASE   0x1b
+	uint64 rdmsr(uint64);
+	uint64 reg = rdmsr(IA32_APIC_BASE);
+	if (!(reg & (1 << 11)))
+		runtime·pancake("lapic disabled?", reg);
+	if (reg >> 12 != 0xfee00)
+		runtime·pancake("weird base addr?", reg >> 12);
+
+#define LVSPUR     (0xf0/4)
+	uint32 lreg = rlap(LVSPUR);
+	if (lreg & (1 << 12))
+		pmsg("EOI broadcast surpression");
+	if (lreg & (1 << 9))
+		pmsg("focus processor checking");
+	if (!(lreg & (1 << 8)))
+		pmsg("apic disabled");
+
+	wlap(LVSPUR, 1 << 8 | 47);
+
+	// 8259a - mask all ints. skipping this step results in GPfault too?
+	outb(0x20 + 1, 0xff);
+	outb(0xa0 + 1, 0xff);
+}
+
+#pragma textflag NOSPLIT
+void
+dummy(void)
+{
+	while (1) {
+		pmsg("child!");
+		runtime·deray(500000);
+	}
+}
+
+#pragma textflag NOSPLIT
+static void
+clone_wrap(void (*fn)(void))
+{
+	runtime·stackcheck();
+	fn();
+	assert(0, "thread returned?", 0);
+}
+
+#pragma textflag NOSPLIT
+void
+hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
+{
+	cli();
+
+	uint64 *sp = stack;
+	uint64 chk = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
+
+	assert(flags == chk, "weird flags", flags);
+	assert(pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)(sp - 1));
+	assert(pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)(sp - 2));
+
+	int32 i;
+	for (i = 0; i < NTHREADS && threads[i].valid; i++);
+
+	assert(i != NTHREADS, "no free threads", i);
+
+	sp--;
+	*(sp--) = (uint64)fn;	// provide fn as arg
+	//*sp-- = (uint64)dummy;
+	*sp = 0xf1eaf1ea;	// fake return addr (clone_wrap never returns)
+
+	struct thread *mt = &threads[i];
+	memset(mt, 0, sizeof(*mt));
+	mt->tf[TF_CS] = CODE_SEG << 3;
+	mt->tf[TF_RSP] = (uint64)sp;
+	mt->tf[TF_RIP] = (uint64)clone_wrap;
+	mt->tf[TF_RFLAGS] = rflags() | TF_FL_IF;
+	mt->tf[TF_FSBASE] = (uint64)mp->tls + 16;
+
+	gp->m = mp;
+	mp->tls[0] = (uintptr)gp;
+	mp->procid = i;
+
+	mt->valid = 1;
+
+	sti();
+}
+
+#pragma textflag NOSPLIT
+void
+clone_test(void)
+{
+	// XXX figure out what "missing go type information" means
+	static uint8 mdur[sizeof(M)];
+	static uint8 gdur[sizeof(G)];
+	M *tm = (M *)mdur;
+	G *tg = (G *)gdur;
+
+	uint64 flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
+
+	tg->stack.lo = 0x80000000 - PGSIZE;
+	tg->stack.hi = 0x80000000;
+	hack_clone(flags, (void *)(0x80000000 - (4096/2)), tm, tg, dummy);
+
+	while (1) {
+		pmsg("parent!");
+		runtime·deray(500000);
+	}
+}
+
+#pragma textflag NOSPLIT
+int64
+hack_nanotime(void)
+{
+	durnanotime %= (1ULL << 63);
+
+	return (int64)durnanotime;
+}
+
+// use these to pass args because using the stack in ·Syscall causes strange
+// runtime behavior. haven't figured out why yet.
+int64 dur_sc_trap;
+int64 dur_sc_a1;
+int64 dur_sc_a2;
+int64 dur_sc_a3;
+int64 dur_sc_r1;
+int64 dur_sc_r2;
+int64 dur_sc_err;
+
+// func Syscall(trap int64, a1, a2, a3 int64) (r1, r2, err int64);
+#pragma textflag NOSPLIT
+void
+hack_syscall(void)
+{
+	int64 trap = dur_sc_trap;
+	int64 a1 = dur_sc_a1;
+	int64 a2 = dur_sc_a2;
+	int64 a3 = dur_sc_a3;
+
+	switch (trap) {
+		default:
+			runtime·pancake("weird trap", trap);
+			break;
+		// write
+		case 1:
+			dur_sc_r1 = hack_write((int32)a1, (void *)a2, (uint64)a3);
+			dur_sc_r2  = 0;
+			dur_sc_err = 0;
+			break;
+	}
+}
+
+void hack_yield(void);
+
+#pragma textflag NOSPLIT
+void
+hack_usleep(void)
+{
+	while (1);
+}
+
+// int64 futex(int32 *uaddr, int32 op, int32 val,
+//	struct timespec *timeout, int32 *uaddr2, int32 val2);
+#pragma textflag NOSPLIT
+int64
+hack_futex(int32 *uaddr, int32 op, int32 val,
+    struct timespec *timeout, int32 *uaddr2, int32 val2)
+{
+	USED(uaddr);
+	USED(op);
+	USED(val);
+	USED(timeout);
+	USED(uaddr2);
+	USED(val2);
+
+	runtime·pancake("no impl", 0);
+
+	return 0;
+}
+
+#pragma textflag NOSPLIT
+void
+hack_exit(int32 code)
+{
+	cli();
+	pmsg("exit with code");
+	pnum(code);
+	while(1);
+}
+
+#pragma textflag NOSPLIT
+void
+cls(void)
+{
+	int32 i;
+	for (i = 0; i < 2291; i++)
+		runtime·doc(' ');
+}

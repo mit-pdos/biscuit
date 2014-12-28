@@ -119,6 +119,450 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	// No per-thread init.
 	RET
 
+#define		CODESEG		1
+#define		DATASEG		2
+#define		FSSEG		3
+
+TEXT fixcs(SB),NOSPLIT,$0
+	POPQ	AX
+	PUSHQ	$(CODESEG << 3)
+	PUSHQ	AX
+	// lretq
+	BYTE	$0x48
+	BYTE	$0xcb
+	MOVQ	$1, 0
+	//POPQ	DX
+	//MOVQ	$(3 << 3), AX
+	//SHLQ	$32, AX
+	//ORQ	DX, AX
+	//PUSHQ	AX
+	//// lret
+	//BYTE	$0xcb
+	//MOVQ	$1, 0
+
+TEXT runtime·deray(SB),NOSPLIT,$8
+	MOVQ	times+0(FP), CX
+	MOVQ	$0x80, DX
+	MOVQ	$0, AX
+back:
+	// outb	%al, (%dx)
+	BYTE	$0xee
+	LOOP	back
+	RET
+
+// i do it this strange way because if i declare fakeargv in C i get 'missing
+// golang type information'. need two 0 entries because go checks for
+// environment variables too.
+DATA	fakeargv+0(SB)/8,$gostr(SB)
+DATA	fakeargv+8(SB)/8,$0
+DATA	fakeargv+16(SB)/8,$0
+GLOBL	fakeargv(SB),RODATA,$24
+
+TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
+
+	// save page table and first free address from bootloader.
+	MOVL	DI, pgtbl(SB)
+	MOVL	SI, first_free(SB)
+	MOVQ	$1, runtime·hackmode(SB)
+
+	ANDQ	$~15, SP
+	//SUBQ	$8, SP	// traceback assumes the initial rsp is writable
+
+	// create istack out of the given (operating system) stack.
+	// _cgo_init may update stackguard.
+	MOVQ	$runtime·g0(SB), DI
+	LEAQ	(-64*1024+104)(SP), BX
+	MOVQ	BX, g_stackguard0(DI)
+	MOVQ	BX, g_stackguard1(DI)
+	MOVQ	BX, (g_stack+stack_lo)(DI)
+	MOVQ	SP, (g_stack+stack_hi)(DI)
+
+	// find out information about the processor we're on
+	MOVQ	$0, AX
+	CPUID
+	CMPQ	AX, $0
+	JE	h_nocpuinfo
+	MOVQ	$1, AX
+	CPUID
+	MOVL	CX, runtime·cpuid_ecx(SB)
+	MOVL	DX, runtime·cpuid_edx(SB)
+h_nocpuinfo:
+
+	CALL	cls(SB)
+	//PUSHQ	$0x20
+	//CALL	runtime·doc(SB)
+	//POPQ	AX
+
+	//PUSHQ	$0x39
+	//CALL	runtime·doc(SB)
+	//CALL	runtime·doc(SB)
+	//POPQ	AX
+
+	// if there is an _cgo_init, call it.
+	//MOVQ	_cgo_init(SB), AX
+	//TESTQ	AX, AX
+	//JZ	needtls
+	//// g0 already in DI
+	//MOVQ	DI, CX	// Win64 uses CX for first parameter
+	//MOVQ	$setg_gcc<>(SB), SI
+	//CALL	AX
+
+	//// update stackguard after _cgo_init
+	//MOVQ	$runtime·g0(SB), CX
+	//MOVQ	(g_stack+stack_lo)(CX), AX
+	//ADDQ	$const_StackGuard, AX
+	//MOVQ	AX, g_stackguard0(CX)
+	//MOVQ	AX, g_stackguard1(CX)
+
+	//CMPL	runtime·iswindows(SB), $0
+	//JEQ ok
+h_needtls:
+
+	//// skip TLS setup on Plan 9
+	//CMPL	runtime·isplan9(SB), $1
+	//JEQ ok
+	//// skip TLS setup on Solaris
+	//CMPL	runtime·issolaris(SB), $1
+	//JEQ ok
+
+	// setup tls
+	LEAQ	runtime·tls0(SB), DI
+	PUSHQ	DI
+	CALL	segsetup(SB)
+
+	MOVQ	8(AX), DI
+	PUSHQ	DI
+	MOVQ	(AX), DI
+	PUSHQ	DI
+	// lgdt (%rsp)
+	BYTE	$0x0f
+	BYTE	$0x01
+	BYTE	$0x14
+	BYTE	$0x24
+	POPQ	AX
+	POPQ	AX
+	POPQ	AX
+
+	MOVQ	$(FSSEG << 3), AX
+	PUSHQ	AX
+	POPQ	FS
+
+	MOVL	$(DATASEG << 3), AX
+	//MOVL	AX, ES
+	BYTE	$0x8e
+	BYTE	$0xd8
+	//MOVL	AX, DS
+	BYTE	$0x8e
+	BYTE	$0xc0
+	//MOVL	AX, SS
+	BYTE	$0x8e
+	BYTE	$0xd0
+
+	// i cannot fix CS via far call to a label because i don't know how to
+	// call a label with plan9 compiler.
+	CALL	fixcs(SB)
+
+	// store through it, to make sure it works
+	get_tls(BX)
+	MOVQ	$0x123, g(BX)
+	MOVQ	runtime·tls0(SB), AX
+	CMPQ	AX, $0x123
+	JEQ	h_ok
+	MOVQ	$0x4242424242424242, AX
+	PUSHQ	AX
+	PUSHQ	$0
+	CALL	runtime·pancake(SB)
+h_ok:
+
+	// set the per-goroutine and per-mach "registers"
+	get_tls(BX)
+	LEAQ	runtime·g0(SB), CX
+	MOVQ	CX, g(BX)
+	LEAQ	runtime·m0(SB), AX
+
+	// save m->g0 = g0
+	MOVQ	CX, m_g0(AX)
+	// save m0 to g0->m
+	MOVQ	AX, g_m(CX)
+
+	CALL	intsetup(SB)
+	CALL	timersetup(SB)
+
+	FINIT
+	MOVQ	CR4, AX
+	PUSHQ	AX
+	MOVQ	CR0, AX
+	PUSHQ	AX
+	CALL	fpuinit(SB)
+	POPQ	AX
+	POPQ	AX
+
+	//MOVQ	CR0, AX
+	//PUSHQ	AX
+	//CALL	exam(SB)
+	//POPQ	AX
+
+	//CALL	pgtest(SB)
+	//CALL	mmap_test(SB)
+
+//	CMPQ	AX, $31337
+//	JZ	forward
+//me:
+//	JMP	me
+//forward:
+	CLD				// convention is D is always left cleared
+	CALL	runtime·check(SB)
+
+	//MOVL	16(SP), AX		// copy argc
+	//MOVL	AX, 0(SP)
+	//MOVQ	24(SP), AX		// copy argv
+	//MOVQ	AX, 8(SP)
+	MOVQ	$fakeargv(SB), AX
+	PUSHQ	AX
+	PUSHQ	$1
+	CALL	runtime·args(SB)
+	POPQ	AX
+	POPQ	AX
+	CALL	runtime·osinit(SB)
+	CALL	runtime·schedinit(SB)
+
+	// create a new goroutine to start program
+	MOVQ	$runtime·main·f(SB), BP		// entry
+	PUSHQ	BP
+	PUSHQ	$0			// arg size
+	CALL	runtime·newproc(SB)
+	POPQ	AX
+	POPQ	AX
+
+	// start this M
+	STI
+	//CALL	clone_test(SB)
+	CALL	runtime·mstart(SB)
+
+	MOVL	$0xf1, 0xf1  // crash
+	RET
+
+
+TEXT rcr2(SB), NOSPLIT, $0-8
+	MOVQ	CR2, AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
+TEXT tlbflush(SB), NOSPLIT, $0-0
+	MOVQ	CR3, AX
+	MOVQ	AX, CR3
+	RET
+
+TEXT invlpg(SB), NOSPLIT, $0-8
+	MOVQ	va+0(FP), AX
+	INVLPG	(AX)
+	RET
+
+TEXT lidt(SB), NOSPLIT, $0-8
+	MOVQ	idtpd+0(FP), AX
+	MOVQ	8(AX), DI
+	PUSHQ	DI
+	MOVQ	(AX), DI
+	PUSHQ	DI
+	// lidt	(%rsp)
+	BYTE	$0x0f
+	BYTE	$0x01
+	BYTE	$0x1c
+	BYTE	$0x24
+	POPQ	AX
+	POPQ	AX
+	RET
+
+TEXT ltr(SB), NOSPLIT, $0-8
+	MOVQ	seg+0(FP), AX
+	// ltr	%ax
+	BYTE $0x0f
+	BYTE $0x00
+	BYTE $0xd8
+	RET
+
+TEXT lcr0(SB), NOSPLIT, $0-8
+	MOVQ	val+0(FP), AX
+	MOVQ	AX, CR0
+	RET
+
+TEXT lcr4(SB), NOSPLIT, $0-8
+	MOVQ	val+0(FP), AX
+	MOVQ	AX, CR4
+	RET
+
+TEXT rdmsr(SB), NOSPLIT, $0-16
+	MOVQ	reg+0(FP), CX
+	RDMSR
+	MOVL	DX, ret2+12(FP)
+	MOVL	AX, ret1+8(FP)
+	RET
+
+// void wrmsr(uint64 reg, uint64 val)
+TEXT wrmsr(SB), NOSPLIT, $0-16
+	MOVQ	reg+0(FP), CX
+	MOVL	vlo+8(FP), AX
+	MOVL	vhi+12(FP), DX
+	WRMSR
+	RET
+
+TEXT outb(SB), NOSPLIT, $0-8
+	MOVL	reg+0(FP), DX
+	MOVL	val+4(FP), AX
+	// outb	%al, (%dx)
+	BYTE	$0xee
+	RET
+
+TEXT rflags(SB), NOSPLIT, $0-8
+	// pushf
+	BYTE	$0x9c
+	POPQ	AX
+	MOVQ	AX, ret+8(FP)
+	RET
+
+TEXT rrsp(SB), NOSPLIT, $0-8
+	MOVQ	SP, AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
+TEXT cli(SB), NOSPLIT, $0-0
+	CLI
+	RET
+
+TEXT sti(SB), NOSPLIT, $0-0
+	STI
+	RET
+
+#define TRAP_TIMER      $32
+TEXT hack_yield(SB), NOSPLIT, $0-0
+	INT	TRAP_TIMER
+	RET
+
+#define IH_NOEC(num, fn)		\
+TEXT fn(SB), NOSPLIT, $0-0;		\
+	PUSHQ	$0;			\
+	PUSHQ	$num;			\
+	JMP	alltraps(SB);		\
+	BYTE	$0xeb;			\
+	BYTE	$0xfe;			\
+	POPQ	AX;			\
+	POPQ	AX;			\
+	RET
+
+#define IH_EC(num, fn)			\
+TEXT fn(SB), NOSPLIT, $0-0;		\
+	PUSHQ	$num;			\
+	JMP	alltraps(SB);		\
+	BYTE	$0xeb;			\
+	BYTE	$0xfe;			\
+	POPQ	AX;			\
+	POPQ	AX;			\
+	RET
+
+IH_NOEC( 0,Xdz )
+IH_NOEC( 1,Xrz )
+IH_NOEC( 2,Xnmi )
+IH_NOEC( 3,Xbp )
+IH_NOEC( 4,Xov )
+IH_NOEC( 5,Xbnd )
+IH_NOEC( 6,Xuo )
+IH_NOEC( 7,Xnm )
+IH_EC  ( 8,Xdf )
+IH_NOEC( 9,Xrz2 )
+IH_EC  (10,Xtss )
+IH_EC  (11,Xsnp )
+IH_EC  (12,Xssf )
+IH_EC  (13,Xgp )
+IH_EC  (14,Xpf )
+IH_NOEC(15,Xrz3 )
+IH_NOEC(16,Xmf )
+IH_EC  (17,Xac )
+IH_NOEC(18,Xmc )
+IH_NOEC(19,Xfp )
+IH_NOEC(20,Xve )
+IH_NOEC(32,Xtimer )
+IH_NOEC(47,Xspur )
+
+#define IA32_FS_BASE   $0xc0000100UL
+
+TEXT alltraps(SB), NOSPLIT, $0-0
+	// tf[15] = trapno
+	// 15 + 1 pushes
+	// pusha is not valid in 64bit mode!
+	PUSHQ	AX
+
+//	MOVQ	$(0x80000000 - 4096 + 14*8), AX
+//	CMPQ	SP, AX
+//	JA	sgut
+//	BYTE	$0xeb
+//	BYTE	$0xfe
+//
+//sgut:
+	PUSHQ	BX
+	PUSHQ	CX
+	PUSHQ	DX
+	PUSHQ	DI
+	PUSHQ	SI
+	PUSHQ	BP
+	PUSHQ	R8
+	PUSHQ	R9
+	PUSHQ	R10
+	PUSHQ	R11
+	PUSHQ	R12
+	PUSHQ	R13
+	PUSHQ	R14
+	PUSHQ	R15
+
+	// save fsbase
+	MOVQ	IA32_FS_BASE, CX
+	RDMSR
+	ORQ	DX, AX
+	PUSHQ	AX
+
+	MOVQ	SP, AX
+	PUSHQ	AX
+	CALL	trap(SB)
+	// jmp self
+	BYTE	$0xeb
+	BYTE	$0xfe
+
+TEXT trapret(SB), NOSPLIT, $0-8
+	MOVQ	fp+0(FP), AX
+	MOVQ	AX, SP
+
+	// restore fsbase
+	MOVQ	IA32_FS_BASE, CX
+	POPQ	AX
+	MOVQ	AX, DX
+	ANDQ	$((1 << 32) - 1), AX
+	SHRQ	$32, DX
+	WRMSR
+
+	POPQ	R15
+	POPQ	R14
+	POPQ	R13
+	POPQ	R12
+	POPQ	R11
+	POPQ	R10
+	POPQ	R9
+	POPQ	R8
+	POPQ	BP
+	POPQ	SI
+	POPQ	DI
+	POPQ	DX
+	POPQ	CX
+	POPQ	BX
+	POPQ	AX
+	// skip trapno and error code
+	ADDQ	$16, SP
+
+	// iretq
+	BYTE	$0x48
+	BYTE	$0xcf
+	// jmp self
+	BYTE	$0xeb
+	BYTE	$0xfe
+
 /*
  *  go-routine
  */
