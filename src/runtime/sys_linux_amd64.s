@@ -10,6 +10,11 @@
 #include "textflag.h"
 
 TEXT runtime·exit(SB),NOSPLIT,$0-4
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	exit_skip
+	JMP	hack_exit(SB)
+exit_skip:
 	MOVL	code+0(FP), DI
 	MOVL	$231, AX	// exitgroup - force all os threads to exit
 	SYSCALL
@@ -38,6 +43,14 @@ TEXT runtime·close(SB),NOSPLIT,$0-12
 	RET
 
 TEXT runtime·write(SB),NOSPLIT,$0-28
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	write_skip
+	JMP	hack_write(SB)
+	// jmp self
+	BYTE	0xeb
+	BYTE	0xfe
+write_skip:
 	MOVQ	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
@@ -64,6 +77,12 @@ TEXT runtime·getrlimit(SB),NOSPLIT,$0-20
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$16
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	us_skip
+	CALL	hack_usleep(SB)
+	RET
+us_skip:
 	MOVL	$0, DX
 	MOVL	usec+0(FP), AX
 	MOVL	$1000000, CX
@@ -113,6 +132,19 @@ TEXT time·now(SB),NOSPLIT,$16
 	// We're guaranteed 128 bytes on entry, and we've taken 16, and the
 	// call uses another 8.
 	// That leaves 104 for the gettime code to use. Hope that's enough!
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	now_skip
+	MOVQ	durnanotime(SB), AX
+	ADDQ	$1000000, AX
+	MOVQ	AX, durnanotime(SB)
+	XORQ	DX, DX
+	MOVQ	$1000000000, DI
+	DIVQ	DI
+	MOVQ	AX, ret+0(FP)
+	MOVQ	DX, ret+8(FP)
+	RET
+now_skip:
 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
 	CMPQ	AX, $0
 	JEQ	fallback_gtod
@@ -139,6 +171,15 @@ fallback_gtod:
 TEXT runtime·nanotime(SB),NOSPLIT,$16
 	// Duplicate time.now here to avoid using up precious stack space.
 	// See comment above in time.now.
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	nnow_skip
+	MOVQ	durnanotime(SB), AX
+	ADDQ	$1000000, AX
+	MOVQ	AX, durnanotime(SB)
+	MOVQ	AX, ret+0(FP)
+	RET
+nnow_skip:
 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
 	CMPQ	AX, $0
 	JEQ	fallback_gtod_nt
@@ -169,6 +210,11 @@ fallback_gtod_nt:
 	RET
 
 TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	spm_skip
+	RET
+spm_skip:
 	MOVL	sig+0(FP), DI
 	MOVQ	new+8(FP), SI
 	MOVQ	old+16(FP), DX
@@ -181,6 +227,12 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 	RET
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	sa_skip
+	MOVL	$0, ret+32(FP)
+	RET
+sa_skip:
 	MOVQ	sig+0(FP), DI
 	MOVQ	new+8(FP), SI
 	MOVQ	old+16(FP), DX
@@ -229,6 +281,11 @@ TEXT runtime·sigreturn(SB),NOSPLIT,$0
 	INT $3	// not reached
 
 TEXT runtime·mmap(SB),NOSPLIT,$0
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	mmap_skip
+	JMP	hack_mmap(SB)
+mmap_skip:
 	MOVQ	addr+0(FP), DI
 	MOVQ	n+8(FP), SI
 	MOVL	prot+16(FP), DX
@@ -246,6 +303,11 @@ TEXT runtime·mmap(SB),NOSPLIT,$0
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT,$0
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	munmap_skip
+	JMP	hack_munmap(SB)
+munmap_skip:
 	MOVQ	addr+0(FP), DI
 	MOVQ	n+8(FP), SI
 	MOVQ	$11, AX	// munmap
@@ -267,6 +329,14 @@ TEXT runtime·madvise(SB),NOSPLIT,$0
 // int64 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
 TEXT runtime·futex(SB),NOSPLIT,$0
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	futex_skip
+	JMP	hack_futex(SB)
+	// jmp self
+	BYTE	0xeb
+	BYTE	0xfe
+futex_skip:
 	MOVQ	addr+0(FP), DI
 	MOVL	op+8(FP), SI
 	MOVL	val+12(FP), DX
@@ -279,7 +349,8 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	RET
 
 // int32 clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void));
-TEXT runtime·clone(SB),NOSPLIT,$0
+//TEXT runtime·clone(SB),NOSPLIT,$0
+TEXT runtime·clone(SB),NOSPLIT,$40-32
 	MOVL	flags+8(SP), DI
 	MOVQ	stack+16(SP), SI
 
@@ -290,6 +361,25 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	MOVQ	fn+40(SP), R12
 
 	MOVL	$56, AX
+	MOVQ	runtime·hackmode(SB), DX
+	TESTQ	DX, DX
+	JZ	clone_skip
+	PUSHQ	R12
+	PUSHQ	R9
+	PUSHQ	R8
+	PUSHQ	SI
+	PUSHQ	DI
+	// takes care of stuff below too
+	CALL	hack_clone(SB)
+	// child does not return here but starts executing fn
+	POPQ	AX
+	POPQ	AX
+	POPQ	AX
+	POPQ	AX
+	POPQ	AX
+	MOVQ	$0, AX
+	RET
+clone_skip:
 	SYSCALL
 
 	// In parent, return.
@@ -326,6 +416,11 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	JMP	-3(PC)	// keep exiting
 
 TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	sas_skip
+	RET
+sas_skip:
 	MOVQ	new+8(SP), DI
 	MOVQ	old+16(SP), SI
 	MOVQ	$131, AX
