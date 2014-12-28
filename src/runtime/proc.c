@@ -144,11 +144,14 @@ runtime·schedinit(void)
 
 	runtime·sched.lastpoll = runtime·nanotime();
 	procs = 1;
-	p = runtime·getenv("GOMAXPROCS");
-	if(p != nil && (n = runtime·atoi(p)) > 0) {
-		if(n > MaxGomaxprocs)
-			n = MaxGomaxprocs;
-		procs = n;
+	extern int64 runtime·hackmode;
+	if (!runtime·hackmode) {
+		p = runtime·getenv("GOMAXPROCS");
+		if(p != nil && (n = runtime·atoi(p)) > 0) {
+			if(n > MaxGomaxprocs)
+				n = MaxGomaxprocs;
+			procs = n;
+		}
 	}
 	procresize(procs);
 

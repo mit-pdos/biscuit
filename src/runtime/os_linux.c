@@ -171,10 +171,17 @@ runtime·newosproc(M *mp, void *stk)
 	}
 }
 
+int64 runtime·hackmode;
+
 void
 runtime·osinit(void)
 {
-	runtime·ncpu = getproccount();
+	if (runtime·hackmode) {
+		// XXX duur
+		runtime·ncpu = 1;
+	} else {
+		runtime·ncpu = getproccount();
+	}
 }
 
 // Random bytes initialized at startup.  These come
