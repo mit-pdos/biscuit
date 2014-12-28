@@ -8,8 +8,15 @@ TEXT _rt0_amd64_linux(SB),NOSPLIT,$-8
 	LEAQ	8(SP), SI // argv
 	MOVQ	0(SP), DI // argc
 	MOVQ	$main(SB), AX
-	JMP	AX
+	CALL	AX
+	MOVL	$1, 0	// abort
+	CALL	_rt0_hack(SB)
+	INT	$3
 
 TEXT main(SB),NOSPLIT,$-8
 	MOVQ	$runtime·rt0_go(SB), AX
 	JMP	AX
+
+TEXT _rt0_hack(SB),NOSPLIT,$0
+	CALL	runtime·rt0_go_hack(SB)
+	INT	$3
