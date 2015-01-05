@@ -323,6 +323,11 @@ munmap_skip:
 	RET
 
 TEXT runtime·madvise(SB),NOSPLIT,$0
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	madvise_skip
+	RET
+madvise_skip:
 	MOVQ	addr+0(FP), DI
 	MOVQ	n+8(FP), SI
 	MOVL	flags+16(FP), DX
