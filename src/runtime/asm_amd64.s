@@ -485,6 +485,18 @@ IH_NOEC(47,Xspur )
 
 #define IA32_FS_BASE   $0xc0000100UL
 
+TEXT wrfsb(SB), NOSPLIT, $0-8
+	get_tls(BX)
+	MOVQ	val+0(FP), AX
+	MOVQ	AX, g(BX)
+	RET
+
+TEXT rdfsb(SB), NOSPLIT, $0-8
+	get_tls(BX)
+	MOVQ	g(BX), AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
 TEXT alltraps(SB), NOSPLIT, $0-0
 	// tf[15] = trapno
 	// 15 + 1 pushes
@@ -516,6 +528,7 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	// save fsbase
 	MOVQ	IA32_FS_BASE, CX
 	RDMSR
+	SHLQ	$32, DX
 	ORQ	DX, AX
 	PUSHQ	AX
 
