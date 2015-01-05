@@ -1233,7 +1233,7 @@ trap(uint64 *tf)
 
 	if (trapno == TRAP_TIMER) {
 		// XXX 
-		durnanotime += 1000000000;
+		durnanotime += 100000000;
 
 		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
 
@@ -1258,6 +1258,9 @@ trap(uint64 *tf)
 
 	pmsg("trapno");
 	pnum(trapno);
+
+	pmsg("for thread");
+	pnum(th_cur);
 
 	uint64 rip = tf[TF_RIP];
 	pmsg("rip");
@@ -1507,9 +1510,9 @@ void hack_yield(void);
 
 #pragma textflag NOSPLIT
 void
-hack_usleep(void)
+hack_usleep(uint32 delay)
 {
-	while (1);
+	runtime·deray(delay);
 }
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,

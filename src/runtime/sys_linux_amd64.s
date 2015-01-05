@@ -76,11 +76,16 @@ TEXT runtime·getrlimit(SB),NOSPLIT,$0-20
 	MOVL	AX, ret+16(FP)
 	RET
 
-TEXT runtime·usleep(SB),NOSPLIT,$16
+//TEXT runtime·usleep(SB),NOSPLIT,$16
+TEXT runtime·usleep(SB),NOSPLIT,$16-8
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	us_skip
+	// can't simply jmp since frame size is non-zero...
+	MOVQ	usec+0(FP), AX
+	PUSHQ	AX
 	CALL	hack_usleep(SB)
+	POPQ	AX
 	RET
 us_skip:
 	MOVL	$0, DX

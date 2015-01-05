@@ -142,11 +142,10 @@ TEXT fixcs(SB),NOSPLIT,$0
 
 TEXT runtime·deray(SB),NOSPLIT,$8
 	MOVQ	times+0(FP), CX
-	MOVQ	$0x80, DX
-	MOVQ	$0, AX
 back:
-	// outb	%al, (%dx)
-	BYTE	$0xee
+	// inb	$0x80, %al
+	BYTE	$0xe4
+	BYTE	$0x80
 	LOOP	back
 	RET
 
