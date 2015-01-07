@@ -441,6 +441,7 @@ runtime·nmsg(int8 *msg)
 void
 runtime·pancake(void *msg, int64 addr)
 {
+	cli();
 	pmsg(msg);
 
 	pnum(addr);

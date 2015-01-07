@@ -454,6 +454,11 @@ TEXT runtime·settls(SB),NOSPLIT,$32
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
+	MOVQ	runtime·hackmode(SB), DI
+	TESTQ	DI, DI
+	JZ	yield_skip
+	RET
+yield_skip:
 	MOVL	$24, AX
 	SYSCALL
 	RET
