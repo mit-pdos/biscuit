@@ -1530,6 +1530,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	USED(uaddr2);
 	USED(val2);
 
+	stack_dump(rrsp());
 	runtime·pancake("no impl", 0);
 
 	return 0;
