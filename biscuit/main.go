@@ -52,3 +52,62 @@ func ip_process(ipchan chan packet) {
 		}
 	}
 }
+
+func parcopy(to []byte, from []byte, done chan int) {
+        for i, c := range from {
+                to[i] = c
+        }
+        done <- 1
+}
+
+func sys_write(to []byte, p []byte) int {
+        PGSIZE := 4096
+        done := make(chan int)
+        cnt := len(p)
+        fmt.Printf("len is %v\n", cnt)
+
+        for i := 0; i < cnt / PGSIZE; i++ {
+                s := i*PGSIZE
+                e := (i+1)*PGSIZE
+                if cnt < e {
+                        e = cnt
+                }
+                go parcopy(to[s:e], p[s:e], done)
+        }
+
+        left := cnt % PGSIZE
+        if left != 0 {
+                t := cnt - left
+                for i := t; i < cnt; i++ {
+                        to[i] = p[i]
+                }
+        }
+
+        for i := 0; i < cnt / PGSIZE; i++ {
+                <- done
+        }
+
+        return cnt
+}
+
+func ver(a []byte, b []byte) {
+        for i, c := range b {
+                if a[i] != c {
+                        panic("bad")
+                }
+        }
+}
+
+func main_write() {
+        to := make([]byte, 4096*1)
+        from := make([]byte, 4096*1)
+
+        for i, _ := range from {
+                from[i] = byte(rand.Int())
+        }
+
+        sys_write(to, from)
+
+        ver(to, from)
+        fmt.Printf("done\n")
+}
