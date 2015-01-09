@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "math/rand"
+import "sync"
 
 type packet struct {
 	ipaddr 		int
@@ -23,25 +24,29 @@ func genpackets(ch chan packet) {
 	}
 }
 
-func process_packets(in chan packet) {
-	outbound := make(map[int]chan packet)
-
-	for {
-		p := <- in
-		pri := p_priority(p)
-		if ch, ok := outbound[pri]; ok {
-			ch <- p
-		} else {
-			pch := make(chan packet)
-			outbound[pri] = pch
-			go ip_process(pch)
-			pch <- p
-		}
+func spawnsend(p packet, outbound map[int]chan packet, f func(chan packet)) {
+	pri := p_priority(p)
+	if ch, ok := outbound[pri]; ok {
+		ch <- p
+	} else {
+		pch := make(chan packet)
+		outbound[pri] = pch
+		go f(pch)
+		pch <- p
 	}
 }
 
 func p_priority(p packet) int {
 	return p.ipaddr / 100
+}
+
+func process_packets(in chan packet) {
+	outbound := make(map[int]chan packet)
+
+	for {
+		p := <- in
+		spawnsend(p, outbound, ip_process)
+	}
 }
 
 func ip_process(ipchan chan packet) {
@@ -110,4 +115,142 @@ func main_write() {
 
         ver(to, from)
         fmt.Printf("done\n")
+}
+
+type bnode struct {
+	fd	int
+	data	int
+	l	*bnode
+	r	*bnode
+}
+
+func binsert(root *bnode, nfd int, ndata int) {
+	if root == nil {
+		panic("nil root")
+	}
+
+	if nfd < root.fd {
+		if root.l == nil {
+			root.l = &bnode{nfd, ndata, nil, nil}
+			return
+		}
+		binsert(root.l, nfd, ndata)
+	} else if nfd > root.fd {
+		if root.r == nil {
+			root.r = &bnode{nfd, ndata, nil, nil}
+			return
+		}
+		binsert(root.r, nfd, ndata)
+	}
+}
+
+func blookup(root *bnode, fd int) *bnode {
+	if root == nil {
+		return nil
+	} else if fd < root.fd {
+		return blookup(root.l, fd)
+	} else if fd > root.fd {
+		return blookup(root.r, fd)
+	}
+
+	return root
+}
+
+func bprint(root *bnode) {
+	if root == nil {
+		return
+	}
+
+	bprint(root.l)
+	fmt.Printf("%v ", root.fd)
+	bprint(root.r)
+}
+
+func bcount(root *bnode) int {
+	if root == nil {
+		return 0
+	}
+	return 1 + bcount(root.l) + bcount(root.r)
+}
+
+func bcopy(root *bnode, par *bnode) *bnode {
+	if root == nil {
+		return nil
+	}
+
+	ret := bnode{root.fd, root.data, nil, nil}
+
+	if par != nil {
+		if par.fd > ret.fd {
+			par.l = &ret
+		} else {
+			par.r = &ret
+		}
+	}
+
+	bcopy(root.l, &ret)
+	bcopy(root.r, &ret)
+	return &ret
+}
+
+func reader(cnt int, ch chan int) {
+	t := 0
+	oldc := cnt
+
+	for {
+		nc := bcount(&root)
+		if nc < oldc {
+			panic("bad count")
+		}
+		if nc != oldc {
+			oldc = nc
+			fmt.Printf("%v ", oldc)
+		}
+		t++
+
+		if t % 100000 == 0 {
+			ch <- 1
+		}
+	}
+}
+
+func rup() {
+	wlock.Lock()
+	defer wlock.Unlock()
+
+	i := rand.Intn(100)
+	for ;blookup(&root, i) != nil; i = rand.Intn(100) {
+	}
+
+	newroot := bcopy(&root, nil)
+	binsert(newroot, i, 0)
+	fmt.Printf("(inserted %v) ", i)
+	root = *newroot
+}
+
+func sys_dup2(oldd int, newd int) {
+	wlock.Lock()
+	defer wlock.Unlock()
+
+	if blookup(&root, newd) != nil {
+		fmt.Printf("close")
+	}
+}
+
+var wlock sync.Mutex
+var root bnode
+func main_rcu() {
+	root.fd = 50
+	for i := 0; i < 9; i++ {
+		binsert(&root, rand.Intn(100), 0)
+	}
+	cnt := bcount(&root)
+	ch := make(chan int)
+	go reader(cnt, ch)
+
+	for {
+		<- ch
+		rup()
+	}
+	fmt.Printf("done")
 }
