@@ -228,14 +228,35 @@ func rup() {
 	root = *newroot
 }
 
-func sys_dup2(oldd int, newd int) {
-	wlock.Lock()
-	defer wlock.Unlock()
+type addr int
+type route int
 
-	if blookup(&root, newd) != nil {
-		fmt.Printf("close")
+var route_table *map[addr]*route
+
+func route_get(dst addr) *route {
+	if r, ok := (*route_table)[dst]; ok {
+		return r
 	}
+
+	return nil
 }
+
+func route_insert(r *route, dst addr) {
+	rtlock.Lock()
+	defer rtlock.Unlock()
+
+	newrt := copy_table()
+	(*newrt)[dst] = r
+
+	route_table = newrt
+}
+
+func copy_table() *map[addr]*route {
+	ret := *route_table
+	return &ret
+}
+
+var rtlock sync.Mutex
 
 var wlock sync.Mutex
 var root bnode
