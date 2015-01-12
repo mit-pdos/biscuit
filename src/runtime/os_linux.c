@@ -367,7 +367,7 @@ void lap_eoi(void);
 static void
 putch(int8 x, int8 y, int8 c)
 {
-        int16 *cons = (int16 *)0xb8000;
+        volatile int16 *cons = (int16 *)0xb8000;
         cons[y*80 + x] = 0x07 << 8 | c;
 }
 
@@ -385,7 +385,7 @@ runtime·doc(int64 mark)
                 y++;
         }
 
-	if (y >= 29)
+	if (y >= 25)
 		y = 0;
 }
 
@@ -1551,6 +1551,6 @@ void
 cls(void)
 {
 	int32 i;
-	for (i = 0; i < 2291; i++)
+	for (i = 0; i < 1974; i++)
 		runtime·doc(' ');
 }

@@ -10,6 +10,14 @@ type packet struct {
 }
 
 func main() {
+	for {
+		fmt.Printf("hi ")
+		for i := 0; i < 1000000; i++ {
+		}
+	}
+}
+
+func main_ip() {
 	fmt.Printf("'network' test ")
 	ch := make(chan packet)
 	go genpackets(ch)
