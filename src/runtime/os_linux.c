@@ -824,7 +824,7 @@ memcpy(void *dst, void *src, uint64 sz)
 
 // given to us by bootloader
 uint64 first_free;
-int32 pgtbl;
+uint64 pgtbl;
 
 int8 gostr[] = "go";
 
@@ -904,24 +904,77 @@ fpuinit(uint64 cr0, uint64 cr4)
 #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
 #define SLOTNEXT(v)       ((v << 9) & ((1ULL << 48) - 1))
 
+struct secret_t {
+	uint64 dur[3];
+#define	SEC_E820	0
+};
+
+// regions of memory not included in the e820 map, into which we cannot
+// allocate
+static struct badregion_t {
+	uint64 start;
+	uint64 end;
+} badregs[] = {
+	// VGA
+	{0xa0000, 0x100000},
+	// secret storage
+	{ROUNDDOWN(0x7c00, PGSIZE), ROUNDUP(0x7c00, PGSIZE)},
+};
+
+#pragma textflag NOSPLIT
+uint64
+skip_bad(uint64 cur)
+{
+	int32 num = sizeof(badregs)/sizeof(badregs[0]);
+	int32 i;
+	for (i = 0; i < num; i++) {
+		if (cur >= badregs[i].start && cur < badregs[i].end)
+			return badregs[i].end;
+	}
+
+	return cur;
+}
+
 #pragma textflag NOSPLIT
 uint64
 get_pg(void)
 {
-	// XXX use e820 map
+	static uint64 limit;
+	if (!limit) {
+		// find e820 entry for the current page
+		struct secret_t *secret = (struct secret_t *)0x7c00;
+		struct e8e {
+			uint64 dur[2];
+		} *ep;
+		// secret storage
+		uint64 base = secret->dur[SEC_E820];
+		int32 i;
+		for (i = 0; i < 7; i++) {
+			ep = (struct e8e *)(base + i * 28);
+			// non-zero len
+			if (!ep->dur[1])
+				continue;
+
+			uint64 end = ep->dur[0] + ep->dur[1];
+			if (first_free >= ep->dur[0] && first_free < end) {
+				limit = end;
+				break;
+			}
+		}
+
+		assert(limit, "no e820 seg for first_free?", first_free);
+	}
+
+	first_free = skip_bad(first_free);
+
 	uint64 ret = first_free;
 	if (ret & PGOFFMASK)
 		runtime·pancake("ret not aligned?", ret);
 
 	first_free += PGSIZE;
 
-	if (ret >= 0x00f00000 && ret < 0x01000000) {
-		ret = 0x01000000;
-		first_free = ret + PGSIZE;
-	}
-
-	if (ret >= 0xc0000000)
-		runtime·pancake("oom?", ret);
+	if (ret >= limit)
+		runtime·pancake("oom?", limit);
 
 	return ret;
 }

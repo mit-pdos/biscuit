@@ -6,8 +6,9 @@
 .set PROT_MODE_CSEG, 0x8         # kernel code segment selector
 .set PROT_MODE_DSEG, 0x10        # kernel data segment selector
 .set CR0_PE_ON,      0x1         # protected mode enable flag
-.set BOOTBLOCKS,     6
+.set BOOTBLOCKS,     8
 .set SECTSIZE,       512
+.set NE820,          6
 
 .globl start
 start:
@@ -40,6 +41,37 @@ seta20.2:
 
   movb    $0xdf,%al               # 0xdf -> port 0x60
   outb    %al,$0x60
+
+e820:
+  movw    $start, %sp
+  xorl	  %ebx, %ebx
+  pushl	  %ebx
+  movw	  $e820m, %di
+
+e820.1:
+  movw	  $0xe820, %ax
+  movw	  $20, %cx
+  movl    $0x534d4150, %edx
+  int	  $0x15
+
+  cmpl	  $0x534d4150, %eax
+  je	  e820.4
+e820.3:
+  jmp	  e820.3
+e820.4:
+  popl	  %eax
+  incl	  %eax
+  pushl	  %eax
+  # done?
+  jc	  e820.2
+  test	  %bx, %bx
+  jz	  e820.2
+  # 28 bytes
+  addw	  $28, %di
+  jmp	  e820.1
+e820.2:
+  popl	  %eax
+  movl	  %eax, e820entries
 
   # Switch from real to protected mode, using a bootstrap GDT
   # and segment translation that makes virtual addresses 
@@ -187,6 +219,25 @@ gdt:
 gdtdesc:
   .word   31                              # sizeof(gdt) - 1
   .long   gdt                             # address gdt
+
+#define	E820		\
+	.long 0,0;		\
+	.long 0,0;		\
+	.long 0;		\
+	.long 0,0;		\
+.globl e820m
+e820m:
+E820
+E820
+E820
+E820
+E820
+E820
+E820
+
+.globl e820entries
+e820entries:
+	.long 0
 
 .org 510
   .byte 0x55, 0xaa
