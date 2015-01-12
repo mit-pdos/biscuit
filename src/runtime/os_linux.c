@@ -963,10 +963,8 @@ pgdir_walk1(uint64 *slot, uint64 van, int32 create)
 {
 	uint64 *ns = (uint64 *)SLOTNEXT((uint64)slot);
 	ns += PML4X(van);
-	if (PML4X(ns) != VREC) {
-		USED(ns);
+	if (PML4X(ns) != VREC)
 		return slot;
-	}
 
 	if (!(*slot & PTE_P)) {
 		if (!create)
@@ -988,7 +986,7 @@ pgdir_walk(void *va, int32 create)
 	if (PML4X(v) == VREC)
 		runtime·pancake("va collides w/VREC", v);
 
-	uint64 *pml4 = (uint64 *)CADDR(VREC, VREC, VREC, VREC);
+	uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
 	pml4 += PML4X(v);
 	return pgdir_walk1(pml4, SLOTNEXT(v), create);
 }
@@ -1099,18 +1097,6 @@ hack_munmap(void *va, uint64 sz)
 void
 stack_dump(uint64 rsp)
 {
-	//uint64 buf[8];
-	//int32 i;
-	//for (i = 0; i < 8; i++)
-	//	buf[i] = 0;
-	//runtime·callers(0, buf, 8);
-	//pmsg(" PCS ");
-	//for (i = 0; i < 8; i++) {
-	//	pnum(buf[i]);
-	//	pmsg(" ");
-	//}
-	//pnum(rsp);
-
 	uint64 *pte = pgdir_walk((void *)rsp, 0);
 	pmsg("STACK DUMP      ");
 	if (pte && *pte & PTE_P) {
