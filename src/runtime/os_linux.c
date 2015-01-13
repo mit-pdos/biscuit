@@ -350,15 +350,16 @@ runtime·signame(int32 sig)
 
 // src/runtime/asm_amd64.s
 void cli(void);
-void sti(void);
-void trapret(uint64 *);
 void lcr0(uint64);
 void lcr4(uint64);
-void outb(uint32, uint32);
+void lidt(struct pdesc_t *);
 void ltr(uint64);
+void outb(uint32, uint32);
 void runtime·stackcheck(void);
 uint64 rflags(void);
 uint64 rrsp(void);
+void sti(void);
+void trapret(uint64 *);
 
 // this file
 void lap_eoi(void);
@@ -712,8 +713,6 @@ tss_setup(void)
 
 	ltr(TSS_SEG << 3);
 }
-
-extern void lidt(struct pdesc_t *);
 
 #pragma textflag NOSPLIT
 void
