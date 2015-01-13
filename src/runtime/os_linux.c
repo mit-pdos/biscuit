@@ -1265,6 +1265,8 @@ mmap_test(void)
 uint64 durnanotime;
 
 #define TRAP_TIMER      32
+#define TIMER_QUANTUM   1000000000UL
+
 #pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
@@ -1272,8 +1274,8 @@ trap(uint64 *tf)
 	uint64 trapno = tf[TF_TRAPNO];
 
 	if (trapno == TRAP_TIMER) {
-		// XXX 
-		durnanotime += 100000000;
+		// XXX convert CPU freq to ns
+		durnanotime += TIMER_QUANTUM / 3;
 
 		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
 
@@ -1352,6 +1354,14 @@ lap_eoi(void)
 }
 
 #pragma textflag NOSPLIT
+uint64
+ticks_get(void)
+{
+#define CCREG       (0x390/4)
+	return TIMER_QUANTUM - rlap(CCREG);
+}
+
+#pragma textflag NOSPLIT
 void
 timersetup(void)
 {
@@ -1360,14 +1370,15 @@ timersetup(void)
 	assert(sizeof(threads[0].tf) == TFSIZE, "weird size", sizeof(threads[0].tf));
 	threads[th_cur].valid = 1;
 
-	lapaddr = (uint64)0xfee00000;
+	uint64 la = (uint64)0xfee00000;
 
 	// map lapic IO mem
-	uint64 *pte = pgdir_walk((void *)lapaddr, 0);
+	uint64 *pte = pgdir_walk((void *)la, 0);
 	if (pte)
 		runtime·pancake("lapic mem mapped?", (uint64)pte);
-	pte = pgdir_walk((void *)lapaddr, 1);
-	*pte = (uint64)lapaddr | PTE_W | PTE_P | PTE_PCD;
+	pte = pgdir_walk((void *)la, 1);
+	*pte = (uint64)la | PTE_W | PTE_P | PTE_PCD;
+	lapaddr = la;
 
 #define LVTIMER     (0x320/4)
 #define DCREG       (0x3e0/4)
@@ -1379,7 +1390,7 @@ timersetup(void)
 	// divide by
 	wlap(DCREG, DIVONE);
 	// initial count
-	wlap(ICREG, 1000000000UL);
+	wlap(ICREG, TIMER_QUANTUM);
 
 #define LVCMCI      (0x2f0/4)
 #define LVINT0      (0x350/4)
@@ -1505,12 +1516,10 @@ clone_test(void)
 }
 
 #pragma textflag NOSPLIT
-int64
+uint64
 hack_nanotime(void)
 {
-	durnanotime %= (1ULL << 63);
-
-	return (int64)durnanotime;
+	return durnanotime + ticks_get();
 }
 
 // use these to pass args because using the stack in ·Syscall causes strange

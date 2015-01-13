@@ -140,14 +140,14 @@ TEXT time·now(SB),NOSPLIT,$16
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	now_skip
-	MOVQ	durnanotime(SB), AX
-	ADDQ	$1000000, AX
-	MOVQ	AX, durnanotime(SB)
+	PUSHQ	$0
+	CALL	hack_nanotime(SB)
+	POPQ	AX
 	XORQ	DX, DX
 	MOVQ	$1000000000, DI
 	DIVQ	DI
-	MOVQ	AX, ret+0(FP)
-	MOVQ	DX, ret+8(FP)
+	MOVQ	AX, sec+0(FP)
+	MOVQ	DX, nsec+8(FP)
 	RET
 now_skip:
 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
@@ -179,9 +179,9 @@ TEXT runtime·nanotime(SB),NOSPLIT,$16
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	nnow_skip
-	MOVQ	durnanotime(SB), AX
-	ADDQ	$1000000, AX
-	MOVQ	AX, durnanotime(SB)
+	PUSHQ	$0
+	CALL	hack_nanotime(SB)
+	POPQ	AX
 	MOVQ	AX, ret+0(FP)
 	RET
 nnow_skip:
