@@ -44,7 +44,7 @@ seta20.2:
 
 e820:
   movw    $start, %sp
-  xorl	  %ebx, %ebx
+  xorl    %ebx, %ebx
   pushl	  %ebx
   movw	  $e820m, %di
 
