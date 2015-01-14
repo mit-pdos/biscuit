@@ -2,27 +2,108 @@ package main
 
 import "fmt"
 import "math/rand"
-import "sync"
+import "runtime"
 
-type packet struct {
-	ipaddr 		int
-	payload		int
+type thread_t struct {
+	valid	int
+	tf	[23]uint64
 }
 
-func main() {
+const nthreads	int = 10
+
+var threads	[nthreads]thread_t
+var th_cur	int
+
+func pancake(msg ...interface{}) {
+	runtime.Cli()
+	fmt.Print(msg)
 	for {
-		fmt.Printf("hi ")
-		for i := 0; i < 1000000; i++ {
+	}
+}
+
+// trap cannot do anything that may have side-effects on the runtime (like
+// fmt.Print, or use pancake!). the reason is that, by design, goroutines are
+// scheduled cooperatively in the runtime. trap interrupts the runtime though,
+// and then tries to execute more gocode, thus doing things the runtime did not
+// expect.
+//go:nosplit
+func trap(tf *[23]uint64) {
+	tfregs    := 16
+	tf_trapno := tfregs
+	//tf_rsp    := tfregs + 5
+	tf_rip    := tfregs + 2
+
+	TIMER := uint64(32)
+
+	switch tf[tf_trapno] {
+	case TIMER:
+		// save current thread context
+		threads[th_cur].tf = *tf
+
+		tnext := func(t int) int {
+			return (t + 1) % nthreads
+		}
+		next := tnext(th_cur)
+		for ;threads[next].valid == 0; next = tnext(next) {
+		}
+		if threads[next].valid != 1 {
+			runtime.Pnum(2)
+			for {
+			}
+		}
+		th_cur = next
+		runtime.Lapic_eoi()
+		runtime.Trapret(&threads[th_cur].tf)
+
+	default:
+		runtime.Pnum(3)
+		runtime.Pnum(tf[tf_trapno])
+		runtime.Pnum(tf[tf_rip])
+		for {
 		}
 	}
 }
 
-func main_ip() {
+func tdump(t thread_t) {
+	tfregs := 16
+	tf_rsp    := tfregs + 5
+	tf_rip    := tfregs + 2
+	fmt.Printf("RIP %x", t.tf[tf_rip])
+	fmt.Printf("RSP %x", t.tf[tf_rsp])
+}
+
+func main() {
+	// install trap handler. have to setup already existing threads to run
+	// too
+	runtime.Cli()
+
+	runtime.Install_traphandler(trap)
+
+	ctf := 0
+	for i, _ := range threads {
+		if runtime.Tf_get(i, &threads[ctf].tf) == 0 {
+			threads[ctf].valid = 1
+			ctf++
+		}
+	}
+	fmt.Printf("grandfathered %v threads", ctf)
+
+	th_cur = runtime.Current_thread()
+	if threads[th_cur].valid != 1 {
+		pancake("current thread invalid")
+	}
+	runtime.Sti()
+
 	fmt.Printf("'network' test ")
 	ch := make(chan packet)
 	go genpackets(ch)
 
 	process_packets(ch)
+}
+
+type packet struct {
+	ipaddr 		int
+	payload		int
 }
 
 func genpackets(ch chan packet) {
@@ -66,220 +147,3 @@ func ip_process(ipchan chan packet) {
 	}
 }
 
-func parcopy(to []byte, from []byte, done chan int) {
-        for i, c := range from {
-                to[i] = c
-        }
-        done <- 1
-}
-
-func sys_write(to []byte, p []byte) int {
-        PGSIZE := 4096
-        done := make(chan int)
-        cnt := len(p)
-        fmt.Printf("len is %v\n", cnt)
-
-        for i := 0; i < cnt / PGSIZE; i++ {
-                s := i*PGSIZE
-                e := (i+1)*PGSIZE
-                if cnt < e {
-                        e = cnt
-                }
-                go parcopy(to[s:e], p[s:e], done)
-        }
-
-        left := cnt % PGSIZE
-        if left != 0 {
-                t := cnt - left
-                for i := t; i < cnt; i++ {
-                        to[i] = p[i]
-                }
-        }
-
-        for i := 0; i < cnt / PGSIZE; i++ {
-                <- done
-        }
-
-        return cnt
-}
-
-func ver(a []byte, b []byte) {
-        for i, c := range b {
-                if a[i] != c {
-                        panic("bad")
-                }
-        }
-}
-
-func main_write() {
-        to := make([]byte, 4096*1)
-        from := make([]byte, 4096*1)
-
-        for i, _ := range from {
-                from[i] = byte(rand.Int())
-        }
-
-        sys_write(to, from)
-
-        ver(to, from)
-        fmt.Printf("done\n")
-}
-
-type bnode struct {
-	fd	int
-	data	int
-	l	*bnode
-	r	*bnode
-}
-
-func binsert(root *bnode, nfd int, ndata int) {
-	if root == nil {
-		panic("nil root")
-	}
-
-	if nfd < root.fd {
-		if root.l == nil {
-			root.l = &bnode{nfd, ndata, nil, nil}
-			return
-		}
-		binsert(root.l, nfd, ndata)
-	} else if nfd > root.fd {
-		if root.r == nil {
-			root.r = &bnode{nfd, ndata, nil, nil}
-			return
-		}
-		binsert(root.r, nfd, ndata)
-	}
-}
-
-func blookup(root *bnode, fd int) *bnode {
-	if root == nil {
-		return nil
-	} else if fd < root.fd {
-		return blookup(root.l, fd)
-	} else if fd > root.fd {
-		return blookup(root.r, fd)
-	}
-
-	return root
-}
-
-func bprint(root *bnode) {
-	if root == nil {
-		return
-	}
-
-	bprint(root.l)
-	fmt.Printf("%v ", root.fd)
-	bprint(root.r)
-}
-
-func bcount(root *bnode) int {
-	if root == nil {
-		return 0
-	}
-	return 1 + bcount(root.l) + bcount(root.r)
-}
-
-func bcopy(root *bnode, par *bnode) *bnode {
-	if root == nil {
-		return nil
-	}
-
-	ret := bnode{root.fd, root.data, nil, nil}
-
-	if par != nil {
-		if par.fd > ret.fd {
-			par.l = &ret
-		} else {
-			par.r = &ret
-		}
-	}
-
-	bcopy(root.l, &ret)
-	bcopy(root.r, &ret)
-	return &ret
-}
-
-func reader(cnt int, ch chan int) {
-	t := 0
-	oldc := cnt
-
-	for {
-		nc := bcount(&root)
-		if nc < oldc {
-			panic("bad count")
-		}
-		if nc != oldc {
-			oldc = nc
-			fmt.Printf("%v ", oldc)
-		}
-		t++
-
-		if t % 100000 == 0 {
-			ch <- 1
-		}
-	}
-}
-
-func rup() {
-	wlock.Lock()
-	defer wlock.Unlock()
-
-	i := rand.Intn(100)
-	for ;blookup(&root, i) != nil; i = rand.Intn(100) {
-	}
-
-	newroot := bcopy(&root, nil)
-	binsert(newroot, i, 0)
-	fmt.Printf("(inserted %v) ", i)
-	root = *newroot
-}
-
-type addr int
-type route int
-
-var route_table *map[addr]*route
-
-func route_get(dst addr) *route {
-	if r, ok := (*route_table)[dst]; ok {
-		return r
-	}
-
-	return nil
-}
-
-func route_insert(r *route, dst addr) {
-	rtlock.Lock()
-	defer rtlock.Unlock()
-
-	newrt := copy_table()
-	(*newrt)[dst] = r
-
-	route_table = newrt
-}
-
-func copy_table() *map[addr]*route {
-	ret := *route_table
-	return &ret
-}
-
-var rtlock sync.Mutex
-
-var wlock sync.Mutex
-var root bnode
-func main_rcu() {
-	root.fd = 50
-	for i := 0; i < 9; i++ {
-		binsert(&root, rand.Intn(100), 0)
-	}
-	cnt := bcount(&root)
-	ch := make(chan int)
-	go reader(cnt, ch)
-
-	for {
-		<- ch
-		rup()
-	}
-	fmt.Printf("done")
-}

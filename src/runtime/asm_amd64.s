@@ -159,6 +159,10 @@ GLOBL	fakeargv(SB),RODATA,$24
 
 TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 
+	// magic loop
+	//BYTE	$0xeb
+	//BYTE	$0xfe
+
 	// save page table and first free address from bootloader.
 	MOVL	DI, pgtbl(SB)
 	MOVL	SI, first_free(SB)
@@ -502,13 +506,6 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	// pusha is not valid in 64bit mode!
 	PUSHQ	AX
 
-//	MOVQ	$(0x80000000 - 4096 + 14*8), AX
-//	CMPQ	SP, AX
-//	JA	sgut
-//	BYTE	$0xeb
-//	BYTE	$0xfe
-//
-//sgut:
 	PUSHQ	BX
 	PUSHQ	CX
 	PUSHQ	DX
@@ -533,12 +530,21 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 
 	MOVQ	SP, AX
 	PUSHQ	AX
+
+	MOVQ	newtrap(SB), AX
+	TESTQ	AX, AX
+	JZ	no_new
+	CALL	AX
+	// jmp self
+	BYTE	$0xeb
+	BYTE	$0xfe
+no_new:
 	CALL	trap(SB)
 	// jmp self
 	BYTE	$0xeb
 	BYTE	$0xfe
 
-TEXT trapret(SB), NOSPLIT, $0-8
+TEXT runtime·Trapret(SB), NOSPLIT, $0-8
 	MOVQ	fp+0(FP), AX
 	MOVQ	AX, SP
 

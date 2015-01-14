@@ -15,3 +15,13 @@ func rtsigprocmask(sig int32, new, old unsafe.Pointer, size int32)
 func getrlimit(kind int32, limit unsafe.Pointer) int32
 func raise(sig int32)
 func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
+
+func Current_thread() int
+func Cli()
+func Install_traphandler(func(tf *[23]uint64))
+func Lapic_eoi()
+func Pgdir_walk(va uintptr) int
+func Pnum(m uint64)
+func Sti()
+func Trapret(tf *[23]uint64)
+func Tf_get(idx int, tf *[23]uint64) int

@@ -359,7 +359,7 @@ void runtime·stackcheck(void);
 uint64 rflags(void);
 uint64 rrsp(void);
 void sti(void);
-void trapret(uint64 *);
+void runtime·Trapret(uint64 *);
 
 // this file
 void lap_eoi(void);
@@ -436,6 +436,13 @@ runtime·nmsg(int8 *msg)
 		return;
 
 	pmsg(msg);
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·nmsg2(int8 *msg)
+{
+	runtime·nmsg(msg);
 }
 
 #pragma textflag NOSPLIT
@@ -1154,7 +1161,7 @@ stack_dump(uint64 rsp)
 	if (pte && *pte & PTE_P) {
 		int32 i;
 		uint64 *p = (uint64 *)rsp;
-		for (i = 0; i < 32; i++) {
+		for (i = 0; i < 50; i++) {
 			pte = pgdir_walk(p, 0);
 			if (pte && *pte & PTE_P)
 				pnum(*p++);
@@ -1261,10 +1268,14 @@ mmap_test(void)
 	pmsg("mmap passed");
 }
 
-uint64 durnanotime;
-
 #define TRAP_TIMER      32
 #define TIMER_QUANTUM   1000000000UL
+
+uint64 durnanotime;
+
+// newtrap is a function pointer to a user provided trap handler. alltraps
+// jumps to newtrap if it is non-zero.
+uint64 newtrap;
 
 #pragma textflag NOSPLIT
 void
@@ -1291,7 +1302,7 @@ trap(uint64 *tf)
 		th_cur = i;
 
 		lap_eoi();
-		trapret(tnext);
+		runtime·Trapret(tnext);
 	}
 
 	pmsg("trap frame at");
@@ -1600,4 +1611,95 @@ cls(void)
 	int32 i;
 	for (i = 0; i < 1974; i++)
 		runtime·doc(' ');
+}
+
+// exported functions
+// XXX remove the NOSPLIT once i've figured out why newstack is being called
+// for a program whose stack doesn't seem to grow
+#pragma textflag NOSPLIT
+void
+runtime·Install_traphandler(uint64 *p)
+{
+	newtrap = *p;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Lapic_eoi(void)
+{
+	lap_eoi();
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Cli(void)
+{
+	cli();
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Sti(void)
+{
+	sti();
+}
+
+#pragma textflag NOSPLIT
+int32
+runtime·Current_thread(void)
+{
+	int32 ret = 0;
+	int32 i;
+	for (i = 0; i < th_cur; i++)
+		if (threads[i].valid)
+			ret++;
+	return ret;
+}
+
+#pragma textflag NOSPLIT
+int32
+runtime·Pgdir_walk(void *va)
+{
+	//return pgdir_walk(va, 0) != nil;
+	uint64 *ret = pgdir_walk(va, 0);
+	if (ret == nil)
+		return 0;
+	if ((*ret & PTE_P) == 0)
+		return 0;
+
+	return 1;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Pnum(uint64 m)
+{
+	pnum(m);
+}
+
+#pragma textflag NOSPLIT
+int32
+runtime·Tf_get(int32 idx, void *dst)
+{
+	int32 i;
+	int32 tc = 0;
+	for (i = 0; i < NTHREADS; i++)
+		if (threads[i].valid)
+			tc++;
+
+	if (idx >= tc)
+		return -1;
+
+	assert(dst, "null dst?", (uint64)dst);
+	tc = 0;
+	for (i = 0; i < NTHREADS; i++) {
+		if (!threads[i].valid)
+			continue;
+		if (tc == idx) {
+			memcpy(dst, threads[i].tf, TFSIZE);
+			break;
+		}
+		tc++;
+	}
+	return 0;
 }
