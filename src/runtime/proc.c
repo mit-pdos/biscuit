@@ -152,6 +152,8 @@ runtime·schedinit(void)
 				n = MaxGomaxprocs;
 			procs = n;
 		}
+	} else {
+		procs = 2;
 	}
 	procresize(procs);
 

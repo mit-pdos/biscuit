@@ -1261,7 +1261,7 @@ mmap_test(void)
 }
 
 #define TRAP_TIMER      32
-#define TIMER_QUANTUM   1000000000UL
+#define TIMER_QUANTUM   100000000UL
 
 uint64 durnanotime;
 
@@ -1290,12 +1290,20 @@ yieldy(void)
 
 #pragma textflag NOSPLIT
 void
+runtime·Yieldy(void)
+{
+	yieldy();
+}
+
+#pragma textflag NOSPLIT
+void
 trap(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
 
-	if (newtrap) {
+	if (newtrap && trapno != TRAP_TIMER) {
 		((void (*)(uint64 *))newtrap)(tf);
+		runtime·pancake("newtrap returned!", 0);
 	}
 
 	if (trapno == TRAP_TIMER) {
