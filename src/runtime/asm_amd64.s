@@ -531,14 +531,6 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	MOVQ	SP, AX
 	PUSHQ	AX
 
-	MOVQ	newtrap(SB), AX
-	TESTQ	AX, AX
-	JZ	no_new
-	CALL	AX
-	// jmp self
-	BYTE	$0xeb
-	BYTE	$0xfe
-no_new:
 	CALL	trap(SB)
 	// jmp self
 	BYTE	$0xeb

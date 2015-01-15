@@ -812,21 +812,13 @@ struct thread {
 #define TF_FSBASE    0
 
 	int32 valid;
+	int64 sleeping;
+	uint64 futaddr;
 };
 
 #define NTHREADS        5
 struct thread threads[NTHREADS];
 static int32 th_cur;
-
-#pragma textflag NOSPLIT
-void
-memcpy(void *dst, void *src, uint64 sz)
-{
-	uint8 *to = (uint8 *)dst;
-	uint8 *from = (uint8 *)src;
-	while (sz--)
-		*to++ = *from++;
-}
 
 // given to us by bootloader
 uint64 first_free;
@@ -1278,31 +1270,53 @@ uint64 durnanotime;
 uint64 newtrap;
 
 #pragma textflag NOSPLIT
+static void
+yieldy(void)
+{
+	assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
+
+	int32 i;
+	for (i = (th_cur + 1) % NTHREADS;
+	     !threads[i].valid;
+	     i = (i + 1) % NTHREADS)
+		;
+
+	uint64 *tnext = (uint64 *)threads[i].tf;
+	assert(tnext[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
+	th_cur = i;
+
+	runtime·Trapret(tnext);
+}
+
+#pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
 
+	if (newtrap) {
+		((void (*)(uint64 *))newtrap)(tf);
+	}
+
 	if (trapno == TRAP_TIMER) {
 		// XXX convert CPU freq to ns
 		durnanotime += TIMER_QUANTUM / 3;
 
-		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
-
-		memcpy(threads[th_cur].tf, tf, TFSIZE);
-
+		// wake up timed out futexs
 		int32 i;
-		for (i = (th_cur + 1) % NTHREADS;
-		     !threads[i].valid;
-		     i = (i + 1) % NTHREADS)
-		     	;
+		for (i = 0; i < NTHREADS; i++) {
+			if (threads[i].sleeping > 0 &&
+			    threads[i].sleeping < durnanotime) {
+			    	threads[i].sleeping = 0;
+				threads[i].futaddr = 0;
+			}
+		}
 
-		uint64 *tnext = (uint64 *)threads[i].tf;
-		assert(tnext[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
-		th_cur = i;
+		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
+		runtime·memmove(threads[th_cur].tf, tf, TFSIZE);
 
 		lap_eoi();
-		runtime·Trapret(tnext);
+		yieldy();
 	}
 
 	pmsg("trap frame at");
@@ -1565,14 +1579,26 @@ hack_syscall(void)
 	}
 }
 
-void hack_yield(void);
-
 #pragma textflag NOSPLIT
 void
 hack_usleep(uint32 delay)
 {
 	runtime·deray(delay);
 }
+
+#pragma textflag NOSPLIT
+static void
+assert_addr(void *va, int8 *msg)
+{
+	uint64 *pte = pgdir_walk(va, 0);
+	if (!pte || (*pte & PTE_P) == 0)
+		runtime·pancake(msg, (uint64)va);
+}
+
+struct timespec {
+	int64 tv_sec;
+	int64 tv_nsec;
+};
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
@@ -1581,15 +1607,51 @@ int64
 hack_futex(int32 *uaddr, int32 op, int32 val,
     struct timespec *timeout, int32 *uaddr2, int32 val2)
 {
-	USED(uaddr);
-	USED(op);
-	USED(val);
-	USED(timeout);
+
 	USED(uaddr2);
 	USED(val2);
 
-	stack_dump(rrsp());
-	runtime·pancake("no impl", 0);
+	switch (op) {
+	case FUTEX_WAIT:
+	{
+		assert_addr(uaddr, "futex uaddr");
+
+		int32 dosleep = *uaddr == val;
+		if (dosleep) {
+			cli();
+			threads[th_cur].futaddr = (uint64)uaddr;
+			threads[th_cur].sleeping = -1;
+			if (timeout) {
+				assert_addr(timeout, "futex timeout");
+				int64 t = timeout->tv_sec * 1000000000;
+				t += timeout->tv_nsec;
+				threads[th_cur].sleeping = hack_nanotime() + t;
+			}
+			sti();
+			void hack_yield(void);
+			hack_yield();
+		} else {
+			return -EAGAIN;
+		}
+
+		break;
+	}
+	case FUTEX_WAKE:
+	{
+		int32 i;
+		for (i = 0; i < NTHREADS && val; i++) {
+			if (threads[i].valid && threads[i].sleeping &&
+			    threads[i].futaddr == (uint64)uaddr) {
+			    	threads[i].sleeping = 0;
+			    	threads[i].futaddr = 0;
+				val--;
+			}
+		}
+		break;
+	}
+	default:
+		runtime·pancake("bad futex op", op);
+	}
 
 	return 0;
 }
@@ -1696,7 +1758,7 @@ runtime·Tf_get(int32 idx, void *dst)
 		if (!threads[i].valid)
 			continue;
 		if (tc == idx) {
-			memcpy(dst, threads[i].tf, TFSIZE);
+			runtime·memmove(dst, threads[i].tf, TFSIZE);
 			break;
 		}
 		tc++;
