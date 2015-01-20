@@ -25,5 +25,5 @@ func Pgdir_walk(va uintptr) int
 func Pnum(m uint64)
 func Sti()
 func Trapret(tf *[23]uint64)
-func Tf_get(idx int, tf *[23]uint64) int
+func Tf_get(idx int, tf *[23]uint64) int32
 func Yieldy()
