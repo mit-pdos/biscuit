@@ -60,15 +60,6 @@ func trapstub(tf *[23]uint64) {
 	//GPFAULT := uint64(13)
 	//PGFAULT := uint64(14)
 
-	// if kernel go code causes an exception and cannot be restarted, our
-	// trap handler will never get to run, thus such a condition is a
-	// critical error
-	//if trapno != TIMER && threads[th_cur].user == 0 {
-	//	runtime.Pnum(trapno)
-	//	runtime.Pnum(tf[tf_rip])
-	//	phack(3)
-	//}
-
 	runtime.Yieldy()
 }
 
@@ -83,10 +74,11 @@ func trap(handlers map[int]func()) {
 		tstail = tsnext(tstail)
 
 		if h, ok := handlers[curtrap]; ok {
+			fmt.Printf("[trap %v] ", curtrap)
 			go h()
 			continue
 		}
-		fmt.Print("no handler for trap", curtrap)
+		fmt.Print("no handler for trap ", curtrap)
 	}
 }
 
@@ -94,33 +86,17 @@ func trap_timer() {
 	fmt.Printf("Timer!")
 }
 
-func trap_die() {
-	pancake("trap die")
-}
-
 func main() {
-	// install trap handler. have to setup already existing threads to run
-	// too
-	runtime.Cli()
-
 	runtime.Install_traphandler(trapstub)
 
-	ctf := 0
-	for i, _ := range threads {
-		if runtime.Tf_get(i, &threads[ctf].tf) == 0 {
-			threads[ctf].valid = 1
-			ctf++
+	trap_diex := func(c int) func() {
+		return func() {
+			fmt.Printf("[death on trap %v] ", c)
+			pancake("perished")
 		}
 	}
-	fmt.Printf("grandfathered %v threads", ctf)
 
-	th_cur = runtime.Current_thread()
-	if threads[th_cur].valid != 1 {
-		pancake("current thread invalid")
-	}
-	runtime.Sti()
-
-	handlers := map[int]func() { 32: trap_timer, 14:trap_die, 13:trap_die}
+	handlers := map[int]func() { 32: trap_timer, 14:trap_diex(14), 13:trap_diex(13)}
 	go trap(handlers)
 
 	fmt.Printf("'network' test ")
@@ -189,12 +165,15 @@ func process_packets(in chan packet) {
 }
 
 func ip_process(ipchan chan packet) {
+	dur := 0
 	for {
 		p := <- ipchan
 		if rand.Intn(1000) == 1 {
 			fmt.Printf("%v ", p_priority(p))
-			var p *int
-			*p = 0
+			dur++
+			if dur == 10 {
+				runtime.Death()
+			}
 		}
 	}
 }

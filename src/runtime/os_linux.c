@@ -628,7 +628,7 @@ struct idte_t {
 #define	INT     0xe
 #define	TRAP    0xf
 
-#define	NIDTE   64
+#define	NIDTE   65
 struct idte_t idt[NIDTE];
 
 #pragma textflag NOSPLIT
@@ -758,6 +758,7 @@ intsetup(void)
 	extern void Xve (void);
 	extern void Xtimer(void);
 	extern void Xspur(void);
+	extern void Xsyscall(void);
 
 	int_set(&idt[ 0], (uint64) Xdz , 0);
 	int_set(&idt[ 1], (uint64) Xrz , 0);
@@ -783,6 +784,7 @@ intsetup(void)
 
 	int_set(&idt[32], (uint64) Xtimer, 0);
 	int_set(&idt[47], (uint64) Xspur, 0);
+	int_set(&idt[64], (uint64) Xsyscall, 0);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
@@ -1271,9 +1273,12 @@ uint64 newtrap;
 
 #pragma textflag NOSPLIT
 static void
-yieldy(void)
+yieldy(int32 resume)
 {
 	assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
+
+	if (resume)
+		runtime·Trapret(threads[th_cur].tf);
 
 	int32 i;
 	for (i = (th_cur + 1) % NTHREADS;
@@ -1290,21 +1295,12 @@ yieldy(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Yieldy(void)
-{
-	yieldy();
-}
-
-#pragma textflag NOSPLIT
-void
 trap(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
 
-	if (newtrap && trapno != TRAP_TIMER) {
-		((void (*)(uint64 *))newtrap)(tf);
-		runtime·pancake("newtrap returned!", 0);
-	}
+	if (trapno == TRAP_TIMER || trapno == 64)
+		runtime·memmove(threads[th_cur].tf, tf, TFSIZE);
 
 	if (trapno == TRAP_TIMER) {
 		// XXX convert CPU freq to ns
@@ -1321,10 +1317,14 @@ trap(uint64 *tf)
 		}
 
 		assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
-		runtime·memmove(threads[th_cur].tf, tf, TFSIZE);
 
 		lap_eoi();
-		yieldy();
+		yieldy(0);
+	}
+
+	if (newtrap) {
+		((void (*)(uint64 *))newtrap)(tf);
+		runtime·pancake("newtrap returned!", 0);
 	}
 
 	pmsg("trap frame at");
@@ -1772,4 +1772,19 @@ runtime·Tf_get(int32 idx, void *dst)
 		tc++;
 	}
 	return 0;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Yieldy(void)
+{
+	yieldy(1);
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Death(void)
+{
+	void death(void);
+	death();
 }

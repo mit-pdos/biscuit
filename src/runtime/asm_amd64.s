@@ -459,7 +459,6 @@ TEXT fn(SB), NOSPLIT, $0-0;		\
 	BYTE	$0xeb;			\
 	BYTE	$0xfe;			\
 	POPQ	AX;			\
-	POPQ	AX;			\
 	RET
 
 IH_NOEC( 0,Xdz )
@@ -485,8 +484,13 @@ IH_NOEC(19,Xfp )
 IH_NOEC(20,Xve )
 IH_NOEC(32,Xtimer )
 IH_NOEC(47,Xspur )
+IH_NOEC(64,Xsyscall )
 
 #define IA32_FS_BASE   $0xc0000100UL
+
+TEXT death(SB), NOSPLIT, $0-0
+	INT	$64
+	RET
 
 TEXT wrfsb(SB), NOSPLIT, $0-8
 	get_tls(BX)
