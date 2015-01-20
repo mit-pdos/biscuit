@@ -4,19 +4,9 @@ import "fmt"
 import "math/rand"
 import "runtime"
 
-type thread_t struct {
-	valid	int
-	tf	[23]uint64
-	user	int
-}
-
-const nthreads	int = 10
-
-var threads	[nthreads]thread_t
-var th_cur	int
-
 type trapstore_t struct {
 	trapno	int
+	ucookie int
 }
 const ntrapst	int = 64
 var trapstore [ntrapst]trapstore_t
@@ -33,7 +23,7 @@ func tsnext(c int) int {
 // and then tries to execute more gocode, thus doing things the runtime did not
 // expect.
 //go:nosplit
-func trapstub(tf *[23]uint64) {
+func trapstub(tf *[23]uint64, ucookie int) {
 
 	tfregs    := 16
 	tf_trapno := tfregs
@@ -42,25 +32,36 @@ func trapstub(tf *[23]uint64) {
 	//tf_rflags   := tfregs + 4
 	//fl_intf     := uint64(1 << 9)
 
-	phack := func(c uint64) {
-		runtime.Pnum(c)
+	// add to trap circular buffer for actual trap handler
+	if tsnext(tshead) == tstail {
+		runtime.Pnum(4)
 		for {
 		}
 	}
-
-	// add to trap circular buffer for actual trap handler
-	if tsnext(tshead) == tstail {
-		phack(4)
-	}
 	trapno := tf[tf_trapno]
 	trapstore[tshead].trapno = int(trapno)
+	trapstore[tshead].ucookie = ucookie
 	tshead = tsnext(tshead)
 
-	//TIMER   := uint64(32)
-	//GPFAULT := uint64(13)
-	//PGFAULT := uint64(14)
+	SYSCALL   := uint64(64)
+	TIMER     := uint64(32)
+	//GPFAULT   := uint64(13)
+	//PGFAULT   := uint64(14)
 
-	runtime.Yieldy()
+	if trapno == SYSCALL {
+		// yield until the syscall is handled
+		runtime.Useryield()
+	} else if trapno == TIMER {
+		// timer interrupts are not exposed to this traphandler yet
+		runtime.Pnum(0x41)
+		for {
+		}
+	} else {
+		runtime.Pnum(trapno)
+		runtime.Pnum(0x42)
+		for {
+		}
+	}
 }
 
 func trap(handlers map[int]func()) {
@@ -71,6 +72,7 @@ func trap(handlers map[int]func()) {
 		}
 
 		curtrap := trapstore[tstail].trapno
+		uc := trapstore[tstail].ucookie
 		tstail = tsnext(tstail)
 
 		if h, ok := handlers[curtrap]; ok {
@@ -78,7 +80,7 @@ func trap(handlers map[int]func()) {
 			go h()
 			continue
 		}
-		fmt.Print("no handler for trap ", curtrap)
+		fmt.Printf("no handler for trap %v, ucookie %x ", curtrap, uc)
 	}
 }
 
@@ -86,7 +88,34 @@ func trap_timer() {
 	fmt.Printf("Timer!")
 }
 
+func adduser() {
+	fmt.Printf("add 'user' prog ")
+
+	var tf [23]uint64
+	tfregs    := 16
+	tf_rsp    := tfregs + 5
+	tf_rip    := tfregs + 2
+	tf_rflags := tfregs + 4
+	fl_intf     := uint64(1 << 9)
+	tf_ss     := tfregs + 6
+	tf_cs     := tfregs + 3
+
+	tf[tf_rip] = runtime.Fnaddr(runtime.Turdyprog)
+	tf[tf_rsp] = runtime.Newstack()
+	tf[tf_rflags] = fl_intf
+	tf[tf_ss] = 2 << 3
+	tf[tf_cs] = 1 << 3
+
+	runtime.Useradd(&tf, 0x31337)
+}
+
 func main() {
+	// magic loop
+	//if rand.Int() != 0 {
+	//	for {
+	//	}
+	//}
+
 	runtime.Install_traphandler(trapstub)
 
 	trap_diex := func(c int) func() {
@@ -99,17 +128,13 @@ func main() {
 	handlers := map[int]func() { 32: trap_timer, 14:trap_diex(14), 13:trap_diex(13)}
 	go trap(handlers)
 
+	adduser()
+
 	fmt.Printf("'network' test ")
 	ch := make(chan packet)
 	go genpackets(ch)
 
 	process_packets(ch)
-
-	//for {
-	//	fmt.Printf("hi ")
-	//	for i := 0; i < 100000; i++ {
-	//	}
-	//}
 }
 
 func pancake(msg ...interface{}) {
@@ -117,14 +142,6 @@ func pancake(msg ...interface{}) {
 	fmt.Print(msg)
 	for {
 	}
-}
-
-func tdump(t thread_t) {
-	tfregs := 16
-	tf_rsp    := tfregs + 5
-	tf_rip    := tfregs + 2
-	fmt.Printf("RIP %x", t.tf[tf_rip])
-	fmt.Printf("RSP %x", t.tf[tf_rsp])
 }
 
 type packet struct {
@@ -165,15 +182,10 @@ func process_packets(in chan packet) {
 }
 
 func ip_process(ipchan chan packet) {
-	dur := 0
 	for {
 		p := <- ipchan
 		if rand.Intn(1000) == 1 {
 			fmt.Printf("%v ", p_priority(p))
-			dur++
-			if dur == 10 {
-				runtime.Death()
-			}
 		}
 	}
 }

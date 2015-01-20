@@ -799,29 +799,6 @@ wemadeit(void)
 	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
 }
 
-struct thread {
-#define TFREGS       16
-#define TFHW         7
-#define TFSIZE       ((TFREGS + TFHW)*8)
-	uint64 tf[TFREGS + TFHW];
-#define TF_RSP       (TFREGS + 5)
-#define TF_RIP       (TFREGS + 2)
-#define TF_CS        (TFREGS + 3)
-#define TF_RFLAGS    (TFREGS + 4)
-	#define		TF_FL_IF	(1 << 9)
-#define TF_SS        (TFREGS + 6)
-#define TF_TRAPNO    TFREGS
-#define TF_FSBASE    0
-
-	int32 valid;
-	int64 sleeping;
-	uint64 futaddr;
-};
-
-#define NTHREADS        5
-struct thread threads[NTHREADS];
-static int32 th_cur;
-
 // given to us by bootloader
 uint64 first_free;
 uint64 pgtbl;
@@ -1262,8 +1239,36 @@ mmap_test(void)
 	pmsg("mmap passed");
 }
 
+#define TRAP_SYSCALL    64
 #define TRAP_TIMER      32
+
 #define TIMER_QUANTUM   100000000UL
+
+struct thread_t {
+#define TFREGS       16
+#define TFHW         7
+#define TFSIZE       ((TFREGS + TFHW)*8)
+	uint64 tf[TFREGS + TFHW];
+#define TF_RSP       (TFREGS + 5)
+#define TF_RIP       (TFREGS + 2)
+#define TF_CS        (TFREGS + 3)
+#define TF_RFLAGS    (TFREGS + 4)
+	#define		TF_FL_IF	(1 << 9)
+#define TF_SS        (TFREGS + 6)
+#define TF_TRAPNO    TFREGS
+#define TF_FSBASE    0
+
+	// free slot in threads?
+	int32 valid;
+	int32 runnable;
+	int64 sleeping;
+	uint64 futaddr;
+	int64 ucookie;
+};
+
+#define NTHREADS        5
+struct thread_t threads[NTHREADS];
+static int64 th_cur;
 
 uint64 durnanotime;
 
@@ -1275,14 +1280,17 @@ uint64 newtrap;
 static void
 yieldy(int32 resume)
 {
+	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
 	assert(threads[th_cur].valid, "th_cur not valid?", th_cur);
 
-	if (resume)
+	if (resume) {
+		assert(threads[th_cur].runnable, "not runnable?", th_cur);
 		runtime·Trapret(threads[th_cur].tf);
+	}
 
 	int32 i;
 	for (i = (th_cur + 1) % NTHREADS;
-	     !threads[i].valid;
+	     !threads[i].runnable;
 	     i = (i + 1) % NTHREADS)
 		;
 
@@ -1294,12 +1302,68 @@ yieldy(int32 resume)
 }
 
 #pragma textflag NOSPLIT
+static
+int32
+avail_thread(void)
+{
+	assert((rflags() & TF_FL_IF) == 0, "thread state race", 0);
+
+	int32 i;
+	for (i = 0; i < NTHREADS; i++) {
+		if (threads[i].valid == 0)
+			return i;
+	}
+
+	assert(0, "no available threads", 0);
+
+	return -1;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Useradd(uint64 *tf, int64 ucookie)
+{
+	cli();
+
+	assert(ucookie != 0, "bad ucookie", ucookie);
+	int32 nt = avail_thread();
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		assert(threads[i].ucookie != ucookie, "uc exists", ucookie);
+
+	struct thread_t *t = &threads[nt];
+	memset(t, 0, TFSIZE);
+
+	runtime·memmove(t->tf, tf, TFSIZE);
+	t->valid = 1;
+	t->runnable = 1;
+	t->ucookie = ucookie;
+
+	sti();
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Userrunnable(int64 ucookie)
+{
+	struct thread_t *t = nil;
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		if (threads[i].ucookie == ucookie)
+			t = &threads[i];
+
+	assert(t, "ucookie not found", ucookie);
+
+	t->runnable = 1;
+}
+
+#pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
 
-	if (trapno == TRAP_TIMER || trapno == 64)
+	if (trapno == TRAP_TIMER || trapno == TRAP_SYSCALL)
 		runtime·memmove(threads[th_cur].tf, tf, TFSIZE);
 
 	if (trapno == TRAP_TIMER) {
@@ -1311,6 +1375,7 @@ trap(uint64 *tf)
 		for (i = 0; i < NTHREADS; i++) {
 			if (threads[i].sleeping > 0 &&
 			    threads[i].sleeping < durnanotime) {
+				threads[i].runnable = 1;
 			    	threads[i].sleeping = 0;
 				threads[i].futaddr = 0;
 			}
@@ -1320,10 +1385,16 @@ trap(uint64 *tf)
 
 		lap_eoi();
 		yieldy(0);
+	} else {
+		// wait for kernel to handle traps from user programs
+		struct thread_t *ct = &threads[th_cur];
+		if (ct->ucookie)
+			ct->runnable = 0;
 	}
 
 	if (newtrap) {
-		((void (*)(uint64 *))newtrap)(tf);
+		int64 uc = threads[th_cur].ucookie;
+		((void (*)(uint64 *, int64))newtrap)(tf, uc);
 		runtime·pancake("newtrap returned!", 0);
 	}
 
@@ -1401,6 +1472,7 @@ timersetup(void)
 	assert(th_cur == 0, "th_cur not zero", th_cur);
 	assert(sizeof(threads[0].tf) == TFSIZE, "weird size", sizeof(threads[0].tf));
 	threads[th_cur].valid = 1;
+	threads[th_cur].runnable = 1;
 
 	uint64 la = (uint64)0xfee00000;
 
@@ -1498,17 +1570,14 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	assert(pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)(sp - 1));
 	assert(pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)(sp - 2));
 
-	int32 i;
-	for (i = 0; i < NTHREADS && threads[i].valid; i++);
-
-	assert(i != NTHREADS, "no free threads", i);
+	int32 i = avail_thread();
 
 	sp--;
 	*(sp--) = (uint64)fn;	// provide fn as arg
 	//*sp-- = (uint64)dummy;
 	*sp = 0xf1eaf1ea;	// fake return addr (clone_wrap never returns)
 
-	struct thread *mt = &threads[i];
+	struct thread_t *mt = &threads[i];
 	memset(mt, 0, sizeof(*mt));
 	mt->tf[TF_CS] = CODE_SEG << 3;
 	mt->tf[TF_RSP] = (uint64)sp;
@@ -1521,6 +1590,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	mp->procid = i;
 
 	mt->valid = 1;
+	mt->runnable = 1;
 
 	sti();
 }
@@ -1629,6 +1699,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			cli();
 			threads[th_cur].futaddr = (uint64)uaddr;
 			threads[th_cur].sleeping = -1;
+			threads[th_cur].runnable = 0;
 			if (timeout) {
 				assert_addr(timeout, "futex timeout");
 				int64 t = timeout->tv_sec * 1000000000;
@@ -1651,6 +1722,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			if (threads[i].valid && threads[i].sleeping &&
 			    threads[i].futaddr == (uint64)uaddr) {
 			    	threads[i].sleeping = 0;
+			    	threads[i].runnable = 1;
 			    	threads[i].futaddr = 0;
 				val--;
 			}
@@ -1688,13 +1760,6 @@ cls(void)
 // for a program whose stack doesn't seem to grow
 #pragma textflag NOSPLIT
 void
-runtime·Install_traphandler(uint64 *p)
-{
-	newtrap = *p;
-}
-
-#pragma textflag NOSPLIT
-void
 runtime·Lapic_eoi(void)
 {
 	lap_eoi();
@@ -1708,22 +1773,30 @@ runtime·Cli(void)
 }
 
 #pragma textflag NOSPLIT
-void
-runtime·Sti(void)
+uint64
+runtime·Fnaddr(uint64 *fn)
 {
-	sti();
+	return *fn;
 }
 
 #pragma textflag NOSPLIT
-int32
-runtime·Current_thread(void)
+void
+runtime·Install_traphandler(uint64 *p)
 {
-	int32 ret = 0;
-	int32 i;
-	for (i = 0; i < th_cur; i++)
-		if (threads[i].valid)
-			ret++;
-	return ret;
+	newtrap = *p;
+}
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Newstack(void)
+{
+	cli();
+
+	uint64 *va = (uint64 *)0x4200000000ULL - 8;
+	alloc_map(va, PTE_W, 1);
+
+	sti();
+	return (uint64)va;
 }
 
 #pragma textflag NOSPLIT
@@ -1748,37 +1821,24 @@ runtime·Pnum(uint64 m)
 }
 
 #pragma textflag NOSPLIT
-int32
-runtime·Tf_get(int32 idx, void *dst)
+void
+runtime·Sti(void)
 {
-	int32 i;
-	int32 tc = 0;
-	for (i = 0; i < NTHREADS; i++)
-		if (threads[i].valid)
-			tc++;
-
-	if (idx >= tc)
-		return -1;
-
-	assert(dst, "null dst?", (uint64)dst);
-	tc = 0;
-	for (i = 0; i < NTHREADS; i++) {
-		if (!threads[i].valid)
-			continue;
-		if (tc == idx) {
-			runtime·memmove(dst, threads[i].tf, TFSIZE);
-			break;
-		}
-		tc++;
-	}
-	return 0;
+	sti();
 }
 
 #pragma textflag NOSPLIT
 void
-runtime·Yieldy(void)
+runtime·Usercontinue(void)
 {
 	yieldy(1);
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Useryield(void)
+{
+	yieldy(0);
 }
 
 #pragma textflag NOSPLIT
@@ -1787,4 +1847,20 @@ runtime·Death(void)
 {
 	void death(void);
 	death();
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Turdyprog(void)
+{
+	int32 i = 0;
+	while (1) {
+		pmsg("user work");
+		runtime·deray(1000000);
+		if (i++ > 10) {
+			pmsg("doing \"system call\"");
+			void death(void);
+			death();
+		}
+	}
 }

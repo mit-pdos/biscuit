@@ -16,15 +16,20 @@ func getrlimit(kind int32, limit unsafe.Pointer) int32
 func raise(sig int32)
 func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
 
-func Current_thread() int
 func Cli()
-func Install_traphandler(func(tf *[23]uint64))
+func Install_traphandler(func(tf *[23]uint64, uc int))
 func Install_trapstub(func())
 func Lapic_eoi()
 func Pgdir_walk(va uintptr) int
 func Pnum(m uint64)
 func Sti()
 func Trapret(tf *[23]uint64)
-func Tf_get(idx int, tf *[23]uint64) int32
-func Yieldy()
+func Useradd(tf *[23]uint64, uc int)
+func Usercontinue()
+func Userrunnable()
+func Useryield()
+
 func Death()
+func Fnaddr(func()) uint64
+func Newstack() uint64
+func Turdyprog()
