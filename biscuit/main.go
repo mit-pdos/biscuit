@@ -103,10 +103,13 @@ func adduser() {
 	tf[tf_rip] = runtime.Fnaddr(runtime.Turdyprog)
 	tf[tf_rsp] = runtime.Newstack()
 	tf[tf_rflags] = fl_intf
-	tf[tf_ss] = 2 << 3
-	tf[tf_cs] = 1 << 3
+	tf[tf_cs] = 6 << 3 | 3
+	tf[tf_ss] = 7 << 3 | 3
+	//tf[tf_cs] = 1 << 3
+	//tf[tf_ss] = 2 << 3
 
-	runtime.Useradd(&tf, 0x31337)
+	pgtbl := runtime.Copy_pgt(runtime.Kpgdir())
+	runtime.Useradd(&tf, 0x31337, pgtbl)
 }
 
 func main() {

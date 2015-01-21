@@ -351,6 +351,7 @@ runtime·signame(int32 sig)
 // src/runtime/asm_amd64.s
 void cli(void);
 void lcr0(uint64);
+void lcr3(uint64);
 void lcr4(uint64);
 void lidt(struct pdesc_t *);
 void ltr(uint64);
@@ -482,8 +483,9 @@ struct seg64_t {
 #define	CODE    0xa
 #define	DATA    0x2
 #define	TSS     0x9
+#define	USER    0x60
 
-static struct seg64_t segs[6] = {
+static struct seg64_t segs[8] = {
 	// NULL seg
 	{0, 0, 0, 0, 0, 0, 0, 0},
 
@@ -519,6 +521,20 @@ static struct seg64_t segs[6] = {
 	// 64 bit tss takes up two segment descriptor entires. the high 32bits
 	// of the base are written in this seg desc.
 	{0, 0, 0, 0, 0, 0, 0, 0},
+
+	// 6 - 64 bit user code
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | CODE | USER,	// p, dpl, s, type
+	 G | L,		// g, d/b, l, avail, mid limit
+	 0},		// base high
+
+	// 7 - user data
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | DATA | USER,	// p, dpl, s, type
+	 G | D,	// g, d/b, l, avail, mid limit
+	 0},		// base high
 };
 
 static struct pdesc_t pd;
@@ -633,7 +649,7 @@ struct idte_t idt[NIDTE];
 
 #pragma textflag NOSPLIT
 static void
-int_set(struct idte_t *i, uint64 addr, uint64 trap)
+int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user)
 {
 	/*
 	{0, 0,		// 0-1   low offset
@@ -654,10 +670,10 @@ int_set(struct idte_t *i, uint64 addr, uint64 trap)
 	bw(&i->dur[2], CODE_SEG << 3, 0);
 	bw(&i->dur[3], CODE_SEG << 3, 1);
 	i->dur[4] = 0;
-	if (trap)
-		i->dur[5] = 0x80 | TRAP;
-	else
-		i->dur[5] = 0x80 | INT;
+	uint8 t = 0x80;
+	t |= trap ? TRAP : INT;
+	t |= user ? USER : 0;
+	i->dur[5] = t;
 	bw(&i->dur[6],  midoff, 0);
 	bw(&i->dur[7],  midoff, 1);
 	bw(&i->dur[8],  highoff, 0);
@@ -668,6 +684,7 @@ int_set(struct idte_t *i, uint64 addr, uint64 trap)
 
 #undef INT
 #undef TRAP
+#undef USER
 
 struct tss_t {
 	uint8 dur[26];
@@ -693,32 +710,6 @@ tss_set(struct tss_t *tss, uint64 rsp0)
 	uint64 d = sizeof(struct tss_t);
 	bw(&tss->dur[102], d, 0);
 	bw(&tss->dur[103], d, 1);
-}
-
-#pragma textflag NOSPLIT
-static void
-tss_setup(void)
-{
-	// alignment is for performance
-	uint64 addr = (uint64)&tss;
-	if (addr & (16 - 1))
-		runtime·pancake("tss not aligned", addr);
-
-	// XXX if we ever use a CPL != 0, we need to use a diff stack;
-	// otherwise we will overwrite pre-trap stack
-	uint64 rsp = 0x80000000;
-
-	tss_set(&tss, rsp);
-	seg_set(&segs[TSS_SEG], (uint32)addr, sizeof(tss) - 1, 0);
-
-	// set high bits (TSS64 uses two segment descriptors
-	uint32 haddr = addr >> 32;
-	bw(&segs[TSS_SEG + 1].dur[0], haddr, 0);
-	bw(&segs[TSS_SEG + 1].dur[1], haddr, 1);
-	bw(&segs[TSS_SEG + 1].dur[2], haddr, 2);
-	bw(&segs[TSS_SEG + 1].dur[3], haddr, 3);
-
-	ltr(TSS_SEG << 3);
 }
 
 #pragma textflag NOSPLIT
@@ -760,36 +751,34 @@ intsetup(void)
 	extern void Xspur(void);
 	extern void Xsyscall(void);
 
-	int_set(&idt[ 0], (uint64) Xdz , 0);
-	int_set(&idt[ 1], (uint64) Xrz , 0);
-	int_set(&idt[ 2], (uint64) Xnmi, 0);
-	int_set(&idt[ 3], (uint64) Xbp , 0);
-	int_set(&idt[ 4], (uint64) Xov , 0);
-	int_set(&idt[ 5], (uint64) Xbnd, 0);
-	int_set(&idt[ 6], (uint64) Xuo , 0);
-	int_set(&idt[ 7], (uint64) Xnm , 0);
-	int_set(&idt[ 8], (uint64) Xdf , 0);
-	int_set(&idt[ 9], (uint64) Xrz2, 0);
-	int_set(&idt[10], (uint64) Xtss, 0);
-	int_set(&idt[11], (uint64) Xsnp, 0);
-	int_set(&idt[12], (uint64) Xssf, 0);
-	int_set(&idt[13], (uint64) Xgp , 0);
-	int_set(&idt[14], (uint64) Xpf , 0);
-	int_set(&idt[15], (uint64) Xrz3, 0);
-	int_set(&idt[16], (uint64) Xmf , 0);
-	int_set(&idt[17], (uint64) Xac , 0);
-	int_set(&idt[18], (uint64) Xmc , 0);
-	int_set(&idt[19], (uint64) Xfp , 0);
-	int_set(&idt[20], (uint64) Xve , 0);
+	int_set(&idt[ 0], (uint64) Xdz , 0, 0);
+	int_set(&idt[ 1], (uint64) Xrz , 0, 0);
+	int_set(&idt[ 2], (uint64) Xnmi, 0, 0);
+	int_set(&idt[ 3], (uint64) Xbp , 0, 0);
+	int_set(&idt[ 4], (uint64) Xov , 0, 0);
+	int_set(&idt[ 5], (uint64) Xbnd, 0, 0);
+	int_set(&idt[ 6], (uint64) Xuo , 0, 0);
+	int_set(&idt[ 7], (uint64) Xnm , 0, 0);
+	int_set(&idt[ 8], (uint64) Xdf , 0, 0);
+	int_set(&idt[ 9], (uint64) Xrz2, 0, 0);
+	int_set(&idt[10], (uint64) Xtss, 0, 0);
+	int_set(&idt[11], (uint64) Xsnp, 0, 0);
+	int_set(&idt[12], (uint64) Xssf, 0, 0);
+	int_set(&idt[13], (uint64) Xgp , 0, 0);
+	int_set(&idt[14], (uint64) Xpf , 0, 0);
+	int_set(&idt[15], (uint64) Xrz3, 0, 0);
+	int_set(&idt[16], (uint64) Xmf , 0, 0);
+	int_set(&idt[17], (uint64) Xac , 0, 0);
+	int_set(&idt[18], (uint64) Xmc , 0, 0);
+	int_set(&idt[19], (uint64) Xfp , 0, 0);
+	int_set(&idt[20], (uint64) Xve , 0, 0);
 
-	int_set(&idt[32], (uint64) Xtimer, 0);
-	int_set(&idt[47], (uint64) Xspur, 0);
-	int_set(&idt[64], (uint64) Xsyscall, 0);
+	int_set(&idt[32], (uint64) Xtimer, 0, 0);
+	int_set(&idt[47], (uint64) Xspur, 0, 0);
+	int_set(&idt[64], (uint64) Xsyscall, 0, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
-
-	tss_setup();
 }
 
 #pragma textflag NOSPLIT
@@ -801,7 +790,7 @@ wemadeit(void)
 
 // given to us by bootloader
 uint64 first_free;
-uint64 pgtbl;
+uint64 kpgtbl;
 
 int8 gostr[] = "go";
 
@@ -1022,7 +1011,7 @@ pgdir_walk(void *va, int32 create)
 }
 
 #pragma textflag NOSPLIT
-void
+static void
 alloc_map(void *va, int32 perms, int32 fempty)
 {
 	uint64 *pte = pgdir_walk(va, 1);
@@ -1264,6 +1253,8 @@ struct thread_t {
 	int64 sleeping;
 	uint64 futaddr;
 	int64 ucookie;
+	// non-zero iff ucookie != 0
+	uint64 pgtbl;
 };
 
 #define NTHREADS        5
@@ -1294,11 +1285,13 @@ yieldy(int32 resume)
 	     i = (i + 1) % NTHREADS)
 		;
 
-	uint64 *tnext = (uint64 *)threads[i].tf;
-	assert(tnext[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
+	struct thread_t *tnext = &threads[i];
+	assert(tnext->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	th_cur = i;
 
-	runtime·Trapret(tnext);
+	if (tnext->ucookie && tnext->pgtbl)
+		lcr3(tnext->pgtbl);
+	runtime·Trapret(tnext->tf);
 }
 
 #pragma textflag NOSPLIT
@@ -1321,7 +1314,7 @@ avail_thread(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Useradd(uint64 *tf, int64 ucookie)
+runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pgtbl)
 {
 	cli();
 
@@ -1338,6 +1331,7 @@ runtime·Useradd(uint64 *tf, int64 ucookie)
 	t->valid = 1;
 	t->runnable = 1;
 	t->ucookie = ucookie;
+	t->pgtbl = pgtbl;
 
 	sti();
 }
@@ -1422,6 +1416,35 @@ trap(uint64 *tf)
 	stack_dump(rsp);
 
 	runtime·pancake("trap", 0);
+}
+
+#pragma textflag NOSPLIT
+static void
+tss_setup(void)
+{
+	// alignment is for performance
+	uint64 addr = (uint64)&tss;
+	if (addr & (16 - 1))
+		runtime·pancake("tss not aligned", addr);
+
+	// XXX if we ever use a CPL != 0, we need to use a diff stack;
+	// otherwise we will overwrite pre-trap stack
+	//uint64 rsp = 0x80000000;
+	uint64 *va = (uint64 *)0x2100000000ULL;
+	alloc_map(va - 1, PTE_W, 1);
+	uint64 rsp = (uint64)va;
+
+	tss_set(&tss, rsp);
+	seg_set(&segs[TSS_SEG], (uint32)addr, sizeof(tss) - 1, 0);
+
+	// set high bits (TSS64 uses two segment descriptors
+	uint32 haddr = addr >> 32;
+	bw(&segs[TSS_SEG + 1].dur[0], haddr, 0);
+	bw(&segs[TSS_SEG + 1].dur[1], haddr, 1);
+	bw(&segs[TSS_SEG + 1].dur[2], haddr, 2);
+	bw(&segs[TSS_SEG + 1].dur[3], haddr, 3);
+
+	ltr(TSS_SEG << 3);
 }
 
 static uint64 lapaddr;
@@ -1536,6 +1559,8 @@ timersetup(void)
 	// 8259a - mask all ints. skipping this step results in GPfault too?
 	outb(0x20 + 1, 0xff);
 	outb(0xa0 + 1, 0xff);
+
+	tss_setup();
 }
 
 #pragma textflag NOSPLIT
@@ -1664,12 +1689,20 @@ hack_usleep(uint32 delay)
 	runtime·deray(delay);
 }
 
+static uint64 *
+pte_mapped(void *va)
+{
+	uint64 *pte = pgdir_walk(va, 0);
+	if (!pte || (*pte & PTE_P) == 0)
+		return nil;
+	return pte;
+}
+
 #pragma textflag NOSPLIT
 static void
 assert_addr(void *va, int8 *msg)
 {
-	uint64 *pte = pgdir_walk(va, 0);
-	if (!pte || (*pte & PTE_P) == 0)
+	if (pte_mapped(va) == nil)
 		runtime·pancake(msg, (uint64)va);
 }
 
@@ -1774,9 +1807,25 @@ runtime·Cli(void)
 
 #pragma textflag NOSPLIT
 uint64
+runtime·Copy_pgt(uint64 *pgt)
+{
+	USED(pgt);
+	// XXX
+	return kpgtbl;
+}
+
+#pragma textflag NOSPLIT
+uint64
 runtime·Fnaddr(uint64 *fn)
 {
 	return *fn;
+}
+
+#pragma textflag NOSPLIT
+uint64*
+runtime·Kpgdir()
+{
+	return CADDR(VREC, VREC, VREC, VREC);
 }
 
 #pragma textflag NOSPLIT
@@ -1803,7 +1852,6 @@ runtime·Newstack(void)
 int32
 runtime·Pgdir_walk(void *va)
 {
-	//return pgdir_walk(va, 0) != nil;
 	uint64 *ret = pgdir_walk(va, 0);
 	if (ret == nil)
 		return 0;
@@ -1841,6 +1889,19 @@ runtime·Useryield(void)
 	yieldy(0);
 }
 
+//#pragma textflag NOSPLIT
+//uint64
+//runtime·Vtop(void *va)
+//{
+//	uint64 van = (uint64)va;
+//	uint64 *pte = pte_mapped(va);
+//	if (!pte)
+//		return 0;
+//	uint64 base = PTE_ADDR(*pte);
+//
+//	return base + (van & PGOFFMASK);
+//}
+
 #pragma textflag NOSPLIT
 void
 runtime·Death(void)
@@ -1855,7 +1916,7 @@ runtime·Turdyprog(void)
 {
 	int32 i = 0;
 	while (1) {
-		pmsg("user work");
+		pmsg("work");
 		runtime·deray(1000000);
 		if (i++ > 10) {
 			pmsg("doing \"system call\"");

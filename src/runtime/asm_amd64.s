@@ -164,7 +164,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	//BYTE	$0xfe
 
 	// save page table and first free address from bootloader.
-	MOVL	DI, pgtbl(SB)
+	MOVL	DI, kpgtbl(SB)
 	MOVL	SI, first_free(SB)
 	MOVQ	$1, runtime·hackmode(SB)
 
@@ -353,6 +353,11 @@ TEXT rcr2(SB), NOSPLIT, $0-8
 
 TEXT tlbflush(SB), NOSPLIT, $0-0
 	MOVQ	CR3, AX
+	MOVQ	AX, CR3
+	RET
+
+TEXT lcr3(SB), NOSPLIT, $0-8
+	MOVQ	pgtbl+0(FP), AX
 	MOVQ	AX, CR3
 	RET
 

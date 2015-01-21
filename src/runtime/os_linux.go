@@ -17,14 +17,16 @@ func raise(sig int32)
 func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
 
 func Cli()
+func Copy_pgt(*[512]int) *[512]int
 func Install_traphandler(func(tf *[23]uint64, uc int))
 func Install_trapstub(func())
+func Kpgdir() *[512]int
 func Lapic_eoi()
 func Pgdir_walk(va uintptr) int
 func Pnum(m uint64)
 func Sti()
 func Trapret(tf *[23]uint64)
-func Useradd(tf *[23]uint64, uc int)
+func Useradd(tf *[23]uint64, uc int, pgtbl *[512]int)
 func Usercontinue()
 func Userrunnable()
 func Useryield()
