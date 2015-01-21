@@ -357,6 +357,7 @@ void lidt(struct pdesc_t *);
 void ltr(uint64);
 void outb(uint32, uint32);
 void runtime·stackcheck(void);
+uint64 rcr2(void);
 uint64 rflags(void);
 uint64 rrsp(void);
 void sti(void);
@@ -789,7 +790,6 @@ wemadeit(void)
 }
 
 // given to us by bootloader
-uint64 first_free;
 uint64 kpgtbl;
 
 int8 gostr[] = "go";
@@ -854,9 +854,9 @@ fpuinit(uint64 cr0, uint64 cr4)
 #define PDX(x)          (((uint64)(x) >> 21) & 0x1ff)
 #define PTX(x)          (((uint64)(x) >> 12) & 0x1ff)
 
-#define PTE_P           (1ULL << 0)
 #define PTE_W           (1ULL << 1)
 #define PTE_U           (1ULL << 2)
+#define PTE_P           (1ULL << 0)
 #define PTE_PCD         (1ULL << 4)
 
 #define PTE_ADDR(x)     ((x) & ~0x3ff)
@@ -874,6 +874,8 @@ struct secret_t {
 	uint64 dur[3];
 #define	SEC_E820	0
 };
+
+// XXX allocator should be in go
 
 // regions of memory not included in the e820 map, into which we cannot
 // allocate
@@ -901,46 +903,59 @@ skip_bad(uint64 cur)
 	return cur;
 }
 
+// given to us by bootloader
+uint64 runtime·Pgfirst;
+// determined by e820 map
+uint64 runtime·Pglast;
+
+#pragma textflag NOSPLIT
+void
+init_pgfirst(void)
+{
+	// find e820 entry for the current page
+	struct secret_t *secret = (struct secret_t *)0x7c00;
+	struct e8e {
+		uint64 dur[2];
+	} *ep;
+	// secret storage
+	uint64 base = secret->dur[SEC_E820];
+	int32 i;
+	// bootloader provides 7 e820 entries at most (it will panick if the PC
+	// provides more)
+	for (i = 0; i < 7; i++) {
+		ep = (struct e8e *)(base + i * 28);
+		// non-zero len
+		if (!ep->dur[1])
+			continue;
+
+		uint64 end = ep->dur[0] + ep->dur[1];
+		if (runtime·Pgfirst >= ep->dur[0] && runtime·Pgfirst < end) {
+			runtime·Pglast = end;
+			break;
+		}
+	}
+	assert(runtime·Pglast, "no e820 seg for Pgfirst?", runtime·Pgfirst);
+}
+
 #pragma textflag NOSPLIT
 uint64
 get_pg(void)
 {
-	static uint64 limit;
-	if (!limit) {
-		// find e820 entry for the current page
-		struct secret_t *secret = (struct secret_t *)0x7c00;
-		struct e8e {
-			uint64 dur[2];
-		} *ep;
-		// secret storage
-		uint64 base = secret->dur[SEC_E820];
-		int32 i;
-		for (i = 0; i < 7; i++) {
-			ep = (struct e8e *)(base + i * 28);
-			// non-zero len
-			if (!ep->dur[1])
-				continue;
-
-			uint64 end = ep->dur[0] + ep->dur[1];
-			if (first_free >= ep->dur[0] && first_free < end) {
-				limit = end;
-				break;
-			}
-		}
-
-		assert(limit, "no e820 seg for first_free?", first_free);
+	if (!runtime·Pglast) {
+		init_pgfirst();
 	}
 
-	first_free = skip_bad(first_free);
+	// runtime·Pgfirst is given by the bootloader
+	runtime·Pgfirst = skip_bad(runtime·Pgfirst);
 
-	uint64 ret = first_free;
+	uint64 ret = runtime·Pgfirst;
 	if (ret & PGOFFMASK)
 		runtime·pancake("ret not aligned?", ret);
 
-	first_free += PGSIZE;
+	runtime·Pgfirst += PGSIZE;
 
-	if (ret >= limit)
-		runtime·pancake("oom?", limit);
+	if (ret >= runtime·Pglast)
+		runtime·pancake("oom?", runtime·Pglast);
 
 	return ret;
 }
@@ -1559,7 +1574,12 @@ timersetup(void)
 	// 8259a - mask all ints. skipping this step results in GPfault too?
 	outb(0x20 + 1, 0xff);
 	outb(0xa0 + 1, 0xff);
+}
 
+#pragma textflag NOSPLIT
+void
+misc_init(void)
+{
 	tss_setup();
 }
 
@@ -1689,6 +1709,7 @@ hack_usleep(uint32 delay)
 	runtime·deray(delay);
 }
 
+#pragma textflag NOSPLIT
 static uint64 *
 pte_mapped(void *va)
 {
@@ -1869,6 +1890,13 @@ runtime·Pnum(uint64 m)
 }
 
 #pragma textflag NOSPLIT
+uint64
+runtime·Rcr2(void)
+{
+	return rcr2();
+}
+
+#pragma textflag NOSPLIT
 void
 runtime·Sti(void)
 {
@@ -1889,18 +1917,18 @@ runtime·Useryield(void)
 	yieldy(0);
 }
 
-//#pragma textflag NOSPLIT
-//uint64
-//runtime·Vtop(void *va)
-//{
-//	uint64 van = (uint64)va;
-//	uint64 *pte = pte_mapped(va);
-//	if (!pte)
-//		return 0;
-//	uint64 base = PTE_ADDR(*pte);
-//
-//	return base + (van & PGOFFMASK);
-//}
+#pragma textflag NOSPLIT
+uint64
+runtime·Vtop(void *va)
+{
+	uint64 van = (uint64)va;
+	uint64 *pte = pte_mapped(va);
+	if (!pte)
+		return 0;
+	uint64 base = PTE_ADDR(*pte);
+
+	return base + (van & PGOFFMASK);
+}
 
 #pragma textflag NOSPLIT
 void

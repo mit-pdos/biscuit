@@ -138,9 +138,9 @@ ljmp(uint16_t sel, uint32_t entry, uint32_t a1, uint32_t a2, uint32_t sp)
 #define PDX(x)          (((x) >> 21) & 0x1ff)
 #define PTX(x)          (((x) >> 12) & 0x1ff)
 
-#define PTE_P           (1UL << 0)
 #define PTE_W           (1UL << 1)
 #define PTE_U           (1UL << 2)
+#define PTE_P           (1UL << 0)
 #define PTE_PCD         (1UL << 4)
 
 #define PTE_ADDR(x)     ((x) & ~0x3ff)

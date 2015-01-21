@@ -165,7 +165,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 
 	// save page table and first free address from bootloader.
 	MOVL	DI, kpgtbl(SB)
-	MOVL	SI, first_free(SB)
+	MOVL	SI, runtime·Pgfirst(SB)
 	MOVQ	$1, runtime·hackmode(SB)
 
 	ANDQ	$~15, SP
@@ -308,11 +308,8 @@ h_ok:
 	//CALL	pgtest(SB)
 	//CALL	mmap_test(SB)
 
-//	CMPQ	AX, $31337
-//	JZ	forward
-//me:
-//	JMP	me
-//forward:
+	CALL	misc_init(SB)
+
 	CLD				// convention is D is always left cleared
 	CALL	runtime·check(SB)
 
