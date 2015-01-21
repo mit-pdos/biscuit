@@ -132,7 +132,12 @@ func new_pgt(ptracker map[int]*[512]int) (*[512]int, int) {
 	if ptn & ((1 << 12) - 1) != 0 {
 		pancake("page table not aligned", ptn)
 	}
-	physaddr := runtime.Vtop(pt)
+	pte := pgdir_walk(runtime.Kpgdir(), unsafe.Pointer(pt),
+	    0, 0, ptracker)
+	if pte == nil {
+		pancake("must be mapped")
+	}
+	physaddr := *pte & PTE_ADDR
 
 	if ptracker != nil {
 		ptracker[physaddr] = pt
@@ -145,7 +150,14 @@ func new_pgt(ptracker map[int]*[512]int) (*[512]int, int) {
 func dmap_init() {
 	dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
 
-	pdpt, p_pdpt := new_pgt(allpages)
+	pdpt  := new([512]int)
+	ptn := int(uintptr(unsafe.Pointer(pdpt)))
+	if ptn & ((1 << 12) - 1) != 0 {
+		pancake("page table not aligned", ptn)
+	}
+	p_pdpt := runtime.Vtop(pdpt)
+	allpages[p_pdpt] = pdpt
+
 	for i := range pdpt {
 		pdpt[i] = i*PGSIZE | PTE_P | PTE_W | PTE_PS
 	}
@@ -262,7 +274,7 @@ func user_test() {
 	runtime.Useradd(&tf, 0x31337, pgtbl)
 }
 
-var allpages map[int]*[512]int
+var allpages = map[int]*[512]int{}
 
 func main() {
 	// magic loop
