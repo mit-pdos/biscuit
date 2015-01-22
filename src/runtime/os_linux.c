@@ -789,8 +789,8 @@ wemadeit(void)
 	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
 }
 
-// given to us by bootloader
-uint64 kpgtbl;
+// physical address of current pmap, given to us by bootloader
+uint64 kpmap;
 
 int8 gostr[] = "go";
 
@@ -1269,7 +1269,7 @@ struct thread_t {
 	uint64 futaddr;
 	int64 ucookie;
 	// non-zero if ucookie != 0
-	uint64 pgtbl;
+	uint64 pmap;
 };
 
 #define NTHREADS        5
@@ -1304,8 +1304,7 @@ yieldy(int32 resume)
 	assert(tnext->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	th_cur = i;
 
-	if (tnext->ucookie && tnext->pgtbl)
-		lcr3(tnext->pgtbl);
+	lcr3(tnext->pmap);
 	trapret(tnext->tf);
 }
 
@@ -1329,7 +1328,7 @@ thread_avail(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pgtbl)
+runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pmap)
 {
 	cli();
 
@@ -1346,7 +1345,7 @@ runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pgtbl)
 	t->valid = 1;
 	t->runnable = 1;
 	t->ucookie = ucookie;
-	t->pgtbl = pgtbl;
+	t->pmap = pmap;
 
 	sti();
 }
@@ -1523,6 +1522,7 @@ timersetup(void)
 	assert(sizeof(threads[0].tf) == TFSIZE, "weird size", sizeof(threads[0].tf));
 	threads[th_cur].valid = 1;
 	threads[th_cur].runnable = 1;
+	threads[th_cur].pmap = kpmap;
 
 	uint64 la = (uint64)0xfee00000;
 
@@ -1648,6 +1648,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 
 	mt->valid = 1;
 	mt->runnable = 1;
+	mt->pmap = kpmap;
 
 	sti();
 }
