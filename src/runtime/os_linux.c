@@ -361,7 +361,7 @@ uint64 rcr2(void);
 uint64 rflags(void);
 uint64 rrsp(void);
 void sti(void);
-void runtime·Trapret(uint64 *);
+void trapret(uint64 *);
 
 // this file
 void lap_eoi(void);
@@ -1291,7 +1291,7 @@ yieldy(int32 resume)
 
 	if (resume) {
 		assert(threads[th_cur].runnable, "not runnable?", th_cur);
-		runtime·Trapret(threads[th_cur].tf);
+		trapret(threads[th_cur].tf);
 	}
 
 	int32 i;
@@ -1306,7 +1306,7 @@ yieldy(int32 resume)
 
 	if (tnext->ucookie && tnext->pgtbl)
 		lcr3(tnext->pgtbl);
-	runtime·Trapret(tnext->tf);
+	trapret(tnext->tf);
 }
 
 #pragma textflag NOSPLIT
@@ -1814,25 +1814,9 @@ cls(void)
 // for a program whose stack doesn't seem to grow
 #pragma textflag NOSPLIT
 void
-runtime·Lapic_eoi(void)
-{
-	lap_eoi();
-}
-
-#pragma textflag NOSPLIT
-void
 runtime·Cli(void)
 {
 	cli();
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Copy_pgt(uint64 *pgt)
-{
-	USED(pgt);
-	// XXX
-	return kpgtbl;
 }
 
 #pragma textflag NOSPLIT
@@ -1844,7 +1828,7 @@ runtime·Fnaddr(uint64 *fn)
 
 #pragma textflag NOSPLIT
 uint64*
-runtime·Kpgdir()
+runtime·Kpmap(void)
 {
 	return CADDR(VREC, VREC, VREC, VREC);
 }
@@ -1854,32 +1838,6 @@ void
 runtime·Install_traphandler(uint64 *p)
 {
 	newtrap = *p;
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Newstack(void)
-{
-	cli();
-
-	uint64 *va = (uint64 *)0x4200000000ULL - 8;
-	alloc_map(va, PTE_W, 1);
-
-	sti();
-	return (uint64)va;
-}
-
-#pragma textflag NOSPLIT
-int32
-runtime·Pgdir_walk(void *va)
-{
-	uint64 *ret = pgdir_walk(va, 0);
-	if (ret == nil)
-		return 0;
-	if ((*ret & PTE_P) == 0)
-		return 0;
-
-	return 1;
 }
 
 #pragma textflag NOSPLIT
@@ -1932,24 +1890,30 @@ runtime·Vtop(void *va)
 
 #pragma textflag NOSPLIT
 void
-runtime·Death(void)
-{
-	void death(void);
-	death();
-}
-
-#pragma textflag NOSPLIT
-void
 runtime·Turdyprog(void)
 {
+	uint16 *vga = (uint16 *)0xb8000;
+	int32 x = 0;
 	int32 i = 0;
 	while (1) {
-		pmsg("work");
-		runtime·deray(1000000);
+		vga[x++] = 'W' | (0x7 << 8);
+		vga[x++] = 'o' | (0x7 << 8);
+		vga[x++] = 'r' | (0x7 << 8);
+		vga[x++] = 'k' | (0x7 << 8);
+		vga[x++] = ' ' | (0x7 << 8);
+		int32 j;
+		for (j = 0; j < 100000000; j++);
 		if (i++ > 10) {
-			pmsg("doing \"system call\"");
-			void death(void);
-			death();
+			vga[x++] = 'S' | (0x7 << 8);
+			vga[x++] = 'Y' | (0x7 << 8);
+			vga[x++] = 'S' | (0x7 << 8);
+			vga[x++] = 'C' | (0x7 << 8);
+			vga[x++] = 'A' | (0x7 << 8);
+			vga[x++] = 'L' | (0x7 << 8);
+			vga[x++] = 'L' | (0x7 << 8);
+			vga[x++] = ' ' | (0x7 << 8);
+			void runtime·Death(void);
+			runtime·Death();
 		}
 	}
 }

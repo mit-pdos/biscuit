@@ -46,7 +46,7 @@ func trapstub(tf *[23]int, ucookie int) {
 
 	SYSCALL   := 64
 	TIMER     := 32
-	//GPFAULT   := 13
+	GPFAULT   := 13
 	PGFAULT   := 14
 
 	if trapno == SYSCALL {
@@ -61,9 +61,13 @@ func trapstub(tf *[23]int, ucookie int) {
 		runtime.Pnum(trapno)
 		if trapno == PGFAULT {
 			runtime.Pnum(runtime.Rcr2())
-			rip := tf[tf_rip]
-			runtime.Pnum(rip)
 		}
+		if trapno == GPFAULT {
+			tf_rdx := 12
+			runtime.Pnum(tf[tf_rdx])
+		}
+		rip := tf[tf_rip]
+		runtime.Pnum(rip)
 		runtime.Pnum(0x42)
 		for {
 		}
@@ -100,6 +104,7 @@ var PTE_U     int = 1 << 2
 var PTE_PS    int = 1 << 7
 var PGSIZE    int = 1 << 12
 var PTE_ADDR  int = ^(0xfff)
+var PTE_FLAGS int = 0x1f
 
 var VREC      int = 0x42
 var VDIRECT   int = 0x44
@@ -126,13 +131,13 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
-func new_pgt(ptracker map[int]*[512]int) (*[512]int, int) {
+func new_mpg(ptracker map[int]*[512]int) (*[512]int, int) {
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
-	if ptn & ((1 << 12) - 1) != 0 {
+	if ptn & (PGSIZE - 1) != 0 {
 		pancake("page table not aligned", ptn)
 	}
-	pte := pgdir_walk(runtime.Kpgdir(), unsafe.Pointer(pt),
+	pte := pmap_walk(runtime.Kpmap(), unsafe.Pointer(pt),
 	    0, 0, ptracker)
 	if pte == nil {
 		pancake("must be mapped")
@@ -167,13 +172,14 @@ func dmap_init() {
 
 // returns a virtual address for the given physical address using the direct
 // mapping
-func dmap(pa int) *[512]int {
+func dmap(p int) *[512]int {
+	pa := uint(p)
 	if pa >= 1 << 39 {
-		pancake("physical address too large")
+		pancake("physical address too large", pa)
 	}
 
 	v := int(uintptr(unsafe.Pointer(caddr(VDIRECT, 0, 0, 0, 0))))
-	v += rounddown(pa, PGSIZE)
+	v += rounddown(int(pa), PGSIZE)
 	return (*[512]int)(unsafe.Pointer(uintptr(v)))
 }
 
@@ -183,14 +189,14 @@ func pe2pg(pe int) *[512]int {
 }
 
 // requires direct mapping
-func pgdir_walk(pml4 *[512]int, v unsafe.Pointer, create int,
+func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create int,
     perms int, ptracker map[int]*[512]int) *int {
 
 	vn := uint(uintptr(v))
 	l4b, pdpb, pdb, ptb := pgbits(vn)
 
 	instpg := func(pg *[512]int, idx uint) int {
-		_, p_np := new_pgt(ptracker)
+		_, p_np := new_mpg(ptracker)
 		npte :=  p_np | perms | PTE_P
 		pg[idx] = npte
 		return npte
@@ -235,21 +241,76 @@ func pg_test() {
 		fmt.Printf(" [%p -> %x] ", v, p)
 	}
 
-	kpgdir := runtime.Kpgdir()
-	pte := pgdir_walk(kpgdir, unsafe.Pointer(uintptr(0x7c00)), 0, 0, allpages)
+	kpgdir := runtime.Kpmap()
+	pte := pmap_walk(kpgdir, unsafe.Pointer(uintptr(0x7c00)), 0, 0, allpages)
 	fmt.Printf("boot pte %x ", *pte)
 
 	paddr := 0x2200000000
-	pte = pgdir_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), 0, 0, allpages)
+	pte = pmap_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), 0, 0, allpages)
 	if pte != nil {
 		pancake("nyet")
 	}
-	pte = pgdir_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), 1, PTE_W, allpages)
+	pte = pmap_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), 1, PTE_W, allpages)
 	fmt.Printf("null pte %x ", *pte)
-	_, p_np := new_pgt(allpages)
+	_, p_np := new_mpg(allpages)
 	*pte = p_np | PTE_P | PTE_W
 	maddr := (*int)(unsafe.Pointer(uintptr(paddr)))
 	fmt.Printf("new addr contents %x ", *maddr)
+}
+
+func copy_pmap1(dst *[512]int, src *[512]int, depth int,
+    ptracker map[int]*[512]int) {
+
+	for i, c := range src {
+		if c & PTE_P  == 0 {
+			continue
+		}
+		if depth == 1 {
+			// copy ptes
+			dst[i] = c
+			continue
+		}
+		// copy mappings of pages > PGSIZE
+		if c & PTE_PS != 0 {
+			dst[i] = c
+			continue
+		}
+		// otherwise, recursively copy
+		np, p_np := new_mpg(ptracker)
+		perms := c & PTE_FLAGS
+		dst[i] = p_np | perms
+		nsrc := pe2pg(c)
+		copy_pmap1(np, nsrc, depth - 1, ptracker)
+	}
+}
+
+func copy_pmap(pm *[512]int, ptracker map[int]*[512]int) (*[512]int, int) {
+	npm, p_npm := new_mpg(ptracker)
+	copy_pmap1(npm, pm, 4, ptracker)
+	return npm, p_npm
+}
+
+func pmap_cperms(pm *[512]int, va unsafe.Pointer, nperms int) {
+	b1, b2, b3, b4 := pgbits(uint(uintptr(va)))
+	if pm[b1] & PTE_P == 0 {
+		return
+	}
+	pm[b1] |= nperms
+	next := pe2pg(pm[b1])
+	if next[b2] & PTE_P == 0 {
+		return
+	}
+	next[b2] |= nperms
+	next = pe2pg(next[b2])
+	if next[b3] & PTE_P == 0 {
+		return
+	}
+	next[b3] |= nperms
+	next = pe2pg(next[b3])
+	if next[b4] & PTE_P == 0 {
+		return
+	}
+	next[b4] |= nperms
 }
 
 func user_test() {
@@ -264,14 +325,34 @@ func user_test() {
 	tf_ss     := tfregs + 6
 	tf_cs     := tfregs + 3
 
-	tf[tf_rip] = runtime.Fnaddr(runtime.Turdyprog)
-	tf[tf_rsp] = runtime.Newstack()
+	fnaddr := runtime.Fnaddr(runtime.Turdyprog)
+	stack, p_stack := new_mpg(allpages)
+	tf[tf_rip] = fnaddr
+	tf[tf_rsp] = int(uintptr(unsafe.Pointer(stack))) + PGSIZE - 8
 	tf[tf_rflags] = fl_intf
 	tf[tf_cs] = 6 << 3 | 3
 	tf[tf_ss] = 7 << 3 | 3
 
-	pgtbl := runtime.Copy_pgt(runtime.Kpgdir())
-	runtime.Useradd(&tf, 0x31337, pgtbl)
+	// copy kernel page table, map new stack
+	kpmap := runtime.Kpmap()
+	upmap, p_upmap := copy_pmap(kpmap, allpages)
+	spte := pmap_walk(upmap, unsafe.Pointer(stack), 1, PTE_U | PTE_W, allpages)
+	*spte = p_stack | PTE_P | PTE_W | PTE_U
+	// set user accessible for page containing Turdyprog. it sometimes
+	// spans two pages.
+	fnaddrp := unsafe.Pointer(uintptr(fnaddr))
+	fnaddrp2 := unsafe.Pointer(uintptr(fnaddr + PGSIZE))
+	pmap_cperms(upmap, fnaddrp, PTE_U)
+	pmap_cperms(upmap, fnaddrp2, PTE_U)
+	// stack
+	pmap_cperms(upmap, unsafe.Pointer(stack), PTE_U)
+	// VGA too
+	pmap_cperms(upmap, unsafe.Pointer(uintptr(0xb8000)), PTE_U)
+	pmap_cperms(upmap, unsafe.Pointer(uintptr(0xb8000)), PTE_U)
+	// "system call"
+	daddr := runtime.Fnaddr(runtime.Death)
+	pmap_cperms(upmap, unsafe.Pointer(uintptr(daddr)), PTE_U)
+	runtime.Useradd(&tf, 0x31337, p_upmap)
 }
 
 var allpages = map[int]*[512]int{}
@@ -296,8 +377,8 @@ func main() {
 	handlers := map[int]func() { 32: trap_timer, 14:trap_diex(14), 13:trap_diex(13)}
 	go trap(handlers)
 
-	//user_test()
-	pg_test()
+	user_test()
+	//pg_test()
 
 	fake_work()
 }

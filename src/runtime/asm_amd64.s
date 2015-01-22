@@ -490,7 +490,7 @@ IH_NOEC(64,Xsyscall )
 
 #define IA32_FS_BASE   $0xc0000100UL
 
-TEXT death(SB), NOSPLIT, $0-0
+TEXT runtime·Death(SB), NOSPLIT, $0-0
 	INT	$64
 	RET
 
@@ -542,7 +542,7 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	BYTE	$0xeb
 	BYTE	$0xfe
 
-TEXT runtime·Trapret(SB), NOSPLIT, $0-8
+TEXT trapret(SB), NOSPLIT, $0-8
 	MOVQ	fp+0(FP), AX
 	MOVQ	AX, SP
 
