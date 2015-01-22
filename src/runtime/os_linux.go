@@ -26,6 +26,7 @@ func Useradd(tf *[23]int, uc int, p_pmap int)
 func Usercontinue()
 func Userrunnable()
 func Useryield()
+func Vtop(*[512]int) int
 
 func Death()
 func Fnaddr(func()) int
