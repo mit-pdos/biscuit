@@ -22,11 +22,11 @@ func Kpmap() *[512]int
 func Pnum(int)
 func Rcr2() int
 func Sti()
-func Useradd(tf *[23]int, uc int, p_pmap int)
-func Usercontinue()
-func Userkill(int)
-func Userrunnable(int)
-func Useryield()
+func Procadd(tf *[23]int, uc int, p_pmap int)
+func Proccontinue()
+func Prockill(int)
+func Procrunnable(int)
+func Procyield()
 func Vtop(*[512]int) int
 
 func Death()

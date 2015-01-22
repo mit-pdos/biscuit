@@ -76,7 +76,7 @@ func trapstub(tf *[23]int, pid int) {
 			trapstore[tcur].faultaddr = runtime.Rcr2()
 		}
 		// yield until the syscall/fault is handled
-		runtime.Useryield()
+		runtime.Procyield()
 	case TIMER:
 		// timer interrupts are not passed yet
 		runtime.Pnum(0x41)
@@ -114,16 +114,20 @@ func trap_timer(p ...interface{}) {
 }
 
 func trap_syscall(p ...interface{}) {
-	uc, ok := p[0].(int)
+	pid, ok   := p[0].(int)
 	if !ok {
 		pancake("weird pid")
 	}
-	fmt.Printf("syscall from %x. rescheduling... ", uc)
-	runtime.Userrunnable(uc)
+	proc, ok := allprocs[pid]
+	if !ok {
+		pancake("no such pid", pid)
+	}
+	fmt.Printf("syscall from %v. rescheduling... ", proc.Name())
+	runtime.Procrunnable(pid)
 }
 
 func trap_pgfault(p ...interface{}) {
-	uc, ok := p[0].(int)
+	pid, ok := p[0].(int)
 	if !ok {
 		pancake("weird pid")
 	}
@@ -131,8 +135,12 @@ func trap_pgfault(p ...interface{}) {
 	if !ok {
 		pancake("bad fault address")
 	}
-	fmt.Printf("fault from %x at %x. terminating... ", uc, fa)
-	runtime.Userkill(uc)
+	proc, ok := allprocs[pid]
+	if !ok {
+		pancake("no such pid", pid)
+	}
+	fmt.Printf("fault from %v at %x. killing... ", proc.Name(), fa)
+	proc_kill(pid)
 }
 
 var PTE_P     int = 1 << 0
@@ -170,7 +178,7 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
-func new_mpg(ptracker map[int]*[512]int) (*[512]int, int) {
+func mpg_new(ptracker map[int]*[512]int) (*[512]int, int) {
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
 	if ptn & (PGSIZE - 1) != 0 {
@@ -235,7 +243,7 @@ func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create int,
 	l4b, pdpb, pdb, ptb := pgbits(vn)
 
 	instpg := func(pg *[512]int, idx uint) int {
-		_, p_np := new_mpg(ptracker)
+		_, p_np := mpg_new(ptracker)
 		npte :=  p_np | perms | PTE_P
 		pg[idx] = npte
 		return npte
@@ -291,7 +299,7 @@ func pg_test() {
 	}
 	pte = pmap_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), 1, PTE_W, allpages)
 	fmt.Printf("null pte %x ", *pte)
-	_, p_np := new_mpg(allpages)
+	_, p_np := mpg_new(allpages)
 	*pte = p_np | PTE_P | PTE_W
 	maddr := (*int)(unsafe.Pointer(uintptr(paddr)))
 	fmt.Printf("new addr contents %x ", *maddr)
@@ -315,7 +323,7 @@ func copy_pmap1(dst *[512]int, src *[512]int, depth int,
 			continue
 		}
 		// otherwise, recursively copy
-		np, p_np := new_mpg(ptracker)
+		np, p_np := mpg_new(ptracker)
 		perms := c & PTE_FLAGS
 		dst[i] = p_np | perms
 		nsrc := pe2pg(c)
@@ -323,8 +331,9 @@ func copy_pmap1(dst *[512]int, src *[512]int, depth int,
 	}
 }
 
+// deep copies the pmap
 func copy_pmap(pm *[512]int, ptracker map[int]*[512]int) (*[512]int, int) {
-	npm, p_npm := new_mpg(ptracker)
+	npm, p_npm := mpg_new(ptracker)
 	copy_pmap1(npm, pm, 4, ptracker)
 	return npm, p_npm
 }
@@ -352,6 +361,49 @@ func pmap_cperms(pm *[512]int, va unsafe.Pointer, nperms int) {
 	next[b4] |= nperms
 }
 
+type proc_t struct {
+	pid     int
+	name    string
+	pages   map[int]*[512]int
+}
+
+func (p *proc_t) Name() string {
+	return "\"" + p.name + "\""
+}
+
+var allprocs = map[int]*proc_t{}
+
+var pid_cur  int
+func proc_new(name string) *proc_t {
+	pid_cur++
+	ret := &proc_t{}
+	allprocs[pid_cur] = ret
+
+	ret.name = name
+	ret.pid = pid_cur
+	ret.pages = make(map[int]*[512]int)
+
+	return ret
+}
+
+func proc_kill(pid int) {
+	_, ok := allprocs[pid]
+	if !ok {
+		pancake("no pid", pid)
+	}
+	runtime.Prockill(pid)
+
+	ms := runtime.MemStats{}
+	runtime.ReadMemStats(&ms)
+	before := ms.Alloc
+
+	delete(allprocs, pid)
+	runtime.GC()
+	runtime.ReadMemStats(&ms)
+	after := ms.Alloc
+	fmt.Printf("reclaimed %vK ", (before-after)/1024)
+}
+
 func user_test() {
 	fmt.Printf("add 'user' prog ")
 
@@ -364,8 +416,10 @@ func user_test() {
 	tf_ss     := tfregs + 6
 	tf_cs     := tfregs + 3
 
+	proc := proc_new("test")
+
 	fnaddr := runtime.Fnaddr(runtime.Turdyprog)
-	stack, p_stack := new_mpg(allpages)
+	stack, p_stack := mpg_new(proc.pages)
 	tf[tf_rip] = fnaddr
 	tf[tf_rsp] = int(uintptr(unsafe.Pointer(stack))) + PGSIZE - 8
 	tf[tf_rflags] = fl_intf
@@ -374,8 +428,9 @@ func user_test() {
 
 	// copy kernel page table, map new stack
 	kpmap := runtime.Kpmap()
-	upmap, p_upmap := copy_pmap(kpmap, allpages)
-	spte := pmap_walk(upmap, unsafe.Pointer(stack), 1, PTE_U | PTE_W, allpages)
+	upmap, p_upmap := copy_pmap(kpmap, proc.pages)
+	spte := pmap_walk(upmap, unsafe.Pointer(stack), 1,
+	    PTE_U | PTE_W, proc.pages)
 	*spte = p_stack | PTE_P | PTE_W | PTE_U
 	// set user accessible for page containing Turdyprog. it sometimes
 	// spans two pages.
@@ -391,7 +446,7 @@ func user_test() {
 	// "system call"
 	daddr := runtime.Fnaddr(runtime.Death)
 	pmap_cperms(upmap, unsafe.Pointer(uintptr(daddr)), PTE_U)
-	runtime.Useradd(&tf, 0x31337, p_upmap)
+	runtime.Procadd(&tf, proc.pid, p_upmap)
 }
 
 func main() {

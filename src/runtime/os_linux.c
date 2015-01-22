@@ -1328,7 +1328,7 @@ thread_avail(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Useradd(uint64 *tf, int64 pid, uint64 pmap)
+runtime·Procadd(uint64 *tf, int64 pid, uint64 pmap)
 {
 	cli();
 
@@ -1365,7 +1365,7 @@ thread_find(int64 uc)
 
 #pragma textflag NOSPLIT
 void
-runtime·Userrunnable(int64 pid)
+runtime·Procrunnable(int64 pid)
 {
 	struct thread_t *t;
 
@@ -1876,14 +1876,14 @@ runtime·Sti(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Usercontinue(void)
+runtime·Proccontinue(void)
 {
 	yieldy(1);
 }
 
 #pragma textflag NOSPLIT
 void
-runtime·Userkill(int64 pid)
+runtime·Prockill(int64 pid)
 {
 	struct thread_t *t;
 	cli();
@@ -1898,7 +1898,7 @@ runtime·Userkill(int64 pid)
 
 #pragma textflag NOSPLIT
 void
-runtime·Useryield(void)
+runtime·Procyield(void)
 {
 	yieldy(0);
 }
