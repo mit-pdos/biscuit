@@ -1268,7 +1268,7 @@ struct thread_t {
 	int64 sleeping;
 	uint64 futaddr;
 	int64 ucookie;
-	// non-zero iff ucookie != 0
+	// non-zero if ucookie != 0
 	uint64 pgtbl;
 };
 
@@ -1312,7 +1312,7 @@ yieldy(int32 resume)
 #pragma textflag NOSPLIT
 static
 int32
-avail_thread(void)
+thread_avail(void)
 {
 	assert((rflags() & TF_FL_IF) == 0, "thread state race", 0);
 
@@ -1334,13 +1334,13 @@ runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pgtbl)
 	cli();
 
 	assert(ucookie != 0, "bad ucookie", ucookie);
-	int32 nt = avail_thread();
+	int32 nt = thread_avail();
 	int32 i;
 	for (i = 0; i < NTHREADS; i++)
 		assert(threads[i].ucookie != ucookie, "uc exists", ucookie);
 
 	struct thread_t *t = &threads[nt];
-	memset(t, 0, TFSIZE);
+	memset(t, 0, sizeof(struct thread_t));
 
 	runtime·memmove(t->tf, tf, TFSIZE);
 	t->valid = 1;
@@ -1352,18 +1352,30 @@ runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pgtbl)
 }
 
 #pragma textflag NOSPLIT
+struct thread_t *
+thread_find(int64 uc)
+{
+	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
+
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		if (threads[i].ucookie == uc)
+			return &threads[i];
+	return nil;
+}
+
+#pragma textflag NOSPLIT
 void
 runtime·Userrunnable(int64 ucookie)
 {
-	struct thread_t *t = nil;
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		if (threads[i].ucookie == ucookie)
-			t = &threads[i];
+	struct thread_t *t;
 
+	cli();
+	t = thread_find(ucookie);
 	assert(t, "ucookie not found", ucookie);
 
 	t->runnable = 1;
+	sti();
 }
 
 #pragma textflag NOSPLIT
@@ -1615,7 +1627,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	assert(pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)(sp - 1));
 	assert(pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)(sp - 2));
 
-	int32 i = avail_thread();
+	int32 i = thread_avail();
 
 	sp--;
 	*(sp--) = (uint64)fn;	// provide fn as arg
@@ -1870,6 +1882,21 @@ runtime·Usercontinue(void)
 
 #pragma textflag NOSPLIT
 void
+runtime·Userkill(int64 ucookie)
+{
+	struct thread_t *t;
+	cli();
+
+	t = thread_find(ucookie);
+	t->valid = 0;
+	t->runnable = 0;
+	t->ucookie = 0;
+
+	sti();
+}
+
+#pragma textflag NOSPLIT
+void
 runtime·Useryield(void)
 {
 	yieldy(0);
@@ -1903,7 +1930,16 @@ runtime·Turdyprog(void)
 		vga[x++] = ' ' | (0x7 << 8);
 		int32 j;
 		for (j = 0; j < 100000000; j++);
-		if (i++ > 10) {
+		i++;
+		if (i >= 20) {
+			vga[x++] = 'F' | (0x7 << 8);
+			vga[x++] = 'A' | (0x7 << 8);
+			vga[x++] = 'U' | (0x7 << 8);
+			vga[x++] = 'L' | (0x7 << 8);
+			vga[x++] = 'T' | (0x7 << 8);
+			int32 *p = (int32 *)0;
+			*p = 0;
+		} else if ((i % 5) == 0) {
 			vga[x++] = 'S' | (0x7 << 8);
 			vga[x++] = 'Y' | (0x7 << 8);
 			vga[x++] = 'S' | (0x7 << 8);

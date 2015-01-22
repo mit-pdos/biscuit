@@ -6,17 +6,23 @@ import "runtime"
 import "unsafe"
 
 type trapstore_t struct {
-	trapno	int
-	ucookie int
+	trapno    int
+	ucookie   int
+	faultaddr int
 }
-const ntrapst	int = 64
+const ntrapst   int = 64
 var trapstore [ntrapst]trapstore_t
-var tshead	int
-var tstail	int
+var tshead      int
+var tstail      int
 
 func tsnext(c int) int {
 	return (c + 1) % ntrapst
 }
+
+var     SYSCALL   int = 64
+var     TIMER     int = 32
+var     GPFAULT   int = 13
+var     PGFAULT   int = 14
 
 // trap cannot do anything that may have side-effects on the runtime (like
 // fmt.Print, or use pancake!). the reason is that, by design, goroutines are
@@ -33,31 +39,11 @@ func trapstub(tf *[23]int, ucookie int) {
 	//tf_rflags   := tfregs + 4
 	//fl_intf     := 1 << 9
 
-	// add to trap circular buffer for actual trap handler
-	if tsnext(tshead) == tstail {
-		runtime.Pnum(4)
-		for {
-		}
-	}
 	trapno := tf[tf_trapno]
-	trapstore[tshead].trapno = int(trapno)
-	trapstore[tshead].ucookie = ucookie
-	tshead = tsnext(tshead)
 
-	SYSCALL   := 64
-	TIMER     := 32
-	GPFAULT   := 13
-	PGFAULT   := 14
-
-	if trapno == SYSCALL {
-		// yield until the syscall is handled
-		runtime.Useryield()
-	} else if trapno == TIMER {
-		// timer interrupts are not exposed to this traphandler yet
-		runtime.Pnum(0x41)
-		for {
-		}
-	} else {
+	// kernel faults are fatal errors for now, but they could be handled by
+	// trap & c.
+	if ucookie == 0 {
 		runtime.Pnum(trapno)
 		if trapno == PGFAULT {
 			runtime.Pnum(runtime.Rcr2())
@@ -72,30 +58,81 @@ func trapstub(tf *[23]int, ucookie int) {
 		for {
 		}
 	}
+
+	// add to trap circular buffer for actual trap handler
+	if tsnext(tshead) == tstail {
+		runtime.Pnum(0xbad)
+		for {
+		}
+	}
+	trapstore[tshead].trapno = trapno
+	trapstore[tshead].ucookie = ucookie
+	tcur := tshead
+	tshead = tsnext(tshead)
+
+	switch trapno {
+	case SYSCALL, PGFAULT:
+		if trapno == PGFAULT {
+			trapstore[tcur].faultaddr = runtime.Rcr2()
+		}
+		// yield until the syscall/fault is handled
+		runtime.Useryield()
+	case TIMER:
+		// timer interrupts are not passed yet
+		runtime.Pnum(0x41)
+		for {
+		}
+	}
 }
 
-func trap(handlers map[int]func()) {
+func trap(handlers map[int]func(...interface{})) {
 	for {
 		for tstail == tshead {
 			// no work
 			runtime.Gosched()
 		}
 
-		curtrap := trapstore[tstail].trapno
-		uc := trapstore[tstail].ucookie
+		tcur := &trapstore[tstail]
+		trapno := tcur.trapno
+		uc := tcur.ucookie
 		tstail = tsnext(tstail)
 
-		if h, ok := handlers[curtrap]; ok {
-			fmt.Printf("[trap %v] ", curtrap)
-			go h()
+		if h, ok := handlers[trapno]; ok {
+			args := []interface{}{uc}
+			if trapno == PGFAULT {
+				args = append(args, tcur.faultaddr)
+			}
+			go h(args...)
 			continue
 		}
-		fmt.Printf("no handler for trap %v, ucookie %x ", curtrap, uc)
+		fmt.Printf("no handler for trap %v, ucookie %x ", trapno, uc)
 	}
 }
 
-func trap_timer() {
+func trap_timer(p ...interface{}) {
 	fmt.Printf("Timer!")
+}
+
+func trap_syscall(p ...interface{}) {
+	uc, ok := p[0].(int)
+	if !ok {
+		pancake("weird cookie")
+	}
+	fmt.Printf("syscall from %x. rescheduling... ", uc)
+	runtime.Userrunnable(uc)
+}
+
+func trap_pgfault(p ...interface{}) {
+	uc, ok := p[0].(int)
+	if !ok {
+		pancake("weird cookie")
+	}
+	fa, ok := p[1].(int)
+	if !ok {
+		pancake("bad fault address")
+	}
+	fmt.Printf("fault from %x at %x. terminating... ", uc, fa)
+	runtime.Userkill(uc)
 }
 
 var PTE_P     int = 1 << 0
@@ -367,14 +404,18 @@ func main() {
 	dmap_init()
 	runtime.Install_traphandler(trapstub)
 
-	trap_diex := func(c int) func() {
-		return func() {
+	trap_diex := func(c int) func(...interface{}) {
+		return func(...interface{}) {
 			fmt.Printf("[death on trap %v] ", c)
 			pancake("perished")
 		}
 	}
 
-	handlers := map[int]func() { 32: trap_timer, 14:trap_diex(14), 13:trap_diex(13)}
+	handlers := map[int]func(...interface{}) {
+	     GPFAULT: trap_diex(13),
+	     PGFAULT: trap_pgfault,
+	     TIMER: trap_timer,
+	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
 	user_test()

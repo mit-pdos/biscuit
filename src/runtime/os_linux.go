@@ -24,7 +24,8 @@ func Rcr2() int
 func Sti()
 func Useradd(tf *[23]int, uc int, p_pmap int)
 func Usercontinue()
-func Userrunnable()
+func Userkill(int)
+func Userrunnable(int)
 func Useryield()
 func Vtop(*[512]int) int
 
