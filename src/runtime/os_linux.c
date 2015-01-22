@@ -1267,8 +1267,8 @@ struct thread_t {
 	int32 runnable;
 	int64 sleeping;
 	uint64 futaddr;
-	int64 ucookie;
-	// non-zero if ucookie != 0
+	int64 pid;
+	// non-zero if pid != 0
 	uint64 pmap;
 };
 
@@ -1328,15 +1328,15 @@ thread_avail(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pmap)
+runtime·Useradd(uint64 *tf, int64 pid, uint64 pmap)
 {
 	cli();
 
-	assert(ucookie != 0, "bad ucookie", ucookie);
+	assert(pid != 0, "bad pid", pid);
 	int32 nt = thread_avail();
 	int32 i;
 	for (i = 0; i < NTHREADS; i++)
-		assert(threads[i].ucookie != ucookie, "uc exists", ucookie);
+		assert(threads[i].pid != pid, "uc exists", pid);
 
 	struct thread_t *t = &threads[nt];
 	memset(t, 0, sizeof(struct thread_t));
@@ -1344,7 +1344,7 @@ runtime·Useradd(uint64 *tf, int64 ucookie, uint64 pmap)
 	runtime·memmove(t->tf, tf, TFSIZE);
 	t->valid = 1;
 	t->runnable = 1;
-	t->ucookie = ucookie;
+	t->pid = pid;
 	t->pmap = pmap;
 
 	sti();
@@ -1358,20 +1358,20 @@ thread_find(int64 uc)
 
 	int32 i;
 	for (i = 0; i < NTHREADS; i++)
-		if (threads[i].ucookie == uc)
+		if (threads[i].pid == uc)
 			return &threads[i];
 	return nil;
 }
 
 #pragma textflag NOSPLIT
 void
-runtime·Userrunnable(int64 ucookie)
+runtime·Userrunnable(int64 pid)
 {
 	struct thread_t *t;
 
 	cli();
-	t = thread_find(ucookie);
-	assert(t, "ucookie not found", ucookie);
+	t = thread_find(pid);
+	assert(t, "pid not found", pid);
 
 	t->runnable = 1;
 	sti();
@@ -1408,12 +1408,12 @@ trap(uint64 *tf)
 	} else {
 		// wait for kernel to handle traps from user programs
 		struct thread_t *ct = &threads[th_cur];
-		if (ct->ucookie)
+		if (ct->pid)
 			ct->runnable = 0;
 	}
 
 	if (newtrap) {
-		int64 uc = threads[th_cur].ucookie;
+		int64 uc = threads[th_cur].pid;
 		((void (*)(uint64 *, int64))newtrap)(tf, uc);
 		runtime·pancake("newtrap returned!", 0);
 	}
@@ -1883,15 +1883,15 @@ runtime·Usercontinue(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Userkill(int64 ucookie)
+runtime·Userkill(int64 pid)
 {
 	struct thread_t *t;
 	cli();
 
-	t = thread_find(ucookie);
+	t = thread_find(pid);
 	t->valid = 0;
 	t->runnable = 0;
-	t->ucookie = 0;
+	t->pid = 0;
 
 	sti();
 }

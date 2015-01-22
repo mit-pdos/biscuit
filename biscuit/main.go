@@ -7,7 +7,7 @@ import "unsafe"
 
 type trapstore_t struct {
 	trapno    int
-	ucookie   int
+	pid       int
 	faultaddr int
 }
 const ntrapst   int = 64
@@ -30,7 +30,7 @@ var     PGFAULT   int = 14
 // and then tries to execute more gocode, thus doing things the runtime did not
 // expect.
 //go:nosplit
-func trapstub(tf *[23]int, ucookie int) {
+func trapstub(tf *[23]int, pid int) {
 
 	tfregs    := 16
 	tf_trapno := tfregs
@@ -43,7 +43,7 @@ func trapstub(tf *[23]int, ucookie int) {
 
 	// kernel faults are fatal errors for now, but they could be handled by
 	// trap & c.
-	if ucookie == 0 {
+	if pid == 0 {
 		runtime.Pnum(trapno)
 		if trapno == PGFAULT {
 			runtime.Pnum(runtime.Rcr2())
@@ -66,7 +66,7 @@ func trapstub(tf *[23]int, ucookie int) {
 		}
 	}
 	trapstore[tshead].trapno = trapno
-	trapstore[tshead].ucookie = ucookie
+	trapstore[tshead].pid = pid
 	tcur := tshead
 	tshead = tsnext(tshead)
 
@@ -94,7 +94,7 @@ func trap(handlers map[int]func(...interface{})) {
 
 		tcur := &trapstore[tstail]
 		trapno := tcur.trapno
-		uc := tcur.ucookie
+		uc := tcur.pid
 		tstail = tsnext(tstail)
 
 		if h, ok := handlers[trapno]; ok {
@@ -105,7 +105,7 @@ func trap(handlers map[int]func(...interface{})) {
 			go h(args...)
 			continue
 		}
-		fmt.Printf("no handler for trap %v, ucookie %x ", trapno, uc)
+		fmt.Printf("no handler for trap %v, pid %x ", trapno, uc)
 	}
 }
 
@@ -116,7 +116,7 @@ func trap_timer(p ...interface{}) {
 func trap_syscall(p ...interface{}) {
 	uc, ok := p[0].(int)
 	if !ok {
-		pancake("weird cookie")
+		pancake("weird pid")
 	}
 	fmt.Printf("syscall from %x. rescheduling... ", uc)
 	runtime.Userrunnable(uc)
@@ -125,7 +125,7 @@ func trap_syscall(p ...interface{}) {
 func trap_pgfault(p ...interface{}) {
 	uc, ok := p[0].(int)
 	if !ok {
-		pancake("weird cookie")
+		pancake("weird pid")
 	}
 	fa, ok := p[1].(int)
 	if !ok {
@@ -145,6 +145,8 @@ var PTE_FLAGS int = 0x1f
 
 var VREC      int = 0x42
 var VDIRECT   int = 0x44
+
+var allpages = map[int]*[512]int{}
 
 func shl(c uint) uint {
 	return 12 + 9 * c
@@ -391,8 +393,6 @@ func user_test() {
 	pmap_cperms(upmap, unsafe.Pointer(uintptr(daddr)), PTE_U)
 	runtime.Useradd(&tf, 0x31337, p_upmap)
 }
-
-var allpages = map[int]*[512]int{}
 
 func main() {
 	// magic loop
