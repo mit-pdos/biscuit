@@ -1,15 +1,20 @@
 TOP := .
 
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
-ASFLAGS := $(BASEFLAGS) -nostdinc -I$(TOP) -m32
-CFLAGS := $(BASEFLAGS) -nostdinc -I$(TOP) -fno-stack-protector -fno-builtin
+ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -m32
+CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -fno-stack-protector -fno-builtin
 
 ASMS := boot.S
 CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
+UPROGS := hello
+UPROGS := $(patsubst %,user/%,$(UPROGS))
+
 RFS  := $(patsubst %.c,%.d,$(CS))
+RFS  += $(patsubst %,%.d,$(UPROGS))
+RFS  += user/litc.d
 
 GOBIN := ../bin/go
 
@@ -51,11 +56,15 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-main.gobin: chentry $(GOBIN) main.go
+main.gobin: chentry $(GOBIN) main.go $(UPROGS)
 	$(GOBIN) build -o $@ main.go
 	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
+
+$(UPROGS): CFLAGS += -I user/ -Wl,-entry,main
+$(UPROGS): % : %.c user/litc.o
+	$(CC) $(CFLAGS) -I user/ -Wl,-entry,main -o $@ $< user/litc.o
 
 main: main.o
 	$(LD) -static -e main -o $@ $<
@@ -64,7 +73,7 @@ chentry: chentry.c
 	$(CC) $(BASEFLAGS) -o $@ chentry.c
 
 clean:
-	rm -f $(OBJS) $(RFS) boot.elf d.img main boot main.gobin go.img chentry
+	rm -f user/litc.o $(UPROGS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin go.img chentry
 
 qemu: d.img
 	qemu-system-x86_64 $(QOPTS) -hda d.img
