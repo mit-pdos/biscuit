@@ -12,6 +12,8 @@ OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 UPROGS := hello
 UPROGS := $(patsubst %,user/%,$(UPROGS))
 
+UCRAP := $(UPROGS) $(patsubst %,%.bgo,$(UPROGS)) user/litc.o
+
 RFS  := $(patsubst %.c,%.d,$(CS))
 RFS  += $(patsubst %,%.d,$(UPROGS))
 RFS  += user/litc.d
@@ -56,8 +58,8 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-main.gobin: chentry $(GOBIN) main.go $(UPROGS)
-	$(GOBIN) build -o $@ main.go
+main.gobin: chentry $(GOBIN) main.go $(UPROGS) bins.go
+	$(GOBIN) build -o $@ main.go bins.go
 	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
@@ -65,6 +67,10 @@ main.gobin: chentry $(GOBIN) main.go $(UPROGS)
 $(UPROGS): CFLAGS += -I user/ -Wl,-entry,main
 $(UPROGS): % : %.c user/litc.o
 	$(CC) $(CFLAGS) -I user/ -Wl,-entry,main -o $@ $< user/litc.o
+	./bin2go.sh $@ > $@.bgo
+
+bins.go: $(UPROGS)
+	./prepbins.py $(UPROGS) > $@
 
 main: main.o
 	$(LD) -static -e main -o $@ $<
@@ -73,7 +79,7 @@ chentry: chentry.c
 	$(CC) $(BASEFLAGS) -o $@ chentry.c
 
 clean:
-	rm -f user/litc.o $(UPROGS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin go.img chentry
+	rm -f $(UCRAP) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin go.img chentry
 
 qemu: d.img
 	qemu-system-x86_64 $(QOPTS) -hda d.img

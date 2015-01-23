@@ -5,3 +5,8 @@ main
 boot
 d.img
 user/hello
+bins.go
+boot.elf
+chentry
+go.img
+main.gobin
