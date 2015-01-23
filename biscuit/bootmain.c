@@ -156,7 +156,7 @@ bootmain(void)
 	uint32_t firstfree = getpg();
 
 	// enter recursive mapping
-	pgdir[VREC] = (uint64_t)(uint32_t)pgdir | PTE_P | PTE_W;
+	pgdir[VREC] = (uint32_t)pgdir | PTE_P | PTE_W;
 	// make sure VTEMP is empty
 	if (pgdir[VTEMP] & PTE_P)
 		pancake("VTEMP is present?", pgdir[VTEMP]);
