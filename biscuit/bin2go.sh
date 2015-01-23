@@ -3,8 +3,8 @@ set -e -u
 
 [ ! $# -eq 1 ] && { echo "usage: $0 <binfile>"; exit 1; }
 
-F=`basename $1`
-NF=`echo $F| sed "s/[^[:alnum:]]/_/g"`
+F=$1
+NF=`basename $F| sed "s/[^[:alnum:]]/_/g"`
 [ ! -r $F ] && { echo "cannot read $F"; exit 1; }
 
 UTIL="xxd"
