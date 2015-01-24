@@ -175,6 +175,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	// _cgo_init may update stackguard.
 	MOVQ	$runtime·g0(SB), DI
 	LEAQ	(-64*1024+104)(SP), BX
+	//LEAQ	(-4*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard0(DI)
 	MOVQ	BX, g_stackguard1(DI)
 	MOVQ	BX, (g_stack+stack_lo)(DI)
@@ -447,6 +448,19 @@ TEXT hack_yield(SB), NOSPLIT, $0-0
 TEXT fn(SB), NOSPLIT, $0-0;		\
 	PUSHQ	$0;			\
 	PUSHQ	$num;			\
+	JMP	alltraps(SB);		\
+	BYTE	$0xeb;			\
+	BYTE	$0xfe;			\
+	POPQ	AX;			\
+	POPQ	AX;			\
+	RET
+
+#define IH_NOEC_LOOP(num, fn)		\
+TEXT fn(SB), NOSPLIT, $0-0;		\
+	PUSHQ	$0;			\
+	PUSHQ	$num;			\
+	BYTE	$0xeb;			\
+	BYTE	$0xfe;			\
 	JMP	alltraps(SB);		\
 	BYTE	$0xeb;			\
 	BYTE	$0xfe;			\

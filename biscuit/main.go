@@ -9,6 +9,7 @@ type trapstore_t struct {
 	trapno    int
 	pid       int
 	faultaddr int
+	rip       int
 }
 const ntrapst   int = 64
 var trapstore [ntrapst]trapstore_t
@@ -74,12 +75,19 @@ func trapstub(tf *[23]int, pid int) {
 	case SYSCALL, PGFAULT:
 		if trapno == PGFAULT {
 			trapstore[tcur].faultaddr = runtime.Rcr2()
+			trapstore[tcur].rip = tf[tf_rip]
 		}
 		// yield until the syscall/fault is handled
 		runtime.Procyield()
 	case TIMER:
 		// timer interrupts are not passed yet
 		runtime.Pnum(0x41)
+		for {
+		}
+	default:
+		runtime.Pnum(trapno)
+		runtime.Pnum(tf[tf_rip])
+		runtime.Pnum(0xbadbabe)
 		for {
 		}
 	}
@@ -101,6 +109,7 @@ func trap(handlers map[int]func(...interface{})) {
 			args := []interface{}{uc}
 			if trapno == PGFAULT {
 				args = append(args, tcur.faultaddr)
+				args = append(args, tcur.rip)
 			}
 			go h(args...)
 			continue
@@ -135,11 +144,16 @@ func trap_pgfault(p ...interface{}) {
 	if !ok {
 		pancake("bad fault address")
 	}
+	rip, ok := p[2].(int)
+	if !ok {
+		pancake("bad rip")
+	}
 	proc, ok := allprocs[pid]
 	if !ok {
 		pancake("no such pid", pid)
 	}
-	fmt.Printf("fault from %v at %x. killing... ", proc.Name(), fa)
+	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing... ",
+	    proc.Name(), fa, rip)
 	proc_kill(pid)
 }
 

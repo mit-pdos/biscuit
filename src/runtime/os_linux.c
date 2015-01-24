@@ -1803,9 +1803,9 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	{
 		assert_addr(uaddr, "futex uaddr");
 
+		cli();
 		int32 dosleep = *uaddr == val;
 		if (dosleep) {
-			cli();
 			threads[th_cur].futaddr = (uint64)uaddr;
 			threads[th_cur].sleeping = -1;
 			threads[th_cur].runnable = 0;
@@ -1819,6 +1819,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			void hack_yield(void);
 			hack_yield();
 		} else {
+			sti();
 			return -EAGAIN;
 		}
 
@@ -1827,6 +1828,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	case FUTEX_WAKE:
 	{
 		int32 i;
+		cli();
 		for (i = 0; i < NTHREADS && val; i++) {
 			if (threads[i].valid && threads[i].sleeping &&
 			    threads[i].futaddr == (uint64)uaddr) {
@@ -1834,8 +1836,11 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			    	threads[i].runnable = 1;
 			    	threads[i].futaddr = 0;
 				val--;
+				//pmsg("wake up");
+				//pnum(i);
 			}
 		}
+		sti();
 		break;
 	}
 	default:
@@ -1899,7 +1904,8 @@ runtime·Install_traphandler(uint64 *p)
 void
 runtime·Pnum(uint64 m)
 {
-	pnum(m);
+	if (runtime·hackmode)
+		pnum(m);
 }
 
 #pragma textflag NOSPLIT
