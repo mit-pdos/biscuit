@@ -651,7 +651,7 @@ struct idte_t idt[NIDTE];
 
 #pragma textflag NOSPLIT
 static void
-int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user)
+int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user, int32 ist)
 {
 	/*
 	{0, 0,		// 0-1   low offset
@@ -671,7 +671,7 @@ int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user)
 	bw(&i->dur[1],  lowoff, 1);
 	bw(&i->dur[2], CODE_SEG << 3, 0);
 	bw(&i->dur[3], CODE_SEG << 3, 1);
-	i->dur[4] = 0;
+	i->dur[4] = ist;
 	uint8 t = 0x80;
 	t |= trap ? TRAP : INT;
 	t |= user ? USER : 0;
@@ -699,6 +699,18 @@ tss_set(struct tss_t *tss, uint64 rsp0)
 {
 	uint32 off = 4;		// offset to rsp0 field
 
+	// set rsp0
+	bw(&tss->dur[off + 0], rsp0, 0);
+	bw(&tss->dur[off + 1], rsp0, 1);
+	bw(&tss->dur[off + 2], rsp0, 2);
+	bw(&tss->dur[off + 3], rsp0, 3);
+	bw(&tss->dur[off + 4], rsp0, 4);
+	bw(&tss->dur[off + 5], rsp0, 5);
+	bw(&tss->dur[off + 6], rsp0, 6);
+	bw(&tss->dur[off + 7], rsp0, 7);
+
+	// set ist1
+	off = 36;
 	bw(&tss->dur[off + 0], rsp0, 0);
 	bw(&tss->dur[off + 1], rsp0, 1);
 	bw(&tss->dur[off + 2], rsp0, 2);
@@ -753,31 +765,33 @@ intsetup(void)
 	extern void Xspur(void);
 	extern void Xsyscall(void);
 
-	int_set(&idt[ 0], (uint64) Xdz , 0, 0);
-	int_set(&idt[ 1], (uint64) Xrz , 0, 0);
-	int_set(&idt[ 2], (uint64) Xnmi, 0, 0);
-	int_set(&idt[ 3], (uint64) Xbp , 0, 0);
-	int_set(&idt[ 4], (uint64) Xov , 0, 0);
-	int_set(&idt[ 5], (uint64) Xbnd, 0, 0);
-	int_set(&idt[ 6], (uint64) Xuo , 0, 0);
-	int_set(&idt[ 7], (uint64) Xnm , 0, 0);
-	int_set(&idt[ 8], (uint64) Xdf , 0, 0);
-	int_set(&idt[ 9], (uint64) Xrz2, 0, 0);
-	int_set(&idt[10], (uint64) Xtss, 0, 0);
-	int_set(&idt[11], (uint64) Xsnp, 0, 0);
-	int_set(&idt[12], (uint64) Xssf, 0, 0);
-	int_set(&idt[13], (uint64) Xgp , 0, 0);
-	int_set(&idt[14], (uint64) Xpf , 0, 0);
-	int_set(&idt[15], (uint64) Xrz3, 0, 0);
-	int_set(&idt[16], (uint64) Xmf , 0, 0);
-	int_set(&idt[17], (uint64) Xac , 0, 0);
-	int_set(&idt[18], (uint64) Xmc , 0, 0);
-	int_set(&idt[19], (uint64) Xfp , 0, 0);
-	int_set(&idt[20], (uint64) Xve , 0, 0);
+	int_set(&idt[ 0], (uint64) Xdz , 0, 0, 0);
+	int_set(&idt[ 1], (uint64) Xrz , 0, 0, 0);
+	int_set(&idt[ 2], (uint64) Xnmi, 0, 0, 0);
+	int_set(&idt[ 3], (uint64) Xbp , 0, 0, 0);
+	int_set(&idt[ 4], (uint64) Xov , 0, 0, 0);
+	int_set(&idt[ 5], (uint64) Xbnd, 0, 0, 0);
+	int_set(&idt[ 6], (uint64) Xuo , 0, 0, 0);
+	int_set(&idt[ 7], (uint64) Xnm , 0, 0, 0);
+	// use ist1 for double fault handler
+	int_set(&idt[ 8], (uint64) Xdf , 0, 0, 1);
+	int_set(&idt[ 9], (uint64) Xrz2, 0, 0, 0);
+	int_set(&idt[10], (uint64) Xtss, 0, 0, 0);
+	int_set(&idt[11], (uint64) Xsnp, 0, 0, 0);
+	int_set(&idt[12], (uint64) Xssf, 0, 0, 0);
+	int_set(&idt[13], (uint64) Xgp , 0, 0, 0);
+	int_set(&idt[14], (uint64) Xpf , 0, 0, 0);
+	int_set(&idt[15], (uint64) Xrz3, 0, 0, 0);
+	int_set(&idt[16], (uint64) Xmf , 0, 0, 0);
+	int_set(&idt[17], (uint64) Xac , 0, 0, 0);
+	int_set(&idt[18], (uint64) Xmc , 0, 0, 0);
+	int_set(&idt[19], (uint64) Xfp , 0, 0, 0);
+	int_set(&idt[20], (uint64) Xve , 0, 0, 0);
 
-	int_set(&idt[32], (uint64) Xtimer, 0, 0);
-	int_set(&idt[47], (uint64) Xspur, 0, 0);
-	int_set(&idt[64], (uint64) Xsyscall, 0, 1);
+	// maybe use ist1 for timer interrupt too
+	int_set(&idt[32], (uint64) Xtimer,   0, 0, 0);
+	int_set(&idt[47], (uint64) Xspur,    0, 0, 0);
+	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 0);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
