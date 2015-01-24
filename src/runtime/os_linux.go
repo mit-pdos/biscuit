@@ -18,15 +18,17 @@ func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
 
 func Cli()
 func Install_traphandler(func(tf *[23]int, uc int))
+func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
+func Memmove(unsafe.Pointer, unsafe.Pointer, uint)
 func Pnum(int)
-func Rcr2() int
-func Sti()
 func Procadd(tf *[23]int, uc int, p_pmap int)
 func Proccontinue()
 func Prockill(int)
 func Procrunnable(int)
 func Procyield()
+func Rcr2() int
+func Sti()
 func Vtop(*[512]int) int
 
 func Death()

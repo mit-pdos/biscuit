@@ -58,15 +58,16 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-main.gobin: chentry $(GOBIN) main.go $(UPROGS) bins.go
-	$(GOBIN) build -o $@ main.go bins.go
+main.gobin: chentry $(GOBIN) main.go $(UPROGS) bins.go syscall.go
+	$(GOBIN) build -o $@ main.go bins.go syscall.go
 	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
 
 $(UPROGS): CFLAGS += -I user/ -Wl,-entry,main
 $(UPROGS): % : %.c user/litc.o
-	$(CC) $(CFLAGS) -I user/ -Wl,-entry,main -o $@ $< user/litc.o
+	$(CC) $(CFLAGS) -I user/ -Wl,-entry,main,-Ttext,0xf1000000\
+	    -Wl,-Tdata,0xf2000000,-Tbss,0xf3000000,-n -o $@ $< user/litc.o
 	./bin2go.sh $@ > $@.bgo
 
 bins.go: $(UPROGS)

@@ -350,6 +350,7 @@ runtime·signame(int32 sig)
 
 // src/runtime/asm_amd64.s
 void cli(void);
+void runtime·Invlpg(void *);
 void lcr0(uint64);
 void lcr3(uint64);
 void lcr4(uint64);
@@ -987,8 +988,6 @@ memset(void *va, uint32 c, uint64 sz)
 		*p++ = b;
 }
 
-void invlpg(void *);
-
 #pragma textflag NOSPLIT
 void
 zero_phys(uint64 phys)
@@ -1005,7 +1004,7 @@ zero_phys(uint64 phys)
 	memset(va, 0, PGSIZE);
 
 	recva[VTEMP] = 0;
-	invlpg(va);
+	runtime·Invlpg(va);
 }
 
 #pragma textflag NOSPLIT
@@ -1075,7 +1074,7 @@ alloc_map(void *va, int32 perms, int32 fempty)
 	// XXX goodbye, memory
 	*pte = get_pg() | perms | PTE_P;
 	if (old & PTE_P) {
-		invlpg(va);
+		runtime·Invlpg(va);
 		if (fempty)
 			runtime·pancake("was not empty", (uint64)va);
 	}
@@ -1160,7 +1159,7 @@ hack_munmap(void *va, uint64 sz)
 		// XXX goodbye, memory
 		if (pte && *pte & PTE_P) {
 			*pte = 0;
-			invlpg(v + i);
+			runtime·Invlpg(v + i);
 		}
 	}
 	pmsg("POOF ");
@@ -1230,11 +1229,11 @@ pgtest1(uint64 v)
 	va[511] = 31337;
 
 	//*pte = phys | PTE_P;
-	//invlpg(va);
+	//runtime·Invlpg(va);
 	//va[0] = 31337;
 
 	//*pte = 0;
-	//invlpg(va);
+	//runtime·Invlpg(va);
 	//pnum(va[0]);
 }
 
@@ -1887,6 +1886,13 @@ void
 runtime·Install_traphandler(uint64 *p)
 {
 	newtrap = *p;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Memmove(void *dst, void *src, uintptr len)
+{
+	runtime·memmove(dst, src, len);
 }
 
 #pragma textflag NOSPLIT
