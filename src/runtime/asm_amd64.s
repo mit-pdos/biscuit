@@ -542,9 +542,12 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	BYTE	$0xeb
 	BYTE	$0xfe
 
-TEXT trapret(SB), NOSPLIT, $0-8
+TEXT trapret(SB), NOSPLIT, $0-16
+	MOVQ	pmap+8(FP), BX
 	MOVQ	fp+0(FP), AX
 	MOVQ	AX, SP
+
+	MOVQ	BX, CR3
 
 	// restore fsbase
 	MOVQ	IA32_FS_BASE, CX

@@ -361,7 +361,8 @@ uint64 rcr2(void);
 uint64 rflags(void);
 uint64 rrsp(void);
 void sti(void);
-void trapret(uint64 *);
+void tlbflush(void);
+void trapret(uint64 *, uint64);
 
 // this file
 void lap_eoi(void);
@@ -864,6 +865,8 @@ fpuinit(uint64 cr0, uint64 cr4)
 // slot for recursive mapping
 #define	VREC    0x42ULL
 #define	VTEMP   0x43ULL
+// vdirect is 44
+#define	VREC2   0x45ULL
 
 #define	VUMAX   0x42ULL		// highest "user" mapping
 
@@ -1023,6 +1026,30 @@ pgdir_walk(void *va, int32 create)
 	uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
 	pml4 += PML4X(v);
 	return pgdir_walk1(pml4, SLOTNEXT(v), create);
+}
+
+#pragma textflag NOSPLIT
+uint64 *
+pgdir_walk_other(uint64 p_pmap, void *va, int32 create)
+{
+	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
+
+	if (PML4X(v) == VREC)
+		runtime·pancake("va collides w/VREC", v);
+
+	uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
+	uint64 old = pml4[VREC];
+	pml4[VREC2] = old;
+	pml4[VREC] = p_pmap | PTE_P;
+	tlbflush();
+
+	uint64 *ret = pgdir_walk(va, create);
+
+	pml4 = CADDR(VREC2, VREC2, VREC2, VREC2);
+	pml4[VREC] = old;
+	tlbflush();
+
+	return ret;
 }
 
 #pragma textflag NOSPLIT
@@ -1291,7 +1318,7 @@ yieldy(int32 resume)
 
 	if (resume) {
 		assert(threads[th_cur].runnable, "not runnable?", th_cur);
-		trapret(threads[th_cur].tf);
+		trapret(threads[th_cur].tf, threads[th_cur].pmap);
 	}
 
 	int32 i;
@@ -1304,8 +1331,7 @@ yieldy(int32 resume)
 	assert(tnext->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	th_cur = i;
 
-	lcr3(tnext->pmap);
-	trapret(tnext->tf);
+	trapret(tnext->tf, tnext->pmap);
 }
 
 #pragma textflag NOSPLIT
@@ -1382,6 +1408,8 @@ void
 trap(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
+
+	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
 	if (trapno == TRAP_TIMER || trapno == TRAP_SYSCALL)
 		runtime·memmove(threads[th_cur].tf, tf, TFSIZE);
