@@ -1190,26 +1190,15 @@ stack_dump(uint64 rsp)
 
 #pragma textflag NOSPLIT
 int64
-hack_write(int32 fd, const void *buf, uint64 c)
+hack_write(int64 fd, const void *buf, uint32 c)
 {
 	if (fd != 1 && fd != 2)
 		runtime·pancake("weird fd", (uint64)fd);
 
-	//pmsg("C>");
-	//pnum(c);
-	//pmsg("<C");
-	if (c > 10000) {
-		stack_dump(rrsp());
-		runtime·pancake("weird len (expected)", c);
-	}
-
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
-	while(c--) {
+	while(c--)
 		runtime·doc(*p++);
-		//if ((++i % 20) == 0)
-		//	runtime·deray(5000000);
-	}
 
 	return ret;
 }

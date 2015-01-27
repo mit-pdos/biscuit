@@ -47,9 +47,6 @@ TEXT runtime·write(SB),NOSPLIT,$0-28
 	TESTQ	DI, DI
 	JZ	write_skip
 	JMP	hack_write(SB)
-	// jmp self
-	BYTE	0xeb
-	BYTE	0xfe
 write_skip:
 	MOVQ	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
