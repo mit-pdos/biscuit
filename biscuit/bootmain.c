@@ -222,7 +222,7 @@ alloc_start(void)
 
 	// find memory to use in the e820 map
 	uint64_t memsz = elfsize();
-	uint32_t last;
+	uint32_t last = 0;
 	int found = 0;
 
 	for (ep = e820m; ep - e820m < e820entries; ep++) {
@@ -369,6 +369,8 @@ static struct {
 	uint64_t start;
 	uint64_t end;
 } badregions[] = {
+	// Elf header
+	{0x10000, 0x11000},
 	// VGA
 	{0xa0000, 0x100000},
 	// ourselves
