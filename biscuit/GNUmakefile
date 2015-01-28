@@ -4,9 +4,14 @@ BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -m32
 CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -fno-stack-protector -fno-builtin
 
+# runtime sources
 ASMS := boot.S
 CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
+
+# kernel sources
+KSRC := main.go syscall.go pmap.go
+
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
 UPROGS := hello
@@ -58,8 +63,8 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-main.gobin: chentry $(GOBIN) main.go $(UPROGS) bins.go syscall.go
-	$(GOBIN) build -o $@ main.go bins.go syscall.go
+main.gobin: chentry $(GOBIN) $(UPROGS) bins.go $(KSRC)
+	$(GOBIN) build -o $@ bins.go $(KSRC)
 	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
