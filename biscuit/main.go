@@ -114,7 +114,7 @@ func trap(handlers map[int]func(...interface{})) {
 			go h(args...)
 			continue
 		}
-		fmt.Printf("no handler for trap %v, pid %x ", trapno, uc)
+		fmt.Printf("no handler for trap %v, pid %x\n", trapno, uc)
 	}
 }
 
@@ -131,7 +131,7 @@ func trap_syscall(p ...interface{}) {
 	if !ok {
 		pancake("no such pid", pid)
 	}
-	fmt.Printf("syscall from %v. rescheduling... ", proc.Name())
+	fmt.Printf("syscall from %v. rescheduling...\n", proc.Name())
 	runtime.Procrunnable(pid)
 }
 
@@ -152,7 +152,7 @@ func trap_pgfault(p ...interface{}) {
 	if !ok {
 		pancake("no such pid", pid)
 	}
-	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing... ",
+	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.Name(), fa, rip)
 	proc_kill(pid)
 }
@@ -160,12 +160,12 @@ func trap_pgfault(p ...interface{}) {
 var allpages = map[int]*[512]int{}
 
 func pg_test() {
-	fmt.Print("page table test ")
+	fmt.Printf("page table test\n")
 
 	physaddr := 0x7c9e
 
 	taddr := dmap(physaddr)
-	fmt.Printf("boot code %x ", uint(taddr[396]))
+	fmt.Printf("boot code %x\n", uint(taddr[396]))
 
 	for p, v := range allpages {
 		fmt.Printf(" [%p -> %x] ", v, p)
@@ -253,7 +253,7 @@ func proc_kill(pid int) {
 	runtime.GC()
 	runtime.ReadMemStats(&ms)
 	after := ms.Alloc
-	fmt.Printf("reclaimed %vK ", (before-after)/1024)
+	fmt.Printf("reclaimed %vK\n", (before-after)/1024)
 }
 
 
@@ -269,26 +269,25 @@ func main() {
 
 	trap_diex := func(c int) func(...interface{}) {
 		return func(...interface{}) {
-			fmt.Printf("[death on trap %v] ", c)
+			fmt.Printf("[death on trap %v]\n", c)
 			pancake("perished")
 		}
 	}
 
 	handlers := map[int]func(...interface{}) {
-	     GPFAULT: trap_diex(13),
+	     GPFAULT: trap_diex(GPFAULT),
 	     PGFAULT: trap_pgfault,
 	     TIMER: trap_timer,
 	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
 	sys_test()
-	//pg_test()
 
 	fake_work()
 }
 
 func fake_work() {
-	fmt.Printf("'network' test ")
+	fmt.Printf("'network' test\n")
 	ch := make(chan packet)
 	go genpackets(ch)
 

@@ -383,8 +383,11 @@ runtime·doc(int64 mark)
         static int8 x;
         static int8 y;
 
-        putch(x++, y, mark & 0xff);
-        //putch(x++, y, ' ');
+	if (mark == '\n')
+		x = 80;
+	else
+		putch(x++, y, mark & 0xff);
+
         if (x >= 79) {
                 x = 0;
                 y++;
