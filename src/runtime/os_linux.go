@@ -31,6 +31,6 @@ func Rcr2() int
 func Sti()
 func Vtop(*[512]int) int
 
-func Death()
+func Newlines(int64)
 func Fnaddr(func()) int
 func Turdyprog()

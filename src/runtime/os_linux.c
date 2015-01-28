@@ -1116,7 +1116,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 {
 	USED(fd);
 	USED(offset);
-	uint8 *v = (uint8 *)va;
+	uint8 *v = va;
 
 	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0)) {
 		runtime·pancake("high addr?", (uint64)v);
@@ -1960,43 +1960,4 @@ runtime·Vtop(void *va)
 	uint64 base = PTE_ADDR(*pte);
 
 	return base + (van & PGOFFMASK);
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Turdyprog(void)
-{
-	uint16 *vga = (uint16 *)0xb8000;
-	int32 x = 0;
-	int32 i = 0;
-	while (1) {
-		vga[x++] = 'W' | (0x7 << 8);
-		vga[x++] = 'o' | (0x7 << 8);
-		vga[x++] = 'r' | (0x7 << 8);
-		vga[x++] = 'k' | (0x7 << 8);
-		vga[x++] = ' ' | (0x7 << 8);
-		int32 j;
-		for (j = 0; j < 100000000; j++);
-		i++;
-		if (i >= 20) {
-			vga[x++] = 'F' | (0x7 << 8);
-			vga[x++] = 'A' | (0x7 << 8);
-			vga[x++] = 'U' | (0x7 << 8);
-			vga[x++] = 'L' | (0x7 << 8);
-			vga[x++] = 'T' | (0x7 << 8);
-			int32 *p = (int32 *)0;
-			*p = 0;
-		} else if ((i % 5) == 0) {
-			vga[x++] = 'S' | (0x7 << 8);
-			vga[x++] = 'Y' | (0x7 << 8);
-			vga[x++] = 'S' | (0x7 << 8);
-			vga[x++] = 'C' | (0x7 << 8);
-			vga[x++] = 'A' | (0x7 << 8);
-			vga[x++] = 'L' | (0x7 << 8);
-			vga[x++] = 'L' | (0x7 << 8);
-			vga[x++] = ' ' | (0x7 << 8);
-			void runtime·Death(void);
-			runtime·Death();
-		}
-	}
 }

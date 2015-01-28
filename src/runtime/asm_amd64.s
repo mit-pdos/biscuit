@@ -504,10 +504,6 @@ IH_NOEC(64,Xsyscall )
 
 #define IA32_FS_BASE   $0xc0000100UL
 
-TEXT runtime·Death(SB), NOSPLIT, $0-0
-	INT	$64
-	RET
-
 TEXT wrfsb(SB), NOSPLIT, $0-8
 	get_tls(BX)
 	MOVQ	val+0(FP), AX
