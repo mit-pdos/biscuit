@@ -172,15 +172,15 @@ func pg_test() {
 	}
 
 	kpgdir := runtime.Kpmap()
-	pte := pmap_walk(kpgdir, unsafe.Pointer(uintptr(0x7c00)), false, 0, allpages)
+	pte := pmap_walk(kpgdir, 0x7c00, false, 0, allpages)
 	fmt.Printf("boot pte %x ", *pte)
 
 	paddr := 0x2200000000
-	pte = pmap_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), false, 0, allpages)
+	pte = pmap_walk(kpgdir, paddr, false, 0, allpages)
 	if pte != nil {
 		pancake("nyet")
 	}
-	pte = pmap_walk(kpgdir, unsafe.Pointer(uintptr(paddr)), true, PTE_W, allpages)
+	pte = pmap_walk(kpgdir, paddr, true, PTE_W, allpages)
 	fmt.Printf("null pte %x ", *pte)
 	_, p_np := pg_new(allpages)
 	*pte = p_np | PTE_P | PTE_W
@@ -223,8 +223,7 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 		panic("null pmap")
 	}
 
-	dur := unsafe.Pointer(uintptr(va))
-	pte := pmap_walk(p.pmap, dur, true, perms, p.pages)
+	pte := pmap_walk(p.pmap, va, true, perms, p.pages)
 	ninval := false
 	if *pte & PTE_P != 0 {
 		if vempty {
@@ -234,6 +233,7 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
+		dur := unsafe.Pointer(uintptr(va))
 		runtime.Invlpg(dur)
 	}
 }

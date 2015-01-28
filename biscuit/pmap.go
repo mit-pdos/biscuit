@@ -8,7 +8,8 @@ var PTE_W     int = 1 << 1
 var PTE_U     int = 1 << 2
 var PTE_PS    int = 1 << 7
 var PGSIZE    int = 1 << 12
-var PTE_ADDR  int = ^(0xfff)
+var PGMASK    int = ^(0xfff)
+var PTE_ADDR  int = PGMASK
 var PTE_FLAGS int = 0x1f
 
 var VREC      int = 0x42
@@ -46,7 +47,7 @@ func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
 	if ptn & (PGSIZE - 1) != 0 {
 		pancake("page not aligned", ptn)
 	}
-	pte := pmap_walk(runtime.Kpmap(), unsafe.Pointer(pt),
+	pte := pmap_walk(runtime.Kpmap(), int(uintptr(unsafe.Pointer(pt))),
 	    false, 0, ptracker)
 	if pte == nil {
 		pancake("must be mapped")
@@ -98,8 +99,8 @@ func pe2pg(pe int) *[512]int {
 }
 
 // requires direct mapping
-func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create bool,
-    perms int, ptracker map[int]*[512]int) *int {
+func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
+    ptracker map[int]*[512]int) *int {
 
 	vn := uint(uintptr(v))
 	l4b, pdpb, pdb, ptb := pgbits(vn)
@@ -111,6 +112,13 @@ func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create bool,
 		return npte
 	}
 
+	cpe := func(pe int) *[512]int {
+		if pe & PTE_PS != 0 {
+			panic("insert mapping into PS page")
+		}
+		return pe2pg(pe)
+	}
+
 	pe := pml4[l4b]
 	if pe & PTE_P == 0 {
 		if !create {
@@ -118,7 +126,7 @@ func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create bool,
 		}
 		pe = instpg(pml4, l4b)
 	}
-	next := pe2pg(pe)
+	next := cpe(pe)
 	pe = next[pdpb]
 	if pe & PTE_P == 0 {
 		if !create {
@@ -126,7 +134,7 @@ func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create bool,
 		}
 		pe = instpg(next, pdpb)
 	}
-	next = pe2pg(pe)
+	next = cpe(pe)
 	pe = next[pdb]
 	if pe & PTE_P == 0 {
 		if !create {
@@ -134,7 +142,7 @@ func pmap_walk(pml4 *[512]int, v unsafe.Pointer, create bool,
 		}
 		pe = instpg(next, pdb)
 	}
-	next = pe2pg(pe)
+	next = cpe(pe)
 	return &next[ptb]
 }
 
