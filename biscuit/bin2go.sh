@@ -1,14 +1,14 @@
 #!/bin/sh
 set -e -u
 
-[ ! $# -eq 1 ] && { echo "usage: $0 <binfile>"; exit 1; }
+[ ! $# -eq 1 ] && { echo "usage: $0 <binfile>" 1>&2; exit 1; }
 
 F=$1
 NF=`basename $F| sed "s/[^[:alnum:]]/_/g"`
-[ ! -r $F ] && { echo "cannot read $F"; exit 1; }
+[ ! -r $F ] && { echo "cannot read $F" 1>&2; exit 1; }
 
 UTIL="xxd"
-which $UTIL > /dev/null 2>&1 || { echo "cannot find $UTIL"; exit 1; }
+which $UTIL > /dev/null 2>&1 || { echo "cannot find $UTIL" 1>&2; exit 1; }
 
 X=`which $UTIL`
 echo "var _bin_$NF = []uint8{"
