@@ -376,6 +376,18 @@ putch(int8 x, int8 y, int8 c)
         cons[y*80 + x] = 0x07 << 8 | c;
 }
 
+// XXX have this hack because panic prints many lines which makes the output
+// wrap around and overwrite the first lines of the panic (the most important
+// part). this will go away when i add serial console support.
+int32 newlines = 1;
+
+#pragma textflag NOSPLIT
+void
+runtime·Newlines(int64 set)
+{
+	newlines = set;
+}
+
 #pragma textflag NOSPLIT
 void
 runtime·doc(int64 mark)
@@ -383,9 +395,11 @@ runtime·doc(int64 mark)
         static int8 x;
         static int8 y;
 
-	if (mark == '\n')
-		x = 80;
-	else
+	if (mark == '\n') {
+		if (newlines) {
+			x = 80;
+		}
+	} else
 		putch(x++, y, mark & 0xff);
 
         if (x >= 79) {
@@ -892,8 +906,10 @@ fpuinit(uint64 cr0, uint64 cr4)
 #define SLOTNEXT(v)       ((v << 9) & ((1ULL << 48) - 1))
 
 struct secret_t {
-	uint64 dur[3];
-#define	SEC_E820	0
+	uint64 dur[4];
+#define	SEC_E820        0
+#define	SEC_PMAP        1
+#define	SEC_FREEPG      2
 };
 
 // XXX allocator should be in go
@@ -1557,7 +1573,7 @@ timersetup(void)
 	threads[th_cur].runnable = 1;
 	threads[th_cur].pmap = kpmap;
 
-	uint64 la = (uint64)0xfee00000;
+	uint64 la = 0xfee00000ULL;
 
 	// map lapic IO mem
 	uint64 *pte = pgdir_walk((void *)la, 0);
@@ -1566,6 +1582,10 @@ timersetup(void)
 	pte = pgdir_walk((void *)la, 1);
 	*pte = (uint64)la | PTE_W | PTE_P | PTE_PCD;
 	lapaddr = la;
+#define LVERSION    (0x30/4)
+	uint32 lver = rlap(LVERSION);
+	if (lver < 0x10)
+		runtime·pancake("82489dx not supported", lver);
 
 #define LVTIMER     (0x320/4)
 #define DCREG       (0x3e0/4)
@@ -1900,24 +1920,17 @@ runtime·Memmove(void *dst, void *src, uintptr len)
 
 #pragma textflag NOSPLIT
 void
-runtime·Pnum(uint64 m)
+runtime·Outb(uint32 reg, uint32 val)
 {
-	if (runtime·hackmode)
-		pnum(m);
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Rcr2(void)
-{
-	return rcr2();
+	outb(reg, val);
 }
 
 #pragma textflag NOSPLIT
 void
-runtime·Sti(void)
+runtime·Pnum(uint64 m)
 {
-	sti();
+	if (runtime·hackmode)
+		pnum(m);
 }
 
 #pragma textflag NOSPLIT
@@ -1947,6 +1960,20 @@ void
 runtime·Procyield(void)
 {
 	yieldy(0);
+}
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Rcr2(void)
+{
+	return rcr2();
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Sti(void)
+{
+	sti();
 }
 
 #pragma textflag NOSPLIT

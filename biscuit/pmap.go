@@ -2,18 +2,21 @@ package main
 
 import "runtime"
 import "unsafe"
+//import "fmt"
 
-var PTE_P     int = 1 << 0
-var PTE_W     int = 1 << 1
-var PTE_U     int = 1 << 2
-var PTE_PS    int = 1 << 7
-var PGSIZE    int = 1 << 12
-var PGMASK    int = ^(0xfff)
-var PTE_ADDR  int = PGMASK
-var PTE_FLAGS int = 0x1f
+const PTE_P     int = 1 << 0
+const PTE_W     int = 1 << 1
+const PTE_U     int = 1 << 2
+const PTE_PCD   int = 1 << 4
+const PTE_PS    int = 1 << 7
+const PGSIZE    int = 1 << 12
+const PGOFFSET  int = 0xfff
+const PGMASK    int = ^(PGOFFSET)
+const PTE_ADDR  int = PGMASK
+const PTE_FLAGS int = 0x1f
 
-var VREC      int = 0x42
-var VDIRECT   int = 0x44
+const VREC      int = 0x42
+const VDIRECT   int = 0x44
 
 func shl(c uint) uint {
 	return 12 + 9 * c
@@ -26,6 +29,25 @@ func pgbits(v uint) (uint, uint, uint, uint) {
 	return lb(3), lb(2), lb(1), lb(0)
 }
 
+func mkpg(l4 int, l3 int, l2 int, l1 int) int {
+	lb := func (c uint) uint {
+		var ret uint
+		switch c {
+		case 3:
+			ret = uint(l4) & 0x1ff
+		case 2:
+			ret = uint(l3) & 0x1ff
+		case 1:
+			ret = uint(l2) & 0x1ff
+		case 0:
+			ret = uint(l1) & 0x1ff
+		}
+		return ret << shl(c)
+	}
+
+	return int(lb(3) | lb(2) | lb(1) | lb(0))
+}
+
 func rounddown(v int, b int) int {
 	return v - (v % b)
 }
@@ -35,7 +57,7 @@ func roundup(v int, b int) int {
 }
 
 func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
-	ret := l4 << shl(3) | ppd << shl(2) | pd << shl(1) | pt << shl(0)
+	ret := mkpg(l4, ppd, pd, pt)
 	ret += off*8
 
 	return (*int)(unsafe.Pointer(uintptr(ret)))
@@ -91,6 +113,13 @@ func dmap(p int) *[512]int {
 	v := int(uintptr(unsafe.Pointer(caddr(VDIRECT, 0, 0, 0, 0))))
 	v += rounddown(int(pa), PGSIZE)
 	return (*[512]int)(unsafe.Pointer(uintptr(v)))
+}
+
+func dmap8(p int) []uint8 {
+	pg := dmap(p)
+	off := p & PGOFFSET
+	bpg := (*[PGSIZE]uint8)(unsafe.Pointer(pg))
+	return bpg[off:]
 }
 
 func pe2pg(pe int) *[512]int {

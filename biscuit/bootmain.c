@@ -144,10 +144,6 @@ bootmain(void)
 	ensure_empty(pgdir, NEWSTACK - PGSIZE);
 	ensure_empty(pgdir, NEWSTACK - 2*PGSIZE);
 	allocphys(pgdir, NEWSTACK - 1);
-	//for (i = 0; i < 16 + 1; i++)
-	//	ensure_empty(pgdir, NEWSTACK - i*PGSIZE - 1);
-	//for (i = 0; i < 16; i++)
-	//	allocphys(pgdir, NEWSTACK - i*PGSIZE - 1);
 
 	// XXX setup tramp if entry is 64bit address...
 	if (!is32(ELFHDR->e_entry))

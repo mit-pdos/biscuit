@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
+import "sync/atomic"
 import "unsafe"
 
 type trapstore_t struct {
@@ -256,6 +257,281 @@ func proc_kill(pid int) {
 	fmt.Printf("reclaimed %vK\n", (before-after)/1024)
 }
 
+func ismapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
+	for i, c := range pmap {
+		if c & PTE_P == 0 {
+			continue
+		}
+		if depth == 1 || c & PTE_PS != 0 {
+			if c & PTE_ADDR == phys & PGMASK {
+				ret := acc << 9 | i
+				return true, ret
+			}
+			continue
+		}
+		// skip direct and recursive maps
+		if depth == 4 && (i == VDIRECT || i == VREC) {
+			continue
+		}
+		nextp := pe2pg(c)
+		nexta := acc << 9 | i
+		mapped, va := ismapped1(nextp, phys, depth - 1, nexta)
+		if mapped {
+			return true, va
+		}
+	}
+	return false, 0
+}
+
+func ismapped(pmap *[512]int, phys int) (bool, int) {
+	return ismapped1(pmap, phys, 4, 0)
+}
+
+func assert_not_map(pmap *[512]int, phys int) {
+	mapped, va := ismapped(pmap, phys)
+	if mapped {
+		runtime.Newlines(0)
+		panic(fmt.Sprintf("%v is mapped at page %#x", phys, va))
+	}
+}
+
+func mp_sum(d []uint8) int {
+	ret := 0
+	for _, c := range d {
+		ret += int(c)
+	}
+	return ret & 0xff
+}
+
+func mp_tblget(f []uint8) ([]uint8, []uint8, []uint8) {
+	feat := readn(f, 1, 11)
+	if feat != 0 {
+		panic("\"default\" configurations not supported")
+	}
+	ctbla := readn(f, 4, 4)
+	fmt.Printf("conf table at %#x\n", ctbla)
+	c := dmap8(ctbla)
+	sig := readn(c, 4, 0)
+	// sig is "PCMP"
+	if sig != 0x504d4350 {
+		panic("bad conf table sig")
+	}
+
+	bsz := readn(c, 2, 4)
+	base := c[:bsz]
+	if mp_sum(base) != 0 {
+		panic("bad conf table cksum")
+	}
+
+	esz := readn(c, 2, 0x28)
+	eck := readn(c, 1, 0x2a)
+	extended := c[bsz : bsz + esz]
+
+	esum := (mp_sum(extended) + eck) & 0xff
+	if esum != 0 {
+		pancake("bad extended table checksum")
+	}
+
+	return f, base, extended
+}
+
+func mp_scan() ([]uint8, []uint8, []uint8) {
+	assert_not_map(runtime.Kpmap(), 0)
+
+	// should use ACPI. don't bother to scan other areas as recommended by
+	// MP spec.
+	// try bios readonly memory, from 0xe0000-0xfffff
+	bro := 0xe0000
+	const brolen = 0x1ffff
+	p := (*[brolen]uint8)(unsafe.Pointer(dmap(bro)))
+	for i := 0; i < brolen - 4; i++ {
+		if p[i] == '_' &&
+		   p[i+1] == 'M' &&
+		   p[i+2] == 'P' &&
+		   p[i+3] == '_' && mp_sum(p[i:i+16]) == 0 {
+			return mp_tblget(p[i:i+16])
+		}
+	}
+	return nil, nil, nil
+}
+
+type cpu_t struct {
+	lapid    int
+	bsp      bool
+}
+
+func cpus_find() []cpu_t {
+
+	fl, base, _ := mp_scan()
+	if fl == nil {
+		fmt.Println("uniprocessor")
+		return []cpu_t{}
+	}
+
+	ret := make([]cpu_t, 0, 10)
+
+	// runtime does the same check
+	lapaddr := readn(base, 4, 0x24)
+	if lapaddr != 0xfee00000 {
+		panic(fmt.Sprintf("weird lapic addr %#x", lapaddr))
+	}
+
+	// switch to symmetric mode interrupts if we are in PIC mode
+	mpfeat := readn(fl, 4, 12)
+	imcrp := 1 << 7
+	if mpfeat & imcrp != 0 {
+		fmt.Printf("entering symmetric mode\n")
+		// select imcr
+		runtime.Outb(0x22, 0x70)
+		// "writing a value of 01h forces the NMI and 8259 INTR signals
+		// to pass through the APIC."
+		runtime.Outb(0x23, 0x1)
+	}
+
+	ecount := readn(base, 2, 0x22)
+	entries := base[44:]
+	idx := 0
+	for i := 0; i < ecount; i++ {
+		t := readn(entries, 1, idx)
+		switch t {
+		case 0:		// processor
+			idx += 20
+			lapid  := readn(entries, 1, idx + 1)
+			cpuf   := readn(entries, 1, idx + 3)
+			cpu_en := 1
+			cpu_bp := 2
+
+			bsp := false
+			if cpuf & cpu_bp != 0 {
+				bsp = true
+			}
+
+			if cpuf & cpu_en == 0 {
+				fmt.Printf("cpu %v disabled\n", lapid)
+				continue
+			}
+
+			ret = append(ret, cpu_t{lapid, bsp})
+
+		default:	// bus, IO apic, IO int. assignment, local int
+				// assignment.
+			idx += 8
+		}
+	}
+	return ret
+}
+
+func cpus_start() {
+	cpus := cpus_find()
+	fmt.Printf("found %v CPUs\n", len(cpus))
+
+	// AP code must be between 0-1MB because the APs are in real mode. load
+	// code to 0x8000 (overwriting bootloader)
+	mpaddr := 0x8000
+	mppg := dmap(mpaddr)
+	for i := range mppg {
+		mppg[i] = 0
+	}
+	mpcode := *allbins["mpentry.bin"].data
+	runtime.Memmove(unsafe.Pointer(mppg), unsafe.Pointer(&mpcode[0]),
+	    len(mpcode))
+
+	// skip mucking with CMOS reset code/warm reset vector (as per the the
+	// "universal startup algoirthm") and instead use the STARTUP IPI which
+	// is supported by lapics of version >= 1.x. (the runtime panicks if a
+	// lapic whose version is < 1.x is found, thus assume their absence).
+	// however, only one STARTUP IPI is accepted after a CPUs RESET or INIT
+	// pin is asserted, thus we need to send an INIT IPI assert first (it
+	// appears someone already used a STARTUP IPI; probably the BIOS).
+
+	lapaddr := 0xfee00000
+	pte := pmap_walk(runtime.Kpmap(), lapaddr, false, 0, nil)
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_PCD == 0 {
+		panic("lapaddr unmapped")
+	}
+	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	icrh := 0x310/4
+	icrl := 0x300/4
+
+	ipilow := func(ds int, t int, l int, deliv int, vec int) uint32 {
+		return uint32(ds << 18 | t << 15 | l << 14 |
+		    deliv << 8 | vec)
+	}
+
+	icrw := func(hi uint32, low uint32) {
+		// use sync to guarantee order
+		atomic.StoreUint32(&lap[icrh], hi)
+		atomic.StoreUint32(&lap[icrl], low)
+	}
+
+	// destination shorthands:
+	// 1: self
+	// 2: all
+	// 3: all but me
+
+	initipi := func(assert bool) {
+		vec := 0
+		delivmode := 0x5
+		level := 1
+		trig  := 0
+		dshort:= 3
+		if !assert {
+			trig = 1
+			level = 0
+			dshort = 2
+		}
+		hi  := uint32(0)
+		low := ipilow(dshort, trig, level, delivmode, vec)
+		icrw(hi, low)
+	}
+
+	startupipi := func() {
+		delivmode := 0x6
+		level     := 0x1
+		dshort    := 0x3
+		trig      := 0x0
+		vec       := mpaddr >> 12
+
+		hi := uint32(0)
+		low := ipilow(dshort, trig, level, delivmode, vec)
+		icrw(hi, low)
+	}
+
+	deray := func(t int) {
+		for i := 0; i < t; i++ {
+		}
+	}
+	if startupipi == nil {}
+
+	// install entry point to the secret storage. the CPUs will jmp to this
+	// address after entering long mode and initializing the idt/gdt.
+	// lapic/tss still needs to be setup.
+	ss := (*[8]int)(unsafe.Pointer(uintptr(0x7c00)))
+	ss[3] = runtime.Fnaddr(ap_entry)
+	// sgdt and sidt save 10 bytes
+	runtime.Sgdt(&ss[4])
+	runtime.Sidt(&ss[6])
+
+	initipi(true)
+	// not necessary since we assume lapic version >= 1.x (ie not 82489DX)
+	//initipi(false)
+	deray(1000000)
+
+	startupipi()
+	deray(10000000)
+	startupipi()
+	fmt.Printf("done!\n")
+}
+
+//go:nosplit
+func ap_entry() {
+	runtime.Pnum(0x43110)
+	for i := 0; i < 1000000000; i++ {
+	}
+	runtime.Pnum(0xbad)
+	var p *int
+	*p = 0
+}
 
 func main() {
 	// magic loop
@@ -281,7 +557,8 @@ func main() {
 	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
-	sys_test()
+	//sys_test()
+	cpus_start()
 
 	fake_work()
 }

@@ -412,6 +412,7 @@ TEXT wrmsr(SB), NOSPLIT, $0-16
 	WRMSR
 	RET
 
+//void outb(int32 addr, int32 val)
 TEXT outb(SB), NOSPLIT, $0-8
 	MOVL	reg+0(FP), DX
 	MOVL	val+4(FP), AX
@@ -437,6 +438,22 @@ TEXT cli(SB), NOSPLIT, $0-0
 
 TEXT sti(SB), NOSPLIT, $0-0
 	STI
+	RET
+
+TEXT ·Sgdt(SB), NOSPLIT, $0-8
+	MOVQ	ptr+0(FP), AX
+	// sgdtl (%rax)
+	BYTE	$0x0f
+	BYTE	$0x01
+	BYTE	$0x00
+	RET
+
+TEXT ·Sidt(SB), NOSPLIT, $0-8
+	MOVQ	ptr+0(FP), AX
+	// sidtl (%rax)
+	BYTE	$0x0f
+	BYTE	$0x01
+	BYTE	$0x08
 	RET
 
 #define TRAP_TIMER      $32

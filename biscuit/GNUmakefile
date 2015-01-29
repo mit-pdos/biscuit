@@ -4,7 +4,7 @@ BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -m32
 CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -fno-stack-protector -fno-builtin
 
-# runtime sources
+# bootloader sources
 ASMS := boot.S
 CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
@@ -17,7 +17,7 @@ OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 UPROGS := hello
 UPROGS := $(patsubst %,user/%,$(UPROGS))
 
-UCRAP := $(UPROGS) $(patsubst %,%.bgo,$(UPROGS)) user/litc.o
+BGOS := $(patsubst %,%.bgo,$(UPROGS)) mpentry.bin.bgo
 
 RFS  := $(patsubst %.c,%.d,$(CS))
 RFS  += $(patsubst %,%.d,$(UPROGS))
@@ -25,7 +25,8 @@ RFS  += user/litc.d
 
 GOBIN := ../bin/go
 
-QOPTS := -m 256M
+CPUS := $(shell echo $${CPUS:-1})
+QOPTS := -m 256M -smp cpus=$(CPUS)
 
 OS := $(shell uname -s)
 
@@ -73,10 +74,16 @@ $(UPROGS): CFLAGS += -I user/ -Wl,-entry,main
 $(UPROGS): % : %.c user/litc.o
 	$(CC) $(CFLAGS) -I user/ -Wl,-entry,main,-Ttext,0xf1000000\
 	    -Wl,-Tdata,0xf2000000,-Tbss,0xf3000000,-n -o $@ $< user/litc.o
-	./bin2go.sh $@ > $@.bgo
 
-bins.go: $(UPROGS)
-	./prepbins.py $(UPROGS) > $@
+mpentry.bin: mpentry.S
+	$(CC) -o mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
+	objcopy -O binary -j.text mpentry.elf $@
+
+$(BGOS): %.bgo : %
+	./bin2go.sh $< > $@
+
+bins.go: $(BGOS)
+	./prepbins.py $^ > $@
 
 main: main.o
 	$(LD) -static -e main -o $@ $<
@@ -85,7 +92,8 @@ chentry: chentry.c
 	$(CC) $(BASEFLAGS) -o $@ chentry.c
 
 clean:
-	rm -f $(UCRAP) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin go.img chentry
+	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
+	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o
 
 qemu: d.img
 	qemu-system-x86_64 $(QOPTS) -hda d.img

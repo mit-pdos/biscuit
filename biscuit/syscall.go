@@ -116,7 +116,7 @@ func elf_sload(p *proc_t, hdr *elf_phdr) {
 			if rsz - i < len {
 				len = rsz - i
 			}
-			runtime.Memmove(dst, src, uint(len))
+			runtime.Memmove(dst, src, len)
 		}
 		p.page_insert(hdr.vaddr + i, pg, p_pg, perms, true)
 	}
