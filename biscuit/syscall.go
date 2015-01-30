@@ -174,12 +174,12 @@ func sys_test() {
 
 	// since kernel and user programs share pml4[0], need to mark shared
 	// pages user
-	pmap_cperms(upmap, unsafe.Pointer(uintptr(elf.entry())), PTE_U)
-	pmap_cperms(upmap, unsafe.Pointer(uintptr(stackva)), PTE_U)
+	pmap_cperms(upmap, elf.entry(), PTE_U)
+	pmap_cperms(upmap, stackva, PTE_U)
 
 	// VGA too
-	pmap_cperms(upmap, unsafe.Pointer(uintptr(0xb8000)), PTE_U)
-	pmap_cperms(upmap, unsafe.Pointer(uintptr(0xb8000)), PTE_U)
+	pmap_cperms(upmap, 0xb8000, PTE_U)
+	pmap_cperms(upmap, 0xb8000, PTE_U)
 
 	runtime.Procadd(&tf, proc.pid, p_upmap)
 }

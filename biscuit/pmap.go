@@ -208,8 +208,8 @@ func copy_pmap(pm *[512]int, ptracker map[int]*[512]int) (*[512]int, int) {
 	return npm, p_npm
 }
 
-func pmap_cperms(pm *[512]int, va unsafe.Pointer, nperms int) {
-	b1, b2, b3, b4 := pgbits(uint(uintptr(va)))
+func pmap_cperms(pm *[512]int, va int, nperms int) {
+	b1, b2, b3, b4 := pgbits(uint(va))
 	if pm[b1] & PTE_P == 0 {
 		return
 	}
