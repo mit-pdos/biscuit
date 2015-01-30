@@ -164,8 +164,7 @@ func sys_test() {
 	tf[tf_ss] = 7 << 3 | 3
 
 	// copy kernel page table, map new stack
-	kpmap := runtime.Kpmap()
-	upmap, p_upmap := copy_pmap(kpmap, proc.pages)
+	upmap, p_upmap := copy_pmap(kpmap(), proc.pages)
 	proc.pmap, proc.p_pmap = upmap, p_upmap
 	proc.page_insert(stackva - PGSIZE, stack,
 	    p_stack, PTE_U | PTE_W, true)

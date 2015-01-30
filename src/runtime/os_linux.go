@@ -29,6 +29,7 @@ func Prockill(int)
 func Procrunnable(int)
 func Procyield()
 func Rcr2() int
+func Rrsp() int
 func Sgdt(*int)
 func Sidt(*int)
 func Sti()

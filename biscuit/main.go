@@ -158,8 +158,6 @@ func trap_pgfault(p ...interface{}) {
 	proc_kill(pid)
 }
 
-var allpages = map[int]*[512]int{}
-
 func pg_test() {
 	fmt.Printf("page table test\n")
 
@@ -287,11 +285,17 @@ func ismapped(pmap *[512]int, phys int) (bool, int) {
 	return ismapped1(pmap, phys, 4, 0)
 }
 
-func assert_not_map(pmap *[512]int, phys int) {
+func assert_no_phys(pmap *[512]int, phys int) {
 	mapped, va := ismapped(pmap, phys)
 	if mapped {
-		runtime.Newlines(0)
 		panic(fmt.Sprintf("%v is mapped at page %#x", phys, va))
+	}
+}
+
+func assert_no_va_map(pmap *[512]int, va int) {
+	pte := pmap_walk(pmap, va, false, 0, nil)
+	if pte != nil && *pte & PTE_P != 0 {
+		panic(fmt.Sprintf("va %#x is mapped", va))
 	}
 }
 
@@ -309,7 +313,6 @@ func mp_tblget(f []uint8) ([]uint8, []uint8, []uint8) {
 		panic("\"default\" configurations not supported")
 	}
 	ctbla := readn(f, 4, 4)
-	fmt.Printf("conf table at %#x\n", ctbla)
 	c := dmap8(ctbla)
 	sig := readn(c, 4, 0)
 	// sig is "PCMP"
@@ -336,7 +339,7 @@ func mp_tblget(f []uint8) ([]uint8, []uint8, []uint8) {
 }
 
 func mp_scan() ([]uint8, []uint8, []uint8) {
-	assert_not_map(runtime.Kpmap(), 0)
+	assert_no_phys(kpmap(), 0)
 
 	// should use ACPI. don't bother to scan other areas as recommended by
 	// MP spec.
@@ -421,9 +424,28 @@ func cpus_find() []cpu_t {
 	return ret
 }
 
+func cpus_stack_init(apcnt int, stackstart int) {
+	for i := 0; i < apcnt; i++ {
+		kmalloc(stackstart, PTE_W)
+		stackstart += PGSIZE
+		assert_no_va_map(kpmap(), stackstart)
+		stackstart += PGSIZE
+	}
+}
+
 func cpus_start() {
 	cpus := cpus_find()
+	apcnt := len(cpus) - 1
 	fmt.Printf("found %v CPUs\n", len(cpus))
+
+	if apcnt == 0 {
+		fmt.Printf("uniprocessor with mpconf\n")
+	}
+
+	// the top of bsp's interrupt stack is 0xa100001000. map an interrupt
+	// stack for each ap. leave 0xa100001000 as a guard page.
+	stackstart := 0xa100002000
+	cpus_stack_init(apcnt, stackstart)
 
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
@@ -445,7 +467,7 @@ func cpus_start() {
 	// appears someone already used a STARTUP IPI; probably the BIOS).
 
 	lapaddr := 0xfee00000
-	pte := pmap_walk(runtime.Kpmap(), lapaddr, false, 0, nil)
+	pte := pmap_walk(kpmap(), lapaddr, false, 0, nil)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}
@@ -501,16 +523,34 @@ func cpus_start() {
 		for i := 0; i < t; i++ {
 		}
 	}
-	if startupipi == nil {}
 
-	// install entry point to the secret storage. the CPUs will jmp to this
-	// address after entering long mode and initializing the idt/gdt.
-	// lapic/tss still needs to be setup.
-	ss := (*[8]int)(unsafe.Pointer(uintptr(0x7c00)))
-	ss[3] = runtime.Fnaddr(ap_entry)
+	// pass arguments to the ap startup code via secret storage (the old
+	// boot device page at 0x7c00)
+
+	// secret storage layout
+	// 0 - e820map
+	// 1 - pmap
+	// 2 - firstfree
+	// 3 - ap entry
+	// 4 - gdt
+	// 5 - gdt
+	// 6 - idt
+	// 7 - idt
+	// 8 - ap count
+	// 9 - stack start
+
+	ss := (*[10]int)(unsafe.Pointer(uintptr(0x7c00)))
+	sap_entry := 3
+	sgdt      := 4
+	sidt      := 6
+	sapcnt    := 8
+	sstacks   := 9
+	ss[sap_entry] = runtime.Fnaddr(ap_entry)
 	// sgdt and sidt save 10 bytes
-	runtime.Sgdt(&ss[4])
-	runtime.Sidt(&ss[6])
+	runtime.Sgdt(&ss[sgdt])
+	runtime.Sidt(&ss[sidt])
+	ss[sapcnt] = 0
+	ss[sstacks] = stackstart   // each ap grabs a unique stack
 
 	initipi(true)
 	// not necessary since we assume lapic version >= 1.x (ie not 82489DX)
@@ -520,7 +560,11 @@ func cpus_start() {
 	startupipi()
 	deray(10000000)
 	startupipi()
-	fmt.Printf("done!\n")
+
+	for ss[sapcnt] != apcnt {
+	}
+
+	fmt.Printf("done! %v CPUs joined\n", ss[sapcnt])
 }
 
 //go:nosplit
@@ -557,7 +601,7 @@ func main() {
 	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
-	//sys_test()
+	sys_test()
 	cpus_start()
 
 	fake_work()

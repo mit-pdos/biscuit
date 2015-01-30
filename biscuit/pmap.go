@@ -2,7 +2,7 @@ package main
 
 import "runtime"
 import "unsafe"
-//import "fmt"
+import "fmt"
 
 const PTE_P     int = 1 << 0
 const PTE_W     int = 1 << 1
@@ -17,6 +17,10 @@ const PTE_FLAGS int = 0x1f
 
 const VREC      int = 0x42
 const VDIRECT   int = 0x44
+
+// tracks all pages allocated by go internally by the kernel such as pmap pages
+// allocated by go (not the bootloader/runtime)
+var allpages = map[int]*[512]int{}
 
 func shl(c uint) uint {
 	return 12 + 9 * c
@@ -69,7 +73,9 @@ func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
 	if ptn & (PGSIZE - 1) != 0 {
 		pancake("page not aligned", ptn)
 	}
-	pte := pmap_walk(runtime.Kpmap(), int(uintptr(unsafe.Pointer(pt))),
+	// pmap walk for every allocation -- a cost of allocating pages with
+	// the garbage collector.
+	pte := pmap_walk(kpmap(), int(uintptr(unsafe.Pointer(pt))),
 	    false, 0, ptracker)
 	if pte == nil {
 		pancake("must be mapped")
@@ -81,6 +87,15 @@ func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
 	}
 
 	return pt, physaddr
+}
+
+var kpmapp      *[512]int
+
+func kpmap() *[512]int {
+	if kpmapp == nil {
+		kpmapp = runtime.Kpmap()
+	}
+	return kpmapp
 }
 
 // installs a direct map for 512G of physical memory via the recursive mapping
@@ -130,7 +145,6 @@ func pe2pg(pe int) *[512]int {
 // requires direct mapping
 func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
     ptracker map[int]*[512]int) *int {
-
 	vn := uint(uintptr(v))
 	l4b, pdpb, pdb, ptb := pgbits(vn)
 
@@ -229,4 +243,14 @@ func pmap_cperms(pm *[512]int, va int, nperms int) {
 		return
 	}
 	next[b4] |= nperms
+}
+
+// allocates a page tracked by allpages and maps it at va
+func kmalloc(va int, perms int) {
+	_, p_pg := pg_new(allpages)
+	pte := pmap_walk(kpmap(), va, true, perms, allpages)
+	if pte != nil && *pte & PTE_P != 0 {
+		panic(fmt.Sprintf("page already mapped %#x", va))
+	}
+	*pte = p_pg | PTE_P | perms
 }

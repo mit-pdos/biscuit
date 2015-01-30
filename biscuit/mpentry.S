@@ -11,14 +11,33 @@
 .set CR4_PAE,            (1 << 5)
 .set IA32_EFER,          0xc0000080
 .set IA32_EFER_LME,      (1 << 8)
+.set PGSIZE,             4096
 .set PROT_MODE_CSEG,     (1 << 3)
 .set PROT_MODE_CSEG64,   (3 << 3)
 .set PROT_MODE_DSEG,     (2 << 3)
 .set REAL_CSEG64,        (1 << 3)
-.set TEMPSTACK,          0x8000 + 4096 // XXX
 // provided by boot loader and kernel. holds pmap, idt, gdt, and the next
 // address to jump to
 .set SECRET,             0x7c00
+
+#define SPLOCK(x)		\
+	movq	$x, %rdi;	\
+1:				\
+	movq	$1, %rax;	\
+	lock			\
+	xchgq	%rax, (%rdi);	\
+	cmpq	$0, %rax;	\
+	je	3f;		\
+2:				\
+	pause;			\
+	movq	(%rdi), %rax;	\
+	cmpq	$0, %rax;	\
+	je	1b;		\
+	jmp	2b;		\
+3:
+
+#define SPUNLOCK(x)		\
+	movq	$0, x
 
 .align 4096
 .code16
@@ -72,11 +91,25 @@ protcseg:
 .code64
 protocseg64:
 
-	movq	$TEMPSTACK, %rsp
+	SPLOCK(lock1)
+
+	// increment ap count
+	movq	$SECRET, %rdx
+	movq	64(%rdx), %rbx
+	incq	%rbx
+	movq	%rbx, 64(%rdx)
+	movq	%rbx, myid
+
+	// get our own stack
+	movq	72(%rdx), %rax
+	movq	%rax, %rsp
+	// rsp = top of page
+	addq	$PGSIZE, %rsp
+	addq	$(PGSIZE * 2), %rax
+	movq	%rax, 72(%rdx)
 	movq	$0, %rbp
 
-	// load idt and gdt from secret storage
-	movq	$SECRET, %rdx
+	// load idt and gdt
 	lgdt	32(%rdx)
 	lidt	48(%rdx)
 
@@ -87,7 +120,15 @@ protocseg64:
 
 realcseg:
 	movq	24(%rdx), %rax
+
+	SPUNLOCK(lock1)
+
 	jmp	*%rax
+
+lock1:
+	.quad	0
+myid:
+	.quad	0
 
 # Bootstrap GDT
 .p2align 2                                # force 4 byte alignment

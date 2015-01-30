@@ -571,7 +571,8 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 
 TEXT trapret(SB), NOSPLIT, $0-16
 	MOVQ	pmap+8(FP), BX
-	MOVQ	fp+0(FP), AX
+	MOVQ	tf+0(FP), AX	// tf is not on the callers stack frame, but in
+				// threads[]
 	MOVQ	AX, SP
 
 	MOVQ	BX, CR3

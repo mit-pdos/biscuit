@@ -1502,10 +1502,7 @@ tss_setup(void)
 	if (addr & (16 - 1))
 		runtime·pancake("tss not aligned", addr);
 
-	// XXX if we ever use a CPL != 0, we need to use a diff stack;
-	// otherwise we will overwrite pre-trap stack
-	//uint64 rsp = 0x80000000;
-	uint64 *va = (uint64 *)0x2100000000ULL;
+	uint64 *va = (uint64 *)0xa100001000ULL;
 	alloc_map(va - 1, PTE_W, 1);
 	uint64 rsp = (uint64)va;
 
@@ -1967,6 +1964,13 @@ uint64
 runtime·Rcr2(void)
 {
 	return rcr2();
+}
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Rrsp(void)
+{
+	return rrsp();
 }
 
 #pragma textflag NOSPLIT
