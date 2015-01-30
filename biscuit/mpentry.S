@@ -109,6 +109,8 @@ protocseg64:
 	movq	%rax, 72(%rdx)
 	movq	$0, %rbp
 
+	pushq	myid
+
 	// load idt and gdt
 	lgdt	32(%rdx)
 	lidt	48(%rdx)
@@ -123,7 +125,7 @@ realcseg:
 
 	SPUNLOCK(lock1)
 
-	jmp	*%rax
+	call	*%rax
 
 lock1:
 	.quad	0

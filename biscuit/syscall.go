@@ -160,8 +160,11 @@ func sys_test() {
 	tf[tf_rsp] = stackva - 8
 	tf[tf_rip] = elf.entry()
 	tf[tf_rflags] = fl_intf
-	tf[tf_cs] = 6 << 3 | 3
-	tf[tf_ss] = 7 << 3 | 3
+
+	ucseg := 4
+	udseg := 5
+	tf[tf_cs] = ucseg << 3 | 3
+	tf[tf_ss] = udseg << 3 | 3
 
 	// copy kernel page table, map new stack
 	upmap, p_upmap := copy_pmap(kpmap(), proc.pages)

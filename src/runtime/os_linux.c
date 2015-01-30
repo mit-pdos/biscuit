@@ -351,6 +351,7 @@ runtime·signame(int32 sig)
 // src/runtime/asm_amd64.s
 void cli(void);
 void runtime·Invlpg(void *);
+uint64 lap_id(void);
 void lcr0(uint64);
 void lcr3(uint64);
 void lcr4(uint64);
@@ -505,7 +506,10 @@ struct seg64_t {
 #define	TSS     0x9
 #define	USER    0x60
 
-static struct seg64_t segs[8] = {
+#define MAXCPUS 128
+
+// 2 tss segs for each CPU
+static struct seg64_t segs[6 + 2*MAXCPUS] = {
 	// NULL seg
 	{0, 0, 0, 0, 0, 0, 0, 0},
 
@@ -532,7 +536,21 @@ static struct seg64_t segs[8] = {
 	 G | D,		// g, d/b, l, avail, mid limit
 	 0},		// base high
 
-	// tss seg
+	// 4 - 64 bit user code
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | CODE | USER,	// p, dpl, s, type
+	 G | L,		// g, d/b, l, avail, mid limit
+	 0},		// base high
+
+	// 5 - user data
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | DATA | USER,	// p, dpl, s, type
+	 G | D,	// g, d/b, l, avail, mid limit
+	 0},		// base high
+
+	// 6 - tss seg
 	{0, 0,		// limit
 	 0, 0, 0,	// base
 	 0x80 | TSS,	// p, dpl, s, type
@@ -541,27 +559,14 @@ static struct seg64_t segs[8] = {
 	// 64 bit tss takes up two segment descriptor entires. the high 32bits
 	// of the base are written in this seg desc.
 	{0, 0, 0, 0, 0, 0, 0, 0},
-
-	// 6 - 64 bit user code
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | CODE | USER,	// p, dpl, s, type
-	 G | L,		// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-	// 7 - user data
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | DATA | USER,	// p, dpl, s, type
-	 G | D,	// g, d/b, l, avail, mid limit
-	 0},		// base high
 };
 
 static struct pdesc_t pd;
 
 #define	CODE_SEG        1
 #define	FS_SEG          3
-#define	TSS_SEG         4
+// 64bit tss uses two seg descriptors
+#define	TSS_SEG(x)      (6 + 2*x)
 
 #pragma textflag NOSPLIT
 static void
@@ -588,6 +593,25 @@ seg_set(struct seg64_t *seg, uint32 base, uint32 lim, uint32 data)
 	seg->dur[3] = b2;
 	seg->dur[4] = b3;
 	seg->dur[7] = b4;
+}
+
+#pragma textflag NOSPLIT
+static void
+tss_seg_set(int32 tn, uint64 base, uint32 lim, uint32 data)
+{
+	struct seg64_t *seg = &segs[TSS_SEG(tn)];
+	uint32 basel = (uint64)base;
+
+	seg->dur[5] = 0x80 | TSS;
+	seg->dur[6] = G;
+	seg_set(seg, basel, lim, data);
+
+	// set high bits (TSS64 uses two segment descriptors
+	uint32 haddr = base >> 32;
+	bw(&segs[TSS_SEG(tn) + 1].dur[0], haddr, 0);
+	bw(&segs[TSS_SEG(tn) + 1].dur[1], haddr, 1);
+	bw(&segs[TSS_SEG(tn) + 1].dur[2], haddr, 2);
+	bw(&segs[TSS_SEG(tn) + 1].dur[3], haddr, 3);
 }
 
 #undef DATA
@@ -707,11 +731,12 @@ int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user, int32 ist)
 #undef USER
 
 struct tss_t {
-	uint8 dur[26];
+	uint8 dur[26*4 + 8]; // +8 to preserve 16 byte alignment
 };
 
-struct tss_t tss;
+struct tss_t tss[MAXCPUS];
 
+#pragma textflag NOSPLIT
 static void
 tss_set(struct tss_t *tss, uint64 rsp0)
 {
@@ -746,7 +771,7 @@ tss_set(struct tss_t *tss, uint64 rsp0)
 
 #pragma textflag NOSPLIT
 void
-intsetup(void)
+int_setup(void)
 {
 	struct pdesc_t p;
 
@@ -1293,6 +1318,7 @@ mmap_test(void)
 
 #define TRAP_SYSCALL    64
 #define TRAP_TIMER      32
+#define TRAP_SPUR       47
 
 #define TIMER_QUANTUM   100000000UL
 
@@ -1424,6 +1450,8 @@ runtime·Procrunnable(int64 pid)
 	sti();
 }
 
+int32 fleabag;
+
 #pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
@@ -1431,6 +1459,15 @@ trap(uint64 *tf)
 	uint64 trapno = tf[TF_TRAPNO];
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
+
+	if (trapno == TRAP_TIMER && lap_id() != 0) {
+		if ((fleabag++ % 10) == 0) {
+			pmsg("timerio!");
+			pnum(lap_id());
+		}
+		lap_eoi();
+		trapret(tf, kpmap);
+	}
 
 	if (trapno == TRAP_TIMER || trapno == TRAP_SYSCALL)
 		runtime·memmove(threads[th_cur].tf, tf, TFSIZE);
@@ -1495,28 +1532,21 @@ trap(uint64 *tf)
 
 #pragma textflag NOSPLIT
 static void
-tss_setup(void)
+tss_setup(int32 tn)
 {
 	// alignment is for performance
-	uint64 addr = (uint64)&tss;
+	uint64 addr = (uint64)&tss[tn];
 	if (addr & (16 - 1))
 		runtime·pancake("tss not aligned", addr);
 
-	uint64 *va = (uint64 *)0xa100001000ULL;
+	uint64 *va = (uint64 *)0xa100001000ULL + tn*(2*PGSIZE);
 	alloc_map(va - 1, PTE_W, 1);
 	uint64 rsp = (uint64)va;
 
-	tss_set(&tss, rsp);
-	seg_set(&segs[TSS_SEG], (uint32)addr, sizeof(tss) - 1, 0);
+	tss_set(&tss[tn], rsp);
+	tss_seg_set(tn, addr, sizeof(tss) - 1, 0);
 
-	// set high bits (TSS64 uses two segment descriptors
-	uint32 haddr = addr >> 32;
-	bw(&segs[TSS_SEG + 1].dur[0], haddr, 0);
-	bw(&segs[TSS_SEG + 1].dur[1], haddr, 1);
-	bw(&segs[TSS_SEG + 1].dur[2], haddr, 2);
-	bw(&segs[TSS_SEG + 1].dur[3], haddr, 3);
-
-	ltr(TSS_SEG << 3);
+	ltr(TSS_SEG(tn) << 3);
 }
 
 static uint64 lapaddr;
@@ -1542,6 +1572,18 @@ wlap(uint32 reg, uint32 val)
 }
 
 #pragma textflag NOSPLIT
+uint64
+lap_id(void)
+{
+	if (!lapaddr)
+		runtime·pancake("lapaddr null?", lapaddr);
+	volatile uint32 *p = (uint32 *)lapaddr;
+
+#define IDREG       (0x20/4)
+	return p[IDREG] >> 24;
+}
+
+#pragma textflag NOSPLIT
 void
 lap_eoi(void)
 {
@@ -1561,22 +1603,13 @@ ticks_get(void)
 
 #pragma textflag NOSPLIT
 void
-timersetup(void)
+timer_setup(void)
 {
-
-	assert(th_cur == 0, "th_cur not zero", th_cur);
-	assert(sizeof(threads[0].tf) == TFSIZE, "weird size", sizeof(threads[0].tf));
-	threads[th_cur].valid = 1;
-	threads[th_cur].runnable = 1;
-	threads[th_cur].pmap = kpmap;
 
 	uint64 la = 0xfee00000ULL;
 
 	// map lapic IO mem
-	uint64 *pte = pgdir_walk((void *)la, 0);
-	if (pte)
-		runtime·pancake("lapic mem mapped?", (uint64)pte);
-	pte = pgdir_walk((void *)la, 1);
+	uint64 *pte = pgdir_walk((void *)la, 1);
 	*pte = (uint64)la | PTE_W | PTE_P | PTE_PCD;
 	lapaddr = la;
 #define LVERSION    (0x30/4)
@@ -1631,18 +1664,44 @@ timersetup(void)
 	if (!(lreg & (1 << 8)))
 		pmsg("apic disabled");
 
-	wlap(LVSPUR, 1 << 8 | 47);
-
-	// 8259a - mask all ints. skipping this step results in GPfault too?
-	outb(0x20 + 1, 0xff);
-	outb(0xa0 + 1, 0xff);
+	// enable lapic, set spurious int vector
+#define SPURIOUS
+	wlap(LVSPUR, 1 << 8 | TRAP_SPUR);
 }
 
 #pragma textflag NOSPLIT
 void
-misc_init(void)
+proc_setup(void)
 {
-	tss_setup();
+	assert(th_cur == 0, "th_cur not zero", th_cur);
+	assert(sizeof(threads[0].tf) == TFSIZE, "weird size",
+	    sizeof(threads[0].tf));
+	threads[th_cur].valid = 1;
+	threads[th_cur].runnable = 1;
+	threads[th_cur].pmap = kpmap;
+
+	uint64 la = 0xfee00000ULL;
+	uint64 *pte = pgdir_walk((void *)la, 0);
+	if (pte && *pte & PTE_P)
+		runtime·pancake("lapic mem mapped?", (uint64)pte);
+
+	timer_setup();
+
+	// 8259a - mask all ints. skipping this step results in GPfault too?
+	outb(0x20 + 1, 0xff);
+	outb(0xa0 + 1, 0xff);
+
+	tss_setup(0);
+}
+
+#pragma textflag NOSPLIT
+void
+·Ap_setup(int64 myid)
+{
+	pmsg("apsetup for");
+	pnum(myid);
+	timer_setup();
+	tss_setup(myid);
 }
 
 #pragma textflag NOSPLIT
@@ -1892,6 +1951,13 @@ uint64
 runtime·Fnaddr(uint64 *fn)
 {
 	return *fn;
+}
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Fnaddri(uint64 *fn)
+{
+	return runtime·Fnaddr(fn);
 }
 
 #pragma textflag NOSPLIT

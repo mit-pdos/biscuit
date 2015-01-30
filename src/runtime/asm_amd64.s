@@ -289,8 +289,8 @@ h_ok:
 	// save m0 to g0->m
 	MOVQ	AX, g_m(CX)
 
-	CALL	intsetup(SB)
-	CALL	timersetup(SB)
+	CALL	int_setup(SB)
+	CALL	proc_setup(SB)
 
 	FINIT
 	MOVQ	CR4, AX
@@ -308,8 +308,6 @@ h_ok:
 
 	//CALL	pgtest(SB)
 	//CALL	mmap_test(SB)
-
-	CALL	misc_init(SB)
 
 	CLD				// convention is D is always left cleared
 	CALL	runtime·check(SB)

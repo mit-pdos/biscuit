@@ -27,10 +27,10 @@ var     GPFAULT   int = 13
 var     PGFAULT   int = 14
 
 // trap cannot do anything that may have side-effects on the runtime (like
-// fmt.Print, or use pancake!). the reason is that, by design, goroutines are
-// scheduled cooperatively in the runtime. trap interrupts the runtime though,
-// and then tries to execute more gocode, thus doing things the runtime did not
-// expect.
+// fmt.Print, or use pancake!). the reason is that goroutines are scheduled
+// cooperatively in the runtime. trap interrupts the runtime though, and then
+// tries to execute more gocode on the same M, thus doing things the runtime
+// did not expect.
 //go:nosplit
 func trapstub(tf *[23]int, pid int) {
 
@@ -545,7 +545,7 @@ func cpus_start() {
 	sidt      := 6
 	sapcnt    := 8
 	sstacks   := 9
-	ss[sap_entry] = runtime.Fnaddr(ap_entry)
+	ss[sap_entry] = runtime.Fnaddri(ap_entry)
 	// sgdt and sidt save 10 bytes
 	runtime.Sgdt(&ss[sgdt])
 	runtime.Sidt(&ss[sidt])
@@ -568,13 +568,20 @@ func cpus_start() {
 }
 
 //go:nosplit
-func ap_entry() {
-	runtime.Pnum(0x43110)
-	for i := 0; i < 1000000000; i++ {
+func ap_entry(myid int) {
+
+	runtime.Ap_setup(myid)
+	runtime.Pnum(0x600d)
+	runtime.Sti()
+	for {
 	}
-	runtime.Pnum(0xbad)
-	var p *int
-	*p = 0
+
+	//runtime.Pnum(0x43110)
+	//for i := 0; i < 1000000000; i++ {
+	//}
+	//runtime.Pnum(0xbad)
+	//var p *int
+	//*p = 0
 }
 
 func main() {
@@ -601,7 +608,7 @@ func main() {
 	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
-	sys_test()
+	//sys_test()
 	cpus_start()
 
 	fake_work()

@@ -16,6 +16,7 @@ func getrlimit(kind int32, limit unsafe.Pointer) int32
 func raise(sig int32)
 func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
 
+func Ap_setup(int)
 func Cli()
 func Install_traphandler(func(tf *[23]int, uc int))
 func Invlpg(unsafe.Pointer)
@@ -37,4 +38,5 @@ func Vtop(*[512]int) int
 
 func Newlines(int64)
 func Fnaddr(func()) int
+func Fnaddri(func(int)) int
 func Turdyprog()
