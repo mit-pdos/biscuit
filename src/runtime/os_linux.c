@@ -473,7 +473,8 @@ struct seg64_t {
 	uint8 dur[8];
 };
 
-#define	G       0x80
+//#define	G       0x80
+#define	G       0x00
 #define	D       0x40
 #define	L       0x20
 
