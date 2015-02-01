@@ -140,7 +140,7 @@ func sys_test_dump() {
 }
 
 func sys_test() {
-	fmt.Printf("add 'user' prog ")
+	fmt.Printf("add 'user' prog\n")
 
 	var tf [23]int
 	tfregs    := 16

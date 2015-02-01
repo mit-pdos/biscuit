@@ -357,8 +357,8 @@ void lcr3(uint64);
 void lcr4(uint64);
 void lidt(struct pdesc_t *);
 void ltr(uint64);
-void outb(uint32, uint32);
-void runtime·stackcheck(void);
+void outb(int64, int64);
+uint64 rcr0(void);
 uint64 rcr2(void);
 uint64 rflags(void);
 uint64 rrsp(void);
@@ -366,16 +366,15 @@ void sti(void);
 void tlbflush(void);
 void trapret(uint64 *, uint64);
 
+// src/runtime/os_linux.go
+void runtime·cls(void);
+void runtime·putch(int8);
+
 // this file
 void lap_eoi(void);
 
-#pragma textflag NOSPLIT
-static void
-putch(int8 x, int8 y, int8 c)
-{
-        volatile int16 *cons = (int16 *)0xb8000;
-        cons[y*80 + x] = 0x07 << 8 | c;
-}
+void runtime·stackcheck(void);
+void runtime·Invlpg(void *);
 
 // XXX have this hack because panic prints many lines which makes the output
 // wrap around and overwrite the first lines of the panic (the most important
@@ -391,42 +390,19 @@ runtime·Newlines(int64 set)
 
 #pragma textflag NOSPLIT
 void
-runtime·doc(int64 mark)
-{
-        static int8 x;
-        static int8 y;
-
-	if (mark == '\n') {
-		if (newlines) {
-			x = 80;
-		}
-	} else
-		putch(x++, y, mark & 0xff);
-
-        if (x >= 79) {
-                x = 0;
-                y++;
-        }
-
-	if (y >= 25)
-		y = 0;
-}
-
-#pragma textflag NOSPLIT
-void
 pnum(uint64 n)
 {
 	uint64 nn = (uint64)n;
 	int64 i;
 
-	runtime·doc(' ');
+	runtime·putch(' ');
 	for (i = 60; i >= 0; i -= 4) {
 		uint64 cn = (nn >> i) & 0xf;
 
 		if (cn <= 9)
-			runtime·doc('0' + cn);
+			runtime·putch('0' + cn);
 		else
-			runtime·doc('A' + cn - 10);
+			runtime·putch('A' + cn - 10);
 	}
 }
 
@@ -444,10 +420,10 @@ runtime·pnum(uint64 n)
 void
 pmsg(int8 *msg)
 {
-	runtime·doc(' ');
+	runtime·putch(' ');
 	if (msg)
 		while (*msg)
-			runtime·doc(*msg++);
+			runtime·putch(*msg++);
 }
 
 #pragma textflag NOSPLIT
@@ -1241,7 +1217,7 @@ hack_write(int64 fd, const void *buf, uint32 c)
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
 	while(c--)
-		runtime·doc(*p++);
+		runtime·putch(*p++);
 
 	return ret;
 }
@@ -1925,15 +1901,6 @@ hack_exit(int32 code)
 	pmsg("exit with code");
 	pnum(code);
 	while(1);
-}
-
-#pragma textflag NOSPLIT
-void
-cls(void)
-{
-	int32 i;
-	for (i = 0; i < 1974; i++)
-		runtime·doc(' ');
 }
 
 // exported functions

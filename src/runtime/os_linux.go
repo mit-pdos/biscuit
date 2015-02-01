@@ -40,3 +40,75 @@ func Newlines(int64)
 func Fnaddr(func()) int
 func Fnaddri(func(int)) int
 func Turdyprog()
+
+func inb(int) int
+func outb(int, int)
+
+//go:nosplit
+func sc_setup() {
+	com1  := 0x3f8
+	data  := 0
+	intr  := 1
+	ififo := 2
+	lctl  := 3
+	mctl  := 4
+
+	outb(com1 + intr, 0x00)
+	outb(com1 + lctl, 0x80)
+	outb(com1 + data, 0x03)
+	outb(com1 + intr, 0x00)
+	outb(com1 + lctl, 0x03)
+	outb(com1 + ififo, 0xc7)
+	outb(com1 + mctl, 0x0b)
+}
+
+//go:nosplit
+func sc_put(c int8) {
+	com1 := 0x3f8
+	lstatus := 5
+	for inb(com1 + lstatus) & 0x20 == 0 {
+	}
+	outb(com1, int(c))
+}
+
+type put_t struct {
+	vx	int
+	vy	int
+}
+
+var put put_t
+
+//go:nosplit
+func vga_put(c int8) {
+	if c != '\n' {
+		p := (*[1999]int16)(unsafe.Pointer(uintptr(0xb8000)))
+		v := 0x0700 | int16(c)
+		p[put.vy * 80 + put.vx] = v
+		put.vx++
+	} else {
+		put.vx = 0
+		put.vy++
+	}
+	if put.vx >= 79 {
+		put.vx = 0
+		put.vy++
+	}
+
+	if put.vy >= 25 {
+		put.vy = 0
+	}
+}
+
+//go:nosplit
+func putch(c int8) {
+	vga_put(c)
+	sc_put(c)
+}
+
+//go:nosplit
+func cls() {
+	for i:= 0; i < 1974; i++ {
+		vga_put(' ')
+	}
+	sc_put('\n')
+}

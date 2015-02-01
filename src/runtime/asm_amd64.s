@@ -192,15 +192,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	MOVL	DX, runtime·cpuid_edx(SB)
 h_nocpuinfo:
 
-	CALL	cls(SB)
-	//PUSHQ	$0x20
-	//CALL	runtime·doc(SB)
-	//POPQ	AX
-
-	//PUSHQ	$0x39
-	//CALL	runtime·doc(SB)
-	//CALL	runtime·doc(SB)
-	//POPQ	AX
+	CALL	runtime·cls(SB)
 
 	// if there is an _cgo_init, call it.
 	//MOVQ	_cgo_init(SB), AX
@@ -298,8 +290,8 @@ h_ok:
 	MOVQ	CR0, AX
 	PUSHQ	AX
 	CALL	fpuinit(SB)
-	POPQ	AX
-	POPQ	AX
+
+	CALL	runtime·sc_setup(SB)
 
 	//MOVQ	CR0, AX
 	//PUSHQ	AX
@@ -410,12 +402,31 @@ TEXT wrmsr(SB), NOSPLIT, $0-16
 	WRMSR
 	RET
 
-//void outb(int32 addr, int32 val)
-TEXT outb(SB), NOSPLIT, $0-8
+TEXT runtime·outb(SB), NOSPLIT, $0-0
+	JMP outb(SB)
+	
+//void outb(int64 port, int64 val)
+TEXT outb(SB), NOSPLIT, $0-16
 	MOVL	reg+0(FP), DX
-	MOVL	val+4(FP), AX
+	MOVL	val+8(FP), AX
 	// outb	%al, (%dx)
 	BYTE	$0xee
+	RET
+
+TEXT runtime·inb(SB), NOSPLIT, $0-0
+	JMP	inb(SB)
+
+//int64 inb(int64 port)
+TEXT inb(SB), NOSPLIT, $0-16
+	MOVL	reg+0(FP), DX
+	// inb	(%dx), %al
+	BYTE	$0xec
+	// movzbq %al, %rax
+	BYTE $0x48
+	BYTE $0x0f
+	BYTE $0xb6
+	BYTE $0xc0
+	MOVQ	AX, ret+8(FP)
 	RET
 
 TEXT rflags(SB), NOSPLIT, $0-8

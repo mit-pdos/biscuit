@@ -102,6 +102,9 @@ qemu-gdb: d.img
 	qemu-system-x86_64 $(QOPTS) -S -s -hda d.img
 
 gqemu: go.img
+	qemu-system-x86_64 $(QOPTS) -nographic -hda go.img
+
+gqemux: go.img
 	qemu-system-x86_64 $(QOPTS) -hda go.img
 
 gqemu-gdb: go.img
