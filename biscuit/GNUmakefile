@@ -108,6 +108,9 @@ gqemux: go.img
 	qemu-system-x86_64 $(QOPTS) -hda go.img
 
 gqemu-gdb: go.img
-	qemu-system-x86_64 $(QOPTS) -S -s -hda go.img
+	qemu-system-x86_64 $(QOPTS) -nographic -S -s -hda go.img
+
+gqemu-gdbx: go.img
+	qemu-system-x86_64 $(QOPTS) -nographic -S -s -hda go.img
 
 .PHONY: clean qemu gqemu
