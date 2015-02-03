@@ -18,7 +18,7 @@
 // would pass 4th arg in CX, not R10.
 
 // XXX using a non-zero frame size causes building cmd/go to never finish or
-// tests to fail. why?
+// tests to fail. because stack gets screwed up and sleep(huge num) is called.
 TEXT	·Syscall(SB),NOSPLIT,$0-56
 	//CALL	runtime·entersyscall(SB)
 	MOVQ	runtime·hackmode(SB), DI

@@ -284,11 +284,6 @@ h_ok:
 	CALL	int_setup(SB)
 	CALL	proc_setup(SB)
 
-	FINIT
-	MOVQ	CR4, AX
-	PUSHQ	AX
-	MOVQ	CR0, AX
-	PUSHQ	AX
 	CALL	fpuinit(SB)
 
 	CALL	runtime·sc_setup(SB)
@@ -334,8 +329,22 @@ h_ok:
 	RET
 
 
+TEXT finit(SB), NOSPLIT, $0-0
+	FINIT
+	RET
+
+TEXT rcr0(SB), NOSPLIT, $0-8
+	MOVQ	CR0, AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
 TEXT rcr2(SB), NOSPLIT, $0-8
 	MOVQ	CR2, AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
+TEXT rcr4(SB), NOSPLIT, $0-8
+	MOVQ	CR4, AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
@@ -464,6 +473,26 @@ TEXT ·Sidt(SB), NOSPLIT, $0-8
 	BYTE	$0x01
 	BYTE	$0x08
 	RET
+
+TEXT gtr(SB), NOSPLIT, $0-8
+	// str	%rax
+	BYTE $0x48
+	BYTE $0x0f
+	BYTE $0x00
+	BYTE $0xc8
+	MOVQ	AX, ret+0(FP)
+	RET
+
+TEXT htpause(SB), NOSPLIT, $0-0
+	PAUSE
+	RET
+
+TEXT cpu_halt(SB), NOSPLIT, $0-8
+	MOVQ	sp+0(FP), SP
+	STI
+hltagain:
+	HLT
+	JMP	hltagain
 
 #define TRAP_TIMER      $32
 TEXT hack_yield(SB), NOSPLIT, $0-0
@@ -615,9 +644,6 @@ TEXT trapret(SB), NOSPLIT, $0-16
 	// iretq
 	BYTE	$0x48
 	BYTE	$0xcf
-	// jmp self
-	BYTE	$0xeb
-	BYTE	$0xfe
 
 /*
  *  go-routine

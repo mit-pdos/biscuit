@@ -36,7 +36,7 @@ func trapstub(tf *[23]int, pid int) {
 
 	tfregs    := 16
 	tf_trapno := tfregs
-	//tf_rsp    := tfregs + 5
+	tf_rsp    := tfregs + 5
 	tf_rip    := tfregs + 2
 	//tf_rflags   := tfregs + 4
 	//fl_intf     := 1 << 9
@@ -57,6 +57,8 @@ func trapstub(tf *[23]int, pid int) {
 		rip := tf[tf_rip]
 		runtime.Pnum(rip)
 		runtime.Pnum(0x42)
+		runtime.Pnum(lap_id())
+		runtime.Stackdump(tf[tf_rsp])
 		for {
 		}
 	}
@@ -69,15 +71,14 @@ func trapstub(tf *[23]int, pid int) {
 	}
 	trapstore[tshead].trapno = trapno
 	trapstore[tshead].pid = pid
-	tcur := tshead
+	if trapno == PGFAULT {
+		trapstore[tshead].faultaddr = runtime.Rcr2()
+		trapstore[tshead].rip = tf[tf_rip]
+	}
 	tshead = tsnext(tshead)
 
 	switch trapno {
 	case SYSCALL, PGFAULT:
-		if trapno == PGFAULT {
-			trapstore[tcur].faultaddr = runtime.Rcr2()
-			trapstore[tcur].rip = tf[tf_rip]
-		}
 		// yield until the syscall/fault is handled
 		runtime.Procyield()
 	case TIMER:
@@ -568,20 +569,18 @@ func cpus_start() {
 }
 
 //go:nosplit
+func lap_id() int {
+	lapaddr := (*[1024]int32)(unsafe.Pointer(uintptr(0xfee00000)))
+	return int(lapaddr[0x20/4] >> 24)
+}
+
+//go:nosplit
 func ap_entry(myid int) {
 
+	// ap ids start from 1
 	runtime.Ap_setup(myid)
-	runtime.Pnum(0x600d)
-	runtime.Sti()
-	for {
-	}
-
-	//runtime.Pnum(0x43110)
-	//for i := 0; i < 1000000000; i++ {
-	//}
-	//runtime.Pnum(0xbad)
-	//var p *int
-	//*p = 0
+	// ints are still cleared
+	runtime.Procyield()
 }
 
 func main() {
@@ -608,8 +607,8 @@ func main() {
 	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
-	//sys_test()
 	cpus_start()
+	sys_test()
 
 	fake_work()
 }

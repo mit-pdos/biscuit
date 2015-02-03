@@ -40,6 +40,7 @@ func Newlines(int64)
 func Fnaddr(func()) int
 func Fnaddri(func(int)) int
 func Turdyprog()
+func Stackdump(int)
 
 func inb(int) int
 func outb(int, int)
@@ -110,5 +111,8 @@ func cls() {
 	for i:= 0; i < 1974; i++ {
 		vga_put(' ')
 	}
+	sc_put('c')
+	sc_put('l')
+	sc_put('s')
 	sc_put('\n')
 }

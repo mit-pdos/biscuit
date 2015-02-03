@@ -340,9 +340,6 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	TESTQ	DI, DI
 	JZ	futex_skip
 	JMP	hack_futex(SB)
-	// jmp self
-	BYTE	0xeb
-	BYTE	0xfe
 futex_skip:
 	MOVQ	addr+0(FP), DI
 	MOVL	op+8(FP), SI

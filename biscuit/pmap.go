@@ -17,6 +17,7 @@ const PTE_FLAGS int = 0x1f
 
 const VREC      int = 0x42
 const VDIRECT   int = 0x44
+const VEND      int = 0x50
 
 // tracks all pages allocated by go internally by the kernel such as pmap pages
 // allocated by go (not the bootloader/runtime)
@@ -114,6 +115,9 @@ func dmap_init() {
 		pdpt[i] = i*PGSIZE | PTE_P | PTE_W | PTE_PS
 	}
 
+	if *dpte & PTE_P != 0 {
+		panic("dmap slot taken")
+	}
 	*dpte = p_pdpt | PTE_P | PTE_W
 }
 
@@ -147,6 +151,13 @@ func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
     ptracker map[int]*[512]int) *int {
 	vn := uint(uintptr(v))
 	l4b, pdpb, pdb, ptb := pgbits(vn)
+	if l4b >= uint(VREC) && l4b <= uint(VEND) {
+		panic("map in special slots")
+	}
+
+	if v & PGMASK == 0 {
+		panic("mapping page 0");
+	}
 
 	instpg := func(pg *[512]int, idx uint) int {
 		_, p_np := pg_new(ptracker)
