@@ -92,7 +92,7 @@ enum {
 
 	// The stack guard is a pointer this many bytes above the
 	// bottom of the stack.
-	StackGuard = 512 + StackSystem,
+	StackGuard = 768 + StackSystem,
 
 	// After a stack split check the SP is allowed to be this
 	// many bytes below the stack guard.  This saves an instruction
