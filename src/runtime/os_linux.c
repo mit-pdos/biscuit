@@ -1366,7 +1366,7 @@ struct cpu_t {
 	int32 num;
 };
 
-#define NTHREADS        5
+#define NTHREADS        25
 static struct thread_t threads[NTHREADS];
 // index is lapic id
 static struct cpu_t cpus[MAXCPUS];
