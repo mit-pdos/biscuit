@@ -1350,6 +1350,7 @@ struct thread_t {
 #define ST_WAITING   3	// waiting for a trap to be serviced
 #define ST_SLEEPING  4
 #define ST_NEEDSLEEP 5	// sleeping, but shouldn't be woken up yet
+#define ST_SKIPSLEEP 6
 	uint64 sleepfor;
 	uint64 sleepret;
 #define ETIMEDOUT   110
@@ -1560,15 +1561,10 @@ runtime·Procrunnable(int64 pid)
 	sti();
 }
 
-struct spinlock_t futexlock;
-
-// must take futexlock
 #pragma textflag NOSPLIT
 void
 wakeup(void)
 {
-	splock(&futexlock);
-
 	// XXX convert CPU freq to ns
 	durnanotime += TIMER_QUANTUM / 3;
 
@@ -1584,8 +1580,6 @@ wakeup(void)
 			threads[i].sleepret = -ETIMEDOUT;
 		}
 	}
-
-	spunlock(&futexlock);
 }
 
 #pragma textflag NOSPLIT
@@ -1990,6 +1984,8 @@ struct timespec {
 	int64 tv_nsec;
 };
 
+struct spinlock_t futexlock;
+
 // int64 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
 #pragma textflag NOSPLIT
@@ -2050,6 +2046,8 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			if (threads[i].futaddr == (uint64)uaddr) {
 				if (threads[i].status == ST_SLEEPING)
 					threads[i].status = ST_RUNNABLE;
+				if (threads[i].status == ST_NEEDSLEEP)
+					threads[i].status = ST_SKIPSLEEP;
 				threads[i].sleepfor = 0;
 				threads[i].futaddr = 0;
 				threads[i].sleepret = 0;
