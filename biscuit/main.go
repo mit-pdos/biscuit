@@ -63,6 +63,14 @@ func trapstub(tf *[23]int, pid int) {
 		}
 	}
 
+	// must switch to kernel pmap before PGFAULT or any trap that may
+	// terminate the application is posted, to prevent a race where the
+	// gorouting handling page faults terminates the application, causing
+	// its pmap to be reclaimed while this function/yieldy are using it.
+	if trapno == PGFAULT {
+		runtime.Lcr3(runtime.Kpmap_p())
+	}
+
 	// add to trap circular buffer for actual trap handler
 	if tsnext(tshead) == tstail {
 		runtime.Pnum(0xbad)
@@ -84,8 +92,6 @@ func trapstub(tf *[23]int, pid int) {
 	case TIMER:
 		// timer interrupts are not passed yet
 		runtime.Pnum(0x41)
-		for {
-		}
 	default:
 		runtime.Pnum(trapno)
 		runtime.Pnum(tf[tf_rip])
@@ -219,13 +225,9 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 	p.pages[p_pg] = pg
 
-	if p.pmap == nil {
-		panic("null pmap")
-	}
-
 	pte := pmap_walk(p.pmap, va, true, perms, p.pages)
 	ninval := false
-	if *pte & PTE_P != 0 {
+	if pte != nil && *pte & PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
 		}
@@ -235,6 +237,15 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 	if ninval {
 		dur := unsafe.Pointer(uintptr(va))
 		runtime.Invlpg(dur)
+	}
+}
+
+func (p *proc_t) page_remove(va int, pg *[512]int) {
+	pte := pmap_walk(p.pmap, va, false, 0, nil)
+	if pte != nil {
+		p_pa := *pte & PTE_ADDR
+		delete(p.pages, p_pa)
+		*pte = 0
 	}
 }
 

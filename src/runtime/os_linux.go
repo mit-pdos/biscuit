@@ -21,6 +21,8 @@ func Cli()
 func Install_traphandler(func(tf *[23]int, uc int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
+func Kpmap_p() int
+func Lcr3(int)
 func Memmove(unsafe.Pointer, unsafe.Pointer, int)
 func Outb(int32, int32)
 func Pnum(int)

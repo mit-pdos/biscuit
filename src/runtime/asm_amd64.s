@@ -483,6 +483,13 @@ TEXT gtr(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
+TEXT getret(SB), NOSPLIT, $0-16
+	MOVQ	ptr+0(FP), AX
+	ADDQ	$-8, AX
+	MOVQ	(AX), AX
+	MOVQ	AX, ret+8(FP)
+	RET
+
 TEXT htpause(SB), NOSPLIT, $0-0
 	PAUSE
 	RET
