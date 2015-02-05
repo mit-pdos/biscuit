@@ -112,7 +112,7 @@ func dmap_init() {
 	allpages[p_pdpt] = pdpt
 
 	for i := range pdpt {
-		pdpt[i] = i*PGSIZE | PTE_P | PTE_W | PTE_PS
+		pdpt[i] = i*(1 << 30) | PTE_P | PTE_W | PTE_PS
 	}
 
 	if *dpte & PTE_P != 0 {
