@@ -21,6 +21,7 @@ const EFAULT       int = 14
 const ENOSYS       int = 38
 
 const SYS_WRITE    int = 1
+const SYS_EXIT     int = 60
 
 func syscall(pid int, tf *[TFSIZE]int) {
 
@@ -33,13 +34,19 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	//a5 := tf[TF_R8]
 
 	ret := -ENOSYS
+	dead := false
 	switch trap {
 	case SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
+	case SYS_EXIT:
+		sys_exit(p, a1);
+		dead = true
 	}
 
 	tf[TF_RAX] = ret
-	runtime.Procrunnable(pid, tf)
+	if !dead {
+		runtime.Procrunnable(pid, tf)
+	}
 }
 
 func sys_write(proc *proc_t, fd int, bufp int, c int) int {
@@ -80,6 +87,11 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 	}
 	runtime.Putcha('\n', utext)
 	return c
+}
+
+func sys_exit(proc *proc_t, status int) {
+	fmt.Printf("%v exited\n", proc.Name())
+	proc_kill(proc.pid)
 }
 
 type elf_t struct {
@@ -232,7 +244,7 @@ func sys_test() {
 
 	proc := proc_new("test")
 
-	elf := allbins["user/hello"]
+	elf := allbins["user/fault"]
 
 	stack, p_stack := pg_new(proc.pages)
 	stackva := 0xf4000000

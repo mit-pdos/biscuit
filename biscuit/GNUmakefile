@@ -14,7 +14,7 @@ KSRC := main.go syscall.go pmap.go
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
-UPROGS := hello
+UPROGS := hello fault
 UPROGS := $(patsubst %,user/%,$(UPROGS))
 
 BGOS := $(patsubst %,%.bgo,$(UPROGS)) mpentry.bin.bgo

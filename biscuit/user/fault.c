@@ -8,6 +8,11 @@ int main() {
 		for (j = 0; j < 100000000; j++)
 			asm volatile("":::"memory");
 	}
-	exit(0);
+
+	pmsg("faulting!");
+
+	int *p = (int *)0;
+	*p = 0;
+
 	return 0;
 }
