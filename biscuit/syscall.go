@@ -95,7 +95,7 @@ func (e *elf_t) entry() int {
 	return readn(*e.data, ELF_ADDR, e_entry)
 }
 
-func elf_sload(p *proc_t, hdr *elf_phdr) {
+func elf_segload(p *proc_t, hdr *elf_phdr) {
 	perms := PTE_U
 	//PF_X := 1
 	PF_W := 2
@@ -111,10 +111,11 @@ func elf_sload(p *proc_t, hdr *elf_phdr) {
 		pg, p_pg := pg_new(p.pages)
 		if len(hdr.sdata) > 0 {
 			dst := unsafe.Pointer(pg)
-			src := unsafe.Pointer(&hdr.sdata[0])
+			src := unsafe.Pointer(&hdr.sdata[i])
 			len := PGSIZE
-			if rsz - i < len {
-				len = rsz - i
+			left := rsz - i
+			if len > left {
+				len = left
 			}
 			runtime.Memmove(dst, src, len)
 		}
@@ -127,7 +128,7 @@ func elf_load(p *proc_t, e *elf_t) {
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
 		if hdr.etype == PT_LOAD && hdr.vaddr >= 0xf1000000 {
-			elf_sload(p, &hdr)
+			elf_segload(p, &hdr)
 		}
 	}
 }
