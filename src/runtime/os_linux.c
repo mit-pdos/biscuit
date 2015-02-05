@@ -2185,6 +2185,7 @@ runtime·Prockill(int64 pid)
 	splock(&threadlock);
 
 	t = thread_find(pid);
+	assert(t->status == ST_WAITING, "user proc not waiting?", t->status);
 	t->status = ST_INVALID;
 	t->pid = 0;
 

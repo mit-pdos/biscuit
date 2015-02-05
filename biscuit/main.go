@@ -58,9 +58,9 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	// terminate the application is posted, to prevent a race where the
 	// gorouting handling page faults terminates the application, causing
 	// its pmap to be reclaimed while this function/yieldy are using it.
-	if trapno == PGFAULT {
-		runtime.Lcr3(runtime.Kpmap_p())
-	}
+	//if trapno == PGFAULT {
+	//	runtime.Lcr3(runtime.Kpmap_p())
+	//}
 
 	// add to trap circular buffer for actual trap handler
 	if tsnext(tshead) == tstail {
@@ -230,6 +230,8 @@ func proc_kill(pid int) {
 		pancake("no pid", pid)
 	}
 	runtime.Prockill(pid)
+	// XXX
+	fmt.Printf("not cleaning up\n")
 
 	ms := runtime.MemStats{}
 	runtime.ReadMemStats(&ms)
