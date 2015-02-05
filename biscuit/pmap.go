@@ -152,10 +152,10 @@ func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	vn := uint(uintptr(v))
 	l4b, pdpb, pdb, ptb := pgbits(vn)
 	if l4b >= uint(VREC) && l4b <= uint(VEND) {
-		panic("map in special slots")
+		panic(fmt.Sprintf("map in special slots: %#x", l4b))
 	}
 
-	if v & PGMASK == 0 {
+	if v & PGMASK == 0 && create {
 		panic("mapping page 0");
 	}
 
@@ -264,4 +264,16 @@ func kmalloc(va int, perms int) {
 		panic(fmt.Sprintf("page already mapped %#x", va))
 	}
 	*pte = p_pg | PTE_P | perms
+}
+
+func is_mapped(pmap *[512]int, va int, size int) bool {
+	p := rounddown(va, PGSIZE)
+	end := roundup(va + size, PGSIZE)
+	for ; p < end; p += PGSIZE {
+		pte := pmap_walk(pmap, p, false, 0, nil)
+		if pte == nil || *pte & PTE_P == 0 {
+			return false
+		}
+	}
+	return true
 }

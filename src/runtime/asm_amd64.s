@@ -358,6 +358,11 @@ TEXT lcr3(SB), NOSPLIT, $0-8
 	MOVQ	AX, CR3
 	RET
 
+TEXT rcr3(SB), NOSPLIT, $0-8
+	MOVQ	CR3, AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
 TEXT runtime·Invlpg(SB), NOSPLIT, $0-8
 	MOVQ	va+0(FP), AX
 	INVLPG	(AX)

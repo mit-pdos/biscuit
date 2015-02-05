@@ -10,7 +10,7 @@ type trapstore_t struct {
 	trapno    int
 	pid       int
 	faultaddr int
-	rip       int
+	tf        [TFSIZE]int
 }
 const ntrapst   int = 64
 var trapstore [ntrapst]trapstore_t
@@ -32,16 +32,11 @@ var     PGFAULT   int = 14
 // tries to execute more gocode on the same M, thus doing things the runtime
 // did not expect.
 //go:nosplit
-func trapstub(tf *[23]int, pid int) {
+func trapstub(tf *[TFSIZE]int, pid int) {
 
-	tfregs    := 16
-	tf_trapno := tfregs
-	tf_rsp    := tfregs + 5
-	tf_rip    := tfregs + 2
-	//tf_rflags   := tfregs + 4
 	//fl_intf     := 1 << 9
 
-	trapno := tf[tf_trapno]
+	trapno := tf[TF_TRAP]
 
 	// kernel faults are fatal errors for now, but they could be handled by
 	// trap & c.
@@ -50,15 +45,11 @@ func trapstub(tf *[23]int, pid int) {
 		if trapno == PGFAULT {
 			runtime.Pnum(runtime.Rcr2())
 		}
-		if trapno == GPFAULT {
-			tf_rdx := 12
-			runtime.Pnum(tf[tf_rdx])
-		}
-		rip := tf[tf_rip]
+		rip := tf[TF_RIP]
 		runtime.Pnum(rip)
 		runtime.Pnum(0x42)
 		runtime.Pnum(lap_id())
-		runtime.Stackdump(tf[tf_rsp])
+		runtime.Stackdump(tf[TF_RSP])
 		for {
 		}
 	}
@@ -79,9 +70,9 @@ func trapstub(tf *[23]int, pid int) {
 	}
 	trapstore[tshead].trapno = trapno
 	trapstore[tshead].pid = pid
+	trapstore[tshead].tf = *tf
 	if trapno == PGFAULT {
 		trapstore[tshead].faultaddr = runtime.Rcr2()
-		trapstore[tshead].rip = tf[tf_rip]
 	}
 	tshead = tsnext(tshead)
 
@@ -94,14 +85,14 @@ func trapstub(tf *[23]int, pid int) {
 		runtime.Pnum(0x41)
 	default:
 		runtime.Pnum(trapno)
-		runtime.Pnum(tf[tf_rip])
+		runtime.Pnum(tf[TF_RIP])
 		runtime.Pnum(0xbadbabe)
 		for {
 		}
 	}
 }
 
-func trap(handlers map[int]func(...interface{})) {
+func trap(handlers map[int]func(*trapstore_t)) {
 	for {
 		for tstail == tshead {
 			// no work
@@ -114,52 +105,36 @@ func trap(handlers map[int]func(...interface{})) {
 		tstail = tsnext(tstail)
 
 		if h, ok := handlers[trapno]; ok {
-			args := []interface{}{uc}
-			if trapno == PGFAULT {
-				args = append(args, tcur.faultaddr)
-				args = append(args, tcur.rip)
-			}
-			go h(args...)
+			newts := trapstore_t{}
+			newts = *tcur
+			go h(&newts)
 			continue
 		}
 		fmt.Printf("no handler for trap %v, pid %x\n", trapno, uc)
 	}
 }
 
-func trap_timer(p ...interface{}) {
+func trap_timer(ts *trapstore_t) {
 	fmt.Printf("Timer!")
 }
 
-func trap_syscall(p ...interface{}) {
-	pid, ok   := p[0].(int)
-	if !ok {
-		pancake("weird pid")
-	}
-	proc, ok := allprocs[pid]
+func trap_syscall(ts *trapstore_t) {
+	pid  := ts.pid
+	_, ok := allprocs[pid]
 	if !ok {
 		pancake("no such pid", pid)
 	}
-	fmt.Printf("syscall from %v. rescheduling...\n", proc.Name())
-	runtime.Procrunnable(pid)
+	syscall(pid, &ts.tf)
 }
 
-func trap_pgfault(p ...interface{}) {
-	pid, ok := p[0].(int)
-	if !ok {
-		pancake("weird pid")
-	}
-	fa, ok := p[1].(int)
-	if !ok {
-		pancake("bad fault address")
-	}
-	rip, ok := p[2].(int)
-	if !ok {
-		pancake("bad rip")
-	}
+func trap_pgfault(ts *trapstore_t) {
+	pid := ts.pid
+	fa  := ts.faultaddr
 	proc, ok := allprocs[pid]
 	if !ok {
 		pancake("no such pid", pid)
 	}
+	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.Name(), fa, rip)
 	proc_kill(pid)
@@ -267,7 +242,7 @@ func proc_kill(pid int) {
 	fmt.Printf("reclaimed %vK\n", (before-after)/1024)
 }
 
-func ismapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
+func physmapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
 	for i, c := range pmap {
 		if c & PTE_P == 0 {
 			continue
@@ -285,7 +260,7 @@ func ismapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
 		}
 		nextp := pe2pg(c)
 		nexta := acc << 9 | i
-		mapped, va := ismapped1(nextp, phys, depth - 1, nexta)
+		mapped, va := physmapped1(nextp, phys, depth - 1, nexta)
 		if mapped {
 			return true, va
 		}
@@ -293,12 +268,12 @@ func ismapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
 	return false, 0
 }
 
-func ismapped(pmap *[512]int, phys int) (bool, int) {
-	return ismapped1(pmap, phys, 4, 0)
+func physmapped(pmap *[512]int, phys int) (bool, int) {
+	return physmapped1(pmap, phys, 4, 0)
 }
 
 func assert_no_phys(pmap *[512]int, phys int) {
-	mapped, va := ismapped(pmap, phys)
+	mapped, va := physmapped(pmap, phys)
 	if mapped {
 		panic(fmt.Sprintf("%v is mapped at page %#x", phys, va))
 	}
@@ -604,14 +579,14 @@ func main() {
 	dmap_init()
 	runtime.Install_traphandler(trapstub)
 
-	trap_diex := func(c int) func(...interface{}) {
-		return func(...interface{}) {
+	trap_diex := func(c int) func(*trapstore_t) {
+		return func(ts *trapstore_t) {
 			fmt.Printf("[death on trap %v]\n", c)
 			pancake("perished")
 		}
 	}
 
-	handlers := map[int]func(...interface{}) {
+	handlers := map[int]func(*trapstore_t) {
 	     GPFAULT: trap_diex(GPFAULT),
 	     PGFAULT: trap_pgfault,
 	     TIMER: trap_timer,

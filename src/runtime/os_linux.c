@@ -361,6 +361,7 @@ void ltr(uint64);
 void outb(int64, int64);
 uint64 rcr0(void);
 uint64 rcr2(void);
+uint64 rcr3(void);
 uint64 rcr4(void);
 uint64 rflags(void);
 uint64 rrsp(void);
@@ -1158,7 +1159,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	if (v == nil)
 		v = find_empty(sz);
 
-	//pmsg("map");
+	//pmsg("map\n");
 	//pnum((uint64)v);
 	//pnum(sz);
 	//pmsg("\n");
@@ -1546,8 +1547,29 @@ thread_find(int64 uc)
 }
 
 #pragma textflag NOSPLIT
+static uint64 *
+pte_mapped(void *va)
+{
+	uint64 *pte = pgdir_walk(va, 0);
+	if (!pte || (*pte & PTE_P) == 0)
+		return nil;
+	return pte;
+}
+
+#pragma textflag NOSPLIT
+static void
+assert_mapped(void *va, int64 size, int8 *msg)
+{
+	byte *p = (byte *)ROUNDDOWN((uint64)va, PGSIZE);
+	byte *end = (byte *)ROUNDUP((uint64)va + size, PGSIZE);
+	for (; p < end; p += PGSIZE)
+		if (pte_mapped(p) == nil)
+			runtime·pancake(msg, (uint64)va);
+}
+
+#pragma textflag NOSPLIT
 void
-runtime·Procrunnable(int64 pid)
+runtime·Procrunnable(int64 pid, uint64 *tf)
 {
 	struct thread_t *t;
 
@@ -1555,8 +1577,13 @@ runtime·Procrunnable(int64 pid)
 	splock(&threadlock);
 	t = thread_find(pid);
 	assert(t, "pid not found", pid);
+	assert(t->status == ST_WAITING, "thread not waiting", t->status);
 
 	t->status = ST_RUNNABLE;
+
+	assert_mapped(tf, TFSIZE, "bad tf");
+	runtime·memmove(t->tf, tf, TFSIZE);
+
 	spunlock(&threadlock);
 	sti();
 }
@@ -1961,24 +1988,6 @@ hack_usleep(uint32 delay)
 	runtime·deray(delay);
 }
 
-#pragma textflag NOSPLIT
-static uint64 *
-pte_mapped(void *va)
-{
-	uint64 *pte = pgdir_walk(va, 0);
-	if (!pte || (*pte & PTE_P) == 0)
-		return nil;
-	return pte;
-}
-
-#pragma textflag NOSPLIT
-static void
-assert_mapped(void *va, int8 *msg)
-{
-	if (pte_mapped(va) == nil)
-		runtime·pancake(msg, (uint64)va);
-}
-
 struct timespec {
 	int64 tv_sec;
 	int64 tv_nsec;
@@ -2001,7 +2010,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	switch (op) {
 	case FUTEX_WAIT:
 	{
-		assert_mapped(uaddr, "futex uaddr");
+		assert_mapped(uaddr, 8, "futex uaddr");
 
 		cli();
 		splock(&futexlock);
@@ -2014,7 +2023,8 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			curthread->status = ST_NEEDSLEEP;
 			curthread->sleepfor = -1;
 			if (timeout) {
-				assert_mapped(timeout, "futex timeout");
+				assert_mapped(timeout, sizeof(struct timespec),
+				    "futex timeout");
 				int64 t = timeout->tv_sec * 1000000000;
 				t += timeout->tv_nsec;
 				curthread->sleepfor = hack_nanotime() + t;
@@ -2121,6 +2131,13 @@ void
 runtime·Lcr3(uint64 pmap)
 {
 	lcr3(pmap);
+}
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Rcr3(void)
+{
+	return rcr3();
 }
 
 #pragma textflag NOSPLIT

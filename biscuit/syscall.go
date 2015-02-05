@@ -4,6 +4,84 @@ import "fmt"
 import "runtime"
 import "unsafe"
 
+const TFSIZE       int = 23
+const TFREGS       int = 16
+const TF_R8        int = 8
+const TF_RSI       int = 10
+const TF_RDI       int = 11
+const TF_RDX       int = 12
+const TF_RCX       int = 13
+const TF_RAX       int = 15
+const TF_TRAP      int = TFREGS
+const TF_RIP       int = TFREGS + 2
+const TF_RSP       int = TFREGS + 5
+const TF_RFLAGS    int = TFREGS + 4
+
+const EFAULT       int = 14
+const ENOSYS       int = 38
+
+const SYS_WRITE    int = 1
+
+func syscall(pid int, tf *[TFSIZE]int) {
+
+	p := allprocs[pid]
+	trap := tf[TF_RAX]
+	a1 := tf[TF_RDI]
+	a2 := tf[TF_RSI]
+	a3 := tf[TF_RDX]
+	//a4 := tf[TF_RCX]
+	//a5 := tf[TF_R8]
+
+	ret := -ENOSYS
+	switch trap {
+	case SYS_WRITE:
+		ret = sys_write(p, a1, a2, a3)
+	}
+
+	tf[TF_RAX] = ret
+	runtime.Procrunnable(pid, tf)
+}
+
+func sys_write(proc *proc_t, fd int, bufp int, c int) int {
+
+	if c == 0 {
+		return 0
+	}
+
+	if !is_mapped(proc.pmap, bufp, c) {
+		fmt.Printf("%#x not mapped\n", bufp)
+		return -EFAULT
+	}
+
+	if fd != 1 && fd != 2 {
+		panic("no imp")
+	}
+
+	vtop := func(va int) int {
+		pte := pmap_walk(proc.pmap, va, false, 0, nil)
+		ret := *pte & PTE_ADDR
+		ret += va & PGOFFSET
+		return ret
+	}
+
+	utext := int8(0x17)
+	cnt := 0
+	for ; cnt < c; {
+		p_bufp := vtop(bufp + cnt)
+		p := dmap8(p_bufp)
+		left := c - cnt
+		if len(p) > left {
+			p = p[:left]
+		}
+		for _, c := range p {
+			runtime.Putcha(int8(c), utext)
+		}
+		cnt += len(p)
+	}
+	runtime.Putcha('\n', utext)
+	return c
+}
+
 type elf_t struct {
 	data	*[]uint8
 	len	int

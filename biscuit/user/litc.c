@@ -1,29 +1,44 @@
 #include <littypes.h>
 
-static int px;
-static int py;
+#define SYS_WRITE       1
 
-void
-putch(char c)
+long
+syscall(long a1, long a2, long a3, long a4,
+    long a5, long trap)
 {
-	ushort *vga = (ushort *)0xb8000;
+	long ret;
+	register long r8 asm("r8") = a5;
 
-	vga[py*80 + px] = (0x7 << 8) | c;
-	px++;
-	if (px >= 79) {
-		px = 0;
-		py++;
-	}
+	asm volatile(
+		"int	$64\n"
+		: "=a"(ret)
+		: "0"(trap), "D"(a1), "S"(a2), "d"(a3), "c"(a4), "r"(r8)
+		: "cc", "memory");
 
-	if (py >= 25)
-		py = 0;
+	return ret;
+}
+
+#define SA(x)     ((long)x)
+
+long
+write(int fd, void *buf, size_t c)
+{
+	syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_WRITE);
+
+	return 0;
+}
+
+size_t
+strlen(char *msg)
+{
+	size_t ret = 0;
+	while (*msg++)
+		ret++;
+	return ret;
 }
 
 void
 pmsg(char *msg)
 {
-	while(*msg) {
-		putch(*msg);
-		msg++;
-	}
+	write(1, msg, strlen(msg));
 }

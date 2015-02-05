@@ -29,9 +29,10 @@ func Pnum(int)
 func Procadd(tf *[23]int, uc int, p_pmap int)
 func Proccontinue()
 func Prockill(int)
-func Procrunnable(int)
+func Procrunnable(int, *[23]int)
 func Procyield()
 func Rcr2() int
+func Rcr3() int
 func Rrsp() int
 func Sgdt(*int)
 func Sidt(*int)
@@ -82,10 +83,11 @@ type put_t struct {
 var put put_t
 
 //go:nosplit
-func vga_put(c int8) {
+func vga_put(c int8, attr int8) {
 	if c != '\n' {
 		p := (*[1999]int16)(unsafe.Pointer(uintptr(0xb8000)))
-		v := 0x0700 | int16(c)
+		a := int16(attr) << 8
+		v := a | int16(c)
 		p[put.vy * 80 + put.vx] = v
 		put.vx++
 	} else {
@@ -104,14 +106,19 @@ func vga_put(c int8) {
 
 //go:nosplit
 func putch(c int8) {
-	vga_put(c)
+	vga_put(c, 0x7)
+	sc_put(c)
+}
+
+func Putcha(c int8, a int8) {
+	vga_put(c, a)
 	sc_put(c)
 }
 
 //go:nosplit
 func cls() {
 	for i:= 0; i < 1974; i++ {
-		vga_put(' ')
+		vga_put(' ', 0x7)
 	}
 	sc_put('c')
 	sc_put('l')
