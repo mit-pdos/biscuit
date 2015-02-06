@@ -3,7 +3,7 @@
 int main() {
 	int i;
 	for (i = 0; i < 3; i++) {
-		pmsg("hello world!");
+		printf("hello world!\n");
 		int j;
 		for (j = 0; j < 100000000; j++)
 			asm volatile("":::"memory");

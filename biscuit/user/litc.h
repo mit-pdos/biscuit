@@ -1,7 +1,8 @@
 #include <littypes.h>
 
-void pmsg(char*);
-void putch(char);
+#define MAXBUF        4096
 
 long write(int, void*, size_t);
 void exit(int);
+
+int printf(char *, ...);
