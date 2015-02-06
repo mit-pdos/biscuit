@@ -9,11 +9,13 @@ const PTE_W     int = 1 << 1
 const PTE_U     int = 1 << 2
 const PTE_PCD   int = 1 << 4
 const PTE_PS    int = 1 << 7
+const PTE_COW   int = 1 << 9	// our flags
 const PGSIZE    int = 1 << 12
 const PGOFFSET  int = 0xfff
 const PGMASK    int = ^(PGOFFSET)
 const PTE_ADDR  int = PGMASK
-const PTE_FLAGS int = 0x1f
+const PTE_FLAGS int = 0x1f	// only masks P, W, U, PWT, and PCD
+
 
 const VREC      int = 0x42
 const VDIRECT   int = 0x44
@@ -200,16 +202,27 @@ func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	return &next[ptb]
 }
 
-func copy_pmap1(dst *[512]int, src *[512]int, depth int,
-    ptracker map[int]*[512]int) {
+func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
+    depth int, ptracker map[int]*[512]int) bool {
 
+	doinval := false
 	for i, c := range src {
 		if c & PTE_P  == 0 {
 			continue
 		}
 		if depth == 1 {
 			// copy ptes
-			dst[i] = c
+			val := c
+			srcval := val
+			dstval := val
+			if ptemod != nil {
+				srcval, dstval = ptemod(val)
+			}
+			if srcval != val {
+				src[i] = srcval
+				doinval = true
+			}
+			dst[i] = dstval
 			continue
 		}
 		// copy mappings of pages > PGSIZE
@@ -222,15 +235,22 @@ func copy_pmap1(dst *[512]int, src *[512]int, depth int,
 		perms := c & PTE_FLAGS
 		dst[i] = p_np | perms
 		nsrc := pe2pg(c)
-		copy_pmap1(np, nsrc, depth - 1, ptracker)
+		if copy_pmap1(ptemod, np, nsrc, depth - 1, ptracker) {
+			doinval = true
+		}
 	}
+
+	return doinval
 }
 
-// deep copies the pmap
-func copy_pmap(pm *[512]int, ptracker map[int]*[512]int) (*[512]int, int) {
+// deep copies the pmap. ptemod is an optional function that takes the
+// original PTE as an argument and returns two values: new PTE for the pmap
+// being copied and PTE for the new pmap.
+func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
+    ptracker map[int]*[512]int) (*[512]int, int, bool) {
 	npm, p_npm := pg_new(ptracker)
-	copy_pmap1(npm, pm, 4, ptracker)
-	return npm, p_npm
+	doinval := copy_pmap1(ptemod, npm, pm, 4, ptracker)
+	return npm, p_npm, doinval
 }
 
 func pmap_cperms(pm *[512]int, va int, nperms int) {
@@ -276,4 +296,9 @@ func is_mapped(pmap *[512]int, va int, size int) bool {
 		}
 	}
 	return true
+}
+
+func invlpg(va int) {
+	dur := unsafe.Pointer(uintptr(va))
+	runtime.Invlpg(dur)
 }

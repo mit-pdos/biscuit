@@ -21,7 +21,11 @@ const EFAULT       int = 14
 const ENOSYS       int = 38
 
 const SYS_WRITE    int = 1
+const SYS_FORK     int = 57
 const SYS_EXIT     int = 60
+
+// lowest userspace address
+const USERMIN      int = 0xf1000000
 
 func syscall(pid int, tf *[TFSIZE]int) {
 
@@ -34,17 +38,17 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	//a5 := tf[TF_R8]
 
 	ret := -ENOSYS
-	dead := false
 	switch trap {
 	case SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
+	case SYS_FORK:
+		ret = sys_fork(p, tf)
 	case SYS_EXIT:
 		sys_exit(p, a1);
-		dead = true
 	}
 
 	tf[TF_RAX] = ret
-	if !dead {
+	if !p.dead {
 		runtime.Procrunnable(pid, tf)
 	}
 }
@@ -88,8 +92,74 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 	return c
 }
 
+func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
+	child := proc_new(fmt.Sprintf("%s's child", parent.name))
+
+	// mark writable entries as read-only and cow
+	mk_cow := func(pte int) (int, int) {
+		// don't mess with or track kernel pages
+		if pte & PTE_U == 0 {
+			return pte, pte
+		}
+		if pte & PTE_W != 0 {
+			pte = (pte | PTE_COW) & ^PTE_W
+		}
+
+		// reference the mapped page in child's tracking maps too
+		p_pg := pte & PTE_ADDR
+		pg, ok := parent.pages[p_pg]
+		if !ok {
+			panic(fmt.Sprintf("parent not tracking " +
+			    "page %#x", p_pg))
+		}
+		if _, ok = parent.upages[p_pg]; !ok {
+			panic(fmt.Sprintf("no umapping for %#x", p_pg))
+		}
+		child.pages[p_pg] = pg
+		child.upages[p_pg] = parent.upages[p_pg]
+		return pte, pte
+
+	}
+	pmap, p_pmap, _ := copy_pmap(mk_cow, parent.pmap, child.pages)
+
+	// tlb invalidation is not necessary for the parent because its pmap
+	// cannot be in use now (well, it may be in use on the CPU that took
+	// the syscall interrupt which may not have switched pmaps yet, but
+	// that CPU will not touch these invalidated user-space addresses).
+
+	child.pmap = pmap
+	child.p_pmap = p_pmap
+
+	chtf := [TFSIZE]int{}
+	chtf = *ptf
+	chtf[TF_RAX] = 0
+
+	child.sched_add(&chtf)
+
+	return child.pid
+}
+
+func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
+	// copy page
+	dst, p_dst := pg_new(proc.pages)
+	p_src := *pte & PTE_ADDR
+	src := dmap(p_src)
+	for i, c := range src {
+		dst[i] = c
+	}
+
+	// insert new page into pmap
+	va := faultaddr & PGMASK
+	perms := (*pte & PTE_FLAGS) & ^PTE_COW
+	perms |= PTE_W
+	proc.page_insert(va, dst, p_dst, perms, false)
+
+	// set process as runnable again
+	runtime.Procrunnable(proc.pid, nil)
+}
+
 func sys_exit(proc *proc_t, status int) {
-	fmt.Printf("%v exited\n", proc.Name())
+	fmt.Printf("%v exited with status %v\n", proc.name, status)
 	proc_kill(proc.pid)
 }
 
@@ -216,7 +286,7 @@ func elf_load(p *proc_t, e *elf_t) {
 	PT_LOAD := 1
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
-		if hdr.etype == PT_LOAD && hdr.vaddr >= 0xf1000000 {
+		if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
 			elf_segload(p, &hdr)
 		}
 	}
@@ -229,7 +299,7 @@ func sys_test_dump() {
 	}
 }
 
-func sys_test() {
+func sys_test(program string) {
 	fmt.Printf("add 'user' prog\n")
 
 	var tf [23]int
@@ -241,9 +311,12 @@ func sys_test() {
 	tf_ss     := tfregs + 6
 	tf_cs     := tfregs + 3
 
-	proc := proc_new("test")
+	proc := proc_new(program + "test")
 
-	elf := allbins["user/fault"]
+	elf, ok := allbins[program]
+	if !ok {
+		panic("no such program: " + program)
+	}
 
 	stack, p_stack := pg_new(proc.pages)
 	stackva := 0xf4000000
@@ -257,7 +330,7 @@ func sys_test() {
 	tf[tf_ss] = udseg << 3 | 3
 
 	// copy kernel page table, map new stack
-	upmap, p_upmap := copy_pmap(kpmap(), proc.pages)
+	upmap, p_upmap, _ := copy_pmap(nil, kpmap(), proc.pages)
 	proc.pmap, proc.p_pmap = upmap, p_upmap
 	proc.page_insert(stackva - PGSIZE, stack,
 	    p_stack, PTE_U | PTE_W, true)
@@ -269,5 +342,5 @@ func sys_test() {
 	pmap_cperms(upmap, elf.entry(), PTE_U)
 	pmap_cperms(upmap, stackva, PTE_U)
 
-	runtime.Procadd(&tf, proc.pid, p_upmap)
+	proc.sched_add(&tf)
 }

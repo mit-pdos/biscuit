@@ -99,18 +99,18 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			runtime.Gosched()
 		}
 
-		tcur := &trapstore[tstail]
+		tcur := trapstore_t{}
+		tcur = trapstore[tstail]
+
 		trapno := tcur.trapno
-		uc := tcur.pid
+		pid := tcur.pid
 		tstail = tsnext(tstail)
 
 		if h, ok := handlers[trapno]; ok {
-			newts := trapstore_t{}
-			newts = *tcur
-			go h(&newts)
+			go h(&tcur)
 			continue
 		}
-		fmt.Printf("no handler for trap %v, pid %x\n", trapno, uc)
+		fmt.Printf("no handler for trap %v, pid %x\n", trapno, pid)
 	}
 }
 
@@ -134,6 +134,12 @@ func trap_pgfault(ts *trapstore_t) {
 	if !ok {
 		pancake("no such pid", pid)
 	}
+	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
+	if pte != nil && *pte & PTE_COW != 0 {
+		sys_pgfault(proc, pte, fa)
+		return
+	}
+
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.Name(), fa, rip)
@@ -172,9 +178,13 @@ func pg_test() {
 type proc_t struct {
 	pid     int
 	name    string
+	// all pages
 	pages   map[int]*[512]int
+	// physical -> user va mapping
+	upages  map[int]int
 	pmap    *[512]int
 	p_pmap  int
+	dead    bool
 }
 
 func (p *proc_t) Name() string {
@@ -192,6 +202,7 @@ func proc_new(name string) *proc_t {
 	ret.name = name
 	ret.pid = pid_cur
 	ret.pages = make(map[int]*[512]int)
+	ret.upages = make(map[int]int)
 
 	return ret
 }
@@ -199,6 +210,7 @@ func proc_new(name string) *proc_t {
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 	p.pages[p_pg] = pg
+	p.upages[p_pg] = va & PGMASK
 
 	pte := pmap_walk(p.pmap, va, true, perms, p.pages)
 	ninval := false
@@ -207,31 +219,48 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 			panic("pte not empty")
 		}
 		ninval = true
+		// remove from tracking maps
+		p_rem := *pte & PTE_ADDR
+		if _, ok := p.pages[p_rem]; !ok {
+			panic("kern va not tracked")
+		}
+		if _, ok := p.upages[p_rem]; !ok {
+			panic("user va not tracked")
+		}
+		delete(p.pages, p_rem)
+		delete(p.upages, p_rem)
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
-		dur := unsafe.Pointer(uintptr(va))
-		runtime.Invlpg(dur)
+		invlpg(va)
 	}
 }
 
 func (p *proc_t) page_remove(va int, pg *[512]int) {
 	pte := pmap_walk(p.pmap, va, false, 0, nil)
-	if pte != nil {
+	if pte != nil && *pte & PTE_P != 0 {
 		p_pa := *pte & PTE_ADDR
 		delete(p.pages, p_pa)
+		delete(p.upages, p_pa)
 		*pte = 0
+		invlpg(va)
 	}
 }
 
+func (p *proc_t) sched_add(tf *[TFSIZE]int) {
+	runtime.Procadd(tf, p.pid, p.p_pmap)
+}
+
 func proc_kill(pid int) {
-	_, ok := allprocs[pid]
+	p, ok := allprocs[pid]
 	if !ok {
 		pancake("no pid", pid)
 	}
+	p.dead = true
 	runtime.Prockill(pid)
 	// XXX
-	fmt.Printf("not cleaning up\n")
+	//fmt.Printf("not cleaning up\n")
+	//return
 
 	ms := runtime.MemStats{}
 	runtime.ReadMemStats(&ms)
@@ -597,7 +626,9 @@ func main() {
 	go trap(handlers)
 
 	cpus_start()
-	sys_test()
+	//sys_test("user/fault")
+	//sys_test("user/hello")
+	sys_test("user/fork")
 
 	fake_work()
 }

@@ -2,6 +2,7 @@
 
 #define MAXBUF        4096
 
+int fork(void);
 long write(int, void*, size_t);
 void exit(int);
 

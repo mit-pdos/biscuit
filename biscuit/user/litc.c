@@ -2,6 +2,7 @@
 #include <litc.h>
 
 #define SYS_WRITE       1
+#define SYS_FORK        57
 #define SYS_EXIT        60
 
 long
@@ -22,11 +23,16 @@ syscall(long a1, long a2, long a3, long a4,
 
 #define SA(x)     ((long)x)
 
+int
+fork(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_FORK);
+}
+
 long
 write(int fd, void *buf, size_t c)
 {
-	syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
-	return 0;
+	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
 }
 
 void
@@ -97,7 +103,8 @@ putn(char *p, char *end, ulong n, int base)
 
 static char pbuf[MAXBUF];
 
-int vprintf(char *fmt, va_list ap)
+int
+vprintf(char *fmt, va_list ap)
 {
 	char *dst = pbuf;
 	char *end = &pbuf[MAXBUF - 1];
@@ -143,7 +150,8 @@ int vprintf(char *fmt, va_list ap)
 				}
 				ulong top = n / 10000000000ULL;
 				ulong bot = n % 10000000000ULL;
-				dst += putn(dst, end, top, 10);
+				if (top)
+					dst += putn(dst, end, top, 10);
 				dst += putn(dst, end, bot, 10);
 				done = 1;
 				break;
@@ -161,7 +169,8 @@ int vprintf(char *fmt, va_list ap)
 					n = (ulong)(uint)va_arg(ap, int);
 				ulong top = n >> 32;
 				ulong bot = n & ((1ULL << 32) - 1);
-				dst += putn(dst, end, top, 16);
+				if (top)
+					dst += putn(dst, end, top, 16);
 				dst += putn(dst, end, bot, 16);
 				done = 1;
 				break;
