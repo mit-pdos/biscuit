@@ -195,3 +195,11 @@ printf(char *fmt, ...)
 
 	return ret;
 }
+
+void
+_entry(void)
+{
+	extern int main(void);
+	int ret = main();
+	exit(ret);
+}

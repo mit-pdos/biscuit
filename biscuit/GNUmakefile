@@ -70,9 +70,9 @@ main.gobin: chentry $(GOBIN) $(UPROGS) bins.go $(KSRC)
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
 
-$(UPROGS): CFLAGS += -I user/ -Wl,-entry,main -fPIC
+$(UPROGS): CFLAGS += -I user/ -Wl,-entry,_entry -fPIC
 $(UPROGS): % : %.c user/litc.o
-	$(CC) $(CFLAGS) -I user/ -Wl,-entry,main,-Ttext,0xf1000000\
+	$(CC) $(CFLAGS) -I user/ -Wl,-Ttext,0xf1000000\
 	    -Wl,-n -o $@ $< user/litc.o
 
 mpentry.bin: mpentry.S
