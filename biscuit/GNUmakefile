@@ -82,8 +82,8 @@ mpentry.bin: mpentry.S
 $(BGOS): %.bgo : %
 	./bin2go.sh $< > $@
 
-bins.go: $(BGOS)
-	./prepbins.py $^ > $@
+bins.go: $(BGOS) prepbins.py
+	./prepbins.py $(BGOS) > $@
 
 main: main.o
 	$(LD) -static -e main -o $@ $<

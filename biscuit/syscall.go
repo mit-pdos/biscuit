@@ -94,7 +94,7 @@ func sys_exit(proc *proc_t, status int) {
 }
 
 type elf_t struct {
-	data	*[]uint8
+	data	[]uint8
 	len	int
 }
 
@@ -122,12 +122,12 @@ func readn(a []uint8, n int, off int) int {
 }
 
 func (e *elf_t) npheaders() int {
-	mag := readn(*e.data, ELF_HALF, 0)
+	mag := readn(e.data, ELF_HALF, 0)
 	if mag != 0x464c457f {
 		pancake("bad elf magic", mag)
 	}
 	e_phnum := 0x38
-	return readn(*e.data, ELF_QUARTER, e_phnum)
+	return readn(e.data, ELF_QUARTER, e_phnum)
 }
 
 func (e *elf_t) header(c int, ret *elf_phdr) {
@@ -139,7 +139,7 @@ func (e *elf_t) header(c int, ret *elf_phdr) {
 	if c >= nph {
 		pancake("bad elf header", c)
 	}
-	d := *e.data
+	d := e.data
 	e_phoff := 0x20
 	e_phentsize := 0x36
 	hoff := readn(d, ELF_OFF, e_phoff)
@@ -181,7 +181,7 @@ func (e *elf_t) headers() []elf_phdr {
 
 func (e *elf_t) entry() int {
 	e_entry := 0x18
-	return readn(*e.data, ELF_ADDR, e_entry)
+	return readn(e.data, ELF_ADDR, e_entry)
 }
 
 func elf_segload(p *proc_t, hdr *elf_phdr) {

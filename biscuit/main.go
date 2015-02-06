@@ -443,7 +443,7 @@ func cpus_start() {
 	for i := range mppg {
 		mppg[i] = 0
 	}
-	mpcode := *allbins["mpentry.bin"].data
+	mpcode := allbins["mpentry.bin"].data
 	runtime.Memmove(unsafe.Pointer(mppg), unsafe.Pointer(&mpcode[0]),
 	    len(mpcode))
 
@@ -550,6 +550,7 @@ func cpus_start() {
 	deray(10000000)
 	startupipi()
 
+	// wait for APs to become ready
 	for ss[sapcnt] != apcnt {
 	}
 

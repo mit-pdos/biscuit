@@ -30,7 +30,7 @@ print 'var allbins = map[string]*elf_t{'
 
 for prog in sys.argv[1:]:
 	p = '.bgo'.join(prog.split('.bgo')[:-1])
-	print '"%s" : &elf_t{ &%s, %s},' % (p, dn(p), sn(p))
+	print '"%s" : &elf_t{ %s, %s},' % (p, dn(p), sn(p))
 
 print '}'
 print
