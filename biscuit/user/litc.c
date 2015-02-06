@@ -1,7 +1,8 @@
 #include <littypes.h>
 #include <litc.h>
 
-#define SYS_WRITE       1
+#define SYS_WRITE        1
+#define SYS_GETPID       39
 #define SYS_FORK        57
 #define SYS_EXIT        60
 
@@ -22,6 +23,12 @@ syscall(long a1, long a2, long a3, long a4,
 }
 
 #define SA(x)     ((long)x)
+
+int
+getpid(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+}
 
 int
 fork(void)

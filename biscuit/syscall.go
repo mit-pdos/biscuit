@@ -20,9 +20,10 @@ const TF_RFLAGS    int = TFREGS + 4
 const EFAULT       int = 14
 const ENOSYS       int = 38
 
-const SYS_WRITE    int = 1
-const SYS_FORK     int = 57
-const SYS_EXIT     int = 60
+const SYS_WRITE      int = 1
+const SYS_GETPID     int = 39
+const SYS_FORK       int = 57
+const SYS_EXIT       int = 60
 
 // lowest userspace address
 const USERMIN      int = 0xf1000000
@@ -41,10 +42,12 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	switch trap {
 	case SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
+	case SYS_GETPID:
+		ret = sys_getpid(p)
 	case SYS_FORK:
 		ret = sys_fork(p, tf)
 	case SYS_EXIT:
-		sys_exit(p, a1);
+		sys_exit(p, a1)
 	}
 
 	tf[TF_RAX] = ret
@@ -90,6 +93,10 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 		cnt += len(p)
 	}
 	return c
+}
+
+func sys_getpid(proc *proc_t) int {
+	return proc.pid
 }
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {

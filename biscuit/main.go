@@ -628,7 +628,8 @@ func main() {
 	cpus_start()
 	//sys_test("user/fault")
 	//sys_test("user/hello")
-	sys_test("user/fork")
+	//sys_test("user/fork")
+	sys_test("user/getpid")
 
 	fake_work()
 }
