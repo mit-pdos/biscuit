@@ -72,7 +72,7 @@ numtoch(char n)
 }
 
 static int
-putn(char *p, char *end, int n, int base, int acc)
+putn1(char *p, char *end, ulong n, int base, long acc)
 {
 	if (acc > n) {
 		int pzero = acc == 1;
@@ -80,13 +80,19 @@ putn(char *p, char *end, int n, int base, int acc)
 			wc(p, end, numtoch(0));
 		return pzero;
 	}
-	int newbase = acc * base;
-	int ret = putn(p, end, n, base, newbase);
+	long newbase = acc * base;
+	int ret = putn1(p, end, n, base, newbase);
 	p += ret;
 	char c = (n % newbase)/acc;
 	c = numtoch(c);
 	wc(p, end, c);
 	return ret + 1;
+}
+
+static int
+putn(char *p, char *end, ulong n, int base)
+{
+	return putn1(p, end, n, base, 1);
 }
 
 static char pbuf[MAXBUF];
@@ -97,7 +103,6 @@ int vprintf(char *fmt, va_list ap)
 	char *end = &pbuf[MAXBUF - 1];
 	char c;
 
-	int prehex = 0;
 
 	c = *fmt;
 	while (c && dst < end) {
@@ -109,32 +114,62 @@ int vprintf(char *fmt, va_list ap)
 		}
 
 		fmt++;
+		int prehex = 0;
 		int done = 0;
+		int longmode = 0;
+		int sig = 1;
 		while (!done) {
 			char t = *fmt;
 			fmt++;
 			switch (t) {
-			case 'd':
-				{
-				int a = va_arg(ap, int);
-				dst += putn(dst, end, a, 10, 1);
-				done = 1;
-				break;
-				}
 			case '#':
 				prehex = 1;
 				break;
+			case 'l':
+				longmode = 1;
+				break;
+			case 'u':
+				sig = 0;
+			case 'd':
+				{
+				ulong n;
+				if (longmode)
+					n = va_arg(ap, ulong);
+				else
+					n = (ulong)(long)va_arg(ap, int);
+				if (sig && (long)n < 0) {
+					dst += wc(dst, end, '-');
+					n = ~n + 1;
+				}
+				ulong top = n / 10000000000ULL;
+				ulong bot = n % 10000000000ULL;
+				dst += putn(dst, end, top, 10);
+				dst += putn(dst, end, bot, 10);
+				done = 1;
+				break;
+				}
 			case 'x':
 				{
 				if (prehex) {
 					dst += wc(dst, end, '0');
 					dst += wc(dst, end, 'x');
 				}
-				int a = va_arg(ap, int);
-				dst += putn(dst, end, a, 16, 1);
+				ulong n;
+				if (longmode)
+					n = va_arg(ap, ulong);
+				else
+					n = (ulong)(uint)va_arg(ap, int);
+				ulong top = n >> 32;
+				ulong bot = n & ((1ULL << 32) - 1);
+				dst += putn(dst, end, top, 16);
+				dst += putn(dst, end, bot, 16);
 				done = 1;
 				break;
 				}
+			case 'c':
+				dst += wc(dst, end, (char)va_arg(ap, int));
+				done = 1;
+				break;
 			}
 		}
 		c = *fmt;
