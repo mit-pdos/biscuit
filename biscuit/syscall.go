@@ -85,7 +85,6 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 		}
 		cnt += len(p)
 	}
-	runtime.Putcha('\n', utext)
 	return c
 }
 
@@ -193,13 +192,13 @@ func elf_segload(p *proc_t, hdr *elf_phdr) {
 		perms |= PTE_W
 	}
 	sz := roundup(hdr.vaddr + hdr.memsz, PGSIZE)
-	sz -= hdr.vaddr
-	rsz := hdr.memsz
+	sz -= rounddown(hdr.vaddr, PGSIZE)
+	rsz := hdr.filesz
 	for i := 0; i < sz; i += PGSIZE {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
 		pg, p_pg := pg_new(p.pages)
-		if len(hdr.sdata) > 0 {
+		if i < len(hdr.sdata) {
 			dst := unsafe.Pointer(pg)
 			src := unsafe.Pointer(&hdr.sdata[i])
 			len := PGSIZE
