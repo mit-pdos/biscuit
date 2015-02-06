@@ -790,6 +790,12 @@ int_setup(void)
 	extern void Xspur(void);
 	extern void Xsyscall(void);
 
+	// any interrupt that may be generated during go code needs to use ist1
+	// to force a stack switch unless there is some mechanism that prevents
+	// a CPU that took an interrupt from getting its stack clobbered by
+	// another CPU handling the interrupt, scheduling/running the go code,
+	// and taking another interrupt on the same stack (before the first CPU
+	// can context switch to a new thread).
 	int_set(&idt[ 0], (uint64) Xdz , 0, 0, 0);
 	int_set(&idt[ 1], (uint64) Xrz , 0, 0, 0);
 	int_set(&idt[ 2], (uint64) Xnmi, 0, 0, 0);
@@ -805,7 +811,7 @@ int_setup(void)
 	int_set(&idt[11], (uint64) Xsnp, 0, 0, 0);
 	int_set(&idt[12], (uint64) Xssf, 0, 0, 0);
 	int_set(&idt[13], (uint64) Xgp , 0, 0, 0);
-	int_set(&idt[14], (uint64) Xpf , 0, 0, 0);
+	int_set(&idt[14], (uint64) Xpf , 0, 0, 1);
 	int_set(&idt[15], (uint64) Xrz3, 0, 0, 0);
 	int_set(&idt[16], (uint64) Xmf , 0, 0, 0);
 	int_set(&idt[17], (uint64) Xac , 0, 0, 0);
@@ -813,10 +819,9 @@ int_setup(void)
 	int_set(&idt[19], (uint64) Xfp , 0, 0, 0);
 	int_set(&idt[20], (uint64) Xve , 0, 0, 0);
 
-	// maybe use ist1 for timer interrupt too
 	int_set(&idt[32], (uint64) Xtimer,   0, 0, 1);
 	int_set(&idt[47], (uint64) Xspur,    0, 0, 0);
-	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 0);
+	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
@@ -1324,6 +1329,7 @@ mmap_test(void)
 	pmsg("mmap passed");
 }
 
+#define TRAP_PGFAULT    14
 #define TRAP_SYSCALL    64
 #define TRAP_TIMER      32
 #define TRAP_SPUR       47
@@ -1580,9 +1586,10 @@ runtime·Procrunnable(int64 pid, uint64 *tf)
 	assert(t->status == ST_WAITING, "thread not waiting", t->status);
 
 	t->status = ST_RUNNABLE;
-
-	assert_mapped(tf, TFSIZE, "bad tf");
-	runtime·memmove(t->tf, tf, TFSIZE);
+	if (tf) {
+		assert_mapped(tf, TFSIZE, "bad tf");
+		runtime·memmove(t->tf, tf, TFSIZE);
+	}
 
 	spunlock(&threadlock);
 	sti();
@@ -1617,7 +1624,10 @@ trap(uint64 *tf)
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
-	if (curthread && trapno == TRAP_TIMER || trapno == TRAP_SYSCALL)
+	if (curthread &&
+	    (trapno == TRAP_TIMER ||
+	    trapno == TRAP_PGFAULT ||
+	    trapno == TRAP_SYSCALL))
 		runtime·memmove(curthread->tf, tf, TFSIZE);
 
 	if (trapno == TRAP_TIMER) {
@@ -1684,7 +1694,6 @@ tss_setup(int32 myid)
 	if (addr & (16 - 1))
 		runtime·pancake("tss not aligned", addr);
 
-	//uint64 *va = (uint64 *)0xa102001000ULL + myid*(2*PGSIZE);
 	uint64 *va = (uint64 *)(0xa100001000ULL + myid*(2*PGSIZE));
 	// aps already have stack mapped
 	if (myid == 0)
