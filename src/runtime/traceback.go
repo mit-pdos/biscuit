@@ -57,7 +57,11 @@ func tracebackinit() {
 	morestackPC = funcPC(morestack)
 	mstartPC = funcPC(mstart)
 	newprocPC = funcPC(newproc)
-	rt0_goPC = funcPC(rt0_go)
+	if hackmode != 0 {
+		rt0_goPC = funcPC(rt0_go_hack)
+	} else {
+		rt0_goPC = funcPC(rt0_go)
+	}
 	sigpanicPC = funcPC(sigpanic)
 }
 

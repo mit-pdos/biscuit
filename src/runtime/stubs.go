@@ -242,6 +242,7 @@ func newproc()
 func morestack()
 func mstart()
 func rt0_go()
+func rt0_go_hack()
 
 // return0 is a stub used to return 0 from deferproc.
 // It is called at the very end of deferproc to signal
