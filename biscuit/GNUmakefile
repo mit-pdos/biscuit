@@ -30,6 +30,8 @@ QOPTS := -m 256M -smp cpus=$(CPUS)
 
 OS := $(shell uname -s)
 
+QEMU := qemu-system-x86_64
+
 ifeq ($(OS), OpenBSD)
 	ASFLAGS += -nopie
 endif
@@ -96,21 +98,21 @@ clean:
 	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o
 
 qemu: d.img
-	qemu-system-x86_64 $(QOPTS) -hda d.img
+	$(QEMU) $(QOPTS) -hda d.img
 
 qemu-gdb: d.img
-	qemu-system-x86_64 $(QOPTS) -S -s -hda d.img
+	$(QEMU) $(QOPTS) -S -s -hda d.img
 
 gqemu: go.img
-	qemu-system-x86_64 $(QOPTS) -nographic -hda go.img
+	$(QEMU) $(QOPTS) -nographic -hda go.img
 
 gqemux: go.img
-	qemu-system-x86_64 $(QOPTS) -hda go.img
+	$(QEMU) $(QOPTS) -hda go.img
 
 gqemu-gdb: go.img
-	qemu-system-x86_64 $(QOPTS) -nographic -S -s -hda go.img
+	$(QEMU) $(QOPTS) -nographic -S -s -hda go.img
 
 gqemu-gdbx: go.img
-	qemu-system-x86_64 $(QOPTS) -nographic -S -s -hda go.img
+	$(QEMU) $(QOPTS) -nographic -S -s -hda go.img
 
 .PHONY: clean qemu gqemu
