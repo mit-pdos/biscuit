@@ -1755,15 +1755,7 @@ runtime·Tfdump(uint64 *tf)
 void
 trap(uint64 *tf)
 {
-	lcr3(kpmap);
 	uint64 trapno = tf[TF_TRAPNO];
-
-	if (trapno != TRAP_TIMER && (tf[TF_CS] & 3) == 0) {
-		pnum(tf[TF_RIP]);
-		pnum(rcr2());
-		stack_dump(tf[TF_RSP]);
-		runtime·pancake("k trap", trapno);
-	}
 
 	struct thread_t *ct = curthread;
 
@@ -2002,6 +1994,9 @@ proc_setup(void)
 	tss_setup(0);
 	curcpu.num = 0;
 	setcurthread(&threads[0]);
+	pmsg("sizeof thread_t:");
+	pnum(sizeof(struct thread_t));
+	pmsg("\n");
 }
 
 #pragma textflag NOSPLIT

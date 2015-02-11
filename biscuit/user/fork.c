@@ -1,21 +1,33 @@
 #include <litc.h>
 
+void child(int id)
+{
+	int i, j;
+	for (i = 0; i < 6; i++) {
+		printf("hello from %d\n", id);
+		for (j = 0; j < 10000000; j++)
+			asm volatile("":::"memory");
+	}
+	int pid = fork();
+	if (!pid) {
+		for (i = 0; i < 6; i++) {
+			printf("hello from baby %d\n", id);
+			for (j = 0; j < 10000000; j++)
+				asm volatile("":::"memory");
+		}
+	}
+	exit(id);
+}
+
 int main()
 {
 	int pid = 0;
 	int id = 0;
-	while (pid < 10000) {
+	while (pid < 100) {
 		pid = fork();
 		id++;
-		if (!pid) {
-			int i, j;
-			for (i = 0; i < 6; i++) {
-				printf("hello from %d\n", id);
-				for (j = 0; j < 10000000; j++)
-					asm volatile("":::"memory");
-			}
-			exit(id);
-		}
+		if (!pid)
+			child(id);
 	}
 
 	//int id = 0;
@@ -27,5 +39,6 @@ int main()
 	//	id++;
 	//	printf("spawn %d\n", id);
 	//}
+	printf("parent done!\n");
 	return 0;
 }
