@@ -994,6 +994,29 @@ init_pgfirst(void)
 }
 
 #pragma textflag NOSPLIT
+void
+pgcheck(uint64 phys)
+{
+	//uint8 poison = 0xcafebabeb00bbeefULL;
+	uint8 poison = 0xfefefffefffefeffULL;
+	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
+	if (recva[VTEMP] & PTE_P)
+		runtime·pancake("not empty", 0);
+	recva[VTEMP] = phys | PTE_P | PTE_W;
+	int32 i;
+	uint64 *p = (uint64 volatile *)CADDR(VREC, VREC, VREC, VTEMP);
+	for (i = 0; i < PGSIZE/8; i++)
+		p[i] = poison;
+	for (i = 0; i < PGSIZE/8; i++)
+		if (p[i] != poison)
+			runtime·pancake("poison mismatch", p[i]);
+	for (i = 0; i < PGSIZE/8; i++)
+		p[i] = 0;
+	recva[VTEMP] = 0;
+	invlpg(p);
+}
+
+#pragma textflag NOSPLIT
 uint64
 get_pg(void)
 {
