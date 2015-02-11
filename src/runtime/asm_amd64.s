@@ -142,11 +142,15 @@ TEXT fixcs(SB),NOSPLIT,$0
 
 TEXT runtime·deray(SB),NOSPLIT,$8
 	MOVQ	times+0(FP), CX
+	SHRQ	$10, CX
+	CMPQ	CX, $0
+	JEQ	done
 back:
 	// inb	$0x80, %al
 	BYTE	$0xe4
 	BYTE	$0x80
 	LOOP	back
+done:
 	RET
 
 // i do it this strange way because if i declare fakeargv in C i get 'missing

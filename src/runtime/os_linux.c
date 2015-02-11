@@ -1994,7 +1994,7 @@ hack_syscall(void)
 void
 hack_usleep(uint32 delay)
 {
-	runtime·deray(delay);
+	hack_yield();
 }
 
 struct timespec {
