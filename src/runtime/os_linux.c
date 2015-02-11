@@ -457,6 +457,8 @@ runtime·pancake(void *msg, int64 addr)
 	pmsg(" PANCAKE");
 	void stack_dump(uint64);
 	stack_dump(rrsp());
+	pmsg("TWO");
+	stack_dump(g->m->curg->sched.sp);
 	while (1);
 }
 
