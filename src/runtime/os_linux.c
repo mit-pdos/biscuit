@@ -2117,8 +2117,12 @@ void
 hack_exit(int32 code)
 {
 	cli();
+	splock(&threadlock);
+	curthread->status = ST_INVALID;
+
 	pmsg("exit with code");
 	pnum(code);
+	pmsg(".\nhalting\n");
 	while(1);
 }
 
