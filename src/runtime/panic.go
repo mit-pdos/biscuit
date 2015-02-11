@@ -457,9 +457,6 @@ func dopanic(unused int) {
 
 //go:nosplit
 func throw(s *byte) {
-	if (hackmode != 0) {
-		pancake(bytes(gostringnocopy(s)), 0xbad2);
-	}
 	gp := getg()
 	if gp.m.throwing == 0 {
 		gp.m.throwing = 1
@@ -472,9 +469,6 @@ func throw(s *byte) {
 
 //go:nosplit
 func gothrow(s string) {
-	if (hackmode != 0) {
-		pancake(bytes(s), 0xbad);
-	}
 	gp := getg()
 	if gp.m.throwing == 0 {
 		gp.m.throwing = 1
