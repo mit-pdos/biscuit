@@ -42,8 +42,10 @@ func Vtop(*[512]int) int
 func Newlines(int64)
 func Fnaddr(func()) int
 func Fnaddri(func(int)) int
+func Tfdump(*[23]int)
 func Turdyprog()
 func Stackdump(int)
+func Hackunlock()
 
 func inb(int) int
 func outb(int, int)

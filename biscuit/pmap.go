@@ -1,8 +1,9 @@
 package main
 
-import "runtime"
-import "unsafe"
 import "fmt"
+import "runtime"
+import "sync"
+import "unsafe"
 
 const PTE_P     int = 1 << 0
 const PTE_W     int = 1 << 1
@@ -70,24 +71,27 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
+var bl = sync.Mutex{}
+
 func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
+	bl.Lock()
+	defer bl.Unlock()
+
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
 	if ptn & (PGSIZE - 1) != 0 {
-		pancake("page not aligned", ptn)
+		panic("page not aligned")
 	}
 	// pmap walk for every allocation -- a cost of allocating pages with
 	// the garbage collector.
 	pte := pmap_walk(kpmap(), int(uintptr(unsafe.Pointer(pt))),
-	    false, 0, ptracker)
+	    false, 0, nil)
 	if pte == nil {
-		pancake("must be mapped")
+		panic("must be mapped")
 	}
 	physaddr := *pte & PTE_ADDR
 
-	if ptracker != nil {
-		ptracker[physaddr] = pt
-	}
+	ptracker[physaddr] = pt
 
 	return pt, physaddr
 }
@@ -108,7 +112,7 @@ func dmap_init() {
 	pdpt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pdpt)))
 	if ptn & ((1 << 12) - 1) != 0 {
-		pancake("page table not aligned", ptn)
+		panic("page table not aligned")
 	}
 	p_pdpt := runtime.Vtop(pdpt)
 	allpages[p_pdpt] = pdpt
@@ -128,7 +132,7 @@ func dmap_init() {
 func dmap(p int) *[512]int {
 	pa := uint(p)
 	if pa >= 1 << 39 {
-		pancake("physical address too large", pa)
+		panic("physical address too large")
 	}
 
 	v := int(uintptr(unsafe.Pointer(caddr(VDIRECT, 0, 0, 0, 0))))

@@ -508,6 +508,22 @@ TEXT htpause(SB), NOSPLIT, $0-0
 	PAUSE
 	RET
 
+TEXT fxsave(SB), NOSPLIT, $0-8
+	MOVQ	dst+0(FP), AX
+	// fxsave	(%rax)
+	BYTE	$0x0f
+	BYTE	$0xae
+	BYTE	$0x00
+	RET
+
+TEXT fxrstor(SB), NOSPLIT, $0-8
+	MOVQ	dst+0(FP), AX
+	// fxrstor	(%rax)
+	BYTE	$0x0f
+	BYTE	$0xae
+	BYTE	$0x08
+	RET
+
 TEXT cpu_halt(SB), NOSPLIT, $0-8
 	MOVQ	sp+0(FP), SP
 	STI

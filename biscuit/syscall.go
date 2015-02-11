@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+//import "sync"
 import "unsafe"
 
 const TFSIZE       int = 23
@@ -11,6 +12,7 @@ const TF_RSI       int = 10
 const TF_RDI       int = 11
 const TF_RDX       int = 12
 const TF_RCX       int = 13
+const TF_RBX       int = 14
 const TF_RAX       int = 15
 const TF_TRAP      int = TFREGS
 const TF_RIP       int = TFREGS + 2
@@ -30,7 +32,7 @@ const USERMIN      int = 0xf1000000
 
 func syscall(pid int, tf *[TFSIZE]int) {
 
-	p := allprocs[pid]
+	p := proc_get(pid)
 	trap := tf[TF_RAX]
 	a1 := tf[TF_RDI]
 	a2 := tf[TF_RSI]
@@ -100,10 +102,12 @@ func sys_getpid(proc *proc_t) int {
 }
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
+
 	child := proc_new(fmt.Sprintf("%s's child", parent.name))
 
 	// mark writable entries as read-only and cow
 	mk_cow := func(pte int) (int, int) {
+
 		// don't mess with or track kernel pages
 		if pte & PTE_U == 0 {
 			return pte, pte
@@ -119,13 +123,14 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 			panic(fmt.Sprintf("parent not tracking " +
 			    "page %#x", p_pg))
 		}
-		if _, ok = parent.upages[p_pg]; !ok {
-			panic(fmt.Sprintf("no umapping for %#x", p_pg))
+		upg, ok := parent.upages[p_pg]
+		if !ok {
+			panic(fmt.Sprintf("parent not tracking " +
+			    "upage %#x", p_pg))
 		}
 		child.pages[p_pg] = pg
-		child.upages[p_pg] = parent.upages[p_pg]
+		child.upages[p_pg] = upg
 		return pte, pte
-
 	}
 	pmap, p_pmap, _ := copy_pmap(mk_cow, parent.pmap, child.pages)
 
@@ -146,7 +151,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	return child.pid
 }
 
-func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
+func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 	// copy page
 	dst, p_dst := pg_new(proc.pages)
 	p_src := *pte & PTE_ADDR
@@ -201,7 +206,7 @@ func readn(a []uint8, n int, off int) int {
 func (e *elf_t) npheaders() int {
 	mag := readn(e.data, ELF_HALF, 0)
 	if mag != 0x464c457f {
-		pancake("bad elf magic", mag)
+		panic("bad elf magic")
 	}
 	e_phnum := 0x38
 	return readn(e.data, ELF_QUARTER, e_phnum)
@@ -214,7 +219,7 @@ func (e *elf_t) header(c int, ret *elf_phdr) {
 
 	nph := e.npheaders()
 	if c >= nph {
-		pancake("bad elf header", c)
+		panic("bad elf header")
 	}
 	d := e.data
 	e_phoff := 0x20
@@ -275,6 +280,7 @@ func elf_segload(p *proc_t, hdr *elf_phdr) {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
 		pg, p_pg := pg_new(p.pages)
+		//pg, p_pg := pg_new(&p.pages)
 		if i < len(hdr.sdata) {
 			dst := unsafe.Pointer(pg)
 			src := unsafe.Pointer(&hdr.sdata[i])

@@ -4,6 +4,7 @@ import "fmt"
 import "math/rand"
 import "runtime"
 import "sync/atomic"
+import "sync"
 import "unsafe"
 
 type trapstore_t struct {
@@ -17,6 +18,7 @@ var trapstore [ntrapst]trapstore_t
 var tshead      int
 var tstail      int
 
+//go:nosplit
 func tsnext(c int) int {
 	return (c + 1) % ntrapst
 }
@@ -27,7 +29,7 @@ var     GPFAULT   int = 13
 var     PGFAULT   int = 14
 
 // trap cannot do anything that may have side-effects on the runtime (like
-// fmt.Print, or use pancake!). the reason is that goroutines are scheduled
+// fmt.Print, or use panic!). the reason is that goroutines are scheduled
 // cooperatively in the runtime. trap interrupts the runtime though, and then
 // tries to execute more gocode on the same M, thus doing things the runtime
 // did not expect.
@@ -49,6 +51,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		runtime.Pnum(rip)
 		runtime.Pnum(0x42)
 		runtime.Pnum(lap_id())
+		runtime.Tfdump(tf)
 		runtime.Stackdump(tf[TF_RSP])
 		for {
 		}
@@ -58,9 +61,9 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	// terminate the application is posted, to prevent a race where the
 	// gorouting handling page faults terminates the application, causing
 	// its pmap to be reclaimed while this function/yieldy are using it.
-	//if trapno == PGFAULT {
-	//	runtime.Lcr3(runtime.Kpmap_p())
-	//}
+	if trapno == PGFAULT || (trapno == SYSCALL && tf[TF_RAX] == SYS_EXIT) {
+		runtime.Lcr3(runtime.Kpmap_p())
+	}
 
 	// add to trap circular buffer for actual trap handler
 	if tsnext(tshead) == tstail {
@@ -79,6 +82,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	switch trapno {
 	case SYSCALL, PGFAULT:
 		// yield until the syscall/fault is handled
+		runtime.Hackunlock()
 		runtime.Procyield()
 	case TIMER:
 		// timer interrupts are not passed yet
@@ -114,29 +118,32 @@ func trap(handlers map[int]func(*trapstore_t)) {
 	}
 }
 
+// multiple versions of all these trap handlers may be running concurrently
 func trap_timer(ts *trapstore_t) {
 	fmt.Printf("Timer!")
 }
 
 func trap_syscall(ts *trapstore_t) {
+	proclock.Lock()
+	defer proclock.Unlock()
+
 	pid  := ts.pid
-	_, ok := allprocs[pid]
-	if !ok {
-		pancake("no such pid", pid)
-	}
 	syscall(pid, &ts.tf)
 }
 
 func trap_pgfault(ts *trapstore_t) {
+	proclock.Lock()
+	defer proclock.Unlock()
+
 	pid := ts.pid
 	fa  := ts.faultaddr
-	proc, ok := allprocs[pid]
-	if !ok {
-		pancake("no such pid", pid)
-	}
+	proc := proc_get(pid)
 	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
 	if pte != nil && *pte & PTE_COW != 0 {
-		sys_pgfault(proc, pte, fa)
+		if fa < USERMIN {
+			panic("kernel page marked COW")
+		}
+		sys_pgfault(proc, pte, fa, &ts.tf)
 		return
 	}
 
@@ -146,39 +153,22 @@ func trap_pgfault(ts *trapstore_t) {
 	proc_kill(pid)
 }
 
-func pg_test() {
-	fmt.Printf("page table test\n")
-
-	physaddr := 0x7c9e
-
-	taddr := dmap(physaddr)
-	fmt.Printf("boot code %x\n", uint(taddr[396]))
-
-	for p, v := range allpages {
-		fmt.Printf(" [%p -> %x] ", v, p)
-	}
-
-	kpgdir := runtime.Kpmap()
-	pte := pmap_walk(kpgdir, 0x7c00, false, 0, allpages)
-	fmt.Printf("boot pte %x ", *pte)
-
-	paddr := 0x2200000000
-	pte = pmap_walk(kpgdir, paddr, false, 0, allpages)
-	if pte != nil {
-		pancake("nyet")
-	}
-	pte = pmap_walk(kpgdir, paddr, true, PTE_W, allpages)
-	fmt.Printf("null pte %x ", *pte)
-	_, p_np := pg_new(allpages)
-	*pte = p_np | PTE_P | PTE_W
-	maddr := (*int)(unsafe.Pointer(uintptr(paddr)))
-	fmt.Printf("new addr contents %x ", *maddr)
+func tfdump(tf *[TFSIZE]int) {
+	fmt.Printf("RIP: %#x\n", tf[TF_RIP])
+	fmt.Printf("RAX: %#x\n", tf[TF_RAX])
+	fmt.Printf("RDI: %#x\n", tf[TF_RDI])
+	fmt.Printf("RSI: %#x\n", tf[TF_RSI])
+	fmt.Printf("RBX: %#x\n", tf[TF_RBX])
+	fmt.Printf("RCX: %#x\n", tf[TF_RCX])
+	fmt.Printf("RDX: %#x\n", tf[TF_RDX])
+	fmt.Printf("RSP: %#x\n", tf[TF_RSP])
 }
 
 type proc_t struct {
 	pid     int
 	name    string
 	// all pages
+	maplock sync.Mutex
 	pages   map[int]*[512]int
 	// physical -> user va mapping
 	upages  map[int]int
@@ -191,10 +181,14 @@ func (p *proc_t) Name() string {
 	return "\"" + p.name + "\""
 }
 
+var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
 func proc_new(name string) *proc_t {
+	//proclock.Lock()
+	//defer proclock.Unlock()
+
 	pid_cur++
 	ret := &proc_t{}
 	allprocs[pid_cur] = ret
@@ -207,10 +201,19 @@ func proc_new(name string) *proc_t {
 	return ret
 }
 
+func proc_get(pid int) *proc_t {
+	//proclock.Lock()
+	p, ok := allprocs[pid]
+	//proclock.Unlock()
+
+	if !ok {
+		panic(fmt.Sprintf("no such pid %d", pid))
+	}
+	return p
+}
+
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
-	p.pages[p_pg] = pg
-	p.upages[p_pg] = va & PGMASK
 
 	pte := pmap_walk(p.pmap, va, true, perms, p.pages)
 	ninval := false
@@ -234,9 +237,13 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 	if ninval {
 		invlpg(va)
 	}
+
+	p.pages[p_pg] = pg
+	p.upages[p_pg] = va & PGMASK
 }
 
 func (p *proc_t) page_remove(va int, pg *[512]int) {
+
 	pte := pmap_walk(p.pmap, va, false, 0, nil)
 	if pte != nil && *pte & PTE_P != 0 {
 		p_pa := *pte & PTE_ADDR
@@ -252,9 +259,12 @@ func (p *proc_t) sched_add(tf *[TFSIZE]int) {
 }
 
 func proc_kill(pid int) {
+	//proclock.Lock()
+	//defer proclock.Unlock()
+
 	p, ok := allprocs[pid]
 	if !ok {
-		pancake("no pid", pid)
+		panic("bad pid")
 	}
 	p.dead = true
 	runtime.Prockill(pid)
@@ -262,18 +272,19 @@ func proc_kill(pid int) {
 	//fmt.Printf("not cleaning up\n")
 	//return
 
-	ms := runtime.MemStats{}
-	runtime.ReadMemStats(&ms)
-	before := ms.Alloc
+	//ms := runtime.MemStats{}
+	//runtime.ReadMemStats(&ms)
+	//before := ms.Alloc
 
 	delete(allprocs, pid)
 	runtime.GC()
-	runtime.ReadMemStats(&ms)
-	after := ms.Alloc
-	fmt.Printf("reclaimed %vK\n", (before-after)/1024)
+	//runtime.ReadMemStats(&ms)
+	//after := ms.Alloc
+	//fmt.Printf("reclaimed %vK\n", (before-after)/1024)
 }
 
-func physmapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
+func physmapped1(pmap *[512]int, phys int, depth int, acc int,
+    thresh int, tsz int) (bool, int) {
 	for i, c := range pmap {
 		if c & PTE_P == 0 {
 			continue
@@ -281,7 +292,13 @@ func physmapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
 		if depth == 1 || c & PTE_PS != 0 {
 			if c & PTE_ADDR == phys & PGMASK {
 				ret := acc << 9 | i
-				return true, ret
+				ret <<= 12
+				if thresh == 0 {
+					return true, ret
+				}
+				if  ret >= thresh && ret < thresh + tsz {
+					return true, ret
+				}
 			}
 			continue
 		}
@@ -291,7 +308,7 @@ func physmapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
 		}
 		nextp := pe2pg(c)
 		nexta := acc << 9 | i
-		mapped, va := physmapped1(nextp, phys, depth - 1, nexta)
+		mapped, va := physmapped1(nextp, phys, depth - 1, nexta, thresh, tsz)
 		if mapped {
 			return true, va
 		}
@@ -300,7 +317,11 @@ func physmapped1(pmap *[512]int, phys int, depth int, acc int) (bool, int) {
 }
 
 func physmapped(pmap *[512]int, phys int) (bool, int) {
-	return physmapped1(pmap, phys, 4, 0)
+	return physmapped1(pmap, phys, 4, 0, 0, 0)
+}
+
+func physmapped_above(pmap *[512]int, phys int, thresh int, size int) (bool, int) {
+	return physmapped1(pmap, phys, 4, 0, thresh, size)
 }
 
 func assert_no_phys(pmap *[512]int, phys int) {
@@ -350,7 +371,7 @@ func mp_tblget(f []uint8) ([]uint8, []uint8, []uint8) {
 
 	esum := (mp_sum(extended) + eck) & 0xff
 	if esum != 0 {
-		pancake("bad extended table checksum")
+		panic("bad extended table checksum")
 	}
 
 	return f, base, extended
@@ -614,7 +635,7 @@ func main() {
 	trap_diex := func(c int) func(*trapstore_t) {
 		return func(ts *trapstore_t) {
 			fmt.Printf("[death on trap %v]\n", c)
-			pancake("perished")
+			panic("perished")
 		}
 	}
 
@@ -626,10 +647,11 @@ func main() {
 	go trap(handlers)
 
 	cpus_start()
+
 	//sys_test("user/fault")
 	//sys_test("user/hello")
-	//sys_test("user/fork")
-	sys_test("user/getpid")
+	sys_test("user/fork")
+	//sys_test("user/getpid")
 
 	fake_work()
 }
@@ -640,13 +662,6 @@ func fake_work() {
 	go genpackets(ch)
 
 	process_packets(ch)
-}
-
-func pancake(msg ...interface{}) {
-	runtime.Cli()
-	fmt.Print(msg)
-	for {
-	}
 }
 
 type packet struct {
@@ -679,6 +694,7 @@ func p_priority(p packet) int {
 
 func process_packets(in chan packet) {
 	outbound := make(map[int]chan packet)
+	fmt.Printf("outbound at %p\n", outbound)
 
 	for {
 		p := <- in
@@ -694,4 +710,3 @@ func ip_process(ipchan chan packet) {
 		}
 	}
 }
-
