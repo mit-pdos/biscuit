@@ -5,8 +5,14 @@ main
 boot
 d.img
 user/hello
+user/fault
+user/fork
+user/getpid
 bins.go
 boot.elf
 chentry
 go.img
 main.gobin
+*.bgo
+mpentry.elf
+mpentry.bin

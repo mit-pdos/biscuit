@@ -11,16 +11,35 @@ type trapstore_t struct {
 	trapno    int
 	pid       int
 	faultaddr int
-	tf        [TFSIZE]int
+	tf	  [TFSIZE]int
 }
-const ntrapst   int = 64
-var trapstore [ntrapst]trapstore_t
-var tshead      int
-var tstail      int
+const maxtstore int = 64
+const maxcpus   int = 32
 
 //go:nosplit
 func tsnext(c int) int {
-	return (c + 1) % ntrapst
+	return (c + 1) % maxtstore
+}
+
+var	numcpus	int = 1
+type cpu_t struct {
+	num		int
+	// per-cpus interrupt queues. the cpu interrupt handler is the
+	// producer, the go routine running trap() below is the consumer. each
+	// cpus interrupt handler increments head while the go routine consuer
+	// increments tail
+	trapstore	[maxtstore]trapstore_t
+	tshead		int
+	tstail		int
+}
+
+var cpus	[maxcpus]cpu_t
+
+// can only be used when interrupts are cleared
+//go:nosplit
+func lap_id() int {
+	lapaddr := (*[1024]int32)(unsafe.Pointer(uintptr(0xfee00000)))
+	return int(lapaddr[0x20/4] >> 24)
 }
 
 var     SYSCALL   int = 64
@@ -65,24 +84,31 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		runtime.Lcr3(runtime.Kpmap_p())
 	}
 
+	lid := cpus[lap_id()].num
+	head := cpus[lid].tshead
+	tail := cpus[lid].tstail
+
 	// add to trap circular buffer for actual trap handler
-	if tsnext(tshead) == tstail {
+	if tsnext(head) == tail {
 		runtime.Pnum(0xbad)
 		for {
 		}
 	}
-	trapstore[tshead].trapno = trapno
-	trapstore[tshead].pid = pid
-	trapstore[tshead].tf = *tf
+	ts := &cpus[lid].trapstore[head]
+	ts.trapno = trapno
+	ts.pid = pid
+	ts.tf = *tf
 	if trapno == PGFAULT {
-		trapstore[tshead].faultaddr = runtime.Rcr2()
+		ts.faultaddr = runtime.Rcr2()
 	}
-	tshead = tsnext(tshead)
+
+	// commit interrupt
+	head = tsnext(head)
+	cpus[lid].tshead = head
 
 	switch trapno {
 	case SYSCALL, PGFAULT:
 		// yield until the syscall/fault is handled
-		runtime.Hackunlock()
 		runtime.Procyield()
 	case TIMER:
 		// timer interrupts are not passed yet
@@ -98,23 +124,33 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 
 func trap(handlers map[int]func(*trapstore_t)) {
 	for {
-		for tstail == tshead {
-			// no work
-			runtime.Gosched()
+		for cpu := 0; cpu < numcpus; cpu += 1 {
+
+			head := cpus[cpu].tshead
+			tail := cpus[cpu].tstail
+
+			if tail == head {
+				// no work for this cpu
+				continue
+			}
+
+			tcur := trapstore_t{}
+			tcur = cpus[cpu].trapstore[tail]
+
+			trapno := tcur.trapno
+			pid := tcur.pid
+
+			tail = tsnext(tail)
+			cpus[cpu].tstail = tail
+
+			if h, ok := handlers[trapno]; ok {
+				go h(&tcur)
+				continue
+			}
+			fmt.Printf("no handler for trap %v, pid %x\n",
+			    trapno,pid)
 		}
-
-		tcur := trapstore_t{}
-		tcur = trapstore[tstail]
-
-		trapno := tcur.trapno
-		pid := tcur.pid
-		tstail = tsnext(tstail)
-
-		if h, ok := handlers[trapno]; ok {
-			go h(&tcur)
-			continue
-		}
-		fmt.Printf("no handler for trap %v, pid %x\n", trapno, pid)
+		runtime.Gosched()
 	}
 }
 
@@ -397,20 +433,21 @@ func mp_scan() ([]uint8, []uint8, []uint8) {
 	return nil, nil, nil
 }
 
-type cpu_t struct {
+type mpcpu_t struct {
 	lapid    int
 	bsp      bool
 }
 
-func cpus_find() []cpu_t {
+func cpus_find() []mpcpu_t {
 
 	fl, base, _ := mp_scan()
 	if fl == nil {
 		fmt.Println("uniprocessor")
-		return []cpu_t{}
+		//return []mpcpu_t{}
+		return nil
 	}
 
-	ret := make([]cpu_t, 0, 10)
+	ret := make([]mpcpu_t, 0, 10)
 
 	// runtime does the same check
 	lapaddr := readn(base, 4, 0x24)
@@ -453,7 +490,7 @@ func cpus_find() []cpu_t {
 				continue
 			}
 
-			ret = append(ret, cpu_t{lapid, bsp})
+			ret = append(ret, mpcpu_t{lapid, bsp})
 
 		default:	// bus, IO apic, IO int. assignment, local int
 				// assignment.
@@ -603,21 +640,26 @@ func cpus_start() {
 	// wait for APs to become ready
 	for ss[sapcnt] != apcnt {
 	}
+	numcpus = apcnt + 1
 
 	fmt.Printf("done! %v CPUs joined\n", ss[sapcnt])
 }
 
-//go:nosplit
-func lap_id() int {
-	lapaddr := (*[1024]int32)(unsafe.Pointer(uintptr(0xfee00000)))
-	return int(lapaddr[0x20/4] >> 24)
-}
-
+// myid is a logical id, not lapic id
 //go:nosplit
 func ap_entry(myid int) {
 
-	// ap ids start from 1
+	// myid starts from 1
 	runtime.Ap_setup(myid)
+
+	lid := lap_id()
+	if lid > maxcpus || lid < 0 {
+		runtime.Pnum(0xb1dd1e)
+		for {
+		}
+	}
+	cpus[lid].num = myid
+
 	// ints are still cleared
 	runtime.Procyield()
 }

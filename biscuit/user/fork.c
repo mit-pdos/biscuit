@@ -16,7 +16,7 @@ void child(int id)
 				asm volatile("":::"memory");
 		}
 	}
-	exit(id);
+	exit(pid);
 }
 
 int main()

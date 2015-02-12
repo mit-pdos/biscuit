@@ -1719,15 +1719,6 @@ wakeup(void)
 	}
 }
 
-struct spinlock_t hacklock;
-
-#pragma textflag NOSPLIT
-void
-runtime·Hackunlock(void)
-{
-	spunlock(&hacklock);
-}
-
 #pragma textflag NOSPLIT
 void
 runtime·Tfdump(uint64 *tf)
@@ -1797,7 +1788,6 @@ trap(uint64 *tf)
 		int64 uc = ct ? ct->pid : 0;
 		if ((tf[TF_CS] & 3) == 0)
 			uc = 0;
-		splock(&hacklock);
 		((void (*)(uint64 *, int64))newtrap)(tf, uc);
 		runtime·pancake("newtrap returned!", 0);
 	}
@@ -2143,6 +2133,7 @@ hack_syscall(void)
 void
 hack_usleep(uint32 delay)
 {
+	USED(delay);
 	hack_yield();
 }
 
