@@ -2,7 +2,6 @@ package main
 
 import "fmt"
 import "runtime"
-import "sync"
 import "unsafe"
 
 const PTE_P     int = 1 << 0
@@ -71,11 +70,7 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
-var bl = sync.Mutex{}
-
 func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
-	bl.Lock()
-	defer bl.Unlock()
 
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))

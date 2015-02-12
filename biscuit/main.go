@@ -147,8 +147,8 @@ func trap(handlers map[int]func(*trapstore_t)) {
 				go h(&tcur)
 				continue
 			}
-			fmt.Printf("no handler for trap %v, pid %x\n",
-			    trapno,pid)
+			panic(fmt.Sprintf("no handler for trap %v, pid %x\n",
+			    trapno,pid))
 		}
 		runtime.Gosched()
 	}
