@@ -8,8 +8,9 @@
 void waitdisk(void);
 void readsect(void *, uint32_t);
 
-static void *allocphys(uint64_t *, uint64_t);
+static void *alloc_phys(uint64_t *, uint64_t);
 static uint32_t alloc_start(void);
+static void bss_zero(uint64_t *, uint64_t, uint64_t);
 static void checkmach(void);
 static uint32_t getpg(void);
 static uint64_t elfsize(void);
@@ -83,7 +84,7 @@ struct __attribute__((packed)) ss_t {
 
 // # of sectors this code takes up; i set this after compiling and observing
 // the size of the text
-#define BOOTBLOCKS     8
+#define BOOTBLOCKS     9
 // boot.S has room for 7 e820 entries
 #define	NE820          7
 
@@ -124,9 +125,9 @@ bootmain(void)
 
 		// zero bss
 		if (ph->p_filesz != ph->p_memsz) {
-			void *addr = allocphys(pgdir, ph->p_va);
-			memset(addr + ph->p_filesz, 0,
-			    ph->p_memsz - ph->p_filesz);
+			uint64_t start = ph->p_va + ph->p_filesz;
+			uint64_t size = ph->p_memsz - ph->p_filesz;
+			bss_zero(pgdir, start, size);
 		}
 	}
 
@@ -143,7 +144,7 @@ bootmain(void)
 	// get a new stack with guard page
 	ensure_empty(pgdir, NEWSTACK - PGSIZE);
 	ensure_empty(pgdir, NEWSTACK - 2*PGSIZE);
-	allocphys(pgdir, NEWSTACK - 1);
+	alloc_phys(pgdir, NEWSTACK - 1);
 
 	// XXX setup tramp if entry is 64bit address...
 	if (!is32(ELFHDR->e_entry))
@@ -184,8 +185,9 @@ bad:
 		/* do nothing */;
 }
 
+// returns the physical address for va, allocating a page if necessary
 static void *
-allocphys(uint64_t *pgdir, uint64_t va)
+alloc_phys(uint64_t *pgdir, uint64_t va)
 {
 	if (!is32(va))
 		pancake("va too large for poor ol' 32-bit me", va);
@@ -244,6 +246,22 @@ alloc_start(void)
 	if (!found)
 		pancake("couldn't find memory", found);
 	return last;
+}
+
+static void
+bss_zero(uint64_t *pgdir, uint64_t va, uint64_t size)
+{
+	uint64_t end = va + size;
+	uint64_t sz;
+
+	for (; va < end; va += sz) {
+		uint64_t *pa = alloc_phys(pgdir, va);
+		sz = PGSIZE - (va & PGOFFMASK);
+		if (sz > size)
+			sz = size;
+		memset(pa, 0, sz);
+		size -= sz;
+	}
 }
 
 static void
@@ -356,7 +374,7 @@ readseg(uint64_t *pgdir, uint64_t va, uint64_t count, uint64_t offset)
 	// We'd write more to memory than asked, but it doesn't matter --
 	// we load in increasing order.
 	while (va < end_va) {
-		void *pa = allocphys(pgdir, va);
+		void *pa = alloc_phys(pgdir, va);
 		readsect(pa, offset);
 		va += SECTSIZE;
 		offset++;
@@ -479,10 +497,16 @@ pgdir_walk(uint64_t *pgdir, uint64_t va, int create)
 	uint64_t *curpage;
 	uint64_t *pml4e = &pgdir[PML4X(va)];
 	curpage = (uint64_t *)ensure_pg(pml4e, create);
+	if (curpage == 0)
+		return 0;
 	uint64_t *pdpte = &curpage[PDPTX(va)];
 	curpage = (uint64_t *)ensure_pg(pdpte, create);
+	if (curpage == 0)
+		return 0;
 	uint64_t *pde = &curpage[PDX(va)];
 	curpage = (uint64_t *)ensure_pg(pde, create);
+	if (curpage == 0)
+		return 0;
 
 	return &curpage[PTX(va)];
 }
@@ -495,7 +519,7 @@ mapone(uint64_t *pgdir, uint64_t va, uint64_t pa, int cd)
 
 	uint64_t *pte = pgdir_walk(pgdir, va, 1);
 
-	if ((*pte & PTE_P) && PTE_ADDR(*pte) != pa)
+	if (pte != 0 && (*pte & PTE_P) && PTE_ADDR(*pte) != pa)
 		pancake("already mapped?", *pte);
 
 	uint64_t perms = PTE_P | PTE_W | (cd ? PTE_PCD : 0);

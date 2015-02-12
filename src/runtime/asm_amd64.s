@@ -166,6 +166,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	// magic loop
 	//BYTE	$0xeb
 	//BYTE	$0xfe
+	CALL	runtime·sc_setup(SB)
 
 	// save page table and first free address from bootloader.
 	MOVL	DI, kpmap(SB)
@@ -289,8 +290,6 @@ h_ok:
 	CALL	proc_setup(SB)
 
 	CALL	fpuinit(SB)
-
-	CALL	runtime·sc_setup(SB)
 
 	//MOVQ	CR0, AX
 	//PUSHQ	AX
