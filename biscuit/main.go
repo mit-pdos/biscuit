@@ -76,14 +76,6 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		}
 	}
 
-	// must switch to kernel pmap before PGFAULT or any trap that may
-	// terminate the application is posted, to prevent a race where the
-	// gorouting handling page faults terminates the application, causing
-	// its pmap to be reclaimed while this function/yieldy are using it.
-	if trapno == PGFAULT || (trapno == SYSCALL && tf[TF_RAX] == SYS_EXIT) {
-		runtime.Lcr3(runtime.Kpmap_p())
-	}
-
 	lid := cpus[lap_id()].num
 	head := cpus[lid].tshead
 	tail := cpus[lid].tstail

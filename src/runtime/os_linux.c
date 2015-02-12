@@ -1746,6 +1746,7 @@ runtime·Tfdump(uint64 *tf)
 void
 trap(uint64 *tf)
 {
+	lcr3(kpmap);
 	uint64 trapno = tf[TF_TRAPNO];
 
 	struct thread_t *ct = curthread;
@@ -1758,7 +1759,6 @@ trap(uint64 *tf)
 	    trapno == TRAP_SYSCALL)) {
 		memmov(ct->tf, tf, TFSIZE);
 		int32 idx = ct - &threads[0];
-		assert(idx < NTHREADS, "save me", idx);
 		fxsave(&fxstates[idx][0]);
 	}
 
