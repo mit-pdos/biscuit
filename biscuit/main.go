@@ -151,17 +151,17 @@ func trap_timer(ts *trapstore_t) {
 	fmt.Printf("Timer!")
 }
 
+var klock	= sync.Mutex{}
+
 func trap_syscall(ts *trapstore_t) {
-	proclock.Lock()
-	defer proclock.Unlock()
+	klock.Lock()
+	defer klock.Unlock()
 
 	pid  := ts.pid
 	syscall(pid, &ts.tf)
 }
 
 func trap_pgfault(ts *trapstore_t) {
-	proclock.Lock()
-	defer proclock.Unlock()
 
 	pid := ts.pid
 	fa  := ts.faultaddr
