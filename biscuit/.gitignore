@@ -8,6 +8,7 @@ user/hello
 user/fault
 user/fork
 user/getpid
+user/fstest
 bins.go
 boot.elf
 chentry

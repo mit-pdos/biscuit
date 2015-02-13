@@ -193,16 +193,15 @@ func tfdump(tf *[TFSIZE]int) {
 }
 
 type fd_t struct {
-	fsdev	int
 	inode	int
 	offset	int
 	perms	int
 }
 
 // special fds
-var fd_stdin 	= fd_t{0, 0, 0, 0}
-var fd_stdout 	= fd_t{0, 1, 0, 0}
-var fd_stderr 	= fd_t{0, 2, 0, 0}
+var fd_stdin 	= fd_t{0, 0, 0}
+var fd_stdout 	= fd_t{1, 0, 0}
+var fd_stderr 	= fd_t{2, 0, 0}
 
 type proc_t struct {
 	pid	int
@@ -217,6 +216,7 @@ type proc_t struct {
 	dead	bool
 	fds	map[int]*fd_t
 	nextfd	int
+	cwd	string
 }
 
 func (p *proc_t) Name() string {
@@ -241,6 +241,7 @@ func proc_new(name string) *proc_t {
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.nextfd = len(ret.fds)
+	ret.cwd = "/"
 
 	return ret
 }
@@ -657,7 +658,7 @@ func main() {
 	//sys_test("user/fault")
 	//sys_test("user/hello")
 	sys_test("user/fork")
-	//sys_test("user/fstest")
+	sys_test("user/fstest")
 	//sys_test("user/getpid")
 
 	fake_work()

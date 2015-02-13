@@ -2,7 +2,6 @@ package main
 
 import "fmt"
 import "runtime"
-//import "sync"
 import "unsafe"
 
 const TFSIZE       int = 23
@@ -19,15 +18,19 @@ const TF_RIP       int = TFREGS + 2
 const TF_RSP       int = TFREGS + 5
 const TF_RFLAGS    int = TFREGS + 4
 
+const ENOENT       int = 2
 const EBADF        int = 9
 const EFAULT       int = 14
+const ENOTDIR      int = 20
+const ENAMETOOLONG int = 36
 const ENOSYS       int = 38
 
 const SYS_WRITE    int = 1
 const SYS_OPEN     int = 2
-const O_RDONLY     int = 0
+const   O_RDONLY      int = 0
 const   O_WRONLY      int = 1
 const   O_RDWR        int = 2
+const   O_CREAT       int = 0x80
 const SYS_GETPID   int = 39
 const SYS_FORK     int = 57
 const SYS_EXIT     int = 60
@@ -110,13 +113,21 @@ func sys_write(proc *proc_t, fdn int, bufp int, c int) int {
 }
 
 func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
-	path, ok := is_mapped_str(proc.pmap, pathn);
+	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
 	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+
+	parts := path_sanitize(proc.cwd + path)
+	inode, err := fs_open(parts, flags, mode)
+	if err != 0 {
+		return err
+	}
 
 	fdn, fd := proc.fd_new()
-
 	switch {
 	case flags & O_RDONLY != 0:
 		fd.perms = O_RDONLY
@@ -125,7 +136,8 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	case flags & O_RDWR != 0:
 		fd.perms = O_RDWR
 	}
-	fd.fsdev, fd.inode = fs_open(path, flags, mode)
+	fd.inode = inode
+
 	return fdn
 }
 
