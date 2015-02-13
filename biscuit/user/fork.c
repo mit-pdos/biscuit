@@ -23,7 +23,7 @@ int main()
 {
 	int pid = 0;
 	int id = 0;
-	while (pid < 100) {
+	while (pid < 10000) {
 		pid = fork();
 		id++;
 		if (!pid)
