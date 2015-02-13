@@ -545,13 +545,12 @@ TEXT fn(SB), NOSPLIT, $0-0;		\
 	POPQ	AX;			\
 	POPQ	AX;			\
 	RET
+// pops are to silence plan9 warnings
 
-#define IH_NOEC_LOOP(num, fn)		\
+#define IH_IRQ(num, fn)			\
 TEXT fn(SB), NOSPLIT, $0-0;		\
 	PUSHQ	$0;			\
-	PUSHQ	$num;			\
-	BYTE	$0xeb;			\
-	BYTE	$0xfe;			\
+	PUSHQ	$(32 + num);		\
 	JMP	alltraps(SB);		\
 	BYTE	$0xeb;			\
 	BYTE	$0xfe;			\
@@ -590,8 +589,26 @@ IH_NOEC(18,Xmc )
 IH_NOEC(19,Xfp )
 IH_NOEC(20,Xve )
 IH_NOEC(32,Xtimer )
-IH_NOEC(47,Xspur )
+IH_NOEC(48,Xspur )
 IH_NOEC(64,Xsyscall )
+
+// irqs
+// irq0 is Xtimer
+IH_IRQ( 1,Xirq1 )
+IH_IRQ( 2,Xirq2 )
+IH_IRQ( 3,Xirq3 )
+IH_IRQ( 4,Xirq4 )
+IH_IRQ( 5,Xirq5 )
+IH_IRQ( 6,Xirq6 )
+IH_IRQ( 7,Xirq7 )
+IH_IRQ( 8,Xirq8 )
+IH_IRQ( 9,Xirq9 )
+IH_IRQ(10,Xirq10 )
+IH_IRQ(11,Xirq11 )
+IH_IRQ(12,Xirq12 )
+IH_IRQ(13,Xirq13 )
+IH_IRQ(14,Xirq14 )
+IH_IRQ(15,Xirq15 )
 
 #define IA32_FS_BASE   $0xc0000100UL
 

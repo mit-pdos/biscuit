@@ -47,6 +47,10 @@ var     TIMER     int = 32
 var     GPFAULT   int = 13
 var     PGFAULT   int = 14
 
+// low 3 bits must be zero
+var     IRQBASE   int = 32
+var     IRQLAST   int = 32 + 16
+
 // trap cannot do anything that may have side-effects on the runtime (like
 // fmt.Print, or use panic!). the reason is that goroutines are scheduled
 // cooperatively in the runtime. trap interrupts the runtime though, and then
@@ -55,9 +59,14 @@ var     PGFAULT   int = 14
 //go:nosplit
 func trapstub(tf *[TFSIZE]int, pid int) {
 
-	//fl_intf     := 1 << 9
-
 	trapno := tf[TF_TRAP]
+
+	if trapno >= IRQBASE && trapno < IRQLAST {
+		runtime.Pnum(0xbadb002e)
+		runtime.Pnum(lap_id())
+		runtime.Pnum(trapno)
+		for {}
+	}
 
 	// kernel faults are fatal errors for now, but they could be handled by
 	// trap & c.
@@ -71,9 +80,8 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		runtime.Pnum(0x42)
 		runtime.Pnum(lap_id())
 		runtime.Tfdump(tf)
-		runtime.Stackdump(tf[TF_RSP])
-		for {
-		}
+		//runtime.Stackdump(tf[TF_RSP])
+		for {}
 	}
 
 	lid := cpus[lap_id()].num
@@ -83,8 +91,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	// add to trap circular buffer for actual trap handler
 	if tsnext(head) == tail {
 		runtime.Pnum(0xbad)
-		for {
-		}
+		for {}
 	}
 	ts := &cpus[lid].trapstore[head]
 	ts.trapno = trapno
@@ -109,8 +116,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		runtime.Pnum(trapno)
 		runtime.Pnum(tf[TF_RIP])
 		runtime.Pnum(0xbadbabe)
-		for {
-		}
+		for {}
 	}
 }
 
@@ -144,11 +150,6 @@ func trap(handlers map[int]func(*trapstore_t)) {
 		}
 		runtime.Gosched()
 	}
-}
-
-// multiple versions of all these trap handlers may be running concurrently
-func trap_timer(ts *trapstore_t) {
-	fmt.Printf("Timer!")
 }
 
 var klock	= sync.Mutex{}
@@ -190,6 +191,12 @@ func tfdump(tf *[TFSIZE]int) {
 	fmt.Printf("RCX: %#x\n", tf[TF_RCX])
 	fmt.Printf("RDX: %#x\n", tf[TF_RDX])
 	fmt.Printf("RSP: %#x\n", tf[TF_RSP])
+}
+
+// XXX
+func cdelay(n int) {
+	for i := 0; i < n*1000000; i++ {
+	}
 }
 
 type fd_t struct {
@@ -408,7 +415,6 @@ func cpus_find() []mpcpu_t {
 	fl, base, _ := mp_scan()
 	if fl == nil {
 		fmt.Println("uniprocessor")
-		//return []mpcpu_t{}
 		return nil
 	}
 
@@ -560,11 +566,6 @@ func cpus_start() {
 		icrw(hi, low)
 	}
 
-	deray := func(t int) {
-		for i := 0; i < t; i++ {
-		}
-	}
-
 	// pass arguments to the ap startup code via secret storage (the old
 	// boot device page at 0x7c00)
 
@@ -596,10 +597,10 @@ func cpus_start() {
 	initipi(true)
 	// not necessary since we assume lapic version >= 1.x (ie not 82489DX)
 	//initipi(false)
-	deray(1000000)
+	cdelay(1)
 
 	startupipi()
-	deray(10000000)
+	cdelay(1)
 	startupipi()
 
 	// wait for APs to become ready
@@ -649,10 +650,10 @@ func main() {
 	handlers := map[int]func(*trapstore_t) {
 	     GPFAULT: trap_diex(GPFAULT),
 	     PGFAULT: trap_pgfault,
-	     TIMER: trap_timer,
 	     SYSCALL: trap_syscall}
 	go trap(handlers)
 
+	init_8259()
 	cpus_start()
 
 	//sys_test("user/fault")

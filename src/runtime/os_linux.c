@@ -458,10 +458,10 @@ runtime·pancake(void *msg, int64 addr)
 
 	pnum(addr);
 	pmsg(" PANCAKE");
-	void stack_dump(uint64);
-	stack_dump(rrsp());
-	pmsg("TWO");
-	stack_dump(g->m->curg->sched.sp);
+	//void stack_dump(uint64);
+	//stack_dump(rrsp());
+	//pmsg("TWO");
+	//stack_dump(g->m->curg->sched.sp);
 	while (1);
 }
 
@@ -795,6 +795,22 @@ int_setup(void)
 	extern void Xspur(void);
 	extern void Xsyscall(void);
 
+	extern void Xirq1(void);
+	extern void Xirq2(void);
+	extern void Xirq3(void);
+	extern void Xirq4(void);
+	extern void Xirq5(void);
+	extern void Xirq6(void);
+	extern void Xirq7(void);
+	extern void Xirq8(void);
+	extern void Xirq9(void);
+	extern void Xirq10(void);
+	extern void Xirq11(void);
+	extern void Xirq12(void);
+	extern void Xirq13(void);
+	extern void Xirq14(void);
+	extern void Xirq15(void);
+
 	// any interrupt that may be generated during go code needs to use ist1
 	// to force a stack switch unless there is some mechanism that prevents
 	// a CPU that took an interrupt from getting its stack clobbered by
@@ -824,7 +840,24 @@ int_setup(void)
 	int_set(&idt[19], (uint64) Xfp , 0, 0, 0);
 	int_set(&idt[20], (uint64) Xve , 0, 0, 0);
 
-	int_set(&idt[32], (uint64) Xtimer,   0, 0, 1);
+#define IRQBASE 32
+	int_set(&idt[IRQBASE+ 0], (uint64) Xtimer,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 1], (uint64) Xirq1 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 2], (uint64) Xirq2 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 3], (uint64) Xirq3 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 4], (uint64) Xirq4 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 5], (uint64) Xirq5 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 6], (uint64) Xirq6 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 7], (uint64) Xirq7 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 8], (uint64) Xirq8 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+ 9], (uint64) Xirq9 ,  0, 0, 1);
+	int_set(&idt[IRQBASE+10], (uint64) Xirq10 , 0, 0, 1);
+	int_set(&idt[IRQBASE+11], (uint64) Xirq11 , 0, 0, 1);
+	int_set(&idt[IRQBASE+12], (uint64) Xirq12 , 0, 0, 1);
+	int_set(&idt[IRQBASE+13], (uint64) Xirq13 , 0, 0, 1);
+	int_set(&idt[IRQBASE+14], (uint64) Xirq14 , 0, 0, 1);
+	int_set(&idt[IRQBASE+15], (uint64) Xirq15 , 0, 0, 1);
+
 	int_set(&idt[47], (uint64) Xspur,    0, 0, 0);
 	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
 
@@ -1440,7 +1473,7 @@ mmap_test(void)
 #define TRAP_PGFAULT    14
 #define TRAP_SYSCALL    64
 #define TRAP_TIMER      32
-#define TRAP_SPUR       47
+#define TRAP_SPUR       48
 
 #define TIMER_QUANTUM   100000000UL
 
@@ -1898,7 +1931,6 @@ ticks_get(void)
 void
 timer_setup(void)
 {
-
 	uint64 la = 0xfee00000ULL;
 
 	// map lapic IO mem
@@ -1977,7 +2009,10 @@ proc_setup(void)
 
 	timer_setup();
 
-	// 8259a - mask all ints. skipping this step results in GPfault too?
+	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
+	// otherwise an RTC timer interrupt (that turns into a double-fault
+	// since the pic has not been programmed yet) comes in immediately
+	// after sti.
 	outb(0x20 + 1, 0xff);
 	outb(0xa0 + 1, 0xff);
 
