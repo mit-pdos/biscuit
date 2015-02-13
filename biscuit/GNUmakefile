@@ -107,12 +107,12 @@ gqemu: go.img
 	$(QEMU) $(QOPTS) -nographic -hda go.img
 
 gqemux: go.img
-	$(QEMU) $(QOPTS) -hda go.img
+	$(QEMU) $(QOPTS) -serial stdio -hda go.img
 
 gqemu-gdb: go.img
 	$(QEMU) $(QOPTS) -nographic -S -s -hda go.img
 
-gqemu-gdbx: go.img
-	$(QEMU) $(QOPTS) -nographic -S -s -hda go.img
+gqemux-gdb: go.img
+	$(QEMU) $(QOPTS) -S -s -serial stdio -hda go.img
 
 .PHONY: clean qemu gqemu
