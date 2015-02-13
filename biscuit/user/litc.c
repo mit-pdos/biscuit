@@ -2,9 +2,10 @@
 #include <litc.h>
 
 #define SYS_WRITE        1
+#define SYS_OPEN         2
 #define SYS_GETPID       39
-#define SYS_FORK        57
-#define SYS_EXIT        60
+#define SYS_FORK         57
+#define SYS_EXIT         60
 
 long
 syscall(long a1, long a2, long a3, long a4,
@@ -24,10 +25,10 @@ syscall(long a1, long a2, long a3, long a4,
 
 #define SA(x)     ((long)x)
 
-int
-getpid(void)
+void
+exit(int status)
 {
-	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+	syscall(status, 0, 0, 0, 0, SYS_EXIT);
 }
 
 int
@@ -36,16 +37,22 @@ fork(void)
 	return syscall(0, 0, 0, 0, 0, SYS_FORK);
 }
 
+int
+getpid(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+}
+
+int
+open(const char *path, int flags, int mode)
+{
+	return syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
+}
+
 long
 write(int fd, void *buf, size_t c)
 {
 	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
-}
-
-void
-exit(int status)
-{
-	syscall(status, 0, 0, 0, 0, SYS_EXIT);
 }
 
 size_t

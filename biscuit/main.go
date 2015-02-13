@@ -192,17 +192,31 @@ func tfdump(tf *[TFSIZE]int) {
 	fmt.Printf("RSP: %#x\n", tf[TF_RSP])
 }
 
+type fd_t struct {
+	fsdev	int
+	inode	int
+	offset	int
+	perms	int
+}
+
+// special fds
+var fd_stdin 	= fd_t{0, 0, 0, 0}
+var fd_stdout 	= fd_t{0, 1, 0, 0}
+var fd_stderr 	= fd_t{0, 2, 0, 0}
+
 type proc_t struct {
-	pid     int
-	name    string
+	pid	int
+	name	string
 	// all pages
-	maplock sync.Mutex
-	pages   map[int]*[512]int
+	maplock	sync.Mutex
+	pages	map[int]*[512]int
 	// physical -> user va mapping
-	upages  map[int]int
-	pmap    *[512]int
-	p_pmap  int
-	dead    bool
+	upages	map[int]int
+	pmap	*[512]int
+	p_pmap	int
+	dead	bool
+	fds	map[int]*fd_t
+	nextfd	int
 }
 
 func (p *proc_t) Name() string {
@@ -225,6 +239,8 @@ func proc_new(name string) *proc_t {
 	ret.pid = pid_cur
 	ret.pages = make(map[int]*[512]int)
 	ret.upages = make(map[int]int)
+	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
+	ret.nextfd = len(ret.fds)
 
 	return ret
 }
@@ -238,6 +254,17 @@ func proc_get(pid int) *proc_t {
 		panic(fmt.Sprintf("no such pid %d", pid))
 	}
 	return p
+}
+
+func (p *proc_t) fd_new() (int, *fd_t) {
+	fdn := p.nextfd
+	p.nextfd++
+	fd := &fd_t{}
+	if _, ok := p.fds[fdn]; ok {
+		panic(fmt.Sprintf("new fd exists %d", fdn))
+	}
+	p.fds[fdn] = fd
+	return fdn, fd
 }
 
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
@@ -309,61 +336,6 @@ func proc_kill(pid int) {
 	//runtime.ReadMemStats(&ms)
 	//after := ms.Alloc
 	//fmt.Printf("reclaimed %vK\n", (before-after)/1024)
-}
-
-func physmapped1(pmap *[512]int, phys int, depth int, acc int,
-    thresh int, tsz int) (bool, int) {
-	for i, c := range pmap {
-		if c & PTE_P == 0 {
-			continue
-		}
-		if depth == 1 || c & PTE_PS != 0 {
-			if c & PTE_ADDR == phys & PGMASK {
-				ret := acc << 9 | i
-				ret <<= 12
-				if thresh == 0 {
-					return true, ret
-				}
-				if  ret >= thresh && ret < thresh + tsz {
-					return true, ret
-				}
-			}
-			continue
-		}
-		// skip direct and recursive maps
-		if depth == 4 && (i == VDIRECT || i == VREC) {
-			continue
-		}
-		nextp := pe2pg(c)
-		nexta := acc << 9 | i
-		mapped, va := physmapped1(nextp, phys, depth - 1, nexta, thresh, tsz)
-		if mapped {
-			return true, va
-		}
-	}
-	return false, 0
-}
-
-func physmapped(pmap *[512]int, phys int) (bool, int) {
-	return physmapped1(pmap, phys, 4, 0, 0, 0)
-}
-
-func physmapped_above(pmap *[512]int, phys int, thresh int, size int) (bool, int) {
-	return physmapped1(pmap, phys, 4, 0, thresh, size)
-}
-
-func assert_no_phys(pmap *[512]int, phys int) {
-	mapped, va := physmapped(pmap, phys)
-	if mapped {
-		panic(fmt.Sprintf("%v is mapped at page %#x", phys, va))
-	}
-}
-
-func assert_no_va_map(pmap *[512]int, va int) {
-	pte := pmap_walk(pmap, va, false, 0, nil)
-	if pte != nil && *pte & PTE_P != 0 {
-		panic(fmt.Sprintf("va %#x is mapped", va))
-	}
 }
 
 func mp_sum(d []uint8) int {
@@ -685,6 +657,7 @@ func main() {
 	//sys_test("user/fault")
 	//sys_test("user/hello")
 	sys_test("user/fork")
+	//sys_test("user/fstest")
 	//sys_test("user/getpid")
 
 	fake_work()
@@ -728,7 +701,6 @@ func p_priority(p packet) int {
 
 func process_packets(in chan packet) {
 	outbound := make(map[int]chan packet)
-	fmt.Printf("outbound at %p\n", outbound)
 
 	for {
 		p := <- in

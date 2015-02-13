@@ -19,13 +19,18 @@ const TF_RIP       int = TFREGS + 2
 const TF_RSP       int = TFREGS + 5
 const TF_RFLAGS    int = TFREGS + 4
 
+const EBADF        int = 9
 const EFAULT       int = 14
 const ENOSYS       int = 38
 
-const SYS_WRITE      int = 1
-const SYS_GETPID     int = 39
-const SYS_FORK       int = 57
-const SYS_EXIT       int = 60
+const SYS_WRITE    int = 1
+const SYS_OPEN     int = 2
+const O_RDONLY     int = 0
+const   O_WRONLY      int = 1
+const   O_RDWR        int = 2
+const SYS_GETPID   int = 39
+const SYS_FORK     int = 57
+const SYS_EXIT     int = 60
 
 // lowest userspace address
 const USERMIN      int = 0xf1000000
@@ -44,6 +49,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	switch trap {
 	case SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
+	case SYS_OPEN:
+		ret = sys_open(p, a1, a2, a3)
 	case SYS_GETPID:
 		ret = sys_getpid(p)
 	case SYS_FORK:
@@ -58,7 +65,7 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	}
 }
 
-func sys_write(proc *proc_t, fd int, bufp int, c int) int {
+func sys_write(proc *proc_t, fdn int, bufp int, c int) int {
 
 	if c == 0 {
 		return 0
@@ -69,8 +76,9 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 		return -EFAULT
 	}
 
-	if fd != 1 && fd != 2 {
-		panic("no imp")
+	fd, ok := proc.fds[fdn]
+	if !ok {
+		return -EBADF
 	}
 
 	vtop := func(va int) int {
@@ -78,6 +86,10 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 		ret := *pte & PTE_ADDR
 		ret += va & PGOFFSET
 		return ret
+	}
+
+	if fd != &fd_stdout && fd != &fd_stderr {
+		panic("no imp")
 	}
 
 	utext := int8(0x17)
@@ -95,6 +107,26 @@ func sys_write(proc *proc_t, fd int, bufp int, c int) int {
 		cnt += len(p)
 	}
 	return c
+}
+
+func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
+	path, ok := is_mapped_str(proc.pmap, pathn);
+	if !ok {
+		return -EFAULT
+	}
+
+	fdn, fd := proc.fd_new()
+
+	switch {
+	case flags & O_RDONLY != 0:
+		fd.perms = O_RDONLY
+	case flags & O_WRONLY != 0:
+		fd.perms = O_WRONLY
+	case flags & O_RDWR != 0:
+		fd.perms = O_RDWR
+	}
+	fd.fsdev, fd.inode = fs_open(path, flags, mode)
+	return fdn
 }
 
 func sys_getpid(proc *proc_t) int {
@@ -190,10 +222,10 @@ type elf_phdr struct {
 }
 
 var ELF_QUARTER = 2
-var ELF_HALF = 4
-var ELF_OFF = 8
-var ELF_ADDR = 8
-var ELF_XWORD = 8
+var ELF_HALF    = 4
+var ELF_OFF     = 8
+var ELF_ADDR    = 8
+var ELF_XWORD   = 8
 
 func readn(a []uint8, n int, off int) int {
 	ret := 0

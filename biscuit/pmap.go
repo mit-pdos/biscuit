@@ -122,8 +122,8 @@ func dmap_init() {
 	*dpte = p_pdpt | PTE_P | PTE_W
 }
 
-// returns a virtual address for the given physical address using the direct
-// mapping
+// returns a page-aligned virtual address for the given physical address using
+// the direct mapping
 func dmap(p int) *[512]int {
 	pa := uint(p)
 	if pa >= 1 << 39 {
@@ -135,6 +135,8 @@ func dmap(p int) *[512]int {
 	return (*[512]int)(unsafe.Pointer(uintptr(v)))
 }
 
+// returns a byte aligned virtual address for the physical address as slice of
+// uint8s
 func dmap8(p int) []uint8 {
 	pg := dmap(p)
 	off := p & PGOFFSET
@@ -297,7 +299,83 @@ func is_mapped(pmap *[512]int, va int, size int) bool {
 	return true
 }
 
+func is_mapped_str(pmap *[512]int, va int) (string, bool) {
+	i := 0
+	var ret []byte
+	for {
+		pte := pmap_walk(pmap, va + i, false, 0, nil)
+		if pte == nil || *pte & PTE_P == 0 {
+			return "", false
+		}
+		phys := *pte & PTE_ADDR
+		phys += va & PGOFFSET
+		str := dmap8(phys)
+		for _, c := range str {
+			if c == 0 {
+				return string(ret), true
+			}
+			ret = append(ret, c)
+		}
+		i += len(str)
+	}
+}
+
 func invlpg(va int) {
 	dur := unsafe.Pointer(uintptr(va))
 	runtime.Invlpg(dur)
+}
+
+func physmapped1(pmap *[512]int, phys int, depth int, acc int,
+    thresh int, tsz int) (bool, int) {
+	for i, c := range pmap {
+		if c & PTE_P == 0 {
+			continue
+		}
+		if depth == 1 || c & PTE_PS != 0 {
+			if c & PTE_ADDR == phys & PGMASK {
+				ret := acc << 9 | i
+				ret <<= 12
+				if thresh == 0 {
+					return true, ret
+				}
+				if  ret >= thresh && ret < thresh + tsz {
+					return true, ret
+				}
+			}
+			continue
+		}
+		// skip direct and recursive maps
+		if depth == 4 && (i == VDIRECT || i == VREC) {
+			continue
+		}
+		nextp := pe2pg(c)
+		nexta := acc << 9 | i
+		mapped, va := physmapped1(nextp, phys, depth - 1, nexta, thresh, tsz)
+		if mapped {
+			return true, va
+		}
+	}
+	return false, 0
+}
+
+func physmapped(pmap *[512]int, phys int) (bool, int) {
+	return physmapped1(pmap, phys, 4, 0, 0, 0)
+}
+
+func physmapped_above(pmap *[512]int, phys int, thresh int, size int) (bool, int) {
+	return physmapped1(pmap, phys, 4, 0, thresh, size)
+}
+
+func assert_no_phys(pmap *[512]int, phys int) {
+	mapped, va := physmapped(pmap, phys)
+	if mapped {
+		panic(fmt.Sprintf("%v is mapped at page %#x", phys, va))
+	}
+}
+
+func assert_no_va_map(pmap *[512]int, va int) {
+	pte := pmap_walk(pmap, va, false, 0, nil)
+	if pte != nil && *pte & PTE_P != 0 {
+		panic(fmt.Sprintf("va %#x is mapped", va))
+	}
 }

@@ -32,7 +32,7 @@ def threadpids(tcount, sizeof):
 
 def lockstatus():
 	print 'locks'
-	for l in ['main\.proclock', 'threadlock', 'hacklock']:
+	for l in ['klock', 'threadlock']:
 		print '\t', l
 		xg(symaddr(l, 'main.gobin'), 2)
 
