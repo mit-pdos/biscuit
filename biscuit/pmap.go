@@ -60,7 +60,7 @@ func rounddown(v int, b int) int {
 }
 
 func roundup(v int, b int) int {
-	return v + (b - (v % b))
+	return rounddown(v + b - 1, b)
 }
 
 func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
