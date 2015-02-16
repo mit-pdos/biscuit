@@ -30,6 +30,10 @@ def poke(data, where, num):
 	data[where+6] = chr((num >> 6*8) & 0xff)
 	data[where+7] = chr((num >> 7*8) & 0xff)
 
+def le8(num):
+	l = [chr((num >> i*8) & 0xff) for i in range(8)]
+	return ''.join(l)
+
 if len(sys.argv) != 4:
 	print >> sys.stderr, 'usage: %s <boot image> <kernel image> <output image>' % (sys.argv[0])
 	sys.exit(-1)
@@ -53,6 +57,18 @@ with open(bfn, 'r') as bf, open(kfn, 'r') as kf, open(ofn, 'w') as of:
 
 	of.write(bf.read())
 	of.write(''.join(kfdata))
+	remaining -= 1
+	if remaining < 0:
+		raise 'ruh roh'
+	# pad out kernel image to block
+	of.write('\0'*(blocksz - (len(kfdata) % blocksz)))
+
+	# fake superblock
+	of.write(le8(usedblocks + 1))
+	of.write(le8(5))
+	of.write(le8(30))
+	of.write('\0'*(blocksz - 3*8))
 	for i in range(remaining):
 		of.write('\0'*512)
 print >> sys.stderr, 'created "%s" of length %d blocks' % (ofn, hdblocks)
+print >> sys.stderr, '(fs starts at %#x in "%s")' % (usedblocks*blocksz, ofn)

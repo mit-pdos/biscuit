@@ -57,7 +57,7 @@ d.img: main boot
 	cat boot main > $@
 
 go.img: boot main.gobin
-	./mkbdisk.py boot main.gobin $@
+	./mkbdisk.py boot main.gobin $@ || rm -f $@
 
 $(GOBIN):
 	@echo; echo; echo; \
