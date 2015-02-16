@@ -656,42 +656,64 @@ func main() {
 	go trap(handlers)
 
 	init_8259()
-	cpus_start()
+	//cpus_start()
 
 	ide_init()
 	go ide_daemon()
-	ide_test()
+	//ide_test()
+	bc_test()
 
 	//sys_test("user/fault")
 	//sys_test("user/hello")
-	sys_test("user/fork")
-	sys_test("user/fstest")
+	//sys_test("user/fork")
+	//sys_test("user/fstest")
 	//sys_test("user/getpid")
 
 	fake_work()
 }
 
 func ide_test() {
-	req := idereq_t{}
-	req.buf.disk = 0
-	req.buf.block = 0
-	req.buf.write = false
-	req.ack = make(chan bool)
-	ide_request <- &req
+	req := idereq_new(0, false, nil)
+	ide_request <- req
 	<- req.ack
 	fmt.Printf("read of block %v finished!\n", req.buf.block)
-	for i := 0; i < len(req.buf.data); i++ {
-		fmt.Printf("%x ", req.buf.data[i])
+	for _, c := range req.buf.data {
+		fmt.Printf("%x ", c)
 	}
 	fmt.Printf("\n")
 	fmt.Printf("will overwrite block %v now...\n", req.buf.block)
-	req.buf.write = true
+	req.write = true
 	for i := range req.buf.data {
 		req.buf.data[i] = 0xcc
 	}
-	ide_request <- &req
+	ide_request <- req
 	<- req.ack
 	fmt.Printf("done!\n")
+}
+
+func bc_test() {
+	summy := func(b *bbuf_t) {
+		sum := 0
+		for _, c := range b.buf.data {
+			sum += int(c)
+		}
+		fmt.Printf("sum of block %v is %v\n", b.buf.block, sum)
+	}
+	for i := 0; i < 1024; i++ {
+		bb := bc_read(rand.Intn(10240))
+		summy(bb)
+	}
+
+	bb := bc_read(0)
+	fmt.Printf("corrupting block 0\n")
+	for i := 0; i < 100; i++ {
+		bb.buf.data[i] = 0x41
+	}
+	bc_write(bb)
+	bc_flush(bb)
+	runtime.Cli()
+	for {
+	}
 }
 
 func fake_work() {
