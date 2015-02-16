@@ -313,6 +313,7 @@ func chk_evict() {
 func bc_read(block int) *bbuf_t {
 	bclock.Lock()
 	ret, ok := bcblocks[block]
+	bclock.Unlock()
 
 	if !ok {
 		chk_evict()
@@ -322,11 +323,12 @@ func bc_read(block int) *bbuf_t {
 		nb := &bbuf_t{}
 		nb.buf = ireq.buf
 		nb.dirty = false
+		bclock.Lock()
 		bcblocks[block] = nb
+		bclock.Unlock()
 		ret = nb
 
 	}
-	bclock.Unlock()
 	return ret
 }
 
