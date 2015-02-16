@@ -1586,6 +1586,7 @@ sched_halt(void)
 static void
 sched_run(struct thread_t *t)
 {
+	assert(t->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	setcurthread(t);
 	int32 idx = t - &threads[0];
 	fxrstor(&fxstates[idx][0]);
@@ -1612,14 +1613,9 @@ yieldy(void)
 	struct thread_t *tnext = &threads[i];
 
 	tnext->status = ST_RUNNING;
-	setcurthread(tnext);
-
 	spunlock(&threadlock);
 
-	assert(tnext->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
-
-	fxrstor(&fxstates[i][0]);
-	trapret(tnext->tf, tnext->pmap);
+	sched_run(tnext);
 }
 
 #pragma textflag NOSPLIT
@@ -1795,40 +1791,41 @@ trap(uint64 *tf)
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
-	if (ct &&
-	    (trapno == TRAP_TIMER ||
-	    trapno == TRAP_PGFAULT ||
-	    trapno == TRAP_SYSCALL ||
-	    trapno == TRAP_DISK)) {
+	if (ct) {
 		memmov(ct->tf, tf, TFSIZE);
 		int32 idx = ct - &threads[0];
 		fxsave(&fxstates[idx][0]);
 	}
 
+	// the timer interrupt is handled specially by the runtime
 	if (trapno == TRAP_TIMER) {
 		splock(&threadlock);
-
 		if (ct) {
 			if (ct->status == ST_NEEDSLEEP)
 				ct->status = ST_SLEEPING;
 			else
 				ct->status = ST_RUNNABLE;
 		}
-
 		if (curcpu.num == 0)
 			wakeup();
-
 		lap_eoi();
+		// yieldy doesn't return
 		yieldy();
-	} else {
-		// wait for kernel to handle traps from user programs
-		if (ct && ct->pid)
-			ct->status = ST_WAITING;
 	}
+
+	// all other interrupts
+	// if the interrupt is a CPU exception and not an IRQ, wait for kernel
+	// to handle it before running the thread again. kernel threads
+	// shouldn't be marked waiting, but exceptions in kernel mode are
+	// currently fatal errors, so don't bother discriminating.
+	if (ct && (trapno == TRAP_SYSCALL || trapno < TRAP_TIMER))
+		ct->status = ST_WAITING;
 
 	if (newtrap) {
 		// if ct is nil here, there is a kernel bug
 		int64 uc = ct ? ct->pid : 0;
+		// catch kernel faults that occur while trying to handle user
+		// traps
 		if ((tf[TF_CS] & 3) == 0)
 			uc = 0;
 		((void (*)(uint64 *, int64))newtrap)(tf, uc);
@@ -2396,14 +2393,9 @@ void
 runtime·Proccontinue(void)
 {
 	// no stack check because called from interrupt stack
-	// XXX simplify trap()
 	struct thread_t *ct = curthread;
 	if (ct) {
-		if (ct->pid) {
-			assert(ct->status == ST_WAITING, "weird status", ct->status);
-			ct->status = ST_RUNNING;
-		}
-		// kernel threads are left marked running
+		assert(ct->status == ST_RUNNING, "weird status", ct->status);
 		sched_run(ct);
 	}
 	sched_halt();
