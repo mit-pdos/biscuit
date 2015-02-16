@@ -355,6 +355,7 @@ void hack_yield(void);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
+int64 inb(int32);
 uint64 lap_id(void);
 void lcr0(uint64);
 void lcr3(uint64);
@@ -1473,6 +1474,7 @@ mmap_test(void)
 #define TRAP_PGFAULT    14
 #define TRAP_SYSCALL    64
 #define TRAP_TIMER      32
+#define TRAP_DISK       (32 + 14)
 #define TRAP_SPUR       48
 
 #define TIMER_QUANTUM   100000000UL
@@ -1578,6 +1580,16 @@ sched_halt(void)
 	//	}
 	//}
 	cpu_halt(curcpu.rsp);
+}
+
+#pragma textflag NOSPLIT
+static void
+sched_run(struct thread_t *t)
+{
+	setcurthread(t);
+	int32 idx = t - &threads[0];
+	fxrstor(&fxstates[idx][0]);
+	trapret(t->tf, t->pmap);
 }
 
 #pragma textflag NOSPLIT
@@ -1789,7 +1801,8 @@ trap(uint64 *tf)
 	if (ct &&
 	    (trapno == TRAP_TIMER ||
 	    trapno == TRAP_PGFAULT ||
-	    trapno == TRAP_SYSCALL)) {
+	    trapno == TRAP_SYSCALL ||
+	    trapno == TRAP_DISK)) {
 		memmov(ct->tf, tf, TFSIZE);
 		int32 idx = ct - &threads[0];
 		fxsave(&fxstates[idx][0]);
@@ -2338,6 +2351,15 @@ runtime·Rcr3(void)
 }
 
 #pragma textflag NOSPLIT
+int64
+runtime·Inb(uint64 reg)
+{
+	runtime·stackcheck();
+	int64 ret = inb(reg);
+	return ret;
+}
+
+#pragma textflag NOSPLIT
 void
 runtime·Install_traphandler(uint64 *p)
 {
@@ -2376,9 +2398,18 @@ runtime·Pnum(uint64 m)
 void
 runtime·Proccontinue(void)
 {
-	assert(0, "no impl", 0);
-
-	yieldy_lock();
+	// no stack check because called from interrupt stack
+	// XXX simplify trap()
+	struct thread_t *ct = curthread;
+	if (ct) {
+		if (ct->pid) {
+			assert(ct->status == ST_WAITING, "weird status", ct->status);
+			ct->status = ST_RUNNING;
+		}
+		// kernel threads are left marked running
+		sched_run(ct);
+	}
+	sched_halt();
 }
 
 #pragma textflag NOSPLIT
@@ -2404,6 +2435,7 @@ runtime·Prockill(int64 pid)
 void
 runtime·Procyield(void)
 {
+	// no stack check because called from interrupt stack
 	yieldy_lock();
 }
 

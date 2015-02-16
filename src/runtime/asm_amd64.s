@@ -435,6 +435,24 @@ TEXT outb(SB), NOSPLIT, $0-16
 	BYTE	$0xee
 	RET
 
+TEXT runtime·Outsl(SB), NOSPLIT, $0-24
+	MOVQ	reg+0(FP), DX
+	MOVQ	ptr+8(FP), SI
+	MOVQ	len+16(FP), CX
+	// repnz outsl (%rsi), (%dx)
+	BYTE	$0xf2
+	BYTE	$0x6f
+	RET
+
+TEXT runtime·Insl(SB), NOSPLIT, $0-24
+	MOVQ	reg+0(FP), DX
+	MOVQ	ptr+8(FP), DI
+	MOVQ	len+16(FP), CX
+	// repnz insl (%dx), (%rdi)
+	BYTE	$0xf2
+	BYTE	$0x6d
+	RET
+
 TEXT runtime·inb(SB), NOSPLIT, $0-0
 	JMP	inb(SB)
 

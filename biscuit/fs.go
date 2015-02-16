@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "runtime"
 import "strings"
+import "unsafe"
 
 // given to us by bootloader, initialized in rt0_go_hack
 var fsblock_start int
@@ -98,7 +99,7 @@ func init_8259() {
 	// start icw1: icw4 required
 	outb(pic1, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	outb(pic1d, IRQBASE)
+	outb(pic1d, IRQ_BASE)
 	// icw3, cascaded mode
 	outb(pic1d, 4)
 	// icw4, auto eoi, intel arch mode.
@@ -108,7 +109,7 @@ func init_8259() {
 	// start icw1: icw4 required
 	outb(pic2, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	outb(pic2d, IRQBASE + 8)
+	outb(pic2d, IRQ_BASE + 8)
 	// icw3, slave identification code
 	outb(pic2d, 2)
 	// icw4, auto eoi, intel arch mode.
@@ -148,4 +149,113 @@ func irq_unmask(irq int) {
 }
 
 // use ata pio for fair comparisons against xv6, but i want to use ahci (or
-// something) eventually
+// something) eventually. unlike xv6, we always use disk 0
+
+const(
+	ide_bsy = 0x80
+	ide_drdy = 0x40
+	ide_df = 0x20
+	ide_err = 0x01
+
+	ide_cmd_read = 0x20
+	ide_cmd_write = 0x30
+
+	ide_rbase = 0x1f0
+	ide_rdata = ide_rbase + 0
+	ide_rerr = ide_rbase + 1
+	ide_rcount = ide_rbase + 2
+	ide_rsect = ide_rbase + 3
+	ide_rclow = ide_rbase + 4
+	ide_rchigh = ide_rbase + 5
+	ide_rdrive = ide_rbase + 6
+	ide_rcmd = ide_rbase + 7
+
+	ide_allstatus = 0x3f6
+)
+
+func ide_wait(chk bool) bool {
+	var r int
+	for {
+		r = runtime.Inb(ide_rcmd)
+		if r & (ide_bsy | ide_drdy) == ide_drdy {
+			break
+		}
+	}
+	if chk && r & (ide_df | ide_err) != 0 {
+		return false
+	}
+	return true
+}
+
+func ide_init() {
+	irq_unmask(IRQ_DISK)
+	ide_wait(false)
+
+	found := false
+	for i := 0; i < 1000; i++ {
+		r := runtime.Inb(ide_rcmd)
+		if r == 0xff {
+			fmt.Printf("floating bus!\n")
+			break
+		} else if r != 0 {
+			found = true
+			break
+		}
+	}
+	if found {
+		fmt.Printf("IDE disk detected\n");
+	} else {
+		fmt.Printf("no IDE disk\n");
+	}
+}
+
+type idebuf_t struct {
+	disk	int32
+	block	int32
+	data	[512]uint8
+	write	bool
+}
+
+type idereq_t struct {
+	buf	idebuf_t
+	ack	chan bool
+}
+
+var ide_int_done	= make(chan bool)
+var ide_request		= make(chan *idereq_t)
+
+func ide_start(b *idebuf_t) bool {
+	writing := false
+	ide_wait(false)
+	outb := runtime.Outb
+	outb(ide_allstatus, 0)
+	outb(ide_rcount, 1)
+	outb(ide_rsect, b.block & 0xff)
+	outb(ide_rclow, (b.block >> 8) & 0xff)
+	outb(ide_rchigh, (b.block >> 16) & 0xff)
+	outb(ide_rdrive, 0xe0 | ((b.disk & 1) << 4) | (b.block >> 24) & 0xf)
+	if b.write {
+		outb(ide_rcmd, ide_cmd_write)
+		runtime.Outsl(ide_rdata, unsafe.Pointer(&b.data[0]), 512/4)
+		writing = true
+	} else {
+		outb(ide_rcmd, ide_cmd_read)
+	}
+	return writing
+}
+
+func ide_daemon() {
+	for {
+		req := <- ide_request
+		writing := ide_start(&req.buf)
+		<- ide_int_done
+		if !writing {
+			// read sector
+			if ide_wait(true) {
+				runtime.Insl(ide_rdata,
+				    unsafe.Pointer(&req.buf.data[0]), 512/4)
+			}
+		}
+		req.ack <- true
+	}
+}

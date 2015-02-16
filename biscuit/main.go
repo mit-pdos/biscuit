@@ -42,14 +42,18 @@ func lap_id() int {
 	return int(lapaddr[0x20/4] >> 24)
 }
 
-var     SYSCALL   int = 64
-var     TIMER     int = 32
-var     GPFAULT   int = 13
-var     PGFAULT   int = 14
+const(
+	GPFAULT   = 13
+	PGFAULT   = 14
+	TIMER     = 32
+	SYSCALL   = 64
 
-// low 3 bits must be zero
-var     IRQBASE   int = 32
-var     IRQLAST   int = 32 + 16
+	// low 3 bits must be zero
+	IRQ_BASE  = 32
+	IRQ_DISK  = 14
+	IRQ_LAST  = IRQ_BASE + 16
+	INT_DISK  = IRQ_BASE + IRQ_DISK
+)
 
 // trap cannot do anything that may have side-effects on the runtime (like
 // fmt.Print, or use panic!). the reason is that goroutines are scheduled
@@ -61,16 +65,9 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 
 	trapno := tf[TF_TRAP]
 
-	if trapno >= IRQBASE && trapno < IRQLAST {
-		runtime.Pnum(0xbadb002e)
-		runtime.Pnum(lap_id())
-		runtime.Pnum(trapno)
-		for {}
-	}
-
 	// kernel faults are fatal errors for now, but they could be handled by
 	// trap & c.
-	if pid == 0 {
+	if pid == 0 && trapno < IRQ_BASE {
 		runtime.Pnum(trapno)
 		if trapno == PGFAULT {
 			runtime.Pnum(runtime.Rcr2())
@@ -109,9 +106,8 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	case SYSCALL, PGFAULT:
 		// yield until the syscall/fault is handled
 		runtime.Procyield()
-	case TIMER:
-		// timer interrupts are not passed yet
-		runtime.Pnum(0x41)
+	case INT_DISK:
+		runtime.Proccontinue()
 	default:
 		runtime.Pnum(trapno)
 		runtime.Pnum(tf[TF_RIP])
@@ -150,6 +146,10 @@ func trap(handlers map[int]func(*trapstore_t)) {
 		}
 		runtime.Gosched()
 	}
+}
+
+func trap_disk(ts *trapstore_t) {
+	ide_int_done <- true
 }
 
 var klock	= sync.Mutex{}
@@ -650,11 +650,17 @@ func main() {
 	handlers := map[int]func(*trapstore_t) {
 	     GPFAULT: trap_diex(GPFAULT),
 	     PGFAULT: trap_pgfault,
-	     SYSCALL: trap_syscall}
+	     SYSCALL: trap_syscall,
+	     INT_DISK: trap_disk,
+	     }
 	go trap(handlers)
 
 	init_8259()
 	cpus_start()
+
+	ide_init()
+	go ide_daemon()
+	ide_test()
 
 	//sys_test("user/fault")
 	//sys_test("user/hello")
@@ -663,6 +669,29 @@ func main() {
 	//sys_test("user/getpid")
 
 	fake_work()
+}
+
+func ide_test() {
+	req := idereq_t{}
+	req.buf.disk = 0
+	req.buf.block = 0
+	req.buf.write = false
+	req.ack = make(chan bool)
+	ide_request <- &req
+	<- req.ack
+	fmt.Printf("read of block %v finished!\n", req.buf.block)
+	for i := 0; i < len(req.buf.data); i++ {
+		fmt.Printf("%x ", req.buf.data[i])
+	}
+	fmt.Printf("\n")
+	fmt.Printf("will overwrite block %v now...\n", req.buf.block)
+	req.buf.write = true
+	for i := range req.buf.data {
+		req.buf.data[i] = 0xcc
+	}
+	ide_request <- &req
+	<- req.ack
+	fmt.Printf("done!\n")
 }
 
 func fake_work() {
