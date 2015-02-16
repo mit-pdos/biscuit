@@ -1780,6 +1780,8 @@ runtime·Tfdump(uint64 *tf)
 	pmsg("\n");
 }
 
+int32 halt;
+
 #pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
@@ -1790,6 +1792,9 @@ trap(uint64 *tf)
 	struct thread_t *ct = curthread;
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
+
+	if (halt)
+		while (1);
 
 	if (ct) {
 		memmov(ct->tf, tf, TFSIZE);
@@ -2275,12 +2280,13 @@ void
 hack_exit(int32 code)
 {
 	cli();
-	splock(&threadlock);
 	curthread->status = ST_INVALID;
 
 	pmsg("exit with code");
 	pnum(code);
 	pmsg(".\nhalting\n");
+	halt = 1;
+	USED(halt);
 	while(1);
 }
 
