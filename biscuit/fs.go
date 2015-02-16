@@ -6,8 +6,9 @@ import "strings"
 import "sync"
 import "unsafe"
 
-// given to us by bootloader, initialized in rt0_go_hack
-var fsblock_start int
+// this variable is special: the build system writes the correct value of
+// fsblock_start into the binary
+var fsblock_start int = -1
 
 const NAME_MAX    int = 512
 
@@ -286,10 +287,9 @@ type bbuf_t struct {
 var bcblocks		= make(map[int]*bbuf_t)
 var bclock		= sync.Mutex{}
 
-const nbcbufs		= 512
-
 // caller must hold bclock
 func chk_evict() {
+	nbcbufs := 512
 	if len(bcblocks) <= nbcbufs {
 		return
 	}
