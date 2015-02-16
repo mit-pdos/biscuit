@@ -1618,9 +1618,6 @@ yieldy(void)
 
 	assert(tnext->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 
-	void wlap(uint32 reg, uint32 val);
-	wlap(0x380/4, TIMER_QUANTUM);
-
 	fxrstor(&fxstates[i][0]);
 	trapret(tnext->tf, tnext->pmap);
 }
