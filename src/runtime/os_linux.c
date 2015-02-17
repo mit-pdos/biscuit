@@ -450,6 +450,8 @@ runtime·nmsg2(int8 *msg)
 	runtime·nmsg(msg);
 }
 
+int32 halt;
+
 #pragma textflag NOSPLIT
 void
 runtime·pancake(void *msg, int64 addr)
@@ -459,6 +461,8 @@ runtime·pancake(void *msg, int64 addr)
 
 	pnum(addr);
 	pmsg(" PANCAKE");
+	halt = 1;
+	USED(halt);
 	//void stack_dump(uint64);
 	//stack_dump(rrsp());
 	//pmsg("TWO");
@@ -1505,8 +1509,7 @@ struct thread_t {
 #define ST_RUNNING   2
 #define ST_WAITING   3	// waiting for a trap to be serviced
 #define ST_SLEEPING  4
-#define ST_NEEDSLEEP 5	// sleeping, but shouldn't be woken up yet
-#define ST_SKIPSLEEP 6
+#define ST_WILLSLEEP 5
 	uint64 sleepfor;
 	uint64 sleepret;
 #define ETIMEDOUT   110
@@ -1536,6 +1539,7 @@ static struct cpu_t cpus[MAXCPUS];
 #define setcurthread(x)      (curcpu.mythread = (uint64)x)
 
 struct spinlock_t threadlock;
+struct spinlock_t futexlock;
 
 uint64 durnanotime;
 
@@ -1780,8 +1784,6 @@ runtime·Tfdump(uint64 *tf)
 	pmsg("\n");
 }
 
-int32 halt;
-
 #pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
@@ -1806,9 +1808,12 @@ trap(uint64 *tf)
 	if (trapno == TRAP_TIMER) {
 		splock(&threadlock);
 		if (ct) {
-			if (ct->status == ST_NEEDSLEEP)
+			if (ct->status == ST_WILLSLEEP) {
 				ct->status = ST_SLEEPING;
-			else
+				// XXX set IF, unlock
+				ct->tf[TF_RFLAGS] |= TF_FL_IF;
+				spunlock(&futexlock);
+			} else
 				ct->status = ST_RUNNABLE;
 		}
 		if (curcpu.num == 0)
@@ -1819,11 +1824,10 @@ trap(uint64 *tf)
 	}
 
 	// all other interrupts
-	// if the interrupt is a CPU exception and not an IRQ, wait for kernel
-	// to handle it before running the thread again. kernel threads
-	// shouldn't be marked waiting, but exceptions in kernel mode are
-	// currently fatal errors, so don't bother discriminating.
-	if (ct && (trapno == TRAP_SYSCALL || trapno < TRAP_TIMER))
+	// if the interrupt is a CPU exception and not an IRQ during user
+	// program execution, wait for kernel to handle it before running the
+	// thread again.
+	if (ct && ct->pid && (trapno == TRAP_SYSCALL || trapno < TRAP_TIMER))
 		ct->status = ST_WAITING;
 
 	if (newtrap) {
@@ -2189,8 +2193,6 @@ struct timespec {
 	int64 tv_nsec;
 };
 
-struct spinlock_t futexlock;
-
 // int64 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
 #pragma textflag NOSPLIT
@@ -2216,7 +2218,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			// can't set to sleeping directly, otherwise another
 			// cpu may wake and start executing the same thread
 			// before we yield.
-			curthread->status = ST_NEEDSLEEP;
+			curthread->status = ST_WILLSLEEP;
 			curthread->sleepfor = -1;
 			if (timeout) {
 				assert_mapped(timeout, sizeof(struct timespec),
@@ -2225,11 +2227,9 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 				t += timeout->tv_nsec;
 				curthread->sleepfor = hack_nanotime() + t;
 			}
-			spunlock(&futexlock);
-			sti();
-
 			hack_yield();
-
+			// unlocks futexlock and returns with interrupts
+			// enabled...
 			cli();
 			ret = curthread->sleepret;
 			sti();
@@ -2245,16 +2245,13 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 		int32 i;
 		int32 woke = 0;
 		cli();
-		splock(&threadlock);
 		splock(&futexlock);
+		splock(&threadlock);
 		for (i = 0; i < NTHREADS && val; i++) {
 			uint64 st = threads[i].status;
 			if (threads[i].futaddr == (uint64)uaddr &&
-			    (st == ST_SLEEPING || st == ST_NEEDSLEEP)) {
-				if (st == ST_SLEEPING)
-					threads[i].status = ST_RUNNABLE;
-				if (st == ST_NEEDSLEEP)
-					threads[i].status = ST_SKIPSLEEP;
+			    st == ST_SLEEPING) {
+				threads[i].status = ST_RUNNABLE;
 				threads[i].sleepfor = 0;
 				threads[i].futaddr = 0;
 				threads[i].sleepret = 0;
@@ -2262,8 +2259,8 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 				woke++;
 			}
 		}
-		spunlock(&futexlock);
 		spunlock(&threadlock);
+		spunlock(&futexlock);
 		sti();
 		ret = woke;
 		break;

@@ -661,16 +661,17 @@ func main() {
 
 	ide_init()
 	go ide_daemon()
+
+	sys_test("user/fault")
+	sys_test("user/hello")
+	sys_test("user/fork")
+	sys_test("user/fstest")
+	//sys_test("user/getpid")
+
 	fs_init()
 	//ide_test()
 	//bc_test()
 	sb_test()
-
-	//sys_test("user/fault")
-	//sys_test("user/hello")
-	//sys_test("user/fork")
-	sys_test("user/fstest")
-	//sys_test("user/getpid")
 
 	fake_work()
 }
