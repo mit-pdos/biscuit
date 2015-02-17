@@ -656,17 +656,18 @@ func main() {
 	go trap(handlers)
 
 	init_8259()
-	//cpus_start()
+	cpus_start()
 
 	ide_init()
 	go ide_daemon()
 	//ide_test()
-	bc_test()
+	//bc_test()
+	sb_test()
 
 	//sys_test("user/fault")
 	//sys_test("user/hello")
-	//sys_test("user/fork")
-	//sys_test("user/fstest")
+	sys_test("user/fork")
+	sys_test("user/fstest")
 	//sys_test("user/getpid")
 
 	fake_work()
@@ -714,6 +715,15 @@ func bc_test() {
 	runtime.Cli()
 	for {
 	}
+}
+
+func sb_test() {
+	fmt.Printf("fsblock_start: %#x\n", fsblock_start)
+	blk := bc_read(fsblock_start)
+	sb := superblock_t{&blk.buf.data}
+	fmt.Printf("freeblock: %#x\n", sb.freeblock())
+	fmt.Printf("freeblocklen: %v\n", sb.freeblocklen())
+	fmt.Printf("loglen: %v\n", sb.loglen())
 }
 
 func fake_work() {

@@ -57,6 +57,9 @@ func fs_walk(path []string) (int, int) {
 }
 
 func itobn(ind int) int {
+	if fsblock_start == -1 {
+		panic("fsblock_start not intialized by mkbdisk.py")
+	}
 	return fsblock_start + ind
 }
 
@@ -65,8 +68,8 @@ func bisfs_create(name string, dirnode int) int {
 }
 
 func bisfs_dir_get(dnode int, name string) (int, int) {
-	bn := itobn(dnode)
-	blk := bisblk_t{bc_fetch(bn)}
+	//bn := itobn(dnode)
+	blk := bisblk_t{nil}
 	inode, err := blk.lookup(name)
 	return inode, err
 }
@@ -79,8 +82,47 @@ func (b *bisblk_t) lookup(name string) (int, int) {
 	return 0, 0
 }
 
-func bc_fetch(blockno int) *[512]byte {
-	return nil
+// superblock format:
+// bytes, meaning
+// 0-7,   freeblock start
+// 8-15,  freeblock length
+// 16-23, number of log blocks
+type superblock_t struct {
+	raw	*[512]uint8
+}
+
+func (sb *superblock_t) freeblock() int {
+	return readn(sb.raw[:], 8, 0)
+}
+
+func (sb *superblock_t) freeblocklen() int {
+	return readn(sb.raw[:], 8, 8)
+}
+
+func (sb *superblock_t) loglen() int {
+	return readn(sb.raw[:], 8, 16)
+}
+
+// inode format:
+// bytes, meaning
+// 0-7,   inode type
+// 8-15,  link count
+// 16-23, size
+// 24-31, major
+// 32-39, minor
+type inode_t struct {
+	raw	*[512]uint8
+}
+
+// inode file types
+const(
+	I_INVALID = 0
+	I_FILE
+	I_DIR
+	I_DEV
+)
+
+func (i *inode_t) itype() {
 }
 
 func init_8259() {
