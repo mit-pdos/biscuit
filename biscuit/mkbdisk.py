@@ -63,11 +63,15 @@ with open(bfn, 'r') as bf, open(kfn, 'r') as kf, open(ofn, 'w') as of:
 	# pad out kernel image to block
 	of.write('\0'*(blocksz - (len(kfdata) % blocksz)))
 
-	# fake superblock
+	# superblock fields: freeblock start, freeblock length, log length, and
+	# last block
 	of.write(le8(usedblocks + 1))
-	of.write(le8(5))
+	of.write(le8(10))
 	of.write(le8(30))
-	of.write('\0'*(blocksz - 3*8))
+	# skip root inode
+	of.write(le8(0))
+	of.write(le8(hdblocks))
+	of.write('\0'*(blocksz - 5*8))
 	for i in range(remaining):
 		of.write('\0'*512)
 print >> sys.stderr, 'created "%s" of length %d blocks' % (ofn, hdblocks)

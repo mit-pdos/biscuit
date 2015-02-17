@@ -22,6 +22,7 @@ func tsnext(c int) int {
 }
 
 var	numcpus	int = 1
+
 type cpu_t struct {
 	num		int
 	// per-cpus interrupt queues. the cpu interrupt handler is the
@@ -660,13 +661,14 @@ func main() {
 
 	ide_init()
 	go ide_daemon()
+	fs_init()
 	//ide_test()
 	//bc_test()
 	sb_test()
 
 	//sys_test("user/fault")
 	//sys_test("user/hello")
-	sys_test("user/fork")
+	//sys_test("user/fork")
 	sys_test("user/fstest")
 	//sys_test("user/getpid")
 
@@ -724,6 +726,44 @@ func sb_test() {
 	fmt.Printf("freeblock: %#x\n", sb.freeblock())
 	fmt.Printf("freeblocklen: %v\n", sb.freeblocklen())
 	fmt.Printf("loglen: %v\n", sb.loglen())
+	rb, ri := sb.rootinode()
+	fmt.Printf("root inode, block %v inode index: %v\n", rb, ri)
+	fmt.Printf("last block: %v\n", sb.lastblock())
+
+	fs_fmt()
+}
+
+func fs_fmt() {
+	fmt.Printf("** formatting fs\n")
+	// init the root inode field in the super block
+	superblock := fsblock_start
+	blk := bc_read(superblock)
+	sb := superblock_t{&blk.buf.data}
+	fbs := sb.freeblock()
+	fblen := sb.freeblocklen()
+	ribn := fbs + fblen + sb.loglen()
+	rid := 0
+	sb.w_rootinode(ribn, rid)
+	bc_write(blk)
+	bc_flush(blk)
+
+	// zero free block bitmaps
+	for i := 0; i < fblen; i++ {
+		fblk := bc_read(fbs + i)
+		for j := range fblk.buf.data {
+			fblk.buf.data[j] = 0
+		}
+		bc_writeflush(fblk)
+	}
+
+	// create root inode
+	blk = bc_read(ribn)
+	rinode := inode_t{&blk.buf.data}
+	rinode.w_itype(rid, I_DIR)
+	rinode.w_linkcount(rid, 1)
+	rinode.w_bsize(rid, 1)
+	rinode.w_indirect(rid, 0)
+	bc_writeflush(blk)
 }
 
 func fake_work() {

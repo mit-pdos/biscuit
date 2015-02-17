@@ -12,8 +12,6 @@ var fsblock_start int = -1
 
 const NAME_MAX    int = 512
 
-const ROOT_INODE  int = 1
-
 func path_sanitize(path string) []string {
 	sp := strings.Split(path, "/")
 	nn := []string{}
@@ -23,6 +21,13 @@ func path_sanitize(path string) []string {
 		}
 	}
 	return nn
+}
+
+func fs_init() {
+	// initialize fs block number offsets; they are stored in block 0. the
+	// build system puts them there.
+	// XXX
+	//blk := bc_read(0)
 }
 
 // returns fs device identifier and inode
@@ -45,7 +50,8 @@ func fs_open(path []string, flags int, mode int) (int, int) {
 
 // returns inode and error
 func fs_walk(path []string) (int, int) {
-	cinode := ROOT_INODE
+	iroot := fsblock_start
+	cinode := iroot
 	for _, p := range path {
 		nexti, err := bisfs_dir_get(cinode, p)
 		if err != 0 {
@@ -54,13 +60,6 @@ func fs_walk(path []string) (int, int) {
 		cinode = nexti
 	}
 	return cinode, 0
-}
-
-func itobn(ind int) int {
-	if fsblock_start == -1 {
-		panic("fsblock_start not intialized by mkbdisk.py")
-	}
-	return fsblock_start + ind
 }
 
 func bisfs_create(name string, dirnode int) int {
@@ -82,47 +81,187 @@ func (b *bisblk_t) lookup(name string) (int, int) {
 	return 0, 0
 }
 
+func fieldr(p *[512]uint8, field int) int {
+	return readn(p[:], 8, field*8)
+}
+
+func fieldw(p *[512]uint8, field int, val int) {
+	writen(p[:], 8, field*8, val)
+}
+
+func biencode(blk int, iidx int) int {
+	logisperblk := uint(2)
+	isperblk := 1 << logisperblk
+	if iidx < 0 || iidx >= isperblk {
+		panic("bad inode index")
+	}
+	return int(blk << logisperblk | iidx)
+}
+
+func bidecode(val int) (int, int) {
+	logisperblk := uint(2)
+	blk := int(uint(val) >> logisperblk)
+	iidx := val & 0x3
+	return blk, iidx
+}
+
 // superblock format:
 // bytes, meaning
 // 0-7,   freeblock start
 // 8-15,  freeblock length
 // 16-23, number of log blocks
+// 24-31, root inode
+// 32-39, last block
 type superblock_t struct {
 	raw	*[512]uint8
 }
 
 func (sb *superblock_t) freeblock() int {
-	return readn(sb.raw[:], 8, 0)
+	return fieldr(sb.raw, 0)
 }
 
 func (sb *superblock_t) freeblocklen() int {
-	return readn(sb.raw[:], 8, 8)
+	return fieldr(sb.raw, 1)
 }
 
 func (sb *superblock_t) loglen() int {
-	return readn(sb.raw[:], 8, 16)
+	return fieldr(sb.raw, 2)
+}
+
+func (sb *superblock_t) rootinode() (int, int) {
+	v := fieldr(sb.raw, 3)
+	return bidecode(v)
+}
+
+func (sb *superblock_t) lastblock() int {
+	return fieldr(sb.raw, 4)
+}
+
+func (sb *superblock_t) w_freeblock(n int) {
+	fieldw(sb.raw, 0, n)
+}
+
+func (sb *superblock_t) w_freeblocklen(n int) {
+	fieldw(sb.raw, 1, n)
+}
+
+func (sb *superblock_t) w_loglen(n int) {
+	fieldw(sb.raw, 2, n)
+}
+
+func (sb *superblock_t) w_rootinode(blk int, iidx int) {
+	fieldw(sb.raw, 3, biencode(blk, iidx))
+}
+
+func (sb *superblock_t) w_lastblock(n int) {
+	fieldw(sb.raw, 4, n)
 }
 
 // inode format:
 // bytes, meaning
-// 0-7,   inode type
-// 8-15,  link count
-// 16-23, size
-// 24-31, major
-// 32-39, minor
+// 0-7,    inode type
+// 8-15,   link count
+// 16-23,  size in blocks
+// 24-31,  major
+// 32-39,  minor
+// 40-47,  indirect block
+// 48-80,  block addresses
 type inode_t struct {
 	raw	*[512]uint8
 }
 
 // inode file types
 const(
-	I_INVALID = 0
+	I_FIRST = 0
+	I_INVALID = I_FIRST
 	I_FILE
 	I_DIR
 	I_DEV
+	I_LAST = I_DEV
+
+	NIADDRS = 10
+	NIWORDS = 6 + NIADDRS
 )
 
-func (i *inode_t) itype() {
+func ifield(iidx int, fieldn int) int {
+	return iidx*NIWORDS + fieldn
+}
+
+// iidx is the inode index; necessary since there are four inodes in one block
+func (ind *inode_t) itype(iidx int) int {
+	it := fieldr(ind.raw, ifield(iidx, 0))
+	if it < I_FIRST || it > I_LAST {
+		panic("weird inode type")
+	}
+	return it
+}
+
+func (ind *inode_t) linkcount(iidx int) int {
+	return fieldr(ind.raw, ifield(iidx, 1))
+}
+
+func (ind *inode_t) bsize(iidx int) int {
+	return fieldr(ind.raw, ifield(iidx, 2))
+}
+
+func (ind *inode_t) major(iidx int) int {
+	return fieldr(ind.raw, ifield(iidx, 3))
+}
+
+func (ind *inode_t) minor(iidx int) int {
+	return fieldr(ind.raw, ifield(iidx, 4))
+}
+
+func (ind *inode_t) indirect(iidx int) (int, int) {
+	v := fieldr(ind.raw, ifield(iidx, 5))
+	return bidecode(v)
+}
+
+func (ind *inode_t) addr(iidx int, i int) (int, int) {
+	if i < 0 || i > NIADDRS {
+		panic("bad inode block index")
+	}
+	addroff := 6
+	v := fieldr(ind.raw, ifield(iidx, addroff + i))
+	return bidecode(v)
+}
+
+func (ind *inode_t) w_itype(iidx int, n int) {
+	if n < I_FIRST || n > I_LAST {
+		panic("weird inode type")
+	}
+	fieldw(ind.raw, ifield(iidx, 0), n)
+}
+
+func (ind *inode_t) w_linkcount(iidx int, n int) {
+	fieldw(ind.raw, ifield(iidx, 1), n)
+}
+
+func (ind *inode_t) w_bsize(iidx int, n int) {
+	fieldw(ind.raw, ifield(iidx, 2), n)
+}
+
+func (ind *inode_t) w_major(iidx int, n int) {
+	fieldw(ind.raw, ifield(iidx, 3), n)
+}
+
+func (ind *inode_t) w_minor(iidx int, n int) {
+	fieldw(ind.raw, ifield(iidx, 4), n)
+}
+
+// blk is the block number and iidx in the index of the inode on block blk.
+func (ind *inode_t) w_indirect(blk int, iidx int) {
+	v := biencode(blk, iidx)
+	fieldw(ind.raw, 5, v)
+}
+
+func (ind *inode_t) w_addr(i int, blk int, iidx int) {
+	if i < 0 || i > NIADDRS {
+		panic("bad inode block index")
+	}
+	addroff := 6
+	v := biencode(blk, iidx)
+	fieldw(ind.raw, addroff + i, v)
 }
 
 func init_8259() {
@@ -353,6 +492,9 @@ func chk_evict() {
 
 // returns a bbuf_t for the specified block
 func bc_read(block int) *bbuf_t {
+	if block < 0 {
+		panic("bad block")
+	}
 	bclock.Lock()
 	ret, ok := bcblocks[block]
 	bclock.Unlock()
@@ -374,7 +516,6 @@ func bc_read(block int) *bbuf_t {
 	return ret
 }
 
-// caller must have b locked
 func bc_write(b *bbuf_t) {
 	bclock.Lock()
 	b.dirty = true
@@ -383,8 +524,7 @@ func bc_write(b *bbuf_t) {
 	bclock.Unlock()
 }
 
-// caller must have b locked. write b to disk if it is dirty. returns after b
-// has been written to disk.
+// write b to disk if it is dirty. returns after b has been written to disk.
 func bc_flush(b *bbuf_t) {
 	if !b.dirty {
 		return
@@ -399,4 +539,10 @@ func bc_flush(b *bbuf_t) {
 	ide_request <- ireq
 	<- ireq.ack
 	b.dirty = false
+}
+
+func bc_writeflush(b *bbuf_t) {
+	// XXX takes lock twice
+	bc_write(b)
+	bc_flush(b)
 }

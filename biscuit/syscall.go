@@ -242,9 +242,16 @@ var ELF_XWORD   = 8
 func readn(a []uint8, n int, off int) int {
 	ret := 0
 	for i := 0; i < n; i++ {
-		ret |= int(a[off + i]) << uint(8*i)
+		ret |= int(a[off + i]) << (uint(i)*8)
 	}
 	return ret
+}
+
+func writen(a []uint8, n int, off int, val int) {
+	v := uint(val)
+	for i := 0; i < n; i++ {
+		a[off + i] = uint8((v >> (uint(i)*8)) & 0xff)
+	}
 }
 
 func (e *elf_t) npheaders() int {
