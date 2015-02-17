@@ -6,10 +6,6 @@ import "strings"
 import "sync"
 import "unsafe"
 
-// this variable is special: the build system writes the correct value of
-// fsblock_start into the binary
-var fsblock_start int = -1
-
 const NAME_MAX    int = 512
 
 func path_sanitize(path string) []string {
@@ -23,17 +19,19 @@ func path_sanitize(path string) []string {
 	return nn
 }
 
-var superb	superblock_t
+var fsblock_start	int
+var superb		superblock_t
 
 // free block bitmap lock
 var fblock	= sync.Mutex{}
 
 func fs_init() {
-	// initialize fs block number offsets; they are stored in block 0. the
-	// build system puts them there.
-	// XXX
-	//blk := bc_read(0)
-	blk := bc_read(fsblock_start)
+	// find the first fs block; the build system installs it in block 0 for
+	// us
+	blk := bc_read(0)
+	FSOFF := 506
+	fsblock_start = readn(blk.buf.data[:], 4, FSOFF)
+	blk = bc_read(fsblock_start)
 	superb = superblock_t{}
 	superb.raw = &blk.buf.data
 	superb.blk = blk

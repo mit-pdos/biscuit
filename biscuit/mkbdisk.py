@@ -7,8 +7,6 @@
 import os
 import sys
 
-import elfutil
-
 blocksz = 512
 hdsize = 20 * 1024 * 1024
 
@@ -25,10 +23,6 @@ def poke(data, where, num):
 	data[where+1] = chr((num >> 1*8) & 0xff)
 	data[where+2] = chr((num >> 2*8) & 0xff)
 	data[where+3] = chr((num >> 3*8) & 0xff)
-	data[where+4] = chr((num >> 4*8) & 0xff)
-	data[where+5] = chr((num >> 5*8) & 0xff)
-	data[where+6] = chr((num >> 6*8) & 0xff)
-	data[where+7] = chr((num >> 7*8) & 0xff)
 
 def le8(num):
 	l = [chr((num >> i*8) & 0xff) for i in range(8)]
@@ -47,16 +41,17 @@ usedblocks = fblocks(bfn)
 usedblocks += fblocks(kfn)
 remaining = hdblocks - usedblocks
 
-where = elfutil.fileoffsetofsym(kfn, 'fsblock_start', 'D')
+FSOFF = 506
 print >> sys.stderr, 'free blocks start at %#x' % (usedblocks)
-print >> sys.stderr, 'symbol fsblock_start at %#x' % (where)
+print >> sys.stderr, 'symbol fsblock_start at %#x' % (FSOFF)
 
 with open(bfn, 'r') as bf, open(kfn, 'r') as kf, open(ofn, 'w') as of:
-	kfdata = list(kf.read())
-	poke(kfdata, where, usedblocks)
+	bfdata = list(bf.read())
+	kfdata = kf.read()
+	poke(bfdata, FSOFF, usedblocks)
 
-	of.write(bf.read())
-	of.write(''.join(kfdata))
+	of.write(''.join(bfdata))
+	of.write(kfdata)
 	remaining -= 1
 	if remaining < 0:
 		raise 'ruh roh'

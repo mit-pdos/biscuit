@@ -239,5 +239,8 @@ E820
 e820entries:
 	.long 0
 
-.org 510
+.org 506
+  // this location is special: mkbdisk.py puts the number of the first fs block
+  // here
+  .long 0
   .byte 0x55, 0xaa
