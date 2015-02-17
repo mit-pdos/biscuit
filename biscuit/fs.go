@@ -23,11 +23,20 @@ func path_sanitize(path string) []string {
 	return nn
 }
 
+var superb	superblock_t
+
+// free block bitmap lock
+var fblock	= sync.Mutex{}
+
 func fs_init() {
 	// initialize fs block number offsets; they are stored in block 0. the
 	// build system puts them there.
 	// XXX
 	//blk := bc_read(0)
+	blk := bc_read(fsblock_start)
+	superb = superblock_t{}
+	superb.raw = &blk.buf.data
+	superb.blk = blk
 }
 
 // returns fs device identifier and inode
@@ -112,8 +121,11 @@ func bidecode(val int) (int, int) {
 // 16-23, number of log blocks
 // 24-31, root inode
 // 32-39, last block
+// 40-47, inode block that may have room for an inode
 type superblock_t struct {
+	l	sync.Mutex
 	raw	*[512]uint8
+	blk	*bbuf_t
 }
 
 func (sb *superblock_t) freeblock() int {
@@ -137,6 +149,10 @@ func (sb *superblock_t) lastblock() int {
 	return fieldr(sb.raw, 4)
 }
 
+func (sb *superblock_t) freeinode() int {
+	return fieldr(sb.raw, 5)
+}
+
 func (sb *superblock_t) w_freeblock(n int) {
 	fieldw(sb.raw, 0, n)
 }
@@ -155,6 +171,10 @@ func (sb *superblock_t) w_rootinode(blk int, iidx int) {
 
 func (sb *superblock_t) w_lastblock(n int) {
 	fieldw(sb.raw, 4, n)
+}
+
+func (sb *superblock_t) w_freeinode(n int) {
+	fieldw(sb.raw, 5, n)
 }
 
 // inode format:
@@ -212,18 +232,16 @@ func (ind *inode_t) minor(iidx int) int {
 	return fieldr(ind.raw, ifield(iidx, 4))
 }
 
-func (ind *inode_t) indirect(iidx int) (int, int) {
-	v := fieldr(ind.raw, ifield(iidx, 5))
-	return bidecode(v)
+func (ind *inode_t) indirect(iidx int) int {
+	return fieldr(ind.raw, ifield(iidx, 5))
 }
 
-func (ind *inode_t) addr(iidx int, i int) (int, int) {
+func (ind *inode_t) addr(iidx int, i int) int {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	v := fieldr(ind.raw, ifield(iidx, addroff + i))
-	return bidecode(v)
+	return fieldr(ind.raw, ifield(iidx, addroff + i))
 }
 
 func (ind *inode_t) w_itype(iidx int, n int) {
@@ -250,18 +268,66 @@ func (ind *inode_t) w_minor(iidx int, n int) {
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
-func (ind *inode_t) w_indirect(blk int, iidx int) {
-	v := biencode(blk, iidx)
-	fieldw(ind.raw, 5, v)
+func (ind *inode_t) w_indirect(iidx int, blk int) {
+	fieldw(ind.raw, ifield(iidx, 5), blk)
 }
 
-func (ind *inode_t) w_addr(i int, blk int, iidx int) {
+func (ind *inode_t) w_addr(iidx int, i int, blk int) {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	v := biencode(blk, iidx)
-	fieldw(ind.raw, addroff + i, v)
+	fieldw(ind.raw, ifield(iidx, addroff + i), blk)
+}
+
+func freebit(b uint8) uint {
+	for m := uint(0); m < 8; m++ {
+		if (1 << m) & b == 0 {
+			return m
+		}
+	}
+	panic("no 0 bit?")
+}
+
+// allocates a block, marking it used in the free block bitmap. free blocks and
+// log blocks are not accounted for in the free bitmap; all others are
+func balloc() int {
+	fst := superb.freeblock()
+	flen := superb.freeblocklen()
+	loglen := superb.loglen()
+
+	fblock.Lock()
+	defer fblock.Unlock()
+
+	found := false
+	var bit uint
+	var blk *bbuf_t
+	var blkn int
+	var oct int
+	// 0 is free, 1 is allocated
+	for i := 0; i < flen && !found; i++ {
+		blk = bc_read(fst + i)
+		for idx, c := range blk.buf.data {
+			if c != 0xff {
+				bit = freebit(c)
+				blkn = i
+				oct = idx
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		panic("no free blocks")
+	}
+
+	// mark as allocated
+	blk.buf.data[oct] |= 1 << bit
+	bc_write(blk)
+
+	boffset := fst + flen + loglen
+	bitsperblk := 512*8
+	return boffset + blkn*bitsperblk + oct*8 + int(bit)
 }
 
 func init_8259() {

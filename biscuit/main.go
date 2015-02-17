@@ -662,16 +662,18 @@ func main() {
 	ide_init()
 	go ide_daemon()
 
-	sys_test("user/fault")
-	sys_test("user/hello")
-	sys_test("user/fork")
-	sys_test("user/fstest")
+	//sys_test("user/fault")
+	//sys_test("user/hello")
+	//sys_test("user/fork")
+	//sys_test("user/fstest")
 	//sys_test("user/getpid")
 
 	fs_init()
 	//ide_test()
 	//bc_test()
-	sb_test()
+	//sb_test()
+	balloc_test()
+	fs_fmt()
 
 	fake_work()
 }
@@ -723,30 +725,59 @@ func bc_test() {
 func sb_test() {
 	fmt.Printf("fsblock_start: %#x\n", fsblock_start)
 	blk := bc_read(fsblock_start)
-	sb := superblock_t{&blk.buf.data}
+	sb := superblock_t{}
+	sb.raw = &blk.buf.data
+	sb.blk = blk
 	fmt.Printf("freeblock: %#x\n", sb.freeblock())
 	fmt.Printf("freeblocklen: %v\n", sb.freeblocklen())
 	fmt.Printf("loglen: %v\n", sb.loglen())
 	rb, ri := sb.rootinode()
 	fmt.Printf("root inode, block %v inode index: %v\n", rb, ri)
 	fmt.Printf("last block: %v\n", sb.lastblock())
+	fmt.Printf("free inode block: %v\n", sb.freeinode())
+}
 
-	fs_fmt()
+func balloc_test() {
+	fmt.Printf("balloc test...\n")
+	fst := superb.freeblock()
+	flen := superb.freeblocklen()
+	writebits := func(v uint8) {
+		for i := 0; i < flen; i++ {
+			blk := bc_read(fst + i)
+			for i := range blk.buf.data {
+				blk.buf.data[i] = v
+			}
+			bc_writeflush(blk)
+		}
+	}
+	chk := func(n int, mult int) {
+		s := make([]int, 0)
+		for i := 0; i < n; i++ {
+			bn := balloc()
+			s = append(s, bn)
+		}
+		start := fst + flen + superb.loglen()
+		for i, c := range s {
+			if c != start + i*mult {
+				panic(fmt.Sprintf("bad allocated block %v != %v",
+				    c, start + i*mult))
+			}
+		}
+	}
+	for outer := 0; outer < 2; outer++ {
+		chk(10000, 1)
+		writebits(0)
+	}
+	writebits(0xaa)
+	chk(10000, 2)
+	fmt.Printf("balloc tests xopowo\n")
 }
 
 func fs_fmt() {
 	fmt.Printf("** formatting fs\n")
 	// init the root inode field in the super block
-	superblock := fsblock_start
-	blk := bc_read(superblock)
-	sb := superblock_t{&blk.buf.data}
-	fbs := sb.freeblock()
-	fblen := sb.freeblocklen()
-	ribn := fbs + fblen + sb.loglen()
-	rid := 0
-	sb.w_rootinode(ribn, rid)
-	bc_write(blk)
-	bc_flush(blk)
+	fbs := superb.freeblock()
+	fblen := superb.freeblocklen()
 
 	// zero free block bitmaps
 	for i := 0; i < fblen; i++ {
@@ -757,14 +788,28 @@ func fs_fmt() {
 		bc_writeflush(fblk)
 	}
 
+	ribn := balloc()
+	rid := 0
+	superb.w_rootinode(ribn, rid)
+	superb.w_freeinode(ribn)
+	bc_writeflush(superb.blk)
+
 	// create root inode
-	blk = bc_read(ribn)
+	blk := bc_read(ribn)
 	rinode := inode_t{&blk.buf.data}
 	rinode.w_itype(rid, I_DIR)
 	rinode.w_linkcount(rid, 1)
 	rinode.w_bsize(rid, 1)
 	rinode.w_indirect(rid, 0)
+	// empty directory data
+	ddata := balloc()
+	rinode.w_addr(rid, 0, ddata)
 	bc_writeflush(blk)
+
+	blk = bc_read(ddata)
+	for i := range blk.buf.data {
+		blk.buf.data[i] = 0
+	}
 }
 
 func fake_work() {
