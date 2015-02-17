@@ -192,9 +192,9 @@ type inode_t struct {
 const(
 	I_FIRST = 0
 	I_INVALID = I_FIRST
-	I_FILE
-	I_DIR
-	I_DEV
+	I_FILE  = 1
+	I_DIR   = 2
+	I_DEV   = 3
 	I_LAST = I_DEV
 
 	NIADDRS = 10
@@ -276,6 +276,64 @@ func (ind *inode_t) w_addr(iidx int, i int, blk int) {
 	}
 	addroff := 6
 	fieldw(ind.raw, ifield(iidx, addroff + i), blk)
+}
+
+// directory data format
+// 0-13,  file name characters
+// 14-21, inode block/offset
+// ...repeated, totaling 23 times
+type dirdata_t struct {
+	raw	*[512]uint8
+}
+
+const(
+	DNAMELEN = 14
+	NDBYTES  = 22
+	NDIRENTS = 512/NDBYTES
+)
+
+func doffset(didx int, off int) int {
+	if didx < 0 || didx >= NDIRENTS {
+		panic("bad dirent index")
+	}
+	return NDBYTES*didx + off
+}
+
+func (dir *dirdata_t) filename(didx int) string {
+	st := doffset(didx, 0)
+	sl := dir.raw[st : st + DNAMELEN]
+	ret := make([]byte, 0)
+	for _, c := range sl {
+		if c != 0 {
+			ret = append(ret, c)
+		}
+	}
+	return string(ret)
+}
+
+func (dir *dirdata_t) inodenext(didx int) (int, int) {
+	st := doffset(didx, 14)
+	v := readn(dir.raw[:], st, 8)
+	return bidecode(v)
+}
+
+func (dir *dirdata_t) w_filename(didx int, fn string) {
+	st := doffset(didx, 0)
+	sl := dir.raw[st : st + DNAMELEN]
+	l := len(fn)
+	for i := range sl {
+		if i >= l {
+			sl[i] = 0
+		} else {
+			sl[i] = fn[i]
+		}
+	}
+}
+
+func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
+	st := doffset(didx, 14)
+	v := biencode(blk, iidx)
+	writen(dir.raw[:], 8, st, v)
 }
 
 func freebit(b uint8) uint {

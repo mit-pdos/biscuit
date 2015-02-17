@@ -672,7 +672,7 @@ func main() {
 	//ide_test()
 	//bc_test()
 	//sb_test()
-	balloc_test()
+	//balloc_test()
 	fs_fmt()
 
 	fake_work()
@@ -779,6 +779,13 @@ func fs_fmt() {
 	fbs := superb.freeblock()
 	fblen := superb.freeblocklen()
 
+	fbflush := func() {
+		for i := 0; i < fblen; i++ {
+			blk := bc_read(fbs + i)
+			bc_writeflush(blk)
+		}
+	}
+
 	// zero free block bitmaps
 	for i := 0; i < fblen; i++ {
 		fblk := bc_read(fbs + i)
@@ -801,14 +808,56 @@ func fs_fmt() {
 	rinode.w_linkcount(rid, 1)
 	rinode.w_bsize(rid, 1)
 	rinode.w_indirect(rid, 0)
-	// empty directory data
-	ddata := balloc()
-	rinode.w_addr(rid, 0, ddata)
+	ddn := balloc()
+	rinode.w_addr(rid, 0, ddn)
 	bc_writeflush(blk)
 
-	blk = bc_read(ddata)
+	// populate directory data
+	blk = bc_read(ddn)
 	for i := range blk.buf.data {
 		blk.buf.data[i] = 0
+	}
+	ddata := dirdata_t{&blk.buf.data}
+	for i, fn := range []string{"vmlinuz", "bsd", "bin", "fatmonkey.jpg"} {
+		ddata.w_filename(i, fn)
+		ddata.w_inodenext(i, 0, 0)
+	}
+	bc_writeflush(blk)
+	fbflush()
+
+	ls(ribn, rid)
+}
+
+func inode_get(block int, iidx int) *inode_t {
+	blk := bc_read(block)
+	ret := inode_t{&blk.buf.data}
+	itype := ret.itype(iidx)
+	if itype == I_INVALID {
+		panic(fmt.Sprintf("this is not an inode %v", itype))
+	}
+	return &ret
+}
+
+func ls(dirnode int, iidx int) {
+	fmt.Printf("listing dirnode %v, %v\n", dirnode, iidx)
+	ip := inode_get(dirnode, iidx)
+	if ip.itype(iidx) != I_DIR {
+		panic("this is not a directory")
+	}
+	for i := 0; i < ip.bsize(iidx); i++ {
+		if i > NIADDRS {
+			// use indirect block
+			panic("no imp")
+		}
+		dblk := bc_read(ip.addr(iidx, i))
+		// dump all files listed in this dir data block
+		for j := 0; j < NDIRENTS; j++ {
+			de := dirdata_t{&dblk.buf.data}
+			fn := de.filename(j)
+			if fn != "" {
+				fmt.Printf("-rw-r--r-- %s\n", fn)
+			}
+		}
 	}
 }
 
