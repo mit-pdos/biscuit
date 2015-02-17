@@ -179,7 +179,7 @@ func (sb *superblock_t) w_freeinode(n int) {
 // bytes, meaning
 // 0-7,    inode type
 // 8-15,   link count
-// 16-23,  size in blocks
+// 16-23,  size in bytes
 // 24-31,  major
 // 32-39,  minor
 // 40-47,  indirect block
@@ -218,7 +218,7 @@ func (ind *inode_t) linkcount(iidx int) int {
 	return fieldr(ind.raw, ifield(iidx, 1))
 }
 
-func (ind *inode_t) bsize(iidx int) int {
+func (ind *inode_t) size(iidx int) int {
 	return fieldr(ind.raw, ifield(iidx, 2))
 }
 
@@ -253,7 +253,7 @@ func (ind *inode_t) w_linkcount(iidx int, n int) {
 	fieldw(ind.raw, ifield(iidx, 1), n)
 }
 
-func (ind *inode_t) w_bsize(iidx int, n int) {
+func (ind *inode_t) w_size(iidx int, n int) {
 	fieldw(ind.raw, ifield(iidx, 2), n)
 }
 

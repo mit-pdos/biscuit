@@ -806,7 +806,7 @@ func fs_fmt() {
 	rinode := inode_t{&blk.buf.data}
 	rinode.w_itype(rid, I_DIR)
 	rinode.w_linkcount(rid, 1)
-	rinode.w_bsize(rid, 1)
+	rinode.w_size(rid, 512)
 	rinode.w_indirect(rid, 0)
 	ddn := balloc()
 	rinode.w_addr(rid, 0, ddn)
@@ -844,7 +844,7 @@ func ls(dirnode int, iidx int) {
 	if ip.itype(iidx) != I_DIR {
 		panic("this is not a directory")
 	}
-	for i := 0; i < ip.bsize(iidx); i++ {
+	for i := 0; i < ip.size(iidx)/512; i++ {
 		if i > NIADDRS {
 			// use indirect block
 			panic("no imp")
