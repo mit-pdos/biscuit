@@ -259,8 +259,8 @@ class Fsrep:
       #  print '**** object', type(ab[b]), 'didnt write a whole block'
       #print 'wrote %d bytes' % (diff)
     # free space
-    #for i in range(remaining - len(ab)):
-    #  of.write('\0'*blocksz)
+    for i in range(remaining - len(ab)):
+      of.write('\0'*blocksz)
 
   def pr(self):
     print 'print all blocks'
