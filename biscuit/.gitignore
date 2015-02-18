@@ -2,7 +2,7 @@
 *.d
 .*.swp
 main
-boot
+/boot
 d.img
 user/hello
 user/fault

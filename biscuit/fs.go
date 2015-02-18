@@ -209,7 +209,7 @@ func ifield(iidx int, fieldn int) int {
 func (ind *inode_t) itype(iidx int) int {
 	it := fieldr(ind.raw, ifield(iidx, 0))
 	if it < I_FIRST || it > I_LAST {
-		panic("weird inode type")
+		panic(fmt.Sprintf("weird inode type %d", it))
 	}
 	return it
 }
@@ -313,7 +313,7 @@ func (dir *dirdata_t) filename(didx int) string {
 
 func (dir *dirdata_t) inodenext(didx int) (int, int) {
 	st := doffset(didx, 14)
-	v := readn(dir.raw[:], st, 8)
+	v := readn(dir.raw[:], 8, st)
 	return bidecode(v)
 }
 

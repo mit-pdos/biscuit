@@ -673,7 +673,8 @@ func main() {
 	//bc_test()
 	//sb_test()
 	//balloc_test()
-	fs_fmt()
+	//fs_fmt()
+	lsonly()
 
 	fake_work()
 }
@@ -838,12 +839,34 @@ func inode_get(block int, iidx int) *inode_t {
 	return &ret
 }
 
+func lsonly() {
+	rootinode, rootioff := superb.rootinode()
+	fmt.Printf("lising root dir...\n")
+	ls(rootinode, rootioff)
+}
+
+func file_pr(fn string, fibn int, fioff int) bool {
+	if fn == "" {
+		return false
+	}
+	finode := inode_get(fibn, fioff)
+	sz := finode.size(fioff)
+	if finode.itype(fioff) == I_DIR {
+		fmt.Printf("drw-r--r-- %10d %s/\n", sz, fn)
+		return true
+	}
+
+	fmt.Printf("-rw-r--r-- %10d %s\n", sz, fn)
+	return false
+}
+
 func ls(dirnode int, iidx int) {
-	fmt.Printf("listing dirnode %v, %v\n", dirnode, iidx)
 	ip := inode_get(dirnode, iidx)
 	if ip.itype(iidx) != I_DIR {
 		panic("this is not a directory")
 	}
+	recdirn := make([]string, 0)
+	recenc := make([]int, 0)
 	for i := 0; i < ip.size(iidx)/512; i++ {
 		if i > NIADDRS {
 			// use indirect block
@@ -853,11 +876,20 @@ func ls(dirnode int, iidx int) {
 		// dump all files listed in this dir data block
 		for j := 0; j < NDIRENTS; j++ {
 			de := dirdata_t{&dblk.buf.data}
+			dib, dioff := de.inodenext(j)
 			fn := de.filename(j)
-			if fn != "" {
-				fmt.Printf("-rw-r--r-- %s\n", fn)
+			isdir := file_pr(fn, dib, dioff)
+			if isdir {
+				recdirn = append(recdirn, fn)
+				recenc = append(recenc, biencode(dib, dioff))
 			}
 		}
+	}
+
+	for i, encd := range recenc {
+		fmt.Printf("\t%s/\n", recdirn[i])
+		dn, ii := bidecode(encd)
+		ls(dn, ii)
 	}
 }
 

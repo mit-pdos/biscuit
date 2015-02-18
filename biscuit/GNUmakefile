@@ -24,6 +24,8 @@ RFS  += $(patsubst %,%.d,$(UPROGS))
 RFS  += user/litc.d
 
 GOBIN := ../bin/go
+SKEL := fsdir
+SKELDEPS := $(shell find $(SKEL))
 
 CPUS := $(shell echo $${CPUS:-1})
 QOPTS := -m 256M -smp cpus=$(CPUS)
@@ -56,8 +58,8 @@ bootmain.o: bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: boot main.gobin
-	./mkbdisk.py boot main.gobin $@ || { rm -f $@; false; }
+go.img: boot main.gobin $(SKELDEPS)
+	./mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
 $(GOBIN):
 	@echo; echo; echo; \
@@ -115,4 +117,4 @@ gqemu-gdb: go.img
 gqemux-gdb: go.img
 	$(QEMU) $(QOPTS) -S -s -serial stdio -hda go.img
 
-.PHONY: clean qemu gqemu
+.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb
