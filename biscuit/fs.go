@@ -47,10 +47,10 @@ func fs_init() {
 func fs_read(dst []uint8, file inum, offset int) (int, int) {
 	fib, fio := bidecode(int(file))
 	inode := inode_get(fib, fio, false, 0)
-	if inode.itype(fio) != I_FILE {
+	if inode.itype() != I_FILE {
 		panic("no imp")
 	}
-	isz := inode.size(fio)
+	isz := inode.size()
 	if offset > isz {
 		return 0, 0
 	}
@@ -64,7 +64,7 @@ func fs_read(dst []uint8, file inum, offset int) (int, int) {
 		if whichblk >= NIADDRS {
 			panic("need indirect support")
 		}
-		blkn := inode.addr(fio, whichblk)
+		blkn := inode.addr(whichblk)
 		blk := bc_read(blkn)
 		start := fileoff % 512
 		end := 512
@@ -121,7 +121,7 @@ func bisfs_create(name string, dirnode inum) (inum, int) {
 func bisfs_dirget(name string, dirnoden inum) (inum, int) {
 	dib, dio := bidecode(int(dirnoden))
 	dirnode := inode_get(dib, dio, true, I_DIR)
-	denames, deinodes := dirents_get(dirnode, dio)
+	denames, deinodes := dirents_get(dirnode)
 	for i, n := range denames {
 		if name == n {
 			return deinodes[i], 0
@@ -130,14 +130,14 @@ func bisfs_dirget(name string, dirnoden inum) (inum, int) {
 	return 0, -ENOENT
 }
 
-func dirents_get(dirnode *inode_t, ioff int) ([]string, []inum) {
-	if dirnode.itype(ioff) != I_DIR {
+func dirents_get(dirnode *inode_t) ([]string, []inum) {
+	if dirnode.itype() != I_DIR {
 		panic("not a directory")
 	}
 	sret := make([]string, 0)
 	iret := make([]inum, 0)
-	for bn := 0; bn < dirnode.size(ioff)/512; bn++ {
-		blk := bc_read(dirnode.addr(ioff, bn))
+	for bn := 0; bn < dirnode.size()/512; bn++ {
+		blk := bc_read(dirnode.addr(bn))
 		dirdata := dirdata_t{&blk.buf.data}
 		for i := 0; i < NDIRENTS; i++ {
 			fn := dirdata.filename(i)
@@ -152,10 +152,10 @@ func dirents_get(dirnode *inode_t, ioff int) ([]string, []inum) {
 	return sret, iret
 }
 
-func inode_get(block int, iidx int, verify bool, exptype int) *inode_t {
+func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
 	blk := bc_read(block)
-	ret := inode_t{&blk.buf.data}
-	itype := ret.itype(iidx)
+	ret := inode_t{&blk.buf.data, ioff}
+	itype := ret.itype()
 	if verify && itype != exptype {
 		panic(fmt.Sprintf("this is not an inode of type %v", exptype))
 	}
@@ -260,6 +260,7 @@ func (sb *superblock_t) w_freeinode(n int) {
 // 48-80,  block addresses
 type inode_t struct {
 	raw	*[512]uint8
+	ioff	int
 }
 
 // inode file types
@@ -280,76 +281,76 @@ func ifield(iidx int, fieldn int) int {
 }
 
 // iidx is the inode index; necessary since there are four inodes in one block
-func (ind *inode_t) itype(iidx int) int {
-	it := fieldr(ind.raw, ifield(iidx, 0))
+func (ind *inode_t) itype() int {
+	it := fieldr(ind.raw, ifield(ind.ioff, 0))
 	if it < I_FIRST || it > I_LAST {
 		panic(fmt.Sprintf("weird inode type %d", it))
 	}
 	return it
 }
 
-func (ind *inode_t) linkcount(iidx int) int {
-	return fieldr(ind.raw, ifield(iidx, 1))
+func (ind *inode_t) linkcount() int {
+	return fieldr(ind.raw, ifield(ind.ioff, 1))
 }
 
-func (ind *inode_t) size(iidx int) int {
-	return fieldr(ind.raw, ifield(iidx, 2))
+func (ind *inode_t) size() int {
+	return fieldr(ind.raw, ifield(ind.ioff, 2))
 }
 
-func (ind *inode_t) major(iidx int) int {
-	return fieldr(ind.raw, ifield(iidx, 3))
+func (ind *inode_t) major() int {
+	return fieldr(ind.raw, ifield(ind.ioff, 3))
 }
 
-func (ind *inode_t) minor(iidx int) int {
-	return fieldr(ind.raw, ifield(iidx, 4))
+func (ind *inode_t) minor() int {
+	return fieldr(ind.raw, ifield(ind.ioff, 4))
 }
 
-func (ind *inode_t) indirect(iidx int) int {
-	return fieldr(ind.raw, ifield(iidx, 5))
+func (ind *inode_t) indirect() int {
+	return fieldr(ind.raw, ifield(ind.ioff, 5))
 }
 
-func (ind *inode_t) addr(iidx int, i int) int {
+func (ind *inode_t) addr(i int) int {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	return fieldr(ind.raw, ifield(iidx, addroff + i))
+	return fieldr(ind.raw, ifield(ind.ioff, addroff + i))
 }
 
-func (ind *inode_t) w_itype(iidx int, n int) {
+func (ind *inode_t) w_itype(n int) {
 	if n < I_FIRST || n > I_LAST {
 		panic("weird inode type")
 	}
-	fieldw(ind.raw, ifield(iidx, 0), n)
+	fieldw(ind.raw, ifield(ind.ioff, 0), n)
 }
 
-func (ind *inode_t) w_linkcount(iidx int, n int) {
-	fieldw(ind.raw, ifield(iidx, 1), n)
+func (ind *inode_t) w_linkcount(n int) {
+	fieldw(ind.raw, ifield(ind.ioff, 1), n)
 }
 
-func (ind *inode_t) w_size(iidx int, n int) {
-	fieldw(ind.raw, ifield(iidx, 2), n)
+func (ind *inode_t) w_size(n int) {
+	fieldw(ind.raw, ifield(ind.ioff, 2), n)
 }
 
-func (ind *inode_t) w_major(iidx int, n int) {
-	fieldw(ind.raw, ifield(iidx, 3), n)
+func (ind *inode_t) w_major(n int) {
+	fieldw(ind.raw, ifield(ind.ioff, 3), n)
 }
 
-func (ind *inode_t) w_minor(iidx int, n int) {
-	fieldw(ind.raw, ifield(iidx, 4), n)
+func (ind *inode_t) w_minor(n int) {
+	fieldw(ind.raw, ifield(ind.ioff, 4), n)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
-func (ind *inode_t) w_indirect(iidx int, blk int) {
-	fieldw(ind.raw, ifield(iidx, 5), blk)
+func (ind *inode_t) w_indirect(blk int) {
+	fieldw(ind.raw, ifield(ind.ioff, 5), blk)
 }
 
-func (ind *inode_t) w_addr(iidx int, i int, blk int) {
+func (ind *inode_t) w_addr(i int, blk int) {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	fieldw(ind.raw, ifield(iidx, addroff + i), blk)
+	fieldw(ind.raw, ifield(ind.ioff, addroff + i), blk)
 }
 
 // directory data format

@@ -804,13 +804,13 @@ func fs_fmt() {
 
 	// create root inode
 	blk := bc_read(ribn)
-	rinode := inode_t{&blk.buf.data}
-	rinode.w_itype(rid, I_DIR)
-	rinode.w_linkcount(rid, 1)
-	rinode.w_size(rid, 512)
-	rinode.w_indirect(rid, 0)
+	rinode := inode_t{&blk.buf.data, rid}
+	rinode.w_itype(I_DIR)
+	rinode.w_linkcount(1)
+	rinode.w_size(512)
+	rinode.w_indirect(0)
 	ddn := balloc()
-	rinode.w_addr(rid, 0, ddn)
+	rinode.w_addr(0, ddn)
 	bc_writeflush(blk)
 
 	// populate directory data
@@ -840,8 +840,8 @@ func file_pr(fn string, fibn int, fioff int) bool {
 		return false
 	}
 	finode := inode_get(fibn, fioff, false, 0)
-	sz := finode.size(fioff)
-	if finode.itype(fioff) == I_DIR {
+	sz := finode.size()
+	if finode.itype() == I_DIR {
 		fmt.Printf("drw-r--r-- %10d %s/\n", sz, fn)
 		return true
 	}
@@ -850,19 +850,19 @@ func file_pr(fn string, fibn int, fioff int) bool {
 	return false
 }
 
-func ls(dirnode int, iidx int) {
-	ip := inode_get(dirnode, iidx, true, I_DIR)
-	if ip.itype(iidx) != I_DIR {
+func ls(dirnode int, ioff int) {
+	ip := inode_get(dirnode, ioff, true, I_DIR)
+	if ip.itype() != I_DIR {
 		panic("this is not a directory")
 	}
 	recdirn := make([]string, 0)
 	recenc := make([]int, 0)
-	for i := 0; i < ip.size(iidx)/512; i++ {
+	for i := 0; i < ip.size()/512; i++ {
 		if i > NIADDRS {
 			// use indirect block
 			panic("no imp")
 		}
-		dblk := bc_read(ip.addr(iidx, i))
+		dblk := bc_read(ip.addr(i))
 		// dump all files listed in this dir data block
 		for j := 0; j < NDIRENTS; j++ {
 			de := dirdata_t{&dblk.buf.data}
