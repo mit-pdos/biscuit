@@ -152,7 +152,7 @@ vprintf(char *fmt, va_list ap)
 			case 'u':
 				sig = 0;
 			case 'd':
-				{
+			{
 				ulong n;
 				if (longmode)
 					n = va_arg(ap, ulong);
@@ -169,9 +169,9 @@ vprintf(char *fmt, va_list ap)
 				dst += putn(dst, end, bot, 10);
 				done = 1;
 				break;
-				}
+			}
 			case 'x':
-				{
+			{
 				if (prehex) {
 					dst += wc(dst, end, '0');
 					dst += wc(dst, end, 'x');
@@ -188,9 +188,20 @@ vprintf(char *fmt, va_list ap)
 				dst += putn(dst, end, bot, 16);
 				done = 1;
 				break;
-				}
+			}
 			case 'c':
 				dst += wc(dst, end, (char)va_arg(ap, int));
+				done = 1;
+				break;
+			case 's':
+			{
+				char *s = va_arg(ap, char *);
+				while (*s)
+					dst += wc(dst, end, *s++);
+				done = 1;
+				break;
+			}
+			default:
 				done = 1;
 				break;
 			}
