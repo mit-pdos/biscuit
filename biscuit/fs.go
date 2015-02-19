@@ -73,7 +73,6 @@ func fs_read(dst []uint8, file inum, offset int) (int, int) {
 			end = start + left
 			readall = true
 		}
-		fmt.Printf("start %v end %v\n", start, end)
 		src := blk.buf.data[start:end]
 		for i, b := range src {
 			dst[c + i] = b

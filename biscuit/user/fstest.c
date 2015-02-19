@@ -2,6 +2,19 @@
 
 static char buf[1024];
 
+void readprint(int fd)
+{
+	int ret;
+	if ((ret = read(fd, &buf, sizeof(buf))) < 0) {
+		printf_red("read1 failed\n");
+		exit(-1);
+	}
+	if (ret == sizeof(buf))
+		ret = sizeof(buf) - 1;
+	buf[ret] = '\0';
+	printf("FD %d returned: %s\n", fd, buf);
+}
+
 int main()
 {
 	int ret;
@@ -19,24 +32,15 @@ int main()
 		return -1;
 	}
 	int fd2 = ret;
-
-	if ((ret = read(fd1, &buf, sizeof(buf))) < 0) {
-		printf_red("read1 failed\n");
+	if ((ret = open("/clouseau.txt", O_RDONLY, 0)) < 0) {
+		printf_red("should have succeeded 3\n");
 		return -1;
 	}
-	if (ret == sizeof(buf))
-		ret = sizeof(buf) - 1;
-	buf[ret] = '\0';
-	printf("fd1: %s\n", buf);
+	int fd3 = ret;
 
-	if ((ret = read(fd2, &buf, sizeof(buf))) < 0) {
-		printf_red("read2 failed\n");
-		return -1;
-	}
-	if (ret == sizeof(buf))
-		ret = sizeof(buf) - 1;
-	buf[ret] = '\0';
-	printf("fd2: %s\n", buf);
+	readprint(fd1);
+	readprint(fd2);
+	readprint(fd3);
 
 	printf_blue("fs tests passed!\n");
 	return 0;
