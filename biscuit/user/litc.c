@@ -219,6 +219,36 @@ printf(char *fmt, ...)
 	return ret;
 }
 
+int
+printf_blue(char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+
+	pmsg(BLUE);
+	va_start(ap, fmt);
+	ret = vprintf(fmt, ap);
+	va_end(ap);
+	pmsg(RESET);
+
+	return ret;
+}
+
+int
+printf_red(char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+
+	pmsg(RED);
+	va_start(ap, fmt);
+	ret = vprintf(fmt, ap);
+	va_end(ap);
+	pmsg(RESET);
+
+	return ret;
+}
+
 void
 _entry(void)
 {
