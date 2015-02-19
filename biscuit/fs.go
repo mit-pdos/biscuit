@@ -8,6 +8,18 @@ import "unsafe"
 
 const NAME_MAX    int = 512
 
+// inum is an fs-independent inode identifier. for biscuit fs it contains an
+// inode's block/offset pair
+type inum int
+
+var fsblock_start	int
+var superb		superblock_t
+var iroot		inum
+
+// free block bitmap lock
+var fblock	= sync.Mutex{}
+
+
 func path_sanitize(path string) []string {
 	sp := strings.Split(path, "/")
 	nn := []string{}
@@ -19,12 +31,6 @@ func path_sanitize(path string) []string {
 	return nn
 }
 
-var fsblock_start	int
-var superb		superblock_t
-
-// free block bitmap lock
-var fblock	= sync.Mutex{}
-
 func fs_init() {
 	// find the first fs block; the build system installs it in block 0 for
 	// us
@@ -35,57 +41,90 @@ func fs_init() {
 	superb = superblock_t{}
 	superb.raw = &blk.buf.data
 	superb.blk = blk
+	a, b := superb.rootinode()
+	iroot = inum(biencode(a, b))
 }
 
-// returns fs device identifier and inode
-func fs_open(path []string, flags int, mode int) (int, int) {
+// returns inum for specified file
+func fs_open(path []string, flags int, mode int) (inum, int) {
 	fmt.Printf("fs open %q\n", path)
 
-	dirnode, inode := fs_walk(path)
+	dirnode, inode, err := fs_walk(path)
 	if flags & O_CREAT == 0 {
-		if inode == -1 {
+		if err != 0 {
 			return 0, -ENOENT
 		}
 		return inode, 0
 	}
 
 	name := path[len(path) - 1]
-	inode = bisfs_create(name, dirnode)
+	crinode, err := bisfs_create(name, dirnode)
 
-	return inode, 0
+	return crinode, err
 }
 
 // returns inode and error
-func fs_walk(path []string) (int, int) {
-	iroot := fsblock_start
+func fs_walk(path []string) (inum, inum, int) {
 	cinode := iroot
+	var lastinode inum
 	for _, p := range path {
-		nexti, err := bisfs_dir_get(cinode, p)
+		nexti, err := bisfs_dirget(p, cinode)
 		if err != 0 {
-			return 0, err
+			return 0, 0, err
 		}
+		lastinode = cinode
 		cinode = nexti
 	}
-	return cinode, 0
+	return lastinode, cinode, 0
 }
 
-func bisfs_create(name string, dirnode int) int {
-	return -1
+func bisfs_create(name string, dirnode inum) (inum, int) {
+	panic("no imp")
+	return -1, -1
 }
 
-func bisfs_dir_get(dnode int, name string) (int, int) {
-	//bn := itobn(dnode)
-	blk := bisblk_t{nil}
-	inode, err := blk.lookup(name)
-	return inode, err
+func bisfs_dirget(name string, dirnoden inum) (inum, int) {
+	dib, dio := bidecode(int(dirnoden))
+	dirnode := inode_get(dib, dio, true, I_DIR)
+	denames, deinodes := dirents_get(dirnode, dio)
+	for i, n := range denames {
+		if name == n {
+			return deinodes[i], 0
+		}
+	}
+	return 0, -ENOENT
 }
 
-type bisblk_t struct {
-	data	*[512]byte
+func dirents_get(dirnode *inode_t, ioff int) ([]string, []inum) {
+	if dirnode.itype(ioff) != I_DIR {
+		panic("not a directory")
+	}
+	sret := make([]string, 0)
+	iret := make([]inum, 0)
+	for bn := 0; bn < dirnode.size(ioff)/512; bn++ {
+		blk := bc_read(dirnode.addr(ioff, bn))
+		dirdata := dirdata_t{&blk.buf.data}
+		for i := 0; i < NDIRENTS; i++ {
+			fn := dirdata.filename(i)
+			if fn == "" {
+				continue
+			}
+			sret = append(sret, fn)
+			a, b := dirdata.inodenext(i)
+			iret = append(iret, inum(biencode(a, b)))
+		}
+	}
+	return sret, iret
 }
 
-func (b *bisblk_t) lookup(name string) (int, int) {
-	return 0, 0
+func inode_get(block int, iidx int, verify bool, exptype int) *inode_t {
+	blk := bc_read(block)
+	ret := inode_t{&blk.buf.data}
+	itype := ret.itype(iidx)
+	if verify && itype != exptype {
+		panic(fmt.Sprintf("this is not an inode of type %v", exptype))
+	}
+	return &ret
 }
 
 func fieldr(p *[512]uint8, field int) int {

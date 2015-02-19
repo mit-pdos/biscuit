@@ -137,7 +137,6 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 		fd.perms = O_RDWR
 	}
 	fd.inode = inode
-
 	return fdn
 }
 

@@ -201,7 +201,7 @@ func cdelay(n int) {
 }
 
 type fd_t struct {
-	inode	int
+	inode	inum
 	offset	int
 	perms	int
 }
@@ -661,14 +661,14 @@ func main() {
 
 	ide_init()
 	go ide_daemon()
+	fs_init()
 
 	//sys_test("user/fault")
 	//sys_test("user/hello")
 	//sys_test("user/fork")
-	//sys_test("user/fstest")
+	sys_test("user/fstest")
 	//sys_test("user/getpid")
 
-	fs_init()
 	//ide_test()
 	//bc_test()
 	//sb_test()
@@ -829,16 +829,6 @@ func fs_fmt() {
 	ls(ribn, rid)
 }
 
-func inode_get(block int, iidx int) *inode_t {
-	blk := bc_read(block)
-	ret := inode_t{&blk.buf.data}
-	itype := ret.itype(iidx)
-	if itype == I_INVALID {
-		panic(fmt.Sprintf("this is not an inode %v", itype))
-	}
-	return &ret
-}
-
 func lsonly() {
 	rootinode, rootioff := superb.rootinode()
 	fmt.Printf("lising root dir...\n")
@@ -849,7 +839,7 @@ func file_pr(fn string, fibn int, fioff int) bool {
 	if fn == "" {
 		return false
 	}
-	finode := inode_get(fibn, fioff)
+	finode := inode_get(fibn, fioff, false, 0)
 	sz := finode.size(fioff)
 	if finode.itype(fioff) == I_DIR {
 		fmt.Printf("drw-r--r-- %10d %s/\n", sz, fn)
@@ -861,7 +851,7 @@ func file_pr(fn string, fibn int, fioff int) bool {
 }
 
 func ls(dirnode int, iidx int) {
-	ip := inode_get(dirnode, iidx)
+	ip := inode_get(dirnode, iidx, true, I_DIR)
 	if ip.itype(iidx) != I_DIR {
 		panic("this is not a directory")
 	}
