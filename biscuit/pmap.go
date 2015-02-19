@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+import "sync"
 import "unsafe"
 
 const PTE_P     int = 1 << 0
@@ -24,6 +25,7 @@ const VEND      int = 0x50
 // tracks all pages allocated by go internally by the kernel such as pmap pages
 // allocated by go (not the bootloader/runtime)
 var allpages = map[int]*[512]int{}
+var allplock = sync.Mutex{}
 
 func shl(c uint) uint {
 	return 12 + 9 * c
@@ -71,7 +73,6 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 }
 
 func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
-
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
 	if ptn & (PGSIZE - 1) != 0 {
@@ -279,6 +280,8 @@ func pmap_cperms(pm *[512]int, va int, nperms int) {
 
 // allocates a page tracked by allpages and maps it at va
 func kmalloc(va int, perms int) {
+	allplock.Lock()
+	defer allplock.Unlock()
 	_, p_pg := pg_new(allpages)
 	pte := pmap_walk(kpmap(), va, true, perms, allpages)
 	if pte != nil && *pte & PTE_P != 0 {

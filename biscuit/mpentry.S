@@ -103,7 +103,7 @@ protocseg64:
 	// get our own stack
 	movq	72(%rdx), %rax
 	movq	%rax, %rsp
-	// rsp = top of page
+	// rsp = bottom of stack page
 	addq	$PGSIZE, %rsp
 	addq	$(PGSIZE * 2), %rax
 	movq	%rax, 72(%rdx)

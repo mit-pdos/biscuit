@@ -45,6 +45,11 @@ const(
 // lowest userspace address
 const USERMIN      int = 0xf1000000
 
+// story for concurrent system calls: any syscall that touches any proc_t, p,
+// which is not the calling process, needs to lock p. access to globals (maps)
+// also need to be locked. obviously, a process cannot have two or more
+// syscalls/pagefaults running concurrently since syscalls/pagefaults are not
+// batched.
 func syscall(pid int, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)

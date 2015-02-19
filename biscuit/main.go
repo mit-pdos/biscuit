@@ -153,11 +153,11 @@ func trap_disk(ts *trapstore_t) {
 	ide_int_done <- true
 }
 
-var klock	= sync.Mutex{}
+//var klock	= sync.Mutex{}
 
 func trap_syscall(ts *trapstore_t) {
-	klock.Lock()
-	defer klock.Unlock()
+	//klock.Lock()
+	//defer klock.Unlock()
 
 	pid  := ts.pid
 	syscall(pid, &ts.tf)
@@ -236,15 +236,16 @@ var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
 func proc_new(name string) *proc_t {
-	//proclock.Lock()
-	//defer proclock.Unlock()
-
-	pid_cur++
 	ret := &proc_t{}
-	allprocs[pid_cur] = ret
+
+	proclock.Lock()
+	pid_cur++
+	newpid := pid_cur
+	allprocs[newpid] = ret
+	proclock.Unlock()
 
 	ret.name = name
-	ret.pid = pid_cur
+	ret.pid = newpid
 	ret.pages = make(map[int]*[512]int)
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
@@ -255,10 +256,9 @@ func proc_new(name string) *proc_t {
 }
 
 func proc_get(pid int) *proc_t {
-	//proclock.Lock()
+	proclock.Lock()
 	p, ok := allprocs[pid]
-	//proclock.Unlock()
-
+	proclock.Unlock()
 	if !ok {
 		panic(fmt.Sprintf("no such pid %d", pid))
 	}
@@ -323,14 +323,15 @@ func (p *proc_t) sched_add(tf *[TFSIZE]int) {
 }
 
 func proc_kill(pid int) {
-	//proclock.Lock()
-	//defer proclock.Unlock()
-
+	proclock.Lock()
 	p, ok := allprocs[pid]
 	if !ok {
 		panic("bad pid")
 	}
 	p.dead = true
+	delete(allprocs, pid)
+	proclock.Unlock()
+
 	runtime.Prockill(pid)
 	// XXX
 	//fmt.Printf("not cleaning up\n")
@@ -340,7 +341,6 @@ func proc_kill(pid int) {
 	//runtime.ReadMemStats(&ms)
 	//before := ms.Alloc
 
-	delete(allprocs, pid)
 	runtime.GC()
 	//runtime.ReadMemStats(&ms)
 	//after := ms.Alloc
@@ -663,11 +663,11 @@ func main() {
 	go ide_daemon()
 	fs_init()
 
-	//sys_test("user/fault")
-	//sys_test("user/hello")
-	//sys_test("user/fork")
+	sys_test("user/fault")
+	sys_test("user/hello")
+	sys_test("user/fork")
 	sys_test("user/fstest")
-	//sys_test("user/getpid")
+	sys_test("user/getpid")
 
 	//ide_test()
 	//bc_test()
