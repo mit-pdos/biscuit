@@ -84,8 +84,6 @@ func fs_read(dst []uint8, file inum, offset int) (int, int) {
 
 // returns inum for specified file
 func fs_open(path []string, flags int, mode int) (inum, int) {
-	fmt.Printf("fs open %q\n", path)
-
 	dirnode, inode, err := fs_walk(path)
 	if flags & O_CREAT == 0 {
 		if err != 0 {
