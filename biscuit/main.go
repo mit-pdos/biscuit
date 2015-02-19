@@ -201,7 +201,7 @@ func cdelay(n int) {
 }
 
 type fd_t struct {
-	inode	inum
+	file	inum
 	offset	int
 	perms	int
 }

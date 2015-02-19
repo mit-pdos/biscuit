@@ -19,7 +19,6 @@ var iroot		inum
 // free block bitmap lock
 var fblock	= sync.Mutex{}
 
-
 func path_sanitize(path string) []string {
 	sp := strings.Split(path, "/")
 	nn := []string{}
@@ -43,6 +42,45 @@ func fs_init() {
 	superb.blk = blk
 	a, b := superb.rootinode()
 	iroot = inum(biencode(a, b))
+}
+
+func fs_read(dst []uint8, file inum, offset int) (int, int) {
+	fib, fio := bidecode(int(file))
+	inode := inode_get(fib, fio, false, 0)
+	if inode.itype(fio) != I_FILE {
+		panic("no imp")
+	}
+	isz := inode.size(fio)
+	if offset > isz {
+		return 0, 0
+	}
+
+	sz := len(dst)
+	c := 0
+	readall := false
+	for c < sz && !readall {
+		fileoff := offset + c
+		whichblk := fileoff/512
+		if whichblk >= NIADDRS {
+			panic("need indirect support")
+		}
+		blkn := inode.addr(fio, whichblk)
+		blk := bc_read(blkn)
+		start := fileoff % 512
+		end := 512
+		left := isz - fileoff
+		if end > left {
+			end = start + left
+			readall = true
+		}
+		fmt.Printf("start %v end %v\n", start, end)
+		src := blk.buf.data[start:end]
+		for i, b := range src {
+			dst[c + i] = b
+		}
+		c += len(src)
+	}
+	return c, 0
 }
 
 // returns inum for specified file

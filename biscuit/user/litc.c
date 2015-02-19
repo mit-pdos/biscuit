@@ -1,6 +1,7 @@
 #include <littypes.h>
 #include <litc.h>
 
+#define SYS_READ         0
 #define SYS_WRITE        1
 #define SYS_OPEN         2
 #define SYS_GETPID       39
@@ -53,6 +54,12 @@ long
 write(int fd, void *buf, size_t c)
 {
 	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
+}
+
+long
+read(int fd, void *buf, size_t c)
+{
+	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
 }
 
 size_t

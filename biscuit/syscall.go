@@ -4,36 +4,43 @@ import "fmt"
 import "runtime"
 import "unsafe"
 
-const TFSIZE       int = 23
-const TFREGS       int = 16
-const TF_R8        int = 8
-const TF_RSI       int = 10
-const TF_RDI       int = 11
-const TF_RDX       int = 12
-const TF_RCX       int = 13
-const TF_RBX       int = 14
-const TF_RAX       int = 15
-const TF_TRAP      int = TFREGS
-const TF_RIP       int = TFREGS + 2
-const TF_RSP       int = TFREGS + 5
-const TF_RFLAGS    int = TFREGS + 4
+const(
+  TFSIZE       = 23
+  TFREGS       = 16
+  TF_R8        = 8
+  TF_RSI       = 10
+  TF_RDI       = 11
+  TF_RDX       = 12
+  TF_RCX       = 13
+  TF_RBX       = 14
+  TF_RAX       = 15
+  TF_TRAP      = TFREGS
+  TF_RIP       = TFREGS + 2
+  TF_RSP       = TFREGS + 5
+  TF_RFLAGS    = TFREGS + 4
+)
 
-const ENOENT       int = 2
-const EBADF        int = 9
-const EFAULT       int = 14
-const ENOTDIR      int = 20
-const ENAMETOOLONG int = 36
-const ENOSYS       int = 38
+const(
+  ENOENT       = 2
+  EBADF        = 9
+  EFAULT       = 14
+  ENOTDIR      = 20
+  ENAMETOOLONG = 36
+  ENOSYS       = 38
+)
 
-const SYS_WRITE    int = 1
-const SYS_OPEN     int = 2
-const   O_RDONLY      int = 0
-const   O_WRONLY      int = 1
-const   O_RDWR        int = 2
-const   O_CREAT       int = 0x80
-const SYS_GETPID   int = 39
-const SYS_FORK     int = 57
-const SYS_EXIT     int = 60
+const(
+  SYS_READ     = 0
+  SYS_WRITE    = 1
+  SYS_OPEN     = 2
+    O_RDONLY      = 0
+    O_WRONLY      = 1
+    O_RDWR        = 2
+    O_CREAT       = 0x80
+  SYS_GETPID   = 39
+  SYS_FORK     = 57
+  SYS_EXIT     = 60
+)
 
 // lowest userspace address
 const USERMIN      int = 0xf1000000
@@ -50,6 +57,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 
 	ret := -ENOSYS
 	switch trap {
+	case SYS_READ:
+		ret = sys_read(p, a1, a2, a3)
 	case SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
 	case SYS_OPEN:
@@ -68,46 +77,78 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	}
 }
 
-func sys_write(proc *proc_t, fdn int, bufp int, c int) int {
-
-	if c == 0 {
+func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
+	if sz == 0 {
 		return 0
 	}
-
-	if !is_mapped(proc.pmap, bufp, c) {
+	if !is_mapped(proc.pmap, bufp, sz) {
 		fmt.Printf("%#x not mapped\n", bufp)
 		return -EFAULT
 	}
-
 	fd, ok := proc.fds[fdn]
 	if !ok {
 		return -EBADF
 	}
-
 	vtop := func(va int) int {
 		pte := pmap_walk(proc.pmap, va, false, 0, nil)
 		ret := *pte & PTE_ADDR
 		ret += va & PGOFFSET
 		return ret
 	}
+	c := 0
+	for c < sz {
+		dst := dmap8(vtop(bufp + c))
+		left := sz - c
+		if len(dst) > left {
+			dst = dst[:left]
+		}
+		ret, err := fs_read(dst, fd.file, fd.offset + c)
+		if err != 0 {
+			return err
+		}
+		c += ret
+		if ret != len(dst) {
+			// no more to read
+			break
+		}
+	}
+	return c
+}
 
+func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
+	if sz == 0 {
+		return 0
+	}
+	if !is_mapped(proc.pmap, bufp, sz) {
+		fmt.Printf("%#x not mapped\n", bufp)
+		return -EFAULT
+	}
+	fd, ok := proc.fds[fdn]
+	if !ok {
+		return -EBADF
+	}
+	vtop := func(va int) int {
+		pte := pmap_walk(proc.pmap, va, false, 0, nil)
+		ret := *pte & PTE_ADDR
+		ret += va & PGOFFSET
+		return ret
+	}
 	if fd != &fd_stdout && fd != &fd_stderr {
 		panic("no imp")
 	}
-
 	utext := int8(0x17)
-	cnt := 0
-	for ; cnt < c; {
-		p_bufp := vtop(bufp + cnt)
+	c := 0
+	for ; c < sz; {
+		p_bufp := vtop(bufp + c)
 		p := dmap8(p_bufp)
-		left := c - cnt
+		left := sz - c
 		if len(p) > left {
 			p = p[:left]
 		}
-		for _, c := range p {
-			runtime.Putcha(int8(c), utext)
+		for _, sz := range p {
+			runtime.Putcha(int8(sz), utext)
 		}
-		cnt += len(p)
+		c += len(p)
 	}
 	return c
 }
@@ -122,7 +163,7 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	}
 
 	parts := path_sanitize(proc.cwd + path)
-	inode, err := fs_open(parts, flags, mode)
+	file, err := fs_open(parts, flags, mode)
 	if err != 0 {
 		return err
 	}
@@ -136,7 +177,7 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	case flags & O_RDWR != 0:
 		fd.perms = O_RDWR
 	}
-	fd.inode = inode
+	fd.file = file
 	return fdn
 }
 

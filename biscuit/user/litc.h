@@ -14,8 +14,10 @@ int open(const char *, int, int);
 #define    O_RDONLY          0
 #define    O_WRONLY          1
 #define    O_RDWR            2
+long read(int, void*, size_t);
 long write(int, void*, size_t);
 
 int printf(char *, ...);
 int printf_blue(char *, ...);
 int printf_red(char *, ...);
+size_t strlen(char *);
