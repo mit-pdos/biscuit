@@ -112,6 +112,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 			break
 		}
 	}
+	fd.offset += c
 	return c
 }
 
