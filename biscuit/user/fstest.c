@@ -28,7 +28,7 @@ int main()
 		return -1;
 	}
 	int fd1 = ret;
-	if ((ret = open("/boot/eufi/readme.txt", O_RDONLY, 0)) < 0) {
+	if ((ret = open("/boot/uefi/readme.txt", O_RDONLY, 0)) < 0) {
 		printf_red("should have succeeded 2\n");
 		return -1;
 	}
