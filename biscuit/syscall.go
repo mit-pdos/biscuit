@@ -25,6 +25,7 @@ const(
   EBADF        = 9
   EFAULT       = 14
   ENOTDIR      = 20
+  EINVAL       = 22
   ENAMETOOLONG = 36
   ENOSYS       = 38
 )
@@ -37,6 +38,7 @@ const(
     O_WRONLY      = 1
     O_RDWR        = 2
     O_CREAT       = 0x80
+    O_APPEND      = 0x400
   SYS_GETPID   = 39
   SYS_FORK     = 57
   SYS_EXIT     = 60
@@ -100,6 +102,8 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		ret += va & PGOFFSET
 		return ret
 	}
+	fd.file.filelock()
+	defer fd.file.fileunlock()
 	c := 0
 	for c < sz {
 		dst := dmap8(vtop(bufp + c))
@@ -139,23 +143,40 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		ret += va & PGOFFSET
 		return ret
 	}
-	if fd != &fd_stdout && fd != &fd_stderr {
-		panic("no imp")
+	wrappy := fs_write
+	// stdout/stderr hack
+	if fd == &fd_stdout || fd == &fd_stderr {
+		wrappy = func(p []uint8, f *file_t, off int,
+		    app bool) (int,int) {
+			utext := int8(0x17)
+			for _, c := range p {
+				runtime.Putcha(int8(c), utext)
+			}
+			return len(p), 0
+		}
 	}
-	utext := int8(0x17)
+	fd.file.filelock()
+	defer fd.file.fileunlock()
+	append := fd.perms & O_APPEND != 0
 	c := 0
-	for ; c < sz; {
+	for c < sz {
 		p_bufp := vtop(bufp + c)
-		p := dmap8(p_bufp)
+		src := dmap8(p_bufp)
 		left := sz - c
-		if len(p) > left {
-			p = p[:left]
+		if len(src) > left {
+			src = src[:left]
 		}
-		for _, sz := range p {
-			runtime.Putcha(int8(sz), utext)
+		ret, err := wrappy(src, fd.file, fd.offset + c, append)
+		if err != 0 {
+			return err
 		}
-		c += len(p)
+		c += ret
+		if ret != len(src) {
+			// short write
+			break
+		}
 	}
+	fd.offset += c
 	return c
 }
 
@@ -167,21 +188,20 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-
+	temp := flags & (O_RDONLY | O_WRONLY | O_RDWR)
+	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
+		return -EINVAL
+	}
 	parts := path_sanitize(proc.cwd + path)
 	file, err := fs_open(parts, flags, mode)
 	if err != 0 {
 		return err
 	}
-
 	fdn, fd := proc.fd_new()
+	fd.perms = temp
 	switch {
-	case flags & O_RDONLY != 0:
-		fd.perms = O_RDONLY
-	case flags & O_WRONLY != 0:
-		fd.perms = O_WRONLY
-	case flags & O_RDWR != 0:
-		fd.perms = O_RDWR
+	case flags & O_APPEND != 0:
+		fd.perms |= O_APPEND
 	}
 	fd.file = file
 	return fdn

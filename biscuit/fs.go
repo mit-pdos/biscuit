@@ -12,14 +12,6 @@ const NAME_MAX    int = 512
 // inode's block/offset pair
 type inum int
 
-// we manage concurrency between files with the file lock tree made of ftnode_t
-// objects. file_t is an object to associate ftnode_t objects with open files.
-type file_t struct {
-	priv		inum
-	parpriv		inum
-	ftnode		*ftnode_t
-}
-
 var fsblock_start	int
 var superb		superblock_t
 var iroot		inum
@@ -46,7 +38,6 @@ func fs_init() {
 	fsblock_start = readn(blk.buf.data[:], 4, FSOFF)
 	blk = bc_read(fsblock_start)
 	superb = superblock_t{}
-	superb.raw = &blk.buf.data
 	superb.blk = blk
 	a, b := superb.rootinode()
 	iroot = inum(biencode(a, b))
@@ -54,12 +45,10 @@ func fs_init() {
 	ftroot.nodes = make(map[int]*ftnode_t)
 }
 
+// caller must have file's filetree node locked
 func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 	fib, fio := bidecode(int(file.priv))
-	inode := inode_get(fib, fio, false, 0)
-	if inode.itype() != I_FILE {
-		panic("no imp")
-	}
+	inode := inode_get(fib, fio, true, I_FILE)
 	isz := inode.size()
 	if offset > isz {
 		return 0, 0
@@ -77,18 +66,65 @@ func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 		blkn := inode.addr(whichblk)
 		blk := bc_read(blkn)
 		start := fileoff % 512
-		end := 512
+		bsp := 512 - start
 		left := isz - fileoff
-		if end > left {
-			end = start + left
+		if bsp > left {
+			bsp = left
 			readall = true
 		}
-		src := blk.buf.data[start:end]
+		src := blk.buf.data[start:start+bsp]
 		for i, b := range src {
 			dst[c + i] = b
 		}
 		c += len(src)
 	}
+	return c, 0
+}
+
+// caller must have file's filetree node locked
+func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
+	fib, fio := bidecode(int(file.priv))
+	inode := inode_get(fib, fio, true, I_FILE)
+	isz := inode.size()
+	offset := soffset
+	if append {
+		offset = isz
+	}
+	// XXX if file length is shortened, when to free old blocks?
+	sz := len(src)
+	c := 0
+	for c < sz {
+		fileoff := offset + c
+		whichblk := fileoff/512
+		if whichblk >= NIADDRS {
+			panic("need indirect support")
+		}
+		blkn := inode.addr(whichblk)
+		if blkn == 0 {
+			// alocate a new block
+			blkn = balloc()
+			inode.w_addr(whichblk, blkn)
+		}
+		blk := bc_read(blkn)
+		start := fileoff % 512
+		bsp := 512 - start
+		left := len(src) - c
+		if bsp > left {
+			bsp = left
+		}
+		dst := blk.buf.data[start:start+bsp]
+		for i := range dst {
+			dst[i] = src[c + i]
+		}
+		bc_write(blk)
+		// XXX log here
+		bc_flush(blk)
+		c += len(dst)
+	}
+	inode.w_size(offset + c)
+	bc_write(inode.blk)
+	// XXX log here
+	bc_flush(inode.blk)
 	return c, 0
 }
 
@@ -159,7 +195,7 @@ func dirents_get(dirnode *inode_t) ([]string, []inum) {
 	iret := make([]inum, 0)
 	for bn := 0; bn < dirnode.size()/512; bn++ {
 		blk := bc_read(dirnode.addr(bn))
-		dirdata := dirdata_t{&blk.buf.data}
+		dirdata := dirdata_t{blk}
 		for i := 0; i < NDIRENTS; i++ {
 			fn := dirdata.filename(i)
 			if fn == "" {
@@ -204,6 +240,22 @@ func (ftn *ftnode_t) txlocknext(priv inum) *ftnode_t {
 	return nextnode
 }
 
+// we manage concurrency between files with the file lock tree made of ftnode_t
+// objects. file_t is an object to associate ftnode_t objects with open files.
+type file_t struct {
+	priv		inum
+	parpriv		inum
+	ftnode		*ftnode_t
+}
+
+func (f *file_t) filelock() {
+	f.ftnode.l.Lock()
+}
+
+func (f *file_t) fileunlock() {
+	f.ftnode.l.Unlock()
+}
+
 func file_new(priv inum, parpriv inum, node *ftnode_t) *file_t {
 	ret := &file_t{}
 	ret.priv = priv
@@ -214,7 +266,7 @@ func file_new(priv inum, parpriv inum, node *ftnode_t) *file_t {
 
 func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
 	blk := bc_read(block)
-	ret := inode_t{&blk.buf.data, ioff}
+	ret := inode_t{blk, ioff}
 	itype := ret.itype()
 	if verify && itype != exptype {
 		panic(fmt.Sprintf("this is not an inode of type %v", exptype))
@@ -261,57 +313,56 @@ func bidecode(val int) (int, int) {
 // 40-47, inode block that may have room for an inode
 type superblock_t struct {
 	l	sync.Mutex
-	raw	*[512]uint8
 	blk	*bbuf_t
 }
 
 func (sb *superblock_t) freeblock() int {
-	return fieldr(sb.raw, 0)
+	return fieldr(&sb.blk.buf.data, 0)
 }
 
 func (sb *superblock_t) freeblocklen() int {
-	return fieldr(sb.raw, 1)
+	return fieldr(&sb.blk.buf.data, 1)
 }
 
 func (sb *superblock_t) loglen() int {
-	return fieldr(sb.raw, 2)
+	return fieldr(&sb.blk.buf.data, 2)
 }
 
 func (sb *superblock_t) rootinode() (int, int) {
-	v := fieldr(sb.raw, 3)
+	v := fieldr(&sb.blk.buf.data, 3)
 	return bidecode(v)
 }
 
 func (sb *superblock_t) lastblock() int {
-	return fieldr(sb.raw, 4)
+	return fieldr(&sb.blk.buf.data, 4)
 }
 
 func (sb *superblock_t) freeinode() int {
-	return fieldr(sb.raw, 5)
+	return fieldr(&sb.blk.buf.data, 5)
 }
 
 func (sb *superblock_t) w_freeblock(n int) {
-	fieldw(sb.raw, 0, n)
+	fieldw(&sb.blk.buf.data, 0, n)
 }
 
 func (sb *superblock_t) w_freeblocklen(n int) {
-	fieldw(sb.raw, 1, n)
+	fieldw(&sb.blk.buf.data, 1, n)
 }
 
 func (sb *superblock_t) w_loglen(n int) {
-	fieldw(sb.raw, 2, n)
+	fieldw(&sb.blk.buf.data, 2, n)
 }
 
 func (sb *superblock_t) w_rootinode(blk int, iidx int) {
-	fieldw(sb.raw, 3, biencode(blk, iidx))
+	fieldw(&sb.blk.buf.data, 3, biencode(blk, iidx))
 }
 
 func (sb *superblock_t) w_lastblock(n int) {
-	fieldw(sb.raw, 4, n)
+	fieldw(&sb.blk.buf.data, 4, n)
 }
 
 func (sb *superblock_t) w_freeinode(n int) {
-	fieldw(sb.raw, 5, n)
+	fieldw(&sb.blk.buf.data, 5, n)
 }
 
 // inode format:
@@ -324,7 +375,7 @@ func (sb *superblock_t) w_freeinode(n int) {
 // 40-47,  indirect block
 // 48-80,  block addresses
 type inode_t struct {
-	raw	*[512]uint8
+	blk	*bbuf_t
 	ioff	int
 }
 
@@ -347,7 +398,7 @@ func ifield(iidx int, fieldn int) int {
 
 // iidx is the inode index; necessary since there are four inodes in one block
 func (ind *inode_t) itype() int {
-	it := fieldr(ind.raw, ifield(ind.ioff, 0))
+	it := fieldr(&ind.blk.buf.data, ifield(ind.ioff, 0))
 	if it < I_FIRST || it > I_LAST {
 		panic(fmt.Sprintf("weird inode type %d", it))
 	}
@@ -355,23 +406,23 @@ func (ind *inode_t) itype() int {
 }
 
 func (ind *inode_t) linkcount() int {
-	return fieldr(ind.raw, ifield(ind.ioff, 1))
+	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 1))
 }
 
 func (ind *inode_t) size() int {
-	return fieldr(ind.raw, ifield(ind.ioff, 2))
+	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 2))
 }
 
 func (ind *inode_t) major() int {
-	return fieldr(ind.raw, ifield(ind.ioff, 3))
+	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 3))
 }
 
 func (ind *inode_t) minor() int {
-	return fieldr(ind.raw, ifield(ind.ioff, 4))
+	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 4))
 }
 
 func (ind *inode_t) indirect() int {
-	return fieldr(ind.raw, ifield(ind.ioff, 5))
+	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 5))
 }
 
 func (ind *inode_t) addr(i int) int {
@@ -379,35 +430,35 @@ func (ind *inode_t) addr(i int) int {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	return fieldr(ind.raw, ifield(ind.ioff, addroff + i))
+	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, addroff + i))
 }
 
 func (ind *inode_t) w_itype(n int) {
 	if n < I_FIRST || n > I_LAST {
 		panic("weird inode type")
 	}
-	fieldw(ind.raw, ifield(ind.ioff, 0), n)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 0), n)
 }
 
 func (ind *inode_t) w_linkcount(n int) {
-	fieldw(ind.raw, ifield(ind.ioff, 1), n)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 1), n)
 }
 
 func (ind *inode_t) w_size(n int) {
-	fieldw(ind.raw, ifield(ind.ioff, 2), n)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 2), n)
 }
 
 func (ind *inode_t) w_major(n int) {
-	fieldw(ind.raw, ifield(ind.ioff, 3), n)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 3), n)
 }
 
 func (ind *inode_t) w_minor(n int) {
-	fieldw(ind.raw, ifield(ind.ioff, 4), n)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 4), n)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
 func (ind *inode_t) w_indirect(blk int) {
-	fieldw(ind.raw, ifield(ind.ioff, 5), blk)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 5), blk)
 }
 
 func (ind *inode_t) w_addr(i int, blk int) {
@@ -415,7 +466,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	fieldw(ind.raw, ifield(ind.ioff, addroff + i), blk)
+	fieldw(&ind.blk.buf.data, ifield(ind.ioff, addroff + i), blk)
 }
 
 // directory data format
@@ -423,7 +474,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 // 14-21, inode block/offset
 // ...repeated, totaling 23 times
 type dirdata_t struct {
-	raw	*[512]uint8
+	blk	*bbuf_t
 }
 
 const(
@@ -441,7 +492,7 @@ func doffset(didx int, off int) int {
 
 func (dir *dirdata_t) filename(didx int) string {
 	st := doffset(didx, 0)
-	sl := dir.raw[st : st + DNAMELEN]
+	sl := dir.blk.buf.data[st : st + DNAMELEN]
 	ret := make([]byte, 0)
 	for _, c := range sl {
 		if c != 0 {
@@ -453,13 +504,13 @@ func (dir *dirdata_t) filename(didx int) string {
 
 func (dir *dirdata_t) inodenext(didx int) (int, int) {
 	st := doffset(didx, 14)
-	v := readn(dir.raw[:], 8, st)
+	v := readn(dir.blk.buf.data[:], 8, st)
 	return bidecode(v)
 }
 
 func (dir *dirdata_t) w_filename(didx int, fn string) {
 	st := doffset(didx, 0)
-	sl := dir.raw[st : st + DNAMELEN]
+	sl := dir.blk.buf.data[st : st + DNAMELEN]
 	l := len(fn)
 	for i := range sl {
 		if i >= l {
@@ -473,7 +524,7 @@ func (dir *dirdata_t) w_filename(didx int, fn string) {
 func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
 	st := doffset(didx, 14)
 	v := biencode(blk, iidx)
-	writen(dir.raw[:], 8, st, v)
+	writen(dir.blk.buf.data[:], 8, st, v)
 }
 
 func freebit(b uint8) uint {
@@ -486,7 +537,8 @@ func freebit(b uint8) uint {
 }
 
 // allocates a block, marking it used in the free block bitmap. free blocks and
-// log blocks are not accounted for in the free bitmap; all others are
+// log blocks are not accounted for in the free bitmap; all others are. balloc
+// should only ever acquire fblock.
 func balloc() int {
 	fst := superb.freeblock()
 	flen := superb.freeblocklen()
@@ -520,6 +572,7 @@ func balloc() int {
 	// mark as allocated
 	blk.buf.data[oct] |= 1 << bit
 	bc_write(blk)
+	// XXX log here
 
 	boffset := fst + flen + loglen
 	bitsperblk := 512*8

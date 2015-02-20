@@ -9,6 +9,7 @@ user/fault
 user/fork
 user/getpid
 user/fstest
+user/fswrite
 bins.go
 boot.elf
 chentry
@@ -17,3 +18,4 @@ main.gobin
 *.bgo
 mpentry.elf
 mpentry.bin
+*.pyc

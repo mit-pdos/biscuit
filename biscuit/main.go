@@ -206,10 +206,13 @@ type fd_t struct {
 	perms	int
 }
 
+var dummynode   = ftnode_t{}
+var dummyfile   = file_t{0, 0, &dummynode}
+
 // special fds
-var fd_stdin 	= fd_t{nil, 0, 0}
-var fd_stdout 	= fd_t{nil, 0, 0}
-var fd_stderr 	= fd_t{nil, 0, 0}
+var fd_stdin 	= fd_t{&dummyfile, 0, 0}
+var fd_stdout 	= fd_t{&dummyfile, 0, 0}
+var fd_stderr 	= fd_t{&dummyfile, 0, 0}
 
 type proc_t struct {
 	pid	int
@@ -667,9 +670,7 @@ func main() {
 	//sys_test("user/hello")
 	//sys_test("user/fork")
 	sys_test("user/fstest")
-	sys_test("user/fstest")
-	sys_test("user/fstest")
-	sys_test("user/fstest")
+	sys_test("user/fswrite")
 	//sys_test("user/getpid")
 
 	//ide_test()
@@ -679,6 +680,8 @@ func main() {
 	//fs_fmt()
 	lsonly()
 
+	//dur := make(chan bool)
+	//<- dur
 	fake_work()
 }
 
@@ -730,7 +733,6 @@ func sb_test() {
 	fmt.Printf("fsblock_start: %#x\n", fsblock_start)
 	blk := bc_read(fsblock_start)
 	sb := superblock_t{}
-	sb.raw = &blk.buf.data
 	sb.blk = blk
 	fmt.Printf("freeblock: %#x\n", sb.freeblock())
 	fmt.Printf("freeblocklen: %v\n", sb.freeblocklen())
@@ -807,7 +809,7 @@ func fs_fmt() {
 
 	// create root inode
 	blk := bc_read(ribn)
-	rinode := inode_t{&blk.buf.data, rid}
+	rinode := inode_t{blk, rid}
 	rinode.w_itype(I_DIR)
 	rinode.w_linkcount(1)
 	rinode.w_size(512)
@@ -821,7 +823,7 @@ func fs_fmt() {
 	for i := range blk.buf.data {
 		blk.buf.data[i] = 0
 	}
-	ddata := dirdata_t{&blk.buf.data}
+	ddata := dirdata_t{blk}
 	for i, fn := range []string{"vmlinuz", "bsd", "bin", "fatmonkey.jpg"} {
 		ddata.w_filename(i, fn)
 		ddata.w_inodenext(i, 0, 0)
@@ -868,7 +870,7 @@ func ls(dirnode int, ioff int) {
 		dblk := bc_read(ip.addr(i))
 		// dump all files listed in this dir data block
 		for j := 0; j < NDIRENTS; j++ {
-			de := dirdata_t{&dblk.buf.data}
+			de := dirdata_t{dblk}
 			dib, dioff := de.inodenext(j)
 			fn := de.filename(j)
 			isdir := file_pr(fn, dib, dioff)
