@@ -20,4 +20,5 @@ long write(int, void*, size_t);
 int printf(char *, ...);
 int printf_blue(char *, ...);
 int printf_red(char *, ...);
+int snprintf(char *, size_t, char *, ...);
 size_t strlen(char *);

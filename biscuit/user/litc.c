@@ -125,12 +125,10 @@ putn(char *p, char *end, ulong n, int base)
 static char pbuf[MAXBUF];
 
 int
-vprintf(char *fmt, va_list ap)
+vsprintf(char *fmt, va_list ap, char *dst, char *end)
 {
-	char *dst = pbuf;
-	char *end = &pbuf[MAXBUF - 1];
+	const char *start = dst;
 	char c;
-
 
 	c = *fmt;
 	while (c && dst < end) {
@@ -218,10 +216,9 @@ vprintf(char *fmt, va_list ap)
 	}
 
 	if (dst > end)
-		dst = end;
+		dst = end - 1;
 	*dst++ = '\0';
-	pmsg(pbuf);
-	return dst - pbuf;
+	return dst - start;
 }
 
 int
@@ -231,7 +228,21 @@ printf(char *fmt, ...)
 	int ret;
 
 	va_start(ap, fmt);
-	ret = vprintf(fmt, ap);
+	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
+	va_end(ap);
+	pmsg(pbuf);
+
+	return ret;
+}
+
+int
+snprintf(char *dst, size_t sz, char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+
+	va_start(ap, fmt);
+	ret = vsprintf(fmt, ap, dst, dst + sz);
 	va_end(ap);
 
 	return ret;
@@ -245,8 +256,9 @@ printf_blue(char *fmt, ...)
 
 	pmsg(BLUE);
 	va_start(ap, fmt);
-	ret = vprintf(fmt, ap);
+	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
 	va_end(ap);
+	pmsg(pbuf);
 	pmsg(RESET);
 
 	return ret;
@@ -260,8 +272,9 @@ printf_red(char *fmt, ...)
 
 	pmsg(RED);
 	va_start(ap, fmt);
-	ret = vprintf(fmt, ap);
+	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
 	va_end(ap);
+	pmsg(pbuf);
 	pmsg(RESET);
 
 	return ret;
