@@ -49,6 +49,6 @@ int main()
 	readprint(fd3);
 	readprint(fd4);
 
-	printf_blue("fs tests passed!\n");
+	printf_blue("FS TESTS PASSED!\n");
 	return 0;
 }

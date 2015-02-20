@@ -12,6 +12,14 @@ const NAME_MAX    int = 512
 // inode's block/offset pair
 type inum int
 
+// we manage concurrency between files with the file lock tree made of ftnode_t
+// objects. file_t is an object to associate ftnode_t objects with open files.
+type file_t struct {
+	priv		inum
+	parpriv		inum
+	ftnode		*ftnode_t
+}
+
 var fsblock_start	int
 var superb		superblock_t
 var iroot		inum
@@ -42,10 +50,12 @@ func fs_init() {
 	superb.blk = blk
 	a, b := superb.rootinode()
 	iroot = inum(biencode(a, b))
+
+	ftroot.nodes = make(map[int]*ftnode_t)
 }
 
-func fs_read(dst []uint8, file inum, offset int) (int, int) {
-	fib, fio := bidecode(int(file))
+func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
+	fib, fio := bidecode(int(file.priv))
 	inode := inode_get(fib, fio, false, 0)
 	if inode.itype() != I_FILE {
 		panic("no imp")
@@ -82,43 +92,54 @@ func fs_read(dst []uint8, file inum, offset int) (int, int) {
 	return c, 0
 }
 
-// returns inum for specified file
-func fs_open(path []string, flags int, mode int) (inum, int) {
-	dirnode, inode, err := fs_walk(path)
+// returns file_t for specified file
+func fs_open(path []string, flags int, mode int) (*file_t, int) {
+	ret, err := fs_walk(path)
+	// open does not manipulate the file, thus don't need it locked
+	if err == 0 {
+		ret.ftnode.l.Unlock()
+	}
 	if flags & O_CREAT == 0 {
 		if err != 0 {
-			return 0, -ENOENT
+			return nil, -ENOENT
 		}
-		return inode, 0
+		return ret, 0
 	}
 
 	name := path[len(path) - 1]
-	crinode, err := bisfs_create(name, dirnode)
-
-	return crinode, err
+	cfile, err := fs_create(name, ret.parpriv, ret.ftnode.par)
+	return cfile, err
 }
 
-// returns inode and error
-func fs_walk(path []string) (inum, inum, int) {
+// returns a file_t with corresponding ftnode_t locked. when err is non-zero,
+// no locks are held.
+func fs_walk(path []string) (*file_t, int) {
+	cftdir := &ftroot
+	cftdir.l.Lock()
 	cinode := iroot
 	var lastinode inum
 	for _, p := range path {
-		nexti, err := bisfs_dirget(p, cinode)
+		nexti, err := dir_get(p, cinode)
 		if err != 0 {
-			return 0, 0, err
+			cftdir.l.Unlock()
+			return nil, err
 		}
+		cftdir = cftdir.txlocknext(nexti)
 		lastinode = cinode
 		cinode = nexti
 	}
-	return lastinode, cinode, 0
+	// create the file_t with filetree lock fields
+	ret := file_new(cinode, lastinode, cftdir)
+	return ret, 0
 }
 
-func bisfs_create(name string, dirnode inum) (inum, int) {
+// create file named 'name' under parent directory parpriv
+func fs_create(name string, parpriv inum, parnode *ftnode_t) (*file_t, int) {
 	panic("no imp")
-	return -1, -1
+	return nil, -1
 }
 
-func bisfs_dirget(name string, dirnoden inum) (inum, int) {
+func dir_get(name string, dirnoden inum) (inum, int) {
 	dib, dio := bidecode(int(dirnoden))
 	dirnode := inode_get(dib, dio, true, I_DIR)
 	denames, deinodes := dirents_get(dirnode)
@@ -152,6 +173,45 @@ func dirents_get(dirnode *inode_t) ([]string, []inum) {
 	return sret, iret
 }
 
+// fs lock tree. this lock tree is how concurrent fs syscalls to the same
+// dir/file are made atomic -- the block cache does not provide any
+// synchronization and thus is not thread-safe. the index to the maps is the
+// inode block number.  the inode block number is the key because then accesses
+// to inodes on the same block are synchronized.
+type ftnode_t struct {
+	l	sync.Mutex
+	nodes	map[int]*ftnode_t
+	par	*ftnode_t
+}
+
+var ftroot	= ftnode_t{}
+
+// caller must have ftn locked. locks the ftnode_t corresponding to blkno under
+// ftn, creating an entry if necessary, and unlocks the ftn.
+func (ftn *ftnode_t) txlocknext(priv inum) *ftnode_t {
+	blkno, _ := bidecode(int(priv))
+	nextnode, ok := ftn.nodes[blkno]
+	if !ok {
+		// create
+		nnode := &ftnode_t{}
+		nnode.nodes = make(map[int]*ftnode_t)
+		nnode.par = ftn
+		ftn.nodes[blkno] = nnode
+		nextnode = nnode
+	}
+	nextnode.l.Lock()
+	ftn.l.Unlock()
+	return nextnode
+}
+
+func file_new(priv inum, parpriv inum, node *ftnode_t) *file_t {
+	ret := &file_t{}
+	ret.priv = priv
+	ret.parpriv = parpriv
+	ret.ftnode = node
+	return ret
+}
+
 func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
 	blk := bc_read(block)
 	ret := inode_t{&blk.buf.data, ioff}
@@ -160,6 +220,11 @@ func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
 		panic(fmt.Sprintf("this is not an inode of type %v", exptype))
 	}
 	return &ret
+}
+
+func inode_chk(priv inum, exptype int) {
+	b, ioff := bidecode(int(priv))
+	inode_get(b, ioff, true, exptype)
 }
 
 func fieldr(p *[512]uint8, field int) int {

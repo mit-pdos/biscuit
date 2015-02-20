@@ -201,15 +201,15 @@ func cdelay(n int) {
 }
 
 type fd_t struct {
-	file	inum
+	file	*file_t
 	offset	int
 	perms	int
 }
 
 // special fds
-var fd_stdin 	= fd_t{0, 0, 0}
-var fd_stdout 	= fd_t{1, 0, 0}
-var fd_stderr 	= fd_t{2, 0, 0}
+var fd_stdin 	= fd_t{nil, 0, 0}
+var fd_stdout 	= fd_t{nil, 0, 0}
+var fd_stderr 	= fd_t{nil, 0, 0}
 
 type proc_t struct {
 	pid	int
@@ -663,11 +663,14 @@ func main() {
 	go ide_daemon()
 	fs_init()
 
-	sys_test("user/fault")
-	sys_test("user/hello")
-	sys_test("user/fork")
+	//sys_test("user/fault")
+	//sys_test("user/hello")
+	//sys_test("user/fork")
 	sys_test("user/fstest")
-	sys_test("user/getpid")
+	sys_test("user/fstest")
+	sys_test("user/fstest")
+	sys_test("user/fstest")
+	//sys_test("user/getpid")
 
 	//ide_test()
 	//bc_test()
