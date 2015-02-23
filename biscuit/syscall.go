@@ -24,6 +24,7 @@ const(
   ENOENT       = 2
   EBADF        = 9
   EFAULT       = 14
+  EEXIST       = 17
   ENOTDIR      = 20
   EINVAL       = 22
   ENAMETOOLONG = 36
@@ -42,6 +43,7 @@ const(
   SYS_GETPID   = 39
   SYS_FORK     = 57
   SYS_EXIT     = 60
+  SYS_MKDIR    = 83
 )
 
 // lowest userspace address
@@ -76,6 +78,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_fork(p, tf)
 	case SYS_EXIT:
 		sys_exit(p, a1)
+	case SYS_MKDIR:
+		ret = sys_mkdir(p, a1, a2)
 	}
 
 	tf[TF_RAX] = ret
@@ -192,7 +196,10 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return -EINVAL
 	}
-	parts := path_sanitize(proc.cwd + path)
+	parts, badp := path_sanitize(proc.cwd + path)
+	if badp {
+		return -ENOENT
+	}
 	file, err := fs_open(parts, flags, mode)
 	if err != 0 {
 		return err
@@ -205,6 +212,21 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	}
 	fd.file = file
 	return fdn
+}
+
+func sys_mkdir(proc *proc_t, pathn int, mode int) int {
+	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	parts, badp := path_sanitize(proc.cwd + path)
+	if badp {
+		return -ENOENT
+	}
+	return fs_mkdir(parts, mode)
 }
 
 func sys_getpid(proc *proc_t) int {

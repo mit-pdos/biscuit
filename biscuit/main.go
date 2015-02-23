@@ -206,8 +206,9 @@ type fd_t struct {
 	perms	int
 }
 
-var dummynode   = ftnode_t{}
-var dummyfile   = file_t{0, 0, &dummynode}
+var dummylock	= sync.Mutex{}
+var dummynode	= ftnode_t{&dummylock, nil, nil}
+var dummyfile	= file_t{0, 0, &dummynode}
 
 // special fds
 var fd_stdin 	= fd_t{&dummyfile, 0, 0}
@@ -669,8 +670,10 @@ func main() {
 	//sys_test("user/fault")
 	//sys_test("user/hello")
 	//sys_test("user/fork")
-	sys_test("user/fstest")
-	sys_test("user/fswrite")
+	//sys_test("user/fstest")
+	//sys_test("user/fswrite")
+	//sys_test("user/fsmkdir")
+	sys_test("user/fscreat")
 	//sys_test("user/getpid")
 
 	//ide_test()
@@ -871,12 +874,13 @@ func ls(dirnode int, ioff int) {
 		// dump all files listed in this dir data block
 		for j := 0; j < NDIRENTS; j++ {
 			de := dirdata_t{dblk}
-			dib, dioff := de.inodenext(j)
+			din := int(de.inodenext(j))
+			dib, dioff := bidecode(din)
 			fn := de.filename(j)
 			isdir := file_pr(fn, dib, dioff)
 			if isdir {
 				recdirn = append(recdirn, fn)
-				recenc = append(recenc, biencode(dib, dioff))
+				recenc = append(recenc, din)
 			}
 		}
 	}

@@ -15,6 +15,7 @@ int open(const char *, int, int);
 #define    O_RDONLY          0
 #define    O_WRONLY          1
 #define    O_RDWR            2
+#define    O_CREAT        0x80
 long read(int, void*, size_t);
 long write(int, void*, size_t);
 

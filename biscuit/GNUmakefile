@@ -14,7 +14,7 @@ KSRC := main.go syscall.go pmap.go fs.go
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
-UPROGS := hello fault fork getpid fstest fswrite
+UPROGS := hello fault fork getpid fstest fswrite fsmkdir fscreat
 UPROGS := $(patsubst %,user/%,$(UPROGS))
 
 BGOS := $(patsubst %,%.bgo,$(UPROGS)) mpentry.bin.bgo

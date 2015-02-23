@@ -18,8 +18,10 @@ var iroot		inum
 
 // free block bitmap lock
 var fblock	= sync.Mutex{}
+// free inode lock
+var filock	= sync.Mutex{}
 
-func path_sanitize(path string) []string {
+func path_sanitize(path string) ([]string, bool) {
 	sp := strings.Split(path, "/")
 	nn := []string{}
 	for _, s := range sp {
@@ -27,7 +29,10 @@ func path_sanitize(path string) []string {
 			nn = append(nn, s)
 		}
 	}
-	return nn
+	if len(nn) == 0 {
+		return nil, true
+	}
+	return nn, false
 }
 
 func fs_init() {
@@ -119,33 +124,50 @@ func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
 		}
 		bc_write(blk)
 		// XXX log here
-		bc_flush(blk)
 		c += len(dst)
 	}
 	inode.w_size(offset + c)
 	bc_write(inode.blk)
 	// XXX log here
-	bc_flush(inode.blk)
 	return c, 0
+}
+
+func fs_mkdir(path []string, mode int) int {
+	l := len(path) - 1
+	dirs := path[:l]
+	dfile, err := fs_walk(dirs)
+	if err != 0 {
+		return err
+	}
+	name := path[l]
+	_, err = fs_create(name, dfile.priv, dfile.ftnode, true)
+	dfile.fileunlock()
+	if err != 0 {
+		return err
+	}
+	return 0
 }
 
 // returns file_t for specified file
 func fs_open(path []string, flags int, mode int) (*file_t, int) {
-	ret, err := fs_walk(path)
-	// open does not manipulate the file, thus don't need it locked
-	if err == 0 {
-		ret.ftnode.l.Unlock()
-	}
-	if flags & O_CREAT == 0 {
+	if flags & O_CREAT != 0 {
+		l := len(path) - 1
+		dirs := path[:l]
+		ret, err := fs_walk(dirs)
 		if err != 0 {
 			return nil, -ENOENT
 		}
-		return ret, 0
+		name := path[len(path) - 1]
+		cfile, err := fs_create(name, ret.priv, ret.ftnode, false)
+		ret.fileunlock()
+		return cfile, err
 	}
-
-	name := path[len(path) - 1]
-	cfile, err := fs_create(name, ret.parpriv, ret.ftnode.par)
-	return cfile, err
+	ret, err := fs_walk(path)
+	if err != 0 {
+		return nil, err
+	}
+	ret.fileunlock()
+	return ret, 0
 }
 
 // returns a file_t with corresponding ftnode_t locked. when err is non-zero,
@@ -170,16 +192,101 @@ func fs_walk(path []string) (*file_t, int) {
 	return ret, 0
 }
 
-// create file named 'name' under parent directory parpriv
-func fs_create(name string, parpriv inum, parnode *ftnode_t) (*file_t, int) {
-	panic("no imp")
-	return nil, -1
+// caller must have parpriv's filetree node locked. create file/directory named
+// 'name' under directory parpriv.
+func fs_create(name string, parpriv inum, parftnode *ftnode_t,
+    isdir bool) (*file_t, int) {
+	// check if file exists
+	dib, dio := bidecode(int(parpriv))
+	dinode := inode_get(dib, dio, true, I_DIR)
+	names, _, emptyvalid, emptyb, emptys := dirents_get(dinode)
+	for _, n := range names {
+		if name == n {
+			return nil, -EEXIST
+		}
+	}
+
+	// allocate new inode and lock it via ftnode
+	newbn, newioff := ialloc()
+	newftnode := parftnode.create(newbn)
+	// the new inode may be on the same block as the parent directory.
+	// don't try to lock in this case.
+	if newftnode.l != parftnode.l {
+		newftnode.l.Lock()
+		defer newftnode.l.Unlock()
+	}
+
+	newiblk := bc_read(newbn)
+	newinode := &inode_t{newiblk, newioff}
+	var itype int
+	if isdir {
+		itype = I_DIR
+	} else {
+		itype = I_FILE
+	}
+	newinode.w_itype(itype)
+	newinode.w_linkcount(1)
+	newinode.w_size(0)
+	newinode.w_major(0)
+	newinode.w_minor(0)
+	newinode.w_indirect(0)
+	for i := 0; i < NIADDRS; i++ {
+		newinode.w_addr(i, 0)
+	}
+	bc_write(newiblk)
+	// XXX log here
+
+	// write new directory entry into parpriv referencing newinode
+	var blk *bbuf_t
+	var deoff int
+	if emptyvalid {
+		// use existing dirdata block
+		blk = bc_read(emptyb)
+		deoff = emptys
+	} else {
+		// allocate new dir data block
+		newddn := balloc()
+		oldsz := dinode.size()
+		nextslot := oldsz/512
+		if nextslot >= NIADDRS {
+			panic("need indirect support")
+		}
+		if dinode.addr(nextslot) != 0 {
+			panic("addr slot allocated")
+		}
+		dinode.w_addr(nextslot, newddn)
+		dinode.w_size(oldsz + 512)
+		bc_write(dinode.blk)
+		// XXX log here
+
+		deoff = 0
+		// zero new directory data block
+		blk = bc_read(newddn)
+		for i := range blk.buf.data {
+			blk.buf.data[i] = 0
+		}
+	}
+
+	// write dir entry
+	ddata := dirdata_t{blk}
+	if ddata.filename(deoff) != "" {
+		panic("dir entry slot is not free")
+	}
+	ddata.w_filename(deoff, name)
+	ddata.w_inodenext(deoff, newbn, newioff)
+	bc_write(ddata.blk)
+	// XXX log here
+
+	newinum := inum(biencode(newbn, newioff))
+	ret := file_new(newinum, parpriv, newftnode)
+	return ret, 0
 }
 
+// returns the inum for the file named 'name' in directory inode dirnoden
 func dir_get(name string, dirnoden inum) (inum, int) {
 	dib, dio := bidecode(int(dirnoden))
 	dirnode := inode_get(dib, dio, true, I_DIR)
-	denames, deinodes := dirents_get(dirnode)
+	denames, deinodes, _, _, _ := dirents_get(dirnode)
 	for i, n := range denames {
 		if name == n {
 			return deinodes[i], 0
@@ -188,26 +295,37 @@ func dir_get(name string, dirnoden inum) (inum, int) {
 	return 0, -ENOENT
 }
 
-func dirents_get(dirnode *inode_t) ([]string, []inum) {
+// fetch all directory entries from a directory data block. returns dirent
+// names, inums, and index of first empty dirent.
+func dirents_get(dirnode *inode_t) ([]string, []inum, bool, int, int) {
 	if dirnode.itype() != I_DIR {
 		panic("not a directory")
 	}
 	sret := make([]string, 0)
 	iret := make([]inum, 0)
+	var emptyb int
+	var emptys int
+	evalid := false
 	for bn := 0; bn < dirnode.size()/512; bn++ {
-		blk := bc_read(dirnode.addr(bn))
+		blkn := dirnode.addr(bn)
+		blk := bc_read(blkn)
 		dirdata := dirdata_t{blk}
 		for i := 0; i < NDIRENTS; i++ {
 			fn := dirdata.filename(i)
 			if fn == "" {
+				if !evalid {
+					evalid = true
+					emptyb = blkn
+					emptys = i
+				}
 				continue
 			}
 			sret = append(sret, fn)
-			a, b := dirdata.inodenext(i)
-			iret = append(iret, inum(biencode(a, b)))
+			inde := dirdata.inodenext(i)
+			iret = append(iret, inde)
 		}
 	}
-	return sret, iret
+	return sret, iret, evalid, emptyb, emptys
 }
 
 // fs lock tree. this lock tree is how concurrent fs syscalls to the same
@@ -418,6 +536,7 @@ const(
 	I_LAST = I_DEV
 
 	NIADDRS = 10
+	// number of words in an inode
 	NIWORDS = 6 + NIADDRS
 )
 
@@ -531,10 +650,10 @@ func (dir *dirdata_t) filename(didx int) string {
 	return string(ret)
 }
 
-func (dir *dirdata_t) inodenext(didx int) (int, int) {
+func (dir *dirdata_t) inodenext(didx int) inum {
 	st := doffset(didx, 14)
 	v := readn(dir.blk.buf.data[:], 8, st)
-	return bidecode(v)
+	return inum(v)
 }
 
 func (dir *dirdata_t) w_filename(didx int, fn string) {
@@ -606,6 +725,39 @@ func balloc() int {
 	boffset := fst + flen + loglen
 	bitsperblk := 512*8
 	return boffset + blkn*bitsperblk + oct*8 + int(bit)
+}
+
+var ifreeblk int	= 0
+var ifreeoff int 	= 0
+
+// returns block/index of free inode. callers must synchronize access to this
+// block via filetree locks.
+func ialloc() (int, int) {
+	filock.Lock()
+	defer filock.Unlock()
+
+	if ifreeblk != 0 {
+		ret := ifreeblk
+		retoff := ifreeoff
+		ifreeoff++
+		blkwords := 512/8
+		if ifreeoff >= blkwords/NIWORDS {
+			// allocate a new inode block next time
+			ifreeblk = 0
+		}
+		return ret, retoff
+	}
+
+	ifreeblk = balloc()
+	ifreeoff = 0
+	zblk := bc_read(ifreeblk)
+	for i := range zblk.buf.data {
+		zblk.buf.data[i] = 0
+	}
+	bc_write(zblk)
+	reti := ifreeoff
+	ifreeoff++
+	return ifreeblk, reti
 }
 
 func init_8259() {
