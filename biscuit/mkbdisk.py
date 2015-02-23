@@ -382,7 +382,8 @@ if __name__ == '__main__':
     of.write(''.join(bfdata))
     of.write(kfdata)
     # pad out kernel image to block
-    of.write('\0'*(blocksz - (len(kfdata) % blocksz)))
+    lim = roundup(len(kfdata), blocksz)
+    of.write('\0'*(lim - len(kfdata)))
 
     fblen = 10
     loglen = 30
