@@ -461,8 +461,8 @@ runtime·pancake(void *msg, int64 addr)
 
 	pnum(addr);
 	pmsg(" PANCAKE");
-	halt = 1;
-	USED(halt);
+	volatile int32 *wtf = &halt;
+	*wtf = 1;
 	//void stack_dump(uint64);
 	//stack_dump(rrsp());
 	//pmsg("TWO");
@@ -2282,8 +2282,8 @@ hack_exit(int32 code)
 	pmsg("exit with code");
 	pnum(code);
 	pmsg(".\nhalting\n");
-	halt = 1;
-	USED(halt);
+	volatile int32 *wtf = &halt;
+	*wtf = 1;
 	while(1);
 }
 
