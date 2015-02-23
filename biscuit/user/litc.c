@@ -7,6 +7,9 @@
 #define SYS_GETPID       39
 #define SYS_FORK         57
 #define SYS_EXIT         60
+#define SYS_MKDIR        83
+
+static void pmsg(char *);
 
 long
 syscall(long a1, long a2, long a3, long a4,
@@ -45,6 +48,12 @@ getpid(void)
 }
 
 int
+mkdir(const char *p, long mode)
+{
+	return syscall(SA(p), mode, 0, 0, 0, SYS_MKDIR);
+}
+
+int
 open(const char *path, int flags, int mode)
 {
 	return syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
@@ -62,6 +71,17 @@ read(int fd, void *buf, size_t c)
 	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
 }
 
+void
+errx(int eval, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+	pmsg("\n");
+	exit(eval);
+}
+
 size_t
 strlen(char *msg)
 {
@@ -71,7 +91,7 @@ strlen(char *msg)
 	return ret;
 }
 
-void
+static void
 pmsg(char *msg)
 {
 	write(1, msg, strlen(msg));
@@ -125,7 +145,7 @@ putn(char *p, char *end, ulong n, int base)
 static char pbuf[MAXBUF];
 
 int
-vsprintf(char *fmt, va_list ap, char *dst, char *end)
+vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 {
 	const char *start = dst;
 	char c;
@@ -222,21 +242,29 @@ vsprintf(char *fmt, va_list ap, char *dst, char *end)
 }
 
 int
+vprintf(const char *fmt, va_list ap)
+{
+	int ret;
+	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
+	pmsg(pbuf);
+	return ret;
+}
+
+int
 printf(char *fmt, ...)
 {
 	va_list ap;
 	int ret;
 
 	va_start(ap, fmt);
-	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
+	ret = vprintf(fmt, ap);
 	va_end(ap);
-	pmsg(pbuf);
 
 	return ret;
 }
 
 int
-snprintf(char *dst, size_t sz, char *fmt, ...)
+snprintf(char *dst, size_t sz, const char *fmt, ...)
 {
 	va_list ap;
 	int ret;
