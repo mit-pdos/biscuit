@@ -43,6 +43,7 @@ func fs_init() {
 	iroot = inum(biencode(a, b))
 
 	ftroot.nodes = make(map[int]*ftnode_t)
+	ftroot.l = new(sync.Mutex)
 }
 
 // caller must have file's filetree node locked
@@ -212,15 +213,19 @@ func dirents_get(dirnode *inode_t) ([]string, []inum) {
 // fs lock tree. this lock tree is how concurrent fs syscalls to the same
 // dir/file are made atomic -- the block cache does not provide any
 // synchronization and thus is not thread-safe. the index to the maps is the
-// inode block number.  the inode block number is the key because then accesses
-// to inodes on the same block are synchronized.
+// inode block number. there is one ftnode for each file/dir, though an
+// ftnode's lock may be referenced from more than one place in the tree.
 type ftnode_t struct {
-	l	sync.Mutex
+	l	*sync.Mutex
 	nodes	map[int]*ftnode_t
 	par	*ftnode_t
 }
 
 var ftroot	= ftnode_t{}
+// map all blocks to locks. ftnodes for files that share an inode should share
+// a lock to synchronize access to the inode. only used when creating ftnodes.
+var allftlocks	= map[int]*sync.Mutex{}
+var allftl	= sync.Mutex{}
 
 // caller must have ftn locked. locks the ftnode_t corresponding to blkno under
 // ftn, creating an entry if necessary, and unlocks the ftn.
@@ -229,15 +234,39 @@ func (ftn *ftnode_t) txlocknext(priv inum) *ftnode_t {
 	nextnode, ok := ftn.nodes[blkno]
 	if !ok {
 		// create
-		nnode := &ftnode_t{}
-		nnode.nodes = make(map[int]*ftnode_t)
-		nnode.par = ftn
-		ftn.nodes[blkno] = nnode
-		nextnode = nnode
+		nextnode = ftn.create(blkno)
 	}
-	nextnode.l.Lock()
-	ftn.l.Unlock()
+	// if a directory and next directory entry are on the same inode, just
+	// keep it locked.
+	if ftn.l != nextnode.l {
+		nextnode.l.Lock()
+		ftn.l.Unlock()
+	}
 	return nextnode
+}
+
+// caller must have ftn locked. does not unlock ftn or lock the created ftnode.
+func (ftn *ftnode_t) create(blkn int) *ftnode_t {
+	if _, ok := ftn.nodes[blkn]; ok {
+		panic("ftnode exists")
+	}
+
+	ret := &ftnode_t{}
+	ret.nodes = make(map[int]*ftnode_t)
+	ret.par = ftn
+
+	allftl.Lock()
+	ftl, ok := allftlocks[blkn]
+	if ok {
+		ret.l = ftl
+	} else {
+		ret.l = new(sync.Mutex)
+		allftlocks[blkn] = ret.l
+	}
+	allftl.Unlock()
+
+	ftn.nodes[blkn] = ret
+	return ret
 }
 
 // we manage concurrency between files with the file lock tree made of ftnode_t
