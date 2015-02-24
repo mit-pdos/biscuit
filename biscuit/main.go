@@ -663,7 +663,9 @@ func main() {
 	init_8259()
 	cpus_start()
 
-	ide_init()
+	if !ide_init() {
+		panic("no IDE disk")
+	}
 	go ide_daemon()
 	fs_init()
 
@@ -671,8 +673,8 @@ func main() {
 	//sys_test("user/hello")
 	//sys_test("user/fork")
 	//sys_test("user/fstest")
-	sys_test("user/fswrite")
-	//sys_test("user/fsmkdir")
+	//sys_test("user/fswrite")
+	sys_test("user/fsmkdir")
 	//sys_test("user/fscreat")
 	//sys_test("user/getpid")
 

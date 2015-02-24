@@ -77,10 +77,27 @@ func fs_init() {
 func fs_recover() {
 	rlen := superb.recovernum()
 	if rlen == 0 {
-		fmt.Printf("no recovery needed\n")
+		fmt.Printf("no FS recovery needed\n")
 		return
 	}
-	panic("recovery not written yet. uh oh.")
+
+	l := &fslog
+	fmt.Printf("starting FS recovery...")
+	dblk := bc_read(l.logstart)
+	for i := 0; i < rlen; i++ {
+		bdest := readn(dblk.buf.data[:], 4, 4*i)
+		src := bc_read(l.logstart + 1 + i)
+		dst := bc_read(bdest)
+		dst.buf.data = src.buf.data
+		bc_write(dst)
+		bc_flush(dst)
+	}
+
+	// clear recovery flag
+	superb.w_recovernum(0)
+	bc_write(superb.blk)
+	bc_flush(superb.blk)
+	fmt.Printf("restored %v blocks\n", rlen)
 }
 
 // caller must have file's filetree node locked
@@ -910,7 +927,7 @@ func ide_wait(chk bool) bool {
 	return true
 }
 
-func ide_init() {
+func ide_init() bool {
 	irq_unmask(IRQ_DISK)
 	ide_wait(false)
 
@@ -927,9 +944,11 @@ func ide_init() {
 	}
 	if found {
 		fmt.Printf("IDE disk detected\n");
-	} else {
-		fmt.Printf("no IDE disk\n");
+		return true
 	}
+
+	fmt.Printf("no IDE disk\n");
+	return false
 }
 
 type idebuf_t struct {
@@ -1205,7 +1224,6 @@ func log_daemon(l *log_t) {
 				}
 			}
 		}
-		fmt.Printf("committing log...\n")
 		l.commit()
 	}
 }
