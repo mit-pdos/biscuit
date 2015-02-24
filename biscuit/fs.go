@@ -1179,5 +1179,8 @@ func op_end() {
 }
 
 func log_write(b *bbuf_t) {
+	if !b.dirty {
+		panic("log write on clean buffer")
+	}
 	fslog.incoming <- int(b.buf.block)
 }

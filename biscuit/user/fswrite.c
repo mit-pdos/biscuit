@@ -22,7 +22,7 @@ int main(int argc, char **argv)
 	int pid2 = fork();
 
 	int fd;
-	if ((fd = open("/boot/uefi/readme.txt", O_RDONLY, 0)) < 0) {
+	if ((fd = open("/boot/uefi/readme.txt", O_RDWR, 0)) < 0) {
 		printf_red("open failed\n");
 		return -1;
 	}
