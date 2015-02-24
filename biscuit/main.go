@@ -671,9 +671,9 @@ func main() {
 	//sys_test("user/hello")
 	//sys_test("user/fork")
 	//sys_test("user/fstest")
-	//sys_test("user/fswrite")
+	sys_test("user/fswrite")
 	//sys_test("user/fsmkdir")
-	sys_test("user/fscreat")
+	//sys_test("user/fscreat")
 	//sys_test("user/getpid")
 
 	//ide_test()
@@ -733,8 +733,8 @@ func bc_test() {
 }
 
 func sb_test() {
-	fmt.Printf("fsblock_start: %#x\n", fsblock_start)
-	blk := bc_read(fsblock_start)
+	fmt.Printf("superb_start: %#x\n", superb_start)
+	blk := bc_read(superb_start)
 	sb := superblock_t{}
 	sb.blk = blk
 	fmt.Printf("freeblock: %#x\n", sb.freeblock())

@@ -42,6 +42,7 @@ func Sidt(*int)
 func Sti()
 func Vtop(*[512]int) int
 
+func Crash()
 func Newlines(int64)
 func Fnaddr(func()) int
 func Fnaddri(func(int)) int

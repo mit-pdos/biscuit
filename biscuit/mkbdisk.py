@@ -386,7 +386,7 @@ if __name__ == '__main__':
     of.write('\0'*(lim - len(kfdata)))
 
     fblen = 10
-    loglen = 30
+    loglen = 31
     dofs(of, usedblocks + 1, fblen, loglen, hdblocks, remaining, skeldir)
 
   print >> sys.stderr, 'created "%s" of length %d blocks' % (ofn, hdblocks)

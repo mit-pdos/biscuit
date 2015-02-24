@@ -89,6 +89,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 }
 
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
+	// sys_read is read-only i.e. doesn't update metadata, thus don't need
+	// op_{begin,end}
 	if sz == 0 {
 		return 0
 	}
@@ -130,6 +132,9 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 }
 
 func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
+	op_begin()
+	defer op_end()
+
 	if sz == 0 {
 		return 0
 	}
@@ -185,6 +190,9 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 }
 
 func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
+	op_begin()
+	defer op_end()
+
 	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
@@ -215,6 +223,9 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 }
 
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {
+	op_begin()
+	defer op_end()
+
 	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT

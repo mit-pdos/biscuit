@@ -2468,3 +2468,13 @@ runtime·Vtop(void *va)
 
 	return base + (van & PGOFFMASK);
 }
+
+#pragma textflag NOSPLIT
+void
+runtime·Crash(void)
+{
+	pmsg("CRASH!\n");
+	volatile int32 *wtf = &halt;
+	*wtf = 1;
+	while (1);
+}

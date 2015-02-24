@@ -12,9 +12,15 @@ const NAME_MAX    int = 512
 // inode's block/offset pair
 type inum int
 
-var fsblock_start	int
+var superb_start	int
 var superb		superblock_t
 var iroot		inum
+var free_start		int
+var free_len		int
+var usable_start	int
+
+// file system journal
+var fslog	= log_t{}
 
 // free block bitmap lock
 var fblock	= sync.Mutex{}
@@ -40,15 +46,41 @@ func fs_init() {
 	// us
 	blk := bc_read(0)
 	FSOFF := 506
-	fsblock_start = readn(blk.buf.data[:], 4, FSOFF)
-	blk = bc_read(fsblock_start)
+	superb_start = readn(blk.buf.data[:], 4, FSOFF)
+	blk = bc_read(superb_start)
 	superb = superblock_t{}
 	superb.blk = blk
 	a, b := superb.rootinode()
 	iroot = inum(biencode(a, b))
 
+	free_start = superb.freeblock()
+	free_len = superb.freeblocklen()
+
 	ftroot.nodes = make(map[int]*ftnode_t)
 	ftroot.l = new(sync.Mutex)
+
+	ll := superb.loglen()
+	if ll < 0 {
+		panic("bad log len")
+	}
+
+	logstart := free_start + free_len
+	fslog.init(logstart, ll)
+
+	usable_start = logstart + ll
+
+	fs_recover()
+
+	go log_daemon(&fslog)
+}
+
+func fs_recover() {
+	rlen := superb.recovernum()
+	if rlen == 0 {
+		fmt.Printf("no recovery needed\n")
+		return
+	}
+	panic("recovery not written yet. uh oh.")
 }
 
 // caller must have file's filetree node locked
@@ -123,12 +155,12 @@ func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
 			dst[i] = src[c + i]
 		}
 		bc_write(blk)
-		// XXX log here
+		log_write(blk)
 		c += len(dst)
 	}
 	inode.w_size(offset + c)
 	bc_write(inode.blk)
-	// XXX log here
+	log_write(inode.blk)
 	return c, 0
 }
 
@@ -234,7 +266,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 		newinode.w_addr(i, 0)
 	}
 	bc_write(newiblk)
-	// XXX log here
+	log_write(newiblk)
 
 	// write new directory entry into parpriv referencing newinode
 	var blk *bbuf_t
@@ -257,7 +289,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 		dinode.w_addr(nextslot, newddn)
 		dinode.w_size(oldsz + 512)
 		bc_write(dinode.blk)
-		// XXX log here
+		log_write(dinode.blk)
 
 		deoff = 0
 		// zero new directory data block
@@ -275,7 +307,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 	ddata.w_filename(deoff, name)
 	ddata.w_inodenext(deoff, newbn, newioff)
 	bc_write(ddata.blk)
-	// XXX log here
+	log_write(ddata.blk)
 
 	newinum := inum(biencode(newbn, newioff))
 	ret := file_new(newinum, parpriv, newftnode)
@@ -458,6 +490,7 @@ func bidecode(val int) (int, int) {
 // 24-31, root inode
 // 32-39, last block
 // 40-47, inode block that may have room for an inode
+// 48-55, recovery log length; if non-zero, recovery procedure should run
 type superblock_t struct {
 	l	sync.Mutex
 	blk	*bbuf_t
@@ -488,6 +521,10 @@ func (sb *superblock_t) freeinode() int {
 	return fieldr(&sb.blk.buf.data, 5)
 }
 
+func (sb *superblock_t) recovernum() int {
+	return fieldr(&sb.blk.buf.data, 6)
+}
+
 func (sb *superblock_t) w_freeblock(n int) {
 	fieldw(&sb.blk.buf.data, 0, n)
 }
@@ -510,6 +547,10 @@ func (sb *superblock_t) w_lastblock(n int) {
 
 func (sb *superblock_t) w_freeinode(n int) {
 	fieldw(&sb.blk.buf.data, 5, n)
+}
+
+func (sb *superblock_t) w_recovernum(n int) {
+	fieldw(&sb.blk.buf.data, 6, n)
 }
 
 // inode format:
@@ -688,9 +729,11 @@ func freebit(b uint8) uint {
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
 func balloc() int {
-	fst := superb.freeblock()
-	flen := superb.freeblocklen()
-	loglen := superb.loglen()
+	fst := free_start
+	flen := free_len
+	if fst == 0 || flen == 0 {
+		panic("fs not initted")
+	}
 
 	fblock.Lock()
 	defer fblock.Unlock()
@@ -720,9 +763,9 @@ func balloc() int {
 	// mark as allocated
 	blk.buf.data[oct] |= 1 << bit
 	bc_write(blk)
-	// XXX log here
+	log_write(blk)
 
-	boffset := fst + flen + loglen
+	boffset := usable_start
 	bitsperblk := 512*8
 	return boffset + blkn*bitsperblk + oct*8 + int(bit)
 }
@@ -755,6 +798,7 @@ func ialloc() (int, int) {
 		zblk.buf.data[i] = 0
 	}
 	bc_write(zblk)
+	log_write(zblk)
 	reti := ifreeoff
 	ifreeoff++
 	return ifreeblk, reti
@@ -1037,8 +1081,143 @@ func bc_flush(b *bbuf_t) {
 	b.dirty = false
 }
 
+// for testing only; unsafe
 func bc_writeflush(b *bbuf_t) {
 	// XXX takes lock twice
 	bc_write(b)
 	bc_flush(b)
+}
+
+// list of dirty blocks that are pending commit.
+type log_t struct {
+	blks		[]int
+	logstart	int
+	loglen		int
+	incoming	chan int
+	admission	chan bool
+	done		chan bool
+}
+
+func (log *log_t) init(ls int, ll int) {
+	log.logstart = ls
+	// first block of the log is an array of log block destinations
+	log.loglen = ll - 1
+	log.blks = make([]int, 0, log.loglen)
+	log.incoming = make(chan int)
+	log.admission = make(chan bool)
+	log.done = make(chan bool)
+}
+
+func (log *log_t) append(blkn int) {
+	// log absorption
+	for _, b := range log.blks {
+		if b == blkn {
+			return
+		}
+	}
+	log.blks = append(log.blks, blkn)
+	if len(log.blks) >= log.loglen {
+		panic("log larger than log len")
+	}
+}
+
+func (log *log_t) commit() {
+	if rnum := superb.recovernum(); rnum != 0  {
+		panic(fmt.Sprintf("should have ran recover %v", rnum))
+	}
+	if log.loglen*4 > 512 {
+		panic("log destination array doesn't fit in one block")
+	}
+	dblk := bc_read(log.logstart)
+	for i, lbn := range log.blks {
+		// install log destination in the first log block
+		writen(dblk.buf.data[:], 4, 4*i, lbn)
+
+		// and write block to the log
+		src := bc_read(lbn)
+		logblkn := log.logstart + 1 + i
+		dst := bc_read(logblkn)
+		dst.buf.data = src.buf.data
+		bc_write(dst)
+		bc_flush(dst)
+	}
+	// flush first log block
+	bc_write(dblk)
+	bc_flush(dblk)
+
+	// commit log
+	superb.w_recovernum(len(log.blks))
+	bc_write(superb.blk)
+	bc_flush(superb.blk)
+
+	//rn := superb.recovernum()
+	//if rn > 0 {
+	//	runtime.Crash()
+	//}
+
+	// the log is committed. if we crash while installing the blocks to
+	// their destinations, we should be able to recover
+	for _, lbn := range log.blks {
+		blk := bc_read(lbn)
+		if !blk.dirty {
+			panic("log blocks must be dirty/in cache")
+		}
+		bc_flush(blk)
+	}
+
+	// success; clear flag indicating to recover from log
+	superb.w_recovernum(0)
+	bc_write(superb.blk)
+	bc_flush(superb.blk)
+
+	log.blks = log.blks[0:0]
+}
+
+func log_daemon(l *log_t) {
+	// an upperbound on the number of blocks written per system call. this
+	// is necessary in order to guarantee that the log is long enough for
+	// the allowed number of concurrent fs syscalls.
+	maxblkspersys := 10
+	for {
+		tickets := l.loglen / maxblkspersys
+		adm := l.admission
+
+		done := false
+		given := 0
+		t := 0
+		for !done {
+			select {
+			case nb := <- l.incoming:
+				if t <= 0 {
+					panic("oh noes")
+				}
+				l.append(nb)
+			case <- l.done:
+				t--
+				if t == 0 {
+					done = true
+				}
+			case adm <- true:
+				given++
+				t++
+				if given == tickets {
+					adm = nil
+				}
+			}
+		}
+		fmt.Printf("committing log...\n")
+		l.commit()
+	}
+}
+
+func op_begin() {
+	<- fslog.admission
+}
+
+func op_end() {
+	fslog.done <- true
+}
+
+func log_write(b *bbuf_t) {
+	fslog.incoming <- int(b.buf.block)
 }
