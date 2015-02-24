@@ -1,6 +1,6 @@
 #include <litc.h>
 
-int main()
+int main(int argc, char **argv)
 {
 	int i;
 	for (i = 0; i < 3; i++) {

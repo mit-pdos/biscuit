@@ -2,7 +2,7 @@
 
 static char buf[1024];
 
-int main()
+int main(int argc, char **argv)
 {
 	int ret;
 	if ((ret = mkdir("/wtf", 0755)) < 0)

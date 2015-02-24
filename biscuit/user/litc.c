@@ -311,7 +311,9 @@ printf_red(char *fmt, ...)
 void
 _entry(void)
 {
-	extern int main(void);
-	int ret = main();
+	int argc = 0;
+	char **argv = NULL;
+	extern int main(int, char **);
+	int ret = main(argc, argv);
 	exit(ret);
 }

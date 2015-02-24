@@ -19,7 +19,7 @@ void child(int id)
 	exit(pid);
 }
 
-int main()
+int main(int argc, char **argv)
 {
 	int pid = 0;
 	int id = 0;

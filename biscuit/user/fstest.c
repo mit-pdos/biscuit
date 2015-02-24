@@ -16,7 +16,7 @@ void readprint(int fd)
 	printf("FD %d returned: %s\n", fd, buf);
 }
 
-int main()
+int main(int argc, char **argv)
 {
 	int ret;
 	if ((ret = open("/etc/passwd", O_RDONLY, 0)) >= 0) {
