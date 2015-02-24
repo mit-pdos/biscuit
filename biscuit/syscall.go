@@ -163,10 +163,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	} else {
 		// only lock the file/get log access if we are writing to a
 		// file.
-		fd.file.filelock()
-		defer fd.file.fileunlock()
 		op_begin()
 		defer op_end()
+		fd.file.filelock()
+		defer fd.file.fileunlock()
 	}
 
 	append := fd.perms & O_APPEND != 0

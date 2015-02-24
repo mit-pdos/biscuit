@@ -743,7 +743,7 @@ func main() {
 	sys_test("user/fswrite")
 	sys_test("user/fsmkdir")
 	sys_test("user/fscreat")
-	//sys_test("user/getpid")
+	sys_test("user/getpid")
 
 	//ide_test()
 	//bc_test()
