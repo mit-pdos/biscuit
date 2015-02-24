@@ -1155,6 +1155,7 @@ func (log *log_t) commit() {
 		// and write block to the log
 		src := bc_read(lbn)
 		logblkn := log.logstart + 1 + i
+		// XXX unnecessary read
 		dst := bc_read(logblkn)
 		dst.buf.data = src.buf.data
 		bc_write(dst)
