@@ -733,24 +733,23 @@ func main() {
 	if !ide_init() {
 		panic("no IDE disk")
 	}
-	go ide_daemon()
 	fs_init()
 
-	sys_test("user/fault")
-	sys_test("user/hello")
-	sys_test("user/fork")
-	sys_test("user/fstest")
-	sys_test("user/fswrite")
+	//sys_test("user/fault")
+	//sys_test("user/hello")
+	//sys_test("user/fork")
+	//sys_test("user/fstest")
+	//sys_test("user/fswrite")
 	sys_test("user/fsmkdir")
-	sys_test("user/fscreat")
-	sys_test("user/getpid")
+	//sys_test("user/fscreat")
+	//sys_test("user/getpid")
 
 	//ide_test()
 	//bc_test()
 	//sb_test()
 	//balloc_test()
 	//fs_fmt()
-	lsonly()
+	//lsonly()
 
 	//dur := make(chan bool)
 	//<- dur
@@ -774,136 +773,6 @@ func ide_test() {
 	ide_request <- req
 	<- req.ack
 	fmt.Printf("done!\n")
-}
-
-func bc_test() {
-	summy := func(b *bbuf_t) {
-		sum := 0
-		for _, c := range b.buf.data {
-			sum += int(c)
-		}
-		fmt.Printf("sum of block %v is %v\n", b.buf.block, sum)
-	}
-	for i := 0; i < 1024; i++ {
-		bb := bc_read(rand.Intn(10240))
-		summy(bb)
-	}
-
-	bb := bc_read(0)
-	fmt.Printf("corrupting block 0\n")
-	for i := 0; i < 100; i++ {
-		bb.buf.data[i] = 0x41
-	}
-	bc_write(bb)
-	bc_flush(bb)
-	runtime.Cli()
-	for {
-	}
-}
-
-func sb_test() {
-	fmt.Printf("superb_start: %#x\n", superb_start)
-	blk := bc_read(superb_start)
-	sb := superblock_t{}
-	sb.blk = blk
-	fmt.Printf("freeblock: %#x\n", sb.freeblock())
-	fmt.Printf("freeblocklen: %v\n", sb.freeblocklen())
-	fmt.Printf("loglen: %v\n", sb.loglen())
-	rb, ri := sb.rootinode()
-	fmt.Printf("root inode, block %v inode index: %v\n", rb, ri)
-	fmt.Printf("last block: %v\n", sb.lastblock())
-	fmt.Printf("free inode block: %v\n", sb.freeinode())
-}
-
-func balloc_test() {
-	fmt.Printf("balloc test...\n")
-	fst := superb.freeblock()
-	flen := superb.freeblocklen()
-	writebits := func(v uint8) {
-		for i := 0; i < flen; i++ {
-			blk := bc_read(fst + i)
-			for i := range blk.buf.data {
-				blk.buf.data[i] = v
-			}
-			bc_writeflush(blk)
-		}
-	}
-	chk := func(n int, mult int) {
-		s := make([]int, 0)
-		for i := 0; i < n; i++ {
-			bn := balloc()
-			s = append(s, bn)
-		}
-		start := fst + flen + superb.loglen()
-		for i, c := range s {
-			if c != start + i*mult {
-				panic(fmt.Sprintf("bad allocated block %v != %v",
-				    c, start + i*mult))
-			}
-		}
-	}
-	for outer := 0; outer < 2; outer++ {
-		chk(10000, 1)
-		writebits(0)
-	}
-	writebits(0xaa)
-	chk(10000, 2)
-	fmt.Printf("balloc tests xopowo\n")
-}
-
-func fs_fmt() {
-	fmt.Printf("** formatting fs\n")
-	// init the root inode field in the super block
-	fbs := superb.freeblock()
-	fblen := superb.freeblocklen()
-
-	fbflush := func() {
-		for i := 0; i < fblen; i++ {
-			blk := bc_read(fbs + i)
-			bc_writeflush(blk)
-		}
-	}
-
-	// zero free block bitmaps
-	for i := 0; i < fblen; i++ {
-		fblk := bc_read(fbs + i)
-		for j := range fblk.buf.data {
-			fblk.buf.data[j] = 0
-		}
-		bc_writeflush(fblk)
-	}
-
-	ribn := balloc()
-	rid := 0
-	superb.w_rootinode(ribn, rid)
-	superb.w_freeinode(ribn)
-	bc_writeflush(superb.blk)
-
-	// create root inode
-	blk := bc_read(ribn)
-	rinode := inode_t{blk, rid}
-	rinode.w_itype(I_DIR)
-	rinode.w_linkcount(1)
-	rinode.w_size(512)
-	rinode.w_indirect(0)
-	ddn := balloc()
-	rinode.w_addr(0, ddn)
-	bc_writeflush(blk)
-
-	// populate directory data
-	blk = bc_read(ddn)
-	for i := range blk.buf.data {
-		blk.buf.data[i] = 0
-	}
-	ddata := dirdata_t{blk}
-	for i, fn := range []string{"vmlinuz", "bsd", "bin", "fatmonkey.jpg"} {
-		ddata.w_filename(i, fn)
-		ddata.w_inodenext(i, 0, 0)
-	}
-	bc_writeflush(blk)
-	fbflush()
-
-	ls(ribn, rid)
 }
 
 func lsonly() {
@@ -939,7 +808,7 @@ func ls(dirnode int, ioff int) {
 			// use indirect block
 			panic("no imp")
 		}
-		dblk := bc_read(ip.addr(i))
+		dblk := bread(ip.addr(i))
 		// dump all files listed in this dir data block
 		for j := 0; j < NDIRENTS; j++ {
 			de := dirdata_t{dblk}
@@ -952,6 +821,7 @@ func ls(dirnode int, ioff int) {
 				recenc = append(recenc, din)
 			}
 		}
+		brelse(dblk)
 	}
 
 	for i, encd := range recenc {

@@ -21,6 +21,7 @@ var usable_start	int
 
 // file system journal
 var fslog	= log_t{}
+var bcdaemon	= bcdaemon_t{}
 
 // free block bitmap lock
 var fblock	= sync.Mutex{}
@@ -42,35 +43,42 @@ func path_sanitize(path string) ([]string, bool) {
 }
 
 func fs_init() {
+	go ide_daemon()
+
+	bcdaemon.init()
+	go bc_daemon(&bcdaemon)
+
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	blk := bc_read(0)
+	blk0 := bread(0)
 	FSOFF := 506
-	superb_start = readn(blk.buf.data[:], 4, FSOFF)
-	blk = bc_read(superb_start)
+	superb_start = readn(blk0.buf.data[:], 4, FSOFF)
+	if superb_start == 0 {
+		panic("bad superblock start")
+	}
+	blk := bread(superb_start)
 	superb = superblock_t{}
 	superb.blk = blk
+	brelse(blk0)
+	brelse(blk)
 	a, b := superb.rootinode()
 	iroot = inum(biencode(a, b))
 
 	free_start = superb.freeblock()
 	free_len = superb.freeblocklen()
+	logstart := free_start + free_len
+	loglen := superb.loglen()
+	usable_start = logstart + loglen
+	if loglen < 0 {
+		panic("bad log len")
+	}
 
 	ftroot.nodes = make(map[int]*ftnode_t)
 	ftroot.l = new(sync.Mutex)
 
-	ll := superb.loglen()
-	if ll < 0 {
-		panic("bad log len")
-	}
-
-	logstart := free_start + free_len
-	fslog.init(logstart, ll)
-
-	usable_start = logstart + ll
-
 	fs_recover()
 
+	fslog.init(logstart, loglen)
 	go log_daemon(&fslog)
 }
 
@@ -83,20 +91,21 @@ func fs_recover() {
 
 	l := &fslog
 	fmt.Printf("starting FS recovery...")
-	dblk := bc_read(l.logstart)
+	dblk := bread(l.logstart)
 	for i := 0; i < rlen; i++ {
 		bdest := readn(dblk.buf.data[:], 4, 4*i)
-		src := bc_read(l.logstart + 1 + i)
-		dst := bc_read(bdest)
+		src := bread(l.logstart + 1 + i)
+		dst := bread(bdest)
 		dst.buf.data = src.buf.data
-		bc_write(dst)
-		bc_flush(dst)
+		dst.writeback()
+		brelse(src)
+		brelse(dst)
 	}
 
+	brelse(dblk)
 	// clear recovery flag
 	superb.w_recovernum(0)
-	bc_write(superb.blk)
-	bc_flush(superb.blk)
+	superb.blk.writeback()
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
@@ -104,6 +113,7 @@ func fs_recover() {
 func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 	fib, fio := bidecode(int(file.priv))
 	inode := inode_get(fib, fio, true, I_FILE)
+	defer inode_put(inode)
 	isz := inode.size()
 	if offset > isz {
 		return 0, 0
@@ -119,7 +129,7 @@ func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 			panic("need indirect support")
 		}
 		blkn := inode.addr(whichblk)
-		blk := bc_read(blkn)
+		blk := bread(blkn)
 		start := fileoff % 512
 		bsp := 512 - start
 		left := isz - fileoff
@@ -131,6 +141,7 @@ func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 		for i, b := range src {
 			dst[c + i] = b
 		}
+		brelse(blk)
 		c += len(src)
 	}
 	return c, 0
@@ -140,6 +151,7 @@ func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
 	fib, fio := bidecode(int(file.priv))
 	inode := inode_get(fib, fio, true, I_FILE)
+	defer inode_put(inode)
 	isz := inode.size()
 	offset := soffset
 	if append {
@@ -160,7 +172,7 @@ func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
 			blkn = balloc()
 			inode.w_addr(whichblk, blkn)
 		}
-		blk := bc_read(blkn)
+		blk := bread(blkn)
 		start := fileoff % 512
 		bsp := 512 - start
 		left := len(src) - c
@@ -171,12 +183,11 @@ func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
 		for i := range dst {
 			dst[i] = src[c + i]
 		}
-		bc_write(blk)
 		log_write(blk)
+		brelse(blk)
 		c += len(dst)
 	}
 	inode.w_size(offset + c)
-	bc_write(inode.blk)
 	log_write(inode.blk)
 	return c, 0
 }
@@ -248,6 +259,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 	// check if file exists
 	dib, dio := bidecode(int(parpriv))
 	dinode := inode_get(dib, dio, true, I_DIR)
+	defer inode_put(dinode)
 	names, _, emptyvalid, emptyb, emptys := dirents_get(dinode)
 	for _, n := range names {
 		if name == n {
@@ -265,7 +277,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 		defer newftnode.l.Unlock()
 	}
 
-	newiblk := bc_read(newbn)
+	newiblk := bread(newbn)
 	newinode := &inode_t{newiblk, newioff}
 	var itype int
 	if isdir {
@@ -282,15 +294,15 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 	for i := 0; i < NIADDRS; i++ {
 		newinode.w_addr(i, 0)
 	}
-	bc_write(newiblk)
 	log_write(newiblk)
+	brelse(newiblk)
 
 	// write new directory entry into parpriv referencing newinode
 	var blk *bbuf_t
 	var deoff int
 	if emptyvalid {
 		// use existing dirdata block
-		blk = bc_read(emptyb)
+		blk = bread(emptyb)
 		deoff = emptys
 	} else {
 		// allocate new dir data block
@@ -305,12 +317,11 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 		}
 		dinode.w_addr(nextslot, newddn)
 		dinode.w_size(oldsz + 512)
-		bc_write(dinode.blk)
 		log_write(dinode.blk)
 
 		deoff = 0
 		// zero new directory data block
-		blk = bc_read(newddn)
+		blk = bread(newddn)
 		for i := range blk.buf.data {
 			blk.buf.data[i] = 0
 		}
@@ -323,8 +334,8 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 	}
 	ddata.w_filename(deoff, name)
 	ddata.w_inodenext(deoff, newbn, newioff)
-	bc_write(ddata.blk)
 	log_write(ddata.blk)
+	brelse(ddata.blk)
 
 	newinum := inum(biencode(newbn, newioff))
 	ret := file_new(newinum, parpriv, newftnode)
@@ -335,6 +346,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 func dir_get(name string, dirnoden inum) (inum, int) {
 	dib, dio := bidecode(int(dirnoden))
 	dirnode := inode_get(dib, dio, true, I_DIR)
+	defer inode_put(dirnode)
 	denames, deinodes, _, _, _ := dirents_get(dirnode)
 	for i, n := range denames {
 		if name == n {
@@ -357,7 +369,7 @@ func dirents_get(dirnode *inode_t) ([]string, []inum, bool, int, int) {
 	evalid := false
 	for bn := 0; bn < dirnode.size()/512; bn++ {
 		blkn := dirnode.addr(bn)
-		blk := bc_read(blkn)
+		blk := bread(blkn)
 		dirdata := dirdata_t{blk}
 		for i := 0; i < NDIRENTS; i++ {
 			fn := dirdata.filename(i)
@@ -373,6 +385,7 @@ func dirents_get(dirnode *inode_t) ([]string, []inum, bool, int, int) {
 			inde := dirdata.inodenext(i)
 			iret = append(iret, inde)
 		}
+		brelse(blk)
 	}
 	return sret, iret, evalid, emptyb, emptys
 }
@@ -468,8 +481,9 @@ func file_new(priv inum, parpriv inum, node *ftnode_t) *file_t {
 	return ret
 }
 
+// caller must release inode via inode_put
 func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
-	blk := bc_read(block)
+	blk := bread(block)
 	ret := inode_t{blk, ioff}
 	itype := ret.itype()
 	if verify && itype != exptype {
@@ -478,9 +492,8 @@ func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
 	return &ret
 }
 
-func inode_chk(priv inum, exptype int) {
-	b, ioff := bidecode(int(priv))
-	inode_get(b, ioff, true, exptype)
+func inode_put(i *inode_t) {
+	brelse(i.blk)
 }
 
 func fieldr(p *[512]uint8, field int) int {
@@ -770,7 +783,7 @@ func balloc() int {
 	var oct int
 	// 0 is free, 1 is allocated
 	for i := 0; i < flen && !found; i++ {
-		blk = bc_read(fst + i)
+		blk = bread(fst + i)
 		for idx, c := range blk.buf.data {
 			if c != 0xff {
 				bit = freebit(c)
@@ -780,6 +793,7 @@ func balloc() int {
 				break
 			}
 		}
+		brelse(blk)
 	}
 	if !found {
 		panic("no free blocks")
@@ -787,7 +801,6 @@ func balloc() int {
 
 	// mark as allocated
 	blk.buf.data[oct] |= 1 << bit
-	bc_write(blk)
 	log_write(blk)
 
 	boffset := usable_start
@@ -818,12 +831,12 @@ func ialloc() (int, int) {
 
 	ifreeblk = balloc()
 	ifreeoff = 0
-	zblk := bc_read(ifreeblk)
+	zblk := bread(ifreeblk)
 	for i := range zblk.buf.data {
 		zblk.buf.data[i] = 0
 	}
-	bc_write(zblk)
 	log_write(zblk)
+	brelse(zblk)
 	reti := ifreeoff
 	ifreeoff++
 	return ifreeblk, reti
@@ -907,6 +920,8 @@ type idereq_t struct {
 var ide_int_done	= make(chan bool)
 var ide_request		= make(chan *idereq_t)
 
+// it is possible that a goroutine is context switched to a new CPU while doing
+// this port io; does this matter? doesn't seem to for qemu...
 func ide_start(b *idebuf_t, write bool) {
 	ide_wait(false)
 	outb := runtime.Outb
@@ -965,87 +980,138 @@ type bbuf_t struct {
 	dirty	bool
 }
 
-var bcblocks		= make(map[int]*bbuf_t)
-var bclock		= sync.Mutex{}
+func (b *bbuf_t) writeback() {
+	ireq := idereq_new(int(b.buf.block), b.dirty, b.buf)
+	ide_request <- ireq
+	<- ireq.ack
+	b.dirty = false
+}
 
-// caller must hold bclock
-func chk_evict() {
-	nbcbufs := 512
-	if len(bcblocks) <= nbcbufs {
-		return
-	}
-	// evict unmodified bbuf
-	freed := false
-	for i, bb := range bcblocks {
-		if !bb.dirty {
-			delete(bcblocks, i)
-			freed = true
-			if len(bcblocks) <= nbcbufs {
-				break
-			}
-		}
-	}
-	if !freed {
-		panic("bc full of dirty blocks")
-	}
+type bcreq_t struct {
+	blkno	int
+	ack	chan *bbuf_t
+}
+
+func bcreq_new(blkno int) *bcreq_t {
+	return &bcreq_t{blkno, make(chan *bbuf_t)}
+}
+
+type bcdaemon_t struct {
+	req		chan *bcreq_t
+	done		chan int
+	bcblocks	map[int]*bbuf_t
+	waiters		map[int][]*chan *bbuf_t
+}
+
+func (bc *bcdaemon_t) init() {
+	bc.req = make(chan *bcreq_t)
+	bc.done = make(chan int)
+	bc.bcblocks = make(map[int]*bbuf_t)
+	bc.waiters = make(map[int][]*chan *bbuf_t)
 }
 
 // returns a bbuf_t for the specified block
-func bc_read(block int) *bbuf_t {
+func (bc *bcdaemon_t) bc_read(block int) *bbuf_t {
 	if block < 0 {
 		panic("bad block")
 	}
-	bclock.Lock()
-	ret, ok := bcblocks[block]
-	bclock.Unlock()
+	ret, ok := bc.bcblocks[block]
 
 	if !ok {
-		chk_evict()
 		ireq := idereq_new(block, false, nil)
 		ide_request <- ireq
 		<- ireq.ack
 		nb := &bbuf_t{}
 		nb.buf = ireq.buf
 		nb.dirty = false
-		bclock.Lock()
-		bcblocks[block] = nb
-		bclock.Unlock()
+		bc.bcblocks[block] = nb
+		bc.chk_evict()
 		ret = nb
-
 	}
 	return ret
 }
 
-func bc_write(b *bbuf_t) {
-	bclock.Lock()
-	b.dirty = true
-	bcblocks[int(b.buf.block)] = b
-	chk_evict()
-	bclock.Unlock()
-}
-
-// write b to disk if it is dirty. returns after b has been written to disk.
-func bc_flush(b *bbuf_t) {
-	if !b.dirty {
+func (bc *bcdaemon_t) qadd(blkno int, ack *chan *bbuf_t) {
+	q, ok := bc.waiters[blkno]
+	if !ok {
+		q = make([]*chan *bbuf_t, 1, 8)
+		bc.waiters[blkno] = q
+		q[0] = ack
 		return
 	}
-	bclock.Lock()
-	bcblocks[int(b.buf.block)] = b
-	chk_evict()
-	bclock.Unlock()
-
-	block := int(b.buf.block)
-	ireq := idereq_new(block, true, b.buf)
-	ide_request <- ireq
-	<- ireq.ack
-	b.dirty = false
+	bc.waiters[blkno] = append(q, ack)
 }
 
-// for testing only; unsafe
-func bc_writeflush(b *bbuf_t) {
-	// XXX takes lock twice
-	bc_write(b)
-	bc_flush(b)
+func (bc *bcdaemon_t) qpop(blkno int) (*chan *bbuf_t, bool) {
+	q, ok := bc.waiters[blkno]
+	if !ok || len(q) == 0 {
+		return nil, false
+	}
+	ret := q[0]
+	bc.waiters[blkno] = q[1:]
+	return ret, true
+}
+
+func bc_daemon(bc *bcdaemon_t) {
+	given := make(map[int]bool)
+	for {
+		select {
+		case r := <- bc.req:
+			fmt.Printf("req for %v\n", r.blkno)
+			// block request
+			inuse := given[r.blkno]
+			if !inuse {
+				given[r.blkno] = true
+				buf := bc.bc_read(r.blkno)
+				r.ack <- buf
+			} else {
+				bc.qadd(r.blkno, &r.ack)
+			}
+		case bfin := <- bc.done:
+			fmt.Printf("release %v\n", bfin)
+			// relinquish block
+			inuse := given[bfin]
+			if !inuse {
+				panic("relinquish unused block")
+			}
+			nextc, ok := bc.qpop(bfin)
+			if ok {
+				buf := bc.bc_read(bfin)
+				*nextc <- buf
+			} else {
+				given[bfin] = false
+			}
+		}
+	}
+}
+
+func (bc *bcdaemon_t) chk_evict() {
+	nbcbufs := 512
+	if len(bc.bcblocks) <= nbcbufs {
+		return
+	}
+	// evict unmodified bbuf
+	for i, bb := range bc.bcblocks {
+		if !bb.dirty {
+			delete(bc.bcblocks, i)
+			if len(bc.bcblocks) <= nbcbufs {
+				break
+			}
+		}
+	}
+	if len(bc.bcblocks) >= nbcbufs {
+		panic("bc full of dirty blocks")
+	}
+}
+
+func bread(blkno int) *bbuf_t {
+	req := bcreq_new(blkno)
+	bcdaemon.req <- req
+	return <- req.ack
+}
+
+func brelse(b *bbuf_t) {
+	bcdaemon.done <- int(b.buf.block)
 }
 
 // list of dirty blocks that are pending commit.
@@ -1088,28 +1154,28 @@ func (log *log_t) commit() {
 	if log.loglen*4 > 512 {
 		panic("log destination array doesn't fit in one block")
 	}
-	dblk := bc_read(log.logstart)
+	dblk := bread(log.logstart)
 	for i, lbn := range log.blks {
 		// install log destination in the first log block
 		writen(dblk.buf.data[:], 4, 4*i, lbn)
 
 		// and write block to the log
-		src := bc_read(lbn)
+		src := bread(lbn)
 		logblkn := log.logstart + 1 + i
 		// XXX unnecessary read
-		dst := bc_read(logblkn)
+		dst := bread(logblkn)
 		dst.buf.data = src.buf.data
-		bc_write(dst)
-		bc_flush(dst)
+		dst.writeback()
+		brelse(src)
+		brelse(dst)
 	}
 	// flush first log block
-	bc_write(dblk)
-	bc_flush(dblk)
+	dblk.writeback()
+	brelse(dblk)
 
 	// commit log
 	superb.w_recovernum(len(log.blks))
-	bc_write(superb.blk)
-	bc_flush(superb.blk)
+	superb.blk.writeback()
 
 	//rn := superb.recovernum()
 	//if rn > 0 {
@@ -1119,17 +1185,17 @@ func (log *log_t) commit() {
 	// the log is committed. if we crash while installing the blocks to
 	// their destinations, we should be able to recover
 	for _, lbn := range log.blks {
-		blk := bc_read(lbn)
+		blk := bread(lbn)
 		if !blk.dirty {
 			panic("log blocks must be dirty/in cache")
 		}
-		bc_flush(blk)
+		blk.writeback()
+		brelse(blk)
 	}
 
 	// success; clear flag indicating to recover from log
 	superb.w_recovernum(0)
-	bc_write(superb.blk)
-	bc_flush(superb.blk)
+	superb.blk.writeback()
 
 	log.blks = log.blks[0:0]
 }
@@ -1179,8 +1245,6 @@ func op_end() {
 }
 
 func log_write(b *bbuf_t) {
-	if !b.dirty {
-		panic("log write on clean buffer")
-	}
+	b.dirty = true
 	fslog.incoming <- int(b.buf.block)
 }
