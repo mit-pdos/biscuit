@@ -257,7 +257,7 @@ func fs_create(name string, parpriv inum, parftnode *ftnode_t,
 
 	// allocate new inode and lock it via ftnode
 	newbn, newioff := ialloc()
-	newftnode := parftnode.create(newbn)
+	newftnode := parftnode.ensure(newbn)
 	// the new inode may be on the same block as the parent directory.
 	// don't try to lock in this case.
 	if newftnode.l != parftnode.l {
@@ -434,6 +434,14 @@ func (ftn *ftnode_t) create(blkn int) *ftnode_t {
 
 	ftn.nodes[blkn] = ret
 	return ret
+}
+
+// caller must have ftn locked. does not unlock ftn or lock the created ftnode.
+func (ftn *ftnode_t) ensure(blkn int) *ftnode_t {
+	if ret, ok := ftn.nodes[blkn]; ok {
+		return ret
+	}
+	return ftn.create(blkn)
 }
 
 // we manage concurrency between files with the file lock tree made of ftnode_t
