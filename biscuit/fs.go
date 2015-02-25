@@ -102,7 +102,7 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
-func fs_read(dsts [][]uint8, priv inum, offset int) int {
+func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
 	// send read request to inode daemon owning inum
 	req := &ireq_t{}
 	req.mkread(dsts, offset)
@@ -111,9 +111,9 @@ func fs_read(dsts [][]uint8, priv inum, offset int) int {
 	idmon.req <- req
 	resp := <- req.ack
 	if resp.err != 0 {
-		return resp.err
+		return 0, resp.err
 	}
-	return resp.count
+	return resp.count, 0
 }
 
 // caller must have file's filetree node locked

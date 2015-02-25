@@ -123,7 +123,10 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		c += len(dst)
 	}
 
-	ret := fs_read(dsts, fd.file.priv, fd.offset)
+	ret, err := fs_read(dsts, fd.file.priv, fd.offset)
+	if err != 0 {
+		return err
+	}
 	fd.offset += ret
 	return ret
 }
