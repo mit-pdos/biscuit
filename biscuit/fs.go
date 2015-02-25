@@ -103,7 +103,7 @@ func fs_recover() {
 }
 
 func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
-	// send read request to inode daemon owning inum
+	// send read request to inode daemon owning priv
 	req := &ireq_t{}
 	req.mkread(dsts, offset)
 
@@ -116,82 +116,77 @@ func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
 	return resp.count, 0
 }
 
-// caller must have file's filetree node locked
-//func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
-//	fib, fio := bidecode(int(file.priv))
-//	inode := inode_get(fib, fio, true, I_FILE)
-//	defer inode_put(inode)
-//	isz := inode.size()
-//	offset := soffset
-//	if append {
-//		offset = isz
-//	}
-//	// XXX if file length is shortened, when to free old blocks?
-//	sz := len(src)
-//	c := 0
-//	for c < sz {
-//		fileoff := offset + c
-//		whichblk := fileoff/512
-//		if whichblk >= NIADDRS {
-//			panic("need indirect support")
-//		}
-//		blkn := inode.addr(whichblk)
-//		if blkn == 0 {
-//			// alocate a new block
-//			blkn = balloc()
-//			inode.w_addr(whichblk, blkn)
-//		}
-//		blk := bread(blkn)
-//		start := fileoff % 512
-//		bsp := 512 - start
-//		left := len(src) - c
-//		if bsp > left {
-//			bsp = left
-//		}
-//		dst := blk.buf.data[start:start+bsp]
-//		for i := range dst {
-//			dst[i] = src[c + i]
-//		}
-//		log_write(blk)
-//		brelse(blk)
-//		c += len(dst)
-//	}
-//	inode.w_size(offset + c)
-//	log_write(inode.blk)
-//	return c, 0
-//}
+func fs_write(srcs [][]uint8, priv inum, offset int, append bool) (int, int) {
+	op_begin()
+	defer op_end()
 
-func fs_mkdir(path []string, mode int) int {
-	panic("no imp")
-	//l := len(path) - 1
-	//dirs := path[:l]
-	//dfile, err := fs_walk(dirs)
-	//if err != 0 {
-	//	return err
-	//}
-	//name := path[l]
-	//_, err = fs_create(name, dfile.priv, nil, true)
-	//dfile.fileunlock()
-	//if err != 0 {
-	//	return err
-	//}
-	//return 0
+	// send write request to inode daemon owning priv
+	req := &ireq_t{}
+	req.mkwrite(srcs, offset, append)
+
+	idmon := idaemon_ensure(priv)
+	idmon.req <- req
+	resp := <- req.ack
+	if resp.err != 0 {
+		return 0, resp.err
+	}
+	return resp.count, 0
 }
 
-// returns file_t for specified file
+func fs_mkdir(path []string, mode int) int {
+	op_begin()
+	defer op_end()
+
+	l := len(path) - 1
+	dirs := path[:l]
+	name := path[l]
+
+	// first find owner idaemon; alternatively, we could merge GET/CREATE
+	// together and do it in one request.
+	req := &ireq_t{}
+	req.mkget(dirs)
+	iroot.req <- req
+	resp := <- req.ack
+	if resp.err != 0 {
+		return resp.err
+	}
+
+	owner := resp.gnext
+	req = &ireq_t{}
+	req.mkcreate(name, I_DIR)
+	idmon := idaemon_ensure(owner)
+	idmon.req <- req
+	resp = <- req.ack
+	return resp.err
+}
+
 func fs_open(path []string, flags int, mode int) (*file_t, int) {
 	if flags & O_CREAT != 0 {
-		panic("no imp")
-		//l := len(path) - 1
-		//dirs := path[:l]
-		//ret, err := fs_walk(dirs)
-		//if err != 0 {
-		//	return nil, -ENOENT
-		//}
-		//name := path[len(path) - 1]
-		//cfile, err := fs_create(name, ret.priv, nil, false)
-		//ret.fileunlock()
-		//return cfile, err
+		op_begin()
+		defer op_end()
+
+		l := len(path) - 1
+		dirs := path[:l]
+
+		req := &ireq_t{}
+		req.mkget(dirs)
+		iroot.req <- req
+		resp := <- req.ack
+		if resp.err != 0 {
+			return nil, resp.err
+		}
+		owner := resp.gnext
+
+		name := path[len(path) - 1]
+		req = &ireq_t{}
+		req.mkcreate(name, I_FILE)
+		idmon := idaemon_ensure(owner)
+		idmon.req <- req
+		resp = <- req.ack
+		if resp.err != 0 {
+			return nil, resp.err
+		}
+		return &file_t{resp.cnext}, 0
 	}
 
 	// send inum get request to root inode daemon
@@ -199,7 +194,6 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 	req.mkget(path)
 	iroot.req <- req
 	resp := <- req.ack
-
 	if resp.err != 0 {
 		return nil, resp.err
 	}
@@ -207,96 +201,6 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 	ret := &file_t{resp.gnext}
 	return ret, 0
 }
-
-// caller must have parpriv's filetree node locked. create file/directory named
-// 'name' under directory parpriv.
-//func fs_create(name string, parpriv inum, parftnode *ftnode_t,
-//    isdir bool) (*file_t, int) {
-//	// check if file exists
-//	dib, dio := bidecode(int(parpriv))
-//	dinode := inode_get(dib, dio, true, I_DIR)
-//	defer inode_put(dinode)
-//	names, _, emptyvalid, emptyb, emptys := dirents_get(dinode)
-//	for _, n := range names {
-//		if name == n {
-//			return nil, -EEXIST
-//		}
-//	}
-//
-//	// allocate new inode
-//	newbn, newioff := ialloc()
-//	newftnode := parftnode.ensure(newbn)
-//	// the new inode may be on the same block as the parent directory.
-//	// don't try to lock in this case.
-//	if newftnode.l != parftnode.l {
-//		newftnode.l.Lock()
-//		defer newftnode.l.Unlock()
-//	}
-//
-//	newiblk := bread(newbn)
-//	newinode := &inode_t{newiblk, newioff}
-//	var itype int
-//	if isdir {
-//		itype = I_DIR
-//	} else {
-//		itype = I_FILE
-//	}
-//	newinode.w_itype(itype)
-//	newinode.w_linkcount(1)
-//	newinode.w_size(0)
-//	newinode.w_major(0)
-//	newinode.w_minor(0)
-//	newinode.w_indirect(0)
-//	for i := 0; i < NIADDRS; i++ {
-//		newinode.w_addr(i, 0)
-//	}
-//	log_write(newiblk)
-//	brelse(newiblk)
-//
-//	// write new directory entry into parpriv referencing newinode
-//	var blk *bbuf_t
-//	var deoff int
-//	if emptyvalid {
-//		// use existing dirdata block
-//		blk = bread(emptyb)
-//		deoff = emptys
-//	} else {
-//		// allocate new dir data block
-//		newddn := balloc()
-//		oldsz := dinode.size()
-//		nextslot := oldsz/512
-//		if nextslot >= NIADDRS {
-//			panic("need indirect support")
-//		}
-//		if dinode.addr(nextslot) != 0 {
-//			panic("addr slot allocated")
-//		}
-//		dinode.w_addr(nextslot, newddn)
-//		dinode.w_size(oldsz + 512)
-//		log_write(dinode.blk)
-//
-//		deoff = 0
-//		// zero new directory data block
-//		blk = bread(newddn)
-//		for i := range blk.buf.data {
-//			blk.buf.data[i] = 0
-//		}
-//	}
-//
-//	// write dir entry
-//	ddata := dirdata_t{blk}
-//	if ddata.filename(deoff) != "" {
-//		panic("dir entry slot is not free")
-//	}
-//	ddata.w_filename(deoff, name)
-//	ddata.w_inodenext(deoff, newbn, newioff)
-//	log_write(ddata.blk)
-//	brelse(ddata.blk)
-//
-//	newinum := inum(biencode(newbn, newioff))
-//	ret := file_new(newinum, parpriv, newftnode)
-//	return ret, 0
-//}
 
 type file_t struct {
 	priv	inum
@@ -368,6 +272,7 @@ type ireq_t struct {
 	get_path	[]string
 	rbufs		[][]uint8
 	dbufs		[][]uint8
+	dappend		bool
 	offset		int
 	cr_name		string
 	cr_type		int
@@ -387,11 +292,12 @@ func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
 	r.offset = offset
 }
 
-func (r *ireq_t) mkwrite(srcs [][]uint8, offset int) {
+func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = WRITE
 	r.dbufs = srcs
 	r.offset = offset
+	r.dappend = append
 }
 
 func (r *ireq_t) mkcreate(nname string, ntype int) {
@@ -479,11 +385,33 @@ func idaemon(idm *idaemon_t) {
 			r.ack <- ret
 
 		case WRITE:
-			panic("no imp")
+			if idm.icache.itype == I_DIR {
+				panic("write to dir")
+			}
+			offset := r.offset
+			if r.dappend {
+				offset = idm.icache.size
+			}
+			read, err := idm.iwrite(r.dbufs, offset)
+			// iupdate() must come before the response is sent.
+			// otherwise the idaemon and the requester race to
+			// log_write()/op_end().
 			iupdate()
+			ret := &iresp_t{count: read, err: err}
+			r.ack <- ret
+
 		case CREATE:
-			panic("no imp")
+			if idm.icache.itype != I_DIR {
+				panic("create in non-dir")
+			}
+			if r.cr_type != I_FILE && r.cr_type != I_DIR {
+				panic("no imp")
+			}
+			isdir := r.cr_type == I_DIR
+			cnext, err := idm.icreate(r.cr_name, isdir)
 			iupdate()
+			ret := &iresp_t{cnext: cnext, err: err}
+			r.ack <- ret
 		default:
 			panic("bad req type")
 		}
@@ -498,7 +426,7 @@ func (idm *idaemon_t) iread(dsts [][]uint8, offset int) (int, int) {
 		if err != 0 {
 			return c, err
 		}
-		if c != len(d) {
+		if read != len(d) {
 			break
 		}
 	}
@@ -537,6 +465,132 @@ func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
 		c += len(src)
 	}
 	return c, 0
+}
+
+func (idm *idaemon_t) iwrite(srcs [][]uint8, offset int) (int, int) {
+	c := 0
+	for _, s := range srcs {
+		wrote, err := idm.iwrite1(s, offset + c)
+		c += wrote
+		if err != 0 {
+			return c, err
+		}
+		// short write
+		if wrote != len(s) {
+			break
+		}
+	}
+	return c, 0
+}
+
+func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
+	// XXX if file length is shortened, when to free old blocks?
+	sz := len(src)
+	c := 0
+	for c < sz {
+		fileoff := offset + c
+		whichblk := fileoff/512
+		if whichblk >= NIADDRS {
+			panic("need indirect support")
+		}
+		blkn := idm.icache.addrs[whichblk]
+		if blkn == 0 {
+			// alocate a new block
+			blkn = balloc()
+			idm.icache.addrs[whichblk] = blkn
+		}
+		blk := bread(blkn)
+		start := fileoff % 512
+		bsp := 512 - start
+		left := len(src) - c
+		if bsp > left {
+			bsp = left
+		}
+		dst := blk.buf.data[start:start+bsp]
+		for i := range dst {
+			dst[i] = src[c + i]
+		}
+		log_write(blk)
+		brelse(blk)
+		c += len(dst)
+	}
+	idm.icache.size = offset + c
+	return c, 0
+}
+
+func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
+	// check if file exists
+	names, _, emptyvalid, emptyb, emptys := idm.dirents_get()
+	for _, n := range names {
+		if name == n {
+			return 0, -EEXIST
+		}
+	}
+
+	// allocate new inode
+	newbn, newioff := ialloc()
+
+	newiblk := bread(newbn)
+	newinode := &inode_t{newiblk, newioff}
+	var itype int
+	if isdir {
+		itype = I_DIR
+	} else {
+		itype = I_FILE
+	}
+	newinode.w_itype(itype)
+	newinode.w_linkcount(1)
+	newinode.w_size(0)
+	newinode.w_major(0)
+	newinode.w_minor(0)
+	newinode.w_indirect(0)
+	for i := 0; i < NIADDRS; i++ {
+		newinode.w_addr(i, 0)
+	}
+	log_write(newiblk)
+	brelse(newiblk)
+
+	// write new directory entry into parpriv referencing newinode
+	var blk *bbuf_t
+	var deoff int
+	if emptyvalid {
+		// use existing dirdata block
+		blk = bread(emptyb)
+		deoff = emptys
+	} else {
+		// allocate new dir data block
+		newddn := balloc()
+		oldsz := idm.icache.size
+		nextslot := oldsz/512
+		if nextslot >= NIADDRS {
+			panic("need indirect support")
+		}
+		if idm.icache.addrs[nextslot] != 0 {
+			panic("addr slot allocated")
+		}
+		idm.icache.addrs[nextslot] = newddn
+		idm.icache.size = oldsz + 512
+
+		deoff = 0
+		// zero new directory data block
+		blk = bread(newddn)
+		for i := range blk.buf.data {
+			blk.buf.data[i] = 0
+		}
+	}
+
+	// write dir entry
+	ddata := dirdata_t{blk}
+	if ddata.filename(deoff) != "" {
+		panic("dir entry slot is not free")
+	}
+	ddata.w_filename(deoff, name)
+	ddata.w_inodenext(deoff, newbn, newioff)
+	log_write(ddata.blk)
+	brelse(ddata.blk)
+
+	newinum := inum(biencode(newbn, newioff))
+	return newinum, 0
 }
 
 func (idm *idaemon_t) fs_get(name string) (inum, int) {
@@ -1069,7 +1123,7 @@ type bbuf_t struct {
 }
 
 func (b *bbuf_t) writeback() {
-	ireq := idereq_new(int(b.buf.block), b.dirty, b.buf)
+	ireq := idereq_new(int(b.buf.block), true, b.buf)
 	ide_request <- ireq
 	<- ireq.ack
 	b.dirty = false

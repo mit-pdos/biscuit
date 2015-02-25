@@ -149,53 +149,46 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		ret += va & PGOFFSET
 		return ret
 	}
-	//wrappy := fs_write
-	var wrappy func(p []uint8, f *file_t, off int, app bool) (int,int)
+	wrappy := fs_write
 	// stdout/stderr hack
 	if fd == &fd_stdout || fd == &fd_stderr {
-		wrappy = func(p []uint8, f *file_t, off int,
-		    app bool) (int,int) {
+		wrappy = func(srcs [][]uint8, priv inum, off int,
+		    ap bool) (int, int) {
 			utext := int8(0x17)
-			for _, c := range p {
-				runtime.Putcha(int8(c), utext)
+			c := 0
+			for _, s := range srcs {
+				for _, c := range s {
+					runtime.Putcha(int8(c), utext)
+				}
+				c += len(s)
 			}
-			return len(p), 0
+			return c, 0
 		}
-	} else {
-		// only lock the file/get log access if we are writing to a
-		// file.
-		panic("no imp")
-		op_begin()
-		defer op_end()
 	}
 
-	append := fd.perms & O_APPEND != 0
+	apnd := fd.perms & O_APPEND != 0
 	c := 0
+	srcs := make([][]uint8, 1)
 	for c < sz {
 		p_bufp := vtop(bufp + c)
+		// XXX augment dmap8
 		src := dmap8(p_bufp)
 		left := sz - c
 		if len(src) > left {
 			src = src[:left]
 		}
-		ret, err := wrappy(src, fd.file, fd.offset + c, append)
-		if err != 0 {
-			return err
-		}
-		c += ret
-		if ret != len(src) {
-			// short write
-			break
-		}
+		srcs = append(srcs, src)
+		c += len(src)
 	}
-	fd.offset += c
-	return c
+	ret, err := wrappy(srcs, fd.file.priv, fd.offset, apnd)
+	if err != 0 {
+		return err
+	}
+	fd.offset += ret
+	return ret
 }
 
 func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
-	op_begin()
-	defer op_end()
-
 	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
@@ -226,9 +219,6 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 }
 
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {
-	op_begin()
-	defer op_end()
-
 	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT

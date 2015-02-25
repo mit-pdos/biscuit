@@ -39,8 +39,8 @@ int main(int argc, char **argv)
 	    " ha! he ya ya ya ya ya ja ja ja ye ye ye, ho ho ho ho hoooooooo"
 	    "ooooooo yo yo yoooooooooooo ya yay aaaaa yaaaaaa ya ya yaaaaa!"
 	    " [%d %d]";
-	int ret;
 	snprintf(buf, sizeof(buf), msg, getpid(), 1);
+	int ret;
 	if ((ret = write(fd, buf, strlen(buf))) != strlen(buf)) {
 		printf_red("write failed %d\n", ret);
 		return -1;
