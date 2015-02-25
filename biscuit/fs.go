@@ -8,13 +8,9 @@ import "unsafe"
 
 const NAME_MAX    int = 512
 
-// inum is an fs-independent inode identifier. for biscuit fs it contains an
-// inode's block/offset pair
-type inum int
-
 var superb_start	int
 var superb		superblock_t
-var iroot		inum
+var iroot		*idaemon_t
 var free_start		int
 var free_len		int
 var usable_start	int
@@ -61,8 +57,8 @@ func fs_init() {
 	superb.blk = blk
 	brelse(blk0)
 	brelse(blk)
-	a, b := superb.rootinode()
-	iroot = inum(biencode(a, b))
+	ri := superb.rootinode()
+	iroot = idaemon_ensure(ri)
 
 	free_start = superb.freeblock()
 	free_len = superb.freeblocklen()
@@ -72,9 +68,6 @@ func fs_init() {
 	if loglen < 0 {
 		panic("bad log len")
 	}
-
-	ftroot.nodes = make(map[int]*ftnode_t)
-	ftroot.l = new(sync.Mutex)
 
 	fs_recover()
 
@@ -109,12 +102,411 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
+func fs_read(dsts [][]uint8, priv inum, offset int) int {
+	// send read request to inode daemon owning inum
+	req := &ireq_t{}
+	req.mkread(dsts, offset)
+
+	idmon := idaemon_ensure(priv)
+	idmon.req <- req
+	resp := <- req.ack
+	if resp.err != 0 {
+		return resp.err
+	}
+	return resp.count
+}
+
 // caller must have file's filetree node locked
-func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
-	fib, fio := bidecode(int(file.priv))
-	inode := inode_get(fib, fio, true, I_FILE)
-	defer inode_put(inode)
-	isz := inode.size()
+//func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
+//	fib, fio := bidecode(int(file.priv))
+//	inode := inode_get(fib, fio, true, I_FILE)
+//	defer inode_put(inode)
+//	isz := inode.size()
+//	offset := soffset
+//	if append {
+//		offset = isz
+//	}
+//	// XXX if file length is shortened, when to free old blocks?
+//	sz := len(src)
+//	c := 0
+//	for c < sz {
+//		fileoff := offset + c
+//		whichblk := fileoff/512
+//		if whichblk >= NIADDRS {
+//			panic("need indirect support")
+//		}
+//		blkn := inode.addr(whichblk)
+//		if blkn == 0 {
+//			// alocate a new block
+//			blkn = balloc()
+//			inode.w_addr(whichblk, blkn)
+//		}
+//		blk := bread(blkn)
+//		start := fileoff % 512
+//		bsp := 512 - start
+//		left := len(src) - c
+//		if bsp > left {
+//			bsp = left
+//		}
+//		dst := blk.buf.data[start:start+bsp]
+//		for i := range dst {
+//			dst[i] = src[c + i]
+//		}
+//		log_write(blk)
+//		brelse(blk)
+//		c += len(dst)
+//	}
+//	inode.w_size(offset + c)
+//	log_write(inode.blk)
+//	return c, 0
+//}
+
+func fs_mkdir(path []string, mode int) int {
+	panic("no imp")
+	//l := len(path) - 1
+	//dirs := path[:l]
+	//dfile, err := fs_walk(dirs)
+	//if err != 0 {
+	//	return err
+	//}
+	//name := path[l]
+	//_, err = fs_create(name, dfile.priv, nil, true)
+	//dfile.fileunlock()
+	//if err != 0 {
+	//	return err
+	//}
+	//return 0
+}
+
+// returns file_t for specified file
+func fs_open(path []string, flags int, mode int) (*file_t, int) {
+	if flags & O_CREAT != 0 {
+		panic("no imp")
+		//l := len(path) - 1
+		//dirs := path[:l]
+		//ret, err := fs_walk(dirs)
+		//if err != 0 {
+		//	return nil, -ENOENT
+		//}
+		//name := path[len(path) - 1]
+		//cfile, err := fs_create(name, ret.priv, nil, false)
+		//ret.fileunlock()
+		//return cfile, err
+	}
+
+	// send inum get request to root inode daemon
+	req := &ireq_t{}
+	req.mkget(path)
+	iroot.req <- req
+	resp := <- req.ack
+
+	if resp.err != 0 {
+		return nil, resp.err
+	}
+
+	ret := &file_t{resp.gnext}
+	return ret, 0
+}
+
+// caller must have parpriv's filetree node locked. create file/directory named
+// 'name' under directory parpriv.
+//func fs_create(name string, parpriv inum, parftnode *ftnode_t,
+//    isdir bool) (*file_t, int) {
+//	// check if file exists
+//	dib, dio := bidecode(int(parpriv))
+//	dinode := inode_get(dib, dio, true, I_DIR)
+//	defer inode_put(dinode)
+//	names, _, emptyvalid, emptyb, emptys := dirents_get(dinode)
+//	for _, n := range names {
+//		if name == n {
+//			return nil, -EEXIST
+//		}
+//	}
+//
+//	// allocate new inode
+//	newbn, newioff := ialloc()
+//	newftnode := parftnode.ensure(newbn)
+//	// the new inode may be on the same block as the parent directory.
+//	// don't try to lock in this case.
+//	if newftnode.l != parftnode.l {
+//		newftnode.l.Lock()
+//		defer newftnode.l.Unlock()
+//	}
+//
+//	newiblk := bread(newbn)
+//	newinode := &inode_t{newiblk, newioff}
+//	var itype int
+//	if isdir {
+//		itype = I_DIR
+//	} else {
+//		itype = I_FILE
+//	}
+//	newinode.w_itype(itype)
+//	newinode.w_linkcount(1)
+//	newinode.w_size(0)
+//	newinode.w_major(0)
+//	newinode.w_minor(0)
+//	newinode.w_indirect(0)
+//	for i := 0; i < NIADDRS; i++ {
+//		newinode.w_addr(i, 0)
+//	}
+//	log_write(newiblk)
+//	brelse(newiblk)
+//
+//	// write new directory entry into parpriv referencing newinode
+//	var blk *bbuf_t
+//	var deoff int
+//	if emptyvalid {
+//		// use existing dirdata block
+//		blk = bread(emptyb)
+//		deoff = emptys
+//	} else {
+//		// allocate new dir data block
+//		newddn := balloc()
+//		oldsz := dinode.size()
+//		nextslot := oldsz/512
+//		if nextslot >= NIADDRS {
+//			panic("need indirect support")
+//		}
+//		if dinode.addr(nextslot) != 0 {
+//			panic("addr slot allocated")
+//		}
+//		dinode.w_addr(nextslot, newddn)
+//		dinode.w_size(oldsz + 512)
+//		log_write(dinode.blk)
+//
+//		deoff = 0
+//		// zero new directory data block
+//		blk = bread(newddn)
+//		for i := range blk.buf.data {
+//			blk.buf.data[i] = 0
+//		}
+//	}
+//
+//	// write dir entry
+//	ddata := dirdata_t{blk}
+//	if ddata.filename(deoff) != "" {
+//		panic("dir entry slot is not free")
+//	}
+//	ddata.w_filename(deoff, name)
+//	ddata.w_inodenext(deoff, newbn, newioff)
+//	log_write(ddata.blk)
+//	brelse(ddata.blk)
+//
+//	newinum := inum(biencode(newbn, newioff))
+//	ret := file_new(newinum, parpriv, newftnode)
+//	return ret, 0
+//}
+
+type file_t struct {
+	priv	inum
+}
+
+func file_new(priv inum) *file_t {
+	ret := &file_t{priv}
+	return ret
+}
+
+type idaemon_t struct {
+	req		chan *ireq_t
+	ack		chan *iresp_t
+	priv		inum
+	blkno		int
+	ioff		int
+	// cache of inode data in case block cache evicts our inode block
+	icache		icache_t
+}
+
+type icache_t struct {
+	itype	int
+	links	int
+	size	int
+	major	int
+	minor	int
+	indir	int
+	addrs	[NIADDRS]int
+}
+
+func (ic *icache_t) fill(blk *bbuf_t, ioff int) {
+	inode := inode_t{blk, ioff}
+	ic.itype = inode.itype()
+	ic.links = inode.linkcount()
+	ic.size  = inode.size()
+	ic.major = inode.major()
+	ic.minor = inode.minor()
+	ic.indir = inode.indirect()
+	for i := 0; i < NIADDRS; i++ {
+		ic.addrs[i] = inode.addr(i)
+	}
+}
+
+func (ic *icache_t) flushto(blk *bbuf_t, ioff int) {
+	inode := inode_t{blk, ioff}
+	inode.w_itype(ic.itype)
+	inode.w_linkcount(ic.links)
+	inode.w_size(ic.size)
+	inode.w_major(ic.major)
+	inode.w_minor(ic.minor)
+	inode.w_indirect(ic.indir)
+	for i := 0; i < NIADDRS; i++ {
+		inode.w_addr(i, ic.addrs[i])
+	}
+}
+
+type rtype_t int
+
+const (
+	GET	rtype_t = iota
+	READ
+	WRITE
+	CREATE
+)
+
+type ireq_t struct {
+	// request type
+	rtype		rtype_t
+	get_path	[]string
+	rbufs		[][]uint8
+	dbufs		[][]uint8
+	offset		int
+	cr_name		string
+	cr_type		int
+	ack		chan *iresp_t
+}
+
+func (r *ireq_t) mkget(name []string) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = GET
+	r.get_path = name
+}
+
+func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = READ
+	r.rbufs = dsts
+	r.offset = offset
+}
+
+func (r *ireq_t) mkwrite(srcs [][]uint8, offset int) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = WRITE
+	r.dbufs = srcs
+	r.offset = offset
+}
+
+func (r *ireq_t) mkcreate(nname string, ntype int) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = CREATE
+	r.cr_name = nname
+	r.cr_type = ntype
+}
+
+type iresp_t struct {
+	gnext	inum
+	cnext	inum
+	count	int
+	err	int
+}
+
+// a type for an inode block/offset identifier
+type inum int
+
+var allidmons	= map[inum]*idaemon_t{}
+var idmonl	= sync.Mutex{}
+
+func idaemon_ensure(priv inum) *idaemon_t {
+	idmonl.Lock()
+	ret, ok := allidmons[priv]
+	if !ok {
+		ret = idaemon_new(priv)
+		allidmons[priv] = ret
+		go idaemon(ret)
+	}
+	idmonl.Unlock()
+	return ret
+}
+
+// creates a new idaemon struct and fills its inode
+func idaemon_new(priv inum) *idaemon_t {
+	blkno, ioff := bidecode(int(priv))
+	ret := &idaemon_t{}
+	ret.priv = priv
+	ret.blkno = blkno
+	ret.ioff = ioff
+
+	ret.req = make(chan *ireq_t)
+	ret.ack = make(chan *iresp_t)
+
+	blk := bread(blkno)
+	ret.icache.fill(blk, ioff)
+	brelse(blk)
+	return ret
+}
+
+func idaemon(idm *idaemon_t) {
+	iupdate := func() {
+		blk := bread(idm.blkno)
+		idm.icache.flushto(blk, idm.ioff)
+		log_write(blk)
+		brelse(blk)
+	}
+	for {
+		r := <- idm.req
+		switch r.rtype {
+		case GET:
+			// is the requester asking for this daemon?
+			if len(r.get_path) == 0 {
+				ret := &iresp_t{gnext: idm.priv}
+				r.ack <- ret
+				break
+			}
+			// lookup next idaemon
+			next := r.get_path[0]
+			r.get_path = r.get_path[1:]
+			npriv, err := idm.fs_get(next)
+			if err != 0 {
+				ret := &iresp_t{err: err}
+				r.ack <- ret
+				break
+			}
+			nextidm := idaemon_ensure(npriv)
+			// forward request
+			nextidm.req <- r
+
+		case READ:
+			read, err := idm.iread(r.rbufs, r.offset)
+			ret := &iresp_t{count: read, err: err}
+			r.ack <- ret
+
+		case WRITE:
+			panic("no imp")
+			iupdate()
+		case CREATE:
+			panic("no imp")
+			iupdate()
+		default:
+			panic("bad req type")
+		}
+	}
+}
+
+func (idm *idaemon_t) iread(dsts [][]uint8, offset int) (int, int) {
+	c := 0
+	for _, d := range dsts {
+		read, err := idm.iread1(d, offset + c)
+		c += read
+		if err != 0 {
+			return c, err
+		}
+		if c != len(d) {
+			break
+		}
+	}
+	return c, 0
+}
+
+func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
+	isz := idm.icache.size
 	if offset > isz {
 		return 0, 0
 	}
@@ -128,7 +520,7 @@ func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 		if whichblk >= NIADDRS {
 			panic("need indirect support")
 		}
-		blkn := inode.addr(whichblk)
+		blkn := idm.icache.addrs[whichblk]
 		blk := bread(blkn)
 		start := fileoff % 512
 		bsp := 512 - start
@@ -147,207 +539,8 @@ func fs_read(dst []uint8, file *file_t, offset int) (int, int) {
 	return c, 0
 }
 
-// caller must have file's filetree node locked
-func fs_write(src []uint8, file *file_t, soffset int, append bool) (int, int) {
-	fib, fio := bidecode(int(file.priv))
-	inode := inode_get(fib, fio, true, I_FILE)
-	defer inode_put(inode)
-	isz := inode.size()
-	offset := soffset
-	if append {
-		offset = isz
-	}
-	// XXX if file length is shortened, when to free old blocks?
-	sz := len(src)
-	c := 0
-	for c < sz {
-		fileoff := offset + c
-		whichblk := fileoff/512
-		if whichblk >= NIADDRS {
-			panic("need indirect support")
-		}
-		blkn := inode.addr(whichblk)
-		if blkn == 0 {
-			// alocate a new block
-			blkn = balloc()
-			inode.w_addr(whichblk, blkn)
-		}
-		blk := bread(blkn)
-		start := fileoff % 512
-		bsp := 512 - start
-		left := len(src) - c
-		if bsp > left {
-			bsp = left
-		}
-		dst := blk.buf.data[start:start+bsp]
-		for i := range dst {
-			dst[i] = src[c + i]
-		}
-		log_write(blk)
-		brelse(blk)
-		c += len(dst)
-	}
-	inode.w_size(offset + c)
-	log_write(inode.blk)
-	return c, 0
-}
-
-func fs_mkdir(path []string, mode int) int {
-	l := len(path) - 1
-	dirs := path[:l]
-	dfile, err := fs_walk(dirs)
-	if err != 0 {
-		return err
-	}
-	name := path[l]
-	_, err = fs_create(name, dfile.priv, dfile.ftnode, true)
-	dfile.fileunlock()
-	if err != 0 {
-		return err
-	}
-	return 0
-}
-
-// returns file_t for specified file
-func fs_open(path []string, flags int, mode int) (*file_t, int) {
-	if flags & O_CREAT != 0 {
-		l := len(path) - 1
-		dirs := path[:l]
-		ret, err := fs_walk(dirs)
-		if err != 0 {
-			return nil, -ENOENT
-		}
-		name := path[len(path) - 1]
-		cfile, err := fs_create(name, ret.priv, ret.ftnode, false)
-		ret.fileunlock()
-		return cfile, err
-	}
-	ret, err := fs_walk(path)
-	if err != 0 {
-		return nil, err
-	}
-	ret.fileunlock()
-	return ret, 0
-}
-
-// returns a file_t with corresponding ftnode_t locked. when err is non-zero,
-// no locks are held.
-func fs_walk(path []string) (*file_t, int) {
-	cftdir := &ftroot
-	cftdir.l.Lock()
-	cinode := iroot
-	var lastinode inum
-	for _, p := range path {
-		nexti, err := dir_get(p, cinode)
-		if err != 0 {
-			cftdir.l.Unlock()
-			return nil, err
-		}
-		cftdir = cftdir.txlocknext(nexti)
-		lastinode = cinode
-		cinode = nexti
-	}
-	// create the file_t with filetree lock fields
-	ret := file_new(cinode, lastinode, cftdir)
-	return ret, 0
-}
-
-// caller must have parpriv's filetree node locked. create file/directory named
-// 'name' under directory parpriv.
-func fs_create(name string, parpriv inum, parftnode *ftnode_t,
-    isdir bool) (*file_t, int) {
-	// check if file exists
-	dib, dio := bidecode(int(parpriv))
-	dinode := inode_get(dib, dio, true, I_DIR)
-	defer inode_put(dinode)
-	names, _, emptyvalid, emptyb, emptys := dirents_get(dinode)
-	for _, n := range names {
-		if name == n {
-			return nil, -EEXIST
-		}
-	}
-
-	// allocate new inode and lock it via ftnode
-	newbn, newioff := ialloc()
-	newftnode := parftnode.ensure(newbn)
-	// the new inode may be on the same block as the parent directory.
-	// don't try to lock in this case.
-	if newftnode.l != parftnode.l {
-		newftnode.l.Lock()
-		defer newftnode.l.Unlock()
-	}
-
-	newiblk := bread(newbn)
-	newinode := &inode_t{newiblk, newioff}
-	var itype int
-	if isdir {
-		itype = I_DIR
-	} else {
-		itype = I_FILE
-	}
-	newinode.w_itype(itype)
-	newinode.w_linkcount(1)
-	newinode.w_size(0)
-	newinode.w_major(0)
-	newinode.w_minor(0)
-	newinode.w_indirect(0)
-	for i := 0; i < NIADDRS; i++ {
-		newinode.w_addr(i, 0)
-	}
-	log_write(newiblk)
-	brelse(newiblk)
-
-	// write new directory entry into parpriv referencing newinode
-	var blk *bbuf_t
-	var deoff int
-	if emptyvalid {
-		// use existing dirdata block
-		blk = bread(emptyb)
-		deoff = emptys
-	} else {
-		// allocate new dir data block
-		newddn := balloc()
-		oldsz := dinode.size()
-		nextslot := oldsz/512
-		if nextslot >= NIADDRS {
-			panic("need indirect support")
-		}
-		if dinode.addr(nextslot) != 0 {
-			panic("addr slot allocated")
-		}
-		dinode.w_addr(nextslot, newddn)
-		dinode.w_size(oldsz + 512)
-		log_write(dinode.blk)
-
-		deoff = 0
-		// zero new directory data block
-		blk = bread(newddn)
-		for i := range blk.buf.data {
-			blk.buf.data[i] = 0
-		}
-	}
-
-	// write dir entry
-	ddata := dirdata_t{blk}
-	if ddata.filename(deoff) != "" {
-		panic("dir entry slot is not free")
-	}
-	ddata.w_filename(deoff, name)
-	ddata.w_inodenext(deoff, newbn, newioff)
-	log_write(ddata.blk)
-	brelse(ddata.blk)
-
-	newinum := inum(biencode(newbn, newioff))
-	ret := file_new(newinum, parpriv, newftnode)
-	return ret, 0
-}
-
-// returns the inum for the file named 'name' in directory inode dirnoden
-func dir_get(name string, dirnoden inum) (inum, int) {
-	dib, dio := bidecode(int(dirnoden))
-	dirnode := inode_get(dib, dio, true, I_DIR)
-	defer inode_put(dirnode)
-	denames, deinodes, _, _, _ := dirents_get(dirnode)
+func (idm *idaemon_t) fs_get(name string) (inum, int) {
+	denames, deinodes, _, _, _ := idm.dirents_get()
 	for i, n := range denames {
 		if name == n {
 			return deinodes[i], 0
@@ -358,17 +551,18 @@ func dir_get(name string, dirnoden inum) (inum, int) {
 
 // fetch all directory entries from a directory data block. returns dirent
 // names, inums, and index of first empty dirent.
-func dirents_get(dirnode *inode_t) ([]string, []inum, bool, int, int) {
-	if dirnode.itype() != I_DIR {
+func (idm *idaemon_t) dirents_get() ([]string, []inum, bool, int, int) {
+	if idm.icache.itype != I_DIR {
 		panic("not a directory")
 	}
+	isz := idm.icache.size
 	sret := make([]string, 0)
 	iret := make([]inum, 0)
 	var emptyb int
 	var emptys int
 	evalid := false
-	for bn := 0; bn < dirnode.size()/512; bn++ {
-		blkn := dirnode.addr(bn)
+	for bn := 0; bn < isz/512; bn++ {
+		blkn := idm.icache.addrs[bn]
 		blk := bread(blkn)
 		dirdata := dirdata_t{blk}
 		for i := 0; i < NDIRENTS; i++ {
@@ -388,112 +582,6 @@ func dirents_get(dirnode *inode_t) ([]string, []inum, bool, int, int) {
 		brelse(blk)
 	}
 	return sret, iret, evalid, emptyb, emptys
-}
-
-// fs lock tree. this lock tree is how concurrent fs syscalls to the same
-// dir/file are made atomic -- the block cache does not provide any
-// synchronization and thus is not thread-safe. the index to the maps is the
-// inode block number. there is one ftnode for each file/dir, though an
-// ftnode's lock may be referenced from more than one place in the tree.
-type ftnode_t struct {
-	l	*sync.Mutex
-	nodes	map[int]*ftnode_t
-	par	*ftnode_t
-}
-
-var ftroot	= ftnode_t{}
-// map all blocks to locks. ftnodes for files that share an inode should share
-// a lock to synchronize access to the inode. only used when creating ftnodes.
-var allftlocks	= map[int]*sync.Mutex{}
-var allftl	= sync.Mutex{}
-
-// caller must have ftn locked. locks the ftnode_t corresponding to blkno under
-// ftn, creating an entry if necessary, and unlocks the ftn.
-func (ftn *ftnode_t) txlocknext(priv inum) *ftnode_t {
-	blkno, _ := bidecode(int(priv))
-	nextnode, ok := ftn.nodes[blkno]
-	if !ok {
-		// create
-		nextnode = ftn.create(blkno)
-	}
-	// if a directory and next directory entry are on the same inode, just
-	// keep it locked.
-	if ftn.l != nextnode.l {
-		nextnode.l.Lock()
-		ftn.l.Unlock()
-	}
-	return nextnode
-}
-
-// caller must have ftn locked. does not unlock ftn or lock the created ftnode.
-func (ftn *ftnode_t) create(blkn int) *ftnode_t {
-	if _, ok := ftn.nodes[blkn]; ok {
-		panic("ftnode exists")
-	}
-
-	ret := &ftnode_t{}
-	ret.nodes = make(map[int]*ftnode_t)
-	ret.par = ftn
-
-	allftl.Lock()
-	ftl, ok := allftlocks[blkn]
-	if ok {
-		ret.l = ftl
-	} else {
-		ret.l = new(sync.Mutex)
-		allftlocks[blkn] = ret.l
-	}
-	allftl.Unlock()
-
-	ftn.nodes[blkn] = ret
-	return ret
-}
-
-// caller must have ftn locked. does not unlock ftn or lock the created ftnode.
-func (ftn *ftnode_t) ensure(blkn int) *ftnode_t {
-	if ret, ok := ftn.nodes[blkn]; ok {
-		return ret
-	}
-	return ftn.create(blkn)
-}
-
-// we manage concurrency between files with the file lock tree made of ftnode_t
-// objects. file_t is an object to associate ftnode_t objects with open files.
-type file_t struct {
-	priv		inum
-	parpriv		inum
-	ftnode		*ftnode_t
-}
-
-func (f *file_t) filelock() {
-	f.ftnode.l.Lock()
-}
-
-func (f *file_t) fileunlock() {
-	f.ftnode.l.Unlock()
-}
-
-func file_new(priv inum, parpriv inum, node *ftnode_t) *file_t {
-	ret := &file_t{}
-	ret.priv = priv
-	ret.parpriv = parpriv
-	ret.ftnode = node
-	return ret
-}
-
-// caller must release inode via inode_put
-func inode_get(block int, ioff int, verify bool, exptype int) *inode_t {
-	blk := bread(block)
-	ret := inode_t{blk, ioff}
-	itype := ret.itype()
-	if verify && itype != exptype {
-		panic(fmt.Sprintf("this is not an inode of type %v", exptype))
-	}
-	return &ret
-}
-
-func inode_put(i *inode_t) {
-	brelse(i.blk)
 }
 
 func fieldr(p *[512]uint8, field int) int {
@@ -546,9 +634,9 @@ func (sb *superblock_t) loglen() int {
 	return fieldr(&sb.blk.buf.data, 2)
 }
 
-func (sb *superblock_t) rootinode() (int, int) {
+func (sb *superblock_t) rootinode() inum {
 	v := fieldr(&sb.blk.buf.data, 3)
-	return bidecode(v)
+	return inum(v)
 }
 
 func (sb *superblock_t) lastblock() int {
@@ -1057,7 +1145,6 @@ func bc_daemon(bc *bcdaemon_t) {
 	for {
 		select {
 		case r := <- bc.req:
-			fmt.Printf("req for %v\n", r.blkno)
 			// block request
 			inuse := given[r.blkno]
 			if !inuse {
@@ -1068,7 +1155,6 @@ func bc_daemon(bc *bcdaemon_t) {
 				bc.qadd(r.blkno, &r.ack)
 			}
 		case bfin := <- bc.done:
-			fmt.Printf("release %v\n", bfin)
 			// relinquish block
 			inuse := given[bfin]
 			if !inuse {

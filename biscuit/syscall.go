@@ -108,27 +108,24 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		ret += va & PGOFFSET
 		return ret
 	}
-	fd.file.filelock()
-	defer fd.file.fileunlock()
 	c := 0
+	// we cannot load the user page map and the buffer to read into may not
+	// be contiguous in physical memory. thus we must piece together the
+	// buffer.
+	dsts := make([][]uint8, 1)
 	for c < sz {
 		dst := dmap8(vtop(bufp + c))
 		left := sz - c
 		if len(dst) > left {
 			dst = dst[:left]
 		}
-		ret, err := fs_read(dst, fd.file, fd.offset + c)
-		if err != 0 {
-			return err
-		}
-		c += ret
-		if ret != len(dst) {
-			// no more to read
-			break
-		}
+		dsts = append(dsts, dst)
+		c += len(dst)
 	}
-	fd.offset += c
-	return c
+
+	ret := fs_read(dsts, fd.file.priv, fd.offset)
+	fd.offset += ret
+	return ret
 }
 
 func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
@@ -149,7 +146,8 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		ret += va & PGOFFSET
 		return ret
 	}
-	wrappy := fs_write
+	//wrappy := fs_write
+	var wrappy func(p []uint8, f *file_t, off int, app bool) (int,int)
 	// stdout/stderr hack
 	if fd == &fd_stdout || fd == &fd_stderr {
 		wrappy = func(p []uint8, f *file_t, off int,
@@ -163,10 +161,9 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	} else {
 		// only lock the file/get log access if we are writing to a
 		// file.
+		panic("no imp")
 		op_begin()
 		defer op_end()
-		fd.file.filelock()
-		defer fd.file.fileunlock()
 	}
 
 	append := fd.perms & O_APPEND != 0
