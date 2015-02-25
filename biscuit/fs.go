@@ -1148,6 +1148,11 @@ func (log *log_t) append(blkn int) {
 }
 
 func (log *log_t) commit() {
+	if len(log.blks) == 0 {
+		// nothing to commit
+		return
+	}
+
 	if rnum := superb.recovernum(); rnum != 0  {
 		panic(fmt.Sprintf("should have ran recover %v", rnum))
 	}
