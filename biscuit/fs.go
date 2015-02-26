@@ -483,6 +483,7 @@ func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
 		}
 		brelse(blk)
 		c += ub
+		dst = dst[ub:]
 		if offset + c == isz || dstfull {
 			break
 		}
