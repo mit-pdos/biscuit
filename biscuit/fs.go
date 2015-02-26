@@ -49,7 +49,7 @@ func fs_init() {
 	blk0 := bread(0)
 	FSOFF := 506
 	superb_start = readn(blk0.buf.data[:], 4, FSOFF)
-	if superb_start == 0 {
+	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
 	blk := bread(superb_start)
@@ -417,6 +417,35 @@ func idaemon(idm *idaemon_t) {
 	}
 }
 
+// if writing, allocate a block if necessary and don't trim the slice to the
+// size of the file
+func (idm *idaemon_t) blkslice(offset int, writing bool) ([]uint8, *bbuf_t) {
+	whichblk := offset/512
+	if whichblk >= NIADDRS {
+		panic("need indirect support")
+	}
+	blkn := idm.icache.addrs[whichblk]
+	if writing && blkn == 0 {
+		blkn = balloc()
+		idm.icache.addrs[whichblk] = blkn
+	}
+	if blkn < superb_start {
+		panic("bad block")
+	}
+	blk := bread(blkn)
+	start := offset % 512
+	bsp := 512 - start
+	if !writing {
+		// trim src buffer to end of file
+		left := idm.icache.size - offset
+		if bsp > left {
+			bsp = left
+		}
+	}
+	src := blk.buf.data[start:start+bsp]
+	return src, blk
+}
+
 func (idm *idaemon_t) iread(dsts [][]uint8, offset int) (int, int) {
 	c := 0
 	for _, d := range dsts {
@@ -440,28 +469,23 @@ func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
 
 	sz := len(dst)
 	c := 0
-	readall := false
-	for c < sz && !readall {
-		fileoff := offset + c
-		whichblk := fileoff/512
-		if whichblk >= NIADDRS {
-			panic("need indirect support")
+	dstfull := false
+	for c < sz {
+		src, blk := idm.blkslice(offset + c, false)
+		// copy upto len(dst) bytes
+		ub := len(src)
+		if len(dst) < ub {
+			ub = len(dst)
+			dstfull = true
 		}
-		blkn := idm.icache.addrs[whichblk]
-		blk := bread(blkn)
-		start := fileoff % 512
-		bsp := 512 - start
-		left := isz - fileoff
-		if bsp > left {
-			bsp = left
-			readall = true
-		}
-		src := blk.buf.data[start:start+bsp]
-		for i, b := range src {
-			dst[c + i] = b
+		for i := 0; i < ub; i++ {
+			dst[i] = src[i]
 		}
 		brelse(blk)
-		c += len(src)
+		c += ub
+		if offset + c == isz || dstfull {
+			break
+		}
 	}
 	return c, 0
 }
@@ -476,7 +500,7 @@ func (idm *idaemon_t) iwrite(srcs [][]uint8, offset int) (int, int) {
 		}
 		// short write
 		if wrote != len(s) {
-			break
+			panic("short write")
 		}
 	}
 	return c, 0
@@ -487,31 +511,18 @@ func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
 	sz := len(src)
 	c := 0
 	for c < sz {
-		fileoff := offset + c
-		whichblk := fileoff/512
-		if whichblk >= NIADDRS {
-			panic("need indirect support")
+		dst, blk := idm.blkslice(offset + c, true)
+		ub := len(dst)
+		if len(src) < ub {
+			ub = len(src)
 		}
-		blkn := idm.icache.addrs[whichblk]
-		if blkn == 0 {
-			// alocate a new block
-			blkn = balloc()
-			idm.icache.addrs[whichblk] = blkn
-		}
-		blk := bread(blkn)
-		start := fileoff % 512
-		bsp := 512 - start
-		left := len(src) - c
-		if bsp > left {
-			bsp = left
-		}
-		dst := blk.buf.data[start:start+bsp]
-		for i := range dst {
-			dst[i] = src[c + i]
+		for i := 0; i < ub; i++ {
+			dst[i] = src[i]
 		}
 		log_write(blk)
 		brelse(blk)
-		c += len(dst)
+		c += ub
+		src = src[ub:]
 	}
 	idm.icache.size = offset + c
 	return c, 0
@@ -924,6 +935,9 @@ func balloc() int {
 	var oct int
 	// 0 is free, 1 is allocated
 	for i := 0; i < flen && !found; i++ {
+		if blk != nil {
+			brelse(blk)
+		}
 		blk = bread(fst + i)
 		for idx, c := range blk.buf.data {
 			if c != 0xff {
@@ -934,7 +948,6 @@ func balloc() int {
 				break
 			}
 		}
-		brelse(blk)
 	}
 	if !found {
 		panic("no free blocks")
@@ -943,6 +956,7 @@ func balloc() int {
 	// mark as allocated
 	blk.buf.data[oct] |= 1 << bit
 	log_write(blk)
+	brelse(blk)
 
 	boffset := usable_start
 	bitsperblk := 512*8
@@ -1199,6 +1213,9 @@ func bc_daemon(bc *bcdaemon_t) {
 		select {
 		case r := <- bc.req:
 			// block request
+			if r.blkno < 0 {
+				panic("bad block")
+			}
 			inuse := given[r.blkno]
 			if !inuse {
 				given[r.blkno] = true
@@ -1209,6 +1226,9 @@ func bc_daemon(bc *bcdaemon_t) {
 			}
 		case bfin := <- bc.done:
 			// relinquish block
+			if bfin < 0 {
+				panic("bad block")
+			}
 			inuse := given[bfin]
 			if !inuse {
 				panic("relinquish unused block")
