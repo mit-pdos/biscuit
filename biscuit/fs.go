@@ -69,9 +69,8 @@ func fs_init() {
 		panic("bad log len")
 	}
 
-	fs_recover()
-
 	fslog.init(logstart, loglen)
+	fs_recover()
 	go log_daemon(&fslog)
 }
 
