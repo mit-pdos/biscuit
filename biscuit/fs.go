@@ -429,7 +429,7 @@ func (idm *idaemon_t) blkslice(offset int, writing bool) ([]uint8, *bbuf_t) {
 		blkn = balloc()
 		idm.icache.addrs[whichblk] = blkn
 	}
-	if blkn < superb_start {
+	if blkn < superb_start && idm.icache.size > 0 {
 		panic("bad block")
 	}
 	blk := bread(blkn)
@@ -1154,113 +1154,121 @@ func bcreq_new(blkno int) *bcreq_t {
 
 type bcdaemon_t struct {
 	req		chan *bcreq_t
+	bnew		chan *bbuf_t
 	done		chan int
-	bcblocks	map[int]*bbuf_t
+	blocks		map[int]*bbuf_t
+	given		map[int]bool
 	waiters		map[int][]*chan *bbuf_t
 }
 
-func (bc *bcdaemon_t) init() {
-	bc.req = make(chan *bcreq_t)
-	bc.done = make(chan int)
-	bc.bcblocks = make(map[int]*bbuf_t)
-	bc.waiters = make(map[int][]*chan *bbuf_t)
+func (blc *bcdaemon_t) init() {
+	blc.req = make(chan *bcreq_t)
+	blc.bnew = make(chan *bbuf_t)
+	blc.done = make(chan int)
+	blc.blocks = make(map[int]*bbuf_t)
+	blc.given = make(map[int]bool)
+	blc.waiters = make(map[int][]*chan *bbuf_t)
 }
 
 // returns a bbuf_t for the specified block
-func (bc *bcdaemon_t) bc_read(block int) *bbuf_t {
-	if block < 0 {
-		panic("bad block")
-	}
-	ret, ok := bc.bcblocks[block]
-
+func (blc *bcdaemon_t) bc_read(blkno int, ack *chan *bbuf_t) {
+	ret, ok := blc.blocks[blkno]
 	if !ok {
-		ireq := idereq_new(block, false, nil)
-		ide_request <- ireq
-		<- ireq.ack
-		nb := &bbuf_t{}
-		nb.buf = ireq.buf
-		nb.dirty = false
-		bc.bcblocks[block] = nb
-		bc.chk_evict()
-		ret = nb
+		// add requester to queue before kicking off disk read
+		blc.qadd(blkno, ack)
+		go func() {
+			ireq := idereq_new(blkno, false, nil)
+			ide_request <- ireq
+			<- ireq.ack
+			nb := &bbuf_t{}
+			nb.buf = ireq.buf
+			blc.bnew <- nb
+		}()
+		return
 	}
-	return ret
+	*ack <- ret
 }
 
-func (bc *bcdaemon_t) qadd(blkno int, ack *chan *bbuf_t) {
-	q, ok := bc.waiters[blkno]
+func (blc *bcdaemon_t) qadd(blkno int, ack *chan *bbuf_t) {
+	q, ok := blc.waiters[blkno]
 	if !ok {
 		q = make([]*chan *bbuf_t, 1, 8)
-		bc.waiters[blkno] = q
+		blc.waiters[blkno] = q
 		q[0] = ack
 		return
 	}
-	bc.waiters[blkno] = append(q, ack)
+	blc.waiters[blkno] = append(q, ack)
 }
 
-func (bc *bcdaemon_t) qpop(blkno int) (*chan *bbuf_t, bool) {
-	q, ok := bc.waiters[blkno]
+func (blc *bcdaemon_t) qpop(blkno int) (*chan *bbuf_t, bool) {
+	q, ok := blc.waiters[blkno]
 	if !ok || len(q) == 0 {
 		return nil, false
 	}
 	ret := q[0]
-	bc.waiters[blkno] = q[1:]
+	blc.waiters[blkno] = q[1:]
 	return ret, true
 }
 
-func bc_daemon(bc *bcdaemon_t) {
-	given := make(map[int]bool)
+func bc_daemon(blc *bcdaemon_t) {
 	for {
 		select {
-		case r := <- bc.req:
+		case r := <- blc.req:
 			// block request
 			if r.blkno < 0 {
 				panic("bad block")
 			}
-			inuse := given[r.blkno]
+			inuse := blc.given[r.blkno]
 			if !inuse {
-				given[r.blkno] = true
-				buf := bc.bc_read(r.blkno)
-				r.ack <- buf
+				blc.given[r.blkno] = true
+				blc.bc_read(r.blkno, &r.ack)
 			} else {
-				bc.qadd(r.blkno, &r.ack)
+				blc.qadd(r.blkno, &r.ack)
 			}
-		case bfin := <- bc.done:
+		case bfin := <- blc.done:
 			// relinquish block
 			if bfin < 0 {
 				panic("bad block")
 			}
-			inuse := given[bfin]
+			inuse := blc.given[bfin]
 			if !inuse {
 				panic("relinquish unused block")
 			}
-			nextc, ok := bc.qpop(bfin)
+			nextc, ok := blc.qpop(bfin)
 			if ok {
-				buf := bc.bc_read(bfin)
-				*nextc <- buf
+				// busy blocks cannot be evicted
+				blk, _ := blc.blocks[bfin]
+				*nextc <- blk
 			} else {
-				given[bfin] = false
+				blc.given[bfin] = false
 			}
+		case nb := <- blc.bnew:
+			// disk read finished
+			blkno := int(nb.buf.block)
+			blc.chk_evict()
+			blc.blocks[blkno] = nb
+			nextc, _ := blc.qpop(blkno)
+			*nextc <- nb
 		}
 	}
 }
 
-func (bc *bcdaemon_t) chk_evict() {
+func (blc *bcdaemon_t) chk_evict() {
 	nbcbufs := 512
-	if len(bc.bcblocks) <= nbcbufs {
+	if len(blc.blocks) <= nbcbufs {
 		return
 	}
 	// evict unmodified bbuf
-	for i, bb := range bc.bcblocks {
-		if !bb.dirty {
-			delete(bc.bcblocks, i)
-			if len(bc.bcblocks) <= nbcbufs {
+	for i, bb := range blc.blocks {
+		if !bb.dirty && !blc.given[i] {
+			delete(blc.blocks, i)
+			if len(blc.blocks) <= nbcbufs {
 				break
 			}
 		}
 	}
-	if len(bc.bcblocks) >= nbcbufs {
-		panic("bc full of dirty blocks")
+	if len(blc.blocks) >= nbcbufs {
+		panic("blc full of dirty blocks")
 	}
 }
 

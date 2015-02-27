@@ -736,11 +736,11 @@ func main() {
 	//sys_test("user/fault")
 	//sys_test("user/hello")
 	//sys_test("user/fork")
-	//sys_test("user/fstest")
+	sys_test("user/fstest")
 	//sys_test("user/fswrite")
 	//sys_test("user/fsbigwrite")
 	//sys_test("user/fsmkdir")
-	sys_test("user/fscreat")
+	//sys_test("user/fscreat")
 	//sys_test("user/getpid")
 
 	//ide_test()
