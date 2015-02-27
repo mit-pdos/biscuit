@@ -44,6 +44,7 @@ const(
   SYS_FORK     = 57
   SYS_EXIT     = 60
   SYS_MKDIR    = 83
+  SYS_LINK     = 86
 )
 
 // lowest userspace address
@@ -80,6 +81,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		sys_exit(p, a1)
 	case SYS_MKDIR:
 		ret = sys_mkdir(p, a1, a2)
+	case SYS_LINK:
+		ret = sys_link(p, a1, a2)
 	}
 
 	tf[TF_RAX] = ret
@@ -231,6 +234,23 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 		return -ENOENT
 	}
 	return fs_mkdir(parts, mode)
+}
+
+func sys_link(proc *proc_t, oldn int, newn int) int {
+	old, ok1, toolong1 := is_mapped_str(proc.pmap, oldn, NAME_MAX)
+	new, ok2, toolong2 := is_mapped_str(proc.pmap, newn, NAME_MAX)
+	if !ok1 || !ok2 {
+		return -EFAULT
+	}
+	if toolong1 || toolong2 {
+		return -ENAMETOOLONG
+	}
+	opath, badp1 := path_sanitize(proc.cwd + old)
+	npath, badp2 := path_sanitize(proc.cwd + new)
+	if badp1 || badp2 {
+		return -ENOENT
+	}
+	return fs_link(opath, npath)
 }
 
 func sys_getpid(proc *proc_t) int {

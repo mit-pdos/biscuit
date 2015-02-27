@@ -101,6 +101,10 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
+func fs_link(oldp []string, newp []string) int {
+	return 0
+}
+
 func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
@@ -140,22 +144,15 @@ func fs_mkdir(path []string, mode int) int {
 	dirs := path[:l]
 	name := path[l]
 
-	// first find owner idaemon; alternatively, we could merge GET/CREATE
-	// together and do it in one request.
-	req := &ireq_t{}
-	req.mkget(dirs)
-	iroot.req <- req
-	resp := <- req.ack
-	if resp.err != 0 {
-		return resp.err
+	idmon, err := iroot_getdmon(dirs)
+	if err != 0 {
+		return err
 	}
 
-	owner := resp.gnext
-	req = &ireq_t{}
+	req := &ireq_t{}
 	req.mkcreate(name, I_DIR)
-	idmon := idaemon_ensure(owner)
 	idmon.req <- req
-	resp = <- req.ack
+	resp := <- req.ack
 	return resp.err
 }
 
@@ -189,16 +186,32 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 	}
 
 	// send inum get request to root inode daemon
+	priv, err := iroot_getp(path)
+	if err != 0 {
+		return nil, err
+	}
+
+	ret := &file_t{priv}
+	return ret, 0
+}
+
+func iroot_getp(path []string) (inum, int) {
 	req := &ireq_t{}
 	req.mkget(path)
 	iroot.req <- req
 	resp := <- req.ack
 	if resp.err != 0 {
-		return nil, resp.err
+		return 0, resp.err
 	}
+	return resp.gnext, 0
+}
 
-	ret := &file_t{resp.gnext}
-	return ret, 0
+func iroot_getdmon(path []string) (*idaemon_t, int) {
+	priv, err := iroot_getp(path)
+	if err != 0 {
+		return nil, err
+	}
+	return idaemon_ensure(priv), 0
 }
 
 type file_t struct {

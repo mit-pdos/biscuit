@@ -10,6 +10,7 @@
 void exit(int);
 int fork(void);
 int getpid(void);
+int link(const char *, const char *);
 int mkdir(const char *, long);
 int open(const char *, int, int);
 #define    O_RDONLY          0

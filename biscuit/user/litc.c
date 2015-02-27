@@ -8,6 +8,7 @@
 #define SYS_FORK         57
 #define SYS_EXIT         60
 #define SYS_MKDIR        83
+#define SYS_LINK         86
 
 static void pmsg(char *);
 
@@ -48,6 +49,12 @@ getpid(void)
 }
 
 int
+link(const char *old, const char *new)
+{
+	return syscall(SA(old), SA(new), 0, 0, 0, SYS_LINK);
+}
+
+int
 mkdir(const char *p, long mode)
 {
 	return syscall(SA(p), mode, 0, 0, 0, SYS_MKDIR);
@@ -75,10 +82,12 @@ void
 errx(int eval, const char *fmt, ...)
 {
 	va_list ap;
+	pmsg(RED);
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
 	pmsg("\n");
+	pmsg(RESET);
 	exit(eval);
 }
 
