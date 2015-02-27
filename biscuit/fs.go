@@ -144,14 +144,9 @@ func fs_mkdir(path []string, mode int) int {
 	dirs := path[:l]
 	name := path[l]
 
-	idmon, err := iroot_getdmon(dirs)
-	if err != 0 {
-		return err
-	}
-
 	req := &ireq_t{}
-	req.mkcreate(name, I_DIR)
-	idmon.req <- req
+	req.mkcreate(dirs, name, I_DIR)
+	iroot.req <- req
 	resp := <- req.ack
 	return resp.err
 }
@@ -164,21 +159,11 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 		l := len(path) - 1
 		dirs := path[:l]
 
+		name := path[len(path) - 1]
 		req := &ireq_t{}
-		req.mkget(dirs)
+		req.mkcreate(dirs, name, I_FILE)
 		iroot.req <- req
 		resp := <- req.ack
-		if resp.err != 0 {
-			return nil, resp.err
-		}
-		owner := resp.gnext
-
-		name := path[len(path) - 1]
-		req = &ireq_t{}
-		req.mkcreate(name, I_FILE)
-		idmon := idaemon_ensure(owner)
-		idmon.req <- req
-		resp = <- req.ack
 		if resp.err != 0 {
 			return nil, resp.err
 		}
@@ -204,14 +189,6 @@ func iroot_getp(path []string) (inum, int) {
 		return 0, resp.err
 	}
 	return resp.gnext, 0
-}
-
-func iroot_getdmon(path []string) (*idaemon_t, int) {
-	priv, err := iroot_getp(path)
-	if err != 0 {
-		return nil, err
-	}
-	return idaemon_ensure(priv), 0
 }
 
 type file_t struct {
@@ -280,12 +257,13 @@ const (
 
 type ireq_t struct {
 	// request type
-	rtype		rtype_t
 	get_path	[]string
+	rtype		rtype_t
 	rbufs		[][]uint8
 	dbufs		[][]uint8
 	dappend		bool
 	offset		int
+	cr_path		[]string
 	cr_name		string
 	cr_type		int
 	ack		chan *iresp_t
@@ -312,9 +290,10 @@ func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 	r.dappend = append
 }
 
-func (r *ireq_t) mkcreate(nname string, ntype int) {
+func (r *ireq_t) mkcreate(dirs []string, nname string, ntype int) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
+	r.cr_path = dirs
 	r.cr_name = nname
 	r.cr_type = ntype
 }
@@ -381,7 +360,7 @@ func idaemon(idm *idaemon_t) {
 			// lookup next idaemon
 			next := r.get_path[0]
 			r.get_path = r.get_path[1:]
-			npriv, err := idm.fs_get(next)
+			npriv, err := idm.iget(next)
 			if err != 0 {
 				ret := &iresp_t{err: err}
 				r.ack <- ret
@@ -413,6 +392,21 @@ func idaemon(idm *idaemon_t) {
 			r.ack <- ret
 
 		case CREATE:
+			// lookup next idaemon?
+			if len(r.cr_path) != 0 {
+				next := r.cr_path[0]
+				r.cr_path = r.cr_path[1:]
+				npriv, err := idm.iget(next)
+				if err != 0 {
+					ret := &iresp_t{err: err}
+					r.ack <- ret
+					break
+				}
+				nextidm := idaemon_ensure(npriv)
+				// forward request
+				nextidm.req <- r
+				break
+			}
 			if idm.icache.itype != I_DIR {
 				panic("create in non-dir")
 			}
@@ -617,7 +611,7 @@ func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 	return newinum, 0
 }
 
-func (idm *idaemon_t) fs_get(name string) (inum, int) {
+func (idm *idaemon_t) iget(name string) (inum, int) {
 	denames, deinodes, _, _, _ := idm.dirents_get()
 	for i, n := range denames {
 		if name == n {
