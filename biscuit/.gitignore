@@ -10,6 +10,10 @@ user/fork
 user/getpid
 user/fstest
 user/fswrite
+user/fsbigwrite
+user/fscreat
+user/fslink
+user/fsmkdir
 bins.go
 boot.elf
 chentry
@@ -19,3 +23,13 @@ main.gobin
 mpentry.elf
 mpentry.bin
 *.pyc
+fsdir/bin/hello
+fsdir/bin/fault
+fsdir/bin/fork
+fsdir/bin/getpid
+fsdir/bin/fstest
+fsdir/bin/fswrite
+fsdir/bin/fsbigwrite
+fsdir/bin/fscreat
+fsdir/bin/fslink
+fsdir/bin/fsmkdir
