@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
+import "strings"
 import "sync/atomic"
 import "sync"
 import "unsafe"
@@ -733,19 +734,24 @@ func main() {
 	}
 	fs_init()
 
-	//sys_test("user/fault")
-	//sys_test("user/hello")
-	sys_test("user/fork")
-	//sys_test("user/fstest")
-	//sys_test("user/fslink")
-	//sys_test("user/fswrite")
-	//sys_test("user/fsbigwrite")
-	//sys_test("user/fsmkdir")
-	//sys_test("user/fscreat")
-	//sys_test("user/getpid")
-	//if sys_execv([]string{"bin", "hello"}, nil) != 0 {
-	//	panic("exec failed")
-	//}
+	exec := func(cmd string) {
+		path := strings.Split(cmd, "/")
+		ret := sys_execv(path, nil)
+		if ret != 0 {
+			panic(fmt.Sprintf("exec failed %v", ret))
+		}
+	}
+
+	//exec("bin/fault")
+	//exec("bin/hello")
+	exec("bin/fork")
+	//exec("bin/fstest")
+	//exec("bin/fslink")
+	//exec("bin/fswrite")
+	//exec("bin/fsbigwrite")
+	//exec("bin/fsmkdir")
+	//exec("bin/fscreat")
+	//exec("bin/getpid")
 
 	//ide_test()
 	//bc_test()

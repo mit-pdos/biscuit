@@ -14,11 +14,12 @@ KSRC := main.go syscall.go pmap.go fs.go
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
-UPROGS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
+UBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink
-UPROGS := $(patsubst %,user/%,$(UPROGS))
+FSUPROGS := $(patsubst %,fsdir/bin/%,$(UBINS))
+UPROGS := $(patsubst %,user/%,$(UBINS))
 
-BGOS := $(patsubst %,%.bgo,$(UPROGS)) mpentry.bin.bgo
+BGOS := mpentry.bin.bgo
 
 RFS  := $(patsubst %.c,%.d,$(CS))
 RFS  += $(patsubst %,%.d,$(UPROGS))
@@ -59,8 +60,12 @@ bootmain.o: bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: boot main.gobin $(SKELDEPS)
+go.img: boot main.gobin $(SKELDEPS) $(FSUPROGS)
 	./mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
+
+# the user/% prereq is built by the UPROGS target
+$(FSUPROGS): fsdir/bin/% : user/%
+	objcopy -S $^ $@
 
 $(GOBIN):
 	@echo; echo; echo; \
@@ -69,7 +74,7 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-main.gobin: chentry $(GOBIN) $(UPROGS) bins.go $(KSRC)
+main.gobin: chentry $(GOBIN) bins.go $(KSRC)
 	$(GOBIN) build -o $@ bins.go $(KSRC)
 	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
@@ -98,7 +103,8 @@ chentry: chentry.c
 
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
-	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o
+	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o \
+	    $(FSUPROGS) $(UPROGS)
 
 qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img

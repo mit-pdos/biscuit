@@ -478,6 +478,7 @@ func sys_test_dump() {
 	}
 }
 
+// loads user program from gobins
 func sys_test(program string) {
 	fmt.Printf("add 'user' prog\n")
 
