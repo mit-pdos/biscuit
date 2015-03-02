@@ -211,7 +211,7 @@ class Inodeb:
     # minor
     wrnum(0)
     # indirect block
-    wrnum(0)
+    wrnum(blk.indirect)
     # block addresses
     for i in blk.blks:
       wrnum(i)
