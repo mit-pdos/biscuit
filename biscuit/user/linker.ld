@@ -6,4 +6,8 @@ SECTIONS
         .text : { *(.text) }
         .data : { *(.data) }
         .bss : { *(.bss) }
+
+	/DISCARD/ : {
+		*(.eh_frame .note.gnu.build-id)
+	}
 }
