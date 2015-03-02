@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+import "strings"
 import "unsafe"
 
 const(
@@ -16,8 +17,11 @@ const(
   TF_RAX       = 15
   TF_TRAP      = TFREGS
   TF_RIP       = TFREGS + 2
+  TF_CS        = TFREGS + 3
   TF_RSP       = TFREGS + 5
+  TF_SS        = TFREGS + 6
   TF_RFLAGS    = TFREGS + 4
+    TF_FL_IF     = 1 << 9
 )
 
 const(
@@ -478,13 +482,6 @@ func sys_test(program string) {
 	fmt.Printf("add 'user' prog\n")
 
 	var tf [23]int
-	tfregs    := 16
-	tf_rsp    := tfregs + 5
-	tf_rip    := tfregs + 2
-	tf_rflags := tfregs + 4
-	fl_intf   := 1 << 9
-	tf_ss     := tfregs + 6
-	tf_cs     := tfregs + 3
 
 	proc := proc_new(program + "test")
 
@@ -495,14 +492,14 @@ func sys_test(program string) {
 
 	stack, p_stack := pg_new(proc.pages)
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
-	tf[tf_rsp] = stackva - 8
-	tf[tf_rip] = elf.entry()
-	tf[tf_rflags] = fl_intf
+	tf[TF_RSP] = stackva - 8
+	tf[TF_RIP] = elf.entry()
+	tf[TF_RFLAGS] = TF_FL_IF
 
 	ucseg := 4
 	udseg := 5
-	tf[tf_cs] = ucseg << 3 | 3
-	tf[tf_ss] = udseg << 3 | 3
+	tf[TF_CS] = ucseg << 3 | 3
+	tf[TF_SS] = udseg << 3 | 3
 
 	// copy kernel page table, map new stack
 	upmap, p_upmap, _ := copy_pmap(nil, kpmap(), proc.pages)
@@ -513,4 +510,53 @@ func sys_test(program string) {
 	elf_load(proc, elf)
 
 	proc.sched_add(&tf)
+}
+
+func sys_execv(path []string, args []string) int {
+	if len(args) != 0 {
+		panic("no imp")
+	}
+	file, err := fs_open(path, O_RDONLY, 0)
+	if err != 0 {
+		return err
+	}
+	eobj := make([]uint8, 0)
+	add := make([]uint8, 4096)
+	ret := 1
+	c := 0
+	for ret != 0 {
+		ret, err = fs_read([][]uint8{add}, file.priv, c)
+		c += ret
+		if err != 0 {
+			return err
+		}
+		valid := add[0:ret]
+		eobj = append(eobj, valid...)
+	}
+
+	cmd := "/" + strings.Join(path, "/") + strings.Join(args, " ")
+	proc := proc_new(cmd)
+
+	elf := &elf_t{eobj}
+
+	stack, p_stack := pg_new(proc.pages)
+	stackva := mkpg(VUSER + 1, 0, 0, 0)
+	var tf [23]int
+	tf[TF_RSP] = stackva - 8
+	tf[TF_RIP] = elf.entry()
+	tf[TF_RFLAGS] = TF_FL_IF
+
+	ucseg := 4
+	udseg := 5
+	tf[TF_CS] = ucseg << 3 | 3
+	tf[TF_SS] = udseg << 3 | 3
+
+	// copy kernel page table, map new stack
+	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
+	proc.page_insert(stackva - PGSIZE, stack, p_stack, PTE_U | PTE_W, true)
+
+	elf_load(proc, elf)
+	proc.sched_add(&tf)
+
+	return 0
 }

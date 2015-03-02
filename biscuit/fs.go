@@ -470,7 +470,7 @@ func (idm *idaemon_t) iread(dsts [][]uint8, offset int) (int, int) {
 
 func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
 	isz := idm.icache.size
-	if offset > isz {
+	if offset >= isz {
 		return 0, 0
 	}
 
