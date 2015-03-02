@@ -744,9 +744,9 @@ func main() {
 
 	//exec("bin/fault")
 	//exec("bin/hello")
-	exec("bin/fork")
+	//exec("bin/fork")
 	//exec("bin/fstest")
-	//exec("bin/fslink")
+	exec("bin/fslink")
 	//exec("bin/fswrite")
 	//exec("bin/fsbigwrite")
 	//exec("bin/fsmkdir")

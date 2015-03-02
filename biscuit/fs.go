@@ -102,7 +102,28 @@ func fs_recover() {
 }
 
 func fs_link(oldp []string, newp []string) int {
-	return 0
+	op_begin()
+	defer op_end()
+
+	ol := len(oldp) - 1
+	olddirs := make([]string, 0)
+	for i := 0; i < ol; i++ {
+		olddirs = append(olddirs, oldp[i])
+	}
+	nl := len(newp) - 1
+	newdirs := make([]string, 0)
+	for i := 0; i < nl; i++ {
+		newdirs = append(newdirs, newp[i])
+	}
+	oldname := oldp[ol]
+	newname := newp[nl]
+
+	// send to nested op channel
+	req := &ireq_t{}
+	req.mklink(olddirs, oldname, newdirs, newname)
+	iroot.multi <- req
+	resp := <- req.ack
+	return resp.err
 }
 
 func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
@@ -201,7 +222,11 @@ func file_new(priv inum) *file_t {
 }
 
 type idaemon_t struct {
+	l		sync.Mutex
+	// simple operations
 	req		chan *ireq_t
+	// transaction operations
+	multi		chan *ireq_t
 	ack		chan *iresp_t
 	priv		inum
 	blkno		int
@@ -251,28 +276,42 @@ type rtype_t int
 const (
 	GET	rtype_t = iota
 	READ
+	REFINC
 	WRITE
 	CREATE
+	INSERT
+	LINK
 )
 
 type ireq_t struct {
 	// request type
-	get_path	[]string
 	rtype		rtype_t
+	// tree traversal
+	path		[]string
+	// read/write op
+	offset		int
+	// read op
 	rbufs		[][]uint8
+	// writes op
 	dbufs		[][]uint8
 	dappend		bool
-	offset		int
-	cr_path		[]string
+	// create op
 	cr_name		string
 	cr_type		int
+	// insert op
+	insert_name	string
+	insert_priv	inum
+	// link op
+	link_oldname	string
+	link_newdirs	[]string
+	link_newname	string
 	ack		chan *iresp_t
 }
 
 func (r *ireq_t) mkget(name []string) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = GET
-	r.get_path = name
+	r.path = name
 }
 
 func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
@@ -293,9 +332,32 @@ func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 func (r *ireq_t) mkcreate(dirs []string, nname string, ntype int) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
-	r.cr_path = dirs
+	r.path = dirs
 	r.cr_name = nname
 	r.cr_type = ntype
+}
+
+func (r *ireq_t) mkinsert(dirs []string, nname string, priv inum) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = INSERT
+	r.path = dirs
+	r.insert_name = nname
+	r.insert_priv = priv
+}
+
+func (r *ireq_t) mklink(olddirs []string, oldname string, newdirs []string,
+    newname string) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = LINK
+	r.path = olddirs
+	r.link_oldname = oldname
+	r.link_newdirs = newdirs
+	r.link_newname = newname
+}
+
+func (r *ireq_t) mkrefinc() {
+	r.ack = make(chan *iresp_t)
+	r.rtype = REFINC
 }
 
 type iresp_t struct {
@@ -315,65 +377,116 @@ func idaemon_ensure(priv inum) *idaemon_t {
 	idmonl.Lock()
 	ret, ok := allidmons[priv]
 	if !ok {
-		ret = idaemon_new(priv)
+		ret = &idaemon_t{}
+		ret.init(priv)
 		allidmons[priv] = ret
-		go idaemon(ret)
+		idaemonize(ret)
 	}
 	idmonl.Unlock()
 	return ret
 }
 
 // creates a new idaemon struct and fills its inode
-func idaemon_new(priv inum) *idaemon_t {
+func (idm *idaemon_t) init(priv inum) {
 	blkno, ioff := bidecode(int(priv))
-	ret := &idaemon_t{}
-	ret.priv = priv
-	ret.blkno = blkno
-	ret.ioff = ioff
+	idm.priv = priv
+	idm.blkno = blkno
+	idm.ioff = ioff
 
-	ret.req = make(chan *ireq_t)
-	ret.ack = make(chan *iresp_t)
+	idm.req = make(chan *ireq_t)
+	idm.multi = make(chan *ireq_t)
+	idm.ack = make(chan *iresp_t)
 
 	blk := bread(blkno)
-	ret.icache.fill(blk, ioff)
+	idm.icache.fill(blk, ioff)
 	brelse(blk)
-	return ret
 }
 
-func idaemon(idm *idaemon_t) {
+// returns true if the request was forwarded or if an error occured. if an
+// error occurs, writes the error back to the requester.
+func (idm *idaemon_t) forwardreq(r *ireq_t, nestop bool) bool {
+	if len(r.path) == 0 {
+		// req is for this idaemon
+		return false
+	}
+
+	next := r.path[0]
+	r.path = r.path[1:]
+	npriv, err := idm.iget(next)
+	if err != 0 {
+		r.ack <- &iresp_t{err: err}
+		return true
+	}
+	nextidm := idaemon_ensure(npriv)
+	// forward request
+	if nestop {
+		nextidm.multi <- r
+	} else {
+		nextidm.req <- r
+	}
+	return true
+}
+
+func idaemonize(idm *idaemon_t) {
 	iupdate := func() {
 		blk := bread(idm.blkno)
 		idm.icache.flushto(blk, idm.ioff)
 		log_write(blk)
 		brelse(blk)
 	}
+
+	// simple operations
+	go func() {
+	idm.l.Lock()
 	for {
+		idm.l.Unlock()
 		r := <- idm.req
+		idm.l.Lock()
+
 		switch r.rtype {
+		case CREATE:
+			if idm.forwardreq(r, false) {
+				break
+			}
+
+			if idm.icache.itype != I_DIR {
+				panic("create in non-dir")
+			}
+			if r.cr_type != I_FILE && r.cr_type != I_DIR {
+				panic("no imp")
+			}
+			isdir := r.cr_type == I_DIR
+			cnext, err := idm.icreate(r.cr_name, isdir)
+			iupdate()
+			ret := &iresp_t{cnext: cnext, err: err}
+			r.ack <- ret
+
 		case GET:
 			// is the requester asking for this daemon?
-			if len(r.get_path) == 0 {
-				ret := &iresp_t{gnext: idm.priv}
-				r.ack <- ret
+			if idm.forwardreq(r, false) {
 				break
 			}
-			// lookup next idaemon
-			next := r.get_path[0]
-			r.get_path = r.get_path[1:]
-			npriv, err := idm.iget(next)
-			if err != 0 {
-				ret := &iresp_t{err: err}
-				r.ack <- ret
+			// req is for us
+			r.ack <- &iresp_t{gnext: idm.priv}
+
+		case INSERT:
+			// create new dir ent with given inode number
+			if idm.forwardreq(r, false) {
 				break
 			}
-			nextidm := idaemon_ensure(npriv)
-			// forward request
-			nextidm.req <- r
+			err := idm.iinsert(r.insert_name, r.insert_priv)
+			resp := &iresp_t{err: err}
+			r.ack <- resp
 
 		case READ:
 			read, err := idm.iread(r.rbufs, r.offset)
 			ret := &iresp_t{count: read, err: err}
 			r.ack <- ret
+
+		case REFINC:
+			// increment reference count
+			idm.icache.links++
+			r.ack <- &iresp_t{}
 
 		case WRITE:
 			if idm.icache.itype == I_DIR {
@@ -391,37 +504,52 @@ func idaemon(idm *idaemon_t) {
 			ret := &iresp_t{count: read, err: err}
 			r.ack <- ret
 
-		case CREATE:
-			// lookup next idaemon?
-			if len(r.cr_path) != 0 {
-				next := r.cr_path[0]
-				r.cr_path = r.cr_path[1:]
-				npriv, err := idm.iget(next)
-				if err != 0 {
-					ret := &iresp_t{err: err}
-					r.ack <- ret
-					break
-				}
-				nextidm := idaemon_ensure(npriv)
-				// forward request
-				nextidm.req <- r
-				break
-			}
-			if idm.icache.itype != I_DIR {
-				panic("create in non-dir")
-			}
-			if r.cr_type != I_FILE && r.cr_type != I_DIR {
-				panic("no imp")
-			}
-			isdir := r.cr_type == I_DIR
-			cnext, err := idm.icreate(r.cr_name, isdir)
-			iupdate()
-			ret := &iresp_t{cnext: cnext, err: err}
-			r.ack <- ret
 		default:
 			panic("bad req type")
 		}
-	}
+	}}()
+
+	// transaction/nested operations. a received op, alpha, must never send
+	// new ops to the same channel on which alpha was received (excluding
+	// forwarding operations to children since two nodes cannot
+	// simultaneously send to each other).
+	go func() {
+	idm.l.Lock()
+	for {
+		idm.l.Unlock()
+		r := <- idm.multi
+		idm.l.Lock()
+
+		switch r.rtype {
+		case LINK:
+			if idm.forwardreq(r, true) {
+				break
+			}
+
+			// send INSERT op, wait for completion
+			priv, err := idm.iget(r.link_oldname)
+			if err != 0 {
+				r.ack <- &iresp_t{err: err}
+				break
+			}
+
+			req := &ireq_t{}
+			req.mkinsert(r.link_newdirs, r.link_newname, priv)
+			iroot.req <- req
+			resp := <- req.ack
+			if resp.err != 0 {
+				r.ack <- resp
+			}
+			req = &ireq_t{}
+			req.mkrefinc()
+			idmon := idaemon_ensure(priv)
+			idmon.req <- req
+			// REFINC never fails
+			r.ack <- (<- req.ack)
+		default:
+			panic("bad req type")
+		}
+	}}()
 }
 
 func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
@@ -571,6 +699,49 @@ func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
 	return c, 0
 }
 
+// does not check if name already exists
+func (idm *idaemon_t) dirent_insert(name string, nblkno int, ioff int,
+    evalid bool, eblkno int, eslot int) {
+
+	var blk *bbuf_t
+	var deoff int
+	if evalid {
+		// use existing dirdata block
+		blk = bread(eblkno)
+		deoff = eslot
+	} else {
+		// allocate new dir data block
+		newddn := balloc()
+		oldsz := idm.icache.size
+		nextslot := oldsz/512
+		if nextslot >= NIADDRS {
+			panic("need indirect support")
+		}
+		if idm.icache.addrs[nextslot] != 0 {
+			panic("addr slot allocated")
+		}
+		idm.icache.addrs[nextslot] = newddn
+		idm.icache.size = oldsz + 512
+
+		deoff = 0
+		// zero new directory data block
+		blk = bread(newddn)
+		for i := range blk.buf.data {
+			blk.buf.data[i] = 0
+		}
+	}
+
+	// write dir entry
+	ddata := dirdata_t{blk}
+	if ddata.filename(deoff) != "" {
+		panic("dir entry slot is not free")
+	}
+	ddata.w_filename(deoff, name)
+	ddata.w_inodenext(deoff, nblkno, ioff)
+	log_write(ddata.blk)
+	brelse(ddata.blk)
+}
+
 func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 	// check if file exists
 	names, _, emptyvalid, emptyb, emptys := idm.dirents_get()
@@ -603,44 +774,8 @@ func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 	log_write(newiblk)
 	brelse(newiblk)
 
-	// write new directory entry into parpriv referencing newinode
-	var blk *bbuf_t
-	var deoff int
-	if emptyvalid {
-		// use existing dirdata block
-		blk = bread(emptyb)
-		deoff = emptys
-	} else {
-		// allocate new dir data block
-		newddn := balloc()
-		oldsz := idm.icache.size
-		nextslot := oldsz/512
-		if nextslot >= NIADDRS {
-			panic("need indirect support")
-		}
-		if idm.icache.addrs[nextslot] != 0 {
-			panic("addr slot allocated")
-		}
-		idm.icache.addrs[nextslot] = newddn
-		idm.icache.size = oldsz + 512
-
-		deoff = 0
-		// zero new directory data block
-		blk = bread(newddn)
-		for i := range blk.buf.data {
-			blk.buf.data[i] = 0
-		}
-	}
-
-	// write dir entry
-	ddata := dirdata_t{blk}
-	if ddata.filename(deoff) != "" {
-		panic("dir entry slot is not free")
-	}
-	ddata.w_filename(deoff, name)
-	ddata.w_inodenext(deoff, newbn, newioff)
-	log_write(ddata.blk)
-	brelse(ddata.blk)
+	// write new directory entry referencing newinode
+	idm.dirent_insert(name, newbn, newioff, emptyvalid, emptyb, emptys)
 
 	newinum := inum(biencode(newbn, newioff))
 	return newinum, 0
@@ -654,6 +789,19 @@ func (idm *idaemon_t) iget(name string) (inum, int) {
 		}
 	}
 	return 0, -ENOENT
+}
+
+// creates a new directory entry with name "name" and inode number priv
+func (idm *idaemon_t) iinsert(name string, priv inum) int {
+	names, _, evalid, eb, es := idm.dirents_get()
+	for _, n := range names {
+		if name == n {
+			return -EEXIST
+		}
+	}
+	a, b := bidecode(int(priv))
+	idm.dirent_insert(name, a, b, evalid, eb, es)
+	return 0
 }
 
 // fetch all directory entries from a directory data block. returns dirent
