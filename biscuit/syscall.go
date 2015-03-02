@@ -48,7 +48,7 @@ const(
 )
 
 // lowest userspace address
-const USERMIN      int = 0xf1000000
+const USERMIN	int = VUSER << 39
 
 // story for concurrent system calls: any syscall that touches any proc_t, p,
 // which is not the calling process, needs to lock p. access to globals (maps)
@@ -495,7 +495,7 @@ func sys_test(program string) {
 	}
 
 	stack, p_stack := pg_new(proc.pages)
-	stackva := 0xf4000000
+	stackva := mkpg(VUSER + 1, 0, 0, 0)
 	tf[tf_rsp] = stackva - 8
 	tf[tf_rip] = elf.entry()
 	tf[tf_rflags] = fl_intf
@@ -512,11 +512,6 @@ func sys_test(program string) {
 	    p_stack, PTE_U | PTE_W, true)
 
 	elf_load(proc, elf)
-
-	// since kernel and user programs share pml4[0], need to mark shared
-	// pages user
-	pmap_cperms(upmap, elf.entry(), PTE_U)
-	pmap_cperms(upmap, stackva, PTE_U)
 
 	proc.sched_add(&tf)
 }

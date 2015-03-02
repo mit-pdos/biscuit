@@ -21,6 +21,7 @@ const PTE_FLAGS int = 0x1f	// only masks P, W, U, PWT, and PCD
 const VREC      int = 0x42
 const VDIRECT   int = 0x44
 const VEND      int = 0x50
+const VUSER     int = 0x59
 
 // tracks all pages allocated by go internally by the kernel such as pmap pages
 // allocated by go (not the bootloader/runtime)
