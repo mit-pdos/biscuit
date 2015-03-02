@@ -424,18 +424,53 @@ func idaemon(idm *idaemon_t) {
 	}
 }
 
+func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
+	whichblk := offset/512
+	var blkn int
+	if whichblk >= NIADDRS {
+		indslot := whichblk - NIADDRS
+		slotpb := 63
+		nextindb := 63*8
+		indno := idm.icache.indir
+		if writing && indno == 0 {
+			indno = balloc()
+			idm.icache.indir = indno
+			// zero block
+			zblk := bread(indno)
+			for i := range zblk.buf.data {
+				zblk.buf.data[i] = 0
+			}
+			log_write(zblk)
+			brelse(zblk)
+		}
+		indblk := bread(indno)
+		for i := 0; i < indslot/slotpb; i++ {
+			indno = readn(indblk.buf.data[:], 8, nextindb)
+			brelse(indblk)
+			bread(indno)
+		}
+		noff := (indslot % slotpb)*8
+		blkn = readn(indblk.buf.data[:], 8, noff)
+		if writing && blkn == 0 {
+			blkn = balloc()
+			writen(indblk.buf.data[:], 8, noff, blkn)
+			log_write(indblk)
+		}
+		brelse(indblk)
+	} else {
+		blkn = idm.icache.addrs[whichblk]
+		if writing && blkn == 0 {
+			blkn = balloc()
+			idm.icache.addrs[whichblk] = blkn
+		}
+	}
+	return blkn
+}
+
 // if writing, allocate a block if necessary and don't trim the slice to the
 // size of the file
 func (idm *idaemon_t) blkslice(offset int, writing bool) ([]uint8, *bbuf_t) {
-	whichblk := offset/512
-	if whichblk >= NIADDRS {
-		panic("need indirect support")
-	}
-	blkn := idm.icache.addrs[whichblk]
-	if writing && blkn == 0 {
-		blkn = balloc()
-		idm.icache.addrs[whichblk] = blkn
-	}
+	blkn := idm.offsetblk(offset, writing)
 	if blkn < superb_start && idm.icache.size > 0 {
 		panic("bad block")
 	}
