@@ -333,7 +333,6 @@ func sys_exit(proc *proc_t, status int) {
 
 type elf_t struct {
 	data	[]uint8
-	len	int
 }
 
 type elf_phdr struct {
