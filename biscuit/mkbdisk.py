@@ -12,6 +12,8 @@ blocksz = 512
 hdsize = 20 * 1024 * 1024
 # number of inode direct addresses
 iaddrs = 10
+# number of inode indirect addresses
+indaddrs = 63
 
 class Balloc:
   def __init__(self, ff):
@@ -50,13 +52,15 @@ class Datab:
     of.write('\0'*(blocksz - l))
 
 class Dirb:
-  # class that writes a directory inode to disk
+  # class used internally by Inodeb; it writes a directory inode to disk
   def __init__(self, bn, ba, dirpart):
     self.bn, self.ba, self.dirpart = bn, ba, dirpart
     self.size = 0
     self.blks = []
     self.curblk = None
     self.namechk = {}
+    self.indirect = 0
+    self.indblk = None
 
   def addentry(self, fn, inodeb, inodeoff):
     self.chkname(fn)
@@ -88,39 +92,88 @@ class Dirb:
       self.curblk.append('\0'*slop)
 
     self.size += blocksz
-    nb = self.ba.balloc()
-    self.curblk = Datab(nb)
-    self.ba.pair(nb, self.curblk)
-    self.blks.append(nb)
-    if len(self.blks) >= iaddrs:
-      raise ValueError('need indirect block support')
+    # use indirect block?
+    if len(self.blks) == iaddrs:
+        if self.indblk == None:
+            self.indblk = Indirectb(nb, self.ba)
+            self.indirect = self.indblk.init()
+        self.curblk = self.indblk.grow()
+    else:
+        nb = self.ba.balloc()
+        self.curblk = Datab(nb)
+        self.ba.pair(nb, self.curblk)
+        self.blks.append(nb)
     return self.curblk
 
   def itype(self):
     return 2
 
 class Fileb:
-  # class that writes a file inode to disk
+  # class used internally by Inodeb; it writes a file inode to disk
   def __init__(self, bn, ba):
     self.bn, self.ba = bn, ba
     self.blks = []
     self.size = 0
+    self.indirect = 0
+    self.indblk = None
 
   def itype(self):
     return 1
 
   def setcont(self, d):
     l = len(d)
-    if l/blocksz > iaddrs:
-      raise ValueError('need indirect block support')
     self.size = l
     for i in range(roundup(l, blocksz)/blocksz):
-      nb = self.ba.balloc()
       start = i*blocksz
-      end = min(start + blocksz, l - start)
+      end = min(start + blocksz, l)
+      # use indirect block?
+      if i >= iaddrs:
+        # initialize indirect block
+        if self.indblk == None:
+          self.indblk = Indirectb(self.ba)
+          self.indirect = self.indblk.init()
+        db = self.indblk.grow()
+        db.append(d[start:end])
+        continue
+      # use direct blocks
+      nb = self.ba.balloc()
       db = Datab(nb, d[start:end])
       self.ba.pair(nb, db)
       self.blks.append(nb)
+
+class Indirectb:
+  # class that writes an indirect block to disk
+  def __init__(self, ba):
+    self.curblk = None
+    self.ba = ba
+
+  def init(self):
+    # returns this indirect blocks block number
+      assert self.curblk == None
+      nb = self.ba.balloc()
+      self.curblk = Datab(nb)
+      self.ba.pair(nb, self.curblk)
+      return nb
+
+  def grow(self):
+    # allocates a new block in the indirect block; returns a Datab for the new
+    # block
+    assert self.curblk != None
+    # last 8 bytes of an indirect block reference a new indirect block
+    # allocate new indirect block?
+    if self.curblk.len()/8 == indaddrs:
+      nb = self.ba.balloc()
+      newblk = Datab(nb)
+      self.ba.pair(nb, newblk)
+      self.curblk.append(le8(nb))
+      assert self.curblk.len() == blocksz
+      self.curblk = newblk
+    # finally allocate a new data block
+    nb = self.ba.balloc()
+    ret = Datab(nb)
+    self.ba.pair(nb, ret)
+    self.curblk.append(le8(nb))
+    return ret
 
 class Inodeb:
   # class for managing inodes: 4 per block
