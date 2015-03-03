@@ -27,8 +27,17 @@ int main(int argc, char **argv)
 	int fd;
 	if ((fd = open("/crap", O_RDONLY, 0)) < 0)
 		errx(-1, "open failed");
-
 	readprint(fd);
+
+	if (link("/boot/uefi/readme.txt", "boot/uefi/crap") != 0)
+		errx(-1, "should have suceeded");
+
+	if ((fd = open("/boot/uefi/crap", O_RDONLY, 0)) < 0)
+		errx(-1, "open failed");
+	readprint(fd);
+
+	if (link("/boot", "/dirhardlink") >= 0)
+		errx(-1, "dir link should fail");
 
 	return 0;
 }

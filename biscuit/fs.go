@@ -105,24 +105,36 @@ func fs_link(oldp []string, newp []string) int {
 	op_begin()
 	defer op_end()
 
-	ol := len(oldp) - 1
-	olddirs := make([]string, 0)
-	for i := 0; i < ol; i++ {
-		olddirs = append(olddirs, oldp[i])
-	}
 	nl := len(newp) - 1
 	newdirs := make([]string, 0)
 	for i := 0; i < nl; i++ {
 		newdirs = append(newdirs, newp[i])
 	}
-	oldname := oldp[ol]
 	newname := newp[nl]
 
-	// send to nested op channel
+	// first get inode number and inc ref count
 	req := &ireq_t{}
-	req.mklink(olddirs, oldname, newdirs, newname)
-	iroot.multi <- req
+	req.mkget(oldp, true)
+	iroot.req <- req
 	resp := <- req.ack
+	if resp.err != 0 {
+		return resp.err
+	}
+
+	// insert directory entry
+	priv := resp.gnext
+	req = &ireq_t{}
+	req.mkinsert(newdirs, newname, priv)
+	iroot.req <- req
+	resp = <- req.ack
+	// decrement ref count if the insert failed
+	if resp.err != 0 {
+		req = &ireq_t{}
+		req.mkrefdec()
+		idmon := idaemon_ensure(priv)
+		idmon.req <- req
+		<- req.ack
+	}
 	return resp.err
 }
 
@@ -203,7 +215,7 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 
 func iroot_getp(path []string) (inum, int) {
 	req := &ireq_t{}
-	req.mkget(path)
+	req.mkget(path, false)
 	iroot.req <- req
 	resp := <- req.ack
 	if resp.err != 0 {
@@ -222,11 +234,7 @@ func file_new(priv inum) *file_t {
 }
 
 type idaemon_t struct {
-	l		sync.Mutex
-	// simple operations
 	req		chan *ireq_t
-	// transaction operations
-	multi		chan *ireq_t
 	ack		chan *iresp_t
 	priv		inum
 	blkno		int
@@ -276,7 +284,7 @@ type rtype_t int
 const (
 	GET	rtype_t = iota
 	READ
-	REFINC
+	REFDEC
 	WRITE
 	CREATE
 	INSERT
@@ -301,17 +309,19 @@ type ireq_t struct {
 	// insert op
 	insert_name	string
 	insert_priv	inum
-	// link op
-	link_oldname	string
-	link_newdirs	[]string
-	link_newname	string
+	// inc ref count after get
+	doinc		bool
 	ack		chan *iresp_t
 }
 
-func (r *ireq_t) mkget(name []string) {
+// if incref is true, the call must be made between op_{begin,end}.
+func (r *ireq_t) mkget(name []string, incref bool) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = GET
 	r.path = name
+	if incref {
+		r.doinc = true
+	}
 }
 
 func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
@@ -345,19 +355,9 @@ func (r *ireq_t) mkinsert(dirs []string, nname string, priv inum) {
 	r.insert_priv = priv
 }
 
-func (r *ireq_t) mklink(olddirs []string, oldname string, newdirs []string,
-    newname string) {
+func (r *ireq_t) mkrefdec() {
 	r.ack = make(chan *iresp_t)
-	r.rtype = LINK
-	r.path = olddirs
-	r.link_oldname = oldname
-	r.link_newdirs = newdirs
-	r.link_newname = newname
-}
-
-func (r *ireq_t) mkrefinc() {
-	r.ack = make(chan *iresp_t)
-	r.rtype = REFINC
+	r.rtype = REFDEC
 }
 
 type iresp_t struct {
@@ -394,7 +394,6 @@ func (idm *idaemon_t) init(priv inum) {
 	idm.ioff = ioff
 
 	idm.req = make(chan *ireq_t)
-	idm.multi = make(chan *ireq_t)
 	idm.ack = make(chan *iresp_t)
 
 	blk := bread(blkno)
@@ -404,7 +403,7 @@ func (idm *idaemon_t) init(priv inum) {
 
 // returns true if the request was forwarded or if an error occured. if an
 // error occurs, writes the error back to the requester.
-func (idm *idaemon_t) forwardreq(r *ireq_t, nestop bool) bool {
+func (idm *idaemon_t) forwardreq(r *ireq_t) bool {
 	if len(r.path) == 0 {
 		// req is for this idaemon
 		return false
@@ -419,11 +418,7 @@ func (idm *idaemon_t) forwardreq(r *ireq_t, nestop bool) bool {
 	}
 	nextidm := idaemon_ensure(npriv)
 	// forward request
-	if nestop {
-		nextidm.multi <- r
-	} else {
-		nextidm.req <- r
-	}
+	nextidm.req <- r
 	return true
 }
 
@@ -437,15 +432,11 @@ func idaemonize(idm *idaemon_t) {
 
 	// simple operations
 	go func() {
-	idm.l.Lock()
 	for {
-		idm.l.Unlock()
 		r := <- idm.req
-		idm.l.Lock()
-
 		switch r.rtype {
 		case CREATE:
-			if idm.forwardreq(r, false) {
+			if idm.forwardreq(r) {
 				break
 			}
 
@@ -463,19 +454,29 @@ func idaemonize(idm *idaemon_t) {
 
 		case GET:
 			// is the requester asking for this daemon?
-			if idm.forwardreq(r, false) {
+			if idm.forwardreq(r) {
 				break
+			}
+			if r.doinc {
+				// no hard links on directories
+				if idm.icache.itype != I_FILE {
+					r.ack <- &iresp_t{err: -EPERM}
+					break
+				}
+				idm.icache.links++
+				iupdate()
 			}
 			// req is for us
 			r.ack <- &iresp_t{gnext: idm.priv}
 
 		case INSERT:
 			// create new dir ent with given inode number
-			if idm.forwardreq(r, false) {
+			if idm.forwardreq(r) {
 				break
 			}
 			err := idm.iinsert(r.insert_name, r.insert_priv)
 			resp := &iresp_t{err: err}
+			iupdate()
 			r.ack <- resp
 
 		case READ:
@@ -483,9 +484,14 @@ func idaemonize(idm *idaemon_t) {
 			ret := &iresp_t{count: read, err: err}
 			r.ack <- ret
 
-		case REFINC:
+		case REFDEC:
 			// increment reference count
-			idm.icache.links++
+			idm.icache.links--
+			// XXX free inode if link count is 0
+			iupdate()
+			if idm.icache.links < 0 {
+				panic("ref count is negative")
+			}
 			r.ack <- &iresp_t{}
 
 		case WRITE:
@@ -504,48 +510,6 @@ func idaemonize(idm *idaemon_t) {
 			ret := &iresp_t{count: read, err: err}
 			r.ack <- ret
 
-		default:
-			panic("bad req type")
-		}
-	}}()
-
-	// transaction/nested operations. a received op, alpha, must never send
-	// new ops to the same channel on which alpha was received (excluding
-	// forwarding operations to children since two nodes cannot
-	// simultaneously send to each other).
-	go func() {
-	idm.l.Lock()
-	for {
-		idm.l.Unlock()
-		r := <- idm.multi
-		idm.l.Lock()
-
-		switch r.rtype {
-		case LINK:
-			if idm.forwardreq(r, true) {
-				break
-			}
-
-			// send INSERT op, wait for completion
-			priv, err := idm.iget(r.link_oldname)
-			if err != 0 {
-				r.ack <- &iresp_t{err: err}
-				break
-			}
-
-			req := &ireq_t{}
-			req.mkinsert(r.link_newdirs, r.link_newname, priv)
-			iroot.req <- req
-			resp := <- req.ack
-			if resp.err != 0 {
-				r.ack <- resp
-			}
-			req = &ireq_t{}
-			req.mkrefinc()
-			idmon := idaemon_ensure(priv)
-			idmon.req <- req
-			// REFINC never fails
-			r.ack <- (<- req.ack)
 		default:
 			panic("bad req type")
 		}

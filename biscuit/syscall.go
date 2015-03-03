@@ -25,6 +25,7 @@ const(
 )
 
 const(
+  EPERM        = 1
   ENOENT       = 2
   EBADF        = 9
   EFAULT       = 14
