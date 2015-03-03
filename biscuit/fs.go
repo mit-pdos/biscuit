@@ -145,24 +145,19 @@ func fs_unlink(path []string) int {
 	op_begin()
 	defer op_end()
 
-	// remove directory entry
 	req := &ireq_t{}
-	l := len(path) - 1
-	req.mkunlink(path[:l], path[l])
+	req.mkunlink(path)
 	iroot.req <- req
 	resp := <- req.ack
-	if resp.err != 0 {
-		return resp.err
+	doit := resp.err == 0
+	// if the targe file is a directory, only remove its directory entry if
+	// it is empty
+	if resp.commitwait {
+		req.commit <- doit
+		// wait for parent inode update to finish
+		<- req.commit
 	}
-
-	// dec ref count of unlinked inode
-	priv := resp.unext
-	req = &ireq_t{}
-	req.mkrefdec()
-	idmon := idaemon_ensure(priv)
-	idmon.req <- req
-	<- req.ack
-	return 0
+	return resp.err
 }
 
 func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
@@ -270,6 +265,38 @@ type idaemon_t struct {
 	icache		icache_t
 }
 
+var allidmons	= map[inum]*idaemon_t{}
+var idmonl	= sync.Mutex{}
+
+func idaemon_ensure(priv inum) *idaemon_t {
+	idmonl.Lock()
+	ret, ok := allidmons[priv]
+	if !ok {
+		ret = &idaemon_t{}
+		ret.init(priv)
+		allidmons[priv] = ret
+		idaemonize(ret)
+	}
+	idmonl.Unlock()
+	return ret
+}
+
+// creates a new idaemon struct and fills its inode
+func (idm *idaemon_t) init(priv inum) {
+	blkno, ioff := bidecode(int(priv))
+	idm.priv = priv
+	idm.blkno = blkno
+	idm.ioff = ioff
+
+	idm.req = make(chan *ireq_t)
+	idm.ack = make(chan *iresp_t)
+
+	blk := bread(blkno)
+	idm.icache.fill(blk, ioff)
+	brelse(blk)
+}
+
+
 type icache_t struct {
 	itype	int
 	links	int
@@ -338,10 +365,11 @@ type ireq_t struct {
 	insert_name	string
 	insert_priv	inum
 	// unlink op
-	unlink_name	string
+	commitwait	bool
 	// inc ref count after get
 	doinc		bool
 	ack		chan *iresp_t
+	commit		chan bool
 }
 
 // if incref is true, the call must be made between op_{begin,end}.
@@ -390,61 +418,30 @@ func (r *ireq_t) mkrefdec() {
 	r.rtype = REFDEC
 }
 
-func (r *ireq_t) mkunlink(dirs []string, name string) {
+func (r *ireq_t) mkunlink(path []string) {
 	r.ack = make(chan *iresp_t)
+	r.commit = make(chan bool)
 	r.rtype = UNLINK
-	r.path = dirs
-	r.unlink_name = name
+	r.path = path
 }
 
 type iresp_t struct {
-	gnext	inum
-	cnext	inum
-	unext	inum
-	count	int
-	err	int
+	gnext		inum
+	cnext		inum
+	count		int
+	err		int
+	commitwait	bool
 }
 
 // a type for an inode block/offset identifier
 type inum int
 
-var allidmons	= map[inum]*idaemon_t{}
-var idmonl	= sync.Mutex{}
-
-func idaemon_ensure(priv inum) *idaemon_t {
-	idmonl.Lock()
-	ret, ok := allidmons[priv]
-	if !ok {
-		ret = &idaemon_t{}
-		ret.init(priv)
-		allidmons[priv] = ret
-		idaemonize(ret)
-	}
-	idmonl.Unlock()
-	return ret
-}
-
-// creates a new idaemon struct and fills its inode
-func (idm *idaemon_t) init(priv inum) {
-	blkno, ioff := bidecode(int(priv))
-	idm.priv = priv
-	idm.blkno = blkno
-	idm.ioff = ioff
-
-	idm.req = make(chan *ireq_t)
-	idm.ack = make(chan *iresp_t)
-
-	blk := bread(blkno)
-	idm.icache.fill(blk, ioff)
-	brelse(blk)
-}
-
 // returns true if the request was forwarded or if an error occured. if an
 // error occurs, writes the error back to the requester.
-func (idm *idaemon_t) forwardreq(r *ireq_t) bool {
+func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 	if len(r.path) == 0 {
 		// req is for this idaemon
-		return false
+		return false, false
 	}
 
 	next := r.path[0]
@@ -452,12 +449,12 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) bool {
 	npriv, err := idm.iget(next)
 	if err != 0 {
 		r.ack <- &iresp_t{err: err}
-		return true
+		return false, true
 	}
 	nextidm := idaemon_ensure(npriv)
 	// forward request
 	nextidm.req <- r
-	return true
+	return true, false
 }
 
 func idaemonize(idm *idaemon_t) {
@@ -474,7 +471,7 @@ func idaemonize(idm *idaemon_t) {
 		r := <- idm.req
 		switch r.rtype {
 		case CREATE:
-			if idm.forwardreq(r) {
+			if fwded, erred := idm.forwardreq(r); fwded || erred {
 				break
 			}
 
@@ -492,7 +489,7 @@ func idaemonize(idm *idaemon_t) {
 
 		case GET:
 			// is the requester asking for this daemon?
-			if idm.forwardreq(r) {
+			if fwded, erred := idm.forwardreq(r); fwded || erred {
 				break
 			}
 			if r.doinc {
@@ -509,7 +506,7 @@ func idaemonize(idm *idaemon_t) {
 
 		case INSERT:
 			// create new dir ent with given inode number
-			if idm.forwardreq(r) {
+			if fwded, erred := idm.forwardreq(r); fwded || erred {
 				break
 			}
 			err := idm.iinsert(r.insert_name, r.insert_priv)
@@ -533,12 +530,59 @@ func idaemonize(idm *idaemon_t) {
 			r.ack <- &iresp_t{}
 
 		case UNLINK:
-			if idm.forwardreq(r) {
-				break
+			// this operation is special: both the target file and
+			// the parent directory of the target file process the
+			// operation.
+			amparent := len(r.path) == 1
+			amchild := len(r.path) == 0
+			if amparent {
+				// parent directory
+				name := r.path[0]
+				commitch := r.commit
+				// check to make sure the operation will
+				// succeed before forwarding the operation.
+				_, err := idm.iget(name)
+				if err != 0 {
+					r.ack <- &iresp_t{err: err}
+					break
+				}
+				r.commitwait = true
+				_, erred := idm.forwardreq(r)
+				if erred {
+					panic("forward must succeed")
+				}
+
+				// wait for confirmation
+				commit := <- commitch
+				if commit {
+					_, err = idm.iunlink(name)
+					iupdate()
+				}
+				commitch <- commit
+			} else if amchild {
+				// the destination is us
+				// ensure child wakes up parent
+				resp := &iresp_t{commitwait: r.commitwait}
+				// if we are a directory, make sure we are
+				// empty before unlinking.
+				if idm.icache.itype == I_DIR &&
+				   !idm.idirempty() {
+					resp.err = -EPERM
+					r.ack <- resp
+					break
+				}
+
+				// decrement reference count
+				idm.icache.links--
+				// XXX free inode if link count is 0
+				iupdate()
+				if idm.icache.links < 0 {
+					panic("ref count is negative")
+				}
+				r.ack <- resp
+			} else {
+				idm.forwardreq(r)
 			}
-			upriv, err := idm.iunlink(r.unlink_name)
-			iupdate()
-			r.ack <- &iresp_t{unext: upriv, err: err}
 
 		case WRITE:
 			if idm.icache.itype == I_DIR {
@@ -832,6 +876,21 @@ func (idm *idaemon_t) iunlink(name string) (inum, int) {
 		return 0, -ENOENT
 	}
 	return priv, 0
+}
+
+// returns true if the inode has no directory entries
+func (idm *idaemon_t) idirempty() bool {
+	ds := idm.all_dirents()
+	defer dirent_brelse(ds)
+	empty := true
+	for i := 0; i < len(ds); i++ {
+		for j := 0; j < NDIRENTS; j++ {
+			if ds[i].filename(j) != "" {
+				empty = false
+			}
+		}
+	}
+	return empty
 }
 
 // returns a slice of all directory data blocks. caller must brelse all

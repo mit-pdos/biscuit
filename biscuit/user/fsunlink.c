@@ -19,7 +19,7 @@ void readprint(int fd)
 int main(int argc, char **argv)
 {
 	if (link("/boot/uefi/readme.txt", "/crap") != 0)
-		errx(-1, "should have suceeded");
+		errx(-1, "should have succeeded");
 
 	int fd;
 	if ((fd = open("/crap", O_RDONLY, 0)) < 0)
@@ -27,7 +27,7 @@ int main(int argc, char **argv)
 	readprint(fd);
 
 	if (unlink("/crap") != 0)
-		errx(-1, "should have suceeded");
+		errx(-1, "should have succeeded");
 
 	if ((fd = open("/crap", O_RDONLY, 0)) >= 0)
 		errx(-1, "open of unlinked should have failed");
@@ -35,6 +35,19 @@ int main(int argc, char **argv)
 	if ((fd = open("/boot/uefi/readme.txt", O_RDONLY, 0)) < 0)
 		errx(-1, "open original failed");
 	readprint(fd);
+
+	if (unlink("/boot/uefi/readme.txt") != 0)
+		errx(-1, "should have succeeded");
+
+	if (unlink("/another") >= 0)
+		errx(-1, "should have failed");
+
+	if (unlink("/another/you-found-me") != 0)
+		errx(-1, "should have succeeded");
+	if (unlink("/another") != 0)
+		errx(-1, "should have succeeded");
+
+	printf_blue("success\n");
 
 	return 0;
 }
