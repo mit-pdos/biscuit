@@ -50,6 +50,7 @@ const(
   SYS_EXIT     = 60
   SYS_MKDIR    = 83
   SYS_LINK     = 86
+  SYS_UNLINK   = 87
 )
 
 // lowest userspace address
@@ -88,6 +89,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_mkdir(p, a1, a2)
 	case SYS_LINK:
 		ret = sys_link(p, a1, a2)
+	case SYS_UNLINK:
+		ret = sys_unlink(p, a1)
 	}
 
 	tf[TF_RAX] = ret
@@ -256,6 +259,21 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 		return -ENOENT
 	}
 	return fs_link(opath, npath)
+}
+
+func sys_unlink(proc *proc_t, pathn int) int {
+	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	parts, badp := path_sanitize(proc.cwd, path)
+	if badp {
+		return -ENOENT
+	}
+	return fs_unlink(parts)
 }
 
 func sys_getpid(proc *proc_t) int {

@@ -18,9 +18,6 @@ void readprint(int fd)
 
 int main(int argc, char **argv)
 {
-	if (link("/biscuit", "/spin") >= 0)
-		errx(-1, "should have failed");
-
 	if (link("/boot/uefi/readme.txt", "/crap") != 0)
 		errx(-1, "should have suceeded");
 
@@ -29,15 +26,15 @@ int main(int argc, char **argv)
 		errx(-1, "open failed");
 	readprint(fd);
 
-	if (link("/boot/uefi/readme.txt", "/boot/uefi/crap") != 0)
+	if (unlink("/crap") != 0)
 		errx(-1, "should have suceeded");
 
-	if ((fd = open("/boot/uefi/crap", O_RDONLY, 0)) < 0)
-		errx(-1, "open failed");
-	readprint(fd);
+	if ((fd = open("/crap", O_RDONLY, 0)) >= 0)
+		errx(-1, "open of unlinked should have failed");
 
-	if (link("/boot", "/dirhardlink") >= 0)
-		errx(-1, "dir link should fail");
+	if ((fd = open("/boot/uefi/readme.txt", O_RDONLY, 0)) < 0)
+		errx(-1, "open original failed");
+	readprint(fd);
 
 	return 0;
 }

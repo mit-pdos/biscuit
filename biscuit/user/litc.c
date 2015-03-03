@@ -9,6 +9,7 @@
 #define SYS_EXIT         60
 #define SYS_MKDIR        83
 #define SYS_LINK         86
+#define SYS_UNLINK       87
 
 static void pmsg(char *);
 
@@ -76,6 +77,12 @@ long
 read(int fd, void *buf, size_t c)
 {
 	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
+}
+
+int
+unlink(const char *path)
+{
+	return syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
 }
 
 void

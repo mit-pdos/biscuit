@@ -14,6 +14,7 @@ user/fsbigwrite
 user/fscreat
 user/fslink
 user/fsmkdir
+user/fsunlink
 bins.go
 boot.elf
 chentry
@@ -33,3 +34,4 @@ fsdir/bin/fsbigwrite
 fsdir/bin/fscreat
 fsdir/bin/fslink
 fsdir/bin/fsmkdir
+fsdir/bin/fsunlink
