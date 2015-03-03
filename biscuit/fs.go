@@ -889,6 +889,7 @@ func dirent_erase(ds []*dirdata_t, name string) (inum, bool) {
 				ret := ds[i].inodenext(j)
 				ds[i].w_filename(j, "")
 				ds[i].w_inodenext(j, 0, 0)
+				log_write(ds[i].blk)
 				return ret, true
 			}
 		}
