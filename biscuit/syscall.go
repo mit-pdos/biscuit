@@ -208,7 +208,7 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return -EINVAL
 	}
-	parts, badp := path_sanitize(proc.cwd + path)
+	parts, badp := path_sanitize(proc.cwd, path)
 	if badp {
 		return -ENOENT
 	}
@@ -234,7 +234,7 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts, badp := path_sanitize(proc.cwd + path)
+	parts, badp := path_sanitize(proc.cwd, path)
 	if badp {
 		return -ENOENT
 	}
@@ -250,8 +250,8 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 	if toolong1 || toolong2 {
 		return -ENAMETOOLONG
 	}
-	opath, badp1 := path_sanitize(proc.cwd + old)
-	npath, badp2 := path_sanitize(proc.cwd + new)
+	opath, badp1 := path_sanitize(proc.cwd, old)
+	npath, badp2 := path_sanitize(proc.cwd, new)
 	if badp1 || badp2 {
 		return -ENOENT
 	}

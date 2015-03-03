@@ -24,7 +24,10 @@ var fblock	= sync.Mutex{}
 // free inode lock
 var filock	= sync.Mutex{}
 
-func path_sanitize(path string) ([]string, bool) {
+func path_sanitize(cwd, path string) ([]string, bool) {
+	if path[0] != '/' {
+		path = cwd + path
+	}
 	sp := strings.Split(path, "/")
 	nn := []string{}
 	for _, s := range sp {
