@@ -834,41 +834,6 @@ func (idm *idaemon_t) iunlink(name string) (inum, int) {
 	return priv, 0
 }
 
-// fetch all directory entries from a directory data block. returns dirent
-// names, inums, and index of first empty dirent.
-func (idm *idaemon_t) dirents_get() ([]string, []inum, bool, int, int) {
-	if idm.icache.itype != I_DIR {
-		panic("not a directory")
-	}
-	isz := idm.icache.size
-	sret := make([]string, 0)
-	iret := make([]inum, 0)
-	var emptyb int
-	var emptys int
-	evalid := false
-	for bn := 0; bn < isz/512; bn++ {
-		blkn := idm.icache.addrs[bn]
-		blk := bread(blkn)
-		dirdata := dirdata_t{blk}
-		for i := 0; i < NDIRENTS; i++ {
-			fn := dirdata.filename(i)
-			if fn == "" {
-				if !evalid {
-					evalid = true
-					emptyb = blkn
-					emptys = i
-				}
-				continue
-			}
-			sret = append(sret, fn)
-			inde := dirdata.inodenext(i)
-			iret = append(iret, inde)
-		}
-		brelse(blk)
-	}
-	return sret, iret, evalid, emptyb, emptys
-}
-
 // returns a slice of all directory data blocks. caller must brelse all
 // underlying blocks.
 func (idm *idaemon_t) all_dirents() ([]*dirdata_t) {
