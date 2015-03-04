@@ -646,7 +646,6 @@ func sys_execv(path []string, args []string) int {
 
 	elf := &elf_t{eobj}
 
-	stack, p_stack := pg_new(proc.pages)
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
 	var tf [23]int
 	tf[TF_RSP] = stackva - 8
@@ -660,7 +659,12 @@ func sys_execv(path []string, args []string) int {
 
 	// copy kernel page table, map new stack
 	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
-	proc.page_insert(stackva - PGSIZE, stack, p_stack, PTE_U | PTE_W, true)
+	numstkpages := 1
+	for i := 0; i < numstkpages; i++ {
+		stack, p_stack := pg_new(proc.pages)
+		proc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
+		    PTE_U | PTE_W, true)
+	}
 
 	elf_load(proc, elf)
 	proc.sched_add(&tf)
