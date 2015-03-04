@@ -1,8 +1,8 @@
-bin/
-pkg/
-src/cmd
-src/liblink
-src/runtime/.*.swp
-src/runtime/z*
-src/tags
-test/
+/bin/
+/pkg/
+/src/cmd
+/src/liblink
+/src/runtime/.*.swp
+/src/runtime/z*
+/src/tags
+/test/
