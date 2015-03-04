@@ -464,6 +464,21 @@ func idaemonize(idm *idaemon_t) {
 		log_write(blk)
 		brelse(blk)
 	}
+	irefdown := func() bool {
+		idm.icache.links--
+		if idm.icache.links < 0 {
+			panic("negative links")
+		}
+		if idm.icache.links != 0 {
+			iupdate()
+			return false
+		}
+		idm.ifree()
+		idmonl.Lock()
+		delete(allidmons, idm.priv)
+		idmonl.Unlock()
+		return true
+	}
 
 	// simple operations
 	go func() {
@@ -520,14 +535,12 @@ func idaemonize(idm *idaemon_t) {
 			r.ack <- ret
 
 		case REFDEC:
-			// increment reference count
-			idm.icache.links--
-			// XXX free inode if link count is 0
-			iupdate()
-			if idm.icache.links < 0 {
-				panic("ref count is negative")
-			}
+			// decrement reference count
+			terminate := irefdown()
 			r.ack <- &iresp_t{}
+			if terminate {
+				return
+			}
 
 		case UNLINK:
 			// this operation is special: both the target file and
@@ -573,13 +586,11 @@ func idaemonize(idm *idaemon_t) {
 				}
 
 				// decrement reference count
-				idm.icache.links--
-				// XXX free inode if link count is 0
-				iupdate()
-				if idm.icache.links < 0 {
-					panic("ref count is negative")
-				}
+				terminate := irefdown()
 				r.ack <- resp
+				if terminate {
+					return
+				}
 			} else {
 				idm.forwardreq(r)
 			}
@@ -891,6 +902,35 @@ func (idm *idaemon_t) idirempty() bool {
 		}
 	}
 	return empty
+}
+
+// frees all blocks occupied by idm
+func (idm *idaemon_t) ifree() {
+	wtf := make([]int, 0)
+	allb := &wtf
+	add := func(blkno int) {
+		if blkno != 0 {
+			wtf = append(*allb, blkno)
+			allb = &wtf
+		}
+	}
+
+	add(idm.blkno)
+	for i := 0; i < NIADDRS; i++ {
+		add(idm.icache.addrs[i])
+	}
+	indno := idm.icache.indir
+	for indno != 0 {
+		add(idm.icache.indir)
+		blk := bread(indno)
+		nextoff := 63*8
+		indno = readn(blk.buf.data[:], 8, nextoff)
+		brelse(blk)
+	}
+
+	for _, blkno := range *allb {
+		bfree(blkno)
+	}
 }
 
 // returns a slice of all directory data blocks. caller must brelse all
@@ -1269,6 +1309,39 @@ func balloc() int {
 	boffset := usable_start
 	bitsperblk := 512*8
 	return boffset + blkn*bitsperblk + oct*8 + int(bit)
+}
+
+func bfree(blkno int) {
+	fst := free_start
+	flen := free_len
+	if fst == 0 || flen == 0 {
+		panic("fs not initted")
+	}
+	if blkno < 0 {
+		panic("bad blockno")
+	}
+
+	fblock.Lock()
+	defer fblock.Unlock()
+
+	bit := blkno - usable_start
+	bitsperblk := 512*8
+	fblkno := fst + bit/bitsperblk
+	fbit := bit%bitsperblk
+	fbyteoff := fbit/8
+	fbitoff := uint(fbit%8)
+	if fblkno >= fst + flen {
+		panic("bad blockno")
+	}
+	fblk := bread(fblkno)
+	fblk.buf.data[fbyteoff] &= ^(1 << fbitoff)
+	log_write(fblk)
+	brelse(fblk)
+
+	// force allocation of free inode block
+	if ifreeblk == blkno {
+		ifreeblk = 0
+	}
 }
 
 var ifreeblk int	= 0
