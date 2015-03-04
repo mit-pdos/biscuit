@@ -226,7 +226,6 @@ type proc_t struct {
 	pid	int
 	name	string
 	// all pages
-	maplock	sync.Mutex
 	pages	map[int]*[512]int
 	// user va -> physical mapping
 	upages	map[int]int
@@ -349,6 +348,24 @@ func (p *proc_t) dmapuser(va int) []uint8 {
 		panic("no phys addr for user va")
 	}
 	return dmap8(phys + voff)
+}
+
+// copies src to the user virtual address uva. does not check if uva is mapped.
+func (p *proc_t) usercopy(src []uint8, uva int) {
+	cnt := 0
+	l := len(src)
+	for cnt != l {
+		dst := p.dmapuser(uva + cnt)
+		ub := len(src)
+		if ub > len(dst) {
+			ub = len(dst)
+		}
+		for i := 0; i < ub; i++ {
+			dst[i] = src[i]
+		}
+		src = src[ub:]
+		cnt += ub
+	}
 }
 
 func proc_kill(pid int) {
@@ -770,7 +787,7 @@ func main() {
 
 	//exec("bin/fault")
 	//exec("bin/hello")
-	exec("bin/fork")
+	//exec("bin/fork")
 	//exec("bin/fstest")
 	//exec("bin/fslink")
 	//exec("bin/fsunlink")
@@ -780,7 +797,7 @@ func main() {
 	//exec("bin/fscreat")
 	//exec("bin/getpid")
 	//exec("bin/fsfree")
-	//exec("bin/ls")
+	exec("bin/ls")
 
 	//ide_test()
 	//bc_test()
@@ -789,9 +806,9 @@ func main() {
 	//fs_fmt()
 	//lsonly()
 
-	//dur := make(chan bool)
-	//<- dur
-	fake_work()
+	dur := make(chan bool)
+	<- dur
+	//fake_work()
 }
 
 func ide_test() {

@@ -7,9 +7,20 @@
 
 #define MAXBUF        4096
 
+struct __attribute__((packed)) stat {
+	ulong	st_dev;
+	ulong	st_ino;
+	ulong	st_mode;
+	ulong	st_size;
+};
+
+#define S_ISDIR(mode)	(mode == 2)
+#define S_ISREG(mode)	(mode == 1)
+
 int close(int);
 void exit(int);
 int fork(void);
+int fstat(int, struct stat *);
 int getpid(void);
 int link(const char *, const char *);
 int mkdir(const char *, long);

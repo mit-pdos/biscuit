@@ -5,6 +5,7 @@
 #define SYS_WRITE        1
 #define SYS_OPEN         2
 #define SYS_CLOSE        3
+#define SYS_FSTAT        5
 #define SYS_GETPID       39
 #define SYS_FORK         57
 #define SYS_EXIT         60
@@ -48,6 +49,12 @@ int
 fork(void)
 {
 	return syscall(0, 0, 0, 0, 0, SYS_FORK);
+}
+
+int
+fstat(int fd, struct stat *buf)
+{
+	return syscall(SA(fd), SA(buf), 0, 0, 0, SYS_FSTAT);
 }
 
 int

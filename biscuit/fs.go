@@ -236,6 +236,15 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 	return ret, 0
 }
 
+func fs_stat(priv inum, st *stat_t) int {
+	idmon := idaemon_ensure(priv)
+	req := &ireq_t{}
+	req.mkstat(st)
+	idmon.req <- req
+	resp := <- req.ack
+	return resp.err
+}
+
 func iroot_getp(path []string) (inum, int) {
 	req := &ireq_t{}
 	req.mkget(path, false)
@@ -345,9 +354,11 @@ const (
 	INSERT
 	LINK
 	UNLINK
+	STAT
 )
 
 type ireq_t struct {
+	ack		chan *iresp_t
 	// request type
 	rtype		rtype_t
 	// tree traversal
@@ -367,10 +378,11 @@ type ireq_t struct {
 	insert_priv	inum
 	// unlink op
 	commitwait	bool
+	commit		chan bool
 	// inc ref count after get
 	doinc		bool
-	ack		chan *iresp_t
-	commit		chan bool
+	// stat op
+	stat_st		*stat_t
 }
 
 // if incref is true, the call must be made between op_{begin,end}.
@@ -424,6 +436,12 @@ func (r *ireq_t) mkunlink(path []string) {
 	r.commit = make(chan bool)
 	r.rtype = UNLINK
 	r.path = path
+}
+
+func (r *ireq_t) mkstat(st *stat_t) {
+	r.ack = make(chan *iresp_t)
+	r.rtype = STAT
+	r.stat_st = st
 }
 
 type iresp_t struct {
@@ -542,6 +560,14 @@ func idaemonize(idm *idaemon_t) {
 			if terminate {
 				return
 			}
+
+		case STAT:
+			st := r.stat_st
+			st.wdev(0)
+			st.wino(int(idm.priv))
+			st.wmode(idm.icache.itype)
+			st.wsize(idm.icache.size)
+			r.ack <- &iresp_t{}
 
 		case UNLINK:
 			// this operation is special: both the target file and
@@ -997,6 +1023,7 @@ func dirent_erase(ds []*dirdata_t, name string) (inum, bool) {
 	return 0, false
 }
 
+// XXX: remove
 func fieldr(p *[512]uint8, field int) int {
 	return readn(p[:], 8, field*8)
 }

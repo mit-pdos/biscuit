@@ -46,6 +46,7 @@ const(
     O_CREAT       = 0x80
     O_APPEND      = 0x400
   SYS_CLOSE    = 3
+  SYS_FSTAT    = 5
   SYS_GETPID   = 39
   SYS_FORK     = 57
   SYS_EXIT     = 60
@@ -82,6 +83,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_open(p, a1, a2, a3)
 	case SYS_CLOSE:
 		ret = sys_close(p, a1)
+	case SYS_FSTAT:
+		ret = sys_fstat(p, a1, a2)
 	case SYS_GETPID:
 		ret = sys_getpid(p)
 	case SYS_FORK:
@@ -237,6 +240,24 @@ func sys_close(proc *proc_t, fdn int) int {
 	return 0
 }
 
+func sys_fstat(proc *proc_t, fdn int, statn int) int {
+	buf := &stat_t{}
+	buf.init()
+	if !is_mapped(proc.pmap, statn, buf.totsz) {
+		return -EFAULT
+	}
+	fd, ok := proc.fds[fdn]
+	if !ok {
+		return -EBADF
+	}
+	err := fs_stat(fd.file.priv, buf)
+	if err != 0 {
+		return err
+	}
+	proc.usercopy(buf.data, statn)
+	return 0
+}
+
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
 	if !ok {
@@ -351,6 +372,75 @@ func sys_exit(proc *proc_t, status int) {
 	proc_kill(proc.pid)
 }
 
+func readn(a []uint8, n int, off int) int {
+	ret := 0
+	for i := 0; i < n; i++ {
+		ret |= int(a[off + i]) << (uint(i)*8)
+	}
+	return ret
+}
+
+func writen(a []uint8, n int, off int, val int) {
+	v := uint(val)
+	for i := 0; i < n; i++ {
+		a[off + i] = uint8((v >> (uint(i)*8)) & 0xff)
+	}
+}
+
+// returns the byte size/offset of field n. they can be used to read []data.
+func fieldinfo(sizes []int, n int) (int, int) {
+	if n >= len(sizes) {
+		panic("badd field number")
+	}
+	off := 0
+	for i := 0; i < n; i++ {
+		off += sizes[i]
+	}
+	return sizes[n], off
+}
+
+type stat_t struct {
+	data	[]uint8
+	// field sizes
+	sizes	[]int
+	totsz	int
+}
+
+func (st *stat_t) init() {
+	st.sizes = []int{
+		8, // 0 - dev
+		8, // 1 - ino
+		8, // 2 - mode
+		8, // 3 - size
+		}
+	sz := 0
+	for _, c := range st.sizes {
+		sz += c
+	}
+	st.data = make([]uint8, sz)
+	st.totsz = sz
+}
+
+func (st *stat_t) wdev(v int) {
+	size, off := fieldinfo(st.sizes, 0)
+	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) wino(v int) {
+	size, off := fieldinfo(st.sizes, 1)
+	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) wmode(v int) {
+	size, off := fieldinfo(st.sizes, 2)
+	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) wsize(v int) {
+	size, off := fieldinfo(st.sizes, 3)
+	writen(st.data, size, off, v)
+}
+
 type elf_t struct {
 	data	[]uint8
 }
@@ -369,21 +459,6 @@ var ELF_HALF    = 4
 var ELF_OFF     = 8
 var ELF_ADDR    = 8
 var ELF_XWORD   = 8
-
-func readn(a []uint8, n int, off int) int {
-	ret := 0
-	for i := 0; i < n; i++ {
-		ret |= int(a[off + i]) << (uint(i)*8)
-	}
-	return ret
-}
-
-func writen(a []uint8, n int, off int, val int) {
-	v := uint(val)
-	for i := 0; i < n; i++ {
-		a[off + i] = uint8((v >> (uint(i)*8)) & 0xff)
-	}
-}
 
 func (e *elf_t) npheaders() int {
 	mag := readn(e.data, ELF_HALF, 0)
