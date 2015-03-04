@@ -25,6 +25,7 @@ func tsnext(c int) int {
 var	numcpus	int = 1
 
 type cpu_t struct {
+	// logical number, not lapic id
 	num		int
 	// per-cpus interrupt queues. the cpu interrupt handler is the
 	// producer, the go routine running trap() below is the consumer. each
@@ -804,7 +805,6 @@ func main() {
 	//sb_test()
 	//balloc_test()
 	//fs_fmt()
-	//lsonly()
 
 	dur := make(chan bool)
 	<- dur
@@ -829,62 +829,6 @@ func ide_test() {
 	<- req.ack
 	fmt.Printf("done!\n")
 }
-
-//func lsonly() {
-//	rootinode, rootioff := superb.rootinode()
-//	fmt.Printf("lising root dir...\n")
-//	ls(rootinode, rootioff)
-//}
-
-//func file_pr(fn string, fibn int, fioff int) bool {
-//	if fn == "" {
-//		return false
-//	}
-//	finode := inode_get(fibn, fioff, false, 0)
-//	sz := finode.size()
-//	if finode.itype() == I_DIR {
-//		fmt.Printf("drw-r--r-- %10d %s/\n", sz, fn)
-//		return true
-//	}
-//
-//	fmt.Printf("-rw-r--r-- %10d %s\n", sz, fn)
-//	return false
-//}
-
-//func ls(dirnode int, ioff int) {
-//	ip := inode_get(dirnode, ioff, true, I_DIR)
-//	if ip.itype() != I_DIR {
-//		panic("this is not a directory")
-//	}
-//	recdirn := make([]string, 0)
-//	recenc := make([]int, 0)
-//	for i := 0; i < ip.size()/512; i++ {
-//		if i > NIADDRS {
-//			// use indirect block
-//			panic("no imp")
-//		}
-//		dblk := bread(ip.addr(i))
-//		// dump all files listed in this dir data block
-//		for j := 0; j < NDIRENTS; j++ {
-//			de := dirdata_t{dblk}
-//			din := int(de.inodenext(j))
-//			dib, dioff := bidecode(din)
-//			fn := de.filename(j)
-//			isdir := file_pr(fn, dib, dioff)
-//			if isdir {
-//				recdirn = append(recdirn, fn)
-//				recenc = append(recenc, din)
-//			}
-//		}
-//		brelse(dblk)
-//	}
-//
-//	for i, encd := range recenc {
-//		fmt.Printf("\t%s/\n", recdirn[i])
-//		dn, ii := bidecode(encd)
-//		ls(dn, ii)
-//	}
-//}
 
 func fake_work() {
 	fmt.Printf("'network' test\n")
