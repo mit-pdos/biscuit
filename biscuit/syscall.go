@@ -121,19 +121,13 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.ftype != INODE {
 		panic("no imp")
 	}
-	vtop := func(va int) int {
-		pte := pmap_walk(proc.pmap, va, false, 0, nil)
-		ret := *pte & PTE_ADDR
-		ret += va & PGOFFSET
-		return ret
-	}
 	c := 0
 	// we cannot load the user page map and the buffer to read into may not
 	// be contiguous in physical memory. thus we must piece together the
 	// buffer.
 	dsts := make([][]uint8, 1)
 	for c < sz {
-		dst := dmap8(vtop(bufp + c))
+		dst := proc.dmapuser(bufp + c)
 		left := sz - c
 		if len(dst) > left {
 			dst = dst[:left]
@@ -165,12 +159,6 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.ftype != INODE && fd.ftype != CDEV {
 		panic("no imp")
 	}
-	vtop := func(va int) int {
-		pte := pmap_walk(proc.pmap, va, false, 0, nil)
-		ret := *pte & PTE_ADDR
-		ret += va & PGOFFSET
-		return ret
-	}
 	wrappy := fs_write
 	// stdout/stderr hack
 	if fd.ftype == CDEV {
@@ -192,9 +180,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	c := 0
 	srcs := make([][]uint8, 1)
 	for c < sz {
-		p_bufp := vtop(bufp + c)
-		// XXX augment dmap8
-		src := dmap8(p_bufp)
+		src := proc.dmapuser(bufp + c)
 		left := sz - c
 		if len(src) > left {
 			src = src[:left]
@@ -315,16 +301,14 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 			panic(fmt.Sprintf("parent not tracking " +
 			    "page %#x", p_pg))
 		}
-		upg, ok := parent.upages[p_pg]
-		if !ok {
-			panic(fmt.Sprintf("parent not tracking " +
-			    "upage %#x", p_pg))
-		}
 		child.pages[p_pg] = pg
-		child.upages[p_pg] = upg
 		return pte, pte
 	}
 	pmap, p_pmap, _ := copy_pmap(mk_cow, parent.pmap, child.pages)
+	// copy user->phys mappings too
+	for k, v := range parent.upages {
+		child.upages[k] = v
+	}
 
 	// tlb invalidation is not necessary for the parent because its pmap
 	// cannot be in use now (well, it may be in use on the CPU that took

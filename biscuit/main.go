@@ -228,7 +228,7 @@ type proc_t struct {
 	// all pages
 	maplock	sync.Mutex
 	pages	map[int]*[512]int
-	// physical -> user va mapping
+	// user va -> physical mapping
 	upages	map[int]int
 	pmap	*[512]int
 	p_pmap	int
@@ -296,6 +296,7 @@ func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 
+	uva := va & PGMASK
 	pte := pmap_walk(p.pmap, va, true, perms, p.pages)
 	ninval := false
 	if pte != nil && *pte & PTE_P != 0 {
@@ -308,11 +309,9 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 		if _, ok := p.pages[p_rem]; !ok {
 			panic("kern va not tracked")
 		}
-		if _, ok := p.upages[p_rem]; !ok {
+		if _, ok := p.upages[uva]; !ok {
 			panic("user va not tracked")
 		}
-		delete(p.pages, p_rem)
-		delete(p.upages, p_rem)
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
@@ -320,7 +319,7 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 	}
 
 	p.pages[p_pg] = pg
-	p.upages[p_pg] = va & PGMASK
+	p.upages[uva] = p_pg
 }
 
 func (p *proc_t) page_remove(va int, pg *[512]int) {
@@ -328,15 +327,28 @@ func (p *proc_t) page_remove(va int, pg *[512]int) {
 	pte := pmap_walk(p.pmap, va, false, 0, nil)
 	if pte != nil && *pte & PTE_P != 0 {
 		p_pa := *pte & PTE_ADDR
-		delete(p.pages, p_pa)
-		delete(p.upages, p_pa)
 		*pte = 0
 		invlpg(va)
+		delete(p.pages, p_pa)
+		uva := va & PGMASK
+		delete(p.upages, uva)
 	}
 }
 
 func (p *proc_t) sched_add(tf *[TFSIZE]int) {
 	runtime.Procadd(tf, p.pid, p.p_pmap)
+}
+
+// returns a slice whose underlying buffer points to va, which can be
+// page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
+func (p *proc_t) dmapuser(va int) []uint8 {
+	uva := va & PGMASK
+	voff := va & PGOFFSET
+	phys, ok := p.upages[uva]
+	if !ok {
+		panic("no phys addr for user va")
+	}
+	return dmap8(phys + voff)
 }
 
 func proc_kill(pid int) {
@@ -758,7 +770,7 @@ func main() {
 
 	//exec("bin/fault")
 	//exec("bin/hello")
-	//exec("bin/fork")
+	exec("bin/fork")
 	//exec("bin/fstest")
 	//exec("bin/fslink")
 	//exec("bin/fsunlink")
@@ -767,7 +779,7 @@ func main() {
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
 	//exec("bin/getpid")
-	exec("bin/fsfree")
+	//exec("bin/fsfree")
 	//exec("bin/ls")
 
 	//ide_test()
