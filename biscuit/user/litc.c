@@ -306,6 +306,13 @@ snprintf(char *dst, size_t sz, const char *fmt, ...)
 	return ret;
 }
 
+char *
+strncpy(char *dst, const char *src, size_t sz)
+{
+	snprintf(dst, sz, "%s", src);
+	return dst;
+}
+
 int
 printf_blue(char *fmt, ...)
 {

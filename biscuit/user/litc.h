@@ -39,4 +39,5 @@ int vprintf(const char *, va_list);
 int printf_blue(char *, ...);
 int printf_red(char *, ...);
 int snprintf(char *, size_t, const char *, ...);
+char *strncpy(char *, const char *, size_t);
 size_t strlen(char *);
