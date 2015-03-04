@@ -4,6 +4,7 @@
 #define SYS_READ         0
 #define SYS_WRITE        1
 #define SYS_OPEN         2
+#define SYS_CLOSE        3
 #define SYS_GETPID       39
 #define SYS_FORK         57
 #define SYS_EXIT         60
@@ -30,6 +31,12 @@ syscall(long a1, long a2, long a3, long a4,
 }
 
 #define SA(x)     ((long)x)
+
+int
+close(int fd)
+{
+	return syscall(SA(fd), 0, 0, 0, 0, SYS_CLOSE);
+}
 
 void
 exit(int status)

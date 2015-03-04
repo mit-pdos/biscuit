@@ -53,6 +53,11 @@ int main(int argc, char **argv)
 	if (write(fd2, buf, sizeof(buf)) != sizeof(buf))
 		errx(-1, "short write");
 
+	if (close(fd) != 0)
+		errx(-1, "close");
+	if (close(fd2) != 0)
+		errx(-1, "close");
+
 	printf("checking contents...\n");
 
 	if ((fd = open("/yetanother", O_RDONLY, 0)) < 0)

@@ -65,7 +65,7 @@ const USERMIN	int = VUSER << 39
 func syscall(pid int, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
-	trap := tf[TF_RAX]
+	sysno := tf[TF_RAX]
 	a1 := tf[TF_RDI]
 	a2 := tf[TF_RSI]
 	a3 := tf[TF_RDX]
@@ -73,13 +73,15 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	//a5 := tf[TF_R8]
 
 	ret := -ENOSYS
-	switch trap {
+	switch sysno {
 	case SYS_READ:
 		ret = sys_read(p, a1, a2, a3)
 	case SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
 	case SYS_OPEN:
 		ret = sys_open(p, a1, a2, a3)
+	case SYS_CLOSE:
+		ret = sys_close(p, a1)
 	case SYS_GETPID:
 		ret = sys_getpid(p)
 	case SYS_FORK:
@@ -92,6 +94,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_link(p, a1, a2)
 	case SYS_UNLINK:
 		ret = sys_unlink(p, a1)
+	default:
+		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
 
 	tf[TF_RAX] = ret
@@ -241,6 +245,9 @@ func sys_close(proc *proc_t, fdn int) int {
 	if fd.ftype != INODE {
 		panic("no imp")
 	}
+	// XXX free inode blocks if it has no links and this was the last fd to
+	// it.
+	delete(proc.fds, fdn)
 	return 0
 }
 

@@ -7,6 +7,7 @@
 
 #define MAXBUF        4096
 
+int close(int);
 void exit(int);
 int fork(void);
 int getpid(void);

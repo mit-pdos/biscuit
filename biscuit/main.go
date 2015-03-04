@@ -234,7 +234,6 @@ type proc_t struct {
 	p_pmap	int
 	dead	bool
 	fds	map[int]*fd_t
-	nextfd	int
 	cwd	string
 }
 
@@ -260,7 +259,6 @@ func proc_new(name string) *proc_t {
 	ret.pages = make(map[int]*[512]int)
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
-	ret.nextfd = len(ret.fds)
 	ret.cwd = "/"
 
 	return ret
@@ -277,8 +275,15 @@ func proc_get(pid int) *proc_t {
 }
 
 func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
-	fdn := p.nextfd
-	p.nextfd++
+	// find free fd
+	newfd := 0
+	for {
+		if _, ok := p.fds[newfd]; !ok {
+			break
+		}
+		newfd++
+	}
+	fdn := newfd
 	fd := &fd_t{}
 	fd.ftype = t
 	if _, ok := p.fds[fdn]; ok {
@@ -757,13 +762,13 @@ func main() {
 	//exec("bin/fstest")
 	//exec("bin/fslink")
 	//exec("bin/fsunlink")
-	//exec("bin/fsfree")
 	//exec("bin/fswrite")
 	//exec("bin/fsbigwrite")
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
 	//exec("bin/getpid")
-	exec("bin/ls")
+	exec("bin/fsfree")
+	//exec("bin/ls")
 
 	//ide_test()
 	//bc_test()
