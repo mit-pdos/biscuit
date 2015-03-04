@@ -211,7 +211,10 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return -EINVAL
 	}
-	parts := path_sanitize(proc.cwd, path)
+	parts, err := path_sanitize(proc.cwd, path)
+	if err != 0 {
+		return err
+	}
 	file, err := fs_open(parts, flags, mode)
 	if err != 0 {
 		return err
@@ -266,7 +269,10 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts := path_sanitize(proc.cwd, path)
+	parts, err := path_sanitize(proc.cwd, path)
+	if err != 0 {
+		return err
+	}
 	return fs_mkdir(parts, mode)
 }
 
@@ -279,8 +285,14 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 	if toolong1 || toolong2 {
 		return -ENAMETOOLONG
 	}
-	opath := path_sanitize(proc.cwd, old)
-	npath := path_sanitize(proc.cwd, new)
+	opath, err1 := path_sanitize(proc.cwd, old)
+	npath, err2 := path_sanitize(proc.cwd, new)
+	if err1 != 0 {
+		return err1
+	}
+	if err2 != 0 {
+		return err2
+	}
 	return fs_link(opath, npath)
 }
 
@@ -292,7 +304,10 @@ func sys_unlink(proc *proc_t, pathn int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts := path_sanitize(proc.cwd, path)
+	parts, err := path_sanitize(proc.cwd, path)
+	if err != 0 {
+		return err
+	}
 	return fs_unlink(parts)
 }
 

@@ -24,7 +24,10 @@ var fblock	= sync.Mutex{}
 // free inode lock
 var filock	= sync.Mutex{}
 
-func path_sanitize(cwd, path string) []string {
+func path_sanitize(cwd, path string) ([]string, int) {
+	if len(path) == 0 {
+		return nil, -ENOENT
+	}
 	if path[0] != '/' {
 		path = cwd + path
 	}
@@ -35,7 +38,7 @@ func path_sanitize(cwd, path string) []string {
 			nn = append(nn, s)
 		}
 	}
-	return nn
+	return nn, 0
 }
 
 func fs_init() {
