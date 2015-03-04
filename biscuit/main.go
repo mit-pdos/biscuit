@@ -201,7 +201,15 @@ func cdelay(n int) {
 	}
 }
 
+type ftype_t int
+const(
+	INODE ftype_t = iota
+	PIPE
+	CDEV	// only console for now
+)
+
 type fd_t struct {
+	ftype	ftype_t
 	file	*file_t
 	offset	int
 	perms	int
@@ -210,9 +218,9 @@ type fd_t struct {
 var dummyfile	= file_t{-1}
 
 // special fds
-var fd_stdin 	= fd_t{&dummyfile, 0, 0}
-var fd_stdout 	= fd_t{&dummyfile, 0, 0}
-var fd_stderr 	= fd_t{&dummyfile, 0, 0}
+var fd_stdin 	= fd_t{CDEV, &dummyfile, 0, 0}
+var fd_stdout 	= fd_t{CDEV, &dummyfile, 0, 0}
+var fd_stderr 	= fd_t{CDEV, &dummyfile, 0, 0}
 
 type proc_t struct {
 	pid	int
@@ -268,10 +276,11 @@ func proc_get(pid int) *proc_t {
 	return p
 }
 
-func (p *proc_t) fd_new() (int, *fd_t) {
+func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
 	fdn := p.nextfd
 	p.nextfd++
 	fd := &fd_t{}
+	fd.ftype = t
 	if _, ok := p.fds[fdn]; ok {
 		panic(fmt.Sprintf("new fd exists %d", fdn))
 	}
@@ -748,12 +757,13 @@ func main() {
 	//exec("bin/fstest")
 	//exec("bin/fslink")
 	//exec("bin/fsunlink")
-	exec("bin/fsfree")
+	//exec("bin/fsfree")
 	//exec("bin/fswrite")
 	//exec("bin/fsbigwrite")
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
 	//exec("bin/getpid")
+	exec("bin/ls")
 
 	//ide_test()
 	//bc_test()

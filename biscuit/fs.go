@@ -24,7 +24,7 @@ var fblock	= sync.Mutex{}
 // free inode lock
 var filock	= sync.Mutex{}
 
-func path_sanitize(cwd, path string) ([]string, bool) {
+func path_sanitize(cwd, path string) []string {
 	if path[0] != '/' {
 		path = cwd + path
 	}
@@ -35,10 +35,7 @@ func path_sanitize(cwd, path string) ([]string, bool) {
 			nn = append(nn, s)
 		}
 	}
-	if len(nn) == 0 {
-		return nil, true
-	}
-	return nn, false
+	return nn
 }
 
 func fs_init() {
@@ -208,6 +205,10 @@ func fs_mkdir(path []string, mode int) int {
 
 func fs_open(path []string, flags int, mode int) (*file_t, int) {
 	if flags & O_CREAT != 0 {
+		// no creating root directory
+		if len(path) == 0 {
+			return nil, -EPERM
+		}
 		op_begin()
 		defer op_end()
 

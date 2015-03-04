@@ -45,6 +45,7 @@ const(
     O_RDWR        = 2
     O_CREAT       = 0x80
     O_APPEND      = 0x400
+  SYS_CLOSE    = 3
   SYS_GETPID   = 39
   SYS_FORK     = 57
   SYS_EXIT     = 60
@@ -113,6 +114,9 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
+	if fd.ftype != INODE {
+		panic("no imp")
+	}
 	vtop := func(va int) int {
 		pte := pmap_walk(proc.pmap, va, false, 0, nil)
 		ret := *pte & PTE_ADDR
@@ -154,6 +158,9 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
+	if fd.ftype != INODE && fd.ftype != CDEV {
+		panic("no imp")
+	}
 	vtop := func(va int) int {
 		pte := pmap_walk(proc.pmap, va, false, 0, nil)
 		ret := *pte & PTE_ADDR
@@ -162,7 +169,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	}
 	wrappy := fs_write
 	// stdout/stderr hack
-	if fd == &fd_stdout || fd == &fd_stderr {
+	if fd.ftype == CDEV {
 		wrappy = func(srcs [][]uint8, priv inum, off int,
 		    ap bool) (int, int) {
 			utext := int8(0x17)
@@ -211,15 +218,12 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return -EINVAL
 	}
-	parts, badp := path_sanitize(proc.cwd, path)
-	if badp {
-		return -ENOENT
-	}
+	parts := path_sanitize(proc.cwd, path)
 	file, err := fs_open(parts, flags, mode)
 	if err != 0 {
 		return err
 	}
-	fdn, fd := proc.fd_new()
+	fdn, fd := proc.fd_new(INODE)
 	fd.perms = temp
 	switch {
 	case flags & O_APPEND != 0:
@@ -227,6 +231,17 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	}
 	fd.file = file
 	return fdn
+}
+
+func sys_close(proc *proc_t, fdn int) int {
+	fd, ok := proc.fds[fdn]
+	if !ok {
+		return -EBADF
+	}
+	if fd.ftype != INODE {
+		panic("no imp")
+	}
+	return 0
 }
 
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {
@@ -237,10 +252,7 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts, badp := path_sanitize(proc.cwd, path)
-	if badp {
-		return -ENOENT
-	}
+	parts := path_sanitize(proc.cwd, path)
 	return fs_mkdir(parts, mode)
 }
 
@@ -253,11 +265,8 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 	if toolong1 || toolong2 {
 		return -ENAMETOOLONG
 	}
-	opath, badp1 := path_sanitize(proc.cwd, old)
-	npath, badp2 := path_sanitize(proc.cwd, new)
-	if badp1 || badp2 {
-		return -ENOENT
-	}
+	opath := path_sanitize(proc.cwd, old)
+	npath := path_sanitize(proc.cwd, new)
 	return fs_link(opath, npath)
 }
 
@@ -269,10 +278,7 @@ func sys_unlink(proc *proc_t, pathn int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts, badp := path_sanitize(proc.cwd, path)
-	if badp {
-		return -ENOENT
-	}
+	parts := path_sanitize(proc.cwd, path)
 	return fs_unlink(parts)
 }
 
