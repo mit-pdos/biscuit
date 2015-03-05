@@ -40,7 +40,7 @@ ifeq ($(OS), OpenBSD)
 	ASFLAGS += -nopie
 endif
 
-all: d.img go.img
+all: d.img go.img net.img
 
 -include $(RFS)
 
@@ -62,6 +62,14 @@ d.img: main boot
 
 go.img: boot main.gobin $(SKELDEPS) $(FSUPROGS)
 	./mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
+
+net.img: boot main.gobin $(SKELDEPS) $(FSUPROGS)
+	./mkbdisk.py -n boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
+
+net: net.img
+	@echo; echo waiting for client copy...
+	nc -l -p 31337 -q2 < $^
+	@echo; echo copied Biscuit image; echo
 
 # the user/% prereq is built by the UPROGS target
 $(FSUPROGS): fsdir/bin/% : user/%
@@ -124,4 +132,4 @@ gqemu-gdb: go.img
 gqemux-gdb: go.img
 	$(QEMU) $(QOPTS) -S -s -serial stdio -hda go.img
 
-.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb
+.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net

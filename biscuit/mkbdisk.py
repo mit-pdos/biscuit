@@ -5,6 +5,7 @@
 # poking the block number of the first free block into the mbr of the disk
 # image.
 
+import getopt
 import os
 import sys
 
@@ -298,7 +299,7 @@ class Fsrep:
   def rooti(self):
     return self.rootinode, self.rootioff
 
-  def writeto(self, of, remaining):
+  def writeto(self, of, remaining, dozero):
     ab = self.ba.allblocks
     if len(ab) > remaining:
       raise ValueError('skeldir too big/out of blocks')
@@ -312,8 +313,9 @@ class Fsrep:
       #  print '**** object', type(ab[b]), 'didnt write a whole block'
       #print 'wrote %d bytes' % (diff)
     # free space
-    for i in range(remaining - len(ab)):
-      of.write('\0'*blocksz)
+    if dozero:
+      for i in range(remaining - len(ab)):
+        of.write('\0'*blocksz)
 
   def pr(self):
     print 'print all blocks'
@@ -372,7 +374,7 @@ def dofree(of, allocblocks, freeblock, freeblocklen):
   for i in range(remaining):
     of.write('\0'*blocksz)
 
-def dofs(of, freeblock, freeblocklen, loglen, lastblock, remaining, skeldir):
+def dofs(of, freeblock, freeblocklen, loglen, lastblock, remaining, skeldir, dozero):
   ff = freeblock + freeblocklen + loglen
   ba = Balloc(ff)
 
@@ -406,17 +408,26 @@ def dofs(of, freeblock, freeblocklen, loglen, lastblock, remaining, skeldir):
     of.write('\0'*blocksz)
 
   # finally, write fs
-  fsrep.writeto(of, remaining)
+  fsrep.writeto(of, remaining, dozero)
 
 if __name__ == '__main__':
-  if len(sys.argv) != 5:
-    print >> sys.stderr, 'usage: %s <boot image> <kernel image> <output image> <skel dir>' % (sys.argv[0])
+
+  dozero = True
+  opts, args = getopt.getopt(sys.argv[1:], 'n')
+  for o, v in opts:
+    if o == '-n':
+      # don't write empty blocks
+      dozero = False
+
+  print args
+  if len(args) != 4:
+    print >> sys.stderr, 'usage: %s [-n] <boot image> <kernel image> <output image> <skel dir>' % (sys.argv[0])
     sys.exit(-1)
 
-  bfn = sys.argv[1]
-  kfn = sys.argv[2]
-  ofn = sys.argv[3]
-  skeldir = sys.argv[4]
+  bfn = args[0]
+  kfn = args[1]
+  ofn = args[2]
+  skeldir = args[3]
 
   hdblocks = roundup(hdsize, blocksz) / blocksz
   usedblocks = fblocks(bfn)
@@ -440,7 +451,8 @@ if __name__ == '__main__':
 
     fblen = 10
     loglen = 31
-    dofs(of, usedblocks + 1, fblen, loglen, hdblocks, remaining, skeldir)
+    dofs(of, usedblocks + 1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
+    wrote = of.tell()/(1 << 20)
 
-  print >> sys.stderr, 'created "%s" of length %d blocks' % (ofn, hdblocks)
+  print >> sys.stderr, 'created "%s" of length %d MB' % (ofn, wrote)
   print >> sys.stderr, '(fs starts at %#x in "%s")' % (usedblocks*blocksz, ofn)

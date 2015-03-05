@@ -10,6 +10,7 @@
 /boot.elf
 /chentry
 /go.img
+/net.img
 /main.gobin
 /mpentry.elf
 /mpentry.bin
