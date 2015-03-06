@@ -42,6 +42,11 @@ seta20.2:
   movb    $0xdf,%al               # 0xdf -> port 0x60
   outb    %al,$0x60
 
+// maybe use new a20?
+//inb	$0x92, %al
+//orb	$2, %al
+//outb	%al, $0x92
+
 e820:
   movw    $start, %sp
   xorl    %ebx, %ebx
@@ -49,11 +54,10 @@ e820:
   movw	  $e820m, %di
 
 e820.1:
-  movw	  $0xe820, %ax
-  movw	  $20, %cx
+  movl	  $0xe820, %eax
+  movl	  $20, %ecx
   movl    $0x534d4150, %edx
   int	  $0x15
-
   cmpl	  $0x534d4150, %eax
   je	  e820.4
 e820.3:
@@ -77,6 +81,7 @@ e820.2:
   # and segment translation that makes virtual addresses 
   # identical to their physical addresses, so that the 
   # effective memory map does not change during the switch.
+  cli		// some bioses set IF in e820!
   lgdt    gdtdesc
   movl    %cr0, %eax
   orl     $CR0_PE_ON, %eax
@@ -95,7 +100,7 @@ protcseg:
   movw    %ax, %fs                # -> FS
   movw    %ax, %gs                # -> GS
   movw    %ax, %ss                # -> SS: Stack Segment
-  
+
   # Set up the stack pointer
   movl    $start, %esp
 
@@ -217,7 +222,7 @@ gdt:
   SEG64(STA_X|STA_R, 0x0, 0xffffffff)	# 64bit code seg
 
 gdtdesc:
-  .word   31                              # sizeof(gdt) - 1
+  .word   (gdtdesc - gdt - 1)             # sizeof(gdt) - 1
   .long   gdt                             # address gdt
 
 #define	E820		\
@@ -233,7 +238,7 @@ E820
 E820
 E820
 E820
-E820
+//E820
 
 .globl e820entries
 e820entries:
@@ -244,3 +249,80 @@ e820entries:
   // here
   .long 0
   .byte 0x55, 0xaa
+
+//endy:
+// useful debugging code
+//cksum:
+//  xorl	%ebp, %ebp
+//  #movl	$((endy - .)/4), %ecx
+//  movl	$(4096/4), %ecx
+//  xorl	%ebx, %ebx
+//1:
+//  leal	0(, %ebx, 4), %edx
+//  movl	(%edx), %eax
+//  addl	%eax, %ebp
+//  incl	%ebx
+//  cmp	%ebx, %ecx
+//  jne	1b
+//
+//  movl	%ebp, %eax
+//  call	pnum
+//  ret
+
+//dump:
+//  movl	$((endy - .)/4), %ecx
+//  xorl	%ebx, %ebx
+//1:
+//  leal	wtf(, %ebx, 4), %edx
+//  movl	(%edx), %eax
+//  call	pnum
+//  incl	%ebx
+//  cmp	%ebx, %ecx
+//  jne	1b
+
+// num in eax
+//pnum:
+//	pushl	%eax
+//	pushl	%edx
+//	pushl	%ecx
+//	movl	%eax, %edx
+//	movl	$8, %ecx
+//1:
+//	xorl	%eax, %eax
+//	movl	%edx, %eax
+//	andl	$0xf0000000, %eax
+//	shr	$28, %eax
+//	call	pdig
+//	shl	$4, %edx
+//	loop	1b
+//	popl	%ecx
+//	popl	%edx
+//	popl	%eax
+//	ret
+//
+//pdig:
+//	pushl	%eax
+//	pushl	%edx
+//	pushl	%ecx
+//	cmpl	$9, %eax
+//	ja	hex
+//	addl	$'0', %eax
+//print:
+//	orl	$0x1700, %eax
+//	movl	biddle, %edx
+//	movw	$0xb000, %cx
+//	movw	%cx, %ds
+//	leal	(0x8000)(, %edx, 2), %ecx
+//	movw	%ax, (%ecx)
+//	xorl	%ecx, %ecx
+//	movw	%cx, %ds
+//	incl	%edx
+//	movl	%edx, biddle
+//
+//	popl	%ecx
+//	popl	%edx
+//	popl	%eax
+//	ret
+//hex:
+//	addl	$('A' - 10), %eax
+//	jmp print

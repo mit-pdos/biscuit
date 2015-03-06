@@ -86,7 +86,7 @@ struct __attribute__((packed)) ss_t {
 // the size of the text
 #define BOOTBLOCKS     9
 // boot.S has room for 7 e820 entries
-#define	NE820          7
+#define	NE820          6
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
