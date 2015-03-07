@@ -40,7 +40,7 @@ ifeq ($(OS), OpenBSD)
 	ASFLAGS += -nopie
 endif
 
-all: d.img go.img net.img
+all: go.img net.img
 
 -include $(RFS)
 
@@ -68,7 +68,9 @@ net.img: boot main.gobin $(SKELDEPS) $(FSUPROGS)
 
 net: net.img
 	@echo; echo waiting for client copy...
+	@sha1sum net.img
 	nc -l -p 31337 -q2 < $^
+	@sha1sum net.img
 	@echo; echo copied Biscuit image; echo
 
 # the user/% prereq is built by the UPROGS target

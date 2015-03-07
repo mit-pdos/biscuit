@@ -419,7 +419,6 @@ if __name__ == '__main__':
       # don't write empty blocks
       dozero = False
 
-  print args
   if len(args) != 4:
     print >> sys.stderr, 'usage: %s [-n] <boot image> <kernel image> <output image> <skel dir>' % (sys.argv[0])
     sys.exit(-1)
