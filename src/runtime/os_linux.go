@@ -18,6 +18,7 @@ func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
 
 func Ap_setup(int)
 func Cli()
+func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
 func Install_traphandler(func(tf *[23]int, uc int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int

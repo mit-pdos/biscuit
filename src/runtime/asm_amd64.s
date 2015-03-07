@@ -332,6 +332,18 @@ h_ok:
 	RET
 
 
+TEXT runtime·Cpuid(SB), NOSPLIT, $0-24
+	XORQ	AX, AX
+	XORQ	CX, CX
+	MOVL	eax+0(FP), AX
+	MOVL	ecx+4(FP), CX
+	CPUID
+	MOVL	AX, ret+8(FP)
+	MOVL	BX, ret+12(FP)
+	MOVL	CX, ret+16(FP)
+	MOVL	DX, ret+20(FP)
+	RET
+
 TEXT finit(SB), NOSPLIT, $0-0
 	FINIT
 	RET

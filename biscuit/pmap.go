@@ -73,6 +73,8 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
+// cannot use pg_new until after dmap_init has been called (pmap_walk depends
+// on direct map)
 func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
@@ -104,7 +106,24 @@ func kpmap() *[512]int {
 
 // installs a direct map for 512G of physical memory via the recursive mapping
 func dmap_init() {
+	// the default cpu qemu uses for x86_64 supports 1GB pages, but
+	// doesn't report it in cpuid 0x80000001... i wonder why.
+	//_, _, ecx, _  := runtime.Cpuid(0, 0)
+	//qemu := ecx == 0x444d4163
+	_, _, _, edx  := runtime.Cpuid(0x80000001, 0)
+	gbpages := edx & (1 << 26) != 0
+
 	dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
+	if *dpte & PTE_P != 0 {
+		panic("dmap slot taken")
+	}
+
+	apadd := func(kva *[512]int, phys int) {
+		if _, ok := allpages[phys]; ok {
+			panic("page already in allpages")
+		}
+		allpages[phys] = kva
+	}
 
 	pdpt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pdpt)))
@@ -112,16 +131,33 @@ func dmap_init() {
 		panic("page table not aligned")
 	}
 	p_pdpt := runtime.Vtop(pdpt)
-	allpages[p_pdpt] = pdpt
+	apadd(pdpt, p_pdpt)
 
-	for i := range pdpt {
-		pdpt[i] = i*(1 << 30) | PTE_P | PTE_W | PTE_PS
-	}
-
-	if *dpte & PTE_P != 0 {
-		panic("dmap slot taken")
-	}
 	*dpte = p_pdpt | PTE_P | PTE_W
+
+	size := (1 << 30)
+
+	// make qemu use 2MB pages, like my hardware, to help expose bugs that
+	// the hardware may encounter.
+	//if gbpages || qemu {
+	if gbpages {
+		for i := range pdpt {
+			pdpt[i] = i*size | PTE_P | PTE_W | PTE_PS
+		}
+		return
+	}
+	fmt.Printf("1GB pages not supported\n")
+
+	size = (1 << 21)
+	for i := range pdpt {
+		pd := new([512]int)
+		p_pd := runtime.Vtop(pd)
+		apadd(pd, p_pd)
+		for j := range pd {
+			pd[j] = j*size | PTE_P | PTE_W | PTE_PS
+		}
+		pdpt[i] = p_pd | PTE_P | PTE_W
+	}
 }
 
 // returns a page-aligned virtual address for the given physical address using
