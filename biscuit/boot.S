@@ -9,6 +9,8 @@
 .set BOOTBLOCKS,     9
 .set SECTSIZE,       512
 .set NE820,          6
+.globl e820m
+.set e820m,	0x6000
 
 .globl start
 start:
@@ -46,6 +48,11 @@ seta20.2:
 //inb	$0x92, %al
 //orb	$2, %al
 //outb	%al, $0x92
+
+  movw	$(4096/4), %cx
+  movw	  $e820m, %di
+  movl	$0, %eax
+  repnz stosl
 
 e820:
   movw    $start, %sp
@@ -230,14 +237,14 @@ gdtdesc:
 	.long 0,0;		\
 	.long 0;		\
 	.long 0,0;		\
-.globl e820m
-e820m:
-E820
-E820
-E820
-E820
-E820
-E820
+//.globl e820m
+//e820m:
+//E820
+//E820
+//E820
+//E820
+//E820
+//E820
 //E820
 
 .globl e820entries

@@ -85,8 +85,8 @@ struct __attribute__((packed)) ss_t {
 // # of sectors this code takes up; i set this after compiling and observing
 // the size of the text
 #define BOOTBLOCKS     9
-// boot.S has room for 7 e820 entries
-#define	NE820          6
+// put 15 e820 entries at 0x6000 (boot.S)
+#define	NE820          15
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space
@@ -140,6 +140,9 @@ bootmain(void)
 	// give us VGA so we can print
 	mapone(pgdir, 0xb8000, 0xb8000, 1);
 	mapone(pgdir, 0xb9000, 0xb9000, 1);
+
+	// map e820 map
+	mapone(pgdir, (uint32_t)e820m, (uint32_t)e820m, 0);
 
 	// get a new stack with guard page
 	ensure_empty(pgdir, NEWSTACK - PGSIZE);
@@ -274,7 +277,7 @@ checkmach(void)
 
 	// check e820 map
 	if (e820entries > NE820)
-		pancake("more than 7 e820 entries", e820entries);
+		pancake("too many e820 entries", e820entries);
 }
 
 static uint32_t
@@ -387,6 +390,8 @@ static struct {
 	uint64_t start;
 	uint64_t end;
 } badregions[] = {
+	// E820 map itself
+	{0x6000, 0x7000},
 	// Elf header
 	{0x10000, 0x11000},
 	// VGA
