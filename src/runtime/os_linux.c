@@ -396,10 +396,37 @@ runtime·Newlines(int64 set)
 	newlines = set;
 }
 
+struct spinlock_t {
+	uint64 lock;
+};
+
+#pragma textflag NOSPLIT
+void
+splock(struct spinlock_t *sl) {
+	int32 runtime·xchg(void *, uint32);
+	void htpause(void);
+	while (1) {
+		if (runtime·xchg(&sl->lock, 1) == 0)
+			break;
+		while (sl->lock)
+			htpause();
+	}
+}
+
+#pragma textflag NOSPLIT
+void
+spunlock(struct spinlock_t *sl) {
+	sl->lock = 0;
+}
+
+struct spinlock_t pmsglock;
+
 #pragma textflag NOSPLIT
 void
 pnum(uint64 n)
 {
+	splock(&pmsglock);
+
 	uint64 nn = (uint64)n;
 	int64 i;
 
@@ -412,6 +439,7 @@ pnum(uint64 n)
 		else
 			runtime·putch('A' + cn - 10);
 	}
+	spunlock(&pmsglock);
 }
 
 #pragma textflag NOSPLIT
@@ -423,15 +451,16 @@ runtime·pnum(uint64 n)
 	pnum(n);
 }
 
-
 #pragma textflag NOSPLIT
 void
 pmsg(int8 *msg)
 {
+	splock(&pmsglock);
 	runtime·putch(' ');
 	if (msg)
 		while (*msg)
 			runtime·putch(*msg++);
+	spunlock(&pmsglock);
 }
 
 #pragma textflag NOSPLIT
@@ -1251,29 +1280,6 @@ find_empty(uint64 sz)
 	}
 }
 
-struct spinlock_t {
-	uint64 lock;
-};
-
-#pragma textflag NOSPLIT
-void
-splock(struct spinlock_t *sl) {
-	int32 runtime·xchg(void *, uint32);
-	void htpause(void);
-	while (1) {
-		if (runtime·xchg(&sl->lock, 1) == 0)
-			break;
-		while (sl->lock)
-			htpause();
-	}
-}
-
-#pragma textflag NOSPLIT
-void
-spunlock(struct spinlock_t *sl) {
-	sl->lock = 0;
-}
-
 struct spinlock_t maplock;
 
 #pragma textflag NOSPLIT
@@ -1404,10 +1410,12 @@ hack_write(int64 fd, const void *buf, uint32 c)
 	if (fd != 1 && fd != 2)
 		runtime·pancake("weird fd", (uint64)fd);
 
+	splock(&pmsglock);
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
 	while(c--)
 		runtime·putch(*p++);
+	spunlock(&pmsglock);
 
 	return ret;
 }
