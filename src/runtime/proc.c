@@ -153,7 +153,7 @@ runtime·schedinit(void)
 			procs = n;
 		}
 	} else {
-		procs = 24;
+		procs = 2;
 	}
 	procresize(procs);
 
