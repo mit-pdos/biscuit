@@ -821,10 +821,6 @@ func main() {
 	exec("bin/ls")
 
 	//ide_test()
-	//bc_test()
-	//sb_test()
-	//balloc_test()
-	//fs_fmt()
 
 	dur := make(chan bool)
 	<- dur

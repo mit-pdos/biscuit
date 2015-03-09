@@ -1217,7 +1217,9 @@ alloc_map(void *va, int32 perms, int32 fempty)
 		runtime·pancake("was not empty", (uint64)va);
 
 	// XXX goodbye, memory
-	*pte = get_pg() | perms | PTE_P;
+	uint64 np = get_pg();
+	zero_phys(np);
+	*pte = np | perms | PTE_P;
 	if (old & PTE_P)
 		invlpg(va);
 }
