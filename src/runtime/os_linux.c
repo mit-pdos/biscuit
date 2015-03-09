@@ -1488,8 +1488,7 @@ mmap_test(void)
 #define TRAP_DISK       (32 + 14)
 #define TRAP_SPUR       48
 
-#define TIMER_QUANTUM   100000000UL
-#define HALT_QUANTUM   (TIMER_QUANTUM/100)
+#define TIMER_QUANTUM   1000000UL
 
 struct thread_t {
 #define TFREGS       16
@@ -1574,9 +1573,6 @@ sched_halt(void)
 	//		case ST_RUNNING:
 	//			msg = "running";
 	//			break;
-	//		case ST_NEEDSLEEP:
-	//			msg = "need sleep";
-	//			break;
 	//		case ST_SLEEPING:
 	//			msg = "sleeping";
 	//			break;
@@ -1593,10 +1589,6 @@ sched_halt(void)
 	//}
 
 	//pmsg("hlt");
-	// when there are no threads to run, set timer count low so a CPU can
-	// quickly find a thread to run.
-	const uint32 icreg = 0x380/4;
-	wlap(icreg, HALT_QUANTUM);
 	cpu_halt(curcpu.rsp);
 }
 
@@ -1608,10 +1600,6 @@ sched_run(struct thread_t *t)
 	setcurthread(t);
 	int32 idx = t - &threads[0];
 	fxrstor(&fxstates[idx][0]);
-	// when running a thread, set timer count high so the CPU executes the
-	// thread with less timer overhead.
-	const uint32 icreg = 0x380/4;
-	wlap(icreg, TIMER_QUANTUM);
 	trapret(t->tf, t->pmap);
 }
 
