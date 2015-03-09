@@ -1488,7 +1488,7 @@ mmap_test(void)
 #define TRAP_DISK       (32 + 14)
 #define TRAP_SPUR       48
 
-#define TIMER_QUANTUM   1000000UL
+#define TIMER_QUANTUM   100000000UL
 
 struct thread_t {
 #define TFREGS       16
@@ -1621,7 +1621,6 @@ yieldy(void)
 	}
 
 	struct thread_t *tnext = &threads[i];
-
 	tnext->status = ST_RUNNING;
 	spunlock(&threadlock);
 
@@ -2272,7 +2271,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 
 #pragma textflag NOSPLIT
 void
-hack_usleep(uint32 delay)
+hack_usleep(uint64 delay)
 {
 	struct timespec ts;
 	ts.tv_sec = delay/1000000000;
@@ -2477,4 +2476,11 @@ runtime·Crash(void)
 	volatile int32 *wtf = &halt;
 	*wtf = 1;
 	while (1);
+}
+#pragma textflag NOSPLIT
+void
+runtime·Usleep(uint64 delay)
+{
+	runtime·stackcheck();
+	hack_usleep(delay);
 }

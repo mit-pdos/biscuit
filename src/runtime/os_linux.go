@@ -49,6 +49,7 @@ func Fnaddr(func()) int
 func Fnaddri(func(int)) int
 func Tfdump(*[23]int)
 func Stackdump(int)
+func Usleep(int)
 
 func inb(int) int
 

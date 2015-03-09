@@ -167,6 +167,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			    trapno,pid))
 		}
 		runtime.Gosched()
+		runtime.Usleep(0)
 	}
 }
 
@@ -822,7 +823,7 @@ func main() {
 
 	//ide_test()
 
-	dur := make(chan bool)
+	var dur chan bool
 	<- dur
 	//fake_work()
 }
