@@ -1365,7 +1365,7 @@ hack_munmap(void *va, uint64 sz)
 			invlpg(v + i);
 		}
 	}
-	pmsg("POOF ");
+	pmsg("POOF\n");
 
 	spunlock(&maplock);
 	return 0;
@@ -2048,9 +2048,9 @@ proc_setup(void)
 	tss_setup(0);
 	curcpu.num = 0;
 	setcurthread(&threads[0]);
-	pmsg("sizeof thread_t:");
-	pnum(sizeof(struct thread_t));
-	pmsg("\n");
+	//pmsg("sizeof thread_t:");
+	//pnum(sizeof(struct thread_t));
+	//pmsg("\n");
 }
 
 #pragma textflag NOSPLIT
@@ -2059,6 +2059,9 @@ void
 {
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(lap_id() <= MAXCPUS, "lapic id large", myid);
+	//pmsg("LAP ID [");
+	//pnum(lap_id());
+	//pmsg("]\n");
 	timer_setup();
 	tss_setup(myid);
 	fpuinit();

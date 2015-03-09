@@ -1502,6 +1502,13 @@ func ide_start(b *idebuf_t, write bool) {
 	outb(ide_rdrive, 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
 	if write {
 		outb(ide_rcmd, ide_cmd_write)
+		// delay before writing data; otherwise test hardware doesn't
+		// doesn't get all the data written and waits for more
+		// indefinitely.
+		runtime.Inb(0x80)
+		runtime.Inb(0x80)
+		runtime.Inb(0x80)
+		runtime.Inb(0x80)
 		runtime.Outsl(ide_rdata, unsafe.Pointer(&b.data[0]), 512/4)
 	} else {
 		outb(ide_rcmd, ide_cmd_read)
@@ -1523,6 +1530,9 @@ func ide_daemon() {
 				runtime.Insl(ide_rdata,
 				    unsafe.Pointer(&req.buf.data[0]), 512/4)
 			}
+		} else {
+			// cache flush
+			//runtime.Outb(ide_rcmd, 0xe7)
 		}
 		req.ack <- true
 	}
