@@ -38,11 +38,23 @@ type cpu_t struct {
 
 var cpus	[maxcpus]cpu_t
 
-// can only be used when interrupts are cleared
+// these functions can only be used when interrupts are cleared
 //go:nosplit
 func lap_id() int {
 	lapaddr := (*[1024]int32)(unsafe.Pointer(uintptr(0xfee00000)))
 	return int(lapaddr[0x20/4] >> 24)
+}
+
+//go:nosplit
+func p8259_eoi() {
+	pic1 := 0x20
+	pic2 := 0xa0
+	// non-specific eoi
+	eoi := 0x20
+
+	outb := runtime.Outb
+	outb(pic1, eoi)
+	outb(pic2, eoi)
 }
 
 const(
@@ -110,6 +122,13 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		// yield until the syscall/fault is handled
 		runtime.Procyield()
 	case INT_DISK:
+		// unclear whether automatic eoi mode works on the slave 8259a.
+		// from page 15 of intel's 8259a doc: "The AEOI mode can only
+		// be used in a master 8259A and not a slave. 8259As with a
+		// copyright date of 1985 or later will operate in the AEOI
+		// mode as a master or a slave." linux seems to observe that
+		// automatic eoi also doesn't work on the slave.
+		p8259_eoi()
 		runtime.Proccontinue()
 	default:
 		runtime.Pnum(trapno)
@@ -121,8 +140,8 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 
 func trap(handlers map[int]func(*trapstore_t)) {
 	for {
+		// XXX completely drain, not remove one
 		for cpu := 0; cpu < numcpus; cpu += 1 {
-
 			head := cpus[cpu].tshead
 			tail := cpus[cpu].tstail
 
@@ -678,11 +697,11 @@ func ap_entry(myid int) {
 	runtime.Procyield()
 }
 
-func init_8259() {
+func p8259_init() {
 	// the piix3 provides two 8259 compatible pics. the runtime masks all
 	// irqs for us.
 	outb := func(reg int, val int) {
-		runtime.Outb(int32(reg), int32(val))
+		runtime.Outb(reg, val)
 		cdelay(1)
 	}
 	pic1 := 0x20
@@ -729,18 +748,18 @@ func init_8259() {
 	runtime.Sti()
 }
 
-var intmask uint16 	= 0xffff
+var intmask uint 	= 0xffff
 
 func irq_unmask(irq int) {
 	if irq < 0 || irq > 16 {
 		panic("weird irq")
 	}
-	pic1 := int32(0x20)
+	pic1 := 0x20
 	pic1d := pic1 + 1
-	pic2 := int32(0xa0)
+	pic2 := 0xa0
 	pic2d := pic2 + 1
 	intmask = intmask & ^(1 << uint(irq))
-	dur := int32(intmask)
+	dur := int(intmask)
 	runtime.Outb(pic1d, dur)
 	runtime.Outb(pic2d, dur >> 8)
 }
@@ -752,7 +771,6 @@ func main() {
 	//	}
 	//}
 
-	dmap_init()
 	runtime.Install_traphandler(trapstub)
 
 	trap_diex := func(c int) func(*trapstore_t) {
@@ -770,7 +788,8 @@ func main() {
 	     }
 	go trap(handlers)
 
-	init_8259()
+	dmap_init()
+	p8259_init()
 	cpus_start()
 
 	if !ide_init() {
@@ -779,6 +798,7 @@ func main() {
 	fs_init()
 
 	exec := func(cmd string) {
+		fmt.Printf("start [%v]\n", cmd)
 		path := strings.Split(cmd, "/")
 		ret := sys_execv(path, nil)
 		if ret != 0 {
@@ -786,7 +806,7 @@ func main() {
 		}
 	}
 
-	//exec("bin/fault")
+	exec("bin/fault")
 	//exec("bin/hello")
 	//exec("bin/fork")
 	//exec("bin/fstest")

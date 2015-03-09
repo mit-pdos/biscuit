@@ -436,8 +436,12 @@ TEXT wrmsr(SB), NOSPLIT, $0-16
 	WRMSR
 	RET
 
-TEXT runtime·outb(SB), NOSPLIT, $0-0
-	JMP outb(SB)
+TEXT runtime·Outb(SB), NOSPLIT, $0-16
+	MOVQ	reg+0(FP), DX
+	MOVQ	val+8(FP), AX
+	// outb	%al, (%dx)
+	BYTE	$0xee
+	RET
 	
 //void outb(int64 port, int64 val)
 TEXT outb(SB), NOSPLIT, $0-16

@@ -1043,6 +1043,10 @@ init_pgfirst(void)
 			break;
 		}
 	}
+	//pmsg("kernel allocate from");
+	//pnum(runtime·Pgfirst);
+	//pmsg("to");
+	//pnum(runtime·Pglast);
 	assert(runtime·Pglast, "no e820 seg for Pgfirst?", runtime·Pgfirst);
 }
 
@@ -1586,6 +1590,7 @@ sched_halt(void)
 	//	}
 	//}
 
+	//pmsg("hlt");
 	// when there are no threads to run, set timer count low so a CPU can
 	// quickly find a thread to run.
 	const uint32 icreg = 0x380/4;
@@ -2383,15 +2388,6 @@ runtime·Memmove(void *dst, void *src, uintptr len)
 	runtime·stackcheck();
 
 	memmov(dst, src, len);
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Outb(uint32 reg, uint32 val)
-{
-	runtime·stackcheck();
-
-	outb(reg, val);
 }
 
 #pragma textflag NOSPLIT

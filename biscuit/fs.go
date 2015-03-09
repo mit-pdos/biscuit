@@ -1494,10 +1494,12 @@ func ide_start(b *idebuf_t, write bool) {
 	outb := runtime.Outb
 	outb(ide_allstatus, 0)
 	outb(ide_rcount, 1)
-	outb(ide_rsect, b.block & 0xff)
-	outb(ide_rclow, (b.block >> 8) & 0xff)
-	outb(ide_rchigh, (b.block >> 16) & 0xff)
-	outb(ide_rdrive, 0xe0 | ((b.disk & 1) << 4) | (b.block >> 24) & 0xf)
+	bn := int(b.block)
+	bd := int(b.disk)
+	outb(ide_rsect, bn & 0xff)
+	outb(ide_rclow, (bn >> 8) & 0xff)
+	outb(ide_rchigh, (bn >> 16) & 0xff)
+	outb(ide_rdrive, 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
 	if write {
 		outb(ide_rcmd, ide_cmd_write)
 		runtime.Outsl(ide_rdata, unsafe.Pointer(&b.data[0]), 512/4)

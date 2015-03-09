@@ -27,7 +27,7 @@ func Lcr3(int)
 func Memmove(unsafe.Pointer, unsafe.Pointer, int)
 func Inb(int32) int
 func Insl(int32, unsafe.Pointer, int)
-func Outb(int32, int32)
+func Outb(int, int)
 func Outsl(int32, unsafe.Pointer, int)
 func Pnum(int)
 func Procadd(tf *[23]int, uc int, p_pmap int)
@@ -51,7 +51,6 @@ func Tfdump(*[23]int)
 func Stackdump(int)
 
 func inb(int) int
-func outb(int, int)
 
 //go:nosplit
 func sc_setup() {
@@ -62,13 +61,13 @@ func sc_setup() {
 	lctl  := 3
 	mctl  := 4
 
-	outb(com1 + intr, 0x00)
-	outb(com1 + lctl, 0x80)
-	outb(com1 + data, 0x03)
-	outb(com1 + intr, 0x00)
-	outb(com1 + lctl, 0x03)
-	outb(com1 + ififo, 0xc7)
-	outb(com1 + mctl, 0x0b)
+	Outb(com1 + intr, 0x00)
+	Outb(com1 + lctl, 0x80)
+	Outb(com1 + data, 0x03)
+	Outb(com1 + intr, 0x00)
+	Outb(com1 + lctl, 0x03)
+	Outb(com1 + ififo, 0xc7)
+	Outb(com1 + mctl, 0x0b)
 }
 
 //go:nosplit
@@ -77,7 +76,7 @@ func sc_put(c int8) {
 	lstatus := 5
 	for inb(com1 + lstatus) & 0x20 == 0 {
 	}
-	outb(com1, int(c))
+	Outb(com1, int(c))
 }
 
 type put_t struct {
