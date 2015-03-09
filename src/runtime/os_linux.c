@@ -1054,8 +1054,8 @@ init_pgfirst(void)
 void
 pgcheck(uint64 phys)
 {
-	//uint8 poison = 0xcafebabeb00bbeefULL;
-	uint8 poison = 0xfefefffefffefeffULL;
+	//uint64 poison = 0xcafebabeb00bbeefULL;
+	uint64 poison = 0xfefefffefffefeffULL;
 	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
 	if (recva[VTEMP] & PTE_P)
 		runtime·pancake("not empty", 0);
