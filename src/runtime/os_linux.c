@@ -2186,14 +2186,6 @@ hack_syscall(void)
 	}
 }
 
-#pragma textflag NOSPLIT
-void
-hack_usleep(uint32 delay)
-{
-	USED(delay);
-	hack_yield();
-}
-
 struct timespec {
 	int64 tv_sec;
 	int64 tv_nsec;
@@ -2276,6 +2268,17 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	}
 
 	return ret;
+}
+
+#pragma textflag NOSPLIT
+void
+hack_usleep(uint32 delay)
+{
+	struct timespec ts;
+	ts.tv_sec = delay/1000000000;
+	ts.tv_nsec = delay%1000000000;
+	int32 dummy = 0;
+	hack_futex(&dummy, FUTEX_WAIT, 0, &ts, nil, 0);
 }
 
 #pragma textflag NOSPLIT
