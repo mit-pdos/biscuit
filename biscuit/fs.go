@@ -21,8 +21,6 @@ var bcdaemon	= bcdaemon_t{}
 
 // free block bitmap lock
 var fblock	= sync.Mutex{}
-// free inode lock
-var filock	= sync.Mutex{}
 
 func path_sanitize(cwd, path string) ([]string, int) {
 	if len(path) == 0 {
@@ -1297,15 +1295,12 @@ func freebit(b uint8) uint {
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func balloc() int {
+func balloc1() int {
 	fst := free_start
 	flen := free_len
 	if fst == 0 || flen == 0 {
 		panic("fs not initted")
 	}
-
-	fblock.Lock()
-	defer fblock.Unlock()
 
 	found := false
 	var bit uint
@@ -1340,6 +1335,13 @@ func balloc() int {
 	boffset := usable_start
 	bitsperblk := 512*8
 	return boffset + blkn*bitsperblk + oct*8 + int(bit)
+}
+
+func balloc() int {
+	fblock.Lock()
+	ret := balloc1()
+	fblock.Unlock()
+	return ret
 }
 
 func bfree(blkno int) {
@@ -1378,11 +1380,10 @@ func bfree(blkno int) {
 var ifreeblk int	= 0
 var ifreeoff int 	= 0
 
-// returns block/index of free inode. callers must synchronize access to this
-// block via filetree locks.
+// returns block/index of free inode.
 func ialloc() (int, int) {
-	filock.Lock()
-	defer filock.Unlock()
+	fblock.Lock()
+	defer fblock.Unlock()
 
 	if ifreeblk != 0 {
 		ret := ifreeblk
@@ -1396,7 +1397,7 @@ func ialloc() (int, int) {
 		return ret, retoff
 	}
 
-	ifreeblk = balloc()
+	ifreeblk = balloc1()
 	ifreeoff = 0
 	zblk := bread(ifreeblk)
 	for i := range zblk.buf.data {
