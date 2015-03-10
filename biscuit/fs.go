@@ -943,7 +943,6 @@ func (idm *idaemon_t) ifree() {
 		}
 	}
 
-	add(idm.blkno)
 	for i := 0; i < NIADDRS; i++ {
 		add(idm.icache.addrs[i])
 	}
@@ -955,6 +954,31 @@ func (idm *idaemon_t) ifree() {
 		indno = readn(blk.buf.data[:], 8, nextoff)
 		brelse(blk)
 	}
+
+	// mark this inode as dead and free the inode block if all inodes on it
+	// are marked dead.
+	alldead := func(blk *bbuf_t) bool {
+		bwords := 512/8
+		ret := true
+		for i := 0; i < bwords/NIWORDS; i++ {
+			ic := icache_t{}
+			ic.fill(blk, i)
+			if ic.itype != I_INVALID {
+				ret = false
+				break
+			}
+		}
+		return ret
+	}
+	iblk := bread(idm.blkno)
+	idm.icache.itype = I_INVALID
+	idm.icache.flushto(iblk, idm.ioff)
+	if alldead(iblk) {
+		add(idm.blkno)
+	} else {
+		log_write(iblk)
+	}
+	brelse(iblk)
 
 	for _, blkno := range *allb {
 		bfree(blkno)
