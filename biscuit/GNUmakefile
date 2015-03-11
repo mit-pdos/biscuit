@@ -114,7 +114,7 @@ chentry: chentry.c
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o \
-	    $(FSUPROGS) $(UPROGS)
+	    $(FSUPROGS) $(UPROGS) btest btest.elf
 
 qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img
@@ -133,5 +133,9 @@ gqemu-gdb: go.img
 
 gqemux-gdb: go.img
 	$(QEMU) $(QOPTS) -S -s -serial stdio -hda go.img
+
+btest: btest.c
+	gcc -Os -m32 -I./ -o $@.elf $^ -nostdlib -nostdinc -e main -Ttext 0x7c00
+	objcopy -O binary -j.text $@.elf $@
 
 .PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net

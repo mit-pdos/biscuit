@@ -3,6 +3,8 @@
 .*.swp
 *.bgo
 *.pyc
+/btest
+/btest.elf
 /main
 /boot
 /d.img
