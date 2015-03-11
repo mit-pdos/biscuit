@@ -67,8 +67,14 @@ e820.1:
   int	  $0x15
   cmpl	  $0x534d4150, %eax
   je	  e820.4
-e820.3:
-  jmp	  e820.3
+e820.fail:
+  movw	  $0xb000, %ax
+  movw	  %ax, %ds
+  xorl	  %eax, %eax
+  movw	  $0x8000, %ax
+  movw	  $0x1742, (%eax)
+1:
+  jmp	  1b
 e820.4:
   popl	  %eax
   incl	  %eax
@@ -111,6 +117,7 @@ protcseg:
   # Set up the stack pointer
   movl    $start, %esp
 
+  movl	 $0x1753, 0xb8000
   # Read the remaining sectors of the boot loader; the first was loaded for us.
   movl  $BOOTBLOCKS-1, %ecx
   movl  $0x7c00 + SECTSIZE, %eax
