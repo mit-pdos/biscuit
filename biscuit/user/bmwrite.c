@@ -4,8 +4,16 @@ static char buf[512];
 
 int main(int argc, char **argv)
 {
+	char *fn = "/bigdaddy.txt";
 	int fd;
-	if ((fd = open("/bigdaddy.txt", O_RDWR | O_CREAT, 0)) < 0)
+	if ((fd = open(fn, O_RDWR, 0)) >= 0) {
+		printf("deleting %s\n", fn);
+		close(fd);
+		if (unlink(fn) < 0)
+			errx(-1, "unlink");
+	}
+
+	if ((fd = open(fn, O_RDWR | O_CREAT, 0)) < 0)
 		errx(-1, "open");
 
 	int i;
