@@ -29,6 +29,7 @@
 /user/fsunlink
 /user/fsfree
 /user/ls
+/user/bmwrite
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -42,3 +43,4 @@
 /fsdir/bin/fsunlink
 /fsdir/bin/fsfree
 /fsdir/bin/ls
+/fsdir/bin/bmwrite

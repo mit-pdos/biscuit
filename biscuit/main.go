@@ -807,9 +807,10 @@ func main() {
 		}
 	}
 
-	exec("bin/fault")
+	//exec("bin/fault")
 	//exec("bin/hello")
 	//exec("bin/fork")
+	//exec("bin/getpid")
 	//exec("bin/fstest")
 	//exec("bin/fslink")
 	//exec("bin/fsunlink")
@@ -817,9 +818,9 @@ func main() {
 	//exec("bin/fsbigwrite")
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
-	//exec("bin/getpid")
 	//exec("bin/fsfree")
-	exec("bin/ls")
+	//exec("bin/ls")
+	exec("bin/bmwrite")
 
 	//ide_test()
 

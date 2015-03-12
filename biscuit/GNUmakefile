@@ -15,7 +15,7 @@ KSRC := main.go syscall.go pmap.go fs.go
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
 UBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
-	  fslink fsunlink fsfree ls
+	  fslink fsunlink fsfree ls bmwrite
 FSUPROGS := $(patsubst %,fsdir/bin/%,$(UBINS))
 UPROGS := $(patsubst %,user/%,$(UBINS))
 
