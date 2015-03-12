@@ -8,7 +8,6 @@
 .set CR0_PE_ON,      0x1         # protected mode enable flag
 .set BOOTBLOCKS,     9
 .set SECTSIZE,       512
-.set NE820,          6
 .globl e820m
 .set e820m,	0x6000
 

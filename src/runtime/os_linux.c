@@ -1058,9 +1058,9 @@ init_pgfirst(void)
 	// secret storage
 	uint64 base = secret->dur[SEC_E820];
 	int32 i;
-	// bootloader provides 7 e820 entries at most (it will panick if the PC
-	// provides more)
-	for (i = 0; i < 7; i++) {
+	// bootloader provides 15 e820 entries at most (boot loader will panick
+	// if the PC provides more)
+	for (i = 0; i < 15; i++) {
 		ep = (struct e8e *)(base + i * 28);
 		// non-zero len
 		if (!ep->dur[1])
