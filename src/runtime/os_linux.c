@@ -1613,8 +1613,33 @@ sched_run(struct thread_t *t)
 
 #pragma textflag NOSPLIT
 static void
+tcount(void)
+{
+	uint64 run, sleep, wait;
+	run = sleep = wait = 0;
+	int32 i;
+	for (i = 0; i < NTHREADS; i++) {
+		struct thread_t *t = &threads[i];
+		if (t->status == ST_RUNNABLE || t->status == ST_RUNNING)
+			run++;
+		else if (t->status == ST_WAITING)
+			wait++;
+		else if (t->status == ST_SLEEPING || t->status == ST_WILLSLEEP)
+			sleep++;
+	}
+
+	uint64 tot = run + sleep + wait;
+	int32 bits = 64/4;
+	uint64 v = tot << (3*bits) | run << (2*bits) | sleep << (1*bits) |
+	    wait << (0*bits);
+	pnum(v);
+}
+
+#pragma textflag NOSPLIT
+static void
 yieldy(void)
 {
+	//tcount();
 	int32 start = curthread ? curthread - &threads[0] : 0;
 	int32 i;
 	for (i = (start + 1) % NTHREADS;
