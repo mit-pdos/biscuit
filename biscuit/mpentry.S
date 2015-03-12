@@ -98,7 +98,8 @@ protocseg64:
 	movq	64(%rdx), %rbx
 	incq	%rbx
 	movq	%rbx, 64(%rdx)
-	movq	%rbx, myid
+	// store id in %rbp
+	movq	%rbx, %rbp
 
 	// get our own stack
 	movq	72(%rdx), %rax
@@ -107,29 +108,36 @@ protocseg64:
 	addq	$PGSIZE, %rsp
 	addq	$(PGSIZE * 2), %rax
 	movq	%rax, 72(%rdx)
-	movq	$0, %rbp
-
-	pushq	myid
 
 	// load idt and gdt
 	lgdt	32(%rdx)
 	lidt	48(%rdx)
 
-	// update CS
+	SPUNLOCK(lock1)
+
+	// wait for BSP to map our stack. APs that joined too late (hopefuly
+	// that doesn't happen) loop here.
+1:
+	movq	80(%rdx), %rax
+	cmpq	$0, %rax
+	je	1b
+	movq	%rax, %rbx
+	decq	%rbx
+	lock cmpxchgq	%rbx, 80(%rdx)
+	jnz	1b
+
+	// stack is now valid, update CS
 	pushq	$REAL_CSEG64
 	pushq	$realcseg
 	lretq
 
 realcseg:
 	movq	24(%rdx), %rax
-
-	SPUNLOCK(lock1)
-
+	pushq	%rbp
+	movq	$0, %rbp
 	call	*%rax
 
 lock1:
-	.quad	0
-myid:
 	.quad	0
 
 # Bootstrap GDT

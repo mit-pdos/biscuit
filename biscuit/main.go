@@ -553,16 +553,17 @@ func cpus_stack_init(apcnt int, stackstart int) {
 func cpus_start() {
 	cpus := cpus_find()
 	apcnt := len(cpus) - 1
+
+	// XXX how to determine logical cpus, not cores from mp table? my test
+	// hardware has 8 logical cpus and 4 cores but there are only 4 entries
+	// in the mp table...
+
 	fmt.Printf("found %v CPUs\n", len(cpus))
 
 	if apcnt == 0 {
 		fmt.Printf("uniprocessor with mpconf\n")
+		return
 	}
-
-	// the top of bsp's interrupt stack is 0xa100001000. map an interrupt
-	// stack for each ap. leave 0xa100001000 as a guard page.
-	stackstart := 0xa100002000
-	cpus_stack_init(apcnt, stackstart)
 
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
@@ -625,11 +626,11 @@ func cpus_start() {
 	}
 
 	startupipi := func() {
+		vec       := mpaddr >> 12
 		delivmode := 0x6
 		level     := 0x1
-		dshort    := 0x3
 		trig      := 0x0
-		vec       := mpaddr >> 12
+		dshort    := 0x3
 
 		hi := uint32(0)
 		low := ipilow(dshort, trig, level, delivmode, vec)
@@ -637,7 +638,7 @@ func cpus_start() {
 	}
 
 	// pass arguments to the ap startup code via secret storage (the old
-	// boot device page at 0x7c00)
+	// boot loader page at 0x7c00)
 
 	// secret storage layout
 	// 0 - e820map
@@ -650,19 +651,29 @@ func cpus_start() {
 	// 7 - idt
 	// 8 - ap count
 	// 9 - stack start
+	// 10- proceed
 
-	ss := (*[10]int)(unsafe.Pointer(uintptr(0x7c00)))
+	ss := (*[11]int)(unsafe.Pointer(uintptr(0x7c00)))
 	sap_entry := 3
 	sgdt      := 4
 	sidt      := 6
 	sapcnt    := 8
 	sstacks   := 9
+	sproceed  := 10
 	ss[sap_entry] = runtime.Fnaddri(ap_entry)
 	// sgdt and sidt save 10 bytes
 	runtime.Sgdt(&ss[sgdt])
 	runtime.Sidt(&ss[sidt])
 	ss[sapcnt] = 0
+	// the top of bsp's interrupt stack is 0xa100001000. map an interrupt
+	// stack for each ap. leave 0xa100001000 as a guard page.
+	stackstart := 0xa100002000
 	ss[sstacks] = stackstart   // each ap grabs a unique stack
+	ss[sproceed] = 0
+
+	// make sure secret storage values are in memory/cache
+	dummy := int64(0)
+	atomic.CompareAndSwapInt64(&dummy, 0, 10)
 
 	initipi(true)
 	// not necessary since we assume lapic version >= 1.x (ie not 82489DX)
@@ -673,10 +684,18 @@ func cpus_start() {
 	cdelay(1)
 	startupipi()
 
-	// wait for APs to become ready
-	for ss[sapcnt] != apcnt {
-	}
+	// wait a while for hopefully all APs to join. it'd be better to use
+	// ACPI to determine the correct count of CPUs and then wait for them
+	// all to join.
+	cdelay(100)
+	apcnt = ss[sapcnt]
 	numcpus = apcnt + 1
+
+	// actually  map the stacks for the CPUs that joined
+	cpus_stack_init(apcnt, stackstart)
+
+	// tell the cpus to carry on
+	ss[sproceed] = apcnt
 
 	fmt.Printf("done! %v CPUs joined\n", ss[sapcnt])
 }
@@ -832,7 +851,7 @@ func main() {
 
 	//exec("bin/fault")
 	//exec("bin/hello")
-	//exec("bin/fork")
+	exec("bin/fork")
 	//exec("bin/getpid")
 	//exec("bin/fstest")
 	//exec("bin/fslink")
@@ -842,8 +861,8 @@ func main() {
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
 	//exec("bin/fsfree")
-	//exec("bin/ls")
-	exec("bin/bmwrite")
+	exec("bin/ls")
+	//exec("bin/bmwrite")
 
 	//ide_test()
 

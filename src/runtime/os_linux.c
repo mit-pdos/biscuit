@@ -973,7 +973,11 @@ fpuinit(void)
 
 	uint64 n = (uint64)fxinit;
 	assert((n & 0xf) == 0, "fxinit not aligned", n);
-	fxsave(fxinit);
+	static int32 once;
+	if (once == 0) {
+		once = 1;
+		fxsave(fxinit);
+	}
 }
 
 #define PGSIZE          (1ULL << 12)
