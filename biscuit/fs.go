@@ -646,6 +646,23 @@ func idaemonize(idm *idaemon_t) {
 }
 
 func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
+	zeroblock := func(blkno int) {
+		// zero block
+		zblk := bread(blkno)
+		for i := range zblk.buf.data {
+			zblk.buf.data[i] = 0
+		}
+		log_write(zblk)
+		brelse(zblk)
+	}
+	ensureb := func(blkno int) (int, bool) {
+		if !writing || blkno != 0 {
+			return blkno, false
+		}
+		nblkno := balloc()
+		zeroblock(nblkno)
+		return nblkno, true
+	}
 	whichblk := offset/512
 	var blkn int
 	if whichblk >= NIADDRS {
@@ -653,27 +670,28 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		slotpb := 63
 		nextindb := 63*8
 		indno := idm.icache.indir
-		if writing && indno == 0 {
-			indno = balloc()
+		// get first indirect block
+		indno, isnew := ensureb(indno)
+		if isnew {
 			idm.icache.indir = indno
-			// zero block
-			zblk := bread(indno)
-			for i := range zblk.buf.data {
-				zblk.buf.data[i] = 0
-			}
-			log_write(zblk)
-			brelse(zblk)
 		}
+		// follow indirect block chain
 		indblk := bread(indno)
 		for i := 0; i < indslot/slotpb; i++ {
 			indno = readn(indblk.buf.data[:], 8, nextindb)
+			indno, isnew = ensureb(indno)
+			if isnew {
+				writen(indblk.buf.data[:], 8, nextindb, indno)
+				log_write(indblk)
+			}
 			brelse(indblk)
-			bread(indno)
+			indblk = bread(indno)
 		}
+		// finally get data block from indirect block
 		noff := (indslot % slotpb)*8
 		blkn = readn(indblk.buf.data[:], 8, noff)
-		if writing && blkn == 0 {
-			blkn = balloc()
+		blkn, isnew = ensureb(blkn)
+		if isnew {
 			writen(indblk.buf.data[:], 8, noff, blkn)
 			log_write(indblk)
 		}
@@ -1703,6 +1721,9 @@ func bc_daemon(blc *bcdaemon_t) {
 
 func (blc *bcdaemon_t) chk_evict() {
 	nbcbufs := 512
+	// how many buffers to evict
+	// XXX LRU
+	evictn := 30
 	if len(blc.blocks) <= nbcbufs {
 		return
 	}
@@ -1710,7 +1731,8 @@ func (blc *bcdaemon_t) chk_evict() {
 	for i, bb := range blc.blocks {
 		if !bb.dirty && !blc.given[i] {
 			delete(blc.blocks, i)
-			if len(blc.blocks) <= nbcbufs {
+			evictn--
+			if evictn == 0 {
 				break
 			}
 		}
