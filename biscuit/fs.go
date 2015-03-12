@@ -1463,24 +1463,16 @@ const(
 
 	ide_cmd_read = 0x20
 	ide_cmd_write = 0x30
-
-	ide_rbase = 0x1f0
-	ide_rdata = ide_rbase + 0
-	ide_rerr = ide_rbase + 1
-	ide_rcount = ide_rbase + 2
-	ide_rsect = ide_rbase + 3
-	ide_rclow = ide_rbase + 4
-	ide_rchigh = ide_rbase + 5
-	ide_rdrive = ide_rbase + 6
-	ide_rcmd = ide_rbase + 7
-
-	ide_allstatus = 0x3f6
 )
+
+// 3400's PCI-native IDE command/control block
+var ide_rbase		int = 0xeca0
+var ide_allstatus	int = 0xec96
 
 func ide_wait(chk bool) bool {
 	var r int
 	for {
-		r = runtime.Inb(ide_rcmd)
+		r = runtime.Inb(ide_rbase + 7)
 		if r & (ide_bsy | ide_drdy) == ide_drdy {
 			break
 		}
@@ -1497,7 +1489,7 @@ func ide_init() bool {
 
 	found := false
 	for i := 0; i < 1000; i++ {
-		r := runtime.Inb(ide_rcmd)
+		r := runtime.Inb(ide_rbase + 7)
 		if r == 0xff {
 			fmt.Printf("floating bus!\n")
 			break
@@ -1535,16 +1527,19 @@ var ide_request		= make(chan *idereq_t)
 func ide_start(b *idebuf_t, write bool) {
 	ide_wait(false)
 	outb := runtime.Outb
+	ireg := func(n int) int {
+		return ide_rbase + n
+	}
 	outb(ide_allstatus, 0)
-	outb(ide_rcount, 1)
+	outb(ireg(2), 1)
 	bn := int(b.block)
 	bd := int(b.disk)
-	outb(ide_rsect, bn & 0xff)
-	outb(ide_rclow, (bn >> 8) & 0xff)
-	outb(ide_rchigh, (bn >> 16) & 0xff)
-	outb(ide_rdrive, 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
+	outb(ireg(3), bn & 0xff)
+	outb(ireg(4), (bn >> 8) & 0xff)
+	outb(ireg(5), (bn >> 16) & 0xff)
+	outb(ireg(6), 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
 	if write {
-		outb(ide_rcmd, ide_cmd_write)
+		outb(ireg(7), ide_cmd_write)
 		// delay before writing data; otherwise test hardware doesn't
 		// doesn't get all the data written and waits for more
 		// indefinitely.
@@ -1552,9 +1547,9 @@ func ide_start(b *idebuf_t, write bool) {
 		runtime.Inb(0x80)
 		runtime.Inb(0x80)
 		runtime.Inb(0x80)
-		runtime.Outsl(ide_rdata, unsafe.Pointer(&b.data[0]), 512/4)
+		runtime.Outsl(ireg(0), unsafe.Pointer(&b.data[0]), 512/4)
 	} else {
-		outb(ide_rcmd, ide_cmd_read)
+		outb(ireg(7), ide_cmd_read)
 	}
 }
 
@@ -1570,13 +1565,14 @@ func ide_daemon() {
 		if !writing {
 			// read sector
 			if ide_wait(true) {
-				runtime.Insl(ide_rdata,
+				runtime.Insl(ide_rbase + 0,
 				    unsafe.Pointer(&req.buf.data[0]), 512/4)
 			}
 		} else {
 			// cache flush
-			//runtime.Outb(ide_rcmd, 0xe7)
+			//runtime.Outb(ireg(7), 0xe7)
 		}
+		p8259_eoi()
 		req.ack <- true
 	}
 }

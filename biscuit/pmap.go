@@ -108,8 +108,6 @@ func kpmap() *[512]int {
 func dmap_init() {
 	// the default cpu qemu uses for x86_64 supports 1GB pages, but
 	// doesn't report it in cpuid 0x80000001... i wonder why.
-	//_, _, ecx, _  := runtime.Cpuid(0, 0)
-	//qemu := ecx == 0x444d4163
 	_, _, _, edx  := runtime.Cpuid(0x80000001, 0)
 	gbpages := edx & (1 << 26) != 0
 
@@ -141,6 +139,7 @@ func dmap_init() {
 	// the hardware may encounter.
 	//if gbpages || qemu {
 	if gbpages {
+		fmt.Printf("dmap via 1GB pages\n")
 		for i := range pdpt {
 			pdpt[i] = i*size | PTE_P | PTE_W | PTE_PS
 		}

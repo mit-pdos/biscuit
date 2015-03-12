@@ -65,10 +65,12 @@ const(
 
 	// low 3 bits must be zero
 	IRQ_BASE  = 32
-	IRQ_DISK  = 14
 	IRQ_LAST  = IRQ_BASE + 16
-	INT_DISK  = IRQ_BASE + IRQ_DISK
 )
+
+// i3400's PCI-native SATA IRQ, use legacy IRQ if we are running on Qemu
+var IRQ_DISK	int = 0xb
+var INT_DISK	int = IRQ_BASE + IRQ_DISK
 
 // trap cannot do anything that may have side-effects on the runtime (like
 // fmt.Print, or use panic!). the reason is that goroutines are scheduled
@@ -128,7 +130,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		// copyright date of 1985 or later will operate in the AEOI
 		// mode as a master or a slave." linux seems to observe that
 		// automatic eoi also doesn't work on the slave.
-		p8259_eoi()
+		//p8259_eoi()
 		runtime.Proccontinue()
 	default:
 		runtime.Pnum(trapno)
@@ -765,12 +767,33 @@ func irq_unmask(irq int) {
 	runtime.Outb(pic2d, dur >> 8)
 }
 
+var amqemu	bool = false
+
+// override hardcoded disk IDE IO ports/IRQ if we are running on Qemu
+func qemuconfig() {
+	// XXX will think AMD machines are qemu...
+	_, _, ecx, _  := runtime.Cpuid(0, 0)
+	amqemu = ecx == 0x444d4163
+	if !amqemu {
+		return
+	}
+
+	fmt.Printf("I am Qemu\n")
+	// use legacy ports/IRQ
+	ide_rbase = 0x1f0
+	ide_allstatus = 0x3f6
+	IRQ_DISK = 14
+	INT_DISK = IRQ_BASE + IRQ_DISK
+}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
 	//	for {
 	//	}
 	//}
+
+	qemuconfig()
 
 	runtime.Install_traphandler(trapstub)
 

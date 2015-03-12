@@ -117,6 +117,16 @@ protcseg:
   # Set up the stack pointer
   movl    $start, %esp
 
+  # XXX: Use legacy IDE command block if this is Qemu; use hardcoded IDE
+  # command block otherwise.
+  xorl	%eax, %eax
+  cpuid
+  // "Genu", Intel's string; Qemu uses an AMD string
+  cmpl	$0x756e6547, %ebx
+  je	1f
+  movw	$0x1f0, idereg
+1:
+
   movl	 $0x1753, 0xb8000
   # Read the remaining sectors of the boot loader; the first was loaded for us.
   movl  $BOOTBLOCKS-1, %ecx
@@ -141,18 +151,14 @@ spin:
 # void waitdisk(void)
 .globl waitdisk
 waitdisk:
-  movw  $0x1f7, %dx
+  movw	idereg, %dx
+  addw	$7, %dx
 1:
   inb   %dx, %al
   andb  $0xc0, %al
   cmpb  $0x40, %al
   jne   1b
   ret
-
-#define OUTB(p, v)  \
-  movw  $p, %dx;     \
-  movb  $v, %al;     \
-  outb  %al, %dx;
 
 # void readsect(void *dst, uint32_t offset)
 .globl readsect
@@ -164,38 +170,46 @@ readsect:
   pushl %eax
   pushl %edx
   pushl %ecx
+  pushl %ebx
 
   call waitdisk
 
-  OUTB(0x1F2, 1)
+  movw	idereg, %bx
 
-  movw  $0x1F3, %dx
+  leaw	2(%bx), %dx
+  movb	$1, %al
+  outb	%al, %dx
+
+  leaw	3(%bx), %dx
   movl  12(%ebp), %eax   // offset
   outb  %al, %dx
 
-  movw  $0x1F4, %dx
+  leaw	4(%bx), %dx
   shr  $8, %eax
   outb  %al, %dx
 
-  movw  $0x1F5, %dx
+  leaw	5(%bx), %dx
   shr  $8, %eax
   outb  %al, %dx
 
-  movw  $0x1F6, %dx
+  leaw	6(%bx), %dx
   shr  $8, %eax
   orb   $0xe0, %al
   outb  %al, %dx
 
-  OUTB(0x1F7, 0x20)
+  leaw	7(%bx), %dx
+  movb	$0x20, %al
+  outb	%al, %dx
 
   call waitdisk
 
   movl  $(SECTSIZE/4), %ecx  // divide by 4 because we move one long at a time
   movl  8(%ebp), %edi
-  movw  $0x1f0, %dx
+  leaw	0(%bx), %dx
   cld
   repnz insl
 
+  popl  %ebx
   popl  %ecx
   popl  %edx
   popl  %eax
@@ -257,6 +271,10 @@ gdtdesc:
 .globl e820entries
 e820entries:
 	.long 0
+idereg:
+	// hard coded PCI-native IDE command block for my test hardware's i3400
+	// southbridge
+	.word 0xeca0
 
 .org 506
   // this location is special: mkbdisk.py puts the number of the first fs block

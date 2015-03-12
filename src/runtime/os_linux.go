@@ -25,10 +25,10 @@ func Kpmap() *[512]int
 func Kpmap_p() int
 func Lcr3(int)
 func Memmove(unsafe.Pointer, unsafe.Pointer, int)
-func Inb(int32) int
-func Insl(int32, unsafe.Pointer, int)
+func Inb(int) int
+func Insl(int, unsafe.Pointer, int)
 func Outb(int, int)
-func Outsl(int32, unsafe.Pointer, int)
+func Outsl(int, unsafe.Pointer, int)
 func Pnum(int)
 func Procadd(tf *[23]int, uc int, p_pmap int)
 func Proccontinue()
