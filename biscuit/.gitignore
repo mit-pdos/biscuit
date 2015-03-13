@@ -30,6 +30,7 @@
 /user/fsfree
 /user/ls
 /user/bmwrite
+/user/bmread
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -44,3 +45,4 @@
 /fsdir/bin/fsfree
 /fsdir/bin/ls
 /fsdir/bin/bmwrite
+/fsdir/bin/bmread
