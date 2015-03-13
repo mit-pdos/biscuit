@@ -196,6 +196,17 @@ func pci_read(bus, dev, f, reg, width int) int {
 }
 
 func trap_disk(ts *trapstore_t) {
+	// is this a disk int?
+	if !amqemu {
+		bmoff := 0xecc0
+		streg := bmoff + 0x02
+		bmintr := 1 << 2
+		st := runtime.Inb(streg)
+		if st & bmintr == 0 {
+			fmt.Printf("spurious disk int\n")
+			return
+		}
+	}
 	ide_int_done <- true
 }
 

@@ -1543,14 +1543,25 @@ func ide_start(b *idebuf_t, write bool) {
 		// delay before writing data; otherwise test hardware doesn't
 		// doesn't get all the data written and waits for more
 		// indefinitely.
-		runtime.Inb(0x80)
-		runtime.Inb(0x80)
-		runtime.Inb(0x80)
-		runtime.Inb(0x80)
+		for i := 0; i < 15; i++ {
+			runtime.Inb(0x80)
+		}
 		runtime.Outsl(ireg(0), unsafe.Pointer(&b.data[0]), 512/4)
 	} else {
 		outb(ireg(7), ide_cmd_read)
 	}
+}
+
+func pcidisk_eoi() {
+	if amqemu {
+		return
+	}
+	// in PCI-native mode, clear the interrupt via the legacy bus master
+	// base, bar 4.
+	bmoff := 0xecc0
+	streg := bmoff + 0x02
+	intr := 1 << 2
+	runtime.Outb(streg, intr)
 }
 
 func ide_daemon() {
@@ -1569,9 +1580,14 @@ func ide_daemon() {
 				    unsafe.Pointer(&req.buf.data[0]), 512/4)
 			}
 		} else {
+			// read status so disk clears int
+			runtime.Inb(ide_rbase + 7)
+			runtime.Inb(ide_rbase + 7)
+
 			// cache flush
-			//runtime.Outb(ireg(7), 0xe7)
+			//runtime.Outb(ide_rbase + 7, 0xe7)
 		}
+		pcidisk_eoi()
 		p8259_eoi()
 		req.ack <- true
 	}
