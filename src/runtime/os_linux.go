@@ -26,8 +26,10 @@ func Kpmap_p() int
 func Lcr3(int)
 func Memmove(unsafe.Pointer, unsafe.Pointer, int)
 func Inb(int) int
+func Inl(int) int
 func Insl(int, unsafe.Pointer, int)
 func Outb(int, int)
+func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
 func Pnum(int)
 func Procadd(tf *[23]int, uc int, p_pmap int)
@@ -44,7 +46,6 @@ func Sti()
 func Vtop(*[512]int) int
 
 func Crash()
-func Newlines(int64)
 func Fnaddr(func()) int
 func Fnaddri(func(int)) int
 func Tfdump(*[23]int)
@@ -52,6 +53,8 @@ func Stackdump(int)
 func Usleep(int)
 
 func inb(int) int
+// os_linux.c
+var newlines int32
 
 //go:nosplit
 func sc_setup() {
@@ -95,7 +98,7 @@ func vga_put(c int8, attr int8) {
 		v := a | int16(c)
 		p[put.vy * 80 + put.vx] = v
 		put.vx++
-	} else {
+	} else if newlines != 0 {
 		put.vx = 0
 		put.vy++
 	}

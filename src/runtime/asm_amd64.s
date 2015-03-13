@@ -442,7 +442,14 @@ TEXT runtime·Outb(SB), NOSPLIT, $0-16
 	// outb	%al, (%dx)
 	BYTE	$0xee
 	RET
-	
+
+TEXT runtime·Outl(SB), NOSPLIT, $0-16
+	MOVQ	reg+0(FP), DX
+	MOVQ	val+8(FP), AX
+	// outl	%eax, (%dx)
+	BYTE	$0xef
+	RET
+
 //void outb(int64 port, int64 val)
 TEXT outb(SB), NOSPLIT, $0-16
 	MOVL	reg+0(FP), DX
@@ -458,6 +465,13 @@ TEXT runtime·Outsl(SB), NOSPLIT, $0-24
 	// repnz outsl (%rsi), (%dx)
 	BYTE	$0xf2
 	BYTE	$0x6f
+	RET
+
+TEXT runtime·Inl(SB), NOSPLIT, $0-16
+	MOVQ	reg+0(FP), DX
+	// inl	(%dx), %eax
+	BYTE	$0xed
+	MOVQ	AX, ret+8(FP)
 	RET
 
 TEXT runtime·Insl(SB), NOSPLIT, $0-24

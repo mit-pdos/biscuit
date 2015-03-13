@@ -10,7 +10,7 @@ var indexError = error(errorString("index out of range"))
 
 func panicindex() {
 	// XXX
-	Newlines(0)
+	newlines = 0
 	panic(indexError)
 }
 

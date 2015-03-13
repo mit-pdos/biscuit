@@ -387,14 +387,7 @@ void invlpg(void *);
 // XXX have this hack because panic prints many lines which makes the output
 // wrap around and overwrite the first lines of the panic (the most important
 // part). this will go away when i add serial console support.
-int32 newlines = 1;
-
-#pragma textflag NOSPLIT
-void
-runtime·Newlines(int64 set)
-{
-	newlines = set;
-}
+int32 runtime·newlines = 1;
 
 struct spinlock_t {
 	uint64 lock;

@@ -81,8 +81,8 @@ void
 runtime·startpanic_m(void)
 {
 	// XXX
-	void runtime·Newlines(int64);
-	runtime·Newlines(0);
+	extern int32 runtime·newlines;
+	runtime·newlines = 0;
 	if(runtime·mheap.cachealloc.size == 0) { // very early
 		runtime·printf("runtime: panic before malloc heap initialized\n");
 		g->m->mallocing = 1; // tell rest of panic not to try to malloc

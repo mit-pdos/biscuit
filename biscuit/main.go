@@ -173,6 +173,28 @@ func trap(handlers map[int]func(*trapstore_t)) {
 	}
 }
 
+// width is width of the register in bytes
+func pci_read(bus, dev, f, reg, width int) int {
+	sw := func(v, sh int) int {
+		return v << uint(sh)
+	}
+	enable := 1 << 31
+	rsh := reg % 4
+	r := reg - rsh
+	tag := enable
+	tag |= sw(bus, 16) | sw(dev, 11) | sw(f, 8) | r
+
+	pci_addr := 0xcf8
+	pci_data := 0xcfc
+	runtime.Outl(pci_addr, tag)
+	d := runtime.Inl(pci_data)
+	runtime.Outl(pci_addr, 0)
+
+	ret := int(uint(d) >> uint(rsh*8))
+	m := ((1 << (8*uint(width))) - 1)
+	return ret & m
+}
+
 func trap_disk(ts *trapstore_t) {
 	ide_int_done <- true
 }
@@ -719,13 +741,18 @@ func ap_entry(myid int) {
 	runtime.Procyield()
 }
 
+// since this function is used when interrupts are cleared, it must be marked
+// nosplit. otherwise we may GC and then resume in some other goroutine with
+// interrupts cleared, thus interrupts would never be cleared.
+//go:nosplit
+func poutb(reg int, val int) {
+	runtime.Outb(reg, val)
+	cdelay(1)
+}
+
 func p8259_init() {
 	// the piix3 provides two 8259 compatible pics. the runtime masks all
 	// irqs for us.
-	outb := func(reg int, val int) {
-		runtime.Outb(reg, val)
-		cdelay(1)
-	}
 	pic1 := 0x20
 	pic1d := pic1 + 1
 	pic2 := 0xa0
@@ -735,33 +762,33 @@ func p8259_init() {
 
 	// master pic
 	// start icw1: icw4 required
-	outb(pic1, 0x11)
+	poutb(pic1, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	outb(pic1d, IRQ_BASE)
+	poutb(pic1d, IRQ_BASE)
 	// icw3, cascaded mode
-	outb(pic1d, 4)
+	poutb(pic1d, 4)
 	// icw4, auto eoi, intel arch mode.
-	outb(pic1d, 3)
+	poutb(pic1d, 3)
 
 	// slave pic
 	// start icw1: icw4 required
-	outb(pic2, 0x11)
+	poutb(pic2, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	outb(pic2d, IRQ_BASE + 8)
+	poutb(pic2d, IRQ_BASE + 8)
 	// icw3, slave identification code
-	outb(pic2d, 2)
+	poutb(pic2d, 2)
 	// icw4, auto eoi, intel arch mode.
-	outb(pic2d, 3)
+	poutb(pic2d, 3)
 
 	// ocw3, enable "special mask mode" (??)
-	outb(pic1, 0x68)
+	poutb(pic1, 0x68)
 	// ocw3, read irq register
-	outb(pic1, 0x0a)
+	poutb(pic1, 0x0a)
 
 	// ocw3, enable "special mask mode" (??)
-	outb(pic2, 0x68)
+	poutb(pic2, 0x68)
 	// ocw3, read irq register
-	outb(pic2, 0x0a)
+	poutb(pic2, 0x0a)
 
 	// enable slave 8259
 	irq_unmask(2)
@@ -805,6 +832,36 @@ func qemuconfig() {
 	INT_DISK = IRQ_BASE + IRQ_DISK
 }
 
+func pci_dump() {
+	pcipr := func(b, dev, f int) (int, bool) {
+		v  := pci_read(b, dev, 0, 0, 2)
+		if v == 0xffff {
+			return 0, false
+		}
+		d  := pci_read(b, dev, 0, 2, 2)
+		mf := pci_read(b, dev, 0, 0xe, 1)
+		fmt.Printf("%d: %d: %d: %#x %#x\n", b, dev, f, v, d)
+		return mf, true
+	}
+	fmt.Printf("PCI dump:\n")
+	for b := 0; b < 3; b++ {
+		for dev := 0; dev < 32; dev++ {
+			mf, ok := pcipr(b, dev, 0)
+			if !ok {
+				continue
+			}
+			if mf & 0x80 != 0 {
+				fmt.Printf("multifunction\n")
+				for f := 1; f < 8; f++ {
+					fmt.Printf("\t")
+					pcipr(b, dev, f)
+				}
+			}
+		}
+	}
+	cdelay(5000)
+}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
@@ -813,6 +870,7 @@ func main() {
 	//}
 
 	qemuconfig()
+	//pci_dump()
 
 	runtime.Install_traphandler(trapstub)
 
