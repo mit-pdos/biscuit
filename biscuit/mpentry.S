@@ -118,13 +118,10 @@ protocseg64:
 	// wait for BSP to map our stack. APs that joined too late (hopefuly
 	// that doesn't happen) loop here.
 1:
+	pause
 	movq	80(%rdx), %rax
-	cmpq	$0, %rax
-	je	1b
-	movq	%rax, %rbx
-	decq	%rbx
-	lock cmpxchgq	%rbx, 80(%rdx)
-	jnz	1b
+	cmpq	%rbp, %rax
+	jb	1b
 
 	// stack is now valid, update CS
 	pushq	$REAL_CSEG64
