@@ -68,9 +68,9 @@ const(
 	IRQ_LAST  = IRQ_BASE + 16
 )
 
-// i3400's PCI-native SATA IRQ, use legacy IRQ if we are running on Qemu
-var IRQ_DISK	int = 0xb
-var INT_DISK	int = IRQ_BASE + IRQ_DISK
+// initialized by disk attach functions
+var IRQ_DISK	int = -1
+var INT_DISK	int = -1
 
 // trap cannot do anything that may have side-effects on the runtime (like
 // fmt.Print, or use panic!). the reason is that goroutines are scheduled
@@ -173,39 +173,11 @@ func trap(handlers map[int]func(*trapstore_t)) {
 	}
 }
 
-// width is width of the register in bytes
-func pci_read(bus, dev, f, reg, width int) int {
-	sw := func(v, sh int) int {
-		return v << uint(sh)
-	}
-	enable := 1 << 31
-	rsh := reg % 4
-	r := reg - rsh
-	tag := enable
-	tag |= sw(bus, 16) | sw(dev, 11) | sw(f, 8) | r
-
-	pci_addr := 0xcf8
-	pci_data := 0xcfc
-	runtime.Outl(pci_addr, tag)
-	d := runtime.Inl(pci_data)
-	runtime.Outl(pci_addr, 0)
-
-	ret := int(uint(d) >> uint(rsh*8))
-	m := ((1 << (8*uint(width))) - 1)
-	return ret & m
-}
-
 func trap_disk(ts *trapstore_t) {
 	// is this a disk int?
-	if !amqemu {
-		bmoff := 0xecc0
-		streg := bmoff + 0x02
-		bmintr := 1 << 2
-		st := runtime.Inb(streg)
-		if st & bmintr == 0 {
-			fmt.Printf("spurious disk int\n")
-			return
-		}
+	if !disk.intr() {
+		fmt.Printf("spurious disk int\n")
+		return
 	}
 	ide_int_done <- true
 }
@@ -826,7 +798,6 @@ func irq_unmask(irq int) {
 
 var amqemu	bool = false
 
-// override hardcoded disk IDE IO ports/IRQ if we are running on Qemu
 func qemuconfig() {
 	// XXX will think AMD machines are qemu...
 	_, _, ecx, _  := runtime.Cpuid(0, 0)
@@ -834,43 +805,11 @@ func qemuconfig() {
 	if !amqemu {
 		return
 	}
-
 	fmt.Printf("I am Qemu\n")
-	// use legacy ports/IRQ
-	ide_rbase = 0x1f0
-	ide_allstatus = 0x3f6
-	IRQ_DISK = 14
-	INT_DISK = IRQ_BASE + IRQ_DISK
 }
 
-func pci_dump() {
-	pcipr := func(b, dev, f int) (int, bool) {
-		v  := pci_read(b, dev, 0, 0, 2)
-		if v == 0xffff {
-			return 0, false
-		}
-		d  := pci_read(b, dev, 0, 2, 2)
-		mf := pci_read(b, dev, 0, 0xe, 1)
-		fmt.Printf("%d: %d: %d: %#x %#x\n", b, dev, f, v, d)
-		return mf, true
-	}
-	fmt.Printf("PCI dump:\n")
-	for b := 0; b < 3; b++ {
-		for dev := 0; dev < 32; dev++ {
-			mf, ok := pcipr(b, dev, 0)
-			if !ok {
-				continue
-			}
-			if mf & 0x80 != 0 {
-				fmt.Printf("multifunction\n")
-				for f := 1; f < 8; f++ {
-					fmt.Printf("\t")
-					pcipr(b, dev, f)
-				}
-			}
-		}
-	}
-	cdelay(5000)
+func attach_devs() {
+	pcibus_attach()
 }
 
 func main() {
@@ -881,7 +820,16 @@ func main() {
 	//}
 
 	qemuconfig()
+
+	dmap_init()
+	p8259_init()
+
 	//pci_dump()
+	attach_devs()
+
+	if disk == nil || INT_DISK < 0 {
+		panic("no disk")
+	}
 
 	runtime.Install_traphandler(trapstub)
 
@@ -900,13 +848,8 @@ func main() {
 	     }
 	go trap(handlers)
 
-	dmap_init()
-	p8259_init()
 	cpus_start()
 
-	if !ide_init() {
-		panic("no IDE disk")
-	}
 	fs_init()
 
 	exec := func(cmd string) {

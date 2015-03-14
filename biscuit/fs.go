@@ -1,10 +1,8 @@
 package main
 
 import "fmt"
-import "runtime"
 import "strings"
 import "sync"
-import "unsafe"
 
 const NAME_MAX    int = 512
 
@@ -40,6 +38,8 @@ func path_sanitize(cwd, path string) ([]string, int) {
 }
 
 func fs_init() {
+	// we are now prepared to take disk interrupts
+	irq_unmask(IRQ_DISK)
 	go ide_daemon()
 
 	bcdaemon.init()
@@ -1452,60 +1452,8 @@ func ialloc() (int, int) {
 	return ifreeblk, reti
 }
 
-// use ata pio for fair comparisons against xv6, but i want to use ahci (or
-// something) eventually. unlike xv6, we always use disk 0
-
-const(
-	ide_bsy = 0x80
-	ide_drdy = 0x40
-	ide_df = 0x20
-	ide_err = 0x01
-
-	ide_cmd_read = 0x20
-	ide_cmd_write = 0x30
-)
-
-// 3400's PCI-native IDE command/control block
-var ide_rbase		int = 0xeca0
-var ide_allstatus	int = 0xec96
-
-func ide_wait(chk bool) bool {
-	var r int
-	for {
-		r = runtime.Inb(ide_rbase + 7)
-		if r & (ide_bsy | ide_drdy) == ide_drdy {
-			break
-		}
-	}
-	if chk && r & (ide_df | ide_err) != 0 {
-		return false
-	}
-	return true
-}
-
-func ide_init() bool {
-	irq_unmask(IRQ_DISK)
-	ide_wait(false)
-
-	found := false
-	for i := 0; i < 1000; i++ {
-		r := runtime.Inb(ide_rbase + 7)
-		if r == 0xff {
-			fmt.Printf("floating bus!\n")
-			break
-		} else if r != 0 {
-			found = true
-			break
-		}
-	}
-	if found {
-		fmt.Printf("IDE disk detected\n");
-		return true
-	}
-
-	fmt.Printf("no IDE disk\n");
-	return false
-}
+// our actual disk
+var disk	disk_t
 
 type idebuf_t struct {
 	disk	int32
@@ -1522,48 +1470,6 @@ type idereq_t struct {
 var ide_int_done	= make(chan bool)
 var ide_request		= make(chan *idereq_t)
 
-// it is possible that a goroutine is context switched to a new CPU while doing
-// this port io; does this matter? doesn't seem to for qemu...
-func ide_start(b *idebuf_t, write bool) {
-	ide_wait(false)
-	outb := runtime.Outb
-	ireg := func(n int) int {
-		return ide_rbase + n
-	}
-	outb(ide_allstatus, 0)
-	outb(ireg(2), 1)
-	bn := int(b.block)
-	bd := int(b.disk)
-	outb(ireg(3), bn & 0xff)
-	outb(ireg(4), (bn >> 8) & 0xff)
-	outb(ireg(5), (bn >> 16) & 0xff)
-	outb(ireg(6), 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
-	if write {
-		outb(ireg(7), ide_cmd_write)
-		// delay before writing data; otherwise test hardware doesn't
-		// doesn't get all the data written and waits for more
-		// indefinitely.
-		for i := 0; i < 15; i++ {
-			runtime.Inb(0x80)
-		}
-		runtime.Outsl(ireg(0), unsafe.Pointer(&b.data[0]), 512/4)
-	} else {
-		outb(ireg(7), ide_cmd_read)
-	}
-}
-
-func pcidisk_eoi() {
-	if amqemu {
-		return
-	}
-	// in PCI-native mode, clear the interrupt via the legacy bus master
-	// base, bar 4.
-	bmoff := 0xecc0
-	streg := bmoff + 0x02
-	intr := 1 << 2
-	runtime.Outb(streg, intr)
-}
-
 func ide_daemon() {
 	for {
 		req := <- ide_request
@@ -1571,24 +1477,10 @@ func ide_daemon() {
 			panic("nil idebuf")
 		}
 		writing := req.write
-		ide_start(req.buf, writing)
+		disk.start(req.buf, writing)
 		<- ide_int_done
-		if !writing {
-			// read sector
-			if ide_wait(true) {
-				runtime.Insl(ide_rbase + 0,
-				    unsafe.Pointer(&req.buf.data[0]), 512/4)
-			}
-		} else {
-			// read status so disk clears int
-			runtime.Inb(ide_rbase + 7)
-			runtime.Inb(ide_rbase + 7)
-
-			// cache flush
-			//runtime.Outb(ide_rbase + 7, 0xe7)
-		}
-		pcidisk_eoi()
-		p8259_eoi()
+		disk.complete(req.buf.data[:], writing)
+		disk.int_clear()
 		req.ack <- true
 	}
 }
