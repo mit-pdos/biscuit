@@ -1598,6 +1598,7 @@ sched_halt(void)
 	//}
 
 	//pmsg("hlt");
+	wlap(0x380/4, TIMER_QUANTUM/10);
 	cpu_halt(curcpu.rsp);
 }
 
@@ -1658,6 +1659,7 @@ yieldy(void)
 	tnext->status = ST_RUNNING;
 	spunlock(&threadlock);
 
+	wlap(0x380/4, TIMER_QUANTUM);
 	sched_run(tnext);
 }
 
