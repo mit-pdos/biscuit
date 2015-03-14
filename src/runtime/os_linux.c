@@ -379,6 +379,7 @@ void wlap(uint32, uint32);
 // src/runtime/os_linux.go
 void runtime·cls(void);
 void runtime·putch(int8);
+extern void runtime·putcha(int8, int8);
 
 // this file
 void lap_eoi(void);
@@ -401,10 +402,11 @@ void
 splock(struct spinlock_t *sl) {
 	int32 runtime·xchg(void *, uint32);
 	void htpause(void);
+	volatile uint64 *p = (uint64 *)&sl->lock;
 	while (1) {
 		if (runtime·xchg(&sl->lock, 1) == 0)
 			break;
-		while (sl->lock)
+		while (*p)
 			htpause();
 	}
 }
@@ -415,6 +417,12 @@ spunlock(struct spinlock_t *sl) {
 	sl->lock = 0;
 }
 
+// interrupts must be cleared before attempting to take this lock. the reason
+// is that access to VGA buffer/serial console must be exclusive, yet i want to
+// be able to print from an interrupt handler. thus any code that takes this
+// lock cannot be interruptible (suppose such code is interruptible, it takes
+// the pmsglock and is then interrupted. the interrupt handler then panicks and
+// tries to print and deadlocks).
 struct spinlock_t pmsglock;
 
 #pragma textflag NOSPLIT
@@ -2518,10 +2526,26 @@ runtime·Crash(void)
 	*wtf = 1;
 	while (1);
 }
+
 #pragma textflag NOSPLIT
 void
 runtime·Usleep(uint64 delay)
 {
 	runtime·stackcheck();
 	hack_usleep(delay);
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Pmsga(uint8 *msg, int64 len, int8 a)
+{
+	runtime·stackcheck();
+
+	int64 fl = pushcli();
+	splock(&pmsglock);
+	while (len--) {
+		runtime·putcha(*msg++, a);
+	}
+	spunlock(&pmsglock);
+	popcli(fl);
 }

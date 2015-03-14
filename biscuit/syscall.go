@@ -128,7 +128,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	// we cannot load the user page map and the buffer to read into may not
 	// be contiguous in physical memory. thus we must piece together the
 	// buffer.
-	dsts := make([][]uint8, 1)
+	dsts := make([][]uint8, 0)
 	for c < sz {
 		dst := proc.dmapuser(bufp + c)
 		left := sz - c
@@ -167,21 +167,27 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.ftype == CDEV {
 		wrappy = func(srcs [][]uint8, priv inum, off int,
 		    ap bool) (int, int) {
+			// merge into one buffer to avoid taking the console
+			// lock many times.
 			utext := int8(0x17)
-			c := 0
+			big := make([]uint8, 0)
 			for _, s := range srcs {
-				for _, c := range s {
-					runtime.Putcha(int8(c), utext)
-				}
-				c += len(s)
+				big = append(big, s...)
 			}
-			return c, 0
+			runtime.Pmsga(&big[0], len(big), utext)
+			return len(big), 0
+			//c := 0
+			//for _, s := range srcs {
+			//	runtime.Pmsga(&s[0], len(s), utext)
+			//	c += len(s)
+			//}
+			//return c, 0
 		}
 	}
 
 	apnd := fd.perms & O_APPEND != 0
 	c := 0
-	srcs := make([][]uint8, 1)
+	srcs := make([][]uint8, 0)
 	for c < sz {
 		src := proc.dmapuser(bufp + c)
 		left := sz - c

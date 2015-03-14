@@ -31,6 +31,7 @@ func Insl(int, unsafe.Pointer, int)
 func Outb(int, int)
 func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
+func Pmsga(*uint8, int, int8)
 func Pnum(int)
 func Procadd(tf *[23]int, uc int, p_pmap int)
 func Proccontinue()
@@ -118,7 +119,8 @@ func putch(c int8) {
 	sc_put(c)
 }
 
-func Putcha(c int8, a int8) {
+//go:nosplit
+func putcha(c int8, a int8) {
 	vga_put(c, a)
 	sc_put(c)
 }
