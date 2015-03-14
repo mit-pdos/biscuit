@@ -920,7 +920,7 @@ func main() {
 
 	//exec("bin/fault")
 	//exec("bin/hello")
-	exec("bin/fork")
+	//exec("bin/fork")
 	//exec("bin/getpid")
 	//exec("bin/fstest")
 	//exec("bin/fslink")
@@ -930,8 +930,9 @@ func main() {
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
 	//exec("bin/fsfree")
-	exec("bin/ls")
-	//exec("bin/bmwrite")
+	//exec("bin/ls")
+	exec("bin/bmwrite")
+	//exec("bin/bmread")
 
 	//ide_test()
 

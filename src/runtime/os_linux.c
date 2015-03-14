@@ -2002,6 +2002,10 @@ timer_setup(void)
 #define DIVONE      0xb
 #define ICREG       (0x380/4)
 
+#define LVSPUR     (0xf0/4)
+	// enable lapic, set spurious int vector
+	wlap(LVSPUR, 1 << 8 | TRAP_SPUR);
+
 	// timer: periodic, int 32
 	wlap(LVTIMER, 1 << 17 | TRAP_TIMER);
 	// divide by
@@ -2035,7 +2039,6 @@ timer_setup(void)
 	if (reg >> 12 != 0xfee00)
 		runtime·pancake("weird base addr?", reg >> 12);
 
-#define LVSPUR     (0xf0/4)
 	uint32 lreg = rlap(LVSPUR);
 	if (lreg & (1 << 12))
 		pmsg("EOI broadcast surpression\n");
@@ -2043,9 +2046,6 @@ timer_setup(void)
 		pmsg("focus processor checking\n");
 	if (!(lreg & (1 << 8)))
 		pmsg("apic disabled\n");
-
-	// enable lapic, set spurious int vector
-	wlap(LVSPUR, 1 << 8 | TRAP_SPUR);
 }
 
 #pragma textflag NOSPLIT
