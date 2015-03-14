@@ -363,6 +363,8 @@ void lcr4(uint64);
 void lidt(struct pdesc_t *);
 void ltr(uint64);
 void outb(int64, int64);
+int64 pushcli(void);
+void popcli(int64);
 uint64 rcr0(void);
 uint64 rcr2(void);
 uint64 rcr3(void);
@@ -380,6 +382,7 @@ void runtime·putch(int8);
 
 // this file
 void lap_eoi(void);
+void runtime·deray(uint64);
 
 void runtime·stackcheck(void);
 void invlpg(void *);
@@ -416,10 +419,8 @@ struct spinlock_t pmsglock;
 
 #pragma textflag NOSPLIT
 void
-pnum(uint64 n)
+_pnum(uint64 n)
 {
-	splock(&pmsglock);
-
 	uint64 nn = (uint64)n;
 	int64 i;
 
@@ -432,7 +433,17 @@ pnum(uint64 n)
 		else
 			runtime·putch('A' + cn - 10);
 	}
+}
+
+#pragma textflag NOSPLIT
+void
+pnum(uint64 n)
+{
+	int64 fl = pushcli();
+	splock(&pmsglock);
+	_pnum(n);
 	spunlock(&pmsglock);
+	popcli(fl);
 }
 
 #pragma textflag NOSPLIT
@@ -446,42 +457,38 @@ runtime·pnum(uint64 n)
 
 #pragma textflag NOSPLIT
 void
-pmsg(int8 *msg)
+_pmsg(int8 *msg)
 {
-	splock(&pmsglock);
 	runtime·putch(' ');
 	if (msg)
 		while (*msg)
 			runtime·putch(*msg++);
+}
+
+#pragma textflag NOSPLIT
+void
+pmsg(int8 *msg)
+{
+	int64 fl = pushcli();
+	splock(&pmsglock);
+	_pmsg(msg);
 	spunlock(&pmsglock);
+	popcli(fl);
 }
 
-#pragma textflag NOSPLIT
-void
-runtime·nmsg(int8 *msg)
-{
-	if (!runtime·hackmode)
-		return;
-
-	pmsg(msg);
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·nmsg2(int8 *msg)
-{
-	runtime·nmsg(msg);
-}
-
-int32 halt;
+static int32 halt;
 
 #pragma textflag NOSPLIT
 void
 runtime·pancake(void *msg, int64 addr)
 {
+	{
+	uint16 *p = (uint16 *)0xb8002;
+	*p = 0x1400 | 'F';
+	}
 	cli();
-	pmsg(msg);
 
+	pmsg(msg);
 	pnum(addr);
 	pmsg(" PANCAKE");
 	volatile int32 *wtf = &halt;
@@ -490,7 +497,11 @@ runtime·pancake(void *msg, int64 addr)
 	//stack_dump(rrsp());
 	//pmsg("TWO");
 	//stack_dump(g->m->curg->sched.sp);
-	while (1);
+	//while (1);
+	while (1) {
+		uint16 *p = (uint16 *)0xb8002;
+		*p = 0x1400 | 'F';
+	}
 }
 
 #define assert(x, y, z)        do { if (!(x)) runtime·pancake(y, z); } while (0)
@@ -685,15 +696,6 @@ segsetup(void *tls0)
 	pdsetup(&pd, (uint64)segs, sizeof(segs) - 1);
 
 	return (uint64)&pd;
-}
-
-extern void runtime·deray(uint64);
-#pragma textflag NOSPLIT
-void
-marksleep(int8 *msg)
-{
-	pmsg(msg);
-	runtime·deray(5000000);
 }
 
 struct idte_t {
@@ -1407,12 +1409,14 @@ hack_write(int64 fd, const void *buf, uint32 c)
 	if (fd != 1 && fd != 2)
 		runtime·pancake("weird fd", (uint64)fd);
 
+	int64 fl = pushcli();
 	splock(&pmsglock);
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
 	while(c--)
 		runtime·putch(*p++);
 	spunlock(&pmsglock);
+	popcli(fl);
 
 	return ret;
 }
@@ -2081,13 +2085,15 @@ void
 {
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(lap_id() <= MAXCPUS, "lapic id large", myid);
-	//pmsg("LAP ID [");
-	//pnum(lap_id());
-	//pmsg("]\n");
 	timer_setup();
 	tss_setup(myid);
 	fpuinit();
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
+
+	int64 test = pushcli();
+	assert((test & TF_FL_IF) == 0, "wtf!", test);
+	popcli(test);
+	assert((rflags() & TF_FL_IF) == 0, "wtf!", test);
 
 	curcpu.num = myid;
 	setcurthread(0);

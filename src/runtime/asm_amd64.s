@@ -500,10 +500,9 @@ TEXT inb(SB), NOSPLIT, $0-16
 	RET
 
 TEXT rflags(SB), NOSPLIT, $0-8
-	// pushf
-	BYTE	$0x9c
+	PUSHFQ
 	POPQ	AX
-	MOVQ	AX, ret+8(FP)
+	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT rrsp(SB), NOSPLIT, $0-8
@@ -517,6 +516,19 @@ TEXT cli(SB), NOSPLIT, $0-0
 
 TEXT sti(SB), NOSPLIT, $0-0
 	STI
+	RET
+
+TEXT pushcli(SB), NOSPLIT, $0-8
+	PUSHFQ
+	POPQ	AX
+	MOVQ	AX, ret+0(FP)
+	CLI
+	RET
+
+TEXT popcli(SB), NOSPLIT, $0-8
+	MOVQ	fl+0(FP), AX
+	PUSHQ	AX
+	POPFQ
 	RET
 
 TEXT ·Sgdt(SB), NOSPLIT, $0-8
