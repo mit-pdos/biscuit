@@ -443,6 +443,14 @@ TEXT runtime·Outb(SB), NOSPLIT, $0-16
 	BYTE	$0xee
 	RET
 
+TEXT runtime·Outw(SB), NOSPLIT, $0-16
+	MOVQ	reg+0(FP), DX
+	MOVQ	val+8(FP), AX
+	// outw	%ax, (%dx)
+	BYTE	$0x66
+	BYTE	$0xef
+	RET
+
 TEXT runtime·Outl(SB), NOSPLIT, $0-16
 	MOVQ	reg+0(FP), DX
 	MOVQ	val+8(FP), AX

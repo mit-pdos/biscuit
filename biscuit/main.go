@@ -45,7 +45,6 @@ func lap_id() int {
 	return int(lapaddr[0x20/4] >> 24)
 }
 
-//go:nosplit
 func p8259_eoi() {
 	pic1 := 0x20
 	pic2 := 0xa0

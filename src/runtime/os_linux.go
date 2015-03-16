@@ -29,6 +29,7 @@ func Inb(int) int
 func Inl(int) int
 func Insl(int, unsafe.Pointer, int)
 func Outb(int, int)
+func Outw(int, int)
 func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
 func Pmsga(*uint8, int, int8)
@@ -52,6 +53,7 @@ func Fnaddri(func(int)) int
 func Tfdump(*[23]int)
 func Stackdump(int)
 func Usleep(int)
+func Rflags() int
 
 func inb(int) int
 // os_linux.c

@@ -2548,4 +2548,12 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 	}
 	spunlock(&pmsglock);
 	popcli(fl);
+	assert((rflags() & TF_FL_IF) != 0, "wtf", 0);
+}
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Rflags(void)
+{
+	return rflags();
 }
