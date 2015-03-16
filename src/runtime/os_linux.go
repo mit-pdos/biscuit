@@ -70,7 +70,7 @@ func sc_setup() {
 
 	Outb(com1 + intr, 0x00)
 	Outb(com1 + lctl, 0x80)
-	Outb(com1 + data, 0x03)
+	Outb(com1 + data, 115200/9600)
 	Outb(com1 + intr, 0x00)
 	Outb(com1 + lctl, 0x03)
 	Outb(com1 + ififo, 0xc7)
