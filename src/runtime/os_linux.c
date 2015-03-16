@@ -2557,3 +2557,15 @@ runtime·Rflags(void)
 {
 	return rflags();
 }
+
+uint64 runtime·gcticks;
+
+#pragma textflag NOSPLIT
+uint64
+runtime·Resetgcticks(void)
+{
+	runtime·stackcheck();
+	uint64 ret = runtime·gcticks;
+	runtime·gcticks = 0;
+	return ret;
+}

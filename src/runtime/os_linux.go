@@ -55,10 +55,12 @@ func Tfdump(*[23]int)
 func Stackdump(int)
 func Usleep(int)
 func Rflags() int
+func Resetgcticks() uint64
 
 func inb(int) int
 // os_linux.c
 var newlines int32
+var gcticks uint64
 
 //go:nosplit
 func sc_setup() {
