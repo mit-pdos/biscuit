@@ -249,14 +249,28 @@ func ide_wait(base int, chk bool) bool {
 	return true
 }
 
+func idedata_ready(base int) {
+	c := 0
+	for {
+		drq := 1 << 3
+		st := runtime.Inb(base + 7)
+		if st & drq != 0 {
+			return
+		}
+		c++
+		if c > 10000000 {
+			fmt.Printf("waiting a long time for DRQ...\n")
+		}
+	}
+}
 // it is possible that a goroutine is context switched to a new CPU while doing
 // this port io; does this matter? doesn't seem to for qemu...
 func ide_start(rbase, allstatus int, ibuf *idebuf_t, writing bool) {
-	ide_wait(rbase, false)
-	outb := runtime.Outb
 	ireg := func(n int) int {
 		return rbase + n
 	}
+	ide_wait(rbase, false)
+	outb := runtime.Outb
 	outb(allstatus, 0)
 	outb(ireg(2), 1)
 	bn := int(ibuf.block)
@@ -267,12 +281,7 @@ func ide_start(rbase, allstatus int, ibuf *idebuf_t, writing bool) {
 	outb(ireg(6), 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
 	if writing {
 		outb(ireg(7), ide_cmd_write)
-		// delay before writing data; otherwise test hardware doesn't
-		// doesn't get all the data written and waits for more
-		// indefinitely.
-		for i := 0; i < 15; i++ {
-			runtime.Inb(0x80)
-		}
+		idedata_ready(rbase)
 		runtime.Outsl(ireg(0), unsafe.Pointer(&ibuf.data[0]), 512/4)
 	} else {
 		outb(ireg(7), ide_cmd_read)
@@ -357,11 +366,17 @@ func (d *pciide_disk_t) int_clear() {
 	// read status so disk clears int
 	runtime.Inb(d.rbase + 7)
 	runtime.Inb(d.rbase + 7)
+
 	// in PCI-native mode, clear the interrupt via the legacy bus master
 	// base, bar 4.
 	streg := d.bmaster + 0x02
-	intr := 1 << 2
-	runtime.Outb(streg, intr)
+	st := runtime.Inb(streg)
+	er := 1 << 1
+	if st & er != 0 {
+		panic("disk error")
+	}
+	runtime.Outb(streg, st)
+
 	// and via 8259 pics
 	p8259_eoi()
 }
