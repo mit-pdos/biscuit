@@ -168,19 +168,23 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	if disk != nil {
 		panic("adding two disks")
 	}
-	IRQ_DISK = 0xb
+
+	intline := 0x3c
+	irq := pci_read(tag, intline, 1)
+
+	IRQ_DISK = irq
 	INT_DISK = IRQ_BASE + IRQ_DISK
+
 	d := &pciide_disk_t{}
 	// 3400's PCI-native IDE command/control block
 	rbase := pci_bar(tag, 0)
 	allstats := pci_bar(tag, 1)
 	busmaster := pci_bar(tag, 4)
 
-	//d.init(0xeca0, 0xec96)
 	d.init(rbase, allstats, busmaster)
 	disk = d
-	fmt.Printf("3400: base %#x, cntrl: %#x, bm: %#x\n", rbase, allstats,
-	    busmaster)
+	fmt.Printf("3400: base %#x, cntrl: %#x, bm: %#x, irq: %d\n", rbase,
+	    allstats, busmaster, irq)
 }
 
 type disk_t interface {
