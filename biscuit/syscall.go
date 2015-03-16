@@ -390,7 +390,9 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 
 func sys_exit(proc *proc_t, status int) {
 	fmt.Printf("%v exited with status %v\n", proc.name, status)
+	tot := runtime.Rdtsc() - proc.tstart
 	proc_kill(proc.pid)
+	fmt.Printf("%v -- %v cycles\n", proc.name, tot)
 }
 
 func readn(a []uint8, n int, off int) int {

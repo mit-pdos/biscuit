@@ -518,6 +518,14 @@ TEXT rrsp(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
+TEXT runtime·Rdtsc(SB), NOSPLIT, $0-8
+	// rdtsc
+	BYTE	$0x0f
+	BYTE	$0x31
+	MOVL	AX, ret+0(FP)
+	MOVL	DX, ret+4(FP)
+	RET
+
 TEXT cli(SB), NOSPLIT, $0-0
 	CLI
 	RET

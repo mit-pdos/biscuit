@@ -261,6 +261,7 @@ type proc_t struct {
 	dead	bool
 	fds	map[int]*fd_t
 	cwd	string
+	tstart	uint64
 }
 
 func (p *proc_t) Name() string {
@@ -362,6 +363,7 @@ func (p *proc_t) page_remove(va int, pg *[512]int) {
 }
 
 func (p *proc_t) sched_add(tf *[TFSIZE]int) {
+	p.tstart = runtime.Rdtsc()
 	runtime.Procadd(tf, p.pid, p.p_pmap)
 }
 
@@ -872,8 +874,8 @@ func main() {
 	//exec("bin/fsmkdir")
 	//exec("bin/fscreat")
 	//exec("bin/fsfree")
-	//exec("bin/ls")
-	exec("bin/bmwrite")
+	exec("bin/ls")
+	//exec("bin/bmwrite")
 	//exec("bin/bmread")
 
 	//ide_test()

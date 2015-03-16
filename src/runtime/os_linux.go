@@ -39,6 +39,7 @@ func Proccontinue()
 func Prockill(int)
 func Procrunnable(int, *[23]int)
 func Procyield()
+func Rdtsc() uint64
 func Rcr2() int
 func Rcr3() int
 func Rrsp() int
