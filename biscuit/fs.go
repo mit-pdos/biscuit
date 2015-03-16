@@ -1615,6 +1615,9 @@ func bc_daemon(blc *bcdaemon_t) {
 		case nb := <- blc.bnew:
 			// disk read finished
 			blkno := int(nb.buf.block)
+			if _, ok := blc.given[blkno]; !ok {
+				panic("bllkno trimmed by cast")
+			}
 			blc.chk_evict()
 			blc.blocks[blkno] = nb
 			nextc, _ := blc.qpop(blkno)
