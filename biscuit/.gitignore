@@ -31,6 +31,8 @@
 /user/ls
 /user/bmwrite
 /user/bmread
+/user/conio
+/user/lsh
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -46,3 +48,5 @@
 /fsdir/bin/ls
 /fsdir/bin/bmwrite
 /fsdir/bin/bmread
+/fsdir/bin/conio
+/fsdir/bin/lsh

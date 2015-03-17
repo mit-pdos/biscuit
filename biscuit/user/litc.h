@@ -19,6 +19,7 @@ struct __attribute__((packed)) stat {
 
 int close(int);
 void exit(int);
+int execv(const char *, const char **);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);

@@ -8,6 +8,7 @@
 #define SYS_FSTAT        5
 #define SYS_GETPID       39
 #define SYS_FORK         57
+#define SYS_EXECV        59
 #define SYS_EXIT         60
 #define SYS_MKDIR        83
 #define SYS_LINK         86
@@ -43,6 +44,14 @@ void
 exit(int status)
 {
 	syscall(status, 0, 0, 0, 0, SYS_EXIT);
+}
+
+int
+execv(const char *path, const char *argv[])
+{
+	if (argv != NULL)
+		errx(-1, "execv: argv not supported yet");
+	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
 }
 
 int
@@ -103,12 +112,10 @@ void
 errx(int eval, const char *fmt, ...)
 {
 	va_list ap;
-	pmsg(RED);
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
 	pmsg("\n");
-	pmsg(RESET);
 	exit(eval);
 }
 
@@ -299,7 +306,7 @@ char *
 readline(char *prompt)
 {
 	if (prompt)
-		printf("%s\n", prompt);
+		printf("%s", prompt);
 	int ret;
 	int i = 0;
 	char c = 0x41;

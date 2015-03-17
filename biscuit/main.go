@@ -281,12 +281,20 @@ var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
-func proc_new(name string) *proc_t {
+func proc_new(name string, usepid int) *proc_t {
 	ret := &proc_t{}
 
 	proclock.Lock()
-	pid_cur++
-	newpid := pid_cur
+	var newpid int
+	if usepid != 0 {
+		newpid = usepid
+	} else {
+		pid_cur++
+		newpid = pid_cur
+	}
+	if _, ok := allprocs[newpid]; ok {
+		panic("pid exists")
+	}
 	allprocs[newpid] = ret
 	proclock.Unlock()
 
@@ -878,6 +886,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			sc := inb(0x60)
 			c, ok := km[sc]
 			if ok {
+				fmt.Printf("%c", c)
 				data = append(data, c)
 			}
 		case l := <- reqc:
@@ -958,7 +967,7 @@ func main() {
 	exec := func(cmd string) {
 		fmt.Printf("start [%v]\n", cmd)
 		path := strings.Split(cmd, "/")
-		ret := sys_execv(path, nil)
+		ret := sys_execv1(nil, path, nil)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
@@ -979,7 +988,8 @@ func main() {
 	//exec("bin/ls")
 	//exec("bin/bmwrite")
 	//exec("bin/bmread")
-	exec("bin/conio")
+	//exec("bin/conio")
+	exec("bin/lsh")
 
 	//ide_test()
 

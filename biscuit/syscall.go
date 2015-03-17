@@ -49,6 +49,7 @@ const(
   SYS_FSTAT    = 5
   SYS_GETPID   = 39
   SYS_FORK     = 57
+  SYS_EXECV    = 59
   SYS_EXIT     = 60
   SYS_MKDIR    = 83
   SYS_LINK     = 86
@@ -89,6 +90,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_getpid(p)
 	case SYS_FORK:
 		ret = sys_fork(p, tf)
+	case SYS_EXECV:
+		ret = sys_execv(p, a1, a2)
 	case SYS_EXIT:
 		sys_exit(p, a1)
 	case SYS_MKDIR:
@@ -340,7 +343,7 @@ func sys_getpid(proc *proc_t) int {
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 
-	child := proc_new(fmt.Sprintf("%s's child", parent.name))
+	child := proc_new(fmt.Sprintf("%s's child", parent.name), 0)
 
 	// mark writable entries as read-only and cow
 	mk_cow := func(pte int) (int, int) {
@@ -403,6 +406,84 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 
 	// set process as runnable again
 	runtime.Procrunnable(proc.pid, nil)
+}
+
+func sys_execv(proc *proc_t, pathn int, argn int) int {
+	if argn != 0 {
+		panic("no imp")
+	}
+	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	parts, err := path_sanitize(proc.cwd, path)
+	if err != 0 {
+		return err
+	}
+	// XXX we don't recycle the proc. does it matter?
+	return sys_execv1(proc, parts, nil)
+}
+
+func sys_execv1(proc *proc_t, path []string, args []string) int {
+	if len(args) != 0 {
+		panic("no imp")
+	}
+	file, err := fs_open(path, O_RDONLY, 0)
+	if err != 0 {
+		return err
+	}
+	eobj := make([]uint8, 0)
+	add := make([]uint8, 4096)
+	ret := 1
+	c := 0
+	for ret != 0 {
+		ret, err = fs_read([][]uint8{add}, file.priv, c)
+		c += ret
+		if err != 0 {
+			return err
+		}
+		valid := add[0:ret]
+		eobj = append(eobj, valid...)
+	}
+
+	usepid := 0
+	if proc != nil {
+		proc_kill(proc.pid)
+		usepid = proc.pid
+	}
+	cmd := "/" + strings.Join(path, "/") + strings.Join(args, " ")
+	newproc := proc_new(cmd, usepid)
+
+	elf := &elf_t{eobj}
+
+	stackva := mkpg(VUSER + 1, 0, 0, 0)
+	var tf [23]int
+	tf[TF_RSP] = stackva - 8
+	tf[TF_RIP] = elf.entry()
+	tf[TF_RFLAGS] = TF_FL_IF
+
+	ucseg := 4
+	udseg := 5
+	tf[TF_CS] = ucseg << 3 | 3
+	tf[TF_SS] = udseg << 3 | 3
+
+	// copy kernel page table, map new stack
+	newproc.pmap, newproc.p_pmap, _ = copy_pmap(nil, kpmap(),
+	    newproc.pages)
+	numstkpages := 1
+	for i := 0; i < numstkpages; i++ {
+		stack, p_stack := pg_new(newproc.pages)
+		newproc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
+		    PTE_U | PTE_W, true)
+	}
+
+	elf_load(newproc, elf)
+	newproc.sched_add(&tf)
+
+	return 0
 }
 
 func sys_exit(proc *proc_t, status int) {
@@ -616,7 +697,7 @@ func sys_test(program string) {
 
 	var tf [23]int
 
-	proc := proc_new(program + "test")
+	proc := proc_new(program + "test", 0)
 
 	elf, ok := allbins[program]
 	if !ok {
@@ -643,57 +724,4 @@ func sys_test(program string) {
 	elf_load(proc, elf)
 
 	proc.sched_add(&tf)
-}
-
-func sys_execv(path []string, args []string) int {
-	if len(args) != 0 {
-		panic("no imp")
-	}
-	file, err := fs_open(path, O_RDONLY, 0)
-	if err != 0 {
-		return err
-	}
-	eobj := make([]uint8, 0)
-	add := make([]uint8, 4096)
-	ret := 1
-	c := 0
-	for ret != 0 {
-		ret, err = fs_read([][]uint8{add}, file.priv, c)
-		c += ret
-		if err != 0 {
-			return err
-		}
-		valid := add[0:ret]
-		eobj = append(eobj, valid...)
-	}
-
-	cmd := "/" + strings.Join(path, "/") + strings.Join(args, " ")
-	proc := proc_new(cmd)
-
-	elf := &elf_t{eobj}
-
-	stackva := mkpg(VUSER + 1, 0, 0, 0)
-	var tf [23]int
-	tf[TF_RSP] = stackva - 8
-	tf[TF_RIP] = elf.entry()
-	tf[TF_RFLAGS] = TF_FL_IF
-
-	ucseg := 4
-	udseg := 5
-	tf[TF_CS] = ucseg << 3 | 3
-	tf[TF_SS] = udseg << 3 | 3
-
-	// copy kernel page table, map new stack
-	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
-	numstkpages := 1
-	for i := 0; i < numstkpages; i++ {
-		stack, p_stack := pg_new(proc.pages)
-		proc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
-		    PTE_U | PTE_W, true)
-	}
-
-	elf_load(proc, elf)
-	proc.sched_add(&tf)
-
-	return 0
 }

@@ -340,7 +340,7 @@ func is_mapped(pmap *[512]int, va int, size int) bool {
 
 // first ret value is the string from user space
 // second ret value is whether or not the string is mapped
-// third ret value is whether the string length is at least lenmax
+// third ret value is whether the string length is less than lenmax
 func is_mapped_str(pmap *[512]int, va int, lenmax int) (string, bool, bool) {
 	i := 0
 	var ret []byte
