@@ -21,7 +21,8 @@ int main(int argc, char **argv)
 		buf[i] = 0x41 + (i / 1000);
 
 	int ret;
-	int blks = 1000;
+	//int blks = 1000;
+	int blks = 140;
 	for (i = 0; i < blks; i++) {
 		printf("write %d\n", i);
 		size_t c = sizeof(buf);
