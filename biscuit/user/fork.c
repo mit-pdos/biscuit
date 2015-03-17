@@ -13,7 +13,7 @@ int main(int argc, char **argv)
 {
 	int pid = 0;
 	int id = 0;
-	while (pid < 1000) {
+	while (id < 100) {
 		pid = fork();
 		id++;
 		if (!pid)
