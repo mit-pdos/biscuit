@@ -121,7 +121,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
-	if fd.ftype != INODE {
+	if fd.ftype != INODE && fd.ftype != CDEV {
 		panic("no imp")
 	}
 	c := 0
@@ -137,6 +137,23 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		}
 		dsts = append(dsts, dst)
 		c += len(dst)
+	}
+
+	// stdout/stderr hack
+	if fd.ftype == CDEV {
+		kdata := kbd_get(sz)
+		ret := len(kdata)
+		for _, dst := range dsts {
+			ub := len(kdata)
+			if ub > len(dst) {
+				ub = len(dst)
+			}
+			for i := 0; i < ub; i++ {
+				dst[i] = kdata[i]
+			}
+			kdata = kdata[ub:]
+		}
+		return ret
 	}
 
 	ret, err := fs_read(dsts, fd.file.priv, fd.offset)

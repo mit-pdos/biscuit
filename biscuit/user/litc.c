@@ -293,6 +293,26 @@ printf(char *fmt, ...)
 	return ret;
 }
 
+static char readlineb[256];
+
+char *
+readline(char *prompt)
+{
+	if (prompt)
+		printf("%s\n", prompt);
+	int ret;
+	int i = 0;
+	char c = 0x41;
+	while ((ret = read(0, &c, 1)) > 0) {
+		if (c == '\n')
+			break;
+		if (i < sizeof(readlineb) - 1)
+			readlineb[i++] = c;
+	}
+	readlineb[i] = 0;
+	return readlineb;
+}
+
 int
 snprintf(char *dst, size_t sz, const char *fmt, ...)
 {
