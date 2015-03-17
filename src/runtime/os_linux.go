@@ -100,6 +100,12 @@ var put put_t
 func vga_put(c int8, attr int8) {
 	if c != '\n' {
 		p := (*[1999]int16)(unsafe.Pointer(uintptr(0xb8000)))
+		// erase the previous line
+		if put.vx == 0 {
+			for i := 0; i < 79; i++ {
+				p[put.vy * 80 + put.vx + i] = 0
+			}
+		}
 		a := int16(attr) << 8
 		v := a | int16(c)
 		p[put.vy * 80 + put.vx] = v
