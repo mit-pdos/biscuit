@@ -1627,10 +1627,11 @@ func bc_daemon(blc *bcdaemon_t) {
 }
 
 func (blc *bcdaemon_t) chk_evict() {
-	nbcbufs := 512
+	//nbcbufs := 512
+	nbcbufs := 30
 	// how many buffers to evict
 	// XXX LRU
-	evictn := 30
+	evictn := 2
 	if len(blc.blocks) <= nbcbufs {
 		return
 	}
