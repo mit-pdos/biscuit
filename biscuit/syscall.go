@@ -492,6 +492,9 @@ func sys_exit(proc *proc_t, status int) {
 	proc_kill(proc.pid)
 	fmt.Printf("%v -- %v cycles (%v GC cycles)\n", proc.name, tot,
 	    runtime.Resetgcticks())
+	if runtime.SCenable {
+		fmt.Printf("SERIAL CONSOLE ENABLED\n")
+	}
 }
 
 func readn(a []uint8, n int, off int) int {

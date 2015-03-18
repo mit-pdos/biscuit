@@ -124,16 +124,22 @@ func vga_put(c int8, attr int8) {
 	}
 }
 
+var SCenable bool = true
+
 //go:nosplit
 func putch(c int8) {
 	vga_put(c, 0x7)
-	sc_put(c)
+	if SCenable {
+		sc_put(c)
+	}
 }
 
 //go:nosplit
 func putcha(c int8, a int8) {
 	vga_put(c, a)
-	sc_put(c)
+	if SCenable {
+		sc_put(c)
+	}
 }
 
 //go:nosplit

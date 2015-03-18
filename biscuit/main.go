@@ -958,6 +958,7 @@ func main() {
 	go trap(handlers)
 
 	//cpus_start()
+	runtime.SCenable = false
 
 	fs_init()
 	kbd_init()
