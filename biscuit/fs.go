@@ -65,7 +65,7 @@ func fs_init() {
 	logstart := free_start + free_len
 	loglen := superb.loglen()
 	usable_start = logstart + loglen
-	if loglen < 0 {
+	if loglen < 0 || loglen > 63 {
 		panic("bad log len")
 	}
 
@@ -75,17 +75,19 @@ func fs_init() {
 }
 
 func fs_recover() {
-	rlen := superb.recovernum()
+	l := &fslog
+	dblk := bread(l.logstart)
+	defer brelse(dblk)
+	lh := logheader_t{dblk}
+	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
 		return
 	}
-
-	l := &fslog
 	fmt.Printf("starting FS recovery...")
-	dblk := bread(l.logstart)
+
 	for i := 0; i < rlen; i++ {
-		bdest := readn(dblk.buf.data[:], 4, 4*i)
+		bdest := lh.logdest(i)
 		src := bread(l.logstart + 1 + i)
 		dst := bread(bdest)
 		dst.buf.data = src.buf.data
@@ -94,10 +96,9 @@ func fs_recover() {
 		brelse(dst)
 	}
 
-	brelse(dblk)
 	// clear recovery flag
-	superb.w_recovernum(0)
-	superb.blk.writeback()
+	lh.w_recovernum(0)
+	lh.blk.writeback()
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
@@ -1147,10 +1148,6 @@ func (sb *superblock_t) freeinode() int {
 	return fieldr(&sb.blk.buf.data, 5)
 }
 
-func (sb *superblock_t) recovernum() int {
-	return fieldr(&sb.blk.buf.data, 6)
-}
-
 func (sb *superblock_t) w_freeblock(n int) {
 	fieldw(&sb.blk.buf.data, 0, n)
 }
@@ -1175,8 +1172,34 @@ func (sb *superblock_t) w_freeinode(n int) {
 	fieldw(&sb.blk.buf.data, 5, n)
 }
 
-func (sb *superblock_t) w_recovernum(n int) {
-	fieldw(&sb.blk.buf.data, 6, n)
+// first log header block format
+// bytes, meaning
+// 0-7,   valid log blocks
+// 8-511, log destination (63)
+type logheader_t struct {
+	blk	*bbuf_t
+}
+
+func (lh *logheader_t) recovernum() int {
+	return fieldr(&lh.blk.buf.data, 0)
+}
+
+func (lh *logheader_t) w_recovernum(n int) {
+	fieldw(&lh.blk.buf.data, 0, n)
+}
+
+func (lh *logheader_t) logdest(p int) int {
+	if p < 0 || p > 62 {
+		panic("bad dnum")
+	}
+	return fieldr(&lh.blk.buf.data, 8 + p)
+}
+
+func (lh *logheader_t) w_logdest(p int, n int) {
+	if p < 0 || p > 62 {
+		panic("bad dnum")
+	}
+	fieldw(&lh.blk.buf.data, 8 + p, n)
 }
 
 // inode format:
@@ -1716,16 +1739,14 @@ func (log *log_t) commit() {
 		return
 	}
 
-	if rnum := superb.recovernum(); rnum != 0  {
+	dblk := bread(log.logstart)
+	lh := logheader_t{dblk}
+	if rnum := lh.recovernum(); rnum != 0  {
 		panic(fmt.Sprintf("should have ran recover %v", rnum))
 	}
-	if log.loglen*4 > 512 {
-		panic("log destination array doesn't fit in one block")
-	}
-	dblk := bread(log.logstart)
 	for i, lbn := range log.blks {
 		// install log destination in the first log block
-		writen(dblk.buf.data[:], 4, 4*i, lbn)
+		lh.w_logdest(i, lbn)
 
 		// and write block to the log
 		src := bread(lbn)
@@ -1737,15 +1758,13 @@ func (log *log_t) commit() {
 		brelse(src)
 		brelse(dst)
 	}
-	// flush first log block
-	dblk.writeback()
-	brelse(dblk)
 
-	// commit log
-	superb.w_recovernum(len(log.blks))
-	superb.blk.writeback()
+	lh.w_recovernum(len(log.blks))
 
-	//rn := superb.recovernum()
+	// commit log: flush log header
+	lh.blk.writeback()
+
+	//rn := lh.recovernum()
 	//if rn > 0 {
 	//	runtime.Crash()
 	//}
@@ -1762,8 +1781,9 @@ func (log *log_t) commit() {
 	}
 
 	// success; clear flag indicating to recover from log
-	superb.w_recovernum(0)
-	superb.blk.writeback()
+	lh.w_recovernum(0)
+	lh.blk.writeback()
+	brelse(dblk)
 
 	log.blks = log.blks[0:0]
 }
