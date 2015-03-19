@@ -153,7 +153,7 @@ runtime·schedinit(void)
 			procs = n;
 		}
 	} else {
-		procs = 8;
+		procs = 1;
 	}
 	procresize(procs);
 
@@ -171,7 +171,9 @@ runtime·schedinit(void)
 void
 runtime·newsysmon(void)
 {
-	newm(sysmon, nil);
+	extern int64 runtime·hackmode;
+	if (!runtime·hackmode)
+		newm(sysmon, nil);
 }
 
 static void
