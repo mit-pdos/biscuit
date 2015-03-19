@@ -655,12 +655,14 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		log_write(zblk)
 		brelse(zblk)
 	}
-	ensureb := func(blkno int) (int, bool) {
+	ensureb := func(blkno int, dozero bool) (int, bool) {
 		if !writing || blkno != 0 {
 			return blkno, false
 		}
 		nblkno := balloc()
-		zeroblock(nblkno)
+		if dozero {
+			zeroblock(nblkno)
+		}
 		return nblkno, true
 	}
 	whichblk := offset/512
@@ -671,7 +673,7 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		nextindb := 63*8
 		indno := idm.icache.indir
 		// get first indirect block
-		indno, isnew := ensureb(indno)
+		indno, isnew := ensureb(indno, true)
 		if isnew {
 			idm.icache.indir = indno
 		}
@@ -679,7 +681,7 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		indblk := bread(indno)
 		for i := 0; i < indslot/slotpb; i++ {
 			indno = readn(indblk.buf.data[:], 8, nextindb)
-			indno, isnew = ensureb(indno)
+			indno, isnew = ensureb(indno, true)
 			if isnew {
 				writen(indblk.buf.data[:], 8, nextindb, indno)
 				log_write(indblk)
@@ -690,7 +692,7 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		// finally get data block from indirect block
 		noff := (indslot % slotpb)*8
 		blkn = readn(indblk.buf.data[:], 8, noff)
-		blkn, isnew = ensureb(blkn)
+		blkn, isnew = ensureb(blkn, false)
 		if isnew {
 			writen(indblk.buf.data[:], 8, noff, blkn)
 			log_write(indblk)
