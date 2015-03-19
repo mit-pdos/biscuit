@@ -712,6 +712,9 @@ func cpus_start() {
 	// all to join.
 	cdelay(100)
 	apcnt = ss[sapcnt]
+	if apcnt > aplim {
+		apcnt = aplim
+	}
 	numcpus = apcnt + 1
 
 	// actually  map the stacks for the CPUs that joined
@@ -720,7 +723,7 @@ func cpus_start() {
 	// tell the cpus to carry on
 	ss[sproceed] = apcnt
 
-	fmt.Printf("done! %v CPUs joined\n", ss[sapcnt])
+	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], apcnt)
 }
 
 // myid is a logical id, not lapic id
@@ -919,12 +922,17 @@ func attach_devs() {
 	pcibus_attach()
 }
 
+var aplim int = 0
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
 	//	for {
 	//	}
 	//}
+
+	// control CPUs
+	runtime.GOMAXPROCS(1 + aplim)
 
 	qemuconfig()
 
@@ -957,7 +965,7 @@ func main() {
 	     }
 	go trap(handlers)
 
-	//cpus_start()
+	cpus_start()
 	runtime.SCenable = false
 
 	fs_init()

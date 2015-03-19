@@ -2093,6 +2093,9 @@ proc_setup(void)
 void
 ·Ap_setup(int64 myid)
 {
+	pmsg("cpu");
+	pnum(myid);
+	pmsg("joined\n");
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(lap_id() <= MAXCPUS, "lapic id large", myid);
 	timer_setup();
