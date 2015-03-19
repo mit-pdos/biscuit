@@ -57,7 +57,6 @@ func fs_init() {
 	superb = superblock_t{}
 	superb.blk = blk
 	brelse(blk0)
-	brelse(blk)
 	ri := superb.rootinode()
 	iroot = idaemon_ensure(ri)
 
@@ -331,8 +330,22 @@ func (ic *icache_t) fill(blk *bbuf_t, ioff int) {
 	}
 }
 
-func (ic *icache_t) flushto(blk *bbuf_t, ioff int) {
+// returns true if the inode data changed, and thus needs to be flushed to disk
+func (ic *icache_t) flushto(blk *bbuf_t, ioff int) bool {
 	inode := inode_t{blk, ioff}
+	j := inode
+	k := ic
+	ret := false
+	if j.itype() != k.itype || j.linkcount() != k.links ||
+	    j.size() != k.size || j.major() != k.major ||
+	    j.minor() != k.minor || j.indirect() != k.indir {
+		ret = true
+	}
+	for i, v := range ic.addrs {
+		if inode.addr(i) != v {
+			ret = true
+		}
+	}
 	inode.w_itype(ic.itype)
 	inode.w_linkcount(ic.links)
 	inode.w_size(ic.size)
@@ -342,6 +355,7 @@ func (ic *icache_t) flushto(blk *bbuf_t, ioff int) {
 	for i := 0; i < NIADDRS; i++ {
 		inode.w_addr(i, ic.addrs[i])
 	}
+	return ret
 }
 
 type rtype_t int
@@ -480,8 +494,9 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 func idaemonize(idm *idaemon_t) {
 	iupdate := func() {
 		blk := bread(idm.blkno)
-		idm.icache.flushto(blk, idm.ioff)
-		log_write(blk)
+		if idm.icache.flushto(blk, idm.ioff) {
+			log_write(blk)
+		}
 		brelse(blk)
 	}
 	irefdown := func() bool {
