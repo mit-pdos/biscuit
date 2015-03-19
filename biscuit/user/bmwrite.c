@@ -24,7 +24,7 @@ int main(int argc, char **argv)
 	//int blks = 1000;
 	int blks = 140;
 	for (i = 0; i < blks; i++) {
-		printf("write %d\n", i);
+		//printf("write %d\n", i);
 		size_t c = sizeof(buf);
 		size_t e = c;
 		if ((ret = write(fd, buf, c)) != e) {
@@ -35,6 +35,7 @@ int main(int argc, char **argv)
 
 	if (close(fd))
 		errx(-1, "close");
+	printf("done\n");
 
 	return 0;
 }
