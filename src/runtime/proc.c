@@ -2770,6 +2770,10 @@ checkdead(void)
 
 	// -1 for sysmon
 	run = runtime·sched.mcount - runtime·sched.nmidle - runtime·sched.nmidlelocked - 1;
+	extern int64 runtime·hackmode;
+	if (runtime·hackmode)
+		run = runtime·sched.mcount - runtime·sched.nmidle -
+		    runtime·sched.nmidlelocked;
 	if(run > 0)
 		return;
 	// If we are dying because of a signal caught on an already idle thread,
