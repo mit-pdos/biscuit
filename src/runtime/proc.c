@@ -1349,6 +1349,8 @@ execute(G *gp)
 	runtime·gogo(&gp->sched);
 }
 
+static void trapcheck(P*);
+
 // Finds a runnable goroutine to execute.
 // Tries to steal from other P's, get g from global queue, poll network.
 static G*
@@ -1365,6 +1367,9 @@ top:
 	}
 	if(runtime·fingwait && runtime·fingwake && (gp = runtime·wakefing()) != nil)
 		runtime·ready(gp);
+	// see if ints need to be handled
+	trapcheck(g->m->p);
+
 	// local runq
 	gp = runqget(g->m->p);
 	if(gp)
@@ -1405,7 +1410,15 @@ top:
 		if(gp)
 			return gp;
 	}
+	extern int64 runtime·hackmode;
 stop:
+	if (runtime·hackmode) {
+		void hack_usleep(uint64);
+		hack_usleep(0);
+		trapcheck(g->m->p);
+		goto top;
+	}
+
 	// return P and block
 	runtime·lock(&runtime·sched.lock);
 	if(runtime·sched.gcwaiting) {
@@ -3478,4 +3491,183 @@ void
 sync·runtime_procUnpin()
 {
 	g->m->locks--;
+}
+
+struct spinlock_t {
+	volatile uint32 lock;
+};
+
+#pragma textflag NOSPLIT
+void
+splock(struct spinlock_t *sl)
+{
+	void htpause(void);
+	while (1) {
+		if (runtime·xchg(&sl->lock, 1) == 0)
+			break;
+		while (sl->lock)
+			htpause();
+	}
+}
+
+#pragma textflag NOSPLIT
+void
+spunlock(struct spinlock_t *sl)
+{
+	sl->lock = 0;
+}
+
+static struct spinlock_t tlock;
+// the special goroutine goes here until a trap occurs.
+G *runtime·trapsleeper;
+enum {
+	IDLE = 0,
+	RUNNING = 1,
+};
+
+int64 pushcli(void);
+void popcli(int64);
+void runtime·pancake(void *, int64);
+
+static uint32 ptrap;
+static uint32 trapst;
+static int32 nints;
+
+// caller must hold tlock
+static void
+tprepsleep(G *gp, int32 done)
+{
+	if (done)
+		trapst = IDLE;
+	else
+		trapst = RUNNING;
+
+	uint32 status;
+	status = runtime·readgstatus(gp);
+	if((status&~Gscan) != Grunning){
+		runtime·throw("bad g status");
+	}
+	// XXX should i use casgstatus?
+	//runtime·casgstatus(gp, Grunning, Gwaiting);
+	uint32 nst = done ? Gwaiting : Grunnable;
+	runtime·xchg(&gp->atomicstatus, nst);
+	dropg();
+}
+
+static int32 initted;
+
+static void
+_trapsched(G *gp, int32 firsttime)
+{
+	int64 fl = pushcli();
+	splock(&tlock);
+
+	if (firsttime) {
+		if (initted)
+			runtime·pancake("two inits", initted);
+		initted = 1;
+		// if there are traps already, let a P wake us up.
+		goto bed;
+	}
+
+	// decrement handled ints
+	if (!nints)
+		runtime·pancake("no ints", nints);
+	nints--;
+	if (nints < 0)
+		runtime·pancake("buh!", nints);
+
+	// check if we are done
+	if (nints != 0) {
+		// keep processing
+		tprepsleep(gp, 0);
+		runqput(g->m->p, gp);
+	} else {
+bed:
+		tprepsleep(gp, 1);
+		if (runtime·trapsleeper != nil)
+			runtime·pancake("trapsleeper set", 0);
+		runtime·trapsleeper = gp;
+	}
+
+	spunlock(&tlock);
+	popcli(fl);
+
+	schedule();
+}
+
+// trap handling goroutines first call. it is not an error if there are no
+// interrupts when this is called.
+void
+runtime·trapinit_m(G *gp)
+{
+	_trapsched(gp, 1);
+}
+
+void
+runtime·trapsched_m(G *gp)
+{
+	_trapsched(gp, 0);
+}
+
+static void
+trapcheck(P *p)
+{
+	if (!ptrap)
+		return;
+
+	int64 fl = pushcli();
+	splock(&tlock);
+
+	if (!ptrap)
+		goto out;
+	// don't clear the start flag if the handler goroutine hasn't
+	// registered yet.
+	if (!initted)
+		goto out;
+	if (trapst == RUNNING)
+		goto out;
+
+	if (trapst != IDLE)
+		runtime·pancake("bad trap status", trapst);
+
+	ptrap = 0;
+	trapst = RUNNING;
+
+	G *trapgp = runtime·trapsleeper;
+	runtime·trapsleeper = nil;
+
+	spunlock(&tlock);
+	popcli(fl);
+
+	uint32 old;
+	// XXX could use casgstatus probably
+	old = runtime·xchg(&trapgp->atomicstatus, Grunnable);
+	if (old != Gwaiting)
+		runtime·pancake("wasn't Gwaiting?", old);
+
+	// hopefully the trap goroutine is executed soon
+	runqput(p, trapgp);
+	return;
+
+out:
+	spunlock(&tlock);
+	popcli(fl);
+	return;
+}
+
+// called from the CPU interrupt handler. must only be called while interrupts
+// are disabled
+#pragma textflag NOSPLIT
+void
+runtime·Trapwake(void)
+{
+	extern void runtime·pancake(void *, int64);
+
+	splock(&tlock);
+	nints++;
+	// only flag the Ps if a handler isn't currently active
+	if (trapst == IDLE)
+		ptrap = 1;
+	spunlock(&tlock);
 }

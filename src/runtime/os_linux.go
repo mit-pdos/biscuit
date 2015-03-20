@@ -15,6 +15,8 @@ func rtsigprocmask(sig int32, new, old unsafe.Pointer, size int32)
 func getrlimit(kind int32, limit unsafe.Pointer) int32
 func raise(sig int32)
 func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
+func trapsched_m(*g)
+func trapinit_m(*g)
 
 func Ap_setup(int)
 func Cli()
@@ -46,7 +48,6 @@ func Rrsp() int
 func Sgdt(*int)
 func Sidt(*int)
 func Sti()
-func Trapwake()
 func Vtop(*[512]int) int
 
 func Crash()
@@ -57,6 +58,7 @@ func Stackdump(int)
 func Usleep(int)
 func Rflags() int
 func Resetgcticks() uint64
+func Trapwake()
 
 func inb(int) int
 // os_linux.c
@@ -152,4 +154,13 @@ func cls() {
 	sc_put('l')
 	sc_put('s')
 	sc_put('\n')
+}
+
+func Trapsched() {
+	mcall(trapsched_m)
+}
+
+// called only once to setup
+func Trapinit() {
+	mcall(trapinit_m)
 }

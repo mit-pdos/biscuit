@@ -121,6 +121,8 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	head = tsnext(head)
 	cpus[lid].tshead = head
 
+	runtime.Trapwake()
+
 	switch trapno {
 	case SYSCALL, PGFAULT:
 		// yield until the syscall/fault is handled
@@ -145,6 +147,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 }
 
 func trap(handlers map[int]func(*trapstore_t)) {
+	runtime.Trapinit()
 	for {
 		// XXX completely drain, not remove one
 		for cpu := 0; cpu < numcpus; cpu += 1 {
@@ -172,8 +175,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			panic(fmt.Sprintf("no handler for trap %v, pid %x\n",
 			    trapno,pid))
 		}
-		runtime.Gosched()
-		runtime.Usleep(0)
+		runtime.Trapsched()
 	}
 }
 

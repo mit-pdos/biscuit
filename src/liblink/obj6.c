@@ -359,34 +359,34 @@ parsetextconst(vlong arg, vlong *textstksiz, vlong *textarg)
 	*textarg = (*textarg+7) & ~7LL;
 }
 
-static Prog*
-intchk(Link *ctxt, Prog *p, Prog **q)
-{
-	p = appendp(ctxt, p);
-	p->as = AMOVQ;
-	p->from.type = D_EXTERN;
-	p->from.sym = linklookup(ctxt, "runtime.doint", 0);
-	p->to.type = D_AX;
-
-	p = appendp(ctxt, p);
-	p->as = ACMPQ;
-	p->to.type = D_CONST;
-	p->to.offset = 0;
-	p->from.type = D_AX;
-
-	p = appendp(ctxt, p);
-	p->as = AJEQ;
-	p->to.type = D_BRANCH;
-	if (q != nil)
-		*q = p;
-
-	p = appendp(ctxt, p);
-	p->as = ACALL;
-	p->to.type = D_BRANCH;
-	p->to.sym = linklookup(ctxt, "runtime.handle_int", 0);
-
-	return p;
-}
+//static Prog*
+//intchk(Link *ctxt, Prog *p, Prog **q)
+//{
+//	p = appendp(ctxt, p);
+//	p->as = AMOVQ;
+//	p->from.type = D_EXTERN;
+//	p->from.sym = linklookup(ctxt, "runtime.doint", 0);
+//	p->to.type = D_AX;
+//
+//	p = appendp(ctxt, p);
+//	p->as = ACMPQ;
+//	p->to.type = D_CONST;
+//	p->to.offset = 0;
+//	p->from.type = D_AX;
+//
+//	p = appendp(ctxt, p);
+//	p->as = AJEQ;
+//	p->to.type = D_BRANCH;
+//	if (q != nil)
+//		*q = p;
+//
+//	p = appendp(ctxt, p);
+//	p->as = ACALL;
+//	p->to.type = D_BRANCH;
+//	p->to.sym = linklookup(ctxt, "runtime.handle_int", 0);
+//
+//	return p;
+//}
 
 static void
 addstacksplit(Link *ctxt, LSym *cursym)
@@ -433,10 +433,11 @@ addstacksplit(Link *ctxt, LSym *cursym)
 
 	q = nil;
 	if(!(p->from.scale & NOSPLIT) || (p->from.scale & WRAPPER)) {
-		Prog *q;
-		p = intchk(ctxt, p, &q);
+		//Prog *q;
+		// XXX intchk should be last to guarantee a stack?
+		//p = intchk(ctxt, p, &q);
 		p = appendp(ctxt, p);
-		q->pcond = p;
+		//q->pcond = p;
 		p = load_g_cx(ctxt, p); // load g into CX
 	}
 	if(!(cursym->text->from.scale & NOSPLIT))

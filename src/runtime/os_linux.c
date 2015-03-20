@@ -381,6 +381,14 @@ void runtime·cls(void);
 void runtime·putch(int8);
 extern void runtime·putcha(int8, int8);
 
+// src/runtime/proc.c
+struct spinlock_t {
+	volatile uint32 lock;
+};
+
+void splock(struct spinlock_t *);
+void spunlock(struct spinlock_t *);
+
 // this file
 void lap_eoi(void);
 void runtime·deray(uint64);
@@ -392,29 +400,6 @@ void invlpg(void *);
 // wrap around and overwrite the first lines of the panic (the most important
 // part). this will go away when i add serial console support.
 int32 runtime·newlines = 1;
-
-struct spinlock_t {
-	volatile uint32 lock;
-};
-
-#pragma textflag NOSPLIT
-static void
-splock(struct spinlock_t *sl) {
-	int32 runtime·xchg(uint32 volatile *, uint32);
-	void htpause(void);
-	while (1) {
-		if (runtime·xchg(&sl->lock, 1) == 0)
-			break;
-		while (sl->lock)
-			htpause();
-	}
-}
-
-#pragma textflag NOSPLIT
-void
-spunlock(struct spinlock_t *sl) {
-	sl->lock = 0;
-}
 
 // interrupts must be cleared before attempting to take this lock. the reason
 // is that access to VGA buffer/serial console must be exclusive, yet i want to
@@ -2550,7 +2535,6 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 	}
 	spunlock(&pmsglock);
 	popcli(fl);
-	assert((rflags() & TF_FL_IF) != 0, "wtf", 0);
 }
 
 #pragma textflag NOSPLIT
@@ -2599,6 +2583,7 @@ _handle_int(void)
 // must only be called while interrupts are disabled
 #pragma textflag NOSPLIT
 void
-runtime·Trapwake(void) {
+runtime·Intpreempt(void)
+{
 	runtime·doint = 1;
 }
