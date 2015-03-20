@@ -431,6 +431,7 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 	if len(args) != 0 {
 		panic("no imp")
 	}
+	// XXX close?
 	file, err := fs_open(path, O_RDONLY, 0)
 	if err != 0 {
 		return err
@@ -448,6 +449,11 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 		valid := add[0:ret]
 		eobj = append(eobj, valid...)
 	}
+	elf := &elf_t{eobj}
+	_, ok := elf.npheaders()
+	if !ok {
+		return -EPERM
+	}
 
 	usepid := 0
 	if proc != nil {
@@ -457,7 +463,6 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 	cmd := "/" + strings.Join(path, "/") + strings.Join(args, " ")
 	newproc := proc_new(cmd, usepid)
 
-	elf := &elf_t{eobj}
 
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
 	var tf [23]int
@@ -585,13 +590,13 @@ var ELF_OFF     = 8
 var ELF_ADDR    = 8
 var ELF_XWORD   = 8
 
-func (e *elf_t) npheaders() int {
+func (e *elf_t) npheaders() (int, bool) {
 	mag := readn(e.data, ELF_HALF, 0)
 	if mag != 0x464c457f {
-		panic("bad elf magic")
+		return 0, false
 	}
 	e_phnum := 0x38
-	return readn(e.data, ELF_QUARTER, e_phnum)
+	return readn(e.data, ELF_QUARTER, e_phnum), true
 }
 
 func (e *elf_t) header(c int, ret *elf_phdr) {
@@ -599,7 +604,10 @@ func (e *elf_t) header(c int, ret *elf_phdr) {
 		panic("nil elf_t")
 	}
 
-	nph := e.npheaders()
+	nph, ok := e.npheaders()
+	if !ok {
+		panic("bad elf")
+	}
 	if c >= nph {
 		panic("bad elf header")
 	}
@@ -635,7 +643,10 @@ func (e *elf_t) header(c int, ret *elf_phdr) {
 }
 
 func (e *elf_t) headers() []elf_phdr {
-	num := e.npheaders()
+	num, ok := e.npheaders()
+	if !ok {
+		panic("bad elf")
+	}
 	ret := make([]elf_phdr, num)
 	for i := 0; i < num; i++ {
 		e.header(i, &ret[i])
