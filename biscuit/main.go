@@ -931,6 +931,8 @@ func main() {
 	//	}
 	//}
 
+	//chanbm()
+
 	// control CPUs
 	runtime.GOMAXPROCS(1 + aplim)
 
@@ -946,6 +948,7 @@ func main() {
 		panic("no disk")
 	}
 
+	// XXX pass irqs from attach_devs to trapstub, not global state.
 	// must come before init funcs below
 	runtime.Install_traphandler(trapstub)
 
@@ -1078,4 +1081,76 @@ func ip_process(ipchan chan packet) {
 			fmt.Printf("%v ", p_priority(p))
 		}
 	}
+}
+
+func chanbm() {
+	for i := range workytown {
+		workytown[i] = rand.Int()
+	}
+
+	// start it here; maybe move to inner loop to learn about go routine
+	// creation time.
+	go chand()
+
+	for {
+		st := runtime.Rdtsc()
+		chanit()
+		elapsed := runtime.Rdtsc() - st
+		fmt.Printf("channel cycles: %20v\n", elapsed)
+
+		st = runtime.Rdtsc()
+		lockit()
+		elapsed = runtime.Rdtsc() - st
+		fmt.Printf("lock cycles:    %20v\n", elapsed)
+		workytown[0] = workyans
+	}
+}
+
+type msg_t struct {
+	a	int
+	b	int
+}
+
+var niters int = 100000
+var bgo = make(chan msg_t)
+var bdone = make(chan msg_t)
+
+func chanit() {
+	a := msg_t{10,0}
+	for i := 0; i < niters; i++ {
+		bgo <- a
+		a = <- bdone
+		workytown[0] = a.a
+	}
+}
+
+func chand() {
+	for {
+		a := <- bgo
+		workytown[0] = a.a
+		work()
+		bdone <- a
+	}
+}
+
+var block = sync.Mutex{}
+
+func lockit() {
+	for i := 0; i < niters; i++ {
+		block.Lock()
+		work()
+		block.Unlock()
+	}
+}
+
+var workytown = make([]int, 512)
+var workyans int
+
+func work() {
+	ret := 0
+	for i, c := range workytown {
+		ret += i ^ c
+		workytown[i] = ret
+	}
+	workyans = ret
 }
