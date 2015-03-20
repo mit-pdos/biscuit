@@ -46,6 +46,7 @@ func Rrsp() int
 func Sgdt(*int)
 func Sidt(*int)
 func Sti()
+func Trapwake()
 func Vtop(*[512]int) int
 
 func Crash()

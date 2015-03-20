@@ -394,19 +394,18 @@ void invlpg(void *);
 int32 runtime·newlines = 1;
 
 struct spinlock_t {
-	uint64 lock;
+	volatile uint32 lock;
 };
 
 #pragma textflag NOSPLIT
-void
+static void
 splock(struct spinlock_t *sl) {
-	int32 runtime·xchg(void *, uint32);
+	int32 runtime·xchg(uint32 volatile *, uint32);
 	void htpause(void);
-	volatile uint64 *p = (uint64 *)&sl->lock;
 	while (1) {
 		if (runtime·xchg(&sl->lock, 1) == 0)
 			break;
-		while (*p)
+		while (sl->lock)
 			htpause();
 	}
 }
@@ -2571,4 +2570,35 @@ runtime·Resetgcticks(void)
 	uint64 ret = runtime·gcticks;
 	runtime·gcticks = 0;
 	return ret;
+}
+
+uint64 runtime·doint;
+int64 runtime·intcnt;
+void (*runtime·Goint)(void);
+
+#pragma textflag NOSPLIT
+void
+_handle_int(void)
+{
+	int32 biddle;
+	runtime·stackcheck();
+	// cast to 32 because i don't know how to insert movl in stackcheck
+	// prologue.
+	uint32 volatile *p = (uint32 volatile *)&runtime·doint;
+	int64 doint = runtime·xchg(p, 0);
+	if (doint == 0)
+		return;
+	//if (runtime·Goint == nil) {
+	//	int32 *p = (int32 *)0;
+	//	*p = 0;
+	//}
+	pmsg("inty time!");
+	pnum((uint64)runtime·getcallerpc(&biddle));
+}
+
+// must only be called while interrupts are disabled
+#pragma textflag NOSPLIT
+void
+runtime·Trapwake(void) {
+	runtime·doint = 1;
 }

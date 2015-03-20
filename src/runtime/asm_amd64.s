@@ -606,6 +606,12 @@ hltagain:
 	HLT
 	JMP	hltagain
 
+TEXT runtime·handle_int(SB), NOSPLIT, $0-0
+	PUSHQ	DX
+	CALL	_handle_int(SB)
+	POPQ	DX
+	RET
+
 #define TRAP_TIMER      $32
 TEXT hack_yield(SB), NOSPLIT, $0-0
 	INT	TRAP_TIMER
