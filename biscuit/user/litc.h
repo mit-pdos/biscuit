@@ -5,6 +5,16 @@
 #define         BLUE    "\x1b[34;1m"
 #define         RESET   "\x1b[0m"
 
+#define EPERM		1
+#define ENOENT		2
+#define EBADF		9
+#define EFAULT		14
+#define EEXIST		17
+#define ENOTDIR		20
+#define EINVAL		22
+#define ENAMETOOLONG	36
+#define ENOSYS		38
+
 #define MAXBUF        4096
 
 struct __attribute__((packed)) stat {
@@ -34,6 +44,7 @@ long read(int, void*, size_t);
 int unlink(const char *);
 long write(int, void*, size_t);
 
+void err(int, const char *, ...);
 void errx(int, const char *, ...);
 int printf(char *, ...);
 int vprintf(const char *, va_list);

@@ -109,6 +109,34 @@ unlink(const char *path)
 }
 
 void
+err(int eval, const char *fmt, ...)
+{
+	const char *es[] = {
+	    [EPERM] = "Permission denied",
+	    [ENOENT] = "No such file or directory",
+	    [EBADF] = "Bad file descriptor",
+	    [EFAULT] = "Bad address",
+	    [EEXIST] = "File exists",
+	    [ENOTDIR] = "Not a directory",
+	    [EINVAL] = "Invalid argument",
+	    [ENAMETOOLONG] = "File name too long",
+	    [ENOSYS] = "Function not implemented",
+	};
+	int nents = sizeof(es)/sizeof(es[0]);
+	va_list ap;
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+	// errno is dumb
+	int neval = eval < 0 ? -eval : eval;
+	if (neval < nents && es[neval] != NULL) {
+		printf(": %s", es[neval]);
+	}
+	pmsg("\n");
+	exit(eval);
+}
+
+void
 errx(int eval, const char *fmt, ...)
 {
 	va_list ap;
@@ -274,7 +302,7 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 
 	if (dst > end)
 		dst = end - 1;
-	*dst++ = '\0';
+	*dst = '\0';
 	return dst - start;
 }
 
