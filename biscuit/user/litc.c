@@ -49,8 +49,6 @@ exit(int status)
 int
 execv(const char *path, const char *argv[])
 {
-	if (argv != NULL)
-		errx(-1, "execv: argv not supported yet");
 	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
 }
 
@@ -123,6 +121,7 @@ err(int eval, const char *fmt, ...)
 	    [ENOSYS] = "Function not implemented",
 	};
 	int nents = sizeof(es)/sizeof(es[0]);
+	printf("%s: ", __progname);
 	va_list ap;
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
@@ -139,6 +138,7 @@ err(int eval, const char *fmt, ...)
 void
 errx(int eval, const char *fmt, ...)
 {
+	printf("%s: ", __progname);
 	va_list ap;
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
@@ -369,6 +369,29 @@ strncpy(char *dst, const char *src, size_t sz)
 	return dst;
 }
 
+char *
+strstr(const char *big, const char *little)
+{
+	while (*big) {
+		if (*big == *little) {
+			const char *guess = big;
+			const char *l = little;
+			while (*big) {
+				if (*l == 0)
+					return (char *)guess;
+				if (*big != *l)
+					break;
+				big++;
+				l++;
+			}
+			if (*big == 0 && *l == 0)
+				return (char *)guess;
+		} else
+			big++;
+	}
+	return NULL;
+}
+
 int
 printf_blue(char *fmt, ...)
 {
@@ -401,19 +424,14 @@ printf_red(char *fmt, ...)
 	return ret;
 }
 
-struct kernstuff_t {
-	ulong magic;
-	char **argv;
-};
+char __progname[64];
 
 void
-_entry(struct kernstuff_t *k)
+_entry(int argc, char **argv)
 {
-	int argc = 0;
+	if (argc)
+		strncpy(__progname, argv[0], sizeof(__progname));
 	int main(int, char **);
-	//if (!k || k->magic != 0x1234)
-	//	errx(-1, "bad magic");
-	//int ret = main(argc, k->argv);
-	int ret = main(argc, NULL);
+	int ret = main(argc, argv);
 	exit(ret);
 }

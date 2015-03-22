@@ -36,6 +36,7 @@
 /user/bmopen
 /user/cls
 /user/fault2
+/user/echo
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -56,3 +57,4 @@
 /fsdir/bin/bmopen
 /fsdir/bin/cls
 /fsdir/bin/fault2
+/fsdir/bin/echo
