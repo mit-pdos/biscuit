@@ -116,10 +116,6 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	if !is_mapped(proc.pmap, bufp, sz) {
-		fmt.Printf("%#x not mapped\n", bufp)
-		return -EFAULT
-	}
 	fd, ok := proc.fds[fdn]
 	if !ok {
 		return -EBADF
@@ -133,7 +129,10 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	// buffer.
 	dsts := make([][]uint8, 0)
 	for c < sz {
-		dst := proc.dmapuser(bufp + c)
+		dst, ok := proc.userdmap(bufp + c)
+		if !ok {
+			return -EFAULT
+		}
 		left := sz - c
 		if len(dst) > left {
 			dst = dst[:left]
@@ -171,10 +170,6 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	if !is_mapped(proc.pmap, bufp, sz) {
-		fmt.Printf("%#x not mapped\n", bufp)
-		return -EFAULT
-	}
 	fd, ok := proc.fds[fdn]
 	if !ok {
 		return -EBADF
@@ -196,12 +191,6 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 			}
 			runtime.Pmsga(&big[0], len(big), utext)
 			return len(big), 0
-			//c := 0
-			//for _, s := range srcs {
-			//	runtime.Pmsga(&s[0], len(s), utext)
-			//	c += len(s)
-			//}
-			//return c, 0
 		}
 	}
 
@@ -209,7 +198,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	c := 0
 	srcs := make([][]uint8, 0)
 	for c < sz {
-		src := proc.dmapuser(bufp + c)
+		src, ok := proc.userdmap(bufp + c)
+		if !ok {
+			return -EFAULT
+		}
 		left := sz - c
 		if len(src) > left {
 			src = src[:left]
@@ -226,7 +218,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 }
 
 func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
-	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
 	}
@@ -272,9 +264,6 @@ func sys_close(proc *proc_t, fdn int) int {
 func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	buf := &stat_t{}
 	buf.init()
-	if !is_mapped(proc.pmap, statn, buf.totsz) {
-		return -EFAULT
-	}
 	fd, ok := proc.fds[fdn]
 	if !ok {
 		return -EBADF
@@ -283,12 +272,15 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	if err != 0 {
 		return err
 	}
-	proc.usercopy(buf.data, statn)
+	ok = proc.usercopy(buf.data, statn)
+	if !ok {
+		return -EFAULT
+	}
 	return 0
 }
 
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {
-	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
 	}
@@ -303,8 +295,8 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 }
 
 func sys_link(proc *proc_t, oldn int, newn int) int {
-	old, ok1, toolong1 := is_mapped_str(proc.pmap, oldn, NAME_MAX)
-	new, ok2, toolong2 := is_mapped_str(proc.pmap, newn, NAME_MAX)
+	old, ok1, toolong1 := proc.userstr(oldn, NAME_MAX)
+	new, ok2, toolong2 := proc.userstr(newn, NAME_MAX)
 	if !ok1 || !ok2 {
 		return -EFAULT
 	}
@@ -323,7 +315,7 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 }
 
 func sys_unlink(proc *proc_t, pathn int) int {
-	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
 	}
@@ -409,10 +401,11 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 }
 
 func sys_execv(proc *proc_t, pathn int, argn int) int {
-	if argn != 0 {
-		panic("no imp")
-	}
-	path, ok, toolong := is_mapped_str(proc.pmap, pathn, NAME_MAX)
+	//args, ok := args_mapped(proc, argn)
+	//if !ok {
+	//	return -EFAULT
+	//}
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
 	}
@@ -533,7 +526,6 @@ type stat_t struct {
 	data	[]uint8
 	// field sizes
 	sizes	[]int
-	totsz	int
 }
 
 func (st *stat_t) init() {
@@ -548,7 +540,6 @@ func (st *stat_t) init() {
 		sz += c
 	}
 	st.data = make([]uint8, sz)
-	st.totsz = sz
 }
 
 func (st *stat_t) wdev(v int) {

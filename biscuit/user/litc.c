@@ -338,6 +338,7 @@ readline(char *prompt)
 	int ret;
 	int i = 0;
 	char c = 0x41;
+	// XXX
 	while ((ret = read(0, &c, 1)) > 0) {
 		if (c == '\n')
 			break;
@@ -400,12 +401,19 @@ printf_red(char *fmt, ...)
 	return ret;
 }
 
+struct kernstuff_t {
+	ulong magic;
+	char **argv;
+};
+
 void
-_entry(void)
+_entry(struct kernstuff_t *k)
 {
 	int argc = 0;
-	char **argv = NULL;
-	extern int main(int, char **);
-	int ret = main(argc, argv);
+	int main(int, char **);
+	//if (!k || k->magic != 0x1234)
+	//	errx(-1, "bad magic");
+	//int ret = main(argc, k->argv);
+	int ret = main(argc, NULL);
 	exit(ret);
 }

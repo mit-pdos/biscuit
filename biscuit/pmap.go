@@ -338,33 +338,6 @@ func is_mapped(pmap *[512]int, va int, size int) bool {
 	return true
 }
 
-// first ret value is the string from user space
-// second ret value is whether or not the string is mapped
-// third ret value is whether the string length is less than lenmax
-func is_mapped_str(pmap *[512]int, va int, lenmax int) (string, bool, bool) {
-	i := 0
-	var ret []byte
-	for {
-		pte := pmap_walk(pmap, va + i, false, 0, nil)
-		if pte == nil || *pte & PTE_P == 0 {
-			return "", false, false
-		}
-		phys := *pte & PTE_ADDR
-		phys += va & PGOFFSET
-		str := dmap8(phys)
-		for _, c := range str {
-			if c == 0 {
-				return string(ret), true, false
-			}
-			ret = append(ret, c)
-		}
-		i += len(str)
-		if len(ret) >= lenmax {
-			return "", true, true
-		}
-	}
-}
-
 func invlpg(va int) {
 	dur := unsafe.Pointer(uintptr(va))
 	runtime.Invlpg(dur)

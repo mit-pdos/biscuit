@@ -388,22 +388,50 @@ func (p *proc_t) sched_add(tf *[TFSIZE]int) {
 
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
-func (p *proc_t) dmapuser(va int) []uint8 {
+func (p *proc_t) userdmap(va int) ([]uint8, bool) {
 	uva := va & PGMASK
 	voff := va & PGOFFSET
 	phys, ok := p.upages[uva]
 	if !ok {
-		panic("no phys addr for user va")
+		return nil, false
 	}
-	return dmap8(phys + voff)
+	return dmap8(phys + voff), true
 }
 
-// copies src to the user virtual address uva. does not check if uva is mapped.
-func (p *proc_t) usercopy(src []uint8, uva int) {
+// first ret value is the string from user space
+// second ret value is whether or not the string is mapped
+// third ret value is whether the string length is less than lenmax
+func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
+	i := 0
+	var ret []byte
+	for {
+		str, ok := p.userdmap(uva + i)
+		if !ok {
+			return "", false, false
+		}
+		for _, c := range str {
+			if c == 0 {
+				return string(ret), true, false
+			}
+			ret = append(ret, c)
+		}
+		i += len(str)
+		if len(ret) >= lenmax {
+			return "", true, true
+		}
+	}
+}
+
+// copies src to the user virtual address uva. may copy part of src if uva +
+// len(src) is not mapped
+func (p *proc_t) usercopy(src []uint8, uva int) bool {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		dst := p.dmapuser(uva + cnt)
+		dst, ok := p.userdmap(uva + cnt)
+		if !ok {
+			return false
+		}
 		ub := len(src)
 		if ub > len(dst) {
 			ub = len(dst)
@@ -414,6 +442,7 @@ func (p *proc_t) usercopy(src []uint8, uva int) {
 		src = src[ub:]
 		cnt += ub
 	}
+	return true
 }
 
 func proc_kill(pid int) {
@@ -1003,6 +1032,7 @@ func main() {
 	//exec("bin/bmread")
 	//exec("bin/bmopen")
 	//exec("bin/conio")
+	//exec("bin/fault2")
 	exec("bin/lsh")
 
 	//ide_test()

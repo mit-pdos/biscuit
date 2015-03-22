@@ -35,6 +35,7 @@
 /user/lsh
 /user/bmopen
 /user/cls
+/user/fault2
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -54,3 +55,4 @@
 /fsdir/bin/lsh
 /fsdir/bin/bmopen
 /fsdir/bin/cls
+/fsdir/bin/fault2
