@@ -575,7 +575,7 @@ func cpus_stack_init(apcnt int, stackstart int) {
 	}
 }
 
-func cpus_start() {
+func cpus_start(aplim int) {
 	cpus := cpus_find()
 	apcnt := len(cpus) - 1
 
@@ -924,8 +924,6 @@ func attach_devs() {
 	pcibus_attach()
 }
 
-var aplim int = 0
-
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
@@ -936,6 +934,7 @@ func main() {
 	//chanbm()
 
 	// control CPUs
+	aplim := 1
 	runtime.GOMAXPROCS(1 + aplim)
 
 	qemuconfig()
@@ -970,7 +969,7 @@ func main() {
 	     }
 	go trap(handlers)
 
-	cpus_start()
+	cpus_start(aplim)
 	runtime.SCenable = false
 
 	fs_init()
