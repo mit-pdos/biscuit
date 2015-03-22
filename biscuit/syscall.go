@@ -401,10 +401,10 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 }
 
 func sys_execv(proc *proc_t, pathn int, argn int) int {
-	//args, ok := args_mapped(proc, argn)
-	//if !ok {
-	//	return -EFAULT
-	//}
+	args, ok := proc.userargs(argn)
+	if !ok {
+		return -EFAULT
+	}
 	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return -EFAULT
@@ -417,13 +417,10 @@ func sys_execv(proc *proc_t, pathn int, argn int) int {
 		return err
 	}
 	// XXX we don't recycle the proc. does it matter?
-	return sys_execv1(proc, parts, nil)
+	return sys_execv1(proc, parts, args)
 }
 
 func sys_execv1(proc *proc_t, path []string, args []string) int {
-	if len(args) != 0 {
-		panic("no imp")
-	}
 	// XXX close?
 	file, err := fs_open(path, O_RDONLY, 0)
 	if err != 0 {
@@ -479,9 +476,58 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 	}
 
 	elf_load(newproc, elf)
+	argc, argv := insertargs(newproc, args)
+	tf[TF_RDI] = argc
+	tf[TF_RSI] = argv
 	newproc.sched_add(&tf)
 
 	return 0
+}
+
+func insertargs(proc *proc_t, sargs []string) (int, int) {
+	// find free page
+	uva := 0
+	for i := 0; i < 1000; i++ {
+		taddr := USERMIN + i*PGSIZE
+		if _, ok := proc.upages[taddr]; !ok {
+			uva = taddr
+			break
+		}
+	}
+	if uva == 0 {
+		panic("couldn't find free user page")
+	}
+	pg, p_pg := pg_new(proc.pages)
+	proc.page_insert(uva, pg, p_pg, PTE_U, true)
+	var args [][]uint8
+	for _, str := range sargs {
+		args = append(args, []uint8(str))
+	}
+	argptrs := make([]int, len(args) + 1)
+	// copy strings to arg page
+	cnt := 0
+	for i, arg := range args {
+		argptrs[i] = uva + cnt
+		// add null terminators
+		arg = append(arg, 0)
+		if !proc.usercopy(arg, uva + cnt) {
+			// args take up more than a page? the user is on their
+			// own.
+			return 0, uva
+		}
+		cnt += len(arg)
+	}
+	argptrs[len(argptrs) - 1] = 0
+	// now put the array of strings
+	argstart := uva + cnt
+	vdata, ok := proc.userdmap(argstart)
+	if !ok || len(vdata) < len(argptrs)*8 {
+		return 0, uva
+	}
+	for i, ptr := range argptrs {
+		writen(vdata, 8, i*8, ptr)
+	}
+	return len(args), argstart
 }
 
 func sys_exit(proc *proc_t, status int) {

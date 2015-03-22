@@ -364,6 +364,8 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 		invlpg(va)
 	}
 
+	// make sure page is tracked if shared (ie the page was not allocated
+	// via pg_new with p's "pages")
 	p.pages[p_pg] = pg
 	p.upages[uva] = p_pg
 }
@@ -420,6 +422,64 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 			return "", true, true
 		}
 	}
+}
+
+func (p *proc_t) userargs(uva int) ([]string, bool) {
+	if uva == 0 {
+		return nil, true
+	}
+	isnull := func(cptr []uint8) bool {
+		for _, b := range cptr {
+			if b != 0 {
+				return false
+			}
+		}
+		return true
+	}
+	ret := make([]string, 0)
+	argmax := 16
+	addarg := func(cptr []uint8) bool {
+		if len(ret) > argmax {
+			return false
+		}
+		var uva int
+		// cptr is little-endian
+		for i, b := range cptr {
+			uva = uva | int(uint(b)) << uint(i*8)
+		}
+		lenmax := 128
+		str, ok, long := p.userstr(uva, lenmax)
+		if !ok || long {
+			return false
+		}
+		ret = append(ret, str)
+		return true
+	}
+	uoff := 0
+	psz := 8
+	done := false
+	curaddr := make([]uint8, 0)
+	for !done {
+		ptrs, ok := p.userdmap(uva + uoff)
+		if !ok {
+			fmt.Printf("dmap\n")
+			return nil, false
+		}
+		for _, ab := range ptrs {
+			curaddr = append(curaddr, ab)
+			if len(curaddr) == psz {
+				if isnull(curaddr) {
+					done = true
+					break
+				}
+				if !addarg(curaddr) {
+					return nil, false
+				}
+				curaddr = curaddr[0:0]
+			}
+		}
+	}
+	return ret, true
 }
 
 // copies src to the user virtual address uva. may copy part of src if uva +
@@ -1009,7 +1069,7 @@ func main() {
 	exec := func(cmd string) {
 		fmt.Printf("start [%v]\n", cmd)
 		path := strings.Split(cmd, "/")
-		ret := sys_execv1(nil, path, nil)
+		ret := sys_execv1(nil, path, []string{cmd})
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
