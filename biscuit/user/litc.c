@@ -106,6 +106,15 @@ unlink(const char *path)
 	return syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
 }
 
+int
+atoi(const char *n)
+{
+	int tot = 0;
+	while (*n)
+		tot = tot*10 + (*n++ - '0');
+	return tot;
+}
+
 void
 err(int eval, const char *fmt, ...)
 {

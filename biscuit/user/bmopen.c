@@ -2,29 +2,25 @@
 
 int main(int argc, char **argv)
 {
-	// find unique dirname for depth
-	char dname[] = "/dA";
-	while (1) {
-		int fd;
-		if ((fd = open(dname, O_RDONLY, 0)) < 0) {
-			close(fd);
-			break;
-		}
-		if (dname[2] > 'Z')
-			errx(-1, "couldn't find unique dirname");
-		dname[2]++;
-	}
+	char dname[] = "/d";
 
-	const int depth = 10;
+	int depth = 10;
+	if (argc >= 2)
+		depth = atoi(argv[1]);
+	printf("using depth: %d\n", depth);
+
 	char boof[1024];
 	char *p = boof;
 	char *end = boof + sizeof(boof);
+	int make = 1;
 	int i;
 	for (i = 0; i < depth; i++) {
 		p += snprintf(p, end - p, "%s", dname);
-		int ret;
-		if ((ret = mkdir(boof, 0)) < 0)
-			err(ret, "mkdir");
+		if (make)
+			if (mkdir(boof, 0) < 0) {
+				make = 0;
+				printf("dirs already made\n");
+			}
 	}
 	char *fn = "/politicians";
 	snprintf(p, end - p, "%s", fn);

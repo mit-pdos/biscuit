@@ -44,6 +44,7 @@ long read(int, void*, size_t);
 int unlink(const char *);
 long write(int, void*, size_t);
 
+int atoi(const char *);
 void err(int, const char *, ...);
 void errx(int, const char *, ...);
 int printf(char *, ...);
