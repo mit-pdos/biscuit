@@ -33,6 +33,8 @@
 /user/bmread
 /user/conio
 /user/lsh
+/user/bmopen
+/user/cls
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -50,3 +52,5 @@
 /fsdir/bin/bmread
 /fsdir/bin/conio
 /fsdir/bin/lsh
+/fsdir/bin/bmopen
+/fsdir/bin/cls

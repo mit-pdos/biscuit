@@ -934,7 +934,7 @@ func main() {
 	//chanbm()
 
 	// control CPUs
-	aplim := 1
+	aplim := 0
 	runtime.GOMAXPROCS(1 + aplim)
 
 	qemuconfig()
@@ -1001,6 +1001,7 @@ func main() {
 	//exec("bin/ls")
 	//exec("bin/bmwrite")
 	//exec("bin/bmread")
+	//exec("bin/bmopen")
 	//exec("bin/conio")
 	exec("bin/lsh")
 
@@ -1085,6 +1086,10 @@ func ip_process(ipchan chan packet) {
 }
 
 func chanbm() {
+	//dmap_init()
+	//cpus_start(1)
+	//runtime.GOMAXPROCS(2)
+
 	for i := range workytown {
 		workytown[i] = rand.Int()
 	}
