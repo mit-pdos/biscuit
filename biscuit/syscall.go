@@ -460,7 +460,7 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 		proc_kill(proc.pid)
 		usepid = proc.pid
 	}
-	cmd := "/" + strings.Join(path, "/") + strings.Join(args, " ")
+	cmd := strings.Join(args, " ")
 	newproc := proc_new(cmd, usepid)
 
 

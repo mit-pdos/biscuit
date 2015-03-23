@@ -218,7 +218,7 @@ func trap_pgfault(ts *trapstore_t) {
 
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
-	    proc.Name(), fa, rip)
+	    proc.name, fa, rip)
 	proc_kill(pid)
 }
 
@@ -273,10 +273,6 @@ type proc_t struct {
 	fds	map[int]*fd_t
 	cwd	string
 	tstart	uint64
-}
-
-func (p *proc_t) Name() string {
-	return "\"" + p.name + "\""
 }
 
 var proclock = sync.Mutex{}
