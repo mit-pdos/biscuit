@@ -2556,6 +2556,14 @@ runtime·Resetgcticks(void)
 	return ret;
 }
 
+#pragma textflag NOSPLIT
+uint64
+runtime·Gcticks(void)
+{
+	runtime·stackcheck();
+	return runtime·gcticks;
+}
+
 uint64 runtime·doint;
 int64 runtime·intcnt;
 void (*runtime·Goint)(void);

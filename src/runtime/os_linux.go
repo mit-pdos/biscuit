@@ -58,6 +58,7 @@ func Stackdump(int)
 func Usleep(int)
 func Rflags() int
 func Resetgcticks() uint64
+func Gcticks() uint64
 func Trapwake()
 
 func inb(int) int
