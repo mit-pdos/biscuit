@@ -37,6 +37,7 @@
 /user/cls
 /user/fault2
 /user/echo
+/user/cat
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -58,3 +59,4 @@
 /fsdir/bin/cls
 /fsdir/bin/fault2
 /fsdir/bin/echo
+/fsdir/bin/cat
