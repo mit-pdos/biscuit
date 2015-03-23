@@ -90,6 +90,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	case SYS_PAUSE:
 		ret = sys_pause(p)
 	case SYS_GETPID:
+		// XXX
+		runtime.Resetgcticks()
 		ret = sys_getpid(p)
 	case SYS_FORK:
 		ret = sys_fork(p, tf)
