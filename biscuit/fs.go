@@ -1029,9 +1029,8 @@ func (idm *idaemon_t) all_dirents() ([]*dirdata_t) {
 	}
 	isz := idm.icache.size
 	ret := make([]*dirdata_t, 0)
-	for bn := 0; bn < isz/512; bn++ {
-		blkn := idm.icache.addrs[bn]
-		blk := bread(blkn)
+	for i := 0; i < isz; i += 512 {
+		_, blk := idm.blkslice(i, false)
 		dirdata := &dirdata_t{blk}
 		ret = append(ret, dirdata)
 	}
@@ -1225,6 +1224,7 @@ const(
 	I_DEV   = 3
 	I_LAST = I_DEV
 
+	// direct block addresses
 	NIADDRS = 10
 	// number of words in an inode
 	NIWORDS = 6 + NIADDRS

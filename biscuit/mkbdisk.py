@@ -96,7 +96,7 @@ class Dirb:
     # use indirect block?
     if len(self.blks) == iaddrs:
         if self.indblk == None:
-            self.indblk = Indirectb(nb, self.ba)
+            self.indblk = Indirectb(self.ba)
             self.indirect = self.indblk.init()
         self.curblk = self.indblk.grow()
     else:
