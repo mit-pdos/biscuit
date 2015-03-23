@@ -40,6 +40,7 @@ int open(const char *, int, int);
 #define    O_WRONLY          1
 #define    O_RDWR            2
 #define    O_CREAT        0x80
+int pause(void);
 long read(int, void*, size_t);
 int unlink(const char *);
 long write(int, void*, size_t);

@@ -47,6 +47,7 @@ const(
     O_APPEND      = 0x400
   SYS_CLOSE    = 3
   SYS_FSTAT    = 5
+  SYS_PAUSE    = 34
   SYS_GETPID   = 39
   SYS_FORK     = 57
   SYS_EXECV    = 59
@@ -86,6 +87,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_close(p, a1)
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
+	case SYS_PAUSE:
+		ret = sys_pause(p)
 	case SYS_GETPID:
 		ret = sys_getpid(p)
 	case SYS_FORK:
@@ -245,6 +248,13 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	}
 	fd.file = file
 	return fdn
+}
+
+func sys_pause(proc *proc_t) int {
+	// no signals yet!
+	var c chan bool
+	<- c
+	return -1
 }
 
 func sys_close(proc *proc_t, fdn int) int {

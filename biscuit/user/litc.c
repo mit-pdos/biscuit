@@ -6,6 +6,7 @@
 #define SYS_OPEN         2
 #define SYS_CLOSE        3
 #define SYS_FSTAT        5
+#define SYS_PAUSE        34
 #define SYS_GETPID       39
 #define SYS_FORK         57
 #define SYS_EXECV        59
@@ -86,6 +87,12 @@ int
 open(const char *path, int flags, int mode)
 {
 	return syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
+}
+
+int
+pause(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_PAUSE);
 }
 
 long
