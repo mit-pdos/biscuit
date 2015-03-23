@@ -1680,13 +1680,13 @@ func (blc *bcdaemon_t) chk_evict() {
 		if !bb.dirty && !blc.given[i] {
 			delete(blc.blocks, i)
 			evictn--
-			if evictn == 0 {
+			if evictn == 0 && len(blc.blocks) <= nbcbufs {
 				break
 			}
 		}
 	}
-	if len(blc.blocks) >= nbcbufs {
-		panic("blc full of dirty blocks")
+	if len(blc.blocks) > nbcbufs {
+		panic("blc full")
 	}
 }
 
