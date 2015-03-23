@@ -12,15 +12,10 @@ int main(int argc, char **argv)
 	char boof[1024];
 	char *p = boof;
 	char *end = boof + sizeof(boof);
-	int make = 1;
 	int i;
 	for (i = 0; i < depth; i++) {
 		p += snprintf(p, end - p, "%s", dname);
-		if (make)
-			if (mkdir(boof, 0) < 0) {
-				make = 0;
-				printf("dirs already made\n");
-			}
+		mkdir(boof, 0);
 	}
 	char *fn = "/politicians";
 	snprintf(p, end - p, "%s", fn);
