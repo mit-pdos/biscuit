@@ -38,6 +38,7 @@
 /user/fault2
 /user/echo
 /user/cat
+/user/bmgc
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -60,3 +61,4 @@
 /fsdir/bin/fault2
 /fsdir/bin/echo
 /fsdir/bin/cat
+/fsdir/bin/bmgc
