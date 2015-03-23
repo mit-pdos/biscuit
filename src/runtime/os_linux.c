@@ -1297,8 +1297,10 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	USED(offset);
 	uint8 *v = va;
 
-	if (ROUNDUP(sz, PGSIZE)/PGSIZE > runtime·Pglast - runtime·Pgfirst)
+	if (ROUNDUP(sz, PGSIZE)/PGSIZE > runtime·Pglast - runtime·Pgfirst) {
+		spunlock(&maplock);
 		return (void *)-1;
+	}
 
 	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0)) {
 		runtime·pancake("high addr?", (uint64)v);
