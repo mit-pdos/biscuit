@@ -271,6 +271,8 @@ type proc_t struct {
 	p_pmap	int
 	dead	bool
 	fds	map[int]*fd_t
+	// where to start scanning for free fds
+	fdstart	int
 	cwd	string
 	tstart	uint64
 }
@@ -301,6 +303,7 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.pages = make(map[int]*[512]int)
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
+	ret.fdstart = 2
 	ret.cwd = "/"
 
 	return ret
@@ -318,9 +321,10 @@ func proc_get(pid int) *proc_t {
 
 func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
 	// find free fd
-	newfd := 0
+	newfd := p.fdstart
 	for {
 		if _, ok := p.fds[newfd]; !ok {
+			p.fdstart = newfd
 			break
 		}
 		newfd++

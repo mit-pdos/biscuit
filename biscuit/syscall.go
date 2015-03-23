@@ -268,6 +268,9 @@ func sys_close(proc *proc_t, fdn int) int {
 	// XXX free inode blocks if it has no links and this was the last fd to
 	// it.
 	delete(proc.fds, fdn)
+	if fdn < proc.fdstart {
+		proc.fdstart = fdn
+	}
 	return 0
 }
 
