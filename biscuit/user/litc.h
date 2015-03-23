@@ -29,7 +29,7 @@ struct __attribute__((packed)) stat {
 
 int close(int);
 void exit(int);
-int execv(const char *, const char **);
+int execv(const char *, char * const[]);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);

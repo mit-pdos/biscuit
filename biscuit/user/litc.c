@@ -48,7 +48,7 @@ exit(int status)
 }
 
 int
-execv(const char *path, const char *argv[])
+execv(const char *path, char * const argv[])
 {
 	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
 }

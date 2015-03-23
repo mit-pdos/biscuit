@@ -34,7 +34,7 @@ int main(int argc, char **argv)
 		if (pid)
 			// XXX wait()
 			continue;
-		int ret = execv(args[0], (const char **)args);
+		int ret = execv(args[0], args);
 		if (ret)
 			errx(ret, "couldn't exec \"%s\"\n", p);
 	}
