@@ -263,8 +263,8 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 			dst[i] = dstval
 			continue
 		}
-		// copy mappings of pages > PGSIZE
-		if c & PTE_PS != 0 {
+		// copy mappings of PS pages and the recursive mapping
+		if c & PTE_PS != 0 || depth == 4 && i == VREC {
 			dst[i] = c
 			continue
 		}
