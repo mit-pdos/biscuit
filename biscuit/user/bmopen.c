@@ -21,13 +21,11 @@ int main(int argc, char **argv)
 	snprintf(p, end - p, "%s", fn);
 
 	printf("using \"%s\"...\n", boof);
+	open(boof, O_RDWR | O_CREAT, 0);
 	for (i = 0; i < 100; i++) {
 		int ret;
-		if ((ret = open(boof, O_RDWR | O_CREAT, 0)) < 0) {
+		if ((ret = open(boof, O_RDONLY, 0)) < 0)
 			err(ret, "open");
-		}
-		if ((ret = unlink(boof)) < 0)
-			err(ret, "unlink");
 	}
 	printf("done\n");
 
