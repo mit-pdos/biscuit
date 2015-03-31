@@ -251,10 +251,7 @@ func iroot_getp(path []string) (inum, int) {
 	req.mkget(path, false)
 	iroot.req <- req
 	resp := <- req.ack
-	if resp.err != 0 {
-		return 0, resp.err
-	}
-	return resp.gnext, 0
+	return resp.gnext, resp.err
 }
 
 type file_t struct {
