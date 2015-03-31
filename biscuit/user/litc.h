@@ -40,6 +40,9 @@ int open(const char *, int, int);
 #define    O_WRONLY          1
 #define    O_RDWR            2
 #define    O_CREAT        0x80
+#define    O_TRUNC        0x200
+
+#define    S_IRWXU        0700
 int pause(void);
 long read(int, void*, size_t);
 int unlink(const char *);

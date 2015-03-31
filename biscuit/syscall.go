@@ -468,6 +468,9 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 	cmd := strings.Join(args, " ")
 	newproc := proc_new(cmd, usepid)
 
+	if proc != nil {
+		newproc.tstart = proc.tstart
+	}
 
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
 	var tf [23]int
