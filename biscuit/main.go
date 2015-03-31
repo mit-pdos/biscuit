@@ -106,6 +106,9 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 
 	// add to trap circular buffer for actual trap handler
 	if tsnext(head) == tail {
+		for i := tail; i != head; i = tsnext(i) {
+			runtime.Pnum(cpus[lid].trapstore[i].trapno)
+		}
 		runtime.Pnum(0xbad)
 		for {}
 	}
