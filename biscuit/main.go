@@ -306,7 +306,7 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.pages = make(map[int]*[512]int)
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
-	ret.fdstart = 2
+	ret.fdstart = 3
 	ret.cwd = "/"
 
 	return ret
@@ -327,7 +327,7 @@ func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
 	newfd := p.fdstart
 	for {
 		if _, ok := p.fds[newfd]; !ok {
-			p.fdstart = newfd
+			p.fdstart = newfd + 1
 			break
 		}
 		newfd++
