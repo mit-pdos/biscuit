@@ -264,7 +264,7 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 			continue
 		}
 		// copy mappings of PS pages and the recursive mapping
-		if c & PTE_PS != 0 || depth == 4 && i == VREC {
+		if c & PTE_PS != 0 || (depth == 4 && i == VREC) {
 			dst[i] = c
 			continue
 		}
@@ -289,29 +289,6 @@ func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
 	npm, p_npm := pg_new(ptracker)
 	doinval := copy_pmap1(ptemod, npm, pm, 4, ptracker)
 	return npm, p_npm, doinval
-}
-
-func pmap_cperms(pm *[512]int, va int, nperms int) {
-	b1, b2, b3, b4 := pgbits(uint(va))
-	if pm[b1] & PTE_P == 0 {
-		return
-	}
-	pm[b1] |= nperms
-	next := pe2pg(pm[b1])
-	if next[b2] & PTE_P == 0 {
-		return
-	}
-	next[b2] |= nperms
-	next = pe2pg(next[b2])
-	if next[b3] & PTE_P == 0 {
-		return
-	}
-	next[b3] |= nperms
-	next = pe2pg(next[b3])
-	if next[b4] & PTE_P == 0 {
-		return
-	}
-	next[b4] |= nperms
 }
 
 // allocates a page tracked by allpages and maps it at va
@@ -368,7 +345,8 @@ func physmapped1(pmap *[512]int, phys int, depth int, acc int,
 		}
 		nextp := pe2pg(c)
 		nexta := acc << 9 | i
-		mapped, va := physmapped1(nextp, phys, depth - 1, nexta, thresh, tsz)
+		mapped, va := physmapped1(nextp, phys, depth - 1, nexta,
+		    thresh, tsz)
 		if mapped {
 			return true, va
 		}
