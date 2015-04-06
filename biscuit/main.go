@@ -1187,15 +1187,13 @@ func chanbm() {
 		workytown[i] = rand.Int()
 	}
 
-	// start it here; maybe move to inner loop to learn about go routine
-	// creation time.
-	go chand()
-
+	bs := 1
 	for {
 		st := runtime.Rdtsc()
-		chanit()
+		chanit(bs)
 		elapsed := runtime.Rdtsc() - st
-		fmt.Printf("channel cycles: %20v\n", elapsed)
+		fmt.Printf("channel cycles: %20v (bs %v)\n", elapsed, bs)
+		bs *= 10
 
 		st = runtime.Rdtsc()
 		lockit()
@@ -1207,25 +1205,39 @@ func chanbm() {
 
 type msg_t struct {
 	a	int
-	b	int
+	//b	int
 }
 
 var niters int = 100000
-var bgo = make(chan msg_t)
-var bdone = make(chan msg_t)
 
-func chanit() {
-	a := msg_t{10,0}
-	for i := 0; i < niters; i++ {
-		bgo <- a
-		a = <- bdone
-		workytown[0] = a.a
+func chanit(bs int) {
+	a := msg_t{10}
+	if bs > niters {
+		bs = niters
 	}
+	bgo := make(chan msg_t, bs)
+	bdone := make(chan msg_t, bs)
+	go chand(bgo, bdone)
+
+	for i := 0; i < niters/bs; i++ {
+		for i := 0; i < bs; i++ {
+			bgo <- a
+		}
+		for i := 0; i < bs; i++ {
+			a = <- bdone
+			workytown[0] = a.a
+		}
+	}
+	close(bgo)
+	close(bdone)
 }
 
-func chand() {
+func chand(bgo chan msg_t, bdone chan msg_t) {
 	for {
-		a := <- bgo
+		a, ok := <- bgo
+		if !ok {
+			break
+		}
 		workytown[0] = a.a
 		work()
 		bdone <- a
