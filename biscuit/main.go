@@ -346,7 +346,7 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 
 	uva := va & PGMASK
-	pte := pmap_walk(p.pmap, va, true, perms, p.pages)
+	pte := pmap_walk(p.pmap, va, true, PTE_U | PTE_W, p.pages)
 	ninval := false
 	if pte != nil && *pte & PTE_P != 0 {
 		if vempty {
