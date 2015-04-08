@@ -88,6 +88,9 @@ func sc_setup() {
 func sc_put(c int8) {
 	com1 := 0x3f8
 	lstatus := 5
+	if c == '\n' {
+		sc_put('\r')
+	}
 	for inb(com1 + lstatus) & 0x20 == 0 {
 	}
 	Outb(com1, int(c))

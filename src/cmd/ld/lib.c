@@ -1113,6 +1113,9 @@ stkcheck(Chain *up, int depth)
 	// or the interrupt preempter. it checks its own stack explicitly.
 	if(strcmp(s->name, "runtime.handle_int") == 0)
 		return 0;
+	// or serial console puts; it is not really infinitely recursive
+	if(strcmp(s->name, "runtime.sc_put") == 0)
+		return 0;
 
 	// Don't duplicate work: only need to consider each
 	// function at top of safe zone once.
