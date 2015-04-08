@@ -1018,6 +1018,41 @@ func attach_devs() {
 	pcibus_attach()
 }
 
+func cpu_wakeup() {
+	lapaddr := 0xfee00000
+	pte := pmap_walk(kpmap(), lapaddr, false, 0, nil)
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_PCD == 0 {
+		panic("lapaddr unmapped")
+	}
+	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	icrh := 0x310/4
+	icrl := 0x300/4
+
+	ipilow := func(ds int, t int, l int, deliv int, vec int) uint32 {
+		return uint32(ds << 18 | t << 15 | l << 14 |
+		    deliv << 8 | vec)
+	}
+
+	icrw := func(hi uint32, low uint32) {
+		// use sync to guarantee order
+		atomic.StoreUint32(&lap[icrh], hi)
+		atomic.StoreUint32(&lap[icrl], low)
+	}
+
+	// destination shorthands:
+	// 1: self
+	// 2: all
+	// 3: all but me
+	timeripi := func() {
+		vec := TIMER
+		dshort:= 3
+		hi  := uint32(0)
+		low := ipilow(dshort, 0, 0, 0, vec)
+		icrw(hi, low)
+	}
+	timeripi()
+}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
