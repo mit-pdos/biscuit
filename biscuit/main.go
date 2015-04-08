@@ -942,7 +942,9 @@ func kbd_init() {
 	    }
 
 	for i, c := range tm {
-		km[i] = c
+		if c != NO {
+			km[i] = c
+		}
 	}
 	cons.kbd_int = make(chan bool)
 	cons.reader = make(chan []byte)
