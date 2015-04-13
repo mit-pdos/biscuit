@@ -291,6 +291,46 @@ func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
 	return npm, p_npm, doinval
 }
 
+func pmap_iter1(ptef func(int, *int), pm *[512]int, depth int, va int,
+    startva bool) {
+	starti := 0
+	if startva {
+		starti = va >> uint(12 + 9*depth)
+		starti &= 0x1ff
+	}
+	mkva := func(ova int, d int, idx int) int {
+		// canonicalize
+		if d == 3 && idx >= 256 {
+			ova = -1 &^ ((1 << 48) - 1)
+		}
+		return ova | idx << uint(9*d + 12)
+	}
+	for i := starti; i < len(pm); i++ {
+		c := pm[i]
+		cva := mkva(va, depth, i)
+		if c & PTE_P  == 0 {
+			continue
+		}
+		// skip recursive mapping
+		if depth == 3 && i == VREC {
+			continue
+		}
+		// run ptef on the PTE
+		if depth == 0 || c & PTE_PS != 0 {
+			ptef(cva, &pm[i])
+			continue
+		}
+		// otherwise, recurse
+		useva := i == starti
+		nextpm := pe2pg(c)
+		pmap_iter1(ptef, nextpm, depth - 1, cva, useva)
+	}
+}
+
+func pmap_iter(ptef func(int, *int), pm *[512]int, va int) {
+	// XXX pmap iter depth is between [0, 3], copy_pmap is [1, 4]...
+	pmap_iter1(ptef, pm, 3, va, true)
+}
 // allocates a page tracked by allpages and maps it at va
 func kmalloc(va int, perms int) {
 	allplock.Lock()
