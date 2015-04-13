@@ -209,27 +209,19 @@ numtoch(char n)
 }
 
 static int
-putn1(char *p, char *end, ulong n, int base, long acc)
-{
-	if (acc > n) {
-		int pzero = acc == 1;
-		if (pzero)
-			wc(p, end, numtoch(0));
-		return pzero;
-	}
-	long newbase = acc * base;
-	int ret = putn1(p, end, n, base, newbase);
-	p += ret;
-	char c = (n % newbase)/acc;
-	c = numtoch(c);
-	wc(p, end, c);
-	return ret + 1;
-}
-
-static int
 putn(char *p, char *end, ulong n, int base)
 {
-	return putn1(p, end, n, base, 1);
+	char buf[21];
+	int i = 0;
+	while (n) {
+		int left = n % base;
+		buf[i++] = numtoch(left);
+		n /= base;
+	}
+	int ret = i;
+	while (i--)
+		p += wc(p, end, buf[i]);
+	return ret;
 }
 
 static char pbuf[MAXBUF];
@@ -277,11 +269,7 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 					dst += wc(dst, end, '-');
 					n = ~n + 1;
 				}
-				ulong top = n / 10000000000ULL;
-				ulong bot = n % 10000000000ULL;
-				if (top)
-					dst += putn(dst, end, top, 10);
-				dst += putn(dst, end, bot, 10);
+				dst += putn(dst, end, n, 10);
 				done = 1;
 				break;
 			}
@@ -296,11 +284,7 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 					n = va_arg(ap, ulong);
 				else
 					n = (ulong)(uint)va_arg(ap, int);
-				ulong top = n >> 32;
-				ulong bot = n & ((1ULL << 32) - 1);
-				if (top)
-					dst += putn(dst, end, top, 16);
-				dst += putn(dst, end, bot, 16);
+				dst += putn(dst, end, n, 16);
 				done = 1;
 				break;
 			}
