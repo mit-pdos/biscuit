@@ -49,12 +49,14 @@ int unlink(const char *);
 long write(int, void*, size_t);
 
 int atoi(const char *);
+ulong atoul(const char *);
 void err(int, const char *, ...);
 void errx(int, const char *, ...);
 int printf(char *, ...);
 int vprintf(const char *, va_list);
 int printf_blue(char *, ...);
 int printf_red(char *, ...);
+ulong rdtsc(void);
 char *readline(char *);
 int snprintf(char *, size_t, const char *, ...);
 char *strncpy(char *, const char *, size_t);

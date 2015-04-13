@@ -122,6 +122,15 @@ atoi(const char *n)
 	return tot;
 }
 
+ulong
+atoul(const char *n)
+{
+	ulong tot = 0;
+	while (*n)
+		tot = tot*10 + (*n++ - '0');
+	return tot;
+}
+
 void
 err(int eval, const char *fmt, ...)
 {
@@ -345,6 +354,18 @@ printf(char *fmt, ...)
 }
 
 static char readlineb[256];
+
+ulong
+rdtsc(void)
+{
+	ulong low, hi;
+	asm volatile(
+	    "rdtsc\n"
+	    : "=a"(low), "=d"(hi)
+	    :
+	    :);
+	return hi << 32 | low;
+}
 
 char *
 readline(char *prompt)
