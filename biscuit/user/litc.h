@@ -30,6 +30,7 @@ struct __attribute__((packed)) stat {
 int close(int);
 void exit(int);
 int execv(const char *, char * const[]);
+int fake_sys(long);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);

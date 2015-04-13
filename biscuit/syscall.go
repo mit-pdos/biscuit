@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+import "math/rand"
 import "runtime"
 import "strings"
 import "unsafe"
@@ -55,6 +56,7 @@ const(
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
+  SYS_FAKE     = 31337
 )
 
 // lowest userspace address
@@ -105,6 +107,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_link(p, a1, a2)
 	case SYS_UNLINK:
 		ret = sys_unlink(p, a1)
+	case SYS_FAKE:
+		ret = sys_fake(p, a1)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
@@ -550,13 +554,28 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 
 func sys_exit(proc *proc_t, status int) {
 	//fmt.Printf("%v exited with status %v\n", proc.name, status)
-	tot := runtime.Rdtsc() - proc.tstart
+	//tot := runtime.Rdtsc() - proc.tstart
 	proc_kill(proc.pid)
-	fmt.Printf("%v -- %v cycles (%v GC cycles)\n", proc.name, tot,
-	    runtime.Resetgcticks())
-	if runtime.SCenable {
-		fmt.Printf("SERIAL CONSOLE ENABLED\n")
+	//fmt.Printf("%v -- %v cycles (%v GC cycles)\n", proc.name, tot,
+	//    runtime.Resetgcticks())
+	//if runtime.SCenable {
+	//	fmt.Printf("SERIAL CONSOLE ENABLED\n")
+	//}
+}
+
+type obj_t struct {
+}
+
+var amap = map[int]obj_t{}
+
+func sys_fake(proc *proc_t, n int) int {
+	amap = make(map[int]obj_t)
+	for i := 0; i < n; i++ {
+		amap[rand.Int()] = obj_t{}
 	}
+
+	//return len(amap)
+	return int(runtime.Resetgcticks())
 }
 
 func readn(a []uint8, n int, off int) int {

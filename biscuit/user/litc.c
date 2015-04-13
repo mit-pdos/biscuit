@@ -14,6 +14,7 @@
 #define SYS_MKDIR        83
 #define SYS_LINK         86
 #define SYS_UNLINK       87
+#define SYS_FAKE         31337
 
 static void pmsg(char *);
 
@@ -51,6 +52,12 @@ int
 execv(const char *path, char * const argv[])
 {
 	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
+}
+
+int
+fake_sys(long n)
+{
+	return syscall(n, 0, 0, 0, 0, SYS_FAKE);
 }
 
 int
