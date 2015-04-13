@@ -57,6 +57,7 @@ func p8259_eoi() {
 }
 
 const(
+	DIVZERO   = 0
 	GPFAULT   = 13
 	PGFAULT   = 14
 	TIMER     = 32
@@ -127,7 +128,7 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 	runtime.Trapwake()
 
 	switch trapno {
-	case SYSCALL, PGFAULT:
+	case SYSCALL, PGFAULT, DIVZERO:
 		// yield until the syscall/fault is handled
 		runtime.Procyield()
 	case INT_DISK:
@@ -180,6 +181,11 @@ func trap(handlers map[int]func(*trapstore_t)) {
 		}
 		runtime.Trapsched()
 	}
+}
+
+func trap_divzero(ts *trapstore_t) {
+	fmt.Printf("pid %v divide by zero; killing...\n", ts.pid)
+	proc_kill(ts.pid)
 }
 
 func trap_disk(ts *trapstore_t) {
@@ -1090,6 +1096,7 @@ func main() {
 	}
 
 	handlers := map[int]func(*trapstore_t) {
+	     DIVZERO: trap_divzero,
 	     GPFAULT: trap_diex(GPFAULT),
 	     PGFAULT: trap_pgfault,
 	     SYSCALL: trap_syscall,
