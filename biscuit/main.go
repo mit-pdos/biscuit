@@ -1106,17 +1106,21 @@ func main() {
 	go trap(handlers)
 
 	cpus_start(aplim)
-	runtime.SCenable = false
+	//runtime.SCenable = false
 
 	fs_init()
 	kbd_init()
 
 	runtime.Resetgcticks()
 
-	exec := func(cmd string) {
+	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v]\n", cmd)
 		path := strings.Split(cmd, "/")
-		ret := sys_execv1(nil, path, []string{cmd})
+		nargs := make([]string, 1)
+		nargs[0] = cmd
+		nargs = append(nargs, args...)
+		//ret := sys_execv1(nil, path, []string{cmd})
+		ret := sys_execv1(nil, path, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
@@ -1140,7 +1144,10 @@ func main() {
 	//exec("bin/bmopen")
 	//exec("bin/conio")
 	//exec("bin/fault2")
-	exec("bin/lsh")
+	//exec("bin/lsh")
+	//exec("bin/bmgc2", []string{"100000000"})
+	//exec("bin/bmgc2", []string{"10"})
+	exec("bin/lsh", []string{})
 
 	//ide_test()
 
