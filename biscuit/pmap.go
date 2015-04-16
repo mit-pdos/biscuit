@@ -150,13 +150,14 @@ func dmap_init() {
 	}
 	fmt.Printf("1GB pages not supported\n")
 
-	size = (1 << 21)
+	size = 1 << 21
+	pdptsz := 1 << 30
 	for i := range pdpt {
 		pd := new([512]int)
 		p_pd := runtime.Vtop(pd)
 		apadd(pd, p_pd)
 		for j := range pd {
-			pd[j] = j*size | PTE_P | PTE_W | PTE_PS
+			pd[j] = i*pdptsz + j*size | PTE_P | PTE_W | PTE_PS
 		}
 		pdpt[i] = p_pd | PTE_P | PTE_W
 	}
