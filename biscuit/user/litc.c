@@ -54,7 +54,7 @@ execv(const char *path, char * const argv[])
 	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
 }
 
-int
+long
 fake_sys(long n)
 {
 	return syscall(n, 0, 0, 0, 0, SYS_FAKE);
@@ -218,6 +218,10 @@ numtoch(char n)
 static int
 putn(char *p, char *end, ulong n, int base)
 {
+	if (n == 0) {
+		wc(p, end, '0');
+		return 1;
+	}
 	char buf[21];
 	int i = 0;
 	while (n) {

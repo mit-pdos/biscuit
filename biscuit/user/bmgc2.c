@@ -16,7 +16,7 @@ int main(int argc, char **argv)
 			exit(0);
 	ulong tot = rdtsc() - st;
 
-	int gctime;
+	long gctime;
 	gctime = fake_sys(0);
 
 	printf("%ld / %ld cycles GCing\n", gctime, tot);
