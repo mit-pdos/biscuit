@@ -90,6 +90,9 @@ func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
 	}
 	physaddr := *pte & PTE_ADDR
 
+	if _, ok := ptracker[physaddr]; ok {
+		panic("page already tracked")
+	}
 	ptracker[physaddr] = pt
 
 	return pt, physaddr
@@ -264,8 +267,12 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 			continue
 		}
 		// copy mappings of PS pages and the recursive mapping
-		if c & PTE_PS != 0 || (depth == 4 && i == VREC) {
+		if c & PTE_PS != 0 {
 			dst[i] = c
+			continue
+		}
+		if depth == 4 && i == VREC {
+			dst[i] = 0
 			continue
 		}
 		// otherwise, recursively copy
@@ -288,6 +295,7 @@ func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
     ptracker map[int]*[512]int) (*[512]int, int, bool) {
 	npm, p_npm := pg_new(ptracker)
 	doinval := copy_pmap1(ptemod, npm, pm, 4, ptracker)
+	npm[VREC] = p_npm | PTE_P | PTE_W
 	return npm, p_npm, doinval
 }
 
