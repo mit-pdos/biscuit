@@ -120,6 +120,12 @@ TEXT runtime·setitimer(SB),NOSPLIT,$0-24
 	RET
 
 TEXT runtime·mincore(SB),NOSPLIT,$0-28
+	//MOVQ	runtime·hackmode(SB), DI
+	//TESTQ	DI, DI
+	//JZ	mincore_skip
+	//MOVQ	$0, ret+24(FP)
+	//RET
+mincore_skip:
 	MOVQ	addr+0(FP), DI
 	MOVQ	n+8(FP), SI
 	MOVQ	dst+16(FP), DX

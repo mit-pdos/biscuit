@@ -1302,14 +1302,15 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 		return (void *)-1;
 	}
 
-	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0)) {
-		runtime·pancake("high addr?", (uint64)v);
-		v = nil;
-	}
 	sz = ROUNDUP((uint64)v+sz, PGSIZE);
 	sz -= ROUNDDOWN((uint64)v, PGSIZE);
 	if (v == nil)
 		v = find_empty(sz);
+
+	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0))
+		runtime·pancake("high addr?", (uint64)v);
+	if ((uint64)v + sz >= (uint64)CADDR(VUMAX, 0, 0, 0))
+		runtime·pancake("high addr2?", (uint64)v + sz);
 
 	//pmsg("map\n");
 	//pnum((uint64)v);

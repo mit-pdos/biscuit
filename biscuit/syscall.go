@@ -566,10 +566,8 @@ func sys_exit(proc *proc_t, status int) {
 type obj_t struct {
 }
 
-var amap = map[int]obj_t{}
-
 func sys_fake(proc *proc_t, n int) int {
-	amap = make(map[int]obj_t)
+	amap := make(map[int]obj_t)
 	for i := 0; i < n; i++ {
 		amap[rand.Int()] = obj_t{}
 	}
