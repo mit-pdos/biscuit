@@ -47,6 +47,7 @@ int open(const char *, int, int);
 int pause(void);
 long read(int, void*, size_t);
 int unlink(const char *);
+int wait(int *);
 long write(int, void*, size_t);
 
 int atoi(const char *);

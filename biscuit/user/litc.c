@@ -11,6 +11,7 @@
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
+#define SYS_WAIT         61
 #define SYS_MKDIR        83
 #define SYS_LINK         86
 #define SYS_UNLINK       87
@@ -103,12 +104,6 @@ pause(void)
 }
 
 long
-write(int fd, void *buf, size_t c)
-{
-	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
-}
-
-long
 read(int fd, void *buf, size_t c)
 {
 	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
@@ -118,6 +113,22 @@ int
 unlink(const char *path)
 {
 	return syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
+}
+
+int
+wait(int *status)
+{
+	int _status;
+	int ret = syscall(SA(&_status), 0, 0, 0, 0, SYS_WAIT);
+	if (status)
+		*status = _status;
+	return ret;
+}
+
+long
+write(int fd, void *buf, size_t c)
+{
+	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
 }
 
 int

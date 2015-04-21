@@ -29,6 +29,7 @@ const(
   EPERM        = 1
   ENOENT       = 2
   EBADF        = 9
+  ECHILD       = 10
   EFAULT       = 14
   EEXIST       = 17
   ENOTDIR      = 20
@@ -53,6 +54,8 @@ const(
   SYS_FORK     = 57
   SYS_EXECV    = 59
   SYS_EXIT     = 60
+  // should be wait4
+  SYS_WAIT     = 61
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
@@ -101,6 +104,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_execv(p, a1, a2)
 	case SYS_EXIT:
 		sys_exit(p, a1)
+	case SYS_WAIT:
+		ret = sys_wait(p, a1)
 	case SYS_MKDIR:
 		ret = sys_mkdir(p, a1, a2)
 	case SYS_LINK:
@@ -354,7 +359,12 @@ func sys_getpid(proc *proc_t) int {
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 
+	if parent.waitch == nil {
+		parent.waitch = make(chan waitmsg_t)
+	}
+	parent.nchild++
 	child := proc_new(fmt.Sprintf("%s's child", parent.name), 0)
+	child.pwaitch = parent.waitch
 
 	// mark writable entries as read-only and cow
 	mk_cow := func(pte int) (int, int) {
@@ -474,6 +484,10 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 
 	if proc != nil {
 		newproc.tstart = proc.tstart
+		newproc.waitch = proc.waitch
+		newproc.pwaitch = proc.pwaitch
+		newproc.nchild = proc.nchild
+		newproc.nreap = proc.nreap
 	}
 
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
@@ -553,14 +567,52 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 }
 
 func sys_exit(proc *proc_t, status int) {
+	if proc.pid == 1 {
+		panic("killed init")
+	}
+
 	//fmt.Printf("%v exited with status %v\n", proc.name, status)
 	//tot := runtime.Rdtsc() - proc.tstart
 	proc_kill(proc.pid)
+
+	// send status to parent
+	if proc.pwaitch == nil {
+		panic("pwaitch nil")
+	}
+	go func() {
+		proc.pwaitch <- waitmsg_t{proc.pid, status, 0}
+	}()
+
+	// send any zombies that proc may be leaving to proc 0
+	// XXX why keep statuses for processes with no parent?
+	go func() {
+		//p0 := proc_get(0)
+		//p0ch := p0.waitch
+		for i := proc.nreap; i < proc.nchild; i++ {
+			<- proc.waitch
+			//p0ch <- m
+		}
+	}()
+
 	//fmt.Printf("%v -- %v cycles (%v GC cycles)\n", proc.name, tot,
 	//    runtime.Resetgcticks())
 	//if runtime.SCenable {
 	//	fmt.Printf("SERIAL CONSOLE ENABLED\n")
 	//}
+}
+
+func sys_wait(proc *proc_t, statusp int) int {
+	if proc.nreap == proc.nchild {
+		return -ECHILD
+	}
+	stp, ok := proc.userdmap(statusp)
+	if !ok {
+		return -EFAULT
+	}
+	wmsg := <- proc.waitch
+	proc.nreap++
+	writen(stp, 4, 0, wmsg.status)
+	return wmsg.pid
 }
 
 type obj_t struct {

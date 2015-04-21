@@ -31,9 +31,10 @@ int main(int argc, char **argv)
 		char *p = readline("# ");
 		mkargs(p, args, sz);
 		int pid = fork();
-		if (pid)
-			// XXX wait()
+		if (pid) {
+			wait(NULL);
 			continue;
+		}
 		int ret = execv(args[0], args);
 		if (ret)
 			errx(ret, "couldn't exec \"%s\"\n", p);

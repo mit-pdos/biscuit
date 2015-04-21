@@ -269,8 +269,20 @@ var fd_stdin 	= fd_t{CDEV, &dummyfile, 0, 0}
 var fd_stdout 	= fd_t{CDEV, &dummyfile, 0, 0}
 var fd_stderr 	= fd_t{CDEV, &dummyfile, 0, 0}
 
+type waitmsg_t struct {
+	pid	int
+	status	int
+	signal	int
+}
+
 type proc_t struct {
 	pid	int
+	// wait channel for my children
+	waitch	chan waitmsg_t
+	nchild	int
+	nreap	int
+	// wait channel of my parent
+	pwaitch	chan waitmsg_t
 	name	string
 	// all pages
 	pages	map[int]*[512]int
