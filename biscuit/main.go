@@ -686,6 +686,7 @@ func cpus_stack_init(apcnt int, stackstart int) {
 }
 
 func cpus_start(aplim int) {
+	runtime.GOMAXPROCS(1 + aplim)
 	cpus := cpus_find()
 	apcnt := len(cpus) - 1
 
@@ -1080,9 +1081,10 @@ func main() {
 
 	//chanbm()
 
+	findbm()
+
 	// control CPUs
-	aplim := 0
-	runtime.GOMAXPROCS(1 + aplim)
+	aplim := 7
 
 	qemuconfig()
 
@@ -1166,6 +1168,58 @@ func main() {
 	var dur chan bool
 	<- dur
 	//fake_work()
+}
+
+func incn() int {
+	blkno := 31337
+	b := bread(blkno)
+	n := readn(b.buf.data[:], 8, 0)
+	ret := n
+	n++
+	writen(b.buf.data[:], 8, 0, n)
+	b.writeback()
+	fmt.Printf("n is now %d\n", n)
+	return ret
+}
+
+func findbm() {
+	dmap_init()
+	//n := incn()
+	//var aplim int
+	//if n == 0 {
+	//	aplim = 1
+	//} else {
+	//	aplim = 7
+	//}
+	aplim := 7
+	cpus_start(aplim)
+
+	ch := make(chan bool)
+	times := uint64(0)
+	sum := uint64(0)
+	for {
+		st0 := runtime.Rdtsc()
+		go func(st uint64) {
+			tot := runtime.Rdtsc() - st
+			sum += tot
+			times++
+			if times % 1000000 == 0 {
+				fmt.Printf("%9v cycles to find (avg)\n",
+				    sum/times)
+				sum = 0
+				times = 0
+			}
+			ch <- true
+		}(st0)
+		//<- ch
+		loopy: for {
+			select {
+			case <- ch:
+				break loopy
+			default:
+			}
+		}
+	}
 }
 
 func ide_test() {
