@@ -379,6 +379,8 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 		if _, ok := p.upages[uva]; !ok {
 			panic("user va not tracked")
 		}
+		delete(p.pages, p_rem)
+		// upages entry updated below
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
