@@ -41,6 +41,7 @@
 /user/bmgc
 /user/bmgc2
 /user/bmsmallfile
+/user/sfork
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -66,3 +67,4 @@
 /fsdir/bin/bmgc
 /fsdir/bin/bmgc2
 /fsdir/bin/bmsmallfile
+/fsdir/bin/sfork
