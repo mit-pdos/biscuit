@@ -396,11 +396,6 @@ void runtime·deray(uint64);
 void runtime·stackcheck(void);
 void invlpg(void *);
 
-// XXX have this hack because panic prints many lines which makes the output
-// wrap around and overwrite the first lines of the panic (the most important
-// part). this will go away when i add serial console support.
-int32 runtime·newlines = 1;
-
 // interrupts must be cleared before attempting to take this lock. the reason
 // is that access to VGA buffer/serial console must be exclusive, yet i want to
 // be able to print from an interrupt handler. thus any code that takes this

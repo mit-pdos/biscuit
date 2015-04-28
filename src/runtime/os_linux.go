@@ -63,7 +63,6 @@ func Trapwake()
 
 func inb(int) int
 // os_linux.c
-var newlines int32
 var gcticks uint64
 
 //go:nosplit
@@ -97,37 +96,47 @@ func sc_put(c int8) {
 }
 
 type put_t struct {
-	vx	int
-	vy	int
+	vx		int
+	vy		int
+	fakewrap	bool
 }
 
 var put put_t
 
 //go:nosplit
 func vga_put(c int8, attr int8) {
+	p := (*[1999]int16)(unsafe.Pointer(uintptr(0xb8000)))
 	if c != '\n' {
-		p := (*[1999]int16)(unsafe.Pointer(uintptr(0xb8000)))
 		// erase the previous line
-		if put.vx == 0 {
-			for i := 0; i < 79; i++ {
-				p[put.vy * 80 + put.vx + i] = 0
-			}
-		}
 		a := int16(attr) << 8
 		v := a | int16(c)
 		p[put.vy * 80 + put.vx] = v
 		put.vx++
-	} else if newlines != 0 {
-		put.vx = 0
-		put.vy++
+		put.fakewrap = false
+	} else {
+		// if we wrapped the text because of a long line in the
+		// immediately previous call to vga_put, don't add another
+		// newline if we asked to print '\n'.
+		if put.fakewrap {
+			put.fakewrap = false
+		} else {
+			put.vx = 0
+			put.vy++
+		}
 	}
 	if put.vx >= 79 {
 		put.vx = 0
 		put.vy++
+		put.fakewrap = true
 	}
 
 	if put.vy >= 25 {
 		put.vy = 0
+	}
+	if put.vx == 0 {
+		for i := 0; i < 79; i++ {
+			p[put.vy * 80 + put.vx + i] = 0
+		}
 	}
 }
 

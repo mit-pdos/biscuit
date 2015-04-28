@@ -9,8 +9,6 @@ import "unsafe"
 var indexError = error(errorString("index out of range"))
 
 func panicindex() {
-	// XXX
-	newlines = 0
 	panic(indexError)
 }
 
