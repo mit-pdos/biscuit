@@ -51,6 +51,18 @@ char *binname(char *bin)
 	return NULL;
 }
 
+int builtins(char *args[], size_t n)
+{
+	char *cmd = args[0];
+	if (strncmp(cmd, "cd", 2) == 0) {
+		int ret = chdir(args[1]);
+		if (ret)
+			printf("chdir to %s failed\n", args[1]);
+		return 1;
+	}
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	while (1) {
@@ -58,6 +70,8 @@ int main(int argc, char **argv)
 		size_t sz = sizeof(args)/sizeof(args[0]);
 		char *p = readline("# ");
 		mkargs(p, args, sz);
+		if (builtins(args, sz))
+			continue;
 		int pid = fork();
 		if (pid) {
 			wait(NULL);

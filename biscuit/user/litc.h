@@ -64,6 +64,7 @@ char *readline(char *);
 int snprintf(char *, size_t, const char *, ...);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(char *);
+int strncmp(const char *, const char *, size_t);
 char *strstr(const char *, const char *);
 
 extern char __progname[64];
