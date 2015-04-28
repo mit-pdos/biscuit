@@ -520,6 +520,33 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 	return 0
 }
 
+func bloataddr(p *proc_t, npages int) {
+	fmt.Printf("pyumping up\n")
+	pn := rand.Intn(0x518000000)
+	start := pn << 12
+	start += USERMIN
+	pg, p_pg := pg_new(p.pages)
+	add := 0
+	for i := 0; i < npages; i++ {
+		//pg, p_pg := pg_new(p.pages)
+		for {
+			addr := start + add + i*PGSIZE
+
+			if _, ok := p.upages[addr]; ok {
+				add += PGSIZE
+				fmt.Printf("@")
+				continue
+			}
+			p.page_insert(addr, pg, p_pg, PTE_U | PTE_W, true)
+			break
+		}
+	}
+	sz := len(p.pages)
+	sz *= 1 << 12
+	sz /= 1 << 20
+	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
+}
+
 func insertargs(proc *proc_t, sargs []string) (int, int) {
 	// find free page
 	uva := 0
