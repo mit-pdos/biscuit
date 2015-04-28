@@ -28,6 +28,7 @@ struct __attribute__((packed)) stat {
 #define S_ISREG(mode)	(mode == 1)
 
 int close(int);
+int chdir(char *);
 void exit(int);
 int execv(const char *, char * const[]);
 long fake_sys(long);

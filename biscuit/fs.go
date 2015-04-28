@@ -20,12 +20,9 @@ var bcdaemon	= bcdaemon_t{}
 // free block bitmap lock
 var fblock	= sync.Mutex{}
 
-func path_sanitize(cwd, path string) ([]string, int) {
+func pathparts(path string) []string {
 	if len(path) == 0 {
-		return nil, -ENOENT
-	}
-	if path[0] != '/' {
-		path = cwd + path
+		panic("no path")
 	}
 	sp := strings.Split(path, "/")
 	nn := []string{}
@@ -34,10 +31,18 @@ func path_sanitize(cwd, path string) ([]string, int) {
 			nn = append(nn, s)
 		}
 	}
-	return nn, 0
+	return nn
 }
 
-func fs_init() {
+func dirname(path string) ([]string, string) {
+	parts := pathparts(path)
+	l := len(parts) - 1
+	dirs := parts[:l]
+	name := parts[l]
+	return dirs, name
+}
+
+func fs_init() *file_t {
 	// we are now prepared to take disk interrupts
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
@@ -72,6 +77,8 @@ func fs_init() {
 	fslog.init(logstart, loglen)
 	fs_recover()
 	go log_daemon(&fslog)
+
+	return &file_t{ri}
 }
 
 func fs_recover() {
@@ -102,21 +109,15 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
-func fs_link(oldp []string, newp []string) int {
+func fs_link(old string, new string, cwdf *file_t) int {
 	op_begin()
 	defer op_end()
 
-	nl := len(newp) - 1
-	newdirs := make([]string, 0)
-	for i := 0; i < nl; i++ {
-		newdirs = append(newdirs, newp[i])
-	}
-	newname := newp[nl]
-
+	cwd := cwdf.priv
 	// first get inode number and inc ref count
 	req := &ireq_t{}
-	req.mkget(oldp, true)
-	iroot.req <- req
+	req.mkget(old, true)
+	req_namei(req, old, cwd)
 	resp := <- req.ack
 	if resp.err != 0 {
 		return resp.err
@@ -125,8 +126,8 @@ func fs_link(oldp []string, newp []string) int {
 	// insert directory entry
 	priv := resp.gnext
 	req = &ireq_t{}
-	req.mkinsert(newdirs, newname, priv)
-	iroot.req <- req
+	req.mkinsert(new, priv)
+	req_namei(req, new, cwd)
 	resp = <- req.ack
 	// decrement ref count if the insert failed
 	if resp.err != 0 {
@@ -139,13 +140,13 @@ func fs_link(oldp []string, newp []string) int {
 	return resp.err
 }
 
-func fs_unlink(path []string) int {
+func fs_unlink(paths string, cwdf *file_t) int {
 	op_begin()
 	defer op_end()
 
 	req := &ireq_t{}
-	req.mkunlink(path)
-	iroot.req <- req
+	req.mkunlink(paths)
+	req_namei(req, paths, cwdf.priv)
 	resp := <- req.ack
 	doit := resp.err == 0
 	// if the targe file is a directory, only remove its directory entry if
@@ -189,37 +190,28 @@ func fs_write(srcs [][]uint8, priv inum, offset int, append bool) (int, int) {
 	return resp.count, 0
 }
 
-func fs_mkdir(path []string, mode int) int {
+func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	op_begin()
 	defer op_end()
 
-	l := len(path) - 1
-	dirs := path[:l]
-	name := path[l]
-
 	req := &ireq_t{}
-	req.mkcreate(dirs, name, I_DIR)
-	iroot.req <- req
+	req.mkcreate(paths, I_DIR)
+	req_namei(req, paths, cwdf.priv)
 	resp := <- req.ack
 	return resp.err
 }
 
-func fs_open(path []string, flags int, mode int) (*file_t, int) {
+func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 	if flags & O_CREAT != 0 {
-		// no creating root directory
-		if len(path) == 0 {
+		if paths == "/" {
 			return nil, -EPERM
 		}
 		op_begin()
 		defer op_end()
 
-		l := len(path) - 1
-		dirs := path[:l]
-
-		name := path[len(path) - 1]
 		req := &ireq_t{}
-		req.mkcreate(dirs, name, I_FILE)
-		iroot.req <- req
+		req.mkcreate(paths, I_FILE)
+		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
 		if resp.err != 0 {
 			return nil, resp.err
@@ -227,8 +219,8 @@ func fs_open(path []string, flags int, mode int) (*file_t, int) {
 		return &file_t{resp.cnext}, 0
 	}
 
-	// send inum get request to root inode daemon
-	priv, err := iroot_getp(path)
+	// send inum get request
+	priv, err := namei(paths, cwdf.priv)
 	if err != 0 {
 		return nil, err
 	}
@@ -246,10 +238,21 @@ func fs_stat(priv inum, st *stat_t) int {
 	return resp.err
 }
 
-func iroot_getp(path []string) (inum, int) {
+// sends a request requiring a lookup to the correct idaemon: if path is a
+// relative path, lookups should start with the idaemon for cwd. if the path is
+// absolute, lookups should start with iroot.
+func req_namei(req *ireq_t, paths string, cwd inum) {
+	dest := iroot
+	if len(paths) == 0 || paths[0] != '/' {
+		dest = idaemon_ensure(cwd)
+	}
+	dest.req <- req
+}
+
+func namei(paths string, cwd inum) (inum, int) {
 	req := &ireq_t{}
-	req.mkget(path, false)
-	iroot.req <- req
+	req.mkget(paths, false)
+	req_namei(req, paths, cwd)
 	resp := <- req.ack
 	return resp.gnext, resp.err
 }
@@ -399,10 +402,10 @@ type ireq_t struct {
 }
 
 // if incref is true, the call must be made between op_{begin,end}.
-func (r *ireq_t) mkget(name []string, incref bool) {
+func (r *ireq_t) mkget(name string, incref bool) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = GET
-	r.path = name
+	r.path = pathparts(name)
 	if incref {
 		r.doinc = true
 	}
@@ -423,19 +426,21 @@ func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 	r.dappend = append
 }
 
-func (r *ireq_t) mkcreate(dirs []string, nname string, ntype int) {
+func (r *ireq_t) mkcreate(path string, ntype int) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
+	dirs, name := dirname(path)
 	r.path = dirs
-	r.cr_name = nname
+	r.cr_name = name
 	r.cr_type = ntype
 }
 
-func (r *ireq_t) mkinsert(dirs []string, nname string, priv inum) {
+func (r *ireq_t) mkinsert(path string, priv inum) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = INSERT
+	dirs, name := dirname(path)
 	r.path = dirs
-	r.insert_name = nname
+	r.insert_name = name
 	r.insert_priv = priv
 }
 
@@ -444,11 +449,11 @@ func (r *ireq_t) mkrefdec() {
 	r.rtype = REFDEC
 }
 
-func (r *ireq_t) mkunlink(path []string) {
+func (r *ireq_t) mkunlink(path string) {
 	r.ack = make(chan *iresp_t)
 	r.commit = make(chan bool)
 	r.rtype = UNLINK
-	r.path = path
+	r.path = pathparts(path)
 }
 
 func (r *ireq_t) mkstat(st *stat_t) {
@@ -1664,8 +1669,7 @@ func bc_daemon(blc *bcdaemon_t) {
 }
 
 func (blc *bcdaemon_t) chk_evict() {
-	//nbcbufs := 512
-	nbcbufs := 30
+	nbcbufs := 1024
 	// how many buffers to evict
 	// XXX LRU
 	evictn := 2

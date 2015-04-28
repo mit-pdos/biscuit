@@ -56,6 +56,7 @@ const(
   SYS_EXIT     = 60
   // should be wait4
   SYS_WAIT     = 61
+  SYS_CHDIR    = 80
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
@@ -106,6 +107,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		sys_exit(p, a1)
 	case SYS_WAIT:
 		ret = sys_wait(p, a1)
+	case SYS_CHDIR:
+		ret = sys_chdir(p, a1)
 	case SYS_MKDIR:
 		ret = sys_mkdir(p, a1, a2)
 	case SYS_LINK:
@@ -122,6 +125,13 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	if !p.dead {
 		runtime.Procrunnable(pid, tf)
 	}
+}
+
+func badpath(path string) int {
+	if len(path) == 0 {
+		return -ENOENT
+	}
+	return 0
 }
 
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
@@ -243,11 +253,11 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return -EINVAL
 	}
-	parts, err := path_sanitize(proc.cwd, path)
+	err := badpath(path)
 	if err != 0 {
 		return err
 	}
-	file, err := fs_open(parts, flags, mode)
+	file, err := fs_open(path, flags, mode, proc.cwd)
 	if err != 0 {
 		return err
 	}
@@ -311,11 +321,11 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts, err := path_sanitize(proc.cwd, path)
+	err := badpath(path)
 	if err != 0 {
 		return err
 	}
-	return fs_mkdir(parts, mode)
+	return fs_mkdir(path, mode, proc.cwd)
 }
 
 func sys_link(proc *proc_t, oldn int, newn int) int {
@@ -327,15 +337,15 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 	if toolong1 || toolong2 {
 		return -ENAMETOOLONG
 	}
-	opath, err1 := path_sanitize(proc.cwd, old)
-	npath, err2 := path_sanitize(proc.cwd, new)
+	err1 := badpath(old)
+	err2 := badpath(new)
 	if err1 != 0 {
 		return err1
 	}
 	if err2 != 0 {
 		return err2
 	}
-	return fs_link(opath, npath)
+	return fs_link(old, new, proc.cwd)
 }
 
 func sys_unlink(proc *proc_t, pathn int) int {
@@ -346,11 +356,11 @@ func sys_unlink(proc *proc_t, pathn int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts, err := path_sanitize(proc.cwd, path)
+	err := badpath(path)
 	if err != 0 {
 		return err
 	}
-	return fs_unlink(parts)
+	return fs_unlink(path, proc.cwd)
 }
 
 func sys_getpid(proc *proc_t) int {
@@ -364,6 +374,9 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	parent.nchild++
 	child := proc_new(fmt.Sprintf("%s's child", parent.name), 0)
 	child.pwaitch = parent.waitch
+	child.cwd = parent.cwd
+
+	// XXX copy fds too
 
 	pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages, parent.pages)
 
@@ -420,17 +433,21 @@ func sys_execv(proc *proc_t, pathn int, argn int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	parts, err := path_sanitize(proc.cwd, path)
+	err := badpath(path)
 	if err != 0 {
 		return err
 	}
-	// XXX we don't recycle the proc. does it matter?
-	return sys_execv1(proc, parts, args)
+	return sys_execv1(proc, path, args)
 }
 
-func sys_execv1(proc *proc_t, path []string, args []string) int {
+func sys_execv1(proc *proc_t, paths string, args []string) int {
 	// XXX close?
-	file, err := fs_open(path, O_RDONLY, 0)
+	// XXX XXX XXX don't allow proc to be nil; don't proc_{kill,new}
+	cwd := rootfile
+	if proc != nil {
+		cwd = proc.cwd
+	}
+	file, err := fs_open(paths, O_RDONLY, 0, cwd)
 	if err != 0 {
 		return err
 	}
@@ -467,6 +484,7 @@ func sys_execv1(proc *proc_t, path []string, args []string) int {
 		newproc.pwaitch = proc.pwaitch
 		newproc.nchild = proc.nchild
 		newproc.nreap = proc.nreap
+		newproc.cwd = proc.cwd
 	}
 
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
@@ -619,6 +637,28 @@ func sys_wait(proc *proc_t, statusp int) int {
 	proc.nreap++
 	writen(stp, 4, 0, wmsg.status)
 	return wmsg.pid
+}
+
+func sys_chdir(proc *proc_t, dirn int) int {
+	path, ok, toolong := proc.userstr(dirn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	err := badpath(path)
+	if err != 0 {
+		return err
+	}
+
+	// XXX close old path
+	newcwd, err := fs_open(path, O_RDWR, 0, proc.cwd)
+	if err != 0 {
+		return err
+	}
+	proc.cwd = newcwd
+	return 0
 }
 
 type obj_t struct {

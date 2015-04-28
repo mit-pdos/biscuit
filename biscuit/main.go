@@ -3,7 +3,6 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
-import "strings"
 import "sync/atomic"
 import "sync"
 import "unsafe"
@@ -294,15 +293,28 @@ type proc_t struct {
 	fds	map[int]*fd_t
 	// where to start scanning for free fds
 	fdstart	int
-	cwd	string
+	cwd	*file_t
 	tstart	uint64
 }
+
+func proc_init(rf *file_t) {
+	if rootfile != nil {
+		panic("proc_init called twice")
+	}
+	rootfile = rf
+}
+
+var rootfile *file_t
 
 var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
 func proc_new(name string, usepid int) *proc_t {
+	if rootfile == nil {
+		panic("proc_init not called")
+	}
+
 	ret := &proc_t{}
 
 	proclock.Lock()
@@ -325,7 +337,7 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.fdstart = 3
-	ret.cwd = "/"
+	ret.cwd = rootfile
 
 	return ret
 }
@@ -1124,19 +1136,15 @@ func main() {
 	cpus_start(aplim)
 	//runtime.SCenable = false
 
-	fs_init()
+	rf := fs_init()
+	proc_init(rf)
 	kbd_init()
 
 	runtime.Resetgcticks()
 
 	exec := func(cmd string, args []string) {
-		fmt.Printf("start [%v]\n", cmd)
-		path := strings.Split(cmd, "/")
-		nargs := make([]string, 1)
-		nargs[0] = cmd
-		nargs = append(nargs, args...)
-		//ret := sys_execv1(nil, path, []string{cmd})
-		ret := sys_execv1(nil, path, nargs)
+		fmt.Printf("start [%v %v]\n", cmd, args)
+		ret := sys_execv1(nil, cmd, args)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}

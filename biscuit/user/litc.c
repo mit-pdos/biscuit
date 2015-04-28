@@ -12,6 +12,7 @@
 #define SYS_EXECV        59
 #define SYS_EXIT         60
 #define SYS_WAIT         61
+#define SYS_CHDIR        80
 #define SYS_MKDIR        83
 #define SYS_LINK         86
 #define SYS_UNLINK       87
@@ -41,6 +42,12 @@ int
 close(int fd)
 {
 	return syscall(SA(fd), 0, 0, 0, 0, SYS_CLOSE);
+}
+
+int
+chdir(char *path)
+{
+	return syscall(SA(path), 0, 0, 0, 0, SYS_CHDIR);
 }
 
 void
