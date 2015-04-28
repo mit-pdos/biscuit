@@ -358,7 +358,6 @@ func sys_getpid(proc *proc_t) int {
 }
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
-
 	if parent.waitch == nil {
 		parent.waitch = make(chan waitmsg_t)
 	}
@@ -366,28 +365,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	child := proc_new(fmt.Sprintf("%s's child", parent.name), 0)
 	child.pwaitch = parent.waitch
 
-	// mark writable entries as read-only and cow
-	mk_cow := func(pte int) (int, int) {
+	pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages, parent.pages)
 
-		// don't mess with or track kernel pages
-		if pte & PTE_U == 0 {
-			return pte, pte
-		}
-		if pte & PTE_W != 0 {
-			pte = (pte | PTE_COW) & ^PTE_W
-		}
-
-		// reference the mapped page in child's tracking maps too
-		p_pg := pte & PTE_ADDR
-		pg, ok := parent.pages[p_pg]
-		if !ok {
-			panic(fmt.Sprintf("parent not tracking " +
-			    "page %#x", p_pg))
-		}
-		child.pages[p_pg] = pg
-		return pte, pte
-	}
-	pmap, p_pmap, _ := copy_pmap(mk_cow, parent.pmap, child.pages)
 	// copy user->phys mappings too
 	for k, v := range parent.upages {
 		child.upages[k] = v

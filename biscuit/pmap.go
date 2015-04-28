@@ -289,6 +289,113 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 	return doinval
 }
 
+func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
+    mywg *sync.WaitGroup, pch chan *map[int]*[512]int,
+    convch chan *map[int]bool) {
+	pt := make(map[int]*[512]int)
+	convs := make(map[int]bool)
+	nwg := sync.WaitGroup{}
+	for i, pte := range src {
+		if pte & PTE_P == 0 {
+			continue
+		}
+		if depth == 0 {
+			if pte & PTE_U != 0 {
+				dst[i] = pte
+				if pte & PTE_W != 0 {
+					v := pte &^ PTE_W
+					v |= PTE_COW
+					dst[i] = v
+					src[i] = v
+				}
+				p_pg := pte & PTE_ADDR
+				convs[p_pg] = true
+			} else {
+				dst[i] = pte
+			}
+			continue
+		}
+		if pte & PTE_PS != 0 {
+			dst[i] = pte
+			continue
+		}
+		if depth == 3 && i == VREC {
+			dst[i] = 0
+			continue
+		}
+		np, p_np := pg_new(pt)
+		perms := pte & PTE_FLAGS
+		dst[i] = p_np | perms
+		nsrc := pe2pg(pte)
+		nwg.Add(1)
+		go pmap_copy_par1(nsrc, np, depth - 1, &nwg, pch, convch)
+	}
+	pch <- &pt
+	convch <- &convs
+	nwg.Wait()
+
+	mywg.Done()
+}
+
+func pmap_copy_par(src *[512]int, pt map[int]*[512]int,
+    ppt map[int]*[512]int) (*[512]int, int) {
+	pch := make(chan *map[int]*[512]int, 512)
+	convch := make(chan *map[int]bool, 512)
+	done := make(chan bool)
+	dst, p_dst := pg_new(pt)
+
+	go func() {
+		d1 := false
+		d2 := false
+		loopy: for {
+			select {
+			case nptt, ok := <- pch:
+				var npt map[int]*[512]int
+				if !ok {
+					d1 = true
+					pch = nil
+					if d1 && d2 {
+						break loopy
+					}
+				} else {
+					npt = *nptt
+				}
+				for k, v := range npt {
+					pt[k] = v
+				}
+			case nptt, ok := <- convch:
+				var npt map[int]bool
+				if !ok {
+					d2 = true
+					convch = nil
+					if d1 && d2 {
+						break loopy
+					}
+				} else {
+					npt = *nptt
+				}
+				for phys, _ := range npt {
+					va, ok := ppt[phys]
+					if !ok {
+						panic("wtf")
+					}
+					pt[phys] = va
+				}
+			}
+		}
+		done <- true
+	}()
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	pmap_copy_par1(src, dst, 3, &wg, pch, convch)
+	close(pch)
+	close(convch)
+	<- done
+
+	return dst, p_dst
+}
+
 // deep copies the pmap. ptemod is an optional function that takes the
 // original PTE as an argument and returns two values: new PTE for the pmap
 // being copied and PTE for the new pmap.

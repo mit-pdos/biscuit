@@ -1083,7 +1083,7 @@ func main() {
 
 	//chanbm()
 
-	findbm()
+	//findbm()
 
 	// control CPUs
 	aplim := 7
@@ -1164,6 +1164,7 @@ func main() {
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
 	exec("bin/lsh", []string{})
+	//exec("bin/fork", []string{})
 
 	//ide_test()
 
