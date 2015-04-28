@@ -228,7 +228,7 @@ func trap_pgfault(ts *trapstore_t) {
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.name, fa, rip)
-	proc_kill(pid)
+	sys_exit(proc, -EFAULT)
 }
 
 func tfdump(tf *[TFSIZE]int) {
