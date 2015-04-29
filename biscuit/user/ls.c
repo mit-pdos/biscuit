@@ -46,7 +46,7 @@ void dprint(int fd, char *par, int left)
 			char *fn = par;
 			int tfd;
 			if ((tfd = open(fn, O_RDONLY, 0)) < 0)
-				errx(-1, "rec open %s", fn);
+				err(tfd, "rec open %s", fn);
 			struct stat st;
 			if (fstat(tfd, &st))
 				errx(-1, "fstat");
@@ -94,12 +94,12 @@ void dprint(int fd, char *par, int left)
 
 int main(int argc, char **argv)
 {
-	char pbuf[256] = {0};
+	char pbuf[256] = {'.'};
 	if (sizeof(struct dirent_t) != 22)
 		errx(-1, "unexpected dirent size");
 
 	int fd;
-	if ((fd = open("/", O_RDONLY, 0)) < 0)
+	if ((fd = open("./", O_RDONLY, 0)) < 0)
 		errx(fd, "open root");
 
 	dprint(fd, pbuf, sizeof(pbuf));

@@ -141,6 +141,11 @@ func fs_link(old string, new string, cwdf *file_t) int {
 }
 
 func fs_unlink(paths string, cwdf *file_t) int {
+	_, fn := dirname(paths)
+	if fn == "." || fn == ".." {
+		return -EPERM
+	}
+
 	op_begin()
 	defer op_end()
 
@@ -987,10 +992,17 @@ func (idm *idaemon_t) iunlink(name string) (inum, int) {
 func (idm *idaemon_t) idirempty() bool {
 	ds := idm.all_dirents()
 	defer dirent_brelse(ds)
+
+	canrem := func(s string) bool {
+		if s == "" || s == ".." || s == "." {
+			return false
+		}
+		return true
+	}
 	empty := true
 	for i := 0; i < len(ds); i++ {
 		for j := 0; j < NDIRENTS; j++ {
-			if ds[i].filename(j) != "" {
+			if canrem(ds[i].filename(j)) {
 				empty = false
 			}
 		}
