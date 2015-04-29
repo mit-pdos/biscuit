@@ -147,6 +147,9 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.ftype != INODE && fd.ftype != CDEV {
 		panic("no imp")
 	}
+	if fd.perms & FD_READ == 0 {
+		return -EPERM
+	}
 	c := 0
 	// we cannot load the user page map and the buffer to read into may not
 	// be contiguous in physical memory. thus we must piece together the
@@ -201,6 +204,9 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.ftype != INODE && fd.ftype != CDEV {
 		panic("no imp")
 	}
+	if fd.perms & FD_WRITE == 0 {
+		return -EPERM
+	}
 	wrappy := fs_write
 	// stdout/stderr hack
 	if fd.ftype == CDEV {
@@ -253,6 +259,17 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return -EINVAL
 	}
+	fdperms := 0
+	switch temp {
+	case O_RDONLY:
+		fdperms = FD_READ
+	case O_WRONLY:
+		fdperms = FD_WRITE
+	case O_RDWR:
+		fdperms = FD_READ | FD_WRITE
+	default:
+		fdperms = FD_READ
+	}
 	err := badpath(path)
 	if err != 0 {
 		return err
@@ -261,8 +278,7 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if err != 0 {
 		return err
 	}
-	fdn, fd := proc.fd_new(INODE)
-	fd.perms = temp
+	fdn, fd := proc.fd_new(INODE, fdperms)
 	switch {
 	case flags & O_APPEND != 0:
 		fd.perms |= O_APPEND
@@ -407,9 +423,7 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 	dst, p_dst := pg_new(proc.pages)
 	p_src := *pte & PTE_ADDR
 	src := dmap(p_src)
-	for i, c := range src {
-		dst[i] = c
-	}
+	*dst = *src
 
 	// insert new page into pmap
 	va := faultaddr & PGMASK

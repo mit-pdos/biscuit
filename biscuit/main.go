@@ -254,6 +254,11 @@ const(
 	CDEV	// only console for now
 )
 
+const(
+	FD_READ		= 0x1
+	FD_WRITE	= 0x2
+)
+
 type fd_t struct {
 	ftype	ftype_t
 	file	*file_t
@@ -261,12 +266,12 @@ type fd_t struct {
 	perms	int
 }
 
-var dummyfile	= file_t{-1}
+var dummyfile	= file_t{priv: -1}
 
 // special fds
-var fd_stdin 	= fd_t{CDEV, &dummyfile, 0, 0}
-var fd_stdout 	= fd_t{CDEV, &dummyfile, 0, 0}
-var fd_stderr 	= fd_t{CDEV, &dummyfile, 0, 0}
+var fd_stdin 	= fd_t{CDEV, &dummyfile, 0, FD_READ}
+var fd_stdout 	= fd_t{CDEV, &dummyfile, 0, FD_WRITE}
+var fd_stderr 	= fd_t{CDEV, &dummyfile, 0, FD_WRITE}
 
 type waitmsg_t struct {
 	pid	int
@@ -352,7 +357,7 @@ func proc_get(pid int) *proc_t {
 	return p
 }
 
-func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
+func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
 	// find free fd
 	newfd := p.fdstart
 	for {
@@ -365,6 +370,7 @@ func (p *proc_t) fd_new(t ftype_t) (int, *fd_t) {
 	fdn := newfd
 	fd := &fd_t{}
 	fd.ftype = t
+	fd.perms = perms
 	if _, ok := p.fds[fdn]; ok {
 		panic(fmt.Sprintf("new fd exists %d", fdn))
 	}
