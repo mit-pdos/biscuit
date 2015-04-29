@@ -54,14 +54,15 @@ class Datab:
 
 class Dirb:
   # class used internally by Inodeb; it writes a directory inode to disk
-  def __init__(self, bn, ba, dirpart):
-    self.bn, self.ba, self.dirpart = bn, ba, dirpart
+  def __init__(self, bn, io, ba, dirpart):
+    self.bn, self.ioff, self.ba, self.dirpart = bn, io, ba, dirpart
     self.size = 0
     self.blks = []
     self.curblk = None
     self.namechk = {}
     self.indirect = 0
     self.indblk = None
+    self.addentry('.', bn, io)
 
   def addentry(self, fn, inodeb, inodeoff):
     self.chkname(fn)
@@ -243,7 +244,7 @@ class Fsrep:
 
   def build(self):
     rootinode, rioff, iblk = self.ialloc()
-    rootdir = Dirb(rootinode, self.ba, '')
+    rootdir = Dirb(rootinode, rioff, self.ba, '')
     iblk.ipair(rioff, rootdir)
     self.rootinode = rootinode
     self.rootioff = rioff
@@ -286,8 +287,9 @@ class Fsrep:
     rec = []
     for d in dirs:
       dib, dii, inodeb = self.ialloc()
-      db = Dirb(dib, self.ba, d)
+      db = Dirb(dib, dii, self.ba, d)
       inodeb.ipair(dii, db)
+      db.addentry('..', dirb.bn, dirb.ioff)
       rec.append(db)
       dirb.addentry(d, dib, dii)
 

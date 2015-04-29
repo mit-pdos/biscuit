@@ -489,8 +489,17 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 		return false, true
 	}
 	nextidm := idaemon_ensure(npriv)
-	// forward request
-	nextidm.req <- r
+	// forward request. if we are sending to our parent via "../" or to
+	// ourselves via "./", do it in a separate goroutine so that we don't
+	// deadlock.
+	send := func() {
+		nextidm.req <- r
+	}
+	if next == ".." || next == "." {
+		go send()
+	} else {
+		send()
+	}
 	return true, false
 }
 
@@ -537,6 +546,24 @@ func idaemonize(idm *idaemon_t) {
 			isdir := r.cr_type == I_DIR
 			cnext, err := idm.icreate(r.cr_name, isdir)
 			iupdate()
+			// create "." and ".." entry if we made a new directory
+			if err == 0 && isdir {
+				req := &ireq_t{}
+				req.mkinsert("..", idm.priv)
+				child := idaemon_ensure(cnext)
+				child.req <- req
+				resp := <- req.ack
+				if resp.err != 0 {
+					panic("insert '../' failed")
+				}
+				req = &ireq_t{}
+				req.mkinsert(".", cnext)
+				child.req <- req
+				resp = <- req.ack
+				if resp.err != 0 {
+					panic("insert './' failed")
+				}
+			}
 			ret := &iresp_t{cnext: cnext, err: err}
 			r.ack <- ret
 
@@ -909,6 +936,7 @@ func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 	for i := 0; i < NIADDRS; i++ {
 		newinode.w_addr(i, 0)
 	}
+
 	log_write(newiblk)
 	brelse(newiblk)
 

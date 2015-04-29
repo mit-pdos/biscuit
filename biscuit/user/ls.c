@@ -72,6 +72,9 @@ void dprint(int fd, char *par, int left)
 			char *tn = dename(dd->de[i].name);
 			if (!tn)
 				continue;
+			if (strncmp(tn, "..", 3) == 0 ||
+			    strncmp(tn, ".", 2) == 0)
+				continue;
 			snprintf(pend, left, "%s", tn);
 			char *fn = par;
 			int tfd;
