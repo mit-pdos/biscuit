@@ -78,7 +78,7 @@ func fs_init() *file_t {
 	fs_recover()
 	go log_daemon(&fslog)
 
-	return &file_t{ri}
+	return &file_t{priv: ri}
 }
 
 func fs_recover() {
@@ -164,11 +164,12 @@ func fs_unlink(paths string, cwdf *file_t) int {
 	return resp.err
 }
 
-func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
+func fs_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
 	req.mkread(dsts, offset)
 
+	priv := f.priv
 	idmon := idaemon_ensure(priv)
 	idmon.req <- req
 	resp := <- req.ack
@@ -178,10 +179,11 @@ func fs_read(dsts [][]uint8, priv inum, offset int) (int, int) {
 	return resp.count, 0
 }
 
-func fs_write(srcs [][]uint8, priv inum, offset int, append bool) (int, int) {
+func fs_write(srcs [][]uint8, f *file_t, offset int, append bool) (int, int) {
 	op_begin()
 	defer op_end()
 
+	priv := f.priv
 	// send write request to inode daemon owning priv
 	req := &ireq_t{}
 	req.mkwrite(srcs, offset, append)
@@ -221,7 +223,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 		if resp.err != 0 {
 			return nil, resp.err
 		}
-		return &file_t{resp.cnext}, 0
+		return &file_t{priv: resp.cnext}, 0
 	}
 
 	// send inum get request
@@ -230,11 +232,12 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 		return nil, err
 	}
 
-	ret := &file_t{priv}
+	ret := &file_t{priv: priv}
 	return ret, 0
 }
 
-func fs_stat(priv inum, st *stat_t) int {
+func fs_stat(f *file_t, st *stat_t) int {
+	priv := f.priv
 	idmon := idaemon_ensure(priv)
 	req := &ireq_t{}
 	req.mkstat(st)
@@ -262,12 +265,8 @@ func namei(paths string, cwd inum) (inum, int) {
 	return resp.gnext, resp.err
 }
 
-type file_t struct {
-	priv	inum
-}
-
 func file_new(priv inum) *file_t {
-	ret := &file_t{priv}
+	ret := &file_t{priv: priv}
 	return ret
 }
 

@@ -8,6 +8,7 @@
 #define EPERM		1
 #define ENOENT		2
 #define EBADF		9
+#define ECHILD		10
 #define EFAULT		14
 #define EEXIST		17
 #define ENOTDIR		20
@@ -46,6 +47,7 @@ int open(const char *, int, int);
 
 #define    S_IRWXU        0700
 int pause(void);
+int pipe(int *);
 long read(int, void*, size_t);
 int unlink(const char *);
 int wait(int *);

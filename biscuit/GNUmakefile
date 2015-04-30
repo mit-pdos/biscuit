@@ -16,7 +16,8 @@ OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
 UBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
-	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir
+	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
+	  pipetest
 FSUPROGS := $(patsubst %,fsdir/bin/%,$(UBINS))
 UPROGS := $(patsubst %,user/%,$(UBINS))
 

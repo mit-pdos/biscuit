@@ -34,6 +34,7 @@ const(
   EEXIST       = 17
   ENOTDIR      = 20
   EINVAL       = 22
+  EPIPE        = 32
   ENAMETOOLONG = 36
   ENOSYS       = 38
 )
@@ -49,6 +50,7 @@ const(
     O_APPEND      = 0x400
   SYS_CLOSE    = 3
   SYS_FSTAT    = 5
+  SYS_PIPE     = 22
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
   SYS_FORK     = 57
@@ -93,6 +95,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_close(p, a1)
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
+	case SYS_PIPE:
+		ret = sys_pipe(p, a1)
 	case SYS_PAUSE:
 		ret = sys_pause(p)
 	case SYS_GETPID:
@@ -127,13 +131,62 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	}
 }
 
-func badpath(path string) int {
-	if len(path) == 0 {
-		return -ENOENT
-	}
-	return 0
+var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
+	CDEV : func(dsts [][]uint8, priv *file_t, offset int) (int, int) {
+		sz := 0
+		for _, d := range dsts {
+			sz += len(d)
+		}
+		kdata := kbd_get(sz)
+		ret := len(kdata)
+		for _, dst := range dsts {
+			ub := len(kdata)
+			if ub > len(dst) {
+				ub = len(dst)
+			}
+			for i := 0; i < ub; i++ {
+				dst[i] = kdata[i]
+			}
+			kdata = kdata[ub:]
+		}
+		if len(kdata) != 0 {
+			panic("dropped keys")
+		}
+		return ret, 0
+	},
+	INODE : fs_read,
+	PIPE : pipe_read,
 }
 
+var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
+	CDEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
+			// merge into one buffer to avoid taking the console
+			// lock many times.
+			utext := int8(0x17)
+			big := make([]uint8, 0)
+			for _, s := range srcs {
+				big = append(big, s...)
+			}
+			runtime.Pmsga(&big[0], len(big), utext)
+			return len(big), 0
+	},
+	INODE : fs_write,
+	PIPE : pipe_write,
+}
+
+var fdclosers = map[ftype_t]func(*file_t, int) int {
+	CDEV : func(f *file_t, perms int) int {
+		return 0
+	},
+	INODE : func(f *file_t, perms int) int {
+		// XXX free inode blocks if it has no links and this was the
+		// last fd to it.
+		return 0
+	},
+	PIPE : pipe_close,
+}
+
+// XXX need to serialize per-fd operations
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	// sys_read is read-only i.e. doesn't update metadata, thus don't need
 	// op_{begin,end}
@@ -144,7 +197,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
-	if fd.ftype != INODE && fd.ftype != CDEV {
+	if _, ok := fdreaders[fd.ftype]; !ok {
 		panic("no imp")
 	}
 	if fd.perms & FD_READ == 0 {
@@ -168,24 +221,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		c += len(dst)
 	}
 
-	// stdout/stderr hack
-	if fd.ftype == CDEV {
-		kdata := kbd_get(sz)
-		ret := len(kdata)
-		for _, dst := range dsts {
-			ub := len(kdata)
-			if ub > len(dst) {
-				ub = len(dst)
-			}
-			for i := 0; i < ub; i++ {
-				dst[i] = kdata[i]
-			}
-			kdata = kdata[ub:]
-		}
-		return ret
-	}
-
-	ret, err := fs_read(dsts, fd.file.priv, fd.offset)
+	ret, err := fdreaders[fd.ftype](dsts, fd.file, fd.offset)
 	if err != 0 {
 		return err
 	}
@@ -201,27 +237,11 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
-	if fd.ftype != INODE && fd.ftype != CDEV {
-		panic("no imp")
-	}
 	if fd.perms & FD_WRITE == 0 {
 		return -EPERM
 	}
-	wrappy := fs_write
-	// stdout/stderr hack
-	if fd.ftype == CDEV {
-		wrappy = func(srcs [][]uint8, priv inum, off int,
-		    ap bool) (int, int) {
-			// merge into one buffer to avoid taking the console
-			// lock many times.
-			utext := int8(0x17)
-			big := make([]uint8, 0)
-			for _, s := range srcs {
-				big = append(big, s...)
-			}
-			runtime.Pmsga(&big[0], len(big), utext)
-			return len(big), 0
-		}
+	if _, ok := fdwriters[fd.ftype]; !ok {
+		panic("no imp")
 	}
 
 	apnd := fd.perms & O_APPEND != 0
@@ -239,7 +259,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		srcs = append(srcs, src)
 		c += len(src)
 	}
-	ret, err := wrappy(srcs, fd.file.priv, fd.offset, apnd)
+	ret, err := fdwriters[fd.ftype](srcs, fd.file, fd.offset, apnd)
 	if err != 0 {
 		return err
 	}
@@ -299,11 +319,10 @@ func sys_close(proc *proc_t, fdn int) int {
 	if !ok {
 		return -EBADF
 	}
-	if fd.ftype != INODE {
+	if _, ok := fdclosers[fd.ftype]; !ok {
 		panic("no imp")
 	}
-	// XXX free inode blocks if it has no links and this was the last fd to
-	// it.
+	fdclosers[fd.ftype](fd.file, fd.perms)
 	delete(proc.fds, fdn)
 	if fdn < proc.fdstart {
 		proc.fdstart = fdn
@@ -318,7 +337,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	if !ok {
 		return -EBADF
 	}
-	err := fs_stat(fd.file.priv, buf)
+	err := fs_stat(fd.file, buf)
 	if err != 0 {
 		return err
 	}
@@ -326,6 +345,147 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	if !ok {
 		return -EFAULT
 	}
+	return 0
+}
+
+func sys_pipe(proc *proc_t, pipen int) int {
+	ok := proc.usermapped(pipen, 8)
+	if !ok {
+		return -EFAULT
+	}
+	rfd, rf := proc.fd_new(PIPE, FD_READ)
+	wfd, wf := proc.fd_new(PIPE, FD_WRITE)
+
+	pipef := pipe_new()
+	rf.file = pipef
+	wf.file = pipef
+
+	proc.userwriten(pipen, 4, rfd)
+	proc.userwriten(pipen + 4, 4, wfd)
+	return 0
+}
+
+type pipe_t struct {
+	inret	chan int
+	in	chan []uint8
+	outsz	chan int
+	out	chan []uint8
+	readers	chan int
+	writers	chan int
+}
+
+func pipe_new() *file_t {
+	ret := &file_t{}
+	inret := make(chan int)
+	in := make(chan []uint8)
+	out := make(chan []uint8)
+	outsz := make(chan int)
+	writers := make(chan int)
+	readers := make(chan int)
+	ret.pipe.inret = inret
+	ret.pipe.in = in
+	ret.pipe.outsz = outsz
+	ret.pipe.out = out
+	ret.pipe.readers = readers
+	ret.pipe.writers = writers
+
+	go func() {
+		pipebufsz := 512
+		writec := 1
+		readc := 1
+		var buf []uint8
+		var toutsz chan int
+		tin := in
+		for writec > 0 || readc > 0 {
+			select {
+			// writing to pipe
+			case d := <- tin:
+				if readc == 0 {
+					inret <- -EPIPE
+					break
+				}
+				if len(buf) + len(d) > pipebufsz {
+					take := pipebufsz - len(buf)
+					d = d[:take]
+					tin = nil
+				}
+				buf = append(buf, d...)
+				inret <- len(d)
+				toutsz = outsz
+			// reading from pipe
+			case sz := <- toutsz:
+				if len(buf) == 0 && writec != 0 {
+					panic("no data")
+				}
+				if sz > len(buf) {
+					sz = len(buf)
+				}
+				out <- buf[:sz]
+				buf = buf[sz:]
+				if len(buf) < pipebufsz {
+					tin = in
+				}
+				// allow more reads if there is data in the
+				// pipe or if there are no writers and the pipe
+				// is empty.
+				if len(buf) == 0 && writec > 0 {
+					toutsz = nil
+				} else {
+					toutsz = outsz
+				}
+			// closing/opening
+			case delta := <- writers:
+				writec += delta
+				if writec < 0 {
+					panic("negative writers")
+				}
+			case delta := <- readers:
+				readc += delta
+				if readc < 0 {
+					panic("negative readers")
+				}
+			}
+		}
+	}()
+
+	return ret
+}
+
+func pipe_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
+	sz := 0
+	for _, dst :=  range dsts {
+		sz += len(dst)
+	}
+	pf := f.pipe
+	pf.outsz <- sz
+	buf := <- pf.out
+	ret := buftodests(buf, dsts)
+	return ret, 0
+}
+
+func pipe_write(srcs [][]uint8, f *file_t, offset int, appnd bool) (int, int) {
+	var buf []uint8
+	for _, src := range srcs {
+		buf = append(buf, src...)
+	}
+	pf := f.pipe
+	pf.in <- buf
+	ret := <- pf.inret
+	if ret < 0 {
+		return 0, ret
+	}
+	return ret, 0
+}
+
+func pipe_close(f *file_t, perms int) int {
+	pf := f.pipe
+	var ch chan int
+	if perms == FD_READ {
+		ch = pf.readers
+	} else {
+		ch = pf.writers
+	}
+	ch <- -1
 	return 0
 }
 
@@ -392,7 +552,19 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	child.pwaitch = parent.waitch
 	child.cwd = parent.cwd
 
-	// XXX copy fds too
+	for k, v := range parent.fds {
+		child.fds[k] = v
+		// increment reader/writer count
+		if v.ftype == PIPE {
+			var ch chan int
+			if v.perms == FD_READ {
+				ch = v.file.pipe.readers
+			} else {
+				ch = v.file.pipe.writers
+			}
+			ch <- 1
+		}
+	}
 
 	pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages, parent.pages)
 
@@ -470,7 +642,7 @@ func sys_execv1(proc *proc_t, paths string, args []string) int {
 	ret := 1
 	c := 0
 	for ret != 0 {
-		ret, err = fs_read([][]uint8{add}, file.priv, c)
+		ret, err = fs_read([][]uint8{add}, file, c)
 		c += ret
 		if err != 0 {
 			return err
@@ -596,6 +768,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 	argstart := uva + cnt
 	vdata, ok := proc.userdmap(argstart)
 	if !ok || len(vdata) < len(argptrs)*8 {
+		fmt.Printf("no room for args")
 		return 0, uva
 	}
 	for i, ptr := range argptrs {
@@ -607,6 +780,11 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 func sys_exit(proc *proc_t, status int) {
 	if proc.pid == 1 {
 		panic("killed init")
+	}
+
+	// close open fds
+	for fdn := range proc.fds {
+		sys_close(proc, fdn)
 	}
 
 	//fmt.Printf("%v exited with status %v\n", proc.name, status)
@@ -643,13 +821,13 @@ func sys_wait(proc *proc_t, statusp int) int {
 	if proc.nreap == proc.nchild {
 		return -ECHILD
 	}
-	stp, ok := proc.userdmap(statusp)
+	ok := proc.usermapped(statusp, 4)
 	if !ok {
 		return -EFAULT
 	}
 	wmsg := <- proc.waitch
 	proc.nreap++
-	writen(stp, 4, 0, wmsg.status)
+	proc.userwriten(statusp, 4, wmsg.status)
 	return wmsg.pid
 }
 
@@ -673,6 +851,29 @@ func sys_chdir(proc *proc_t, dirn int) int {
 	}
 	proc.cwd = newcwd
 	return 0
+}
+
+func badpath(path string) int {
+	if len(path) == 0 {
+		return -ENOENT
+	}
+	return 0
+}
+
+func buftodests(buf []uint8, dsts [][]uint8) int {
+	ret := 0
+	for _, dst := range dsts {
+		ub := len(buf)
+		if ub > len(dst) {
+			ub = len(dst)
+		}
+		for i := 0; i < ub; i++ {
+			dst[i] = buf[i]
+		}
+		ret += ub
+		buf = buf[ub:]
+	}
+	return ret
 }
 
 type obj_t struct {

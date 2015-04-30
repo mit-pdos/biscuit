@@ -6,6 +6,7 @@
 #define SYS_OPEN         2
 #define SYS_CLOSE        3
 #define SYS_FSTAT        5
+#define SYS_PIPE         22
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
 #define SYS_FORK         57
@@ -110,6 +111,12 @@ pause(void)
 	return syscall(0, 0, 0, 0, 0, SYS_PAUSE);
 }
 
+int
+pipe(int pfds[2])
+{
+	return syscall(SA(pfds), 0, 0, 0, 0, SYS_PIPE);
+}
+
 long
 read(int fd, void *buf, size_t c)
 {
@@ -163,6 +170,7 @@ err(int eval, const char *fmt, ...)
 	    [EPERM] = "Permission denied",
 	    [ENOENT] = "No such file or directory",
 	    [EBADF] = "Bad file descriptor",
+	    [ECHILD] = "No child processes",
 	    [EFAULT] = "Bad address",
 	    [EEXIST] = "File exists",
 	    [ENOTDIR] = "Not a directory",

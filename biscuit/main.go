@@ -247,6 +247,11 @@ func cdelay(n int) {
 	}
 }
 
+type file_t struct {
+	priv	inum
+	pipe	pipe_t
+}
+
 type ftype_t int
 const(
 	INODE ftype_t = iota
@@ -439,6 +444,35 @@ func (p *proc_t) userdmap(va int) ([]uint8, bool) {
 		return nil, false
 	}
 	return dmap8(phys + voff), true
+}
+
+func (p *proc_t) usermapped(va, n int) bool {
+	end := roundup(va + n, PGSIZE)
+	for i := rounddown(va, PGSIZE); i < end; i += PGSIZE {
+		pn := i & PGMASK
+		_, ok := p.upages[pn]
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *proc_t) userwriten(va, n, val int) bool {
+	if n > 8 {
+		panic("large n")
+	}
+	var dst []uint8
+	for i := 0; i < n; i += len(dst) {
+		v := val >> (8*uint(i))
+		t, ok := p.userdmap(va + i)
+		dst = t
+		if !ok {
+			return false
+		}
+		writen(dst, n - i, 0, v)
+	}
+	return true
 }
 
 // first ret value is the string from user space
@@ -1150,7 +1184,9 @@ func main() {
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)
-		ret := sys_execv1(nil, cmd, args)
+		nargs := []string{cmd}
+		nargs = append(nargs, args...)
+		ret := sys_execv1(nil, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
