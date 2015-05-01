@@ -802,8 +802,6 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 
 func sys_exit(proc *proc_t, status int) {
 	if proc.pid == 1 {
-		fmt.Printf("killed init\n")
-		runtime.Crash()
 		panic("killed init")
 	}
 
