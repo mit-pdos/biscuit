@@ -152,13 +152,13 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 func trap(handlers map[int]func(*trapstore_t)) {
 	runtime.Trapinit()
 	for {
-		// XXX completely drain, not remove one
-		for cpu := 0; cpu < numcpus; cpu += 1 {
+		for cpu := 0; cpu < numcpus; {
 			head := cpus[cpu].tshead
 			tail := cpus[cpu].tstail
 
 			if tail == head {
 				// no work for this cpu
+				cpu++
 				continue
 			}
 
