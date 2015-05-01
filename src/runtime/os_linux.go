@@ -21,7 +21,7 @@ func trapinit_m(*g)
 func Ap_setup(int)
 func Cli()
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
-func Install_traphandler(func(tf *[23]int, uc int))
+func Install_traphandler(func(tf *[23]int, uc int, pidk int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
@@ -39,6 +39,7 @@ func Pnum(int)
 func Procadd(tf *[23]int, uc int, p_pmap int)
 func Proccontinue()
 func Prockill(int)
+func Procnotify(int) int
 func Procrunnable(int, *[23]int)
 func Procyield()
 func Rdtsc() uint64

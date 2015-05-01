@@ -1523,6 +1523,7 @@ struct thread_t {
 	int64 pid;
 	// non-zero if pid != 0
 	uint64 pmap;
+	int64 notify;
 };
 
 struct cpu_t {
@@ -1844,6 +1845,12 @@ trap(uint64 *tf)
 				// XXX set IF, unlock
 				ct->tf[TF_RFLAGS] |= TF_FL_IF;
 				spunlock(&futexlock);
+			} else if (ct->notify) {
+				int64 v = ct->notify;
+				ct->notify = 0;
+				ct->status = ST_WAITING;
+				((void (*)(uint64 *, int64, int64))
+				    newtrap)(nil, 0, v);
 			} else
 				ct->status = ST_RUNNABLE;
 		}
@@ -1868,7 +1875,7 @@ trap(uint64 *tf)
 		// traps
 		if ((tf[TF_CS] & 3) == 0)
 			uc = 0;
-		((void (*)(uint64 *, int64))newtrap)(tf, uc);
+		((void (*)(uint64 *, int64, int64))newtrap)(tf, uc, 0);
 		runtime·pancake("newtrap returned!", 0);
 	}
 
@@ -2451,9 +2458,35 @@ runtime·Prockill(int64 pid)
 	assert(t->status == ST_WAITING, "user proc not waiting?", t->status);
 	t->status = ST_INVALID;
 	t->pid = 0;
+	t->notify = 0;
 
 	spunlock(&threadlock);
 	sti();
+}
+
+#pragma textflag NOSPLIT
+int64
+runtime·Procnotify(int64 pid)
+{
+	runtime·stackcheck();
+
+	if (pid == 0)
+		runtime·pancake("notify on 0", pid);
+
+	cli();
+	splock(&threadlock);
+
+	struct thread_t *t = thread_find(pid);
+	if (t == nil) {
+		spunlock(&threadlock);
+		sti();
+		return 1;
+	}
+	t->notify = pid;
+
+	spunlock(&threadlock);
+	sti();
+	return 0;
 }
 
 #pragma textflag NOSPLIT

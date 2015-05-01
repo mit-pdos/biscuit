@@ -28,6 +28,7 @@ const(
 const(
   EPERM        = 1
   ENOENT       = 2
+  ESRCH	       = 3
   EBADF        = 9
   ECHILD       = 10
   EFAULT       = 14
@@ -58,11 +59,16 @@ const(
   SYS_EXIT     = 60
   // should be wait4
   SYS_WAIT     = 61
+  SYS_KILL     = 62
   SYS_CHDIR    = 80
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
   SYS_FAKE     = 31337
+)
+
+const(
+  SIGKILL = 9
 )
 
 // lowest userspace address
@@ -76,6 +82,13 @@ const USERMIN	int = VUSER << 39
 func syscall(pid int, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
+
+	if p.doomed {
+		// this process has been killed
+		reap_doomed(pid)
+		return
+	}
+
 	sysno := tf[TF_RAX]
 	a1 := tf[TF_RDI]
 	a2 := tf[TF_RSI]
@@ -111,6 +124,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		sys_exit(p, a1)
 	case SYS_WAIT:
 		ret = sys_wait(p, a1)
+	case SYS_KILL:
+		ret = sys_kill(p, a1, a2)
 	case SYS_CHDIR:
 		ret = sys_chdir(p, a1)
 	case SYS_MKDIR:
@@ -129,6 +144,14 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	if !p.dead {
 		runtime.Procrunnable(pid, tf)
 	}
+}
+
+func reap_doomed(pid int) {
+	p := proc_get(pid)
+	if !p.doomed {
+		panic("p not doomed")
+	}
+	sys_exit(p, -1)
 }
 
 var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
@@ -779,6 +802,8 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 
 func sys_exit(proc *proc_t, status int) {
 	if proc.pid == 1 {
+		fmt.Printf("killed init\n")
+		runtime.Crash()
 		panic("killed init")
 	}
 
@@ -829,6 +854,21 @@ func sys_wait(proc *proc_t, statusp int) int {
 	proc.nreap++
 	proc.userwriten(statusp, 4, wmsg.status)
 	return wmsg.pid
+}
+
+func sys_kill(proc *proc_t, pid, sig int) int {
+	if sig != SIGKILL {
+		panic("no imp")
+	}
+	p, ok := proc_check(pid)
+	if !ok {
+		return -ESRCH
+	}
+	p.doomed = true
+	if runtime.Procnotify(pid) != 0 {
+		fmt.Printf("pid %v already terminated\n", pid)
+	}
+	return 0
 }
 
 func sys_chdir(proc *proc_t, dirn int) int {

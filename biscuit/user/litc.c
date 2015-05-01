@@ -13,6 +13,7 @@
 #define SYS_EXECV        59
 #define SYS_EXIT         60
 #define SYS_WAIT         61
+#define SYS_KILL         62
 #define SYS_CHDIR        80
 #define SYS_MKDIR        83
 #define SYS_LINK         86
@@ -85,6 +86,16 @@ int
 getpid(void)
 {
 	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+}
+
+int
+kill(int pid, int sig)
+{
+	if (sig != SIGKILL) {
+		printf("%s: kill: only SIGKILL is supported\n", __progname);
+		return -1;
+	}
+	return syscall(SA(pid), SA(sig), 0, 0, 0, SYS_KILL);
 }
 
 int
@@ -203,6 +214,16 @@ errx(int eval, const char *fmt, ...)
 	va_end(ap);
 	pmsg("\n");
 	exit(eval);
+}
+
+void *
+memset(void *d, int c, size_t n)
+{
+	char v = (char)c;
+	char *p = d;
+	while (n--)
+		*p++ = v;
+	return d;
 }
 
 size_t

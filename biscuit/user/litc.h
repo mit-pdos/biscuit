@@ -16,6 +16,8 @@
 #define ENAMETOOLONG	36
 #define ENOSYS		38
 
+#define SIGKILL		9
+
 #define MAXBUF        4096
 
 struct __attribute__((packed)) stat {
@@ -36,6 +38,7 @@ long fake_sys(long);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);
+int kill(int, int);
 int link(const char *, const char *);
 int mkdir(const char *, long);
 int open(const char *, int, int);
@@ -57,6 +60,7 @@ int atoi(const char *);
 ulong atoul(const char *);
 void err(int, const char *, ...);
 void errx(int, const char *, ...);
+void *memset(void *, int, size_t);
 int printf(char *, ...);
 int vprintf(const char *, va_list);
 int printf_blue(char *, ...);

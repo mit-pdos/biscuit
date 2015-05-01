@@ -12,6 +12,7 @@ type trapstore_t struct {
 	pid       int
 	faultaddr int
 	tf	  [TFSIZE]int
+	piddone   int
 }
 const maxtstore int = 64
 const maxcpus   int = 32
@@ -80,7 +81,32 @@ var INT_DISK	int = -1
 // tries to execute more gocode on the same M, thus doing things the runtime
 // did not expect.
 //go:nosplit
-func trapstub(tf *[TFSIZE]int, pid int) {
+func trapstub(tf *[TFSIZE]int, pid int, piddone int) {
+
+	lid := cpus[lap_id()].num
+	head := cpus[lid].tshead
+	tail := cpus[lid].tstail
+	ts := &cpus[lid].trapstore[head]
+
+	// make sure circular buffer has room
+	if tsnext(head) == tail {
+		for i := tail; i != head; i = tsnext(i) {
+			runtime.Pnum(cpus[lid].trapstore[i].trapno)
+		}
+		runtime.Pnum(0xbad)
+		for {}
+	}
+
+	// if pidkilled is non-zero, a trap has not been received but a
+	// thread's has stopped running and thus it's pmap can be freed.
+	if piddone != 0 {
+		ts.piddone = piddone
+		// commit "interrupt"
+		head = tsnext(head)
+		cpus[lid].tshead = head
+		runtime.Trapwake()
+		return
+	}
 
 	trapno := tf[TF_TRAP]
 
@@ -100,22 +126,11 @@ func trapstub(tf *[TFSIZE]int, pid int) {
 		for {}
 	}
 
-	lid := cpus[lap_id()].num
-	head := cpus[lid].tshead
-	tail := cpus[lid].tstail
-
 	// add to trap circular buffer for actual trap handler
-	if tsnext(head) == tail {
-		for i := tail; i != head; i = tsnext(i) {
-			runtime.Pnum(cpus[lid].trapstore[i].trapno)
-		}
-		runtime.Pnum(0xbad)
-		for {}
-	}
-	ts := &cpus[lid].trapstore[head]
 	ts.trapno = trapno
 	ts.pid = pid
 	ts.tf = *tf
+	ts.piddone = 0
 	if trapno == PGFAULT {
 		ts.faultaddr = runtime.Rcr2()
 	}
@@ -167,9 +182,15 @@ func trap(handlers map[int]func(*trapstore_t)) {
 
 			trapno := tcur.trapno
 			pid := tcur.pid
+			piddone := tcur.piddone
 
 			tail = tsnext(tail)
 			cpus[cpu].tstail = tail
+
+			if piddone != 0 {
+				go reap_doomed(piddone)
+				continue
+			}
 
 			if h, ok := handlers[trapno]; ok {
 				go h(&tcur)
@@ -300,6 +321,9 @@ type proc_t struct {
 	pmap	*[512]int
 	p_pmap	int
 	dead	bool
+	// a procces is marked doomed when it has been killed but may be
+	// currently running on another processor
+	doomed	bool
 	fds	map[int]*fd_t
 	// where to start scanning for free fds
 	fdstart	int
@@ -360,6 +384,13 @@ func proc_get(pid int) *proc_t {
 		panic(fmt.Sprintf("no such pid %d", pid))
 	}
 	return p
+}
+
+func proc_check(pid int) (*proc_t, bool) {
+	proclock.Lock()
+	p, ok := allprocs[pid]
+	proclock.Unlock()
+	return p, ok
 }
 
 func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
@@ -1214,7 +1245,8 @@ func main() {
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
 	exec("bin/lsh", []string{})
-	//exec("bin/fork", []string{})
+	//exec("bin/killtest", []string{})
+	//exec("bin/ls", []string{})
 
 	//ide_test()
 

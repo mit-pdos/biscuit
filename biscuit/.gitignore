@@ -46,6 +46,8 @@
 /user/touch
 /user/unlink
 /user/pipetest
+/user/kill
+/user/killtest
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -76,3 +78,5 @@
 /fsdir/bin/touch
 /fsdir/bin/mkdir
 /fsdir/bin/pipetest
+/fsdir/bin/kill
+/fsdir/bin/killtest
