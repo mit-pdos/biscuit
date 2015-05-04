@@ -285,14 +285,15 @@ type fd_t struct {
 	file	*file_t
 	offset	int
 	perms	int
+	sync.Mutex
 }
 
 var dummyfile	= file_t{priv: -1}
 
 // special fds
-var fd_stdin 	= fd_t{CDEV, &dummyfile, 0, FD_READ}
-var fd_stdout 	= fd_t{CDEV, &dummyfile, 0, FD_WRITE}
-var fd_stderr 	= fd_t{CDEV, &dummyfile, 0, FD_WRITE}
+var fd_stdin 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_READ}
+var fd_stdout 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_WRITE}
+var fd_stderr 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_WRITE}
 
 type waitmsg_t struct {
 	pid	int

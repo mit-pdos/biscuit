@@ -257,6 +257,9 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		c += len(dst)
 	}
 
+	fd.Lock()
+	defer fd.Unlock()
+
 	ret, err := fdreaders[fd.ftype](dsts, fd.file, fd.offset)
 	if err != 0 {
 		return err
@@ -279,6 +282,8 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if _, ok := fdwriters[fd.ftype]; !ok {
 		panic("no imp")
 	}
+	fd.Lock()
+	defer fd.Unlock()
 
 	apnd := fd.perms & O_APPEND != 0
 	c := 0
@@ -649,6 +654,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	child.pwaitch = parent.waitch
 	child.cwd = parent.cwd
 
+	// copy fd table
 	for k, v := range parent.fds {
 		child.fds[k] = v
 		// increment reader/writer count
