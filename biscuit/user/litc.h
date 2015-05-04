@@ -86,4 +86,7 @@ size_t strlen(char *);
 int strncmp(const char *, const char *, size_t);
 char *strstr(const char *, const char *);
 
+void *malloc(size_t);
+void free(void *);
+
 extern char __progname[64];

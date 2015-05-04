@@ -530,6 +530,71 @@ printf_red(char *fmt, ...)
 	return ret;
 }
 
+struct header_t {
+	char *start;
+	char *end;
+	ulong objs;
+	struct header_t *next;
+};
+
+static struct header_t *allh;
+static struct header_t *curh;
+static char *bump;
+
+void *
+malloc(size_t sz)
+{
+	sz = (sz + 7) & ~7;
+	if (!curh || bump + sz > curh->end) {
+		const int pgsize = 1 << 12;
+		size_t mmapsz = (sz + pgsize - 1) & ~(pgsize - 1);
+		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
+		    MAP_ANON | MAP_PRIVATE, -1, 0);
+		if (nh == MAP_FAILED)
+			return NULL;
+		nh->start = (char *)nh;
+		nh->end = nh->start + mmapsz;
+		nh->objs = 0;
+		nh->next = allh;
+		allh = nh;
+
+		curh = nh;
+		bump = curh->start + sizeof(struct header_t);
+	}
+	curh->objs++;
+	char *ret = bump;
+	bump += sz;
+	return ret;
+}
+
+void
+free(void *pp)
+{
+	char *p = pp;
+	// find containing seg
+	struct header_t *ch;
+	struct header_t *prev = NULL;
+	for (ch = allh; ch; prev = ch, ch = ch->next)
+		if (ch->start <= p && ch->end > p)
+			break;
+	if (!ch)
+		errx(-1, "free: bad pointer");
+	ch->objs--;
+	if (ch->objs == 0) {
+		if (prev)
+			prev->next = ch->next;
+		else
+			allh = ch->next;
+		if (curh == ch) {
+			bump = NULL;
+			curh = NULL;
+		}
+		int ret;
+		if ((ret = munmap(ch->start, ch->end - ch->start)) < 0)
+			err(ret, "munmap");
+	}
+}
+
 char __progname[64];
 
 void
