@@ -318,10 +318,11 @@ type proc_t struct {
 	pages	map[int]*[512]int
 	// user va -> physical mapping
 	upages	map[int]int
+	mmapi	int
 	pmap	*[512]int
 	p_pmap	int
 	dead	bool
-	// a procces is marked doomed when it has been killed but may be
+	// a process is marked doomed when it has been killed but may be
 	// currently running on another processor
 	doomed	bool
 	fds	map[int]*fd_t
@@ -372,6 +373,7 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.fdstart = 3
 	ret.cwd = rootfile
+	ret.mmapi = USERMIN
 
 	return ret
 }
@@ -447,8 +449,8 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 	p.upages[uva] = p_pg
 }
 
-func (p *proc_t) page_remove(va int, pg *[512]int) {
-
+func (p *proc_t) page_remove(va int) bool {
+	remmed := false
 	pte := pmap_walk(p.pmap, va, false, 0, nil)
 	if pte != nil && *pte & PTE_P != 0 {
 		p_pa := *pte & PTE_ADDR
@@ -457,7 +459,9 @@ func (p *proc_t) page_remove(va int, pg *[512]int) {
 		delete(p.pages, p_pa)
 		uva := va & PGMASK
 		delete(p.upages, uva)
+		remmed = true
 	}
+	return remmed
 }
 
 func (p *proc_t) sched_add(tf *[TFSIZE]int) {

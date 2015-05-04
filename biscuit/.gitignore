@@ -48,6 +48,7 @@
 /user/pipetest
 /user/kill
 /user/killtest
+/user/mmaptest
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -80,3 +81,4 @@
 /fsdir/bin/pipetest
 /fsdir/bin/kill
 /fsdir/bin/killtest
+/fsdir/bin/mmaptest

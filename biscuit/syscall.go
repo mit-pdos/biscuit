@@ -51,6 +51,16 @@ const(
     O_APPEND      = 0x400
   SYS_CLOSE    = 3
   SYS_FSTAT    = 5
+  SYS_MMAP     = 9
+    MAP_PRIVATE   = 0x2
+    MAP_FIXED     = 0x10
+    MAP_ANON      = 0x20
+    MAP_FAILED    = -1
+    PROT_NONE     = 0x0
+    PROT_READ     = 0x1
+    PROT_WRITE    = 0x2
+    PROT_EXEC     = 0x4
+  SYS_MUNMAP   = 11
   SYS_PIPE     = 22
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
@@ -93,8 +103,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	a1 := tf[TF_RDI]
 	a2 := tf[TF_RSI]
 	a3 := tf[TF_RDX]
-	//a4 := tf[TF_RCX]
-	//a5 := tf[TF_R8]
+	a4 := tf[TF_RCX]
+	a5 := tf[TF_R8]
 
 	ret := -ENOSYS
 	switch sysno {
@@ -108,6 +118,10 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_close(p, a1)
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
+	case SYS_MMAP:
+		ret = sys_mmap(p, a1, a2, a3, a4, a5)
+	case SYS_MUNMAP:
+		ret = sys_munmap(p, a1, a2)
 	case SYS_PIPE:
 		ret = sys_pipe(p, a1)
 	case SYS_PAUSE:
@@ -349,6 +363,67 @@ func sys_close(proc *proc_t, fdn int) int {
 	delete(proc.fds, fdn)
 	if fdn < proc.fdstart {
 		proc.fdstart = fdn
+	}
+	return 0
+}
+
+func sys_mmap(proc *proc_t, addrn, len, protflags, fd, offset int) int{
+	prot := uint(protflags) >> 32
+	flags := uint(uint32(protflags))
+
+	if flags != MAP_PRIVATE | MAP_ANON {
+		panic("no imp")
+	}
+	if flags & MAP_FIXED != 0 && addrn < USERMIN {
+		return MAP_FAILED
+	}
+	if prot == PROT_NONE {
+		return proc.mmapi
+	}
+	perms := PTE_U
+	if prot & PROT_WRITE != 0 {
+		perms |= PTE_W
+	}
+	len = roundup(len, PGSIZE)
+	addr := mmap_findaddr(proc, addrn, len)
+	for i := 0; i < len; i += PGSIZE {
+		pg, p_pg := pg_new(proc.pages)
+		proc.page_insert(addr + i, pg, p_pg, perms, true)
+	}
+	return addr
+}
+
+func mmap_findaddr(proc *proc_t, hint, len int) int {
+	for proc.mmapi < 256 << 39 {
+		found := true
+		for i := 0; i < len; i += PGSIZE {
+			pte := pmap_walk(proc.pmap, proc.mmapi + i, false, 0,
+			    nil)
+			if pte != nil && *pte & PTE_P != 0 {
+				found = false
+				proc.mmapi += i + PGSIZE
+				break
+			}
+		}
+		if found {
+			ret := proc.mmapi
+			proc.mmapi += len
+			return ret
+		}
+	}
+	panic("no addr space left")
+}
+
+func sys_munmap(proc *proc_t, addrn, len int) int {
+	if addrn & PGOFFSET != 0 || addrn < USERMIN {
+		return -EINVAL
+	}
+	len = roundup(len, PGSIZE)
+	for i := 0; i < len; i += PGSIZE {
+		p := addrn + i
+		if !proc.page_remove(p) {
+			return -EINVAL
+		}
 	}
 	return 0
 }
@@ -822,14 +897,10 @@ func sys_exit(proc *proc_t, status int) {
 		proc.pwaitch <- waitmsg_t{proc.pid, status, 0}
 	}()
 
-	// send any zombies that proc may be leaving to proc 0
-	// XXX why keep statuses for processes with no parent?
+	// drain all child statuses in background
 	go func() {
-		//p0 := proc_get(0)
-		//p0ch := p0.waitch
 		for i := proc.nreap; i < proc.nchild; i++ {
 			<- proc.waitch
-			//p0ch <- m
 		}
 	}()
 

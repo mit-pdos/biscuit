@@ -6,6 +6,8 @@
 #define SYS_OPEN         2
 #define SYS_CLOSE        3
 #define SYS_FSTAT        5
+#define SYS_MMAP         9
+#define SYS_MUNMAP       11
 #define SYS_PIPE         22
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
@@ -108,6 +110,21 @@ int
 mkdir(const char *p, long mode)
 {
 	return syscall(SA(p), mode, 0, 0, 0, SYS_MKDIR);
+}
+
+void *
+mmap(void *addr, size_t len, int prot, int flags, int fd, long offset)
+{
+	ulong protflags = (ulong)prot << 32;
+	protflags |= flags;
+	return (void *)syscall(SA(addr), SA(len), SA(protflags), SA(fd),
+	    SA(offset), SYS_MMAP);
+}
+
+int
+munmap(void *addr, size_t len)
+{
+	return syscall(SA(addr), SA(len), 0, 0, 0, SYS_MUNMAP);
 }
 
 int

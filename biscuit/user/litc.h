@@ -18,6 +18,17 @@
 
 #define SIGKILL		9
 
+#define MAP_FAILED	((void *) -1)
+
+#define MAP_PRIVATE	0x2
+#define MAP_ANON        0x20
+#define MAP_ANONYMOUS   MAP_ANON
+
+#define PROT_NONE	0x0
+#define PROT_READ	0x1
+#define PROT_WRITE	0x2
+#define PROT_EXEC	0x4
+
 #define MAXBUF        4096
 
 struct __attribute__((packed)) stat {
@@ -41,6 +52,8 @@ int getpid(void);
 int kill(int, int);
 int link(const char *, const char *);
 int mkdir(const char *, long);
+void *mmap(void *, size_t, int, int, int, long);
+int munmap(void *, size_t);
 int open(const char *, int, int);
 #define    O_RDONLY          0
 #define    O_WRONLY          1
