@@ -68,7 +68,7 @@ int main(int argc, char **argv)
 	  errx(fd2, "create failed");
 	chk(fd2, 'C');
 
-	printf_blue("success\n");
+	printf("success\n");
 
 	return 0;
 }

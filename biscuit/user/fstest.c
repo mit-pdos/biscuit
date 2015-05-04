@@ -6,7 +6,7 @@ void readprint(int fd)
 {
 	long ret;
 	if ((ret = read(fd, &buf, sizeof(buf))) < 0) {
-		printf_red("read1 failed\n");
+		err(ret, "read");
 		exit(-1);
 	}
 	printf("FD %d read %ld bytes\n", fd, ret);
@@ -20,26 +20,26 @@ int main(int argc, char **argv)
 {
 	int ret;
 	if ((ret = open("/etc/passwd", O_RDONLY, 0)) >= 0) {
-		printf_red("should have failed\n");
+		errx(-1, "open should fail");
 		return -1;
 	}
 	if ((ret = open("/hi.txt", O_RDONLY, 0)) < 0) {
-		printf_red("should have succeeded 1\n");
+		err(ret, "open");
 		return -1;
 	}
 	int fd1 = ret;
 	if ((ret = open("/boot/uefi/readme.txt", O_RDONLY, 0)) < 0) {
-		printf_red("should have succeeded 2\n");
+		err(ret, "open");
 		return -1;
 	}
 	int fd2 = ret;
 	if ((ret = open("/clouseau.txt", O_RDONLY, 0)) < 0) {
-		printf_red("should have succeeded 3\n");
+		err(ret, "open");
 		return -1;
 	}
 	int fd3 = ret;
 	if ((ret = open("/boot/bsd", O_RDONLY, 0)) < 0) {
-		printf_red("should have succeeded 4\n");
+		err(ret, "open");
 		return -1;
 	}
 	int fd4 = ret;
@@ -49,6 +49,6 @@ int main(int argc, char **argv)
 	readprint(fd3);
 	readprint(fd4);
 
-	printf_blue("FS TESTS PASSED!\n");
+	printf("FS TESTS PASSED!\n");
 	return 0;
 }

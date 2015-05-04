@@ -6,7 +6,7 @@ void readprint(int fd)
 {
 	long ret;
 	if ((ret = read(fd, &buf, sizeof(buf))) < 0) {
-		printf_red("read1 failed\n");
+		err(ret, "read");
 		exit(-1);
 	}
 	printf("FD %d read %ld bytes\n", fd, ret);
@@ -23,7 +23,7 @@ int main(int argc, char **argv)
 
 	int fd;
 	if ((fd = open("/boot/uefi/readme.txt", O_RDWR, 0)) < 0) {
-		printf_red("open failed\n");
+		err(fd, "open");
 		return -1;
 	}
 
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
 
 	int ret;
 	if ((ret = write(fd, buf, sizeof(buf))) != sizeof(buf)) {
-		printf_red("write failed %d\n", ret);
+		err(ret, "write");
 		return -1;
 	}
 	return 0;

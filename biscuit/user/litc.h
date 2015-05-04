@@ -76,8 +76,6 @@ void errx(int, const char *, ...);
 void *memset(void *, int, size_t);
 int printf(char *, ...);
 int vprintf(const char *, va_list);
-int printf_blue(char *, ...);
-int printf_red(char *, ...);
 ulong rdtsc(void);
 char *readline(char *);
 int snprintf(char *, size_t, const char *, ...);

@@ -22,7 +22,7 @@
 #define SYS_UNLINK       87
 #define SYS_FAKE         31337
 
-static void pmsg(char *);
+static void pmsg(char *, long);
 
 long
 syscall(long a1, long a2, long a3, long a4,
@@ -217,7 +217,7 @@ err(int eval, const char *fmt, ...)
 	if (neval < nents && es[neval] != NULL) {
 		printf(": %s", es[neval]);
 	}
-	pmsg("\n");
+	pmsg("\n", 1);
 	exit(eval);
 }
 
@@ -229,7 +229,7 @@ errx(int eval, const char *fmt, ...)
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
-	pmsg("\n");
+	pmsg("\n", 1);
 	exit(eval);
 }
 
@@ -263,9 +263,9 @@ strncmp(const char *s1, const char *s2, size_t n)
 }
 
 static void
-pmsg(char *msg)
+pmsg(char *msg, long sz)
 {
-	write(1, msg, strlen(msg));
+	write(1, msg, sz);
 }
 
 static int
@@ -405,7 +405,7 @@ vprintf(const char *fmt, va_list ap)
 {
 	int ret;
 	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
-	pmsg(pbuf);
+	pmsg(pbuf, ret);
 	return ret;
 }
 
@@ -496,38 +496,6 @@ strstr(const char *big, const char *little)
 			big++;
 	}
 	return NULL;
-}
-
-int
-printf_blue(char *fmt, ...)
-{
-	va_list ap;
-	int ret;
-
-	pmsg(BLUE);
-	va_start(ap, fmt);
-	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
-	va_end(ap);
-	pmsg(pbuf);
-	pmsg(RESET);
-
-	return ret;
-}
-
-int
-printf_red(char *fmt, ...)
-{
-	va_list ap;
-	int ret;
-
-	pmsg(RED);
-	va_start(ap, fmt);
-	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
-	va_end(ap);
-	pmsg(pbuf);
-	pmsg(RESET);
-
-	return ret;
 }
 
 struct header_t {

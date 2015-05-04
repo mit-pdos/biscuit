@@ -6,7 +6,7 @@ void readprint(int fd)
 {
 	long ret;
 	if ((ret = read(fd, &buf, sizeof(buf))) < 0) {
-		printf_red("read1 failed\n");
+		err(ret, "read");
 		exit(-1);
 	}
 	printf("FD %d read %ld bytes\n", fd, ret);
