@@ -40,7 +40,7 @@ func Procadd(tf *[23]int, uc int, p_pmap int)
 func Proccontinue()
 func Prockill(int)
 func Procnotify(int) int
-func Procrunnable(int, *[23]int)
+func Procrunnable(int, *[23]int, int)
 func Procyield()
 func Rdtsc() uint64
 func Rcr2() int

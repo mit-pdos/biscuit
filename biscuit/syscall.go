@@ -3,7 +3,6 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
-import "strings"
 import "unsafe"
 
 const(
@@ -133,7 +132,7 @@ func syscall(pid int, tf *[TFSIZE]int) {
 	case SYS_FORK:
 		ret = sys_fork(p, tf)
 	case SYS_EXECV:
-		ret = sys_execv(p, a1, a2)
+		ret = sys_execv(p, tf, a1, a2)
 	case SYS_EXIT:
 		sys_exit(p, a1)
 	case SYS_WAIT:
@@ -156,7 +155,7 @@ func syscall(pid int, tf *[TFSIZE]int) {
 
 	tf[TF_RAX] = ret
 	if !p.dead {
-		runtime.Procrunnable(pid, tf)
+		runtime.Procrunnable(pid, tf, p.p_pmap)
 	}
 }
 
@@ -702,10 +701,10 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 	proc.page_insert(va, dst, p_dst, perms, false)
 
 	// set process as runnable again
-	runtime.Procrunnable(proc.pid, nil)
+	runtime.Procrunnable(proc.pid, nil, proc.p_pmap)
 }
 
-func sys_execv(proc *proc_t, pathn int, argn int) int {
+func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 	args, ok := proc.userargs(argn)
 	if !ok {
 		return -EFAULT
@@ -721,17 +720,13 @@ func sys_execv(proc *proc_t, pathn int, argn int) int {
 	if err != 0 {
 		return err
 	}
-	return sys_execv1(proc, path, args)
+	return sys_execv1(proc, tf, path, args)
 }
 
-func sys_execv1(proc *proc_t, paths string, args []string) int {
+func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
+    args []string) int {
 	// XXX close?
-	// XXX XXX XXX don't allow proc to be nil; don't proc_{kill,new}
-	cwd := rootfile
-	if proc != nil {
-		cwd = proc.cwd
-	}
-	file, err := fs_open(paths, O_RDONLY, 0, cwd)
+	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd)
 	if err != 0 {
 		return err
 	}
@@ -754,81 +749,55 @@ func sys_execv1(proc *proc_t, paths string, args []string) int {
 		return -EPERM
 	}
 
-	usepid := 0
-	if proc != nil {
-		proc_kill(proc.pid)
-		usepid = proc.pid
-	}
-	cmd := strings.Join(args, " ")
-	newproc := proc_new(cmd, usepid)
-
-	if proc != nil {
-		newproc.tstart = proc.tstart
-		newproc.waitch = proc.waitch
-		newproc.pwaitch = proc.pwaitch
-		newproc.nchild = proc.nchild
-		newproc.nreap = proc.nreap
-		newproc.cwd = proc.cwd
-	}
-
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
-	var tf [23]int
+
+	opages := proc.pages
+	oupages := proc.upages
+	proc.pages = make(map[int]*[512]int)
+	proc.upages = make(map[int]int)
+
+	// copy kernel page table, map new stack
+	opmap := proc.pmap
+	op_pmap := proc.p_pmap
+	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
+	numstkpages := 1
+	for i := 0; i < numstkpages; i++ {
+		stack, p_stack := pg_new(proc.pages)
+		proc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
+		    PTE_U | PTE_W, true)
+	}
+
+	elf_load(proc, elf)
+	argc, argv, ok := insertargs(proc, args)
+	if !ok {
+		// restore old process
+		proc.pages = opages
+		proc.upages = oupages
+		proc.pmap = opmap
+		proc.p_pmap = op_pmap
+		return -EINVAL
+	}
+
+	// commit new image state
 	tf[TF_RSP] = stackva - 8
 	tf[TF_RIP] = elf.entry()
 	tf[TF_RFLAGS] = TF_FL_IF
-
 	ucseg := 4
 	udseg := 5
 	tf[TF_CS] = ucseg << 3 | 3
 	tf[TF_SS] = udseg << 3 | 3
-
-	// copy kernel page table, map new stack
-	newproc.pmap, newproc.p_pmap, _ = copy_pmap(nil, kpmap(),
-	    newproc.pages)
-	numstkpages := 1
-	for i := 0; i < numstkpages; i++ {
-		stack, p_stack := pg_new(newproc.pages)
-		newproc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
-		    PTE_U | PTE_W, true)
-	}
-
-	elf_load(newproc, elf)
-	argc, argv := insertargs(newproc, args)
 	tf[TF_RDI] = argc
 	tf[TF_RSI] = argv
-	newproc.sched_add(&tf)
+	// XXX duplicated in proc_new
+	proc.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
+	proc.fdstart = 3
+	proc.mmapi = USERMIN
+	proc.name = paths
 
 	return 0
 }
 
-func bloataddr(p *proc_t, npages int) {
-	fmt.Printf("pyumping up\n")
-	pn := rand.Intn(0x518000000)
-	start := pn << 12
-	start += USERMIN
-	pg, p_pg := pg_new(p.pages)
-	add := 0
-	for i := 0; i < npages; i++ {
-		//pg, p_pg := pg_new(p.pages)
-		for {
-			addr := start + add + i*PGSIZE
-
-			if _, ok := p.upages[addr]; ok {
-				add += PGSIZE
-				fmt.Printf("@")
-				continue
-			}
-			p.page_insert(addr, pg, p_pg, PTE_U | PTE_W, true)
-			break
-		}
-	}
-	sz := len(p.pages)
-	sz *= 1 << 12
-	sz /= 1 << 20
-	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
-}
-
-func insertargs(proc *proc_t, sargs []string) (int, int) {
+func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	// find free page
 	uva := 0
 	for i := 0; i < 1000; i++ {
@@ -857,7 +826,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 		if !proc.usercopy(arg, uva + cnt) {
 			// args take up more than a page? the user is on their
 			// own.
-			return 0, uva
+			return 0, 0, false
 		}
 		cnt += len(arg)
 	}
@@ -867,12 +836,39 @@ func insertargs(proc *proc_t, sargs []string) (int, int) {
 	vdata, ok := proc.userdmap(argstart)
 	if !ok || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
-		return 0, uva
+		return 0, 0, false
 	}
 	for i, ptr := range argptrs {
 		writen(vdata, 8, i*8, ptr)
 	}
-	return len(args), argstart
+	return len(args), argstart, true
+}
+
+func bloataddr(p *proc_t, npages int) {
+	fmt.Printf("pyumping up\n")
+	pn := rand.Intn(0x518000000)
+	start := pn << 12
+	start += USERMIN
+	pg, p_pg := pg_new(p.pages)
+	add := 0
+	for i := 0; i < npages; i++ {
+		//pg, p_pg := pg_new(p.pages)
+		for {
+			addr := start + add + i*PGSIZE
+
+			if _, ok := p.upages[addr]; ok {
+				add += PGSIZE
+				fmt.Printf("@")
+				continue
+			}
+			p.page_insert(addr, pg, p_pg, PTE_U | PTE_W, true)
+			break
+		}
+	}
+	sz := len(p.pages)
+	sz *= 1 << 12
+	sz /= 1 << 20
+	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
 }
 
 func sys_exit(proc *proc_t, status int) {

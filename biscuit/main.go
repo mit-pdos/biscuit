@@ -221,12 +221,7 @@ func trap_kbd(ts *trapstore_t) {
 	cons.kbd_int <- true
 }
 
-//var klock	= sync.Mutex{}
-
 func trap_syscall(ts *trapstore_t) {
-	//klock.Lock()
-	//defer klock.Unlock()
-
 	pid  := ts.pid
 	syscall(pid, &ts.tf)
 }
@@ -1221,7 +1216,10 @@ func main() {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
-		ret := sys_execv1(nil, cmd, nargs)
+		p := proc_new(cmd, 0)
+		var tf [TFSIZE]int
+		ret := sys_execv1(p, &tf, cmd, nargs)
+		p.sched_add(&tf)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
@@ -1249,6 +1247,7 @@ func main() {
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
 	exec("bin/lsh", []string{})
+	//exec("bin/fork", []string{})
 	//exec("bin/killtest", []string{})
 	//exec("bin/ls", []string{})
 

@@ -1685,6 +1685,22 @@ thread_avail(void)
 }
 
 #pragma textflag NOSPLIT
+struct thread_t *
+thread_find(int64 uc)
+{
+	runtime·stackcheck();
+
+	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
+	assert(threadlock.lock, "threadlock not taken", 0);
+
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		if (threads[i].pid == uc)
+			return &threads[i];
+	return nil;
+}
+
+#pragma textflag NOSPLIT
 void
 runtime·Procadd(uint64 *tf, int64 pid, uint64 pmap)
 {
@@ -1714,22 +1730,6 @@ runtime·Procadd(uint64 *tf, int64 pid, uint64 pmap)
 }
 
 #pragma textflag NOSPLIT
-struct thread_t *
-thread_find(int64 uc)
-{
-	runtime·stackcheck();
-
-	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
-	assert(threadlock.lock, "threadlock not taken", 0);
-
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		if (threads[i].pid == uc)
-			return &threads[i];
-	return nil;
-}
-
-#pragma textflag NOSPLIT
 static uint64 *
 pte_mapped(void *va)
 {
@@ -1752,7 +1752,7 @@ assert_mapped(void *va, int64 size, int8 *msg)
 
 #pragma textflag NOSPLIT
 void
-runtime·Procrunnable(int64 pid, uint64 *tf)
+runtime·Procrunnable(int64 pid, uint64 *tf, uint64 pmap)
 {
 	runtime·stackcheck();
 
@@ -1766,6 +1766,9 @@ runtime·Procrunnable(int64 pid, uint64 *tf)
 	if (tf) {
 		//assert_mapped(tf, TFSIZE, "bad tf");
 		memmov(t->tf, tf, TFSIZE);
+	}
+	if (pmap) {
+		t->pmap = pmap;
 	}
 
 	spunlock(&threadlock);
