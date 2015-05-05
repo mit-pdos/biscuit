@@ -518,8 +518,10 @@ malloc(size_t sz)
 		size_t mmapsz = (sz + pgsize - 1) & ~(pgsize - 1);
 		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
 		    MAP_ANON | MAP_PRIVATE, -1, 0);
-		if (nh == MAP_FAILED)
+		if (nh == MAP_FAILED) {
+			printf("malloc: couldn't mmap more mem\n");
 			return NULL;
+		}
 		nh->start = (char *)nh;
 		nh->end = nh->start + mmapsz;
 		nh->objs = 0;
