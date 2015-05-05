@@ -49,6 +49,7 @@
 /user/kill
 /user/killtest
 /user/mmaptest
+/user/usertests
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -82,3 +83,4 @@
 /fsdir/bin/kill
 /fsdir/bin/killtest
 /fsdir/bin/mmaptest
+/fsdir/bin/usertests
