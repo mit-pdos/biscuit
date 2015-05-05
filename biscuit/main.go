@@ -1233,29 +1233,12 @@ func main() {
 		}
 	}
 
-	//exec("bin/fault")
-	//exec("bin/hello")
-	//exec("bin/fork")
-	//exec("bin/getpid")
-	//exec("bin/fstest")
-	//exec("bin/fslink")
-	//exec("bin/fsunlink")
-	//exec("bin/fswrite")
-	//exec("bin/fsbigwrite")
-	//exec("bin/fsmkdir")
-	//exec("bin/fscreat")
-	//exec("bin/fsfree")
-	//exec("bin/ls")
-	//exec("bin/bmwrite")
-	//exec("bin/bmread")
-	//exec("bin/bmopen")
-	//exec("bin/conio")
-	//exec("bin/fault2")
-	//exec("bin/lsh")
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
-	//exec("bin/lsh", []string{})
-	exec("bin/usertests", []string{})
+	exec("bin/lsh", []string{})
+	//exec("bin/usertests", []string{})
+	//exec("bin/pipetest", []string{})
+	//exec("bin/ls", []string{})
 
 	//ide_test()
 

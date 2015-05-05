@@ -258,8 +258,10 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		c += len(dst)
 	}
 
-	fd.Lock()
-	defer fd.Unlock()
+	if fd.ftype == INODE {
+		fd.Lock()
+		defer fd.Unlock()
+	}
 
 	ret, err := fdreaders[fd.ftype](dsts, fd.file, fd.offset)
 	if err != 0 {
@@ -283,8 +285,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if _, ok := fdwriters[fd.ftype]; !ok {
 		panic("no imp")
 	}
-	fd.Lock()
-	defer fd.Unlock()
+	if fd.ftype == INODE {
+		fd.Lock()
+		defer fd.Unlock()
+	}
 
 	apnd := fd.perms & O_APPEND != 0
 	c := 0
@@ -513,11 +517,9 @@ func pipe_new() *file_t {
 				if len(buf) + len(d) > pipebufsz {
 					take := pipebufsz - len(buf)
 					d = d[:take]
-					tin = nil
 				}
 				buf = append(buf, d...)
 				inret <- len(d)
-				toutsz = outsz
 			// reading from pipe
 			case sz := <- toutsz:
 				if len(buf) == 0 && writec != 0 {
@@ -528,28 +530,24 @@ func pipe_new() *file_t {
 				}
 				out <- buf[:sz]
 				buf = buf[sz:]
-				if len(buf) < pipebufsz {
-					tin = in
-				}
-				// allow more reads if there is data in the
-				// pipe or if there are no writers and the pipe
-				// is empty.
-				if len(buf) == 0 && writec > 0 {
-					toutsz = nil
-				} else {
-					toutsz = outsz
-				}
 			// closing/opening
 			case delta := <- writers:
 				writec += delta
-				if writec < 0 {
-					panic("negative writers")
-				}
 			case delta := <- readers:
 				readc += delta
-				if readc < 0 {
-					panic("negative readers")
-				}
+			}
+
+			// allow more reads if there is data in the pipe or if
+			// there are no writers and the pipe is empty.
+			if len(buf) > 0 || writec == 0 {
+				toutsz = outsz
+			} else {
+				toutsz = nil
+			}
+			if len(buf) < pipebufsz || readc == 0 {
+				tin = in
+			} else {
+				tin = nil
 			}
 		}
 	}()
@@ -575,10 +573,15 @@ func pipe_write(srcs [][]uint8, f *file_t, offset int, appnd bool) (int, int) {
 		buf = append(buf, src...)
 	}
 	pf := f.pipe
-	pf.in <- buf
-	ret := <- pf.inret
-	if ret < 0 {
-		return 0, ret
+	ret := 0
+	for len(buf) > 0 {
+		pf.in <- buf
+		c := <- pf.inret
+		if c < 0 {
+			return 0, c
+		}
+		buf = buf[c:]
+		ret += c
 	}
 	return ret, 0
 }
