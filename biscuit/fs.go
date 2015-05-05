@@ -550,7 +550,8 @@ func idaemonize(idm *idaemon_t) {
 			}
 
 			if idm.icache.itype != I_DIR {
-				panic("create in non-dir")
+				r.ack <- &iresp_t{err: -ENOTDIR}
+				break
 			}
 			if r.cr_type != I_FILE && r.cr_type != I_DIR {
 				panic("no imp")
