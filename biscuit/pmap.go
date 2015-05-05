@@ -267,8 +267,9 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 			dst[i] = dstval
 			continue
 		}
-		// copy mappings of PS pages and the recursive mapping
-		if c & PTE_PS != 0 {
+		// reference kernel mappings pmap pages, PS pages, and create
+		// nil recursive mapping
+		if c & PTE_U == 0 || c & PTE_PS != 0 {
 			dst[i] = c
 			continue
 		}
@@ -326,7 +327,7 @@ func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
 			}
 			continue
 		}
-		if pte & PTE_PS != 0 {
+		if pte & PTE_U == 0 || pte & PTE_PS != 0 {
 			dst[i] = pte
 			continue
 		}
