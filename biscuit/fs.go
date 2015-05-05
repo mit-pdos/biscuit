@@ -203,6 +203,9 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 
 	req := &ireq_t{}
 	req.mkcreate(paths, I_DIR)
+	if len(req.cr_name) > DNAMELEN {
+		return -ENAMETOOLONG
+	}
 	req_namei(req, paths, cwdf.priv)
 	resp := <- req.ack
 	return resp.err
@@ -218,6 +221,9 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 
 		req := &ireq_t{}
 		req.mkcreate(paths, I_FILE)
+		if len(req.cr_name) > DNAMELEN {
+			return nil, -ENAMETOOLONG
+		}
 		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
 		if resp.err == -EEXIST && flags & O_EXCL == 0 {
