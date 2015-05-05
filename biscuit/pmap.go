@@ -289,6 +289,17 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 	return doinval
 }
 
+// deep copies the pmap. ptemod is an optional function that takes the
+// original PTE as an argument and returns two values: new PTE for the pmap
+// being copied and PTE for the new pmap.
+func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
+    ptracker map[int]*[512]int) (*[512]int, int, bool) {
+	npm, p_npm := pg_new(ptracker)
+	doinval := copy_pmap1(ptemod, npm, pm, 4, ptracker)
+	npm[VREC] = p_npm | PTE_P | PTE_W
+	return npm, p_npm, doinval
+}
+
 func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
     mywg *sync.WaitGroup, pch chan *map[int]*[512]int,
     convch chan *map[int]bool) {
@@ -394,17 +405,6 @@ func pmap_copy_par(src *[512]int, pt map[int]*[512]int,
 	<- done
 
 	return dst, p_dst
-}
-
-// deep copies the pmap. ptemod is an optional function that takes the
-// original PTE as an argument and returns two values: new PTE for the pmap
-// being copied and PTE for the new pmap.
-func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
-    ptracker map[int]*[512]int) (*[512]int, int, bool) {
-	npm, p_npm := pg_new(ptracker)
-	doinval := copy_pmap1(ptemod, npm, pm, 4, ptracker)
-	npm[VREC] = p_npm | PTE_P | PTE_W
-	return npm, p_npm, doinval
 }
 
 func pmap_iter1(ptef func(int, *int), pm *[512]int, depth int, va int,

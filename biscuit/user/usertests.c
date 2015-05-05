@@ -1770,9 +1770,7 @@ main(int argc, char *argv[])
   exitiputtest();
   iputtest();
 
-  fake_sys(0);
   mem();
-  fake_sys(0);
   pipe1();
   preempt();
   exitwait();
