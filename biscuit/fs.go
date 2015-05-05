@@ -220,7 +220,9 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 		req.mkcreate(paths, I_FILE)
 		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
-		if resp.err != 0 {
+		if resp.err == -EEXIST && flags & O_EXCL == 0 {
+			// nothing
+		} else if resp.err != 0 {
 			return nil, resp.err
 		}
 		return &file_t{priv: resp.cnext}, 0

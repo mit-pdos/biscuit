@@ -301,6 +301,10 @@ type waitmsg_t struct {
 	signal	int
 }
 
+type ulimit_t struct {
+	pages	int
+}
+
 type proc_t struct {
 	pid	int
 	// wait channel for my children
@@ -326,6 +330,7 @@ type proc_t struct {
 	fdstart	int
 	cwd	*file_t
 	tstart	uint64
+	ulim	ulimit_t
 }
 
 func proc_init(rf *file_t) {
@@ -370,6 +375,8 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.fdstart = 3
 	ret.cwd = rootfile
 	ret.mmapi = USERMIN
+	// mem limit = 128 MB
+	ret.ulim.pages = (1 << 27) / (1 << 12)
 
 	return ret
 }
@@ -1247,10 +1254,8 @@ func main() {
 	//exec("bin/lsh")
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
-	exec("bin/lsh", []string{})
-	//exec("bin/fork", []string{})
-	//exec("bin/killtest", []string{})
-	//exec("bin/ls", []string{})
+	//exec("bin/lsh", []string{})
+	exec("bin/usertests", []string{})
 
 	//ide_test()
 

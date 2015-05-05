@@ -1028,9 +1028,9 @@ skip_bad(uint64 cur)
 }
 
 // given to us by bootloader
-uint64 runtime·Pgfirst;
+uint64 pgfirst;
 // determined by e820 map
-uint64 runtime·Pglast;
+uint64 pglast;
 
 #pragma textflag NOSPLIT
 void
@@ -1053,16 +1053,17 @@ init_pgfirst(void)
 			continue;
 
 		uint64 end = ep->dur[0] + ep->dur[1];
-		if (runtime·Pgfirst >= ep->dur[0] && runtime·Pgfirst < end) {
-			runtime·Pglast = end;
+		if (pgfirst >= ep->dur[0] && pgfirst < end) {
+			pglast = end;
 			break;
 		}
 	}
 	//pmsg("kernel allocate from");
-	//pnum(runtime·Pgfirst);
+	//pnum(pgfirst);
 	//pmsg("to");
-	//pnum(runtime·Pglast);
-	assert(runtime·Pglast, "no e820 seg for Pgfirst?", runtime·Pgfirst);
+	//pnum(pglast);
+	assert(pglast, "no e820 seg for pgfirst?", pgfirst);
+	assert((pgfirst & PGOFFMASK) == 0, "pgfirst not aligned", pgfirst);
 }
 
 #pragma textflag NOSPLIT
@@ -1092,21 +1093,17 @@ pgcheck(uint64 phys)
 uint64
 get_pg(void)
 {
-	if (!runtime·Pglast) {
+	if (!pglast)
 		init_pgfirst();
-	}
 
-	// runtime·Pgfirst is given by the bootloader
-	runtime·Pgfirst = skip_bad(runtime·Pgfirst);
+	// pgfirst is given by the bootloader
+	pgfirst = skip_bad(pgfirst);
 
-	uint64 ret = runtime·Pgfirst;
-	if (ret & PGOFFMASK)
-		runtime·pancake("ret not aligned?", ret);
+	if (pgfirst >= pglast)
+		runtime·pancake("oom?", pglast);
 
-	runtime·Pgfirst += PGSIZE;
-
-	if (ret >= runtime·Pglast)
-		runtime·pancake("oom?", runtime·Pglast);
+	uint64 ret = pgfirst;
+	pgfirst += PGSIZE;
 
 	return ret;
 }
@@ -1292,7 +1289,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	USED(offset);
 	uint8 *v = va;
 
-	if (ROUNDUP(sz, PGSIZE)/PGSIZE > runtime·Pglast - runtime·Pgfirst) {
+	if (ROUNDUP(sz, PGSIZE)/PGSIZE > pglast - pgfirst) {
 		spunlock(&maplock);
 		return (void *)-1;
 	}

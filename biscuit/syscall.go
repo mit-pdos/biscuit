@@ -46,7 +46,8 @@ const(
     O_RDONLY      = 0
     O_WRONLY      = 1
     O_RDWR        = 2
-    O_CREAT       = 0x80
+    O_CREAT       = 0x40
+    O_EXCL        = 0x80
     O_APPEND      = 0x400
   SYS_CLOSE    = 3
   SYS_FSTAT    = 5
@@ -371,7 +372,7 @@ func sys_close(proc *proc_t, fdn int) int {
 	return 0
 }
 
-func sys_mmap(proc *proc_t, addrn, len, protflags, fd, offset int) int{
+func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	prot := uint(protflags) >> 32
 	flags := uint(uint32(protflags))
 
@@ -388,9 +389,12 @@ func sys_mmap(proc *proc_t, addrn, len, protflags, fd, offset int) int{
 	if prot & PROT_WRITE != 0 {
 		perms |= PTE_W
 	}
-	len = roundup(len, PGSIZE)
-	addr := mmap_findaddr(proc, addrn, len)
-	for i := 0; i < len; i += PGSIZE {
+	lenn = roundup(lenn, PGSIZE)
+	if lenn/PGSIZE + len(proc.pages) > proc.ulim.pages {
+		return MAP_FAILED
+	}
+	addr := mmap_findaddr(proc, addrn, lenn)
+	for i := 0; i < lenn; i += PGSIZE {
 		pg, p_pg := pg_new(proc.pages)
 		proc.page_insert(addr + i, pg, p_pg, perms, true)
 	}
