@@ -1195,12 +1195,10 @@ func (idm *idaemon_t) idirempty() bool {
 
 // frees all blocks occupied by idm
 func (idm *idaemon_t) ifree() {
-	wtf := make([]int, 0)
-	allb := &wtf
+	allb := make([]int, 0)
 	add := func(blkno int) {
 		if blkno != 0 {
-			wtf = append(*allb, blkno)
-			allb = &wtf
+			allb = append(allb, blkno)
 		}
 	}
 
@@ -1241,7 +1239,7 @@ func (idm *idaemon_t) ifree() {
 	}
 	brelse(iblk)
 
-	for _, blkno := range *allb {
+	for _, blkno := range allb {
 		bfree(blkno)
 	}
 }
