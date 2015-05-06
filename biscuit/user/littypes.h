@@ -1,5 +1,4 @@
-#ifndef _LITTYPES_H
-#define _LITTYPES_H
+#pragma once
 
 typedef unsigned short ushort;
 typedef unsigned int uint;
@@ -19,5 +18,3 @@ struct timeval {
 #define va_end(ap)         __builtin_va_end(ap)
 
 typedef __builtin_va_list va_list;
-
-#endif

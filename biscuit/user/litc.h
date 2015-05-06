@@ -1,3 +1,5 @@
+#pragma once
+
 #include <littypes.h>
 
 #define         RED     "\x1b[31;1m"
