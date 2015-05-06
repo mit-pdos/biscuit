@@ -33,6 +33,7 @@ const(
   EFAULT       = 14
   EEXIST       = 17
   ENOTDIR      = 20
+  EISDIR       = 21
   EINVAL       = 22
   EPIPE        = 32
   ENAMETOOLONG = 36
@@ -49,6 +50,7 @@ const(
     O_CREAT       = 0x40
     O_EXCL        = 0x80
     O_APPEND      = 0x400
+    O_DIRECTORY   = 0x10000
   SYS_CLOSE    = 3
   SYS_FSTAT    = 5
   SYS_MMAP     = 9
@@ -963,7 +965,7 @@ func sys_chdir(proc *proc_t, dirn int) int {
 	}
 
 	// XXX close old path
-	newcwd, err := fs_open(path, O_RDWR, 0, proc.cwd)
+	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd)
 	if err != 0 {
 		return err
 	}
@@ -1032,7 +1034,7 @@ func writen(a []uint8, n int, off int, val int) {
 // returns the byte size/offset of field n. they can be used to read []data.
 func fieldinfo(sizes []int, n int) (int, int) {
 	if n >= len(sizes) {
-		panic("badd field number")
+		panic("bad field number")
 	}
 	off := 0
 	for i := 0; i < n; i++ {
@@ -1069,6 +1071,11 @@ func (st *stat_t) wdev(v int) {
 func (st *stat_t) wino(v int) {
 	size, off := fieldinfo(st.sizes, 1)
 	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) mode() int {
+	size, off := fieldinfo(st.sizes, 2)
+	return readn(st.data, size, off)
 }
 
 func (st *stat_t) wmode(v int) {

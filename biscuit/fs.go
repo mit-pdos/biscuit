@@ -116,7 +116,7 @@ func fs_link(old string, new string, cwdf *file_t) int {
 	cwd := cwdf.priv
 	// first get inode number and inc ref count
 	req := &ireq_t{}
-	req.mkget(old, true)
+	req.mkget_fsinc(old)
 	req_namei(req, old, cwd)
 	resp := <- req.ack
 	if resp.err != 0 {
@@ -132,7 +132,7 @@ func fs_link(old string, new string, cwdf *file_t) int {
 	// decrement ref count if the insert failed
 	if resp.err != 0 {
 		req = &ireq_t{}
-		req.mkrefdec()
+		req.mkrefdec(false)
 		idmon := idaemon_ensure(priv)
 		idmon.req <- req
 		<- req.ack
@@ -202,7 +202,7 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	defer op_end()
 
 	req := &ireq_t{}
-	req.mkcreate(paths, I_DIR)
+	req.mkcreate(paths, I_DIR, 0, true)
 	if len(req.cr_name) > DNAMELEN {
 		return -ENAMETOOLONG
 	}
@@ -220,22 +220,17 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 		defer op_end()
 
 		req := &ireq_t{}
-		req.mkcreate(paths, I_FILE)
+		req.mkcreate(paths, I_FILE, flags, false)
 		if len(req.cr_name) > DNAMELEN {
 			return nil, -ENAMETOOLONG
 		}
 		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
-		if resp.err == -EEXIST && flags & O_EXCL == 0 {
-			// nothing
-		} else if resp.err != 0 {
-			return nil, resp.err
-		}
-		return &file_t{priv: resp.cnext}, 0
+		return &file_t{priv: resp.cnext}, resp.err
 	}
 
 	// send inum get request
-	priv, err := namei(paths, cwdf.priv)
+	priv, err := namei(paths, cwdf.priv, flags)
 	if err != 0 {
 		return nil, err
 	}
@@ -265,9 +260,9 @@ func req_namei(req *ireq_t, paths string, cwd inum) {
 	dest.req <- req
 }
 
-func namei(paths string, cwd inum) (inum, int) {
+func namei(paths string, cwd inum, flags int) (inum, int) {
 	req := &ireq_t{}
-	req.mkget(paths, false)
+	req.mkget(paths, flags)
 	req_namei(req, paths, cwd)
 	resp := <- req.ack
 	return resp.gnext, resp.err
@@ -286,6 +281,7 @@ type idaemon_t struct {
 	ioff		int
 	// cache of inode data in case block cache evicts our inode block
 	icache		icache_t
+	memref		int
 }
 
 var allidmons	= map[inum]*idaemon_t{}
@@ -391,6 +387,7 @@ type ireq_t struct {
 	rtype		rtype_t
 	// tree traversal
 	path		[]string
+	flags		int
 	// read/write op
 	offset		int
 	// read op
@@ -401,6 +398,7 @@ type ireq_t struct {
 	// create op
 	cr_name		string
 	cr_type		int
+	cr_mkdir	bool
 	// insert op
 	insert_name	string
 	insert_priv	inum
@@ -408,22 +406,45 @@ type ireq_t struct {
 	commitwait	bool
 	commit		chan bool
 	// inc ref count after get
-	doinc		bool
+	fsref		bool
+	memref		bool
 	// stat op
 	stat_st		*stat_t
 }
 
-// if incref is true, the call must be made between op_{begin,end}.
-func (r *ireq_t) mkget(name string, incref bool) {
+func (r *ireq_t) mkget(name string, flags int) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = GET
 	r.path = pathparts(name)
-	if incref {
-		r.doinc = true
-	}
+	r.flags = flags
+}
+
+// if incref is true, the call must be made between op_{begin,end}.
+func (r *ireq_t) mkget_fsinc(name string) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = GET
+	r.path = pathparts(name)
+	r.fsref = true
+	r.memref = false
+}
+
+func (r *ireq_t) mkget_memref(name string) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = GET
+	r.path = pathparts(name)
+	r.fsref = false
+	r.memref = true
 }
 
 func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = READ
 	r.rbufs = dsts
@@ -431,6 +452,8 @@ func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
 }
 
 func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = WRITE
 	r.dbufs = srcs
@@ -438,16 +461,22 @@ func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 	r.dappend = append
 }
 
-func (r *ireq_t) mkcreate(path string, ntype int) {
+func (r *ireq_t) mkcreate(path string, ntype, flags int, mkdir bool) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
 	dirs, name := dirname(path)
 	r.path = dirs
 	r.cr_name = name
 	r.cr_type = ntype
+	r.flags = flags
+	r.cr_mkdir = mkdir
 }
 
 func (r *ireq_t) mkinsert(path string, priv inum) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = INSERT
 	dirs, name := dirname(path)
@@ -456,12 +485,23 @@ func (r *ireq_t) mkinsert(path string, priv inum) {
 	r.insert_priv = priv
 }
 
-func (r *ireq_t) mkrefdec() {
+func (r *ireq_t) mkrefdec(memref bool) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = REFDEC
+	r.fsref = false
+	r.memref = false
+	if memref {
+		r.memref = true
+	} else {
+		r.fsref = true
+	}
 }
 
 func (r *ireq_t) mkunlink(path string) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.commit = make(chan bool)
 	r.rtype = UNLINK
@@ -469,6 +509,8 @@ func (r *ireq_t) mkunlink(path string) {
 }
 
 func (r *ireq_t) mkstat(st *stat_t) {
+	var z ireq_t
+	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = STAT
 	r.stat_st = st
@@ -523,13 +565,19 @@ func idaemonize(idm *idaemon_t) {
 		}
 		brelse(blk)
 	}
-	irefdown := func() bool {
-		idm.icache.links--
-		if idm.icache.links < 0 {
+	irefdown := func(memref bool) bool {
+		if memref {
+			idm.memref--
+		} else {
+			idm.icache.links--
+		}
+		if idm.icache.links < 0 || idm.memref < 0 {
 			panic("negative links")
 		}
-		if idm.icache.links != 0 {
-			iupdate()
+		if idm.icache.links != 0 || idm.memref != 0 {
+			if !memref {
+				iupdate()
+			}
 			return false
 		}
 		idm.ifree()
@@ -549,18 +597,28 @@ func idaemonize(idm *idaemon_t) {
 				break
 			}
 
+			if r.cr_type != I_FILE && r.cr_type != I_DIR {
+				panic("no imp")
+			}
+
 			if idm.icache.itype != I_DIR {
 				r.ack <- &iresp_t{err: -ENOTDIR}
 				break
 			}
-			if r.cr_type != I_FILE && r.cr_type != I_DIR {
-				panic("no imp")
-			}
+
 			isdir := r.cr_type == I_DIR
 			cnext, err := idm.icreate(r.cr_name, isdir)
 			iupdate()
-			// create "." and ".." entry if we made a new directory
-			if err == 0 && isdir {
+
+			// is mkdir operation
+			if r.cr_mkdir {
+				if err != 0 {
+					ret := &iresp_t{err: err}
+					r.ack <- ret
+					break
+				}
+				// create "." and ".." entry if we made a new
+				// directory
 				req := &ireq_t{}
 				req.mkinsert("..", idm.priv)
 				child := idaemon_ensure(cnext)
@@ -576,8 +634,60 @@ func idaemonize(idm *idaemon_t) {
 				if resp.err != 0 {
 					panic("insert './' failed")
 				}
+
+				ret := &iresp_t{cnext: cnext}
+				r.ack <- ret
+				break
 			}
-			ret := &iresp_t{cnext: cnext, err: err}
+
+			// open with O_CREAT
+			if err == -EEXIST {
+				// always fail if O_EXCL is specified and the
+				// file exists
+				if r.flags & O_EXCL != 0 {
+					r.ack <- &iresp_t{err: -EEXIST}
+					break
+				}
+
+				// determine type of existing file
+				req := ireq_t{}
+				st := stat_t{}
+				st.init()
+				req.mkstat(&st)
+				child := idaemon_ensure(cnext)
+				child.req <- &req
+				resp := <- req.ack
+				if resp.err != 0 {
+					panic("create stat failed")
+				}
+				itype := st.mode()
+
+				// O_CREAT fails if the existing file is a
+				// directory (not sure if posix specifies this,
+				// but it seems good)
+				if itype != I_FILE {
+					r.ack <- &iresp_t{err: -EISDIR}
+					break
+				}
+			} else if err != 0 {
+				ret := &iresp_t{err: err}
+				r.ack <- ret
+				break
+			}
+
+			// inc memref for opened file
+			req := &ireq_t{}
+			req.mkget_memref("nyet")
+			var z []string
+			req.path = z
+			child := idaemon_ensure(cnext)
+			child.req <- req
+			resp := <- req.ack
+			if resp.err != 0 {
+				panic("create memref failed")
+			}
+
+			ret := &iresp_t{cnext: cnext}
 			r.ack <- ret
 
 		case GET:
@@ -585,7 +695,9 @@ func idaemonize(idm *idaemon_t) {
 			if fwded, erred := idm.forwardreq(r); fwded || erred {
 				break
 			}
-			if r.doinc {
+
+			// not open, just increase links
+			if r.fsref {
 				// no hard links on directories
 				if idm.icache.itype != I_FILE {
 					r.ack <- &iresp_t{err: -EPERM}
@@ -593,7 +705,30 @@ func idaemonize(idm *idaemon_t) {
 				}
 				idm.icache.links++
 				iupdate()
+			} else if r.memref {
+				idm.memref++
+			} else {
+
+				// open -- make sure the open permissions are
+				// allowed
+				itype := idm.icache.itype
+				flags := r.flags
+				if itype != I_DIR && flags & O_DIRECTORY != 0 {
+					r.ack <- &iresp_t{err: -ENOTDIR}
+					break
+				}
+
+				// opening directories with write permissions
+				// is not allowed
+				writable := flags & O_WRONLY != 0 ||
+				    flags & O_RDWR != 0
+				if itype != I_FILE && writable {
+					r.ack <- &iresp_t{err: -EISDIR}
+					break
+				}
+				idm.memref++
 			}
+
 			// req is for us
 			r.ack <- &iresp_t{gnext: idm.priv}
 
@@ -614,7 +749,7 @@ func idaemonize(idm *idaemon_t) {
 
 		case REFDEC:
 			// decrement reference count
-			terminate := irefdown()
+			terminate := irefdown(r.memref)
 			r.ack <- &iresp_t{}
 			if terminate {
 				return
@@ -629,6 +764,10 @@ func idaemonize(idm *idaemon_t) {
 			r.ack <- &iresp_t{}
 
 		case UNLINK:
+			// XXX it would be simpler to pass unlink all the way
+			// to child, then have child synchronously send unlink
+			// to parent
+
 			// this operation is special: both the target file and
 			// the parent directory of the target file process the
 			// operation.
@@ -672,7 +811,7 @@ func idaemonize(idm *idaemon_t) {
 				}
 
 				// decrement reference count
-				terminate := irefdown()
+				terminate := irefdown(false)
 				r.ack <- resp
 				if terminate {
 					return
@@ -924,9 +1063,9 @@ func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 	ds := idm.all_dirents()
 	defer dirent_brelse(ds)
 
-	_, found := dirent_lookup(ds, name)
+	foundinum, found := dirent_lookup(ds, name)
 	if found {
-		return 0, -EEXIST
+		return foundinum, -EEXIST
 	}
 
 	// allocate new inode
@@ -961,6 +1100,10 @@ func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 }
 
 func (idm *idaemon_t) iget(name string) (inum, int) {
+	// did someone confuse a file with a directory?
+	if idm.icache.itype != I_DIR {
+		return 0, -ENOTDIR
+	}
 	ds := idm.all_dirents()
 	priv, found := dirent_lookup(ds, name)
 	dirent_brelse(ds)

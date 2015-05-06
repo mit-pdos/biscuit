@@ -1227,10 +1227,10 @@ func main() {
 		p := proc_new(cmd, 0)
 		var tf [TFSIZE]int
 		ret := sys_execv1(p, &tf, cmd, nargs)
-		p.sched_add(&tf)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
+		p.sched_add(&tf)
 	}
 
 	//exec("bin/bmgc2", []string{"100000000"})

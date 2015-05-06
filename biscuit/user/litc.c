@@ -202,6 +202,7 @@ err(int eval, const char *fmt, ...)
 	    [EFAULT] = "Bad address",
 	    [EEXIST] = "File exists",
 	    [ENOTDIR] = "Not a directory",
+	    [EISDIR] = "Is a directory",
 	    [EINVAL] = "Invalid argument",
 	    [ENAMETOOLONG] = "File name too long",
 	    [ENOSYS] = "Function not implemented",

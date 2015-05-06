@@ -64,7 +64,7 @@ void dprint(int fd, char *par, int left)
 	*pend = 0;
 	// no seek...
 	if ((fd = open(par, O_RDONLY, 0)) < 0)
-		errx(fd, "open root");
+		err(fd, "open par");
 	while ((ret = read(fd, buf, sizeof(buf))) > 0) {
 		struct dirdata_t *dd = (struct dirdata_t *)buf;
 		int i;
@@ -79,7 +79,7 @@ void dprint(int fd, char *par, int left)
 			char *fn = par;
 			int tfd;
 			if ((tfd = open(fn, O_RDONLY, 0)) < 0)
-				errx(-1, "rec open %s", fn);
+				err(tfd, "rec open %s", fn);
 			struct stat st;
 			if (fstat(tfd, &st))
 				errx(-1, "fstat");
@@ -100,7 +100,7 @@ int main(int argc, char **argv)
 
 	int fd;
 	if ((fd = open("./", O_RDONLY, 0)) < 0)
-		errx(fd, "open root");
+		err(fd, "open root");
 
 	dprint(fd, pbuf, sizeof(pbuf));
 	close(fd);
