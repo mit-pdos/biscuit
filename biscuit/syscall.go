@@ -217,11 +217,7 @@ var fdclosers = map[ftype_t]func(*file_t, int) int {
 	CDEV : func(f *file_t, perms int) int {
 		return 0
 	},
-	INODE : func(f *file_t, perms int) int {
-		// XXX free inode blocks if it has no links and this was the
-		// last fd to it.
-		return 0
-	},
+	INODE : fs_close,
 	PIPE : pipe_close,
 }
 
@@ -370,12 +366,16 @@ func sys_close(proc *proc_t, fdn int) int {
 	if _, ok := fdclosers[fd.ftype]; !ok {
 		panic("no imp")
 	}
-	fdclosers[fd.ftype](fd.file, fd.perms)
+	ret := file_close(fd.ftype, fd.file, fd.perms)
 	delete(proc.fds, fdn)
 	if fdn < proc.fdstart {
 		proc.fdstart = fdn
 	}
-	return 0
+	return ret
+}
+
+func file_close(ft ftype_t, f *file_t, perms int) int {
+	return fdclosers[ft](f, perms)
 }
 
 func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
@@ -667,7 +667,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	for k, v := range parent.fds {
 		child.fds[k] = v
 		// increment reader/writer count
-		if v.ftype == PIPE {
+		switch v.ftype {
+		case PIPE:
 			var ch chan int
 			if v.perms == FD_READ {
 				ch = v.file.pipe.readers
@@ -675,6 +676,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 				ch = v.file.pipe.writers
 			}
 			ch <- 1
+		case INODE:
+			fs_memref(v.file, v.perms)
 		}
 	}
 
@@ -964,7 +967,7 @@ func sys_chdir(proc *proc_t, dirn int) int {
 		return err
 	}
 
-	// XXX close old path
+	file_close(INODE, proc.cwd, 0)
 	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd)
 	if err != 0 {
 		return err

@@ -374,6 +374,7 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.fdstart = 3
 	ret.cwd = rootfile
+	fs_memref(rootfile, 0)
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)

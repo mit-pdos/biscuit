@@ -239,6 +239,31 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 	return ret, 0
 }
 
+// XXX log files that have no fs links but > 0 memory references to the journal
+// so that if we crash before freeing its blocks, the blocks can be reclaimed.
+func fs_close(f *file_t, perms int) int {
+	op_begin()
+	defer op_end()
+
+	req := &ireq_t{}
+	req.mkrefdec(true)
+	idmon := idaemon_ensure(f.priv)
+	idmon.req <- req
+	resp := <- req.ack
+	return resp.err
+}
+
+func fs_memref(f *file_t, perms int) {
+	idmon := idaemon_ensure(f.priv)
+	req := &ireq_t{}
+	req.mkref_direct()
+	idmon.req <- req
+	resp := <- req.ack
+	if resp.err != 0 {
+		panic("mem ref increment of open file failed")
+	}
+}
+
 func fs_stat(f *file_t, st *stat_t) int {
 	priv := f.priv
 	idmon := idaemon_ensure(priv)
@@ -438,6 +463,15 @@ func (r *ireq_t) mkget_memref(name string) {
 	r.ack = make(chan *iresp_t)
 	r.rtype = GET
 	r.path = pathparts(name)
+	r.fsref = false
+	r.memref = true
+}
+
+func (r *ireq_t) mkref_direct() {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = GET
 	r.fsref = false
 	r.memref = true
 }
@@ -677,9 +711,7 @@ func idaemonize(idm *idaemon_t) {
 
 			// inc memref for opened file
 			req := &ireq_t{}
-			req.mkget_memref("nyet")
-			var z []string
-			req.path = z
+			req.mkref_direct()
 			child := idaemon_ensure(cnext)
 			child.req <- req
 			resp := <- req.ack
