@@ -32,6 +32,9 @@
 #define PROT_WRITE	0x2
 #define PROT_EXEC	0x4
 
+#define WAIT_ANY	(-1)
+#define WAIT_MYPGRP	0
+
 #define MAXBUF        4096
 
 struct __attribute__((packed)) stat {
@@ -72,6 +75,7 @@ int pipe(int *);
 long read(int, void*, size_t);
 int unlink(const char *);
 int wait(int *);
+int wait4(int, int *, int, void *);
 long write(int, void*, size_t);
 
 int atoi(const char *);

@@ -295,42 +295,38 @@ var fd_stdin 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_READ}
 var fd_stdout 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_WRITE}
 var fd_stderr 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_WRITE}
 
-type waitmsg_t struct {
-	pid	int
-	status	int
-	signal	int
-}
-
 type ulimit_t struct {
 	pages	int
 }
 
 type proc_t struct {
-	pid	int
-	// wait channel for my children
-	waitch	chan waitmsg_t
-	nchild	int
-	nreap	int
-	// wait channel of my parent
-	pwaitch	chan waitmsg_t
-	name	string
+	pid		int
+	name		string
+
+	waiti		waitinfo_t
+	// waitinfo of my parent
+	pwaiti		*waitinfo_t
+
 	// all pages
-	pages	map[int]*[512]int
+	pages		map[int]*[512]int
 	// user va -> physical mapping
-	upages	map[int]int
-	mmapi	int
-	pmap	*[512]int
-	p_pmap	int
-	dead	bool
+	upages		map[int]int
+
+	mmapi		int
+	pmap		*[512]int
+	p_pmap		int
+	dead		bool
 	// a process is marked doomed when it has been killed but may be
 	// currently running on another processor
-	doomed	bool
-	fds	map[int]*fd_t
+	doomed		bool
+	fds		map[int]*fd_t
 	// where to start scanning for free fds
-	fdstart	int
-	cwd	*file_t
-	tstart	uint64
-	ulim	ulimit_t
+	fdstart		int
+	cwd		*file_t
+	tstart		uint64
+	ulim		ulimit_t
+
+	sync.Mutex
 }
 
 func proc_init(rf *file_t) {
@@ -378,6 +374,8 @@ func proc_new(name string, usepid int) *proc_t {
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)
+
+	ret.waiti.init()
 
 	return ret
 }
@@ -630,18 +628,6 @@ func proc_kill(pid int) {
 	proclock.Unlock()
 
 	runtime.Prockill(pid)
-	// XXX
-	//fmt.Printf("not cleaning up\n")
-	//return
-
-	//ms := runtime.MemStats{}
-	//runtime.ReadMemStats(&ms)
-	//before := ms.Alloc
-
-	//runtime.GC()
-	//runtime.ReadMemStats(&ms)
-	//after := ms.Alloc
-	//fmt.Printf("reclaimed %vK\n", (before-after)/1024)
 }
 
 func mp_sum(d []uint8) int {

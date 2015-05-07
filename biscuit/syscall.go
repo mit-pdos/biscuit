@@ -69,8 +69,9 @@ const(
   SYS_FORK     = 57
   SYS_EXECV    = 59
   SYS_EXIT     = 60
-  // should be wait4
-  SYS_WAIT     = 61
+  SYS_WAIT4    = 61
+    WAIT_ANY     = -1
+    WAIT_MYPGRP  = 0
   SYS_KILL     = 62
   SYS_CHDIR    = 80
   SYS_MKDIR    = 83
@@ -138,8 +139,8 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		ret = sys_execv(p, tf, a1, a2)
 	case SYS_EXIT:
 		sys_exit(p, a1)
-	case SYS_WAIT:
-		ret = sys_wait(p, a1)
+	case SYS_WAIT4:
+		ret = sys_wait4(p, a1, a2, a3, a4)
 	case SYS_KILL:
 		ret = sys_kill(p, a1, a2)
 	case SYS_CHDIR:
@@ -655,13 +656,19 @@ func sys_getpid(proc *proc_t) int {
 }
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
-	if parent.waitch == nil {
-		parent.waitch = make(chan waitmsg_t)
-	}
-	parent.nchild++
+	//mkthread := flags & FORK_THREAD != 0
+
 	child := proc_new(fmt.Sprintf("%s's child", parent.name), 0)
-	child.pwaitch = parent.waitch
+	child.pwaiti = &parent.waiti
 	child.cwd = parent.cwd
+	var pm parmsg_t
+	pm.init(child.pid)
+	pm.forked = true
+	parent.waiti.getch <- pm
+	resp := <- pm.ack
+	if resp.err != 0 {
+		panic("add child")
+	}
 
 	// copy fd table
 	for k, v := range parent.fds {
@@ -904,39 +911,180 @@ func sys_exit(proc *proc_t, status int) {
 	proc_kill(proc.pid)
 
 	// send status to parent
-	if proc.pwaitch == nil {
-		panic("pwaitch nil")
+	if proc.pwaiti == nil {
+		panic("p_pwaiti nil")
 	}
-	go func() {
-		proc.pwaitch <- waitmsg_t{proc.pid, status, 0}
-	}()
+	var cm childmsg_t
+	cm.pid = proc.pid
+	cm.status = status
+	proc.pwaiti.addch <- cm
 
-	// drain all child statuses in background
-	go func() {
-		for i := proc.nreap; i < proc.nchild; i++ {
-			<- proc.waitch
-		}
-	}()
-
-	//fmt.Printf("%v -- %v cycles (%v GC cycles)\n", proc.name, tot,
-	//    runtime.Resetgcticks())
-	//if runtime.SCenable {
-	//	fmt.Printf("SERIAL CONSOLE ENABLED\n")
-	//}
+	// tell wait daemon to finish
+	proc.waiti.finish()
 }
 
-func sys_wait(proc *proc_t, statusp int) int {
-	if proc.nreap == proc.nchild {
-		return -ECHILD
-	}
+func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep int) int {
+	wi := proc.waiti
+
 	ok := proc.usermapped(statusp, 4)
 	if !ok {
 		return -EFAULT
 	}
-	wmsg := <- proc.waitch
-	proc.nreap++
-	proc.userwriten(statusp, 4, wmsg.status)
-	return wmsg.pid
+
+	if wpid == WAIT_MYPGRP {
+		panic("no imp")
+	}
+
+	var pm parmsg_t
+	pm.init(wpid)
+
+	wi.getch <- pm
+	resp := <- pm.ack
+	if resp.err != 0 {
+		return resp.err
+	}
+	proc.userwriten(statusp, 4, resp.status)
+	return resp.pid
+}
+
+type childmsg_t struct {
+	pid	int
+	status	int
+	err	int
+}
+
+type parmsg_t struct {
+	forked	bool
+	pid	int
+	ack	chan childmsg_t
+}
+
+func (pm *parmsg_t) init(pid int) {
+	pm.pid = pid
+	pm.ack = make(chan childmsg_t)
+}
+
+type waitinfo_t struct {
+	addch	chan childmsg_t
+	getch	chan parmsg_t
+}
+
+type cinfo_t struct {
+	pid	int
+	status 	int
+	reaped	bool
+	dead	bool
+}
+
+func (w *waitinfo_t) init() {
+	w.addch = make(chan childmsg_t)
+	w.getch = make(chan parmsg_t)
+	go w.daemon()
+}
+
+func (w *waitinfo_t) finish() {
+	close(w.getch)
+}
+
+func (w *waitinfo_t) daemon() {
+	add := w.addch
+	get := w.getch
+
+	reaps := 0
+	childs := make(map[int]cinfo_t)
+	waiters := make(map[int]parmsg_t)
+	anys := make([]parmsg_t, 0)
+
+	addanys := func(pm parmsg_t) {
+		anys = append(anys, pm)
+	}
+
+	done := false
+	for !done {
+		select {
+		case cm := <- add:
+			// child has terminated
+			ci, ok := childs[cm.pid]
+			if !ok || ci.dead || ci.reaped {
+				panic("what")
+			}
+			ci.dead = true
+			ci.status = cm.status
+			childs[cm.pid] = ci
+
+		case pm, ok := <- get:
+			if !ok {
+				// parent terminated, no more waits or forks
+				if len(anys) != 0 || len(waiters) != 0 {
+					panic("threads?")
+				}
+				done = true
+				break
+			}
+			// new child spawned?
+			if pm.forked {
+				var nci cinfo_t
+				nci.pid = pm.pid
+				nci.reaped = false
+				nci.dead = false
+				childs[pm.pid] = nci
+				pm.ack <- childmsg_t{}
+				break
+			}
+
+			// get status of child
+			if reaps == len(childs) {
+				// no unreaped children
+				pm.ack <- childmsg_t{err: -ECHILD}
+				break
+			}
+
+			if pm.pid == WAIT_ANY {
+				addanys(pm)
+				break
+			}
+
+			ci, ok := childs[pm.pid]
+			if !ok || ci.reaped {
+				// no such child or already waited for
+				pm.ack <- childmsg_t{err: -ECHILD}
+				break
+			}
+			waiters[pm.pid] = pm
+		}
+
+		// check for new statuses
+		var cm childmsg_t
+		for pid, ci := range childs {
+			if ci.reaped || !ci.dead {
+				continue
+			}
+			cm.pid = ci.pid
+			cm.status = ci.status
+			if len(anys) > 0 {
+				ci.reaped = true
+				childs[pid] = ci
+				reaps++
+				pm := anys[0]
+				anys = anys[1:]
+				pm.ack <- cm
+				continue
+			}
+			pm, ok := waiters[pid]
+			if !ok {
+				continue
+			}
+			ci.reaped = true
+			childs[pid] = ci
+			reaps++
+			pm.ack <- cm
+			delete(waiters, pid)
+		}
+	}
+	// parent exited, drain remaining statuses
+	for i := reaps; i < len(childs); i++ {
+		<- add
+	}
 }
 
 func sys_kill(proc *proc_t, pid, sig int) int {

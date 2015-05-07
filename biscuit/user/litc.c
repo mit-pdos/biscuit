@@ -14,7 +14,7 @@
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
-#define SYS_WAIT         61
+#define SYS_WAIT4        61
 #define SYS_KILL         62
 #define SYS_CHDIR        80
 #define SYS_MKDIR        83
@@ -161,7 +161,20 @@ int
 wait(int *status)
 {
 	int _status;
-	int ret = syscall(SA(&_status), 0, 0, 0, 0, SYS_WAIT);
+	int ret = syscall(WAIT_ANY, SA(&_status), 0, 0, 0, SYS_WAIT4);
+	if (status)
+		*status = _status;
+	return ret;
+}
+
+int
+wait4(int pid, int *status, int options, void *rusage)
+{
+	if (rusage)
+		errx(-1, "wait4: rusage not supported");
+	int _status;
+	int ret = syscall(pid, SA(&_status), SA(options), SA(rusage), 0,
+	    SYS_WAIT4);
 	if (status)
 		*status = _status;
 	return ret;
