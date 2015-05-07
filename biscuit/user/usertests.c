@@ -305,7 +305,7 @@ void
 exectest(void)
 {
   printf("exec test\n");
-  if(exec("echo", echoargv) < 0){
+  if(exec("/bin/echo", echoargv) < 0){
     printf("exec echo failed\n");
     exit(0);
   }
@@ -1424,7 +1424,8 @@ forktest(void)
   
   if(n == 1000){
     printf("fork claimed to work 1000 times!\n");
-    exit(0);
+    printf("continuing...\n");
+    //exit(0);
   }
   
   for(; n > 0; n--){
@@ -1434,7 +1435,7 @@ forktest(void)
     }
   }
   
-  if(wait(NULL) != -1){
+  if(wait(NULL) != -ECHILD){
     printf("wait got too many\n");
     exit(0);
   }
