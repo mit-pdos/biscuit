@@ -1045,37 +1045,25 @@ func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
 func (idm *idaemon_t) dirent_add(ds []*dirdata_t, name string, nblkno int,
     ioff int) {
 
-	var blk *bbuf_t
 	var deoff int
 	var ddata *dirdata_t
 	dorelse := false
 
-	found, eblkidx, eslot := dirent_empty(ds)
+	found, eblkidx, eslot := dirent_getempty(ds)
 	if found {
 		// use existing dirdata block
 		deoff = eslot
 		ddata = ds[eblkidx]
 	} else {
 		// allocate new dir data block
-		newddn := balloc()
-		oldsz := idm.icache.size
-		nextslot := oldsz/512
-		if nextslot >= NIADDRS {
-			panic("need indirect support")
-		}
-		if idm.icache.addrs[nextslot] != 0 {
-			panic("addr slot allocated")
-		}
-		idm.icache.addrs[nextslot] = newddn
-		idm.icache.size = oldsz + 512
-
-		deoff = 0
-		// zero new directory data block
-		blk = bread(newddn)
+		blkn := idm.offsetblk(idm.icache.size, true)
+		idm.icache.size += 512
+		blk := bread(blkn)
 		for i := range blk.buf.data {
 			blk.buf.data[i] = 0
 		}
 		ddata = &dirdata_t{blk}
+		deoff = 0
 		dorelse = true
 	}
 	// write dir entry
@@ -1279,7 +1267,7 @@ func dirent_brelse(ds []*dirdata_t) {
 }
 
 // returns an empty directory entry
-func dirent_empty(ds []*dirdata_t) (bool, int, int) {
+func dirent_getempty(ds []*dirdata_t) (bool, int, int) {
 	for i := 0; i < len(ds); i++ {
 		for j := 0; j < NDIRENTS; j++ {
 			if ds[i].filename(j) == "" {
