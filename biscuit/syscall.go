@@ -967,11 +967,11 @@ func sys_chdir(proc *proc_t, dirn int) int {
 		return err
 	}
 
-	file_close(INODE, proc.cwd, 0)
 	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd)
 	if err != 0 {
 		return err
 	}
+	file_close(INODE, proc.cwd, 0)
 	proc.cwd = newcwd
 	return 0
 }
