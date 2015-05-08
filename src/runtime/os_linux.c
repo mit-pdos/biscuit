@@ -1586,7 +1586,7 @@ sched_halt(void)
 	//}
 
 	//pmsg("hlt");
-	wlap(0x380/4, TIMER_QUANTUM/10);
+	wlap(0x380/4, TIMER_QUANTUM/100);
 	cpu_halt(curcpu.rsp);
 }
 

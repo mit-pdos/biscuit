@@ -342,8 +342,7 @@ var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
-// XXX remove usepid
-func proc_new(name string, usepid int) *proc_t {
+func proc_new(name string) *proc_t {
 	if rootfile == nil {
 		panic("proc_init not called")
 	}
@@ -352,12 +351,8 @@ func proc_new(name string, usepid int) *proc_t {
 
 	proclock.Lock()
 	var newpid int
-	if usepid != 0 {
-		newpid = usepid
-	} else {
-		pid_cur++
-		newpid = pid_cur
-	}
+	pid_cur++
+	newpid = pid_cur
 	if _, ok := allprocs[newpid]; ok {
 		panic("pid exists")
 	}
@@ -1212,7 +1207,7 @@ func main() {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
-		p := proc_new(cmd, 0)
+		p := proc_new(cmd)
 		var tf [TFSIZE]int
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {

@@ -652,7 +652,7 @@ func sys_getpid(proc *proc_t) int {
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	//mkthread := flags & FORK_THREAD != 0
 
-	child := proc_new(fmt.Sprintf("%s's child", parent.name), 0)
+	child := proc_new(fmt.Sprintf("%s's child", parent.name))
 	child.pwaiti = &parent.waiti
 	child.cwd = parent.cwd
 	var pm parmsg_t
@@ -1373,7 +1373,7 @@ func sys_test(program string) {
 
 	var tf [23]int
 
-	proc := proc_new(program + "test", 0)
+	proc := proc_new(program + "test")
 
 	elf, ok := allbins[program]
 	if !ok {
