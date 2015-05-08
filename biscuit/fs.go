@@ -37,6 +37,9 @@ func pathparts(path string) []string {
 func dirname(path string) ([]string, string) {
 	parts := pathparts(path)
 	l := len(parts) - 1
+	if l < 0 {
+		return nil, ""
+	}
 	dirs := parts[:l]
 	name := parts[l]
 	return dirs, name
