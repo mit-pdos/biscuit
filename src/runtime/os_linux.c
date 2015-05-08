@@ -1699,7 +1699,7 @@ thread_find(int64 uc)
 
 #pragma textflag NOSPLIT
 void
-runtime·Procadd(uint64 *tf, int64 pid, uint64 pmap)
+runtime·Procadd(int64 pid, uint64 *tf, uint64 pmap)
 {
 	runtime·stackcheck();
 
@@ -1836,6 +1836,9 @@ trap(uint64 *tf)
 		fxsave(&fxstates[idx][0]);
 	}
 
+	void (*ntrap)(uint64 *, int64, int64);
+	ntrap = (void (*)(uint64 *, int64, int64))newtrap;
+
 	// the timer interrupt is handled specially by the runtime
 	if (trapno == TRAP_TIMER) {
 		splock(&threadlock);
@@ -1846,11 +1849,9 @@ trap(uint64 *tf)
 				ct->tf[TF_RFLAGS] |= TF_FL_IF;
 				spunlock(&futexlock);
 			} else if (ct->notify) {
-				int64 v = ct->notify;
 				ct->notify = 0;
 				ct->status = ST_WAITING;
-				((void (*)(uint64 *, int64, int64))
-				    newtrap)(nil, 0, v);
+				ntrap(nil, ct->pid, 1);
 			} else
 				ct->status = ST_RUNNABLE;
 		}
@@ -1868,14 +1869,14 @@ trap(uint64 *tf)
 	if (ct && ct->pid && (trapno == TRAP_SYSCALL || trapno < TRAP_TIMER))
 		ct->status = ST_WAITING;
 
-	if (newtrap) {
+	if (ntrap) {
 		// if ct is nil here, there is a kernel bug
-		int64 uc = ct ? ct->pid : 0;
+		int64 ptid = ct ? ct->pid : 0;
 		// catch kernel faults that occur while trying to handle user
 		// traps
 		if ((tf[TF_CS] & 3) == 0)
-			uc = 0;
-		((void (*)(uint64 *, int64, int64))newtrap)(tf, uc, 0);
+			ptid = 0;
+		ntrap(tf, ptid, 0);
 		runtime·pancake("newtrap returned!", 0);
 	}
 
@@ -2446,15 +2447,15 @@ runtime·Proccontinue(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Prockill(int64 pid)
+runtime·Prockill(int64 ptid)
 {
 	runtime·stackcheck();
 
 	cli();
 	splock(&threadlock);
 
-	struct thread_t *t = thread_find(pid);
-	assert(t, "no such pid", pid);
+	struct thread_t *t = thread_find(ptid);
+	assert(t, "no such ptid", ptid);
 	assert(t->status == ST_WAITING, "user proc not waiting?", t->status);
 	t->status = ST_INVALID;
 	t->pid = 0;
@@ -2466,23 +2467,23 @@ runtime·Prockill(int64 pid)
 
 #pragma textflag NOSPLIT
 int64
-runtime·Procnotify(int64 pid)
+runtime·Procnotify(int64 ptid)
 {
 	runtime·stackcheck();
 
-	if (pid == 0)
-		runtime·pancake("notify on 0", pid);
+	if (ptid == 0)
+		runtime·pancake("notify on 0", ptid);
 
 	cli();
 	splock(&threadlock);
 
-	struct thread_t *t = thread_find(pid);
+	struct thread_t *t = thread_find(ptid);
 	if (t == nil) {
 		spunlock(&threadlock);
 		sti();
 		return 1;
 	}
-	t->notify = pid;
+	t->notify = ptid;
 
 	spunlock(&threadlock);
 	sti();

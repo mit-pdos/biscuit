@@ -10,9 +10,10 @@ import "unsafe"
 type trapstore_t struct {
 	trapno    int
 	pid       int
+	tid       tid_t
 	faultaddr int
 	tf	  [TFSIZE]int
-	piddone   int
+	notify    bool
 }
 const maxtstore int = 64
 const maxcpus   int = 32
@@ -81,7 +82,7 @@ var INT_DISK	int = -1
 // tries to execute more gocode on the same M, thus doing things the runtime
 // did not expect.
 //go:nosplit
-func trapstub(tf *[TFSIZE]int, pid int, piddone int) {
+func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 
 	lid := cpus[lap_id()].num
 	head := cpus[lid].tshead
@@ -97,10 +98,20 @@ func trapstub(tf *[TFSIZE]int, pid int, piddone int) {
 		for {}
 	}
 
-	// if pidkilled is non-zero, a trap has not been received but a
-	// thread's has stopped running and thus it's pmap can be freed.
-	if piddone != 0 {
-		ts.piddone = piddone
+	// extract process and thread id
+	pid := int(ptid >> 32)
+	tid := tid_t(uint32(ptid))
+	ts.pid = pid
+	ts.tid = tid
+
+	// if ptiddone is non-zero, a trap has not been received but a thread
+	// has stopped running and thus it's pmap can be freed.
+	if notify != 0 {
+		if pid == 0 {
+			runtime.Pnum(0xbad2)
+			for {}
+		}
+		ts.notify = true
 		// commit "interrupt"
 		head = tsnext(head)
 		cpus[lid].tshead = head
@@ -128,9 +139,8 @@ func trapstub(tf *[TFSIZE]int, pid int, piddone int) {
 
 	// add to trap circular buffer for actual trap handler
 	ts.trapno = trapno
-	ts.pid = pid
 	ts.tf = *tf
-	ts.piddone = 0
+	ts.notify = false
 	if trapno == PGFAULT {
 		ts.faultaddr = runtime.Rcr2()
 	}
@@ -181,14 +191,15 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			tcur = cpus[cpu].trapstore[tail]
 
 			trapno := tcur.trapno
-			pid := tcur.pid
-			piddone := tcur.piddone
+			notify := tcur.notify
 
 			tail = tsnext(tail)
 			cpus[cpu].tstail = tail
 
-			if piddone != 0 {
-				go reap_doomed(piddone)
+			if notify {
+				pid := tcur.pid
+				tid := tcur.tid
+				go reap_doomed(pid, tid)
 				continue
 			}
 
@@ -196,6 +207,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 				go h(&tcur)
 				continue
 			}
+			pid := tcur.pid
 			panic(fmt.Sprintf("no handler for trap %v, pid %x\n",
 			    trapno,pid))
 		}
@@ -223,7 +235,8 @@ func trap_kbd(ts *trapstore_t) {
 
 func trap_syscall(ts *trapstore_t) {
 	pid  := ts.pid
-	syscall(pid, &ts.tf)
+	tid := ts.tid
+	syscall(pid, tid, &ts.tf)
 }
 
 func trap_pgfault(ts *trapstore_t) {
@@ -299,13 +312,22 @@ type ulimit_t struct {
 	pages	int
 }
 
+type threadinfo_t struct {
+	count	int
+	alive	int
+}
+
 type proc_t struct {
 	pid		int
 	name		string
 
+	// waitinfo for my children
 	waiti		waitinfo_t
 	// waitinfo of my parent
 	pwaiti		*waitinfo_t
+
+	// thread bookkeeping
+	threadi		threadinfo_t
 
 	// all pages
 	pages		map[int]*[512]int
@@ -393,6 +415,19 @@ func proc_check(pid int) (*proc_t, bool) {
 	return p, ok
 }
 
+func proc_kill(pid int) {
+	proclock.Lock()
+	p, ok := allprocs[pid]
+	if !ok {
+		panic("bad pid")
+	}
+	p.dead = true
+	delete(allprocs, pid)
+	proclock.Unlock()
+
+	runtime.Prockill(p.mkptid(0))
+}
+
 func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
 	// find free fd
 	newfd := p.fdstart
@@ -412,6 +447,15 @@ func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
 	}
 	p.fds[fdn] = fd
 	return fdn, fd
+}
+
+type tid_t int
+
+func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
+	// make pid/tid pair
+	ptid := p.pid << 32
+	ptid |= int(tid)
+	return runtime.Ptid_t(ptid)
 }
 
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
@@ -462,9 +506,24 @@ func (p *proc_t) page_remove(va int) bool {
 	return remmed
 }
 
-func (p *proc_t) sched_add(tf *[TFSIZE]int) {
+func (p *proc_t) sched_add(tf *[TFSIZE]int, tid tid_t) {
 	p.tstart = runtime.Rdtsc()
-	runtime.Procadd(tf, p.pid, p.p_pmap)
+	ptid := p.mkptid(tid)
+	runtime.Procadd(ptid, tf, p.p_pmap)
+}
+
+func (p *proc_t) sched_runnable(tf *[TFSIZE]int, tid tid_t) {
+	ptid := p.mkptid(tid)
+	runtime.Procrunnable(ptid, tf, p.p_pmap)
+}
+
+func (p *proc_t) tid_new() tid_t {
+	p.Lock()
+	ret := tid_t(p.threadi.count)
+	p.threadi.count++
+	p.threadi.alive++
+	p.Unlock()
+	return ret
 }
 
 // returns a slice whose underlying buffer points to va, which can be
@@ -611,19 +670,6 @@ func (p *proc_t) usercopy(src []uint8, uva int) bool {
 		cnt += ub
 	}
 	return true
-}
-
-func proc_kill(pid int) {
-	proclock.Lock()
-	p, ok := allprocs[pid]
-	if !ok {
-		panic("bad pid")
-	}
-	p.dead = true
-	delete(allprocs, pid)
-	proclock.Unlock()
-
-	runtime.Prockill(pid)
 }
 
 func mp_sum(d []uint8) int {
@@ -1213,7 +1259,7 @@ func main() {
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
-		p.sched_add(&tf)
+		p.sched_add(&tf, 0)
 	}
 
 	//exec("bin/bmgc2", []string{"100000000"})

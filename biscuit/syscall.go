@@ -67,6 +67,8 @@ const(
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
   SYS_FORK     = 57
+    FORK_PROCESS = 0x0
+    FORK_THREAD  = 0x1
   SYS_EXECV    = 59
   SYS_EXIT     = 60
   SYS_WAIT4    = 61
@@ -87,13 +89,13 @@ const(
 // lowest userspace address
 const USERMIN	int = VUSER << 39
 
-func syscall(pid int, tf *[TFSIZE]int) {
+func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
 
 	if p.doomed {
 		// this process has been killed
-		reap_doomed(pid)
+		reap_doomed(pid, tid)
 		return
 	}
 
@@ -129,7 +131,7 @@ func syscall(pid int, tf *[TFSIZE]int) {
 		runtime.Resetgcticks()
 		ret = sys_getpid(p)
 	case SYS_FORK:
-		ret = sys_fork(p, tf)
+		ret = sys_fork(p, tf, a1)
 	case SYS_EXECV:
 		ret = sys_execv(p, tf, a1, a2)
 	case SYS_EXIT:
@@ -154,11 +156,11 @@ func syscall(pid int, tf *[TFSIZE]int) {
 
 	tf[TF_RAX] = ret
 	if !p.dead {
-		runtime.Procrunnable(pid, tf, p.p_pmap)
+		p.sched_runnable(tf, tid)
 	}
 }
 
-func reap_doomed(pid int) {
+func reap_doomed(pid int, tid tid_t) {
 	p := proc_get(pid)
 	if !p.doomed {
 		panic("p not doomed")
@@ -649,7 +651,7 @@ func sys_getpid(proc *proc_t) int {
 	return proc.pid
 }
 
-func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
+func sys_fork(parent *proc_t, ptf *[TFSIZE]int, flags int) int {
 	//mkthread := flags & FORK_THREAD != 0
 
 	child := proc_new(fmt.Sprintf("%s's child", parent.name))
@@ -701,7 +703,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int) int {
 	chtf = *ptf
 	chtf[TF_RAX] = 0
 
-	child.sched_add(&chtf)
+	child.sched_add(&chtf, 0)
 
 	return child.pid
 }
@@ -720,7 +722,7 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 	proc.page_insert(va, dst, p_dst, perms, false)
 
 	// set process as runnable again
-	runtime.Procrunnable(proc.pid, nil, proc.p_pmap)
+	proc.sched_runnable(nil, 0)
 }
 
 func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
@@ -1090,7 +1092,7 @@ func sys_kill(proc *proc_t, pid, sig int) int {
 		return -ESRCH
 	}
 	p.doomed = true
-	if runtime.Procnotify(pid) != 0 {
+	if runtime.Procnotify(p.mkptid(0)) != 0 {
 		fmt.Printf("pid %v already terminated\n", pid)
 	}
 	return 0
@@ -1358,46 +1360,4 @@ func elf_load(p *proc_t, e *elf_t) {
 			elf_segload(p, &hdr)
 		}
 	}
-}
-
-func sys_test_dump() {
-	e := allbins["user/hello"]
-	for i, hdr := range e.headers() {
-		fmt.Printf("%v -- vaddr %x filesz %x ", i, hdr.vaddr, hdr.filesz)
-	}
-}
-
-// loads user program from gobins
-func sys_test(program string) {
-	fmt.Printf("add 'user' prog\n")
-
-	var tf [23]int
-
-	proc := proc_new(program + "test")
-
-	elf, ok := allbins[program]
-	if !ok {
-		panic("no such program: " + program)
-	}
-
-	stack, p_stack := pg_new(proc.pages)
-	stackva := mkpg(VUSER + 1, 0, 0, 0)
-	tf[TF_RSP] = stackva - 8
-	tf[TF_RIP] = elf.entry()
-	tf[TF_RFLAGS] = TF_FL_IF
-
-	ucseg := 4
-	udseg := 5
-	tf[TF_CS] = ucseg << 3 | 3
-	tf[TF_SS] = udseg << 3 | 3
-
-	// copy kernel page table, map new stack
-	upmap, p_upmap, _ := copy_pmap(nil, kpmap(), proc.pages)
-	proc.pmap, proc.p_pmap = upmap, p_upmap
-	proc.page_insert(stackva - PGSIZE, stack,
-	    p_stack, PTE_U | PTE_W, true)
-
-	elf_load(proc, elf)
-
-	proc.sched_add(&tf)
 }
