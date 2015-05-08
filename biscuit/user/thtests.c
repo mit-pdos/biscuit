@@ -26,7 +26,6 @@ void child(void *msg)
 	printf("child loop (msg: %s)\n", msg);
 	loop("c", 10);
 	printf("child exit\n");
-	threxit(0);
 }
 
 int main(int argc, char **argv)
