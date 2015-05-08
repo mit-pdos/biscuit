@@ -23,6 +23,22 @@
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
 
+static long biglock;
+static int dolock = 1;
+
+void acquire(void)
+{
+	if (!dolock)
+		return;
+	while (__sync_lock_test_and_set(&biglock, 1) != 0)
+		;
+}
+
+void release(void)
+{
+	biglock = 0;
+}
+
 static void pmsg(char *, long);
 
 long
@@ -217,6 +233,7 @@ atoul(const char *n)
 void
 err(int eval, const char *fmt, ...)
 {
+	dolock = 0;
 	const char *es[] = {
 	    [EPERM] = "Permission denied",
 	    [ENOENT] = "No such file or directory",
@@ -248,6 +265,7 @@ err(int eval, const char *fmt, ...)
 void
 errx(int eval, const char *fmt, ...)
 {
+	dolock = 0;
 	printf("%s: ", __progname);
 	va_list ap;
 	va_start(ap, fmt);
@@ -427,9 +445,13 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 int
 vprintf(const char *fmt, va_list ap)
 {
+	acquire();
+
 	int ret;
 	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
 	pmsg(pbuf, ret);
+
+	release();
 	return ret;
 }
 
@@ -536,6 +558,8 @@ static char *bump;
 void *
 malloc(size_t sz)
 {
+	acquire();
+
 	sz = (sz + 7) & ~7;
 	if (!curh || bump + sz > curh->end) {
 		const int pgsize = 1 << 12;
@@ -543,6 +567,7 @@ malloc(size_t sz)
 		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
 		    MAP_ANON | MAP_PRIVATE, -1, 0);
 		if (nh == MAP_FAILED) {
+			release();
 			printf("malloc: couldn't mmap more mem\n");
 			return NULL;
 		}
@@ -558,12 +583,17 @@ malloc(size_t sz)
 	curh->objs++;
 	char *ret = bump;
 	bump += sz;
+
+	release();
+
 	return ret;
 }
 
 void
 free(void *pp)
 {
+	acquire();
+
 	char *p = pp;
 	// find containing seg
 	struct header_t *ch;
@@ -587,6 +617,7 @@ free(void *pp)
 		if ((ret = munmap(ch->start, ch->end - ch->start)) < 0)
 			err(ret, "munmap");
 	}
+	release();
 }
 
 char __progname[64];
