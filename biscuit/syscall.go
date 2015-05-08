@@ -92,6 +92,9 @@ const USERMIN	int = VUSER << 39
 func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
+	if int(tid) >= p.threadi.count {
+		panic(fmt.Sprintf("bad thread id %v %v", tid, p.threadi.count))
+	}
 
 	if p.doomed {
 		// this process has been killed
@@ -135,7 +138,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	case SYS_EXECV:
 		ret = sys_execv(p, tf, a1, a2)
 	case SYS_EXIT:
-		sys_exit(p, a1)
+		sys_exit(p, tid, a1)
 	case SYS_WAIT4:
 		ret = sys_wait4(p, a1, a2, a3, a4)
 	case SYS_KILL:
@@ -165,7 +168,7 @@ func reap_doomed(pid int, tid tid_t) {
 	if !p.doomed {
 		panic("p not doomed")
 	}
-	sys_exit(p, -1)
+	p.thread_dead(tid, 0, false)
 }
 
 var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
@@ -892,31 +895,10 @@ func bloataddr(p *proc_t, npages int) {
 	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
 }
 
-func sys_exit(proc *proc_t, status int) {
-	if proc.pid == 1 {
-		panic("killed init")
-	}
-
-	// close open fds
-	for fdn := range proc.fds {
-		sys_close(proc, fdn)
-	}
-
-	//fmt.Printf("%v exited with status %v\n", proc.name, status)
-	//tot := runtime.Rdtsc() - proc.tstart
-	proc_kill(proc.pid)
-
-	// send status to parent
-	if proc.pwaiti == nil {
-		panic("p_pwaiti nil")
-	}
-	var cm childmsg_t
-	cm.pid = proc.pid
-	cm.status = status
-	proc.pwaiti.addch <- cm
-
-	// tell wait daemon to finish
-	proc.waiti.finish()
+func sys_exit(proc *proc_t, tid tid_t, status int) {
+	// set doomed to all other threads die
+	proc.doomed = true
+	proc.thread_dead(tid, status, true)
 }
 
 func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep int) int {

@@ -217,7 +217,8 @@ func trap(handlers map[int]func(*trapstore_t)) {
 
 func trap_divzero(ts *trapstore_t) {
 	fmt.Printf("pid %v divide by zero; killing...\n", ts.pid)
-	proc_kill(ts.pid)
+	p := proc_get(ts.pid)
+	sys_exit(p, ts.tid, -1)
 }
 
 func trap_disk(ts *trapstore_t) {
@@ -242,6 +243,7 @@ func trap_syscall(ts *trapstore_t) {
 func trap_pgfault(ts *trapstore_t) {
 
 	pid := ts.pid
+	tid := ts.tid
 	fa  := ts.faultaddr
 	proc := proc_get(pid)
 	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
@@ -256,7 +258,7 @@ func trap_pgfault(ts *trapstore_t) {
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.name, fa, rip)
-	sys_exit(proc, -EFAULT)
+	sys_exit(proc, tid, -EFAULT)
 }
 
 func tfdump(tf *[TFSIZE]int) {
@@ -338,9 +340,11 @@ type proc_t struct {
 	pmap		*[512]int
 	p_pmap		int
 	dead		bool
-	// a process is marked doomed when it has been killed but may be
-	// currently running on another processor
+	// a process is marked doomed when it has been killed but may have
+	// threads currently running on another processor
 	doomed		bool
+	exitstatus	int
+
 	fds		map[int]*fd_t
 	// where to start scanning for free fds
 	fdstart		int
@@ -394,6 +398,7 @@ func proc_new(name string) *proc_t {
 	ret.ulim.pages = (1 << 27) / (1 << 12)
 
 	ret.waiti.init()
+	ret.tid_new()
 
 	return ret
 }
@@ -415,7 +420,7 @@ func proc_check(pid int) (*proc_t, bool) {
 	return p, ok
 }
 
-func proc_kill(pid int) {
+func proc_del(pid int) {
 	proclock.Lock()
 	p, ok := allprocs[pid]
 	if !ok {
@@ -424,8 +429,6 @@ func proc_kill(pid int) {
 	p.dead = true
 	delete(allprocs, pid)
 	proclock.Unlock()
-
-	runtime.Prockill(p.mkptid(0))
 }
 
 func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
@@ -524,6 +527,64 @@ func (p *proc_t) tid_new() tid_t {
 	p.threadi.alive++
 	p.Unlock()
 	return ret
+}
+
+// terminate a single thread
+func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
+	p.Lock()
+	ti := &p.threadi
+	ti.alive--
+	if ti.alive < 0 {
+		panic("negative thread alive count")
+	}
+	destroy := ti.alive == 0
+
+	if usestatus {
+		p.exitstatus = status
+	}
+	p.Unlock()
+
+	runtime.Prockill(p.mkptid(tid))
+	if destroy {
+		p.terminate()
+	}
+}
+
+// termiante a process. must only be called when the process has no more
+// running threads.
+func (p *proc_t) terminate() {
+	if p.pid == 1 {
+		panic("killed init")
+	}
+
+	p.Lock()
+	ti := &p.threadi
+	p.Unlock()
+
+	if ti.alive != 0 {
+		panic("terminate, but threads alive")
+	}
+
+	// close open fds
+	for fdn := range p.fds {
+		sys_close(p, fdn)
+	}
+
+	//fmt.Printf("%v exited with status %v\n", p.name, p.exitstatus)
+	//tot := runtime.Rdtsc() - p.tstart
+	proc_del(p.pid)
+
+	// send status to parent
+	if p.pwaiti == nil {
+		panic("pwaiti nil")
+	}
+	var cm childmsg_t
+	cm.pid = p.pid
+	cm.status = p.exitstatus
+	p.pwaiti.addch <- cm
+
+	// tell wait daemon to finish
+	p.waiti.finish()
 }
 
 // returns a slice whose underlying buffer points to va, which can be
