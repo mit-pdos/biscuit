@@ -342,6 +342,7 @@ var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
+// XXX remove usepid
 func proc_new(name string, usepid int) *proc_t {
 	if rootfile == nil {
 		panic("proc_init not called")

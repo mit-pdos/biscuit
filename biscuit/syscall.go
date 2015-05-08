@@ -87,11 +87,6 @@ const(
 // lowest userspace address
 const USERMIN	int = VUSER << 39
 
-// story for concurrent system calls: any syscall that touches any proc_t, p,
-// which is not the calling process, needs to lock p. access to globals (maps)
-// also need to be locked. obviously, a process cannot have two or more
-// syscalls/pagefaults running concurrently since syscalls/pagefaults are not
-// batched.
 func syscall(pid int, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
@@ -222,7 +217,6 @@ var fdclosers = map[ftype_t]func(*file_t, int) int {
 	PIPE : pipe_close,
 }
 
-// XXX need to serialize per-fd operations
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	// sys_read is read-only i.e. doesn't update metadata, thus don't need
 	// op_{begin,end}
@@ -750,7 +744,6 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
-	// XXX close?
 	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd)
 	if err != 0 {
 		return err
@@ -768,6 +761,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		valid := add[0:ret]
 		eobj = append(eobj, valid...)
 	}
+	file_close(INODE, file, 0)
 	elf := &elf_t{eobj}
 	_, ok := elf.npheaders()
 	if !ok {
