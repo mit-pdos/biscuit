@@ -35,6 +35,9 @@
 #define WAIT_ANY	(-1)
 #define WAIT_MYPGRP	0
 
+#define FORK_PROCESS	0x1
+#define FORK_THREAD	0x2
+
 #define MAXBUF        4096
 
 struct __attribute__((packed)) stat {
@@ -42,6 +45,12 @@ struct __attribute__((packed)) stat {
 	ulong	st_ino;
 	ulong	st_mode;
 	ulong	st_size;
+};
+
+struct __attribute__((packed)) tfork_t {
+	void *tf_tcb;
+	void *tf_tid;
+	void *tf_stack;
 };
 
 #define S_ISDIR(mode)	(mode == 2)
@@ -78,7 +87,11 @@ int wait(int *);
 int wait4(int, int *, int, void *);
 long write(int, void*, size_t);
 
-// thread syscalls
+/*
+ * thread stuff
+ */
+void tfork_done(void);
+int tfork_thread(struct tfork_t *, void (*fn)(void *), void *);
 void threxit(long);
 
 int atoi(const char *);

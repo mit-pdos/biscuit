@@ -92,7 +92,8 @@ fake_sys(long n)
 int
 fork(void)
 {
-	return syscall(0, 0, 0, 0, 0, SYS_FORK);
+	long flags = FORK_PROCESS;
+	return syscall(0, flags, 0, 0, 0, SYS_FORK);
 }
 
 int
@@ -206,6 +207,40 @@ write(int fd, void *buf, size_t c)
 /*
  * thread stuff
  */
+void
+tfork_done(void)
+{
+	printf("thread finished\n");
+	threxit(0);
+	errx(-1, "threxit returned");
+}
+
+int
+tfork_thread(struct tfork_t *args, void (*fn)(void *), void *fnarg)
+{
+	int tid;
+	long flags = FORK_THREAD;
+
+	register ulong r8 asm("r8") = (ulong)fn;
+	register ulong r9 asm("r9") = (ulong)fnarg;
+
+	asm volatile(
+	    "int	$64\n"
+	    "cmpl	$0, %%eax\n"
+	    // parent or error
+	    "jne	1f\n"
+	    // child
+	    "movq	%5, %%rdi\n"
+	    "call	%4\n"
+	    "call	tfork_done\n"
+	    "movq	$0, 0xfece5\n"
+	    "1:\n"
+	    : "=a"(tid)
+	    : "D"(args), "S"(flags), "0"(SYS_FORK), "r"(r8), "r"(r9)
+	    : "memory", "cc");
+	return tid;
+}
+
 void
 threxit(long status)
 {

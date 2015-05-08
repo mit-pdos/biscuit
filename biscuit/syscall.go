@@ -67,8 +67,8 @@ const(
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
   SYS_FORK     = 57
-    FORK_PROCESS = 0x0
-    FORK_THREAD  = 0x1
+    FORK_PROCESS = 0x1
+    FORK_THREAD  = 0x2
   SYS_EXECV    = 59
   SYS_EXIT     = 60
   SYS_WAIT4    = 61
@@ -142,7 +142,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		runtime.Resetgcticks()
 		ret = sys_getpid(p)
 	case SYS_FORK:
-		ret = sys_fork(p, tf, a1)
+		ret = sys_fork(p, tf, a1, a2)
 	case SYS_EXECV:
 		ret = sys_execv(p, tf, a1, a2)
 	case SYS_EXIT:
@@ -664,61 +664,109 @@ func sys_getpid(proc *proc_t) int {
 	return proc.pid
 }
 
-func sys_fork(parent *proc_t, ptf *[TFSIZE]int, flags int) int {
-	//mkthread := flags & FORK_THREAD != 0
-
-	child := proc_new(fmt.Sprintf("%s's child", parent.name))
-	child.pwaiti = &parent.waiti
-	child.cwd = parent.cwd
-	var pm parmsg_t
-	pm.init(child.pid)
-	pm.forked = true
-	parent.waiti.getch <- pm
-	resp := <- pm.ack
-	if resp.err != 0 {
-		panic("add child")
+func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
+	tmp := flags & (FORK_THREAD | FORK_PROCESS)
+	if tmp != FORK_THREAD && tmp != FORK_PROCESS {
+		return -EINVAL
+	}
+	sztfork_t := 24
+	if tmp == FORK_THREAD && !parent.usermapped(tforkp, sztfork_t) {
+		fmt.Printf("no tforkp thingy\n")
+		return -EFAULT
 	}
 
-	// copy fd table
-	for k, v := range parent.fds {
-		child.fds[k] = v
-		// increment reader/writer count
-		switch v.ftype {
-		case PIPE:
-			var ch chan int
-			if v.perms == FD_READ {
-				ch = v.file.pipe.readers
-			} else {
-				ch = v.file.pipe.writers
-			}
-			ch <- 1
-		case INODE:
-			fs_memref(v.file, v.perms)
-		}
-	}
+	mkproc := flags & FORK_PROCESS != 0
+	var child *proc_t
+	var childtid tid_t
+	var ret int
 
-	pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages, parent.pages)
-
-	// copy user->phys mappings too
-	for k, v := range parent.upages {
-		child.upages[k] = v
-	}
-
-	// tlb invalidation is not necessary for the parent because its pmap
-	// cannot be in use now (well, it may be in use on the CPU that took
-	// the syscall interrupt which may not have switched pmaps yet, but
-	// that CPU will not touch these invalidated user-space addresses).
-
-	child.pmap = pmap
-	child.p_pmap = p_pmap
-
+	// copy parents trap frame
 	chtf := [TFSIZE]int{}
 	chtf = *ptf
+
+	if mkproc {
+		child = proc_new(fmt.Sprintf("%s's child", parent.name))
+		child.pwaiti = &parent.waiti
+		child.cwd = parent.cwd
+		var pm parmsg_t
+		pm.init(child.pid)
+		pm.forked = true
+		parent.waiti.getch <- pm
+		resp := <- pm.ack
+		if resp.err != 0 {
+			panic("add child")
+		}
+
+		// copy fd table
+		for k, v := range parent.fds {
+			child.fds[k] = v
+			// increment reader/writer count
+			switch v.ftype {
+			case PIPE:
+				var ch chan int
+				if v.perms == FD_READ {
+					ch = v.file.pipe.readers
+				} else {
+					ch = v.file.pipe.writers
+				}
+				ch <- 1
+			case INODE:
+				fs_memref(v.file, v.perms)
+			}
+		}
+
+		pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages,
+		    parent.pages)
+
+		// copy user->phys mappings too
+		for k, v := range parent.upages {
+			child.upages[k] = v
+		}
+
+		// tlb invalidation is not necessary for the parent because
+		// trap always switches to the kernel pmap, for now.
+
+		child.pmap = pmap
+		child.p_pmap = p_pmap
+		childtid = 0
+		ret = child.pid
+	} else {
+		// validate tfork struct
+		tcb, ok1      := parent.userreadn(tforkp + 0, 8)
+		tidaddrn, ok2 := parent.userreadn(tforkp + 8, 8)
+		stack, ok3    := parent.userreadn(tforkp + 16, 8)
+		if !ok1 || !ok2 || !ok3 {
+			panic("unexpected unmap")
+		}
+		writetid := tidaddrn != 0
+		if writetid && !parent.usermapped(tidaddrn, 8) {
+			fmt.Printf("nonzero tid but bad addr\n")
+			return -EFAULT
+		}
+		if tcb != 0 {
+			panic("no imp")
+		}
+		if !parent.usermapped(stack - 8, 8) {
+			fmt.Printf("stack not mapped\n")
+			return -EFAULT
+		}
+
+		child = parent
+		childtid = parent.tid_new()
+
+		chtf[TF_RSP] = stack
+		v := int(childtid)
+		if writetid && !parent.userwriten(tforkp + 8, 8, v) {
+			panic("unexpected unmap")
+		}
+		ret = v
+	}
+
 	chtf[TF_RAX] = 0
 
-	child.sched_add(&chtf, 0)
+	child.sched_add(&chtf, childtid)
 
-	return child.pid
+	return ret
 }
 
 func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
@@ -907,7 +955,7 @@ func bloataddr(p *proc_t, npages int) {
 
 func sys_exit(proc *proc_t, tid tid_t, status int) {
 	// set doomed to all other threads die
-	proc.doomed = true
+	proc.doomall()
 	proc.thread_dead(tid, status, true)
 }
 
@@ -1087,10 +1135,7 @@ func sys_kill(proc *proc_t, pid, sig int) int {
 	if !ok {
 		return -ESRCH
 	}
-	p.doomed = true
-	if runtime.Procnotify(p.mkptid(0)) != 0 {
-		fmt.Printf("pid %v already terminated\n", pid)
-	}
+	p.doomall()
 	return 0
 }
 
@@ -1319,6 +1364,7 @@ func (e *elf_t) entry() int {
 	return readn(e.data, ELF_ADDR, e_entry)
 }
 
+// XXX remove unsafes
 func elf_segload(p *proc_t, hdr *elf_phdr) {
 	perms := PTE_U
 	//PF_X := 1

@@ -540,6 +540,15 @@ func (p *proc_t) tid_new() tid_t {
 	return ret
 }
 
+// remove a particular thread that was never added to scheduler; like when fork
+// fails.
+func (p *proc_t) thread_del(tid tid_t) {
+	p.Lock()
+	ti := &p.threadi
+	delete(ti.alive, tid)
+	p.Unlock()
+}
+
 // terminate a single thread
 func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	p.Lock()
@@ -556,6 +565,17 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	if destroy {
 		p.terminate()
 	}
+}
+
+func (p *proc_t) doomall() {
+	p.doomed = true
+	p.Lock()
+	for t := range p.threadi.alive {
+		if runtime.Procnotify(p.mkptid(t)) != 0 {
+			panic("pid gone")
+		}
+	}
+	p.Unlock()
 }
 
 // termiante a process. must only be called when the process has no more
@@ -594,6 +614,9 @@ func (p *proc_t) terminate() {
 	p.waiti.finish()
 }
 
+// XXX these can probably go away since user processes share kernel pmaps
+// now...
+
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
 func (p *proc_t) userdmap(va int) ([]uint8, bool) {
@@ -616,6 +639,28 @@ func (p *proc_t) usermapped(va, n int) bool {
 		}
 	}
 	return true
+}
+
+func (p *proc_t) userreadn(va, n int) (int, bool) {
+	if n > 8 {
+		panic("large n")
+	}
+	var ret int
+	var src []uint8
+	var ok bool
+	for i := 0; i < n; i += len(src) {
+		src, ok = p.userdmap(va + i)
+		if !ok {
+			return 0, false
+		}
+		l := n - i
+		if len(src) < l {
+			l = len(src)
+		}
+		v := readn(src, l, 0)
+		ret |= v << (8*uint(i))
+	}
+	return ret, true
 }
 
 func (p *proc_t) userwriten(va, n, val int) bool {

@@ -73,6 +73,8 @@ int main(int argc, char **argv)
 		if (builtins(args, sz))
 			continue;
 		int pid = fork();
+		if (pid < 0)
+			err(pid, "fork");
 		if (pid) {
 			wait(NULL);
 			continue;
