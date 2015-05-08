@@ -21,6 +21,7 @@
 #define SYS_LINK         86
 #define SYS_UNLINK       87
 #define SYS_FAKE         31337
+#define SYS_THREXIT      31338
 
 static void pmsg(char *, long);
 
@@ -184,6 +185,15 @@ long
 write(int fd, void *buf, size_t c)
 {
 	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
+}
+
+/*
+ * thread stuff
+ */
+void
+threxit(long status)
+{
+	syscall(SA(status), 0, 0, 0, 0, SYS_THREXIT);
 }
 
 int

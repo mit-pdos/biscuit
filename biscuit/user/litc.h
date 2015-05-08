@@ -78,6 +78,9 @@ int wait(int *);
 int wait4(int, int *, int, void *);
 long write(int, void*, size_t);
 
+// thread syscalls
+void threxit(long);
+
 int atoi(const char *);
 ulong atoul(const char *);
 void err(int, const char *, ...);

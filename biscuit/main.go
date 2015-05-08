@@ -316,7 +316,11 @@ type ulimit_t struct {
 
 type threadinfo_t struct {
 	count	int
-	alive	int
+	alive	map[tid_t]bool
+}
+
+func (t *threadinfo_t) init() {
+	t.alive = make(map[tid_t]bool)
 }
 
 type proc_t struct {
@@ -339,7 +343,7 @@ type proc_t struct {
 	mmapi		int
 	pmap		*[512]int
 	p_pmap		int
-	dead		bool
+
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
 	doomed		bool
@@ -398,6 +402,7 @@ func proc_new(name string) *proc_t {
 	ret.ulim.pages = (1 << 27) / (1 << 12)
 
 	ret.waiti.init()
+	ret.threadi.init()
 	ret.tid_new()
 
 	return ret
@@ -422,11 +427,10 @@ func proc_check(pid int) (*proc_t, bool) {
 
 func proc_del(pid int) {
 	proclock.Lock()
-	p, ok := allprocs[pid]
+	_, ok := allprocs[pid]
 	if !ok {
 		panic("bad pid")
 	}
-	p.dead = true
 	delete(allprocs, pid)
 	proclock.Unlock()
 }
@@ -509,6 +513,13 @@ func (p *proc_t) page_remove(va int) bool {
 	return remmed
 }
 
+func (p *proc_t) resched(tid tid_t) bool {
+	p.Lock()
+	talive := p.threadi.alive[tid]
+	p.Unlock()
+	return talive
+}
+
 func (p *proc_t) sched_add(tf *[TFSIZE]int, tid tid_t) {
 	p.tstart = runtime.Rdtsc()
 	ptid := p.mkptid(tid)
@@ -524,7 +535,7 @@ func (p *proc_t) tid_new() tid_t {
 	p.Lock()
 	ret := tid_t(p.threadi.count)
 	p.threadi.count++
-	p.threadi.alive++
+	p.threadi.alive[ret] = true
 	p.Unlock()
 	return ret
 }
@@ -533,11 +544,8 @@ func (p *proc_t) tid_new() tid_t {
 func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	p.Lock()
 	ti := &p.threadi
-	ti.alive--
-	if ti.alive < 0 {
-		panic("negative thread alive count")
-	}
-	destroy := ti.alive == 0
+	delete(ti.alive, tid)
+	destroy := len(ti.alive) == 0
 
 	if usestatus {
 		p.exitstatus = status
@@ -559,11 +567,10 @@ func (p *proc_t) terminate() {
 
 	p.Lock()
 	ti := &p.threadi
-	p.Unlock()
-
-	if ti.alive != 0 {
+	if len(ti.alive) != 0 {
 		panic("terminate, but threads alive")
 	}
+	p.Unlock()
 
 	// close open fds
 	for fdn := range p.fds {

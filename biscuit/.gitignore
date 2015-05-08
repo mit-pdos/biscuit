@@ -50,6 +50,7 @@
 /user/killtest
 /user/mmaptest
 /user/usertests
+/user/thtests
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -84,3 +85,4 @@
 /fsdir/bin/killtest
 /fsdir/bin/mmaptest
 /fsdir/bin/usertests
+/fsdir/bin/thtests

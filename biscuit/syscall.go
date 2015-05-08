@@ -80,6 +80,7 @@ const(
   SYS_LINK     = 86
   SYS_UNLINK   = 87
   SYS_FAKE     = 31337
+  SYS_THREXIT  = 31338
 )
 
 const(
@@ -92,9 +93,16 @@ const USERMIN	int = VUSER << 39
 func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
-	if int(tid) >= p.threadi.count {
-		panic(fmt.Sprintf("bad thread id %v %v", tid, p.threadi.count))
+
+	p.Lock()
+	talive, ok := p.threadi.alive[tid]
+	if !ok {
+		panic("bad thread")
 	}
+	if !talive {
+		panic("thread not alive")
+	}
+	p.Unlock()
 
 	if p.doomed {
 		// this process has been killed
@@ -153,12 +161,14 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_unlink(p, a1)
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
+	case SYS_THREXIT:
+		sys_threxit(p, tid, a1)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
 
 	tf[TF_RAX] = ret
-	if !p.dead {
+	if p.resched(tid) {
 		p.sched_runnable(tf, tid)
 	}
 }
@@ -899,6 +909,10 @@ func sys_exit(proc *proc_t, tid tid_t, status int) {
 	// set doomed to all other threads die
 	proc.doomed = true
 	proc.thread_dead(tid, status, true)
+}
+
+func sys_threxit(proc *proc_t, tid tid_t, status int) {
+	proc.thread_dead(tid, status, false)
 }
 
 func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep int) int {
