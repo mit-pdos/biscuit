@@ -14,19 +14,25 @@ void *mkstack(size_t size)
 
 void loop(char *msg, const int iters)
 {
-	int i, j;
-	for (j = 0; j < iters; j++) {
-		for (i = 0; i < 100000000; i++);
+	int j;
+	for (j = 0; j < iters; j++)
 		printf(msg);
-	}
 }
+
+__thread long tlvar;
 
 void child(void *msg)
 {
+	printf("thread var is: %ld\n", tlvar);
 	printf("child loop (msg: %s)\n", msg);
-	loop("c", 10);
+	char b[2] = {'0' + tlvar, 0};
+	loop(b, 10);
 	printf("child exit\n");
 }
+
+static long tls1;
+static long tls2;
+static void *tcbs[] = {(char *)&tls1 + 8, (char *)&tls2 + 8};
 
 int main(int argc, char **argv)
 {
@@ -45,14 +51,28 @@ int main(int argc, char **argv)
 	//	errx(-1, "posix is sad");
 
 	struct tfork_t tf;
-	tf.tf_tcb = NULL;
-	tf.tf_tid = NULL;
-	tf.tf_stack = mkstack(4096*3);
-	int tid = tfork_thread(&tf, child, "yahoo!");
+
+	tf.tf_tcb = &tcbs[0];
+	tf.tf_tid = &tls1;
+	tf.tf_stack = mkstack(4096*1);
+	int tid = tfork_thread(&tf, child, "child 1!");
 	if (tid < 0)
 		err(tid, "tfork");
+	if (tid != tls1)
+		errx(-1, "tid mismatch");
+
+	tf.tf_tcb = &tcbs[1];
+	tf.tf_tid = &tls2;
+	tf.tf_stack = mkstack(4096*1);
+	tid = tfork_thread(&tf, child, "child 2!");
+	if (tid < 0)
+		err(tid, "tfork");
+	if (tid != tls2)
+		errx(-1, "tid mismatch");
+
 	printf("parent loop\n");
 	loop("p", 10);
+	for (tid = 0; tid < 100000000; tid++);
 	printf("parent exit");
 
 	return 0;

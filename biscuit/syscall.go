@@ -8,6 +8,7 @@ import "unsafe"
 const(
   TFSIZE       = 23
   TFREGS       = 16
+  TF_FSBASE    = 0
   TF_R8        = 8
   TF_RSI       = 10
   TF_RDI       = 11
@@ -744,7 +745,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 			return -EFAULT
 		}
 		if tcb != 0 {
-			panic("no imp")
+			chtf[TF_FSBASE] = tcb
 		}
 		if !parent.usermapped(stack - 8, 8) {
 			fmt.Printf("stack not mapped\n")
@@ -756,7 +757,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		chtf[TF_RSP] = stack
 		v := int(childtid)
-		if writetid && !parent.userwriten(tforkp + 8, 8, v) {
+		if writetid && !parent.userwriten(tidaddrn, 8, v) {
 			panic("unexpected unmap")
 		}
 		ret = v
