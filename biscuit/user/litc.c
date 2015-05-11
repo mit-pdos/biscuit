@@ -248,6 +248,19 @@ threxit(long status)
 }
 
 int
+thrwait(int tid, int *status)
+{
+	if (tid <= 0)
+		errx(-1, "thrwait: bad tid %d", tid);
+
+	int _status;
+	int ret = syscall(tid, SA(&_status), 0, 0, 1, SYS_WAIT4);
+	if (status)
+		*status = _status;
+	return ret;
+}
+
+int
 atoi(const char *n)
 {
 	int tot = 0;

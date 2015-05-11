@@ -149,7 +149,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	case SYS_EXIT:
 		sys_exit(p, tid, a1)
 	case SYS_WAIT4:
-		ret = sys_wait4(p, a1, a2, a3, a4)
+		ret = sys_wait4(p, a1, a2, a3, a4, a5)
 	case SYS_KILL:
 		ret = sys_kill(p, a1, a2)
 	case SYS_CHDIR:
@@ -679,6 +679,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	mkproc := flags & FORK_PROCESS != 0
 	var child *proc_t
 	var childtid tid_t
+	var childch chan parmsg_t
 	var ret int
 
 	// copy parents trap frame
@@ -689,14 +690,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		child = proc_new(fmt.Sprintf("%s's child", parent.name))
 		child.pwaiti = &parent.waiti
 		child.cwd = parent.cwd
-		var pm parmsg_t
-		pm.init(child.pid)
-		pm.forked = true
-		parent.waiti.getch <- pm
-		resp := <- pm.ack
-		if resp.err != 0 {
-			panic("add child")
-		}
 
 		// copy fd table
 		for k, v := range parent.fds {
@@ -729,8 +722,9 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		child.pmap = pmap
 		child.p_pmap = p_pmap
-		childtid = 0
+		childtid = child.tid0
 		ret = child.pid
+		childch = parent.waiti.getch
 	} else {
 		// validate tfork struct
 		tcb, ok1      := parent.userreadn(tforkp + 0, 8)
@@ -754,13 +748,23 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		child = parent
 		childtid = parent.tid_new()
+		childch = child.twaiti.getch
 
-		chtf[TF_RSP] = stack
 		v := int(childtid)
+		chtf[TF_RSP] = stack
 		if writetid && !parent.userwriten(tidaddrn, 8, v) {
 			panic("unexpected unmap")
 		}
 		ret = v
+	}
+
+	// inform wait daemon of new process/thread
+	var pm parmsg_t
+	pm.init(ret, true)
+	childch <- pm
+	resp := <- pm.ack
+	if resp.err != 0 {
+		panic("add child")
 	}
 
 	chtf[TF_RAX] = 0
@@ -770,7 +774,9 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	return ret
 }
 
-func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
+func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
+    tf *[TFSIZE]int) {
+
 	// copy page
 	dst, p_dst := pg_new(proc.pages)
 	p_src := *pte & PTE_ADDR
@@ -784,7 +790,7 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int, tf *[TFSIZE]int) {
 	proc.page_insert(va, dst, p_dst, perms, false)
 
 	// set process as runnable again
-	proc.sched_runnable(nil, 0)
+	proc.sched_runnable(nil, tid)
 }
 
 func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
@@ -964,7 +970,8 @@ func sys_threxit(proc *proc_t, tid tid_t, status int) {
 	proc.thread_dead(tid, status, false)
 }
 
-func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep int) int {
+func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
+    threadwait int) int {
 	wi := proc.waiti
 
 	ok := proc.usermapped(statusp, 4)
@@ -976,10 +983,15 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep int) int {
 		panic("no imp")
 	}
 
-	var pm parmsg_t
-	pm.init(wpid)
+	ch := wi.getch
+	if threadwait != 0 {
+		ch = proc.twaiti.getch
+	}
 
-	wi.getch <- pm
+	var pm parmsg_t
+	pm.init(wpid, false)
+
+	ch <- pm
 	resp := <- pm.ack
 	if resp.err != 0 {
 		return resp.err
@@ -1000,9 +1012,10 @@ type parmsg_t struct {
 	ack	chan childmsg_t
 }
 
-func (pm *parmsg_t) init(pid int) {
+func (pm *parmsg_t) init(pid int, forked bool) {
 	pm.pid = pid
 	pm.ack = make(chan childmsg_t)
+	pm.forked = forked
 }
 
 type waitinfo_t struct {
@@ -1122,8 +1135,16 @@ func (w *waitinfo_t) daemon() {
 			delete(waiters, pid)
 		}
 	}
+
+	deadc := 0
+	for _, c := range childs {
+		if c.dead {
+			deadc++
+		}
+	}
+
 	// parent exited, drain remaining statuses
-	for i := reaps; i < len(childs); i++ {
+	for i := deadc; i < len(childs); i++ {
 		<- add
 	}
 }

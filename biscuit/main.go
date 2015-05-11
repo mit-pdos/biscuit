@@ -322,7 +322,6 @@ type ulimit_t struct {
 }
 
 type threadinfo_t struct {
-	count	int
 	alive	map[tid_t]bool
 }
 
@@ -332,15 +331,19 @@ func (t *threadinfo_t) init() {
 
 type proc_t struct {
 	pid		int
+	// first thread id
+	tid0		tid_t
 	name		string
 
-	// waitinfo for my children
+	// waitinfo for my child processes
 	waiti		waitinfo_t
 	// waitinfo of my parent
 	pwaiti		*waitinfo_t
 
-	// thread bookkeeping
+	// thread waitinfo
 	threadi		threadinfo_t
+	// waitinfo for threads
+	twaiti		waitinfo_t
 
 	// all pages
 	pages		map[int]*[512]int
@@ -380,6 +383,16 @@ var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
 var pid_cur  int
+
+func newpid() int {
+	proclock.Lock()
+	pid_cur++
+	ret := pid_cur
+	proclock.Unlock()
+
+	return ret
+}
+
 func proc_new(name string) *proc_t {
 	if rootfile == nil {
 		panic("proc_init not called")
@@ -388,9 +401,8 @@ func proc_new(name string) *proc_t {
 	ret := &proc_t{}
 
 	proclock.Lock()
-	var newpid int
 	pid_cur++
-	newpid = pid_cur
+	newpid := pid_cur
 	if _, ok := allprocs[newpid]; ok {
 		panic("pid exists")
 	}
@@ -410,8 +422,17 @@ func proc_new(name string) *proc_t {
 	ret.ulim.pages = (1 << 27) / (1 << 12)
 
 	ret.waiti.init()
+	ret.twaiti.init()
 	ret.threadi.init()
-	ret.tid_new()
+	ret.tid0 = ret.tid_new()
+
+	var pm parmsg_t
+	pm.init(int(ret.tid0), true)
+	ret.twaiti.getch <- pm
+	resp := <- pm.ack
+	if resp.err != 0 {
+		panic("add child thread")
+	}
 
 	return ret
 }
@@ -540,11 +561,12 @@ func (p *proc_t) sched_runnable(tf *[TFSIZE]int, tid tid_t) {
 }
 
 func (p *proc_t) tid_new() tid_t {
+	ret := tid_t(newpid())
+
 	p.Lock()
-	ret := tid_t(p.threadi.count)
-	p.threadi.count++
 	p.threadi.alive[ret] = true
 	p.Unlock()
+
 	return ret
 }
 
@@ -568,6 +590,10 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 		p.exitstatus = status
 	}
 	p.Unlock()
+
+	// send thread status to thread wait daemon
+	cm := childmsg_t{pid: int(tid), status: status}
+	p.twaiti.addch <- cm
 
 	runtime.Prockill(p.mkptid(tid))
 	if destroy {
@@ -613,13 +639,12 @@ func (p *proc_t) terminate() {
 	if p.pwaiti == nil {
 		panic("pwaiti nil")
 	}
-	var cm childmsg_t
-	cm.pid = p.pid
-	cm.status = p.exitstatus
+	cm := childmsg_t{pid: p.pid, status: p.exitstatus}
 	p.pwaiti.addch <- cm
 
-	// tell wait daemon to finish
+	// tell wait daemons to finish
 	p.waiti.finish()
+	p.twaiti.finish()
 }
 
 // XXX these can probably go away since user processes share kernel pmaps
@@ -1380,7 +1405,7 @@ func main() {
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
-		p.sched_add(&tf, 0)
+		p.sched_add(&tf, p.tid0)
 	}
 
 	//exec("bin/bmgc2", []string{"100000000"})

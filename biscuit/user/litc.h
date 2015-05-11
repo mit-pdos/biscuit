@@ -93,6 +93,7 @@ long write(int, void*, size_t);
 void tfork_done(void);
 int tfork_thread(struct tfork_t *, void (*fn)(void *), void *);
 void threxit(long);
+int thrwait(int, int *);
 
 int atoi(const char *);
 ulong atoul(const char *);
