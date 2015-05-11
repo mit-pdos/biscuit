@@ -386,8 +386,6 @@ putn(char *p, char *end, ulong n, int base)
 	return ret;
 }
 
-static char pbuf[MAXBUF];
-
 int
 vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 {
@@ -480,13 +478,12 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 int
 vprintf(const char *fmt, va_list ap)
 {
-	acquire();
+	char lbuf[256];
 
 	int ret;
-	ret = vsprintf(fmt, ap, pbuf, &pbuf[MAXBUF]);
-	pmsg(pbuf, ret);
+	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
+	pmsg(lbuf, ret);
 
-	release();
 	return ret;
 }
 
