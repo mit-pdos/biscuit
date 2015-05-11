@@ -241,20 +241,27 @@ func trap_syscall(ts *trapstore_t) {
 }
 
 func trap_pgfault(ts *trapstore_t) {
-
 	pid := ts.pid
 	tid := ts.tid
 	fa  := ts.faultaddr
 	proc := proc_get(pid)
+
+	// XXX need TLB shootdowns!
+	proc.pgfl.Lock()
+	defer proc.pgfl.Unlock()
+
 	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
 	if pte != nil && *pte & PTE_COW != 0 {
 		if fa < USERMIN {
 			panic("kernel page marked COW")
 		}
-		sys_pgfault(proc, pte, fa, &ts.tf)
+		sys_pgfault(proc, tid, pte, fa, &ts.tf)
 		return
 	}
 
+	// if two threads fault on the same page simultaneously, the second
+	// thread will think the fault is unexpected since the first thread
+	// cleared COW already...
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.name, fa, rip)
@@ -343,6 +350,7 @@ type proc_t struct {
 	mmapi		int
 	pmap		*[512]int
 	p_pmap		int
+	pgfl		sync.Mutex
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
