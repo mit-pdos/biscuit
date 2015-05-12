@@ -210,7 +210,6 @@ write(int fd, void *buf, size_t c)
 void
 tfork_done(long status)
 {
-	printf("thread finished\n");
 	threxit(status);
 	errx(-1, "threxit returned");
 }
@@ -259,6 +258,51 @@ thrwait(int tid, int *status)
 	if (status)
 		*status = _status;
 	return ret;
+}
+
+static void *
+mkstack(size_t size)
+{
+	const size_t pgsize = 1 << 12;
+	size += pgsize - 1;
+	size &= ~(pgsize - 1);
+	char *ret = mmap(NULL, size, PROT_READ | PROT_WRITE,
+	    MAP_ANON | MAP_PRIVATE, -1, 0);
+	if (!ret)
+		return NULL;
+	return ret + size;
+}
+
+int
+pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *arg)
+{
+	t->stack = NULL;
+	// XXX setup guard page
+	const long stksz = 4096;
+	void *stack = mkstack(stksz);
+	if (!stack)
+		return -ENOMEM;
+	struct tfork_t tf = {
+		.tf_tcb = NULL,
+		.tf_tid = &t->tid,
+		.tf_stack = stack,
+	};
+	int ret = tfork_thread(&tf, (long (*)(void *))fn, arg);
+	if (ret < 0) {
+		munmap(stack, stksz);
+		return ret;
+	}
+	t->stack = stack;
+	return 0;
+}
+
+int
+pthread_join(pthread_t t, void **retval)
+{
+	int ret = thrwait(t.tid, (int *)retval);
+	if (ret < 0)
+		return ret;
+	return 0;
 }
 
 int

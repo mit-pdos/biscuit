@@ -11,6 +11,7 @@
 #define ENOENT		2
 #define EBADF		9
 #define ECHILD		10
+#define ENOMEM		12
 #define EFAULT		14
 #define EEXIST		17
 #define ENOTDIR		20
@@ -94,6 +95,17 @@ void tfork_done(long);
 int tfork_thread(struct tfork_t *, long (*fn)(void *), void *);
 void threxit(long);
 int thrwait(int, int *);
+
+typedef struct {
+	int tid;
+	void *stack;
+} pthread_t;
+
+typedef struct {
+} pthread_attr_t;
+
+int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
+int pthread_join(pthread_t, void **);
 
 int atoi(const char *);
 ulong atoul(const char *);

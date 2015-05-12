@@ -51,6 +51,7 @@
 /user/mmaptest
 /user/usertests
 /user/thtests
+/user/pthtests
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -86,3 +87,4 @@
 /fsdir/bin/mmaptest
 /fsdir/bin/usertests
 /fsdir/bin/thtests
+/fsdir/bin/pthtests
