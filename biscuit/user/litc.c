@@ -208,15 +208,15 @@ write(int fd, void *buf, size_t c)
  * thread stuff
  */
 void
-tfork_done(void)
+tfork_done(long status)
 {
 	printf("thread finished\n");
-	threxit(0);
+	threxit(status);
 	errx(-1, "threxit returned");
 }
 
 int
-tfork_thread(struct tfork_t *args, void (*fn)(void *), void *fnarg)
+tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 {
 	int tid;
 	long flags = FORK_THREAD;
@@ -232,6 +232,7 @@ tfork_thread(struct tfork_t *args, void (*fn)(void *), void *fnarg)
 	    // child
 	    "movq	%5, %%rdi\n"
 	    "call	%4\n"
+	    "movq	%%rax, %%rdi\n"
 	    "call	tfork_done\n"
 	    "movq	$0, 0xfece5\n"
 	    "1:\n"

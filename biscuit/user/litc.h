@@ -90,8 +90,8 @@ long write(int, void*, size_t);
 /*
  * thread stuff
  */
-void tfork_done(void);
-int tfork_thread(struct tfork_t *, void (*fn)(void *), void *);
+void tfork_done(long);
+int tfork_thread(struct tfork_t *, long (*fn)(void *), void *);
 void threxit(long);
 int thrwait(int, int *);
 

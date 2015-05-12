@@ -21,7 +21,7 @@ void loop(char *msg, const int iters)
 
 __thread long tlvar;
 
-void child(void *msg)
+long child(void *msg)
 {
 	printf("thread var is: %ld\n", tlvar);
 	printf("child loop (msg: %s)\n", msg);
@@ -29,7 +29,7 @@ void child(void *msg)
 	snprintf(buf, sizeof(buf), "%ld ", tlvar);
 	loop(buf, 30);
 	printf("child exit\n");
-	threxit(tlvar);
+	return tlvar;
 }
 
 static long tls1;
