@@ -2,7 +2,8 @@ TOP := .
 
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -m32
-CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -fno-stack-protector -fno-builtin
+CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -fno-stack-protector -fno-builtin
+CXXFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -fno-stack-protector -fno-builtin
 
 # bootloader sources
 ASMS := boot.S
@@ -20,6 +21,12 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  pipetest kill killtest mmaptest usertests thtests pthtests
 FSCPROGS := $(patsubst %,fsdir/bin/%,$(CBINS))
 CPROGS := $(patsubst %,user/c/%,$(CBINS))
+
+CXXBINS := 
+FSCXXPROGS := $(patsubst %,fsdir/bin/%,$(CXXBINS))
+CXXPROGS := $(patsubst %,user/c++/%,$(CXXBINS))
+
+FSPROGS := $(FSCPROGS) $(FSCXXPROGS)
 
 BGOS := mpentry.bin.bgo
 
@@ -52,6 +59,7 @@ boot: boot.o bootmain.o
 	./stamp.py $@.bin
 	mv $@.bin $@
 
+bootmain.o: CFLAGS += -I$(TOP)
 bootmain.o: bootmain.c
 	@# don't use -Os because it rearranges code in .text such that start
 	@# isn't first. htf do i force ld to put a specific function first in
@@ -62,10 +70,10 @@ bootmain.o: bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: boot main.gobin $(SKELDEPS) $(FSCPROGS)
+go.img: boot main.gobin $(SKELDEPS) $(FSPROGS)
 	./mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
-net.img: boot main.gobin $(SKELDEPS) $(FSCPROGS)
+net.img: boot main.gobin $(SKELDEPS) $(FSPROGS)
 	./mkbdisk.py -n boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
 net: net.img
@@ -74,10 +82,6 @@ net: net.img
 	nc -l -p 31337 -q2 < $^
 	@sha1sum net.img
 	@echo; echo copied Biscuit image; echo
-
-# the user/% prereq is built by the CPROGS target
-$(FSCPROGS): fsdir/bin/% : user/c/%
-	objcopy -S $^ $@
 
 $(GOBIN):
 	@echo; echo; echo; \
@@ -92,9 +96,22 @@ main.gobin: chentry $(GOBIN) bins.go $(KSRC)
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
 
+# the user/% prereq is built by the CPROGS target
+$(FSCPROGS): fsdir/bin/% : user/c/%
+	objcopy -S $^ $@
+
 $(CPROGS): CFLAGS += -I user/c/ -fPIC
 $(CPROGS): % : %.c user/c/litc.o
-	$(CC) $(CFLAGS) -I user/c/ -Wl,-T user/c/linker.ld \
+	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld \
+	    -Wl,-n -o $@ $< user/c/litc.o
+
+$(FSCXXPROGS): fsdir/bin/% : user/c++/%
+	objcopy -S $^ $@
+
+$(CXXPROGS): CXXFLAGS += -I user/c++/ -I user/c/ \
+		-fPIC
+$(CXXPROGS): % : %.cc user/c/litc.o
+	$(CXX) $(CXXFLAGS) -Wl,-T user/c++/linker.ld \
 	    -Wl,-n -o $@ $< user/c/litc.o
 
 mpentry.bin: mpentry.S
@@ -116,7 +133,7 @@ chentry: chentry.c
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o \
-	    $(FSCPROGS) $(CPROGS) btest btest.elf
+	    $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf
 
 qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img
