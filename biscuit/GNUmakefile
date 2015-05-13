@@ -46,6 +46,8 @@ OS := $(shell uname -s)
 
 QEMU := qemu-system-x86_64
 
+PYTHON ?= python2
+
 ifeq ($(OS), OpenBSD)
 	ASFLAGS += -nopie
 endif
@@ -71,11 +73,12 @@ bootmain.o: bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: boot main.gobin $(SKELDEPS) $(FSPROGS)
-	./mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
+go.img: boot main.gobin $(SKELDEPS) $(FSPROGS) mkbdisk.py
+	$(PYTHON) mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
-net.img: boot main.gobin $(SKELDEPS) $(FSPROGS)
-	./mkbdisk.py -n boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
+net.img: boot main.gobin $(SKELDEPS) $(FSPROGS) mkbdisk.py
+	$(PYTHON) mkbdisk.py -n boot main.gobin $@ $(SKEL) || \
+	    { rm -f $@; false; }
 
 net: net.img
 	@echo; echo waiting for client copy...
@@ -123,7 +126,8 @@ $(BGOS): %.bgo : %
 	./bin2go.sh $< > $@
 
 bins.go: $(BGOS) prepbins.py
-	./prepbins.py $(BGOS) > $@
+	$(PYTHON) prepbins.py $(BGOS) > _$@
+	mv _$@ $@
 
 main: main.o
 	$(LD) -static -e main -o $@ $<
@@ -133,8 +137,8 @@ chentry: chentry.c
 
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
-	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o \
-	    $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf
+	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
+	    user/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf
 
 qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img
