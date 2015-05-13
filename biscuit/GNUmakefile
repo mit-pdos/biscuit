@@ -14,17 +14,17 @@ KSRC := main.go syscall.go pmap.go fs.go hw.go
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
-UBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
+CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
 	  pipetest kill killtest mmaptest usertests thtests pthtests
-FSUPROGS := $(patsubst %,fsdir/bin/%,$(UBINS))
-UPROGS := $(patsubst %,user/%,$(UBINS))
+FSCPROGS := $(patsubst %,fsdir/bin/%,$(CBINS))
+CPROGS := $(patsubst %,user/c/%,$(CBINS))
 
 BGOS := mpentry.bin.bgo
 
 RFS  := $(patsubst %.c,%.d,$(CS))
-RFS  += $(patsubst %,%.d,$(UPROGS))
+RFS  += $(patsubst %,%.d,$(CPROGS))
 RFS  += user/litc.d
 
 GOBIN := ../bin/go
@@ -62,10 +62,10 @@ bootmain.o: bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: boot main.gobin $(SKELDEPS) $(FSUPROGS)
+go.img: boot main.gobin $(SKELDEPS) $(FSCPROGS)
 	./mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
-net.img: boot main.gobin $(SKELDEPS) $(FSUPROGS)
+net.img: boot main.gobin $(SKELDEPS) $(FSCPROGS)
 	./mkbdisk.py -n boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
 net: net.img
@@ -75,8 +75,8 @@ net: net.img
 	@sha1sum net.img
 	@echo; echo copied Biscuit image; echo
 
-# the user/% prereq is built by the UPROGS target
-$(FSUPROGS): fsdir/bin/% : user/%
+# the user/% prereq is built by the CPROGS target
+$(FSCPROGS): fsdir/bin/% : user/c/%
 	objcopy -S $^ $@
 
 $(GOBIN):
@@ -92,10 +92,10 @@ main.gobin: chentry $(GOBIN) bins.go $(KSRC)
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@ $$ADDR; fi \
 
-$(UPROGS): CFLAGS += -I user/ -fPIC
-$(UPROGS): % : %.c user/litc.o
-	$(CC) $(CFLAGS) -I user/ -Wl,-T user/linker.ld \
-	    -Wl,-n -o $@ $< user/litc.o
+$(CPROGS): CFLAGS += -I user/c/ -fPIC
+$(CPROGS): % : %.c user/c/litc.o
+	$(CC) $(CFLAGS) -I user/c/ -Wl,-T user/c/linker.ld \
+	    -Wl,-n -o $@ $< user/c/litc.o
 
 mpentry.bin: mpentry.S
 	$(CC) -o mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
@@ -116,7 +116,7 @@ chentry: chentry.c
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin bins.go user/litc.o \
-	    $(FSUPROGS) $(UPROGS) btest btest.elf
+	    $(FSCPROGS) $(CPROGS) btest btest.elf
 
 qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img
