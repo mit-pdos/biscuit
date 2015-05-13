@@ -58,18 +58,20 @@ func p8259_eoi() {
 }
 
 const(
-	DIVZERO   = 0
-	GPFAULT   = 13
-	PGFAULT   = 14
-	TIMER     = 32
-	SYSCALL   = 64
+	DIVZERO		= 0
+	GPFAULT		= 13
+	PGFAULT		= 14
+	TIMER		= 32
+	SYSCALL		= 64
 
 	// low 3 bits must be zero
-	IRQ_BASE  = 32
-	IRQ_KBD   = 1
-	IRQ_LAST  = IRQ_BASE + 16
+	IRQ_BASE	= 32
+	IRQ_KBD		= 1
+	IRQ_COM1	= 4
+	IRQ_LAST	= IRQ_BASE + 16
 
-	INT_KBD   = IRQ_BASE + IRQ_KBD
+	INT_KBD		= IRQ_BASE + IRQ_KBD
+	INT_COM1	= IRQ_BASE + IRQ_COM1
 )
 
 // initialized by disk attach functions
@@ -164,7 +166,7 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 		// automatic eoi also doesn't work on the slave.
 		//p8259_eoi()
 		runtime.Proccontinue()
-	case INT_KBD:
+	case INT_KBD, INT_COM1:
 		runtime.Proccontinue()
 	default:
 		runtime.Pnum(trapno)
@@ -230,8 +232,16 @@ func trap_disk(ts *trapstore_t) {
 	ide_int_done <- true
 }
 
-func trap_kbd(ts *trapstore_t) {
-	cons.kbd_int <- true
+func trap_cons(ts *trapstore_t) {
+	var ch chan bool
+	if ts.trapno == INT_KBD {
+		ch = cons.kbd_int
+	} else if ts.trapno == INT_COM1 {
+		ch = cons.com_int
+	} else {
+		panic("bad int")
+	}
+	ch <- true
 }
 
 func trap_syscall(ts *trapstore_t) {
@@ -1233,18 +1243,22 @@ func kbd_init() {
 		}
 	}
 	cons.kbd_int = make(chan bool)
+	cons.com_int = make(chan bool)
 	cons.reader = make(chan []byte)
 	cons.reqc = make(chan int)
 	go kbd_daemon(&cons, km)
 	irq_unmask(IRQ_KBD)
+	irq_unmask(IRQ_COM1)
+
 	// make sure kbd int is clear
 	runtime.Inb(0x60)
 }
 
 type cons_t struct {
-	kbd_int chan bool
-	reader	chan []byte
-	reqc	chan int
+	kbd_int		chan bool
+	com_int		chan bool
+	reader		chan []byte
+	reqc		chan int
 }
 
 var cons	= cons_t{}
@@ -1260,9 +1274,21 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 		return true
 	}
-	var reqc chan int
+	comready := func() bool {
+		com1ctl := 0x3f8 + 5
+		b := inb(com1ctl)
+		if b & 0x01 == 0 {
+			return false
+		}
+		return true
+	}
 	start := make([]byte, 0, 10)
 	data := start
+	addprint := func(c byte) {
+		fmt.Printf("%c", c)
+		data = append(data, c)
+	}
+	var reqc chan int
 	for {
 		select {
 		case <- cons.kbd_int:
@@ -1272,9 +1298,22 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			sc := inb(0x60)
 			c, ok := km[sc]
 			if ok {
-				fmt.Printf("%c", c)
-				data = append(data, c)
+				addprint(c)
 			}
+		case <- cons.com_int:
+			if !comready() {
+				continue
+			}
+			com1data := 0x3f8 + 0
+			sc := inb(com1data)
+			c := byte(sc)
+			if c == '\r' {
+				c = '\n'
+			} else if c == 127 {
+				// delete -> backspace
+				c = '\b'
+			}
+			addprint(c)
 		case l := <- reqc:
 			if l > len(data) {
 				l = len(data)
@@ -1384,7 +1423,8 @@ func main() {
 	     PGFAULT: trap_pgfault,
 	     SYSCALL: trap_syscall,
 	     INT_DISK: trap_disk,
-	     INT_KBD: trap_kbd,
+	     INT_KBD: trap_cons,
+	     INT_COM1: trap_cons,
 	     }
 	go trap(handlers)
 

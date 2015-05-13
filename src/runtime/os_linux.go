@@ -76,13 +76,16 @@ func sc_setup() {
 	lctl  := 3
 	mctl  := 4
 
-	Outb(com1 + intr, 0x00)
+	Outb(com1 + ififo, 0x0)
 	Outb(com1 + lctl, 0x80)
 	Outb(com1 + data, 115200/9600)
-	Outb(com1 + intr, 0x00)
+	Outb(com1 + intr, 0x0)
 	Outb(com1 + lctl, 0x03)
-	Outb(com1 + ififo, 0xc7)
-	Outb(com1 + mctl, 0x0b)
+	Outb(com1 + mctl, 0x0)
+	Outb(com1 + intr, 0x01)
+
+	inb(com1 + ififo)
+	inb(com1 + data)
 }
 
 //go:nosplit
