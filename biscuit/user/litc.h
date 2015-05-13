@@ -41,6 +41,9 @@
 
 #define MAXBUF        4096
 
+/*
+ * system calls
+ */
 struct __attribute__((packed)) stat {
 	ulong	st_dev;
 	ulong	st_ino;
@@ -107,6 +110,9 @@ typedef struct {
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
 
+/*
+ * libc
+ */
 int atoi(const char *);
 ulong atoul(const char *);
 void err(int, const char *, ...);
