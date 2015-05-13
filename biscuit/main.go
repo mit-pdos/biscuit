@@ -1261,7 +1261,8 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		return true
 	}
 	var reqc chan int
-	data := make([]byte, 0)
+	start := make([]byte, 0, 10)
+	data := start
 	for {
 		select {
 		case <- cons.kbd_int:
@@ -1284,6 +1285,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 		if len(data) == 0 {
 			reqc = nil
+			data = start
 		} else {
 			reqc = cons.reqc
 		}
