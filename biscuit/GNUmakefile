@@ -19,19 +19,19 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
 	  pipetest kill killtest mmaptest usertests thtests pthtests
-FSCPROGS := $(patsubst %,fsdir/bin/%,$(CBINS))
-CPROGS := $(patsubst %,user/c/%,$(CBINS))
+FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
+CPROGS := $(addprefix user/c/,$(CBINS))
 
 CXXBINS := 
-FSCXXPROGS := $(patsubst %,fsdir/bin/%,$(CXXBINS))
-CXXPROGS := $(patsubst %,user/c++/%,$(CXXBINS))
+FSCXXPROGS := $(addprefix fsdir/bin/,$(CXXBINS))
+CXXPROGS := $(addprefix user/c++/,$(CXXBINS))
 
 FSPROGS := $(FSCPROGS) $(FSCXXPROGS)
 
 BGOS := mpentry.bin.bgo
 
 RFS  := $(patsubst %.c,%.d,$(CS))
-RFS  += $(patsubst %,%.d,$(CPROGS))
+RFS  += $(addsuffix .d,$(CPROGS))
 RFS  += user/litc.d
 
 GOBIN := ../bin/go
