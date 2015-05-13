@@ -24,7 +24,7 @@ __thread long tlvar;
 long child(void *msg)
 {
 	printf("thread var is: %ld\n", tlvar);
-	printf("child loop (msg: %s)\n", msg);
+	printf("child loop (msg: %s)\n", (char *)msg);
 	char buf[10];
 	snprintf(buf, sizeof(buf), "%ld ", tlvar);
 	loop(buf, 30);
@@ -80,11 +80,11 @@ int main(int argc, char **argv)
 	if ((tid = thrwait(tls1, &status)) != tls1)
 		err(tid, "thrwait1");
 	if (status != tls1)
-		errx(-1, "bad status %d %d", status, tls1);
+		errx(-1, "bad status %d %ld", status, tls1);
 	if ((tid = thrwait(tls2, &status)) != tls2)
 		err(tid, "thrwait2");
 	if (status != tls2)
-		errx(-1, "bad status %d %d", status, tls2);
+		errx(-1, "bad status %d %ld", status, tls2);
 	printf("parent exit\n");
 
 	return 0;

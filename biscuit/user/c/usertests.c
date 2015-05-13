@@ -211,7 +211,7 @@ writetest1(void)
   for(i = 0; i < MAXFILE; i++){
     ((int*)buf)[0] = i;
     if(write(fd, buf, 512) != 512){
-      printf("error: write big file failed\n", i);
+      printf("error: write big file failed\n");
       exit(0);
     }
   }

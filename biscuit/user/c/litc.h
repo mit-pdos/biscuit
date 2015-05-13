@@ -119,14 +119,18 @@ int pthread_join(pthread_t, void **);
  */
 int atoi(const char *);
 ulong atoul(const char *);
-void err(int, const char *, ...);
-void errx(int, const char *, ...);
+void err(int, const char *, ...)
+    __attribute__((format(printf, 2, 3)));
+void errx(int, const char *, ...)
+    __attribute__((format(printf, 2, 3)));
 void *memset(void *, int, size_t);
-int printf(char *, ...);
+int printf(char *, ...)
+    __attribute__((format(printf, 1, 2)));
 int vprintf(const char *, va_list);
 ulong rdtsc(void);
 char *readline(char *);
-int snprintf(char *, size_t, const char *, ...);
+int snprintf(char *, size_t, const char *,...)
+    __attribute__((format(printf, 3, 4)));
 char *strncpy(char *, const char *, size_t);
 size_t strlen(char *);
 int strncmp(const char *, const char *, size_t);

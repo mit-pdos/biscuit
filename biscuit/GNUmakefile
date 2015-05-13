@@ -32,7 +32,8 @@ BGOS := mpentry.bin.bgo
 
 RFS  := $(patsubst %.c,%.d,$(CS))
 RFS  += $(addsuffix .d,$(CPROGS))
-RFS  += user/litc.d
+RFS  += $(addsuffix .d,$(CXXPROGS))
+RFS  += user/c/litc.d
 
 GOBIN := ../bin/go
 SKEL := fsdir

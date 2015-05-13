@@ -53,9 +53,9 @@ void dprint(int fd, char *par, int left)
 			if (close(tfd))
 				errx(-1, "close");
 			if (S_ISDIR(st.st_mode))
-				printf("drwxr-xr-x %d %s\n", st.st_size, tn);
+				printf("drwxr-xr-x %ld %s\n", st.st_size, tn);
 			else
-				printf("-rwxr-xr-x %d %s\n", st.st_size, tn);
+				printf("-rwxr-xr-x %ld %s\n", st.st_size, tn);
 		}
 	}
 	close(fd);
