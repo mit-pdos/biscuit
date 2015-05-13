@@ -95,6 +95,11 @@ func sc_put(c int8) {
 	for inb(com1 + lstatus) & 0x20 == 0 {
 	}
 	Outb(com1, int(c))
+	if c == '\b' {
+		// clear the previous character
+		Outb(com1, int(' '))
+		Outb(com1, int('\b'))
+	}
 }
 
 type put_t struct {
@@ -111,9 +116,16 @@ func vga_put(c int8, attr int8) {
 	if c != '\n' {
 		// erase the previous line
 		a := int16(attr) << 8
+		backspace := c == '\b'
+		if backspace {
+			put.vx--
+			c = ' '
+		}
 		v := a | int16(c)
 		p[put.vy * 80 + put.vx] = v
-		put.vx++
+		if !backspace {
+			put.vx++
+		}
 		put.fakewrap = false
 	} else {
 		// if we wrapped the text because of a long line in the

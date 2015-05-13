@@ -584,6 +584,10 @@ readline(char *prompt)
 	while ((ret = read(0, &c, 1)) > 0) {
 		if (c == '\n')
 			break;
+		if (c == '\b') {
+			i--;
+			continue;
+		}
 		if (i < sizeof(readlineb) - 1)
 			readlineb[i++] = c;
 	}
