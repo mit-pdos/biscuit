@@ -1184,7 +1184,7 @@ func p8259_init() {
 var intmask uint 	= 0xffff
 
 func irq_unmask(irq int) {
-	if irq < 0 || irq > 16 {
+	if irq < 0 || irq >= 16 {
 		panic("weird irq")
 	}
 	pic1 := 0x20
@@ -1278,9 +1278,9 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			if l > len(data) {
 				l = len(data)
 			}
-			data = data[0:l]
-			cons.reader <- data
-			data = make([]byte, 0)
+			s := data[0:l]
+			cons.reader <- s
+			data = data[l:]
 		}
 		if len(data) == 0 {
 			reqc = nil

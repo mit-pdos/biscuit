@@ -1,3 +1,6 @@
+QEMU := qemu-system-x86_64
+PYTHON ?= python2
+
 TOP := .
 
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
@@ -44,10 +47,6 @@ QOPTS := -m 256M -smp cpus=$(CPUS)
 
 OS := $(shell uname -s)
 
-QEMU := qemu-system-x86_64
-
-PYTHON ?= python2
-
 ifeq ($(OS), OpenBSD)
 	ASFLAGS += -nopie
 endif
@@ -59,7 +58,7 @@ all: go.img net.img
 boot: boot.o bootmain.o
 	$(LD) --omagic -o $@.elf -m elf_i386 -static -e start -Ttext 0x7c00 $^
 	objcopy -O binary $@.elf $@.bin
-	./stamp.py $@.bin
+	$(PYTHON) stamp.py $@.bin
 	mv $@.bin $@
 
 bootmain.o: CFLAGS += -I$(TOP)
