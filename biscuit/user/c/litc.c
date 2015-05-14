@@ -603,10 +603,11 @@ readline(const char *prompt)
 		if (c == '\n')
 			break;
 		if (c == '\b') {
-			i--;
+			if (--i < 0)
+				i = 0;
 			continue;
 		}
-		if (i < sizeof(readlineb) - 1)
+		if (i < sizeof(readlineb) - 2)
 			readlineb[i++] = c;
 	}
 	readlineb[i] = 0;
