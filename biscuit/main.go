@@ -380,15 +380,6 @@ type proc_t struct {
 	sync.Mutex
 }
 
-func proc_init(rf *file_t) {
-	if rootfile != nil {
-		panic("proc_init called twice")
-	}
-	rootfile = rf
-}
-
-var rootfile *file_t
-
 var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 
@@ -403,11 +394,7 @@ func newpid() int {
 	return ret
 }
 
-func proc_new(name string) *proc_t {
-	if rootfile == nil {
-		panic("proc_init not called")
-	}
-
+func proc_new(name string, cwd *file_t) *proc_t {
 	ret := &proc_t{}
 
 	proclock.Lock()
@@ -425,8 +412,8 @@ func proc_new(name string) *proc_t {
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.fdstart = 3
-	ret.cwd = rootfile
-	fs_memref(rootfile, 0)
+	ret.cwd = cwd
+	fs_memref(ret.cwd, 0)
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)
@@ -1432,7 +1419,6 @@ func main() {
 	//runtime.SCenable = false
 
 	rf := fs_init()
-	proc_init(rf)
 	kbd_init()
 
 	runtime.Resetgcticks()
@@ -1441,7 +1427,7 @@ func main() {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
-		p := proc_new(cmd)
+		p := proc_new(cmd, rf)
 		var tf [TFSIZE]int
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {

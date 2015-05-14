@@ -687,9 +687,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	chtf = *ptf
 
 	if mkproc {
-		child = proc_new(fmt.Sprintf("%s's child", parent.name))
+		child = proc_new(fmt.Sprintf("%s's child", parent.name), parent.cwd)
 		child.pwaiti = &parent.waiti
-		child.cwd = parent.cwd
 
 		// copy fd table
 		for k, v := range parent.fds {
