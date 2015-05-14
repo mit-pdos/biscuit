@@ -23,7 +23,7 @@ struct timeval before, end;
 
 int errno;
 
-void gettimeofday(struct timeval *h, void *p)
+void rgettimeofday(struct timeval *h, void *p)
 {
 	time_t hi, lo, v;
 	asm(
@@ -38,13 +38,13 @@ void gettimeofday(struct timeval *h, void *p)
 
 void start()
 {
-    gettimeofday(&before, NULL);
+    rgettimeofday(&before, NULL);
 }
 
 
 long stop()
 {
-    gettimeofday(&end, NULL);
+    rgettimeofday(&end, NULL);
     long time = (end.tv_sec - before.tv_sec) * 1000000 +
 	(end.tv_usec - before.tv_usec);
     return time;
