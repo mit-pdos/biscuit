@@ -88,20 +88,26 @@ func sc_setup() {
 	inb(com1 + data)
 }
 
+const com1 = 0x3f8
+const lstatus = 5
+
 //go:nosplit
-func sc_put(c int8) {
-	com1 := 0x3f8
-	lstatus := 5
+func sc_put_(c int8) {
 	for inb(com1 + lstatus) & 0x20 == 0 {
 	}
-	if c == '\n' {
-		Outb(com1, int('\r'))
-	}
 	Outb(com1, int(c))
+}
+
+//go:nosplit
+func sc_put(c int8) {
+	if c == '\n' {
+		sc_put_('\r')
+	}
+	sc_put_(c)
 	if c == '\b' {
 		// clear the previous character
-		Outb(com1, int(' '))
-		Outb(com1, int('\b'))
+		sc_put_(' ')
+		sc_put_('\b')
 	}
 }
 
