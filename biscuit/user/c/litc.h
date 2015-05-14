@@ -117,16 +117,31 @@ int pthread_join(pthread_t, void **);
 /*
  * libc
  */
+typedef struct {
+	int fd;
+} FILE;
+extern FILE  *stdin, *stdout, *stderr;
+
+struct timeval {
+	time_t tv_sec;
+	time_t tv_usec;
+};
+
+struct timezone {
+};
+
 int atoi(const char *);
 ulong atoul(const char *);
 void err(int, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 void errx(int, const char *, ...)
     __attribute__((format(printf, 2, 3)));
+int fprintf(FILE *, const char *, ...)
+    __attribute__((format(printf, 2, 3)));
+int gettimeofday(struct timeval *tv, struct timezone *tz);
 void *memset(void *, int, size_t);
 int printf(char *, ...)
     __attribute__((format(printf, 1, 2)));
-int vprintf(const char *, va_list);
 ulong rdtsc(void);
 char *readline(char *);
 int snprintf(char *, size_t, const char *,...)
@@ -135,6 +150,10 @@ char *strncpy(char *, const char *, size_t);
 size_t strlen(char *);
 int strncmp(const char *, const char *, size_t);
 char *strstr(const char *, const char *);
+int vfprintf(FILE *, const char *, va_list)
+    __attribute__((format(printf, 2, 0)));
+int vprintf(const char *, va_list)
+    __attribute__((format(printf, 1, 0)));
 
 void *malloc(size_t);
 void free(void *);

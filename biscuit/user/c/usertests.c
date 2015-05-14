@@ -3,7 +3,6 @@
 char buf[8192];
 char name[3];
 char *echoargv[] = { "echo", "ALL", "TESTS", "PASSED", 0 };
-int stdout = 1;
 
 #define mkdir(x)	mkdir(x, 0)
 #define open(x, y)	open(x, y, 0)

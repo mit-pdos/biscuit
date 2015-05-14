@@ -23,6 +23,9 @@
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
 
+static FILE  _stdin = {0}, _stdout = {1}, _stderr = {2};
+FILE  *stdin = &_stdin, *stdout = &_stdout, *stderr = &_stderr;
+
 static long biglock;
 static int dolock = 1;
 
@@ -368,6 +371,24 @@ errx(int eval, const char *fmt, ...)
 	exit(eval);
 }
 
+int
+fprintf(FILE *f, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	int ret;
+	ret = vfprintf(f, fmt, ap);
+	va_end(ap);
+	return ret;
+}
+
+int
+gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+	errx(-1, "gettimeofday: no imp");
+	return 0;
+}
+
 void *
 memset(void *d, int c, size_t n)
 {
@@ -534,19 +555,7 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 }
 
 int
-vprintf(const char *fmt, va_list ap)
-{
-	char lbuf[256];
-
-	int ret;
-	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
-	pmsg(lbuf, ret);
-
-	return ret;
-}
-
-int
-printf(char *fmt, ...)
+printf(const char *fmt, ...)
 {
 	va_list ap;
 	int ret;
@@ -636,6 +645,30 @@ strstr(const char *big, const char *little)
 			big++;
 	}
 	return NULL;
+}
+
+int
+vprintf(const char *fmt, va_list ap)
+{
+	char lbuf[256];
+
+	int ret;
+	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
+	pmsg(lbuf, ret);
+
+	return ret;
+}
+
+int
+vfprintf(FILE *f, const char *fmt, va_list ap)
+{
+	char lbuf[256];
+
+	int ret;
+	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
+	write(f->fd, lbuf, ret);
+
+	return ret;
 }
 
 struct header_t {

@@ -6,10 +6,7 @@ typedef unsigned long ulong;
 typedef unsigned long size_t;
 typedef unsigned long time_t;
 
-struct timeval {
-	time_t tv_sec;
-	time_t tv_usec;
-};
+typedef unsigned long uint64_t;
 
 #define NULL   ((void *)0)
 
