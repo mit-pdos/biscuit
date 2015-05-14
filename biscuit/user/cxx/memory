@@ -1,0 +1,352 @@
+// -*- c++ -*-
+
+#pragma once
+
+#include <type_traits>
+#include <utility>
+
+namespace std {
+  // [C++11 20.6.12.1]
+  template <class T>
+  T*
+  addressof(T& r) noexcept
+  {
+    return reinterpret_cast<T*>(&(char&)r);
+  }
+
+  // [C++11 20.7.1.1] Default deleters
+  template <class T>
+  struct default_delete {
+    constexpr default_delete() noexcept = default;
+    template <class U, typename = typename
+              std::enable_if<std::is_convertible<U*, T*>::value>::type>
+    default_delete(const default_delete<U>&) noexcept { }
+    void operator()(T* ptr) const
+    {
+      delete ptr;
+    }
+  };
+
+  template <class T>
+  struct default_delete<T[]> {
+    constexpr default_delete() noexcept = default;
+    void operator()(T* ptr) const
+    {
+      delete[] ptr;
+    }
+    template <class U> void operator()(U*) const = delete;
+  };
+
+  // Use empty base optimization if D is an empty class.  However, D
+  // might also be a function type, in which case we can't subclass.
+  template<class P, class D, bool empty> struct __uptr_impl;
+  template<class P, class D>
+  struct __uptr_impl<P, D, true> : private D
+  {
+    P ptr_;
+    __uptr_impl(P ptr, const D &d) noexcept : D(d), ptr_(ptr) { }
+    __uptr_impl(P ptr, D &&d) noexcept : D(std::move(d)), ptr_(ptr) { }
+    D &get_deleter() { return *this; }
+  };
+  template<class P, class D>
+  struct __uptr_impl<P, D, false>
+  {
+    D d_;
+    P ptr_;
+    __uptr_impl(P ptr, const D &d) noexcept : d_(d), ptr_(ptr) { }
+    __uptr_impl(P ptr, D &&d) noexcept : d_(std::move(d)), ptr_(ptr) { }
+    D &get_deleter() { return d_; }
+  };
+
+  // [C++11 20.7.1.2]
+  template <class T, class D = default_delete<T>>
+  class unique_ptr
+  {
+  public:
+    typedef T* pointer;         // XXX Violates standard
+    typedef T element_type;
+    typedef D deleter_type;
+
+  private:
+    __uptr_impl<pointer, D, std::is_empty<D>::value> impl_;
+
+  public:
+    constexpr unique_ptr() noexcept : impl_(nullptr, D()) { }
+
+    explicit unique_ptr(pointer p) noexcept : impl_(p, D()) { }
+
+    unique_ptr(pointer p,
+               typename conditional<is_reference<D>::value, D, const D&>::type
+               d) noexcept
+      : impl_(p, d) { }
+
+    unique_ptr(pointer p, typename remove_reference<D>::type&& d) noexcept
+      : impl_(std::move(p), std::move(d))
+    {
+      static_assert(!is_reference<D>::value,
+                    "rvalue deleter bound to reference");
+    }
+
+    unique_ptr(unique_ptr&& u) noexcept
+      : impl_(u.release(), std::forward<D>(u.get_deleter())) { }
+
+    constexpr unique_ptr(nullptr_t) noexcept : unique_ptr() { }
+
+    template <class U, class E, typename = typename
+              enable_if
+              <is_convertible<typename unique_ptr<U, E>::pointer, pointer>::value &&
+               !is_array<U>::value &&
+               conditional<is_reference<D>::value,
+                           is_same<E, D>,
+                           is_convertible<E, D> >::type::value>::type>
+    unique_ptr(unique_ptr<U, E>&& u) noexcept
+      : impl_(u.release(), std::forward<E>(u.get_deleter())) { }
+
+    ~unique_ptr()
+    {
+      if (get() != nullptr)
+        get_deleter()(get());
+    }
+
+    unique_ptr&
+    operator=(unique_ptr&& u) noexcept
+    {
+      reset(u.release());
+      get_deleter() = std::forward<D>(u.get_deleter());
+      return *this;
+    }
+
+    template <class U, class E, typename = typename
+              enable_if
+              <is_convertible<typename unique_ptr<U, E>::pointer, pointer>::value &&
+               !is_array<U>::value>::type>
+    unique_ptr&
+    operator=(unique_ptr<U, E>&& u) noexcept
+    {
+      reset(u.release());
+      get_deleter() = std::forward<E>(u.get_deleter());
+      return *this;
+    }
+
+    unique_ptr&
+    operator=(nullptr_t) noexcept
+    {
+      reset();
+      return *this;
+    }
+
+    typename add_lvalue_reference<T>::type
+    operator*() const
+    {
+      return *get();
+    }
+
+    pointer
+    operator->() const noexcept
+    {
+      return get();
+    }
+
+    pointer
+    get() const noexcept
+    {
+      return impl_.ptr_;
+    }
+
+    deleter_type&
+    get_deleter() noexcept
+    {
+      return impl_.get_deleter();
+    }
+
+    const deleter_type&
+    get_deleter() const noexcept
+    {
+      return impl_.get_deleter();
+    }
+
+    explicit
+    operator bool() const noexcept
+    {
+      return get() != nullptr;
+    }
+
+    pointer
+    release() noexcept
+    {
+      pointer p = get();
+      impl_.ptr_ = pointer();
+      return p;
+    }
+
+    void
+    reset(pointer p = pointer()) noexcept
+    {
+      pointer o = get();
+      impl_.ptr_ = p;
+      if (o != pointer())
+        get_deleter()(o);
+    }
+
+    void
+    swap(unique_ptr& u) noexcept
+    {
+      std::swap(impl_.ptr_, u.impl_.ptr_);
+      std::swap(get_deleter(), u.get_deleter());
+    }
+
+    // Disable copy from lvalue
+    unique_ptr(const unique_ptr&) = delete;
+    unique_ptr& operator=(const unique_ptr&) = delete;
+  };
+
+  // [C++11 20.7.1.3]
+  template <class T, class D>
+  class unique_ptr<T[], D>
+  {
+  public:
+    typedef T* pointer;         // XXX Violates standard
+    typedef T element_type;
+    typedef D deleter_type;
+
+  private:
+    __uptr_impl<pointer, D, std::is_empty<D>::value> impl_;
+
+  public:
+    constexpr unique_ptr() noexcept : impl_(nullptr, D()) { }
+
+    explicit unique_ptr(pointer p) noexcept : impl_(p, D()) { }
+
+    unique_ptr(pointer p,
+               typename conditional<is_reference<D>::value, D, const D&>::type
+               d) noexcept
+      : impl_(p, d) { }
+
+    unique_ptr(pointer p, typename remove_reference<D>::type&& d) noexcept
+      : impl_(std::move(p), std::move(d))
+    {
+      static_assert(!is_reference<D>::value,
+                    "rvalue deleter bound to reference");
+    }
+
+    unique_ptr(unique_ptr&& u) noexcept
+      : impl_(u.release(), std::forward<D>(u.get_deleter())) { }
+
+    constexpr unique_ptr(nullptr_t) noexcept : unique_ptr() { }
+
+    ~unique_ptr()
+    {
+      if (get() != nullptr)
+        get_deleter()(get());
+    }
+
+    unique_ptr&
+    operator=(unique_ptr&& u) noexcept
+    {
+      reset(u.release());
+      get_deleter() = std::forward<D>(u.get_deleter());
+      return *this;
+    }
+
+    unique_ptr&
+    operator=(nullptr_t) noexcept
+    {
+      reset();
+      return *this;
+    }
+
+    T&
+    operator[](size_t i) const
+    {
+      return get()[i];
+    }
+
+    pointer
+    get() const noexcept
+    {
+      return impl_.ptr_;
+    }
+
+    deleter_type&
+    get_deleter() noexcept
+    {
+      return impl_.get_deleter();
+    }
+
+    explicit
+    operator bool() const noexcept
+    {
+      return get() != nullptr;
+    }
+
+    pointer
+    release() noexcept
+    {
+      pointer p = get();
+      impl_.ptr_ = pointer();
+      return p;
+    }
+
+    void
+    reset(pointer p = pointer()) noexcept
+    {
+      pointer o = get();
+      impl_.ptr_ = p;
+      if (o != pointer())
+        get_deleter()(o);
+    }
+
+    // Disallow resetting to convertible pointer types
+    template<typename U, typename = typename enable_if
+             <is_pointer<pointer>::value &&
+              is_convertible<U*, pointer>::value &&
+              is_base_of<T, U>::value &&
+              !is_same<typename remove_cv<T>::type,
+                       typename remove_cv<U>::type>::value>::type>
+        void reset(U*) = delete;
+
+    void
+    swap(unique_ptr& u) noexcept
+    {
+      std::swap(impl_.ptr_, u.impl_.ptr_);
+      std::swap(get_deleter(), u.get_deleter());
+    }
+  };
+
+  // [C++14 20.8.1.4]
+  template<class T>
+  struct __make_unique_result
+  {
+    typedef unique_ptr<T> single;
+  };
+
+  template<class T>
+  struct __make_unique_result<T[]>
+  {
+    typedef unique_ptr<T[]> array;
+  };
+
+  template<class T, size_t Bound>
+  struct __make_unique_result<T[Bound]>
+  {
+    struct invalid { };
+  };
+
+  template<class T, class ...Args>
+  typename __make_unique_result<T>::single
+  make_unique(Args&& ...args)
+  {
+    return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+  }
+
+  template<class T>
+  typename __make_unique_result<T>::array
+  make_unique(size_t bound)
+  {
+    return unique_ptr<T>(new typename remove_extent<T>::type[bound]());
+  }
+
+  template<class T, class... Args>
+  typename __make_unique_result<T>::invalid
+  make_unique(Args&&...) = delete;
+}

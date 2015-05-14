@@ -1,0 +1,129 @@
+// -*- c++ -*-
+
+#pragma once
+
+#include <algorithm>
+#include <functional>
+#include <utility>
+
+namespace std {
+  // [C++11 23.6.4]
+  // Not implemented: Allocator support
+  template <class T, class Container = vector<T>,
+            class Compare = less<typename Container::value_type> >
+  class priority_queue {
+  public:
+    typedef typename Container::value_type value_type;
+    typedef typename Container::reference reference;
+    typedef typename Container::const_reference const_reference;
+    typedef typename Container::size_type size_type;
+    typedef Container container_type;
+
+  protected:
+    Compare comp_;
+    Container c_;
+
+  public:
+    priority_queue(const Compare& comp, const Container& c)
+      : comp_(comp), c_(c)
+    {
+      std::make_heap(c_.begin(), c_.end(), comp_);
+    }
+
+    explicit priority_queue(const Compare& comp = Compare(),
+                            Container&& c = Container())
+      : comp_(comp), c_(c)
+    {
+      std::make_heap(c_.begin(), c_.end(), comp_);
+    }
+
+    template <class InputIterator>
+    priority_queue(InputIterator first, InputIterator last,
+                   const Compare& comp, const Container& c)
+      : comp_(comp), c_(c)
+    {
+      c_.insert(c_.end(), first, last);
+      std::make_heap(c_.begin(), c_.end(), comp_);
+    }
+
+    template <class InputIterator>
+    priority_queue(InputIterator first, InputIterator last,
+                   const Compare& comp = Compare(), Container&& c = Container())
+      : comp_(comp), c_(c)
+    {
+      c_.insert(c_.end(), first, last);
+      std::make_heap(c_.begin(), c_.end(), comp_);
+    }
+
+    // template <class Alloc> explicit priority_queue(const Alloc& a);
+    // template <class Alloc>
+    // priority_queue(const Compare& comp, const Alloc& a);
+    // template <class Alloc>
+    // priority_queue(const Compare& comp, const Container& c, const Alloc& a);
+    // template <class Alloc>
+    // priority_queue(const Compare& comp, Container&& c, const Alloc& a);
+    // template <class Alloc>
+    // priority_queue(const priority_queue& q, const Alloc& a);
+    // template <class Alloc>
+    // priority_queue(priority_queue&& q, const Alloc& a);
+
+    bool empty() const
+    {
+      return c_.empty();
+    }
+
+    size_type size() const
+    {
+      return c_.size();
+    }
+
+    const_reference top() const
+    {
+      return c_.front();
+    }
+
+    void push(const value_type& x)
+    {
+      c_.push_back(x);
+      std::push_heap(c_.begin(), c_.end(), comp_);
+    }
+
+    void push(value_type&& x)
+    {
+      c_.push_back(std::move(x));
+      std::push_heap(c_.begin(), c_.end(), comp_);
+    }
+    
+    template <class... Args>
+    void emplace(Args&&... args)
+    {
+      c_.emplace_back(std::forward<Args>(args)...);
+      std::push_heap(c_.begin(), c_.end(), comp_);
+    }
+
+    void pop()
+    {
+      pop_heap(c_.begin(), c_.end(), comp_);
+      c_.pop_back();
+    }
+
+    void swap(priority_queue& q)
+      noexcept(noexcept(swap(c_, q.c_)) && noexcept(swap(comp_, q.comp_)))
+    {
+      std::swap(c_, q.c_);
+      std::swap(comp_, q.comp_);
+    }
+  };
+
+  template <class T, class Container, class Compare>
+  void swap(priority_queue<T, Container, Compare>& x,
+            priority_queue<T, Container, Compare>& y)
+    noexcept(noexcept(x.swap(y)))
+  {
+    x.swap(y);
+  }
+
+  // template <class T, class Container, class Compare, class Alloc>
+  // struct uses_allocator<priority_queue<T, Container, Compare>, Alloc>
+  //   : uses_allocator<Container, Alloc>::type { };
+}

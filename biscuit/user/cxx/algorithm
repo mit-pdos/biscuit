@@ -1,0 +1,439 @@
+// -*- c++ -*-
+
+#pragma once
+
+#include <litc.h>
+#include <utility>
+
+namespace std {
+  // [C++11 25.2] Non-modifying sequence operations
+  struct __less
+  {
+    template <class T> bool operator()(const T& x, const T& y) const
+    {
+      return x < y;
+    }
+  };
+
+  template <class InputIterator, class Predicate>
+  bool all_of(InputIterator first, InputIterator last, Predicate pred)
+  {
+    for (; first != last; ++first)
+      if (!pred(*first))
+        return false;
+    return true;
+  }
+
+  template <class InputIterator, class Predicate>
+  bool any_of(InputIterator first, InputIterator last, Predicate pred)
+  {
+    for (; first != last; ++first)
+      if (pred(*first))
+        return true;
+    return false;
+  }
+
+  template <class InputIterator, class Predicate>
+  bool none_of(InputIterator first, InputIterator last, Predicate pred)
+  {
+    for (; first != last; ++first)
+      if (pred(*first))
+        return false;
+    return true;
+  }
+
+  template<class InputIterator, class T>
+  InputIterator find(InputIterator first, InputIterator last,
+                     const T& value)
+  {
+    for (; first != last; ++first)
+      if (*first == value)
+        break;
+    return first;
+  }
+
+  // [C++11 25.4.7] Minimum and maximum
+  template<class T>
+  const T& min(const T& a, const T& b)
+  {
+    if (b < a)
+      return b;
+    return a;
+  }
+
+  template<class T, class Compare>
+  const T& min(const T& a, const T& b, Compare comp)
+  {
+    if (Compare(b, a))
+      return b;
+    return a;
+  }
+
+  template<class T>
+  const T& max(const T& a, const T& b)
+  {
+    if (a < b)
+      return b;
+    return a;
+  }
+
+  template<class T, class Compare>
+  const T& max(const T& a, const T& b, Compare comp)
+  {
+    if (Compare(a, b))
+      return b;
+    return a;
+  }
+
+  // [C++11 25.3.2] Move
+  template<class InputIterator, class OutputIterator>
+  OutputIterator move(InputIterator first, InputIterator last,
+                      OutputIterator result)
+  {
+    while (first != last)
+        *result++ = std::move(*first++);
+    return result;
+  }
+
+  template<class BidirectionalIterator1, class BidirectionalIterator2>
+  BidirectionalIterator2 move_backward(BidirectionalIterator1 first,
+                                       BidirectionalIterator1 last,
+                                       BidirectionalIterator2 result)
+  {
+    while (first != last)
+      *(--result) = std::move(*(--last));
+    return result;
+  }
+
+  // [C++11 25.3.6] Fill
+  template<class ForwardIterator, class T>
+  void fill(ForwardIterator first, ForwardIterator last, const T& value)
+  {
+    for (; first != last; ++first)
+      *first = value;
+  }
+
+  template<class T>
+  typename enable_if<sizeof(T) == 1 && is_integral<T>::value, void>::type
+    fill(T* first, T* last, const T& value)
+  {
+    memset(first, value, last - first);
+  }
+
+  // [C++11 25.4.1] Sorting
+  template<class RandomAccessIterator, class Compare>
+  void sort(RandomAccessIterator first, RandomAccessIterator last,
+            Compare comp)
+  {
+    auto dist = last - first;
+    if (dist <= 1)
+      return;
+    // Move pivot to the end
+    auto pivot = last;
+    --pivot;
+    std::swap(*(first + dist / 2), *pivot);
+    // Partition
+    auto store = first;
+    for (auto it = first; it != pivot; ++it) {
+      if (comp(*it, *pivot)) {
+        std::swap(*store, *it);
+        ++store;
+      }
+    }
+    // Move pivot to final location
+    std::swap(*store, *pivot);
+    // Sort partitions
+    sort(first, store, comp);
+    ++store;
+    sort(store, last, comp);
+  }
+
+  template<class RandomAccessIterator>
+  void sort(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    sort(first, last, __less());
+  }
+
+  template<class ForwardIterator, class Compare>
+  ForwardIterator is_sorted_until(ForwardIterator first, ForwardIterator last,
+                                  Compare comp)
+  {
+    if (last - first < 2)
+      return last;
+    ForwardIterator next = first;
+    for (++next; next != last; ++next, ++first)
+      if (comp(*next, *first))
+        break;
+    return next;
+  }
+
+  template<class ForwardIterator>
+  bool is_sorted(ForwardIterator first, ForwardIterator last)
+  {
+    return is_sorted_until(first, last, __less()) == last;
+  }
+
+  template<class ForwardIterator, class Compare>
+  bool is_sorted(ForwardIterator first, ForwardIterator last,
+                 Compare comp)
+  {
+    return is_sorted_until(first, last, comp) == last;
+  }
+
+  template<class ForwardIterator>
+  ForwardIterator is_sorted_until(ForwardIterator first, ForwardIterator last)
+  {
+    return is_sorted_until(first, last, __less());
+  }
+
+  // [C++11 25.4.3] Binary search
+
+  // Returns an iterator pointing to @c value, or, if @c value isn't
+  // present, an iterator pointing to @c value's successor.  @c comp
+  // must take a dereferenced iterator and value and return true if
+  // the first is strictly less than the second.
+  //
+  // 0   2   4 <- Collection
+  //   1 2     <- Values that return 2
+  template<class ForwardIterator, class T, class Compare>
+  ForwardIterator
+  lower_bound(ForwardIterator first, ForwardIterator last,
+              const T& value, Compare comp)
+  {
+    auto dist = last - first;
+    while (dist > 0) {
+      auto mid = first;
+      mid += dist / 2;
+      if (comp(*mid, value)) {
+        first = mid;
+        ++first;
+        dist = dist - dist / 2 - 1;
+      } else {
+        dist /= 2;
+      }
+    }
+    return first;
+  }
+
+  template<class ForwardIterator, class T>
+  ForwardIterator
+  lower_bound(ForwardIterator first, ForwardIterator last,
+              const T& value)
+  {
+    return lower_bound(first, last, value,
+                       [](const T& a, const T& b) { return a < b; });
+  }
+
+  // Returns an iterator pointing to @c value's successor.  @c comp
+  // must take value and a dereferenced iterator and return true if
+  // the first is strictly less than the second.
+  //
+  // 0   2   4 <- Collection
+  // 0 1       <- Values that return 2
+  template<class ForwardIterator, class T, class Compare>
+  ForwardIterator
+  upper_bound(ForwardIterator first, ForwardIterator last,
+              const T& value, Compare comp)
+  {
+    auto dist = last - first;
+    while (dist > 0) {
+      auto mid = first;
+      mid += dist / 2;
+      if (comp(value, *mid)) {
+        dist /= 2;
+      } else {
+        first = mid;
+        ++first;
+        dist = dist - dist / 2 - 1;
+      }
+    }
+    return first;
+  }
+
+  template<class ForwardIterator, class T>
+  ForwardIterator
+  upper_bound(ForwardIterator first, ForwardIterator last,
+              const T& value)
+  {
+    return upper_bound(first, last, value,
+                       [](const T& a, const T& b) { return a < b; });
+  }
+
+  // [C++11 25.4.6] Heap operations
+
+  // Move *(first + pos) up the heap to the correct position
+  template<class RandomAccessIterator, class Compare, class Distance>
+  void
+  __move_up(RandomAccessIterator first, Distance pos, Distance len, Compare comp)
+  {
+    auto val = std::move(*(first + pos));
+    Distance parent;
+    // Shift values down until we find the place to insert val
+    while (parent = (pos - 1) / 2, pos > 0 && comp(*(first + parent), val)) {
+      *(first + pos) = std::move(*(first + parent));
+      pos = parent;
+    }
+    // Insert val
+    *(first + pos) = std::move(val);
+  }
+
+  // Move *(first + pos) down the heap to the correct position
+  template<class RandomAccessIterator, class Compare, class Distance>
+  void
+  __move_down(RandomAccessIterator first, Distance pos, Distance len,
+              Compare comp)
+  {
+    auto val = std::move(*(first + pos));
+    while (true) {
+      // Set childpos to the larger of the children of pos
+      Distance childpos = 2 * pos + 1;
+      Distance rightpos = childpos + 1;
+      if (rightpos < len && !comp(*(first + rightpos), *(first + childpos)))
+        childpos = rightpos;
+      // If we hit the bottom or val is > than the largest child, we've
+      // found our hole
+      if (childpos >= len || comp(*(first + childpos), val)) {
+        *(first + pos) = std::move(val);
+        return;
+      }
+      // Move the child up the tree
+      *(first + pos) = std::move(*(first + childpos));
+      // Move the hole down the tree
+      pos = childpos;
+    }
+  }
+
+  template<class RandomAccessIterator, class Compare>
+  void
+  push_heap(RandomAccessIterator first, RandomAccessIterator last, Compare comp)
+  {
+    __move_up(first, last - first - 1, last - first, comp);
+  }
+
+  template<class RandomAccessIterator>
+  void
+  push_heap(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    push_heap(first, last, __less());
+  }
+
+  template<class RandomAccessIterator, class Compare>
+  void
+  pop_heap(RandomAccessIterator first, RandomAccessIterator last, Compare comp)
+  {
+    if (last - first <= 1)
+      return;
+    --last;
+    std::swap(*first, *last);
+    __move_down(first, decltype(last - first)(0), last - first, comp);
+  }
+
+  template<class RandomAccessIterator>
+  void
+  pop_heap(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    pop_heap(first, last, __less());
+  }
+
+  template<class RandomAccessIterator, class Compare>
+  void
+  make_heap(RandomAccessIterator first, RandomAccessIterator last, Compare comp)
+  {
+    auto len = last - first;
+    // To avoid problems if i is unsigned, i is one more than the real index
+    for (auto i = len / 2; i > 0; --i)
+      __move_down(first, i - 1, len, comp);
+  }
+
+  template<class RandomAccessIterator>
+  void
+  make_heap(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    make_heap(first, last, __less());
+  }
+
+  template<class RandomAccessIterator, class Compare>
+  void
+  sort_heap(RandomAccessIterator first, RandomAccessIterator last, Compare comp)
+  {
+    for (; first != last; --last)
+      pop_heap(first, last, comp);
+  }
+
+  template<class RandomAccessIterator>
+  void
+  sort_heap(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    sort_heap(first, last, __less());
+  }
+
+  template<class RandomAccessIterator, class Compare>
+  RandomAccessIterator
+  is_heap_until(RandomAccessIterator first, RandomAccessIterator last,
+                Compare comp)
+  {
+    if (first == last)
+      return last;
+    RandomAccessIterator pos = first + 1;
+    for (; pos != last; ++pos) {
+      RandomAccessIterator parent = first + (pos - first - 1) / 2;
+      if (comp(*parent, *pos))
+        break;
+    }
+    return pos;
+  }
+
+  template<class RandomAccessIterator>
+  bool
+  is_heap(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    return is_heap_until(first, last, __less()) == last;
+  }
+
+  template<class RandomAccessIterator, class Compare>
+  bool
+  is_heap(RandomAccessIterator first, RandomAccessIterator last, Compare comp)
+  {
+    return is_heap_until(first, last, comp) == last;
+  }
+
+  template<class RandomAccessIterator>
+  RandomAccessIterator
+  is_heap_until(RandomAccessIterator first, RandomAccessIterator last)
+  {
+    return is_heap_until(first, last, __less());
+  }
+}
+
+#if 0
+#include <cassert>
+#include <vector>
+
+int main(int argc, char **argv)
+{
+  std::vector<int> vec;
+  for (int t = 0; t < 1000; ++t) {
+    vec.clear();
+    for (int i = 0; i < 100; ++i) {
+      vec.push_back(rand() % 100);
+      push_heap(vec.begin(), vec.end());
+      assert(is_heap(vec.begin(), vec.end()));
+    }
+    while (!vec.empty()) {
+      pop_heap(vec.begin(), vec.end());
+      vec.pop_back();
+      assert(is_heap(vec.begin(), vec.end()));
+    }
+
+    for (int i = 0; i < 100; ++i)
+      vec.push_back(rand() % 100);
+    make_heap(vec.begin(), vec.end());
+    assert(is_heap(vec.begin(), vec.end()));
+
+    sort_heap(vec.begin(), vec.end());
+    for (int i = 0; i < vec.size() - 1; ++i)
+      assert(vec[i] <= vec[i+1]);
+  }
+  return 0;
+}
+#endif

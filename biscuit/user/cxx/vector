@@ -1,0 +1,291 @@
+// -*- c++ -*-
+#pragma once
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+#include <new>
+
+namespace std {
+  template<class T>
+  class vector
+  {
+    T *data_;
+    std::size_t size_, cap_;
+
+  public:
+    typedef T value_type;
+    typedef value_type& reference;
+    typedef const value_type& const_reference;
+    typedef T* iterator;
+    typedef const T* const_iterator;
+    typedef std::size_t size_type;
+    typedef std::size_t difference_type;
+
+    vector()
+      : data_(), size_(0), cap_(0) { }
+
+    template<class InputIterator>
+    vector(InputIterator first, InputIterator last) : vector()
+    {
+      for (; first != last; ++first)
+        push_back(*first);
+    }
+
+    vector(const vector &x) : vector()
+    {
+      *this = x;
+    }
+
+    vector(vector &&x) : data_(x.data_), size_(x.size_), cap_(x.cap_)
+    {
+      x.data_ = nullptr;
+      x.size_ = x.cap_ = 0;
+    }
+
+    vector(std::initializer_list<T> elts) : vector()
+    {
+      reserve(elts.size());
+      for (auto it = elts.begin(), last = elts.end(); it != last; ++it)
+        push_back(*it);
+    }
+
+    ~vector()
+    {
+      clear();
+      if (data_)
+        delete[] reinterpret_cast<char*>(data_);
+    }
+
+    vector& operator=(const vector &x)
+    {
+      if (&x != this) {
+        reserve(x.size());
+        for (auto &elt : x)
+          push_back(elt);
+      }
+      return *this;
+    }
+
+    vector& operator=(vector &&x)
+    {
+      clear();
+      x.swap(*this);
+      return *this;
+    }
+
+    iterator begin() noexcept
+    {
+      return data();
+    }
+
+    const_iterator begin() const noexcept
+    {
+      return data();
+    }
+
+    iterator end() noexcept
+    {
+      return data() + size_;
+    }
+
+    const_iterator end() const noexcept
+    {
+      return data() + size_;
+    }
+
+    const_iterator cbegin() const noexcept
+    {
+      return data();
+    }
+
+    const_iterator cend() const noexcept
+    {
+      return data() + size_;
+    }
+
+    size_type size() const
+    {
+      return size_;
+    }
+
+    size_type max_size() const noexcept
+    {
+      return (size_type)-1;
+    }
+
+    size_type capacity() const noexcept
+    {
+      return cap_;
+    }
+
+    bool empty() const noexcept
+    {
+      return size_ == 0;
+    }
+
+    void reserve(size_type n)
+    {
+      if (n <= cap_)
+        return;
+
+      size_type ncap = cap_ == 0 ? 1 : cap_;
+      while (ncap < n)
+        ncap *= 2;
+      auto ndata = reinterpret_cast<T*>(new char[sizeof(T) * ncap]);
+      for (size_type i = 0; i < size_; ++i)
+        new (&ndata[i]) T(std::move(data()[i]));
+      data_ = ndata;
+      cap_ = ncap;
+    }
+
+    reference operator[](size_type n)
+    {
+      return *(data() + n);
+    }
+
+    const_reference operator[](size_type n) const
+    {
+      return *(data() + n);
+    }
+
+    const_reference at(size_type n) const
+    {
+      if (n >= size_)
+        throw std::out_of_range("index exceeds size");
+      return *(data() + n);
+    }
+
+    reference at(size_type n)
+    {
+      if (n >= size_)
+        throw std::out_of_range("index exceeds size");
+      return *(data() + n);
+    }
+
+    reference front()
+    {
+      return *data();
+    }
+
+    const_reference front() const
+    {
+      return *data();
+    }
+
+    reference back()
+    {
+      return *(data() + size_ - 1);
+    }
+
+    const_reference back() const
+    {
+      return *(data() + size_ - 1);
+    }
+
+    T* data() noexcept
+    {
+      return data_;
+    }
+
+    const T* data() const noexcept
+    {
+      return data_;
+    }
+
+    template <class... Args>
+    void emplace_back(Args&&... args)
+    {
+      reserve(size_ + 1);
+      new (end()) T(std::forward<Args>(args)...);
+      ++size_;
+    }
+
+    void push_back(const T& x)
+    {
+      emplace_back(x);
+    }
+
+    void push_back(T&& x)
+    {
+      emplace_back(std::move(x));
+    }
+
+    void pop_back()
+    {
+      if (!empty()) {
+        back().~T();
+        --size_;
+      }
+    }
+
+    template <class... Args>
+    iterator emplace(const_iterator position, Args&&... args)
+    {
+      iterator it = end();
+      if (it == position) {
+        // The general logic is wrong for end emplacement
+        emplace_back(std::forward<Args>(args)...);
+      } else {
+        size_type pos = position - front();
+        reserve(size_ + 1);
+        position = front() + pos;
+        // Construct a new last element
+        it = end();
+        new (it) T(std::move(*(it - 1)));
+        ++size_;
+        // Shift all of the elements between position and end
+        for (--it; it > position; --it)
+          *it = std::move(*(it - 1));
+        // Construct and move-assign new element.
+        *it = T(std::forward<Args>(args)...);
+      }
+      return it;
+    }
+
+    iterator erase(const_iterator position)
+    {
+      // Shift everything between position and end down
+      auto pos = begin() + (position - begin());
+      auto nend = std::move(pos + 1, end(), pos);
+      // Destruct last element
+      nend->~T();
+      --size_;
+      return pos;
+    }
+
+    iterator erase(const_iterator first, const_iterator last)
+    {
+      // Shift everything down
+      auto pos = begin() + (first - begin()), dst = pos,
+        src = begin() + (last - begin());
+      if (src != dst) {
+        auto nend = std::move(src, end(), dst);
+        // Destruct remaining elements
+        size_t n = 0;
+        for (; nend != end(); ++nend, ++n)
+          nend->~T();
+        size_ -= n;
+      }
+      return pos;
+    }
+
+    void swap(vector &x)
+    {
+      std::swap(data_, x.data_);
+      std::swap(size_, x.size_);
+      std::swap(cap_, x.cap_);
+    }
+
+    void clear() noexcept
+    {
+      for (std::size_t i = 0; i < size_; ++i)
+        (*this)[i].~T();
+      size_ = 0;
+    }
+  };
+}

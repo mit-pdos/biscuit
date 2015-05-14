@@ -1,0 +1,665 @@
+// -*- c++ -*-
+#pragma once
+
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstring>
+#include <initializer_list>
+
+namespace std {
+  class out_of_range;
+
+  template<class charT>
+  class basic_string
+  {
+    // The data backing the string.  This is shared and copy-on-write.
+    // This is always allocated to allow one extra byte in buf beyond
+    // cap, which provides space for a NUL charT.  Anything that
+    // modifies len must ensure that buf[len] == 0.
+    struct data
+    {
+      atomic<unsigned> refcnt;
+      size_t len, cap;
+      charT buf[];
+
+      static data* alloc(data *cur, size_t cap)
+      {
+        // Allocate space for cap plus a NUL.
+        struct data *res = reinterpret_cast<struct data*>(
+          new char[sizeof(*res) + sizeof(charT) * (cap + 1)]);
+        res->refcnt.store(1, memory_order_relaxed);
+        res->cap = cap;
+        if (cur) {
+          res->len = cur->len;
+          memmove(res->buf, cur->buf, sizeof(charT) * (cur->len + 1));
+        } else {
+          res->len = 0;
+          res->buf[0] = 0;
+        }
+        return res;
+      }
+
+      void set_len(size_t nlen)
+      {
+        buf[nlen] = 0;
+        len = nlen;
+      }
+    };
+
+    struct data *data_;
+
+    void release()
+    {
+      if (data_ && --data_->refcnt == 0)
+        delete[] (char*)data_;
+      data_ = nullptr;
+    }
+
+    void may_write()
+    {
+      if (data_ && data_->refcnt > 1) {
+        struct data *ndata = data::alloc(data_, data_->cap);
+        release();
+        data_ = ndata;
+      }
+    }
+
+  public:
+    // XXX traits_type, allocator_type
+    // XXX Traits and allocator-aware
+    typedef charT value_type;
+    typedef size_t size_type;
+    typedef size_t difference_type;
+
+    typedef value_type& reference;
+    typedef const value_type& const_reference;
+    typedef value_type* pointer;
+    typedef const value_type* const_pointer;
+
+    typedef value_type* iterator;
+    typedef const value_type* const_iterator;
+
+    static const size_type npos = -1;
+
+    basic_string() : data_() { }
+
+    basic_string(const basic_string& str) : data_(str.data_)
+    {
+      if (data_)
+        ++data_->refcnt;
+    }
+
+    basic_string(basic_string&& str) noexcept : data_(str.data_)
+    {
+      str.data_ = nullptr;
+    }
+
+    basic_string(const basic_string& str, size_type pos, size_type n = npos)
+      : basic_string()
+    {
+      append(str, pos, n);
+    }
+
+    basic_string(const charT* s, size_type n) : basic_string()
+    {
+      append(s, n);
+    }
+
+    basic_string(const charT* s) : basic_string()
+    {
+      append(s);
+    }
+
+    basic_string(size_type n, charT c) : basic_string()
+    {
+      append(n, c);
+    }
+
+    template<class InputIterator>
+    basic_string(InputIterator begin, InputIterator end) : basic_string()
+    {
+      append(begin, end);
+    }
+
+    basic_string(initializer_list<charT> il) : basic_string()
+    {
+      append(il.begin(), il.size());
+    }
+
+    ~basic_string()
+    {
+      release();
+    }
+
+    basic_string& operator=(const basic_string& str)
+    {
+      if (&str != this) {
+        release();
+        if ((data_ = str.data_))
+          ++data_->refcnt;
+      }
+      return *this;
+    }
+
+    basic_string& operator=(basic_string &&str) noexcept
+    {
+      release();
+      data_ = str.data_;
+      str.data_ = nullptr;
+      return *this;
+    }
+
+    basic_string& operator=(const charT* s)
+    {
+      clear();
+      return append(s);
+    }
+
+    basic_string& operator=(charT c)
+    {
+      clear();
+      return append(1, c);
+    }
+
+    basic_string& operator=(initializer_list<charT> il)
+    {
+      clear();
+      return append(il.begin(), il.size());
+    }
+
+    iterator begin() noexcept
+    {
+      may_write();
+      if (data_)
+        return &data_->buf[0];
+      return nullptr;
+    }
+
+    const_iterator begin() const noexcept
+    {
+      return cbegin();
+    }
+
+    iterator end() noexcept
+    {
+      may_write();
+      if (data_)
+        return &data_->buf[data_->len];
+      return nullptr;
+    }
+
+    const_iterator end() const noexcept
+    {
+      return cend();
+    }
+
+    // XXX rbegin, rend
+
+    const_iterator cbegin() const noexcept
+    {
+      if (data_)
+        return &data_->buf[0];
+      return nullptr;
+    }
+
+    const_iterator cend() const noexcept
+    {
+      if (data_)
+        return &data_->buf[data_->len];
+      return nullptr;
+    }
+
+    // XXX crbegin, crend
+
+    size_type size() const noexcept
+    {
+      if (data_)
+        return data_->len;
+      return 0;
+    }
+
+    size_type length() const noexcept
+    {
+      return size();
+    }
+
+    size_type max_size() const noexcept
+    {
+      return (size_type)-1;
+    }
+
+    // XXX resize
+
+    size_type capacity() const noexcept
+    {
+      if (data_)
+        return data_->cap;
+      return 0;
+    }
+
+    void reserve(size_type n = 0)
+    {
+      // Make sure there's enough space besides the buffer itself for
+      // the allocator to store a size plus alignment padding, for the
+      // data header, and for a terminating NUL.  As a result, the
+      // allocation will generally be power-of-two friendly and cap
+      // will generally by a power of two minus this padding.
+      const static auto PADDING =
+        2 * sizeof(void*) + offsetof(struct data, buf) + 1;
+      if (n < size())
+        n = size();
+      // Compute a the smallest power-of-two total allocation size
+      // that will fit n.
+      n += PADDING;
+      size_type goal = 16;
+      while (n > goal)
+        goal *= 2;
+      // The new buffer capacity of the total allocation goal minus
+      // the padding we accounting for.
+      size_type ncap = goal - PADDING;
+      if (data_ && ncap == data_->cap)
+        return;
+      // Create new data
+      struct data *ndata = data::alloc(data_, ncap);
+      release();
+      data_ = ndata;
+    }
+
+    void shrink_to_fit()
+    {
+      if (size() == capacity())
+        return;
+      struct data *ndata = data::alloc(data_, capacity());
+      release();
+      data_ = ndata;
+    }
+
+    void clear() noexcept
+    {
+      if (!data_)
+        return;
+      if (data_->refcnt > 1)
+        release();
+      else
+        data_->set_len(0);
+    }
+
+    bool empty() const noexcept
+    {
+      return data_ == nullptr || data_->len == 0;
+    }
+
+    const_reference operator[](size_type pos) const
+    {
+      return *(begin() + pos);
+    }
+
+    reference operator[](size_type pos)
+    {
+      return *(begin() + pos);
+    }
+
+    const_reference at(size_type pos) const
+    {
+      if (pos >= size())
+        throw out_of_range("index out of range");
+      return *(begin() + pos);
+    }
+
+    reference at(size_type pos)
+    {
+      if (pos >= size())
+        throw out_of_range("index out of range");
+      return *(begin() + pos);
+    }
+
+    const charT& front() const
+    {
+      return *begin();
+    }
+
+    charT& front()
+    {
+      return *begin();
+    }
+
+    const charT& back() const
+    {
+      return *(end() - 1);
+    }
+
+    charT& back()
+    {
+      return *(end() - 1);
+    }
+
+    basic_string& operator+=(const basic_string& str)
+    {
+      return append(str);
+    }
+
+    basic_string& operator+=(const charT* s)
+    {
+      return append(s);
+    }
+
+    basic_string& operator+=(charT c)
+    {
+      return append(1, c);
+    }
+
+    basic_string& operator+=(initializer_list<charT> il)
+    {
+      return append(il.first(), il.size());
+    }
+
+    basic_string& append(const basic_string& str)
+    {
+      return append(str.data(), str.size());
+    }
+
+    basic_string& append(const basic_string& str, size_type pos, size_type n)
+    {
+      if (pos > str.size())
+        throw out_of_range("pos out of range");
+      if (n > str.size() - pos)
+        n = str.size() - pos;
+      return append(str.begin() + pos, n);
+    }
+
+    basic_string& append(const charT* s, size_type n)
+    {
+      reserve(size() + n);
+      may_write();
+      memmove(data_->buf + data_->len, s, sizeof(charT)*n);
+      data_->set_len(data_->len + n);
+      return *this;
+    }
+
+    basic_string& append(const charT* s)
+    {
+      // XXX traits::length
+      return append(s, strlen(s));
+    }
+
+    basic_string& append(size_type n, charT c)
+    {
+      reserve(size() + n);
+      may_write();
+      fill(data_->buf + data_->len, data_->buf + data_->len + n, c);
+      data_->set_len(data_->len + n);
+      return *this;
+    }
+
+    template<class InputIterator>
+    basic_string& append(InputIterator first, InputIterator last)
+    {
+      for (; first != last; ++first)
+        push_back(*first);
+      return *this;
+    }
+
+    basic_string& append(initializer_list<charT> il)
+    {
+      return append(il.begin(), il.size());
+    }
+
+    void push_back(charT c)
+    {
+      reserve(size() + 1);
+      may_write();
+      data_->buf[data_->len] = c;
+      data_->set_len(data_->len + 1);
+    }
+
+    // XXX assign, insert, erase
+
+    void pop_back()
+    {
+      if (!empty()) {
+        may_write();
+        data_->set_len(data_->len - 1);
+      }
+    }
+
+    // XXX replace, copy, swap
+
+    const charT* c_str() const noexcept
+    {
+      // We always maintain a NUL terminator
+      return data();
+    }
+
+    const charT* data() const noexcept
+    {
+      return begin();
+    }
+
+    // XXX get_allocator, find, rfind, find_first_of, find_last_of,
+    // find_first_not_of, find_last_not_of, substr
+
+    int compare(const basic_string& str) const noexcept
+    {
+      return compare(0, size(), str.data(), str.size());
+    }
+
+    int compare(size_type pos1, size_type n1,
+                const basic_string& str) const
+    {
+      return compare(pos1, n1, str.data(), str.size());
+    }
+
+    int compare(size_type pos1, size_type n1,
+                const basic_string& str,
+                size_type pos2, size_type n2) const
+    {
+      if (pos2 > str.size())
+        throw out_of_range("compare pos out of range");
+      if (n2 > str.size() - pos2)
+        n2 = str.size() - pos2;
+      return compare(pos1, n1, str.data() + pos2, n2);
+    }
+
+    int compare(const charT* s) const
+    {
+      return compare(0, size(), s);
+    }
+
+    int compare(size_type pos1, size_type n1,
+                const charT* s) const
+    {
+      return compare(pos1, n1, s, strlen(s));
+    }
+
+    int compare(size_type pos1, size_type n1,
+                const charT* s, size_type n2) const
+    {
+      if (pos1 > size())
+        throw out_of_range("compare pos out of range");
+      if (n1 > size() - pos1)
+        n1 = size() - pos1;
+      size_type rlen = n1 < n2 ? n1 : n2;
+      int res = memcmp(data(), s, rlen * sizeof(charT));
+      if (res == 0) {
+        if (n1 < n2)
+          res = -1;
+        else if (n1 > n2)
+          res = 1;
+      }
+      return res;
+    }
+  };
+
+  template<class charT>
+  bool operator==(const basic_string<charT>& a, const basic_string<charT>& b)
+  {
+    return a.compare(b) == 0;
+  }
+
+  template<class charT>
+  bool operator==(const charT* a, const basic_string<charT>& b)
+  {
+    return b.compare(a) == 0;
+  }
+
+  template<class charT>
+  bool operator==(const basic_string<charT>& a, const charT* b)
+  {
+    return a.compare(b) == 0;
+  }
+
+  template<class charT>
+  bool operator!=(const basic_string<charT>& a, const basic_string<charT>& b)
+  {
+    return !(a == b);
+  }
+
+  template<class charT>
+  bool operator!=(const charT* a, const basic_string<charT>& b)
+  {
+    return !(a == b);
+  }
+
+  template<class charT>
+  bool operator!=(const basic_string<charT>& a, const charT* b)
+  {
+    return !(a == b);
+  }
+
+  template<class charT>
+  bool operator<(const basic_string<charT>& a, const basic_string<charT>& b)
+  {
+    return a.compare(b) < 0;
+  }
+
+  template<class charT>
+  bool operator<(const charT* a, const basic_string<charT>& b)
+  {
+    return b.compare(a) > 0;
+  }
+
+  template<class charT>
+  bool operator<(const basic_string<charT>& a, const charT* b)
+  {
+    return a.compare(b) < 0;
+  }
+
+  template<class charT>
+  bool operator>(const basic_string<charT>& a, const basic_string<charT>& b)
+  {
+    return a.compare(b) > 0;
+  }
+
+  template<class charT>
+  bool operator>(const charT* a, const basic_string<charT>& b)
+  {
+    return b.compare(a) < 0;
+  }
+
+  template<class charT>
+  bool operator>(const basic_string<charT>& a, const charT* b)
+  {
+    return a.compare(b) > 0;
+  }
+
+  template<class charT>
+  bool operator<=(const basic_string<charT>& a, const basic_string<charT>& b)
+  {
+    return a.compare(b) <= 0;
+  }
+
+  template<class charT>
+  bool operator<=(const charT* a, const basic_string<charT>& b)
+  {
+    return b.compare(a) >= 0;
+  }
+
+  template<class charT>
+  bool operator<=(const basic_string<charT>& a, const charT* b)
+  {
+    return a.compare(b) <= 0;
+  }
+
+  template<class charT>
+  bool operator>=(const basic_string<charT>& a, const basic_string<charT>& b)
+  {
+    return a.compare(b) >= 0;
+  }
+
+  template<class charT>
+  bool operator>=(const charT* a, const basic_string<charT>& b)
+  {
+    return b.compare(a) <= 0;
+  }
+
+  template<class charT>
+  bool operator>=(const basic_string<charT>& a, const charT* b)
+  {
+    return a.compare(b) >= 0;
+  }
+
+
+  template<class charT>
+  basic_string<charT> operator+(const basic_string<charT>& lhs,
+                                const basic_string<charT>& rhs)
+  {
+    basic_string<charT> o(lhs);
+    return o.append(rhs);
+  }
+
+  template<class charT>
+  basic_string<charT> operator+(basic_string<charT>&& lhs,
+                                const basic_string<charT>& rhs)
+  {
+    return lhs.append(rhs);
+  }
+
+  template<class charT>
+  basic_string<charT> operator+(const charT* lhs,
+                                const basic_string<charT>& rhs)
+  {
+    basic_string<charT> o(lhs);
+    return o.append(rhs);
+  }
+
+  template<class charT>
+  basic_string<charT> operator+(charT lhs,
+                                const basic_string<charT>& rhs)
+  {
+    basic_string<charT> o(1, lhs);
+    return o.append(rhs);
+  }
+  
+  template<class charT>
+  basic_string<charT> operator+(const basic_string<charT>& lhs,
+                                const charT* rhs)
+  {
+    basic_string<charT> o(lhs);
+    return o.append(rhs);
+  }
+
+  template<class charT>
+  basic_string<charT> operator+(basic_string<charT>&& lhs,
+                                const charT* rhs)
+  {
+    return lhs.append(rhs);
+  }
+
+  template<class charT>
+  basic_string<charT> operator+(const basic_string<charT>& lhs,
+                                const charT rhs)
+  {
+    basic_string<charT> o(lhs);
+    return o.append(1, rhs);
+  }
+
+  template<class charT>
+  basic_string<charT> operator+(basic_string<charT>&& lhs,
+                                const charT rhs)
+  {
+    return lhs.append(1, rhs);
+  }
+
+  typedef basic_string<char> string;
+}

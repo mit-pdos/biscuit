@@ -1,0 +1,56 @@
+// -*- c++ -*-
+
+#pragma once
+
+namespace std {
+#define __binop(RESULT, NAME, OP)                                       \
+  template <class T>                                                    \
+  struct NAME {                                                         \
+    RESULT operator()(const T& x, const T& y) const { return x OP y; }  \
+    typedef T first_argument_type;                                      \
+    typedef T second_argument_type;                                     \
+    typedef RESULT result_type;                                         \
+  }
+#define __binop_T(NAME, OP) __binop(T, NAME, OP)
+#define __binop_bool(NAME, OP) __binop(bool, NAME, OP)
+
+  // [C++11 20.8.4] Arithmetic operations
+  __binop_T(plus, +);
+  __binop_T(minus, -);
+  __binop_T(multiplies, *);
+  __binop_T(divides, /);
+  __binop_T(modulus, %);
+  template <class T>
+  struct negate {
+    T operator()(const T& x) const { return -x; }
+    typedef T argument_type;
+    typedef T result_type;
+  };
+
+  // [C++11 20.8.5] Comparisons
+  __binop_bool(equal_to, ==);
+  __binop_bool(not_equal_to, !=);
+  __binop_bool(greater, >);
+  __binop_bool(less, <);
+  __binop_bool(greater_equal, >=);
+  __binop_bool(less_equal, <=);
+
+  // [C++11 20.8.6] Logical operations
+  __binop_bool(logical_and, &&);
+  __binop_bool(logical_or, ||);
+  template <class T>
+  struct logical_not {
+    bool operator()(const T& x) const { return !x; }
+    typedef T argument_type;
+    typedef bool result_type;
+  };
+
+  // [C++11 20.8.7] Bitwise operations
+  __binop_T(bit_and, &);
+  __binop_T(bit_or, |);
+  __binop_T(bit_xor, ^);
+
+#undef __binop_bool
+#undef __binop_T
+#undef __binop
+}

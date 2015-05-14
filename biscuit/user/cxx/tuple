@@ -1,0 +1,114 @@
+// -*- c++ -*-
+// C++11 20.4
+#pragma once
+
+#include <cstddef>
+#include <utility>
+
+namespace std {
+  //
+  // tuple
+  //
+
+  template <class... Types>
+  class tuple;
+
+  template <class T0, class... TN>
+  class tuple<T0, TN...>
+  {
+    T0 car_;
+    tuple<TN...> cdr_;
+
+    template<size_t, typename...>
+    friend struct __get_impl;
+
+  public:
+    constexpr tuple() : car_(), cdr_() { }
+
+    explicit tuple(const T0& car, const TN&... cdr)
+      : car_(car), cdr_(tuple<TN...>(cdr...)) { }
+
+    template<class UType0, class... UTypes>
+    explicit tuple(UType0 &&car, UTypes&&... cdr)
+      : car_(std::forward<UType0>(car)),
+        cdr_(tuple<TN...>(std::forward<UTypes>(cdr)...)) { }
+
+    tuple(const tuple&) = default;
+    tuple(tuple&&) = default;
+
+    tuple& operator=(const tuple&) = default;
+    tuple& operator=(tuple&&) = default;
+
+    void swap(tuple& rhs)
+    {
+      swap(car_, rhs.car_);
+      swap(cdr_, rhs.cdr_);
+    }
+  };
+
+  template <>
+  class tuple<>
+  {
+  public:
+    constexpr tuple() { }
+    void swap(tuple& rhs) { }
+  };
+
+  //
+  // tuple_element
+  //
+
+  template <size_t I, class... Types>
+  class tuple_element;
+
+  template <class T0, class... TN>
+  class tuple_element<0, tuple<T0, TN...> > {
+  public:
+    typedef T0 type;
+  };
+
+  template <size_t I, class T0, class... TN>
+  class tuple_element<I, tuple<T0, TN...> >
+    : public tuple_element<I - 1, tuple<TN...> > { };
+
+  //
+  // get
+  //
+
+  template <size_t I, class... Types>
+  struct __get_impl;
+
+  template <class T0, class... TN>
+  struct __get_impl<0, T0, TN...>
+  {
+    static T0 &get(tuple<T0, TN...>& t) noexcept
+    {
+      return t.car_;
+    }
+  };
+
+  template <size_t I, class T0, class... TN>
+  struct __get_impl<I, T0, TN...>
+  {
+    static typename tuple_element<I, tuple<T0, TN...> >::type&
+    get(tuple<T0, TN...>& t) noexcept
+    {
+      return __get_impl<I - 1, TN...>::get(t.cdr_);
+    }
+  };
+
+  template <size_t I, class... Types>
+  typename tuple_element<I, tuple<Types...> >::type& get(tuple<Types...>& t)
+    noexcept
+  {
+    return __get_impl<I, Types...>::get(t);
+  }
+
+  template <size_t I, class... Types>
+  typename tuple_element<I, tuple<Types...> >::type&& get(tuple<Types...>&& t)
+    noexcept
+  {
+    return std::forward<typename tuple_element<I, tuple<Types...> >
+                        ::type&&>(get<I>(t));
+  }
+}

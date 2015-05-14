@@ -1,0 +1,144 @@
+// -*- c++ -*-
+// C++11 30
+#pragma once
+
+#include <utility>
+#include "bind.hh"
+
+namespace std
+{
+  class thread
+  {
+  public:
+    class id
+    {
+      int thread_;
+
+      friend class thread;
+      explicit id(int thread) noexcept : thread_(thread) { }
+
+    public:
+      id() noexcept : thread_(-1) { }
+
+      friend bool operator==(thread::id x, thread::id y) noexcept
+      {
+        return x.thread_ == y.thread_;
+      }
+
+      friend bool operator!=(thread::id x, thread::id y) noexcept
+      {
+        return x.thread_ != y.thread_;
+      }
+
+      friend bool operator<(thread::id x, thread::id y) noexcept
+      {
+        return x.thread_ < y.thread_;
+      }
+
+      friend bool operator<=(thread::id x, thread::id y) noexcept
+      {
+        return x.thread_ <= y.thread_;
+      }
+
+      friend bool operator>(thread::id x, thread::id y) noexcept
+      {
+        return x.thread_ > y.thread_;
+      }
+
+      friend bool operator>=(thread::id x, thread::id y) noexcept
+      {
+        return x.thread_ >= y.thread_;
+      }
+
+      static id __get_this_thread_id() noexcept;
+    };
+
+  private:
+    id id_;
+
+    class vrun
+    {
+    public:
+      virtual ~vrun() { }
+      virtual void run() = 0;
+    };
+
+    template<class CB>
+    class vruncb : public vrun
+    {
+      CB cb_;
+    public:
+      vruncb(CB&& cb) : cb_(forward<CB>(cb)) { }
+      void run() override
+      {
+        cb_();
+      }
+    };
+
+    template<class CB>
+    static vrun *make_vrun(CB&& cb)
+    {
+      return new vruncb<CB>(forward<CB>(cb));
+    }
+
+    static void *vrun_wrapper(void *opaque);
+
+    thread(vrun *r);
+
+  public:
+    thread() noexcept { }
+
+    template<class F, class ...Args>
+    explicit thread(F&& f, Args&&... args)
+      : thread(make_vrun(bind_simple(forward<F>(f), forward<Args>(args)...)))
+    { }
+
+    thread(thread&& x) noexcept : id_(x.id_)
+    {
+      x.id_ = id();
+    }
+
+    ~thread();
+
+    thread& operator=(thread&& x) noexcept;
+
+    void swap(thread& x) noexcept
+    {
+      thread tmp(move(*this));
+      *this = move(x);
+      x = move(tmp);
+    }
+
+    bool joinable() const noexcept
+    {
+      return get_id() != id();
+    }
+
+    void join();
+
+    // void detach();
+
+    id get_id() const noexcept
+    {
+      return id_;
+    }
+
+    static hardware_concurrency() noexcept
+    {
+      return NCPU;
+    }
+  };
+
+  static inline void swap(thread& x, thread& y) noexcept
+  {
+    x.swap(y);
+  }
+
+  namespace this_thread
+  {
+    static inline thread::id get_id() noexcept
+    {
+      return thread::id::__get_this_thread_id();
+    }
+  }
+}

@@ -1,0 +1,90 @@
+// -*- c++ -*-
+// C++11 19.2
+#pragma once
+
+#include <exception>
+#include <string>
+
+namespace std
+{
+  class __base_error : public exception
+  {
+    const char *msg_;
+    string str_;
+  public:
+    explicit __base_error(const char *what_arg)
+      : msg_(what_arg) { }
+    explicit __base_error(const string &what_arg)
+      : msg_(nullptr), str_(what_arg) { }
+    ~__base_error() noexcept { }
+    virtual const char *what() const noexcept
+    {
+      if (msg_)
+        return msg_;
+      return str_.c_str();
+    }
+  };
+
+  class logic_error : public __base_error
+  {
+  public:
+    explicit logic_error(const char* what_arg) : __base_error(what_arg) { }
+    explicit logic_error(const string& what_arg) : __base_error(what_arg) { }
+  };
+
+  class domain_error : public logic_error
+  {
+  public:
+    explicit domain_error(const char* what_arg) : logic_error(what_arg) { }
+    explicit domain_error(const string& what_arg) : logic_error(what_arg) { }
+  };
+
+  class invalid_argument : public logic_error
+  {
+  public:
+    explicit invalid_argument(const char* what_arg) : logic_error(what_arg) { }
+    explicit invalid_argument(const string& what_arg) : logic_error(what_arg) { }
+  };
+
+  class length_error : public logic_error
+  {
+  public:
+    explicit length_error(const char* what_arg) : logic_error(what_arg) { }
+    explicit length_error(const string& what_arg) : logic_error(what_arg) { }
+  };
+
+  class out_of_range : public logic_error
+  {
+  public:
+    explicit out_of_range(const char* what_arg) : logic_error(what_arg) { }
+    explicit out_of_range(const string& what_arg) : logic_error(what_arg) { }
+  };
+
+  class runtime_error : public __base_error
+  {
+  public:
+    explicit runtime_error(const char* what_arg) : __base_error(what_arg) { }
+    explicit runtime_error(const string& what_arg) : __base_error(what_arg) { }
+  };
+
+  class range_error : public runtime_error
+  {
+  public:
+    explicit range_error(const char* what_arg) : runtime_error(what_arg) { }
+    explicit range_error(const string& what_arg) : runtime_error(what_arg) { }
+  };
+
+  class overflow_error : public runtime_error
+  {
+  public:
+    explicit overflow_error(const char* what_arg) : runtime_error(what_arg) { }
+    explicit overflow_error(const string& what_arg) : runtime_error(what_arg) { }
+  };
+
+  class underflow_error : public runtime_error
+  {
+  public:
+    explicit underflow_error(const char* what_arg) : runtime_error(what_arg) { }
+    explicit underflow_error(const string& what_arg) : runtime_error(what_arg) { }
+  };
+}

@@ -6,7 +6,7 @@ TOP := .
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -m32
 CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -fno-stack-protector -fno-builtin
-CXXFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -fno-stack-protector -fno-builtin
+CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-stack-protector -fno-builtin
 
 # bootloader sources
 ASMS := boot.S
@@ -25,9 +25,9 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
-CXXBINS := 
+CXXBINS := #mail-enqueue
 FSCXXPROGS := $(addprefix fsdir/bin/,$(CXXBINS))
-CXXPROGS := $(addprefix user/c++/,$(CXXBINS))
+CXXPROGS := $(addprefix user/cxx/,$(CXXBINS))
 
 FSPROGS := $(FSCPROGS) $(FSCXXPROGS)
 
@@ -108,14 +108,22 @@ $(CPROGS): % : %.c user/c/litc.o
 	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld \
 	    -Wl,-n -o $@ $< user/c/litc.o
 
-$(FSCXXPROGS): fsdir/bin/% : user/c++/%
+$(FSCXXPROGS): fsdir/bin/% : user/cxx/%
 	objcopy -S $^ $@
 
-$(CXXPROGS): CXXFLAGS += -I user/c++/ -I user/c/ \
-		-fPIC
-$(CXXPROGS): % : %.cc user/c/litc.o
-	$(CXX) $(CXXFLAGS) -Wl,-T user/c++/linker.ld \
-	    -Wl,-n -o $@ $< user/c/litc.o
+CXXLOBJS := user/c/litc.o user/cxx/libutil.o user/cxx/shutil.o
+$(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/ -isysroot user/cxx/sysroot \
+		-fPIC -DXV6_USER -std=c++11
+$(CXXPROGS): % : %.cc  $(CXXLOBJS) user/cxx/sysroot
+	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld \
+	    -Wl,-n -o $@ $< $(CXXLOBJS)
+
+user/cxx/sysroot: user/cxx/host_hdrs.hh
+	rm -rf $@.tmp $@
+	mkdir -p $@.tmp
+	tar c $$($(CXX) -E -H -std=c++0x -ffreestanding $< -o /dev/null 2>&1 \
+		| awk '/^[.]/ {print $$2}') | tar xC $@.tmp
+	mv $@.tmp $@
 
 mpentry.bin: mpentry.S
 	$(CC) -o mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
@@ -137,7 +145,8 @@ chentry: chentry.c
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
-	    user/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf
+	    user/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
+	rm -rf user/cxx/sysroot
 
 qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img

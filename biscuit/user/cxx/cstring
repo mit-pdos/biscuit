@@ -1,0 +1,5 @@
+// -*- c++ -*-
+// C++11 20.6.13
+#pragma once
+
+#include "string.h"

@@ -1,0 +1,52 @@
+// -*- c++ -*-
+// C++11 18.6, minus new_handler
+#pragma once
+
+#include <exception>
+
+namespace std {
+  class bad_alloc : public exception
+  {
+  public:
+    bad_alloc() noexcept { }
+    bad_alloc(const bad_alloc&) noexcept { }
+    bad_alloc& operator=(const bad_alloc&) noexcept
+    {
+      return *this;
+    }
+    virtual const char* what() const noexcept
+    {
+      return "allocation failed";
+    }
+  };
+
+  class bad_array_new_length : public bad_alloc
+  {
+  public:
+    bad_array_new_length() noexcept { }
+  };
+
+  struct nothrow_t {
+    nothrow_t() {}
+  };
+
+  extern const nothrow_t nothrow;
+
+  //typedef void (*new_handler)();
+  //new_handler get_new_handler() noexcept;
+  //new_handler set_new_handler(new_handler new_p) noexcept;
+}
+
+void* operator new(std::size_t size);                                  
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept;  
+void  operator delete(void* ptr);
+void  operator delete(void* ptr, const std::nothrow_t&) noexcept;      
+void* operator new[](std::size_t size);                                
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept;
+void  operator delete[](void* ptr);
+void  operator delete[](void* ptr, const std::nothrow_t&) noexcept;
+
+void* operator new(std::size_t size, void* ptr) noexcept;
+void* operator new[](std::size_t size, void* ptr) noexcept;
+void  operator delete(void* ptr, void*) noexcept;
+void  operator delete[](void* ptr, void*) noexcept;
