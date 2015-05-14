@@ -78,6 +78,8 @@ void
 exit(int status)
 {
 	syscall(status, 0, 0, 0, 0, SYS_EXIT);
+	errx(-1, "exit returned");
+	while(1);
 }
 
 int
@@ -127,6 +129,13 @@ link(const char *old, const char *new)
 	return syscall(SA(old), SA(new), 0, 0, 0, SYS_LINK);
 }
 
+off_t
+lseek(int fd, off_t off, int whence)
+{
+	errx(-1, "lseek: no imp");
+	return 0;
+}
+
 int
 mkdir(const char *p, long mode)
 {
@@ -149,7 +158,7 @@ munmap(void *addr, size_t len)
 }
 
 int
-open(const char *path, int flags, int mode)
+open(const char *path, int flags, mode_t mode)
 {
 	return syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
 }
@@ -202,7 +211,7 @@ wait4(int pid, int *status, int options, void *rusage)
 }
 
 long
-write(int fd, void *buf, size_t c)
+write(int fd, const void *buf, size_t c)
 {
 	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
 }
@@ -582,7 +591,7 @@ rdtsc(void)
 }
 
 char *
-readline(char *prompt)
+readline(const char *prompt)
 {
 	if (prompt)
 		printf("%s", prompt);

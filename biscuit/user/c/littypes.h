@@ -4,9 +4,12 @@ typedef unsigned short ushort;
 typedef unsigned int uint;
 typedef unsigned long ulong;
 typedef unsigned long size_t;
-typedef unsigned long time_t;
-
+typedef long ssize_t;
 typedef unsigned long uint64_t;
+
+typedef unsigned long time_t;
+typedef unsigned long mode_t;
+typedef long off_t;
 
 #define NULL   ((void *)0)
 
