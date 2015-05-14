@@ -103,11 +103,10 @@ main.gobin: chentry $(GOBIN) bins.go $(KSRC)
 $(FSCPROGS): fsdir/bin/% : user/c/%
 	objcopy -S $^ $@
 
-CLOBJS := user/c/litc.o user/c/entry.o
 $(CPROGS): CFLAGS += -I user/c/ -fPIC
-$(CPROGS): % : %.c $(CLOBJS)
+$(CPROGS): % : %.c user/c/litc.o
 	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld \
-	    -Wl,-n -o $@ $< $(CLOBJS)
+	    -Wl,-n -o $@ $< user/c/litc.o
 
 $(FSCXXPROGS): fsdir/bin/% : user/c++/%
 	objcopy -S $^ $@
