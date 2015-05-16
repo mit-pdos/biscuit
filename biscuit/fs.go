@@ -242,8 +242,9 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 	return ret, 0
 }
 
-// XXX log files that have no fs links but > 0 memory references to the journal
-// so that if we crash before freeing its blocks, the blocks can be reclaimed.
+// XXX log those files that have no fs links but > 0 memory references to the
+// journal so that if we crash before freeing its blocks, the blocks can be
+// reclaimed.
 func fs_close(f *file_t, perms int) int {
 	op_begin()
 	defer op_end()

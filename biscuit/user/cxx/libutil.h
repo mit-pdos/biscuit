@@ -25,3 +25,6 @@ int setaffinity(int c);
 		errx(-1, "assert failed: " #x " (%s:%d)\n", f, l);	\
 	} while (0)
 
+
+#define		STAT_OMIT_NLINK		0
+#define fstatx(a, b, c)		fstat(a, b)

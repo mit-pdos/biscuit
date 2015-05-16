@@ -4,9 +4,10 @@ PYTHON ?= python2
 TOP := .
 
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
-ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP) -m32
+ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP)
 CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -fno-stack-protector -fno-builtin
-CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-stack-protector -fno-builtin
+CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-stack-protector \
+	    -fno-builtin
 
 # bootloader sources
 ASMS := boot.S
@@ -25,7 +26,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
-CXXBINS := #mail-enqueue
+CXXBINS := mail-enqueue
 FSCXXPROGS := $(addprefix fsdir/bin/,$(CXXBINS))
 CXXPROGS := $(addprefix user/cxx/,$(CXXBINS))
 
@@ -60,6 +61,8 @@ boot: boot.o bootmain.o
 	objcopy -O binary $@.elf $@.bin
 	$(PYTHON) stamp.py $@.bin
 	mv $@.bin $@
+
+boot.o: ASFLAGS += -m32
 
 bootmain.o: CFLAGS += -I$(TOP)
 bootmain.o: bootmain.c
@@ -111,12 +114,19 @@ $(CPROGS): % : %.c user/c/litc.o
 $(FSCXXPROGS): fsdir/bin/% : user/cxx/%
 	objcopy -S $^ $@
 
-CXXLOBJS := user/c/litc.o user/cxx/libutil.o user/cxx/shutil.o
+CXXRT := $(shell $(CC) -print-file-name=libgcc_eh.a) \
+	 $(shell $(CC) -print-file-name=libsupc++.a)
+
+CXXLOBJS := user/cxx/libutil.o user/cxx/shutil.o user/cxx/cxxrt.o user/c/litc.o
+$(CXXLOBJS): user/cxx/sysroot
+
+CXXBEGIN := user/cxx/cxxrtbegin.o
+CXXEND := user/cxx/cxxrtend.o
 $(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/ -isysroot user/cxx/sysroot \
 		-fPIC -DXV6_USER -std=c++11
-$(CXXPROGS): % : %.cc  $(CXXLOBJS) user/cxx/sysroot
+$(CXXPROGS): % : %.cc  $(CXXLOBJS) $(CXXBEGIN) $(CXXEND) user/cxx/sysroot
 	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld \
-	    -Wl,-n -o $@ $< $(CXXLOBJS)
+	    -Wl,-n -o $@ $(CXXBEGIN) $< $(CXXLOBJS) $(CXXRT) $(CXXEND)
 
 user/cxx/sysroot: user/cxx/host_hdrs.hh
 	rm -rf $@.tmp $@
@@ -146,6 +156,7 @@ clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
 	    user/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
+	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS)
 	rm -rf user/cxx/sysroot
 
 qemu: d.img

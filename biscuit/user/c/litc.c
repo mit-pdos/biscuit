@@ -11,6 +11,8 @@
 #define SYS_PIPE         22
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
+#define SYS_SOCKET       41
+#define SYS_SENDTO       44
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
@@ -182,6 +184,28 @@ read(int fd, void *buf, size_t c)
 }
 
 int
+rename(const char *old, const char *new)
+{
+	errx(-1, "rename: no imp");
+	return 0;
+}
+
+ssize_t
+sendto(int fd, const void *buf, size_t len, int flags,
+    const struct sockaddr *sa, socklen_t slen)
+{
+	errx(-1, "sendto: no imp");
+	return syscall(0, 0, 0, 0, 0, SYS_SENDTO);
+}
+
+int
+socket(int dom, int type, int proto)
+{
+	errx(-1, "socket: no imp");
+	return syscall(SA(dom), SA(type), SA(proto), 0, 0, SYS_SOCKET);
+}
+
+int
 unlink(const char *path)
 {
 	return syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
@@ -288,6 +312,8 @@ mkstack(size_t size)
 int
 pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *arg)
 {
+	if (attrs != NULL)
+		errx(-1, "pthread_create: attrs not yet supported");
 	t->stack = NULL;
 	// XXX setup guard page
 	const long stksz = 4096;
@@ -315,6 +341,36 @@ pthread_join(pthread_t t, void **retval)
 	if (ret < 0)
 		return ret;
 	return 0;
+}
+
+int
+pthread_mutex_lock(pthread_mutex_t *m)
+{
+	errx(-1, "pthread_mutex_lock: no imp");
+	return 0;
+}
+
+int
+pthread_mutex_unlock(pthread_mutex_t *m)
+{
+	errx(-1, "pthread_mutex_unlock: no imp");
+	return 0;
+}
+
+int
+pthread_once(pthread_once_t *octl, void (*fn)(void))
+{
+	errx(-1, "pthread_once: no imp");
+	return 0;
+}
+
+/*
+ * libc
+ */
+void
+abort(void)
+{
+	errx(-1, "abort");
 }
 
 int
@@ -391,10 +447,32 @@ fprintf(FILE *f, const char *fmt, ...)
 	return ret;
 }
 
+int optind;
+
+int
+getopt(int argc, char * const *argv, const char *optstring)
+{
+	errx(-1, "getopt: no imp");
+	return 0;
+}
+
 int
 gettimeofday(struct timeval *tv, struct timezone *tz)
 {
 	errx(-1, "gettimeofday: no imp");
+	return 0;
+}
+
+void *
+memcpy(void *dst, const void *src, size_t n)
+{
+	return memmove(dst, src, n);
+}
+
+void *
+memmove(void *dst, const void *src, size_t n)
+{
+	errx(-1, "memmove: no imp");
 	return 0;
 }
 
@@ -409,12 +487,20 @@ memset(void *d, int c, size_t n)
 }
 
 size_t
-strlen(char *msg)
+strlen(const char *msg)
 {
 	size_t ret = 0;
 	while (*msg++)
 		ret++;
 	return ret;
+}
+
+int
+strcmp(const char *s1, const char *s2)
+{
+	while (*s1 && *s1 == *s2)
+		s1++, s2++;
+	return *s1 - *s2;
 }
 
 int

@@ -52,6 +52,7 @@
 /user/c/usertests
 /user/c/thtests
 /user/c/pthtests
+/user/cxx/mail-enqueue
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -88,3 +89,4 @@
 /fsdir/bin/usertests
 /fsdir/bin/thtests
 /fsdir/bin/pthtests
+/fsdir/bin/mail-enqueue

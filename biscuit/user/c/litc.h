@@ -43,14 +43,28 @@ extern "C" {
 /*
  * system calls
  */
-struct __attribute__((packed)) stat {
+struct sockaddr {
+	uchar	sa_len;
+	uchar	sa_family;
+	char	sa_data[14];
+};
+
+struct sockaddr_un {
+	uchar	sun_len;
+	uchar	sun_family;
+	char	sun_path[104];
+};
+
+#define		SUN_LEN(x)	(sizeof(struct sockaddr_un))
+
+struct stat {
 	ulong	st_dev;
 	ulong	st_ino;
 	ulong	st_mode;
 	ulong	st_size;
 };
 
-struct __attribute__((packed)) tfork_t {
+struct tfork_t {
 	void *tf_tcb;
 	void *tf_tid;
 	void *tf_stack;
@@ -91,6 +105,18 @@ int open(const char *, int, mode_t);
 int pause(void);
 int pipe(int *);
 long read(int, void*, size_t);
+int rename(const char *, const char *);
+ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
+    socklen_t);
+int socket(int, int, int);
+#define		AF_UNIX		1
+#define		AF_INET		2
+
+#define		SOCK_STREAM	1
+#define		SOCK_DGRAM	2
+#define		SOCK_RAW	3
+#define		SOCK_SEQPACKET	5
+
 int unlink(const char *);
 int wait(int *);
 int wait4(int, int *, int, void *);
@@ -112,8 +138,17 @@ typedef struct {
 typedef struct {
 } pthread_attr_t;
 
+typedef struct {
+} pthread_mutex_t;
+
+typedef struct {
+} pthread_once_t;
+
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
+int pthread_mutex_lock(pthread_mutex_t *);
+int pthread_mutex_unlock(pthread_mutex_t *);
+int pthread_once(pthread_once_t *, void (*)(void));
 
 /*
  * libc
@@ -131,6 +166,7 @@ struct timeval {
 struct timezone {
 };
 
+void abort(void);
 int atoi(const char *);
 ulong atoul(const char *);
 void err(int, const char *, ...)
@@ -139,7 +175,12 @@ void errx(int, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
+int getopt(int, char * const *, const char *);
+extern int optind;
+
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+void *memcpy(void *, const void *, size_t);
+void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);
 int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
@@ -148,7 +189,8 @@ char *readline(const char *);
 int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
 char *strncpy(char *, const char *, size_t);
-size_t strlen(char *);
+size_t strlen(const char *);
+int strcmp(const char *, const char *);
 int strncmp(const char *, const char *, size_t);
 char *strstr(const char *, const char *);
 int vfprintf(FILE *, const char *, va_list)
