@@ -10,6 +10,10 @@ void mkargs(char *line, char *args[], size_t n)
 	for (ai = 0; line && ai < n - 1; ai++) {
 		if (be - bp <= 0)
 			errx(-1, "no boof");
+		while (*line == ' ')
+			line++;
+		if (*line == 0)
+			break;
 		args[ai] = bp;
 		f = strstr(line, " ");
 		if (f)
@@ -84,7 +88,7 @@ int main(int argc, char **argv)
 			errx(-1, "no such binary: %s", args[0]);
 		int ret = execv(bin, args);
 		if (ret)
-			errx(ret, "couldn't exec \"%s\"\n", p);
+			err(ret, "couldn't exec \"%s\"\n", p);
 	}
 
 	return 0;
