@@ -296,6 +296,7 @@ func cdelay(n int) {
 }
 
 type file_t struct {
+	ftype	ftype_t
 	priv	inum
 	pipe	pipe_t
 }
@@ -313,19 +314,18 @@ const(
 )
 
 type fd_t struct {
-	ftype	ftype_t
 	file	*file_t
 	offset	int
 	perms	int
 	sync.Mutex
 }
 
-var dummyfile	= file_t{priv: -1}
+var dummyfile	= file_t{ftype: CDEV, priv: -1}
 
 // special fds
-var fd_stdin 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_READ}
-var fd_stdout 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_WRITE}
-var fd_stderr 	= fd_t{ftype: CDEV, file: &dummyfile, perms: FD_WRITE}
+var fd_stdin 	= fd_t{file: &dummyfile, perms: FD_READ}
+var fd_stdout 	= fd_t{file: &dummyfile, perms: FD_WRITE}
+var fd_stderr 	= fd_t{file: &dummyfile, perms: FD_WRITE}
 
 type ulimit_t struct {
 	pages	int
@@ -461,7 +461,7 @@ func proc_del(pid int) {
 	proclock.Unlock()
 }
 
-func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
+func (p *proc_t) fd_new(perms int) (int, *fd_t) {
 	// find free fd
 	newfd := p.fdstart
 	for {
@@ -473,7 +473,6 @@ func (p *proc_t) fd_new(t ftype_t, perms int) (int, *fd_t) {
 	}
 	fdn := newfd
 	fd := &fd_t{}
-	fd.ftype = t
 	fd.perms = perms
 	if _, ok := p.fds[fdn]; ok {
 		panic(fmt.Sprintf("new fd exists %d", fdn))

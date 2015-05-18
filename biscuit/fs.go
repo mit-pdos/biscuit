@@ -81,7 +81,7 @@ func fs_init() *file_t {
 	fs_recover()
 	go log_daemon(&fslog)
 
-	return &file_t{priv: ri}
+	return &file_t{ftype: INODE, priv: ri}
 }
 
 func fs_recover() {
@@ -214,7 +214,8 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	return resp.err
 }
 
-func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
+func fs_open(paths string, flags int, mode int, cwdf *file_t,
+    major, minor int) (*file_t, int) {
 	if flags & O_CREAT != 0 {
 		if paths == "/" {
 			return nil, -EPERM
@@ -229,7 +230,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 		}
 		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
-		return &file_t{priv: resp.cnext}, resp.err
+		return &file_t{ftype: INODE, priv: resp.cnext}, resp.err
 	}
 
 	// send inum get request
@@ -238,7 +239,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t) (*file_t, int) {
 		return nil, err
 	}
 
-	ret := &file_t{priv: priv}
+	ret := &file_t{ftype: INODE, priv: priv}
 	return ret, 0
 }
 
@@ -295,11 +296,6 @@ func namei(paths string, cwd inum, flags int) (inum, int) {
 	req_namei(req, paths, cwd)
 	resp := <- req.ack
 	return resp.gnext, resp.err
-}
-
-func file_new(priv inum) *file_t {
-	ret := &file_t{priv: priv}
-	return ret
 }
 
 type idaemon_t struct {

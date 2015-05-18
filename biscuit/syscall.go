@@ -243,7 +243,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
-	if _, ok := fdreaders[fd.ftype]; !ok {
+	if _, ok := fdreaders[fd.file.ftype]; !ok {
 		panic("no imp")
 	}
 	if fd.perms & FD_READ == 0 {
@@ -267,12 +267,12 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		c += len(dst)
 	}
 
-	if fd.ftype == INODE {
+	if fd.file.ftype == INODE {
 		fd.Lock()
 		defer fd.Unlock()
 	}
 
-	ret, err := fdreaders[fd.ftype](dsts, fd.file, fd.offset)
+	ret, err := fdreaders[fd.file.ftype](dsts, fd.file, fd.offset)
 	if err != 0 {
 		return err
 	}
@@ -291,10 +291,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.perms & FD_WRITE == 0 {
 		return -EPERM
 	}
-	if _, ok := fdwriters[fd.ftype]; !ok {
+	if _, ok := fdwriters[fd.file.ftype]; !ok {
 		panic("no imp")
 	}
-	if fd.ftype == INODE {
+	if fd.file.ftype == INODE {
 		fd.Lock()
 		defer fd.Unlock()
 	}
@@ -314,7 +314,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		srcs = append(srcs, src)
 		c += len(src)
 	}
-	ret, err := fdwriters[fd.ftype](srcs, fd.file, fd.offset, apnd)
+	ret, err := fdwriters[fd.file.ftype](srcs, fd.file, fd.offset, apnd)
 	if err != 0 {
 		return err
 	}
@@ -349,11 +349,11 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if err != 0 {
 		return err
 	}
-	file, err := fs_open(path, flags, mode, proc.cwd)
+	file, err := fs_open(path, flags, mode, proc.cwd, 0, 0)
 	if err != 0 {
 		return err
 	}
-	fdn, fd := proc.fd_new(INODE, fdperms)
+	fdn, fd := proc.fd_new(fdperms)
 	switch {
 	case flags & O_APPEND != 0:
 		fd.perms |= O_APPEND
@@ -374,10 +374,10 @@ func sys_close(proc *proc_t, fdn int) int {
 	if !ok {
 		return -EBADF
 	}
-	if _, ok := fdclosers[fd.ftype]; !ok {
+	if _, ok := fdclosers[fd.file.ftype]; !ok {
 		panic("no imp")
 	}
-	ret := file_close(fd.ftype, fd.file, fd.perms)
+	ret := file_close(fd.file, fd.perms)
 	delete(proc.fds, fdn)
 	if fdn < proc.fdstart {
 		proc.fdstart = fdn
@@ -385,8 +385,8 @@ func sys_close(proc *proc_t, fdn int) int {
 	return ret
 }
 
-func file_close(ft ftype_t, f *file_t, perms int) int {
-	return fdclosers[ft](f, perms)
+func file_close(f *file_t, perms int) int {
+	return fdclosers[f.ftype](f, perms)
 }
 
 func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
@@ -476,8 +476,8 @@ func sys_pipe(proc *proc_t, pipen int) int {
 	if !ok {
 		return -EFAULT
 	}
-	rfd, rf := proc.fd_new(PIPE, FD_READ)
-	wfd, wf := proc.fd_new(PIPE, FD_WRITE)
+	rfd, rf := proc.fd_new(FD_READ)
+	wfd, wf := proc.fd_new(FD_WRITE)
 
 	pipef := pipe_new()
 	rf.file = pipef
@@ -505,6 +505,7 @@ func pipe_new() *file_t {
 	outsz := make(chan int)
 	writers := make(chan int)
 	readers := make(chan int)
+	ret.ftype = PIPE
 	ret.pipe.inret = inret
 	ret.pipe.in = in
 	ret.pipe.outsz = outsz
@@ -694,7 +695,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		for k, v := range parent.fds {
 			child.fds[k] = v
 			// increment reader/writer count
-			switch v.ftype {
+			switch v.file.ftype {
 			case PIPE:
 				var ch chan int
 				if v.perms == FD_READ {
@@ -813,7 +814,7 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
-	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd)
+	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
 	if err != 0 {
 		return err
 	}
@@ -830,7 +831,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		valid := add[0:ret]
 		eobj = append(eobj, valid...)
 	}
-	file_close(INODE, file, 0)
+	file_close(file, 0)
 	elf := &elf_t{eobj}
 	_, ok := elf.npheaders()
 	if !ok {
@@ -1173,11 +1174,11 @@ func sys_chdir(proc *proc_t, dirn int) int {
 		return err
 	}
 
-	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd)
+	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd, 0, 0)
 	if err != 0 {
 		return err
 	}
-	file_close(INODE, proc.cwd, 0)
+	file_close(proc.cwd, 0)
 	proc.cwd = newcwd
 	return 0
 }
