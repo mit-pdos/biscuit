@@ -52,7 +52,9 @@
 /user/c/usertests
 /user/c/thtests
 /user/c/pthtests
+/user/c/mknodtest
 /user/cxx/mail-enqueue
+/user/cxx/sysroot
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
@@ -90,3 +92,4 @@
 /fsdir/bin/thtests
 /fsdir/bin/pthtests
 /fsdir/bin/mail-enqueue
+/fsdir/bin/mknodtest

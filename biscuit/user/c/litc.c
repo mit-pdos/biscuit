@@ -22,6 +22,7 @@
 #define SYS_MKDIR        83
 #define SYS_LINK         86
 #define SYS_UNLINK       87
+#define SYS_MKNOD        133
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
 
@@ -142,6 +143,12 @@ int
 mkdir(const char *p, long mode)
 {
 	return syscall(SA(p), mode, 0, 0, 0, SYS_MKDIR);
+}
+
+int
+mknod(const char *p, mode_t m, dev_t d)
+{
+	return syscall(SA(p), SA(m), SA(d), 0, 0, SYS_MKNOD);
 }
 
 void *
@@ -482,6 +489,12 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 {
 	errx(-1, "gettimeofday: no imp");
 	return 0;
+}
+
+dev_t
+makedev(uint maj, uint min)
+{
+	return (ulong)maj << 32 | min;
 }
 
 void *

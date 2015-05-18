@@ -90,6 +90,7 @@ off_t lseek(int, off_t, int);
 #define		SEEK_END	2
 
 int mkdir(const char *, long);
+int mknod(const char *, mode_t, dev_t);
 void *mmap(void *, size_t, int, int, int, long);
 int munmap(void *, size_t);
 int open(const char *, int, mode_t);
@@ -180,6 +181,7 @@ extern char *optarg;
 extern int   optind;
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+dev_t makedev(uint, uint);
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);

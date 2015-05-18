@@ -12,6 +12,7 @@ typedef unsigned long uint64_t;
 
 typedef unsigned long time_t;
 typedef unsigned long mode_t;
+typedef unsigned long dev_t;
 typedef long off_t;
 typedef long socklen_t;
 

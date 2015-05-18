@@ -22,7 +22,8 @@ OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
-	  pipetest kill killtest mmaptest usertests thtests pthtests
+	  pipetest kill killtest mmaptest usertests thtests pthtests \
+	  mknodtest
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
