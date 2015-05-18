@@ -74,6 +74,8 @@ int main(int argc, char **argv)
 		size_t sz = sizeof(args)/sizeof(args[0]);
 		char *p = readline("# ");
 		mkargs(p, args, sz);
+		if (args[0] == NULL)
+			continue;
 		if (builtins(args, sz))
 			continue;
 		int pid = fork();
