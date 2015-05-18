@@ -106,8 +106,9 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 	ts.pid = pid
 	ts.tid = tid
 
-	// if ptiddone is non-zero, a trap has not been received but a thread
-	// has stopped running and thus it's pmap can be freed.
+	// if notify is non-zero, a trap has not been received but a thread has
+	// stopped running (due to a timer interrupt) and thus it's pmap can be
+	// freed.
 	if notify != 0 {
 		if pid == 0 {
 			runtime.Pnum(0xbad2)
@@ -295,17 +296,23 @@ func cdelay(n int) {
 	}
 }
 
+type dev_t struct {
+	major	int
+	minor	int
+}
+
 type file_t struct {
 	ftype	ftype_t
 	priv	inum
 	pipe	pipe_t
+	dev	dev_t
 }
 
 type ftype_t int
 const(
 	INODE ftype_t = iota
 	PIPE
-	CDEV	// only console for now
+	DEV	// only console for now
 )
 
 const(
@@ -320,7 +327,7 @@ type fd_t struct {
 	sync.Mutex
 }
 
-var dummyfile	= file_t{ftype: CDEV, priv: -1}
+var dummyfile	= file_t{ftype: DEV, priv: -1}
 
 // special fds
 var fd_stdin 	= fd_t{file: &dummyfile, perms: FD_READ}

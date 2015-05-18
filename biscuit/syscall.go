@@ -80,6 +80,7 @@ const(
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
+  SYS_MKNOD    = 133
   SYS_FAKE     = 31337
   SYS_THREXIT  = 31338
 )
@@ -160,6 +161,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_link(p, a1, a2)
 	case SYS_UNLINK:
 		ret = sys_unlink(p, a1)
+	case SYS_MKNOD:
+		ret = sys_mknod(p, a1, a2, a3)
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
 	case SYS_THREXIT:
@@ -183,7 +186,7 @@ func reap_doomed(pid int, tid tid_t) {
 }
 
 var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
-	CDEV : func(dsts [][]uint8, priv *file_t, offset int) (int, int) {
+	DEV : func(dsts [][]uint8, priv *file_t, offset int) (int, int) {
 		sz := 0
 		for _, d := range dsts {
 			sz += len(d)
@@ -210,7 +213,7 @@ var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
 }
 
 var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
-	CDEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
+	DEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
 			// merge into one buffer to avoid taking the console
 			// lock many times.
 			utext := int8(0x17)
@@ -226,7 +229,7 @@ var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 }
 
 var fdclosers = map[ftype_t]func(*file_t, int) int {
-	CDEV : func(f *file_t, perms int) int {
+	DEV : func(f *file_t, perms int) int {
 		return 0
 	},
 	INODE : fs_close,
@@ -660,6 +663,34 @@ func sys_unlink(proc *proc_t, pathn int) int {
 		return err
 	}
 	return fs_unlink(path, proc.cwd)
+}
+
+func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
+	dsplit := func(n int) (int, int) {
+		a := uint(n)
+		maj := a >> 32
+		min := uint32(a)
+		return int(maj), int(min)
+	}
+
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+
+	err := badpath(path)
+	if err != 0 {
+		return err
+	}
+	maj, min := dsplit(devn)
+	_, err = fs_open(path, O_CREAT, 0, proc.cwd, maj, min)
+	if err != 0 {
+		return err
+	}
+	return 0
 }
 
 func sys_getpid(proc *proc_t) int {

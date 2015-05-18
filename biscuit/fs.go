@@ -205,7 +205,7 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	defer op_end()
 
 	req := &ireq_t{}
-	req.mkcreate(paths, I_DIR, 0, true)
+	req.mkcreate_dir(paths, 0)
 	if len(req.cr_name) > DNAMELEN {
 		return -ENAMETOOLONG
 	}
@@ -216,30 +216,50 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 
 func fs_open(paths string, flags int, mode int, cwdf *file_t,
     major, minor int) (*file_t, int) {
+	fnew := func(priv inum, maj, min int) *file_t {
+		r := &file_t{}
+		r.ftype = INODE
+		if maj != 0 || min != 0 {
+			r.ftype = DEV
+		}
+		r.priv = priv
+		r.dev.major = maj
+		r.dev.minor = min
+		return r
+	}
 	if flags & O_CREAT != 0 {
 		if paths == "/" {
 			return nil, -EPERM
 		}
+		isdev := major != 0 || minor != 0
 		op_begin()
 		defer op_end()
 
 		req := &ireq_t{}
-		req.mkcreate(paths, I_FILE, flags, false)
+		if isdev {
+			req.mkcreate_nod(paths, flags, major, minor)
+		} else {
+			req.mkcreate_file(paths, flags)
+		}
 		if len(req.cr_name) > DNAMELEN {
 			return nil, -ENAMETOOLONG
 		}
 		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
-		return &file_t{ftype: INODE, priv: resp.cnext}, resp.err
+		if resp.err != 0 {
+			return nil, resp.err
+		}
+		ret := fnew(resp.cnext, resp.major, resp.minor)
+		return ret, 0
 	}
 
 	// send inum get request
-	priv, err := namei(paths, cwdf.priv, flags)
+	resp, err := namei(paths, cwdf.priv, flags)
 	if err != 0 {
 		return nil, err
 	}
 
-	ret := &file_t{ftype: INODE, priv: priv}
+	ret := fnew(resp.gnext, resp.major, resp.minor)
 	return ret, 0
 }
 
@@ -290,12 +310,12 @@ func req_namei(req *ireq_t, paths string, cwd inum) {
 	dest.req <- req
 }
 
-func namei(paths string, cwd inum, flags int) (inum, int) {
+func namei(paths string, cwd inum, flags int) (*iresp_t, int) {
 	req := &ireq_t{}
 	req.mkget(paths, flags)
 	req_namei(req, paths, cwd)
 	resp := <- req.ack
-	return resp.gnext, resp.err
+	return resp, resp.err
 }
 
 type idaemon_t struct {
@@ -424,6 +444,8 @@ type ireq_t struct {
 	cr_name		string
 	cr_type		int
 	cr_mkdir	bool
+	cr_major	int
+	cr_minor	int
 	// insert op
 	insert_name	string
 	insert_priv	inum
@@ -495,7 +517,7 @@ func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 	r.dappend = append
 }
 
-func (r *ireq_t) mkcreate(path string, ntype, flags int, mkdir bool) {
+func (r *ireq_t) mkcreate_dir(path string, flags int) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
@@ -503,9 +525,37 @@ func (r *ireq_t) mkcreate(path string, ntype, flags int, mkdir bool) {
 	dirs, name := dirname(path)
 	r.path = dirs
 	r.cr_name = name
-	r.cr_type = ntype
+	r.cr_type = I_DIR
 	r.flags = flags
-	r.cr_mkdir = mkdir
+	r.cr_mkdir = true
+}
+
+func (r *ireq_t) mkcreate_file(path string, flags int) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = CREATE
+	dirs, name := dirname(path)
+	r.path = dirs
+	r.cr_name = name
+	r.cr_type = I_FILE
+	r.flags = flags
+	r.cr_mkdir = false
+}
+
+func (r *ireq_t) mkcreate_nod(path string, flags, maj, min int) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = CREATE
+	dirs, name := dirname(path)
+	r.path = dirs
+	r.cr_name = name
+	r.cr_type = I_DEV
+	r.flags = flags
+	r.cr_mkdir = false
+	r.cr_major = maj
+	r.cr_minor = min
 }
 
 func (r *ireq_t) mkinsert(path string, priv inum) {
@@ -556,6 +606,8 @@ type iresp_t struct {
 	count		int
 	err		int
 	commitwait	bool
+	major		int
+	minor		int
 }
 
 // a type for an inode block/offset identifier
@@ -631,7 +683,8 @@ func idaemonize(idm *idaemon_t) {
 				break
 			}
 
-			if r.cr_type != I_FILE && r.cr_type != I_DIR {
+			if r.cr_type != I_FILE && r.cr_type != I_DIR &&
+			   r.cr_type != I_DEV {
 				panic("no imp")
 			}
 
@@ -640,12 +693,21 @@ func idaemonize(idm *idaemon_t) {
 				break
 			}
 
-			isdir := r.cr_type == I_DIR
-			cnext, err := idm.icreate(r.cr_name, isdir)
+			itype := r.cr_type
+			maj := r.cr_major
+			min := r.cr_minor
+			cnext, err := idm.icreate(r.cr_name, itype, maj, min)
 			iupdate()
 
-			// is mkdir operation
-			if r.cr_mkdir {
+
+			if itype == I_DEV {
+				// mknod operation
+				ret := &iresp_t{cnext: cnext, major: maj,
+				    minor: min}
+				r.ack <- ret
+				break
+			} else if itype == I_DIR {
+				// is mkdir operation
 				if err != 0 {
 					ret := &iresp_t{err: err}
 					r.ack <- ret
@@ -754,7 +816,7 @@ func idaemonize(idm *idaemon_t) {
 				// is not allowed
 				writable := flags & O_WRONLY != 0 ||
 				    flags & O_RDWR != 0
-				if itype != I_FILE && writable {
+				if itype == I_DIR && writable {
 					r.ack <- &iresp_t{err: -EISDIR}
 					break
 				}
@@ -762,7 +824,10 @@ func idaemonize(idm *idaemon_t) {
 			}
 
 			// req is for us
-			r.ack <- &iresp_t{gnext: idm.priv}
+			maj := idm.icache.major
+			min := idm.icache.minor
+			r.ack <- &iresp_t{gnext: idm.priv, major: maj,
+			    minor: min}
 
 		case INSERT:
 			// create new dir ent with given inode number
@@ -1078,7 +1143,11 @@ func (idm *idaemon_t) dirent_add(ds []*dirdata_t, name string, nblkno int,
 	}
 }
 
-func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
+func (idm *idaemon_t) icreate(name string, nitype, major,
+    minor int) (inum, int) {
+	if nitype != I_DEV && (major != 0 || minor != 0) {
+		panic("inconsistent args")
+	}
 	// make sure file does not already exist
 	ds := idm.all_dirents()
 	defer dirent_brelse(ds)
@@ -1093,17 +1162,11 @@ func (idm *idaemon_t) icreate(name string, isdir bool) (inum, int) {
 
 	newiblk := bread(newbn)
 	newinode := &inode_t{newiblk, newioff}
-	var itype int
-	if isdir {
-		itype = I_DIR
-	} else {
-		itype = I_FILE
-	}
-	newinode.w_itype(itype)
+	newinode.w_itype(nitype)
 	newinode.w_linkcount(1)
 	newinode.w_size(0)
-	newinode.w_major(0)
-	newinode.w_minor(0)
+	newinode.w_major(major)
+	newinode.w_minor(minor)
 	newinode.w_indirect(0)
 	for i := 0; i < NIADDRS; i++ {
 		newinode.w_addr(i, 0)
