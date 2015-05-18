@@ -447,13 +447,34 @@ fprintf(FILE *f, const char *fmt, ...)
 	return ret;
 }
 
-int optind;
+char *optarg;
+int   optind = 1;
 
 int
 getopt(int argc, char * const *argv, const char *optstring)
 {
-	errx(-1, "getopt: no imp");
-	return 0;
+	optarg = NULL;
+	for (; optind < argc && !argv[optind]; optind++)
+		;
+	if (optind >= argc)
+		return -1;
+	char *ca = argv[optind];
+	if (ca[0] != '-')
+		return -1;
+	optind++;
+	const char wut = '?';
+	char *o = strchr(optstring, ca[1]);
+	if (!o)
+		return wut;
+	int needarg = o[1] == ':';
+	if (!needarg)
+		return ca[1];
+	const char argwut = optstring[0] == ':' ? ':' : wut;
+	if (optind >= argc || argv[optind][0] == '-')
+		return argwut;
+	optarg = argv[optind];
+	optind++;
+	return ca[1];
 }
 
 int
@@ -629,6 +650,14 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 			case 's':
 			{
 				char *s = va_arg(ap, char *);
+				if (!s) {
+					dst += wc(dst, end, '(');
+					dst += wc(dst, end, 'n');
+					dst += wc(dst, end, 'i');
+					dst += wc(dst, end, 'l');
+					dst += wc(dst, end, ')');
+					break;
+				}
 				while (*s)
 					dst += wc(dst, end, *s++);
 				done = 1;
@@ -711,6 +740,17 @@ snprintf(char *dst, size_t sz, const char *fmt, ...)
 	va_end(ap);
 
 	return ret;
+}
+
+char *
+strchr(const char *big, const char l)
+{
+	for (; *big; big++)
+		if (*big == l)
+			return (char *)big;
+	if (l == '\0')
+		return (char *)big;
+	return NULL;
 }
 
 char *

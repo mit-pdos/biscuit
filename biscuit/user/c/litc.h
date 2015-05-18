@@ -176,7 +176,8 @@ void errx(int, const char *, ...)
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 int getopt(int, char * const *, const char *);
-extern int optind;
+extern char *optarg;
+extern int   optind;
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
 void *memcpy(void *, const void *, size_t);
@@ -188,6 +189,7 @@ ulong rdtsc(void);
 char *readline(const char *);
 int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
+char *strchr(const char *, const char);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
