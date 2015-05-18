@@ -301,6 +301,17 @@ type dev_t struct {
 	minor	int
 }
 
+type udev_t uint
+
+// allocated device major numbers
+const(
+	CONSOLE udev_t	= iota
+)
+
+func (d *dev_t) unique() udev_t {
+	return udev_t(d.major << 32 | d.minor)
+}
+
 type file_t struct {
 	ftype	ftype_t
 	priv	inum
@@ -327,7 +338,7 @@ type fd_t struct {
 	sync.Mutex
 }
 
-var dummyfile	= file_t{ftype: DEV, priv: -1}
+var dummyfile	= file_t{ftype: DEV, dev: dev_t{0, 0}}
 
 // special fds
 var fd_stdin 	= fd_t{file: &dummyfile, perms: FD_READ}

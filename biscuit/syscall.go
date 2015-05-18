@@ -185,28 +185,51 @@ func reap_doomed(pid int, tid tid_t) {
 	p.thread_dead(tid, 0, false)
 }
 
+func cons_read(dsts [][]uint8, priv *file_t, offset int) (int, int) {
+	sz := 0
+	for _, d := range dsts {
+		sz += len(d)
+	}
+	kdata := kbd_get(sz)
+	ret := len(kdata)
+	for _, dst := range dsts {
+		ub := len(kdata)
+		if ub > len(dst) {
+			ub = len(dst)
+		}
+		for i := 0; i < ub; i++ {
+			dst[i] = kdata[i]
+		}
+		kdata = kdata[ub:]
+	}
+	if len(kdata) != 0 {
+		panic("dropped keys")
+	}
+	return ret, 0
+}
+
+func cons_write(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
+		// merge into one buffer to avoid taking the console
+		// lock many times.
+		utext := int8(0x17)
+		big := make([]uint8, 0)
+		for _, s := range srcs {
+			big = append(big, s...)
+		}
+		runtime.Pmsga(&big[0], len(big), utext)
+		return len(big), 0
+}
+
 var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
-	DEV : func(dsts [][]uint8, priv *file_t, offset int) (int, int) {
-		sz := 0
-		for _, d := range dsts {
-			sz += len(d)
+	DEV : func(dsts [][]uint8, f *file_t, offset int) (int, int) {
+		dm := map[udev_t]func([][]uint8, *file_t, int) (int, int) {
+			CONSOLE: cons_read,
 		}
-		kdata := kbd_get(sz)
-		ret := len(kdata)
-		for _, dst := range dsts {
-			ub := len(kdata)
-			if ub > len(dst) {
-				ub = len(dst)
-			}
-			for i := 0; i < ub; i++ {
-				dst[i] = kdata[i]
-			}
-			kdata = kdata[ub:]
+		fn, ok := dm[f.dev.unique()]
+		if !ok {
+			panic("bad device major")
 		}
-		if len(kdata) != 0 {
-			panic("dropped keys")
-		}
-		return ret, 0
+		return fn(dsts, f, offset)
 	},
 	INODE : fs_read,
 	PIPE : pipe_read,
@@ -214,15 +237,14 @@ var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
 
 var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 	DEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
-			// merge into one buffer to avoid taking the console
-			// lock many times.
-			utext := int8(0x17)
-			big := make([]uint8, 0)
-			for _, s := range srcs {
-				big = append(big, s...)
-			}
-			runtime.Pmsga(&big[0], len(big), utext)
-			return len(big), 0
+		dm := map[udev_t]func([][]uint8, *file_t, int, bool) (int, int){
+			CONSOLE: cons_write,
+		}
+		fn, ok := dm[f.dev.unique()]
+		if !ok {
+			panic("bad device major")
+		}
+		return fn(srcs, f, off, ap)
 	},
 	INODE : fs_write,
 	PIPE : pipe_write,
@@ -230,7 +252,17 @@ var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 
 var fdclosers = map[ftype_t]func(*file_t, int) int {
 	DEV : func(f *file_t, perms int) int {
-		return 0
+		dm := map[udev_t]func(*file_t, int) int {
+			CONSOLE:
+			    func (f *file_t, perms int) int {
+				    return 0
+			    },
+		}
+		fn, ok := dm[f.dev.unique()]
+		if !ok {
+			panic("bad device major")
+		}
+		return fn(f, perms)
 	},
 	INODE : fs_close,
 	PIPE : pipe_close,
