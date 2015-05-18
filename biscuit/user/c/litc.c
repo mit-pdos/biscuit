@@ -656,6 +656,7 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 					dst += wc(dst, end, 'i');
 					dst += wc(dst, end, 'l');
 					dst += wc(dst, end, ')');
+					done = 1;
 					break;
 				}
 				while (*s)
