@@ -148,6 +148,8 @@ mkdir(const char *p, long mode)
 int
 mknod(const char *p, mode_t m, dev_t d)
 {
+	if (MAJOR(d) == 0)
+		errx(-1, "bad major: 0");
 	return syscall(SA(p), SA(m), SA(d), 0, 0, SYS_MKNOD);
 }
 

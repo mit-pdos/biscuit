@@ -3,7 +3,7 @@
 int main(int argc, char **argv)
 {
 	int ret;
-	if ((ret = mknod("/tmp/flea", 10, 10)) < 0)
+	if ((ret = mknod("/tmp/flea", 10, MKDEV(10, 0))) < 0)
 		err(ret, "mknod");
 
 	int fd = open("/tmp/flea", O_RDWR, 0);

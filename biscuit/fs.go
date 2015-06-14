@@ -219,6 +219,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 	fnew := func(priv inum, maj, min int) *file_t {
 		r := &file_t{}
 		r.ftype = INODE
+		// XXX should use type
 		if maj != 0 || min != 0 {
 			r.ftype = DEV
 		}

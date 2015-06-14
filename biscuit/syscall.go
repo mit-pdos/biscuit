@@ -222,10 +222,10 @@ func cons_write(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
 
 var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
 	DEV : func(dsts [][]uint8, f *file_t, offset int) (int, int) {
-		dm := map[udev_t]func([][]uint8, *file_t, int) (int, int) {
+		dm := map[int]func([][]uint8, *file_t, int) (int, int) {
 			CONSOLE: cons_read,
 		}
-		fn, ok := dm[f.dev.unique()]
+		fn, ok := dm[f.dev.major]
 		if !ok {
 			panic("bad device major")
 		}
@@ -237,10 +237,10 @@ var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
 
 var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 	DEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
-		dm := map[udev_t]func([][]uint8, *file_t, int, bool) (int, int){
+		dm := map[int]func([][]uint8, *file_t, int, bool) (int, int){
 			CONSOLE: cons_write,
 		}
-		fn, ok := dm[f.dev.unique()]
+		fn, ok := dm[f.dev.major]
 		if !ok {
 			panic("bad device major")
 		}
@@ -252,13 +252,13 @@ var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 
 var fdclosers = map[ftype_t]func(*file_t, int) int {
 	DEV : func(f *file_t, perms int) int {
-		dm := map[udev_t]func(*file_t, int) int {
+		dm := map[int]func(*file_t, int) int {
 			CONSOLE:
 			    func (f *file_t, perms int) int {
 				    return 0
 			    },
 		}
-		fn, ok := dm[f.dev.unique()]
+		fn, ok := dm[f.dev.major]
 		if !ok {
 			panic("bad device major")
 		}
