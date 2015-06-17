@@ -108,6 +108,7 @@ int open(const char *, int, mode_t);
 #define		O_EXCL		0x80
 #define		O_TRUNC		0x200
 #define		O_DIRECTORY	0x10000
+#define		O_CLOEXEC	0x80000
 
 #define		S_IRWXU		0700
 int pause(void);

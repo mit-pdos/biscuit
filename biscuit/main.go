@@ -312,6 +312,7 @@ const(
 
 type file_t struct {
 	ftype	ftype_t
+	offset	int
 	priv	inum
 	pipe	pipe_t
 	dev	dev_t
@@ -329,11 +330,12 @@ const(
 const(
 	FD_READ		= 0x1
 	FD_WRITE	= 0x2
+	FD_CLOEXEC	= 0x4
+	FD_APPEND	= 0x8
 )
 
 type fd_t struct {
 	file	*file_t
-	offset	int
 	perms	int
 	sync.Mutex
 }

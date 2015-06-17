@@ -54,6 +54,7 @@ const(
     O_EXCL        = 0x80
     O_APPEND      = 0x400
     O_DIRECTORY   = 0x10000
+    O_CLOEXEC     = 0x80000
   SYS_CLOSE    = 3
   SYS_STAT     = 4
   SYS_FSTAT    = 5
@@ -343,11 +344,11 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		defer fd.Unlock()
 	}
 
-	ret, err := fdreaders[fd.file.ftype](dsts, fd.file, fd.offset)
+	ret, err := fdreaders[fd.file.ftype](dsts, fd.file, fd.file.offset)
 	if err != 0 {
 		return err
 	}
-	fd.offset += ret
+	fd.file.offset += ret
 	return ret
 }
 
@@ -370,7 +371,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		defer fd.Unlock()
 	}
 
-	apnd := fd.perms & O_APPEND != 0
+	apnd := fd.perms & FD_APPEND != 0
 	c := 0
 	srcs := make([][]uint8, 0)
 	for c < sz {
@@ -385,11 +386,12 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		srcs = append(srcs, src)
 		c += len(src)
 	}
-	ret, err := fdwriters[fd.file.ftype](srcs, fd.file, fd.offset, apnd)
+	ret, err := fdwriters[fd.file.ftype](srcs, fd.file, fd.file.offset,
+	    apnd)
 	if err != 0 {
 		return err
 	}
-	fd.offset += ret
+	fd.file.offset += ret
 	return ret
 }
 
@@ -432,7 +434,9 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	fdn, fd := proc.fd_new(fdperms)
 	switch {
 	case flags & O_APPEND != 0:
-		fd.perms |= O_APPEND
+		fd.perms |= FD_APPEND
+	case flags & O_CLOEXEC != 0:
+		fd.perms |= FD_CLOEXEC
 	}
 	fd.file = file
 	return fdn
@@ -1213,6 +1217,8 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 	return sys_execv1(proc, tf, path, args)
 }
 
+// XXX a multithreaded process that execs is broken; POSIX2008 says that all
+// threads should terminate before exec.
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
 	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
@@ -1268,6 +1274,15 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		return -EINVAL
 	}
 
+	// close fds marked with CLOEXEC
+	for fdn, fd := range proc.fds {
+		if fd.perms & FD_CLOEXEC != 0 {
+			if sys_close(proc, fdn) != 0 {
+				panic("close")
+			}
+		}
+	}
+
 	// commit new image state
 	tf[TF_RSP] = stackva - 8
 	tf[TF_RIP] = elf.entry()
@@ -1279,7 +1294,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	tf[TF_RDI] = argc
 	tf[TF_RSI] = argv
 	// XXX duplicated in proc_new
-	proc.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
+	//proc.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	proc.fdstart = 3
 	proc.mmapi = USERMIN
 	proc.name = paths
