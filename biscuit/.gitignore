@@ -53,6 +53,7 @@
 /user/c/thtests
 /user/c/pthtests
 /user/c/mknodtest
+/user/c/sockettest
 /user/cxx/mail-enqueue
 /user/cxx/sysroot
 /fsdir/bin/hello
@@ -93,3 +94,4 @@
 /fsdir/bin/pthtests
 /fsdir/bin/mail-enqueue
 /fsdir/bin/mknodtest
+/fsdir/bin/sockettest
