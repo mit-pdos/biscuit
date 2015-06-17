@@ -13,6 +13,8 @@
 #define SYS_GETPID       39
 #define SYS_SOCKET       41
 #define SYS_SENDTO       44
+#define SYS_RECVFROM     45
+#define SYS_BIND         49
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
@@ -64,6 +66,12 @@ syscall(long a1, long a2, long a3, long a4,
 }
 
 #define SA(x)     ((long)x)
+
+int
+bind(int sockfd, const struct sockaddr *s, socklen_t sl)
+{
+	return syscall(SA(sockfd), SA(s), SA(sl), 0, 0, SYS_BIND);
+}
 
 int
 close(int fd)
@@ -192,6 +200,17 @@ read(int fd, void *buf, size_t c)
 	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
 }
 
+ssize_t
+recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *sa,
+    socklen_t *salen)
+{
+	if (len >= (1ULL << 32))
+		errx(-1, "len too big");
+	ulong flaglen = len << 32 | flags;
+	return (ssize_t)syscall(SA(fd), SA(buf), SA(flaglen), SA(sa),
+	    SA(salen), SYS_RECVFROM);
+}
+
 int
 rename(const char *old, const char *new)
 {
@@ -203,14 +222,16 @@ ssize_t
 sendto(int fd, const void *buf, size_t len, int flags,
     const struct sockaddr *sa, socklen_t slen)
 {
-	errx(-1, "sendto: no imp");
-	return syscall(0, 0, 0, 0, 0, SYS_SENDTO);
+	if (len >= (1ULL << 32))
+		errx(-1, "len too big");
+	ulong flaglen = len << 32 | flags;
+	return syscall(SA(fd), SA(buf), SA(flaglen), SA(sa), SA(slen),
+	    SYS_SENDTO);
 }
 
 int
 socket(int dom, int type, int proto)
 {
-	errx(-1, "socket: no imp");
 	return syscall(SA(dom), SA(type), SA(proto), 0, 0, SYS_SOCKET);
 }
 
@@ -416,6 +437,7 @@ err(int eval, const char *fmt, ...)
 	    [EINVAL] = "Invalid argument",
 	    [ENAMETOOLONG] = "File name too long",
 	    [ENOSYS] = "Function not implemented",
+	    [ECONNREFUSED] = "Connection refused",
 	};
 	int nents = sizeof(es)/sizeof(es[0]);
 	printf("%s: ", __progname);

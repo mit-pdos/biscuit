@@ -23,11 +23,11 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
 	  pipetest kill killtest mmaptest usertests thtests pthtests \
-	  mknodtest
+	  mknodtest sockettest
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
-CXXBINS := mail-enqueue
+CXXBINS := mail-enqueue #mail-qman
 FSCXXPROGS := $(addprefix fsdir/bin/,$(CXXBINS))
 CXXPROGS := $(addprefix user/cxx/,$(CXXBINS))
 

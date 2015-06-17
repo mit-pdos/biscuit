@@ -700,9 +700,13 @@ func idaemonize(idm *idaemon_t) {
 			cnext, err := idm.icreate(r.cr_name, itype, maj, min)
 			iupdate()
 
-
 			if itype == I_DEV {
 				// mknod operation
+				if r.flags & O_EXCL != 0 && err == -EEXIST {
+					r.ack <- &iresp_t{err: -EEXIST}
+					break
+				}
+
 				ret := &iresp_t{cnext: cnext, major: maj,
 				    minor: min}
 				r.ack <- ret

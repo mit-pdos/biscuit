@@ -303,7 +303,11 @@ type dev_t struct {
 
 // allocated device major numbers
 const(
-	CONSOLE int	= 1
+	D_CONSOLE int	= 1
+	// UNIX domain sockets
+	D_SUN 		= 2
+	D_FIRST		= D_CONSOLE
+	D_LAST		= D_SUN
 )
 
 type file_t struct {
@@ -311,6 +315,7 @@ type file_t struct {
 	priv	inum
 	pipe	pipe_t
 	dev	dev_t
+	sock	sock_t
 }
 
 type ftype_t int
@@ -318,6 +323,7 @@ const(
 	INODE ftype_t = iota
 	PIPE
 	DEV	// only console for now
+	SOCKET
 )
 
 const(
@@ -332,7 +338,7 @@ type fd_t struct {
 	sync.Mutex
 }
 
-var dummyfile	= file_t{ftype: DEV, dev: dev_t{int(CONSOLE), 0}}
+var dummyfile	= file_t{ftype: DEV, dev: dev_t{int(D_CONSOLE), 0}}
 
 // special fds
 var fd_stdin 	= fd_t{file: &dummyfile, perms: FD_READ}
@@ -725,6 +731,9 @@ func (p *proc_t) userwriten(va, n, val int) bool {
 // second ret value is whether or not the string is mapped
 // third ret value is whether the string length is less than lenmax
 func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
+	if lenmax < 0 {
+		return "", false, false
+	}
 	i := 0
 	var ret []byte
 	for {

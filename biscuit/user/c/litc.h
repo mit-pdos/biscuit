@@ -18,6 +18,7 @@ extern "C" {
 #define		EINVAL		22
 #define		ENAMETOOLONG	36
 #define		ENOSYS		38
+#define		ECONNREFUSED	111
 
 #define		SIGKILL		9
 
@@ -77,6 +78,7 @@ struct tfork_t {
 #define		S_ISDIR(mode)	(mode == 2)
 #define		S_ISREG(mode)	(mode == 1)
 
+int bind(int, const struct sockaddr *, socklen_t);
 int close(int);
 int chdir(char *);
 void exit(int)
@@ -110,6 +112,7 @@ int open(const char *, int, mode_t);
 int pause(void);
 int pipe(int *);
 long read(int, void*, size_t);
+ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
 int rename(const char *, const char *);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);

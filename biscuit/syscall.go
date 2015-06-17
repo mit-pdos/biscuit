@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
+import "sync"
 import "unsafe"
 
 const(
@@ -39,6 +40,7 @@ const(
   EPIPE        = 32
   ENAMETOOLONG = 36
   ENOSYS       = 38
+  ECONNREFUSED = 111
 )
 
 const(
@@ -67,6 +69,15 @@ const(
   SYS_PIPE     = 22
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
+  SYS_SOCKET   = 41
+    // domains
+    AF_UNIX       = 1
+    // types
+    SOCK_STREAM   = 1
+    SOCK_DGRAM    = 2
+  SYS_SENDTO   = 44
+  SYS_RECVFROM = 45
+  SYS_BIND     = 49
   SYS_FORK     = 57
     FORK_PROCESS = 0x1
     FORK_THREAD  = 0x2
@@ -143,6 +154,14 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		// XXX
 		runtime.Resetgcticks()
 		ret = sys_getpid(p)
+	case SYS_SOCKET:
+		ret = sys_socket(p, a1, a2, a3);
+	case SYS_SENDTO:
+		ret = sys_sendto(p, a1, a2, a3, a4, a5);
+	case SYS_RECVFROM:
+		ret = sys_recvfrom(p, a1, a2, a3, a4, a5);
+	case SYS_BIND:
+		ret = sys_bind(p, a1, a2, a3);
 	case SYS_FORK:
 		ret = sys_fork(p, tf, a1, a2)
 	case SYS_EXECV:
@@ -220,10 +239,23 @@ func cons_write(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
 		return len(big), 0
 }
 
+func sock_close(f *file_t, perms int) int {
+	if !f.sock.dgram {
+		panic("no imp")
+	}
+	allsundl.Lock()
+	delete(allsunds, f.sock.sunid)
+	if f.sock.sund != nil {
+		f.sock.sund.finish <- true
+	}
+	allsundl.Unlock()
+	return 0
+}
+
 var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
 	DEV : func(dsts [][]uint8, f *file_t, offset int) (int, int) {
 		dm := map[int]func([][]uint8, *file_t, int) (int, int) {
-			CONSOLE: cons_read,
+			D_CONSOLE: cons_read,
 		}
 		fn, ok := dm[f.dev.major]
 		if !ok {
@@ -238,7 +270,7 @@ var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
 var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 	DEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
 		dm := map[int]func([][]uint8, *file_t, int, bool) (int, int){
-			CONSOLE: cons_write,
+			D_CONSOLE: cons_write,
 		}
 		fn, ok := dm[f.dev.major]
 		if !ok {
@@ -253,7 +285,7 @@ var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
 var fdclosers = map[ftype_t]func(*file_t, int) int {
 	DEV : func(f *file_t, perms int) int {
 		dm := map[int]func(*file_t, int) int {
-			CONSOLE:
+			D_CONSOLE:
 			    func (f *file_t, perms int) int {
 				    return 0
 			    },
@@ -266,6 +298,7 @@ var fdclosers = map[ftype_t]func(*file_t, int) int {
 	},
 	INODE : fs_close,
 	PIPE : pipe_close,
+	SOCKET : sock_close,
 }
 
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
@@ -387,6 +420,11 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	file, err := fs_open(path, flags, mode, proc.cwd, 0, 0)
 	if err != 0 {
 		return err
+	}
+	// not allowed to open UNIX sockets
+	if file.ftype == DEV && file.dev.major == D_SUN {
+		// no close since the socket dev file actually does nothing
+		return -EPERM
 	}
 	fdn, fd := proc.fd_new(fdperms)
 	switch {
@@ -729,6 +767,269 @@ func sys_getpid(proc *proc_t) int {
 	return proc.pid
 }
 
+func sys_socket(proc *proc_t, domain, typ, proto int) int {
+	if domain != AF_UNIX || typ != SOCK_DGRAM {
+		fmt.Printf("only AF_UNIX + SOCK_DGRAM is supported for now")
+		return -ENOSYS
+	}
+	// no permissions yet
+	fdn, fd := proc.fd_new(0)
+	fd.file = &file_t{ftype: SOCKET}
+	if typ == SOCK_DGRAM {
+		fd.file.sock.dgram = true
+	} else {
+		fd.file.sock.stream = true
+	}
+	return fdn
+}
+
+func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
+	fd, ok := proc.fds[fdn]
+	if !ok || fd.file.ftype != SOCKET {
+		return -EBADF
+	}
+	flags := uint(uint32(flaglen))
+	if flags != 0 {
+		panic("no imp")
+	}
+	buflen := int(uint(flaglen) >> 32)
+	if !proc.usermapped(bufn, buflen) {
+		return -EFAULT
+	}
+	if !proc.usermapped(sockaddrn, socklen) {
+		return -EFAULT
+	}
+	if !fd.file.sock.dgram {
+		panic("no imp")
+	}
+	poff := 2
+	plen := socklen - poff
+	if plen <= 0 {
+		return -ENOENT
+	}
+	path, ok, toolong := proc.userstr(sockaddrn + poff, plen)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	// get sunid from file
+	file, err := fs_open(path, 0, 0, proc.cwd, 0, 0)
+	if err != 0 {
+		return err
+	}
+	if file.ftype != DEV || file.dev.major != D_SUN {
+		return -EPERM
+	}
+
+	// lookup sid, get admission to write. we must get admission in order
+	// to ensure that after the socket daemon terminates 1) no writers are
+	// left blocking indefinitely and 2) that no new writers attempt to
+	// write to a channel that no one is listening on
+	allsundl.Lock()
+	sund, ok := allsunds[sunid_t(file.dev.minor)]
+	if ok {
+		sund.adm <- true
+	}
+	allsundl.Unlock()
+	if !ok {
+		return -ECONNREFUSED
+	}
+
+	c := 0
+	var data []uint8
+	for c < buflen {
+		src, ok := proc.userdmap(bufn + c)
+		if !ok {
+			sund.in <- nil
+			return -EFAULT
+		}
+		left := buflen - c
+		if len(src) > left {
+			src = src[:left]
+		}
+		data = append(data, src...)
+		c += len(src)
+	}
+
+	sund.in <- data
+	return <- sund.inret
+}
+
+func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
+    socklenn int) int {
+	fd, ok := proc.fds[fdn]
+	if !ok || fd.file.ftype != SOCKET {
+		return -EBADF
+	}
+	flags := uint(uint32(flaglen))
+	if flags != 0 {
+		panic("no imp")
+	}
+	buflen := int(uint(flaglen) >> 32)
+	if !proc.usermapped(bufn, buflen) {
+		return -EFAULT
+	}
+	if sockaddrn != 0 {
+		panic("no imp")
+	}
+
+	if !fd.file.sock.dgram {
+		panic("no imp")
+	}
+	sund := fd.file.sock.sund
+	sund.outsz <- buflen
+	data := <- sund.out
+
+	if !proc.usercopy(data, bufn) {
+		return -EFAULT
+	}
+
+	return len(data)
+}
+
+func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
+	fd, ok := proc.fds[fdn]
+	if !ok {
+		return -EBADF
+	}
+	if fd.file.ftype != SOCKET {
+		return -EBADF
+	}
+	poff := 2
+	plen := socklen - poff
+	if plen <= 0 {
+		return -ENOENT
+	}
+	path, ok, toolong := proc.userstr(sockaddrn + poff, plen)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	// try to create the specified file as a special device
+	sid := sun_new()
+	_, err := fs_open(path, O_CREAT | O_EXCL, 0, proc.cwd, D_SUN, int(sid))
+	if err != 0 {
+		return err
+	}
+	fd.file.sock.sunid = sid
+	fd.file.sock.sund = sun_start(sid)
+	return 0
+}
+
+type sunid_t int
+
+var sunid_cur	sunid_t
+
+type sock_t struct {
+	dgram	bool
+	stream	bool
+	sunid	sunid_t
+	sund	*sund_t
+}
+
+type sund_t struct {
+	adm	chan bool
+	finish	chan bool
+	outsz	chan int
+	out	chan []uint8
+	inret	chan int
+	// XXX: sender should also send address, which the daemon should save
+	// in order to pass to recvfrom.
+	in	chan []uint8
+}
+
+func sun_new() sunid_t {
+	sunid_cur++
+	return sunid_cur
+}
+
+var allsundl	sync.Mutex
+var allsunds	= map[sunid_t]*sund_t{}
+
+func sun_start(sid sunid_t) *sund_t {
+	if _, ok := allsunds[sid]; ok {
+		panic("sund exists")
+	}
+	ns := &sund_t{}
+	adm := make(chan bool)
+	finish := make(chan bool)
+	outsz := make(chan int)
+	out := make(chan []uint8)
+	inret := make(chan int)
+	in := make(chan []uint8)
+
+	ns.adm = adm
+	ns.finish = finish
+	ns.outsz = outsz
+	ns.out = out
+	ns.inret = inret
+	ns.in = in
+
+	go func() {
+		done := false
+		sunbufsz := 512
+		admitted := 0
+		var buf []uint8
+		var toutsz chan int
+		tin := in
+		for !done {
+			select {
+			case <- finish:
+				done = true
+			case <- adm:
+				admitted++
+			// writing
+			case d := <- tin:
+				if len(buf) + len(d) > sunbufsz {
+					take := sunbufsz - len(buf)
+					d = d[:take]
+				}
+				buf = append(buf, d...)
+				inret <- len(d)
+				admitted--
+			// reading
+			case sz := <- toutsz:
+				if len(buf) == 0 {
+					panic("no data")
+				}
+				if sz > len(buf) {
+					sz = len(buf)
+				}
+				out <- buf[:sz]
+				buf = buf[sz:]
+			}
+
+			// block writes if socket is full
+			// block reads if socket is empty
+			if len(buf) > 0 {
+				toutsz = outsz
+			} else {
+				toutsz = nil
+			}
+			if len(buf) < sunbufsz {
+				tin = in
+			} else {
+				tin = nil
+			}
+		}
+
+		for i := admitted; i > 0; i-- {
+			<- in
+			inret <- -ECONNREFUSED
+		}
+	}()
+
+	allsundl.Lock()
+	allsunds[sid] = ns
+	allsundl.Unlock()
+
+	return ns
+}
+
 func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	tmp := flags & (FORK_THREAD | FORK_PROCESS)
 	if tmp != FORK_THREAD && tmp != FORK_PROCESS {
@@ -751,7 +1052,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	chtf = *ptf
 
 	if mkproc {
-		child = proc_new(fmt.Sprintf("%s's child", parent.name), parent.cwd)
+		child = proc_new(fmt.Sprintf("%s's child", parent.name),
+		    parent.cwd)
 		child.pwaiti = &parent.waiti
 
 		// copy fd table
