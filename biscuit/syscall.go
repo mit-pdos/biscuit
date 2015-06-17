@@ -53,6 +53,7 @@ const(
     O_CREAT       = 0x40
     O_EXCL        = 0x80
     O_APPEND      = 0x400
+    O_NONBLOCK    = 0x800
     O_DIRECTORY   = 0x10000
     O_CLOEXEC     = 0x80000
   SYS_CLOSE    = 3
@@ -68,7 +69,6 @@ const(
     PROT_WRITE    = 0x2
     PROT_EXEC     = 0x4
   SYS_MUNMAP   = 11
-  SYS_PIPE     = 22
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
   SYS_SOCKET   = 41
@@ -94,6 +94,7 @@ const(
   SYS_LINK     = 86
   SYS_UNLINK   = 87
   SYS_MKNOD    = 133
+  SYS_PIPE2    = 293
   SYS_FAKE     = 31337
   SYS_THREXIT  = 31338
 )
@@ -150,8 +151,6 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
 	case SYS_MUNMAP:
 		ret = sys_munmap(p, a1, a2)
-	case SYS_PIPE:
-		ret = sys_pipe(p, a1)
 	case SYS_PAUSE:
 		ret = sys_pause(p)
 	case SYS_GETPID:
@@ -186,6 +185,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_unlink(p, a1)
 	case SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
+	case SYS_PIPE2:
+		ret = sys_pipe2(p, a1, a2)
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
 	case SYS_THREXIT:
@@ -432,10 +433,10 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 		return -EPERM
 	}
 	fdn, fd := proc.fd_new(fdperms)
-	switch {
-	case flags & O_APPEND != 0:
+	if flags & O_APPEND != 0 {
 		fd.perms |= FD_APPEND
-	case flags & O_CLOEXEC != 0:
+	}
+	if flags & O_CLOEXEC != 0 {
 		fd.perms |= FD_CLOEXEC
 	}
 	fd.file = file
@@ -576,7 +577,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	return 0
 }
 
-func sys_pipe(proc *proc_t, pipen int) int {
+func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	ok := proc.usermapped(pipen, 8)
 	if !ok {
 		return -EFAULT
@@ -587,6 +588,11 @@ func sys_pipe(proc *proc_t, pipen int) int {
 	pipef := pipe_new()
 	rf.file = pipef
 	wf.file = pipef
+
+	if flags & O_CLOEXEC != 0 {
+		rf.perms |= FD_CLOEXEC
+		wf.perms |= FD_CLOEXEC
+	}
 
 	proc.userwriten(pipen, 4, rfd)
 	proc.userwriten(pipen + 4, 4, wfd)

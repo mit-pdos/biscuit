@@ -14,6 +14,7 @@ typedef unsigned long time_t;
 typedef unsigned long mode_t;
 typedef unsigned long dev_t;
 typedef long off_t;
+typedef long pid_t;
 typedef unsigned long socklen_t;
 
 #define NULL   ((void *)0)

@@ -1584,8 +1584,8 @@ validateint(int *p)
 	asm volatile(
 		"int	$64\n"
 		: "=a"(ret)
-#define SYS_PIPE         22
-		: "0"(SYS_PIPE), "D"(p)
+#define SYS_PIPE2         293
+		: "0"(SYS_PIPE2), "D"(p)
 		: "cc", "memory");
 	if (ret == 0)
 		errx(-1, "bad int passed?");

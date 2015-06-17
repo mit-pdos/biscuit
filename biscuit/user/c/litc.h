@@ -107,12 +107,14 @@ int open(const char *, int, ...);
 #define		O_CREAT		0x40
 #define		O_EXCL		0x80
 #define		O_TRUNC		0x200
+#define		O_NONBLOCK	0x800
 #define		O_DIRECTORY	0x10000
 #define		O_CLOEXEC	0x80000
 
 #define		S_IRWXU		0700
 int pause(void);
 int pipe(int *);
+int pipe2(int *, int);
 long read(int, void*, size_t);
 ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);

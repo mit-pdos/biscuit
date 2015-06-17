@@ -9,7 +9,6 @@
 #define SYS_FSTAT        5
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
-#define SYS_PIPE         22
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
 #define SYS_SOCKET       41
@@ -26,6 +25,7 @@
 #define SYS_LINK         86
 #define SYS_UNLINK       87
 #define SYS_MKNOD        133
+#define SYS_PIPE2        293
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
 
@@ -199,7 +199,14 @@ pause(void)
 int
 pipe(int pfds[2])
 {
-	return syscall(SA(pfds), 0, 0, 0, 0, SYS_PIPE);
+	int pipe2(int*, int);
+	return pipe2(pfds, 0);
+}
+
+int
+pipe2(int pfds[2], int flags)
+{
+	return syscall(SA(pfds), SA(flags), 0, 0, 0, SYS_PIPE2);
 }
 
 long
