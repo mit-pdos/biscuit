@@ -243,12 +243,12 @@ func sock_close(f *file_t, perms int) int {
 	if !f.sock.dgram {
 		panic("no imp")
 	}
-	allsundl.Lock()
-	delete(allsunds, f.sock.sunid)
+	allsunds.Lock()
+	delete(allsunds.m, f.sock.sunid)
 	if f.sock.sund != nil {
 		f.sock.sund.finish <- true
 	}
-	allsundl.Unlock()
+	allsunds.Unlock()
 	return 0
 }
 
@@ -827,12 +827,12 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	// to ensure that after the socket daemon terminates 1) no writers are
 	// left blocking indefinitely and 2) that no new writers attempt to
 	// write to a channel that no one is listening on
-	allsundl.Lock()
-	sund, ok := allsunds[sunid_t(file.dev.minor)]
+	allsunds.Lock()
+	sund, ok := allsunds.m[sunid_t(file.dev.minor)]
 	if ok {
 		sund.adm <- true
 	}
-	allsundl.Unlock()
+	allsunds.Unlock()
 	if !ok {
 		return -ECONNREFUSED
 	}
@@ -947,11 +947,15 @@ func sun_new() sunid_t {
 	return sunid_cur
 }
 
-var allsundl	sync.Mutex
-var allsunds	= map[sunid_t]*sund_t{}
+type allsund_t struct {
+	m	map[sunid_t]*sund_t
+	sync.Mutex
+}
+
+var allsunds = allsund_t{m: map[sunid_t]*sund_t{}}
 
 func sun_start(sid sunid_t) *sund_t {
-	if _, ok := allsunds[sid]; ok {
+	if _, ok := allsunds.m[sid]; ok {
 		panic("sund exists")
 	}
 	ns := &sund_t{}
@@ -1023,9 +1027,9 @@ func sun_start(sid sunid_t) *sund_t {
 		}
 	}()
 
-	allsundl.Lock()
-	allsunds[sid] = ns
-	allsundl.Unlock()
+	allsunds.Lock()
+	allsunds.m[sid] = ns
+	allsunds.Unlock()
 
 	return ns
 }
