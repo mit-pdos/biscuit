@@ -5,6 +5,7 @@
 #define SYS_WRITE        1
 #define SYS_OPEN         2
 #define SYS_CLOSE        3
+#define SYS_STAT         4
 #define SYS_FSTAT        5
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
@@ -236,6 +237,12 @@ socket(int dom, int type, int proto)
 }
 
 int
+stat(const char *path, struct stat *st)
+{
+	return syscall(SA(path), SA(st), 0, 0, 0, SYS_STAT);
+}
+
+int
 unlink(const char *path)
 {
 	return syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
@@ -296,7 +303,7 @@ tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 	    "jne	1f\n"
 	    // child
 	    "movq	%5, %%rdi\n"
-	    "call	%4\n"
+	    "call	*%4\n"
 	    "movq	%%rax, %%rdi\n"
 	    "call	tfork_done\n"
 	    "movq	$0, 0xfece5\n"

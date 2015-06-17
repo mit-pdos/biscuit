@@ -55,6 +55,7 @@ const(
     O_APPEND      = 0x400
     O_DIRECTORY   = 0x10000
   SYS_CLOSE    = 3
+  SYS_STAT     = 4
   SYS_FSTAT    = 5
   SYS_MMAP     = 9
     MAP_PRIVATE   = 0x2
@@ -140,6 +141,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_open(p, a1, a2, a3)
 	case SYS_CLOSE:
 		ret = sys_close(p, a1)
+	case SYS_STAT:
+		ret = sys_stat(p, a1, a2)
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
 	case SYS_MMAP:
@@ -526,6 +529,31 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	return 0
 }
 
+func sys_stat(proc *proc_t, pathn, statn int) int {
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	buf := &stat_t{}
+	buf.init()
+	file, err := fs_open(path, 0, 0, proc.cwd, 0, 0)
+	if err != 0 {
+		return err
+	}
+	err = fs_stat(file, buf)
+	if err != 0 {
+		return err
+	}
+	ok = proc.usercopy(buf.data, statn)
+	if !ok {
+		return -EFAULT
+	}
+	return 0
+}
+
 func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	buf := &stat_t{}
 	buf.init()
@@ -733,6 +761,10 @@ func sys_unlink(proc *proc_t, pathn int) int {
 		return err
 	}
 	return fs_unlink(path, proc.cwd)
+}
+
+func mkdev(maj, min int) int {
+	return maj << 32 | min
 }
 
 func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
@@ -1634,6 +1666,7 @@ func (st *stat_t) init() {
 		8, // 1 - ino
 		8, // 2 - mode
 		8, // 3 - size
+		8, // 4 - rdev
 		}
 	sz := 0
 	for _, c := range st.sizes {
@@ -1664,6 +1697,11 @@ func (st *stat_t) wmode(v int) {
 
 func (st *stat_t) wsize(v int) {
 	size, off := fieldinfo(st.sizes, 3)
+	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) wrdev(v int) {
+	size, off := fieldinfo(st.sizes, 4)
 	writen(st.data, size, off, v)
 }
 

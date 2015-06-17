@@ -44,18 +44,18 @@ void dprint(int fd, char *par, int left)
 				continue;
 			snprintf(pend, left, "%s", tn);
 			char *fn = par;
-			int tfd;
-			if ((tfd = open(fn, O_RDONLY, 0)) < 0)
-				err(tfd, "rec open %s", fn);
 			struct stat st;
-			if (fstat(tfd, &st))
-				errx(-1, "fstat");
-			if (close(tfd))
-				errx(-1, "close");
+			int ret;
+			if ((ret = stat(fn, &st)))
+				err(ret, "stat");
+			char spec;
 			if (S_ISDIR(st.st_mode))
-				printf("drwxr-xr-x %ld %s\n", st.st_size, tn);
+				spec = 'd';
+			else if (S_ISSOCK(st.st_mode))
+				spec = 's';
 			else
-				printf("-rwxr-xr-x %ld %s\n", st.st_size, tn);
+				spec = '-';
+			printf("%crwxr-xr-x %ld %s\n", spec, st.st_size, tn);
 		}
 	}
 	close(fd);
@@ -77,17 +77,18 @@ void dprint(int fd, char *par, int left)
 				continue;
 			snprintf(pend, left, "%s", tn);
 			char *fn = par;
-			int tfd;
-			if ((tfd = open(fn, O_RDONLY, 0)) < 0)
-				err(tfd, "rec open %s", fn);
 			struct stat st;
-			if (fstat(tfd, &st))
-				errx(-1, "fstat");
+			int ret;
+			if ((ret = stat(fn, &st)))
+				err(ret, "stat");
 			if (S_ISDIR(st.st_mode)) {
+				int tfd = open(fn, O_RDONLY | O_DIRECTORY, 0);
+				if (tfd < 0)
+					err(ret, "rec open");
 				dprint(tfd, par, left - strlen(pend));
+				if ((ret = close(tfd)))
+					err(ret, "close");
 			}
-			if (close(tfd))
-				errx(-1, "close");
 		}
 	}
 }

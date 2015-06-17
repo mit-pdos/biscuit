@@ -77,6 +77,7 @@ struct tfork_t {
 
 #define		S_ISDIR(mode)	(mode == 2)
 #define		S_ISREG(mode)	(mode == 1)
+#define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
 int bind(int, const struct sockaddr *, socklen_t);
 int close(int);
@@ -125,6 +126,7 @@ int socket(int, int, int);
 #define		SOCK_RAW	3
 #define		SOCK_SEQPACKET	5
 
+int stat(const char *, struct stat *);
 int unlink(const char *);
 int wait(int *);
 int wait4(int, int *, int, void *);

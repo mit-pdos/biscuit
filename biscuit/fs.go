@@ -861,8 +861,9 @@ func idaemonize(idm *idaemon_t) {
 			st := r.stat_st
 			st.wdev(0)
 			st.wino(int(idm.priv))
-			st.wmode(idm.icache.itype)
+			st.wmode(idm.mkmode())
 			st.wsize(idm.icache.size)
+			st.wrdev(mkdev(idm.icache.major, idm.icache.minor))
 			r.ack <- &iresp_t{}
 
 		case UNLINK:
@@ -1314,6 +1315,19 @@ func (idm *idaemon_t) all_dirents() ([]*dirdata_t) {
 		ret = append(ret, dirdata)
 	}
 	return ret
+}
+
+// used for {,f}stat
+func (idm *idaemon_t) mkmode() int {
+	itype := idm.icache.itype
+	switch itype {
+	case I_DIR, I_FILE:
+		return itype
+	case I_DEV:
+		return mkdev(idm.icache.major, idm.icache.minor)
+	default:
+		panic("weird itype")
+	}
 }
 
 // returns the inode number for the specified filename

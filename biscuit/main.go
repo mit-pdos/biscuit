@@ -662,7 +662,7 @@ func (p *proc_t) terminate() {
 }
 
 // XXX these can probably go away since user processes share kernel pmaps
-// now...
+// now... (don't switch to kernel pmap, just use the user pmap)
 
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
