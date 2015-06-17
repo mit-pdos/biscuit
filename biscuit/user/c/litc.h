@@ -113,6 +113,7 @@ int open(const char *, int, mode_t);
 int pause(void);
 int pipe(int *);
 long read(int, void*, size_t);
+ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
 int rename(const char *, const char *);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,

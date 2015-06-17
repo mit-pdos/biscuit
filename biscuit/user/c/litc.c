@@ -202,6 +202,12 @@ read(int fd, void *buf, size_t c)
 }
 
 ssize_t
+recv(int fd, void *buf, size_t len, int flags)
+{
+	return recvfrom(fd, buf, len, flags, NULL, NULL);
+}
+
+ssize_t
 recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *sa,
     socklen_t *salen)
 {
