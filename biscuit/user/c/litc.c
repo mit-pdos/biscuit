@@ -178,8 +178,15 @@ munmap(void *addr, size_t len)
 }
 
 int
-open(const char *path, int flags, mode_t mode)
+open(const char *path, int flags, ...)
 {
+	mode_t mode = 0;
+	if (flags & O_CREAT) {
+		va_list l;
+		va_start(l, flags);
+		mode = va_arg(l, mode_t);
+		va_end(l);
+	}
 	return syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
 }
 

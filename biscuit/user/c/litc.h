@@ -100,7 +100,7 @@ int mkdir(const char *, long);
 int mknod(const char *, mode_t, dev_t);
 void *mmap(void *, size_t, int, int, int, long);
 int munmap(void *, size_t);
-int open(const char *, int, mode_t);
+int open(const char *, int, ...);
 #define		O_RDONLY	0
 #define		O_WRONLY	1
 #define		O_RDWR		2
