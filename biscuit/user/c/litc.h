@@ -82,6 +82,7 @@ struct tfork_t {
 int bind(int, const struct sockaddr *, socklen_t);
 int close(int);
 int chdir(char *);
+int dup2(int, int);
 void exit(int)
     __attribute__((noreturn));
 int execv(const char *, char * const[]);

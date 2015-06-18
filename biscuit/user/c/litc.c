@@ -9,6 +9,7 @@
 #define SYS_FSTAT        5
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
+#define SYS_DUP2         33
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
 #define SYS_SOCKET       41
@@ -84,6 +85,12 @@ int
 chdir(char *path)
 {
 	return syscall(SA(path), 0, 0, 0, 0, SYS_CHDIR);
+}
+
+int
+dup2(int old, int new)
+{
+	return syscall(SA(old), SA(new), 0, 0, 0, SYS_DUP2);
 }
 
 void
@@ -199,7 +206,6 @@ pause(void)
 int
 pipe(int pfds[2])
 {
-	int pipe2(int*, int);
 	return pipe2(pfds, 0);
 }
 
@@ -790,6 +796,8 @@ readline(const char *prompt)
 		if (i < sizeof(readlineb) - 2)
 			readlineb[i++] = c;
 	}
+	if (ret < 0)
+		printf("readline: read failed: %d\n", ret);
 	readlineb[i] = 0;
 	return readlineb;
 }

@@ -312,6 +312,7 @@ const(
 
 type file_t struct {
 	ftype	ftype_t
+	sync.Mutex
 	offset	int
 	priv	inum
 	pipe	pipe_t
@@ -337,7 +338,6 @@ const(
 type fd_t struct {
 	file	*file_t
 	perms	int
-	sync.Mutex
 }
 
 var dummyfile	= file_t{ftype: DEV, dev: dev_t{int(D_CONSOLE), 0}}

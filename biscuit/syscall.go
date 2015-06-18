@@ -69,6 +69,7 @@ const(
     PROT_WRITE    = 0x2
     PROT_EXEC     = 0x4
   SYS_MUNMAP   = 11
+  SYS_DUP2     = 33
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
   SYS_SOCKET   = 41
@@ -151,6 +152,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
 	case SYS_MUNMAP:
 		ret = sys_munmap(p, a1, a2)
+	case SYS_DUP2:
+		ret = sys_dup2(p, a1, a2)
 	case SYS_PAUSE:
 		ret = sys_pause(p)
 	case SYS_GETPID:
@@ -341,8 +344,8 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	}
 
 	if fd.file.ftype == INODE {
-		fd.Lock()
-		defer fd.Unlock()
+		fd.file.Lock()
+		defer fd.file.Unlock()
 	}
 
 	ret, err := fdreaders[fd.file.ftype](dsts, fd.file, fd.file.offset)
@@ -368,8 +371,8 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		panic("no imp")
 	}
 	if fd.file.ftype == INODE {
-		fd.Lock()
-		defer fd.Unlock()
+		fd.file.Lock()
+		defer fd.file.Unlock()
 	}
 
 	apnd := fd.perms & FD_APPEND != 0
@@ -532,6 +535,43 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 		}
 	}
 	return 0
+}
+
+func copyfd(fd *fd_t) *fd_t {
+	nfd := &fd_t{}
+	*nfd = *fd
+	// increment reader/writer count
+	switch fd.file.ftype {
+	case PIPE:
+		var ch chan int
+		if fd.perms == FD_READ {
+			ch = fd.file.pipe.readers
+		} else {
+			ch = fd.file.pipe.writers
+		}
+		ch <- 1
+	case INODE:
+		fs_memref(fd.file, fd.perms)
+	}
+	return nfd
+}
+
+func sys_dup2(proc *proc_t, oldn, newn int) int{
+	if oldn == newn {
+		return newn
+	}
+	ofd, ok := proc.fds[oldn]
+	if !ok {
+		return -EBADF
+	}
+	_, ok = proc.fds[newn]
+	if ok {
+		sys_close(proc, newn)
+	}
+	nfd := copyfd(ofd)
+	nfd.perms &^= O_CLOEXEC
+	proc.fds[newn] = nfd
+	return newn
 }
 
 func sys_stat(proc *proc_t, pathn, statn int) int {
@@ -1104,20 +1144,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		// copy fd table
 		for k, v := range parent.fds {
-			child.fds[k] = v
-			// increment reader/writer count
-			switch v.file.ftype {
-			case PIPE:
-				var ch chan int
-				if v.perms == FD_READ {
-					ch = v.file.pipe.readers
-				} else {
-					ch = v.file.pipe.writers
-				}
-				ch <- 1
-			case INODE:
-				fs_memref(v.file, v.perms)
-			}
+			child.fds[k] = copyfd(v)
 		}
 
 		pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages,
