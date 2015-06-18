@@ -151,10 +151,7 @@ int tfork_thread(struct tfork_t *, long (*fn)(void *), void *);
 void threxit(long);
 int thrwait(int, long *);
 
-typedef struct {
-	int tid;
-	void *stack;
-} pthread_t;
+typedef long pthread_t;
 
 typedef struct {
 } pthread_attr_t;

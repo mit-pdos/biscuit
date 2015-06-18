@@ -414,14 +414,14 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *a
 {
 	if (attrs != NULL)
 		errx(-1, "pthread_create: attrs not yet supported");
-	t->stack = NULL;
 	// XXX setup guard page
 	void *stack = mkstack(PSTACKSZ);
 	if (!stack)
 		return -ENOMEM;
+	long tid;
 	struct tfork_t tf = {
 		.tf_tcb = NULL,
-		.tf_tid = &t->tid,
+		.tf_tid = &tid,
 		.tf_stack = stack,
 	};
 	int ret;
@@ -438,7 +438,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *a
 	if (ret < 0) {
 		goto both;
 	}
-	t->stack = stack;
+	*t = tid;
 	return 0;
 both:
 	free(pca);
@@ -450,7 +450,7 @@ errstack:
 int
 pthread_join(pthread_t t, void **retval)
 {
-	int ret = thrwait(t.tid, (long *)retval);
+	int ret = thrwait(t, (long *)retval);
 	if (ret < 0)
 		return ret;
 	return 0;
@@ -480,10 +480,7 @@ pthread_once(pthread_once_t *octl, void (*fn)(void))
 pthread_t
 pthread_self(void)
 {
-	//int tid = getpid();
-	pthread_t ret;
-	ret.tid = -1;
-	return ret;
+	return getpid();
 }
 
 /*
