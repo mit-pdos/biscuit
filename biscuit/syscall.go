@@ -86,6 +86,9 @@ const(
     FORK_THREAD  = 0x2
   SYS_EXECV    = 59
   SYS_EXIT     = 60
+    CONTINUED    = 1 << 9
+    EXITED       = 1 << 10
+    SIGNALED     = 1 << 11
   SYS_WAIT4    = 61
     WAIT_ANY     = -1
     WAIT_MYPGRP  = 0
@@ -173,7 +176,9 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	case SYS_EXECV:
 		ret = sys_execv(p, tf, a1, a2)
 	case SYS_EXIT:
-		sys_exit(p, tid, a1)
+		status := a1 & 0xff
+		status |= EXITED
+		sys_exit(p, tid, status)
 	case SYS_WAIT4:
 		ret = sys_wait4(p, a1, a2, a3, a4, a5)
 	case SYS_KILL:
@@ -193,7 +198,9 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
 	case SYS_THREXIT:
-		sys_threxit(p, tid, a1)
+		status := a1 & 0xff
+		status |= EXITED
+		sys_threxit(p, tid, status)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}

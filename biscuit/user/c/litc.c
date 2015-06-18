@@ -285,6 +285,12 @@ wait(int *status)
 }
 
 int
+waitpid(int pid, int *status, int options)
+{
+	return wait4(pid, status, options, NULL);
+}
+
+int
 wait4(int pid, int *status, int options, void *rusage)
 {
 	if (rusage)

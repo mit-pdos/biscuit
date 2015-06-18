@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 		if (pid2 != 0) {
 			if ((ret = wait(&status)) < 0)
 				err(ret, "wait1");
-			if (status != 0)
+			if (WEXITSTATUS(status) != 0)
 				errx(status, "child child failed %d", status);
 		}
 		return 0;
@@ -52,11 +52,11 @@ int main(int argc, char **argv)
 
 	if ((ret = wait(&status)) < 0)
 		err(ret, "wait2");
-	if (status != 0)
+	if (WEXITSTATUS(status) != 0)
 		err(status, "parent child failed %d", status);
 	if ((ret = wait(&status)) < 0)
 		err(ret, "wait3");
-	if (status != 0)
+	if (WEXITSTATUS(status) != 0)
 		err(status, "parent child2 failed %d", status);
 
 	// try write on pipe with no readers

@@ -134,7 +134,13 @@ int socket(int, int, int);
 int stat(const char *, struct stat *);
 int unlink(const char *);
 int wait(int *);
+int waitpid(int, int *, int);
 int wait4(int, int *, int, void *);
+#define		WIFCONTINUED(x)		(x & (1 << 9))
+#define		WIFEXITED(x)		(x & (1 << 10))
+#define		WIFSIGNALED(x)		(x & (1 << 11))
+#define		WEXITSTATUS(x)		(x & 0xff)
+
 long write(int, const void*, size_t);
 
 /*
