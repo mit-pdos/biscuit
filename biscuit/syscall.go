@@ -198,9 +198,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
 	case SYS_THREXIT:
-		status := a1 & 0xff
-		status |= EXITED
-		sys_threxit(p, tid, status)
+		sys_threxit(p, tid, a1)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
@@ -1452,7 +1450,11 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
 	if resp.err != 0 {
 		return resp.err
 	}
-	proc.userwriten(statusp, 4, resp.status)
+	if threadwait == 0 {
+		proc.userwriten(statusp, 4, resp.status)
+	} else {
+		proc.userwriten(statusp, 8, resp.status)
+	}
 	return resp.pid
 }
 

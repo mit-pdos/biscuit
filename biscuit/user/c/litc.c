@@ -36,7 +36,7 @@ FILE  *stdin = &_stdin, *stdout = &_stdout, *stderr = &_stderr;
 static long biglock;
 static int dolock = 1;
 
-void acquire(void)
+static void acquire(void)
 {
 	if (!dolock)
 		return;
@@ -44,7 +44,7 @@ void acquire(void)
 		;
 }
 
-void release(void)
+static void release(void)
 {
 	biglock = 0;
 }
@@ -338,7 +338,7 @@ tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 	    "call	*%4\n"
 	    "movq	%%rax, %%rdi\n"
 	    "call	tfork_done\n"
-	    "movq	$0, 0xfece5\n"
+	    "movq	$0, 0x0\n"
 	    "1:\n"
 	    : "=a"(tid)
 	    : "D"(args), "S"(flags), "0"(SYS_FORK), "r"(r8), "r"(r9)
@@ -353,12 +353,12 @@ threxit(long status)
 }
 
 int
-thrwait(int tid, int *status)
+thrwait(int tid, long *status)
 {
 	if (tid <= 0)
 		errx(-1, "thrwait: bad tid %d", tid);
 
-	int _status;
+	long _status;
 	int ret = syscall(tid, SA(&_status), 0, 0, 1, SYS_WAIT4);
 	if (status)
 		*status = _status;
@@ -378,6 +378,37 @@ mkstack(size_t size)
 	return ret + size;
 }
 
+struct pcargs_t {
+	void* (*fn)(void *);
+	void *arg;
+	void *stack;
+};
+
+static long
+_pcreate(void *vpcarg)
+{
+#define		PSTACKSZ	(4096)
+	struct pcargs_t pcargs = *(struct pcargs_t *)vpcarg;
+	free(vpcarg);
+	long status;
+	status = (long)(pcargs.fn(pcargs.arg));
+	asm volatile(
+	    "int	$64\n"
+	    "cmpq	$0, %%rax\n"
+	    "je		1f\n"
+	    "movq	$0, 0x0\n"
+	    "1:\n"
+	    "movq	%1, %%rax\n"
+	    "movq	%4, %%rdi\n"
+	    "int	$64\n"
+	    "movq	$0, 0x1\n"
+	    :
+	    : "a"(SYS_MUNMAP), "g"(SYS_THREXIT), "D"(pcargs.stack), "S"(PSTACKSZ), "g"(status)
+	    : "memory", "cc");
+	// not reached
+	return 0;
+}
+
 int
 pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *arg)
 {
@@ -385,8 +416,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *a
 		errx(-1, "pthread_create: attrs not yet supported");
 	t->stack = NULL;
 	// XXX setup guard page
-	const long stksz = 4096;
-	void *stack = mkstack(stksz);
+	void *stack = mkstack(PSTACKSZ);
 	if (!stack)
 		return -ENOMEM;
 	struct tfork_t tf = {
@@ -394,19 +424,33 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *a
 		.tf_tid = &t->tid,
 		.tf_stack = stack,
 	};
-	int ret = tfork_thread(&tf, (long (*)(void *))fn, arg);
+	int ret;
+	struct pcargs_t *pca = malloc(sizeof(struct pcargs_t));
+	if (!pca) {
+		ret = -ENOMEM;
+		goto errstack;
+	}
+
+	pca->fn = fn;
+	pca->arg = arg;
+	pca->stack = stack - PSTACKSZ;
+	ret = tfork_thread(&tf, _pcreate, pca);
 	if (ret < 0) {
-		munmap(stack, stksz);
-		return ret;
+		goto both;
 	}
 	t->stack = stack;
 	return 0;
+both:
+	free(pca);
+errstack:
+	munmap(stack, PSTACKSZ);
+	return ret;
 }
 
 int
 pthread_join(pthread_t t, void **retval)
 {
-	int ret = thrwait(t.tid, (int *)retval);
+	int ret = thrwait(t.tid, (long *)retval);
 	if (ret < 0)
 		return ret;
 	return 0;
@@ -431,6 +475,15 @@ pthread_once(pthread_once_t *octl, void (*fn)(void))
 {
 	errx(-1, "pthread_once: no imp");
 	return 0;
+}
+
+pthread_t
+pthread_self(void)
+{
+	//int tid = getpid();
+	pthread_t ret;
+	ret.tid = -1;
+	return ret;
 }
 
 /*
@@ -558,6 +611,18 @@ dev_t
 makedev(uint maj, uint min)
 {
 	return (ulong)maj << 32 | min;
+}
+
+int
+memcmp(const void *q, const void *p, size_t sz)
+{
+	const char *s1 = (char *)q;
+	const char *s2 = (char *)p;
+	while (sz && *s1 == *s2)
+		sz--, s1++, s2++;
+	if (!sz)
+		return 0;
+	return *s1 - *s2;
 }
 
 void *

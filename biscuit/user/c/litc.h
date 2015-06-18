@@ -149,7 +149,7 @@ long write(int, const void*, size_t);
 void tfork_done(long);
 int tfork_thread(struct tfork_t *, long (*fn)(void *), void *);
 void threxit(long);
-int thrwait(int, int *);
+int thrwait(int, long *);
 
 typedef struct {
 	int tid;
@@ -170,6 +170,7 @@ int pthread_join(pthread_t, void **);
 int pthread_mutex_lock(pthread_mutex_t *);
 int pthread_mutex_unlock(pthread_mutex_t *);
 int pthread_once(pthread_once_t *, void (*)(void));
+pthread_t pthread_self(void);
 
 /*
  * libc
@@ -202,6 +203,7 @@ extern int   optind;
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
 dev_t makedev(uint, uint);
+int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);

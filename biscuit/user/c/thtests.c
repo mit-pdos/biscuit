@@ -76,15 +76,15 @@ int main(int argc, char **argv)
 	loop("p ", 10);
 
 	printf("waiting for child threads\n");
-	int status;
+	long status;
 	if ((tid = thrwait(tls1, &status)) != tls1)
 		err(tid, "thrwait1");
 	if (status != tls1)
-		errx(-1, "bad status %d %ld", status, tls1);
+		errx(-1, "bad status %ld %ld", status, tls1);
 	if ((tid = thrwait(tls2, &status)) != tls2)
 		err(tid, "thrwait2");
 	if (status != tls2)
-		errx(-1, "bad status %d %ld", status, tls2);
+		errx(-1, "bad status %ld %ld", status, tls2);
 	printf("parent exit\n");
 
 	return 0;
