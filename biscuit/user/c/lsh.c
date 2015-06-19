@@ -43,13 +43,9 @@ char *binname(char *bin)
 	int i;
 	for (i = 0; i < elems; i++) {
 		snprintf(buf, sizeof(buf), "%s%s", paths[i], bin);
-		int fd = open(buf, O_RDONLY, 0);
-		if (fd > -1) {
-			int ret = close(fd);
-			if (ret)
-				err(ret, "close");
+		struct stat st;
+		if (stat(buf, &st) == 0)
 			return buf;
-		}
 
 	}
 	return NULL;

@@ -1331,9 +1331,6 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	tf[TF_SS] = udseg << 3 | 3
 	tf[TF_RDI] = argc
 	tf[TF_RSI] = argv
-	// XXX duplicated in proc_new
-	//proc.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
-	proc.fdstart = 3
 	proc.mmapi = USERMIN
 	proc.name = paths
 
