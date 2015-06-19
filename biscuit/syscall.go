@@ -1294,7 +1294,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
 	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
-	numstkpages := 1
+	numstkpages := 2
 	for i := 0; i < numstkpages; i++ {
 		stack, p_stack := pg_new(proc.pages)
 		proc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
