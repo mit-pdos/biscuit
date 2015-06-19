@@ -9,21 +9,16 @@
 
 #include "libutil.h"
 #include "shutil.h"
-#include "xsys.h"
-
-#include <fcntl.h>
-#include <spawn.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/un.h>
-#include <sys/wait.h>
+//#include "xsys.h"
 
 #include <stdexcept>
 #include <string>
 #include <thread>
+
+#include <litc.h>
+
+#define SOCK_DGRAM_UNORDERED	(-1)
+#define O_ANYFD			(-1)
 
 using std::string;
 using std::thread;
@@ -87,7 +82,7 @@ public:
     if (fstatx(fd, &st, STAT_OMIT_NLINK) < 0)
       edie("fstat %s failed", path);
     string res(st.st_size, 0);
-    if (readall(fd, &res.front(), res.size()) != res.size())
+    if (readall(fd, &res.front(), res.size()) != (ssize_t)res.size())
       edie("readall %s failed", path);
     close(fd);
     return res;
@@ -126,7 +121,7 @@ public:
     for (int i = 0; i < nthread; ++i) {
       if (i == mycpu)
         continue;
-      setaffinity(i);
+      //setaffinity(i);
       if (sendto(notifyfd, killmsg, strlen(killmsg), 0,
                  (struct sockaddr*)&notify_sun_, SUN_LEN(&notify_sun_)) < 0)
         edie("%s: sendto failed", __func__);
@@ -134,7 +129,7 @@ public:
 
     close(notifyfd);
 
-    setaffinity(mycpu);
+    //setaffinity(mycpu);
   }
 };
 
@@ -148,11 +143,12 @@ class deliverer
 
   void start_child(const char *argv[], int stdin, int stdout)
   {
-#if defined(XV6_USER)
-    // xv6 doesn't define errno.
-    int errno = 0;
-#endif
     if (alt) {
+#if 0
+#if defined(XV6_USER)
+      // xv6 doesn't define errno.
+      int errno = 0;
+#endif
       posix_spawn_file_actions_t actions;
       if ((errno = posix_spawn_file_actions_init(&actions)))
         edie("posix_spawn_file_actions_init failed");
@@ -167,6 +163,7 @@ class deliverer
         edie("posix_spawn failed");
       if ((errno = posix_spawn_file_actions_destroy(&actions)))
         edie("posix_spawn_file_actions_destroy failed");
+#endif
     } else {
       pid_ = fork();
       if (pid_ < 0)
@@ -222,9 +219,11 @@ public:
         const char *argv[] = {"./mail-deliver", "-b", mailroot_.c_str(),
                               recipient.c_str(), nullptr};
         pool_recipient_ = recipient;
-        if (pipe2(msgpipe, O_CLOEXEC|O_ANYFD) < 0)
+        //if (pipe2(msgpipe, O_CLOEXEC|O_ANYFD) < 0)
+        if (pipe2(msgpipe, O_CLOEXEC) < 0)
           edie("pipe msgpipe failed");
-        if (pipe2(respipe, O_CLOEXEC|O_ANYFD) < 0)
+        //if (pipe2(respipe, O_CLOEXEC|O_ANYFD) < 0)
+        if (pipe2(respipe, O_CLOEXEC) < 0)
           edie("pipe respipe failed");
         start_child(argv, msgpipe[0], respipe[1]);
         close(msgpipe[0]);
@@ -241,7 +240,7 @@ public:
       ssize_t r = copy_fd_n(msgpipe[1], msgfd, msg_len);
       if (r < 0)
         edie("mail-qman: copy_fd_n to mail-deliver failed");
-      else if (r < msg_len)
+      else if ((uint64_t)r < msg_len)
         die("mail-qman: short write to mail-deliver (%zd < %zu)",
             r, (size_t)msg_len);
 
@@ -299,9 +298,10 @@ main(int argc, char **argv)
   while ((opt = getopt(argc, argv, "a:p")) != -1) {
     switch (opt) {
     case 'a':
-      if (strcmp(optarg, "all") == 0)
+      if (strcmp(optarg, "all") == 0) {
+	errx(-1, "alt interface not supported");
         alt = true;
-      else if (strcmp(optarg, "none") == 0)
+      } else if (strcmp(optarg, "none") == 0)
         alt = false;
       else
         usage(argv[0]);
@@ -328,7 +328,7 @@ main(int argc, char **argv)
   thread *threads = new thread[nthread];
 
   for (int i = 0; i < nthread; ++i) {
-    setaffinity(i);
+    //setaffinity(i);
     threads[i] = std::move(thread(do_process, &reader, mailroot, pool,
                                   nthread, i));
   }

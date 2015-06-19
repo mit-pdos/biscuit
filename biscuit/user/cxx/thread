@@ -12,7 +12,7 @@ namespace std
   public:
     class id
     {
-      int thread_;
+      long thread_;
 
       friend class thread;
       explicit id(int thread) noexcept : thread_(thread) { }
@@ -123,8 +123,9 @@ namespace std
       return id_;
     }
 
-    static hardware_concurrency() noexcept
+    static int hardware_concurrency() noexcept
     {
+      const int NCPU = 8;
       return NCPU;
     }
   };

@@ -27,7 +27,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
-CXXBINS := mail-enqueue #mail-qman
+CXXBINS := mail-enqueue mail-qman
 FSCXXPROGS := $(addprefix fsdir/bin/,$(CXXBINS))
 CXXPROGS := $(addprefix user/cxx/,$(CXXBINS))
 
@@ -118,7 +118,8 @@ $(FSCXXPROGS): fsdir/bin/% : user/cxx/%
 CXXRT := $(shell $(CC) -print-file-name=libgcc_eh.a) \
 	 $(shell $(CC) -print-file-name=libsupc++.a)
 
-CXXLOBJS := user/cxx/libutil.o user/cxx/shutil.o user/cxx/cxxrt.o user/c/litc.o
+CXXLOBJS := user/cxx/libutil.o user/cxx/shutil.o user/cxx/cxxrt.o \
+	user/cxx/threads.o user/c/litc.o
 $(CXXLOBJS): user/cxx/sysroot
 
 CXXBEGIN := user/cxx/cxxrtbegin.o

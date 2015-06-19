@@ -55,6 +55,7 @@
 /user/c/mknodtest
 /user/c/sockettest
 /user/cxx/mail-enqueue
+/user/cxx/mail-qman
 /user/cxx/sysroot
 /fsdir/bin/hello
 /fsdir/bin/fault
@@ -95,3 +96,4 @@
 /fsdir/bin/mail-enqueue
 /fsdir/bin/mknodtest
 /fsdir/bin/sockettest
+/fsdir/bin/mail-qman
