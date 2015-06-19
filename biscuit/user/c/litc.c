@@ -766,6 +766,9 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 				done = 1;
 				break;
 			}
+			case 'p':
+				longmode = 1;
+				prehex = 1;
 			case 'x':
 			{
 				if (prehex) {
