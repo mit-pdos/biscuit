@@ -67,6 +67,7 @@ struct stat {
 	ulong	st_ino;
 	ulong	st_mode;
 	ulong	st_size;
+	ulong	st_rdev;
 };
 
 struct tfork_t {
