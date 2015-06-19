@@ -631,8 +631,21 @@ memcpy(void *dst, const void *src, size_t n)
 void *
 memmove(void *dst, const void *src, size_t n)
 {
-	errx(-1, "memmove: no imp");
-	return 0;
+	char *d = dst;
+	const char *s = src;
+	if (d == s || n == 0)
+		return d;
+	if (d > s && d <= s + n) {
+		// copy backwards
+		s += n;
+		d += n;
+		while (n--)
+			*--d = *--s;
+		return d;
+	}
+	while (n--)
+		*d++ = *s++;
+	return d;
 }
 
 void *
