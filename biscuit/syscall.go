@@ -52,6 +52,7 @@ const(
     O_RDWR        = 2
     O_CREAT       = 0x40
     O_EXCL        = 0x80
+    O_TRUNC       = 0x200
     O_APPEND      = 0x400
     O_NONBLOCK    = 0x800
     O_DIRECTORY   = 0x10000
@@ -414,6 +415,9 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	}
 	temp := flags & (O_RDONLY | O_WRONLY | O_RDWR)
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
+		return -EINVAL
+	}
+	if temp == O_RDONLY && flags & O_TRUNC != 0 {
 		return -EINVAL
 	}
 	fdperms := 0

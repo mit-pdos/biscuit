@@ -228,13 +228,14 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		r.dev.minor = min
 		return r
 	}
+	// open with O_TRUNC is not read-only
+	op_begin()
+	defer op_end()
 	if flags & O_CREAT != 0 {
 		if paths == "/" {
 			return nil, -EPERM
 		}
 		isdev := major != 0 || minor != 0
-		op_begin()
-		defer op_end()
 
 		req := &ireq_t{}
 		if isdev {
@@ -294,7 +295,7 @@ func fs_stat(f *file_t, st *stat_t) int {
 	priv := f.priv
 	idmon := idaemon_ensure(priv)
 	req := &ireq_t{}
-	req.mkstat(st)
+	req.mkstat(st, false)
 	idmon.req <- req
 	resp := <- req.ack
 	return resp.err
@@ -458,6 +459,7 @@ type ireq_t struct {
 	memref		bool
 	// stat op
 	stat_st		*stat_t
+	stat_trunc	bool
 }
 
 func (r *ireq_t) mkget(name string, flags int) {
@@ -593,12 +595,13 @@ func (r *ireq_t) mkunlink(path string) {
 	r.path = pathparts(path)
 }
 
-func (r *ireq_t) mkstat(st *stat_t) {
+func (r *ireq_t) mkstat(st *stat_t, trunc bool) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = STAT
 	r.stat_st = st
+	r.stat_trunc = trunc
 }
 
 type iresp_t struct {
@@ -754,7 +757,8 @@ func idaemonize(idm *idaemon_t) {
 				req := ireq_t{}
 				st := stat_t{}
 				st.init()
-				req.mkstat(&st)
+				// tell the existing file to truncate, too
+				req.mkstat(&st, r.flags & O_TRUNC != 0)
 				child := idaemon_ensure(cnext)
 				child.req <- &req
 				resp := <- req.ack
@@ -819,13 +823,17 @@ func idaemonize(idm *idaemon_t) {
 
 				// opening directories with write permissions
 				// is not allowed
-				writable := flags & O_WRONLY != 0 ||
-				    flags & O_RDWR != 0
+				writable := flags & (O_WRONLY|O_RDWR) != 0
 				if itype == I_DIR && writable {
 					r.ack <- &iresp_t{err: -EISDIR}
 					break
 				}
 				idm.memref++
+
+				if flags & O_TRUNC != 0 && itype == I_FILE {
+					idm.icache.size = 0
+					iupdate()
+				}
 			}
 
 			// req is for us
@@ -858,6 +866,10 @@ func idaemonize(idm *idaemon_t) {
 			}
 
 		case STAT:
+			if r.stat_trunc {
+				idm.icache.size = 0
+				iupdate()
+			}
 			st := r.stat_st
 			st.wdev(0)
 			st.wino(int(idm.priv))
@@ -1108,7 +1120,10 @@ func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
 		c += ub
 		src = src[ub:]
 	}
-	idm.icache.size = offset + c
+	newsz := offset + c
+	if newsz > idm.icache.size {
+		idm.icache.size = newsz
+	}
 	return c, 0
 }
 
