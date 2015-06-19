@@ -882,6 +882,8 @@ readline(const char *prompt)
 	}
 	if (ret < 0)
 		printf("readline: read failed: %d\n", ret);
+	if (ret == 0)
+		return NULL;
 	readlineb[i] = 0;
 	return readlineb;
 }
