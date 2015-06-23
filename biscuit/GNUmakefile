@@ -27,7 +27,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
-CXXBINS := mail-enqueue mail-qman
+CXXBINS := mail-enqueue mail-qman mail-deliver
 FSCXXPROGS := $(addprefix fsdir/bin/,$(CXXBINS))
 CXXPROGS := $(addprefix user/cxx/,$(CXXBINS))
 

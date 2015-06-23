@@ -76,6 +76,9 @@ struct tfork_t {
 	void *tf_stack;
 };
 
+#define		S_IFMT		((ulong)-1)
+#define		S_IFDIR		(2)
+
 #define		S_ISDIR(mode)	(mode == 2)
 #define		S_ISREG(mode)	(mode == 1)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
