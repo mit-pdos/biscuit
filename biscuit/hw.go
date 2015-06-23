@@ -34,6 +34,20 @@ func pci_read(tag pcitag_t, reg, width int) int {
 	return ret & m
 }
 
+func pci_write(tag pcitag_t, reg, val int) {
+	if reg & 3 != 0 {
+		panic("reg must be 32bit aligned")
+	}
+	enable := 1 << 31
+	t := enable | int(tag) | reg
+
+	pci_addr := 0xcf8
+	pci_data := 0xcfc
+	runtime.Outl(pci_addr, t)
+	runtime.Outl(pci_data, val)
+	runtime.Outl(pci_addr, 0)
+}
+
 func pci_bar(tag pcitag_t, barn int) int {
 	if barn < 0 || barn > 4 {
 		panic("bad bar #")
