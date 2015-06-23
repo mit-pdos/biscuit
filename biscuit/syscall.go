@@ -95,6 +95,7 @@ const(
     WAIT_MYPGRP  = 0
   SYS_KILL     = 62
   SYS_CHDIR    = 80
+  SYS_RENAME   = 82
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
@@ -186,6 +187,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_kill(p, a1, a2)
 	case SYS_CHDIR:
 		ret = sys_chdir(p, a1)
+	case SYS_RENAME:
+		ret = sys_rename(p, a1, a2)
 	case SYS_MKDIR:
 		ret = sys_mkdir(p, a1, a2)
 	case SYS_LINK:
@@ -770,6 +773,26 @@ func pipe_close(f *file_t, perms int) int {
 	}
 	ch <- -1
 	return 0
+}
+
+func sys_rename(proc *proc_t, oldn int, newn int) int {
+	old, ok1, toolong1 := proc.userstr(oldn, NAME_MAX)
+	new, ok2, toolong2 := proc.userstr(newn, NAME_MAX)
+	if !ok1 || !ok2 {
+		return -EFAULT
+	}
+	if toolong1 || toolong2 {
+		return -ENAMETOOLONG
+	}
+	err1 := badpath(old)
+	err2 := badpath(new)
+	if err1 != 0 {
+		return err1
+	}
+	if err2 != 0 {
+		return err2
+	}
+	return fs_rename(old, new, proc.cwd)
 }
 
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {

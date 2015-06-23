@@ -22,6 +22,7 @@
 #define SYS_WAIT4        61
 #define SYS_KILL         62
 #define SYS_CHDIR        80
+#define SYS_RENAME       82
 #define SYS_MKDIR        83
 #define SYS_LINK         86
 #define SYS_UNLINK       87
@@ -241,8 +242,7 @@ recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *sa,
 int
 rename(const char *old, const char *new)
 {
-	errx(-1, "rename: no imp");
-	return 0;
+	return syscall(SA(old), SA(new), 0, 0, 0, SYS_RENAME);
 }
 
 ssize_t

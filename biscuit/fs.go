@@ -167,6 +167,10 @@ func fs_unlink(paths string, cwdf *file_t) int {
 	return resp.err
 }
 
+func fs_rename(oldp, newp string, cwdf *file_t) int {
+	return -1
+}
+
 func fs_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
