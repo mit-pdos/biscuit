@@ -43,6 +43,12 @@ func dirname(path string) ([]string, string) {
 	return dirs, name
 }
 
+func sdirname(path string) (string, string) {
+	ds, fn := dirname(path)
+	s := strings.Join(ds, "/")
+	return s, fn
+}
+
 func fs_init() *file_t {
 	// we are now prepared to take disk interrupts
 	irq_unmask(IRQ_DISK)
@@ -148,6 +154,7 @@ type inodetx_t struct {
 	cwd	inum
 	lchans	map[string]chan *ireq_t
 	privs	[]inum
+	ptoinum	map[string]inum
 }
 
 func (itx *inodetx_t) init(cwdpriv inum) {
@@ -156,6 +163,7 @@ func (itx *inodetx_t) init(cwdpriv inum) {
 	itx.lchans = make(map[string]chan *ireq_t)
 	itx.privs = make([]inum, 0, 6)
 	itx.dpaths = make([]string, 0, 6)
+	itx.ptoinum = make(map[string]inum)
 }
 
 func (itx *inodetx_t) addpath(path string) {
@@ -311,7 +319,16 @@ func (itx *inodetx_t) lockall() int {
 		fp := path + "/" + child
 		itx.lchans[fp] = lchans[priv]
 	}
+	itx.ptoinum = inums
 	return 0
+}
+
+func (itx *inodetx_t) privfor(path string) inum {
+	ret, ok := itx.ptoinum[path]
+	if !ok {
+		panic("no such path")
+	}
+	return ret
 }
 
 func (itx *inodetx_t) send(path string, req *ireq_t) *iresp_t {
@@ -385,7 +402,7 @@ func fs_link(old string, new string, cwdf *file_t) int {
 }
 
 func fs_unlink(paths string, cwdf *file_t) int {
-	ds, fn := dirname(paths)
+	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -EPERM
 	}
@@ -395,7 +412,6 @@ func fs_unlink(paths string, cwdf *file_t) int {
 
 	itx := inodetx_t{}
 	itx.init(cwdf.priv)
-	dirs := strings.Join(ds, "/")
 	itx.addpath(dirs)
 	itx.addchild(dirs, fn)
 
@@ -467,14 +483,45 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	op_begin()
 	defer op_end()
 
-	req := &ireq_t{}
-	req.mkcreate_dir(paths, 0)
-	if len(req.cr_name) > DNAMELEN {
+	dirs, fn := sdirname(paths)
+	if len(fn) > DNAMELEN {
 		return -ENAMETOOLONG
 	}
-	req_namei(req, paths, cwdf.priv)
-	resp := <- req.ack
-	return resp.err
+
+	// atomically create new dir with insert of "." and ".."
+	itx := inodetx_t{}
+	itx.init(cwdf.priv)
+	itx.addpath(dirs)
+
+	err := itx.lockall()
+	if err != 0 {
+		return err
+	}
+	defer itx.unlockall()
+
+	req := &ireq_t{}
+	req.mkcreate_dir(fn)
+	resp := itx.send(dirs, req)
+	if resp.err != 0 {
+		return resp.err
+	}
+	priv := resp.cnext
+
+	idm := idaemon_ensure(priv)
+	req.mkinsert(".", priv)
+	idm.req <- req
+	resp = <- req.ack
+	if resp.err != 0 {
+		panic("insert must succeed")
+	}
+	parpriv := itx.privfor(dirs)
+	req.mkinsert("..", parpriv)
+	idm.req <- req
+	resp = <- req.ack
+	if resp.err != 0 {
+		panic("insert must succeed")
+	}
+	return 0
 }
 
 func fs_open(paths string, flags int, mode int, cwdf *file_t,
@@ -491,40 +538,140 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		r.dev.minor = min
 		return r
 	}
+
+	trunc := flags & O_TRUNC != 0
+	creat := flags & O_CREAT != 0
+	nodir := false
 	// open with O_TRUNC is not read-only
-	op_begin()
-	defer op_end()
-	if flags & O_CREAT != 0 {
-		if paths == "/" {
-			return nil, -EPERM
-		}
+	if trunc || creat {
+		op_begin()
+		defer op_end()
+	}
+	var idm *idaemon_t
+	priv := inum(-1)
+	var maj int
+	var min int
+	if creat {
+		nodir = true
+		// creat; must atomically create and open the new file.
 		isdev := major != 0 || minor != 0
+
+		// must specify at least one path component
+		dirs, fn := sdirname(paths)
+		if fn == "" {
+			return nil, -EISDIR
+		}
 
 		req := &ireq_t{}
 		if isdev {
-			req.mkcreate_nod(paths, flags, major, minor)
+			req.mkcreate_nod(fn, major, minor)
 		} else {
-			req.mkcreate_file(paths, flags)
+			req.mkcreate_file(fn)
 		}
 		if len(req.cr_name) > DNAMELEN {
 			return nil, -ENAMETOOLONG
 		}
+
+		// lock containing directory
+		itx := inodetx_t{}
+		itx.init(cwdf.priv)
+		itx.addpath(dirs)
+
+		err := itx.lockall()
+		if err != 0 {
+			return nil, err
+		}
+		// create new file
+		resp := itx.send(dirs, req)
+
+		oexcl := flags & O_EXCL != 0
+		if oexcl && resp.err == -EEXIST {
+			itx.unlockall()
+			return nil, resp.err
+		} else if resp.err != 0 && resp.err != -EEXIST {
+			itx.unlockall()
+			return nil, resp.err
+		}
+
+		// open file
+		priv = resp.cnext
+		idm = idaemon_ensure(priv)
+		maj = major
+		min = minor
+
+		req.mkref_direct()
+		idm.req <- req
+		resp = <- req.ack
+		if resp.err != 0 {
+			panic("mem ref inc must succeed")
+		}
+		// unlock after opening to make sure we open the file that we
+		// just created (otherwise O_EXCL is broken)
+		itx.unlockall()
+	} else {
+		// open existing file
+		req := &ireq_t{}
+		req.mkget_meminc(paths)
 		req_namei(req, paths, cwdf.priv)
 		resp := <- req.ack
 		if resp.err != 0 {
 			return nil, resp.err
 		}
-		ret := fnew(resp.cnext, resp.major, resp.minor)
-		return ret, 0
+		priv = resp.gnext
+		maj = resp.major
+		min = resp.minor
+		idm = idaemon_ensure(priv)
 	}
 
-	// send inum get request
-	resp, err := namei(paths, cwdf.priv, flags)
-	if err != 0 {
-		return nil, err
+	o_dir := flags & O_DIRECTORY != 0
+	wantwrite := flags & (O_WRONLY|O_RDWR) != 0
+	if wantwrite {
+		nodir = true
 	}
 
-	ret := fnew(resp.gnext, resp.major, resp.minor)
+	// verify flags: dir cannot be opened with write perms and only dir can
+	// be opened with O_DIRECTORY
+	if o_dir || nodir {
+		memdec := func() {
+			req := &ireq_t{}
+			req.mkrefdec(true)
+			idm.req <- req
+			resp := <- req.ack
+			if resp.err != 0 {
+				panic("mem ref dec must succeed")
+			}
+		}
+		st := &stat_t{}
+		st.init()
+		req := &ireq_t{}
+		req.mkstat(st)
+		idm.req <- req
+		resp := <- req.ack
+		if resp.err != 0 {
+			panic("stat must succeed")
+		}
+		itype := st.mode()
+		if o_dir && itype != I_DIR {
+			memdec()
+			return nil, -ENOTDIR
+		}
+		if nodir && itype == I_DIR {
+			memdec()
+			return nil, -EISDIR
+		}
+	}
+
+	if nodir && trunc {
+		req := &ireq_t{}
+		req.mktrunc()
+		idm.req <- req
+		resp := <- req.ack
+		if resp.err != 0 {
+			panic("trunc must succeed")
+		}
+	}
+
+	ret := fnew(priv, maj, min)
 	return ret, 0
 }
 
@@ -558,7 +705,7 @@ func fs_stat(f *file_t, st *stat_t) int {
 	priv := f.priv
 	idmon := idaemon_ensure(priv)
 	req := &ireq_t{}
-	req.mkstat(st, false)
+	req.mkstat(st)
 	idmon.req <- req
 	resp := <- req.ack
 	return resp.err
@@ -573,14 +720,6 @@ func req_namei(req *ireq_t, paths string, cwd inum) {
 		dest = idaemon_ensure(cwd)
 	}
 	dest.req <- req
-}
-
-func namei(paths string, cwd inum, flags int) (*iresp_t, int) {
-	req := &ireq_t{}
-	req.mkget(paths, flags)
-	req_namei(req, paths, cwd)
-	resp := <- req.ack
-	return resp, resp.err
 }
 
 type idaemon_t struct {
@@ -693,6 +832,7 @@ const (
 	UNLOCK
 	LOOKUP
 	EMPTY
+	TRUNC
 )
 
 type ireq_t struct {
@@ -701,7 +841,6 @@ type ireq_t struct {
 	rtype		rtype_t
 	// tree traversal
 	path		[]string
-	flags		int
 	// read/write op
 	offset		int
 	// read op
@@ -723,18 +862,8 @@ type ireq_t struct {
 	memref		bool
 	// stat op
 	stat_st		*stat_t
-	stat_trunc	bool
 	// lock
 	lock_lchan	chan *ireq_t }
-
-func (r *ireq_t) mkget(name string, flags int) {
-	var z ireq_t
-	*r = z
-	r.ack = make(chan *iresp_t)
-	r.rtype = GET
-	r.path = pathparts(name)
-	r.flags = flags
-}
 
 // if incref is true, the call must be made between op_{begin,end}.
 func (r *ireq_t) mkget_fsinc(name string) {
@@ -785,42 +914,45 @@ func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
 	r.dappend = append
 }
 
-func (r *ireq_t) mkcreate_dir(path string, flags int) {
+func (r *ireq_t) mkcreate_dir(path string) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
 	dirs, name := dirname(path)
-	r.path = dirs
+	if len(dirs) != 0 {
+		panic("no lookup with create now")
+	}
 	r.cr_name = name
 	r.cr_type = I_DIR
-	r.flags = flags
 	r.cr_mkdir = true
 }
 
-func (r *ireq_t) mkcreate_file(path string, flags int) {
+func (r *ireq_t) mkcreate_file(path string) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
 	dirs, name := dirname(path)
-	r.path = dirs
+	if len(dirs) != 0 {
+		panic("no lookup with create now")
+	}
 	r.cr_name = name
 	r.cr_type = I_FILE
-	r.flags = flags
 	r.cr_mkdir = false
 }
 
-func (r *ireq_t) mkcreate_nod(path string, flags, maj, min int) {
+func (r *ireq_t) mkcreate_nod(path string, maj, min int) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = CREATE
 	dirs, name := dirname(path)
-	r.path = dirs
+	if len(dirs) != 0 {
+		panic("no lookup with create now")
+	}
 	r.cr_name = name
 	r.cr_type = I_DEV
-	r.flags = flags
 	r.cr_mkdir = false
 	r.cr_major = maj
 	r.cr_minor = min
@@ -863,13 +995,12 @@ func (r *ireq_t) mkunlink(path string) {
 	r.path = []string{fn}
 }
 
-func (r *ireq_t) mkstat(st *stat_t, trunc bool) {
+func (r *ireq_t) mkstat(st *stat_t) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = STAT
 	r.stat_st = st
-	r.stat_trunc = trunc
 }
 
 func (r *ireq_t) mklock() {
@@ -904,6 +1035,13 @@ func (r *ireq_t) mkempty() {
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = EMPTY
+}
+
+func (r *ireq_t) mktrunc() {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = TRUNC
 }
 
 type iresp_t struct {
@@ -1006,95 +1144,9 @@ func idaemonize(idm *idaemon_t) {
 			cnext, err := idm.icreate(r.cr_name, itype, maj, min)
 			iupdate()
 
-			if itype == I_DEV {
-				// mknod operation
-				if r.flags & O_EXCL != 0 && err == -EEXIST {
-					r.ack <- &iresp_t{err: -EEXIST}
-					break
-				}
-
-				ret := &iresp_t{cnext: cnext, major: maj,
-				    minor: min}
-				r.ack <- ret
-				break
-			} else if itype == I_DIR {
-				// is mkdir operation
-				if err != 0 {
-					ret := &iresp_t{err: err}
-					r.ack <- ret
-					break
-				}
-				// create "." and ".." entry if we made a new
-				// directory
-				req := &ireq_t{}
-				req.mkinsert("..", idm.priv)
-				child := idaemon_ensure(cnext)
-				child.req <- req
-				resp := <- req.ack
-				if resp.err != 0 {
-					panic("insert '../' failed")
-				}
-				req = &ireq_t{}
-				req.mkinsert(".", cnext)
-				child.req <- req
-				resp = <- req.ack
-				if resp.err != 0 {
-					panic("insert './' failed")
-				}
-
-				ret := &iresp_t{cnext: cnext}
-				r.ack <- ret
-				break
-			}
-
-			// open with O_CREAT
-			if err == -EEXIST {
-				// always fail if O_EXCL is specified and the
-				// file exists
-				if r.flags & O_EXCL != 0 {
-					r.ack <- &iresp_t{err: -EEXIST}
-					break
-				}
-
-				// determine type of existing file
-				req := ireq_t{}
-				st := stat_t{}
-				st.init()
-				// tell the existing file to truncate, too
-				req.mkstat(&st, r.flags & O_TRUNC != 0)
-				child := idaemon_ensure(cnext)
-				child.req <- &req
-				resp := <- req.ack
-				if resp.err != 0 {
-					panic("create stat failed")
-				}
-				itype := st.mode()
-
-				// O_CREAT fails if the existing file is a
-				// directory (not sure if posix specifies this,
-				// but it seems good)
-				if itype != I_FILE {
-					r.ack <- &iresp_t{err: -EISDIR}
-					break
-				}
-			} else if err != 0 {
-				ret := &iresp_t{err: err}
-				r.ack <- ret
-				break
-			}
-
-			// inc memref for opened file
-			req := &ireq_t{}
-			req.mkref_direct()
-			child := idaemon_ensure(cnext)
-			child.req <- req
-			resp := <- req.ack
-			if resp.err != 0 {
-				panic("create memref failed")
-			}
-
-			ret := &iresp_t{cnext: cnext}
-			r.ack <- ret
+			resp := &iresp_t{cnext: cnext, err: err,
+			    major: maj, minor: min}
+			r.ack <- resp
 
 		case GET:
 			// is the requester asking for this daemon?
@@ -1113,30 +1165,6 @@ func idaemonize(idm *idaemon_t) {
 				iupdate()
 			} else if r.memref {
 				idm.memref++
-			} else {
-
-				// open -- make sure the open permissions are
-				// allowed
-				itype := idm.icache.itype
-				flags := r.flags
-				if itype != I_DIR && flags & O_DIRECTORY != 0 {
-					r.ack <- &iresp_t{err: -ENOTDIR}
-					break
-				}
-
-				// opening directories with write permissions
-				// is not allowed
-				writable := flags & (O_WRONLY|O_RDWR) != 0
-				if itype == I_DIR && writable {
-					r.ack <- &iresp_t{err: -EISDIR}
-					break
-				}
-				idm.memref++
-
-				if flags & O_TRUNC != 0 && itype == I_FILE {
-					idm.icache.size = 0
-					iupdate()
-				}
 			}
 
 			// req is for us
@@ -1169,10 +1197,6 @@ func idaemonize(idm *idaemon_t) {
 			}
 
 		case STAT:
-			if r.stat_trunc {
-				idm.icache.size = 0
-				iupdate()
-			}
 			st := r.stat_st
 			st.wdev(0)
 			st.wino(int(idm.priv))
@@ -1244,6 +1268,16 @@ func idaemonize(idm *idaemon_t) {
 				err = -EPERM
 			}
 			resp := &iresp_t{err: err}
+			r.ack <- resp
+
+		case TRUNC:
+			if idm.icache.itype != I_FILE &&
+			   idm.icache.itype != I_DEV {
+				panic("bad truncate")
+			}
+			idm.icache.size = 0
+			iupdate()
+			resp := &iresp_t{err: 0}
 			r.ack <- resp
 
 		default:
@@ -1461,6 +1495,9 @@ func (idm *idaemon_t) dirent_add(ds []*dirdata_t, name string, nblkno int,
 
 func (idm *idaemon_t) icreate(name string, nitype, major,
     minor int) (inum, int) {
+	if name == "" {
+		panic("icreate with no name")
+	}
 	if nitype != I_DEV && (major != 0 || minor != 0) {
 		panic("inconsistent args")
 	}

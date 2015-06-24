@@ -22,9 +22,7 @@ int main(int argc, char **argv)
 	int fd, ret;
 
 	if (pid) {
-		int j;
-		for (j = 0; j < 300000000; j++)
-			asm volatile("":::"memory");
+		wait(NULL);
 		if ((ret = open("/afile", O_RDONLY, 0)) < 0)
 		  errx(ret, "open failed");
 		fd = ret;
