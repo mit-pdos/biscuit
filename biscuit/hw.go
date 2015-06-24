@@ -48,6 +48,8 @@ func pci_write(tag pcitag_t, reg, val int) {
 	runtime.Outl(pci_addr, 0)
 }
 
+// XXX enable port IO/mem/busmaster in pci command reg before attaching
+// XXX handle mem mapped bar types too
 func pci_bar(tag pcitag_t, barn int) int {
 	if barn < 0 || barn > 4 {
 		panic("bad bar #")
