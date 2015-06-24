@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+import "sort"
 import "strings"
 import "sync"
 
@@ -21,9 +22,6 @@ var bcdaemon	= bcdaemon_t{}
 var fblock	= sync.Mutex{}
 
 func pathparts(path string) []string {
-	if len(path) == 0 {
-		panic("no path")
-	}
 	sp := strings.Split(path, "/")
 	nn := []string{}
 	for _, s := range sp {
@@ -112,6 +110,249 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
+// object for managing inode transactions. since rename may need to atomically
+// operate on 3 arbitrary inodes, we need a way to lock the inodes but do it
+// without deadlocking. the purpose of this class is to lock the inodes, but
+// lock them in ascending order of inums. that way deadlock is avoided. it is
+// complicated by the fact that we do not know all the inodes inums before hand
+// -- we have to look them up. furthermore, one of the inodes that must be
+// locked may be contained by one of the inums that needs to be locked, so if
+// the lookup inode has a smaller inum, we have to unlock everything and start
+// over, making sure to lock the looked up inode before the others.
+
+// the inputs to inodetx_t are 1) paths: the inodes that are NOT contained in
+// another inode in this transaction. 2) childs: inodes that are contained in
+// another inode in this transaction (like unlink: we must lock the parent dir,
+// a path, and the target directory, the child).
+
+// lockall() then resolves the given paths, increments the mem ref count on the
+// paths so the idaemons don't terminate out from under us, and looks up the
+// inum of all children. the inums are then sorted for the purpose of
+// determining the correct locking order. then all the inodes are locked. every
+// child has its inum verified by doing a lookup in the containing parent (the
+// child inode may have been unlinked before we locked the parents). if all
+// child inums are still correct, locking has succeeded. otherwise, we try
+// again until we succeed.
+
+// it is OK if multiples paths resolve to the same inode (this is possible with
+// rename); lockall() will lock each distinct inode once. that way the
+// transaction operations can be completely unaware of the number of distinct
+// inodes involved in the transaction.
+
+// to unlock, unlockall() simply sends the unlock to all locked inodes and
+// finally decrements the mem ref count.
+
+type inodetx_t struct {
+	dpaths	[]string
+	pchilds	map[string]string
+	cwd	inum
+	lchans	map[string]chan *ireq_t
+	privs	[]inum
+}
+
+func (itx *inodetx_t) init(cwdpriv inum) {
+	itx.cwd = cwdpriv
+	itx.pchilds = make(map[string]string)
+	itx.lchans = make(map[string]chan *ireq_t)
+	itx.privs = make([]inum, 0, 6)
+	itx.dpaths = make([]string, 0, 6)
+}
+
+func (itx *inodetx_t) addpath(path string) {
+	itx.dpaths = append(itx.dpaths, path)
+}
+
+func (itx *inodetx_t) addchild(path string, childp string) {
+	if _, ok := itx.pchilds[path]; ok {
+		panic("path already has child")
+	}
+	itx.pchilds[path] = childp
+}
+
+// we don't need to inc memref of child paths until the end because a child
+// path cannot be freed out from under us since we have the parent directory of
+// all child paths locked (if a child is unlinked before our lock, we will
+// observe that the lookup for the child fails and thus will try to lock
+// again).
+func (itx *inodetx_t) lockall() int {
+	inums := make(map[string]inum)
+	for _, p := range itx.dpaths {
+		req := &ireq_t{}
+		req.mkget_meminc(p)
+		req_namei(req, p, itx.cwd)
+		resp := <- req.ack
+		if resp.err != 0 {
+			return resp.err
+		}
+		inums[p] = resp.gnext
+	}
+
+	send := func(req *ireq_t, priv inum) *iresp_t {
+		idm := idaemon_ensure(priv)
+		idm.req <- req
+		return <- req.ack
+	}
+
+	var lchans map[inum]chan *ireq_t
+	var childpairs map[string]inum
+	var sorted []int
+	done := false
+	for !done {
+		sorted = make([]int, 0, 6)
+		for _, in := range inums {
+			sorted = append(sorted, int(in))
+		}
+
+		// add children to sorted inums
+		childpairs = make(map[string]inum)
+		for path, priv := range inums {
+			child, ok := itx.pchilds[path]
+			if !ok {
+				continue
+			}
+			req := &ireq_t{}
+			req.mklookup(child)
+			resp := send(req, priv)
+			if resp.err != 0 {
+				return resp.err
+			}
+			childpriv := resp.gnext
+			sorted = append(sorted, int(childpriv))
+			childpairs[child] = childpriv
+		}
+
+		lchans = make(map[inum]chan *ireq_t)
+		// sort inums (no duplicates), lock in order
+		sort.Sort(sort.IntSlice(sorted))
+		nodups := make(map[int]bool)
+		for _, in := range sorted {
+			if _, ok := nodups[in]; ok {
+				continue
+			}
+			req := &ireq_t{}
+			req.mklock()
+			lchans[inum(in)] = req.lock_lchan
+			resp := send(req, inum(in))
+			if resp.err != 0 {
+				panic("lock must succeed")
+			}
+		}
+
+		unlockf := func(priv inum) {
+			req := &ireq_t{}
+			req.mkunlock()
+			lchans[priv] <- req
+			resp := <- req.ack
+			if resp.err != 0 {
+				panic("unlock must succeed")
+			}
+		}
+		unlockall := func() {
+			for _, in := range sorted {
+				unlockf(inum(in))
+			}
+		}
+
+		// verify that child inums haven't been changed
+		done = true
+		for path, priv := range inums {
+			child, ok := itx.pchilds[path]
+			if !ok {
+				continue
+			}
+			req := &ireq_t{}
+			req.mklookup(child)
+			lchans[priv] <- req
+			resp := <- req.ack
+			if resp.err != 0 {
+				unlockall()
+				return resp.err
+			}
+			cpriv := resp.gnext
+			old, ok := childpairs[child]
+			if !ok {
+				panic("child pair must exist")
+			}
+			if old != cpriv {
+				// child inode was moved before we locked it
+				unlockall()
+				done = false
+				break
+			}
+		}
+	}
+	for _, in := range sorted {
+		itx.privs = append(itx.privs, inum(in))
+	}
+	// finally, build mapping from path names to lock channels and inc mem
+	// ref of child paths
+	for path, priv := range inums {
+		itx.lchans[path] = lchans[priv]
+	}
+	meminc := func(lchan chan *ireq_t) {
+		req := &ireq_t{}
+		req.mkref_direct()
+		lchan <- req
+		resp := <- req.ack
+		if resp.err != 0 {
+			panic("child memref inc must succeed")
+		}
+	}
+	for path, _ := range inums {
+		child, ok := itx.pchilds[path]
+		if !ok {
+			continue
+		}
+		priv, ok := childpairs[child]
+		if !ok {
+			panic("child pair must exist")
+		}
+		meminc(lchans[priv])
+		fp := path + "/" + child
+		itx.lchans[fp] = lchans[priv]
+	}
+	return 0
+}
+
+func (itx *inodetx_t) send(path string, req *ireq_t) *iresp_t {
+	if itx.lchans == nil {
+		panic("nothing locked")
+	}
+	lchan, ok := itx.lchans[path]
+	if !ok {
+		panic("no such path")
+	}
+	lchan <- req
+	return <- req.ack
+}
+
+func (itx *inodetx_t) unlockall() {
+	// unlock
+	if itx.lchans == nil {
+		panic("nothing locked")
+	}
+	for _, lchan := range itx.lchans {
+		req := &ireq_t{}
+		req.mkunlock()
+		lchan <- req
+		resp := <- req.ack
+		if resp.err != 0 {
+			panic("unlock must succeed")
+		}
+	}
+	// dec mem ref
+	for _, priv := range itx.privs {
+		req := &ireq_t{}
+		req.mkrefdec(true)
+		idm := idaemon_ensure(priv)
+		idm.req <- req
+		resp := <- req.ack
+		if resp.err != 0 {
+			panic("dec ref must succeed")
+		}
+	}
+}
+
 func fs_link(old string, new string, cwdf *file_t) int {
 	op_begin()
 	defer op_end()
@@ -144,7 +385,7 @@ func fs_link(old string, new string, cwdf *file_t) int {
 }
 
 func fs_unlink(paths string, cwdf *file_t) int {
-	_, fn := dirname(paths)
+	ds, fn := dirname(paths)
 	if fn == "." || fn == ".." {
 		return -EPERM
 	}
@@ -152,19 +393,37 @@ func fs_unlink(paths string, cwdf *file_t) int {
 	op_begin()
 	defer op_end()
 
-	req := &ireq_t{}
-	req.mkunlink(paths)
-	req_namei(req, paths, cwdf.priv)
-	resp := <- req.ack
-	doit := resp.err == 0
-	// if the targe file is a directory, only remove its directory entry if
-	// it is empty
-	if resp.commitwait {
-		req.commit <- doit
-		// wait for parent inode update to finish
-		<- req.commit
+	itx := inodetx_t{}
+	itx.init(cwdf.priv)
+	dirs := strings.Join(ds, "/")
+	itx.addpath(dirs)
+	itx.addchild(dirs, fn)
+
+	err := itx.lockall()
+	if err != 0 {
+		return err
 	}
-	return resp.err
+	defer itx.unlockall()
+
+	req := &ireq_t{}
+	req.mkempty()
+	cp := dirs + "/" + fn
+	resp := itx.send(cp, req)
+	if resp.err != 0 {
+		return resp.err
+	}
+
+	req.mkunlink(fn)
+	resp = itx.send(dirs, req)
+	if resp.err != 0 {
+		panic("unlink must succeed")
+	}
+	req.mkrefdec(false)
+	resp = itx.send(cp, req)
+	if resp.err != 0 {
+		panic("fs ref dec must succeed")
+	}
+	return 0
 }
 
 func fs_rename(oldp, newp string, cwdf *file_t) int {
@@ -430,6 +689,10 @@ const (
 	LINK
 	UNLINK
 	STAT
+	LOCK
+	UNLOCK
+	LOOKUP
+	EMPTY
 )
 
 type ireq_t struct {
@@ -455,16 +718,14 @@ type ireq_t struct {
 	// insert op
 	insert_name	string
 	insert_priv	inum
-	// unlink op
-	commitwait	bool
-	commit		chan bool
 	// inc ref count after get
 	fsref		bool
 	memref		bool
 	// stat op
 	stat_st		*stat_t
 	stat_trunc	bool
-}
+	// lock
+	lock_lchan	chan *ireq_t }
 
 func (r *ireq_t) mkget(name string, flags int) {
 	var z ireq_t
@@ -486,7 +747,7 @@ func (r *ireq_t) mkget_fsinc(name string) {
 	r.memref = false
 }
 
-func (r *ireq_t) mkget_memref(name string) {
+func (r *ireq_t) mkget_meminc(name string) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
@@ -594,9 +855,12 @@ func (r *ireq_t) mkunlink(path string) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
-	r.commit = make(chan bool)
 	r.rtype = UNLINK
-	r.path = pathparts(path)
+	dirs, fn := dirname(path)
+	if len(dirs) != 0 {
+		panic("no lookup with unlink now")
+	}
+	r.path = []string{fn}
 }
 
 func (r *ireq_t) mkstat(st *stat_t, trunc bool) {
@@ -606,6 +870,40 @@ func (r *ireq_t) mkstat(st *stat_t, trunc bool) {
 	r.rtype = STAT
 	r.stat_st = st
 	r.stat_trunc = trunc
+}
+
+func (r *ireq_t) mklock() {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = LOCK
+	r.lock_lchan = make(chan *ireq_t)
+}
+
+func (r *ireq_t) mkunlock() {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = UNLOCK
+}
+
+func (r *ireq_t) mklookup(path string) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = LOOKUP
+	dn, fn := dirname(path)
+	if len(dn) != 0 {
+		panic("dirname given to lookup")
+	}
+	r.path = []string{fn}
+}
+
+func (r *ireq_t) mkempty() {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = EMPTY
 }
 
 type iresp_t struct {
@@ -683,8 +981,9 @@ func idaemonize(idm *idaemon_t) {
 
 	// simple operations
 	go func() {
+	ch := idm.req
 	for {
-		r := <- idm.req
+		r := <- ch
 		switch r.rtype {
 		case CREATE:
 			if fwded, erred := idm.forwardreq(r); fwded || erred {
@@ -883,61 +1182,16 @@ func idaemonize(idm *idaemon_t) {
 			r.ack <- &iresp_t{}
 
 		case UNLINK:
-			// XXX it would be simpler to pass unlink all the way
-			// to child, then have child synchronously send unlink
-			// to parent
-
-			// this operation is special: both the target file and
-			// the parent directory of the target file process the
-			// operation.
-			amparent := len(r.path) == 1
-			amchild := len(r.path) == 0
-			if amparent {
-				// parent directory
-				name := r.path[0]
-				commitch := r.commit
-				// check to make sure the operation will
-				// succeed before forwarding the operation.
-				_, err := idm.iget(name)
-				if err != 0 {
-					r.ack <- &iresp_t{err: err}
-					break
-				}
-				r.commitwait = true
-				_, erred := idm.forwardreq(r)
-				if erred {
-					panic("forward must succeed")
-				}
-
-				// wait for confirmation
-				commit := <- commitch
-				if commit {
-					_, err = idm.iunlink(name)
-					iupdate()
-				}
-				commitch <- commit
-			} else if amchild {
-				// the destination is us
-				// ensure child wakes up parent
-				resp := &iresp_t{commitwait: r.commitwait}
-				// if we are a directory, make sure we are
-				// empty before unlinking.
-				if idm.icache.itype == I_DIR &&
-				   !idm.idirempty() {
-					resp.err = -EPERM
-					r.ack <- resp
-					break
-				}
-
-				// decrement reference count
-				terminate := irefdown(false)
-				r.ack <- resp
-				if terminate {
-					return
-				}
-			} else {
-				idm.forwardreq(r)
+			if len(r.path) != 1 {
+				panic("path for lookup should be one component")
 			}
+			name := r.path[0]
+			_, err := idm.iunlink(name)
+			if err == 0 {
+				iupdate()
+			}
+			ret := &iresp_t{err: err}
+			r.ack <- ret
 
 		case WRITE:
 			if idm.icache.itype == I_DIR {
@@ -954,6 +1208,43 @@ func idaemonize(idm *idaemon_t) {
 			iupdate()
 			ret := &iresp_t{count: read, err: err}
 			r.ack <- ret
+
+		// new uops
+		case LOCK:
+			if r.lock_lchan == nil {
+				panic("lock with nil lock chan")
+			}
+			if ch != idm.req {
+				panic("double lock")
+			}
+			ch = r.lock_lchan
+			resp := &iresp_t{err: 0}
+			r.ack <- resp
+
+		case UNLOCK:
+			if ch == idm.req {
+				panic("already unlocked")
+			}
+			ch = idm.req
+			resp := &iresp_t{err: 0}
+			r.ack <- resp
+
+		case LOOKUP:
+			if len(r.path) != 1 {
+				panic("path for lookup should be one component")
+			}
+			name := r.path[0]
+			npriv, err := idm.iget(name)
+			resp := &iresp_t{gnext: npriv, err: err}
+			r.ack <- resp
+
+		case EMPTY:
+			err := 0
+			if idm.icache.itype == I_DIR && !idm.idirempty() {
+				err = -EPERM
+			}
+			resp := &iresp_t{err: err}
+			r.ack <- resp
 
 		default:
 			panic("bad req type")
