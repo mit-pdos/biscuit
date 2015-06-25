@@ -46,6 +46,9 @@ func dirname(path string) ([]string, string) {
 func sdirname(path string) (string, string) {
 	ds, fn := dirname(path)
 	s := strings.Join(ds, "/")
+	if path != "" && path[0] == '/' {
+		s = "/" + s
+	}
 	return s, fn
 }
 
@@ -124,7 +127,9 @@ func fs_recover() {
 // -- we have to look them up. furthermore, one of the inodes that must be
 // locked may be contained by one of the inums that needs to be locked, so if
 // the lookup inode has a smaller inum, we have to unlock everything and start
-// over, making sure to lock the looked up inode before the others.
+// over, making sure to lock the looked up inode before the others. worse yet,
+// a child may exist in which case it must be locked -- if it does not exist
+// then obviously it is fine to not lock it.
 
 // the inputs to inodetx_t are 1) paths: the inodes that are NOT contained in
 // another inode in this transaction. 2) childs: inodes that are contained in
@@ -150,7 +155,9 @@ func fs_recover() {
 
 type inodetx_t struct {
 	dpaths	[]string
-	pchilds	map[string]string
+	pchilds	map[string][]string
+	pmexist	map[string]bool
+	lchilds map[string]bool
 	cwd	inum
 	lchans	map[string]chan *ireq_t
 	privs	[]inum
@@ -159,7 +166,9 @@ type inodetx_t struct {
 
 func (itx *inodetx_t) init(cwdpriv inum) {
 	itx.cwd = cwdpriv
-	itx.pchilds = make(map[string]string)
+	itx.pchilds = make(map[string][]string)
+	itx.pmexist = make(map[string]bool)
+	itx.lchilds = make(map[string]bool)
 	itx.lchans = make(map[string]chan *ireq_t)
 	itx.privs = make([]inum, 0, 6)
 	itx.dpaths = make([]string, 0, 6)
@@ -170,11 +179,13 @@ func (itx *inodetx_t) addpath(path string) {
 	itx.dpaths = append(itx.dpaths, path)
 }
 
-func (itx *inodetx_t) addchild(path string, childp string) {
-	if _, ok := itx.pchilds[path]; ok {
-		panic("path already has child")
+func (itx *inodetx_t) addchild(path string, childp string, mustexist bool) {
+	if s, ok := itx.pchilds[path]; ok {
+		itx.pchilds[path] = append(s, childp)
+	} else {
+		itx.pchilds[path] = []string{childp}
 	}
-	itx.pchilds[path] = childp
+	itx.pmexist[path + "/" + childp] = mustexist
 }
 
 // we don't need to inc memref of child paths until the end because a child
@@ -211,22 +222,31 @@ func (itx *inodetx_t) lockall() int {
 			sorted = append(sorted, int(in))
 		}
 
+		cadds := make(map[string]bool)
 		// add children to sorted inums
 		childpairs = make(map[string]inum)
 		for path, priv := range inums {
-			child, ok := itx.pchilds[path]
+			childs, ok := itx.pchilds[path]
 			if !ok {
 				continue
 			}
-			req := &ireq_t{}
-			req.mklookup(child)
-			resp := send(req, priv)
-			if resp.err != 0 {
-				return resp.err
+			for _, child := range childs {
+				req := &ireq_t{}
+				req.mklookup(child)
+				resp := send(req, priv)
+				if resp.err == -ENOENT {
+					if itx.pmexist[path + "/" + child] {
+						return resp.err
+					}
+					continue
+				} else if resp.err != 0 {
+					return resp.err
+				}
+				childpriv := resp.gnext
+				sorted = append(sorted, int(childpriv))
+				childpairs[child] = childpriv
+				cadds[child] = true
 			}
-			childpriv := resp.gnext
-			sorted = append(sorted, int(childpriv))
-			childpairs[child] = childpriv
 		}
 
 		lchans = make(map[inum]chan *ireq_t)
@@ -261,31 +281,46 @@ func (itx *inodetx_t) lockall() int {
 			}
 		}
 
-		// verify that child inums haven't been changed
+		// verify that child inums haven't been changed and that
+		// children that were not locked because they didn't exist do
+		// not now exist
 		done = true
 		for path, priv := range inums {
-			child, ok := itx.pchilds[path]
+			childs, ok := itx.pchilds[path]
 			if !ok {
 				continue
 			}
-			req := &ireq_t{}
-			req.mklookup(child)
-			lchans[priv] <- req
-			resp := <- req.ack
-			if resp.err != 0 {
-				unlockall()
-				return resp.err
-			}
-			cpriv := resp.gnext
-			old, ok := childpairs[child]
-			if !ok {
-				panic("child pair must exist")
-			}
-			if old != cpriv {
-				// child inode was moved before we locked it
-				unlockall()
-				done = false
-				break
+			for _, child := range childs {
+				req := &ireq_t{}
+				req.mklookup(child)
+				lchans[priv] <- req
+				resp := <- req.ack
+				if resp.err == 0 && !cadds[child] {
+					unlockall()
+					done = false
+					break
+				} else if resp.err == -ENOENT {
+					if cadds[child] {
+						unlockall()
+						done = false
+						break
+					}
+					continue
+				} else if resp.err != 0 {
+					unlockall()
+					return resp.err
+				}
+				cpriv := resp.gnext
+				old, ok := childpairs[child]
+				if !ok {
+					panic("child pair must exist")
+				}
+				if old != cpriv {
+					// child inode was moved before we locked it
+					unlockall()
+					done = false
+					break
+				}
 			}
 		}
 	}
@@ -296,6 +331,7 @@ func (itx *inodetx_t) lockall() int {
 	// ref of child paths
 	for path, priv := range inums {
 		itx.lchans[path] = lchans[priv]
+		itx.ptoinum[path] = priv
 	}
 	meminc := func(lchan chan *ireq_t) {
 		req := &ireq_t{}
@@ -307,20 +343,27 @@ func (itx *inodetx_t) lockall() int {
 		}
 	}
 	for path, _ := range inums {
-		child, ok := itx.pchilds[path]
+		childs, ok := itx.pchilds[path]
 		if !ok {
 			continue
 		}
-		priv, ok := childpairs[child]
-		if !ok {
-			panic("child pair must exist")
+		for _, child := range childs {
+			priv, ok := childpairs[child]
+			if !ok {
+				continue
+			}
+			meminc(lchans[priv])
+			fp := path + "/" + child
+			itx.lchans[fp] = lchans[priv]
+			itx.ptoinum[fp] = priv
+			itx.lchilds[fp] = true
 		}
-		meminc(lchans[priv])
-		fp := path + "/" + child
-		itx.lchans[fp] = lchans[priv]
 	}
-	itx.ptoinum = inums
 	return 0
+}
+
+func (itx *inodetx_t) childlocked(fpath string) bool {
+	return itx.lchilds[fpath]
 }
 
 func (itx *inodetx_t) privfor(path string) inum {
@@ -331,11 +374,11 @@ func (itx *inodetx_t) privfor(path string) inum {
 	return ret
 }
 
-func (itx *inodetx_t) send(path string, req *ireq_t) *iresp_t {
+func (itx *inodetx_t) send(fpath string, req *ireq_t) *iresp_t {
 	if itx.lchans == nil {
 		panic("nothing locked")
 	}
-	lchan, ok := itx.lchans[path]
+	lchan, ok := itx.lchans[fpath]
 	if !ok {
 		panic("no such path")
 	}
@@ -413,7 +456,7 @@ func fs_unlink(paths string, cwdf *file_t) int {
 	itx := inodetx_t{}
 	itx.init(cwdf.priv)
 	itx.addpath(dirs)
-	itx.addchild(dirs, fn)
+	itx.addchild(dirs, fn, true)
 
 	err := itx.lockall()
 	if err != 0 {
@@ -443,7 +486,81 @@ func fs_unlink(paths string, cwdf *file_t) int {
 }
 
 func fs_rename(oldp, newp string, cwdf *file_t) int {
-	return -1
+	odirs, ofn := sdirname(oldp)
+	ndirs, nfn := sdirname(newp)
+
+	if ofn == "" || nfn == "" {
+		return -ENOENT
+	}
+
+	op_begin()
+	defer op_end()
+
+	itx := inodetx_t{}
+	itx.init(cwdf.priv)
+	itx.addpath(odirs)
+	itx.addpath(ndirs)
+	itx.addchild(odirs, ofn, true)
+	itx.addchild(ndirs, nfn, false)
+
+	err := itx.lockall()
+	if err != 0 {
+		return err
+	}
+	defer itx.unlockall()
+
+	sendd := func(path string, req *ireq_t) *iresp_t {
+		resp := itx.send(path, req)
+		if resp.err != 0 {
+			panic("op must succed")
+		}
+		return resp
+	}
+
+	ofp := odirs + "/" + ofn
+	nfp := ndirs + "/" + nfn
+	newexists := itx.childlocked(nfp)
+	if newexists {
+		// make sure old file and new file are both files, or both
+		// directories
+		ost := &stat_t{}
+		ost.init()
+		req := &ireq_t{}
+		req.mkstat(ost)
+		sendd(ofp, req)
+
+		nst := &stat_t{}
+		nst.init()
+		req.mkstat(nst)
+		sendd(nfp, req)
+
+		odir := ost.mode() == I_DIR
+		ndir := nst.mode() == I_DIR
+		if odir && !ndir {
+			return -ENOTDIR
+		} else if !odir && ndir {
+			return -EISDIR
+		}
+
+		// unlink existing new file
+		req.mkunlink(nfn)
+		sendd(ndirs, req)
+
+		req.mkrefdec(false)
+		sendd(nfp, req)
+	}
+
+	// insert new file
+	opriv := itx.privfor(ofp)
+
+	req := &ireq_t{}
+	req.mkinsert(nfn, opriv)
+	sendd(ndirs, req)
+
+	req.mkunlink(ofn)
+	sendd(odirs, req)
+
+	return 0
 }
 
 func fs_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
@@ -1206,9 +1323,6 @@ func idaemonize(idm *idaemon_t) {
 			r.ack <- &iresp_t{}
 
 		case UNLINK:
-			if len(r.path) != 1 {
-				panic("path for lookup should be one component")
-			}
 			name := r.path[0]
 			_, err := idm.iunlink(name)
 			if err == 0 {

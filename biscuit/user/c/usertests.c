@@ -1736,6 +1736,104 @@ rand()
   return randstate;
 }
 
+void
+rshuffle(char *f1, char *f2, char *n1, char *n2)
+{
+	int i;
+	for (i = 0; i < 100; i++) {
+		while (rename(f1, f2) < 0)
+			;
+		while (rename(n1, n2) < 0)
+			;
+	}
+	exit(0);
+}
+
+void
+collectn(int n)
+{
+	int i;
+	for (i = 0; i < n; i++) {
+		int status;
+		wait(&status);
+		if (WEXITSTATUS(status) != 0)
+			errx(status, "child failed: %d", status);
+	}
+}
+
+void
+_rename()
+{
+	int ret;
+	if ((ret = mkdir("renamed")))
+		err(ret, "mkdir");
+	if ((ret = chdir("renamed")))
+		err(ret, "chdir");
+
+	if ((ret = open("a", O_RDONLY | O_CREAT)) < 0)
+		err(ret, "open");
+	close(ret);
+	if ((ret = open("f", O_RDONLY | O_CREAT)) < 0)
+		err(ret, "open");
+	close(ret);
+
+	if (fork() == 0)
+		rshuffle("a", "b", "e", "f");
+	if (fork() == 0)
+		rshuffle("b", "c", "f", "g");
+	if (fork() == 0)
+		rshuffle("c", "a", "g", "e");
+	collectn(3);
+
+	unlink("a");
+	unlink("b");
+	unlink("c");
+	unlink("e");
+	unlink("f");
+	unlink("g");
+
+	if ((ret = mkdir("d1")))
+		err(ret, "mkdir");
+	if ((ret = mkdir("d2")))
+		err(ret, "mkdir");
+	if ((ret = mkdir("d3")))
+		err(ret, "mkdir");
+
+	if ((ret = open("d1/a", O_RDONLY | O_CREAT)) < 0)
+		err(ret, "open");
+	close(ret);
+	if ((ret = open("d2/e", O_RDONLY | O_CREAT)) < 0)
+		err(ret, "open");
+	close(ret);
+
+	if (fork() == 0)
+		rshuffle("d1/a", "d2/b", "d1/f", "d3/g");
+	if (fork() == 0)
+		rshuffle("d2/b", "d3/c", "d2/e", "d1/f");
+	if (fork() == 0)
+		rshuffle("d3/c", "d1/a", "d3/g", "d2/e");
+	collectn(3);
+
+	exit(0);
+}
+
+void
+rename_test()
+{
+	printf("rename test\n");
+
+	int pid = fork();
+	if (!pid)
+		_rename();
+	int status;
+	wait(&status);
+
+	if (WEXITSTATUS(status) != 0)
+		errx(status, "rename test failed");
+
+	printf("rename test finished\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1752,6 +1850,7 @@ main(int argc, char *argv[])
   concreate();
   fourfiles();
   sharedfd();
+  rename_test();
 
   bigargtest();
   bigwrite();
