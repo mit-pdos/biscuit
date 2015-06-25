@@ -581,7 +581,7 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 		sys_close(proc, newn)
 	}
 	nfd := copyfd(ofd)
-	nfd.perms &^= O_CLOEXEC
+	nfd.perms &^= FD_CLOEXEC
 	proc.fds[newn] = nfd
 	return newn
 }
