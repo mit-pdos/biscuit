@@ -228,17 +228,7 @@ func cons_read(dsts [][]uint8, priv *file_t, offset int) (int, int) {
 	}
 	kdata := kbd_get(sz)
 	ret := len(kdata)
-	for _, dst := range dsts {
-		ub := len(kdata)
-		if ub > len(dst) {
-			ub = len(dst)
-		}
-		for i := 0; i < ub; i++ {
-			dst[i] = kdata[i]
-		}
-		kdata = kdata[ub:]
-	}
-	if len(kdata) != 0 {
+	if buftodests(kdata, dsts) != len(kdata) {
 		panic("dropped keys")
 	}
 	return ret, 0
