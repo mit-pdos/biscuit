@@ -216,7 +216,7 @@ public:
 
       if (!pid_) {
         // Start batch-mode deliver process
-        const char *argv[] = {"./mail-deliver", "-b", mailroot_.c_str(),
+        const char *argv[] = {"/bin/mail-deliver", "-b", mailroot_.c_str(),
                               recipient.c_str(), nullptr};
         pool_recipient_ = recipient;
         //if (pipe2(msgpipe, O_CLOEXEC|O_ANYFD) < 0)
@@ -251,7 +251,7 @@ public:
       if (res != 0)
         die("mail-qman: mail-deliver returned status %d", (int)res);
     } else {
-      const char *argv[] = {"./mail-deliver", mailroot_.c_str(),
+      const char *argv[] = {"/bin/mail-deliver", mailroot_.c_str(),
                             recipient.c_str(), nullptr};
       start_child(argv, msgfd, -1);
       wait_child();
