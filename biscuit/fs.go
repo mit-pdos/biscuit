@@ -244,8 +244,8 @@ func (itx *inodetx_t) lockall() int {
 				}
 				childpriv := resp.gnext
 				sorted = append(sorted, int(childpriv))
-				childpairs[child] = childpriv
-				cadds[child] = true
+				childpairs[path + "/" + child] = childpriv
+				cadds[path + "/" + child] = true
 			}
 		}
 
@@ -285,6 +285,7 @@ func (itx *inodetx_t) lockall() int {
 		// children that were not locked because they didn't exist do
 		// not now exist
 		done = true
+		outer:
 		for path, priv := range inums {
 			childs, ok := itx.pchilds[path]
 			if !ok {
@@ -295,15 +296,15 @@ func (itx *inodetx_t) lockall() int {
 				req.mklookup(child)
 				lchans[priv] <- req
 				resp := <- req.ack
-				if resp.err == 0 && !cadds[child] {
+				if resp.err == 0 && !cadds[path + "/" + child] {
 					unlockall()
 					done = false
-					break
+					break outer
 				} else if resp.err == -ENOENT {
-					if cadds[child] {
+					if cadds[path + "/" + child] {
 						unlockall()
 						done = false
-						break
+						break outer
 					}
 					continue
 				} else if resp.err != 0 {
@@ -311,7 +312,7 @@ func (itx *inodetx_t) lockall() int {
 					return resp.err
 				}
 				cpriv := resp.gnext
-				old, ok := childpairs[child]
+				old, ok := childpairs[path + "/" + child]
 				if !ok {
 					panic("child pair must exist")
 				}
@@ -319,7 +320,7 @@ func (itx *inodetx_t) lockall() int {
 					// child inode was moved before we locked it
 					unlockall()
 					done = false
-					break
+					break outer
 				}
 			}
 		}
@@ -348,7 +349,7 @@ func (itx *inodetx_t) lockall() int {
 			continue
 		}
 		for _, child := range childs {
-			priv, ok := childpairs[child]
+			priv, ok := childpairs[path + "/" + child]
 			if !ok {
 				continue
 			}

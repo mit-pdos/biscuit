@@ -1765,10 +1765,6 @@ void
 _rename()
 {
 	int ret;
-	if ((ret = mkdir("renamed")))
-		err(ret, "mkdir");
-	if ((ret = chdir("renamed")))
-		err(ret, "chdir");
 
 	if ((ret = open("a", O_RDONLY | O_CREAT)) < 0)
 		err(ret, "open");
@@ -1776,6 +1772,17 @@ _rename()
 	if ((ret = open("f", O_RDONLY | O_CREAT)) < 0)
 		err(ret, "open");
 	close(ret);
+
+	if ((ret = mkdir("renamed")))
+		err(ret, "mkdir");
+
+	if ((ret = rename("a", "renamed/a")))
+		err(ret, "rename");
+	if ((ret = rename("f", "renamed/f")))
+		err(ret, "rename");
+
+	if ((ret = chdir("renamed")))
+		err(ret, "chdir");
 
 	if (fork() == 0)
 		rshuffle("a", "b", "e", "f");
