@@ -1,71 +1,102 @@
 #include <litc.h>
 
-void child()
+void sendall(int fd, char *buf, size_t len, struct sockaddr_un *sa,
+    socklen_t slen)
 {
-	struct sockaddr_un me;
-	snprintf(me.sun_path, sizeof(me.sun_path), "/tmp/child");
-	int s = socket(AF_UNIX, SOCK_DGRAM, 0);
+	size_t c = 0;
 	int ret;
-	if ((ret = bind(s, (struct sockaddr *)&me, sizeof(me))) < 0)
+	while (c < len) {
+		ret = sendto(fd, buf + c, len - c, 0, (struct sockaddr *)sa,
+		    slen);
+		if (ret < 0)
+			err(ret, "sendall");
+		c += ret;
+	}
+}
+
+void sendmany()
+{
+	int s = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (s < 0)
+		err(s, "socket");
+
+	int ret;
+	struct sockaddr_un me;
+	memset(&me, 0, sizeof(struct sockaddr_un));
+	me.sun_family = AF_UNIX;
+	snprintf(me.sun_path, sizeof(me.sun_path), "/tmp/child");
+	if ((ret = bind(s, (struct sockaddr *)&me,
+	     sizeof(struct sockaddr_un))) < 0)
 		err(ret, "bind: %d", ret);
 
 	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
 	snprintf(sa.sun_path, sizeof(sa.sun_path), "/tmp/parent");
 
-	char msg[] = "levee be breakin'";
-	int s2 = socket(AF_UNIX, SOCK_DGRAM, 0);
-	ret = sendto(s2, msg, sizeof(msg), 0, (struct sockaddr *)&sa,
-	    sizeof(sa));
-	if (ret < 0)
-		err(ret, "sendto");
-	if (ret != sizeof(msg))
-		errx(-1, "send mismath: %d %ld\n", ret, sizeof(msg));
-
-	char buf[64];
-	if ((ret = recvfrom(s, buf, sizeof(buf) - 1, 0, NULL, NULL)) < 0)
-		err(ret, "recvfrom");
-	buf[ret] = 0;
-	printf("child got: %s\n", buf);
+	int i;
+	for (i = 0; i < 100; i++) {
+		char buf[64];
+		snprintf(buf, sizeof(buf), "message %d", i);
+		size_t mlen = strlen(buf);
+		//sendall(s, buf, strlen(buf), &sa, sizeof(struct sockaddr_un));
+		int ret = sendto(s, buf, mlen, 0, (void *)&sa,
+		    sizeof(struct sockaddr_un));
+		if (ret < 0)
+			err(ret, "sendto");
+		if (ret != mlen)
+			printf("short write! (lost %ld bytes)\n", mlen - ret);
+	}
+	printf("**sender done\n");
 	exit(0);
 }
 
-int main(int argc, char **argv)
+void test()
 {
-	int pid;
-	if ((pid = fork()) < 0)
-		err(pid, "fork");
-	if (pid == 0)
-		child();
+	unlink("/tmp/parent");
+	unlink("/tmp/child");
 
 	int s = socket(AF_UNIX, SOCK_DGRAM, 0);
 	if (s < 0)
 		err(s, "socket");
+
+	int ret;
 	struct sockaddr_un sa;
-	sa.sun_len = sizeof(sa);
+	memset(&sa, 0, sizeof(struct sockaddr_un));
 	sa.sun_family = AF_UNIX;
 	snprintf(sa.sun_path, sizeof(sa.sun_path), "/tmp/parent");
-	int ret;
 	if ((ret = bind(s, (struct sockaddr *)&sa, sizeof(sa))) < 0)
 		err(ret, "bind: %d", ret);
 
+	int pid;
+	if ((pid = fork()) < 0)
+		err(pid, "fork");
+	if (pid == 0) {
+		close(s);
+		sendmany();
+	}
+
 	char buf[64];
-	if ((ret = recvfrom(s, buf, sizeof(buf) - 1, 0, NULL, NULL)) < 0)
-		err(ret, "recvfrom");
-	buf[ret] = 0;
-	printf("parent got: %s\n", buf);
+	int i;
+	for (i = 0; i < 100; i++) {
+		// stall to make sure the socket buffer fills up and blocks the
+		// sender
+		int j;
+		for (j = 0; j < 1000000; j++)
+			rdtsc();
+		struct sockaddr_un cli;
+		socklen_t clen = sizeof(struct sockaddr_un);
+		ret = recvfrom(s, buf, sizeof(buf) - 1, 0,
+		    (struct sockaddr *)&cli, &clen);
+		if (ret < 0)
+			err(ret, "recvfrom");
+		buf[ret] = 0;
+		printf("from: %s got: %s\n", cli.sun_path, buf);
+	}
+	wait(NULL);
+}
 
-	struct sockaddr_un them;
-	snprintf(them.sun_path, sizeof(them.sun_path), "/tmp/child");
-
-	char msg[] = "indeed! broken as fuke";
-	int s2 = socket(AF_UNIX, SOCK_DGRAM, 0);
-	ret = sendto(s2, msg, sizeof(msg), 0, (struct sockaddr *)&them,
-	    sizeof(them));
-	if (ret < 0)
-		err(ret, "sendto");
-	if (ret != sizeof(msg))
-		errx(-1, "send mismath: %d %ld\n", ret, sizeof(msg));
-
-	close(s);
+int main(int argc, char **argv)
+{
+	test();
 	return 0;
 }

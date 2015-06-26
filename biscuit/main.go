@@ -679,6 +679,9 @@ func (p *proc_t) userdmap(va int) ([]uint8, bool) {
 }
 
 func (p *proc_t) usermapped(va, n int) bool {
+	if n < 0 {
+		panic("negative count")
+	}
 	end := roundup(va + n, PGSIZE)
 	for i := rounddown(va, PGSIZE); i < end; i += PGSIZE {
 		pn := i & PGMASK
@@ -1460,6 +1463,7 @@ func main() {
 
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
+	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
 	exec("bin/lsh", []string{})
 	//exec("bin/usertests", []string{})
 	//exec("bin/pipetest", []string{})

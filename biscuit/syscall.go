@@ -40,6 +40,7 @@ const(
   EPIPE        = 32
   ENAMETOOLONG = 36
   ENOSYS       = 38
+  EMSGSIZE     = 90
   ECONNREFUSED = 111
 )
 
@@ -250,12 +251,20 @@ func sock_close(f *file_t, perms int) int {
 	if !f.sock.dgram {
 		panic("no imp")
 	}
-	allsunds.Lock()
-	delete(allsunds.m, f.sock.sunid)
-	if f.sock.sund != nil {
-		f.sock.sund.finish <- true
+	f.Lock()
+	f.sock.open--
+	if f.sock.open < 0 {
+		panic("negative ref count")
 	}
-	allsunds.Unlock()
+	termsund := f.sock.open == 0
+	f.Unlock()
+
+	if termsund && f.sock.bound {
+		allsunds.Lock()
+		delete(allsunds.m, f.sock.sunaddr.id)
+		f.sock.sunaddr.sund.finish <- true
+		allsunds.Unlock()
+	}
 	return 0
 }
 
@@ -554,6 +563,10 @@ func copyfd(fd *fd_t) *fd_t {
 		ch <- 1
 	case INODE:
 		fs_memref(fd.file, fd.perms)
+	case SOCKET:
+		fd.file.Lock()
+		fd.file.sock.open++
+		fd.file.Unlock()
 	}
 	return nfd
 }
@@ -884,6 +897,7 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	} else {
 		fd.file.sock.stream = true
 	}
+	fd.file.sock.open = 1
 	return fdn
 }
 
@@ -918,7 +932,7 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	if toolong {
 		return -ENAMETOOLONG
 	}
-	// get sunid from file
+	// get sund id from file
 	file, err := fs_open(path, 0, 0, proc.cwd, 0, 0)
 	if err != 0 {
 		return err
@@ -946,7 +960,7 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	for c < buflen {
 		src, ok := proc.userdmap(bufn + c)
 		if !ok {
-			sund.in <- nil
+			sund.in <- sunbuf_t{}
 			return -EFAULT
 		}
 		left := buflen - c
@@ -957,7 +971,8 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 		c += len(src)
 	}
 
-	sund.in <- data
+	sbuf := sunbuf_t{from: file.sock.sunaddr, data: data}
+	sund.in <- sbuf
 	return <- sund.inret
 }
 
@@ -975,22 +990,44 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 	if !proc.usermapped(bufn, buflen) {
 		return -EFAULT
 	}
-	if sockaddrn != 0 {
-		panic("no imp")
+	fillfrom := sockaddrn != 0
+	slen := 0
+	if fillfrom {
+		l, ok := proc.userreadn(socklenn, 8)
+		if !ok {
+			return -EFAULT
+		}
+		if l > 0 {
+			slen = l
+		}
+		if !proc.usermapped(sockaddrn, slen) {
+			return -EFAULT
+		}
 	}
 
 	if !fd.file.sock.dgram {
 		panic("no imp")
 	}
-	sund := fd.file.sock.sund
+	sund := fd.file.sock.sunaddr.sund
 	sund.outsz <- buflen
-	data := <- sund.out
+	sbuf := <- sund.out
 
-	if !proc.usercopy(data, bufn) {
+	if !proc.usercopy(sbuf.data, bufn) {
 		return -EFAULT
 	}
 
-	return len(data)
+	if fillfrom {
+		sa := fd.file.sock.sunaddr.sockaddr_un(slen)
+		if !proc.usercopy(sa, sockaddrn) {
+			return -EFAULT
+		}
+		// write actual size
+		if !proc.userwriten(socklenn, 8, len(sa)) {
+			return -EFAULT
+		}
+	}
+
+	return len(sbuf.data)
 }
 
 func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
@@ -1019,31 +1056,63 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 	if err != 0 {
 		return err
 	}
-	fd.file.sock.sunid = sid
-	fd.file.sock.sund = sun_start(sid)
+	fd.file.sock.sunaddr.id = sid
+	fd.file.sock.sunaddr.path = path
+	fd.file.sock.sunaddr.sund = sun_start(sid)
+	fd.file.sock.bound = true
 	return 0
 }
-
-type sunid_t int
-
-var sunid_cur	sunid_t
 
 type sock_t struct {
 	dgram	bool
 	stream	bool
-	sunid	sunid_t
+	sunaddr	sunaddr_t
+	open	int
+	bound	bool
+}
+
+type sunid_t int
+
+// globally unique unix socket minor number
+var sunid_cur	sunid_t
+
+type sunaddr_t struct {
+	id	sunid_t
+	path	string
 	sund	*sund_t
+}
+
+// used by recvfrom to fill in "fromaddr"
+func (sa *sunaddr_t) sockaddr_un(sz int) []uint8 {
+	if sz < 0 {
+		panic("negative size")
+	}
+	ret := make([]uint8, 2)
+	// len
+	writen(ret, 1, 0, len(sa.path))
+	// family
+	writen(ret, 1, 1, AF_UNIX)
+	// path
+	ret = append(ret, sa.path...)
+	ret = append(ret, 0)
+	if sz > len(ret) {
+		sz = len(ret)
+	}
+	return ret[:sz]
+}
+
+type sunbuf_t struct {
+	from	sunaddr_t
+	data	[]uint8
 }
 
 type sund_t struct {
 	adm	chan bool
 	finish	chan bool
 	outsz	chan int
-	out	chan []uint8
+	out	chan sunbuf_t
 	inret	chan int
-	// XXX: sender should also send address, which the daemon should save
-	// in order to pass to recvfrom.
-	in	chan []uint8
+	in	chan sunbuf_t
 }
 
 func sun_new() sunid_t {
@@ -1066,9 +1135,9 @@ func sun_start(sid sunid_t) *sund_t {
 	adm := make(chan bool)
 	finish := make(chan bool)
 	outsz := make(chan int)
-	out := make(chan []uint8)
+	out := make(chan sunbuf_t)
 	inret := make(chan int)
-	in := make(chan []uint8)
+	in := make(chan sunbuf_t)
 
 	ns.adm = adm
 	ns.finish = finish
@@ -1078,10 +1147,37 @@ func sun_start(sid sunid_t) *sund_t {
 	ns.in = in
 
 	go func() {
+		bstart := make([]sunbuf_t, 0, 10)
+		buf := bstart
+		buflen := func() int {
+			ret := 0
+			for _, b := range buf {
+				ret += len(b.data)
+			}
+			return ret
+		}
+		bufadd := func(n sunbuf_t) {
+			if len(n.data) == 0 {
+				return
+			}
+			buf = append(buf, n)
+		}
+
+		bufdeq := func(sz int) sunbuf_t {
+			if sz == 0 {
+				return sunbuf_t{}
+			}
+			ret := buf[0]
+			buf = buf[1:]
+			if len(buf) == 0 {
+				buf = bstart
+			}
+			return ret
+		}
+
 		done := false
 		sunbufsz := 512
 		admitted := 0
-		var buf []uint8
 		var toutsz chan int
 		tin := in
 		for !done {
@@ -1091,34 +1187,34 @@ func sun_start(sid sunid_t) *sund_t {
 			case <- adm:
 				admitted++
 			// writing
-			case d := <- tin:
-				if len(buf) + len(d) > sunbufsz {
-					take := sunbufsz - len(buf)
-					d = d[:take]
+			case sbuf := <- tin:
+				if buflen() >= sunbufsz {
+					panic("buf full")
 				}
-				buf = append(buf, d...)
-				inret <- len(d)
+				if len(sbuf.data) > 2*sunbufsz {
+					inret <- -EMSGSIZE
+					break
+				}
+				bufadd(sbuf)
+				inret <- len(sbuf.data)
 				admitted--
 			// reading
 			case sz := <- toutsz:
-				if len(buf) == 0 {
+				if buflen() == 0 {
 					panic("no data")
 				}
-				if sz > len(buf) {
-					sz = len(buf)
-				}
-				out <- buf[:sz]
-				buf = buf[sz:]
+				d := bufdeq(sz)
+				out <- d
 			}
 
 			// block writes if socket is full
 			// block reads if socket is empty
-			if len(buf) > 0 {
+			if buflen() > 0 {
 				toutsz = outsz
 			} else {
 				toutsz = nil
 			}
-			if len(buf) < sunbufsz {
+			if buflen() < sunbufsz {
 				tin = in
 			} else {
 				tin = nil
