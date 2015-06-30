@@ -27,6 +27,7 @@
 #define SYS_LINK         86
 #define SYS_UNLINK       87
 #define SYS_MKNOD        133
+#define SYS_NANOSLEEP    230
 #define SYS_PIPE2        293
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
@@ -183,6 +184,12 @@ int
 munmap(void *addr, size_t len)
 {
 	return syscall(SA(addr), SA(len), 0, 0, 0, SYS_MUNMAP);
+}
+
+int
+nanosleep(const struct timespec *timeout, struct timespec *remainder)
+{
+	return syscall(SA(timeout), SA(remainder), 0, 0, 0, SYS_NANOSLEEP);
 }
 
 int
@@ -886,6 +893,17 @@ readline(const char *prompt)
 		return NULL;
 	readlineb[i] = 0;
 	return readlineb;
+}
+
+uint
+sleep(uint s)
+{
+	struct timespec t = {s, 0};
+	struct timespec r = {0, 0};
+	int ret = nanosleep(&t, &r);
+	if (ret)
+		return (uint)r.tv_sec;
+	return 0;
 }
 
 int

@@ -23,7 +23,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
 	  pipetest kill killtest mmaptest usertests thtests pthtests \
-	  mknodtest sockettest mv
+	  mknodtest sockettest mv sleep
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 

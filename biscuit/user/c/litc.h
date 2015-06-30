@@ -76,6 +76,11 @@ struct tfork_t {
 	void *tf_stack;
 };
 
+struct timespec {
+	long tv_sec;
+	long tv_nsec;
+};
+
 #define		S_IFMT		((ulong)-1)
 #define		S_IFDIR		(2)
 
@@ -105,6 +110,7 @@ int mkdir(const char *, long);
 int mknod(const char *, mode_t, dev_t);
 void *mmap(void *, size_t, int, int, int, long);
 int munmap(void *, size_t);
+int nanosleep(const struct timespec *, struct timespec *);
 int open(const char *, int, ...);
 #define		O_RDONLY	0
 #define		O_WRONLY	1
@@ -213,6 +219,7 @@ int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
 ulong rdtsc(void);
 char *readline(const char *);
+uint sleep(uint);
 int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
 char *strchr(const char *, const char);

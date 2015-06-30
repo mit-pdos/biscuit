@@ -55,6 +55,7 @@
 /user/c/mknodtest
 /user/c/sockettest
 /user/c/mv
+/user/c/sleep
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -101,3 +102,4 @@
 /fsdir/bin/mail-qman
 /fsdir/bin/mail-deliver
 /fsdir/bin/mv
+/fsdir/bin/sleep

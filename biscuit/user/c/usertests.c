@@ -12,17 +12,6 @@ char *echoargv[] = { "echo", "ALL", "TESTS", "PASSED", 0 };
 #define O_CREATE	O_CREAT
 #define MAXFILE		1024
 
-void
-sleep(int t)
-{
-	if (t == 0)
-		return;
-	const ulong hz = 2800000;
-	ulong st = rdtsc();
-	while (rdtsc() - st < t * hz);
-	return;
-}
-
 // does chdir() call iput(p->cwd) in a transaction?
 void
 iputtest(void)
