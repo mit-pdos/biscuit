@@ -875,7 +875,7 @@ int_setup(void)
 	int_set(&idt[IRQBASE+14], (uint64) Xirq14 , 0, 0, 1);
 	int_set(&idt[IRQBASE+15], (uint64) Xirq15 , 0, 0, 1);
 
-	int_set(&idt[47], (uint64) Xspur,    0, 0, 0);
+	int_set(&idt[48], (uint64) Xspur,    0, 0, 0);
 	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
@@ -1484,7 +1484,9 @@ mmap_test(void)
 #define TRAP_DISK       (32 + 14)
 #define TRAP_SPUR       48
 
-#define TIMER_QUANTUM   100000000UL
+// HZ timer interrupts/sec
+#define HZ		10
+static uint32 lapic_quantum;
 
 struct thread_t {
 #define TFREGS       16
@@ -1586,7 +1588,6 @@ sched_halt(void)
 	//}
 
 	//pmsg("hlt");
-	wlap(0x380/4, TIMER_QUANTUM/100);
 	cpu_halt(curcpu.rsp);
 }
 
@@ -1647,7 +1648,6 @@ yieldy(void)
 	tnext->status = ST_RUNNING;
 	spunlock(&threadlock);
 
-	wlap(0x380/4, TIMER_QUANTUM);
 	sched_run(tnext);
 }
 
@@ -1776,8 +1776,8 @@ runtime·Procrunnable(int64 pid, uint64 *tf, uint64 pmap)
 void
 wakeup(void)
 {
-	// XXX convert CPU freq to ns
-	durnanotime += TIMER_QUANTUM / 3;
+	// nanoseconds
+	durnanotime += 1e9/HZ;
 
 	// wake up timed out futexs
 	int32 i;
@@ -1979,12 +1979,39 @@ uint64
 ticks_get(void)
 {
 #define CCREG       (0x390/4)
-	return TIMER_QUANTUM - rlap(CCREG);
+	return lapic_quantum - rlap(CCREG);
+}
+
+int64
+pit_ticks(void)
+{
+#define CNT0		0x40
+#define CNTCTL		0x43
+	// counter latch command for counter 0
+	int64 cmd = 0;
+	outb(CNTCTL, cmd);
+	int64 low = inb(CNT0);
+	int64 high = inb(CNT0);
+	return high << 8 | low;
+}
+
+// wait until 8254 resets the counter
+void
+pit_phasewait(void)
+{
+	// 8254 timers are 16 bits, thus always smaller than last;
+	int64 last = 1 << 16;
+	for (;;) {
+		int64 cur = pit_ticks();
+		if (cur > last)
+			return;
+		last = cur;
+	}
 }
 
 #pragma textflag NOSPLIT
 void
-timer_setup(void)
+timer_setup(int32 calibrate)
 {
 	uint64 la = 0xfee00000ULL;
 
@@ -2002,6 +2029,8 @@ timer_setup(void)
 #define DIVONE      0xb
 #define ICREG       (0x380/4)
 
+#define MASKINT   (1 << 16)
+
 #define LVSPUR     (0xf0/4)
 	// enable lapic, set spurious int vector
 	wlap(LVSPUR, 1 << 8 | TRAP_SPUR);
@@ -2010,8 +2039,48 @@ timer_setup(void)
 	wlap(LVTIMER, 1 << 17 | TRAP_TIMER);
 	// divide by
 	wlap(DCREG, DIVONE);
-	// initial count
-	wlap(ICREG, TIMER_QUANTUM);
+
+	if (calibrate) {
+		// figure out how many lapic ticks there are in a second; first
+		// setup 8254 PIT since it has a known clock frequency. openbsd
+		// uses a similar technique.
+		const uint32 pitfreq = 1193182;
+		const uint32 pithz = 100;
+		const uint32 div = pitfreq/pithz;
+		// rate generator mode, lsb then msb (if square wave mode is
+		// used, the PIT uses div/2 for the countdown since div is
+		// taken to be the period of the wave)
+		outb(CNTCTL, 0x34);
+		outb(CNT0, div & 0xff);
+		outb(CNT0, div >> 8);
+
+		// start lapic counting
+		wlap(ICREG, 0x80000000);
+		pit_phasewait();
+		uint32 lapstart = rlap(CCREG);
+
+		int32 i;
+		for (i = 0; i < pithz; i++)
+			pit_phasewait();
+
+		uint32 lapend = rlap(CCREG);
+		if (lapend > lapstart)
+			runtime·pancake("lapic timer wrapped?", lapend);
+		uint32 lapelapsed = lapstart - lapend;
+		pmsg("lapic Mhz:");
+		pnum(lapelapsed/(1000 * 1000));
+		pmsg("\n");
+		lapic_quantum = lapelapsed / HZ;
+
+		// disable PIT: one-shot, lsb then msb
+		outb(CNTCTL, 0x32);
+		outb(CNT0, div & 0xff);
+		outb(CNT0, div >> 8);
+	}
+
+	// initial count; the LAPIC's frequency is not the same as the CPU's
+	// frequency
+	wlap(ICREG, lapic_quantum);
 
 #define LVCMCI      (0x2f0/4)
 #define LVINT0      (0x350/4)
@@ -2020,16 +2089,14 @@ timer_setup(void)
 #define LVPERF      (0x340/4)
 #define LVTHERMAL   (0x330/4)
 
-#define MASKSHIFT   16
-
 	// mask cmci, lint[01], error, perf counters, and thermal sensor
-	wlap(LVCMCI,    1 << MASKSHIFT);
+	wlap(LVCMCI,    MASKINT);
 	// masking LVINT0 somewhow results in a GPfault?
 	//wlap(LVINT0,    1 << MASKSHIFT);
-	wlap(LVINT1,    1 << MASKSHIFT);
-	wlap(LVERROR,   1 << MASKSHIFT);
-	wlap(LVPERF,    1 << MASKSHIFT);
-	wlap(LVTHERMAL, 1 << MASKSHIFT);
+	wlap(LVINT1,    MASKINT);
+	wlap(LVERROR,   MASKINT);
+	wlap(LVPERF,    MASKINT);
+	wlap(LVTHERMAL, MASKINT);
 
 #define IA32_APIC_BASE   0x1b
 	uint64 rdmsr(uint64);
@@ -2062,7 +2129,7 @@ proc_setup(void)
 	if (pte && *pte & PTE_P)
 		runtime·pancake("lapic mem mapped?", (uint64)pte);
 
-	timer_setup();
+	timer_setup(1);
 
 	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
 	// otherwise an RTC timer interrupt (that turns into a double-fault
@@ -2088,7 +2155,7 @@ void
 	pmsg("joined\n");
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(lap_id() <= MAXCPUS, "lapic id large", myid);
-	timer_setup();
+	timer_setup(0);
 	tss_setup(myid);
 	fpuinit();
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
@@ -2216,7 +2283,7 @@ hack_syscall(void)
 
 	switch (trap) {
 		default:
-			runtime·pancake("weird trap", trap);
+			runtime·pancake("weird syscall:", trap);
 			break;
 		// write
 		case 1:

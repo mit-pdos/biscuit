@@ -1112,7 +1112,7 @@ func cpus_start(aplim int) {
 	// wait a while for hopefully all APs to join. it'd be better to use
 	// ACPI to determine the correct count of CPUs and then wait for them
 	// all to join.
-	cdelay(100)
+	cdelay(500)
 	apcnt = ss[sapcnt]
 	if apcnt > aplim {
 		apcnt = aplim
