@@ -810,6 +810,7 @@ int_setup(void)
 	extern void Xve (void);
 	extern void Xtimer(void);
 	extern void Xspur(void);
+	extern void Xyield(void);
 	extern void Xsyscall(void);
 
 	extern void Xirq1(void);
@@ -875,7 +876,8 @@ int_setup(void)
 	int_set(&idt[IRQBASE+14], (uint64) Xirq14 , 0, 0, 1);
 	int_set(&idt[IRQBASE+15], (uint64) Xirq15 , 0, 0, 1);
 
-	int_set(&idt[48], (uint64) Xspur,    0, 0, 0);
+	int_set(&idt[48], (uint64) Xspur,    0, 0, 1);
+	int_set(&idt[49], (uint64) Xyield,   0, 0, 1);
 	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
@@ -1483,10 +1485,13 @@ mmap_test(void)
 #define TRAP_TIMER      32
 #define TRAP_DISK       (32 + 14)
 #define TRAP_SPUR       48
+#define TRAP_YIELD      49
 
 // HZ timer interrupts/sec
 #define HZ		10
 static uint32 lapic_quantum;
+// picoseconds per lapic clock tick
+static uint64 pspertick;
 
 struct thread_t {
 #define TFREGS       16
@@ -1547,7 +1552,7 @@ static struct cpu_t cpus[MAXCPUS];
 struct spinlock_t threadlock;
 struct spinlock_t futexlock;
 
-uint64 durnanotime;
+static uint64 durnanotime;
 
 // newtrap is a function pointer to a user provided trap handler. alltraps
 // jumps to newtrap if it is non-zero.
@@ -1777,7 +1782,7 @@ void
 wakeup(void)
 {
 	// nanoseconds
-	durnanotime += 1e9/HZ;
+	durnanotime += 1000000000ull/HZ;
 
 	// wake up timed out futexs
 	int32 i;
@@ -1830,6 +1835,13 @@ trap(uint64 *tf)
 	if (halt)
 		while (1);
 
+	int32 yielding = 0;
+	if (trapno == TRAP_YIELD) {
+		trapno = TRAP_TIMER;
+		tf[TF_TRAPNO] = TRAP_TIMER;
+		yielding = 1;
+	}
+
 	if (ct) {
 		memmov(ct->tf, tf, TFSIZE);
 		int32 idx = ct - &threads[0];
@@ -1855,9 +1867,11 @@ trap(uint64 *tf)
 			} else
 				ct->status = ST_RUNNABLE;
 		}
-		if (curcpu.num == 0)
-			wakeup();
-		lap_eoi();
+		if (!yielding) {
+			lap_eoi();
+			if (curcpu.num == 0)
+				wakeup();
+		}
 		// yieldy doesn't return
 		yieldy();
 	}
@@ -2070,6 +2084,7 @@ timer_setup(int32 calibrate)
 		pmsg("lapic Mhz:");
 		pnum(lapelapsed/(1000 * 1000));
 		pmsg("\n");
+		pspertick = (1000000000000ull)/lapelapsed;
 		lapic_quantum = lapelapsed / HZ;
 
 		// disable PIT: one-shot, lsb then msb
@@ -2257,7 +2272,18 @@ clone_test(void)
 uint64
 hack_nanotime(void)
 {
-	return durnanotime + ticks_get();
+	// XXX lapic timers can't be globally synchronized...
+	static uint64 last;
+	uint64 ticks = ticks_get();
+	uint64 nsecs = (ticks * pspertick)/1000;
+	uint64 ret = durnanotime + nsecs;
+	// XXX if a timer interrupt comes after the return of ticks_get() but
+	// before the load of durnanotime, we may double count about 1e9/HZ
+	// nanoseconds. do this hack for now.
+	if (ret < last)
+		ret += 1000000000ull/HZ;
+	last = ret;
+	return ret;
 }
 
 // use these to pass args because using the stack in ·Syscall causes strange

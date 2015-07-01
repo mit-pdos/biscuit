@@ -288,7 +288,6 @@ h_ok:
 
 	CALL	int_setup(SB)
 	CALL	proc_setup(SB)
-
 	CALL	fpuinit(SB)
 
 	//MOVQ	CR0, AX
@@ -612,9 +611,9 @@ TEXT runtime·handle_int(SB), NOSPLIT, $0-0
 	POPQ	DX
 	RET
 
-#define TRAP_TIMER      $32
+#define TRAP_YIELD      $49
 TEXT hack_yield(SB), NOSPLIT, $0-0
-	INT	TRAP_TIMER
+	INT	TRAP_YIELD
 	RET
 
 #define IH_NOEC(num, fn)		\
@@ -672,6 +671,7 @@ IH_NOEC(19,Xfp )
 IH_NOEC(20,Xve )
 IH_NOEC(32,Xtimer )
 IH_NOEC(48,Xspur )
+IH_NOEC(49,Xyield )
 IH_NOEC(64,Xsyscall )
 
 // irqs
