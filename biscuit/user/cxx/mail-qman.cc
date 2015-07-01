@@ -144,7 +144,6 @@ class deliverer
   void start_child(const char *argv[], int stdin, int stdout)
   {
     if (alt) {
-#if 0
 #if defined(XV6_USER)
       // xv6 doesn't define errno.
       int errno = 0;
@@ -163,7 +162,6 @@ class deliverer
         edie("posix_spawn failed");
       if ((errno = posix_spawn_file_actions_destroy(&actions)))
         edie("posix_spawn_file_actions_destroy failed");
-#endif
     } else {
       pid_ = fork();
       if (pid_ < 0)

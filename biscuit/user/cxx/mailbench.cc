@@ -1,17 +1,10 @@
-#include "amd64.h"
+//#include "amd64.h"
 #include "distribution.hh"
 #include "spinbarrier.hh"
 #include "libutil.h"
-#include "xsys.h"
+//#include "xsys.h"
 
-#include <fcntl.h>
-#include <spawn.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
+#include <litc.h>
 
 #include <string>
 #include <thread>
@@ -104,10 +97,11 @@ do_mua(int cpu, string spooldir, string msgpath, size_t batch_size)
 #if defined(XV6_USER)
   int errno;
 #endif
-  setaffinity(cpu);
+  //setaffinity(cpu);
 
   // Open message file (alternatively, we could use an open spawn
   // action)
+  int O_ANYFD = 0;
   int msgfd = open(msgpath.c_str(), O_RDONLY|O_CLOEXEC|O_ANYFD);
   if (msgfd < 0)
     edie("open %s failed", msgpath.c_str());

@@ -59,6 +59,7 @@
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
+/user/cxx/mailbench
 /user/cxx/sysroot
 /fsdir/bin/hello
 /fsdir/bin/fault
@@ -103,3 +104,4 @@
 /fsdir/bin/mail-deliver
 /fsdir/bin/mv
 /fsdir/bin/sleep
+/fsdir/bin/mailbench
