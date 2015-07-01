@@ -174,6 +174,8 @@ int main(int argc, char **argv)
 		char *infile, *outfile;
 		int append;
 		char *p = readline("# ");
+		if (p == NULL)
+			exit(0);
 		if (redir(p, &infile, &outfile, &append))
 			continue;
 		mkargs(p, args, sz);
