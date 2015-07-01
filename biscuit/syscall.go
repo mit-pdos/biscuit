@@ -1309,6 +1309,9 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		ret = child.pid
 		childch = parent.waiti.getch
 	} else {
+		// XXX XXX XXX need to copy FPU state from parent thread to
+		// child thread
+
 		// validate tfork struct
 		tcb, ok1      := parent.userreadn(tforkp + 0, 8)
 		tidaddrn, ok2 := parent.userreadn(tforkp + 8, 8)
@@ -2020,9 +2023,12 @@ func elf_segload(p *proc_t, hdr *elf_phdr) {
 
 func elf_load(p *proc_t, e *elf_t) {
 	PT_LOAD := 1
+	PT_TLS  := 7
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
-		if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
+		if hdr.etype == PT_TLS {
+			panic("no imp (soon)")
+		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
 			elf_segload(p, &hdr)
 		}
 	}
