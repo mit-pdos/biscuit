@@ -1830,6 +1830,85 @@ rename_test()
 	printf("rename test finished\n");
 }
 
+void
+posixtest()
+{
+	printf("posix test\n");
+
+	char *of = "poutfile";
+	char *inf = "pinfile";
+
+	unlink(of);
+	unlink(inf);
+
+	// create input for child lsh
+	int infd;
+	if ((infd = open(inf, O_CREAT | O_WRONLY)) < 0)
+		err(infd, "open");
+
+	char *inmsg = "echo posix spawn worked\n";
+	size_t ilen = strlen(inmsg);
+
+	int ret;
+	if ((ret = write(infd, inmsg, ilen)) != ilen)
+		err(ret, "write");
+
+	// reopen input file so child has correct offset
+	close(infd);
+	if ((infd = open(inf, O_RDONLY)) < 0)
+		err(infd, "open");
+
+	int outfd;
+	if ((outfd = open(of, O_CREAT | O_WRONLY)) < 0)
+		err(outfd, "open");
+
+	posix_spawn_file_actions_t fa;
+	if ((ret = posix_spawn_file_actions_init(&fa)) < 0)
+		err(ret, "posix fa init");
+
+	if ((ret = posix_spawn_file_actions_adddup2(&fa, outfd, 1)) < 0)
+		err(ret, "posix addup2");
+
+	if ((ret = posix_spawn_file_actions_adddup2(&fa, infd, 0)) < 0)
+		err(ret, "posix addup2");
+
+	char *args[] = {"/bin/lsh", NULL};
+	pid_t c;
+	if ((ret = posix_spawn(&c, args[0], &fa, NULL, args, NULL)))
+		err(ret, "posix_spawn");
+
+	if ((ret = posix_spawn_file_actions_destroy(&fa)) < 0)
+		err(ret, "posix fa destroy");
+
+	close(outfd);
+	close(infd);
+
+	int status;
+	pid_t got = wait(&status);
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(status, "child failed");
+	if (got != c)
+		errx(-1, "wrong pid %ld %ld", c, got);
+
+	if ((outfd = open(of, O_RDONLY)) < 0)
+		err(outfd, "open");
+
+	char *omsg = "# posix spawn worked\n# ";
+	size_t olen = strlen(omsg);
+
+	char buf[128];
+	if ((ret = read(outfd, buf, sizeof(buf))) < 0)
+		err(ret, "read");
+	else if (ret != olen)
+		errx(-1, "unexpected read len: %d %lu", ret, olen);
+
+	if (strncmp(omsg, buf, olen))
+		errx(-1, "unexpected child output");
+	close(outfd);
+
+	printf("posix test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1880,6 +1959,9 @@ main(int argc, char *argv[])
   iref();
   forktest();
   bigdir(); // slow
+
+  posixtest();
+
   exectest();
 
   return 0;

@@ -491,6 +491,85 @@ pthread_self(void)
 }
 
 /*
+ * posix
+ */
+
+int
+_posix_dups(const posix_spawn_file_actions_t *fa)
+{
+	int i;
+	for (i = 0; i < fa->dup2slot; i++) {
+		int ret;
+		int from = fa->dup2s[i].from;
+		int to = fa->dup2s[i].to;
+		if ((ret = dup2(from, to)) < 0)
+			return ret;
+	}
+	return 0;
+}
+
+static char *_environ[] = {"", NULL};
+
+int
+posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *fa,
+    const posix_spawnattr_t *sa, char *const argv[], char *const envp[])
+{
+	if (sa)
+		errx(-1, "spawnattr not supported");
+	if (envp != NULL)
+		if (envp != _environ || !envp[0] ||
+		    envp[0][0] != '\0' || envp[1] != NULL)
+			errx(-1, "environ not supported");
+	pid_t p = fork();
+	if (p < 0)
+		return p;
+
+	int child = !p;
+	if (child) {
+		if (fa) {
+			if (_posix_dups(fa))
+				exit(127);
+		}
+		execv(path, argv);
+		exit(127);
+	}
+
+	if (pid)
+		*pid = p;
+
+	return 0;
+}
+
+int
+posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *fa, int ofd, int newfd)
+{
+	if (ofd < 0 || newfd < 0)
+		return -EINVAL;
+
+	size_t nelms = sizeof(fa->dup2s)/sizeof(fa->dup2s[0]);
+	int myslot = fa->dup2slot++;
+	if (myslot < 0 || myslot >= nelms)
+		errx(-1, "bad dup2slot: %d", myslot);
+
+	fa->dup2s[myslot].from = ofd;
+	fa->dup2s[myslot].to = newfd;
+	return 0;
+}
+
+int
+posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *fa)
+{
+	return 0;
+}
+
+int
+posix_spawn_file_actions_init(posix_spawn_file_actions_t *fa)
+{
+	memset(fa, 0, sizeof(posix_spawn_file_actions_t));
+	return 0;
+}
+
+/*
  * libc
  */
 void
@@ -1061,6 +1140,7 @@ free(void *pp)
 }
 
 char __progname[64];
+char **environ = _environ;
 
 void
 _entry(int argc, char **argv)

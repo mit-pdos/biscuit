@@ -181,6 +181,26 @@ int pthread_once(pthread_once_t *, void (*)(void));
 pthread_t pthread_self(void);
 
 /*
+ * posix stuff
+ */
+typedef struct {
+	struct {
+		int from;
+		int to;
+	} dup2s[10];
+	int dup2slot;
+} posix_spawn_file_actions_t;
+
+typedef struct {
+} posix_spawnattr_t;
+
+int posix_spawn(pid_t *, const char *, const posix_spawn_file_actions_t *,
+    const posix_spawnattr_t *, char *const argv[], char *const envp[]);
+int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int, int);
+int posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *);
+int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
+
+/*
  * libc
  */
 typedef struct {
@@ -200,9 +220,11 @@ void abort(void);
 int atoi(const char *);
 ulong atoul(const char *);
 void err(int, const char *, ...)
-    __attribute__((format(printf, 2, 3)));
+    __attribute__((format(printf, 2, 3)))
+    __attribute__((__noreturn__));
 void errx(int, const char *, ...)
-    __attribute__((format(printf, 2, 3)));
+    __attribute__((format(printf, 2, 3)))
+    __attribute__((__noreturn__));
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 int getopt(int, char * const *, const char *);
@@ -237,6 +259,7 @@ void *malloc(size_t);
 void free(void *);
 
 extern char __progname[64];
+extern char **environ;
 
 #ifdef __cplusplus
 }	// extern "C"

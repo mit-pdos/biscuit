@@ -169,6 +169,9 @@ void doredirs(char *infn, char *outfn, int append)
 int main(int argc, char **argv)
 {
 	while (1) {
+		// if you change the output of lsh, you need to update
+		// posixtest() in usertests.c so the test is aware of the new
+		// changes.
 		char *args[10];
 		size_t sz = sizeof(args)/sizeof(args[0]);
 		char *infile, *outfile;
