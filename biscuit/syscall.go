@@ -4,6 +4,7 @@ import "fmt"
 import "math/rand"
 import "runtime"
 import "sync"
+import "time"
 import "unsafe"
 
 const(
@@ -101,6 +102,7 @@ const(
   SYS_LINK     = 86
   SYS_UNLINK   = 87
   SYS_MKNOD    = 133
+  SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
   SYS_FAKE     = 31337
   SYS_THREXIT  = 31338
@@ -198,6 +200,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_unlink(p, a1)
 	case SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
+	case SYS_NANOSLEEP:
+		ret = sys_nanosleep(p, a1, a2)
 	case SYS_PIPE2:
 		ret = sys_pipe2(p, a1, a2)
 	case SYS_FAKE:
@@ -541,6 +545,9 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	len = roundup(len, PGSIZE)
 	for i := 0; i < len; i += PGSIZE {
 		p := addrn + i
+		if p < USERMIN {
+			return -EINVAL
+		}
 		if !proc.page_remove(p) {
 			return -EINVAL
 		}
@@ -877,6 +884,26 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 	if err != 0 {
 		return err
 	}
+	return 0
+}
+
+func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
+	timespecsz := 16
+	if !proc.usermapped(sleeptsn, timespecsz) {
+		return -EFAULT
+	}
+
+	secs, ok1 := proc.userreadn(sleeptsn, 8)
+	nsecs, ok2 := proc.userreadn(sleeptsn + 8, 8)
+	if !ok1 || !ok2 {
+		return -EFAULT
+	}
+	if secs < 0 || nsecs < 0 {
+		return -EINVAL
+	}
+	tot := time.Duration(secs) * time.Second
+	tot += time.Duration(nsecs) * time.Nanosecond
+	<- time.After(tot)
 	return 0
 }
 
@@ -1343,6 +1370,7 @@ func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
 	va := faultaddr & PGMASK
 	perms := (*pte & PTE_FLAGS) & ^PTE_COW
 	perms |= PTE_W
+	// XXX TLB shootdown
 	proc.page_insert(va, dst, p_dst, perms, false)
 
 	// set process as runnable again
