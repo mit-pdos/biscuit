@@ -2,7 +2,7 @@
 
 __thread int id;
 
-const int nthreads = 3;
+int nthreads;
 int count;
 
 void *fn(void *a)
@@ -31,9 +31,13 @@ void *fn(void *a)
 
 int main(int argc, char **argv)
 {
-	pthread_t t[nthreads];
+	if (argc > 1)
+		nthreads = atoi(argv[1]);
+	if (nthreads <= 0)
+		nthreads = 3;
 
-	printf("make threads\n");
+	printf("making %d threads\n", nthreads);
+	pthread_t t[nthreads];
 	int i;
 	for (i = 0; i < nthreads; i++)
 		if (pthread_create(&t[i], NULL, fn, (void *)(long)i))
