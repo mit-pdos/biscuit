@@ -389,6 +389,7 @@ struct pcargs_t {
 	void* (*fn)(void *);
 	void *arg;
 	void *stack;
+	void *tls;
 };
 
 static long
@@ -399,6 +400,7 @@ _pcreate(void *vpcarg)
 	free(vpcarg);
 	long status;
 	status = (long)(pcargs.fn(pcargs.arg));
+	free(pcargs.tls);
 	asm volatile(
 	    "int	$64\n"
 	    "cmpq	$0, %%rax\n"
@@ -410,28 +412,55 @@ _pcreate(void *vpcarg)
 	    "int	$64\n"
 	    "movq	$0, 0x1\n"
 	    :
-	    : "a"(SYS_MUNMAP), "g"(SYS_THREXIT), "D"(pcargs.stack), "S"(PSTACKSZ), "g"(status)
+	    : "a"(SYS_MUNMAP), "g"(SYS_THREXIT), "D"(pcargs.stack),
+	        "S"(PSTACKSZ), "g"(status)
 	    : "memory", "cc");
 	// not reached
 	return 0;
 }
 
+struct kinfo_t {
+	void *freshtls;
+	size_t len;
+	void *t0tls;
+};
+
+// initialized in _entry, given to us by kernel
+static struct kinfo_t *kinfo;
+
 int
-pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *arg)
+pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
+    void *arg)
 {
 	if (attrs != NULL)
 		errx(-1, "pthread_create: attrs not yet supported");
+	// allocate and setup TLS space
+	if (!kinfo)
+		errx(-1, "nil kinfo");
+	// +8 for the tls indirect pointer
+	void *newtls = malloc(kinfo->len + 8);
+	if (!newtls)
+		return -ENOMEM;
+	char *tlsdata = newtls;
+	tlsdata += 8;
+	memmove(tlsdata, kinfo->freshtls, kinfo->len);
+
+	char **tlsptr = newtls;
+	*tlsptr = tlsdata + kinfo->len;
+
+	int ret;
 	// XXX setup guard page
 	void *stack = mkstack(PSTACKSZ);
-	if (!stack)
-		return -ENOMEM;
+	if (!stack) {
+		ret = -ENOMEM;
+		goto tls;
+	}
 	long tid;
 	struct tfork_t tf = {
-		.tf_tcb = NULL,
+		.tf_tcb = tlsptr,
 		.tf_tid = &tid,
 		.tf_stack = stack,
 	};
-	int ret;
 	struct pcargs_t *pca = malloc(sizeof(struct pcargs_t));
 	if (!pca) {
 		ret = -ENOMEM;
@@ -441,6 +470,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *), void *a
 	pca->fn = fn;
 	pca->arg = arg;
 	pca->stack = stack - PSTACKSZ;
+	pca->tls = newtls;
 	ret = tfork_thread(&tf, _pcreate, pca);
 	if (ret < 0) {
 		goto both;
@@ -451,6 +481,8 @@ both:
 	free(pca);
 errstack:
 	munmap(stack, PSTACKSZ);
+tls:
+	free(newtls);
 	return ret;
 }
 
@@ -1142,15 +1174,10 @@ free(void *pp)
 char __progname[64];
 char **environ = _environ;
 
-struct kinfo_t {
-	void *freshtls;
-	size_t len;
-	void *t0tls;
-};
-
 void
 _entry(int argc, char **argv, struct kinfo_t *k)
 {
+	kinfo = k;
 	if (argc)
 		strncpy(__progname, argv[0], sizeof(__progname));
 	int main(int, char **);
