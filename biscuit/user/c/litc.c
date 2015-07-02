@@ -1142,8 +1142,14 @@ free(void *pp)
 char __progname[64];
 char **environ = _environ;
 
+struct kinfo_t {
+	void *freshtls;
+	size_t len;
+	void *t0tls;
+};
+
 void
-_entry(int argc, char **argv)
+_entry(int argc, char **argv, struct kinfo_t *k)
 {
 	if (argc)
 		strncpy(__progname, argv[0], sizeof(__progname));

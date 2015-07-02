@@ -668,7 +668,7 @@ func (p *proc_t) terminate() {
 
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
-func (p *proc_t) userdmap(va int) ([]uint8, bool) {
+func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
 	uva := va & PGMASK
 	voff := va & PGOFFSET
 	phys, ok := p.upages[uva]
@@ -676,6 +676,16 @@ func (p *proc_t) userdmap(va int) ([]uint8, bool) {
 		return nil, false
 	}
 	return dmap8(phys + voff), true
+}
+
+// like userdmap8, but returns a pointer to the page
+func (p *proc_t) userdmap(va int) (*[512]int, bool) {
+	uva := va & PGMASK
+	phys, ok := p.upages[uva]
+	if !ok {
+		return nil, false
+	}
+	return dmap(phys), true
 }
 
 func (p *proc_t) usermapped(va, n int) bool {
@@ -701,7 +711,7 @@ func (p *proc_t) userreadn(va, n int) (int, bool) {
 	var src []uint8
 	var ok bool
 	for i := 0; i < n; i += len(src) {
-		src, ok = p.userdmap(va + i)
+		src, ok = p.userdmap8(va + i)
 		if !ok {
 			return 0, false
 		}
@@ -722,7 +732,7 @@ func (p *proc_t) userwriten(va, n, val int) bool {
 	var dst []uint8
 	for i := 0; i < n; i += len(dst) {
 		v := val >> (8*uint(i))
-		t, ok := p.userdmap(va + i)
+		t, ok := p.userdmap8(va + i)
 		dst = t
 		if !ok {
 			return false
@@ -742,7 +752,7 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	i := 0
 	var ret []byte
 	for {
-		str, ok := p.userdmap(uva + i)
+		str, ok := p.userdmap8(uva + i)
 		if !ok {
 			return "", false, false
 		}
@@ -795,7 +805,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 	done := false
 	curaddr := make([]uint8, 0)
 	for !done {
-		ptrs, ok := p.userdmap(uva + uoff)
+		ptrs, ok := p.userdmap8(uva + uoff)
 		if !ok {
 			fmt.Printf("dmap\n")
 			return nil, false
@@ -823,7 +833,7 @@ func (p *proc_t) usercopy(src []uint8, uva int) bool {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		dst, ok := p.userdmap(uva + cnt)
+		dst, ok := p.userdmap8(uva + cnt)
 		if !ok {
 			return false
 		}
@@ -843,6 +853,10 @@ func (p *proc_t) usercopy(src []uint8, uva int) bool {
 func (p *proc_t) unusedva(startva, len int) int {
 	if len < 0 || len > 1 << 48 {
 		panic("weird len")
+	}
+	startva = rounddown(startva, PGSIZE)
+	if startva < USERMIN {
+		startva = USERMIN
 	}
 	for startva < 256 << 39 {
 		found := true

@@ -343,7 +343,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	// buffer.
 	dsts := make([][]uint8, 0)
 	for c < sz {
-		dst, ok := proc.userdmap(bufp + c)
+		dst, ok := proc.userdmap8(bufp + c)
 		if !ok {
 			return -EFAULT
 		}
@@ -391,7 +391,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	c := 0
 	srcs := make([][]uint8, 0)
 	for c < sz {
-		src, ok := proc.userdmap(bufp + c)
+		src, ok := proc.userdmap8(bufp + c)
 		if !ok {
 			return -EFAULT
 		}
@@ -965,7 +965,7 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	c := 0
 	var data []uint8
 	for c < buflen {
-		src, ok := proc.userdmap(bufn + c)
+		src, ok := proc.userdmap8(bufn + c)
 		if !ok {
 			sund.in <- sunbuf_t{}
 			return -EFAULT
@@ -1425,7 +1425,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		    PTE_U | PTE_W, true)
 	}
 
-	elf_load(proc, elf)
+	tls, istls := elf_load(proc, elf)
+	// XXX make insertargs not fail by using more than a page...
 	argc, argv, ok := insertargs(proc, args)
 	if !ok {
 		// restore old process
@@ -1434,6 +1435,63 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
 		return -EINVAL
+	}
+
+	// create two copies of TLS section: one for the fresh copy and one for
+	// thread 0
+	freshtls := 0
+	t0tls := 0
+	if istls {
+		l := roundup(tls.addr + tls.size, PGSIZE)
+		l -= rounddown(tls.addr, PGSIZE)
+
+		mktls := func(writable bool) int {
+			ret := proc.unusedva(0, l)
+			perms := PTE_U
+			if writable {
+				perms |= PTE_W
+			}
+			for i := 0; i < l; i += PGSIZE {
+				pg, p_pg := pg_new(proc.pages)
+				proc.page_insert(ret + i, pg, p_pg, perms, true)
+			}
+			for i := 0; i < l; i += PGSIZE {
+				src, ok1 := proc.userdmap(tls.addr + i)
+				dst, ok2 := proc.userdmap(ret + i)
+				if !ok1 || !ok2 {
+					panic("must succeed")
+				}
+				*dst = *src
+			}
+
+			// zero the tbss
+			zl := tls.size - tls.copylen
+			if zl < 0 {
+				panic("bad zero len")
+			}
+			startva := ret + tls.copylen
+			var z []uint8
+			for c := 0; c < zl; c += len(z) {
+				z, ok = proc.userdmap8(startva + c)
+				if !ok {
+					panic("must succeed")
+				}
+				left := zl - c
+				if len(z) > left {
+					z = z[:left]
+				}
+				for i := range z {
+					z[i] = 0
+				}
+			}
+			return ret
+		}
+		freshtls = mktls(false)
+		t0tls = mktls(true)
+
+		// amd64 sys 5 abi specifies that the tls pointer references to
+		// the first invalid word past the end of the tls
+		t0tls += tls.size
 	}
 
 	// close fds marked with CLOEXEC
@@ -1445,8 +1503,21 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		}
 	}
 
+	// put special struct on stack: fresh tls start, tls len, and tls0
+	// pointer
+	words := 3
+	buf := make([]uint8, words*8)
+	writen(buf, 8, 0, freshtls)
+	writen(buf, 8, 8, tls.size)
+	writen(buf, 8, 16, t0tls)
+	bufdest := stackva - words*8
+	tls0addr := bufdest + 2*8
+	if !proc.usercopy(buf, bufdest) {
+		panic("must succeed")
+	}
+
 	// commit new image state
-	tf[TF_RSP] = stackva - 8
+	tf[TF_RSP] = bufdest
 	tf[TF_RIP] = elf.entry()
 	tf[TF_RFLAGS] = TF_FL_IF
 	ucseg := 4
@@ -1455,6 +1526,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	tf[TF_SS] = udseg << 3 | 3
 	tf[TF_RDI] = argc
 	tf[TF_RSI] = argv
+	tf[TF_RDX] = bufdest
+	tf[TF_FSBASE] = tls0addr
 	proc.mmapi = USERMIN
 	proc.name = paths
 
@@ -1497,7 +1570,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	argptrs[len(argptrs) - 1] = 0
 	// now put the array of strings
 	argstart := uva + cnt
-	vdata, ok := proc.userdmap(argstart)
+	vdata, ok := proc.userdmap8(argstart)
 	if !ok || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
 		return 0, 0, false
@@ -1986,7 +2059,6 @@ func elf_segload(p *proc_t, hdr *elf_phdr) {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
 		pg, p_pg := pg_new(p.pages)
-		//pg, p_pg := pg_new(&p.pages)
 		if i < len(hdr.sdata) {
 			dst := unsafe.Pointer(pg)
 			src := unsafe.Pointer(&hdr.sdata[i])
@@ -2001,15 +2073,28 @@ func elf_segload(p *proc_t, hdr *elf_phdr) {
 	}
 }
 
-func elf_load(p *proc_t, e *elf_t) {
+type etls_t struct {
+	addr	int
+	size	int
+	copylen	int
+}
+
+// returns TLS struct and whether ELF has TLS
+func elf_load(p *proc_t, e *elf_t) (etls_t, bool) {
 	PT_LOAD := 1
 	PT_TLS  := 7
+	tls := etls_t{}
+	istls := false
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
 		if hdr.etype == PT_TLS {
-			panic("no imp (soon)")
+			istls = true
+			tls.addr = hdr.vaddr
+			tls.size = roundup(hdr.memsz, 8)
+			tls.copylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
 			elf_segload(p, &hdr)
 		}
 	}
+	return tls, istls
 }
