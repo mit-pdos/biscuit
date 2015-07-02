@@ -509,33 +509,13 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	if lenn/PGSIZE + len(proc.pages) > proc.ulim.pages {
 		return MAP_FAILED
 	}
-	addr := mmap_findaddr(proc, addrn, lenn)
+	addr := proc.unusedva(proc.mmapi, lenn)
+	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
 		pg, p_pg := pg_new(proc.pages)
 		proc.page_insert(addr + i, pg, p_pg, perms, true)
 	}
 	return addr
-}
-
-func mmap_findaddr(proc *proc_t, hint, len int) int {
-	for proc.mmapi < 256 << 39 {
-		found := true
-		for i := 0; i < len; i += PGSIZE {
-			pte := pmap_walk(proc.pmap, proc.mmapi + i, false, 0,
-			    nil)
-			if pte != nil && *pte & PTE_P != 0 {
-				found = false
-				proc.mmapi += i + PGSIZE
-				break
-			}
-		}
-		if found {
-			ret := proc.mmapi
-			proc.mmapi += len
-			return ret
-		}
-	}
-	panic("no addr space left")
 }
 
 func sys_munmap(proc *proc_t, addrn, len int) int {

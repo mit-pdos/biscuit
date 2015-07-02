@@ -840,6 +840,30 @@ func (p *proc_t) usercopy(src []uint8, uva int) bool {
 	return true
 }
 
+func (p *proc_t) unusedva(startva, len int) int {
+	if len < 0 || len > 1 << 48 {
+		panic("weird len")
+	}
+	for startva < 256 << 39 {
+		found := true
+		for i := 0; i < len; i += PGSIZE {
+			pte := pmap_walk(p.pmap, startva + i, false, 0,
+			    nil)
+			if pte != nil && *pte & PTE_P != 0 {
+				found = false
+				startva += i + PGSIZE
+				break
+			}
+		}
+		if found {
+			return startva
+		}
+	}
+	panic("no addr space left")
+	return 0
+}
+
+
 func mp_sum(d []uint8) int {
 	ret := 0
 	for _, c := range d {
