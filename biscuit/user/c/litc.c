@@ -111,6 +111,38 @@ execv(const char *path, char * const argv[])
 	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
 }
 
+static const char *
+_binname(const char *bin)
+{
+	static char buf[64];
+	// absoulte path
+	if (strchr(bin, '/')) {
+		snprintf(buf, sizeof(buf), "%s", bin);
+		return bin;
+	}
+
+	// try paths
+	char *paths[] = {"/bin/"};
+	const int elems = sizeof(paths)/sizeof(paths[0]);
+	int i;
+	for (i = 0; i < elems; i++) {
+		snprintf(buf, sizeof(buf), "%s%s", paths[i], bin);
+		struct stat st;
+		if (stat(buf, &st) == 0)
+			return buf;
+	}
+	return NULL;
+}
+
+int
+execvp(const char *path, char * const argv[])
+{
+	const char *p = _binname(path);
+	if (!p)
+		return -ENOENT;
+	return execv(p, argv);
+}
+
 long
 fake_sys(long n)
 {

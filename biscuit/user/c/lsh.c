@@ -27,30 +27,6 @@ void mkargs(char *line, char *args[], size_t n)
 	//	printf("arg %d: %s\n", ai, args[ai]);
 }
 
-char *binname(char *bin)
-{
-	static char buf[64];
-
-	// absoulte path
-	if (bin[0] == '/') {
-		snprintf(buf, sizeof(buf), "%s", bin);
-		return bin;
-	}
-
-	// try paths
-	char *paths[] = {"/bin/"};
-	const int elems = sizeof(paths)/sizeof(paths[0]);
-	int i;
-	for (i = 0; i < elems; i++) {
-		snprintf(buf, sizeof(buf), "%s%s", paths[i], bin);
-		struct stat st;
-		if (stat(buf, &st) == 0)
-			return buf;
-
-	}
-	return NULL;
-}
-
 int builtins(char *args[], size_t n)
 {
 	char *cmd = args[0];
@@ -193,13 +169,11 @@ int main(int argc, char **argv)
 			wait(NULL);
 			continue;
 		}
-		char *bin = binname(args[0]);
-		if (bin == NULL)
-			errx(-1, "no such binary: %s", args[0]);
 		doredirs(infile, outfile, append);
-		int ret = execv(bin, args);
-		if (ret)
-			err(ret, "couldn't exec \"%s\"\n", p);
+		int ret = execvp(args[0], args);
+		if (ret) {
+			err(ret, "couldn't exec \"%s\"", args[0]);
+		}
 	}
 
 	return 0;

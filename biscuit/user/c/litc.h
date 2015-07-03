@@ -95,6 +95,7 @@ int dup2(int, int);
 void exit(int)
     __attribute__((noreturn));
 int execv(const char *, char * const[]);
+int execvp(const char *, char * const[]);
 long fake_sys(long);
 int fork(void);
 int fstat(int, struct stat *);
