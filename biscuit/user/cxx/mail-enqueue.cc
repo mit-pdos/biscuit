@@ -79,7 +79,7 @@ public:
     const char *msg = "EXIT";
     if (sendto(notifyfd_, msg, strlen(msg), 0,
                (struct sockaddr*)&notify_addr_, notify_len_) < 0)
-      edie("send failed");
+      edie("send exit failed");
   }
 };
 

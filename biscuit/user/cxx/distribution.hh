@@ -99,9 +99,8 @@ class concurrent_distribution
       myid = nextid++;
       haveid = true;
       //assert(myid < MAX_THREADS);
-      if (myid < MAX_THREADS) {
-      	printf("myid >= max threads\n");
-	while (1);
+      if (myid >= MAX_THREADS) {
+        errx(-1, "myid >= max threads %d\n", myid);
       }
     }
     return myid;

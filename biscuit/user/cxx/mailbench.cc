@@ -87,13 +87,13 @@ xwaitpid(int pid, const char *cmd)
   if (waitpid(pid, &status, 0) < 0)
     edie("waitpid %s failed", cmd);
   if (!WIFEXITED(status) || WEXITSTATUS(status))
-    die("status %d from %s", status, cmd);
+    die("status %d from %s", WEXITSTATUS(status), cmd);
 }
 
 static void
 do_mua(int cpu, string spooldir, string msgpath, size_t batch_size)
 {
-  std::vector<const char*> argv{"./mail-enqueue"};
+  std::vector<const char*> argv{"/bin/mail-enqueue"};
 #if defined(XV6_USER)
   int errno;
 #endif
@@ -275,7 +275,7 @@ main(int argc, char **argv)
   pid_t qman_pid;
   if (START_QMAN) {
     // Start queue manager
-    std::vector<const char*> qman{"./mail-qman", "-a", alt_str};
+    std::vector<const char*> qman{"/bin/mail-qman", "-a", alt_str};
     if (pool)
       qman.push_back("-p");
     qman.push_back(spooldir.c_str());
@@ -320,7 +320,7 @@ main(int argc, char **argv)
 
   if (START_QMAN) {
     // Kill qman and wait for it to exit
-    const char *enq[] = {"./mail-enqueue", "--exit", spooldir.c_str(), nullptr};
+    const char *enq[] = {"/bin/mail-enqueue", "--exit", spooldir.c_str(), nullptr};
     pid_t enq_pid;
     if (posix_spawn(&enq_pid, enq[0], nullptr, nullptr,
                     const_cast<char *const*>(enq), environ) != 0)
