@@ -10,7 +10,10 @@ const std::nothrow_t std::nothrow;
 void*
 operator new(std::size_t nbytes)
 {
-  return malloc(nbytes);
+  void *p = malloc(nbytes);
+  if (!p)
+    throw std::bad_alloc();
+  return p;
 }
 
 void
@@ -22,7 +25,10 @@ operator delete(void* p)
 void*
 operator new[](std::size_t nbytes)
 {
-  return malloc(nbytes);
+  void *p = malloc(nbytes);
+  if (!p)
+    throw std::bad_alloc();
+  return p;
 }
 
 void
