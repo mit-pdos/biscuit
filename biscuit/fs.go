@@ -527,12 +527,12 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 		ost := &stat_t{}
 		ost.init()
 		req := &ireq_t{}
-		req.mkstat(ost)
+		req.mkfstat(ost)
 		sendd(ofp, req)
 
 		nst := &stat_t{}
 		nst.init()
-		req.mkstat(nst)
+		req.mkfstat(nst)
 		sendd(nfp, req)
 
 		odir := ost.mode() == I_DIR
@@ -702,20 +702,35 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		// create new file
 		resp := itx.send(dirs, req)
 
+		exists := resp.err == -EEXIST
 		oexcl := flags & O_EXCL != 0
-		if oexcl && resp.err == -EEXIST {
-			itx.unlockall()
-			return nil, resp.err
-		} else if resp.err != 0 && resp.err != -EEXIST {
-			itx.unlockall()
-			return nil, resp.err
-		}
 
-		// open file
 		priv = resp.cnext
-		idm = idaemon_ensure(priv)
-		maj = major
-		min = minor
+		if exists {
+			idm = idaemon_ensure(priv)
+			if oexcl || isdev {
+				itx.unlockall()
+				return nil, resp.err
+			}
+			// determine major/minor of existing file
+			st := &stat_t{}
+			st.init()
+			req := &ireq_t{}
+			req.mkfstat(st)
+			idm.req <- req
+			resp := <- req.ack
+			if resp.err != 0 {
+				panic("must succeed")
+			}
+			maj, min = unmkdev(st.rdev())
+		} else if resp.err != 0 {
+			itx.unlockall()
+			return nil, resp.err
+		} else {
+			idm = idaemon_ensure(priv)
+			maj = major
+			min = minor
+		}
 
 		req.mkref_direct()
 		idm.req <- req
@@ -762,7 +777,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		st := &stat_t{}
 		st.init()
 		req := &ireq_t{}
-		req.mkstat(st)
+		req.mkfstat(st)
 		idm.req <- req
 		resp := <- req.ack
 		if resp.err != 0 {
@@ -819,12 +834,20 @@ func fs_memref(f *file_t, perms int) {
 	}
 }
 
-func fs_stat(f *file_t, st *stat_t) int {
+func fs_fstat(f *file_t, st *stat_t) int {
 	priv := f.priv
 	idmon := idaemon_ensure(priv)
 	req := &ireq_t{}
-	req.mkstat(st)
+	req.mkfstat(st)
 	idmon.req <- req
+	resp := <- req.ack
+	return resp.err
+}
+
+func fs_stat(path string, st *stat_t, cwdf *file_t) int {
+	req := &ireq_t{}
+	req.mkstat(path, st)
+	req_namei(req, path, cwdf.priv)
 	resp := <- req.ack
 	return resp.err
 }
@@ -855,6 +878,9 @@ var allidmons	= map[inum]*idaemon_t{}
 var idmonl	= sync.Mutex{}
 
 func idaemon_ensure(priv inum) *idaemon_t {
+	if priv == 0 {
+		panic("zero priv")
+	}
 	idmonl.Lock()
 	ret, ok := allidmons[priv]
 	if !ok {
@@ -1113,12 +1139,21 @@ func (r *ireq_t) mkunlink(path string) {
 	r.path = []string{fn}
 }
 
-func (r *ireq_t) mkstat(st *stat_t) {
+func (r *ireq_t) mkfstat(st *stat_t) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan *iresp_t)
 	r.rtype = STAT
 	r.stat_st = st
+}
+
+func (r *ireq_t) mkstat(path string, st *stat_t) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan *iresp_t)
+	r.rtype = STAT
+	r.stat_st = st
+	r.path = pathparts(path)
 }
 
 func (r *ireq_t) mklock() {
@@ -1315,6 +1350,9 @@ func idaemonize(idm *idaemon_t) {
 			}
 
 		case STAT:
+			if fwded, erred := idm.forwardreq(r); fwded || erred {
+				break
+			}
 			st := r.stat_st
 			st.wdev(0)
 			st.wino(int(idm.priv))

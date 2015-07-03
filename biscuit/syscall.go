@@ -457,7 +457,9 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	}
 	// not allowed to open UNIX sockets
 	if file.ftype == DEV && file.dev.major == D_SUN {
-		// no close since the socket dev file actually does nothing
+		if err := fs_close(file, 0); err != 0 {
+			panic("must succeed")
+		}
 		return -EPERM
 	}
 	fdn, fd := proc.fd_new(fdperms)
@@ -596,17 +598,9 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 	}
 	buf := &stat_t{}
 	buf.init()
-	file, err := fs_open(path, 0, 0, proc.cwd, 0, 0)
+	err := fs_stat(path, buf, proc.cwd)
 	if err != 0 {
 		return err
-	}
-	err = fs_stat(file, buf)
-	if err != 0 {
-		return err
-	}
-	err = file_close(file, 0)
-	if err != 0 {
-		panic("must succeed")
 	}
 	ok = proc.usercopy(buf.data, statn)
 	if !ok {
@@ -622,7 +616,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	if !ok {
 		return -EBADF
 	}
-	err := fs_stat(fd.file, buf)
+	err := fs_fstat(fd.file, buf)
 	if err != 0 {
 		return err
 	}
@@ -653,7 +647,7 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	case SEEK_END:
 		st := &stat_t{}
 		st.init()
-		if err := fs_stat(fd.file, st); err != 0 {
+		if err := fs_fstat(fd.file, st); err != 0 {
 			panic("must succeed")
 		}
 		fd.file.offset = st.size() + off
@@ -899,6 +893,11 @@ func sys_gettimeofday(proc *proc_t, timevaln int) int {
 
 func mkdev(maj, min int) int {
 	return maj << 32 | min
+}
+
+func unmkdev(di int) (int, int) {
+	d := uint(di)
+	return int(d >> 32), int(uint32(d))
 }
 
 func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
@@ -2016,6 +2015,11 @@ func (st *stat_t) size() int {
 func (st *stat_t) wsize(v int) {
 	size, off := fieldinfo(st.sizes, 3)
 	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) rdev() int {
+	size, off := fieldinfo(st.sizes, 4)
+	return readn(st.data, size, off)
 }
 
 func (st *stat_t) wrdev(v int) {
