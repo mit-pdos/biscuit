@@ -899,6 +899,16 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 				done = 1;
 				break;
 			}
+			case 'f':
+				// XXX
+				{
+					char warn[] = "[insert float here]";
+					int i;
+					for (i = 0; i < sizeof(warn); i++)
+						dst += wc(dst, end, warn[i]);
+					done = 1;
+				}
+				break;
 			case 'p':
 				longmode = 1;
 				prehex = 1;
