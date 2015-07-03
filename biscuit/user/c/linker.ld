@@ -8,6 +8,6 @@ SECTIONS
         .bss : { *(.bss) }
 
 	/DISCARD/ : {
-		*(.eh_frame .note.gnu.build-id)
+		*(.eh_frame)
 	}
 }
