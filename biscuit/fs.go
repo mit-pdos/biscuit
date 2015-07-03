@@ -1401,6 +1401,8 @@ func idaemonize(idm *idaemon_t) {
 	}}()
 }
 
+// takes as input the file offset and whether the operation is a write and
+// returns the block number of the block responsible for that offset.
 func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 	zeroblock := func(blkno int) {
 		// zero block
@@ -1421,7 +1423,48 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		}
 		return nblkno, true
 	}
+	// this function makes sure that every slot up to and including idx of
+	// the given indirect block has a block allocated. it is necessary to
+	// allocate a bunch of zero'd blocks for a file when someone lseek()s
+	// past the end of the file but writes later.
+	ensureind := func(blk *bbuf_t, idx int) {
+		if !writing {
+			return
+		}
+		added := false
+		for i := 0; i <= idx; i++ {
+			slot := i * 8
+			blkn := readn(blk.buf.data[:], 8, slot)
+			blkn, isnew := ensureb(blkn, true)
+			if isnew {
+				writen(blk.buf.data[:], 8, slot, blkn)
+				added = true
+			}
+		}
+		if added {
+			log_write(blk)
+		}
+	}
+
 	whichblk := offset/512
+	// make sure there is no empty space for writes past the end of the
+	// file
+	if writing {
+		ub := whichblk + 1
+		if ub > NIADDRS {
+			ub = NIADDRS
+		}
+		for i := 0; i < ub; i++ {
+			if idm.icache.addrs[i] != 0 {
+				continue
+			}
+			tblkn := balloc()
+			// idaemon_t.iupdate() will make sure the
+			// icache is updated on disk
+			idm.icache.addrs[i] = tblkn
+		}
+	}
+
 	var blkn int
 	if whichblk >= NIADDRS {
 		indslot := whichblk - NIADDRS
@@ -1436,17 +1479,18 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		// follow indirect block chain
 		indblk := bread(indno)
 		for i := 0; i < indslot/slotpb; i++ {
+			// make sure the indirect block has no empty spaces if
+			// we are writing past the end of the file
+			ensureind(indblk, slotpb)
+
 			indno = readn(indblk.buf.data[:], 8, nextindb)
-			indno, isnew = ensureb(indno, true)
-			if isnew {
-				writen(indblk.buf.data[:], 8, nextindb, indno)
-				log_write(indblk)
-			}
 			brelse(indblk)
 			indblk = bread(indno)
 		}
 		// finally get data block from indirect block
-		noff := (indslot % slotpb)*8
+		slotoff := (indslot % slotpb)
+		ensureind(indblk, slotoff)
+		noff := (slotoff)*8
 		blkn = readn(indblk.buf.data[:], 8, noff)
 		blkn, isnew = ensureb(blkn, false)
 		if isnew {
@@ -1456,10 +1500,6 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		brelse(indblk)
 	} else {
 		blkn = idm.icache.addrs[whichblk]
-		if writing && blkn == 0 {
-			blkn = balloc()
-			idm.icache.addrs[whichblk] = blkn
-		}
 	}
 	return blkn
 }

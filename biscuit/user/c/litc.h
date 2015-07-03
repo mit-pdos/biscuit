@@ -102,9 +102,9 @@ int getpid(void);
 int kill(int, int);
 int link(const char *, const char *);
 off_t lseek(int, off_t, int);
-#define		SEEK_SET	0
-#define		SEEK_CUR	1
-#define		SEEK_END	2
+#define		SEEK_SET	1
+#define		SEEK_CUR	2
+#define		SEEK_END	4
 
 int mkdir(const char *, long);
 int mknod(const char *, mode_t, dev_t);

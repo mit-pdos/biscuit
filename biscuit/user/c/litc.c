@@ -7,6 +7,7 @@
 #define SYS_CLOSE        3
 #define SYS_STAT         4
 #define SYS_FSTAT        5
+#define SYS_LSEEK        8
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
 #define SYS_DUP2         33
@@ -153,8 +154,7 @@ link(const char *old, const char *new)
 off_t
 lseek(int fd, off_t off, int whence)
 {
-	errx(-1, "lseek: no imp");
-	return 0;
+	return syscall(SA(fd), SA(off), SA(whence), 0, 0, SYS_LSEEK);
 }
 
 int
@@ -560,10 +560,10 @@ posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *fa,
 	if (child) {
 		if (fa) {
 			if (_posix_dups(fa))
-				exit(127);
+				errx(127, "posix_spawn dups failed");
 		}
 		execv(path, argv);
-		exit(127);
+		errx(127, "posix_spawn exec failed");
 	}
 
 	if (pid)

@@ -1814,7 +1814,7 @@ _rename()
 }
 
 void
-rename_test()
+renametest()
 {
 	printf("rename test\n");
 
@@ -1909,6 +1909,48 @@ posixtest()
 	printf("posix test ok\n");
 }
 
+void
+lseektest()
+{
+	printf("lseek test\n");
+
+	char *f = "lseekfile";
+	unlink(f);
+
+	int fd = open(f, O_CREAT | O_RDWR);
+	if (fd < 0)
+		err(fd, "open");
+	char *msg = "duhee hi";
+	int ret = write(fd, msg, strlen(msg));
+	if (ret < 0)
+		err(ret, "write");
+	else if (ret != strlen(msg))
+		errx(-1, "bad len");
+
+	if ((ret = lseek(fd, 10240, SEEK_SET)) < 0)
+		err(ret, "lseek");
+
+	if ((ret = write(fd, msg, strlen(msg))) < 0)
+		err(ret, "write");
+	else if (ret != strlen(msg))
+		errx(-1, "bad len");
+
+	if ((ret = lseek(fd, 0, SEEK_SET)) < 0)
+		err(ret, "lseek");
+
+	long tot = 0;
+	char buf[1024];
+	while ((ret = read(fd, buf, sizeof(buf))) > 0)
+		tot += ret;
+	if (ret < 0)
+		err(ret, "read");
+
+	if (tot != 10240 + strlen(msg))
+		errx(-1, "bad total lens");
+
+	printf("lseek test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1925,7 +1967,8 @@ main(int argc, char *argv[])
   concreate();
   fourfiles();
   sharedfd();
-  rename_test();
+  renametest();
+  lseektest();
 
   bigargtest();
   bigwrite();

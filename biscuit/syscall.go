@@ -38,6 +38,7 @@ const(
   ENOTDIR      = 20
   EISDIR       = 21
   EINVAL       = 22
+  ESPIPE       = 29
   EPIPE        = 32
   ENAMETOOLONG = 36
   ENOSYS       = 38
@@ -62,6 +63,10 @@ const(
   SYS_CLOSE    = 3
   SYS_STAT     = 4
   SYS_FSTAT    = 5
+  SYS_LSEEK    = 8
+    SEEK_SET      = 0x1
+    SEEK_CUR      = 0x2
+    SEEK_END      = 0x4
   SYS_MMAP     = 9
     MAP_PRIVATE   = 0x2
     MAP_FIXED     = 0x10
@@ -156,6 +161,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_stat(p, a1, a2)
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
+	case SYS_LSEEK:
+		ret = sys_lseek(p, a1, a2, a3)
 	case SYS_MMAP:
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
 	case SYS_MUNMAP:
@@ -594,6 +601,10 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 	if err != 0 {
 		return err
 	}
+	err = file_close(file, 0)
+	if err != 0 {
+		panic("must succeed")
+	}
 	ok = proc.usercopy(buf.data, statn)
 	if !ok {
 		return -EFAULT
@@ -617,6 +628,39 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 		return -EFAULT
 	}
 	return 0
+}
+
+func sys_lseek(proc *proc_t, fdn, off, whence int) int {
+	fd, ok := proc.fds[fdn]
+	if !ok {
+		return -EBADF
+	}
+	if fd.file.ftype != INODE {
+		return -ESPIPE
+	}
+
+	fd.file.Lock()
+	defer fd.file.Unlock()
+
+	switch whence {
+	case SEEK_SET:
+		fd.file.offset = off
+	case SEEK_CUR:
+		fd.file.offset += off
+	case SEEK_END:
+		st := &stat_t{}
+		st.init()
+		if err := fs_stat(fd.file, st); err != 0 {
+			panic("must succeed")
+		}
+		fd.file.offset = st.size() + off
+	default:
+		return -EINVAL
+	}
+	if fd.file.offset < 0 {
+		fd.file.offset = 0
+	}
+	return fd.file.offset
 }
 
 func sys_pipe2(proc *proc_t, pipen, flags int) int {
@@ -1944,6 +1988,11 @@ func (st *stat_t) mode() int {
 func (st *stat_t) wmode(v int) {
 	size, off := fieldinfo(st.sizes, 2)
 	writen(st.data, size, off, v)
+}
+
+func (st *stat_t) size() int {
+	size, off := fieldinfo(st.sizes, 3)
+	return readn(st.data, size, off)
 }
 
 func (st *stat_t) wsize(v int) {
