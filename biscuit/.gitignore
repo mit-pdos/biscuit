@@ -56,6 +56,7 @@
 /user/c/sockettest
 /user/c/mv
 /user/c/sleep
+/user/c/time
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -105,3 +106,4 @@
 /fsdir/bin/mv
 /fsdir/bin/sleep
 /fsdir/bin/mailbench
+/fsdir/bin/time
