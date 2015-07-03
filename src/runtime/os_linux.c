@@ -2311,6 +2311,20 @@ hack_syscall(void)
 		default:
 			runtime·pancake("weird syscall:", trap);
 			break;
+		// open
+		case 2:
+			{
+			// catch unexpected opens; fail only /etc/localtime
+			byte *p = (byte *)dur_sc_a1;
+			byte l[] = "/etc/localtime";
+			if (runtime·strcmp(p, l) == 0)
+				dur_sc_err = -2;
+			else {
+				pmsg((int8 *)p);
+				runtime·pancake("unexpected open", 0);
+			}
+			break;
+			}
 		// write
 		case 1:
 			dur_sc_r1 = hack_write((int32)a1, (void *)a2, (uint64)a3);
