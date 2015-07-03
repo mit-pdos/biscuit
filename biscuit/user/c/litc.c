@@ -27,6 +27,7 @@
 #define SYS_MKDIR        83
 #define SYS_LINK         86
 #define SYS_UNLINK       87
+#define SYS_GETTOD       96
 #define SYS_MKNOD        133
 #define SYS_NANOSLEEP    230
 #define SYS_PIPE2        293
@@ -133,6 +134,14 @@ int
 getpid(void)
 {
 	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+}
+
+int
+gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+	if (tz)
+		errx(-1, "timezone not supported");
+	return syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
 }
 
 int
@@ -713,13 +722,6 @@ getopt(int argc, char * const *argv, const char *optstring)
 	optarg = argv[optind];
 	optind++;
 	return ca[1];
-}
-
-int
-gettimeofday(struct timeval *tv, struct timezone *tz)
-{
-	errx(-1, "gettimeofday: no imp");
-	return 0;
 }
 
 dev_t

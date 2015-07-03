@@ -106,6 +106,7 @@ const(
   SYS_MKDIR    = 83
   SYS_LINK     = 86
   SYS_UNLINK   = 87
+  SYS_GETTOD   = 96
   SYS_MKNOD    = 133
   SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
@@ -205,6 +206,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		ret = sys_link(p, a1, a2)
 	case SYS_UNLINK:
 		ret = sys_unlink(p, a1)
+	case SYS_GETTOD:
+		ret = sys_gettimeofday(p, a1)
 	case SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
 	case SYS_NANOSLEEP:
@@ -877,6 +880,21 @@ func sys_unlink(proc *proc_t, pathn int) int {
 		return err
 	}
 	return fs_unlink(path, proc.cwd)
+}
+
+func sys_gettimeofday(proc *proc_t, timevaln int) int {
+	tvalsz := 16
+	if !proc.usermapped(timevaln, tvalsz) {
+		return -EFAULT
+	}
+	now := time.Now()
+	buf := make([]uint8, tvalsz)
+	writen(buf, 8, 0, now.Second())
+	writen(buf, 8, 8, now.Nanosecond() / 1000)
+	if !proc.usercopy(buf, timevaln) {
+		panic("must succeed")
+	}
+	return 0
 }
 
 func mkdev(maj, min int) int {
