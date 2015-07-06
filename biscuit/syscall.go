@@ -125,7 +125,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 
 	p := proc_get(pid)
 
-	p.Lock()
+	p.threadi.Lock()
 	talive, ok := p.threadi.alive[tid]
 	if !ok {
 		panic("bad thread")
@@ -133,7 +133,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	if !talive {
 		panic("thread not alive")
 	}
-	p.Unlock()
+	p.threadi.Unlock()
 
 	if p.doomed {
 		// this process has been killed

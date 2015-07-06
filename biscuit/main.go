@@ -354,6 +354,7 @@ type ulimit_t struct {
 
 type threadinfo_t struct {
 	alive	map[tid_t]bool
+	sync.Mutex
 }
 
 func (t *threadinfo_t) init() {
@@ -397,8 +398,6 @@ type proc_t struct {
 	cwd		*file_t
 	tstart		uint64
 	ulim		ulimit_t
-
-	sync.Mutex
 }
 
 var proclock = sync.Mutex{}
@@ -560,9 +559,9 @@ func (p *proc_t) page_remove(va int) bool {
 }
 
 func (p *proc_t) resched(tid tid_t) bool {
-	p.Lock()
+	p.threadi.Lock()
 	talive := p.threadi.alive[tid]
-	p.Unlock()
+	p.threadi.Unlock()
 	return talive
 }
 
@@ -580,9 +579,9 @@ func (p *proc_t) sched_runnable(tf *[TFSIZE]int, tid tid_t) {
 func (p *proc_t) tid_new() tid_t {
 	ret := tid_t(newpid())
 
-	p.Lock()
+	p.threadi.Lock()
 	p.threadi.alive[ret] = true
-	p.Unlock()
+	p.threadi.Unlock()
 
 	return ret
 }
@@ -590,15 +589,15 @@ func (p *proc_t) tid_new() tid_t {
 // remove a particular thread that was never added to scheduler; like when fork
 // fails.
 func (p *proc_t) thread_del(tid tid_t) {
-	p.Lock()
+	p.threadi.Lock()
 	ti := &p.threadi
 	delete(ti.alive, tid)
-	p.Unlock()
+	p.threadi.Unlock()
 }
 
 // terminate a single thread
 func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
-	p.Lock()
+	p.threadi.Lock()
 	ti := &p.threadi
 	delete(ti.alive, tid)
 	destroy := len(ti.alive) == 0
@@ -606,7 +605,7 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	if usestatus {
 		p.exitstatus = status
 	}
-	p.Unlock()
+	p.threadi.Unlock()
 
 	// send thread status to thread wait daemon
 	cm := childmsg_t{pid: int(tid), status: status}
@@ -620,13 +619,13 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 
 func (p *proc_t) doomall() {
 	p.doomed = true
-	p.Lock()
+	p.threadi.Lock()
 	for t := range p.threadi.alive {
 		if runtime.Procnotify(p.mkptid(t)) != 0 {
 			panic("pid gone")
 		}
 	}
-	p.Unlock()
+	p.threadi.Unlock()
 }
 
 // termiante a process. must only be called when the process has no more
@@ -636,12 +635,12 @@ func (p *proc_t) terminate() {
 		panic("killed init")
 	}
 
-	p.Lock()
+	p.threadi.Lock()
 	ti := &p.threadi
 	if len(ti.alive) != 0 {
 		panic("terminate, but threads alive")
 	}
-	p.Unlock()
+	p.threadi.Unlock()
 
 	// close open fds
 	for fdn := range p.fds {
