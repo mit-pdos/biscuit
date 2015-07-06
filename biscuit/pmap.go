@@ -5,17 +5,19 @@ import "runtime"
 import "sync"
 import "unsafe"
 
-const PTE_P     int = 1 << 0
-const PTE_W     int = 1 << 1
-const PTE_U     int = 1 << 2
-const PTE_PCD   int = 1 << 4
-const PTE_PS    int = 1 << 7
-const PTE_COW   int = 1 << 9	// our flags
-const PGSIZE    int = 1 << 12
-const PGOFFSET  int = 0xfff
-const PGMASK    int = ^(PGOFFSET)
-const PTE_ADDR  int = PGMASK
-const PTE_FLAGS int = 0x1f	// only masks P, W, U, PWT, and PCD
+const PTE_P      int = 1 << 0
+const PTE_W      int = 1 << 1
+const PTE_U      int = 1 << 2
+const PTE_PCD    int = 1 << 4
+const PTE_PS     int = 1 << 7
+// our flags; bits 9-11 are ignored for all page map entries in long mode
+const PTE_COW    int = 1 << 9
+const PTE_WASCOW int = 1 << 10
+const PGSIZE     int = 1 << 12
+const PGOFFSET   int = 0xfff
+const PGMASK     int = ^(PGOFFSET)
+const PTE_ADDR   int = PGMASK
+const PTE_FLAGS  int = 0x1f	// only masks P, W, U, PWT, and PCD
 
 
 const VREC      int = 0x42
@@ -315,7 +317,7 @@ func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
 			if pte & PTE_U != 0 {
 				dst[i] = pte
 				if pte & PTE_W != 0 {
-					v := pte &^ PTE_W
+					v := pte &^ (PTE_W | PTE_WASCOW)
 					v |= PTE_COW
 					dst[i] = v
 					src[i] = v

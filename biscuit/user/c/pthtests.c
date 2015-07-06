@@ -5,11 +5,13 @@ __thread int id;
 int nthreads;
 int count;
 
-void *fn(void *a)
+void barrier_init()
 {
-	int b = (int)(long)a;
-	id = b;
+	count = 0;
+}
 
+void barrier()
+{
 	// barrier
 	for (;;) {
 		int oc = count;
@@ -21,12 +23,48 @@ void *fn(void *a)
 	int volatile *p = &count;
 	while (*p != nthreads)
 		;
+}
+
+void *fn(void *a)
+{
+	int b = (int)(long)a;
+	id = b;
+
+	// barrier
+	barrier();
 
 	printf("my id is still: %d (%d)\n", id, b);
 	if (id != b)
 		errx(-1, "TLS fyuked!");
 
 	return NULL;
+}
+
+int volatile go __attribute__((aligned(4096)));
+int blah __attribute__((aligned(4096)));
+
+void *groupfault(void *a)
+{
+	int b = (int)(long)a;
+
+	while (!go)
+		asm volatile("pause");
+
+	blah = b;
+
+	return NULL;
+}
+
+void joinall(pthread_t t[])
+{
+	int i;
+	for (i = 0; i < nthreads; i++) {
+		void *ret;
+		if (pthread_join(t[i], &ret))
+			errx(-1, "pthread join");
+		if (ret)
+			errx(-1, "bad exit");
+	}
 }
 
 int main(int argc, char **argv)
@@ -36,6 +74,7 @@ int main(int argc, char **argv)
 	if (nthreads <= 0)
 		nthreads = 3;
 
+	barrier_init();
 	printf("making %d threads\n", nthreads);
 	pthread_t t[nthreads];
 	int i;
@@ -45,14 +84,25 @@ int main(int argc, char **argv)
 
 	printf("started\n");
 
-	for (i = 0; i < nthreads; i++) {
-		void *ret;
-		if (pthread_join(t[i], &ret))
-			errx(-1, "pthread join");
-		if (ret)
-			errx(-1, "bad exit");
-	}
+	joinall(t);
+	printf("joined. doing group fault...\n");
 
-	printf("joined\n");
+	// test simultaneous faults
+	for (i = 0; i < nthreads; i++)
+		if (pthread_create(&t[i], NULL, groupfault, (void *)(long)i))
+			errx(-1, "pthread create");
+
+	sleep(1);
+	printf("fork\n");
+
+	// make address space copy-on-write by forking
+	if (fork() == 0)
+		return 0;
+
+	go = 1;
+
+	joinall(t);
+	printf("success\n");
+
 	return 0;
 }

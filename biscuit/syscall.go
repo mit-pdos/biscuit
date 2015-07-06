@@ -1403,19 +1403,33 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
     tf *[TFSIZE]int) {
+	cow := *pte & PTE_COW != 0
+	wascow := *pte & PTE_WASCOW != 0
+	if cow && wascow {
+		panic("invalid state")
+	}
 
-	// copy page
-	dst, p_dst := pg_new(proc.pages)
-	p_src := *pte & PTE_ADDR
-	src := dmap(p_src)
-	*dst = *src
+	if cow {
+		// copy page
+		dst, p_dst := pg_new(proc.pages)
+		p_src := *pte & PTE_ADDR
+		src := dmap(p_src)
+		*dst = *src
 
-	// insert new page into pmap
-	va := faultaddr & PGMASK
-	perms := (*pte & PTE_FLAGS) & ^PTE_COW
-	perms |= PTE_W
-	// XXX TLB shootdown
-	proc.page_insert(va, dst, p_dst, perms, false)
+		// insert new page into pmap
+		va := faultaddr & PGMASK
+		perms := (*pte & PTE_FLAGS) & ^PTE_COW
+		perms |= PTE_W | PTE_WASCOW
+		// XXX TLB shootdown
+		proc.page_insert(va, dst, p_dst, perms, false)
+	} else if wascow {
+		// land here if two threads fault on same page
+		if wascow && *pte & PTE_W == 0 {
+			panic("handled but read-only")
+		}
+	} else {
+		panic("fault on non-cow page")
+	}
 
 	// set process as runnable again
 	proc.sched_runnable(nil, tid)

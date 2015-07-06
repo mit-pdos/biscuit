@@ -262,17 +262,18 @@ func trap_pgfault(ts *trapstore_t) {
 	defer proc.pgfl.Unlock()
 
 	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
-	if pte != nil && *pte & PTE_COW != 0 {
-		if fa < USERMIN {
-			panic("kernel page marked COW")
+	if pte != nil {
+		cow := *pte & PTE_COW != 0
+		wascow := *pte & PTE_WASCOW != 0
+		if cow || wascow {
+			if fa < USERMIN {
+				panic("kern addr marked cow")
+			}
+			sys_pgfault(proc, tid, pte, fa, &ts.tf)
+			return
 		}
-		sys_pgfault(proc, tid, pte, fa, &ts.tf)
-		return
 	}
 
-	// if two threads fault on the same page simultaneously, the second
-	// thread will think the fault is unexpected since the first thread
-	// cleared COW already...
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.name, fa, rip)
