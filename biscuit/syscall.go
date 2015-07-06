@@ -392,10 +392,6 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if _, ok := fdwriters[fd.file.ftype]; !ok {
 		panic("no imp")
 	}
-	if fd.file.ftype == INODE {
-		fd.file.Lock()
-		defer fd.file.Unlock()
-	}
 
 	apnd := fd.perms & FD_APPEND != 0
 	c := 0
@@ -411,6 +407,11 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		}
 		srcs = append(srcs, src)
 		c += len(src)
+	}
+
+	if fd.file.ftype == INODE {
+		fd.file.Lock()
+		defer fd.file.Unlock()
 	}
 	ret, err := fdwriters[fd.file.ftype](srcs, fd.file, fd.file.offset,
 	    apnd)
@@ -513,6 +514,10 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	if prot == PROT_NONE {
 		return proc.mmapi
 	}
+
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
+
 	perms := PTE_U
 	if prot & PROT_WRITE != 0 {
 		perms |= PTE_W
@@ -521,7 +526,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	if lenn/PGSIZE + len(proc.pages) > proc.ulim.pages {
 		return MAP_FAILED
 	}
-	addr := proc.unusedva(proc.mmapi, lenn)
+	addr := proc.unusedva_inner(proc.mmapi, lenn)
 	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
 		pg, p_pg := pg_new(proc.pages)
@@ -534,6 +539,8 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	if addrn & PGOFFSET != 0 || addrn < USERMIN {
 		return -EINVAL
 	}
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
 	len = roundup(len, PGSIZE)
 	for i := 0; i < len; i += PGSIZE {
 		p := addrn + i
@@ -620,6 +627,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	if err != 0 {
 		return err
 	}
+
 	ok = proc.usercopy(buf.data, statn)
 	if !ok {
 		return -EFAULT
@@ -1324,6 +1332,9 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	chtf = *ptf
 
 	if mkproc {
+		parent.Lock_pmap()
+		defer parent.Unlock_pmap()
+
 		child = proc_new(fmt.Sprintf("%s's child", parent.name),
 		    parent.cwd)
 		child.pwaiti = &parent.waiti
@@ -1403,6 +1414,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
     tf *[TFSIZE]int) {
+	// pmap is Lock'ed in trap_pgfault...
 	cow := *pte & PTE_COW != 0
 	wascow := *pte & PTE_WASCOW != 0
 	if cow && wascow {
@@ -1454,8 +1466,6 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 	return sys_execv1(proc, tf, path, args)
 }
 
-// XXX a multithreaded process that execs is broken; POSIX2008 says that all
-// threads should terminate before exec.
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
 	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
@@ -1481,6 +1491,17 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	if !ok {
 		return -EPERM
 	}
+
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
+
+	// XXX a multithreaded process that execs is broken; POSIX2008 says
+	// that all threads should terminate before exec.
+	proc.threadi.Lock()
+	if len(proc.threadi.alive) > 1 {
+		panic("fix exec with many threads")
+	}
+	proc.threadi.Unlock()
 
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
 
@@ -1521,7 +1542,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		l -= rounddown(tls.addr, PGSIZE)
 
 		mktls := func(writable bool) int {
-			ret := proc.unusedva(0, l)
+			ret := proc.unusedva_inner(0, l)
 			perms := PTE_U
 			if writable {
 				perms |= PTE_W
@@ -1530,9 +1551,10 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 				pg, p_pg := pg_new(proc.pages)
 				proc.page_insert(ret + i, pg, p_pg, perms, true)
 			}
+
 			for i := 0; i < l; i += PGSIZE {
-				src, ok1 := proc.userdmap(tls.addr + i)
-				dst, ok2 := proc.userdmap(ret + i)
+				src, ok1 := proc.userdmap_inner(tls.addr + i)
+				dst, ok2 := proc.userdmap_inner(ret + i)
 				if !ok1 || !ok2 {
 					panic("must succeed")
 				}
@@ -1547,7 +1569,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 			startva := ret + tls.copylen
 			var z []uint8
 			for c := 0; c < zl; c += len(z) {
-				z, ok = proc.userdmap8(startva + c)
+				z, ok = proc.userdmap8_inner(startva + c)
 				if !ok {
 					panic("must succeed")
 				}
@@ -1587,7 +1609,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	writen(buf, 8, 16, t0tls)
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
-	if !proc.usercopy(buf, bufdest) {
+	if !proc.usercopy_inner(buf, bufdest) {
 		panic("must succeed")
 	}
 
@@ -1635,7 +1657,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 		argptrs[i] = uva + cnt
 		// add null terminators
 		arg = append(arg, 0)
-		if !proc.usercopy(arg, uva + cnt) {
+		if !proc.usercopy_inner(arg, uva + cnt) {
 			// args take up more than a page? the user is on their
 			// own.
 			return 0, 0, false
@@ -1645,7 +1667,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	argptrs[len(argptrs) - 1] = 0
 	// now put the array of strings
 	argstart := uva + cnt
-	vdata, ok := proc.userdmap8(argstart)
+	vdata, ok := proc.userdmap8_inner(argstart)
 	if !ok || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
 		return 0, 0, false
@@ -2164,7 +2186,7 @@ type etls_t struct {
 	copylen	int
 }
 
-// returns TLS struct and whether ELF has TLS
+// returns TLS struct and whether ELF has TLS. caller must hold pagemap lock.
 func elf_load(p *proc_t, e *elf_t) (etls_t, bool) {
 	PT_LOAD := 1
 	PT_TLS  := 7

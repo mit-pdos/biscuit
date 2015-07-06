@@ -258,8 +258,8 @@ func trap_pgfault(ts *trapstore_t) {
 	proc := proc_get(pid)
 
 	// XXX need TLB shootdowns!
-	proc.pgfl.Lock()
-	defer proc.pgfl.Unlock()
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
 
 	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
 	if pte != nil {
@@ -385,7 +385,9 @@ type proc_t struct {
 	mmapi		int
 	pmap		*[512]int
 	p_pmap		int
+	// lock for pages, upages, pmap, and p_pmap
 	pgfl		sync.Mutex
+	pgfltaken	bool
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
@@ -512,7 +514,7 @@ func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
 
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
-
+	p.lockassert_pmap()
 	uva := va & PGMASK
 	pte := pmap_walk(p.pmap, va, true, PTE_U | PTE_W, p.pages)
 	ninval := false
@@ -544,6 +546,7 @@ func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
 }
 
 func (p *proc_t) page_remove(va int) bool {
+	p.lockassert_pmap()
 	remmed := false
 	pte := pmap_walk(p.pmap, va, false, 0, nil)
 	if pte != nil && *pte & PTE_P != 0 {
@@ -666,9 +669,30 @@ func (p *proc_t) terminate() {
 // XXX these can probably go away since user processes share kernel pmaps
 // now... (don't switch to kernel pmap, just use the user pmap)
 
+func (p *proc_t) Lock_pmap() {
+	// useful for finding deadlock bugs with one cpu
+	//if p.pgfltaken {
+	//	panic("double lock")
+	//}
+	p.pgfl.Lock()
+	p.pgfltaken = true
+}
+
+func (p *proc_t) Unlock_pmap() {
+	p.pgfltaken = false
+	p.pgfl.Unlock()
+}
+
+func (p *proc_t) lockassert_pmap() {
+	if !p.pgfltaken {
+		panic("pgfl lock must be held")
+	}
+}
+
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
-func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
+func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
+	p.lockassert_pmap()
 	uva := va & PGMASK
 	voff := va & PGOFFSET
 	phys, ok := p.upages[uva]
@@ -678,8 +702,15 @@ func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
 	return dmap8(phys + voff), true
 }
 
-// like userdmap8, but returns a pointer to the page
-func (p *proc_t) userdmap(va int) (*[512]int, bool) {
+func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
+	return p.userdmap8_inner(va)
+}
+
+// caller must have the vm lock
+func (p *proc_t) userdmap_inner(va int) (*[512]int, bool) {
+	p.lockassert_pmap()
 	uva := va & PGMASK
 	phys, ok := p.upages[uva]
 	if !ok {
@@ -688,7 +719,17 @@ func (p *proc_t) userdmap(va int) (*[512]int, bool) {
 	return dmap(phys), true
 }
 
+// like userdmap8, but returns a pointer to the page
+func (p *proc_t) userdmap(va int) (*[512]int, bool) {
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
+	return p.userdmap_inner(va)
+}
+
 func (p *proc_t) usermapped(va, n int) bool {
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
+
 	if n < 0 {
 		panic("negative count")
 	}
@@ -830,10 +871,17 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 // copies src to the user virtual address uva. may copy part of src if uva +
 // len(src) is not mapped
 func (p *proc_t) usercopy(src []uint8, uva int) bool {
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
+	return p.usercopy_inner(src, uva)
+}
+
+func (p *proc_t) usercopy_inner(src []uint8, uva int) bool {
+	p.lockassert_pmap()
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		dst, ok := p.userdmap8(uva + cnt)
+		dst, ok := p.userdmap8_inner(uva + cnt)
 		if !ok {
 			return false
 		}
@@ -850,7 +898,8 @@ func (p *proc_t) usercopy(src []uint8, uva int) bool {
 	return true
 }
 
-func (p *proc_t) unusedva(startva, len int) int {
+func (p *proc_t) unusedva_inner(startva, len int) int {
+	p.lockassert_pmap()
 	if len < 0 || len > 1 << 48 {
 		panic("weird len")
 	}
@@ -1337,6 +1386,9 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	addprint := func(c byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
+		if c == '\\' {
+			panic("yahoo")
+		}
 	}
 	var reqc chan int
 	for {
