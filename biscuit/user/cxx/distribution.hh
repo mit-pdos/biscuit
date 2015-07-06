@@ -93,15 +93,12 @@ class concurrent_distribution
   static int getid()
   {
     static std::atomic<int> nextid;
-    static __thread bool haveid;
-    static __thread int myid;
-    if (!haveid) {
+    static __thread int myid = -1;
+    if (myid == -1) {
       myid = nextid++;
-      haveid = true;
       //assert(myid < MAX_THREADS);
-      if (myid >= MAX_THREADS) {
-        errx(-1, "myid >= max threads %d\n", myid);
-      }
+      if (myid >= MAX_THREADS || myid < 0)
+	errx(-1, "myid >= max threads %d\n", myid);
     }
     return myid;
   }
