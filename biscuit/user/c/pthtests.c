@@ -40,8 +40,8 @@ void *fn(void *a)
 	return NULL;
 }
 
-int volatile go __attribute__((aligned(4096)));
-int blah __attribute__((aligned(4096)));
+static long volatile go __attribute__((aligned(4096)));
+static int blah __attribute__((aligned(4096)));
 
 void *groupfault(void *a)
 {
@@ -52,6 +52,28 @@ void *groupfault(void *a)
 
 	blah = b;
 
+	return NULL;
+}
+
+static int volatile observe __attribute__((aligned(4096))) = 10;
+
+void acquire(void)
+{
+	while (__sync_lock_test_and_set(&go, 1) != 0)
+		;
+}
+
+void release(void)
+{
+	go = 0;
+}
+
+void *tlbinval(void *a)
+{
+	acquire();
+	if (observe != 0x31337)
+		errx(-1, "didn't get tlb invalidate: %d", observe);
+	release();
 	return NULL;
 }
 
@@ -100,8 +122,21 @@ int main(int argc, char **argv)
 		return 0;
 
 	go = 1;
+	joinall(t);
+	go = 0;
+
+	printf("testing TLB shootdowns...\n");
+	// test TLB shootdowns
+	acquire();
+	for (i = 0; i < nthreads; i++)
+		if (pthread_create(&t[i], NULL, tlbinval, NULL))
+			errx(-1, "pthread create");
+
+	observe = 0x31337;
+	release();
 
 	joinall(t);
+
 	printf("success\n");
 
 	return 0;

@@ -551,6 +551,8 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 			return -EINVAL
 		}
 	}
+	pgs := len/PGSIZE
+	proc.tlbshoot(addrn, pgs)
 	return 0
 }
 
@@ -1432,8 +1434,9 @@ func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
 		va := faultaddr & PGMASK
 		perms := (*pte & PTE_FLAGS) & ^PTE_COW
 		perms |= PTE_W | PTE_WASCOW
-		// XXX TLB shootdown
 		proc.page_insert(va, dst, p_dst, perms, false)
+
+		proc.tlbshoot(faultaddr, 1)
 	} else if wascow {
 		// land here if two threads fault on same page
 		if wascow && *pte & PTE_W == 0 {
@@ -1492,16 +1495,14 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		return -EPERM
 	}
 
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
-
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
 	// that all threads should terminate before exec.
-	proc.threadi.Lock()
-	if len(proc.threadi.alive) > 1 {
+	if proc.thread_count() > 1 {
 		panic("fix exec with many threads")
 	}
-	proc.threadi.Unlock()
+
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
 
 	stackva := mkpg(VUSER + 1, 0, 0, 0)
 

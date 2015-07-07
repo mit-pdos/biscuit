@@ -349,6 +349,7 @@ runtime·signame(int32 sig)
 }
 
 // src/runtime/asm_amd64.s
+void atomic_dec(uint64 *);
 void cli(void);
 void cpu_halt(uint64);
 void hack_yield(void);
@@ -692,7 +693,7 @@ struct idte_t {
 #define	INT     0xe
 #define	TRAP    0xf
 
-#define	NIDTE   65
+#define	NIDTE   128
 struct idte_t idt[NIDTE];
 
 #pragma textflag NOSPLIT
@@ -812,6 +813,7 @@ int_setup(void)
 	extern void Xspur(void);
 	extern void Xyield(void);
 	extern void Xsyscall(void);
+	extern void Xtlbshoot(void);
 
 	extern void Xirq1(void);
 	extern void Xirq2(void);
@@ -879,6 +881,8 @@ int_setup(void)
 	int_set(&idt[48], (uint64) Xspur,    0, 0, 1);
 	int_set(&idt[49], (uint64) Xyield,   0, 0, 1);
 	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
+
+	int_set(&idt[70], (uint64) Xtlbshoot, 0, 0, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
@@ -1340,6 +1344,7 @@ hack_munmap(void *va, uint64 sz)
 {
 	splock(&maplock);
 
+	// XXX TLB shootdowns?
 	uint8 *v = (uint8 *)va;
 	int32 i;
 	sz = ROUNDUP(sz, PGSIZE);
@@ -1486,6 +1491,7 @@ mmap_test(void)
 #define TRAP_DISK       (32 + 14)
 #define TRAP_SPUR       48
 #define TRAP_YIELD      49
+#define TRAP_TLBSHOOT   70
 
 // HZ timer interrupts/sec
 #define HZ		10
@@ -1821,6 +1827,59 @@ runtime·Tfdump(uint64 *tf)
 	pmsg("\n");
 }
 
+uint64 tlbshoot_wait;
+uint64 tlbshoot_pg;
+uint64 tlbshoot_count;
+uint64 tlbshoot_pmap;
+
+#pragma textflag NOSPLIT
+void
+runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
+{
+	while (!runtime·cas64(&tlbshoot_wait, 0, cpuwait))
+		;
+
+	runtime·xchg64(&tlbshoot_pg, pg);
+	runtime·xchg64(&tlbshoot_count, pgcount);
+	runtime·xchg64(&tlbshoot_pmap, pmap);
+}
+
+#pragma textflag NOSPLIT
+void
+tlb_shootdown(uint64 *tf)
+{
+	lap_eoi();
+	struct thread_t *ct = curthread;
+
+	if (ct && ct->pmap == tlbshoot_pmap) {
+		// the TLB is flushed simply by taking an IPI since currently
+		// each CPU switches to kernel page map on trap entry. the
+		// following code will be necessary if we ever stop switching
+		// to kernel page map on each trap.
+
+		//uint64 start = tlbshoot_pg;
+		//uint64 end = tlbshoot_pg + tlbshoot_count * PGSIZE;
+		//pnum(lap_id() << 56 | start);
+		//for (; start < end; start += PGSIZE)
+		//	invlpg((uint64 *)start);
+	}
+
+	// decrement outstanding tlb shootdown count; if we stop broadcasting
+	// shootdowns, only CPUs that the shootdown is sent to should do this
+	while (1) {
+		uint64 old = runtime·atomicload64(&tlbshoot_wait);
+		if (!old)
+			runtime·pancake("count is 0", old);
+		if (runtime·cas64(&tlbshoot_wait, old, old - 1))
+			break;
+	}
+
+	if (ct)
+		trapret(tf, ct->pmap);
+	else
+		sched_halt();
+}
+
 #pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
@@ -1840,6 +1899,9 @@ trap(uint64 *tf)
 		trapno = TRAP_TIMER;
 		tf[TF_TRAPNO] = TRAP_TIMER;
 		yielding = 1;
+	} else if (trapno == TRAP_TLBSHOOT) {
+		// does not return
+		tlb_shootdown(tf);
 	}
 
 	if (ct) {

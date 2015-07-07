@@ -343,6 +343,12 @@ TEXT runtime·Cpuid(SB), NOSPLIT, $0-24
 	MOVL	DX, ret+20(FP)
 	RET
 
+TEXT runtime·atomic_dec(SB), NOSPLIT, $0-8
+	MOVQ	addr+0(FP), AX
+	LOCK
+	DECQ	(AX)
+	RET
+
 TEXT finit(SB), NOSPLIT, $0-0
 	FINIT
 	RET
@@ -626,7 +632,7 @@ TEXT fn(SB), NOSPLIT, $0-0;		\
 	POPQ	AX;			\
 	POPQ	AX;			\
 	RET
-// pops are to silence plan9 warnings
+// pops are to silence plan9 assembler warnings
 
 #define IH_IRQ(num, fn)			\
 TEXT fn(SB), NOSPLIT, $0-0;		\
@@ -673,6 +679,7 @@ IH_NOEC(32,Xtimer )
 IH_NOEC(48,Xspur )
 IH_NOEC(49,Xyield )
 IH_NOEC(64,Xsyscall )
+IH_NOEC(70,Xtlbshoot )
 
 // irqs
 // irq0 is Xtimer

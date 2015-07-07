@@ -50,6 +50,7 @@ func Rrsp() int
 func Sgdt(*int)
 func Sidt(*int)
 func Sti()
+func Tlbadmit(int, int, int, int)
 func Vtop(*[512]int) int
 
 func Crash()
