@@ -457,8 +457,8 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	yield_skip
-#define TRAP_TIMER      $32
-	INT	TRAP_TIMER
+#define TRAP_YIELD      $49
+	INT	TRAP_YIELD
 	RET
 yield_skip:
 	MOVL	$24, AX

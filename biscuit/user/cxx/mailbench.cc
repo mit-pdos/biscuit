@@ -333,7 +333,8 @@ main(int argc, char **argv)
   printf("%lu start usec skew\n", start_usec.span());
   printf("%lu stop usec skew\n", stop_usec.span());
   uint64_t usec = stop_usec.mean() - start_usec.mean();
-  printf("%f secs\n", (double)usec / 1e6);
+  //printf("%f secs\n", (double)usec / 1e6);
+  printf("%lu usecs\n", usec);
   printf("%lu cycles\n", stop_tsc.mean() - start_tsc.mean());
 
   uint64_t messages = count.sum();
