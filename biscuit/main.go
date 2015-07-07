@@ -1386,9 +1386,6 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	addprint := func(c byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
-		if c == '\\' {
-			panic("yahoo")
-		}
 	}
 	var reqc chan int
 	for {
