@@ -1787,7 +1787,8 @@ runtime·Procrunnable(int64 pid, uint64 *tf, uint64 pmap)
 void
 wakeup(void)
 {
-	// nanoseconds
+	// nanoseconds. uint64 nanosecond counter will overflow after 584.9
+	// years.
 	durnanotime += 1000000000ull/HZ;
 
 	// wake up timed out futexs
@@ -2336,15 +2337,21 @@ hack_nanotime(void)
 {
 	// XXX lapic timers can't be globally synchronized...
 	static uint64 last;
-	uint64 ticks = ticks_get();
-	uint64 nsecs = (ticks * pspertick)/1000;
-	uint64 ret = durnanotime + nsecs;
 	// XXX if a timer interrupt comes after the return of ticks_get() but
 	// before the load of durnanotime, we may double count about 1e9/HZ
 	// nanoseconds. do this hack for now.
-	if (ret < last)
-		ret += 1000000000ull/HZ;
-	last = ret;
+	uint64 ret;
+	while (1) {
+		uint64 ticks = ticks_get();
+		uint64 nsecs = (ticks * pspertick)/1000;
+		ret = durnanotime + nsecs;
+
+		uint64 mylast = runtime·atomicload64(&last);
+		if (ret < mylast)
+			ret = mylast;
+		if (runtime·cas64(&last, mylast, ret))
+			break;
+	}
 	return ret;
 }
 

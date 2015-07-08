@@ -894,8 +894,9 @@ func sys_gettimeofday(proc *proc_t, timevaln int) int {
 	}
 	now := time.Now()
 	buf := make([]uint8, tvalsz)
-	writen(buf, 8, 0, now.Second())
-	writen(buf, 8, 8, now.Nanosecond() / 1000)
+	us := int(now.UnixNano() / 1000)
+	writen(buf, 8, 0, us/1e6)
+	writen(buf, 8, 8, us%1e6)
 	if !proc.usercopy(buf, timevaln) {
 		panic("must succeed")
 	}
