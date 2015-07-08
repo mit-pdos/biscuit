@@ -395,6 +395,7 @@ type proc_t struct {
 	exitstatus	int
 
 	fds		map[int]*fd_t
+	fdl		sync.Mutex
 	// where to start scanning for free fds
 	fdstart		int
 	cwd		*file_t
@@ -437,6 +438,9 @@ func proc_new(name string, cwd *file_t) *proc_t {
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.fdstart = 3
 	ret.cwd = cwd
+	if cwd.ftype != INODE {
+		panic("weird cwd")
+	}
 	fs_memref(ret.cwd, 0)
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
@@ -486,6 +490,9 @@ func proc_del(pid int) {
 }
 
 func (p *proc_t) fd_new(perms int) (int, *fd_t) {
+	p.fdl.Lock()
+	defer p.fdl.Unlock()
+
 	// find free fd
 	newfd := p.fdstart
 	for {
@@ -662,9 +669,11 @@ func (p *proc_t) terminate() {
 	p.threadi.Unlock()
 
 	// close open fds
+	p.fdl.Lock()
 	for fdn := range p.fds {
 		sys_close(p, fdn)
 	}
+	p.fdl.Unlock()
 
 	//fmt.Printf("%v exited with status %v\n", p.name, p.exitstatus)
 	//tot := runtime.Rdtsc() - p.tstart
