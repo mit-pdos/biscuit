@@ -42,6 +42,7 @@ const(
   EPIPE        = 32
   ENAMETOOLONG = 36
   ENOSYS       = 38
+  ENOTEMPTY    = 39
   EMSGSIZE     = 90
   ECONNREFUSED = 111
 )
@@ -1923,6 +1924,9 @@ func sys_chdir(proc *proc_t, dirn int) int {
 	if err != 0 {
 		return err
 	}
+
+	proc.cwdl.Lock()
+	defer proc.cwdl.Unlock()
 
 	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd, 0, 0)
 	if err != 0 {

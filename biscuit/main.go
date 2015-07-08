@@ -398,6 +398,8 @@ type proc_t struct {
 	// where to start scanning for free fds
 	fdstart		int
 	cwd		*file_t
+	// to serialize chdirs
+	cwdl		sync.Mutex
 	tstart		uint64
 	ulim		ulimit_t
 }

@@ -1418,7 +1418,7 @@ func idaemonize(idm *idaemon_t) {
 		case EMPTY:
 			err := 0
 			if idm.icache.itype == I_DIR && !idm.idirempty() {
-				err = -EPERM
+				err = -ENOTEMPTY
 			}
 			resp := &iresp_t{err: err}
 			r.ack <- resp
