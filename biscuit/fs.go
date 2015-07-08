@@ -254,9 +254,10 @@ func (itx *inodetx_t) lockall() int {
 		sort.Sort(sort.IntSlice(sorted))
 		nodups := make(map[int]bool)
 		for _, in := range sorted {
-			if _, ok := nodups[in]; ok {
+			if nodups[in] {
 				continue
 			}
+			nodups[in] = true
 			req := &ireq_t{}
 			req.mklock()
 			lchans[inum(in)] = req.lock_lchan
@@ -522,6 +523,11 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 	nfp := ndirs + "/" + nfn
 	newexists := itx.childlocked(nfp)
 	if newexists {
+		// if src and dst are the same file, we are done
+		if itx.privfor(ofp) == itx.privfor(nfp) {
+			return 0
+		}
+
 		// make sure old file and new file are both files, or both
 		// directories
 		ost := &stat_t{}

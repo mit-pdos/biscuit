@@ -1754,7 +1754,6 @@ void
 _rename()
 {
 	int ret;
-
 	if ((ret = open("a", O_RDONLY | O_CREAT)) < 0)
 		err(ret, "open");
 	close(ret);
@@ -1772,6 +1771,9 @@ _rename()
 
 	if ((ret = chdir("renamed")))
 		err(ret, "chdir");
+
+	if ((ret = rename("f", "f")))
+		err(ret, "rename");
 
 	if (fork() == 0)
 		rshuffle("a", "b", "e", "f");
