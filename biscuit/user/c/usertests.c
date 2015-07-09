@@ -1,4 +1,6 @@
-#include <litc.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 char buf[8192];
 char name[3];
