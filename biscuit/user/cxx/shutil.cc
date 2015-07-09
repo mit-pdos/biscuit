@@ -1,7 +1,11 @@
 #include "shutil.h"
 #include "libutil.h"
 
-#include <litc.h>
+#include <err.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 ssize_t
 writeall(int fd, const void *buf, size_t n)

@@ -61,6 +61,10 @@
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
 /user/cxx/mailbench
+/user/cxx/linux/mail-enqueue
+/user/cxx/linux/mail-qman
+/user/cxx/linux/mail-deliver
+/user/cxx/linux/mailbench
 /user/cxx/sysroot
 /fsdir/bin/hello
 /fsdir/bin/fault

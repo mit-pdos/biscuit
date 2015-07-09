@@ -1,11 +1,9 @@
 #pragma once
 
 //#include "compiler.h"
-//
-//#include <stdint.h>
-//#include <sys/types.h>
 
-#include <litc.h>
+#include <stdint.h>
+#include <sys/types.h>
 
 void die(const char* errstr, ...)
   __attribute__((noreturn, __format__(__printf__, 1, 2)));
@@ -28,3 +26,10 @@ uint64_t now_usec(void);
 
 #define		STAT_OMIT_NLINK		0
 #define fstatx(a, b, c)		fstat(a, b)
+
+#if !defined(XV6_USER)
+ulong rdtsc(void);
+#define		EP(x)		"./" x
+#else
+#define		EP(x)		"/bin/" x
+#endif

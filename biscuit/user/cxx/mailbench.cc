@@ -4,7 +4,16 @@
 #include "libutil.h"
 //#include "xsys.h"
 
-#include <litc.h>
+//#include <litc.h>
+
+#include <fcntl.h>
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #include <string>
 #include <thread>
@@ -93,7 +102,7 @@ xwaitpid(int pid, const char *cmd)
 static void
 do_mua(int cpu, string spooldir, string msgpath, size_t batch_size)
 {
-  std::vector<const char*> argv{"/bin/mail-enqueue"};
+  std::vector<const char*> argv{EP("mail-enqueue")};
 #if defined(XV6_USER)
   int errno;
 #endif
@@ -275,7 +284,7 @@ main(int argc, char **argv)
   pid_t qman_pid;
   if (START_QMAN) {
     // Start queue manager
-    std::vector<const char*> qman{"/bin/mail-qman", "-a", alt_str};
+    std::vector<const char*> qman{EP("mail-qman"), "-a", alt_str};
     if (pool)
       qman.push_back("-p");
     qman.push_back(spooldir.c_str());
@@ -320,7 +329,7 @@ main(int argc, char **argv)
 
   if (START_QMAN) {
     // Kill qman and wait for it to exit
-    const char *enq[] = {"/bin/mail-enqueue", "--exit", spooldir.c_str(), nullptr};
+    const char *enq[] = {EP("mail-enqueue"), "--exit", spooldir.c_str(), nullptr};
     pid_t enq_pid;
     if (posix_spawn(&enq_pid, enq[0], nullptr, nullptr,
                     const_cast<char *const*>(enq), environ) != 0)

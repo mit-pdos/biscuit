@@ -2,18 +2,16 @@
 
 #include "libutil.h"
 
-//#include <stdarg.h>
-//#include <errno.h>
-//#include <fcntl.h>
-//#include <sched.h>
-//#include <stdio.h>
-//#include <stdlib.h>
-//#include <stdarg.h>
-//#include <string.h>
-//#include <unistd.h>
-//#include <sys/time.h>
-
-#include <litc.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sched.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/time.h>
 
 static void __attribute__((noreturn))
 vdie(const char* errstr, va_list ap)
@@ -98,5 +96,17 @@ setaffinity(int c)
   if (sched_setaffinity(0, sizeof(cpuset), &cpuset) < 0)
     edie("setaffinity, sched_setaffinity failed");
   return 0;
+}
+
+ulong
+rdtsc(void)
+{
+	ulong low, hi;
+	asm volatile(
+	    "rdtsc\n"
+	    : "=a"(low), "=d"(hi)
+	    :
+	    :);
+	return hi << 32 | low;
 }
 #endif

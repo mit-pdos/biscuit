@@ -11,11 +11,20 @@
 #include "shutil.h"
 //#include "xsys.h"
 
+#include <err.h>
+#include <fcntl.h>
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+
 #include <stdexcept>
 #include <string>
 #include <thread>
-
-#include <litc.h>
 
 #define SOCK_DGRAM_UNORDERED	(-1)
 #define O_ANYFD			(-1)
@@ -214,7 +223,7 @@ public:
 
       if (!pid_) {
         // Start batch-mode deliver process
-        const char *argv[] = {"/bin/mail-deliver", "-b", mailroot_.c_str(),
+        const char *argv[] = {EP("mail-deliver"), "-b", mailroot_.c_str(),
                               recipient.c_str(), nullptr};
         pool_recipient_ = recipient;
         //if (pipe2(msgpipe, O_CLOEXEC|O_ANYFD) < 0)
@@ -249,7 +258,7 @@ public:
       if (res != 0)
         die("mail-qman: mail-deliver returned status %d", (int)res);
     } else {
-      const char *argv[] = {"/bin/mail-deliver", mailroot_.c_str(),
+      const char *argv[] = {EP("mail-deliver"), mailroot_.c_str(),
                             recipient.c_str(), nullptr};
       start_child(argv, msgfd, -1);
       wait_child();

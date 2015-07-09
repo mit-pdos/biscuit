@@ -119,7 +119,7 @@ CXXRT := $(shell $(CC) -print-file-name=libgcc_eh.a) \
 	 $(shell $(CC) -print-file-name=libsupc++.a)
 
 CXXLOBJS := user/cxx/libutil.o user/cxx/shutil.o user/cxx/cxxrt.o \
-	user/cxx/threads.o user/c/litc.o
+	user/cxx/threads.o
 $(CXXLOBJS): user/cxx/sysroot
 
 CXXBEGIN := user/cxx/cxxrtbegin.o
@@ -128,7 +128,7 @@ $(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/ -isysroot user/cxx/sysroot \
 		-fPIC -DXV6_USER -std=c++11
 $(CXXPROGS): % : %.cc  $(CXXLOBJS) $(CXXBEGIN) $(CXXEND) user/cxx/sysroot
 	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld -Wl,-n,--build-id=none \
-	    -o $@ $(CXXBEGIN) $< $(CXXLOBJS) $(CXXRT) $(CXXEND)
+	    -o $@ $(CXXBEGIN) $< $(CXXLOBJS) user/c/litc.o $(CXXRT) $(CXXEND)
 
 user/cxx/sysroot: user/cxx/host_hdrs.hh
 	rm -rf $@.tmp $@
@@ -136,6 +136,13 @@ user/cxx/sysroot: user/cxx/host_hdrs.hh
 	tar c $$($(CXX) -E -H -std=c++0x -ffreestanding $< -o /dev/null 2>&1 \
 		| awk '/^[.]/ {print $$2}') | tar xC $@.tmp
 	mv $@.tmp $@
+
+LINS := $(addprefix user/cxx/linux/,$(CXXBINS))
+$(LINS) : user/cxx/linux/% : user/cxx/%.cc
+	g++ -std=c++11 -Wall -Werror -lpthread -o $@ $< user/cxx/libutil.cc \
+		user/cxx/shutil.cc
+
+linux: $(LINS)
 
 mpentry.bin: mpentry.S
 	$(CC) -o mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
@@ -158,7 +165,7 @@ clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
 	    user/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
-	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS)
+	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS)
 	rm -rf user/cxx/sysroot
 
 qemu: d.img
@@ -183,4 +190,4 @@ btest: btest.c
 	gcc -Os -m32 -I./ -o $@.elf $^ -nostdlib -nostdinc -e main -Ttext 0x7c00
 	objcopy -O binary -j.text $@.elf $@
 
-.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net
+.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net linux
