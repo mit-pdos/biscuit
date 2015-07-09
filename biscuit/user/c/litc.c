@@ -911,6 +911,7 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 			case '#':
 				prehex = 1;
 				break;
+			case 'z':
 			case 'l':
 				longmode = 1;
 				break;
