@@ -338,7 +338,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok {
 		return -EBADF
 	}
@@ -383,7 +383,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok {
 		return -EBADF
 	}
@@ -483,22 +483,18 @@ func sys_pause(proc *proc_t) int {
 }
 
 func sys_close(proc *proc_t, fdn int) int {
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_del(fdn)
 	if !ok {
 		return -EBADF
 	}
-	if _, ok := fdclosers[fd.file.ftype]; !ok {
-		panic("no imp")
-	}
 	ret := file_close(fd.file, fd.perms)
-	delete(proc.fds, fdn)
-	if fdn < proc.fdstart {
-		proc.fdstart = fdn
-	}
 	return ret
 }
 
 func file_close(f *file_t, perms int) int {
+	if _, ok := fdclosers[f.ftype]; !ok {
+		panic("no closer for this file")
+	}
 	return fdclosers[f.ftype](f, perms)
 }
 
@@ -584,17 +580,25 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 	if oldn == newn {
 		return newn
 	}
-	ofd, ok := proc.fds[oldn]
+
+	ofd, ok := proc.fd_get(oldn)
 	if !ok {
 		return -EBADF
 	}
-	_, ok = proc.fds[newn]
-	if ok {
-		sys_close(proc, newn)
-	}
 	nfd := copyfd(ofd)
 	nfd.perms &^= FD_CLOEXEC
+
+	// lock fd table to prevent racing on the same fd number
+	proc.fdl.Lock()
+	cfd, needclose := proc.fds[newn]
 	proc.fds[newn] = nfd
+	proc.fdl.Unlock()
+
+	if needclose {
+		if file_close(cfd.file, 0) != 0 {
+			panic("must succeed")
+		}
+	}
 	return newn
 }
 
@@ -620,12 +624,12 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 }
 
 func sys_fstat(proc *proc_t, fdn int, statn int) int {
-	buf := &stat_t{}
-	buf.init()
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok {
 		return -EBADF
 	}
+	buf := &stat_t{}
+	buf.init()
 	err := fs_fstat(fd.file, buf)
 	if err != 0 {
 		return err
@@ -639,7 +643,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 }
 
 func sys_lseek(proc *proc_t, fdn, off, whence int) int {
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok {
 		return -EBADF
 	}
@@ -982,7 +986,7 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 }
 
 func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok || fd.file.ftype != SOCKET {
 		return -EBADF
 	}
@@ -1058,7 +1062,7 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 
 func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
     socklenn int) int {
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok || fd.file.ftype != SOCKET {
 		return -EBADF
 	}
@@ -1111,7 +1115,7 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 }
 
 func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
-	fd, ok := proc.fds[fdn]
+	fd, ok := proc.fd_get(fdn)
 	if !ok {
 		return -EBADF
 	}
@@ -1336,18 +1340,19 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	chtf = *ptf
 
 	if mkproc {
-		parent.Lock_pmap()
-		defer parent.Unlock_pmap()
 
 		child = proc_new(fmt.Sprintf("%s's child", parent.name),
 		    parent.cwd)
 		child.pwaiti = &parent.waiti
 
 		// copy fd table
+		parent.fdl.Lock()
 		for k, v := range parent.fds {
 			child.fds[k] = copyfd(v)
 		}
+		parent.fdl.Unlock()
 
+		parent.Lock_pmap()
 		pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages,
 		    parent.pages)
 
@@ -1355,6 +1360,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		for k, v := range parent.upages {
 			child.upages[k] = v
 		}
+		parent.Unlock_pmap()
 
 		// tlb invalidation is not necessary for the parent because
 		// trap always switches to the kernel pmap, for now.
@@ -1490,7 +1496,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		valid := add[0:ret]
 		eobj = append(eobj, valid...)
 	}
-	file_close(file, 0)
+	if file_close(file, 0) != 0 {
+		panic("must succeed")
+	}
 	elf := &elf_t{eobj}
 	_, ok := elf.npheaders()
 	if !ok {
@@ -1933,7 +1941,9 @@ func sys_chdir(proc *proc_t, dirn int) int {
 	if err != 0 {
 		return err
 	}
-	file_close(proc.cwd, 0)
+	if file_close(proc.cwd, 0) != 0 {
+		panic("must succeed")
+	}
 	proc.cwd = newcwd
 	return 0
 }

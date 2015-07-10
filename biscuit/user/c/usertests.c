@@ -473,17 +473,13 @@ sharedfd(void)
 
   unlink("sharedfd");
   fd = open("sharedfd", O_CREATE|O_RDWR);
-  if(fd < 0){
-    printf("fstests: cannot open sharedfd for writing");
-    return;
-  }
+  if(fd < 0)
+    err(fd, "fstests: cannot open sharedfd for writing");
   pid = fork();
   memset(buf, pid==0?'c':'p', sizeof(buf));
   for(i = 0; i < 1000; i++){
-    if(write(fd, buf, sizeof(buf)) != sizeof(buf)){
-      printf("fstests: write sharedfd failed\n");
-      break;
-    }
+    if(write(fd, buf, sizeof(buf)) != sizeof(buf))
+      errx(-1, "fstests: write sharedfd failed\n");
   }
   if(pid == 0)
     exit(0);
@@ -491,10 +487,8 @@ sharedfd(void)
     wait(NULL);
   close(fd);
   fd = open("sharedfd", 0);
-  if(fd < 0){
-    printf("fstests: cannot open sharedfd for reading\n");
-    return;
-  }
+  if(fd < 0)
+    err(fd, "fstests: cannot open sharedfd for reading\n");
   nc = np = 0;
   while((n = read(fd, buf, sizeof(buf))) > 0){
     for(i = 0; i < sizeof(buf); i++){

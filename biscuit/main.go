@@ -257,7 +257,6 @@ func trap_pgfault(ts *trapstore_t) {
 	fa  := ts.faultaddr
 	proc := proc_get(pid)
 
-	// XXX need TLB shootdowns!
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
 
@@ -352,6 +351,8 @@ type ulimit_t struct {
 	pages	int
 }
 
+type tid_t int
+
 type threadinfo_t struct {
 	alive	map[tid_t]bool
 	sync.Mutex
@@ -395,9 +396,11 @@ type proc_t struct {
 	exitstatus	int
 
 	fds		map[int]*fd_t
-	fdl		sync.Mutex
 	// where to start scanning for free fds
 	fdstart		int
+	// fds, fdstart protected by fdl
+	fdl		sync.Mutex
+
 	cwd		*file_t
 	// to serialize chdirs
 	cwdl		sync.Mutex
@@ -512,7 +515,25 @@ func (p *proc_t) fd_new(perms int) (int, *fd_t) {
 	return fdn, fd
 }
 
-type tid_t int
+func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
+	p.fdl.Lock()
+	ret, ok := p.fds[fdn]
+	p.fdl.Unlock()
+	return ret, ok
+}
+
+func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
+	p.fdl.Lock()
+	ret, ok := p.fds[fdn]
+	if ok {
+		delete(p.fds, fdn)
+	}
+	if ok && fdn < p.fdstart {
+		p.fdstart = fdn
+	}
+	p.fdl.Unlock()
+	return ret, ok
+}
 
 func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
 	// make pid/tid pair
@@ -670,8 +691,10 @@ func (p *proc_t) terminate() {
 
 	// close open fds
 	p.fdl.Lock()
-	for fdn := range p.fds {
-		sys_close(p, fdn)
+	for _, fd := range p.fds {
+		if file_close(fd.file, fd.perms) != 0 {
+			panic("must succeed")
+		}
 	}
 	p.fdl.Unlock()
 
