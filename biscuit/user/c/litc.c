@@ -926,22 +926,30 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 					n = (ulong)(long)va_arg(ap, int);
 				if (sig && (long)n < 0) {
 					dst += wc(dst, end, '-');
-					n = ~n + 1;
+					n = -n;
 				}
 				dst += putn(dst, end, n, 10);
 				done = 1;
 				break;
 			}
 			case 'f':
-				// XXX
-				{
-					char warn[] = "[insert float here]";
-					int i;
-					for (i = 0; i < sizeof(warn); i++)
-						dst += wc(dst, end, warn[i]);
-					done = 1;
+			{
+				int prec = 6;
+				double n;
+				// floats are promoted to double when used for
+				// a ... argument
+				n = va_arg(ap, double);
+				dst += putn(dst, end, (ulong)n, 10);
+				dst += wc(dst, end, '.');
+				n -= (ulong)n;
+				for (; prec > 0; prec--) {
+					n *= 10;
+					dst += putn(dst, end, (ulong)n, 10);
+					n -= (ulong)n;
 				}
+				done = 1;
 				break;
+			}
 			case 'p':
 				longmode = 1;
 				prehex = 1;
