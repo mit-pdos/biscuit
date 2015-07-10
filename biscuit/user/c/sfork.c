@@ -50,32 +50,27 @@ long jointot(pthread_t t[], const int nthreads)
 static int volatile start;
 static int volatile cease;
 
-void *renames(void *idp)
+void *crrename(void *idp)
 {
-	long id = (long)idp;
-	char dir[32];
-
-	snprintf(dir, sizeof(dir), "d%ld/", id);
-
-	int ret;
-	printf("making %s...\n", dir);
-	if ((ret = mkdir(dir, 0700)) < 0)
-		err(ret, "mkdir");
-
-	if ((ret = chdir(dir)) < 0)
-		err(ret, "chdir");
-
 	while (!start)
 		asm volatile("pause":::"memory");
 
+	char o[32];
+	//char n[32];
+
+	long id = (long)idp;
+	snprintf(o, sizeof(o), "o%ld", id);
+	//snprintf(n, sizeof(n), "o%ld", id);
+
+	int fd = open(o, O_CREAT | O_RDONLY, 0600);
+	if (fd < 0)
+		err(fd, "open");
+	close(fd);
+
 	long total = 0;
 	while (!cease) {
-		char *o = "old";
-		char *n = "new";
-		int fd = open(o, O_CREAT | O_RDONLY, 0600);
-		if (fd < 0)
-			err(fd, "open");
-		if ((ret = rename(o, n)) < 0)
+		int ret;
+		if ((ret = rename(o, o)) < 0)
 			err(ret, "rename");
 		total++;
 	}
@@ -97,6 +92,35 @@ void *lookups(void *idp)
 	return (void *)total;
 }
 
+void *crmessage(void *idp)
+{
+	while (!start)
+		asm volatile("pause":::"memory");
+
+	long id = (long)idp;
+
+	char msg[1660];
+	memset(msg, 'X', sizeof(msg));
+	long total = 0;
+	while (!cease) {
+		char o[32];
+		snprintf(o, sizeof(o), "f%ld.%ld", id, total);
+
+		int fd = open(o, O_CREAT | O_WRONLY | O_EXCL, 0600);
+		if (fd < 0)
+			err(fd, "open");
+		int ret = write(fd, msg, sizeof(msg));
+		if (ret < 0)
+			err(ret, "write");
+		else if (ret != sizeof(msg))
+			errx(-1, "short write");
+		close(fd);
+
+		total++;
+	}
+	return (void *)total;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc != 2)
@@ -111,7 +135,8 @@ int main(int argc, char **argv)
 	pthread_t t[nthreads];
 	int i;
 	for (i = 0; i < nthreads; i++)
-		if (pthread_create(&t[i], NULL, lookups, (void *)(long)i))
+		if (pthread_create(&t[i], NULL, crmessage, (void *)(long)i))
+		//if (pthread_create(&t[i], NULL, lookups, (void *)(long)i))
 			errx(-1, "pthread create");
 
 	ulong st = now();
@@ -124,7 +149,8 @@ int main(int argc, char **argv)
 	ulong actual = now() - st;
 
 	printf("ran for %lu ms (slept %lu)\n", actual, beforejoin - st);
-	printf("total lookups: %ld\n", total);
+	double secs = actual / 1000;
+	printf("ops: %lf /sec\n", (double)total/secs);
 
 	return 0;
 }
