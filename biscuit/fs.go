@@ -729,10 +729,11 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 				panic("must succeed")
 			}
 			maj, min = unmkdev(st.rdev())
-		} else if resp.err != 0 {
-			itx.unlockall()
-			return nil, resp.err
 		} else {
+			if resp.err != 0 {
+				itx.unlockall()
+				return nil, resp.err
+			}
 			idm = idaemon_ensure(priv)
 			maj = major
 			min = minor
@@ -884,8 +885,8 @@ var allidmons	= map[inum]*idaemon_t{}
 var idmonl	= sync.Mutex{}
 
 func idaemon_ensure(priv inum) *idaemon_t {
-	if priv == 0 {
-		panic("zero priv")
+	if priv <= 0 {
+		panic("non-positive priv")
 	}
 	idmonl.Lock()
 	ret, ok := allidmons[priv]
@@ -1694,6 +1695,10 @@ func (idm *idaemon_t) dirent_add(ds []*dirdata_t, name string, nblkno int,
 
 func (idm *idaemon_t) icreate(name string, nitype, major,
     minor int) (inum, int) {
+	if nitype <= I_INVALID || nitype > I_LAST {
+		fmt.Printf("itype: %v\n", nitype)
+		panic("bad itype!")
+	}
 	if name == "" {
 		panic("icreate with no name")
 	}
@@ -1872,6 +1877,7 @@ func (idm *idaemon_t) mkmode() int {
 	case I_DEV:
 		return mkdev(idm.icache.major, idm.icache.minor)
 	default:
+		fmt.Printf("itype: %v\n", itype)
 		panic("weird itype")
 	}
 }
