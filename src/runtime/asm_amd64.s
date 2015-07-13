@@ -680,6 +680,7 @@ IH_NOEC(48,Xspur )
 IH_NOEC(49,Xyield )
 IH_NOEC(64,Xsyscall )
 IH_NOEC(70,Xtlbshoot )
+IH_NOEC(71,Xsigret )
 
 // irqs
 // irq0 is Xtimer
@@ -751,11 +752,15 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 
 TEXT trapret(SB), NOSPLIT, $0-16
 	MOVQ	pmap+8(FP), BX
+	MOVQ	BX, CR3
+
+	JMP	_trapret(SB)
+	INT	$3
+
+TEXT _trapret(SB), NOSPLIT, $0-8
 	MOVQ	tf+0(FP), AX	// tf is not on the callers stack frame, but in
 				// threads[]
 	MOVQ	AX, SP
-
-	MOVQ	BX, CR3
 
 	// restore fsbase
 	MOVQ	IA32_FS_BASE, CX

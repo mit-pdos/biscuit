@@ -112,6 +112,12 @@ TEXT runtime·raise(SB),NOSPLIT,$0
 	RET
 
 TEXT runtime·setitimer(SB),NOSPLIT,$0-24
+	MOVQ	runtime·hackmode(SB), AX
+	TESTQ	AX, AX
+	JZ	stim_skip
+	JMP	hack_setitimer(SB)
+	INT	$3
+stim_skip:
 	MOVL	mode+0(FP), DI
 	MOVQ	new+8(FP), SI
 	MOVQ	old+16(FP), DX
@@ -249,6 +255,18 @@ sa_skip:
 	SYSCALL
 	MOVL	AX, ret+32(FP)
 	RET
+
+TEXT intsigret(SB),NOSPLIT,$0
+#define TRAP_SIGRET      $71
+	INT	TRAP_SIGRET
+	INT	$3
+
+// change from using go calling conventions to x86_64 abi conventions
+TEXT fakesig(SB),NOSPLIT,$0-24
+	MOVL	signo+0(FP), DI
+	MOVQ	si+8(FP), SI
+	MOVQ	ctx+16(FP), DX
+	JMP	runtime·sigtramp(SB)
 
 TEXT runtime·sigtramp(SB),NOSPLIT,$64
 	get_tls(BX)
@@ -429,7 +447,8 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	sas_skip
-	RET
+	JMP	hack_sigaltstack(SB)
+	INT	$3
 sas_skip:
 	MOVQ	new+8(SP), DI
 	MOVQ	old+16(SP), SI

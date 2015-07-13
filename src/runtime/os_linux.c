@@ -375,12 +375,14 @@ uint64 rrsp(void);
 void sti(void);
 void tlbflush(void);
 void trapret(uint64 *, uint64);
+void _trapret(uint64 *);
 void wlap(uint32, uint32);
 
 uint64 runtime·Rdtsc(void);
 
 // src/runtime/sys_linux_amd64.s
 void fakesig(int32, Siginfo *, void *);
+void intsigret(void);
 
 // src/runtime/os_linux.go
 void runtime·cls(void);
@@ -819,6 +821,7 @@ int_setup(void)
 	extern void Xyield(void);
 	extern void Xsyscall(void);
 	extern void Xtlbshoot(void);
+	extern void Xsigret(void);
 
 	extern void Xirq1(void);
 	extern void Xirq2(void);
@@ -888,6 +891,7 @@ int_setup(void)
 	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
 
 	int_set(&idt[70], (uint64) Xtlbshoot, 0, 0, 1);
+	int_set(&idt[71], (uint64) Xsigret,   0, 0, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
@@ -967,6 +971,9 @@ fpuinit(void)
 	uint64 n = (uint64)fxinit;
 	assert((n & 0xf) == 0, "fxinit not aligned", n);
 	static int32 once;
+	// XXX XXX XXX XXX XXX XXX XXX XXX 
+	//if (runtime·cas(&once, 0, 1))
+	//	fxsave(fxinit);
 	if (once == 0) {
 		once = 1;
 		fxsave(fxinit);
@@ -1497,9 +1504,10 @@ mmap_test(void)
 #define TRAP_SPUR       48
 #define TRAP_YIELD      49
 #define TRAP_TLBSHOOT   70
+#define TRAP_SIGRET     71
 
 // HZ timer interrupts/sec
-#define HZ		10
+#define HZ		100
 static uint32 lapic_quantum;
 // picoseconds per CPU cycle
 static uint64 pspercycle;
@@ -1509,6 +1517,8 @@ struct thread_t {
 #define TFHW         7
 #define TFSIZE       ((TFREGS + TFHW)*8)
 	uint64 tf[TFREGS + TFHW];
+	uint64 sigtf[TFREGS + TFHW];
+	uint64 sigfx[512/8];
 #define TF_RSP       (TFREGS + 5)
 #define TF_RIP       (TFREGS + 2)
 #define TF_CS        (TFREGS + 3)
@@ -1531,12 +1541,24 @@ struct thread_t {
 #define ST_WAITING   3	// waiting for a trap to be serviced
 #define ST_SLEEPING  4
 #define ST_WILLSLEEP 5
+	int32 doingsig;
+	// stack for signals, provided by the runtime via sigaltstack.
+	// sigtramp switches m->g to the signal g so that stack checks
+	// pass and thus we don't try to grow the stack.
+	uint64 sigstack;
+	struct prof_t {
+		// nanoseconds until we fake SIGPROF
+		int32 enabled;
+		uint64 time;
+		int64 curtime;
+		uint64 stampstart;
+	} prof;
+
 	uint64 sleepfor;
 	uint64 sleepret;
 #define ETIMEDOUT   110
 	uint64 futaddr;
 	int64 pid;
-	// non-zero if pid != 0
 	uint64 pmap;
 	int64 notify;
 };
@@ -1551,7 +1573,8 @@ struct cpu_t {
 
 #define NTHREADS        64
 // SSE state
-uint64 fxstates[NTHREADS][512/8];
+// XXX move into thread_t
+static uint64 fxstates[NTHREADS][512/8];
 static struct thread_t threads[NTHREADS];
 // index is lapic id
 static struct cpu_t cpus[MAXCPUS];
@@ -1619,7 +1642,12 @@ sched_run(struct thread_t *t)
 {
 	assert(t->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	setcurthread(t);
-	int32 idx = t - &threads[0];
+
+	// if profiling, get a start time stamp
+	if (t->prof.enabled && !t->doingsig)
+		t->prof.stampstart = hack_nanotime();
+
+	int64 idx = t - &threads[0];
 	fxrstor(&fxstates[idx][0]);
 	trapret(t->tf, t->pmap);
 }
@@ -1743,6 +1771,8 @@ runtime·Procadd(int64 pid, uint64 *tf, uint64 pmap)
 	t->status = ST_RUNNABLE;
 	t->pid = pid;
 	t->pmap = pmap;
+	t->doingsig = 0;
+	t->prof.enabled = 0;
 
 	spunlock(&threadlock);
 	sti();
@@ -1845,6 +1875,7 @@ uint64 tlbshoot_pmap;
 void
 runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
 {
+	runtime·stackcheck();
 	while (!runtime·cas64(&tlbshoot_wait, 0, cpuwait))
 		;
 
@@ -1855,7 +1886,7 @@ runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
 
 #pragma textflag NOSPLIT
 void
-tlb_shootdown(uint64 *tf)
+tlb_shootdown(void)
 {
 	lap_eoi();
 	struct thread_t *ct = curthread;
@@ -1884,9 +1915,156 @@ tlb_shootdown(uint64 *tf)
 	}
 
 	if (ct)
-		trapret(tf, ct->pmap);
+		sched_run(ct);
 	else
 		sched_halt();
+}
+
+#pragma textflag NOSPLIT
+void
+sigret(struct thread_t *t)
+{
+	assert(t->status == ST_RUNNING, "uh oh2", 0);
+
+	// restore pre-signal context
+	runtime·memmove(t->tf, t->sigtf, TFSIZE);
+	int32 idx = t - &threads[0];
+	runtime·memmove(&fxstates[idx][0], t->sigfx, 512);
+
+	// allow new signals
+	t->doingsig = 0;
+
+	sched_run(t);
+}
+
+// if sigsim() is used to deliver signals other than SIGPROF, you will need to
+// construct siginfo_t and more of context.
+
+// sigsim is executed by the runtime thread directly (ie not in interrupt
+// context) on the signal stack. mksig() is used in interrupt context to setup
+// and dispatch a signal context. we use an interrupt to restore pre-signal
+// context because an interrupt switches to the interrupt stack so we can
+// easily mark the task as signal-able again and restore old context (a task
+// must be marked as signal-able only after the signal stack is no longer
+// used).
+
+// we could probably not use an interrupt and instead switch to pre-signal
+// stack, then mark task as signal-able, and finally restore pre-signal
+// context. the function implementing this should be not marked no-split
+// though.
+#pragma textflag NOSPLIT
+void
+sigsim(int32 signo, Siginfo *si, void *ctx)
+{
+	// SIGPROF handler doesn't use siginfo_t...
+	USED(si);
+	fakesig(signo, nil, ctx);
+	intsigret();
+}
+
+static uint64 stacks[16];
+const int64 stackn = sizeof(stacks)/sizeof(stacks[0]);
+
+#pragma textflag NOSPLIT
+void
+mksig(struct thread_t *t, int32 signo)
+{
+	// save old context for sigret
+	// XXX
+	if ((t->tf[TF_RFLAGS] & TF_FL_IF) == 0) {
+		assert(t->status == ST_WILLSLEEP, "how the fuke", t->status);
+		t->tf[TF_RFLAGS] |= TF_FL_IF;
+	}
+	runtime·memmove(t->sigtf, t->tf, TFSIZE);
+	// XXX duuuur
+	int32 idx = t - &threads[0];
+	runtime·memmove(t->sigfx, &fxstates[idx][0], 512);
+
+	// these are defined by linux since we lie to the go build system that
+	// we are running on linux...
+	struct ucontext_t {
+		uint64 uc_flags;
+		uint64 uc_link;
+		struct uc_stack_t {
+			void *sp;
+			int32 flags;
+			uint64 size;
+		} uc_stack;
+		struct mcontext_t {
+			//ulong	greg[23];
+			uint64 r8;
+			uint64 r9;
+			uint64 r10;
+			uint64 r11;
+			uint64 r12;
+			uint64 r13;
+			uint64 r14;
+			uint64 r15;
+			uint64 rdi;
+			uint64 rsi;
+			uint64 rbp;
+			uint64 rbx;
+			uint64 rdx;
+			uint64 rax;
+			uint64 rcx;
+			uint64 rsp;
+			uint64 rip;
+			uint64 eflags;
+			uint16 cs;
+			uint16 gs;
+			uint16 fs;
+			uint16 __pad0;
+			uint64 err;
+			uint64 trapno;
+			uint64 oldmask;
+			uint64 cr2;
+			uint64	fpptr;
+			uint64	res[8];
+		} uc_mcontext;
+		uint64 uc_sigmask;
+	};
+
+	uint64 *rsp = (uint64 *)t->sigstack;
+	rsp -= sizeof(struct ucontext_t);
+	struct ucontext_t *ctxt = (struct ucontext_t *)rsp;
+
+	// the profiler only uses rip and rsp of the context...
+	runtime·memclr((byte *)ctxt, sizeof(struct ucontext_t));
+	ctxt->uc_mcontext.rip = t->tf[TF_RIP];
+	ctxt->uc_mcontext.rsp = t->tf[TF_RSP];
+
+	// simulate call to sigsim with args
+	*--rsp = (uint64)ctxt;
+	// nil siginfo_t
+	*--rsp = 0;
+	*--rsp = (uint64)signo;
+	// bad return addr; shouldn't be reached
+	*--rsp = 0;
+
+	t->tf[TF_RSP] = (uint64)rsp;
+	t->tf[TF_RIP] = (uint64)sigsim;
+}
+
+#pragma textflag NOSPLIT
+static void
+proftick(struct thread_t *t)
+{
+	// if profiling the kernel, do fake SIGPROF if we aren't already
+	if (!t->prof.enabled || t->doingsig)
+		return;
+	assert(t->status == ST_RUNNING || t->status == ST_WILLSLEEP,
+	    "not exclusive access", t->status);
+
+	uint64 elapsed = hack_nanotime() - t->prof.stampstart;
+
+	t->prof.stampstart = 0;
+	t->prof.curtime -= elapsed;
+	if (t->prof.curtime <= 0) {
+		t->prof.curtime = t->prof.time;
+		t->doingsig = 1;
+		const int32 SIGPROF = 27;
+		mksig(t, SIGPROF);
+	}
 }
 
 #pragma textflag NOSPLIT
@@ -1903,26 +2081,38 @@ trap(uint64 *tf)
 	if (halt)
 		while (1);
 
+	void (*ntrap)(uint64 *, int64, int64);
+	ntrap = (void (*)(uint64 *, int64, int64))newtrap;
+
+	// don't add code before FPU context saving unless you've thought very
+	// carefully! it is easy to accidentally and silently corrupt FPU state
+	// (ie calling runtime·memmove) before it is saved below.
+
+	// save FPU state immediately before we clobber it
+	if (ct) {
+		int32 idx = ct - &threads[0];
+		fxsave(&fxstates[idx][0]);
+
+		runtime·memmove(ct->tf, tf, TFSIZE);
+
+		// proftick must come after trapframe copy
+		proftick(ct);
+	}
+
 	int32 yielding = 0;
+	// these interrupts are handled specially by the runtime
 	if (trapno == TRAP_YIELD) {
 		trapno = TRAP_TIMER;
 		tf[TF_TRAPNO] = TRAP_TIMER;
 		yielding = 1;
 	} else if (trapno == TRAP_TLBSHOOT) {
 		// does not return
-		tlb_shootdown(tf);
+		tlb_shootdown();
+	} else if (trapno == TRAP_SIGRET) {
+		// does not return
+		sigret(ct);
 	}
 
-	if (ct) {
-		memmov(ct->tf, tf, TFSIZE);
-		int32 idx = ct - &threads[0];
-		fxsave(&fxstates[idx][0]);
-	}
-
-	void (*ntrap)(uint64 *, int64, int64);
-	ntrap = (void (*)(uint64 *, int64, int64))newtrap;
-
-	// the timer interrupt is handled specially by the runtime
 	if (trapno == TRAP_TIMER) {
 		splock(&threadlock);
 		if (ct) {
@@ -2626,6 +2816,9 @@ runtime·Prockill(int64 ptid)
 	t->status = ST_INVALID;
 	t->pid = 0;
 	t->notify = 0;
+	t->doingsig = 0;
+	t->prof.enabled = 0;
+	t->sigstack = 0;
 
 	spunlock(&threadlock);
 	sti();
@@ -2760,6 +2953,50 @@ runtime·Gcticks(void)
 {
 	runtime·stackcheck();
 	return runtime·gcticks;
+}
+
+#pragma textflag NOSPLIT
+void
+hack_setitimer(uint32 timer, Itimerval *new, Itimerval *old)
+{
+	const uint32 TIMER_PROF = 2;
+	if (timer != TIMER_PROF)
+		runtime·pancake("weird timer", timer);
+	USED(old);
+
+	int64 fl = pushcli();
+
+	struct thread_t *ct = curthread;
+	uint64 nsecs = new->it_interval.tv_sec * 1000000000 +
+	    new->it_interval.tv_usec * 1000;
+
+	if (nsecs) {
+		ct->prof.enabled = 1;
+		ct->prof.time = nsecs;
+		ct->prof.curtime = nsecs;
+		ct->prof.stampstart = hack_nanotime();
+		assert(ct->sigstack != 0, "no sig stack", 0);
+	} else
+		ct->prof.enabled = 0;
+
+	popcli(fl);
+}
+
+#pragma textflag NOSPLIT
+void
+hack_sigaltstack(SigaltstackT *new, SigaltstackT *old)
+{
+	USED(old);
+
+	int64 fl = pushcli();
+
+	struct thread_t *ct = curthread;
+	if (new->ss_flags & SS_DISABLE)
+		ct->sigstack = 0;
+	else
+		ct->sigstack = (uint64)new->ss_sp + new->ss_size;
+
+	popcli(fl);
 }
 
 uint64 runtime·doint;

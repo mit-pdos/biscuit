@@ -1532,6 +1532,47 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 	runtime.Tlbadmit(0, 0, 0, 0)
 }
 
+type bprof_t struct {
+	data	[]byte
+	c	int
+}
+
+func (b *bprof_t) init() {
+	b.data = make([]byte, 0)
+}
+
+func (b *bprof_t) Write(p []byte) (int, error) {
+	b.data = append(b.data, p...)
+	return len(p), nil
+}
+
+func (b *bprof_t) len() int {
+	return len(b.data)
+}
+
+// dumps profile to serial console/vga for xxd -r
+func (b *bprof_t) dump() {
+	l := len(b.data)
+	for i := 0; i < l; i += 16 {
+		cur := b.data[i:]
+		if len(cur) > 16 {
+			cur = cur[:16]
+		}
+		fmt.Printf("%07x: ", i)
+		prc := 0
+		for _, b := range cur {
+			fmt.Printf("%02x", b)
+			prc++
+			if prc % 2 == 0 {
+				fmt.Printf(" ")
+			}
+		}
+		fmt.Printf("\n")
+	}
+}
+
+var prof = bprof_t{}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
