@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
+import "runtime/pprof"
 import "sync"
 import "time"
 import "unsafe"
@@ -1971,24 +1972,19 @@ func buftodests(buf []uint8, dsts [][]uint8) int {
 	return ret
 }
 
-type obj_t struct {
-}
-
-var amap = map[int]obj_t{}
-
 func sys_fake(proc *proc_t, n int) int {
-	amap = make(map[int]obj_t)
-	for i := 0; i < n; i++ {
-		amap[rand.Int()] = obj_t{}
+	if n != 0 {
+		prof.init()
+		err := pprof.StartCPUProfile(&prof)
+		if err != nil {
+			fmt.Printf("%v\n", err)
+			return 1
+		}
+	} else {
+		pprof.StopCPUProfile()
+		prof.dump()
 	}
-
-	ms := runtime.MemStats{}
-	runtime.ReadMemStats(&ms)
-	heapsz := ms.HeapAlloc
-	fmt.Printf("Heapsize: %7v MB\n", heapsz/(1<<20))
-
-	//return len(amap)
-	return int(runtime.Resetgcticks())
+	return 0
 }
 
 func readn(a []uint8, n int, off int) int {

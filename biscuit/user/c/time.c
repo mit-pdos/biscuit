@@ -18,6 +18,10 @@ int main(int argc, char **argv)
 
 	ulong start = now();
 
+	// start profiling
+	if (fake_sys(1))
+		errx(-1, "prof start");
+
 	if (fork() == 0) {
 		int ret;
 		ret = execvp(argv[1], &argv[1]);
@@ -27,6 +31,10 @@ int main(int argc, char **argv)
 	int status;
 	wait(&status);
 	ulong elapsed = now() - start;
+
+	// stop profiling
+	if (fake_sys(0))
+		errx(-1, "prof stop");
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status))
 		printf("child failed with status: %d\n", WEXITSTATUS(status));

@@ -1904,8 +1904,9 @@ tlb_shootdown(void)
 		//	invlpg((uint64 *)start);
 	}
 
-	// decrement outstanding tlb shootdown count; if we stop broadcasting
-	// shootdowns, only CPUs that the shootdown is sent to should do this
+	// decrement outstanding tlb shootdown count; if we change to a design
+	// that doesn't broadcast shootdowns, only CPUs that the shootdown is
+	// sent to should do this
 	while (1) {
 		uint64 old = runtime·atomicload64(&tlbshoot_wait);
 		if (!old)
