@@ -3551,6 +3551,7 @@ tprepsleep(G *gp, int32 done)
 	//runtime·casgstatus(gp, Grunning, Gwaiting);
 	uint32 nst = done ? Gwaiting : Grunnable;
 	runtime·xchg(&gp->atomicstatus, nst);
+	gp->waitreason = runtime·gostringnocopy((byte*)"waiting for trap");
 	dropg();
 }
 
