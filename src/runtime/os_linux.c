@@ -377,6 +377,11 @@ void tlbflush(void);
 void trapret(uint64 *, uint64);
 void wlap(uint32, uint32);
 
+uint64 runtime·Rdtsc(void);
+
+// src/runtime/sys_linux_amd64.s
+void fakesig(int32, Siginfo *, void *);
+
 // src/runtime/os_linux.go
 void runtime·cls(void);
 void runtime·putch(int8);
@@ -1496,8 +1501,8 @@ mmap_test(void)
 // HZ timer interrupts/sec
 #define HZ		10
 static uint32 lapic_quantum;
-// picoseconds per lapic clock tick
-static uint64 pspertick;
+// picoseconds per CPU cycle
+static uint64 pspercycle;
 
 struct thread_t {
 #define TFREGS       16
@@ -1558,8 +1563,6 @@ static struct cpu_t cpus[MAXCPUS];
 struct spinlock_t threadlock;
 struct spinlock_t futexlock;
 
-static uint64 durnanotime;
-
 // newtrap is a function pointer to a user provided trap handler. alltraps
 // jumps to newtrap if it is non-zero.
 uint64 newtrap;
@@ -1600,6 +1603,14 @@ sched_halt(void)
 
 	//pmsg("hlt");
 	cpu_halt(curcpu.rsp);
+}
+
+#pragma textflag NOSPLIT
+uint64
+hack_nanotime(void)
+{
+	uint64 cyc = runtime·Rdtsc();
+	return (cyc * pspercycle)/1000;
 }
 
 #pragma textflag NOSPLIT
@@ -1787,16 +1798,13 @@ runtime·Procrunnable(int64 pid, uint64 *tf, uint64 pmap)
 void
 wakeup(void)
 {
-	// nanoseconds. uint64 nanosecond counter will overflow after 584.9
-	// years.
-	durnanotime += 1000000000ull/HZ;
-
+	uint64 now = hack_nanotime();
 	// wake up timed out futexs
 	int32 i;
 	for (i = 0; i < NTHREADS; i++) {
 		uint64 sf = threads[i].sleepfor;
 		if (threads[i].status == ST_SLEEPING &&
-				sf != -1 && sf < durnanotime) {
+				sf != -1 && sf < now) {
 			threads[i].status = ST_RUNNABLE;
 			threads[i].sleepfor = 0;
 			threads[i].futaddr = 0;
@@ -2135,6 +2143,7 @@ timer_setup(int32 calibrate)
 		wlap(ICREG, 0x80000000);
 		pit_phasewait();
 		uint32 lapstart = rlap(CCREG);
+		uint64 cycstart = runtime·Rdtsc();
 
 		int32 i;
 		for (i = 0; i < pithz; i++)
@@ -2144,11 +2153,16 @@ timer_setup(int32 calibrate)
 		if (lapend > lapstart)
 			runtime·pancake("lapic timer wrapped?", lapend);
 		uint32 lapelapsed = lapstart - lapend;
-		pmsg("lapic Mhz:");
+		uint64 cycelapsed = runtime·Rdtsc() - cycstart;
+		pmsg("LAPIC Mhz:");
 		pnum(lapelapsed/(1000 * 1000));
 		pmsg("\n");
-		pspertick = (1000000000000ull)/lapelapsed;
 		lapic_quantum = lapelapsed / HZ;
+
+		pmsg("CPU Mhz:");
+		pnum(cycelapsed/(1000 * 1000));
+		pmsg("\n");
+		pspercycle = (1000000000000ull)/cycelapsed;
 
 		// disable PIT: one-shot, lsb then msb
 		outb(CNTCTL, 0x32);
@@ -2329,30 +2343,6 @@ clone_test(void)
 		pmsg("parent!");
 		runtime·deray(500000);
 	}
-}
-
-#pragma textflag NOSPLIT
-uint64
-hack_nanotime(void)
-{
-	// XXX lapic timers can't be globally synchronized...
-	static uint64 last;
-	// XXX if a timer interrupt comes after the return of ticks_get() but
-	// before the load of durnanotime, we may double count about 1e9/HZ
-	// nanoseconds. do this hack for now.
-	uint64 ret;
-	while (1) {
-		uint64 ticks = ticks_get();
-		uint64 nsecs = (ticks * pspertick)/1000;
-		ret = durnanotime + nsecs;
-
-		uint64 mylast = runtime·atomicload64(&last);
-		if (ret < mylast)
-			ret = mylast;
-		if (runtime·cas64(&last, mylast, ret))
-			break;
-	}
-	return ret;
 }
 
 // use these to pass args because using the stack in ·Syscall causes strange
