@@ -935,46 +935,6 @@ exam(uint64 cr0)
 		pmsg("MP set ");
 }
 
-static uint64 _gimmealign;
-static uint64 fxinit[512/8];
-
-#pragma textflag NOSPLIT
-void
-fpuinit(void)
-{
-	finit();
-
-	uint64 cr0 = rcr0();
-	uint64 cr4 = rcr4();
-
-	// for VEX prefixed instructions
-	//// set NE and MP
-	//cr0 |= 1 << 5;
-	//cr0 |= 1 << 1;
-	// TS to catch SSE
-	//cr0 |= 1 << 3;
-
-	//// set OSXSAVE
-	//cr4 |= 1 << 18;
-
-	// clear EM
-	cr0 &= ~(1 << 2);
-
-	// set OSFXSR
-	cr4 |= 1 << 9;
-	// set MP
-	cr0 |= 1 << 1;
-
-	lcr0(cr0);
-	lcr4(cr4);
-
-	uint64 n = (uint64)fxinit;
-	assert((n & 0xf) == 0, "fxinit not aligned", n);
-	static uint32 once;
-	if (runtime·cas(&once, 0, 1))
-		fxsave(fxinit);
-}
-
 #define PGSIZE          (1ULL << 12)
 #define PGOFFMASK       (PGSIZE - 1)
 #define PGMASK          (~PGOFFMASK)
@@ -1511,9 +1471,20 @@ struct thread_t {
 #define TFREGS       16
 #define TFHW         7
 #define TFSIZE       ((TFREGS + TFHW)*8)
+	// general context
 	uint64 tf[TFREGS + TFHW];
+#define FXSIZE       512
+#define FXREGS       (FXSIZE/8)
+	// MMX/SSE state; must be 16 byte aligned or fx{save,rstor} will
+	// generate #GP
+	uint64 _pad;
+	uint64 fx[FXREGS];
+
+	// we could put this on the signal stack instead
 	uint64 sigtf[TFREGS + TFHW];
-	uint64 sigfx[512/8];
+	// don't care whether sigfx is 16 byte aligned since we never call
+	// fx{save,rstor} on it directly.
+	uint64 sigfx[FXREGS];
 #define TF_RSP       (TFREGS + 5)
 #define TF_RIP       (TFREGS + 2)
 #define TF_CS        (TFREGS + 3)
@@ -1567,9 +1538,6 @@ struct cpu_t {
 };
 
 #define NTHREADS        64
-// SSE state
-// XXX move into thread_t
-static uint64 fxstates[NTHREADS][512/8];
 static struct thread_t threads[NTHREADS];
 // index is lapic id
 static struct cpu_t cpus[MAXCPUS];
@@ -1580,6 +1548,51 @@ static struct cpu_t cpus[MAXCPUS];
 
 struct spinlock_t threadlock;
 struct spinlock_t futexlock;
+
+static uint64 _gimmealign;
+static uint64 fxinit[512/8];
+
+#pragma textflag NOSPLIT
+void
+fpuinit(void)
+{
+	finit();
+
+	uint64 cr0 = rcr0();
+	uint64 cr4 = rcr4();
+
+	// for VEX prefixed instructions
+	//// set NE and MP
+	//cr0 |= 1 << 5;
+	//cr0 |= 1 << 1;
+	// TS to catch SSE
+	//cr0 |= 1 << 3;
+
+	//// set OSXSAVE
+	//cr4 |= 1 << 18;
+
+	// clear EM
+	cr0 &= ~(1 << 2);
+
+	// set OSFXSR
+	cr4 |= 1 << 9;
+	// set MP
+	cr0 |= 1 << 1;
+
+	lcr0(cr0);
+	lcr4(cr4);
+
+	uint64 n = (uint64)fxinit;
+	assert((n & 0xf) == 0, "fxinit not aligned", n);
+	static uint32 once;
+	if (runtime·cas(&once, 0, 1))
+		fxsave(fxinit);
+
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		if ((uint64)threads[i].fx & ((1 << 4) - 1))
+			assert(0, "fx not 16 byte aligned", i);
+}
 
 // newtrap is a function pointer to a user provided trap handler. alltraps
 // jumps to newtrap if it is non-zero.
@@ -1642,8 +1655,7 @@ sched_run(struct thread_t *t)
 	if (t->prof.enabled && !t->doingsig)
 		t->prof.stampstart = hack_nanotime();
 
-	int64 idx = t - &threads[0];
-	fxrstor(&fxstates[idx][0]);
+	fxrstor(t->fx);
 	trapret(t->tf, t->pmap);
 }
 
@@ -1761,7 +1773,7 @@ runtime·Procadd(int64 pid, uint64 *tf, uint64 pmap)
 	memset(t, 0, sizeof(struct thread_t));
 
 	memmov(t->tf, tf, TFSIZE);
-	memmov(&fxstates[nt][0], fxinit, sizeof(fxinit));
+	memmov(t->fx, fxinit, FXSIZE);
 
 	t->status = ST_RUNNABLE;
 	t->pid = pid;
@@ -1924,8 +1936,7 @@ sigret(struct thread_t *t)
 
 	// restore pre-signal context
 	runtime·memmove(t->tf, t->sigtf, TFSIZE);
-	int32 idx = t - &threads[0];
-	runtime·memmove(&fxstates[idx][0], t->sigfx, 512);
+	runtime·memmove(t->fx, t->sigfx, FXSIZE);
 
 	// allow new signals
 	t->doingsig = 0;
@@ -1972,9 +1983,7 @@ mksig(struct thread_t *t, int32 signo)
 		t->tf[TF_RFLAGS] |= TF_FL_IF;
 	}
 	runtime·memmove(t->sigtf, t->tf, TFSIZE);
-	// XXX duuuur
-	int32 idx = t - &threads[0];
-	runtime·memmove(t->sigfx, &fxstates[idx][0], 512);
+	runtime·memmove(t->sigfx, t->fx, FXSIZE);
 
 	// these are defined by linux since we lie to the go build system that
 	// we are running on linux...
@@ -2086,8 +2095,7 @@ trap(uint64 *tf)
 
 	// save FPU state immediately before we clobber it
 	if (ct) {
-		int32 idx = ct - &threads[0];
-		fxsave(&fxstates[idx][0]);
+		fxsave(ct->fx);
 
 		runtime·memmove(ct->tf, tf, TFSIZE);
 
@@ -2397,8 +2405,10 @@ timer_setup(int32 calibrate)
 void
 proc_setup(void)
 {
-	assert(sizeof(threads[0].tf) == TFSIZE, "weird size",
+	assert(sizeof(threads[0].tf) == TFSIZE, "weird tf size",
 	    sizeof(threads[0].tf));
+	assert(sizeof(threads[0].fx) == FXSIZE, "weird fx size",
+	    sizeof(threads[0].fx));
 	threads[0].status = ST_RUNNING;
 	threads[0].pmap = kpmap;
 
@@ -2503,7 +2513,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	mt->status = ST_RUNNABLE;
 	mt->pmap = kpmap;
 
-	memmov(&fxstates[i][0], fxinit, sizeof(fxinit));
+	memmov(mt->fx, fxinit, FXSIZE);
 
 	spunlock(&threadlock);
 	sti();
