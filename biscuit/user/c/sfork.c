@@ -121,7 +121,7 @@ void *crmessage(void *idp)
 	return (void *)total;
 }
 
-int main(int argc, char **argv)
+int __main(int argc, char **argv)
 {
 	if (argc != 2)
 		errx(-1, "usage: %s <num threads>", argv[0]);
@@ -153,4 +153,31 @@ int main(int argc, char **argv)
 	printf("ops: %lf /sec\n", (double)total/secs);
 
 	return 0;
+}
+
+void __attribute__((noreturn)) child(int cd)
+{
+	char dir[32];
+	snprintf(dir, sizeof(dir), "%d", cd);
+	char *args[] = {"/bin/time", "mailbench", dir, "2", NULL};
+	//char *args[] = {"/bin/mailbench", dir, "2", NULL};
+	int ret = execv(args[0], args);
+	err(ret, "execv");
+}
+
+int main(int argc, char **argv)
+{
+	int cd = 0;
+	for (;;) {
+		printf("     directory: %d\n", cd);
+		char dn[32];
+		snprintf(dn, sizeof(dn), "%d", cd);
+		int ret;
+		if ((ret = mkdir(dn, 0700)) < 0)
+			err(ret, "mkdir");
+		if (fork() == 0)
+			child(cd);
+		wait(NULL);
+		cd++;
+	}
 }
