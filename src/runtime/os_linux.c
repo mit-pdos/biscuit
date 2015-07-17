@@ -1645,6 +1645,13 @@ hack_nanotime(void)
 }
 
 #pragma textflag NOSPLIT
+uint64
+runtime·Nanotime(void)
+{
+	return hack_nanotime();
+}
+
+#pragma textflag NOSPLIT
 static void
 sched_run(struct thread_t *t)
 {

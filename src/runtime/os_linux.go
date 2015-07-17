@@ -28,6 +28,7 @@ func Kpmap() *[512]int
 func Kpmap_p() int
 func Lcr3(int)
 func Memmove(unsafe.Pointer, unsafe.Pointer, int)
+func Nanotime() int
 func Inb(int) int
 func Inl(int) int
 func Insl(int, unsafe.Pointer, int)

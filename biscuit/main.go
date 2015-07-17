@@ -5,6 +5,7 @@ import "math/rand"
 import "runtime"
 import "sync/atomic"
 import "sync"
+import "time"
 import "unsafe"
 
 type trapstore_t struct {
@@ -12,8 +13,9 @@ type trapstore_t struct {
 	pid       int
 	tid       tid_t
 	faultaddr int
-	tf	  [TFSIZE]int
+	tf        [TFSIZE]int
 	notify    bool
+	inttime   int
 }
 const maxtstore int = 64
 const maxcpus   int = 32
@@ -105,6 +107,7 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 	tid := tid_t(uint32(ptid))
 	ts.pid = pid
 	ts.tid = tid
+	ts.inttime = runtime.Nanotime()
 
 	// if notify is non-zero, a trap has not been received but a thread has
 	// stopped running (due to a timer interrupt) and thus it's pmap can be
@@ -248,7 +251,7 @@ func trap_cons(ts *trapstore_t) {
 func trap_syscall(ts *trapstore_t) {
 	pid  := ts.pid
 	tid := ts.tid
-	syscall(pid, tid, &ts.tf)
+	syscall(pid, tid, &ts.tf, ts.inttime)
 }
 
 func trap_pgfault(ts *trapstore_t) {
@@ -351,6 +354,31 @@ type ulimit_t struct {
 	pages	int
 }
 
+type accnt_t struct {
+	// nanoseconds
+	userns	int64
+	sysns	int64
+}
+
+func (a *accnt_t) now() int {
+	return int(time.Now().UnixNano())
+}
+
+func (a *accnt_t) utadd(since int) {
+	d := time.Now().UnixNano() - int64(since)
+	atomic.AddInt64(&a.userns, d)
+}
+
+func (a *accnt_t) systadd(since int) {
+	d := time.Now().UnixNano() - int64(since)
+	atomic.AddInt64(&a.sysns, d)
+}
+
+func (a *accnt_t) sleeptadd(since int) {
+	d := time.Now().UnixNano() - int64(since)
+	atomic.AddInt64(&a.sysns, -d)
+}
+
 type tid_t int
 
 type threadinfo_t struct {
@@ -404,8 +432,8 @@ type proc_t struct {
 	cwd		*file_t
 	// to serialize chdirs
 	cwdl		sync.Mutex
-	tstart		uint64
 	ulim		ulimit_t
+	atime		accnt_t
 }
 
 var proclock = sync.Mutex{}
@@ -606,7 +634,6 @@ func (p *proc_t) resched(tid tid_t) bool {
 }
 
 func (p *proc_t) sched_add(tf *[TFSIZE]int, tid tid_t) {
-	p.tstart = runtime.Rdtsc()
 	ptid := p.mkptid(tid)
 	runtime.Procadd(ptid, tf, p.p_pmap)
 }
@@ -699,7 +726,6 @@ func (p *proc_t) terminate() {
 	p.fdl.Unlock()
 
 	//fmt.Printf("%v exited with status %v\n", p.name, p.exitstatus)
-	//tot := runtime.Rdtsc() - p.tstart
 	proc_del(p.pid)
 
 	// send status to parent
@@ -973,7 +999,6 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	panic("no addr space left")
 	return 0
 }
-
 
 func mp_sum(d []uint8) int {
 	ret := 0

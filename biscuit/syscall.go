@@ -123,7 +123,7 @@ const(
 // lowest userspace address
 const USERMIN	int = VUSER << 39
 
-func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
+func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 
 	p := proc_get(pid)
 
@@ -140,6 +140,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 	if p.doomed {
 		// this process has been killed
 		reap_doomed(pid, tid)
+		p.atime.systadd(inttime)
 		return
 	}
 
@@ -224,6 +225,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int) {
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
 
+	p.atime.systadd(inttime)
 	tf[TF_RAX] = ret
 	if p.resched(tid) {
 		p.sched_runnable(tf, tid)
@@ -479,7 +481,9 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 func sys_pause(proc *proc_t) int {
 	// no signals yet!
 	var c chan bool
+	sleepstart := proc.atime.now()
 	<- c
+	proc.atime.sleeptadd(sleepstart)
 	return -1
 }
 
@@ -961,7 +965,11 @@ func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
 	}
 	tot := time.Duration(secs) * time.Second
 	tot += time.Duration(nsecs) * time.Nanosecond
+
+	sleepstart := proc.atime.now()
 	<- time.After(tot)
+	proc.atime.sleeptadd(sleepstart)
+
 	return 0
 }
 
@@ -1749,7 +1757,11 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
 	pm.init(wpid, false)
 
 	ch <- pm
+
+	sleepstart := proc.atime.now()
 	resp := <- pm.ack
+	proc.atime.sleeptadd(sleepstart)
+
 	if resp.err != 0 {
 		return resp.err
 	}
