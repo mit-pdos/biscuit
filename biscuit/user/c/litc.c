@@ -28,6 +28,7 @@
 #define SYS_LINK         86
 #define SYS_UNLINK       87
 #define SYS_GETTOD       96
+#define SYS_GETRUSAGE    98
 #define SYS_MKNOD        133
 #define SYS_NANOSLEEP    230
 #define SYS_PIPE2        293
@@ -174,6 +175,12 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 	if (tz)
 		errx(-1, "timezone not supported");
 	return syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
+}
+
+int
+getrusage(int who, struct rusage *r)
+{
+	return syscall(SA(who), SA(r), 0, 0, 0, SYS_GETRUSAGE);
 }
 
 int
@@ -339,12 +346,12 @@ waitpid(int pid, int *status, int options)
 }
 
 int
-wait4(int pid, int *status, int options, void *rusage)
+wait4(int pid, int *status, int options, struct rusage *r)
 {
-	if (rusage)
+	if (r)
 		errx(-1, "wait4: rusage not supported");
 	int _status;
-	int ret = syscall(pid, SA(&_status), SA(options), SA(rusage), 0,
+	int ret = syscall(pid, SA(&_status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
 	if (status)
 		*status = _status;

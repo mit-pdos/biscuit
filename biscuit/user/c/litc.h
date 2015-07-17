@@ -48,6 +48,16 @@ extern "C" {
 /*
  * system calls
  */
+struct timeval {
+	time_t tv_sec;
+	time_t tv_usec;
+};
+
+struct rusage {
+	struct timeval ru_utime;
+	struct timeval ru_stime;
+};
+
 struct sockaddr {
 	uchar	sa_len;
 	uchar	sa_family;
@@ -100,6 +110,10 @@ long fake_sys(long);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);
+int getrusage(int, struct rusage *);
+#define		RUSAGE_SELF	1
+#define		RUSAGE_CHILDREN	2
+
 int kill(int, int);
 int link(const char *, const char *);
 off_t lseek(int, off_t, int);
@@ -147,7 +161,7 @@ int stat(const char *, struct stat *);
 int unlink(const char *);
 int wait(int *);
 int waitpid(int, int *, int);
-int wait4(int, int *, int, void *);
+int wait4(int, int *, int, struct rusage *);
 #define		WIFCONTINUED(x)		(x & (1 << 9))
 #define		WIFEXITED(x)		(x & (1 << 10))
 #define		WIFSIGNALED(x)		(x & (1 << 11))
@@ -208,11 +222,6 @@ typedef struct {
 	int fd;
 } FILE;
 extern FILE  *stdin, *stdout, *stderr;
-
-struct timeval {
-	time_t tv_sec;
-	time_t tv_usec;
-};
 
 struct timezone {
 };
