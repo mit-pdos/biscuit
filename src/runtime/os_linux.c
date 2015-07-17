@@ -352,7 +352,7 @@ runtime·signame(int32 sig)
 void atomic_dec(uint64 *);
 void cli(void);
 void cpu_halt(uint64);
-void hack_yield(void);
+void fut_hack_yield(void);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
@@ -2628,7 +2628,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 				t += timeout->tv_nsec;
 				curthread->sleepfor = hack_nanotime() + t;
 			}
-			hack_yield();
+			fut_hack_yield();
 			// unlocks futexlock and returns with interrupts
 			// enabled...
 			cli();

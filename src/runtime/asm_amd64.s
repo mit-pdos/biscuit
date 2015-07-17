@@ -622,6 +622,14 @@ TEXT hack_yield(SB), NOSPLIT, $0-0
 	INT	TRAP_YIELD
 	RET
 
+TEXT fut_hack_yield(SB), NOSPLIT, $0-0
+	INT	TRAP_YIELD
+	RET
+
+TEXT find_hack_yield(SB), NOSPLIT, $0-0
+	INT	TRAP_YIELD
+	RET
+
 #define IH_NOEC(num, fn)		\
 TEXT fn(SB), NOSPLIT, $0-0;		\
 	PUSHQ	$0;			\

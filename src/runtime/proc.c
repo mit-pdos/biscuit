@@ -1413,8 +1413,8 @@ top:
 	extern int64 runtime·hackmode;
 stop:
 	if (runtime·hackmode) {
-		void hack_yield(void);
-		hack_yield();
+		void find_hack_yield(void);
+		find_hack_yield();
 		trapcheck(g->m->p);
 		goto top;
 	}
