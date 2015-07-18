@@ -43,6 +43,7 @@ func Proccontinue()
 func Prockill(Ptid_t)
 func Procnotify(Ptid_t) int
 func Procrunnable(ptid Ptid_t, tf *[23]int, p_pmap int)
+func Proctime(ptid Ptid_t) int
 func Procyield()
 func Rdtsc() uint64
 func Rcr2() int

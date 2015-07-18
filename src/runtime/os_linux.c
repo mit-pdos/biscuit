@@ -1477,7 +1477,7 @@ struct thread_t {
 #define FXREGS       (FXSIZE/8)
 	// MMX/SSE state; must be 16 byte aligned or fx{save,rstor} will
 	// generate #GP
-	uint64 _pad;
+	uint64 _pad1;
 	uint64 fx[FXREGS];
 
 	// we could put this on the signal stack instead
@@ -1518,6 +1518,7 @@ struct thread_t {
 		uint64 time;
 		int64 curtime;
 		uint64 stampstart;
+		uint64 totaltime;
 	} prof;
 
 	uint64 sleepfor;
@@ -1527,6 +1528,7 @@ struct thread_t {
 	int64 pid;
 	uint64 pmap;
 	int64 notify;
+	uint64 _pad2;
 };
 
 struct cpu_t {
@@ -1658,9 +1660,8 @@ sched_run(struct thread_t *t)
 	assert(t->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	setcurthread(t);
 
-	// if profiling, get a start time stamp
-	if (t->prof.enabled && !t->doingsig)
-		t->prof.stampstart = hack_nanotime();
+	// get a start time stamp
+	t->prof.stampstart = hack_nanotime();
 
 	fxrstor(t->fx);
 	trapret(t->tf, t->pmap);
@@ -1785,8 +1786,6 @@ runtime·Procadd(int64 pid, uint64 *tf, uint64 pmap)
 	t->status = ST_RUNNABLE;
 	t->pid = pid;
 	t->pmap = pmap;
-	t->doingsig = 0;
-	t->prof.enabled = 0;
 
 	spunlock(&threadlock);
 	sti();
@@ -2061,15 +2060,17 @@ mksig(struct thread_t *t, int32 signo)
 static void
 proftick(struct thread_t *t)
 {
-	// if profiling the kernel, do fake SIGPROF if we aren't already
-	if (!t->prof.enabled || t->doingsig)
-		return;
 	assert(t->status == ST_RUNNING || t->status == ST_WILLSLEEP,
 	    "not exclusive access", t->status);
 
 	uint64 elapsed = hack_nanotime() - t->prof.stampstart;
-
 	t->prof.stampstart = 0;
+	t->prof.totaltime += elapsed;
+
+	// if profiling the kernel, do fake SIGPROF if we aren't already
+	if (!t->prof.enabled || t->doingsig)
+		return;
+
 	t->prof.curtime -= elapsed;
 	if (t->prof.curtime <= 0) {
 		t->prof.curtime = t->prof.time;
@@ -2826,12 +2827,7 @@ runtime·Prockill(int64 ptid)
 	struct thread_t *t = thread_find(ptid);
 	assert(t, "no such ptid", ptid);
 	assert(t->status == ST_WAITING, "user proc not waiting?", t->status);
-	t->status = ST_INVALID;
-	t->pid = 0;
-	t->notify = 0;
-	t->doingsig = 0;
-	t->prof.enabled = 0;
-	t->sigstack = 0;
+	memset(t, 0, sizeof(struct thread_t));
 
 	spunlock(&threadlock);
 	sti();
@@ -2860,6 +2856,27 @@ runtime·Procnotify(int64 ptid)
 	spunlock(&threadlock);
 	sti();
 	return 0;
+}
+
+#pragma textflag NOSPLIT
+int64
+runtime·Proctime(int64 ptid)
+{
+	runtime·stackcheck();
+	if (ptid == 0)
+		runtime·pancake("proctime on kernel threads", ptid);
+	cli();
+	splock(&threadlock);
+
+	int64 ret = -1;
+	struct thread_t *t = thread_find(ptid);
+	if (t != nil)
+		ret = t->prof.totaltime;
+
+	spunlock(&threadlock);
+	sti();
+
+	return ret;
 }
 
 #pragma textflag NOSPLIT
@@ -2987,7 +3004,6 @@ hack_setitimer(uint32 timer, Itimerval *new, Itimerval *old)
 		ct->prof.enabled = 1;
 		ct->prof.time = nsecs;
 		ct->prof.curtime = nsecs;
-		ct->prof.stampstart = hack_nanotime();
 		assert(ct->sigstack != 0, "no sig stack", 0);
 	} else
 		ct->prof.enabled = 0;

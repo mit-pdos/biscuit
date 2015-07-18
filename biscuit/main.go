@@ -366,9 +366,8 @@ func (a *accnt_t) now() int {
 	return int(time.Now().UnixNano())
 }
 
-func (a *accnt_t) utadd(since int) {
-	d := time.Now().UnixNano() - int64(since)
-	atomic.AddInt64(&a.userns, d)
+func (a *accnt_t) utadd_raw(tot int) {
+	atomic.AddInt64(&a.userns, int64(tot))
 }
 
 func (a *accnt_t) systadd(since int) {
@@ -725,6 +724,13 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 		p.exitstatus = status
 	}
 	p.threadi.Unlock()
+
+	// update rusage user time
+	utime := runtime.Proctime(p.mkptid(tid))
+	if utime < 0 {
+		panic("tid must exist")
+	}
+	p.atime.utadd_raw(utime)
 
 	// send thread status to thread wait daemon; threads don't have rusage
 	// for now.

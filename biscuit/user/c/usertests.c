@@ -1958,6 +1958,15 @@ _ruchild()
 	exit(0);
 }
 
+void *
+_ruthread(void *p)
+{
+	volatile int *done = (int *)p;
+	while (*done == 0)
+		;
+	return NULL;
+}
+
 ulong
 tvtot(struct timeval *t)
 {
@@ -1970,10 +1979,26 @@ rusagetest()
 	printf("rusage test\n");
 
 	struct rusage r;
+
+	const int n = 3;
+	pthread_t t[n];
+	int i;
+	volatile int done = 0;
+	for (i = 0; i < n; i++)
+		pthread_create(&t[i], NULL, _ruthread, (void *)&done);
+	sleep(1);
+	done = 1;
+	for (i = 0; i < n; i++)
+		pthread_join(t[i], NULL);
+
 	memset(&r, 0, sizeof(struct rusage));
 	int ret;
 	if ((ret = getrusage(RUSAGE_SELF, &r)) < 0)
 		err(ret, "getrusage");
+
+	ulong utime = tvtot(&r.ru_utime);
+	if (utime < 1000000 || utime > 4000000)
+		errx(-1, "weird utime: %lu", utime);
 
 	//printf("my user us: %lu\n", tvtot(&r.ru_utime));
 	//printf("my sys  us: %lu\n", tvtot(&r.ru_stime));
@@ -1991,7 +2016,12 @@ rusagetest()
 
 	if (tvtot(&r.ru_stime) > 500)
 		errx(-1, "more system time than expected");
+	if (tvtot(&r.ru_stime) > tvtot(&r.ru_utime))
+		errx(-1, "more system time than user time");
 	printf("rusage test ok\n");
+
+	//printf("user us: %lu\n", tvtot(&r.ru_utime));
+	//printf("sys  us: %lu\n", tvtot(&r.ru_stime));
 }
 
 int

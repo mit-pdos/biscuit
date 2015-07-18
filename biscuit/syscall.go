@@ -923,7 +923,22 @@ func sys_gettimeofday(proc *proc_t, timevaln int) int {
 func sys_getrusage(proc *proc_t, who, rusagep int) int {
 	var ru []uint8
 	if who == RUSAGE_SELF {
-		ru = proc.atime.fetch()
+		// user time is gathered at thread termination... report user
+		// time as best as we can
+		tmp := proc.atime
+
+		proc.threadi.Lock()
+		for tid := range proc.threadi.alive {
+			val := runtime.Proctime(proc.mkptid(tid))
+			// tid may not exist if the query for the time races
+			// with a thread exiting.
+			if val > 0 {
+				tmp.userns += int64(val)
+			}
+		}
+		proc.threadi.Unlock()
+
+		ru = tmp.to_rusage()
 	} else if who == RUSAGE_CHILDREN {
 		ru = proc.catime.fetch()
 	} else {
