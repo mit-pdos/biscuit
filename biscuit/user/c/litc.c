@@ -348,8 +348,6 @@ waitpid(int pid, int *status, int options)
 int
 wait4(int pid, int *status, int options, struct rusage *r)
 {
-	if (r)
-		errx(-1, "wait4: rusage not supported");
 	int _status;
 	int ret = syscall(pid, SA(&_status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
@@ -414,7 +412,7 @@ thrwait(int tid, long *status)
 		errx(-1, "thrwait: bad tid %d", tid);
 
 	long _status;
-	int ret = syscall(tid, SA(&_status), 0, 0, 1, SYS_WAIT4);
+	int ret = syscall(SA(tid), SA(&_status), 0, 0, 1, SYS_WAIT4);
 	if (status)
 		*status = _status;
 	return ret;

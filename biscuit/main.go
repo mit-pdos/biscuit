@@ -224,7 +224,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 func trap_divzero(ts *trapstore_t) {
 	fmt.Printf("pid %v divide by zero; killing...\n", ts.pid)
 	p := proc_get(ts.pid)
-	sys_exit(p, ts.tid, -1)
+	sys_exit(p, ts.tid, -1, ts.inttime)
 }
 
 func trap_disk(ts *trapstore_t) {
@@ -279,7 +279,7 @@ func trap_pgfault(ts *trapstore_t) {
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.name, fa, rip)
-	sys_exit(proc, tid, SIGNALED)
+	sys_exit(proc, tid, SIGNALED, ts.inttime)
 }
 
 func tfdump(tf *[TFSIZE]int) {
@@ -356,8 +356,10 @@ type ulimit_t struct {
 
 type accnt_t struct {
 	// nanoseconds
-	userns	int64
-	sysns	int64
+	userns		int64
+	sysns		int64
+	// for getting consistent snapshot of both times; not always needed
+	sync.Mutex
 }
 
 func (a *accnt_t) now() int {
@@ -377,6 +379,44 @@ func (a *accnt_t) systadd(since int) {
 func (a *accnt_t) sleeptadd(since int) {
 	d := time.Now().UnixNano() - int64(since)
 	atomic.AddInt64(&a.sysns, -d)
+}
+
+func (a *accnt_t) add(n *accnt_t) {
+	a.Lock()
+	a.userns += n.userns
+	a.sysns += n.sysns
+	a.Unlock()
+}
+
+func (a *accnt_t) fetch() []uint8 {
+	a.Lock()
+	ru := a.to_rusage()
+	a.Unlock()
+	return ru
+}
+
+func (a *accnt_t) to_rusage() []uint8 {
+	words := 4
+	ret := make([]uint8, words*8)
+	totv := func(nano int64) (int, int) {
+		secs := int(nano/1e9)
+		usecs := int((nano%1e9)/1000)
+		return secs, usecs
+	}
+	off := 0
+	// user timeval
+	s, us := totv(a.userns)
+	writen(ret, 8, off, s)
+	off += 8
+	writen(ret, 8, off, us)
+	off += 8
+	// sys timeval
+	s, us = totv(a.sysns)
+	writen(ret, 8, off, s)
+	off += 8
+	writen(ret, 8, off, us)
+	off += 8
+	return ret
 }
 
 type tid_t int
@@ -433,7 +473,11 @@ type proc_t struct {
 	// to serialize chdirs
 	cwdl		sync.Mutex
 	ulim		ulimit_t
+
+	// this proc's rusage
 	atime		accnt_t
+	// total child rusage
+	catime		accnt_t
 }
 
 var proclock = sync.Mutex{}
@@ -671,6 +715,7 @@ func (p *proc_t) thread_del(tid tid_t) {
 
 // terminate a single thread
 func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
+	// XXX exit process if thread is thread0, even if other threads exist
 	p.threadi.Lock()
 	ti := &p.threadi
 	delete(ti.alive, tid)
@@ -681,7 +726,8 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	}
 	p.threadi.Unlock()
 
-	// send thread status to thread wait daemon
+	// send thread status to thread wait daemon; threads don't have rusage
+	// for now.
 	cm := childmsg_t{pid: int(tid), status: status}
 	p.twaiti.addch <- cm
 
@@ -732,7 +778,10 @@ func (p *proc_t) terminate() {
 	if p.pwaiti == nil {
 		panic("pwaiti nil")
 	}
-	cm := childmsg_t{pid: p.pid, status: p.exitstatus}
+	// combine total child rusage with ours, send to parent
+	na := p.atime
+	na.add(&p.catime)
+	cm := childmsg_t{pid: p.pid, status: p.exitstatus, atime: na}
 	p.pwaiti.addch <- cm
 
 	// tell wait daemons to finish

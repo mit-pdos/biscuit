@@ -109,6 +109,9 @@ const(
   SYS_LINK     = 86
   SYS_UNLINK   = 87
   SYS_GETTOD   = 96
+  SYS_GETRUSG  = 98
+    RUSAGE_SELF      = 1
+    RUSAGE_CHILDREN  = 2
   SYS_MKNOD    = 133
   SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
@@ -194,7 +197,10 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 	case SYS_EXIT:
 		status := a1 & 0xff
 		status |= EXITED
-		sys_exit(p, tid, status)
+		// syscalls that terminate will send an atime to parent that
+		// has not yet had the current syscall time added to it. thus
+		// terminating syscalls add to atime themselves.
+		sys_exit(p, tid, status, inttime)
 	case SYS_WAIT4:
 		ret = sys_wait4(p, a1, a2, a3, a4, a5)
 	case SYS_KILL:
@@ -211,6 +217,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 		ret = sys_unlink(p, a1)
 	case SYS_GETTOD:
 		ret = sys_gettimeofday(p, a1)
+	case SYS_GETRUSG:
+		ret = sys_getrusage(p, a1, a2)
 	case SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
 	case SYS_NANOSLEEP:
@@ -220,15 +228,15 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
 	case SYS_THREXIT:
-		sys_threxit(p, tid, a1)
+		sys_threxit(p, tid, a1, inttime)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
 
-	p.atime.systadd(inttime)
 	tf[TF_RAX] = ret
 	if p.resched(tid) {
 		p.sched_runnable(tf, tid)
+		p.atime.systadd(inttime)
 	}
 }
 
@@ -908,6 +916,21 @@ func sys_gettimeofday(proc *proc_t, timevaln int) int {
 	writen(buf, 8, 8, us%1e6)
 	if !proc.usercopy(buf, timevaln) {
 		panic("must succeed")
+	}
+	return 0
+}
+
+func sys_getrusage(proc *proc_t, who, rusagep int) int {
+	var ru []uint8
+	if who == RUSAGE_SELF {
+		ru = proc.atime.fetch()
+	} else if who == RUSAGE_CHILDREN {
+		ru = proc.catime.fetch()
+	} else {
+		return -EINVAL
+	}
+	if !proc.usercopy(ru, rusagep) {
+		return -EFAULT
 	}
 	return 0
 }
@@ -1725,13 +1748,15 @@ func bloataddr(p *proc_t, npages int) {
 	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
 }
 
-func sys_exit(proc *proc_t, tid tid_t, status int) {
+func sys_exit(proc *proc_t, tid tid_t, status, inttime int) {
 	// set doomed to all other threads die
 	proc.doomall()
+	proc.atime.systadd(inttime)
 	proc.thread_dead(tid, status, true)
 }
 
-func sys_threxit(proc *proc_t, tid tid_t, status int) {
+func sys_threxit(proc *proc_t, tid tid_t, status, inttime int) {
+	proc.atime.systadd(inttime)
 	proc.thread_dead(tid, status, false)
 }
 
@@ -1767,6 +1792,14 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
 	}
 	if threadwait == 0 {
 		proc.userwriten(statusp, 4, resp.status)
+		// update total child rusage
+		proc.catime.add(&resp.atime)
+		if rusagep != 0 {
+			ru := resp.atime.to_rusage()
+			if !proc.usercopy(ru, rusagep) {
+				return -EFAULT
+			}
+		}
 	} else {
 		proc.userwriten(statusp, 8, resp.status)
 	}
@@ -1777,6 +1810,7 @@ type childmsg_t struct {
 	pid	int
 	status	int
 	err	int
+	atime	accnt_t
 }
 
 type parmsg_t struct {
@@ -1801,6 +1835,7 @@ type cinfo_t struct {
 	status 	int
 	reaped	bool
 	dead	bool
+	atime	accnt_t
 }
 
 func (w *waitinfo_t) init() {
@@ -1837,6 +1872,7 @@ func (w *waitinfo_t) daemon() {
 			}
 			ci.dead = true
 			ci.status = cm.status
+			ci.atime = cm.atime
 			childs[cm.pid] = ci
 
 		case pm, ok := <- get:
@@ -1888,6 +1924,7 @@ func (w *waitinfo_t) daemon() {
 			}
 			cm.pid = ci.pid
 			cm.status = ci.status
+			cm.atime = ci.atime
 			if len(anys) > 0 {
 				ci.reaped = true
 				childs[pid] = ci
