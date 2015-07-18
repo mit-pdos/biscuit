@@ -929,6 +929,10 @@ type icache_t struct {
 func (ic *icache_t) fill(blk *bbuf_t, ioff int) {
 	inode := inode_t{blk, ioff}
 	ic.itype = inode.itype()
+	if ic.itype <= I_FIRST || ic.itype > I_LAST {
+		fmt.Printf("itype: %v\n", ic.itype)
+		panic("bad itype in fill")
+	}
 	ic.links = inode.linkcount()
 	ic.size  = inode.size()
 	ic.major = inode.major()
@@ -1828,9 +1832,10 @@ func (idm *idaemon_t) ifree() {
 		bwords := 512/8
 		ret := true
 		for i := 0; i < bwords/NIWORDS; i++ {
-			ic := icache_t{}
-			ic.fill(blk, i)
-			if ic.itype != I_INVALID {
+			//ic := icache_t{}
+			//ic.fill(blk, i)
+			ic := inode_t{blk, i}
+			if ic.itype() != I_INVALID {
 				ret = false
 				break
 			}
