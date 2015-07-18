@@ -1949,6 +1949,51 @@ lseektest()
 	printf("lseek test ok\n");
 }
 
+void
+_ruchild()
+{
+	int i;
+	for (i = 0; i < 1e8; i++)
+		asm volatile("":::"memory");
+	exit(0);
+}
+
+ulong
+tvtot(struct timeval *t)
+{
+	return t->tv_sec * 1e6 + t->tv_usec;
+}
+
+void
+rusagetest()
+{
+	printf("rusage test\n");
+
+	struct rusage r;
+	memset(&r, 0, sizeof(struct rusage));
+	int ret;
+	if ((ret = getrusage(RUSAGE_SELF, &r)) < 0)
+		err(ret, "getrusage");
+
+	//printf("my user us: %lu\n", tvtot(&r.ru_utime));
+	//printf("my sys  us: %lu\n", tvtot(&r.ru_stime));
+
+	int pid = fork();
+	if (!pid)
+		_ruchild();
+	int status;
+	memset(&r, 0, sizeof(struct rusage));
+	ret = wait4(WAIT_ANY, &status, 0, &r);
+	if (ret < 0)
+		err(ret, "wait4 rusage");
+	if (ret != pid)
+		errx(-1, "wrong pid %d %d", ret, pid);
+
+	if (tvtot(&r.ru_stime) > 500)
+		errx(-1, "more system time than expected");
+	printf("rusage test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1975,6 +2020,8 @@ main(int argc, char *argv[])
   printf("skipping sbrk test\n");
   //sbrktest();
   validatetest();
+
+  rusagetest();
 
   opentest();
   writetest();
