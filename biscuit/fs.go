@@ -153,39 +153,55 @@ func fs_recover() {
 // to unlock, unlockall() simply sends the unlock to all locked inodes and
 // finally decrements the mem ref count.
 
+type itxchild_t struct {
+	path		string
+	found		bool
+	mustexist	bool
+	priv		inum
+	lchan		chan *ireq_t
+}
+
+type itxpar_t struct {
+	path		string
+	priv		inum
+	childs		map[string]*itxchild_t
+	lchan		chan *ireq_t
+}
+
 type inodetx_t struct {
-	dpaths	[]string
-	pchilds	map[string][]string
-	pmexist	map[string]bool
-	lchilds map[string]bool
+	dpaths	map[string]*itxpar_t
 	cwd	inum
-	lchans	map[string]chan *ireq_t
-	privs	[]inum
-	ptoinum	map[string]inum
+}
+
+func (itx *inodetx_t) cname(par, child string) string {
+	return par + "/" + child
 }
 
 func (itx *inodetx_t) init(cwdpriv inum) {
 	itx.cwd = cwdpriv
-	itx.pchilds = make(map[string][]string)
-	itx.pmexist = make(map[string]bool)
-	itx.lchilds = make(map[string]bool)
-	itx.lchans = make(map[string]chan *ireq_t)
-	itx.privs = make([]inum, 0, 6)
-	itx.dpaths = make([]string, 0, 6)
-	itx.ptoinum = make(map[string]inum)
+	itx.dpaths = make(map[string]*itxpar_t)
 }
 
 func (itx *inodetx_t) addpath(path string) {
-	itx.dpaths = append(itx.dpaths, path)
+	if _, ok := itx.dpaths[path]; ok {
+		return
+	}
+	par := itxpar_t{path: path, childs: make(map[string]*itxchild_t)}
+	itx.dpaths[path] = &par
 }
 
 func (itx *inodetx_t) addchild(path string, childp string, mustexist bool) {
-	if s, ok := itx.pchilds[path]; ok {
-		itx.pchilds[path] = append(s, childp)
-	} else {
-		itx.pchilds[path] = []string{childp}
+	if childp == "" {
+		panic("child cannot be empty string")
 	}
-	itx.pmexist[path + "/" + childp] = mustexist
+	par := itx.dpaths[path]
+	if echild, ok := par.childs[childp]; ok {
+		old := echild.mustexist
+		echild.mustexist = old || mustexist
+	} else {
+		nc := itxchild_t{path: childp, mustexist: mustexist}
+		par.childs[childp] = &nc
+	}
 }
 
 // we don't need to inc memref of child paths until the end because a child
@@ -194,16 +210,49 @@ func (itx *inodetx_t) addchild(path string, childp string, mustexist bool) {
 // observe that the lookup for the child fails and thus will try to lock
 // again).
 func (itx *inodetx_t) lockall() int {
-	inums := make(map[string]inum)
-	for _, p := range itx.dpaths {
+	// reset state
+	for _, par := range itx.dpaths {
+		par.priv = 0
+		par.lchan = nil
+		for _, child := range par.childs {
+			child.found = false
+			child.priv = 0
+			child.lchan = nil
+		}
+	}
+
+	memdecf := func(priv inum) {
 		req := &ireq_t{}
-		req.mkget_meminc(p)
-		req_namei(req, p, itx.cwd)
+		req.mkref_direct()
+		idm := idaemon_ensure(priv)
+		idm.req <- req
 		resp := <- req.ack
 		if resp.err != 0 {
+			panic("unlock must succeed")
+		}
+	}
+
+	pmems := make(map[inum]bool)
+	pmemdecs := func() {
+		for priv := range pmems {
+			memdecf(priv)
+		}
+	}
+
+	for path, par := range itx.dpaths {
+		req := &ireq_t{}
+		req.mkget_meminc(path)
+		req_namei(req, path, itx.cwd)
+		resp := <- req.ack
+		if resp.err != 0 {
+			pmemdecs()
 			return resp.err
 		}
-		inums[p] = resp.gnext
+		par.priv = resp.gnext
+		if pmems[par.priv] {
+			memdecf(par.priv)
+		}
+		pmems[par.priv] = true
 	}
 
 	send := func(req *ireq_t, priv inum) *iresp_t {
@@ -212,58 +261,91 @@ func (itx *inodetx_t) lockall() int {
 		return <- req.ack
 	}
 
-	var lchans map[inum]chan *ireq_t
-	var childpairs map[string]inum
 	var sorted []int
+	var lchans map[inum]chan *ireq_t
 	done := false
 	for !done {
 		sorted = make([]int, 0, 6)
-		for _, in := range inums {
-			sorted = append(sorted, int(in))
+		cmems := make(map[inum]bool)
+		clocks := make(map[inum]bool)
+
+		added := make(map[inum]bool)
+		for _, par := range itx.dpaths {
+			// remove duplicate par inums
+			if !added[par.priv] {
+				sorted = append(sorted, int(par.priv))
+			}
+			added[par.priv] = true
 		}
 
-		cadds := make(map[string]bool)
 		// add children to sorted inums
-		childpairs = make(map[string]inum)
-		for path, priv := range inums {
-			childs, ok := itx.pchilds[path]
-			if !ok {
-				continue
-			}
-			for _, child := range childs {
+		for _, par := range itx.dpaths {
+			for cpath, child := range par.childs {
+				child.priv = 0
+				child.found = false
+				child.lchan = nil
+
 				req := &ireq_t{}
-				req.mklookup(child)
-				resp := send(req, priv)
+				req.mkget_meminc(cpath)
+				resp := send(req, par.priv)
 				if resp.err == -ENOENT {
-					if itx.pmexist[path + "/" + child] {
+					if child.mustexist {
+						pmemdecs()
 						return resp.err
 					}
 					continue
 				} else if resp.err != 0 {
+					pmemdecs()
 					return resp.err
 				}
-				childpriv := resp.gnext
-				sorted = append(sorted, int(childpriv))
-				childpairs[path + "/" + child] = childpriv
-				cadds[path + "/" + child] = true
+				child.priv = resp.gnext
+				child.found = true
+				// remove duplicate child inums
+				if !added[child.priv] {
+					sorted = append(sorted, int(child.priv))
+				}
+				added[child.priv] = true
+				cmems[child.priv] = true
 			}
 		}
 
 		lchans = make(map[inum]chan *ireq_t)
-		// sort inums (no duplicates), lock in order
+		// sort inums, lock in order
 		sort.Sort(sort.IntSlice(sorted))
-		nodups := make(map[int]bool)
 		for _, in := range sorted {
-			if nodups[in] {
-				continue
-			}
-			nodups[in] = true
 			req := &ireq_t{}
 			req.mklock()
 			lchans[inum(in)] = req.lock_lchan
 			resp := send(req, inum(in))
 			if resp.err != 0 {
 				panic("lock must succeed")
+			}
+			for _, par := range itx.dpaths {
+				for _, child := range par.childs {
+					if child.priv == inum(in) {
+						clocks[child.priv] = true
+					}
+				}
+			}
+		}
+
+		// set lchans
+		for _, par := range itx.dpaths {
+			lc, ok := lchans[par.priv]
+			// XXX remove panics
+			if !ok {
+				panic("must be in lchans")
+			}
+			par.lchan = lc
+			for _, child := range par.childs {
+				if !child.found {
+					continue
+				}
+				lc, ok := lchans[child.priv]
+				if !ok {
+					panic("child must be in lchans")
+				}
+				child.lchan = lc
 			}
 		}
 
@@ -277,48 +359,51 @@ func (itx *inodetx_t) lockall() int {
 			}
 		}
 		unlockall := func() {
-			for _, in := range sorted {
-				unlockf(inum(in))
+			for _, par := range itx.dpaths {
+				unlockf(par.priv)
 			}
+			for cpriv := range clocks {
+				unlockf(cpriv)
+			}
+			for cpriv := range cmems {
+				memdecf(cpriv)
+			}
+		}
+		unlockfail := func() {
+			unlockall()
+			pmemdecs()
 		}
 
 		// verify that child inums haven't been changed and that
-		// children that were not locked because they didn't exist do
-		// not now exist
+		// children that were not locked because they didn't exist
+		// still don't exist
 		done = true
 		outer:
-		for path, priv := range inums {
-			childs, ok := itx.pchilds[path]
-			if !ok {
-				continue
-			}
-			for _, child := range childs {
+		for _, par := range itx.dpaths {
+			for cpath, child := range par.childs {
 				req := &ireq_t{}
-				req.mklookup(child)
-				lchans[priv] <- req
+				req.mklookup(cpath)
+				par.lchan <- req
 				resp := <- req.ack
-				if resp.err == 0 && !cadds[path + "/" + child] {
+				if resp.err == 0 && !child.found {
 					unlockall()
 					done = false
 					break outer
 				} else if resp.err == -ENOENT {
-					if cadds[path + "/" + child] {
+					if child.found {
 						unlockall()
 						done = false
 						break outer
 					}
 					continue
 				} else if resp.err != 0 {
-					unlockall()
+					unlockfail()
 					return resp.err
 				}
-				cpriv := resp.gnext
-				old, ok := childpairs[path + "/" + child]
-				if !ok {
-					panic("child pair must exist")
-				}
-				if old != cpriv {
-					// child inode was moved before we locked it
+				newpriv := resp.gnext
+				if newpriv != child.priv {
+					// child inode was changed before we
+					// locked it
 					unlockall()
 					done = false
 					break outer
@@ -326,74 +411,78 @@ func (itx *inodetx_t) lockall() int {
 			}
 		}
 	}
-	for _, in := range sorted {
-		itx.privs = append(itx.privs, inum(in))
-	}
-	// finally, build mapping from path names to lock channels and inc mem
-	// ref of child paths
-	for path, priv := range inums {
-		itx.lchans[path] = lchans[priv]
-		itx.ptoinum[path] = priv
-	}
-	meminc := func(lchan chan *ireq_t) {
-		req := &ireq_t{}
-		req.mkref_direct()
-		lchan <- req
-		resp := <- req.ack
-		if resp.err != 0 {
-			panic("child memref inc must succeed")
-		}
-	}
-	for path, _ := range inums {
-		childs, ok := itx.pchilds[path]
-		if !ok {
-			continue
-		}
-		for _, child := range childs {
-			priv, ok := childpairs[path + "/" + child]
-			if !ok {
-				continue
-			}
-			meminc(lchans[priv])
-			fp := path + "/" + child
-			itx.lchans[fp] = lchans[priv]
-			itx.ptoinum[fp] = priv
-			itx.lchilds[fp] = true
-		}
-	}
 	return 0
 }
 
-func (itx *inodetx_t) childlocked(fpath string) bool {
-	return itx.lchilds[fpath]
-}
-
-func (itx *inodetx_t) privfor(path string) inum {
-	ret, ok := itx.ptoinum[path]
+func (itx *inodetx_t) childfound(par, child string) bool {
+	p, ok := itx.dpaths[par]
 	if !ok {
-		panic("no such path")
+		panic("no such par")
 	}
-	return ret
+	c, ok := p.childs[child]
+	if !ok {
+		panic("no such child")
+	}
+	return c.found
 }
 
-func (itx *inodetx_t) send(fpath string, req *ireq_t) *iresp_t {
-	if itx.lchans == nil {
+func (itx *inodetx_t) privforc(par, child string) inum {
+	p, ok := itx.dpaths[par]
+	if !ok {
+		panic("no such par")
+	}
+	c, ok := p.childs[child]
+	if !ok {
+		panic("no such child")
+	}
+	if !c.found {
+		panic("child not found")
+	}
+	return c.priv
+}
+
+func (itx *inodetx_t) privforp(par string) inum {
+	p, ok := itx.dpaths[par]
+	if !ok {
+		panic("no such par")
+	}
+	return p.priv
+}
+
+func (itx *inodetx_t) sendp(par string, req *ireq_t) *iresp_t {
+	if len(itx.dpaths) == 0 {
 		panic("nothing locked")
 	}
-	lchan, ok := itx.lchans[fpath]
+	p, ok := itx.dpaths[par]
+	if !ok || p.lchan == nil {
+		panic("no such path")
+	}
+	p.lchan <- req
+	return <- req.ack
+}
+
+func (itx *inodetx_t) sendc(par, child string, req *ireq_t) *iresp_t {
+	if len(itx.dpaths) == 0 {
+		panic("nothing locked")
+	}
+	p, ok := itx.dpaths[par]
 	if !ok {
 		panic("no such path")
 	}
-	lchan <- req
+	c, ok := p.childs[child]
+	if !ok {
+		panic("no such child path")
+	}
+	c.lchan <- req
 	return <- req.ack
 }
 
 func (itx *inodetx_t) unlockall() {
 	// unlock
-	if itx.lchans == nil {
+	if len(itx.dpaths) == 0 {
 		panic("nothing locked")
 	}
-	for _, lchan := range itx.lchans {
+	unlock := func(lchan chan *ireq_t) {
 		req := &ireq_t{}
 		req.mkunlock()
 		lchan <- req
@@ -402,8 +491,7 @@ func (itx *inodetx_t) unlockall() {
 			panic("unlock must succeed")
 		}
 	}
-	// dec mem ref
-	for _, priv := range itx.privs {
+	decref := func(priv inum) {
 		req := &ireq_t{}
 		req.mkrefdec(true)
 		idm := idaemon_ensure(priv)
@@ -413,6 +501,31 @@ func (itx *inodetx_t) unlockall() {
 			panic("dec ref must succeed")
 		}
 	}
+	doit := func(locks bool) {
+		did := make(map[inum]bool)
+		for _, par := range itx.dpaths {
+			if !did[par.priv] {
+				if locks {
+					unlock(par.lchan)
+				} else {
+					decref(par.priv)
+				}
+				did[par.priv] = true
+			}
+			for _, child := range par.childs {
+				if child.found && !did[child.priv] {
+					if locks {
+						unlock(child.lchan)
+					} else {
+						decref(child.priv)
+					}
+					did[child.priv] = true
+				}
+			}
+		}
+	}
+	doit(true)
+	doit(false)
 }
 
 func fs_link(old string, new string, cwdf *file_t) int {
@@ -468,19 +581,18 @@ func fs_unlink(paths string, cwdf *file_t) int {
 
 	req := &ireq_t{}
 	req.mkempty()
-	cp := dirs + "/" + fn
-	resp := itx.send(cp, req)
+	resp := itx.sendc(dirs, fn, req)
 	if resp.err != 0 {
 		return resp.err
 	}
 
 	req.mkunlink(fn)
-	resp = itx.send(dirs, req)
+	resp = itx.sendp(dirs, req)
 	if resp.err != 0 {
 		panic("unlink must succeed")
 	}
 	req.mkrefdec(false)
-	resp = itx.send(cp, req)
+	resp = itx.sendc(dirs, fn, req)
 	if resp.err != 0 {
 		panic("fs ref dec must succeed")
 	}
@@ -511,20 +623,26 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 	}
 	defer itx.unlockall()
 
-	sendd := func(path string, req *ireq_t) *iresp_t {
-		resp := itx.send(path, req)
+	sendc := func(par, child string, req *ireq_t) *iresp_t {
+		resp := itx.sendc(par, child, req)
 		if resp.err != 0 {
 			panic("op must succed")
 		}
 		return resp
 	}
 
-	ofp := odirs + "/" + ofn
-	nfp := ndirs + "/" + nfn
-	newexists := itx.childlocked(nfp)
+	sendp := func(par string, req *ireq_t) *iresp_t {
+		resp := itx.sendp(par, req)
+		if resp.err != 0 {
+			panic("op must succed")
+		}
+		return resp
+	}
+
+	newexists := itx.childfound(ndirs, nfn)
 	if newexists {
 		// if src and dst are the same file, we are done
-		if itx.privfor(ofp) == itx.privfor(nfp) {
+		if itx.privforc(odirs, ofn) == itx.privforc(ndirs, nfn) {
 			return 0
 		}
 
@@ -534,12 +652,12 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 		ost.init()
 		req := &ireq_t{}
 		req.mkfstat(ost)
-		sendd(ofp, req)
+		sendc(odirs, ofn, req)
 
 		nst := &stat_t{}
 		nst.init()
 		req.mkfstat(nst)
-		sendd(nfp, req)
+		sendc(ndirs, nfn, req)
 
 		odir := ost.mode() == I_DIR
 		ndir := nst.mode() == I_DIR
@@ -551,21 +669,21 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 
 		// unlink existing new file
 		req.mkunlink(nfn)
-		sendd(ndirs, req)
+		sendp(ndirs, req)
 
 		req.mkrefdec(false)
-		sendd(nfp, req)
+		sendc(ndirs, nfn, req)
 	}
 
 	// insert new file
-	opriv := itx.privfor(ofp)
+	opriv := itx.privforc(odirs, ofn)
 
 	req := &ireq_t{}
 	req.mkinsert(nfn, opriv)
-	sendd(ndirs, req)
+	sendp(ndirs, req)
 
 	req.mkunlink(ofn)
-	sendd(odirs, req)
+	sendp(odirs, req)
 
 	return 0
 }
@@ -625,7 +743,7 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 
 	req := &ireq_t{}
 	req.mkcreate_dir(fn)
-	resp := itx.send(dirs, req)
+	resp := itx.sendp(dirs, req)
 	if resp.err != 0 {
 		return resp.err
 	}
@@ -638,7 +756,7 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	if resp.err != 0 {
 		panic("insert must succeed")
 	}
-	parpriv := itx.privfor(dirs)
+	parpriv := itx.privforp(dirs)
 	req.mkinsert("..", parpriv)
 	idm.req <- req
 	resp = <- req.ack
@@ -706,7 +824,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 			return nil, err
 		}
 		// create new file
-		resp := itx.send(dirs, req)
+		resp := itx.sendp(dirs, req)
 
 		exists := resp.err == -EEXIST
 		oexcl := flags & O_EXCL != 0
