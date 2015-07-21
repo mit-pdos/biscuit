@@ -58,13 +58,11 @@ void dprint(int fd, char *par, int left)
 			printf("%crwxr-xr-x %ld %s\n", spec, st.st_size, tn);
 		}
 	}
-	close(fd);
 
 	// recursive list
 	*pend = 0;
-	// no seek...
-	if ((fd = open(par, O_RDONLY, 0)) < 0)
-		err(fd, "open par");
+	if ((ret = lseek(fd, 0, SEEK_SET)) < 0)
+		err(ret, "lseek");
 	while ((ret = read(fd, buf, sizeof(buf))) > 0) {
 		struct dirdata_t *dd = (struct dirdata_t *)buf;
 		int i;
