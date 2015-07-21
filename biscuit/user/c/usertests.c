@@ -1997,7 +1997,7 @@ rusagetest()
 		err(ret, "getrusage");
 
 	ulong utime = tvtot(&r.ru_utime);
-	if (utime < 1000000 || utime > 4000000)
+	if (utime < 1000000)
 		errx(-1, "weird utime: %lu", utime);
 
 	//printf("my user us: %lu\n", tvtot(&r.ru_utime));
