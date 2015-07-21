@@ -204,11 +204,6 @@ func (itx *inodetx_t) addchild(path string, childp string, mustexist bool) {
 	}
 }
 
-// we don't need to inc memref of child paths until the end because a child
-// path cannot be freed out from under us since we have the parent directory of
-// all child paths locked (if a child is unlinked before our lock, we will
-// observe that the lookup for the child fails and thus will try to lock
-// again).
 func (itx *inodetx_t) lockall() int {
 	// reset state
 	for _, par := range itx.dpaths {
@@ -332,7 +327,6 @@ func (itx *inodetx_t) lockall() int {
 		// set lchans
 		for _, par := range itx.dpaths {
 			lc, ok := lchans[par.priv]
-			// XXX remove panics
 			if !ok {
 				panic("must be in lchans")
 			}

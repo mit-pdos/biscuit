@@ -354,6 +354,7 @@ type ulimit_t struct {
 	pages	int
 }
 
+// accnt_t is thread-safe
 type accnt_t struct {
 	// nanoseconds
 	userns		int64
@@ -498,15 +499,15 @@ func proc_new(name string, cwd *file_t) *proc_t {
 
 	proclock.Lock()
 	pid_cur++
-	newpid := pid_cur
-	if _, ok := allprocs[newpid]; ok {
+	np := pid_cur
+	if _, ok := allprocs[np]; ok {
 		panic("pid exists")
 	}
-	allprocs[newpid] = ret
+	allprocs[np] = ret
 	proclock.Unlock()
 
 	ret.name = name
-	ret.pid = newpid
+	ret.pid = np
 	ret.pages = make(map[int]*[512]int)
 	ret.upages = make(map[int]int)
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
