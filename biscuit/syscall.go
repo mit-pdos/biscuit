@@ -126,9 +126,7 @@ const(
 // lowest userspace address
 const USERMIN	int = VUSER << 39
 
-func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
-
-	p := proc_get(pid)
+func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 
 	p.threadi.Lock()
 	talive, ok := p.threadi.alive[tid]
@@ -142,9 +140,8 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 
 	if p.doomed {
 		// this process has been killed
-		reap_doomed(pid, tid)
-		p.atime.systadd(inttime)
-		return
+		reap_doomed(p, tid)
+		return 0
 	}
 
 	sysno := tf[TF_RAX]
@@ -197,10 +194,7 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 	case SYS_EXIT:
 		status := a1 & 0xff
 		status |= EXITED
-		// syscalls that terminate will send an atime to parent that
-		// has not yet had the current syscall time added to it. thus
-		// terminating syscalls add to atime themselves.
-		sys_exit(p, tid, status, inttime)
+		sys_exit(p, tid, status)
 	case SYS_WAIT4:
 		ret = sys_wait4(p, a1, a2, a3, a4, a5)
 	case SYS_KILL:
@@ -228,20 +222,14 @@ func syscall(pid int, tid tid_t, tf *[TFSIZE]int, inttime int) {
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
 	case SYS_THREXIT:
-		sys_threxit(p, tid, a1, inttime)
+		sys_threxit(p, tid, a1)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 	}
-
-	tf[TF_RAX] = ret
-	if p.resched(tid) {
-		p.sched_runnable(tf, tid)
-		p.atime.systadd(inttime)
-	}
+	return ret
 }
 
-func reap_doomed(pid int, tid tid_t) {
-	p := proc_get(pid)
+func reap_doomed(p *proc_t, tid tid_t) {
 	if !p.doomed {
 		panic("p not doomed")
 	}
@@ -382,7 +370,9 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		defer fd.file.Unlock()
 	}
 
+	n := proc.atime.now()
 	ret, err := fdreaders[fd.file.ftype](dsts, fd.file, fd.file.offset)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -425,8 +415,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		fd.file.Lock()
 		defer fd.file.Unlock()
 	}
+	n := proc.atime.now()
 	ret, err := fdwriters[fd.file.ftype](srcs, fd.file, fd.file.offset,
 	    apnd)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -464,15 +456,19 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if err != 0 {
 		return err
 	}
+	n := proc.atime.now()
 	file, err := fs_open(path, flags, mode, proc.cwd, 0, 0)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
 	// not allowed to open UNIX sockets
 	if file.ftype == DEV && file.dev.major == D_SUN {
+		n := proc.atime.now()
 		if err := fs_close(file, 0); err != 0 {
 			panic("must succeed")
 		}
+		proc.atime.io_time(n)
 		return -EPERM
 	}
 	fdn, fd := proc.fd_new(fdperms)
@@ -489,9 +485,9 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 func sys_pause(proc *proc_t) int {
 	// no signals yet!
 	var c chan bool
-	sleepstart := proc.atime.now()
+	n := proc.atime.now()
 	<- c
-	proc.atime.sleeptadd(sleepstart)
+	proc.atime.sleep_time(n)
 	return -1
 }
 
@@ -608,9 +604,11 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 	proc.fdl.Unlock()
 
 	if needclose {
+		n := proc.atime.now()
 		if file_close(cfd.file, 0) != 0 {
 			panic("must succeed")
 		}
+		proc.atime.io_time(n)
 	}
 	return newn
 }
@@ -625,7 +623,9 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 	}
 	buf := &stat_t{}
 	buf.init()
+	n := proc.atime.now()
 	err := fs_stat(path, buf, proc.cwd)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -643,7 +643,9 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	}
 	buf := &stat_t{}
 	buf.init()
+	n := proc.atime.now()
 	err := fs_fstat(fd.file, buf)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -675,9 +677,11 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	case SEEK_END:
 		st := &stat_t{}
 		st.init()
+		n := proc.atime.now()
 		if err := fs_fstat(fd.file, st); err != 0 {
 			panic("must succeed")
 		}
+		proc.atime.io_time(n)
 		fd.file.offset = st.size() + off
 	default:
 		return -EINVAL
@@ -851,7 +855,10 @@ func sys_rename(proc *proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return err2
 	}
-	return fs_rename(old, new, proc.cwd)
+	n := proc.atime.now()
+	ret := fs_rename(old, new, proc.cwd)
+	proc.atime.io_time(n)
+	return ret
 }
 
 func sys_mkdir(proc *proc_t, pathn int, mode int) int {
@@ -866,7 +873,10 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 	if err != 0 {
 		return err
 	}
-	return fs_mkdir(path, mode, proc.cwd)
+	n := proc.atime.now()
+	ret := fs_mkdir(path, mode, proc.cwd)
+	proc.atime.io_time(n)
+	return ret
 }
 
 func sys_link(proc *proc_t, oldn int, newn int) int {
@@ -886,7 +896,10 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return err2
 	}
-	return fs_link(old, new, proc.cwd)
+	n := proc.atime.now()
+	ret := fs_link(old, new, proc.cwd)
+	proc.atime.io_time(n)
+	return ret
 }
 
 func sys_unlink(proc *proc_t, pathn int) int {
@@ -901,7 +914,10 @@ func sys_unlink(proc *proc_t, pathn int) int {
 	if err != 0 {
 		return err
 	}
-	return fs_unlink(path, proc.cwd)
+	n := proc.atime.now()
+	ret := fs_unlink(path, proc.cwd)
+	proc.atime.io_time(n)
+	return ret
 }
 
 func sys_gettimeofday(proc *proc_t, timevaln int) int {
@@ -980,7 +996,9 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 		return err
 	}
 	maj, min := dsplit(devn)
+	n := proc.atime.now()
 	_, err = fs_open(path, O_CREAT, 0, proc.cwd, maj, min)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -1004,9 +1022,9 @@ func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
 	tot := time.Duration(secs) * time.Second
 	tot += time.Duration(nsecs) * time.Nanosecond
 
-	sleepstart := proc.atime.now()
+	n := proc.atime.now()
 	<- time.After(tot)
-	proc.atime.sleeptadd(sleepstart)
+	proc.atime.sleep_time(n)
 
 	return 0
 }
@@ -1064,7 +1082,9 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 		return -ENAMETOOLONG
 	}
 	// get sund id from file
+	n := proc.atime.now()
 	file, err := fs_open(path, 0, 0, proc.cwd, 0, 0)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -1183,7 +1203,9 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 	}
 	// try to create the specified file as a special device
 	sid := sun_new()
+	n := proc.atime.now()
 	_, err := fs_open(path, O_CREAT | O_EXCL, 0, proc.cwd, D_SUN, int(sid))
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -1500,9 +1522,6 @@ func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
 	} else {
 		panic("fault on non-cow page")
 	}
-
-	// set process as runnable again
-	proc.sched_runnable(nil, tid)
 }
 
 func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
@@ -1526,7 +1545,9 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
+	n := proc.atime.now()
 	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
@@ -1535,7 +1556,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	ret := 1
 	c := 0
 	for ret != 0 {
+		n := proc.atime.now()
 		ret, err = fs_read([][]uint8{add}, file, c)
+		proc.atime.io_time(n)
 		c += ret
 		if err != 0 {
 			return err
@@ -1763,15 +1786,13 @@ func bloataddr(p *proc_t, npages int) {
 	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
 }
 
-func sys_exit(proc *proc_t, tid tid_t, status, inttime int) {
+func sys_exit(proc *proc_t, tid tid_t, status int) {
 	// set doomed to all other threads die
 	proc.doomall()
-	proc.atime.systadd(inttime)
 	proc.thread_dead(tid, status, true)
 }
 
-func sys_threxit(proc *proc_t, tid tid_t, status, inttime int) {
-	proc.atime.systadd(inttime)
+func sys_threxit(proc *proc_t, tid tid_t, status int) {
 	proc.thread_dead(tid, status, false)
 }
 
@@ -1798,9 +1819,9 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
 
 	ch <- pm
 
-	sleepstart := proc.atime.now()
+	n := proc.atime.now()
 	resp := <- pm.ack
-	proc.atime.sleeptadd(sleepstart)
+	proc.atime.sleep_time(n)
 
 	if resp.err != 0 {
 		return resp.err
@@ -2002,13 +2023,17 @@ func sys_chdir(proc *proc_t, dirn int) int {
 	proc.cwdl.Lock()
 	defer proc.cwdl.Unlock()
 
+	n := proc.atime.now()
 	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd, 0, 0)
+	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
+	n = proc.atime.now()
 	if file_close(proc.cwd, 0) != 0 {
 		panic("must succeed")
 	}
+	proc.atime.io_time(n)
 	proc.cwd = newcwd
 	return 0
 }

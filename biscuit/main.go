@@ -205,7 +205,8 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			if notify {
 				pid := tcur.pid
 				tid := tcur.tid
-				go reap_doomed(pid, tid)
+				p := proc_get(pid)
+				reap_doomed(p, tid)
 				continue
 			}
 
@@ -224,7 +225,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 func trap_divzero(ts *trapstore_t) {
 	fmt.Printf("pid %v divide by zero; killing...\n", ts.pid)
 	p := proc_get(ts.pid)
-	sys_exit(p, ts.tid, -1, ts.inttime)
+	sys_exit(p, ts.tid, -1)
 }
 
 func trap_disk(ts *trapstore_t) {
@@ -251,7 +252,14 @@ func trap_cons(ts *trapstore_t) {
 func trap_syscall(ts *trapstore_t) {
 	pid  := ts.pid
 	tid := ts.tid
-	syscall(pid, tid, &ts.tf, ts.inttime)
+	p := proc_get(pid)
+
+	ret := syscall(p, tid, &ts.tf)
+	ts.tf[TF_RAX] = ret
+	if p.resched(tid) {
+		p.sched_runnable(&ts.tf, tid)
+		p.atime.finish(ts.inttime)
+	}
 }
 
 func trap_pgfault(ts *trapstore_t) {
@@ -272,6 +280,9 @@ func trap_pgfault(ts *trapstore_t) {
 				panic("kern addr marked cow")
 			}
 			sys_pgfault(proc, tid, pte, fa, &ts.tf)
+			proc.atime.finish(ts.inttime)
+			// set process as runnable again
+			proc.sched_runnable(nil, tid)
 			return
 		}
 	}
@@ -279,7 +290,7 @@ func trap_pgfault(ts *trapstore_t) {
 	rip := ts.tf[TF_RIP]
 	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
 	    proc.name, fa, rip)
-	sys_exit(proc, tid, SIGNALED, ts.inttime)
+	sys_exit(proc, tid, SIGNALED)
 }
 
 func tfdump(tf *[TFSIZE]int) {
@@ -363,22 +374,30 @@ type accnt_t struct {
 	sync.Mutex
 }
 
+func (a *accnt_t) utadd(delta int) {
+	atomic.AddInt64(&a.userns, int64(delta))
+}
+
+func (a *accnt_t) systadd(delta int) {
+	atomic.AddInt64(&a.sysns, int64(delta))
+}
+
 func (a *accnt_t) now() int {
 	return int(time.Now().UnixNano())
 }
 
-func (a *accnt_t) utadd_raw(tot int) {
-	atomic.AddInt64(&a.userns, int64(tot))
+func (a *accnt_t) io_time(since int) {
+	d := a.now() - since
+	a.systadd(-d)
 }
 
-func (a *accnt_t) systadd(since int) {
-	d := time.Now().UnixNano() - int64(since)
-	atomic.AddInt64(&a.sysns, d)
+func (a *accnt_t) sleep_time(since int) {
+	d := a.now() - since
+	a.systadd(-d)
 }
 
-func (a *accnt_t) sleeptadd(since int) {
-	d := time.Now().UnixNano() - int64(since)
-	atomic.AddInt64(&a.sysns, -d)
+func (a *accnt_t) finish(inttime int) {
+	a.systadd(a.now() - inttime)
 }
 
 func (a *accnt_t) add(n *accnt_t) {
@@ -461,6 +480,7 @@ type proc_t struct {
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
 	doomed		bool
+	perished	bool
 	exitstatus	int
 
 	fds		map[int]*fd_t
@@ -731,7 +751,7 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	if utime < 0 {
 		panic("tid must exist")
 	}
-	p.atime.utadd_raw(utime)
+	p.atime.utadd(utime)
 
 	// send thread status to thread wait daemon; threads don't have rusage
 	// for now.
@@ -786,7 +806,7 @@ func (p *proc_t) terminate() {
 		panic("pwaiti nil")
 	}
 	// combine total child rusage with ours, send to parent
-	na := p.atime
+	na := accnt_t{userns: p.atime.userns, sysns: p.atime.sysns}
 	na.add(&p.catime)
 	cm := childmsg_t{pid: p.pid, status: p.exitstatus, atime: na}
 	p.pwaiti.addch <- cm
@@ -794,6 +814,7 @@ func (p *proc_t) terminate() {
 	// tell wait daemons to finish
 	p.waiti.finish()
 	p.twaiti.finish()
+	p.perished = true
 }
 
 // XXX these can probably go away since user processes share kernel pmaps
@@ -1715,11 +1736,13 @@ func main() {
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
 		p := proc_new(cmd, rf)
+		n := p.atime.now()
 		var tf [TFSIZE]int
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
+		p.atime.finish(n)
 		p.sched_add(&tf, p.tid0)
 	}
 
