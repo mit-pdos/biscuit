@@ -1204,6 +1204,7 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 	// try to create the specified file as a special device
 	sid := sun_new()
 	n := proc.atime.now()
+	// XXX close?
 	_, err := fs_open(path, O_CREAT | O_EXCL, 0, proc.cwd, D_SUN, int(sid))
 	proc.atime.io_time(n)
 	if err != 0 {

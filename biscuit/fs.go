@@ -264,6 +264,12 @@ func (itx *inodetx_t) lockall() int {
 		cmems := make(map[inum]bool)
 		clocks := make(map[inum]bool)
 
+		cmemdecs := func() {
+			for cpriv := range cmems {
+				memdecf(cpriv)
+			}
+		}
+
 		added := make(map[inum]bool)
 		for _, par := range itx.dpaths {
 			// remove duplicate par inums
@@ -286,11 +292,13 @@ func (itx *inodetx_t) lockall() int {
 				if resp.err == -ENOENT {
 					if child.mustexist {
 						pmemdecs()
+						cmemdecs()
 						return resp.err
 					}
 					continue
 				} else if resp.err != 0 {
 					pmemdecs()
+					cmemdecs()
 					return resp.err
 				}
 				child.priv = resp.gnext
@@ -359,13 +367,12 @@ func (itx *inodetx_t) lockall() int {
 			for cpriv := range clocks {
 				unlockf(cpriv)
 			}
-			for cpriv := range cmems {
-				memdecf(cpriv)
-			}
+			cmemdecs()
 		}
 		unlockfail := func() {
 			unlockall()
 			pmemdecs()
+			cmemdecs()
 		}
 
 		// verify that child inums haven't been changed and that
@@ -1358,7 +1365,7 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 	if next == ".." || next == "." {
 		go send()
 	} else {
-		send()
+		go send()
 	}
 	return true, false
 }
