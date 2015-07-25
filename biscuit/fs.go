@@ -119,6 +119,43 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
+var memorium = [][512]uint8{}
+var memtime = false
+
+func use_memfs() {
+	startb := superb_start
+
+	// 20MB disks
+	fsblocks := 40960
+
+	fmt.Printf("Populating memfs")
+	memorium = make([][512]uint8, fsblocks)
+
+	tpct := fsblocks/100
+	for i := 1; i < fsblocks; i++ {
+		blk := bread(startb + i)
+		memorium[i] = blk.buf.data
+		brelse(blk)
+		if (i + 1) % tpct == 0 {
+			fmt.Printf(".")
+		}
+	}
+	memtime = true
+	fmt.Printf("\ndone! Not using disk for fs\n")
+}
+
+func memfsrw(b *idebuf_t, writing bool) {
+	idx := int(b.block) - superb_start
+	if idx == 0 {
+		panic("no superblock")
+	}
+	if writing {
+		memorium[idx] = b.data
+	} else {
+		b.data = memorium[idx]
+	}
+}
+
 // object for managing inode transactions. since rename may need to atomically
 // operate on 3 arbitrary inodes, we need a way to lock the inodes but do it
 // without deadlocking. the purpose of this class is to lock the inodes, but
@@ -2486,6 +2523,11 @@ func ide_daemon() {
 			panic("nil idebuf")
 		}
 		writing := req.write
+		if memtime {
+			memfsrw(req.buf, writing)
+			req.ack <- true
+			continue
+		}
 		disk.start(req.buf, writing)
 		<- ide_int_done
 		disk.complete(req.buf.data[:], writing)
