@@ -1485,6 +1485,8 @@ struct thread_t {
 	// don't care whether sigfx is 16 byte aligned since we never call
 	// fx{save,rstor} on it directly.
 	uint64 sigfx[FXREGS];
+	uint64 sigstatus;
+	uint64 sigsleepfor;
 #define TF_RSP       (TFREGS + 5)
 #define TF_RIP       (TFREGS + 2)
 #define TF_CS        (TFREGS + 3)
@@ -1513,12 +1515,9 @@ struct thread_t {
 	// pass and thus we don't try to grow the stack.
 	uint64 sigstack;
 	struct prof_t {
-		// nanoseconds until we fake SIGPROF
-		int32 enabled;
-		uint64 time;
-		int64 curtime;
-		uint64 stampstart;
+		uint64 enabled;
 		uint64 totaltime;
+		uint64 stampstart;
 	} prof;
 
 	uint64 sleepfor;
@@ -1944,10 +1943,26 @@ sigret(struct thread_t *t)
 	runtime·memmove(t->tf, t->sigtf, TFSIZE);
 	runtime·memmove(t->fx, t->sigfx, FXSIZE);
 
+	splock(&threadlock);
+	assert(t->sigstatus == ST_RUNNABLE || t->sigstatus == ST_SLEEPING,
+	    "oh nyet", t->sigstatus);
+
 	// allow new signals
 	t->doingsig = 0;
 
-	sched_run(t);
+	uint64 sf = t->sigsleepfor;
+	uint64 st = t->sigstatus;
+	t->sigsleepfor = t->sigstatus = 0;
+
+	if (st == ST_WAITING) {
+		t->sleepfor = sf;
+		t->status = ST_WAITING;
+		yieldy();
+	} else {
+		// t->status is already ST_RUNNING
+		spunlock(&threadlock);
+		sched_run(t);
+	}
 }
 
 // if sigsim() is used to deliver signals other than SIGPROF, you will need to
@@ -1978,10 +1993,12 @@ sigsim(int32 signo, Siginfo *si, void *ctx)
 static uint64 stacks[16];
 const int64 stackn = sizeof(stacks)/sizeof(stacks[0]);
 
+// caller must hold threadlock
 #pragma textflag NOSPLIT
 void
 mksig(struct thread_t *t, int32 signo)
 {
+	assert(t->sigstack != 0, "no sig stack", t->sigstack);
 	// save old context for sigret
 	// XXX
 	if ((t->tf[TF_RFLAGS] & TF_FL_IF) == 0) {
@@ -1990,6 +2007,10 @@ mksig(struct thread_t *t, int32 signo)
 	}
 	runtime·memmove(t->sigtf, t->tf, TFSIZE);
 	runtime·memmove(t->sigfx, t->fx, FXSIZE);
+	t->sigsleepfor = t->sleepfor;
+	t->sigstatus = t->status;
+	t->status = ST_RUNNABLE;
+	t->doingsig = 1;
 
 	// these are defined by linux since we lie to the go build system that
 	// we are running on linux...
@@ -2058,26 +2079,43 @@ mksig(struct thread_t *t, int32 signo)
 
 #pragma textflag NOSPLIT
 static void
-proftick(struct thread_t *t)
+timetick(struct thread_t *t)
 {
-	assert(t->status == ST_RUNNING || t->status == ST_WILLSLEEP,
-	    "not exclusive access", t->status);
-
 	uint64 elapsed = hack_nanotime() - t->prof.stampstart;
 	t->prof.stampstart = 0;
 	t->prof.totaltime += elapsed;
+}
 
-	// if profiling the kernel, do fake SIGPROF if we aren't already
-	if (!t->prof.enabled || t->doingsig)
+// caller must hold threadlock
+#pragma textflag NOSPLIT
+static void
+proftick(void)
+{
+	const uint64 profns = 10000000;
+	static uint64 lastprof;
+	uint64 n = hack_nanotime();
+
+	if (n - lastprof < profns)
 		return;
+	lastprof = n;
 
-	t->prof.curtime -= elapsed;
-	if (t->prof.curtime <= 0) {
-		t->prof.curtime = t->prof.time;
-		t->doingsig = 1;
+	int32 did = 0;
+	int32 i;
+	for (i = 0; i < NTHREADS; i++) {
+		// if profiling the kernel, do fake SIGPROF if we aren't
+		// already
+		struct thread_t *t = &threads[i];
+		if (t->pid || !t->prof.enabled || t->doingsig)
+			continue;
+		// don't touch running threads
+		if (t->status == ST_RUNNING)
+			continue;
 		const int32 SIGPROF = 27;
 		mksig(t, SIGPROF);
+		did++;
 	}
+	//if (did)
+	//	pmsg("!");
 }
 
 #pragma textflag NOSPLIT
@@ -2104,11 +2142,8 @@ trap(uint64 *tf)
 	// save FPU state immediately before we clobber it
 	if (ct) {
 		fxsave(ct->fx);
-
 		runtime·memmove(ct->tf, tf, TFSIZE);
-
-		// proftick must come after trapframe copy
-		proftick(ct);
+		timetick(ct);
 	}
 
 	int32 yielding = 0;
@@ -2142,8 +2177,10 @@ trap(uint64 *tf)
 		}
 		if (!yielding) {
 			lap_eoi();
-			if (curcpu.num == 0)
+			if (curcpu.num == 0) {
 				wakeup();
+				proftick();
+			}
 		}
 		// yieldy doesn't return
 		yieldy();
@@ -3034,15 +3071,13 @@ hack_setitimer(uint32 timer, Itimerval *new, Itimerval *old)
 	int64 fl = pushcli();
 
 	struct thread_t *ct = curthread;
+	// ignore timeout since we don't use virtual time
 	uint64 nsecs = new->it_interval.tv_sec * 1000000000 +
 	    new->it_interval.tv_usec * 1000;
 
-	if (nsecs) {
+	if (nsecs)
 		ct->prof.enabled = 1;
-		ct->prof.time = nsecs;
-		ct->prof.curtime = nsecs;
-		assert(ct->sigstack != 0, "no sig stack", 0);
-	} else
+	else
 		ct->prof.enabled = 0;
 
 	popcli(fl);
