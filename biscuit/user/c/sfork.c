@@ -121,7 +121,7 @@ void *crmessage(void *idp)
 	return (void *)total;
 }
 
-int __main(int argc, char **argv)
+int ___main(int argc, char **argv)
 {
 	if (argc != 2)
 		errx(-1, "usage: %s <num threads>", argv[0]);
@@ -165,7 +165,7 @@ void __attribute__((noreturn)) child(int cd)
 	err(ret, "execv");
 }
 
-int main(int argc, char **argv)
+int __main(int argc, char **argv)
 {
 	int cd = 0;
 	for (;;) {
@@ -180,4 +180,58 @@ int main(int argc, char **argv)
 		wait(NULL);
 		cd++;
 	}
+}
+
+static volatile long county;
+
+void *mapper(void *n)
+{
+	county++;
+
+	while (!start)
+		asm volatile("pause":::"memory");
+
+	long c = 0;
+	while (!cease) {
+		//size_t l = 4096;
+		//void *p = mmap(NULL, l, PROT_READ, MAP_PRIVATE | MAP_ANON,
+		//    -1, 0);
+		//if (p == MAP_FAILED)
+		//	errx(-1, "mmap");
+		//int ret;
+		//if ((ret = munmap(p, l)) < 0)
+		//	err(ret, "munmap");
+
+		getpid();
+		c++;
+	}
+	printf("dune\n");
+	return (void *)c;
+}
+
+int main(int argc, char **argv)
+{
+	const int bmsecs = 5;
+	printf("going for %d seconds\n", bmsecs);
+
+	pthread_t t;
+	if (pthread_create(&t, NULL, mapper, NULL))
+		errx(-1, "pthread create");
+
+	while (county != 1)
+		;
+	ulong st = now();
+	start = 1;
+
+	sleep(bmsecs);
+	cease = 1;
+	ulong beforejoin = now();
+	long total = jointot(&t, 1);
+	ulong actual = now() - st;
+
+	printf("ran for %lu ms (slept %lu)\n", actual, beforejoin - st);
+	double secs = actual / 1000;
+	printf("ops: %lf /sec\n", (double)total/secs);
+
+	return 0;
 }
