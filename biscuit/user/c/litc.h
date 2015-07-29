@@ -18,6 +18,7 @@ extern "C" {
 #define		EINVAL		22
 #define		ENAMETOOLONG	36
 #define		ENOSYS		38
+#define		ENOTEMPTY	39
 #define		ECONNREFUSED	111
 
 #define		SIGKILL		9

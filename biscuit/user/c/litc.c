@@ -690,6 +690,7 @@ err(int eval, const char *fmt, ...)
 	    [EINVAL] = "Invalid argument",
 	    [ENAMETOOLONG] = "File name too long",
 	    [ENOSYS] = "Function not implemented",
+	    [ENOTEMPTY] = "Directory not empty",
 	    [ECONNREFUSED] = "Connection refused",
 	};
 	int nents = sizeof(es)/sizeof(es[0]);

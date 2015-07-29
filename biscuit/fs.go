@@ -677,6 +677,14 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 		return resp
 	}
 
+	// is old a dir?
+	ost := &stat_t{}
+	ost.init()
+	req := &ireq_t{}
+	req.mkfstat(ost)
+	sendc(odirs, ofn, req)
+	odir := ost.mode() == I_DIR
+
 	newexists := itx.childfound(ndirs, nfn)
 	if newexists {
 		// if src and dst are the same file, we are done
@@ -686,18 +694,11 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 
 		// make sure old file and new file are both files, or both
 		// directories
-		ost := &stat_t{}
-		ost.init()
-		req := &ireq_t{}
-		req.mkfstat(ost)
-		sendc(odirs, ofn, req)
-
 		nst := &stat_t{}
 		nst.init()
 		req.mkfstat(nst)
 		sendc(ndirs, nfn, req)
 
-		odir := ost.mode() == I_DIR
 		ndir := nst.mode() == I_DIR
 		if odir && !ndir {
 			return -ENOTDIR
@@ -706,6 +707,12 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 		}
 
 		// unlink existing new file
+		req.mkempty()
+		resp := itx.sendc(ndirs, nfn, req)
+		if resp.err != 0 {
+			return resp.err
+		}
+
 		req.mkunlink(nfn)
 		sendp(ndirs, req)
 
@@ -716,12 +723,21 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 	// insert new file
 	opriv := itx.privforc(odirs, ofn)
 
-	req := &ireq_t{}
+	req = &ireq_t{}
 	req.mkinsert(nfn, opriv)
 	sendp(ndirs, req)
 
 	req.mkunlink(ofn)
 	sendp(odirs, req)
+
+	// update '..'; orphaned loop not yet handled.
+	if odir {
+		req.mkunlink("..")
+		sendc(odirs, ofn, req)
+		ndpriv := itx.privforp(ndirs)
+		req.mkinsert("..", ndpriv)
+		sendc(odirs, ofn, req)
+	}
 
 	return 0
 }
