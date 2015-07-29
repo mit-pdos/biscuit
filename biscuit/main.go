@@ -280,9 +280,9 @@ func trap_pgfault(ts *trapstore_t) {
 				panic("kern addr marked cow")
 			}
 			sys_pgfault(proc, tid, pte, fa, &ts.tf)
-			proc.atime.finish(ts.inttime)
 			// set process as runnable again
 			proc.sched_runnable(nil, tid)
+			proc.atime.finish(ts.inttime)
 			return
 		}
 	}

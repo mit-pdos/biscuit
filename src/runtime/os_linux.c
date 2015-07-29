@@ -2881,6 +2881,43 @@ runtime·Proctime(int64 ptid)
 
 #pragma textflag NOSPLIT
 void
+runtime·Kreset(void)
+{
+	runtime·stackcheck();
+	cli();
+	splock(&threadlock);
+
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		if (!threads[i].pid)
+			threads[i].prof.totaltime = 0;
+
+	spunlock(&threadlock);
+	sti();
+}
+
+#pragma textflag NOSPLIT
+int64
+runtime·Ktime(void)
+{
+	runtime·stackcheck();
+	cli();
+	splock(&threadlock);
+
+	int64 ret = 0;
+	int32 i;
+	for (i = 0; i < NTHREADS; i++)
+		if (!threads[i].pid)
+			ret += threads[i].prof.totaltime;
+
+	spunlock(&threadlock);
+	sti();
+
+	return ret;
+}
+
+#pragma textflag NOSPLIT
+void
 runtime·Procyield(void)
 {
 	// no stack check because called from interrupt stack

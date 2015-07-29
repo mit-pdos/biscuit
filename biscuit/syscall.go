@@ -176,8 +176,6 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 	case SYS_PAUSE:
 		ret = sys_pause(p)
 	case SYS_GETPID:
-		// XXX
-		runtime.Resetgcticks()
 		ret = sys_getpid(p)
 	case SYS_SOCKET:
 		ret = sys_socket(p, a1, a2, a3);
@@ -538,6 +536,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		pg, p_pg := pg_new(proc.pages)
 		proc.page_insert(addr + i, pg, p_pg, perms, true)
 	}
+	// no tlbshoot because mmap never replaces pages for now
 	return addr
 }
 
@@ -2064,6 +2063,7 @@ func buftodests(buf []uint8, dsts [][]uint8) int {
 
 func sys_fake(proc *proc_t, n int) int {
 	if n != 0 {
+		//runtime.Kreset()
 		prof.init()
 		err := pprof.StartCPUProfile(&prof)
 		if err != nil {
@@ -2071,8 +2071,10 @@ func sys_fake(proc *proc_t, n int) int {
 			return 1
 		}
 	} else {
+		//kns := runtime.Ktime()
 		pprof.StopCPUProfile()
 		prof.dump()
+		//fmt.Printf("K    ns: %v\n", kns)
 	}
 	return 0
 }

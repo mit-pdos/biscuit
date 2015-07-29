@@ -1415,7 +1415,7 @@ stop:
 	if (runtime·hackmode) {
 		void find_hack_yield(void);
 		find_hack_yield();
-		trapcheck(g->m->p);
+		//trapcheck(g->m->p);
 		goto top;
 	}
 
