@@ -568,6 +568,41 @@ pthread_self(void)
 	return getpid();
 }
 
+int
+pthread_barrier_init(pthread_barrier_t *b, pthread_barrierattr_t *attr,uint c)
+{
+	if (attr)
+		errx(-1, "barrier attributes not supported");
+	b->target = c;
+	b->current = 0;
+	b->gen = 0;
+	return 0;
+}
+
+int
+pthread_barrier_destroy(pthread_barrier_t *b)
+{
+	return 0;
+}
+
+int
+pthread_barrier_wait(pthread_barrier_t *b)
+{
+	uint gen = b->gen;
+	uint c = __sync_add_and_fetch(&b->current, 1);
+	gen += c / b->target;
+	if ((c % b->target) == 0) {
+		__sync_add_and_fetch(&b->gen, 1);
+		while (!__sync_bool_compare_and_swap(&b->current, b->current,
+		    b->current - b->target))
+			;
+		return PTHREAD_BARRIER_SERIAL_THREAD;
+	}
+	while (gen >= b->gen)
+		asm volatile("pause":::"memory");
+	return 0;
+}
+
 /*
  * posix
  */

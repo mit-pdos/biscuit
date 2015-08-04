@@ -189,12 +189,26 @@ typedef struct {
 typedef struct {
 } pthread_once_t;
 
+typedef struct {
+	uint target;
+	volatile uint current;
+	volatile uint gen;
+} pthread_barrier_t;
+
+typedef struct {
+} pthread_barrierattr_t;
+
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
 int pthread_mutex_lock(pthread_mutex_t *);
 int pthread_mutex_unlock(pthread_mutex_t *);
 int pthread_once(pthread_once_t *, void (*)(void));
 pthread_t pthread_self(void);
+
+int pthread_barrier_init(pthread_barrier_t *, pthread_barrierattr_t *, uint);
+int pthread_barrier_destroy(pthread_barrier_t *);
+int pthread_barrier_wait(pthread_barrier_t *);
+#define		PTHREAD_BARRIER_SERIAL_THREAD	1
 
 /*
  * posix stuff
