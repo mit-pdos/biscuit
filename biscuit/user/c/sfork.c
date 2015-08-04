@@ -1,11 +1,14 @@
+#include <err.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
-#include <errno.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 
@@ -58,11 +61,10 @@ long jointot(pthread_t t[], const int nthreads)
 	return total;
 }
 
-static const int bmsecs = 2;
-
 pthread_barrier_t bar;
 static int volatile cease;
 
+static int bmsecs = 2;
 static int nthreads;
 
 void *crrename(void *idp)
@@ -151,6 +153,8 @@ void *crmessage(void *idp)
 		else if (ret != sizeof(msg))
 			errx(-1, "short write");
 		close(fd);
+		if ((ret = unlink(o)) < 0)
+			err(ret, "unlink");
 
 		total++;
 	}
@@ -284,23 +288,70 @@ void *sunsend(void *idp)
 	return (void *)total;
 }
 
+void usage(char *n)
+{
+	printf( "usage:\n"
+		"%s [-s seconds] [-b [c|r|u]] <num threads>\n"
+		"  -s seconds\n"
+		"       run benchmark for seconds\n"
+		"  -b [c|r|u]\n"
+		"       only run create message, rename, or\n"
+		"       unix socket benchmark\n", n);
+	exit(-1);
+}
+
 int main(int argc, char **argv)
 {
-	if (argc != 2)
-		errx(-1, "usage: %s <num threads>", argv[0]);
+	char *n = argv[0];
+	char onebm = 0;
 
-	nthreads = atoi(argv[1]);
+	int ch;
+	while ((ch = getopt(argc, argv, "b:s:")) != -1) {
+		switch (ch) {
+		case 's':
+			bmsecs = atoi(optarg);
+			break;
+		case 'b':
+			onebm = *optarg;
+			break;
+		default:
+			usage(n);
+		}
+	}
+	argc -= optind;
+	argv += optind;
+	if (argc != 1)
+		usage(n);
+
+	nthreads = atoi(argv[0]);
 	if (nthreads < 0)
 		nthreads = 3;
 	printf("using %d threads for %d seconds\n", nthreads, bmsecs);
 
-	bm("renames", crrename);
-	bm("create/write", crmessage);
-	sunspawn();
+	struct {
+		char *name;
+		char sname;
+		void *(*fn)(void *);
+		void (*begin)(void);
+		void (*end)(void);
+	} bms[] = {
+		{"renames", 'r', crrename, NULL, NULL},
+		{"create/write/unlink", 'c', crmessage, NULL, NULL},
+		{"unix socket", 'u', sunsend, sunspawn, sunkill},
+	};
 
-	bm("unix socket send", sunsend);
+	const int nbms = sizeof(bms)/sizeof(bms[0]);
 
-	sunkill();
+	int i;
+	for (i = 0; i < nbms; i++) {
+		if (onebm && onebm != bms[i].sname)
+			continue;
+		if (bms[i].begin)
+			bms[i].begin();
+		bm(bms[i].name, bms[i].fn);
+		if (bms[i].end)
+			bms[i].end();
+	}
 
 	return 0;
 }
