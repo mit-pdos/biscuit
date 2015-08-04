@@ -223,7 +223,8 @@ func trap(handlers map[int]func(*trapstore_t)) {
 }
 
 func trap_divzero(ts *trapstore_t) {
-	fmt.Printf("pid %v divide by zero; killing...\n", ts.pid)
+	fmt.Printf("pid %v divide by zero at %x ; killing...\n", ts.pid,
+	    ts.tf[TF_RIP])
 	p := proc_get(ts.pid)
 	sys_exit(p, ts.tid, -1)
 }
