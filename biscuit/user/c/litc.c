@@ -575,7 +575,6 @@ pthread_barrier_init(pthread_barrier_t *b, pthread_barrierattr_t *attr,uint c)
 		errx(-1, "barrier attributes not supported");
 	b->target = c;
 	b->current = 0;
-	b->gen = 0;
 	return 0;
 }
 
@@ -588,18 +587,36 @@ pthread_barrier_destroy(pthread_barrier_t *b)
 int
 pthread_barrier_wait(pthread_barrier_t *b)
 {
-	uint gen = b->gen;
-	uint c = __sync_add_and_fetch(&b->current, 1);
-	gen += c / b->target;
-	if ((c % b->target) == 0) {
-		__sync_add_and_fetch(&b->gen, 1);
-		while (!__sync_bool_compare_and_swap(&b->current, b->current,
-		    b->current - b->target))
-			;
+	uint m = 1ull << 31;
+	uint c;
+	while (1) {
+		uint o = b->current;
+		uint n = o + 1;
+		if ((o & m) != 0) {
+			asm volatile("pause":::"memory");
+			continue;
+		}
+		c = n;
+		if (__sync_bool_compare_and_swap(&b->current, o, n))
+			break;
+	}
+
+	if (c == b->target) {
+		while (1) {
+			uint o = b->current;
+			uint n = (b->current - 1) | m;
+			if (__sync_bool_compare_and_swap(&b->current, o, n))
+				break;
+		}
 		return PTHREAD_BARRIER_SERIAL_THREAD;
 	}
-	while (gen >= b->gen)
+
+	while ((b->current & m) == 0)
 		asm volatile("pause":::"memory");
+
+	c = __sync_add_and_fetch(&b->current, -1);
+	if (c == m)
+		b->current = 0;
 	return 0;
 }
 

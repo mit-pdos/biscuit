@@ -192,7 +192,6 @@ typedef struct {
 typedef struct {
 	uint target;
 	volatile uint current;
-	volatile uint gen;
 } pthread_barrier_t;
 
 typedef struct {
