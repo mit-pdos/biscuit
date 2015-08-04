@@ -1,4 +1,15 @@
-#include <litc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
+
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+
+#include <pthread.h>
 
 int _main(int argc, char **argv)
 {
@@ -47,20 +58,23 @@ long jointot(pthread_t t[], const int nthreads)
 	return total;
 }
 
-static int volatile start;
+static const int bmsecs = 2;
+
+pthread_barrier_t bar;
 static int volatile cease;
+
+static int nthreads;
 
 void *crrename(void *idp)
 {
-	while (!start)
-		asm volatile("pause":::"memory");
+	pthread_barrier_wait(&bar);
 
 	char o[32];
-	//char n[32];
+	char n[32];
 
 	long id = (long)idp;
 	snprintf(o, sizeof(o), "o%ld", id);
-	//snprintf(n, sizeof(n), "o%ld", id);
+	snprintf(n, sizeof(n), "n%ld", id);
 
 	int fd = open(o, O_CREAT | O_RDONLY, 0600);
 	if (fd < 0)
@@ -70,17 +84,18 @@ void *crrename(void *idp)
 	long total = 0;
 	while (!cease) {
 		int ret;
-		if ((ret = rename(o, o)) < 0)
+		if ((ret = rename(o, n)) < 0)
 			err(ret, "rename");
-		total++;
+		if ((ret = rename(n, o)) < 0)
+			err(ret, "rename");
+		total += 2;
 	}
 	return (void *)total;
 }
 
 void *lookups(void *idp)
 {
-	while (!start)
-		asm volatile("pause":::"memory");
+	pthread_barrier_wait(&bar);
 
 	long total = 0;
 	while (!cease) {
@@ -92,10 +107,31 @@ void *lookups(void *idp)
 	return (void *)total;
 }
 
+void *mapper(void *n)
+{
+	pthread_barrier_wait(&bar);
+
+	long c = 0;
+	while (!cease) {
+		size_t l = 4096;
+		void *p = mmap(NULL, l, PROT_READ, MAP_PRIVATE | MAP_ANON,
+		    -1, 0);
+		if (p == MAP_FAILED)
+			errx(-1, "mmap");
+		int ret;
+		if ((ret = munmap(p, l)) < 0)
+			err(ret, "munmap");
+
+		//getpid();
+		c++;
+	}
+	printf("dune\n");
+	return (void *)c;
+}
+
 void *crmessage(void *idp)
 {
-	while (!start)
-		asm volatile("pause":::"memory");
+	pthread_barrier_wait(&bar);
 
 	long id = (long)idp;
 
@@ -121,36 +157,150 @@ void *crmessage(void *idp)
 	return (void *)total;
 }
 
-int ___main(int argc, char **argv)
+void bm(char const *tl, void *(*fn)(void *))
 {
-	if (argc != 2)
-		errx(-1, "usage: %s <num threads>", argv[0]);
+	cease = 0;
 
-	int nthreads = atoi(argv[1]);
-	if (nthreads < 0)
-		nthreads = 3;
-	const int bmsecs = 5;
-	printf("using %d threads for %d seconds\n", nthreads, bmsecs);
+	pthread_barrier_init(&bar, NULL, nthreads + 1);
 
 	pthread_t t[nthreads];
 	int i;
 	for (i = 0; i < nthreads; i++)
-		if (pthread_create(&t[i], NULL, crmessage, (void *)(long)i))
-		//if (pthread_create(&t[i], NULL, lookups, (void *)(long)i))
+		if (pthread_create(&t[i], NULL, fn, (void *)(long)i))
 			errx(-1, "pthread create");
 
-	ulong st = now();
-	start = 1;
+	pthread_barrier_wait(&bar);
 
+	ulong st = now();
 	sleep(bmsecs);
+
 	cease = 1;
 	ulong beforejoin = now();
 	long total = jointot(t, nthreads);
 	ulong actual = now() - st;
 
-	printf("ran for %lu ms (slept %lu)\n", actual, beforejoin - st);
+	printf("%s ran for %lu ms (slept %lu)\n", tl, actual, beforejoin - st);
 	double secs = actual / 1000;
-	printf("ops: %lf /sec\n", (double)total/secs);
+	printf("\tops: %lf /sec\n\n", (double)total/secs);
+}
+
+char const *sunsock = "sock";
+
+void sunspawn()
+{
+	if (fork() != 0) {
+		sleep(1);
+		return;
+	}
+
+	unlink(sunsock);
+
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, sunsock, sizeof(sa.sun_path));
+
+	int fd;
+	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0)
+		err(fd, "socket");
+
+	int ret;
+	if ((ret = bind(fd, (struct sockaddr *)&sa, sizeof(sa))) < 0)
+		err(ret, "bind");
+
+	ulong mcnt;
+	ulong bytes;
+	mcnt = bytes = 0;
+	char buf[64];
+	while ((ret = recv(fd, buf, sizeof(buf), 0)) > 0) {
+		if (!strncmp(buf, "exit", 4)) {
+			ret = 0;
+			break;
+		}
+		mcnt++;
+		bytes += ret;
+	}
+
+	if (ret < 0)
+		err(ret, "recv");
+	close(fd);
+
+	printf("%lu total messages received (%lu bytes)\n", mcnt, bytes);
+	exit(0);
+}
+
+void sunkill()
+{
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, sunsock, sizeof(sa.sun_path));
+
+	int fd;
+	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0)
+		err(fd, "socket");
+
+	char msg[] = "exit";
+	int ret;
+	ret = sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&sa,
+	    sizeof(sa));
+	if (ret < 0)
+		err(ret, "sendto");
+	else if (ret != sizeof(msg))
+		errx(-1, "short write");
+	close(fd);
+
+	printf("waiting for daemon:\n");
+	int status;
+	wait(&status);
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "sun daemon exited with status %d", status);
+	printf("done\n");
+}
+
+void *sunsend(void *idp)
+{
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, sunsock, sizeof(sa.sun_path));
+
+	int fd;
+	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0)
+		err(fd, "socket");
+
+	pthread_barrier_wait(&bar);
+
+	long total = 0;
+	while (!cease) {
+		char msg[] = "123456789";
+		int ret;
+		ret = sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&sa,
+		    sizeof(sa));
+		if (ret < 0)
+			err(ret, "sendto");
+		else if (ret != sizeof(msg))
+			errx(-1, "short write");
+
+		total++;
+	}
+	return (void *)total;
+}
+
+int main(int argc, char **argv)
+{
+	if (argc != 2)
+		errx(-1, "usage: %s <num threads>", argv[0]);
+
+	nthreads = atoi(argv[1]);
+	if (nthreads < 0)
+		nthreads = 3;
+	printf("using %d threads for %d seconds\n", nthreads, bmsecs);
+
+	bm("renames", crrename);
+	bm("create/write", crmessage);
+	sunspawn();
+
+	bm("unix socket send", sunsend);
+
+	sunkill();
 
 	return 0;
 }
@@ -180,58 +330,4 @@ int __main(int argc, char **argv)
 		wait(NULL);
 		cd++;
 	}
-}
-
-static volatile long county;
-
-void *mapper(void *n)
-{
-	county++;
-
-	while (!start)
-		asm volatile("pause":::"memory");
-
-	long c = 0;
-	while (!cease) {
-		//size_t l = 4096;
-		//void *p = mmap(NULL, l, PROT_READ, MAP_PRIVATE | MAP_ANON,
-		//    -1, 0);
-		//if (p == MAP_FAILED)
-		//	errx(-1, "mmap");
-		//int ret;
-		//if ((ret = munmap(p, l)) < 0)
-		//	err(ret, "munmap");
-
-		getpid();
-		c++;
-	}
-	printf("dune\n");
-	return (void *)c;
-}
-
-int main(int argc, char **argv)
-{
-	const int bmsecs = 5;
-	printf("going for %d seconds\n", bmsecs);
-
-	pthread_t t;
-	if (pthread_create(&t, NULL, mapper, NULL))
-		errx(-1, "pthread create");
-
-	while (county != 1)
-		;
-	ulong st = now();
-	start = 1;
-
-	sleep(bmsecs);
-	cease = 1;
-	ulong beforejoin = now();
-	long total = jointot(&t, 1);
-	ulong actual = now() - st;
-
-	printf("ran for %lu ms (slept %lu)\n", actual, beforejoin - st);
-	double secs = actual / 1000;
-	printf("ops: %lf /sec\n", (double)total/secs);
-
-	return 0;
 }

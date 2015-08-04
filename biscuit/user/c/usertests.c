@@ -2024,6 +2024,37 @@ rusagetest()
 	//printf("sys  us: %lu\n", tvtot(&r.ru_stime));
 }
 
+void *bart(void *arg)
+{
+	pthread_barrier_t *b = (pthread_barrier_t *)arg;
+
+	int i;
+	for (i = 0; i < 100; i++)
+		pthread_barrier_wait(b);
+	return NULL;
+}
+
+void
+barriertest()
+{
+	printf("barrier test\n");
+
+	const int nthreads = 3;
+	pthread_barrier_t b;
+	pthread_barrier_init(&b, NULL, nthreads);
+
+	int i;
+	pthread_t t[nthreads];
+	for (i = 0; i < nthreads; i++)
+		if (pthread_create(&t[i], NULL, bart, &b))
+			errx(-1, "pthread create");
+	for (i = 0; i < nthreads; i++)
+		if (pthread_join(t[i], NULL))
+			errx(-1, "pthread join");
+
+	printf("barrier test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2079,6 +2110,7 @@ main(int argc, char *argv[])
   bigdir(); // slow
 
   posixtest();
+  barriertest();
 
   exectest();
 
