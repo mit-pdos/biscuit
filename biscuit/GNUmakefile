@@ -45,7 +45,7 @@ SKEL := fsdir
 SKELDEPS := $(shell find $(SKEL))
 
 CPUS := $(shell echo $${CPUS:-1})
-QOPTS := -m 256M -smp cpus=$(CPUS)
+QOPTS := -m 512M -smp cpus=$(CPUS)
 
 OS := $(shell uname -s)
 
