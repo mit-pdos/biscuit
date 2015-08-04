@@ -1252,6 +1252,9 @@ prot_none(uint8 *v, uint64 sz)
 	}
 }
 
+// XXX: all go mappings should be fall into the same pml4 slot; that way user
+// threads can share kernel page tables (since each user process has its own
+// pml4 page).
 #pragma textflag NOSPLIT
 void*
 hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
