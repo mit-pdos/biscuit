@@ -559,21 +559,25 @@ static struct seg64_t segs[6 + 2*MAXCPUS] = {
 	 G | D,		// g, d/b, l, avail, mid limit
 	 0},		// base high
 
-	// 4 - 64 bit user code
+	// another NULL seg: the sysexit instruction requires that the user
+	// code seg and the kernel code seg descriptor are 4 slots apart.
+	{0, 0, 0, 0, 0, 0, 0, 0},
+
+	// 5 - 64 bit user code
 	{0, 0,		// limit
 	 0, 0, 0,	// base
 	 0x90 | CODE | USER,	// p, dpl, s, type
 	 G | L,		// g, d/b, l, avail, mid limit
 	 0},		// base high
 
-	// 5 - user data
+	// 6 - user data
 	{0, 0,		// limit
 	 0, 0, 0,	// base
 	 0x90 | DATA | USER,	// p, dpl, s, type
 	 G | D,	// g, d/b, l, avail, mid limit
 	 0},		// base high
 
-	// 6 - tss seg
+	// 7 - tss seg
 	{0, 0,		// limit
 	 0, 0, 0,	// base
 	 0x80 | TSS,	// p, dpl, s, type
@@ -589,7 +593,7 @@ static struct pdesc_t pd;
 #define	CODE_SEG        1
 #define	FS_SEG          3
 // 64bit tss uses two seg descriptors
-#define	TSS_SEG(x)      (6 + 2*x)
+#define	TSS_SEG(x)      (7 + 2*x)
 
 #pragma textflag NOSPLIT
 static void
@@ -861,7 +865,7 @@ int_setup(void)
 	int_set(&idt[10], (uint64) Xtss, 0, 0, 0);
 	int_set(&idt[11], (uint64) Xsnp, 0, 0, 0);
 	int_set(&idt[12], (uint64) Xssf, 0, 0, 0);
-	int_set(&idt[13], (uint64) Xgp , 0, 0, 0);
+	int_set(&idt[13], (uint64) Xgp , 0, 0, 1);
 	int_set(&idt[14], (uint64) Xpf , 0, 0, 1);
 	int_set(&idt[15], (uint64) Xrz3, 0, 0, 0);
 	int_set(&idt[16], (uint64) Xmf , 0, 0, 0);

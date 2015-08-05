@@ -1698,8 +1698,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	tf[TF_RSP] = bufdest
 	tf[TF_RIP] = elf.entry()
 	tf[TF_RFLAGS] = TF_FL_IF
-	ucseg := 4
-	udseg := 5
+	ucseg := 5
+	udseg := 6
 	tf[TF_CS] = ucseg << 3 | 3
 	tf[TF_SS] = udseg << 3 | 3
 	tf[TF_RDI] = argc
