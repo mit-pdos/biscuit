@@ -118,11 +118,11 @@ protcseg:
 
   # XXX: Use legacy IDE command block if this is Qemu; use hardcoded IDE
   # command block otherwise.
-  xorl	%eax, %eax
+  movl	$1, %eax
   cpuid
-  // "Genu", Intel's string; Qemu uses an AMD string
-  cmpl	$0x756e6547, %ebx
-  je	1f
+  // Qemu's Nehalem CPU family/model etc. test hardware is 0x106e5
+  cmpl	$0x106a3, %eax
+  jne	1f
   movw	$0x1f0, idereg
 1:
 

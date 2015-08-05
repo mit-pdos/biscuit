@@ -1460,18 +1460,6 @@ func irq_unmask(irq int) {
 	runtime.Outb(pic2d, dur >> 8)
 }
 
-var amqemu	bool = false
-
-func qemuconfig() {
-	// XXX will think AMD machines are qemu...
-	_, _, ecx, _  := runtime.Cpuid(0, 0)
-	amqemu = ecx == 0x444d4163
-	if !amqemu {
-		return
-	}
-	fmt.Printf("I am Qemu\n")
-}
-
 func kbd_init() {
 	km := make(map[int]byte)
 	NO := byte(0)
@@ -1690,7 +1678,6 @@ func main() {
 	// control CPUs
 	aplim := 7
 
-	qemuconfig()
 
 	dmap_init()
 	p8259_init()

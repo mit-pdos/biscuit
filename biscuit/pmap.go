@@ -142,7 +142,6 @@ func dmap_init() {
 
 	// make qemu use 2MB pages, like my hardware, to help expose bugs that
 	// the hardware may encounter.
-	//if gbpages || qemu {
 	if gbpages {
 		fmt.Printf("dmap via 1GB pages\n")
 		for i := range pdpt {
