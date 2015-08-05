@@ -9,32 +9,11 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 
 #include <pthread.h>
-
-int _main(int argc, char **argv)
-{
-	ulong sum = 0;
-	ulong times = 0;
-	while (1) {
-		ulong st = rdtsc();
-		if (fork() == 0)
-			exit(0);
-		ulong tot = rdtsc() - st;
-		sum += tot;
-		times++;
-		if (times % 100 == 0)
-			while (wait(NULL) > 0);
-		if (times % 5000 == 0) {
-			printf("%ld cycles/fork (avg)\n", sum/times);
-			times = sum = 0;
-		}
-	}
-
-	return 0;
-}
 
 // ms
 ulong now()
@@ -64,7 +43,7 @@ long jointot(pthread_t t[], const int nthreads)
 pthread_barrier_t bar;
 static int volatile cease;
 
-static int bmsecs = 2;
+static int bmsecs = 10;
 static int nthreads;
 
 void *crrename(void *idp)
@@ -156,6 +135,30 @@ void *crmessage(void *idp)
 		if ((ret = unlink(o)) < 0)
 			err(ret, "unlink");
 
+		total++;
+	}
+	return (void *)total;
+}
+
+void *getpids(void *idp)
+{
+	pthread_barrier_wait(&bar);
+
+	long total = 0;
+	while (!cease) {
+		getpid();
+		total++;
+	}
+	return (void *)total;
+}
+
+void *fake2(void *idp)
+{
+	pthread_barrier_wait(&bar);
+
+	long total = 0;
+	while (!cease) {
+		fake_sys2(0);
 		total++;
 	}
 	return (void *)total;
@@ -273,8 +276,8 @@ void *sunsend(void *idp)
 	pthread_barrier_wait(&bar);
 
 	long total = 0;
+	const char msg[] = "123456789";
 	while (!cease) {
-		char msg[] = "123456789";
 		int ret;
 		ret = sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&sa,
 		    sizeof(sa));
@@ -291,17 +294,23 @@ void *sunsend(void *idp)
 void usage(char *n)
 {
 	printf( "usage:\n"
-		"%s [-s seconds] [-b [c|r|u]] <num threads>\n"
+		"%s [-s seconds] [-b [c|r|u|f|p]] <num threads>\n"
 		"  -s seconds\n"
 		"       run benchmark for seconds\n"
 		"  -b [c|r|u]\n"
-		"       only run create message, rename, or\n"
-		"       unix socket benchmark\n", n);
+		"       only run create message, rename, unix\n"
+		"       socket, sys_fake2, or getpid benchmark\n", n);
 	exit(-1);
 }
 
 int main(int argc, char **argv)
 {
+	printf("> ");
+	int i;
+	for (i = 0; i < argc; i++)
+		printf("%s ", argv[i]);
+	printf("\n");
+
 	char *n = argv[0];
 	char onebm = 0;
 
@@ -338,11 +347,12 @@ int main(int argc, char **argv)
 		{"renames", 'r', crrename, NULL, NULL},
 		{"create/write/unlink", 'c', crmessage, NULL, NULL},
 		{"unix socket", 'u', sunsend, sunspawn, sunkill},
+		{"getpids", 'p', getpids, NULL, NULL},
+		{"fake2", 'f', fake2, NULL, NULL},
 	};
 
 	const int nbms = sizeof(bms)/sizeof(bms[0]);
 
-	int i;
 	for (i = 0; i < nbms; i++) {
 		if (onebm && onebm != bms[i].sname)
 			continue;
