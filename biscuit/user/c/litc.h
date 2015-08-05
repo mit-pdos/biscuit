@@ -108,6 +108,7 @@ void exit(int)
 int execv(const char *, char * const[]);
 int execvp(const char *, char * const[]);
 long fake_sys(long);
+long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);

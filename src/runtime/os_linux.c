@@ -370,6 +370,7 @@ uint64 rcr0(void);
 uint64 rcr2(void);
 uint64 rcr3(void);
 uint64 rcr4(void);
+uint64 rdmsr(uint64);
 uint64 rflags(void);
 uint64 rrsp(void);
 void sti(void);
@@ -377,6 +378,7 @@ void tlbflush(void);
 void trapret(uint64 *, uint64);
 void _trapret(uint64 *);
 void wlap(uint32, uint32);
+void wrmsr(uint64, uint64);
 
 uint64 runtime·Rdtsc(void);
 
@@ -2161,6 +2163,9 @@ trap(uint64 *tf)
 	} else if (trapno == TRAP_SIGRET) {
 		// does not return
 		sigret(ct);
+	} else if (trapno == TRAP_SYSCALL && tf[TF_RAX] == 31339) {
+		// sys_fake2
+		sched_run(ct);
 	}
 
 	if (trapno == TRAP_TIMER) {
@@ -2433,7 +2438,6 @@ timer_setup(int32 calibrate)
 	wlap(LVTHERMAL, MASKINT);
 
 #define IA32_APIC_BASE   0x1b
-	uint64 rdmsr(uint64);
 	uint64 reg = rdmsr(IA32_APIC_BASE);
 	if (!(reg & (1 << 11)))
 		runtime·pancake("lapic disabled?", reg);

@@ -34,6 +34,7 @@
 #define SYS_PIPE2        293
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
+#define SYS_FAKE2        31339
 
 static FILE  _stdin = {0}, _stdout = {1}, _stderr = {2};
 FILE  *stdin = &_stdin, *stdout = &_stdout, *stderr = &_stderr;
@@ -148,6 +149,12 @@ long
 fake_sys(long n)
 {
 	return syscall(n, 0, 0, 0, 0, SYS_FAKE);
+}
+
+long
+fake_sys2(long n)
+{
+	return syscall(n, 0, 0, 0, 0, SYS_FAKE2);
 }
 
 int
