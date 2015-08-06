@@ -800,6 +800,33 @@ TEXT _trapret(SB), NOSPLIT, $0-8
 	BYTE	$0x48
 	BYTE	$0xcf
 
+TEXT goodbye(SB), NOSPLIT, $0-8
+	CLI
+	MOVQ	tfptr+0(FP), R15
+	JMP	alltraps(SB)
+
+TEXT _sysentry(SB), NOSPLIT, $0
+	// rcx contains rsp, rdx contains ret addr
+	PUSHQ	CX
+	PUSHQ	DX
+	CALL	sysentry(SB)
+	INT	$3
+
+TEXT sysexitportal(SB), NOSPLIT, $0-8
+	MOVQ	thread+0(FP), AX
+	MOVQ	0x90(AX), DX
+	MOVQ	0xa8(AX), CX
+	// stack cannot be used after STI since an int using the IST can come
+	// in and clobber our stack
+	STI
+	// rcx contains rsp
+	// rdx contains rip
+	// rex64 sysexit
+	BYTE	$0x48
+	BYTE	$0x0f
+	BYTE	$0x35
+	INT	$3
+
 /*
  *  go-routine
  */

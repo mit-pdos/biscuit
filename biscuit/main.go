@@ -1664,6 +1664,19 @@ func (b *bprof_t) dump() {
 
 var prof = bprof_t{}
 
+func cpuchk() {
+	ax, _, _, dx := runtime.Cpuid(1, 0)
+	stepping := ax & 0xf
+	model :=  (ax >> 4) & 0xf
+	family := (ax >> 8) & 0xf
+	oldp := family == 6 && model < 3 && stepping < 3
+
+	sep := uint32(1 << 11)
+	if dx & sep == 0 || oldp {
+		panic("sysenter supported")
+	}
+}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
@@ -1674,6 +1687,8 @@ func main() {
 	//chanbm()
 
 	//findbm()
+
+	cpuchk()
 
 	// control CPUs
 	aplim := 7

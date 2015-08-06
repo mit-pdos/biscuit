@@ -58,6 +58,24 @@ static void release(void)
 static void pmsg(char *, long);
 
 long
+syscall2(long a1, long a2, long a3, long a4,
+    long a5, long trap)
+{
+	//long ret;
+	//register long r8 asm("r8") = a5;
+
+	asm volatile(
+		"movq	%%rsp, %%rcx\n"
+		"leaq	2(%%rip), %%rdx\n"
+		"sysenter\n"
+		:
+		:
+		: "cc", "memory", "r12", "r13", "r14", "r15");
+
+	return 0;
+}
+
+long
 syscall(long a1, long a2, long a3, long a4,
     long a5, long trap)
 {

@@ -379,6 +379,7 @@ void trapret(uint64 *, uint64);
 void _trapret(uint64 *);
 void wlap(uint32, uint32);
 void wrmsr(uint64, uint64);
+void goodbye(uint64 *tf);
 
 uint64 runtime·Rdtsc(void);
 
@@ -1477,6 +1478,8 @@ static uint32 lapic_quantum;
 static uint64 pspercycle;
 
 struct thread_t {
+	// if you add struct members before tf, you must fix the address in
+	// sysexitportal() too
 #define TFREGS       16
 #define TFHW         7
 #define TFSIZE       ((TFREGS + TFHW)*8)
@@ -2242,7 +2245,7 @@ trap(uint64 *tf)
 static uint64 lapaddr;
 
 #pragma textflag NOSPLIT
-static void
+static uint64
 tss_setup(int32 myid)
 {
 	// alignment is for performance
@@ -2264,6 +2267,8 @@ tss_setup(int32 myid)
 
 	assert(lapaddr, "lapic not yet mapped", lapaddr);
 	curcpu.rsp = rsp;
+
+	return rsp;
 }
 
 #pragma textflag NOSPLIT
@@ -2459,6 +2464,63 @@ timer_setup(int32 calibrate)
 
 #pragma textflag NOSPLIT
 void
+sysentry(uint64 ret, uint64 stack)
+{
+	assert((rflags() & TF_FL_IF) == 0, "ints enabled in sysentry", 0);
+
+	//pmsg("yahoozle!\n");
+
+	struct thread_t *t = curthread;
+	t->tf[TF_RIP] = ret;
+	t->tf[TF_RSP] = stack;
+
+	void sysexitportal(struct thread_t *);
+	sysexitportal(t);
+}
+
+#pragma textflag NOSPLIT
+void
+sysc_setup(uint64 myrsp)
+{
+	// lowest 2 bits are ignored for sysenter, but used for sysexit
+	const uint64 kcode64 = 1 << 3 | 3;
+	const uint64 sysenter_cs = 0x174;
+	wrmsr(sysenter_cs, kcode64);
+
+	const uint64 sysenter_eip = 0x176;
+	// asm_amd64.s
+	void _sysentry(void);
+	wrmsr(sysenter_eip, (uint64)_sysentry);
+
+	const uint64 sysenter_esp = 0x175;
+	wrmsr(sysenter_esp, myrsp);
+
+	//const uint64 ia32_efer = 0xc0000080;
+
+	//wrmsr(ia32_efer, rdmsr(ia32_efer) | 1);
+
+	//const uint64 ia32_fmask = 0xc0000084;
+	//wrmsr(ia32_fmask, TF_FL_IF);
+
+	//void sysentry(void);
+	//const uint64 ia32_lstar = 0xc0000082;
+	//wrmsr(ia32_lstar, (uint64)sysentry);
+
+	//const uint64 ia32_star = 0xc0000081;
+	//wrmsr(ia32_star, kcode64 << 32);
+
+	//runtime·printf("cs: %p ip: %p rf m: %p\n", rdmsr(ia32_star) >> 32,
+	//    rdmsr(ia32_lstar), rdmsr(ia32_fmask));
+
+	//uint64 reg = rdmsr(ia32_efer);
+	//if ((reg & 1) == 0)
+	//	pmsg("syscall NOT supported\n");
+	//else
+	//	pmsg("syscall supported\n");
+}
+
+#pragma textflag NOSPLIT
+void
 proc_setup(void)
 {
 	assert(sizeof(threads[0].tf) == TFSIZE, "weird tf size",
@@ -2482,7 +2544,8 @@ proc_setup(void)
 	outb(0x20 + 1, 0xff);
 	outb(0xa0 + 1, 0xff);
 
-	tss_setup(0);
+	uint64 myrsp = tss_setup(0);
+	sysc_setup(myrsp);
 	curcpu.num = 0;
 	setcurthread(&threads[0]);
 	//pmsg("sizeof thread_t:");
@@ -2500,7 +2563,8 @@ void
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(lap_id() <= MAXCPUS, "lapic id large", myid);
 	timer_setup(0);
-	tss_setup(myid);
+	uint64 myrsp = tss_setup(myid);
+	sysc_setup(myrsp);
 	fpuinit();
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
 
