@@ -122,6 +122,7 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 #define		CODESEG		1
 #define		DATASEG		2
 #define		FSSEG		3
+#define		GSSEG		4
 
 TEXT fixcs(SB),NOSPLIT,$0
 	POPQ	AX
@@ -826,6 +827,17 @@ TEXT sysexitportal(SB), NOSPLIT, $0-8
 	BYTE	$0x0f
 	BYTE	$0x35
 	INT	$3
+
+TEXT gs_null(SB), NOSPLIT, $8-0
+	XORQ	AX, AX
+	PUSHQ	AX
+	POPQ	GS
+	RET
+
+TEXT gscpu(SB), NOSPLIT, $0-8
+	MOVQ	0(GS), AX
+	MOVQ	AX, ret+0(FP)
+	RET
 
 /*
  *  go-routine

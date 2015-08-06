@@ -356,6 +356,7 @@ void fut_hack_yield(void);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
+struct cpu_t* gscpu(void);
 int64 inb(int32);
 uint64 lap_id(void);
 void lcr0(uint64);
@@ -530,7 +531,7 @@ struct seg64_t {
 #define	TSS     0x9
 #define	USER    0x60
 
-#define MAXCPUS 128
+#define MAXCPUS 32
 
 // 2 tss segs for each CPU
 static struct seg64_t segs[6 + 2*MAXCPUS] = {
@@ -560,9 +561,14 @@ static struct seg64_t segs[6 + 2*MAXCPUS] = {
 	 G | D,		// g, d/b, l, avail, mid limit
 	 0},		// base high
 
-	// another NULL seg: the sysexit instruction requires that the user
+
+	// gs seg. the sysexit instruction also requires that the user
 	// code seg and the kernel code seg descriptor are 4 slots apart.
-	{0, 0, 0, 0, 0, 0, 0, 0},
+	{0, 0,		// limit
+	 0, 0, 0,	// base
+	 0x90 | DATA,	// p, dpl, s, type
+	 G | D,		// g, d/b, l, avail, mid limit
+	 0},		// base high
 
 	// 5 - 64 bit user code
 	{0, 0,		// limit
@@ -1545,9 +1551,11 @@ struct thread_t {
 struct cpu_t {
 	// XXX missing go type info
 	//struct thread_t *mythread;
+	// a pointer to this cpu_t
+	uint64 this;
 	uint64 mythread;
 	uint64 rsp;
-	int32 num;
+	uint64 num;
 };
 
 #define NTHREADS        64
@@ -2521,6 +2529,19 @@ sysc_setup(uint64 myrsp)
 
 #pragma textflag NOSPLIT
 void
+gs_set(struct cpu_t *mycpu)
+{
+	const uint64 ia32_gs_base = 0xc0000101;
+	// on qemu (not the hardware), if we don't set gs to null selector
+	// before the wrmsr, the wrmsr is mysteriously lost (but the next wrmsr
+	// seems to stay).
+	void gs_null(void);
+	gs_null();
+	wrmsr(ia32_gs_base, (uint64)mycpu);
+}
+
+#pragma textflag NOSPLIT
+void
 proc_setup(void)
 {
 	assert(sizeof(threads[0].tf) == TFSIZE, "weird tf size",
@@ -2535,6 +2556,10 @@ proc_setup(void)
 	if (pte && *pte & PTE_P)
 		runtime·pancake("lapic mem mapped?", (uint64)pte);
 
+	int32 i;
+	for (i = 0; i < MAXCPUS; i++)
+		cpus[i].this = (uint64)&cpus[i];
+
 	timer_setup(1);
 
 	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
@@ -2547,6 +2572,7 @@ proc_setup(void)
 	uint64 myrsp = tss_setup(0);
 	sysc_setup(myrsp);
 	curcpu.num = 0;
+	gs_set(&curcpu);
 	setcurthread(&threads[0]);
 	//pmsg("sizeof thread_t:");
 	//pnum(sizeof(struct thread_t));
@@ -2574,6 +2600,7 @@ void
 	assert((rflags() & TF_FL_IF) == 0, "wtf!", test);
 
 	curcpu.num = myid;
+	gs_set(&curcpu);
 	setcurthread(0);
 }
 

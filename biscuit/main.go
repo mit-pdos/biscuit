@@ -1665,6 +1665,12 @@ func (b *bprof_t) dump() {
 var prof = bprof_t{}
 
 func cpuchk() {
+	_, _, _, dx := runtime.Cpuid(0x80000001, 0)
+	arch64 := uint32(1 << 29)
+	if dx & arch64 == 0 {
+		panic("not intel 64 arch?")
+	}
+
 	ax, _, _, dx := runtime.Cpuid(1, 0)
 	stepping := ax & 0xf
 	model :=  (ax >> 4) & 0xf
@@ -1692,7 +1698,6 @@ func main() {
 
 	// control CPUs
 	aplim := 7
-
 
 	dmap_init()
 	p8259_init()
