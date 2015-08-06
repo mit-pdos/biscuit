@@ -1413,8 +1413,9 @@ top:
 	extern int64 runtime·hackmode;
 stop:
 	if (runtime·hackmode) {
-		void find_hack_yield(void);
-		find_hack_yield();
+		void mktrap(uint64);
+		const uint64 yield = 49;
+		mktrap(yield);
 		//trapcheck(g->m->p);
 		goto top;
 	}

@@ -801,9 +801,113 @@ TEXT _trapret(SB), NOSPLIT, $0-8
 	BYTE	$0x48
 	BYTE	$0xcf
 
-TEXT goodbye(SB), NOSPLIT, $0-8
+TEXT gtest(SB), NOSPLIT, $0
+	MOVQ	$1, AX
+	MOVQ	$2, BX
+	MOVQ	$3, CX
+	MOVQ	$4, DX
+	MOVQ	$5, DI
+	MOVQ	$6, SI
+	MOVQ	$7, R8
+	MOVQ	$8, R9
+	MOVQ	$9, R10
+	MOVQ	$10, R11
+	MOVQ	$11, R12
+	MOVQ	$12, R13
+	MOVQ	$13, R14
+	MOVQ	$14, R15
+	PUSHQ	TRAP_YIELD
+	CALL	mktrap(SB)
+	ADDQ	$8, SP
+	CMPQ	AX, $1
+	JNE	badinko
+	CMPQ	BX, $2
+	JNE	badinko
+	CMPQ	CX, $3
+	JNE	badinko
+	CMPQ	DX, $4
+	JNE	badinko
+	CMPQ	DI, $5
+	JNE	badinko
+	CMPQ	SI, $6
+	JNE	badinko
+	CMPQ	R8, $7
+	JNE	badinko
+	CMPQ	R9, $8
+	JNE	badinko
+	CMPQ	R10, $9
+	JNE	badinko
+	CMPQ	R11, $10
+	JNE	badinko
+	CMPQ	R12, $11
+	JNE	badinko
+	CMPQ	R13, $12
+	JNE	badinko
+	CMPQ	R14, $13
+	JNE	badinko
+	CMPQ	R15, $14
+	JNE	badinko
+	RET
+badinko:
+	INT	$3
+
+// void mktrap(uint64 intn)
+TEXT mktrap(SB), NOSPLIT, $0-8
+	PUSHQ	AX
+	PUSHQ	DX
+	PUSHFQ
+	POPQ	AX
+
 	CLI
-	MOVQ	tfptr+0(FP), R15
+
+	// do hardware trap frame; get CPU's interrupt stack
+	MOVQ	16(GS), DX
+
+	// save rflags first
+	MOVQ	AX, -24(DX)
+
+	XORQ	AX, AX
+	// mov %ss, %ax
+	BYTE	$0x66
+	BYTE	$0x8c
+	BYTE	$0xd0
+	MOVQ	AX, -8(DX)
+
+	MOVQ	SP, AX
+	// get rid of our pushes and ret addr, return there directly
+	ADDQ	$24, AX
+	MOVQ	AX, -16(DX)
+
+	XORQ	AX, AX
+	// mov %cs, %ax
+	BYTE	$0x66
+	BYTE	$0x8c
+	BYTE	$0xc8
+	MOVQ	AX, -32(DX)
+
+	// ret addr
+	MOVQ	ret+-8(FP), AX
+	MOVQ	AX, -40(DX)
+
+	// dummy error code
+	MOVQ	$0, -48(DX)
+
+	// interrupt number
+	MOVQ	intn+0(FP), AX
+	MOVQ	AX, -56(DX)
+
+	// and finally, restore rax and rdx
+	POPQ	AX
+	MOVQ	AX, -64(DX)
+
+	POPQ	AX
+	MOVQ	AX, -72(DX)
+
+	LEAQ	-72(DX), SP
+
+	POPQ	AX
+	POPQ	DX
+
 	JMP	alltraps(SB)
 
 TEXT _sysentry(SB), NOSPLIT, $0

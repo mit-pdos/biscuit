@@ -352,7 +352,6 @@ runtime·signame(int32 sig)
 void atomic_dec(uint64 *);
 void cli(void);
 void cpu_halt(uint64);
-void fut_hack_yield(void);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
@@ -380,7 +379,7 @@ void trapret(uint64 *, uint64);
 void _trapret(uint64 *);
 void wlap(uint32, uint32);
 void wrmsr(uint64, uint64);
-void goodbye(uint64 *tf);
+void mktrap(uint64);
 
 uint64 runtime·Rdtsc(void);
 
@@ -1551,6 +1550,9 @@ struct thread_t {
 struct cpu_t {
 	// XXX missing go type info
 	//struct thread_t *mythread;
+
+	// if you add fields before rsp, asm in mktrap() needs to be updated
+
 	// a pointer to this cpu_t
 	uint64 this;
 	uint64 mythread;
@@ -2775,7 +2777,8 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 				t += timeout->tv_nsec;
 				curthread->sleepfor = hack_nanotime() + t;
 			}
-			fut_hack_yield();
+			mktrap(TRAP_YIELD);
+
 			// unlocks futexlock and returns with interrupts
 			// enabled...
 			cli();
