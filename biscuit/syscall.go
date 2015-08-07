@@ -1553,9 +1553,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	}
 	eobj := make([]uint8, 0)
 	add := make([]uint8, 4096)
-	ret := 1
+	ret := len(add)
 	c := 0
-	for ret != 0 {
+	for ret == len(add) {
 		n := proc.atime.now()
 		ret, err = fs_read([][]uint8{add}, file, c)
 		proc.atime.io_time(n)
