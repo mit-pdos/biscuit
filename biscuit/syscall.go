@@ -1869,7 +1869,6 @@ type waitinfo_t struct {
 type cinfo_t struct {
 	pid	int
 	status 	int
-	reaped	bool
 	dead	bool
 	atime	accnt_t
 }
@@ -1888,13 +1887,51 @@ func (w *waitinfo_t) daemon() {
 	add := w.addch
 	get := w.getch
 
-	reaps := 0
 	childs := make(map[int]cinfo_t)
-	waiters := make(map[int]parmsg_t)
+	waiters := make(map[int][]parmsg_t)
 	anys := make([]parmsg_t, 0)
 
-	addanys := func(pm parmsg_t) {
-		anys = append(anys, pm)
+	// deletes info of specified child and wakes up any threads that were
+	// 1) waiting for the same pid or 2) waiting for any pid but there are
+	// no more children
+	reapchild := func(pid int) {
+		_, ok := childs[pid]
+		if !ok {
+			panic("no such child")
+		}
+		delete(childs, pid)
+		pms, ok := waiters[pid]
+		if ok {
+			for _, pm := range pms {
+				pm.ack <- childmsg_t{err: -ECHILD}
+			}
+			delete(waiters, pid)
+		}
+		if len(childs) == 0 {
+			// no more children to wait for
+			for _, pm := range anys {
+				pm.ack <- childmsg_t{err: -ECHILD}
+			}
+			anys = anys[0:0]
+			for pid, pms := range waiters {
+				for _, pm := range pms {
+					pm.ack <- childmsg_t{err: -ECHILD}
+				}
+				delete(waiters, pid)
+			}
+		}
+	}
+
+	addwaiter := func(pm *parmsg_t) {
+		if pms, ok := waiters[pm.pid]; ok {
+			waiters[pm.pid] = append(pms, *pm)
+		} else {
+			waiters[pm.pid] = []parmsg_t{*pm}
+		}
+	}
+
+	addanys := func(pm *parmsg_t) {
+		anys = append(anys, *pm)
 	}
 
 	done := false
@@ -1903,7 +1940,7 @@ func (w *waitinfo_t) daemon() {
 		case cm := <- add:
 			// child has terminated
 			ci, ok := childs[cm.pid]
-			if !ok || ci.dead || ci.reaped {
+			if !ok || ci.dead {
 				panic("what")
 			}
 			ci.dead = true
@@ -1924,7 +1961,6 @@ func (w *waitinfo_t) daemon() {
 			if pm.forked {
 				var nci cinfo_t
 				nci.pid = pm.pid
-				nci.reaped = false
 				nci.dead = false
 				childs[pm.pid] = nci
 				pm.ack <- childmsg_t{}
@@ -1932,66 +1968,57 @@ func (w *waitinfo_t) daemon() {
 			}
 
 			// get status of child
-			if reaps == len(childs) {
+			if len(childs) == 0 {
 				// no unreaped children
 				pm.ack <- childmsg_t{err: -ECHILD}
 				break
 			}
 
 			if pm.pid == WAIT_ANY {
-				addanys(pm)
+				addanys(&pm)
 				break
 			}
 
-			ci, ok := childs[pm.pid]
-			if !ok || ci.reaped {
+			_, ok = childs[pm.pid]
+			if !ok {
 				// no such child or already waited for
 				pm.ack <- childmsg_t{err: -ECHILD}
 				break
 			}
-			waiters[pm.pid] = pm
+			addwaiter(&pm)
 		}
 
 		// check for new statuses
 		var cm childmsg_t
 		for pid, ci := range childs {
-			if ci.reaped || !ci.dead {
+			if !ci.dead {
 				continue
 			}
 			cm.pid = ci.pid
 			cm.status = ci.status
 			cm.atime = ci.atime
-			if len(anys) > 0 {
-				ci.reaped = true
-				childs[pid] = ci
-				reaps++
+			pms, ok := waiters[pid]
+			if ok {
+				pm := pms[0]
+				pm.ack <- cm
+				rest := pms[1:]
+				waiters[pid] = rest
+				reapchild(pid)
+			} else if len(anys) > 0 {
+				// wake up someone waiting for any pid
 				pm := anys[0]
 				anys = anys[1:]
 				pm.ack <- cm
-				continue
+				reapchild(pid)
 			}
-			pm, ok := waiters[pid]
-			if !ok {
-				continue
-			}
-			ci.reaped = true
-			childs[pid] = ci
-			reaps++
-			pm.ack <- cm
-			delete(waiters, pid)
-		}
-	}
-
-	deadc := 0
-	for _, c := range childs {
-		if c.dead {
-			deadc++
 		}
 	}
 
 	// parent exited, drain remaining statuses
-	for i := deadc; i < len(childs); i++ {
-		<- add
+	for _, ci := range childs {
+		if !ci.dead {
+			<- add
+		}
 	}
 }
 
@@ -2073,6 +2100,7 @@ func sys_fake(proc *proc_t, n int) int {
 	} else {
 		//kns := runtime.Ktime()
 		pprof.StopCPUProfile()
+		//pprof.WriteHeapProfile(&prof)
 		prof.dump()
 		//fmt.Printf("K    ns: %v\n", kns)
 	}

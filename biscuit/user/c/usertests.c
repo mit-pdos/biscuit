@@ -2055,6 +2055,75 @@ barriertest()
 	printf("barrier test ok\n");
 }
 
+void *_waitany(void *a)
+{
+	waitpid(WAIT_ANY, NULL, 0);
+	printf("waitany woke\n");
+	return NULL;
+}
+
+void *_waitchild(void *a)
+{
+	long pid = (long)a;
+	waitpid(pid, NULL, 0);
+	printf("waitchild woke\n");
+	return NULL;
+}
+
+void
+threadwait()
+{
+	printf("threadwait test\n");
+	long pid;
+	if ((pid = fork()) == 0) {
+		sleep(1);
+		exit(0);
+	} else if (pid < 0)
+		err(pid, "fork");
+	int ret;
+	pthread_t t[2];
+	if ((ret = pthread_create(&t[0], NULL, _waitany, NULL)) < 0)
+		err(ret, "pthread_create");
+	if ((ret = pthread_create(&t[1], NULL, _waitchild, (void *)pid)) < 0)
+		err(ret, "pthread_create");
+	if ((ret = pthread_join(t[0], NULL)))
+		err(ret, "pthread_join");
+	if ((ret = pthread_join(t[1], NULL)))
+		err(ret, "pthread_join");
+
+	if ((pid = fork()) == 0) {
+		sleep(1);
+		exit(0);
+	} else if (pid < 0)
+		err(pid, "fork");
+
+	if ((ret = pthread_create(&t[0], NULL, _waitany, NULL)) < 0)
+		err(ret, "pthread_create");
+	if ((ret = pthread_create(&t[1], NULL, _waitany, NULL)) < 0)
+		err(ret, "pthread_create");
+	if ((ret = pthread_join(t[0], NULL)))
+		err(ret, "pthread_join");
+	if ((ret = pthread_join(t[1], NULL)))
+		err(ret, "pthread_join");
+
+	if ((pid = fork()) == 0) {
+		sleep(1);
+		exit(0);
+	} else if (pid < 0)
+		err(pid, "fork");
+
+	if ((ret = pthread_create(&t[0], NULL, _waitchild, (void *)pid)) < 0)
+		err(ret, "pthread_create");
+	if ((ret = pthread_create(&t[1], NULL, _waitchild, (void *)pid)) < 0)
+		err(ret, "pthread_create");
+	if ((ret = pthread_join(t[0], NULL)))
+		err(ret, "pthread_join");
+	if ((ret = pthread_join(t[1], NULL)))
+		err(ret, "pthread_join");
+
+	printf("threadwait ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2111,6 +2180,7 @@ main(int argc, char *argv[])
 
   posixtest();
   barriertest();
+  threadwait();
 
   exectest();
 
