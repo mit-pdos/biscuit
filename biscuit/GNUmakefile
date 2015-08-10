@@ -126,7 +126,8 @@ CXXBEGIN := user/cxx/cxxrtbegin.o
 CXXEND := user/cxx/cxxrtend.o
 $(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/ -isysroot user/cxx/sysroot \
 		-fPIC -DXV6_USER -std=c++11
-$(CXXPROGS): % : %.cc  $(CXXLOBJS) $(CXXBEGIN) $(CXXEND) user/cxx/sysroot
+$(CXXPROGS): % : %.cc  $(CXXLOBJS) $(CXXBEGIN) $(CXXEND) user/cxx/sysroot \
+	    user/c/litc.o
 	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld -Wl,-n,--build-id=none \
 	    -o $@ $(CXXBEGIN) $< $(CXXLOBJS) user/c/litc.o $(CXXRT) $(CXXEND)
 
