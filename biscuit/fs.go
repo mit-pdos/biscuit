@@ -119,7 +119,11 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
-var memorium = [][512]uint8{}
+type memorium_t struct {
+	idebuf	idebuf_t
+	sync.Mutex
+}
+var memorium = []memorium_t{}
 var memtime = false
 
 func use_memfs() {
@@ -129,12 +133,14 @@ func use_memfs() {
 	fsblocks := 40960
 
 	fmt.Printf("Populating memfs")
-	memorium = make([][512]uint8, fsblocks)
+	memorium = make([]memorium_t, fsblocks)
 
 	tpct := fsblocks/100
 	for i := 1; i < fsblocks; i++ {
 		blk := bread(startb + i)
-		memorium[i] = blk.buf.data
+		memorium[i].idebuf.disk = 0
+		memorium[i].idebuf.block = int32(startb + i)
+		memorium[i].idebuf.data = blk.buf.data
 		brelse(blk)
 		if (i + 1) % tpct == 0 {
 			fmt.Printf(".")
@@ -150,9 +156,9 @@ func memfsrw(b *idebuf_t, writing bool) {
 		panic("no superblock")
 	}
 	if writing {
-		memorium[idx] = b.data
+		memorium[idx].idebuf.data = b.data
 	} else {
-		b.data = memorium[idx]
+		b.data = memorium[idx].idebuf.data
 	}
 }
 
@@ -2713,13 +2719,37 @@ func (blc *bcdaemon_t) chk_evict() {
 	}
 }
 
+func membread(blkno int) *bbuf_t {
+	idx := blkno - superb_start
+	m := &memorium[idx]
+	m.Lock()
+	b := &bbuf_t{}
+	b.buf = &m.idebuf
+	b.dirty = true
+	return b
+}
+
+func membrelse(b *bbuf_t) {
+	idx := int(b.buf.block) - superb_start
+	m := &memorium[idx]
+	m.Unlock()
+	return
+}
+
 func bread(blkno int) *bbuf_t {
+	if memtime {
+		return membread(blkno)
+	}
 	req := bcreq_new(blkno)
 	bcdaemon.req <- req
 	return <- req.ack
 }
 
 func brelse(b *bbuf_t) {
+	if memtime {
+		membrelse(b)
+		return
+	}
 	bcdaemon.done <- int(b.buf.block)
 }
 
