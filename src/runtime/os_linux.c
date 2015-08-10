@@ -2144,6 +2144,12 @@ trap(uint64 *tf)
 	lcr3(kpmap);
 	uint64 trapno = tf[TF_TRAPNO];
 
+	if (gscpu() != &curcpu) {
+		pnum((uint64)gscpu());
+		pnum((uint64)&curcpu);
+		assert(0, "gs is wrong", 0);
+	}
+
 	struct thread_t *ct = curthread;
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
