@@ -1567,7 +1567,9 @@ validateint(int *p)
 {
 	ulong ret;
 	asm volatile(
-		"int	$64\n"
+		"movq	%%rsp, %%r10\n"
+		"leaq	2(%%rip), %%r11\n"
+		"sysenter\n"
 		: "=a"(ret)
 #define SYS_PIPE2         293
 		: "0"(SYS_PIPE2), "D"(p)

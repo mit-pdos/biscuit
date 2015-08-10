@@ -58,25 +58,25 @@ static void release(void)
 static void pmsg(char *, long);
 
 long
-syscall2(long a1, long a2, long a3, long a4,
+syscall(long a1, long a2, long a3, long a4,
     long a5, long trap)
 {
-	//long ret;
-	//register long r8 asm("r8") = a5;
+	long ret;
+	register long r8 asm("r8") = a5;
 
 	asm volatile(
-		"movq	%%rsp, %%rcx\n"
-		"leaq	2(%%rip), %%rdx\n"
+		"movq	%%rsp, %%r10\n"
+		"leaq	2(%%rip), %%r11\n"
 		"sysenter\n"
-		:
-		:
-		: "cc", "memory", "r12", "r13", "r14", "r15");
+		: "=a"(ret)
+		: "0"(trap), "D"(a1), "S"(a2), "d"(a3), "c"(a4), "r"(r8)
+		: "cc", "memory");
 
-	return 0;
+	return ret;
 }
 
 long
-syscall(long a1, long a2, long a3, long a4,
+syscall_old(long a1, long a2, long a3, long a4,
     long a5, long trap)
 {
 	long ret;
@@ -407,7 +407,9 @@ tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 	register ulong r9 asm("r9") = (ulong)fnarg;
 
 	asm volatile(
-	    "int	$64\n"
+	    "movq	%%rsp, %%r10\n"
+	    "leaq	2(%%rip), %%r11\n"
+	    "sysenter\n"
 	    "cmpl	$0, %%eax\n"
 	    // parent or error
 	    "jne	1f\n"
@@ -473,14 +475,17 @@ _pcreate(void *vpcarg)
 	status = (long)(pcargs.fn(pcargs.arg));
 	free(pcargs.tls);
 	asm volatile(
-	    "int	$64\n"
+	    "movq	%%rsp, %%r10\n"
+	    "leaq	2(%%rip), %%r11\n"
+	    "sysenter\n"
 	    "cmpq	$0, %%rax\n"
 	    "je		1f\n"
 	    "movq	$0, 0x0\n"
 	    "1:\n"
 	    "movq	%1, %%rax\n"
 	    "movq	%4, %%rdi\n"
-	    "int	$64\n"
+	    "leaq	2(%%rip), %%r11\n"
+	    "sysenter\n"
 	    "movq	$0, 0x1\n"
 	    :
 	    : "a"(SYS_MUNMAP), "g"(SYS_THREXIT), "D"(pcargs.stack),

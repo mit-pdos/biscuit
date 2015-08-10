@@ -900,7 +900,7 @@ int_setup(void)
 
 	int_set(&idt[48], (uint64) Xspur,    0, 0, 1);
 	int_set(&idt[49], (uint64) Xyield,   0, 0, 1);
-	int_set(&idt[64], (uint64) Xsyscall, 0, 1, 1);
+	int_set(&idt[64], (uint64) Xsyscall, 0, 0, 1);
 
 	int_set(&idt[70], (uint64) Xtlbshoot, 0, 0, 1);
 	int_set(&idt[71], (uint64) Xsigret,   0, 0, 1);
@@ -1517,6 +1517,7 @@ struct thread_t {
 #define TF_RDX       12
 #define TF_RDI       11
 #define TF_RSI       10
+#define TF_RBP       9
 #define TF_FSBASE    0
 
 	int64 status;
@@ -2487,8 +2488,9 @@ sysentry(uint64 ret, uint64 stack)
 	t->tf[TF_RIP] = ret;
 	t->tf[TF_RSP] = stack;
 
-	void sysexitportal(struct thread_t *);
-	sysexitportal(t);
+	//void sysexitportal(struct thread_t *);
+	//sysexitportal(t);
+	assert(0, "no", 0);
 }
 
 #pragma textflag NOSPLIT

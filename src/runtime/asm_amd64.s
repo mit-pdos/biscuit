@@ -123,6 +123,8 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 #define		DATASEG		2
 #define		FSSEG		3
 #define		GSSEG		4
+#define		UCSEG		5
+#define		UDSEG		6
 
 TEXT fixcs(SB),NOSPLIT,$0
 	POPQ	AX
@@ -911,19 +913,69 @@ TEXT mktrap(SB), NOSPLIT, $0-8
 	JMP	alltraps(SB)
 
 TEXT _sysentry(SB), NOSPLIT, $0
-	// rcx contains rsp, rdx contains ret addr
-	PUSHQ	CX
-	PUSHQ	DX
+	// r10 contains return rsp, r11 contains return rip
+	PUSHQ	AX
+
+	// build hardware trap frame
+
+	MOVQ	$((UDSEG << 3) | 3), AX
+	PUSHQ	AX
+
+	PUSHQ	R10
+
+#define		TF_FL_IF	$(1 << 9)
+	PUSHFQ
+	POPQ	AX
+	ORQ	TF_FL_IF, AX
+	PUSHQ	AX
+
+	MOVQ	$((UCSEG << 3) | 3), AX
+	PUSHQ	AX
+
+	// ret addr
+	PUSHQ	R11
+
+	// dummy error code
+	PUSHQ	$0
+
+	// interrupt number
+#define TRAP_SYSCALL    $64
+	PUSHQ	TRAP_SYSCALL
+
+	// and finally, restore rax
+	MOVQ	56(SP), AX
+	JMP	alltraps(SB)
+
+	INT	$3
 	CALL	sysentry(SB)
 	INT	$3
 
-TEXT sysexitportal(SB), NOSPLIT, $0-8
-	MOVQ	thread+0(FP), AX
-	MOVQ	0x90(AX), DX
-	MOVQ	0xa8(AX), CX
+// this is unused
+TEXT sysexitportal(SB), NOSPLIT, $0-56
+	MOVQ	pmap+24(FP), AX
+	MOVQ	AX, CR3
+
+	MOVQ	fsb+16(FP), AX
+
+	// restore fsbase
+	MOVQ	IA32_FS_BASE, CX
+	MOVQ	AX, DX
+	ANDQ	$((1 << 32) - 1), AX
+	SHRQ	$32, DX
+	WRMSR
+
+	MOVQ	rip+0(FP), DX
+	MOVQ	rsp+8(FP), CX
+	MOVQ	rax+32(FP), AX
+	MOVQ	rbp+40(FP), BP
+	MOVQ	rbx+48(FP), BX
+
+	//MOVQ	0x90(AX), DX
+	//MOVQ	0xa8(AX), CX
 	// stack cannot be used after STI since an int using the IST can come
 	// in and clobber our stack
 	STI
+
 	// rcx contains rsp
 	// rdx contains rip
 	// rex64 sysexit

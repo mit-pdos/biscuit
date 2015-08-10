@@ -164,20 +164,6 @@ void *fake2(void *idp)
 	return (void *)total;
 }
 
-void *sysenters(void *idp)
-{
-	pthread_barrier_wait(&bar);
-
-	long total = 0;
-	while (!cease) {
-		long syscall2(long a1, long a2, long a3, long a4, long a5,
-		    long trap);
-		syscall2(0, 0, 0, 0, 0, 0);
-		total++;
-	}
-	return (void *)total;
-}
-
 void bm(char const *tl, void *(*fn)(void *))
 {
 	cease = 0;
@@ -308,12 +294,12 @@ void *sunsend(void *idp)
 void usage(char *n)
 {
 	printf( "usage:\n"
-		"%s [-s seconds] [-b [c|r|u|f|s|p]] <num threads>\n"
+		"%s [-s seconds] [-b [c|r|u|f|p]] <num threads>\n"
 		"  -s seconds\n"
 		"       run benchmark for seconds\n"
 		"  -b [c|r|u|f|s|p]\n"
 		"       only run create message, rename, unix\n"
-		"       socket, sys_fake2, sysenter, or getpid\n"
+		"       socket, sys_fake2, or getpid\n"
 		"       benchmark\n", n);
 	exit(-1);
 }
@@ -363,7 +349,6 @@ int main(int argc, char **argv)
 		{"create/write/unlink", 'c', crmessage, NULL, NULL},
 		{"unix socket", 'u', sunsend, sunspawn, sunkill},
 		{"getpids", 'p', getpids, NULL, NULL},
-		{"sysenters", 's', sysenters, NULL, NULL},
 		{"fake2", 'f', fake2, NULL, NULL},
 	};
 
