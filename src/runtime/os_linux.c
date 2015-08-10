@@ -2127,7 +2127,7 @@ proftick(void)
 		if (t->pid || !t->prof.enabled || t->doingsig)
 			continue;
 		// don't touch running threads
-		if (t->status == ST_RUNNING)
+		if (t->status != ST_RUNNABLE)
 			continue;
 		const int32 SIGPROF = 27;
 		mksig(t, SIGPROF);
