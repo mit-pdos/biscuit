@@ -1093,35 +1093,35 @@ get_pg(void)
 	return ret;
 }
 
-#pragma textflag NOSPLIT
-void
-memset(void *va, uint32 c, uint64 sz)
-{
-	uint8 b = c;
-	uint8 *p = (uint8 *)va;
-	while (sz--)
-		*p++ = b;
-}
+//#pragma textflag NOSPLIT
+//void
+//memset(void *va, uint32 c, uint64 sz)
+//{
+//	uint8 b = c;
+//	uint8 *p = (uint8 *)va;
+//	while (sz--)
+//		*p++ = b;
+//}
 
-#pragma textflag NOSPLIT
-void
-memmov(void *dst, void *src, uint64 sz)
-{
-	uint8 *d = (uint8 *)dst;
-	uint8 *s = (uint8 *)src;
-	if (dst == src || sz == 0)
-		return;
-	if (d > s && d <= s + sz) {
-		// copy backwards
-		s += sz;
-		d += sz;
-		while (sz--)
-			*--d = *--s;
-		return;
-	}
-	while (sz--)
-		*d++ = *s++;
-}
+//#pragma textflag NOSPLIT
+//void
+//memmov(void *dst, void *src, uint64 sz)
+//{
+//	uint8 *d = (uint8 *)dst;
+//	uint8 *s = (uint8 *)src;
+//	if (dst == src || sz == 0)
+//		return;
+//	if (d > s && d <= s + sz) {
+//		// copy backwards
+//		s += sz;
+//		d += sz;
+//		while (sz--)
+//			*--d = *--s;
+//		return;
+//	}
+//	while (sz--)
+//		*d++ = *s++;
+//}
 
 #pragma textflag NOSPLIT
 void
@@ -1136,7 +1136,7 @@ zero_phys(uint64 phys)
 
 	uint64 *va = CADDR(VREC, VREC, VREC, VTEMP);
 
-	memset(va, 0, PGSIZE);
+	runtime·memclr((byte *)va, PGSIZE);
 
 	recva[VTEMP] = 0;
 	invlpg(va);
@@ -1799,10 +1799,10 @@ runtime·Procadd(int64 pid, uint64 *tf, uint64 pmap)
 		assert(threads[i].pid != pid, "uc exists", pid);
 
 	struct thread_t *t = &threads[nt];
-	memset(t, 0, sizeof(struct thread_t));
+	runtime·memclr((byte *)t, sizeof(struct thread_t));
 
-	memmov(t->tf, tf, TFSIZE);
-	memmov(t->fx, fxinit, FXSIZE);
+	runtime·memmove(t->tf, tf, TFSIZE);
+	runtime·memmove(t->fx, fxinit, FXSIZE);
 
 	t->status = ST_RUNNABLE;
 	t->pid = pid;
@@ -1848,7 +1848,7 @@ runtime·Procrunnable(int64 pid, uint64 *tf, uint64 pmap)
 	t->status = ST_RUNNABLE;
 	if (tf) {
 		//assert_mapped(tf, TFSIZE, "bad tf");
-		memmov(t->tf, tf, TFSIZE);
+		runtime·memmove(t->tf, tf, TFSIZE);
 	}
 	if (pmap) {
 		t->pmap = pmap;
@@ -2011,9 +2011,6 @@ sigsim(int32 signo, Siginfo *si, void *ctx)
 	fakesig(signo, nil, ctx);
 	intsigret();
 }
-
-static uint64 stacks[16];
-const int64 stackn = sizeof(stacks)/sizeof(stacks[0]);
 
 // caller must hold threadlock
 #pragma textflag NOSPLIT
@@ -2648,7 +2645,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	*sp = 0xf1eaf1ea;	// fake return addr (clone_wrap never returns)
 
 	struct thread_t *mt = &threads[i];
-	memset(mt, 0, sizeof(*mt));
+	runtime·memclr((byte *)mt, sizeof(struct thread_t));
 	mt->tf[TF_CS] = CODE_SEG << 3;
 	mt->tf[TF_RSP] = (uint64)sp;
 	mt->tf[TF_RIP] = (uint64)clone_wrap;
@@ -2662,7 +2659,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	mt->status = ST_RUNNABLE;
 	mt->pmap = kpmap;
 
-	memmov(mt->fx, fxinit, FXSIZE);
+	runtime·memmove(mt->fx, fxinit, FXSIZE);
 
 	spunlock(&threadlock);
 	sti();
@@ -2933,7 +2930,7 @@ runtime·Memmove(void *dst, void *src, uintptr len)
 {
 	runtime·stackcheck();
 
-	memmov(dst, src, len);
+	runtime·memmove(dst, src, len);
 }
 
 #pragma textflag NOSPLIT
@@ -2969,7 +2966,8 @@ runtime·Prockill(int64 ptid)
 	struct thread_t *t = thread_find(ptid);
 	assert(t, "no such ptid", ptid);
 	assert(t->status == ST_WAITING, "user proc not waiting?", t->status);
-	memset(t, 0, sizeof(struct thread_t));
+	//runtime·memclr(t, sizeof(struct thread_t));
+	t->status = ST_INVALID;
 
 	spunlock(&threadlock);
 	sti();

@@ -263,6 +263,7 @@ h_needtls:
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
 	CALL	fixcs(SB)
+	CALL	fpuinit(SB)
 
 	// store through it, to make sure it works
 	get_tls(BX)
@@ -289,7 +290,6 @@ h_ok:
 
 	CALL	int_setup(SB)
 	CALL	proc_setup(SB)
-	CALL	fpuinit(SB)
 
 	//MOVQ	CR0, AX
 	//PUSHQ	AX
