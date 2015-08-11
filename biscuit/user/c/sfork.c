@@ -291,16 +291,60 @@ void *sunsend(void *idp)
 	return (void *)total;
 }
 
+void *forkonly(void *idp)
+{
+	pthread_barrier_wait(&bar);
+
+	long total = 0;
+	while (!cease) {
+		int pid = fork();
+		if (pid < 0)
+			err(pid, "fork");
+		if (!pid) {
+			exit(0);
+		}
+		int status;
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			errx(-1, "child failed: %d", status);
+		total++;
+	}
+	return (void *)total;
+}
+
+void *forkexec(void *idp)
+{
+	pthread_barrier_wait(&bar);
+
+	long total = 0;
+	while (!cease) {
+		int pid = fork();
+		if (pid < 0)
+			err(pid, "fork");
+		if (!pid) {
+			char * const args[] = {"/bin/true", NULL};
+			execv(args[0], args);
+			errx(-1, "execv");
+		}
+		int status;
+		wait(&status);
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			errx(-1, "child failed: %d", status);
+		total++;
+	}
+	return (void *)total;
+}
+
 void usage(char *n)
 {
 	printf( "usage:\n"
-		"%s [-s seconds] [-b [c|r|u|f|p]] <num threads>\n"
+		"%s [-s seconds] [-b [c|r|u|f|k|e|p]] <num threads>\n"
 		"  -s seconds\n"
 		"       run benchmark for seconds\n"
 		"  -b [c|r|u|f|s|p]\n"
 		"       only run create message, rename, unix\n"
-		"       socket, sys_fake2, or getpid\n"
-		"       benchmark\n", n);
+		"       socket, sys_fake2, forkonly, forkexec,\n"
+		"       or getpid benchmark\n", n);
 	exit(-1);
 }
 
@@ -350,6 +394,8 @@ int main(int argc, char **argv)
 		{"unix socket", 'u', sunsend, sunspawn, sunkill},
 		{"getpids", 'p', getpids, NULL, NULL},
 		{"fake2", 'f', fake2, NULL, NULL},
+		{"forkonly", 'k', forkonly, NULL, NULL},
+		{"forkexec", 'e', forkexec, NULL, NULL},
 	};
 
 	const int nbms = sizeof(bms)/sizeof(bms[0]);

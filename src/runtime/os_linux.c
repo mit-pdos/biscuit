@@ -2010,7 +2010,8 @@ sigsim(int32 signo, Siginfo *si, void *ctx)
 	// SIGPROF handler doesn't use siginfo_t...
 	USED(si);
 	fakesig(signo, nil, ctx);
-	intsigret();
+	//intsigret();
+	mktrap(TRAP_SIGRET);
 }
 
 // caller must hold threadlock
