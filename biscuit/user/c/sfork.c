@@ -400,14 +400,20 @@ int main(int argc, char **argv)
 
 	const int nbms = sizeof(bms)/sizeof(bms[0]);
 
+	int did = 0;
 	for (i = 0; i < nbms; i++) {
 		if (onebm && onebm != bms[i].sname)
 			continue;
+		did++;
 		if (bms[i].begin)
 			bms[i].begin();
 		bm(bms[i].name, bms[i].fn);
 		if (bms[i].end)
 			bms[i].end();
+	}
+	if (!did) {
+		printf("no benchmarks executed; no such bm\n");
+		exit(-1);
 	}
 
 	return 0;
