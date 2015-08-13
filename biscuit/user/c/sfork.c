@@ -344,8 +344,38 @@ void usage(char *n)
 		"  -b [c|r|u|f|s|p]\n"
 		"       only run create message, rename, unix\n"
 		"       socket, sys_fake2, forkonly, forkexec,\n"
-		"       or getpid benchmark\n", n);
+		"       or getpid benchmark\n"
+		"\n", n);
+	printf(	"%s -m\n"
+		"       run mailbench forever\n\n", n);
 	exit(-1);
+}
+
+void __attribute__((noreturn)) child(int cd)
+{
+	char dir[32];
+	snprintf(dir, sizeof(dir), "%d", cd);
+	//char *args[] = {"/bin/time", "mailbench", dir, "2", NULL};
+	char *args[] = {"/bin/mailbench", dir, "1", NULL};
+	int ret = execv(args[0], args);
+	err(ret, "execv");
+}
+
+int mbforever()
+{
+	int cd = 0;
+	for (;;) {
+		printf("     directory: %d\n", cd);
+		char dn[32];
+		snprintf(dn, sizeof(dn), "%d", cd);
+		int ret;
+		if ((ret = mkdir(dn, 0700)) < 0)
+			err(ret, "mkdir");
+		if (fork() == 0)
+			child(cd);
+		wait(NULL);
+		cd++;
+	}
 }
 
 int main(int argc, char **argv)
@@ -360,7 +390,7 @@ int main(int argc, char **argv)
 	char onebm = 0;
 
 	int ch;
-	while ((ch = getopt(argc, argv, "b:s:")) != -1) {
+	while ((ch = getopt(argc, argv, "mb:s:")) != -1) {
 		switch (ch) {
 		case 's':
 			bmsecs = atoi(optarg);
@@ -368,6 +398,9 @@ int main(int argc, char **argv)
 		case 'b':
 			onebm = *optarg;
 			break;
+		case 'm':
+			printf("running mailbench forever...\n");
+			return mbforever();
 		default:
 			usage(n);
 		}
@@ -417,31 +450,4 @@ int main(int argc, char **argv)
 	}
 
 	return 0;
-}
-
-void __attribute__((noreturn)) child(int cd)
-{
-	char dir[32];
-	snprintf(dir, sizeof(dir), "%d", cd);
-	char *args[] = {"/bin/time", "mailbench", dir, "2", NULL};
-	//char *args[] = {"/bin/mailbench", dir, "2", NULL};
-	int ret = execv(args[0], args);
-	err(ret, "execv");
-}
-
-int __main(int argc, char **argv)
-{
-	int cd = 0;
-	for (;;) {
-		printf("     directory: %d\n", cd);
-		char dn[32];
-		snprintf(dn, sizeof(dn), "%d", cd);
-		int ret;
-		if ((ret = mkdir(dn, 0700)) < 0)
-			err(ret, "mkdir");
-		if (fork() == 0)
-			child(cd);
-		wait(NULL);
-		cd++;
-	}
 }

@@ -2120,7 +2120,6 @@ proftick(void)
 		return;
 	lastprof = n;
 
-	int32 did = 0;
 	int32 i;
 	for (i = 0; i < NTHREADS; i++) {
 		// if profiling the kernel, do fake SIGPROF if we aren't
@@ -2133,10 +2132,7 @@ proftick(void)
 			continue;
 		const int32 SIGPROF = 27;
 		mksig(t, SIGPROF);
-		did++;
 	}
-	//if (did)
-	//	pmsg("!");
 }
 
 #pragma textflag NOSPLIT
