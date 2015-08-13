@@ -302,6 +302,57 @@ func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
 	return npm, p_npm, doinval
 }
 
+func fork_pmap1(dst *[512]int, src *[512]int, depth int,
+    ptracker map[int]*[512]int) bool {
+
+	doinval := false
+	for i, c := range src {
+		if c & PTE_P  == 0 {
+			continue
+		}
+		if depth == 1 {
+			// copy ptes
+			if c & PTE_U != 0 {
+				v := c &^ (PTE_W | PTE_WASCOW)
+				v |= PTE_COW
+				src[i] = v
+				dst[i] = v
+			} else {
+				dst[i] = c
+			}
+			continue
+		}
+		if depth == 4 && i == VREC {
+			dst[i] = 0
+			continue
+		}
+		// reference kernel mappings pmap pages, PS pages, and create
+		// nil recursive mapping
+		if c & PTE_U == 0 || c & PTE_PS != 0 {
+			dst[i] = c
+			continue
+		}
+		// otherwise, recursively copy
+		np, p_np := pg_new(ptracker)
+		perms := c & PTE_FLAGS
+		dst[i] = p_np | perms
+		nsrc := pe2pg(c)
+		if fork_pmap1(np, nsrc, depth - 1, ptracker) {
+			doinval = true
+		}
+	}
+
+	return doinval
+}
+
+func fork_pmap(pm *[512]int,
+    ptracker map[int]*[512]int) (*[512]int, int, bool) {
+	npm, p_npm := pg_new(ptracker)
+	doinval := fork_pmap1(npm, pm, 4, ptracker)
+	npm[VREC] = p_npm | PTE_P | PTE_W
+	return npm, p_npm, doinval
+}
+
 func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
     mywg *sync.WaitGroup, pch chan *map[int]*[512]int,
     convch chan *map[int]bool) {
