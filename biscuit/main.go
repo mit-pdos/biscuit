@@ -1629,7 +1629,7 @@ type bprof_t struct {
 }
 
 func (b *bprof_t) init() {
-	b.data = make([]byte, 0)
+	b.data = make([]byte, 0, 4096)
 }
 
 func (b *bprof_t) Write(p []byte) (int, error) {
