@@ -191,4 +191,4 @@ btest: btest.c
 	gcc -Os -m32 -I./ -o $@.elf $^ -nostdlib -nostdinc -e main -Ttext 0x7c00
 	objcopy -O binary -j.text $@.elf $@
 
-.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net linux
+.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net linux net
