@@ -1385,7 +1385,6 @@ type iresp_t struct {
 	cnext		inum
 	count		int
 	err		int
-	commitwait	bool
 	major		int
 	minor		int
 }
@@ -1778,9 +1777,7 @@ func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
 			ub = len(dst)
 			dstfull = true
 		}
-		for i := 0; i < ub; i++ {
-			dst[i] = src[i]
-		}
+		copy(dst, src)
 		brelse(blk)
 		c += ub
 		dst = dst[ub:]

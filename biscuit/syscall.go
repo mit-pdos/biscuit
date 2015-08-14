@@ -1551,36 +1551,6 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
-	n := proc.atime.now()
-	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
-	proc.atime.io_time(n)
-	if err != 0 {
-		return err
-	}
-	eobj := make([]uint8, 0)
-	add := make([]uint8, 4096)
-	ret := len(add)
-	c := 0
-	for ret == len(add) {
-		n := proc.atime.now()
-		ret, err = fs_read([][]uint8{add}, file, c)
-		proc.atime.io_time(n)
-		c += ret
-		if err != 0 {
-			return err
-		}
-		valid := add[0:ret]
-		eobj = append(eobj, valid...)
-	}
-	if file_close(file, 0) != 0 {
-		panic("must succeed")
-	}
-	elf := &elf_t{eobj}
-	_, ok := elf.npheaders()
-	if !ok {
-		return -EPERM
-	}
-
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
 	// that all threads should terminate before exec.
 	if proc.thread_count() > 1 {
@@ -1590,17 +1560,54 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
 
-	stackva := mkpg(VUSER + 1, 0, 0, 0)
-
+	// save page trackers in case the exec fails
 	opages := proc.pages
 	oupages := proc.upages
 	proc.pages = make(map[int]*[512]int)
 	proc.upages = make(map[int]int)
 
-	// copy kernel page table, map new stack
+	// copy kernel page table
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
 	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
+
+	// load binary image -- get first block of file
+	n := proc.atime.now()
+	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
+	proc.atime.io_time(n)
+	if err != 0 {
+		return err
+	}
+	defer func() {
+		if file_close(file, 0) != 0 {
+			panic("must succeed")
+		}
+	}()
+
+	hdata := make([]uint8, 512)
+	n = proc.atime.now()
+	ret, err := fs_read([][]uint8{hdata}, file, 0)
+	proc.atime.io_time(n)
+	if err != 0 {
+		return err
+	}
+	if ret < len(hdata) {
+		hdata = hdata[0:ret]
+	}
+
+	// assume its always an elf, for now
+	elfhdr := &elf_t{hdata}
+	ok := elfhdr.sanity()
+	if !ok {
+		return -EPERM
+	}
+	// elf_load() will create two copies of TLS section: one for the fresh
+	// copy and one for thread 0
+	freshtls, t0tls, tlssz := elfhdr.elf_load(proc, file)
+
+	// map new stack
+	//stackva := mkpg(VUSER + 1, 0, 0, 0)
+	stackva := mkpg(VUSER, 0, 1, 0)
 	numstkpages := 2
 	for i := 0; i < numstkpages; i++ {
 		stack, p_stack := pg_new(proc.pages)
@@ -1608,7 +1615,6 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		    PTE_U | PTE_W, true)
 	}
 
-	tls, istls := elf_load(proc, elf)
 	// XXX make insertargs not fail by using more than a page...
 	argc, argv, ok := insertargs(proc, args)
 	if !ok {
@@ -1618,64 +1624,6 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
 		return -EINVAL
-	}
-
-	// create two copies of TLS section: one for the fresh copy and one for
-	// thread 0
-	freshtls := 0
-	t0tls := 0
-	if istls {
-		l := roundup(tls.addr + tls.size, PGSIZE)
-		l -= rounddown(tls.addr, PGSIZE)
-
-		mktls := func(writable bool) int {
-			ret := proc.unusedva_inner(0, l)
-			perms := PTE_U
-			if writable {
-				perms |= PTE_W
-			}
-			for i := 0; i < l; i += PGSIZE {
-				pg, p_pg := pg_new(proc.pages)
-				proc.page_insert(ret + i, pg, p_pg, perms, true)
-			}
-
-			for i := 0; i < l; i += PGSIZE {
-				src, ok1 := proc.userdmap_inner(tls.addr + i)
-				dst, ok2 := proc.userdmap_inner(ret + i)
-				if !ok1 || !ok2 {
-					panic("must succeed")
-				}
-				*dst = *src
-			}
-
-			// zero the tbss
-			zl := tls.size - tls.copylen
-			if zl < 0 {
-				panic("bad zero len")
-			}
-			startva := ret + tls.copylen
-			var z []uint8
-			for c := 0; c < zl; c += len(z) {
-				z, ok = proc.userdmap8_inner(startva + c)
-				if !ok {
-					panic("must succeed")
-				}
-				left := zl - c
-				if len(z) > left {
-					z = z[:left]
-				}
-				for i := range z {
-					z[i] = 0
-				}
-			}
-			return ret
-		}
-		freshtls = mktls(false)
-		t0tls = mktls(true)
-
-		// amd64 sys 5 abi specifies that the tls pointer references to
-		// the first invalid word past the end of the tls
-		t0tls += tls.size
 	}
 
 	// close fds marked with CLOEXEC
@@ -1692,7 +1640,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	words := 3
 	buf := make([]uint8, words*8)
 	writen(buf, 8, 0, freshtls)
-	writen(buf, 8, 8, tls.size)
+	writen(buf, 8, 8, tlssz)
 	writen(buf, 8, 16, t0tls)
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
@@ -1702,7 +1650,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 	// commit new image state
 	tf[TF_RSP] = bufdest
-	tf[TF_RIP] = elf.entry()
+	tf[TF_RIP] = elfhdr.entry()
 	tf[TF_RFLAGS] = TF_FL_IF
 	ucseg := 5
 	udseg := 6
@@ -2210,36 +2158,64 @@ type elf_phdr struct {
 	flags   int
 	vaddr   int
 	filesz  int
+	fileoff	int
 	memsz   int
-	sdata    []uint8
 }
 
-var ELF_QUARTER = 2
-var ELF_HALF    = 4
-var ELF_OFF     = 8
-var ELF_ADDR    = 8
-var ELF_XWORD   = 8
+const(
+ELF_QUARTER = 2
+ELF_HALF    = 4
+ELF_OFF     = 8
+ELF_ADDR    = 8
+ELF_XWORD   = 8
+)
 
-func (e *elf_t) npheaders() (int, bool) {
-	mag := readn(e.data, ELF_HALF, 0)
-	if mag != 0x464c457f {
-		return 0, false
+func (e *elf_t) sanity() bool {
+	// make sure its an elf
+	e_ident := 0
+	elfmag := 0x464c457f
+	t := readn(e.data, ELF_HALF, e_ident)
+	if t != elfmag {
+		return false
 	}
+
+	// and that we read the entire elf header and program headers
+	dlen := len(e.data)
+
+	e_ehsize := 0x34
+	ehlen := readn(e.data, ELF_QUARTER, e_ehsize)
+	if dlen < ehlen {
+		fmt.Printf("read too few elf bytes (elf header)\n")
+		return false
+	}
+
+	e_phoff := 0x20
+	e_phentsize := 0x36
 	e_phnum := 0x38
-	return readn(e.data, ELF_QUARTER, e_phnum), true
+
+	poff := readn(e.data, ELF_OFF, e_phoff)
+	phsz := readn(e.data, ELF_QUARTER, e_phentsize)
+	phnum := readn(e.data, ELF_QUARTER, e_phnum)
+	phend := poff + phsz * phnum
+	if dlen < phend {
+		fmt.Printf("read too few elf bytes (program headers)\n")
+		return false
+	}
+
+	return true
 }
 
-func (e *elf_t) header(c int, ret *elf_phdr) {
-	if ret == nil {
-		panic("nil elf_t")
-	}
+func (e *elf_t) npheaders() int {
+	e_phnum := 0x38
+	return readn(e.data, ELF_QUARTER, e_phnum)
+}
 
-	nph, ok := e.npheaders()
-	if !ok {
-		panic("bad elf")
-	}
+func (e *elf_t) header(c int) elf_phdr {
+	ret := elf_phdr{}
+
+	nph := e.npheaders()
 	if c >= nph {
-		panic("bad elf header")
+		panic("header idx too large")
 	}
 	d := e.data
 	e_phoff := 0x20
@@ -2258,28 +2234,18 @@ func (e *elf_t) header(c int, ret *elf_phdr) {
 	}
 	ret.etype = f(p_type, ELF_HALF)
 	ret.flags = f(p_flags, ELF_HALF)
+	ret.fileoff = f(p_offset, ELF_OFF)
 	ret.vaddr = f(p_vaddr, ELF_ADDR)
 	ret.filesz = f(p_filesz, ELF_XWORD)
 	ret.memsz = f(p_memsz, ELF_XWORD)
-	off := f(p_offset, ELF_OFF)
-	if off < 0 || off >= len(d) {
-		panic(fmt.Sprintf("weird off %v", off))
-	}
-	if ret.filesz < 0 || off + ret.filesz >= len(d) {
-		panic(fmt.Sprintf("weird filesz %v", ret.filesz))
-	}
-	rd := d[off:off + ret.filesz]
-	ret.sdata = rd
+	return ret
 }
 
 func (e *elf_t) headers() []elf_phdr {
-	num, ok := e.npheaders()
-	if !ok {
-		panic("bad elf")
-	}
-	ret := make([]elf_phdr, num)
-	for i := 0; i < num; i++ {
-		e.header(i, &ret[i])
+	pnum := e.npheaders()
+	ret := make([]elf_phdr, pnum)
+	for i := 0; i < pnum; i++ {
+		ret[i] = e.header(i)
 	}
 	return ret
 }
@@ -2289,8 +2255,7 @@ func (e *elf_t) entry() int {
 	return readn(e.data, ELF_ADDR, e_entry)
 }
 
-// XXX remove unsafes
-func elf_segload(p *proc_t, hdr *elf_phdr) {
+func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 	perms := PTE_U
 	//PF_X := 1
 	PF_W := 2
@@ -2299,47 +2264,87 @@ func elf_segload(p *proc_t, hdr *elf_phdr) {
 	}
 	sz := roundup(hdr.vaddr + hdr.memsz, PGSIZE)
 	sz -= rounddown(hdr.vaddr, PGSIZE)
-	rsz := hdr.filesz
 	for i := 0; i < sz; i += PGSIZE {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
-		pg, p_pg := pg_new(p.pages)
-		if i < len(hdr.sdata) {
-			dst := unsafe.Pointer(pg)
-			src := unsafe.Pointer(&hdr.sdata[i])
-			len := PGSIZE
-			left := rsz - i
-			if len > left {
-				len = left
+		pg, p_pg := pg_new(proc.pages)
+		proc.page_insert(hdr.vaddr + i, pg, p_pg, perms, true)
+		if i < hdr.filesz {
+			bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
+			left := hdr.filesz - i
+			if left < len(bpg) {
+				bpg = bpg[0:left]
 			}
-			runtime.Memmove(dst, src, len)
+			ret, err := fs_read([][]uint8{bpg}, f, hdr.fileoff + i)
+			if err != 0 {
+				panic("must succeed")
+			}
+			if ret != len(bpg) {
+				panic("unexpected eof")
+			}
 		}
-		p.page_insert(hdr.vaddr + i, pg, p_pg, perms, true)
 	}
 }
 
-type etls_t struct {
-	addr	int
-	size	int
-	copylen	int
-}
-
-// returns TLS struct and whether ELF has TLS. caller must hold pagemap lock.
-func elf_load(p *proc_t, e *elf_t) (etls_t, bool) {
+// returns user address of read-only TLS, thread 0's TLS image, and TLS size.
+// caller must hold proc's pagemap lock.
+func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 	PT_LOAD := 1
 	PT_TLS  := 7
-	tls := etls_t{}
 	istls := false
+	tlssize := 0
+	var tlsaddr int
+	var tlscopylen int
+
+	// load each elf segment directly into process memory
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
 		if hdr.etype == PT_TLS {
 			istls = true
-			tls.addr = hdr.vaddr
-			tls.size = roundup(hdr.memsz, 8)
-			tls.copylen = hdr.filesz
+			tlsaddr = hdr.vaddr
+			tlssize = roundup(hdr.memsz, 8)
+			tlscopylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
-			elf_segload(p, &hdr)
+			segload(proc, &hdr, f)
 		}
 	}
-	return tls, istls
+
+	freshtls := 0
+	t0tls := 0
+	if istls {
+		l := roundup(tlsaddr + tlssize, PGSIZE)
+		l -= rounddown(tlsaddr, PGSIZE)
+
+		mktls := func(writable bool) int {
+			ret := proc.unusedva_inner(0, l)
+			perms := PTE_U
+			if writable {
+				perms |= PTE_W
+			}
+			for i := 0; i < l; i += PGSIZE {
+				// allocator zeros objects, so tbss is already
+				// initialized.
+				pg, p_pg := pg_new(proc.pages)
+				proc.page_insert(ret + i, pg, p_pg, perms, true)
+				src, ok := proc.userdmap8_inner(tlsaddr + i)
+				if !ok {
+					panic("must succeed")
+				}
+				bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
+				left := tlscopylen - i
+				if len(bpg) > left {
+					bpg = bpg[0:left]
+				}
+				copy(bpg, src)
+			}
+			return ret
+		}
+		freshtls = mktls(false)
+		t0tls = mktls(true)
+
+		// amd64 sys 5 abi specifies that the tls pointer references to
+		// the first invalid word past the end of the tls
+		t0tls += tlssize
+	}
+	return freshtls, t0tls, tlssize
 }

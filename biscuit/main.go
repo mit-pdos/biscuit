@@ -1041,9 +1041,7 @@ func (p *proc_t) usercopy_inner(src []uint8, uva int) bool {
 		if ub > len(dst) {
 			ub = len(dst)
 		}
-		for i := 0; i < ub; i++ {
-			dst[i] = src[i]
-		}
+		copy(dst, src)
 		src = src[ub:]
 		cnt += ub
 	}
