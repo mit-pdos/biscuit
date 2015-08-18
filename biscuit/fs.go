@@ -1070,7 +1070,7 @@ func idaemon_ensure(priv inum) *idaemon_t {
 	ret, ok := allidmons[priv]
 	if !ok {
 		ret = &idaemon_t{}
-		ret.init(priv)
+		ret.idm_init(priv)
 		allidmons[priv] = ret
 		idaemonize(ret)
 	}
@@ -1079,7 +1079,7 @@ func idaemon_ensure(priv inum) *idaemon_t {
 }
 
 // creates a new idaemon struct and fills its inode
-func (idm *idaemon_t) init(priv inum) {
+func (idm *idaemon_t) idm_init(priv inum) {
 	blkno, ioff := bidecode(int(priv))
 	idm.priv = priv
 	idm.blkno = blkno
@@ -1090,18 +1090,31 @@ func (idm *idaemon_t) init(priv inum) {
 
 	blk := bread(blkno)
 	idm.icache.fill(blk, ioff)
+	if idm.icache.itype == I_DIR {
+		ds := idm.all_dirents()
+		idm.icache.cache_dirents(ds)
+		dirent_brelse(ds)
+	}
 	brelse(blk)
 }
 
-
 type icache_t struct {
-	itype	int
-	links	int
-	size	int
-	major	int
-	minor	int
-	indir	int
-	addrs	[NIADDRS]int
+	itype		int
+	links		int
+	size		int
+	major		int
+	minor		int
+	indir		int
+	addrs		[NIADDRS]int
+	dents		map[string]icdent_t
+	free_dents	[]icdent_t
+}
+
+// struct to hold the block/offset of free directory entry slots
+type icdent_t struct {
+	blkno	int
+	slot	int
+	priv	inum
 }
 
 func (ic *icache_t) fill(blk *bbuf_t, ioff int) {
@@ -1118,6 +1131,23 @@ func (ic *icache_t) fill(blk *bbuf_t, ioff int) {
 	ic.indir = inode.indirect()
 	for i := 0; i < NIADDRS; i++ {
 		ic.addrs[i] = inode.addr(i)
+	}
+}
+
+func (ic *icache_t) cache_dirents(ds []dirdata_t) {
+	ic.dents = make(map[string]icdent_t)
+	ic.free_dents = make([]icdent_t, 0, NDIRENTS)
+	for i := range ds {
+		for j := 0; j < NDIRENTS; j++ {
+			fn := ds[i].filename(j)
+			priv := ds[i].inodenext(j)
+			fde := icdent_t{int(ds[i].blk.buf.block), j, priv}
+			if fn == "" {
+				ic.free_dents = append(ic.free_dents, fde)
+			} else {
+				ic.dents[fn] = fde
+			}
+		}
 	}
 }
 
@@ -1835,31 +1865,13 @@ func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
 	return c, 0
 }
 
-// does not check if name already exists. does not update ds.
-func (idm *idaemon_t) dirent_add(ds []*dirdata_t, name string, nblkno int,
-    ioff int) {
-
-	var deoff int
-	var ddata *dirdata_t
-	dorelse := false
-
-	found, eblkidx, eslot := dirent_getempty(ds)
-	if found {
-		// use existing dirdata block
-		deoff = eslot
-		ddata = ds[eblkidx]
-	} else {
-		// allocate new dir data block
-		blkn := idm.offsetblk(idm.icache.size, true)
-		idm.icache.size += 512
-		blk := bread(blkn)
-		for i := range blk.buf.data {
-			blk.buf.data[i] = 0
-		}
-		ddata = &dirdata_t{blk}
-		deoff = 0
-		dorelse = true
+func (idm *idaemon_t) dirent_add(name string, nblkno int, ioff int) {
+	if _, ok := idm.icache.dents[name]; ok {
+		panic("dirent already exists")
 	}
+	var ddata dirdata_t
+	blkno, deoff := idm.dirent_getempty()
+	ddata.blk = bread(blkno)
 	// write dir entry
 	if ddata.filename(deoff) != "" {
 		panic("dir entry slot is not free")
@@ -1867,9 +1879,9 @@ func (idm *idaemon_t) dirent_add(ds []*dirdata_t, name string, nblkno int,
 	ddata.w_filename(deoff, name)
 	ddata.w_inodenext(deoff, nblkno, ioff)
 	log_write(ddata.blk)
-	if dorelse {
-		brelse(ddata.blk)
-	}
+	de := icdent_t{blkno, deoff, inum(biencode(nblkno, ioff))}
+	idm.icache.dents[name] = de
+	brelse(ddata.blk)
 }
 
 func (idm *idaemon_t) icreate(name string, nitype, major,
@@ -1885,12 +1897,8 @@ func (idm *idaemon_t) icreate(name string, nitype, major,
 		panic("inconsistent args")
 	}
 	// make sure file does not already exist
-	ds := idm.all_dirents()
-	defer dirent_brelse(ds)
-
-	foundinum, found := dirent_lookup(ds, name)
-	if found {
-		return foundinum, -EEXIST
+	if de, ok := idm.icache.dents[name]; ok {
+		return de.priv, -EEXIST
 	}
 
 	// allocate new inode
@@ -1912,7 +1920,7 @@ func (idm *idaemon_t) icreate(name string, nitype, major,
 	brelse(newiblk)
 
 	// write new directory entry referencing newinode
-	idm.dirent_add(ds, name, newbn, newioff)
+	idm.dirent_add(name, newbn, newioff)
 
 	newinum := inum(biencode(newbn, newioff))
 	return newinum, 0
@@ -1923,39 +1931,39 @@ func (idm *idaemon_t) iget(name string) (inum, int) {
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
 	}
-	ds := idm.all_dirents()
-	priv, found := dirent_lookup(ds, name)
-	dirent_brelse(ds)
-	if found {
-		return priv, 0
+	if de, ok := idm.icache.dents[name]; ok {
+		return de.priv, 0
 	}
 	return 0, -ENOENT
 }
 
 // creates a new directory entry with name "name" and inode number priv
 func (idm *idaemon_t) iinsert(name string, priv inum) int {
-	ds := idm.all_dirents()
-	defer dirent_brelse(ds)
-
-	_, found := dirent_lookup(ds, name)
-	if found {
+	if idm.icache.itype != I_DIR {
+		return -ENOTDIR
+	}
+	if _, ok := idm.icache.dents[name]; ok {
 		return -EEXIST
 	}
 	a, b := bidecode(int(priv))
-	idm.dirent_add(ds, name, a, b)
+	idm.dirent_add(name, a, b)
 	return 0
 }
 
 // returns inode number of unliked inode so caller can decrement its ref count
 func (idm *idaemon_t) iunlink(name string) (inum, int) {
-	ds := idm.all_dirents()
-	defer dirent_brelse(ds)
-
-	priv, found := dirent_erase(ds, name)
-	if !found {
+	de, ok := idm.icache.dents[name]
+	if !ok {
 		return 0, -ENOENT
 	}
-	return priv, 0
+	blk := bread(de.blkno)
+	dirdata := dirdata_t{blk}
+	dirdata.w_filename(de.slot, "")
+	dirdata.w_inodenext(de.slot, 0, 0)
+	brelse(blk)
+	log_write(blk)
+	delete(idm.icache.dents, name)
+	return de.priv, 0
 }
 
 // returns true if the inode has no directory entries
@@ -2034,18 +2042,42 @@ func (idm *idaemon_t) ifree() {
 
 // returns a slice of all directory data blocks. caller must brelse all
 // underlying blocks.
-func (idm *idaemon_t) all_dirents() ([]*dirdata_t) {
+func (idm *idaemon_t) all_dirents() ([]dirdata_t) {
 	if idm.icache.itype != I_DIR {
 		panic("not a directory")
 	}
 	isz := idm.icache.size
-	ret := make([]*dirdata_t, 0)
+	ret := make([]dirdata_t, 0, 10)
 	for i := 0; i < isz; i += 512 {
 		_, blk := idm.blkslice(i, false)
-		dirdata := &dirdata_t{blk}
+		dirdata := dirdata_t{blk}
 		ret = append(ret, dirdata)
 	}
 	return ret
+}
+
+// returns an empty directory entry
+func (idm *idaemon_t) dirent_getempty() (int, int) {
+	frd := idm.icache.free_dents
+	if len(frd) > 0 {
+		ret := frd[0]
+		idm.icache.free_dents = frd[1:]
+		return ret.blkno, ret.slot
+	}
+
+	// current dir blocks are full -- allocate new dirdata block
+	blkno := idm.offsetblk(idm.icache.size, true)
+	idm.icache.size += 512
+	blk := bread(blkno)
+	var zbuf [512]uint8
+	blk.buf.data = zbuf
+	log_write(blk)
+	for i := 1; i < NDIRENTS; i++ {
+		fde := icdent_t{blkno, i, 0}
+		idm.icache.free_dents = append(idm.icache.free_dents, fde)
+	}
+	brelse(blk)
+	return blkno, 0
 }
 
 // used for {,f}stat
@@ -2062,50 +2094,10 @@ func (idm *idaemon_t) mkmode() int {
 	}
 }
 
-// returns the inode number for the specified filename
-func dirent_lookup(ds []*dirdata_t, name string) (inum, bool) {
-	for i := 0; i < len(ds); i++ {
-		for j := 0; j < NDIRENTS; j++ {
-			if name == ds[i].filename(j) {
-				return ds[i].inodenext(j), true
-			}
-		}
-	}
-	return 0, false
-}
-
-func dirent_brelse(ds []*dirdata_t) {
+func dirent_brelse(ds []dirdata_t) {
 	for _, d := range ds {
 		brelse(d.blk)
 	}
-}
-
-// returns an empty directory entry
-func dirent_getempty(ds []*dirdata_t) (bool, int, int) {
-	for i := 0; i < len(ds); i++ {
-		for j := 0; j < NDIRENTS; j++ {
-			if ds[i].filename(j) == "" {
-				return true, i, j
-			}
-		}
-	}
-	return false, 0, 0
-}
-
-// erases the specified directory entry
-func dirent_erase(ds []*dirdata_t, name string) (inum, bool) {
-	for i := 0; i < len(ds); i++ {
-		for j := 0; j < NDIRENTS; j++ {
-			if name == ds[i].filename(j) {
-				ret := ds[i].inodenext(j)
-				ds[i].w_filename(j, "")
-				ds[i].w_inodenext(j, 0, 0)
-				log_write(ds[i].blk)
-				return ret, true
-			}
-		}
-	}
-	return 0, false
 }
 
 // XXX: remove
@@ -2356,11 +2348,12 @@ func doffset(didx int, off int) int {
 func (dir *dirdata_t) filename(didx int) string {
 	st := doffset(didx, 0)
 	sl := dir.blk.buf.data[st : st + DNAMELEN]
-	ret := make([]byte, 0)
+	ret := make([]byte, 0, 14)
 	for _, c := range sl {
-		if c != 0 {
-			ret = append(ret, c)
+		if c == 0 {
+			break
 		}
+		ret = append(ret, c)
 	}
 	return string(ret)
 }
