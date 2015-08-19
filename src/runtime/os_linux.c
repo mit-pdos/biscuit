@@ -1271,6 +1271,7 @@ prot_none(uint8 *v, uint64 sz)
 void*
 hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 {
+	uint64 fl = pushcli();
 	splock(&maplock);
 
 	USED(fd);
@@ -1279,6 +1280,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 
 	if (ROUNDUP(sz, PGSIZE)/PGSIZE > pglast - pgfirst) {
 		spunlock(&maplock);
+		popcli(fl);
 		return (void *)-1;
 	}
 
@@ -1306,6 +1308,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	if (prot == PROT_NONE) {
 		prot_none(v, sz);
 		spunlock(&maplock);
+		popcli(fl);
 		return v;
 	}
 
@@ -1317,6 +1320,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 		alloc_map(v + i, perms, 1);
 
 	spunlock(&maplock);
+	popcli(fl);
 	return v;
 }
 
@@ -1324,6 +1328,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 int32
 hack_munmap(void *va, uint64 sz)
 {
+	uint64 fl = pushcli();
 	splock(&maplock);
 
 	// XXX TLB shootdowns?
@@ -1343,6 +1348,7 @@ hack_munmap(void *va, uint64 sz)
 	pmsg("POOF\n");
 
 	spunlock(&maplock);
+	popcli(fl);
 	return 0;
 }
 
