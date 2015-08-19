@@ -303,7 +303,7 @@ func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
 }
 
 func fork_pmap1(dst *[512]int, src *[512]int, depth int,
-    ptracker map[int]*[512]int) bool {
+    ptracker map[int]*[512]int, ctracker map[int]*[512]int) bool {
 
 	doinval := false
 	for i, c := range src {
@@ -317,6 +317,12 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 				v |= PTE_COW
 				src[i] = v
 				dst[i] = v
+				phys := v & PTE_ADDR
+				pgva, ok := ptracker[phys]
+				if !ok {
+					panic("user pg not tracked")
+				}
+				ctracker[phys] = pgva
 			} else {
 				dst[i] = c
 			}
@@ -333,11 +339,11 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 			continue
 		}
 		// otherwise, recursively copy
-		np, p_np := pg_new(ptracker)
+		np, p_np := pg_new(ctracker)
 		perms := c & PTE_FLAGS
 		dst[i] = p_np | perms
 		nsrc := pe2pg(c)
-		if fork_pmap1(np, nsrc, depth - 1, ptracker) {
+		if fork_pmap1(np, nsrc, depth - 1, ptracker, ctracker) {
 			doinval = true
 		}
 	}
@@ -346,9 +352,10 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 }
 
 func fork_pmap(pm *[512]int,
-    ptracker map[int]*[512]int) (*[512]int, int, bool) {
-	npm, p_npm := pg_new(ptracker)
-	doinval := fork_pmap1(npm, pm, 4, ptracker)
+    ptracker map[int]*[512]int,
+    ctracker map[int]*[512]int) (*[512]int, int, bool) {
+	npm, p_npm := pg_new(ctracker)
+	doinval := fork_pmap1(npm, pm, 4, ptracker, ctracker)
 	npm[VREC] = p_npm | PTE_P | PTE_W
 	return npm, p_npm, doinval
 }

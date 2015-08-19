@@ -1424,12 +1424,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		parent.Lock_pmap()
 		//pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages,
 		//    parent.pages)
-		pmap, p_pmap, _ := fork_pmap(parent.pmap, child.pages)
-
-		// copy phys->virtual mappings
-		for k, v := range parent.pages {
-			child.pages[k] = v
-		}
+		pmap, p_pmap, _ := fork_pmap(parent.pmap, parent.pages,
+		    child.pages)
 
 		// copy user->phys mappings too
 		for k, v := range parent.upages {
