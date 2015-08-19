@@ -1272,6 +1272,9 @@ runtime·readgogc(void)
 {
 	byte *p;
 
+	extern int64 runtime·hackmode;
+	if (runtime·hackmode)
+		return 800;
 	p = runtime·getenv("GOGC");
 	if(p == nil || p[0] == '\0')
 		return 100;
