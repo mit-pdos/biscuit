@@ -164,6 +164,8 @@ func dmap_init() {
 	}
 }
 
+var _vdirect	= VDIRECT << 39
+
 // returns a page-aligned virtual address for the given physical address using
 // the direct mapping
 func dmap(p int) *[512]int {
@@ -172,7 +174,7 @@ func dmap(p int) *[512]int {
 		panic("physical address too large")
 	}
 
-	v := int(uintptr(unsafe.Pointer(caddr(VDIRECT, 0, 0, 0, 0))))
+	v := _vdirect
 	v += rounddown(int(pa), PGSIZE)
 	return (*[512]int)(unsafe.Pointer(uintptr(v)))
 }
@@ -195,7 +197,10 @@ func pe2pg(pe int) *[512]int {
 func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
     ptracker map[int]*[512]int) *int {
 	vn := uint(uintptr(v))
-	l4b, pdpb, pdb, ptb := pgbits(vn)
+	l4b  := (vn >> (12 + 9*3)) & 0x1ff
+	pdpb := (vn >> (12 + 9*2)) & 0x1ff
+	pdb  := (vn >> (12 + 9*1)) & 0x1ff
+	ptb  := (vn >> (12 + 9*0)) & 0x1ff
 	if l4b >= uint(VREC) && l4b <= uint(VEND) {
 		panic(fmt.Sprintf("map in special slots: %#x", l4b))
 	}
@@ -215,7 +220,8 @@ func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 		if pe & PTE_PS != 0 {
 			panic("insert mapping into PS page")
 		}
-		return pe2pg(pe)
+		phys := pe & PTE_ADDR
+		return (*[512]int)(unsafe.Pointer(uintptr(_vdirect + phys)))
 	}
 
 	pe := pml4[l4b]
