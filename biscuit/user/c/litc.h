@@ -93,10 +93,11 @@ struct timespec {
 };
 
 #define		S_IFMT		((ulong)-1)
-#define		S_IFDIR		(2)
+#define		S_IFREG		1
+#define		S_IFDIR		2
 
-#define		S_ISDIR(mode)	(mode == 2)
-#define		S_ISREG(mode)	(mode == 1)
+#define		S_ISDIR(mode)	(mode == S_IFDIR)
+#define		S_ISREG(mode)	(mode == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
 int bind(int, const struct sockaddr *, socklen_t);

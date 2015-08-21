@@ -12,7 +12,7 @@ int main(int argc, char **argv)
 		if (fd < 0)
 			err(fd, "open");
 		char buf[512];
-		int ret;
+		long ret;
 		while ((ret = read(fd, buf, sizeof(buf))) > 0)
 			write(1, buf, ret);
 		if (ret < 0)
