@@ -2086,9 +2086,11 @@ func (idm *idaemon_t) dirent_getempty() (int, int) {
 	var zbuf [512]uint8
 	blk.buf.data = zbuf
 	log_write(blk)
-	for i := 1; i < NDIRENTS; i++ {
-		fde := icdent_t{blkno, i, 0}
-		idm.icache.free_dents = append(idm.icache.free_dents, fde)
+	// NDIRENTS - 1 because we return slot 0 directly
+	idm.icache.free_dents = make([]icdent_t, NDIRENTS - 1)
+	for i := 0; i < NDIRENTS - 1; i++ {
+		fde := icdent_t{blkno, i + 1, 0}
+		idm.icache.free_dents[i] = fde
 	}
 	brelse(blk)
 	return blkno, 0
