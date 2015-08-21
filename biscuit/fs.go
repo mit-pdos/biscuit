@@ -2887,14 +2887,23 @@ func log_daemon(l *log_t) {
 }
 
 func op_begin() {
+	if memtime {
+		return
+	}
 	<- fslog.admission
 }
 
 func op_end() {
+	if memtime {
+		return
+	}
 	fslog.done <- true
 }
 
 func log_write(b *bbuf_t) {
+	if memtime {
+		return
+	}
 	b.dirty = true
 	fslog.incoming <- int(b.buf.block)
 }
