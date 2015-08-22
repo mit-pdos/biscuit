@@ -469,14 +469,13 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 		proc.atime.io_time(n)
 		return -EPERM
 	}
-	fdn, fd := proc.fd_new(fdperms)
 	if flags & O_APPEND != 0 {
-		fd.perms |= FD_APPEND
+		fdperms |= FD_APPEND
 	}
 	if flags & O_CLOEXEC != 0 {
-		fd.perms |= FD_CLOEXEC
+		fdperms |= FD_CLOEXEC
 	}
-	fd.file = file
+	fdn := proc.fd_insert(file, fdperms)
 	return fdn
 }
 
@@ -696,17 +695,17 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	if !ok {
 		return -EFAULT
 	}
-	rfd, rf := proc.fd_new(FD_READ)
-	wfd, wf := proc.fd_new(FD_WRITE)
-
-	pipef := pipe_new()
-	rf.file = pipef
-	wf.file = pipef
+	rfp := FD_READ
+	wfp := FD_WRITE
 
 	if flags & O_CLOEXEC != 0 {
-		rf.perms |= FD_CLOEXEC
-		wf.perms |= FD_CLOEXEC
+		rfp |= FD_CLOEXEC
+		wfp |= FD_CLOEXEC
 	}
+
+	pipef := pipe_new()
+	rfd := proc.fd_insert(pipef, FD_READ)
+	wfd := proc.fd_insert(pipef, FD_WRITE)
 
 	proc.userwriten(pipen, 4, rfd)
 	proc.userwriten(pipen + 4, 4, wfd)
@@ -1037,15 +1036,15 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 		fmt.Printf("only AF_UNIX + SOCK_DGRAM is supported for now")
 		return -ENOSYS
 	}
-	// no permissions yet
-	fdn, fd := proc.fd_new(0)
-	fd.file = &file_t{ftype: SOCKET}
+	file := &file_t{ftype: SOCKET}
 	if typ == SOCK_DGRAM {
-		fd.file.sock.dgram = true
+		file.sock.dgram = true
 	} else {
-		fd.file.sock.stream = true
+		file.sock.stream = true
 	}
-	fd.file.sock.open = 1
+	file.sock.open = 1
+	// no permissions yet
+	fdn := proc.fd_insert(file, 0)
 	return fdn
 }
 

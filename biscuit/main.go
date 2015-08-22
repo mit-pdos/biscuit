@@ -484,6 +484,7 @@ type proc_t struct {
 	perished	bool
 	exitstatus	int
 
+	// XXX should be a slice
 	fds		map[int]*fd_t
 	// where to start scanning for free fds
 	fdstart		int
@@ -585,7 +586,10 @@ func proc_del(pid int) {
 	proclock.Unlock()
 }
 
-func (p *proc_t) fd_new(perms int) (int, *fd_t) {
+// an fd table invariant: every fd must have its file field set. thus the
+// caller cannot set an fd's file field without holding fdl. otherwise you will
+// race with a forking thread when it copies the fd table.
+func (p *proc_t) fd_insert(f *file_t, perms int) int {
 	p.fdl.Lock()
 	defer p.fdl.Unlock()
 
@@ -605,7 +609,8 @@ func (p *proc_t) fd_new(perms int) (int, *fd_t) {
 		panic(fmt.Sprintf("new fd exists %d", fdn))
 	}
 	p.fds[fdn] = fd
-	return fdn, fd
+	fd.file = f
+	return fdn
 }
 
 func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
