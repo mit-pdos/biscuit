@@ -663,10 +663,6 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 }
 
 func sys_pipe2(proc *proc_t, pipen, flags int) int {
-	ok := proc.usermapped(pipen, 8)
-	if !ok {
-		return -EFAULT
-	}
 	rfp := FD_READ
 	wfp := FD_WRITE
 
@@ -679,8 +675,16 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	rfd := proc.fd_insert(pipef, FD_READ)
 	wfd := proc.fd_insert(pipef, FD_WRITE)
 
-	proc.userwriten(pipen, 4, rfd)
-	proc.userwriten(pipen + 4, 4, wfd)
+	ok1 := proc.userwriten(pipen, 4, rfd)
+	ok2 := proc.userwriten(pipen + 4, 4, wfd)
+	if !ok1 || !ok2 {
+		err1 := sys_close(proc, rfd)
+		err2 := sys_close(proc, wfd)
+		if err1 != 0 || err2 != 0 {
+			panic("must succeed")
+		}
+		return -EFAULT
+	}
 	return 0
 }
 
@@ -893,16 +897,13 @@ func sys_unlink(proc *proc_t, pathn int) int {
 
 func sys_gettimeofday(proc *proc_t, timevaln int) int {
 	tvalsz := 16
-	if !proc.usermapped(timevaln, tvalsz) {
-		return -EFAULT
-	}
 	now := time.Now()
 	buf := make([]uint8, tvalsz)
 	us := int(now.UnixNano() / 1000)
 	writen(buf, 8, 0, us/1e6)
 	writen(buf, 8, 8, us%1e6)
 	if !proc.usercopy(buf, timevaln) {
-		panic("must succeed")
+		return -EFAULT
 	}
 	return 0
 }
@@ -977,11 +978,6 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 }
 
 func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
-	timespecsz := 16
-	if !proc.usermapped(sleeptsn, timespecsz) {
-		return -EFAULT
-	}
-
 	secs, ok1 := proc.userreadn(sleeptsn, 8)
 	nsecs, ok2 := proc.userreadn(sleeptsn + 8, 8)
 	if !ok1 || !ok2 {
@@ -1031,12 +1027,6 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	if !proc.usermapped(bufn, buflen) {
-		return -EFAULT
-	}
-	if !proc.usermapped(sockaddrn, socklen) {
-		return -EFAULT
-	}
 	if !fd.file.sock.dgram {
 		panic("no imp")
 	}
@@ -1109,9 +1099,6 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	if !proc.usermapped(bufn, buflen) {
-		return -EFAULT
-	}
 	fillfrom := sockaddrn != 0
 	slen := 0
 	if fillfrom {
@@ -1135,6 +1122,7 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 	sbuf := <- sund.out
 
 	if !proc.usercopy(sbuf.data, bufn) {
+		// XXX drops a message
 		return -EFAULT
 	}
 
@@ -1422,7 +1410,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		tidaddrn, ok2 := parent.userreadn(tforkp + 8, 8)
 		stack, ok3    := parent.userreadn(tforkp + 16, 8)
 		if !ok1 || !ok2 || !ok3 {
-			panic("unexpected unmap")
+			return -EFAULT
 		}
 		writetid := tidaddrn != 0
 		if writetid && !parent.usermapped(tidaddrn, 8) {
@@ -1722,11 +1710,6 @@ func sys_threxit(proc *proc_t, tid tid_t, status int) {
 func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
     threadwait int) int {
 	wi := proc.waiti
-
-	ok := proc.usermapped(statusp, 4)
-	if !ok {
-		return -EFAULT
-	}
 
 	if wpid == WAIT_MYPGRP {
 		panic("no imp")
