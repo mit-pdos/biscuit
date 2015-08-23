@@ -280,7 +280,7 @@ func trap_pgfault(ts *trapstore_t) {
 			if fa < USERMIN {
 				panic("kern addr marked cow")
 			}
-			sys_pgfault(proc, tid, pte, fa, &ts.tf)
+			sys_pgfault(proc, pte, fa)
 			// set process as runnable again
 			proc.sched_runnable(nil, tid)
 			proc.atime.finish(ts.inttime)
@@ -469,6 +469,8 @@ type proc_t struct {
 	// all pages
 	pages		map[int]*[512]int
 	// user va -> physical mapping
+	// XXX maybe this should go away since, for writes, we must walk the
+	// user pmap to determine if the destination page is COW anyway.
 	upages		map[int]int
 
 	mmapi		int
@@ -586,6 +588,22 @@ func proc_del(pid int) {
 	proclock.Unlock()
 }
 
+// prepare to write to the user page that contains userva that may be marked
+// COW.  caller must hold pmap lock (and the copy must take place under the
+// same lock acquisition). this can go away once we can handle syscalls with
+// the user pmap still loaded.
+func (p *proc_t) cowfault(userva int) {
+	if userva < USERMIN {
+		return
+	}
+	p.lockassert_pmap()
+	pte := pmap_walk(p.pmap, userva, false, 0, p.pages)
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_COW == 0 {
+		return
+	}
+	sys_pgfault(p, pte, userva)
+}
+
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
@@ -638,6 +656,12 @@ func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
 	ptid := p.pid << 32
 	ptid |= int(tid)
 	return runtime.Ptid_t(ptid)
+}
+
+func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
+	ret := &userbuf_t{}
+	ret.ub_init(p, userva, len)
+	return ret
 }
 
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
@@ -927,10 +951,13 @@ func (p *proc_t) userwriten(va, n, val int) bool {
 	if n > 8 {
 		panic("large n")
 	}
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
 	var dst []uint8
 	for i := 0; i < n; i += len(dst) {
 		v := val >> (8*uint(i))
-		t, ok := p.userdmap8(va + i)
+		p.cowfault(va + i)
+		t, ok := p.userdmap8_inner(va + i)
 		dst = t
 		if !ok {
 			return false
@@ -1038,6 +1065,7 @@ func (p *proc_t) usercopy_inner(src []uint8, uva int) bool {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
+		p.cowfault(uva + cnt)
 		dst, ok := p.userdmap8_inner(uva + cnt)
 		if !ok {
 			return false
@@ -1079,6 +1107,84 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	}
 	panic("no addr space left")
 	return 0
+}
+
+// a helper object for read/writing from userspace memory. virtual address
+// lookups and reads/writes to those addresses must be atomic with respect to
+// page faults.
+type userbuf_t struct {
+	userva	int
+	len	int
+	off	int
+	proc	*proc_t
+	fake	bool
+	fbuf	[]uint8
+}
+
+func (ub *userbuf_t) ub_init(p *proc_t, uva, len int) {
+	ub.userva = uva
+	ub.len = len
+	ub.off = 0
+	ub.proc = p
+}
+
+func (ub *userbuf_t) fake_init(buf []uint8) {
+	ub.fake = true
+	ub.fbuf = buf
+	ub.off = 0
+}
+
+func (ub *userbuf_t) read(dst []uint8) (int, int) {
+	return ub._tx(dst, false)
+}
+
+func (ub *userbuf_t) write(src []uint8) (int, int) {
+	return ub._tx(src, true)
+}
+
+// returns number of bytes copied and error
+func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
+	if ub.fake {
+		var c int
+		if write {
+			c = copy(ub.fbuf, buf)
+		} else {
+			c = copy(buf, ub.fbuf)
+		}
+		ub.fbuf = ub.fbuf[c:]
+		return c, 0
+	}
+
+	// serialize with page faults
+	ub.proc.Lock_pmap()
+	defer ub.proc.Unlock_pmap()
+
+	ret := 0
+	for len(buf) != 0 && ub.off != ub.len {
+		va := ub.userva + ub.off
+		if write {
+			ub.proc.cowfault(va)
+		}
+		ubuf, ok := ub.proc.userdmap8_inner(va)
+		if !ok {
+			return ret, -EFAULT
+		}
+		end := ub.off + len(ubuf)
+		if end > ub.len {
+			left := ub.len - ub.off
+			ubuf = ubuf[:left]
+		}
+		var c int
+		if write {
+			c = copy(ubuf, buf)
+		} else {
+			c = copy(buf, ubuf)
+		}
+		buf = buf[c:]
+		ub.off += c
+		ret += c
+	}
+	return ret, 0
 }
 
 func mp_sum(d []uint8) int {

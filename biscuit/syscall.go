@@ -234,26 +234,27 @@ func reap_doomed(p *proc_t, tid tid_t) {
 	p.thread_dead(tid, 0, false)
 }
 
-func cons_read(dsts [][]uint8, priv *file_t, offset int) (int, int) {
-	sz := 0
-	for _, d := range dsts {
-		sz += len(d)
-	}
+func cons_read(ub *userbuf_t, priv *file_t, offset int) (int, int) {
+	sz := ub.len
 	kdata := kbd_get(sz)
-	ret := len(kdata)
-	if buftodests(kdata, dsts) != len(kdata) {
+	ret, err := ub.write(kdata)
+	if err != 0 || ret != len(kdata) {
 		panic("dropped keys")
 	}
 	return ret, 0
 }
 
-func cons_write(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
+func cons_write(src *userbuf_t, f *file_t, off int, ap bool) (int, int) {
 		// merge into one buffer to avoid taking the console
 		// lock many times.
 		utext := int8(0x17)
-		big := make([]uint8, 0)
-		for _, s := range srcs {
-			big = append(big, s...)
+		big := make([]uint8, src.len)
+		read, err := src.read(big)
+		if err != 0 {
+			return 0, err
+		}
+		if read != src.len {
+			panic("short read")
 		}
 		runtime.Pmsga(&big[0], len(big), utext)
 		return len(big), 0
@@ -280,31 +281,31 @@ func sock_close(f *file_t, perms int) int {
 	return 0
 }
 
-var fdreaders = map[ftype_t]func([][]uint8, *file_t, int) (int, int) {
-	DEV : func(dsts [][]uint8, f *file_t, offset int) (int, int) {
-		dm := map[int]func([][]uint8, *file_t, int) (int, int) {
+var fdreaders = map[ftype_t]func(*userbuf_t, *file_t, int) (int, int) {
+	DEV : func(ub *userbuf_t, f *file_t, offset int) (int, int) {
+		dm := map[int]func(*userbuf_t, *file_t, int) (int, int) {
 			D_CONSOLE: cons_read,
 		}
 		fn, ok := dm[f.dev.major]
 		if !ok {
 			panic("bad device major")
 		}
-		return fn(dsts, f, offset)
+		return fn(ub, f, offset)
 	},
 	INODE : fs_read,
 	PIPE : pipe_read,
 }
 
-var fdwriters = map[ftype_t]func([][]uint8, *file_t, int, bool) (int, int) {
-	DEV : func(srcs [][]uint8, f *file_t, off int, ap bool) (int, int) {
-		dm := map[int]func([][]uint8, *file_t, int, bool) (int, int){
+var fdwriters = map[ftype_t]func(*userbuf_t, *file_t, int, bool) (int, int) {
+	DEV : func(src *userbuf_t, f *file_t, off int, ap bool) (int, int) {
+		dm := map[int]func(*userbuf_t, *file_t, int, bool) (int, int) {
 			D_CONSOLE: cons_write,
 		}
 		fn, ok := dm[f.dev.major]
 		if !ok {
 			panic("bad device major")
 		}
-		return fn(srcs, f, off, ap)
+		return fn(src, f, off, ap)
 	},
 	INODE : fs_write,
 	PIPE : pipe_write,
@@ -330,8 +331,6 @@ var fdclosers = map[ftype_t]func(*file_t, int) int {
 }
 
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
-	// sys_read is read-only i.e. doesn't update metadata, thus don't need
-	// op_{begin,end}
 	if sz == 0 {
 		return 0
 	}
@@ -345,23 +344,8 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.perms & FD_READ == 0 {
 		return -EPERM
 	}
-	c := 0
-	// we cannot load the user page map and the buffer to read into may not
-	// be contiguous in physical memory. thus we must piece together the
-	// buffer.
-	dsts := make([][]uint8, 0)
-	for c < sz {
-		dst, ok := proc.userdmap8(bufp + c)
-		if !ok {
-			return -EFAULT
-		}
-		left := sz - c
-		if len(dst) > left {
-			dst = dst[:left]
-		}
-		dsts = append(dsts, dst)
-		c += len(dst)
-	}
+
+	userbuf := proc.mkuserbuf(bufp, sz)
 
 	if fd.file.ftype == INODE {
 		fd.file.Lock()
@@ -369,7 +353,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	}
 
 	n := proc.atime.now()
-	ret, err := fdreaders[fd.file.ftype](dsts, fd.file, fd.file.offset)
+	ret, err := fdreaders[fd.file.ftype](userbuf, fd.file, fd.file.offset)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -394,27 +378,15 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	}
 
 	apnd := fd.perms & FD_APPEND != 0
-	c := 0
-	srcs := make([][]uint8, 0)
-	for c < sz {
-		src, ok := proc.userdmap8(bufp + c)
-		if !ok {
-			return -EFAULT
-		}
-		left := sz - c
-		if len(src) > left {
-			src = src[:left]
-		}
-		srcs = append(srcs, src)
-		c += len(src)
-	}
+
+	userbuf := proc.mkuserbuf(bufp, sz)
 
 	if fd.file.ftype == INODE {
 		fd.file.Lock()
 		defer fd.file.Unlock()
 	}
 	n := proc.atime.now()
-	ret, err := fdwriters[fd.file.ftype](srcs, fd.file, fd.file.offset,
+	ret, err := fdwriters[fd.file.ftype](userbuf, fd.file, fd.file.offset,
 	    apnd)
 	proc.atime.io_time(n)
 	if err != 0 {
@@ -793,22 +765,23 @@ func pipe_new() *file_t {
 	return ret
 }
 
-func pipe_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
-	sz := 0
-	for _, dst :=  range dsts {
-		sz += len(dst)
-	}
+func pipe_read(ub *userbuf_t, f *file_t, offset int) (int, int) {
+	sz := ub.len
 	pf := f.pipe
 	pf.outsz <- sz
 	buf := <- pf.out
-	ret := buftodests(buf, dsts)
-	return ret, 0
+	ret, err := ub.write(buf)
+	return ret, err
 }
 
-func pipe_write(srcs [][]uint8, f *file_t, offset int, appnd bool) (int, int) {
-	var buf []uint8
-	for _, src := range srcs {
-		buf = append(buf, src...)
+func pipe_write(src *userbuf_t, f *file_t, offset int, appnd bool) (int, int) {
+	buf := make([]uint8, src.len)
+	read, err := src.read(buf)
+	if err != 0 {
+		return 0, err
+	}
+	if read != src.len {
+		panic("short user read")
 	}
 	pf := f.pipe
 	ret := 0
@@ -1492,8 +1465,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	return ret
 }
 
-func sys_pgfault(proc *proc_t, tid tid_t, pte *int, faultaddr int,
-    tf *[TFSIZE]int) {
+func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
 	// pmap is Lock'ed in trap_pgfault...
 	cow := *pte & PTE_COW != 0
 	wascow := *pte & PTE_WASCOW != 0
@@ -1580,8 +1552,10 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	}()
 
 	hdata := make([]uint8, 512)
+	ub := &userbuf_t{}
+	ub.fake_init(hdata)
 	n = proc.atime.now()
-	ret, err := fs_read([][]uint8{hdata}, file, 0)
+	ret, err := fs_read(ub, file, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -2259,6 +2233,7 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 	}
 	sz := roundup(hdr.vaddr + hdr.memsz, PGSIZE)
 	sz -= rounddown(hdr.vaddr, PGSIZE)
+	ub := &userbuf_t{}
 	for i := 0; i < sz; i += PGSIZE {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
@@ -2270,7 +2245,8 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 			if left < len(bpg) {
 				bpg = bpg[0:left]
 			}
-			ret, err := fs_read([][]uint8{bpg}, f, hdr.fileoff + i)
+			ub.fake_init(bpg)
+			ret, err := fs_read(ub, f, hdr.fileoff + i)
 			if err != 0 {
 				panic("must succeed")
 			}

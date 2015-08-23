@@ -747,10 +747,10 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 	return 0
 }
 
-func fs_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
+func fs_read(dst *userbuf_t, f *file_t, offset int) (int, int) {
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkread(dsts, offset)
+	req.mkread(dst, offset)
 
 	priv := f.priv
 	idmon := idaemon_ensure(priv)
@@ -762,14 +762,14 @@ func fs_read(dsts [][]uint8, f *file_t, offset int) (int, int) {
 	return req.resp.count, 0
 }
 
-func fs_write(srcs [][]uint8, f *file_t, offset int, append bool) (int, int) {
+func fs_write(src *userbuf_t, f *file_t, offset int, append bool) (int, int) {
 	op_begin()
 	defer op_end()
 
 	priv := f.priv
 	// send write request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkwrite(srcs, offset, append)
+	req.mkwrite(src, offset, append)
 
 	idmon := idaemon_ensure(priv)
 	idmon.req <- req
@@ -1204,9 +1204,9 @@ type ireq_t struct {
 	// read/write op
 	offset		int
 	// read op
-	rbufs		[][]uint8
+	rbuf		*userbuf_t
 	// writes op
-	dbufs		[][]uint8
+	dbuf		*userbuf_t
 	dappend		bool
 	// create op
 	cr_name		string
@@ -1257,21 +1257,21 @@ func (r *ireq_t) mkref_direct() {
 	r.memref = true
 }
 
-func (r *ireq_t) mkread(dsts [][]uint8, offset int) {
+func (r *ireq_t) mkread(dst *userbuf_t, offset int) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan bool)
 	r.rtype = READ
-	r.rbufs = dsts
+	r.rbuf = dst
 	r.offset = offset
 }
 
-func (r *ireq_t) mkwrite(srcs [][]uint8, offset int, append bool) {
+func (r *ireq_t) mkwrite(src *userbuf_t, offset int, append bool) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan bool)
 	r.rtype = WRITE
-	r.dbufs = srcs
+	r.dbuf = src
 	r.offset = offset
 	r.dappend = append
 }
@@ -1564,7 +1564,7 @@ func idaemonize(idm *idaemon_t) {
 			r.ack <- true
 
 		case READ:
-			read, err := idm.iread(r.rbufs, r.offset)
+			read, err := idm.iread(r.rbuf, r.offset)
 			r.resp.count = read
 			r.resp.err = err
 			r.ack <- true
@@ -1608,7 +1608,7 @@ func idaemonize(idm *idaemon_t) {
 			if r.dappend {
 				offset = idm.icache.size
 			}
-			wrote, err := idm.iwrite(r.dbufs, offset)
+			wrote, err := idm.iwrite(r.dbuf, offset)
 			// iupdate() must come before the response is sent.
 			// otherwise the idaemon and the requester race to
 			// log_write()/op_end().
@@ -1795,82 +1795,50 @@ func (idm *idaemon_t) blkslice(offset int, writing bool) ([]uint8, *bbuf_t) {
 	return src, blk
 }
 
-func (idm *idaemon_t) iread(dsts [][]uint8, offset int) (int, int) {
-	c := 0
-	for _, d := range dsts {
-		read, err := idm.iread1(d, offset + c)
-		c += read
-		if err != 0 {
-			return c, err
-		}
-		if read != len(d) {
-			break
-		}
-	}
-	return c, 0
+func (idm *idaemon_t) iread(dst *userbuf_t, offset int) (int, int) {
+	return idm.iread1(dst, offset)
 }
 
-func (idm *idaemon_t) iread1(dst []uint8, offset int) (int, int) {
+func (idm *idaemon_t) iread1(dst *userbuf_t, offset int) (int, int) {
 	isz := idm.icache.size
 	if offset >= isz {
 		return 0, 0
 	}
 
-	sz := len(dst)
 	c := 0
-	dstfull := false
-	for c < sz {
+	for offset + c < isz {
 		src, blk := idm.blkslice(offset + c, false)
-		// copy upto len(dst) bytes
-		ub := len(src)
-		if len(dst) < ub {
-			ub = len(dst)
-			dstfull = true
-		}
-		copy(dst, src)
+		wrote, err := dst.write(src)
 		brelse(blk)
-		c += ub
-		dst = dst[ub:]
-		if offset + c == isz || dstfull {
+		c += wrote
+		if err != 0 {
+			return c, err
+		}
+		dstfull := wrote != len(src)
+		if dstfull {
 			break
 		}
 	}
 	return c, 0
 }
 
-func (idm *idaemon_t) iwrite(srcs [][]uint8, offset int) (int, int) {
-	c := 0
-	for _, s := range srcs {
-		wrote, err := idm.iwrite1(s, offset + c)
-		c += wrote
-		if err != 0 {
-			return c, err
-		}
-		// short write
-		if wrote != len(s) {
-			panic("short write")
-		}
-	}
-	return c, 0
+func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
+	return idm.iwrite1(src, offset)
 }
 
-func (idm *idaemon_t) iwrite1(src []uint8, offset int) (int, int) {
+func (idm *idaemon_t) iwrite1(src *userbuf_t, offset int) (int, int) {
 	// XXX if file length is shortened, when to free old blocks?
-	sz := len(src)
+	sz := src.len
 	c := 0
 	for c < sz {
 		dst, blk := idm.blkslice(offset + c, true)
-		ub := len(dst)
-		if len(src) < ub {
-			ub = len(src)
-		}
-		for i := 0; i < ub; i++ {
-			dst[i] = src[i]
-		}
+		read, err := src.read(dst)
 		log_write(blk)
 		brelse(blk)
-		c += ub
-		src = src[ub:]
+		c += read
+		if err != 0 {
+			return c, err
+		}
 	}
 	newsz := offset + c
 	if newsz > idm.icache.size {
