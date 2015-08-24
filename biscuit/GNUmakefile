@@ -140,8 +140,9 @@ user/cxx/sysroot: user/cxx/host_hdrs.hh
 
 LINS := $(addprefix user/cxx/linux/,$(CXXBINS))
 $(LINS) : user/cxx/linux/% : user/cxx/%.cc
-	g++ -std=c++11 -Wall -Werror -lpthread -o $@ $< user/cxx/libutil.cc \
-		user/cxx/shutil.cc
+	g++ -std=c++11 -Wall -Werror -static -o $@ $< user/cxx/libutil.cc \
+		user/cxx/shutil.cc -Wl,--whole-archive -lpthread \
+		-Wl,--no-whole-archive
 
 linux: $(LINS)
 
