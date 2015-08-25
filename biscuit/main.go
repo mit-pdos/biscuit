@@ -816,6 +816,9 @@ func (p *proc_t) terminate() {
 		}
 	}
 	p.fdl.Unlock()
+	if file_close(p.cwd, 0) != 0 {
+		panic("must succeed")
+	}
 
 	//fmt.Printf("%v exited with status %v\n", p.name, p.exitstatus)
 	proc_del(p.pid)
