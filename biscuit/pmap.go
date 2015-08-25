@@ -362,6 +362,9 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 				v |= PTE_COW
 				src[i] = v
 				dst[i] = v
+				if v != c {
+					doinval = true
+				}
 			} else {
 				dst[i] = c
 			}

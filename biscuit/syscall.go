@@ -1381,16 +1381,19 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		parent.fdl.Unlock()
 
 		parent.Lock_pmap()
-		pmap, p_pmap, _ := fork_pmap(parent.pmap, child.pmpages)
+		pmap, p_pmap, doflush := fork_pmap(parent.pmap, child.pmpages)
 
 		// copy userva->kva mappings too
 		for k, v := range parent.pages {
 			child.pages[k] = v
 		}
-		parent.Unlock_pmap()
 
-		// tlb invalidation is not necessary for the parent because
-		// trap always switches to the kernel pmap, for now.
+		// flush all ptes now marked COW
+		if doflush {
+			// this flushes the TLB for now
+			parent.tlbshoot(0, 1)
+		}
+		parent.Unlock_pmap()
 
 		child.pmap = pmap
 		child.p_pmap = p_pmap
