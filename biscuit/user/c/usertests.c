@@ -1596,7 +1596,10 @@ validatetest(void)
     //sleep(0);
     //sleep(0);
     //kill(pid);
-    wait(NULL);
+    int status;
+    wait(&status);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+      errx(-1, "validate failed");
 
     // try to crash the kernel by passing in a bad string pointer
     if(link("nosuchfile", (char*)p) == 0){
