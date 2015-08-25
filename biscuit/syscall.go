@@ -1,7 +1,6 @@
 package main
 
 import "fmt"
-import "math/rand"
 import "runtime"
 import "runtime/pprof"
 import "sync"
@@ -504,7 +503,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
 	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
-		pg, p_pg := pg_new(proc.pages)
+		pg, p_pg := pg_new()
 		proc.page_insert(addr + i, pg, p_pg, perms, true)
 	}
 	// no tlbshoot because mmap never replaces pages for now
@@ -1382,14 +1381,11 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		parent.fdl.Unlock()
 
 		parent.Lock_pmap()
-		//pmap, p_pmap := pmap_copy_par(parent.pmap, child.pages,
-		//    parent.pages)
-		pmap, p_pmap, _ := fork_pmap(parent.pmap, parent.pages,
-		    child.pages)
+		pmap, p_pmap, _ := fork_pmap(parent.pmap, child.pmpages)
 
-		// copy user->phys mappings too
-		for k, v := range parent.upages {
-			child.upages[k] = v
+		// copy userva->kva mappings too
+		for k, v := range parent.pages {
+			child.pages[k] = v
 		}
 		parent.Unlock_pmap()
 
@@ -1463,7 +1459,7 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
 
 	if cow {
 		// copy page
-		dst, p_dst := pg_new(proc.pages)
+		dst, p_dst := pg_new()
 		p_src := *pte & PTE_ADDR
 		src := dmap(p_src)
 		*dst = *src
@@ -1517,14 +1513,15 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 	// save page trackers in case the exec fails
 	opages := proc.pages
-	oupages := proc.upages
-	proc.pages = make(map[int]*[512]int)
-	proc.upages = make(map[int]int)
+	opmpages := proc.pmpages
+	proc.pages = make(map[pgn_t]*[512]int)
+	proc.pmpages = &pmtracker_t{}
+	proc.pmpages.pminit()
 
 	// copy kernel page table
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
-	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pages)
+	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pmpages)
 
 	// load binary image -- get first block of file
 	n := proc.atime.now()
@@ -1567,7 +1564,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	stackva := mkpg(VUSER, 0, 1, 0)
 	numstkpages := 2
 	for i := 0; i < numstkpages; i++ {
-		stack, p_stack := pg_new(proc.pages)
+		stack, p_stack := pg_new()
 		proc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
 		    PTE_U | PTE_W, true)
 	}
@@ -1577,7 +1574,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	if !ok {
 		// restore old process
 		proc.pages = opages
-		proc.upages = oupages
+		proc.pmpages = opmpages
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
 		return -EINVAL
@@ -1628,7 +1625,8 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	uva := 0
 	for i := 0; i < 1000; i++ {
 		taddr := USERMIN + i*PGSIZE
-		if _, ok := proc.upages[taddr]; !ok {
+		pte := pmap_lookup(proc.pmap, taddr)
+		if pte == nil || *pte & PTE_P == 0 {
 			uva = taddr
 			break
 		}
@@ -1636,7 +1634,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	if uva == 0 {
 		panic("couldn't find free user page")
 	}
-	pg, p_pg := pg_new(proc.pages)
+	pg, p_pg := pg_new()
 	proc.page_insert(uva, pg, p_pg, PTE_U, true)
 	var args [][]uint8
 	for _, str := range sargs {
@@ -1668,33 +1666,6 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 		writen(vdata, 8, i*8, ptr)
 	}
 	return len(args), argstart, true
-}
-
-func bloataddr(p *proc_t, npages int) {
-	fmt.Printf("pyumping up\n")
-	pn := rand.Intn(0x518000000)
-	start := pn << 12
-	start += USERMIN
-	pg, p_pg := pg_new(p.pages)
-	add := 0
-	for i := 0; i < npages; i++ {
-		//pg, p_pg := pg_new(p.pages)
-		for {
-			addr := start + add + i*PGSIZE
-
-			if _, ok := p.upages[addr]; ok {
-				add += PGSIZE
-				fmt.Printf("@")
-				continue
-			}
-			p.page_insert(addr, pg, p_pg, PTE_U | PTE_W, true)
-			break
-		}
-	}
-	sz := len(p.pages)
-	sz *= 1 << 12
-	sz /= 1 << 20
-	fmt.Printf("app mem size: %vMB (%v pages)\n", sz, len(p.pages))
 }
 
 func sys_exit(proc *proc_t, tid tid_t, status int) {
@@ -2220,7 +2191,7 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 	for i := 0; i < sz; i += PGSIZE {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
-		pg, p_pg := pg_new(proc.pages)
+		pg, p_pg := pg_new()
 		proc.page_insert(hdr.vaddr + i, pg, p_pg, perms, true)
 		if i < hdr.filesz {
 			bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
@@ -2278,7 +2249,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 			for i := 0; i < l; i += PGSIZE {
 				// allocator zeros objects, so tbss is already
 				// initialized.
-				pg, p_pg := pg_new(proc.pages)
+				pg, p_pg := pg_new()
 				proc.page_insert(ret + i, pg, p_pg, perms, true)
 				src, ok := proc.userdmap8_inner(tlsaddr + i)
 				if !ok {

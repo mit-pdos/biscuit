@@ -272,7 +272,7 @@ func trap_pgfault(ts *trapstore_t) {
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
 
-	pte := pmap_walk(proc.pmap, fa, false, 0, nil)
+	pte := pmap_lookup(proc.pmap, fa)
 	if pte != nil {
 		cow := *pte & PTE_COW != 0
 		wascow := *pte & PTE_WASCOW != 0
@@ -466,17 +466,16 @@ type proc_t struct {
 	// waitinfo for threads
 	twaiti		waitinfo_t
 
-	// all pages
-	pages		map[int]*[512]int
-	// user va -> physical mapping
-	// XXX maybe this should go away since, for writes, we must walk the
-	// user pmap to determine if the destination page is COW anyway.
-	upages		map[int]int
+	// memory pages: virtual pgn -> kernel va for pg
+	pages		pgtracker_t
+
+	// pmap pages
+	pmpages		*pmtracker_t
 
 	mmapi		int
 	pmap		*[512]int
 	p_pmap		int
-	// lock for pages, upages, pmap, and p_pmap
+	// lock for pages, pmpages, pmap, and p_pmap
 	pgfl		sync.Mutex
 	pgfltaken	bool
 
@@ -532,8 +531,9 @@ func proc_new(name string, cwd *file_t) *proc_t {
 
 	ret.name = name
 	ret.pid = np
-	ret.pages = make(map[int]*[512]int)
-	ret.upages = make(map[int]int)
+	ret.pages = pgtracker_t{}
+	ret.pmpages = &pmtracker_t{}
+	ret.pmpages.pminit()
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
 	ret.fdstart = 3
 	ret.cwd = cwd
@@ -597,7 +597,7 @@ func (p *proc_t) cowfault(userva int) {
 		return
 	}
 	p.lockassert_pmap()
-	pte := pmap_walk(p.pmap, userva, false, 0, p.pages)
+	pte := pmap_lookup(p.pmap, userva)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_COW == 0 {
 		return
 	}
@@ -667,47 +667,36 @@ func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
 func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 	p.lockassert_pmap()
-	uva := va & PGMASK
-	pte := pmap_walk(p.pmap, va, true, PTE_U | PTE_W, p.pages)
+	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, p.pmpages)
 	ninval := false
+	pgn := mkpgn(va)
 	if pte != nil && *pte & PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
 		}
 		ninval = true
-		// remove from tracking maps
-		p_rem := *pte & PTE_ADDR
-		if _, ok := p.pages[p_rem]; !ok {
+		if _, ok := p.pages[pgn]; !ok {
 			panic("kern va not tracked")
 		}
-		if _, ok := p.upages[uva]; !ok {
-			panic("user va not tracked")
-		}
-		delete(p.pages, p_rem)
-		// upages entry updated below
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
 		invlpg(va)
 	}
 
-	// make sure page is tracked if shared (ie the page was not allocated
-	// via pg_new with p's "pages")
-	p.pages[p_pg] = pg
-	p.upages[uva] = p_pg
+	// make sure page is tracked if shared
+	p.pages[pgn] = pg
 }
 
 func (p *proc_t) page_remove(va int) bool {
 	p.lockassert_pmap()
 	remmed := false
-	pte := pmap_walk(p.pmap, va, false, 0, nil)
+	pte := pmap_lookup(p.pmap, va)
 	if pte != nil && *pte & PTE_P != 0 {
-		p_pa := *pte & PTE_ADDR
 		*pte = 0
 		invlpg(va)
-		delete(p.pages, p_pa)
-		uva := va & PGMASK
-		delete(p.upages, uva)
+		pgn := mkpgn(va)
+		delete(p.pages, pgn)
 		remmed = true
 	}
 	return remmed
@@ -874,13 +863,14 @@ func (p *proc_t) lockassert_pmap() {
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
 func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
 	p.lockassert_pmap()
-	uva := va & PGMASK
 	voff := va & PGOFFSET
-	phys, ok := p.upages[uva]
+	pgn := mkpgn(va)
+	pg, ok := p.pages[pgn]
 	if !ok {
 		return nil, false
 	}
-	return dmap8(phys + voff), true
+	bpg := (*[PGSIZE]uint8)(unsafe.Pointer(pg))
+	return bpg[voff:], true
 }
 
 func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
@@ -892,12 +882,12 @@ func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
 // caller must have the vm lock
 func (p *proc_t) userdmap_inner(va int) (*[512]int, bool) {
 	p.lockassert_pmap()
-	uva := va & PGMASK
-	phys, ok := p.upages[uva]
+	pgn := mkpgn(va)
+	pg, ok := p.pages[pgn]
 	if !ok {
 		return nil, false
 	}
-	return dmap(phys), true
+	return pg, true
 }
 
 // like userdmap8, but returns a pointer to the page
@@ -916,9 +906,8 @@ func (p *proc_t) usermapped(va, n int) bool {
 	}
 	end := roundup(va + n, PGSIZE)
 	for i := rounddown(va, PGSIZE); i < end; i += PGSIZE {
-		pn := i & PGMASK
-		_, ok := p.upages[pn]
-		if !ok {
+		pte := pmap_lookup(p.pmap, i)
+		if pte == nil || *pte & PTE_P == 0 {
 			return false
 		}
 	}
@@ -1093,8 +1082,7 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	for startva < 256 << 39 {
 		found := true
 		for i := 0; i < len; i += PGSIZE {
-			pte := pmap_walk(p.pmap, startva + i, false, 0,
-			    nil)
+			pte := pmap_lookup(p.pmap, startva + i)
 			if pte != nil && *pte & PTE_P != 0 {
 				found = false
 				startva += i + PGSIZE
@@ -1357,7 +1345,7 @@ func cpus_start(aplim int) {
 	// appears someone already used a STARTUP IPI; probably the BIOS).
 
 	lapaddr := 0xfee00000
-	pte := pmap_walk(kpmap(), lapaddr, false, 0, nil)
+	pte := pmap_lookup(kpmap(), lapaddr)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}
@@ -1703,7 +1691,7 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 	runtime.Tlbadmit(p_pmap, othercpus, va, pgcount)
 
 	lapaddr := 0xfee00000
-	pte := pmap_walk(kpmap(), lapaddr, false, 0, nil)
+	pte := pmap_lookup(kpmap(), lapaddr)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}

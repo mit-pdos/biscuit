@@ -14,21 +14,58 @@ const PTE_PS     int = 1 << 7
 const PTE_COW    int = 1 << 9
 const PTE_WASCOW int = 1 << 10
 const PGSIZE     int = 1 << 12
+const PGSHIFT    uint = 12
 const PGOFFSET   int = 0xfff
 const PGMASK     int = ^(PGOFFSET)
 const PTE_ADDR   int = PGMASK
 const PTE_FLAGS  int = 0x1f	// only masks P, W, U, PWT, and PCD
-
 
 const VREC      int = 0x42
 const VDIRECT   int = 0x44
 const VEND      int = 0x50
 const VUSER     int = 0x59
 
+// pgn_t is the page number of a virtual address
+type pgn_t uint
+
+func mkpgn(va int) pgn_t {
+	return pgn_t(uint(va) >> PGSHIFT)
+}
+
+// these types holds references to pages so the GC doesn't reclaim them -- the
+// GC cannot find them without our help because it doesn't know how to trace a
+// page map since references are physical addresses
+
+// tracks pmap pages; pmap pages are never removed once added
+type pmtracker_t struct {
+	pms	[]*[512]int
+}
+
+func (pmt *pmtracker_t) pminit() {
+	pmt.pms = make([]*[512]int, 0, 30)
+}
+
+func (pmt *pmtracker_t) pmadd(pm *[512]int) {
+	pmt.pms = append(pmt.pms, pm)
+}
+
+// tracks memory pages
+type pgtracker_t map[pgn_t]*[512]int
+
 // tracks all pages allocated by go internally by the kernel such as pmap pages
-// allocated by go (not the bootloader/runtime)
-var allpages = map[int]*[512]int{}
-var allplock = sync.Mutex{}
+// allocated by the kernel (not the bootloader/runtime)
+var kplock = sync.Mutex{}
+var kpages = pgtracker_t{}
+var kpmpages = &pmtracker_t{}
+
+func kpgadd(pg *[512]int) {
+	va := uintptr(unsafe.Pointer(pg))
+	pgn := pgn_t(va >> 12)
+	if _, ok := kpages[pgn]; ok {
+		panic("page already in kpages")
+	}
+	kpages[pgn] = pg
+}
 
 func shl(c uint) uint {
 	return 12 + 9 * c
@@ -76,27 +113,21 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 }
 
 // cannot use pg_new until after dmap_init has been called (pmap_walk depends
-// on direct map)
-func pg_new(ptracker map[int]*[512]int) (*[512]int, int) {
+// on direct map). the caller should almost always call proc_t.page_insert()
+// after pg_new().
+func pg_new() (*[512]int, int) {
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
-	if ptn & (PGSIZE - 1) != 0 {
+	if ptn & PGOFFSET != 0 {
 		panic("page not aligned")
 	}
 	// pmap walk for every allocation -- a cost of allocating pages with
 	// the garbage collector.
-	pte := pmap_walk(kpmap(), int(uintptr(unsafe.Pointer(pt))),
-	    false, 0, nil)
+	pte := pmap_lookup(kpmap(), int(uintptr(unsafe.Pointer(pt))))
 	if pte == nil {
 		panic("must be mapped")
 	}
 	physaddr := *pte & PTE_ADDR
-
-	if _, ok := ptracker[physaddr]; ok {
-		panic("page already tracked")
-	}
-	ptracker[physaddr] = pt
-
 	return pt, physaddr
 }
 
@@ -111,6 +142,8 @@ func kpmap() *[512]int {
 
 // installs a direct map for 512G of physical memory via the recursive mapping
 func dmap_init() {
+	kpmpages.pminit()
+
 	// the default cpu qemu uses for x86_64 supports 1GB pages, but
 	// doesn't report it in cpuid 0x80000001... i wonder why.
 	_, _, _, edx  := runtime.Cpuid(0x80000001, 0)
@@ -121,20 +154,13 @@ func dmap_init() {
 		panic("dmap slot taken")
 	}
 
-	apadd := func(kva *[512]int, phys int) {
-		if _, ok := allpages[phys]; ok {
-			panic("page already in allpages")
-		}
-		allpages[phys] = kva
-	}
-
 	pdpt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pdpt)))
-	if ptn & ((1 << 12) - 1) != 0 {
+	if ptn & PGOFFSET != 0 {
 		panic("page table not aligned")
 	}
 	p_pdpt := runtime.Vtop(pdpt)
-	apadd(pdpt, p_pdpt)
+	kpgadd(pdpt)
 
 	*dpte = p_pdpt | PTE_P | PTE_W
 
@@ -156,7 +182,7 @@ func dmap_init() {
 	for i := range pdpt {
 		pd := new([512]int)
 		p_pd := runtime.Vtop(pd)
-		apadd(pd, p_pd)
+		kpgadd(pd)
 		for j := range pd {
 			pd[j] = i*pdptsz + j*size | PTE_P | PTE_W | PTE_PS
 		}
@@ -194,8 +220,8 @@ func pe2pg(pe int) *[512]int {
 }
 
 // requires direct mapping
-func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
-    ptracker map[int]*[512]int) *int {
+func _pmap_walk(pml4 *[512]int, v int, create bool, perms int,
+    pmt *pmtracker_t) *int {
 	vn := uint(uintptr(v))
 	l4b  := (vn >> (12 + 9*3)) & 0x1ff
 	pdpb := (vn >> (12 + 9*2)) & 0x1ff
@@ -210,7 +236,8 @@ func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	}
 
 	instpg := func(pg *[512]int, idx uint) int {
-		_, p_np := pg_new(ptracker)
+		np, p_np := pg_new()
+		pmt.pmadd(np)
 		npte :=  p_np | perms | PTE_P
 		pg[idx] = npte
 		return npte
@@ -251,8 +278,18 @@ func pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	return &next[ptb]
 }
 
+func pmap_walk(pml4 *[512]int, v int, perms int, pmt *pmtracker_t) *int {
+	return _pmap_walk(pml4, v, true, perms, pmt)
+}
+
+var _nilpmt	= &pmtracker_t{}
+
+func pmap_lookup(pml4 *[512]int, v int) *int {
+	return _pmap_walk(pml4, v, false, 0, _nilpmt)
+}
+
 func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
-    depth int, ptracker map[int]*[512]int) bool {
+    depth int, pmt *pmtracker_t) bool {
 
 	doinval := false
 	for i, c := range src {
@@ -285,11 +322,12 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 			continue
 		}
 		// otherwise, recursively copy
-		np, p_np := pg_new(ptracker)
+		np, p_np := pg_new()
+		pmt.pmadd(np)
 		perms := c & PTE_FLAGS
 		dst[i] = p_np | perms
 		nsrc := pe2pg(c)
-		if copy_pmap1(ptemod, np, nsrc, depth - 1, ptracker) {
+		if copy_pmap1(ptemod, np, nsrc, depth - 1, pmt) {
 			doinval = true
 		}
 	}
@@ -301,15 +339,16 @@ func copy_pmap1(ptemod func(int) (int, int), dst *[512]int, src *[512]int,
 // original PTE as an argument and returns two values: new PTE for the pmap
 // being copied and PTE for the new pmap.
 func copy_pmap(ptemod func(int) (int, int), pm *[512]int,
-    ptracker map[int]*[512]int) (*[512]int, int, bool) {
-	npm, p_npm := pg_new(ptracker)
-	doinval := copy_pmap1(ptemod, npm, pm, 4, ptracker)
+    pmt *pmtracker_t) (*[512]int, int, bool) {
+	npm, p_npm := pg_new()
+	pmt.pmadd(npm)
+	doinval := copy_pmap1(ptemod, npm, pm, 4, pmt)
 	npm[VREC] = p_npm | PTE_P | PTE_W
 	return npm, p_npm, doinval
 }
 
 func fork_pmap1(dst *[512]int, src *[512]int, depth int,
-    ptracker map[int]*[512]int, ctracker map[int]*[512]int) bool {
+    pmt *pmtracker_t) bool {
 
 	doinval := false
 	for i, c := range src {
@@ -323,12 +362,6 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 				v |= PTE_COW
 				src[i] = v
 				dst[i] = v
-				phys := v & PTE_ADDR
-				pgva, ok := ptracker[phys]
-				if !ok {
-					panic("user pg not tracked")
-				}
-				ctracker[phys] = pgva
 			} else {
 				dst[i] = c
 			}
@@ -345,11 +378,12 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 			continue
 		}
 		// otherwise, recursively copy
-		np, p_np := pg_new(ctracker)
+		np, p_np := pg_new()
+		pmt.pmadd(np)
 		perms := c & PTE_FLAGS
 		dst[i] = p_np | perms
 		nsrc := pe2pg(c)
-		if fork_pmap1(np, nsrc, depth - 1, ptracker, ctracker) {
+		if fork_pmap1(np, nsrc, depth - 1, pmt) {
 			doinval = true
 		}
 	}
@@ -357,11 +391,10 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 	return doinval
 }
 
-func fork_pmap(pm *[512]int,
-    ptracker map[int]*[512]int,
-    ctracker map[int]*[512]int) (*[512]int, int, bool) {
-	npm, p_npm := pg_new(ctracker)
-	doinval := fork_pmap1(npm, pm, 4, ptracker, ctracker)
+func fork_pmap(pm *[512]int, pmt *pmtracker_t) (*[512]int, int, bool) {
+	npm, p_npm := pg_new()
+	pmt.pmadd(npm)
+	doinval := fork_pmap1(npm, pm, 4, pmt)
 	npm[VREC] = p_npm | PTE_P | PTE_W
 	return npm, p_npm, doinval
 }
@@ -369,6 +402,7 @@ func fork_pmap(pm *[512]int,
 func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
     mywg *sync.WaitGroup, pch chan *map[int]*[512]int,
     convch chan *map[int]bool) {
+	panic("update")
 	pt := make(map[int]*[512]int)
 	convs := make(map[int]bool)
 	nwg := sync.WaitGroup{}
@@ -400,7 +434,7 @@ func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
 			dst[i] = pte
 			continue
 		}
-		np, p_np := pg_new(pt)
+		np, p_np := pg_new()
 		perms := pte & PTE_FLAGS
 		dst[i] = p_np | perms
 		nsrc := pe2pg(pte)
@@ -416,10 +450,11 @@ func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,
 
 func pmap_copy_par(src *[512]int, pt map[int]*[512]int,
     ppt map[int]*[512]int) (*[512]int, int) {
+	panic("update")
 	pch := make(chan *map[int]*[512]int, 512)
 	convch := make(chan *map[int]bool, 512)
 	done := make(chan bool)
-	dst, p_dst := pg_new(pt)
+	dst, p_dst := pg_new()
 
 	go func() {
 		d1 := false
@@ -511,14 +546,18 @@ func pmap_iter1(ptef func(int, *int), pm *[512]int, depth int, va int,
 
 func pmap_iter(ptef func(int, *int), pm *[512]int, va int) {
 	// XXX pmap iter depth is between [0, 3], copy_pmap is [1, 4]...
+	panic("update")
 	pmap_iter1(ptef, pm, 3, va, true)
 }
-// allocates a page tracked by allpages and maps it at va
+
+// allocates a page tracked by kpages and maps it at va. only used during AP
+// bootup.
 func kmalloc(va int, perms int) {
-	allplock.Lock()
-	defer allplock.Unlock()
-	_, p_pg := pg_new(allpages)
-	pte := pmap_walk(kpmap(), va, true, perms, allpages)
+	kplock.Lock()
+	defer kplock.Unlock()
+	pg, p_pg := pg_new()
+	kpgadd(pg)
+	pte := pmap_walk(kpmap(), va, perms, kpmpages)
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("page already mapped %#x", va))
 	}
@@ -529,7 +568,7 @@ func is_mapped(pmap *[512]int, va int, size int) bool {
 	p := rounddown(va, PGSIZE)
 	end := roundup(va + size, PGSIZE)
 	for ; p < end; p += PGSIZE {
-		pte := pmap_walk(pmap, p, false, 0, nil)
+		pte := pmap_lookup(pmap, p)
 		if pte == nil || *pte & PTE_P == 0 {
 			return false
 		}
@@ -592,7 +631,7 @@ func assert_no_phys(pmap *[512]int, phys int) {
 }
 
 func assert_no_va_map(pmap *[512]int, va int) {
-	pte := pmap_walk(pmap, va, false, 0, nil)
+	pte := pmap_lookup(pmap, va)
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("va %#x is mapped", va))
 	}
