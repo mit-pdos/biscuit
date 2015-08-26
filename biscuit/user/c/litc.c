@@ -357,11 +357,7 @@ unlink(const char *path)
 int
 wait(int *status)
 {
-	int _status;
-	int ret = syscall(WAIT_ANY, SA(&_status), 0, 0, 0, SYS_WAIT4);
-	if (status)
-		*status = _status;
-	return ret;
+	return syscall(WAIT_ANY, SA(status), 0, 0, 0, SYS_WAIT4);
 }
 
 int
@@ -373,11 +369,8 @@ waitpid(int pid, int *status, int options)
 int
 wait4(int pid, int *status, int options, struct rusage *r)
 {
-	int _status;
-	int ret = syscall(pid, SA(&_status), SA(options), SA(r), 0,
+	int ret = syscall(pid, SA(status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
-	if (status)
-		*status = _status;
 	return ret;
 }
 
@@ -437,11 +430,7 @@ thrwait(int tid, long *status)
 {
 	if (tid <= 0)
 		errx(-1, "thrwait: bad tid %d", tid);
-
-	long _status;
-	int ret = syscall(SA(tid), SA(&_status), 0, 0, 1, SYS_WAIT4);
-	if (status)
-		*status = _status;
+	int ret = syscall(SA(tid), SA(status), 0, 0, 1, SYS_WAIT4);
 	return ret;
 }
 

@@ -1707,17 +1707,27 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
 		return resp.err
 	}
 	if threadwait == 0 {
-		proc.userwriten(statusp, 4, resp.status)
+		ok :=  true
+		if statusp != 0 {
+			ok = proc.userwriten(statusp, 4, resp.status)
+		}
 		// update total child rusage
 		proc.catime.add(&resp.atime)
 		if rusagep != 0 {
 			ru := resp.atime.to_rusage()
 			if !proc.usercopy(ru, rusagep) {
+				ok = false
+			}
+		}
+		if !ok {
+			return -EFAULT
+		}
+	} else {
+		if statusp != 0 {
+			if !proc.userwriten(statusp, 8, resp.status) {
 				return -EFAULT
 			}
 		}
-	} else {
-		proc.userwriten(statusp, 8, resp.status)
 	}
 	return resp.pid
 }
