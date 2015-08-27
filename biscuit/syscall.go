@@ -310,14 +310,15 @@ var fdwriters = map[ftype_t]func(*userbuf_t, *file_t, int, bool) (int, int) {
 	PIPE : pipe_write,
 }
 
+var _devs = map[int]func(*file_t, int) int {
+	D_CONSOLE: func (f *file_t, perms int) int {
+			return 0
+		   },
+}
+
 var fdclosers = map[ftype_t]func(*file_t, int) int {
 	DEV : func(f *file_t, perms int) int {
-		dm := map[int]func(*file_t, int) int {
-			D_CONSOLE:
-			    func (f *file_t, perms int) int {
-				    return 0
-			    },
-		}
+		dm := _devs
 		fn, ok := dm[f.dev.major]
 		if !ok {
 			panic("bad device major")
