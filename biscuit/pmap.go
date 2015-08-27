@@ -188,7 +188,24 @@ func dmap_init() {
 		}
 		pdpt[i] = p_pd | PTE_P | PTE_W
 	}
+
+	// fill in kent, the list of kernel pml4 entries
+	cnt := 0
+	for i, e := range kpmap() {
+		if e & PTE_U == 0 && e & PTE_P != 0 {
+			cnt++
+			ent := kent_t{i, e}
+			kents = append(kents, ent)
+		}
+	}
 }
+
+type kent_t struct {
+	pml4slot	int
+	entry		int
+}
+
+var kents = make([]kent_t, 0, 5)
 
 var _vdirect	= VDIRECT << 39
 
@@ -358,6 +375,8 @@ func fork_pmap1(dst *[512]int, src *[512]int, depth int,
 		if depth == 1 {
 			// copy ptes
 			if c & PTE_U != 0 {
+				// XXX: sets readable pages writable!
+				// copies dirty bits (and others) too...
 				v := c &^ (PTE_W | PTE_WASCOW)
 				v |= PTE_COW
 				src[i] = v

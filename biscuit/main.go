@@ -867,6 +867,48 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	return ret, ok
 }
 
+// marks parent's PTEs COW and maps the pages in the child's pmap. returns
+// whether or not a pte for the parent was changed (i.e. whether a TLB
+// shootdown is necessary)
+func (parent *proc_t) vm_fork(child *proc_t) bool {
+	// first add kernel pml4 entries
+	for _, e := range kents {
+		child.pmap[e.pml4slot] = e.entry
+	}
+	// recursive mapping
+	child.pmap[VREC] = child.p_pmap | PTE_P | PTE_W
+
+	doflush := false
+	// XXX two pmap walks for each page will probably perform poorly for
+	// large address spaces. instead, we should keep track of contiguous
+	// ranges of mapped memory and copy each range directly.
+	for pgn, pg := range parent.pages {
+		child.pages[pgn] = pg
+		va := int(pgn << PGSHIFT)
+		ppte := pmap_lookup(parent.pmap, va)
+		if ppte == nil || *ppte & PTE_P == 0 {
+			panic("wut")
+		}
+		cpte := pmap_walk(child.pmap, va, PTE_U | PTE_W, child.pmpages)
+		if *ppte & PTE_W == 0 {
+			*cpte = *ppte
+			continue
+		}
+
+		// writable
+		old := *ppte
+		v := old
+		v &^= (PTE_W | PTE_WASCOW)
+		v |= PTE_COW
+		*ppte = v
+		*cpte = v
+		if old != v {
+			doflush = true
+		}
+	}
+	return doflush
+}
+
 func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
 	// make pid/tid pair
 	ptid := p.pid << 32

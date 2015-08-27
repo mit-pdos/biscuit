@@ -1382,12 +1382,12 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		parent.fdl.Unlock()
 
 		parent.Lock_pmap()
-		pmap, p_pmap, doflush := fork_pmap(parent.pmap, child.pmpages)
 
-		// copy userva->kva mappings too
-		for k, v := range parent.pages {
-			child.pages[k] = v
-		}
+		// fork parent address space
+		pmap, p_pmap := pg_new()
+		child.pmap = pmap
+		child.p_pmap = p_pmap
+		doflush := parent.vm_fork(child)
 
 		// flush all ptes now marked COW
 		if doflush {
@@ -1396,8 +1396,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		}
 		parent.Unlock_pmap()
 
-		child.pmap = pmap
-		child.p_pmap = p_pmap
 		childtid = child.tid0
 		ret = child.pid
 	} else {
