@@ -1527,11 +1527,19 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	op_pmap := proc.p_pmap
 	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pmpages)
 
+	restore := func() {
+		proc.pages = opages
+		proc.pmpages = opmpages
+		proc.pmap = opmap
+		proc.p_pmap = op_pmap
+	}
+
 	// load binary image -- get first block of file
 	n := proc.atime.now()
 	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
+		restore()
 		return err
 	}
 	defer func() {
@@ -1547,6 +1555,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	ret, err := fs_read(ub, file, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
+		restore()
 		return err
 	}
 	if ret < len(hdata) {
@@ -1557,6 +1566,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	elfhdr := &elf_t{hdata}
 	ok := elfhdr.sanity()
 	if !ok {
+		restore()
 		return -EPERM
 	}
 	// elf_load() will create two copies of TLS section: one for the fresh
@@ -1577,10 +1587,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	argc, argv, ok := insertargs(proc, args)
 	if !ok {
 		// restore old process
-		proc.pages = opages
-		proc.pmpages = opmpages
-		proc.pmap = opmap
-		proc.p_pmap = op_pmap
+		restore()
 		return -EINVAL
 	}
 
