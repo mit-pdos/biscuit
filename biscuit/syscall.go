@@ -193,7 +193,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		status |= EXITED
 		sys_exit(p, tid, status)
 	case SYS_WAIT4:
-		ret = sys_wait4(p, a1, a2, a3, a4, a5)
+		ret = sys_wait4(p, tid, a1, a2, a3, a4, a5)
 	case SYS_KILL:
 		ret = sys_kill(p, a1, a2)
 	case SYS_CHDIR:
@@ -1361,7 +1361,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	mkproc := flags & FORK_PROCESS != 0
 	var child *proc_t
 	var childtid tid_t
-	var childch chan parmsg_t
 	var ret int
 
 	// copy parents trap frame
@@ -1370,9 +1369,10 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 	if mkproc {
 
-		child = proc_new(fmt.Sprintf("%s's child", parent.name),
+		child = proc_new(parent.name + " [child]",
 		    parent.cwd)
-		child.pwaiti = &parent.waiti
+		child.pwait = &parent.mywait
+		parent.mywait.start_proc(child.pid)
 
 		// copy fd table
 		parent.fdl.Lock()
@@ -1400,7 +1400,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		child.p_pmap = p_pmap
 		childtid = child.tid0
 		ret = child.pid
-		childch = parent.waiti.getch
 	} else {
 		// XXX XXX XXX need to copy FPU state from parent thread to
 		// child thread
@@ -1427,7 +1426,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		child = parent
 		childtid = parent.tid_new()
-		childch = child.twaiti.getch
+		parent.mywait.start_thread(childtid)
 
 		v := int(childtid)
 		chtf[TF_RSP] = stack
@@ -1435,15 +1434,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 			panic("unexpected unmap")
 		}
 		ret = v
-	}
-
-	// inform wait daemon of new process/thread
-	var pm parmsg_t
-	pm.init(ret, true)
-	childch <- pm
-	resp := <- pm.ack
-	if resp.err != 0 {
-		panic("add child")
 	}
 
 	chtf[TF_RAX] = 0
@@ -1689,26 +1679,19 @@ func sys_threxit(proc *proc_t, tid tid_t, status int) {
 	proc.thread_dead(tid, status, false)
 }
 
-func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
+func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
     threadwait int) int {
-	wi := proc.waiti
-
 	if wpid == WAIT_MYPGRP {
 		panic("no imp")
 	}
 
-	ch := wi.getch
-	if threadwait != 0 {
-		ch = proc.twaiti.getch
+	// no waiting for yourself!
+	if tid == tid_t(wpid) {
+		return -ECHILD
 	}
 
-	var pm parmsg_t
-	pm.init(wpid, false)
-
-	ch <- pm
-
 	n := proc.atime.now()
-	resp := <- pm.ack
+	resp := proc.mywait.reap(wpid)
 	proc.atime.sleep_time(n)
 
 	if resp.err != 0 {
@@ -1738,186 +1721,6 @@ func sys_wait4(proc *proc_t, wpid, statusp, options, rusagep,
 		}
 	}
 	return resp.pid
-}
-
-type childmsg_t struct {
-	pid	int
-	status	int
-	err	int
-	atime	accnt_t
-}
-
-type parmsg_t struct {
-	forked	bool
-	pid	int
-	ack	chan childmsg_t
-}
-
-func (pm *parmsg_t) init(pid int, forked bool) {
-	pm.pid = pid
-	pm.ack = make(chan childmsg_t)
-	pm.forked = forked
-}
-
-type waitinfo_t struct {
-	addch	chan childmsg_t
-	getch	chan parmsg_t
-}
-
-type cinfo_t struct {
-	pid	int
-	status 	int
-	dead	bool
-	atime	accnt_t
-}
-
-func (w *waitinfo_t) init() {
-	w.addch = make(chan childmsg_t)
-	w.getch = make(chan parmsg_t)
-	go w.daemon()
-}
-
-func (w *waitinfo_t) finish() {
-	close(w.getch)
-}
-
-func (w *waitinfo_t) daemon() {
-	add := w.addch
-	get := w.getch
-
-	childs := make(map[int]cinfo_t)
-	waiters := make(map[int][]parmsg_t)
-	anys := make([]parmsg_t, 0)
-
-	// deletes info of specified child and wakes up any threads that were
-	// 1) waiting for the same pid or 2) waiting for any pid but there are
-	// no more children
-	reapchild := func(pid int) {
-		_, ok := childs[pid]
-		if !ok {
-			panic("no such child")
-		}
-		delete(childs, pid)
-		pms, ok := waiters[pid]
-		if ok {
-			for _, pm := range pms {
-				pm.ack <- childmsg_t{err: -ECHILD}
-			}
-			delete(waiters, pid)
-		}
-		if len(childs) == 0 {
-			// no more children to wait for
-			for _, pm := range anys {
-				pm.ack <- childmsg_t{err: -ECHILD}
-			}
-			anys = anys[0:0]
-			for pid, pms := range waiters {
-				for _, pm := range pms {
-					pm.ack <- childmsg_t{err: -ECHILD}
-				}
-				delete(waiters, pid)
-			}
-		}
-	}
-
-	addwaiter := func(pm *parmsg_t) {
-		if pms, ok := waiters[pm.pid]; ok {
-			waiters[pm.pid] = append(pms, *pm)
-		} else {
-			waiters[pm.pid] = []parmsg_t{*pm}
-		}
-	}
-
-	addanys := func(pm *parmsg_t) {
-		anys = append(anys, *pm)
-	}
-
-	done := false
-	for !done {
-		select {
-		case cm := <- add:
-			// child has terminated
-			ci, ok := childs[cm.pid]
-			if !ok || ci.dead {
-				panic("what")
-			}
-			ci.dead = true
-			ci.status = cm.status
-			ci.atime = cm.atime
-			childs[cm.pid] = ci
-
-		case pm, ok := <- get:
-			if !ok {
-				// parent terminated, no more waits or forks
-				if len(anys) != 0 || len(waiters) != 0 {
-					panic("threads?")
-				}
-				done = true
-				break
-			}
-			// new child spawned?
-			if pm.forked {
-				var nci cinfo_t
-				nci.pid = pm.pid
-				nci.dead = false
-				childs[pm.pid] = nci
-				pm.ack <- childmsg_t{}
-				break
-			}
-
-			// get status of child
-			if len(childs) == 0 {
-				// no unreaped children
-				pm.ack <- childmsg_t{err: -ECHILD}
-				break
-			}
-
-			if pm.pid == WAIT_ANY {
-				addanys(&pm)
-				break
-			}
-
-			_, ok = childs[pm.pid]
-			if !ok {
-				// no such child or already waited for
-				pm.ack <- childmsg_t{err: -ECHILD}
-				break
-			}
-			addwaiter(&pm)
-		}
-
-		// check for new statuses
-		var cm childmsg_t
-		for pid, ci := range childs {
-			if !ci.dead {
-				continue
-			}
-			cm.pid = ci.pid
-			cm.status = ci.status
-			cm.atime = ci.atime
-			pms, ok := waiters[pid]
-			if ok {
-				pm := pms[0]
-				pm.ack <- cm
-				rest := pms[1:]
-				waiters[pid] = rest
-				reapchild(pid)
-			} else if len(anys) > 0 {
-				// wake up someone waiting for any pid
-				pm := anys[0]
-				anys = anys[1:]
-				pm.ack <- cm
-				reapchild(pid)
-			}
-		}
-	}
-
-	// parent exited, drain remaining statuses
-	for _, ci := range childs {
-		if !ci.dead {
-			<- add
-		}
-	}
 }
 
 func sys_kill(proc *proc_t, pid, sig int) int {

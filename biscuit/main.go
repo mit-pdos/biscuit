@@ -439,6 +439,232 @@ func (a *accnt_t) to_rusage() []uint8 {
 	return ret
 }
 
+// requirements for wait* syscalls (used for processes and threads):
+// - wait for a pid that is not my child must fail
+// - only one wait for a specific pid may succeed; others must fail
+// - wait when there are no children must fail
+// - wait for a process should not return thread info and vice versa
+type waitst_t struct {
+	pid		int
+	err		int
+	status		int
+	atime		accnt_t
+}
+
+type waitent_t struct {
+	waiter		chan waitst_t
+	wstatus		waitst_t
+	// we need this flag so that WAIT_ANY can differentiate threads from
+	// procs when looking for a proc that has already terminated
+	isproc		bool
+	dead		bool
+}
+
+type wait_t struct {
+	sync.Mutex
+	ids		map[int]waitent_t
+	// number of child processes (not threads)
+	childs		int
+	_anyhints	[]int
+	anyhints	[]int
+	anys		chan waitst_t
+	wakeany		int
+}
+
+func (w *wait_t) wait_init() {
+	w.ids = make(map[int]waitent_t, 10)
+	w.anys = make(chan waitst_t)
+	w._anyhints = make([]int, 0, 10)
+	w.anyhints = w._anyhints
+	w.wakeany = 0
+	w.childs = 0
+}
+
+func (w *wait_t) _pop_hint() (int, bool) {
+	if len(w.anyhints) == 0 {
+		return 0, false
+	}
+	ret := w.anyhints[0]
+	w.anyhints = w.anyhints[1:]
+	if len(w.anyhints) == 0 {
+		w.anyhints = w._anyhints
+	}
+	return ret, true
+}
+
+func (w *wait_t) _push_hint(id int) {
+	w.anyhints = append(w.anyhints, id)
+}
+
+func (w *wait_t) _start(id int, isproc bool) {
+	w.Lock()
+
+	ent, ok := w.ids[id]
+	if ok {
+		panic("two start for same id")
+	}
+	// put zero value
+	if isproc {
+		ent.isproc = true
+		w.childs++
+	}
+	w.ids[id] = ent
+	w.Unlock()
+}
+
+// caller must have the wait_t locked. returns the number of WAIT_ANYs that
+// need to be woken up.
+func (w *wait_t) _orphancount() int {
+	ret := 0
+	// wakeup WAIT_ANYs with error if there are no procs
+	if w.childs == 0 && w.wakeany != 0 {
+		ret = w.wakeany
+		w.wakeany = 0
+	}
+	return ret
+}
+
+func (w *wait_t) _orphanwake(times int) {
+	if times > 0 {
+		fail := waitst_t{err: -ECHILD}
+		for ; times > 0; times-- {
+			w.anys <- fail
+		}
+	}
+}
+
+// id can be a pid or a tid
+func (w *wait_t) put(id, status int, atime *accnt_t) {
+	w.Lock()
+
+	ent, ok := w.ids[id]
+	if !ok {
+		panic("put without start")
+	}
+
+	ent.wstatus.pid = id
+	ent.wstatus.err = 0
+	ent.wstatus.status = status
+	if atime != nil {
+		ent.wstatus.atime.userns = atime.userns
+		ent.wstatus.atime.sysns = atime.sysns
+	}
+	ent.dead = true
+
+	// wakeup someone waiting for this pid
+	var wakechan chan waitst_t
+	if ent.waiter != nil {
+		wakechan = ent.waiter
+	// see if there are WAIT_ANYs
+	} else if ent.isproc && w.wakeany != 0 {
+		wakechan = w.anys
+		w.wakeany--
+		if w.wakeany < 0 {
+			panic("nyet!")
+		}
+	} else {
+		// no waiters, add to map so someone can later reap
+		w.ids[id] = ent
+		if ent.isproc {
+			w._push_hint(id)
+		}
+	}
+
+	if wakechan != nil {
+		delete(w.ids, id)
+		if ent.isproc {
+			w.childs--
+		}
+	}
+	owake := w._orphancount()
+
+	w.Unlock()
+
+	if wakechan != nil {
+		wakechan <- ent.wstatus
+	}
+
+	w._orphanwake(owake)
+}
+
+func (w *wait_t) reap(id int) waitst_t {
+	if id == WAIT_MYPGRP {
+		panic("no imp")
+	}
+
+	w.Lock()
+
+	var ret waitst_t
+	var waitchan chan waitst_t
+	var owake int
+
+	if id == WAIT_ANY {
+		if w.childs < 0 {
+			panic("neg childs")
+		}
+		if w.childs == 0 {
+			ret.err = -ECHILD
+			goto out
+		}
+		found := false
+		for hint, ok := w._pop_hint(); ok; hint, ok = w._pop_hint() {
+			ent := w.ids[hint]
+			if ent.dead && ent.isproc {
+				ret = ent.wstatus
+				delete(w.ids, hint)
+				found = true
+				w.childs--
+				break
+			}
+		}
+		// otherwise, wait
+		if !found {
+			w.wakeany++
+			waitchan = w.anys
+		}
+	} else {
+		ent, ok := w.ids[id]
+		if !ok || ent.waiter != nil {
+			ret.err = -ECHILD
+			goto out
+		}
+		if ent.dead {
+			ret = ent.wstatus
+			delete(w.ids, id)
+			if ent.isproc {
+				w.childs--
+			}
+		} else {
+			// need to wait
+			waitchan = make(chan waitst_t)
+			ent.waiter = waitchan
+			w.ids[id] = ent
+		}
+	}
+	owake = w._orphancount()
+
+	w.Unlock()
+
+	if waitchan != nil {
+		ret = <- waitchan
+	}
+
+	w._orphanwake(owake)
+
+	return ret
+out:
+	w.Unlock()
+	return ret
+}
+
+func (w *wait_t) start_proc(id int) {
+	w._start(id, true)
+}
+
+func (w *wait_t) start_thread(id tid_t) {
+	w._start(int(id), false)
+}
+
 type tid_t int
 
 type threadinfo_t struct {
@@ -457,14 +683,12 @@ type proc_t struct {
 	name		string
 
 	// waitinfo for my child processes
-	waiti		waitinfo_t
+	mywait		wait_t
 	// waitinfo of my parent
-	pwaiti		*waitinfo_t
+	pwait		*wait_t
 
-	// thread waitinfo
+	// thread tids of this process
 	threadi		threadinfo_t
-	// waitinfo for threads
-	twaiti		waitinfo_t
 
 	// memory pages: virtual pgn -> kernel va for pg
 	pages		pgtracker_t
@@ -482,7 +706,6 @@ type proc_t struct {
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
 	doomed		bool
-	perished	bool
 	exitstatus	int
 
 	// XXX should be a slice
@@ -545,18 +768,11 @@ func proc_new(name string, cwd *file_t) *proc_t {
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)
 
-	ret.waiti.init()
-	ret.twaiti.init()
 	ret.threadi.init()
 	ret.tid0 = ret.tid_new()
 
-	var pm parmsg_t
-	pm.init(int(ret.tid0), true)
-	ret.twaiti.getch <- pm
-	resp := <- pm.ack
-	if resp.err != 0 {
-		panic("add child thread")
-	}
+	ret.mywait.wait_init()
+	ret.mywait.start_thread(ret.tid0)
 
 	return ret
 }
@@ -772,10 +988,9 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	}
 	p.atime.utadd(utime)
 
-	// send thread status to thread wait daemon; threads don't have rusage
-	// for now.
-	cm := childmsg_t{pid: int(tid), status: status}
-	p.twaiti.addch <- cm
+	// put thread status in this process's wait info; threads don't have
+	// rusage for now.
+	p.mywait.put(int(tid), status, nil)
 
 	runtime.Prockill(p.mkptid(tid))
 	if destroy {
@@ -820,23 +1035,23 @@ func (p *proc_t) terminate() {
 		panic("must succeed")
 	}
 
-	//fmt.Printf("%v exited with status %v\n", p.name, p.exitstatus)
 	proc_del(p.pid)
 
 	// send status to parent
-	if p.pwaiti == nil {
-		panic("pwaiti nil")
+	if p.pwait == nil {
+		panic("nil pwait")
 	}
+
 	// combine total child rusage with ours, send to parent
 	na := accnt_t{userns: p.atime.userns, sysns: p.atime.sysns}
-	na.add(&p.catime)
-	cm := childmsg_t{pid: p.pid, status: p.exitstatus, atime: na}
-	p.pwaiti.addch <- cm
+	// calling na.add() makes the compiler allocate na in the heap! escape
+	// analysis' fault?
+	//na.add(&p.catime)
+	na.userns += p.catime.userns
+	na.sysns += p.catime.sysns
 
-	// tell wait daemons to finish
-	p.waiti.finish()
-	p.twaiti.finish()
-	p.perished = true
+	// put process exit status to parent's wait info
+	p.pwait.put(p.pid, p.exitstatus, &na)
 }
 
 // XXX these can probably go away since user processes share kernel pmaps
