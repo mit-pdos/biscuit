@@ -1381,13 +1381,14 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		}
 		parent.fdl.Unlock()
 
-		parent.Lock_pmap()
 
 		// fork parent address space
+		parent.Lock_pmap()
 		pmap, p_pmap := pg_new()
 		child.pmap = pmap
 		child.p_pmap = p_pmap
-		doflush := parent.vm_fork(child)
+		rsp := chtf[TF_RSP]
+		doflush := parent.vm_fork(child, rsp)
 
 		// flush all ptes now marked COW
 		if doflush {

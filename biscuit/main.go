@@ -870,7 +870,7 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 // marks parent's PTEs COW and maps the pages in the child's pmap. returns
 // whether or not a pte for the parent was changed (i.e. whether a TLB
 // shootdown is necessary)
-func (parent *proc_t) vm_fork(child *proc_t) bool {
+func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	// first add kernel pml4 entries
 	for _, e := range kents {
 		child.pmap[e.pml4slot] = e.entry
@@ -895,7 +895,7 @@ func (parent *proc_t) vm_fork(child *proc_t) bool {
 			continue
 		}
 
-		// writable
+		// mark writable page COW
 		old := *ppte
 		v := old
 		v &^= (PTE_W | PTE_WASCOW)
@@ -906,6 +906,25 @@ func (parent *proc_t) vm_fork(child *proc_t) bool {
 			doflush = true
 		}
 	}
+
+	// don't mark stack COW since the parent/child are likely to fault
+	// their stacks immediately, even if they plan on exec'ing
+	pte := pmap_lookup(child.pmap, rsp)
+	// give up if we can't find the child's stack
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
+		return doflush
+	}
+	// sys_pgfault expects pmap to be locked
+	child.Lock_pmap()
+	sys_pgfault(child, pte, rsp)
+	child.Unlock_pmap()
+	pte = pmap_lookup(parent.pmap, rsp)
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
+		panic("child has stack but not parent")
+	}
+	*pte &^= PTE_COW
+	*pte |= PTE_W | PTE_WASCOW
+
 	return doflush
 }
 
