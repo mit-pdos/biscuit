@@ -73,10 +73,11 @@ func (vs *vmseg_t) gettrack(va int) (*[512]int, bool) {
 		panic("va outside seg")
 	}
 	slot := (va >> PGSHIFT) - vs.startn
-	if slot < 0 || slot > len(vs.pages) {
+	ret := vs.pages[slot]
+	if ret == nil {
 		return nil, false
 	}
-	return vs.pages[slot], true
+	return ret, true
 }
 
 
@@ -114,6 +115,10 @@ func (vr *vmregion_t) insert(ns *vmseg_t) *vmseg_t {
 	var h *vmseg_t
 	found := false
 	for h = vr.head; h != nil; h = h.next {
+		if (ns.start >= h.start && ns.start < h.end) ||
+		   (ns.end >= h.start && ns.end < h.end) {
+			panic("seg intersects")
+		}
 		if h.start == ns.end {
 			return vr._merge(prev, ns, h)
 		} else if ns.start == h.end {
@@ -219,6 +224,25 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 		}
 	}
 	return mid
+}
+
+// finds an unreserved region of size sz, at startva or higher
+func (vr *vmregion_t) empty(startva, sz int) int {
+	prev := vr.head
+	for h := vr.head.next; h != nil; h = h.next {
+		if startva > prev.end {
+			continue
+		}
+		if h.start - prev.end >= sz {
+			return prev.end
+		}
+		prev = h
+	}
+	last := prev
+	if startva > last.end {
+		return startva
+	}
+	return last.end
 }
 
 // tracks memory pages
@@ -608,9 +632,6 @@ func ptefork(cpmap, ppmap *[512]int, cpmt *pmtracker_t, start, end int) bool {
 	i := start
 	for i < end {
 		pptb, slot := pmap_pgtbl(ppmap, i, false, 0, nil)
-		if pptb[slot] & PTE_P == 0 {
-			panic("wtf")
-		}
 		cptb, _ := pmap_pgtbl(cpmap, i, true, PTE_U | PTE_W, cpmt)
 		ps := pptb[slot:]
 		cs := cptb[slot:]
@@ -620,9 +641,6 @@ func ptefork(cpmap, ppmap *[512]int, cpmt *pmtracker_t, start, end int) bool {
 			cs = cs[:left]
 		}
 		for j, pte := range ps {
-			if pte & PTE_P == 0 {
-				panic("all ptes must be present")
-			}
 			phys := pte & PTE_ADDR
 			flags := pte & PTE_FLAGS
 			if flags & PTE_W != 0 {

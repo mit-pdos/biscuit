@@ -1357,22 +1357,7 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	if startva < USERMIN {
 		startva = USERMIN
 	}
-	for startva < 256 << 39 {
-		found := true
-		for i := 0; i < len; i += PGSIZE {
-			pte := pmap_lookup(p.pmap, startva + i)
-			if pte != nil && *pte & PTE_P != 0 {
-				found = false
-				startva += i + PGSIZE
-				break
-			}
-		}
-		if found {
-			return startva
-		}
-	}
-	panic("no addr space left")
-	return 0
+	return p.vmregion.empty(startva, len)
 }
 
 // a helper object for read/writing from userspace memory. virtual address

@@ -1635,18 +1635,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	// find free page
-	uva := 0
-	for i := 0; i < 1000; i++ {
-		taddr := USERMIN + i*PGSIZE
-		pte := pmap_lookup(proc.pmap, taddr)
-		if pte == nil || *pte & PTE_P == 0 {
-			uva = taddr
-			break
-		}
-	}
-	if uva == 0 {
-		panic("couldn't find free user page")
-	}
+	uva := proc.unusedva_inner(0, PGSIZE)
 	seg := proc.mkvmseg(uva, PGSIZE)
 	pg, p_pg := pg_new()
 	proc.page_insert(uva, seg, pg, p_pg, PTE_U, true)
