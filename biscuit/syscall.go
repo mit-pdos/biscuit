@@ -1573,10 +1573,12 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	freshtls, t0tls, tlssz := elfhdr.elf_load(proc, file)
 
 	// map new stack
-	//stackva := mkpg(VUSER + 1, 0, 0, 0)
-	stackva := mkpg(VUSER, 0, 1, 0)
 	numstkpages := 2
-	seg := proc.mkvmseg(stackva - numstkpages*PGSIZE, numstkpages*PGSIZE)
+	// +1 for the guard page
+	stksz := (numstkpages + 1) * PGSIZE
+	stackva := proc.unusedva_inner(0, stksz)
+	seg := proc.mkvmseg(stackva, stksz)
+	stackva += stksz
 	for i := 0; i < numstkpages; i++ {
 		stack, p_stack := pg_new()
 		va := stackva - PGSIZE*(i+1)
