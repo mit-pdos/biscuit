@@ -18,19 +18,13 @@ const PGSHIFT    uint = 12
 const PGOFFSET   int = 0xfff
 const PGMASK     int = ^(PGOFFSET)
 const PTE_ADDR   int = PGMASK
-const PTE_FLAGS  int = 0x1f	// only masks P, W, U, PWT, and PCD
+const PTE_FLAGS  int = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
+    PTE_WASCOW)
 
 const VREC      int = 0x42
 const VDIRECT   int = 0x44
 const VEND      int = 0x50
 const VUSER     int = 0x59
-
-// pgn_t is the page number of a virtual address
-type pgn_t uint
-
-func mkpgn(va int) pgn_t {
-	return pgn_t(uint(va) >> PGSHIFT)
-}
 
 // these types holds references to pages so the GC doesn't reclaim them -- the
 // GC cannot find them without our help because it doesn't know how to trace a
@@ -49,8 +43,186 @@ func (pmt *pmtracker_t) pmadd(pm *[512]int) {
 	pmt.pms = append(pmt.pms, pm)
 }
 
+type vmseg_t struct {
+	start	int
+	end	int
+	startn	int
+	next	*vmseg_t
+	pages	[]*[512]int
+}
+
+func (vs *vmseg_t) seg_init(startva, len int) {
+	vs.start = rounddown(startva, PGSIZE)
+	vs.end = roundup(startva + len, PGSIZE)
+	vs.next = nil
+	vs.startn = vs.start >> PGSHIFT
+	l := vs.end - vs.start
+	l /= PGSIZE
+	vs.pages = make([]*[512]int, l)
+}
+
+func (vs *vmseg_t) track(va int, pg *[512]int) bool {
+	slot := (va >> PGSHIFT) - vs.startn
+	old := vs.pages[slot]
+	vs.pages[slot] = pg
+	return old != nil
+}
+
+func (vs *vmseg_t) gettrack(va int) (*[512]int, bool) {
+	if va < vs.start || va >= vs.end {
+		panic("va outside seg")
+	}
+	slot := (va >> PGSHIFT) - vs.startn
+	if slot < 0 || slot > len(vs.pages) {
+		return nil, false
+	}
+	return vs.pages[slot], true
+}
+
+
+type vmregion_t struct {
+	head	*vmseg_t
+}
+
+func (vr *vmregion_t) pglen() int {
+	ret := 0
+	for h := vr.head; h != nil; h = h.next {
+		ret += len(h.pages)
+	}
+	return ret
+}
+
+func (vr *vmregion_t) dump() {
+	fmt.Printf("SEGS: ")
+	for h := vr.head; h != nil; h = h.next {
+		fmt.Printf("(%x, %x) - %v\n", h.start, h.end, h.pages)
+	}
+}
+
+func (vr *vmregion_t) clear() *vmseg_t {
+	old := vr.head
+	vr.head = nil
+	return old
+}
+
+func (vr *vmregion_t) insert(ns *vmseg_t) *vmseg_t {
+	if vr.head == nil {
+		vr.head = ns
+		return vr.head
+	}
+	var prev *vmseg_t
+	var h *vmseg_t
+	found := false
+	for h = vr.head; h != nil; h = h.next {
+		if h.start == ns.end {
+			return vr._merge(prev, ns, h)
+		} else if ns.start == h.end {
+			return vr._merge(h, ns, h.next)
+		} else if ns.end <= h.start {
+			found = true
+			break
+		}
+		prev = h
+	}
+	if !found {
+		// end of list
+		h = prev
+		h.next = ns
+		return ns
+	}
+	if prev != nil {
+		prev.next = ns
+		ns.next = h
+	} else {
+		// head of list
+		ns.next = h
+		vr.head = ns
+	}
+	return ns
+}
+
+func (vr *vmregion_t) remove(startva, len int) bool {
+	start := rounddown(startva, PGSIZE)
+	end := roundup(startva + len, PGSIZE)
+	seg, prev, ok := vr.contain(start)
+	if !ok || end > seg.end {
+		return false
+	}
+	if start == seg.start && end == seg.end {
+		if prev != nil {
+			prev.next = seg.next
+		} else {
+			vr.head = seg.next
+		}
+		return true
+	}
+	vr._split(seg, start, end)
+	return true
+}
+
+func (vr *vmregion_t) contain(va int) (*vmseg_t, *vmseg_t, bool) {
+	var prev *vmseg_t
+	var h *vmseg_t
+	for h = vr.head; h != nil; h = h.next {
+		if va >= h.start && va < h.end {
+			return h, prev, true
+		}
+		prev = h
+	}
+	return nil, nil, false
+}
+
+func (vr *vmregion_t) _split(old *vmseg_t, rstart, rend int) {
+	if old.start == rstart {
+		l := (rend - old.start) / PGSIZE
+		old.start = rend
+		old.startn = old.start >> PGSHIFT
+		old.pages = old.pages[l:]
+	} else if old.end == rend {
+		l := (rstart - old.start) / PGSIZE
+		old.end = rstart
+		old.pages = old.pages[:l]
+	} else {
+		ns := &vmseg_t{}
+		ns.start = rend
+		ns.startn = ns.start >> PGSHIFT
+		ns.end = old.end
+		ns.next = old.next
+		nl := (rend - old.start) / PGSIZE
+		ns.pages = old.pages[nl:]
+
+		old.end = rstart
+		old.next = ns
+		ol := (rstart - old.start) / PGSIZE
+		old.pages = old.pages[:ol]
+	}
+}
+
+// left or right may be nil. left.next == right
+func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
+	if left != nil {
+		if left.end == mid.start {
+			left.end = mid.end
+			left.pages = append(left.pages, mid.pages...)
+			mid = left
+		} else {
+			left.next = mid
+		}
+	}
+	if right != nil {
+		if mid.end == right.start {
+			mid.end = right.end
+			mid.pages = append(mid.pages, right.pages...)
+			mid.next = right.next
+		} else {
+			mid.next = right
+		}
+	}
+	return mid
+}
+
 // tracks memory pages
-type pgtracker_t map[pgn_t]*[512]int
+type pgtracker_t map[int]*[512]int
 
 // tracks all pages allocated by go internally by the kernel such as pmap pages
 // allocated by the kernel (not the bootloader/runtime)
@@ -60,7 +232,7 @@ var kpmpages = &pmtracker_t{}
 
 func kpgadd(pg *[512]int) {
 	va := uintptr(unsafe.Pointer(pg))
-	pgn := pgn_t(va >> 12)
+	pgn := int(va >> 12)
 	if _, ok := kpages[pgn]; ok {
 		panic("page already in kpages")
 	}
@@ -236,9 +408,8 @@ func pe2pg(pe int) *[512]int {
 	return dmap(addr)
 }
 
-// requires direct mapping
-func _pmap_walk(pml4 *[512]int, v int, create bool, perms int,
-    pmt *pmtracker_t) *int {
+func pmap_pgtbl(pml4 *[512]int, v int, create bool, perms int,
+    pmt *pmtracker_t) (*[512]int, int) {
 	vn := uint(uintptr(v))
 	l4b  := (vn >> (12 + 9*3)) & 0x1ff
 	pdpb := (vn >> (12 + 9*2)) & 0x1ff
@@ -271,7 +442,7 @@ func _pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	pe := pml4[l4b]
 	if pe & PTE_P == 0 {
 		if !create {
-			return nil
+			return nil, 0
 		}
 		pe = instpg(pml4, l4b)
 	}
@@ -279,7 +450,7 @@ func _pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	pe = next[pdpb]
 	if pe & PTE_P == 0 {
 		if !create {
-			return nil
+			return nil, 0
 		}
 		pe = instpg(next, pdpb)
 	}
@@ -287,12 +458,22 @@ func _pmap_walk(pml4 *[512]int, v int, create bool, perms int,
 	pe = next[pdb]
 	if pe & PTE_P == 0 {
 		if !create {
-			return nil
+			return nil, 0
 		}
 		pe = instpg(next, pdb)
 	}
 	next = cpe(pe)
-	return &next[ptb]
+	return next, int(ptb)
+}
+
+// requires direct mapping
+func _pmap_walk(pml4 *[512]int, v int, create bool, perms int,
+    pmt *pmtracker_t) *int {
+	pgtbl, slot := pmap_pgtbl(pml4, v, create, perms, pmt)
+	if pgtbl == nil {
+		return nil
+	}
+	return &pgtbl[slot]
 }
 
 func pmap_walk(pml4 *[512]int, v int, perms int, pmt *pmtracker_t) *int {
@@ -419,6 +600,43 @@ func fork_pmap(pm *[512]int, pmt *pmtracker_t) (*[512]int, int, bool) {
 	doinval := fork_pmap1(npm, pm, 4, pmt)
 	npm[VREC] = p_npm | PTE_P | PTE_W
 	return npm, p_npm, doinval
+}
+
+// forks the ptes only for the virtual address range specified
+func ptefork(cpmap, ppmap *[512]int, cpmt *pmtracker_t, start, end int) bool {
+	doflush := false
+	i := start
+	for i < end {
+		pptb, slot := pmap_pgtbl(ppmap, i, false, 0, nil)
+		if pptb[slot] & PTE_P == 0 {
+			panic("wtf")
+		}
+		cptb, _ := pmap_pgtbl(cpmap, i, true, PTE_U | PTE_W, cpmt)
+		ps := pptb[slot:]
+		cs := cptb[slot:]
+		left := (end - i) / PGSIZE
+		if left < len(ps) {
+			ps = ps[:left]
+			cs = cs[:left]
+		}
+		for j, pte := range ps {
+			if pte & PTE_P == 0 {
+				panic("all ptes must be present")
+			}
+			phys := pte & PTE_ADDR
+			flags := pte & PTE_FLAGS
+			if flags & PTE_W != 0 {
+				flags &^= (PTE_W | PTE_WASCOW)
+				flags |= PTE_COW
+				doflush = true
+				ps[j] = phys | flags
+			}
+			cs[j] = phys | flags
+		}
+		i += len(ps)*PGSIZE
+
+	}
+	return doflush
 }
 
 func pmap_copy_par1(src *[512]int, dst *[512]int, depth int,

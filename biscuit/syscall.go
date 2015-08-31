@@ -498,14 +498,15 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		perms |= PTE_W
 	}
 	lenn = roundup(lenn, PGSIZE)
-	if lenn/PGSIZE + len(proc.pages) > proc.ulim.pages {
+	if lenn/PGSIZE + proc.vmregion.pglen() > proc.ulim.pages {
 		return MAP_FAILED
 	}
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
+	seg := proc.mkvmseg(addr, lenn)
 	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
 		pg, p_pg := pg_new()
-		proc.page_insert(addr + i, pg, p_pg, perms, true)
+		proc.page_insert(addr + i, seg, pg, p_pg, perms, true)
 	}
 	// no tlbshoot because mmap never replaces pages for now
 	return addr
@@ -528,6 +529,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 		}
 	}
 	pgs := len/PGSIZE
+	proc.vmregion.remove(addrn, len)
 	proc.tlbshoot(addrn, pgs)
 	return 0
 }
@@ -1457,11 +1459,16 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
 		src := dmap(p_src)
 		*dst = *src
 
+		seg, _, ok := proc.vmregion.contain(faultaddr)
+		if !ok {
+			panic("no seg")
+		}
+
 		// insert new page into pmap
 		va := faultaddr & PGMASK
 		perms := (*pte & PTE_FLAGS) & ^PTE_COW
 		perms |= PTE_W | PTE_WASCOW
-		proc.page_insert(va, dst, p_dst, perms, false)
+		proc.page_insert(va, seg, dst, p_dst, perms, false)
 
 		proc.tlbshoot(faultaddr, 1)
 	} else if wascow {
@@ -1505,22 +1512,24 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	defer proc.Unlock_pmap()
 
 	// save page trackers in case the exec fails
-	opages := proc.pages
 	opmpages := proc.pmpages
-	proc.pages = make(map[pgn_t]*[512]int)
 	proc.pmpages = &pmtracker_t{}
 	proc.pmpages.pminit()
+	ovmreg := proc.vmregion.clear()
 
-	// copy kernel page table
+	// create kernel page table
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
-	proc.pmap, proc.p_pmap, _ = copy_pmap(nil, kpmap(), proc.pmpages)
+	proc.pmap, proc.p_pmap = pg_new()
+	for _, e := range kents {
+		proc.pmap[e.pml4slot] = e.entry
+	}
 
 	restore := func() {
-		proc.pages = opages
 		proc.pmpages = opmpages
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
+		proc.vmregion.head = ovmreg
 	}
 
 	// load binary image -- get first block of file
@@ -1558,6 +1567,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		restore()
 		return -EPERM
 	}
+
 	// elf_load() will create two copies of TLS section: one for the fresh
 	// copy and one for thread 0
 	freshtls, t0tls, tlssz := elfhdr.elf_load(proc, file)
@@ -1566,10 +1576,11 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	//stackva := mkpg(VUSER + 1, 0, 0, 0)
 	stackva := mkpg(VUSER, 0, 1, 0)
 	numstkpages := 2
+	seg := proc.mkvmseg(stackva - numstkpages*PGSIZE, numstkpages*PGSIZE)
 	for i := 0; i < numstkpages; i++ {
 		stack, p_stack := pg_new()
-		proc.page_insert(stackva - PGSIZE*(i+1), stack, p_stack,
-		    PTE_U | PTE_W, true)
+		va := stackva - PGSIZE*(i+1)
+		proc.page_insert(va, seg, stack, p_stack, PTE_U | PTE_W, true)
 	}
 
 	// XXX make insertargs not fail by using more than a page...
@@ -1634,8 +1645,9 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	if uva == 0 {
 		panic("couldn't find free user page")
 	}
+	seg := proc.mkvmseg(uva, PGSIZE)
 	pg, p_pg := pg_new()
-	proc.page_insert(uva, pg, p_pg, PTE_U, true)
+	proc.page_insert(uva, seg, pg, p_pg, PTE_U, true)
 	var args [][]uint8
 	for _, str := range sargs {
 		args = append(args, []uint8(str))
@@ -2011,11 +2023,12 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 	sz := roundup(hdr.vaddr + hdr.memsz, PGSIZE)
 	sz -= rounddown(hdr.vaddr, PGSIZE)
 	ub := &userbuf_t{}
+	seg := proc.mkvmseg(hdr.vaddr, hdr.memsz)
 	for i := 0; i < sz; i += PGSIZE {
 		// go allocator zeros all pages for us, thus bss is already
 		// initialized
 		pg, p_pg := pg_new()
-		proc.page_insert(hdr.vaddr + i, pg, p_pg, perms, true)
+		proc.page_insert(hdr.vaddr + i, seg, pg, p_pg, perms, true)
 		if i < hdr.filesz {
 			bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
 			left := hdr.filesz - i
@@ -2069,11 +2082,13 @@ func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 			if writable {
 				perms |= PTE_W
 			}
+			seg := proc.mkvmseg(ret, l)
 			for i := 0; i < l; i += PGSIZE {
 				// allocator zeros objects, so tbss is already
 				// initialized.
 				pg, p_pg := pg_new()
-				proc.page_insert(ret + i, pg, p_pg, perms, true)
+				proc.page_insert(ret + i, seg, pg, p_pg, perms,
+				    true)
 				src, ok := proc.userdmap8_inner(tlsaddr + i)
 				if !ok {
 					panic("must succeed")

@@ -690,18 +690,21 @@ type proc_t struct {
 	// thread tids of this process
 	threadi		threadinfo_t
 
-	// memory pages: virtual pgn -> kernel va for pg
-	pages		pgtracker_t
+	// lock for vmregion, pmpages, pmap, and p_pmap
+	pgfl		sync.Mutex
+	pgfltaken	bool
+
+	// vmregion is a linked list of vmseg_t. each describes a contiguous
+	// address space.
+	vmregion	vmregion_t
 
 	// pmap pages
 	pmpages		*pmtracker_t
-
-	mmapi		int
 	pmap		*[512]int
 	p_pmap		int
-	// lock for pages, pmpages, pmap, and p_pmap
-	pgfl		sync.Mutex
-	pgfltaken	bool
+
+	// mmap next virtual address hint
+	mmapi		int
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
@@ -754,7 +757,6 @@ func proc_new(name string, cwd *file_t) *proc_t {
 
 	ret.name = name
 	ret.pid = np
-	ret.pages = pgtracker_t{}
 	ret.pmpages = &pmtracker_t{}
 	ret.pmpages.pminit()
 	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
@@ -867,9 +869,6 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	return ret, ok
 }
 
-// marks parent's PTEs COW and maps the pages in the child's pmap. returns
-// whether or not a pte for the parent was changed (i.e. whether a TLB
-// shootdown is necessary)
 func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	// first add kernel pml4 entries
 	for _, e := range kents {
@@ -878,31 +877,27 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	// recursive mapping
 	child.pmap[VREC] = child.p_pmap | PTE_P | PTE_W
 
+	// copy vm segments
 	doflush := false
-	// XXX two pmap walks for each page will probably perform poorly for
-	// large address spaces. instead, we should keep track of contiguous
-	// ranges of mapped memory and copy each range directly.
-	for pgn, pg := range parent.pages {
-		child.pages[pgn] = pg
-		va := int(pgn << PGSHIFT)
-		ppte := pmap_lookup(parent.pmap, va)
-		if ppte == nil || *ppte & PTE_P == 0 {
-			panic("wut")
+	var ch *vmseg_t
+	for ph := parent.vmregion.head; ph != nil; ph = ph.next {
+		// add new vmseg to child
+		ns := &vmseg_t{}
+		if ch == nil {
+			child.vmregion.head = ns
+		} else {
+			ch.next = ns
 		}
-		cpte := pmap_walk(child.pmap, va, PTE_U | PTE_W, child.pmpages)
-		if *ppte & PTE_W == 0 {
-			*cpte = *ppte
-			continue
-		}
+		ch = ns
+		ns.start = ph.start
+		ns.end = ph.end
+		ns.startn = ph.startn
+		ns.pages = make([]*[512]int, len(ph.pages))
+		copy(ns.pages, ph.pages)
 
-		// mark writable page COW
-		old := *ppte
-		v := old
-		v &^= (PTE_W | PTE_WASCOW)
-		v |= PTE_COW
-		*ppte = v
-		*cpte = v
-		if old != v {
+		// fork all ptes for this vmseg
+		if ptefork(child.pmap, parent.pmap, child.pmpages, ph.start,
+		    ph.end) {
 			doflush = true
 		}
 	}
@@ -910,7 +905,7 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	// don't mark stack COW since the parent/child are likely to fault
 	// their stacks immediately, even if they plan on exec'ing
 	pte := pmap_lookup(child.pmap, rsp)
-	// give up if we can't find the child's stack
+	// give up if we can't find the stack
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return doflush
 	}
@@ -935,34 +930,34 @@ func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
 	return runtime.Ptid_t(ptid)
 }
 
+func (p *proc_t) mkvmseg(start, len int) *vmseg_t {
+	seg := &vmseg_t{}
+	seg.seg_init(start, len)
+	return p.vmregion.insert(seg)
+}
+
 func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
 	ret := &userbuf_t{}
 	ret.ub_init(p, userva, len)
 	return ret
 }
 
-func (p *proc_t) page_insert(va int, pg *[512]int, p_pg int,
+func (p *proc_t) page_insert(va int, seg *vmseg_t, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 	p.lockassert_pmap()
 	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, p.pmpages)
 	ninval := false
-	pgn := mkpgn(va)
 	if pte != nil && *pte & PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
 		}
 		ninval = true
-		if _, ok := p.pages[pgn]; !ok {
-			panic("kern va not tracked")
-		}
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
 		invlpg(va)
 	}
-
-	// make sure page is tracked if shared
-	p.pages[pgn] = pg
+	seg.track(va, pg)
 }
 
 func (p *proc_t) page_remove(va int) bool {
@@ -972,8 +967,6 @@ func (p *proc_t) page_remove(va int) bool {
 	if pte != nil && *pte & PTE_P != 0 {
 		*pte = 0
 		invlpg(va)
-		pgn := mkpgn(va)
-		delete(p.pages, pgn)
 		remmed = true
 	}
 	return remmed
@@ -1143,8 +1136,11 @@ func (p *proc_t) lockassert_pmap() {
 func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
 	p.lockassert_pmap()
 	voff := va & PGOFFSET
-	pgn := mkpgn(va)
-	pg, ok := p.pages[pgn]
+	seg, _, ok := p.vmregion.contain(va)
+	if !ok {
+		return nil, false
+	}
+	pg, ok := seg.gettrack(va)
 	if !ok {
 		return nil, false
 	}
@@ -1161,12 +1157,15 @@ func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
 // caller must have the vm lock
 func (p *proc_t) userdmap_inner(va int) (*[512]int, bool) {
 	p.lockassert_pmap()
-	pgn := mkpgn(va)
-	pg, ok := p.pages[pgn]
+	seg, _, ok := p.vmregion.contain(va)
 	if !ok {
 		return nil, false
 	}
-	return pg, true
+	pg, ok := seg.gettrack(va)
+	if !ok {
+		return nil, false
+	}
+	return pg, ok
 }
 
 // like userdmap8, but returns a pointer to the page
@@ -1904,6 +1903,9 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	addprint := func(c byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
+		if c == '\\' {
+			panic("yahoo")
+		}
 	}
 	var reqc chan int
 	for {
