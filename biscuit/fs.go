@@ -57,21 +57,22 @@ func fs_init() *file_t {
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
 
+	iblkcache.blks = make(map[int]*ibuf_t)
+
 	bcdaemon.init()
 	go bc_daemon(&bcdaemon)
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	blk0 := bread(0)
+	buffer := new([512]uint8)
+	bdev_read(0, buffer)
 	FSOFF := 506
-	superb_start = readn(blk0.buf.data[:], 4, FSOFF)
+	superb_start = readn(buffer[:], 4, FSOFF)
 	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
-	blk := bread(superb_start)
-	superb = superblock_t{}
-	superb.blk = blk
-	brelse(blk0)
+	bdev_read(superb_start, buffer)
+	superb = superblock_t{buffer}
 	ri := superb.rootinode()
 	iroot = idaemon_ensure(ri)
 
@@ -1083,14 +1084,92 @@ func (idm *idaemon_t) idm_init(priv inum) {
 
 	idm.req = make(chan *ireq_t)
 
-	blk := bread(blkno)
+	blk := ibread(blkno)
 	idm.icache.fill(blk, ioff)
 	if idm.icache.itype == I_DIR {
 		ds := idm.all_dirents()
 		idm.icache.cache_dirents(ds)
 		dirent_brelse(ds)
 	}
-	brelse(blk)
+	ibrelse(blk)
+}
+
+// inode block cache. there are 4 inodes per inode block. we need a block cache
+// so that writes aren't lost due to concurrent inode updates.
+type ibuf_t struct {
+	block		int
+	data		*[512]uint8
+	sync.Mutex
+}
+
+type iblkcache_t struct {
+	// inode blkno -> disk contents
+	blks		map[int]*ibuf_t
+	sync.Mutex
+}
+
+func (ib *ibuf_t) log_write() {
+	dur := &bbuf_t{}
+	dur.buf = &idebuf_t{}
+	dur.buf.block = ib.block
+	dur.buf.data = ib.data
+	log_write(dur)
+}
+
+var iblkcache = iblkcache_t{}
+
+func ibread(blkn int) *ibuf_t {
+	if blkn < superb_start {
+		panic("no")
+	}
+	created := false
+
+	iblkcache.Lock()
+	iblk, ok := iblkcache.blks[blkn]
+	if !ok {
+		iblk = &ibuf_t{}
+		iblk.Lock()
+		iblkcache.blks[blkn] = iblk
+		created = true
+	}
+	iblkcache.Unlock()
+
+	if !created {
+		iblk.Lock()
+		if iblk.block != blkn {
+			panic("wtf")
+		}
+	} else {
+		// fill new iblkcache entry
+		iblk.data = new([512]uint8)
+		iblk.block = blkn
+		bdev_read(blkn, iblk.data)
+	}
+	return iblk
+}
+
+func ibempty(blkn int) *ibuf_t {
+	iblkcache.Lock()
+	if _, ok := iblkcache.blks[blkn]; ok {
+		panic("iblk exists")
+	}
+	iblk := &ibuf_t{}
+	iblk.block = blkn
+	iblk.data = new([512]uint8)
+	iblkcache.blks[blkn] = iblk
+	iblk.Lock()
+	iblkcache.Unlock()
+	return iblk
+}
+
+func ibrelse(ib *ibuf_t) {
+	ib.Unlock()
+}
+
+func ibpurge(ib *ibuf_t) {
+	iblkcache.Lock()
+	delete(iblkcache.blks, ib.block)
+	iblkcache.Unlock()
 }
 
 type icache_t struct {
@@ -1112,11 +1191,12 @@ type icdent_t struct {
 	priv	inum
 }
 
-func (ic *icache_t) fill(blk *bbuf_t, ioff int) {
+func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
 	inode := inode_t{blk, ioff}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_LAST {
-		fmt.Printf("itype: %v\n", ic.itype)
+		fmt.Printf("itype: %v for %v\n", ic.itype,
+		    biencode(blk.block, ioff))
 		panic("bad itype in fill")
 	}
 	ic.links = inode.linkcount()
@@ -1147,7 +1227,7 @@ func (ic *icache_t) cache_dirents(ds []dirdata_t) {
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *icache_t) flushto(blk *bbuf_t, ioff int) bool {
+func (ic *icache_t) flushto(blk *ibuf_t, ioff int) bool {
 	inode := inode_t{blk, ioff}
 	j := inode
 	k := ic
@@ -1458,11 +1538,11 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 
 func idaemonize(idm *idaemon_t) {
 	iupdate := func() {
-		blk := bread(idm.blkno)
-		if idm.icache.flushto(blk, idm.ioff) {
-			log_write(blk)
+		iblk := ibread(idm.blkno)
+		if idm.icache.flushto(iblk, idm.ioff) {
+			iblk.log_write()
 		}
-		brelse(blk)
+		ibrelse(iblk)
 	}
 	irefdown := func(memref bool) bool {
 		if memref {
@@ -1884,7 +1964,7 @@ func (idm *idaemon_t) icreate(name string, nitype, major,
 	// allocate new inode
 	newbn, newioff := ialloc()
 
-	newiblk := bread(newbn)
+	newiblk := ibread(newbn)
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
 	newinode.w_linkcount(1)
@@ -1896,8 +1976,8 @@ func (idm *idaemon_t) icreate(name string, nitype, major,
 		newinode.w_addr(i, 0)
 	}
 
-	log_write(newiblk)
-	brelse(newiblk)
+	newiblk.log_write()
+	ibrelse(newiblk)
 
 	// write new directory entry referencing newinode
 	idm.dirent_add(name, newbn, newioff)
@@ -1982,21 +2062,25 @@ func (idm *idaemon_t) ifree() {
 	}
 	indno := idm.icache.indir
 	for indno != 0 {
-		add(idm.icache.indir)
+		add(indno)
 		blk := bread(indno)
+		blks := blk.buf.data[:]
+		for i := 0; i < 63; i++ {
+			off := i*8
+			nblkno := readn(blks, 8, off)
+			add(nblkno)
+		}
 		nextoff := 63*8
-		indno = readn(blk.buf.data[:], 8, nextoff)
+		indno = readn(blks, 8, nextoff)
 		brelse(blk)
 	}
 
 	// mark this inode as dead and free the inode block if all inodes on it
 	// are marked dead.
-	alldead := func(blk *bbuf_t) bool {
+	alldead := func(blk *ibuf_t) bool {
 		bwords := 512/8
 		ret := true
 		for i := 0; i < bwords/NIWORDS; i++ {
-			//ic := icache_t{}
-			//ic.fill(blk, i)
 			ic := inode_t{blk, i}
 			if ic.itype() != I_INVALID {
 				ret = false
@@ -2005,15 +2089,16 @@ func (idm *idaemon_t) ifree() {
 		}
 		return ret
 	}
-	iblk := bread(idm.blkno)
+	iblk := ibread(idm.blkno)
 	idm.icache.itype = I_INVALID
 	idm.icache.flushto(iblk, idm.ioff)
 	if alldead(iblk) {
 		add(idm.blkno)
+		ibpurge(iblk)
 	} else {
-		log_write(iblk)
+		iblk.log_write()
 	}
-	brelse(iblk)
+	ibrelse(iblk)
 
 	for _, blkno := range allb {
 		bfree(blkno)
@@ -2117,57 +2202,56 @@ func bidecode(val int) (int, int) {
 // 40-47, inode block that may have room for an inode
 // 48-55, recovery log length; if non-zero, recovery procedure should run
 type superblock_t struct {
-	l	sync.Mutex
-	blk	*bbuf_t
+	data	*[512]uint8
 }
 
 func (sb *superblock_t) freeblock() int {
-	return fieldr(sb.blk.buf.data, 0)
+	return fieldr(sb.data, 0)
 }
 
 func (sb *superblock_t) freeblocklen() int {
-	return fieldr(sb.blk.buf.data, 1)
+	return fieldr(sb.data, 1)
 }
 
 func (sb *superblock_t) loglen() int {
-	return fieldr(sb.blk.buf.data, 2)
+	return fieldr(sb.data, 2)
 }
 
 func (sb *superblock_t) rootinode() inum {
-	v := fieldr(sb.blk.buf.data, 3)
+	v := fieldr(sb.data, 3)
 	return inum(v)
 }
 
 func (sb *superblock_t) lastblock() int {
-	return fieldr(sb.blk.buf.data, 4)
+	return fieldr(sb.data, 4)
 }
 
 func (sb *superblock_t) freeinode() int {
-	return fieldr(sb.blk.buf.data, 5)
+	return fieldr(sb.data, 5)
 }
 
 func (sb *superblock_t) w_freeblock(n int) {
-	fieldw(sb.blk.buf.data, 0, n)
+	fieldw(sb.data, 0, n)
 }
 
 func (sb *superblock_t) w_freeblocklen(n int) {
-	fieldw(sb.blk.buf.data, 1, n)
+	fieldw(sb.data, 1, n)
 }
 
 func (sb *superblock_t) w_loglen(n int) {
-	fieldw(sb.blk.buf.data, 2, n)
+	fieldw(sb.data, 2, n)
 }
 
 func (sb *superblock_t) w_rootinode(blk int, iidx int) {
-	fieldw(sb.blk.buf.data, 3, biencode(blk, iidx))
+	fieldw(sb.data, 3, biencode(blk, iidx))
 }
 
 func (sb *superblock_t) w_lastblock(n int) {
-	fieldw(sb.blk.buf.data, 4, n)
+	fieldw(sb.data, 4, n)
 }
 
 func (sb *superblock_t) w_freeinode(n int) {
-	fieldw(sb.blk.buf.data, 5, n)
+	fieldw(sb.data, 5, n)
 }
 
 // first log header block format
@@ -2210,7 +2294,7 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 // 40-47,  indirect block
 // 48-80,  block addresses
 type inode_t struct {
-	blk	*bbuf_t
+	iblk	*ibuf_t
 	ioff	int
 }
 
@@ -2235,7 +2319,7 @@ func ifield(iidx int, fieldn int) int {
 
 // iidx is the inode index; necessary since there are four inodes in one block
 func (ind *inode_t) itype() int {
-	it := fieldr(ind.blk.buf.data, ifield(ind.ioff, 0))
+	it := fieldr(ind.iblk.data, ifield(ind.ioff, 0))
 	if it < I_FIRST || it > I_LAST {
 		panic(fmt.Sprintf("weird inode type %d", it))
 	}
@@ -2243,23 +2327,23 @@ func (ind *inode_t) itype() int {
 }
 
 func (ind *inode_t) linkcount() int {
-	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 1))
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 1))
 }
 
 func (ind *inode_t) size() int {
-	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 2))
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 2))
 }
 
 func (ind *inode_t) major() int {
-	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 3))
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 3))
 }
 
 func (ind *inode_t) minor() int {
-	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 4))
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 4))
 }
 
 func (ind *inode_t) indirect() int {
-	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 5))
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 5))
 }
 
 func (ind *inode_t) addr(i int) int {
@@ -2267,35 +2351,35 @@ func (ind *inode_t) addr(i int) int {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	return fieldr(ind.blk.buf.data, ifield(ind.ioff, addroff + i))
+	return fieldr(ind.iblk.data, ifield(ind.ioff, addroff + i))
 }
 
 func (ind *inode_t) w_itype(n int) {
 	if n < I_FIRST || n > I_LAST {
 		panic("weird inode type")
 	}
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, 0), n)
+	fieldw(ind.iblk.data, ifield(ind.ioff, 0), n)
 }
 
 func (ind *inode_t) w_linkcount(n int) {
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, 1), n)
+	fieldw(ind.iblk.data, ifield(ind.ioff, 1), n)
 }
 
 func (ind *inode_t) w_size(n int) {
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, 2), n)
+	fieldw(ind.iblk.data, ifield(ind.ioff, 2), n)
 }
 
 func (ind *inode_t) w_major(n int) {
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, 3), n)
+	fieldw(ind.iblk.data, ifield(ind.ioff, 3), n)
 }
 
 func (ind *inode_t) w_minor(n int) {
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, 4), n)
+	fieldw(ind.iblk.data, ifield(ind.ioff, 4), n)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
 func (ind *inode_t) w_indirect(blk int) {
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, 5), blk)
+	fieldw(ind.iblk.data, ifield(ind.ioff, 5), blk)
 }
 
 func (ind *inode_t) w_addr(i int, blk int) {
@@ -2303,7 +2387,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	fieldw(ind.blk.buf.data, ifield(ind.ioff, addroff + i), blk)
+	fieldw(ind.iblk.data, ifield(ind.ioff, addroff + i), blk)
 }
 
 // directory data format
@@ -2481,12 +2565,9 @@ func ialloc() (int, int) {
 
 	ifreeblk = balloc1()
 	ifreeoff = 0
-	zblk := bread(ifreeblk)
-	for i := range zblk.buf.data {
-		zblk.buf.data[i] = 0
-	}
-	log_write(zblk)
-	brelse(zblk)
+	zblk := ibempty(ifreeblk)
+	zblk.log_write()
+	ibrelse(zblk)
 	reti := ifreeoff
 	ifreeoff++
 	return ifreeblk, reti
