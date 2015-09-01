@@ -91,11 +91,11 @@ func fs_init() *file_t {
 	return &file_t{ftype: INODE, priv: ri}
 }
 
+// XXX why not method of log_t???
 func fs_recover() {
 	l := &fslog
-	dblk := bread(l.logstart)
-	defer brelse(dblk)
-	lh := logheader_t{dblk}
+	bdev_read(l.logstart, &l.tmpblk)
+	lh := logheader_t{&l.tmpblk}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
@@ -103,19 +103,16 @@ func fs_recover() {
 	}
 	fmt.Printf("starting FS recovery...")
 
+	buffer := new([512]uint8)
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		src := bread(l.logstart + 1 + i)
-		dst := bread(bdest)
-		dst.buf.data = src.buf.data
-		dst.writeback()
-		brelse(src)
-		brelse(dst)
+		bdev_read(l.logstart + 1 + i, buffer)
+		bdev_write(bdest, buffer)
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
-	lh.blk.writeback()
+	bdev_write(l.logstart, &l.tmpblk)
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
@@ -136,12 +133,13 @@ func use_memfs() {
 	memorium = make([]memorium_t, fsblocks)
 
 	tpct := fsblocks/100
+	buffer := new([512]uint8)
 	for i := 1; i < fsblocks; i++ {
-		blk := bread(startb + i)
+		bdev_read(startb + i, buffer)
 		memorium[i].idebuf.disk = 0
-		memorium[i].idebuf.block = int32(startb + i)
-		memorium[i].idebuf.data = blk.buf.data
-		brelse(blk)
+		memorium[i].idebuf.block = startb + i
+		memorium[i].idebuf.data = new([512]uint8)
+		*memorium[i].idebuf.data = *buffer
 		if (i + 1) % tpct == 0 {
 			fmt.Printf(".")
 		}
@@ -151,14 +149,14 @@ func use_memfs() {
 }
 
 func memfsrw(b *idebuf_t, writing bool) {
-	idx := int(b.block) - superb_start
+	idx := b.block - superb_start
 	if idx == 0 {
 		panic("no superblock")
 	}
 	if writing {
-		memorium[idx].idebuf.data = b.data
+		*memorium[idx].idebuf.data = *b.data
 	} else {
-		b.data = memorium[idx].idebuf.data
+		*b.data = *memorium[idx].idebuf.data
 	}
 }
 
@@ -2052,7 +2050,7 @@ func (idm *idaemon_t) dirent_getempty() (int, int) {
 	idm.icache.size += 512
 	blk := bread(blkno)
 	var zbuf [512]uint8
-	blk.buf.data = zbuf
+	*blk.buf.data = zbuf
 	log_write(blk)
 	// NDIRENTS - 1 because we return slot 0 directly
 	idm.icache.free_dents = make([]icdent_t, NDIRENTS - 1)
@@ -2124,52 +2122,52 @@ type superblock_t struct {
 }
 
 func (sb *superblock_t) freeblock() int {
-	return fieldr(&sb.blk.buf.data, 0)
+	return fieldr(sb.blk.buf.data, 0)
 }
 
 func (sb *superblock_t) freeblocklen() int {
-	return fieldr(&sb.blk.buf.data, 1)
+	return fieldr(sb.blk.buf.data, 1)
 }
 
 func (sb *superblock_t) loglen() int {
-	return fieldr(&sb.blk.buf.data, 2)
+	return fieldr(sb.blk.buf.data, 2)
 }
 
 func (sb *superblock_t) rootinode() inum {
-	v := fieldr(&sb.blk.buf.data, 3)
+	v := fieldr(sb.blk.buf.data, 3)
 	return inum(v)
 }
 
 func (sb *superblock_t) lastblock() int {
-	return fieldr(&sb.blk.buf.data, 4)
+	return fieldr(sb.blk.buf.data, 4)
 }
 
 func (sb *superblock_t) freeinode() int {
-	return fieldr(&sb.blk.buf.data, 5)
+	return fieldr(sb.blk.buf.data, 5)
 }
 
 func (sb *superblock_t) w_freeblock(n int) {
-	fieldw(&sb.blk.buf.data, 0, n)
+	fieldw(sb.blk.buf.data, 0, n)
 }
 
 func (sb *superblock_t) w_freeblocklen(n int) {
-	fieldw(&sb.blk.buf.data, 1, n)
+	fieldw(sb.blk.buf.data, 1, n)
 }
 
 func (sb *superblock_t) w_loglen(n int) {
-	fieldw(&sb.blk.buf.data, 2, n)
+	fieldw(sb.blk.buf.data, 2, n)
 }
 
 func (sb *superblock_t) w_rootinode(blk int, iidx int) {
-	fieldw(&sb.blk.buf.data, 3, biencode(blk, iidx))
+	fieldw(sb.blk.buf.data, 3, biencode(blk, iidx))
 }
 
 func (sb *superblock_t) w_lastblock(n int) {
-	fieldw(&sb.blk.buf.data, 4, n)
+	fieldw(sb.blk.buf.data, 4, n)
 }
 
 func (sb *superblock_t) w_freeinode(n int) {
-	fieldw(&sb.blk.buf.data, 5, n)
+	fieldw(sb.blk.buf.data, 5, n)
 }
 
 // first log header block format
@@ -2177,29 +2175,29 @@ func (sb *superblock_t) w_freeinode(n int) {
 // 0-7,   valid log blocks
 // 8-511, log destination (63)
 type logheader_t struct {
-	blk	*bbuf_t
+	data	*[512]uint8
 }
 
 func (lh *logheader_t) recovernum() int {
-	return fieldr(&lh.blk.buf.data, 0)
+	return fieldr(lh.data, 0)
 }
 
 func (lh *logheader_t) w_recovernum(n int) {
-	fieldw(&lh.blk.buf.data, 0, n)
+	fieldw(lh.data, 0, n)
 }
 
 func (lh *logheader_t) logdest(p int) int {
 	if p < 0 || p > 62 {
 		panic("bad dnum")
 	}
-	return fieldr(&lh.blk.buf.data, 8 + p)
+	return fieldr(lh.data, 8 + p)
 }
 
 func (lh *logheader_t) w_logdest(p int, n int) {
 	if p < 0 || p > 62 {
 		panic("bad dnum")
 	}
-	fieldw(&lh.blk.buf.data, 8 + p, n)
+	fieldw(lh.data, 8 + p, n)
 }
 
 // inode format:
@@ -2237,7 +2235,7 @@ func ifield(iidx int, fieldn int) int {
 
 // iidx is the inode index; necessary since there are four inodes in one block
 func (ind *inode_t) itype() int {
-	it := fieldr(&ind.blk.buf.data, ifield(ind.ioff, 0))
+	it := fieldr(ind.blk.buf.data, ifield(ind.ioff, 0))
 	if it < I_FIRST || it > I_LAST {
 		panic(fmt.Sprintf("weird inode type %d", it))
 	}
@@ -2245,23 +2243,23 @@ func (ind *inode_t) itype() int {
 }
 
 func (ind *inode_t) linkcount() int {
-	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 1))
+	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 1))
 }
 
 func (ind *inode_t) size() int {
-	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 2))
+	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 2))
 }
 
 func (ind *inode_t) major() int {
-	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 3))
+	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 3))
 }
 
 func (ind *inode_t) minor() int {
-	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 4))
+	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 4))
 }
 
 func (ind *inode_t) indirect() int {
-	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, 5))
+	return fieldr(ind.blk.buf.data, ifield(ind.ioff, 5))
 }
 
 func (ind *inode_t) addr(i int) int {
@@ -2269,35 +2267,35 @@ func (ind *inode_t) addr(i int) int {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	return fieldr(&ind.blk.buf.data, ifield(ind.ioff, addroff + i))
+	return fieldr(ind.blk.buf.data, ifield(ind.ioff, addroff + i))
 }
 
 func (ind *inode_t) w_itype(n int) {
 	if n < I_FIRST || n > I_LAST {
 		panic("weird inode type")
 	}
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 0), n)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, 0), n)
 }
 
 func (ind *inode_t) w_linkcount(n int) {
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 1), n)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, 1), n)
 }
 
 func (ind *inode_t) w_size(n int) {
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 2), n)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, 2), n)
 }
 
 func (ind *inode_t) w_major(n int) {
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 3), n)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, 3), n)
 }
 
 func (ind *inode_t) w_minor(n int) {
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 4), n)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, 4), n)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
 func (ind *inode_t) w_indirect(blk int) {
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, 5), blk)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, 5), blk)
 }
 
 func (ind *inode_t) w_addr(i int, blk int) {
@@ -2305,7 +2303,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 		panic("bad inode block index")
 	}
 	addroff := 6
-	fieldw(&ind.blk.buf.data, ifield(ind.ioff, addroff + i), blk)
+	fieldw(ind.blk.buf.data, ifield(ind.ioff, addroff + i), blk)
 }
 
 // directory data format
@@ -2498,9 +2496,9 @@ func ialloc() (int, int) {
 var disk	disk_t
 
 type idebuf_t struct {
-	disk	int32
-	block	int32
-	data	[512]uint8
+	disk	int
+	block	int
+	data	*[512]uint8
 }
 
 type idereq_t struct {
@@ -2532,20 +2530,17 @@ func ide_daemon() {
 	}
 }
 
-func idereq_new(block int, write bool, ibuf *idebuf_t) *idereq_t {
-	ret := idereq_t{}
+func idereq_new(block int, write bool, data *[512]uint8) *idereq_t {
+	ret := &idereq_t{}
 	ret.ack = make(chan bool)
-	if ibuf == nil {
-		ret.buf = &idebuf_t{}
-		ret.buf.block = int32(block)
-	} else {
-		ret.buf = ibuf
-		if block != int(ibuf.block) {
-			panic("block mismatch")
-		}
-	}
 	ret.write = write
-	return &ret
+	ret.buf = &idebuf_t{}
+	ret.buf.block = block
+	ret.buf.data = data
+	if data == nil {
+		panic("no nil")
+	}
+	return ret
 }
 
 type bbuf_t struct {
@@ -2554,7 +2549,7 @@ type bbuf_t struct {
 }
 
 func (b *bbuf_t) writeback() {
-	ireq := idereq_new(int(b.buf.block), true, b.buf)
+	ireq := idereq_new(b.buf.block, true, b.buf.data)
 	ide_request <- ireq
 	<- ireq.ack
 	b.dirty = false
@@ -2594,7 +2589,8 @@ func (blc *bcdaemon_t) bc_read(blkno int, ack *chan *bbuf_t) {
 		// add requester to queue before kicking off disk read
 		blc.qadd(blkno, ack)
 		go func() {
-			ireq := idereq_new(blkno, false, nil)
+			data := new([512]uint8)
+			ireq := idereq_new(blkno, false, data)
 			ide_request <- ireq
 			<- ireq.ack
 			nb := &bbuf_t{}
@@ -2661,7 +2657,7 @@ func bc_daemon(blc *bcdaemon_t) {
 			}
 		case nb := <- blc.bnew:
 			// disk read finished
-			blkno := int(nb.buf.block)
+			blkno := nb.buf.block
 			if _, ok := blc.given[blkno]; !ok {
 				panic("bllkno trimmed by cast")
 			}
@@ -2732,32 +2728,37 @@ func brelse(b *bbuf_t) {
 
 // list of dirty blocks that are pending commit.
 type log_t struct {
-	blks		[]int
+	blks		[]idebuf_t
 	logstart	int
 	loglen		int
-	incoming	chan int
+	incoming	chan *bbuf_t
 	admission	chan bool
 	done		chan bool
+	tmpblk		[512]uint8
 }
 
 func (log *log_t) init(ls int, ll int) {
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
-	log.blks = make([]int, 0, log.loglen)
-	log.incoming = make(chan int)
+	log.blks = make([]idebuf_t, 0, log.loglen)
+	for i := range log.blks {
+		log.blks[i].data = new([512]uint8)
+	}
+	log.incoming = make(chan *bbuf_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
 }
 
-func (log *log_t) append(blkn int) {
+func (log *log_t) addlog(blk *bbuf_t) {
 	// log absorption
-	for _, b := range log.blks {
-		if b == blkn {
+	for i, b := range log.blks {
+		if b.block == blk.buf.block {
+			*log.blks[i].data = *blk.buf.data
 			return
 		}
 	}
-	log.blks = append(log.blks, blkn)
+	log.blks = append(log.blks, *blk.buf)
 	if len(log.blks) >= log.loglen {
 		panic("log larger than log len")
 	}
@@ -2769,30 +2770,20 @@ func (log *log_t) commit() {
 		return
 	}
 
-	dblk := bread(log.logstart)
-	lh := logheader_t{dblk}
-	if rnum := lh.recovernum(); rnum != 0  {
-		panic(fmt.Sprintf("should have ran recover %v", rnum))
-	}
-	for i, lbn := range log.blks {
+	lh := logheader_t{&log.tmpblk}
+	for i, lb := range log.blks {
 		// install log destination in the first log block
-		lh.w_logdest(i, lbn)
+		lh.w_logdest(i, lb.block)
 
 		// and write block to the log
-		src := bread(lbn)
 		logblkn := log.logstart + 1 + i
-		// XXX unnecessary read
-		dst := bread(logblkn)
-		dst.buf.data = src.buf.data
-		dst.writeback()
-		brelse(src)
-		brelse(dst)
+		bdev_write(logblkn, lb.data)
 	}
 
 	lh.w_recovernum(len(log.blks))
 
 	// commit log: flush log header
-	lh.blk.writeback()
+	bdev_write(log.logstart, &log.tmpblk)
 
 	//rn := lh.recovernum()
 	//if rn > 0 {
@@ -2801,20 +2792,20 @@ func (log *log_t) commit() {
 
 	// the log is committed. if we crash while installing the blocks to
 	// their destinations, we should be able to recover
-	for _, lbn := range log.blks {
-		blk := bread(lbn)
-		if !blk.dirty {
-			panic("log blocks must be dirty/in cache")
-		}
-		blk.writeback()
-		brelse(blk)
+	for _, lb := range log.blks {
+		bdev_write(lb.block, lb.data)
 	}
 
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
-	lh.blk.writeback()
-	brelse(dblk)
+	bdev_write(log.logstart, &log.tmpblk)
 
+	// XXX this goes away when bcache goes away. so bc doesn't fill up.
+	for _, lb := range log.blks {
+		blk := bread(lb.block)
+		blk.dirty = false
+		brelse(blk)
+	}
 	log.blks = log.blks[0:0]
 }
 
@@ -2833,10 +2824,7 @@ func log_daemon(l *log_t) {
 		for !done {
 			select {
 			case nb := <- l.incoming:
-				if t <= 0 {
-					panic("oh noes")
-				}
-				l.append(nb)
+				l.addlog(nb)
 			case <- l.done:
 				t--
 				if t == 0 {
@@ -2873,5 +2861,17 @@ func log_write(b *bbuf_t) {
 		return
 	}
 	b.dirty = true
-	fslog.incoming <- int(b.buf.block)
+	fslog.incoming <- b
+}
+
+func bdev_write(blkn int, src *[512]uint8) {
+	ider := idereq_new(blkn, true, src)
+	ide_request <- ider
+	<- ider.ack
+}
+
+func bdev_read(blkn int, dst *[512]uint8) {
+	ider := idereq_new(blkn, false, dst)
+	ide_request <- ider
+	<- ider.ack
 }
