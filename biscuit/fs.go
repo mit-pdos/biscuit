@@ -57,7 +57,7 @@ func fs_init() *file_t {
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
 
-	iblkcache.blks = make(map[int]*ibuf_t)
+	iblkcache.blks = make(map[int]*ibuf_t, 30)
 
 	bcdaemon.init()
 	go bc_daemon(&bcdaemon)
@@ -78,6 +78,9 @@ func fs_init() *file_t {
 
 	free_start = superb.freeblock()
 	free_len = superb.freeblocklen()
+
+	fblkcache.fblkc_init(free_start, free_len)
+
 	logstart := free_start + free_len
 	loglen := superb.loglen()
 	usable_start = logstart + loglen
@@ -2449,6 +2452,39 @@ func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
 	writen(dir.blk.buf.data[:], 8, st, v)
 }
 
+type fblkcache_t struct {
+	blks		[]*ibuf_t
+	free_start	int
+}
+
+var fblkcache = fblkcache_t{}
+
+func (fbc *fblkcache_t) fblkc_init(free_start, free_len int) {
+	fbc.blks = make([]*ibuf_t, free_len)
+	fbc.free_start = free_start
+	for i := range fbc.blks {
+		blkno := free_start + i
+		fb := &ibuf_t{}
+		fbc.blks[i] = fb
+		fb.block = blkno
+		fb.data = new([512]uint8)
+		bdev_read(blkno, fb.data)
+	}
+}
+
+func fbread(blockno int) *ibuf_t {
+	if blockno < superb_start {
+		panic("naughty blockno")
+	}
+	n := blockno - fblkcache.free_start
+	fblkcache.blks[n].Lock()
+	return fblkcache.blks[n]
+}
+
+func fbrelse(fb *ibuf_t) {
+	fb.Unlock()
+}
+
 func freebit(b uint8) uint {
 	for m := uint(0); m < 8; m++ {
 		if (1 << m) & b == 0 {
@@ -2470,16 +2506,16 @@ func balloc1() int {
 
 	found := false
 	var bit uint
-	var blk *bbuf_t
+	var blk *ibuf_t
 	var blkn int
 	var oct int
 	// 0 is free, 1 is allocated
 	for i := 0; i < flen && !found; i++ {
 		if blk != nil {
-			brelse(blk)
+			fbrelse(blk)
 		}
-		blk = bread(fst + i)
-		for idx, c := range blk.buf.data {
+		blk = fbread(fst + i)
+		for idx, c := range blk.data {
 			if c != 0xff {
 				bit = freebit(c)
 				blkn = i
@@ -2494,9 +2530,9 @@ func balloc1() int {
 	}
 
 	// mark as allocated
-	blk.buf.data[oct] |= 1 << bit
-	log_write(blk)
-	brelse(blk)
+	blk.data[oct] |= 1 << bit
+	blk.log_write()
+	fbrelse(blk)
 
 	boffset := usable_start
 	bitsperblk := 512*8
@@ -2532,10 +2568,10 @@ func bfree(blkno int) {
 	if fblkno >= fst + flen {
 		panic("bad blockno")
 	}
-	fblk := bread(fblkno)
-	fblk.buf.data[fbyteoff] &= ^(1 << fbitoff)
-	log_write(fblk)
-	brelse(fblk)
+	fblk := fbread(fblkno)
+	fblk.data[fbyteoff] &= ^(1 << fbitoff)
+	fblk.log_write()
+	fbrelse(fblk)
 
 	// force allocation of free inode block
 	if ifreeblk == blkno {
