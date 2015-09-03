@@ -164,6 +164,9 @@ func memfsrw(b *idebuf_t, writing bool) {
 	}
 }
 
+// a type for an inode block/offset identifier
+type inum int
+
 // object for managing inode transactions. since rename may need to atomically
 // operate on 3 arbitrary inodes, we need a way to lock the inodes but do it
 // without deadlocking. the purpose of this class is to lock the inodes, but
@@ -197,6 +200,15 @@ func memfsrw(b *idebuf_t, writing bool) {
 
 // to unlock, unlockall() simply sends the unlock to all locked inodes and
 // finally decrements the mem ref count.
+
+func noblksend(r *ireq_t, idm *idaemon_t) bool {
+	select {
+	case idm.req <- r:
+		return true
+	default:
+		return false
+	}
+}
 
 type itxchild_t struct {
 	path		string
@@ -1064,6 +1076,9 @@ type idaemon_t struct {
 	// cache of inode metadata
 	icache		icache_t
 	memref		int
+	// postponed ".." reqs
+	_ppdots		[]*ireq_t
+	ppdots		[]*ireq_t
 }
 
 var allidmons	= map[inum]*idaemon_t{}
@@ -1093,6 +1108,8 @@ func (idm *idaemon_t) idm_init(priv inum) {
 	idm.ioff = ioff
 
 	idm.req = make(chan *ireq_t)
+	idm._ppdots = make([]*ireq_t, 0, 2)
+	idm.ppdots = idm._ppdots
 
 	blk := ibread(blkno)
 	idm.icache.fill(blk, ioff)
@@ -1353,6 +1370,15 @@ type ireq_t struct {
 	resp		iresp_t
 }
 
+type iresp_t struct {
+	gnext		inum
+	cnext		inum
+	count		int
+	err		int
+	major		int
+	minor		int
+}
+
 // if incref is true, the call must be made between op_{begin,end}.
 func (r *ireq_t) mkget_fsinc(name string) {
 	var z ireq_t
@@ -1541,28 +1567,58 @@ func (r *ireq_t) mktrunc() {
 	r.rtype = TRUNC
 }
 
-type iresp_t struct {
-	gnext		inum
-	cnext		inum
-	count		int
-	err		int
-	major		int
-	minor		int
+func (idm *idaemon_t) _dotsadd(r *ireq_t, pidm *idaemon_t) {
+	// r has ".." removed from path
+	// try to send to parent immediately. if it would block, postpone.
+	if !noblksend(r, pidm) {
+		idm.ppdots = append(idm.ppdots, r)
+	}
 }
 
-// a type for an inode block/offset identifier
-type inum int
+// while waiting for a new ireq, try to send postponed ".." ireqs to parent
+func (idm *idaemon_t) nextreq(rin chan *ireq_t) *ireq_t {
+	// don't send postponded dotdots if locked
+	if len(idm.ppdots) != 0 && rin == idm.req {
+		priv, err := idm.iget("..")
+		if err != 0 {
+			panic("must succeed")
+		}
+		pidm := idaemon_ensure(priv)
+		for len(idm.ppdots) != 0 {
+			pp := idm.ppdots[0]
+			select {
+			case r := <- rin:
+				return r
+			case pidm.req <- pp:
+				idm.ppdots = idm.ppdots[1:]
+				if len(idm.ppdots) == 0 {
+					idm.ppdots = idm._ppdots
+				}
+			}
+		}
+	}
+
+	return <- rin
+}
 
 // returns true if the request is for the caller. if an error occurs, writes
 // the error back to the requester.
 func (idm *idaemon_t) forwardreq(r *ireq_t) bool {
-	if len(r.path) == 0 {
-		// req is for this idaemon
-		return true
-	}
+	// skip "."
+	var next string
+	for {
+		if len(r.path) == 0 {
+			// req is for this idaemon
+			return true
+		}
 
-	next := r.path[0]
-	r.path = r.path[1:]
+		next = r.path[0]
+		r.path = r.path[1:]
+		// iroot's ".." is special: it is just like "."
+		if next != "."  && (next != ".." || idm != iroot) {
+			break
+		}
+	}
 	npriv, err := idm.iget(next)
 	if err != 0 {
 		r.resp.err = err
@@ -1570,16 +1626,11 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) bool {
 		return false
 	}
 	nextidm := idaemon_ensure(npriv)
-	// forward request. if we are sending to our parent via "../" or to
-	// ourselves via "./", do it in a separate goroutine so that we don't
-	// deadlock.
-	send := func() {
-		nextidm.req <- r
-	}
-	if next == ".." || next == "." {
-		go send()
+	// if necessary, postpone ".." to avoid deadlock.
+	if next == ".." {
+		idm._dotsadd(r, nextidm)
 	} else {
-		go send()
+		nextidm.req <- r
 	}
 	return false
 }
@@ -1601,11 +1652,17 @@ func idaemonize(idm *idaemon_t) {
 		if idm.icache.links < 0 || idm.memref < 0 {
 			panic("negative links")
 		}
+		// XXX if links == 0 and we are a directory, remove ".."
 		if idm.icache.links != 0 || idm.memref != 0 {
 			if !memref {
 				iupdate()
 			}
 			return false
+		}
+		// fail postponed dotdots
+		for _, pp := range idm.ppdots {
+			pp.resp.err = -ENOENT
+			pp.ack <- true
 		}
 		idm.ifree()
 		idmonl.Lock()
@@ -1618,7 +1675,7 @@ func idaemonize(idm *idaemon_t) {
 	go func() {
 	ch := idm.req
 	for {
-		r := <- ch
+		r := idm.nextreq(ch)
 		switch r.rtype {
 		case CREATE:
 			if forme := idm.forwardreq(r); !forme {
