@@ -1553,12 +1553,12 @@ type iresp_t struct {
 // a type for an inode block/offset identifier
 type inum int
 
-// returns true if the request was forwarded or if an error occured. if an
-// error occurs, writes the error back to the requester.
-func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
+// returns true if the request is for the caller. if an error occurs, writes
+// the error back to the requester.
+func (idm *idaemon_t) forwardreq(r *ireq_t) bool {
 	if len(r.path) == 0 {
 		// req is for this idaemon
-		return false, false
+		return true
 	}
 
 	next := r.path[0]
@@ -1567,7 +1567,7 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 	if err != 0 {
 		r.resp.err = err
 		r.ack <- true
-		return false, true
+		return false
 	}
 	nextidm := idaemon_ensure(npriv)
 	// forward request. if we are sending to our parent via "../" or to
@@ -1581,7 +1581,7 @@ func (idm *idaemon_t) forwardreq(r *ireq_t) (bool, bool) {
 	} else {
 		go send()
 	}
-	return true, false
+	return false
 }
 
 func idaemonize(idm *idaemon_t) {
@@ -1621,7 +1621,7 @@ func idaemonize(idm *idaemon_t) {
 		r := <- ch
 		switch r.rtype {
 		case CREATE:
-			if fwded, erred := idm.forwardreq(r); fwded || erred {
+			if forme := idm.forwardreq(r); !forme {
 				break
 			}
 
@@ -1650,7 +1650,7 @@ func idaemonize(idm *idaemon_t) {
 
 		case GET:
 			// is the requester asking for this daemon?
-			if fwded, erred := idm.forwardreq(r); fwded || erred {
+			if forme := idm.forwardreq(r); !forme {
 				break
 			}
 
@@ -1680,7 +1680,7 @@ func idaemonize(idm *idaemon_t) {
 
 		case INSERT:
 			// create new dir ent with given inode number
-			if fwded, erred := idm.forwardreq(r); fwded || erred {
+			if forme := idm.forwardreq(r); !forme {
 				break
 			}
 			err := idm.iinsert(r.insert_name, r.insert_priv)
@@ -1705,7 +1705,7 @@ func idaemonize(idm *idaemon_t) {
 			}
 
 		case STAT:
-			if fwded, erred := idm.forwardreq(r); fwded || erred {
+			if forme := idm.forwardreq(r); !forme {
 				break
 			}
 			st := r.stat_st
