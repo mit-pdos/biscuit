@@ -1,7 +1,7 @@
 package main
 
 import "fmt"
-import "sort"
+import "runtime"
 import "strings"
 import "sync"
 
@@ -169,15 +169,9 @@ type inum int
 
 // object for managing inode transactions. since rename may need to atomically
 // operate on 3 arbitrary inodes, we need a way to lock the inodes but do it
-// without deadlocking. the purpose of this class is to lock the inodes, but
-// lock them in ascending order of inums. that way deadlock is avoided. it is
-// complicated by the fact that we do not know all the inodes inums before hand
-// -- we have to look them up. furthermore, one of the inodes that must be
-// locked may be contained by one of the inums that needs to be locked, so if
-// the lookup inode has a smaller inum, we have to unlock everything and start
-// over, making sure to lock the looked up inode before the others. worse yet,
-// a child may exist in which case it must be locked -- if it does not exist
-// then obviously it is fine to not lock it.
+// without deadlocking. the purpose of this class is to lock the inodes, but to
+// use non-blocking acquires -- if an acquire fails, we release all the locks
+// and retry. that way deadlock is avoided.
 
 // the inputs to inodetx_t are 1) paths: the inodes that are NOT contained in
 // another inode in this transaction. 2) childs: inodes that are contained in
@@ -210,380 +204,293 @@ func noblksend(r *ireq_t, idm *idaemon_t) bool {
 	}
 }
 
-type itxchild_t struct {
-	path		string
-	found		bool
-	mustexist	bool
-	priv		inum
-	lchan		chan *ireq_t
-}
-
-type itxpar_t struct {
-	path		string
-	priv		inum
-	childs		map[string]*itxchild_t
-	lchan		chan *ireq_t
-}
-
 type inodetx_t struct {
-	dpaths	map[string]*itxpar_t
+	paths	map[string]*itxpath_t
+	bypriv	map[inum]bool
 	cwd	inum
 }
 
-func (itx *inodetx_t) cname(par, child string) string {
-	return par + "/" + child
+type itxpath_t struct {
+	mustexist	bool
+	found		bool
+	priv		inum
+	lchan		chan *ireq_t
+	child		bool
+	par		*itxpath_t
+	cpath		string
+}
+
+func (itx *inodetx_t) _pjoin(p, c string) string {
+	if p == "" {
+		return c
+	} else {
+		return p + "/" + c
+	}
 }
 
 func (itx *inodetx_t) init(cwdpriv inum) {
 	itx.cwd = cwdpriv
-	itx.dpaths = make(map[string]*itxpar_t)
+	itx.paths = make(map[string]*itxpath_t)
 }
 
 func (itx *inodetx_t) addpath(path string) {
-	if _, ok := itx.dpaths[path]; ok {
+	if _, ok := itx.paths[path]; ok {
 		return
 	}
-	par := itxpar_t{path: path, childs: make(map[string]*itxchild_t)}
-	itx.dpaths[path] = &par
+	p := &itxpath_t{}
+	p.mustexist = true
+	itx.paths[path] = p
 }
 
-func (itx *inodetx_t) addchild(path string, childp string, mustexist bool) {
+func (itx *inodetx_t) addchild(par string, childp string, mustexist bool) {
 	if childp == "" {
 		panic("child cannot be empty string")
 	}
-	par := itx.dpaths[path]
-	if echild, ok := par.childs[childp]; ok {
-		old := echild.mustexist
-		echild.mustexist = old || mustexist
+	path := itx._pjoin(par, childp)
+	if ep, ok := itx.paths[path]; ok {
+		old := ep.mustexist
+		ep.mustexist = old || mustexist
 	} else {
-		nc := itxchild_t{path: childp, mustexist: mustexist}
-		par.childs[childp] = &nc
+		pp, ok := itx.paths[par]
+		if !ok {
+			panic("no parent for child")
+		}
+		np := &itxpath_t{mustexist: mustexist, child: true,
+		    par: pp, cpath: childp}
+		itx.paths[path] = np
 	}
 }
 
-func (itx *inodetx_t) lockall() int {
-	// reset state
-	for _, par := range itx.dpaths {
-		par.priv = 0
-		par.lchan = nil
-		for _, child := range par.childs {
-			child.found = false
-			child.priv = 0
-			child.lchan = nil
-		}
+func (itx *inodetx_t) childfound(par, child string) bool {
+	path := itx._pjoin(par, child)
+	if p, ok := itx.paths[path]; ok {
+		return p.found
 	}
+	panic("no such path")
+}
 
-	memdecf := func(priv inum) {
+func (itx *inodetx_t) privforc(par, child string) inum {
+	path := itx._pjoin(par, child)
+	if p, ok := itx.paths[path]; ok {
+		return p.priv
+	}
+	panic("no such path")
+}
+
+func (itx *inodetx_t) privforp(path string) inum {
+	if p, ok := itx.paths[path]; ok {
+		return p.priv
+	}
+	panic("no such path")
+}
+
+func (itx *inodetx_t) sendp(path string, req *ireq_t) {
+	if p, ok := itx.paths[path]; ok {
+		p.lchan <- req
+		<- req.ack
+		return
+	}
+	panic("no such path")
+}
+
+func (itx *inodetx_t) sendc(par, child string, req *ireq_t) {
+	path := itx._pjoin(par, child)
+	if p, ok := itx.paths[path]; ok {
+		p.lchan <- req
+		<- req.ack
+		return
+	}
+	panic("no such path")
+}
+
+func (itx *inodetx_t) lockall() int {
+	memdec := func(priv inum) {
 		req := &ireq_t{}
 		req.mkref_direct()
 		idm := idaemon_ensure(priv)
 		idm.req <- req
 		<- req.ack
 		if req.resp.err != 0 {
-			panic("unlock must succeed")
+			panic("decref must succeed")
 		}
 	}
 
-	pmems := make(map[inum]bool)
-	pmemdecs := func() {
-		for priv := range pmems {
-			memdecf(priv)
+	var refs map[inum]bool
+	itx.bypriv = refs
+	dodecs := func() {
+		for priv := range refs {
+			memdec(priv)
 		}
 	}
 
-	for path, par := range itx.dpaths {
+	dounlocks := func() {
 		req := &ireq_t{}
-		req.mkget_meminc(path)
-		req_namei(req, path, itx.cwd)
-		<- req.ack
-		if req.resp.err != 0 {
-			pmemdecs()
-			return req.resp.err
-		}
-		par.priv = req.resp.gnext
-		if pmems[par.priv] {
-			memdecf(par.priv)
-		}
-		pmems[par.priv] = true
-	}
-
-	send := func(req *ireq_t, priv inum) {
-		idm := idaemon_ensure(priv)
-		idm.req <- req
-		<- req.ack
-	}
-
-	var sorted []int
-	var lchans map[inum]chan *ireq_t
-	done := false
-	for !done {
-		sorted = make([]int, 0, 6)
-		cmems := make(map[inum]bool)
-		clocks := make(map[inum]bool)
-
-		cmemdecs := func() {
-			for cpriv := range cmems {
-				memdecf(cpriv)
-			}
-		}
-
-		added := make(map[inum]bool)
-		for _, par := range itx.dpaths {
-			// remove duplicate par inums
-			if !added[par.priv] {
-				sorted = append(sorted, int(par.priv))
-			}
-			added[par.priv] = true
-		}
-
-		// add children to sorted inums
-		for _, par := range itx.dpaths {
-			for cpath, child := range par.childs {
-				child.priv = 0
-				child.found = false
-				child.lchan = nil
-
-				req := &ireq_t{}
-				req.mkget_meminc(cpath)
-				send(req, par.priv)
-				if req.resp.err == -ENOENT {
-					if child.mustexist {
-						pmemdecs()
-						cmemdecs()
-						return req.resp.err
-					}
+		req.mkunlock()
+		for priv := range refs {
+			var ch chan *ireq_t
+			for _, ipath := range itx.paths {
+				if ipath.priv != priv {
 					continue
-				} else if req.resp.err != 0 {
-					pmemdecs()
-					cmemdecs()
-					return req.resp.err
 				}
-				child.priv = req.resp.gnext
-				child.found = true
-				// remove duplicate child inums
-				if !added[child.priv] {
-					sorted = append(sorted, int(child.priv))
+				if ipath.lchan != nil {
+					ch = ipath.lchan
+					break
 				}
-				added[child.priv] = true
-				cmems[child.priv] = true
+			}
+			if ch != nil {
+				ch <- req
+				<- req.ack
+				if req.resp.err != 0 {
+					panic("unlocked must succeed")
+				}
+			}
+		}
+	}
+
+	req := &ireq_t{}
+	fails := 0
+	restart:
+	for {
+		// reset state
+		refs = make(map[inum]bool)
+		for _, ipath := range itx.paths {
+			ipath.found = false
+			ipath.lchan = nil
+			ipath.priv = 0
+		}
+
+		// get memrefs
+		for path, ipath := range itx.paths {
+			req.mkget_meminc(path)
+			req_namei(req, path, itx.cwd)
+			<- req.ack
+			err := req.resp.err
+			if err != 0 {
+				if !ipath.mustexist && err == -ENOENT {
+					ipath.found = false
+				} else {
+					dodecs()
+					return err
+				}
+			} else {
+				ipath.found = true
+			}
+			if ipath.found {
+				priv := req.resp.gnext
+				if refs[priv] {
+					memdec(priv)
+				}
+				refs[priv] = true
+				ipath.found = true
+				ipath.priv = priv
 			}
 		}
 
-		lchans = make(map[inum]chan *ireq_t)
-		// sort inums, lock in order
-		sort.Sort(sort.IntSlice(sorted))
-		for _, in := range sorted {
-			req := &ireq_t{}
+		// try all locks
+		for priv := range refs {
 			req.mklock()
-			lchans[inum(in)] = req.lock_lchan
-			send(req, inum(in))
-			if req.resp.err != 0 {
-				panic("lock must succeed")
-			}
-			for _, par := range itx.dpaths {
-				for _, child := range par.childs {
-					if child.priv == inum(in) {
-						clocks[child.priv] = true
-					}
+			idm := idaemon_ensure(priv)
+			failed := true
+			// we've just sent the goroutine a memref request; give
+			// it a chance to receive again. if we fail on our
+			// first try to send instead of yielding after an
+			// attempt, we often loop in here 500 times on qemu.
+			for i := 0; i < 3; i++ {
+				if noblksend(req, idm) {
+					failed = false
+					break
 				}
+				runtime.Gosched()
 			}
-		}
-
-		// set lchans
-		for _, par := range itx.dpaths {
-			lc, ok := lchans[par.priv]
-			if !ok {
-				panic("must be in lchans")
+			if failed {
+				dounlocks()
+				dodecs()
+				fails++
+				goto restart
 			}
-			par.lchan = lc
-			for _, child := range par.childs {
-				if !child.found {
-					continue
-				}
-				lc, ok := lchans[child.priv]
-				if !ok {
-					panic("child must be in lchans")
-				}
-				child.lchan = lc
-			}
-		}
-
-		unlockf := func(priv inum) {
-			req := &ireq_t{}
-			req.mkunlock()
-			lchans[priv] <- req
 			<- req.ack
 			if req.resp.err != 0 {
-				panic("unlock must succeed")
+				panic("must succeed")
 			}
-		}
-		unlockall := func() {
-			for _, par := range itx.dpaths {
-				unlockf(par.priv)
-			}
-			for cpriv := range clocks {
-				unlockf(cpriv)
-			}
-			cmemdecs()
-		}
-		unlockfail := func() {
-			unlockall()
-			pmemdecs()
-			cmemdecs()
-		}
-
-		// verify that child inums haven't been changed and that
-		// children that were not locked because they didn't exist
-		// still don't exist
-		done = true
-		outer:
-		for _, par := range itx.dpaths {
-			for cpath, child := range par.childs {
-				req := &ireq_t{}
-				req.mklookup(cpath)
-				par.lchan <- req
-				<- req.ack
-				if req.resp.err == 0 && !child.found {
-					unlockall()
-					done = false
-					break outer
-				} else if req.resp.err == -ENOENT {
-					if child.found {
-						unlockall()
-						done = false
-						break outer
-					}
+			// find all paths with this priv and set lchan
+			for _, ipath := range itx.paths {
+				if ipath.priv != priv {
 					continue
-				} else if req.resp.err != 0 {
-					unlockfail()
-					return req.resp.err
 				}
-				newpriv := req.resp.gnext
-				if newpriv != child.priv {
-					// child inode was changed before we
-					// locked it
-					unlockall()
-					done = false
-					break outer
-				}
+				ipath.lchan = req.lock_lchan
 			}
 		}
-	}
-	return 0
-}
 
-func (itx *inodetx_t) childfound(par, child string) bool {
-	p, ok := itx.dpaths[par]
-	if !ok {
-		panic("no such par")
-	}
-	c, ok := p.childs[child]
-	if !ok {
-		panic("no such child")
-	}
-	return c.found
-}
+		// make sure child existence is the same as what we observed
+		// when getting memrefs
+		for _, ipath := range itx.paths {
+			if !ipath.child {
+				continue
+			}
+			req.mklookup(ipath.cpath)
+			if ipath.par.lchan == nil {
+				panic("parent must be locked")
+			}
+			ipath.par.lchan <- req
+			<- req.ack
+			err := req.resp.err
+			if err != -ENOENT && err != 0 {
+				dounlocks()
+				dodecs()
+				return err
+			}
+			// child availability or inum changed?
+			if (err == -ENOENT && ipath.found) ||
+			   (err == 0 && !ipath.found) ||
+			   (req.resp.gnext != ipath.priv) {
+				dounlocks()
+				dodecs()
+				goto restart
+			}
+		}
 
-func (itx *inodetx_t) privforc(par, child string) inum {
-	p, ok := itx.dpaths[par]
-	if !ok {
-		panic("no such par")
+		// we are done!
+		itx.bypriv = refs
+		if fails >= 3 {
+			fmt.Printf("*** fails: %v\n", fails)
+		}
+		return 0
 	}
-	c, ok := p.childs[child]
-	if !ok {
-		panic("no such child")
-	}
-	if !c.found {
-		panic("child not found")
-	}
-	return c.priv
-}
-
-func (itx *inodetx_t) privforp(par string) inum {
-	p, ok := itx.dpaths[par]
-	if !ok {
-		panic("no such par")
-	}
-	return p.priv
-}
-
-func (itx *inodetx_t) sendp(par string, req *ireq_t) {
-	if len(itx.dpaths) == 0 {
-		panic("nothing locked")
-	}
-	p, ok := itx.dpaths[par]
-	if !ok || p.lchan == nil {
-		panic("no such path")
-	}
-	p.lchan <- req
-	<- req.ack
-}
-
-func (itx *inodetx_t) sendc(par, child string, req *ireq_t) {
-	if len(itx.dpaths) == 0 {
-		panic("nothing locked")
-	}
-	p, ok := itx.dpaths[par]
-	if !ok {
-		panic("no such path")
-	}
-	c, ok := p.childs[child]
-	if !ok {
-		panic("no such child path")
-	}
-	c.lchan <- req
-	<- req.ack
 }
 
 func (itx *inodetx_t) unlockall() {
-	// unlock
-	if len(itx.dpaths) == 0 {
-		panic("nothing locked")
-	}
-	unlock := func(lchan chan *ireq_t) {
-		req := &ireq_t{}
-		req.mkunlock()
-		lchan <- req
-		<- req.ack
-		if req.resp.err != 0 {
-			panic("unlock must succeed")
-		}
-	}
-	decref := func(priv inum) {
-		req := &ireq_t{}
-		req.mkrefdec(true)
-		idm := idaemon_ensure(priv)
-		idm.req <- req
-		<- req.ack
-		if req.resp.err != 0 {
-			panic("dec ref must succeed")
-		}
-	}
-	doit := func(locks bool) {
-		did := make(map[inum]bool)
-		for _, par := range itx.dpaths {
-			if !did[par.priv] {
-				if locks {
-					unlock(par.lchan)
-				} else {
-					decref(par.priv)
-				}
-				did[par.priv] = true
+	// unlock, then send memdecs
+	req := &ireq_t{}
+	req.mkunlock()
+	for priv := range itx.bypriv {
+		var ch chan *ireq_t
+		for _, ipath := range itx.paths {
+			if ipath.priv != priv {
+				continue
 			}
-			for _, child := range par.childs {
-				if child.found && !did[child.priv] {
-					if locks {
-						unlock(child.lchan)
-					} else {
-						decref(child.priv)
-					}
-					did[child.priv] = true
-				}
+			if ipath.lchan != nil {
+				ch = ipath.lchan
+				break
+			}
+		}
+		if ch != nil {
+			ch <- req
+			<- req.ack
+			if req.resp.err != 0 {
+				panic("unlocked must succeed")
 			}
 		}
 	}
-	doit(true)
-	doit(false)
+
+	req.mkrefdec(true)
+	for priv := range itx.bypriv {
+		idmn := idaemon_ensure(priv)
+		idmn.req <- req
+		<- req.ack
+		if req.resp.err != 0 {
+			panic("decref must succeed")
+		}
+	}
 }
 
 func fs_link(old string, new string, cwdf *file_t) int {
