@@ -1366,6 +1366,7 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 type userbuf_t struct {
 	userva	int
 	len	int
+	// 0 <= off <= len
 	off	int
 	proc	*proc_t
 	fake	bool
@@ -1383,6 +1384,13 @@ func (ub *userbuf_t) fake_init(buf []uint8) {
 	ub.fake = true
 	ub.fbuf = buf
 	ub.off = 0
+}
+
+func (ub *userbuf_t) remain() int {
+	if ub.fake {
+		return len(ub.fbuf)
+	}
+	return ub.len - ub.off
 }
 
 func (ub *userbuf_t) read(dst []uint8) (int, int) {

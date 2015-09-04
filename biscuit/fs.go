@@ -1898,17 +1898,13 @@ func (idm *idaemon_t) iread1(dst *userbuf_t, offset int) (int, int) {
 	}
 
 	c := 0
-	for offset + c < isz {
+	for offset + c < isz && dst.remain() != 0 {
 		src, blk := idm.blkslice(offset + c, false)
 		wrote, err := dst.write(src)
 		idm.icache.mbrelse(blk)
 		c += wrote
 		if err != 0 {
 			return c, err
-		}
-		dstfull := wrote != len(src)
-		if dstfull {
-			break
 		}
 	}
 	return c, 0
