@@ -1115,6 +1115,7 @@ type icache_t struct {
 	indir		int
 	addrs		[NIADDRS]int
 	dents		map[string]icdent_t
+	_free_dents	[]icdent_t
 	free_dents	[]icdent_t
 	// inode specific metadata blocks
 	metablks	map[int]*mdbuf_t
@@ -1183,7 +1184,8 @@ func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
 
 func (ic *icache_t) cache_dirents(ds []dirdata_t) {
 	ic.dents = make(map[string]icdent_t)
-	ic.free_dents = make([]icdent_t, 0, NDIRENTS)
+	ic._free_dents = make([]icdent_t, 0, NDIRENTS)
+	ic.free_dents = ic._free_dents
 	for i := range ds {
 		for j := 0; j < NDIRENTS; j++ {
 			fn := ds[i].filename(j)
@@ -2032,7 +2034,10 @@ func (idm *idaemon_t) iunlink(name string) (inum, int) {
 	dirdata.w_inodenext(de.slot, 0, 0)
 	blk.log_write()
 	idm.icache.mbrelse(blk)
+	// add back to free dents
 	delete(idm.icache.dents, name)
+	icd := icdent_t{blkno: de.blkno, slot: de.slot}
+	idm.icache.free_dents = append(idm.icache.free_dents, icd)
 	return de.priv, 0
 }
 
@@ -2137,6 +2142,9 @@ func (idm *idaemon_t) dirent_getempty() (int, int) {
 	if len(frd) > 0 {
 		ret := frd[0]
 		idm.icache.free_dents = frd[1:]
+		if len(idm.icache.free_dents) == 0 {
+			idm.icache.free_dents = idm.icache._free_dents
+		}
 		return ret.blkno, ret.slot
 	}
 

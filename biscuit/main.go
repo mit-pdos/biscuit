@@ -2141,18 +2141,6 @@ func main() {
 	//fake_work()
 }
 
-func incn() int {
-	blkno := 31337
-	b := bread(blkno)
-	n := readn(b.buf.data[:], 8, 0)
-	ret := n
-	n++
-	writen(b.buf.data[:], 8, 0, n)
-	b.writeback()
-	fmt.Printf("n is now %d\n", n)
-	return ret
-}
-
 func findbm() {
 	dmap_init()
 	//n := incn()
