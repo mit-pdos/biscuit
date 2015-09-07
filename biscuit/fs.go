@@ -4,6 +4,7 @@ import "fmt"
 import "runtime"
 import "strings"
 import "sync"
+import "unsafe"
 
 const NAME_MAX    int = 512
 
@@ -16,7 +17,6 @@ var usable_start	int
 
 // file system journal
 var fslog	= log_t{}
-var bcdaemon	= bcdaemon_t{}
 
 // free block bitmap lock
 var fblock	= sync.Mutex{}
@@ -58,9 +58,6 @@ func fs_init() *file_t {
 	go ide_daemon()
 
 	iblkcache.blks = make(map[int]*ibuf_t, 30)
-
-	bcdaemon.init()
-	go bc_daemon(&bcdaemon)
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
@@ -120,48 +117,11 @@ func fs_recover() {
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
-type memorium_t struct {
-	idebuf	idebuf_t
-	sync.Mutex
-}
-var memorium = []memorium_t{}
 var memtime = false
 
 func use_memfs() {
-	startb := superb_start
-
-	// 20MB disks
-	fsblocks := 40960
-
-	fmt.Printf("Populating memfs")
-	memorium = make([]memorium_t, fsblocks)
-
-	tpct := fsblocks/100
-	buffer := new([512]uint8)
-	for i := 1; i < fsblocks; i++ {
-		bdev_read(startb + i, buffer)
-		memorium[i].idebuf.disk = 0
-		memorium[i].idebuf.block = startb + i
-		memorium[i].idebuf.data = new([512]uint8)
-		*memorium[i].idebuf.data = *buffer
-		if (i + 1) % tpct == 0 {
-			fmt.Printf(".")
-		}
-	}
 	memtime = true
-	fmt.Printf("\ndone! Not using disk for fs\n")
-}
-
-func memfsrw(b *idebuf_t, writing bool) {
-	idx := b.block - superb_start
-	if idx == 0 {
-		panic("no superblock")
-	}
-	if writing {
-		*memorium[idx].idebuf.data = *b.data
-	} else {
-		*b.data = *memorium[idx].idebuf.data
-	}
+	fmt.Printf("Using MEMORY FS\n")
 }
 
 // a type for an inode block/offset identifier
@@ -968,9 +928,127 @@ func req_namei(req *ireq_t, paths string, cwd inum) {
 	dest.req <- req
 }
 
+// XXX should flush only modified parts of a page (where the unit is determined
+// by the underlying device's blocksize) instead of the entire page.
+// XXX don't need to fill the destination page if the write covers the whole
+// page
+// XXX need a mechanism for evicting page cache...
 type pgcache_t struct {
 	pgs	[]*[PGSIZE]uint8
-	phys	[]int
+	pginfo	[]pgcinfo_t
+	// fill is used to fill empty pages with data from the underlying
+	// device or layer. its arguments are the destination slice and offset
+	// and returns error. fill may write fewer bytes than the length of the
+	// destination buffer.
+	_fill	func([]uint8, int) int
+	// flush writes the given buffer to the specified offset of the device.
+	_flush	func([]uint8, int) int
+}
+
+type pgcinfo_t struct {
+	phys		int
+	dirty		bool
+}
+
+func (pc *pgcache_t) pgc_init(fill func([]uint8, int) int,
+    flush func([]uint8, int) int) {
+	if fill == nil || flush == nil {
+		panic("invalid page func")
+	}
+	pc._fill = fill
+	pc._flush = flush
+}
+
+// mark the range [offset, end) as dirty
+func (pc *pgcache_t) pgdirty(offset, end int) {
+	pgn := offset / PGSIZE
+	pgi := pc.pginfo[pgn]
+	if pc.pgs[pgn] == nil {
+		panic("pg not init'ed")
+	}
+	pgi.dirty = true
+	pc.pginfo[pgn] = pgi
+}
+
+func (pc *pgcache_t) _ensureslot(pgn int) bool {
+	// XXXPANIC
+	if len(pc.pgs) != len(pc.pginfo) {
+		panic("weird lens")
+	}
+	// XXXPANIC
+	if pgn > len(pc.pgs) + 40 {
+		panic("much wasted")
+	}
+	// make arrays large enough to hold this page
+	if pgn >= len(pc.pgs) {
+		nlen := pgn + 3
+		npgs := make([]*[PGSIZE]uint8, nlen)
+		copy(npgs, pc.pgs)
+		npgi := make([]pgcinfo_t, nlen)
+		copy(npgi, pc.pginfo)
+		pc.pgs = npgs
+		pc.pginfo = npgi
+	}
+	created := false
+	if pc.pgs[pgn] == nil {
+		created = true
+		npg, p_npg := pg_new()
+		var pgi pgcinfo_t
+		pgi.phys = p_npg
+		pc.pginfo[pgn] = pgi
+		bpg := (*[PGSIZE]uint8)(unsafe.Pointer(npg))
+		pc.pgs[pgn] = bpg
+	}
+	return created
+}
+
+// offset <= end. if offset lies on the same page as end, the returned slice is
+// trimmed (bytes >= end are removed).
+func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, int) {
+	if offset > end {
+		panic("offset must be less than end")
+	}
+	// resize pginfo array if necessary
+	pgn := offset / PGSIZE
+	needsfill := pc._ensureslot(pgn)
+	pgva := pc.pgs[pgn]
+	pg := pgva[:]
+
+	if needsfill {
+		devoffset := pgn * PGSIZE
+		err := pc._fill(pg, devoffset)
+		if err != 0 {
+			panic("must succeed")
+		}
+	}
+	pgoff := offset % PGSIZE
+	pg = pg[pgoff:]
+	if offset + len(pg) > end {
+		left := end - offset
+		pg = pg[:left]
+	}
+	return pg, 0
+}
+
+// write all dirty pages back to device
+func (pc *pgcache_t) flush() {
+	for i := range pc.pgs {
+		pgva := pc.pgs[i]
+		if pgva == nil {
+			continue
+		}
+		pgi := pc.pginfo[i]
+		if !pgi.dirty {
+			continue
+		}
+		devoffset := i*PGSIZE
+		err := pc._flush(pgva[:], devoffset)
+		if err != 0 {
+			panic("flush must succeed")
+		}
+		pgi.dirty = false
+		pc.pginfo[i] = pgi
+	}
 }
 
 type idaemon_t struct {
@@ -1014,18 +1092,45 @@ func (idm *idaemon_t) idm_init(priv inum) {
 	idm.blkno = blkno
 	idm.ioff = ioff
 
+	idm.pgcache.pgc_init(idm.fs_fill, idm.fs_flush)
 	idm.req = make(chan *ireq_t)
 	idm._ppdots = make([]*ireq_t, 0, 2)
 	idm.ppdots = idm._ppdots
 
 	blk := ibread(blkno)
 	idm.icache.fill(blk, ioff)
-	if idm.icache.itype == I_DIR {
-		ds := idm.all_dirents()
-		idm.icache.cache_dirents(ds)
-		idm.icache.dirent_brelse(ds)
-	}
 	ibrelse(blk)
+	if idm.icache.itype == I_DIR {
+		idm.cache_dirents()
+	}
+}
+
+func (idm *idaemon_t) cache_dirents() {
+	ic := &idm.icache
+	ic.dents = make(map[string]icdent_t)
+	ic._free_dents = make([]icdent_t, 0, NDIRENTS)
+	ic.free_dents = ic._free_dents
+	for i := 0; i < idm.icache.size; i+= 512 {
+		pg, err := idm.pgcache.pgfor(i, i+512)
+		if err != 0 {
+			panic("must succeed")
+		}
+		// XXXPANIC
+		if len(pg) != 512 {
+			panic("wut")
+		}
+		dd := dirdata_t{pg}
+		for j := 0; j < NDIRENTS; j++ {
+			fn := dd.filename(j)
+			priv := dd.inodenext(j)
+			nde := icdent_t{i+j*NDBYTES, priv}
+			if fn == "" {
+				ic.free_dents = append(ic.free_dents, nde)
+			} else {
+				ic.dents[fn] = nde
+			}
+		}
+	}
 }
 
 // inode block cache. there are 4 inodes per inode block. we need a block cache
@@ -1121,10 +1226,9 @@ type icache_t struct {
 	metablks	map[int]*mdbuf_t
 }
 
-// struct to hold the block/offset of free directory entry slots
+// struct to hold the offset/priv of directory entry slots
 type icdent_t struct {
-	blkno	int
-	slot	int
+	offset	int
 	priv	inum
 }
 
@@ -1133,6 +1237,19 @@ type icdent_t struct {
 type mdbuf_t struct {
 	block	int
 	data	[512]uint8
+}
+
+func (ic *icache_t) _mbensure(blockn int, fill bool) *mdbuf_t {
+	mb, ok := ic.metablks[blockn]
+	if !ok {
+		mb = &mdbuf_t{}
+		mb.block = blockn
+		if fill {
+			bdev_read(blockn, &mb.data)
+		}
+		ic.metablks[blockn] = mb
+	}
+	return mb
 }
 
 func (mb *mdbuf_t) log_write() {
@@ -1144,23 +1261,17 @@ func (mb *mdbuf_t) log_write() {
 }
 
 func (ic *icache_t) mbread(blockn int) *mdbuf_t {
-	mb, ok := ic.metablks[blockn]
-	if !ok {
-		mb = &mdbuf_t{}
-		mb.block = blockn
-		bdev_read(blockn, &mb.data)
-		ic.metablks[blockn] = mb
-	}
-	return mb
+	return ic._mbensure(blockn, true)
 }
 
 func (ic *icache_t) mbrelse(mb *mdbuf_t) {
 }
 
-func (ic *icache_t) dirent_brelse(ds []dirdata_t) {
-	for _, d := range ds {
-		ic.mbrelse(d.blk)
+func (ic *icache_t) mbempty(blockn int) *mdbuf_t {
+	if _, ok := ic.metablks[blockn]; ok {
+		panic("block present")
 	}
+	return ic._mbensure(blockn, false)
 }
 
 func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
@@ -1180,24 +1291,6 @@ func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
 		ic.addrs[i] = inode.addr(i)
 	}
 	ic.metablks = make(map[int]*mdbuf_t, 5)
-}
-
-func (ic *icache_t) cache_dirents(ds []dirdata_t) {
-	ic.dents = make(map[string]icdent_t)
-	ic._free_dents = make([]icdent_t, 0, NDIRENTS)
-	ic.free_dents = ic._free_dents
-	for i := range ds {
-		for j := 0; j < NDIRENTS; j++ {
-			fn := ds[i].filename(j)
-			priv := ds[i].inodenext(j)
-			fde := icdent_t{int(ds[i].blk.block), j, priv}
-			if fn == "" {
-				ic.free_dents = append(ic.free_dents, fde)
-			} else {
-				ic.dents[fn] = fde
-			}
-		}
-	}
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
@@ -1766,29 +1859,18 @@ func idaemonize(idm *idaemon_t) {
 // takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
-	zeroblock := func(blkno int) {
-		// zero block
-		zblk := idm.icache.mbread(blkno)
-		for i := range zblk.data {
-			zblk.data[i] = 0
-		}
-		zblk.log_write()
-		idm.icache.mbrelse(zblk)
-	}
-	ensureb := func(blkno int, dozero bool) (int, bool) {
+	// ensure block exists
+	ensureb := func(blkno int) (int, bool) {
 		if !writing || blkno != 0 {
 			return blkno, false
 		}
 		nblkno := balloc()
-		if dozero {
-			zeroblock(nblkno)
-		}
 		return nblkno, true
 	}
 	// this function makes sure that every slot up to and including idx of
 	// the given indirect block has a block allocated. it is necessary to
 	// allocate a bunch of zero'd blocks for a file when someone lseek()s
-	// past the end of the file but writes later.
+	// past the end of the file and then writes.
 	ensureind := func(blk *mdbuf_t, idx int) {
 		if !writing {
 			return
@@ -1798,7 +1880,7 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 			slot := i * 8
 			s := blk.data[:]
 			blkn := readn(s, 8, slot)
-			blkn, isnew := ensureb(blkn, true)
+			blkn, isnew := ensureb(blkn)
 			if isnew {
 				writen(s, 8, slot, blkn)
 				added = true
@@ -1835,8 +1917,9 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		nextindb := 63*8
 		indno := idm.icache.indir
 		// get first indirect block
-		indno, isnew := ensureb(indno, true)
+		indno, isnew := ensureb(indno)
 		if isnew {
+			idm.icache.mbempty(indno)
 			idm.icache.indir = indno
 		}
 		// follow indirect block chain
@@ -1856,7 +1939,7 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		noff := (slotoff)*8
 		s := indblk.data[:]
 		blkn = readn(s, 8, noff)
-		blkn, isnew = ensureb(blkn, false)
+		blkn, isnew = ensureb(blkn)
 		if isnew {
 			writen(s, 8, noff, blkn)
 			indblk.log_write()
@@ -1868,42 +1951,15 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 	return blkn
 }
 
-// if writing, allocate a block if necessary and don't trim the slice to the
-// size of the file
-func (idm *idaemon_t) blkslice(offset int, writing bool) ([]uint8, *mdbuf_t) {
-	blkn := idm.offsetblk(offset, writing)
-	if blkn < superb_start && idm.icache.size > 0 {
-		panic("bad block")
-	}
-	blk := idm.icache.mbread(blkn)
-	start := offset % 512
-	bsp := 512 - start
-	if !writing {
-		// trim src buffer to end of file
-		left := idm.icache.size - offset
-		if bsp > left {
-			bsp = left
-		}
-	}
-	src := blk.data[start:start+bsp]
-	return src, blk
-}
-
 func (idm *idaemon_t) iread(dst *userbuf_t, offset int) (int, int) {
-	return idm.iread1(dst, offset)
-}
-
-func (idm *idaemon_t) iread1(dst *userbuf_t, offset int) (int, int) {
 	isz := idm.icache.size
-	if offset >= isz {
-		return 0, 0
-	}
-
 	c := 0
 	for offset + c < isz && dst.remain() != 0 {
-		src, blk := idm.blkslice(offset + c, false)
+		src, err := idm.pgcache.pgfor(offset + c, isz)
+		if err != 0 {
+			return c, err
+		}
 		wrote, err := dst.write(src)
-		idm.icache.mbrelse(blk)
 		c += wrote
 		if err != 0 {
 			return c, err
@@ -1913,28 +1969,85 @@ func (idm *idaemon_t) iread1(dst *userbuf_t, offset int) (int, int) {
 }
 
 func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
-	return idm.iwrite1(src, offset)
-}
-
-func (idm *idaemon_t) iwrite1(src *userbuf_t, offset int) (int, int) {
-	// XXX if file length is shortened, when to free old blocks?
 	sz := src.len
+	newsz := offset + sz
 	c := 0
 	for c < sz {
-		dst, blk := idm.blkslice(offset + c, true)
-		read, err := src.read(dst)
-		blk.log_write()
-		idm.icache.mbrelse(blk)
-		c += read
+		dst, err := idm.pgcache.pgfor(offset + c, newsz)
 		if err != 0 {
 			return c, err
 		}
+		read, err := src.read(dst)
+		if err != 0 {
+			return c, err
+		}
+		idm.pgcache.pgdirty(offset + c, newsz)
+		c += read
 	}
-	newsz := offset + c
+	wrote := c
+	// XXXPANIC
+	if wrote < src.len {
+		panic("short write")
+	}
 	if newsz > idm.icache.size {
 		idm.icache.size = newsz
 	}
-	return c, 0
+	idm.pgcache.flush()
+	return wrote, 0
+}
+
+// fills the parts of pages whose offset < the file size (extending the file
+// shouldn't read any blocks).
+func (idm *idaemon_t) fs_fill(pgdst []uint8, fileoffset int) int {
+	// XXXPANIC
+	if len(pgdst) != PGSIZE {
+		panic("not pgsize")
+	}
+	isz := idm.icache.size
+	c := 0
+	for len(pgdst) != 0 && fileoffset + c < isz {
+		blkno := idm.offsetblk(fileoffset + c, false)
+		// XXXPANIC
+		if len(pgdst) < 512 {
+			panic("no")
+		}
+		p := (*[512]uint8)(unsafe.Pointer(&pgdst[0]))
+		bdev_read(blkno, p)
+		c += len(p)
+		pgdst = pgdst[len(p):]
+	}
+	return 0
+}
+
+// flush only the parts of pages whose offset is < file size
+func (idm *idaemon_t) fs_flush(pgsrc []uint8, fileoffset int) int {
+	// XXXPANIC
+	if len(pgsrc) != PGSIZE {
+		panic("not pgsize")
+	}
+	if memtime {
+		return 0
+	}
+	isz := idm.icache.size
+	c := 0
+	for len(pgsrc) != 0 && fileoffset + c < isz {
+		blkno := idm.offsetblk(fileoffset + c, true)
+		// XXXPANIC
+		if len(pgsrc) < 512 {
+			panic("no")
+		}
+		p := (*[512]uint8)(unsafe.Pointer(&pgsrc[0]))
+		// XXX
+		dur := &bbuf_t{}
+		dur.buf = &idebuf_t{}
+		dur.buf.block = blkno
+		dur.buf.data = p
+		log_write(dur)
+		wrote := len(p)
+		c += wrote
+		pgsrc = pgsrc[wrote:]
+	}
+	return 0
 }
 
 func (idm *idaemon_t) dirent_add(name string, nblkno int, ioff int) {
@@ -1942,18 +2055,23 @@ func (idm *idaemon_t) dirent_add(name string, nblkno int, ioff int) {
 		panic("dirent already exists")
 	}
 	var ddata dirdata_t
-	blkno, deoff := idm.dirent_getempty()
-	ddata.blk = idm.icache.mbread(blkno)
+	noff := idm.dirent_getempty()
+	pg, err := idm.pgcache.pgfor(noff, noff+NDBYTES)
+	if err != 0 {
+		panic("must succeed")
+	}
+	ddata.data = pg
+
 	// write dir entry
-	if ddata.filename(deoff) != "" {
+	if ddata.filename(0) != "" {
 		panic("dir entry slot is not free")
 	}
-	ddata.w_filename(deoff, name)
-	ddata.w_inodenext(deoff, nblkno, ioff)
-	ddata.blk.log_write()
-	de := icdent_t{blkno, deoff, inum(biencode(nblkno, ioff))}
+	ddata.w_filename(0, name)
+	ddata.w_inodenext(0, nblkno, ioff)
+	idm.pgcache.pgdirty(noff, noff+NDBYTES)
+	idm.pgcache.flush()
+	de := icdent_t{noff, inum(biencode(nblkno, ioff))}
 	idm.icache.dents[name] = de
-	idm.icache.mbrelse(ddata.blk)
 }
 
 func (idm *idaemon_t) icreate(name string, nitype, major,
@@ -2024,40 +2142,41 @@ func (idm *idaemon_t) iinsert(name string, priv inum) int {
 
 // returns inode number of unliked inode so caller can decrement its ref count
 func (idm *idaemon_t) iunlink(name string) (inum, int) {
+	if idm.icache.itype != I_DIR {
+		panic("unlink to non-dir")
+	}
 	de, ok := idm.icache.dents[name]
 	if !ok {
 		return 0, -ENOENT
 	}
-	blk := idm.icache.mbread(de.blkno)
-	dirdata := dirdata_t{blk}
-	dirdata.w_filename(de.slot, "")
-	dirdata.w_inodenext(de.slot, 0, 0)
-	blk.log_write()
-	idm.icache.mbrelse(blk)
+	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES)
+	if err != 0 {
+		panic("must succeed")
+	}
+	dirdata := dirdata_t{pg}
+	dirdata.w_filename(0, "")
+	dirdata.w_inodenext(0, 0, 0)
+	idm.pgcache.pgdirty(de.offset, de.offset + NDBYTES)
+	idm.pgcache.flush()
 	// add back to free dents
 	delete(idm.icache.dents, name)
-	icd := icdent_t{blkno: de.blkno, slot: de.slot}
+	icd := icdent_t{de.offset, 0}
 	idm.icache.free_dents = append(idm.icache.free_dents, icd)
 	return de.priv, 0
 }
 
 // returns true if the inode has no directory entries
 func (idm *idaemon_t) idirempty() bool {
-	ds := idm.all_dirents()
-	defer idm.icache.dirent_brelse(ds)
-
 	canrem := func(s string) bool {
-		if s == "" || s == ".." || s == "." {
+		if s == ".." || s == "." {
 			return false
 		}
 		return true
 	}
 	empty := true
-	for i := 0; i < len(ds); i++ {
-		for j := 0; j < NDIRENTS; j++ {
-			if canrem(ds[i].filename(j)) {
-				empty = false
-			}
+	for fn := range idm.icache.dents {
+		if canrem(fn) {
+			empty = false
 		}
 	}
 	return empty
@@ -2120,24 +2239,8 @@ func (idm *idaemon_t) ifree() {
 	}
 }
 
-// returns a slice of all directory data blocks. caller must brelse all
-// underlying blocks.
-func (idm *idaemon_t) all_dirents() ([]dirdata_t) {
-	if idm.icache.itype != I_DIR {
-		panic("not a directory")
-	}
-	isz := idm.icache.size
-	ret := make([]dirdata_t, 0, 10)
-	for i := 0; i < isz; i += 512 {
-		_, blk := idm.blkslice(i, false)
-		dirdata := dirdata_t{blk}
-		ret = append(ret, dirdata)
-	}
-	return ret
-}
-
-// returns an empty directory entry
-func (idm *idaemon_t) dirent_getempty() (int, int) {
+// returns the offset of an empty directory entry
+func (idm *idaemon_t) dirent_getempty() int {
 	frd := idm.icache.free_dents
 	if len(frd) > 0 {
 		ret := frd[0]
@@ -2145,24 +2248,26 @@ func (idm *idaemon_t) dirent_getempty() (int, int) {
 		if len(idm.icache.free_dents) == 0 {
 			idm.icache.free_dents = idm.icache._free_dents
 		}
-		return ret.blkno, ret.slot
+		return ret.offset
 	}
 
-	// current dir blocks are full -- allocate new dirdata block
-	blkno := idm.offsetblk(idm.icache.size, true)
-	idm.icache.size += 512
-	blk := idm.icache.mbread(blkno)
-	var zbuf [512]uint8
-	blk.data = zbuf
-	blk.log_write()
-	// NDIRENTS - 1 because we return slot 0 directly
-	idm.icache.free_dents = make([]icdent_t, NDIRENTS - 1)
-	for i := 0; i < NDIRENTS - 1; i++ {
-		fde := icdent_t{blkno, i + 1, 0}
-		idm.icache.free_dents[i] = fde
+	// current dir blocks are full -- allocate new dirdata block. make
+	// sure its in the page cache but not fill'ed from disk
+	newsz := idm.icache.size + 512
+	_, err := idm.pgcache.pgfor(idm.icache.size, newsz)
+	if err != 0 {
+		panic("must succeed")
 	}
-	idm.icache.mbrelse(blk)
-	return blkno, 0
+	idm.pgcache.pgdirty(idm.icache.size, newsz)
+	newoff := idm.icache.size
+	// NDIRENTS - 1 because we return slot 0 directly
+	idm.icache.free_dents = idm.icache._free_dents
+	for i := 1; i < NDIRENTS; i++ {
+		fde := icdent_t{newoff + NDBYTES*i, 0}
+		idm.icache.free_dents = append(idm.icache.free_dents, fde)
+	}
+	idm.icache.size = newsz
+	return newoff
 }
 
 // used for {,f}stat
@@ -2407,7 +2512,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 // 14-21, inode block/offset
 // ...repeated, totaling 23 times
 type dirdata_t struct {
-	blk	*mdbuf_t
+	data	[]uint8
 }
 
 const(
@@ -2425,7 +2530,7 @@ func doffset(didx int, off int) int {
 
 func (dir *dirdata_t) filename(didx int) string {
 	st := doffset(didx, 0)
-	sl := dir.blk.data[st : st + DNAMELEN]
+	sl := dir.data[st : st + DNAMELEN]
 	ret := make([]byte, 0, 14)
 	for _, c := range sl {
 		if c == 0 {
@@ -2438,13 +2543,13 @@ func (dir *dirdata_t) filename(didx int) string {
 
 func (dir *dirdata_t) inodenext(didx int) inum {
 	st := doffset(didx, 14)
-	v := readn(dir.blk.data[:], 8, st)
+	v := readn(dir.data[:], 8, st)
 	return inum(v)
 }
 
 func (dir *dirdata_t) w_filename(didx int, fn string) {
 	st := doffset(didx, 0)
-	sl := dir.blk.data[st : st + DNAMELEN]
+	sl := dir.data[st : st + DNAMELEN]
 	l := len(fn)
 	for i := range sl {
 		if i >= l {
@@ -2458,7 +2563,7 @@ func (dir *dirdata_t) w_filename(didx int, fn string) {
 func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
 	st := doffset(didx, 14)
 	v := biencode(blk, iidx)
-	writen(dir.blk.data[:], 8, st, v)
+	writen(dir.data[:], 8, st, v)
 }
 
 type fblkcache_t struct {
@@ -2643,11 +2748,6 @@ func ide_daemon() {
 			panic("nil idebuf")
 		}
 		writing := req.write
-		if memtime {
-			memfsrw(req.buf, writing)
-			req.ack <- true
-			continue
-		}
 		disk.start(req.buf, writing)
 		<- ide_int_done
 		disk.complete(req.buf.data[:], writing)
@@ -2672,186 +2772,6 @@ func idereq_new(block int, write bool, data *[512]uint8) *idereq_t {
 type bbuf_t struct {
 	buf	*idebuf_t
 	dirty	bool
-}
-
-func (b *bbuf_t) writeback() {
-	ireq := idereq_new(b.buf.block, true, b.buf.data)
-	ide_request <- ireq
-	<- ireq.ack
-	b.dirty = false
-}
-
-type bcreq_t struct {
-	blkno	int
-	ack	chan *bbuf_t
-}
-
-func bcreq_new(blkno int) *bcreq_t {
-	return &bcreq_t{blkno, make(chan *bbuf_t)}
-}
-
-type bcdaemon_t struct {
-	req		chan *bcreq_t
-	bnew		chan *bbuf_t
-	done		chan int
-	blocks		map[int]*bbuf_t
-	given		map[int]bool
-	waiters		map[int][]*chan *bbuf_t
-}
-
-func (blc *bcdaemon_t) init() {
-	blc.req = make(chan *bcreq_t)
-	blc.bnew = make(chan *bbuf_t)
-	blc.done = make(chan int)
-	blc.blocks = make(map[int]*bbuf_t)
-	blc.given = make(map[int]bool)
-	blc.waiters = make(map[int][]*chan *bbuf_t)
-}
-
-// returns a bbuf_t for the specified block
-func (blc *bcdaemon_t) bc_read(blkno int, ack *chan *bbuf_t) {
-	ret, ok := blc.blocks[blkno]
-	if !ok {
-		// add requester to queue before kicking off disk read
-		blc.qadd(blkno, ack)
-		go func() {
-			data := new([512]uint8)
-			ireq := idereq_new(blkno, false, data)
-			ide_request <- ireq
-			<- ireq.ack
-			nb := &bbuf_t{}
-			nb.buf = ireq.buf
-			blc.bnew <- nb
-		}()
-		return
-	}
-	*ack <- ret
-}
-
-func (blc *bcdaemon_t) qadd(blkno int, ack *chan *bbuf_t) {
-	q, ok := blc.waiters[blkno]
-	if !ok {
-		q = make([]*chan *bbuf_t, 1, 8)
-		blc.waiters[blkno] = q
-		q[0] = ack
-		return
-	}
-	blc.waiters[blkno] = append(q, ack)
-}
-
-func (blc *bcdaemon_t) qpop(blkno int) (*chan *bbuf_t, bool) {
-	q, ok := blc.waiters[blkno]
-	if !ok || len(q) == 0 {
-		return nil, false
-	}
-	ret := q[0]
-	blc.waiters[blkno] = q[1:]
-	return ret, true
-}
-
-func bc_daemon(blc *bcdaemon_t) {
-	for {
-		select {
-		case r := <- blc.req:
-			// block request
-			if r.blkno < 0 {
-				panic("bad block")
-			}
-			inuse := blc.given[r.blkno]
-			if !inuse {
-				blc.given[r.blkno] = true
-				blc.bc_read(r.blkno, &r.ack)
-			} else {
-				blc.qadd(r.blkno, &r.ack)
-			}
-		case bfin := <- blc.done:
-			// relinquish block
-			if bfin < 0 {
-				panic("bad block")
-			}
-			inuse := blc.given[bfin]
-			if !inuse {
-				panic("relinquish unused block")
-			}
-			nextc, ok := blc.qpop(bfin)
-			if ok {
-				// busy blocks cannot be evicted
-				blk, _ := blc.blocks[bfin]
-				*nextc <- blk
-			} else {
-				blc.given[bfin] = false
-			}
-		case nb := <- blc.bnew:
-			// disk read finished
-			blkno := nb.buf.block
-			if _, ok := blc.given[blkno]; !ok {
-				panic("bllkno trimmed by cast")
-			}
-			blc.chk_evict()
-			blc.blocks[blkno] = nb
-			nextc, _ := blc.qpop(blkno)
-			*nextc <- nb
-		}
-	}
-}
-
-func (blc *bcdaemon_t) chk_evict() {
-	nbcbufs := 1024
-	// how many buffers to evict
-	// XXX LRU
-	evictn := 2
-	if len(blc.blocks) <= nbcbufs {
-		return
-	}
-	// evict unmodified bbuf
-	for i, bb := range blc.blocks {
-		if !bb.dirty && !blc.given[i] {
-			delete(blc.blocks, i)
-			evictn--
-			if evictn == 0 && len(blc.blocks) <= nbcbufs {
-				break
-			}
-		}
-	}
-	if len(blc.blocks) > nbcbufs {
-		panic("blc full")
-	}
-}
-
-func membread(blkno int) *bbuf_t {
-	idx := blkno - superb_start
-	m := &memorium[idx]
-	m.Lock()
-	b := &bbuf_t{}
-	b.buf = &m.idebuf
-	b.dirty = true
-	return b
-}
-
-func membrelse(b *bbuf_t) {
-	idx := int(b.buf.block) - superb_start
-	m := &memorium[idx]
-	m.Unlock()
-	return
-}
-
-func bread(blkno int) *bbuf_t {
-	panic("no")
-	if memtime {
-		return membread(blkno)
-	}
-	req := bcreq_new(blkno)
-	bcdaemon.req <- req
-	return <- req.ack
-}
-
-func brelse(b *bbuf_t) {
-	panic("no")
-	if memtime {
-		membrelse(b)
-		return
-	}
-	bcdaemon.done <- int(b.buf.block)
 }
 
 // list of dirty blocks that are pending commit.
@@ -2935,7 +2855,7 @@ func log_daemon(l *log_t) {
 	// an upperbound on the number of blocks written per system call. this
 	// is necessary in order to guarantee that the log is long enough for
 	// the allowed number of concurrent fs syscalls.
-	maxblkspersys := 10
+	maxblkspersys := 15
 	for {
 		tickets := l.loglen / maxblkspersys
 		adm := l.admission
