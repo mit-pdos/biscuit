@@ -68,15 +68,13 @@ func fs_init() *file_t {
 	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
+	// superblock is never changed, so reading before recovery is fine
 	bdev_read(superb_start, buffer)
 	superb = superblock_t{buffer}
 	ri := superb.rootinode()
-	iroot = idaemon_ensure(ri)
 
 	free_start = superb.freeblock()
 	free_len = superb.freeblocklen()
-
-	fblkcache.fblkc_init(free_start, free_len)
 
 	logstart := free_start + free_len
 	loglen := superb.loglen()
@@ -88,6 +86,10 @@ func fs_init() *file_t {
 	fslog.init(logstart, loglen)
 	fs_recover()
 	go log_daemon(&fslog)
+
+	// anything that reads disk blocks needs to happen after recovery
+	fblkcache.fblkc_init(free_start, free_len)
+	iroot = idaemon_ensure(ri)
 
 	return &file_t{ftype: INODE, priv: ri}
 }
