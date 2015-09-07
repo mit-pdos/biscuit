@@ -1166,10 +1166,9 @@ type iblkcache_t struct {
 }
 
 func (ib *ibuf_t) log_write() {
-	dur := &bbuf_t{}
-	dur.buf = &idebuf_t{}
-	dur.buf.block = ib.block
-	dur.buf.data = ib.data
+	dur := idebuf_t{}
+	dur.block = ib.block
+	dur.data = ib.data
 	log_write(dur)
 }
 
@@ -1271,10 +1270,9 @@ func (ic *icache_t) _mbensure(blockn int, fill bool) *mdbuf_t {
 }
 
 func (mb *mdbuf_t) log_write() {
-	dur := &bbuf_t{}
-	dur.buf = &idebuf_t{}
-	dur.buf.block = mb.block
-	dur.buf.data = &mb.data
+	dur := idebuf_t{}
+	dur.block = mb.block
+	dur.data = &mb.data
 	log_write(dur)
 }
 
@@ -2044,11 +2042,7 @@ func (idm *idaemon_t) fs_flush(pgsrc []uint8, fileoffset int) int {
 			panic("no")
 		}
 		p := (*[512]uint8)(unsafe.Pointer(&pgsrc[0]))
-		// XXX
-		dur := &bbuf_t{}
-		dur.buf = &idebuf_t{}
-		dur.buf.block = blkno
-		dur.buf.data = p
+		dur := idebuf_t{block: blkno, data: p}
 		log_write(dur)
 		wrote := len(p)
 		c += wrote
@@ -2776,57 +2770,60 @@ func idereq_new(block int, write bool, data *[512]uint8) *idereq_t {
 	return ret
 }
 
-type bbuf_t struct {
-	buf	*idebuf_t
-	dirty	bool
-}
-
 // list of dirty blocks that are pending commit.
 type log_t struct {
 	blks		[]idebuf_t
+	lhead		int
 	logstart	int
 	loglen		int
-	incoming	chan *bbuf_t
+	incoming	chan idebuf_t
 	admission	chan bool
 	done		chan bool
 	tmpblk		[512]uint8
 }
 
 func (log *log_t) init(ls int, ll int) {
+	log.lhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
-	log.blks = make([]idebuf_t, 0, log.loglen)
+	log.blks = make([]idebuf_t, log.loglen)
 	for i := range log.blks {
 		log.blks[i].data = new([512]uint8)
 	}
-	log.incoming = make(chan *bbuf_t)
+	log.incoming = make(chan idebuf_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
 }
 
-func (log *log_t) addlog(blk *bbuf_t) {
+func (log *log_t) addlog(buf idebuf_t) {
 	// log absorption
-	for i, b := range log.blks {
-		if b.block == blk.buf.block {
-			*log.blks[i].data = *blk.buf.data
+	for i := 0; i < log.lhead; i++ {
+		b := log.blks[i]
+		if b.block == buf.block {
+			*log.blks[i].data = *buf.data
 			return
 		}
 	}
-	log.blks = append(log.blks, *blk.buf)
-	if len(log.blks) >= log.loglen {
-		panic("log larger than log len")
+	lhead := log.lhead
+	if lhead >= len(log.blks) {
+		panic("log overflow")
 	}
+	log.blks[lhead].disk = buf.disk
+	log.blks[lhead].block = buf.block
+	*log.blks[lhead].data = *buf.data
+	log.lhead++
 }
 
 func (log *log_t) commit() {
-	if len(log.blks) == 0 {
+	if log.lhead == 0 {
 		// nothing to commit
 		return
 	}
 
 	lh := logheader_t{&log.tmpblk}
-	for i, lb := range log.blks {
+	for i := 0; i < log.lhead; i++ {
+		lb := log.blks[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, lb.block)
 
@@ -2835,7 +2832,7 @@ func (log *log_t) commit() {
 		bdev_write(logblkn, lb.data)
 	}
 
-	lh.w_recovernum(len(log.blks))
+	lh.w_recovernum(log.lhead)
 
 	// commit log: flush log header
 	bdev_write(log.logstart, &log.tmpblk)
@@ -2847,7 +2844,8 @@ func (log *log_t) commit() {
 
 	// the log is committed. if we crash while installing the blocks to
 	// their destinations, we should be able to recover
-	for _, lb := range log.blks {
+	for i := 0; i < log.lhead; i++ {
+		lb := log.blks[i]
 		bdev_write(lb.block, lb.data)
 	}
 
@@ -2855,7 +2853,7 @@ func (log *log_t) commit() {
 	lh.w_recovernum(0)
 	bdev_write(log.logstart, &log.tmpblk)
 
-	log.blks = log.blks[0:0]
+	log.lhead = 0
 }
 
 func log_daemon(l *log_t) {
@@ -2905,11 +2903,10 @@ func op_end() {
 	fslog.done <- true
 }
 
-func log_write(b *bbuf_t) {
+func log_write(b idebuf_t) {
 	if memtime {
 		return
 	}
-	b.dirty = true
 	fslog.incoming <- b
 }
 
