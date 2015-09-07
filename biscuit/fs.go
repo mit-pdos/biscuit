@@ -936,6 +936,8 @@ func req_namei(req *ireq_t, paths string, cwd inum) {
 type pgcache_t struct {
 	pgs	[]*[PGSIZE]uint8
 	pginfo	[]pgcinfo_t
+	// the unit size of underlying device
+	blocksz		int
 	// fill is used to fill empty pages with data from the underlying
 	// device or layer. its arguments are the destination slice and offset
 	// and returns error. fill may write fewer bytes than the length of the
@@ -947,37 +949,46 @@ type pgcache_t struct {
 
 type pgcinfo_t struct {
 	phys		int
-	dirty		bool
+	dirtyblocks	[]bool
 }
 
-func (pc *pgcache_t) pgc_init(fill func([]uint8, int) int,
+func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) int,
     flush func([]uint8, int) int) {
 	if fill == nil || flush == nil {
 		panic("invalid page func")
 	}
 	pc._fill = fill
 	pc._flush = flush
+	if PGSIZE % bsz != 0 {
+		panic("block size does not divide pgsize")
+	}
+	pc.blocksz = bsz
+}
+
+// takes an offset, returns the page number and starting block
+func (pc *pgcache_t) _pgblock(offset int) (int, int) {
+	pgn := offset / PGSIZE
+	block := (offset % PGSIZE) / pc.blocksz
+	return pgn, block
 }
 
 // mark the range [offset, end) as dirty
 func (pc *pgcache_t) pgdirty(offset, end int) {
-	pgn := offset / PGSIZE
-	pgi := pc.pginfo[pgn]
-	if pc.pgs[pgn] == nil {
-		panic("pg not init'ed")
+	for i := offset; i < end; i += pc.blocksz {
+		pgn, chn := pc._pgblock(i)
+		pgi := pc.pginfo[pgn]
+		if pc.pgs[pgn] == nil {
+			panic("pg not init'ed")
+		}
+		pgi.dirtyblocks[chn] = true
+		pc.pginfo[pgn] = pgi
 	}
-	pgi.dirty = true
-	pc.pginfo[pgn] = pgi
 }
 
 func (pc *pgcache_t) _ensureslot(pgn int) bool {
 	// XXXPANIC
 	if len(pc.pgs) != len(pc.pginfo) {
 		panic("weird lens")
-	}
-	// XXXPANIC
-	if pgn > len(pc.pgs) + 40 {
-		panic("much wasted")
 	}
 	// make arrays large enough to hold this page
 	if pgn >= len(pc.pgs) {
@@ -993,11 +1004,12 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 	if pc.pgs[pgn] == nil {
 		created = true
 		npg, p_npg := pg_new()
-		var pgi pgcinfo_t
-		pgi.phys = p_npg
-		pc.pginfo[pgn] = pgi
 		bpg := (*[PGSIZE]uint8)(unsafe.Pointer(npg))
 		pc.pgs[pgn] = bpg
+		var pgi pgcinfo_t
+		pgi.phys = p_npg
+		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
+		pc.pginfo[pgn] = pgi
 	}
 	return created
 }
@@ -1038,16 +1050,20 @@ func (pc *pgcache_t) flush() {
 			continue
 		}
 		pgi := pc.pginfo[i]
-		if !pgi.dirty {
-			continue
+		for j, dirty := range pgi.dirtyblocks {
+			if !dirty {
+				continue
+			}
+			pgoffset := j*pc.blocksz
+			pgend := pgoffset + pc.blocksz
+			s := pgva[pgoffset:pgend]
+			devoffset := i*PGSIZE + pgoffset
+			err := pc._flush(s, devoffset)
+			if err != 0 {
+				panic("flush must succeed")
+			}
+			pgi.dirtyblocks[j] = false
 		}
-		devoffset := i*PGSIZE
-		err := pc._flush(pgva[:], devoffset)
-		if err != 0 {
-			panic("flush must succeed")
-		}
-		pgi.dirty = false
-		pc.pginfo[i] = pgi
 	}
 }
 
@@ -1092,7 +1108,7 @@ func (idm *idaemon_t) idm_init(priv inum) {
 	idm.blkno = blkno
 	idm.ioff = ioff
 
-	idm.pgcache.pgc_init(idm.fs_fill, idm.fs_flush)
+	idm.pgcache.pgc_init(512, idm.fs_fill, idm.fs_flush)
 	idm.req = make(chan *ireq_t)
 	idm._ppdots = make([]*ireq_t, 0, 2)
 	idm.ppdots = idm._ppdots
@@ -1973,7 +1989,8 @@ func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
 	newsz := offset + sz
 	c := 0
 	for c < sz {
-		dst, err := idm.pgcache.pgfor(offset + c, newsz)
+		noff := offset + c
+		dst, err := idm.pgcache.pgfor(noff, newsz)
 		if err != 0 {
 			return c, err
 		}
@@ -1981,14 +1998,10 @@ func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
 		if err != 0 {
 			return c, err
 		}
-		idm.pgcache.pgdirty(offset + c, newsz)
+		idm.pgcache.pgdirty(noff, noff + read)
 		c += read
 	}
 	wrote := c
-	// XXXPANIC
-	if wrote < src.len {
-		panic("short write")
-	}
 	if newsz > idm.icache.size {
 		idm.icache.size = newsz
 	}
@@ -1999,10 +2012,6 @@ func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
 // fills the parts of pages whose offset < the file size (extending the file
 // shouldn't read any blocks).
 func (idm *idaemon_t) fs_fill(pgdst []uint8, fileoffset int) int {
-	// XXXPANIC
-	if len(pgdst) != PGSIZE {
-		panic("not pgsize")
-	}
 	isz := idm.icache.size
 	c := 0
 	for len(pgdst) != 0 && fileoffset + c < isz {
@@ -2021,10 +2030,6 @@ func (idm *idaemon_t) fs_fill(pgdst []uint8, fileoffset int) int {
 
 // flush only the parts of pages whose offset is < file size
 func (idm *idaemon_t) fs_flush(pgsrc []uint8, fileoffset int) int {
-	// XXXPANIC
-	if len(pgsrc) != PGSIZE {
-		panic("not pgsize")
-	}
 	if memtime {
 		return 0
 	}
