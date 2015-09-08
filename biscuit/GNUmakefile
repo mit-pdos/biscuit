@@ -109,7 +109,7 @@ $(FSCPROGS): fsdir/bin/% : user/c/%
 
 $(CPROGS): CFLAGS += -I user/c/ -fPIC
 $(CPROGS): % : %.c user/c/litc.o
-	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld -Wl,-n,--build-id=none \
+	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld -Wl,--build-id=none \
 	    -o $@ $< user/c/litc.o
 
 $(FSCXXPROGS): fsdir/bin/% : user/cxx/%
@@ -128,7 +128,7 @@ $(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/ -isysroot user/cxx/sysroot \
 		-fPIC -DXV6_USER -std=c++11
 $(CXXPROGS): % : %.cc  $(CXXLOBJS) $(CXXBEGIN) $(CXXEND) user/cxx/sysroot \
 	    user/c/litc.o
-	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld -Wl,-n,--build-id=none \
+	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld -Wl,--build-id=none \
 	    -o $@ $(CXXBEGIN) $< $(CXXLOBJS) user/c/litc.o $(CXXRT) $(CXXEND)
 
 user/cxx/sysroot: user/cxx/host_hdrs.hh

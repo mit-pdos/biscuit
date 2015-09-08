@@ -2,7 +2,7 @@ ENTRY(_entry)
 
 SECTIONS
 {
-        . = 0x2c8000000000;
+        . = 0x2c8000001000;
         .text : { *(.text) }
         .data : { *(.data) }
         .bss : { *(.bss) }
