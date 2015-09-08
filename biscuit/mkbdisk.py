@@ -319,7 +319,8 @@ class Fsrep:
     # free space
     if dozero:
       for i in range(remaining - len(ab)):
-        of.write('\0'*blocksz)
+	# fill with crap to detect fs bugs
+        of.write('\x0c'*blocksz)
 
   def pr(self):
     print 'print all blocks'
