@@ -1956,6 +1956,11 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 			if isnew {
 				writen(s, 8, slot, blkn)
 				added = true
+				// make sure to zero indirect pointer block if
+				// allocated
+				if idx == 63 {
+					idm.icache.mbempty(blkn)
+				}
 			}
 		}
 		if added {
@@ -1992,13 +1997,16 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 		indno, isnew := ensureb(indno)
 		if isnew {
 			idm.icache.mbempty(indno)
+			// new indirect block will be written to log below
 			idm.icache.indir = indno
 		}
 		// follow indirect block chain
 		indblk := idm.icache.mbread(indno)
 		for i := 0; i < indslot/slotpb; i++ {
 			// make sure the indirect block has no empty spaces if
-			// we are writing past the end of the file
+			// we are writing past the end of the file. if
+			// necessary, ensureind also allocates the next
+			// indirect pointer block.
 			ensureind(indblk, slotpb)
 
 			indno = readn(indblk.data[:], 8, nextindb)
@@ -2304,6 +2312,7 @@ func (idm *idaemon_t) ifree() {
 	}
 	ibrelse(iblk)
 
+	// could batch free
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
