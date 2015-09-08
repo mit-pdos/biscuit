@@ -2136,6 +2136,16 @@ func main() {
 
 	//ide_test()
 
+	//go func() {
+	//	d := time.Second
+	//	for {
+	//		<- time.After(d)
+	//		ms := &runtime.MemStats{}
+	//		runtime.ReadMemStats(ms)
+	//		fmt.Printf("%v MiB\n", ms.Alloc/ (1 << 20))
+	//	}
+	//}()
+
 	var dur chan bool
 	<- dur
 	//fake_work()
