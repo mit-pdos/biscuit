@@ -2932,7 +2932,7 @@ func log_daemon(l *log_t) {
 	// an upperbound on the number of blocks written per system call. this
 	// is necessary in order to guarantee that the log is long enough for
 	// the allowed number of concurrent fs syscalls.
-	maxblkspersys := 15
+	maxblkspersys := 10
 	for {
 		tickets := l.loglen / maxblkspersys
 		adm := l.admission
