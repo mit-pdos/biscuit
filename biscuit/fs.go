@@ -1225,9 +1225,6 @@ func ibread(blkn int) *ibuf_t {
 
 	if !created {
 		iblk.Lock()
-		if iblk.block != blkn {
-			panic("wtf")
-		}
 	} else {
 		// fill new iblkcache entry
 		iblk.data = new([512]uint8)
@@ -1330,7 +1327,7 @@ func (ic *icache_t) mbempty(blockn int) *mdbuf_t {
 func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
 	inode := inode_t{blk, ioff}
 	ic.itype = inode.itype()
-	if ic.itype <= I_FIRST || ic.itype > I_LAST {
+	if ic.itype <= I_FIRST || ic.itype > I_VALID {
 		fmt.Printf("itype: %v for %v\n", ic.itype,
 		    biencode(blk.block, ioff))
 		panic("bad itype in fill")
@@ -2136,7 +2133,7 @@ func (idm *idaemon_t) dirent_add(name string, nblkno int, ioff int) {
 
 func (idm *idaemon_t) icreate(name string, nitype, major,
     minor int) (inum, int) {
-	if nitype <= I_INVALID || nitype > I_LAST {
+	if nitype <= I_INVALID || nitype > I_VALID {
 		fmt.Printf("itype: %v\n", nitype)
 		panic("bad itype!")
 	}
@@ -2257,7 +2254,7 @@ func (idm *idaemon_t) immapinfo(offset int) ([]mmapinfo_t, int) {
 
 // frees all blocks occupied by idm
 func (idm *idaemon_t) ifree() {
-	allb := make([]int, 0)
+	allb := make([]int, 0, 10)
 	add := func(blkno int) {
 		if blkno != 0 {
 			allb = append(allb, blkno)
@@ -2289,7 +2286,7 @@ func (idm *idaemon_t) ifree() {
 		ret := true
 		for i := 0; i < bwords/NIWORDS; i++ {
 			icache := inode_t{blk, i}
-			if icache.itype() != I_INVALID {
+			if icache.itype() != I_DEAD {
 				ret = false
 				break
 			}
@@ -2297,7 +2294,7 @@ func (idm *idaemon_t) ifree() {
 		return ret
 	}
 	iblk := ibread(idm.blkno)
-	idm.icache.itype = I_INVALID
+	idm.icache.itype = I_DEAD
 	idm.icache.flushto(iblk, idm.ioff)
 	if alldead(iblk) {
 		add(idm.blkno)
@@ -2495,7 +2492,10 @@ const(
 	I_FILE  = 1
 	I_DIR   = 2
 	I_DEV   = 3
-	I_LAST = I_DEV
+	I_VALID = I_DEV
+	// ready to be reclaimed
+	I_DEAD  = 4
+	I_LAST = I_DEAD
 
 	// direct block addresses
 	NIADDRS = 10
