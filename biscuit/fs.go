@@ -1239,8 +1239,12 @@ func ibread(blkn int) *ibuf_t {
 
 func ibempty(blkn int) *ibuf_t {
 	iblkcache.Lock()
-	if _, ok := iblkcache.blks[blkn]; ok {
-		panic("iblk exists")
+	if oiblk, ok := iblkcache.blks[blkn]; ok {
+		iblkcache.Unlock()
+		oiblk.Lock()
+		var zdata [512]uint8
+		*oiblk.data = zdata
+		return oiblk
 	}
 	iblk := &ibuf_t{}
 	iblk.block = blkn
