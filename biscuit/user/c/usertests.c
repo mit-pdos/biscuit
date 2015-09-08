@@ -884,7 +884,7 @@ linkunlink()
     if((x % 3) == 0){
       close(open("x", O_RDWR | O_CREATE));
     } else if((x % 3) == 1){
-      link("cat", "x");
+      link("/bin/cat", "x");
     } else {
       unlink("x");
     }
