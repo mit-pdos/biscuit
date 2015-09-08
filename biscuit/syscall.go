@@ -476,6 +476,12 @@ func file_close(f *file_t, perms int) int {
 	return fdclosers[f.ftype](f, perms)
 }
 
+// a type to hold the virtual/physical addresses of memory mapped files
+type mmapinfo_t struct {
+	pg	*[512]int
+	phys	int
+}
+
 func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	prot := uint(protflags) >> 32
 	flags := uint(uint32(protflags))
@@ -2005,35 +2011,44 @@ func (e *elf_t) entry() int {
 }
 
 func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
+	if hdr.vaddr % PGSIZE != hdr.fileoff % PGSIZE {
+		panic("requires copying")
+	}
 	perms := PTE_U
 	//PF_X := 1
 	PF_W := 2
 	if hdr.flags & PF_W != 0 {
-		perms |= PTE_W
+		perms |= PTE_COW
 	}
-	sz := roundup(hdr.vaddr + hdr.memsz, PGSIZE)
-	sz -= rounddown(hdr.vaddr, PGSIZE)
-	ub := &userbuf_t{}
+	mmapi, err := fs_mmapinfo(f, 0)
+	if err != 0 {
+		panic("must succeed")
+	}
+
+	filesz := roundup(hdr.vaddr + hdr.filesz, PGSIZE)
+	filesz -= rounddown(hdr.vaddr, PGSIZE)
 	seg := proc.mkvmseg(hdr.vaddr, hdr.memsz)
-	for i := 0; i < sz; i += PGSIZE {
-		// go allocator zeros all pages for us, thus bss is already
-		// initialized
-		pg, p_pg := pg_new()
+	for i := 0; i < filesz; i += PGSIZE {
+		pgn := i / PGSIZE
+		pg := mmapi[pgn].pg
+		p_pg := mmapi[pgn].phys
 		proc.page_insert(hdr.vaddr + i, seg, pg, p_pg, perms, true)
-		if i < hdr.filesz {
-			bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
-			left := hdr.filesz - i
-			if left < len(bpg) {
-				bpg = bpg[0:left]
+	}
+	for i := hdr.vaddr + hdr.filesz; i < hdr.vaddr + hdr.memsz; {
+		if (i % PGSIZE) == 0 {
+			// user zero pg
+			proc.page_insert(i, seg, zeropg, p_zeropg, perms, true)
+			i += PGSIZE
+		} else {
+			proc.cowfault(i)
+			pg, ok := proc.userdmap8_inner(i)
+			if !ok {
+				panic("must be mapped")
 			}
-			ub.fake_init(bpg)
-			ret, err := fs_read(ub, f, hdr.fileoff + i)
-			if err != 0 {
-				panic("must succeed")
+			for j := range pg {
+				pg[j] = 0
 			}
-			if ret != len(bpg) {
-				panic("unexpected eof")
-			}
+			i += len(pg)
 		}
 	}
 }

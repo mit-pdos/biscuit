@@ -23,7 +23,7 @@ var fblock	= sync.Mutex{}
 
 func pathparts(path string) []string {
 	sp := strings.Split(path, "/")
-	nn := []string{}
+	nn := make([]string, 0, 7)
 	for _, s := range sp {
 		if s != "" {
 			nn = append(nn, s)
@@ -919,6 +919,17 @@ func fs_stat(path string, st *stat_t, cwdf *file_t) int {
 	return req.resp.err
 }
 
+// returns the mmapinfo for the pages of the target file. the page cache is
+// populated if necessary.
+func fs_mmapinfo(f *file_t, offset int) ([]mmapinfo_t, int) {
+	req := &ireq_t{}
+	req.mkmmapinfo(offset)
+	idm := idaemon_ensure(f.priv)
+	idm.req <- req
+	<- req.ack
+	return req.resp.mmapinfo, req.resp.err
+}
+
 // sends a request requiring a lookup to the correct idaemon: if path is a
 // relative path, lookups should start with the idaemon for cwd. if the path is
 // absolute, lookups should start with iroot.
@@ -987,6 +998,19 @@ func (pc *pgcache_t) pgdirty(offset, end int) {
 	}
 }
 
+// returns the raw page and physical address of requested page. fills the page
+// if necessary.
+func (pc *pgcache_t) pgraw(offset int) (*[512]int, int) {
+	pgn := offset / PGSIZE
+	err := pc._ensurefill(pgn)
+	if err != 0 {
+		panic("must succeed")
+	}
+	pgi := pc.pginfo[pgn]
+	wpg := (*[512]int)(unsafe.Pointer(pc.pgs[pgn]))
+	return wpg, pgi.phys
+}
+
 func (pc *pgcache_t) _ensureslot(pgn int) bool {
 	// XXXPANIC
 	if len(pc.pgs) != len(pc.pginfo) {
@@ -1016,25 +1040,34 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 	return created
 }
 
+// return error
+func (pc *pgcache_t) _ensurefill(pgn int) int {
+	needsfill := pc._ensureslot(pgn)
+	pgva := pc.pgs[pgn]
+	if needsfill {
+		devoffset := pgn * PGSIZE
+		err := pc._fill(pgva[:], devoffset)
+		if err != 0 {
+			panic("must succeed")
+		}
+	}
+	return 0
+}
+
 // offset <= end. if offset lies on the same page as end, the returned slice is
 // trimmed (bytes >= end are removed).
 func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, int) {
 	if offset > end {
 		panic("offset must be less than end")
 	}
-	// resize pginfo array if necessary
 	pgn := offset / PGSIZE
-	needsfill := pc._ensureslot(pgn)
+	err := pc._ensurefill(pgn)
+	if err != 0 {
+		panic("must succeed")
+	}
 	pgva := pc.pgs[pgn]
 	pg := pgva[:]
 
-	if needsfill {
-		devoffset := pgn * PGSIZE
-		err := pc._fill(pg, devoffset)
-		if err != 0 {
-			panic("must succeed")
-		}
-	}
 	pgoff := offset % PGSIZE
 	pg = pg[pgoff:]
 	if offset + len(pg) > end {
@@ -1354,6 +1387,7 @@ const (
 	LOOKUP
 	EMPTY
 	TRUNC
+	MMAPINFO
 )
 
 type ireq_t struct {
@@ -1385,6 +1419,8 @@ type ireq_t struct {
 	stat_st		*stat_t
 	// lock
 	lock_lchan	chan *ireq_t
+	// mmap info
+	mm_offset	int
 	resp		iresp_t
 }
 
@@ -1395,6 +1431,7 @@ type iresp_t struct {
 	err		int
 	major		int
 	minor		int
+	mmapinfo	[]mmapinfo_t
 }
 
 // if incref is true, the call must be made between op_{begin,end}.
@@ -1583,6 +1620,14 @@ func (r *ireq_t) mktrunc() {
 	*r = z
 	r.ack = make(chan bool)
 	r.rtype = TRUNC
+}
+
+func (r *ireq_t) mkmmapinfo(off int) {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan bool)
+	r.rtype = MMAPINFO
+	r.mm_offset = off
 }
 
 func (idm *idaemon_t) _dotsadd(r *ireq_t, pidm *idaemon_t) {
@@ -1864,6 +1909,16 @@ func idaemonize(idm *idaemon_t) {
 			idm.icache.size = 0
 			iupdate()
 			r.resp.err = 0
+			r.ack <- true
+
+		case MMAPINFO:
+			if idm.icache.itype != I_FILE &&
+			   idm.icache.itype != I_DIR {
+				panic("bad mmapinfo")
+			}
+			mmi, err := idm.immapinfo(r.mm_offset)
+			r.resp.mmapinfo = mmi
+			r.resp.err = err
 			r.ack <- true
 
 		default:
@@ -2181,6 +2236,19 @@ func (idm *idaemon_t) idirempty() bool {
 		}
 	}
 	return empty
+}
+
+func (idm *idaemon_t) immapinfo(offset int) ([]mmapinfo_t, int) {
+	isz := idm.icache.size
+	pgc := roundup(isz, PGSIZE) / PGSIZE
+	ret := make([]mmapinfo_t, pgc)
+	for i := 0; i < isz; i += PGSIZE {
+		pg, phys := idm.pgcache.pgraw(i)
+		pgn := i / PGSIZE
+		ret[pgn].pg = pg
+		ret[pgn].phys = phys
+	}
+	return ret, 0
 }
 
 // frees all blocks occupied by idm

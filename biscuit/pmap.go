@@ -43,6 +43,10 @@ func (pmt *pmtracker_t) pmadd(pm *[512]int) {
 	pmt.pms = append(pmt.pms, pm)
 }
 
+// XXX right now, the caller has to use a vmseg to keep track of the seg and
+// manually insert it into the page map. it would be easier to only use vmseg:
+// populate vmseg with page information then install a vmseg into a taret page
+// map.
 type vmseg_t struct {
 	start	int
 	end	int
@@ -336,6 +340,9 @@ func kpmap() *[512]int {
 	return kpmapp
 }
 
+var zeropg = new([512]int)
+var p_zeropg int
+
 // installs a direct map for 512G of physical memory via the recursive mapping
 func dmap_init() {
 	kpmpages.pminit()
@@ -394,6 +401,12 @@ func dmap_init() {
 			kents = append(kents, ent)
 		}
 	}
+
+	pte := pmap_lookup(kpmap(), int(uintptr(unsafe.Pointer(zeropg))))
+	if pte == nil || *pte & PTE_P == 0 {
+		panic("wut")
+	}
+	p_zeropg = *pte & PTE_ADDR
 }
 
 type kent_t struct {
