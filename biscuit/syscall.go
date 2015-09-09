@@ -2034,6 +2034,7 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 		p_pg := mmapi[pgn].phys
 		proc.page_insert(hdr.vaddr + i, seg, pg, p_pg, perms, true)
 	}
+	// setup bss: zero first page, map the rest to the zero page
 	for i := hdr.vaddr + hdr.filesz; i < hdr.vaddr + hdr.memsz; {
 		if (i % PGSIZE) == 0 {
 			// user zero pg
@@ -2079,37 +2080,37 @@ func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 	freshtls := 0
 	t0tls := 0
 	if istls {
+		// create fresh TLS image and map it COW for thread 0
 		l := roundup(tlsaddr + tlssize, PGSIZE)
 		l -= rounddown(tlsaddr, PGSIZE)
 
-		mktls := func(writable bool) int {
-			ret := proc.unusedva_inner(0, l)
-			perms := PTE_U
-			if writable {
-				perms |= PTE_W
+		freshtls = proc.unusedva_inner(0, 2*l)
+		t0tls = freshtls + l
+		seg := proc.mkvmseg(freshtls, 2*l)
+		perms := PTE_U
+
+		for i := 0; i < l; i += PGSIZE {
+			// allocator zeros objects, so tbss is already
+			// initialized.
+			pg, p_pg := pg_new()
+			proc.page_insert(freshtls + i, seg, pg, p_pg, perms,
+			    true)
+			src, ok := proc.userdmap8_inner(tlsaddr + i)
+			if !ok {
+				panic("must succeed")
 			}
-			seg := proc.mkvmseg(ret, l)
-			for i := 0; i < l; i += PGSIZE {
-				// allocator zeros objects, so tbss is already
-				// initialized.
-				pg, p_pg := pg_new()
-				proc.page_insert(ret + i, seg, pg, p_pg, perms,
-				    true)
-				src, ok := proc.userdmap8_inner(tlsaddr + i)
-				if !ok {
-					panic("must succeed")
-				}
-				bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
-				left := tlscopylen - i
-				if len(bpg) > left {
-					bpg = bpg[0:left]
-				}
-				copy(bpg, src)
+			bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
+			left := tlscopylen - i
+			if len(bpg) > left {
+				bpg = bpg[0:left]
 			}
-			return ret
+			copy(bpg, src)
+			// map fresh TLS for thread 0
+			nperms := perms | PTE_COW
+			proc.page_insert(t0tls + i, seg, pg, p_pg, nperms,
+			    true)
 		}
-		freshtls = mktls(false)
-		t0tls = mktls(true)
+		// map thread 0's TLS
 
 		// amd64 sys 5 abi specifies that the tls pointer references to
 		// the first invalid word past the end of the tls
