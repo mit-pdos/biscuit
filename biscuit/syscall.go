@@ -1270,18 +1270,13 @@ func sun_start(sid sunid_t) *sund_t {
 	go func() {
 		bstart := make([]sunbuf_t, 0, 10)
 		buf := bstart
-		buflen := func() int {
-			ret := 0
-			for _, b := range buf {
-				ret += len(b.data)
-			}
-			return ret
-		}
+		buflen := 0
 		bufadd := func(n sunbuf_t) {
 			if len(n.data) == 0 {
 				return
 			}
 			buf = append(buf, n)
+			buflen += len(n.data)
 		}
 
 		bufdeq := func(sz int) sunbuf_t {
@@ -1293,6 +1288,7 @@ func sun_start(sid sunid_t) *sund_t {
 			if len(buf) == 0 {
 				buf = bstart
 			}
+			buflen -= len(ret.data)
 			return ret
 		}
 
@@ -1309,7 +1305,7 @@ func sun_start(sid sunid_t) *sund_t {
 				admitted++
 			// writing
 			case sbuf := <- tin:
-				if buflen() >= sunbufsz {
+				if buflen >= sunbufsz {
 					panic("buf full")
 				}
 				if len(sbuf.data) > 2*sunbufsz {
@@ -1321,7 +1317,7 @@ func sun_start(sid sunid_t) *sund_t {
 				admitted--
 			// reading
 			case sz := <- toutsz:
-				if buflen() == 0 {
+				if buflen == 0 {
 					panic("no data")
 				}
 				d := bufdeq(sz)
@@ -1330,12 +1326,12 @@ func sun_start(sid sunid_t) *sund_t {
 
 			// block writes if socket is full
 			// block reads if socket is empty
-			if buflen() > 0 {
+			if buflen > 0 {
 				toutsz = outsz
 			} else {
 				toutsz = nil
 			}
-			if buflen() < sunbufsz {
+			if buflen < sunbufsz {
 				tin = in
 			} else {
 				tin = nil
