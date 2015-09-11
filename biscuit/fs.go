@@ -735,6 +735,8 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 	priv := inum(-1)
 	var maj int
 	var min int
+	var itype int
+	req := &ireq_t{}
 	if creat {
 		nodir = true
 		// creat; must atomically create and open the new file.
@@ -746,7 +748,6 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 			return nil, -EISDIR
 		}
 
-		req := &ireq_t{}
 		if isdev {
 			req.mkcreate_nod(fn, major, minor)
 		} else {
@@ -767,13 +768,17 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		}
 		// create new file
 		itx.sendp(dirs, req)
+		if req.resp.err != 0 && req.resp.err != -EEXIST {
+			itx.unlockall()
+			return nil, req.resp.err
+		}
 
 		exists := req.resp.err == -EEXIST
 		oexcl := flags & O_EXCL != 0
-
 		priv = req.resp.cnext
+		idm = idaemon_ensure(priv)
+
 		if exists {
-			idm = idaemon_ensure(priv)
 			if oexcl || isdev {
 				itx.unlockall()
 				return nil, req.resp.err
@@ -790,11 +795,6 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 			}
 			maj, min = unmkdev(st.rdev())
 		} else {
-			if req.resp.err != 0 {
-				itx.unlockall()
-				return nil, req.resp.err
-			}
-			idm = idaemon_ensure(priv)
 			maj = major
 			min = minor
 		}
@@ -810,7 +810,6 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		itx.unlockall()
 	} else {
 		// open existing file
-		req := &ireq_t{}
 		req.mkget_meminc(paths)
 		req_namei(req, paths, cwdf.priv)
 		<- req.ack
@@ -822,6 +821,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		min = req.resp.minor
 		idm = idaemon_ensure(priv)
 	}
+	itype = req.resp.gtype
 
 	o_dir := flags & O_DIRECTORY != 0
 	wantwrite := flags & (O_WRONLY|O_RDWR) != 0
@@ -841,16 +841,6 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 				panic("mem ref dec must succeed")
 			}
 		}
-		st := &stat_t{}
-		st.init()
-		req := &ireq_t{}
-		req.mkfstat(st)
-		idm.req <- req
-		<- req.ack
-		if req.resp.err != 0 {
-			panic("stat must succeed")
-		}
-		itype := st.mode()
 		if o_dir && itype != I_DIR {
 			memdec()
 			return nil, -ENOTDIR
@@ -1207,6 +1197,8 @@ func (ib *ibuf_t) log_write() {
 
 var iblkcache = iblkcache_t{}
 
+// XXX shouldn't synchronize; idaemon's don't share anything but we need to
+// make sure that a logged inode block has all recent modifications.
 func ibread(blkn int) *ibuf_t {
 	if blkn < superb_start {
 		panic("no")
@@ -1427,6 +1419,7 @@ type ireq_t struct {
 
 type iresp_t struct {
 	gnext		inum
+	gtype		int
 	cnext		inum
 	count		int
 	err		int
@@ -1794,6 +1787,7 @@ func idaemonize(idm *idaemon_t) {
 			maj := idm.icache.major
 			min := idm.icache.minor
 			r.resp.gnext = idm.priv
+			r.resp.gtype = idm.icache.itype
 			r.resp.major = maj
 			r.resp.minor = min
 			r.resp.err = 0
