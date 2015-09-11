@@ -16,7 +16,8 @@ void loop(char *msg, const int iters)
 {
 	int j;
 	for (j = 0; j < iters; j++)
-		printf(msg);
+		// appease gcc
+		printf("%s", msg);
 }
 
 __thread long tlvar;
