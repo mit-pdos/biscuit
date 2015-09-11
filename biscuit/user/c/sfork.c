@@ -119,9 +119,10 @@ void *crmessage(void *idp)
 	char msg[1660];
 	memset(msg, 'X', sizeof(msg));
 	long total = 0;
+	int pid = getpid();
 	while (!cease) {
 		char o[32];
-		snprintf(o, sizeof(o), "f%ld.%ld", id, total);
+		snprintf(o, sizeof(o), "f%d-%ld.%ld", pid, id, total);
 
 		int fd = open(o, O_CREAT | O_WRONLY | O_EXCL, 0600);
 		if (fd < 0)
@@ -335,16 +336,57 @@ void *forkexec(void *idp)
 	return (void *)total;
 }
 
+void *seqcreate(void *idp)
+{
+	pthread_barrier_wait(&bar);
+
+	long id = (long)idp;
+	int pid = getpid();
+
+	long total = 0;
+	while (!cease) {
+		char o[64];
+		snprintf(o, sizeof(o), "f%d-%ld.%ld", pid, id, total);
+
+		int fd = open(o, O_CREAT | O_WRONLY | O_EXCL, 0600);
+		if (fd < 0)
+			err(fd, "open");
+		close(fd);
+		total++;
+	}
+	return (void *)total;
+}
+
+void *openonly(void *idp)
+{
+	const char *f = "/tmp/dur";
+	int fd = open(f, O_CREAT | O_WRONLY, 0600);
+	if (fd < 0)
+		err(fd, "create");
+	close(fd);
+	pthread_barrier_wait(&bar);
+
+	long total = 0;
+	while (!cease) {
+		fd = open(f, O_RDONLY);
+		if (fd < 0)
+			err(fd, "open");
+		close(fd);
+		total++;
+	}
+	return (void *)total;
+}
+
 void usage(char *n)
 {
 	printf( "usage:\n"
-		"%s [-s seconds] [-b [c|r|u|f|k|e|p]] <num threads>\n"
+		"%s [-s seconds] [-b c|r|u|f|k|e|p|s|o] <num threads>\n"
 		"  -s seconds\n"
 		"       run benchmark for seconds\n"
-		"  -b [c|r|u|f|s|p]\n"
+		"  -b c|r|u|f|k|e|p|s|o\n"
 		"       only run create message, rename, unix\n"
 		"       socket, sys_fake2, forkonly, forkexec,\n"
-		"       or getpid benchmark\n"
+		"       getpid, seqcreate, or open only benchmark\n"
 		"\n", n);
 	printf(	"%s -m\n"
 		"       run mailbench forever\n\n", n);
@@ -429,6 +471,8 @@ int main(int argc, char **argv)
 		{"fake2", 'f', fake2, NULL, NULL},
 		{"forkonly", 'k', forkonly, NULL, NULL},
 		{"forkexec", 'e', forkexec, NULL, NULL},
+		{"seqcreate", 's', seqcreate, NULL, NULL},
+		{"openonly", 'o', openonly, NULL, NULL},
 	};
 
 	const int nbms = sizeof(bms)/sizeof(bms[0]);
