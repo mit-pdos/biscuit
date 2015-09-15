@@ -54,8 +54,9 @@ void *crrename(void *idp)
 	char n[32];
 
 	long id = (long)idp;
-	snprintf(o, sizeof(o), "o%ld", id);
-	snprintf(n, sizeof(n), "n%ld", id);
+	int pid = getpid();
+	snprintf(o, sizeof(o), "o%d-%ld", pid, id);
+	snprintf(n, sizeof(n), "n%d-%ld", pid, id);
 
 	int fd = open(o, O_CREAT | O_RDONLY, 0600);
 	if (fd < 0)
