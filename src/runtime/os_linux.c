@@ -1264,6 +1264,8 @@ prot_none(uint8 *v, uint64 sz)
 	}
 }
 
+int64 runtime·No_pml4;
+
 // XXX: all go mappings should be fall into the same pml4 slot; that way user
 // threads can share kernel page tables (since each user process has its own
 // pml4 page).
@@ -1314,6 +1316,15 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 
 	if (prot & PROT_WRITE)
 		perms |= PTE_W;
+
+	if (runtime·No_pml4) {
+		uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
+		int32 sidx = 0x1ff & ((uint64)v >> 39);
+		int32 eidx = 0x1ff & (((uint64)v + sz - 1) >> 39);
+		for (; sidx <= eidx; sidx++)
+			if ((pml4[sidx] & PTE_P) == 0)
+				runtime·pancake("adding new pml4 entry", 0);
+	}
 
 	int32 i;
 	for (i = 0; i < sz ; i += PGSIZE)

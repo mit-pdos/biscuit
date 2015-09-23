@@ -71,6 +71,7 @@ func Trapwake()
 func inb(int) int
 // os_linux.c
 var gcticks uint64
+var No_pml4 int
 
 //go:nosplit
 func sc_setup() {

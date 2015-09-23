@@ -392,11 +392,11 @@ func dmap_init() {
 		pdpt[i] = p_pd | PTE_P | PTE_W
 	}
 
-	// fill in kent, the list of kernel pml4 entries
-	cnt := 0
+	// fill in kent, the list of kernel pml4 entries. make sure we will
+	// panic if the runtime adds new mappings that we don't record here.
+	runtime.No_pml4 = 1
 	for i, e := range kpmap() {
 		if e & PTE_U == 0 && e & PTE_P != 0 {
-			cnt++
 			ent := kent_t{i, e}
 			kents = append(kents, ent)
 		}
