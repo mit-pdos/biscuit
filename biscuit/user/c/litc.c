@@ -64,13 +64,16 @@ syscall(long a1, long a2, long a3, long a4,
 	long ret;
 	register long r8 asm("r8") = a5;
 
+	// we may want to follow the sys5 abi and have the kernel restore
+	// r12-r15 too...
 	asm volatile(
 		"movq	%%rsp, %%r10\n"
 		"leaq	2(%%rip), %%r11\n"
 		"sysenter\n"
 		: "=a"(ret)
 		: "0"(trap), "D"(a1), "S"(a2), "d"(a3), "c"(a4), "r"(r8)
-		: "cc", "memory");
+		: "cc", "memory", "r9", "r10", "r11", "r12", "r13", "r14",
+		  "r15");
 
 	return ret;
 }
@@ -1308,9 +1311,12 @@ char __progname[64];
 char **environ = _environ;
 
 void
-_entry(int argc, char **argv, struct kinfo_t *k)
+_entry(int argc, char **argv)
 {
+	// kinfo is in r10 since we cannot set rdx using sysexit
+	register struct kinfo_t *k asm("r10");
 	kinfo = k;
+
 	if (argc)
 		strncpy(__progname, argv[0], sizeof(__progname));
 	int main(int, char **);

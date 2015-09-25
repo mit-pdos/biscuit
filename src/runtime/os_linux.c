@@ -355,7 +355,7 @@ void cpu_halt(uint64);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
-struct cpu_t* gscpu(void);
+struct cpu_t* ·Gscpu(void);
 int64 inb(int32);
 uint64 lap_id(void);
 void lcr0(uint64);
@@ -364,13 +364,13 @@ void lcr4(uint64);
 void lidt(struct pdesc_t *);
 void ltr(uint64);
 void outb(int64, int64);
-int64 pushcli(void);
-void popcli(int64);
+int64 ·Pushcli(void);
+void ·Popcli(int64);
 uint64 rcr0(void);
 uint64 rcr2(void);
 uint64 rcr3(void);
 uint64 rcr4(void);
-uint64 rdmsr(uint64);
+uint64 ·Rdmsr(uint64);
 uint64 rflags(void);
 uint64 rrsp(void);
 void sti(void);
@@ -378,7 +378,7 @@ void tlbflush(void);
 void trapret(uint64 *, uint64);
 void _trapret(uint64 *);
 void wlap(uint32, uint32);
-void wrmsr(uint64, uint64);
+void ·Wrmsr(uint64, uint64);
 void mktrap(uint64);
 
 uint64 runtime·Rdtsc(void);
@@ -437,11 +437,11 @@ _pnum(uint64 n)
 void
 pnum(uint64 n)
 {
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 	splock(&pmsglock);
 	_pnum(n);
 	spunlock(&pmsglock);
-	popcli(fl);
+	·Popcli(fl);
 }
 
 #pragma textflag NOSPLIT
@@ -467,11 +467,11 @@ _pmsg(int8 *msg)
 void
 pmsg(int8 *msg)
 {
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 	splock(&pmsglock);
 	_pmsg(msg);
 	spunlock(&pmsglock);
-	popcli(fl);
+	·Popcli(fl);
 }
 
 static int32 halt;
@@ -1273,7 +1273,7 @@ int64 runtime·No_pml4;
 void*
 hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 {
-	uint64 fl = pushcli();
+	uint64 fl = ·Pushcli();
 	splock(&maplock);
 
 	USED(fd);
@@ -1282,7 +1282,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 
 	if (ROUNDUP(sz, PGSIZE)/PGSIZE > pglast - pgfirst) {
 		spunlock(&maplock);
-		popcli(fl);
+		·Popcli(fl);
 		return (void *)-1;
 	}
 
@@ -1310,7 +1310,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	if (prot == PROT_NONE) {
 		prot_none(v, sz);
 		spunlock(&maplock);
-		popcli(fl);
+		·Popcli(fl);
 		return v;
 	}
 
@@ -1331,7 +1331,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 		alloc_map(v + i, perms, 1);
 
 	spunlock(&maplock);
-	popcli(fl);
+	·Popcli(fl);
 	return v;
 }
 
@@ -1339,7 +1339,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 int32
 hack_munmap(void *va, uint64 sz)
 {
-	uint64 fl = pushcli();
+	uint64 fl = ·Pushcli();
 	splock(&maplock);
 
 	// XXX TLB shootdowns?
@@ -1359,7 +1359,7 @@ hack_munmap(void *va, uint64 sz)
 	pmsg("POOF\n");
 
 	spunlock(&maplock);
-	popcli(fl);
+	·Popcli(fl);
 	return 0;
 }
 
@@ -1402,14 +1402,14 @@ hack_write(int64 fd, const void *buf, uint32 c)
 	if (fd != 1 && fd != 2)
 		runtime·pancake("weird fd", (uint64)fd);
 
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 	splock(&pmsglock);
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
 	while(c--)
 		runtime·putch(*p++);
 	spunlock(&pmsglock);
-	popcli(fl);
+	·Popcli(fl);
 
 	return ret;
 }
@@ -1493,6 +1493,10 @@ mmap_test(void)
 #define TRAP_TLBSHOOT   70
 #define TRAP_SIGRET     71
 
+#define IRQ_BASE	32
+#define IS_IRQ(x)	(x > IRQ_BASE && x <= IRQ_BASE + 15)
+#define IS_CPUEX(x)	(x < IRQ_BASE)
+
 // HZ timer interrupts/sec
 #define HZ		100
 static uint32 lapic_quantum;
@@ -1500,9 +1504,8 @@ static uint32 lapic_quantum;
 static uint64 pspercycle;
 
 struct thread_t {
-	// if you add struct members before tf, you must fix the address in
-	// sysexitportal() too
-#define TFREGS       16
+// ======== don't forget to update the go definition too! ======
+#define TFREGS       17
 #define TFHW         7
 #define TFSIZE       ((TFREGS + TFHW)*8)
 	// general context
@@ -1511,9 +1514,15 @@ struct thread_t {
 #define FXREGS       (FXSIZE/8)
 	// MMX/SSE state; must be 16 byte aligned or fx{save,rstor} will
 	// generate #GP
-	uint64 _pad1;
+	//uint64 _pad1;
 	uint64 fx[FXREGS];
-
+	// these both are pointers to go allocated memory, but they are only
+	// non-nil during user program execution thus the GC will always find
+	// tf and fxbuf via the G's syscallsp.
+	struct user_t {
+		uint64 tf;
+		uint64 fxbuf;
+	} user;
 	// we could put this on the signal stack instead
 	uint64 sigtf[TFREGS + TFHW];
 	// don't care whether sigfx is 16 byte aligned since we never call
@@ -1528,14 +1537,15 @@ struct thread_t {
 	#define		TF_FL_IF	(1 << 9)
 #define TF_SS        (TFREGS + 6)
 #define TF_TRAPNO    TFREGS
-#define TF_RAX       15
-#define TF_RBX       14
-#define TF_RCX       13
-#define TF_RDX       12
-#define TF_RDI       11
-#define TF_RSI       10
-#define TF_RBP       9
-#define TF_FSBASE    0
+#define TF_RAX       16
+#define TF_RBX       15
+#define TF_RCX       14
+#define TF_RDX       13
+#define TF_RDI       12
+#define TF_RSI       11
+#define TF_RBP       10
+#define TF_FSBASE    1
+#define TF_SYSRSP    0
 
 	int64 status;
 #define ST_INVALID   0
@@ -1562,10 +1572,11 @@ struct thread_t {
 	int64 pid;
 	uint64 pmap;
 	int64 notify;
-	uint64 _pad2;
+	//uint64 _pad2;
 };
 
 struct cpu_t {
+// ======== don't forget to update the go definition too! ======
 	// XXX missing go type info
 	//struct thread_t *mythread;
 
@@ -1915,6 +1926,8 @@ runtime·Tfdump(uint64 *tf)
 	pnum(tf[TF_RDX]);
 	pmsg("\nRSP:");
 	pnum(tf[TF_RSP]);
+	pmsg("\nFSBASE:");
+	pnum(tf[TF_FSBASE]);
 	pmsg("\n");
 }
 
@@ -1944,6 +1957,7 @@ tlb_shootdown(void)
 	struct thread_t *ct = curthread;
 
 	if (ct && ct->pmap == tlbshoot_pmap) {
+// XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX 
 		// the TLB is flushed simply by taking an IPI since currently
 		// each CPU switches to kernel page map on trap entry. the
 		// following code will be necessary if we ever stop switching
@@ -2152,6 +2166,9 @@ proftick(void)
 	}
 }
 
+// XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX 
+// may want to only wakeup() on most timer ints since now there is more
+// overhead for timer ints during user time.
 #pragma textflag NOSPLIT
 void
 trap(uint64 *tf)
@@ -2159,21 +2176,38 @@ trap(uint64 *tf)
 	lcr3(kpmap);
 	uint64 trapno = tf[TF_TRAPNO];
 
-	if (gscpu() != &curcpu) {
-		pnum((uint64)gscpu());
+	if (·Gscpu() != &curcpu) {
+		pnum((uint64)·Gscpu());
 		pnum((uint64)&curcpu);
-		assert(0, "gs is wrong", 0);
+		runtime·pancake("gs is wrong", 0);
 	}
 
 	struct thread_t *ct = curthread;
+
+	// CPU exceptions in kernel mode are fatal errors
+	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0) {
+		pmsg("trap frame at");
+		pnum((uint64)tf);
+		pmsg("trapno");
+		pnum(trapno);
+		uint64 rip = tf[TF_RIP];
+		pmsg("rip");
+		pnum(rip);
+		if (trapno == 14) {
+			uint64 rcr2(void);
+			uint64 cr2 = rcr2();
+			pmsg("cr2");
+			pnum(cr2);
+		}
+		uint64 rsp = tf[TF_RSP];
+		stack_dump(rsp);
+		runtime·pancake("kernel fault", trapno);
+	}
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
 	if (halt)
 		while (1);
-
-	void (*ntrap)(uint64 *, int64, int64);
-	ntrap = (void (*)(uint64 *, int64, int64))newtrap;
 
 	// don't add code before FPU context saving unless you've thought very
 	// carefully! it is easy to accidentally and silently corrupt FPU state
@@ -2181,8 +2215,32 @@ trap(uint64 *tf)
 
 	// save FPU state immediately before we clobber it
 	if (ct) {
-		fxsave(ct->fx);
-		runtime·memmove(ct->tf, tf, TFSIZE);
+		// if in user mode, save to user buffers and make it look like
+		// Userrun returned.
+		if (ct->user.tf) {
+			uint64 *ufx = (uint64 *)ct->user.fxbuf;
+			uint64 *utf = (uint64 *)ct->user.tf;
+			fxsave(ufx);
+			runtime·memmove(utf, tf, TFSIZE);
+			// runtime/asm_amd64.s
+			void _userint(void);
+			ct->tf[TF_RIP] = (uint64)_userint;
+			ct->tf[TF_RSP] = utf[TF_SYSRSP];
+			ct->tf[TF_RAX] = trapno;
+			ct->tf[TF_RBX] = rcr2();
+			// XXXPANIC
+			if (trapno == TRAP_YIELD || trapno == TRAP_SIGRET)
+				runtime·pancake("nyet", trapno);
+			// if we are unlucky enough for a timer int to come in
+			// before we execute the first instruction of the new
+			// rip, make sure the state we just saved isn't
+			// clobbered
+			ct->user.tf = 0;
+			ct->user.fxbuf = 0;
+		} else {
+			fxsave(ct->fx);
+			runtime·memmove(ct->tf, tf, TFSIZE);
+		}
 		timetick(ct);
 	}
 
@@ -2192,18 +2250,18 @@ trap(uint64 *tf)
 		trapno = TRAP_TIMER;
 		tf[TF_TRAPNO] = TRAP_TIMER;
 		yielding = 1;
-	} else if (trapno == TRAP_TLBSHOOT) {
+	}
+
+	void (*ntrap)(uint64 *, int64, int64);
+	ntrap = (void (*)(uint64 *, int64, int64))newtrap;
+
+	if (trapno == TRAP_TLBSHOOT) {
 		// does not return
 		tlb_shootdown();
 	} else if (trapno == TRAP_SIGRET) {
 		// does not return
 		sigret(ct);
-	} else if (trapno == TRAP_SYSCALL && tf[TF_RAX] == 31339) {
-		// sys_fake2
-		sched_run(ct);
-	}
-
-	if (trapno == TRAP_TIMER) {
+	} else if (trapno == TRAP_TIMER) {
 		splock(&threadlock);
 		if (ct) {
 			if (ct->status == ST_WILLSLEEP) {
@@ -2227,47 +2285,30 @@ trap(uint64 *tf)
 		}
 		// yieldy doesn't return
 		yieldy();
+	} else if (IS_IRQ(trapno)) {
+		if (ntrap) {
+			// if ct is nil here, there is a kernel bug
+			int64 ptid = ct ? ct->pid : 0;
+			// catch kernel faults that occur while trying to
+			// handle user traps
+			if ((tf[TF_CS] & 3) == 0)
+				ptid = 0;
+			ntrap(tf, ptid, 0);
+		} else
+			runtime·pancake("IRQ without ntrap", trapno);
+		if (ct)
+			sched_run(ct);
+		else
+			sched_halt();
+	} else if (IS_CPUEX(trapno)) {
+		// we vet out kernel mode CPU exceptions above; must be from
+		// user program. thus return from Userrun() to kernel.
+		sched_run(ct);
+	} else {
+		runtime·pancake("unexpected int", trapno);
 	}
-
-	// all other interrupts
-	// if the interrupt is a CPU exception and not an IRQ during user
-	// program execution, wait for kernel to handle it before running the
-	// thread again.
-	if (ct && ct->pid && (trapno == TRAP_SYSCALL || trapno < TRAP_TIMER))
-		ct->status = ST_WAITING;
-
-	if (ntrap) {
-		// if ct is nil here, there is a kernel bug
-		int64 ptid = ct ? ct->pid : 0;
-		// catch kernel faults that occur while trying to handle user
-		// traps
-		if ((tf[TF_CS] & 3) == 0)
-			ptid = 0;
-		ntrap(tf, ptid, 0);
-		runtime·pancake("newtrap returned!", 0);
-	}
-
-	pmsg("trap frame at");
-	pnum((uint64)tf);
-
-	pmsg("trapno");
-	pnum(trapno);
-
-	uint64 rip = tf[TF_RIP];
-	pmsg("rip");
-	pnum(rip);
-
-	if (trapno == 14) {
-		uint64 rcr2(void);
-		uint64 cr2 = rcr2();
-		pmsg("cr2");
-		pnum(cr2);
-	}
-
-	uint64 rsp = tf[TF_RSP];
-	stack_dump(rsp);
-
-	runtime·pancake("trap", 0);
+	// not reached
+	runtime·pancake("no returning", 0);
 }
 
 static uint64 lapaddr;
@@ -2475,7 +2516,7 @@ timer_setup(int32 calibrate)
 	wlap(LVTHERMAL, MASKINT);
 
 #define IA32_APIC_BASE   0x1b
-	uint64 reg = rdmsr(IA32_APIC_BASE);
+	uint64 reg = ·Rdmsr(IA32_APIC_BASE);
 	if (!(reg & (1 << 11)))
 		runtime·pancake("lapic disabled?", reg);
 	if (reg >> 12 != 0xfee00)
@@ -2514,34 +2555,34 @@ sysc_setup(uint64 myrsp)
 	// lowest 2 bits are ignored for sysenter, but used for sysexit
 	const uint64 kcode64 = 1 << 3 | 3;
 	const uint64 sysenter_cs = 0x174;
-	wrmsr(sysenter_cs, kcode64);
+	·Wrmsr(sysenter_cs, kcode64);
 
 	const uint64 sysenter_eip = 0x176;
 	// asm_amd64.s
 	void _sysentry(void);
-	wrmsr(sysenter_eip, (uint64)_sysentry);
+	·Wrmsr(sysenter_eip, (uint64)_sysentry);
 
 	const uint64 sysenter_esp = 0x175;
-	wrmsr(sysenter_esp, myrsp);
+	·Wrmsr(sysenter_esp, myrsp);
 
 	//const uint64 ia32_efer = 0xc0000080;
 
-	//wrmsr(ia32_efer, rdmsr(ia32_efer) | 1);
+	//runtime·Wrmsr(ia32_efer, ·Rdmsr(ia32_efer) | 1);
 
 	//const uint64 ia32_fmask = 0xc0000084;
-	//wrmsr(ia32_fmask, TF_FL_IF);
+	//runtime·Wrmsr(ia32_fmask, TF_FL_IF);
 
 	//void sysentry(void);
 	//const uint64 ia32_lstar = 0xc0000082;
-	//wrmsr(ia32_lstar, (uint64)sysentry);
+	//runtime·Wrmsr(ia32_lstar, (uint64)sysentry);
 
 	//const uint64 ia32_star = 0xc0000081;
-	//wrmsr(ia32_star, kcode64 << 32);
+	//runtime·Wrmsr(ia32_star, kcode64 << 32);
 
-	//runtime·printf("cs: %p ip: %p rf m: %p\n", rdmsr(ia32_star) >> 32,
-	//    rdmsr(ia32_lstar), rdmsr(ia32_fmask));
+	//runtime·printf("cs: %p ip: %p rf m: %p\n", ·Rdmsr(ia32_star) >> 32,
+	//    ·Rdmsr(ia32_lstar), ·Rdmsr(ia32_fmask));
 
-	//uint64 reg = rdmsr(ia32_efer);
+	//uint64 reg = ·Rdmsr(ia32_efer);
 	//if ((reg & 1) == 0)
 	//	pmsg("syscall NOT supported\n");
 	//else
@@ -2554,11 +2595,11 @@ gs_set(struct cpu_t *mycpu)
 {
 	const uint64 ia32_gs_base = 0xc0000101;
 	// on qemu (not the hardware), if we don't set gs to null selector
-	// before the wrmsr, the wrmsr is mysteriously lost (but the next wrmsr
+	// before the runtime·Wrmsr, the runtime·Wrmsr is mysteriously lost (but the next runtime·Wrmsr
 	// seems to stay).
 	void gs_null(void);
 	gs_null();
-	wrmsr(ia32_gs_base, (uint64)mycpu);
+	·Wrmsr(ia32_gs_base, (uint64)mycpu);
 }
 
 #pragma textflag NOSPLIT
@@ -2615,9 +2656,9 @@ void
 	fpuinit();
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
 
-	int64 test = pushcli();
+	int64 test = ·Pushcli();
 	assert((test & TF_FL_IF) == 0, "wtf!", test);
-	popcli(test);
+	·Popcli(test);
 	assert((rflags() & TF_FL_IF) == 0, "wtf!", test);
 
 	curcpu.num = myid;
@@ -3148,13 +3189,13 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 {
 	runtime·stackcheck();
 
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 	splock(&pmsglock);
 	while (len--) {
 		runtime·putcha(*msg++, a);
 	}
 	spunlock(&pmsglock);
-	popcli(fl);
+	·Popcli(fl);
 }
 
 #pragma textflag NOSPLIT
@@ -3193,7 +3234,7 @@ hack_setitimer(uint32 timer, Itimerval *new, Itimerval *old)
 		runtime·pancake("weird timer", timer);
 	USED(old);
 
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 
 	struct thread_t *ct = curthread;
 	// ignore timeout since we don't use virtual time
@@ -3205,7 +3246,7 @@ hack_setitimer(uint32 timer, Itimerval *new, Itimerval *old)
 	else
 		ct->prof.enabled = 0;
 
-	popcli(fl);
+	·Popcli(fl);
 }
 
 #pragma textflag NOSPLIT
@@ -3214,7 +3255,7 @@ hack_sigaltstack(SigaltstackT *new, SigaltstackT *old)
 {
 	USED(old);
 
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 
 	struct thread_t *ct = curthread;
 	if (new->ss_flags & SS_DISABLE)
@@ -3222,7 +3263,7 @@ hack_sigaltstack(SigaltstackT *new, SigaltstackT *old)
 	else
 		ct->sigstack = (uint64)new->ss_sp + new->ss_size;
 
-	popcli(fl);
+	·Popcli(fl);
 }
 
 uint64 runtime·doint;

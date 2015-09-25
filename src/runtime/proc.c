@@ -1349,6 +1349,12 @@ execute(G *gp)
 	runtime·gogo(&gp->sched);
 }
 
+static void
+userrun(void)
+{
+	runtime·printf("userio! ");
+}
+
 static void trapcheck(P*);
 
 // Finds a runnable goroutine to execute.
@@ -1413,10 +1419,12 @@ top:
 	extern int64 runtime·hackmode;
 stop:
 	if (runtime·hackmode) {
-		void mktrap(uint64);
 		const uint64 yield = 49;
+		void mktrap(uint64);
 		mktrap(yield);
-		//trapcheck(g->m->p);
+		trapcheck(g->m->p);
+		//void userrun(void);
+		//userrun();
 		goto top;
 	}
 
@@ -3526,8 +3534,8 @@ enum {
 	RUNNING = 1,
 };
 
-int64 pushcli(void);
-void popcli(int64);
+int64 ·Pushcli(void);
+void ·Popcli(int64);
 void runtime·pancake(void *, int64);
 
 static uint32 ptrap;
@@ -3561,7 +3569,7 @@ static int32 initted;
 static void
 _trapsched(G *gp, int32 firsttime)
 {
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 	splock(&tlock);
 
 	if (firsttime) {
@@ -3593,7 +3601,7 @@ bed:
 	}
 
 	spunlock(&tlock);
-	popcli(fl);
+	·Popcli(fl);
 
 	schedule();
 }
@@ -3618,7 +3626,7 @@ trapcheck(P *p)
 	if (!ptrap)
 		return;
 
-	int64 fl = pushcli();
+	int64 fl = ·Pushcli();
 	splock(&tlock);
 
 	if (!ptrap)
@@ -3640,7 +3648,7 @@ trapcheck(P *p)
 	runtime·trapsleeper = nil;
 
 	spunlock(&tlock);
-	popcli(fl);
+	·Popcli(fl);
 
 	uint32 old;
 	// XXX could use casgstatus probably
@@ -3654,7 +3662,7 @@ trapcheck(P *p)
 
 out:
 	spunlock(&tlock);
-	popcli(fl);
+	·Popcli(fl);
 	return;
 }
 

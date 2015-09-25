@@ -22,7 +22,7 @@ func Ap_setup(int)
 func Cli()
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
 type Ptid_t uint
-func Install_traphandler(func(tf *[23]int, ptid Ptid_t, notify int))
+func Install_traphandler(func(tf *[24]int, ptid Ptid_t, notify int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
@@ -38,11 +38,11 @@ func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
 func Pmsga(*uint8, int, int8)
 func Pnum(int)
-func Procadd(ptid Ptid_t, tf *[23]int, p_pmap int)
+func Procadd(ptid Ptid_t, tf *[24]int, p_pmap int)
 func Proccontinue()
 func Prockill(Ptid_t)
 func Procnotify(Ptid_t) int
-func Procrunnable(ptid Ptid_t, tf *[23]int, p_pmap int)
+func Procrunnable(ptid Ptid_t, tf *[24]int, p_pmap int)
 func Proctime(ptid Ptid_t) int
 func Kreset()
 func Ktime() int
@@ -60,7 +60,7 @@ func Vtop(*[512]int) int
 func Crash()
 func Fnaddr(func()) int
 func Fnaddri(func(int)) int
-func Tfdump(*[23]int)
+func Tfdump(*[24]int)
 func Stackdump(int)
 func Usleep(int)
 func Rflags() int
@@ -72,6 +72,104 @@ func inb(int) int
 // os_linux.c
 var gcticks uint64
 var No_pml4 int
+
+type cpu_t struct {
+	this		int
+	mythread	int
+	rsp		int
+	num		int
+}
+
+type tuser_t struct {
+	tf	uintptr
+	fxbuf	uintptr
+}
+
+type prof_t struct {
+	enabled		int
+	totaltime	int
+	stampstart	int
+}
+
+type thread_t struct {
+	tf		[24]int
+	fx		[64]int
+	user		tuser_t
+	sigtf		[24]int
+	sigfx		[64]int
+	sigstatus	int
+	siglseepfor	int
+	status		int
+	doingsig	int
+	sigstack	int
+	prof		prof_t
+	sleepfor	int
+	sleepret	int
+	futaddr		int
+	pid		int
+	pmap		int
+	notify		int
+}
+
+const(
+  TFSIZE       = 24
+  TFREGS       = 17
+  TF_SYSRSP    = 0
+  TF_FSBASE    = 1
+  TF_R8        = 9
+  TF_RBP       = 10
+  TF_RSI       = 11
+  TF_RDI       = 12
+  TF_RDX       = 13
+  TF_RCX       = 14
+  TF_RBX       = 15
+  TF_RAX       = 16
+  TF_TRAP      = TFREGS
+  TF_RIP       = TFREGS + 2
+  TF_CS        = TFREGS + 3
+  TF_RSP       = TFREGS + 5
+  TF_SS        = TFREGS + 6
+  TF_RFLAGS    = TFREGS + 4
+    TF_FL_IF     = 1 << 9
+)
+
+func Pushcli() int
+func Popcli(int)
+func Gscpu() *cpu_t
+func Rdmsr(int) int
+func Wrmsr(int, int)
+func Userrun_(*[24]int, bool) (int, int)
+
+func Userrun(tf *[24]int, fxbuf *[64]int, p_pmap int,
+    fastret bool) (int, int) {
+	entersyscall()
+	fl := Pushcli()
+	ct := (*thread_t)(unsafe.Pointer(uintptr(Gscpu().mythread)))
+	// don't need to set the threads pmap to the user prog's pmap since any
+	// interrupt taken while in user code forces a return to kernel mode
+	// through Userrun
+
+	if Rcr3() != p_pmap {
+		Lcr3(p_pmap)
+	}
+
+	// if doing a fast return after a syscall, we need to restore some user
+	// state manually
+	ia32_fs_base := 0xc0000100
+	kfsbase := Rdmsr(ia32_fs_base)
+	Wrmsr(ia32_fs_base, tf[TF_FSBASE])
+
+	ct.user.tf = uintptr(unsafe.Pointer(tf))
+	ct.user.fxbuf = uintptr(unsafe.Pointer(fxbuf))
+	intno, aux := Userrun_(tf, fastret)
+
+	Wrmsr(ia32_fs_base, kfsbase)
+	ct.user.tf = 0
+	ct.user.fxbuf = 0
+	Popcli(fl)
+	exitsyscall()
+	return intno, aux
+}
 
 //go:nosplit
 func sc_setup() {

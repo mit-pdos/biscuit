@@ -429,15 +429,15 @@ TEXT lcr4(SB), NOSPLIT, $0-8
 	MOVQ	AX, CR4
 	RET
 
-TEXT rdmsr(SB), NOSPLIT, $0-16
+TEXT ·Rdmsr(SB), NOSPLIT, $0-16
 	MOVQ	reg+0(FP), CX
 	RDMSR
 	MOVL	DX, ret2+12(FP)
 	MOVL	AX, ret1+8(FP)
 	RET
 
-// void wrmsr(uint64 reg, uint64 val)
-TEXT wrmsr(SB), NOSPLIT, $0-16
+// void ·Wrmsr(uint64 reg, uint64 val)
+TEXT ·Wrmsr(SB), NOSPLIT, $0-16
 	MOVQ	reg+0(FP), CX
 	MOVL	vlo+8(FP), AX
 	MOVL	vhi+12(FP), DX
@@ -542,14 +542,14 @@ TEXT sti(SB), NOSPLIT, $0-0
 	STI
 	RET
 
-TEXT pushcli(SB), NOSPLIT, $0-8
+TEXT runtime·Pushcli(SB), NOSPLIT, $0-8
 	PUSHFQ
 	POPQ	AX
 	MOVQ	AX, ret+0(FP)
 	CLI
 	RET
 
-TEXT popcli(SB), NOSPLIT, $0-8
+TEXT runtime·Popcli(SB), NOSPLIT, $0-8
 	MOVQ	fl+0(FP), AX
 	PUSHQ	AX
 	POPFQ
@@ -621,6 +621,7 @@ TEXT runtime·handle_int(SB), NOSPLIT, $0-0
 	RET
 
 #define TRAP_YIELD      $49
+#define TRAP_SYSCALL    $64
 TEXT hack_yield(SB), NOSPLIT, $0-0
 	INT	TRAP_YIELD
 	RET
@@ -711,7 +712,9 @@ IH_IRQ(13,Xirq13 )
 IH_IRQ(14,Xirq14 )
 IH_IRQ(15,Xirq15 )
 
-#define IA32_FS_BASE   $0xc0000100UL
+#define IA32_FS_BASE		$0xc0000100UL
+#define IA32_SYSENTER_ESP	$0x175UL
+#define IA32_SYSENTER_EIP	$0x176UL
 
 TEXT wrfsb(SB), NOSPLIT, $0-8
 	get_tls(BX)
@@ -753,6 +756,13 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	ORQ	DX, AX
 	PUSHQ	AX
 
+	// save sysenter rsp
+	MOVQ	IA32_SYSENTER_ESP, CX
+	RDMSR
+	SHLQ	$32, DX
+	ORQ	DX, AX
+	PUSHQ	AX
+
 	MOVQ	SP, AX
 	PUSHQ	AX
 
@@ -772,6 +782,14 @@ TEXT _trapret(SB), NOSPLIT, $0-8
 	MOVQ	tf+0(FP), AX	// tf is not on the callers stack frame, but in
 				// threads[]
 	MOVQ	AX, SP
+
+	// restore sysenter esp
+	MOVQ	IA32_SYSENTER_ESP, CX
+	POPQ	AX
+	MOVQ	AX, DX
+	ANDQ	$((1 << 32) - 1), AX
+	SHRQ	$32, DX
+	WRMSR
 
 	// restore fsbase
 	MOVQ	IA32_FS_BASE, CX
@@ -912,7 +930,104 @@ TEXT mktrap(SB), NOSPLIT, $0-8
 
 	JMP	alltraps(SB)
 
-TEXT _sysentry(SB), NOSPLIT, $0
+#define TFREGS		17
+#define TF_SYSRSP	(8*0)
+#define TF_R8		(8*9)
+#define TF_RBP		(8*10)
+#define TF_RSI		(8*11)
+#define TF_RDI		(8*12)
+#define TF_RDX		(8*13)
+#define TF_RCX		(8*14)
+#define TF_RBX		(8*15)
+#define TF_RAX		(8*16)
+#define TF_RIP		(8*(TFREGS + 2))
+#define TF_RSP		(8*(TFREGS + 5))
+
+// if you change the number of arguments, you must adjust the stack offsets in
+// _sysentry and _userint.
+// func Userrun_(tf *[24]int, fastret bool) (int, int)
+TEXT ·Userrun_(SB), NOSPLIT, $24-32
+	MOVQ	tf+0(FP), R9
+
+	// fastret or iret?
+	MOVB	fastret+8(FP), AX
+	CMPB	AX, $0
+	JNE	syscallreturn
+	// do full state restore, make sure the SP we return with is correct
+	MOVQ	SP, TF_SYSRSP(R9)
+	PUSHQ	R9
+	CALL	_trapret(SB)
+	INT	$3
+
+syscallreturn:
+	// set SP MSRs manually
+	MOVQ	SP, AX
+	PUSHQ	AX
+	PUSHQ	IA32_SYSENTER_ESP
+	CALL	·Wrmsr(SB)
+	POPQ	AX
+	POPQ	AX
+
+	// user dx/cx cannot be loaded directly those registers are used by
+	// sysexit. thus we use r10 and r11 for dx and cx respectively. this
+	// only matters for exec when we need to setup a call to _entry() with
+	// more than two arguments. we also clobber all other registers; maybe
+	// this is bad.
+	MOVQ	TF_RAX(R9), AX
+	MOVQ	TF_RDI(R9), DI
+	MOVQ	TF_RSI(R9), SI
+	MOVQ	TF_RDX(R9), R10
+	MOVQ	TF_RSP(R9), CX
+	MOVQ	TF_RIP(R9), DX
+	MOVQ	TF_RBP(R9), BP
+	MOVQ	TF_RBX(R9), BX
+	// rcx contains rsp
+	// rdx contains rip
+	STI
+	// rex64 sysexit
+	BYTE	$0x48
+	BYTE	$0x0f
+	BYTE	$0x35
+	// not reached; just to trick dead code analysis
+	CALL	_sysentry(SB)
+	CALL	_userint(SB)
+
+// this should be a label since it is the bottom half of the Userrun_ function,
+// but i can't figure out how to get the plan9 assembler to let me use lea on a
+// label. thus the function epilogue and offset to get the tf arg from Userrun_
+// are hand-coded.
+//_sysentry:
+TEXT _sysentry(SB), NOSPLIT, $0-0
+	// save user state in fake trapframe
+	MOVQ	0x20(SP), R9
+	MOVQ	R10, TF_RSP(R9)
+	MOVQ	R11, TF_RIP(R9)
+	MOVQ	AX,  TF_RAX(R9)
+	MOVQ	DI,  TF_RDI(R9)
+	MOVQ	SI,  TF_RSI(R9)
+	MOVQ	DX,  TF_RDX(R9)
+	MOVQ	CX,  TF_RCX(R9)
+	MOVQ	R8,  TF_R8(R9)
+	MOVQ	BP,  TF_RBP(R9)
+	MOVQ	BX,  TF_RBX(R9)
+	// return val 1
+	MOVQ	TRAP_SYSCALL, 0x30(SP)
+	// return val 2
+	MOVQ	$0, 0x38(SP)
+	ADDQ	$0x18, SP
+	RET
+
+// this is the bottom half of _userrun() that is executed if a timer int or CPU
+// exception is generated during user program execution.
+TEXT _userint(SB), NOSPLIT, $0-0
+	CLI
+	// AX holds the interrupt number, BX holds aux (cr2 for page fault)
+	MOVQ	AX, 0x30(SP)
+	MOVQ	BX, 0x38(SP)
+	ADDQ	$0x18, SP
+	RET
+
+TEXT old_sysentry(SB), NOSPLIT, $0
 	// r10 contains return rsp, r11 contains return rip
 	PUSHQ	AX
 
@@ -939,7 +1054,6 @@ TEXT _sysentry(SB), NOSPLIT, $0
 	PUSHQ	$0
 
 	// interrupt number
-#define TRAP_SYSCALL    $64
 	PUSHQ	TRAP_SYSCALL
 
 	// and finally, restore rax
@@ -950,47 +1064,13 @@ TEXT _sysentry(SB), NOSPLIT, $0
 	CALL	sysentry(SB)
 	INT	$3
 
-// this is unused
-TEXT sysexitportal(SB), NOSPLIT, $0-56
-	MOVQ	pmap+24(FP), AX
-	MOVQ	AX, CR3
-
-	MOVQ	fsb+16(FP), AX
-
-	// restore fsbase
-	MOVQ	IA32_FS_BASE, CX
-	MOVQ	AX, DX
-	ANDQ	$((1 << 32) - 1), AX
-	SHRQ	$32, DX
-	WRMSR
-
-	MOVQ	rip+0(FP), DX
-	MOVQ	rsp+8(FP), CX
-	MOVQ	rax+32(FP), AX
-	MOVQ	rbp+40(FP), BP
-	MOVQ	rbx+48(FP), BX
-
-	//MOVQ	0x90(AX), DX
-	//MOVQ	0xa8(AX), CX
-	// stack cannot be used after STI since an int using the IST can come
-	// in and clobber our stack
-	STI
-
-	// rcx contains rsp
-	// rdx contains rip
-	// rex64 sysexit
-	BYTE	$0x48
-	BYTE	$0x0f
-	BYTE	$0x35
-	INT	$3
-
 TEXT gs_null(SB), NOSPLIT, $8-0
 	XORQ	AX, AX
 	PUSHQ	AX
 	POPQ	GS
 	RET
 
-TEXT gscpu(SB), NOSPLIT, $0-8
+TEXT runtime·Gscpu(SB), NOSPLIT, $0-8
 	MOVQ	0(GS), AX
 	MOVQ	AX, ret+0(FP)
 	RET

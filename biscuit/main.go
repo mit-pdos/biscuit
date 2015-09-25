@@ -127,19 +127,9 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 
 	trapno := tf[TF_TRAP]
 
-	// kernel faults are fatal errors for now, but they could be handled by
-	// trap & c.
-	if pid == 0 && trapno < IRQ_BASE {
-		runtime.Pnum(trapno)
-		if trapno == PGFAULT {
-			runtime.Pnum(runtime.Rcr2())
-		}
-		rip := tf[TF_RIP]
-		runtime.Pnum(rip)
-		runtime.Pnum(0x42)
-		runtime.Pnum(lap_id())
-		runtime.Tfdump(tf)
-		//runtime.Stackdump(tf[TF_RSP])
+	// only IRQs come through here now
+	if trapno <= TIMER {
+		runtime.Pnum(0x1001)
 		for {}
 	}
 
@@ -158,21 +148,15 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 	runtime.Trapwake()
 
 	switch trapno {
-	case SYSCALL, PGFAULT, DIVZERO:
-		// yield until the syscall/fault is handled
-		runtime.Procyield()
-	case INT_DISK:
+	case INT_DISK, INT_KBD, INT_COM1:
 		// unclear whether automatic eoi mode works on the slave 8259a.
 		// from page 15 of intel's 8259a doc: "The AEOI mode can only
 		// be used in a master 8259A and not a slave. 8259As with a
 		// copyright date of 1985 or later will operate in the AEOI
 		// mode as a master or a slave." linux seems to observe that
 		// automatic eoi also doesn't work on the slave.
-		//p8259_eoi()
-		runtime.Proccontinue()
-	case INT_KBD, INT_COM1:
-		runtime.Proccontinue()
 	default:
+		// unexpected IRQ
 		runtime.Pnum(trapno)
 		runtime.Pnum(tf[TF_RIP])
 		runtime.Pnum(0xbadbabe)
@@ -992,9 +976,81 @@ func (p *proc_t) resched(tid tid_t) bool {
 	return talive
 }
 
+func new_pgfault(proc *proc_t, fa, rip int) bool {
+
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
+
+	pte := pmap_lookup(proc.pmap, fa)
+	if pte != nil {
+		cow := *pte & PTE_COW != 0
+		wascow := *pte & PTE_WASCOW != 0
+		if cow || wascow {
+			if fa < USERMIN {
+				panic("kern addr marked cow")
+			}
+			sys_pgfault(proc, pte, fa)
+			// set process as runnable again
+			//proc.sched_runnable(nil, tid)
+			//proc.atime.finish(ts.inttime)
+			return false
+		}
+	}
+
+	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
+	    proc.name, fa, rip)
+	//sys_exit(proc, tid, SIGNALED)
+	return true
+}
+
 func (p *proc_t) sched_add(tf *[TFSIZE]int, tid tid_t) {
-	ptid := p.mkptid(tid)
-	runtime.Procadd(ptid, tf, p.p_pmap)
+	//ptid := p.mkptid(tid)
+	//runtime.Procadd(ptid, tf, p.p_pmap)
+	go func() {
+		done := false
+		fastret := true
+		for !done {
+			// for fast syscalls, we restore little state. thus we
+			// must distinguish between returning to the user
+			// program after it was interrupted by a timer
+			// interrupt/CPU exception vs a syscall.
+			intno, aux := runtime.Userrun(tf, &p.fxbuf, p.p_pmap,
+			    fastret)
+			fastret = false
+			switch intno {
+			case SYSCALL:
+				fastret = true
+				sysno := tf[TF_RAX]
+				if sysno == SYS_EXIT {
+					fmt.Printf("pid %v terminatorium\n",
+					    p.pid)
+					done = true
+				} else {
+					tf[TF_RAX] = syscall(p, tid, tf)
+				}
+			case TIMER:
+				fmt.Printf(".")
+				runtime.Gosched()
+			case PGFAULT:
+				faultaddr := aux
+				kill := new_pgfault(p, faultaddr, tf[TF_RIP])
+				if kill {
+					fmt.Printf("perished\n")
+					done = true
+				}
+			case DIVZERO, GPFAULT:
+				fmt.Printf("TRAP: %v, RIP: %x\n", intno,
+				    tf[TF_RIP])
+				panic("no imp")
+			default:
+				fmt.Printf("!%v ", intno)
+			}
+		}
+		if p.pwait != nil {
+			p.pwait.put(p.pid, 0, &accnt_t{userns:0, sysns:0})
+		}
+		fmt.Printf("done running user prog\n")
+	}()
 }
 
 func (p *proc_t) sched_runnable(tf *[TFSIZE]int, tid tid_t) {
@@ -1031,6 +1087,7 @@ func (p *proc_t) thread_del(tid tid_t) {
 // terminate a single thread
 func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	// XXX exit process if thread is thread0, even if other threads exist
+	panic("babooned!")
 	p.threadi.Lock()
 	ti := &p.threadi
 	delete(ti.alive, tid)
@@ -2074,7 +2131,7 @@ func main() {
 	cpuchk()
 
 	// control CPUs
-	aplim := 7
+	aplim := 0
 
 	dmap_init()
 	p8259_init()
@@ -2136,7 +2193,11 @@ func main() {
 	//exec("bin/bmgc2", []string{"10"})
 	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
 	//exec("bin/lsh", []string{})
-	exec("bin/init", []string{})
+	//exec("bin/init", []string{})
+	exec("bin/ls", nil)
+	//exec("bin/hello", nil)
+	//exec("bin/fork", nil)
+	//exec("bin/fault", nil)
 	//exec("bin/usertests", []string{})
 	//exec("bin/pipetest", []string{})
 	//exec("bin/ls", []string{})
