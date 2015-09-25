@@ -931,8 +931,6 @@ func req_namei(req *ireq_t, paths string, cwd inum) {
 	dest.req <- req
 }
 
-// XXX should flush only modified parts of a page (where the unit is determined
-// by the underlying device's blocksize) instead of the entire page.
 // XXX don't need to fill the destination page if the write covers the whole
 // page
 // XXX need a mechanism for evicting page cache...
