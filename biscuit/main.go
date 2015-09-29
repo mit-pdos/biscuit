@@ -703,6 +703,7 @@ type proc_t struct {
 	pmap		*[512]int
 	p_pmap		int
 
+	fxbuf		[64]int
 	// mmap next virtual address hint
 	mmapi		int
 
@@ -775,6 +776,11 @@ func proc_new(name string, cwd *file_t) *proc_t {
 
 	ret.mywait.wait_init()
 	ret.mywait.start_thread(ret.tid0)
+
+	n := uintptr(unsafe.Pointer(&ret.fxbuf))
+	if n & 15 != 0 {
+		panic("fxbuf not 16 byte aligned")
+	}
 
 	return ret
 }
