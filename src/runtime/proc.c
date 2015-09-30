@@ -1349,12 +1349,6 @@ execute(G *gp)
 	runtime·gogo(&gp->sched);
 }
 
-static void
-userrun(void)
-{
-	runtime·printf("userio! ");
-}
-
 static void trapcheck(P*);
 
 // Finds a runnable goroutine to execute.
@@ -1419,12 +1413,10 @@ top:
 	extern int64 runtime·hackmode;
 stop:
 	if (runtime·hackmode) {
-		const uint64 yield = 49;
 		void mktrap(uint64);
+		const uint64 yield = 49;
 		mktrap(yield);
-		trapcheck(g->m->p);
-		//void userrun(void);
-		//userrun();
+		//trapcheck(g->m->p);
 		goto top;
 	}
 
