@@ -927,7 +927,10 @@ func sys_getrusage(proc *proc_t, who, rusagep int) int {
 
 		proc.threadi.Lock()
 		for tid := range proc.threadi.alive {
-			val := runtime.Proctime(proc.mkptid(tid))
+			//val := runtime.Proctime(proc.mkptid(tid))
+			if tid == 0 {
+			}
+			val := 42
 			// tid may not exist if the query for the time races
 			// with a thread exiting.
 			if val > 0 {

@@ -614,12 +614,6 @@ hltagain:
 	HLT
 	JMP	hltagain
 
-TEXT runtime·handle_int(SB), NOSPLIT, $0-0
-	PUSHQ	DX
-	CALL	_handle_int(SB)
-	POPQ	DX
-	RET
-
 #define TRAP_YIELD      $49
 #define TRAP_SYSCALL    $64
 TEXT hack_yield(SB), NOSPLIT, $0-0
@@ -945,8 +939,8 @@ TEXT mktrap(SB), NOSPLIT, $0-8
 
 // if you change the number of arguments, you must adjust the stack offsets in
 // _sysentry and _userint.
-// func Userrun_(tf *[24]int, fastret bool) (int, int)
-TEXT ·Userrun_(SB), NOSPLIT, $24-32
+// func _Userrun(tf *[24]int, fastret bool) (int, int)
+TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	MOVQ	tf+0(FP), R9
 
 	// fastret or iret?

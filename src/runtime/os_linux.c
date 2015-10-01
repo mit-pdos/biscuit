@@ -1569,9 +1569,7 @@ struct thread_t {
 	uint64 sleepret;
 #define ETIMEDOUT   110
 	uint64 futaddr;
-	int64 pid;
 	uint64 pmap;
-	int64 notify;
 	//uint64 _pad2;
 };
 
@@ -1797,51 +1795,6 @@ thread_avail(void)
 }
 
 #pragma textflag NOSPLIT
-struct thread_t *
-thread_find(int64 uc)
-{
-	runtime·stackcheck();
-
-	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
-	assert(threadlock.lock, "threadlock not taken", 0);
-
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		if (threads[i].pid == uc)
-			return &threads[i];
-	return nil;
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Procadd(int64 pid, uint64 *tf, uint64 pmap)
-{
-	runtime·stackcheck();
-
-	cli();
-	splock(&threadlock);
-
-	assert(pid != 0, "bad pid", pid);
-	int32 nt = thread_avail();
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		assert(threads[i].pid != pid, "uc exists", pid);
-
-	struct thread_t *t = &threads[nt];
-	runtime·memclr((byte *)t, sizeof(struct thread_t));
-
-	runtime·memmove(t->tf, tf, TFSIZE);
-	runtime·memmove(t->fx, fxinit, FXSIZE);
-
-	t->status = ST_RUNNABLE;
-	t->pid = pid;
-	t->pmap = pmap;
-
-	spunlock(&threadlock);
-	sti();
-}
-
-#pragma textflag NOSPLIT
 static uint64 *
 pte_mapped(void *va)
 {
@@ -1860,31 +1813,6 @@ assert_mapped(void *va, int64 size, int8 *msg)
 	for (; p < end; p += PGSIZE)
 		if (pte_mapped(p) == nil)
 			runtime·pancake(msg, (uint64)va);
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Procrunnable(int64 pid, uint64 *tf, uint64 pmap)
-{
-	runtime·stackcheck();
-
-	cli();
-	splock(&threadlock);
-	struct thread_t *t = thread_find(pid);
-	assert(t, "pid not found", pid);
-	assert(t->status == ST_WAITING, "thread not waiting", t->status);
-
-	t->status = ST_RUNNABLE;
-	if (tf) {
-		//assert_mapped(tf, TFSIZE, "bad tf");
-		runtime·memmove(t->tf, tf, TFSIZE);
-	}
-	if (pmap) {
-		t->pmap = pmap;
-	}
-
-	spunlock(&threadlock);
-	sti();
 }
 
 #pragma textflag NOSPLIT
@@ -1957,7 +1885,6 @@ tlb_shootdown(void)
 	struct thread_t *ct = curthread;
 
 	if (ct && ct->pmap == tlbshoot_pmap) {
-// XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX 
 		// the TLB is flushed simply by taking an IPI since currently
 		// each CPU switches to kernel page map on trap entry. the
 		// following code will be necessary if we ever stop switching
@@ -2156,7 +2083,7 @@ proftick(void)
 		// if profiling the kernel, do fake SIGPROF if we aren't
 		// already
 		struct thread_t *t = &threads[i];
-		if (t->pid || !t->prof.enabled || t->doingsig)
+		if (!t->prof.enabled || t->doingsig)
 			continue;
 		// don't touch running threads
 		if (t->status != ST_RUNNABLE)
@@ -2252,8 +2179,8 @@ trap(uint64 *tf)
 		yielding = 1;
 	}
 
-	void (*ntrap)(uint64 *, int64, int64);
-	ntrap = (void (*)(uint64 *, int64, int64))newtrap;
+	void (*ntrap)(uint64 *, int64);
+	ntrap = (void (*)(uint64 *, int64))newtrap;
 
 	if (trapno == TRAP_TLBSHOOT) {
 		// does not return
@@ -2269,10 +2196,6 @@ trap(uint64 *tf)
 				// XXX set IF, unlock
 				ct->tf[TF_RFLAGS] |= TF_FL_IF;
 				spunlock(&futexlock);
-			} else if (ct->notify) {
-				ct->notify = 0;
-				ct->status = ST_WAITING;
-				ntrap(nil, ct->pid, 1);
 			} else
 				ct->status = ST_RUNNABLE;
 		}
@@ -2287,13 +2210,9 @@ trap(uint64 *tf)
 		yieldy();
 	} else if (IS_IRQ(trapno)) {
 		if (ntrap) {
-			// if ct is nil here, there is a kernel bug
-			int64 ptid = ct ? ct->pid : 0;
 			// catch kernel faults that occur while trying to
 			// handle user traps
-			if ((tf[TF_CS] & 3) == 0)
-				ptid = 0;
-			ntrap(tf, ptid, 0);
+			ntrap(tf, 0);
 		} else
 			runtime·pancake("IRQ without ntrap", trapno);
 		if (ct)
@@ -3005,129 +2924,6 @@ runtime·Pnum(uint64 m)
 }
 
 #pragma textflag NOSPLIT
-void
-runtime·Proccontinue(void)
-{
-	// no stack check because called from interrupt stack
-	struct thread_t *ct = curthread;
-	if (ct) {
-		assert(ct->status == ST_RUNNING, "weird status", ct->status);
-		sched_run(ct);
-	}
-	sched_halt();
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Prockill(int64 ptid)
-{
-	runtime·stackcheck();
-
-	cli();
-	splock(&threadlock);
-
-	struct thread_t *t = thread_find(ptid);
-	assert(t, "no such ptid", ptid);
-	assert(t->status == ST_WAITING, "user proc not waiting?", t->status);
-	//runtime·memclr(t, sizeof(struct thread_t));
-	t->status = ST_INVALID;
-
-	spunlock(&threadlock);
-	sti();
-}
-
-#pragma textflag NOSPLIT
-int64
-runtime·Procnotify(int64 ptid)
-{
-	runtime·stackcheck();
-
-	if (ptid == 0)
-		runtime·pancake("notify on 0", ptid);
-
-	cli();
-	splock(&threadlock);
-
-	struct thread_t *t = thread_find(ptid);
-	if (t == nil) {
-		spunlock(&threadlock);
-		sti();
-		return 1;
-	}
-	t->notify = ptid;
-
-	spunlock(&threadlock);
-	sti();
-	return 0;
-}
-
-#pragma textflag NOSPLIT
-int64
-runtime·Proctime(int64 ptid)
-{
-	runtime·stackcheck();
-	if (ptid == 0)
-		runtime·pancake("proctime on kernel threads", ptid);
-	cli();
-	splock(&threadlock);
-
-	int64 ret = -1;
-	struct thread_t *t = thread_find(ptid);
-	if (t != nil)
-		ret = t->prof.totaltime;
-
-	spunlock(&threadlock);
-	sti();
-
-	return ret;
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Kreset(void)
-{
-	runtime·stackcheck();
-	cli();
-	splock(&threadlock);
-
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		if (!threads[i].pid)
-			threads[i].prof.totaltime = 0;
-
-	spunlock(&threadlock);
-	sti();
-}
-
-#pragma textflag NOSPLIT
-int64
-runtime·Ktime(void)
-{
-	runtime·stackcheck();
-	cli();
-	splock(&threadlock);
-
-	int64 ret = 0;
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		if (!threads[i].pid)
-			ret += threads[i].prof.totaltime;
-
-	spunlock(&threadlock);
-	sti();
-
-	return ret;
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Procyield(void)
-{
-	// no stack check because called from interrupt stack
-	yieldy_lock();
-}
-
-#pragma textflag NOSPLIT
 uint64
 runtime·Rcr2(void)
 {
@@ -3264,36 +3060,4 @@ hack_sigaltstack(SigaltstackT *new, SigaltstackT *old)
 		ct->sigstack = (uint64)new->ss_sp + new->ss_size;
 
 	·Popcli(fl);
-}
-
-uint64 runtime·doint;
-int64 runtime·intcnt;
-void (*runtime·Goint)(void);
-
-#pragma textflag NOSPLIT
-void
-_handle_int(void)
-{
-	int32 biddle;
-	runtime·stackcheck();
-	// cast to 32 because i don't know how to insert movl in stackcheck
-	// prologue.
-	uint32 volatile *p = (uint32 volatile *)&runtime·doint;
-	int64 doint = runtime·xchg(p, 0);
-	if (doint == 0)
-		return;
-	//if (runtime·Goint == nil) {
-	//	int32 *p = (int32 *)0;
-	//	*p = 0;
-	//}
-	pmsg("inty time!");
-	pnum((uint64)runtime·getcallerpc(&biddle));
-}
-
-// must only be called while interrupts are disabled
-#pragma textflag NOSPLIT
-void
-runtime·Intpreempt(void)
-{
-	runtime·doint = 1;
 }

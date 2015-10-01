@@ -21,8 +21,7 @@ func trapinit_m(*g)
 func Ap_setup(int)
 func Cli()
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
-type Ptid_t uint
-func Install_traphandler(func(tf *[24]int, ptid Ptid_t, notify int))
+func Install_traphandler(func(tf *[24]int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
@@ -38,15 +37,8 @@ func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
 func Pmsga(*uint8, int, int8)
 func Pnum(int)
-func Procadd(ptid Ptid_t, tf *[24]int, p_pmap int)
-func Proccontinue()
-func Prockill(Ptid_t)
-func Procnotify(Ptid_t) int
-func Procrunnable(ptid Ptid_t, tf *[24]int, p_pmap int)
-func Proctime(ptid Ptid_t) int
 func Kreset()
 func Ktime() int
-func Procyield()
 func Rdtsc() uint64
 func Rcr2() int
 func Rcr3() int
@@ -106,9 +98,8 @@ type thread_t struct {
 	sleepfor	int
 	sleepret	int
 	futaddr		int
-	pid		int
 	pmap		int
-	notify		int
+	//_pad		int
 }
 
 const(
@@ -138,7 +129,7 @@ func Popcli(int)
 func Gscpu() *cpu_t
 func Rdmsr(int) int
 func Wrmsr(int, int)
-func Userrun_(*[24]int, bool) (int, int)
+func _Userrun(*[24]int, bool) (int, int)
 
 func Userrun(tf *[24]int, fxbuf *[64]int, p_pmap int,
     fastret bool) (int, int) {
@@ -161,7 +152,7 @@ func Userrun(tf *[24]int, fxbuf *[64]int, p_pmap int,
 
 	ct.user.tf = uintptr(unsafe.Pointer(tf))
 	ct.user.fxbuf = uintptr(unsafe.Pointer(fxbuf))
-	intno, aux := Userrun_(tf, fastret)
+	intno, aux := _Userrun(tf, fastret)
 
 	Wrmsr(ia32_fs_base, kfsbase)
 	ct.user.tf = 0

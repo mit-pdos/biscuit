@@ -10,11 +10,8 @@ import "unsafe"
 
 type trapstore_t struct {
 	trapno    int
-	pid       int
-	tid       tid_t
 	faultaddr int
 	tf        [TFSIZE]int
-	notify    bool
 	inttime   int
 }
 const maxtstore int = 64
@@ -86,7 +83,7 @@ var INT_DISK	int = -1
 // tries to execute more gocode on the same M, thus doing things the runtime
 // did not expect.
 //go:nosplit
-func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
+func trapstub(tf *[TFSIZE]int) {
 
 	lid := cpus[lap_id()].num
 	head := cpus[lid].tshead
@@ -103,27 +100,7 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 	}
 
 	// extract process and thread id
-	pid := int(ptid >> 32)
-	tid := tid_t(uint32(ptid))
-	ts.pid = pid
-	ts.tid = tid
 	ts.inttime = runtime.Nanotime()
-
-	// if notify is non-zero, a trap has not been received but a thread has
-	// stopped running (due to a timer interrupt) and thus it's pmap can be
-	// freed.
-	if notify != 0 {
-		if pid == 0 {
-			runtime.Pnum(0xbad2)
-			for {}
-		}
-		ts.notify = true
-		// commit "interrupt"
-		head = tsnext(head)
-		cpus[lid].tshead = head
-		runtime.Trapwake()
-		return
-	}
 
 	trapno := tf[TF_TRAP]
 
@@ -136,7 +113,6 @@ func trapstub(tf *[TFSIZE]int, ptid runtime.Ptid_t, notify int) {
 	// add to trap circular buffer for actual trap handler
 	ts.trapno = trapno
 	ts.tf = *tf
-	ts.notify = false
 	if trapno == PGFAULT {
 		ts.faultaddr = runtime.Rcr2()
 	}
@@ -181,36 +157,18 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			tcur = cpus[cpu].trapstore[tail]
 
 			trapno := tcur.trapno
-			notify := tcur.notify
 
 			tail = tsnext(tail)
 			cpus[cpu].tstail = tail
-
-			if notify {
-				pid := tcur.pid
-				tid := tcur.tid
-				p := proc_get(pid)
-				reap_doomed(p, tid)
-				continue
-			}
 
 			if h, ok := handlers[trapno]; ok {
 				go h(&tcur)
 				continue
 			}
-			pid := tcur.pid
-			panic(fmt.Sprintf("no handler for trap %v, pid %x\n",
-			    trapno,pid))
+			panic(fmt.Sprintf("no handler for trap %v\n", trapno))
 		}
 		runtime.Trapsched()
 	}
-}
-
-func trap_divzero(ts *trapstore_t) {
-	fmt.Printf("pid %v divide by zero at %x ; killing...\n", ts.pid,
-	    ts.tf[TF_RIP])
-	p := proc_get(ts.pid)
-	sys_exit(p, ts.tid, -1)
 }
 
 func trap_disk(ts *trapstore_t) {
@@ -232,50 +190,6 @@ func trap_cons(ts *trapstore_t) {
 		panic("bad int")
 	}
 	ch <- true
-}
-
-func trap_syscall(ts *trapstore_t) {
-	pid  := ts.pid
-	tid := ts.tid
-	p := proc_get(pid)
-
-	ret := syscall(p, tid, &ts.tf)
-	ts.tf[TF_RAX] = ret
-	if p.resched(tid) {
-		p.sched_runnable(&ts.tf, tid)
-		p.atime.finish(ts.inttime)
-	}
-}
-
-func trap_pgfault(ts *trapstore_t) {
-	pid := ts.pid
-	tid := ts.tid
-	fa  := ts.faultaddr
-	proc := proc_get(pid)
-
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
-
-	pte := pmap_lookup(proc.pmap, fa)
-	if pte != nil {
-		cow := *pte & PTE_COW != 0
-		wascow := *pte & PTE_WASCOW != 0
-		if cow || wascow {
-			if fa < USERMIN {
-				panic("kern addr marked cow")
-			}
-			sys_pgfault(proc, pte, fa)
-			// set process as runnable again
-			proc.sched_runnable(nil, tid)
-			proc.atime.finish(ts.inttime)
-			return
-		}
-	}
-
-	rip := ts.tf[TF_RIP]
-	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
-	    proc.name, fa, rip)
-	sys_exit(proc, tid, SIGNALED)
 }
 
 func tfdump(tf *[TFSIZE]int) {
@@ -687,7 +601,6 @@ type proc_t struct {
 	pmap		*[512]int
 	p_pmap		int
 
-	fxbuf		[64]int
 	// mmap next virtual address hint
 	mmapi		int
 
@@ -760,11 +673,6 @@ func proc_new(name string, cwd *file_t) *proc_t {
 
 	ret.mywait.wait_init()
 	ret.mywait.start_thread(ret.tid0)
-
-	n := uintptr(unsafe.Pointer(&ret.fxbuf))
-	if n & 15 != 0 {
-		panic("fxbuf not 16 byte aligned")
-	}
 
 	return ret
 }
@@ -913,13 +821,6 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	return doflush
 }
 
-func (p *proc_t) mkptid(tid tid_t) runtime.Ptid_t {
-	// make pid/tid pair
-	ptid := p.pid << 32
-	ptid |= int(tid)
-	return runtime.Ptid_t(ptid)
-}
-
 func (p *proc_t) mkvmseg(start, len int) *vmseg_t {
 	seg := &vmseg_t{}
 	seg.seg_init(start, len)
@@ -929,6 +830,15 @@ func (p *proc_t) mkvmseg(start, len int) *vmseg_t {
 func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
 	ret := &userbuf_t{}
 	ret.ub_init(p, userva, len)
+	return ret
+}
+
+func (p *proc_t) mkfxbuf() *[64]int {
+	ret := new([64]int)
+	n := uintptr(unsafe.Pointer(&ret))
+	if n & 15 != 0 {
+		panic("fxbuf not 16 byte aligned")
+	}
 	return ret
 }
 
@@ -962,6 +872,27 @@ func (p *proc_t) page_remove(va int) bool {
 	return remmed
 }
 
+func (p *proc_t) pgfault(tid tid_t, fa, rip int) {
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
+
+	pte := pmap_lookup(p.pmap, fa)
+	if pte != nil {
+		cow := *pte & PTE_COW != 0
+		wascow := *pte & PTE_WASCOW != 0
+		if cow || wascow {
+			if fa < USERMIN {
+				panic("kern addr marked cow")
+			}
+			sys_pgfault(p, pte, fa)
+			return
+		}
+	}
+	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
+	    p.name, fa, rip)
+	sys_exit(p, tid, SIGNALED)
+}
+
 func (p *proc_t) tlbshoot(startva, pgcount int) {
 	p.lockassert_pmap()
 	if p.thread_count() > 1 {
@@ -970,92 +901,49 @@ func (p *proc_t) tlbshoot(startva, pgcount int) {
 }
 
 func (p *proc_t) resched(tid tid_t) bool {
+	if p.doomed {
+		return false
+	}
 	p.threadi.Lock()
 	talive := p.threadi.alive[tid]
 	p.threadi.Unlock()
 	return talive
 }
 
-func new_pgfault(proc *proc_t, fa, rip int) bool {
-
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
-
-	pte := pmap_lookup(proc.pmap, fa)
-	if pte != nil {
-		cow := *pte & PTE_COW != 0
-		wascow := *pte & PTE_WASCOW != 0
-		if cow || wascow {
-			if fa < USERMIN {
-				panic("kern addr marked cow")
-			}
-			sys_pgfault(proc, pte, fa)
-			// set process as runnable again
-			//proc.sched_runnable(nil, tid)
-			//proc.atime.finish(ts.inttime)
-			return false
+func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
+	fastret := true
+	// could allocate fxbuf lazily
+	fxbuf := p.mkfxbuf()
+	for p.resched(tid) {
+		// for fast syscalls, we restore little state. thus we
+		// must distinguish between returning to the user
+		// program after it was interrupted by a timer
+		// interrupt/CPU exception vs a syscall.
+		intno, aux := runtime.Userrun(tf, fxbuf, p.p_pmap,
+		    fastret)
+		fastret = false
+		switch intno {
+		case SYSCALL:
+			fastret = true
+			tf[TF_RAX] = syscall(p, tid, tf)
+		case TIMER:
+			//fmt.Printf(".")
+			runtime.Gosched()
+		case PGFAULT:
+			faultaddr := aux
+			p.pgfault(tid, faultaddr, tf[TF_RIP])
+		case DIVZERO, GPFAULT:
+			fmt.Printf("TRAP: %v, RIP: %x\n", intno,
+			    tf[TF_RIP])
+			sys_exit(p, tid, SIGNALED)
+		default:
+			fmt.Printf("!%v ", intno)
 		}
 	}
-
-	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
-	    proc.name, fa, rip)
-	//sys_exit(proc, tid, SIGNALED)
-	return true
 }
 
 func (p *proc_t) sched_add(tf *[TFSIZE]int, tid tid_t) {
-	//ptid := p.mkptid(tid)
-	//runtime.Procadd(ptid, tf, p.p_pmap)
-	go func() {
-		done := false
-		fastret := true
-		for !done {
-			// for fast syscalls, we restore little state. thus we
-			// must distinguish between returning to the user
-			// program after it was interrupted by a timer
-			// interrupt/CPU exception vs a syscall.
-			intno, aux := runtime.Userrun(tf, &p.fxbuf, p.p_pmap,
-			    fastret)
-			fastret = false
-			switch intno {
-			case SYSCALL:
-				fastret = true
-				sysno := tf[TF_RAX]
-				if sysno == SYS_EXIT {
-					fmt.Printf("pid %v terminatorium\n",
-					    p.pid)
-					done = true
-				} else {
-					tf[TF_RAX] = syscall(p, tid, tf)
-				}
-			case TIMER:
-				fmt.Printf(".")
-				runtime.Gosched()
-			case PGFAULT:
-				faultaddr := aux
-				kill := new_pgfault(p, faultaddr, tf[TF_RIP])
-				if kill {
-					fmt.Printf("perished\n")
-					done = true
-				}
-			case DIVZERO, GPFAULT:
-				fmt.Printf("TRAP: %v, RIP: %x\n", intno,
-				    tf[TF_RIP])
-				panic("no imp")
-			default:
-				fmt.Printf("!%v ", intno)
-			}
-		}
-		if p.pwait != nil {
-			p.pwait.put(p.pid, 0, &accnt_t{userns:0, sysns:0})
-		}
-		fmt.Printf("done running user prog\n")
-	}()
-}
-
-func (p *proc_t) sched_runnable(tf *[TFSIZE]int, tid tid_t) {
-	ptid := p.mkptid(tid)
-	runtime.Procrunnable(ptid, tf, p.p_pmap)
+	go p.run(tf, tid)
 }
 
 func (p *proc_t) tid_new() tid_t {
@@ -1087,7 +975,6 @@ func (p *proc_t) thread_del(tid tid_t) {
 // terminate a single thread
 func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	// XXX exit process if thread is thread0, even if other threads exist
-	panic("babooned!")
 	p.threadi.Lock()
 	ti := &p.threadi
 	delete(ti.alive, tid)
@@ -1099,17 +986,17 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	p.threadi.Unlock()
 
 	// update rusage user time
-	utime := runtime.Proctime(p.mkptid(tid))
-	if utime < 0 {
-		panic("tid must exist")
-	}
+	//utime := runtime.Proctime(p.mkptid(tid))
+	//if utime < 0 {
+	//	panic("tid must exist")
+	//}
+	utime := 42
 	p.atime.utadd(utime)
 
 	// put thread status in this process's wait info; threads don't have
 	// rusage for now.
 	p.mywait.put(int(tid), status, nil)
 
-	runtime.Prockill(p.mkptid(tid))
 	if destroy {
 		p.terminate()
 	}
@@ -1117,13 +1004,6 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 
 func (p *proc_t) doomall() {
 	p.doomed = true
-	p.threadi.Lock()
-	for t := range p.threadi.alive {
-		if runtime.Procnotify(p.mkptid(t)) != 0 {
-			panic("pid gone")
-		}
-	}
-	p.threadi.Unlock()
 }
 
 // termiante a process. must only be called when the process has no more
@@ -1810,13 +1690,13 @@ func ap_entry(myid int) {
 	lid := lap_id()
 	if lid > maxcpus || lid < 0 {
 		runtime.Pnum(0xb1dd1e)
-		for {
-		}
+		for {}
 	}
 	cpus[lid].num = myid
 
-	// ints are still cleared
-	runtime.Procyield()
+	// ints are still cleared. wait for timer int to enter scheduler
+	runtime.Sti()
+	for {}
 }
 
 // since this function is used when interrupts are cleared, it must be marked
@@ -2147,18 +2027,7 @@ func main() {
 	// must come before init funcs below
 	runtime.Install_traphandler(trapstub)
 
-	trap_diex := func(c int) func(*trapstore_t) {
-		return func(ts *trapstore_t) {
-			fmt.Printf("[death on trap %v]\n", c)
-			panic("perished")
-		}
-	}
-
 	handlers := map[int]func(*trapstore_t) {
-	     DIVZERO: trap_divzero,
-	     GPFAULT: trap_diex(GPFAULT),
-	     PGFAULT: trap_pgfault,
-	     SYSCALL: trap_syscall,
 	     INT_DISK: trap_disk,
 	     INT_KBD: trap_cons,
 	     INT_COM1: trap_cons,
@@ -2192,9 +2061,9 @@ func main() {
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
 	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
-	//exec("bin/lsh", []string{})
-	//exec("bin/init", []string{})
-	exec("bin/ls", nil)
+	exec("bin/lsh", nil)
+	//exec("bin/init", nil)
+	//exec("bin/ls", nil)
 	//exec("bin/hello", nil)
 	//exec("bin/fork", nil)
 	//exec("bin/fault", nil)
