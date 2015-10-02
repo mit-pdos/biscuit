@@ -1586,14 +1586,17 @@ struct cpu_t {
 	uint64 mythread;
 	uint64 rsp;
 	uint64 num;
+	// these are used only by Go code
+	void *pmap;
+	Slice pms;
 };
 
 #define NTHREADS        64
 static struct thread_t threads[NTHREADS];
 // index is lapic id
-static struct cpu_t cpus[MAXCPUS];
+extern struct cpu_t ·cpus[MAXCPUS];
 
-#define curcpu               (cpus[lap_id()])
+#define curcpu               (·cpus[lap_id()])
 #define curthread            ((struct thread_t *)(curcpu.mythread))
 #define setcurthread(x)      (curcpu.mythread = (uint64)x)
 
@@ -2543,7 +2546,7 @@ proc_setup(void)
 
 	int32 i;
 	for (i = 0; i < MAXCPUS; i++)
-		cpus[i].this = (uint64)&cpus[i];
+		·cpus[i].this = (uint64)&·cpus[i];
 
 	timer_setup(1);
 

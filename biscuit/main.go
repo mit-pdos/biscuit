@@ -901,12 +901,15 @@ func (p *proc_t) tlbshoot(startva, pgcount int) {
 }
 
 func (p *proc_t) resched(tid tid_t) bool {
-	if p.doomed {
-		return false
-	}
 	p.threadi.Lock()
 	talive := p.threadi.alive[tid]
 	p.threadi.Unlock()
+	if talive && p.doomed {
+		// although this thread is still alive, the process should
+		// terminate
+		reap_doomed(p, tid)
+		return false
+	}
 	return talive
 }
 
@@ -1701,7 +1704,6 @@ func ap_entry(myid int) {
 
 func set_cpucount(n int) {
 	numcpus = n
-	runtime.Userinit(n)
 }
 
 func proc_init() {
@@ -2020,7 +2022,7 @@ func main() {
 	cpuchk()
 
 	// control CPUs
-	aplim := 0
+	aplim := 7
 
 	dmap_init()
 	p8259_init()

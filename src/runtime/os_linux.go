@@ -66,11 +66,15 @@ var gcticks uint64
 var No_pml4 int
 
 type cpu_t struct {
-	this		int
-	mythread	int
-	rsp		int
-	num		int
+	this		uint
+	mythread	uint
+	rsp		uint
+	num		uint
+	pmap		*[512]int
+	pms		[]*[512]int
 }
+
+var cpus [32]cpu_t
 
 type tuser_t struct {
 	tf	uintptr
@@ -131,18 +135,6 @@ func Rdmsr(int) int
 func Wrmsr(int, int)
 func _Userrun(*[24]int, bool) (int, int)
 
-// XXX should use cpu_t
-type gcpu_t struct {
-	pmap	*[512]int
-	pms	[]*[512]int
-}
-
-var gcpus []gcpu_t
-
-func Userinit(numcpu int) {
-	gcpus = make([]gcpu_t, numcpu)
-}
-
 func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
     pms []*[512]int, fastret bool) (int, int) {
 
@@ -152,9 +144,9 @@ func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
 
 	// set shadow pointers for user pmap so it isn't free'd out from under
 	// us if the process terminates soon
-	ci := Gscpu().num
-	gcpus[ci].pmap = pmap
-	gcpus[ci].pms = pms
+	cpu := Gscpu()
+	cpu.pmap = pmap
+	cpu.pms = pms
 	if Rcr3() != p_pmap {
 		Lcr3(p_pmap)
 	}
@@ -180,13 +172,9 @@ func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
 // caller must have interrupts cleared
 //go:nosplit
 func shadow_clear() {
-	// do nothing if gscpus is not init'ed yet
-	if len(gcpus) == 0 {
-		return
-	}
-	ci := Gscpu().num
-	gcpus[ci].pmap = nil
-	gcpus[ci].pms = nil
+	cpu := Gscpu()
+	cpu.pmap = nil
+	cpu.pms = nil
 }
 
 //go:nosplit
