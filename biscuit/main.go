@@ -1698,7 +1698,9 @@ func ap_entry(myid int) {
 	cpus[lid].num = myid
 
 	// ints are still cleared. wait for timer int to enter scheduler
-	runtime.Sti()
+	fl := runtime.Pushcli()
+	fl |= TF_FL_IF
+	runtime.Popcli(fl)
 	for {}
 }
 
