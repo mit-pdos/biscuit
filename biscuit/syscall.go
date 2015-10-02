@@ -12,6 +12,8 @@ const(
   TFREGS       = 17
   TF_SYSRSP    = 0
   TF_FSBASE    = 1
+  TF_R13       = 4
+  TF_R12       = 5
   TF_R8        = 9
   TF_RBP       = 10
   TF_RSI       = 11

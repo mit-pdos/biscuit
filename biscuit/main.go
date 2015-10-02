@@ -835,9 +835,9 @@ func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
 
 func (p *proc_t) mkfxbuf() *[64]int {
 	ret := new([64]int)
-	n := uintptr(unsafe.Pointer(&ret))
-	if n & 15 != 0 {
-		panic("fxbuf not 16 byte aligned")
+	n := uintptr(unsafe.Pointer(ret))
+	if n & ((1 << 4) - 1) != 0 {
+		panic("not 16 byte aligned")
 	}
 	return ret
 }
@@ -914,7 +914,7 @@ func (p *proc_t) resched(tid tid_t) bool {
 }
 
 func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
-	fastret := true
+	fastret := false
 	// could allocate fxbuf lazily
 	fxbuf := p.mkfxbuf()
 	for p.resched(tid) {
@@ -927,7 +927,13 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 		fastret = false
 		switch intno {
 		case SYSCALL:
-			fastret = true
+			// fast return doesn't restore the registers used to
+			// specify the arguments for libc _entry(), so do a
+			// slow return when returning from sys_execv().
+			sysno := tf[TF_RAX]
+			if sysno != SYS_EXECV {
+				fastret = true
+			}
 			tf[TF_RAX] = syscall(p, tid, tf)
 		case TIMER:
 			//fmt.Printf(".")
@@ -940,7 +946,9 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			    tf[TF_RIP])
 			sys_exit(p, tid, SIGNALED)
 		default:
-			fmt.Printf("!%v ", intno)
+			// should probably not stop execution of user programs
+			// after receiving an IRQ?
+			//fmt.Printf("!%v ", intno)
 		}
 	}
 }
@@ -1708,10 +1716,6 @@ func set_cpucount(n int) {
 	numcpus = n
 }
 
-func proc_init() {
-	set_cpucount(1)
-}
-
 // since this function is used when interrupts are cleared, it must be marked
 // nosplit. otherwise we may GC and then resume in some other goroutine with
 // interrupts cleared, thus interrupts would never be cleared.
@@ -2053,7 +2057,6 @@ func main() {
 	rf := fs_init()
 	//use_memfs()
 	kbd_init()
-	proc_init()
 
 	runtime.Resetgcticks()
 
@@ -2075,8 +2078,8 @@ func main() {
 	//exec("bin/bmgc2", []string{"100000000"})
 	//exec("bin/bmgc2", []string{"10"})
 	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
-	exec("bin/lsh", nil)
-	//exec("bin/init", nil)
+	//exec("bin/lsh", nil)
+	exec("bin/init", nil)
 	//exec("bin/ls", nil)
 	//exec("bin/hello", nil)
 	//exec("bin/fork", nil)

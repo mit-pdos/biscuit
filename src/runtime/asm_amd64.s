@@ -926,6 +926,8 @@ TEXT mktrap(SB), NOSPLIT, $0-8
 
 #define TFREGS		17
 #define TF_SYSRSP	(8*0)
+#define TF_R13		(8*4)
+#define TF_R12		(8*5)
 #define TF_R8		(8*9)
 #define TF_RBP		(8*10)
 #define TF_RSI		(8*11)
@@ -962,15 +964,7 @@ syscallreturn:
 	POPQ	AX
 	POPQ	AX
 
-	// user dx/cx cannot be loaded directly those registers are used by
-	// sysexit. thus we use r10 and r11 for dx and cx respectively. this
-	// only matters for exec when we need to setup a call to _entry() with
-	// more than two arguments. we also clobber all other registers; maybe
-	// this is bad.
 	MOVQ	TF_RAX(R9), AX
-	MOVQ	TF_RDI(R9), DI
-	MOVQ	TF_RSI(R9), SI
-	MOVQ	TF_RDX(R9), R10
 	MOVQ	TF_RSP(R9), CX
 	MOVQ	TF_RIP(R9), DX
 	MOVQ	TF_RBP(R9), BP
@@ -996,12 +990,14 @@ TEXT _sysentry(SB), NOSPLIT, $0-0
 	MOVQ	0x20(SP), R9
 	MOVQ	R10, TF_RSP(R9)
 	MOVQ	R11, TF_RIP(R9)
+	// syscall args
 	MOVQ	AX,  TF_RAX(R9)
 	MOVQ	DI,  TF_RDI(R9)
 	MOVQ	SI,  TF_RSI(R9)
 	MOVQ	DX,  TF_RDX(R9)
 	MOVQ	CX,  TF_RCX(R9)
 	MOVQ	R8,  TF_R8(R9)
+	// kernel preserves rbp and rbx
 	MOVQ	BP,  TF_RBP(R9)
 	MOVQ	BX,  TF_RBX(R9)
 	// return val 1
@@ -1015,6 +1011,7 @@ TEXT _sysentry(SB), NOSPLIT, $0-0
 // exception is generated during user program execution.
 TEXT _userint(SB), NOSPLIT, $0-0
 	CLI
+	// user state is already saved by trap handler.
 	// AX holds the interrupt number, BX holds aux (cr2 for page fault)
 	MOVQ	AX, 0x30(SP)
 	MOVQ	BX, 0x38(SP)

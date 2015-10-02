@@ -65,7 +65,7 @@ syscall(long a1, long a2, long a3, long a4,
 	register long r8 asm("r8") = a5;
 
 	// we may want to follow the sys5 abi and have the kernel restore
-	// r12-r15 too...
+	// r14-r15 too...
 	asm volatile(
 		"movq	%%rsp, %%r10\n"
 		"leaq	2(%%rip), %%r11\n"
@@ -399,8 +399,10 @@ tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 	int tid;
 	long flags = FORK_THREAD;
 
-	register ulong r8 asm("r8") = (ulong)fn;
-	register ulong r9 asm("r9") = (ulong)fnarg;
+	// rbx and rbp are preserved across syscalls. i don't know how to
+	// specify rbp as a register contraint.
+	register ulong rbp asm("rbp") = (ulong)fn;
+	register ulong rbx asm("rbx") = (ulong)fnarg;
 
 	asm volatile(
 	    "movq	%%rsp, %%r10\n"
@@ -417,7 +419,7 @@ tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 	    "movq	$0, 0x0\n"
 	    "1:\n"
 	    : "=a"(tid)
-	    : "D"(args), "S"(flags), "0"(SYS_FORK), "r"(r8), "r"(r9)
+	    : "D"(args), "S"(flags), "0"(SYS_FORK), "r"(rbp), "r"(rbx)
 	    : "memory", "cc");
 	return tid;
 }
@@ -466,6 +468,12 @@ _pcreate(void *vpcarg)
 	long status;
 	status = (long)(pcargs.fn(pcargs.arg));
 	free(pcargs.tls);
+
+	// rbx and rbp are preserved across syscalls. i don't know how to
+	// specify rbp as a register contraint.
+	register ulong rbp asm("rbp") = SYS_THREXIT;
+	register long rbx asm("rbx") = status;
+
 	asm volatile(
 	    "movq	%%rsp, %%r10\n"
 	    "leaq	2(%%rip), %%r11\n"
@@ -474,14 +482,14 @@ _pcreate(void *vpcarg)
 	    "je		1f\n"
 	    "movq	$0, 0x0\n"
 	    "1:\n"
-	    "movq	%1, %%rax\n"
+	    "movq	%3, %%rax\n"
 	    "movq	%4, %%rdi\n"
 	    "leaq	2(%%rip), %%r11\n"
 	    "sysenter\n"
 	    "movq	$0, 0x1\n"
 	    :
-	    : "a"(SYS_MUNMAP), "g"(SYS_THREXIT), "D"(pcargs.stack),
-	        "S"(PSTACKSZ), "g"(status)
+	    : "a"(SYS_MUNMAP), "D"(pcargs.stack), "S"(PSTACKSZ),
+	      "r"(rbp), "r"(rbx)
 	    : "memory", "cc");
 	// not reached
 	return 0;
@@ -1311,10 +1319,8 @@ char __progname[64];
 char **environ = _environ;
 
 void
-_entry(int argc, char **argv)
+_entry(int argc, char **argv, struct kinfo_t *k)
 {
-	// kinfo is in r10 since we cannot set rdx using sysexit
-	register struct kinfo_t *k asm("r10");
 	kinfo = k;
 
 	if (argc)
