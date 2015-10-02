@@ -1049,9 +1049,6 @@ func (p *proc_t) terminate() {
 
 	// put process exit status to parent's wait info
 	p.pwait.put(p.pid, p.exitstatus, &na)
-	// make sure the pmap is not free'd out from under some CPU but passing
-	// references to it to the delayed free'er thingy.
-	pmapfree <- pmfree_t{p.pmap, p.pmpages}
 }
 
 // XXX these can probably go away since user processes share kernel pmaps
@@ -1304,48 +1301,6 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 		startva = USERMIN
 	}
 	return p.vmregion.empty(startva, len)
-}
-
-type pmfree_t struct {
-	pmap	*[512]int
-	pmt	*pmtracker_t
-}
-
-var pmapfree = make(chan pmfree_t)
-
-// removes pmaps that are safe to be free'd every second. it is safe to free a
-// pmap once every processor has taken at least one interrupt -- we force this
-// interrupt by broadcasting a TLB shootdown which makes CPUs reload the kernel
-// pmap.
-func pmfreedaemon() {
-	_pmbuf := make([]pmfree_t, 0, 15000)
-	pmbuf := _pmbuf
-	add := func(p pmfree_t) {
-		pmbuf = append(pmbuf, p)
-	}
-	var zeropmf pmfree_t
-	for {
-		checkt := time.Now().Add(time.Second)
-		for checkt.After(time.Now()) {
-			npm := <- pmapfree
-			add(npm)
-		}
-		if len(pmbuf) == 0 {
-			continue
-		}
-		// this flushes all TLBs for now
-		tlb_shootdown(0, 0, 1)
-		// no CPU can be using one of these pmaps after the TLB
-		// shootdown broadcast. free them all.
-		for i := range pmbuf {
-			pmbuf[i] = zeropmf
-		}
-		pmbuf = _pmbuf
-	}
-}
-
-func proc_init() {
-	go pmfreedaemon()
 }
 
 // a helper object for read/writing from userspace memory. virtual address
@@ -2085,7 +2040,6 @@ func main() {
 	rf := fs_init()
 	//use_memfs()
 	kbd_init()
-	proc_init()
 
 	runtime.Resetgcticks()
 

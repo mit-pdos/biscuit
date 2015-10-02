@@ -66,10 +66,10 @@ var gcticks uint64
 var No_pml4 int
 
 type cpu_t struct {
-	this		uint
-	mythread	uint
-	rsp		uint
-	num		uint
+	this		int
+	mythread	int
+	rsp		int
+	num		int
 }
 
 type tuser_t struct {
