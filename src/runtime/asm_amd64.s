@@ -120,9 +120,6 @@ TEXT runtime·asminit(SB),NOSPLIT,$0-0
 	RET
 
 #define		CODESEG		1
-#define		DATASEG		2
-#define		FSSEG		3
-#define		GSSEG		4
 #define		UCSEG		5
 #define		UDSEG		6
 
@@ -230,10 +227,13 @@ h_needtls:
 	//JEQ ok
 
 	// setup tls
+	PUSHQ	AX
 	LEAQ	runtime·tls0(SB), DI
 	PUSHQ	DI
 	CALL	segsetup(SB)
 
+	POPQ	AX
+	POPQ	AX
 	MOVQ	8(AX), DI
 	PUSHQ	DI
 	MOVQ	(AX), DI
@@ -246,21 +246,6 @@ h_needtls:
 	POPQ	AX
 	POPQ	AX
 	POPQ	AX
-
-	MOVQ	$(FSSEG << 3), AX
-	PUSHQ	AX
-	POPQ	FS
-
-	MOVL	$(DATASEG << 3), AX
-	//MOVL	AX, ES
-	BYTE	$0x8e
-	BYTE	$0xd8
-	//MOVL	AX, DS
-	BYTE	$0x8e
-	BYTE	$0xc0
-	//MOVL	AX, SS
-	BYTE	$0x8e
-	BYTE	$0xd0
 
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
@@ -1059,6 +1044,12 @@ TEXT gs_null(SB), NOSPLIT, $8-0
 	XORQ	AX, AX
 	PUSHQ	AX
 	POPQ	GS
+	RET
+
+TEXT fs_null(SB), NOSPLIT, $8-0
+	XORQ	AX, AX
+	PUSHQ	AX
+	POPQ	FS
 	RET
 
 TEXT runtime·Gscpu(SB), NOSPLIT, $0-8

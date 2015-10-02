@@ -697,10 +697,16 @@ segsetup(void *tls0)
 	if ((uint64)&pd & 0x7)
 		runtime·pancake("pdesc not aligned", (uint64)&pd);
 
-	if (CHECK32(tlsaddr))
-		runtime·pancake("tlsaddr > 32bits, use msrs", tlsaddr);
-
-	seg_set(&segs[FS_SEG], (uint32)tlsaddr, 15, 1);
+	// we must set fs/gs, the only segment descriptors in ia32e mode, at
+	// least once before we use the MSRs to change their base address. the
+	// MSRs write directly to hidden segment descriptor cache, and if we
+	// don't explicitly fill the segment descriptor cache, the writes to
+	// the MSRs are thrown out (presumably because the caches are thought
+	// to be invalid).
+	fs_null();
+	gs_null();
+	const uint64 ia32_fs_base = 0xc0000100ull;
+	·Wrmsr(ia32_fs_base, tlsaddr);
 	pdsetup(&pd, (uint64)segs, sizeof(segs) - 1);
 
 	return (uint64)&pd;
@@ -2318,6 +2324,7 @@ ticks_get(void)
 	return lapic_quantum - rlap(CCREG);
 }
 
+#pragma textflag NOSPLIT
 int64
 pit_ticks(void)
 {
@@ -2331,6 +2338,7 @@ pit_ticks(void)
 	return high << 8 | low;
 }
 
+#pragma textflag NOSPLIT
 // wait until 8254 resets the counter
 void
 pit_phasewait(void)
@@ -2520,11 +2528,6 @@ void
 gs_set(struct cpu_t *mycpu)
 {
 	const uint64 ia32_gs_base = 0xc0000101;
-	// on qemu (not the hardware), if we don't set gs to null selector
-	// before the runtime·Wrmsr, the runtime·Wrmsr is mysteriously lost (but the next runtime·Wrmsr
-	// seems to stay).
-	void gs_null(void);
-	gs_null();
 	·Wrmsr(ia32_gs_base, (uint64)mycpu);
 }
 
