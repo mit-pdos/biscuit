@@ -919,8 +919,8 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 		// must distinguish between returning to the user
 		// program after it was interrupted by a timer
 		// interrupt/CPU exception vs a syscall.
-		intno, aux := runtime.Userrun(tf, fxbuf, p.p_pmap,
-		    fastret)
+		intno, aux := runtime.Userrun(tf, fxbuf, p.pmap, p.p_pmap,
+		    p.pmpages.pms, fastret)
 		fastret = false
 		switch intno {
 		case SYSCALL:
@@ -1669,7 +1669,7 @@ func cpus_start(aplim int) {
 	if apcnt > aplim {
 		apcnt = aplim
 	}
-	numcpus = apcnt + 1
+	set_cpucount(apcnt + 1)
 
 	// actually  map the stacks for the CPUs that joined
 	cpus_stack_init(apcnt, stackstart)
@@ -1697,6 +1697,15 @@ func ap_entry(myid int) {
 	// ints are still cleared. wait for timer int to enter scheduler
 	runtime.Sti()
 	for {}
+}
+
+func set_cpucount(n int) {
+	numcpus = n
+	runtime.Userinit(n)
+}
+
+func proc_init() {
+	set_cpucount(1)
 }
 
 // since this function is used when interrupts are cleared, it must be marked
@@ -2040,6 +2049,7 @@ func main() {
 	rf := fs_init()
 	//use_memfs()
 	kbd_init()
+	proc_init()
 
 	runtime.Resetgcticks()
 

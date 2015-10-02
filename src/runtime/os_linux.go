@@ -131,15 +131,30 @@ func Rdmsr(int) int
 func Wrmsr(int, int)
 func _Userrun(*[24]int, bool) (int, int)
 
-func Userrun(tf *[24]int, fxbuf *[64]int, p_pmap int,
-    fastret bool) (int, int) {
+// XXX should use cpu_t
+type gcpu_t struct {
+	pmap	*[512]int
+	pms	[]*[512]int
+}
+
+var gcpus []gcpu_t
+
+func Userinit(numcpu int) {
+	gcpus = make([]gcpu_t, numcpu)
+}
+
+func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
+    pms []*[512]int, fastret bool) (int, int) {
+
 	entersyscall()
 	fl := Pushcli()
 	ct := (*thread_t)(unsafe.Pointer(uintptr(Gscpu().mythread)))
-	// don't need to set the threads pmap to the user prog's pmap since any
-	// interrupt taken while in user code forces a return to kernel mode
-	// through Userrun
 
+	// set shadow pointers for user pmap so it isn't free'd out from under
+	// us if the process terminates soon
+	ci := Gscpu().num
+	gcpus[ci].pmap = pmap
+	gcpus[ci].pms = pms
 	if Rcr3() != p_pmap {
 		Lcr3(p_pmap)
 	}
@@ -160,6 +175,18 @@ func Userrun(tf *[24]int, fxbuf *[64]int, p_pmap int,
 	Popcli(fl)
 	exitsyscall()
 	return intno, aux
+}
+
+// caller must have interrupts cleared
+//go:nosplit
+func shadow_clear() {
+	// do nothing if gscpus is not init'ed yet
+	if len(gcpus) == 0 {
+		return
+	}
+	ci := Gscpu().num
+	gcpus[ci].pmap = nil
+	gcpus[ci].pms = nil
 }
 
 //go:nosplit

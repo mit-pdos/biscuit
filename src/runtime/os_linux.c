@@ -391,6 +391,7 @@ void intsigret(void);
 void runtime·cls(void);
 void runtime·putch(int8);
 extern void runtime·putcha(int8, int8);
+void runtime·shadow_clear(void);
 
 // src/runtime/proc.c
 struct spinlock_t {
@@ -2135,6 +2136,9 @@ trap(uint64 *tf)
 
 	if (halt)
 		while (1);
+
+	// clear shadow pointers to user pmap
+	runtime·shadow_clear();
 
 	// don't add code before FPU context saving unless you've thought very
 	// carefully! it is easy to accidentally and silently corrupt FPU state
