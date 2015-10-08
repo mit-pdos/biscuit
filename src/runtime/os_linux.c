@@ -380,6 +380,8 @@ void _trapret(uint64 *);
 void wlap(uint32, uint32);
 void ·Wrmsr(uint64, uint64);
 void mktrap(uint64);
+void fs_null(void);
+void gs_null(void);
 
 uint64 runtime·Rdtsc(void);
 
