@@ -170,10 +170,13 @@ clean:
 	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS)
 	rm -rf user/cxx/sysroot
 
-qemu: d.img
+qemu: gqemu
+qemu-gdb: gqemu-gdb
+
+old_qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img
 
-qemu-gdb: d.img
+old_qemu-gdb: d.img
 	$(QEMU) $(QOPTS) -S -s -hda d.img
 
 gqemu: go.img
