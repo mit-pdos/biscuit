@@ -1150,11 +1150,13 @@ func (p *proc_t) userreadn(va, n int) (int, bool) {
 	if n > 8 {
 		panic("large n")
 	}
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
 	var ret int
 	var src []uint8
 	var ok bool
 	for i := 0; i < n; i += len(src) {
-		src, ok = p.userdmap8(va + i)
+		src, ok = p.userdmap8_inner(va + i)
 		if !ok {
 			return 0, false
 		}
@@ -1195,10 +1197,12 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	if lenmax < 0 {
 		return "", false, false
 	}
+	p.Lock_pmap()
+	defer p.Unlock_pmap()
 	i := 0
 	var ret []byte
 	for {
-		str, ok := p.userdmap8(uva + i)
+		str, ok := p.userdmap8_inner(uva + i)
 		if !ok {
 			return "", false, false
 		}
