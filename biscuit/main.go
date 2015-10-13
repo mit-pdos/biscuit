@@ -1200,20 +1200,21 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
 	i := 0
-	var ret []byte
+	var s string
 	for {
 		str, ok := p.userdmap8_inner(uva + i)
 		if !ok {
 			return "", false, false
 		}
-		for _, c := range str {
+		for j, c := range str {
 			if c == 0 {
-				return string(ret), true, false
+				s = s + string(str[:j])
+				return s, true, false
 			}
-			ret = append(ret, c)
 		}
+		s = s + string(str)
 		i += len(str)
-		if len(ret) >= lenmax {
+		if len(s) >= lenmax {
 			return "", true, true
 		}
 	}

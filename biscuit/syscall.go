@@ -2044,6 +2044,7 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 			proc.page_insert(i, seg, zeropg, p_zeropg, perms, true)
 			i += PGSIZE
 		} else {
+			// make our own copy of the file's page
 			proc.cowfault(i)
 			pg, ok := proc.userdmap8_inner(i)
 			if !ok {
