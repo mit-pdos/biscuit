@@ -1589,9 +1589,19 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	seg := proc.mkvmseg(stackva, stksz)
 	stackva += stksz
 	for i := 0; i < numstkpages; i++ {
-		stack, p_stack := pg_new()
+		var stack *[512]int
+		var p_stack int
+		perms := PTE_U
+		if i == 0 {
+			stack, p_stack = pg_new()
+			perms |= PTE_W
+		} else {
+			stack = zeropg
+			p_stack = p_zeropg
+			perms |= PTE_COW
+		}
 		va := stackva - PGSIZE*(i+1)
-		proc.page_insert(va, seg, stack, p_stack, PTE_U | PTE_W, true)
+		proc.page_insert(va, seg, stack, p_stack, perms, true)
 	}
 
 	// XXX make insertargs not fail by using more than a page...
