@@ -226,6 +226,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		sys_threxit(p, tid, a1)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
+		sys_exit(p, tid, SIGNALED)
 	}
 	return ret
 }
