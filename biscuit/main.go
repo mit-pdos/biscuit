@@ -2015,7 +2015,15 @@ func cpuchk() {
 
 	sep := uint32(1 << 11)
 	if dx & sep == 0 || oldp {
-		panic("sysenter supported")
+		panic("sysenter not supported")
+	}
+
+	_, _, _, dx = runtime.Cpuid(0x80000007, 0)
+	invartsc := uint32(1 << 8)
+	if dx & invartsc == 0 {
+		// no qemu CPUs support invariant tsc, but my hardware does...
+		//panic("invariant tsc not supported")
+		fmt.Printf("invariant TSC not supported\n")
 	}
 }
 
