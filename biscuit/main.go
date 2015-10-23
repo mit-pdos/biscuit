@@ -2027,6 +2027,105 @@ func cpuchk() {
 	}
 }
 
+func mkbm() {
+	ch := make(chan bool)
+	for it := 0; it < 20; it++ {
+		st := runtime.Nanotime()
+		n := st
+		ops := 0
+		ns := 3000000000
+		for n - st < ns {
+			go func() {
+				ch <- true
+			}()
+			<- ch
+			n = runtime.Nanotime()
+			ops++
+		}
+		fmt.Printf("%20v ns/spawn+send (%v ops)\n", ns/ops, ops)
+	}
+}
+
+func sendbm() {
+	ch := make(chan bool)
+	go func() {
+		for {
+			<- ch
+			ch <- true
+		}
+	}()
+	times := 3
+	for it := 0; it < times; it++ {
+		st := runtime.Nanotime()
+		n := st
+		ops := 0
+		ns := 3000000000
+		for n - st < ns {
+			ch <- false
+			<- ch
+			n = runtime.Nanotime()
+			ops += 2
+		}
+		fmt.Printf("%20v ns/sends (%v ops)\n", ns/ops, ops)
+	}
+}
+
+func insertbm() {
+	fmt.Printf("making keys, growing m...")
+	_buf := make([]byte, 100)
+	randstr := func() string {
+		n := 10
+		for i := 0; i < n; i++ {
+			_buf[i] = byte('0' + rand.Intn('Z' - '0'))
+		}
+		return string(_buf[:n])
+	}
+
+	m := make(map[string]bool)
+	keyn := 1000000
+	keys := make([]string, keyn)
+	for i := range keys {
+		if (i + 1) % (keyn/10) == 0 {
+			fmt.Printf("|")
+		}
+		keys[i] = randstr()
+		m[keys[i]] = true
+	}
+	for i := range m {
+		delete(m, i)
+	}
+	fmt.Printf("done. made %v keys.\n", len(keys))
+
+	times := 3
+	for i := 0; i < times; i++ {
+		st := runtime.Nanotime()
+		for _, k := range keys {
+			m[k] = true
+		}
+		elap := runtime.Nanotime() - st
+		fmt.Printf("%20v ns/insert (no lock)\n", elap/len(keys))
+		for i := range m {
+			delete(m, i)
+		}
+	}
+
+	l := sync.Mutex{}
+	for i := 0; i < times; i++ {
+		st := runtime.Nanotime()
+		for _, k := range keys {
+			l.Lock()
+			m[k] = true
+			l.Unlock()
+		}
+		elap := runtime.Nanotime() - st
+		fmt.Printf("%20v ns/insert\n", elap/len(keys))
+		for i := range m {
+			delete(m, i)
+		}
+	}
+}
+
+var rootfile *file_t
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
@@ -2093,6 +2192,7 @@ func main() {
 	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
 	//exec("bin/lsh", nil)
 	exec("bin/init", nil)
+	//exec("bin/sfork", []string{"-s", "3", "-b", "d", "1"})
 	//exec("bin/ls", nil)
 	//exec("bin/hello", nil)
 	//exec("bin/fork", nil)
