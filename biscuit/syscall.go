@@ -120,6 +120,7 @@ const(
   SYS_PIPE2    = 293
   SYS_FAKE     = 31337
   SYS_THREXIT  = 31338
+  SYS_FAKE2    = 31339
 )
 
 const(
@@ -222,6 +223,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_pipe2(p, a1, a2)
 	case SYS_FAKE:
 		ret = sys_fake(p, a1)
+	case SYS_FAKE2:
+		ret = sys_fake2(p, a1)
 	case SYS_THREXIT:
 		sys_threxit(p, tid, a1)
 	default:
@@ -1827,6 +1830,10 @@ func sys_fake(proc *proc_t, n int) int {
 		prof.dump()
 		//fmt.Printf("K    ns: %v\n", kns)
 	}
+	return 0
+}
+
+func sys_fake2(proc *proc_t, n int) int {
 	return 0
 }
 
