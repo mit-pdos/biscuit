@@ -1067,6 +1067,9 @@ func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, int) {
 
 // write all dirty pages back to device
 func (pc *pgcache_t) flush() {
+	if memtime {
+		return
+	}
 	for i := range pc.pgs {
 		pgva := pc.pgs[i]
 		if pgva == nil {
