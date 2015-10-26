@@ -706,7 +706,6 @@ segsetup(void *tls0)
 	// the MSRs are thrown out (presumably because the caches are thought
 	// to be invalid).
 	fs_null();
-	gs_null();
 	const uint64 ia32_fs_base = 0xc0000100ull;
 	·Wrmsr(ia32_fs_base, tlsaddr);
 	pdsetup(&pd, (uint64)segs, sizeof(segs) - 1);
@@ -2529,6 +2528,13 @@ sysc_setup(uint64 myrsp)
 void
 gs_set(struct cpu_t *mycpu)
 {
+	// we must set fs/gs, the only segment descriptors in ia32e mode, at
+	// least once before we use the MSRs to change their base address. the
+	// MSRs write directly to hidden segment descriptor cache, and if we
+	// don't explicitly fill the segment descriptor cache, the writes to
+	// the MSRs are thrown out (presumably because the caches are thought
+	// to be invalid).
+	gs_null();
 	const uint64 ia32_gs_base = 0xc0000101;
 	·Wrmsr(ia32_gs_base, (uint64)mycpu);
 }
