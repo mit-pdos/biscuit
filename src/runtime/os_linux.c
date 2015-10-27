@@ -2152,14 +2152,6 @@ trap(uint64 *tf)
 	lcr3(kpmap);
 	uint64 trapno = tf[TF_TRAPNO];
 
-	if (·Gscpu() != &curcpu) {
-		pnum((uint64)·Gscpu());
-		pnum((uint64)&curcpu);
-		runtime·pancake("gs is wrong", 0);
-	}
-
-	struct thread_t *ct = curthread;
-
 	// CPU exceptions in kernel mode are fatal errors
 	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0) {
 		pmsg("trap frame at");
@@ -2179,6 +2171,14 @@ trap(uint64 *tf)
 		stack_dump(rsp);
 		runtime·pancake("kernel fault", trapno);
 	}
+
+	if (·Gscpu() != &curcpu) {
+		pnum((uint64)·Gscpu());
+		pnum((uint64)&curcpu);
+		runtime·pancake("gs is wrong", 0);
+	}
+
+	struct thread_t *ct = curthread;
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
@@ -2637,6 +2637,7 @@ void
 	assert((rflags() & TF_FL_IF) == 0, "wtf!", test);
 
 	curcpu.num = myid;
+	fs_null();
 	gs_set(&curcpu);
 	setcurthread(0);
 }
