@@ -135,6 +135,8 @@ func Rdmsr(int) int
 func Wrmsr(int, int)
 func _Userrun(*[24]int, bool) (int, int)
 
+func Cprint(byte, int)
+
 func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
     pms []*[512]int, fastret bool) (int, int) {
 

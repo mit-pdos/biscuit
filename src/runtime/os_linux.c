@@ -1659,6 +1659,26 @@ fpuinit(void)
 // jumps to newtrap if it is non-zero.
 uint64 newtrap;
 
+static uint16 cpuattrs[MAXCPUS];
+#pragma textflag NOSPLIT
+void
+cpuprint(uint8 n, int32 row)
+{
+	uint16 *p = (uint16*)0xb8000;
+	uint64 num = ·Gscpu()->num;
+	p += num + row*80;
+	uint16 attr = cpuattrs[num];
+	cpuattrs[num] += 0x100;
+	*p = attr | n;
+}
+
+#pragma textflag NOSPLIT
+void
+·Cprint(byte n, int64 row)
+{
+	cpuprint((uint8)n, (int32)row);
+}
+
 #pragma textflag NOSPLIT
 static void
 sched_halt(void)
