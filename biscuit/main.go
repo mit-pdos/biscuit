@@ -2142,7 +2142,6 @@ func insertbm() {
 	}
 }
 
-var rootfile *file_t
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
