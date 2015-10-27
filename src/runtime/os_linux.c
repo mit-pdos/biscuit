@@ -1894,18 +1894,36 @@ uint64 tlbshoot_wait;
 uint64 tlbshoot_pg;
 uint64 tlbshoot_count;
 uint64 tlbshoot_pmap;
+uint64 tlbshoot_gen;
 
 #pragma textflag NOSPLIT
-void
+uint64
 runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
 {
+	void htpause(void);
 	runtime·stackcheck();
+	volatile uint64 *p = &tlbshoot_wait;
 	while (!runtime·cas64(&tlbshoot_wait, 0, cpuwait))
-		;
+		while (*p != 0)
+			htpause();
 
 	runtime·xchg64(&tlbshoot_pg, pg);
 	runtime·xchg64(&tlbshoot_count, pgcount);
 	runtime·xchg64(&tlbshoot_pmap, pmap);
+	tlbshoot_gen++;
+	return tlbshoot_gen;
+}
+
+#pragma textflag NOSPLIT
+void
+runtime·Tlbwait(uint64 gen)
+{
+	runtime·stackcheck();
+	volatile uint64 *p = &tlbshoot_wait;
+	volatile uint64 *g = &tlbshoot_gen;
+	while (*p != 0)
+		if (*g != gen)
+			return;
 }
 
 #pragma textflag NOSPLIT

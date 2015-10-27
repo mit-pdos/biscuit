@@ -1927,13 +1927,9 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 		return
 	}
 	othercpus := numcpus - 1
-	runtime.Tlbadmit(p_pmap, othercpus, va, pgcount)
+	mygen := runtime.Tlbadmit(p_pmap, othercpus, va, pgcount)
 
 	lapaddr := 0xfee00000
-	pte := pmap_lookup(kpmap(), lapaddr)
-	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_PCD == 0 {
-		panic("lapaddr unmapped")
-	}
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 	ipilow := func(ds int, deliv int, vec int) uint32 {
 		return uint32(ds << 18 | 1 << 14 | deliv << 8 | vec)
@@ -1956,7 +1952,7 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 	icrw(0, low)
 
 	// wait for other cpus to finish
-	runtime.Tlbadmit(0, 0, 0, 0)
+	runtime.Tlbwait(mygen)
 }
 
 type bprof_t struct {
