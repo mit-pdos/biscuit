@@ -609,8 +609,7 @@ type proc_t struct {
 	doomed		bool
 	exitstatus	int
 
-	// XXX should be a slice
-	fds		map[int]*fd_t
+	fds		[]*fd_t
 	// where to start scanning for free fds
 	fdstart		int
 	// fds, fdstart protected by fdl
@@ -641,7 +640,7 @@ func newpid() int {
 	return ret
 }
 
-func proc_new(name string, cwd *file_t) *proc_t {
+func proc_new(name string, cwd *file_t, fds []*fd_t) *proc_t {
 	ret := &proc_t{}
 
 	proclock.Lock()
@@ -657,7 +656,7 @@ func proc_new(name string, cwd *file_t) *proc_t {
 	ret.pid = np
 	ret.pmpages = &pmtracker_t{}
 	ret.pmpages.pminit()
-	ret.fds = map[int]*fd_t{0: &fd_stdin, 1: &fd_stdout, 2: &fd_stderr}
+	ret.fds = fds
 	ret.fdstart = 3
 	ret.cwd = cwd
 	if cwd.ftype != INODE {
@@ -729,17 +728,26 @@ func (p *proc_t) fd_insert(f *file_t, perms int) int {
 
 	// find free fd
 	newfd := p.fdstart
-	for {
-		if _, ok := p.fds[newfd]; !ok {
+	found := false
+	for newfd < len(p.fds) {
+		if p.fds[newfd] == nil {
 			p.fdstart = newfd + 1
+			found = true
 			break
 		}
 		newfd++
 	}
+	if !found {
+		// double size of fd table
+		ol := len(p.fds)
+		nfdt := make([]*fd_t, 2*ol)
+		copy(nfdt, p.fds)
+		p.fds = nfdt
+	}
 	fdn := newfd
 	fd := &fd_t{}
 	fd.perms = perms
-	if _, ok := p.fds[fdn]; ok {
+	if p.fds[fdn] != nil {
 		panic(fmt.Sprintf("new fd exists %d", fdn))
 	}
 	p.fds[fdn] = fd
@@ -747,23 +755,33 @@ func (p *proc_t) fd_insert(f *file_t, perms int) int {
 	return fdn
 }
 
+// fdn is not guaranteed to be a sane fd
 func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
 	p.fdl.Lock()
-	ret, ok := p.fds[fdn]
-	p.fdl.Unlock()
+	defer p.fdl.Unlock()
+
+	if fdn < 0 || fdn >= len(p.fds) {
+		return nil, false
+	}
+	ret := p.fds[fdn]
+	ok := ret != nil
 	return ret, ok
 }
 
+// fdn is not guaranteed to be a sane fd
 func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	p.fdl.Lock()
-	ret, ok := p.fds[fdn]
-	if ok {
-		delete(p.fds, fdn)
+	defer p.fdl.Unlock()
+
+	if fdn < 0 || fdn >= len(p.fds) {
+		return nil, false
 	}
+	ret := p.fds[fdn]
+	p.fds[fdn] = nil
+	ok := ret != nil
 	if ok && fdn < p.fdstart {
 		p.fdstart = fdn
 	}
-	p.fdl.Unlock()
 	return ret, ok
 }
 
@@ -1033,8 +1051,11 @@ func (p *proc_t) terminate() {
 
 	// close open fds
 	p.fdl.Lock()
-	for _, fd := range p.fds {
-		if file_close(fd.file, fd.perms) != 0 {
+	for i := range p.fds {
+		if p.fds[i] == nil {
+			continue
+		}
+		if file_close(p.fds[i].file, p.fds[i].perms) != 0 {
 			panic("must succeed")
 		}
 	}
@@ -2172,7 +2193,8 @@ func main() {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
-		p := proc_new(cmd, rf)
+		defaultfds := []*fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
+		p := proc_new(cmd, rf, defaultfds)
 		n := p.atime.now()
 		var tf [TFSIZE]int
 		ret := sys_execv1(p, &tf, cmd, nargs)

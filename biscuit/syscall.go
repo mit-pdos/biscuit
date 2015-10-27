@@ -585,7 +585,8 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 
 	// lock fd table to prevent racing on the same fd number
 	proc.fdl.Lock()
-	cfd, needclose := proc.fds[newn]
+	cfd := proc.fds[newn]
+	needclose := cfd != nil
 	proc.fds[newn] = nfd
 	proc.fdl.Unlock()
 
@@ -1384,18 +1385,19 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 	if mkproc {
 
-		child = proc_new(parent.name + " [child]",
-		    parent.cwd)
-		child.pwait = &parent.mywait
-		parent.mywait.start_proc(child.pid)
-
 		// copy fd table
 		parent.fdl.Lock()
-		for k, v := range parent.fds {
-			child.fds[k] = copyfd(v)
+		cfds := make([]*fd_t, len(parent.fds))
+		for i := range parent.fds {
+			if parent.fds[i] != nil {
+				cfds[i] = copyfd(parent.fds[i])
+			}
 		}
 		parent.fdl.Unlock()
 
+		child = proc_new(parent.name + " [child]", parent.cwd, cfds)
+		child.pwait = &parent.mywait
+		parent.mywait.start_proc(child.pid)
 
 		// fork parent address space
 		parent.Lock_pmap()
@@ -1618,6 +1620,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 	// close fds marked with CLOEXEC
 	for fdn, fd := range proc.fds {
+		if fd == nil {
+			continue
+		}
 		if fd.perms & FD_CLOEXEC != 0 {
 			if sys_close(proc, fdn) != 0 {
 				panic("close")
