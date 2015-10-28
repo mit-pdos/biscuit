@@ -378,22 +378,6 @@ void *openonly(void *idp)
 	return (void *)total;
 }
 
-void usage(char *n)
-{
-	printf( "usage:\n"
-		"%s [-s seconds] [-b c|r|u|f|k|e|p|s|o] <num threads>\n"
-		"  -s seconds\n"
-		"       run benchmark for seconds\n"
-		"  -b c|r|u|f|k|e|p|s|o\n"
-		"       only run create message, rename, unix\n"
-		"       socket, sys_fake2, forkonly, forkexec,\n"
-		"       getpid, seqcreate, or open only benchmark\n"
-		"\n", n);
-	printf(	"%s -m\n"
-		"       run mailbench forever\n\n", n);
-	exit(-1);
-}
-
 void __attribute__((noreturn)) child(int cd)
 {
 	char dir[32];
@@ -419,6 +403,44 @@ int mbforever()
 		wait(NULL);
 		cd++;
 	}
+}
+
+struct {
+	char *name;
+	char sname;
+	void *(*fn)(void *);
+	void (*begin)(void);
+	void (*end)(void);
+} bms[] = {
+	{"renames", 'r', crrename, NULL, NULL},
+	{"create/write/unlink", 'c', crmessage, NULL, NULL},
+	{"unix socket", 'u', sunsend, sunspawn, sunkill},
+	{"getpids", 'p', getpids, NULL, NULL},
+	{"fake2", 'f', fake2, NULL, NULL},
+	{"forkonly", 'k', forkonly, NULL, NULL},
+	{"forkexec", 'e', forkexec, NULL, NULL},
+	{"seqcreate", 's', seqcreate, NULL, NULL},
+	{"openonly", 'o', openonly, NULL, NULL},
+};
+
+const int nbms = sizeof(bms)/sizeof(bms[0]);
+
+void usage(char *n)
+{
+	printf( "usage:\n"
+		"%s [-s seconds] [-b <benchmark id>] <num threads>\n"
+		"  -s seconds\n"
+		"       run benchmark for seconds\n"
+		"  -b <benchmark id>\n"
+		"       benchmark ids:\n", n);
+	int i;
+	for (i = 0; i < nbms; i++)
+		printf("       %c      %s\n", bms[i].sname, bms[i].name);
+	printf("\n");
+
+	printf(	"%s -m\n"
+		"       run mailbench forever\n\n", n);
+	exit(-1);
 }
 
 int main(int argc, char **argv)
@@ -457,26 +479,6 @@ int main(int argc, char **argv)
 	if (nthreads < 0)
 		nthreads = 3;
 	printf("using %d threads for %d seconds\n", nthreads, bmsecs);
-
-	struct {
-		char *name;
-		char sname;
-		void *(*fn)(void *);
-		void (*begin)(void);
-		void (*end)(void);
-	} bms[] = {
-		{"renames", 'r', crrename, NULL, NULL},
-		{"create/write/unlink", 'c', crmessage, NULL, NULL},
-		{"unix socket", 'u', sunsend, sunspawn, sunkill},
-		{"getpids", 'p', getpids, NULL, NULL},
-		{"fake2", 'f', fake2, NULL, NULL},
-		{"forkonly", 'k', forkonly, NULL, NULL},
-		{"forkexec", 'e', forkexec, NULL, NULL},
-		{"seqcreate", 's', seqcreate, NULL, NULL},
-		{"openonly", 'o', openonly, NULL, NULL},
-	};
-
-	const int nbms = sizeof(bms)/sizeof(bms[0]);
 
 	int did = 0;
 	for (i = 0; i < nbms; i++) {

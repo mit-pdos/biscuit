@@ -1839,7 +1839,12 @@ func sys_fake(proc *proc_t, n int) int {
 }
 
 func sys_fake2(proc *proc_t, n int) int {
-	return 0
+	idmonl.Lock()
+	ret := len(allidmons)
+	idmonl.Unlock()
+	runtime.GC()
+
+	return ret
 }
 
 func readn(a []uint8, n int, off int) int {
