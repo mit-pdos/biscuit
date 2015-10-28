@@ -1215,7 +1215,7 @@ strstr(const char *big, const char *little)
 int
 vprintf(const char *fmt, va_list ap)
 {
-	char lbuf[256];
+	char lbuf[1024];
 
 	if (strlen(fmt) >= sizeof(lbuf))
 		printf("warning: fmt too long\n");
