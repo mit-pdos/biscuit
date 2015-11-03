@@ -182,30 +182,21 @@ func shadow_clear() {
 
 //go:nosplit
 func sc_setup() {
-	// XXX figure out and document this shit!
-	//com1  := 0x3f8
-	//data  := 0
-	//intr  := 1
-	//ififo := 2
-	//lctl  := 3
-	//mctl  := 4
-
-	//Outb(com1 + ififo, 0x0)
-	//Outb(com1 + lctl, 0x80)
-	//Outb(com1 + data, 115200/9600)
-	//Outb(com1 + intr, 0x0)
-	//Outb(com1 + lctl, 0x03)
-	//Outb(com1 + mctl, 0x0)
-	//Outb(com1 + intr, 0x01)
-
-	//inb(com1 + ififo)
-	//inb(com1 + data)
-
+	// disable interrupts
 	Outb(com1 + 1, 0)
+
+	// set divisor latch bit to set divisor bytes
 	Outb(com1 + 3, 0x80)
+
+	// set both bytes for divisor baud rate
 	Outb(com1 + 0, 115200/9600)
 	Outb(com1 + 1, 0)
+
+	// 8 bit words, one stop bit, no parity
 	Outb(com1 + 3, 0x03)
+
+	// configure FIFO for interrupts: maximum FIFO size, clear
+	// transmit/receive FIFOs, and enable FIFOs.
 	Outb(com1 + 2, 0xc7)
 	Outb(com1 + 4, 0x0b)
 	Outb(com1 + 1, 1)
