@@ -62,6 +62,7 @@ const(
 	PGFAULT		= 14
 	TIMER		= 32
 	SYSCALL		= 64
+	TLBSHOOT	= 70
 
 	// low 3 bits must be zero
 	IRQ_BASE	= 32
@@ -963,10 +964,10 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			fmt.Printf("TRAP: %v, RIP: %x\n", intno,
 			    tf[TF_RIP])
 			sys_exit(p, tid, SIGNALED)
+		case TLBSHOOT, INT_KBD, INT_COM1, INT_DISK:
+			// XXX: shouldn't interrupt user program execution...
 		default:
-			// should probably not stop execution of user programs
-			// after receiving an IRQ?
-			//fmt.Printf("!%v ", intno)
+			panic(fmt.Sprintf("weird trap: %d", intno))
 		}
 	}
 }

@@ -1400,7 +1400,6 @@ type ireq_t struct {
 	// create op
 	cr_name		string
 	cr_type		int
-	cr_mkdir	bool
 	cr_major	int
 	cr_minor	int
 	// insert op
@@ -1489,7 +1488,6 @@ func (r *ireq_t) mkcreate_dir(path string) {
 	}
 	r.cr_name = name
 	r.cr_type = I_DIR
-	r.cr_mkdir = true
 }
 
 func (r *ireq_t) mkcreate_file(path string) {
@@ -1503,7 +1501,6 @@ func (r *ireq_t) mkcreate_file(path string) {
 	}
 	r.cr_name = name
 	r.cr_type = I_FILE
-	r.cr_mkdir = false
 }
 
 func (r *ireq_t) mkcreate_nod(path string, maj, min int) {
@@ -1517,7 +1514,6 @@ func (r *ireq_t) mkcreate_nod(path string, maj, min int) {
 	}
 	r.cr_name = name
 	r.cr_type = I_DEV
-	r.cr_mkdir = false
 	r.cr_major = maj
 	r.cr_minor = min
 }
