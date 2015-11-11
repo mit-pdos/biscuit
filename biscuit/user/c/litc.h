@@ -161,6 +161,7 @@ int socket(int, int, int);
 #define		SOCK_SEQPACKET	5
 
 int stat(const char *, struct stat *);
+int sync(void);
 int unlink(const char *);
 int wait(int *);
 int waitpid(int, int *, int);

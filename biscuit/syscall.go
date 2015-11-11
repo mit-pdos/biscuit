@@ -116,6 +116,7 @@ const(
     RUSAGE_SELF      = 1
     RUSAGE_CHILDREN  = 2
   SYS_MKNOD    = 133
+  SYS_SYNC     = 162
   SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
   SYS_FAKE     = 31337
@@ -217,6 +218,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_getrusage(p, a1, a2)
 	case SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
+	case SYS_SYNC:
+		ret = sys_sync(p)
 	case SYS_NANOSLEEP:
 		ret = sys_nanosleep(p, a1, a2)
 	case SYS_PIPE2:
@@ -995,6 +998,10 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 		return err
 	}
 	return 0
+}
+
+func sys_sync(proc *proc_t) int {
+	return fs_sync()
 }
 
 func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {

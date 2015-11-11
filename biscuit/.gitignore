@@ -59,6 +59,7 @@
 /user/c/time
 /user/c/true
 /user/c/init
+/user/c/sync
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -115,3 +116,4 @@
 /fsdir/bin/time
 /fsdir/bin/true
 /fsdir/bin/init
+/fsdir/bin/sync

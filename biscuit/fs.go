@@ -920,6 +920,17 @@ func fs_mmapinfo(f *file_t, offset int) ([]mmapinfo_t, int) {
 	return req.resp.mmapinfo, req.resp.err
 }
 
+func fs_sync() int {
+	if memtime {
+		return 0
+	}
+	// ensure any fs ops in the journal preceding this sync call are
+	// flushed to disk by waiting for log commit.
+	fslog.force <- true
+	<- fslog.commitwait
+	return 0
+}
+
 // sends a request requiring a lookup to the correct idaemon: if path is a
 // relative path, lookups should start with the idaemon for cwd. if the path is
 // absolute, lookups should start with iroot.
@@ -2851,6 +2862,8 @@ type log_t struct {
 	incoming	chan idebuf_t
 	admission	chan bool
 	done		chan bool
+	force		chan bool
+	commitwait	chan bool
 	tmpblk		[512]uint8
 }
 
@@ -2866,6 +2879,8 @@ func (log *log_t) init(ls int, ll int) {
 	log.incoming = make(chan idebuf_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
+	log.force = make(chan bool)
+	log.commitwait = make(chan bool)
 }
 
 func (log *log_t) addlog(buf idebuf_t) {
@@ -2940,6 +2955,7 @@ func log_daemon(l *log_t) {
 		done := false
 		given := 0
 		t := 0
+		waiters := 0
 		for !done {
 			select {
 			case nb := <- l.incoming:
@@ -2955,9 +2971,23 @@ func log_daemon(l *log_t) {
 				if given == tickets {
 					adm = nil
 				}
+			case <- l.force:
+				waiters++
+				adm = nil
+				if t == 0 {
+					done = true
+				}
 			}
 		}
 		l.commit()
+		// wake up waiters
+		if waiters > 0 {
+			go func() {
+				for i := 0; i < waiters; i++ {
+					l.commitwait <- true
+				}
+			}()
+		}
 	}
 }
 

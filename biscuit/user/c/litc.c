@@ -30,6 +30,7 @@
 #define SYS_GETTOD       96
 #define SYS_GETRUSAGE    98
 #define SYS_MKNOD        133
+#define SYS_SYNC         162
 #define SYS_NANOSLEEP    230
 #define SYS_PIPE2        293
 #define SYS_FAKE         31337
@@ -349,6 +350,12 @@ int
 stat(const char *path, struct stat *st)
 {
 	return syscall(SA(path), SA(st), 0, 0, 0, SYS_STAT);
+}
+
+int
+sync(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_SYNC);
 }
 
 int
