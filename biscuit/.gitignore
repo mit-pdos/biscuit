@@ -60,6 +60,7 @@
 /user/c/true
 /user/c/init
 /user/c/sync
+/user/c/reboot
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -117,3 +118,4 @@
 /fsdir/bin/true
 /fsdir/bin/init
 /fsdir/bin/sync
+/fsdir/bin/reboot

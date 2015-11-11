@@ -31,6 +31,7 @@
 #define SYS_GETRUSAGE    98
 #define SYS_MKNOD        133
 #define SYS_SYNC         162
+#define SYS_REBOOT       169
 #define SYS_NANOSLEEP    230
 #define SYS_PIPE2        293
 #define SYS_FAKE         31337
@@ -304,6 +305,12 @@ long
 read(int fd, void *buf, size_t c)
 {
 	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
+}
+
+int
+reboot(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_REBOOT);
 }
 
 ssize_t

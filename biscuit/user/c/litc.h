@@ -146,6 +146,7 @@ int pause(void);
 int pipe(int *);
 int pipe2(int *, int);
 long read(int, void*, size_t);
+int reboot(void);
 ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
 int rename(const char *, const char *);
