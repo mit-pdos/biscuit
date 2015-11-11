@@ -1718,10 +1718,10 @@ func idaemonize(idm *idaemon_t) {
 			pp.resp.err = -ENOENT
 			pp.ack <- true
 		}
-		idm.ifree()
 		idmonl.Lock()
 		delete(allidmons, idm.priv)
 		idmonl.Unlock()
+		idm.ifree()
 		return true
 	}
 
