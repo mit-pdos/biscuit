@@ -5,11 +5,11 @@ the vast majority of Biscuit's code is in biscuit/
 
 you must build the go runtime before building Biscuit:
 
-( cd src/ && ./all.bash )
+( cd src/ && ./make.bash )
 
 then run Biscuit:
 
-( cd biscuit/ && make gqemux CPUS=8 )
+( cd biscuit/ && make qemu CPUS=2 )
 
-run a command:
-/bin/ls
+then type a command:
+ls
