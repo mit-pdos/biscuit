@@ -2,13 +2,17 @@ ENTRY(_entry)
 
 SECTIONS
 {
-        . = 0x2c8000001000;
-        .text : { *(.text) }
-        .data : { *(.data) }
-        .eh_frame : { *(.eh_frame) }
-        .bss : { *(.bss) }
+	. = 0x2c8000001000;
+	.text : { *(.text .text*) }
+	.data : { *(.data* .rodata*) }
+	.tdata : { *(.tdata*) }
+	.tbss : { *(.tbss*) }
+	.bss : { *(.bss*) *(COMMON) }
+	/*.got BLOCK(0x1000) : { *(.got*) }*/
+	.got : { *(.got*) }
+	.eh_frame : { *(.eh_frame*) }
 
 	/DISCARD/ : {
-		*(.note.gnu.build-id)
+		*(*)
 	}
 }
