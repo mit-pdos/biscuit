@@ -232,6 +232,9 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 
 // finds an unreserved region of size sz, at startva or higher
 func (vr *vmregion_t) empty(startva, sz int) int {
+	if vr.head == nil {
+		return startva
+	}
 	prev := vr.head
 	for h := vr.head.next; h != nil; h = h.next {
 		if startva > prev.end {
