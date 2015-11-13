@@ -2059,7 +2059,7 @@ func (e *elf_t) entry() int {
 	return readn(e.data, ELF_ADDR, e_entry)
 }
 
-func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
+func segload(proc *proc_t, hdr *elf_phdr, mmapi []mmapinfo_t) {
 	if hdr.vaddr % PGSIZE != hdr.fileoff % PGSIZE {
 		panic("requires copying")
 	}
@@ -2069,16 +2069,34 @@ func segload(proc *proc_t, hdr *elf_phdr, f *file_t) {
 	if hdr.flags & PF_W != 0 {
 		perms |= PTE_COW
 	}
-	mmapi, err := fs_mmapinfo(f, 0)
-	if err != 0 {
-		panic("must succeed")
-	}
 
+	var vastart int
+	var did int
+	// this segment's virtual address may start on the same page as the
+	// previous segment. if that is the case, we may not be able to avoid
+	// copying.
+	if _, _, ok := proc.vmregion.contain(hdr.vaddr); ok {
+		va := hdr.vaddr
+		proc.cowfault(va)
+		pg, ok := proc.userdmap8_inner(va)
+		if !ok {
+			panic("must be mapped")
+		}
+		pgn := hdr.fileoff / PGSIZE
+		bsrc := (*[PGSIZE]uint8)(unsafe.Pointer(mmapi[pgn].pg))[:]
+		bsrc = bsrc[va & PGOFFSET:]
+		if len(pg) > hdr.filesz {
+			pg = pg[0:hdr.filesz]
+		}
+		copy(pg, bsrc)
+		did = len(pg)
+		vastart = PGSIZE
+	}
 	filesz := roundup(hdr.vaddr + hdr.filesz, PGSIZE)
 	filesz -= rounddown(hdr.vaddr, PGSIZE)
-	seg := proc.mkvmseg(hdr.vaddr, hdr.memsz)
-	for i := 0; i < filesz; i += PGSIZE {
-		pgn := i / PGSIZE
+	seg := proc.mkvmseg(hdr.vaddr + did, hdr.memsz - did)
+	for i := vastart; i < filesz; i += PGSIZE {
+		pgn := (hdr.fileoff + i) / PGSIZE
 		pg := mmapi[pgn].pg
 		p_pg := mmapi[pgn].phys
 		proc.page_insert(hdr.vaddr + i, seg, pg, p_pg, perms, true)
@@ -2123,7 +2141,11 @@ func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 			tlssize = roundup(hdr.memsz, 8)
 			tlscopylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
-			segload(proc, &hdr, f)
+			mmapi, err := fs_mmapinfo(f, 0)
+			if err != 0 {
+				panic("must succeed")
+			}
+			segload(proc, &hdr, mmapi)
 		}
 	}
 
