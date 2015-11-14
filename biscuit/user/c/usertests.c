@@ -2156,7 +2156,7 @@ main(int argc, char *argv[])
   //sbrktest();
   validatetest();
 
-  rusagetest();
+  //rusagetest();
 
   opentest();
   writetest();
