@@ -80,7 +80,6 @@ static char *cmd;
 static record_t **mem;
 static char **hole_mem;
 static unsigned int page_size;
-static time_t start_time;
 static volatile int threads_go;
 static uint64_t records_read;
 
@@ -117,7 +116,8 @@ read_options(int argc, char *argv[])
 {
 	int c;
 
-	page_size = getpagesize();
+	/* page_size = getpagesize(); */
+	page_size = 4096; // Hard-code it for now.
 
 	/*
 	 * Set some defaults.  These are currently tuned to run in a
@@ -127,15 +127,17 @@ read_options(int argc, char *argv[])
 	 * then the defaults would be split between here and the top
 	 * of the file, which is annoying.
 	 */
-	threads = 2 * sysconf(_SC_NPROCESSORS_ONLN);
+
+	/* threads = 2 * sysconf(_SC_NPROCESSORS_ONLN); */
+	threads = 1;
 	chunks = 10;
 	chunk_size = record_size * 64 * 1024;
 	seconds = 10;
+	linear = 1; // Force linear search for now.
 
 	/* On to option processing */
 
 	cmd = argv[0];
-	opterr = 1;
 
 	while ((c = getopt(argc, argv, "lmMn:pPRs:S:t:vzT")) != -1) {
 		switch (c) {
@@ -221,8 +223,10 @@ read_options(int argc, char *argv[])
 		usage();
 	}
 
+#if 0
 	if (never_mmap)
 		mallopt(M_MMAP_MAX, 0);
+#endif
 
 	if (chunk_size < record_size) {
 		fprintf(stderr, "Chunk size %lu smaller than record size %u\n",
@@ -330,9 +334,13 @@ write_pattern(void)
 	for (i = 0; i < chunks; i++) {
 		for(j = 0; j < chunk_size / record_size; j++)
 			mem[i][j] = (record_t) j;
+
+#if 0 /* Biscuit doesn't support mprotect yet. */
 		/* Prevent coalescing by alternating permissions */
 		if (use_permissions && (i % 2) == 0)
 			mprotect((void *) mem[i], chunk_size, PROT_READ);
+#endif
+
 	}
 	if (verbose)
 		printf("Wrote memory\n");
@@ -350,11 +358,13 @@ linear_search(record_t key, record_t *base, size_t size)
 	return NULL;
 }
 
+#if 0
 static int
 compare(const void *p1, const void *p2)
 {
 	return (* (record_t *) p1 - * (record_t *) p2);
 }
+#endif
 
 /*
  * Stupid ranged random number function.  We don't care about quality.
@@ -417,11 +427,16 @@ search_mem(void)
 			if (verbose > 2)
 				printf("[%lx] Search key %zu, copy size %zu\n",
 					pthread_self(), key, copy_size);
+
+#if 1 // Force linear search for now.
+			found = linear_search(key, copy, copy_size);
+#else
 			if (linear)
 				found = linear_search(key, copy, copy_size);
 			else
 				found = bsearch(&key, copy, copy_size / record_size,
 					record_size, compare);
+#endif
 
 			/* Below check is mainly for memory corruption or other bugs */
 			if (found == NULL) {
@@ -455,9 +470,8 @@ thread_run(void *arg)
 	pthread_mutex_unlock(&records_count_lock);
 
 	if (verbose > 1)
-		printf("[%lx] Thread finished, %f seconds %lu records\n",
-		       pthread_self(), difftime(time(NULL), start_time),
-		       records_local);
+		printf("[%lx] Thread finished, processed %lu records\n",
+		       pthread_self(), records_local);
 
 	return NULL;
 }
@@ -478,7 +492,7 @@ start_threads(void)
 	double elapsed;
 	unsigned int i;
 	struct rusage start_ru, end_ru;
-	struct timeval usr_time, sys_time;
+	struct timeval start_time, end_time, usr_time, sys_time, elapsed_time;
 	int err;
 
 	if (verbose)
@@ -499,11 +513,11 @@ start_threads(void)
 	 * we want to measure. */
 
 	getrusage(RUSAGE_SELF, &start_ru);
-	start_time = time(NULL);
+	gettimeofday(&start_time, NULL);
 	threads_go = 1;
 	sleep(seconds);
 	threads_go = 0;
-	elapsed = difftime(time(NULL), start_time);
+	gettimeofday(&end_time, NULL);
 	getrusage(RUSAGE_SELF, &end_ru);
 
 	/*
@@ -518,18 +532,21 @@ start_threads(void)
 		}
 	}
 
+	elapsed_time = difftimeval(&end_time, &start_time);
+	usr_time = difftimeval(&end_ru.ru_utime, &start_ru.ru_utime);
+	sys_time = difftimeval(&end_ru.ru_stime, &start_ru.ru_stime);
+
+	elapsed = elapsed_time.tv_sec + elapsed_time.tv_usec/1e6;
+
 	if (verbose)
 		printf("Threads finished\n");
 
 	printf("%lu records/s\n",
 	       (uint64_t) (((double) records_read)/elapsed));
 
-	usr_time = difftimeval(&end_ru.ru_utime, &start_ru.ru_utime);
-	sys_time = difftimeval(&end_ru.ru_stime, &start_ru.ru_stime);
-
-	printf("real %5.2f s\n", elapsed);
-	printf("user %5.2f s\n", usr_time.tv_sec + usr_time.tv_usec/1e6);
-	printf("sys  %5.2f s\n", sys_time.tv_sec + sys_time.tv_usec/1e6);
+	printf("real %f s\n", elapsed);
+	printf("user %f s\n", usr_time.tv_sec + usr_time.tv_usec/1e6);
+	printf("sys  %f s\n", sys_time.tv_sec + sys_time.tv_usec/1e6);
 }
 
 int
