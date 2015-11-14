@@ -1269,10 +1269,14 @@ malloc(size_t sz)
 {
 	acquire();
 
+	// Minimum allocation size = 8 bytes.
 	sz = (sz + 7) & ~7;
 	if (!curh || bump + sz > curh->end) {
 		const int pgsize = 1 << 12;
-		size_t mmapsz = (sz + pgsize - 1) & ~(pgsize - 1);
+		// Also account for the header that we embed within the allocated
+		// space.
+		size_t mmapsz = (sz + sizeof(struct header_t) + pgsize - 1) &
+				~(pgsize - 1);
 		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
 		    MAP_ANON | MAP_PRIVATE, -1, 0);
 		if (nh == MAP_FAILED) {
