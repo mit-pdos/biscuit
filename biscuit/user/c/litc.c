@@ -1254,7 +1254,10 @@ vprintf(const char *fmt, va_list ap)
 int
 vfprintf(FILE *f, const char *fmt, va_list ap)
 {
-	char lbuf[256];
+	char lbuf[1024];
+
+	if (strlen(fmt) >= sizeof(lbuf))
+		printf("warning: fmt too long\n");
 
 	int ret;
 	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
