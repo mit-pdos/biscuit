@@ -84,6 +84,9 @@ static time_t start_time;
 static volatile int threads_go;
 static unsigned int records_read;
 
+/* Global lock to serialize records aggregation */
+pthread_mutex_t records_count_lock;
+
 static void
 usage(void)
 {
@@ -435,6 +438,7 @@ search_mem(void)
 static void *
 thread_run(void *arg)
 {
+	unsigned int records_local;
 
 	if (verbose > 1)
 		printf("Thread started\n");
@@ -443,7 +447,11 @@ thread_run(void *arg)
 
 	while (threads_go == 0);
 
-	records_read += search_mem();
+	records_local = search_mem();
+
+	pthread_mutex_lock(&records_count_lock);
+	records_read += records_local;
+	pthread_mutex_unlock(&records_count_lock);
 
 	if (verbose > 1)
 		printf("Thread finished, %f seconds\n",
@@ -473,6 +481,8 @@ start_threads(void)
 
 	if (verbose)
 		printf("Threads starting\n");
+
+	pthread_mutex_init(&records_count_lock, NULL);
 
 	for (i = 0; i < threads; i++) {
 		err = pthread_create(&thread_array[i], NULL, thread_run, NULL);
