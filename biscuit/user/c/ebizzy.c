@@ -58,12 +58,12 @@
 
 static unsigned int always_mmap;
 static unsigned int never_mmap;
-static unsigned int chunks;
+static uint64_t chunks;
 static unsigned int use_permissions;
 static unsigned int use_holes;
 static unsigned int random_size;
-static unsigned int chunk_size;
-static unsigned int seconds;
+static uint64_t chunk_size;
+static uint64_t seconds;
 static unsigned int threads;
 static unsigned int verbose;
 static unsigned int linear;
@@ -82,7 +82,7 @@ static char **hole_mem;
 static unsigned int page_size;
 static time_t start_time;
 static volatile int threads_go;
-static unsigned int records_read;
+static uint64_t records_read;
 
 /* Global lock to serialize records aggregation */
 pthread_mutex_t records_count_lock;
@@ -149,7 +149,7 @@ read_options(int argc, char *argv[])
 			never_mmap = 1;
 			break;
 		case 'n':
-			chunks = atoi(optarg);
+			chunks = atoul(optarg);
 			if (chunks == 0)
 				usage();
 			break;
@@ -163,12 +163,12 @@ read_options(int argc, char *argv[])
 			random_size = 1;
 			break;
 		case 's':
-			chunk_size = atoi(optarg);
+			chunk_size = atoul(optarg);
 			if (chunk_size == 0)
 				usage();
 			break;
 		case 'S':
-			seconds = atoi(optarg);
+			seconds = atoul(optarg);
 			if (seconds == 0)
 				usage();
 			break;
@@ -199,13 +199,13 @@ read_options(int argc, char *argv[])
 	if (verbose) {
 		printf("always_mmap %u\n", always_mmap);
 		printf("never_mmap %u\n", never_mmap);
-		printf("chunks %u\n", chunks);
+		printf("chunks %lu\n", chunks);
 		printf("prevent coalescing using permissions %u\n",
 		       use_permissions);
 		printf("prevent coalescing using holes %u\n", use_holes);
 		printf("random_size %u\n", random_size);
-		printf("chunk_size %u\n", chunk_size);
-		printf("seconds %d\n", seconds);
+		printf("chunk_size %lu\n", chunk_size);
+		printf("seconds %lu\n", seconds);
 		printf("threads %u\n", threads);
 		printf("verbose %u\n", verbose);
 		printf("linear %u\n", linear);
@@ -225,7 +225,7 @@ read_options(int argc, char *argv[])
 		mallopt(M_MMAP_MAX, 0);
 
 	if (chunk_size < record_size) {
-		fprintf(stderr, "Chunk size %u smaller than record size %u\n",
+		fprintf(stderr, "Chunk size %lu smaller than record size %u\n",
 			chunk_size, record_size);
 		usage();
 	}
@@ -261,7 +261,7 @@ alloc_mem(size_t size)
 	if (err) {
 		fprintf(stderr, "Couldn't allocate %zu bytes, try smaller "
 			"chunks or size options\n"
-			"Using -n %u chunks and -s %u size\n",
+			"Using -n %lu chunks and -s %lu size\n",
 			size, chunks, chunk_size);
 		exit(1);
 	}
@@ -363,10 +363,10 @@ compare(const void *p1, const void *p2)
  */
 
 static inline unsigned int
-rand_num(unsigned int max, unsigned int state)
+rand_num(unsigned int max, unsigned int *state)
 {
-	state = state * 1103515245 + 12345;
-	return ((state/65536) % max);
+	*state = *state * 1103515245 + 12345;
+	return ((*state/65536) % max);
 }
 
 /*
@@ -388,18 +388,18 @@ search_mem(void)
 	record_t *src, *copy;
 	unsigned int chunk;
 	size_t copy_size = chunk_size;
-	unsigned int i;
-	unsigned int state;
+	uint64_t i;
+	unsigned int state = 0x0c0ffee0;
 
 	for (i = 0; threads_go == 1; i++) {
-		chunk = rand_num(chunks, state);
+		chunk = rand_num(chunks, &state);
 		src = mem[chunk];
 		/*
 		 * If we're doing random sizes, we need a non-zero
 		 * multiple of record size.
 		 */
 		if (random_size)
-			copy_size = (rand_num(chunk_size / record_size, state)
+			copy_size = (rand_num(chunk_size / record_size, &state)
 				     + 1) * record_size;
 		copy = alloc_mem(copy_size);
 
@@ -412,17 +412,18 @@ search_mem(void)
 			else
 				memcpy(copy, src, copy_size);
 
-			key = rand_num(copy_size / record_size, state);
+			key = rand_num(copy_size / record_size, &state);
 
 			if (verbose > 2)
-				printf("Search key %zu, copy size %zu\n", key, copy_size);
+				printf("[%lx] Search key %zu, copy size %zu\n",
+					pthread_self(), key, copy_size);
 			if (linear)
 				found = linear_search(key, copy, copy_size);
 			else
 				found = bsearch(&key, copy, copy_size / record_size,
 					record_size, compare);
 
-				/* Below check is mainly for memory corruption or other bug */
+			/* Below check is mainly for memory corruption or other bugs */
 			if (found == NULL) {
 				fprintf(stderr, "Couldn't find key %zd\n", key);
 				exit(1);
@@ -438,10 +439,10 @@ search_mem(void)
 static void *
 thread_run(void *arg)
 {
-	unsigned int records_local;
+	uint64_t records_local;
 
 	if (verbose > 1)
-		printf("Thread started\n");
+		printf("[%lx] Thread started\n", pthread_self());
 
 	/* Wait for the start signal */
 
@@ -454,8 +455,9 @@ thread_run(void *arg)
 	pthread_mutex_unlock(&records_count_lock);
 
 	if (verbose > 1)
-		printf("Thread finished, %f seconds\n",
-		       difftime(time(NULL), start_time));
+		printf("[%lx] Thread finished, %f seconds %lu records\n",
+		       pthread_self(), difftime(time(NULL), start_time),
+		       records_local);
 
 	return NULL;
 }
@@ -519,8 +521,8 @@ start_threads(void)
 	if (verbose)
 		printf("Threads finished\n");
 
-	printf("%u records/s\n",
-	       (unsigned int) (((double) records_read)/elapsed));
+	printf("%lu records/s\n",
+	       (uint64_t) (((double) records_read)/elapsed));
 
 	usr_time = difftimeval(&end_ru.ru_utime, &start_ru.ru_utime);
 	sys_time = difftimeval(&end_ru.ru_stime, &start_ru.ru_stime);
