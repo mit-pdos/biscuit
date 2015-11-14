@@ -586,17 +586,27 @@ pthread_join(pthread_t t, void **retval)
 }
 
 int
-pthread_mutex_lock(pthread_mutex_t *m)
+pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)
 {
-	errx(-1, "pthread_mutex_lock: no imp");
+	if (attr)
+		errx(-1, "mutex attributes not supported");
+	*mutex = 0;
 	return 0;
 }
 
 int
-pthread_mutex_unlock(pthread_mutex_t *m)
+pthread_mutex_lock(pthread_mutex_t *mutex)
 {
-	errx(-1, "pthread_mutex_unlock: no imp");
+	while (!__sync_bool_compare_and_swap(mutex, 0, 1))
+		;
 	return 0;
+}
+
+int
+pthread_mutex_unlock(pthread_mutex_t *mutex)
+{
+	int b = __sync_bool_compare_and_swap(mutex, 1, 0);
+	return !b;
 }
 
 int

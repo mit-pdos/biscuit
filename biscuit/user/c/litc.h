@@ -187,8 +187,10 @@ typedef long pthread_t;
 typedef struct {
 } pthread_attr_t;
 
+typedef int pthread_mutex_t;
+
 typedef struct {
-} pthread_mutex_t;
+} pthread_mutexattr_t;
 
 typedef struct {
 } pthread_once_t;
@@ -203,6 +205,7 @@ typedef struct {
 
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
+int pthread_mutex_init(pthread_mutex_t *, const pthread_mutexattr_t *);
 int pthread_mutex_lock(pthread_mutex_t *);
 int pthread_mutex_unlock(pthread_mutex_t *);
 int pthread_once(pthread_once_t *, void (*)(void));
