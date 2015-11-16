@@ -110,7 +110,7 @@ $(FSCPROGS): fsdir/bin/% : user/c/%
 $(CPROGS): CFLAGS += -I user/c/ -fPIC
 $(CPROGS): % : %.c user/c/litc.o
 	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld -Wl,--build-id=none \
-	    -o $@ $< user/c/litc.o
+	    -o $@ user/c/litc.o $<
 
 $(FSCXXPROGS): fsdir/bin/% : user/cxx/%
 	objcopy -S $^ $@
@@ -166,7 +166,7 @@ chentry: chentry.c
 clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
-	    user/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
+	    user/c/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
 	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS)
 	rm -rf user/cxx/sysroot
 
