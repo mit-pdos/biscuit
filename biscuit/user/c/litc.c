@@ -1285,7 +1285,7 @@ malloc(size_t sz)
 	// Minimum allocation size = 8 bytes.
 	sz = (sz + 7) & ~7;
 	if (!curh || bump + sz > curh->end) {
-		const int pgsize = 1 << 12;
+		const size_t pgsize = 1 << 12;
 		// Also account for the header that we embed within the allocated
 		// space.
 		size_t mmapsz = (sz + sizeof(struct header_t) + pgsize - 1) &
