@@ -1490,7 +1490,9 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
 		dst, p_dst := pg_new()
 		p_src := *pte & PTE_ADDR
 		src := dmap(p_src)
-		*dst = *src
+		if p_src != p_zeropg {
+			*dst = *src
+		}
 
 		seg, _, ok := proc.vmregion.contain(faultaddr)
 		if !ok {
