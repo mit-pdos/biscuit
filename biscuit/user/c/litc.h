@@ -239,6 +239,8 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 /*
  * libc
  */
+extern __thread int errno;
+
 typedef struct {
 	int fd;
 } FILE;

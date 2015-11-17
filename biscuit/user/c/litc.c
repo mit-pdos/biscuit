@@ -38,6 +38,8 @@
 #define SYS_THREXIT      31338
 #define SYS_FAKE2        31339
 
+__thread int errno;
+
 static FILE  _stdin = {0}, _stdout = {1}, _stderr = {2};
 FILE  *stdin = &_stdin, *stdout = &_stdout, *stderr = &_stderr;
 
@@ -80,46 +82,51 @@ syscall(long a1, long a2, long a3, long a4,
 	return ret;
 }
 
-long
-syscall_old(long a1, long a2, long a3, long a4,
-    long a5, long trap)
-{
-	long ret;
-	register long r8 asm("r8") = a5;
-
-	asm volatile(
-		"int	$64\n"
-		: "=a"(ret)
-		: "0"(trap), "D"(a1), "S"(a2), "d"(a3), "c"(a4), "r"(r8)
-		: "cc", "memory");
-
-	return ret;
-}
-
 #define SA(x)     ((long)x)
+#define ERRNO_NZ(x) do {				\
+				if (x != 0) {		\
+					errno = x;	\
+					x = -1;		\
+				}			\
+			} while (0)
+
+#define ERRNO_NEG(x)	do {				\
+				if (x < 0) {		\
+					errno = x;	\
+					x = -1;		\
+				}			\
+			} while (0)
 
 int
 bind(int sockfd, const struct sockaddr *s, socklen_t sl)
 {
-	return syscall(SA(sockfd), SA(s), SA(sl), 0, 0, SYS_BIND);
+	int ret = syscall(SA(sockfd), SA(s), SA(sl), 0, 0, SYS_BIND);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 close(int fd)
 {
-	return syscall(SA(fd), 0, 0, 0, 0, SYS_CLOSE);
+	int ret = syscall(SA(fd), 0, 0, 0, 0, SYS_CLOSE);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 chdir(char *path)
 {
-	return syscall(SA(path), 0, 0, 0, 0, SYS_CHDIR);
+	int ret = syscall(SA(path), 0, 0, 0, 0, SYS_CHDIR);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 dup2(int old, int new)
 {
-	return syscall(SA(old), SA(new), 0, 0, 0, SYS_DUP2);
+	int ret = syscall(SA(old), SA(new), 0, 0, 0, SYS_DUP2);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 void
@@ -133,7 +140,9 @@ exit(int status)
 int
 execv(const char *path, char * const argv[])
 {
-	return syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
+	int ret = syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
+	errno = ret;
+	return -1;
 }
 
 static const char *
@@ -184,13 +193,17 @@ int
 fork(void)
 {
 	long flags = FORK_PROCESS;
-	return syscall(0, flags, 0, 0, 0, SYS_FORK);
+	int ret = syscall(0, flags, 0, 0, 0, SYS_FORK);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 fstat(int fd, struct stat *buf)
 {
-	return syscall(SA(fd), SA(buf), 0, 0, 0, SYS_FSTAT);
+	int ret = syscall(SA(fd), SA(buf), 0, 0, 0, SYS_FSTAT);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
@@ -204,13 +217,17 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 {
 	if (tz)
 		errx(-1, "timezone not supported");
-	return syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
+	int ret = syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 getrusage(int who, struct rusage *r)
 {
-	return syscall(SA(who), SA(r), 0, 0, 0, SYS_GETRUSAGE);
+	int ret = syscall(SA(who), SA(r), 0, 0, 0, SYS_GETRUSAGE);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
@@ -220,25 +237,33 @@ kill(int pid, int sig)
 		printf("%s: kill: only SIGKILL is supported\n", __progname);
 		return -1;
 	}
-	return syscall(SA(pid), SA(sig), 0, 0, 0, SYS_KILL);
+	int ret = syscall(SA(pid), SA(sig), 0, 0, 0, SYS_KILL);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 link(const char *old, const char *new)
 {
-	return syscall(SA(old), SA(new), 0, 0, 0, SYS_LINK);
+	int ret = syscall(SA(old), SA(new), 0, 0, 0, SYS_LINK);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 off_t
 lseek(int fd, off_t off, int whence)
 {
-	return syscall(SA(fd), SA(off), SA(whence), 0, 0, SYS_LSEEK);
+	int ret = syscall(SA(fd), SA(off), SA(whence), 0, 0, SYS_LSEEK);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 mkdir(const char *p, long mode)
 {
-	return syscall(SA(p), mode, 0, 0, 0, SYS_MKDIR);
+	int ret = syscall(SA(p), mode, 0, 0, 0, SYS_MKDIR);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
@@ -246,7 +271,9 @@ mknod(const char *p, mode_t m, dev_t d)
 {
 	if (MAJOR(d) == 0)
 		errx(-1, "bad major: 0");
-	return syscall(SA(p), SA(m), SA(d), 0, 0, SYS_MKNOD);
+	int ret = syscall(SA(p), SA(m), SA(d), 0, 0, SYS_MKNOD);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 void *
@@ -261,13 +288,17 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, long offset)
 int
 munmap(void *addr, size_t len)
 {
-	return syscall(SA(addr), SA(len), 0, 0, 0, SYS_MUNMAP);
+	int ret = syscall(SA(addr), SA(len), 0, 0, 0, SYS_MUNMAP);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 nanosleep(const struct timespec *timeout, struct timespec *remainder)
 {
-	return syscall(SA(timeout), SA(remainder), 0, 0, 0, SYS_NANOSLEEP);
+	int ret = syscall(SA(timeout), SA(remainder), 0, 0, 0, SYS_NANOSLEEP);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
@@ -280,43 +311,57 @@ open(const char *path, int flags, ...)
 		mode = va_arg(l, mode_t);
 		va_end(l);
 	}
-	return syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
+	int ret = syscall(SA(path), flags, mode, 0, 0, SYS_OPEN);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 pause(void)
 {
-	return syscall(0, 0, 0, 0, 0, SYS_PAUSE);
+	int ret = syscall(0, 0, 0, 0, 0, SYS_PAUSE);
+	errno = ret;
+	return -1;
 }
 
 int
 pipe(int pfds[2])
 {
-	return pipe2(pfds, 0);
+	int ret = pipe2(pfds, 0);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 pipe2(int pfds[2], int flags)
 {
-	return syscall(SA(pfds), SA(flags), 0, 0, 0, SYS_PIPE2);
+	int ret = syscall(SA(pfds), SA(flags), 0, 0, 0, SYS_PIPE2);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 long
 read(int fd, void *buf, size_t c)
 {
-	return syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
+	int ret = syscall(SA(fd), SA(buf), SA(c), 0, 0, SYS_READ);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 reboot(void)
 {
-	return syscall(0, 0, 0, 0, 0, SYS_REBOOT);
+	int ret = syscall(0, 0, 0, 0, 0, SYS_REBOOT);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 ssize_t
 recv(int fd, void *buf, size_t len, int flags)
 {
-	return recvfrom(fd, buf, len, flags, NULL, NULL);
+	int ret = recvfrom(fd, buf, len, flags, NULL, NULL);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 ssize_t
@@ -326,14 +371,18 @@ recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *sa,
 	if (len >= (1ULL << 32))
 		errx(-1, "len too big");
 	ulong flaglen = len << 32 | flags;
-	return (ssize_t)syscall(SA(fd), SA(buf), SA(flaglen), SA(sa),
+	int ret = syscall(SA(fd), SA(buf), SA(flaglen), SA(sa),
 	    SA(salen), SYS_RECVFROM);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 rename(const char *old, const char *new)
 {
-	return syscall(SA(old), SA(new), 0, 0, 0, SYS_RENAME);
+	int ret = syscall(SA(old), SA(new), 0, 0, 0, SYS_RENAME);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 ssize_t
@@ -343,38 +392,50 @@ sendto(int fd, const void *buf, size_t len, int flags,
 	if (len >= (1ULL << 32))
 		errx(-1, "len too big");
 	ulong flaglen = len << 32 | flags;
-	return syscall(SA(fd), SA(buf), SA(flaglen), SA(sa), SA(slen),
+	int ret = syscall(SA(fd), SA(buf), SA(flaglen), SA(sa), SA(slen),
 	    SYS_SENDTO);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 socket(int dom, int type, int proto)
 {
-	return syscall(SA(dom), SA(type), SA(proto), 0, 0, SYS_SOCKET);
+	int ret = syscall(SA(dom), SA(type), SA(proto), 0, 0, SYS_SOCKET);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
 stat(const char *path, struct stat *st)
 {
-	return syscall(SA(path), SA(st), 0, 0, 0, SYS_STAT);
+	int ret = syscall(SA(path), SA(st), 0, 0, 0, SYS_STAT);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 sync(void)
 {
-	return syscall(0, 0, 0, 0, 0, SYS_SYNC);
+	int ret = syscall(0, 0, 0, 0, 0, SYS_SYNC);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 unlink(const char *path)
 {
-	return syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
+	int ret = syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
 wait(int *status)
 {
-	return syscall(WAIT_ANY, SA(status), 0, 0, 0, SYS_WAIT4);
+	int ret = syscall(WAIT_ANY, SA(status), 0, 0, 0, SYS_WAIT4);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 int
@@ -388,13 +449,16 @@ wait4(int pid, int *status, int options, struct rusage *r)
 {
 	int ret = syscall(pid, SA(status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
+	ERRNO_NEG(ret);
 	return ret;
 }
 
 long
 write(int fd, const void *buf, size_t c)
 {
-	return syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
+	int ret = syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
+	ERRNO_NEG(ret);
+	return ret;
 }
 
 /*

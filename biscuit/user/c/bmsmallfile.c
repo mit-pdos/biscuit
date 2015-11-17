@@ -1,12 +1,11 @@
-//#include <stdio.h>
-//#include <sys/types.h>
-//#include <sys/stat.h>
-//#include <sys/time.h>
-//#include <fcntl.h>
-//#include <stdlib.h>
-//#include <unistd.h>
-//#include <errno.h>
-#include <litc.h>
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
 
 static char buf[40960];
 static char name[100];
@@ -20,8 +19,6 @@ static char dir[100];
 time_t ds;
 time_t du;
 struct timeval before, end;
-
-int errno;
 
 void rgettimeofday(struct timeval *h, void *p)
 {
