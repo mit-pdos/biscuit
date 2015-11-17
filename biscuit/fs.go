@@ -781,10 +781,10 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		// XXX XXX XXX removing locking from creat; not necessary
 		psend := func(r *ireq_t) {
 			if priv == itx.privforp(dirs) {
-				itx.sendp(dirs, req)
+				itx.sendp(dirs, r)
 			} else {
-				idm.req <- req
-				<- req.ack
+				idm.req <- r
+				<- r.ack
 			}
 		}
 
