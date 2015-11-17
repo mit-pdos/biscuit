@@ -1196,7 +1196,7 @@ snprintf(char *dst, size_t sz, const char *fmt, ...)
 }
 
 char *
-strchr(const char *big, const char l)
+strchr(const char *big, int l)
 {
 	for (; *big; big++)
 		if (*big == l)

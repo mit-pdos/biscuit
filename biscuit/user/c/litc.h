@@ -275,7 +275,7 @@ char *readline(const char *);
 uint sleep(uint);
 int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
-char *strchr(const char *, const char);
+char *strchr(const char *, int);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
