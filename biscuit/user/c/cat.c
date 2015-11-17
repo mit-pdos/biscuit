@@ -10,13 +10,13 @@ int main(int argc, char **argv)
 		int fd;
 		fd = open(argv[i], O_RDONLY, 0);
 		if (fd < 0)
-			err(fd, "open");
+			err(-1, "open");
 		char buf[512];
 		long ret;
 		while ((ret = read(fd, buf, sizeof(buf))) > 0)
 			write(1, buf, ret);
 		if (ret < 0)
-			err(ret, "read");
+			err(-1, "read");
 		close(fd);
 	}
 	return 0;

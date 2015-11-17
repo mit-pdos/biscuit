@@ -1419,7 +1419,7 @@ forktest(void)
     }
   }
   
-  if(wait(NULL) != -1 || errno != -ECHILD){
+  if(wait(NULL) != -1 || errno != ECHILD){
     printf("wait got too many\n");
     exit(0);
   }

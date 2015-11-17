@@ -120,10 +120,9 @@ void doredirs(char *infn, char *outfn, int append)
 	if (infn) {
 		int fd = open(infn, O_RDONLY);
 		if (fd < 0)
-			err(fd, "open in redirect");
-		int ret;
-		if ((ret = dup2(fd, 0)) < 0)
-			err(ret, "dup2");
+			err(-1, "open in redirect");
+		if (dup2(fd, 0) < 0)
+			err(-1, "dup2");
 		close(fd);
 	}
 	if (outfn) {
@@ -134,10 +133,9 @@ void doredirs(char *infn, char *outfn, int append)
 			flags |= O_TRUNC;
 		int fd = open(outfn, flags);
 		if (fd < 0)
-			err(fd, "open out redirect");
-		int ret;
-		if ((ret = dup2(fd, 1)) < 0)
-			err(ret, "dup2");
+			err(-1, "open out redirect");
+		if (dup2(fd, 1) < 0)
+			err(-1, "dup2");
 		close(fd);
 	}
 }
@@ -164,16 +162,14 @@ int main(int argc, char **argv)
 			continue;
 		int pid = fork();
 		if (pid < 0)
-			err(pid, "fork");
+			err(-1, "fork");
 		if (pid) {
 			wait(NULL);
 			continue;
 		}
 		doredirs(infile, outfile, append);
-		int ret = execvp(args[0], args);
-		if (ret) {
-			err(ret, "couldn't exec \"%s\"", args[0]);
-		}
+		execvp(args[0], args);
+		err(-1, "couldn't exec \"%s\"", args[0]);
 	}
 
 	return 0;

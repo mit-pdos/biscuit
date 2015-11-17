@@ -5,13 +5,12 @@ int main(int argc, char **argv)
 	int pid = fork();
 	if (pid == 0)
 		while (1);
-	int ret;
 	printf("killing %d...", pid);
-	if ((ret = kill(pid, SIGKILL)) < 0)
-		errx(ret, "kill");
+	if (kill(pid, SIGKILL) < 0)
+		err(-1, "kill");
 	printf("killed. waiting...");
-	if ((ret = wait(NULL)) < 0)
-		errx(ret, "wait failed\n");
+	if (wait(NULL) < 0)
+		err(-1, "wait failed\n");
 	printf("done\n");
 	printf("success\n");
 	return 0;

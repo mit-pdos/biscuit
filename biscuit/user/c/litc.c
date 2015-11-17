@@ -85,14 +85,14 @@ syscall(long a1, long a2, long a3, long a4,
 #define SA(x)     ((long)x)
 #define ERRNO_NZ(x) do {				\
 				if (x != 0) {		\
-					errno = x;	\
+					errno = -x;	\
 					x = -1;		\
 				}			\
 			} while (0)
 
 #define ERRNO_NEG(x)	do {				\
 				if (x < 0) {		\
-					errno = x;	\
+					errno = -x;	\
 					x = -1;		\
 				}			\
 			} while (0)
@@ -141,7 +141,7 @@ int
 execv(const char *path, char * const argv[])
 {
 	int ret = syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
-	errno = ret;
+	errno = -ret;
 	return -1;
 }
 
@@ -870,10 +870,11 @@ err(int eval, const char *fmt, ...)
 	vprintf(fmt, ap);
 	va_end(ap);
 	// errno is dumb
-	int neval = eval < 0 ? -eval : eval;
-	if (neval < nents && es[neval] != NULL) {
-		printf(": %s", es[neval]);
-	}
+	int neval = errno;
+	const char *p = "Unknown error";
+	if (neval < nents && es[neval] != NULL)
+		p = es[neval];
+	printf(": %s", p);
 	pmsg("\n", 1);
 	exit(eval);
 }

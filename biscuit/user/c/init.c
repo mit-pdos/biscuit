@@ -8,15 +8,15 @@ int main(int argc, char **argv)
 	mkdir("/dev", 0);
 	int ret;
 	ret = mknod("/dev/console", 0, MKDEV(1, 0));
-	if (ret != 0 && ret != -EEXIST)
-		err(ret, "mknod");
+	if (ret != 0 && errno != EEXIST)
+		err(-1, "mknod");
 
 	for (;;) {
 		int pid = fork();
 		if (!pid) {
 			char * const args[] = {"/bin/lsh", NULL};
-			ret = execv(args[0], args);
-			err(ret, "execv");
+			execv(args[0], args);
+			err(-1, "execv");
 		}
 		wait(NULL);
 		printf("lsh terminated?\n");

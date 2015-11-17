@@ -30,12 +30,11 @@ void dprint(int fd, char *par, int left)
 
 	printf("%s/:\n", par);
 
-	long ret;
 	char *pend = par + strlen(par);
 	snprintf(pend, left, "/");
 	left--;
 	pend = par + strlen(par);
-	while ((ret = read(fd, buf, sizeof(buf))) > 0) {
+	while (read(fd, buf, sizeof(buf)) > 0) {
 		struct dirdata_t *dd = (struct dirdata_t *)buf;
 		int i;
 		for (i = 0; i < NDIRENTS; i++) {
@@ -45,9 +44,8 @@ void dprint(int fd, char *par, int left)
 			snprintf(pend, left, "%s", tn);
 			char *fn = par;
 			struct stat st;
-			int ret;
-			if ((ret = stat(fn, &st)))
-				err(ret, "stat");
+			if (stat(fn, &st))
+				err(-1, "stat");
 			char spec;
 			if (S_ISDIR(st.st_mode))
 				spec = 'd';
@@ -61,9 +59,9 @@ void dprint(int fd, char *par, int left)
 
 	// recursive list
 	*pend = 0;
-	if ((ret = lseek(fd, 0, SEEK_SET)) < 0)
-		err(ret, "lseek");
-	while ((ret = read(fd, buf, sizeof(buf))) > 0) {
+	if (lseek(fd, 0, SEEK_SET) < 0)
+		err(-1, "lseek");
+	while (read(fd, buf, sizeof(buf)) > 0) {
 		struct dirdata_t *dd = (struct dirdata_t *)buf;
 		int i;
 		for (i = 0; i < NDIRENTS; i++) {
@@ -76,16 +74,15 @@ void dprint(int fd, char *par, int left)
 			snprintf(pend, left, "%s", tn);
 			char *fn = par;
 			struct stat st;
-			int ret;
-			if ((ret = stat(fn, &st)))
-				err(ret, "stat");
+			if (stat(fn, &st))
+				err(-1, "stat");
 			if (S_ISDIR(st.st_mode)) {
 				int tfd = open(fn, O_RDONLY | O_DIRECTORY, 0);
 				if (tfd < 0)
-					err(ret, "rec open");
+					err(-1, "rec open");
 				dprint(tfd, par, left - strlen(pend));
-				if ((ret = close(tfd)))
-					err(ret, "close");
+				if (close(tfd))
+					err(-1, "close");
 			}
 		}
 	}
@@ -99,7 +96,7 @@ int main(int argc, char **argv)
 
 	int fd;
 	if ((fd = open("./", O_RDONLY, 0)) < 0)
-		err(fd, "open root");
+		err(-1, "open root");
 
 	dprint(fd, pbuf, sizeof(pbuf));
 	close(fd);

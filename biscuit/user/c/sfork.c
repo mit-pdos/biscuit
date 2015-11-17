@@ -60,16 +60,15 @@ void *crrename(void *idp)
 
 	int fd = open(o, O_CREAT | O_RDONLY, 0600);
 	if (fd < 0)
-		err(fd, "open");
+		err(-1, "open");
 	close(fd);
 
 	long total = 0;
 	while (!cease) {
-		int ret;
-		if ((ret = rename(o, n)) < 0)
-			err(ret, "rename");
-		if ((ret = rename(n, o)) < 0)
-			err(ret, "rename");
+		if (rename(o, n) < 0)
+			err(-1, "rename");
+		if (rename(n, o) < 0)
+			err(-1, "rename");
 		total += 2;
 	}
 	return (void *)total;
@@ -81,9 +80,8 @@ void *lookups(void *idp)
 
 	long total = 0;
 	while (!cease) {
-		int ret;
-		if ((ret = open("NONE", O_RDONLY)) != -ENOENT)
-			err(ret, "open: unexpected error");
+		if (open("NONE", O_RDONLY) >= 0 || errno != ENOENT)
+			err(-1, "open: unexpected error");
 		total++;
 	}
 	return (void *)total;
@@ -100,9 +98,8 @@ void *mapper(void *n)
 		    -1, 0);
 		if (p == MAP_FAILED)
 			errx(-1, "mmap");
-		int ret;
-		if ((ret = munmap(p, l)) < 0)
-			err(ret, "munmap");
+		if (munmap(p, l) < 0)
+			err(-1, "munmap");
 
 		//getpid();
 		c++;
@@ -127,15 +124,15 @@ void *crmessage(void *idp)
 
 		int fd = open(o, O_CREAT | O_WRONLY | O_EXCL, 0600);
 		if (fd < 0)
-			err(fd, "open");
+			err(-1, "open");
 		int ret = write(fd, msg, sizeof(msg));
 		if (ret < 0)
-			err(ret, "write");
+			err(-1, "write");
 		else if (ret != sizeof(msg))
 			errx(-1, "short write");
 		close(fd);
-		if ((ret = unlink(o)) < 0)
-			err(ret, "unlink");
+		if (unlink(o) < 0)
+			err(-1, "unlink");
 
 		total++;
 	}
@@ -210,11 +207,11 @@ void sunspawn()
 
 	int fd;
 	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0)
-		err(fd, "socket");
+		err(-1, "socket");
 
 	int ret;
-	if ((ret = bind(fd, (struct sockaddr *)&sa, sizeof(sa))) < 0)
-		err(ret, "bind");
+	if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		err(-1, "bind");
 
 	ulong mcnt;
 	ulong bytes;
@@ -230,7 +227,7 @@ void sunspawn()
 	}
 
 	if (ret < 0)
-		err(ret, "recv");
+		err(-1, "recv");
 	close(fd);
 
 	printf("%lu total messages received (%lu bytes)\n", mcnt, bytes);
@@ -245,14 +242,14 @@ void sunkill()
 
 	int fd;
 	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0)
-		err(fd, "socket");
+		err(-1, "socket");
 
 	char msg[] = "exit";
 	int ret;
 	ret = sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&sa,
 	    sizeof(sa));
 	if (ret < 0)
-		err(ret, "sendto");
+		err(-1, "sendto");
 	else if (ret != sizeof(msg))
 		errx(-1, "short write");
 	close(fd);
@@ -273,7 +270,7 @@ void *sunsend(void *idp)
 
 	int fd;
 	if ((fd = socket(AF_UNIX, SOCK_DGRAM, 0)) < 0)
-		err(fd, "socket");
+		err(-1, "socket");
 
 	pthread_barrier_wait(&bar);
 
@@ -284,7 +281,7 @@ void *sunsend(void *idp)
 		ret = sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&sa,
 		    sizeof(sa));
 		if (ret < 0)
-			err(ret, "sendto");
+			err(-1, "sendto");
 		else if (ret != sizeof(msg))
 			errx(-1, "short write");
 
@@ -301,7 +298,7 @@ void *forkonly(void *idp)
 	while (!cease) {
 		int pid = fork();
 		if (pid < 0)
-			err(pid, "fork");
+			err(-1, "fork");
 		if (!pid) {
 			exit(0);
 		}
@@ -322,7 +319,7 @@ void *forkexec(void *idp)
 	while (!cease) {
 		int pid = fork();
 		if (pid < 0)
-			err(pid, "fork");
+			err(-1, "fork");
 		if (!pid) {
 			char * const args[] = {"/bin/true", NULL};
 			execv(args[0], args);
@@ -351,7 +348,7 @@ void *seqcreate(void *idp)
 
 		int fd = open(o, O_CREAT | O_WRONLY | O_EXCL, 0600);
 		if (fd < 0)
-			err(fd, "open");
+			err(-1, "open");
 		close(fd);
 		total++;
 	}
@@ -363,7 +360,7 @@ void *openonly(void *idp)
 	const char *f = "/tmp/dur";
 	int fd = open(f, O_CREAT | O_WRONLY, 0600);
 	if (fd < 0)
-		err(fd, "create");
+		err(-1, "create");
 	close(fd);
 	pthread_barrier_wait(&bar);
 
@@ -371,7 +368,7 @@ void *openonly(void *idp)
 	while (!cease) {
 		fd = open(f, O_RDONLY);
 		if (fd < 0)
-			err(fd, "open");
+			err(-1, "open");
 		close(fd);
 		total++;
 	}
@@ -384,8 +381,8 @@ void __attribute__((noreturn)) child(int cd)
 	snprintf(dir, sizeof(dir), "%d", cd);
 	//char *args[] = {"/bin/time", "mailbench", dir, "2", NULL};
 	char *args[] = {"/bin/mailbench", dir, "1", NULL};
-	int ret = execv(args[0], args);
-	err(ret, "execv");
+	execv(args[0], args);
+	err(-1, "execv");
 }
 
 int mbforever()
@@ -395,9 +392,8 @@ int mbforever()
 		printf("     directory: %d\n", cd);
 		char dn[32];
 		snprintf(dn, sizeof(dn), "%d", cd);
-		int ret;
-		if ((ret = mkdir(dn, 0700)) < 0)
-			err(ret, "mkdir");
+		if (mkdir(dn, 0700) < 0)
+			err(-1, "mkdir");
 		if (fork() == 0)
 			child(cd);
 		wait(NULL);

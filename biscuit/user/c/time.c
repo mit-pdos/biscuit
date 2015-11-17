@@ -5,20 +5,19 @@ ulong now()
 	struct timeval t;
 	int ret;
 	if ((ret = gettimeofday(&t, NULL)) < 0)
-		err(ret, "gettimeofday");
+		err(-1, "gettimeofday");
 
 	// ms
 	return t.tv_sec * 1000 + t.tv_usec / 1000;
 }
 
-void usage(char *me)
+void usage()
 {
-	errx(-1, "usage: %s [-r] <command> <arg1> ...", me);
+	errx(-1, "usage: %s [-r] <command> <arg1> ...", __progname);
 }
 
 int main(int argc, char **argv)
 {
-	char *me = argv[0];
 	int profile = 0;
 	int ch;
 	while ((ch = getopt(argc, argv, "r")) != -1) {
@@ -27,7 +26,7 @@ int main(int argc, char **argv)
 			profile = 1;
 			break;
 		default:
-			usage(me);
+			usage();
 			break;
 		}
 	}
@@ -35,7 +34,7 @@ int main(int argc, char **argv)
 	argv += optind;
 
 	if (argc < 1)
-		usage(me);
+		usage();
 
 	ulong start = now();
 
@@ -44,17 +43,15 @@ int main(int argc, char **argv)
 		errx(-1, "prof start");
 
 	if (fork() == 0) {
-		int ret;
-		//ret = execvp(argv[1], &argv[1]);
-		ret = execvp(argv[0], &argv[0]);
-		err(ret, "execv");
+		execvp(argv[0], &argv[0]);
+		err(-1, "execv");
 	}
 
 	struct rusage r;
 	int status;
 	int ret = wait4(WAIT_ANY, &status, 0, &r);
 	if (ret < 0)
-		err(ret, "wait4");
+		err(-1, "wait4");
 	ulong elapsed = now() - start;
 
 	// stop profiling
