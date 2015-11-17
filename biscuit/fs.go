@@ -778,6 +778,16 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		priv = req.resp.cnext
 		idm = idaemon_ensure(priv)
 
+		// XXX XXX XXX removing locking from creat; not necessary
+		psend := func(r *ireq_t) {
+			if priv == itx.privforp(dirs) {
+				itx.sendp(dirs, req)
+			} else {
+				idm.req <- req
+				<- req.ack
+			}
+		}
+
 		if exists {
 			if oexcl || isdev {
 				itx.unlockall()
@@ -788,8 +798,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 			st.init()
 			req := &ireq_t{}
 			req.mkfstat(st)
-			idm.req <- req
-			<- req.ack
+			psend(req)
 			if req.resp.err != 0 {
 				panic("must succeed")
 			}
@@ -800,8 +809,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		}
 
 		req.mkref_direct()
-		idm.req <- req
-		<- req.ack
+		psend(req)
 		if req.resp.err != 0 {
 			panic("mem ref inc must succeed")
 		}
