@@ -1197,8 +1197,6 @@ printf(const char *fmt, ...)
 	return ret;
 }
 
-static char readlineb[256];
-
 ulong
 rdtsc(void)
 {
@@ -1210,6 +1208,8 @@ rdtsc(void)
 	    :);
 	return hi << 32 | low;
 }
+
+static char readlineb[256];
 
 char *
 readline(const char *prompt)
@@ -1228,7 +1228,7 @@ readline(const char *prompt)
 				i = 0;
 			continue;
 		}
-		if (i < sizeof(readlineb) - 2)
+		if (i < sizeof(readlineb) - 1)
 			readlineb[i++] = c;
 	}
 	if (ret < 0)
