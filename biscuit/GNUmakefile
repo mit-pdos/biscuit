@@ -107,7 +107,7 @@ main.gobin: chentry $(GOBIN) bins.go $(KSRC)
 $(FSCPROGS): fsdir/bin/% : user/c/%
 	objcopy -S $^ $@
 
-$(CPROGS): CFLAGS += -I user/c/ -fPIC
+$(CPROGS): CFLAGS += -I user/c/include -fPIC
 $(CPROGS): % : %.c user/c/litc.o
 	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld -Wl,--build-id=none \
 	    -o $@ user/c/litc.o $<
@@ -124,8 +124,8 @@ $(CXXLOBJS): user/cxx/sysroot
 
 CXXBEGIN := user/cxx/cxxrtbegin.o
 CXXEND := user/cxx/cxxrtend.o
-$(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/ -isysroot user/cxx/sysroot \
-		-fPIC -DXV6_USER -std=c++11
+$(CXXPROGS): CXXFLAGS += -I user/cxx/ -I user/c/include/ \
+	-isysroot user/cxx/sysroot -fPIC -DXV6_USER -std=c++11
 $(CXXPROGS): % : %.cc  $(CXXLOBJS) $(CXXBEGIN) $(CXXEND) user/cxx/sysroot \
 	    user/c/litc.o
 	$(CXX) $(CXXFLAGS) -Wl,-T user/cxx/linker.ld -Wl,--build-id=none \
