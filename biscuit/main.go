@@ -58,6 +58,7 @@ func p8259_eoi() {
 
 const(
 	DIVZERO		= 0
+	UD		= 6
 	GPFAULT		= 13
 	PGFAULT		= 14
 	TIMER		= 32
@@ -891,7 +892,7 @@ func (p *proc_t) page_remove(va int) bool {
 	return remmed
 }
 
-func (p *proc_t) pgfault(tid tid_t, fa, rip int) {
+func (p *proc_t) pgfault(tid tid_t, fa int) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
 
@@ -904,12 +905,10 @@ func (p *proc_t) pgfault(tid tid_t, fa, rip int) {
 				panic("kern addr marked cow")
 			}
 			sys_pgfault(p, pte, fa)
-			return
+			return true
 		}
 	}
-	fmt.Printf("*** fault *** %v: addr %x, rip %x. killing...\n",
-	    p.name, fa, rip)
-	sys_exit(p, tid, SIGNALED)
+	return false
 }
 
 func (p *proc_t) tlbshoot(startva, pgcount int) {
@@ -959,11 +958,16 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			runtime.Gosched()
 		case PGFAULT:
 			faultaddr := aux
-			p.pgfault(tid, faultaddr, tf[TF_RIP])
-		case DIVZERO, GPFAULT:
+			if !p.pgfault(tid, faultaddr) {
+				fmt.Printf("*** fault *** %v: addr %x, " +
+				    "rip %x. killing...\n", p.name, faultaddr,
+				    tf[TF_RIP])
+				sys_exit(p, tid, SIGNALED | mkexitsig(11))
+			}
+		case DIVZERO, GPFAULT, UD:
 			fmt.Printf("TRAP: %v, RIP: %x\n", intno,
 			    tf[TF_RIP])
-			sys_exit(p, tid, SIGNALED)
+			sys_exit(p, tid, SIGNALED | mkexitsig(4))
 		case TLBSHOOT, INT_KBD, INT_COM1, INT_DISK:
 			// XXX: shouldn't interrupt user program execution...
 		default:

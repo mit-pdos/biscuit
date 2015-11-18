@@ -105,9 +105,13 @@ const(
     CONTINUED    = 1 << 9
     EXITED       = 1 << 10
     SIGNALED     = 1 << 11
+    SIGSHIFT     = 27
   SYS_WAIT4    = 61
     WAIT_ANY     = -1
     WAIT_MYPGRP  = 0
+    WCONTINUED   = 1
+    WNOHANG      = 2
+    WUNTRACED    = 4
   SYS_KILL     = 62
   SYS_CHDIR    = 80
   SYS_RENAME   = 82
@@ -238,7 +242,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		sys_threxit(p, tid, a1)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
-		sys_exit(p, tid, SIGNALED)
+		sys_exit(p, tid, SIGNALED | mkexitsig(31))
 	}
 	return ret
 }
@@ -1722,6 +1726,13 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	return len(args), argstart, true
 }
 
+func mkexitsig(sig int) int {
+	if sig < 0 || sig > 32 {
+		panic("bad sig")
+	}
+	return sig << SIGSHIFT
+}
+
 func sys_exit(proc *proc_t, tid tid_t, status int) {
 	// set doomed to all other threads die
 	proc.doomall()
@@ -1734,7 +1745,7 @@ func sys_threxit(proc *proc_t, tid tid_t, status int) {
 
 func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
     threadwait int) int {
-	if wpid == WAIT_MYPGRP {
+	if wpid == WAIT_MYPGRP || options != 0 {
 		panic("no imp")
 	}
 

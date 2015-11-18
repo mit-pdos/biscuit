@@ -402,6 +402,36 @@ preempt(void)
   printf("preempt ok\n");
 }
 
+void _childfault(void)
+{
+  char *p = NULL;
+  *p = 'a';
+  errx(-1, "no fault");
+}
+
+void stchk(int status, int expsig)
+{
+  if (expsig) {
+    if (WIFCONTINUED(status))
+      errx(-1, "unexpected continued");
+    if (WIFEXITED(status))
+      errx(-1, "unexpected exited");
+    if (!WIFSIGNALED(status))
+      errx(-1, "expected signaled");
+    if (WTERMSIG(status) != expsig)
+      errx(-1, "signal mismatch");
+  } else {
+    if (WIFCONTINUED(status))
+      errx(-1, "unexpected continued");
+    if (!WIFEXITED(status))
+      errx(-1, "expected exited");
+    if (WIFSIGNALED(status))
+      errx(-1, "unexpected signaled");
+    if (WTERMSIG(status) != 0)
+      errx(-1, "signal mismatch");
+  }
+}
+
 // try to find any races between exit and wait
 void
 exitwait(void)
@@ -424,6 +454,18 @@ exitwait(void)
     }
   }
   printf("exitwait ok\n");
+
+  printf("exit status test\n");
+  if (!fork())
+    _childfault();
+  int status;
+  wait(&status);
+  stchk(status, 14);
+  if (!fork())
+    exit(0);
+  wait(&status);
+  stchk(status, 0);
+  printf("exit status test ok\n");
 }
 
 void

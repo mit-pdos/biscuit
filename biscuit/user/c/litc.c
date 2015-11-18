@@ -453,6 +453,15 @@ wait4(int pid, int *status, int options, struct rusage *r)
 	return ret;
 }
 
+int
+wait3(int *status, int options, struct rusage *r)
+{
+	int ret = syscall(WAIT_ANY, SA(status), SA(options), SA(r), 0,
+	    SYS_WAIT4);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
 long
 write(int fd, const void *buf, size_t c)
 {

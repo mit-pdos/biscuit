@@ -39,9 +39,6 @@ extern "C" {
 #define		PROT_WRITE	0x2
 #define		PROT_EXEC	0x4
 
-#define		WAIT_ANY	(-1)
-#define		WAIT_MYPGRP	0
-
 #define		FORK_PROCESS	0x1
 #define		FORK_THREAD	0x2
 
@@ -171,12 +168,20 @@ int sync(void);
 int unlink(const char *);
 int wait(int *);
 int waitpid(int, int *, int);
+int wait3(int *, int, struct rusage *);
 int wait4(int, int *, int, struct rusage *);
+#define		WAIT_ANY	(-1)
+#define		WAIT_MYPGRP	0
+
+#define		WCONTINUED	1
+#define		WNOHANG		2
+#define		WUNTRACED	4
+
 #define		WIFCONTINUED(x)		(x & (1 << 9))
 #define		WIFEXITED(x)		(x & (1 << 10))
 #define		WIFSIGNALED(x)		(x & (1 << 11))
 #define		WEXITSTATUS(x)		(x & 0xff)
-
+#define		WTERMSIG(x)		((int)((uint)x >> 27) & 0x1f)
 long write(int, const void*, size_t);
 
 /*
