@@ -851,6 +851,7 @@ err(int eval, const char *fmt, ...)
 	const char *es[] = {
 	    [EPERM] = "Permission denied",
 	    [ENOENT] = "No such file or directory",
+	    [EINTR] = "Interrupted system call",
 	    [EBADF] = "Bad file descriptor",
 	    [ECHILD] = "No child processes",
 	    [EFAULT] = "Bad address",
@@ -865,6 +866,7 @@ err(int eval, const char *fmt, ...)
 	    [ENOSYS] = "Function not implemented",
 	    [ENOTEMPTY] = "Directory not empty",
 	    [ECONNREFUSED] = "Connection refused",
+	    [EINPROGRESS] = "Operation now in progress",
 	};
 	int nents = sizeof(es)/sizeof(es[0]);
 	printf("%s: ", __progname);
@@ -1064,8 +1066,8 @@ putn(char *p, char *end, ulong n, int base)
 	return ret;
 }
 
-int
-vsprintf(const char *fmt, va_list ap, char *dst, char *end)
+static int
+_vprintf(const char *fmt, va_list ap, char *dst, char *end)
 {
 	const char *start = dst;
 	char c;
@@ -1185,6 +1187,12 @@ vsprintf(const char *fmt, va_list ap, char *dst, char *end)
 }
 
 int
+vsnprintf(char *dst, size_t sz, const char *fmt, va_list ap)
+{
+	return _vprintf(fmt, ap, dst, dst + sz);
+}
+
+int
 printf(const char *fmt, ...)
 {
 	va_list ap;
@@ -1257,7 +1265,7 @@ snprintf(char *dst, size_t sz, const char *fmt, ...)
 	int ret;
 
 	va_start(ap, fmt);
-	ret = vsprintf(fmt, ap, dst, dst + sz);
+	ret = vsnprintf(dst, sz, fmt, ap);
 	va_end(ap);
 
 	return ret;
@@ -1313,7 +1321,7 @@ vprintf(const char *fmt, va_list ap)
 		printf("warning: fmt too long\n");
 
 	int ret;
-	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
+	ret = vsnprintf(lbuf, sizeof(lbuf), fmt, ap);
 	pmsg(lbuf, ret);
 
 	return ret;
@@ -1328,7 +1336,7 @@ vfprintf(FILE *f, const char *fmt, va_list ap)
 		printf("warning: fmt too long\n");
 
 	int ret;
-	ret = vsprintf(fmt, ap, lbuf, lbuf + sizeof(lbuf));
+	ret = vsnprintf(lbuf, sizeof(lbuf), fmt, ap);
 	write(f->fd, lbuf, ret);
 
 	return ret;

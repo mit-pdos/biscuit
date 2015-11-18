@@ -35,6 +35,7 @@ const(
   EPERM        = 1
   ENOENT       = 2
   ESRCH	       = 3
+  EINTR	       = 4
   EBADF        = 9
   ECHILD       = 10
   EFAULT       = 14
@@ -50,6 +51,7 @@ const(
   ENOTEMPTY    = 39
   EMSGSIZE     = 90
   ECONNREFUSED = 111
+  EINPROGRESS  = 115
 )
 
 const(

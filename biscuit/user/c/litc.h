@@ -8,6 +8,7 @@ extern "C" {
 
 #define		EPERM		1
 #define		ENOENT		2
+#define		EINTR		4
 #define		EBADF		9
 #define		ECHILD		10
 #define		ENOMEM		12
@@ -23,6 +24,7 @@ extern "C" {
 #define		ENOSYS		38
 #define		ENOTEMPTY	39
 #define		ECONNREFUSED	111
+#define		EINPROGRESS	115
 
 #define		SIGKILL		9
 
@@ -290,6 +292,8 @@ int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));
 int vprintf(const char *, va_list)
     __attribute__((format(printf, 1, 0)));
+int vsnprintf(char *, size_t, const char *, va_list)
+    __attribute__((format(printf, 3, 0)));
 
 void *malloc(size_t);
 void free(void *);
