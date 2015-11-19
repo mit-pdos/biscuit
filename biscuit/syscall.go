@@ -36,6 +36,8 @@ const(
   ENOENT       = 2
   ESRCH	       = 3
   EINTR	       = 4
+  EIO	       = 5
+  E2BIG	       = 7
   EBADF        = 9
   ECHILD       = 10
   EFAULT       = 14
@@ -43,6 +45,7 @@ const(
   ENOTDIR      = 20
   EISDIR       = 21
   EINVAL       = 22
+  ENOSPC       = 28
   ESPIPE       = 29
   EPIPE        = 32
   ERANGE       = 34
@@ -50,6 +53,7 @@ const(
   ENOSYS       = 38
   ENOTEMPTY    = 39
   EMSGSIZE     = 90
+  ETIMEDOUT    = 110
   ECONNREFUSED = 111
   EINPROGRESS  = 115
 )

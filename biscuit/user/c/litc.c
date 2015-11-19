@@ -861,19 +861,24 @@ err(int eval, const char *fmt, ...)
 	    [EPERM] = "Permission denied",
 	    [ENOENT] = "No such file or directory",
 	    [EINTR] = "Interrupted system call",
+	    [EIO] = "Input/output error",
+	    [E2BIG] = "Argument list too long",
 	    [EBADF] = "Bad file descriptor",
+	    [EAGAIN] = "Resource temporarily unavailable",
 	    [ECHILD] = "No child processes",
 	    [EFAULT] = "Bad address",
 	    [EEXIST] = "File exists",
 	    [ENOTDIR] = "Not a directory",
 	    [EISDIR] = "Is a directory",
 	    [EINVAL] = "Invalid argument",
+	    [ENOSPC] = "No space left on device",
 	    [ESPIPE] = "Illegal seek",
 	    [EPIPE] = "Broken pipe",
 	    [ERANGE] = "Result too large",
 	    [ENAMETOOLONG] = "File name too long",
 	    [ENOSYS] = "Function not implemented",
 	    [ENOTEMPTY] = "Directory not empty",
+	    [ETIMEDOUT] = "Operation timed out",
 	    [ECONNREFUSED] = "Connection refused",
 	    [EINPROGRESS] = "Operation now in progress",
 	};
@@ -1364,6 +1369,12 @@ strtol(const char *n, char **endptr, int base)
 	if (endptr)
 		*endptr = (char *)n;
 	return tot*sign;
+}
+
+long long
+strtoll(const char *n, char **endptr, int base)
+{
+	return strtol(n, endptr, base);
 }
 
 ulong
