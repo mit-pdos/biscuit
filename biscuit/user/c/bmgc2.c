@@ -7,7 +7,7 @@ int main(int argc, char **argv)
 	if (argc != 2)
 		errx(-1, "usage: %s nkernelobjs", argv[0]);
 
-	ulong kn = atoul(argv[1]);
+	ulong kn = strtoul(argv[1], NULL, 0);
 	printf("adding %ld kernel objects...\n", kn);
 	fake_sys(kn);
 	printf("done. forking %d times...\n", times);

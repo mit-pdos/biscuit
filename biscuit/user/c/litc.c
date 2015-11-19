@@ -222,6 +222,15 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 	return ret;
 }
 
+int isxdigit(int c)
+{
+	if ((c >= '0' && c <= '9') ||
+	    (c >= 'a' && c <= 'f') ||
+	    (c >= 'A' && c <= 'F'))
+		return 1;
+	return 0;
+}
+
 int
 getrusage(int who, struct rusage *r)
 {
@@ -844,15 +853,6 @@ atoi(const char *n)
 	return tot;
 }
 
-ulong
-atoul(const char *n)
-{
-	ulong tot = 0;
-	while (*n)
-		tot = tot*10 + (*n++ - '0');
-	return tot;
-}
-
 void
 err(int eval, const char *fmt, ...)
 {
@@ -1280,6 +1280,21 @@ snprintf(char *dst, size_t sz, const char *fmt, ...)
 	return ret;
 }
 
+int
+sprintf(char *dst, const char *fmt, ...)
+{
+	size_t dur = (uintptr_t)-1 - (uintptr_t)dst;
+
+	va_list ap;
+	int ret;
+
+	va_start(ap, fmt);
+	ret = vsnprintf(dst, dur, fmt, ap);
+	va_end(ap);
+
+	return ret;
+}
+
 char *
 strchr(const char *big, int l)
 {
@@ -1319,6 +1334,43 @@ strstr(const char *big, const char *little)
 			big++;
 	}
 	return NULL;
+}
+
+long
+strtol(const char *n, char **endptr, int base)
+{
+	// gobble spaces, then "+" or "-", and finally "0x" or "0"
+	while (*n == ' ' || *n == '\t')
+		n++;
+	int sign = 1;
+	if (*n == '+')
+		n++;
+	else if (*n == '-') {
+		sign = -1;
+		n++;
+	}
+
+	if ((base == 0 || base == 16) && strncmp(n, "0x", 2) == 0) {
+		base = 16;
+		n += 2;
+	} else if (base == 0 && *n == '0') {
+		base = 8;
+		n++;
+	} else if (base == 0)
+		base = 10;
+	long tot = 0;
+	while (isxdigit(*n))
+		tot = tot*base + (*n++ - '0');
+	if (endptr)
+		*endptr = (char *)n;
+	return tot*sign;
+}
+
+ulong
+strtoul(const char *n, char **endptr, int base)
+{
+	long ret = strtol(n, endptr, base);
+	return (ulong)ret;
 }
 
 int

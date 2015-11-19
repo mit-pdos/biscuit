@@ -460,7 +460,7 @@ exitwait(void)
     _childfault();
   int status;
   wait(&status);
-  stchk(status, 14);
+  stchk(status, 11);
   if (!fork())
     exit(0);
   wait(&status);

@@ -261,7 +261,6 @@ struct timezone {
 
 void abort(void);
 int atoi(const char *);
-ulong atoul(const char *);
 void err(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
     __attribute__((__noreturn__));
@@ -275,6 +274,7 @@ extern char *optarg;
 extern int   optind;
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
+int isxdigit(int);
 dev_t makedev(uint, uint);
 int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);
@@ -287,11 +287,15 @@ char *readline(const char *);
 uint sleep(uint);
 int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
+int sprintf(char *, const char *,...)
+    __attribute__((format(printf, 2, 3)));
 char *strchr(const char *, int);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
 int strncmp(const char *, const char *, size_t);
+long strtol(const char *, char **, int);
+ulong strtoul(const char *, char **, int);
 char *strstr(const char *, const char *);
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));

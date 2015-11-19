@@ -151,7 +151,7 @@ read_options(int argc, char *argv[])
 			never_mmap = 1;
 			break;
 		case 'n':
-			chunks = atoul(optarg);
+			chunks = strtoul(optarg, NULL, 0);
 			if (chunks == 0)
 				usage();
 			break;
@@ -165,12 +165,12 @@ read_options(int argc, char *argv[])
 			random_size = 1;
 			break;
 		case 's':
-			chunk_size = atoul(optarg);
+			chunk_size = strtoul(optarg, NULL, 0);
 			if (chunk_size == 0)
 				usage();
 			break;
 		case 'S':
-			seconds = atoul(optarg);
+			seconds = strtoul(optarg, NULL, 0);
 			if (seconds == 0)
 				usage();
 			break;
