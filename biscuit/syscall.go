@@ -42,6 +42,7 @@ const(
   ECHILD       = 10
   EFAULT       = 14
   EEXIST       = 17
+  ENODEV       = 19
   ENOTDIR      = 20
   EISDIR       = 21
   EINVAL       = 22
@@ -52,6 +53,7 @@ const(
   ENAMETOOLONG = 36
   ENOSYS       = 38
   ENOTEMPTY    = 39
+  ENOTSOCK     = 88
   EMSGSIZE     = 90
   ETIMEDOUT    = 110
   ECONNREFUSED = 111
@@ -258,7 +260,7 @@ func reap_doomed(p *proc_t, tid tid_t) {
 	p.thread_dead(tid, 0, false)
 }
 
-func cons_read(ub *userbuf_t, priv *file_t, offset int) (int, int) {
+func cons_read(ub *userbuf_t, f *file_t, offset int) (int, int) {
 	sz := ub.len
 	kdata := kbd_get(sz)
 	ret, err := ub.write(kdata)
@@ -284,77 +286,6 @@ func cons_write(src *userbuf_t, f *file_t, off int, ap bool) (int, int) {
 		return len(big), 0
 }
 
-func sock_close(f *file_t, perms int) int {
-	if !f.sock.dgram {
-		panic("no imp")
-	}
-	f.Lock()
-	f.sock.open--
-	if f.sock.open < 0 {
-		panic("negative ref count")
-	}
-	termsund := f.sock.open == 0
-	f.Unlock()
-
-	if termsund && f.sock.bound {
-		allsunds.Lock()
-		delete(allsunds.m, f.sock.sunaddr.id)
-		f.sock.sunaddr.sund.finish <- true
-		allsunds.Unlock()
-	}
-	return 0
-}
-
-var fdreaders = map[ftype_t]func(*userbuf_t, *file_t, int) (int, int) {
-	DEV : func(ub *userbuf_t, f *file_t, offset int) (int, int) {
-		dm := map[int]func(*userbuf_t, *file_t, int) (int, int) {
-			D_CONSOLE: cons_read,
-		}
-		fn, ok := dm[f.dev.major]
-		if !ok {
-			panic("bad device major")
-		}
-		return fn(ub, f, offset)
-	},
-	INODE : fs_read,
-	PIPE : pipe_read,
-}
-
-var fdwriters = map[ftype_t]func(*userbuf_t, *file_t, int, bool) (int, int) {
-	DEV : func(src *userbuf_t, f *file_t, off int, ap bool) (int, int) {
-		dm := map[int]func(*userbuf_t, *file_t, int, bool) (int, int) {
-			D_CONSOLE: cons_write,
-		}
-		fn, ok := dm[f.dev.major]
-		if !ok {
-			panic("bad device major")
-		}
-		return fn(src, f, off, ap)
-	},
-	INODE : fs_write,
-	PIPE : pipe_write,
-}
-
-var _devs = map[int]func(*file_t, int) int {
-	D_CONSOLE: func (f *file_t, perms int) int {
-			return 0
-		   },
-}
-
-var fdclosers = map[ftype_t]func(*file_t, int) int {
-	DEV : func(f *file_t, perms int) int {
-		dm := _devs
-		fn, ok := dm[f.dev.major]
-		if !ok {
-			panic("bad device major")
-		}
-		return fn(f, perms)
-	},
-	INODE : fs_close,
-	PIPE : pipe_close,
-	SOCKET : sock_close,
-}
-
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
@@ -363,22 +294,20 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if !ok {
 		return -EBADF
 	}
-	if _, ok := fdreaders[fd.file.ftype]; !ok {
-		panic("no imp")
-	}
 	if fd.perms & FD_READ == 0 {
 		return -EPERM
 	}
 
 	userbuf := proc.mkuserbuf(bufp, sz)
 
+	// XXX offset sync only; move to fdops
 	if fd.file.ftype == INODE {
 		fd.file.Lock()
 		defer fd.file.Unlock()
 	}
 
 	n := proc.atime.now()
-	ret, err := fdreaders[fd.file.ftype](userbuf, fd.file, fd.file.offset)
+	ret, err := fd.file.fops.read(userbuf, fd.file, fd.file.offset)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -398,9 +327,6 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if fd.perms & FD_WRITE == 0 {
 		return -EPERM
 	}
-	if _, ok := fdwriters[fd.file.ftype]; !ok {
-		panic("no imp")
-	}
 
 	apnd := fd.perms & FD_APPEND != 0
 
@@ -411,8 +337,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		defer fd.file.Unlock()
 	}
 	n := proc.atime.now()
-	ret, err := fdwriters[fd.file.ftype](userbuf, fd.file, fd.file.offset,
-	    apnd)
+	ret, err := fd.file.fops.write(userbuf, fd.file, fd.file.offset, apnd)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -452,15 +377,18 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 		return err
 	}
 	n := proc.atime.now()
-	file, err := fs_open(path, flags, mode, proc.cwd, 0, 0)
+	pi := proc.cwd.fops.pathi()
+	file, err := fs_open(path, flags, mode, pi, 0, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
+	// XXX for new fs_open that does not return a file_t, create proper
+	// fops struct and close on-disk dev file.
 	// not allowed to open UNIX sockets
-	if file.ftype == DEV && file.dev.major == D_SUN {
+	if file.hack {
 		n := proc.atime.now()
-		if err := fs_close(file, 0); err != 0 {
+		if err := file.fops.close(file); err != 0 {
 			panic("must succeed")
 		}
 		proc.atime.io_time(n)
@@ -490,15 +418,13 @@ func sys_close(proc *proc_t, fdn int) int {
 	if !ok {
 		return -EBADF
 	}
-	ret := file_close(fd.file, fd.perms)
+	ret := file_close(fd.file)
 	return ret
 }
 
-func file_close(f *file_t, perms int) int {
-	if _, ok := fdclosers[f.ftype]; !ok {
-		panic("no closer for this file")
-	}
-	return fdclosers[f.ftype](f, perms)
+// XXX remove
+func file_close(f *file_t) int {
+	return f.fops.close(f)
 }
 
 // a type to hold the virtual/physical addresses of memory mapped files
@@ -568,23 +494,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 func copyfd(fd *fd_t) *fd_t {
 	nfd := &fd_t{}
 	*nfd = *fd
-	// increment reader/writer count
-	switch fd.file.ftype {
-	case PIPE:
-		var ch chan int
-		if fd.perms == FD_READ {
-			ch = fd.file.pipe.readers
-		} else {
-			ch = fd.file.pipe.writers
-		}
-		ch <- 1
-	case INODE:
-		fs_memref(fd.file, fd.perms)
-	case SOCKET:
-		fd.file.Lock()
-		fd.file.sock.open++
-		fd.file.Unlock()
-	}
+	nfd.file.fops.reopen(nil)
 	return nfd
 }
 
@@ -609,7 +519,7 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 
 	if needclose {
 		n := proc.atime.now()
-		if file_close(cfd.file, 0) != 0 {
+		if file_close(cfd.file) != 0 {
 			panic("must succeed")
 		}
 		proc.atime.io_time(n)
@@ -628,7 +538,7 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 	buf := &stat_t{}
 	buf.init()
 	n := proc.atime.now()
-	err := fs_stat(path, buf, proc.cwd)
+	err := fs_stat(path, buf, proc.cwd.fops.pathi())
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -648,7 +558,8 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	buf := &stat_t{}
 	buf.init()
 	n := proc.atime.now()
-	err := fs_fstat(fd.file, buf)
+	//err := fs_fstat(fd.file, buf)
+	err := fd.file.fops.fstat(fd.file, buf)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -666,6 +577,7 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	if !ok {
 		return -EBADF
 	}
+	// XXX lseek should be part of fdops_i interface
 	if fd.file.ftype != INODE {
 		return -ESPIPE
 	}
@@ -682,7 +594,7 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 		st := &stat_t{}
 		st.init()
 		n := proc.atime.now()
-		if err := fs_fstat(fd.file, st); err != 0 {
+		if err := fd.file.fops.fstat(fd.file, st); err != 0 {
 			panic("must succeed")
 		}
 		proc.atime.io_time(n)
@@ -700,14 +612,23 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	rfp := FD_READ
 	wfp := FD_WRITE
 
+	if flags & O_NONBLOCK != 0 {
+		panic("no imp yet")
+	}
+
 	if flags & O_CLOEXEC != 0 {
 		rfp |= FD_CLOEXEC
 		wfp |= FD_CLOEXEC
 	}
 
-	pipef := pipe_new()
-	rfd := proc.fd_insert(pipef, FD_READ)
-	wfd := proc.fd_insert(pipef, FD_WRITE)
+	p := &pipe_t{}
+	p.pipe_start()
+	rops := &pipefops_t{pipe: p, writer: false}
+	wops := &pipefops_t{pipe: p, writer: true}
+	rpipe := &file_t{fops: rops}
+	wpipe := &file_t{fops: wops}
+	rfd := proc.fd_insert(rpipe, rfp)
+	wfd := proc.fd_insert(wpipe, wfp)
 
 	ok1 := proc.userwriten(pipen, 4, rfd)
 	ok2 := proc.userwriten(pipen + 4, 4, wfd)
@@ -731,21 +652,19 @@ type pipe_t struct {
 	writers	chan int
 }
 
-func pipe_new() *file_t {
-	ret := &file_t{}
+func (p *pipe_t) pipe_start() {
 	inret := make(chan int)
 	in := make(chan []uint8)
 	out := make(chan []uint8)
 	outsz := make(chan int)
 	writers := make(chan int)
 	readers := make(chan int)
-	ret.ftype = PIPE
-	ret.pipe.inret = inret
-	ret.pipe.in = in
-	ret.pipe.outsz = outsz
-	ret.pipe.out = out
-	ret.pipe.readers = readers
-	ret.pipe.writers = writers
+	p.inret = inret
+	p.in = in
+	p.outsz = outsz
+	p.out = out
+	p.readers = readers
+	p.writers = writers
 
 	go func() {
 		pipebufsz := 512
@@ -799,20 +718,24 @@ func pipe_new() *file_t {
 			}
 		}
 	}()
-
-	return ret
 }
 
-func pipe_read(ub *userbuf_t, f *file_t, offset int) (int, int) {
+type pipefops_t struct {
+	pipe	*pipe_t
+	writer	bool
+}
+
+func (pf *pipefops_t) read(ub *userbuf_t, f *file_t, offset int) (int, int) {
 	sz := ub.len
-	pf := f.pipe
-	pf.outsz <- sz
-	buf := <- pf.out
+	p := pf.pipe
+	p.outsz <- sz
+	buf := <- p.out
 	ret, err := ub.write(buf)
 	return ret, err
 }
 
-func pipe_write(src *userbuf_t, f *file_t, offset int, appnd bool) (int, int) {
+func (pf *pipefops_t) write(src *userbuf_t, f *file_t, offset int,
+    appnd bool) (int, int) {
 	buf := make([]uint8, src.len)
 	read, err := src.read(buf)
 	if err != 0 {
@@ -821,11 +744,11 @@ func pipe_write(src *userbuf_t, f *file_t, offset int, appnd bool) (int, int) {
 	if read != src.len {
 		panic("short user read")
 	}
-	pf := f.pipe
+	p := pf.pipe
 	ret := 0
 	for len(buf) > 0 {
-		pf.in <- buf
-		c := <- pf.inret
+		p.in <- buf
+		c := <- p.inret
 		if c < 0 {
 			return 0, c
 		}
@@ -835,16 +758,50 @@ func pipe_write(src *userbuf_t, f *file_t, offset int, appnd bool) (int, int) {
 	return ret, 0
 }
 
-func pipe_close(f *file_t, perms int) int {
-	pf := f.pipe
+func (pf *pipefops_t) close(f *file_t) int {
+	p := pf.pipe
 	var ch chan int
-	if perms == FD_READ {
-		ch = pf.readers
+	if pf.writer {
+		ch = p.writers
 	} else {
-		ch = pf.writers
+		ch = p.readers
 	}
 	ch <- -1
 	return 0
+}
+
+func (pf *pipefops_t) fstat(f *file_t, st *stat_t) int {
+	panic("fstat on pipe")
+}
+
+func (pf *pipefops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+	panic("mmap on pipe")
+}
+
+func (pf *pipefops_t) pathi() inum {
+	panic("pipe cwd")
+}
+
+func (pf *pipefops_t) reopen(f *file_t) {
+	var ch chan int
+	if pf.writer {
+		ch = pf.pipe.writers
+	} else {
+		ch = pf.pipe.readers
+	}
+	ch <- 1
+}
+
+func (pf *pipefops_t) bind(*proc_t, []uint8) int {
+	return -ENOTSOCK
+}
+
+func (pf *pipefops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+	return 0, -ENOTSOCK
+}
+
+func (pf *pipefops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
+	return 0, 0, -ENOTSOCK
 }
 
 func sys_rename(proc *proc_t, oldn int, newn int) int {
@@ -865,7 +822,7 @@ func sys_rename(proc *proc_t, oldn int, newn int) int {
 		return err2
 	}
 	n := proc.atime.now()
-	ret := fs_rename(old, new, proc.cwd)
+	ret := fs_rename(old, new, proc.cwd.fops.pathi())
 	proc.atime.io_time(n)
 	return ret
 }
@@ -883,7 +840,7 @@ func sys_mkdir(proc *proc_t, pathn int, mode int) int {
 		return err
 	}
 	n := proc.atime.now()
-	ret := fs_mkdir(path, mode, proc.cwd)
+	ret := fs_mkdir(path, mode, proc.cwd.fops.pathi())
 	proc.atime.io_time(n)
 	return ret
 }
@@ -906,7 +863,7 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 		return err2
 	}
 	n := proc.atime.now()
-	ret := fs_link(old, new, proc.cwd)
+	ret := fs_link(old, new, proc.cwd.fops.pathi())
 	proc.atime.io_time(n)
 	return ret
 }
@@ -924,7 +881,7 @@ func sys_unlink(proc *proc_t, pathn int) int {
 		return err
 	}
 	n := proc.atime.now()
-	ret := fs_unlink(path, proc.cwd)
+	ret := fs_unlink(path, proc.cwd.fops.pathi())
 	proc.atime.io_time(n)
 	return ret
 }
@@ -1006,7 +963,7 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 	}
 	maj, min := dsplit(devn)
 	n := proc.atime.now()
-	_, err = fs_open(path, O_CREAT, 0, proc.cwd, maj, min)
+	_, err = fs_open(path, O_CREAT, 0, proc.cwd.fops.pathi(), maj, min)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -1054,93 +1011,63 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 		fmt.Printf("only AF_UNIX + SOCK_DGRAM is supported for now")
 		return -ENOSYS
 	}
-	file := &file_t{ftype: SOCKET}
-	if typ == SOCK_DGRAM {
-		file.sock.dgram = true
-	} else {
-		file.sock.stream = true
-	}
-	file.sock.open = 1
-	// no permissions yet
+	file := &file_t{}
+	sfops := &sockfops_t{open: 1, dgram: true}
+	file.fops = sfops
+	// no permissions -- disallow read(2)/write(2) on new socket
 	fdn := proc.fd_insert(file, 0)
 	return fdn
 }
 
+func copysockaddr(proc *proc_t, san, sl int) ([]uint8, int) {
+	if sl < 0 {
+		return nil, -EFAULT
+	}
+	maxsl := 256
+	if sl >= maxsl {
+		return nil, -ENOTSOCK
+	}
+	ub := proc.mkuserbuf(san, sl)
+	sabuf := make([]uint8, sl)
+	_, err := ub.read(sabuf)
+	if err != 0 {
+		return nil, err
+	}
+	return sabuf, 0
+}
+
 func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	fd, ok := proc.fd_get(fdn)
-	if !ok || fd.file.ftype != SOCKET {
+	if !ok {
 		return -EBADF
 	}
-	flags := uint(uint32(flaglen))
+	flags := int(uint(uint32(flaglen)))
 	if flags != 0 {
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	if !fd.file.sock.dgram {
-		panic("no imp")
-	}
-	poff := 2
-	plen := socklen - poff
-	if plen <= 0 {
-		return -ENOENT
-	}
-	path, ok, toolong := proc.userstr(sockaddrn + poff, plen)
-	if !ok {
+	if buflen < 0 {
 		return -EFAULT
 	}
-	if toolong {
-		return -ENAMETOOLONG
-	}
-	// get sund id from file
-	n := proc.atime.now()
-	file, err := fs_open(path, 0, 0, proc.cwd, 0, 0)
-	proc.atime.io_time(n)
+
+	// copy sockaddr to kernel space to avoid races
+	sabuf, err := copysockaddr(proc, sockaddrn, socklen)
 	if err != 0 {
 		return err
 	}
-	if file.ftype != DEV || file.dev.major != D_SUN {
-		return -EPERM
-	}
 
-	// lookup sid, get admission to write. we must get admission in order
-	// to ensure that after the socket daemon terminates 1) no writers are
-	// left blocking indefinitely and 2) that no new writers attempt to
-	// write to a channel that no one is listening on
-	allsunds.Lock()
-	sund, ok := allsunds.m[sunid_t(file.dev.minor)]
-	if ok {
-		sund.adm <- true
+	buf := proc.mkuserbuf(bufn, buflen)
+	ret, err := fd.file.fops.sendto(proc, buf, sabuf, flags)
+	if err != 0 {
+		return err
 	}
-	allsunds.Unlock()
-	if !ok {
-		return -ECONNREFUSED
-	}
-
-	c := 0
-	var data []uint8
-	for c < buflen {
-		src, ok := proc.userdmap8(bufn + c)
-		if !ok {
-			sund.in <- sunbuf_t{}
-			return -EFAULT
-		}
-		left := buflen - c
-		if len(src) > left {
-			src = src[:left]
-		}
-		data = append(data, src...)
-		c += len(src)
-	}
-
-	sbuf := sunbuf_t{from: file.sock.sunaddr, data: data}
-	sund.in <- sbuf
-	return <- sund.inret
+	return ret
 }
 
 func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
     socklenn int) int {
 	fd, ok := proc.fd_get(fdn)
-	if !ok || fd.file.ftype != SOCKET {
+	if !ok {
 		return -EBADF
 	}
 	flags := uint(uint32(flaglen))
@@ -1148,45 +1075,32 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	fillfrom := sockaddrn != 0
-	slen := 0
-	if fillfrom {
+	buf := proc.mkuserbuf(bufn, buflen)
+
+	// is the from address requested?
+	var salen int
+	if socklenn != 0 {
 		l, ok := proc.userreadn(socklenn, 8)
 		if !ok {
 			return -EFAULT
 		}
-		if l > 0 {
-			slen = l
-		}
-		if !proc.usermapped(sockaddrn, slen) {
+		salen = l
+		if salen < 0 {
 			return -EFAULT
 		}
 	}
-
-	if !fd.file.sock.dgram {
-		panic("no imp")
+	fromsa := proc.mkuserbuf(sockaddrn, salen)
+	ret, addrlen, err := fd.file.fops.recvfrom(proc, buf, fromsa)
+	if err != 0 {
+		return err
 	}
-	sund := fd.file.sock.sunaddr.sund
-	sund.outsz <- buflen
-	sbuf := <- sund.out
-
-	if !proc.usercopy(sbuf.data, bufn) {
-		// XXX drops a message
-		return -EFAULT
-	}
-
-	if fillfrom {
-		sa := fd.file.sock.sunaddr.sockaddr_un(slen)
-		if !proc.usercopy(sa, sockaddrn) {
-			return -EFAULT
-		}
-		// write actual size
-		if !proc.userwriten(socklenn, 8, len(sa)) {
+	// write new socket size to user space
+	if addrlen > 0 {
+		if !proc.userwriten(socklenn, 8, addrlen) {
 			return -EFAULT
 		}
 	}
-
-	return len(sbuf.data)
+	return ret
 }
 
 func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
@@ -1194,43 +1108,196 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 	if !ok {
 		return -EBADF
 	}
-	if fd.file.ftype != SOCKET {
-		return -EBADF
+
+	sabuf, err := copysockaddr(proc, sockaddrn, socklen)
+	if err != 0 {
+		return err
 	}
+
+	return fd.file.fops.bind(proc, sabuf)
+}
+
+type sockfops_t struct {
+	sunaddr	sunaddr_t
+	open	int
+	bound	bool
+	dgram	bool
+	stream	bool
+	// to protect the "open" field from racing close()s
+	sync.Mutex
+}
+
+func (sf *sockfops_t) _sane() {
+	// for now
+	if !sf.dgram || sf.stream {
+		panic("no imp")
+	}
+}
+
+func (sf *sockfops_t) close(f *file_t) int {
+	sf._sane()
+	sf.Lock()
+	sf.open--
+	if sf.open < 0 {
+		panic("negative ref count")
+	}
+	termsund := sf.open == 0
+	sf.Unlock()
+
+	if termsund && sf.bound {
+		allsunds.Lock()
+		delete(allsunds.m, sf.sunaddr.id)
+		sf.sunaddr.sund.finish <- true
+		allsunds.Unlock()
+	}
+	return 0
+}
+
+func (sf *sockfops_t) fstat(f *file_t, s *stat_t) int {
+	sf._sane()
+	return -ENODEV
+}
+
+func (sf *sockfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+	sf._sane()
+	return nil, -ENODEV
+}
+
+func (sf *sockfops_t) pathi() inum {
+	sf._sane()
+	panic("cwd socket?")
+}
+
+func (sf *sockfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
+	sf._sane()
+	return 0, -ENODEV
+}
+
+func (sf *sockfops_t) reopen(*file_t) {
+	sf._sane()
+	sf.Lock()
+	sf.open++
+	sf.Unlock()
+}
+
+func (sf *sockfops_t) write(*userbuf_t, *file_t, int, bool) (int, int) {
+	sf._sane()
+	return 0, -ENODEV
+}
+
+// trims trailing nulls from slice
+func slicetostr(buf []uint8) string {
+	end := 0
+	for i := range buf {
+		end = i
+		if buf[i] == 0 {
+			break
+		}
+	}
+	return string(buf[:end])
+}
+
+func (sf *sockfops_t) bind(proc *proc_t, sa []uint8) int {
+	sf._sane()
 	poff := 2
-	plen := socklen - poff
-	if plen <= 0 {
-		return -ENOENT
-	}
-	path, ok, toolong := proc.userstr(sockaddrn + poff, plen)
-	if !ok {
-		return -EFAULT
-	}
-	if toolong {
-		return -ENAMETOOLONG
-	}
+	path := slicetostr(sa[poff:])
 	// try to create the specified file as a special device
 	sid := sun_new()
 	n := proc.atime.now()
-	// XXX close?
-	_, err := fs_open(path, O_CREAT | O_EXCL, 0, proc.cwd, D_SUN, int(sid))
+	pi := proc.cwd.fops.pathi()
+	newfile, err := fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUN, int(sid))
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
-	fd.file.sock.sunaddr.id = sid
-	fd.file.sock.sunaddr.path = path
-	fd.file.sock.sunaddr.sund = sun_start(sid)
-	fd.file.sock.bound = true
+	// XXX fix fs_open to not return file_t
+	dur := fsfops_t{priv: newfile.fops.(*devfops_t).priv}
+	if dur.close(nil) != 0 {
+		panic("must succeed")
+	}
+	sf.sunaddr.id = sid
+	sf.sunaddr.path = path
+	sf.sunaddr.sund = sun_start(sid)
+	sf.bound = true
 	return 0
 }
 
-type sock_t struct {
-	dgram	bool
-	stream	bool
-	sunaddr	sunaddr_t
-	open	int
-	bound	bool
+func (sf *sockfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
+    flags int) (int, int) {
+	sf._sane()
+	poff := 2
+	if len(sa) <= poff {
+		return 0, -EINVAL
+	}
+	st := &stat_t{}
+	st.init()
+	path := slicetostr(sa[poff:])
+	n := proc.atime.now()
+	err := fs_stat(path, st, proc.cwd.fops.pathi())
+	proc.atime.io_time(n)
+	if err != 0 {
+		return 0, err
+	}
+	maj, min := unmkdev(st.rdev())
+	if maj != D_SUN {
+		return 0, -ECONNREFUSED
+	}
+
+	sunid := sunid_t(min)
+	// XXX use new way
+	// lookup sid, get admission to write. we must get admission in order
+	// to ensure that after the socket daemon terminates 1) no writers are
+	// left blocking indefinitely and 2) that no new writers attempt to
+	// write to a channel that no one is listening on
+	allsunds.Lock()
+	sund, ok := allsunds.m[sunid]
+	if ok {
+		sund.adm <- true
+	}
+	allsunds.Unlock()
+	if !ok {
+		return 0, -ECONNREFUSED
+	}
+
+	// XXX pass userbuf directly to sund
+	data := make([]uint8, src.len)
+	_, err = src.read(data)
+	if err != 0 {
+		return 0, err
+	}
+
+	sbuf := sunbuf_t{from: sf.sunaddr, data: data}
+	sund.in <- sbuf
+	return <- sund.inret, 0
+}
+
+func (sf *sockfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
+    fromsa *userbuf_t) (int, int, int) {
+	sf._sane()
+	// XXX what does recv'ing on an unbound unix datagram socket supposed
+	// to do? openbsd and linux seem to block forever.
+	if !sf.bound {
+		return 0, 0, -ECONNREFUSED
+	}
+	sund := sf.sunaddr.sund
+	// XXX send userbuf to sund directly
+	sund.outsz <- dst.remain()
+	sbuf := <- sund.out
+
+	ret, err := dst.write(sbuf.data)
+	if err != 0 {
+		return 0, 0, err
+	}
+	// fill in from address
+	var addrlen int
+	if fromsa.remain() > 0 {
+		sa := sbuf.from.sockaddr_un()
+		addrlen, err = fromsa.write(sa)
+		if err != 0 {
+			return 0, 0, err
+		}
+	}
+	return ret, addrlen, 0
 }
 
 type sunid_t int
@@ -1245,11 +1312,8 @@ type sunaddr_t struct {
 }
 
 // used by recvfrom to fill in "fromaddr"
-func (sa *sunaddr_t) sockaddr_un(sz int) []uint8 {
-	if sz < 0 {
-		panic("negative size")
-	}
-	ret := make([]uint8, 2)
+func (sa *sunaddr_t) sockaddr_un() []uint8 {
+	ret := make([]uint8, 16)
 	// len
 	writen(ret, 1, 0, len(sa.path))
 	// family
@@ -1257,10 +1321,7 @@ func (sa *sunaddr_t) sockaddr_un(sz int) []uint8 {
 	// path
 	ret = append(ret, sa.path...)
 	ret = append(ret, 0)
-	if sz > len(ret) {
-		sz = len(ret)
-	}
-	return ret[:sz]
+	return ret
 }
 
 type sunbuf_t struct {
@@ -1424,7 +1485,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		}
 		parent.fdl.Unlock()
 
-		child = proc_new(parent.name + " [child]", parent.cwd, cfds)
+		child = proc_new(parent.name + " [child]",
+		    parent.cwd, cfds)
 		child.pwait = &parent.mywait
 		parent.mywait.start_proc(child.pid)
 
@@ -1580,14 +1642,14 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 	// load binary image -- get first block of file
 	n := proc.atime.now()
-	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd, 0, 0)
+	file, err := fs_open(paths, O_RDONLY, 0, proc.cwd.fops.pathi(), 0, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
 		restore()
 		return err
 	}
 	defer func() {
-		if file_close(file, 0) != 0 {
+		if file_close(file) != 0 {
 			panic("must succeed")
 		}
 	}()
@@ -1596,7 +1658,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	ub := &userbuf_t{}
 	ub.fake_init(hdata)
 	n = proc.atime.now()
-	ret, err := fs_read(ub, file, 0)
+	ret, err := file.fops.read(ub, file, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
 		restore()
@@ -1820,13 +1882,14 @@ func sys_chdir(proc *proc_t, dirn int) int {
 	defer proc.cwdl.Unlock()
 
 	n := proc.atime.now()
-	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, proc.cwd, 0, 0)
+	pi := proc.cwd.fops.pathi()
+	newcwd, err := fs_open(path, O_RDONLY | O_DIRECTORY, 0, pi, 0, 0)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
 	n = proc.atime.now()
-	if file_close(proc.cwd, 0) != 0 {
+	if file_close(proc.cwd) != 0 {
 		panic("must succeed")
 	}
 	proc.atime.io_time(n)
@@ -1912,6 +1975,7 @@ func fieldinfo(sizes []int, n int) (int, int) {
 	return sizes[n], off
 }
 
+// XXX use "unsafe" structs instead of the awful "go" way
 type stat_t struct {
 	data	[]uint8
 	// field sizes
@@ -2161,7 +2225,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 			tlssize = roundup(hdr.memsz, 8)
 			tlscopylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
-			mmapi, err := fs_mmapinfo(f, 0)
+			mmapi, err := f.fops.mmapi(f, 0)
 			if err != 0 {
 				panic("must succeed")
 			}

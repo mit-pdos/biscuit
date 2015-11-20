@@ -217,6 +217,7 @@ type dev_t struct {
 }
 
 // allocated device major numbers
+// internally, biscuit uses device numbers for all special, on-disk files.
 const(
 	D_CONSOLE int	= 1
 	// UNIX domain sockets
@@ -225,22 +226,41 @@ const(
 	D_LAST		= D_SUN
 )
 
+type fdops_i interface {
+	// file ops
+	// remove file_t arg?
+	close(*file_t) int
+	fstat(*file_t, *stat_t) int
+	mmapi(*file_t, int) ([]mmapinfo_t, int)
+	pathi() inum
+	read(*userbuf_t, *file_t, int) (int, int)
+	reopen(*file_t)
+	write(*userbuf_t, *file_t, int, bool) (int, int)
+	// socket ops
+	bind(*proc_t, []uint8) int
+	sendto(*proc_t, *userbuf_t, []uint8, int) (int, int)
+	// returns number of bytes read, size of from sock address written, and
+	// error
+	recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int)
+}
+
+// this is the new fd_t
 type file_t struct {
+	// XXX move offset into fsfops_t first
 	ftype	ftype_t
 	sync.Mutex
+	// move into files that support it
 	offset	int
-	priv	inum
-	pipe	pipe_t
-	dev	dev_t
-	sock	sock_t
+	// fops is an interface implemented via a "pointer receiver", thus fops
+	// is a reference, not a value
+	fops	fdops_i
+	// XXX
+	hack	bool
 }
 
 type ftype_t int
 const(
-	INODE ftype_t = iota
-	PIPE
-	DEV	// only console for now
-	SOCKET
+	INODE ftype_t = 1
 )
 
 const(
@@ -250,12 +270,15 @@ const(
 	FD_APPEND	= 0x8
 )
 
+// XXX make fd_t go away? careful: because fd_t is read-only, races between
+// copying an fd_t and updating an fd_t do not exist. merging fd_t into file_t
+// would expose these races though with the current code.
 type fd_t struct {
 	file	*file_t
 	perms	int
 }
 
-var dummyfile	= file_t{ftype: DEV, dev: dev_t{int(D_CONSOLE), 0}}
+var dummyfile	= file_t{ fops: &devfops_t{priv: -1, maj: D_CONSOLE, min: 0}}
 
 // special fds
 var fd_stdin 	= fd_t{file: &dummyfile, perms: FD_READ}
@@ -661,10 +684,7 @@ func proc_new(name string, cwd *file_t, fds []*fd_t) *proc_t {
 	ret.fds = fds
 	ret.fdstart = 3
 	ret.cwd = cwd
-	if cwd.ftype != INODE {
-		panic("weird cwd")
-	}
-	fs_memref(ret.cwd, 0)
+	ret.cwd.fops.reopen(nil)
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)
@@ -720,6 +740,14 @@ func (p *proc_t) cowfault(userva int) {
 	}
 	sys_pgfault(p, pte, userva)
 }
+
+// XXX use me!
+//func (p *proc_t) cwd() inum {
+//	p.cwdl.Lock()
+//	ret := p.cwd.fops.pathi()
+//	p.cwdl.Unlock()
+//	return ret
+//}
 
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
@@ -1060,12 +1088,12 @@ func (p *proc_t) terminate() {
 		if p.fds[i] == nil {
 			continue
 		}
-		if file_close(p.fds[i].file, p.fds[i].perms) != 0 {
+		if file_close(p.fds[i].file) != 0 {
 			panic("must succeed")
 		}
 	}
 	p.fdl.Unlock()
-	if file_close(p.cwd, 0) != 0 {
+	if file_close(p.cwd) != 0 {
 		panic("must succeed")
 	}
 
@@ -1284,7 +1312,6 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 	for !done {
 		ptrs, ok := p.userdmap8(uva + uoff)
 		if !ok {
-			fmt.Printf("dmap\n")
 			return nil, false
 		}
 		for _, ab := range ptrs {
@@ -1354,6 +1381,9 @@ type userbuf_t struct {
 	// 0 <= off <= len
 	off	int
 	proc	*proc_t
+	// "fake" is a hack for easy reading/writing kernel memory only (like
+	// fetching the ELF header from the pagecache during exec)
+	// XXX
 	fake	bool
 	fbuf	[]uint8
 }
@@ -1386,7 +1416,8 @@ func (ub *userbuf_t) write(src []uint8) (int, int) {
 	return ub._tx(src, true)
 }
 
-// returns number of bytes copied and error
+// copies the min of either the provided buffer or ub.len. returns number of
+// bytes copied and error.
 func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
 	if ub.fake {
 		var c int

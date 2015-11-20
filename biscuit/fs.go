@@ -91,7 +91,7 @@ func fs_init() *file_t {
 	fblkcache.fblkc_init(free_start, free_len)
 	iroot = idaemon_ensure(ri)
 
-	return &file_t{ftype: INODE, priv: ri}
+	return &file_t{ftype: INODE, fops: &fsfops_t{priv: ri}}
 }
 
 // XXX why not method of log_t???
@@ -455,11 +455,10 @@ func (itx *inodetx_t) unlockall() {
 	}
 }
 
-func fs_link(old string, new string, cwdf *file_t) int {
+func fs_link(old string, new string, cwd inum) int {
 	op_begin()
 	defer op_end()
 
-	cwd := cwdf.priv
 	// first get inode number and inc ref count
 	req := &ireq_t{}
 	req.mkget_fsinc(old)
@@ -488,7 +487,7 @@ func fs_link(old string, new string, cwdf *file_t) int {
 	return req.resp.err
 }
 
-func fs_unlink(paths string, cwdf *file_t) int {
+func fs_unlink(paths string, cwd inum) int {
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -EPERM
@@ -498,7 +497,7 @@ func fs_unlink(paths string, cwdf *file_t) int {
 	defer op_end()
 
 	itx := inodetx_t{}
-	itx.init(cwdf.priv)
+	itx.init(cwd)
 	itx.addpath(dirs)
 	itx.addchild(dirs, fn, true)
 
@@ -528,7 +527,7 @@ func fs_unlink(paths string, cwdf *file_t) int {
 	return 0
 }
 
-func fs_rename(oldp, newp string, cwdf *file_t) int {
+func fs_rename(oldp, newp string, cwd inum) int {
 	odirs, ofn := sdirname(oldp)
 	ndirs, nfn := sdirname(newp)
 
@@ -540,7 +539,7 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 	defer op_end()
 
 	itx := inodetx_t{}
-	itx.init(cwdf.priv)
+	itx.init(cwd)
 	itx.addpath(odirs)
 	itx.addpath(ndirs)
 	itx.addchild(odirs, ofn, true)
@@ -630,12 +629,16 @@ func fs_rename(oldp, newp string, cwdf *file_t) int {
 	return 0
 }
 
-func fs_read(dst *userbuf_t, f *file_t, offset int) (int, int) {
+type fsfops_t struct {
+	priv	inum
+}
+
+func (fo *fsfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
 	req.mkread(dst, offset)
 
-	priv := f.priv
+	priv := fo.priv
 	idmon := idaemon_ensure(priv)
 	idmon.req <- req
 	<- req.ack
@@ -645,11 +648,12 @@ func fs_read(dst *userbuf_t, f *file_t, offset int) (int, int) {
 	return req.resp.count, 0
 }
 
-func fs_write(src *userbuf_t, f *file_t, offset int, append bool) (int, int) {
+func (fo *fsfops_t) write(src *userbuf_t, f *file_t, offset int,
+    append bool) (int, int) {
 	op_begin()
 	defer op_end()
 
-	priv := f.priv
+	priv := fo.priv
 	// send write request to inode daemon owning priv
 	req := &ireq_t{}
 	req.mkwrite(src, offset, append)
@@ -663,7 +667,138 @@ func fs_write(src *userbuf_t, f *file_t, offset int, append bool) (int, int) {
 	return req.resp.count, 0
 }
 
-func fs_mkdir(paths string, mode int, cwdf *file_t) int {
+func (fo *fsfops_t) fstat(f *file_t, st *stat_t) int {
+	priv := fo.priv
+	idmon := idaemon_ensure(priv)
+	req := &ireq_t{}
+	req.mkfstat(st)
+	idmon.req <- req
+	<- req.ack
+	return req.resp.err
+}
+
+// XXX log those files that have no fs links but > 0 memory references to the
+// journal so that if we crash before freeing its blocks, the blocks can be
+// reclaimed.
+func (fo *fsfops_t) close(f *file_t) int {
+	op_begin()
+	defer op_end()
+
+	req := &ireq_t{}
+	req.mkrefdec(true)
+	idmon := idaemon_ensure(fo.priv)
+	idmon.req <- req
+	<- req.ack
+	return req.resp.err
+}
+
+func (fo *fsfops_t) pathi() inum {
+	return fo.priv
+}
+
+func (fo *fsfops_t) reopen(f *file_t) {
+	idmon := idaemon_ensure(fo.priv)
+	req := &ireq_t{}
+	req.mkref_direct()
+	idmon.req <- req
+	<- req.ack
+	if req.resp.err != 0 {
+		panic("must succeed")
+	}
+}
+
+// returns the mmapinfo for the pages of the target file. the page cache is
+// populated if necessary.
+func (fo *fsfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+	req := &ireq_t{}
+	req.mkmmapinfo(offset)
+	idm := idaemon_ensure(fo.priv)
+	idm.req <- req
+	<- req.ack
+	return req.resp.mmapinfo, req.resp.err
+}
+
+func (fo *fsfops_t) bind(*proc_t, []uint8) int {
+	return -ENOTSOCK
+}
+
+func (fo *fsfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+	return 0, -ENOTSOCK
+}
+
+func (fo *fsfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
+	return 0, 0, -ENOTSOCK
+}
+
+type devfops_t struct {
+	priv	inum
+	maj	int
+	min	int
+}
+
+func (df *devfops_t) _sane() {
+	// make sure this maj/min pair is handled by devfops_t. to handle more
+	// devices, we can either do dispatch in devfops_t or we can return
+	// device-specific fdops_i in fs_open()
+	if df.maj != D_CONSOLE {
+		panic("bad dev")
+	}
+}
+
+func (df *devfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
+	df._sane()
+	return cons_read(dst, f, offset)
+}
+
+func (df *devfops_t) write(src *userbuf_t, f *file_t, offset int,
+    append bool) (int, int) {
+	df._sane()
+	return cons_write(src, f, offset, append)
+}
+
+func (df *devfops_t) fstat(f *file_t, st *stat_t) int {
+	df._sane()
+	priv := df.priv
+	idmon := idaemon_ensure(priv)
+	req := &ireq_t{}
+	req.mkfstat(st)
+	idmon.req <- req
+	<- req.ack
+	return req.resp.err
+}
+
+func (df *devfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+	df._sane()
+	return nil, -ENODEV
+}
+
+func (df *devfops_t) pathi() inum {
+	df._sane()
+	panic("bad cwd")
+}
+
+func (df *devfops_t) close(f *file_t) int {
+	df._sane()
+	return 0
+}
+
+func (df *devfops_t) reopen(f *file_t) {
+	df._sane()
+}
+
+func (df *devfops_t) bind(*proc_t, []uint8) int {
+	return -ENOTSOCK
+}
+
+func (df *devfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+	return 0, -ENOTSOCK
+}
+
+func (df *devfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
+	return 0, 0, -ENOTSOCK
+}
+
+func fs_mkdir(paths string, mode int, cwd inum) int {
 	op_begin()
 	defer op_end()
 
@@ -674,7 +809,7 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 
 	// atomically create new dir with insert of "." and ".."
 	itx := inodetx_t{}
-	itx.init(cwdf.priv)
+	itx.init(cwd)
 	itx.addpath(dirs)
 
 	err := itx.lockall()
@@ -708,18 +843,20 @@ func fs_mkdir(paths string, mode int, cwdf *file_t) int {
 	return 0
 }
 
-func fs_open(paths string, flags int, mode int, cwdf *file_t,
+func fs_open(paths string, flags int, mode int, cwd inum,
     major, minor int) (*file_t, int) {
 	fnew := func(priv inum, maj, min int) *file_t {
 		r := &file_t{}
-		r.ftype = INODE
-		// XXX should use type
 		if maj != 0 || min != 0 {
-			r.ftype = DEV
+			r.fops = &devfops_t{priv: priv, maj: maj, min: min}
+			// XXX XXX goes away with new fs_open
+			if maj == D_SUN {
+				r.hack = true
+			}
+		} else {
+			r.ftype = INODE
+			r.fops = &fsfops_t{priv: priv}
 		}
-		r.priv = priv
-		r.dev.major = maj
-		r.dev.minor = min
 		return r
 	}
 
@@ -739,7 +876,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 	req := &ireq_t{}
 	if creat {
 		nodir = true
-		// creat; must atomically create and open the new file.
+		// creat w/execl; must atomically create and open the new file.
 		isdev := major != 0 || minor != 0
 
 		// must specify at least one path component
@@ -759,7 +896,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 
 		// lock containing directory
 		itx := inodetx_t{}
-		itx.init(cwdf.priv)
+		itx.init(cwd)
 		itx.addpath(dirs)
 
 		err := itx.lockall()
@@ -778,7 +915,6 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 		priv = req.resp.cnext
 		idm = idaemon_ensure(priv)
 
-		// XXX XXX XXX removing locking from creat; not necessary
 		psend := func(r *ireq_t) {
 			if priv == itx.privforp(dirs) {
 				itx.sendp(dirs, r)
@@ -819,7 +955,7 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 	} else {
 		// open existing file
 		req.mkget_meminc(paths)
-		req_namei(req, paths, cwdf.priv)
+		req_namei(req, paths, cwd)
 		<- req.ack
 		if req.resp.err != 0 {
 			return nil, req.resp.err
@@ -873,59 +1009,12 @@ func fs_open(paths string, flags int, mode int, cwdf *file_t,
 	return ret, 0
 }
 
-// XXX log those files that have no fs links but > 0 memory references to the
-// journal so that if we crash before freeing its blocks, the blocks can be
-// reclaimed.
-func fs_close(f *file_t, perms int) int {
-	op_begin()
-	defer op_end()
-
-	req := &ireq_t{}
-	req.mkrefdec(true)
-	idmon := idaemon_ensure(f.priv)
-	idmon.req <- req
-	<- req.ack
-	return req.resp.err
-}
-
-func fs_memref(f *file_t, perms int) {
-	idmon := idaemon_ensure(f.priv)
-	req := &ireq_t{}
-	req.mkref_direct()
-	idmon.req <- req
-	<- req.ack
-	if req.resp.err != 0 {
-		panic("mem ref increment of open file failed")
-	}
-}
-
-func fs_fstat(f *file_t, st *stat_t) int {
-	priv := f.priv
-	idmon := idaemon_ensure(priv)
-	req := &ireq_t{}
-	req.mkfstat(st)
-	idmon.req <- req
-	<- req.ack
-	return req.resp.err
-}
-
-func fs_stat(path string, st *stat_t, cwdf *file_t) int {
+func fs_stat(path string, st *stat_t, cwd inum) int {
 	req := &ireq_t{}
 	req.mkstat(path, st)
-	req_namei(req, path, cwdf.priv)
+	req_namei(req, path, cwd)
 	<- req.ack
 	return req.resp.err
-}
-
-// returns the mmapinfo for the pages of the target file. the page cache is
-// populated if necessary.
-func fs_mmapinfo(f *file_t, offset int) ([]mmapinfo_t, int) {
-	req := &ireq_t{}
-	req.mkmmapinfo(offset)
-	idm := idaemon_ensure(f.priv)
-	idm.req <- req
-	<- req.ack
-	return req.resp.mmapinfo, req.resp.err
 }
 
 func fs_sync() int {
