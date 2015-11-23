@@ -227,7 +227,7 @@ const(
 )
 
 type fdops_i interface {
-	// file ops
+	// fd ops
 	close() int
 	fstat(*stat_t) int
 	lseek(int, int) int
@@ -245,10 +245,11 @@ type fdops_i interface {
 }
 
 // this is the new fd_t
-type file_t struct {
+type fd_t struct {
 	// fops is an interface implemented via a "pointer receiver", thus fops
 	// is a reference, not a value
 	fops	fdops_i
+	perms	int
 }
 
 const(
@@ -258,20 +259,12 @@ const(
 	FD_APPEND	= 0x8
 )
 
-// XXX make fd_t go away? careful: because fd_t is read-only, races between
-// copying an fd_t and updating an fd_t do not exist. merging fd_t into file_t
-// would expose these races though with the current code.
-type fd_t struct {
-	file	*file_t
-	perms	int
-}
-
-var dummyfile	= file_t{ fops: &devfops_t{priv: -1, maj: D_CONSOLE, min: 0}}
+var dummyfops	= &devfops_t{priv: -1, maj: D_CONSOLE, min: 0}
 
 // special fds
-var fd_stdin 	= fd_t{file: &dummyfile, perms: FD_READ}
-var fd_stdout 	= fd_t{file: &dummyfile, perms: FD_WRITE}
-var fd_stderr 	= fd_t{file: &dummyfile, perms: FD_WRITE}
+var fd_stdin 	= fd_t{fops: dummyfops, perms: FD_READ}
+var fd_stdout 	= fd_t{fops: dummyfops, perms: FD_WRITE}
+var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 
 type ulimit_t struct {
 	pages	int
@@ -628,7 +621,7 @@ type proc_t struct {
 	// fds, fdstart protected by fdl
 	fdl		sync.Mutex
 
-	cwd		*file_t
+	cwd		*fd_t
 	// to serialize chdirs
 	cwdl		sync.Mutex
 	ulim		ulimit_t
@@ -653,7 +646,7 @@ func newpid() int {
 	return ret
 }
 
-func proc_new(name string, cwd *file_t, fds []*fd_t) *proc_t {
+func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 	ret := &proc_t{}
 
 	proclock.Lock()
@@ -740,7 +733,7 @@ func (p *proc_t) cowfault(userva int) {
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
-func (p *proc_t) fd_insert(f *file_t, perms int) int {
+func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 	p.fdl.Lock()
 	defer p.fdl.Unlock()
 
@@ -763,13 +756,16 @@ func (p *proc_t) fd_insert(f *file_t, perms int) int {
 		p.fds = nfdt
 	}
 	fdn := newfd
-	fd := &fd_t{}
+	//fd := &fd_t{}
+	fd := f
 	fd.perms = perms
 	if p.fds[fdn] != nil {
 		panic(fmt.Sprintf("new fd exists %d", fdn))
 	}
 	p.fds[fdn] = fd
-	fd.file = f
+	if fd.fops == nil {
+		panic("wtf!")
+	}
 	return fdn
 }
 
@@ -1076,7 +1072,7 @@ func (p *proc_t) terminate() {
 		if p.fds[i] == nil {
 			continue
 		}
-		if file_close(p.fds[i].file) != 0 {
+		if file_close(p.fds[i]) != 0 {
 			panic("must succeed")
 		}
 	}

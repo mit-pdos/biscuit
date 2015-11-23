@@ -52,7 +52,7 @@ func sdirname(path string) (string, string) {
 	return s, fn
 }
 
-func fs_init() *file_t {
+func fs_init() *fd_t {
 	// we are now prepared to take disk interrupts
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
@@ -91,7 +91,7 @@ func fs_init() *file_t {
 	fblkcache.fblkc_init(free_start, free_len)
 	iroot = idaemon_ensure(ri)
 
-	return &file_t{fops: &fsfops_t{priv: ri}}
+	return &fd_t{fops: &fsfops_t{priv: ri}}
 }
 
 // XXX why not method of log_t???
@@ -782,12 +782,12 @@ func (df *devfops_t) _sane() {
 
 func (df *devfops_t) read(dst *userbuf_t) (int, int) {
 	df._sane()
-	return cons_read(dst, nil, 0)
+	return cons_read(dst, 0)
 }
 
 func (df *devfops_t) write(src *userbuf_t, append bool) (int, int) {
 	df._sane()
-	return cons_write(src, nil, 0, append)
+	return cons_write(src, 0, append)
 }
 
 func (df *devfops_t) fstat(st *stat_t) int {
@@ -1044,7 +1044,7 @@ func _fs_open(paths string, flags int, mode int, cwd inum,
 }
 
 func fs_open(paths string, flags, mode int, cwd inum,
-    major, minor int) (*file_t, int) {
+    major, minor int) (*fd_t, int) {
 	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
 		return nil, err
@@ -1062,7 +1062,7 @@ func fs_open(paths string, flags, mode int, cwd inum,
 	priv := fsf.priv
 	maj := fsf.major
 	min := fsf.minor
-	ret := &file_t{}
+	ret := &fd_t{}
 	if maj != 0 {
 		ret.fops = &devfops_t{priv: priv, maj: maj, min: min}
 	} else {

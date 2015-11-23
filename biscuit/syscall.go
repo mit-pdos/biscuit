@@ -260,7 +260,7 @@ func reap_doomed(p *proc_t, tid tid_t) {
 	p.thread_dead(tid, 0, false)
 }
 
-func cons_read(ub *userbuf_t, f *file_t, offset int) (int, int) {
+func cons_read(ub *userbuf_t, offset int) (int, int) {
 	sz := ub.len
 	kdata := kbd_get(sz)
 	ret, err := ub.write(kdata)
@@ -270,7 +270,7 @@ func cons_read(ub *userbuf_t, f *file_t, offset int) (int, int) {
 	return ret, 0
 }
 
-func cons_write(src *userbuf_t, f *file_t, off int, ap bool) (int, int) {
+func cons_write(src *userbuf_t, off int, ap bool) (int, int) {
 		// merge into one buffer to avoid taking the console
 		// lock many times.
 		utext := int8(0x17)
@@ -301,7 +301,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	userbuf := proc.mkuserbuf(bufp, sz)
 
 	n := proc.atime.now()
-	ret, err := fd.file.fops.read(userbuf)
+	ret, err := fd.fops.read(userbuf)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -326,7 +326,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	userbuf := proc.mkuserbuf(bufp, sz)
 
 	n := proc.atime.now()
-	ret, err := fd.file.fops.write(userbuf, apnd)
+	ret, err := fd.fops.write(userbuf, apnd)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -395,12 +395,12 @@ func sys_close(proc *proc_t, fdn int) int {
 	if !ok {
 		return -EBADF
 	}
-	ret := file_close(fd.file)
+	ret := file_close(fd)
 	return ret
 }
 
 // XXX remove
-func file_close(f *file_t) int {
+func file_close(f *fd_t) int {
 	return f.fops.close()
 }
 
@@ -471,7 +471,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 func copyfd(fd *fd_t) *fd_t {
 	nfd := &fd_t{}
 	*nfd = *fd
-	nfd.file.fops.reopen()
+	nfd.fops.reopen()
 	return nfd
 }
 
@@ -496,7 +496,7 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 
 	if needclose {
 		n := proc.atime.now()
-		if file_close(cfd.file) != 0 {
+		if file_close(cfd) != 0 {
 			panic("must succeed")
 		}
 		proc.atime.io_time(n)
@@ -535,8 +535,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	buf := &stat_t{}
 	buf.init()
 	n := proc.atime.now()
-	//err := fs_fstat(fd.file, buf)
-	err := fd.file.fops.fstat(buf)
+	err := fd.fops.fstat(buf)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -556,7 +555,7 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	}
 
 	n := proc.atime.now()
-	ret := fd.file.fops.lseek(off, whence)
+	ret := fd.fops.lseek(off, whence)
 	proc.atime.io_time(n)
 	return ret
 }
@@ -578,8 +577,8 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	p.pipe_start()
 	rops := &pipefops_t{pipe: p, writer: false}
 	wops := &pipefops_t{pipe: p, writer: true}
-	rpipe := &file_t{fops: rops}
-	wpipe := &file_t{fops: wops}
+	rpipe := &fd_t{fops: rops}
+	wpipe := &fd_t{fops: wops}
 	rfd := proc.fd_insert(rpipe, rfp)
 	wfd := proc.fd_insert(wpipe, wfp)
 
@@ -970,11 +969,10 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 		fmt.Printf("only AF_UNIX + SOCK_DGRAM is supported for now")
 		return -ENOSYS
 	}
-	file := &file_t{}
+	file := &fd_t{}
 	sfops := &sockfops_t{open: 1, dgram: true}
 	file.fops = sfops
-	// no permissions -- disallow read(2)/write(2) on new socket
-	fdn := proc.fd_insert(file, 0)
+	fdn := proc.fd_insert(file, FD_READ | FD_WRITE)
 	return fdn
 }
 
@@ -1016,7 +1014,7 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	}
 
 	buf := proc.mkuserbuf(bufn, buflen)
-	ret, err := fd.file.fops.sendto(proc, buf, sabuf, flags)
+	ret, err := fd.fops.sendto(proc, buf, sabuf, flags)
 	if err != 0 {
 		return err
 	}
@@ -1049,7 +1047,7 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 		}
 	}
 	fromsa := proc.mkuserbuf(sockaddrn, salen)
-	ret, addrlen, err := fd.file.fops.recvfrom(proc, buf, fromsa)
+	ret, addrlen, err := fd.fops.recvfrom(proc, buf, fromsa)
 	if err != 0 {
 		return err
 	}
@@ -1073,7 +1071,7 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 		return err
 	}
 
-	return fd.file.fops.bind(proc, sabuf)
+	return fd.fops.bind(proc, sabuf)
 }
 
 type sockfops_t struct {
@@ -2169,7 +2167,7 @@ func segload(proc *proc_t, hdr *elf_phdr, mmapi []mmapinfo_t) {
 
 // returns user address of read-only TLS, thread 0's TLS image, and TLS size.
 // caller must hold proc's pagemap lock.
-func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
+func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 	PT_LOAD := 1
 	PT_TLS  := 7
 	istls := false
