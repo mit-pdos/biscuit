@@ -91,7 +91,7 @@ func fs_init() *fd_t {
 	fblkcache.fblkc_init(free_start, free_len)
 	iroot = idaemon_ensure(ri)
 
-	return &fd_t{fops: &fsfops_t{priv: ri}}
+	return &fd_t{fops: &fsfops_t{priv: ri, openc: 1}}
 }
 
 // XXX why not method of log_t???
@@ -631,15 +631,20 @@ func fs_rename(oldp, newp string, cwd inum) int {
 
 type fsfops_t struct {
 	priv	inum
-	offset	int
-	// protects offset for threads that share an fd
+	// protects offset and closed for threads that share an fd
 	sync.Mutex
+	offset	int
+	closed	bool
+	openc	int
 }
 
 func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
-	// lock the file to prevent races on offset
+	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
+	if fo.closed {
+		return 0, -EBADF
+	}
 
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
@@ -657,9 +662,12 @@ func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
 }
 
 func (fo *fsfops_t) write(src *userbuf_t, append bool) (int, int) {
-	// lock the file to prevent races on offset
+	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
+	if fo.closed {
+		return 0, -EBADF
+	}
 
 	op_begin()
 	defer op_end()
@@ -680,6 +688,13 @@ func (fo *fsfops_t) write(src *userbuf_t, append bool) (int, int) {
 }
 
 func (fo *fsfops_t) fstat(st *stat_t) int {
+	// lock the file to prevent races on closing
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.closed {
+		return -EBADF
+	}
+
 	priv := fo.priv
 	idmon := idaemon_ensure(priv)
 	req := &ireq_t{}
@@ -693,14 +708,37 @@ func (fo *fsfops_t) fstat(st *stat_t) int {
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
 func (fo *fsfops_t) close() int {
-	return fs_close(fo.priv)
+	// the underlying object (inode daemon) expects that no other
+	// operations will follow the last close, but threads may race with
+	// another thread closing. to this end, lock the file to prevent
+	// another operation racing with close().
+	//
+	// it would be better to modify the underlying object so that
+	// operations following the last close would fail. however, right now,
+	// this is not easily done.
+	fo.Lock()
+	fo.openc--
+	if fo.openc == 0 {
+		fo.closed = true
+	}
+	ret := fs_close(fo.priv)
+	fo.Unlock()
+	return ret
 }
 
 func (fo *fsfops_t) pathi() inum {
 	return fo.priv
 }
 
-func (fo *fsfops_t) reopen() {
+func (fo *fsfops_t) reopen() int {
+	// lock the file to prevent races on closing
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.closed {
+		return -EBADF
+	}
+	fo.openc++
+
 	idmon := idaemon_ensure(fo.priv)
 	req := &ireq_t{}
 	req.mkref_direct()
@@ -709,12 +747,16 @@ func (fo *fsfops_t) reopen() {
 	if req.resp.err != 0 {
 		panic("must succeed")
 	}
+	return 0
 }
 
 func (fo *fsfops_t) lseek(off, whence int) int {
-	// prevent races on fo.offset
+	// prevent races on fo.offset or closing
 	fo.Lock()
 	defer fo.Unlock()
+	if fo.closed {
+		return -EBADF
+	}
 
 	switch whence {
 	case SEEK_SET:
@@ -745,6 +787,12 @@ func (fo *fsfops_t) lseek(off, whence int) int {
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
 func (fo *fsfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.closed {
+		return nil, -EBADF
+	}
+
 	req := &ireq_t{}
 	req.mkmmapinfo(offset)
 	idm := idaemon_ensure(fo.priv)
@@ -816,8 +864,9 @@ func (df *devfops_t) close() int {
 	return 0
 }
 
-func (df *devfops_t) reopen() {
+func (df *devfops_t) reopen() int {
 	df._sane()
+	return 0
 }
 
 func (df *devfops_t) lseek(int, int) int {
@@ -1064,9 +1113,13 @@ func fs_open(paths string, flags, mode int, cwd inum,
 	min := fsf.minor
 	ret := &fd_t{}
 	if maj != 0 {
+		// don't need underlying file open
+		if fs_close(fsf.priv) != 0 {
+			panic("must succeed")
+		}
 		ret.fops = &devfops_t{priv: priv, maj: maj, min: min}
 	} else {
-		ret.fops = &fsfops_t{priv: priv}
+		ret.fops = &fsfops_t{priv: priv, openc: 1}
 	}
 	return ret, 0
 }

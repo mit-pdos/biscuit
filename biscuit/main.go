@@ -226,6 +226,7 @@ const(
 	D_LAST		= D_SUN
 )
 
+// threads/processes can concurrently call a single fd's methods
 type fdops_i interface {
 	// fd ops
 	close() int
@@ -234,7 +235,8 @@ type fdops_i interface {
 	mmapi(int) ([]mmapinfo_t, int)
 	pathi() inum
 	read(*userbuf_t) (int, int)
-	reopen()
+	// reopen() is called with proc_t.fdl is held
+	reopen() int
 	write(*userbuf_t, bool) (int, int)
 	// socket ops
 	bind(*proc_t, []uint8) int
@@ -665,7 +667,9 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 	ret.fds = fds
 	ret.fdstart = 3
 	ret.cwd = cwd
-	ret.cwd.fops.reopen()
+	if ret.cwd.fops.reopen() != 0 {
+		panic("must succeed")
+	}
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)

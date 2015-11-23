@@ -468,11 +468,14 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	return 0
 }
 
-func copyfd(fd *fd_t) *fd_t {
+func copyfd(fd *fd_t) (*fd_t, int) {
 	nfd := &fd_t{}
 	*nfd = *fd
-	nfd.fops.reopen()
-	return nfd
+	err := nfd.fops.reopen()
+	if err != 0 {
+		return nil, err
+	}
+	return nfd, 0
 }
 
 func sys_dup2(proc *proc_t, oldn, newn int) int{
@@ -484,7 +487,10 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 	if !ok {
 		return -EBADF
 	}
-	nfd := copyfd(ofd)
+	nfd, err := copyfd(ofd)
+	if err != 0 {
+		return err
+	}
 	nfd.perms &^= FD_CLOEXEC
 
 	// lock fd table to prevent racing on the same fd number
@@ -602,6 +608,7 @@ type pipe_t struct {
 	out	chan []uint8
 	readers	chan int
 	writers	chan int
+	admit	chan bool
 }
 
 func (p *pipe_t) pipe_start() {
@@ -611,12 +618,14 @@ func (p *pipe_t) pipe_start() {
 	outsz := make(chan int)
 	writers := make(chan int)
 	readers := make(chan int)
+	admission := make(chan bool)
 	p.inret = inret
 	p.in = in
 	p.outsz = outsz
 	p.out = out
 	p.readers = readers
 	p.writers = writers
+	p.admit = admission
 
 	go func() {
 		pipebufsz := 512
@@ -625,9 +634,13 @@ func (p *pipe_t) pipe_start() {
 		var buf []uint8
 		var toutsz chan int
 		tin := in
+		admit := 0
 		for writec > 0 || readc > 0 {
 			select {
 			// writing to pipe
+			case p.admit <- true:
+				admit++
+				continue
 			case d := <- tin:
 				if readc == 0 {
 					inret <- -EPIPE
@@ -655,6 +668,10 @@ func (p *pipe_t) pipe_start() {
 			case delta := <- readers:
 				readc += delta
 			}
+			admit--
+			if admit < 0 {
+				panic("wtf")
+			}
 
 			// allow more reads if there is data in the pipe or if
 			// there are no writers and the pipe is empty.
@@ -669,6 +686,20 @@ func (p *pipe_t) pipe_start() {
 				tin = nil
 			}
 		}
+
+		// fail requests from threads that raced with last closer.
+		close(p.admit)
+		for ; admit > 0; admit-- {
+			select {
+			case <- in:
+				inret <- -EBADF
+			case <- outsz:
+				var e []uint8
+				out <- e
+			case <- writers:
+			case <- readers:
+			}
+		}
 	}()
 }
 
@@ -678,6 +709,9 @@ type pipefops_t struct {
 }
 
 func (pf *pipefops_t) read(ub *userbuf_t) (int, int) {
+	if _, ok := <- pf.pipe.admit; !ok {
+		return 0, -EBADF
+	}
 	sz := ub.len
 	p := pf.pipe
 	p.outsz <- sz
@@ -698,6 +732,9 @@ func (pf *pipefops_t) write(src *userbuf_t, appnd bool) (int, int) {
 	p := pf.pipe
 	ret := 0
 	for len(buf) > 0 {
+		if _, ok := <- p.admit; !ok {
+			return 0, -EBADF
+		}
 		p.in <- buf
 		c := <- p.inret
 		if c < 0 {
@@ -710,6 +747,9 @@ func (pf *pipefops_t) write(src *userbuf_t, appnd bool) (int, int) {
 }
 
 func (pf *pipefops_t) close() int {
+	if _, ok := <- pf.pipe.admit; !ok {
+		return -EBADF
+	}
 	p := pf.pipe
 	var ch chan int
 	if pf.writer {
@@ -733,7 +773,10 @@ func (pf *pipefops_t) pathi() inum {
 	panic("pipe cwd")
 }
 
-func (pf *pipefops_t) reopen() {
+func (pf *pipefops_t) reopen() int {
+	if _, ok := <- pf.pipe.admit; !ok {
+		return -EBADF
+	}
 	var ch chan int
 	if pf.writer {
 		ch = pf.pipe.writers
@@ -741,6 +784,7 @@ func (pf *pipefops_t) reopen() {
 		ch = pf.pipe.readers
 	}
 	ch <- 1
+	return 0
 }
 
 func (pf *pipefops_t) lseek(int, int) int {
@@ -1130,11 +1174,12 @@ func (sf *sockfops_t) read(dst *userbuf_t) (int, int) {
 	return 0, -ENODEV
 }
 
-func (sf *sockfops_t) reopen() {
+func (sf *sockfops_t) reopen() int {
 	sf._sane()
 	sf.Lock()
 	sf.open++
 	sf.Unlock()
+	return 0
 }
 
 func (sf *sockfops_t) write(*userbuf_t, bool) (int, int) {
@@ -1439,7 +1484,12 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		cfds := make([]*fd_t, len(parent.fds))
 		for i := range parent.fds {
 			if parent.fds[i] != nil {
-				cfds[i] = copyfd(parent.fds[i])
+				tfd, err := copyfd(parent.fds[i])
+				// copying an fd may fail if another thread
+				// closes the fd out from under us
+				if err == 0 {
+					cfds[i] = tfd
+				}
 			}
 		}
 		parent.fdl.Unlock()
