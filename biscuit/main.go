@@ -231,11 +231,12 @@ type fdops_i interface {
 	// remove file_t arg?
 	close(*file_t) int
 	fstat(*file_t, *stat_t) int
+	lseek(*file_t, int, int) int
 	mmapi(*file_t, int) ([]mmapinfo_t, int)
 	pathi() inum
-	read(*userbuf_t, *file_t, int) (int, int)
+	read(*userbuf_t, *file_t) (int, int)
 	reopen(*file_t)
-	write(*userbuf_t, *file_t, int, bool) (int, int)
+	write(*userbuf_t, *file_t, bool) (int, int)
 	// socket ops
 	bind(*proc_t, []uint8) int
 	sendto(*proc_t, *userbuf_t, []uint8, int) (int, int)
@@ -246,22 +247,12 @@ type fdops_i interface {
 
 // this is the new fd_t
 type file_t struct {
-	// XXX move offset into fsfops_t first
-	ftype	ftype_t
-	sync.Mutex
-	// move into files that support it
-	offset	int
 	// fops is an interface implemented via a "pointer receiver", thus fops
 	// is a reference, not a value
 	fops	fdops_i
 	// XXX
 	hack	bool
 }
-
-type ftype_t int
-const(
-	INODE ftype_t = 1
-)
 
 const(
 	FD_READ		= 0x1

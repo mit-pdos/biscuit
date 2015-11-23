@@ -91,7 +91,7 @@ func fs_init() *file_t {
 	fblkcache.fblkc_init(free_start, free_len)
 	iroot = idaemon_ensure(ri)
 
-	return &file_t{ftype: INODE, fops: &fsfops_t{priv: ri}}
+	return &file_t{fops: &fsfops_t{priv: ri}}
 }
 
 // XXX why not method of log_t???
@@ -631,12 +631,19 @@ func fs_rename(oldp, newp string, cwd inum) int {
 
 type fsfops_t struct {
 	priv	inum
+	offset	int
+	// protects offset for threads that share an fd
+	sync.Mutex
 }
 
-func (fo *fsfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
+func (fo *fsfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
+	// lock the file to prevent races on offset
+	fo.Lock()
+	defer fo.Unlock()
+
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkread(dst, offset)
+	req.mkread(dst, fo.offset)
 
 	priv := fo.priv
 	idmon := idaemon_ensure(priv)
@@ -645,18 +652,22 @@ func (fo *fsfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
 	if req.resp.err != 0 {
 		return 0, req.resp.err
 	}
+	fo.offset += req.resp.count
 	return req.resp.count, 0
 }
 
-func (fo *fsfops_t) write(src *userbuf_t, f *file_t, offset int,
-    append bool) (int, int) {
+func (fo *fsfops_t) write(src *userbuf_t, f *file_t, append bool) (int, int) {
+	// lock the file to prevent races on offset
+	fo.Lock()
+	defer fo.Unlock()
+
 	op_begin()
 	defer op_end()
 
 	priv := fo.priv
 	// send write request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkwrite(src, offset, append)
+	req.mkwrite(src, fo.offset, append)
 
 	idmon := idaemon_ensure(priv)
 	idmon.req <- req
@@ -664,6 +675,7 @@ func (fo *fsfops_t) write(src *userbuf_t, f *file_t, offset int,
 	if req.resp.err != 0 {
 		return 0, req.resp.err
 	}
+	fo.offset += req.resp.count
 	return req.resp.count, 0
 }
 
@@ -707,6 +719,37 @@ func (fo *fsfops_t) reopen(f *file_t) {
 	}
 }
 
+func (fo *fsfops_t) lseek(f *file_t, off, whence int) int {
+	// prevent races on fo.offset
+	fo.Lock()
+	defer fo.Unlock()
+
+	switch whence {
+	case SEEK_SET:
+		fo.offset = off
+	case SEEK_CUR:
+		fo.offset += off
+	case SEEK_END:
+		st := &stat_t{}
+		st.init()
+		req := &ireq_t{}
+		req.mkfstat(st)
+		idm := idaemon_ensure(fo.priv)
+		idm.req <- req
+		<- req.ack
+		if req.resp.err != 0 {
+			panic("must succeed")
+		}
+		fo.offset = st.size() + off
+	default:
+		return -EINVAL
+	}
+	if fo.offset < 0 {
+		fo.offset = 0
+	}
+	return fo.offset
+}
+
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
 func (fo *fsfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
@@ -745,15 +788,14 @@ func (df *devfops_t) _sane() {
 	}
 }
 
-func (df *devfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
+func (df *devfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
 	df._sane()
-	return cons_read(dst, f, offset)
+	return cons_read(dst, f, 0)
 }
 
-func (df *devfops_t) write(src *userbuf_t, f *file_t, offset int,
-    append bool) (int, int) {
+func (df *devfops_t) write(src *userbuf_t, f *file_t, append bool) (int, int) {
 	df._sane()
-	return cons_write(src, f, offset, append)
+	return cons_write(src, f, 0, append)
 }
 
 func (df *devfops_t) fstat(f *file_t, st *stat_t) int {
@@ -784,6 +826,11 @@ func (df *devfops_t) close(f *file_t) int {
 
 func (df *devfops_t) reopen(f *file_t) {
 	df._sane()
+}
+
+func (df *devfops_t) lseek(*file_t, int, int) int {
+	df._sane()
+	return -ENODEV
 }
 
 func (df *devfops_t) bind(*proc_t, []uint8) int {
@@ -854,7 +901,6 @@ func fs_open(paths string, flags int, mode int, cwd inum,
 				r.hack = true
 			}
 		} else {
-			r.ftype = INODE
 			r.fops = &fsfops_t{priv: priv}
 		}
 		return r

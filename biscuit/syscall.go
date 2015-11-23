@@ -300,19 +300,12 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 
 	userbuf := proc.mkuserbuf(bufp, sz)
 
-	// XXX offset sync only; move to fdops
-	if fd.file.ftype == INODE {
-		fd.file.Lock()
-		defer fd.file.Unlock()
-	}
-
 	n := proc.atime.now()
-	ret, err := fd.file.fops.read(userbuf, fd.file, fd.file.offset)
+	ret, err := fd.file.fops.read(userbuf, fd.file)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
-	fd.file.offset += ret
 	return ret
 }
 
@@ -332,17 +325,12 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 
 	userbuf := proc.mkuserbuf(bufp, sz)
 
-	if fd.file.ftype == INODE {
-		fd.file.Lock()
-		defer fd.file.Unlock()
-	}
 	n := proc.atime.now()
-	ret, err := fd.file.fops.write(userbuf, fd.file, fd.file.offset, apnd)
+	ret, err := fd.file.fops.write(userbuf, fd.file, apnd)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
-	fd.file.offset += ret
 	return ret
 }
 
@@ -577,35 +565,11 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	if !ok {
 		return -EBADF
 	}
-	// XXX lseek should be part of fdops_i interface
-	if fd.file.ftype != INODE {
-		return -ESPIPE
-	}
 
-	fd.file.Lock()
-	defer fd.file.Unlock()
-
-	switch whence {
-	case SEEK_SET:
-		fd.file.offset = off
-	case SEEK_CUR:
-		fd.file.offset += off
-	case SEEK_END:
-		st := &stat_t{}
-		st.init()
-		n := proc.atime.now()
-		if err := fd.file.fops.fstat(fd.file, st); err != 0 {
-			panic("must succeed")
-		}
-		proc.atime.io_time(n)
-		fd.file.offset = st.size() + off
-	default:
-		return -EINVAL
-	}
-	if fd.file.offset < 0 {
-		fd.file.offset = 0
-	}
-	return fd.file.offset
+	n := proc.atime.now()
+	ret := fd.file.fops.lseek(fd.file, off, whence)
+	proc.atime.io_time(n)
+	return ret
 }
 
 func sys_pipe2(proc *proc_t, pipen, flags int) int {
@@ -725,7 +689,7 @@ type pipefops_t struct {
 	writer	bool
 }
 
-func (pf *pipefops_t) read(ub *userbuf_t, f *file_t, offset int) (int, int) {
+func (pf *pipefops_t) read(ub *userbuf_t, f *file_t) (int, int) {
 	sz := ub.len
 	p := pf.pipe
 	p.outsz <- sz
@@ -734,8 +698,7 @@ func (pf *pipefops_t) read(ub *userbuf_t, f *file_t, offset int) (int, int) {
 	return ret, err
 }
 
-func (pf *pipefops_t) write(src *userbuf_t, f *file_t, offset int,
-    appnd bool) (int, int) {
+func (pf *pipefops_t) write(src *userbuf_t, f *file_t, appnd bool) (int, int) {
 	buf := make([]uint8, src.len)
 	read, err := src.read(buf)
 	if err != 0 {
@@ -790,6 +753,10 @@ func (pf *pipefops_t) reopen(f *file_t) {
 		ch = pf.pipe.readers
 	}
 	ch <- 1
+}
+
+func (pf *pipefops_t) lseek(*file_t, int, int) int {
+	return -ENODEV
 }
 
 func (pf *pipefops_t) bind(*proc_t, []uint8) int {
@@ -1168,7 +1135,7 @@ func (sf *sockfops_t) pathi() inum {
 	panic("cwd socket?")
 }
 
-func (sf *sockfops_t) read(dst *userbuf_t, f *file_t, offset int) (int, int) {
+func (sf *sockfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
 	sf._sane()
 	return 0, -ENODEV
 }
@@ -1180,9 +1147,13 @@ func (sf *sockfops_t) reopen(*file_t) {
 	sf.Unlock()
 }
 
-func (sf *sockfops_t) write(*userbuf_t, *file_t, int, bool) (int, int) {
+func (sf *sockfops_t) write(*userbuf_t, *file_t, bool) (int, int) {
 	sf._sane()
 	return 0, -ENODEV
+}
+
+func (sf *sockfops_t) lseek(*file_t, int, int) int {
+	return -ENODEV
 }
 
 // trims trailing nulls from slice
@@ -1658,7 +1629,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	ub := &userbuf_t{}
 	ub.fake_init(hdata)
 	n = proc.atime.now()
-	ret, err := file.fops.read(ub, file, 0)
+	ret, err := file.fops.read(ub, file)
 	proc.atime.io_time(n)
 	if err != 0 {
 		restore()
