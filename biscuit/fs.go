@@ -636,7 +636,7 @@ type fsfops_t struct {
 	sync.Mutex
 }
 
-func (fo *fsfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
+func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
 	// lock the file to prevent races on offset
 	fo.Lock()
 	defer fo.Unlock()
@@ -656,7 +656,7 @@ func (fo *fsfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
 	return req.resp.count, 0
 }
 
-func (fo *fsfops_t) write(src *userbuf_t, f *file_t, append bool) (int, int) {
+func (fo *fsfops_t) write(src *userbuf_t, append bool) (int, int) {
 	// lock the file to prevent races on offset
 	fo.Lock()
 	defer fo.Unlock()
@@ -679,7 +679,7 @@ func (fo *fsfops_t) write(src *userbuf_t, f *file_t, append bool) (int, int) {
 	return req.resp.count, 0
 }
 
-func (fo *fsfops_t) fstat(f *file_t, st *stat_t) int {
+func (fo *fsfops_t) fstat(st *stat_t) int {
 	priv := fo.priv
 	idmon := idaemon_ensure(priv)
 	req := &ireq_t{}
@@ -692,7 +692,7 @@ func (fo *fsfops_t) fstat(f *file_t, st *stat_t) int {
 // XXX log those files that have no fs links but > 0 memory references to the
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
-func (fo *fsfops_t) close(f *file_t) int {
+func (fo *fsfops_t) close() int {
 	return fs_close(fo.priv)
 }
 
@@ -700,7 +700,7 @@ func (fo *fsfops_t) pathi() inum {
 	return fo.priv
 }
 
-func (fo *fsfops_t) reopen(f *file_t) {
+func (fo *fsfops_t) reopen() {
 	idmon := idaemon_ensure(fo.priv)
 	req := &ireq_t{}
 	req.mkref_direct()
@@ -711,7 +711,7 @@ func (fo *fsfops_t) reopen(f *file_t) {
 	}
 }
 
-func (fo *fsfops_t) lseek(f *file_t, off, whence int) int {
+func (fo *fsfops_t) lseek(off, whence int) int {
 	// prevent races on fo.offset
 	fo.Lock()
 	defer fo.Unlock()
@@ -744,7 +744,7 @@ func (fo *fsfops_t) lseek(f *file_t, off, whence int) int {
 
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
-func (fo *fsfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+func (fo *fsfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	req := &ireq_t{}
 	req.mkmmapinfo(offset)
 	idm := idaemon_ensure(fo.priv)
@@ -780,17 +780,17 @@ func (df *devfops_t) _sane() {
 	}
 }
 
-func (df *devfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
+func (df *devfops_t) read(dst *userbuf_t) (int, int) {
 	df._sane()
-	return cons_read(dst, f, 0)
+	return cons_read(dst, nil, 0)
 }
 
-func (df *devfops_t) write(src *userbuf_t, f *file_t, append bool) (int, int) {
+func (df *devfops_t) write(src *userbuf_t, append bool) (int, int) {
 	df._sane()
-	return cons_write(src, f, 0, append)
+	return cons_write(src, nil, 0, append)
 }
 
-func (df *devfops_t) fstat(f *file_t, st *stat_t) int {
+func (df *devfops_t) fstat(st *stat_t) int {
 	df._sane()
 	priv := df.priv
 	idmon := idaemon_ensure(priv)
@@ -801,7 +801,7 @@ func (df *devfops_t) fstat(f *file_t, st *stat_t) int {
 	return req.resp.err
 }
 
-func (df *devfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+func (df *devfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	df._sane()
 	return nil, -ENODEV
 }
@@ -811,16 +811,16 @@ func (df *devfops_t) pathi() inum {
 	panic("bad cwd")
 }
 
-func (df *devfops_t) close(f *file_t) int {
+func (df *devfops_t) close() int {
 	df._sane()
 	return 0
 }
 
-func (df *devfops_t) reopen(f *file_t) {
+func (df *devfops_t) reopen() {
 	df._sane()
 }
 
-func (df *devfops_t) lseek(*file_t, int, int) int {
+func (df *devfops_t) lseek(int, int) int {
 	df._sane()
 	return -ENODEV
 }

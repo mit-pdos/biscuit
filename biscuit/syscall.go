@@ -301,7 +301,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	userbuf := proc.mkuserbuf(bufp, sz)
 
 	n := proc.atime.now()
-	ret, err := fd.file.fops.read(userbuf, fd.file)
+	ret, err := fd.file.fops.read(userbuf)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -326,7 +326,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	userbuf := proc.mkuserbuf(bufp, sz)
 
 	n := proc.atime.now()
-	ret, err := fd.file.fops.write(userbuf, fd.file, apnd)
+	ret, err := fd.file.fops.write(userbuf, apnd)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -401,7 +401,7 @@ func sys_close(proc *proc_t, fdn int) int {
 
 // XXX remove
 func file_close(f *file_t) int {
-	return f.fops.close(f)
+	return f.fops.close()
 }
 
 // a type to hold the virtual/physical addresses of memory mapped files
@@ -471,7 +471,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 func copyfd(fd *fd_t) *fd_t {
 	nfd := &fd_t{}
 	*nfd = *fd
-	nfd.file.fops.reopen(nil)
+	nfd.file.fops.reopen()
 	return nfd
 }
 
@@ -536,7 +536,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	buf.init()
 	n := proc.atime.now()
 	//err := fs_fstat(fd.file, buf)
-	err := fd.file.fops.fstat(fd.file, buf)
+	err := fd.file.fops.fstat(buf)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -556,7 +556,7 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	}
 
 	n := proc.atime.now()
-	ret := fd.file.fops.lseek(fd.file, off, whence)
+	ret := fd.file.fops.lseek(off, whence)
 	proc.atime.io_time(n)
 	return ret
 }
@@ -678,7 +678,7 @@ type pipefops_t struct {
 	writer	bool
 }
 
-func (pf *pipefops_t) read(ub *userbuf_t, f *file_t) (int, int) {
+func (pf *pipefops_t) read(ub *userbuf_t) (int, int) {
 	sz := ub.len
 	p := pf.pipe
 	p.outsz <- sz
@@ -687,7 +687,7 @@ func (pf *pipefops_t) read(ub *userbuf_t, f *file_t) (int, int) {
 	return ret, err
 }
 
-func (pf *pipefops_t) write(src *userbuf_t, f *file_t, appnd bool) (int, int) {
+func (pf *pipefops_t) write(src *userbuf_t, appnd bool) (int, int) {
 	buf := make([]uint8, src.len)
 	read, err := src.read(buf)
 	if err != 0 {
@@ -710,7 +710,7 @@ func (pf *pipefops_t) write(src *userbuf_t, f *file_t, appnd bool) (int, int) {
 	return ret, 0
 }
 
-func (pf *pipefops_t) close(f *file_t) int {
+func (pf *pipefops_t) close() int {
 	p := pf.pipe
 	var ch chan int
 	if pf.writer {
@@ -722,11 +722,11 @@ func (pf *pipefops_t) close(f *file_t) int {
 	return 0
 }
 
-func (pf *pipefops_t) fstat(f *file_t, st *stat_t) int {
+func (pf *pipefops_t) fstat(st *stat_t) int {
 	panic("fstat on pipe")
 }
 
-func (pf *pipefops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+func (pf *pipefops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	panic("mmap on pipe")
 }
 
@@ -734,7 +734,7 @@ func (pf *pipefops_t) pathi() inum {
 	panic("pipe cwd")
 }
 
-func (pf *pipefops_t) reopen(f *file_t) {
+func (pf *pipefops_t) reopen() {
 	var ch chan int
 	if pf.writer {
 		ch = pf.pipe.writers
@@ -744,7 +744,7 @@ func (pf *pipefops_t) reopen(f *file_t) {
 	ch <- 1
 }
 
-func (pf *pipefops_t) lseek(*file_t, int, int) int {
+func (pf *pipefops_t) lseek(int, int) int {
 	return -ENODEV
 }
 
@@ -1093,7 +1093,7 @@ func (sf *sockfops_t) _sane() {
 	}
 }
 
-func (sf *sockfops_t) close(f *file_t) int {
+func (sf *sockfops_t) close() int {
 	sf._sane()
 	sf.Lock()
 	sf.open--
@@ -1112,12 +1112,12 @@ func (sf *sockfops_t) close(f *file_t) int {
 	return 0
 }
 
-func (sf *sockfops_t) fstat(f *file_t, s *stat_t) int {
+func (sf *sockfops_t) fstat(s *stat_t) int {
 	sf._sane()
 	return -ENODEV
 }
 
-func (sf *sockfops_t) mmapi(f *file_t, offset int) ([]mmapinfo_t, int) {
+func (sf *sockfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	sf._sane()
 	return nil, -ENODEV
 }
@@ -1127,24 +1127,24 @@ func (sf *sockfops_t) pathi() inum {
 	panic("cwd socket?")
 }
 
-func (sf *sockfops_t) read(dst *userbuf_t, f *file_t) (int, int) {
+func (sf *sockfops_t) read(dst *userbuf_t) (int, int) {
 	sf._sane()
 	return 0, -ENODEV
 }
 
-func (sf *sockfops_t) reopen(*file_t) {
+func (sf *sockfops_t) reopen() {
 	sf._sane()
 	sf.Lock()
 	sf.open++
 	sf.Unlock()
 }
 
-func (sf *sockfops_t) write(*userbuf_t, *file_t, bool) (int, int) {
+func (sf *sockfops_t) write(*userbuf_t, bool) (int, int) {
 	sf._sane()
 	return 0, -ENODEV
 }
 
-func (sf *sockfops_t) lseek(*file_t, int, int) int {
+func (sf *sockfops_t) lseek(int, int) int {
 	return -ENODEV
 }
 
@@ -1610,7 +1610,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		return err
 	}
 	defer func() {
-		if file.fops.close(nil) != 0 {
+		if file.fops.close() != 0 {
 			panic("must succeed")
 		}
 	}()
@@ -1619,7 +1619,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	ub := &userbuf_t{}
 	ub.fake_init(hdata)
 	n = proc.atime.now()
-	ret, err := file.fops.read(ub, file)
+	ret, err := file.fops.read(ub)
 	proc.atime.io_time(n)
 	if err != 0 {
 		restore()
@@ -2186,7 +2186,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *file_t) (int, int, int) {
 			tlssize = roundup(hdr.memsz, 8)
 			tlscopylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
-			mmapi, err := f.fops.mmapi(f, 0)
+			mmapi, err := f.fops.mmapi(0)
 			if err != 0 {
 				panic("must succeed")
 			}

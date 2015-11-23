@@ -228,15 +228,14 @@ const(
 
 type fdops_i interface {
 	// file ops
-	// remove file_t arg?
-	close(*file_t) int
-	fstat(*file_t, *stat_t) int
-	lseek(*file_t, int, int) int
-	mmapi(*file_t, int) ([]mmapinfo_t, int)
+	close() int
+	fstat(*stat_t) int
+	lseek(int, int) int
+	mmapi(int) ([]mmapinfo_t, int)
 	pathi() inum
-	read(*userbuf_t, *file_t) (int, int)
-	reopen(*file_t)
-	write(*userbuf_t, *file_t, bool) (int, int)
+	read(*userbuf_t) (int, int)
+	reopen()
+	write(*userbuf_t, bool) (int, int)
 	// socket ops
 	bind(*proc_t, []uint8) int
 	sendto(*proc_t, *userbuf_t, []uint8, int) (int, int)
@@ -673,7 +672,7 @@ func proc_new(name string, cwd *file_t, fds []*fd_t) *proc_t {
 	ret.fds = fds
 	ret.fdstart = 3
 	ret.cwd = cwd
-	ret.cwd.fops.reopen(nil)
+	ret.cwd.fops.reopen()
 	ret.mmapi = USERMIN
 	// mem limit = 128 MB
 	ret.ulim.pages = (1 << 27) / (1 << 12)
