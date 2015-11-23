@@ -371,17 +371,6 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if err != 0 {
 		return err
 	}
-	// XXX for new fs_open that does not return a file_t, create proper
-	// fops struct and close on-disk dev file.
-	// not allowed to open UNIX sockets
-	if file.hack {
-		n := proc.atime.now()
-		if err := file.fops.close(file); err != 0 {
-			panic("must succeed")
-		}
-		proc.atime.io_time(n)
-		return -EPERM
-	}
 	if flags & O_APPEND != 0 {
 		fdperms |= FD_APPEND
 	}
@@ -930,10 +919,13 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 	}
 	maj, min := dsplit(devn)
 	n := proc.atime.now()
-	_, err = fs_open(path, O_CREAT, 0, proc.cwd.fops.pathi(), maj, min)
+	fsf, err := _fs_open(path, O_CREAT, 0, proc.cwd.fops.pathi(), maj, min)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
+	}
+	if fs_close(fsf.priv) != 0 {
+		panic("must succeed")
 	}
 	return 0
 }
@@ -1176,14 +1168,12 @@ func (sf *sockfops_t) bind(proc *proc_t, sa []uint8) int {
 	sid := sun_new()
 	n := proc.atime.now()
 	pi := proc.cwd.fops.pathi()
-	newfile, err := fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUN, int(sid))
+	fsf, err := _fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUN, int(sid))
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
 	}
-	// XXX fix fs_open to not return file_t
-	dur := fsfops_t{priv: newfile.fops.(*devfops_t).priv}
-	if dur.close(nil) != 0 {
+	if fs_close(fsf.priv) != 0 {
 		panic("must succeed")
 	}
 	sf.sunaddr.id = sid
@@ -1620,7 +1610,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		return err
 	}
 	defer func() {
-		if file_close(file) != 0 {
+		if file.fops.close(nil) != 0 {
 			panic("must succeed")
 		}
 	}()

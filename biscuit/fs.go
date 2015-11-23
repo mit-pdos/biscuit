@@ -693,15 +693,7 @@ func (fo *fsfops_t) fstat(f *file_t, st *stat_t) int {
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
 func (fo *fsfops_t) close(f *file_t) int {
-	op_begin()
-	defer op_end()
-
-	req := &ireq_t{}
-	req.mkrefdec(true)
-	idmon := idaemon_ensure(fo.priv)
-	idmon.req <- req
-	<- req.ack
-	return req.resp.err
+	return fs_close(fo.priv)
 }
 
 func (fo *fsfops_t) pathi() inum {
@@ -890,22 +882,15 @@ func fs_mkdir(paths string, mode int, cwd inum) int {
 	return 0
 }
 
-func fs_open(paths string, flags int, mode int, cwd inum,
-    major, minor int) (*file_t, int) {
-	fnew := func(priv inum, maj, min int) *file_t {
-		r := &file_t{}
-		if maj != 0 || min != 0 {
-			r.fops = &devfops_t{priv: priv, maj: maj, min: min}
-			// XXX XXX goes away with new fs_open
-			if maj == D_SUN {
-				r.hack = true
-			}
-		} else {
-			r.fops = &fsfops_t{priv: priv}
-		}
-		return r
-	}
+// a type to represent on-disk files
+type fsfile_t struct {
+	priv	inum
+	major	int
+	minor	int
+}
 
+func _fs_open(paths string, flags int, mode int, cwd inum,
+    major, minor int) (*fsfile_t, int) {
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
 	nodir := false
@@ -1051,8 +1036,51 @@ func fs_open(paths string, flags int, mode int, cwd inum,
 		}
 	}
 
-	ret := fnew(priv, maj, min)
+	ret := &fsfile_t{}
+	ret.priv = priv
+	ret.major = maj
+	ret.minor = min
 	return ret, 0
+}
+
+func fs_open(paths string, flags, mode int, cwd inum,
+    major, minor int) (*file_t, int) {
+	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
+	if err != 0 {
+		return nil, err
+	}
+
+	// some special files (sockets) cannot be opened with fops this way
+	if fsf.major == D_SUN {
+		if fs_close(fsf.priv) != 0 {
+			panic("must succeed")
+		}
+		return nil, -EPERM
+	}
+
+	// convert on-disk file to fd with fops
+	priv := fsf.priv
+	maj := fsf.major
+	min := fsf.minor
+	ret := &file_t{}
+	if maj != 0 {
+		ret.fops = &devfops_t{priv: priv, maj: maj, min: min}
+	} else {
+		ret.fops = &fsfops_t{priv: priv}
+	}
+	return ret, 0
+}
+
+func fs_close(priv inum) int {
+	op_begin()
+	defer op_end()
+
+	req := &ireq_t{}
+	req.mkrefdec(true)
+	idmon := idaemon_ensure(priv)
+	idmon.req <- req
+	<- req.ack
+	return req.resp.err
 }
 
 func fs_stat(path string, st *stat_t, cwd inum) int {

@@ -250,8 +250,6 @@ type file_t struct {
 	// fops is an interface implemented via a "pointer receiver", thus fops
 	// is a reference, not a value
 	fops	fdops_i
-	// XXX
-	hack	bool
 }
 
 const(
