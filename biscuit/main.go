@@ -1315,6 +1315,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 				curaddr = curaddr[0:0]
 			}
 		}
+		uoff += len(ptrs)
 	}
 	return ret, true
 }
