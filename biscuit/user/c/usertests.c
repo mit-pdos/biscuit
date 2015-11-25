@@ -2171,6 +2171,184 @@ threadwait()
 	printf("threadwait ok\n");
 }
 
+// ... = is processed in groups of three: int fd, short events, short expected
+void _pchk(const int timeout, const int expto, const int numfds, ...)
+{
+	struct pollfd pfds[numfds];
+	short expects[numfds];
+
+	va_list ap;
+	va_start(ap, numfds);
+	int i;
+	for (i = 0; i < numfds; i++) {
+		int fd = va_arg(ap, int);
+		short events = va_arg(ap, int);
+		short expect = va_arg(ap, int);
+		pfds[i].fd = fd;
+		pfds[i].events = events;
+		expects[i] = expect;
+	}
+	va_end(ap);
+
+	int ret = poll(pfds, numfds, timeout);
+	// verify return value
+	if (expto && ret != 0)
+		errx(-1, "expected timeout");
+	int readyfds = 0;
+	for (i = 0; i < numfds; i++) {
+		if (expects[i] != 0)
+			readyfds++;
+		if (expects[i] != pfds[i].revents)
+			errx(-1, "status mismatch: got %x, expected %x for "
+			    "fd %d", pfds[i].revents, expects[i], pfds[i].fd);
+	}
+	if (readyfds != ret)
+		errx(-1, "ready fd mismatch: %d != %d", readyfds, ret);
+}
+
+void polltest()
+{
+	printf("poll test\n");
+
+	int f1 = open("/tmp/hello1", O_CREAT | O_RDWR);
+	if (f1 < 0)
+		err(-1, "create");
+	int f2 = open("/tmp/hello2", O_CREAT | O_RDWR);
+	if (f2 < 0)
+		err(-1, "create");
+
+	const int rwfl = POLLIN | POLLOUT;
+	const int toyes = 1, tono = 0;
+	// make sure they are {read,write}able
+	_pchk(-1, tono, 1, f1, rwfl, rwfl);
+	_pchk(-1, tono, 2, f1, rwfl, rwfl,
+			f2, rwfl, rwfl);
+	_pchk(INT_MAX, tono, 2, f1, POLLIN, POLLIN,
+			f2, POLLOUT, POLLOUT);
+	_pchk(0, tono,  2, f1, rwfl, rwfl,
+			f2, rwfl, rwfl);
+	// and that no error/hup is reported for non-blocking and timeouts
+	_pchk(0, toyes,  2, f1, POLLERR | POLLHUP, 0,
+			f2, POLLERR | POLLHUP, 0);
+	_pchk(500000, toyes,  2, f1, POLLERR | POLLHUP, 0,
+			f2, POLLERR | POLLHUP, 0);
+
+	// pipe initially has no data to read
+	int pp[2];
+	if (pipe(pp) < 0)
+		err(-1, "pipe");
+	_pchk(-1, tono, 4,
+		f1, rwfl, rwfl,
+		f2, rwfl, rwfl,
+		pp[0], rwfl, 0,
+		pp[1], rwfl, POLLOUT);
+
+	// notice reads
+	char buf[512];
+	long ret;
+	ret = write(pp[1], buf, sizeof(buf));
+	if (ret < 0)
+		err(-1, "write");
+	else if (ret != sizeof(buf))
+		errx(-1, "short write");
+
+	_pchk(-1, tono, 2,
+		pp[0], rwfl, POLLIN,
+		pp[1], rwfl, 0);
+
+	// make sure pipe empties
+	ret = read(pp[0], buf, sizeof(buf)/2);
+	if (ret < 0)
+		err(-1, "read");
+	else if (ret != (sizeof(buf)/2))
+		errx(-1, "short read");
+
+	_pchk(10000, tono, 2,
+		pp[0], rwfl, POLLIN,
+		pp[1], rwfl, POLLOUT);
+
+	ret = read(pp[0], buf, sizeof(buf)/2);
+	if (ret < 0)
+		err(-1, "read");
+	else if (ret != (sizeof(buf)/2))
+		errx(-1, "short read");
+
+	_pchk(-1, tono, 2,
+		pp[0], rwfl, 0,
+		pp[1], rwfl, POLLOUT);
+
+	int unbound = socket(AF_UNIX, SOCK_DGRAM, 0);
+	int sock = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (sock < 0)
+		err(-1, "socket");
+	char *spath = "/tmp/pollsock";
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	snprintf(sa.sun_path, sizeof(sa.sun_path), spath);
+
+	unlink(spath);
+	if (bind(sock, (struct sockaddr *)&sa, SUN_LEN(&sa)) < 0)
+		err(-1, "bind");
+
+	_pchk(-1, tono, 4,
+		pp[0], rwfl, 0,
+		pp[1], rwfl, POLLOUT,
+		unbound, rwfl, POLLERR,
+		sock, rwfl, POLLOUT);
+
+	_pchk(10000, toyes, 1,
+		sock, POLLIN, 0);
+
+	pid_t pid = fork();
+	if (pid < 0)
+		err(-1, "fork");
+	if (pid == 0) {
+		close(f1);
+		close(f2);
+		close(pp[0]);
+		close(sock);
+
+		struct sockaddr_un ua;
+		ua.sun_family = AF_UNIX;
+		snprintf(ua.sun_path, sizeof(ua.sun_path), "/tmp/pollsock");
+		char *msg = "foobar";
+		ret = sendto(unbound, msg, strlen(msg), 0,
+		    (struct sockaddr *)&ua, SUN_LEN(&ua));
+		if (ret < 0)
+			err(-1, "sendto");
+		else if (ret != strlen(msg))
+			errx(-1, "short write");
+		printf("child sent\n");
+		exit(0);
+	}
+
+	_pchk(-1, tono, 1,
+		sock, POLLIN, POLLIN);
+	_pchk(0, tono, 1,
+		sock, rwfl, rwfl);
+	_pchk(10000, toyes, 1,
+		sock, POLLERR, 0);
+
+	ret = recv(sock, buf, sizeof(buf), 0);
+	if (ret < 0)
+		err(-1, "recv");
+	else if (ret == 0)
+		errx(-1, "short read");
+
+	_pchk(10000, tono, 1,
+		sock, rwfl, POLLOUT);
+	_pchk(10000, toyes, 1,
+		sock, POLLIN, 0);
+
+	close(f1);
+	close(f2);
+	close(pp[0]);
+	close(pp[1]);
+	close(sock);
+	close(unbound);
+	printf("polltest ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2228,6 +2406,8 @@ main(int argc, char *argv[])
   posixtest();
   barriertest();
   threadwait();
+
+  polltest();
 
   exectest();
 

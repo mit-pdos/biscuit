@@ -77,6 +77,17 @@ const(
   SYS_CLOSE    = 3
   SYS_STAT     = 4
   SYS_FSTAT    = 5
+  SYS_POLL     = 7
+    POLLRDNORM    = 0x1
+    POLLRDBAND    = 0x2
+    POLLIN        = (POLLRDNORM | POLLRDBAND)
+    POLLPRI       = 0x4
+    POLLWRNORM    = 0x8
+    POLLOUT       = POLLWRNORM
+    POLLWRBAND    = 0x10
+    POLLERR       = 0x20
+    POLLHUP       = 0x40
+    POLLNVAL      = 0x80
   SYS_LSEEK    = 8
     SEEK_SET      = 0x1
     SEEK_CUR      = 0x2
@@ -184,6 +195,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_stat(p, a1, a2)
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
+	case SYS_POLL:
+		ret = sys_poll(p, a1, a2, a3)
 	case SYS_LSEEK:
 		ret = sys_lseek(p, a1, a2, a3)
 	case SYS_MMAP:
@@ -554,6 +567,121 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	return 0
 }
 
+func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
+	if nfds < 0  || timeout < -1 {
+		return -EINVAL
+	}
+
+	// converts internal states to poll states
+	inmask  := POLLIN | POLLPRI
+	outmask := POLLOUT | POLLWRBAND
+	ready2rev := func(r ready_t) int {
+		ret := 0
+		if r & R_READ != 0 {
+			ret |= inmask
+		}
+		if r & R_WRITE != 0 {
+			ret |= outmask
+		}
+		if r & R_HUP != 0 {
+			ret |= POLLHUP
+		}
+		if r & R_ERROR != 0 {
+			ret |= POLLERR
+		}
+		return ret
+	}
+
+	// pokes poll status bits into user memory. since we only use one
+	// priority internally, mask away any POLL bits the user didn't not
+	// request.
+	ppoke := func(orig, bits int) int {
+		origevents := ((orig >> 32) & 0xffff) | POLLNVAL | POLLERR | POLLHUP
+		return orig & 0x0000ffffffffffff | ((origevents & bits) << 48)
+	}
+
+	// first we tell the underlying device to notify us if their fd is
+	// ready. if a device is immediately ready, we don't both to register
+	// notifiers with the rest of the devices -- we just ask their status
+	// too.
+	pollfdsz := 8
+	devwait := timeout != 0
+	pm := pollmsg_t{}
+	readyfds := 0
+	for i := 0; i < nfds; i++ {
+		va := fdsn + pollfdsz*i
+		uw, ok := proc.userreadn(va, 8)
+		if !ok {
+			return -EFAULT
+		}
+		fdn := int(uint32(uw))
+		// fds < 0 are to be ignored
+		if fdn < 0 {
+			continue
+		}
+		fd, ok := proc.fd_get(fdn)
+		if !ok {
+			uw |= POLLNVAL
+			if !proc.userwriten(va, 8, uw) {
+				return -EFAULT
+			}
+			continue
+		}
+		var pev ready_t
+		events := int((uint(uw) >> 32) & 0xffff)
+		// one priority
+		if events & inmask != 0 {
+			pev |= R_READ
+		}
+		if events & outmask != 0 {
+			pev |= R_WRITE
+		}
+		if events & POLLHUP != 0 {
+			pev |= R_HUP
+		}
+		// poll unconditionally reports ERR, HUP, and NVAL
+		pev |= R_ERROR | R_HUP
+		pm.pm_set(pev, fdn, devwait, i)
+		devstatus := fd.fops.pollone(pm)
+		if devstatus != 0 {
+			// found at least one ready fd; don't bother having the
+			// other fds send notifications. update user revents
+			devwait = false
+			nuw := ppoke(uw, ready2rev(devstatus))
+			if !proc.userwriten(va, 8, nuw) {
+				return -EFAULT
+			}
+			readyfds++
+		}
+	}
+
+	// if we found a ready fd, we are done
+	if !devwait {
+		return readyfds
+	}
+
+	// otherwise, wait for one notification
+	rpm, timedout, err := pm.pm_wait(timeout)
+	if err != 0 {
+		panic("must succeed")
+	}
+	if timedout {
+		return 0
+	}
+	// update pollfd revent field
+	idx := rpm.phint
+	va := fdsn + idx*pollfdsz
+	uw, ok := proc.userreadn(va, 8)
+	if !ok {
+		return -EFAULT
+	}
+	nuw := ppoke(uw, ready2rev(rpm.events))
+	if !proc.userwriten(va, 8, nuw) {
+		return -EFAULT
+	}
+	return 1
+}
+
 func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	fd, ok := proc.fd_get(fdn)
 	if !ok {
@@ -601,14 +729,108 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	return 0
 }
 
+type ready_t uint
+const(
+	R_READ 	ready_t	= 1 << iota
+	R_WRITE	ready_t	= 1 << iota
+	R_ERROR	ready_t	= 1 << iota
+	R_HUP	ready_t	= 1 << iota
+)
+
+// used by thread executing poll(2).
+type pollmsg_t struct {
+	notif	chan pollmsg_t
+	events	ready_t
+	fdn	int
+	dowait	bool
+	// phint is this fd's index into the user pollfd array
+	phint	int
+}
+
+func (pm *pollmsg_t) pm_set(events ready_t, fdn int, dowait bool, phint int) {
+	if pm.notif == nil {
+		// 1-element buffered channel; that way devices can send
+		// notifies on the channel asynchronously without blocking.
+		pm.notif = make(chan pollmsg_t, 1)
+	}
+	pm.events = events
+	pm.fdn = fdn
+	pm.dowait = dowait
+	pm.phint = phint
+}
+
+// returns the pollmsg_t of ready fd, whether we timed out, and error
+func (pm *pollmsg_t) pm_wait(tous int) (pollmsg_t, bool, int) {
+	// XXXPANIC
+	if tous == 0 {
+		panic("wait for non-blocking poll?")
+	}
+	var tochan <-chan time.Time
+	if tous > 0 {
+		tochan = time.After(time.Duration(tous) * time.Microsecond)
+	}
+	var readypm pollmsg_t
+	var timeout bool
+	select {
+	case readypm = <- pm.notif:
+	case <- tochan:
+		timeout = true
+	}
+	return readypm, timeout, 0
+}
+
+// keeps track of all outstanding pollers. used by devices supporting poll(2)
+type pollers_t struct {
+	allmask	ready_t
+	// just need an unordered set; use array if too slow
+	waiters	map[chan pollmsg_t]pollmsg_t
+}
+
+func (p *pollers_t) addpoller(pm *pollmsg_t) {
+	if p.waiters == nil {
+		p.waiters = make(map[chan pollmsg_t]pollmsg_t, 4)
+	}
+	// XXXPANIC
+	if _, ok := p.waiters[pm.notif]; ok {
+		panic("poller exists")
+	}
+	p.waiters[pm.notif] = *pm
+	p.allmask |= pm.events
+}
+
+func (p *pollers_t) wakeready(r ready_t) {
+	if p.allmask & r == 0 {
+		return
+	}
+	var newallmask ready_t
+	for k, pm := range p.waiters {
+		// found a waiter
+		if pm.events & r != 0 {
+			pm.events &= r
+			// non-blocking send on a 1-element buffered channel
+			select {
+			case pm.notif <- pm:
+			default:
+			}
+			delete(p.waiters, k)
+		} else {
+			newallmask |= pm.events
+		}
+	}
+	p.allmask = newallmask
+}
+
 type pipe_t struct {
-	inret	chan int
-	in	chan []uint8
-	outsz	chan int
-	out	chan []uint8
-	readers	chan int
-	writers	chan int
-	admit	chan bool
+	pollers		pollers_t
+	inret		chan int
+	in		chan []uint8
+	outsz		chan int
+	out		chan []uint8
+	readers		chan int
+	writers		chan int
+	admit		chan bool
+	poll_in		chan pollmsg_t
+	poll_out	chan ready_t
 }
 
 func (p *pipe_t) pipe_start() {
@@ -618,14 +840,15 @@ func (p *pipe_t) pipe_start() {
 	outsz := make(chan int)
 	writers := make(chan int)
 	readers := make(chan int)
-	admission := make(chan bool)
+	p.admit = make(chan bool)
+	p.poll_in = make(chan pollmsg_t)
+	p.poll_out = make(chan ready_t)
 	p.inret = inret
 	p.in = in
 	p.outsz = outsz
 	p.out = out
 	p.readers = readers
 	p.writers = writers
-	p.admit = admission
 
 	go func() {
 		pipebufsz := 512
@@ -637,10 +860,10 @@ func (p *pipe_t) pipe_start() {
 		admit := 0
 		for writec > 0 || readc > 0 {
 			select {
-			// writing to pipe
 			case p.admit <- true:
 				admit++
 				continue
+			// writing to pipe
 			case d := <- tin:
 				if readc == 0 {
 					inret <- -EPIPE
@@ -667,7 +890,28 @@ func (p *pipe_t) pipe_start() {
 				writec += delta
 			case delta := <- readers:
 				readc += delta
+			// poll
+			case pm := <- p.poll_in:
+				ev := pm.events
+				var ret ready_t
+				// check if reading, writing, or errors are
+				// available
+				if ev & R_READ != 0 && toutsz != nil {
+					ret |= R_READ
+				}
+				if ev & R_WRITE != 0 && tin != nil {
+					ret |= R_WRITE
+				}
+				if ev & R_HUP != 0 && readc == 0 {
+					ret |= R_HUP
+				}
+				// ignore R_ERROR
+				if ret == 0 && pm.dowait {
+					p.pollers.addpoller(&pm)
+				}
+				p.poll_out <- ret
 			}
+
 			admit--
 			if admit < 0 {
 				panic("wtf")
@@ -677,11 +921,13 @@ func (p *pipe_t) pipe_start() {
 			// there are no writers and the pipe is empty.
 			if len(buf) > 0 || writec == 0 {
 				toutsz = outsz
+				p.pollers.wakeready(R_READ)
 			} else {
 				toutsz = nil
 			}
 			if len(buf) < pipebufsz || readc == 0 {
 				tin = in
+				p.pollers.wakeready(R_WRITE)
 			} else {
 				tin = nil
 			}
@@ -799,8 +1045,24 @@ func (pf *pipefops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
 	return 0, -ENOTSOCK
 }
 
-func (pf *pipefops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
+func (pf *pipefops_t) recvfrom(*proc_t, *userbuf_t,
+    *userbuf_t) (int, int, int) {
 	return 0, 0, -ENOTSOCK
+}
+
+func (pf *pipefops_t) pollone(pm pollmsg_t) ready_t {
+	if _, ok := <- pf.pipe.admit; !ok {
+		return 0
+	}
+	// only a pipe writer can poll for writing, and reader for reading
+	if pf.writer {
+		pm.events &^= R_READ
+	} else {
+		pm.events &^= R_WRITE
+	}
+	pf.pipe.poll_in <- pm
+	status := <- pf.pipe.poll_out
+	return status
 }
 
 func sys_rename(proc *proc_t, oldn int, newn int) int {
@@ -1304,6 +1566,15 @@ func (sf *sockfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 	return ret, addrlen, 0
 }
 
+func (sf *sockfops_t) pollone(pm pollmsg_t) ready_t {
+	if !sf.bound {
+		return pm.events & R_ERROR
+	}
+	sf.sunaddr.sund.poll_in <- pm
+	status := <- sf.sunaddr.sund.poll_out
+	return status
+}
+
 type sunid_t int
 
 // globally unique unix socket minor number
@@ -1334,12 +1605,15 @@ type sunbuf_t struct {
 }
 
 type sund_t struct {
-	adm	chan bool
-	finish	chan bool
-	outsz	chan int
-	out	chan sunbuf_t
-	inret	chan int
-	in	chan sunbuf_t
+	adm		chan bool
+	finish		chan bool
+	outsz		chan int
+	out		chan sunbuf_t
+	inret		chan int
+	in		chan sunbuf_t
+	poll_in		chan pollmsg_t
+	poll_out 	chan ready_t
+	pollers		pollers_t
 }
 
 func sun_new() sunid_t {
@@ -1365,6 +1639,8 @@ func sun_start(sid sunid_t) *sund_t {
 	out := make(chan sunbuf_t)
 	inret := make(chan int)
 	in := make(chan sunbuf_t)
+	poll_in := make(chan pollmsg_t)
+	poll_out := make(chan ready_t)
 
 	ns.adm = adm
 	ns.finish = finish
@@ -1372,6 +1648,8 @@ func sun_start(sid sunid_t) *sund_t {
 	ns.out = out
 	ns.inret = inret
 	ns.in = in
+	ns.poll_in = poll_in
+	ns.poll_out = poll_out
 
 	go func() {
 		bstart := make([]sunbuf_t, 0, 10)
@@ -1428,17 +1706,34 @@ func sun_start(sid sunid_t) *sund_t {
 				}
 				d := bufdeq(sz)
 				out <- d
+			case pm := <- ns.poll_in:
+				ev := pm.events
+				var ret ready_t
+				// check if reading, writing, or errors are
+				// available. ignore R_ERROR
+				if ev & R_READ != 0 && toutsz != nil {
+					ret |= R_READ
+				}
+				if ev & R_WRITE != 0 && tin != nil {
+					ret |= R_WRITE
+				}
+				if ret == 0 && pm.dowait {
+					ns.pollers.addpoller(&pm)
+				}
+				ns.poll_out <- ret
 			}
 
 			// block writes if socket is full
 			// block reads if socket is empty
 			if buflen > 0 {
 				toutsz = outsz
+				ns.pollers.wakeready(R_READ)
 			} else {
 				toutsz = nil
 			}
 			if buflen < sunbufsz {
 				tin = in
+				ns.pollers.wakeready(R_WRITE)
 			} else {
 				tin = nil
 			}

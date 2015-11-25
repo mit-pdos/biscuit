@@ -238,12 +238,19 @@ type fdops_i interface {
 	// reopen() is called with proc_t.fdl is held
 	reopen() int
 	write(*userbuf_t, bool) (int, int)
+
 	// socket ops
 	bind(*proc_t, []uint8) int
 	sendto(*proc_t, *userbuf_t, []uint8, int) (int, int)
 	// returns number of bytes read, size of from sock address written, and
 	// error
 	recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int)
+
+	// for poll/select
+	// returns the current ready flags and whether a notification will be
+	// sent. pollone() will only cause the device to send a notification if
+	// none of the states being polled are currently true.
+	pollone(pollmsg_t) ready_t
 }
 
 // this is the new fd_t
@@ -1296,7 +1303,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 	uoff := 0
 	psz := 8
 	done := false
-	curaddr := make([]uint8, 0)
+	curaddr := make([]uint8, 0, 8)
 	for !done {
 		ptrs, ok := p.userdmap8(uva + uoff)
 		if !ok {

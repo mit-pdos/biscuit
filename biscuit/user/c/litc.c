@@ -7,6 +7,7 @@
 #define SYS_CLOSE        3
 #define SYS_STAT         4
 #define SYS_FSTAT        5
+#define SYS_POLL         7
 #define SYS_LSEEK        8
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
@@ -346,6 +347,18 @@ pipe2(int pfds[2], int flags)
 {
 	int ret = syscall(SA(pfds), SA(flags), 0, 0, 0, SYS_PIPE2);
 	ERRNO_NZ(ret);
+	return ret;
+}
+
+int
+poll(struct pollfd *fds, nfds_t nfds, int timeout)
+{
+	struct pollfd *end = fds + nfds;
+	struct pollfd *p;
+	for (p = fds; p < end; p++)
+		p->revents = 0;
+	int ret = syscall(SA(fds), SA(nfds), SA(timeout), 0, 0, SYS_POLL);
+	ERRNO_NEG(ret);
 	return ret;
 }
 

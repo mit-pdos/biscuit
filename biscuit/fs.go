@@ -813,6 +813,10 @@ func (fo *fsfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
 	return 0, 0, -ENOTSOCK
 }
 
+func (fo *fsfops_t) pollone(pm pollmsg_t) ready_t {
+	return pm.events & (R_READ | R_WRITE)
+}
+
 type devfops_t struct {
 	priv	inum
 	maj	int
@@ -884,6 +888,10 @@ func (df *devfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
 
 func (df *devfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
 	return 0, 0, -ENOTSOCK
+}
+
+func (df *devfops_t) pollone(pm pollmsg_t) ready_t {
+	return pm.events & (R_READ | R_WRITE)
 }
 
 func fs_mkdir(paths string, mode int, cwd inum) int {

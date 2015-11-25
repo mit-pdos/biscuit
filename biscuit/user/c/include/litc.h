@@ -88,8 +88,8 @@ struct pollfd {
 #define		POLLERR		0x20
 #define		POLLHUP		0x40
 #define		POLLNVAL	0x80
-	short	events;
-	short	revents;
+	ushort	events;
+	ushort	revents;
 };
 
 struct timeval {
@@ -235,7 +235,7 @@ int open(const char *, int, ...);
 int pause(void);
 int pipe(int *);
 int pipe2(int *, int);
-//REDIS int poll(struct pollfd *, nfds_t, int);
+int poll(struct pollfd *, nfds_t, int);
 long read(int, void*, size_t);
 int reboot(void);
 ssize_t recv(int, void *, size_t, int);
