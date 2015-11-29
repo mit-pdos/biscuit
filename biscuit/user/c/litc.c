@@ -1276,6 +1276,82 @@ readline(const char *prompt)
 	return readlineb;
 }
 
+static inline int _fdisset(int fd, fd_set *fds)
+{
+	if (fds)
+		return FD_ISSET(fd, fds);
+	return 0;
+}
+
+int
+select(int maxfd, fd_set *rfds, fd_set *wfds, fd_set *efds,
+    struct timeval *timeout)
+{
+	int nfds = 0;
+	int i;
+	for (i = 0; i < maxfd; i++)
+		if (_fdisset(i, rfds) || _fdisset(i, wfds) ||
+		    _fdisset(i, efds))
+			nfds++;
+	struct pollfd pfds[nfds];
+	int curp = 0;
+	for (i = 0; i < maxfd; i++) {
+		if ((_fdisset(i, rfds) || _fdisset(i, wfds) ||
+		    _fdisset(i, efds)) == 0)
+			continue;
+		pfds[curp].fd = i;
+		pfds[curp].events = 0;
+		if (_fdisset(i, rfds))
+			pfds[curp].events |= POLLIN;
+		if (_fdisset(i, wfds))
+			pfds[curp].events |= POLLOUT;
+		if (_fdisset(i, efds))
+			pfds[curp].events |= POLLERR;
+		curp++;
+	}
+	int tous = -1;
+	if (timeout)
+		tous = timeout->tv_sec * 1000000 + timeout->tv_usec;
+
+	// account for differences between select(2) and poll(2):
+	// 1. poll's HUP counts as a read-ready fd for select
+	// 2. an invalid fd is an error for select
+	// 3. select returns the number of bits set in the fdsets, not the
+	// number of ready fds.
+	if (rfds)
+		FD_ZERO(rfds);
+	if (wfds)
+		FD_ZERO(wfds);
+	if (efds)
+		FD_ZERO(efds);
+	int ret = poll(pfds, nfds, tous);
+	if (ret <= 0)
+		return ret;
+
+	int selret = 0;
+	for (i = 0; i < nfds; i++) {
+		if (pfds[i].events & POLLNVAL) {
+			errno = EINVAL;
+			return -1;
+		}
+
+#define _PTOS(pf, fds)	do { \
+				if ((pfds[i].revents & pf) &&	\
+				    pfds[i].events & pf) {	\
+					FD_SET(pfds[i].fd, fds); \
+					selret++;	\
+				}	\
+			} while (0)
+
+		_PTOS(POLLIN, rfds);
+		_PTOS(POLLHUP, rfds);
+		_PTOS(POLLOUT, wfds);
+		_PTOS(POLLERR, efds);
+#undef _PTOS
+	}
+	return selret;
+}
+
 uint
 sleep(uint s)
 {

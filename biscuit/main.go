@@ -247,9 +247,9 @@ type fdops_i interface {
 	recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int)
 
 	// for poll/select
-	// returns the current ready flags and whether a notification will be
-	// sent. pollone() will only cause the device to send a notification if
-	// none of the states being polled are currently true.
+	// returns the current ready flags. pollone() will only cause the
+	// device to send a notification if none of the states being polled are
+	// currently true.
 	pollone(pollmsg_t) ready_t
 }
 
