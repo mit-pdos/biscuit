@@ -221,9 +221,9 @@ type dev_t struct {
 const(
 	D_CONSOLE int	= 1
 	// UNIX domain sockets
-	D_SUN 		= 2
+	D_SUD 		= 2
 	D_FIRST		= D_CONSOLE
-	D_LAST		= D_SUN
+	D_LAST		= D_SUD
 )
 
 // threads/processes can concurrently call a single fd's methods

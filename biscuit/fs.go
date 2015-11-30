@@ -1108,7 +1108,7 @@ func fs_open(paths string, flags, mode int, cwd inum,
 	}
 
 	// some special files (sockets) cannot be opened with fops this way
-	if fsf.major == D_SUN {
+	if fsf.major == D_SUD {
 		if fs_close(fsf.priv) != 0 {
 			panic("must succeed")
 		}

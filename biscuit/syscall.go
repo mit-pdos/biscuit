@@ -1271,12 +1271,14 @@ func sys_getpid(proc *proc_t) int {
 }
 
 func sys_socket(proc *proc_t, domain, typ, proto int) int {
-	if domain != AF_UNIX || typ != SOCK_DGRAM {
-		fmt.Printf("only AF_UNIX + SOCK_DGRAM is supported for now")
-		return -ENOSYS
+	var sfops fdops_i
+	switch {
+	case domain == AF_UNIX && typ == SOCK_DGRAM:
+		sfops = &sudfops_t{open: 1}
+	default:
+		return -EINVAL
 	}
 	file := &fd_t{}
-	sfops := &sockfops_t{open: 1, dgram: true}
 	file.fops = sfops
 	fdn := proc.fd_insert(file, FD_READ | FD_WRITE)
 	return fdn
@@ -1380,25 +1382,15 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 	return fd.fops.bind(proc, sabuf)
 }
 
-type sockfops_t struct {
+type sudfops_t struct {
 	sunaddr	sunaddr_t
 	open	int
 	bound	bool
-	dgram	bool
-	stream	bool
 	// to protect the "open" field from racing close()s
 	sync.Mutex
 }
 
-func (sf *sockfops_t) _sane() {
-	// for now
-	if !sf.dgram || sf.stream {
-		panic("no imp")
-	}
-}
-
-func (sf *sockfops_t) close() int {
-	sf._sane()
+func (sf *sudfops_t) close() int {
 	sf.Lock()
 	sf.open--
 	if sf.open < 0 {
@@ -1416,40 +1408,34 @@ func (sf *sockfops_t) close() int {
 	return 0
 }
 
-func (sf *sockfops_t) fstat(s *stat_t) int {
-	sf._sane()
+func (sf *sudfops_t) fstat(s *stat_t) int {
 	return -ENODEV
 }
 
-func (sf *sockfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
-	sf._sane()
+func (sf *sudfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
-func (sf *sockfops_t) pathi() inum {
-	sf._sane()
+func (sf *sudfops_t) pathi() inum {
 	panic("cwd socket?")
 }
 
-func (sf *sockfops_t) read(dst *userbuf_t) (int, int) {
-	sf._sane()
+func (sf *sudfops_t) read(dst *userbuf_t) (int, int) {
 	return 0, -ENODEV
 }
 
-func (sf *sockfops_t) reopen() int {
-	sf._sane()
+func (sf *sudfops_t) reopen() int {
 	sf.Lock()
 	sf.open++
 	sf.Unlock()
 	return 0
 }
 
-func (sf *sockfops_t) write(*userbuf_t, bool) (int, int) {
-	sf._sane()
+func (sf *sudfops_t) write(*userbuf_t, bool) (int, int) {
 	return 0, -ENODEV
 }
 
-func (sf *sockfops_t) lseek(int, int) int {
+func (sf *sudfops_t) lseek(int, int) int {
 	return -ENODEV
 }
 
@@ -1465,15 +1451,14 @@ func slicetostr(buf []uint8) string {
 	return string(buf[:end])
 }
 
-func (sf *sockfops_t) bind(proc *proc_t, sa []uint8) int {
-	sf._sane()
+func (sf *sudfops_t) bind(proc *proc_t, sa []uint8) int {
 	poff := 2
 	path := slicetostr(sa[poff:])
 	// try to create the specified file as a special device
 	sid := sun_new()
 	n := proc.atime.now()
 	pi := proc.cwd.fops.pathi()
-	fsf, err := _fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUN, int(sid))
+	fsf, err := _fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUD, int(sid))
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -1488,9 +1473,8 @@ func (sf *sockfops_t) bind(proc *proc_t, sa []uint8) int {
 	return 0
 }
 
-func (sf *sockfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
+func (sf *sudfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
     flags int) (int, int) {
-	sf._sane()
 	poff := 2
 	if len(sa) <= poff {
 		return 0, -EINVAL
@@ -1505,7 +1489,7 @@ func (sf *sockfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
 		return 0, err
 	}
 	maj, min := unmkdev(st.rdev())
-	if maj != D_SUN {
+	if maj != D_SUD {
 		return 0, -ECONNREFUSED
 	}
 
@@ -1537,9 +1521,8 @@ func (sf *sockfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
 	return <- sund.inret, 0
 }
 
-func (sf *sockfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
+func (sf *sudfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
     fromsa *userbuf_t) (int, int, int) {
-	sf._sane()
 	// XXX what does recv'ing on an unbound unix datagram socket supposed
 	// to do? openbsd and linux seem to block forever.
 	if !sf.bound {
@@ -1566,7 +1549,7 @@ func (sf *sockfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 	return ret, addrlen, 0
 }
 
-func (sf *sockfops_t) pollone(pm pollmsg_t) ready_t {
+func (sf *sudfops_t) pollone(pm pollmsg_t) ready_t {
 	if !sf.bound {
 		return pm.events & R_ERROR
 	}
