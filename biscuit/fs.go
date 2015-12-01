@@ -801,8 +801,20 @@ func (fo *fsfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	return req.resp.mmapinfo, req.resp.err
 }
 
+func (fo *fsfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+	return nil, 0, -ENOTSOCK
+}
+
 func (fo *fsfops_t) bind(*proc_t, []uint8) int {
 	return -ENOTSOCK
+}
+
+func (fo *fsfops_t) connect(proc *proc_t, sabuf []uint8) int {
+	return -ENOTSOCK
+}
+
+func (fo *fsfops_t) listen(*proc_t, int) (fdops_i, int) {
+	return nil, -ENOTSOCK
 }
 
 func (fo *fsfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
@@ -878,8 +890,20 @@ func (df *devfops_t) lseek(int, int) int {
 	return -ENODEV
 }
 
+func (df *devfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+	return nil, 0, -ENOTSOCK
+}
+
 func (df *devfops_t) bind(*proc_t, []uint8) int {
 	return -ENOTSOCK
+}
+
+func (df *devfops_t) connect(proc *proc_t, sabuf []uint8) int {
+	return -ENOTSOCK
+}
+
+func (df *devfops_t) listen(*proc_t, int) (fdops_i, int) {
+	return nil, -ENOTSOCK
 }
 
 func (df *devfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {

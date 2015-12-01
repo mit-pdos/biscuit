@@ -15,9 +15,12 @@
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
 #define SYS_SOCKET       41
+#define SYS_CONNECT      42
+#define SYS_ACCEPT       43
 #define SYS_SENDTO       44
 #define SYS_RECVFROM     45
 #define SYS_BIND         49
+#define SYS_LISTEN       50
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
@@ -99,6 +102,14 @@ syscall(long a1, long a2, long a3, long a4,
 			} while (0)
 
 int
+accept(int fd, struct sockaddr *s, socklen_t *sl)
+{
+	int ret = syscall(SA(fd), SA(s), SA(sl), 0, 0, SYS_ACCEPT);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+int
 bind(int sockfd, const struct sockaddr *s, socklen_t sl)
 {
 	int ret = syscall(SA(sockfd), SA(s), SA(sl), 0, 0, SYS_BIND);
@@ -118,6 +129,14 @@ int
 chdir(char *path)
 {
 	int ret = syscall(SA(path), 0, 0, 0, 0, SYS_CHDIR);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
+int
+connect(int fd, const struct sockaddr *sa, socklen_t salen)
+{
+	int ret = syscall(SA(fd), SA(sa), SA(salen), 0, 0, SYS_CONNECT);
 	ERRNO_NZ(ret);
 	return ret;
 }
@@ -256,6 +275,14 @@ int
 link(const char *old, const char *new)
 {
 	int ret = syscall(SA(old), SA(new), 0, 0, 0, SYS_LINK);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
+int
+listen(int fd, int backlog)
+{
+	int ret = syscall(SA(fd), SA(backlog), 0, 0, 0, SYS_LISTEN);
 	ERRNO_NZ(ret);
 	return ret;
 }
@@ -899,7 +926,10 @@ err(int eval, const char *fmt, ...)
 	    [ENOSYS] = "Function not implemented",
 	    [ENOTEMPTY] = "Directory not empty",
 	    [ENOTSOCK] = "Socket operation on non-socket",
+	    [EISCONN] = "Socket is already connected",
+	    [ENOTCONN] = "Socket is not connected",
 	    [ETIMEDOUT] = "Operation timed out",
+	    [ECONNRESET] = "Connection reset by peer",
 	    [ECONNREFUSED] = "Connection refused",
 	    [EINPROGRESS] = "Operation now in progress",
 	};

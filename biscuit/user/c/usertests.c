@@ -2346,7 +2346,32 @@ void polltest()
 	close(pp[1]);
 	close(sock);
 	close(unbound);
+
+	int status;
+	if (wait(&status) != pid)
+		errx(-1, "wrong child");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
 	printf("polltest ok\n");
+}
+
+void
+runsockettest(void)
+{
+	pid_t child = fork();
+	if (child < 0)
+		err(-1, "fork");
+	if (!child) {
+		char *args[] = {"sockettest", NULL};
+		execvp(args[0], args);
+		err(-1, "exec failed");
+	}
+
+	int status;
+	if (wait(&status) != child)
+		errx(-1, "wrong child");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
 }
 
 int
@@ -2365,7 +2390,7 @@ main(int argc, char *argv[])
   concreate();
   fourfiles();
   sharedfd();
-  renametest();
+  //renametest();
   lseektest();
 
   bigargtest();
@@ -2408,6 +2433,7 @@ main(int argc, char *argv[])
   threadwait();
 
   polltest();
+  runsockettest();
 
   exectest();
 

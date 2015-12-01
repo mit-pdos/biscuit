@@ -35,6 +35,9 @@ extern "C" {
 #define		ENOSYS		38
 #define		ENOTEMPTY	39
 #define		ENOTSOCK	88
+#define		ECONNRESET	104
+#define		EISCONN		106
+#define		ENOTCONN	107
 #define		ETIMEDOUT	110
 #define		ECONNREFUSED	111
 #define		EINPROGRESS	115
@@ -177,9 +180,9 @@ struct timespec {
 #define		S_ISREG(mode)	(mode == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
-//REDIS int accept(int, struct sockaddr *, socklen_t*);
+int accept(int, struct sockaddr *, socklen_t*);
 int bind(int, const struct sockaddr *, socklen_t);
-//REDIS int connect(int, const struct sockaddr *, socklen_t);
+int connect(int, const struct sockaddr *, socklen_t);
 //REDIS int chmod(const char *, mode_t);
 int close(int);
 int chdir(char *);
@@ -208,7 +211,7 @@ int getrusage(int, struct rusage *);
 
 int kill(int, int);
 int link(const char *, const char *);
-//REDIS int listen(int, int);
+int listen(int, int);
 off_t lseek(int, off_t, int);
 #define		SEEK_SET	1
 #define		SEEK_CUR	2

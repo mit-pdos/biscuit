@@ -222,8 +222,9 @@ const(
 	D_CONSOLE int	= 1
 	// UNIX domain sockets
 	D_SUD 		= 2
+	D_SUS 		= 3
 	D_FIRST		= D_CONSOLE
-	D_LAST		= D_SUD
+	D_LAST		= D_SUS
 )
 
 // threads/processes can concurrently call a single fd's methods
@@ -240,7 +241,14 @@ type fdops_i interface {
 	write(*userbuf_t, bool) (int, int)
 
 	// socket ops
+	// returns fops of new fd, size of connector's address written to user
+	// space, and error
+	accept(*proc_t, *userbuf_t) (fdops_i, int, int)
 	bind(*proc_t, []uint8) int
+	connect(*proc_t, []uint8) int
+	// listen changes the underlying socket type; thus is returns the new
+	// fops.
+	listen(*proc_t, int) (fdops_i, int)
 	sendto(*proc_t, *userbuf_t, []uint8, int) (int, int)
 	// returns number of bytes read, size of from sock address written, and
 	// error
@@ -2246,7 +2254,7 @@ func main() {
 	//exec("bin/hello", nil)
 	//exec("bin/fork", nil)
 	//exec("bin/fault", nil)
-	//exec("bin/usertests", []string{})
+	//exec("bin/usertests", nil)
 	//exec("bin/pipetest", []string{})
 	//exec("bin/ls", []string{})
 

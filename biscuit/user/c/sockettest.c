@@ -50,8 +50,10 @@ void sendmany()
 	exit(0);
 }
 
-void test()
+void datagram()
 {
+	printf("datagram test\n");
+
 	unlink("/tmp/parent");
 	unlink("/tmp/child");
 
@@ -77,12 +79,11 @@ void test()
 
 	char buf[64];
 	int i;
+	struct timespec to = {0, 1000000};
 	for (i = 0; i < 100; i++) {
 		// stall to make sure the socket buffer fills up and blocks the
 		// sender
-		int j;
-		for (j = 0; j < 1000000; j++)
-			rdtsc();
+		nanosleep(&to, NULL);
 		struct sockaddr_un cli;
 		socklen_t clen = sizeof(struct sockaddr_un);
 		ret = recvfrom(s, buf, sizeof(buf) - 1, 0,
@@ -90,13 +91,141 @@ void test()
 		if (ret < 0)
 			err(ret, "recvfrom");
 		buf[ret] = 0;
-		printf("from: %s got: %s\n", cli.sun_path, buf);
+		//printf("from: %s got: %s\n", cli.sun_path, buf);
+		char cmp[64];
+		snprintf(cmp, sizeof(cmp), "message %d", i);
+		if (strncmp(buf, cmp, strlen(cmp)))
+			errx(-1, "msg mismatch");
 	}
-	wait(NULL);
+
+	int status;
+	if (wait(&status) != pid)
+		errx(-1, "wrong child");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+
+	printf("datagram test OK\n");
+}
+
+__attribute__((noreturn))
+void connector(char *path, char *msg1, char *msg2)
+{
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, path, sizeof(sa.sun_path));
+
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0)
+		err(-1, "socket");
+
+	if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		err(-1, "connect");
+	ssize_t r;
+	if ((r = write(s, msg1, strlen(msg1))) != strlen(msg1))
+		err(-1, "write failed (%ld != %lu)", r, strlen(msg1));
+	close(s);
+
+	s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0)
+		err(-1, "socket");
+
+	if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		err(-1, "connect");
+	if ((r = write(s, msg2, strlen(msg2))) != strlen(msg2))
+		err(-1, "write failed (%ld != %lu)", r, strlen(msg2));
+
+	char buf[256];
+	if ((r = read(s, buf, sizeof(buf))) != strlen(msg1))
+		err(-1, "read failed (%ld != %lu)", r, strlen(msg1));
+	if (strncmp(buf, msg1, strlen(msg1)))
+		errx(-1, "string mismatch");
+	close(s);
+
+	exit(0);
+}
+
+void stream()
+{
+	printf("stream test\n");
+
+	char *path = "/tmp/stream";
+	char *msg1 = "hello1";
+	char *msg2 = "hello2 happy day";
+
+	unlink(path);
+
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0)
+		err(-1, "socket");
+
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, path, sizeof(sa.sun_path));
+
+	if (bind(s, (struct sockaddr *)&sa, SUN_LEN(&sa)) < 0)
+		err(-1, "bind");
+
+	if (listen(s, 10) < 0)
+		err(-1, "listen");
+
+	pid_t child = fork();
+	if (child < 0)
+		err(-1, "fork");
+	if (!child) {
+		close(s);
+		connector(path, msg1, msg2);
+	}
+
+	int c = accept(s, NULL,  NULL);
+	if (c < 0)
+		err(-1, "accept");
+
+	char buf[256];
+	ssize_t r;
+	if ((r = read(c, buf, sizeof(buf) - 1)) < 0)
+		err(-1, "read");
+	buf[r] = 0;
+	if (strncmp(buf, msg1, strlen(msg1)))
+		errx(-1, "msg mismatch");
+	if (close(c))
+		err(-1, "closey");
+
+	c = accept(s, NULL,  NULL);
+	if (c < 0)
+		err(-1, "accept");
+
+	if ((r = read(c, buf, sizeof(buf) - 1)) < 0)
+		err(-1, "read");
+	buf[r] = 0;
+	if (strncmp(buf, msg2, strlen(msg2)))
+		errx(-1, "msg mismatch");
+
+	if ((r = write(c, msg1, strlen(msg1))) != strlen(msg1))
+		err(-1, "write failed (%ld != %lu)", r, strlen(msg1));
+
+	// child closed connection; writes should fail, should get EOF
+	if ((r = read(c, buf, sizeof(buf))) != 0)
+		errx(-1, "expected failiure1 %ld", r);
+	if (write(c, buf, 10) != -1 || errno != ECONNRESET)
+		errx(-1, "expected failure2");
+
+	if (close(c))
+		err(-1, "closey");
+	if (close(s))
+		err(-1, "closey");
+
+	int status;
+	if (wait(&status) != child)
+		errx(-1, "wrong child");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+
+	printf("stream test OK\n");
 }
 
 int main(int argc, char **argv)
 {
-	test();
+	datagram();
+	stream();
 	return 0;
 }
