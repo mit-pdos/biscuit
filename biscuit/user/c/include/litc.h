@@ -242,6 +242,7 @@ ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
 int rename(const char *, const char *);
 int select(int, fd_set*, fd_set*, fd_set*, struct timeval *);
+ssize_t send(int, const void *, size_t, int);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);
 //REDIS int setrlimit(int, const struct rlimit *);
