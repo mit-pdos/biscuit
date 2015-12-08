@@ -87,3 +87,12 @@ typedef __builtin_va_list va_list;
 
 #define ULONG_MAX	0xffffffffffffffffull
 #define ULLONG_MAX	0xffffffffffffffffull
+
+#define INT8_C(x)	x
+#define INT16_C(x)	x
+#define INT32_C(x)	x
+#define INT64_C(x)	x ## ll
+#define UINT8_C(x)	x ## u
+#define UINT16_C(x)	x ## u
+#define UINT32_C(x)	x ## u
+#define UINT64_C(x)	x ## ull

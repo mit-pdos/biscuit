@@ -42,6 +42,7 @@ const(
   EBADF        = 9
   ECHILD       = 10
   EFAULT       = 14
+  EBUSY        = 16
   EEXIST       = 17
   ENODEV       = 19
   ENOTDIR      = 20

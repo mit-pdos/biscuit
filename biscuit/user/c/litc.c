@@ -913,6 +913,7 @@ err(int eval, const char *fmt, ...)
 	    [EAGAIN] = "Resource temporarily unavailable",
 	    [ECHILD] = "No child processes",
 	    [EFAULT] = "Bad address",
+	    [EBUSY] = "Device busy",
 	    [EEXIST] = "File exists",
 	    [ENODEV] = "Operation not supported by device",
 	    [ENOTDIR] = "Not a directory",

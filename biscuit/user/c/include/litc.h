@@ -22,6 +22,7 @@ extern "C" {
 #define		EWOULDBLOCK	EAGAIN
 #define		ENOMEM		12
 #define		EFAULT		14
+#define		EBUSY		16
 #define		EEXIST		17
 #define		ENODEV		19
 #define		ENOTDIR		20
@@ -181,31 +182,38 @@ struct timespec {
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
 int accept(int, struct sockaddr *, socklen_t*);
+// access(2) cannot be a wrapper around stat(2) because access(2) uses real-id
+// instead of effective-id
+//int access(const char *, int); /*REDIS*/
+#define		R_OK	1
+#define		W_OK	2
+#define		X_OK	3
 int bind(int, const struct sockaddr *, socklen_t);
 int connect(int, const struct sockaddr *, socklen_t);
-//REDIS int chmod(const char *, mode_t);
+//int chmod(const char *, mode_t); /*REDIS*/
 int close(int);
 int chdir(char *);
 int dup2(int, int);
-//REDIS void _exit(int)
-//REDIS     __attribute__((noreturn));
+//void _exit(int) /*REDIS*/
+//    __attribute__((noreturn)); /*REDIS*/
 void exit(int)
     __attribute__((noreturn));
 int execv(const char *, char * const[]);
+//int execve(const char *, char * const[], char * const[]); /*REDIS*/
 int execvp(const char *, char * const[]);
 long fake_sys(long);
 long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);
-//REDIS int getrlimit(int, struct rlimit *);
+//int getrlimit(int, struct rlimit *); /*REDIS*/
 #define		RLIMIT_NOFILE	1
 int getrusage(int, struct rusage *);
 #define		RUSAGE_SELF	1
 #define		RUSAGE_CHILDREN	2
-//REDIS int getsockopt(int, int, int, void *, socklen_t *);
+//int getsockopt(int, int, int, void *, socklen_t *); /*REDIS*/
 
-//REDIS int fcntl(int, int, ...);
+//int fcntl(int, int, ...); /*REDIS*/
 #define		F_GETFL		1
 #define		F_SETFL		2
 
@@ -248,16 +256,16 @@ int select(int, fd_set*, fd_set*, fd_set*, struct timeval *);
 ssize_t send(int, const void *, size_t, int);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);
-//REDIS int setrlimit(int, const struct rlimit *);
-//REDIS pid_t setsid(void);
-//REDIS int setsockopt(int, int, int, void *, socklen_t);
+//int setrlimit(int, const struct rlimit *); /*REDIS*/
+//pid_t setsid(void); /*REDIS*/
+//int setsockopt(int, int, int, void *, socklen_t); /*REDIS*/
 // levels
 #define		SOL_SOCKET	1
 // socket options
 #define		SO_SNDBUF	1
 #define		SO_SNDTIMEO	2
 #define		SO_ERROR	3
-//REDIS int sigaction(int, const struct sigaction *, struct sigaction *);
+//int sigaction(int, const struct sigaction *, struct sigaction *); /*REDIS*/
 #define		SIGHUP		1
 #define		SIGINT		2
 #define		SIGILL		4
@@ -265,10 +273,15 @@ ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
 #define		SIGUSR1		10
 #define		SIGSEGV		11
 #define		SIGPIPE		13
+#define		SIGALRM		14
 #define		SIGTERM		15
-//REDIS void (*signal(int, void (*)(int)))(int);
+//void (*signal(int, void (*)(int)))(int); /*REDIS*/
 #define		SIG_DFL		((void (*)(int))1)
 #define		SIG_IGN		((void (*)(int))2)
+//int sigprocmask(int, sigset_t *, sigset_t *); /*REDIS*/
+#define		SIG_BLOCK	1
+#define		SIG_SETMASK	2
+#define		SIG_UNBLOCK	3
 int socket(int, int, int);
 #define		AF_UNIX		1
 #define		AF_INET		2
@@ -312,6 +325,12 @@ typedef long pthread_t;
 typedef struct {
 } pthread_attr_t;
 
+typedef struct {
+} pthread_cond_t;
+
+typedef struct {
+} pthread_condattr_t;
+
 typedef int pthread_mutex_t;
 
 typedef struct {
@@ -329,6 +348,21 @@ typedef struct {
 typedef struct {
 } pthread_barrierattr_t;
 
+//int pthread_attr_destroy(pthread_attr_t *); /*REDIS*/
+//int pthread_attr_init(pthread_attr_t *); /*REDIS*/
+//int pthread_attr_getstacksize(pthread_attr_t *, size_t *); /*REDIS*/
+//int pthread_attr_setstacksize(pthread_attr_t *, size_t); /*REDIS*/
+
+int pthread_barrier_init(pthread_barrier_t *, pthread_barrierattr_t *, uint);
+int pthread_barrier_destroy(pthread_barrier_t *);
+int pthread_barrier_wait(pthread_barrier_t *);
+#define		PTHREAD_BARRIER_SERIAL_THREAD	1
+
+//int pthread_cond_destroy(pthread_cond_t *); /*REDIS*/
+//int pthread_cond_init(pthread_cond_t *, const pthread_condattr_t *); /*REDIS*/
+//int pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *); /*REDIS*/
+//int pthread_cond_signal(pthread_cond_t *); /*REDIS*/
+
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
 int pthread_mutex_init(pthread_mutex_t *, const pthread_mutexattr_t *);
@@ -336,11 +370,17 @@ int pthread_mutex_lock(pthread_mutex_t *);
 int pthread_mutex_unlock(pthread_mutex_t *);
 int pthread_once(pthread_once_t *, void (*)(void));
 pthread_t pthread_self(void);
+//int pthread_cancel(pthread_t); /*REDIS*/
 
-int pthread_barrier_init(pthread_barrier_t *, pthread_barrierattr_t *, uint);
-int pthread_barrier_destroy(pthread_barrier_t *);
-int pthread_barrier_wait(pthread_barrier_t *);
-#define		PTHREAD_BARRIER_SERIAL_THREAD	1
+//int pthread_sigmask(int, const sigset_t *, sigset_t *); /*REDIS*/
+
+//int pthread_setcancelstate(int, int *); /*REDIS*/
+#define		PTHREAD_CANCEL_ENABLE		1
+#define		PTHREAD_CANCEL_DISABLE		2
+
+//int pthread_setcanceltype(int, int *); /*REDIS*/
+#define		PTHREAD_CANCEL_DEFERRED		1
+#define		PTHREAD_CANCEL_ASYNCHRONOUS	2
 
 /*
  * posix stuff
@@ -406,30 +446,30 @@ void err(int, const char *, ...)
 void errx(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
     __attribute__((__noreturn__));
-//REDIS int fclose(FILE *);
-//REDIS int fileno(FILE *);
-//REDIS int fflush(FILE *);
-//REDIS FILE *fopen(const char *, const char *);
+//int fclose(FILE *); /*REDIS*/
+//int fileno(FILE *); /*REDIS*/
+//int fflush(FILE *); /*REDIS*/
+//FILE *fopen(const char *, const char *); /*REDIS*/
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
-//REDIS int fsync(int);
-//REDIS int ftruncate(int, off_t);
-//REDIS size_t fwrite(const void *, size_t, size_t, FILE *);
+//int fsync(int); /*REDIS*/
+//int ftruncate(int, off_t); /*REDIS*/
+//size_t fwrite(const void *, size_t, size_t, FILE *); /*REDIS*/
 int getopt(int, char * const *, const char *);
 extern char *optarg;
 extern int   optind;
 
 int gettimeofday(struct timeval *tv, struct timezone *tz);
-//REDIS int isdigit(int);
-//REDIS int isprint(int);
-//REDIS int isspace(int);
+//int isdigit(int); /*REDIS*/
+//int isprint(int); /*REDIS*/
+//int isspace(int); /*REDIS*/
 int isxdigit(int);
 dev_t makedev(uint, uint);
 int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);
-//REDIS void openlog(const char *, int, int);
+//void openlog(const char *, int, int); /*REDIS*/
 // log options
 #define		LOG_PID		(1ull << 0)
 #define		LOG_CONS	(1ull << 1)
@@ -438,12 +478,14 @@ void *memset(void *, int, size_t);
 #define		LOG_NOWAIT	(1ull << 4)
 int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
-//REDIS void perror(const char *);
-//REDIS long random(void);
+//void perror(const char *); /*REDIS*/
+//int rand(void); /*REDIS*/
+//long random(void); /*REDIS*/
 ulong rdtsc(void);
 char *readline(const char *);
-//REDIS int scanf(const char *, ...)
-//REDIS     __attribute__((format(scanf, 1, 2)));
+//int scanf(const char *, ...) /*REDIS*/
+//    __attribute__((format(scanf, 1, 2))); /*REDIS*/
+//int setenv(const char *, const char *, int ); /*REDIS*/
 char *setlocale(int, const char *);
 #define		LC_COLLATE	1
 uint sleep(uint);
@@ -451,24 +493,26 @@ int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
 int sprintf(char *, const char *,...)
     __attribute__((format(printf, 2, 3)));
-//REDIS void srand(uint);
-//REDIS int sscanf(const char *, const char *, ...)
-//REDIS     __attribute__((format(scanf, 2, 3)));
+//void srand(uint); /*REDIS*/
+//int sscanf(const char *, const char *, ...) /*REDIS*/
+//    __attribute__((format(scanf, 2, 3))); /*REDIS*/
 int strcasecmp(const char *, const char *);
 char *strchr(const char *, int);
+//char *strdup(char *); /*REDIS*/
 char *strerror(int);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
-//REDIS int strcoll(const char *, const char *);
+//int strcoll(const char *, const char *); /*REDIS*/
 int strncmp(const char *, const char *, size_t);
 long strtol(const char *, char **, int);
-//REDIS double strtod(const char *, char **);
-//REDIS long double strtold(const char *, char **);
-//REDIS long long strtoll(const char *, char **, int);
+//double strtod(const char *, char **); /*REDIS*/
+//long double strtold(const char *, char **); /*REDIS*/
+//long long strtoll(const char *, char **, int); /*REDIS*/
 ulong strtoul(const char *, char **, int);
+//unsigned long long strtoull(const char *, char **, int); /*REDIS*/
 char *strstr(const char *, const char *);
-//REDIS void syslog(int, const char *, ...);
+//void syslog(int, const char *, ...); /*REDIS*/
 // priorities
 #define		LOG_EMERG	(1ull << 0)
 #define		LOG_ALERT	(1ull << 1)
@@ -487,22 +531,22 @@ char *strstr(const char *, const char *);
 #define		LOG_LOCAL6	(1ull << 14)
 #define		LOG_LOCAL7	(1ull << 15)
 #define		LOG_USER	(1ull << 16)
-//REDIS time_t time(time_t*);
-//REDIS int tolower(int);
-//REDIS int toupper(int);
-//REDIS int uname(struct utsname *);
+ time_t time(time_t*);
+//int tolower(int); /*REDIS*/
+//int toupper(int); /*REDIS*/
+//int uname(struct utsname *); /*REDIS*/
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));
 int vprintf(const char *, va_list)
     __attribute__((format(printf, 1, 0)));
 int vsnprintf(char *, size_t, const char *, va_list)
     __attribute__((format(printf, 3, 0)));
-//REDIS void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+//void qsort(void *, size_t, size_t, int (*)(const void *, const void *)); /*REDIS*/
 
 void *malloc(size_t);
 void free(void *);
-//REDIS void *calloc(size_t, size_t);
-//REDIS void *realloc(void *, size_t);
+//void *calloc(size_t, size_t); /*REDIS*/
+//void *realloc(void *, size_t); /*REDIS*/
 
 extern char __progname[64];
 extern char **environ;
