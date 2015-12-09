@@ -414,6 +414,11 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		isnan(x)	__builtin_isnan(x)
 #define		HUGE_VAL	__builtin_huge_val()
 
+#define		ceil(x)		__builtin_ceil(x)
+#define		floor(x)	__builtin_floor(x)
+#define		log(x)		__builtin_log(x)
+#define		sqrt(x)		__builtin_sqrt(x)
+
 #define		ntohs(x)	__builtin_bswap16(x)
 #define		htons(x)	__builtin_bswap16(x)
 #define		ntohl(x)	__builtin_bswap32(x)
@@ -440,6 +445,7 @@ struct utsname {
 
 void abort(void);
 int atoi(const char *);
+//char *ctime_r(const time_t *, char *); /*REDIS*/
 void err(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
     __attribute__((__noreturn__));
@@ -447,14 +453,19 @@ void errx(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
     __attribute__((__noreturn__));
 //int fclose(FILE *); /*REDIS*/
+//int feof(FILE *); /*REDIS*/
 //int fileno(FILE *); /*REDIS*/
 //int fflush(FILE *); /*REDIS*/
+//char *fgets(char *, int size, FILE *); /*REDIS*/
 //FILE *fopen(const char *, const char *); /*REDIS*/
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 //int fsync(int); /*REDIS*/
+//off_t ftello(FILE *); /*REDIS*/
 //int ftruncate(int, off_t); /*REDIS*/
+//size_t fread(void *, size_t, size_t, FILE *); /*REDIS*/
 //size_t fwrite(const void *, size_t, size_t, FILE *); /*REDIS*/
+//char *getcwd(char *, size_t); /*REDIS*/
 int getopt(int, char * const *, const char *);
 extern char *optarg;
 extern int   optind;
@@ -534,6 +545,7 @@ char *strstr(const char *, const char *);
  time_t time(time_t*);
 //int tolower(int); /*REDIS*/
 //int toupper(int); /*REDIS*/
+//int truncate(const char *, off_t); /*REDIS*/
 //int uname(struct utsname *); /*REDIS*/
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));
