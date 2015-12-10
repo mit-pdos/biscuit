@@ -1466,6 +1466,103 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
 	return ret, 0
 }
 
+// a circular buffer that is read/written by userspace. not thread-safe -- it
+// is intended to be used by one daemon.
+type circbuf_t struct {
+	buf	[]uint8
+	bufsz	int
+	head	int
+	tail	int
+}
+
+func (cb *circbuf_t) cb_init(sz int) {
+	bufmax := 1024*1024
+	if sz < 0 || sz > bufmax {
+		panic("bad circbuf size")
+	}
+	cb.bufsz = sz
+	cb.buf = make([]uint8, cb.bufsz)
+	cb.head, cb.tail = 0, 0
+}
+
+func (cb *circbuf_t) full() bool {
+	return cb.head - cb.tail == cb.bufsz
+}
+
+func (cb *circbuf_t) empty() bool {
+	return cb.head == cb.tail
+}
+
+func (cb *circbuf_t) copyin(src *userbuf_t) (int, int) {
+	if cb.full() {
+		panic("cb.buf full; should have blocked")
+	}
+	hi := cb.head % cb.bufsz
+	ti := cb.tail % cb.bufsz
+	c := 0
+	// wraparound?
+	if ti <= hi {
+		dst := cb.buf[hi:]
+		wrote, err := src.read(dst)
+		if err != 0 {
+			return 0, err
+		}
+		if wrote != len(dst) {
+			cb.head += wrote
+			return wrote, 0
+		}
+		c += wrote
+		hi = (cb.head + wrote) % cb.bufsz
+	}
+	// XXXPANIC
+	if hi > ti {
+		panic("wut?")
+	}
+	dst := cb.buf[hi:ti]
+	wrote, err := src.read(dst)
+	if err != 0 {
+		return 0, err
+	}
+	c += wrote
+	cb.head += c
+	return c, 0
+}
+
+func (cb *circbuf_t) copyout(dst *userbuf_t) (int, int) {
+	if cb.empty() {
+		return 0, 0
+	}
+	hi := cb.head % cb.bufsz
+	ti := cb.tail % cb.bufsz
+	c := 0
+	// wraparound?
+	if hi <= ti {
+		src := cb.buf[ti:]
+		wrote, err := dst.write(src)
+		if err != 0 {
+			return 0, err
+		}
+		if wrote != len(src) {
+			cb.tail += wrote
+			return wrote, 0
+		}
+		c += wrote
+		ti = (cb.tail + wrote) % cb.bufsz
+	}
+	// XXXPANIC
+	if ti > hi {
+		panic("wut?")
+	}
+	src := cb.buf[ti:hi]
+	wrote, err := dst.write(src)
+	if err != 0 {
+		return 0, err
+	}
+	c += wrote
+	cb.tail += c
+	return c, 0
+}
+
 func mp_sum(d []uint8) int {
 	ret := 0
 	for _, c := range d {

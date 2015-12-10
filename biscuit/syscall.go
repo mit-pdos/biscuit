@@ -1880,87 +1880,9 @@ func susd_start() *susd_t {
 	ret.poll_out = poll_out
 
 	go func() {
-		// XXX use this for pipe too
-		// circular buffer
 		bufsz := 512
-		buf := make([]uint8, bufsz)
-		// add data at head, remove from tail
-		h := 0
-		t := 0
-		buffull := func() bool {
-			return h - t == bufsz
-		}
-		bufempty := func() bool {
-			return h == t
-		}
-		bufadd := func(src *userbuf_t) (int, int) {
-			if buffull() {
-				panic("buf full; should have blocked")
-			}
-			hi := h % bufsz
-			ti := t % bufsz
-			c := 0
-			// wraparound?
-			if ti <= hi {
-				dst := buf[hi:]
-				wrote, err := src.read(dst)
-				if err != 0 {
-					return 0, err
-				}
-				if wrote != len(dst) {
-					h += wrote
-					return wrote, 0
-				}
-				c += wrote
-				hi = (h + wrote) % bufsz
-			}
-			// XXXPANIC
-			if hi > ti {
-				panic("wut?")
-			}
-			dst := buf[hi:ti]
-			wrote, err := src.read(dst)
-			if err != 0 {
-				return 0, err
-			}
-			c += wrote
-			h += c
-			return c, 0
-		}
-		buftake := func(dst *userbuf_t) (int, int) {
-			if bufempty() {
-				return 0, 0
-			}
-			hi := h % bufsz
-			ti := t % bufsz
-			c := 0
-			// wraparound?
-			if hi <= ti {
-				src := buf[ti:]
-				wrote, err := dst.write(src)
-				if err != 0 {
-					return 0, err
-				}
-				if wrote != len(src) {
-					t += wrote
-					return wrote, 0
-				}
-				c += wrote
-				ti = (t + wrote) % bufsz
-			}
-			// XXXPANIC
-			if ti > hi {
-				panic("wut?")
-			}
-			src := buf[ti:hi]
-			wrote, err := dst.write(src)
-			if err != 0 {
-				return 0, err
-			}
-			c += wrote
-			t += c
-			return c, 0
-		}
+		cbuf := circbuf_t{}
+		cbuf.cb_init(bufsz)
 
 		pollers := pollers_t{}
 
@@ -1982,13 +1904,13 @@ func susd_start() *susd_t {
 					inret <- -ECONNRESET
 					break
 				}
-				read, err := bufadd(src)
+				read, err := cbuf.copyin(src)
 				if err != 0 {
 					inret <- err
 				}
 				inret <- read
 			case dst := <- out:
-				wrote, err := buftake(dst)
+				wrote, err := cbuf.copyout(dst)
 				if err != 0 {
 					outret <- err
 				}
@@ -2013,13 +1935,13 @@ func susd_start() *susd_t {
 			}
 			// block readers/writers if buffer is empty/full or if
 			// one end of the connection is closed.
-			if !buffull() || opencnt == 1 {
+			if !cbuf.full() || opencnt == 1 {
 				in = ret.in
 				pollers.wakeready(R_READ)
 			} else {
 				in = nil
 			}
-			if !bufempty() || opencnt == 1 {
+			if !cbuf.empty() || opencnt == 1 {
 				out = ret.out
 				pollers.wakeready(R_WRITE)
 			} else {

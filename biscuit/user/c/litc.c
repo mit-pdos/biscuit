@@ -1562,8 +1562,8 @@ malloc(size_t sz)
 	sz = (sz + 7) & ~7;
 	if (!curh || bump + sz > curh->end) {
 		const size_t pgsize = 1 << 12;
-		// Also account for the header that we embed within the allocated
-		// space.
+		// Also account for the header that we embed within the
+		// allocated space.
 		size_t mmapsz = (sz + sizeof(struct header_t) + pgsize - 1) &
 				~(pgsize - 1);
 		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
