@@ -284,6 +284,7 @@ ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
 #define		SIG_UNBLOCK	3
 int socket(int, int, int);
 #define		AF_UNIX		1
+#define		AF_LOCAL	AF_UNIX
 #define		AF_INET		2
 
 #define		SOCK_STREAM	1
@@ -405,6 +406,9 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 /*
  * libc
  */
+#define		EXIT_FAILURE	(-1)
+#define		EXIT_SUCCESS	0
+
 #define		BUFSIZ		4096
 
 #define		offsetof(s, m)	__builtin_offsetof(s, m)
@@ -418,6 +422,7 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		floor(x)	__builtin_floor(x)
 #define		log(x)		__builtin_log(x)
 #define		sqrt(x)		__builtin_sqrt(x)
+#define		pow(x)		__builtin_pow(x)
 
 #define		ntohs(x)	__builtin_bswap16(x)
 #define		htons(x)	__builtin_bswap16(x)
@@ -430,6 +435,14 @@ typedef struct {
 	int fd;
 } FILE;
 extern FILE  *stdin, *stdout, *stderr;
+
+typedef struct {
+} jmp_buf;
+
+struct lconv {
+	int a;
+	int decimal_point[10];
+};
 
 struct timezone {
 };
@@ -475,6 +488,7 @@ int gettimeofday(struct timeval *tv, struct timezone *tz);
 //int isprint(int); /*REDIS*/
 //int isspace(int); /*REDIS*/
 int isxdigit(int);
+//struct lconv* localeconv(void); /*REDIS*/
 dev_t makedev(uint, uint);
 int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);
@@ -507,10 +521,12 @@ int sprintf(char *, const char *,...)
 //void srand(uint); /*REDIS*/
 //int sscanf(const char *, const char *, ...) /*REDIS*/
 //    __attribute__((format(scanf, 2, 3))); /*REDIS*/
-int strcasecmp(const char *, const char *);
+//int strcasecmp(const char *, const char *); /*REDIS*/
+//int strncasecmp(const char *, const char *, size_t); /*REDIS*/
 char *strchr(const char *, int);
 //char *strdup(char *); /*REDIS*/
-char *strerror(int);
+//char *strerror(int); /*REDIS*/
+//char *strerror_r(int, char *, size_t); /*REDIS*/
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
