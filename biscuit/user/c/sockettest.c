@@ -139,6 +139,15 @@ void connector(char *path, char *msg1, char *msg2)
 		err(-1, "read failed (%ld != %lu)", r, strlen(msg1));
 	if (strncmp(buf, msg1, strlen(msg1)))
 		errx(-1, "string mismatch");
+
+	char *mymsg = "child";
+	char *theirmsg = "parent";
+	if ((r = write(s, mymsg, strlen(mymsg))) != strlen(mymsg))
+		err(-1, "write failed (%ld != %lu)", r, strlen(mymsg));
+	if ((r = read(s, buf, sizeof(buf))) != strlen(theirmsg))
+		err(-1, "read failed (%ld != %lu)", r, strlen(theirmsg));
+	if (strncmp(buf, theirmsg, strlen(theirmsg)))
+		errx(-1, "unexpected data");
 	close(s);
 
 	exit(0);
@@ -202,6 +211,15 @@ void stream()
 
 	if ((r = write(c, msg1, strlen(msg1))) != strlen(msg1))
 		err(-1, "write failed (%ld != %lu)", r, strlen(msg1));
+
+	char *mymsg = "parent";
+	char *theirmsg = "child";
+	if ((r = write(c, mymsg, strlen(mymsg))) != strlen(mymsg))
+		err(-1, "write failed (%ld != %lu)", r, strlen(mymsg));
+	if ((r = read(c, buf, sizeof(buf))) != strlen(theirmsg))
+		err(-1, "read failed (%ld != %lu)", r, strlen(theirmsg));
+	if (strncmp(buf, theirmsg, strlen(theirmsg)))
+		errx(-1, "unexpected data");
 
 	// child closed connection; writes should fail, should get EOF
 	if ((r = read(c, buf, sizeof(buf))) != 0)

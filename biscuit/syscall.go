@@ -1826,139 +1826,142 @@ func sun_start(sid sunid_t) *sund_t {
 	return ns
 }
 
+// may need this later...
 // unix stream socket with connection
-type susd_t struct {
-	// admittance/non-blocking
-	admit		chan bool
-
-	// sharing/closing fd
-	openc		chan int
-
-	// writing
-	in		chan *userbuf_t
-	innoblk		chan *userbuf_t
-	inret		chan int
-
-	// reading
-	out		chan *userbuf_t
-	outnoblk	chan *userbuf_t
-	outret		chan int
-
-	// polling
-	poll_in		chan pollmsg_t
-	poll_out	chan ready_t
-}
-
-func susd_start() *susd_t {
-	ret := &susd_t{}
-	admit := make(chan bool)
-	openc := make(chan int)
-	in := make(chan *userbuf_t)
-	inret := make(chan int)
-	_out := make(chan *userbuf_t)
-	outret := make(chan int)
-	poll_in := make(chan pollmsg_t)
-	poll_out := make(chan ready_t)
-	ret.admit = admit
-	ret.openc = openc
-	ret.in = in
-	ret.inret = inret
-	ret.out = _out
-	ret.outret = outret
-	ret.poll_in = poll_in
-	ret.poll_out = poll_out
-
-	go func() {
-		bufsz := 512
-		cbuf := circbuf_t{}
-		cbuf.cb_init(bufsz)
-
-		pollers := pollers_t{}
-
-		admits := 0
-		opencnt := 2
-		done := false
-
-		// socket initially empty
-		var out chan *userbuf_t
-		for !done {
-			select {
-			case admit <- true:
-				admits++
-				continue
-			case delta := <- openc:
-				opencnt += delta
-			case src := <- in:
-				if opencnt == 1 {
-					inret <- -ECONNRESET
-					break
-				}
-				read, err := cbuf.copyin(src)
-				if err != 0 {
-					inret <- err
-				}
-				inret <- read
-			case dst := <- out:
-				wrote, err := cbuf.copyout(dst)
-				if err != 0 {
-					outret <- err
-				}
-				outret <- wrote
-			case pm := <- poll_in:
-				ev := pm.events
-				var r ready_t
-				if ev & R_READ != 0 && out != nil {
-					r |= R_READ
-				}
-				if ev & R_WRITE != 0 && in != nil {
-					r |= R_WRITE
-				}
-				if r == 0 {
-					pollers.addpoller(&pm)
-				}
-			}
-			admits--
-			// XXXPANIC
-			if admits < 0 {
-				panic("neg admits")
-			}
-			// block readers/writers if buffer is empty/full or if
-			// one end of the connection is closed.
-			if !cbuf.full() || opencnt == 1 {
-				in = ret.in
-				pollers.wakeready(R_READ)
-			} else {
-				in = nil
-			}
-			if !cbuf.empty() || opencnt == 1 {
-				out = ret.out
-				pollers.wakeready(R_WRITE)
-			} else {
-				out = nil
-			}
-			if opencnt == 0 {
-				done = true
-			}
-		}
-
-		close(admit)
-		for i := 0; i < admits; i++ {
-			select {
-			case <- openc:
-			case <- ret.in:
-				inret <- -ECONNRESET
-			case <- ret.out:
-				outret <- -ENOTCONN
-			case pm := <- poll_in:
-				poll_out <- pm.events & R_HUP
-			}
-		}
-	}()
-	return ret
-}
+//type susd_t struct {
+//	// admittance/non-blocking
+//	admit		chan bool
+//
+//	// sharing/closing fd
+//	openc		chan int
+//
+//	// writing
+//	in		chan *userbuf_t
+//	innoblk		chan *userbuf_t
+//	inret		chan int
+//
+//	// reading
+//	out		chan *userbuf_t
+//	outnoblk	chan *userbuf_t
+//	outret		chan int
+//
+//	// polling
+//	poll_in		chan pollmsg_t
+//	poll_out	chan ready_t
+//}
+//
+//func susd_start() *susd_t {
+//	ret := &susd_t{}
+//	admit := make(chan bool)
+//	openc := make(chan int)
+//	in := make(chan *userbuf_t)
+//	inret := make(chan int)
+//	_out := make(chan *userbuf_t)
+//	outret := make(chan int)
+//	poll_in := make(chan pollmsg_t)
+//	poll_out := make(chan ready_t)
+//	ret.admit = admit
+//	ret.openc = openc
+//	ret.in = in
+//	ret.inret = inret
+//	ret.out = _out
+//	ret.outret = outret
+//	ret.poll_in = poll_in
+//	ret.poll_out = poll_out
+//
+//	go func() {
+//		bufsz := 512
+//		cbuf := circbuf_t{}
+//		cbuf.cb_init(bufsz)
+//
+//		pollers := pollers_t{}
+//
+//		admits := 0
+//		opencnt := 2
+//		done := false
+//
+//		// socket initially empty
+//		var out chan *userbuf_t
+//		for !done {
+//			select {
+//			case admit <- true:
+//				admits++
+//				continue
+//			case delta := <- openc:
+//				opencnt += delta
+//			case src := <- in:
+//				if opencnt == 1 {
+//					inret <- -ECONNRESET
+//					break
+//				}
+//				read, err := cbuf.copyin(src)
+//				if err != 0 {
+//					inret <- err
+//				}
+//				inret <- read
+//			case dst := <- out:
+//				wrote, err := cbuf.copyout(dst)
+//				if err != 0 {
+//					outret <- err
+//				}
+//				outret <- wrote
+//			case pm := <- poll_in:
+//				ev := pm.events
+//				var r ready_t
+//				if ev & R_READ != 0 && out != nil {
+//					r |= R_READ
+//				}
+//				if ev & R_WRITE != 0 && in != nil {
+//					r |= R_WRITE
+//				}
+//				if r == 0 {
+//					pollers.addpoller(&pm)
+//				}
+//			}
+//			admits--
+//			// XXXPANIC
+//			if admits < 0 {
+//				panic("neg admits")
+//			}
+//			// block readers/writers if buffer is empty/full or if
+//			// one end of the connection is closed.
+//			if !cbuf.full() || opencnt == 1 {
+//				in = ret.in
+//				pollers.wakeready(R_READ)
+//			} else {
+//				in = nil
+//			}
+//			if !cbuf.empty() || opencnt == 1 {
+//				out = ret.out
+//				pollers.wakeready(R_WRITE)
+//			} else {
+//				out = nil
+//			}
+//			if opencnt == 0 {
+//				done = true
+//			}
+//		}
+//
+//		close(admit)
+//		for i := 0; i < admits; i++ {
+//			select {
+//			case <- openc:
+//			case <- ret.in:
+//				inret <- -ECONNRESET
+//			case <- ret.out:
+//				outret <- -ENOTCONN
+//			case pm := <- poll_in:
+//				poll_out <- pm.events & R_HUP
+//			}
+//		}
+//	}()
+//	return ret
+//}
 
 type susfops_t struct {
-	susd	*susd_t
+	//susd	*susd_t
+	pipein	*pipe_t
+	pipeout	*pipe_t
 	conn	bool
 	// to prevent bind(2) and listen(2) races
 	bl	sync.Mutex
@@ -1969,12 +1972,21 @@ type susfops_t struct {
 	options	int
 }
 
-func (sus *susfops_t) _admit() bool {
+func (sus *susfops_t) _admitr() bool {
 	// XXXPANIC
-	if sus.susd == nil {
+	if sus.pipein == nil {
 		panic("wtf??")
 	}
-	_, ok := <- sus.susd.admit
+	_, ok := <- sus.pipein.admit
+	return ok
+}
+
+func (sus *susfops_t) _admitw() bool {
+	// XXXPANIC
+	if sus.pipeout == nil {
+		panic("wtf??")
+	}
+	_, ok := <- sus.pipeout.admit
 	return ok
 }
 
@@ -1982,11 +1994,18 @@ func (sus *susfops_t) close() int {
 	if !sus.conn {
 		return 0
 	}
-	if !sus._admit() {
-		return -EBADF
+	err := 0
+	if sus._admitr() {
+		sus.pipein.readers <- -1
+	} else {
+		err = -EBADF
 	}
-	sus.susd.openc <- -1
-	return 0
+	if sus._admitw() {
+		sus.pipeout.writers <- -1
+	} else {
+		err = -EBADF
+	}
+	return err
 }
 
 func (sus *susfops_t) fstat(*stat_t) int {
@@ -2006,44 +2025,34 @@ func (sus *susfops_t) pathi() inum {
 }
 
 func (sus *susfops_t) read(dst *userbuf_t) (int, int) {
-	if !sus.conn {
-		return 0, -ENOTCONN
-	}
-	if !sus._admit() {
-		return 0, -EBADF
-	}
-	sus.susd.out <- dst
-	ret := <- sus.susd.outret
-	if ret < 0 {
-		return 0, ret
-	}
-	return ret, 0
+	read, _, err := sus.recvfrom(nil, dst, nil)
+	return read, err
 }
 
 func (sus *susfops_t) reopen() int {
 	if !sus.conn {
 		return 0
 	}
-	if !sus._admit() {
-		return -EBADF
+	err := 0
+	if sus._admitr() {
+		sus.pipein.readers <- 1
+	} else {
+		err = -EBADF
 	}
-	sus.susd.openc <- 1
-	return 0
+	if sus._admitw() {
+		sus.pipeout.writers <- 1
+	} else {
+		err = -EBADF
+	}
+	return err
 }
 
 func (sus *susfops_t) write(src *userbuf_t, append bool) (int, int) {
-	if !sus.conn {
-		return 0, -ENOTCONN
+	wrote, err := sus.sendto(nil, src, nil, 0)
+	if err == -EPIPE {
+		err = -ECONNRESET
 	}
-	if !sus._admit() {
-		return 0, -EBADF
-	}
-	sus.susd.in <- src
-	ret := <- sus.susd.inret
-	if ret < 0 {
-		return 0, ret
-	}
-	return ret, 0
+	return wrote, err
 }
 
 func (sus *susfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
@@ -2113,14 +2122,16 @@ func (sus *susfops_t) connect(proc *proc_t, saddr []uint8) int {
 	if !ok {
 		return -ECONNREFUSED
 	}
-	ch := make(chan *susd_t)
+	ch := make(chan *pipe_t)
 	susld.push <- ch
-	susd := <- ch
-	if susd == nil {
+	pipein := <- ch
+	if pipein == nil {
 		return -ECONNREFUSED
 	}
+	pipeout := <- ch
 
-	sus.susd = susd
+	sus.pipein = pipein
+	sus.pipeout = pipeout
 	sus.conn = true
 	return 0
 }
@@ -2164,16 +2175,9 @@ func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
 		return 0, -EISCONN
 	}
 
-	if !sus._admit() {
-		return 0, -EBADF
-	}
 	// XXX do nonblocking if requested in flags
-	sus.susd.in <- src
-	ret := <- sus.susd.inret
-	if ret < 0 {
-		return 0, ret
-	}
-	return ret, 0
+	fakepipe := &pipefops_t{pipe: sus.pipeout}
+	return fakepipe.write(src, false)
 }
 
 func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
@@ -2182,15 +2186,9 @@ func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 		return 0, 0, -ENOTCONN
 	}
 
-	if !sus._admit() {
-		return 0, 0, -EBADF
-	}
-	sus.susd.in <- dst
-	ret := <- sus.susd.inret
-	if ret < 0 {
-		return 0, 0, ret
-	}
-	return ret, 0, 0
+	fakepipe := &pipefops_t{pipe: sus.pipein}
+	ret, err := fakepipe.read(dst)
+	return ret, 0, err
 }
 
 func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
@@ -2198,12 +2196,16 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 		return ready_t(pm.events & R_ERROR)
 	}
 
-	if !sus._admit() {
-		return ready_t(pm.events & R_HUP)
+	fakein := &pipefops_t{pipe: sus.pipein}
+	fakeout := &pipefops_t{pipe: sus.pipeout, writer: true}
+	// pipefops_t.pollone() doesn't allow polling for reading on write-end
+	// of pipe and vice versa
+	readyin := fakein.pollone(pm)
+	if readyin != 0 {
+		return readyin
 	}
-	sus.susd.poll_in <- pm
-	ret := <- sus.susd.poll_out
-	return ret
+	readyout := fakeout.pollone(pm)
+	return readyout
 }
 
 var _susid uint64
@@ -2229,8 +2231,8 @@ type susld_t struct {
 	openc		chan int
 
 	// new connections
-	push		chan chan *susd_t
-	pop		chan chan *susd_t
+	push		chan chan *pipe_t
+	pop		chan chan *pipe_t
 
 	// poll
 	poll_in		chan pollmsg_t
@@ -2241,8 +2243,8 @@ func susld_start(mysid, backlog int) *susld_t {
 	ret := &susld_t{}
 	admit := make(chan bool)
 	openc := make(chan int)
-	push := make(chan chan *susd_t)
-	_pop := make(chan chan *susd_t)
+	push := make(chan chan *pipe_t)
+	_pop := make(chan chan *pipe_t)
 	poll_in := make(chan pollmsg_t)
 	poll_out := make(chan ready_t)
 	ret.admit = admit
@@ -2254,17 +2256,17 @@ func susld_start(mysid, backlog int) *susld_t {
 
 	go func() {
 		// circular buffer
-		_conns := make([]chan *susd_t, 0, backlog)
+		_conns := make([]chan *pipe_t, 0, backlog)
 		conns := _conns
 
 		admits := 0
 		opencnt := 2
 		pollers := pollers_t{}
 		// queue is initially empty
-		var pop chan chan *susd_t
+		var pop chan chan *pipe_t
 		done := false
 		for !done {
-			var first chan *susd_t
+			var first chan *pipe_t
 			if len(conns) > 0 {
 				first = conns[0]
 			}
@@ -2394,9 +2396,14 @@ func (sul *suslfops_t) accept(proc *proc_t, fromsa *userbuf_t) (fdops_i, int, in
 	if newconn == nil {
 		return nil, 0, -EBADF
 	}
-	susd := susd_start()
-	newconn <- susd
-	ret := &susfops_t{susd: susd, conn: true, options: sul.options}
+	pipea := &pipe_t{}
+	pipeb := &pipe_t{}
+	pipea.pipe_start()
+	pipeb.pipe_start()
+	newconn <- pipeb
+	newconn <- pipea
+	ret := &susfops_t{pipein: pipea, pipeout: pipeb, conn: true,
+	    options: sul.options}
 	return ret, 0, 0
 }
 
