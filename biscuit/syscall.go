@@ -840,10 +840,10 @@ func (p *pollers_t) wakeready(r ready_t) {
 
 type pipe_t struct {
 	pollers		pollers_t
+	in		chan *userbuf_t
 	inret		chan int
-	in		chan []uint8
-	outsz		chan int
-	out		chan []uint8
+	out		chan *userbuf_t
+	outret		chan int
 	readers		chan int
 	writers		chan int
 	admit		chan bool
@@ -852,10 +852,10 @@ type pipe_t struct {
 }
 
 func (p *pipe_t) pipe_start() {
+	in := make(chan *userbuf_t)
 	inret := make(chan int)
-	in := make(chan []uint8)
-	out := make(chan []uint8)
-	outsz := make(chan int)
+	out := make(chan *userbuf_t)
+	outret := make(chan int)
 	writers := make(chan int)
 	readers := make(chan int)
 	p.admit = make(chan bool)
@@ -863,8 +863,8 @@ func (p *pipe_t) pipe_start() {
 	p.poll_out = make(chan ready_t)
 	p.inret = inret
 	p.in = in
-	p.outsz = outsz
 	p.out = out
+	p.outret = outret
 	p.readers = readers
 	p.writers = writers
 
@@ -872,8 +872,9 @@ func (p *pipe_t) pipe_start() {
 		pipebufsz := 512
 		writec := 1
 		readc := 1
-		var buf []uint8
-		var toutsz chan int
+		cbuf := circbuf_t{}
+		cbuf.cb_init(pipebufsz)
+		var tout chan *userbuf_t
 		tin := in
 		admit := 0
 		for writec > 0 || readc > 0 {
@@ -882,27 +883,23 @@ func (p *pipe_t) pipe_start() {
 				admit++
 				continue
 			// writing to pipe
-			case d := <- tin:
+			case src := <- tin:
 				if readc == 0 {
 					inret <- -EPIPE
 					break
 				}
-				if len(buf) + len(d) > pipebufsz {
-					take := pipebufsz - len(buf)
-					d = d[:take]
+				ret, err := cbuf.copyin(src)
+				if err != 0 {
+					inret <- err
 				}
-				buf = append(buf, d...)
-				inret <- len(d)
+				inret <- ret
 			// reading from pipe
-			case sz := <- toutsz:
-				if len(buf) == 0 && writec != 0 {
-					panic("no data")
+			case dst := <- tout:
+				ret, err := cbuf.copyout(dst)
+				if err != 0 {
+					outret <- err
 				}
-				if sz > len(buf) {
-					sz = len(buf)
-				}
-				out <- buf[:sz]
-				buf = buf[sz:]
+				outret <- ret
 			// closing/opening
 			case delta := <- writers:
 				writec += delta
@@ -914,7 +911,7 @@ func (p *pipe_t) pipe_start() {
 				var ret ready_t
 				// check if reading, writing, or errors are
 				// available
-				if ev & R_READ != 0 && toutsz != nil {
+				if ev & R_READ != 0 && tout != nil {
 					ret |= R_READ
 				}
 				if ev & R_WRITE != 0 && tin != nil {
@@ -937,13 +934,13 @@ func (p *pipe_t) pipe_start() {
 
 			// allow more reads if there is data in the pipe or if
 			// there are no writers and the pipe is empty.
-			if len(buf) > 0 || writec == 0 {
-				toutsz = outsz
+			if !cbuf.empty() || writec == 0 {
+				tout = out
 				p.pollers.wakeready(R_READ)
 			} else {
-				toutsz = nil
+				tout = nil
 			}
-			if len(buf) < pipebufsz || readc == 0 {
+			if !cbuf.full() || readc == 0 {
 				tin = in
 				p.pollers.wakeready(R_WRITE)
 			} else {
@@ -957,9 +954,8 @@ func (p *pipe_t) pipe_start() {
 			select {
 			case <- p.in:
 				inret <- -EBADF
-			case <- p.outsz:
-				var e []uint8
-				out <- e
+			case <- p.out:
+				outret <- 0
 			case <- writers:
 			case <- readers:
 			}
@@ -972,42 +968,35 @@ type pipefops_t struct {
 	writer	bool
 }
 
-func (pf *pipefops_t) read(ub *userbuf_t) (int, int) {
+func (pf *pipefops_t) read(dst *userbuf_t) (int, int) {
 	if _, ok := <- pf.pipe.admit; !ok {
 		return 0, -EBADF
 	}
-	sz := ub.len
 	p := pf.pipe
-	p.outsz <- sz
-	buf := <- p.out
-	ret, err := ub.write(buf)
-	return ret, err
+	p.out <- dst
+	ret := <- p.outret
+	if ret < 0 {
+		return 0, ret
+	}
+	return ret, 0
 }
 
 func (pf *pipefops_t) write(src *userbuf_t, appnd bool) (int, int) {
-	buf := make([]uint8, src.len)
-	read, err := src.read(buf)
-	if err != 0 {
-		return 0, err
-	}
-	if read != src.len {
-		panic("short user read")
-	}
+	// block until the entire write completes
 	p := pf.pipe
-	ret := 0
-	for len(buf) > 0 {
+	c := 0
+	for c != src.len {
 		if _, ok := <- p.admit; !ok {
 			return 0, -EBADF
 		}
-		p.in <- buf
-		c := <- p.inret
-		if c < 0 {
-			return 0, c
+		p.in <- src
+		ret := <- p.inret
+		if ret < 0 {
+			return 0, ret
 		}
-		buf = buf[c:]
-		ret += c
+		c += ret
 	}
-	return ret, 0
+	return c, 0
 }
 
 func (pf *pipefops_t) close() int {
