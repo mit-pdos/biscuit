@@ -424,8 +424,10 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		sqrt(x)		__builtin_sqrt(x)
 #define		pow(x)		__builtin_pow(x)
 
-#define		ntohs(x)	__builtin_bswap16(x)
-#define		htons(x)	__builtin_bswap16(x)
+// annoyingly, some GCC versions < 4.8 are bugged and do not have
+// __builtin_bswap16.
+#define		ntohs(x)	(((x & 0xff) << 8) | ((x & 0xff00) >> 8))
+#define		htons(x)	(((x & 0xff) << 8) | ((x & 0xff00) >> 8))
 #define		ntohl(x)	__builtin_bswap32(x)
 #define		htonl(x)	__builtin_bswap32(x)
 
