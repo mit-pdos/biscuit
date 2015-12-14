@@ -1875,6 +1875,16 @@ renametest()
 	printf("rename test finished\n");
 }
 
+void *
+_bigstack(void *no)
+{
+	char *test = (char *)&no - 4096*30;
+	test += 32;
+	*test = 0;
+	asm volatile ("" ::"r"(test) : "memory");
+	return NULL;
+}
+
 void
 posixtest()
 {
@@ -1950,6 +1960,19 @@ posixtest()
 	if (strncmp(omsg, buf, olen))
 		errx(-1, "unexpected child output");
 	close(outfd);
+
+	pthread_attr_t pa;
+	pthread_attr_init(&pa);
+	pthread_attr_setstacksize(&pa, 4096*30);
+	pthread_t ct;
+	if (pthread_create(&ct, &pa, _bigstack, NULL))
+		errx(-1, "pthread_create");
+	void *threadret;
+	if (pthread_join(ct, &threadret))
+		errx(-1, "pthread_join");
+	if (threadret != NULL)
+		errx(-1, "thread failed");
+	pthread_attr_destroy(&pa);
 
 	printf("posix test ok\n");
 }

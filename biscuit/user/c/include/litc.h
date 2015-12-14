@@ -324,6 +324,8 @@ int thrwait(int, long *);
 typedef long pthread_t;
 
 typedef struct {
+	size_t stacksize;
+#define		_PTHREAD_DEFSTKSZ		4096ull
 } pthread_attr_t;
 
 typedef struct {
@@ -349,10 +351,10 @@ typedef struct {
 typedef struct {
 } pthread_barrierattr_t;
 
-//int pthread_attr_destroy(pthread_attr_t *); /*REDIS*/
-//int pthread_attr_init(pthread_attr_t *); /*REDIS*/
-//int pthread_attr_getstacksize(pthread_attr_t *, size_t *); /*REDIS*/
-//int pthread_attr_setstacksize(pthread_attr_t *, size_t); /*REDIS*/
+int pthread_attr_destroy(pthread_attr_t *);
+int pthread_attr_init(pthread_attr_t *);
+int pthread_attr_getstacksize(pthread_attr_t *, size_t *);
+int pthread_attr_setstacksize(pthread_attr_t *, size_t);
 
 int pthread_barrier_init(pthread_barrier_t *, pthread_barrierattr_t *, uint);
 int pthread_barrier_destroy(pthread_barrier_t *);
@@ -373,7 +375,7 @@ int pthread_once(pthread_once_t *, void (*)(void));
 pthread_t pthread_self(void);
 //int pthread_cancel(pthread_t); /*REDIS*/
 
-//int pthread_sigmask(int, const sigset_t *, sigset_t *); /*REDIS*/
+int pthread_sigmask(int, const sigset_t *, sigset_t *);
 
 //int pthread_setcancelstate(int, int *); /*REDIS*/
 #define		PTHREAD_CANCEL_ENABLE		1
@@ -418,10 +420,13 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		isnan(x)	__builtin_isnan(x)
 #define		HUGE_VAL	__builtin_huge_val()
 
+// these "builtins" sometimes result in a call to the library function. the
+// builtin version just tries to optimize some cases.
 #define		ceil(x)		__builtin_ceil(x)
 #define		floor(x)	__builtin_floor(x)
 #define		log(x)		__builtin_log(x)
 #define		sqrt(x)		__builtin_sqrt(x)
+#define		trunc(x)	__builtin_trunc(x)
 #define		pow(x)		__builtin_pow(x)
 
 // annoyingly, some GCC versions < 4.8 are bugged and do not have
@@ -560,9 +565,10 @@ char *strstr(const char *, const char *);
 #define		LOG_LOCAL6	(1ull << 14)
 #define		LOG_LOCAL7	(1ull << 15)
 #define		LOG_USER	(1ull << 16)
- time_t time(time_t*);
+time_t time(time_t*);
 //int tolower(int); /*REDIS*/
 //int toupper(int); /*REDIS*/
+double trunc(double);
 //int truncate(const char *, off_t); /*REDIS*/
 //int uname(struct utsname *); /*REDIS*/
 int vfprintf(FILE *, const char *, va_list)

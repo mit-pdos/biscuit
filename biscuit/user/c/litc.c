@@ -599,12 +599,12 @@ struct pcargs_t {
 	void *arg;
 	void *stack;
 	void *tls;
+	ulong stksz;
 };
 
 static long
 _pcreate(void *vpcarg)
 {
-#define		PSTACKSZ	(4096)
 	struct pcargs_t pcargs = *(struct pcargs_t *)vpcarg;
 	free(vpcarg);
 	long status;
@@ -630,7 +630,7 @@ _pcreate(void *vpcarg)
 	    "sysenter\n"
 	    "movq	$0, 0x1\n"
 	    :
-	    : "a"(SYS_MUNMAP), "D"(pcargs.stack), "S"(PSTACKSZ),
+	    : "a"(SYS_MUNMAP), "D"(pcargs.stack), "S"(pcargs.stksz),
 	      "r"(rbp), "r"(rbx)
 	    : "memory", "cc");
 	// not reached
@@ -650,8 +650,6 @@ int
 pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
     void *arg)
 {
-	if (attrs != NULL)
-		errx(-1, "pthread_create: attrs not yet supported");
 	// allocate and setup TLS space
 	if (!kinfo)
 		errx(-1, "nil kinfo");
@@ -666,9 +664,18 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 	char **tlsptr = newtls;
 	*tlsptr = tlsdata + kinfo->len;
 
+	size_t stksz = _PTHREAD_DEFSTKSZ;
+	if (attrs) {
+		stksz = attrs->stacksize;
+		if (stksz > 1024*1024*128)
+			errx(-1, "big fat stack");
+		const ulong pgsize = 1ul << 12;
+		if ((stksz % pgsize) != 0)
+			errx(-1, "stack size not aligned");
+	}
 	int ret;
 	// XXX setup guard page
-	void *stack = mkstack(PSTACKSZ);
+	void *stack = mkstack(stksz);
 	if (!stack) {
 		ret = -ENOMEM;
 		goto tls;
@@ -687,8 +694,9 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 
 	pca->fn = fn;
 	pca->arg = arg;
-	pca->stack = stack - PSTACKSZ;
+	pca->stack = stack - stksz;
 	pca->tls = newtls;
+	pca->stksz = stksz;
 	ret = tfork_thread(&tf, _pcreate, pca);
 	if (ret < 0) {
 		goto both;
@@ -698,7 +706,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 both:
 	free(pca);
 errstack:
-	munmap(stack, PSTACKSZ);
+	munmap(stack - stksz, stksz);
 tls:
 	free(newtls);
 	return ret;
@@ -799,6 +807,41 @@ pthread_barrier_wait(pthread_barrier_t *b)
 	c = __sync_add_and_fetch(&b->current, -1);
 	if (c == m)
 		b->current = 0;
+	return 0;
+}
+
+int
+pthread_sigmask(int how, const sigset_t *set, sigset_t *oset)
+{
+	printf("warning: signals not implemented\n");
+	return 0;
+}
+
+int
+pthread_attr_destroy(pthread_attr_t *a)
+{
+	return 0;
+}
+
+int
+pthread_attr_init(pthread_attr_t *a)
+{
+	memset(a, 0, sizeof(pthread_attr_t));
+	a->stacksize = _PTHREAD_DEFSTKSZ;
+	return 0;
+}
+
+int
+pthread_attr_getstacksize(pthread_attr_t *a, size_t *sz)
+{
+	*sz = a->stacksize;
+	return 0;
+}
+
+int
+pthread_attr_setstacksize(pthread_attr_t *a, size_t sz)
+{
+	a->stacksize = sz;
 	return 0;
 }
 
@@ -1510,6 +1553,12 @@ strtoul(const char *n, char **endptr, int base)
 {
 	long ret = strtol(n, endptr, base);
 	return (ulong)ret;
+}
+
+double
+trunc(double x)
+{
+	return (long)x;
 }
 
 int
