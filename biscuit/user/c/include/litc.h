@@ -373,7 +373,7 @@ int pthread_mutex_lock(pthread_mutex_t *);
 int pthread_mutex_unlock(pthread_mutex_t *);
 int pthread_once(pthread_once_t *, void (*)(void));
 pthread_t pthread_self(void);
-//int pthread_cancel(pthread_t); /*REDIS*/
+int pthread_cancel(pthread_t);
 
 int pthread_sigmask(int, const sigset_t *, sigset_t *);
 
@@ -496,6 +496,7 @@ int gettimeofday(struct timeval *tv, struct timezone *tz);
 //int isspace(int); /*REDIS*/
 int isxdigit(int);
 //struct lconv* localeconv(void); /*REDIS*/
+double log(double);
 dev_t makedev(uint, uint);
 int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);

@@ -722,6 +722,12 @@ pthread_join(pthread_t t, void **retval)
 }
 
 int
+pthread_cancel(pthread_t t)
+{
+	errx(-1, "no imp");
+}
+
+int
 pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)
 {
 	if (attr)
@@ -1045,6 +1051,22 @@ getopt(int argc, char * const *argv, const char *optstring)
 	optarg = argv[optind];
 	optind++;
 	return ca[1];
+}
+
+double
+log(double x)
+{
+	if (x < 1)
+		errx(-1, "no imp");
+	const double ln2 = 0.693147;
+	double ret = 0;
+	while (x >= 2) {
+		x /= 2;
+		ret += ln2;
+	}
+	if (x > 1)
+		ret += x - 1;
+	return ret;
 }
 
 dev_t
