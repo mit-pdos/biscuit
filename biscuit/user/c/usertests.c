@@ -2397,6 +2397,53 @@ runsockettest(void)
 		errx(-1, "child failed");
 }
 
+void _testnoblk(int rfd, int wfd)
+{
+	char buf[512];
+	memset(buf, 'A', sizeof(buf));
+	ssize_t ret, tot = 0;
+	while ((ret = write(wfd, buf, 10)) > 0)
+		tot += ret;
+	if (ret != -1 || errno != EWOULDBLOCK)
+		errx(-1, "weird write ret: %ld %d", ret, errno);
+	ssize_t tot2 = 0;
+	while ((ret = read(rfd, buf, 32)) > 0)
+		tot2 += ret;
+	if (ret != -1 || errno != EWOULDBLOCK)
+		errx(-1, "weird read ret: %ld %d", ret, errno);
+	if (tot != tot2)
+		errx(-1, "len mismatch");
+}
+
+void fnonblock(void)
+{
+	printf("non-blocking test...\n");
+	int p[2];
+	if (pipe2(p, O_NONBLOCK))
+		err(-1, "pipe");
+	_testnoblk(p[0], p[1]);
+	close(p[0]);
+	close(p[1]);
+
+	if (pipe2(p, 0))
+		err(-1, "pipe");
+	int flags;
+	if ((flags = fcntl(p[0], F_GETFL)) == - 1)
+		err(-1, "fcntlg");
+	if (fcntl(p[0], F_SETFL, flags | O_NONBLOCK) == -1)
+		err(-1, "fcntls");
+	if ((flags = fcntl(p[1], F_GETFL)) == - 1)
+		err(-1, "fcntlg");
+	if (fcntl(p[1], F_SETFL, flags | O_NONBLOCK) == -1)
+		err(-1, "fcntls");
+	_testnoblk(p[0], p[1]);
+	close(p[0]);
+	close(p[1]);
+
+	// XXX test unix stream sockets once we have socketpair(2)
+	printf("non-blocking test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2454,6 +2501,7 @@ main(int argc, char *argv[])
   posixtest();
   barriertest();
   threadwait();
+  fnonblock();
 
   polltest();
   runsockettest();

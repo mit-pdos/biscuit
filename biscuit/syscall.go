@@ -41,6 +41,8 @@ const(
   E2BIG	       = 7
   EBADF        = 9
   ECHILD       = 10
+  EAGAIN       = 11
+  EWOULDBLOCK  = EAGAIN
   EFAULT       = 14
   EBUSY        = 16
   EEXIST       = 17
@@ -725,8 +727,9 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 	rfp := FD_READ
 	wfp := FD_WRITE
 
+	var opts int
 	if flags & O_NONBLOCK != 0 {
-		panic("no imp yet")
+		opts |= O_NONBLOCK
 	}
 
 	if flags & O_CLOEXEC != 0 {
@@ -736,8 +739,8 @@ func sys_pipe2(proc *proc_t, pipen, flags int) int {
 
 	p := &pipe_t{}
 	p.pipe_start()
-	rops := &pipefops_t{pipe: p, writer: false}
-	wops := &pipefops_t{pipe: p, writer: true}
+	rops := &pipefops_t{pipe: p, writer: false, options: opts}
+	wops := &pipefops_t{pipe: p, writer: true, options: opts}
 	rpipe := &fd_t{fops: rops}
 	wpipe := &fd_t{fops: wops}
 	rfd := proc.fd_insert(rpipe, rfp)
@@ -858,6 +861,8 @@ type pipe_t struct {
 	admit		chan bool
 	poll_in		chan pollmsg_t
 	poll_out	chan ready_t
+	innoblk		chan *userbuf_t
+	outnoblk	chan *userbuf_t
 }
 
 func (p *pipe_t) pipe_start() {
@@ -867,6 +872,8 @@ func (p *pipe_t) pipe_start() {
 	outret := make(chan int)
 	writers := make(chan int)
 	readers := make(chan int)
+	innoblk := make(chan *userbuf_t)
+	outnoblk := make(chan *userbuf_t)
 	p.admit = make(chan bool)
 	p.poll_in = make(chan pollmsg_t)
 	p.poll_out = make(chan ready_t)
@@ -876,6 +883,8 @@ func (p *pipe_t) pipe_start() {
 	p.outret = outret
 	p.readers = readers
 	p.writers = writers
+	p.innoblk = innoblk
+	p.outnoblk = outnoblk
 
 	go func() {
 		pipebufsz := 512
@@ -900,6 +909,7 @@ func (p *pipe_t) pipe_start() {
 				ret, err := cbuf.copyin(src)
 				if err != 0 {
 					inret <- err
+					break
 				}
 				inret <- ret
 			// reading from pipe
@@ -907,6 +917,34 @@ func (p *pipe_t) pipe_start() {
 				ret, err := cbuf.copyout(dst)
 				if err != 0 {
 					outret <- err
+					break
+				}
+				outret <- ret
+			// non-blocking read/writes
+			case src := <- innoblk:
+				if readc == 0 {
+					inret <- -EPIPE
+					break
+				}
+				if tin == nil {
+					inret <- -EWOULDBLOCK
+					break
+				}
+				ret, err := cbuf.copyin(src)
+				if err != 0 {
+					inret <- err
+					break
+				}
+				inret <- ret
+			case dst := <- outnoblk:
+				if tout == nil {
+					outret <- -EWOULDBLOCK
+					break
+				}
+				ret, err := cbuf.copyout(dst)
+				if err != 0 {
+					outret <- err
+					break
 				}
 				outret <- ret
 			// closing/opening
@@ -963,7 +1001,11 @@ func (p *pipe_t) pipe_start() {
 			select {
 			case <- p.in:
 				inret <- -EBADF
+			case <- innoblk:
+				inret <- -EBADF
 			case <- p.out:
+				outret <- 0
+			case <- outnoblk:
 				outret <- 0
 			case <- writers:
 			case <- readers:
@@ -975,14 +1017,20 @@ func (p *pipe_t) pipe_start() {
 type pipefops_t struct {
 	pipe	*pipe_t
 	writer	bool
+	options	int
 }
 
 func (pf *pipefops_t) read(dst *userbuf_t) (int, int) {
-	if _, ok := <- pf.pipe.admit; !ok {
+	noblk := pf.options & O_NONBLOCK != 0
+	p := pf.pipe
+	if _, ok := <- p.admit; !ok {
 		return 0, -EBADF
 	}
-	p := pf.pipe
-	p.out <- dst
+	outchan := p.out
+	if noblk {
+		outchan = p.outnoblk
+	}
+	outchan <- dst
 	ret := <- p.outret
 	if ret < 0 {
 		return 0, ret
@@ -992,16 +1040,24 @@ func (pf *pipefops_t) read(dst *userbuf_t) (int, int) {
 
 func (pf *pipefops_t) write(src *userbuf_t, appnd bool) (int, int) {
 	// block until the entire write completes
+	noblk := pf.options & O_NONBLOCK != 0
 	p := pf.pipe
 	c := 0
+	inchan := p.in
+	if noblk {
+		inchan = p.innoblk
+	}
 	for c != src.len {
 		if _, ok := <- p.admit; !ok {
 			return 0, -EBADF
 		}
-		p.in <- src
+		inchan <- src
 		ret := <- p.inret
 		if ret < 0 {
 			return 0, ret
+		}
+		if noblk {
+			return ret, 0
 		}
 		c += ret
 	}
@@ -1094,7 +1150,15 @@ func (pf *pipefops_t) pollone(pm pollmsg_t) ready_t {
 }
 
 func (pf *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
-	return -ENOSYS
+	switch cmd {
+	case F_GETFL:
+		return pf.options
+	case F_SETFL:
+		pf.options = opt
+		return 0
+	default:
+		panic("weird cmd")
+	}
 }
 
 func sys_rename(proc *proc_t, oldn int, newn int) int {
@@ -1303,12 +1367,17 @@ func sys_getpid(proc *proc_t) int {
 }
 
 func sys_socket(proc *proc_t, domain, typ, proto int) int {
+	var opts int
+	if typ & SOCK_NONBLOCK != 0 {
+		opts |= O_NONBLOCK
+	}
+
 	var sfops fdops_i
 	switch {
-	case domain == AF_UNIX && typ == SOCK_DGRAM:
+	case domain == AF_UNIX && typ & SOCK_DGRAM != 0:
 		sfops = &sudfops_t{open: 1}
-	case domain == AF_UNIX && typ == SOCK_STREAM:
-		sfops = &susfops_t{}
+	case domain == AF_UNIX && typ & SOCK_STREAM != 0:
+		sfops = &susfops_t{options: opts}
 	default:
 		return -EINVAL
 	}
@@ -2193,7 +2262,7 @@ func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
 	}
 
 	// XXX do nonblocking if requested in flags
-	fakepipe := &pipefops_t{pipe: sus.pipeout}
+	fakepipe := &pipefops_t{pipe: sus.pipeout, options: sus.options}
 	return fakepipe.write(src, false)
 }
 
@@ -2203,7 +2272,7 @@ func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 		return 0, 0, -ENOTCONN
 	}
 
-	fakepipe := &pipefops_t{pipe: sus.pipein}
+	fakepipe := &pipefops_t{pipe: sus.pipein, options: sus.options}
 	ret, err := fakepipe.read(dst)
 	return ret, 0, err
 }
@@ -2230,7 +2299,8 @@ func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	case F_GETFL:
 		return sus.options
 	case F_SETFL:
-		panic("no imp")
+		sus.options = opt
+		return 0
 	default:
 		panic("weird cmd")
 	}
@@ -2469,7 +2539,8 @@ func (sul *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	case F_GETFL:
 		return sul.options
 	case F_SETFL:
-		panic("no imp")
+		sul.options = opt
+		return 0
 	default:
 		panic("weird cmd")
 	}
