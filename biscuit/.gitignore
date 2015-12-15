@@ -62,6 +62,7 @@
 /user/c/sync
 /user/c/reboot
 /user/c/ebizzy
+/user/c/uname
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -121,3 +122,4 @@
 /fsdir/bin/sync
 /fsdir/bin/reboot
 /fsdir/bin/ebizzy
+/fsdir/bin/uname

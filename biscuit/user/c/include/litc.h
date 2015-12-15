@@ -1,5 +1,8 @@
 #pragma once
 
+#define		BISCUIT_RELEASE	"REARDEN"
+#define		BISCUIT_VERSION	"0.0.0"
+
 #include <littypes.h>
 
 #ifdef __cplusplus
@@ -99,6 +102,9 @@ struct pollfd {
 struct timeval {
 	time_t tv_sec;
 	time_t tv_usec;
+};
+
+struct timezone {
 };
 
 struct rlimit {
@@ -212,6 +218,7 @@ int getrusage(int, struct rusage *);
 #define		RUSAGE_SELF	1
 #define		RUSAGE_CHILDREN	2
 //int getsockopt(int, int, int, void *, socklen_t *); /*REDIS*/
+int gettimeofday(struct timeval *, struct timezone *);
 
 int fcntl(int, int, ...);
 #define		F_GETFL		1
@@ -455,9 +462,6 @@ struct lconv {
 	int decimal_point[10];
 };
 
-struct timezone {
-};
-
 struct utsname {
 #define		UTSMAX	64
 	char	sysname[UTSMAX];
@@ -469,6 +473,7 @@ struct utsname {
 
 void abort(void);
 int atoi(const char *);
+double ceil(double);
 //char *ctime_r(const time_t *, char *); /*REDIS*/
 void err(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
@@ -494,10 +499,12 @@ int getopt(int, char * const *, const char *);
 extern char *optarg;
 extern int   optind;
 
-int gettimeofday(struct timeval *tv, struct timezone *tz);
+int isalpha(int);
 //int isdigit(int); /*REDIS*/
+int islower(int);
 //int isprint(int); /*REDIS*/
 //int isspace(int); /*REDIS*/
+int isupper(int);
 int isxdigit(int);
 //struct lconv* localeconv(void); /*REDIS*/
 double log(double);
@@ -571,11 +578,11 @@ char *strstr(const char *, const char *);
 #define		LOG_LOCAL7	(1ull << 15)
 #define		LOG_USER	(1ull << 16)
 time_t time(time_t*);
-//int tolower(int); /*REDIS*/
-//int toupper(int); /*REDIS*/
+int tolower(int);
+int toupper(int);
 double trunc(double);
 //int truncate(const char *, off_t); /*REDIS*/
-//int uname(struct utsname *); /*REDIS*/
+int uname(struct utsname *);
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));
 int vprintf(const char *, va_list)

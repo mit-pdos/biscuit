@@ -271,15 +271,6 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 	return ret;
 }
 
-int isxdigit(int c)
-{
-	if ((c >= '0' && c <= '9') ||
-	    (c >= 'a' && c <= 'f') ||
-	    (c >= 'A' && c <= 'F'))
-		return 1;
-	return 0;
-}
-
 int
 getrusage(int who, struct rusage *r)
 {
@@ -977,6 +968,14 @@ atoi(const char *n)
 	return tot;
 }
 
+double
+ceil(double x)
+{
+	if (x == trunc(x))
+		return x;
+	return trunc(x + 1);
+}
+
 void
 err(int eval, const char *fmt, ...)
 {
@@ -1080,6 +1079,34 @@ getopt(int argc, char * const *argv, const char *optstring)
 	optarg = argv[optind];
 	optind++;
 	return ca[1];
+}
+
+int
+islower(int c)
+{
+	return c >= 'a' && c <= 'z';
+}
+
+int
+isupper(int c)
+{
+	return c >= 'A' && c <= 'Z';
+}
+
+int
+isalpha(int c)
+{
+	return isupper(c) || islower(c);
+}
+
+int
+isxdigit(int c)
+{
+	if ((c >= '0' && c <= '9') ||
+	    (c >= 'a' && c <= 'f') ||
+	    (c >= 'A' && c <= 'F'))
+		return 1;
+	return 0;
 }
 
 double
@@ -1606,6 +1633,33 @@ strtoul(const char *n, char **endptr, int base)
 	return (ulong)ret;
 }
 
+time_t
+time(time_t *tloc)
+{
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL))
+	      return -1;
+	if (tloc)
+		*tloc = tv.tv_sec;
+	return tv.tv_sec;
+}
+
+int
+tolower(int c)
+{
+	if (!isalpha(c))
+		return c;
+	return c | 0x20;
+}
+
+int
+toupper(int c)
+{
+	if (!isalpha(c))
+		return c;
+	return c & ~0x20;
+}
+
 double
 trunc(double x)
 {
@@ -1625,6 +1679,21 @@ vprintf(const char *fmt, va_list ap)
 	pmsg(lbuf, ret);
 
 	return ret;
+}
+
+static struct utsname _unamed = {
+	.sysname = "BiscuitOS",
+	.nodename = "localhost",
+	.release = BISCUIT_RELEASE,
+	.version = BISCUIT_VERSION,
+	.machine = "amd64",
+};
+
+int
+uname(struct utsname *name)
+{
+	memcpy(name, &_unamed, sizeof(struct utsname));
+	return 0;
 }
 
 int
