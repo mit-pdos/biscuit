@@ -1613,8 +1613,14 @@ strtol(const char *n, char **endptr, int base)
 	} else if (base == 0)
 		base = 10;
 	long tot = 0;
-	while (isxdigit(*n))
-		tot = tot*base + (*n++ - '0');
+	while (isxdigit(*n)) {
+		int c = tolower(*n++);
+		tot = tot*base;
+		if (isalpha(c))
+			tot += c - 'a' + 10;
+		else
+			tot += c - '0';
+	}
 	if (endptr)
 		*endptr = (char *)n;
 	return tot*sign;
