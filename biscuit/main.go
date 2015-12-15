@@ -259,6 +259,8 @@ type fdops_i interface {
 	// device to send a notification if none of the states being polled are
 	// currently true.
 	pollone(pollmsg_t) ready_t
+
+	fcntl(*proc_t, int, int) int
 }
 
 // this is the new fd_t

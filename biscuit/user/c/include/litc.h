@@ -213,9 +213,13 @@ int getrusage(int, struct rusage *);
 #define		RUSAGE_CHILDREN	2
 //int getsockopt(int, int, int, void *, socklen_t *); /*REDIS*/
 
-//int fcntl(int, int, ...); /*REDIS*/
+int fcntl(int, int, ...);
 #define		F_GETFL		1
 #define		F_SETFL		2
+#define		F_GETFD		3
+#define		F_SETFD		4
+
+#define		FD_CLOEXEC	0x4
 
 int kill(int, int);
 int link(const char *, const char *);

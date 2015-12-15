@@ -26,6 +26,7 @@
 #define SYS_EXIT         60
 #define SYS_WAIT4        61
 #define SYS_KILL         62
+#define SYS_FCNTL        72
 #define SYS_CHDIR        80
 #define SYS_RENAME       82
 #define SYS_MKDIR        83
@@ -207,6 +208,34 @@ long
 fake_sys2(long n)
 {
 	return syscall(n, 0, 0, 0, 0, SYS_FAKE2);
+}
+
+int
+fcntl(int fd, int cmd, ...)
+{
+	int ret;
+	long a1 = SA(fd);
+	long a2 = SA(cmd);
+
+	va_list ap;
+	va_start(ap, cmd);
+	switch (cmd) {
+	case F_GETFD:
+	case F_SETFD:
+	case F_GETFL:
+	case F_SETFL:
+	{
+		int fl = va_arg(ap, int);
+		ret = syscall(a1, a2, SA(fl), 0, 0, SYS_FCNTL);
+		ERRNO_NEG(ret);
+		break;
+	}
+	default:
+		errno = -EINVAL;
+		ret = -1;
+	}
+	va_end(ap);
+	return ret;
 }
 
 int

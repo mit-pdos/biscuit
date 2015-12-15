@@ -142,6 +142,11 @@ const(
     WNOHANG      = 2
     WUNTRACED    = 4
   SYS_KILL     = 62
+  SYS_FCNTL    = 72
+    F_GETFL      = 1
+    F_SETFL      = 2
+    F_GETFD      = 3
+    F_SETFD      = 4
   SYS_CHDIR    = 80
   SYS_RENAME   = 82
   SYS_MKDIR    = 83
@@ -247,6 +252,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_wait4(p, tid, a1, a2, a3, a4, a5)
 	case SYS_KILL:
 		ret = sys_kill(p, a1, a2)
+	case SYS_FCNTL:
+		ret = sys_fcntl(p, a1, a2, a3)
 	case SYS_CHDIR:
 		ret = sys_chdir(p, a1)
 	case SYS_RENAME:
@@ -352,6 +359,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		return -EPERM
 	}
 
+	// XXX move FD_APPEND into fops
 	apnd := fd.perms & FD_APPEND != 0
 
 	userbuf := proc.mkuserbuf(bufp, sz)
@@ -402,6 +410,7 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if err != 0 {
 		return err
 	}
+	// XXX move FD_APPEND into fops
 	if flags & O_APPEND != 0 {
 		fdperms |= FD_APPEND
 	}
@@ -1084,6 +1093,10 @@ func (pf *pipefops_t) pollone(pm pollmsg_t) ready_t {
 	return status
 }
 
+func (pf *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	return -ENOSYS
+}
+
 func sys_rename(proc *proc_t, oldn int, newn int) int {
 	old, ok1, toolong1 := proc.userstr(oldn, NAME_MAX)
 	new, ok2, toolong2 := proc.userstr(newn, NAME_MAX)
@@ -1649,6 +1662,10 @@ func (sf *sudfops_t) pollone(pm pollmsg_t) ready_t {
 	return status
 }
 
+func (sf *sudfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	return -ENOSYS
+}
+
 type sunid_t int
 
 // globally unique unix socket minor number
@@ -2208,6 +2225,17 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 	return readyout
 }
 
+func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	switch cmd {
+	case F_GETFL:
+		return sus.options
+	case F_SETFL:
+		panic("no imp")
+	default:
+		panic("weird cmd")
+	}
+}
+
 var _susid uint64
 
 func susid_new() int {
@@ -2434,6 +2462,17 @@ func (sul *suslfops_t) pollone(pm pollmsg_t) ready_t {
 	}
 	sul.susld.poll_in <- pm
 	return <- sul.susld.poll_out
+}
+
+func (sul *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	switch cmd {
+	case F_GETFL:
+		return sul.options
+	case F_SETFL:
+		panic("no imp")
+	default:
+		panic("weird cmd")
+	}
 }
 
 func sys_listen(proc *proc_t, fdn, backlog int) int {
@@ -2870,6 +2909,30 @@ func sys_kill(proc *proc_t, pid, sig int) int {
 	}
 	p.doomall()
 	return 0
+}
+
+func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return -EBADF
+	}
+	switch cmd {
+	// general fcntl(2) ops
+	case F_GETFD:
+		return fd.perms & FD_CLOEXEC
+	case F_SETFD:
+		if opt & FD_CLOEXEC == 0 {
+			fd.perms &^= FD_CLOEXEC
+		} else {
+			fd.perms |= FD_CLOEXEC
+		}
+		return 0
+	// fd specific fcntl(2) ops
+	case F_GETFL, F_SETFL:
+		return fd.fops.fcntl(proc, cmd, opt)
+	default:
+		return -EINVAL
+	}
 }
 
 func sys_chdir(proc *proc_t, dirn int) int {

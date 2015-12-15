@@ -829,6 +829,10 @@ func (fo *fsfops_t) pollone(pm pollmsg_t) ready_t {
 	return pm.events & (R_READ | R_WRITE)
 }
 
+func (fo *fsfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	return -ENOSYS
+}
+
 type devfops_t struct {
 	priv	inum
 	maj	int
@@ -916,6 +920,10 @@ func (df *devfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
 
 func (df *devfops_t) pollone(pm pollmsg_t) ready_t {
 	return pm.events & (R_READ | R_WRITE)
+}
+
+func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	return -ENOSYS
 }
 
 func fs_mkdir(paths string, mode int, cwd inum) int {
