@@ -636,6 +636,7 @@ type fsfops_t struct {
 	offset	int
 	closed	bool
 	openc	int
+	append	bool
 }
 
 func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
@@ -661,7 +662,7 @@ func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
 	return req.resp.count, 0
 }
 
-func (fo *fsfops_t) write(src *userbuf_t, append bool) (int, int) {
+func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -675,7 +676,7 @@ func (fo *fsfops_t) write(src *userbuf_t, append bool) (int, int) {
 	priv := fo.priv
 	// send write request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkwrite(src, fo.offset, append)
+	req.mkwrite(src, fo.offset, fo.append)
 
 	idmon := idaemon_ensure(priv)
 	idmon.req <- req
@@ -853,9 +854,9 @@ func (df *devfops_t) read(dst *userbuf_t) (int, int) {
 	return cons_read(dst, 0)
 }
 
-func (df *devfops_t) write(src *userbuf_t, append bool) (int, int) {
+func (df *devfops_t) write(src *userbuf_t) (int, int) {
 	df._sane()
-	return cons_write(src, 0, append)
+	return cons_write(src, 0)
 }
 
 func (df *devfops_t) fstat(st *stat_t) int {
@@ -1132,6 +1133,9 @@ func _fs_open(paths string, flags int, mode int, cwd inum,
 	return ret, 0
 }
 
+// socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
+var _denyopen = map[int]bool{ D_SUD: true, D_SUS: true}
+
 func fs_open(paths string, flags, mode int, cwd inum,
     major, minor int) (*fd_t, int) {
 	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
@@ -1140,7 +1144,7 @@ func fs_open(paths string, flags, mode int, cwd inum,
 	}
 
 	// some special files (sockets) cannot be opened with fops this way
-	if fsf.major == D_SUD {
+	if denied := _denyopen[fsf.major]; denied {
 		if fs_close(fsf.priv) != 0 {
 			panic("must succeed")
 		}
@@ -1159,7 +1163,8 @@ func fs_open(paths string, flags, mode int, cwd inum,
 		}
 		ret.fops = &devfops_t{priv: priv, maj: maj, min: min}
 	} else {
-		ret.fops = &fsfops_t{priv: priv, openc: 1}
+		apnd := flags & O_APPEND != 0
+		ret.fops = &fsfops_t{priv: priv, openc: 1, append: apnd}
 	}
 	return ret, 0
 }

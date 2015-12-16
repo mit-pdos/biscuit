@@ -310,7 +310,7 @@ func cons_read(ub *userbuf_t, offset int) (int, int) {
 	return ret, 0
 }
 
-func cons_write(src *userbuf_t, off int, ap bool) (int, int) {
+func cons_write(src *userbuf_t, off int) (int, int) {
 		// merge into one buffer to avoid taking the console
 		// lock many times.
 		utext := int8(0x17)
@@ -361,13 +361,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		return -EPERM
 	}
 
-	// XXX move FD_APPEND into fops
-	apnd := fd.perms & FD_APPEND != 0
-
 	userbuf := proc.mkuserbuf(bufp, sz)
 
 	n := proc.atime.now()
-	ret, err := fd.fops.write(userbuf, apnd)
+	ret, err := fd.fops.write(userbuf)
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
@@ -411,10 +408,6 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	proc.atime.io_time(n)
 	if err != 0 {
 		return err
-	}
-	// XXX move FD_APPEND into fops
-	if flags & O_APPEND != 0 {
-		fdperms |= FD_APPEND
 	}
 	if flags & O_CLOEXEC != 0 {
 		fdperms |= FD_CLOEXEC
@@ -1038,7 +1031,7 @@ func (pf *pipefops_t) read(dst *userbuf_t) (int, int) {
 	return ret, 0
 }
 
-func (pf *pipefops_t) write(src *userbuf_t, appnd bool) (int, int) {
+func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
 	// block until the entire write completes
 	noblk := pf.options & O_NONBLOCK != 0
 	p := pf.pipe
@@ -1585,7 +1578,7 @@ func (sf *sudfops_t) reopen() int {
 	return 0
 }
 
-func (sf *sudfops_t) write(*userbuf_t, bool) (int, int) {
+func (sf *sudfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENODEV
 }
 
@@ -2133,7 +2126,7 @@ func (sus *susfops_t) reopen() int {
 	return err
 }
 
-func (sus *susfops_t) write(src *userbuf_t, append bool) (int, int) {
+func (sus *susfops_t) write(src *userbuf_t) (int, int) {
 	wrote, err := sus.sendto(nil, src, nil, 0)
 	if err == -EPIPE {
 		err = -ECONNRESET
@@ -2263,7 +2256,7 @@ func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
 
 	// XXX do nonblocking if requested in flags
 	fakepipe := &pipefops_t{pipe: sus.pipeout, options: sus.options}
-	return fakepipe.write(src, false)
+	return fakepipe.write(src)
 }
 
 func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
@@ -2482,7 +2475,7 @@ func (sul *suslfops_t) reopen() int {
 	return 0
 }
 
-func (sul *suslfops_t) write(*userbuf_t, bool) (int, int) {
+func (sul *suslfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENOTCONN
 }
 

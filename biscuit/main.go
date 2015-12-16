@@ -238,7 +238,7 @@ type fdops_i interface {
 	read(*userbuf_t) (int, int)
 	// reopen() is called with proc_t.fdl is held
 	reopen() int
-	write(*userbuf_t, bool) (int, int)
+	write(*userbuf_t) (int, int)
 
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
@@ -275,7 +275,6 @@ const(
 	FD_READ		= 0x1
 	FD_WRITE	= 0x2
 	FD_CLOEXEC	= 0x4
-	FD_APPEND	= 0x8
 )
 
 var dummyfops	= &devfops_t{priv: -1, maj: D_CONSOLE, min: 0}
