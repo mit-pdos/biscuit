@@ -196,13 +196,11 @@ int accept(int, struct sockaddr *, socklen_t*);
 #define		X_OK	3
 int bind(int, const struct sockaddr *, socklen_t);
 int connect(int, const struct sockaddr *, socklen_t);
-//int chmod(const char *, mode_t); /*REDIS*/
+int chmod(const char *, mode_t);
 int close(int);
 int chdir(char *);
 int dup2(int, int);
-//void _exit(int) /*REDIS*/
-//    __attribute__((noreturn)); /*REDIS*/
-void exit(int)
+void _exit(int)
     __attribute__((noreturn));
 int execv(const char *, char * const[]);
 //int execve(const char *, char * const[], char * const[]); /*REDIS*/
@@ -269,7 +267,7 @@ ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);
 //int setrlimit(int, const struct rlimit *); /*REDIS*/
 //pid_t setsid(void); /*REDIS*/
-//int setsockopt(int, int, int, void *, socklen_t); /*REDIS*/
+//int setsockopt(int, int, int, void *, socklen_t);
 // levels
 #define		SOL_SOCKET	1
 // socket options
@@ -483,6 +481,8 @@ void err(int, const char *, ...)
 void errx(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
     __attribute__((__noreturn__));
+void exit(int)
+    __attribute__((noreturn));
 //int fclose(FILE *); /*REDIS*/
 //int feof(FILE *); /*REDIS*/
 //int fileno(FILE *); /*REDIS*/
@@ -491,7 +491,8 @@ void errx(int, const char *, ...)
 //FILE *fopen(const char *, const char *); /*REDIS*/
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
-//int fsync(int); /*REDIS*/
+int fsync(int);
+//int fputs(const char *, FILE *); /*REDIS*/
 //off_t ftello(FILE *); /*REDIS*/
 //int ftruncate(int, off_t); /*REDIS*/
 //size_t fread(void *, size_t, size_t, FILE *); /*REDIS*/
@@ -525,8 +526,10 @@ void *memset(void *, int, size_t);
 int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
 //void perror(const char *); /*REDIS*/
-//int rand(void); /*REDIS*/
-//long random(void); /*REDIS*/
+int rand(void);
+int rand_r(uint *);
+#define		RAND_MAX	0x7fffffff
+long random(void);
 ulong rdtsc(void);
 char *readline(const char *);
 //int scanf(const char *, ...) /*REDIS*/
@@ -539,15 +542,16 @@ int snprintf(char *, size_t, const char *,...)
     __attribute__((format(printf, 3, 4)));
 int sprintf(char *, const char *,...)
     __attribute__((format(printf, 2, 3)));
-//void srand(uint); /*REDIS*/
+void srand(uint);
 //int sscanf(const char *, const char *, ...) /*REDIS*/
 //    __attribute__((format(scanf, 2, 3))); /*REDIS*/
-//int strcasecmp(const char *, const char *); /*REDIS*/
-//int strncasecmp(const char *, const char *, size_t); /*REDIS*/
+int strcasecmp(const char *, const char *);
+int strncasecmp(const char *, const char *, size_t);
 char *strchr(const char *, int);
 //char *strdup(char *); /*REDIS*/
-//char *strerror(int); /*REDIS*/
-//char *strerror_r(int, char *, size_t); /*REDIS*/
+char *strerror(int);
+#define		NL_TEXTMAX	64
+int strerror_r(int, char *, size_t);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);

@@ -143,6 +143,13 @@ connect(int fd, const struct sockaddr *sa, socklen_t salen)
 }
 
 int
+chmod(const char *path, mode_t mode)
+{
+	printf("warning: chmod is a no-op\n");
+	return 0;
+}
+
+int
 dup2(int old, int new)
 {
 	int ret = syscall(SA(old), SA(new), 0, 0, 0, SYS_DUP2);
@@ -151,7 +158,7 @@ dup2(int old, int new)
 }
 
 void
-exit(int status)
+_exit(int status)
 {
 	syscall(status, 0, 0, 0, 0, SYS_EXIT);
 	errx(-1, "exit returned");
@@ -980,38 +987,6 @@ void
 err(int eval, const char *fmt, ...)
 {
 	dolock = 0;
-	const char *es[] = {
-	    [EPERM] = "Permission denied",
-	    [ENOENT] = "No such file or directory",
-	    [EINTR] = "Interrupted system call",
-	    [EIO] = "Input/output error",
-	    [E2BIG] = "Argument list too long",
-	    [EBADF] = "Bad file descriptor",
-	    [EAGAIN] = "Resource temporarily unavailable",
-	    [ECHILD] = "No child processes",
-	    [EFAULT] = "Bad address",
-	    [EBUSY] = "Device busy",
-	    [EEXIST] = "File exists",
-	    [ENODEV] = "Operation not supported by device",
-	    [ENOTDIR] = "Not a directory",
-	    [EISDIR] = "Is a directory",
-	    [EINVAL] = "Invalid argument",
-	    [ENOSPC] = "No space left on device",
-	    [ESPIPE] = "Illegal seek",
-	    [EPIPE] = "Broken pipe",
-	    [ERANGE] = "Result too large",
-	    [ENAMETOOLONG] = "File name too long",
-	    [ENOSYS] = "Function not implemented",
-	    [ENOTEMPTY] = "Directory not empty",
-	    [ENOTSOCK] = "Socket operation on non-socket",
-	    [EISCONN] = "Socket is already connected",
-	    [ENOTCONN] = "Socket is not connected",
-	    [ETIMEDOUT] = "Operation timed out",
-	    [ECONNRESET] = "Connection reset by peer",
-	    [ECONNREFUSED] = "Connection refused",
-	    [EINPROGRESS] = "Operation now in progress",
-	};
-	int nents = sizeof(es)/sizeof(es[0]);
 	printf("%s: ", __progname);
 	va_list ap;
 	va_start(ap, fmt);
@@ -1019,11 +994,9 @@ err(int eval, const char *fmt, ...)
 	va_end(ap);
 	// errno is dumb
 	int neval = errno;
-	const char *p = "Unknown error";
-	if (neval < nents && es[neval] != NULL)
-		p = es[neval];
-	printf(": %s", p);
-	pmsg("\n", 1);
+	char p[NL_TEXTMAX];
+	strerror_r(neval, p, sizeof(p));
+	printf(": %s\n", p);
 	exit(eval);
 }
 
@@ -1040,6 +1013,11 @@ errx(int eval, const char *fmt, ...)
 	exit(eval);
 }
 
+void exit(int ret)
+{
+	_exit(ret);
+}
+
 int
 fprintf(FILE *f, const char *fmt, ...)
 {
@@ -1049,6 +1027,14 @@ fprintf(FILE *f, const char *fmt, ...)
 	ret = vfprintf(f, fmt, ap);
 	va_end(ap);
 	return ret;
+}
+
+int
+fsync(int fd)
+{
+	// biscuit's FS does not return until all modifications are durably
+	// stored on disk.
+	return 0;
 }
 
 char *optarg;
@@ -1392,6 +1378,40 @@ printf(const char *fmt, ...)
 	return ret;
 }
 
+uint _seed1;
+
+int
+rand(void)
+{
+	return rand_r(&_seed1);
+}
+
+int
+rand_r(uint *seed)
+{
+	*seed = *seed * 1103515245 + 12345;
+	return *seed & RAND_MAX;
+}
+
+void srand(uint seed)
+{
+	_seed1 = seed;
+}
+
+uint _seed2;
+
+long
+random(void)
+{
+	return rand_r(&_seed2);
+}
+
+void
+srandom(uint seed)
+{
+	_seed2 = seed;
+}
+
 ulong
 rdtsc(void)
 {
@@ -1549,6 +1569,27 @@ sprintf(char *dst, const char *fmt, ...)
 	return ret;
 }
 
+int
+strcasecmp(const char *s1, const char *s2)
+{
+	return strncasecmp(s1, s2, ULONG_MAX);
+}
+
+int
+strncasecmp(const char *s1, const char *s2, size_t n)
+{
+	uint a = tolower(*s1++);
+	uint b = tolower(*s2++);
+	while (n && a && a == b) {
+		n--;
+		a = tolower(*s1++);
+		b = tolower(*s2++);
+	}
+	if (n == 0)
+		return 0;
+	return a - b;
+}
+
 char *
 strchr(const char *big, int l)
 {
@@ -1558,6 +1599,57 @@ strchr(const char *big, int l)
 	if (l == '\0')
 		return (char *)big;
 	return NULL;
+}
+
+char *
+strerror(int errnum)
+{
+	static char buf[NL_TEXTMAX];
+	strerror_r(errnum, buf, sizeof(buf));
+	return buf;
+}
+
+static const char * const _errstr[] = {
+	[EPERM] = "Permission denied",
+	[ENOENT] = "No such file or directory",
+	[EINTR] = "Interrupted system call",
+	[EIO] = "Input/output error",
+	[E2BIG] = "Argument list too long",
+	[EBADF] = "Bad file descriptor",
+	[EAGAIN] = "Resource temporarily unavailable",
+	[ECHILD] = "No child processes",
+	[EFAULT] = "Bad address",
+	[EBUSY] = "Device busy",
+	[EEXIST] = "File exists",
+	[ENODEV] = "Operation not supported by device",
+	[ENOTDIR] = "Not a directory",
+	[EISDIR] = "Is a directory",
+	[EINVAL] = "Invalid argument",
+	[ENOSPC] = "No space left on device",
+	[ESPIPE] = "Illegal seek",
+	[EPIPE] = "Broken pipe",
+	[ERANGE] = "Result too large",
+	[ENAMETOOLONG] = "File name too long",
+	[ENOSYS] = "Function not implemented",
+	[ENOTEMPTY] = "Directory not empty",
+	[ENOTSOCK] = "Socket operation on non-socket",
+	[EISCONN] = "Socket is already connected",
+	[ENOTCONN] = "Socket is not connected",
+	[ETIMEDOUT] = "Operation timed out",
+	[ECONNRESET] = "Connection reset by peer",
+	[ECONNREFUSED] = "Connection refused",
+	[EINPROGRESS] = "Operation now in progress",
+};
+
+int
+strerror_r(int errnum, char *dst, size_t dstlen)
+{
+	int nents = sizeof(_errstr)/sizeof(_errstr[0]);
+	const char *p = "Unknown error";
+	if (errnum < nents && _errstr[errnum] != NULL)
+		p = _errstr[errnum];
+	strncpy(dst, p, dstlen);
+	return 0;
 }
 
 char *
