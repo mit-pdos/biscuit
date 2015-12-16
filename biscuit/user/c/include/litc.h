@@ -298,10 +298,12 @@ int socket(int, int, int);
 #define		AF_LOCAL	AF_UNIX
 #define		AF_INET		2
 
-#define		SOCK_STREAM	1
-#define		SOCK_DGRAM	2
-#define		SOCK_RAW	3
-#define		SOCK_SEQPACKET	5
+#define		SOCK_STREAM	(1 << 0)
+#define		SOCK_DGRAM	(1 << 1)
+#define		SOCK_RAW	(1 << 2)
+#define		SOCK_SEQPACKET	(1 << 3)
+#define		SOCK_CLOEXEC	(1 << 4)
+#define		SOCK_NONBLOCK	(1 << 5)
 
 int stat(const char *, struct stat *);
 int sync(void);
