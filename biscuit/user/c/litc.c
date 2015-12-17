@@ -42,6 +42,8 @@
 #define SYS_FAKE         31337
 #define SYS_THREXIT      31338
 #define SYS_FAKE2        31339
+#define SYS_PREAD        31340
+#define SYS_PWRITE       31341
 
 __thread int errno;
 
@@ -412,6 +414,22 @@ poll(struct pollfd *fds, nfds_t nfds, int timeout)
 	for (p = fds; p < end; p++)
 		p->revents = 0;
 	int ret = syscall(SA(fds), SA(nfds), SA(timeout), 0, 0, SYS_POLL);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+ssize_t
+pread(int fd, void *dst, size_t len, off_t off)
+{
+	ssize_t ret = syscall(SA(fd), SA(dst), SA(len), SA(off), 0, SYS_PREAD);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+ssize_t
+pwrite(int fd, const void *src, size_t len, off_t off)
+{
+	ssize_t ret = syscall(SA(fd), SA(src), SA(len), SA(off), 0, SYS_PWRITE);
 	ERRNO_NEG(ret);
 	return ret;
 }

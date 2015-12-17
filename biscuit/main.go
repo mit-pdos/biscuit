@@ -240,6 +240,9 @@ type fdops_i interface {
 	reopen() int
 	write(*userbuf_t) (int, int)
 
+	pread(*userbuf_t, int) (int, int)
+	pwrite(*userbuf_t, int) (int, int)
+
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
 	// space, and error

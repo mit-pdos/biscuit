@@ -166,6 +166,8 @@ const(
   SYS_FAKE     = 31337
   SYS_THREXIT  = 31338
   SYS_FAKE2    = 31339
+  SYS_PREAD    = 31340
+  SYS_PWRITE   = 31341
 )
 
 const(
@@ -286,6 +288,10 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_fake2(p, a1)
 	case SYS_THREXIT:
 		sys_threxit(p, tid, a1)
+	case SYS_PREAD:
+		ret = sys_pread(p, a1, a2, a3, a4)
+	case SYS_PWRITE:
+		ret = sys_pwrite(p, a1, a2, a3, a4)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 		sys_exit(p, tid, SIGNALED | mkexitsig(31))
@@ -1057,6 +1063,14 @@ func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
 	return c, 0
 }
 
+func (pf *pipefops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (pf *pipefops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
 func (pf *pipefops_t) close() int {
 	if _, ok := <- pf.pipe.admit; !ok {
 		return -EBADF
@@ -1099,7 +1113,7 @@ func (pf *pipefops_t) reopen() int {
 }
 
 func (pf *pipefops_t) lseek(int, int) int {
-	return -ENODEV
+	return -ESPIPE
 }
 
 func (pf *pipefops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
@@ -1582,8 +1596,16 @@ func (sf *sudfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENODEV
 }
 
+func (sf *sudfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (sf *sudfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
 func (sf *sudfops_t) lseek(int, int) int {
-	return -ENODEV
+	return -ESPIPE
 }
 
 // trims trailing nulls from slice
@@ -2092,7 +2114,7 @@ func (sus *susfops_t) fstat(*stat_t) int {
 }
 
 func (sus *susfops_t) lseek(int, int) int {
-	return -ENODEV
+	return -ESPIPE
 }
 
 func (sus *susfops_t) mmapi(int) ([]mmapinfo_t, int) {
@@ -2132,6 +2154,14 @@ func (sus *susfops_t) write(src *userbuf_t) (int, int) {
 		err = -ECONNRESET
 	}
 	return wrote, err
+}
+
+func (sus *susfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (sus *susfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
 }
 
 func (sus *susfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
@@ -2452,7 +2482,7 @@ func (sul *suslfops_t) fstat(*stat_t) int {
 }
 
 func (sul *suslfops_t) lseek(int, int) int {
-	return -ENODEV
+	return -ESPIPE
 }
 
 func (sul *suslfops_t) mmapi(int) ([]mmapinfo_t, int) {
@@ -2479,7 +2509,16 @@ func (sul *suslfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENOTCONN
 }
 
-func (sul *suslfops_t) accept(proc *proc_t, fromsa *userbuf_t) (fdops_i, int, int) {
+func (sul *suslfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (sul *suslfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (sul *suslfops_t) accept(proc *proc_t,
+    fromsa *userbuf_t) (fdops_i, int, int) {
 	if !sul._admit() {
 		return nil, 0, -EBADF
 	}
@@ -2973,6 +3012,32 @@ func sys_kill(proc *proc_t, pid, sig int) int {
 	}
 	p.doomall()
 	return 0
+}
+
+func sys_pread(proc *proc_t, fdn, bufn, lenn, offset int) int {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return -EBADF
+	}
+	dst := proc.mkuserbuf(bufn, lenn)
+	ret, err := fd.fops.pread(dst, offset)
+	if err != 0 {
+		return err
+	}
+	return ret
+}
+
+func sys_pwrite(proc *proc_t, fdn, bufn, lenn, offset int) int {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return -EBADF
+	}
+	src := proc.mkuserbuf(bufn, lenn)
+	ret, err := fd.fops.pwrite(src, offset)
+	if err != 0 {
+		return err
+	}
+	return ret
 }
 
 func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {

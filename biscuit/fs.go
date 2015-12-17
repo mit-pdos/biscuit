@@ -639,7 +639,7 @@ type fsfops_t struct {
 	append	bool
 }
 
-func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
+func (fo *fsfops_t) _read(dst *userbuf_t, toff int) (int, int) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -647,9 +647,19 @@ func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
 		return 0, -EBADF
 	}
 
+	useoffset := toff != -1
+	offset := fo.offset
+	if useoffset {
+		// XXXPANIC
+		if toff < 0 {
+			panic("neg offset")
+		}
+		offset = toff
+	}
+
 	// send read request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkread(dst, fo.offset)
+	req.mkread(dst, offset)
 
 	priv := fo.priv
 	idmon := idaemon_ensure(priv)
@@ -658,11 +668,21 @@ func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
 	if req.resp.err != 0 {
 		return 0, req.resp.err
 	}
-	fo.offset += req.resp.count
+	if !useoffset {
+		fo.offset += req.resp.count
+	}
 	return req.resp.count, 0
 }
 
-func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
+func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
+	return fo._read(dst, -1)
+}
+
+func (fo *fsfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	return fo._read(dst, offset)
+}
+
+func (fo *fsfops_t) _write(src *userbuf_t, toff int) (int, int) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -676,7 +696,19 @@ func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
 	priv := fo.priv
 	// send write request to inode daemon owning priv
 	req := &ireq_t{}
-	req.mkwrite(src, fo.offset, fo.append)
+
+	useoffset := toff != -1
+	offset := fo.offset
+	append := fo.append
+	if useoffset {
+		// XXXPANIC
+		if toff < 0 {
+			panic("neg offset")
+		}
+		offset = toff
+		append = false
+	}
+	req.mkwrite(src, offset, append)
 
 	idmon := idaemon_ensure(priv)
 	idmon.req <- req
@@ -684,8 +716,18 @@ func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
 	if req.resp.err != 0 {
 		return 0, req.resp.err
 	}
-	fo.offset += req.resp.count
+	if !useoffset {
+		fo.offset += req.resp.count
+	}
 	return req.resp.count, 0
+}
+
+func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
+	return fo._write(src, -1)
+}
+
+func (fo *fsfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	return fo._write(src, offset)
 }
 
 func (fo *fsfops_t) fstat(st *stat_t) int {
@@ -859,6 +901,16 @@ func (df *devfops_t) write(src *userbuf_t) (int, int) {
 	return cons_write(src, 0)
 }
 
+func (df *devfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	df._sane()
+	return 0, -ESPIPE
+}
+
+func (df *devfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	df._sane()
+	return 0, -ESPIPE
+}
+
 func (df *devfops_t) fstat(st *stat_t) int {
 	df._sane()
 	priv := df.priv
@@ -892,7 +944,7 @@ func (df *devfops_t) reopen() int {
 
 func (df *devfops_t) lseek(int, int) int {
 	df._sane()
-	return -ENODEV
+	return -ESPIPE
 }
 
 func (df *devfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {

@@ -2417,7 +2417,7 @@ void _testnoblk(int rfd, int wfd)
 
 void fnonblock(void)
 {
-	printf("non-blocking test...\n");
+	printf("non-blocking test\n");
 	int p[2];
 	if (pipe2(p, O_NONBLOCK))
 		err(-1, "pipe");
@@ -2442,6 +2442,77 @@ void fnonblock(void)
 
 	// XXX test unix stream sockets once we have socketpair(2)
 	printf("non-blocking test ok\n");
+}
+
+void preadwrite(void)
+{
+	printf ("preadwrite test\n");
+
+	char *tfile = "/tmp/prdwrfile";
+	int fd = open(tfile, O_WRONLY | O_CREAT | O_TRUNC);
+	if (fd < 0)
+		err(-1, "open");
+
+	const size_t fsz = 1024;
+	char fbuf[fsz];
+	int i;
+	for (i = 0; i < sizeof(fbuf); i++)
+		fbuf[i] = i * (i+1);
+	ssize_t r;
+	if ((r = write(fd, fbuf, sizeof(fbuf))) != sizeof(fbuf))
+		err(-1, "write");
+	close(fd);
+
+	if ((fd = open(tfile, O_RDONLY)) < 0)
+		err(-1, "open");
+	char pbuf[fsz];
+	char *f = &fbuf[0];
+	char *fend = f + sizeof(fbuf);
+	srandom(time(NULL));
+
+	// interleave preads with reads to make sure offsets are screwed up
+	while (((r = read(fd, f, fend - f)) > 0)) {
+		f += r;
+		off_t off = random() % sizeof(fbuf);
+		if ((r = pread(fd, pbuf, sizeof(pbuf) - off, off)) < 0)
+			err(-1, "pread");
+	}
+	if (r < 0)
+		err(-1, "read");
+	if (f != fend)
+		errx(-1, "short length");
+
+	for (i = 0; i < sizeof(fbuf); i++)
+		if (fbuf[i] != (char)(i * (i+1)))
+			errx(-1, "byte mismatch");
+	close(fd);
+
+	// now read file forwards and backwards simultaneously to make sure
+	// data read is sane
+	f = &fbuf[0];
+	char *pend = &pbuf[0] + sizeof(pbuf);
+	char *p = pend;
+	const size_t ch = 10;
+
+	if ((fd = open(tfile, O_RDONLY)) < 0)
+		err(-1, "open");
+	while (((r = read(fd, f, MIN(ch, fend - f))) > 0)) {
+		f += r;
+		size_t take = MIN(ch, p - &pbuf[0]);
+		p -= take;
+		off_t off = sizeof(pbuf) - (pend - p);
+		if ((r = pread(fd, p, take, off)) < 0)
+			err(-1, "pread");
+	}
+	if (r < 0)
+		err(-1, "read");
+	if (p != &pbuf[0] || f != fend)
+		errx(-1, "short length");
+	if (strncmp(fbuf, pbuf, fsz) != 0)
+		errx(-1, "byte mismatch");
+	close(fd);
+
+	printf ("preadwrite test ok\n");
 }
 
 int
@@ -2498,6 +2569,7 @@ main(int argc, char *argv[])
   forktest();
   bigdir(); // slow
 
+  preadwrite();
   posixtest();
   barriertest();
   threadwait();

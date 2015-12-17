@@ -256,6 +256,8 @@ int pause(void);
 int pipe(int *);
 int pipe2(int *, int);
 int poll(struct pollfd *, nfds_t, int);
+ssize_t pread(int, void *, size_t, off_t);
+ssize_t pwrite(int, const void *, size_t, off_t);
 long read(int, void*, size_t);
 int reboot(void);
 ssize_t recv(int, void *, size_t, int);
@@ -447,6 +449,8 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		ntohl(x)	__builtin_bswap32(x)
 #define		htonl(x)	__builtin_bswap32(x)
 
+#define		MIN(x, y)	(x < y ? x : y)
+
 extern __thread int errno;
 
 typedef struct {
@@ -543,6 +547,7 @@ int snprintf(char *, size_t, const char *,...)
 int sprintf(char *, const char *,...)
     __attribute__((format(printf, 2, 3)));
 void srand(uint);
+void srandom(uint);
 //int sscanf(const char *, const char *, ...) /*REDIS*/
 //    __attribute__((format(scanf, 2, 3))); /*REDIS*/
 int strcasecmp(const char *, const char *);
