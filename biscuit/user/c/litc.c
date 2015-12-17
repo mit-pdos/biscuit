@@ -793,7 +793,9 @@ int
 pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
 	int b = __sync_bool_compare_and_swap(mutex, 1, 0);
-	return !b;
+	if (!b)
+		errx(-1, "unlock of unlocked mutex");
+	return 0;
 }
 
 int
