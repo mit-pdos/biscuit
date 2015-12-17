@@ -12,7 +12,7 @@ extern "C" {
 #define		STDIN_FILENO	0
 #define		STDOUT_FILENO	1
 #define		STDERR_FILENO	2
-#define		EOF		-1
+#define		EOF		(-1)
 
 #define		EPERM		1
 #define		ENOENT		2
@@ -38,6 +38,7 @@ extern "C" {
 #define		ENAMETOOLONG	36
 #define		ENOSYS		38
 #define		ENOTEMPTY	39
+#define		EOVERFLOW	75
 #define		ENOTSOCK	88
 #define		ECONNRESET	104
 #define		EISCONN		106
@@ -168,6 +169,14 @@ struct stat {
 	dev_t	st_rdev;
 };
 
+#define		S_IFMT		((ulong)-1)
+#define		S_IFREG		1
+#define		S_IFDIR		2
+
+#define		S_ISDIR(mode)	(mode == S_IFDIR)
+#define		S_ISREG(mode)	(mode == S_IFREG)
+#define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
+
 struct tfork_t {
 	void *tf_tcb;
 	void *tf_tid;
@@ -178,14 +187,6 @@ struct timespec {
 	long tv_sec;
 	long tv_nsec;
 };
-
-#define		S_IFMT		((ulong)-1)
-#define		S_IFREG		1
-#define		S_IFDIR		2
-
-#define		S_ISDIR(mode)	(mode == S_IFDIR)
-#define		S_ISREG(mode)	(mode == S_IFREG)
-#define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
 int accept(int, struct sockaddr *, socklen_t*);
 // access(2) cannot be a wrapper around stat(2) because access(2) uses real-id
@@ -258,7 +259,7 @@ int pipe2(int *, int);
 int poll(struct pollfd *, nfds_t, int);
 ssize_t pread(int, void *, size_t, off_t);
 ssize_t pwrite(int, const void *, size_t, off_t);
-long read(int, void*, size_t);
+ssize_t read(int, void*, size_t);
 int reboot(void);
 ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
@@ -324,7 +325,7 @@ int wait4(int, int *, int, struct rusage *);
 #define		WIFSIGNALED(x)		(x & (1 << 11))
 #define		WEXITSTATUS(x)		(x & 0xff)
 #define		WTERMSIG(x)		((int)((uint)x >> 27) & 0x1f)
-long write(int, const void*, size_t);
+ssize_t write(int, const void*, size_t);
 
 /*
  * thread stuff
@@ -384,6 +385,7 @@ int pthread_join(pthread_t, void **);
 int pthread_mutex_init(pthread_mutex_t *, const pthread_mutexattr_t *);
 int pthread_mutex_lock(pthread_mutex_t *);
 int pthread_mutex_unlock(pthread_mutex_t *);
+int pthread_mutex_destroy(pthread_mutex_t *);
 int pthread_once(pthread_once_t *, void (*)(void));
 pthread_t pthread_self(void);
 int pthread_cancel(pthread_t);
@@ -424,8 +426,6 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		EXIT_FAILURE	(-1)
 #define		EXIT_SUCCESS	0
 
-#define		BUFSIZ		4096
-
 #define		offsetof(s, m)	__builtin_offsetof(s, m)
 
 #define		isfinite(x)	__builtin_isfinite(x)
@@ -450,12 +450,34 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		htonl(x)	__builtin_bswap32(x)
 
 #define		MIN(x, y)	(x < y ? x : y)
+#define		MAX(x, y)	(x > y ? x : y)
 
 extern __thread int errno;
 
-typedef struct {
+#define		BUFSIZ		4096
+
+struct _FILE {
 	int fd;
-} FILE;
+	int btype;
+#define		_IOFBF		1
+#define		_IOLBF		2
+#define		_IONBF		3
+	char buf[BUFSIZ];
+	// &buf[0] <= p <= end <= &buf[BUFSIZ]
+	char *p;
+	char *end;
+	int eof;
+	int error;
+	// [&buf[0], pend) is dirty
+	int writing;
+	pthread_mutex_t mut;
+	// if something else needs builtin linked lists, replace this with
+	// fancy linked list macros.
+	struct _FILE *lnext;
+	struct _FILE *lprev;
+};
+
+typedef struct _FILE FILE;
 extern FILE  *stdin, *stdout, *stderr;
 
 typedef struct {
@@ -487,20 +509,21 @@ void errx(int, const char *, ...)
     __attribute__((__noreturn__));
 void exit(int)
     __attribute__((noreturn));
-//int fclose(FILE *); /*REDIS*/
-//int feof(FILE *); /*REDIS*/
+int fclose(FILE *);
+int feof(FILE *);
+int ferror(FILE *);
 //int fileno(FILE *); /*REDIS*/
-//int fflush(FILE *); /*REDIS*/
+int fflush(FILE *);
 //char *fgets(char *, int size, FILE *); /*REDIS*/
-//FILE *fopen(const char *, const char *); /*REDIS*/
+FILE *fopen(const char *, const char *);
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 int fsync(int);
 //int fputs(const char *, FILE *); /*REDIS*/
 //off_t ftello(FILE *); /*REDIS*/
 //int ftruncate(int, off_t); /*REDIS*/
-//size_t fread(void *, size_t, size_t, FILE *); /*REDIS*/
-//size_t fwrite(const void *, size_t, size_t, FILE *); /*REDIS*/
+size_t fread(void *, size_t, size_t, FILE *);
+size_t fwrite(const void *, size_t, size_t, FILE *);
 //char *getcwd(char *, size_t); /*REDIS*/
 int getopt(int, char * const *, const char *);
 extern char *optarg;

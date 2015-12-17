@@ -47,9 +47,6 @@
 
 __thread int errno;
 
-static FILE  _stdin = {0}, _stdout = {1}, _stderr = {2};
-FILE  *stdin = &_stdin, *stdout = &_stdout, *stderr = &_stderr;
-
 static long biglock;
 static int dolock = 1;
 
@@ -799,6 +796,12 @@ pthread_mutex_unlock(pthread_mutex_t *mutex)
 }
 
 int
+pthread_mutex_destroy(pthread_mutex_t *mutex)
+{
+	return 0;
+}
+
+int
 pthread_once(pthread_once_t *octl, void (*fn)(void))
 {
 	errx(-1, "pthread_once: no imp");
@@ -1007,16 +1010,16 @@ void
 err(int eval, const char *fmt, ...)
 {
 	dolock = 0;
-	printf("%s: ", __progname);
+	fprintf(stderr, "%s: ", __progname);
 	va_list ap;
 	va_start(ap, fmt);
-	vprintf(fmt, ap);
+	vfprintf(stderr, fmt, ap);
 	va_end(ap);
 	// errno is dumb
 	int neval = errno;
 	char p[NL_TEXTMAX];
 	strerror_r(neval, p, sizeof(p));
-	printf(": %s\n", p);
+	fprintf(stderr, ": %s\n", p);
 	exit(eval);
 }
 
@@ -1024,17 +1027,20 @@ void
 errx(int eval, const char *fmt, ...)
 {
 	dolock = 0;
-	printf("%s: ", __progname);
+	fprintf(stderr, "%s: ", __progname);
 	va_list ap;
 	va_start(ap, fmt);
-	vprintf(fmt, ap);
+	vfprintf(stderr, fmt, ap);
 	va_end(ap);
-	pmsg("\n", 1);
+	fprintf(stderr, "\n");
 	exit(eval);
 }
 
-void exit(int ret)
+void
+exit(int ret)
 {
+	if (fflush(NULL))
+		fprintf(stderr, "warning: failed to fflush\n");
 	_exit(ret);
 }
 
@@ -1047,6 +1053,336 @@ fprintf(FILE *f, const char *fmt, ...)
 	ret = vfprintf(f, fmt, ap);
 	va_end(ap);
 	return ret;
+}
+
+static int
+_ferror(FILE *f)
+{
+	return f->error;
+}
+
+int
+ferror(FILE *f)
+{
+	pthread_mutex_lock(&f->mut);
+	int ret = _ferror(f);
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
+static int
+_feof(FILE *f)
+{
+	return f->eof;
+}
+
+int
+feof(FILE *f)
+{
+	pthread_mutex_lock(&f->mut);
+	int ret = _feof(f);
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
+static struct {
+	FILE *head;
+	pthread_mutex_t mut;
+} _allfiles;
+
+static FILE  _stdin, _stdout, _stderr;
+FILE  *stdin = &_stdin, *stdout = &_stdout, *stderr = &_stderr;
+
+static void fdinit(void)
+{
+#define FDINIT(f, fdn, bt)	do {			\
+	f.fd = fdn;					\
+	f.p = &f.buf[0];				\
+	f.end = f.p + sizeof(f.buf);			\
+	f.lnext = _allfiles.head;			\
+	f.lprev = NULL;					\
+	f.btype = bt;					\
+	if (_allfiles.head)				\
+		_allfiles.head->lprev = &f;		\
+	_allfiles.head = &f;				\
+	} while (0)
+
+	FDINIT(_stdin, 0, _IONBF);
+	FDINIT(_stdout, 1, _IONBF);
+	FDINIT(_stderr, 2, _IONBF);
+#undef FDINIT
+	pthread_mutex_init(&_allfiles.mut, NULL);
+}
+
+static int
+_fflush(FILE *f)
+{
+	if (!f->writing)
+		return 0;
+	char * const bst = &f->buf[0];
+	size_t len = f->p - bst;
+	// XXXPANIC
+	if (len == 0)
+		errx(-1, "writing but no data");
+	ssize_t r;
+	if ((r = write(f->fd, bst, len)) < 0) {
+		f->error = errno;
+		return EOF;
+	} else if (r != len) {
+		printf("asked: %zu, actual: %zu\n", len, r);
+		return EOF;
+	}
+	f->p = f->end = bst;
+	return 0;
+}
+
+int
+fflush(FILE *f)
+{
+	if (f == NULL) {
+		int ret = 0;
+		pthread_mutex_lock(&_allfiles.mut);
+		FILE *f = _allfiles.head;
+		while (f != NULL) {
+			ret |= fflush(f);
+			f = f->lnext;
+		}
+		pthread_mutex_unlock(&_allfiles.mut);
+		return ret;
+	}
+
+	pthread_mutex_lock(&f->mut);
+	int ret = _fflush(f);
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
+FILE *
+fopen(const char *path, const char *mode)
+{
+	int flags = -1;
+	int plus = strchr(mode, '+') != NULL;
+	int x = strchr(mode, 'x') != NULL;
+	switch (mode[0]) {
+	case 'r':
+		if (plus)
+			flags = O_RDWR;
+		else
+			flags = O_RDONLY;
+		break;
+	case 'w':
+		if (plus)
+			flags = O_RDWR | O_CREAT | O_TRUNC;
+		else
+			flags = O_WRONLY | O_CREAT | O_TRUNC;
+		if (x)
+			flags |= O_EXCL;
+		break;
+	case 'a':
+		if (plus)
+			flags = O_RDWR | O_CREAT | O_APPEND;
+		else
+			flags = O_WRONLY | O_CREAT | O_APPEND;
+		if (x)
+			flags |= O_EXCL;
+		break;
+	default:
+		errno = EINVAL;
+		return NULL;
+	}
+
+	if (strchr(mode, 'e') != NULL)
+		flags |= O_CLOEXEC;
+
+	FILE *ret = malloc(sizeof(FILE));
+	if (ret == NULL) {
+		errno = ENOMEM;
+		return NULL;
+	}
+	memset(ret, 0, sizeof(FILE));
+
+	int fd = open(path, flags);
+	if (fd < 0) {
+		free(ret);
+		return NULL;
+	}
+
+	pthread_mutex_init(&ret->mut, NULL);
+	ret->fd = fd;
+	ret->p = &ret->buf[0];
+	ret->end = ret->p;
+	// POSIX: fully-buffered iff is not an interactive device
+	ret->btype = _IONBF;
+	struct stat st;
+	if (fstat(ret->fd, &st) == 0 && S_ISREG(st.st_mode))
+		ret->btype = _IOFBF;
+
+	// insert into global list
+	pthread_mutex_lock(&_allfiles.mut);
+	ret->lnext = _allfiles.head;
+	if (_allfiles.head)
+		_allfiles.head->lprev = ret;
+	_allfiles.head = ret;
+	pthread_mutex_unlock(&_allfiles.mut);
+	return ret;
+}
+
+int
+fclose(FILE *f)
+{
+	// remove from global list
+	pthread_mutex_lock(&_allfiles.mut);
+	if (f->lnext)
+		f->lnext->lprev = f->lprev;
+	if (f->lprev)
+		f->lprev->lnext = f->lnext;
+	if (_allfiles.head == f)
+		_allfiles.head = f->lnext;
+	pthread_mutex_unlock(&_allfiles.mut);
+
+	pthread_mutex_lock(&f->mut);
+	_fflush(f);
+
+	// try to crash buggy programs that use f after us
+	f->fd = -1;
+	f->p = (void *)1;
+	f->end = NULL;
+	pthread_mutex_unlock(&f->mut);
+
+	pthread_mutex_destroy(&f->mut);
+	free(f);
+
+	return 0;
+}
+
+static size_t
+_fread1(void *dst, size_t left, FILE *f)
+{
+	if (!(f->btype == _IOFBF || f->btype == _IONBF))
+		errx(-1, "noimp");
+	// unbuffered stream
+	if (f->btype == _IONBF) {
+		ssize_t r = read(f->fd, dst, left);
+		if (r < 0) {
+			f->error = errno;
+			return 0;
+		}
+		return r;
+	}
+
+	// switch to read mode
+	if (_fflush(f))
+		return 0;
+	f->writing = 0;
+
+	// fill buffer?
+	if (f->p == f->end && !_feof(f) && !_ferror(f)) {
+		char * const bst = &f->buf[0];
+		size_t r;
+		if ((r = read(f->fd, bst, sizeof(f->buf))) < 0) {
+			f->error = errno;
+			return 0;
+		} else if (r == 0) {
+			f->eof = 1;
+			return 0;
+		}
+		f->p = bst;
+		f->end = bst + r;
+	}
+
+	size_t ub = MIN(left, f->end - f->p);
+	memmove(dst, f->p, ub);
+	f->p += ub;
+
+	return ub;
+}
+
+size_t
+fread(void *dst, size_t sz, size_t mem, FILE *f)
+{
+	if (sz == 0)
+		return 0;
+	if (mem > ULONG_MAX / sz) {
+		errno = -EOVERFLOW;
+		return 0;
+	}
+
+	pthread_mutex_lock(&f->mut);
+
+	size_t ret = 0;
+	size_t left = mem * sz;
+	while (left > 0 && !_feof(f) && !_ferror(f)) {
+		size_t c = _fread1(dst, left, f);
+		dst += c;
+		left -= c;
+		ret += c;
+	}
+
+	pthread_mutex_unlock(&f->mut);
+	return ret/sz;
+}
+
+static size_t
+_fwrite1(const void *src, size_t left, FILE *f)
+{
+	if (!(f->btype == _IOFBF || f->btype == _IONBF))
+		errx(-1, "noimp");
+	// unbuffered stream
+	if (f->btype == _IONBF) {
+		ssize_t r = write(f->fd, src, left);
+		if (r < 0) {
+			f->error = errno;
+			return 0;
+		}
+		return r;
+	}
+
+	char * const bst = &f->buf[0];
+	char * const bend = bst + sizeof(f->buf);
+
+	// switch to write mode (discarding unread data and using undefined
+	// offset)
+	if (!f->writing) {
+		f->writing = 1;
+		f->p = f->end = bst;
+	}
+
+	// buffer full?
+	if (f->p == bend) {
+		if (_fflush(f))
+			return 0;
+		f->p = f->end = bst;
+	}
+	size_t put = MIN(bend - f->p, left);
+	memmove(f->p, src, put);
+	f->p += put;
+	f->end = MAX(f->p, f->end);
+	return put;
+}
+
+size_t
+fwrite(const void *src, size_t sz, size_t mem, FILE *f)
+{
+	if (sz == 0)
+		return 0;
+	if (mem > ULONG_MAX / sz) {
+		errno = -EOVERFLOW;
+		return 0;
+	}
+
+	pthread_mutex_lock(&f->mut);
+
+	size_t ret = 0;
+	size_t left = mem * sz;
+	while (left > 0 && !_ferror(f)) {
+		size_t c = _fwrite1(src, left, f);
+		src += c;
+		left -= c;
+		ret += c;
+	}
+
+	pthread_mutex_unlock(&f->mut);
+	return ret/sz;
 }
 
 int
@@ -1392,7 +1728,7 @@ printf(const char *fmt, ...)
 	int ret;
 
 	va_start(ap, fmt);
-	ret = vprintf(fmt, ap);
+	ret = vfprintf(stdout, fmt, ap);
 	va_end(ap);
 
 	return ret;
@@ -1652,6 +1988,7 @@ static const char * const _errstr[] = {
 	[ENAMETOOLONG] = "File name too long",
 	[ENOSYS] = "Function not implemented",
 	[ENOTEMPTY] = "Directory not empty",
+	[EOVERFLOW] = "Value too large to be stored in data type",
 	[ENOTSOCK] = "Socket operation on non-socket",
 	[EISCONN] = "Socket is already connected",
 	[ENOTCONN] = "Socket is not connected",
@@ -1824,9 +2161,9 @@ vfprintf(FILE *f, const char *fmt, va_list ap)
 
 	int ret;
 	ret = vsnprintf(lbuf, sizeof(lbuf), fmt, ap);
-	write(f->fd, lbuf, ret);
+	int wrote = fwrite(lbuf, ret, 1, f);
 
-	return ret;
+	return wrote;
 }
 
 struct header_t {
@@ -1919,6 +2256,7 @@ _entry(int argc, char **argv, struct kinfo_t *k)
 
 	if (argc)
 		strncpy(__progname, argv[0], sizeof(__progname));
+	fdinit();
 	int main(int, char **);
 	int ret = main(argc, argv);
 	exit(ret);

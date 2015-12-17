@@ -1397,6 +1397,10 @@ type userbuf_t struct {
 }
 
 func (ub *userbuf_t) ub_init(p *proc_t, uva, len int) {
+	// XXX fix signedness
+	if len < 0 {
+		panic("negative length")
+	}
 	ub.userva = uva
 	ub.len = len
 	ub.off = 0

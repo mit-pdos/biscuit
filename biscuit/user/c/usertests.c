@@ -2470,7 +2470,7 @@ void preadwrite(void)
 	char *fend = f + sizeof(fbuf);
 	srandom(time(NULL));
 
-	// interleave preads with reads to make sure offsets are screwed up
+	// interleave preads with reads to make sure offsets aren't screwed up
 	while (((r = read(fd, f, fend - f)) > 0)) {
 		f += r;
 		off_t off = random() % sizeof(fbuf);
@@ -2513,6 +2513,70 @@ void preadwrite(void)
 	close(fd);
 
 	printf ("preadwrite test ok\n");
+}
+
+static char _expfile[BUFSIZ*2];
+static char gotfile[BUFSIZ*2];
+
+void stdiotest(void)
+{
+	printf("stdio test\n");
+
+	FILE *f = fopen("/bigfile.txt", "r");
+	if (f == NULL)
+		err(-1, "fopen");
+	char buf[512];
+	ulong cksum = 0;
+	size_t tot = 0, r;
+	while ((r = fread(buf, 1, sizeof(buf), f)) > 0) {
+		tot += r;
+		int i;
+		for (i = 0; i < r; i++)
+			cksum += buf[i];
+	}
+	if (ferror(f))
+		err(-1, "fread");
+	if (!feof(f))
+		errx(-1, "exptected eof");
+	ulong ckexp = 0x1fbd000;
+	if (cksum != ckexp)
+		errx(-1, "cksum mismatch: %lx != %lx", cksum, ckexp);
+	fclose(f);
+
+	srandom(time(NULL));
+	int i;
+	for (i = 0; i < sizeof(_expfile); i++)
+		_expfile[i] = random();
+	const char *tfile = "/tmp/stdiofile";
+	if ((f = fopen(tfile, "w")) == NULL)
+		err(-1, "fopen");
+	if ((r = fwrite(_expfile, sizeof(_expfile), 1, f)) != 1)
+		err(-1, "fwrite");
+	fclose(f);
+
+	if ((f = fopen(tfile, "r")) == NULL)
+		err(-1, "fopen");
+
+	const size_t ch = 10;
+	char *p = &gotfile[0];
+	char * const pend = p + sizeof(gotfile);
+	while (p < pend) {
+		if (feof(f))
+			errx(-1, "FAPPED: %ld", p - &gotfile[0]);
+		if (ferror(f))
+			errx(-1, "ferror: %d", ferror(f));
+		size_t l = MIN(ch, pend - p);
+		r = fread(p, 1, l, f);
+		if (r != l)
+			err(-1, "fread %zu != %zu", r, l);
+		p += r;
+	}
+	fclose(f);
+
+	if (strncmp(gotfile, _expfile, sizeof(_expfile)) != 0)
+		errx(-1, "byte mismatch");
+
+	printf("stdio test ok\n");
 }
 
 int
@@ -2569,11 +2633,12 @@ main(int argc, char *argv[])
   forktest();
   bigdir(); // slow
 
-  preadwrite();
   posixtest();
   barriertest();
   threadwait();
   fnonblock();
+  preadwrite();
+  stdiotest();
 
   polltest();
   runsockettest();
