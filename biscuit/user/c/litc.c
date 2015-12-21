@@ -2170,6 +2170,7 @@ struct header_t {
 	char *start;
 	char *end;
 	ulong objs;
+	size_t maxsz;
 	struct header_t *next;
 };
 
@@ -2177,11 +2178,9 @@ static struct header_t *allh;
 static struct header_t *curh;
 static char *bump;
 
-void *
-malloc(size_t sz)
+static void *
+_malloc(size_t sz)
 {
-	acquire();
-
 	// Minimum allocation size = 8 bytes.
 	sz = (sz + 7) & ~7;
 	if (!curh || bump + sz > curh->end) {
@@ -2192,15 +2191,13 @@ malloc(size_t sz)
 				~(pgsize - 1);
 		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
 		    MAP_ANON | MAP_PRIVATE, -1, 0);
-		if (nh == MAP_FAILED) {
-			release();
-			printf("malloc: couldn't mmap more mem\n");
+		if (nh == MAP_FAILED)
 			return NULL;
-		}
 		nh->start = (char *)nh;
 		nh->end = nh->start + mmapsz;
 		nh->objs = 0;
 		nh->next = allh;
+		nh->maxsz = 0;
 		allh = nh;
 
 		curh = nh;
@@ -2209,24 +2206,64 @@ malloc(size_t sz)
 	curh->objs++;
 	char *ret = bump;
 	bump += sz;
-
-	release();
-
+	if (sz > curh->maxsz)
+		curh->maxsz = sz;
 	return ret;
 }
 
-void
-free(void *pp)
-{
-	acquire();
+#define	ZEROPTR	((void *)1)
 
-	char *p = pp;
-	// find containing seg
+void *
+malloc(size_t sz)
+{
+	// try to catch accesses to zero-length objects. is this ok?
+	if (sz == 0)
+		return ZEROPTR;
+	acquire();
+	void *ret = _malloc(sz);
+	release();
+
+	if (!ret)
+		errno = ENOMEM;
+	return ret;
+}
+
+void *
+calloc(size_t n, size_t sz)
+{
+	if (n == 0 || sz == 0)
+		return ZEROPTR;
+	if (n > UINT_MAX / sz) {
+		errno = EOVERFLOW;
+		return NULL;
+	}
+	size_t big = sz*n;
+	void *ret = malloc(big);
+	memset(ret, 0, big);
+	return ret;
+}
+
+static struct header_t *
+_findseg(void *pp, struct header_t **pprev)
+{
+	char *p = (char *)pp;
 	struct header_t *ch;
 	struct header_t *prev = NULL;
 	for (ch = allh; ch; prev = ch, ch = ch->next)
 		if (ch->start <= p && ch->end > p)
 			break;
+	if (pprev)
+		*pprev = prev;
+	return ch;
+}
+
+static void
+_free(void *pp)
+{
+	// find containing seg
+	struct header_t *ch;
+	struct header_t *prev;
+	ch = _findseg(pp, &prev);
 	if (!ch)
 		errx(-1, "free: bad pointer");
 	ch->objs--;
@@ -2243,7 +2280,40 @@ free(void *pp)
 		if ((ret = munmap(ch->start, ch->end - ch->start)) < 0)
 			err(ret, "munmap");
 	}
+}
+
+void
+free(void *pp)
+{
+	acquire();
+	_free(pp);
 	release();
+}
+
+void *
+realloc(void *vold, size_t nsz)
+{
+	char *old = vold;
+	if (!old)
+		return malloc(nsz);
+
+	acquire();
+
+	void *ret = old;
+	struct header_t *ch = _findseg(old, NULL);
+	if (nsz < ch->maxsz)
+		goto out;
+	// we don't know the exact size of the object, but its size is bounded
+	// as follows
+	size_t oldsz = MIN(ch->maxsz, ch->end - old);
+	ret = _malloc(nsz);
+	if (ret == NULL)
+		goto out;
+	memcpy(ret, old, oldsz);
+	_free(old);
+out:
+	release();
+	return ret;
 }
 
 char __progname[64];

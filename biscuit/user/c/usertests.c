@@ -2579,6 +2579,31 @@ void stdiotest(void)
 	printf("stdio test ok\n");
 }
 
+void realloctest(void)
+{
+	printf("realloc test\n");
+
+	const size_t size = 13;
+	int i;
+	uchar *p = NULL;
+	for (i = 1; i < 10; i++) {
+		size_t nsize = i*size;
+		p = realloc(p, nsize);
+		if (p == NULL)
+			errx(-1, "malloc");
+		size_t osize = (i-1)*size;
+		int j;
+		for (j = 0; j < osize; j++)
+			if (p[j] != j)
+				errx(-1, "byte mismatch");
+		for (j = osize; j < nsize; j++)
+			p[j] = j;
+	}
+	free(p);
+
+	printf("realloc test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2639,6 +2664,7 @@ main(int argc, char *argv[])
   fnonblock();
   preadwrite();
   stdiotest();
+  realloctest();
 
   polltest();
   runsockettest();

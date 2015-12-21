@@ -627,8 +627,8 @@ int vsnprintf(char *, size_t, const char *, va_list)
 
 void *malloc(size_t);
 void free(void *);
-//void *calloc(size_t, size_t); /*REDIS*/
-//void *realloc(void *, size_t); /*REDIS*/
+void *calloc(size_t, size_t);
+void *realloc(void *, size_t);
 
 extern char __progname[64];
 extern char **environ;
