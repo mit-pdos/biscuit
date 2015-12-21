@@ -289,6 +289,7 @@ var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 
 type ulimit_t struct {
 	pages	int
+	nofile	uint
 }
 
 // accnt_t is thread-safe
@@ -667,6 +668,12 @@ func newpid() int {
 	return ret
 }
 
+var _deflimits = ulimit_t {
+	// mem limit = 128 MB
+	pages: (1 << 27) / (1 << 12),
+	nofile: RLIM_INFINITY,
+}
+
 func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 	ret := &proc_t{}
 
@@ -690,8 +697,7 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 		panic("must succeed")
 	}
 	ret.mmapi = USERMIN
-	// mem limit = 128 MB
-	ret.ulim.pages = (1 << 27) / (1 << 12)
+	ret.ulim = _deflimits
 
 	ret.threadi.init()
 	ret.tid0 = ret.tid_new()

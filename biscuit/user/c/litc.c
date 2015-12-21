@@ -11,6 +11,7 @@
 #define SYS_LSEEK        8
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
+#define SYS_SIGACTION    13
 #define SYS_DUP2         33
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
@@ -33,8 +34,10 @@
 #define SYS_LINK         86
 #define SYS_UNLINK       87
 #define SYS_GETTOD       96
+#define SYS_GETRLIMIT    97
 #define SYS_GETRUSAGE    98
 #define SYS_MKNOD        133
+#define SYS_SETRLIMIT    160
 #define SYS_SYNC         162
 #define SYS_REBOOT       169
 #define SYS_NANOSLEEP    230
@@ -278,6 +281,14 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 }
 
 int
+getrlimit(int res, struct rlimit *rlp)
+{
+	int ret = syscall(SA(res), SA(rlp), 0, 0, 0, SYS_GETRLIMIT);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+int
 getrusage(int who, struct rusage *r)
 {
 	int ret = syscall(SA(who), SA(r), 0, 0, 0, SYS_GETRUSAGE);
@@ -493,6 +504,41 @@ sendto(int fd, const void *buf, size_t len, int flags,
 	    SYS_SENDTO);
 	ERRNO_NEG(ret);
 	return ret;
+}
+
+int
+setrlimit(int res, const struct rlimit *rlp)
+{
+	int ret = syscall(SA(res), SA(rlp), 0, 0, 0, SYS_SETRLIMIT);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+pid_t
+setsid(void)
+{
+	printf("warning: no sessions or process groups yet\n");
+	return getpid();
+}
+
+int
+sigaction(int sig, const struct sigaction *act, struct sigaction *oact)
+{
+	printf("warning: no signals yet\n");
+	return 0;
+	//int ret = syscall(SA(sig), SA(act), SA(oact), 0, 0, SYS_SIGACTION);
+	//ERRNO_NEG(ret);
+	//return ret;
+}
+
+void
+(*signal(int sig, void (*f)(int)))(int)
+{
+	struct sigaction sa, oa;
+	memset(&sa, 0, sizeof(struct sigaction));
+	sa.sa_handler = f;
+	sigaction(sig, &sa, &oa);
+	return oa.sa_handler;
 }
 
 int
@@ -1070,6 +1116,15 @@ ferror(FILE *f)
 	return ret;
 }
 
+int
+fileno(FILE *f)
+{
+	pthread_mutex_lock(&f->mut);
+	int ret = f->fd;
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
 static int
 _feof(FILE *f)
 {
@@ -1442,13 +1497,43 @@ isalpha(int c)
 }
 
 int
+isdigit(int c)
+{
+	return c >= '0' || c <= '9';
+}
+
+int
+isprint(int c)
+{
+	return isalpha(c) || isdigit(c) || ispunct(c);
+}
+
+static char _punct[255] = {
+	['!'] = 1, ['"'] = 1, ['#'] = 1, ['$'] = 1, ['%'] = 1, ['&'] = 1,
+	['\'']= 1, ['('] = 1, [')'] = 1, ['*'] = 1, ['+'] = 1, [','] = 1,
+	['-'] = 1, ['.'] = 1, ['/'] = 1, [':'] = 1, [';'] = 1, ['<'] = 1,
+	['='] = 1, ['>'] = 1, ['?'] = 1, ['@'] = 1, ['['] = 1, ['\\']= 1,
+	[']'] = 1, ['^'] = 1, ['_'] = 1, ['`'] = 1, ['{'] = 1, ['|'] = 1,
+	['}'] = 1, ['~'] = 1,
+};
+
+int
+ispunct(int c)
+{
+	return _punct[(unsigned char)c];
+}
+
+int
+isspace(int c)
+{
+	return c == ' ' || c == '\f' || c == '\n' || c == '\t' || c == '\v';
+}
+
+int
 isxdigit(int c)
 {
-	if ((c >= '0' && c <= '9') ||
-	    (c >= 'a' && c <= 'f') ||
-	    (c >= 'A' && c <= 'F'))
-		return 1;
-	return 0;
+	int d = tolower(c);
+	return isdigit(c) || (d >= 'a' && d <= 'f');
 }
 
 double
@@ -1519,6 +1604,25 @@ memset(void *d, int c, size_t n)
 	while (n--)
 		*p++ = v;
 	return d;
+}
+
+struct {
+	const char *prefix;
+	int pid;
+	int ndelay;
+	int fac;
+	ulong mask;
+} _slogopts = {.fac = LOG_USER, .mask = -1};
+
+void
+openlog(const char *ident, int logopt, int fac)
+{
+	_slogopts.prefix = ident;
+	_slogopts.fac = fac;
+	if (logopt & LOG_PID)
+		_slogopts.pid = 1;
+	if (logopt & LOG_NDELAY)
+		_slogopts.ndelay = 1;
 }
 
 size_t
@@ -1734,6 +1838,16 @@ printf(const char *fmt, ...)
 	return ret;
 }
 
+void
+perror(const char *str)
+{
+	char *e = strerror(errno);
+	if (str)
+		fprintf(stderr, "%s: %s\n", str, e);
+	else
+		fprintf(stderr, "%s\n", e);
+}
+
 uint _seed1;
 
 int
@@ -1886,6 +2000,13 @@ select(int maxfd, fd_set *rfds, fd_set *wfds, fd_set *efds,
 	return selret;
 }
 
+char *
+setlocale(int cat, const char *loc)
+{
+	printf("warning: no fancy locale support\n");
+	return "C";
+}
+
 uint
 sleep(uint s)
 {
@@ -1957,14 +2078,6 @@ strchr(const char *big, int l)
 	return NULL;
 }
 
-char *
-strerror(int errnum)
-{
-	static char buf[NL_TEXTMAX];
-	strerror_r(errnum, buf, sizeof(buf));
-	return buf;
-}
-
 static const char * const _errstr[] = {
 	[EPERM] = "Permission denied",
 	[ENOENT] = "No such file or directory",
@@ -1997,6 +2110,16 @@ static const char * const _errstr[] = {
 	[ECONNREFUSED] = "Connection refused",
 	[EINPROGRESS] = "Operation now in progress",
 };
+
+char *
+strerror(int errnum)
+{
+	int nents = sizeof(_errstr)/sizeof(_errstr[0]);
+	const char *p = "Unknown error";
+	if (errnum < nents && _errstr[errnum] != NULL)
+		p = _errstr[errnum];
+	return (char *)p;
+}
 
 int
 strerror_r(int errnum, char *dst, size_t dstlen)
@@ -2037,6 +2160,24 @@ strstr(const char *big, const char *little)
 			big++;
 	}
 	return NULL;
+}
+
+void
+syslog(int priority, const char *msg, ...)
+{
+	if (((priority & LOG_ALL) & _slogopts.mask) == 0)
+		return;
+	va_list ap;
+	va_start(ap, msg);
+
+	const char *pref = _slogopts.prefix ? _slogopts.prefix : "";
+	char lbuf[1024];
+	if (_slogopts.pid)
+		snprintf(lbuf, sizeof(lbuf), "syslog (pid %d): %s: %s", getpid(), pref, msg);
+	else
+		snprintf(lbuf, sizeof(lbuf), "syslog: %s: %s", pref, msg);
+	vfprintf(stderr, lbuf, ap);
+	va_end(ap);
 }
 
 long

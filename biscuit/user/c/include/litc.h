@@ -137,6 +137,7 @@ typedef struct {
 
 struct sigaction {
 	void (*sa_handler)(int);
+	void (*sa_sigaction)(int, siginfo_t *, void *);
 	sigset_t sa_mask;
 #define		sigemptyset(ss)		(*ss = 0)
 #define		sigfillset(ss)		(*ss = -1)
@@ -144,7 +145,7 @@ struct sigaction {
 #define		sigdelset(ss, s)	(*ss &= ~(1ull << s))
 #define		sigismember(ss, s)	(*ss & (1ull << s))
 	int	sa_flags;
-	void (*sa_sigaction)(int, siginfo_t *, void *);
+#define		SA_SIGINFO		1
 };
 
 struct sockaddr {
@@ -211,8 +212,9 @@ long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
 int getpid(void);
-//int getrlimit(int, struct rlimit *); /*REDIS*/
+int getrlimit(int, struct rlimit *);
 #define		RLIMIT_NOFILE	1
+#define		RLIM_INFINITY	ULONG_MAX
 int getrusage(int, struct rusage *);
 #define		RUSAGE_SELF	1
 #define		RUSAGE_CHILDREN	2
@@ -268,8 +270,8 @@ int select(int, fd_set*, fd_set*, fd_set*, struct timeval *);
 ssize_t send(int, const void *, size_t, int);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);
-//int setrlimit(int, const struct rlimit *); /*REDIS*/
-//pid_t setsid(void); /*REDIS*/
+int setrlimit(int, const struct rlimit *);
+pid_t setsid(void);
 //int setsockopt(int, int, int, void *, socklen_t);
 // levels
 #define		SOL_SOCKET	1
@@ -277,7 +279,7 @@ ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
 #define		SO_SNDBUF	1
 #define		SO_SNDTIMEO	2
 #define		SO_ERROR	3
-//int sigaction(int, const struct sigaction *, struct sigaction *); /*REDIS*/
+int sigaction(int, const struct sigaction *, struct sigaction *);
 #define		SIGHUP		1
 #define		SIGINT		2
 #define		SIGILL		4
@@ -287,7 +289,7 @@ ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
 #define		SIGPIPE		13
 #define		SIGALRM		14
 #define		SIGTERM		15
-//void (*signal(int, void (*)(int)))(int); /*REDIS*/
+void (*signal(int, void (*)(int)))(int);
 #define		SIG_DFL		((void (*)(int))1)
 #define		SIG_IGN		((void (*)(int))2)
 //int sigprocmask(int, sigset_t *, sigset_t *); /*REDIS*/
@@ -512,7 +514,7 @@ void exit(int)
 int fclose(FILE *);
 int feof(FILE *);
 int ferror(FILE *);
-//int fileno(FILE *); /*REDIS*/
+int fileno(FILE *);
 int fflush(FILE *);
 //char *fgets(char *, int size, FILE *); /*REDIS*/
 FILE *fopen(const char *, const char *);
@@ -530,12 +532,14 @@ extern char *optarg;
 extern int   optind;
 
 int isalpha(int);
-//int isdigit(int); /*REDIS*/
+int isdigit(int);
 int islower(int);
-//int isprint(int); /*REDIS*/
-//int isspace(int); /*REDIS*/
+int isprint(int);
+int ispunct(int);
+int isspace(int);
 int isupper(int);
 int isxdigit(int);
+
 //struct lconv* localeconv(void); /*REDIS*/
 double log(double);
 dev_t makedev(uint, uint);
@@ -543,7 +547,7 @@ int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);
-//void openlog(const char *, int, int); /*REDIS*/
+void openlog(const char *, int, int);
 // log options
 #define		LOG_PID		(1ull << 0)
 #define		LOG_CONS	(1ull << 1)
@@ -552,7 +556,7 @@ void *memset(void *, int, size_t);
 #define		LOG_NOWAIT	(1ull << 4)
 int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
-//void perror(const char *); /*REDIS*/
+void perror(const char *);
 int rand(void);
 int rand_r(uint *);
 #define		RAND_MAX	0x7fffffff
@@ -561,7 +565,7 @@ ulong rdtsc(void);
 char *readline(const char *);
 //int scanf(const char *, ...) /*REDIS*/
 //    __attribute__((format(scanf, 1, 2))); /*REDIS*/
-//int setenv(const char *, const char *, int ); /*REDIS*/
+int setenv(const char *, const char *, int );
 char *setlocale(int, const char *);
 #define		LC_COLLATE	1
 uint sleep(uint);
@@ -592,7 +596,7 @@ long strtol(const char *, char **, int);
 ulong strtoul(const char *, char **, int);
 //unsigned long long strtoull(const char *, char **, int); /*REDIS*/
 char *strstr(const char *, const char *);
-//void syslog(int, const char *, ...); /*REDIS*/
+void syslog(int, const char *, ...);
 // priorities
 #define		LOG_EMERG	(1ull << 0)
 #define		LOG_ALERT	(1ull << 1)
@@ -611,6 +615,7 @@ char *strstr(const char *, const char *);
 #define		LOG_LOCAL6	(1ull << 14)
 #define		LOG_LOCAL7	(1ull << 15)
 #define		LOG_USER	(1ull << 16)
+#define		LOG_ALL		(0x1ffff)
 time_t time(time_t*);
 int tolower(int);
 int toupper(int);

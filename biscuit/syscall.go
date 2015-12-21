@@ -109,6 +109,7 @@ const(
     PROT_WRITE    = 0x2
     PROT_EXEC     = 0x4
   SYS_MUNMAP   = 11
+  SYS_SIGACT   = 13
   SYS_DUP2     = 33
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
@@ -155,10 +156,14 @@ const(
   SYS_LINK     = 86
   SYS_UNLINK   = 87
   SYS_GETTOD   = 96
+  SYS_GETRLMT  = 97
+    RLIMIT_NOFILE = 1
+    RLIM_INFINITY = ^uint(0)
   SYS_GETRUSG  = 98
     RUSAGE_SELF      = 1
     RUSAGE_CHILDREN  = 2
   SYS_MKNOD    = 133
+  SYS_SETRLMT  = 160
   SYS_SYNC     = 162
   SYS_REBOOT   = 169
   SYS_NANOSLEEP= 230
@@ -224,6 +229,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
 	case SYS_MUNMAP:
 		ret = sys_munmap(p, a1, a2)
+	case SYS_SIGACT:
+		ret = sys_sigaction(p, a1, a2, a3)
 	case SYS_DUP2:
 		ret = sys_dup2(p, a1, a2)
 	case SYS_PAUSE:
@@ -270,10 +277,14 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_unlink(p, a1)
 	case SYS_GETTOD:
 		ret = sys_gettimeofday(p, a1)
+	case SYS_GETRLMT:
+		ret = sys_getrlimit(p, a1, a2)
 	case SYS_GETRUSG:
 		ret = sys_getrusage(p, a1, a2)
 	case SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
+	case SYS_SETRLMT:
+		ret = sys_setrlimit(p, a1, a2)
 	case SYS_SYNC:
 		ret = sys_sync(p)
 	case SYS_REBOOT:
@@ -507,6 +518,10 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	proc.vmregion.remove(addrn, len)
 	proc.tlbshoot(addrn, pgs)
 	return 0
+}
+
+func sys_sigaction(proc *proc_t, sig, actn, oactn int) int {
+	panic("no imp")
 }
 
 func copyfd(fd *fd_t) (*fd_t, int) {
@@ -1259,6 +1274,44 @@ func sys_gettimeofday(proc *proc_t, timevaln int) int {
 	writen(buf, 8, 8, us%1e6)
 	if !proc.usercopy(buf, timevaln) {
 		return -EFAULT
+	}
+	return 0
+}
+
+var _rlimits = map[int]uint{RLIMIT_NOFILE: RLIM_INFINITY}
+
+func sys_getrlimit(proc *proc_t, resn, rlpn int) int {
+	var cur uint
+	switch resn {
+	case RLIMIT_NOFILE:
+		cur = proc.ulim.nofile
+	default:
+		return -EINVAL
+	}
+	max := _rlimits[resn]
+	ok1 := proc.userwriten(rlpn, 8, int(cur))
+	ok2 := proc.userwriten(rlpn + 8, 8, int(max))
+	if !ok1 || !ok2 {
+		return -EFAULT
+	}
+	return 0
+}
+
+func sys_setrlimit(proc *proc_t, resn, rlpn int) int {
+	// XXX root can raise max
+	_ncur, ok := proc.userreadn(rlpn, 8)
+	if !ok {
+		return -EFAULT
+	}
+	ncur := uint(_ncur)
+	if ncur > _rlimits[resn] {
+		return -EINVAL
+	}
+	switch resn {
+	case RLIMIT_NOFILE:
+		proc.ulim.nofile = ncur
+	default:
+		return -EINVAL
 	}
 	return 0
 }
