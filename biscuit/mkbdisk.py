@@ -367,10 +367,13 @@ def dofree(of, allocblocks, freeblock, freeblocklen):
   val = 0
   for i in range(bits):
     val |= 1 << i
-  of.write(chr(val))
+  bmbytes = allocblocks/8
+  # allocblocks divides by 8?
+  if val != 0:
+    of.write(chr(val))
+    bmbytes += 1
   # pad out to a block
-  bmbytes = allocblocks/8 + 1
-  rem = blocksz - (bmbytes % blocksz)
+  rem = roundup(bmbytes, 512) - bmbytes
   of.write('\0'*rem)
   bmblocks = roundup(bmbytes, blocksz)/blocksz
   remaining = freeblocklen - bmblocks
@@ -390,6 +393,7 @@ def dofs(of, freeblock, freeblocklen, loglen, lastblock, remaining, skeldir, doz
     raise ValueError('ruh roh')
 
   # start superblock: freeblock start, freeblock length, log length, and
+  # rootinode
   of.write(le8(freeblock))
   of.write(le8(freeblocklen))
   of.write(le8(loglen))
