@@ -588,7 +588,7 @@ int strerror_r(int, char *, size_t);
 char *strncpy(char *, const char *, size_t);
 size_t strlen(const char *);
 int strcmp(const char *, const char *);
-//int strcoll(const char *, const char *); /*REDIS*/
+int strcoll(const char *, const char *);
 int strncmp(const char *, const char *, size_t);
 long strtol(const char *, char **, int);
 //double strtod(const char *, char **); /*REDIS*/

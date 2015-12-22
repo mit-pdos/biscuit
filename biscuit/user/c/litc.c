@@ -1654,6 +1654,12 @@ strcmp(const char *s1, const char *s2)
 }
 
 int
+strcoll(const char *s1, const char *s2)
+{
+	return strcmp(s1, s2);
+}
+
+int
 strncmp(const char *s1, const char *s2, size_t n)
 {
 	while (n && *s1 && *s1 == *s2)
@@ -2196,7 +2202,7 @@ long
 strtol(const char *n, char **endptr, int base)
 {
 	// gobble spaces, then "+" or "-", and finally "0x" or "0"
-	while (*n == ' ' || *n == '\t')
+	while (isspace(*n))
 		n++;
 	int sign = 1;
 	if (*n == '+')
