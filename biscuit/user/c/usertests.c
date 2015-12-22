@@ -2604,6 +2604,45 @@ void realloctest(void)
 	printf("realloc test ok\n");
 }
 
+__attribute__((noreturn))
+void _cwdtest(void)
+{
+	const char *p = "/";
+	if (chdir(p))
+		err(-1, "chdir");
+	char buf[128];
+	if (!getcwd(buf, sizeof(buf)))
+		err(-1, "getcwd");
+	if (strcmp(p, buf))
+		errx(-1, "pwd mismatch");
+
+	p = "/another/../another/../another/../another/../boot/uefi/";
+	if (chdir(p))
+		err(-1, "chdir");
+	if (!getcwd(buf, sizeof(buf)))
+		err(-1, "getcwd");
+	if (strcmp(buf, "/boot/uefi"))
+		errx(-1, "pwd mismatch");
+
+	exit(0);
+}
+
+void cwdtest(void)
+{
+	printf("cwd test\n");
+
+	pid_t c = fork();
+	if (!c)
+		_cwdtest();
+	int status;
+	if (wait(&status) != c)
+		errx(-1, "wrong child");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+
+	printf("cwd test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2665,6 +2704,8 @@ main(int argc, char *argv[])
   preadwrite();
   stdiotest();
   realloctest();
+
+  cwdtest();
 
   polltest();
   runsockettest();

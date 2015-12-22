@@ -726,6 +726,18 @@ func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
 	return fo._write(src, -1)
 }
 
+func (fo *fsfops_t) fullpath() (string, int) {
+	r := &ireq_t{}
+	r.mkfullpath()
+	idmon := idaemon_ensure(fo.priv)
+	idmon.req <- r
+	<- r.ack
+	if r.resp.err != 0 {
+		panic("must succeed")
+	}
+	return r.resp.fpath, 0
+}
+
 func (fo *fsfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
 	return fo._write(src, offset)
 }
@@ -899,6 +911,10 @@ func (df *devfops_t) read(dst *userbuf_t) (int, int) {
 func (df *devfops_t) write(src *userbuf_t) (int, int) {
 	df._sane()
 	return cons_write(src, 0)
+}
+
+func (df *devfops_t) fullpath() (string, int) {
+	panic("weird cwd")
 }
 
 func (df *devfops_t) pread(dst *userbuf_t, offset int) (int, int) {
@@ -1714,6 +1730,7 @@ const (
 	EMPTY
 	TRUNC
 	MMAPINFO
+	FULLPATH
 )
 
 type ireq_t struct {
@@ -1747,6 +1764,9 @@ type ireq_t struct {
 	// mmap info
 	mm_offset	int
 	resp		iresp_t
+	// fullpath
+	fpacc		string
+	fplast		inum
 }
 
 type iresp_t struct {
@@ -1758,6 +1778,7 @@ type iresp_t struct {
 	major		int
 	minor		int
 	mmapinfo	[]mmapinfo_t
+	fpath		string
 }
 
 // if incref is true, the call must be made between op_{begin,end}.
@@ -1951,6 +1972,13 @@ func (r *ireq_t) mkmmapinfo(off int) {
 	r.ack = make(chan bool)
 	r.rtype = MMAPINFO
 	r.mm_offset = off
+}
+
+func (r *ireq_t) mkfullpath() {
+	var z ireq_t
+	*r = z
+	r.ack = make(chan bool)
+	r.rtype = FULLPATH
 }
 
 func (idm *idaemon_t) _dotsadd(r *ireq_t, pidm *idaemon_t) {
@@ -2245,6 +2273,43 @@ func idaemonize(idm *idaemon_t) {
 			r.resp.err = err
 			r.ack <- true
 
+		case FULLPATH:
+			// prepend the name of the sending dir (our child) to
+			// the path
+			if idm.icache.itype != I_DIR {
+				panic("fullpath on non-dir")
+			}
+			// the first idaemon has no lookup to do
+			if r.fplast != 0 {
+				found := false
+				for p, icd := range idm.icache.dents {
+					if icd.priv == r.fplast {
+						r.fpacc = "/" + p + r.fpacc
+						found = true
+						break
+					}
+				}
+				// XXXPANIC
+				if !found {
+					panic("child must exist")
+				}
+			}
+			// if this idaemon is the root idaemon, we are done.
+			// otherwise, forward to parent.
+			if idm == iroot {
+				if r.fpacc == "" {
+					r.resp.fpath = "/"
+				} else {
+					r.resp.fpath = r.fpacc
+				}
+				r.ack <- true
+			} else {
+				r.fplast = idm.priv
+				r.path = []string{".."}
+				if idm.forwardreq(r) {
+					panic("req is for parent")
+				}
+			}
 		default:
 			panic("bad req type")
 		}

@@ -28,6 +28,7 @@
 #define SYS_WAIT4        61
 #define SYS_KILL         62
 #define SYS_FCNTL        72
+#define SYS_GETCWD       79
 #define SYS_CHDIR        80
 #define SYS_RENAME       82
 #define SYS_MKDIR        83
@@ -129,7 +130,7 @@ close(int fd)
 }
 
 int
-chdir(char *path)
+chdir(const char *path)
 {
 	int ret = syscall(SA(path), 0, 0, 0, 0, SYS_CHDIR);
 	ERRNO_NZ(ret);
@@ -262,6 +263,16 @@ fstat(int fd, struct stat *buf)
 	int ret = syscall(SA(fd), SA(buf), 0, 0, 0, SYS_FSTAT);
 	ERRNO_NZ(ret);
 	return ret;
+}
+
+char *
+getcwd(char *buf, size_t sz)
+{
+	int ret = syscall(SA(buf), SA(sz), 0, 0, 0, SYS_GETCWD);
+	ERRNO_NZ(ret);
+	if (ret)
+		return NULL;
+	return buf;
 }
 
 int
@@ -2003,8 +2014,9 @@ select(int maxfd, fd_set *rfds, fd_set *wfds, fd_set *efds,
 char *
 setlocale(int cat, const char *loc)
 {
-	printf("warning: no fancy locale support\n");
-	return "C";
+	if (strcmp(loc, "C") == 0 || strcmp(loc, "POSIX") == 0)
+		return "C";
+	errx(-1, "no fancy locale support");
 }
 
 uint

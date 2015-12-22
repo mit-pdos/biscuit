@@ -200,7 +200,7 @@ int bind(int, const struct sockaddr *, socklen_t);
 int connect(int, const struct sockaddr *, socklen_t);
 int chmod(const char *, mode_t);
 int close(int);
-int chdir(char *);
+int chdir(const char *);
 int dup2(int, int);
 void _exit(int)
     __attribute__((noreturn));
@@ -211,6 +211,7 @@ long fake_sys(long);
 long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
+char *getcwd(char *, size_t);
 int getpid(void);
 int getrlimit(int, struct rlimit *);
 #define		RLIMIT_NOFILE	1

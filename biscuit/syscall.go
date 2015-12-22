@@ -150,6 +150,7 @@ const(
     F_SETFL      = 2
     F_GETFD      = 3
     F_SETFD      = 4
+  SYS_GETCWD   = 79
   SYS_CHDIR    = 80
   SYS_RENAME   = 82
   SYS_MKDIR    = 83
@@ -265,6 +266,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_kill(p, a1, a2)
 	case SYS_FCNTL:
 		ret = sys_fcntl(p, a1, a2, a3)
+	case SYS_GETCWD:
+		ret = sys_getcwd(p, a1, a2)
 	case SYS_CHDIR:
 		ret = sys_chdir(p, a1)
 	case SYS_RENAME:
@@ -1078,6 +1081,10 @@ func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
 	return c, 0
 }
 
+func (pr *pipefops_t) fullpath() (string, int) {
+	panic("weird cwd")
+}
+
 func (pf *pipefops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
@@ -1649,6 +1656,10 @@ func (sf *sudfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENODEV
 }
 
+func (sf *sudfops_t) fullpath() (string, int) {
+	panic("weird cwd")
+}
+
 func (sf *sudfops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
@@ -2209,6 +2220,10 @@ func (sus *susfops_t) write(src *userbuf_t) (int, int) {
 	return wrote, err
 }
 
+func (sus *susfops_t) fullpath() (string, int) {
+	panic("weird cwd")
+}
+
 func (sus *susfops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
@@ -2560,6 +2575,10 @@ func (sul *suslfops_t) reopen() int {
 
 func (sul *suslfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENOTCONN
+}
+
+func (sul *suslfops_t) fullpath() (string, int) {
+	panic("weird cwd")
 }
 
 func (sul *suslfops_t) pread(dst *userbuf_t, offset int) (int, int) {
@@ -3115,6 +3134,22 @@ func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {
 	default:
 		return -EINVAL
 	}
+}
+
+func sys_getcwd(proc *proc_t, bufn, sz int) int {
+	dst := proc.mkuserbuf(bufn, sz)
+	pwd, err := proc.cwd.fops.fullpath()
+	if err != 0 {
+		return err
+	}
+	_, err = dst.write([]uint8(pwd))
+	if err != 0 {
+		return err
+	}
+	if _, err := dst.write([]uint8{0}); err != 0 {
+		return err
+	}
+	return 0
 }
 
 func sys_chdir(proc *proc_t, dirn int) int {

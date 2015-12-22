@@ -63,6 +63,7 @@
 /user/c/reboot
 /user/c/ebizzy
 /user/c/uname
+/user/c/pwd
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -123,3 +124,4 @@
 /fsdir/bin/reboot
 /fsdir/bin/ebizzy
 /fsdir/bin/uname
+/fsdir/bin/pwd

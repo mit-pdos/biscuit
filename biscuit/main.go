@@ -239,6 +239,7 @@ type fdops_i interface {
 	// reopen() is called with proc_t.fdl is held
 	reopen() int
 	write(*userbuf_t) (int, int)
+	fullpath() (string, int)
 
 	pread(*userbuf_t, int) (int, int)
 	pwrite(*userbuf_t, int) (int, int)
@@ -1406,6 +1407,9 @@ func (ub *userbuf_t) ub_init(p *proc_t, uva, len int) {
 	// XXX fix signedness
 	if len < 0 {
 		panic("negative length")
+	}
+	if len >= 1 << 39 {
+		fmt.Printf("suspiciously large user buffer\n")
 	}
 	ub.userva = uva
 	ub.len = len
