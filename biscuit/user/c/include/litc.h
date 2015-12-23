@@ -443,7 +443,7 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		log(x)		__builtin_log(x)
 #define		sqrt(x)		__builtin_sqrt(x)
 #define		trunc(x)	__builtin_trunc(x)
-#define		pow(x)		__builtin_pow(x)
+#define		pow(x, y)	__builtin_pow(x, y)
 
 // annoyingly, some GCC versions < 4.8 are bugged and do not have
 // __builtin_bswap16.
@@ -557,6 +557,7 @@ void openlog(const char *, int, int);
 #define		LOG_NOWAIT	(1ull << 4)
 int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
+double pow(double, double);
 void perror(const char *);
 int rand(void);
 int rand_r(uint *);
@@ -591,11 +592,11 @@ int strcmp(const char *, const char *);
 int strcoll(const char *, const char *);
 int strncmp(const char *, const char *, size_t);
 long strtol(const char *, char **, int);
-//double strtod(const char *, char **); /*REDIS*/
-//long double strtold(const char *, char **); /*REDIS*/
-//long long strtoll(const char *, char **, int); /*REDIS*/
+double strtod(const char *, char **);
+long double strtold(const char *, char **);
+long long strtoll(const char *, char **, int);
 ulong strtoul(const char *, char **, int);
-//unsigned long long strtoull(const char *, char **, int); /*REDIS*/
+unsigned long long strtoull(const char *, char **, int);
 char *strstr(const char *, const char *);
 void syslog(int, const char *, ...);
 // priorities

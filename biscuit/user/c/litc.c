@@ -1771,6 +1771,10 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				// floats are promoted to double when used for
 				// a ... argument
 				n = va_arg(ap, double);
+				if (n < 0) {
+					dst += wc(dst, end, '-');
+					n = -n;
+				}
 				dst += putn(dst, end, (ulong)n, 10);
 				dst += wc(dst, end, '.');
 				n -= (ulong)n;
@@ -1852,6 +1856,27 @@ printf(const char *fmt, ...)
 	ret = vfprintf(stdout, fmt, ap);
 	va_end(ap);
 
+	return ret;
+}
+
+double
+pow(double x, double y)
+{
+	long exp = (long)y;
+	if (y - exp != 0)
+		errx(-1, "shitty pow(3) only accepts integer exponents");
+	if (exp == 0)
+		return 1;
+	int inv = 0;
+	if (exp < 0) {
+		exp = -exp;
+		inv = 1;
+	}
+	double ret = 1;
+	while (exp--)
+		ret *= x;
+	if (inv)
+		return 1.0/ret;
 	return ret;
 }
 
@@ -2198,6 +2223,11 @@ syslog(int priority, const char *msg, ...)
 	va_end(ap);
 }
 
+static int _isoct(int c)
+{
+	return c >= '0' && c <= '7';
+}
+
 long
 strtol(const char *n, char **endptr, int base)
 {
@@ -2212,16 +2242,20 @@ strtol(const char *n, char **endptr, int base)
 		n++;
 	}
 
+	int (*matcher)(int);
 	if ((base == 0 || base == 16) && strncmp(n, "0x", 2) == 0) {
 		base = 16;
 		n += 2;
+		matcher = isxdigit;
 	} else if (base == 0 && *n == '0') {
 		base = 8;
 		n++;
+		matcher = _isoct;
 	} else if (base == 0)
 		base = 10;
+		matcher = isdigit;
 	long tot = 0;
-	while (isxdigit(*n)) {
+	while (matcher(*n)) {
 		int c = tolower(*n++);
 		tot = tot*base;
 		if (isalpha(c))
@@ -2232,6 +2266,47 @@ strtol(const char *n, char **endptr, int base)
 	if (endptr)
 		*endptr = (char *)n;
 	return tot*sign;
+}
+
+double
+strtod(const char *s, char **end)
+{
+	return (double)strtold(s, end);
+}
+
+long double
+strtold(const char *s, char **end)
+{
+        char *tend;
+        long t = strtol(s, &tend, 10);
+        // tend points to '.' or [Ee]
+        long double ret = (long double)t;
+        if (*tend == '.') {
+                tend++;
+                char *fend;
+                long frac = strtol(tend, &fend, 10);
+                long digs = fend - tend;
+                if (digs) {
+			long double addend = (long double)frac/(pow(10, digs));
+			if (ret < 0)
+				ret -= addend;
+			else
+				ret += addend;
+                        tend = fend;
+                }
+        }
+        if (tolower(*tend) == 'e') {
+                tend++;
+                char *eend;
+                long exp = strtol(tend, &eend, 10);
+                if (eend - tend > 0) {
+                        ret *= pow(10, exp);
+                        tend = eend;
+                }
+        }
+        if (end)
+                *end = tend;
+        return ret;
 }
 
 long long
@@ -2245,6 +2320,12 @@ strtoul(const char *n, char **endptr, int base)
 {
 	long ret = strtol(n, endptr, base);
 	return (ulong)ret;
+}
+
+unsigned long long
+strtoull(const char *n, char **endptr, int base)
+{
+	return strtoull(n, endptr, base);
 }
 
 time_t
