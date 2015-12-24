@@ -22,6 +22,7 @@
 #define SYS_RECVFROM     45
 #define SYS_BIND         49
 #define SYS_LISTEN       50
+#define SYS_GETSOCKOPT   55
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
@@ -279,6 +280,15 @@ int
 getpid(void)
 {
 	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+}
+
+int
+getsockopt(int fd, int level, int opt, void *optv, socklen_t *optlen)
+{
+	int ret = syscall(SA(fd), SA(level), SA(opt), SA(optv), SA(optlen),
+	    SYS_GETSOCKOPT);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int
@@ -2146,6 +2156,7 @@ static const char * const _errstr[] = {
 	[ENOTEMPTY] = "Directory not empty",
 	[EOVERFLOW] = "Value too large to be stored in data type",
 	[ENOTSOCK] = "Socket operation on non-socket",
+	[EOPNOTSUPP] = "Operation not supported",
 	[EISCONN] = "Socket is already connected",
 	[ENOTCONN] = "Socket is not connected",
 	[ETIMEDOUT] = "Operation timed out",

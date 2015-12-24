@@ -189,6 +189,13 @@ void stream()
 	if (c < 0)
 		err(-1, "accept");
 
+	int sockerr;
+	socklen_t solen = sizeof(sockerr);
+	if (getsockopt(c, SOL_SOCKET, SO_ERROR, &sockerr, &solen))
+		err(-1, "getsockopt");
+	if (sockerr != 0)
+		errx(-1, "socket error");
+
 	char buf[256];
 	ssize_t r;
 	if ((r = read(c, buf, sizeof(buf) - 1)) < 0)

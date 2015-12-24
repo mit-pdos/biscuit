@@ -59,6 +59,7 @@ const(
   ENOTEMPTY    = 39
   ENOTSOCK     = 88
   EMSGSIZE     = 90
+  EOPNOTSUPP   = 95
   ECONNRESET   = 104
   EISCONN      = 106
   ENOTCONN     = 107
@@ -129,6 +130,13 @@ const(
   SYS_RECVFROM = 45
   SYS_BIND     = 49
   SYS_LISTEN   = 50
+  SYS_GETSOCKOPT = 55
+    // socket levels
+    SOL_SOCKET     = 1
+    // socket options
+    SO_SNDBUF      = 1
+    SO_SNDTIMEO    = 2
+    SO_ERROR       = 3
   SYS_FORK     = 57
     FORK_PROCESS = 0x1
     FORK_THREAD  = 0x2
@@ -252,6 +260,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_bind(p, a1, a2, a3)
 	case SYS_LISTEN:
 		ret = sys_listen(p, a1, a2)
+	case SYS_GETSOCKOPT:
+		ret = sys_getsockopt(p, a1, a2, a3, a4, a5)
 	case SYS_FORK:
 		ret = sys_fork(p, tf, a1, a2)
 	case SYS_EXECV:
@@ -1190,6 +1200,11 @@ func (pf *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
+func (pf *pipefops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	return 0, -ENOTSOCK
+}
+
 func sys_rename(proc *proc_t, oldn int, newn int) int {
 	old, ok1, toolong1 := proc.userstr(oldn, NAME_MAX)
 	new, ok2, toolong2 := proc.userstr(newn, NAME_MAX)
@@ -1438,6 +1453,10 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	if typ & SOCK_NONBLOCK != 0 {
 		opts |= O_NONBLOCK
 	}
+	var clop int
+	if typ & SOCK_CLOEXEC != 0 {
+		clop = FD_CLOEXEC
+	}
 
 	var sfops fdops_i
 	switch {
@@ -1450,7 +1469,7 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	}
 	file := &fd_t{}
 	file.fops = sfops
-	fdn := proc.fd_insert(file, FD_READ | FD_WRITE)
+	fdn := proc.fd_insert(file, FD_READ | FD_WRITE | clop)
 	return fdn
 }
 
@@ -1812,6 +1831,11 @@ func (sf *sudfops_t) pollone(pm pollmsg_t) ready_t {
 
 func (sf *sudfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	return -ENOSYS
+}
+
+func (sf *sudfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	return 0, -EOPNOTSUPP
 }
 
 type sunid_t int
@@ -2397,6 +2421,19 @@ func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
+func (sus *susfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	switch opt {
+	case SO_ERROR:
+		if !proc.userwriten(bufarg.userva, 4, 0) {
+			return 0, -EFAULT
+		}
+		return 4, 0
+	default:
+		return 0, -EOPNOTSUPP
+	}
+}
+
 var _susid uint64
 
 func susid_new() int {
@@ -2650,6 +2687,11 @@ func (sul *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
+func (sul *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	return 0, -EOPNOTSUPP
+}
+
 func sys_listen(proc *proc_t, fdn, backlog int) int {
 	fd, ok := proc.fd_get(fdn)
 	if !ok {
@@ -2666,6 +2708,39 @@ func sys_listen(proc *proc_t, fdn, backlog int) int {
 	proc.fdl.Lock()
 	fd.fops = newfops
 	proc.fdl.Unlock()
+	return 0
+}
+
+func sys_getsockopt(proc *proc_t, fdn, level, opt, optvaln, optlenn int) int {
+	if level != SOL_SOCKET {
+		panic("no imp")
+	}
+	var olen int
+	if optlenn != 0 {
+		l, ok := proc.userreadn(optlenn, 8)
+		if !ok {
+			return -EFAULT
+		}
+		if l < 0 {
+			return -EFAULT
+		}
+		olen = l
+	}
+	bufarg := proc.mkuserbuf(optvaln, olen)
+	intarg := optvaln
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return -EBADF
+	}
+	optwrote, err := fd.fops.getsockopt(proc, opt, bufarg, intarg)
+	if err != 0 {
+		return err
+	}
+	if optlenn != 0 {
+		if !proc.userwriten(optlenn, 8, optwrote) {
+			return -EFAULT
+		}
+	}
 	return 0
 }
 

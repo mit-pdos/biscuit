@@ -40,6 +40,7 @@ extern "C" {
 #define		ENOTEMPTY	39
 #define		EOVERFLOW	75
 #define		ENOTSOCK	88
+#define		EOPNOTSUPP	95
 #define		ECONNRESET	104
 #define		EISCONN		106
 #define		ENOTCONN	107
@@ -219,7 +220,7 @@ int getrlimit(int, struct rlimit *);
 int getrusage(int, struct rusage *);
 #define		RUSAGE_SELF	1
 #define		RUSAGE_CHILDREN	2
-//int getsockopt(int, int, int, void *, socklen_t *); /*REDIS*/
+int getsockopt(int, int, int, void *, socklen_t *);
 int gettimeofday(struct timeval *, struct timezone *);
 
 int fcntl(int, int, ...);

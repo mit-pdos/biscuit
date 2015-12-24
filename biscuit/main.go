@@ -265,6 +265,7 @@ type fdops_i interface {
 	pollone(pollmsg_t) ready_t
 
 	fcntl(*proc_t, int, int) int
+	getsockopt(*proc_t, int, *userbuf_t, int) (int, int)
 }
 
 // this is the new fd_t

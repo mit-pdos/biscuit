@@ -888,6 +888,11 @@ func (fo *fsfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	return -ENOSYS
 }
 
+func (fo *fsfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	return 0, -ENOTSOCK
+}
+
 type devfops_t struct {
 	priv	inum
 	maj	int
@@ -993,6 +998,11 @@ func (df *devfops_t) pollone(pm pollmsg_t) ready_t {
 
 func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	return -ENOSYS
+}
+
+func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	return 0, -ENOTSOCK
 }
 
 func fs_mkdir(paths string, mode int, cwd inum) int {
