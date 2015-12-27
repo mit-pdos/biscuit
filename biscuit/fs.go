@@ -413,7 +413,7 @@ func (itx *inodetx_t) lockall() int {
 
 		// we are done!
 		itx.bypriv = refs
-		if fails >= 3 {
+		if fails >= 50 {
 			fmt.Printf("*** fails: %v\n", fails)
 		}
 		return 0
@@ -738,6 +738,21 @@ func (fo *fsfops_t) fullpath() (string, int) {
 	return r.resp.fpath, 0
 }
 
+func (fo *fsfops_t) truncate(newlen uint) int {
+	op_begin()
+	defer op_end()
+
+	r := &ireq_t{}
+	if newlen < 0 {
+		newlen = 0
+	}
+	r.mktrunc(newlen)
+	idmon := idaemon_ensure(fo.priv)
+	idmon.req <- r
+	<- r.ack
+	return r.resp.err
+}
+
 func (fo *fsfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
 	return fo._write(src, offset)
 }
@@ -920,6 +935,10 @@ func (df *devfops_t) write(src *userbuf_t) (int, int) {
 
 func (df *devfops_t) fullpath() (string, int) {
 	panic("weird cwd")
+}
+
+func (df *devfops_t) truncate(newlen uint) int {
+	return -EINVAL
 }
 
 func (df *devfops_t) pread(dst *userbuf_t, offset int) (int, int) {
@@ -1196,7 +1215,7 @@ func _fs_open(paths string, flags int, mode int, cwd inum,
 
 	if nodir && trunc {
 		req := &ireq_t{}
-		req.mktrunc()
+		req.mktrunc(0)
 		idm.req <- req
 		<- req.ack
 		if req.resp.err != 0 {
@@ -1751,6 +1770,8 @@ type ireq_t struct {
 	path		[]string
 	// read/write op
 	offset		int
+	// truncate op
+	newlen		uint
 	// read op
 	rbuf		*userbuf_t
 	// writes op
@@ -1969,11 +1990,12 @@ func (r *ireq_t) mkempty() {
 	r.rtype = EMPTY
 }
 
-func (r *ireq_t) mktrunc() {
+func (r *ireq_t) mktrunc(truncto uint) {
 	var z ireq_t
 	*r = z
 	r.ack = make(chan bool)
 	r.rtype = TRUNC
+	r.newlen = truncto
 }
 
 func (r *ireq_t) mkmmapinfo(off int) {
@@ -2268,9 +2290,9 @@ func idaemonize(idm *idaemon_t) {
 			   idm.icache.itype != I_DEV {
 				panic("bad truncate")
 			}
-			idm.icache.size = 0
+			err := idm.itrunc(r.newlen)
 			iupdate()
-			r.resp.err = 0
+			r.resp.err = err
 			r.ack <- true
 
 		case MMAPINFO:
@@ -2426,6 +2448,9 @@ func (idm *idaemon_t) offsetblk(offset int, writing bool) int {
 	} else {
 		blkn = idm.icache.addrs[whichblk]
 	}
+	if blkn <= 0 || blkn >= superb.lastblock() {
+		panic("bad data blocks")
+	}
 	return blkn
 }
 
@@ -2449,6 +2474,10 @@ func (idm *idaemon_t) iread(dst *userbuf_t, offset int) (int, int) {
 func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
 	sz := src.len
 	newsz := offset + sz
+	err := idm._preventhole(idm.icache.size, uint(newsz))
+	if err != 0 {
+		return 0, err
+	}
 	c := 0
 	for c < sz {
 		noff := offset + c
@@ -2469,6 +2498,49 @@ func (idm *idaemon_t) iwrite(src *userbuf_t, offset int) (int, int) {
 	}
 	idm.pgcache.flush()
 	return wrote, 0
+}
+
+// if a progam 1) lseeks past end of file and writes or 2) extends file size
+// via ftruncate/truncate, make sure the page cache is filled with zeros for
+// the new bytes.
+func (idm *idaemon_t) _preventhole(_oldlen int, newlen uint) int {
+	// XXX fix sign
+	oldlen := uint(_oldlen)
+	if newlen > oldlen {
+		// extending file; fill new content in page cache with zeros
+		first := true
+		c := oldlen
+		for c < newlen {
+			pg, err := idm.pgcache.pgfor(int(c), int(newlen))
+			if err != 0 {
+				panic("must succeed")
+			}
+			if first {
+				// XXX go doesn't seem to have a good way to
+				// zero a slice
+				for i := range pg {
+					pg[i] = 0
+				}
+				first = false
+			}
+			c += uint(len(pg))
+		}
+		idm.pgcache.pgdirty(int(oldlen), int(newlen))
+	}
+	return 0
+}
+
+func (idm *idaemon_t) itrunc(newlen uint) int {
+	err := idm._preventhole(idm.icache.size, newlen)
+	if err != 0 {
+		return err
+	}
+	// it's important that the icache.size is updated after filling the
+	// page cache since fs_fill reads from disk any pages whose offset is
+	// <= icache.size
+	idm.icache.size = int(newlen)
+	idm.pgcache.flush()
+	return 0
 }
 
 // fills the parts of pages whose offset < the file size (extending the file
@@ -3355,6 +3427,9 @@ func log_daemon(l *log_t) {
 		for !done {
 			select {
 			case nb := <- l.incoming:
+				if t <= 0 {
+					panic("log write without admission")
+				}
 				l.addlog(nb)
 			case <- l.done:
 				t--

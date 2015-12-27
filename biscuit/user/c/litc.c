@@ -29,6 +29,8 @@
 #define SYS_WAIT4        61
 #define SYS_KILL         62
 #define SYS_FCNTL        72
+#define SYS_TRUNC        76
+#define SYS_FTRUNC       77
 #define SYS_GETCWD       79
 #define SYS_CHDIR        80
 #define SYS_RENAME       82
@@ -582,6 +584,14 @@ int
 sync(void)
 {
 	int ret = syscall(0, 0, 0, 0, 0, SYS_SYNC);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
+int
+truncate(const char *p, off_t newlen)
+{
+	int ret = syscall(SA(p), SA(newlen), 0, 0, 0, SYS_TRUNC);
 	ERRNO_NZ(ret);
 	return ret;
 }
@@ -1459,6 +1469,14 @@ fwrite(const void *src, size_t sz, size_t mem, FILE *f)
 
 	pthread_mutex_unlock(&f->mut);
 	return ret/sz;
+}
+
+int
+ftruncate(int fd, off_t newlen)
+{
+	int ret = syscall(SA(fd), SA(newlen), 0, 0, 0, SYS_FTRUNC);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int

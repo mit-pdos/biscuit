@@ -212,6 +212,7 @@ long fake_sys(long);
 long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
+int ftruncate(int, off_t);
 char *getcwd(char *, size_t);
 int getpid(void);
 int getrlimit(int, struct rlimit *);
@@ -312,6 +313,7 @@ int socket(int, int, int);
 
 int stat(const char *, struct stat *);
 int sync(void);
+int truncate(const char *, off_t);
 int unlink(const char *);
 int wait(int *);
 int waitpid(int, int *, int);
@@ -524,9 +526,8 @@ int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 int fsync(int);
 //int fputs(const char *, FILE *); /*REDIS*/
-//off_t ftello(FILE *); /*REDIS*/
-//int ftruncate(int, off_t); /*REDIS*/
 size_t fread(void *, size_t, size_t, FILE *);
+//off_t ftello(FILE *); /*REDIS*/
 size_t fwrite(const void *, size_t, size_t, FILE *);
 //char *getcwd(char *, size_t); /*REDIS*/
 int getopt(int, char * const *, const char *);
@@ -623,7 +624,6 @@ time_t time(time_t*);
 int tolower(int);
 int toupper(int);
 double trunc(double);
-//int truncate(const char *, off_t); /*REDIS*/
 int uname(struct utsname *);
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));

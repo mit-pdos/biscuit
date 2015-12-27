@@ -158,6 +158,8 @@ const(
     F_SETFL      = 2
     F_GETFD      = 3
     F_SETFD      = 4
+  SYS_TRUNC    = 76
+  SYS_FTRUNC   = 77
   SYS_GETCWD   = 79
   SYS_CHDIR    = 80
   SYS_RENAME   = 82
@@ -276,6 +278,10 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_kill(p, a1, a2)
 	case SYS_FCNTL:
 		ret = sys_fcntl(p, a1, a2, a3)
+	case SYS_TRUNC:
+		ret = sys_truncate(p, a1, uint(a2))
+	case SYS_FTRUNC:
+		ret = sys_ftruncate(p, a1, uint(a2))
 	case SYS_GETCWD:
 		ret = sys_getcwd(p, a1, a2)
 	case SYS_CHDIR:
@@ -460,13 +466,8 @@ func sys_close(proc *proc_t, fdn int) int {
 	if !ok {
 		return -EBADF
 	}
-	ret := file_close(fd)
+	ret := fd.fops.close()
 	return ret
-}
-
-// XXX remove
-func file_close(f *fd_t) int {
-	return f.fops.close()
 }
 
 // a type to hold the virtual/physical addresses of memory mapped files
@@ -547,6 +548,12 @@ func copyfd(fd *fd_t) (*fd_t, int) {
 	return nfd, 0
 }
 
+func close_panic(f *fd_t) {
+	if f.fops.close() != 0 {
+		panic("must succeed")
+	}
+}
+
 func sys_dup2(proc *proc_t, oldn, newn int) int{
 	if oldn == newn {
 		return newn
@@ -571,9 +578,7 @@ func sys_dup2(proc *proc_t, oldn, newn int) int{
 
 	if needclose {
 		n := proc.atime.now()
-		if file_close(cfd) != 0 {
-			panic("must succeed")
-		}
+		close_panic(cfd)
 		proc.atime.io_time(n)
 	}
 	return newn
@@ -1091,8 +1096,12 @@ func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
 	return c, 0
 }
 
-func (pr *pipefops_t) fullpath() (string, int) {
+func (pf *pipefops_t) fullpath() (string, int) {
 	panic("weird cwd")
+}
+
+func (pf *pipefops_t) truncate(newlen uint) int {
+	return -EINVAL
 }
 
 func (pf *pipefops_t) pread(dst *userbuf_t, offset int) (int, int) {
@@ -1679,6 +1688,10 @@ func (sf *sudfops_t) fullpath() (string, int) {
 	panic("weird cwd")
 }
 
+func (sf *sudfops_t) truncate(newlen uint) int {
+	return -EINVAL
+}
+
 func (sf *sudfops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
@@ -2248,6 +2261,10 @@ func (sus *susfops_t) fullpath() (string, int) {
 	panic("weird cwd")
 }
 
+func (sus *susfops_t) truncate(newlen uint) int {
+	return -EINVAL
+}
+
 func (sus *susfops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
@@ -2618,6 +2635,10 @@ func (sul *suslfops_t) fullpath() (string, int) {
 	panic("weird cwd")
 }
 
+func (sul *suslfops_t) truncate(newlen uint) int {
+	return -EINVAL
+}
+
 func (sul *suslfops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
@@ -2945,9 +2966,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		return err
 	}
 	defer func() {
-		if file.fops.close() != 0 {
-			panic("must succeed")
-		}
+		close_panic(file)
 	}()
 
 	hdata := make([]uint8, 512)
@@ -3211,6 +3230,35 @@ func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {
 	}
 }
 
+func sys_truncate(proc *proc_t, pathn int, newlen uint) int {
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	if err := badpath(path); err != 0 {
+		return err
+	}
+	pi := proc.cwd.fops.pathi()
+	f, err := fs_open(path, O_WRONLY, 0, pi, 0, 0)
+	if err != 0 {
+		return err
+	}
+	ret := f.fops.truncate(newlen)
+	close_panic(f)
+	return ret
+}
+
+func sys_ftruncate(proc *proc_t, fdn int, newlen uint) int {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return -EBADF
+	}
+	return fd.fops.truncate(newlen)
+}
+
 func sys_getcwd(proc *proc_t, bufn, sz int) int {
 	dst := proc.mkuserbuf(bufn, sz)
 	pwd, err := proc.cwd.fops.fullpath()
@@ -3251,9 +3299,7 @@ func sys_chdir(proc *proc_t, dirn int) int {
 		return err
 	}
 	n = proc.atime.now()
-	if file_close(proc.cwd) != 0 {
-		panic("must succeed")
-	}
+	close_panic(proc.cwd)
 	proc.atime.io_time(n)
 	proc.cwd = newcwd
 	return 0
@@ -3306,7 +3352,6 @@ func sys_fake2(proc *proc_t, n int) int {
 	ret := len(allidmons)
 	idmonl.Unlock()
 	runtime.GC()
-
 	return ret
 }
 

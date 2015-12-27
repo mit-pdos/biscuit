@@ -135,8 +135,10 @@ void connector(char *path, char *msg1, char *msg2)
 		err(-1, "write failed (%ld != %lu)", r, strlen(msg2));
 
 	char buf[256];
-	if ((r = read(s, buf, sizeof(buf))) != strlen(msg1))
-		err(-1, "read failed (%ld != %lu)", r, strlen(msg1));
+	// parent writes two messages in a row; make sure we read them one at a
+	// time
+	if ((r = read(s, buf, strlen(msg1))) != strlen(msg1))
+		err(-1, "c1 read failed (%ld != %lu)", r, strlen(msg1));
 	if (strncmp(buf, msg1, strlen(msg1)))
 		errx(-1, "string mismatch");
 
@@ -145,7 +147,7 @@ void connector(char *path, char *msg1, char *msg2)
 	if ((r = write(s, mymsg, strlen(mymsg))) != strlen(mymsg))
 		err(-1, "write failed (%ld != %lu)", r, strlen(mymsg));
 	if ((r = read(s, buf, sizeof(buf))) != strlen(theirmsg))
-		err(-1, "read failed (%ld != %lu)", r, strlen(theirmsg));
+		err(-1, "c2 read failed (%ld != %lu)", r, strlen(theirmsg));
 	if (strncmp(buf, theirmsg, strlen(theirmsg)))
 		errx(-1, "unexpected data");
 	close(s);
@@ -224,7 +226,7 @@ void stream()
 	if ((r = write(c, mymsg, strlen(mymsg))) != strlen(mymsg))
 		err(-1, "write failed (%ld != %lu)", r, strlen(mymsg));
 	if ((r = read(c, buf, sizeof(buf))) != strlen(theirmsg))
-		err(-1, "read failed (%ld != %lu)", r, strlen(theirmsg));
+		err(-1, "s1 read failed (%ld != %lu)", r, strlen(theirmsg));
 	if (strncmp(buf, theirmsg, strlen(theirmsg)))
 		errx(-1, "unexpected data");
 

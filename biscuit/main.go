@@ -240,6 +240,7 @@ type fdops_i interface {
 	reopen() int
 	write(*userbuf_t) (int, int)
 	fullpath() (string, int)
+	truncate(uint) int
 
 	pread(*userbuf_t, int) (int, int)
 	pwrite(*userbuf_t, int) (int, int)
@@ -1103,14 +1104,10 @@ func (p *proc_t) terminate() {
 		if p.fds[i] == nil {
 			continue
 		}
-		if file_close(p.fds[i]) != 0 {
-			panic("must succeed")
-		}
+		close_panic(p.fds[i])
 	}
 	p.fdl.Unlock()
-	if file_close(p.cwd) != 0 {
-		panic("must succeed")
-	}
+	close_panic(p.cwd)
 
 	proc_del(p.pid)
 

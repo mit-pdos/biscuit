@@ -2643,6 +2643,57 @@ void cwdtest(void)
 	printf("cwd test ok\n");
 }
 
+void trunctest(void)
+{
+	printf("trunc test\n");
+
+	const char *fp = "/tmp/truncfile";
+	int fd = open(fp, O_RDWR | O_CREAT);
+	if (fd < 0)
+		err(-1, "open");
+	char buf[256];
+	int i;
+	for (i = 0; i < sizeof(buf); i++)
+		buf[i] = 'A';
+	if (write(fd, buf, sizeof(buf)) != sizeof(buf))
+		err(-1, "short write");
+	if (lseek(fd, 0, SEEK_SET) != 0)
+		err(-1, "lseek");
+	off_t newsz = 15;
+	if (ftruncate(fd, newsz))
+		err(-1, "ftruncate");
+	ssize_t r;
+	if ((r = read(fd, buf, sizeof(buf))) != newsz)
+		err(-1, "expected %lu bytes, got %zd", newsz, r);
+	close(fd);
+
+	newsz = 7;
+	if (truncate(fp, newsz))
+		err(-1, "truncate");
+	fd = open(fp, O_RDONLY | O_CREAT);
+	if (fd < 0)
+		err(-1, "open");
+	if ((r = read(fd, buf, sizeof(buf))) != newsz)
+		err(-1, "expected %lu bytes, got %zd", newsz, r);
+	close(fd);
+
+	// 8192, so file spans two pages in page cache
+	newsz = sizeof(buf)*32;
+	if (truncate(fp, newsz))
+		err(-1, "truncate");
+	fd = open(fp, O_RDONLY | O_CREAT);
+	if (fd < 0)
+		err(-1, "open");
+	fake_sys2(1);
+	for (i = 0; i < newsz; i += sizeof(buf))
+		if ((r = read(fd, buf, sizeof(buf))) != sizeof(buf))
+			err(-1, "expected %lu bytes, got %zd", newsz, r);
+	fake_sys2(0);
+	close(fd);
+
+	printf("trunc test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2704,6 +2755,7 @@ main(int argc, char *argv[])
   preadwrite();
   stdiotest();
   realloctest();
+  trunctest();
 
   cwdtest();
 
