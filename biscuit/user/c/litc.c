@@ -2280,9 +2280,13 @@ strtol(const char *n, char **endptr, int base)
 		base = 8;
 		n++;
 		matcher = _isoct;
-	} else if (base == 0)
+	} else if (base == 0 || base == 10) {
 		base = 10;
 		matcher = isdigit;
+	} else {
+		errno = EINVAL;
+		return 0;
+	}
 	long tot = 0;
 	while (matcher(*n)) {
 		int c = tolower(*n++);
