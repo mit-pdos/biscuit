@@ -1184,7 +1184,7 @@ static void fdinit(void)
 #define FDINIT(f, fdn, bt)	do {			\
 	f.fd = fdn;					\
 	f.p = &f.buf[0];				\
-	f.end = f.p + sizeof(f.buf);			\
+	f.end = f.p;					\
 	f.lnext = _allfiles.head;			\
 	f.lprev = NULL;					\
 	f.btype = bt;					\
@@ -1471,6 +1471,84 @@ fwrite(const void *src, size_t sz, size_t mem, FILE *f)
 	return ret/sz;
 }
 
+static int
+_fgetc(FILE *f)
+{
+	char buf;
+	if (_fread1(&buf, 1, f) != 1)
+		return EOF;
+	return buf;
+}
+
+int
+fgetc(FILE *f)
+{
+	pthread_mutex_lock(&f->mut);
+	int ret = _fgetc(f);
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
+static int
+_ungetc(int c, FILE *f)
+{
+	const char * const bst = &f->buf[0];
+	if (f->p == bst)
+		return EOF;
+	unsigned char put = (unsigned char)c;
+	f->p--;
+	*f->p = put;
+	f->eof = 0;
+	return put;
+}
+
+int
+ungetc(int c, FILE *f)
+{
+	if (c == EOF)
+		return c;
+
+	pthread_mutex_lock(&f->mut);
+	int ret = _ungetc(c, f);
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
+char *
+fgets(char *buf, int size, FILE *f)
+{
+	if (size == 0)
+		return NULL;
+	// get room for nul
+	size--;
+	pthread_mutex_lock(&f->mut);
+
+	char *ret = NULL;
+	size_t c = 0;
+	while (c < size) {
+		int ch = _fgetc(f);
+		if (ch == EOF) {
+			if (c > 0)
+				ret = buf;
+			goto out;
+		}
+		buf[c++] = ch;
+		if (ch == '\n')
+			break;
+	}
+	ret = buf;
+out:
+	buf[c] = '\0';
+	pthread_mutex_unlock(&f->mut);
+	return ret;
+}
+
+off_t
+ftello(FILE *f)
+{
+	return lseek(f->fd, 0, SEEK_CUR);
+}
+
 int
 ftruncate(int fd, off_t newlen)
 {
@@ -1565,7 +1643,8 @@ ispunct(int c)
 int
 isspace(int c)
 {
-	return c == ' ' || c == '\f' || c == '\n' || c == '\t' || c == '\v';
+	return c == ' ' || c == '\f' || c == '\n' || c == '\t' || c == '\v' ||
+	    c == '\r';
 }
 
 int
@@ -1792,6 +1871,7 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				done = 1;
 				break;
 			}
+			case 'g':
 			case 'f':
 			{
 				int prec = 6;
@@ -1854,7 +1934,7 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				break;
 			}
 			default:
-				done = 1;
+				errx(-1, "unsupported printf format: %c\n", *fmt);
 				break;
 			}
 		}
@@ -1872,6 +1952,97 @@ int
 vsnprintf(char *dst, size_t sz, const char *fmt, va_list ap)
 {
 	return _vprintf(fmt, ap, dst, dst + sz);
+}
+
+static int
+_vscanf(const char *src, const char * const end, const char *fmt, va_list ap)
+{
+	int ret = 0;
+	while (*fmt && src < end) {
+		if (isspace(*fmt)) {
+			fmt++;
+			while (isspace(*src))
+				src++;
+			continue;
+		}
+		if (*fmt != '%') {
+			if (*src != *fmt)
+				return ret;
+			fmt++;
+			src++;
+			continue;
+		}
+		fmt++;
+		int done = 0;
+		int longmode = 0;
+		int hexmode = 0;
+		while (!done) {
+			switch (*fmt) {
+			case '%':
+				if (*src != '%')
+					return ret;
+				src++;
+				done = 1;
+				break;
+			case 'l':
+				longmode = 1;
+				break;
+			case 'x':
+				hexmode = 1;
+			case 'u':
+			case 'd':
+			{
+				char *eptr;
+				long read = strtol(src, &eptr, hexmode ? 16 : 10);
+				if (src == eptr)
+					return ret;
+				if (longmode) {
+					 long *p = va_arg(ap, long *);
+					 *p = read;
+				} else {
+					 int *p = va_arg(ap, int *);
+					 *p = (int)read;
+				}
+				src = eptr;
+				done = 1;
+				ret++;
+			}
+				break;
+			case 'g':
+			case 'f':
+			{
+				char *eptr;
+				long double read = strtold(src, &eptr);
+				if (src == eptr)
+					return ret;
+				if (longmode) {
+					 double *p = va_arg(ap, double *);
+					 *p = (double)read;
+				} else {
+					 float *p = va_arg(ap, float *);
+					 *p = (float)read;
+				}
+				src = eptr;
+				done = 1;
+				ret++;
+			}
+				break;
+			default:
+				errx(-1, "unsupported scanf format: %c", *fmt);
+			}
+			fmt++;
+		}
+	}
+	return ret;
+}
+
+int
+vsscanf(const char *src, const char *fmt, va_list ap)
+{
+	const char * const end = strchr(src, '\0');
+	if (!end)
+		errx(-1, "no null");
+	return _vscanf(src, end, fmt, ap);
 }
 
 int
@@ -1950,6 +2121,17 @@ void
 srandom(uint seed)
 {
 	_seed2 = seed;
+}
+
+int
+sscanf(const char *src, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	int ret = vsscanf(src, fmt, ap);
+	va_end(ap);
+
+	return ret;
 }
 
 ulong

@@ -520,14 +520,15 @@ int feof(FILE *);
 int ferror(FILE *);
 int fileno(FILE *);
 int fflush(FILE *);
-//char *fgets(char *, int size, FILE *); /*REDIS*/
+int fgetc(FILE *);
+char *fgets(char *, int, FILE *);
 FILE *fopen(const char *, const char *);
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));
 int fsync(int);
 //int fputs(const char *, FILE *); /*REDIS*/
 size_t fread(void *, size_t, size_t, FILE *);
-//off_t ftello(FILE *); /*REDIS*/
+off_t ftello(FILE *);
 size_t fwrite(const void *, size_t, size_t, FILE *);
 //char *getcwd(char *, size_t); /*REDIS*/
 int getopt(int, char * const *, const char *);
@@ -579,8 +580,8 @@ int sprintf(char *, const char *,...)
     __attribute__((format(printf, 2, 3)));
 void srand(uint);
 void srandom(uint);
-//int sscanf(const char *, const char *, ...) /*REDIS*/
-//    __attribute__((format(scanf, 2, 3))); /*REDIS*/
+int sscanf(const char *, const char *, ...)
+    __attribute__((format(scanf, 2, 3)));
 int strcasecmp(const char *, const char *);
 int strncasecmp(const char *, const char *, size_t);
 char *strchr(const char *, int);
@@ -625,12 +626,15 @@ int tolower(int);
 int toupper(int);
 double trunc(double);
 int uname(struct utsname *);
+int ungetc(int, FILE *);
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));
 int vprintf(const char *, va_list)
     __attribute__((format(printf, 1, 0)));
 int vsnprintf(char *, size_t, const char *, va_list)
     __attribute__((format(printf, 3, 0)));
+int vsscanf(const char *, const char *, va_list)
+    __attribute__((format(scanf, 2, 0)));
 //void qsort(void *, size_t, size_t, int (*)(const void *, const void *)); /*REDIS*/
 
 void *malloc(size_t);

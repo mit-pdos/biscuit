@@ -2562,7 +2562,7 @@ void stdiotest(void)
 	char * const pend = p + sizeof(gotfile);
 	while (p < pend) {
 		if (feof(f))
-			errx(-1, "FAPPED: %ld", p - &gotfile[0]);
+			errx(-1, "early eof: %ld", p - &gotfile[0]);
 		if (ferror(f))
 			errx(-1, "ferror: %d", ferror(f));
 		size_t l = MIN(ch, pend - p);
@@ -2575,6 +2575,22 @@ void stdiotest(void)
 
 	if (strncmp(gotfile, _expfile, sizeof(_expfile)) != 0)
 		errx(-1, "byte mismatch");
+
+	// test ungetc
+	if (!(f = fopen("/hi.txt", "r")))
+		err(-1, "fopen");
+	char buf1[64];
+	char buf2[64];
+	if ((r = fread(buf1, 1, sizeof(buf1), f)) < 1)
+		err(-1, "fread");
+	for (i = 0; i < r; i++)
+		if (ungetc(buf1[i], f) != buf1[i])
+			errx(-1, "ungetc");
+	if ((r = fread(buf2, 1, sizeof(buf2), f)) < 1)
+		err(-1, "fread");
+	for (i = 0; i < r; i++)
+		if (buf1[i] != buf2[r-1-i])
+			errx(-1, "ungetc mismatch");
 
 	printf("stdio test ok\n");
 }
