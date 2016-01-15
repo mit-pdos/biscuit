@@ -562,6 +562,7 @@ int printf(const char *, ...)
     __attribute__((format(printf, 1, 2)));
 double pow(double, double);
 void perror(const char *);
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 int rand(void);
 int rand_r(uint *);
 #define		RAND_MAX	0x7fffffff

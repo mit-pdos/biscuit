@@ -2089,6 +2089,72 @@ perror(const char *str)
 		fprintf(stderr, "%s\n", e);
 }
 
+static void _qsort(void *_base, size_t elms, size_t esz,
+    int (*cmp)(const void *, const void *), char *scratch, char *pivot)
+{
+	if (elms <= 1)
+		return;
+	char *base = _base;
+	if (elms == 2) {
+		if (cmp(base, base+esz) > 0) {
+			memmove(pivot, base, esz);
+			memmove(base, base+esz, esz);
+			memmove(pivot, base+esz, esz);
+		}
+		return;
+	}
+	// the first element is the pivot
+	memmove(pivot, base, esz);
+	// sort to scratch
+	char *lh, *hh;
+	size_t l, h;
+	l = h = 0;
+	lh = scratch;
+	hh = (char *)scratch + (elms - 1)*esz;
+	size_t i;
+	char *cur = (char *)base + esz;
+	for (i = 1; i < elms; i++, cur += esz) {
+		int c = cmp(cur, pivot);
+		if (c < 0) {
+			memmove(lh, cur, esz);
+			lh += esz;
+			l++;
+		} else {
+			memmove(hh, cur, esz);
+			hh -= esz;
+			h++;
+		}
+	}
+	//copy scratch back to base
+	void *plow = base;
+	memmove(plow, scratch, l*esz);
+
+	void *piv = base + l*esz;
+	memmove(piv, pivot, esz);
+
+	void *phigh = piv + esz;
+	size_t tail = elms - h;
+	memmove(phigh, scratch + tail*esz, h*esz);
+
+	_qsort(plow,  l, esz, cmp, scratch, pivot);
+	_qsort(phigh, h, esz, cmp, scratch, pivot);
+}
+
+void
+qsort(void *base, size_t elms, size_t esz,
+    int (*cmp)(const void *, const void *))
+{
+	if (elms < 0)
+		return;
+	// +1 for pivot
+	char *scratch = calloc(elms + 1, esz);
+	if (scratch == NULL)
+		errx(-1, "qsort calloc");
+	char *pivot = (char *)scratch + elms*esz;
+	_qsort(base, elms, esz, cmp, scratch, pivot);
+	free(scratch);
+}
+
 uint _seed1;
 
 int
@@ -2104,13 +2170,15 @@ rand_r(uint *seed)
 	return *seed & RAND_MAX;
 }
 
-void srand(uint seed)
+void
+srand(uint seed)
 {
 	_seed1 = seed;
 }
 
 uint _seed2;
 
+// POSIX requires that random(3)'s range is [0, 2**31)
 long
 random(void)
 {
