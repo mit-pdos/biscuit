@@ -1560,8 +1560,7 @@ ftruncate(int fd, off_t newlen)
 int
 fsync(int fd)
 {
-	// biscuit's FS does not return until all modifications are durably
-	// stored on disk.
+	sync();
 	return 0;
 }
 
@@ -2670,7 +2669,7 @@ static struct utsname _unamed = {
 int
 uname(struct utsname *name)
 {
-	memcpy(name, &_unamed, sizeof(struct utsname));
+	memmove(name, &_unamed, sizeof(struct utsname));
 	return 0;
 }
 
