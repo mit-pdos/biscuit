@@ -12,6 +12,7 @@
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
 #define SYS_SIGACTION    13
+#define SYS_ACCESS       21
 #define SYS_DUP2         33
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
@@ -117,6 +118,14 @@ accept(int fd, struct sockaddr *s, socklen_t *sl)
 }
 
 int
+access(const char *p, int mode)
+{
+	int ret = syscall(SA(p), SA(mode), 0, 0, 0, SYS_ACCESS);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
+int
 bind(int sockfd, const struct sockaddr *s, socklen_t sl)
 {
 	int ret = syscall(SA(sockfd), SA(s), SA(sl), 0, 0, SYS_BIND);
@@ -174,6 +183,14 @@ _exit(int status)
 int
 execv(const char *path, char * const argv[])
 {
+	return execve(path, argv, environ);
+}
+
+int
+execve(const char *path, char * const argv[], char * const envp[])
+{
+	if (envp != environ)
+		errx(-1, "envp not supported yet");
 	int ret = syscall(SA(path), SA(argv), 0, 0, 0, SYS_EXECV);
 	errno = -ret;
 	return -1;
@@ -1081,6 +1098,22 @@ ceil(double x)
 	if (x == trunc(x))
 		return x;
 	return trunc(x + 1);
+}
+
+char *
+ctime(const time_t *t)
+{
+	static char cbuf[64];
+	return ctime_r(t, cbuf);
+}
+
+char *
+ctime_r(const time_t *t, char *buf)
+{
+	printf("warning: ctime_r not implemented\n");
+	char *msg = "i do not wish to write this code";
+	memmove(buf, msg, strlen(msg) + 1);
+	return buf;
 }
 
 void
@@ -2243,6 +2276,14 @@ readline(const char *prompt)
 	return readlineb;
 }
 
+int
+setenv(const char *k, const char *v, int overwrite)
+{
+	printf("setenv: no environment yet\n");
+	errno = ENOSYS;
+	return -1;
+}
+
 static inline int _fdisset(int fd, fd_set *fds)
 {
 	if (fds)
@@ -2396,6 +2437,19 @@ strchr(const char *big, int l)
 	if (l == '\0')
 		return (char *)big;
 	return NULL;
+}
+
+char *
+strdup(char *orig)
+{
+	size_t l = strlen(orig) + 1;
+	char *ret = malloc(l);
+	if (!l) {
+		errno = ENOMEM;
+		return NULL;
+	}
+	memmove(ret, orig, l);
+	return ret;
 }
 
 static const char * const _errstr[] = {

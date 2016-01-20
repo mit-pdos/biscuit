@@ -193,10 +193,10 @@ struct timespec {
 int accept(int, struct sockaddr *, socklen_t*);
 // access(2) cannot be a wrapper around stat(2) because access(2) uses real-id
 // instead of effective-id
-//int access(const char *, int); /*REDIS*/
-#define		R_OK	1
-#define		W_OK	2
-#define		X_OK	3
+int access(const char *, int);
+#define		R_OK	(1 << 0)
+#define		W_OK	(1 << 1)
+#define		X_OK	(1 << 2)
 int bind(int, const struct sockaddr *, socklen_t);
 int connect(int, const struct sockaddr *, socklen_t);
 int chmod(const char *, mode_t);
@@ -206,7 +206,7 @@ int dup2(int, int);
 void _exit(int)
     __attribute__((noreturn));
 int execv(const char *, char * const[]);
-//int execve(const char *, char * const[], char * const[]); /*REDIS*/
+int execve(const char *, char * const[], char * const[]);
 int execvp(const char *, char * const[]);
 long fake_sys(long);
 long fake_sys2(long);
@@ -506,7 +506,8 @@ struct utsname {
 void abort(void);
 int atoi(const char *);
 double ceil(double);
-//char *ctime_r(const time_t *, char *); /*REDIS*/
+char *ctime(const time_t *);
+char *ctime_r(const time_t *, char *);
 void err(int, const char *, ...)
     __attribute__((format(printf, 2, 3)))
     __attribute__((__noreturn__));
@@ -571,7 +572,7 @@ ulong rdtsc(void);
 char *readline(const char *);
 //int scanf(const char *, ...) /*REDIS*/
 //    __attribute__((format(scanf, 1, 2))); /*REDIS*/
-int setenv(const char *, const char *, int );
+int setenv(const char *, const char *, int);
 char *setlocale(int, const char *);
 #define		LC_COLLATE	1
 uint sleep(uint);
@@ -586,7 +587,7 @@ int sscanf(const char *, const char *, ...)
 int strcasecmp(const char *, const char *);
 int strncasecmp(const char *, const char *, size_t);
 char *strchr(const char *, int);
-//char *strdup(char *); /*REDIS*/
+char *strdup(char *);
 char *strerror(int);
 #define		NL_TEXTMAX	64
 int strerror_r(int, char *, size_t);

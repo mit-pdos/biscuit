@@ -111,6 +111,7 @@ const(
     PROT_EXEC     = 0x4
   SYS_MUNMAP   = 11
   SYS_SIGACT   = 13
+  SYS_ACCESS   = 21
   SYS_DUP2     = 33
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
@@ -242,6 +243,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_munmap(p, a1, a2)
 	case SYS_SIGACT:
 		ret = sys_sigaction(p, a1, a2, a3)
+	case SYS_ACCESS:
+		ret = sys_access(p, a1, a2)
 	case SYS_DUP2:
 		ret = sys_dup2(p, a1, a2)
 	case SYS_PAUSE:
@@ -538,6 +541,38 @@ func sys_sigaction(proc *proc_t, sig, actn, oactn int) int {
 	panic("no imp")
 }
 
+func sys_access(proc *proc_t, pathn, mode int) int {
+	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
+	if !ok {
+		return -EFAULT
+	}
+	if toolong {
+		return -ENAMETOOLONG
+	}
+	if mode == 0 {
+		return -EINVAL
+	}
+
+	n := proc.atime.now()
+	pi := proc.cwd.fops.pathi()
+	fsf, err := _fs_open(path, O_RDONLY, 0, pi, 0, 0)
+	proc.atime.io_time(n)
+	if err != 0 {
+		return err
+	}
+
+	// XXX no permissions yet
+	//R_OK := 1 << 0
+	//W_OK := 1 << 1
+	//X_OK := 1 << 2
+	ret := 0
+
+	if fs_close(fsf.priv) != 0 {
+		panic("must succeed")
+	}
+	return ret
+}
+
 func copyfd(fd *fd_t) (*fd_t, int) {
 	nfd := &fd_t{}
 	*nfd = *fd
@@ -657,7 +692,8 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 	// priority internally, mask away any POLL bits the user didn't not
 	// request.
 	ppoke := func(orig, bits int) int {
-		origevents := ((orig >> 32) & 0xffff) | POLLNVAL | POLLERR | POLLHUP
+		origevents := ((orig >> 32) & 0xffff) | POLLNVAL | POLLERR |
+		    POLLHUP
 		return orig & 0x0000ffffffffffff | ((origevents & bits) << 48)
 	}
 

@@ -2710,6 +2710,35 @@ void trunctest(void)
 	printf("trunc test ok\n");
 }
 
+void accesstest(void)
+{
+	// XXX write better test once we actually have permissions
+	printf("access test\n");
+
+	if (access("/", R_OK | X_OK | W_OK))
+	       err(-1, "access");
+	if (access("/tmp", R_OK | X_OK | W_OK))
+	       err(-1, "access");
+	if (access("//bin", R_OK | X_OK | W_OK))
+	       err(-1, "access");
+	if (access("//bin/cat", R_OK | X_OK))
+		err(-1, "access");
+
+	if (access("//does/not/exist/ever", R_OK | X_OK) == 0)
+		errx(-1, "access for bad file");
+
+	char *f = "/tmp/accfile";
+	int fd;
+	if ((fd = open(f, O_CREAT | O_WRONLY)) < 0)
+		err(-1, "creat");
+	close(fd);
+
+	if (access(f, R_OK | X_OK | W_OK))
+	       err(-1, "access");
+
+	printf("access test OK\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2777,6 +2806,7 @@ main(int argc, char *argv[])
 
   polltest();
   runsockettest();
+  accesstest();
 
   exectest();
 
