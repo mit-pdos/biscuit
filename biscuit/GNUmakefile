@@ -84,12 +84,17 @@ net.img: boot main.gobin $(SKELDEPS) $(FSPROGS) mkbdisk.py
 	$(PYTHON) mkbdisk.py -n boot main.gobin $@ $(SKEL) || \
 	    { rm -f $@; false; }
 
+BHW := bhw.pdos.csail.mit.edu
+
 net: net.img
 	@echo; echo waiting for client copy...
 	@sha1sum net.img
-	nc -l -p 31337 -q2 < $^
+	until nc $(BHW) 31337 -q1 < $^; do \
+		echo timed out. trying again...; \
+		sleep 1; \
+	done
 	@sha1sum net.img
-	@echo; echo copied Biscuit image; echo
+	@echo; echo copied Biscuit image to $(BHW) ; echo
 
 $(GOBIN):
 	@echo; echo; echo; \
