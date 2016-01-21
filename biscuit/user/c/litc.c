@@ -2167,7 +2167,7 @@ static void _qsort(void *_base, size_t elms, size_t esz,
 		if (cmp(base, base+esz) > 0) {
 			memmove(pivot, base, esz);
 			memmove(base, base+esz, esz);
-			memmove(pivot, base+esz, esz);
+			memmove(base+esz, pivot, esz);
 		}
 		return;
 	}
