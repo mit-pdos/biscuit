@@ -2613,14 +2613,17 @@ strtol(const char *n, char **endptr, int base)
 		n++;
 	}
 
+	int haspre = strcmp(n, "0x") == 0;
 	int (*matcher)(int);
-	if ((base == 0 || base == 16) && strncmp(n, "0x", 2) == 0) {
+	if (base == 16 || (base == 0 && haspre)) {
 		base = 16;
-		n += 2;
+		if (haspre)
+			n += 2;
 		matcher = isxdigit;
-	} else if (base == 0 && *n == '0') {
+	} else if (base == 8 || (base == 0 && *n == '0')) {
 		base = 8;
-		n++;
+		if (*n == '0')
+			n++;
 		matcher = _isoct;
 	} else if (base == 0 || base == 10) {
 		base = 10;
