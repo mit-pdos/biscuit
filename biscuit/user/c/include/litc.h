@@ -381,10 +381,10 @@ int pthread_barrier_destroy(pthread_barrier_t *);
 int pthread_barrier_wait(pthread_barrier_t *);
 #define		PTHREAD_BARRIER_SERIAL_THREAD	1
 
-//int pthread_cond_destroy(pthread_cond_t *); /*REDIS*/
-//int pthread_cond_init(pthread_cond_t *, const pthread_condattr_t *); /*REDIS*/
-//int pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *); /*REDIS*/
-//int pthread_cond_signal(pthread_cond_t *); /*REDIS*/
+int pthread_cond_destroy(pthread_cond_t *);
+int pthread_cond_init(pthread_cond_t *, const pthread_condattr_t *);
+int pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *);
+int pthread_cond_signal(pthread_cond_t *);
 
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
@@ -398,11 +398,11 @@ int pthread_cancel(pthread_t);
 
 int pthread_sigmask(int, const sigset_t *, sigset_t *);
 
-//int pthread_setcancelstate(int, int *); /*REDIS*/
+int pthread_setcancelstate(int, int *);
 #define		PTHREAD_CANCEL_ENABLE		1
 #define		PTHREAD_CANCEL_DISABLE		2
 
-//int pthread_setcanceltype(int, int *); /*REDIS*/
+int pthread_setcanceltype(int, int *);
 #define		PTHREAD_CANCEL_DEFERRED		1
 #define		PTHREAD_CANCEL_ASYNCHRONOUS	2
 

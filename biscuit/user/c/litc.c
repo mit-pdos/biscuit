@@ -961,10 +961,46 @@ pthread_barrier_wait(pthread_barrier_t *b)
 }
 
 int
+pthread_cond_destroy(pthread_cond_t *c)
+{
+	errx(-1, "no imp");
+}
+
+int
+pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *ca)
+{
+	errx(-1, "no imp");
+}
+
+int
+pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
+{
+	errx(-1, "no imp");
+}
+
+int
+pthread_cond_signal(pthread_cond_t *c)
+{
+	errx(-1, "no imp");
+}
+
+int
 pthread_sigmask(int how, const sigset_t *set, sigset_t *oset)
 {
 	printf("warning: signals not implemented\n");
 	return 0;
+}
+
+int
+pthread_setcancelstate(int state, int *oldstate)
+{
+	errx(-1, "no imp");
+}
+
+int
+pthread_setcanceltype(int type, int *oldtype)
+{
+	errx(-1, "no imp");
 }
 
 int
