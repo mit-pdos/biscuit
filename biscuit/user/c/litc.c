@@ -2880,15 +2880,13 @@ realloc(void *vold, size_t nsz)
 
 	void *ret = old;
 	struct header_t *ch = _findseg(old, NULL);
-	if (nsz < ch->maxsz)
-		goto out;
 	// we don't know the exact size of the object, but its size is bounded
 	// as follows
 	size_t oldsz = MIN(ch->maxsz, ch->end - old);
 	ret = _malloc(nsz);
 	if (ret == NULL)
 		goto out;
-	memcpy(ret, old, oldsz);
+	memmove(ret, old, MIN(oldsz, nsz));
 	_free(old);
 out:
 	release();
