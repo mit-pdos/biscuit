@@ -2478,7 +2478,7 @@ strchr(const char *big, int l)
 }
 
 char *
-strdup(char *orig)
+strdup(const char *orig)
 {
 	size_t l = strlen(orig) + 1;
 	char *ret = malloc(l);
@@ -2767,6 +2767,13 @@ uname(struct utsname *name)
 {
 	memmove(name, &_unamed, sizeof(struct utsname));
 	return 0;
+}
+
+int usleep(uint us)
+{
+	long ns = (us % 1000000)*1000;
+	struct timespec t = {us/1000000, ns};
+	return nanosleep(&t, NULL);
 }
 
 int

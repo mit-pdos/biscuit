@@ -587,7 +587,7 @@ int sscanf(const char *, const char *, ...)
 int strcasecmp(const char *, const char *);
 int strncasecmp(const char *, const char *, size_t);
 char *strchr(const char *, int);
-char *strdup(char *);
+char *strdup(const char *);
 char *strerror(int);
 #define		NL_TEXTMAX	64
 int strerror_r(int, char *, size_t);
@@ -629,6 +629,7 @@ int toupper(int);
 double trunc(double);
 int uname(struct utsname *);
 int ungetc(int, FILE *);
+int usleep(uint);
 int vfprintf(FILE *, const char *, va_list)
     __attribute__((format(printf, 2, 0)));
 int vprintf(const char *, va_list)
