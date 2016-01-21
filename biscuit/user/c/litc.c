@@ -2363,7 +2363,9 @@ select(int maxfd, fd_set *rfds, fd_set *wfds, fd_set *efds,
 char *
 setlocale(int cat, const char *loc)
 {
-	if (strcmp(loc, "C") == 0 || strcmp(loc, "POSIX") == 0)
+	// null loc to fetch current locale
+	if (!loc || strcmp(loc, "") == 0 || strcmp(loc, "C") == 0 ||
+	    strcmp(loc, "POSIX") == 0)
 		return "C";
 	errx(-1, "no fancy locale support");
 }
@@ -2548,7 +2550,8 @@ syslog(int priority, const char *msg, ...)
 	const char *pref = _slogopts.prefix ? _slogopts.prefix : "";
 	char lbuf[1024];
 	if (_slogopts.pid)
-		snprintf(lbuf, sizeof(lbuf), "syslog (pid %d): %s: %s", getpid(), pref, msg);
+		snprintf(lbuf, sizeof(lbuf), "syslog (pid %d): %s: %s",
+		    getpid(), pref, msg);
 	else
 		snprintf(lbuf, sizeof(lbuf), "syslog: %s: %s", pref, msg);
 	vfprintf(stderr, lbuf, ap);
