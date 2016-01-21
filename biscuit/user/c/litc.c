@@ -2584,7 +2584,7 @@ syslog(int priority, const char *msg, ...)
 	va_start(ap, msg);
 
 	const char *pref = _slogopts.prefix ? _slogopts.prefix : "";
-	char lbuf[1024];
+	char lbuf[2048];
 	if (_slogopts.pid)
 		snprintf(lbuf, sizeof(lbuf), "syslog (pid %d): %s: %s",
 		    getpid(), pref, msg);
@@ -2742,7 +2742,7 @@ trunc(double x)
 int
 vprintf(const char *fmt, va_list ap)
 {
-	char lbuf[1024];
+	char lbuf[2048];
 
 	if (strlen(fmt) >= sizeof(lbuf))
 		printf("warning: fmt too long\n");
@@ -2779,7 +2779,7 @@ int usleep(uint us)
 int
 vfprintf(FILE *f, const char *fmt, va_list ap)
 {
-	char lbuf[1024];
+	char lbuf[2048];
 
 	if (strlen(fmt) >= sizeof(lbuf))
 		printf("warning: fmt too long\n");
