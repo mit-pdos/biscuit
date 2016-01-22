@@ -212,6 +212,17 @@ void stream()
 	if (c < 0)
 		err(-1, "accept");
 
+	// make sure non-blocking accept fails at this point
+	int fl;
+	if ((fl = fcntl(s, F_GETFL)) == -1)
+		err(-1, "fcntlg");
+	if (fcntl(s, F_SETFL, fl | O_NONBLOCK) == -1)
+		err(-1, "fcntls");
+	if (accept(s, NULL, NULL) != -1 || errno != EWOULDBLOCK)
+		errx(-1, "expected EWOULDBLOCK");
+	if (fcntl(s, F_SETFL, fl) == -1)
+		err(-1, "fcntls");
+
 	if ((r = read(c, buf, sizeof(buf) - 1)) < 0)
 		err(-1, "read");
 	buf[r] = 0;
@@ -232,7 +243,7 @@ void stream()
 
 	// child closed connection; writes should fail, should get EOF
 	if ((r = read(c, buf, sizeof(buf))) != 0)
-		errx(-1, "expected failiure1 %ld", r);
+		errx(-1, "expected failure1 %ld %d", r, errno);
 	if (write(c, buf, 10) != -1 || errno != ECONNRESET)
 		errx(-1, "expected failure2");
 

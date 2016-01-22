@@ -2512,6 +2512,7 @@ type susld_t struct {
 	// new connections
 	push		chan chan *pipe_t
 	pop		chan chan *pipe_t
+	popnoblk	chan chan *pipe_t
 
 	// poll
 	poll_in		chan pollmsg_t
@@ -2524,12 +2525,14 @@ func susld_start(mysid, backlog int) *susld_t {
 	openc := make(chan int)
 	push := make(chan chan *pipe_t)
 	_pop := make(chan chan *pipe_t)
+	popnoblk := make(chan chan *pipe_t)
 	poll_in := make(chan pollmsg_t)
 	poll_out := make(chan ready_t)
 	ret.admit = admit
 	ret.openc = openc
 	ret.push = push
 	ret.pop = _pop
+	ret.popnoblk = popnoblk
 	ret.poll_in = poll_in
 	ret.poll_out = poll_out
 
@@ -2537,6 +2540,13 @@ func susld_start(mysid, backlog int) *susld_t {
 		// circular buffer
 		_conns := make([]chan *pipe_t, 0, backlog)
 		conns := _conns
+
+		qpop := func() {
+			conns = conns[1:]
+			if len(conns) == 0 {
+				conns = _conns
+			}
+		}
 
 		admits := 0
 		opencnt := 2
@@ -2561,9 +2571,10 @@ func susld_start(mysid, backlog int) *susld_t {
 				}
 				conns = append(conns, e)
 			case pop <- first:
-				conns = conns[1:]
-				if len(conns) == 0 {
-					conns = _conns
+				qpop()
+			case popnoblk <- first:
+				if len(conns) != 0 {
+					qpop()
 				}
 			case pm := <- poll_in:
 				ev := pm.events
@@ -2690,9 +2701,16 @@ func (sul *suslfops_t) accept(proc *proc_t,
 	if !sul._admit() {
 		return nil, 0, -EBADF
 	}
-	newconn := <- sul.susld.pop
+	noblk := sul.options & O_NONBLOCK != 0
+	popc := sul.susld.pop
+	ferr := -EBADF
+	if noblk {
+		popc = sul.susld.popnoblk
+		ferr = -EWOULDBLOCK
+	}
+	newconn := <- popc
 	if newconn == nil {
-		return nil, 0, -EBADF
+		return nil, 0, ferr
 	}
 	pipea := &pipe_t{}
 	pipeb := &pipe_t{}

@@ -2428,11 +2428,11 @@ void fnonblock(void)
 	if (pipe2(p, 0))
 		err(-1, "pipe");
 	int flags;
-	if ((flags = fcntl(p[0], F_GETFL)) == - 1)
+	if ((flags = fcntl(p[0], F_GETFL)) == -1)
 		err(-1, "fcntlg");
 	if (fcntl(p[0], F_SETFL, flags | O_NONBLOCK) == -1)
 		err(-1, "fcntls");
-	if ((flags = fcntl(p[1], F_GETFL)) == - 1)
+	if ((flags = fcntl(p[1], F_GETFL)) == -1)
 		err(-1, "fcntlg");
 	if (fcntl(p[1], F_SETFL, flags | O_NONBLOCK) == -1)
 		err(-1, "fcntls");
