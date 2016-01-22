@@ -2571,8 +2571,10 @@ func susld_start(mysid, backlog int) *susld_t {
 				if ev & R_READ != 0 {
 					var st ready_t
 					if pop == nil {
-						pollers.addpoller(&pm)
 						st = 0
+						if pm.dowait {
+							pollers.addpoller(&pm)
+						}
 					} else {
 						st = R_READ
 					}
