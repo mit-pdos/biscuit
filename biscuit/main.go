@@ -2101,6 +2101,10 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 		return
 	}
 	othercpus := numcpus - 1
+	// XXX XXX XXX go code that is protected by spinlocks may deadlock. if
+	// two Ps race on the spinlock, and the P that wins GCs before
+	// releasing, the P that failed to acquire will spin forever,
+	// preventing the GC from making progress.
 	mygen := runtime.Tlbadmit(p_pmap, othercpus, va, pgcount)
 
 	lapaddr := 0xfee00000
@@ -2428,21 +2432,15 @@ func findbm() {
 	}
 }
 
-func ide_test() {
-	req := idereq_new(0, false, nil)
+func nvcount() int {
+	var data [512]uint8
+	req := idereq_new(0, false, &data)
 	ide_request <- req
 	<- req.ack
-	fmt.Printf("read of block %v finished!\n", req.buf.block)
-	for _, c := range req.buf.data {
-		fmt.Printf("%x ", c)
-	}
-	fmt.Printf("\n")
-	fmt.Printf("will overwrite block %v now...\n", req.buf.block)
+	ret := req.buf.data[505]
+	req.buf.data[505] = ret + 1
 	req.write = true
-	for i := range req.buf.data {
-		req.buf.data[i] = 0xcc
-	}
 	ide_request <- req
 	<- req.ack
-	fmt.Printf("done!\n")
+	return int(ret)
 }

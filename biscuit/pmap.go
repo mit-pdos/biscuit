@@ -84,7 +84,6 @@ func (vs *vmseg_t) gettrack(va int) (*[512]int, bool) {
 	return ret, true
 }
 
-
 type vmregion_t struct {
 	head	*vmseg_t
 }
