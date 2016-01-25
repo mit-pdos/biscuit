@@ -3055,7 +3055,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	numstkpages := 2
 	// +1 for the guard page
 	stksz := (numstkpages + 1) * PGSIZE
-	stackva := proc.unusedva_inner(0, stksz)
+	stackva := proc.unusedva_inner(0x0ff << 39, stksz)
 	seg := proc.mkvmseg(stackva, stksz)
 	stackva += stksz
 	for i := 0; i < numstkpages; i++ {
