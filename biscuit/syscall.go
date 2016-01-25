@@ -3052,7 +3052,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	freshtls, t0tls, tlssz := elfhdr.elf_load(proc, file)
 
 	// map new stack
-	numstkpages := 2
+	numstkpages := 6
 	// +1 for the guard page
 	stksz := (numstkpages + 1) * PGSIZE
 	stackva := proc.unusedva_inner(0x0ff << 39, stksz)
