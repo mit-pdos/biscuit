@@ -1257,6 +1257,8 @@ static void fdinit(void)
 	f.lnext = _allfiles.head;			\
 	f.lprev = NULL;					\
 	f.btype = bt;					\
+	if (pthread_mutex_init(&f.mut, NULL))		\
+		pmsg("mutex init", 9);			\
 	if (_allfiles.head)				\
 		_allfiles.head->lprev = &f;		\
 	_allfiles.head = &f;				\
