@@ -185,6 +185,9 @@ const(
   SYS_FAKE2    = 31339
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
+  SYS_FUTEX    = 31342
+    FUTEX_SLEEP  = 1
+    FUTEX_WAKE   = 2
 )
 
 const(
@@ -325,6 +328,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_pread(p, a1, a2, a3, a4)
 	case SYS_PWRITE:
 		ret = sys_pwrite(p, a1, a2, a3, a4)
+	case SYS_FUTEX:
+		ret = sys_futex(p, a1, a2, a3, a4)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 		sys_exit(p, tid, SIGNALED | mkexitsig(31))
@@ -3260,6 +3265,115 @@ func sys_pwrite(proc *proc_t, fdn, bufn, lenn, offset int) int {
 		return err
 	}
 	return ret
+}
+
+type futex_t struct {
+	reopen	chan int
+	cmd	chan futexmsg_t
+}
+
+type futexmsg_t struct {
+	op	int
+	aux	uint32
+	relva	*uint32
+	ack	chan int
+}
+
+type allfutex_t struct {
+	sync.Mutex
+	m	map[uintptr]futex_t
+}
+
+func (f futex_t) futex_start() {
+	acks := make(map[uint32]chan int, 10)
+	acksleep := func(aux uint32, c chan int) {
+		if _, ok := acks[aux]; ok {
+			panic("sleeper exists")
+		}
+		acks[aux] = c
+	}
+	ackwake := func(aux uint32) {
+		c, ok := acks[aux]
+		if !ok {
+			// sleeper may have observed unlock before sleeping,
+			// thus wakeup is already done
+			return
+		}
+		delete(acks, aux)
+		c <- 0
+	}
+	opencount := 1
+	for opencount > 0 {
+		select {
+		case d := <- f.reopen:
+			opencount += d
+		case fm := <- f.cmd:
+			switch fm.op {
+			case FUTEX_SLEEP:
+				val := atomic.LoadUint32(fm.relva)
+				if val == fm.aux {
+					// owner just unlocked and it's this
+					// thread's turn; don't sleep
+					fm.ack <- 0
+				} else {
+					acksleep(fm.aux, fm.ack)
+				}
+			case FUTEX_WAKE:
+				ackwake(fm.aux)
+				fm.ack <- 0
+			default:
+				panic("bad futex op")
+			}
+		}
+	}
+}
+
+var _allfutex = allfutex_t{m: map[uintptr]futex_t{}}
+
+func futex_ensure(uniq uintptr) futex_t {
+	_allfutex.Lock()
+	r, ok := _allfutex.m[uniq]
+	if !ok {
+		r.reopen = make(chan int)
+		r.cmd = make(chan futexmsg_t)
+		_allfutex.m[uniq] = r
+		go r.futex_start()
+	}
+	_allfutex.Unlock()
+	return r
+}
+
+func sys_futex(proc *proc_t, op, futn, aux, timespecn int) int {
+	seg, _, ok := proc.vmregion.contain(futn)
+	if !ok {
+		return -EFAULT
+	}
+	pgva, ok := seg.gettrack(futn)
+	if !ok {
+		return -EFAULT
+	}
+	pgoff := uintptr(futn) & uintptr(PGOFFSET)
+	uniq := uintptr(unsafe.Pointer(pgva)) + pgoff
+	kva := (*uint32)(unsafe.Pointer(uniq))
+
+	fut := futex_ensure(uniq)
+
+	var fm futexmsg_t
+	fm.op = op
+	fm.aux = uint32(aux)
+	fm.relva = kva
+	// XXX could lazily allocate one futex channel per thread
+	fm.ack = make(chan int)
+	switch op {
+	case FUTEX_SLEEP:
+	case FUTEX_WAKE:
+	default:
+		return -EINVAL
+	}
+
+	fut.cmd <- fm
+	<- fm.ack
+	return 0
 }
 
 func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {

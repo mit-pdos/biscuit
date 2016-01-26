@@ -213,6 +213,10 @@ long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
 int ftruncate(int, off_t);
+int futex(const int, void *, int, struct timespec *);
+#define		FUTEX_SLEEP	1
+#define		FUTEX_WAKE	2
+
 char *getcwd(char *, size_t);
 int getpid(void);
 int getrlimit(int, struct rlimit *);

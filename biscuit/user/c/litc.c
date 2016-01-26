@@ -52,6 +52,7 @@
 #define SYS_FAKE2        31339
 #define SYS_PREAD        31340
 #define SYS_PWRITE       31341
+#define SYS_FUTEX        31342
 
 __thread int errno;
 
@@ -1624,6 +1625,14 @@ int
 ftruncate(int fd, off_t newlen)
 {
 	int ret = syscall(SA(fd), SA(newlen), 0, 0, 0, SYS_FTRUNC);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
+int
+futex(const int op, void *fut, int aux, struct timespec *ts)
+{
+	int ret = syscall(SA(op), SA(fut), SA(aux), SA(ts), 0, SYS_FUTEX);
 	ERRNO_NZ(ret);
 	return ret;
 }
