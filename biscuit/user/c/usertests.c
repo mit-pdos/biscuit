@@ -2739,6 +2739,51 @@ void accesstest(void)
 	printf("access test OK\n");
 }
 
+static const int ltimes = 1000000;
+static int lcounter;
+static volatile int go;
+
+static void *_locker(void *v)
+{
+	while (go != 1)
+		asm volatile("pause\n":::"memory");
+	pthread_mutex_t *m = (pthread_mutex_t *)v;
+	int i;
+	for (i = 0; i < ltimes; i++) {
+		if (pthread_mutex_lock(m))
+			err(-1, "m lock");
+		lcounter++;
+		if (pthread_mutex_unlock(m))
+			err(-1, "m unlock");
+	}
+	return NULL;
+}
+
+void futextest(void)
+{
+	printf("futex test\n");
+
+	pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+
+	const int nt = 4;
+	pthread_t t[nt];
+	int i;
+	for (i = 0; i < nt; i++)
+		if (pthread_create(&t[i], NULL, _locker, &m))
+			err(-1, "pthread_create");
+	go = 1;
+	for (i = 0; i < nt; i++)
+		if (pthread_join(t[i], NULL))
+			err(-1, "pthread_join");
+	int exp = nt * ltimes;
+	if (lcounter != exp)
+		errx(-1, "uh oh %d != %d", exp, lcounter);
+
+	// XXX conditional variables here
+
+	printf("futex test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -2807,6 +2852,7 @@ main(int argc, char *argv[])
   polltest();
   runsockettest();
   accesstest();
+  futextest();
 
   exectest();
 

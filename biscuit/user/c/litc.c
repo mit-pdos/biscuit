@@ -865,29 +865,42 @@ pthread_cancel(pthread_t t)
 }
 
 int
-pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)
+pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
 {
 	if (attr)
 		errx(-1, "mutex attributes not supported");
-	*mutex = 0;
+	m->locks = 0;
+	m->unlocks = 1;
 	return 0;
 }
 
 int
-pthread_mutex_lock(pthread_mutex_t *mutex)
+pthread_mutex_lock(pthread_mutex_t *m)
 {
-	while (!__sync_bool_compare_and_swap(mutex, 0, 1))
-		;
-	return 0;
+	uint ticket = __sync_add_and_fetch(&m->locks, 1);
+	// compiler barrier
+	asm volatile("":::"memory");
+	uint turn = m->unlocks;
+	if (ticket == turn)
+		return 0;
+	int ret;
+	ret = futex(FUTEX_SLEEP, &m->unlocks, ticket, NULL);
+	return ret;
 }
 
 int
-pthread_mutex_unlock(pthread_mutex_t *mutex)
+pthread_mutex_unlock(pthread_mutex_t *m)
 {
-	int b = __sync_bool_compare_and_swap(mutex, 1, 0);
-	if (!b)
-		errx(-1, "unlock of unlocked mutex");
-	return 0;
+	uint unlocks = __sync_add_and_fetch(&m->unlocks, 1);
+	// compiler barrier
+	asm volatile("":::"memory");
+	uint locks = m->locks;
+	// no waiters?
+	if (locks == unlocks - 1)
+		return 0;
+	int ret;
+	ret = futex(FUTEX_WAKE, &m->unlocks, unlocks, NULL);
+	return ret;
 }
 
 int

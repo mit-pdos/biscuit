@@ -358,11 +358,14 @@ typedef struct {
 typedef struct {
 } pthread_condattr_t;
 
-typedef int pthread_mutex_t;
+typedef struct {
+	uint locks;
+	uint unlocks;
+} pthread_mutex_t;
+#define		PTHREAD_MUTEX_INITIALIZER	{0, 1}
 
 typedef struct {
 } pthread_mutexattr_t;
-#define		PTHREAD_MUTEX_INITIALIZER	{0}
 
 typedef struct {
 } pthread_once_t;
