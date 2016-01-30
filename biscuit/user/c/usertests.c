@@ -2739,7 +2739,12 @@ void accesstest(void)
 	printf("access test OK\n");
 }
 
-static const int ltimes = 1000000;
+//static const int btimes = 10000;
+//static const int bctimes= 2500;
+//static const int ltimes = 1000000;
+static const int btimes = 100;
+static const int bctimes= 100;
+static const int ltimes = 100000;
 static int lcounter;
 static volatile int go;
 
@@ -2759,13 +2764,16 @@ static void *_locker(void *v)
 	return NULL;
 }
 
-void futextest(void)
-{
-	printf("futex test\n");
+struct conds_t {
+	pthread_mutex_t *m;
+	pthread_cond_t *yours;
+	pthread_cond_t *theirs;
+};
 
+void _mutextest(const int nt)
+{
 	pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
 
-	const int nt = 4;
 	pthread_t t[nt];
 	int i;
 	for (i = 0; i < nt; i++)
@@ -2779,7 +2787,172 @@ void futextest(void)
 	if (lcounter != exp)
 		errx(-1, "uh oh %d != %d", exp, lcounter);
 
-	// XXX conditional variables here
+	if (pthread_mutex_destroy(&m))
+		err(-1, "m destroy");
+}
+
+static void *_condsleep(void *v)
+{
+	struct conds_t *ca = (struct conds_t *)v;
+
+	pthread_mutex_t *m = ca->m;
+	pthread_cond_t *mine = ca->yours;
+	pthread_cond_t *theirs = ca->theirs;
+
+	if (pthread_mutex_lock(m))
+		err(-1, "lock");
+	go = 1;
+
+	int i;
+	for (i = 0; i < btimes; i++) {
+		lcounter++;
+		if (pthread_cond_signal(theirs))
+			err(-1, "cond sig");
+		if (pthread_cond_wait(mine, m))
+			err(-1, "cond wait");
+	}
+	if (pthread_cond_signal(theirs))
+		err(-1, "cond sig");
+
+	if (pthread_mutex_unlock(m))
+		err(-1, "unlock");
+	return NULL;
+}
+
+static void *_condsleepbc(void *v)
+{
+	struct conds_t *ca = (struct conds_t *)v;
+	pthread_mutex_t *m = ca->m;
+	pthread_cond_t *mine = ca->yours;
+
+	if (pthread_mutex_lock(m))
+		err(-1, "lock");
+
+	while (go) {
+		lcounter++;
+		if (pthread_cond_wait(mine, m))
+			err(-1, "cond wait");
+	}
+	if (pthread_mutex_unlock(m))
+		err(-1, "unlock");
+	return NULL;
+}
+
+static void _condtest(const int nt)
+{
+	if (nt < 0)
+		errx(-1, "bad nthreads");
+
+	lcounter = 0;
+
+	pthread_mutex_t m;
+	if (pthread_mutex_init(&m, NULL))
+		err(-1, "m init");
+	pthread_cond_t cs[nt];
+	int i;
+	for (i = 0; i < nt; i++)
+		if (pthread_cond_init(&cs[i], NULL))
+			err(-1, "c init");
+	pthread_t t[nt];
+	struct conds_t args[nt];
+	for (i = 0; i < nt; i++) {
+		args[i].m = &m;
+		args[i].yours = &cs[i];
+		const int nid = i + 1 == nt ? 0 : i + 1;
+		args[i].theirs = &cs[nid];
+		// make sure each thread goes to sleep before we create their
+		// neighbor to guarantee that the threads terminate in order.
+		go = 0;
+		if (pthread_create(&t[i], NULL, _condsleep, &args[i]))
+			err(-1, "pthread_ create");
+		while (go == 0)
+			asm volatile("pause\n":::"memory");
+	}
+
+	for (i = 0; i < nt; i++)
+		if (pthread_join(t[i], NULL))
+			err(-1, "pthread_join");
+
+	int exp = btimes*nt;
+	if (lcounter != exp)
+		errx(-1, "uh oh! %d != %d", lcounter, exp);
+
+	if (pthread_mutex_destroy(&m))
+		err(-1, "m destroy");
+	for (i = 0; i < nt; i++)
+		if (pthread_cond_destroy(&cs[i]))
+			err(-1, "cond destroy");
+}
+
+static void _condbctest(const int nt)
+{
+	if (nt < 0)
+		errx(-1, "bad nthreads");
+
+	lcounter = 0;
+	go = 1;
+
+	pthread_mutex_t m;
+	if (pthread_mutex_init(&m, NULL))
+		err(-1, "m init");
+	pthread_cond_t c;
+	if (pthread_cond_init(&c, NULL))
+		err(-1, "c init");
+
+	pthread_t t[nt];
+	struct conds_t args[nt];
+	int i;
+	for (i = 0; i < nt; i++) {
+		args[i].m = &m;
+		args[i].yours = &c;
+		if (pthread_create(&t[i], NULL, _condsleepbc, &args[i]))
+			err(-1, "pthread_ create");
+	}
+
+	srandom(time(NULL));
+
+	int enext = nt;
+	for (i = 0; i < bctimes; i++) {
+		volatile int *p = &lcounter;
+		while (*p < enext)
+			asm volatile("pause\n":::"memory");
+		if (pthread_mutex_lock(&m))
+			err(-1, "lock");
+		if (i == bctimes - 1)
+			go = 0;
+		if (rand() < RAND_MAX / 1000) {
+			struct timespec ts = {time(NULL) + 1, 0};
+			if (pthread_cond_timedwait(&c, &m, &ts))
+				err(-1, "timedwait");
+		}
+		if (pthread_cond_broadcast(&c))
+			err(-1, "broadcast");
+		if (pthread_mutex_unlock(&m))
+			err(-1, "unlock");
+		enext += nt;
+	}
+
+	for (i = 0; i < nt; i++)
+		if (pthread_join(t[i], NULL))
+			err(-1, "pthread_join");
+
+	if (pthread_mutex_destroy(&m))
+		err(-1, "m destroy");
+	if (pthread_cond_destroy(&c))
+		err(-1, "cond destroy");
+}
+
+void futextest(void)
+{
+	printf("futex test\n");
+
+	_mutextest(8);
+
+	printf("cond test\n");
+	_condtest(8);
+
+	printf("cond bc test\n");
+	_condbctest(8);
 
 	printf("futex test ok\n");
 }

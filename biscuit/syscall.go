@@ -186,8 +186,12 @@ const(
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
   SYS_FUTEX    = 31342
-    FUTEX_SLEEP  = 1
-    FUTEX_WAKE   = 2
+    FUTEX_SLEEP    = 1
+    FUTEX_WAKE     = 2
+    FUTEX_CNDGIVE  = 3
+    _FUTEX_LAST = FUTEX_CNDGIVE
+    // futex internal op
+    _FUTEX_CNDTAKE  = 4
 )
 
 const(
@@ -253,7 +257,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 	case SYS_PAUSE:
 		ret = sys_pause(p)
 	case SYS_GETPID:
-		ret = sys_getpid(p)
+		ret = sys_getpid(p, tid)
 	case SYS_SOCKET:
 		ret = sys_socket(p, a1, a2, a3)
 	case SYS_CONNECT:
@@ -329,7 +333,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 	case SYS_PWRITE:
 		ret = sys_pwrite(p, a1, a2, a3, a4)
 	case SYS_FUTEX:
-		ret = sys_futex(p, a1, a2, a3, a4)
+		ret = sys_futex(p, a1, a2, a3, a4, a5)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 		sys_exit(p, tid, SIGNALED | mkexitsig(31))
@@ -1476,17 +1480,10 @@ func sys_reboot(proc *proc_t) int {
 }
 
 func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
-	secs, ok1 := proc.userreadn(sleeptsn, 8)
-	nsecs, ok2 := proc.userreadn(sleeptsn + 8, 8)
-	if !ok1 || !ok2 {
-		return -EFAULT
+	tot, _, err := proc.usertimespec(sleeptsn)
+	if err != 0 {
+		return err
 	}
-	if secs < 0 || nsecs < 0 {
-		return -EINVAL
-	}
-	tot := time.Duration(secs) * time.Second
-	tot += time.Duration(nsecs) * time.Nanosecond
-
 	n := proc.atime.now()
 	<- time.After(tot)
 	proc.atime.sleep_time(n)
@@ -1494,7 +1491,7 @@ func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
 	return 0
 }
 
-func sys_getpid(proc *proc_t) int {
+func sys_getpid(proc *proc_t, tid tid_t) int {
 	return proc.pid
 }
 
@@ -3273,10 +3270,21 @@ type futex_t struct {
 }
 
 type futexmsg_t struct {
-	op	int
+	op	uint
 	aux	uint32
-	relva	*uint32
 	ack	chan int
+	othmut	futex_t
+	cndtake	[]chan int
+	totake	[]_futto_t
+	fumem	futumem_t
+	timeout	time.Time
+	useto	bool
+}
+
+func (fm *futexmsg_t) fmsg_init(op uint, aux uint32, ack chan int) {
+	fm.op = op
+	fm.aux = aux
+	fm.ack = ack
 }
 
 type allfutex_t struct {
@@ -3284,42 +3292,153 @@ type allfutex_t struct {
 	m	map[uintptr]futex_t
 }
 
+// futex timeout metadata
+type _futto_t struct {
+	when	time.Time
+	tochan	<-chan time.Time
+	who	chan int
+}
+
 func (f futex_t) futex_start() {
-	acks := make(map[uint32]chan int, 10)
-	acksleep := func(aux uint32, c chan int) {
-		if _, ok := acks[aux]; ok {
-			panic("sleeper exists")
-		}
-		acks[aux] = c
+	_cnds := make([]chan int, 0, 10)
+	cnds := _cnds
+	cndsleep := func(c chan int) {
+		cnds = append(cnds, c)
 	}
-	ackwake := func(aux uint32) {
-		c, ok := acks[aux]
-		if !ok {
-			// sleeper may have observed unlock before sleeping,
-			// thus wakeup is already done
+	cndwake := func(v int) {
+		if len(cnds) == 0 {
 			return
 		}
-		delete(acks, aux)
-		c <- 0
+		c := cnds[0]
+		cnds = cnds[1:]
+		if len(cnds) == 0 {
+			cnds = _cnds
+		}
+		c <- v
 	}
+	_tos := make([]_futto_t, 0, 10)
+	tos := _tos
+	toadd := func(who chan int, when time.Time) {
+		fto := _futto_t{when, time.After(when.Sub(time.Now())), who}
+		tos = append(tos, fto)
+	}
+	tonext := func() (<-chan time.Time, chan int) {
+		if len(tos) == 0 {
+			return nil, nil
+		}
+		small := tos[0].when
+		next := tos[0]
+		for _, nto := range tos {
+			if nto.when.Before(small) {
+				small = nto.when
+				next = nto
+			}
+		}
+		return next.tochan, next.who
+	}
+	towake := func(who chan int, v int) {
+		// remove from tos and cnds
+		idx := -1
+		for i, nto := range tos {
+			if nto.who == who {
+				idx = i
+				break
+			}
+		}
+		copy(tos[idx:], tos[idx+1:])
+		l := len(tos)
+		tos = tos[:l-1]
+		if len(tos) == 0 {
+			tos = _tos
+		}
+		idx = -1
+		for i := range cnds {
+			if cnds[i] == who {
+				idx = i
+				break
+			}
+		}
+		copy(cnds[idx:], cnds[idx+1:])
+		l = len(cnds)
+		cnds = cnds[:l-1]
+		if len(cnds) == 0 {
+			cnds = _cnds
+		}
+		who <- v
+	}
+
+	pack := make(chan int)
 	opencount := 1
 	for opencount > 0 {
+		tochan, towho := tonext()
 		select {
+		case <- tochan:
+			towake(towho, 0)
 		case d := <- f.reopen:
 			opencount += d
 		case fm := <- f.cmd:
 			switch fm.op {
 			case FUTEX_SLEEP:
-				val := atomic.LoadUint32(fm.relva)
-				if val == fm.aux {
+				val, err := fm.fumem.futload()
+				if err != 0 {
+					fm.ack <- err
+					break
+				}
+				if val != fm.aux {
 					// owner just unlocked and it's this
 					// thread's turn; don't sleep
 					fm.ack <- 0
 				} else {
-					acksleep(fm.aux, fm.ack)
+					if fm.useto {
+						toadd(fm.ack, fm.timeout)
+					}
+					cndsleep(fm.ack)
 				}
 			case FUTEX_WAKE:
-				ackwake(fm.aux)
+				var v int
+				if fm.aux == 1 {
+					v = 0
+				} else if fm.aux == ^uint32(0) {
+					v = 1
+				} else {
+					panic("weird wake n")
+				}
+				cndwake(v)
+				fm.ack <- 0
+			case FUTEX_CNDGIVE:
+				// as an optimization to avoid thundering herd
+				// after pthread_cond_broadcast(3), move
+				// conditional variable's queue of sleepers to
+				// the mutex of the thread we wakeup here.
+				l := len(cnds)
+				if l == 0 {
+					fm.ack <- 0
+					break
+				}
+				here := make([]chan int, l)
+				copy(here, cnds)
+				tohere := make([]_futto_t, len(tos))
+				copy(tohere, tos)
+
+				var nfm futexmsg_t
+				nfm.fmsg_init(_FUTEX_CNDTAKE, 0, pack)
+				nfm.cndtake = here
+				nfm.totake = tohere
+
+				fm.othmut.cmd <- nfm
+				err := <- nfm.ack
+				if err == 0 {
+					cnds = _cnds
+					tos = _tos
+				}
+				fm.ack <- err
+			case _FUTEX_CNDTAKE:
+				// add new waiters to our queue; get them
+				// tickets
+				here := fm.cndtake
+				cnds = append(cnds, here...)
+				tohere := fm.totake
+				tos = append(tos, tohere...)
 				fm.ack <- 0
 			default:
 				panic("bad futex op")
@@ -3343,37 +3462,96 @@ func futex_ensure(uniq uintptr) futex_t {
 	return r
 }
 
-func sys_futex(proc *proc_t, op, futn, aux, timespecn int) int {
-	seg, _, ok := proc.vmregion.contain(futn)
-	if !ok {
-		return -EFAULT
-	}
-	pgva, ok := seg.gettrack(futn)
-	if !ok {
-		return -EFAULT
-	}
-	pgoff := uintptr(futn) & uintptr(PGOFFSET)
-	uniq := uintptr(unsafe.Pointer(pgva)) + pgoff
-	kva := (*uint32)(unsafe.Pointer(uniq))
+// pmap must be locked. maps user va to kernel va. returns kva as uintptr and
+// *uint32
+func _uva2kva(proc *proc_t, va uintptr) (uintptr, *uint32, int) {
+	proc.lockassert_pmap()
 
-	fut := futex_ensure(uniq)
+	seg, _, ok := proc.vmregion.contain(int(va))
+	if !ok {
+		return 0, nil, -EFAULT
+	}
+	pgva, ok := seg.gettrack(int(va))
+	if !ok {
+		return 0, nil, -EFAULT
+	}
+	pgoff := uintptr(va) & uintptr(PGOFFSET)
+	uniq := uintptr(unsafe.Pointer(pgva)) + pgoff
+	return uniq, (*uint32)(unsafe.Pointer(uniq)), 0
+}
+
+func va2fut(proc *proc_t, va uintptr) (futex_t, int) {
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
+
+	var zf futex_t
+	uniq, _, err := _uva2kva(proc, va)
+	if err != 0 {
+		return zf, err
+	}
+	return futex_ensure(uniq), 0
+}
+
+// an object for atomically looking-up and incrementing/loading from a user
+// address
+type futumem_t struct {
+	proc	*proc_t
+	umem	uintptr
+}
+
+func (fu *futumem_t) futload() (uint32, int) {
+	fu.proc.Lock_pmap()
+	defer fu.proc.Unlock_pmap()
+
+	_, ptr, err := _uva2kva(fu.proc, fu.umem)
+	if err != 0 {
+		return 0, err
+	}
+	var ret uint32
+	ret = atomic.LoadUint32(ptr)
+	return ret, 0
+}
+
+func sys_futex(proc *proc_t, _op, _futn, _fut2n, aux, timespecn int) int {
+	op := uint(_op)
+	if op > _FUTEX_LAST {
+		return -EINVAL
+	}
+	futn := uintptr(_futn)
+	fut2n := uintptr(_fut2n)
+	fut, err := va2fut(proc, futn)
+	if err != 0 {
+		return err
+	}
 
 	var fm futexmsg_t
-	fm.op = op
-	fm.aux = uint32(aux)
-	fm.relva = kva
-	// XXX could lazily allocate one futex channel per thread
-	fm.ack = make(chan int)
-	switch op {
-	case FUTEX_SLEEP:
-	case FUTEX_WAKE:
-	default:
-		return -EINVAL
+	// could lazily allocate one futex channel per thread
+	fm.fmsg_init(op, uint32(aux), make(chan int))
+	fm.fumem = futumem_t{proc, futn}
+
+	if timespecn != 0 {
+		_, when, err := proc.usertimespec(timespecn)
+		if err != 0 {
+			return err
+		}
+		n := time.Now()
+		if when.Before(n) {
+			return -EINVAL
+		}
+		fm.timeout = when
+		fm.useto = true
+	}
+
+	if op == FUTEX_CNDGIVE {
+		fm.othmut, err = va2fut(proc, fut2n)
+		if err != 0 {
+			return err
+		}
 	}
 
 	fut.cmd <- fm
-	<- fm.ack
-	return 0
+	ret := <- fm.ack
+	return ret
 }
 
 func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {

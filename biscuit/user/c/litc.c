@@ -870,36 +870,42 @@ pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
 	if (attr)
 		errx(-1, "mutex attributes not supported");
 	m->locks = 0;
-	m->unlocks = 1;
 	return 0;
 }
 
 int
 pthread_mutex_lock(pthread_mutex_t *m)
 {
-	uint ticket = __sync_add_and_fetch(&m->locks, 1);
-	// compiler barrier
-	asm volatile("":::"memory");
-	uint turn = m->unlocks;
-	if (ticket == turn)
+	// fast path
+	uint * const p = &m->locks;
+	uint old;
+	if ((old = __sync_val_compare_and_swap(p, 0, 1)) == 0)
 		return 0;
-	int ret;
-	ret = futex(FUTEX_SLEEP, &m->unlocks, ticket, NULL);
-	return ret;
+
+	while (1) {
+		// upgrade lock to "has waiters"
+		old = __sync_lock_test_and_set(p, 2);
+		// did we get lucky?
+		if (old == 0)
+			return 0;
+
+		// sleep and acquire
+		int ret;
+		ret = futex(FUTEX_SLEEP, &m->locks, NULL, 2, NULL);
+		if (ret < 0)
+			return ret;
+	}
 }
 
 int
 pthread_mutex_unlock(pthread_mutex_t *m)
 {
-	uint unlocks = __sync_add_and_fetch(&m->unlocks, 1);
-	// compiler barrier
-	asm volatile("":::"memory");
-	uint locks = m->locks;
-	// no waiters?
-	if (locks == unlocks - 1)
-		return 0;
-	int ret;
-	ret = futex(FUTEX_WAKE, &m->unlocks, unlocks, NULL);
+	uint old;
+	old = __sync_lock_test_and_set(&m->locks, 0);
+
+	int ret = 0;
+	if (old == 2)
+		ret = futex(FUTEX_WAKE, &m->locks, NULL, 1, NULL);
 	return ret;
 }
 
@@ -975,6 +981,13 @@ pthread_barrier_wait(pthread_barrier_t *b)
 }
 
 int
+pthread_cond_broadcast(pthread_cond_t *c)
+{
+	__sync_add_and_fetch(&c->gen, 1);
+	return futex(FUTEX_WAKE, &c->gen, NULL, -1, NULL);
+}
+
+int
 pthread_cond_destroy(pthread_cond_t *c)
 {
 	return 0;
@@ -983,19 +996,52 @@ pthread_cond_destroy(pthread_cond_t *c)
 int
 pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *ca)
 {
+	if (ca)
+		errx(-1, "cond attritbutes not supported");
+	c->gen = 0;
+	c->bcast = 0;
 	return 0;
+}
+
+int
+pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m,
+    const struct timespec *t)
+{
+	uint last = c->gen;
+	asm volatile("":::"memory");
+	int ret;
+	if ((ret = pthread_mutex_unlock(m)))
+		return ret;
+
+	int moveq;
+	if ((moveq = futex(FUTEX_SLEEP, &c->gen, NULL, last, t)) < 0)
+		return moveq;
+
+	if ((ret = pthread_mutex_lock(m)))
+		return ret;
+
+	// on pthread_cond_broadcast(3), move cond's sleep queue to my mutex
+	if (moveq) {
+		// make sure threads moved to mutex wait queue are woken up
+		c->bcast = 1;
+		ret = futex(FUTEX_CNDGIVE, &c->gen, &m->locks, 0, NULL);
+	}
+	if (c->bcast)
+		m->locks = 2;
+	return ret;
 }
 
 int
 pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
 {
-	errx(-1, "no imp");
+	return pthread_cond_timedwait(c, m, NULL);
 }
 
 int
 pthread_cond_signal(pthread_cond_t *c)
 {
-	errx(-1, "no imp");
+	__sync_add_and_fetch(&c->gen, 1);
+	return futex(FUTEX_WAKE, &c->gen, NULL, 1, NULL);
 }
 
 int
@@ -1643,10 +1689,11 @@ ftruncate(int fd, off_t newlen)
 }
 
 int
-futex(const int op, void *fut, int aux, struct timespec *ts)
+futex(const int op, void *fut, void *fut2, int aux, const struct timespec *ts)
 {
-	int ret = syscall(SA(op), SA(fut), SA(aux), SA(ts), 0, SYS_FUTEX);
-	ERRNO_NZ(ret);
+	int ret = syscall(SA(op), SA(fut), SA(fut2), SA(aux), SA(ts),
+	    SYS_FUTEX);
+	ERRNO_NEG(ret);
 	return ret;
 }
 
@@ -2793,7 +2840,8 @@ uname(struct utsname *name)
 	return 0;
 }
 
-int usleep(uint us)
+int
+usleep(uint us)
 {
 	long ns = (us % 1000000)*1000;
 	struct timespec t = {us/1000000, ns};

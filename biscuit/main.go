@@ -980,10 +980,10 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 	// could allocate fxbuf lazily
 	fxbuf := p.mkfxbuf()
 	for p.resched(tid) {
-		// for fast syscalls, we restore little state. thus we
-		// must distinguish between returning to the user
-		// program after it was interrupted by a timer
-		// interrupt/CPU exception vs a syscall.
+		// for fast syscalls, we restore little state. thus we must
+		// distinguish between returning to the user program after it
+		// was interrupted by a timer interrupt/CPU exception vs a
+		// syscall.
 		intno, aux := runtime.Userrun(tf, fxbuf, p.pmap, p.p_pmap,
 		    p.pmpages.pms, fastret)
 		fastret = false
@@ -1284,6 +1284,22 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 			return "", true, true
 		}
 	}
+}
+
+func (p *proc_t) usertimespec(va int) (time.Duration, time.Time, int) {
+	secs, ok1 := p.userreadn(va, 8)
+	nsecs, ok2 := p.userreadn(va + 8, 8)
+	var zt time.Time
+	if !ok1 || !ok2 {
+		return 0, zt, -EFAULT
+	}
+	if secs < 0 || nsecs < 0 {
+		return 0, zt, -EINVAL
+	}
+	tot := time.Duration(secs) * time.Second
+	tot += time.Duration(nsecs) * time.Nanosecond
+	t := time.Unix(int64(secs), int64(nsecs))
+	return tot, t, 0
 }
 
 func (p *proc_t) userargs(uva int) ([]string, bool) {

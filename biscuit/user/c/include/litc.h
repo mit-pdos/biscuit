@@ -186,7 +186,7 @@ struct tfork_t {
 };
 
 struct timespec {
-	long tv_sec;
+	time_t tv_sec;
 	long tv_nsec;
 };
 
@@ -213,9 +213,10 @@ long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
 int ftruncate(int, off_t);
-int futex(const int, void *, int, struct timespec *);
+int futex(const int, void *, void *, int, const struct timespec *);
 #define		FUTEX_SLEEP	1
 #define		FUTEX_WAKE	2
+#define		FUTEX_CNDGIVE	3
 
 char *getcwd(char *, size_t);
 int getpid(void);
@@ -353,6 +354,8 @@ typedef struct {
 } pthread_attr_t;
 
 typedef struct {
+	uint gen;
+	int bcast;
 } pthread_cond_t;
 
 typedef struct {
@@ -360,9 +363,8 @@ typedef struct {
 
 typedef struct {
 	uint locks;
-	uint unlocks;
 } pthread_mutex_t;
-#define		PTHREAD_MUTEX_INITIALIZER	{0, 1}
+#define		PTHREAD_MUTEX_INITIALIZER	{0}
 
 typedef struct {
 } pthread_mutexattr_t;
@@ -388,10 +390,13 @@ int pthread_barrier_destroy(pthread_barrier_t *);
 int pthread_barrier_wait(pthread_barrier_t *);
 #define		PTHREAD_BARRIER_SERIAL_THREAD	1
 
+int pthread_cond_broadcast(pthread_cond_t *);
 int pthread_cond_destroy(pthread_cond_t *);
 int pthread_cond_init(pthread_cond_t *, const pthread_condattr_t *);
 int pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *);
 int pthread_cond_signal(pthread_cond_t *);
+int pthread_cond_timedwait(pthread_cond_t *, pthread_mutex_t *,
+    const struct timespec *);
 
 int pthread_create(pthread_t *, pthread_attr_t *, void* (*)(void *), void *);
 int pthread_join(pthread_t, void **);
