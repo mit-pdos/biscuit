@@ -867,14 +867,14 @@ func (pm *pollmsg_t) pm_set(events ready_t, fdn int, dowait bool, phint int) {
 }
 
 // returns the pollmsg_t of ready fd, whether we timed out, and error
-func (pm *pollmsg_t) pm_wait(tous int) (pollmsg_t, bool, int) {
+func (pm *pollmsg_t) pm_wait(toms int) (pollmsg_t, bool, int) {
 	// XXXPANIC
-	if tous == 0 {
+	if toms == 0 {
 		panic("wait for non-blocking poll?")
 	}
 	var tochan <-chan time.Time
-	if tous > 0 {
-		tochan = time.After(time.Duration(tous) * time.Microsecond)
+	if toms > 0 {
+		tochan = time.After(time.Duration(toms) * time.Millisecond)
 	}
 	var readypm pollmsg_t
 	var timeout bool
@@ -2431,7 +2431,6 @@ func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
 		return 0, -EISCONN
 	}
 
-	// XXX do nonblocking if requested in flags
 	fakepipe := &pipefops_t{pipe: sus.pipeout, options: sus.options}
 	return fakepipe.write(src)
 }
@@ -2452,6 +2451,7 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 		return ready_t(pm.events & R_ERROR)
 	}
 
+	// ugh..."in"/"out" are backwards from pipe_start code...
 	fakein := &pipefops_t{pipe: sus.pipein}
 	fakeout := &pipefops_t{pipe: sus.pipeout, writer: true}
 	// pipefops_t.pollone() doesn't allow polling for reading on write-end

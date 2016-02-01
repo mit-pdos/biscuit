@@ -2253,7 +2253,7 @@ void polltest()
 	// and that no error/hup is reported for non-blocking and timeouts
 	_pchk(0, toyes,  2, f1, POLLERR | POLLHUP, 0,
 			f2, POLLERR | POLLHUP, 0);
-	_pchk(500000, toyes,  2, f1, POLLERR | POLLHUP, 0,
+	_pchk(500, toyes,  2, f1, POLLERR | POLLHUP, 0,
 			f2, POLLERR | POLLHUP, 0);
 
 	// pipe initially has no data to read
@@ -2286,7 +2286,7 @@ void polltest()
 	else if (ret != (sizeof(buf)/2))
 		errx(-1, "short read");
 
-	_pchk(10000, tono, 2,
+	_pchk(10, tono, 2,
 		pp[0], rwfl, POLLIN,
 		pp[1], rwfl, POLLOUT);
 
@@ -2319,7 +2319,7 @@ void polltest()
 		unbound, rwfl, POLLERR,
 		sock, rwfl, POLLOUT);
 
-	_pchk(10000, toyes, 1,
+	_pchk(10, toyes, 1,
 		sock, POLLIN, 0);
 
 	pid_t pid = fork();
@@ -2349,7 +2349,7 @@ void polltest()
 		sock, POLLIN, POLLIN);
 	_pchk(0, tono, 1,
 		sock, rwfl, rwfl);
-	_pchk(10000, toyes, 1,
+	_pchk(10, toyes, 1,
 		sock, POLLERR, 0);
 
 	ret = recv(sock, buf, sizeof(buf), 0);
@@ -2358,9 +2358,9 @@ void polltest()
 	else if (ret == 0)
 		errx(-1, "short read");
 
-	_pchk(10000, tono, 1,
+	_pchk(10, tono, 1,
 		sock, rwfl, POLLOUT);
-	_pchk(10000, toyes, 1,
+	_pchk(10, toyes, 1,
 		sock, POLLIN, 0);
 
 	close(f1);

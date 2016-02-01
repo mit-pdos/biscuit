@@ -2424,9 +2424,9 @@ select(int maxfd, fd_set *rfds, fd_set *wfds, fd_set *efds,
 			pfds[curp].events |= POLLERR;
 		curp++;
 	}
-	int tous = -1;
+	int toms = -1;
 	if (timeout)
-		tous = timeout->tv_sec * 1000000 + timeout->tv_usec;
+		toms = timeout->tv_sec * 1000 + timeout->tv_usec / 1000;
 
 	// account for differences between select(2) and poll(2):
 	// 1. poll's HUP counts as a read-ready fd for select
@@ -2439,7 +2439,7 @@ select(int maxfd, fd_set *rfds, fd_set *wfds, fd_set *efds,
 		FD_ZERO(wfds);
 	if (efds)
 		FD_ZERO(efds);
-	int ret = poll(pfds, nfds, tous);
+	int ret = poll(pfds, nfds, toms);
 	if (ret <= 0)
 		return ret;
 
