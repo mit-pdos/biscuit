@@ -3264,11 +3264,6 @@ func sys_pwrite(proc *proc_t, fdn, bufn, lenn, offset int) int {
 	return ret
 }
 
-type futex_t struct {
-	reopen	chan int
-	cmd	chan futexmsg_t
-}
-
 type futexmsg_t struct {
 	op	uint
 	aux	uint32
@@ -3287,11 +3282,6 @@ func (fm *futexmsg_t) fmsg_init(op uint, aux uint32, ack chan int) {
 	fm.ack = ack
 }
 
-type allfutex_t struct {
-	sync.Mutex
-	m	map[uintptr]futex_t
-}
-
 // futex timeout metadata
 type _futto_t struct {
 	when	time.Time
@@ -3299,81 +3289,103 @@ type _futto_t struct {
 	who	chan int
 }
 
-func (f futex_t) futex_start() {
-	_cnds := make([]chan int, 0, 10)
-	cnds := _cnds
-	cndsleep := func(c chan int) {
-		cnds = append(cnds, c)
+type futex_t struct {
+	reopen	chan int
+	cmd	chan futexmsg_t
+	_cnds	[]chan int
+	cnds	[]chan int
+	_tos	[]_futto_t
+	tos	[]_futto_t
+}
+
+func (f *futex_t) cndsleep(c chan int) {
+	f.cnds = append(f.cnds, c)
+}
+
+func (f *futex_t) cndwake(v int) {
+	if len(f.cnds) == 0 {
+		return
 	}
-	cndwake := func(v int) {
-		if len(cnds) == 0 {
-			return
-		}
-		c := cnds[0]
-		cnds = cnds[1:]
-		if len(cnds) == 0 {
-			cnds = _cnds
-		}
-		c <- v
+	c := f.cnds[0]
+	f.cnds = f.cnds[1:]
+	if len(f.cnds) == 0 {
+		f.cnds = f._cnds
 	}
-	_tos := make([]_futto_t, 0, 10)
-	tos := _tos
-	toadd := func(who chan int, when time.Time) {
-		fto := _futto_t{when, time.After(when.Sub(time.Now())), who}
-		tos = append(tos, fto)
+	f._torm(c)
+	c <- v
+}
+
+func (f *futex_t) toadd(who chan int, when time.Time) {
+	fto := _futto_t{when, time.After(when.Sub(time.Now())), who}
+	f.tos = append(f.tos, fto)
+}
+
+func (f *futex_t) tonext() (<-chan time.Time, chan int) {
+	if len(f.tos) == 0 {
+		return nil, nil
 	}
-	tonext := func() (<-chan time.Time, chan int) {
-		if len(tos) == 0 {
-			return nil, nil
+	small := f.tos[0].when
+	next := f.tos[0]
+	for _, nto := range f.tos {
+		if nto.when.Before(small) {
+			small = nto.when
+			next = nto
 		}
-		small := tos[0].when
-		next := tos[0]
-		for _, nto := range tos {
-			if nto.when.Before(small) {
-				small = nto.when
-				next = nto
-			}
-		}
-		return next.tochan, next.who
 	}
-	towake := func(who chan int, v int) {
-		// remove from tos and cnds
-		idx := -1
-		for i, nto := range tos {
-			if nto.who == who {
-				idx = i
-				break
-			}
+	return next.tochan, next.who
+}
+
+func (f *futex_t) _torm(who chan int) {
+	idx := -1
+	for i, nto := range f.tos {
+		if nto.who == who {
+			idx = i
+			break
 		}
-		copy(tos[idx:], tos[idx+1:])
-		l := len(tos)
-		tos = tos[:l-1]
-		if len(tos) == 0 {
-			tos = _tos
-		}
-		idx = -1
-		for i := range cnds {
-			if cnds[i] == who {
-				idx = i
-				break
-			}
-		}
-		copy(cnds[idx:], cnds[idx+1:])
-		l = len(cnds)
-		cnds = cnds[:l-1]
-		if len(cnds) == 0 {
-			cnds = _cnds
-		}
-		who <- v
 	}
+	if idx == -1 {
+		return
+	}
+	copy(f.tos[idx:], f.tos[idx+1:])
+	l := len(f.tos)
+	f.tos = f.tos[:l-1]
+	if len(f.tos) == 0 {
+		f.tos = f._tos
+	}
+}
+
+func (f *futex_t) towake(who chan int, v int) {
+	// remove from tos and cnds
+	f._torm(who)
+	idx := -1
+	for i := range f.cnds {
+		if f.cnds[i] == who {
+			idx = i
+			break
+		}
+	}
+	copy(f.cnds[idx:], f.cnds[idx+1:])
+	l := len(f.cnds)
+	f.cnds = f.cnds[:l-1]
+	if len(f.cnds) == 0 {
+		f.cnds = f._cnds
+	}
+	who <- v
+}
+
+func (f *futex_t) futex_start() {
+	f._cnds = make([]chan int, 0, 10)
+	f.cnds = f._cnds
+	f._tos = make([]_futto_t, 0, 10)
+	f.tos = f._tos
 
 	pack := make(chan int)
 	opencount := 1
 	for opencount > 0 {
-		tochan, towho := tonext()
+		tochan, towho := f.tonext()
 		select {
 		case <- tochan:
-			towake(towho, 0)
+			f.towake(towho, 0)
 		case d := <- f.reopen:
 			opencount += d
 		case fm := <- f.cmd:
@@ -3390,9 +3402,9 @@ func (f futex_t) futex_start() {
 					fm.ack <- 0
 				} else {
 					if fm.useto {
-						toadd(fm.ack, fm.timeout)
+						f.toadd(fm.ack, fm.timeout)
 					}
-					cndsleep(fm.ack)
+					f.cndsleep(fm.ack)
 				}
 			case FUTEX_WAKE:
 				var v int
@@ -3403,22 +3415,22 @@ func (f futex_t) futex_start() {
 				} else {
 					panic("weird wake n")
 				}
-				cndwake(v)
+				f.cndwake(v)
 				fm.ack <- 0
 			case FUTEX_CNDGIVE:
 				// as an optimization to avoid thundering herd
 				// after pthread_cond_broadcast(3), move
 				// conditional variable's queue of sleepers to
 				// the mutex of the thread we wakeup here.
-				l := len(cnds)
+				l := len(f.cnds)
 				if l == 0 {
 					fm.ack <- 0
 					break
 				}
 				here := make([]chan int, l)
-				copy(here, cnds)
-				tohere := make([]_futto_t, len(tos))
-				copy(tohere, tos)
+				copy(here, f.cnds)
+				tohere := make([]_futto_t, len(f.tos))
+				copy(tohere, f.tos)
 
 				var nfm futexmsg_t
 				nfm.fmsg_init(_FUTEX_CNDTAKE, 0, pack)
@@ -3428,23 +3440,28 @@ func (f futex_t) futex_start() {
 				fm.othmut.cmd <- nfm
 				err := <- nfm.ack
 				if err == 0 {
-					cnds = _cnds
-					tos = _tos
+					f.cnds = f._cnds
+					f.tos = f._tos
 				}
 				fm.ack <- err
 			case _FUTEX_CNDTAKE:
 				// add new waiters to our queue; get them
 				// tickets
 				here := fm.cndtake
-				cnds = append(cnds, here...)
+				f.cnds = append(f.cnds, here...)
 				tohere := fm.totake
-				tos = append(tos, tohere...)
+				f.tos = append(f.tos, tohere...)
 				fm.ack <- 0
 			default:
 				panic("bad futex op")
 			}
 		}
 	}
+}
+
+type allfutex_t struct {
+	sync.Mutex
+	m	map[uintptr]futex_t
 }
 
 var _allfutex = allfutex_t{m: map[uintptr]futex_t{}}
