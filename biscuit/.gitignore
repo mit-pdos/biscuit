@@ -125,3 +125,6 @@
 /fsdir/bin/ebizzy
 /fsdir/bin/uname
 /fsdir/bin/pwd
+/fsdir/redis.conf
+/fsdir/bin/rbm
+/fsdir/bin/rs
