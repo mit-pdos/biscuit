@@ -153,6 +153,9 @@ int main(int argc, char **argv)
 		char *p = readline("# ");
 		if (p == NULL)
 			exit(0);
+		char *com;
+		if ((com = strchr(p, '#')))
+			*com = '\0';
 		if (redir(p, &infile, &outfile, &append))
 			continue;
 		mkargs(p, args, sz);
