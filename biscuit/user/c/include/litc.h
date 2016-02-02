@@ -82,7 +82,7 @@ typedef struct {
 #define 	FD_ZERO(ft)	memset((ft), 0, sizeof(fd_set))
 #define 	FD_SET(n, ft)	(ft)->mask[n/64] |= 1ull << (n%64)
 #define 	FD_CLR(n, ft)	(ft)->mask[n/64] &= ~(1ull << (n%64))
-#define 	FD_ISSET(n, ft)	((ft)->mask[n/64] & (1ull << (n%64)))
+#define 	FD_ISSET(n, ft)	(((ft)->mask[n/64] & (1ull << (n%64))) != 0)
 
 struct pollfd {
 	int	fd;
