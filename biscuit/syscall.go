@@ -713,6 +713,7 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 	pollfdsz := 8
 	devwait := timeout != 0
 	pm := pollmsg_t{}
+	pm.pm_init(timeout)
 	readyfds := 0
 	for i := 0; i < nfds; i++ {
 		va := fdsn + pollfdsz*i
@@ -767,7 +768,7 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 	}
 
 	// otherwise, wait for one notification
-	rpm, timedout, err := pm.pm_wait(timeout)
+	rpm, timedout, err := pm.pm_wait()
 	if err != 0 {
 		panic("must succeed")
 	}
@@ -848,10 +849,24 @@ const(
 type pollmsg_t struct {
 	notif	chan pollmsg_t
 	events	ready_t
+	timeout	time.Time
 	fdn	int
-	dowait	bool
 	// phint is this fd's index into the user pollfd array
 	phint	int
+	hasto	bool
+	dowait	bool
+}
+
+func (pm *pollmsg_t) pm_init(to int) {
+	var zt time.Time
+	if to > 0 {
+		pm.hasto = true
+		d := time.Duration(to)
+		pm.timeout = time.Now().Add(d * time.Millisecond)
+	} else {
+		pm.hasto = false
+		pm.timeout = zt
+	}
 }
 
 func (pm *pollmsg_t) pm_set(events ready_t, fdn int, dowait bool, phint int) {
@@ -862,19 +877,15 @@ func (pm *pollmsg_t) pm_set(events ready_t, fdn int, dowait bool, phint int) {
 	}
 	pm.events = events
 	pm.fdn = fdn
-	pm.dowait = dowait
 	pm.phint = phint
+	pm.dowait = dowait
 }
 
 // returns the pollmsg_t of ready fd, whether we timed out, and error
-func (pm *pollmsg_t) pm_wait(toms int) (pollmsg_t, bool, int) {
-	// XXXPANIC
-	if toms == 0 {
-		panic("wait for non-blocking poll?")
-	}
+func (pm *pollmsg_t) pm_wait() (pollmsg_t, bool, int) {
 	var tochan <-chan time.Time
-	if toms > 0 {
-		tochan = time.After(time.Duration(toms) * time.Millisecond)
+	if pm.hasto {
+		tochan = time.After(pm.timeout.Sub(time.Now()))
 	}
 	var readypm pollmsg_t
 	var timeout bool
@@ -888,20 +899,27 @@ func (pm *pollmsg_t) pm_wait(toms int) (pollmsg_t, bool, int) {
 
 // keeps track of all outstanding pollers. used by devices supporting poll(2)
 type pollers_t struct {
-	allmask	ready_t
-	// just need an unordered set; use array if too slow
-	waiters	map[chan pollmsg_t]pollmsg_t
+	allmask		ready_t
+	_waiters	[]pollmsg_t
+	waiters		[]pollmsg_t
+}
+
+func (p *pollers_t) _rm(idx int) {
+	if len(p.waiters) == 1 {
+		p.waiters = p._waiters
+		return
+	}
+	copy(p.waiters[idx:], p.waiters[idx+1:])
+	l := len(p.waiters)
+	p.waiters = p.waiters[:l-1]
 }
 
 func (p *pollers_t) addpoller(pm *pollmsg_t) {
 	if p.waiters == nil {
-		p.waiters = make(map[chan pollmsg_t]pollmsg_t, 4)
+		p._waiters = make([]pollmsg_t, 0, 10)
+		p.waiters = p._waiters
 	}
-	// XXXPANIC
-	if _, ok := p.waiters[pm.notif]; ok {
-		panic("poller exists")
-	}
-	p.waiters[pm.notif] = *pm
+	p.waiters = append(p.waiters, *pm)
 	p.allmask |= pm.events
 }
 
@@ -909,8 +927,11 @@ func (p *pollers_t) wakeready(r ready_t) {
 	if p.allmask & r == 0 {
 		return
 	}
+	n := time.Now()
 	var newallmask ready_t
-	for k, pm := range p.waiters {
+	for i := 0; i < len(p.waiters); i++ {
+		rmed := false
+		pm := p.waiters[i]
 		// found a waiter
 		if pm.events & r != 0 {
 			pm.events &= r
@@ -919,8 +940,15 @@ func (p *pollers_t) wakeready(r ready_t) {
 			case pm.notif <- pm:
 			default:
 			}
-			delete(p.waiters, k)
-		} else {
+			p._rm(i)
+			i--
+			rmed = true
+		} else if pm.hasto && n.After(pm.timeout) {
+			p._rm(i)
+			i--
+			rmed = true
+		}
+		if !rmed {
 			newallmask |= pm.events
 		}
 	}
