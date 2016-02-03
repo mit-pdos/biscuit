@@ -189,7 +189,7 @@ func sc_setup() {
 	Outb(com1 + 3, 0x80)
 
 	// set both bytes for divisor baud rate
-	Outb(com1 + 0, 115200/9600)
+	Outb(com1 + 0, 115200/115200)
 	Outb(com1 + 1, 0)
 
 	// 8 bit words, one stop bit, no parity
