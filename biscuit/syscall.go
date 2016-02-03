@@ -1114,6 +1114,8 @@ func (p *pipe_t) pipe_start() {
 				outret <- 0
 			case <- writers:
 			case <- readers:
+			case pm := <- p.poll_in:
+				p.poll_out <- pm.events & R_HUP
 			}
 		}
 	}()
