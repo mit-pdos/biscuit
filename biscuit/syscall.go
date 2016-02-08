@@ -2584,20 +2584,26 @@ func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 
 func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 	if !sus.conn {
-		return ready_t(pm.events & R_ERROR)
+		return pm.events & R_ERROR
 	}
 
-	// ugh..."in"/"out" are backwards from pipe_start code...
-	fakein := &pipefops_t{pipe: sus.pipein}
-	fakeout := &pipefops_t{pipe: sus.pipeout, writer: true}
 	// pipefops_t.pollone() doesn't allow polling for reading on write-end
 	// of pipe and vice versa
-	readyin := fakein.pollone(pm)
+	var readyin ready_t
+	var readyout ready_t
+	both := pm.events & (R_READ|R_WRITE) == 0
+	if both || pm.events & R_READ != 0 {
+		fakein := &pipefops_t{pipe: sus.pipein}
+		readyin = fakein.pollone(pm)
+	}
 	if readyin != 0 {
 		return readyin
 	}
-	readyout := fakeout.pollone(pm)
-	return readyout
+	if both || pm.events & R_WRITE != 0 {
+		fakeout := &pipefops_t{pipe: sus.pipeout, writer: true}
+		readyout = fakeout.pollone(pm)
+	}
+	return readyin | readyout
 }
 
 func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {

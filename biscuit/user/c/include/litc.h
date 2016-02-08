@@ -65,7 +65,7 @@ extern "C" {
 #define		MAXBUF		4096
 
 #define		MAJOR(x)	((long)((ulong)x >> 32))
-#define		MINOR(x)	((long)(uint)x)
+#define		MINOR(x)	((long)(ulong)(uint)x)
 #define		MKDEV(x, y)	((dev_t)((ulong)x << 32 | (ulong)y))
 
 /*

@@ -2378,6 +2378,7 @@ func main() {
 	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
 	//exec("bin/lsh", nil)
 	exec("bin/init", nil)
+	//exec("bin/rs", []string{"/redis.conf"})
 	//exec("bin/sfork", []string{"-s", "3", "-b", "d", "1"})
 	//exec("bin/ls", nil)
 	//exec("bin/hello", nil)
