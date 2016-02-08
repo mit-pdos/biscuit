@@ -127,12 +127,8 @@ func trapstub(tf *[TFSIZE]int) {
 
 	switch trapno {
 	case INT_DISK, INT_KBD, INT_COM1:
-		// unclear whether automatic eoi mode works on the slave 8259a.
-		// from page 15 of intel's 8259a doc: "The AEOI mode can only
-		// be used in a master 8259A and not a slave. 8259As with a
-		// copyright date of 1985 or later will operate in the AEOI
-		// mode as a master or a slave." linux seems to observe that
-		// automatic eoi also doesn't work on the slave.
+		// intel documentation for PCH (may 2014) says that AEOI mode
+		// cannot be used on the slave PIC.
 	default:
 		// unexpected IRQ
 		runtime.Pnum(trapno)

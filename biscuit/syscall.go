@@ -919,6 +919,7 @@ func (p *pollers_t) addpoller(pm *pollmsg_t) {
 		p._waiters = make([]pollmsg_t, 0, 10)
 		p.waiters = p._waiters
 	}
+	// XXX should prune old timeouts here too
 	p.waiters = append(p.waiters, *pm)
 	p.allmask |= pm.events
 }
@@ -955,169 +956,280 @@ func (p *pollers_t) wakeready(r ready_t) {
 	p.allmask = newallmask
 }
 
+type msgtype_t	uint8
+
+const(
+	D_READ		msgtype_t = iota
+	D_WRITE		msgtype_t = iota
+	D_READNOBLK	msgtype_t = iota
+	D_WRITENOBLK	msgtype_t = iota
+	D_POLL		msgtype_t = iota
+	D_REOPEN	msgtype_t = iota
+)
+
+type piperet_t struct {
+	ret	int
+	err	int
+	poll	ready_t
+}
+
+type pipemsg_t struct {
+	// read/write
+	ub	*userbuf_t
+	// poll
+	pollmsg	pollmsg_t
+	ack	chan piperet_t
+	// reopen
+	rewrite	int8
+	reread	int8
+	mtype	msgtype_t
+}
+
+var _zpipemsg pipemsg_t
+
+func (pm *pipemsg_t) _common(t msgtype_t) {
+	if pm.ack == nil {
+		pm.ack = make(chan piperet_t)
+	}
+	tmp := pm.ack
+	*pm = _zpipemsg
+	pm.ack = tmp
+	pm.mtype = t
+}
+
+func (pm *pipemsg_t) _errwait() (int, int) {
+	pr := <- pm.ack
+	return pr.ret, pr.err
+}
+
+func (pm *pipemsg_t) mkread(ub *userbuf_t) {
+	pm._common(D_READ)
+	pm.ub = ub
+}
+
+func (pm *pipemsg_t) readwait() (int, int) {
+	return pm._errwait()
+}
+
+func (pm *pipemsg_t) mkwrite(ub *userbuf_t) {
+	pm._common(D_WRITE)
+	pm.ub = ub
+}
+
+func (pm *pipemsg_t) writewait() (int, int) {
+	return pm._errwait()
+}
+
+func (pm *pipemsg_t) mkreadnoblk(ub *userbuf_t) {
+	pm._common(D_READNOBLK)
+	pm.ub = ub
+}
+
+func (pm *pipemsg_t) mkwritenoblk(ub *userbuf_t) {
+	pm._common(D_WRITENOBLK)
+	pm.ub = ub
+}
+
+func (pm *pipemsg_t) mkpoll(m *pollmsg_t) {
+	pm._common(D_POLL)
+	pm.pollmsg = *m
+}
+
+func (pm *pipemsg_t) pollwait() ready_t {
+	pr := <- pm.ack
+	return pr.poll
+}
+
+func (pm *pipemsg_t) mkreopenr(r int) {
+	pm._common(D_REOPEN)
+	pm.reread = int8(r)
+}
+
+func (pm *pipemsg_t) mkreopenw(w int) {
+	pm._common(D_REOPEN)
+	pm.rewrite = int8(w)
+}
+
+type pblockers_t struct {
+	_l	[]pipemsg_t
+	l	[]pipemsg_t
+}
+
+func (pb *pblockers_t) add(pm *pipemsg_t) {
+	if pb.l == nil {
+		pb._l = make([]pipemsg_t, 0, 10)
+		pb.l = pb._l
+	}
+	pb.l = append(pb.l, *pm)
+}
+
+func (pb *pblockers_t) haswaiter() bool {
+	return len(pb.l) != 0
+}
+
+func (pb *pblockers_t) pop() pipemsg_t {
+	if len(pb.l) == 0 {
+		panic("no blockers")
+	}
+	ret := pb.l[0]
+	pb.l = pb.l[1:]
+	if len(pb.l) == 0 {
+		pb.l = pb._l
+	}
+	return ret
+}
+
 type pipe_t struct {
-	pollers		pollers_t
-	in		chan *userbuf_t
-	inret		chan int
-	out		chan *userbuf_t
-	outret		chan int
-	readers		chan int
-	writers		chan int
+	msgch		chan pipemsg_t
 	admit		chan bool
-	poll_in		chan pollmsg_t
-	poll_out	chan ready_t
-	innoblk		chan *userbuf_t
-	outnoblk	chan *userbuf_t
 }
 
 func (p *pipe_t) pipe_start() {
-	in := make(chan *userbuf_t)
-	inret := make(chan int)
-	out := make(chan *userbuf_t)
-	outret := make(chan int)
-	writers := make(chan int)
-	readers := make(chan int)
-	innoblk := make(chan *userbuf_t)
-	outnoblk := make(chan *userbuf_t)
+	p.msgch = make(chan pipemsg_t)
 	p.admit = make(chan bool)
-	p.poll_in = make(chan pollmsg_t)
-	p.poll_out = make(chan ready_t)
-	p.inret = inret
-	p.in = in
-	p.out = out
-	p.outret = outret
-	p.readers = readers
-	p.writers = writers
-	p.innoblk = innoblk
-	p.outnoblk = outnoblk
 
 	go func() {
-		pipebufsz := 512
-		writec := 1
-		readc := 1
-		cbuf := circbuf_t{}
-		cbuf.cb_init(pipebufsz)
-		var tout chan *userbuf_t
-		tin := in
-		admit := 0
-		for writec > 0 || readc > 0 {
-			select {
-			case p.admit <- true:
-				admit++
-				continue
-			// writing to pipe
-			case src := <- tin:
-				if readc == 0 {
-					inret <- -EPIPE
-					break
-				}
-				ret, err := cbuf.copyin(src)
-				if err != 0 {
-					inret <- err
-					break
-				}
-				inret <- ret
-			// reading from pipe
-			case dst := <- tout:
-				ret, err := cbuf.copyout(dst)
-				if err != 0 {
-					outret <- err
-					break
-				}
-				outret <- ret
-			// non-blocking read/writes
-			case src := <- innoblk:
-				if readc == 0 {
-					inret <- -EPIPE
-					break
-				}
-				if tin == nil {
-					inret <- -EWOULDBLOCK
-					break
-				}
-				ret, err := cbuf.copyin(src)
-				if err != 0 {
-					inret <- err
-					break
-				}
-				inret <- ret
-			case dst := <- outnoblk:
-				if tout == nil {
-					outret <- -EWOULDBLOCK
-					break
-				}
-				ret, err := cbuf.copyout(dst)
-				if err != 0 {
-					outret <- err
-					break
-				}
-				outret <- ret
-			// closing/opening
-			case delta := <- writers:
-				writec += delta
-			case delta := <- readers:
-				readc += delta
-			// poll
-			case pm := <- p.poll_in:
-				ev := pm.events
-				var ret ready_t
-				// check if reading, writing, or errors are
-				// available
-				if ev & R_READ != 0 && tout != nil {
-					ret |= R_READ
-				}
-				if ev & R_WRITE != 0 && tin != nil {
-					ret |= R_WRITE
-				}
-				if ev & R_HUP != 0 && readc == 0 {
-					ret |= R_HUP
-				}
-				// ignore R_ERROR
-				if ret == 0 && pm.dowait {
-					p.pollers.addpoller(&pm)
-				}
-				p.poll_out <- ret
-			}
+	admit := 0
+	writec := 1
+	readc := 1
+	pipebufsz := 512
+	cbuf := circbuf_t{}
+	cbuf.cb_init(pipebufsz)
+	pollers := pollers_t{}
+	wblockers := pblockers_t{}
+	rblockers := pblockers_t{}
 
-			admit--
-			if admit < 0 {
-				panic("wtf")
-			}
+	for writec > 0 || readc > 0 {
+		// allow more reads if there is data in the pipe or if
+		// there are no writers and the pipe is empty.
+		writerdy := false
+		readrdy := false
+		if !cbuf.empty() || writec == 0 {
+			readrdy = true
+			pollers.wakeready(R_READ)
+		}
+		if !cbuf.full() || readc == 0 {
+			writerdy = true
+			pollers.wakeready(R_WRITE)
+		}
 
-			// allow more reads if there is data in the pipe or if
-			// there are no writers and the pipe is empty.
-			if !cbuf.empty() || writec == 0 {
-				tout = out
-				p.pollers.wakeready(R_READ)
+		var msg pipemsg_t
+		nomsg := true
+		if writerdy && wblockers.haswaiter() {
+			msg = wblockers.pop()
+			nomsg = false
+		} else if readrdy && rblockers.haswaiter() {
+			msg = rblockers.pop()
+			nomsg = false
+		}
+		for nomsg {
+			p.admit <- true
+			admit++
+
+			msg = <- p.msgch
+			if !readrdy && msg.mtype == D_READ {
+				rblockers.add(&msg)
+			} else if !writerdy && msg.mtype == D_WRITE {
+				wblockers.add(&msg)
 			} else {
-				tout = nil
-			}
-			if !cbuf.full() || readc == 0 {
-				tin = in
-				p.pollers.wakeready(R_WRITE)
-			} else {
-				tin = nil
+				nomsg = false
 			}
 		}
 
-		// fail requests from threads that raced with last closer.
-		close(p.admit)
-		for ; admit > 0; admit-- {
-			select {
-			case <- p.in:
-				inret <- -EBADF
-			case <- innoblk:
-				inret <- -EBADF
-			case <- p.out:
-				outret <- 0
-			case <- outnoblk:
-				outret <- 0
-			case <- writers:
-			case <- readers:
-			case pm := <- p.poll_in:
-				p.poll_out <- pm.events & R_HUP
+		var pret piperet_t
+		switch msg.mtype {
+		// writing to pipe
+		case D_WRITE, D_WRITENOBLK:
+			if readc == 0 {
+				pret.err = -EPIPE
+				msg.ack <- pret
+				break
 			}
+			if msg.mtype == D_WRITENOBLK && cbuf.full() {
+				pret.err = -EWOULDBLOCK
+				msg.ack <- pret
+				break
+			}
+			src := msg.ub
+			ret, err := cbuf.copyin(src)
+			pret.ret = ret
+			pret.err = err
+			msg.ack <- pret
+		// reading from pipe
+		case D_READ, D_READNOBLK:
+			if msg.mtype == D_READNOBLK && !readrdy {
+				pret.err = -EWOULDBLOCK
+				msg.ack <- pret
+				break
+			}
+			dst := msg.ub
+			ret, err := cbuf.copyout(dst)
+			pret.ret = ret
+			pret.err = err
+			msg.ack <- pret
+		case D_REOPEN:
+			writec += int(msg.rewrite)
+			readc += int(msg.reread)
+		// poll
+		case D_POLL:
+			pm := &msg.pollmsg
+			ev := pm.events
+			var ret ready_t
+			// check if reading, writing, or errors are available
+			if ev & R_READ != 0 && readrdy {
+				ret |= R_READ
+			}
+			if ev & R_WRITE != 0 && writerdy {
+				ret |= R_WRITE
+			}
+			if ev & R_HUP != 0 && readc == 0 {
+				ret |= R_HUP
+			}
+			// ignore R_ERROR
+			if ret == 0 && pm.dowait {
+				pollers.addpoller(pm)
+			}
+			pret.poll = ret
+			msg.ack <- pret
+		default:
+			panic("weird msg")
 		}
+		admit--
+		if admit < 0 {
+			panic("neg admit")
+		}
+	}
+
+	// fail requests from threads that raced with last closer.
+	close(p.admit)
+	pret := piperet_t{}
+	pret.err = -EBADF
+	pret.poll = R_HUP | R_ERROR
+	for ; admit > 0; admit-- {
+		var msg pipemsg_t
+		if rblockers.haswaiter() {
+			msg = rblockers.pop()
+		} else if wblockers.haswaiter() {
+			msg = wblockers.pop()
+		} else {
+			panic("wut")
+		}
+		switch msg.mtype {
+		case D_READ, D_READNOBLK, D_WRITE, D_WRITENOBLK, D_POLL:
+			msg.ack <- pret
+		case D_REOPEN:
+		default:
+			panic("weird msg")
+		}
+	}
+	// XXXPANIC
+	if rblockers.haswaiter() {
+		panic("no")
+	}
+	// XXXPANIC
+	if wblockers.haswaiter() {
+		panic("no")
+	}
 	}()
 }
 
@@ -1133,16 +1245,15 @@ func (pf *pipefops_t) read(dst *userbuf_t) (int, int) {
 	if _, ok := <- p.admit; !ok {
 		return 0, -EBADF
 	}
-	outchan := p.out
+	m := pipemsg_t{}
 	if noblk {
-		outchan = p.outnoblk
+		m.mkreadnoblk(dst)
+	} else {
+		m.mkread(dst)
 	}
-	outchan <- dst
-	ret := <- p.outret
-	if ret < 0 {
-		return 0, ret
-	}
-	return ret, 0
+	p.msgch <- m
+	ret, err := m.readwait()
+	return ret, err
 }
 
 func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
@@ -1150,21 +1261,20 @@ func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
 	noblk := pf.options & O_NONBLOCK != 0
 	p := pf.pipe
 	c := 0
-	inchan := p.in
+	m := pipemsg_t{}
 	if noblk {
-		inchan = p.innoblk
+		m.mkwritenoblk(src)
+	} else {
+		m.mkwrite(src)
 	}
 	for c != src.len {
 		if _, ok := <- p.admit; !ok {
 			return 0, -EBADF
 		}
-		inchan <- src
-		ret := <- p.inret
-		if ret < 0 {
-			return 0, ret
-		}
-		if noblk {
-			return ret, 0
+		p.msgch <- m
+		ret, err := m.writewait()
+		if noblk || err != 0 {
+			return ret, err
 		}
 		c += ret
 	}
@@ -1192,13 +1302,13 @@ func (pf *pipefops_t) close() int {
 		return -EBADF
 	}
 	p := pf.pipe
-	var ch chan int
+	m := pipemsg_t{}
 	if pf.writer {
-		ch = p.writers
+		m.mkreopenw(-1)
 	} else {
-		ch = p.readers
+		m.mkreopenr(-1)
 	}
-	ch <- -1
+	p.msgch <- m
 	return 0
 }
 
@@ -1218,13 +1328,13 @@ func (pf *pipefops_t) reopen() int {
 	if _, ok := <- pf.pipe.admit; !ok {
 		return -EBADF
 	}
-	var ch chan int
+	m := pipemsg_t{}
 	if pf.writer {
-		ch = pf.pipe.writers
+		m.mkreopenw(1)
 	} else {
-		ch = pf.pipe.readers
+		m.mkreopenr(1)
 	}
-	ch <- 1
+	pf.pipe.msgch <- m
 	return 0
 }
 
@@ -1259,7 +1369,7 @@ func (pf *pipefops_t) recvfrom(*proc_t, *userbuf_t,
 
 func (pf *pipefops_t) pollone(pm pollmsg_t) ready_t {
 	if _, ok := <- pf.pipe.admit; !ok {
-		return 0
+		return pm.events & R_ERROR
 	}
 	// only a pipe writer can poll for writing, and reader for reading
 	if pf.writer {
@@ -1267,8 +1377,10 @@ func (pf *pipefops_t) pollone(pm pollmsg_t) ready_t {
 	} else {
 		pm.events &^= R_WRITE
 	}
-	pf.pipe.poll_in <- pm
-	status := <- pf.pipe.poll_out
+	m := pipemsg_t{}
+	m.mkpoll(&pm)
+	pf.pipe.msgch <- m
+	status := m.pollwait()
 	return status
 }
 
@@ -2264,18 +2376,15 @@ func (sus *susfops_t) close() int {
 	if !sus.conn {
 		return 0
 	}
-	err := 0
-	if sus._admitr() {
-		sus.pipein.readers <- -1
-	} else {
-		err = -EBADF
+	p := pipefops_t{pipe: sus.pipein}
+	err1 := p.close()
+	p.pipe = sus.pipeout
+	p.writer = true
+	err2 := p.close()
+	if err1 != 0 {
+		return err1
 	}
-	if sus._admitw() {
-		sus.pipeout.writers <- -1
-	} else {
-		err = -EBADF
-	}
-	return err
+	return err2
 }
 
 func (sus *susfops_t) fstat(*stat_t) int {
@@ -2303,18 +2412,15 @@ func (sus *susfops_t) reopen() int {
 	if !sus.conn {
 		return 0
 	}
-	err := 0
-	if sus._admitr() {
-		sus.pipein.readers <- 1
-	} else {
-		err = -EBADF
+	p := pipefops_t{pipe: sus.pipein}
+	err1 := p.reopen()
+	p.pipe = sus.pipeout
+	p.writer = true
+	err2 := p.reopen()
+	if err1 != 0 {
+		return err1
 	}
-	if sus._admitw() {
-		sus.pipeout.writers <- 1
-	} else {
-		err = -EBADF
-	}
-	return err
+	return err2
 }
 
 func (sus *susfops_t) write(src *userbuf_t) (int, int) {
@@ -2778,7 +2884,7 @@ func (sul *suslfops_t) recvfrom(*proc_t, *userbuf_t,
 
 func (sul *suslfops_t) pollone(pm pollmsg_t) ready_t {
 	if !sul._admit() {
-		return pm.events & R_HUP
+		return pm.events & (R_HUP|R_ERROR)
 	}
 	sul.susld.poll_in <- pm
 	return <- sul.susld.poll_out
@@ -3853,11 +3959,11 @@ type elf_phdr struct {
 }
 
 const(
-ELF_QUARTER = 2
-ELF_HALF    = 4
-ELF_OFF     = 8
-ELF_ADDR    = 8
-ELF_XWORD   = 8
+	ELF_QUARTER = 2
+	ELF_HALF    = 4
+	ELF_OFF     = 8
+	ELF_ADDR    = 8
+	ELF_XWORD   = 8
 )
 
 func (e *elf_t) sanity() bool {
