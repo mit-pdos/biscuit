@@ -180,6 +180,59 @@ func shadow_clear() {
 	cpu.pms = nil
 }
 
+type tss_t struct {
+	_res0 uint32
+
+	rsp0l uint32
+	rsp0h uint32
+	rsp1l uint32
+	rsp1h uint32
+	rsp2l uint32
+	rsp2h uint32
+
+	_res1 [2]uint32
+
+	ist1l uint32
+	ist1h uint32
+	ist2l uint32
+	ist2h uint32
+	ist3l uint32
+	ist3h uint32
+	ist4l uint32
+	ist4h uint32
+	ist5l uint32
+	ist5h uint32
+	ist6l uint32
+	ist6h uint32
+	ist7l uint32
+	ist7h uint32
+
+	_res2 [2]uint32
+
+	_res3 uint16
+	iobmap uint16
+	_align uint64
+}
+
+var alltss [32]tss_t
+
+//go:nosplit
+func tss_set(id uintptr, rsp uintptr, rsz *uintptr) uintptr {
+	sz := unsafe.Sizeof(alltss[id])
+	if sz != 104 + 8 {
+		panic("bad tss_t")
+	}
+	p := &alltss[id]
+	p.rsp0l = uint32(rsp)
+	p.rsp0h = uint32(rsp >> 32)
+
+	p.ist1l = uint32(rsp)
+	p.ist1h = uint32(rsp >> 32)
+	p.iobmap = uint16(sz)
+	*rsz = sz
+	return uintptr(unsafe.Pointer(p))
+}
+
 //go:nosplit
 func sc_setup() {
 	// disable interrupts

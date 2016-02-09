@@ -394,6 +394,7 @@ void runtime·cls(void);
 void runtime·putch(int8);
 extern void runtime·putcha(int8, int8);
 void runtime·shadow_clear(void);
+uint64 runtime·tss_set(uint64, uint64, uint64*);
 
 // src/runtime/proc.c
 struct spinlock_t {
@@ -761,45 +762,6 @@ int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user, int32 ist)
 #undef INT
 #undef TRAP
 #undef USER
-
-struct tss_t {
-	uint8 dur[26*4 + 8]; // +8 to preserve 16 byte alignment
-};
-
-struct tss_t tss[MAXCPUS];
-
-#pragma textflag NOSPLIT
-static void
-tss_set(struct tss_t *tss, uint64 rsp0)
-{
-	uint32 off = 4;		// offset to rsp0 field
-
-	// set rsp0
-	bw(&tss->dur[off + 0], rsp0, 0);
-	bw(&tss->dur[off + 1], rsp0, 1);
-	bw(&tss->dur[off + 2], rsp0, 2);
-	bw(&tss->dur[off + 3], rsp0, 3);
-	bw(&tss->dur[off + 4], rsp0, 4);
-	bw(&tss->dur[off + 5], rsp0, 5);
-	bw(&tss->dur[off + 6], rsp0, 6);
-	bw(&tss->dur[off + 7], rsp0, 7);
-
-	// set ist1
-	off = 36;
-	bw(&tss->dur[off + 0], rsp0, 0);
-	bw(&tss->dur[off + 1], rsp0, 1);
-	bw(&tss->dur[off + 2], rsp0, 2);
-	bw(&tss->dur[off + 3], rsp0, 3);
-	bw(&tss->dur[off + 4], rsp0, 4);
-	bw(&tss->dur[off + 5], rsp0, 5);
-	bw(&tss->dur[off + 6], rsp0, 6);
-	bw(&tss->dur[off + 7], rsp0, 7);
-
-	// disable io bitmap
-	uint64 d = sizeof(struct tss_t);
-	bw(&tss->dur[102], d, 0);
-	bw(&tss->dur[103], d, 1);
-}
 
 #pragma textflag NOSPLIT
 void
@@ -2288,11 +2250,6 @@ static uint64 lapaddr;
 static uint64
 tss_setup(int32 myid)
 {
-	// alignment is for performance
-	uint64 addr = (uint64)&tss[myid];
-	if (addr & (16 - 1))
-		runtime·pancake("tss not aligned", addr);
-
 	uint64 *va = (uint64 *)(0xa100001000ULL + myid*(2*PGSIZE));
 	// aps already have stack mapped
 	if (myid == 0)
@@ -2300,8 +2257,12 @@ tss_setup(int32 myid)
 
 	uint64 rsp = (uint64)va;
 
-	tss_set(&tss[myid], rsp);
-	tss_seg_set(myid, addr, sizeof(struct tss_t) - 1, 0);
+	uint64 tsize;
+	uint64 addr = runtime·tss_set(myid, rsp, &tsize);
+	// alignment is for performance
+	if (addr & (16 - 1))
+		runtime·pancake("tss not aligned", addr);
+	tss_seg_set(myid, addr, tsize - 1, 0);
 
 	ltr(TSS_SEG(myid) << 3);
 
