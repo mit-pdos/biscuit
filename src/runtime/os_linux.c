@@ -2864,8 +2864,8 @@ void
 hack_usleep(uint64 delay)
 {
 	struct timespec ts;
-	ts.tv_sec = delay/1000000000;
-	ts.tv_nsec = delay%1000000000;
+	ts.tv_sec = delay/1000000;
+	ts.tv_nsec = (delay%1000000)*1000;
 	int32 dummy = 0;
 	hack_futex(&dummy, FUTEX_WAIT, 0, &ts, nil, 0);
 }

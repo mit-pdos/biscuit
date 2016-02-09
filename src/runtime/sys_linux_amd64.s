@@ -79,7 +79,7 @@ TEXT runtime·usleep(SB),NOSPLIT,$16-8
 	TESTQ	DI, DI
 	JZ	us_skip
 	// can't simply jmp since frame size is non-zero...
-	MOVQ	usec+0(FP), AX
+	MOVL	usec+0(FP), AX
 	PUSHQ	AX
 	CALL	hack_usleep(SB)
 	POPQ	AX
