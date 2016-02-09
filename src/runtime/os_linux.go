@@ -217,7 +217,7 @@ type tss_t struct {
 var alltss [32]tss_t
 
 //go:nosplit
-func tss_set(id uintptr, rsp uintptr, rsz *uintptr) uintptr {
+func tss_set(id, rsp, nmi uintptr, rsz *uintptr) uintptr {
 	sz := unsafe.Sizeof(alltss[id])
 	if sz != 104 + 8 {
 		panic("bad tss_t")
@@ -228,7 +228,12 @@ func tss_set(id uintptr, rsp uintptr, rsz *uintptr) uintptr {
 
 	p.ist1l = uint32(rsp)
 	p.ist1h = uint32(rsp >> 32)
+
+	p.ist2l = uint32(nmi)
+	p.ist2h = uint32(nmi >> 32)
+
 	p.iobmap = uint16(sz)
+
 	*rsz = sz
 	return uintptr(unsafe.Pointer(p))
 }

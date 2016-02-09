@@ -106,7 +106,7 @@ protocseg64:
 	movq	%rax, %rsp
 	// rsp = bottom of stack page
 	addq	$PGSIZE, %rsp
-	addq	$(PGSIZE * 2), %rax
+	addq	$(PGSIZE * 4), %rax
 	movq	%rax, 72(%rdx)
 
 	// load idt and gdt

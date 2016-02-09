@@ -394,7 +394,7 @@ void runtime·cls(void);
 void runtime·putch(int8);
 extern void runtime·putcha(int8, int8);
 void runtime·shadow_clear(void);
-uint64 runtime·tss_set(uint64, uint64, uint64*);
+uint64 runtime·tss_set(uint64, uint64, uint64, uint64*);
 
 // src/runtime/proc.c
 struct spinlock_t {
@@ -2250,15 +2250,19 @@ static uint64 lapaddr;
 static uint64
 tss_setup(int32 myid)
 {
-	uint64 *va = (uint64 *)(0xa100001000ULL + myid*(2*PGSIZE));
+	uint64 *intstk = (uint64 *)(0xa100001000ULL + myid*(4*PGSIZE));
+	uint64 *nmistk = (uint64 *)(0xa100003000ULL + myid*(4*PGSIZE));
 	// aps already have stack mapped
-	if (myid == 0)
-		alloc_map(va - 1, PTE_W, 1);
+	if (myid == 0) {
+		alloc_map(intstk - 1, PTE_W, 1);
+		alloc_map(nmistk - 1, PTE_W, 1);
+	}
 
-	uint64 rsp = (uint64)va;
+	uint64 rsp = (uint64)intstk;
+	uint64 rspnmi = (uint64)nmistk;
 
 	uint64 tsize;
-	uint64 addr = runtime·tss_set(myid, rsp, &tsize);
+	uint64 addr = runtime·tss_set(myid, rsp, rspnmi, &tsize);
 	// alignment is for performance
 	if (addr & (16 - 1))
 		runtime·pancake("tss not aligned", addr);

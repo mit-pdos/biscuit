@@ -1718,6 +1718,12 @@ func cpus_find() []mpcpu_t {
 
 func cpus_stack_init(apcnt int, stackstart uintptr) {
 	for i := 0; i < apcnt; i++ {
+		// allocate/map interrupt stack
+		kmalloc(stackstart, PTE_W)
+		stackstart += PGSIZEW
+		assert_no_va_map(kpmap(), stackstart)
+		stackstart += PGSIZEW
+		// allocate/map NMI stack
 		kmalloc(stackstart, PTE_W)
 		stackstart += PGSIZEW
 		assert_no_va_map(kpmap(), stackstart)
@@ -1844,9 +1850,15 @@ func cpus_start(aplim int) {
 	runtime.Sgdt(&ss[sgdt])
 	runtime.Sidt(&ss[sidt])
 	ss[sapcnt] = 0
-	// the top of bsp's interrupt stack is 0xa100001000. map an interrupt
-	// stack for each ap. leave 0xa100001000 as a guard page.
-	stackstart := uintptr(0xa100002000)
+	// for BSP:
+	// 	int stack	[0xa100000000, 0xa100001000)
+	// 	guard page	[0xa100001000, 0xa100002000)
+	// 	NMI stack	[0xa100002000, 0xa100003000)
+	// 	guard page	[0xa100003000, 0xa100004000)
+	// for each AP:
+	// 	int stack	BSP's + apnum*4*PGSIZE + 0*PGSIZE
+	// 	NMI stack	BSP's + apnum*4*PGSIZE + 2*PGSIZE
+	stackstart := uintptr(0xa100004000)
 	ss[sstacks] = stackstart   // each ap grabs a unique stack
 	ss[sproceed] = 0
 
