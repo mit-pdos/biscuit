@@ -43,16 +43,16 @@ func Rdtsc() uint64
 func Rcr2() int
 func Rcr3() int
 func Rrsp() int
-func Sgdt(*int)
-func Sidt(*int)
+func Sgdt(*uintptr)
+func Sidt(*uintptr)
 func Sti()
 func Tlbadmit(int, int, int, int) uint
 func Tlbwait(uint)
 func Vtop(*[512]int) int
 
 func Crash()
-func Fnaddr(func()) int
-func Fnaddri(func(int)) int
+func Fnaddr(func()) uintptr
+func Fnaddri(func(int)) uintptr
 func Tfdump(*[24]int)
 func Stackdump(int)
 func Usleep(int)

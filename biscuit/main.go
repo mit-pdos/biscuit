@@ -1716,12 +1716,12 @@ func cpus_find() []mpcpu_t {
 	return ret
 }
 
-func cpus_stack_init(apcnt int, stackstart int) {
+func cpus_stack_init(apcnt int, stackstart uintptr) {
 	for i := 0; i < apcnt; i++ {
 		kmalloc(stackstart, PTE_W)
-		stackstart += PGSIZE
+		stackstart += PGSIZEW
 		assert_no_va_map(kpmap(), stackstart)
-		stackstart += PGSIZE
+		stackstart += PGSIZEW
 	}
 }
 
@@ -1832,7 +1832,7 @@ func cpus_start(aplim int) {
 	// 9 - stack start
 	// 10- proceed
 
-	ss := (*[11]int)(unsafe.Pointer(uintptr(0x7c00)))
+	ss := (*[11]uintptr)(unsafe.Pointer(uintptr(0x7c00)))
 	sap_entry := 3
 	sgdt      := 4
 	sidt      := 6
@@ -1846,7 +1846,7 @@ func cpus_start(aplim int) {
 	ss[sapcnt] = 0
 	// the top of bsp's interrupt stack is 0xa100001000. map an interrupt
 	// stack for each ap. leave 0xa100001000 as a guard page.
-	stackstart := 0xa100002000
+	stackstart := uintptr(0xa100002000)
 	ss[sstacks] = stackstart   // each ap grabs a unique stack
 	ss[sproceed] = 0
 
@@ -1867,7 +1867,7 @@ func cpus_start(aplim int) {
 	// ACPI to determine the correct count of CPUs and then wait for them
 	// all to join.
 	cdelay(500)
-	apcnt = ss[sapcnt]
+	apcnt = int(ss[sapcnt])
 	if apcnt > aplim {
 		apcnt = aplim
 	}
@@ -1877,7 +1877,7 @@ func cpus_start(aplim int) {
 	cpus_stack_init(apcnt, stackstart)
 
 	// tell the cpus to carry on
-	ss[sproceed] = apcnt
+	ss[sproceed] = uintptr(apcnt)
 
 	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], apcnt)
 }

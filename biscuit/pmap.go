@@ -14,6 +14,7 @@ const PTE_PS     int = 1 << 7
 const PTE_COW    int = 1 << 9
 const PTE_WASCOW int = 1 << 10
 const PGSIZE     int = 1 << 12
+const PGSIZEW    uintptr = uintptr(PGSIZE)
 const PGSHIFT    uint = 12
 const PGOFFSET   int = 0xfff
 const PGMASK     int = ^(PGOFFSET)
@@ -825,12 +826,12 @@ func pmap_iter(ptef func(int, *int), pm *[512]int, va int) {
 
 // allocates a page tracked by kpages and maps it at va. only used during AP
 // bootup.
-func kmalloc(va int, perms int) {
+func kmalloc(va uintptr, perms int) {
 	kplock.Lock()
 	defer kplock.Unlock()
 	pg, p_pg := pg_new()
 	kpgadd(pg)
-	pte := pmap_walk(kpmap(), va, perms, kpmpages)
+	pte := pmap_walk(kpmap(), int(va), perms, kpmpages)
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("page already mapped %#x", va))
 	}
@@ -903,8 +904,8 @@ func assert_no_phys(pmap *[512]int, phys int) {
 	}
 }
 
-func assert_no_va_map(pmap *[512]int, va int) {
-	pte := pmap_lookup(pmap, va)
+func assert_no_va_map(pmap *[512]int, va uintptr) {
+	pte := pmap_lookup(pmap, int(va))
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("va %#x is mapped", va))
 	}
