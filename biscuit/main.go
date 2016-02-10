@@ -2209,8 +2209,14 @@ func cpuchk() {
 	stepping := ax & 0xf
 	model :=  (ax >> 4) & 0xf
 	family := (ax >> 8) & 0xf
-	oldp := family == 6 && model < 3 && stepping < 3
+	emodel := (ax >> 16) & 0xf
+	efamily := (ax >> 20) & 0xff
 
+	rmodel := emodel << 4 + model
+	rfamily := efamily + family
+	fmt.Printf("CPUID: family: %x, model: %x\n", rfamily, rmodel)
+
+	oldp := rfamily == 6 && rmodel < 3 && stepping < 3
 	sep := uint32(1 << 11)
 	if dx & sep == 0 || oldp {
 		panic("sysenter not supported")
