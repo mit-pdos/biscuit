@@ -177,6 +177,7 @@ clean:
 	rm -rf user/cxx/sysroot
 
 qemu: gqemu
+qemux: gqemux
 qemu-gdb: gqemu-gdb
 
 old_qemu: d.img

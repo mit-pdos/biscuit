@@ -355,6 +355,7 @@ void cpu_halt(uint64);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
+void htpause(void);
 struct cpu_t* ·Gscpu(void);
 int64 inb(int32);
 uint64 lap_id(void);
@@ -485,26 +486,24 @@ static int32 halt;
 void
 runtime·pancake(void *msg, int64 addr)
 {
-	{
-	uint16 *p = (uint16 *)0xb8002;
-	*p = 0x1400 | 'F';
-	}
 	cli();
 
-	pmsg(msg);
-	pnum(addr);
-	pmsg(" PANCAKE");
 	volatile int32 *wtf = &halt;
 	*wtf = 1;
+
+	_pmsg(msg);
+	_pnum(addr);
+	_pmsg("PANCAKE");
+
+	while (1) {
+		uint16 *p = (uint16 *)0xb8002;
+		*p = 0x1400 | 'F';
+	}
 	//void stack_dump(uint64);
 	//stack_dump(rrsp());
 	//pmsg("TWO");
 	//stack_dump(g->m->curg->sched.sp);
 	//while (1);
-	while (1) {
-		uint16 *p = (uint16 *)0xb8002;
-		*p = 0x1400 | 'F';
-	}
 }
 
 #define assert(x, y, z)        do { if (!(x)) runtime·pancake(y, z); } while (0)
@@ -1341,31 +1340,24 @@ void
 stack_dump(uint64 rsp)
 {
 	uint64 *pte = pgdir_walk((void *)rsp, 0);
-	pmsg("STACK DUMP      ");
+	_pmsg("STACK DUMP      ");
 	if (pte && *pte & PTE_P) {
 		int32 i;
 		uint64 *p = (uint64 *)rsp;
 		for (i = 0; i < 70; i++) {
 			pte = pgdir_walk(p, 0);
 			if (pte && *pte & PTE_P)
-				pnum(*p++);
+				_pnum(*p++);
 		}
 	} else {
 		pmsg("bad stack");
-		pnum(rsp);
+		_pnum(rsp);
 		if (pte) {
-			pmsg("pte:");
-			pnum(*pte);
+			_pmsg("pte:");
+			_pnum(*pte);
 		} else
-			pmsg("null pte");
+			_pmsg("null pte");
 	}
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Stackdump(uint64 rsp)
-{
-	stack_dump(rsp);
 }
 
 #pragma textflag NOSPLIT
@@ -1881,7 +1873,6 @@ uint64 tlbshoot_gen;
 uint64
 runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
 {
-	void htpause(void);
 	runtime·stackcheck();
 	volatile uint64 *p = &tlbshoot_wait;
 	while (!runtime·cas64(&tlbshoot_wait, 0, cpuwait))
@@ -2123,6 +2114,29 @@ proftick(void)
 	}
 }
 
+#pragma textflag NOSPLIT
+void
+kernel_fault(uint64 *tf)
+{
+	uint64 trapno = tf[TF_TRAPNO];
+	_pmsg("trap frame at");
+	_pnum((uint64)tf);
+	_pmsg("trapno");
+	_pnum(trapno);
+	uint64 rip = tf[TF_RIP];
+	_pmsg("rip");
+	_pnum(rip);
+	if (trapno == TRAP_PGFAULT) {
+		uint64 rcr2(void);
+		uint64 cr2 = rcr2();
+		_pmsg("cr2");
+		_pnum(cr2);
+	}
+	uint64 rsp = tf[TF_RSP];
+	stack_dump(rsp);
+	runtime·pancake("kernel fault", trapno);
+}
+
 // XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX 
 // may want to only wakeup() on most timer ints since now there is more
 // overhead for timer ints during user time.
@@ -2144,24 +2158,8 @@ trap(uint64 *tf)
 	lcr3(kpmap);
 
 	// CPU exceptions in kernel mode are fatal errors
-	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0) {
-		pmsg("trap frame at");
-		pnum((uint64)tf);
-		pmsg("trapno");
-		pnum(trapno);
-		uint64 rip = tf[TF_RIP];
-		pmsg("rip");
-		pnum(rip);
-		if (trapno == 14) {
-			uint64 rcr2(void);
-			uint64 cr2 = rcr2();
-			pmsg("cr2");
-			pnum(cr2);
-		}
-		uint64 rsp = tf[TF_RSP];
-		stack_dump(rsp);
-		runtime·pancake("kernel fault", trapno);
-	}
+	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0)
+		kernel_fault(tf);
 
 	if (·Gscpu() != &curcpu) {
 		pnum((uint64)·Gscpu());

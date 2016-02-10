@@ -54,7 +54,6 @@ func Crash()
 func Fnaddr(func()) uintptr
 func Fnaddri(func(int)) uintptr
 func Tfdump(*[24]int)
-func Stackdump(int)
 func Usleep(int)
 func Rflags() int
 func Resetgcticks() uint64
