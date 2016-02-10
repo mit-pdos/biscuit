@@ -142,6 +142,7 @@ void doredirs(char *infn, char *outfn, int append)
 
 int main(int argc, char **argv)
 {
+	int nbgs = 0;
 	while (1) {
 		// if you change the output of lsh, you need to update
 		// posixtest() in usertests.c so the test is aware of the new
@@ -156,6 +157,11 @@ int main(int argc, char **argv)
 		char *com;
 		if ((com = strchr(p, '#')))
 			*com = '\0';
+		int isbg = 0;
+		if ((com = strchr(p, '&'))) {
+			*com = ' ';
+			isbg = 1;
+		}
 		if (redir(p, &infile, &outfile, &append))
 			continue;
 		mkargs(p, args, sz);
@@ -167,8 +173,27 @@ int main(int argc, char **argv)
 		if (pid < 0)
 			err(-1, "fork");
 		if (pid) {
-			wait(NULL);
+			if (isbg)
+				nbgs++;
+			else
+				while (wait(NULL) != pid)
+					;
 			continue;
+		}
+		// if background job, fork another child to check the commands
+		// exit code
+		int pid2;
+		if (isbg && (pid2 = fork()) != 0) {
+			printf("background pid %d\n", pid2);
+			int status;
+			wait(&status);
+			int st = WEXITSTATUS(status);
+			if (!WIFEXITED(status) || st != 0)
+				printf("background job %d failed with %d",
+				    pid2, st);
+			else
+				printf("background job %d done\n", pid2);
+			exit(st);
 		}
 		doredirs(infile, outfile, append);
 		execvp(args[0], args);
