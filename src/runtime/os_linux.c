@@ -391,8 +391,9 @@ void intsigret(void);
 
 // src/runtime/os_linux.go
 void runtime·cls(void);
+void runtime·perfmask(void);
 void runtime·putch(int8);
-extern void runtime·putcha(int8, int8);
+void runtime·putcha(int8, int8);
 void runtime·shadow_clear(void);
 uint64 runtime·tss_set(uint64, uint64, uint64, uint64*);
 
@@ -804,6 +805,7 @@ int_setup(void)
 	extern void Xsyscall(void);
 	extern void Xtlbshoot(void);
 	extern void Xsigret(void);
+	extern void Xperfmask(void);
 
 	extern void Xirq1(void);
 	extern void Xirq2(void);
@@ -829,7 +831,7 @@ int_setup(void)
 	// can context switch to a new thread).
 	int_set(&idt[ 0], (uint64) Xdz , 0, 0, 0);
 	int_set(&idt[ 1], (uint64) Xrz , 0, 0, 0);
-	int_set(&idt[ 2], (uint64) Xnmi, 0, 0, 0);
+	int_set(&idt[ 2], (uint64) Xnmi, 0, 0, 2);
 	int_set(&idt[ 3], (uint64) Xbp , 0, 0, 0);
 	int_set(&idt[ 4], (uint64) Xov , 0, 0, 0);
 	int_set(&idt[ 5], (uint64) Xbnd, 0, 0, 0);
@@ -874,6 +876,7 @@ int_setup(void)
 
 	int_set(&idt[70], (uint64) Xtlbshoot, 0, 0, 1);
 	int_set(&idt[71], (uint64) Xsigret,   0, 0, 1);
+	int_set(&idt[72], (uint64) Xperfmask, 0, 0, 1);
 
 	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
@@ -1462,6 +1465,7 @@ mmap_test(void)
 #define TRAP_YIELD      49
 #define TRAP_TLBSHOOT   70
 #define TRAP_SIGRET     71
+#define TRAP_PERFMASK   72
 
 #define IRQ_BASE	32
 #define IS_IRQ(x)	(x > IRQ_BASE && x <= IRQ_BASE + 15)
@@ -1639,6 +1643,21 @@ void
 ·Cprint(byte n, int64 row)
 {
 	cpuprint((uint8)n, (int32)row);
+}
+
+#pragma textflag NOSPLIT
+static void
+cpupnum(uint64 rip)
+{
+	uint64 i;
+	for (i = 0; i < 16; i++) {
+		uint8 c = (rip >> i*4) & 0xf;
+		if (c < 0xa)
+			c += '0';
+		else
+			c = 'a' + (c - 0xa);
+		cpuprint(c, i);
+	}
 }
 
 #pragma textflag NOSPLIT
@@ -2111,8 +2130,18 @@ proftick(void)
 void
 trap(uint64 *tf)
 {
-	lcr3(kpmap);
 	uint64 trapno = tf[TF_TRAPNO];
+
+	if (trapno == 2) {
+		uint64 rip = tf[TF_RIP];
+		cpupnum(rip);
+
+		runtime·perfmask();
+
+		trapret(tf, rcr3());
+	}
+
+	lcr3(kpmap);
 
 	// CPU exceptions in kernel mode are fatal errors
 	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0) {
@@ -2199,9 +2228,6 @@ trap(uint64 *tf)
 	if (trapno == TRAP_TLBSHOOT) {
 		// does not return
 		tlb_shootdown();
-	} else if (trapno == TRAP_SIGRET) {
-		// does not return
-		sigret(ct);
 	} else if (trapno == TRAP_TIMER) {
 		splock(&threadlock);
 		if (ct) {
@@ -2237,6 +2263,16 @@ trap(uint64 *tf)
 		// we vet out kernel mode CPU exceptions above; must be from
 		// user program. thus return from Userrun() to kernel.
 		sched_run(ct);
+	} else if (trapno == TRAP_SIGRET) {
+		// does not return
+		sigret(ct);
+	} else if (trapno == TRAP_PERFMASK) {
+		lap_eoi();
+		runtime·perfmask();
+		if (ct)
+			sched_run(ct);
+		else
+			sched_halt();
 	} else {
 		runtime·pancake("unexpected int", trapno);
 	}
@@ -2423,7 +2459,9 @@ timer_setup(int32 calibrate)
 		lapic_quantum = lapelapsed / HZ;
 
 		pmsg("CPU Mhz:");
-		pnum(cycelapsed/(1000 * 1000));
+		extern uint64 runtime·Cpumhz;
+		runtime·Cpumhz = cycelapsed/(1000 * 1000);
+		pnum(runtime·Cpumhz);
 		pmsg("\n");
 		pspercycle = (1000000000000ull)/cycelapsed;
 

@@ -672,6 +672,7 @@ IH_NOEC(49,Xyield )
 IH_NOEC(64,Xsyscall )
 IH_NOEC(70,Xtlbshoot )
 IH_NOEC(71,Xsigret )
+IH_NOEC(72,Xperfmask )
 
 // irqs
 // irq0 is Xtimer

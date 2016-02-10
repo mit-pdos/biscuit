@@ -75,6 +75,8 @@ type cpu_t struct {
 	pms		[]*[512]int
 }
 
+var Cpumhz uint
+
 var cpus [32]cpu_t
 
 type tuser_t struct {
@@ -236,6 +238,59 @@ func tss_set(id, rsp, nmi uintptr, rsz *uintptr) uintptr {
 
 	*rsz = sz
 	return uintptr(unsafe.Pointer(p))
+}
+
+var LVTPerfMask bool = true
+
+//go:nosplit
+func perfmask() {
+	lapaddr := 0xfee00000
+	const PGSIZE = 1 << 12
+	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+
+	perfmonc := 208
+	mask := uint32(1 << 16)
+	nmidelmode :=  uint32(0x4 << 8)
+	if LVTPerfMask {
+		lap[perfmonc] = mask
+		_perfcnt(false)
+	} else {
+		lap[perfmonc] = nmidelmode
+		_perfcnt(true)
+	}
+}
+
+//go:nosplit
+func _perfcnt(en bool) {
+	ia32_pmc0 := 0xc1
+	ia32_perfevtsel0 := 0x186
+	ia32_perf_global_ovf_ctrl := 0x390
+	//ia32_perf_global_status := uint32(0x38e)
+
+	// "unhalted core cycles"
+	umask := uint8(0)
+	event := uint8(0x3c)
+
+	if en {
+		// disable perf counter before clearing
+		Wrmsr(ia32_perfevtsel0, 0)
+
+		// clear overflow
+		Wrmsr(ia32_perf_global_ovf_ctrl, 1)
+
+		usr := uint(1 << 16)
+		os := uint(1 << 17)
+		en := uint(1 << 22)
+		inte := uint(1 << 20)
+
+		ticks := int(Cpumhz * 10000)
+		Wrmsr(ia32_pmc0, -ticks)
+
+		v := uint(umask) | uint(event) | usr | os | en | inte
+		Wrmsr(ia32_perfevtsel0, int(v))
+	} else {
+		Wrmsr(ia32_perfevtsel0, 0)
+	}
 }
 
 //go:nosplit

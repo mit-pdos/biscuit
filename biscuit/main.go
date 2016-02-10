@@ -2231,6 +2231,80 @@ func cpuchk() {
 	}
 }
 
+func perfsetup() {
+	ax, bx, _, _ := runtime.Cpuid(0xa, 0)
+	perfv := ax & 0xff
+	npmc := (ax >> 8) & 0xff
+	pmebits := (ax >> 24) & 0xff
+	cyccnt := bx & 1 == 0
+	if perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 && cyccnt {
+		fmt.Printf("Performance profiling enabled\n")
+		profhw = &intelprof_t{}
+	} else {
+		fmt.Printf("No performance profiling\n")
+		profhw = &nilprof_t{}
+	}
+}
+
+// a device driver for hardware profiling
+type profhw_i interface {
+	start()
+	stop() []uint8
+}
+
+var profhw profhw_i
+
+type nilprof_t struct {
+}
+
+func (n *nilprof_t) start() {
+}
+
+func (n *nilprof_t) stop() []uint8 {
+	var r []uint8
+	return r
+}
+
+type intelprof_t struct {
+	l	sync.Mutex
+}
+
+func (ip *intelprof_t) _disableall() {
+	runtime.LVTPerfMask = true
+	ip._perfipi()
+}
+
+func (ip *intelprof_t) _enableall() {
+	runtime.LVTPerfMask = false
+	ip._perfipi()
+}
+
+func (ip *intelprof_t) _perfipi() {
+	lapaddr := 0xfee00000
+	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+
+	allandself := 2
+	trap_perf := 72
+	low := uint32(allandself << 18 | 1 << 14 | trap_perf)
+	icrl := 0x300/4
+	atomic.StoreUint32(&lap[icrl], low)
+	ipisent := uint32(1 << 12)
+	for atomic.LoadUint32(&lap[icrl]) & ipisent != 0 {
+	}
+}
+
+func (ip *intelprof_t) start() {
+	ip.l.Lock()
+	ip._enableall()
+}
+
+func (ip *intelprof_t) stop() []uint8 {
+	ip._disableall()
+	ip.l.Unlock()
+	var r []uint8
+	return r
+}
+
 func mkbm() {
 	ch := make(chan bool)
 	for it := 0; it < 20; it++ {
@@ -2341,6 +2415,7 @@ func main() {
 	//findbm()
 
 	cpuchk()
+	perfsetup()
 
 	// control CPUs
 	aplim := 7

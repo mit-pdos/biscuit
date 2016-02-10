@@ -2,7 +2,6 @@ package main
 
 import "fmt"
 import "runtime"
-import "runtime/pprof"
 import "sync"
 import "sync/atomic"
 import "time"
@@ -3837,18 +3836,19 @@ func buftodests(buf []uint8, dsts [][]uint8) int {
 
 func sys_fake(proc *proc_t, n int) int {
 	if n != 0 {
-		//runtime.Kreset()
+		profhw.start()
+		//prof.init()
+		//err := pprof.StartCPUProfile(&prof)
+		//if err != nil {
+		//	fmt.Printf("%v\n", err)
+		//	return 1
+		//}
 		//runtime.SetBlockProfileRate(1)
-		prof.init()
-		err := pprof.StartCPUProfile(&prof)
-		if err != nil {
-			fmt.Printf("%v\n", err)
-			return 1
-		}
 	} else {
-		//kns := runtime.Ktime()
-		pprof.StopCPUProfile()
-		prof.dump()
+		profhw.stop()
+		//pprof.StopCPUProfile()
+		//prof.dump()
+
 		//pprof.WriteHeapProfile(&prof)
 		//fmt.Printf("K    ns: %v\n", kns)
 

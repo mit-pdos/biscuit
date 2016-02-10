@@ -192,7 +192,7 @@ func stkbucket(typ bucketType, size uintptr, stk []uintptr, alloc bool) *bucket 
 
 func sysAlloc(n uintptr, stat *uint64) unsafe.Pointer
 func pancake(n []byte, o uint64)
-func pnum(n uint64)
+func pnum(n uintptr)
 
 func eqslice(x, y []uintptr) bool {
 	if len(x) != len(y) {
