@@ -392,7 +392,7 @@ void intsigret(void);
 
 // src/runtime/os_linux.go
 void runtime·cls(void);
-void runtime·perfmask(void);
+void runtime·perfmask(uint64 *);
 void runtime·putch(int8);
 void runtime·putcha(int8, int8);
 void runtime·shadow_clear(void);
@@ -2147,11 +2147,7 @@ trap(uint64 *tf)
 	uint64 trapno = tf[TF_TRAPNO];
 
 	if (trapno == 2) {
-		uint64 rip = tf[TF_RIP];
-		cpupnum(rip);
-
-		runtime·perfmask();
-
+		runtime·perfmask(tf);
 		trapret(tf, rcr3());
 	}
 
@@ -2266,7 +2262,7 @@ trap(uint64 *tf)
 		sigret(ct);
 	} else if (trapno == TRAP_PERFMASK) {
 		lap_eoi();
-		runtime·perfmask();
+		runtime·perfmask(nil);
 		if (ct)
 			sched_run(ct);
 		else

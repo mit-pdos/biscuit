@@ -2249,7 +2249,7 @@ func perfsetup() {
 // a device driver for hardware profiling
 type profhw_i interface {
 	start()
-	stop() []uint8
+	stop() []uintptr
 }
 
 var profhw profhw_i
@@ -2260,8 +2260,8 @@ type nilprof_t struct {
 func (n *nilprof_t) start() {
 }
 
-func (n *nilprof_t) stop() []uint8 {
-	var r []uint8
+func (n *nilprof_t) stop() []uintptr {
+	var r []uintptr
 	return r
 }
 
@@ -2293,15 +2293,24 @@ func (ip *intelprof_t) _perfipi() {
 	}
 }
 
+var _zbf [4096]uintptr
 func (ip *intelprof_t) start() {
 	ip.l.Lock()
+
+	runtime.Byoof = _zbf
+	runtime.Byidx = 0
+
 	ip._enableall()
 }
 
-func (ip *intelprof_t) stop() []uint8 {
+func (ip *intelprof_t) stop() []uintptr {
 	ip._disableall()
+
+	l := runtime.Byidx + 1
+	r := make([]uintptr, l)
+	copy(r, runtime.Byoof[0:l])
+
 	ip.l.Unlock()
-	var r []uint8
 	return r
 }
 
@@ -2466,22 +2475,9 @@ func main() {
 		p.sched_add(&tf, p.tid0)
 	}
 
-	//exec("bin/bmgc2", []string{"100000000"})
-	//exec("bin/bmgc2", []string{"10"})
-	//exec("bin/mail-qman", []string{"/mail/spool", "/mail", "1"})
 	//exec("bin/lsh", nil)
 	exec("bin/init", nil)
 	//exec("bin/rs", []string{"/redis.conf"})
-	//exec("bin/sfork", []string{"-s", "3", "-b", "d", "1"})
-	//exec("bin/ls", nil)
-	//exec("bin/hello", nil)
-	//exec("bin/fork", nil)
-	//exec("bin/fault", nil)
-	//exec("bin/usertests", nil)
-	//exec("bin/pipetest", []string{})
-	//exec("bin/ls", []string{})
-
-	//ide_test()
 
 	//go func() {
 	//	d := time.Second
@@ -2495,7 +2491,6 @@ func main() {
 
 	var dur chan bool
 	<- dur
-	//fake_work()
 }
 
 func findbm() {

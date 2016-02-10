@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+import "sort"
 import "sync"
 import "sync/atomic"
 import "time"
@@ -3834,7 +3835,38 @@ func buftodests(buf []uint8, dsts [][]uint8) int {
 	return ret
 }
 
+type perfrips_t struct {
+	rips	[]uintptr
+	times	[]int
+}
+
+func (pr *perfrips_t) init(m map[uintptr]int) {
+	l := len(m)
+	pr.rips = make([]uintptr, l)
+	pr.times = make([]int, l)
+	idx := 0
+	for k, v := range m {
+		pr.rips[idx] = k
+		pr.times[idx] = v
+		idx++
+	}
+}
+
+func (pr *perfrips_t) Len() int {
+	return len(pr.rips)
+}
+
+func (pr *perfrips_t) Less(i, j int) bool {
+	return pr.times[i] < pr.times[j]
+}
+
+func (pr *perfrips_t) Swap(i, j int) {
+	pr.rips[i], pr.rips[j] = pr.rips[j], pr.rips[i]
+	pr.times[i], pr.times[j] = pr.times[j], pr.times[i]
+}
+
 func sys_fake(proc *proc_t, n int) int {
+	// start profiling
 	if n != 0 {
 		profhw.start()
 		//prof.init()
@@ -3844,22 +3876,41 @@ func sys_fake(proc *proc_t, n int) int {
 		//	return 1
 		//}
 		//runtime.SetBlockProfileRate(1)
-	} else {
-		profhw.stop()
-		//pprof.StopCPUProfile()
-		//prof.dump()
-
-		//pprof.WriteHeapProfile(&prof)
-		//fmt.Printf("K    ns: %v\n", kns)
-
-		//p := pprof.Lookup("block")
-		//err := p.WriteTo(&prof, 0)
-		//if err != nil {
-		//	fmt.Printf("%v\n", err)
-		//	return 1
-		//}
-		//prof.dump()
+		return 0
 	}
+
+	// stop profiling
+	rips := profhw.stop()
+	if len(rips) == 0 {
+		fmt.Printf("No samples!\n")
+		return 0
+	}
+
+	m := make(map[uintptr]int)
+	for _, v := range rips {
+		m[v] = m[v] + 1
+	}
+	prips := perfrips_t{}
+	prips.init(m)
+	sort.Sort(sort.Reverse(&prips))
+	for i := 0; i < prips.Len(); i++ {
+		r := prips.rips[i]
+		t := prips.times[i]
+		fmt.Printf("%0.16x -- %10v\n", r, t)
+	}
+	//pprof.StopCPUProfile()
+	//prof.dump()
+
+	//pprof.WriteHeapProfile(&prof)
+	//fmt.Printf("K    ns: %v\n", kns)
+
+	//p := pprof.Lookup("block")
+	//err := p.WriteTo(&prof, 0)
+	//if err != nil {
+	//	fmt.Printf("%v\n", err)
+	//	return 1
+	//}
+	//prof.dump()
 	return 0
 }
 
