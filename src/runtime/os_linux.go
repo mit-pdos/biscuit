@@ -245,7 +245,15 @@ var Byoof [4096]uintptr
 var Byidx uint64 = ^uint64(0)
 
 //go:nosplit
-func perfmask(tf *[TFSIZE]uintptr) {
+func perfgather(tf *[TFSIZE]uintptr) {
+	idx := xadd64(&Byidx, 1)
+	if idx <= uint64(len(Byoof)) {
+		Byoof[idx] = tf[TF_RIP]
+	}
+}
+
+//go:nosplit
+func perfmask() {
 	lapaddr := 0xfee00000
 	const PGSIZE = 1 << 12
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
@@ -257,14 +265,6 @@ func perfmask(tf *[TFSIZE]uintptr) {
 		lap[perfmonc] = mask
 		_perfcnt(false)
 	} else {
-		// collect infos
-		if tf != nil {
-			idx := xadd64(&Byidx, 1)
-			if idx <= uint64(len(Byoof)) {
-				Byoof[idx] = tf[TF_RIP]
-			}
-		}
-
 		// unmask perf LVT, reset pmc
 		lap[perfmonc] = nmidelmode
 		_perfcnt(true)

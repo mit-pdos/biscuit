@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+import "runtime/pprof"
 import "sort"
 import "sync"
 import "sync/atomic"
@@ -3865,52 +3866,71 @@ func (pr *perfrips_t) Swap(i, j int) {
 	pr.times[i], pr.times[j] = pr.times[j], pr.times[i]
 }
 
-func sys_fake(proc *proc_t, n int) int {
-	// start profiling
-	if n != 0 {
+func _prof_nmi(en bool) {
+	if en {
 		profhw.start()
-		//prof.init()
-		//err := pprof.StartCPUProfile(&prof)
+	} else {
+		// stop profiling
+		rips := profhw.stop()
+		if len(rips) == 0 {
+			fmt.Printf("No samples!\n")
+			return
+		}
+
+		m := make(map[uintptr]int)
+		for _, v := range rips {
+			m[v] = m[v] + 1
+		}
+		prips := perfrips_t{}
+		prips.init(m)
+		sort.Sort(sort.Reverse(&prips))
+		for i := 0; i < prips.Len(); i++ {
+			r := prips.rips[i]
+			t := prips.times[i]
+			fmt.Printf("%0.16x -- %10v\n", r, t)
+		}
+	}
+}
+
+func _prof_go(en bool) {
+	if en {
+		prof.init()
+		err := pprof.StartCPUProfile(&prof)
+		if err != nil {
+			fmt.Printf("%v\n", err)
+			return
+		}
+		//runtime.SetBlockProfileRate(1)
+	} else {
+		pprof.StopCPUProfile()
+		prof.dump()
+
+		//pprof.WriteHeapProfile(&prof)
+		//fmt.Printf("K    ns: %v\n", kns)
+
+		//p := pprof.Lookup("block")
+		//err := p.WriteTo(&prof, 0)
 		//if err != nil {
 		//	fmt.Printf("%v\n", err)
 		//	return 1
 		//}
-		//runtime.SetBlockProfileRate(1)
-		return 0
+		//prof.dump()
+	}
+}
+
+func sys_fake(proc *proc_t, n int) int {
+	en := false
+	if n != 0 {
+		en = true
 	}
 
-	// stop profiling
-	rips := profhw.stop()
-	if len(rips) == 0 {
-		fmt.Printf("No samples!\n")
-		return 0
+	nmiprof := false
+	if nmiprof {
+		_prof_nmi(en)
+	} else {
+		_prof_go(en)
 	}
 
-	m := make(map[uintptr]int)
-	for _, v := range rips {
-		m[v] = m[v] + 1
-	}
-	prips := perfrips_t{}
-	prips.init(m)
-	sort.Sort(sort.Reverse(&prips))
-	for i := 0; i < prips.Len(); i++ {
-		r := prips.rips[i]
-		t := prips.times[i]
-		fmt.Printf("%0.16x -- %10v\n", r, t)
-	}
-	//pprof.StopCPUProfile()
-	//prof.dump()
-
-	//pprof.WriteHeapProfile(&prof)
-	//fmt.Printf("K    ns: %v\n", kns)
-
-	//p := pprof.Lookup("block")
-	//err := p.WriteTo(&prof, 0)
-	//if err != nil {
-	//	fmt.Printf("%v\n", err)
-	//	return 1
-	//}
-	//prof.dump()
 	return 0
 }
 

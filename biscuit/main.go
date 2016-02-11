@@ -2238,10 +2238,10 @@ func perfsetup() {
 	pmebits := (ax >> 24) & 0xff
 	cyccnt := bx & 1 == 0
 	if perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 && cyccnt {
-		fmt.Printf("Performance profiling enabled\n")
+		fmt.Printf("Hardware Performance monitoring enabled\n")
 		profhw = &intelprof_t{}
 	} else {
-		fmt.Printf("No performance profiling\n")
+		fmt.Printf("No hardware performance monitoring\n")
 		profhw = &nilprof_t{}
 	}
 }
@@ -2298,7 +2298,7 @@ func (ip *intelprof_t) start() {
 	ip.l.Lock()
 
 	runtime.Byoof = _zbf
-	runtime.Byidx = 0
+	runtime.Byidx = ^uint64(0)
 
 	ip._enableall()
 }
