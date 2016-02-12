@@ -242,14 +242,49 @@ func tss_set(id, rsp, nmi uintptr, rsz *uintptr) uintptr {
 var LVTPerfMask bool = true
 
 var Byoof [4096]uintptr
-var Byidx uint64 = ^uint64(0)
+var Byidx uint64 = 0
+
+//go:nosplit
+func _consumelbr() {
+	lastbranch_tos := 0x1c9
+	lastbranch_0_from_ip := 0x680
+	lastbranch_0_to_ip := 0x6c0
+
+	last := Rdmsr(lastbranch_tos) & 0xf
+	// XXX stacklen
+	l := 16 * 2
+	l++
+	idx := int(xadd64(&Byidx, int64(l)))
+	idx -= l
+	for i := 0; i < 16; i++ {
+		cur := (last - i)
+		if cur < 0 {
+			cur += 16
+		}
+		from := uintptr(Rdmsr(lastbranch_0_from_ip + cur))
+		to := uintptr(Rdmsr(lastbranch_0_to_ip + cur))
+		Wrmsr(lastbranch_0_from_ip + cur, 0)
+		Wrmsr(lastbranch_0_to_ip + cur, 0)
+		if idx + 2*i + 1 >= len(Byoof) {
+			Cprint('!', 1)
+			break
+		}
+		Byoof[idx+2*i] = from
+		Byoof[idx+2*i+1] = to
+	}
+	idx += l - 1
+	if idx < len(Byoof) {
+		Byoof[idx] = ^uintptr(0)
+	}
+}
 
 //go:nosplit
 func perfgather(tf *[TFSIZE]uintptr) {
-	idx := xadd64(&Byidx, 1)
+	idx := xadd64(&Byidx, 1) - 1
 	if idx <= uint64(len(Byoof)) {
 		Byoof[idx] = tf[TF_RIP]
 	}
+	//_consumelbr()
 }
 
 //go:nosplit
@@ -259,28 +294,52 @@ func perfmask() {
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 
 	perfmonc := 208
-	mask := uint32(1 << 16)
-	nmidelmode :=  uint32(0x4 << 8)
 	if LVTPerfMask {
+		mask := uint32(1 << 16)
 		lap[perfmonc] = mask
-		_perfcnt(false)
+		_pmcreset(false)
 	} else {
 		// unmask perf LVT, reset pmc
+		nmidelmode :=  uint32(0x4 << 8)
 		lap[perfmonc] = nmidelmode
-		_perfcnt(true)
+		_pmcreset(true)
 	}
 }
 
 //go:nosplit
-func _perfcnt(en bool) {
+func _lrbreset(en bool) {
+	ia32_debugctl := 0x1d9
+	if !en {
+		Wrmsr(ia32_debugctl, 0)
+		return
+	}
+
+	// enable last branch records. filter every branch but to direct
+	// calls/jmps (sandybridge onward has better filtering)
+	lbr_select := 0x1c8
+	jcc := 1 << 2
+	indjmp := 1 << 6
+	//reljmp := 1 << 7
+	farbr := 1 << 8
+	dv := jcc | farbr | indjmp
+	Wrmsr(lbr_select, dv)
+
+	freeze_lbrs_on_pmi := 1 << 11
+	lbrs := 1 << 0
+	dv = lbrs | freeze_lbrs_on_pmi
+	Wrmsr(ia32_debugctl, dv)
+}
+
+//go:nosplit
+func _pmcreset(en bool) {
 	ia32_pmc0 := 0xc1
 	ia32_perfevtsel0 := 0x186
 	ia32_perf_global_ovf_ctrl := 0x390
 	//ia32_perf_global_status := uint32(0x38e)
 
 	// "unhalted core cycles"
-	umask := uint8(0)
-	event := uint8(0x3c)
+	umask := 0
+	event := 0x3c
 
 	if en {
 		// disable perf counter before clearing
@@ -289,19 +348,23 @@ func _perfcnt(en bool) {
 		// clear overflow
 		Wrmsr(ia32_perf_global_ovf_ctrl, 1)
 
-		usr := uint(1 << 16)
-		os := uint(1 << 17)
-		en := uint(1 << 22)
-		inte := uint(1 << 20)
+		usr := 1 << 16
+		os := 1 << 17
+		en := 1 << 22
+		inte := 1 << 20
 
 		ticks := int(Cpumhz * 10000)
 		Wrmsr(ia32_pmc0, -ticks)
 
-		v := uint(umask) | uint(event) | usr | os | en | inte
-		Wrmsr(ia32_perfevtsel0, int(v))
+		v := umask | event | usr | os | en | inte
+		Wrmsr(ia32_perfevtsel0, v)
 	} else {
 		Wrmsr(ia32_perfevtsel0, 0)
 	}
+
+	// the write to debugctl enabling LBR must come after clearing overflow
+	// via global_ovf_ctrl; otherwise the processor instantly clears lbr...
+	//_lrbreset(en)
 }
 
 //go:nosplit

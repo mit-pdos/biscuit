@@ -2237,7 +2237,10 @@ func perfsetup() {
 	npmc := (ax >> 8) & 0xff
 	pmebits := (ax >> 24) & 0xff
 	cyccnt := bx & 1 == 0
-	if perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 && cyccnt {
+	_, _, cx, _ := runtime.Cpuid(0x1, 0)
+	pdc := cx & (1 << 15) != 0
+	if pdc && perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 &&
+	    cyccnt {
 		fmt.Printf("Hardware Performance monitoring enabled\n")
 		profhw = &intelprof_t{}
 	} else {
@@ -2298,7 +2301,7 @@ func (ip *intelprof_t) start() {
 	ip.l.Lock()
 
 	runtime.Byoof = _zbf
-	runtime.Byidx = ^uint64(0)
+	runtime.Byidx = 0
 
 	ip._enableall()
 }
@@ -2306,7 +2309,10 @@ func (ip *intelprof_t) start() {
 func (ip *intelprof_t) stop() []uintptr {
 	ip._disableall()
 
-	l := runtime.Byidx + 1
+	l := int(runtime.Byidx) + 1
+	if l > len(runtime.Byoof) {
+		l = len(runtime.Byoof)
+	}
 	r := make([]uintptr, l)
 	copy(r, runtime.Byoof[0:l])
 
