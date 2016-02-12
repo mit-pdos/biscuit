@@ -1341,14 +1341,17 @@ void
 stack_dump(uint64 rsp)
 {
 	uint64 *pte = pgdir_walk((void *)rsp, 0);
-	_pmsg("STACK DUMP      ");
+	_pmsg("STACK DUMP\n");
 	if (pte && *pte & PTE_P) {
-		int32 i;
+		int32 i, pc = 0;
 		uint64 *p = (uint64 *)rsp;
 		for (i = 0; i < 70; i++) {
 			pte = pgdir_walk(p, 0);
-			if (pte && *pte & PTE_P)
+			if (pte && *pte & PTE_P) {
 				_pnum(*p++);
+				if (((pc++ + 1) % 4) == 0)
+					_pmsg("\n");
+			}
 		}
 	} else {
 		pmsg("bad stack");
