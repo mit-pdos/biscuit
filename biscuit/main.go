@@ -1360,8 +1360,9 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 // len(src) is not mapped
 func (p *proc_t) usercopy(src []uint8, uva int) bool {
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
-	return p.usercopy_inner(src, uva)
+	ret := p.usercopy_inner(src, uva)
+	p.Unlock_pmap()
+	return ret
 }
 
 func (p *proc_t) usercopy_inner(src []uint8, uva int) bool {
