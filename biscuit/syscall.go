@@ -707,21 +707,27 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 		return orig & 0x0000ffffffffffff | ((origevents & bits) << 48)
 	}
 
+	// copy pollfds from userspace to avoid reading/writing overhead
+	// (locking pmap and looking up uva mapping).
+	pollfdsz := 8
+	sz := pollfdsz*nfds
+	buf := make([]uint8, sz)
+	if !proc.user2k(buf, fdsn) {
+		return -EFAULT
+	}
+
 	// first we tell the underlying device to notify us if their fd is
 	// ready. if a device is immediately ready, we don't both to register
 	// notifiers with the rest of the devices -- we just ask their status
 	// too.
-	pollfdsz := 8
 	devwait := timeout != 0
 	pm := pollmsg_t{}
 	pm.pm_init(timeout)
 	readyfds := 0
+	writeback := false
 	for i := 0; i < nfds; i++ {
-		va := fdsn + pollfdsz*i
-		uw, ok := proc.userreadn(va, 8)
-		if !ok {
-			return -EFAULT
-		}
+		off := i*8
+		uw := readn(buf, 8, off)
 		fdn := int(uint32(uw))
 		// fds < 0 are to be ignored
 		if fdn < 0 {
@@ -730,9 +736,8 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 		fd, ok := proc.fd_get(fdn)
 		if !ok {
 			uw |= POLLNVAL
-			if !proc.userwriten(va, 8, uw) {
-				return -EFAULT
-			}
+			writen(buf, 8, off, uw)
+			writeback = true
 			continue
 		}
 		var pev ready_t
@@ -756,11 +761,14 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 			// other fds send notifications. update user revents
 			devwait = false
 			nuw := ppoke(uw, ready2rev(devstatus))
-			if !proc.userwriten(va, 8, nuw) {
-				return -EFAULT
-			}
+			writen(buf, 8, off, nuw)
 			readyfds++
+			writeback = true
 		}
+	}
+
+	if writeback && !proc.k2user(buf, fdsn) {
+		return -EFAULT
 	}
 
 	// if we found a ready fd, we are done
@@ -778,12 +786,10 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 	}
 	// update pollfd revent field
 	idx := rpm.phint
-	va := fdsn + idx*pollfdsz
-	uw, ok := proc.userreadn(va, 8)
-	if !ok {
-		return -EFAULT
-	}
+	off := idx*pollfdsz
+	uw := readn(buf, 8, off)
 	nuw := ppoke(uw, ready2rev(rpm.events))
+	va := fdsn + off
 	if !proc.userwriten(va, 8, nuw) {
 		return -EFAULT
 	}
