@@ -1358,14 +1358,14 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 
 // copies src to the user virtual address uva. may copy part of src if uva +
 // len(src) is not mapped
-func (p *proc_t) usercopy(src []uint8, uva int) bool {
+func (p *proc_t) k2user(src []uint8, uva int) bool {
 	p.Lock_pmap()
-	ret := p.usercopy_inner(src, uva)
+	ret := p.k2user_inner(src, uva)
 	p.Unlock_pmap()
 	return ret
 }
 
-func (p *proc_t) usercopy_inner(src []uint8, uva int) bool {
+func (p *proc_t) k2user_inner(src []uint8, uva int) bool {
 	p.lockassert_pmap()
 	cnt := 0
 	l := len(src)
@@ -1381,6 +1381,34 @@ func (p *proc_t) usercopy_inner(src []uint8, uva int) bool {
 		}
 		copy(dst, src)
 		src = src[ub:]
+		cnt += ub
+	}
+	return true
+}
+
+// copies len(dst) bytes from userspace address uva to dst
+func (p *proc_t) user2k(dst []uint8, uva int) bool {
+	p.Lock_pmap()
+	ret := p.user2k_inner(dst, uva)
+	p.Unlock_pmap()
+	return ret
+}
+
+func (p *proc_t) user2k_inner(dst []uint8, uva int) bool {
+	p.lockassert_pmap()
+	cnt := 0
+	l := len(dst)
+	for cnt != l {
+		src, ok := p.userdmap8_inner(uva + cnt)
+		if !ok {
+			return false
+		}
+		ub := len(dst)
+		if ub > len(src) {
+			ub = len(src)
+		}
+		copy(dst, src)
+		dst = dst[ub:]
 		cnt += ub
 	}
 	return true

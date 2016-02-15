@@ -645,7 +645,7 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 	if err != 0 {
 		return err
 	}
-	ok = proc.usercopy(buf.data, statn)
+	ok = proc.k2user(buf.data, statn)
 	if !ok {
 		return -EFAULT
 	}
@@ -666,7 +666,7 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 		return err
 	}
 
-	ok = proc.usercopy(buf.data, statn)
+	ok = proc.k2user(buf.data, statn)
 	if !ok {
 		return -EFAULT
 	}
@@ -1491,7 +1491,7 @@ func sys_gettimeofday(proc *proc_t, timevaln int) int {
 	us := int(now.UnixNano() / 1000)
 	writen(buf, 8, 0, us/1e6)
 	writen(buf, 8, 8, us%1e6)
-	if !proc.usercopy(buf, timevaln) {
+	if !proc.k2user(buf, timevaln) {
 		return -EFAULT
 	}
 	return 0
@@ -1562,7 +1562,7 @@ func sys_getrusage(proc *proc_t, who, rusagep int) int {
 	} else {
 		return -EINVAL
 	}
-	if !proc.usercopy(ru, rusagep) {
+	if !proc.k2user(ru, rusagep) {
 		return -EFAULT
 	}
 	return 0
@@ -3248,7 +3248,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	writen(buf, 8, 16, t0tls)
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
-	if !proc.usercopy_inner(buf, bufdest) {
+	if !proc.k2user_inner(buf, bufdest) {
 		panic("must succeed")
 	}
 
@@ -3287,7 +3287,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 		argptrs[i] = uva + cnt
 		// add null terminators
 		arg = append(arg, 0)
-		if !proc.usercopy_inner(arg, uva + cnt) {
+		if !proc.k2user_inner(arg, uva + cnt) {
 			// args take up more than a page? the user is on their
 			// own.
 			return 0, 0, false
@@ -3352,7 +3352,7 @@ func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
 		proc.catime.add(&resp.atime)
 		if rusagep != 0 {
 			ru := resp.atime.to_rusage()
-			if !proc.usercopy(ru, rusagep) {
+			if !proc.k2user(ru, rusagep) {
 				ok = false
 			}
 		}
