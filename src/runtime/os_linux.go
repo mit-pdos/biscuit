@@ -161,6 +161,9 @@ func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
 	kfsbase := Rdmsr(ia32_fs_base)
 	Wrmsr(ia32_fs_base, tf[TF_FSBASE])
 
+	// we only save/restore SSE registers on cpu exception/interrupt, not
+	// during syscall exit/return. this is OK since sys5ABI defines the SSE
+	// registers to be caller-saved.
 	ct.user.tf = uintptr(unsafe.Pointer(tf))
 	ct.user.fxbuf = uintptr(unsafe.Pointer(fxbuf))
 	intno, aux := _Userrun(tf, fastret)
