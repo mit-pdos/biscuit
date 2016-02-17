@@ -1107,8 +1107,8 @@ func (p *pipe_t) pipe_start() {
 	rblockers := pblockers_t{}
 
 	for writec > 0 || readc > 0 {
-		// allow more reads if there is data in the pipe or if
-		// there are no writers and the pipe is empty.
+		// allow more reads if there is data in the pipe or if there
+		// are no writers and the pipe is empty.
 		writerdy := false
 		readrdy := false
 		if !cbuf.empty() || writec == 0 {

@@ -2383,10 +2383,12 @@ func sendbm() {
 		ops := 0
 		ns := 3000000000
 		for n - st < ns {
-			ch <- false
-			<- ch
+			for i := 0; i < 1000; i++ {
+				ch <- false
+				<- ch
+				ops += 2
+			}
 			n = runtime.Nanotime()
-			ops += 2
 		}
 		fmt.Printf("%20v ns/sends (%v ops)\n", ns/ops, ops)
 	}

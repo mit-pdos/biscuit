@@ -2412,7 +2412,7 @@ void _testnoblk(int rfd, int wfd)
 	if (ret != -1 || errno != EWOULDBLOCK)
 		errx(-1, "weird read ret: %ld %d", ret, errno);
 	if (tot != tot2)
-		errx(-1, "len mismatch");
+		errx(-1, "len mismatch %zd %zd", tot, tot2);
 }
 
 void fnonblock(void)
