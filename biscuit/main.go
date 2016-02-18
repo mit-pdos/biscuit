@@ -45,15 +45,23 @@ func lap_id() int {
 	return int(lapaddr[0x20/4] >> 24)
 }
 
-func p8259_eoi() {
+func p8259_eoi(irq int) {
 	pic1 := 0x20
 	pic2 := 0xa0
-	// non-specific eoi
-	eoi := 0x20
+	// specific eoi
+	eoi := 0x60
+	if irq <= 0 {
+		panic("weird irq")
+	}
+	bits := irq % 8
 
 	outb := runtime.Outb
-	outb(pic1, eoi)
-	outb(pic2, eoi)
+	if irq <= 7 {
+		outb(pic1, eoi | bits)
+	} else {
+		outb(pic1, eoi | 2)
+		outb(pic2, eoi | bits)
+	}
 }
 
 const(
@@ -1968,24 +1976,24 @@ func p8259_init() {
 	runtime.Cli()
 
 	// master pic
-	// start icw1: icw4 required
+	// start icw1: edge triggered, icw4 required
 	poutb(pic1, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
 	poutb(pic1d, IRQ_BASE)
 	// icw3, cascaded mode
 	poutb(pic1d, 4)
-	// icw4, auto eoi, intel arch mode.
-	poutb(pic1d, 3)
+	// icw4, no auto eoi, 8086 mode.
+	poutb(pic1d, 1)
 
 	// slave pic
-	// start icw1: icw4 required
+	// start icw1: edge triggered, icw4 required
 	poutb(pic2, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
 	poutb(pic2d, IRQ_BASE + 8)
 	// icw3, slave identification code
 	poutb(pic2d, 2)
-	// icw4, auto eoi, intel arch mode.
-	poutb(pic2d, 3)
+	// icw4, no auto eoi, 8086 mode.
+	poutb(pic2d, 1)
 
 	// ocw3, enable "special mask mode" (??)
 	poutb(pic1, 0x68)
@@ -2051,8 +2059,13 @@ func kbd_init() {
 	irq_unmask(IRQ_KBD)
 	irq_unmask(IRQ_COM1)
 
-	// make sure kbd int is clear
-	runtime.Inb(0x60)
+	// make sure kbd int and com1 int are clear
+	for _kready() {
+		runtime.Inb(0x60)
+	}
+	for _comready() {
+		runtime.Inb(0x3f8)
+	}
 }
 
 type cons_t struct {
@@ -2064,25 +2077,26 @@ type cons_t struct {
 
 var cons	= cons_t{}
 
+func _comready() bool {
+	com1ctl := 0x3f8 + 5
+	b := runtime.Inb(com1ctl)
+	if b & 0x01 == 0 {
+		return false
+	}
+	return true
+}
+func _kready() bool {
+	ibf := 1 << 0
+	st := runtime.Inb(0x64)
+	if st & ibf == 0 {
+		//panic("no kbd data?")
+		return false
+	}
+	return true
+}
+
 func kbd_daemon(cons *cons_t, km map[int]byte) {
 	inb := runtime.Inb
-	kready := func() bool {
-		ibf := 1 << 0
-		st := inb(0x64)
-		if st & ibf == 0 {
-			//panic("no kbd data?")
-			return false
-		}
-		return true
-	}
-	comready := func() bool {
-		com1ctl := 0x3f8 + 5
-		b := inb(com1ctl)
-		if b & 0x01 == 0 {
-			return false
-		}
-		return true
-	}
 	start := make([]byte, 0, 10)
 	data := start
 	addprint := func(c byte) {
@@ -2096,28 +2110,28 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	for {
 		select {
 		case <- cons.kbd_int:
-			if !kready() {
-				continue
+			for _kready() {
+				sc := inb(0x60)
+				c, ok := km[sc]
+				if ok {
+					addprint(c)
+				}
 			}
-			sc := inb(0x60)
-			c, ok := km[sc]
-			if ok {
+			p8259_eoi(IRQ_KBD)
+		case <- cons.com_int:
+			for _comready() {
+				com1data := 0x3f8 + 0
+				sc := inb(com1data)
+				c := byte(sc)
+				if c == '\r' {
+					c = '\n'
+				} else if c == 127 {
+					// delete -> backspace
+					c = '\b'
+				}
 				addprint(c)
 			}
-		case <- cons.com_int:
-			if !comready() {
-				continue
-			}
-			com1data := 0x3f8 + 0
-			sc := inb(com1data)
-			c := byte(sc)
-			if c == '\r' {
-				c = '\n'
-			} else if c == 127 {
-				// delete -> backspace
-				c = '\b'
-			}
-			addprint(c)
+			p8259_eoi(IRQ_COM1)
 		case l := <- reqc:
 			if l > len(data) {
 				l = len(data)

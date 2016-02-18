@@ -3918,7 +3918,7 @@ func _prof_go(en bool) {
 		//err := p.WriteTo(&prof, 0)
 		//if err != nil {
 		//	fmt.Printf("%v\n", err)
-		//	return 1
+		//	return
 		//}
 		//prof.dump()
 	}

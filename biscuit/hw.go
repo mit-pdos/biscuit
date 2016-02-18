@@ -344,7 +344,7 @@ func (d *legacy_disk_t) int_clear() {
 	// read status so disk clears int
 	runtime.Inb(d.rbase + 7)
 	runtime.Inb(d.rbase + 7)
-	p8259_eoi()
+	p8259_eoi(IRQ_DISK)
 }
 
 type pciide_disk_t struct {
@@ -394,5 +394,5 @@ func (d *pciide_disk_t) int_clear() {
 	runtime.Outb(streg, st)
 
 	// and via 8259 pics
-	p8259_eoi()
+	p8259_eoi(IRQ_DISK)
 }
