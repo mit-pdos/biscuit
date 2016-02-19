@@ -130,6 +130,8 @@ const(
     TF_FL_IF     = 1 << 9
 )
 
+var Pspercycle uint
+
 func Pushcli() int
 func Popcli(int)
 func Gscpu() *cpu_t

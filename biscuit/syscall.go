@@ -3001,11 +3001,12 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 	// put special struct on stack: fresh tls start, tls len, and tls0
 	// pointer
-	words := 3
+	words := 4
 	buf := make([]uint8, words*8)
 	writen(buf, 8, 0, freshtls)
 	writen(buf, 8, 8, tlssz)
 	writen(buf, 8, 16, t0tls)
+	writen(buf, 8, 24, int(runtime.Pspercycle))
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
 	if !proc.k2user_inner(buf, bufdest) {

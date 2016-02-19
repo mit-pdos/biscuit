@@ -74,6 +74,16 @@ static void release(void)
 
 static void pmsg(char *, long);
 
+struct kinfo_t {
+	void *freshtls;
+	size_t len;
+	void *t0tls;
+	ulong pspercycle;
+};
+
+// initialized in _entry, given to us by kernel
+static struct kinfo_t *kinfo;
+
 long
 syscall(long a1, long a2, long a3, long a4,
     long a5, long trap)
@@ -314,11 +324,16 @@ getsockopt(int fd, int level, int opt, void *optv, socklen_t *optlen)
 int
 gettimeofday(struct timeval *tv, struct timezone *tz)
 {
-	if (tz)
-		errx(-1, "timezone not supported");
-	int ret = syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
-	ERRNO_NZ(ret);
-	return ret;
+	//if (tz)
+	//	errx(-1, "timezone not supported");
+	//int ret = syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
+	//ERRNO_NZ(ret);
+	//return ret;
+	ulong c = rdtsc();
+	ulong us = c * kinfo->pspercycle / 1000000;
+	tv->tv_sec = us / 1000000;
+	tv->tv_usec = us % 1000000;
+	return 0;
 }
 
 int
@@ -773,15 +788,6 @@ _pcreate(void *vpcarg)
 	// not reached
 	return 0;
 }
-
-struct kinfo_t {
-	void *freshtls;
-	size_t len;
-	void *t0tls;
-};
-
-// initialized in _entry, given to us by kernel
-static struct kinfo_t *kinfo;
 
 int
 pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),

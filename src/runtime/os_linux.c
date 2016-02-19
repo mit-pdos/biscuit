@@ -1471,7 +1471,7 @@ mmap_test(void)
 #define HZ		100
 static uint32 lapic_quantum;
 // picoseconds per CPU cycle
-static uint64 pspercycle;
+uint64 ·Pspercycle;
 
 struct thread_t {
 // ======== don't forget to update the go definition too! ======
@@ -1699,7 +1699,7 @@ uint64
 hack_nanotime(void)
 {
 	uint64 cyc = runtime·Rdtsc();
-	return (cyc * pspercycle)/1000;
+	return (cyc * ·Pspercycle)/1000;
 }
 
 #pragma textflag NOSPLIT
@@ -2462,7 +2462,7 @@ timer_setup(int32 calibrate)
 		runtime·Cpumhz = cycelapsed/(1000 * 1000);
 		pnum(runtime·Cpumhz);
 		pmsg("\n");
-		pspercycle = (1000000000000ull)/cycelapsed;
+		·Pspercycle = (1000000000000ull)/cycelapsed;
 
 		// disable PIT: one-shot, lsb then msb
 		outb(CNTCTL, 0x32);
