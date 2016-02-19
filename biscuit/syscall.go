@@ -945,323 +945,192 @@ func (p *pollers_t) wakeready(r ready_t) {
 	p.allmask = newallmask
 }
 
-type msgtype_t	uint8
-
-const(
-	D_READ		msgtype_t = iota
-	D_WRITE		msgtype_t = iota
-	D_READNOBLK	msgtype_t = iota
-	D_WRITENOBLK	msgtype_t = iota
-	D_POLL		msgtype_t = iota
-	D_REOPEN	msgtype_t = iota
-)
-
-type piperet_t struct {
-	ret	int
-	err	int
-	poll	ready_t
-}
-
-type pipemsg_t struct {
-	// read/write
-	ub	*userbuf_t
-	// poll
-	pollmsg	pollmsg_t
-	ack	chan piperet_t
-	// reopen
-	rewrite	int8
-	reread	int8
-	mtype	msgtype_t
-}
-
-var _zpipemsg pipemsg_t
-
-func (pm *pipemsg_t) _common(t msgtype_t) {
-	if pm.ack == nil {
-		pm.ack = make(chan piperet_t)
-	}
-	tmp := pm.ack
-	*pm = _zpipemsg
-	pm.ack = tmp
-	pm.mtype = t
-}
-
-func (pm *pipemsg_t) _errwait() (int, int) {
-	pr := <- pm.ack
-	return pr.ret, pr.err
-}
-
-func (pm *pipemsg_t) mkread(ub *userbuf_t) {
-	pm._common(D_READ)
-	pm.ub = ub
-}
-
-func (pm *pipemsg_t) readwait() (int, int) {
-	return pm._errwait()
-}
-
-func (pm *pipemsg_t) mkwrite(ub *userbuf_t) {
-	pm._common(D_WRITE)
-	pm.ub = ub
-}
-
-func (pm *pipemsg_t) writewait() (int, int) {
-	return pm._errwait()
-}
-
-func (pm *pipemsg_t) mkreadnoblk(ub *userbuf_t) {
-	pm._common(D_READNOBLK)
-	pm.ub = ub
-}
-
-func (pm *pipemsg_t) mkwritenoblk(ub *userbuf_t) {
-	pm._common(D_WRITENOBLK)
-	pm.ub = ub
-}
-
-func (pm *pipemsg_t) mkpoll(m *pollmsg_t) {
-	pm._common(D_POLL)
-	pm.pollmsg = *m
-}
-
-func (pm *pipemsg_t) pollwait() ready_t {
-	pr := <- pm.ack
-	return pr.poll
-}
-
-func (pm *pipemsg_t) mkreopenr(r int) {
-	pm._common(D_REOPEN)
-	pm.reread = int8(r)
-}
-
-func (pm *pipemsg_t) mkreopenw(w int) {
-	pm._common(D_REOPEN)
-	pm.rewrite = int8(w)
-}
-
-type pblockers_t struct {
-	_l	[]pipemsg_t
-	l	[]pipemsg_t
-}
-
-func (pb *pblockers_t) add(pm *pipemsg_t) {
-	if pb.l == nil {
-		pb._l = make([]pipemsg_t, 0, 10)
-		pb.l = pb._l
-	}
-	pb.l = append(pb.l, *pm)
-}
-
-func (pb *pblockers_t) haswaiter() bool {
-	return len(pb.l) != 0
-}
-
-func (pb *pblockers_t) pop() pipemsg_t {
-	if len(pb.l) == 0 {
-		panic("no blockers")
-	}
-	ret := pb.l[0]
-	pb.l = pb.l[1:]
-	if len(pb.l) == 0 {
-		pb.l = pb._l
-	}
-	return ret
-}
-
 type pipe_t struct {
-	msgch		chan pipemsg_t
-	admit		chan bool
+	sync.Mutex
+	cbuf	circbuf_t
+	rcond	*sync.Cond
+	wcond	*sync.Cond
+	readers	int
+	writers int
+	closed	bool
+	pollers	pollers_t
 }
 
-func (p *pipe_t) pipe_start() {
-	p.msgch = make(chan pipemsg_t)
-	p.admit = make(chan bool)
+func (o *pipe_t) pipe_start() {
+	pipesz := 512
+	o.cbuf.cb_init(pipesz)
+	o.readers, o.writers = 1, 1
+	o.rcond = sync.NewCond(o)
+	o.wcond = sync.NewCond(o)
+}
 
-	go func() {
-	admit := 0
-	writec := 1
-	readc := 1
-	pipebufsz := 512
-	cbuf := circbuf_t{}
-	cbuf.cb_init(pipebufsz)
-	pollers := pollers_t{}
-	wblockers := pblockers_t{}
-	rblockers := pblockers_t{}
+func (o *pipe_t) op_write(src *userbuf_t, noblock bool) (int, int) {
+	o.Lock()
+	for {
+		if o.closed {
+			o.Unlock()
+			return 0, -EBADF
+		}
+		if o.readers == 0 {
+			o.Unlock()
+			return 0, -EPIPE
+		}
+		if !o.cbuf.full() {
+			break
+		}
+		if noblock {
+			o.Unlock()
+			return 0, -EWOULDBLOCK
+		}
+		o.wcond.Wait()
+	}
+	ret, err := o.cbuf.copyin(src)
+	if err != 0 {
+		o.Unlock()
+		return 0, err
+	}
+	o.rcond.Signal()
+	o.pollers.wakeready(R_READ)
+	o.Unlock()
 
-	for writec > 0 || readc > 0 {
-		// allow more reads if there is data in the pipe or if there
-		// are no writers and the pipe is empty.
-		writerdy := false
-		readrdy := false
-		if !cbuf.empty() || writec == 0 {
-			readrdy = true
-			pollers.wakeready(R_READ)
-		}
-		if !cbuf.full() || readc == 0 {
-			writerdy = true
-			pollers.wakeready(R_WRITE)
-		}
+	return ret, 0
+}
 
-		var msg pipemsg_t
-		nomsg := true
-		if writerdy && wblockers.haswaiter() {
-			msg = wblockers.pop()
-			nomsg = false
-		} else if readrdy && rblockers.haswaiter() {
-			msg = rblockers.pop()
-			nomsg = false
+func (o *pipe_t) op_read(dst *userbuf_t, noblock bool) (int, int) {
+	o.Lock()
+	for {
+		if o.closed {
+			o.Unlock()
+			return 0, -EBADF
 		}
-		for nomsg {
-			p.admit <- true
-			admit++
+		if o.writers == 0 || !o.cbuf.empty() {
+			break
+		}
+		if noblock {
+			o.Unlock()
+			return 0, -EWOULDBLOCK
+		}
+		o.rcond.Wait()
+	}
+	ret, err := o.cbuf.copyout(dst)
+	if err != 0 {
+		o.Unlock()
+		return 0, err
+	}
+	o.wcond.Signal()
+	o.pollers.wakeready(R_WRITE)
+	o.Unlock()
 
-			msg = <- p.msgch
-			if !readrdy && msg.mtype == D_READ {
-				rblockers.add(&msg)
-			} else if !writerdy && msg.mtype == D_WRITE {
-				wblockers.add(&msg)
-			} else {
-				nomsg = false
-			}
-		}
+	return ret, 0
+}
 
-		var pret piperet_t
-		switch msg.mtype {
-		// writing to pipe
-		case D_WRITE, D_WRITENOBLK:
-			if readc == 0 {
-				pret.err = -EPIPE
-				msg.ack <- pret
-				break
-			}
-			if msg.mtype == D_WRITENOBLK && cbuf.full() {
-				pret.err = -EWOULDBLOCK
-				msg.ack <- pret
-				break
-			}
-			src := msg.ub
-			ret, err := cbuf.copyin(src)
-			pret.ret = ret
-			pret.err = err
-			msg.ack <- pret
-		// reading from pipe
-		case D_READ, D_READNOBLK:
-			if msg.mtype == D_READNOBLK && !readrdy {
-				pret.err = -EWOULDBLOCK
-				msg.ack <- pret
-				break
-			}
-			dst := msg.ub
-			ret, err := cbuf.copyout(dst)
-			pret.ret = ret
-			pret.err = err
-			msg.ack <- pret
-		case D_REOPEN:
-			writec += int(msg.rewrite)
-			readc += int(msg.reread)
-		// poll
-		case D_POLL:
-			pm := &msg.pollmsg
-			ev := pm.events
-			var ret ready_t
-			// check if reading, writing, or errors are available
-			if ev & R_READ != 0 && readrdy {
-				ret |= R_READ
-			}
-			if ev & R_WRITE != 0 && writerdy {
-				ret |= R_WRITE
-			}
-			if ev & R_HUP != 0 && readc == 0 {
-				ret |= R_HUP
-			}
-			// ignore R_ERROR
-			if ret == 0 && pm.dowait {
-				pollers.addpoller(pm)
-			}
-			pret.poll = ret
-			msg.ack <- pret
-		default:
-			panic("weird msg")
-		}
-		admit--
-		if admit < 0 {
-			panic("neg admit")
-		}
+func (o *pipe_t) op_poll(pm pollmsg_t) ready_t {
+	o.Lock()
+
+	if o.closed {
+		o.Unlock()
+		return 0
 	}
 
-	// fail requests from threads that raced with last closer.
-	close(p.admit)
-	pret := piperet_t{}
-	pret.err = -EBADF
-	pret.poll = R_HUP | R_ERROR
-	for ; admit > 0; admit-- {
-		var msg pipemsg_t
-		if rblockers.haswaiter() {
-			msg = rblockers.pop()
-		} else if wblockers.haswaiter() {
-			msg = wblockers.pop()
-		} else {
-			panic("wut")
-		}
-		switch msg.mtype {
-		case D_READ, D_READNOBLK, D_WRITE, D_WRITENOBLK, D_POLL:
-			msg.ack <- pret
-		case D_REOPEN:
-		default:
-			panic("weird msg")
-		}
+	var r ready_t
+	readable := false
+	if !o.cbuf.empty() || o.writers == 0 {
+		readable = true
 	}
-	// XXXPANIC
-	if rblockers.haswaiter() {
-		panic("no")
+	writeable := false
+	if !o.cbuf.full() || o.readers == 0 {
+		writeable = true
 	}
-	// XXXPANIC
-	if wblockers.haswaiter() {
-		panic("no")
+	if pm.events & R_READ != 0 && readable {
+		r |= R_READ
 	}
-	}()
+	if pm.events & R_HUP != 0 && o.writers == 0 {
+		r |= R_HUP
+	} else if pm.events & R_WRITE != 0 && writeable {
+		r |= R_WRITE
+	}
+	if r != 0 {
+		o.Unlock()
+		return r
+	}
+	o.pollers.addpoller(&pm)
+	o.Unlock()
+	return 0
+}
+
+func (o *pipe_t) op_reopen(rd, wd int) int {
+	o.Lock()
+	if o.closed {
+		o.Unlock()
+		return -EBADF
+	}
+	o.readers += rd
+	o.writers += wd
+	if o.writers == 0 {
+		o.rcond.Broadcast()
+	}
+	if o.readers == 0 {
+		o.wcond.Broadcast()
+	}
+	if o.readers == 0 && o.writers == 0 {
+		o.closed = true
+	}
+	o.Unlock()
+	return 0
 }
 
 type pipefops_t struct {
 	pipe	*pipe_t
-	writer	bool
 	options	int
+	writer	bool
 }
 
-func (pf *pipefops_t) read(dst *userbuf_t) (int, int) {
-	noblk := pf.options & O_NONBLOCK != 0
-	p := pf.pipe
-	if _, ok := <- p.admit; !ok {
-		return 0, -EBADF
-	}
-	m := pipemsg_t{}
-	if noblk {
-		m.mkreadnoblk(dst)
+func (of *pipefops_t) close() int {
+	var ret int
+	if of.writer {
+		ret = of.pipe.op_reopen(0, -1)
 	} else {
-		m.mkread(dst)
+		ret = of.pipe.op_reopen(-1, 0)
 	}
-	p.msgch <- m
-	ret, err := m.readwait()
-	return ret, err
+	return ret
 }
 
-func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
-	// block until the entire write completes
-	noblk := pf.options & O_NONBLOCK != 0
-	p := pf.pipe
+func (of *pipefops_t) fstat(*stat_t) int {
+	panic("fstat on pipe")
+}
+
+func (of *pipefops_t) lseek(int, int) int {
+	return -ESPIPE
+}
+
+func (of *pipefops_t) mmapi(int) ([]mmapinfo_t, int) {
+	return nil, -EINVAL
+}
+
+func (of *pipefops_t) pathi() inum {
+	panic("pipe cwd")
+}
+
+func (of *pipefops_t) read(dst *userbuf_t) (int, int) {
+	noblk := of.options & O_NONBLOCK != 0
+	return of.pipe.op_read(dst, noblk)
+}
+
+func (of *pipefops_t) reopen() int {
+	var ret int
+	if of.writer {
+		ret = of.pipe.op_reopen(0, 1)
+	} else {
+		ret = of.pipe.op_reopen(1, 0)
+	}
+	return ret
+}
+
+func (of *pipefops_t) write(src *userbuf_t) (int, int) {
+	noblk := of.options & O_NONBLOCK != 0
 	c := 0
-	m := pipemsg_t{}
-	if noblk {
-		m.mkwritenoblk(src)
-	} else {
-		m.mkwrite(src)
-	}
 	for c != src.len {
-		if _, ok := <- p.admit; !ok {
-			return 0, -EBADF
-		}
-		p.msgch <- m
-		ret, err := m.writewait()
+		ret, err := of.pipe.op_write(src, noblk)
 		if noblk || err != 0 {
 			return ret, err
 		}
@@ -1270,123 +1139,68 @@ func (pf *pipefops_t) write(src *userbuf_t) (int, int) {
 	return c, 0
 }
 
-func (pf *pipefops_t) fullpath() (string, int) {
+func (of *pipefops_t) fullpath() (string, int) {
 	panic("weird cwd")
 }
 
-func (pf *pipefops_t) truncate(newlen uint) int {
+func (of *pipefops_t) truncate(uint) int {
 	return -EINVAL
 }
 
-func (pf *pipefops_t) pread(dst *userbuf_t, offset int) (int, int) {
+func (of *pipefops_t) pread(*userbuf_t, int) (int, int) {
 	return 0, -ESPIPE
 }
 
-func (pf *pipefops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+func (of *pipefops_t) pwrite(*userbuf_t, int) (int, int) {
 	return 0, -ESPIPE
 }
 
-func (pf *pipefops_t) close() int {
-	if _, ok := <- pf.pipe.admit; !ok {
-		return -EBADF
-	}
-	p := pf.pipe
-	m := pipemsg_t{}
-	if pf.writer {
-		m.mkreopenw(-1)
-	} else {
-		m.mkreopenr(-1)
-	}
-	p.msgch <- m
-	return 0
-}
-
-func (pf *pipefops_t) fstat(st *stat_t) int {
-	panic("fstat on pipe")
-}
-
-func (pf *pipefops_t) mmapi(offset int) ([]mmapinfo_t, int) {
-	panic("mmap on pipe")
-}
-
-func (pf *pipefops_t) pathi() inum {
-	panic("pipe cwd")
-}
-
-func (pf *pipefops_t) reopen() int {
-	if _, ok := <- pf.pipe.admit; !ok {
-		return -EBADF
-	}
-	m := pipemsg_t{}
-	if pf.writer {
-		m.mkreopenw(1)
-	} else {
-		m.mkreopenr(1)
-	}
-	pf.pipe.msgch <- m
-	return 0
-}
-
-func (pf *pipefops_t) lseek(int, int) int {
-	return -ESPIPE
-}
-
-func (pf *pipefops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+func (of *pipefops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
 	return nil, 0, -ENOTSOCK
 }
 
-func (pf *pipefops_t) bind(*proc_t, []uint8) int {
+func (of *pipefops_t) bind(*proc_t, []uint8) int {
 	return -ENOTSOCK
 }
 
-func (pf *pipefops_t) connect(proc *proc_t, sabuf []uint8) int {
+func (of *pipefops_t) connect(*proc_t, []uint8) int {
 	return -ENOTSOCK
 }
 
-func (pf *pipefops_t) listen(*proc_t, int) (fdops_i, int) {
+func (of *pipefops_t) listen(*proc_t, int) (fdops_i, int) {
 	return nil, -ENOTSOCK
 }
 
-func (pf *pipefops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+func (of *pipefops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
 	return 0, -ENOTSOCK
 }
 
-func (pf *pipefops_t) recvfrom(*proc_t, *userbuf_t,
-    *userbuf_t) (int, int, int) {
+func (of *pipefops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
 	return 0, 0, -ENOTSOCK
 }
 
-func (pf *pipefops_t) pollone(pm pollmsg_t) ready_t {
-	if _, ok := <- pf.pipe.admit; !ok {
-		return pm.events & R_ERROR
-	}
-	// only a pipe writer can poll for writing, and reader for reading
-	if pf.writer {
+func (of *pipefops_t) pollone(pm pollmsg_t) ready_t {
+	if of.writer {
 		pm.events &^= R_READ
 	} else {
 		pm.events &^= R_WRITE
 	}
-	m := pipemsg_t{}
-	m.mkpoll(&pm)
-	pf.pipe.msgch <- m
-	status := m.pollwait()
-	return status
+	return of.pipe.op_poll(pm)
 }
 
-func (pf *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
+func (of *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	switch cmd {
 	case F_GETFL:
-		return pf.options
+		return of.options
 	case F_SETFL:
-		pf.options = opt
+		of.options = opt
 		return 0
 	default:
 		panic("weird cmd")
 	}
 }
 
-func (pf *pipefops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
-    intarg int) (int, int) {
+func (of *pipefops_t) getsockopt(*proc_t, int, *userbuf_t, int) (int, int) {
 	return 0, -ENOTSOCK
 }
 
@@ -2325,24 +2139,6 @@ type susfops_t struct {
 	myaddr	string
 	mysid	int
 	options	int
-}
-
-func (sus *susfops_t) _admitr() bool {
-	// XXXPANIC
-	if sus.pipein == nil {
-		panic("wtf??")
-	}
-	_, ok := <- sus.pipein.admit
-	return ok
-}
-
-func (sus *susfops_t) _admitw() bool {
-	// XXXPANIC
-	if sus.pipeout == nil {
-		panic("wtf??")
-	}
-	_, ok := <- sus.pipeout.admit
-	return ok
 }
 
 func (sus *susfops_t) close() int {
