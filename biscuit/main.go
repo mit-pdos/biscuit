@@ -2516,13 +2516,11 @@ func main() {
 		nargs = append(nargs, args...)
 		defaultfds := []*fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
 		p := proc_new(cmd, rf, defaultfds)
-		n := p.atime.now()
 		var tf [TFSIZE]int
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
-		p.atime.finish(n)
 		p.sched_add(&tf, p.tid0)
 	}
 
