@@ -496,7 +496,6 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	}
 
 	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
 
 	perms := PTE_U
 	if prot & PROT_WRITE != 0 {
@@ -504,6 +503,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	}
 	lenn = roundup(lenn, PGSIZE)
 	if lenn/PGSIZE + proc.vmregion.pglen() > proc.ulim.pages {
+		proc.Unlock_pmap()
 		return MAP_FAILED
 	}
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
@@ -514,6 +514,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		proc.page_insert(addr + i, seg, pg, p_pg, perms, true)
 	}
 	// no tlbshoot because mmap never replaces pages for now
+	proc.Unlock_pmap()
 	return addr
 }
 

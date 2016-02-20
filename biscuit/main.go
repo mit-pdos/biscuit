@@ -1501,7 +1501,6 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
 
 	// serialize with page faults
 	ub.proc.Lock_pmap()
-	defer ub.proc.Unlock_pmap()
 
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
@@ -1511,6 +1510,7 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
 		}
 		ubuf, ok := ub.proc.userdmap8_inner(va)
 		if !ok {
+			ub.proc.Unlock_pmap()
 			return ret, -EFAULT
 		}
 		end := ub.off + len(ubuf)
@@ -1528,6 +1528,7 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
 		ub.off += c
 		ret += c
 	}
+	ub.proc.Unlock_pmap()
 	return ret, 0
 }
 
