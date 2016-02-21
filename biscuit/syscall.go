@@ -2130,8 +2130,8 @@ func sun_start(sid sunid_t) *sund_t {
 
 type susfops_t struct {
 	//susd	*susd_t
-	pipein	*pipe_t
-	pipeout	*pipe_t
+	pipein	*pipefops_t
+	pipeout	*pipefops_t
 	conn	bool
 	// to prevent bind(2) and listen(2) races
 	bl	sync.Mutex
@@ -2146,11 +2146,8 @@ func (sus *susfops_t) close() int {
 	if !sus.conn {
 		return 0
 	}
-	p := pipefops_t{pipe: sus.pipein}
-	err1 := p.close()
-	p.pipe = sus.pipeout
-	p.writer = true
-	err2 := p.close()
+	err1 := sus.pipein.close()
+	err2 := sus.pipeout.close()
 	if err1 != 0 {
 		return err1
 	}
@@ -2182,11 +2179,8 @@ func (sus *susfops_t) reopen() int {
 	if !sus.conn {
 		return 0
 	}
-	p := pipefops_t{pipe: sus.pipein}
-	err1 := p.reopen()
-	p.pipe = sus.pipeout
-	p.writer = true
-	err2 := p.reopen()
+	err1 := sus.pipein.reopen()
+	err2 := sus.pipeout.reopen()
 	if err1 != 0 {
 		return err1
 	}
@@ -2282,14 +2276,14 @@ func (sus *susfops_t) connect(proc *proc_t, saddr []uint8) int {
 	}
 	ch := make(chan *pipe_t)
 	susld.push <- ch
-	pipein := <- ch
-	if pipein == nil {
+	pipea := <- ch
+	if pipea == nil {
 		return -ECONNREFUSED
 	}
-	pipeout := <- ch
+	pipeb := <- ch
 
-	sus.pipein = pipein
-	sus.pipeout = pipeout
+	sus.pipein = &pipefops_t{pipe: pipea, options: sus.options}
+	sus.pipeout = &pipefops_t{pipe: pipeb, writer: true, options: sus.options}
 	sus.conn = true
 	return 0
 }
@@ -2333,8 +2327,7 @@ func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
 		return 0, -EISCONN
 	}
 
-	fakepipe := &pipefops_t{pipe: sus.pipeout, options: sus.options}
-	return fakepipe.write(src)
+	return sus.pipeout.write(src)
 }
 
 func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
@@ -2343,8 +2336,7 @@ func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 		return 0, 0, -ENOTCONN
 	}
 
-	fakepipe := &pipefops_t{pipe: sus.pipein, options: sus.options}
-	ret, err := fakepipe.read(dst)
+	ret, err := sus.pipein.read(dst)
 	return ret, 0, err
 }
 
@@ -2359,15 +2351,13 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 	var readyout ready_t
 	both := pm.events & (R_READ|R_WRITE) == 0
 	if both || pm.events & R_READ != 0 {
-		fakein := &pipefops_t{pipe: sus.pipein}
-		readyin = fakein.pollone(pm)
+		readyin = sus.pipein.pollone(pm)
 	}
 	if readyin != 0 {
 		return readyin
 	}
 	if both || pm.events & R_WRITE != 0 {
-		fakeout := &pipefops_t{pipe: sus.pipeout, writer: true}
-		readyout = fakeout.pollone(pm)
+		readyout = sus.pipeout.pollone(pm)
 	}
 	return readyin | readyout
 }
@@ -2378,6 +2368,10 @@ func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 		return sus.options
 	case F_SETFL:
 		sus.options = opt
+		if sus.conn {
+			sus.pipein.options = opt
+			sus.pipeout.options = opt
+		}
 		return 0
 	default:
 		panic("weird cmd")
@@ -2628,7 +2622,9 @@ func (sul *suslfops_t) accept(proc *proc_t,
 	pipeb.pipe_start()
 	newconn <- pipeb
 	newconn <- pipea
-	ret := &susfops_t{pipein: pipea, pipeout: pipeb, conn: true,
+	pipein := &pipefops_t{pipe: pipea, options: sul.options}
+	pipeout := &pipefops_t{pipe: pipeb, writer: true, options: sul.options}
+	ret := &susfops_t{pipein: pipein, pipeout: pipeout, conn: true,
 	    options: sul.options}
 	return ret, 0, 0
 }
