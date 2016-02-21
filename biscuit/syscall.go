@@ -658,58 +658,36 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 	return 0
 }
 
-func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
-	if nfds < 0  || timeout < -1 {
-		return -EINVAL
-	}
-
-	// converts internal states to poll states
+// converts internal states to poll states
+// pokes poll status bits into user memory. since we only use one priority
+// internally, mask away any POLL bits the user didn't not request.
+func _ready2rev(orig int, r ready_t) int {
 	inmask  := POLLIN | POLLPRI
 	outmask := POLLOUT | POLLWRBAND
-	ready2rev := func(r ready_t) int {
-		ret := 0
-		if r & R_READ != 0 {
-			ret |= inmask
-		}
-		if r & R_WRITE != 0 {
-			ret |= outmask
-		}
-		if r & R_HUP != 0 {
-			ret |= POLLHUP
-		}
-		if r & R_ERROR != 0 {
-			ret |= POLLERR
-		}
-		return ret
+	pbits := 0
+	if r & R_READ != 0 {
+		pbits |= inmask
 	}
-
-	// pokes poll status bits into user memory. since we only use one
-	// priority internally, mask away any POLL bits the user didn't not
-	// request.
-	ppoke := func(orig, bits int) int {
-		origevents := ((orig >> 32) & 0xffff) | POLLNVAL | POLLERR |
-		    POLLHUP
-		return orig & 0x0000ffffffffffff | ((origevents & bits) << 48)
+	if r & R_WRITE != 0 {
+		pbits |= outmask
 	}
-
-	// copy pollfds from userspace to avoid reading/writing overhead
-	// (locking pmap and looking up uva mapping).
-	pollfdsz := 8
-	sz := pollfdsz*nfds
-	buf := make([]uint8, sz)
-	if !proc.user2k(buf, fdsn) {
-		return -EFAULT
+	if r & R_HUP != 0 {
+		pbits |= POLLHUP
 	}
+	if r & R_ERROR != 0 {
+		pbits |= POLLERR
+	}
+	wantevents := ((orig >> 32) & 0xffff) | POLLNVAL | POLLERR | POLLHUP
+	revents := wantevents & pbits
+	return orig | (revents << 48)
+}
 
-	// first we tell the underlying device to notify us if their fd is
-	// ready. if a device is immediately ready, we don't both to register
-	// notifiers with the rest of the devices -- we just ask their status
-	// too.
-	devwait := timeout != 0
-	pm := pollmsg_t{}
-	pm.pm_init(timeout)
+func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8, nfds int) (int, bool) {
+	inmask  := POLLIN | POLLPRI
+	outmask := POLLOUT | POLLWRBAND
 	readyfds := 0
 	writeback := false
+	//proc.fdl.Lock()
 	for i := 0; i < nfds; i++ {
 		off := i*8
 		uw := readn(buf, 8, off)
@@ -718,6 +696,7 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 		if fdn < 0 {
 			continue
 		}
+		//fd, ok := proc.fd_get_inner(fdn)
 		fd, ok := proc.fd_get(fdn)
 		if !ok {
 			uw |= POLLNVAL
@@ -739,46 +718,71 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 		}
 		// poll unconditionally reports ERR, HUP, and NVAL
 		pev |= R_ERROR | R_HUP
-		pm.pm_set(pev, fdn, devwait, i)
-		devstatus := fd.fops.pollone(pm)
+		pm.pm_set(pev, wait)
+		devstatus := fd.fops.pollone(*pm)
 		if devstatus != 0 {
 			// found at least one ready fd; don't bother having the
 			// other fds send notifications. update user revents
-			devwait = false
-			nuw := ppoke(uw, ready2rev(devstatus))
+			wait = false
+			nuw := _ready2rev(uw, devstatus)
 			writen(buf, 8, off, nuw)
 			readyfds++
 			writeback = true
 		}
 	}
+	//proc.fdl.Unlock()
+	return readyfds, writeback
+}
+
+func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
+	if nfds < 0  || timeout < -1 {
+		return -EINVAL
+	}
+
+	// copy pollfds from userspace to avoid reading/writing overhead
+	// (locking pmap and looking up uva mapping).
+	pollfdsz := 8
+	sz := pollfdsz*nfds
+	buf := make([]uint8, sz)
+	if !proc.user2k(buf, fdsn) {
+		return -EFAULT
+	}
+
+	// first we tell the underlying device to notify us if their fd is
+	// ready. if a device is immediately ready, we don't both to register
+	// notifiers with the rest of the devices -- we just ask their status
+	// too.
+	devwait := timeout != 0
+	pm := pollmsg_t{}
+	readyfds, writeback := _checkfds(proc, &pm, devwait, buf, nfds)
 
 	if writeback && !proc.k2user(buf, fdsn) {
 		return -EFAULT
 	}
 
 	// if we found a ready fd, we are done
-	if !devwait {
+	if readyfds != 0 || !devwait {
 		return readyfds
 	}
 
-	// otherwise, wait for one notification
-	rpm, timedout, err := pm.pm_wait()
+	// otherwise, wait for a notification
+	timedout, err := pm.pm_wait(timeout)
 	if err != 0 {
 		panic("must succeed")
 	}
 	if timedout {
+		pm.pnote.prune = true
 		return 0
 	}
-	// update pollfd revent field
-	idx := rpm.phint
-	off := idx*pollfdsz
-	uw := readn(buf, 8, off)
-	nuw := ppoke(uw, ready2rev(rpm.events))
-	va := fdsn + off
-	if !proc.userwriten(va, 8, nuw) {
+	// check the fds one more time, update ready status
+	readyfds, writeback = _checkfds(proc, &pm, false, buf, nfds)
+	if writeback && !proc.k2user(buf, fdsn) {
 		return -EFAULT
 	}
-	return 1
+	if readyfds < 1 {
+		panic("wokeup without ready fd?")
+	}
+	return readyfds
 }
 
 func sys_lseek(proc *proc_t, fdn, off, whence int) int {
@@ -835,56 +839,42 @@ const(
 	R_HUP	ready_t	= 1 << iota
 )
 
+type pollnote_t struct {
+	notif	chan bool
+	prune	bool
+}
+
 // used by thread executing poll(2).
 type pollmsg_t struct {
-	notif	chan pollmsg_t
+	pnote	*pollnote_t
 	events	ready_t
-	timeout	time.Time
-	fdn	int
-	// phint is this fd's index into the user pollfd array
-	phint	int
-	hasto	bool
 	dowait	bool
 }
 
-func (pm *pollmsg_t) pm_init(to int) {
-	var zt time.Time
-	if to > 0 {
-		pm.hasto = true
-		d := time.Duration(to)
-		pm.timeout = time.Now().Add(d * time.Millisecond)
-	} else {
-		pm.hasto = false
-		pm.timeout = zt
-	}
-}
-
-func (pm *pollmsg_t) pm_set(events ready_t, fdn int, dowait bool, phint int) {
-	if pm.notif == nil {
+func (pm *pollmsg_t) pm_set(events ready_t, dowait bool) {
+	if pm.pnote == nil {
+		pm.pnote = &pollnote_t{}
 		// 1-element buffered channel; that way devices can send
 		// notifies on the channel asynchronously without blocking.
-		pm.notif = make(chan pollmsg_t, 1)
+		pm.pnote.notif = make(chan bool, 1)
 	}
 	pm.events = events
-	pm.fdn = fdn
-	pm.phint = phint
 	pm.dowait = dowait
 }
 
-// returns the pollmsg_t of ready fd, whether we timed out, and error
-func (pm *pollmsg_t) pm_wait() (pollmsg_t, bool, int) {
+// returns whether we timed out, and error
+func (pm *pollmsg_t) pm_wait(to int) (bool, int) {
 	var tochan <-chan time.Time
-	if pm.hasto {
-		tochan = time.After(pm.timeout.Sub(time.Now()))
+	if to != -1 {
+		tochan = time.After(time.Duration(to)*time.Millisecond)
 	}
-	var readypm pollmsg_t
 	var timeout bool
 	select {
-	case readypm = <- pm.notif:
+	case <- pm.pnote.notif:
 	case <- tochan:
 		timeout = true
 	}
-	return readypm, timeout, 0
+	return timeout, 0
 }
 
 // keeps track of all outstanding pollers. used by devices supporting poll(2)
@@ -909,7 +899,6 @@ func (p *pollers_t) addpoller(pm *pollmsg_t) {
 		p._waiters = make([]pollmsg_t, 0, 10)
 		p.waiters = p._waiters
 	}
-	// XXX should prune old timeouts here too
 	p.waiters = append(p.waiters, *pm)
 	p.allmask |= pm.events
 }
@@ -918,23 +907,24 @@ func (p *pollers_t) wakeready(r ready_t) {
 	if p.allmask & r == 0 {
 		return
 	}
-	n := time.Now()
 	var newallmask ready_t
 	for i := 0; i < len(p.waiters); i++ {
 		rmed := false
 		pm := p.waiters[i]
-		// found a waiter
-		if pm.events & r != 0 {
-			pm.events &= r
-			// non-blocking send on a 1-element buffered channel
-			select {
-			case pm.notif <- pm:
-			default:
-			}
+		// prune useless waiters
+		if pm.pnote.prune {
 			p._rm(i)
 			i--
 			rmed = true
-		} else if pm.hasto && n.After(pm.timeout) {
+		} else if pm.events & r != 0 {
+			// found a waiter
+			pm.events &= r
+			// non-blocking send on a 1-element buffered channel
+			select {
+			case pm.pnote.notif <- true:
+				pm.pnote.prune = true
+			default:
+			}
 			p._rm(i)
 			i--
 			rmed = true
