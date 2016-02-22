@@ -2936,7 +2936,7 @@ calloc(size_t n, size_t sz)
 {
 	if (n == 0 || sz == 0)
 		return ZEROPTR;
-	if (n > UINT_MAX / sz) {
+	if (n > ULONG_MAX / sz) {
 		errno = EOVERFLOW;
 		return NULL;
 	}
