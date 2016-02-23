@@ -2242,6 +2242,18 @@ func (b *bprof_t) dump() {
 
 var prof = bprof_t{}
 
+func cpuidfamily() (uint, uint) {
+	ax, _, _, _ := runtime.Cpuid(1, 0)
+	model :=  (ax >> 4) & 0xf
+	family := (ax >> 8) & 0xf
+	emodel := (ax >> 16) & 0xf
+	efamily := (ax >> 20) & 0xff
+
+	dispmodel := emodel << 4 + model
+	dispfamily := efamily + family
+	return uint(dispmodel), uint(dispfamily)
+}
+
 func cpuchk() {
 	_, _, _, dx := runtime.Cpuid(0x80000001, 0)
 	arch64 := uint32(1 << 29)
@@ -2249,17 +2261,11 @@ func cpuchk() {
 		panic("not intel 64 arch?")
 	}
 
-	ax, _, _, dx := runtime.Cpuid(1, 0)
-	stepping := ax & 0xf
-	model :=  (ax >> 4) & 0xf
-	family := (ax >> 8) & 0xf
-	emodel := (ax >> 16) & 0xf
-	efamily := (ax >> 20) & 0xff
-
-	rmodel := emodel << 4 + model
-	rfamily := efamily + family
+	rmodel, rfamily := cpuidfamily()
 	fmt.Printf("CPUID: family: %x, model: %x\n", rfamily, rmodel)
 
+	ax, _, _, dx := runtime.Cpuid(1, 0)
+	stepping := ax & 0xf
 	oldp := rfamily == 6 && rmodel < 3 && stepping < 3
 	sep := uint32(1 << 11)
 	if dx & sep == 0 || oldp {
@@ -2285,18 +2291,61 @@ func perfsetup() {
 	pdc := cx & (1 << 15) != 0
 	if pdc && perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 &&
 	    cyccnt {
-		fmt.Printf("Hardware Performance monitoring enabled\n")
+		fmt.Printf("Hardware Performance monitoring enabled: " +
+		    "%v counters\n", npmc)
 		profhw = &intelprof_t{}
+		profhw.prof_init(uint(npmc))
 	} else {
 		fmt.Printf("No hardware performance monitoring\n")
 		profhw = &nilprof_t{}
 	}
 }
 
+// performance monitoring event id
+type pmevid_t uint
+
+const(
+	// architectural
+	EV_UNHALTED_CORE_CYCLES		pmevid_t = iota
+	EV_LLC_MISSES			pmevid_t = iota
+	EV_LLC_REFS			pmevid_t = iota
+	EV_BRANCH_INSTR_RETIRED		pmevid_t = iota
+	EV_INSTR_RETIRED		pmevid_t = iota
+	// non-architectural
+	// "all TLB misses that cause a page walk"
+	EV_DTLB_LOAD_MISS_ANY		pmevid_t = iota
+	EV_L2_LD_HITS			pmevid_t = iota
+)
+
+type pmflag_t uint
+
+const(
+	EVF_OS				pmflag_t = 1 << iota
+	EVF_USR				pmflag_t = 1 << iota
+)
+
+type pmev_t struct {
+	evid	pmevid_t
+	pflags	pmflag_t
+}
+
+var pmevid_names = map[pmevid_t]string{
+	EV_UNHALTED_CORE_CYCLES: "Unhalted core cycles",
+	EV_LLC_MISSES: "LLC misses",
+	EV_LLC_REFS: "LLC references",
+	EV_BRANCH_INSTR_RETIRED: "Branch instructions retired",
+	EV_INSTR_RETIRED: "Instructions retired",
+	EV_DTLB_LOAD_MISS_ANY : "dTLB load misses",
+	EV_L2_LD_HITS: "L2 load hits",
+}
+
 // a device driver for hardware profiling
 type profhw_i interface {
-	start()
-	stop() []uintptr
+	prof_init(uint)
+	startpmc([]pmev_t) ([]int, bool)
+	stoppmc([]int) []uint
+	startnmi() bool
+	stopnmi() []uintptr
 }
 
 var profhw profhw_i
@@ -2304,35 +2353,59 @@ var profhw profhw_i
 type nilprof_t struct {
 }
 
-func (n *nilprof_t) start() {
+func (n *nilprof_t) prof_init(uint) {
 }
 
-func (n *nilprof_t) stop() []uintptr {
-	var r []uintptr
-	return r
+func (n *nilprof_t) startpmc([]pmev_t) ([]int, bool) {
+	return nil, false
+}
+
+func (n *nilprof_t) stoppmc([]int) []uint {
+	return nil
+}
+
+func (n *nilprof_t) startnmi() bool {
+	return false
+}
+
+func (n *nilprof_t) stopnmi() []uintptr {
+	return nil
 }
 
 type intelprof_t struct {
-	l	sync.Mutex
+	l		sync.Mutex
+	pmcs		[]intelpmc_t
+	events		map[pmevid_t]pmevent_t
+}
+
+type intelpmc_t struct {
+	alloced		bool
+	eventid		pmevid_t
+}
+
+type pmevent_t struct {
+	event	int
+	umask	int
 }
 
 func (ip *intelprof_t) _disableall() {
 	runtime.LVTPerfMask = true
-	ip._perfipi()
+	ip._perfmaskipi()
 }
 
 func (ip *intelprof_t) _enableall() {
 	runtime.LVTPerfMask = false
-	ip._perfipi()
+	ip._perfmaskipi()
 }
 
-func (ip *intelprof_t) _perfipi() {
+func (ip *intelprof_t) _perfmaskipi() {
 	lapaddr := 0xfee00000
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 
 	allandself := 2
-	trap_perf := 72
-	low := uint32(allandself << 18 | 1 << 14 | trap_perf)
+	trap_perfmask := 72
+	level := 1 << 14
+	low := uint32(allandself << 18 | level | trap_perfmask)
 	icrl := 0x300/4
 	atomic.StoreUint32(&lap[icrl], low)
 	ipisent := uint32(1 << 12)
@@ -2340,27 +2413,180 @@ func (ip *intelprof_t) _perfipi() {
 	}
 }
 
-var _zbf [4096]uintptr
-func (ip *intelprof_t) start() {
-	ip.l.Lock()
+func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
+	if cid < 0 || cid >= len(ip.pmcs) {
+		panic("wtf")
+	}
+	ev, ok := ip.events[eid]
+	if !ok {
+		panic("no such event")
+	}
+	wrmsr := func(a, b int) {
+		runtime.Wrmsr(a, b)
+	}
+	ia32_pmc0 := 0xc1
+	ia32_perfevtsel0 := 0x186
+	pmc := ia32_pmc0 + cid
+	evtsel := ia32_perfevtsel0 + cid
+	// disable perf counter before clearing
+	wrmsr(evtsel, 0)
+	wrmsr(pmc, 0)
 
-	runtime.Byoof = _zbf
-	runtime.Byidx = 0
+	usr := 1 << 16
+	os  := 1 << 17
+	en  := 1 << 22
+	event := ev.event
+	umask := ev.umask << 8
 
-	ip._enableall()
+	v := umask | event | en
+	if pf & EVF_OS != 0 {
+		v |= os
+	}
+	if pf & EVF_USR != 0 {
+		v |= usr
+	}
+	if pf == 0 {
+		v |= os | usr
+	}
+	wrmsr(evtsel, v)
 }
 
-func (ip *intelprof_t) stop() []uintptr {
-	ip._disableall()
+func (ip *intelprof_t) _pmc_stop(cid int) uint {
+	if cid < 0 || cid >= len(ip.pmcs) {
+		panic("wtf")
+	}
+	ia32_pmc0 := 0xc1
+	ia32_perfevtsel0 := 0x186
+	pmc := ia32_pmc0 + cid
+	evtsel := ia32_perfevtsel0 + cid
+	ret := runtime.Rdmsr(pmc)
+	runtime.Wrmsr(evtsel, 0)
+	return uint(ret)
+}
 
-	l := int(runtime.Byidx) + 1
+func (ip *intelprof_t) prof_init(npmc uint) {
+	ip.pmcs = make([]intelpmc_t, npmc)
+	// architectural events
+	ip.events = map[pmevid_t]pmevent_t{
+	    EV_UNHALTED_CORE_CYCLES:
+		{0x3c, 0},
+	    EV_LLC_MISSES:
+		{0x2e, 0x41},
+	    EV_LLC_REFS:
+		{0x2e, 0x4f},
+	    EV_BRANCH_INSTR_RETIRED:
+		{0xc4, 0x0},
+	    EV_INSTR_RETIRED:
+		{0xc0, 0x0},
+	}
+
+	_xeon5000 := map[pmevid_t]pmevent_t{
+	    EV_DTLB_LOAD_MISS_ANY :
+		// "dTLB load misses that cause a page-walk"
+		{0x08, 0x1},
+	    EV_L2_LD_HITS:
+		{0x24, 0x1},
+	}
+
+	dispmodel, dispfamily := cpuidfamily()
+
+	if dispfamily == 0x6 && dispmodel == 0x1e {
+		for k, v := range _xeon5000 {
+			ip.events[k] = v
+		}
+	}
+}
+
+// starts a performance counter for each event in evs. if all the counters
+// cannot be allocated, no performance counter is started.
+func (ip *intelprof_t) startpmc(evs []pmev_t) ([]int, bool) {
+	ip.l.Lock()
+	defer ip.l.Unlock()
+
+	// are the event ids supported?
+	for _, ev := range evs {
+		if _, ok := ip.events[ev.evid]; !ok {
+			return nil, false
+		}
+	}
+	// make sure we have enough counters
+	cnt := 0
+	for i := range ip.pmcs {
+		if !ip.pmcs[i].alloced {
+			cnt++
+		}
+	}
+	if cnt < len(evs) {
+		return nil, false
+	}
+
+	ret := make([]int, len(evs))
+	ri := 0
+	// find available counter
+	outer:
+	for _, ev := range evs {
+		eid := ev.evid
+		for i := range ip.pmcs {
+			if !ip.pmcs[i].alloced {
+				ip.pmcs[i].alloced = true
+				ip.pmcs[i].eventid = eid
+				ip._pmc_start(i, eid, ev.pflags)
+				ret[ri] = i
+				ri++
+				continue outer
+			}
+		}
+	}
+	return ret, true
+}
+
+func (ip *intelprof_t) stoppmc(idxs []int) []uint {
+	ip.l.Lock()
+	defer ip.l.Unlock()
+
+	ret := make([]uint, len(idxs))
+	ri := 0
+	for _, idx := range idxs {
+		if !ip.pmcs[idx].alloced {
+			ret[ri] = 0
+			ri++
+			continue
+		}
+		ip.pmcs[idx].alloced = false
+		c := ip._pmc_stop(idx)
+		ret[ri] = c
+		ri++
+	}
+	return ret
+}
+
+func (ip *intelprof_t) startnmi() bool {
+	ip.l.Lock()
+	defer ip.l.Unlock()
+	if ip.pmcs[0].alloced {
+		return false
+	}
+	// NMI profiling uses pmc0 (but could use any other counters)
+	ip.pmcs[0].alloced = true
+	runtime.Byidx = 0
+	ip._enableall()
+	return true
+}
+
+func (ip *intelprof_t) stopnmi() []uintptr {
+	ip.l.Lock()
+	defer ip.l.Unlock()
+
+	ip._disableall()
+	ip.pmcs[0].alloced = false
+
+	l := int(runtime.Byidx)
 	if l > len(runtime.Byoof) {
 		l = len(runtime.Byoof)
 	}
 	r := make([]uintptr, l)
 	copy(r, runtime.Byoof[0:l])
 
-	ip.l.Unlock()
 	return r
 }
 

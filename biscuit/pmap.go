@@ -31,7 +31,8 @@ const VUSER     int = 0x59
 // GC cannot find them without our help because it doesn't know how to trace a
 // page map since references are physical addresses
 
-// tracks pmap pages; pmap pages are never removed once added
+// tracks pmap pages; pmap pages are never removed once added (until the
+// process dies and its pmap is reclaimed)
 type pmtracker_t struct {
 	pms	[]*[512]int
 }

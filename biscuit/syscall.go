@@ -3610,10 +3610,12 @@ func (pr *perfrips_t) Swap(i, j int) {
 
 func _prof_nmi(en bool) {
 	if en {
-		profhw.start()
+		if !profhw.startnmi() {
+			fmt.Printf("Failed to start NMI profiling\n")
+		}
 	} else {
 		// stop profiling
-		rips := profhw.stop()
+		rips := profhw.stopnmi()
 		if len(rips) == 0 {
 			fmt.Printf("No samples!\n")
 			return
@@ -3657,6 +3659,57 @@ func _prof_go(en bool) {
 		//	return
 		//}
 		//prof.dump()
+	}
+}
+
+var hacklock sync.Mutex
+var hackctrs []int
+
+func _prof_pmc(en bool) {
+	hacklock.Lock()
+	defer hacklock.Unlock()
+
+	events := []pmev_t{
+	    {EV_LLC_MISSES, EVF_OS},
+	    {EV_LLC_MISSES, EVF_USR},
+	    {EV_DTLB_LOAD_MISS_ANY, EVF_OS},
+	    {EV_DTLB_LOAD_MISS_ANY, EVF_USR},
+	}
+	if en {
+		if hackctrs != nil {
+			fmt.Printf("counters in use\n")
+			return
+		}
+		cs, ok := profhw.startpmc(events)
+		if ok {
+			hackctrs = cs
+		} else {
+			fmt.Printf("failed to start counters\n")
+		}
+	} else {
+		if hackctrs == nil {
+			return
+		}
+		r := profhw.stoppmc(hackctrs)
+		hackctrs = nil
+		for i, ev := range events {
+			t := ""
+			if ev.pflags & EVF_USR != 0 {
+				t = "(usr"
+			}
+			if ev.pflags & EVF_OS != 0 {
+				if t != "" {
+					t += "+os"
+				} else {
+					t = "(os"
+				}
+			}
+			if t != "" {
+				t += ")"
+			}
+			n := pmevid_names[ev.evid] + " " + t
+			fmt.Printf("%-30s: %15v\n", n, r[i])
+		}
 	}
 }
 
