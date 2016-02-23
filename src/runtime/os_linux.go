@@ -361,6 +361,7 @@ func _pmcreset(en bool) {
 		ticks := int(Cpumhz * 10000)
 		Wrmsr(ia32_pmc0, -ticks)
 
+		umask = umask << 8
 		v := umask | event | usr | os | en | inte
 		Wrmsr(ia32_perfevtsel0, v)
 	} else {
