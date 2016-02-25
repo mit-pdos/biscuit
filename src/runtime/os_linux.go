@@ -340,6 +340,8 @@ func _pmcreset(en bool) {
 	ia32_pmc0 := 0xc1
 	ia32_perfevtsel0 := 0x186
 	ia32_perf_global_ovf_ctrl := 0x390
+	ia32_debugctl := 0x1d9
+	ia32_global_ctrl := 0x38f
 	//ia32_perf_global_status := uint32(0x38e)
 
 	// "unhalted core cycles"
@@ -360,6 +362,12 @@ func _pmcreset(en bool) {
 
 		ticks := int(Cpumhz * 10000)
 		Wrmsr(ia32_pmc0, -ticks)
+
+		freeze_pmc_on_pmi := 1 << 12
+		Wrmsr(ia32_debugctl, freeze_pmc_on_pmi)
+		// cpu clears global_ctrl on PMI if freeze-on-pmi is set.
+		// re-enable
+		Wrmsr(ia32_global_ctrl, 1)
 
 		umask = umask << 8
 		v := umask | event | usr | os | en | inte
