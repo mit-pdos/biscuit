@@ -1453,15 +1453,16 @@ mmap_test(void)
 	pmsg("mmap passed");
 }
 
-#define TRAP_PGFAULT    14
-#define TRAP_SYSCALL    64
-#define TRAP_TIMER      32
-#define TRAP_DISK       (32 + 14)
-#define TRAP_SPUR       48
-#define TRAP_YIELD      49
-#define TRAP_TLBSHOOT   70
-#define TRAP_SIGRET     71
-#define TRAP_PERFMASK   72
+#define TRAP_NMI	2
+#define TRAP_PGFAULT	14
+#define TRAP_SYSCALL	64
+#define TRAP_TIMER	32
+#define TRAP_DISK	(32 + 14)
+#define TRAP_SPUR	48
+#define TRAP_YIELD	49
+#define TRAP_TLBSHOOT	70
+#define TRAP_SIGRET	71
+#define TRAP_PERFMASK	72
 
 #define IRQ_BASE	32
 #define IS_IRQ(x)	(x > IRQ_BASE && x <= IRQ_BASE + 15)
@@ -2150,10 +2151,10 @@ trap(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
 
-	if (trapno == 2) {
+	if (trapno == TRAP_NMI) {
 		runtime·perfgather(tf);
 		runtime·perfmask();
-		trapret(tf, rcr3());
+		_trapret(tf);
 	}
 
 	lcr3(kpmap);
