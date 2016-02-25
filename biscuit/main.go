@@ -2310,6 +2310,7 @@ const(
 	EV_LLC_MISSES			pmevid_t = iota
 	EV_LLC_REFS			pmevid_t = iota
 	EV_BRANCH_INSTR_RETIRED		pmevid_t = iota
+	EV_BRANCH_MISS_RETIRED		pmevid_t = iota
 	EV_INSTR_RETIRED		pmevid_t = iota
 	// non-architectural
 	// "all TLB misses that cause a page walk"
@@ -2334,6 +2335,7 @@ var pmevid_names = map[pmevid_t]string{
 	EV_LLC_MISSES: "LLC misses",
 	EV_LLC_REFS: "LLC references",
 	EV_BRANCH_INSTR_RETIRED: "Branch instructions retired",
+	EV_BRANCH_MISS_RETIRED: "Branch misses retired",
 	EV_INSTR_RETIRED: "Instructions retired",
 	EV_DTLB_LOAD_MISS_ANY : "dTLB load misses",
 	EV_L2_LD_HITS: "L2 load hits",
@@ -2476,12 +2478,14 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		{0x2e, 0x4f},
 	    EV_BRANCH_INSTR_RETIRED:
 		{0xc4, 0x0},
+	    EV_BRANCH_MISS_RETIRED:
+		{0xc5, 0x0},
 	    EV_INSTR_RETIRED:
 		{0xc0, 0x0},
 	}
 
 	_xeon5000 := map[pmevid_t]pmevent_t{
-	    EV_DTLB_LOAD_MISS_ANY :
+	    EV_DTLB_LOAD_MISS_ANY:
 		// "dTLB load misses that cause a page-walk"
 		{0x08, 0x1},
 	    EV_L2_LD_HITS:
