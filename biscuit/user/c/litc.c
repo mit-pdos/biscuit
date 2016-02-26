@@ -2978,6 +2978,8 @@ _free(void *pp)
 		errx(-1, "free: bad pointer");
 	ch->objs--;
 	if (ch->objs == 0) {
+		if (ch == curh)
+			return;
 		if (prev)
 			prev->next = ch->next;
 		else
