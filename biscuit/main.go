@@ -2315,6 +2315,10 @@ const(
 	// non-architectural
 	// "all TLB misses that cause a page walk"
 	EV_DTLB_LOAD_MISS_ANY		pmevid_t = iota
+	// "number of completed walks due to miss in sTLB"
+	EV_DTLB_LOAD_MISS_STLB		pmevid_t = iota
+	// "retired stores that missed in the dTLB"
+	EV_STORE_DTLB_MISS		pmevid_t = iota
 	EV_L2_LD_HITS			pmevid_t = iota
 )
 
@@ -2337,7 +2341,9 @@ var pmevid_names = map[pmevid_t]string{
 	EV_BRANCH_INSTR_RETIRED: "Branch instructions retired",
 	EV_BRANCH_MISS_RETIRED: "Branch misses retired",
 	EV_INSTR_RETIRED: "Instructions retired",
-	EV_DTLB_LOAD_MISS_ANY : "dTLB load misses",
+	EV_DTLB_LOAD_MISS_ANY: "dTLB load misses",
+	EV_DTLB_LOAD_MISS_STLB: "sTLB misses",
+	EV_STORE_DTLB_MISS: "Store dTLB misses",
 	EV_L2_LD_HITS: "L2 load hits",
 }
 
@@ -2488,6 +2494,10 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 	    EV_DTLB_LOAD_MISS_ANY:
 		// "dTLB load misses that cause a page-walk"
 		{0x08, 0x1},
+	    EV_DTLB_LOAD_MISS_STLB:
+		{0x08, 0x2},
+	    EV_STORE_DTLB_MISS:
+		{0x0c, 0x1},
 	    EV_L2_LD_HITS:
 		{0x24, 0x1},
 	}
@@ -2590,6 +2600,9 @@ func (ip *intelprof_t) stopnmi() []uintptr {
 	}
 	r := make([]uintptr, l)
 	copy(r, runtime.Byoof[0:l])
+	if l == len(runtime.Byoof) {
+		fmt.Printf("*** NMI buffer is full!\n")
+	}
 
 	return r
 }
