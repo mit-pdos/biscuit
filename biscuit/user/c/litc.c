@@ -411,8 +411,14 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, long offset)
 {
 	ulong protflags = (ulong)prot << 32;
 	protflags |= flags;
-	return (void *)syscall(SA(addr), SA(len), SA(protflags), SA(fd),
+	long ret;
+	ret = syscall(SA(addr), SA(len), SA(protflags), SA(fd),
 	    SA(offset), SYS_MMAP);
+	if (ret < 0 && -ret >= ERRNO_FIRST && -ret <= ERRNO_LAST) {
+		errno = -ret;
+		ret = (long)MAP_FAILED;
+	}
+	return (void *)ret;
 }
 
 int
@@ -799,7 +805,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 	// +8 for the tls indirect pointer
 	void *newtls = malloc(kinfo->len + 8);
 	if (!newtls)
-		return -ENOMEM;
+		return ENOMEM;
 	char *tlsdata = newtls;
 	tlsdata += 8;
 	memmove(tlsdata, kinfo->freshtls, kinfo->len);
@@ -820,7 +826,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 	// XXX setup guard page
 	void *stack = mkstack(stksz);
 	if (!stack) {
-		ret = -ENOMEM;
+		ret = ENOMEM;
 		goto tls;
 	}
 	long tid;
@@ -831,7 +837,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 	};
 	struct pcargs_t *pca = malloc(sizeof(struct pcargs_t));
 	if (!pca) {
-		ret = -ENOMEM;
+		ret = ENOMEM;
 		goto errstack;
 	}
 
@@ -2576,6 +2582,7 @@ static const char * const _errstr[] = {
 	[EBADF] = "Bad file descriptor",
 	[EAGAIN] = "Resource temporarily unavailable",
 	[ECHILD] = "No child processes",
+	[ENOMEM] = "Out of memory",
 	[EFAULT] = "Bad address",
 	[EBUSY] = "Device busy",
 	[EEXIST] = "File exists",
@@ -3043,6 +3050,6 @@ _entry(void)
 	    "andq	$0xfffffffffffffff0, %%rsp\n"
 	    "subq	$8, %%rsp\n"
 	    "movabs 	$_start, %%rax\n"
-	    "jmpq	%%rax\n"
+	    "jmpq	*%%rax\n"
 	    ::: "memory", "cc");
 }

@@ -43,6 +43,7 @@ const(
 	EBADF		= 9
 	ECHILD		= 10
 	EAGAIN		= 11
+	ENOMEM		= 12
 	EWOULDBLOCK	= EAGAIN
 	EFAULT		= 14
 	EBUSY		= 16
@@ -489,7 +490,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		panic("no imp")
 	}
 	if flags & MAP_FIXED != 0 && addrn < USERMIN {
-		return MAP_FAILED
+		return -EINVAL
 	}
 	if prot == PROT_NONE {
 		return proc.mmapi
@@ -504,7 +505,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	lenn = roundup(lenn, PGSIZE)
 	if lenn/PGSIZE + proc.vmregion.pglen() > proc.ulim.pages {
 		proc.Unlock_pmap()
-		return MAP_FAILED
+		return -ENOMEM
 	}
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
 	seg := proc.mkvmseg(addr, lenn)

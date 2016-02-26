@@ -14,6 +14,7 @@ extern "C" {
 #define		STDERR_FILENO	2
 #define		EOF		(-1)
 
+#define		ERRNO_FIRST	1
 #define		EPERM		1
 #define		ENOENT		2
 #define		EINTR		4
@@ -47,6 +48,7 @@ extern "C" {
 #define		ETIMEDOUT	110
 #define		ECONNREFUSED	111
 #define		EINPROGRESS	115
+#define		ERRNO_LAST	115
 
 #define		MAP_FAILED	((void *) -1)
 
