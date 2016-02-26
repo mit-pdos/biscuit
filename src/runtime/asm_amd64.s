@@ -356,6 +356,9 @@ TEXT rcr4(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
+TEXT ·Rcr4(SB), NOSPLIT, $0-0
+	JMP	rcr4(SB)
+
 TEXT tlbflush(SB), NOSPLIT, $0-0
 	MOVQ	CR3, AX
 	MOVQ	AX, CR3

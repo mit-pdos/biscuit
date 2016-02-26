@@ -1400,7 +1400,7 @@ func sys_sync(proc *proc_t) int {
 
 func sys_reboot(proc *proc_t) int {
 	// who needs ACPI?
-	runtime.Lcr3(p_zeropg)
+	runtime.Lcr3(uintptr(p_zeropg))
 	// poof
 	fmt.Printf("what?\n")
 	return 0

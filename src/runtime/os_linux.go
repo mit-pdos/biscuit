@@ -25,7 +25,7 @@ func Install_traphandler(func(tf *[24]int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
-func Lcr3(int)
+func Lcr3(uintptr)
 func Memmove(unsafe.Pointer, unsafe.Pointer, int)
 func Nanotime() int
 func Inb(int) int
@@ -40,8 +40,9 @@ func Pnum(int)
 func Kreset()
 func Ktime() int
 func Rdtsc() uint64
-func Rcr2() int
-func Rcr3() int
+func Rcr2() uintptr
+func Rcr3() uintptr
+func Rcr4() uintptr
 func Rrsp() int
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
@@ -141,7 +142,7 @@ func _Userrun(*[24]int, bool) (int, int)
 
 func Cprint(byte, int)
 
-func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap int,
+func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
     pms []*[512]int, fastret bool) (int, int) {
 
 	entersyscall()

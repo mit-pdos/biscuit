@@ -10,7 +10,7 @@ import "unsafe"
 
 type trapstore_t struct {
 	trapno    int
-	faultaddr int
+	faultaddr uintptr
 	tf        [TFSIZE]int
 	inttime   int
 }
@@ -988,8 +988,8 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
-		intno, aux := runtime.Userrun(tf, fxbuf, p.pmap, p.p_pmap,
-		    p.pmpages.pms, fastret)
+		intno, aux := runtime.Userrun(tf, fxbuf, p.pmap,
+		    uintptr(p.p_pmap), p.pmpages.pms, fastret)
 		fastret = false
 		switch intno {
 		case SYSCALL:
