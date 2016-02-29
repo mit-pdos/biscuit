@@ -2319,6 +2319,8 @@ const(
 	EV_DTLB_LOAD_MISS_STLB		pmevid_t = iota
 	// "retired stores that missed in the dTLB"
 	EV_STORE_DTLB_MISS		pmevid_t = iota
+	//EV_WTF1				pmevid_t = iota
+	//EV_WTF2				pmevid_t = iota
 	EV_L2_LD_HITS			pmevid_t = iota
 )
 
@@ -2344,6 +2346,8 @@ var pmevid_names = map[pmevid_t]string{
 	EV_DTLB_LOAD_MISS_ANY: "dTLB load misses",
 	EV_DTLB_LOAD_MISS_STLB: "sTLB misses",
 	EV_STORE_DTLB_MISS: "Store dTLB misses",
+	//EV_WTF1: "dummy 1",
+	//EV_WTF2: "dummy 2",
 	EV_L2_LD_HITS: "L2 load hits",
 }
 
@@ -2352,7 +2356,7 @@ type profhw_i interface {
 	prof_init(uint)
 	startpmc([]pmev_t) ([]int, bool)
 	stoppmc([]int) []uint
-	startnmi() bool
+	startnmi(pmevid_t, pmflag_t, uint, uint) bool
 	stopnmi() []uintptr
 }
 
@@ -2372,7 +2376,7 @@ func (n *nilprof_t) stoppmc([]int) []uint {
 	return nil
 }
 
-func (n *nilprof_t) startnmi() bool {
+func (n *nilprof_t) startnmi(pmevid_t, pmflag_t, uint, uint) bool {
 	return false
 }
 
@@ -2397,12 +2401,10 @@ type pmevent_t struct {
 }
 
 func (ip *intelprof_t) _disableall() {
-	runtime.LVTPerfMask = true
 	ip._perfmaskipi()
 }
 
 func (ip *intelprof_t) _enableall() {
-	runtime.LVTPerfMask = false
 	ip._perfmaskipi()
 }
 
@@ -2421,13 +2423,32 @@ func (ip *intelprof_t) _perfmaskipi() {
 	}
 }
 
-func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
-	if cid < 0 || cid >= len(ip.pmcs) {
-		panic("wtf")
-	}
+func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	ev, ok := ip.events[eid]
 	if !ok {
 		panic("no such event")
+	}
+	usr := 1 << 16
+	os  := 1 << 17
+	en  := 1 << 22
+	event := ev.event
+	umask := ev.umask << 8
+	v := umask | event | en
+	if pf & EVF_OS != 0 {
+		v |= os
+	}
+	if pf & EVF_USR != 0 {
+		v |= usr
+	}
+	if pf == 0 {
+		v |= os | usr
+	}
+	return v
+}
+
+func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
+	if cid < 0 || cid >= len(ip.pmcs) {
+		panic("wtf")
 	}
 	wrmsr := func(a, b int) {
 		runtime.Wrmsr(a, b)
@@ -2440,22 +2461,7 @@ func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
 	wrmsr(evtsel, 0)
 	wrmsr(pmc, 0)
 
-	usr := 1 << 16
-	os  := 1 << 17
-	en  := 1 << 22
-	event := ev.event
-	umask := ev.umask << 8
-
-	v := umask | event | en
-	if pf & EVF_OS != 0 {
-		v |= os
-	}
-	if pf & EVF_USR != 0 {
-		v |= usr
-	}
-	if pf == 0 {
-		v |= os | usr
-	}
+	v := ip._ev2msr(eid, pf)
 	wrmsr(evtsel, v)
 }
 
@@ -2498,6 +2504,10 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		{0x08, 0x2},
 	    EV_STORE_DTLB_MISS:
 		{0x0c, 0x1},
+	    //EV_WTF1:
+	    //    {0x49, 0x1},
+	    //EV_WTF2:
+	    //    {0x14, 0x2},
 	    EV_L2_LD_HITS:
 		{0x24, 0x1},
 	}
@@ -2574,15 +2584,27 @@ func (ip *intelprof_t) stoppmc(idxs []int) []uint {
 	return ret
 }
 
-func (ip *intelprof_t) startnmi() bool {
+func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
+    max uint) bool {
 	ip.l.Lock()
 	defer ip.l.Unlock()
 	if ip.pmcs[0].alloced {
 		return false
 	}
-	// NMI profiling uses pmc0 (but could use any other counters)
+	if _, ok := ip.events[evid]; !ok {
+		return false
+	}
+	// NMI profiling currently only uses pmc0 (but could use any other
+	// counter)
 	ip.pmcs[0].alloced = true
-	runtime.Byidx = 0
+
+	v := ip._ev2msr(evid, pf)
+	// enable LVT interrupt on PMC overflow
+	inte := 1 << 20
+	v |= inte
+
+	mask := false
+	runtime.SetNMI(mask, v, min, max)
 	ip._enableall()
 	return true
 }
@@ -2591,20 +2613,17 @@ func (ip *intelprof_t) stopnmi() []uintptr {
 	ip.l.Lock()
 	defer ip.l.Unlock()
 
+	mask := true
+	runtime.SetNMI(mask, 0, 0, 0)
 	ip._disableall()
-	ip.pmcs[0].alloced = false
-
-	l := int(runtime.Byidx)
-	if l > len(runtime.Byoof) {
-		l = len(runtime.Byoof)
-	}
-	r := make([]uintptr, l)
-	copy(r, runtime.Byoof[0:l])
-	if l == len(runtime.Byoof) {
+	buf, full := runtime.TakeNMIBuf()
+	if full {
 		fmt.Printf("*** NMI buffer is full!\n")
 	}
 
-	return r
+	ip.pmcs[0].alloced = false
+
+	return buf
 }
 
 func mkbm() {

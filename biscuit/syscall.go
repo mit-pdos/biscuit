@@ -683,12 +683,12 @@ func _ready2rev(orig int, r ready_t) int {
 	return orig | (revents << 48)
 }
 
-func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8, nfds int) (int, bool) {
+func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8,
+    nfds int) (int, bool) {
 	inmask  := POLLIN | POLLPRI
 	outmask := POLLOUT | POLLWRBAND
 	readyfds := 0
 	writeback := false
-	//proc.fdl.Lock()
 	for i := 0; i < nfds; i++ {
 		off := i*8
 		uw := readn(buf, 8, off)
@@ -697,7 +697,6 @@ func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8, nfds int) (i
 		if fdn < 0 {
 			continue
 		}
-		//fd, ok := proc.fd_get_inner(fdn)
 		fd, ok := proc.fd_get(fdn)
 		if !ok {
 			uw |= POLLNVAL
@@ -731,7 +730,6 @@ func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8, nfds int) (i
 			writeback = true
 		}
 	}
-	//proc.fdl.Unlock()
 	return readyfds, writeback
 }
 
@@ -3609,34 +3607,6 @@ func (pr *perfrips_t) Swap(i, j int) {
 	pr.times[i], pr.times[j] = pr.times[j], pr.times[i]
 }
 
-func _prof_nmi(en bool) {
-	if en {
-		if !profhw.startnmi() {
-			fmt.Printf("Failed to start NMI profiling\n")
-		}
-	} else {
-		// stop profiling
-		rips := profhw.stopnmi()
-		if len(rips) == 0 {
-			fmt.Printf("No samples!\n")
-			return
-		}
-
-		m := make(map[uintptr]int)
-		for _, v := range rips {
-			m[v] = m[v] + 1
-		}
-		prips := perfrips_t{}
-		prips.init(m)
-		sort.Sort(sort.Reverse(&prips))
-		for i := 0; i < prips.Len(); i++ {
-			r := prips.rips[i]
-			t := prips.times[i]
-			fmt.Printf("%0.16x -- %10v\n", r, t)
-		}
-	}
-}
-
 func _prof_go(en bool) {
 	if en {
 		prof.init()
@@ -3663,6 +3633,38 @@ func _prof_go(en bool) {
 	}
 }
 
+func _prof_nmi(en bool) {
+	if en {
+		cyc := runtime.Cpumhz * 1000000
+		samples := uint(1000)
+		min := cyc/samples
+		if !profhw.startnmi(EV_UNHALTED_CORE_CYCLES, EVF_USR | EVF_OS,
+		    min, 5*min) {
+			fmt.Printf("Failed to start NMI profiling\n")
+		}
+	} else {
+		// stop profiling
+		rips := profhw.stopnmi()
+		if len(rips) == 0 {
+			fmt.Printf("No samples!\n")
+			return
+		}
+
+		m := make(map[uintptr]int)
+		for _, v := range rips {
+			m[v] = m[v] + 1
+		}
+		prips := perfrips_t{}
+		prips.init(m)
+		sort.Sort(sort.Reverse(&prips))
+		for i := 0; i < prips.Len(); i++ {
+			r := prips.rips[i]
+			t := prips.times[i]
+			fmt.Printf("%0.16x -- %10v\n", r, t)
+		}
+	}
+}
+
 var hacklock sync.Mutex
 var hackctrs []int
 
@@ -3671,10 +3673,14 @@ func _prof_pmc(en bool) {
 	defer hacklock.Unlock()
 
 	events := []pmev_t{
-	    {EV_LLC_MISSES, EVF_OS},
-	    {EV_LLC_MISSES, EVF_USR},
-	    {EV_DTLB_LOAD_MISS_ANY, EVF_OS},
+	    //{EV_LLC_MISSES, EVF_OS},
+	    //{EV_LLC_MISSES, EVF_USR},
+	    //{EV_DTLB_LOAD_MISS_ANY, EVF_OS},
 	    {EV_DTLB_LOAD_MISS_ANY, EVF_USR},
+	    {EV_DTLB_LOAD_MISS_STLB, EVF_USR},
+	    //{EV_STORE_DTLB_MISS, EVF_USR},
+	    //{EV_WTF1, EVF_USR},
+	    //{EV_WTF2, EVF_USR},
 	}
 	if en {
 		if hackctrs != nil {
@@ -3725,6 +3731,7 @@ func sys_fake(proc *proc_t, n int) int {
 		_prof_nmi(en)
 	} else {
 		_prof_go(en)
+		//_prof_pmc(en)
 	}
 
 	return 0

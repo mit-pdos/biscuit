@@ -1559,6 +1559,7 @@ struct cpu_t {
 	// these are used only by Go code
 	void *pmap;
 	Slice pms;
+	//uint64 pid;
 };
 
 #define NTHREADS        64

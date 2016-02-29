@@ -73,6 +73,7 @@ type cpu_t struct {
 	num		uint
 	pmap		*[512]int
 	pms		[]*[512]int
+	//pid		uintptr
 }
 
 var Cpumhz uint
@@ -154,6 +155,7 @@ func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
 	cpu := Gscpu()
 	cpu.pmap = pmap
 	cpu.pms = pms
+	//cpu.pid = uintptr(pid)
 	if Rcr3() != p_pmap {
 		Lcr3(p_pmap)
 	}
@@ -245,10 +247,53 @@ func tss_set(id, rsp, nmi uintptr, rsz *uintptr) uintptr {
 	return uintptr(unsafe.Pointer(p))
 }
 
-var LVTPerfMask bool = true
+type nmiprof_t struct {
+	buf		[]uintptr
+	bufidx		uint64
+	LVTmask		bool
+	evtsel		int
+	evtmin		uint
+	evtmax		uint
+}
 
-var Byoof [4096]uintptr
-var Byidx uint64 = 0
+var _nmibuf [4096]uintptr
+var nmiprof = nmiprof_t{buf: _nmibuf[:]}
+
+func SetNMI(mask bool, evtsel int, min, max uint) {
+	nmiprof.LVTmask = mask
+	nmiprof.evtsel = evtsel
+	nmiprof.evtmin = min
+	nmiprof.evtmax = max
+}
+
+func TakeNMIBuf() ([]uintptr, bool) {
+	ret := nmiprof.buf
+	l := int(nmiprof.bufidx)
+	if l > len(ret) {
+		l = len(ret)
+	}
+	ret = ret[:l]
+	full := false
+	if l == len(_nmibuf) {
+		full = true
+	}
+
+	nmiprof.bufidx = 0
+	return ret, full
+}
+
+var _seed uint
+
+//go:nosplit
+func dumrand(low, high uint) uint {
+	ra := high - low
+	if ra == 0 {
+		return low
+	}
+	_seed = _seed * 1103515245 + 12345
+	ret := _seed & 0x7fffffffffffffff
+	return low + (ret % ra)
+}
 
 //go:nosplit
 func _consumelbr() {
@@ -260,7 +305,7 @@ func _consumelbr() {
 	// XXX stacklen
 	l := 16 * 2
 	l++
-	idx := int(xadd64(&Byidx, int64(l)))
+	idx := int(xadd64(&nmiprof.bufidx, int64(l)))
 	idx -= l
 	for i := 0; i < 16; i++ {
 		cur := (last - i)
@@ -271,49 +316,21 @@ func _consumelbr() {
 		to := uintptr(Rdmsr(lastbranch_0_to_ip + cur))
 		Wrmsr(lastbranch_0_from_ip + cur, 0)
 		Wrmsr(lastbranch_0_to_ip + cur, 0)
-		if idx + 2*i + 1 >= len(Byoof) {
+		if idx + 2*i + 1 >= len(nmiprof.buf) {
 			Cprint('!', 1)
 			break
 		}
-		Byoof[idx+2*i] = from
-		Byoof[idx+2*i+1] = to
+		nmiprof.buf[idx+2*i] = from
+		nmiprof.buf[idx+2*i+1] = to
 	}
 	idx += l - 1
-	if idx < len(Byoof) {
-		Byoof[idx] = ^uintptr(0)
+	if idx < len(nmiprof.buf) {
+		nmiprof.buf[idx] = ^uintptr(0)
 	}
 }
 
 //go:nosplit
-func perfgather(tf *[TFSIZE]uintptr) {
-	idx := xadd64(&Byidx, 1) - 1
-	if idx <= uint64(len(Byoof)) {
-		Byoof[idx] = tf[TF_RIP]
-	}
-	//_consumelbr()
-}
-
-//go:nosplit
-func perfmask() {
-	lapaddr := 0xfee00000
-	const PGSIZE = 1 << 12
-	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
-
-	perfmonc := 208
-	if LVTPerfMask {
-		mask := uint32(1 << 16)
-		lap[perfmonc] = mask
-		_pmcreset(false)
-	} else {
-		// unmask perf LVT, reset pmc
-		nmidelmode :=  uint32(0x4 << 8)
-		lap[perfmonc] = nmidelmode
-		_pmcreset(true)
-	}
-}
-
-//go:nosplit
-func _lrbreset(en bool) {
+func _lbrreset(en bool) {
 	ia32_debugctl := 0x1d9
 	if !en {
 		Wrmsr(ia32_debugctl, 0)
@@ -337,6 +354,38 @@ func _lrbreset(en bool) {
 }
 
 //go:nosplit
+func perfgather(tf *[TFSIZE]uintptr) {
+	idx := xadd64(&nmiprof.bufidx, 1) - 1
+	if idx < uint64(len(nmiprof.buf)) {
+		//nmiprof.buf[idx] = tf[TF_RIP]
+		//pid := Gscpu().pid
+		//v := tf[TF_RIP] | (pid << 56)
+		v := tf[TF_RIP]
+		nmiprof.buf[idx] = v
+	}
+	//_consumelbr()
+}
+
+//go:nosplit
+func perfmask() {
+	lapaddr := 0xfee00000
+	const PGSIZE = 1 << 12
+	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+
+	perfmonc := 208
+	if nmiprof.LVTmask {
+		mask := uint32(1 << 16)
+		lap[perfmonc] = mask
+		_pmcreset(false)
+	} else {
+		// unmask perf LVT, reset pmc
+		nmidelmode :=  uint32(0x4 << 8)
+		lap[perfmonc] = nmidelmode
+		_pmcreset(true)
+	}
+}
+
+//go:nosplit
 func _pmcreset(en bool) {
 	ia32_pmc0 := 0xc1
 	ia32_perfevtsel0 := 0x186
@@ -345,10 +394,6 @@ func _pmcreset(en bool) {
 	ia32_global_ctrl := 0x38f
 	//ia32_perf_global_status := uint32(0x38e)
 
-	// "unhalted core cycles"
-	umask := 0
-	event := 0x3c
-
 	if en {
 		// disable perf counter before clearing
 		Wrmsr(ia32_perfevtsel0, 0)
@@ -356,13 +401,8 @@ func _pmcreset(en bool) {
 		// clear overflow
 		Wrmsr(ia32_perf_global_ovf_ctrl, 1)
 
-		usr := 1 << 16
-		os := 1 << 17
-		en := 1 << 22
-		inte := 1 << 20
-
-		ticks := int(Cpumhz * 10000)
-		Wrmsr(ia32_pmc0, -ticks)
+		r := dumrand(nmiprof.evtmin, nmiprof.evtmax)
+		Wrmsr(ia32_pmc0, -int(r))
 
 		freeze_pmc_on_pmi := 1 << 12
 		Wrmsr(ia32_debugctl, freeze_pmc_on_pmi)
@@ -370,8 +410,7 @@ func _pmcreset(en bool) {
 		// re-enable
 		Wrmsr(ia32_global_ctrl, 1)
 
-		umask = umask << 8
-		v := umask | event | usr | os | en | inte
+		v := nmiprof.evtsel
 		Wrmsr(ia32_perfevtsel0, v)
 	} else {
 		Wrmsr(ia32_perfevtsel0, 0)
@@ -379,7 +418,7 @@ func _pmcreset(en bool) {
 
 	// the write to debugctl enabling LBR must come after clearing overflow
 	// via global_ovf_ctrl; otherwise the processor instantly clears lbr...
-	//_lrbreset(en)
+	//_lbrreset(en)
 }
 
 //go:nosplit
