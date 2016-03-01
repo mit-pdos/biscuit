@@ -2055,7 +2055,8 @@ rusagetest()
 	int i;
 	volatile int done = 0;
 	for (i = 0; i < n; i++)
-		pthread_create(&t[i], NULL, _ruthread, (void *)&done);
+		if (pthread_create(&t[i], NULL, _ruthread, (void *)&done))
+			errx(-1, "pthread_create");
 	sleep(1);
 	done = 1;
 	for (i = 0; i < n; i++)
@@ -2152,44 +2153,44 @@ threadwait()
 		err(pid, "fork");
 	int ret;
 	pthread_t t[2];
-	if ((ret = pthread_create(&t[0], NULL, _waitany, NULL)) < 0)
-		err(ret, "pthread_create");
-	if ((ret = pthread_create(&t[1], NULL, _waitchild, (void *)pid)) < 0)
-		err(ret, "pthread_create");
+	if ((ret = pthread_create(&t[0], NULL, _waitany, NULL)))
+		errx(ret, "pthread_create");
+	if ((ret = pthread_create(&t[1], NULL, _waitchild, (void *)pid)))
+		errx(ret, "pthread_create");
 	if ((ret = pthread_join(t[0], NULL)))
-		err(ret, "pthread_join");
+		errx(ret, "pthread_join");
 	if ((ret = pthread_join(t[1], NULL)))
-		err(ret, "pthread_join");
+		errx(ret, "pthread_join");
 
 	if ((pid = fork()) == 0) {
 		sleep(1);
 		exit(0);
 	} else if (pid < 0)
-		err(pid, "fork");
+		errx(pid, "fork");
 
-	if ((ret = pthread_create(&t[0], NULL, _waitany, NULL)) < 0)
-		err(ret, "pthread_create");
-	if ((ret = pthread_create(&t[1], NULL, _waitany, NULL)) < 0)
-		err(ret, "pthread_create");
+	if ((ret = pthread_create(&t[0], NULL, _waitany, NULL)))
+		errx(ret, "pthread_create");
+	if ((ret = pthread_create(&t[1], NULL, _waitany, NULL)))
+		errx(ret, "pthread_create");
 	if ((ret = pthread_join(t[0], NULL)))
-		err(ret, "pthread_join");
+		errx(ret, "pthread_join");
 	if ((ret = pthread_join(t[1], NULL)))
-		err(ret, "pthread_join");
+		errx(ret, "pthread_join");
 
 	if ((pid = fork()) == 0) {
 		sleep(1);
 		exit(0);
 	} else if (pid < 0)
-		err(pid, "fork");
+		errx(pid, "fork");
 
-	if ((ret = pthread_create(&t[0], NULL, _waitchild, (void *)pid)) < 0)
-		err(ret, "pthread_create");
-	if ((ret = pthread_create(&t[1], NULL, _waitchild, (void *)pid)) < 0)
-		err(ret, "pthread_create");
+	if ((ret = pthread_create(&t[0], NULL, _waitchild, (void *)pid)))
+		errx(ret, "pthread_create");
+	if ((ret = pthread_create(&t[1], NULL, _waitchild, (void *)pid)))
+		errx(ret, "pthread_create");
 	if ((ret = pthread_join(t[0], NULL)))
-		err(ret, "pthread_join");
+		errx(ret, "pthread_join");
 	if ((ret = pthread_join(t[1], NULL)))
-		err(ret, "pthread_join");
+		errx(ret, "pthread_join");
 
 	printf("threadwait ok\n");
 }
@@ -2778,7 +2779,7 @@ void _mutextest(const int nt)
 	int i;
 	for (i = 0; i < nt; i++)
 		if (pthread_create(&t[i], NULL, _locker, &m))
-			err(-1, "pthread_create");
+			errx(-1, "pthread_create");
 	go = 1;
 	for (i = 0; i < nt; i++)
 		if (pthread_join(t[i], NULL))
@@ -2864,7 +2865,7 @@ static void _condtest(const int nt)
 		// neighbor to guarantee that the threads terminate in order.
 		go = 0;
 		if (pthread_create(&t[i], NULL, _condsleep, &args[i]))
-			err(-1, "pthread_ create");
+			errx(-1, "pthread_ create");
 		while (go == 0)
 			asm volatile("pause\n":::"memory");
 	}
@@ -2906,7 +2907,7 @@ static void _condbctest(const int nt)
 		args[i].m = &m;
 		args[i].yours = &c;
 		if (pthread_create(&t[i], NULL, _condsleepbc, &args[i]))
-			err(-1, "pthread_ create");
+			errx(-1, "pthread_ create");
 	}
 
 	srandom(time(NULL));

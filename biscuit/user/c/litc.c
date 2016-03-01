@@ -866,7 +866,7 @@ pthread_join(pthread_t t, void **retval)
 {
 	int ret = thrwait(t, (long *)retval);
 	if (ret < 0)
-		return ret;
+		return -ret;
 	return 0;
 }
 

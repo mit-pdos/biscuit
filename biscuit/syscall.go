@@ -3649,6 +3649,7 @@ func _prof_nmi(en bool) {
 			fmt.Printf("No samples!\n")
 			return
 		}
+		fmt.Printf("%v samples\n", len(rips))
 
 		m := make(map[uintptr]int)
 		for _, v := range rips {
