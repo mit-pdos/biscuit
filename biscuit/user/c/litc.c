@@ -84,6 +84,15 @@ struct kinfo_t {
 // initialized in _entry, given to us by kernel
 static struct kinfo_t *kinfo;
 
+// tfork_thread and _pcreate use inline asm to call some syscalls in order to
+// 1) make sure the new thread immediately calls the destination function
+// without executing any C code (which would be unsafe since the new thread is
+// running on a different stack) 2) to make sure that, on thread exit, the
+// stack is not used after munmapping it, but before calling exit(2). we use
+// this macro to make sure the clobbers are coherent for these three pieces of
+// code using syscalls.
+#define SYSCALL_CLOBBERS "cc", "memory", "r9", "r10", "r11", "r12", "r13", \
+			 "r14", "r15"
 long
 syscall(long a1, long a2, long a3, long a4,
     long a5, long trap)
@@ -99,8 +108,7 @@ syscall(long a1, long a2, long a3, long a4,
 		"sysenter\n"
 		: "=a"(ret)
 		: "0"(trap), "D"(a1), "S"(a2), "d"(a3), "c"(a4), "r"(r8)
-		: "cc", "memory", "r9", "r10", "r11", "r12", "r13", "r14",
-		  "r15");
+		: SYSCALL_CLOBBERS);
 
 	return ret;
 }
@@ -720,7 +728,7 @@ tfork_thread(struct tfork_t *args, long (*fn)(void *), void *fnarg)
 	    "1:\n"
 	    : "=a"(tid)
 	    : "D"(args), "S"(flags), "0"(SYS_FORK), "r"(rbp), "r"(rbx)
-	    : "memory", "cc");
+	    : SYSCALL_CLOBBERS);
 	return tid;
 }
 
@@ -790,7 +798,7 @@ _pcreate(void *vpcarg)
 	    :
 	    : "a"(SYS_MUNMAP), "D"(pcargs.stack), "S"(pcargs.stksz),
 	      "r"(rbp), "r"(rbx)
-	    : "memory", "cc");
+	    : SYSCALL_CLOBBERS);
 	// not reached
 	return 0;
 }
@@ -848,6 +856,7 @@ pthread_create(pthread_t *t, pthread_attr_t *attrs, void* (*fn)(void *),
 	pca->stksz = stksz;
 	ret = tfork_thread(&tf, _pcreate, pca);
 	if (ret < 0) {
+		ret = -ret;
 		goto both;
 	}
 	*t = tid;
