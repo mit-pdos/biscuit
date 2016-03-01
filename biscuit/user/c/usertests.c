@@ -288,6 +288,8 @@ void dirtest(void)
     printf("unlink dir0 failed\n");
     exit(0);
   }
+  if (mkdir("/") != -1)
+    errx(-1, "expected failure");
   printf("mkdir test ok\n");
 }
 
@@ -2976,6 +2978,7 @@ main(int argc, char *argv[])
   sharedfd();
   //renametest();
   lseektest();
+  dirtest();
 
   bigargtest();
   bigwrite();

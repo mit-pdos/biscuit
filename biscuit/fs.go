@@ -1032,6 +1032,9 @@ func fs_mkdir(paths string, mode int, cwd inum) int {
 	if len(fn) > DNAMELEN {
 		return -ENAMETOOLONG
 	}
+	if fn == "" {
+		return -EINVAL
+	}
 
 	// atomically create new dir with insert of "." and ".."
 	itx := inodetx_t{}
