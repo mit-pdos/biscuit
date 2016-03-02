@@ -1747,6 +1747,10 @@ getopt(int argc, char * const *argv, const char *optstring)
 	int needarg = o[1] == ':';
 	if (!needarg)
 		return ca[1];
+	if (ca[2] != '\0') {
+		optarg = &ca[2];
+		return ca[1];
+	}
 	const char argwut = optstring[0] == ':' ? ':' : wut;
 	if (optind >= argc || argv[optind][0] == '-')
 		return argwut;
