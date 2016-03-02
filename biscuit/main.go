@@ -1788,13 +1788,15 @@ func cpus_start(aplim int) {
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
 	mpaddr := 0x8000
-	mppg := dmap(mpaddr)
-	for i := range mppg {
-		mppg[i] = 0
-	}
 	mpcode := allbins["mpentry.bin"].data
-	runtime.Memmove(unsafe.Pointer(mppg), unsafe.Pointer(&mpcode[0]),
-	    len(mpcode))
+	c := 0
+	mpl := len(mpcode)
+	for c < mpl {
+		mppg := dmap8(mpaddr + c)
+		did := copy(mppg, mpcode)
+		mpcode = mpcode[did:]
+		c += did
+	}
 
 	// skip mucking with CMOS reset code/warm reset vector (as per the the
 	// "universal startup algoirthm") and instead use the STARTUP IPI which

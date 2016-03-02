@@ -2969,15 +2969,6 @@ runtime·Install_traphandler(uint64 *p)
 
 #pragma textflag NOSPLIT
 void
-runtime·Memmove(void *dst, void *src, uintptr len)
-{
-	runtime·stackcheck();
-
-	runtime·memmove(dst, src, len);
-}
-
-#pragma textflag NOSPLIT
-void
 runtime·Pnum(uint64 m)
 {
 	if (runtime·hackmode)
