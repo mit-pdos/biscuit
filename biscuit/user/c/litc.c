@@ -2011,6 +2011,10 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 			char t = *fmt;
 			fmt++;
 			switch (t) {
+			case '%':
+				dst += wc(dst, end, '%');
+				done = 1;
+				break;
 			case '#':
 				prehex = 1;
 				break;
