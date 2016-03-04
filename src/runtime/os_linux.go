@@ -144,6 +144,9 @@ func Cprint(byte, int)
 func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
     pms []*[512]int, fastret bool) (int, int) {
 
+	// {enter,exit}syscall() may not be worth the overhead. i believe the
+	// only benefit for biscuit is that cpus running in the kernel could GC
+	// while other cpus execute user programs.
 	entersyscall()
 	fl := Pushcli()
 	ct := (*thread_t)(unsafe.Pointer(uintptr(Gscpu().mythread)))
