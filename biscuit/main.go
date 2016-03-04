@@ -2098,6 +2098,8 @@ func _kready() bool {
 	return true
 }
 
+var _nflip int
+
 func kbd_daemon(cons *cons_t, km map[int]byte) {
 	inb := runtime.Inb
 	start := make([]byte, 0, 10)
@@ -2107,6 +2109,9 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		data = append(data, c)
 		if c == '\\' {
 			panic("yahoo")
+		} else if c == '@' {
+			_nflip = (_nflip + 1) % 2
+			sys_fake(nil, _nflip)
 		}
 	}
 	var reqc chan int
