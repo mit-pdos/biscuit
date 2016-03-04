@@ -3641,8 +3641,8 @@ func _prof_nmi(en bool) {
 		cyc := runtime.Cpumhz * 1000000
 		samples := uint(1000)
 		min := cyc/samples
-		if !profhw.startnmi(EV_UNHALTED_CORE_CYCLES, EVF_USR | EVF_OS,
-		    min, 5*min) {
+		if !profhw.startnmi(EV_UNHALTED_CORE_CYCLES, EVF_USR,
+		    min, min) {
 			fmt.Printf("Failed to start NMI profiling\n")
 		}
 	} else {
@@ -3742,10 +3742,31 @@ func sys_fake(proc *proc_t, n int) int {
 }
 
 func sys_fake2(proc *proc_t, n int) int {
-	idmonl.Lock()
-	ret := len(allidmons)
-	idmonl.Unlock()
-	runtime.GC()
+	ms := &runtime.MemStats{}
+	runtime.ReadMemStats(ms)
+
+	ret := -1
+	switch n {
+	case 0:
+		ret = int(ms.NumGC)
+	case 1:
+		ret = int(ms.PauseTotalNs)
+	case 2:
+		ret = int(ms.Alloc)
+	case 3:
+		ret = int(ms.Sys)
+	case 4:
+		ret = int(ms.HeapSys)
+	case 5:
+		ret = int(ms.StackSys)
+	case 10:
+		runtime.GC()
+		ret = 0
+	case 11:
+		proc.vmregion.dump()
+		ret = 0
+	}
+
 	return ret
 }
 

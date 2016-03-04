@@ -268,6 +268,7 @@ runtime·check(void)
 
 #pragma dataflag NOPTR
 DebugVars	runtime·debug;
+//DebugVars	runtime·debug = {.gctrace = 1};
 
 typedef struct DbgVar DbgVar;
 struct DbgVar
