@@ -349,8 +349,7 @@ runtime·signame(int32 sig)
 }
 
 // src/runtime/asm_amd64.s
-void atomic_dec(uint64 *);
-void cli(void);
+void ·cli(void);
 void cpu_halt(uint64);
 void finit(void);
 void fxsave(uint64 *);
@@ -374,7 +373,7 @@ uint64 rcr4(void);
 uint64 ·Rdmsr(uint64);
 uint64 rflags(void);
 uint64 rrsp(void);
-void sti(void);
+void ·sti(void);
 void tlbflush(void);
 void trapret(uint64 *, uint64);
 void _trapret(uint64 *);
@@ -384,7 +383,7 @@ void mktrap(uint64);
 void fs_null(void);
 void gs_null(void);
 
-uint64 runtime·Rdtsc(void);
+uint64 ·Rdtsc(void);
 
 // src/runtime/sys_linux_amd64.s
 void fakesig(int32, Siginfo *, void *);
@@ -424,7 +423,7 @@ struct spinlock_t pmsglock;
 
 #pragma textflag NOSPLIT
 void
-_pnum(uint64 n)
+·_pnum(uint64 n)
 {
 	uint64 nn = (uint64)n;
 	int64 i;
@@ -446,23 +445,14 @@ pnum(uint64 n)
 {
 	int64 fl = ·Pushcli();
 	splock(&pmsglock);
-	_pnum(n);
+	·_pnum(n);
 	spunlock(&pmsglock);
 	·Popcli(fl);
 }
 
 #pragma textflag NOSPLIT
 void
-runtime·pnum(uint64 n)
-{
-	if (!runtime·hackmode)
-		return;
-	pnum(n);
-}
-
-#pragma textflag NOSPLIT
-void
-_pmsg(int8 *msg)
+·_pmsg(int8 *msg)
 {
 	runtime·putch(' ');
 	if (msg)
@@ -476,36 +466,37 @@ pmsg(int8 *msg)
 {
 	int64 fl = ·Pushcli();
 	splock(&pmsglock);
-	_pmsg(msg);
+	·_pmsg(msg);
 	spunlock(&pmsglock);
 	·Popcli(fl);
 }
 
-static int32 halt;
+uint32 ·Halt;
 
-#pragma textflag NOSPLIT
-void
-runtime·pancake(void *msg, int64 addr)
-{
-	cli();
-
-	volatile int32 *wtf = &halt;
-	*wtf = 1;
-
-	_pmsg(msg);
-	_pnum(addr);
-	_pmsg("PANCAKE");
-
-	while (1) {
-		uint16 *p = (uint16 *)0xb8002;
-		*p = 0x1400 | 'F';
-	}
-	//void stack_dump(uint64);
-	//stack_dump(rrsp());
-	//pmsg("TWO");
-	//stack_dump(g->m->curg->sched.sp);
-	//while (1);
-}
+void runtime·pancake(void *msg, int64 addr);
+//#pragma textflag NOSPLIT
+//void
+//runtime·pancake(void *msg, int64 addr)
+//{
+//	·cli();
+//
+//	volatile int32 *wtf = &·Halt;
+//	*wtf = 1;
+//
+//	·_pmsg(msg);
+//	·_pnum(addr);
+//	·_pmsg("PANCAKE");
+//
+//	while (1) {
+//		uint16 *p = (uint16 *)0xb8002;
+//		*p = 0x1400 | 'F';
+//	}
+//	//void stack_dump(uint64);
+//	//stack_dump(rrsp());
+//	//pmsg("TWO");
+//	//stack_dump(g->m->curg->sched.sp);
+//	//while (1);
+//}
 
 #define assert(x, y, z)        do { if (!(x)) runtime·pancake(y, z); } while (0)
 
@@ -1066,36 +1057,6 @@ get_pg(void)
 	return ret;
 }
 
-//#pragma textflag NOSPLIT
-//void
-//memset(void *va, uint32 c, uint64 sz)
-//{
-//	uint8 b = c;
-//	uint8 *p = (uint8 *)va;
-//	while (sz--)
-//		*p++ = b;
-//}
-
-//#pragma textflag NOSPLIT
-//void
-//memmov(void *dst, void *src, uint64 sz)
-//{
-//	uint8 *d = (uint8 *)dst;
-//	uint8 *s = (uint8 *)src;
-//	if (dst == src || sz == 0)
-//		return;
-//	if (d > s && d <= s + sz) {
-//		// copy backwards
-//		s += sz;
-//		d += sz;
-//		while (sz--)
-//			*--d = *--s;
-//		return;
-//	}
-//	while (sz--)
-//		*d++ = *s++;
-//}
-
 #pragma textflag NOSPLIT
 void
 zero_phys(uint64 phys)
@@ -1149,30 +1110,6 @@ pgdir_walk(void *va, int32 create)
 	uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
 	pml4 += PML4X(v);
 	return pgdir_walk1(pml4, SLOTNEXT(v), create);
-}
-
-#pragma textflag NOSPLIT
-uint64 *
-pgdir_walk_other(uint64 p_pmap, void *va, int32 create)
-{
-	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
-
-	if (PML4X(v) == VREC)
-		runtime·pancake("va collides w/VREC", v);
-
-	uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
-	uint64 old = pml4[VREC];
-	pml4[VREC2] = old;
-	pml4[VREC] = p_pmap | PTE_P;
-	tlbflush();
-
-	uint64 *ret = pgdir_walk(va, create);
-
-	pml4 = CADDR(VREC2, VREC2, VREC2, VREC2);
-	pml4[VREC] = old;
-	tlbflush();
-
-	return ret;
 }
 
 #pragma textflag NOSPLIT
@@ -1341,26 +1278,26 @@ void
 stack_dump(uint64 rsp)
 {
 	uint64 *pte = pgdir_walk((void *)rsp, 0);
-	_pmsg("STACK DUMP\n");
+	·_pmsg("STACK DUMP\n");
 	if (pte && *pte & PTE_P) {
 		int32 i, pc = 0;
 		uint64 *p = (uint64 *)rsp;
 		for (i = 0; i < 70; i++) {
 			pte = pgdir_walk(p, 0);
 			if (pte && *pte & PTE_P) {
-				_pnum(*p++);
+				·_pnum(*p++);
 				if (((pc++ + 1) % 4) == 0)
-					_pmsg("\n");
+					·_pmsg("\n");
 			}
 		}
 	} else {
 		pmsg("bad stack");
-		_pnum(rsp);
+		·_pnum(rsp);
 		if (pte) {
-			_pmsg("pte:");
-			_pnum(*pte);
+			·_pmsg("pte:");
+			·_pnum(*pte);
 		} else
-			_pmsg("null pte");
+			·_pmsg("null pte");
 	}
 }
 
@@ -1700,7 +1637,7 @@ sched_halt(void)
 uint64
 hack_nanotime(void)
 {
-	uint64 cyc = runtime·Rdtsc();
+	uint64 cyc = ·Rdtsc();
 	return (cyc * ·Pspercycle)/1000;
 }
 
@@ -2125,18 +2062,18 @@ void
 kernel_fault(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
-	_pmsg("trap frame at");
-	_pnum((uint64)tf);
-	_pmsg("trapno");
-	_pnum(trapno);
+	·_pmsg("trap frame at");
+	·_pnum((uint64)tf);
+	·_pmsg("trapno");
+	·_pnum(trapno);
 	uint64 rip = tf[TF_RIP];
-	_pmsg("rip");
-	_pnum(rip);
+	·_pmsg("rip");
+	·_pnum(rip);
 	if (trapno == TRAP_PGFAULT) {
 		uint64 rcr2(void);
 		uint64 cr2 = rcr2();
-		_pmsg("cr2");
-		_pnum(cr2);
+		·_pmsg("cr2");
+		·_pnum(cr2);
 	}
 	uint64 rsp = tf[TF_RSP];
 	stack_dump(rsp);
@@ -2174,7 +2111,7 @@ trap(uint64 *tf)
 
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
-	if (halt)
+	if (·Halt)
 		while (1);
 
 	// clear shadow pointers to user pmap
@@ -2443,7 +2380,7 @@ timer_setup(int32 calibrate)
 		wlap(ICREG, 0x80000000);
 		pit_phasewait();
 		uint32 lapstart = rlap(CCREG);
-		uint64 cycstart = runtime·Rdtsc();
+		uint64 cycstart = ·Rdtsc();
 
 		int32 i;
 		for (i = 0; i < pithz; i++)
@@ -2453,7 +2390,7 @@ timer_setup(int32 calibrate)
 		if (lapend > lapstart)
 			runtime·pancake("lapic timer wrapped?", lapend);
 		uint32 lapelapsed = lapstart - lapend;
-		uint64 cycelapsed = runtime·Rdtsc() - cycstart;
+		uint64 cycelapsed = ·Rdtsc() - cycstart;
 		pmsg("LAPIC Mhz:");
 		pnum(lapelapsed/(1000 * 1000));
 		pmsg("\n");
@@ -2510,23 +2447,6 @@ timer_setup(int32 calibrate)
 
 #pragma textflag NOSPLIT
 void
-sysentry(uint64 ret, uint64 stack)
-{
-	assert((rflags() & TF_FL_IF) == 0, "ints enabled in sysentry", 0);
-
-	//pmsg("yahoozle!\n");
-
-	struct thread_t *t = curthread;
-	t->tf[TF_RIP] = ret;
-	t->tf[TF_RSP] = stack;
-
-	//void sysexitportal(struct thread_t *);
-	//sysexitportal(t);
-	assert(0, "no", 0);
-}
-
-#pragma textflag NOSPLIT
-void
 sysc_setup(uint64 myrsp)
 {
 	// lowest 2 bits are ignored for sysenter, but used for sysexit
@@ -2541,29 +2461,6 @@ sysc_setup(uint64 myrsp)
 
 	const uint64 sysenter_esp = 0x175;
 	·Wrmsr(sysenter_esp, myrsp);
-
-	//const uint64 ia32_efer = 0xc0000080;
-
-	//runtime·Wrmsr(ia32_efer, ·Rdmsr(ia32_efer) | 1);
-
-	//const uint64 ia32_fmask = 0xc0000084;
-	//runtime·Wrmsr(ia32_fmask, TF_FL_IF);
-
-	//void sysentry(void);
-	//const uint64 ia32_lstar = 0xc0000082;
-	//runtime·Wrmsr(ia32_lstar, (uint64)sysentry);
-
-	//const uint64 ia32_star = 0xc0000081;
-	//runtime·Wrmsr(ia32_star, kcode64 << 32);
-
-	//runtime·printf("cs: %p ip: %p rf m: %p\n", ·Rdmsr(ia32_star) >> 32,
-	//    ·Rdmsr(ia32_lstar), ·Rdmsr(ia32_fmask));
-
-	//uint64 reg = ·Rdmsr(ia32_efer);
-	//if ((reg & 1) == 0)
-	//	pmsg("syscall NOT supported\n");
-	//else
-	//	pmsg("syscall supported\n");
 }
 
 #pragma textflag NOSPLIT
@@ -2606,7 +2503,7 @@ proc_setup(void)
 	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
 	// otherwise an RTC timer interrupt (that turns into a double-fault
 	// since the pic has not been programmed yet) comes in immediately
-	// after sti.
+	// after ·sti.
 	outb(0x20 + 1, 0xff);
 	outb(0xa0 + 1, 0xff);
 
@@ -2671,7 +2568,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 {
 	runtime·stackcheck();
 
-	cli();
+	·cli();
 	splock(&threadlock);
 
 	uint64 *sp = stack;
@@ -2705,7 +2602,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	runtime·memmove(mt->fx, fxinit, FXSIZE);
 
 	spunlock(&threadlock);
-	sti();
+	·sti();
 }
 
 #pragma textflag NOSPLIT
@@ -2800,7 +2697,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	{
 		assert_mapped(uaddr, 8, "futex uaddr");
 
-		cli();
+		·cli();
 		splock(&futexlock);
 		int32 dosleep = *uaddr == val;
 		if (dosleep) {
@@ -2821,12 +2718,12 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 
 			// unlocks futexlock and returns with interrupts
 			// enabled...
-			cli();
+			·cli();
 			ret = curthread->sleepret;
-			sti();
+			·sti();
 		} else {
 			spunlock(&futexlock);
-			sti();
+			·sti();
 			ret = -EAGAIN; // EAGAIN == EWOULDBLOCK
 		}
 		break;
@@ -2835,7 +2732,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 	{
 		int32 i;
 		int32 woke = 0;
-		cli();
+		·cli();
 		splock(&futexlock);
 		splock(&threadlock);
 		for (i = 0; i < NTHREADS && val; i++) {
@@ -2852,7 +2749,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 		}
 		spunlock(&threadlock);
 		spunlock(&futexlock);
-		sti();
+		·sti();
 		ret = woke;
 		break;
 	}
@@ -2878,13 +2775,13 @@ hack_usleep(uint64 delay)
 void
 hack_exit(int32 code)
 {
-	cli();
+	·cli();
 	curthread->status = ST_INVALID;
 
 	pmsg("exit with code");
 	pnum(code);
 	pmsg(".\nhalting\n");
-	volatile int32 *wtf = &halt;
+	volatile uint32 *wtf = &·Halt;
 	*wtf = 1;
 	while(1);
 }
@@ -2898,7 +2795,7 @@ runtime·Cli(void)
 {
 	runtime·stackcheck();
 
-	cli();
+	·cli();
 }
 
 #pragma textflag NOSPLIT
@@ -2995,7 +2892,7 @@ runtime·Sti(void)
 {
 	runtime·stackcheck();
 
-	sti();
+	·sti();
 }
 
 #pragma textflag NOSPLIT
@@ -3018,17 +2915,9 @@ void
 runtime·Crash(void)
 {
 	pmsg("CRASH!\n");
-	volatile int32 *wtf = &halt;
+	volatile uint32 *wtf = &·Halt;
 	*wtf = 1;
 	while (1);
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Usleep(uint64 delay)
-{
-	runtime·stackcheck();
-	hack_usleep(delay);
 }
 
 #pragma textflag NOSPLIT

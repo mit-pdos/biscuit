@@ -54,7 +54,6 @@ func Crash()
 func Fnaddr(func()) uintptr
 func Fnaddri(func(int)) uintptr
 func Tfdump(*[24]int)
-func Usleep(int)
 func Rflags() int
 func Resetgcticks() uint64
 func Gcticks() uint64
@@ -553,4 +552,35 @@ func Trapsched() {
 // called only once to setup
 func Trapinit() {
 	mcall(trapinit_m)
+}
+
+// TEMPORARY CRAP
+// G_ prefix means a function had to have both C and Go versions while the
+// conversion is underway. remove prefix afterwards.
+var Halt uint32
+
+func cli()
+func sti()
+func _pnum(uint)
+func _pmsg(*int8)
+
+//go:nosplit
+func G_pmsg(msg string) {
+	putch(' ');
+	for _, c := range msg {
+		putch(int8(c))
+	}
+}
+
+//go:nosplit
+func pancake(msg *int8, addr uint) {
+	cli()
+	atomicstore(&Halt, 1)
+	_pmsg(msg)
+	_pnum(addr)
+	G_pmsg("PANCAKE")
+	for {
+		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
+		*p = 0x1400 | 'F'
+	}
 }

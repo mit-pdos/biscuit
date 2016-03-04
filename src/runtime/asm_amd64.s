@@ -331,12 +331,6 @@ TEXT runtime·Cpuid(SB), NOSPLIT, $0-24
 	MOVL	DX, ret+20(FP)
 	RET
 
-TEXT runtime·atomic_dec(SB), NOSPLIT, $0-8
-	MOVQ	addr+0(FP), AX
-	LOCK
-	DECQ	(AX)
-	RET
-
 TEXT finit(SB), NOSPLIT, $0-0
 	FINIT
 	RET
@@ -514,7 +508,7 @@ TEXT rrsp(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
-TEXT runtime·Rdtsc(SB), NOSPLIT, $0-8
+TEXT ·Rdtsc(SB), NOSPLIT, $0-8
 	// rdtsc
 	BYTE	$0x0f
 	BYTE	$0x31
@@ -522,22 +516,22 @@ TEXT runtime·Rdtsc(SB), NOSPLIT, $0-8
 	MOVL	DX, ret+4(FP)
 	RET
 
-TEXT cli(SB), NOSPLIT, $0-0
+TEXT ·cli(SB), NOSPLIT, $0-0
 	CLI
 	RET
 
-TEXT sti(SB), NOSPLIT, $0-0
+TEXT ·sti(SB), NOSPLIT, $0-0
 	STI
 	RET
 
-TEXT runtime·Pushcli(SB), NOSPLIT, $0-8
+TEXT ·Pushcli(SB), NOSPLIT, $0-8
 	PUSHFQ
 	POPQ	AX
 	MOVQ	AX, ret+0(FP)
 	CLI
 	RET
 
-TEXT runtime·Popcli(SB), NOSPLIT, $0-8
+TEXT ·Popcli(SB), NOSPLIT, $0-8
 	MOVQ	fl+0(FP), AX
 	PUSHQ	AX
 	POPFQ
@@ -1056,7 +1050,7 @@ TEXT fs_null(SB), NOSPLIT, $8-0
 	POPQ	FS
 	RET
 
-TEXT runtime·Gscpu(SB), NOSPLIT, $0-8
+TEXT ·Gscpu(SB), NOSPLIT, $0-8
 	MOVQ	0(GS), AX
 	MOVQ	AX, ret+0(FP)
 	RET

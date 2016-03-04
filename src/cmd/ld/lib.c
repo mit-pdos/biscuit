@@ -1108,11 +1108,6 @@ stkcheck(Chain *up, int depth)
 		return 0;
 	if(strcmp(s->name, "pgdir_walk1") == 0)
 		return 0;
-	if(strcmp(s->name, "pgdir_walk_other") == 0)
-		return 0;
-	// or the interrupt preempter. it checks its own stack explicitly.
-	if(strcmp(s->name, "runtime.handle_int") == 0)
-		return 0;
 	// or serial console puts; it is not really infinitely recursive
 	if(strcmp(s->name, "runtime.sc_put") == 0)
 		return 0;
