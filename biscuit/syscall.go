@@ -483,6 +483,9 @@ type mmapinfo_t struct {
 }
 
 func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
+	if lenn == 0 {
+		return -EINVAL
+	}
 	prot := uint(protflags) >> 32
 	flags := uint(uint32(protflags))
 

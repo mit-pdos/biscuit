@@ -101,7 +101,8 @@ func (vr *vmregion_t) pglen() int {
 func (vr *vmregion_t) dump() {
 	fmt.Printf("SEGS: ")
 	for h := vr.head; h != nil; h = h.next {
-		fmt.Printf("(%x, %x) - %v\n", h.start, h.end, h.pages)
+		//fmt.Printf("(%x, %x) - %v\n", h.start, h.end, h.pages)
+		fmt.Printf("(%x, %x)\n", h.start, h.end)
 	}
 }
 
@@ -120,10 +121,6 @@ func (vr *vmregion_t) insert(ns *vmseg_t) *vmseg_t {
 	var h *vmseg_t
 	found := false
 	for h = vr.head; h != nil; h = h.next {
-		if (ns.start >= h.start && ns.start < h.end) ||
-		   (ns.end >= h.start && ns.end < h.end) {
-			panic("seg intersects")
-		}
 		if h.start == ns.end {
 			return vr._merge(prev, ns, h)
 		} else if ns.start == h.end {
@@ -211,6 +208,7 @@ func (vr *vmregion_t) _split(old *vmseg_t, rstart, rend int) {
 // left or right may be nil. left.next == right
 func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 	if left != nil {
+		vr._noisect(mid, left)
 		if left.end == mid.start {
 			left.end = mid.end
 			left.pages = append(left.pages, mid.pages...)
@@ -220,6 +218,7 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 		}
 	}
 	if right != nil {
+		vr._noisect(mid, right)
 		if mid.end == right.start {
 			mid.end = right.end
 			mid.pages = append(mid.pages, right.pages...)
@@ -231,6 +230,17 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 	return mid
 }
 
+func (vr *vmregion_t) _noisect(ns, h *vmseg_t) {
+	if (ns.start < ns.end && ns.end <= h.start && ns.start < ns.end) ||
+	   (h.start < h.end && h.end <= ns.start && h.start < h.end) {
+		return
+	}
+	vr.dump()
+	fmt.Printf("trying to merge [%x, %x) and" +
+	    " [%x, %x)\n", ns.start, ns.end, h.start, h.end)
+	panic("segs intersect")
+}
+
 // finds an unreserved region of size sz, at startva or higher
 func (vr *vmregion_t) empty(startva, sz int) int {
 	if vr.head == nil {
@@ -238,7 +248,8 @@ func (vr *vmregion_t) empty(startva, sz int) int {
 	}
 	prev := vr.head
 	for h := vr.head.next; h != nil; h = h.next {
-		if startva > prev.end {
+		if startva > h.end {
+			prev = h
 			continue
 		}
 		if h.start - prev.end >= sz {

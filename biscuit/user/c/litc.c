@@ -2102,7 +2102,7 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				break;
 			}
 			default:
-				errx(-1, "unsupported printf format: %c\n", *fmt);
+				errx(-1, "unsupported printf format: %c\n", t);
 				break;
 			}
 		}
