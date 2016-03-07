@@ -477,7 +477,9 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 	TESTQ	DI, DI
 	JZ	yield_skip
 #define TRAP_YIELD      $49
-	INT	TRAP_YIELD
+	PUSHQ	TRAP_YIELD
+	CALL	mktrap(SB)
+	POPQ	AX
 	RET
 yield_skip:
 	MOVL	$24, AX

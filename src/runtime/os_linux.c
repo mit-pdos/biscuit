@@ -361,8 +361,6 @@ uint64 ·lap_id(void);
 void lcr0(uint64);
 void lcr3(uint64);
 void lcr4(uint64);
-void lidt(struct pdesc_t *);
-void ·ltr(uint64);
 void outb(int64, int64);
 int64 ·Pushcli(void);
 void ·Popcli(int64);
@@ -412,26 +410,10 @@ void runtime·deray(uint64);
 void runtime·stackcheck(void);
 void invlpg(void *);
 
-// interrupts must be cleared before attempting to take this lock. the reason
-// is that access to VGA buffer/serial console must be exclusive, yet i want to
-// be able to print from an interrupt handler. thus any code that takes this
-// lock cannot be interruptible (suppose such code is interruptible, it takes
-// the pmsglock and is then interrupted. the interrupt handler then panicks and
-// tries to print and deadlocks).
-struct spinlock_t pmsglock;
+extern struct spinlock_t *·pmsglock;
 
 void ·_pnum(uint64 n);
-
-#pragma textflag NOSPLIT
-void
-pnum(uint64 n)
-{
-	int64 fl = ·Pushcli();
-	·splock(&pmsglock);
-	·_pnum(n);
-	·spunlock(&pmsglock);
-	·Popcli(fl);
-}
+void ·pnum(uint64 n);
 
 #pragma textflag NOSPLIT
 void
@@ -448,9 +430,9 @@ void
 pmsg(int8 *msg)
 {
 	int64 fl = ·Pushcli();
-	·splock(&pmsglock);
+	·splock(·pmsglock);
 	·_pmsg(msg);
-	·spunlock(&pmsglock);
+	·spunlock(·pmsglock);
 	·Popcli(fl);
 }
 
@@ -467,189 +449,9 @@ bw(uint8 *d, uint64 data, uint64 off)
 	*d = (data >> off*8) & 0xff;
 }
 
-// gee i wish i could pack structs with plan9 compiler
-struct pdesc_t {
-	uint8 dur[10];
-};
-
-#define	CODE    0xa
-#define	DATA    0x2
-#define	TSS     0x9
-#define	USER    0x60
-
 #define MAXCPUS 32
 
 #define	CODE_SEG        1
-#define	FS_SEG          3
-
-void ·pdsetup(struct pdesc_t *pd, uint64 s, uint64 lim);
-
-struct idte_t {
-	uint8 dur[16];
-};
-
-#define	INT     0xe
-#define	TRAP    0xf
-
-#define	NIDTE   128
-struct idte_t idt[NIDTE];
-
-#pragma textflag NOSPLIT
-static void
-int_set(struct idte_t *i, uint64 addr, uint32 trap, int32 user, int32 ist)
-{
-	/*
-	{0, 0,		// 0-1   low offset
-	 CODE_SEG, 0,	// 2-3   segment
-	 0,		// 4     ist
-	 0x80 | INT,	// 5     p, dpl, type
-	 0, 0,		// 6-7   mid offset
-	 0, 0, 0, 0,	// 8-11  high offset
-	 0, 0, 0, 0},	// 12-15 resreved
-	 */
-
-	uint16 lowoff  = (uint16)addr;
-	uint16 midoff  = (addr >> 16) & 0xffff;
-	uint32 highoff = addr >> 32;
-
-	bw(&i->dur[0],  lowoff, 0);
-	bw(&i->dur[1],  lowoff, 1);
-	bw(&i->dur[2], CODE_SEG << 3, 0);
-	bw(&i->dur[3], CODE_SEG << 3, 1);
-	i->dur[4] = ist;
-	uint8 t = 0x80;
-	t |= trap ? TRAP : INT;
-	t |= user ? USER : 0;
-	i->dur[5] = t;
-	bw(&i->dur[6],  midoff, 0);
-	bw(&i->dur[7],  midoff, 1);
-	bw(&i->dur[8],  highoff, 0);
-	bw(&i->dur[9],  highoff, 1);
-	bw(&i->dur[10], highoff, 2);
-	bw(&i->dur[11], highoff, 3);
-}
-
-#undef INT
-#undef TRAP
-#undef USER
-
-#pragma textflag NOSPLIT
-void
-int_setup(void)
-{
-	struct pdesc_t p;
-
-	if (sizeof(struct idte_t) != 16)
-		runtime·pancake("idte not packed", sizeof(struct idte_t));
-	if (sizeof(idt) != 16*NIDTE)
-		runtime·pancake("idt not packed", sizeof(idt));
-
-	if ((uint64)idt & 0x7)
-		runtime·pancake("idt not aligned", (uint64)idt);
-
-	extern void Xdz (void);
-	extern void Xrz (void);
-	extern void Xnmi(void);
-	extern void Xbp (void);
-	extern void Xov (void);
-	extern void Xbnd(void);
-	extern void Xuo (void);
-	extern void Xnm (void);
-	extern void Xdf (void);
-	extern void Xrz2(void);
-	extern void Xtss(void);
-	extern void Xsnp(void);
-	extern void Xssf(void);
-	extern void Xgp (void);
-	extern void Xpf (void);
-	extern void Xrz3(void);
-	extern void Xmf (void);
-	extern void Xac (void);
-	extern void Xmc (void);
-	extern void Xfp (void);
-	extern void Xve (void);
-	extern void Xtimer(void);
-	extern void Xspur(void);
-	extern void Xyield(void);
-	extern void Xsyscall(void);
-	extern void Xtlbshoot(void);
-	extern void Xsigret(void);
-	extern void Xperfmask(void);
-
-	extern void Xirq1(void);
-	extern void Xirq2(void);
-	extern void Xirq3(void);
-	extern void Xirq4(void);
-	extern void Xirq5(void);
-	extern void Xirq6(void);
-	extern void Xirq7(void);
-	extern void Xirq8(void);
-	extern void Xirq9(void);
-	extern void Xirq10(void);
-	extern void Xirq11(void);
-	extern void Xirq12(void);
-	extern void Xirq13(void);
-	extern void Xirq14(void);
-	extern void Xirq15(void);
-
-	// any interrupt that may be generated during go code needs to use ist1
-	// to force a stack switch unless there is some mechanism that prevents
-	// a CPU that took an interrupt from getting its stack clobbered by
-	// another CPU handling the interrupt, scheduling/running the go code,
-	// and taking another interrupt on the same stack (before the first CPU
-	// can context switch to a new thread).
-	int_set(&idt[ 0], (uint64) Xdz , 0, 0, 0);
-	int_set(&idt[ 1], (uint64) Xrz , 0, 0, 0);
-	int_set(&idt[ 2], (uint64) Xnmi, 0, 0, 2);
-	int_set(&idt[ 3], (uint64) Xbp , 0, 0, 0);
-	int_set(&idt[ 4], (uint64) Xov , 0, 0, 0);
-	int_set(&idt[ 5], (uint64) Xbnd, 0, 0, 0);
-	int_set(&idt[ 6], (uint64) Xuo , 0, 0, 0);
-	int_set(&idt[ 7], (uint64) Xnm , 0, 0, 0);
-	// use ist1 for double fault handler
-	int_set(&idt[ 8], (uint64) Xdf , 0, 0, 1);
-	int_set(&idt[ 9], (uint64) Xrz2, 0, 0, 0);
-	int_set(&idt[10], (uint64) Xtss, 0, 0, 0);
-	int_set(&idt[11], (uint64) Xsnp, 0, 0, 0);
-	int_set(&idt[12], (uint64) Xssf, 0, 0, 0);
-	int_set(&idt[13], (uint64) Xgp , 0, 0, 1);
-	int_set(&idt[14], (uint64) Xpf , 0, 0, 1);
-	int_set(&idt[15], (uint64) Xrz3, 0, 0, 0);
-	int_set(&idt[16], (uint64) Xmf , 0, 0, 0);
-	int_set(&idt[17], (uint64) Xac , 0, 0, 0);
-	int_set(&idt[18], (uint64) Xmc , 0, 0, 0);
-	int_set(&idt[19], (uint64) Xfp , 0, 0, 0);
-	int_set(&idt[20], (uint64) Xve , 0, 0, 0);
-
-#define IRQBASE 32
-	int_set(&idt[IRQBASE+ 0], (uint64) Xtimer,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 1], (uint64) Xirq1 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 2], (uint64) Xirq2 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 3], (uint64) Xirq3 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 4], (uint64) Xirq4 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 5], (uint64) Xirq5 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 6], (uint64) Xirq6 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 7], (uint64) Xirq7 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 8], (uint64) Xirq8 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+ 9], (uint64) Xirq9 ,  0, 0, 1);
-	int_set(&idt[IRQBASE+10], (uint64) Xirq10 , 0, 0, 1);
-	int_set(&idt[IRQBASE+11], (uint64) Xirq11 , 0, 0, 1);
-	int_set(&idt[IRQBASE+12], (uint64) Xirq12 , 0, 0, 1);
-	int_set(&idt[IRQBASE+13], (uint64) Xirq13 , 0, 0, 1);
-	int_set(&idt[IRQBASE+14], (uint64) Xirq14 , 0, 0, 1);
-	int_set(&idt[IRQBASE+15], (uint64) Xirq15 , 0, 0, 1);
-
-	int_set(&idt[48], (uint64) Xspur,    0, 0, 1);
-	int_set(&idt[49], (uint64) Xyield,   0, 0, 1);
-	int_set(&idt[64], (uint64) Xsyscall, 0, 0, 1);
-
-	int_set(&idt[70], (uint64) Xtlbshoot, 0, 0, 1);
-	int_set(&idt[71], (uint64) Xsigret,   0, 0, 1);
-	int_set(&idt[72], (uint64) Xperfmask, 0, 0, 1);
-
-	·pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
-	lidt(&p);
-}
 
 #pragma textflag NOSPLIT
 void
@@ -669,7 +471,7 @@ exam(uint64 cr0)
 {
 	USED(cr0);
 	//pmsg(" first free ");
-	//pnum(first_free);
+	//·pnum(first_free);
 
 	pmsg("inspect cr0");
 
@@ -714,7 +516,7 @@ exam(uint64 cr0)
 // vdirect is 44
 #define	VREC2   0x45ULL
 
-#define	VUMAX   0x42ULL		// highest "user" mapping
+#define	VUMAX   0x42ULL		// highest runtime mapping
 
 #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
 #define SLOTNEXT(v)       ((v << 9) & ((1ULL << 48) - 1))
@@ -786,9 +588,9 @@ init_pgfirst(void)
 		}
 	}
 	//pmsg("kernel allocate from");
-	//pnum(pgfirst);
+	//·pnum(pgfirst);
 	//pmsg("to");
-	//pnum(pglast);
+	//·pnum(pglast);
 	assert(pglast, "no e820 seg for pgfirst?", pgfirst);
 	assert((pgfirst & PGOFFMASK) == 0, "pgfirst not aligned", pgfirst);
 }
@@ -985,8 +787,8 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 		runtime·pancake("high addr2?", (uint64)v + sz);
 
 	//pmsg("map\n");
-	//pnum((uint64)v);
-	//pnum(sz);
+	//·pnum((uint64)v);
+	//·pnum(sz);
 	//pmsg("\n");
 
 	if (!(flags & MAP_ANON))
@@ -1087,12 +889,12 @@ hack_write(int64 fd, const void *buf, uint32 c)
 		runtime·pancake("weird fd", (uint64)fd);
 
 	int64 fl = ·Pushcli();
-	·splock(&pmsglock);
+	·splock(·pmsglock);
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
 	while(c--)
 		runtime·putch(*p++);
-	·spunlock(&pmsglock);
+	·spunlock(·pmsglock);
 	·Popcli(fl);
 
 	return ret;
@@ -1130,7 +932,7 @@ pgtest1(uint64 v)
 
 	//*pte = 0;
 	//invlpg(va);
-	//pnum(va[0]);
+	//·pnum(va[0]);
 }
 
 #pragma textflag NOSPLIT
@@ -1380,7 +1182,7 @@ sched_halt(void)
 	//if (lap_id() == 0) {
 	//	int32 i;
 	//	for (i = 0; i < NTHREADS; i++) {
-	//		pnum(i);
+	//		·pnum(i);
 	//		int8 *msg = "wtf";
 	//		switch (threads[i].status) {
 	//		case ST_INVALID:
@@ -1461,7 +1263,7 @@ tcount(void)
 	int32 bits = 64/4;
 	uint64 v = tot << (3*bits) | run << (2*bits) | sleep << (1*bits) |
 	    wait << (0*bits);
-	pnum(v);
+	·pnum(v);
 }
 
 #pragma textflag NOSPLIT
@@ -1564,23 +1366,23 @@ void
 runtime·Tfdump(uint64 *tf)
 {
 	pmsg("RIP:");
-	pnum(tf[TF_RIP]);
+	·pnum(tf[TF_RIP]);
 	pmsg("\nRAX:");
-	pnum(tf[TF_RAX]);
+	·pnum(tf[TF_RAX]);
 	pmsg("\nRDI:");
-	pnum(tf[TF_RDI]);
+	·pnum(tf[TF_RDI]);
 	pmsg("\nRSI:");
-	pnum(tf[TF_RSI]);
+	·pnum(tf[TF_RSI]);
 	pmsg("\nRBX:");
-	pnum(tf[TF_RBX]);
+	·pnum(tf[TF_RBX]);
 	pmsg("\nRCX:");
-	pnum(tf[TF_RCX]);
+	·pnum(tf[TF_RCX]);
 	pmsg("\nRDX:");
-	pnum(tf[TF_RDX]);
+	·pnum(tf[TF_RDX]);
 	pmsg("\nRSP:");
-	pnum(tf[TF_RSP]);
+	·pnum(tf[TF_RSP]);
 	pmsg("\nFSBASE:");
-	pnum(tf[TF_FSBASE]);
+	·pnum(tf[TF_FSBASE]);
 	pmsg("\n");
 }
 
@@ -1634,7 +1436,7 @@ tlb_shootdown(void)
 
 		//uint64 start = tlbshoot_pg;
 		//uint64 end = tlbshoot_pg + tlbshoot_count * PGSIZE;
-		//pnum(lap_id() << 56 | start);
+		//·pnum(lap_id() << 56 | start);
 		//for (; start < end; start += PGSIZE)
 		//	invlpg((uint64 *)start);
 	}
@@ -1880,8 +1682,8 @@ trap(uint64 *tf)
 		kernel_fault(tf);
 
 	if (·Gscpu() != &curcpu) {
-		pnum((uint64)·Gscpu());
-		pnum((uint64)&curcpu);
+		·pnum((uint64)·Gscpu());
+		·pnum((uint64)&curcpu);
 		runtime·pancake("gs is wrong", 0);
 	}
 
@@ -2142,14 +1944,14 @@ timer_setup(int32 calibrate)
 		uint32 lapelapsed = lapstart - lapend;
 		uint64 cycelapsed = ·Rdtsc() - cycstart;
 		pmsg("LAPIC Mhz:");
-		pnum(lapelapsed/(1000 * 1000));
+		·pnum(lapelapsed/(1000 * 1000));
 		pmsg("\n");
 		lapic_quantum = lapelapsed / HZ;
 
 		pmsg("CPU Mhz:");
 		extern uint64 runtime·Cpumhz;
 		runtime·Cpumhz = cycelapsed/(1000 * 1000);
-		pnum(runtime·Cpumhz);
+		·pnum(runtime·Cpumhz);
 		pmsg("\n");
 		·Pspercycle = (1000000000000ull)/cycelapsed;
 
@@ -2263,7 +2065,7 @@ proc_setup(void)
 	gs_set(&curcpu);
 	setcurthread(&threads[0]);
 	//pmsg("sizeof thread_t:");
-	//pnum(sizeof(struct thread_t));
+	//·pnum(sizeof(struct thread_t));
 	//pmsg("\n");
 }
 
@@ -2272,7 +2074,7 @@ void
 ·Ap_setup(int64 myid)
 {
 	pmsg("cpu");
-	pnum(myid);
+	·pnum(myid);
 	pmsg("joined\n");
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(·lap_id() <= MAXCPUS, "lapic id large", myid);
@@ -2529,7 +2331,7 @@ hack_exit(int32 code)
 	curthread->status = ST_INVALID;
 
 	pmsg("exit with code");
-	pnum(code);
+	·pnum(code);
 	pmsg(".\nhalting\n");
 	volatile uint32 *wtf = &·Halt;
 	*wtf = 1;
@@ -2619,7 +2421,7 @@ void
 runtime·Pnum(uint64 m)
 {
 	if (runtime·hackmode)
-		pnum(m);
+		·pnum(m);
 }
 
 #pragma textflag NOSPLIT
@@ -2677,11 +2479,11 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 	runtime·stackcheck();
 
 	int64 fl = ·Pushcli();
-	·splock(&pmsglock);
+	·splock(·pmsglock);
 	while (len--) {
 		runtime·putcha(*msg++, a);
 	}
-	·spunlock(&pmsglock);
+	·spunlock(·pmsglock);
 	·Popcli(fl);
 }
 

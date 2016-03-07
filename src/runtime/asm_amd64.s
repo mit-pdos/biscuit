@@ -226,31 +226,11 @@ h_needtls:
 	//CMPL	runtime·issolaris(SB), $1
 	//JEQ ok
 
-	PUSHQ	AX
-	CALL	·segsetup(SB)
-
-	POPQ	AX
-	MOVQ	8(AX), DI
-	PUSHQ	DI
-	MOVQ	(AX), DI
-	PUSHQ	DI
-	// lgdt (%rsp)
-	BYTE	$0x0f
-	BYTE	$0x01
-	BYTE	$0x14
-	BYTE	$0x24
-	POPQ	AX
-	POPQ	AX
+	CALL	·seg_setup(SB)
 
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
 	CALL	fixcs(SB)
-	// setup tls
-	LEAQ	runtime·tls0(SB), DI
-	PUSHQ	DI
-	CALL	·fs0init(SB)
-	POPQ	AX
-
 	CALL	fpuinit(SB)
 
 	// store through it, to make sure it works
@@ -276,7 +256,7 @@ h_ok:
 	// save m0 to g0->m
 	MOVQ	AX, g_m(CX)
 
-	CALL	int_setup(SB)
+	CALL	·int_setup(SB)
 	CALL	proc_setup(SB)
 
 	//MOVQ	CR0, AX
@@ -379,19 +359,25 @@ TEXT invlpg(SB), NOSPLIT, $0-8
 	INVLPG	(AX)
 	RET
 
-TEXT lidt(SB), NOSPLIT, $0-8
-	MOVQ	idtpd+0(FP), AX
-	MOVQ	8(AX), DI
-	PUSHQ	DI
-	MOVQ	(AX), DI
-	PUSHQ	DI
-	// lidt	(%rsp)
+// void lidt(pdesc_t);
+TEXT ·lidt(SB), NOSPLIT, $0-16
+	// lidtq 8(%rsp)
+	BYTE	$0x48
 	BYTE	$0x0f
 	BYTE	$0x01
-	BYTE	$0x1c
+	BYTE	$0x5c
 	BYTE	$0x24
-	POPQ	AX
-	POPQ	AX
+	BYTE	$0x08
+	RET
+
+// void lgdt(pdesc_t);
+TEXT ·lgdt(SB), NOSPLIT, $0-16
+	// lgdt 8(%rsp)
+	BYTE	$0x0f
+	BYTE	$0x01
+	BYTE	$0x54
+	BYTE	$0x24
+	BYTE	$0x08
 	RET
 
 TEXT ·ltr(SB), NOSPLIT, $0-8
@@ -643,52 +629,52 @@ TEXT fn(SB), NOSPLIT, $0-0;		\
 	POPQ	AX;			\
 	RET
 
-IH_NOEC( 0,Xdz )
-IH_NOEC( 1,Xrz )
-IH_NOEC( 2,Xnmi )
-IH_NOEC( 3,Xbp )
-IH_NOEC( 4,Xov )
-IH_NOEC( 5,Xbnd )
-IH_NOEC( 6,Xuo )
-IH_NOEC( 7,Xnm )
-IH_EC  ( 8,Xdf )
-IH_NOEC( 9,Xrz2 )
-IH_EC  (10,Xtss )
-IH_EC  (11,Xsnp )
-IH_EC  (12,Xssf )
-IH_EC  (13,Xgp )
-IH_EC  (14,Xpf )
-IH_NOEC(15,Xrz3 )
-IH_NOEC(16,Xmf )
-IH_EC  (17,Xac )
-IH_NOEC(18,Xmc )
-IH_NOEC(19,Xfp )
-IH_NOEC(20,Xve )
-IH_NOEC(32,Xtimer )
-IH_NOEC(48,Xspur )
-IH_NOEC(49,Xyield )
-IH_NOEC(64,Xsyscall )
-IH_NOEC(70,Xtlbshoot )
-IH_NOEC(71,Xsigret )
-IH_NOEC(72,Xperfmask )
+IH_NOEC( 0,·Xdz )
+IH_NOEC( 1,·Xrz )
+IH_NOEC( 2,·Xnmi )
+IH_NOEC( 3,·Xbp )
+IH_NOEC( 4,·Xov )
+IH_NOEC( 5,·Xbnd )
+IH_NOEC( 6,·Xuo )
+IH_NOEC( 7,·Xnm )
+IH_EC  ( 8,·Xdf )
+IH_NOEC( 9,·Xrz2 )
+IH_EC  (10,·Xtss )
+IH_EC  (11,·Xsnp )
+IH_EC  (12,·Xssf )
+IH_EC  (13,·Xgp )
+IH_EC  (14,·Xpf )
+IH_NOEC(15,·Xrz3 )
+IH_NOEC(16,·Xmf )
+IH_EC  (17,·Xac )
+IH_NOEC(18,·Xmc )
+IH_NOEC(19,·Xfp )
+IH_NOEC(20,·Xve )
+IH_NOEC(32,·Xtimer )
+IH_NOEC(48,·Xspur )
+IH_NOEC(49,·Xyield )
+IH_NOEC(64,·Xsyscall )
+IH_NOEC(70,·Xtlbshoot )
+IH_NOEC(71,·Xsigret )
+IH_NOEC(72,·Xperfmask )
 
 // irqs
 // irq0 is Xtimer
-IH_IRQ( 1,Xirq1 )
-IH_IRQ( 2,Xirq2 )
-IH_IRQ( 3,Xirq3 )
-IH_IRQ( 4,Xirq4 )
-IH_IRQ( 5,Xirq5 )
-IH_IRQ( 6,Xirq6 )
-IH_IRQ( 7,Xirq7 )
-IH_IRQ( 8,Xirq8 )
-IH_IRQ( 9,Xirq9 )
-IH_IRQ(10,Xirq10 )
-IH_IRQ(11,Xirq11 )
-IH_IRQ(12,Xirq12 )
-IH_IRQ(13,Xirq13 )
-IH_IRQ(14,Xirq14 )
-IH_IRQ(15,Xirq15 )
+IH_IRQ( 1,·Xirq1 )
+IH_IRQ( 2,·Xirq2 )
+IH_IRQ( 3,·Xirq3 )
+IH_IRQ( 4,·Xirq4 )
+IH_IRQ( 5,·Xirq5 )
+IH_IRQ( 6,·Xirq6 )
+IH_IRQ( 7,·Xirq7 )
+IH_IRQ( 8,·Xirq8 )
+IH_IRQ( 9,·Xirq9 )
+IH_IRQ(10,·Xirq10 )
+IH_IRQ(11,·Xirq11 )
+IH_IRQ(12,·Xirq12 )
+IH_IRQ(13,·Xirq13 )
+IH_IRQ(14,·Xirq14 )
+IH_IRQ(15,·Xirq15 )
 
 #define IA32_FS_BASE		$0xc0000100UL
 #define IA32_SYSENTER_ESP	$0x175UL

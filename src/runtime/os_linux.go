@@ -63,6 +63,8 @@ func inb(int) int
 func htpause()
 func fs_null()
 func gs_null()
+func lgdt(pdesc_t)
+func lidt(pdesc_t)
 func cli()
 func sti()
 func ltr(int)
@@ -529,6 +531,7 @@ var Halt uint32
 func _pmsg(*int8)
 func alloc_map(uintptr, uint, int)
 
+// wait until remove definition from proc.c
 //type spinlock_t struct {
 //	v	uint32
 //}
@@ -549,6 +552,10 @@ func splock(l *spinlock_t) {
 func spunlock(l *spinlock_t) {
 	atomicstore(&l.v, 0)
 }
+
+// since this lock may be taken during an interrupt (only under fatal error
+// conditions), interrupts must be cleared before attempting to take this lock.
+var pmsglock = &spinlock_t{}
 
 // msg must be utf-8 string
 //go:nosplit
@@ -572,6 +579,15 @@ func _pnum(n uint) {
 			putch(int8('A' + cn - 10))
 		}
 	}
+}
+
+//go:nosplit
+func pnum(n uint) {
+	fl := Pushcli()
+	splock(pmsglock)
+	_pnum(n)
+	spunlock(pmsglock)
+	Popcli(fl)
 }
 
 //go:nosplit
@@ -604,7 +620,7 @@ func G_pancake(msg string, addr uint) {
 func chkalign(_p unsafe.Pointer, n uint) {
 	p := uint(uintptr(_p))
 	if p & (n - 1) != 0 {
-		G_pancake("not aligned", n)
+		G_pancake("not aligned", p)
 	}
 }
 
@@ -617,7 +633,11 @@ func chksize(n uintptr, exp uintptr) {
 
 type pdesc_t struct {
 	limit	uint16
-	addr	[8]uint8
+	addrlow uint16
+	addrmid	uint32
+	addrhi	uint16
+	_res1	uint16
+	_res2	uint32
 }
 
 type seg64_t struct {
@@ -670,9 +690,8 @@ const (
 	DATA	uint32 = (0x02 << 8)
 	TSS	uint32 = (0x09 << 8)
 	USER	uint32 = (0x60 << 8)
+	INT	uint16 = (0x0e << 8)
 )
-
-var _pgdt pdesc_t
 
 var _segs = [7 + 2*MAXCPUS]seg64_t{
 	// 0: null segment
@@ -721,7 +740,7 @@ func tss_set(id int, rsp, nmi uintptr) *tss_t {
 	return p
 }
 
-// maps cpu number to TSS segment descriptor in the GDT
+// maps cpu number to the per-cpu TSS segment descriptor in the GDT
 //go:nosplit
 func segnum(cpunum int) int {
 	return 7 + 2*cpunum
@@ -730,7 +749,7 @@ func segnum(cpunum int) int {
 //go:nosplit
 func tss_seginit(cpunum int, _tssaddr *tss_t, lim uintptr) {
 	seg := &_segs[segnum(cpunum)]
-	seg.rest |= P | TSS | G
+	seg.rest = P | TSS | G
 
 	seg.lim = uint16(lim)
 	seg.rest |= uint32((lim >> 16) & 0xf) << 16
@@ -766,11 +785,12 @@ func tss_init(cpunum int) uintptr {
 
 //go:nosplit
 func pdsetup(pd *pdesc_t, _addr unsafe.Pointer, lim uintptr) {
+	chkalign(_addr, 8)
 	addr := uintptr(_addr)
 	pd.limit = uint16(lim)
-	for i := uint(0); i < 8; i++ {
-		pd.addr[i] = uint8((addr >> (i*8)) & 0xff)
-	}
+	pd.addrlow = uint16(addr)
+	pd.addrmid = uint32(addr >> 16)
+	pd.addrhi = uint16(addr >> 48)
 }
 
 //go:nosplit
@@ -782,27 +802,161 @@ func dur(_p unsafe.Pointer, sz uintptr) {
 }
 
 //go:nosplit
-func segsetup() *pdesc_t {
-	chksize(unsafe.Sizeof(_pgdt), 10)
+func seg_setup() {
+	p := pdesc_t{}
 	chksize(unsafe.Sizeof(seg64_t{}), 8)
-	chkalign(unsafe.Pointer(&_pgdt), 8)
-	pdsetup(&_pgdt, unsafe.Pointer(&_segs[0]), unsafe.Sizeof(_segs) - 1)
-	return &_pgdt
-}
+	pdsetup(&p, unsafe.Pointer(&_segs[0]), unsafe.Sizeof(_segs) - 1)
+	lgdt(p)
 
-//go:nosplit
-func fs0init(tls0 uintptr) {
+	// now that we have a GDT, setup tls for the first thread.
 	// elf tls defines user tls at -16(%fs)
-	tlsaddr := int(tls0 + 16)
-	// we must set fs/gs, the only segment descriptors in ia32e mode, at
-	// least once before we use the MSRs to change their base address. the
-	// MSRs write directly to hidden segment descriptor cache, and if we
-	// don't explicitly fill the segment descriptor cache, the writes to
-	// the MSRs are thrown out (presumably because the caches are thought
-	// to be invalid).
+	t := uintptr(unsafe.Pointer(&tls0[0]))
+	tlsaddr := int(t + 16)
+	// we must set fs/gs at least once before we use the MSRs to change
+	// their base address. the MSRs write directly to hidden segment
+	// descriptor cache, and if we don't explicitly fill the segment
+	// descriptor cache, the writes to the MSRs are thrown out (presumably
+	// because the caches are thought to be invalid).
 	fs_null()
 	ia32_fs_base := 0xc0000100
 	Wrmsr(ia32_fs_base, tlsaddr)
+}
+
+// interrupt entries, defined in runtime/asm_amd64.s
+func Xdz()
+func Xrz()
+func Xnmi()
+func Xbp()
+func Xov()
+func Xbnd()
+func Xuo()
+func Xnm()
+func Xdf()
+func Xrz2()
+func Xtss()
+func Xsnp()
+func Xssf()
+func Xgp()
+func Xpf()
+func Xrz3()
+func Xmf()
+func Xac()
+func Xmc()
+func Xfp()
+func Xve()
+func Xtimer()
+func Xspur()
+func Xyield()
+func Xsyscall()
+func Xtlbshoot()
+func Xsigret()
+func Xperfmask()
+func Xirq1()
+func Xirq2()
+func Xirq3()
+func Xirq4()
+func Xirq5()
+func Xirq6()
+func Xirq7()
+func Xirq8()
+func Xirq9()
+func Xirq10()
+func Xirq11()
+func Xirq12()
+func Xirq13()
+func Xirq14()
+func Xirq15()
+
+type idte_t struct {
+	baselow	uint16
+	segsel	uint16
+	details	uint16
+	basemid	uint16
+	basehi	uint32
+	_res	uint32
+}
+
+const idtsz uintptr = 128
+var _idt [idtsz]idte_t
+
+//go:nosplit
+func int_set(idx int, intentry func(), istn int) {
+	var f func()
+	f = intentry
+	entry := **(**uint)(unsafe.Pointer(&f))
+	kcode64 := 1
+
+	p := &_idt[idx]
+	p.baselow = uint16(entry)
+	p.basemid = uint16(entry >> 16)
+	p.basehi = uint32(entry >> 32)
+
+	p.segsel = uint16(kcode64 << 3)
+
+	p.details = uint16(P) | INT | uint16(istn & 0x7)
+}
+
+//go:nosplit
+func int_setup() {
+	chksize(unsafe.Sizeof(idte_t{}), 16)
+	chksize(unsafe.Sizeof(_idt), idtsz*16)
+	chkalign(unsafe.Pointer(&_idt[0]), 8)
+
+	// cpu exceptions
+	int_set(0,   Xdz,  0)
+	int_set(1,   Xrz,  0)
+	int_set(2,   Xnmi, 2)
+	int_set(3,   Xbp,  0)
+	int_set(4,   Xov,  0)
+	int_set(5,   Xbnd, 0)
+	int_set(6,   Xuo,  0)
+	int_set(7,   Xnm,  0)
+	int_set(8,   Xdf,  1)
+	int_set(9,   Xrz2, 0)
+	int_set(10,  Xtss, 0)
+	int_set(11,  Xsnp, 0)
+	int_set(12,  Xssf, 0)
+	int_set(13,  Xgp,  1)
+	int_set(14,  Xpf,  1)
+	int_set(15,  Xrz3, 0)
+	int_set(16,  Xmf,  0)
+	int_set(17,  Xac,  0)
+	int_set(18,  Xmc,  0)
+	int_set(19,  Xfp,  0)
+	int_set(20,  Xve,  0)
+
+	// interrupts
+	irqbase := 32
+	int_set(irqbase+ 0,  Xtimer,  1)
+	int_set(irqbase+ 1,  Xirq1,   1)
+	int_set(irqbase+ 2,  Xirq2,   1)
+	int_set(irqbase+ 3,  Xirq3,   1)
+	int_set(irqbase+ 4,  Xirq4,   1)
+	int_set(irqbase+ 5,  Xirq5,   1)
+	int_set(irqbase+ 6,  Xirq6,   1)
+	int_set(irqbase+ 7,  Xirq7,   1)
+	int_set(irqbase+ 8,  Xirq8,   1)
+	int_set(irqbase+ 9,  Xirq9,   1)
+	int_set(irqbase+10,  Xirq10,  1)
+	int_set(irqbase+11,  Xirq11,  1)
+	int_set(irqbase+12,  Xirq12,  1)
+	int_set(irqbase+13,  Xirq13,  1)
+	int_set(irqbase+14,  Xirq14,  1)
+	int_set(irqbase+15,  Xirq15,  1)
+
+	int_set(48,  Xspur,    1)
+	// no longer used
+	//int_set(49,  Xyield,   1)
+	//int_set(64,  Xsyscall, 1)
+
+	int_set(70,  Xtlbshoot, 1)
+	// no longer used
+	//int_set(71,  Xsigret,   1)
+	int_set(72,  Xperfmask, 1)
+
+	p := pdesc_t{}
+	pdsetup(&p, unsafe.Pointer(&_idt[0]), unsafe.Sizeof(_idt) - 1)
+	lidt(p)
 }
 
 const (
