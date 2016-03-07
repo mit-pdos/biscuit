@@ -226,13 +226,9 @@ h_needtls:
 	//CMPL	runtime·issolaris(SB), $1
 	//JEQ ok
 
-	// setup tls
 	PUSHQ	AX
-	LEAQ	runtime·tls0(SB), DI
-	PUSHQ	DI
-	CALL	segsetup(SB)
+	CALL	·segsetup(SB)
 
-	POPQ	AX
 	POPQ	AX
 	MOVQ	8(AX), DI
 	PUSHQ	DI
@@ -245,11 +241,16 @@ h_needtls:
 	BYTE	$0x24
 	POPQ	AX
 	POPQ	AX
-	POPQ	AX
 
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
 	CALL	fixcs(SB)
+	// setup tls
+	LEAQ	runtime·tls0(SB), DI
+	PUSHQ	DI
+	CALL	·fs0init(SB)
+	POPQ	AX
+
 	CALL	fpuinit(SB)
 
 	// store through it, to make sure it works
@@ -393,7 +394,7 @@ TEXT lidt(SB), NOSPLIT, $0-8
 	POPQ	AX
 	RET
 
-TEXT ltr(SB), NOSPLIT, $0-8
+TEXT ·ltr(SB), NOSPLIT, $0-8
 	MOVQ	seg+0(FP), AX
 	// ltr	%ax
 	BYTE $0x0f
@@ -569,7 +570,7 @@ TEXT getret(SB), NOSPLIT, $0-16
 	MOVQ	AX, ret+8(FP)
 	RET
 
-TEXT htpause(SB), NOSPLIT, $0-0
+TEXT ·htpause(SB), NOSPLIT, $0-0
 	PAUSE
 	RET
 
@@ -1038,13 +1039,13 @@ TEXT old_sysentry(SB), NOSPLIT, $0
 	CALL	sysentry(SB)
 	INT	$3
 
-TEXT gs_null(SB), NOSPLIT, $8-0
+TEXT ·gs_null(SB), NOSPLIT, $8-0
 	XORQ	AX, AX
 	PUSHQ	AX
 	POPQ	GS
 	RET
 
-TEXT fs_null(SB), NOSPLIT, $8-0
+TEXT ·fs_null(SB), NOSPLIT, $8-0
 	XORQ	AX, AX
 	PUSHQ	AX
 	POPQ	FS

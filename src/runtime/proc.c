@@ -3494,31 +3494,16 @@ sync·runtime_procUnpin()
 	g->m->locks--;
 }
 
+// XXX axeme
 struct spinlock_t {
-	volatile uint32 lock;
+	volatile uint32 v;
 };
 
-#pragma textflag NOSPLIT
-void
-splock(struct spinlock_t *sl)
-{
-	void htpause(void);
-	while (1) {
-		if (runtime·xchg(&sl->lock, 1) == 0)
-			break;
-		while (sl->lock)
-			htpause();
-	}
-}
-
-#pragma textflag NOSPLIT
-void
-spunlock(struct spinlock_t *sl)
-{
-	sl->lock = 0;
-}
+void ·splock(struct spinlock_t *sl);
+void ·spunlock(struct spinlock_t *sl);
 
 static struct spinlock_t tlock;
+
 // the special goroutine goes here until a trap occurs.
 G *runtime·trapsleeper;
 enum {
@@ -3562,7 +3547,7 @@ static void
 _trapsched(G *gp, int32 firsttime)
 {
 	int64 fl = ·Pushcli();
-	splock(&tlock);
+	·splock(&tlock);
 
 	if (firsttime) {
 		if (initted)
@@ -3592,7 +3577,7 @@ bed:
 		runtime·trapsleeper = gp;
 	}
 
-	spunlock(&tlock);
+	·spunlock(&tlock);
 	·Popcli(fl);
 
 	schedule();
@@ -3619,7 +3604,7 @@ trapcheck(P *p)
 		return;
 
 	int64 fl = ·Pushcli();
-	splock(&tlock);
+	·splock(&tlock);
 
 	if (!ptrap)
 		goto out;
@@ -3639,7 +3624,7 @@ trapcheck(P *p)
 	G *trapgp = runtime·trapsleeper;
 	runtime·trapsleeper = nil;
 
-	spunlock(&tlock);
+	·spunlock(&tlock);
 	·Popcli(fl);
 
 	uint32 old;
@@ -3653,7 +3638,7 @@ trapcheck(P *p)
 	return;
 
 out:
-	spunlock(&tlock);
+	·spunlock(&tlock);
 	·Popcli(fl);
 	return;
 }
@@ -3666,10 +3651,10 @@ runtime·Trapwake(void)
 {
 	extern void runtime·pancake(void *, int64);
 
-	splock(&tlock);
+	·splock(&tlock);
 	nints++;
 	// only flag the Ps if a handler isn't currently active
 	if (trapst == IDLE)
 		ptrap = 1;
-	spunlock(&tlock);
+	·spunlock(&tlock);
 }

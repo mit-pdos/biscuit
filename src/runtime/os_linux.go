@@ -60,14 +60,31 @@ func Gcticks() uint64
 func Trapwake()
 
 func inb(int) int
+func htpause()
+func fs_null()
+func gs_null()
+func cli()
+func sti()
+func ltr(int)
+func lap_id() int
+
 // os_linux.c
 var gcticks uint64
 var No_pml4 int
 
+// we have to carefully write go code that may be executed early (during boot)
+// or in interrupt context. such code cannot allocate or call functions that
+// that have the stack splitting prologue. the following is a list of go code
+// that could result in code that allocates or calls a function with a stack
+// splitting prologue.
+// - function with interface argument (calls convT2E)
+// - taking address of stack variable (may allocate)
+// - using range to iterate over a string (calls stringiter*)
+
 type cpu_t struct {
 	this		uint
 	mythread	uint
-	rsp		uint
+	rsp		uintptr
 	num		uint
 	pmap		*[512]int
 	pms		[]*[512]int
@@ -76,7 +93,9 @@ type cpu_t struct {
 
 var Cpumhz uint
 
-var cpus [32]cpu_t
+const MAXCPUS int = 32
+
+var cpus [MAXCPUS]cpu_t
 
 type tuser_t struct {
 	tf	uintptr
@@ -188,64 +207,6 @@ func shadow_clear() {
 	cpu := Gscpu()
 	cpu.pmap = nil
 	cpu.pms = nil
-}
-
-type tss_t struct {
-	_res0 uint32
-
-	rsp0l uint32
-	rsp0h uint32
-	rsp1l uint32
-	rsp1h uint32
-	rsp2l uint32
-	rsp2h uint32
-
-	_res1 [2]uint32
-
-	ist1l uint32
-	ist1h uint32
-	ist2l uint32
-	ist2h uint32
-	ist3l uint32
-	ist3h uint32
-	ist4l uint32
-	ist4h uint32
-	ist5l uint32
-	ist5h uint32
-	ist6l uint32
-	ist6h uint32
-	ist7l uint32
-	ist7h uint32
-
-	_res2 [2]uint32
-
-	_res3 uint16
-	iobmap uint16
-	_align uint64
-}
-
-var alltss [32]tss_t
-
-//go:nosplit
-func tss_set(id, rsp, nmi uintptr, rsz *uintptr) uintptr {
-	sz := unsafe.Sizeof(alltss[id])
-	if sz != 104 + 8 {
-		panic("bad tss_t")
-	}
-	p := &alltss[id]
-	p.rsp0l = uint32(rsp)
-	p.rsp0h = uint32(rsp >> 32)
-
-	p.ist1l = uint32(rsp)
-	p.ist1h = uint32(rsp >> 32)
-
-	p.ist2l = uint32(nmi)
-	p.ist2h = uint32(nmi >> 32)
-
-	p.iobmap = uint16(sz)
-
-	*rsz = sz
-	return uintptr(unsafe.Pointer(p))
 }
 
 type nmiprof_t struct {
@@ -370,7 +331,6 @@ func perfgather(tf *[TFSIZE]uintptr) {
 //go:nosplit
 func perfmask() {
 	lapaddr := 0xfee00000
-	const PGSIZE = 1 << 12
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 
 	perfmonc := 208
@@ -557,21 +517,60 @@ func Trapinit() {
 	mcall(trapinit_m)
 }
 
-// TEMPORARY CRAP
 // G_ prefix means a function had to have both C and Go versions while the
-// conversion is underway. remove prefix afterwards.
+// conversion is underway. remove prefix afterwards. we need two versions of
+// functions that take a string as an argument since string literals are
+// different data types in C and Go.
+//
+// XXX XXX many of these do not need nosplits!
 var Halt uint32
 
-func cli()
-func sti()
-func _pnum(uint)
+// TEMPORARY CRAP
 func _pmsg(*int8)
+func alloc_map(uintptr, uint, int)
 
+//type spinlock_t struct {
+//	v	uint32
+//}
+
+//go:nosplit
+func splock(l *spinlock_t) {
+	for {
+		if xchg(&l.v, 1) == 0 {
+			break
+		}
+		for l.v != 0 {
+			htpause()
+		}
+	}
+}
+
+//go:nosplit
+func spunlock(l *spinlock_t) {
+	atomicstore(&l.v, 0)
+}
+
+// msg must be utf-8 string
 //go:nosplit
 func G_pmsg(msg string) {
 	putch(' ');
-	for _, c := range msg {
-		putch(int8(c))
+	// can't use range since it results in calls stringiter2 which has the
+	// stack splitting proglogue
+	for i := 0; i < len(msg); i++ {
+		putch(int8(msg[i]))
+	}
+}
+
+//go:nosplit
+func _pnum(n uint) {
+	putch(' ')
+	for i := 60; i >= 0; i -= 4 {
+		cn := (n >> uint(i)) & 0xf
+		if cn <= 9 {
+			putch(int8('0' + cn))
+		} else {
+			putch(int8('A' + cn - 10))
+		}
 	}
 }
 
@@ -587,3 +586,229 @@ func pancake(msg *int8, addr uint) {
 		*p = 0x1400 | 'F'
 	}
 }
+//go:nosplit
+func G_pancake(msg string, addr uint) {
+	cli()
+	atomicstore(&Halt, 1)
+	G_pmsg(msg)
+	_pnum(addr)
+	G_pmsg("PANCAKE")
+	for {
+		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
+		*p = 0x1400 | 'F'
+	}
+}
+
+
+//go:nosplit
+func chkalign(_p unsafe.Pointer, n uint) {
+	p := uint(uintptr(_p))
+	if p & (n - 1) != 0 {
+		G_pancake("not aligned", n)
+	}
+}
+
+//go:nosplit
+func chksize(n uintptr, exp uintptr) {
+	if n != exp {
+		G_pancake("size mismatch", uint(n))
+	}
+}
+
+type pdesc_t struct {
+	limit	uint16
+	addr	[8]uint8
+}
+
+type seg64_t struct {
+	lim	uint16
+	baselo	uint16
+	rest	uint32
+}
+
+type tss_t struct {
+	_res0 uint32
+
+	rsp0l uint32
+	rsp0h uint32
+	rsp1l uint32
+	rsp1h uint32
+	rsp2l uint32
+	rsp2h uint32
+
+	_res1 [2]uint32
+
+	ist1l uint32
+	ist1h uint32
+	ist2l uint32
+	ist2h uint32
+	ist3l uint32
+	ist3h uint32
+	ist4l uint32
+	ist4h uint32
+	ist5l uint32
+	ist5h uint32
+	ist6l uint32
+	ist6h uint32
+	ist7l uint32
+	ist7h uint32
+
+	_res2 [2]uint32
+
+	_res3 uint16
+	iobmap uint16
+	_align uint64
+}
+
+const (
+	P 	uint32 = (1 << 15)
+	PS	uint32 = (P | (1 << 12))
+	G 	uint32 = (0 << 23)
+	D 	uint32 = (1 << 22)
+	L 	uint32 = (1 << 21)
+	CODE	uint32 = (0x0a << 8)
+	DATA	uint32 = (0x02 << 8)
+	TSS	uint32 = (0x09 << 8)
+	USER	uint32 = (0x60 << 8)
+)
+
+var _pgdt pdesc_t
+
+var _segs = [7 + 2*MAXCPUS]seg64_t{
+	// 0: null segment
+	{0, 0, 0},
+	// 1: 64 bit kernel code
+	{0, 0, PS | CODE | G | L},
+	// 2: 64 bit kernel data
+	{0, 0, PS | DATA | G | D},
+	// 3: FS segment
+	{0, 0, PS | DATA | G | D},
+	// 4: GS segment. the sysexit instruction also requires that the
+	// difference in indicies for the user code segment descriptor and the
+	// kernel code segment descriptor is 4.
+	{0, 0, PS | DATA | G | D},
+	// 5: 64 bit user code
+	{0, 0, PS | CODE | USER | G | L},
+	// 6: 64 bit user data
+	{0, 0, PS | DATA | USER | G | D},
+	// 7: 64 bit TSS segment (occupies two segment descriptor entries)
+	{0, 0, P | TSS | G},
+	{0, 0, 0},
+}
+
+var _tss [MAXCPUS]tss_t
+
+//go:nosplit
+func tss_set(id int, rsp, nmi uintptr) *tss_t {
+	sz := unsafe.Sizeof(_tss[id])
+	if sz != 104 + 8 {
+		panic("bad tss_t")
+	}
+	p := &_tss[id]
+	p.rsp0l = uint32(rsp)
+	p.rsp0h = uint32(rsp >> 32)
+
+	p.ist1l = uint32(rsp)
+	p.ist1h = uint32(rsp >> 32)
+
+	p.ist2l = uint32(nmi)
+	p.ist2h = uint32(nmi >> 32)
+
+	p.iobmap = uint16(sz)
+
+	up := unsafe.Pointer(p)
+	chkalign(up, 16)
+	return p
+}
+
+// maps cpu number to TSS segment descriptor in the GDT
+//go:nosplit
+func segnum(cpunum int) int {
+	return 7 + 2*cpunum
+}
+
+//go:nosplit
+func tss_seginit(cpunum int, _tssaddr *tss_t, lim uintptr) {
+	seg := &_segs[segnum(cpunum)]
+	seg.rest |= P | TSS | G
+
+	seg.lim = uint16(lim)
+	seg.rest |= uint32((lim >> 16) & 0xf) << 16
+
+	base := uintptr(unsafe.Pointer(_tssaddr))
+	seg.baselo = uint16(base)
+	seg.rest |= uint32(uint8(base >> 16))
+	seg.rest |= uint32(uint8(base >> 24) << 24)
+
+	seg = &_segs[segnum(cpunum) + 1]
+	seg.lim = uint16(base >> 32)
+	seg.baselo = uint16(base >> 48)
+}
+
+//go:nosplit
+func tss_init(cpunum int) uintptr {
+	intstk := uintptr(0xa100001000 + cpunum*4*PGSIZE)
+	nmistk := uintptr(0xa100003000 + cpunum*4*PGSIZE)
+	// BSP maps AP's stack for them
+	if cpunum == 0 {
+		alloc_map(intstk - 1, PTE_W, 1)
+		alloc_map(nmistk - 1, PTE_W, 1)
+	}
+	rsp := intstk
+	rspnmi := nmistk
+	tss := tss_set(cpunum, rsp, rspnmi)
+	tss_seginit(cpunum, tss, unsafe.Sizeof(tss_t{}) - 1)
+	segselect := segnum(cpunum) << 3
+	ltr(segselect)
+	cpus[lap_id()].rsp = rsp
+	return rsp
+}
+
+//go:nosplit
+func pdsetup(pd *pdesc_t, _addr unsafe.Pointer, lim uintptr) {
+	addr := uintptr(_addr)
+	pd.limit = uint16(lim)
+	for i := uint(0); i < 8; i++ {
+		pd.addr[i] = uint8((addr >> (i*8)) & 0xff)
+	}
+}
+
+//go:nosplit
+func dur(_p unsafe.Pointer, sz uintptr) {
+	for i := uintptr(0); i < sz; i++ {
+		p := (*uint8)(unsafe.Pointer(uintptr(_p) + i))
+		_pnum(uint(*p))
+	}
+}
+
+//go:nosplit
+func segsetup() *pdesc_t {
+	chksize(unsafe.Sizeof(_pgdt), 10)
+	chksize(unsafe.Sizeof(seg64_t{}), 8)
+	chkalign(unsafe.Pointer(&_pgdt), 8)
+	pdsetup(&_pgdt, unsafe.Pointer(&_segs[0]), unsafe.Sizeof(_segs) - 1)
+	return &_pgdt
+}
+
+//go:nosplit
+func fs0init(tls0 uintptr) {
+	// elf tls defines user tls at -16(%fs)
+	tlsaddr := int(tls0 + 16)
+	// we must set fs/gs, the only segment descriptors in ia32e mode, at
+	// least once before we use the MSRs to change their base address. the
+	// MSRs write directly to hidden segment descriptor cache, and if we
+	// don't explicitly fill the segment descriptor cache, the writes to
+	// the MSRs are thrown out (presumably because the caches are thought
+	// to be invalid).
+	fs_null()
+	ia32_fs_base := 0xc0000100
+	Wrmsr(ia32_fs_base, tlsaddr)
+}
+
+const (
+	PGSIZE	= 1 << 12
+	PTE_P	= 1 << 0
+	PTE_W	= 1 << 1
+	PTE_U	= 1 << 2
+	PTE_PCD	= 1 << 4
+)

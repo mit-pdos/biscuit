@@ -354,15 +354,15 @@ void cpu_halt(uint64);
 void finit(void);
 void fxsave(uint64 *);
 void fxrstor(uint64 *);
-void htpause(void);
+void ·htpause(void);
 struct cpu_t* ·Gscpu(void);
 int64 inb(int32);
-uint64 lap_id(void);
+uint64 ·lap_id(void);
 void lcr0(uint64);
 void lcr3(uint64);
 void lcr4(uint64);
 void lidt(struct pdesc_t *);
-void ltr(uint64);
+void ·ltr(uint64);
 void outb(int64, int64);
 int64 ·Pushcli(void);
 void ·Popcli(int64);
@@ -380,8 +380,8 @@ void _trapret(uint64 *);
 void wlap(uint32, uint32);
 void ·Wrmsr(uint64, uint64);
 void mktrap(uint64);
-void fs_null(void);
-void gs_null(void);
+void ·fs_null(void);
+void ·gs_null(void);
 
 uint64 ·Rdtsc(void);
 
@@ -396,15 +396,14 @@ void runtime·perfmask(void);
 void runtime·putch(int8);
 void runtime·putcha(int8, int8);
 void runtime·shadow_clear(void);
-uint64 runtime·tss_set(uint64, uint64, uint64, uint64*);
 
 // src/runtime/proc.c
 struct spinlock_t {
-	volatile uint32 lock;
+	volatile uint32 v;
 };
 
-void splock(struct spinlock_t *);
-void spunlock(struct spinlock_t *);
+void ·splock(struct spinlock_t *);
+void ·spunlock(struct spinlock_t *);
 
 // this file
 void lap_eoi(void);
@@ -421,32 +420,16 @@ void invlpg(void *);
 // tries to print and deadlocks).
 struct spinlock_t pmsglock;
 
-#pragma textflag NOSPLIT
-void
-·_pnum(uint64 n)
-{
-	uint64 nn = (uint64)n;
-	int64 i;
-
-	runtime·putch(' ');
-	for (i = 60; i >= 0; i -= 4) {
-		uint64 cn = (nn >> i) & 0xf;
-
-		if (cn <= 9)
-			runtime·putch('0' + cn);
-		else
-			runtime·putch('A' + cn - 10);
-	}
-}
+void ·_pnum(uint64 n);
 
 #pragma textflag NOSPLIT
 void
 pnum(uint64 n)
 {
 	int64 fl = ·Pushcli();
-	splock(&pmsglock);
+	·splock(&pmsglock);
 	·_pnum(n);
-	spunlock(&pmsglock);
+	·spunlock(&pmsglock);
 	·Popcli(fl);
 }
 
@@ -465,38 +448,15 @@ void
 pmsg(int8 *msg)
 {
 	int64 fl = ·Pushcli();
-	splock(&pmsglock);
+	·splock(&pmsglock);
 	·_pmsg(msg);
-	spunlock(&pmsglock);
+	·spunlock(&pmsglock);
 	·Popcli(fl);
 }
 
 uint32 ·Halt;
 
 void runtime·pancake(void *msg, int64 addr);
-//#pragma textflag NOSPLIT
-//void
-//runtime·pancake(void *msg, int64 addr)
-//{
-//	·cli();
-//
-//	volatile int32 *wtf = &·Halt;
-//	*wtf = 1;
-//
-//	·_pmsg(msg);
-//	·_pnum(addr);
-//	·_pmsg("PANCAKE");
-//
-//	while (1) {
-//		uint16 *p = (uint16 *)0xb8002;
-//		*p = 0x1400 | 'F';
-//	}
-//	//void stack_dump(uint64);
-//	//stack_dump(rrsp());
-//	//pmsg("TWO");
-//	//stack_dump(g->m->curg->sched.sp);
-//	//while (1);
-//}
 
 #define assert(x, y, z)        do { if (!(x)) runtime·pancake(y, z); } while (0)
 
@@ -512,15 +472,6 @@ struct pdesc_t {
 	uint8 dur[10];
 };
 
-struct seg64_t {
-	uint8 dur[8];
-};
-
-//#define	G       0x80
-#define	G       0x00
-#define	D       0x40
-#define	L       0x20
-
 #define	CODE    0xa
 #define	DATA    0x2
 #define	TSS     0x9
@@ -528,183 +479,10 @@ struct seg64_t {
 
 #define MAXCPUS 32
 
-// 2 tss segs for each CPU
-static struct seg64_t segs[6 + 2*MAXCPUS] = {
-	// NULL seg
-	{0, 0, 0, 0, 0, 0, 0, 0},
-
-	// limits and base are ignored for CS, DS, and ES in long mode.
-
-	// 64 bit code
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | CODE,	// p, dpl, s, type
-	 G | L,		// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-	// data
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | DATA,	// p, dpl, s, type
-	 G | D,	// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-	// fs seg
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | DATA,	// p, dpl, s, type
-	 G | D,		// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-
-	// gs seg. the sysexit instruction also requires that the user
-	// code seg and the kernel code seg descriptor are 4 slots apart.
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | DATA,	// p, dpl, s, type
-	 G | D,		// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-	// 5 - 64 bit user code
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | CODE | USER,	// p, dpl, s, type
-	 G | L,		// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-	// 6 - user data
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x90 | DATA | USER,	// p, dpl, s, type
-	 G | D,	// g, d/b, l, avail, mid limit
-	 0},		// base high
-
-	// 7 - tss seg
-	{0, 0,		// limit
-	 0, 0, 0,	// base
-	 0x80 | TSS,	// p, dpl, s, type
-	 G,		// g, d/b, l, avail, mid limit
-	 0},		// base high
-	// 64 bit tss takes up two segment descriptor entires. the high 32bits
-	// of the base are written in this seg desc.
-	{0, 0, 0, 0, 0, 0, 0, 0},
-};
-
-static struct pdesc_t pd;
-
 #define	CODE_SEG        1
 #define	FS_SEG          3
-// 64bit tss uses two seg descriptors
-#define	TSS_SEG(x)      (7 + 2*x)
 
-#pragma textflag NOSPLIT
-static void
-seg_set(struct seg64_t *seg, uint32 base, uint32 lim, uint32 data)
-{
-	uint8 b1 = base & 0xff;
-	uint8 b2 = (base >>  8) & 0xff;
-	uint8 b3 = (base >> 16) & 0xff;
-	uint8 b4 = (base >> 24) & 0xff;
-
-	// correct limit
-	uint8 l1 = lim & 0xff;
-	uint8 l2 = (lim >>  8) & 0xff;
-	uint8 l3 = (lim >> 16) & 0xf;
-
-	seg->dur[0] = l1;
-	seg->dur[1] = l2;
-	if (data)
-		seg->dur[6] = l3 | G | D;
-	else
-		seg->dur[6] = l3 | G;
-
-	seg->dur[2] = b1;
-	seg->dur[3] = b2;
-	seg->dur[4] = b3;
-	seg->dur[7] = b4;
-}
-
-#pragma textflag NOSPLIT
-static void
-tss_seg_set(int32 tn, uint64 base, uint32 lim, uint32 data)
-{
-	struct seg64_t *seg = &segs[TSS_SEG(tn)];
-	uint32 basel = (uint64)base;
-
-	seg->dur[5] = 0x80 | TSS;
-	seg->dur[6] = G;
-	seg_set(seg, basel, lim, data);
-
-	// set high bits (TSS64 uses two segment descriptors
-	uint32 haddr = base >> 32;
-	bw(&segs[TSS_SEG(tn) + 1].dur[0], haddr, 0);
-	bw(&segs[TSS_SEG(tn) + 1].dur[1], haddr, 1);
-	bw(&segs[TSS_SEG(tn) + 1].dur[2], haddr, 2);
-	bw(&segs[TSS_SEG(tn) + 1].dur[3], haddr, 3);
-}
-
-#undef DATA
-#undef CODE
-#undef TSS
-#undef G
-#undef D
-#undef L
-
-#define	CHECK32(x)     (x & ~((1ULL << 32) - 1))
-
-#pragma textflag NOSPLIT
-static void
-pdsetup(struct pdesc_t *pd, uint64 s, uint64 lim)
-{
-	uint64 addr = (uint64)s;
-
-	pd->dur[0] = lim & 0xff;
-	pd->dur[1] = (lim >> 8) & 0xff;
-
-	pd->dur[2] = addr & 0xff;
-	pd->dur[3] = (addr >>  8) & 0xff;
-	pd->dur[4] = (addr >> 16) & 0xff;
-	pd->dur[5] = (addr >> 24) & 0xff;
-	pd->dur[6] = (addr >> 32) & 0xff;
-	pd->dur[7] = (addr >> 40) & 0xff;
-	pd->dur[8] = (addr >> 48) & 0xff;
-	pd->dur[9] = (addr >> 56) & 0xff;
-}
-
-#pragma textflag NOSPLIT
-uint64
-segsetup(void *tls0)
-{
-	uint64 tlsaddr = (uint64)tls0;
-
-	// TLS assembles to -16(%fs)
-	tlsaddr += 16;
-
-	if (sizeof(struct pdesc_t) != 10)
-		runtime·pancake("pdesc not packed", sizeof(struct pdesc_t));
-
-	if (sizeof(struct seg64_t) != 8)
-		runtime·pancake("seg64 not packed", sizeof(struct seg64_t));
-	if (sizeof(struct seg64_t)*4 != 32)
-		runtime·pancake("wut?", sizeof(struct seg64_t)*4);
-
-	// gee i wish i could align data with plan9 compiler
-	if ((uint64)&pd & 0x7)
-		runtime·pancake("pdesc not aligned", (uint64)&pd);
-
-	// we must set fs/gs, the only segment descriptors in ia32e mode, at
-	// least once before we use the MSRs to change their base address. the
-	// MSRs write directly to hidden segment descriptor cache, and if we
-	// don't explicitly fill the segment descriptor cache, the writes to
-	// the MSRs are thrown out (presumably because the caches are thought
-	// to be invalid).
-	fs_null();
-	const uint64 ia32_fs_base = 0xc0000100ull;
-	·Wrmsr(ia32_fs_base, tlsaddr);
-	pdsetup(&pd, (uint64)segs, sizeof(segs) - 1);
-
-	return (uint64)&pd;
-}
+void ·pdsetup(struct pdesc_t *pd, uint64 s, uint64 lim);
 
 struct idte_t {
 	uint8 dur[16];
@@ -869,7 +647,7 @@ int_setup(void)
 	int_set(&idt[71], (uint64) Xsigret,   0, 0, 1);
 	int_set(&idt[72], (uint64) Xperfmask, 0, 0, 1);
 
-	pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
+	·pdsetup(&p, (uint64)idt, sizeof(idt) - 1);
 	lidt(&p);
 }
 
@@ -1113,8 +891,8 @@ pgdir_walk(void *va, int32 create)
 }
 
 #pragma textflag NOSPLIT
-static void
-alloc_map(void *va, int32 perms, int32 fempty)
+void
+·alloc_map(void *va, int32 perms, int32 fempty)
 {
 	uint64 *pte = pgdir_walk(va, 1);
 	uint64 old = 0;
@@ -1184,14 +962,14 @@ void*
 hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 {
 	uint64 fl = ·Pushcli();
-	splock(&maplock);
+	·splock(&maplock);
 
 	USED(fd);
 	USED(offset);
 	uint8 *v = va;
 
 	if (ROUNDUP(sz, PGSIZE)/PGSIZE > pglast - pgfirst) {
-		spunlock(&maplock);
+		·spunlock(&maplock);
 		·Popcli(fl);
 		return (void *)-1;
 	}
@@ -1219,7 +997,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	int32 perms = PTE_P;
 	if (prot == PROT_NONE) {
 		prot_none(v, sz);
-		spunlock(&maplock);
+		·spunlock(&maplock);
 		·Popcli(fl);
 		return v;
 	}
@@ -1238,9 +1016,9 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 
 	int32 i;
 	for (i = 0; i < sz ; i += PGSIZE)
-		alloc_map(v + i, perms, 1);
+		·alloc_map(v + i, perms, 1);
 
-	spunlock(&maplock);
+	·spunlock(&maplock);
 	·Popcli(fl);
 	return v;
 }
@@ -1250,7 +1028,7 @@ int32
 hack_munmap(void *va, uint64 sz)
 {
 	uint64 fl = ·Pushcli();
-	splock(&maplock);
+	·splock(&maplock);
 
 	// XXX TLB shootdowns?
 	uint8 *v = (uint8 *)va;
@@ -1268,7 +1046,7 @@ hack_munmap(void *va, uint64 sz)
 	}
 	pmsg("POOF\n");
 
-	spunlock(&maplock);
+	·spunlock(&maplock);
 	·Popcli(fl);
 	return 0;
 }
@@ -1309,12 +1087,12 @@ hack_write(int64 fd, const void *buf, uint32 c)
 		runtime·pancake("weird fd", (uint64)fd);
 
 	int64 fl = ·Pushcli();
-	splock(&pmsglock);
+	·splock(&pmsglock);
 	int64 ret = (int64)c;
 	byte *p = (byte *)buf;
 	while(c--)
 		runtime·putch(*p++);
-	spunlock(&pmsglock);
+	·spunlock(&pmsglock);
 	·Popcli(fl);
 
 	return ret;
@@ -1504,7 +1282,7 @@ static struct thread_t threads[NTHREADS];
 // index is lapic id
 extern struct cpu_t ·cpus[MAXCPUS];
 
-#define curcpu               (·cpus[lap_id()])
+#define curcpu               (·cpus[·lap_id()])
 #define curthread            ((struct thread_t *)(curcpu.mythread))
 #define setcurthread(x)      (curcpu.mythread = (uint64)x)
 
@@ -1698,7 +1476,7 @@ yieldy(void)
 	     i = (i + 1) % NTHREADS) {
 	     	if (i == start) {
 			setcurthread(0);
-			spunlock(&threadlock);
+			·spunlock(&threadlock);
 			// does not return
 			sched_halt();
 		}
@@ -1706,7 +1484,7 @@ yieldy(void)
 
 	struct thread_t *tnext = &threads[i];
 	tnext->status = ST_RUNNING;
-	spunlock(&threadlock);
+	·spunlock(&threadlock);
 
 	sched_run(tnext);
 }
@@ -1716,7 +1494,7 @@ static void
 yieldy_lock(void)
 {
 	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
-	splock(&threadlock);
+	·splock(&threadlock);
 	yieldy();
 }
 
@@ -1728,7 +1506,7 @@ thread_avail(void)
 	runtime·stackcheck();
 
 	assert((rflags() & TF_FL_IF) == 0, "thread state race", 0);
-	assert(threadlock.lock, "threadlock not taken", 0);
+	assert(threadlock.v, "threadlock not taken", 0);
 
 	int32 i;
 	for (i = 0; i < NTHREADS; i++) {
@@ -1820,7 +1598,7 @@ runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
 	volatile uint64 *p = &tlbshoot_wait;
 	while (!runtime·cas64(&tlbshoot_wait, 0, cpuwait))
 		while (*p != 0)
-			htpause();
+			·htpause();
 
 	runtime·xchg64(&tlbshoot_pg, pg);
 	runtime·xchg64(&tlbshoot_count, pgcount);
@@ -1888,7 +1666,7 @@ sigret(struct thread_t *t)
 	runtime·memmove(t->tf, t->sigtf, TFSIZE);
 	runtime·memmove(t->fx, t->sigfx, FXSIZE);
 
-	splock(&threadlock);
+	·splock(&threadlock);
 	assert(t->sigstatus == ST_RUNNABLE || t->sigstatus == ST_SLEEPING,
 	    "oh nyet", t->sigstatus);
 
@@ -1905,7 +1683,7 @@ sigret(struct thread_t *t)
 		yieldy();
 	} else {
 		// t->status is already ST_RUNNING
-		spunlock(&threadlock);
+		·spunlock(&threadlock);
 		sched_run(t);
 	}
 }
@@ -2167,13 +1945,13 @@ trap(uint64 *tf)
 		// does not return
 		tlb_shootdown();
 	} else if (trapno == TRAP_TIMER) {
-		splock(&threadlock);
+		·splock(&threadlock);
 		if (ct) {
 			if (ct->status == ST_WILLSLEEP) {
 				ct->status = ST_SLEEPING;
 				// XXX set IF, unlock
 				ct->tf[TF_RFLAGS] |= TF_FL_IF;
-				spunlock(&futexlock);
+				·spunlock(&futexlock);
 			} else
 				ct->status = ST_RUNNABLE;
 		}
@@ -2220,35 +1998,7 @@ trap(uint64 *tf)
 
 static uint64 lapaddr;
 
-#pragma textflag NOSPLIT
-static uint64
-tss_setup(int32 myid)
-{
-	uint64 *intstk = (uint64 *)(0xa100001000ULL + myid*(4*PGSIZE));
-	uint64 *nmistk = (uint64 *)(0xa100003000ULL + myid*(4*PGSIZE));
-	// aps already have stack mapped
-	if (myid == 0) {
-		alloc_map(intstk - 1, PTE_W, 1);
-		alloc_map(nmistk - 1, PTE_W, 1);
-	}
-
-	uint64 rsp = (uint64)intstk;
-	uint64 rspnmi = (uint64)nmistk;
-
-	uint64 tsize;
-	uint64 addr = runtime·tss_set(myid, rsp, rspnmi, &tsize);
-	// alignment is for performance
-	if (addr & (16 - 1))
-		runtime·pancake("tss not aligned", addr);
-	tss_seg_set(myid, addr, tsize - 1, 0);
-
-	ltr(TSS_SEG(myid) << 3);
-
-	assert(lapaddr, "lapic not yet mapped", lapaddr);
-	curcpu.rsp = rsp;
-
-	return rsp;
-}
+uint64 ·tss_init(int32 myid);
 
 #pragma textflag NOSPLIT
 uint32
@@ -2272,7 +2022,7 @@ wlap(uint32 reg, uint32 val)
 
 #pragma textflag NOSPLIT
 uint64
-lap_id(void)
+·lap_id(void)
 {
 	assert((rflags() & TF_FL_IF) == 0, "ints enabled for lapid", 0);
 
@@ -2473,7 +2223,7 @@ gs_set(struct cpu_t *mycpu)
 	// don't explicitly fill the segment descriptor cache, the writes to
 	// the MSRs are thrown out (presumably because the caches are thought
 	// to be invalid).
-	gs_null();
+	·gs_null();
 	const uint64 ia32_gs_base = 0xc0000101;
 	·Wrmsr(ia32_gs_base, (uint64)mycpu);
 }
@@ -2507,7 +2257,7 @@ proc_setup(void)
 	outb(0x20 + 1, 0xff);
 	outb(0xa0 + 1, 0xff);
 
-	uint64 myrsp = tss_setup(0);
+	uint64 myrsp = ·tss_init(0);
 	sysc_setup(myrsp);
 	curcpu.num = 0;
 	gs_set(&curcpu);
@@ -2525,9 +2275,9 @@ void
 	pnum(myid);
 	pmsg("joined\n");
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
-	assert(lap_id() <= MAXCPUS, "lapic id large", myid);
+	assert(·lap_id() <= MAXCPUS, "lapic id large", myid);
 	timer_setup(0);
-	uint64 myrsp = tss_setup(myid);
+	uint64 myrsp = ·tss_init(myid);
 	sysc_setup(myrsp);
 	fpuinit();
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
@@ -2538,7 +2288,7 @@ void
 	assert((rflags() & TF_FL_IF) == 0, "wtf!", test);
 
 	curcpu.num = myid;
-	fs_null();
+	·fs_null();
 	gs_set(&curcpu);
 	setcurthread(0);
 }
@@ -2569,7 +2319,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	runtime·stackcheck();
 
 	·cli();
-	splock(&threadlock);
+	·splock(&threadlock);
 
 	uint64 *sp = stack;
 	uint64 chk = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
@@ -2601,7 +2351,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 
 	runtime·memmove(mt->fx, fxinit, FXSIZE);
 
-	spunlock(&threadlock);
+	·spunlock(&threadlock);
 	·sti();
 }
 
@@ -2698,7 +2448,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 		assert_mapped(uaddr, 8, "futex uaddr");
 
 		·cli();
-		splock(&futexlock);
+		·splock(&futexlock);
 		int32 dosleep = *uaddr == val;
 		if (dosleep) {
 			curthread->futaddr = (uint64)uaddr;
@@ -2722,7 +2472,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 			ret = curthread->sleepret;
 			·sti();
 		} else {
-			spunlock(&futexlock);
+			·spunlock(&futexlock);
 			·sti();
 			ret = -EAGAIN; // EAGAIN == EWOULDBLOCK
 		}
@@ -2733,8 +2483,8 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 		int32 i;
 		int32 woke = 0;
 		·cli();
-		splock(&futexlock);
-		splock(&threadlock);
+		·splock(&futexlock);
+		·splock(&threadlock);
 		for (i = 0; i < NTHREADS && val; i++) {
 			uint64 st = threads[i].status;
 			if (threads[i].futaddr == (uint64)uaddr &&
@@ -2747,8 +2497,8 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 				woke++;
 			}
 		}
-		spunlock(&threadlock);
-		spunlock(&futexlock);
+		·spunlock(&threadlock);
+		·spunlock(&futexlock);
 		·sti();
 		ret = woke;
 		break;
@@ -2927,11 +2677,11 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 	runtime·stackcheck();
 
 	int64 fl = ·Pushcli();
-	splock(&pmsglock);
+	·splock(&pmsglock);
 	while (len--) {
 		runtime·putcha(*msg++, a);
 	}
-	spunlock(&pmsglock);
+	·spunlock(&pmsglock);
 	·Popcli(fl);
 }
 
