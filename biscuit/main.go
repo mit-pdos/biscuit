@@ -1014,7 +1014,7 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 				sys_exit(p, tid, SIGNALED | mkexitsig(11))
 			}
 		case DIVZERO, GPFAULT, UD:
-			fmt.Printf("TRAP: %v, RIP: %x\n", intno,
+			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.name, intno,
 			    tf[TF_RIP])
 			sys_exit(p, tid, SIGNALED | mkexitsig(4))
 		case TLBSHOOT, INT_KBD, INT_COM1, INT_DISK:

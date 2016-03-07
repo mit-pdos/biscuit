@@ -351,23 +351,23 @@ runtime·signame(int32 sig)
 // src/runtime/asm_amd64.s
 void ·cli(void);
 void cpu_halt(uint64);
-void finit(void);
-void fxsave(uint64 *);
+void ·finit(void);
+void ·fxsave(uint64 *);
 void fxrstor(uint64 *);
 void ·htpause(void);
 struct cpu_t* ·Gscpu(void);
 int64 inb(int32);
 uint64 ·lap_id(void);
-void lcr0(uint64);
+void ·lcr0(uint64);
 void lcr3(uint64);
-void lcr4(uint64);
+void ·lcr4(uint64);
 void outb(int64, int64);
 int64 ·Pushcli(void);
 void ·Popcli(int64);
-uint64 rcr0(void);
+uint64 ·rcr0(void);
 uint64 rcr2(void);
 uint64 rcr3(void);
-uint64 rcr4(void);
+uint64 ·rcr4(void);
 uint64 ·Rdmsr(uint64);
 uint64 rflags(void);
 uint64 rrsp(void);
@@ -408,7 +408,7 @@ void lap_eoi(void);
 void runtime·deray(uint64);
 
 void runtime·stackcheck(void);
-void invlpg(void *);
+void ·invlpg(void *);
 
 extern struct spinlock_t *·pmsglock;
 
@@ -519,197 +519,14 @@ exam(uint64 cr0)
 #define	VUMAX   0x42ULL		// highest runtime mapping
 
 #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
-#define SLOTNEXT(v)       ((v << 9) & ((1ULL << 48) - 1))
-
-struct secret_t {
-	uint64 dur[4];
-#define	SEC_E820        0
-#define	SEC_PMAP        1
-#define	SEC_FREEPG      2
-};
-
-// XXX allocator should be in go
-
-// regions of memory not included in the e820 map, into which we cannot
-// allocate
-static struct badregion_t {
-	uint64 start;
-	uint64 end;
-} badregs[] = {
-	// VGA
-	{0xa0000, 0x100000},
-	// secret storage
-	{ROUNDDOWN(0x7c00, PGSIZE), ROUNDUP(0x7c00, PGSIZE)},
-};
-
-#pragma textflag NOSPLIT
-uint64
-skip_bad(uint64 cur)
-{
-	int32 num = sizeof(badregs)/sizeof(badregs[0]);
-	int32 i;
-	for (i = 0; i < num; i++) {
-		if (cur >= badregs[i].start && cur < badregs[i].end)
-			return badregs[i].end;
-	}
-
-	return cur;
-}
 
 // given to us by bootloader
-uint64 pgfirst;
+extern uint64 ·pgfirst;
 // determined by e820 map
-uint64 pglast;
+extern uint64 ·pglast;
 
-#pragma textflag NOSPLIT
-void
-init_pgfirst(void)
-{
-	// find e820 entry for the current page
-	struct secret_t *secret = (struct secret_t *)0x7c00;
-	struct e8e {
-		uint64 dur[2];
-	} *ep;
-	// secret storage
-	uint64 base = secret->dur[SEC_E820];
-	int32 i;
-	// bootloader provides 15 e820 entries at most (boot loader will panick
-	// if the PC provides more)
-	for (i = 0; i < 15; i++) {
-		ep = (struct e8e *)(base + i * 28);
-		// non-zero len
-		if (!ep->dur[1])
-			continue;
-
-		uint64 end = ep->dur[0] + ep->dur[1];
-		if (pgfirst >= ep->dur[0] && pgfirst < end) {
-			pglast = end;
-			break;
-		}
-	}
-	//pmsg("kernel allocate from");
-	//·pnum(pgfirst);
-	//pmsg("to");
-	//·pnum(pglast);
-	assert(pglast, "no e820 seg for pgfirst?", pgfirst);
-	assert((pgfirst & PGOFFMASK) == 0, "pgfirst not aligned", pgfirst);
-}
-
-#pragma textflag NOSPLIT
-void
-pgcheck(uint64 phys)
-{
-	//uint64 poison = 0xcafebabeb00bbeefULL;
-	uint64 poison = 0xfefefffefffefeffULL;
-	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
-	if (recva[VTEMP] & PTE_P)
-		runtime·pancake("not empty", 0);
-	recva[VTEMP] = phys | PTE_P | PTE_W;
-	int32 i;
-	uint64 *p = (uint64 volatile *)CADDR(VREC, VREC, VREC, VTEMP);
-	for (i = 0; i < PGSIZE/8; i++)
-		p[i] = poison;
-	for (i = 0; i < PGSIZE/8; i++)
-		if (p[i] != poison)
-			runtime·pancake("poison mismatch", p[i]);
-	for (i = 0; i < PGSIZE/8; i++)
-		p[i] = 0;
-	recva[VTEMP] = 0;
-	invlpg(p);
-}
-
-#pragma textflag NOSPLIT
-uint64
-get_pg(void)
-{
-	if (!pglast)
-		init_pgfirst();
-
-	// pgfirst is given by the bootloader
-	pgfirst = skip_bad(pgfirst);
-
-	if (pgfirst >= pglast)
-		runtime·pancake("oom?", pglast);
-
-	uint64 ret = pgfirst;
-	pgfirst += PGSIZE;
-
-	return ret;
-}
-
-#pragma textflag NOSPLIT
-void
-zero_phys(uint64 phys)
-{
-	phys = ROUNDDOWN(phys, PGSIZE);
-
-	uint64 *recva = CADDR(VREC, VREC, VREC, VREC);
-	if (recva[VTEMP] & PTE_P)
-		runtime·pancake("vtemp in use?", recva[VTEMP]);
-	recva[VTEMP] = phys | PTE_P | PTE_W;
-
-	uint64 *va = CADDR(VREC, VREC, VREC, VTEMP);
-
-	runtime·memclr((byte *)va, PGSIZE);
-
-	recva[VTEMP] = 0;
-	invlpg(va);
-}
-
-#pragma textflag NOSPLIT
-static uint64 *
-pgdir_walk1(uint64 *slot, uint64 van, int32 create)
-{
-	uint64 *ns = (uint64 *)SLOTNEXT((uint64)slot);
-	ns += PML4X(van);
-	if (PML4X(ns) != VREC)
-		return slot;
-
-	if (!(*slot & PTE_P)) {
-		if (!create)
-			return nil;
-		uint64 np = get_pg();
-		zero_phys(np);
-		*slot = np | PTE_P | PTE_W;
-	}
-
-	return pgdir_walk1(ns, SLOTNEXT(van), create);
-}
-
-#pragma textflag NOSPLIT
-uint64 *
-pgdir_walk(void *va, int32 create)
-{
-	uint64 v = ROUNDDOWN((uint64)va, PGSIZE);
-	if (ROUNDDOWN(v, PGSIZE) == 0 && create)
-		runtime·pancake("mapping page 0", v);
-
-	if (PML4X(v) == VREC)
-		runtime·pancake("va collides w/VREC", v);
-
-	uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
-	pml4 += PML4X(v);
-	return pgdir_walk1(pml4, SLOTNEXT(v), create);
-}
-
-#pragma textflag NOSPLIT
-void
-·alloc_map(void *va, int32 perms, int32 fempty)
-{
-	uint64 *pte = pgdir_walk(va, 1);
-	uint64 old = 0;
-	if (pte)
-		old = *pte;
-	if (old & PTE_P && fempty)
-		runtime·pancake("was not empty", (uint64)va);
-
-	// XXX goodbye, memory
-	uint64 np = get_pg();
-	zero_phys(np);
-	*pte = np | perms | PTE_P;
-	if (old & PTE_P)
-		invlpg(va);
-}
+uint64 * ·pgdir_walk(void *va, uint8 create);
+void ·alloc_map(void *va, uint64 perms, uint8 fempty);
 
 #pragma textflag NOSPLIT
 void *
@@ -719,11 +536,11 @@ find_empty(uint64 sz)
 	uint64 *pte;
 	// XXX sweet
 	while (1) {
-		pte = pgdir_walk(v, 0);
+		pte = ·pgdir_walk(v, 0);
 		if (!pte) {
 			int32 i, failed = 0;
 			for (i = 0; i < sz; i += PGSIZE) {
-				pte = pgdir_walk(v + i, 0);
+				pte = ·pgdir_walk(v + i, 0);
 				if (pte) {
 					failed = 1;
 					v = v + i;
@@ -746,10 +563,10 @@ prot_none(uint8 *v, uint64 sz)
 {
 	int32 i;
 	for (i = 0; i < sz; i += PGSIZE) {
-		uint64 *pte = pgdir_walk(v + i, 1);
+		uint64 *pte = ·pgdir_walk(v + i, 1);
 		if (pte != nil) {
 			*pte = *pte & ~PTE_P;
-			invlpg(v + i);
+			·invlpg(v + i);
 		}
 	}
 }
@@ -770,7 +587,7 @@ hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
 	USED(offset);
 	uint8 *v = va;
 
-	if (ROUNDUP(sz, PGSIZE)/PGSIZE > pglast - pgfirst) {
+	if (ROUNDUP(sz, PGSIZE)/PGSIZE > ·pglast - ·pgfirst) {
 		·spunlock(&maplock);
 		·Popcli(fl);
 		return (void *)-1;
@@ -837,13 +654,13 @@ hack_munmap(void *va, uint64 sz)
 	int32 i;
 	sz = ROUNDUP(sz, PGSIZE);
 	for (i = 0; i < sz; i+= PGSIZE) {
-		uint64 *pte = pgdir_walk(v + i, 0);
+		uint64 *pte = ·pgdir_walk(v + i, 0);
 		if (PML4X(v + i) >= VUMAX)
 			runtime·pancake("unmap too high", (uint64)(v + i));
 		// XXX goodbye, memory
 		if (pte && *pte & PTE_P) {
 			*pte = 0;
-			invlpg(v + i);
+			·invlpg(v + i);
 		}
 	}
 	pmsg("POOF\n");
@@ -857,13 +674,13 @@ hack_munmap(void *va, uint64 sz)
 void
 stack_dump(uint64 rsp)
 {
-	uint64 *pte = pgdir_walk((void *)rsp, 0);
+	uint64 *pte = ·pgdir_walk((void *)rsp, 0);
 	·_pmsg("STACK DUMP\n");
 	if (pte && *pte & PTE_P) {
 		int32 i, pc = 0;
 		uint64 *p = (uint64 *)rsp;
 		for (i = 0; i < 70; i++) {
-			pte = pgdir_walk(p, 0);
+			pte = ·pgdir_walk(p, 0);
 			if (pte && *pte & PTE_P) {
 				·_pnum(*p++);
 				if (((pc++ + 1) % 4) == 0)
@@ -898,55 +715,6 @@ hack_write(int64 fd, const void *buf, uint32 c)
 	·Popcli(fl);
 
 	return ret;
-}
-
-#pragma textflag NOSPLIT
-void
-pgtest1(uint64 v)
-{
-	uint64 *va = (uint64 *)v;
-	uint64 phys = get_pg();
-	zero_phys(phys);
-
-	uint64 *pte = pgdir_walk(va, 0);
-	if (pte && *pte & PTE_P) {
-		runtime·pancake("something mapped?", (uint64)pte);
-	}
-
-	pmsg("no mapping");
-	pte = pgdir_walk(va, 1);
-	*pte = phys | PTE_P | PTE_W;
-	int32 i;
-	for (i = 0; i < 512; i++)
-		if (va[i] != 0)
-			runtime·pancake("new page not zero?", va[i]);
-
-	pmsg("zeroed");
-	va[0] = 31337;
-	va[256] = 31337;
-	va[511] = 31337;
-
-	//*pte = phys | PTE_P;
-	//invlpg(va);
-	//va[0] = 31337;
-
-	//*pte = 0;
-	//invlpg(va);
-	//·pnum(va[0]);
-}
-
-#pragma textflag NOSPLIT
-void
-pgtest(void)
-{
-	uint64 va[] = {0xc001d00d000ULL, 0xfffffffffffff000ULL,
-	    0x1000ULL, 0x313371000ULL, 0x7f0000000000ULL,
-	    (uint64)CADDR(0, 0xc, 0, 0) };
-
-	int32 i;
-	for (i = 0; i < sizeof(va)/sizeof(va[0]); i++)
-		pgtest1(va[i]);
-	runtime·pancake("GUT GUT GUT", 0);
 }
 
 #pragma textflag NOSPLIT
@@ -1092,49 +860,9 @@ struct spinlock_t threadlock;
 struct spinlock_t futexlock;
 
 static uint64 _gimmealign;
-static uint64 fxinit[512/8];
+extern uint64 ·fxinit[512/8];
 
-#pragma textflag NOSPLIT
-void
-fpuinit(void)
-{
-	finit();
-
-	uint64 cr0 = rcr0();
-	uint64 cr4 = rcr4();
-
-	// for VEX prefixed instructions
-	//// set NE and MP
-	//cr0 |= 1 << 5;
-	//cr0 |= 1 << 1;
-	// TS to catch SSE
-	//cr0 |= 1 << 3;
-
-	//// set OSXSAVE
-	//cr4 |= 1 << 18;
-
-	// clear EM
-	cr0 &= ~(1 << 2);
-
-	// set OSFXSR
-	cr4 |= 1 << 9;
-	// set MP
-	cr0 |= 1 << 1;
-
-	lcr0(cr0);
-	lcr4(cr4);
-
-	uint64 n = (uint64)fxinit;
-	assert((n & 0xf) == 0, "fxinit not aligned", n);
-	static uint32 once;
-	if (runtime·cas(&once, 0, 1))
-		fxsave(fxinit);
-
-	int32 i;
-	for (i = 0; i < NTHREADS; i++)
-		if ((uint64)threads[i].fx & ((1 << 4) - 1))
-			assert(0, "fx not 16 byte aligned", i);
-}
+void ·fpuinit(int8);
 
 // newtrap is a function pointer to a user provided trap handler. alltraps
 // jumps to newtrap if it is non-zero.
@@ -1325,7 +1053,7 @@ thread_avail(void)
 static uint64 *
 pte_mapped(void *va)
 {
-	uint64 *pte = pgdir_walk(va, 0);
+	uint64 *pte = ·pgdir_walk(va, 0);
 	if (!pte || (*pte & PTE_P) == 0)
 		return nil;
 	return pte;
@@ -1438,7 +1166,7 @@ tlb_shootdown(void)
 		//uint64 end = tlbshoot_pg + tlbshoot_count * PGSIZE;
 		//·pnum(lap_id() << 56 | start);
 		//for (; start < end; start += PGSIZE)
-		//	invlpg((uint64 *)start);
+		//	·invlpg((uint64 *)start);
 	}
 
 	// decrement outstanding tlb shootdown count; if we change to a design
@@ -1708,7 +1436,7 @@ trap(uint64 *tf)
 		if (ct->user.tf) {
 			uint64 *ufx = (uint64 *)ct->user.fxbuf;
 			uint64 *utf = (uint64 *)ct->user.tf;
-			fxsave(ufx);
+			·fxsave(ufx);
 			runtime·memmove(utf, tf, TFSIZE);
 			// runtime/asm_amd64.s
 			void _userint(void);
@@ -1726,7 +1454,7 @@ trap(uint64 *tf)
 			ct->user.tf = 0;
 			ct->user.fxbuf = 0;
 		} else {
-			fxsave(ct->fx);
+			·fxsave(ct->fx);
 			runtime·memmove(ct->tf, tf, TFSIZE);
 		}
 		timetick(ct);
@@ -1890,7 +1618,7 @@ timer_setup(int32 calibrate)
 	uint64 la = 0xfee00000ULL;
 
 	// map lapic IO mem
-	uint64 *pte = pgdir_walk((void *)la, 1);
+	uint64 *pte = ·pgdir_walk((void *)la, 1);
 	*pte = (uint64)la | PTE_W | PTE_P | PTE_PCD;
 	lapaddr = la;
 #define LVERSION    (0x30/4)
@@ -2042,7 +1770,7 @@ proc_setup(void)
 	threads[0].pmap = kpmap;
 
 	uint64 la = 0xfee00000ULL;
-	uint64 *pte = pgdir_walk((void *)la, 0);
+	uint64 *pte = ·pgdir_walk((void *)la, 0);
 	if (pte && *pte & PTE_P)
 		runtime·pancake("lapic mem mapped?", (uint64)pte);
 
@@ -2067,6 +1795,10 @@ proc_setup(void)
 	//pmsg("sizeof thread_t:");
 	//·pnum(sizeof(struct thread_t));
 	//pmsg("\n");
+
+	for (i = 0; i < NTHREADS; i++)
+		if ((uint64)threads[i].fx & ((1 << 4) - 1))
+			assert(0, "fx not 16 byte aligned", i);
 }
 
 #pragma textflag NOSPLIT
@@ -2081,7 +1813,7 @@ void
 	timer_setup(0);
 	uint64 myrsp = ·tss_init(myid);
 	sysc_setup(myrsp);
-	fpuinit();
+	·fpuinit(0);
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
 
 	int64 test = ·Pushcli();
@@ -2127,8 +1859,8 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	uint64 chk = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
 
 	assert(flags == chk, "weird flags", flags);
-	assert(pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)(sp - 1));
-	assert(pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)(sp - 2));
+	assert(·pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)(sp - 1));
+	assert(·pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)(sp - 2));
 
 	int32 i = thread_avail();
 	sp--;
@@ -2151,7 +1883,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	mt->status = ST_RUNNABLE;
 	mt->pmap = kpmap;
 
-	runtime·memmove(mt->fx, fxinit, FXSIZE);
+	runtime·memmove(mt->fx, ·fxinit, FXSIZE);
 
 	·spunlock(&threadlock);
 	·sti();

@@ -1104,9 +1104,9 @@ stkcheck(Chain *up, int depth)
 	
 	// don't check my fancy recursive page mapping functions. maybe they
 	// should not be recursive...
-	if(strcmp(s->name, "pgdir_walk") == 0)
+	if(strcmp(s->name, "runtime.pgdir_walk") == 0)
 		return 0;
-	if(strcmp(s->name, "pgdir_walk1") == 0)
+	if(strcmp(s->name, "runtime.pgdir_walk1") == 0)
 		return 0;
 	// or serial console puts; it is not really infinitely recursive
 	if(strcmp(s->name, "runtime.sc_put") == 0)

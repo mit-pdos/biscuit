@@ -61,14 +61,20 @@ func Trapwake()
 
 func inb(int) int
 func htpause()
+func finit()
 func fs_null()
+func fxsave(*[fxwords]uintptr)
 func gs_null()
 func lgdt(pdesc_t)
 func lidt(pdesc_t)
 func cli()
 func sti()
-func ltr(int)
+func ltr(uint)
 func lap_id() int
+func rcr0() uintptr
+func rcr4() uintptr
+func lcr0(uintptr)
+func lcr4(uintptr)
 
 // os_linux.c
 var gcticks uint64
@@ -529,7 +535,7 @@ var Halt uint32
 
 // TEMPORARY CRAP
 func _pmsg(*int8)
-func alloc_map(uintptr, uint, int)
+func invlpg(uintptr)
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -569,7 +575,7 @@ func G_pmsg(msg string) {
 }
 
 //go:nosplit
-func _pnum(n uint) {
+func _pnum(n uintptr) {
 	putch(' ')
 	for i := 60; i >= 0; i -= 4 {
 		cn := (n >> uint(i)) & 0xf
@@ -582,7 +588,7 @@ func _pnum(n uint) {
 }
 
 //go:nosplit
-func pnum(n uint) {
+func pnum(n uintptr) {
 	fl := Pushcli()
 	splock(pmsglock)
 	_pnum(n)
@@ -591,7 +597,7 @@ func pnum(n uint) {
 }
 
 //go:nosplit
-func pancake(msg *int8, addr uint) {
+func pancake(msg *int8, addr uintptr) {
 	cli()
 	atomicstore(&Halt, 1)
 	_pmsg(msg)
@@ -603,7 +609,7 @@ func pancake(msg *int8, addr uint) {
 	}
 }
 //go:nosplit
-func G_pancake(msg string, addr uint) {
+func G_pancake(msg string, addr uintptr) {
 	cli()
 	atomicstore(&Halt, 1)
 	G_pmsg(msg)
@@ -617,8 +623,8 @@ func G_pancake(msg string, addr uint) {
 
 
 //go:nosplit
-func chkalign(_p unsafe.Pointer, n uint) {
-	p := uint(uintptr(_p))
+func chkalign(_p unsafe.Pointer, n uintptr) {
+	p := uintptr(_p)
 	if p & (n - 1) != 0 {
 		G_pancake("not aligned", p)
 	}
@@ -627,7 +633,7 @@ func chkalign(_p unsafe.Pointer, n uint) {
 //go:nosplit
 func chksize(n uintptr, exp uintptr) {
 	if n != exp {
-		G_pancake("size mismatch", uint(n))
+		G_pancake("size mismatch", n)
 	}
 }
 
@@ -718,7 +724,7 @@ var _segs = [7 + 2*MAXCPUS]seg64_t{
 var _tss [MAXCPUS]tss_t
 
 //go:nosplit
-func tss_set(id int, rsp, nmi uintptr) *tss_t {
+func tss_set(id uint, rsp, nmi uintptr) *tss_t {
 	sz := unsafe.Sizeof(_tss[id])
 	if sz != 104 + 8 {
 		panic("bad tss_t")
@@ -742,12 +748,12 @@ func tss_set(id int, rsp, nmi uintptr) *tss_t {
 
 // maps cpu number to the per-cpu TSS segment descriptor in the GDT
 //go:nosplit
-func segnum(cpunum int) int {
+func segnum(cpunum uint) uint {
 	return 7 + 2*cpunum
 }
 
 //go:nosplit
-func tss_seginit(cpunum int, _tssaddr *tss_t, lim uintptr) {
+func tss_seginit(cpunum uint, _tssaddr *tss_t, lim uintptr) {
 	seg := &_segs[segnum(cpunum)]
 	seg.rest = P | TSS | G
 
@@ -765,13 +771,13 @@ func tss_seginit(cpunum int, _tssaddr *tss_t, lim uintptr) {
 }
 
 //go:nosplit
-func tss_init(cpunum int) uintptr {
-	intstk := uintptr(0xa100001000 + cpunum*4*PGSIZE)
-	nmistk := uintptr(0xa100003000 + cpunum*4*PGSIZE)
+func tss_init(cpunum uint) uintptr {
+	intstk := 0xa100001000 + uintptr(cpunum)*4*PGSIZE
+	nmistk := 0xa100003000 + uintptr(cpunum)*4*PGSIZE
 	// BSP maps AP's stack for them
 	if cpunum == 0 {
-		alloc_map(intstk - 1, PTE_W, 1)
-		alloc_map(nmistk - 1, PTE_W, 1)
+		alloc_map(intstk - 1, PTE_W, true)
+		alloc_map(nmistk - 1, PTE_W, true)
 	}
 	rsp := intstk
 	rspnmi := nmistk
@@ -794,10 +800,10 @@ func pdsetup(pd *pdesc_t, _addr unsafe.Pointer, lim uintptr) {
 }
 
 //go:nosplit
-func dur(_p unsafe.Pointer, sz uintptr) {
+func hexdump(_p unsafe.Pointer, sz uintptr) {
 	for i := uintptr(0); i < sz; i++ {
 		p := (*uint8)(unsafe.Pointer(uintptr(_p) + i))
-		_pnum(uint(*p))
+		_pnum(uintptr(*p))
 	}
 }
 
@@ -809,7 +815,7 @@ func seg_setup() {
 	lgdt(p)
 
 	// now that we have a GDT, setup tls for the first thread.
-	// elf tls defines user tls at -16(%fs)
+	// elf tls specification defines user tls at -16(%fs)
 	t := uintptr(unsafe.Pointer(&tls0[0]))
 	tlsaddr := int(t + 16)
 	// we must set fs/gs at least once before we use the MSRs to change
@@ -960,9 +966,230 @@ func int_setup() {
 }
 
 const (
-	PGSIZE	= 1 << 12
-	PTE_P	= 1 << 0
-	PTE_W	= 1 << 1
-	PTE_U	= 1 << 2
-	PTE_PCD	= 1 << 4
+	PTE_P		uintptr = 1 << 0
+	PTE_W		uintptr = 1 << 1
+	PTE_U		uintptr = 1 << 2
+	PTE_PCD		uintptr = 1 << 4
+	PGSIZE		uintptr = 1 << 12
+	PGOFFMASK	uintptr = PGSIZE - 1
+	PGMASK		uintptr = ^PGOFFMASK
+
+	// special pml4 slots, agreed upon with the bootloader (which creates
+	// our pmap).
+	// recursive mapping
+	VREC		uintptr = 0x42
+	// available mapping
+	VTEMP		uintptr = 0x43
 )
+
+//go:nosplit
+func pml4x(va uintptr) uintptr {
+	return (va >> 39) & 0x1ff
+}
+
+//go:nosplit
+func slotnext(va uintptr) uintptr {
+	return ((va << 9) & ((1 << 48) - 1))
+}
+
+//go:nosplit
+func pgroundup(va uintptr) uintptr {
+	return (va + PGSIZE - 1) & PGMASK
+}
+
+//go:nosplit
+func pgrounddown(va uintptr) uintptr {
+	return va & PGMASK
+}
+
+//go:nosplit
+func caddr(l4 uintptr, ppd uintptr, pd uintptr, pt uintptr,
+    off uintptr) uintptr {
+	ret := l4 << 39 | ppd << 30 | pd << 21 | pt << 12
+	ret += off*8
+	return uintptr(ret)
+}
+
+// XXX XXX XXX get rid of create
+//go:nosplit
+func pgdir_walk(_va uintptr, create bool) *uintptr {
+	v := pgrounddown(_va)
+	if v == 0 && create {
+		G_pancake("map zero pg", _va)
+	}
+	slot0 := pml4x(v)
+	if slot0 == VREC {
+		G_pancake("map in VREC", _va)
+	}
+	pml4 := caddr(VREC, VREC, VREC, VREC, slot0)
+	return pgdir_walk1(pml4, slotnext(v), create)
+}
+
+//go:nosplit
+func pgdir_walk1(slot, van uintptr, create bool) *uintptr {
+	ns := slotnext(slot)
+	ns += pml4x(van)*8
+	if pml4x(ns) != VREC {
+		return (*uintptr)(unsafe.Pointer(slot))
+	}
+	sp := (*uintptr)(unsafe.Pointer(slot))
+	if *sp & PTE_P == 0 {
+		if !create{
+			return nil
+		}
+		p_pg := get_pg()
+		zero_phys(p_pg)
+		*sp = p_pg | PTE_P | PTE_W
+	}
+	return pgdir_walk1(ns, slotnext(van), create)
+}
+
+//go:nosplit
+func zero_phys(_phys uintptr) {
+	rec := caddr(VREC, VREC, VREC, VREC, VTEMP)
+	pml4 := (*uintptr)(unsafe.Pointer(rec))
+	if *pml4 & PTE_P != 0 {
+		G_pancake("vtemp in use", *pml4)
+	}
+	phys := pgrounddown(_phys)
+	*pml4 = phys | PTE_P | PTE_W
+	_tva := caddr(VREC, VREC, VREC, VTEMP, 0)
+	tva := unsafe.Pointer(_tva)
+	memclr(tva, PGSIZE)
+	*pml4 = 0
+	invlpg(_tva)
+}
+
+// this physical allocation code is temporary. biscuit probably shouldn't
+// bother resizing its heap, ever. instead of providing a fake mmap to the
+// runtime, the runtime should simply mmap its entire heap during
+// initialization according to the amount of available memory.
+//
+// XXX when you write the new code, check and see if we can use ACPI to find
+// available memory instead of e820. since e820 is only usable in realmode, we
+// have to have e820 code in the bootloader. it would be better to have such
+// memory management code in the kernel and not the bootloader.
+
+type e820_t struct {
+	start	uintptr
+	len	uintptr
+}
+
+// "secret structure". created by bootloader for passing info to the kernel.
+type secret_t struct {
+	e820p	uintptr
+	pmap	uintptr
+	freepg	uintptr
+}
+
+// regions of memory not included in the e820 map, into which we cannot
+// allocate
+type badregion_t struct {
+	start	uintptr
+	end	uintptr
+}
+
+var badregs = []badregion_t{
+	// VGA
+	{0xa0000, 0x100000},
+	// secret storage
+	{0x7000, 0x8000},
+}
+
+//go:nosplit
+func skip_bad(cur uintptr) uintptr {
+	for _, br := range badregs {
+		if cur >= br.start && cur < br.end {
+			return br.end
+		}
+	}
+	return cur
+}
+
+var pgfirst uintptr
+var pglast uintptr
+
+//go:nosplit
+func phys_init() {
+	sec := (*secret_t)(unsafe.Pointer(uintptr(0x7c00)))
+	found := false
+	base := sec.e820p
+	// bootloader provides 15 e820 entries at most (it panicks if the PC
+	// provides more).
+	for i := uintptr(0); i < 15; i++ {
+		ep := (*e820_t)(unsafe.Pointer(base + i*28))
+		if ep.len == 0 {
+			continue
+		}
+		endpg := ep.start + ep.len
+		if pgfirst >= ep.start && pgfirst < endpg {
+			pglast = endpg
+			found = true
+			break
+		}
+	}
+	if !found {
+		G_pancake("e820 problems", pgfirst)
+	}
+	if pgfirst & PGOFFMASK != 0 {
+		G_pancake("pgfist not aligned", pgfirst)
+	}
+}
+
+//go:nosplit
+func get_pg() uintptr {
+	if pglast == 0 {
+		phys_init()
+	}
+	pgfirst = skip_bad(pgfirst)
+	if pgfirst >= pglast {
+		G_pancake("oom", pglast)
+	}
+	ret := pgfirst
+	pgfirst += PGSIZE
+	return ret
+}
+
+//go:nosplit
+func alloc_map(va uintptr, perms uintptr, fempty bool) {
+	pte := pgdir_walk(va, true)
+	old := *pte
+	if old & PTE_P != 0 && fempty {
+		G_pancake("expected empty pte", old)
+	}
+	p_pg := get_pg()
+	zero_phys(p_pg)
+	// XXX goodbye, memory
+	*pte = p_pg | perms | PTE_P
+	if old & PTE_P != 0 {
+		invlpg(va)
+	}
+}
+
+const fxwords = 512/8
+var fxinit [fxwords]uintptr
+
+//go:nosplit
+func fpuinit(amfirst bool) {
+	finit()
+	cr0 := rcr0()
+	// clear EM
+	cr0 &^= (1 << 2)
+	// set MP
+	cr0 |= 1 << 1
+	lcr0(cr0);
+
+	cr4 := rcr4()
+	// set OSFXSR
+	cr4 |= 1 << 9
+	lcr4(cr4);
+
+	if amfirst {
+		chkalign(unsafe.Pointer(&fxinit[0]), 16)
+		fxsave(&fxinit)
+
+		// XXX XXX XXX XXX XXX XXX XXX dont forget to do this once
+		// thread code is converted to go
+		G_pmsg("VERIFY FX FOR THREADS\n")
+	}
+}

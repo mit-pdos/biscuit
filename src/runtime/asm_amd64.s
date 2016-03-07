@@ -131,14 +131,6 @@ TEXT fixcs(SB),NOSPLIT,$0
 	BYTE	$0x48
 	BYTE	$0xcb
 	MOVQ	$1, 0
-	//POPQ	DX
-	//MOVQ	$(3 << 3), AX
-	//SHLQ	$32, AX
-	//ORQ	DX, AX
-	//PUSHQ	AX
-	//// lret
-	//BYTE	$0xcb
-	//MOVQ	$1, 0
 
 TEXT runtime·deray(SB),NOSPLIT,$8
 	MOVQ	times+0(FP), CX
@@ -170,7 +162,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 
 	// save page table and first free address from bootloader.
 	MOVL	DI, kpmap(SB)
-	MOVL	SI, pgfirst(SB)
+	MOVL	SI, ·pgfirst(SB)
 	MOVQ	$1, runtime·hackmode(SB)
 
 	ANDQ	$~15, SP
@@ -231,7 +223,9 @@ h_needtls:
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
 	CALL	fixcs(SB)
-	CALL	fpuinit(SB)
+	PUSHQ	$1
+	CALL	·fpuinit(SB)
+	POPQ	AX
 
 	// store through it, to make sure it works
 	get_tls(BX)
@@ -312,11 +306,11 @@ TEXT runtime·Cpuid(SB), NOSPLIT, $0-24
 	MOVL	DX, ret+20(FP)
 	RET
 
-TEXT finit(SB), NOSPLIT, $0-0
+TEXT ·finit(SB), NOSPLIT, $0-0
 	FINIT
 	RET
 
-TEXT rcr0(SB), NOSPLIT, $0-8
+TEXT ·rcr0(SB), NOSPLIT, $0-8
 	MOVQ	CR0, AX
 	MOVQ	AX, ret+0(FP)
 	RET
@@ -326,13 +320,13 @@ TEXT rcr2(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
-TEXT rcr4(SB), NOSPLIT, $0-8
+TEXT ·rcr4(SB), NOSPLIT, $0-8
 	MOVQ	CR4, AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
 TEXT ·Rcr4(SB), NOSPLIT, $0-0
-	JMP	rcr4(SB)
+	JMP	·rcr4(SB)
 
 TEXT tlbflush(SB), NOSPLIT, $0-0
 	MOVQ	CR3, AX
@@ -354,7 +348,7 @@ TEXT runtime·Invlpg(SB), $0-8
 	INVLPG	(AX)
 	RET
 
-TEXT invlpg(SB), NOSPLIT, $0-8
+TEXT ·invlpg(SB), NOSPLIT, $0-8
 	MOVQ	va+0(FP), AX
 	INVLPG	(AX)
 	RET
@@ -388,12 +382,12 @@ TEXT ·ltr(SB), NOSPLIT, $0-8
 	BYTE $0xd8
 	RET
 
-TEXT lcr0(SB), NOSPLIT, $0-8
+TEXT ·lcr0(SB), NOSPLIT, $0-8
 	MOVQ	val+0(FP), AX
 	MOVQ	AX, CR0
 	RET
 
-TEXT lcr4(SB), NOSPLIT, $0-8
+TEXT ·lcr4(SB), NOSPLIT, $0-8
 	MOVQ	val+0(FP), AX
 	MOVQ	AX, CR4
 	RET
@@ -560,7 +554,7 @@ TEXT ·htpause(SB), NOSPLIT, $0-0
 	PAUSE
 	RET
 
-TEXT fxsave(SB), NOSPLIT, $0-8
+TEXT ·fxsave(SB), NOSPLIT, $0-8
 	MOVQ	dst+0(FP), AX
 	// fxsave	(%rax)
 	BYTE	$0x0f
