@@ -78,7 +78,6 @@ func lcr4(uintptr)
 
 // os_linux.c
 var gcticks uint64
-var No_pml4 int
 
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
@@ -976,6 +975,8 @@ const (
 
 	// special pml4 slots, agreed upon with the bootloader (which creates
 	// our pmap).
+	// highest runtime heap mapping
+	VUEND		uintptr = 0x42
 	// recursive mapping
 	VREC		uintptr = 0x42
 	// available mapping
@@ -1192,4 +1193,115 @@ func fpuinit(amfirst bool) {
 		// thread code is converted to go
 		G_pmsg("VERIFY FX FOR THREADS\n")
 	}
+}
+
+//go:nosplit
+func find_empty(sz uintptr) uintptr {
+	v := caddr(0, 0, 0, 1, 0)
+	for {
+		pte := pgdir_walk(v, false)
+		if pte == nil || *pte & PTE_P == 0 {
+			failed := false
+			for i := uintptr(0); i < sz; i += PGSIZE {
+				pte = pgdir_walk(v + i, false)
+				if pte != nil && *pte & PTE_P != 0 {
+					failed = true
+					v += i
+					break
+				}
+			}
+			if !failed {
+				return v
+			}
+		}
+		v += PGSIZE
+	}
+}
+
+//go:nosplit
+func prot_none(v, sz uintptr) {
+	for i := uintptr(0); i < sz; i += PGSIZE {
+		pte := pgdir_walk(v + i, true)
+		if pte != nil {
+			*pte = *pte & ^PTE_P
+			invlpg(v + i)
+		}
+	}
+}
+
+var maplock = &spinlock_t{}
+
+// this flag makes hack_mmap panic if a new pml4 entry is ever added to the
+// kernel's pmap. we want to make sure all kernel mappings added after bootup
+// fall into the same pml4 entry so that all the kernel mappings can be easily
+// shared in user process pmaps.
+var No_pml4 int
+
+//go:nosplit
+func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
+    fd int32, offset int32) uintptr {
+	fl := Pushcli()
+	splock(maplock)
+
+	MAP_ANON := uintptr(0x20)
+	MAP_PRIVATE := uintptr(0x2)
+	PROT_NONE := uintptr(0x0)
+	PROT_WRITE := uintptr(0x2)
+
+	prot := uintptr(_prot)
+	flags := uintptr(_flags)
+	var vaend uintptr
+	var perms uintptr
+	var ret uintptr
+	var t uintptr
+	pgleft := pglast - pgfirst
+	sz := pgroundup(_sz)
+	if sz > pgleft {
+		ret = ^uintptr(0)
+		goto out
+	}
+	sz = pgroundup(va + _sz)
+	sz -= pgrounddown(va)
+	if va == 0 {
+		va = find_empty(sz)
+	}
+	vaend = caddr(VUEND, 0, 0, 0, 0)
+	if va >= vaend || va + sz >= vaend {
+		G_pancake("va space exhausted", va)
+	}
+
+	t = MAP_ANON | MAP_PRIVATE
+	if flags & t != t {
+		G_pancake("unexpected flags", flags)
+	}
+	perms = PTE_P
+	if prot == PROT_NONE {
+		prot_none(va, sz)
+		ret = va
+		goto out
+	}
+
+	if prot & PROT_WRITE != 0 {
+		perms |= PTE_W
+	}
+
+	if No_pml4 != 0 {
+		eidx := pml4x(va + sz - 1)
+		for sidx := pml4x(va); sidx <= eidx; sidx++ {
+			pml4 := caddr(VREC, VREC, VREC, VREC, sidx)
+			pml4e := (*uintptr)(unsafe.Pointer(pml4))
+			if *pml4e & PTE_P == 0 {
+				G_pancake("new pml4 entry to kernel pmap", va)
+			}
+		}
+	}
+
+	for i := uintptr(0); i < sz; i += PGSIZE {
+		alloc_map(va + i, perms, true)
+	}
+	ret = va
+out:
+	spunlock(maplock)
+	Popcli(fl)
+	return ret
 }

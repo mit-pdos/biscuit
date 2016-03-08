@@ -310,7 +310,8 @@ TEXT runtime·mmap(SB),NOSPLIT,$0
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	mmap_skip
-	JMP	hack_mmap(SB)
+	JMP	·hack_mmap(SB)
+	//JMP	hack_mmap(SB)
 mmap_skip:
 	MOVQ	addr+0(FP), DI
 	MOVQ	n+8(FP), SI

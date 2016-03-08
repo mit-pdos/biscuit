@@ -520,134 +520,16 @@ exam(uint64 cr0)
 
 #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
 
-// given to us by bootloader
-extern uint64 ·pgfirst;
-// determined by e820 map
-extern uint64 ·pglast;
-
 uint64 * ·pgdir_walk(void *va, uint8 create);
-void ·alloc_map(void *va, uint64 perms, uint8 fempty);
 
-#pragma textflag NOSPLIT
-void *
-find_empty(uint64 sz)
-{
-	uint8 *v = (uint8 *)CADDR(0, 0, 0, 1);
-	uint64 *pte;
-	// XXX sweet
-	while (1) {
-		pte = ·pgdir_walk(v, 0);
-		if (!pte) {
-			int32 i, failed = 0;
-			for (i = 0; i < sz; i += PGSIZE) {
-				pte = ·pgdir_walk(v + i, 0);
-				if (pte) {
-					failed = 1;
-					v = v + i;
-					break;
-				}
-			}
-
-			if (!failed)
-				return v;
-		}
-		v += PGSIZE;
-	}
-}
-
-struct spinlock_t maplock;
-
-#pragma textflag NOSPLIT
-void
-prot_none(uint8 *v, uint64 sz)
-{
-	int32 i;
-	for (i = 0; i < sz; i += PGSIZE) {
-		uint64 *pte = ·pgdir_walk(v + i, 1);
-		if (pte != nil) {
-			*pte = *pte & ~PTE_P;
-			·invlpg(v + i);
-		}
-	}
-}
-
-int64 runtime·No_pml4;
-
-// XXX: all go mappings should be fall into the same pml4 slot; that way user
-// threads can share kernel page tables (since each user process has its own
-// pml4 page).
-#pragma textflag NOSPLIT
-void*
-hack_mmap(void *va, uint64 sz, int32 prot, int32 flags, int32 fd, uint32 offset)
-{
-	uint64 fl = ·Pushcli();
-	·splock(&maplock);
-
-	USED(fd);
-	USED(offset);
-	uint8 *v = va;
-
-	if (ROUNDUP(sz, PGSIZE)/PGSIZE > ·pglast - ·pgfirst) {
-		·spunlock(&maplock);
-		·Popcli(fl);
-		return (void *)-1;
-	}
-
-	sz = ROUNDUP((uint64)v+sz, PGSIZE);
-	sz -= ROUNDDOWN((uint64)v, PGSIZE);
-	if (v == nil)
-		v = find_empty(sz);
-
-	if ((uint64)v >= (uint64)CADDR(VUMAX, 0, 0, 0))
-		runtime·pancake("high addr?", (uint64)v);
-	if ((uint64)v + sz >= (uint64)CADDR(VUMAX, 0, 0, 0))
-		runtime·pancake("high addr2?", (uint64)v + sz);
-
-	//pmsg("map\n");
-	//·pnum((uint64)v);
-	//·pnum(sz);
-	//pmsg("\n");
-
-	if (!(flags & MAP_ANON))
-		runtime·pancake("not anon?", flags);
-	if (!(flags & MAP_PRIVATE))
-		runtime·pancake("not private?", flags);
-
-	int32 perms = PTE_P;
-	if (prot == PROT_NONE) {
-		prot_none(v, sz);
-		·spunlock(&maplock);
-		·Popcli(fl);
-		return v;
-	}
-
-	if (prot & PROT_WRITE)
-		perms |= PTE_W;
-
-	if (runtime·No_pml4) {
-		uint64 *pml4 = CADDR(VREC, VREC, VREC, VREC);
-		int32 sidx = 0x1ff & ((uint64)v >> 39);
-		int32 eidx = 0x1ff & (((uint64)v + sz - 1) >> 39);
-		for (; sidx <= eidx; sidx++)
-			if ((pml4[sidx] & PTE_P) == 0)
-				runtime·pancake("adding new pml4 entry", 0);
-	}
-
-	int32 i;
-	for (i = 0; i < sz ; i += PGSIZE)
-		·alloc_map(v + i, perms, 1);
-
-	·spunlock(&maplock);
-	·Popcli(fl);
-	return v;
-}
+extern struct spinlock_t *·maplock;
 
 #pragma textflag NOSPLIT
 int32
 hack_munmap(void *va, uint64 sz)
 {
 	uint64 fl = ·Pushcli();
-	·splock(&maplock);
+	·splock(·maplock);
 
 	// XXX TLB shootdowns?
 	uint8 *v = (uint8 *)va;
@@ -665,7 +547,7 @@ hack_munmap(void *va, uint64 sz)
 	}
 	pmsg("POOF\n");
 
-	·spunlock(&maplock);
+	·spunlock(·maplock);
 	·Popcli(fl);
 	return 0;
 }
@@ -715,27 +597,6 @@ hack_write(int64 fd, const void *buf, uint32 c)
 	·Popcli(fl);
 
 	return ret;
-}
-
-#pragma textflag NOSPLIT
-void
-mmap_test(void)
-{
-	pmsg("mmap TEST");
-
-	uint64 *va = (uint64 *)0xc001d00d000ULL;
-
-	uint64 *ret = hack_mmap(va, 100*PGSIZE, PROT_READ|PROT_WRITE,
-	    MAP_ANON | MAP_PRIVATE, -1, 0);
-
-	if (ret != va)
-		runtime·pancake("mmap failed?", (uint64)ret);
-
-	int32 i;
-	for (i = 0; i < 100*PGSIZE/sizeof(uint64); i++)
-		ret[i] = 0;
-
-	pmsg("mmap passed");
 }
 
 #define TRAP_NMI	2
