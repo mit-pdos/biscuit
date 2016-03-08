@@ -46,8 +46,6 @@ func Rrsp() int
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
 func Sti()
-func Tlbadmit(int, int, int, int) uint
-func Tlbwait(uint)
 func Vtop(*[512]int) int
 
 func Crash()
@@ -90,7 +88,7 @@ var gcticks uint64
 
 type cpu_t struct {
 	this		uint
-	mythread	uint
+	mythread	*thread_t
 	rsp		uintptr
 	num		uint
 	pmap		*[512]int
@@ -130,7 +128,7 @@ type thread_t struct {
 	sleepfor	int
 	sleepret	int
 	futaddr		int
-	pmap		int
+	p_pmap		uintptr
 	//_pad		int
 }
 
@@ -175,11 +173,11 @@ func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
 	// while other cpus execute user programs.
 	entersyscall()
 	fl := Pushcli()
-	ct := (*thread_t)(unsafe.Pointer(uintptr(Gscpu().mythread)))
+	cpu := Gscpu()
+	ct := cpu.mythread
 
 	// set shadow pointers for user pmap so it isn't free'd out from under
 	// us if the process terminates soon
-	cpu := Gscpu()
 	cpu.pmap = pmap
 	cpu.pms = pms
 	//cpu.pid = uintptr(pid)
@@ -535,6 +533,9 @@ var Halt uint32
 // TEMPORARY CRAP
 func _pmsg(*int8)
 func invlpg(uintptr)
+func lap_eoi()
+func sched_run(*thread_t)
+func sched_halt()
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -562,15 +563,24 @@ func spunlock(l *spinlock_t) {
 // conditions), interrupts must be cleared before attempting to take this lock.
 var pmsglock = &spinlock_t{}
 
-// msg must be utf-8 string
 //go:nosplit
-func G_pmsg(msg string) {
+func _G_pmsg(msg string) {
 	putch(' ');
 	// can't use range since it results in calls stringiter2 which has the
 	// stack splitting proglogue
 	for i := 0; i < len(msg); i++ {
 		putch(int8(msg[i]))
 	}
+}
+
+// msg must be utf-8 string
+//go:nosplit
+func G_pmsg(msg string) {
+	fl := Pushcli()
+	splock(pmsglock)
+	_G_pmsg(msg)
+	spunlock(pmsglock)
+	Popcli(fl)
 }
 
 //go:nosplit
@@ -595,13 +605,15 @@ func pnum(n uintptr) {
 	Popcli(fl)
 }
 
+func pmsg(msg *int8)
+
 //go:nosplit
 func pancake(msg *int8, addr uintptr) {
 	cli()
 	atomicstore(&Halt, 1)
 	_pmsg(msg)
 	_pnum(addr)
-	G_pmsg("PANCAKE")
+	_G_pmsg("PANCAKE")
 	for {
 		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
 		*p = 0x1400 | 'F'
@@ -611,9 +623,9 @@ func pancake(msg *int8, addr uintptr) {
 func G_pancake(msg string, addr uintptr) {
 	cli()
 	atomicstore(&Halt, 1)
-	G_pmsg(msg)
+	_G_pmsg(msg)
 	_pnum(addr)
-	G_pmsg("PANCAKE")
+	_G_pmsg("PANCAKE")
 	for {
 		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
 		*p = 0x1400 | 'F'
@@ -1198,13 +1210,15 @@ func fpuinit(amfirst bool) {
 //go:nosplit
 func find_empty(sz uintptr) uintptr {
 	v := caddr(0, 0, 0, 1, 0)
+	cantuse := uintptr(0xf0)
 	for {
 		pte := pgdir_walk(v, false)
-		if pte == nil || *pte & PTE_P == 0 {
+		if pte == nil || (*pte != cantuse && *pte & PTE_P == 0) {
 			failed := false
 			for i := uintptr(0); i < sz; i += PGSIZE {
 				pte = pgdir_walk(v + i, false)
-				if pte != nil && *pte & PTE_P != 0 {
+				if pte != nil &&
+				    (*pte & PTE_P != 0 || *pte == cantuse) {
 					failed = true
 					v += i
 					break
@@ -1235,7 +1249,11 @@ var maplock = &spinlock_t{}
 // kernel's pmap. we want to make sure all kernel mappings added after bootup
 // fall into the same pml4 entry so that all the kernel mappings can be easily
 // shared in user process pmaps.
-var No_pml4 int
+var _nopml4 bool
+
+func Pml4freeze() {
+	_nopml4 = true
+}
 
 //go:nosplit
 func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
@@ -1285,7 +1303,7 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 		perms |= PTE_W
 	}
 
-	if No_pml4 != 0 {
+	if _nopml4 {
 		eidx := pml4x(va + sz - 1)
 		for sidx := pml4x(va); sidx <= eidx; sidx++ {
 			pml4 := caddr(VREC, VREC, VREC, VREC, sidx)
@@ -1305,3 +1323,113 @@ out:
 	Popcli(fl)
 	return ret
 }
+
+//go:nosplit
+func hack_munmap(v, _sz uintptr) {
+	fl := Pushcli()
+	splock(maplock)
+	sz := pgroundup(_sz)
+	cantuse := uintptr(0xf0)
+	for i := uintptr(0); i < sz; i += PGSIZE {
+		va := v + i
+		pte := pgdir_walk(va, false)
+		if pml4x(va) >= VUEND {
+			G_pancake("high unmap", va)
+		}
+		// XXX goodbye, memory
+		if pte != nil && *pte & PTE_P != 0 {
+			// make sure these pages aren't remapped via
+			// hack_munmap
+			*pte = cantuse
+			invlpg(va)
+		}
+	}
+	G_pmsg("POOF\n")
+	spunlock(maplock)
+	Popcli(fl)
+}
+
+var tlbshoot_wait uintptr
+var tlbshoot_pg uintptr
+var tlbshoot_count uintptr
+var tlbshoot_pmap uintptr
+var tlbshoot_gen uint64
+
+func Tlbadmit(p_pmap, cpuwait, pg, pgcount uintptr) uint64 {
+	for !casuintptr(&tlbshoot_wait, 0, cpuwait) {
+		preemptok()
+	}
+	xchguintptr(&tlbshoot_pg, pg)
+	xchguintptr(&tlbshoot_count, pgcount)
+	xchguintptr(&tlbshoot_pmap, p_pmap)
+	xadd64(&tlbshoot_gen, 1)
+	return tlbshoot_gen
+}
+
+func Tlbwait(gen uint64) {
+	for atomicloaduintptr(&tlbshoot_wait) != 0 {
+		if atomicload64(&tlbshoot_gen) != gen {
+			break
+		}
+	}
+}
+
+// must be nosplit since called at interrupt time
+//go:nosplit
+func tlb_shootdown() {
+	lap_eoi()
+	ct := Gscpu().mythread
+	if ct != nil && ct.p_pmap == tlbshoot_pmap {
+		// the TLB was already invalidated since trap() currently
+		// switches to kernel pmap on any exception/interrupt other
+		// than NMI.
+		//start := tlbshoot_pg
+		//end := tlbshoot_pg + tlbshoot_count * PGSIZE
+		//for ; start < end; start += PGSIZE {
+		//	invlpg(start)
+		//}
+	}
+	dur := (*uint64)(unsafe.Pointer(&tlbshoot_wait))
+	v := xadd64(dur, -1)
+	if v < 0 {
+		G_pancake("shootwait < 0", uintptr(v))
+	}
+	if ct != nil {
+		sched_run(ct)
+	} else {
+		sched_halt()
+	}
+}
+
+// this function checks to see if another thread is trying to preempt this
+// thread (perhaps to start a GC). this is called when go code is spinning on a
+// spinlock in order to avoid a deadlock where the thread that acquired the
+// spinlock starts a GC and waits forever for the spinning thread. (go code
+// should probably not use spinlocks. tlb shootdown code is the only code
+// protected by a spinlock since the lock must be acquired in interrupt
+// context.)
+//
+// alternatively, we could make sure that no allocations are made while the
+// spinlock is acquired.
+func preemptok() {
+	gp := getg()
+	StackPreempt := uintptr(0xfffffffffffffade)
+	if gp.stackguard0 == StackPreempt {
+		G_pmsg("!")
+		// call function with stack splitting prologue
+		_dummy()
+	}
+}
+
+var _notdeadcode uint32
+func _dummy() {
+	if _notdeadcode != 0 {
+		_dummy()
+	}
+	_notdeadcode = 0
+}
+
+const (
+	TRAP_TIMER	= 32
+	TRAP_YIELD	= 49
+)

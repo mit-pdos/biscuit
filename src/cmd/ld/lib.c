@@ -1108,6 +1108,8 @@ stkcheck(Chain *up, int depth)
 		return 0;
 	if(strcmp(s->name, "runtime.pgdir_walk1") == 0)
 		return 0;
+	if(strcmp(s->name, "runtime._dummy") == 0)
+		return 0;
 	// or serial console puts; it is not really infinitely recursive
 	if(strcmp(s->name, "runtime.sc_put") == 0)
 		return 0;

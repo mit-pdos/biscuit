@@ -404,7 +404,7 @@ void ·splock(struct spinlock_t *);
 void ·spunlock(struct spinlock_t *);
 
 // this file
-void lap_eoi(void);
+void ·lap_eoi(void);
 void runtime·deray(uint64);
 
 void runtime·stackcheck(void);
@@ -452,13 +452,6 @@ bw(uint8 *d, uint64 data, uint64 off)
 #define MAXCPUS 32
 
 #define	CODE_SEG        1
-
-#pragma textflag NOSPLIT
-void
-wemadeit(void)
-{
-	runtime·pancake(" We made it! ", 0xc001d00dc001d00dULL);
-}
 
 // physical address of current pmap, given to us by bootloader
 uint64 kpmap;
@@ -521,36 +514,6 @@ exam(uint64 cr0)
 #define CADDR(m, p, d, t) ((uint64 *)(m << 39 | p << 30 | d << 21 | t << 12))
 
 uint64 * ·pgdir_walk(void *va, uint8 create);
-
-extern struct spinlock_t *·maplock;
-
-#pragma textflag NOSPLIT
-int32
-hack_munmap(void *va, uint64 sz)
-{
-	uint64 fl = ·Pushcli();
-	·splock(·maplock);
-
-	// XXX TLB shootdowns?
-	uint8 *v = (uint8 *)va;
-	int32 i;
-	sz = ROUNDUP(sz, PGSIZE);
-	for (i = 0; i < sz; i+= PGSIZE) {
-		uint64 *pte = ·pgdir_walk(v + i, 0);
-		if (PML4X(v + i) >= VUMAX)
-			runtime·pancake("unmap too high", (uint64)(v + i));
-		// XXX goodbye, memory
-		if (pte && *pte & PTE_P) {
-			*pte = 0;
-			·invlpg(v + i);
-		}
-	}
-	pmsg("POOF\n");
-
-	·spunlock(·maplock);
-	·Popcli(fl);
-	return 0;
-}
 
 #pragma textflag NOSPLIT
 void
@@ -686,7 +649,7 @@ struct thread_t {
 	uint64 sleepret;
 #define ETIMEDOUT   110
 	uint64 futaddr;
-	uint64 pmap;
+	uint64 p_pmap;
 	//uint64 _pad2;
 };
 
@@ -765,8 +728,8 @@ cpupnum(uint64 rip)
 }
 
 #pragma textflag NOSPLIT
-static void
-sched_halt(void)
+void
+·sched_halt(void)
 {
 	//if (lap_id() == 0) {
 	//	int32 i;
@@ -818,8 +781,8 @@ runtime·Nanotime(void)
 }
 
 #pragma textflag NOSPLIT
-static void
-sched_run(struct thread_t *t)
+void
+·sched_run(struct thread_t *t)
 {
 	assert(t->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
 	setcurthread(t);
@@ -828,7 +791,7 @@ sched_run(struct thread_t *t)
 	t->prof.stampstart = hack_nanotime();
 
 	fxrstor(t->fx);
-	trapret(t->tf, t->pmap);
+	trapret(t->tf, t->p_pmap);
 }
 
 #pragma textflag NOSPLIT
@@ -869,7 +832,7 @@ yieldy(void)
 			setcurthread(0);
 			·spunlock(&threadlock);
 			// does not return
-			sched_halt();
+			·sched_halt();
 		}
 	}
 
@@ -877,7 +840,7 @@ yieldy(void)
 	tnext->status = ST_RUNNING;
 	·spunlock(&threadlock);
 
-	sched_run(tnext);
+	·sched_run(tnext);
 }
 
 #pragma textflag NOSPLIT
@@ -975,77 +938,10 @@ runtime·Tfdump(uint64 *tf)
 	pmsg("\n");
 }
 
-uint64 tlbshoot_wait;
-uint64 tlbshoot_pg;
-uint64 tlbshoot_count;
-uint64 tlbshoot_pmap;
-uint64 tlbshoot_gen;
+extern uint64 ·tlbshoot_pmap;
+extern uint64 ·tlbshoot_wait;
 
-#pragma textflag NOSPLIT
-uint64
-runtime·Tlbadmit(uint64 pmap, uint64 cpuwait, uint64 pg, uint64 pgcount)
-{
-	runtime·stackcheck();
-	volatile uint64 *p = &tlbshoot_wait;
-	while (!runtime·cas64(&tlbshoot_wait, 0, cpuwait))
-		while (*p != 0)
-			·htpause();
-
-	runtime·xchg64(&tlbshoot_pg, pg);
-	runtime·xchg64(&tlbshoot_count, pgcount);
-	runtime·xchg64(&tlbshoot_pmap, pmap);
-	tlbshoot_gen++;
-	return tlbshoot_gen;
-}
-
-#pragma textflag NOSPLIT
-void
-runtime·Tlbwait(uint64 gen)
-{
-	runtime·stackcheck();
-	volatile uint64 *p = &tlbshoot_wait;
-	volatile uint64 *g = &tlbshoot_gen;
-	while (*p != 0)
-		if (*g != gen)
-			return;
-}
-
-#pragma textflag NOSPLIT
-void
-tlb_shootdown(void)
-{
-	lap_eoi();
-	struct thread_t *ct = curthread;
-
-	if (ct && ct->pmap == tlbshoot_pmap) {
-		// the TLB is flushed simply by taking an IPI since currently
-		// each CPU switches to kernel page map on trap entry. the
-		// following code will be necessary if we ever stop switching
-		// to kernel page map on each trap.
-
-		//uint64 start = tlbshoot_pg;
-		//uint64 end = tlbshoot_pg + tlbshoot_count * PGSIZE;
-		//·pnum(lap_id() << 56 | start);
-		//for (; start < end; start += PGSIZE)
-		//	·invlpg((uint64 *)start);
-	}
-
-	// decrement outstanding tlb shootdown count; if we change to a design
-	// that doesn't broadcast shootdowns, only CPUs that the shootdown is
-	// sent to should do this
-	while (1) {
-		uint64 old = runtime·atomicload64(&tlbshoot_wait);
-		if (!old)
-			runtime·pancake("count is 0", old);
-		if (runtime·cas64(&tlbshoot_wait, old, old - 1))
-			break;
-	}
-
-	if (ct)
-		sched_run(ct);
-	else
-		sched_halt();
-}
+void ·tlb_shootdown(void);
 
 #pragma textflag NOSPLIT
 void
@@ -1075,7 +971,7 @@ sigret(struct thread_t *t)
 	} else {
 		// t->status is already ST_RUNNING
 		·spunlock(&threadlock);
-		sched_run(t);
+		·sched_run(t);
 	}
 }
 
@@ -1334,7 +1230,7 @@ trap(uint64 *tf)
 
 	if (trapno == TRAP_TLBSHOOT) {
 		// does not return
-		tlb_shootdown();
+		·tlb_shootdown();
 	} else if (trapno == TRAP_TIMER) {
 		·splock(&threadlock);
 		if (ct) {
@@ -1347,7 +1243,7 @@ trap(uint64 *tf)
 				ct->status = ST_RUNNABLE;
 		}
 		if (!yielding) {
-			lap_eoi();
+			·lap_eoi();
 			if (curcpu.num == 0) {
 				wakeup();
 				proftick();
@@ -1363,23 +1259,23 @@ trap(uint64 *tf)
 		} else
 			runtime·pancake("IRQ without ntrap", trapno);
 		if (ct)
-			sched_run(ct);
+			·sched_run(ct);
 		else
-			sched_halt();
+			·sched_halt();
 	} else if (IS_CPUEX(trapno)) {
 		// we vet out kernel mode CPU exceptions above; must be from
 		// user program. thus return from Userrun() to kernel.
-		sched_run(ct);
+		·sched_run(ct);
 	} else if (trapno == TRAP_SIGRET) {
 		// does not return
 		sigret(ct);
 	} else if (trapno == TRAP_PERFMASK) {
-		lap_eoi();
+		·lap_eoi();
 		runtime·perfmask();
 		if (ct)
-			sched_run(ct);
+			·sched_run(ct);
 		else
-			sched_halt();
+			·sched_halt();
 	} else {
 		runtime·pancake("unexpected int", trapno);
 	}
@@ -1427,7 +1323,7 @@ uint64
 
 #pragma textflag NOSPLIT
 void
-lap_eoi(void)
+·lap_eoi(void)
 {
 	assert(lapaddr, "lapaddr null?", lapaddr);
 
@@ -1628,7 +1524,7 @@ proc_setup(void)
 	assert(sizeof(threads[0].fx) == FXSIZE, "weird fx size",
 	    sizeof(threads[0].fx));
 	threads[0].status = ST_RUNNING;
-	threads[0].pmap = kpmap;
+	threads[0].p_pmap = kpmap;
 
 	uint64 la = 0xfee00000ULL;
 	uint64 *pte = ·pgdir_walk((void *)la, 0);
@@ -1742,7 +1638,7 @@ hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
 	mp->procid = i;
 
 	mt->status = ST_RUNNABLE;
-	mt->pmap = kpmap;
+	mt->p_pmap = kpmap;
 
 	runtime·memmove(mt->fx, ·fxinit, FXSIZE);
 

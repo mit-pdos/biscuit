@@ -2176,12 +2176,9 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 	if numcpus == 1 {
 		return
 	}
-	othercpus := numcpus - 1
-	// XXX XXX XXX go code that is protected by spinlocks may deadlock. if
-	// two Ps race on the spinlock, and the P that wins GCs before
-	// releasing, the P that failed to acquire will spin forever,
-	// preventing the GC from making progress.
-	mygen := runtime.Tlbadmit(p_pmap, othercpus, va, pgcount)
+	othercpus := uintptr(numcpus - 1)
+	mygen := runtime.Tlbadmit(uintptr(p_pmap), othercpus, uintptr(va),
+	    uintptr(pgcount))
 
 	lapaddr := 0xfee00000
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))

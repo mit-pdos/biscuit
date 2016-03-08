@@ -409,7 +409,7 @@ func dmap_init() {
 
 	// fill in kent, the list of kernel pml4 entries. make sure we will
 	// panic if the runtime adds new mappings that we don't record here.
-	runtime.No_pml4 = 1
+	runtime.Pml4freeze()
 	for i, e := range kpmap() {
 		if e & PTE_U == 0 && e & PTE_P != 0 {
 			ent := kent_t{i, e}
