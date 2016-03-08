@@ -20,7 +20,7 @@ static Sigset sigset_all = { ~(uint32)0, ~(uint32)0 };
 //	futexwakeup(uint32 *addr)
 //
 // Futexsleep atomically checks if *addr == val and if so, sleeps on addr.
-// Futexwakeup wakes up threads sleeping on addr.
+// Futexwakeup wakes up ·threads sleeping on addr.
 // Futexsleep is allowed to wake up spuriously.
 
 enum
@@ -369,7 +369,7 @@ uint64 rcr2(void);
 uint64 rcr3(void);
 uint64 ·rcr4(void);
 uint64 ·Rdmsr(uint64);
-uint64 rflags(void);
+uint64 ·rflags(void);
 uint64 rrsp(void);
 void ·sti(void);
 void tlbflush(void);
@@ -454,7 +454,7 @@ bw(uint8 *d, uint64 data, uint64 off)
 #define	CODE_SEG        1
 
 // physical address of current pmap, given to us by bootloader
-uint64 kpmap;
+extern uint64 ·p_kpmap;
 
 int8 gostr[] = "go";
 
@@ -672,7 +672,8 @@ struct cpu_t {
 };
 
 #define NTHREADS        64
-static struct thread_t threads[NTHREADS];
+//static struct thread_t ·threads[NTHREADS];
+extern struct thread_t ·threads[NTHREADS];
 // index is lapic id
 extern struct cpu_t ·cpus[MAXCPUS];
 
@@ -680,7 +681,7 @@ extern struct cpu_t ·cpus[MAXCPUS];
 #define curthread            ((struct thread_t *)(curcpu.mythread))
 #define setcurthread(x)      (curcpu.mythread = (uint64)x)
 
-struct spinlock_t threadlock;
+extern struct spinlock_t *·threadlock;
 struct spinlock_t futexlock;
 
 static uint64 _gimmealign;
@@ -736,7 +737,7 @@ void
 	//	for (i = 0; i < NTHREADS; i++) {
 	//		·pnum(i);
 	//		int8 *msg = "wtf";
-	//		switch (threads[i].status) {
+	//		switch (·threads[i].status) {
 	//		case ST_INVALID:
 	//			msg = "invalid";
 	//			break;
@@ -802,7 +803,7 @@ tcount(void)
 	run = sleep = wait = 0;
 	int32 i;
 	for (i = 0; i < NTHREADS; i++) {
-		struct thread_t *t = &threads[i];
+		struct thread_t *t = &·threads[i];
 		if (t->status == ST_RUNNABLE || t->status == ST_RUNNING)
 			run++;
 		else if (t->status == ST_WAITING)
@@ -823,54 +824,24 @@ static void
 yieldy(void)
 {
 	//tcount();
-	int32 start = curthread ? curthread - &threads[0] : 0;
+	int32 start = curthread ? curthread - &·threads[0] : 0;
 	int32 i;
 	for (i = (start + 1) % NTHREADS;
-	     threads[i].status != ST_RUNNABLE;
+	     ·threads[i].status != ST_RUNNABLE;
 	     i = (i + 1) % NTHREADS) {
 	     	if (i == start) {
 			setcurthread(0);
-			·spunlock(&threadlock);
+			·spunlock(·threadlock);
 			// does not return
 			·sched_halt();
 		}
 	}
 
-	struct thread_t *tnext = &threads[i];
+	struct thread_t *tnext = &·threads[i];
 	tnext->status = ST_RUNNING;
-	·spunlock(&threadlock);
+	·spunlock(·threadlock);
 
 	·sched_run(tnext);
-}
-
-#pragma textflag NOSPLIT
-static void
-yieldy_lock(void)
-{
-	assert((rflags() & TF_FL_IF) == 0, "interrupts enabled", 0);
-	·splock(&threadlock);
-	yieldy();
-}
-
-#pragma textflag NOSPLIT
-static
-int32
-thread_avail(void)
-{
-	runtime·stackcheck();
-
-	assert((rflags() & TF_FL_IF) == 0, "thread state race", 0);
-	assert(threadlock.v, "threadlock not taken", 0);
-
-	int32 i;
-	for (i = 0; i < NTHREADS; i++) {
-		if (threads[i].status == ST_INVALID)
-			return i;
-	}
-
-	assert(0, "no available threads", 0);
-
-	return -1;
 }
 
 #pragma textflag NOSPLIT
@@ -902,13 +873,13 @@ wakeup(void)
 	// wake up timed out futexs
 	int32 i;
 	for (i = 0; i < NTHREADS; i++) {
-		uint64 sf = threads[i].sleepfor;
-		if (threads[i].status == ST_SLEEPING &&
+		uint64 sf = ·threads[i].sleepfor;
+		if (·threads[i].status == ST_SLEEPING &&
 				sf != -1 && sf < now) {
-			threads[i].status = ST_RUNNABLE;
-			threads[i].sleepfor = 0;
-			threads[i].futaddr = 0;
-			threads[i].sleepret = -ETIMEDOUT;
+			·threads[i].status = ST_RUNNABLE;
+			·threads[i].sleepfor = 0;
+			·threads[i].futaddr = 0;
+			·threads[i].sleepret = -ETIMEDOUT;
 		}
 	}
 }
@@ -953,7 +924,7 @@ sigret(struct thread_t *t)
 	runtime·memmove(t->tf, t->sigtf, TFSIZE);
 	runtime·memmove(t->fx, t->sigfx, FXSIZE);
 
-	·splock(&threadlock);
+	·splock(·threadlock);
 	assert(t->sigstatus == ST_RUNNABLE || t->sigstatus == ST_SLEEPING,
 	    "oh nyet", t->sigstatus);
 
@@ -970,7 +941,7 @@ sigret(struct thread_t *t)
 		yieldy();
 	} else {
 		// t->status is already ST_RUNNING
-		·spunlock(&threadlock);
+		·spunlock(·threadlock);
 		·sched_run(t);
 	}
 }
@@ -1111,10 +1082,10 @@ proftick(void)
 	for (i = 0; i < NTHREADS; i++) {
 		// if profiling the kernel, do fake SIGPROF if we aren't
 		// already
-		struct thread_t *t = &threads[i];
+		struct thread_t *t = &·threads[i];
 		if (!t->prof.enabled || t->doingsig)
 			continue;
-		// don't touch running threads
+		// don't touch running ·threads
 		if (t->status != ST_RUNNABLE)
 			continue;
 		const int32 SIGPROF = 27;
@@ -1160,7 +1131,7 @@ trap(uint64 *tf)
 		_trapret(tf);
 	}
 
-	lcr3(kpmap);
+	lcr3(·p_kpmap);
 
 	// CPU exceptions in kernel mode are fatal errors
 	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0)
@@ -1174,7 +1145,7 @@ trap(uint64 *tf)
 
 	struct thread_t *ct = curthread;
 
-	assert((rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
+	assert((·rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
 	if (·Halt)
 		while (1);
@@ -1232,7 +1203,7 @@ trap(uint64 *tf)
 		// does not return
 		·tlb_shootdown();
 	} else if (trapno == TRAP_TIMER) {
-		·splock(&threadlock);
+		·splock(·threadlock);
 		if (ct) {
 			if (ct->status == ST_WILLSLEEP) {
 				ct->status = ST_SLEEPING;
@@ -1311,7 +1282,7 @@ wlap(uint32 reg, uint32 val)
 uint64
 ·lap_id(void)
 {
-	assert((rflags() & TF_FL_IF) == 0, "ints enabled for lapid", 0);
+	assert((·rflags() & TF_FL_IF) == 0, "ints enabled for lapid", 0);
 
 	if (!lapaddr)
 		runtime·pancake("lapaddr null (id)", lapaddr);
@@ -1519,12 +1490,17 @@ gs_set(struct cpu_t *mycpu)
 void
 proc_setup(void)
 {
-	assert(sizeof(threads[0].tf) == TFSIZE, "weird tf size",
-	    sizeof(threads[0].tf));
-	assert(sizeof(threads[0].fx) == FXSIZE, "weird fx size",
-	    sizeof(threads[0].fx));
-	threads[0].status = ST_RUNNING;
-	threads[0].p_pmap = kpmap;
+	// fpuinit must be called before pgdir_walk or tss_init since
+	// pgdir_walk may call memclr which uses SSE instructions to zero newly
+	// allocated pages.
+	·fpuinit(1);
+
+	assert(sizeof(·threads[0].tf) == TFSIZE, "weird tf size",
+	    sizeof(·threads[0].tf));
+	assert(sizeof(·threads[0].fx) == FXSIZE, "weird fx size",
+	    sizeof(·threads[0].fx));
+	·threads[0].status = ST_RUNNING;
+	·threads[0].p_pmap = ·p_kpmap;
 
 	uint64 la = 0xfee00000ULL;
 	uint64 *pte = ·pgdir_walk((void *)la, 0);
@@ -1548,13 +1524,13 @@ proc_setup(void)
 	sysc_setup(myrsp);
 	curcpu.num = 0;
 	gs_set(&curcpu);
-	setcurthread(&threads[0]);
+	setcurthread(&·threads[0]);
 	//pmsg("sizeof thread_t:");
 	//·pnum(sizeof(struct thread_t));
 	//pmsg("\n");
 
 	for (i = 0; i < NTHREADS; i++)
-		if ((uint64)threads[i].fx & ((1 << 4) - 1))
+		if ((uint64)·threads[i].fx & ((1 << 4) - 1))
 			assert(0, "fx not 16 byte aligned", i);
 }
 
@@ -1567,105 +1543,21 @@ void
 	pmsg("joined\n");
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(·lap_id() <= MAXCPUS, "lapic id large", myid);
+	·fpuinit(0);
 	timer_setup(0);
 	uint64 myrsp = ·tss_init(myid);
 	sysc_setup(myrsp);
-	·fpuinit(0);
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
 
 	int64 test = ·Pushcli();
 	assert((test & TF_FL_IF) == 0, "wtf!", test);
 	·Popcli(test);
-	assert((rflags() & TF_FL_IF) == 0, "wtf!", test);
+	assert((·rflags() & TF_FL_IF) == 0, "wtf!", test);
 
 	curcpu.num = myid;
 	·fs_null();
 	gs_set(&curcpu);
 	setcurthread(0);
-}
-
-#pragma textflag NOSPLIT
-void
-dummy(void)
-{
-	while (1) {
-		pmsg("child!");
-		runtime·deray(500000);
-	}
-}
-
-#pragma textflag NOSPLIT
-static void
-clone_wrap(void (*fn)(void))
-{
-	runtime·stackcheck();
-	fn();
-	assert(0, "thread returned?", 0);
-}
-
-#pragma textflag NOSPLIT
-void
-hack_clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void))
-{
-	runtime·stackcheck();
-
-	·cli();
-	·splock(&threadlock);
-
-	uint64 *sp = stack;
-	uint64 chk = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
-
-	assert(flags == chk, "weird flags", flags);
-	assert(·pgdir_walk(sp - 1, 0), "stack slot 1 not mapped", (uint64)(sp - 1));
-	assert(·pgdir_walk(sp - 2, 0), "stack slot 2 not mapped", (uint64)(sp - 2));
-
-	int32 i = thread_avail();
-	sp--;
-	*(sp--) = (uint64)fn;	// provide fn as arg
-	//*sp-- = (uint64)dummy;
-	*sp = 0xf1eaf1ea;	// fake return addr (clone_wrap never returns)
-
-	struct thread_t *mt = &threads[i];
-	runtime·memclr((byte *)mt, sizeof(struct thread_t));
-	mt->tf[TF_CS] = CODE_SEG << 3;
-	mt->tf[TF_RSP] = (uint64)sp;
-	mt->tf[TF_RIP] = (uint64)clone_wrap;
-	mt->tf[TF_RFLAGS] = rflags() | TF_FL_IF;
-	mt->tf[TF_FSBASE] = (uint64)mp->tls + 16;
-
-	gp->m = mp;
-	mp->tls[0] = (uintptr)gp;
-	mp->procid = i;
-
-	mt->status = ST_RUNNABLE;
-	mt->p_pmap = kpmap;
-
-	runtime·memmove(mt->fx, ·fxinit, FXSIZE);
-
-	·spunlock(&threadlock);
-	·sti();
-}
-
-#pragma textflag NOSPLIT
-void
-clone_test(void)
-{
-	// XXX figure out what "missing go type information" means
-	static uint8 mdur[sizeof(M)];
-	static uint8 gdur[sizeof(G)];
-	M *tm = (M *)mdur;
-	G *tg = (G *)gdur;
-
-	uint64 flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
-
-	tg->stack.lo = 0x80000000 - PGSIZE;
-	tg->stack.hi = 0x80000000;
-	hack_clone(flags, (void *)(0x80000000 - (4096/2)), tm, tg, dummy);
-
-	while (1) {
-		pmsg("parent!");
-		runtime·deray(500000);
-	}
 }
 
 // use these to pass args because using the stack in ·Syscall causes strange
@@ -1775,20 +1667,20 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 		int32 woke = 0;
 		·cli();
 		·splock(&futexlock);
-		·splock(&threadlock);
+		·splock(·threadlock);
 		for (i = 0; i < NTHREADS && val; i++) {
-			uint64 st = threads[i].status;
-			if (threads[i].futaddr == (uint64)uaddr &&
+			uint64 st = ·threads[i].status;
+			if (·threads[i].futaddr == (uint64)uaddr &&
 			    st == ST_SLEEPING) {
-				threads[i].status = ST_RUNNABLE;
-				threads[i].sleepfor = 0;
-				threads[i].futaddr = 0;
-				threads[i].sleepret = 0;
+				·threads[i].status = ST_RUNNABLE;
+				·threads[i].sleepfor = 0;
+				·threads[i].futaddr = 0;
+				·threads[i].sleepret = 0;
 				val--;
 				woke++;
 			}
 		}
-		·spunlock(&threadlock);
+		·spunlock(·threadlock);
 		·spunlock(&futexlock);
 		·sti();
 		ret = woke;
@@ -1868,7 +1760,7 @@ runtime·Kpmap(void)
 uint64
 runtime·Kpmap_p(void)
 {
-	return kpmap;
+	return ·p_kpmap;
 }
 
 #pragma textflag NOSPLIT
@@ -1980,7 +1872,7 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 uint64
 runtime·Rflags(void)
 {
-	return rflags();
+	return ·rflags();
 }
 
 uint64 runtime·gcticks;

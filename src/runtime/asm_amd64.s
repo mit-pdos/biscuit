@@ -161,7 +161,7 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	CALL	runtime·sc_setup(SB)
 
 	// save page table and first free address from bootloader.
-	MOVL	DI, kpmap(SB)
+	MOVL	DI, ·p_kpmap(SB)
 	MOVL	SI, ·pgfirst(SB)
 	MOVQ	$1, runtime·hackmode(SB)
 
@@ -171,6 +171,10 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
 	MOVQ	$runtime·g0(SB), DI
+	// even though we only have one page of stack, leave stackguard far
+	// below. if the scheduler overflows its stack, we will get a pagefault
+	// which is probably easier to debug than panicking due to stack
+	// growing on scheduler.
 	LEAQ	(-64*1024+104)(SP), BX
 	//LEAQ	(-4*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard0(DI)
@@ -201,11 +205,11 @@ h_nocpuinfo:
 	//CALL	AX
 
 	//// update stackguard after _cgo_init
-	//MOVQ	$runtime·g0(SB), CX
-	//MOVQ	(g_stack+stack_lo)(CX), AX
-	//ADDQ	$const_StackGuard, AX
-	//MOVQ	AX, g_stackguard0(CX)
-	//MOVQ	AX, g_stackguard1(CX)
+	MOVQ	$runtime·g0(SB), CX
+	MOVQ	(g_stack+stack_lo)(CX), AX
+	ADDQ	$const_StackGuard, AX
+	MOVQ	AX, g_stackguard0(CX)
+	MOVQ	AX, g_stackguard1(CX)
 
 	//CMPL	runtime·iswindows(SB), $0
 	//JEQ ok
@@ -223,9 +227,6 @@ h_needtls:
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
 	CALL	fixcs(SB)
-	PUSHQ	$1
-	CALL	·fpuinit(SB)
-	POPQ	AX
 
 	// store through it, to make sure it works
 	get_tls(BX)
@@ -478,7 +479,7 @@ TEXT inb(SB), NOSPLIT, $0-16
 	MOVQ	AX, ret+8(FP)
 	RET
 
-TEXT rflags(SB), NOSPLIT, $0-8
+TEXT ·rflags(SB), NOSPLIT, $0-8
 	PUSHFQ
 	POPQ	AX
 	MOVQ	AX, ret+0(FP)
@@ -576,6 +577,12 @@ TEXT cpu_halt(SB), NOSPLIT, $0-8
 hltagain:
 	HLT
 	JMP	hltagain
+
+// void ·clone_call(uintptr rip)
+TEXT ·clone_call(SB), NOSPLIT, $0-8
+	MOVQ	fn+0(FP), AX
+	CALL	AX
+	RET
 
 #define TRAP_YIELD      $49
 #define TRAP_SYSCALL    $64

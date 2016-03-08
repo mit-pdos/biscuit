@@ -398,7 +398,7 @@ TEXT runtime·clone(SB),NOSPLIT,$40-32
 	PUSHQ	SI
 	PUSHQ	DI
 	// takes care of stuff below too
-	CALL	hack_clone(SB)
+	CALL	·hack_clone(SB)
 	// child does not return here but starts executing fn
 	POPQ	AX
 	POPQ	AX

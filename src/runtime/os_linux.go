@@ -73,6 +73,7 @@ func rcr0() uintptr
 func rcr4() uintptr
 func lcr0(uintptr)
 func lcr4(uintptr)
+func clone_call(uintptr)
 
 // os_linux.c
 var gcticks uint64
@@ -113,12 +114,14 @@ type prof_t struct {
 	stampstart	int
 }
 
+// XXX rearrange these for better spatial locality; p_pmap should probably be
+// near front
 type thread_t struct {
-	tf		[24]int
-	fx		[64]int
+	tf		[TFSIZE]uintptr
+	fx		[FXREGS]uintptr
 	user		tuser_t
-	sigtf		[24]int
-	sigfx		[64]int
+	sigtf		[TFSIZE]uintptr
+	sigfx		[FXREGS]uintptr
 	sigstatus	int
 	siglseepfor	int
 	status		int
@@ -132,8 +135,10 @@ type thread_t struct {
 	//_pad		int
 }
 
+// XXX fix these misleading names
 const(
   TFSIZE       = 24
+  FXREGS       = 64
   TFREGS       = 17
   TF_SYSRSP    = 0
   TF_FSBASE    = 1
@@ -151,7 +156,7 @@ const(
   TF_RSP       = TFREGS + 5
   TF_SS        = TFREGS + 6
   TF_RFLAGS    = TFREGS + 4
-    TF_FL_IF     = 1 << 9
+    TF_FL_IF     uintptr = 1 << 9
 )
 
 var Pspercycle uint
@@ -536,6 +541,7 @@ func invlpg(uintptr)
 func lap_eoi()
 func sched_run(*thread_t)
 func sched_halt()
+func rflags() uintptr
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -708,6 +714,8 @@ const (
 	TSS	uint32 = (0x09 << 8)
 	USER	uint32 = (0x60 << 8)
 	INT	uint16 = (0x0e << 8)
+
+	KCODE64		= 1
 )
 
 var _segs = [7 + 2*MAXCPUS]seg64_t{
@@ -818,6 +826,8 @@ func hexdump(_p unsafe.Pointer, sz uintptr) {
 	}
 }
 
+// must be nosplit since stack splitting prologue uses FS which this function
+// initializes.
 //go:nosplit
 func seg_setup() {
 	p := pdesc_t{}
@@ -901,14 +911,13 @@ func int_set(idx int, intentry func(), istn int) {
 	var f func()
 	f = intentry
 	entry := **(**uint)(unsafe.Pointer(&f))
-	kcode64 := 1
 
 	p := &_idt[idx]
 	p.baselow = uint16(entry)
 	p.basemid = uint16(entry >> 16)
 	p.basehi = uint32(entry >> 32)
 
-	p.segsel = uint16(kcode64 << 3)
+	p.segsel = uint16(KCODE64 << 3)
 
 	p.details = uint16(P) | INT | uint16(istn & 0x7)
 }
@@ -994,6 +1003,9 @@ const (
 	// available mapping
 	VTEMP		uintptr = 0x43
 )
+
+// physical address of kernel's pmap, given to us by bootloader
+var p_kpmap uintptr
 
 //go:nosplit
 func pml4x(va uintptr) uintptr {
@@ -1182,6 +1194,7 @@ func alloc_map(va uintptr, perms uintptr, fempty bool) {
 const fxwords = 512/8
 var fxinit [fxwords]uintptr
 
+// nosplit because APs call this function before FS is setup
 //go:nosplit
 func fpuinit(amfirst bool) {
 	finit()
@@ -1207,7 +1220,6 @@ func fpuinit(amfirst bool) {
 	}
 }
 
-//go:nosplit
 func find_empty(sz uintptr) uintptr {
 	v := caddr(0, 0, 0, 1, 0)
 	cantuse := uintptr(0xf0)
@@ -1232,7 +1244,6 @@ func find_empty(sz uintptr) uintptr {
 	}
 }
 
-//go:nosplit
 func prot_none(v, sz uintptr) {
 	for i := uintptr(0); i < sz; i += PGSIZE {
 		pte := pgdir_walk(v + i, true)
@@ -1255,7 +1266,6 @@ func Pml4freeze() {
 	_nopml4 = true
 }
 
-//go:nosplit
 func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
     fd int32, offset int32) uintptr {
 	fl := Pushcli()
@@ -1324,7 +1334,6 @@ out:
 	return ret
 }
 
-//go:nosplit
 func hack_munmap(v, _sz uintptr) {
 	fl := Pushcli()
 	splock(maplock)
@@ -1433,3 +1442,85 @@ const (
 	TRAP_TIMER	= 32
 	TRAP_YIELD	= 49
 )
+
+func clone_wrap(rip uintptr) {
+	clone_call(rip)
+	G_pancake("clone_wrap returned", 0)
+}
+
+func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
+	CLONE_VM := 0x100
+	CLONE_FS := 0x200
+	CLONE_FILES := 0x400
+	CLONE_SIGHAND := 0x800
+	CLONE_THREAD := 0x10000
+	chk := uint32(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
+	    CLONE_THREAD)
+	if flags != chk {
+		G_pancake("unexpected clone args", uintptr(flags))
+	}
+	var dur func(uintptr)
+	dur = clone_wrap
+	cloneaddr := **(**uintptr)(unsafe.Pointer(&dur))
+
+	fl := Pushcli()
+	splock(threadlock)
+
+	ti := thread_avail()
+	// provide fn as arg to clone_wrap
+	rsp -= 8
+	*(*uintptr)(unsafe.Pointer(rsp)) = fn
+	rsp -= 8
+	// bad return address
+	*(*uintptr)(unsafe.Pointer(rsp)) = 0
+
+	mt := &threads[ti]
+	memclr(unsafe.Pointer(mt), unsafe.Sizeof(thread_t{}))
+	mt.tf[TF_CS] = KCODE64 << 3
+	mt.tf[TF_RSP] = rsp
+	mt.tf[TF_RIP] = cloneaddr
+	mt.tf[TF_RFLAGS] = rflags() | TF_FL_IF
+	mt.tf[TF_FSBASE] = uintptr(unsafe.Pointer(&mp.tls[0])) + 16
+
+	gp.m = mp
+	mp.tls[0] = uintptr(unsafe.Pointer(gp))
+	mp.procid = uint64(ti)
+	mt.status = ST_RUNNABLE
+	mt.p_pmap = p_kpmap
+
+	mt.fx = fxinit
+
+	spunlock(threadlock)
+	Popcli(fl)
+}
+
+var threadlock = &spinlock_t{}
+
+// maximum # of runtime "OS" threads
+const maxthreads = 64
+var threads [maxthreads]thread_t
+
+const (
+	ST_INVALID	= 0
+	ST_RUNNABLE	= 1
+	ST_RUNNING	= 2
+	ST_WAITING	= 3
+	ST_SLEEPING	= 4
+	ST_WILLSLEEP	= 5
+)
+
+func thread_avail() int {
+	if rflags() & TF_FL_IF != 0 {
+		G_pancake("must not be interruptible", 0)
+	}
+	if threadlock.v == 0 {
+		G_pancake("must hold threadlock", 0)
+	}
+	for i := range threads {
+		if threads[i].status == ST_INVALID {
+			return i
+		}
+	}
+	G_pancake("no available threads", maxthreads)
+	return -1
+}
