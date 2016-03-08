@@ -350,10 +350,8 @@ runtime·signame(int32 sig)
 
 // src/runtime/asm_amd64.s
 void ·cli(void);
-void cpu_halt(uint64);
 void ·finit(void);
 void ·fxsave(uint64 *);
-void fxrstor(uint64 *);
 void ·htpause(void);
 struct cpu_t* ·Gscpu(void);
 int64 inb(int32);
@@ -373,7 +371,6 @@ uint64 ·rflags(void);
 uint64 rrsp(void);
 void ·sti(void);
 void tlbflush(void);
-void trapret(uint64 *, uint64);
 void _trapret(uint64 *);
 void wlap(uint32, uint32);
 void ·Wrmsr(uint64, uint64);
@@ -728,47 +725,11 @@ cpupnum(uint64 rip)
 	}
 }
 
-#pragma textflag NOSPLIT
-void
-·sched_halt(void)
-{
-	//if (lap_id() == 0) {
-	//	int32 i;
-	//	for (i = 0; i < NTHREADS; i++) {
-	//		·pnum(i);
-	//		int8 *msg = "wtf";
-	//		switch (·threads[i].status) {
-	//		case ST_INVALID:
-	//			msg = "invalid";
-	//			break;
-	//		case ST_RUNNABLE:
-	//			msg = "runnable";
-	//			break;
-	//		case ST_RUNNING:
-	//			msg = "running";
-	//			break;
-	//		case ST_SLEEPING:
-	//			msg = "sleeping";
-	//			break;
-	//		case ST_WAITING:
-	//			msg = "waiting";
-	//			break;
-	//		case ST_SKIPSLEEP:
-	//			msg = "skip sleep";
-	//			break;
-	//		}
-	//		pmsg(msg);
-	//		pmsg("\n");
-	//	}
-	//}
-
-	//pmsg("hlt");
-	cpu_halt(curcpu.rsp);
-}
+void ·sched_halt(void);
 
 #pragma textflag NOSPLIT
 uint64
-hack_nanotime(void)
+·hack_nanotime(void)
 {
 	uint64 cyc = ·Rdtsc();
 	return (cyc * ·Pspercycle)/1000;
@@ -778,22 +739,10 @@ hack_nanotime(void)
 uint64
 runtime·Nanotime(void)
 {
-	return hack_nanotime();
+	return ·hack_nanotime();
 }
 
-#pragma textflag NOSPLIT
-void
-·sched_run(struct thread_t *t)
-{
-	assert(t->tf[TF_RFLAGS] & TF_FL_IF, "no interrupts?", 0);
-	setcurthread(t);
-
-	// get a start time stamp
-	t->prof.stampstart = hack_nanotime();
-
-	fxrstor(t->fx);
-	trapret(t->tf, t->p_pmap);
-}
+void ·sched_run(struct thread_t *t);
 
 #pragma textflag NOSPLIT
 static void
@@ -819,30 +768,7 @@ tcount(void)
 	·pnum(v);
 }
 
-#pragma textflag NOSPLIT
-static void
-yieldy(void)
-{
-	//tcount();
-	int32 start = curthread ? curthread - &·threads[0] : 0;
-	int32 i;
-	for (i = (start + 1) % NTHREADS;
-	     ·threads[i].status != ST_RUNNABLE;
-	     i = (i + 1) % NTHREADS) {
-	     	if (i == start) {
-			setcurthread(0);
-			·spunlock(·threadlock);
-			// does not return
-			·sched_halt();
-		}
-	}
-
-	struct thread_t *tnext = &·threads[i];
-	tnext->status = ST_RUNNING;
-	·spunlock(·threadlock);
-
-	·sched_run(tnext);
-}
+void ·yieldy(void);
 
 #pragma textflag NOSPLIT
 static uint64 *
@@ -865,24 +791,7 @@ assert_mapped(void *va, int64 size, int8 *msg)
 			runtime·pancake(msg, (uint64)va);
 }
 
-#pragma textflag NOSPLIT
-void
-wakeup(void)
-{
-	uint64 now = hack_nanotime();
-	// wake up timed out futexs
-	int32 i;
-	for (i = 0; i < NTHREADS; i++) {
-		uint64 sf = ·threads[i].sleepfor;
-		if (·threads[i].status == ST_SLEEPING &&
-				sf != -1 && sf < now) {
-			·threads[i].status = ST_RUNNABLE;
-			·threads[i].sleepfor = 0;
-			·threads[i].futaddr = 0;
-			·threads[i].sleepret = -ETIMEDOUT;
-		}
-	}
-}
+void ·wakeup(void);
 
 #pragma textflag NOSPLIT
 void
@@ -938,7 +847,7 @@ sigret(struct thread_t *t)
 	if (st == ST_WAITING) {
 		t->sleepfor = sf;
 		t->status = ST_WAITING;
-		yieldy();
+		·yieldy();
 	} else {
 		// t->status is already ST_RUNNING
 		·spunlock(·threadlock);
@@ -1060,7 +969,7 @@ mksig(struct thread_t *t, int32 signo)
 static void
 timetick(struct thread_t *t)
 {
-	uint64 elapsed = hack_nanotime() - t->prof.stampstart;
+	uint64 elapsed = ·hack_nanotime() - t->prof.stampstart;
 	t->prof.stampstart = 0;
 	t->prof.totaltime += elapsed;
 }
@@ -1072,7 +981,7 @@ proftick(void)
 {
 	const uint64 profns = 10000000;
 	static uint64 lastprof;
-	uint64 n = hack_nanotime();
+	uint64 n = ·hack_nanotime();
 
 	if (n - lastprof < profns)
 		return;
@@ -1116,8 +1025,8 @@ kernel_fault(uint64 *tf)
 	runtime·pancake("kernel fault", trapno);
 }
 
-// XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX XXX 
-// may want to only wakeup() on most timer ints since now there is more
+// XXX
+// may want to only ·wakeup() on most timer ints since now there is more
 // overhead for timer ints during user time.
 #pragma textflag NOSPLIT
 void
@@ -1216,12 +1125,12 @@ trap(uint64 *tf)
 		if (!yielding) {
 			·lap_eoi();
 			if (curcpu.num == 0) {
-				wakeup();
+				·wakeup();
 				proftick();
 			}
 		}
-		// yieldy doesn't return
-		yieldy();
+		// ·yieldy doesn't return
+		·yieldy();
 	} else if (IS_IRQ(trapno)) {
 		if (ntrap) {
 			// catch kernel faults that occur while trying to
@@ -1645,7 +1554,7 @@ hack_futex(int32 *uaddr, int32 op, int32 val,
 				    "futex timeout");
 				int64 t = timeout->tv_sec * 1000000000;
 				t += timeout->tv_nsec;
-				curthread->sleepfor = hack_nanotime() + t;
+				curthread->sleepfor = ·hack_nanotime() + t;
 			}
 			mktrap(TRAP_YIELD);
 

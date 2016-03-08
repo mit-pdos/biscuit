@@ -150,7 +150,7 @@ TEXT time·now(SB),NOSPLIT,$16
 	TESTQ	DI, DI
 	JZ	now_skip
 	PUSHQ	$0
-	CALL	hack_nanotime(SB)
+	CALL	·hack_nanotime(SB)
 	POPQ	AX
 	XORQ	DX, DX
 	MOVQ	$1000000000, DI
@@ -189,7 +189,7 @@ TEXT runtime·nanotime(SB),NOSPLIT,$16
 	TESTQ	DI, DI
 	JZ	nnow_skip
 	PUSHQ	$0
-	CALL	hack_nanotime(SB)
+	CALL	·hack_nanotime(SB)
 	POPQ	AX
 	MOVQ	AX, ret+0(FP)
 	RET
@@ -377,8 +377,12 @@ futex_skip:
 	RET
 
 // int32 clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void));
-//TEXT runtime·clone(SB),NOSPLIT,$0
-TEXT runtime·clone(SB),NOSPLIT,$40-32
+TEXT runtime·clone(SB),NOSPLIT,$0
+	MOVQ	runtime·hackmode(SB), DX
+	TESTQ	DX, DX
+	JZ	clone_skip
+	JMP	·hack_clone(SB)
+clone_skip:
 	MOVL	flags+8(SP), DI
 	MOVQ	stack+16(SP), SI
 
@@ -389,25 +393,6 @@ TEXT runtime·clone(SB),NOSPLIT,$40-32
 	MOVQ	fn+40(SP), R12
 
 	MOVL	$56, AX
-	MOVQ	runtime·hackmode(SB), DX
-	TESTQ	DX, DX
-	JZ	clone_skip
-	PUSHQ	R12
-	PUSHQ	R9
-	PUSHQ	R8
-	PUSHQ	SI
-	PUSHQ	DI
-	// takes care of stuff below too
-	CALL	·hack_clone(SB)
-	// child does not return here but starts executing fn
-	POPQ	AX
-	POPQ	AX
-	POPQ	AX
-	POPQ	AX
-	POPQ	AX
-	MOVQ	$0, AX
-	RET
-clone_skip:
 	SYSCALL
 
 	// In parent, return.

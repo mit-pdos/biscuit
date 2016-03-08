@@ -563,7 +563,7 @@ TEXT ·fxsave(SB), NOSPLIT, $0-8
 	BYTE	$0x00
 	RET
 
-TEXT fxrstor(SB), NOSPLIT, $0-8
+TEXT ·fxrstor(SB), NOSPLIT, $0-8
 	MOVQ	dst+0(FP), AX
 	// fxrstor	(%rax)
 	BYTE	$0x0f
@@ -571,7 +571,7 @@ TEXT fxrstor(SB), NOSPLIT, $0-8
 	BYTE	$0x08
 	RET
 
-TEXT cpu_halt(SB), NOSPLIT, $0-8
+TEXT ·cpu_halt(SB), NOSPLIT, $0-8
 	MOVQ	sp+0(FP), SP
 	STI
 hltagain:
@@ -736,7 +736,8 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	BYTE	$0xeb
 	BYTE	$0xfe
 
-TEXT trapret(SB), NOSPLIT, $0-16
+// void ·trapret(tf *uintptr, p_pmap uintptr)
+TEXT ·trapret(SB), NOSPLIT, $0-16
 	MOVQ	pmap+8(FP), BX
 	MOVQ	BX, CR3
 

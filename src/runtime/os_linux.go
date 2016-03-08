@@ -74,6 +74,9 @@ func rcr4() uintptr
 func lcr0(uintptr)
 func lcr4(uintptr)
 func clone_call(uintptr)
+func cpu_halt(uintptr)
+func fxrstor(*[FXREGS]uintptr)
+func trapret(*[TFSIZE]uintptr, uintptr)
 
 // os_linux.c
 var gcticks uint64
@@ -539,9 +542,8 @@ var Halt uint32
 func _pmsg(*int8)
 func invlpg(uintptr)
 func lap_eoi()
-func sched_run(*thread_t)
-func sched_halt()
 func rflags() uintptr
+func hack_nanotime() int
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -1509,13 +1511,18 @@ const (
 	ST_WILLSLEEP	= 5
 )
 
-func thread_avail() int {
+//go:nosplit
+func _tchk() {
 	if rflags() & TF_FL_IF != 0 {
 		G_pancake("must not be interruptible", 0)
 	}
 	if threadlock.v == 0 {
 		G_pancake("must hold threadlock", 0)
 	}
+}
+
+func thread_avail() int {
+	_tchk()
 	for i := range threads {
 		if threads[i].status == ST_INVALID {
 			return i
@@ -1523,4 +1530,62 @@ func thread_avail() int {
 	}
 	G_pancake("no available threads", maxthreads)
 	return -1
+}
+
+//go:nosplit
+func sched_halt() {
+	cpu_halt(Gscpu().rsp)
+}
+
+//go:nosplit
+func sched_run(t *thread_t) {
+	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
+		G_pancake("thread not interurptible", 0)
+	}
+	Gscpu().mythread = t
+	fxrstor(&t.fx)
+	trapret(&t.tf, t.p_pmap)
+}
+
+//go:nosplit
+func wakeup() {
+	_tchk()
+	now := hack_nanotime()
+	timedout := -110
+	for i := range threads {
+		t := &threads[i]
+		sf := t.sleepfor
+		if t.status == ST_SLEEPING && sf != -1 && sf < now {
+			t.status = ST_RUNNABLE
+			t.sleepfor = 0
+			t.futaddr = 0
+			t.sleepret = timedout
+		}
+	}
+}
+
+//go:nosplit
+func yieldy() {
+	_tchk()
+	cpu := Gscpu()
+	ct := cpu.mythread
+	_ti := (uintptr(unsafe.Pointer(ct)) -
+	    uintptr(unsafe.Pointer(&threads[0])))/unsafe.Sizeof(thread_t{})
+	ti := int(_ti)
+	start := (ti + 1) % maxthreads
+	if ct == nil {
+		start = 0
+	}
+	for i := 0; i < maxthreads; i++ {
+		idx := (start + i) % maxthreads
+		t := &threads[idx]
+		if t.status == ST_RUNNABLE {
+			t.status = ST_RUNNING
+			spunlock(threadlock)
+			sched_run(t)
+		}
+	}
+	cpu.mythread = nil
+	spunlock(threadlock)
+	sched_halt()
 }
