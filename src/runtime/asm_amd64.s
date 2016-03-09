@@ -408,9 +408,23 @@ TEXT ·Wrmsr(SB), NOSPLIT, $0-16
 	WRMSR
 	RET
 
+// uint64 Inb(reg uint16)
+TEXT ·Inb(SB), NOSPLIT, $0-16
+	MOVW	reg+0(FP), DX
+	// inb (%dx), %al
+	BYTE	$0xec
+	// movzbq %al, %rax
+	BYTE $0x48
+	BYTE $0x0f
+	BYTE $0xb6
+	BYTE $0xc0
+	MOVQ	AX, ret+8(FP)
+	RET
+
+// void Outb(reg uint16, val uint8)
 TEXT runtime·Outb(SB), NOSPLIT, $0-16
-	MOVQ	reg+0(FP), DX
-	MOVQ	val+8(FP), AX
+	MOVW	reg+0(FP), DX
+	MOVB	val+2(FP), AX
 	// outb	%al, (%dx)
 	BYTE	$0xee
 	RET
@@ -428,14 +442,6 @@ TEXT runtime·Outl(SB), NOSPLIT, $0-16
 	MOVQ	val+8(FP), AX
 	// outl	%eax, (%dx)
 	BYTE	$0xef
-	RET
-
-//void outb(int64 port, int64 val)
-TEXT outb(SB), NOSPLIT, $0-16
-	MOVL	reg+0(FP), DX
-	MOVL	val+8(FP), AX
-	// outb	%al, (%dx)
-	BYTE	$0xee
 	RET
 
 TEXT runtime·Outsl(SB), NOSPLIT, $0-24
@@ -461,22 +467,6 @@ TEXT runtime·Insl(SB), NOSPLIT, $0-24
 	// repnz insl (%dx), (%rdi)
 	BYTE	$0xf2
 	BYTE	$0x6d
-	RET
-
-TEXT runtime·inb(SB), NOSPLIT, $0-0
-	JMP	inb(SB)
-
-//int64 inb(int64 port)
-TEXT inb(SB), NOSPLIT, $0-16
-	MOVL	reg+0(FP), DX
-	// inb	(%dx), %al
-	BYTE	$0xec
-	// movzbq %al, %rax
-	BYTE $0x48
-	BYTE $0x0f
-	BYTE $0xb6
-	BYTE $0xc0
-	MOVQ	AX, ret+8(FP)
 	RET
 
 TEXT ·rflags(SB), NOSPLIT, $0-8

@@ -26,10 +26,10 @@ func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
 func Lcr3(uintptr)
-func Inb(int) int
 func Inl(int) int
 func Insl(int, unsafe.Pointer, int)
-func Outb(int, int)
+func Outb(uint16, uint8)
+func Inb(uint16) uint
 func Outw(int, int)
 func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
@@ -51,7 +51,6 @@ func Fnaddr(func()) uintptr
 func Fnaddri(func(int)) uintptr
 func Trapwake()
 
-func inb(int) int
 func htpause()
 func finit()
 func fs_null()
@@ -62,7 +61,6 @@ func lidt(pdesc_t)
 func cli()
 func sti()
 func ltr(uint)
-func lap_id() int
 func rcr0() uintptr
 func rcr4() uintptr
 func lcr0(uintptr)
@@ -94,6 +92,7 @@ type cpu_t struct {
 }
 
 var Cpumhz uint
+var Pspercycle uint
 
 const MAXCPUS int = 32
 
@@ -154,8 +153,6 @@ const(
   TF_RFLAGS    = TFREGS + 4
     TF_FL_IF     uintptr = 1 << 9
 )
-
-var Pspercycle uint
 
 func Pushcli() int
 func Popcli(int)
@@ -418,14 +415,14 @@ func sc_setup() {
 	Outb(com1 + 1, 1)
 }
 
-const com1 = 0x3f8
-const lstatus = 5
+const com1 = uint16(0x3f8)
 
 //go:nosplit
 func sc_put_(c int8) {
-	for inb(com1 + lstatus) & 0x20 == 0 {
+	lstatus := uint16(5)
+	for Inb(com1 + lstatus) & 0x20 == 0 {
 	}
-	Outb(com1, int(c))
+	Outb(com1, uint8(c))
 }
 
 //go:nosplit
@@ -540,7 +537,6 @@ var Halt uint32
 // TEMPORARY CRAP
 func _pmsg(*int8)
 func invlpg(uintptr)
-func lap_eoi()
 func rflags() uintptr
 
 // wait until remove definition from proc.c
@@ -562,7 +558,8 @@ func splock(l *spinlock_t) {
 
 //go:nosplit
 func spunlock(l *spinlock_t) {
-	atomicstore(&l.v, 0)
+	//atomicstore(&l.v, 0)
+	l.v = 0
 }
 
 // since this lock may be taken during an interrupt (only under fatal error
@@ -1220,6 +1217,415 @@ func fpuinit(amfirst bool) {
 	}
 }
 
+// LAPIC registers
+const (
+	LAPID		= 0x20/4
+	LAPEOI		= 0xb0/4
+	LAPVER		= 0x30/4
+	LAPDCNT		= 0x3e0/4
+	LAPICNT		= 0x380/4
+	LAPCCNT		= 0x390/4
+	LVSPUR		= 0xf0/4
+	LVTIMER		= 0x320/4
+	LVCMCI		= 0x2f0/4
+	LVINT0		= 0x350/4
+	LVINT1		= 0x360/4
+	LVERROR		= 0x370/4
+	LVPERF		= 0x340/4
+	LVTHERMAL	= 0x330/4
+)
+
+var _lapaddr uintptr
+
+//go:nosplit
+func rlap(reg uint) uint32 {
+	if _lapaddr == 0 {
+		G_pancake("lapic not init", 0)
+	}
+	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
+	return atomicload(&lpg[reg])
+}
+
+//go:nosplit
+func wlap(reg uint, val uint32) {
+	if _lapaddr == 0 {
+		G_pancake("lapic not init", 0)
+	}
+	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
+	lpg[reg] = val
+}
+
+//go:nosplit
+func lap_id() uint32 {
+	if rflags() & TF_FL_IF != 0 {
+		G_pancake("interrupts must be cleared", 0)
+	}
+	if _lapaddr == 0 {
+		G_pancake("lapic not init", 0)
+	}
+	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
+	return lpg[LAPID] >> 24
+}
+
+//go:nosplit
+func lap_eoi() {
+	if _lapaddr == 0 {
+		G_pancake("lapic not init", 0)
+	}
+	wlap(LAPEOI, 0)
+}
+
+// PIT registers
+const (
+	CNT0	uint16 = 0x40
+	CNTCTL	uint16 = 0x43
+	_pitfreq	= 1193182
+	_pithz		= 100
+	PITDIV		= _pitfreq/_pithz
+)
+
+//go:nosplit
+func pit_ticks() uint {
+	// counter latch command for counter 0
+	cmd := uint8(0)
+	Outb(CNTCTL, cmd)
+	low := Inb(CNT0)
+	hi := Inb(CNT0)
+	return hi << 8 | low
+}
+
+//go:nosplit
+func pit_enable() {
+	// rate generator mode, lsb then msb (if square wave mode is used, the
+	// PIT uses div/2 for the countdown since div is taken to be the period
+	// of the wave)
+	Outb(CNTCTL, 0x34)
+	Outb(CNT0, uint8(PITDIV & 0xff))
+	Outb(CNT0, uint8(PITDIV >> 8))
+}
+
+func pit_disable() {
+	// disable PIT: one-shot, lsb then msb
+	Outb(CNTCTL, 0x32);
+	Outb(CNT0, uint8(PITDIV & 0xff))
+	Outb(CNT0, uint8(PITDIV >> 8))
+}
+
+// wait until 8254 resets the counter
+//go:nosplit
+func pit_phasewait() {
+	// 8254 timers are 16 bits, thus always smaller than last;
+	last := uint(1 << 16)
+	for {
+		cur := pit_ticks()
+		if cur > last {
+			return
+		}
+		last = cur
+	}
+}
+
+var _lapic_quantum uint32
+
+//go:nosplit
+func lapic_setup(calibrate int32) {
+	la := uintptr(0xfee00000)
+
+	if calibrate != 0 {
+		// map lapic IO mem
+		pte := pgdir_walk(la, false)
+		if pte != nil && *pte & PTE_P != 0 {
+			G_pancake("lapic mem already mapped", 0)
+		}
+	}
+
+	pte := pgdir_walk(la, true)
+	*pte = la | PTE_W | PTE_P | PTE_PCD
+	_lapaddr = la
+
+	lver := rlap(LAPVER)
+	if lver < 0x10 {
+		G_pancake("82489dx not supported", uintptr(lver))
+	}
+
+	// enable lapic, set spurious int vector
+	apicenable := 1 << 8
+	wlap(LVSPUR, uint32(apicenable | TRAP_SPUR))
+
+	// timer: periodic, int 32
+	periodic := 1 << 17
+	wlap(LVTIMER, uint32(periodic | TRAP_TIMER))
+	// divide by 1
+	divone := uint32(0xb)
+	wlap(LAPDCNT, divone)
+
+	if calibrate != 0 {
+		// figure out how many lapic ticks there are in a second; first
+		// setup 8254 PIT since it has a known clock frequency. openbsd
+		// uses a similar technique.
+		pit_enable()
+
+		// start lapic counting
+		wlap(LAPICNT, 0x80000000)
+		pit_phasewait()
+		lapstart := rlap(LAPCCNT)
+		cycstart := Rdtsc()
+
+		frac := 10
+		// XXX only wait for 100ms instead of 1s
+		for i := 0; i < _pithz/frac; i++ {
+			pit_phasewait()
+		}
+
+		lapend := rlap(LAPCCNT)
+		if lapend > lapstart {
+			G_pancake("lapic timer wrapped?", uintptr(lapend))
+		}
+		lapelapsed := (lapstart - lapend)*uint32(frac)
+		cycelapsed := (Rdtsc() - cycstart)*uint64(frac)
+		G_pmsg("LAPIC Mhz:")
+		pnum(uintptr(lapelapsed/(1000 * 1000)))
+		G_pmsg("\n")
+		_lapic_quantum = lapelapsed / HZ
+
+		G_pmsg("CPU Mhz:")
+		Cpumhz = uint(cycelapsed/(1000 * 1000))
+		pnum(uintptr(Cpumhz))
+		G_pmsg("\n")
+		Pspercycle = uint(1000000000000/cycelapsed)
+
+		pit_disable()
+	}
+
+	// initial count; the LAPIC's frequency is not the same as the CPU's
+	// frequency
+	wlap(LAPICNT, _lapic_quantum)
+
+	maskint := uint32(1 << 16)
+	// mask cmci, lint[01], error, perf counters, and thermal sensor
+	wlap(LVCMCI,    maskint)
+	// unmask LINT0 and LINT1. soon, i will use IO APIC instead.
+	wlap(LVINT0,    rlap(LVINT0) &^ maskint)
+	wlap(LVINT1,    rlap(LVINT1) &^ maskint)
+	wlap(LVERROR,   maskint)
+	wlap(LVPERF,    maskint)
+	wlap(LVTHERMAL, maskint)
+
+	ia32_apic_base := 0x1b
+	reg := uintptr(Rdmsr(ia32_apic_base))
+	if reg & (1 << 11) == 0 {
+		G_pancake("lapic disabled?", reg)
+	}
+	if (reg >> 12) != 0xfee00 {
+		G_pancake("weird base addr?", reg >> 12)
+	}
+
+	lreg := rlap(LVSPUR)
+	if lreg & (1 << 12) != 0 {
+		G_pmsg("EOI broadcast surpression\n")
+	}
+	if lreg & (1 << 9) != 0 {
+		G_pmsg("focus processor checking\n")
+	}
+	if lreg & (1 << 8) == 0 {
+		G_pmsg("apic disabled\n")
+	}
+}
+
+var tlbshoot_wait uintptr
+var tlbshoot_pg uintptr
+var tlbshoot_count uintptr
+var tlbshoot_pmap uintptr
+var tlbshoot_gen uint64
+
+func Tlbadmit(p_pmap, cpuwait, pg, pgcount uintptr) uint64 {
+	for !casuintptr(&tlbshoot_wait, 0, cpuwait) {
+		preemptok()
+	}
+	xchguintptr(&tlbshoot_pg, pg)
+	xchguintptr(&tlbshoot_count, pgcount)
+	xchguintptr(&tlbshoot_pmap, p_pmap)
+	xadd64(&tlbshoot_gen, 1)
+	return tlbshoot_gen
+}
+
+func Tlbwait(gen uint64) {
+	for atomicloaduintptr(&tlbshoot_wait) != 0 {
+		if atomicload64(&tlbshoot_gen) != gen {
+			break
+		}
+	}
+}
+
+// must be nosplit since called at interrupt time
+//go:nosplit
+func tlb_shootdown() {
+	lap_eoi()
+	ct := Gscpu().mythread
+	if ct != nil && ct.p_pmap == tlbshoot_pmap {
+		// the TLB was already invalidated since trap() currently
+		// switches to kernel pmap on any exception/interrupt other
+		// than NMI.
+		//start := tlbshoot_pg
+		//end := tlbshoot_pg + tlbshoot_count * PGSIZE
+		//for ; start < end; start += PGSIZE {
+		//	invlpg(start)
+		//}
+	}
+	dur := (*uint64)(unsafe.Pointer(&tlbshoot_wait))
+	v := xadd64(dur, -1)
+	if v < 0 {
+		G_pancake("shootwait < 0", uintptr(v))
+	}
+	if ct != nil {
+		sched_run(ct)
+	} else {
+		sched_halt()
+	}
+}
+
+// this function checks to see if another thread is trying to preempt this
+// thread (perhaps to start a GC). this is called when go code is spinning on a
+// spinlock in order to avoid a deadlock where the thread that acquired the
+// spinlock starts a GC and waits forever for the spinning thread. (go code
+// should probably not use spinlocks. tlb shootdown code is the only code
+// protected by a spinlock since the lock must both be acquired in go code and
+// in interrupt context.)
+//
+// alternatively, we could make sure that no allocations are made while the
+// spinlock is acquired.
+func preemptok() {
+	gp := getg()
+	StackPreempt := uintptr(0xfffffffffffffade)
+	if gp.stackguard0 == StackPreempt {
+		G_pmsg("!")
+		// call function with stack splitting prologue
+		_dummy()
+	}
+}
+
+var _notdeadcode uint32
+func _dummy() {
+	if _notdeadcode != 0 {
+		_dummy()
+	}
+	_notdeadcode = 0
+}
+
+// cpu exception/interrupt vectors
+const (
+	TRAP_NMI	= 2
+	TRAP_PGFAULT	= 14
+	TRAP_SYSCALL	= 64
+	TRAP_TIMER	= 32
+	TRAP_DISK	= (32 + 14)
+	TRAP_SPUR	= 48
+	TRAP_YIELD	= 49
+	TRAP_TLBSHOOT	= 70
+	TRAP_SIGRET	= 71
+	TRAP_PERFMASK	= 72
+)
+
+var threadlock = &spinlock_t{}
+
+// maximum # of runtime "OS" threads
+const maxthreads = 64
+var threads [maxthreads]thread_t
+
+// thread states
+const (
+	ST_INVALID	= 0
+	ST_RUNNABLE	= 1
+	ST_RUNNING	= 2
+	ST_WAITING	= 3
+	ST_SLEEPING	= 4
+	ST_WILLSLEEP	= 5
+)
+
+// scheduler constants
+const (
+	HZ	= 100
+)
+
+//go:nosplit
+func _tchk() {
+	if rflags() & TF_FL_IF != 0 {
+		G_pancake("must not be interruptible", 0)
+	}
+	if threadlock.v == 0 {
+		G_pancake("must hold threadlock", 0)
+	}
+}
+
+func thread_avail() int {
+	_tchk()
+	for i := range threads {
+		if threads[i].status == ST_INVALID {
+			return i
+		}
+	}
+	G_pancake("no available threads", maxthreads)
+	return -1
+}
+
+//go:nosplit
+func sched_halt() {
+	cpu_halt(Gscpu().rsp)
+}
+
+//go:nosplit
+func sched_run(t *thread_t) {
+	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
+		G_pancake("thread not interurptible", 0)
+	}
+	Gscpu().mythread = t
+	fxrstor(&t.fx)
+	trapret(&t.tf, t.p_pmap)
+}
+
+//go:nosplit
+func wakeup() {
+	_tchk()
+	now := hack_nanotime()
+	timedout := -110
+	for i := range threads {
+		t := &threads[i]
+		sf := t.sleepfor
+		if t.status == ST_SLEEPING && sf != -1 && sf < now {
+			t.status = ST_RUNNABLE
+			t.sleepfor = 0
+			t.futaddr = 0
+			t.sleepret = timedout
+		}
+	}
+}
+
+//go:nosplit
+func yieldy() {
+	_tchk()
+	cpu := Gscpu()
+	ct := cpu.mythread
+	_ti := (uintptr(unsafe.Pointer(ct)) -
+	    uintptr(unsafe.Pointer(&threads[0])))/unsafe.Sizeof(thread_t{})
+	ti := int(_ti)
+	start := (ti + 1) % maxthreads
+	if ct == nil {
+		start = 0
+	}
+	for i := 0; i < maxthreads; i++ {
+		idx := (start + i) % maxthreads
+		t := &threads[idx]
+		if t.status == ST_RUNNABLE {
+			t.status = ST_RUNNING
+			spunlock(threadlock)
+			sched_run(t)
+		}
+	}
+	cpu.mythread = nil
+	spunlock(threadlock)
+	sched_halt()
+}
+
 func find_empty(sz uintptr) uintptr {
 	v := caddr(0, 0, 0, 1, 0)
 	cantuse := uintptr(0xf0)
@@ -1358,91 +1764,6 @@ func hack_munmap(v, _sz uintptr) {
 	Popcli(fl)
 }
 
-var tlbshoot_wait uintptr
-var tlbshoot_pg uintptr
-var tlbshoot_count uintptr
-var tlbshoot_pmap uintptr
-var tlbshoot_gen uint64
-
-func Tlbadmit(p_pmap, cpuwait, pg, pgcount uintptr) uint64 {
-	for !casuintptr(&tlbshoot_wait, 0, cpuwait) {
-		preemptok()
-	}
-	xchguintptr(&tlbshoot_pg, pg)
-	xchguintptr(&tlbshoot_count, pgcount)
-	xchguintptr(&tlbshoot_pmap, p_pmap)
-	xadd64(&tlbshoot_gen, 1)
-	return tlbshoot_gen
-}
-
-func Tlbwait(gen uint64) {
-	for atomicloaduintptr(&tlbshoot_wait) != 0 {
-		if atomicload64(&tlbshoot_gen) != gen {
-			break
-		}
-	}
-}
-
-// must be nosplit since called at interrupt time
-//go:nosplit
-func tlb_shootdown() {
-	lap_eoi()
-	ct := Gscpu().mythread
-	if ct != nil && ct.p_pmap == tlbshoot_pmap {
-		// the TLB was already invalidated since trap() currently
-		// switches to kernel pmap on any exception/interrupt other
-		// than NMI.
-		//start := tlbshoot_pg
-		//end := tlbshoot_pg + tlbshoot_count * PGSIZE
-		//for ; start < end; start += PGSIZE {
-		//	invlpg(start)
-		//}
-	}
-	dur := (*uint64)(unsafe.Pointer(&tlbshoot_wait))
-	v := xadd64(dur, -1)
-	if v < 0 {
-		G_pancake("shootwait < 0", uintptr(v))
-	}
-	if ct != nil {
-		sched_run(ct)
-	} else {
-		sched_halt()
-	}
-}
-
-// this function checks to see if another thread is trying to preempt this
-// thread (perhaps to start a GC). this is called when go code is spinning on a
-// spinlock in order to avoid a deadlock where the thread that acquired the
-// spinlock starts a GC and waits forever for the spinning thread. (go code
-// should probably not use spinlocks. tlb shootdown code is the only code
-// protected by a spinlock since the lock must both be acquired in go code and
-// in interrupt context.)
-//
-// alternatively, we could make sure that no allocations are made while the
-// spinlock is acquired.
-func preemptok() {
-	gp := getg()
-	StackPreempt := uintptr(0xfffffffffffffade)
-	if gp.stackguard0 == StackPreempt {
-		G_pmsg("!")
-		// call function with stack splitting prologue
-		_dummy()
-	}
-}
-
-var _notdeadcode uint32
-func _dummy() {
-	if _notdeadcode != 0 {
-		_dummy()
-	}
-	_notdeadcode = 0
-}
-
-const (
-	TRAP_TIMER	= 32
-	TRAP_YIELD	= 49
-)
-
 func clone_wrap(rip uintptr) {
 	clone_call(rip)
 	G_pancake("clone_wrap returned", 0)
@@ -1492,100 +1813,6 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 
 	spunlock(threadlock)
 	Popcli(fl)
-}
-
-var threadlock = &spinlock_t{}
-
-// maximum # of runtime "OS" threads
-const maxthreads = 64
-var threads [maxthreads]thread_t
-
-const (
-	ST_INVALID	= 0
-	ST_RUNNABLE	= 1
-	ST_RUNNING	= 2
-	ST_WAITING	= 3
-	ST_SLEEPING	= 4
-	ST_WILLSLEEP	= 5
-)
-
-//go:nosplit
-func _tchk() {
-	if rflags() & TF_FL_IF != 0 {
-		G_pancake("must not be interruptible", 0)
-	}
-	if threadlock.v == 0 {
-		G_pancake("must hold threadlock", 0)
-	}
-}
-
-func thread_avail() int {
-	_tchk()
-	for i := range threads {
-		if threads[i].status == ST_INVALID {
-			return i
-		}
-	}
-	G_pancake("no available threads", maxthreads)
-	return -1
-}
-
-//go:nosplit
-func sched_halt() {
-	cpu_halt(Gscpu().rsp)
-}
-
-//go:nosplit
-func sched_run(t *thread_t) {
-	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
-		G_pancake("thread not interurptible", 0)
-	}
-	Gscpu().mythread = t
-	fxrstor(&t.fx)
-	trapret(&t.tf, t.p_pmap)
-}
-
-//go:nosplit
-func wakeup() {
-	_tchk()
-	now := hack_nanotime()
-	timedout := -110
-	for i := range threads {
-		t := &threads[i]
-		sf := t.sleepfor
-		if t.status == ST_SLEEPING && sf != -1 && sf < now {
-			t.status = ST_RUNNABLE
-			t.sleepfor = 0
-			t.futaddr = 0
-			t.sleepret = timedout
-		}
-	}
-}
-
-//go:nosplit
-func yieldy() {
-	_tchk()
-	cpu := Gscpu()
-	ct := cpu.mythread
-	_ti := (uintptr(unsafe.Pointer(ct)) -
-	    uintptr(unsafe.Pointer(&threads[0])))/unsafe.Sizeof(thread_t{})
-	ti := int(_ti)
-	start := (ti + 1) % maxthreads
-	if ct == nil {
-		start = 0
-	}
-	for i := 0; i < maxthreads; i++ {
-		idx := (start + i) % maxthreads
-		t := &threads[idx]
-		if t.status == ST_RUNNABLE {
-			t.status = ST_RUNNING
-			spunlock(threadlock)
-			sched_run(t)
-		}
-	}
-	cpu.mythread = nil
-	spunlock(threadlock)
-	sched_halt()
 }
 
 func hack_setitimer(timer uint32, new, old *itimerval) {

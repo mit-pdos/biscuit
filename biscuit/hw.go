@@ -227,7 +227,7 @@ func ide_init(rbase int) bool {
 
 	found := false
 	for i := 0; i < 1000; i++ {
-		r := runtime.Inb(rbase + 7)
+		r := int(runtime.Inb(uint16(rbase + 7)))
 		if r == 0xff {
 			fmt.Printf("floating bus!\n")
 			break
@@ -249,7 +249,7 @@ func ide_wait(base int, chk bool) bool {
 	var r int
 	c := 0
 	for {
-		r = runtime.Inb(base + 7)
+		r = int(runtime.Inb(uint16(base + 7)))
 		if r & (ide_bsy | ide_drdy) == ide_drdy {
 			break
 		}
@@ -269,7 +269,7 @@ func idedata_ready(base int) {
 	c := 0
 	for {
 		drq := 1 << 3
-		st := runtime.Inb(base + 7)
+		st := int(runtime.Inb(uint16(base + 7)))
 		if st & drq != 0 {
 			return
 		}
@@ -282,23 +282,24 @@ func idedata_ready(base int) {
 // it is possible that a goroutine is context switched to a new CPU while doing
 // this port io; does this matter? doesn't seem to for qemu...
 func ide_start(rbase, allstatus int, ibuf *idebuf_t, writing bool) {
-	ireg := func(n int) int {
-		return rbase + n
+	ireg := func(n int) uint16 {
+		return uint16(rbase + n)
 	}
 	ide_wait(rbase, false)
 	outb := runtime.Outb
-	outb(allstatus, 0)
+	outb(uint16(allstatus), 0)
 	outb(ireg(2), 1)
-	bn := int(ibuf.block)
-	bd := int(ibuf.disk)
-	outb(ireg(3), bn & 0xff)
-	outb(ireg(4), (bn >> 8) & 0xff)
-	outb(ireg(5), (bn >> 16) & 0xff)
-	outb(ireg(6), 0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf)
+	bn := ibuf.block
+	bd := ibuf.disk
+	outb(ireg(3), uint8(bn & 0xff))
+	outb(ireg(4), uint8((bn >> 8) & 0xff))
+	outb(ireg(5), uint8((bn >> 16) & 0xff))
+	outb(ireg(6), uint8(0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf))
 	if writing {
 		outb(ireg(7), ide_cmd_write)
 		idedata_ready(rbase)
-		runtime.Outsl(ireg(0), unsafe.Pointer(&ibuf.data[0]), 512/4)
+		runtime.Outsl(int(ireg(0)), unsafe.Pointer(&ibuf.data[0]),
+		    512/4)
 	} else {
 		outb(ireg(7), ide_cmd_read)
 	}
@@ -342,8 +343,8 @@ func (d *legacy_disk_t) intr() bool {
 
 func (d *legacy_disk_t) int_clear() {
 	// read status so disk clears int
-	runtime.Inb(d.rbase + 7)
-	runtime.Inb(d.rbase + 7)
+	runtime.Inb(uint16(d.rbase + 7))
+	runtime.Inb(uint16(d.rbase + 7))
 	p8259_eoi(IRQ_DISK)
 }
 
@@ -369,8 +370,8 @@ func (d *pciide_disk_t) complete(dst []uint8, writing bool) {
 }
 
 func (d *pciide_disk_t) intr() bool {
-	streg := d.bmaster + 0x02
-	bmintr := 1 << 2
+	streg := uint16(d.bmaster + 0x02)
+	bmintr := uint(1 << 2)
 	st := runtime.Inb(streg)
 	if st & bmintr == 0 {
 		return false
@@ -380,18 +381,18 @@ func (d *pciide_disk_t) intr() bool {
 
 func (d *pciide_disk_t) int_clear() {
 	// read status so disk clears int
-	runtime.Inb(d.rbase + 7)
-	runtime.Inb(d.rbase + 7)
+	runtime.Inb(uint16(d.rbase + 7))
+	runtime.Inb(uint16(d.rbase + 7))
 
 	// in PCI-native mode, clear the interrupt via the legacy bus master
 	// base, bar 4.
-	streg := d.bmaster + 0x02
+	streg := uint16(d.bmaster + 0x02)
 	st := runtime.Inb(streg)
-	er := 1 << 1
+	er := uint(1 << 1)
 	if st & er != 0 {
 		panic("disk error")
 	}
-	runtime.Outb(streg, st)
+	runtime.Outb(streg, uint8(st))
 
 	// and via 8259 pics
 	p8259_eoi(IRQ_DISK)

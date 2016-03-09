@@ -354,12 +354,12 @@ void ·finit(void);
 void ·fxsave(uint64 *);
 void ·htpause(void);
 struct cpu_t* ·Gscpu(void);
-int64 inb(int32);
-uint64 ·lap_id(void);
+uint64 ·Inb(int16);
+uint32 ·lap_id(void);
 void ·lcr0(uint64);
 void lcr3(uint64);
 void ·lcr4(uint64);
-void outb(int64, int64);
+void ·Outb(uint16, uint8);
 int64 ·Pushcli(void);
 void ·Popcli(int64);
 uint64 ·rcr0(void);
@@ -372,7 +372,6 @@ uint64 rrsp(void);
 void ·sti(void);
 void tlbflush(void);
 void _trapret(uint64 *);
-void wlap(uint32, uint32);
 void ·Wrmsr(uint64, uint64);
 void ·mktrap(uint64);
 void ·fs_null(void);
@@ -1082,204 +1081,11 @@ trap(uint64 *tf)
 	runtime·pancake("no returning", 0);
 }
 
-static uint64 lapaddr;
-
 uint64 ·tss_init(int32 myid);
 
-#pragma textflag NOSPLIT
-uint32
-rlap(uint32 reg)
-{
-	if (!lapaddr)
-		runtime·pancake("lapaddr null?", lapaddr);
-	volatile uint32 *p = (uint32 *)lapaddr;
-	return p[reg];
-}
+uint32 ·lap_id(void);
 
-#pragma textflag NOSPLIT
-void
-wlap(uint32 reg, uint32 val)
-{
-	if (!lapaddr)
-		runtime·pancake("lapaddr null?", lapaddr);
-	volatile uint32 *p = (uint32 *)lapaddr;
-	p[reg] = val;
-}
-
-#pragma textflag NOSPLIT
-uint64
-·lap_id(void)
-{
-	assert((·rflags() & TF_FL_IF) == 0, "ints enabled for lapid", 0);
-
-	if (!lapaddr)
-		runtime·pancake("lapaddr null (id)", lapaddr);
-	volatile uint32 *p = (uint32 *)lapaddr;
-
-#define IDREG       (0x20/4)
-	return p[IDREG] >> 24;
-}
-
-#pragma textflag NOSPLIT
-void
-·lap_eoi(void)
-{
-	assert(lapaddr, "lapaddr null?", lapaddr);
-
-#define EOIREG      (0xb0/4)
-	wlap(EOIREG, 0);
-}
-
-#pragma textflag NOSPLIT
-uint64
-ticks_get(void)
-{
-#define CCREG       (0x390/4)
-	return lapic_quantum - rlap(CCREG);
-}
-
-#pragma textflag NOSPLIT
-int64
-pit_ticks(void)
-{
-#define CNT0		0x40
-#define CNTCTL		0x43
-	// counter latch command for counter 0
-	int64 cmd = 0;
-	outb(CNTCTL, cmd);
-	int64 low = inb(CNT0);
-	int64 high = inb(CNT0);
-	return high << 8 | low;
-}
-
-#pragma textflag NOSPLIT
-// wait until 8254 resets the counter
-void
-pit_phasewait(void)
-{
-	// 8254 timers are 16 bits, thus always smaller than last;
-	int64 last = 1 << 16;
-	for (;;) {
-		int64 cur = pit_ticks();
-		if (cur > last)
-			return;
-		last = cur;
-	}
-}
-
-#pragma textflag NOSPLIT
-void
-timer_setup(int32 calibrate)
-{
-	uint64 la = 0xfee00000ULL;
-
-	// map lapic IO mem
-	uint64 *pte = ·pgdir_walk((void *)la, 1);
-	*pte = (uint64)la | PTE_W | PTE_P | PTE_PCD;
-	lapaddr = la;
-#define LVERSION    (0x30/4)
-	uint32 lver = rlap(LVERSION);
-	if (lver < 0x10)
-		runtime·pancake("82489dx not supported", lver);
-
-#define LVTIMER     (0x320/4)
-#define DCREG       (0x3e0/4)
-#define DIVONE      0xb
-#define ICREG       (0x380/4)
-
-#define MASKINT   (1 << 16)
-
-#define LVSPUR     (0xf0/4)
-	// enable lapic, set spurious int vector
-	wlap(LVSPUR, 1 << 8 | TRAP_SPUR);
-
-	// timer: periodic, int 32
-	wlap(LVTIMER, 1 << 17 | TRAP_TIMER);
-	// divide by
-	wlap(DCREG, DIVONE);
-
-	if (calibrate) {
-		// figure out how many lapic ticks there are in a second; first
-		// setup 8254 PIT since it has a known clock frequency. openbsd
-		// uses a similar technique.
-		const uint32 pitfreq = 1193182;
-		const uint32 pithz = 100;
-		const uint32 div = pitfreq/pithz;
-		// rate generator mode, lsb then msb (if square wave mode is
-		// used, the PIT uses div/2 for the countdown since div is
-		// taken to be the period of the wave)
-		outb(CNTCTL, 0x34);
-		outb(CNT0, div & 0xff);
-		outb(CNT0, div >> 8);
-
-		// start lapic counting
-		wlap(ICREG, 0x80000000);
-		pit_phasewait();
-		uint32 lapstart = rlap(CCREG);
-		uint64 cycstart = ·Rdtsc();
-
-		int32 i;
-		for (i = 0; i < pithz; i++)
-			pit_phasewait();
-
-		uint32 lapend = rlap(CCREG);
-		if (lapend > lapstart)
-			runtime·pancake("lapic timer wrapped?", lapend);
-		uint32 lapelapsed = lapstart - lapend;
-		uint64 cycelapsed = ·Rdtsc() - cycstart;
-		pmsg("LAPIC Mhz:");
-		·pnum(lapelapsed/(1000 * 1000));
-		pmsg("\n");
-		lapic_quantum = lapelapsed / HZ;
-
-		pmsg("CPU Mhz:");
-		extern uint64 runtime·Cpumhz;
-		runtime·Cpumhz = cycelapsed/(1000 * 1000);
-		·pnum(runtime·Cpumhz);
-		pmsg("\n");
-		·Pspercycle = (1000000000000ull)/cycelapsed;
-
-		// disable PIT: one-shot, lsb then msb
-		outb(CNTCTL, 0x32);
-		outb(CNT0, div & 0xff);
-		outb(CNT0, div >> 8);
-	}
-
-	// initial count; the LAPIC's frequency is not the same as the CPU's
-	// frequency
-	wlap(ICREG, lapic_quantum);
-
-#define LVCMCI      (0x2f0/4)
-#define LVINT0      (0x350/4)
-#define LVINT1      (0x360/4)
-#define LVERROR     (0x370/4)
-#define LVPERF      (0x340/4)
-#define LVTHERMAL   (0x330/4)
-
-	// mask cmci, lint[01], error, perf counters, and thermal sensor
-	wlap(LVCMCI,    MASKINT);
-	// masking LVINT0 somewhow results in a GPfault?
-	//wlap(LVINT0,    1 << MASKSHIFT);
-	wlap(LVINT1,    MASKINT);
-	wlap(LVERROR,   MASKINT);
-	wlap(LVPERF,    MASKINT);
-	wlap(LVTHERMAL, MASKINT);
-
-#define IA32_APIC_BASE   0x1b
-	uint64 reg = ·Rdmsr(IA32_APIC_BASE);
-	if (!(reg & (1 << 11)))
-		runtime·pancake("lapic disabled?", reg);
-	if (reg >> 12 != 0xfee00)
-		runtime·pancake("weird base addr?", reg >> 12);
-
-	uint32 lreg = rlap(LVSPUR);
-	if (lreg & (1 << 12))
-		pmsg("EOI broadcast surpression\n");
-	if (lreg & (1 << 9))
-		pmsg("focus processor checking\n");
-	if (!(lreg & (1 << 8)))
-		pmsg("apic disabled\n");
-}
+void ·lapic_setup(int32 calibrate);
 
 #pragma textflag NOSPLIT
 void
@@ -1339,14 +1145,14 @@ proc_setup(void)
 	for (i = 0; i < MAXCPUS; i++)
 		·cpus[i].this = (uint64)&·cpus[i];
 
-	timer_setup(1);
+	·lapic_setup(1);
 
 	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
 	// otherwise an RTC timer interrupt (that turns into a double-fault
 	// since the pic has not been programmed yet) comes in immediately
 	// after ·sti.
-	outb(0x20 + 1, 0xff);
-	outb(0xa0 + 1, 0xff);
+	·Outb(0x20 + 1, 0xff);
+	·Outb(0xa0 + 1, 0xff);
 
 	uint64 myrsp = ·tss_init(0);
 	sysc_setup(myrsp);
@@ -1372,7 +1178,7 @@ void
 	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
 	assert(·lap_id() <= MAXCPUS, "lapic id large", myid);
 	·fpuinit(0);
-	timer_setup(0);
+	·lapic_setup(0);
 	uint64 myrsp = ·tss_init(myid);
 	sysc_setup(myrsp);
 	assert(curcpu.num == 0, "slot taken", curcpu.num);
@@ -1451,15 +1257,6 @@ runtime·Rcr3(void)
 	runtime·stackcheck();
 
 	return rcr3();
-}
-
-#pragma textflag NOSPLIT
-int64
-runtime·Inb(uint64 reg)
-{
-	runtime·stackcheck();
-	int64 ret = inb(reg);
-	return ret;
 }
 
 #pragma textflag NOSPLIT

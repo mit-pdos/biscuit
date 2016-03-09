@@ -47,14 +47,14 @@ func lap_id() int {
 }
 
 func p8259_eoi(irq int) {
-	pic1 := 0x20
-	pic2 := 0xa0
+	pic1 := uint16(0x20)
+	pic2 := uint16(0xa0)
 	// specific eoi
-	eoi := 0x60
+	eoi := uint8(0x60)
 	if irq <= 0 {
 		panic("weird irq")
 	}
-	bits := irq % 8
+	bits := uint8(irq % 8)
 
 	outb := runtime.Outb
 	if irq <= 7 {
@@ -1964,7 +1964,7 @@ func set_cpucount(n int) {
 // nosplit. otherwise we may GC and then resume in some other goroutine with
 // interrupts cleared, thus interrupts would never be cleared.
 //go:nosplit
-func poutb(reg int, val int) {
+func poutb(reg uint16, val uint8) {
 	runtime.Outb(reg, val)
 	cdelay(1)
 }
@@ -1972,9 +1972,9 @@ func poutb(reg int, val int) {
 func p8259_init() {
 	// the piix3 provides two 8259 compatible pics. the runtime masks all
 	// irqs for us.
-	pic1 := 0x20
+	pic1 := uint16(0x20)
 	pic1d := pic1 + 1
-	pic2 := 0xa0
+	pic2 := uint16(0xa0)
 	pic2d := pic2 + 1
 
 	runtime.Cli()
@@ -1983,7 +1983,7 @@ func p8259_init() {
 	// start icw1: edge triggered, icw4 required
 	poutb(pic1, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	poutb(pic1d, IRQ_BASE)
+	poutb(pic1d, uint8(IRQ_BASE))
 	// icw3, cascaded mode
 	poutb(pic1d, 4)
 	// icw4, no auto eoi, 8086 mode.
@@ -1993,7 +1993,7 @@ func p8259_init() {
 	// start icw1: edge triggered, icw4 required
 	poutb(pic2, 0x11)
 	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	poutb(pic2d, IRQ_BASE + 8)
+	poutb(pic2d, uint8(IRQ_BASE + 8))
 	// icw3, slave identification code
 	poutb(pic2d, 2)
 	// icw4, no auto eoi, 8086 mode.
@@ -2022,14 +2022,13 @@ func irq_unmask(irq int) {
 	if irq < 0 || irq >= 16 {
 		panic("weird irq")
 	}
-	pic1 := 0x20
+	pic1 := uint16(0x20)
 	pic1d := pic1 + 1
-	pic2 := 0xa0
+	pic2 := uint16(0xa0)
 	pic2d := pic2 + 1
 	intmask = intmask & ^(1 << uint(irq))
-	dur := int(intmask)
-	runtime.Outb(pic1d, dur)
-	runtime.Outb(pic2d, dur >> 8)
+	runtime.Outb(pic1d, uint8(intmask))
+	runtime.Outb(pic2d, uint8(intmask >> 8))
 }
 
 func kbd_init() {
@@ -2082,7 +2081,7 @@ type cons_t struct {
 var cons	= cons_t{}
 
 func _comready() bool {
-	com1ctl := 0x3f8 + 5
+	com1ctl := uint16(0x3f8 + 5)
 	b := runtime.Inb(com1ctl)
 	if b & 0x01 == 0 {
 		return false
@@ -2090,7 +2089,7 @@ func _comready() bool {
 	return true
 }
 func _kready() bool {
-	ibf := 1 << 0
+	ibf := uint(1 << 0)
 	st := runtime.Inb(0x64)
 	if st & ibf == 0 {
 		//panic("no kbd data?")
@@ -2120,7 +2119,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		select {
 		case <- cons.kbd_int:
 			for _kready() {
-				sc := inb(0x60)
+				sc := int(inb(0x60))
 				c, ok := km[sc]
 				if ok {
 					addprint(c)
@@ -2129,7 +2128,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			p8259_eoi(IRQ_KBD)
 		case <- cons.com_int:
 			for _comready() {
-				com1data := 0x3f8 + 0
+				com1data := uint16(0x3f8 + 0)
 				sc := inb(com1data)
 				c := byte(sc)
 				if c == '\r' {
