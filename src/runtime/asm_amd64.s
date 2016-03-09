@@ -252,23 +252,11 @@ h_ok:
 	MOVQ	AX, g_m(CX)
 
 	CALL	·int_setup(SB)
-	CALL	proc_setup(SB)
-
-	//MOVQ	CR0, AX
-	//PUSHQ	AX
-	//CALL	exam(SB)
-	//POPQ	AX
-
-	//CALL	pgtest(SB)
-	//CALL	mmap_test(SB)
+	CALL	·proc_setup(SB)
 
 	CLD				// convention is D is always left cleared
 	CALL	runtime·check(SB)
 
-	//MOVL	16(SP), AX		// copy argc
-	//MOVL	AX, 0(SP)
-	//MOVQ	24(SP), AX		// copy argv
-	//MOVQ	AX, 8(SP)
 	MOVQ	$fakeargv(SB), AX
 	PUSHQ	AX
 	PUSHQ	$1
@@ -472,11 +460,6 @@ TEXT runtime·Insl(SB), NOSPLIT, $0-24
 TEXT ·rflags(SB), NOSPLIT, $0-8
 	PUSHFQ
 	POPQ	AX
-	MOVQ	AX, ret+0(FP)
-	RET
-
-TEXT rrsp(SB), NOSPLIT, $0-8
-	MOVQ	SP, AX
 	MOVQ	AX, ret+0(FP)
 	RET
 
@@ -939,7 +922,7 @@ syscallreturn:
 	BYTE	$0x0f
 	BYTE	$0x35
 	// not reached; just to trick dead code analysis
-	CALL	_sysentry(SB)
+	CALL	·_sysentry(SB)
 	CALL	_userint(SB)
 
 // this should be a label since it is the bottom half of the Userrun_ function,
@@ -947,7 +930,7 @@ syscallreturn:
 // label. thus the function epilogue and offset to get the tf arg from Userrun_
 // are hand-coded.
 //_sysentry:
-TEXT _sysentry(SB), NOSPLIT, $0-0
+TEXT ·_sysentry(SB), NOSPLIT, $0-0
 	// save user state in fake trapframe
 	MOVQ	0x20(SP), R9
 	MOVQ	R10, TF_RSP(R9)

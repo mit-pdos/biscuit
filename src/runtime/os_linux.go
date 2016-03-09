@@ -18,7 +18,6 @@ func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
 func trapsched_m(*g)
 func trapinit_m(*g)
 
-func Ap_setup(int)
 func Cli()
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
 func Install_traphandler(func(tf *[24]int))
@@ -48,7 +47,7 @@ func Vtop(*[512]int) int
 
 func Crash()
 func Fnaddr(func()) uintptr
-func Fnaddri(func(int)) uintptr
+func Fnaddri(func(uint)) uintptr
 func Trapwake()
 
 func htpause()
@@ -71,6 +70,7 @@ func fxrstor(*[FXREGS]uintptr)
 func trapret(*[TFSIZE]uintptr, uintptr)
 func mktrap(int)
 func stackcheck()
+func _sysentry()
 
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
@@ -82,7 +82,7 @@ func stackcheck()
 // - using range to iterate over a string (calls stringiter*)
 
 type cpu_t struct {
-	this		uint
+	this		*cpu_t
 	mythread	*thread_t
 	rsp		uintptr
 	num		uint
@@ -622,6 +622,7 @@ func pancake(msg *int8, addr uintptr) {
 		*p = 0x1400 | 'F'
 	}
 }
+
 //go:nosplit
 func G_pancake(msg string, addr uintptr) {
 	cli()
@@ -801,7 +802,7 @@ func tss_init(cpunum uint) uintptr {
 	tss_seginit(cpunum, tss, unsafe.Sizeof(tss_t{}) - 1)
 	segselect := segnum(cpunum) << 3
 	ltr(segselect)
-	cpus[lap_id()].rsp = rsp
+	cpus[cpunum].rsp = rsp
 	return rsp
 }
 
@@ -1211,9 +1212,10 @@ func fpuinit(amfirst bool) {
 		chkalign(unsafe.Pointer(&fxinit[0]), 16)
 		fxsave(&fxinit)
 
-		// XXX XXX XXX XXX XXX XXX XXX dont forget to do this once
-		// thread code is converted to go
-		G_pmsg("VERIFY FX FOR THREADS\n")
+		chksize(FXREGS*8, unsafe.Sizeof(threads[0].fx))
+		for i := range threads {
+			chkalign(unsafe.Pointer(&threads[i].fx), 16)
+		}
 	}
 }
 
@@ -1328,10 +1330,10 @@ func pit_phasewait() {
 var _lapic_quantum uint32
 
 //go:nosplit
-func lapic_setup(calibrate int32) {
+func lapic_setup(calibrate bool) {
 	la := uintptr(0xfee00000)
 
-	if calibrate != 0 {
+	if calibrate {
 		// map lapic IO mem
 		pte := pgdir_walk(la, false)
 		if pte != nil && *pte & PTE_P != 0 {
@@ -1359,7 +1361,7 @@ func lapic_setup(calibrate int32) {
 	divone := uint32(0xb)
 	wlap(LAPDCNT, divone)
 
-	if calibrate != 0 {
+	if calibrate {
 		// figure out how many lapic ticks there are in a second; first
 		// setup 8254 PIT since it has a known clock frequency. openbsd
 		// uses a similar technique.
@@ -1430,6 +1432,94 @@ func lapic_setup(calibrate int32) {
 	if lreg & (1 << 8) == 0 {
 		G_pmsg("apic disabled\n")
 	}
+}
+
+func proc_setup() {
+	chksize(TFSIZE*8, unsafe.Sizeof(threads[0].tf))
+	fpuinit(true)
+	// initialize the first thread: us
+	threads[0].status = ST_RUNNING
+	threads[0].p_pmap = p_kpmap
+
+	// initialize GS pointers
+	for i := range cpus {
+		cpus[i].this = &cpus[i]
+	}
+
+	lapic_setup(true)
+
+	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
+	// otherwise an RTC timer interrupt (that turns into a double-fault
+	// since the PIC has not been programmed yet) comes in immediately
+	// after sti.
+	Outb(0x20 + 1, 0xff)
+	Outb(0xa0 + 1, 0xff)
+
+	myrsp := tss_init(0)
+	sysc_setup(myrsp)
+	gs_set(&cpus[0])
+	Gscpu().num = 0
+	Gscpu().mythread = &threads[0]
+}
+
+//go:nosplit
+func Ap_setup(cpunum uint) {
+	// interrupts are probably already cleared
+	fl := Pushcli()
+
+	splock(pmsglock)
+	_G_pmsg("cpu")
+	_pnum(uintptr(cpunum))
+	_G_pmsg("joined\n")
+	spunlock(pmsglock)
+
+	if cpunum >= uint(MAXCPUS) {
+		G_pancake("nice computer!", uintptr(cpunum))
+	}
+	fpuinit(false)
+	lapic_setup(false)
+	myrsp := tss_init(cpunum)
+	sysc_setup(myrsp)
+	mycpu := &cpus[cpunum]
+	if mycpu.num != 0 {
+		G_pancake("cpu id conflict", uintptr(mycpu.num))
+	}
+	fs_null()
+	gs_set(mycpu)
+	Gscpu().num = cpunum
+	Gscpu().mythread = nil
+
+	Popcli(fl)
+}
+
+//go:nosplit
+func gs_set(c *cpu_t) {
+	// we must set fs/gs at least once before we use the MSRs to change
+	// their base address. the MSRs write directly to hidden segment
+	// descriptor cache, and if we don't explicitly fill the segment
+	// descriptor cache, the writes to the MSRs are thrown out (presumably
+	// because the caches are thought to be invalid).
+	gs_null()
+	ia32_gs_base := 0xc0000101
+	Wrmsr(ia32_gs_base, int(uintptr(unsafe.Pointer(c))))
+}
+
+//go:nosplit
+func sysc_setup(myrsp uintptr) {
+	// lowest 2 bits are ignored for sysenter, but used for sysexit
+	kcode64 := 1 << 3 | 3
+	sysenter_cs := 0x174
+	Wrmsr(sysenter_cs, kcode64)
+
+	sysenter_eip := 0x176
+	// asm_amd64.s
+	var dur func()
+	dur = _sysentry
+	sysentryaddr := **(**uintptr)(unsafe.Pointer(&dur))
+	Wrmsr(sysenter_eip, int(sysentryaddr))
+
+	sysenter_esp := 0x175
+	Wrmsr(sysenter_esp, int(myrsp))
 }
 
 var tlbshoot_wait uintptr

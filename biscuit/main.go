@@ -30,7 +30,7 @@ type cpu_t struct {
 	num		int
 	// per-cpus interrupt queues. the cpu interrupt handler is the
 	// producer, the go routine running trap() below is the consumer. each
-	// cpus interrupt handler increments head while the go routine consuer
+	// cpus interrupt handler increments head while the go routine consumer
 	// increments tail
 	trapstore	[maxtstore]trapstore_t
 	tshead		int
@@ -1926,7 +1926,7 @@ func cpus_start(aplim int) {
 	}
 	set_cpucount(apcnt + 1)
 
-	// actually  map the stacks for the CPUs that joined
+	// actually map the stacks for the CPUs that joined
 	cpus_stack_init(apcnt, stackstart)
 
 	// tell the cpus to carry on
@@ -1937,7 +1937,7 @@ func cpus_start(aplim int) {
 
 // myid is a logical id, not lapic id
 //go:nosplit
-func ap_entry(myid int) {
+func ap_entry(myid uint) {
 
 	// myid starts from 1
 	runtime.Ap_setup(myid)
@@ -1947,7 +1947,7 @@ func ap_entry(myid int) {
 		runtime.Pnum(0xb1dd1e)
 		for {}
 	}
-	cpus[lid].num = myid
+	cpus[lid].num = int(myid)
 
 	// ints are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()

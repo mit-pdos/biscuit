@@ -355,7 +355,6 @@ void ·fxsave(uint64 *);
 void ·htpause(void);
 struct cpu_t* ·Gscpu(void);
 uint64 ·Inb(int16);
-uint32 ·lap_id(void);
 void ·lcr0(uint64);
 void lcr3(uint64);
 void ·lcr4(uint64);
@@ -653,10 +652,6 @@ struct cpu_t {
 extern struct thread_t ·threads[NTHREADS];
 // index is lapic id
 extern struct cpu_t ·cpus[MAXCPUS];
-
-#define curcpu               (·cpus[·lap_id()])
-#define curthread            ((struct thread_t *)(curcpu.mythread))
-#define setcurthread(x)      (curcpu.mythread = (uint64)x)
 
 extern struct spinlock_t *·threadlock;
 extern struct spinlock_t *·futexlock;
@@ -964,13 +959,16 @@ trap(uint64 *tf)
 	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0)
 		kernel_fault(tf);
 
-	if (·Gscpu() != &curcpu) {
-		·pnum((uint64)·Gscpu());
-		·pnum((uint64)&curcpu);
-		runtime·pancake("gs is wrong", 0);
-	}
+	// not true anymore since we use logical id instead of lapic id for
+	// index into cpus[]
+	//if (·Gscpu() != &curcpu) {
+	//	·pnum((uint64)·Gscpu());
+	//	·pnum((uint64)&curcpu);
+	//	runtime·pancake("gs is wrong", 0);
+	//}
 
-	struct thread_t *ct = curthread;
+	//struct thread_t *ct = curthread;
+	struct thread_t *ct = (struct thread_t *)·Gscpu()->mythread;
 
 	assert((·rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
 
@@ -1042,7 +1040,7 @@ trap(uint64 *tf)
 		}
 		if (!yielding) {
 			·lap_eoi();
-			if (curcpu.num == 0) {
+			if (·Gscpu()->num == 0) {
 				·wakeup();
 				proftick();
 			}
@@ -1080,124 +1078,6 @@ trap(uint64 *tf)
 	// not reached
 	runtime·pancake("no returning", 0);
 }
-
-uint64 ·tss_init(int32 myid);
-
-uint32 ·lap_id(void);
-
-void ·lapic_setup(int32 calibrate);
-
-#pragma textflag NOSPLIT
-void
-sysc_setup(uint64 myrsp)
-{
-	// lowest 2 bits are ignored for sysenter, but used for sysexit
-	const uint64 kcode64 = 1 << 3 | 3;
-	const uint64 sysenter_cs = 0x174;
-	·Wrmsr(sysenter_cs, kcode64);
-
-	const uint64 sysenter_eip = 0x176;
-	// asm_amd64.s
-	void _sysentry(void);
-	·Wrmsr(sysenter_eip, (uint64)_sysentry);
-
-	const uint64 sysenter_esp = 0x175;
-	·Wrmsr(sysenter_esp, myrsp);
-}
-
-#pragma textflag NOSPLIT
-void
-gs_set(struct cpu_t *mycpu)
-{
-	// we must set fs/gs, the only segment descriptors in ia32e mode, at
-	// least once before we use the MSRs to change their base address. the
-	// MSRs write directly to hidden segment descriptor cache, and if we
-	// don't explicitly fill the segment descriptor cache, the writes to
-	// the MSRs are thrown out (presumably because the caches are thought
-	// to be invalid).
-	·gs_null();
-	const uint64 ia32_gs_base = 0xc0000101;
-	·Wrmsr(ia32_gs_base, (uint64)mycpu);
-}
-
-#pragma textflag NOSPLIT
-void
-proc_setup(void)
-{
-	// fpuinit must be called before pgdir_walk or tss_init since
-	// pgdir_walk may call memclr which uses SSE instructions to zero newly
-	// allocated pages.
-	·fpuinit(1);
-
-	assert(sizeof(·threads[0].tf) == TFSIZE, "weird tf size",
-	    sizeof(·threads[0].tf));
-	assert(sizeof(·threads[0].fx) == FXSIZE, "weird fx size",
-	    sizeof(·threads[0].fx));
-	·threads[0].status = ST_RUNNING;
-	·threads[0].p_pmap = ·p_kpmap;
-
-	uint64 la = 0xfee00000ULL;
-	uint64 *pte = ·pgdir_walk((void *)la, 0);
-	if (pte && *pte & PTE_P)
-		runtime·pancake("lapic mem mapped?", (uint64)pte);
-
-	int32 i;
-	for (i = 0; i < MAXCPUS; i++)
-		·cpus[i].this = (uint64)&·cpus[i];
-
-	·lapic_setup(1);
-
-	// 8259a - mask all irqs. see 2.5.3.6 in piix3 documentation.
-	// otherwise an RTC timer interrupt (that turns into a double-fault
-	// since the pic has not been programmed yet) comes in immediately
-	// after ·sti.
-	·Outb(0x20 + 1, 0xff);
-	·Outb(0xa0 + 1, 0xff);
-
-	uint64 myrsp = ·tss_init(0);
-	sysc_setup(myrsp);
-	curcpu.num = 0;
-	gs_set(&curcpu);
-	setcurthread(&·threads[0]);
-	//pmsg("sizeof thread_t:");
-	//·pnum(sizeof(struct thread_t));
-	//pmsg("\n");
-
-	for (i = 0; i < NTHREADS; i++)
-		if ((uint64)·threads[i].fx & ((1 << 4) - 1))
-			assert(0, "fx not 16 byte aligned", i);
-}
-
-#pragma textflag NOSPLIT
-void
-·Ap_setup(int64 myid)
-{
-	pmsg("cpu");
-	·pnum(myid);
-	pmsg("joined\n");
-	assert(myid >= 0 && myid < MAXCPUS, "id id large", myid);
-	assert(·lap_id() <= MAXCPUS, "lapic id large", myid);
-	·fpuinit(0);
-	·lapic_setup(0);
-	uint64 myrsp = ·tss_init(myid);
-	sysc_setup(myrsp);
-	assert(curcpu.num == 0, "slot taken", curcpu.num);
-
-	int64 test = ·Pushcli();
-	assert((test & TF_FL_IF) == 0, "wtf!", test);
-	·Popcli(test);
-	assert((·rflags() & TF_FL_IF) == 0, "wtf!", test);
-
-	curcpu.num = myid;
-	·fs_null();
-	gs_set(&curcpu);
-	setcurthread(0);
-}
-
-struct timespec {
-	int64 tv_sec;
-	int64 tv_nsec;
-};
 
 // exported functions
 // XXX remove the NOSPLIT once i've figured out why newstack is being called
