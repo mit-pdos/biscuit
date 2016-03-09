@@ -374,7 +374,7 @@ void tlbflush(void);
 void _trapret(uint64 *);
 void wlap(uint32, uint32);
 void ·Wrmsr(uint64, uint64);
-void mktrap(uint64);
+void ·mktrap(uint64);
 void ·fs_null(void);
 void ·gs_null(void);
 
@@ -540,25 +540,6 @@ stack_dump(uint64 rsp)
 	}
 }
 
-#pragma textflag NOSPLIT
-int64
-hack_write(int64 fd, const void *buf, uint32 c)
-{
-	if (fd != 1 && fd != 2)
-		runtime·pancake("weird fd", (uint64)fd);
-
-	int64 fl = ·Pushcli();
-	·splock(·pmsglock);
-	int64 ret = (int64)c;
-	byte *p = (byte *)buf;
-	while(c--)
-		runtime·putch(*p++);
-	·spunlock(·pmsglock);
-	·Popcli(fl);
-
-	return ret;
-}
-
 #define TRAP_NMI	2
 #define TRAP_PGFAULT	14
 #define TRAP_SYSCALL	64
@@ -655,7 +636,7 @@ struct cpu_t {
 	// XXX missing go type info
 	//struct thread_t *mythread;
 
-	// if you add fields before rsp, asm in mktrap() needs to be updated
+	// if you add fields before rsp, asm in ·mktrap() needs to be updated
 
 	// a pointer to this cpu_t
 	uint64 this;
@@ -679,7 +660,7 @@ extern struct cpu_t ·cpus[MAXCPUS];
 #define setcurthread(x)      (curcpu.mythread = (uint64)x)
 
 extern struct spinlock_t *·threadlock;
-struct spinlock_t futexlock;
+extern struct spinlock_t *·futexlock;
 
 static uint64 _gimmealign;
 extern uint64 ·fxinit[512/8];
@@ -727,46 +708,9 @@ cpupnum(uint64 rip)
 
 void ·sched_halt(void);
 
-#pragma textflag NOSPLIT
-uint64
-·hack_nanotime(void)
-{
-	uint64 cyc = ·Rdtsc();
-	return (cyc * ·Pspercycle)/1000;
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Nanotime(void)
-{
-	return ·hack_nanotime();
-}
+uint64 ·hack_nanotime(void);
 
 void ·sched_run(struct thread_t *t);
-
-#pragma textflag NOSPLIT
-static void
-tcount(void)
-{
-	uint64 run, sleep, wait;
-	run = sleep = wait = 0;
-	int32 i;
-	for (i = 0; i < NTHREADS; i++) {
-		struct thread_t *t = &·threads[i];
-		if (t->status == ST_RUNNABLE || t->status == ST_RUNNING)
-			run++;
-		else if (t->status == ST_WAITING)
-			wait++;
-		else if (t->status == ST_SLEEPING || t->status == ST_WILLSLEEP)
-			sleep++;
-	}
-
-	uint64 tot = run + sleep + wait;
-	int32 bits = 64/4;
-	uint64 v = tot << (3*bits) | run << (2*bits) | sleep << (1*bits) |
-	    wait << (0*bits);
-	·pnum(v);
-}
 
 void ·yieldy(void);
 
@@ -792,31 +736,6 @@ assert_mapped(void *va, int64 size, int8 *msg)
 }
 
 void ·wakeup(void);
-
-#pragma textflag NOSPLIT
-void
-runtime·Tfdump(uint64 *tf)
-{
-	pmsg("RIP:");
-	·pnum(tf[TF_RIP]);
-	pmsg("\nRAX:");
-	·pnum(tf[TF_RAX]);
-	pmsg("\nRDI:");
-	·pnum(tf[TF_RDI]);
-	pmsg("\nRSI:");
-	·pnum(tf[TF_RSI]);
-	pmsg("\nRBX:");
-	·pnum(tf[TF_RBX]);
-	pmsg("\nRCX:");
-	·pnum(tf[TF_RCX]);
-	pmsg("\nRDX:");
-	·pnum(tf[TF_RDX]);
-	pmsg("\nRSP:");
-	·pnum(tf[TF_RSP]);
-	pmsg("\nFSBASE:");
-	·pnum(tf[TF_FSBASE]);
-	pmsg("\n");
-}
 
 extern uint64 ·tlbshoot_pmap;
 extern uint64 ·tlbshoot_wait;
@@ -878,7 +797,7 @@ sigsim(int32 signo, Siginfo *si, void *ctx)
 	USED(si);
 	fakesig(signo, nil, ctx);
 	//intsigret();
-	mktrap(TRAP_SIGRET);
+	·mktrap(TRAP_SIGRET);
 }
 
 // caller must hold threadlock
@@ -1118,7 +1037,7 @@ trap(uint64 *tf)
 				ct->status = ST_SLEEPING;
 				// XXX set IF, unlock
 				ct->tf[TF_RFLAGS] |= TF_FL_IF;
-				·spunlock(&futexlock);
+				·spunlock(·futexlock);
 			} else
 				ct->status = ST_RUNNABLE;
 		}
@@ -1469,164 +1388,10 @@ void
 	setcurthread(0);
 }
 
-// use these to pass args because using the stack in ·Syscall causes strange
-// runtime behavior. haven't figured out why yet.
-int64 dur_sc_trap;
-int64 dur_sc_a1;
-int64 dur_sc_a2;
-int64 dur_sc_a3;
-
-int64 dur_sc_r1;
-int64 dur_sc_r2;
-int64 dur_sc_err;
-
-// func Syscall(trap int64, a1, a2, a3 int64) (r1, r2, err int64);
-#pragma textflag NOSPLIT
-void
-hack_syscall(void)
-{
-	int64 trap = dur_sc_trap;
-	int64 a1 = dur_sc_a1;
-	int64 a2 = dur_sc_a2;
-	int64 a3 = dur_sc_a3;
-
-	switch (trap) {
-		default:
-			runtime·pancake("weird syscall:", trap);
-			break;
-		// open
-		case 2:
-			{
-			// catch unexpected opens; fail only /etc/localtime
-			byte *p = (byte *)dur_sc_a1;
-			byte l[] = "/etc/localtime";
-			if (runtime·strcmp(p, l) == 0)
-				dur_sc_err = -2;
-			else {
-				pmsg((int8 *)p);
-				runtime·pancake("unexpected open", 0);
-			}
-			break;
-			}
-		// write
-		case 1:
-			dur_sc_r1 = hack_write((int32)a1, (void *)a2, (uint64)a3);
-			dur_sc_r2  = 0;
-			dur_sc_err = 0;
-			break;
-	}
-}
-
 struct timespec {
 	int64 tv_sec;
 	int64 tv_nsec;
 };
-
-// int64 futex(int32 *uaddr, int32 op, int32 val,
-//	struct timespec *timeout, int32 *uaddr2, int32 val2);
-#pragma textflag NOSPLIT
-int64
-hack_futex(int32 *uaddr, int32 op, int32 val,
-    struct timespec *timeout, int32 *uaddr2, int32 val2)
-{
-
-	int64 ret = 0;
-	USED(uaddr2);
-	USED(val2);
-
-	switch (op) {
-	case FUTEX_WAIT:
-	{
-		assert_mapped(uaddr, 8, "futex uaddr");
-
-		·cli();
-		·splock(&futexlock);
-		int32 dosleep = *uaddr == val;
-		if (dosleep) {
-			curthread->futaddr = (uint64)uaddr;
-			// can't set to sleeping directly, otherwise another
-			// cpu may wake and start executing the same thread
-			// before we yield.
-			curthread->status = ST_WILLSLEEP;
-			curthread->sleepfor = -1;
-			if (timeout) {
-				assert_mapped(timeout, sizeof(struct timespec),
-				    "futex timeout");
-				int64 t = timeout->tv_sec * 1000000000;
-				t += timeout->tv_nsec;
-				curthread->sleepfor = ·hack_nanotime() + t;
-			}
-			mktrap(TRAP_YIELD);
-
-			// unlocks futexlock and returns with interrupts
-			// enabled...
-			·cli();
-			ret = curthread->sleepret;
-			·sti();
-		} else {
-			·spunlock(&futexlock);
-			·sti();
-			ret = -EAGAIN; // EAGAIN == EWOULDBLOCK
-		}
-		break;
-	}
-	case FUTEX_WAKE:
-	{
-		int32 i;
-		int32 woke = 0;
-		·cli();
-		·splock(&futexlock);
-		·splock(·threadlock);
-		for (i = 0; i < NTHREADS && val; i++) {
-			uint64 st = ·threads[i].status;
-			if (·threads[i].futaddr == (uint64)uaddr &&
-			    st == ST_SLEEPING) {
-				·threads[i].status = ST_RUNNABLE;
-				·threads[i].sleepfor = 0;
-				·threads[i].futaddr = 0;
-				·threads[i].sleepret = 0;
-				val--;
-				woke++;
-			}
-		}
-		·spunlock(·threadlock);
-		·spunlock(&futexlock);
-		·sti();
-		ret = woke;
-		break;
-	}
-	default:
-		runtime·pancake("bad futex op", op);
-	}
-
-	return ret;
-}
-
-#pragma textflag NOSPLIT
-void
-hack_usleep(uint64 delay)
-{
-	struct timespec ts;
-	ts.tv_sec = delay/1000000;
-	ts.tv_nsec = (delay%1000000)*1000;
-	int32 dummy = 0;
-	hack_futex(&dummy, FUTEX_WAIT, 0, &ts, nil, 0);
-}
-
-#pragma textflag NOSPLIT
-void
-hack_exit(int32 code)
-{
-	·cli();
-	curthread->status = ST_INVALID;
-
-	pmsg("exit with code");
-	·pnum(code);
-	pmsg(".\nhalting\n");
-	volatile uint32 *wtf = &·Halt;
-	*wtf = 1;
-	while(1);
-}
 
 // exported functions
 // XXX remove the NOSPLIT once i've figured out why newstack is being called
@@ -1722,13 +1487,6 @@ runtime·Rcr2(void)
 }
 
 #pragma textflag NOSPLIT
-uint64
-runtime·Rrsp(void)
-{
-	return rrsp();
-}
-
-#pragma textflag NOSPLIT
 void
 runtime·Sti(void)
 {
@@ -1774,73 +1532,5 @@ runtime·Pmsga(uint8 *msg, int64 len, int8 a)
 		runtime·putcha(*msg++, a);
 	}
 	·spunlock(·pmsglock);
-	·Popcli(fl);
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Rflags(void)
-{
-	return ·rflags();
-}
-
-uint64 runtime·gcticks;
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Resetgcticks(void)
-{
-	runtime·stackcheck();
-	uint64 ret = runtime·gcticks;
-	runtime·gcticks = 0;
-	return ret;
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Gcticks(void)
-{
-	runtime·stackcheck();
-	return runtime·gcticks;
-}
-
-#pragma textflag NOSPLIT
-void
-hack_setitimer(uint32 timer, Itimerval *new, Itimerval *old)
-{
-	const uint32 TIMER_PROF = 2;
-	if (timer != TIMER_PROF)
-		runtime·pancake("weird timer", timer);
-	USED(old);
-
-	int64 fl = ·Pushcli();
-
-	struct thread_t *ct = curthread;
-	// ignore timeout since we don't use virtual time
-	uint64 nsecs = new->it_interval.tv_sec * 1000000000 +
-	    new->it_interval.tv_usec * 1000;
-
-	if (nsecs)
-		ct->prof.enabled = 1;
-	else
-		ct->prof.enabled = 0;
-
-	·Popcli(fl);
-}
-
-#pragma textflag NOSPLIT
-void
-hack_sigaltstack(SigaltstackT *new, SigaltstackT *old)
-{
-	USED(old);
-
-	int64 fl = ·Pushcli();
-
-	struct thread_t *ct = curthread;
-	if (new->ss_flags & SS_DISABLE)
-		ct->sigstack = 0;
-	else
-		ct->sigstack = (uint64)new->ss_sp + new->ss_size;
-
 	·Popcli(fl);
 }

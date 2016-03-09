@@ -13,7 +13,7 @@ TEXT runtime·exit(SB),NOSPLIT,$0-4
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	exit_skip
-	JMP	hack_exit(SB)
+	JMP	·hack_exit(SB)
 exit_skip:
 	MOVL	code+0(FP), DI
 	MOVL	$231, AX	// exitgroup - force all os threads to exit
@@ -46,7 +46,7 @@ TEXT runtime·write(SB),NOSPLIT,$0-28
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	write_skip
-	JMP	hack_write(SB)
+	JMP	·hack_write(SB)
 write_skip:
 	MOVQ	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
@@ -81,7 +81,7 @@ TEXT runtime·usleep(SB),NOSPLIT,$16-8
 	// can't simply jmp since frame size is non-zero...
 	MOVL	usec+0(FP), AX
 	PUSHQ	AX
-	CALL	hack_usleep(SB)
+	CALL	·hack_usleep(SB)
 	POPQ	AX
 	RET
 us_skip:
@@ -115,7 +115,7 @@ TEXT runtime·setitimer(SB),NOSPLIT,$0-24
 	MOVQ	runtime·hackmode(SB), AX
 	TESTQ	AX, AX
 	JZ	stim_skip
-	JMP	hack_setitimer(SB)
+	JMP	·hack_setitimer(SB)
 	INT	$3
 stim_skip:
 	MOVL	mode+0(FP), DI
@@ -363,7 +363,7 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	futex_skip
-	JMP	hack_futex(SB)
+	JMP	·hack_futex(SB)
 futex_skip:
 	MOVQ	addr+0(FP), DI
 	MOVL	op+8(FP), SI
@@ -432,7 +432,7 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	sas_skip
-	JMP	hack_sigaltstack(SB)
+	JMP	·hack_sigaltstack(SB)
 	INT	$3
 sas_skip:
 	MOVQ	new+8(SP), DI
@@ -463,7 +463,7 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 	JZ	yield_skip
 #define TRAP_YIELD      $49
 	PUSHQ	TRAP_YIELD
-	CALL	mktrap(SB)
+	CALL	·mktrap(SB)
 	POPQ	AX
 	RET
 yield_skip:

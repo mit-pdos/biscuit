@@ -17,29 +17,11 @@
 // Note that this differs from "standard" ABI convention, which
 // would pass 4th arg in CX, not R10.
 
-// XXX using a non-zero frame size causes building cmd/go to never finish or
-// tests to fail. because stack gets screwed up and sleep(huge num) is called.
 TEXT	·Syscall(SB),NOSPLIT,$0-56
-	//CALL	runtime·entersyscall(SB)
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	sysc_skip
-	MOVQ	8(SP), AX
-	MOVQ	AX, dur_sc_trap(SB)
-	MOVQ	16(SP), AX
-	MOVQ	AX, dur_sc_a1(SB)
-	MOVQ	24(SP), AX
-	MOVQ	AX, dur_sc_a2(SB)
-	MOVQ	32(SP), AX
-	MOVQ	AX, dur_sc_a3(SB)
-	CALL	hack_syscall(SB)
-	MOVQ	dur_sc_r1(SB), AX
-	MOVQ	AX, 40(SP)
-	MOVQ	dur_sc_r2(SB), AX
-	MOVQ	AX, 48(SP)
-	MOVQ	dur_sc_err(SB), AX
-	MOVQ	AX, 56(SP)
-	RET
+	JMP	runtime·hack_syscall(SB)
 sysc_skip:
 	CALL	runtime·entersyscall(SB)
 	MOVQ	16(SP), DI

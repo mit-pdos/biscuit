@@ -26,7 +26,6 @@ func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
 func Lcr3(uintptr)
-func Nanotime() int
 func Inb(int) int
 func Inl(int) int
 func Insl(int, unsafe.Pointer, int)
@@ -42,7 +41,6 @@ func Rdtsc() uint64
 func Rcr2() uintptr
 func Rcr3() uintptr
 func Rcr4() uintptr
-func Rrsp() int
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
 func Sti()
@@ -51,10 +49,6 @@ func Vtop(*[512]int) int
 func Crash()
 func Fnaddr(func()) uintptr
 func Fnaddri(func(int)) uintptr
-func Tfdump(*[24]int)
-func Rflags() int
-func Resetgcticks() uint64
-func Gcticks() uint64
 func Trapwake()
 
 func inb(int) int
@@ -77,9 +71,8 @@ func clone_call(uintptr)
 func cpu_halt(uintptr)
 func fxrstor(*[FXREGS]uintptr)
 func trapret(*[TFSIZE]uintptr, uintptr)
-
-// os_linux.c
-var gcticks uint64
+func mktrap(int)
+func stackcheck()
 
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
@@ -129,11 +122,11 @@ type thread_t struct {
 	siglseepfor	int
 	status		int
 	doingsig	int
-	sigstack	int
+	sigstack	uintptr
 	prof		prof_t
 	sleepfor	int
 	sleepret	int
-	futaddr		int
+	futaddr		uintptr
 	p_pmap		uintptr
 	//_pad		int
 }
@@ -166,12 +159,20 @@ var Pspercycle uint
 
 func Pushcli() int
 func Popcli(int)
-func Gscpu() *cpu_t
+func _Gscpu() *cpu_t
 func Rdmsr(int) int
 func Wrmsr(int, int)
 func _Userrun(*[24]int, bool) (int, int)
 
 func Cprint(byte, int)
+
+//go:nosplit
+func Gscpu() *cpu_t {
+	if rflags() & TF_FL_IF != 0 {
+		G_pancake("must not be interruptible", 0)
+	}
+	return _Gscpu()
+}
 
 func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
     pms []*[512]int, fastret bool) (int, int) {
@@ -534,8 +535,6 @@ func Trapinit() {
 // conversion is underway. remove prefix afterwards. we need two versions of
 // functions that take a string as an argument since string literals are
 // different data types in C and Go.
-//
-// XXX XXX many of these do not need nosplits!
 var Halt uint32
 
 // TEMPORARY CRAP
@@ -543,7 +542,6 @@ func _pmsg(*int8)
 func invlpg(uintptr)
 func lap_eoi()
 func rflags() uintptr
-func hack_nanotime() int
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -1417,8 +1415,8 @@ func tlb_shootdown() {
 // spinlock in order to avoid a deadlock where the thread that acquired the
 // spinlock starts a GC and waits forever for the spinning thread. (go code
 // should probably not use spinlocks. tlb shootdown code is the only code
-// protected by a spinlock since the lock must be acquired in interrupt
-// context.)
+// protected by a spinlock since the lock must both be acquired in go code and
+// in interrupt context.)
 //
 // alternatively, we could make sure that no allocations are made while the
 // spinlock is acquired.
@@ -1588,4 +1586,183 @@ func yieldy() {
 	cpu.mythread = nil
 	spunlock(threadlock)
 	sched_halt()
+}
+
+func hack_setitimer(timer uint32, new, old *itimerval) {
+	TIMER_PROF := uint32(2)
+	if timer != TIMER_PROF {
+		G_pancake("weird timer", uintptr(timer))
+	}
+
+	fl := Pushcli()
+	ct := Gscpu().mythread
+	nsecs := new.it_interval.tv_sec * 1000000000 +
+	    new.it_interval.tv_usec * 1000
+	if nsecs != 0 {
+		ct.prof.enabled = 1
+	} else {
+		ct.prof.enabled = 0
+	}
+	Popcli(fl)
+}
+
+func hack_sigaltstack(new, old *sigaltstackt) {
+	fl := Pushcli()
+	ct := Gscpu().mythread
+	SS_DISABLE := int32(2)
+	if new.ss_flags & SS_DISABLE != 0 {
+		ct.sigstack = 0
+	} else {
+		ct.sigstack = uintptr(unsafe.Pointer(new.ss_sp)) +
+		    uintptr(new.ss_size)
+	}
+	Popcli(fl)
+}
+
+func hack_write(fd int, bufn uintptr, sz uint32) int64 {
+	if fd != 1 && fd != 2 {
+		G_pancake("unexpected fd", uintptr(fd))
+	}
+	fl := Pushcli()
+	splock(pmsglock)
+	c := uintptr(sz)
+	for i := uintptr(0); i < c; i++ {
+		p := (*int8)(unsafe.Pointer(bufn + i))
+		putch(*p)
+	}
+	spunlock(pmsglock)
+	Popcli(fl)
+	return int64(sz)
+}
+
+// "/etc/localtime"
+var fnwhite = []int8{0x2f, 0x65, 0x74, 0x63, 0x2f, 0x6c, 0x6f, 0x63, 0x61,
+    0x6c, 0x74, 0x69, 0x6d, 0x65}
+
+// a is the C string.
+func cstrmatch(a uintptr, b []int8) bool {
+	for i, c := range b {
+		p := (*int8)(unsafe.Pointer(a + uintptr(i)))
+		if *p != c {
+			return false
+		}
+	}
+	return true
+}
+
+func hack_syscall(trap, a1, a2, a3 int64) (int64, int64, int64) {
+	switch trap {
+	case 1:
+		r1 := hack_write(int(a1), uintptr(a2), uint32(a3))
+		return r1, 0, 0
+	case 2:
+		enoent := int64(-2)
+		if !cstrmatch(uintptr(a1), fnwhite) {
+			G_pancake("unexpected open", 0)
+		}
+		return 0, 0, enoent
+	default:
+		G_pancake("unexpected syscall", uintptr(trap))
+	}
+	// not reached
+	return 0, 0, -1
+}
+
+var futexlock = &spinlock_t{}
+
+// XXX not sure why stack splitting prologue is not ok here
+//go:nosplit
+func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
+    val2 int32) int64 {
+	stackcheck()
+	FUTEX_WAIT := int32(0)
+	FUTEX_WAKE := int32(1)
+	uaddrn := uintptr(unsafe.Pointer(uaddr))
+	ret := 0
+	switch op {
+	case FUTEX_WAIT:
+		cli()
+		splock(futexlock)
+		dosleep := *uaddr == val
+		if dosleep {
+			ct := Gscpu().mythread
+			ct.futaddr = uaddrn
+			ct.status = ST_WILLSLEEP
+			ct.sleepfor = -1
+			if to != nil {
+				t := to.tv_sec * 1000000000
+				t += to.tv_nsec
+				ct.sleepfor = hack_nanotime() + int(t)
+			}
+			mktrap(TRAP_YIELD)
+			// scheduler unlocks ·futexlock and returns with
+			// interrupts enabled...
+			cli()
+			ret = Gscpu().mythread.sleepret
+			sti()
+		} else {
+			spunlock(futexlock)
+			sti()
+			eagain := -11
+			ret = eagain
+		}
+	case FUTEX_WAKE:
+		woke := 0
+		cli()
+		splock(futexlock)
+		splock(threadlock)
+		for i := 0; i < maxthreads && val > 0; i++ {
+			t := &threads[i]
+			st := t.status
+			if t.futaddr == uaddrn && st == ST_SLEEPING {
+				t.status = ST_RUNNABLE
+				t.sleepfor = 0
+				t.futaddr = 0
+				t.sleepret = 0
+				val--
+				woke++
+			}
+		}
+		spunlock(threadlock)
+		spunlock(futexlock)
+		sti()
+		ret = woke
+	default:
+		G_pancake("unexpected futex op", uintptr(op))
+	}
+	return int64(ret)
+}
+
+func hack_usleep(delay int64) {
+	ts := timespec{}
+	ts.tv_sec = delay/1000000
+	ts.tv_nsec = (delay%1000000)*1000
+	dummy := int32(0)
+	FUTEX_WAIT := int32(0)
+	hack_futex(&dummy, FUTEX_WAIT, 0, &ts, nil, 0)
+}
+
+func hack_exit(code int32) {
+	cli()
+	Gscpu().mythread.status = ST_INVALID
+	G_pmsg("exit with code")
+	pnum(uintptr(code))
+	G_pmsg(".\nhalting\n")
+	atomicstore(&Halt, 1)
+	for {
+	}
+}
+
+// called in interupt context
+//go:nosplit
+func hack_nanotime() int {
+	cyc := uint(Rdtsc())
+	return int(cyc*Pspercycle/1000)
+}
+
+// XXX also called in interupt context; remove when trapstub is moved into
+// runtime
+//go:nosplit
+func Nanotime() int {
+	return hack_nanotime()
 }

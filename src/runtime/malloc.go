@@ -438,7 +438,6 @@ func gogc(force int32) {
 	mp = acquirem()
 	mp.gcing = 1
 	releasem(mp)
-	sticks := Rdtsc()
 	onM(stoptheworld)
 	if mp != acquirem() {
 		gothrow("gogc: rescheduled")
@@ -473,7 +472,6 @@ func gogc(force int32) {
 	// all done
 	mp.gcing = 0
 	semrelease(&worldsema)
-	gcticks += Rdtsc() - sticks
 	onM(starttheworld)
 	releasem(mp)
 	mp = nil

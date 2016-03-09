@@ -803,7 +803,7 @@ TEXT gtest(SB), NOSPLIT, $0
 	MOVQ	$13, R14
 	MOVQ	$14, R15
 	PUSHQ	TRAP_YIELD
-	CALL	mktrap(SB)
+	CALL	·mktrap(SB)
 	ADDQ	$8, SP
 	CMPQ	AX, $1
 	JNE	badinko
@@ -837,8 +837,8 @@ TEXT gtest(SB), NOSPLIT, $0
 badinko:
 	INT	$3
 
-// void mktrap(uint64 intn)
-TEXT mktrap(SB), NOSPLIT, $0-8
+// void ·mktrap(uint64 intn)
+TEXT ·mktrap(SB), NOSPLIT, $0-8
 	PUSHQ	AX
 	PUSHQ	DX
 	PUSHFQ
@@ -1039,7 +1039,7 @@ TEXT ·fs_null(SB), NOSPLIT, $8-0
 	POPQ	FS
 	RET
 
-TEXT ·Gscpu(SB), NOSPLIT, $0-8
+TEXT ·_Gscpu(SB), NOSPLIT, $0-8
 	MOVQ	0(GS), AX
 	MOVQ	AX, ret+0(FP)
 	RET
