@@ -20,7 +20,6 @@ func trapinit_m(*g)
 
 func Cli()
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
-func Install_traphandler(func(tf *[24]int))
 func Invlpg(unsafe.Pointer)
 func Kpmap() *[512]int
 func Kpmap_p() int
@@ -50,10 +49,11 @@ func Fnaddr(func()) uintptr
 func Fnaddri(func(uint)) uintptr
 func Trapwake()
 
+// runtime/asm_amd64.s
 func htpause()
 func finit()
 func fs_null()
-func fxsave(*[fxwords]uintptr)
+func fxsave(*[FXREGS]uintptr)
 func gs_null()
 func lgdt(pdesc_t)
 func lidt(pdesc_t)
@@ -71,6 +71,8 @@ func trapret(*[TFSIZE]uintptr, uintptr)
 func mktrap(int)
 func stackcheck()
 func _sysentry()
+func _trapret(*[TFSIZE]uintptr)
+func _userint()
 
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
@@ -99,8 +101,8 @@ const MAXCPUS int = 32
 var cpus [MAXCPUS]cpu_t
 
 type tuser_t struct {
-	tf	uintptr
-	fxbuf	uintptr
+	tf	*[TFSIZE]uintptr
+	fxbuf	*[FXREGS]uintptr
 }
 
 type prof_t struct {
@@ -145,7 +147,7 @@ const(
   TF_RCX       = 14
   TF_RBX       = 15
   TF_RAX       = 16
-  TF_TRAP      = TFREGS
+  TF_TRAPNO    = TFREGS
   TF_RIP       = TFREGS + 2
   TF_CS        = TFREGS + 3
   TF_RSP       = TFREGS + 5
@@ -171,8 +173,8 @@ func Gscpu() *cpu_t {
 	return _Gscpu()
 }
 
-func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
-    pms []*[512]int, fastret bool) (int, int) {
+func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
+    p_pmap uintptr, pms []*[512]int, fastret bool) (int, int) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
@@ -200,13 +202,14 @@ func Userrun(tf *[24]int, fxbuf *[64]int, pmap *[512]int, p_pmap uintptr,
 	// we only save/restore SSE registers on cpu exception/interrupt, not
 	// during syscall exit/return. this is OK since sys5ABI defines the SSE
 	// registers to be caller-saved.
-	ct.user.tf = uintptr(unsafe.Pointer(tf))
-	ct.user.fxbuf = uintptr(unsafe.Pointer(fxbuf))
+	// XXX types
+	ct.user.tf = (*[TFSIZE]uintptr)(unsafe.Pointer(tf))
+	ct.user.fxbuf = (*[FXREGS]uintptr)(unsafe.Pointer(fxbuf))
 	intno, aux := _Userrun(tf, fastret)
 
 	Wrmsr(ia32_fs_base, kfsbase)
-	ct.user.tf = 0
-	ct.user.fxbuf = 0
+	ct.user.tf = nil
+	ct.user.fxbuf = nil
 	Popcli(fl)
 	exitsyscall()
 	return intno, aux
@@ -538,6 +541,10 @@ var Halt uint32
 func _pmsg(*int8)
 func invlpg(uintptr)
 func rflags() uintptr
+func kernel_fault(*[TFSIZE]uintptr)
+func timetick(*thread_t)
+func proftick()
+func sigret(*thread_t)
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -1189,8 +1196,7 @@ func alloc_map(va uintptr, perms uintptr, fempty bool) {
 	}
 }
 
-const fxwords = 512/8
-var fxinit [fxwords]uintptr
+var fxinit [FXREGS]uintptr
 
 // nosplit because APs call this function before FS is setup
 //go:nosplit
@@ -1374,7 +1380,6 @@ func lapic_setup(calibrate bool) {
 		cycstart := Rdtsc()
 
 		frac := 10
-		// XXX only wait for 100ms instead of 1s
 		for i := 0; i < _pithz/frac; i++ {
 			pit_phasewait()
 		}
@@ -1520,6 +1525,9 @@ func sysc_setup(myrsp uintptr) {
 
 	sysenter_esp := 0x175
 	Wrmsr(sysenter_esp, int(myrsp))
+
+	dur = _userint
+	_userintaddr = **(**uintptr)(unsafe.Pointer(&dur))
 }
 
 var tlbshoot_wait uintptr
@@ -1550,7 +1558,6 @@ func Tlbwait(gen uint64) {
 // must be nosplit since called at interrupt time
 //go:nosplit
 func tlb_shootdown() {
-	lap_eoi()
 	ct := Gscpu().mythread
 	if ct != nil && ct.p_pmap == tlbshoot_pmap {
 		// the TLB was already invalidated since trap() currently
@@ -1567,11 +1574,7 @@ func tlb_shootdown() {
 	if v < 0 {
 		G_pancake("shootwait < 0", uintptr(v))
 	}
-	if ct != nil {
-		sched_run(ct)
-	} else {
-		sched_halt()
-	}
+	sched_resume(ct)
 }
 
 // this function checks to see if another thread is trying to preempt this
@@ -1614,6 +1617,7 @@ const (
 	TRAP_TLBSHOOT	= 70
 	TRAP_SIGRET	= 71
 	TRAP_PERFMASK	= 72
+	IRQ_BASE	= 32
 )
 
 var threadlock = &spinlock_t{}
@@ -1636,6 +1640,154 @@ const (
 const (
 	HZ	= 100
 )
+
+var _userintaddr uintptr
+var _newtrap func(*[TFSIZE]uintptr)
+
+// XXX remove newtrap?
+func Install_traphandler(newtrap func(*[TFSIZE]uintptr)) {
+	_newtrap = newtrap
+}
+
+// XXX
+// may want to only ·wakeup() on most timer ints since now there is more
+// overhead for timer ints during user time.
+//go:nosplit
+func trap(tf *[TFSIZE]uintptr) {
+	trapno := tf[TF_TRAPNO]
+
+	if trapno == TRAP_NMI {
+		perfgather(tf)
+		perfmask()
+		_trapret(tf)
+	}
+
+	Lcr3(p_kpmap)
+
+	// CPU exceptions in kernel mode are fatal errors
+	if trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0 {
+		kernel_fault(tf)
+	}
+
+	ct := Gscpu().mythread
+
+	if rflags() & TF_FL_IF != 0 {
+		G_pancake("ints enabled in trap", 0)
+	}
+
+	if Halt != 0 {
+		for {
+		}
+	}
+
+	// clear shadow pointers to user pmap
+	shadow_clear()
+
+	// don't add code before FPU context saving unless you've thought very
+	// carefully! it is easy to accidentally and silently corrupt FPU state
+	// (ie calling memmove indirectly by assignment of large datatypes)
+	// before it is saved below.
+
+	// save FPU state immediately before we clobber it
+	if ct != nil {
+		// if in user mode, save to user buffers and make it look like
+		// Userrun returned.
+		if ct.user.tf != nil {
+			ufx := ct.user.fxbuf
+			fxsave(ufx)
+			utf := ct.user.tf
+			*utf = *tf
+			ct.tf[TF_RIP] = _userintaddr
+			ct.tf[TF_RSP] = utf[TF_SYSRSP]
+			ct.tf[TF_RAX] = trapno
+			ct.tf[TF_RBX] = Rcr2()
+			// XXXPANIC
+			if trapno == TRAP_YIELD || trapno == TRAP_SIGRET {
+				G_pancake("nyet", trapno)
+			}
+			// XXX fix this using RIP method
+			// if we are unlucky enough for a timer int to come in
+			// before we execute the first instruction of the new
+			// rip, make sure the state we just saved isn't
+			// clobbered
+			ct.user.tf = nil
+			ct.user.fxbuf = nil
+		} else {
+			fxsave(&ct.fx)
+			ct.tf = *tf
+		}
+		timetick(ct)
+	}
+
+	yielding := false
+	// these interrupts are handled specially by the runtime
+	if trapno == TRAP_YIELD {
+		trapno = TRAP_TIMER
+		tf[TF_TRAPNO] = TRAP_TIMER
+		yielding = true
+	}
+
+	if trapno == TRAP_TLBSHOOT {
+		lap_eoi()
+		// does not return
+		tlb_shootdown()
+	} else if trapno == TRAP_TIMER {
+		splock(threadlock)
+		if ct != nil {
+			if ct.status == ST_WILLSLEEP {
+				ct.status = ST_SLEEPING
+				// XXX set IF, unlock
+				ct.tf[TF_RFLAGS] |= TF_FL_IF
+				spunlock(futexlock)
+			} else {
+				ct.status = ST_RUNNABLE
+			}
+		}
+		if !yielding {
+			lap_eoi()
+			if Gscpu().num == 0 {
+				wakeup()
+				proftick()
+			}
+		}
+		// yieldy doesn't return
+		yieldy()
+	} else if is_irq(trapno) {
+		if _newtrap != nil {
+			// catch kernel faults that occur while trying to
+			// handle user traps
+			_newtrap(tf)
+		} else {
+			G_pancake("IRQ without ntrap", trapno)
+		}
+		sched_resume(ct)
+	} else if is_cpuex(trapno) {
+		// we vet out kernel mode CPU exceptions above must be from
+		// user program. thus return from Userrun() to kernel.
+		sched_run(ct)
+	} else if trapno == TRAP_SIGRET {
+		// does not return
+		sigret(ct)
+	} else if trapno == TRAP_PERFMASK {
+		lap_eoi()
+		perfmask()
+		sched_resume(ct)
+	} else {
+		G_pancake("unexpected int", trapno)
+	}
+	// not reached
+	G_pancake("no returning", 0)
+}
+
+//go:nosplit
+func is_irq(trapno uintptr) bool {
+	return trapno > IRQ_BASE && trapno <= IRQ_BASE + 15
+}
+
+//go:nosplit
+func is_cpuex(trapno uintptr) bool {
+	return trapno < IRQ_BASE
+}
 
 //go:nosplit
 func _tchk() {
@@ -1671,6 +1823,15 @@ func sched_run(t *thread_t) {
 	Gscpu().mythread = t
 	fxrstor(&t.fx)
 	trapret(&t.tf, t.p_pmap)
+}
+
+//go:nosplit
+func sched_resume(ct *thread_t) {
+	if ct != nil {
+		sched_run(ct)
+	} else {
+		sched_halt()
+	}
 }
 
 //go:nosplit

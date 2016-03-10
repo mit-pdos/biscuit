@@ -362,7 +362,7 @@ void ·Outb(uint16, uint8);
 int64 ·Pushcli(void);
 void ·Popcli(int64);
 uint64 ·rcr0(void);
-uint64 rcr2(void);
+uint64 ·Rcr2(void);
 uint64 rcr3(void);
 uint64 ·rcr4(void);
 uint64 ·Rdmsr(uint64);
@@ -452,32 +452,6 @@ bw(uint8 *d, uint64 data, uint64 off)
 extern uint64 ·p_kpmap;
 
 int8 gostr[] = "go";
-
-#pragma textflag NOSPLIT
-void
-exam(uint64 cr0)
-{
-	USED(cr0);
-	//pmsg(" first free ");
-	//·pnum(first_free);
-
-	pmsg("inspect cr0");
-
-	if (cr0 & (1UL << 30))
-		pmsg("CD set ");
-	if (cr0 & (1UL << 29))
-		pmsg("NW set ");
-	if (cr0 & (1UL << 16))
-		pmsg("WP set ");
-	if (cr0 & (1UL << 5))
-		pmsg("NE set ");
-	if (cr0 & (1UL << 3))
-		pmsg("TS set ");
-	if (cr0 & (1UL << 2))
-		pmsg("EM set ");
-	if (cr0 & (1UL << 1))
-		pmsg("MP set ");
-}
 
 #define PGSIZE          (1ULL << 12)
 #define PGOFFMASK       (PGSIZE - 1)
@@ -661,10 +635,6 @@ extern uint64 ·fxinit[512/8];
 
 void ·fpuinit(int8);
 
-// newtrap is a function pointer to a user provided trap handler. alltraps
-// jumps to newtrap if it is non-zero.
-uint64 newtrap;
-
 static uint16 cpuattrs[MAXCPUS];
 #pragma textflag NOSPLIT
 void
@@ -738,7 +708,7 @@ void ·tlb_shootdown(void);
 
 #pragma textflag NOSPLIT
 void
-sigret(struct thread_t *t)
+·sigret(struct thread_t *t)
 {
 	assert(t->status == ST_RUNNING, "uh oh2", 0);
 
@@ -879,8 +849,8 @@ mksig(struct thread_t *t, int32 signo)
 }
 
 #pragma textflag NOSPLIT
-static void
-timetick(struct thread_t *t)
+void
+·timetick(struct thread_t *t)
 {
 	uint64 elapsed = ·hack_nanotime() - t->prof.stampstart;
 	t->prof.stampstart = 0;
@@ -889,8 +859,8 @@ timetick(struct thread_t *t)
 
 // caller must hold threadlock
 #pragma textflag NOSPLIT
-static void
-proftick(void)
+void
+·proftick(void)
 {
 	const uint64 profns = 10000000;
 	static uint64 lastprof;
@@ -917,7 +887,7 @@ proftick(void)
 
 #pragma textflag NOSPLIT
 void
-kernel_fault(uint64 *tf)
+·kernel_fault(uint64 *tf)
 {
 	uint64 trapno = tf[TF_TRAPNO];
 	·_pmsg("trap frame at");
@@ -928,155 +898,13 @@ kernel_fault(uint64 *tf)
 	·_pmsg("rip");
 	·_pnum(rip);
 	if (trapno == TRAP_PGFAULT) {
-		uint64 rcr2(void);
-		uint64 cr2 = rcr2();
+		uint64 cr2 = ·Rcr2();
 		·_pmsg("cr2");
 		·_pnum(cr2);
 	}
 	uint64 rsp = tf[TF_RSP];
 	stack_dump(rsp);
 	runtime·pancake("kernel fault", trapno);
-}
-
-// XXX
-// may want to only ·wakeup() on most timer ints since now there is more
-// overhead for timer ints during user time.
-#pragma textflag NOSPLIT
-void
-trap(uint64 *tf)
-{
-	uint64 trapno = tf[TF_TRAPNO];
-
-	if (trapno == TRAP_NMI) {
-		runtime·perfgather(tf);
-		runtime·perfmask();
-		_trapret(tf);
-	}
-
-	lcr3(·p_kpmap);
-
-	// CPU exceptions in kernel mode are fatal errors
-	if (trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0)
-		kernel_fault(tf);
-
-	// not true anymore since we use logical id instead of lapic id for
-	// index into cpus[]
-	//if (·Gscpu() != &curcpu) {
-	//	·pnum((uint64)·Gscpu());
-	//	·pnum((uint64)&curcpu);
-	//	runtime·pancake("gs is wrong", 0);
-	//}
-
-	//struct thread_t *ct = curthread;
-	struct thread_t *ct = (struct thread_t *)·Gscpu()->mythread;
-
-	assert((·rflags() & TF_FL_IF) == 0, "ints enabled in trap", 0);
-
-	if (·Halt)
-		while (1);
-
-	// clear shadow pointers to user pmap
-	runtime·shadow_clear();
-
-	// don't add code before FPU context saving unless you've thought very
-	// carefully! it is easy to accidentally and silently corrupt FPU state
-	// (ie calling runtime·memmove) before it is saved below.
-
-	// save FPU state immediately before we clobber it
-	if (ct) {
-		// if in user mode, save to user buffers and make it look like
-		// Userrun returned.
-		if (ct->user.tf) {
-			uint64 *ufx = (uint64 *)ct->user.fxbuf;
-			uint64 *utf = (uint64 *)ct->user.tf;
-			·fxsave(ufx);
-			runtime·memmove(utf, tf, TFSIZE);
-			// runtime/asm_amd64.s
-			void _userint(void);
-			ct->tf[TF_RIP] = (uint64)_userint;
-			ct->tf[TF_RSP] = utf[TF_SYSRSP];
-			ct->tf[TF_RAX] = trapno;
-			ct->tf[TF_RBX] = rcr2();
-			// XXXPANIC
-			if (trapno == TRAP_YIELD || trapno == TRAP_SIGRET)
-				runtime·pancake("nyet", trapno);
-			// if we are unlucky enough for a timer int to come in
-			// before we execute the first instruction of the new
-			// rip, make sure the state we just saved isn't
-			// clobbered
-			ct->user.tf = 0;
-			ct->user.fxbuf = 0;
-		} else {
-			·fxsave(ct->fx);
-			runtime·memmove(ct->tf, tf, TFSIZE);
-		}
-		timetick(ct);
-	}
-
-	int32 yielding = 0;
-	// these interrupts are handled specially by the runtime
-	if (trapno == TRAP_YIELD) {
-		trapno = TRAP_TIMER;
-		tf[TF_TRAPNO] = TRAP_TIMER;
-		yielding = 1;
-	}
-
-	void (*ntrap)(uint64 *, int64);
-	ntrap = (void (*)(uint64 *, int64))newtrap;
-
-	if (trapno == TRAP_TLBSHOOT) {
-		// does not return
-		·tlb_shootdown();
-	} else if (trapno == TRAP_TIMER) {
-		·splock(·threadlock);
-		if (ct) {
-			if (ct->status == ST_WILLSLEEP) {
-				ct->status = ST_SLEEPING;
-				// XXX set IF, unlock
-				ct->tf[TF_RFLAGS] |= TF_FL_IF;
-				·spunlock(·futexlock);
-			} else
-				ct->status = ST_RUNNABLE;
-		}
-		if (!yielding) {
-			·lap_eoi();
-			if (·Gscpu()->num == 0) {
-				·wakeup();
-				proftick();
-			}
-		}
-		// ·yieldy doesn't return
-		·yieldy();
-	} else if (IS_IRQ(trapno)) {
-		if (ntrap) {
-			// catch kernel faults that occur while trying to
-			// handle user traps
-			ntrap(tf, 0);
-		} else
-			runtime·pancake("IRQ without ntrap", trapno);
-		if (ct)
-			·sched_run(ct);
-		else
-			·sched_halt();
-	} else if (IS_CPUEX(trapno)) {
-		// we vet out kernel mode CPU exceptions above; must be from
-		// user program. thus return from Userrun() to kernel.
-		·sched_run(ct);
-	} else if (trapno == TRAP_SIGRET) {
-		// does not return
-		sigret(ct);
-	} else if (trapno == TRAP_PERFMASK) {
-		·lap_eoi();
-		runtime·perfmask();
-		if (ct)
-			·sched_run(ct);
-		else
-			·sched_halt();
-	} else {
-		runtime·pancake("unexpected int", trapno);
-	}
-	// not reached
-	runtime·pancake("no returning", 0);
 }
 
 // exported functions
@@ -1141,26 +969,10 @@ runtime·Rcr3(void)
 
 #pragma textflag NOSPLIT
 void
-runtime·Install_traphandler(uint64 *p)
-{
-	runtime·stackcheck();
-
-	newtrap = *p;
-}
-
-#pragma textflag NOSPLIT
-void
 runtime·Pnum(uint64 m)
 {
 	if (runtime·hackmode)
 		·pnum(m);
-}
-
-#pragma textflag NOSPLIT
-uint64
-runtime·Rcr2(void)
-{
-	return rcr2();
 }
 
 #pragma textflag NOSPLIT

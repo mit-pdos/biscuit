@@ -304,7 +304,7 @@ TEXT ·rcr0(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
-TEXT rcr2(SB), NOSPLIT, $0-8
+TEXT ·Rcr2(SB), NOSPLIT, $0-8
 	MOVQ	CR2, AX
 	MOVQ	AX, ret+0(FP)
 	RET
@@ -704,7 +704,7 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	MOVQ	SP, AX
 	PUSHQ	AX
 
-	CALL	trap(SB)
+	CALL	·trap(SB)
 	// jmp self
 	BYTE	$0xeb
 	BYTE	$0xfe
@@ -714,10 +714,10 @@ TEXT ·trapret(SB), NOSPLIT, $0-16
 	MOVQ	pmap+8(FP), BX
 	MOVQ	BX, CR3
 
-	JMP	_trapret(SB)
+	JMP	·_trapret(SB)
 	INT	$3
 
-TEXT _trapret(SB), NOSPLIT, $0-8
+TEXT ·_trapret(SB), NOSPLIT, $0-8
 	MOVQ	tf+0(FP), AX	// tf is not on the callers stack frame, but in
 				// threads[]
 	MOVQ	AX, SP
@@ -885,7 +885,7 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 #define TF_RSP		(8*(TFREGS + 5))
 
 // if you change the number of arguments, you must adjust the stack offsets in
-// _sysentry and _userint.
+// _sysentry and ·_userint.
 // func _Userrun(tf *[24]int, fastret bool) (int, int)
 TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	MOVQ	tf+0(FP), R9
@@ -897,7 +897,7 @@ TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	// do full state restore, make sure the SP we return with is correct
 	MOVQ	SP, TF_SYSRSP(R9)
 	PUSHQ	R9
-	CALL	_trapret(SB)
+	CALL	·_trapret(SB)
 	INT	$3
 
 syscallreturn:
@@ -923,7 +923,7 @@ syscallreturn:
 	BYTE	$0x35
 	// not reached; just to trick dead code analysis
 	CALL	·_sysentry(SB)
-	CALL	_userint(SB)
+	CALL	·_userint(SB)
 
 // this should be a label since it is the bottom half of the Userrun_ function,
 // but i can't figure out how to get the plan9 assembler to let me use lea on a
@@ -954,7 +954,7 @@ TEXT ·_sysentry(SB), NOSPLIT, $0-0
 
 // this is the bottom half of _userrun() that is executed if a timer int or CPU
 // exception is generated during user program execution.
-TEXT _userint(SB), NOSPLIT, $0-0
+TEXT ·_userint(SB), NOSPLIT, $0-0
 	CLI
 	// user state is already saved by trap handler.
 	// AX holds the interrupt number, BX holds aux (cr2 for page fault)

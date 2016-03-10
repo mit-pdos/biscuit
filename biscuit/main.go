@@ -10,9 +10,9 @@ import "time"
 import "unsafe"
 
 type trapstore_t struct {
-	trapno    int
+	trapno    uintptr
 	faultaddr uintptr
-	tf        [TFSIZE]int
+	tf        [TFSIZE]uintptr
 	inttime   int
 }
 const maxtstore int = 64
@@ -94,7 +94,7 @@ var INT_DISK	int = -1
 // tries to execute more gocode on the same M, thus doing things the runtime
 // did not expect.
 //go:nosplit
-func trapstub(tf *[TFSIZE]int) {
+func trapstub(tf *[TFSIZE]uintptr) {
 
 	lid := cpus[lap_id()].num
 	head := cpus[lid].tshead
@@ -104,7 +104,7 @@ func trapstub(tf *[TFSIZE]int) {
 	// make sure circular buffer has room
 	if tsnext(head) == tail {
 		for i := tail; i != head; i = tsnext(i) {
-			runtime.Pnum(cpus[lid].trapstore[i].trapno)
+			runtime.Pnum(int(cpus[lid].trapstore[i].trapno))
 		}
 		runtime.Pnum(0xbad)
 		for {}
@@ -135,13 +135,13 @@ func trapstub(tf *[TFSIZE]int) {
 	runtime.Trapwake()
 
 	switch trapno {
-	case INT_DISK, INT_KBD, INT_COM1:
+	case uintptr(INT_DISK), INT_KBD, INT_COM1:
 		// intel documentation for PCH (may 2014) says that AEOI mode
 		// cannot be used on the slave PIC.
 	default:
 		// unexpected IRQ
-		runtime.Pnum(trapno)
-		runtime.Pnum(tf[TF_RIP])
+		runtime.Pnum(int(trapno))
+		runtime.Pnum(int(tf[TF_RIP]))
 		runtime.Pnum(0xbadbabe)
 		for {}
 	}
@@ -168,7 +168,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			tail = tsnext(tail)
 			cpus[cpu].tstail = tail
 
-			if h, ok := handlers[trapno]; ok {
+			if h, ok := handlers[int(trapno)]; ok {
 				go h(&tcur)
 				continue
 			}
