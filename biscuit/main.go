@@ -2775,7 +2775,7 @@ func main() {
 	//runtime.SCenable = false
 
 	rf := fs_init()
-	//use_memfs()
+	use_memfs()
 	kbd_init()
 
 	runtime.Resetgcticks()

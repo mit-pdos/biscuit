@@ -20,7 +20,7 @@ static Sigset sigset_all = { ~(uint32)0, ~(uint32)0 };
 //	futexwakeup(uint32 *addr)
 //
 // Futexsleep atomically checks if *addr == val and if so, sleeps on addr.
-// Futexwakeup wakes up ·threads sleeping on addr.
+// Futexwakeup wakes up threads sleeping on addr.
 // Futexsleep is allowed to wake up spuriously.
 
 enum
@@ -170,8 +170,6 @@ runtime·newosproc(M *mp, void *stk)
 		runtime·throw("runtime.newosproc");
 	}
 }
-
-int64 runtime·hackmode;
 
 void
 runtime·osinit(void)
@@ -346,28 +344,4 @@ int8*
 runtime·signame(int32 sig)
 {
 	return runtime·sigtab[sig].name;
-}
-
-void runtime·putch(int8);
-
-// src/runtime/proc.c
-struct spinlock_t {
-	volatile uint32 v;
-};
-
-void ·splock(struct spinlock_t *);
-void ·spunlock(struct spinlock_t *);
-
-// this file
-
-extern struct spinlock_t *·pmsglock;
-
-#pragma textflag NOSPLIT
-void
-·_pmsg(int8 *msg)
-{
-	runtime·putch(' ');
-	if (msg)
-		while (*msg)
-			runtime·putch(*msg++);
 }

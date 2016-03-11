@@ -3513,7 +3513,6 @@ enum {
 
 int64 ·Pushcli(void);
 void ·Popcli(int64);
-void runtime·pancake(void *, int64);
 
 static uint32 ptrap;
 static uint32 trapst;
@@ -3551,7 +3550,7 @@ _trapsched(G *gp, int32 firsttime)
 
 	if (firsttime) {
 		if (initted)
-			runtime·pancake("two inits", initted);
+			runtime·throw("two inits");
 		initted = 1;
 		// if there are traps already, let a P wake us up.
 		goto bed;
@@ -3559,10 +3558,10 @@ _trapsched(G *gp, int32 firsttime)
 
 	// decrement handled ints
 	if (!nints)
-		runtime·pancake("no ints", nints);
+		runtime·throw("no ints");
 	nints--;
 	if (nints < 0)
-		runtime·pancake("buh!", nints);
+		runtime·throw("buh!");
 
 	// check if we are done
 	if (nints != 0) {
@@ -3573,7 +3572,7 @@ _trapsched(G *gp, int32 firsttime)
 bed:
 		tprepsleep(gp, 1);
 		if (runtime·trapsleeper != nil)
-			runtime·pancake("trapsleeper set", 0);
+			runtime·throw("trapsleeper set");
 		runtime·trapsleeper = gp;
 	}
 
@@ -3616,7 +3615,7 @@ trapcheck(P *p)
 		goto out;
 
 	if (trapst != IDLE)
-		runtime·pancake("bad trap status", trapst);
+		runtime·throw("bad trap status");
 
 	ptrap = 0;
 	trapst = RUNNING;
@@ -3631,7 +3630,7 @@ trapcheck(P *p)
 	// XXX could use casgstatus probably
 	old = runtime·xchg(&trapgp->atomicstatus, Grunnable);
 	if (old != Gwaiting)
-		runtime·pancake("wasn't Gwaiting?", old);
+		runtime·throw("wasn't Gwaiting?");
 
 	// hopefully the trap goroutine is executed soon
 	runqput(p, trapgp);
@@ -3649,8 +3648,6 @@ out:
 void
 runtime·Trapwake(void)
 {
-	extern void runtime·pancake(void *, int64);
-
 	·splock(&tlock);
 	nints++;
 	// only flag the Ps if a handler isn't currently active

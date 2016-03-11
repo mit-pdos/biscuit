@@ -21,6 +21,7 @@ func Cli()
 func clone_call(uintptr)
 func cpu_halt(uintptr)
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
+func fakesig(int32, unsafe.Pointer, *ucontext_t)
 func finit()
 func fs_null()
 func fxrstor(*[FXREGS]uintptr)
@@ -28,6 +29,7 @@ func fxsave(*[FXREGS]uintptr)
 func _Gscpu() *cpu_t
 func gs_null()
 func htpause()
+func invlpg(uintptr)
 func Inb(uint16) uint
 func Inl(int) int
 func Insl(int, unsafe.Pointer, int)
@@ -45,6 +47,7 @@ func Outsl(int, unsafe.Pointer, int)
 func Outw(int, int)
 func Popcli(int)
 func Pushcli() int
+func rflags() uintptr
 func Rcr0() uintptr
 func Rcr2() uintptr
 func Rcr3() uintptr
@@ -150,7 +153,7 @@ const(
 //go:nosplit
 func Gscpu() *cpu_t {
 	if rflags() & TF_FL_IF != 0 {
-		G_pancake("must not be interruptible", 0)
+		pancake("must not be interruptible", 0)
 	}
 	return _Gscpu()
 }
@@ -513,17 +516,8 @@ func Trapinit() {
 	mcall(trapinit_m)
 }
 
-// G_ prefix means a function had to have both C and Go versions while the
-// conversion is underway. remove prefix afterwards. we need two versions of
-// functions that take a string as an argument since string literals are
-// different data types in C and Go.
+var hackmode int32
 var Halt uint32
-
-// TEMPORARY CRAP
-func _pmsg(*int8)
-func invlpg(uintptr)
-func rflags() uintptr
-func fakesig(int32, unsafe.Pointer, *ucontext_t)
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -553,7 +547,7 @@ func spunlock(l *spinlock_t) {
 var pmsglock = &spinlock_t{}
 
 //go:nosplit
-func _G_pmsg(msg string) {
+func _pmsg(msg string) {
 	putch(' ');
 	// can't use range since it results in calls stringiter2 which has the
 	// stack splitting proglogue
@@ -564,10 +558,10 @@ func _G_pmsg(msg string) {
 
 // msg must be utf-8 string
 //go:nosplit
-func G_pmsg(msg string) {
+func pmsg(msg string) {
 	fl := Pushcli()
 	splock(pmsglock)
-	_G_pmsg(msg)
+	_pmsg(msg)
 	spunlock(pmsglock)
 	Popcli(fl)
 }
@@ -631,28 +625,13 @@ func cpupnum(rip uintptr) {
 	}
 }
 
-func pmsg(msg *int8)
-
 //go:nosplit
-func pancake(msg *int8, addr uintptr) {
+func pancake(msg string, addr uintptr) {
 	Pushcli()
 	atomicstore(&Halt, 1)
 	_pmsg(msg)
 	_pnum(addr)
-	_G_pmsg("PANCAKE")
-	for {
-		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
-		*p = 0x1400 | 'F'
-	}
-}
-
-//go:nosplit
-func G_pancake(msg string, addr uintptr) {
-	Pushcli()
-	atomicstore(&Halt, 1)
-	_G_pmsg(msg)
-	_pnum(addr)
-	_G_pmsg("PANCAKE")
+	_pmsg("PANCAKE")
 	for {
 		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
 		*p = 0x1400 | 'F'
@@ -665,14 +644,14 @@ var gostr = []int8{'g', 'o', 0}
 func chkalign(_p unsafe.Pointer, n uintptr) {
 	p := uintptr(_p)
 	if p & (n - 1) != 0 {
-		G_pancake("not aligned", p)
+		pancake("not aligned", p)
 	}
 }
 
 //go:nosplit
 func chksize(n uintptr, exp uintptr) {
 	if n != exp {
-		G_pancake("size mismatch", n)
+		pancake("size mismatch", n)
 	}
 }
 
@@ -1067,11 +1046,11 @@ func caddr(l4 uintptr, ppd uintptr, pd uintptr, pt uintptr,
 func pgdir_walk(_va uintptr, create bool) *uintptr {
 	v := pgrounddown(_va)
 	if v == 0 && create {
-		G_pancake("map zero pg", _va)
+		pancake("map zero pg", _va)
 	}
 	slot0 := pml4x(v)
 	if slot0 == VREC {
-		G_pancake("map in VREC", _va)
+		pancake("map in VREC", _va)
 	}
 	pml4 := caddr(VREC, VREC, VREC, VREC, slot0)
 	return pgdir_walk1(pml4, slotnext(v), create)
@@ -1101,7 +1080,7 @@ func zero_phys(_phys uintptr) {
 	rec := caddr(VREC, VREC, VREC, VREC, VTEMP)
 	pml4 := (*uintptr)(unsafe.Pointer(rec))
 	if *pml4 & PTE_P != 0 {
-		G_pancake("vtemp in use", *pml4)
+		pancake("vtemp in use", *pml4)
 	}
 	phys := pgrounddown(_phys)
 	*pml4 = phys | PTE_P | PTE_W
@@ -1181,10 +1160,10 @@ func phys_init() {
 		}
 	}
 	if !found {
-		G_pancake("e820 problems", pgfirst)
+		pancake("e820 problems", pgfirst)
 	}
 	if pgfirst & PGOFFMASK != 0 {
-		G_pancake("pgfist not aligned", pgfirst)
+		pancake("pgfist not aligned", pgfirst)
 	}
 }
 
@@ -1195,7 +1174,7 @@ func get_pg() uintptr {
 	}
 	pgfirst = skip_bad(pgfirst)
 	if pgfirst >= pglast {
-		G_pancake("oom", pglast)
+		pancake("oom", pglast)
 	}
 	ret := pgfirst
 	pgfirst += PGSIZE
@@ -1207,7 +1186,7 @@ func alloc_map(va uintptr, perms uintptr, fempty bool) {
 	pte := pgdir_walk(va, true)
 	old := *pte
 	if old & PTE_P != 0 && fempty {
-		G_pancake("expected empty pte", old)
+		pancake("expected empty pte", old)
 	}
 	p_pg := get_pg()
 	zero_phys(p_pg)
@@ -1270,7 +1249,7 @@ var _lapaddr uintptr
 //go:nosplit
 func rlap(reg uint) uint32 {
 	if _lapaddr == 0 {
-		G_pancake("lapic not init", 0)
+		pancake("lapic not init", 0)
 	}
 	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
 	return atomicload(&lpg[reg])
@@ -1279,7 +1258,7 @@ func rlap(reg uint) uint32 {
 //go:nosplit
 func wlap(reg uint, val uint32) {
 	if _lapaddr == 0 {
-		G_pancake("lapic not init", 0)
+		pancake("lapic not init", 0)
 	}
 	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
 	lpg[reg] = val
@@ -1288,10 +1267,10 @@ func wlap(reg uint, val uint32) {
 //go:nosplit
 func lap_id() uint32 {
 	if rflags() & TF_FL_IF != 0 {
-		G_pancake("interrupts must be cleared", 0)
+		pancake("interrupts must be cleared", 0)
 	}
 	if _lapaddr == 0 {
-		G_pancake("lapic not init", 0)
+		pancake("lapic not init", 0)
 	}
 	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
 	return lpg[LAPID] >> 24
@@ -1300,7 +1279,7 @@ func lap_id() uint32 {
 //go:nosplit
 func lap_eoi() {
 	if _lapaddr == 0 {
-		G_pancake("lapic not init", 0)
+		pancake("lapic not init", 0)
 	}
 	wlap(LAPEOI, 0)
 }
@@ -1365,7 +1344,7 @@ func lapic_setup(calibrate bool) {
 		// map lapic IO mem
 		pte := pgdir_walk(la, false)
 		if pte != nil && *pte & PTE_P != 0 {
-			G_pancake("lapic mem already mapped", 0)
+			pancake("lapic mem already mapped", 0)
 		}
 	}
 
@@ -1375,7 +1354,7 @@ func lapic_setup(calibrate bool) {
 
 	lver := rlap(LAPVER)
 	if lver < 0x10 {
-		G_pancake("82489dx not supported", uintptr(lver))
+		pancake("82489dx not supported", uintptr(lver))
 	}
 
 	// enable lapic, set spurious int vector
@@ -1408,19 +1387,19 @@ func lapic_setup(calibrate bool) {
 
 		lapend := rlap(LAPCCNT)
 		if lapend > lapstart {
-			G_pancake("lapic timer wrapped?", uintptr(lapend))
+			pancake("lapic timer wrapped?", uintptr(lapend))
 		}
 		lapelapsed := (lapstart - lapend)*uint32(frac)
 		cycelapsed := (Rdtsc() - cycstart)*uint64(frac)
-		G_pmsg("LAPIC Mhz:")
+		pmsg("LAPIC Mhz:")
 		pnum(uintptr(lapelapsed/(1000 * 1000)))
-		G_pmsg("\n")
+		pmsg("\n")
 		_lapic_quantum = lapelapsed / HZ
 
-		G_pmsg("CPU Mhz:")
+		pmsg("CPU Mhz:")
 		Cpumhz = uint(cycelapsed/(1000 * 1000))
 		pnum(uintptr(Cpumhz))
-		G_pmsg("\n")
+		pmsg("\n")
 		Pspercycle = uint(1000000000000/cycelapsed)
 
 		pit_disable()
@@ -1443,21 +1422,21 @@ func lapic_setup(calibrate bool) {
 	ia32_apic_base := 0x1b
 	reg := uintptr(Rdmsr(ia32_apic_base))
 	if reg & (1 << 11) == 0 {
-		G_pancake("lapic disabled?", reg)
+		pancake("lapic disabled?", reg)
 	}
 	if (reg >> 12) != 0xfee00 {
-		G_pancake("weird base addr?", reg >> 12)
+		pancake("weird base addr?", reg >> 12)
 	}
 
 	lreg := rlap(LVSPUR)
 	if lreg & (1 << 12) != 0 {
-		G_pmsg("EOI broadcast surpression\n")
+		pmsg("EOI broadcast surpression\n")
 	}
 	if lreg & (1 << 9) != 0 {
-		G_pmsg("focus processor checking\n")
+		pmsg("focus processor checking\n")
 	}
 	if lreg & (1 << 8) == 0 {
-		G_pmsg("apic disabled\n")
+		pmsg("apic disabled\n")
 	}
 }
 
@@ -1502,13 +1481,13 @@ func Ap_setup(cpunum uint) {
 	fl := Pushcli()
 
 	splock(pmsglock)
-	_G_pmsg("cpu")
+	_pmsg("cpu")
 	_pnum(uintptr(cpunum))
-	_G_pmsg("joined\n")
+	_pmsg("joined\n")
 	spunlock(pmsglock)
 
 	if cpunum >= uint(MAXCPUS) {
-		G_pancake("nice computer!", uintptr(cpunum))
+		pancake("nice computer!", uintptr(cpunum))
 	}
 	fpuinit(false)
 	lapic_setup(false)
@@ -1516,7 +1495,7 @@ func Ap_setup(cpunum uint) {
 	sysc_setup(myrsp)
 	mycpu := &cpus[cpunum]
 	if mycpu.num != 0 {
-		G_pancake("cpu id conflict", uintptr(mycpu.num))
+		pancake("cpu id conflict", uintptr(mycpu.num))
 	}
 	fs_null()
 	gs_set(mycpu)
@@ -1598,7 +1577,7 @@ func tlb_shootdown() {
 	dur := (*uint64)(unsafe.Pointer(&tlbshoot_wait))
 	v := xadd64(dur, -1)
 	if v < 0 {
-		G_pancake("shootwait < 0", uintptr(v))
+		pancake("shootwait < 0", uintptr(v))
 	}
 	sched_resume(ct)
 }
@@ -1617,7 +1596,7 @@ func preemptok() {
 	gp := getg()
 	StackPreempt := uintptr(0xfffffffffffffade)
 	if gp.stackguard0 == StackPreempt {
-		G_pmsg("!")
+		pmsg("!")
 		// call function with stack splitting prologue
 		_dummy()
 	}
@@ -1679,7 +1658,7 @@ func Install_traphandler(newtrap func(*[TFSIZE]uintptr)) {
 //go:nosplit
 func stack_dump(rsp uintptr) {
 	pte := pgdir_walk(rsp, false)
-	_G_pmsg("STACK DUMP\n")
+	_pmsg("STACK DUMP\n")
 	if pte != nil && *pte & PTE_P != 0 {
 		pc := 0
 		p := rsp
@@ -1690,13 +1669,13 @@ func stack_dump(rsp uintptr) {
 				p += 8
 				_pnum(n)
 				if (pc % 4) == 0 {
-					_G_pmsg("\n")
+					_pmsg("\n")
 				}
 				pc++
 			}
 		}
 	} else {
-		_G_pmsg("bad stack")
+		_pmsg("bad stack")
 		_pnum(rsp)
 	}
 }
@@ -1704,21 +1683,21 @@ func stack_dump(rsp uintptr) {
 //go:nosplit
 func kernel_fault(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
-	_G_pmsg("trap frame at")
+	_pmsg("trap frame at")
 	_pnum(uintptr(unsafe.Pointer(tf)))
-	_G_pmsg("trapno")
+	_pmsg("trapno")
 	_pnum(trapno)
 	rip := tf[TF_RIP]
-	_G_pmsg("rip")
+	_pmsg("rip")
 	_pnum(rip)
 	if trapno == TRAP_PGFAULT {
 		cr2 := Rcr2()
-		_G_pmsg("cr2")
+		_pmsg("cr2")
 		_pnum(cr2)
 	}
 	rsp := tf[TF_RSP]
 	stack_dump(rsp)
-	G_pancake("kernel fault", trapno)
+	pancake("kernel fault", trapno)
 }
 
 // XXX
@@ -1744,7 +1723,7 @@ func trap(tf *[TFSIZE]uintptr) {
 	ct := Gscpu().mythread
 
 	if rflags() & TF_FL_IF != 0 {
-		G_pancake("ints enabled in trap", 0)
+		pancake("ints enabled in trap", 0)
 	}
 
 	if Halt != 0 {
@@ -1775,7 +1754,7 @@ func trap(tf *[TFSIZE]uintptr) {
 			ct.tf[TF_RBX] = Rcr2()
 			// XXXPANIC
 			if trapno == TRAP_YIELD || trapno == TRAP_SIGRET {
-				G_pancake("nyet", trapno)
+				pancake("nyet", trapno)
 			}
 			// XXX fix this using RIP method
 			// if we are unlucky enough for a timer int to come in
@@ -1830,7 +1809,7 @@ func trap(tf *[TFSIZE]uintptr) {
 			// handle user traps
 			_newtrap(tf)
 		} else {
-			G_pancake("IRQ without ntrap", trapno)
+			pancake("IRQ without ntrap", trapno)
 		}
 		sched_resume(ct)
 	} else if is_cpuex(trapno) {
@@ -1845,10 +1824,10 @@ func trap(tf *[TFSIZE]uintptr) {
 		perfmask()
 		sched_resume(ct)
 	} else {
-		G_pancake("unexpected int", trapno)
+		pancake("unexpected int", trapno)
 	}
 	// not reached
-	G_pancake("no returning", 0)
+	pancake("no returning", 0)
 }
 
 //go:nosplit
@@ -1864,10 +1843,10 @@ func is_cpuex(trapno uintptr) bool {
 //go:nosplit
 func _tchk() {
 	if rflags() & TF_FL_IF != 0 {
-		G_pancake("must not be interruptible", 0)
+		pancake("must not be interruptible", 0)
 	}
 	if threadlock.v == 0 {
-		G_pancake("must hold threadlock", 0)
+		pancake("must hold threadlock", 0)
 	}
 }
 
@@ -1879,7 +1858,7 @@ func sched_halt() {
 //go:nosplit
 func sched_run(t *thread_t) {
 	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
-		G_pancake("thread not interurptible", 0)
+		pancake("thread not interurptible", 0)
 	}
 	Gscpu().mythread = t
 	fxrstor(&t.fx)
@@ -2024,11 +2003,11 @@ type ucontext_t struct {
 //go:nosplit
 func mksig(t *thread_t, signo int32) {
 	if t.sigstack == 0 {
-		G_pancake("no sig stack", t.sigstack)
+		pancake("no sig stack", t.sigstack)
 	}
 	// save old context for sigret
 	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
-		G_pancake("thread uninterruptible?", 0)
+		pancake("thread uninterruptible?", 0)
 	}
 	t.sigtf = t.tf
 	t.sigfx = t.fx
@@ -2074,13 +2053,13 @@ func sigsim(signo int32, si unsafe.Pointer, ctx *ucontext_t) {
 //go:nosplit
 func sigret(t *thread_t) {
 	if t.status != ST_RUNNING {
-		G_pancake("uh oh!", uintptr(t.status))
+		pancake("uh oh!", uintptr(t.status))
 	}
 	t.tf = t.sigtf
 	t.fx = t.sigfx
 	t.doingsig = 0
 	if t.status != ST_RUNNING {
-		G_pancake("wut", uintptr(t.status))
+		pancake("wut", uintptr(t.status))
 	}
 	sched_run(t)
 }
@@ -2163,12 +2142,12 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 	}
 	vaend = caddr(VUEND, 0, 0, 0, 0)
 	if va >= vaend || va + sz >= vaend {
-		G_pancake("va space exhausted", va)
+		pancake("va space exhausted", va)
 	}
 
 	t = MAP_ANON | MAP_PRIVATE
 	if flags & t != t {
-		G_pancake("unexpected flags", flags)
+		pancake("unexpected flags", flags)
 	}
 	perms = PTE_P
 	if prot == PROT_NONE {
@@ -2187,7 +2166,7 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 			pml4 := caddr(VREC, VREC, VREC, VREC, sidx)
 			pml4e := (*uintptr)(unsafe.Pointer(pml4))
 			if *pml4e & PTE_P == 0 {
-				G_pancake("new pml4 entry to kernel pmap", va)
+				pancake("new pml4 entry to kernel pmap", va)
 			}
 		}
 	}
@@ -2211,7 +2190,7 @@ func hack_munmap(v, _sz uintptr) {
 		va := v + i
 		pte := pgdir_walk(va, false)
 		if pml4x(va) >= VUEND {
-			G_pancake("high unmap", va)
+			pancake("high unmap", va)
 		}
 		// XXX goodbye, memory
 		if pte != nil && *pte & PTE_P != 0 {
@@ -2221,7 +2200,7 @@ func hack_munmap(v, _sz uintptr) {
 			invlpg(va)
 		}
 	}
-	G_pmsg("POOF\n")
+	pmsg("POOF\n")
 	spunlock(maplock)
 	Popcli(fl)
 }
@@ -2233,13 +2212,13 @@ func thread_avail() int {
 			return i
 		}
 	}
-	G_pancake("no available threads", maxthreads)
+	pancake("no available threads", maxthreads)
 	return -1
 }
 
 func clone_wrap(rip uintptr) {
 	clone_call(rip)
-	G_pancake("clone_wrap returned", 0)
+	pancake("clone_wrap returned", 0)
 }
 
 func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
@@ -2251,7 +2230,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	chk := uint32(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
 	    CLONE_THREAD)
 	if flags != chk {
-		G_pancake("unexpected clone args", uintptr(flags))
+		pancake("unexpected clone args", uintptr(flags))
 	}
 	var dur func(uintptr)
 	dur = clone_wrap
@@ -2291,7 +2270,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 func hack_setitimer(timer uint32, new, old *itimerval) {
 	TIMER_PROF := uint32(2)
 	if timer != TIMER_PROF {
-		G_pancake("weird timer", uintptr(timer))
+		pancake("weird timer", uintptr(timer))
 	}
 
 	fl := Pushcli()
@@ -2321,7 +2300,7 @@ func hack_sigaltstack(new, old *sigaltstackt) {
 
 func hack_write(fd int, bufn uintptr, sz uint32) int64 {
 	if fd != 1 && fd != 2 {
-		G_pancake("unexpected fd", uintptr(fd))
+		pancake("unexpected fd", uintptr(fd))
 	}
 	fl := Pushcli()
 	splock(pmsglock)
@@ -2358,11 +2337,11 @@ func hack_syscall(trap, a1, a2, a3 int64) (int64, int64, int64) {
 	case 2:
 		enoent := int64(-2)
 		if !cstrmatch(uintptr(a1), fnwhite) {
-			G_pancake("unexpected open", 0)
+			pancake("unexpected open", 0)
 		}
 		return 0, 0, enoent
 	default:
-		G_pancake("unexpected syscall", uintptr(trap))
+		pancake("unexpected syscall", uintptr(trap))
 	}
 	// not reached
 	return 0, 0, -1
@@ -2428,7 +2407,7 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 		Sti()
 		ret = woke
 	default:
-		G_pancake("unexpected futex op", uintptr(op))
+		pancake("unexpected futex op", uintptr(op))
 	}
 	return int64(ret)
 }
@@ -2445,9 +2424,9 @@ func hack_usleep(delay int64) {
 func hack_exit(code int32) {
 	Cli()
 	Gscpu().mythread.status = ST_INVALID
-	G_pmsg("exit with code")
+	pmsg("exit with code")
 	pnum(uintptr(code))
-	G_pmsg(".\nhalting\n")
+	pmsg(".\nhalting\n")
 	atomicstore(&Halt, 1)
 	for {
 	}
@@ -2479,7 +2458,7 @@ func Nanotime() int {
 
 // useful for basic tests of filesystem durability
 func Crash() {
-	G_pmsg("CRASH!\n")
+	pmsg("CRASH!\n")
 	atomicstore(&Halt, 1)
 	for {
 	}
