@@ -350,7 +350,8 @@ var kpmapp      *[512]int
 
 func kpmap() *[512]int {
 	if kpmapp == nil {
-		kpmapp = runtime.Kpmap()
+		dur := caddr(VREC, VREC, VREC, VREC, 0)
+		kpmapp = (*[512]int)(unsafe.Pointer(dur))
 	}
 	return kpmapp
 }
@@ -377,10 +378,13 @@ func dmap_init() {
 	if ptn & PGOFFSET != 0 {
 		panic("page table not aligned")
 	}
-	p_pdpt := runtime.Vtop(pdpt)
+	p_pdpt, ok := runtime.Vtop(unsafe.Pointer(pdpt))
+	if !ok {
+		panic("must succeed")
+	}
 	kpgadd(pdpt)
 
-	*dpte = p_pdpt | PTE_P | PTE_W
+	*dpte = int(p_pdpt) | PTE_P | PTE_W
 
 	size := (1 << 30)
 
@@ -399,12 +403,15 @@ func dmap_init() {
 	pdptsz := 1 << 30
 	for i := range pdpt {
 		pd := new([512]int)
-		p_pd := runtime.Vtop(pd)
+		p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
+		if !ok {
+			panic("must succeed")
+		}
 		kpgadd(pd)
 		for j := range pd {
 			pd[j] = i*pdptsz + j*size | PTE_P | PTE_W | PTE_PS
 		}
-		pdpt[i] = p_pd | PTE_P | PTE_W
+		pdpt[i] = int(p_pd) | PTE_P | PTE_W
 	}
 
 	// fill in kent, the list of kernel pml4 entries. make sure we will

@@ -148,7 +148,7 @@ done:
 // i do it this strange way because if i declare fakeargv in C i get 'missing
 // golang type information'. need two 0 entries because go checks for
 // environment variables too.
-DATA	fakeargv+0(SB)/8,$gostr(SB)
+DATA	fakeargv+0(SB)/8,$·gostr(SB)
 DATA	fakeargv+8(SB)/8,$0
 DATA	fakeargv+16(SB)/8,$0
 GLOBL	fakeargv(SB),RODATA,$24
@@ -234,10 +234,10 @@ h_needtls:
 	MOVQ	runtime·tls0(SB), AX
 	CMPQ	AX, $0x123
 	JEQ	h_ok
-	MOVQ	$0x4242424242424242, AX
-	PUSHQ	AX
-	PUSHQ	$0
-	CALL	runtime·pancake(SB)
+	MOVW	$0x1742, 0xb8000
+	MOVW	$0x1746, 0xb8002
+	BYTE	$0xeb;
+	BYTE	$0xfe;
 h_ok:
 
 	// set the per-goroutine and per-mach "registers"
@@ -299,7 +299,7 @@ TEXT ·finit(SB), NOSPLIT, $0-0
 	FINIT
 	RET
 
-TEXT ·rcr0(SB), NOSPLIT, $0-8
+TEXT ·Rcr0(SB), NOSPLIT, $0-8
 	MOVQ	CR0, AX
 	MOVQ	AX, ret+0(FP)
 	RET
@@ -309,25 +309,22 @@ TEXT ·Rcr2(SB), NOSPLIT, $0-8
 	MOVQ	AX, ret+0(FP)
 	RET
 
-TEXT ·rcr4(SB), NOSPLIT, $0-8
+TEXT ·Rcr4(SB), NOSPLIT, $0-8
 	MOVQ	CR4, AX
 	MOVQ	AX, ret+0(FP)
 	RET
-
-TEXT ·Rcr4(SB), NOSPLIT, $0-0
-	JMP	·rcr4(SB)
 
 TEXT tlbflush(SB), NOSPLIT, $0-0
 	MOVQ	CR3, AX
 	MOVQ	AX, CR3
 	RET
 
-TEXT lcr3(SB), NOSPLIT, $0-8
+TEXT ·Lcr3(SB), NOSPLIT, $0-8
 	MOVQ	pgtbl+0(FP), AX
 	MOVQ	AX, CR3
 	RET
 
-TEXT rcr3(SB), NOSPLIT, $0-8
+TEXT ·Rcr3(SB), NOSPLIT, $0-8
 	MOVQ	CR3, AX
 	MOVQ	AX, ret+0(FP)
 	RET
@@ -371,12 +368,12 @@ TEXT ·ltr(SB), NOSPLIT, $0-8
 	BYTE $0xd8
 	RET
 
-TEXT ·lcr0(SB), NOSPLIT, $0-8
+TEXT ·Lcr0(SB), NOSPLIT, $0-8
 	MOVQ	val+0(FP), AX
 	MOVQ	AX, CR0
 	RET
 
-TEXT ·lcr4(SB), NOSPLIT, $0-8
+TEXT ·Lcr4(SB), NOSPLIT, $0-8
 	MOVQ	val+0(FP), AX
 	MOVQ	AX, CR4
 	RET
@@ -471,11 +468,11 @@ TEXT ·Rdtsc(SB), NOSPLIT, $0-8
 	MOVL	DX, ret+4(FP)
 	RET
 
-TEXT ·cli(SB), NOSPLIT, $0-0
+TEXT ·Cli(SB), NOSPLIT, $0-0
 	CLI
 	RET
 
-TEXT ·sti(SB), NOSPLIT, $0-0
+TEXT ·Sti(SB), NOSPLIT, $0-0
 	STI
 	RET
 

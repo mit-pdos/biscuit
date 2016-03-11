@@ -15,64 +15,57 @@ func rtsigprocmask(sig int32, new, old unsafe.Pointer, size int32)
 func getrlimit(kind int32, limit unsafe.Pointer) int32
 func raise(sig int32)
 func sched_getaffinity(pid, len uintptr, buf *uintptr) int32
-func trapsched_m(*g)
-func trapinit_m(*g)
 
+// runtime/asm_amd64.s
 func Cli()
+func clone_call(uintptr)
+func cpu_halt(uintptr)
 func Cpuid(uint32, uint32) (uint32, uint32, uint32, uint32)
-func Invlpg(unsafe.Pointer)
-func Kpmap() *[512]int
-func Kpmap_p() int
-func Lcr3(uintptr)
+func finit()
+func fs_null()
+func fxrstor(*[FXREGS]uintptr)
+func fxsave(*[FXREGS]uintptr)
+func _Gscpu() *cpu_t
+func gs_null()
+func htpause()
+func Inb(uint16) uint
 func Inl(int) int
 func Insl(int, unsafe.Pointer, int)
+func Invlpg(unsafe.Pointer)
+func Lcr0(uintptr)
+func Lcr3(uintptr)
+func Lcr4(uintptr)
+func lgdt(pdesc_t)
+func lidt(pdesc_t)
+func ltr(uint)
+func mktrap(int)
 func Outb(uint16, uint8)
-func Inb(uint16) uint
-func Outw(int, int)
 func Outl(int, int)
 func Outsl(int, unsafe.Pointer, int)
-func Pmsga(*uint8, int, int8)
-func Pnum(int)
-func Kreset()
-func Ktime() int
-func Rdtsc() uint64
+func Outw(int, int)
+func Popcli(int)
+func Pushcli() int
+func Rcr0() uintptr
 func Rcr2() uintptr
 func Rcr3() uintptr
 func Rcr4() uintptr
+func Rdmsr(int) int
+func Rdtsc() uint64
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
-func Sti()
-func Vtop(*[512]int) int
-
-func Crash()
-func Fnaddr(func()) uintptr
-func Fnaddri(func(uint)) uintptr
-func Trapwake()
-
-// runtime/asm_amd64.s
-func htpause()
-func finit()
-func fs_null()
-func fxsave(*[FXREGS]uintptr)
-func gs_null()
-func lgdt(pdesc_t)
-func lidt(pdesc_t)
-func cli()
-func sti()
-func ltr(uint)
-func rcr0() uintptr
-func rcr4() uintptr
-func lcr0(uintptr)
-func lcr4(uintptr)
-func clone_call(uintptr)
-func cpu_halt(uintptr)
-func fxrstor(*[FXREGS]uintptr)
-func trapret(*[TFSIZE]uintptr, uintptr)
-func mktrap(int)
 func stackcheck()
+func Sti()
 func _sysentry()
 func _trapret(*[TFSIZE]uintptr)
+func trapret(*[TFSIZE]uintptr, uintptr)
 func _userint()
+func _Userrun(*[24]int, bool) (int, int)
+func Wrmsr(int, int)
+
+// proc.c
+func Trapwake()
+func trapsched_m(*g)
+func trapinit_m(*g)
 
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
@@ -153,15 +146,6 @@ const(
   TF_RFLAGS    = TFREGS + 4
     TF_FL_IF     uintptr = 1 << 9
 )
-
-func Pushcli() int
-func Popcli(int)
-func _Gscpu() *cpu_t
-func Rdmsr(int) int
-func Wrmsr(int, int)
-func _Userrun(*[24]int, bool) (int, int)
-
-func Cprint(byte, int)
 
 //go:nosplit
 func Gscpu() *cpu_t {
@@ -291,7 +275,7 @@ func _consumelbr() {
 		Wrmsr(lastbranch_0_from_ip + cur, 0)
 		Wrmsr(lastbranch_0_to_ip + cur, 0)
 		if idx + 2*i + 1 >= len(nmiprof.buf) {
-			Cprint('!', 1)
+			Cpuprint('!', 1)
 			break
 		}
 		nmiprof.buf[idx+2*i] = from
@@ -539,7 +523,6 @@ var Halt uint32
 func _pmsg(*int8)
 func invlpg(uintptr)
 func rflags() uintptr
-//func timetick(*thread_t)
 func fakesig(int32, unsafe.Pointer, *ucontext_t)
 
 // wait until remove definition from proc.c
@@ -611,6 +594,18 @@ func pnum(n uintptr) {
 	Popcli(fl)
 }
 
+func Pmsga(_p *uint8, c int, attr int8) {
+	pn := uintptr(unsafe.Pointer(_p))
+	fl := Pushcli()
+	splock(pmsglock)
+	for i := uintptr(0); i < uintptr(c); i++ {
+		p := (*int8)(unsafe.Pointer(pn+i))
+		putcha(*p, attr)
+	}
+	spunlock(pmsglock)
+	Popcli(fl)
+}
+
 var _cpuattrs [MAXCPUS]uint16
 
 //go:nosplit
@@ -640,7 +635,7 @@ func pmsg(msg *int8)
 
 //go:nosplit
 func pancake(msg *int8, addr uintptr) {
-	cli()
+	Pushcli()
 	atomicstore(&Halt, 1)
 	_pmsg(msg)
 	_pnum(addr)
@@ -653,7 +648,7 @@ func pancake(msg *int8, addr uintptr) {
 
 //go:nosplit
 func G_pancake(msg string, addr uintptr) {
-	cli()
+	Pushcli()
 	atomicstore(&Halt, 1)
 	_G_pmsg(msg)
 	_pnum(addr)
@@ -664,6 +659,7 @@ func G_pancake(msg string, addr uintptr) {
 	}
 }
 
+var gostr = []int8{'g', 'o', 0}
 
 //go:nosplit
 func chkalign(_p unsafe.Pointer, n uintptr) {
@@ -1039,6 +1035,11 @@ func pml4x(va uintptr) uintptr {
 }
 
 //go:nosplit
+func pte_addr(x uintptr) uintptr {
+	return x &^ ((1 << 12) - 1)
+}
+
+//go:nosplit
 func slotnext(va uintptr) uintptr {
 	return ((va << 9) & ((1 << 48) - 1))
 }
@@ -1223,17 +1224,17 @@ var fxinit [FXREGS]uintptr
 //go:nosplit
 func fpuinit(amfirst bool) {
 	finit()
-	cr0 := rcr0()
+	cr0 := Rcr0()
 	// clear EM
 	cr0 &^= (1 << 2)
 	// set MP
 	cr0 |= 1 << 1
-	lcr0(cr0);
+	Lcr0(cr0);
 
-	cr4 := rcr4()
+	cr4 := Rcr4()
 	// set OSFXSR
 	cr4 |= 1 << 9
-	lcr4(cr4);
+	Lcr4(cr4);
 
 	if amfirst {
 		chkalign(unsafe.Pointer(&fxinit[0]), 16)
@@ -2380,7 +2381,7 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 	ret := 0
 	switch op {
 	case FUTEX_WAIT:
-		cli()
+		Cli()
 		splock(futexlock)
 		dosleep := *uaddr == val
 		if dosleep {
@@ -2396,18 +2397,18 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 			mktrap(TRAP_YIELD)
 			// scheduler unlocks ·futexlock and returns with
 			// interrupts enabled...
-			cli()
+			Cli()
 			ret = Gscpu().mythread.sleepret
-			sti()
+			Sti()
 		} else {
 			spunlock(futexlock)
-			sti()
+			Sti()
 			eagain := -11
 			ret = eagain
 		}
 	case FUTEX_WAKE:
 		woke := 0
-		cli()
+		Cli()
 		splock(futexlock)
 		splock(threadlock)
 		for i := 0; i < maxthreads && val > 0; i++ {
@@ -2424,7 +2425,7 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 		}
 		spunlock(threadlock)
 		spunlock(futexlock)
-		sti()
+		Sti()
 		ret = woke
 	default:
 		G_pancake("unexpected futex op", uintptr(op))
@@ -2442,7 +2443,7 @@ func hack_usleep(delay int64) {
 }
 
 func hack_exit(code int32) {
-	cli()
+	Cli()
 	Gscpu().mythread.status = ST_INVALID
 	G_pmsg("exit with code")
 	pnum(uintptr(code))
@@ -2459,9 +2460,38 @@ func hack_nanotime() int {
 	return int(cyc*Pspercycle/1000)
 }
 
+func Vtop(va unsafe.Pointer) (uintptr, bool) {
+	van := uintptr(va)
+	pte := pgdir_walk(van, false)
+	if pte == nil || *pte & PTE_P == 0 {
+		return 0, false
+	}
+	base := pte_addr(*pte)
+	return base + (van & PGOFFMASK), true
+}
+
 // XXX also called in interupt context; remove when trapstub is moved into
 // runtime
 //go:nosplit
 func Nanotime() int {
 	return hack_nanotime()
+}
+
+// useful for basic tests of filesystem durability
+func Crash() {
+	G_pmsg("CRASH!\n")
+	atomicstore(&Halt, 1)
+	for {
+	}
+}
+
+// XXX also called in interupt context; remove when trapstub is moved into
+// runtime
+//go:nosplit
+func Pnum(n int) {
+	pnum(uintptr(n))
+}
+
+func Kpmap_p() uintptr {
+	return p_kpmap
 }
