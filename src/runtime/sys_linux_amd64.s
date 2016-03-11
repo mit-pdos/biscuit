@@ -262,7 +262,7 @@ TEXT intsigret(SB),NOSPLIT,$0
 	INT	$3
 
 // change from using go calling conventions to x86_64 abi conventions
-TEXT fakesig(SB),NOSPLIT,$0-24
+TEXT ·fakesig(SB),NOSPLIT,$0-24
 	MOVL	signo+0(FP), DI
 	MOVQ	si+8(FP), SI
 	MOVQ	ctx+16(FP), DX

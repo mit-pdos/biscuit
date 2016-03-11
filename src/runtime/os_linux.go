@@ -119,8 +119,6 @@ type thread_t struct {
 	user		tuser_t
 	sigtf		[TFSIZE]uintptr
 	sigfx		[FXREGS]uintptr
-	sigstatus	int
-	siglseepfor	int
 	status		int
 	doingsig	int
 	sigstack	uintptr
@@ -541,10 +539,8 @@ var Halt uint32
 func _pmsg(*int8)
 func invlpg(uintptr)
 func rflags() uintptr
-func kernel_fault(*[TFSIZE]uintptr)
-func timetick(*thread_t)
-func proftick()
-func sigret(*thread_t)
+//func timetick(*thread_t)
+func fakesig(int32, unsafe.Pointer, *ucontext_t)
 
 // wait until remove definition from proc.c
 //type spinlock_t struct {
@@ -613,6 +609,31 @@ func pnum(n uintptr) {
 	_pnum(n)
 	spunlock(pmsglock)
 	Popcli(fl)
+}
+
+var _cpuattrs [MAXCPUS]uint16
+
+//go:nosplit
+func Cpuprint(n uint16, row uintptr) {
+	p := uintptr(0xb8000)
+	num := Gscpu().num
+	p += uintptr(num) + row*80
+	attr := _cpuattrs[num]
+	_cpuattrs[num] += 0x100
+	*(*uint16)(unsafe.Pointer(p)) = attr | n
+}
+
+//go:nosplit
+func cpupnum(rip uintptr) {
+	for i := uintptr(0); i < 16; i++ {
+		c := uint16((rip >> i*4) & 0xf)
+		if c < 0xa {
+			c += '0'
+		} else {
+			c = 'a' + (c - 0xa)
+		}
+		Cpuprint(c, i)
+	}
 }
 
 func pmsg(msg *int8)
@@ -1040,7 +1061,7 @@ func caddr(l4 uintptr, ppd uintptr, pd uintptr, pt uintptr,
 	return uintptr(ret)
 }
 
-// XXX XXX XXX get rid of create
+// XXX get rid of create
 //go:nosplit
 func pgdir_walk(_va uintptr, create bool) *uintptr {
 	v := pgrounddown(_va)
@@ -1440,6 +1461,13 @@ func lapic_setup(calibrate bool) {
 }
 
 func proc_setup() {
+	var dur func()
+	dur = _userint
+	_userintaddr = **(**uintptr)(unsafe.Pointer(&dur))
+	var dur2 func(int32, unsafe.Pointer, *ucontext_t)
+	dur2 = sigsim
+	_sigsimaddr = **(**uintptr)(unsafe.Pointer(&dur2))
+
 	chksize(TFSIZE*8, unsafe.Sizeof(threads[0].tf))
 	fpuinit(true)
 	// initialize the first thread: us
@@ -1525,9 +1553,6 @@ func sysc_setup(myrsp uintptr) {
 
 	sysenter_esp := 0x175
 	Wrmsr(sysenter_esp, int(myrsp))
-
-	dur = _userint
-	_userintaddr = **(**uintptr)(unsafe.Pointer(&dur))
 }
 
 var tlbshoot_wait uintptr
@@ -1642,11 +1667,57 @@ const (
 )
 
 var _userintaddr uintptr
+var _sigsimaddr uintptr
 var _newtrap func(*[TFSIZE]uintptr)
 
 // XXX remove newtrap?
 func Install_traphandler(newtrap func(*[TFSIZE]uintptr)) {
 	_newtrap = newtrap
+}
+
+//go:nosplit
+func stack_dump(rsp uintptr) {
+	pte := pgdir_walk(rsp, false)
+	_G_pmsg("STACK DUMP\n")
+	if pte != nil && *pte & PTE_P != 0 {
+		pc := 0
+		p := rsp
+		for i := 0; i < 70; i++ {
+			pte = pgdir_walk(p, false)
+			if pte != nil && *pte & PTE_P != 0 {
+				n := *(*uintptr)(unsafe.Pointer(p))
+				p += 8
+				_pnum(n)
+				if (pc % 4) == 0 {
+					_G_pmsg("\n")
+				}
+				pc++
+			}
+		}
+	} else {
+		_G_pmsg("bad stack")
+		_pnum(rsp)
+	}
+}
+
+//go:nosplit
+func kernel_fault(tf *[TFSIZE]uintptr) {
+	trapno := tf[TF_TRAPNO]
+	_G_pmsg("trap frame at")
+	_pnum(uintptr(unsafe.Pointer(tf)))
+	_G_pmsg("trapno")
+	_pnum(trapno)
+	rip := tf[TF_RIP]
+	_G_pmsg("rip")
+	_pnum(rip)
+	if trapno == TRAP_PGFAULT {
+		cr2 := Rcr2()
+		_G_pmsg("cr2")
+		_pnum(cr2)
+	}
+	rsp := tf[TF_RSP]
+	stack_dump(rsp)
+	G_pancake("kernel fault", trapno)
 }
 
 // XXX
@@ -1716,7 +1787,7 @@ func trap(tf *[TFSIZE]uintptr) {
 			fxsave(&ct.fx)
 			ct.tf = *tf
 		}
-		timetick(ct)
+		//timetick(ct)
 	}
 
 	yielding := false
@@ -1799,17 +1870,6 @@ func _tchk() {
 	}
 }
 
-func thread_avail() int {
-	_tchk()
-	for i := range threads {
-		if threads[i].status == ST_INVALID {
-			return i
-		}
-	}
-	G_pancake("no available threads", maxthreads)
-	return -1
-}
-
 //go:nosplit
 func sched_halt() {
 	cpu_halt(Gscpu().rsp)
@@ -1876,6 +1936,156 @@ func yieldy() {
 	spunlock(threadlock)
 	sched_halt()
 }
+
+// goprofiling is implemented by simulating the SIGPROF signal. when proftick
+// observes that enough time has elapsed, mksig() is used to deliver SIGPROF to
+// the runtime and things are setup so the runtime returns to sigsim().
+// sigsim() makes sure that, once the "signal" has been delivered, the runtime
+// thread restores its pre-signal context (signals must be taken on the
+// alternate stack since the signal handler pushes a lot of state to the stack
+// and may clobber a goroutine stack since goroutine stacks are small). for
+// simpliclity, sigsim() uses a special trap # (TRAP_SIGRET) to restore the
+// pre-signal context. it is easier using a (software) trap because a trap
+// switches to the interrupt stack where we can easily change the runnability
+// of the current thread.
+
+var _lastprof int
+
+//go:nosplit
+func proftick() {
+	// goprofile period = 10ms
+	profns := 10000000
+	n := hack_nanotime()
+
+	if n - _lastprof < profns {
+		return
+	}
+	_lastprof = n
+
+	for i := range threads {
+		// only do fake SIGPROF if we are already
+		t := &threads[i]
+		if t.prof.enabled == 0 || t.doingsig != 0 {
+			continue
+		}
+		// don't touch running threads
+		if t.status != ST_RUNNABLE {
+			continue
+		}
+		SIGPROF := int32(27)
+		mksig(t, SIGPROF)
+	}
+}
+
+// these are defined by linux since we lie to the go build system that we are
+// running on linux...
+type ucontext_t struct {
+	uc_flags	uintptr
+	uc_link		uintptr
+	uc_stack struct {
+		sp	uintptr
+		flags	int32
+		size	uint64
+	}
+	uc_mcontext struct {
+		r8	uintptr
+		r9	uintptr
+		r10	uintptr
+		r11	uintptr
+		r12	uintptr
+		r13	uintptr
+		r14	uintptr
+		r15	uintptr
+		rdi	uintptr
+		rsi	uintptr
+		rbp	uintptr
+		rbx	uintptr
+		rdx	uintptr
+		rax	uintptr
+		rcx	uintptr
+		rsp	uintptr
+		rip	uintptr
+		eflags	uintptr
+		cs	uint16
+		gs	uint16
+		fs	uint16
+		__pad0	uint16
+		err	uintptr
+		trapno	uintptr
+		oldmask	uintptr
+		cr2	uintptr
+		fpptr	uintptr
+		res	[8]uintptr
+	}
+	uc_sigmask	uintptr
+}
+
+//go:nosplit
+func mksig(t *thread_t, signo int32) {
+	if t.sigstack == 0 {
+		G_pancake("no sig stack", t.sigstack)
+	}
+	// save old context for sigret
+	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
+		G_pancake("thread uninterruptible?", 0)
+	}
+	t.sigtf = t.tf
+	t.sigfx = t.fx
+	t.status = ST_RUNNABLE
+	t.doingsig = 1
+
+	rsp := t.sigstack
+	ucsz := unsafe.Sizeof(ucontext_t{})
+	rsp -= ucsz
+	_ctxt := rsp
+	ctxt := (*ucontext_t)(unsafe.Pointer(_ctxt))
+
+	// the profiler only uses rip and rsp of the context...
+	memclr(unsafe.Pointer(_ctxt), ucsz)
+	ctxt.uc_mcontext.rip = t.tf[TF_RIP]
+	ctxt.uc_mcontext.rsp = t.tf[TF_RSP]
+
+	// simulate call to sigsim with args
+	rsp -= 8
+	*(*uintptr)(unsafe.Pointer(rsp)) = _ctxt
+	// nil siginfo_t
+	rsp -= 8
+	*(*uintptr)(unsafe.Pointer(rsp)) = 0
+	rsp -= 8
+	*(*uintptr)(unsafe.Pointer(rsp)) = uintptr(signo)
+	// bad return addr shouldn't be reached
+	rsp -= 8
+	*(*uintptr)(unsafe.Pointer(rsp)) = 0
+
+	t.tf[TF_RSP] = rsp
+	t.tf[TF_RIP] = _sigsimaddr
+}
+
+//go:nosplit
+func sigsim(signo int32, si unsafe.Pointer, ctx *ucontext_t) {
+	// the purpose of fakesig is to enter the runtime's usual signal
+	// handler from go code. the signal handler uses sys5abi, so fakesig
+	// converts between calling conventions.
+	fakesig(signo, nil, ctx)
+	mktrap(TRAP_SIGRET)
+}
+
+//go:nosplit
+func sigret(t *thread_t) {
+	if t.status != ST_RUNNING {
+		G_pancake("uh oh!", uintptr(t.status))
+	}
+	t.tf = t.sigtf
+	t.fx = t.sigfx
+	t.doingsig = 0
+	if t.status != ST_RUNNING {
+		G_pancake("wut", uintptr(t.status))
+	}
+	sched_run(t)
+}
+
+// if sigsim() is used to deliver signals other than SIGPROF, you will need to
+// construct siginfo_t and more of context.
 
 func find_empty(sz uintptr) uintptr {
 	v := caddr(0, 0, 0, 1, 0)
@@ -2013,6 +2223,17 @@ func hack_munmap(v, _sz uintptr) {
 	G_pmsg("POOF\n")
 	spunlock(maplock)
 	Popcli(fl)
+}
+
+func thread_avail() int {
+	_tchk()
+	for i := range threads {
+		if threads[i].status == ST_INVALID {
+			return i
+		}
+	}
+	G_pancake("no available threads", maxthreads)
+	return -1
 }
 
 func clone_wrap(rip uintptr) {
