@@ -536,22 +536,22 @@ func cls() {
 	sc_put('\n')
 }
 
-func Trapsched() {
-	mcall(trapsched_m)
-}
+//func Trapsched() {
+//	mcall(trapsched_m)
+//}
 
 // called only once to setup
-func Trapinit() {
-	mcall(trapinit_m)
-}
+//func Trapinit() {
+//	mcall(trapinit_m)
+//}
 
 var hackmode int32
 var Halt uint32
 
 // wait until remove definition from proc.c
-//type spinlock_t struct {
-//	v	uint32
-//}
+type spinlock_t struct {
+	v	uint32
+}
 
 //go:nosplit
 func splock(l *spinlock_t) {
