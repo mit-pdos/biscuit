@@ -197,29 +197,25 @@ DATA	fakeargv+16(SB)/8,$0
 GLOBL	fakeargv(SB),RODATA,$24
 
 TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
-
-	// magic loop
-	//BYTE	$0xeb
-	//BYTE	$0xfe
-	CALL	runtime·sc_setup(SB)
-
-	// save page table and first free address from bootloader.
 	MOVL	DI, ·p_kpmap(SB)
 	MOVL	SI, ·pgfirst(SB)
 	MOVQ	$1, runtime·hackmode(SB)
+	CALL	runtime·sc_setup(SB)
 
+	// copy arguments forward on an even stack
+	//MOVQ	DI, AX		// argc
+	//MOVQ	SI, BX		// argv
+	MOVQ	$0, AX		// argc
+	MOVQ	$0, BX		// argv
+	SUBQ	$(4*8+7), SP		// 2args 2auto
 	ANDQ	$~15, SP
-	//SUBQ	$8, SP	// traceback assumes the initial rsp is writable
+	MOVQ	AX, 16(SP)
+	MOVQ	BX, 24(SP)
 
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
 	MOVQ	$runtime·g0(SB), DI
-	// even though we only have one page of stack, leave stackguard far
-	// below. if the scheduler overflows its stack, we will get a pagefault
-	// which is probably easier to debug than panicking due to stack
-	// growing on scheduler.
 	LEAQ	(-64*1024+104)(SP), BX
-	//LEAQ	(-4*1024+104)(SP), BX
 	MOVQ	BX, g_stackguard0(DI)
 	MOVQ	BX, g_stackguard1(DI)
 	MOVQ	BX, (g_stack+stack_lo)(DI)
@@ -229,14 +225,25 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	MOVQ	$0, AX
 	CPUID
 	CMPQ	AX, $0
-	JE	h_nocpuinfo
+	JE	nocpuinfo
+
+	// Figure out how to serialize RDTSC.
+	// On Intel processors LFENCE is enough. AMD requires MFENCE.
+	// Don't know about the rest, so let's do MFENCE.
+	CMPL	BX, $0x756E6547  // "Genu"
+	JNE	notintel
+	CMPL	DX, $0x49656E69  // "ineI"
+	JNE	notintel
+	CMPL	CX, $0x6C65746E  // "ntel"
+	JNE	notintel
+	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
+notintel:
+
 	MOVQ	$1, AX
 	CPUID
 	MOVL	CX, runtime·cpuid_ecx(SB)
 	MOVL	DX, runtime·cpuid_edx(SB)
-h_nocpuinfo:
-
-	CALL	runtime·cls(SB)
+nocpuinfo:
 
 	// if there is an _cgo_init, call it.
 	//MOVQ	_cgo_init(SB), AX
@@ -247,26 +254,29 @@ h_nocpuinfo:
 	//MOVQ	$setg_gcc<>(SB), SI
 	//CALL	AX
 
-	//// update stackguard after _cgo_init
+	// update stackguard after _cgo_init
 	MOVQ	$runtime·g0(SB), CX
 	MOVQ	(g_stack+stack_lo)(CX), AX
-	ADDQ	$const_StackGuard, AX
+	ADDQ	$const__StackGuard, AX
 	MOVQ	AX, g_stackguard0(CX)
 	MOVQ	AX, g_stackguard1(CX)
 
+	CALL	runtime·cls(SB)
+
 	//CMPL	runtime·iswindows(SB), $0
 	//JEQ ok
-h_needtls:
-
-	//// skip TLS setup on Plan 9
+needtls:
+	// skip TLS setup on Plan 9
 	//CMPL	runtime·isplan9(SB), $1
 	//JEQ ok
 	//// skip TLS setup on Solaris
 	//CMPL	runtime·issolaris(SB), $1
 	//JEQ ok
 
-	CALL	·seg_setup(SB)
+	//LEAQ	runtime·tls0(SB), DI
+	//CALL	runtime·settls(SB)
 
+	CALL	·seg_setup(SB)
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
 	CALL	fixcs(SB)
@@ -276,13 +286,14 @@ h_needtls:
 	MOVQ	$0x123, g(BX)
 	MOVQ	runtime·tls0(SB), AX
 	CMPQ	AX, $0x123
-	JEQ	h_ok
-	MOVW	$0x1742, 0xb8000
-	MOVW	$0x1746, 0xb8002
+	JEQ	ok
+	MOVQ	$0x42, (SP)
+	CALL	runtime·putch(SB)
+	MOVQ	$0x46, (SP)
+	CALL	runtime·putch(SB)
 	BYTE	$0xeb;
 	BYTE	$0xfe;
-h_ok:
-
+ok:
 	// set the per-goroutine and per-mach "registers"
 	get_tls(BX)
 	LEAQ	runtime·g0(SB), CX
@@ -296,35 +307,34 @@ h_ok:
 
 	CALL	·int_setup(SB)
 	CALL	·proc_setup(SB)
+	STI
 
 	CLD				// convention is D is always left cleared
 	CALL	runtime·check(SB)
 
+	//MOVL	16(SP), AX		// copy argc
+	MOVL	$1, AX		// copy argc
+	MOVL	AX, 0(SP)
+	//MOVQ	24(SP), AX		// copy argv
 	MOVQ	$fakeargv(SB), AX
-	PUSHQ	AX
-	PUSHQ	$1
+	MOVQ	AX, 8(SP)
 	CALL	runtime·args(SB)
-	POPQ	AX
-	POPQ	AX
 	CALL	runtime·osinit(SB)
 	CALL	runtime·schedinit(SB)
 
 	// create a new goroutine to start program
-	MOVQ	$runtime·main·f(SB), BP		// entry
-	PUSHQ	BP
+	MOVQ	$runtime·mainPC(SB), AX		// entry
+	PUSHQ	AX
 	PUSHQ	$0			// arg size
 	CALL	runtime·newproc(SB)
 	POPQ	AX
 	POPQ	AX
 
 	// start this M
-	STI
-	//CALL	clone_test(SB)
 	CALL	runtime·mstart(SB)
 
 	MOVL	$0xf1, 0xf1  // crash
 	RET
-
 
 TEXT runtime·Cpuid(SB), NOSPLIT, $0-24
 	XORQ	AX, AX
@@ -690,9 +700,9 @@ IH_IRQ(13,·Xirq13 )
 IH_IRQ(14,·Xirq14 )
 IH_IRQ(15,·Xirq15 )
 
-#define IA32_FS_BASE		$0xc0000100UL
-#define IA32_SYSENTER_ESP	$0x175UL
-#define IA32_SYSENTER_EIP	$0x176UL
+#define IA32_FS_BASE		$0xc0000100
+#define IA32_SYSENTER_ESP	$0x175
+#define IA32_SYSENTER_EIP	$0x176
 
 TEXT wrfsb(SB), NOSPLIT, $0-8
 	get_tls(BX)
@@ -799,56 +809,6 @@ TEXT ·_trapret(SB), NOSPLIT, $0-8
 	// iretq
 	BYTE	$0x48
 	BYTE	$0xcf
-
-TEXT gtest(SB), NOSPLIT, $0
-	MOVQ	$1, AX
-	MOVQ	$2, BX
-	MOVQ	$3, CX
-	MOVQ	$4, DX
-	MOVQ	$5, DI
-	MOVQ	$6, SI
-	MOVQ	$7, R8
-	MOVQ	$8, R9
-	MOVQ	$9, R10
-	MOVQ	$10, R11
-	MOVQ	$11, R12
-	MOVQ	$12, R13
-	MOVQ	$13, R14
-	MOVQ	$14, R15
-	PUSHQ	TRAP_YIELD
-	CALL	·mktrap(SB)
-	ADDQ	$8, SP
-	CMPQ	AX, $1
-	JNE	badinko
-	CMPQ	BX, $2
-	JNE	badinko
-	CMPQ	CX, $3
-	JNE	badinko
-	CMPQ	DX, $4
-	JNE	badinko
-	CMPQ	DI, $5
-	JNE	badinko
-	CMPQ	SI, $6
-	JNE	badinko
-	CMPQ	R8, $7
-	JNE	badinko
-	CMPQ	R9, $8
-	JNE	badinko
-	CMPQ	R10, $9
-	JNE	badinko
-	CMPQ	R11, $10
-	JNE	badinko
-	CMPQ	R12, $11
-	JNE	badinko
-	CMPQ	R13, $12
-	JNE	badinko
-	CMPQ	R14, $13
-	JNE	badinko
-	CMPQ	R15, $14
-	JNE	badinko
-	RET
-badinko:
-	INT	$3
 
 // void ·mktrap(uint64 intn)
 TEXT ·mktrap(SB), NOSPLIT, $0-8
@@ -1002,43 +962,6 @@ TEXT ·_userint(SB), NOSPLIT, $0-0
 	MOVQ	BX, 0x38(SP)
 	ADDQ	$0x18, SP
 	RET
-
-TEXT old_sysentry(SB), NOSPLIT, $0
-	// r10 contains return rsp, r11 contains return rip
-	PUSHQ	AX
-
-	// build hardware trap frame
-
-	MOVQ	$((UDSEG << 3) | 3), AX
-	PUSHQ	AX
-
-	PUSHQ	R10
-
-#define		TF_FL_IF	$(1 << 9)
-	PUSHFQ
-	POPQ	AX
-	ORQ	TF_FL_IF, AX
-	PUSHQ	AX
-
-	MOVQ	$((UCSEG << 3) | 3), AX
-	PUSHQ	AX
-
-	// ret addr
-	PUSHQ	R11
-
-	// dummy error code
-	PUSHQ	$0
-
-	// interrupt number
-	PUSHQ	TRAP_SYSCALL
-
-	// and finally, restore rax
-	MOVQ	56(SP), AX
-	JMP	alltraps(SB)
-
-	INT	$3
-	CALL	sysentry(SB)
-	INT	$3
 
 TEXT ·gs_null(SB), NOSPLIT, $8-0
 	XORQ	AX, AX

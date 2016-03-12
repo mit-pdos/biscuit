@@ -184,7 +184,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
 	// while other cpus execute user programs.
-	entersyscall()
+	entersyscall(0)
 	fl := Pushcli()
 	cpu := Gscpu()
 	ct := cpu.mythread
@@ -216,7 +216,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	ct.user.tf = nil
 	ct.user.fxbuf = nil
 	Popcli(fl)
-	exitsyscall()
+	exitsyscall(0)
 	return intno, aux
 }
 
@@ -857,9 +857,10 @@ func seg_setup() {
 	lgdt(p)
 
 	// now that we have a GDT, setup tls for the first thread.
-	// elf tls specification defines user tls at -16(%fs)
+	// elf tls specification defines user tls at -16(%fs). go1.5 uses
+	// -8(%fs) though.
 	t := uintptr(unsafe.Pointer(&tls0[0]))
-	tlsaddr := int(t + 16)
+	tlsaddr := int(t + 8)
 	// we must set fs/gs at least once before we use the MSRs to change
 	// their base address. the MSRs write directly to hidden segment
 	// descriptor cache, and if we don't explicitly fill the segment
@@ -2273,7 +2274,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	mt.tf[TF_RSP] = rsp
 	mt.tf[TF_RIP] = cloneaddr
 	mt.tf[TF_RFLAGS] = rflags() | TF_FL_IF
-	mt.tf[TF_FSBASE] = uintptr(unsafe.Pointer(&mp.tls[0])) + 16
+	mt.tf[TF_FSBASE] = uintptr(unsafe.Pointer(&mp.tls[0])) + 8
 
 	gp.m = mp
 	mp.tls[0] = uintptr(unsafe.Pointer(gp))

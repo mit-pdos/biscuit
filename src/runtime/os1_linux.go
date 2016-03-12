@@ -169,12 +169,20 @@ var failallocatestack = []byte("runtime: failed to allocate stack for the new OS
 var failthreadcreate = []byte("runtime: failed to create new OS thread\n")
 
 func osinit() {
-	ncpu = getproccount()
+	if hackmode != 0 {
+		// avoid getproccount which wants an 8k stack
+		ncpu = 1
+	} else {
+		ncpu = getproccount()
+	}
 }
 
 var urandom_dev = []byte("/dev/urandom\x00")
 
 func getRandomData(r []byte) {
+	if hackmode != 0 {
+		return
+	}
 	if startupRandomData != nil {
 		n := copy(r, startupRandomData)
 		extendRandom(r, n)
@@ -247,7 +255,9 @@ func minit() {
 	}
 
 	// for debuggers, in case cgo created the thread
-	_g_.m.procid = uint64(gettid())
+	if hackmode == 0 {
+		_g_.m.procid = uint64(gettid())
+	}
 
 	// restore signal mask from m.sigmask and unblock essential signals
 	nmask := _g_.m.sigmask
