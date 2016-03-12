@@ -169,14 +169,14 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	cpu := Gscpu()
 	ct := cpu.mythread
 
+	if Rcr3() != p_pmap {
+		Lcr3(p_pmap)
+	}
 	// set shadow pointers for user pmap so it isn't free'd out from under
 	// us if the process terminates soon
 	cpu.pmap = pmap
 	cpu.pms = pms
 	//cpu.pid = uintptr(pid)
-	if Rcr3() != p_pmap {
-		Lcr3(p_pmap)
-	}
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
