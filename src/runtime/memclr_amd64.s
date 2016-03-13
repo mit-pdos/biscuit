@@ -15,30 +15,33 @@ TEXT runtime·memclr(SB), NOSPLIT, $0-16
 	XORQ	AX, AX
 
 	// MOVOU seems always faster than REP STOSQ.
-clr_tail:
+tail:
 	TESTQ	BX, BX
-	JEQ	clr_0
+	JEQ	_0
 	CMPQ	BX, $2
-	JBE	clr_1or2
+	JBE	_1or2
 	CMPQ	BX, $4
-	JBE	clr_3or4
+	JBE	_3or4
 	CMPQ	BX, $8
-	JBE	clr_5through8
+	JB	_5through7
+	JE	_8
 	CMPQ	BX, $16
-	JBE	clr_9through16
+	JBE	_9through16
 	PXOR	X0, X0
 	CMPQ	BX, $32
-	JBE	clr_17through32
+	JBE	_17through32
 	CMPQ	BX, $64
-	JBE	clr_33through64
+	JBE	_33through64
 	CMPQ	BX, $128
-	JBE	clr_65through128
+	JBE	_65through128
 	CMPQ	BX, $256
-	JBE	clr_129through256
+	JBE	_129through256
+	CMPB	runtime·support_avx2(SB), $1
+	JE loop_preheader_avx2
 	// TODO: use branch table and BSR to make this just a single dispatch
-	// TODO: for really big clears, use MOVNTDQ.
+	// TODO: for really big clears, use MOVNTDQ, even without AVX2.
 
-clr_loop:
+loop:
 	MOVOU	X0, 0(DI)
 	MOVOU	X0, 16(DI)
 	MOVOU	X0, 32(DI)
@@ -58,38 +61,93 @@ clr_loop:
 	SUBQ	$256, BX
 	ADDQ	$256, DI
 	CMPQ	BX, $256
-	JAE	clr_loop
-	JMP	clr_tail
+	JAE	loop
+	JMP	tail
 
-clr_1or2:
+loop_preheader_avx2:
+	VPXOR Y0, Y0, Y0
+	// For smaller sizes MOVNTDQ may be faster or slower depending on hardware.
+	// For larger sizes it is always faster, even on dual Xeons with 30M cache.
+	// TODO take into account actual LLC size. E. g. glibc uses LLC size/2.
+	CMPQ    BX, $0x2000000
+	JAE     loop_preheader_avx2_huge
+loop_avx2:
+	VMOVDQU	Y0, 0(DI)
+	VMOVDQU	Y0, 32(DI)
+	VMOVDQU	Y0, 64(DI)
+	VMOVDQU	Y0, 96(DI)
+	SUBQ	$128, BX
+	ADDQ	$128, DI
+	CMPQ	BX, $128
+	JAE	loop_avx2
+	VMOVDQU  Y0, -32(DI)(BX*1)
+	VMOVDQU  Y0, -64(DI)(BX*1)
+	VMOVDQU  Y0, -96(DI)(BX*1)
+	VMOVDQU  Y0, -128(DI)(BX*1)
+	VZEROUPPER
+	RET
+loop_preheader_avx2_huge:
+	// Align to 32 byte boundary
+	VMOVDQU  Y0, 0(DI)
+	MOVQ	DI, SI
+	ADDQ	$32, DI
+	ANDQ	$~31, DI
+	SUBQ	DI, SI
+	ADDQ	SI, BX
+loop_avx2_huge:
+	VMOVNTDQ	Y0, 0(DI)
+	VMOVNTDQ	Y0, 32(DI)
+	VMOVNTDQ	Y0, 64(DI)
+	VMOVNTDQ	Y0, 96(DI)
+	SUBQ	$128, BX
+	ADDQ	$128, DI
+	CMPQ	BX, $128
+	JAE	loop_avx2_huge
+	// In the desciption of MOVNTDQ in [1]
+	// "... fencing operation implemented with the SFENCE or MFENCE instruction
+	// should be used in conjunction with MOVNTDQ instructions..."
+	// [1] 64-ia-32-architectures-software-developer-manual-325462.pdf
+	SFENCE
+	VMOVDQU  Y0, -32(DI)(BX*1)
+	VMOVDQU  Y0, -64(DI)(BX*1)
+	VMOVDQU  Y0, -96(DI)(BX*1)
+	VMOVDQU  Y0, -128(DI)(BX*1)
+	VZEROUPPER
+	RET
+
+_1or2:
 	MOVB	AX, (DI)
 	MOVB	AX, -1(DI)(BX*1)
 	RET
-clr_0:
+_0:
 	RET
-clr_3or4:
+_3or4:
 	MOVW	AX, (DI)
 	MOVW	AX, -2(DI)(BX*1)
 	RET
-clr_5through8:
+_5through7:
 	MOVL	AX, (DI)
 	MOVL	AX, -4(DI)(BX*1)
 	RET
-clr_9through16:
+_8:
+	// We need a separate case for 8 to make sure we clear pointers atomically.
+	MOVQ	AX, (DI)
+	RET
+_9through16:
 	MOVQ	AX, (DI)
 	MOVQ	AX, -8(DI)(BX*1)
 	RET
-clr_17through32:
+_17through32:
 	MOVOU	X0, (DI)
 	MOVOU	X0, -16(DI)(BX*1)
 	RET
-clr_33through64:
+_33through64:
 	MOVOU	X0, (DI)
 	MOVOU	X0, 16(DI)
 	MOVOU	X0, -32(DI)(BX*1)
 	MOVOU	X0, -16(DI)(BX*1)
 	RET
-clr_65through128:
+_65through128:
 	MOVOU	X0, (DI)
 	MOVOU	X0, 16(DI)
 	MOVOU	X0, 32(DI)
@@ -99,7 +157,7 @@ clr_65through128:
 	MOVOU	X0, -32(DI)(BX*1)
 	MOVOU	X0, -16(DI)(BX*1)
 	RET
-clr_129through256:
+_129through256:
 	MOVOU	X0, (DI)
 	MOVOU	X0, 16(DI)
 	MOVOU	X0, 32(DI)

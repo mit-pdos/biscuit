@@ -5,6 +5,8 @@
 package runtime
 
 import (
+	"runtime/internal/atomic"
+	"runtime/internal/sys"
 	"unsafe"
 )
 
@@ -14,14 +16,17 @@ func mapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess1_fast32))
 	}
 	if h == nil || h.count == 0 {
-		return unsafe.Pointer(t.elem.zero)
+		return atomic.Loadp(unsafe.Pointer(&zeroptr))
+	}
+	if h.flags&hashWriting != 0 {
+		throw("concurrent map read and map write")
 	}
 	var b *bmap
 	if h.B == 0 {
 		// One-bucket table.  No need to hash.
 		b = (*bmap)(h.buckets)
 	} else {
-		hash := goalg(t.key.alg).hash(noescape(unsafe.Pointer(&key)), 4, uintptr(h.hash0))
+		hash := t.key.alg.hash(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 		m := uintptr(1)<<h.B - 1
 		b = (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 		if c := h.oldbuckets; c != nil {
@@ -43,9 +48,9 @@ func mapaccess1_fast32(t *maptype, h *hmap, key uint32) unsafe.Pointer {
 			}
 			return add(unsafe.Pointer(b), dataOffset+bucketCnt*4+i*uintptr(t.valuesize))
 		}
-		b = b.overflow
+		b = b.overflow(t)
 		if b == nil {
-			return unsafe.Pointer(t.elem.zero)
+			return atomic.Loadp(unsafe.Pointer(&zeroptr))
 		}
 	}
 }
@@ -56,14 +61,17 @@ func mapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess2_fast32))
 	}
 	if h == nil || h.count == 0 {
-		return unsafe.Pointer(t.elem.zero), false
+		return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
+	}
+	if h.flags&hashWriting != 0 {
+		throw("concurrent map read and map write")
 	}
 	var b *bmap
 	if h.B == 0 {
 		// One-bucket table.  No need to hash.
 		b = (*bmap)(h.buckets)
 	} else {
-		hash := goalg(t.key.alg).hash(noescape(unsafe.Pointer(&key)), 4, uintptr(h.hash0))
+		hash := t.key.alg.hash(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 		m := uintptr(1)<<h.B - 1
 		b = (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 		if c := h.oldbuckets; c != nil {
@@ -85,9 +93,9 @@ func mapaccess2_fast32(t *maptype, h *hmap, key uint32) (unsafe.Pointer, bool) {
 			}
 			return add(unsafe.Pointer(b), dataOffset+bucketCnt*4+i*uintptr(t.valuesize)), true
 		}
-		b = b.overflow
+		b = b.overflow(t)
 		if b == nil {
-			return unsafe.Pointer(t.elem.zero), false
+			return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
 		}
 	}
 }
@@ -98,14 +106,17 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess1_fast64))
 	}
 	if h == nil || h.count == 0 {
-		return unsafe.Pointer(t.elem.zero)
+		return atomic.Loadp(unsafe.Pointer(&zeroptr))
+	}
+	if h.flags&hashWriting != 0 {
+		throw("concurrent map read and map write")
 	}
 	var b *bmap
 	if h.B == 0 {
 		// One-bucket table.  No need to hash.
 		b = (*bmap)(h.buckets)
 	} else {
-		hash := goalg(t.key.alg).hash(noescape(unsafe.Pointer(&key)), 8, uintptr(h.hash0))
+		hash := t.key.alg.hash(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 		m := uintptr(1)<<h.B - 1
 		b = (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 		if c := h.oldbuckets; c != nil {
@@ -127,9 +138,9 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 			}
 			return add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.valuesize))
 		}
-		b = b.overflow
+		b = b.overflow(t)
 		if b == nil {
-			return unsafe.Pointer(t.elem.zero)
+			return atomic.Loadp(unsafe.Pointer(&zeroptr))
 		}
 	}
 }
@@ -140,14 +151,17 @@ func mapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess2_fast64))
 	}
 	if h == nil || h.count == 0 {
-		return unsafe.Pointer(t.elem.zero), false
+		return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
+	}
+	if h.flags&hashWriting != 0 {
+		throw("concurrent map read and map write")
 	}
 	var b *bmap
 	if h.B == 0 {
 		// One-bucket table.  No need to hash.
 		b = (*bmap)(h.buckets)
 	} else {
-		hash := goalg(t.key.alg).hash(noescape(unsafe.Pointer(&key)), 8, uintptr(h.hash0))
+		hash := t.key.alg.hash(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 		m := uintptr(1)<<h.B - 1
 		b = (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 		if c := h.oldbuckets; c != nil {
@@ -169,9 +183,9 @@ func mapaccess2_fast64(t *maptype, h *hmap, key uint64) (unsafe.Pointer, bool) {
 			}
 			return add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.valuesize)), true
 		}
-		b = b.overflow
+		b = b.overflow(t)
 		if b == nil {
-			return unsafe.Pointer(t.elem.zero), false
+			return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
 		}
 	}
 }
@@ -182,9 +196,12 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess1_faststr))
 	}
 	if h == nil || h.count == 0 {
-		return unsafe.Pointer(t.elem.zero)
+		return atomic.Loadp(unsafe.Pointer(&zeroptr))
 	}
-	key := (*stringStruct)(unsafe.Pointer(&ky))
+	if h.flags&hashWriting != 0 {
+		throw("concurrent map read and map write")
+	}
+	key := stringStructOf(&ky)
 	if h.B == 0 {
 		// One-bucket table.
 		b := (*bmap)(h.buckets)
@@ -195,15 +212,15 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 				if x == empty {
 					continue
 				}
-				k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*ptrSize))
+				k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*sys.PtrSize))
 				if k.len != key.len {
 					continue
 				}
 				if k.str == key.str || memeq(k.str, key.str, uintptr(key.len)) {
-					return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+i*uintptr(t.valuesize))
+					return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+i*uintptr(t.valuesize))
 				}
 			}
-			return unsafe.Pointer(t.elem.zero)
+			return atomic.Loadp(unsafe.Pointer(&zeroptr))
 		}
 		// long key, try not to do more comparisons than necessary
 		keymaybe := uintptr(bucketCnt)
@@ -212,12 +229,12 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 			if x == empty {
 				continue
 			}
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*ptrSize))
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*sys.PtrSize))
 			if k.len != key.len {
 				continue
 			}
 			if k.str == key.str {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+i*uintptr(t.valuesize))
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+i*uintptr(t.valuesize))
 			}
 			// check first 4 bytes
 			// TODO: on amd64/386 at least, make this compile to one 4-byte comparison instead of
@@ -236,15 +253,15 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 			keymaybe = i
 		}
 		if keymaybe != bucketCnt {
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+keymaybe*2*ptrSize))
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+keymaybe*2*sys.PtrSize))
 			if memeq(k.str, key.str, uintptr(key.len)) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+keymaybe*uintptr(t.valuesize))
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+keymaybe*uintptr(t.valuesize))
 			}
 		}
-		return unsafe.Pointer(t.elem.zero)
+		return atomic.Loadp(unsafe.Pointer(&zeroptr))
 	}
 dohash:
-	hash := goalg(t.key.alg).hash(noescape(unsafe.Pointer(&ky)), 2*ptrSize, uintptr(h.hash0))
+	hash := t.key.alg.hash(noescape(unsafe.Pointer(&ky)), uintptr(h.hash0))
 	m := uintptr(1)<<h.B - 1
 	b := (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 	if c := h.oldbuckets; c != nil {
@@ -253,7 +270,7 @@ dohash:
 			b = oldb
 		}
 	}
-	top := uint8(hash >> (ptrSize*8 - 8))
+	top := uint8(hash >> (sys.PtrSize*8 - 8))
 	if top < minTopHash {
 		top += minTopHash
 	}
@@ -263,17 +280,17 @@ dohash:
 			if x != top {
 				continue
 			}
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*ptrSize))
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*sys.PtrSize))
 			if k.len != key.len {
 				continue
 			}
 			if k.str == key.str || memeq(k.str, key.str, uintptr(key.len)) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+i*uintptr(t.valuesize))
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+i*uintptr(t.valuesize))
 			}
 		}
-		b = b.overflow
+		b = b.overflow(t)
 		if b == nil {
-			return unsafe.Pointer(t.elem.zero)
+			return atomic.Loadp(unsafe.Pointer(&zeroptr))
 		}
 	}
 }
@@ -284,9 +301,12 @@ func mapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
 		racereadpc(unsafe.Pointer(h), callerpc, funcPC(mapaccess2_faststr))
 	}
 	if h == nil || h.count == 0 {
-		return unsafe.Pointer(t.elem.zero), false
+		return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
 	}
-	key := (*stringStruct)(unsafe.Pointer(&ky))
+	if h.flags&hashWriting != 0 {
+		throw("concurrent map read and map write")
+	}
+	key := stringStructOf(&ky)
 	if h.B == 0 {
 		// One-bucket table.
 		b := (*bmap)(h.buckets)
@@ -297,15 +317,15 @@ func mapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
 				if x == empty {
 					continue
 				}
-				k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*ptrSize))
+				k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*sys.PtrSize))
 				if k.len != key.len {
 					continue
 				}
 				if k.str == key.str || memeq(k.str, key.str, uintptr(key.len)) {
-					return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+i*uintptr(t.valuesize)), true
+					return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+i*uintptr(t.valuesize)), true
 				}
 			}
-			return unsafe.Pointer(t.elem.zero), false
+			return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
 		}
 		// long key, try not to do more comparisons than necessary
 		keymaybe := uintptr(bucketCnt)
@@ -314,12 +334,12 @@ func mapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
 			if x == empty {
 				continue
 			}
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*ptrSize))
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*sys.PtrSize))
 			if k.len != key.len {
 				continue
 			}
 			if k.str == key.str {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+i*uintptr(t.valuesize)), true
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+i*uintptr(t.valuesize)), true
 			}
 			// check first 4 bytes
 			if *((*[4]byte)(key.str)) != *((*[4]byte)(k.str)) {
@@ -336,15 +356,15 @@ func mapaccess2_faststr(t *maptype, h *hmap, ky string) (unsafe.Pointer, bool) {
 			keymaybe = i
 		}
 		if keymaybe != bucketCnt {
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+keymaybe*2*ptrSize))
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+keymaybe*2*sys.PtrSize))
 			if memeq(k.str, key.str, uintptr(key.len)) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+keymaybe*uintptr(t.valuesize)), true
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+keymaybe*uintptr(t.valuesize)), true
 			}
 		}
-		return unsafe.Pointer(t.elem.zero), false
+		return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
 	}
 dohash:
-	hash := goalg(t.key.alg).hash(noescape(unsafe.Pointer(&ky)), 2*ptrSize, uintptr(h.hash0))
+	hash := t.key.alg.hash(noescape(unsafe.Pointer(&ky)), uintptr(h.hash0))
 	m := uintptr(1)<<h.B - 1
 	b := (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 	if c := h.oldbuckets; c != nil {
@@ -353,7 +373,7 @@ dohash:
 			b = oldb
 		}
 	}
-	top := uint8(hash >> (ptrSize*8 - 8))
+	top := uint8(hash >> (sys.PtrSize*8 - 8))
 	if top < minTopHash {
 		top += minTopHash
 	}
@@ -363,17 +383,17 @@ dohash:
 			if x != top {
 				continue
 			}
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*ptrSize))
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*sys.PtrSize))
 			if k.len != key.len {
 				continue
 			}
 			if k.str == key.str || memeq(k.str, key.str, uintptr(key.len)) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*ptrSize+i*uintptr(t.valuesize)), true
+				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*sys.PtrSize+i*uintptr(t.valuesize)), true
 			}
 		}
-		b = b.overflow
+		b = b.overflow(t)
 		if b == nil {
-			return unsafe.Pointer(t.elem.zero), false
+			return atomic.Loadp(unsafe.Pointer(&zeroptr)), false
 		}
 	}
 }

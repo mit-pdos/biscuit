@@ -554,9 +554,10 @@ func parseHeap(b []byte) (p *Profile, err error) {
 			}
 		}
 
-		if l = strings.TrimSpace(l); l == "" {
+		if isSpaceOrComment(l) {
 			continue
 		}
+		l = strings.TrimSpace(l)
 
 		if sectionTrigger(l) != unrecognizedSection {
 			break
@@ -588,7 +589,7 @@ func parseHeap(b []byte) (p *Profile, err error) {
 		p.Sample = append(p.Sample, &Sample{
 			Value:    value,
 			Location: sloc,
-			NumLabel: map[string][]int64{"bytes": []int64{blocksize}},
+			NumLabel: map[string][]int64{"bytes": {blocksize}},
 		})
 	}
 

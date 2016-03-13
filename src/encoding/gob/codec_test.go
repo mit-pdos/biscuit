@@ -50,10 +50,16 @@ func testError(t *testing.T) {
 	return
 }
 
+func newDecBuffer(data []byte) *decBuffer {
+	return &decBuffer{
+		data: data,
+	}
+}
+
 // Test basic encode/decode routines for unsigned integers
 func TestUintCodec(t *testing.T) {
 	defer testError(t)
-	b := new(bytes.Buffer)
+	b := new(encBuffer)
 	encState := newEncoderState(b)
 	for _, tt := range encodeT {
 		b.Reset()
@@ -62,10 +68,10 @@ func TestUintCodec(t *testing.T) {
 			t.Errorf("encodeUint: %#x encode: expected % x got % x", tt.x, tt.b, b.Bytes())
 		}
 	}
-	decState := newDecodeState(b)
 	for u := uint64(0); ; u = (u + 1) * 7 {
 		b.Reset()
 		encState.encodeUint(u)
+		decState := newDecodeState(newDecBuffer(b.Bytes()))
 		v := decState.decodeUint()
 		if u != v {
 			t.Errorf("Encode/Decode: sent %#x received %#x", u, v)
@@ -78,11 +84,10 @@ func TestUintCodec(t *testing.T) {
 
 func verifyInt(i int64, t *testing.T) {
 	defer testError(t)
-	var b = new(bytes.Buffer)
+	var b = new(encBuffer)
 	encState := newEncoderState(b)
 	encState.encodeInt(i)
-	decState := newDecodeState(b)
-	decState.buf = make([]byte, 8)
+	decState := newDecodeState(newDecBuffer(b.Bytes()))
 	j := decState.decodeInt()
 	if i != j {
 		t.Errorf("Encode/Decode: sent %#x received %#x", uint64(i), uint64(j))
@@ -118,14 +123,13 @@ var complexResult = []byte{0x07, 0xFE, 0x31, 0x40, 0xFE, 0x33, 0x40}
 // The result of encoding "hello" with field number 7
 var bytesResult = []byte{0x07, 0x05, 'h', 'e', 'l', 'l', 'o'}
 
-func newDecodeState(buf *bytes.Buffer) *decoderState {
+func newDecodeState(buf *decBuffer) *decoderState {
 	d := new(decoderState)
 	d.b = buf
-	d.buf = make([]byte, uint64Size)
 	return d
 }
 
-func newEncoderState(b *bytes.Buffer) *encoderState {
+func newEncoderState(b *encBuffer) *encoderState {
 	b.Reset()
 	state := &encoderState{enc: nil, b: b}
 	state.fieldnum = -1
@@ -135,7 +139,7 @@ func newEncoderState(b *bytes.Buffer) *encoderState {
 // Test instruction execution for encoding.
 // Do not run the machine yet; instead do individual instructions crafted by hand.
 func TestScalarEncInstructions(t *testing.T) {
-	var b = new(bytes.Buffer)
+	var b = new(encBuffer)
 
 	// bool
 	{
@@ -328,7 +332,7 @@ func execDec(typ string, instr *decInstr, state *decoderState, t *testing.T, val
 }
 
 func newDecodeStateFromData(data []byte) *decoderState {
-	b := bytes.NewBuffer(data)
+	b := newDecBuffer(data)
 	state := newDecodeState(b)
 	state.fieldnum = -1
 	return state
@@ -1464,6 +1468,25 @@ func TestFuzzOneByte(t *testing.T) {
 				err := NewDecoder(bytes.NewReader(b)).Decode(&e)
 				_ = err
 			}()
+		}
+	}
+}
+
+// Don't crash, just give error with invalid type id.
+// Issue 9649.
+func TestErrorInvalidTypeId(t *testing.T) {
+	data := []byte{0x01, 0x00, 0x01, 0x00}
+	d := NewDecoder(bytes.NewReader(data))
+	// When running d.Decode(&foo) the first time the decoder stops
+	// after []byte{0x01, 0x00} and reports an errBadType. Running
+	// d.Decode(&foo) again on exactly the same input sequence should
+	// give another errBadType, but instead caused a panic because
+	// decoderMap wasn't cleaned up properly after the first error.
+	for i := 0; i < 2; i++ {
+		var foo struct{}
+		err := d.Decode(&foo)
+		if err != errBadType {
+			t.Fatalf("decode: expected %s, got %s", errBadType, err)
 		}
 	}
 }

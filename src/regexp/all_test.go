@@ -6,6 +6,7 @@ package regexp
 
 import (
 	"reflect"
+	"regexp/syntax"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,25 @@ func TestMatchFunction(t *testing.T) {
 	}
 }
 
+func copyMatchTest(t *testing.T, test *FindTest) {
+	re := compileTest(t, test.pat, "")
+	if re == nil {
+		return
+	}
+	m1 := re.MatchString(test.text)
+	m2 := re.Copy().MatchString(test.text)
+	if m1 != m2 {
+		t.Errorf("Copied Regexp match failure on %s: original gave %t; copy gave %t; should be %t",
+			test, m1, m2, len(test.matches) > 0)
+	}
+}
+
+func TestCopyMatch(t *testing.T) {
+	for _, test := range findTests {
+		copyMatchTest(t, &test)
+	}
+}
+
 type ReplaceTest struct {
 	pattern, replacement, input, output string
 }
@@ -200,6 +220,12 @@ var replaceTests = []ReplaceTest{
 	// Substitution when subexpression isn't found
 	{"(x)?", "$1", "123", "123"},
 	{"abc", "$1", "123", "123"},
+
+	// Substitutions involving a (x){0}
+	{"(a)(b){0}(c)", ".$1|$3.", "xacxacx", "x.a|c.x.a|c.x"},
+	{"(a)(((b))){0}c", ".$1.", "xacxacx", "x.a.x.a.x"},
+	{"((a(b){0}){3}){5}(h)", "y caramb$2", "say aaaaaaaaaaaaaaaah", "say ay caramba"},
+	{"((a(b){0}){3}){5}h", "y caramb$2", "say aaaaaaaaaaaaaaaah", "say ay caramba"},
 }
 
 var replaceLiteralTests = []ReplaceTest{
@@ -333,6 +359,19 @@ var metaTests = []MetaTest{
 	{`!@#$%^&*()_+-=[{]}\|,<.>/?~`, `!@#\$%\^&\*\(\)_\+-=\[\{\]\}\\\|,<\.>/\?~`, `!@#`, false},
 }
 
+var literalPrefixTests = []MetaTest{
+	// See golang.org/issue/11175.
+	// output is unused.
+	{`^0^0$`, ``, `0`, false},
+	{`^0^`, ``, ``, false},
+	{`^0$`, ``, `0`, true},
+	{`$0^`, ``, ``, false},
+	{`$0$`, ``, ``, false},
+	{`^^0$$`, ``, ``, false},
+	{`^$^$`, ``, ``, false},
+	{`$$0^^`, ``, ``, false},
+}
+
 func TestQuoteMeta(t *testing.T) {
 	for _, tc := range metaTests {
 		// Verify that QuoteMeta returns the expected string.
@@ -364,7 +403,7 @@ func TestQuoteMeta(t *testing.T) {
 }
 
 func TestLiteralPrefix(t *testing.T) {
-	for _, tc := range metaTests {
+	for _, tc := range append(metaTests, literalPrefixTests...) {
 		// Literal method needs to scan the pattern.
 		re := MustCompile(tc.pattern)
 		str, complete := re.LiteralPrefix()
@@ -473,12 +512,30 @@ func TestSplit(t *testing.T) {
 	}
 }
 
-// This ran out of stack before issue 7608 was fixed.
+// Check that one-pass cutoff does trigger.
 func TestOnePassCutoff(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping in short mode")
+	re, err := syntax.Parse(`^x{1,1000}y{1,1000}$`, syntax.Perl)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
 	}
-	MustCompile(`^(?:x{1,1000}){1,1000}$`)
+	p, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if compileOnePass(p) != notOnePass {
+		t.Fatalf("makeOnePass succeeded; wanted notOnePass")
+	}
+}
+
+// Check that the same machine can be used with the standard matcher
+// and then the backtracker when there are no captures.
+func TestSwitchBacktrack(t *testing.T) {
+	re := MustCompile(`a|b`)
+	long := make([]byte, maxBacktrackVector+1)
+
+	// The following sequence of Match calls used to panic. See issue #10319.
+	re.Match(long)     // triggers standard matcher
+	re.Match(long[:1]) // triggers backtracker
 }
 
 func BenchmarkLiteral(b *testing.B) {
@@ -645,4 +702,27 @@ func BenchmarkOnePassLongNotPrefix(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		re.Match(x)
 	}
+}
+
+func BenchmarkMatchParallelShared(b *testing.B) {
+	x := []byte("this is a long line that contains foo bar baz")
+	re := MustCompile("foo (ba+r)? baz")
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			re.Match(x)
+		}
+	})
+}
+
+func BenchmarkMatchParallelCopied(b *testing.B) {
+	x := []byte("this is a long line that contains foo bar baz")
+	re := MustCompile("foo (ba+r)? baz")
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		re := re.Copy()
+		for pb.Next() {
+			re.Match(x)
+		}
+	})
 }

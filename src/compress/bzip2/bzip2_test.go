@@ -173,6 +173,7 @@ const rand3Hex = "1744b384d68c042371244e13500d4bfb98c6244e3d71a5b700224420b59c59
 const (
 	digits = iota
 	twain
+	random
 )
 
 var testfiles = []string{
@@ -180,8 +181,10 @@ var testfiles = []string{
 	// does not repeat, but there are only 10 possible digits, so it should be
 	// reasonably compressible.
 	digits: "testdata/e.txt.bz2",
-	// Twain is Project Gutenberg's edition of Mark Twain's classic English novel.
+	// Twain is Mark Twain's classic English novel.
 	twain: "testdata/Mark.Twain-Tom.Sawyer.txt.bz2",
+	// 16KB of random data from /dev/urandom
+	random: "testdata/random.data.bz2",
 }
 
 func benchmarkDecode(b *testing.B, testfile int) {
@@ -198,9 +201,10 @@ func benchmarkDecode(b *testing.B, testfile int) {
 
 func BenchmarkDecodeDigits(b *testing.B) { benchmarkDecode(b, digits) }
 func BenchmarkDecodeTwain(b *testing.B)  { benchmarkDecode(b, twain) }
+func BenchmarkDecodeRand(b *testing.B)   { benchmarkDecode(b, random) }
 
 func TestBufferOverrun(t *testing.T) {
-	// Tests https://code.google.com/p/go/issues/detail?id=5747.
+	// Tests https://golang.org/issue/5747.
 	buffer := bytes.NewReader([]byte(bufferOverrunBase64))
 	decoder := base64.NewDecoder(base64.StdEncoding, buffer)
 	decompressor := NewReader(decoder)
@@ -209,7 +213,7 @@ func TestBufferOverrun(t *testing.T) {
 }
 
 func TestOutOfRangeSelector(t *testing.T) {
-	// Tests https://code.google.com/p/go/issues/detail?id=8363.
+	// Tests https://golang.org/issue/8363.
 	buffer := bytes.NewReader(outOfRangeSelector)
 	decompressor := NewReader(buffer)
 	// This shouldn't panic.

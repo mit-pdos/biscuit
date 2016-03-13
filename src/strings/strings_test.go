@@ -59,6 +59,59 @@ var indexTests = []IndexTest{
 	{"abc", "b", 1},
 	{"abc", "c", 2},
 	{"abc", "x", -1},
+	// test special cases in Index() for short strings
+	{"", "ab", -1},
+	{"bc", "ab", -1},
+	{"ab", "ab", 0},
+	{"xab", "ab", 1},
+	{"xab"[:2], "ab", -1},
+	{"", "abc", -1},
+	{"xbc", "abc", -1},
+	{"abc", "abc", 0},
+	{"xabc", "abc", 1},
+	{"xabc"[:3], "abc", -1},
+	{"xabxc", "abc", -1},
+	{"", "abcd", -1},
+	{"xbcd", "abcd", -1},
+	{"abcd", "abcd", 0},
+	{"xabcd", "abcd", 1},
+	{"xyabcd"[:5], "abcd", -1},
+	{"xbcqq", "abcqq", -1},
+	{"abcqq", "abcqq", 0},
+	{"xabcqq", "abcqq", 1},
+	{"xyabcqq"[:6], "abcqq", -1},
+	{"xabxcqq", "abcqq", -1},
+	{"xabcqxq", "abcqq", -1},
+	{"", "01234567", -1},
+	{"32145678", "01234567", -1},
+	{"01234567", "01234567", 0},
+	{"x01234567", "01234567", 1},
+	{"xx01234567"[:9], "01234567", -1},
+	{"", "0123456789", -1},
+	{"3214567844", "0123456789", -1},
+	{"0123456789", "0123456789", 0},
+	{"x0123456789", "0123456789", 1},
+	{"xyz0123456789"[:12], "0123456789", -1},
+	{"x01234567x89", "0123456789", -1},
+	{"", "0123456789012345", -1},
+	{"3214567889012345", "0123456789012345", -1},
+	{"0123456789012345", "0123456789012345", 0},
+	{"x0123456789012345", "0123456789012345", 1},
+	{"", "01234567890123456789", -1},
+	{"32145678890123456789", "01234567890123456789", -1},
+	{"01234567890123456789", "01234567890123456789", 0},
+	{"x01234567890123456789", "01234567890123456789", 1},
+	{"xyz01234567890123456789"[:22], "01234567890123456789", -1},
+	{"", "0123456789012345678901234567890", -1},
+	{"321456788901234567890123456789012345678911", "0123456789012345678901234567890", -1},
+	{"0123456789012345678901234567890", "0123456789012345678901234567890", 0},
+	{"x0123456789012345678901234567890", "0123456789012345678901234567890", 1},
+	{"xyz0123456789012345678901234567890"[:33], "0123456789012345678901234567890", -1},
+	{"", "01234567890123456789012345678901", -1},
+	{"32145678890123456789012345678901234567890211", "01234567890123456789012345678901", -1},
+	{"01234567890123456789012345678901", "01234567890123456789012345678901", 0},
+	{"x01234567890123456789012345678901", "01234567890123456789012345678901", 1},
+	{"xyz01234567890123456789012345678901"[:34], "01234567890123456789012345678901", -1},
 }
 
 var lastIndexTests = []IndexTest{
@@ -119,6 +172,23 @@ func TestIndex(t *testing.T)        { runIndexTests(t, Index, "Index", indexTest
 func TestLastIndex(t *testing.T)    { runIndexTests(t, LastIndex, "LastIndex", lastIndexTests) }
 func TestIndexAny(t *testing.T)     { runIndexTests(t, IndexAny, "IndexAny", indexAnyTests) }
 func TestLastIndexAny(t *testing.T) { runIndexTests(t, LastIndexAny, "LastIndexAny", lastIndexAnyTests) }
+
+func TestLastIndexByte(t *testing.T) {
+	testCases := []IndexTest{
+		{"", "q", -1},
+		{"abcdef", "q", -1},
+		{"abcdefabcdef", "a", len("abcdef")},      // something in the middle
+		{"abcdefabcdef", "f", len("abcdefabcde")}, // last byte
+		{"zabcdefabcdef", "z", 0},                 // first byte
+		{"a☺b☻c☹d", "b", len("a☺")},               // non-ascii
+	}
+	for _, test := range testCases {
+		actual := LastIndexByte(test.s, test.sep[0])
+		if actual != test.out {
+			t.Errorf("LastIndexByte(%q,%c) = %v; want %v", test.s, test.sep[0], actual, test.out)
+		}
+	}
+}
 
 var indexRuneTests = []struct {
 	s    string
@@ -565,6 +635,35 @@ func TestTrim(t *testing.T) {
 		actual := f(tc.in, tc.arg)
 		if actual != tc.out {
 			t.Errorf("%s(%q, %q) = %q; want %q", name, tc.in, tc.arg, actual, tc.out)
+		}
+	}
+}
+
+func BenchmarkTrim(b *testing.B) {
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		for _, tc := range trimTests {
+			name := tc.f
+			var f func(string, string) string
+			switch name {
+			case "Trim":
+				f = Trim
+			case "TrimLeft":
+				f = TrimLeft
+			case "TrimRight":
+				f = TrimRight
+			case "TrimPrefix":
+				f = TrimPrefix
+			case "TrimSuffix":
+				f = TrimSuffix
+			default:
+				b.Errorf("Undefined trim function %s", name)
+			}
+			actual := f(tc.in, tc.arg)
+			if actual != tc.out {
+				b.Errorf("%s(%q, %q) = %q; want %q", name, tc.in, tc.arg, actual, tc.out)
+			}
 		}
 	}
 }

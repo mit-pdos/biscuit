@@ -218,6 +218,81 @@ func TestNonblockRecvRace(t *testing.T) {
 	}
 }
 
+// This test checks that select acts on the state of the channels at one
+// moment in the execution, not over a smeared time window.
+// In the test, one goroutine does:
+//	create c1, c2
+//	make c1 ready for receiving
+//	create second goroutine
+//	make c2 ready for receiving
+//	make c1 no longer ready for receiving (if possible)
+// The second goroutine does a non-blocking select receiving from c1 and c2.
+// From the time the second goroutine is created, at least one of c1 and c2
+// is always ready for receiving, so the select in the second goroutine must
+// always receive from one or the other. It must never execute the default case.
+func TestNonblockSelectRace(t *testing.T) {
+	n := 100000
+	if testing.Short() {
+		n = 1000
+	}
+	done := make(chan bool, 1)
+	for i := 0; i < n; i++ {
+		c1 := make(chan int, 1)
+		c2 := make(chan int, 1)
+		c1 <- 1
+		go func() {
+			select {
+			case <-c1:
+			case <-c2:
+			default:
+				done <- false
+				return
+			}
+			done <- true
+		}()
+		c2 <- 1
+		select {
+		case <-c1:
+		default:
+		}
+		if !<-done {
+			t.Fatal("no chan is ready")
+		}
+	}
+}
+
+// Same as TestNonblockSelectRace, but close(c2) replaces c2 <- 1.
+func TestNonblockSelectRace2(t *testing.T) {
+	n := 100000
+	if testing.Short() {
+		n = 1000
+	}
+	done := make(chan bool, 1)
+	for i := 0; i < n; i++ {
+		c1 := make(chan int, 1)
+		c2 := make(chan int)
+		c1 <- 1
+		go func() {
+			select {
+			case <-c1:
+			case <-c2:
+			default:
+				done <- false
+				return
+			}
+			done <- true
+		}()
+		close(c2)
+		select {
+		case <-c1:
+		default:
+		}
+		if !<-done {
+			t.Fatal("no chan is ready")
+		}
+	}
+}
+
 func TestSelfSelect(t *testing.T) {
 	// Ensure that send/recv on the same chan in select
 	// does not crash nor deadlock.
@@ -453,7 +528,7 @@ func TestMultiConsumer(t *testing.T) {
 func TestShrinkStackDuringBlockedSend(t *testing.T) {
 	// make sure that channel operations still work when we are
 	// blocked on a channel send and we shrink the stack.
-	// NOTE: this test probably won't fail unless stack.c:StackDebug
+	// NOTE: this test probably won't fail unless stack1.go:stackDebug
 	// is set to >= 1.
 	const n = 10
 	c := make(chan int)
@@ -480,6 +555,35 @@ func TestShrinkStackDuringBlockedSend(t *testing.T) {
 		runtime.GC()
 	}
 	<-done
+}
+
+func TestSelectDuplicateChannel(t *testing.T) {
+	// This test makes sure we can queue a G on
+	// the same channel multiple times.
+	c := make(chan int)
+	d := make(chan int)
+	e := make(chan int)
+
+	// goroutine A
+	go func() {
+		select {
+		case <-c:
+		case <-c:
+		case <-d:
+		}
+		e <- 9
+	}()
+	time.Sleep(time.Millisecond) // make sure goroutine A gets qeueued first on c
+
+	// goroutine B
+	go func() {
+		<-c
+	}()
+	time.Sleep(time.Millisecond) // make sure goroutine B gets queued on c before continuing
+
+	d <- 7 // wake up A, it dequeues itself from c.  This operation used to corrupt c.recvq.
+	<-e    // A tells us it's done
+	c <- 8 // wake up B.  This operation used to fail because c.recvq was corrupted (it tries to wake up an already running G instead of B)
 }
 
 func BenchmarkChanNonblocking(b *testing.B) {
@@ -788,4 +892,31 @@ func BenchmarkChanSem(b *testing.B) {
 			<-myc
 		}
 	})
+}
+
+func BenchmarkChanPopular(b *testing.B) {
+	const n = 1000
+	c := make(chan bool)
+	var a []chan bool
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for j := 0; j < n; j++ {
+		d := make(chan bool)
+		a = append(a, d)
+		go func() {
+			for i := 0; i < b.N; i++ {
+				select {
+				case <-c:
+				case <-d:
+				}
+			}
+			wg.Done()
+		}()
+	}
+	for i := 0; i < b.N; i++ {
+		for _, d := range a {
+			d <- true
+		}
+	}
+	wg.Wait()
 }

@@ -51,16 +51,16 @@ func MakeFunc(typ Type, fn func(args []Value) (results []Value)) Value {
 
 	// Indirect Go func value (dummy) to obtain
 	// actual code address. (A Go func value is a pointer
-	// to a C function pointer. http://golang.org/s/go11func.)
+	// to a C function pointer. https://golang.org/s/go11func.)
 	dummy := makeFuncStub
 	code := **(**uintptr)(unsafe.Pointer(&dummy))
 
 	// makeFuncImpl contains a stack map for use by the runtime
-	_, _, _, stack := funcLayout(t, nil)
+	_, _, _, stack, _ := funcLayout(t, nil)
 
 	impl := &makeFuncImpl{code: code, stack: stack, typ: ftyp, fn: fn}
 
-	return Value{t, unsafe.Pointer(impl), 0, flag(Func) << flagKindShift}
+	return Value{t, unsafe.Pointer(impl), flag(Func)}
 }
 
 // makeFuncStub is an assembly function that is the code half of
@@ -91,20 +91,20 @@ func makeMethodValue(op string, v Value) Value {
 
 	// Ignoring the flagMethod bit, v describes the receiver, not the method type.
 	fl := v.flag & (flagRO | flagAddr | flagIndir)
-	fl |= flag(v.typ.Kind()) << flagKindShift
-	rcvr := Value{v.typ, v.ptr, v.scalar, fl}
+	fl |= flag(v.typ.Kind())
+	rcvr := Value{v.typ, v.ptr, fl}
 
 	// v.Type returns the actual type of the method value.
 	funcType := v.Type().(*rtype)
 
 	// Indirect Go func value (dummy) to obtain
 	// actual code address. (A Go func value is a pointer
-	// to a C function pointer. http://golang.org/s/go11func.)
+	// to a C function pointer. https://golang.org/s/go11func.)
 	dummy := methodValueCall
 	code := **(**uintptr)(unsafe.Pointer(&dummy))
 
 	// methodValue contains a stack map for use by the runtime
-	_, _, _, stack := funcLayout(funcType, nil)
+	_, _, _, stack, _ := funcLayout(funcType, nil)
 
 	fv := &methodValue{
 		fn:     code,
@@ -118,7 +118,7 @@ func makeMethodValue(op string, v Value) Value {
 	// but we want Interface() and other operations to fail early.
 	methodReceiver(op, fv.rcvr, fv.method)
 
-	return Value{funcType, unsafe.Pointer(fv), 0, v.flag&flagRO | flag(Func)<<flagKindShift}
+	return Value{funcType, unsafe.Pointer(fv), v.flag&flagRO | flag(Func)}
 }
 
 // methodValueCall is an assembly function that is the code half of

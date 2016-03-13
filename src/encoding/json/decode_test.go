@@ -9,6 +9,7 @@ import (
 	"encoding"
 	"fmt"
 	"image"
+	"net"
 	"reflect"
 	"strings"
 	"testing"
@@ -117,6 +118,7 @@ type Top struct {
 	Loop
 	Embed0p // has Point with X, Y, used
 	Embed0q // has Point with Z, used
+	embed   // contains exported field
 }
 
 type Embed0 struct {
@@ -145,6 +147,10 @@ type Embed0p struct {
 
 type Embed0q struct {
 	Point
+}
+
+type embed struct {
+	Q int
 }
 
 type Loop struct {
@@ -216,6 +222,9 @@ type XYZ struct {
 	Z interface{}
 }
 
+func sliceAddr(x []int) *[]int                 { return &x }
+func mapAddr(x map[string]int) *map[string]int { return &x }
+
 var unmarshalTests = []unmarshalTest{
 	// basic types
 	{in: `true`, ptr: new(bool), out: true},
@@ -231,7 +240,7 @@ var unmarshalTests = []unmarshalTest{
 	{in: `"g-clef: \uD834\uDD1E"`, ptr: new(string), out: "g-clef: \U0001D11E"},
 	{in: `"invalid: \uD834x\uDD1E"`, ptr: new(string), out: "invalid: \uFFFDx\uFFFD"},
 	{in: "null", ptr: new(interface{}), out: nil},
-	{in: `{"X": [1,2,3], "Y": 4}`, ptr: new(T), out: T{Y: 4}, err: &UnmarshalTypeError{"array", reflect.TypeOf("")}},
+	{in: `{"X": [1,2,3], "Y": 4}`, ptr: new(T), out: T{Y: 4}, err: &UnmarshalTypeError{"array", reflect.TypeOf(""), 7}},
 	{in: `{"x": 1}`, ptr: new(tx), out: tx{}},
 	{in: `{"F1":1,"F2":2,"F3":3}`, ptr: new(V), out: V{F1: float64(1), F2: int32(2), F3: Number("3")}},
 	{in: `{"F1":1,"F2":2,"F3":3}`, ptr: new(V), out: V{F1: Number("1"), F2: int32(2), F3: Number("3")}, useNumber: true},
@@ -302,6 +311,12 @@ var unmarshalTests = []unmarshalTest{
 	{in: `["X"]`, ptr: &umslicepT, out: &umsliceT},
 	{in: `{"M":"X"}`, ptr: &umstructT, out: umstructT},
 
+	// Overwriting of data.
+	// This is different from package xml, but it's what we've always done.
+	// Now documented and tested.
+	{in: `[2]`, ptr: sliceAddr([]int{1}), out: []int{2}},
+	{in: `{"key": 2}`, ptr: mapAddr(map[string]int{"old": 0, "key": 1}), out: map[string]int{"key": 2}},
+
 	{
 		in: `{
 			"Level0": 1,
@@ -321,7 +336,8 @@ var unmarshalTests = []unmarshalTest{
 			"Loop2": 14,
 			"X": 15,
 			"Y": 16,
-			"Z": 17
+			"Z": 17,
+			"Q": 18
 		}`,
 		ptr: new(Top),
 		out: Top{
@@ -350,6 +366,9 @@ var unmarshalTests = []unmarshalTest{
 			},
 			Embed0q: Embed0q{
 				Point: Point{Z: 17},
+			},
+			embed: embed{
+				Q: 18,
 			},
 		},
 	},
@@ -411,7 +430,7 @@ var unmarshalTests = []unmarshalTest{
 	{
 		in:  `{"2009-11-10T23:00:00Z": "hello world"}`,
 		ptr: &map[time.Time]string{},
-		err: &UnmarshalTypeError{"object", reflect.TypeOf(map[time.Time]string{})},
+		err: &UnmarshalTypeError{"object", reflect.TypeOf(map[time.Time]string{}), 1},
 	},
 }
 
@@ -497,12 +516,15 @@ func TestMarshalEmbeds(t *testing.T) {
 		Embed0q: Embed0q{
 			Point: Point{Z: 17},
 		},
+		embed: embed{
+			Q: 18,
+		},
 	}
 	b, err := Marshal(top)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "{\"Level0\":1,\"Level1b\":2,\"Level1c\":3,\"Level1a\":5,\"LEVEL1B\":6,\"e\":{\"Level1a\":8,\"Level1b\":9,\"Level1c\":10,\"Level1d\":11,\"x\":12},\"Loop1\":13,\"Loop2\":14,\"X\":15,\"Y\":16,\"Z\":17}"
+	want := "{\"Level0\":1,\"Level1b\":2,\"Level1c\":3,\"Level1a\":5,\"LEVEL1B\":6,\"e\":{\"Level1a\":8,\"Level1b\":9,\"Level1c\":10,\"Level1d\":11,\"x\":12},\"Loop1\":13,\"Loop2\":14,\"X\":15,\"Y\":16,\"Z\":17,\"Q\":18}"
 	if string(b) != want {
 		t.Errorf("Wrong marshal result.\n got: %q\nwant: %q", b, want)
 	}
@@ -688,6 +710,7 @@ var wrongStringTests = []wrongStringTest{
 	{`{"result":"x"}`, `json: invalid use of ,string struct tag, trying to unmarshal "x" into string`},
 	{`{"result":"foo"}`, `json: invalid use of ,string struct tag, trying to unmarshal "foo" into string`},
 	{`{"result":"123"}`, `json: invalid use of ,string struct tag, trying to unmarshal "123" into string`},
+	{`{"result":123}`, `json: invalid use of ,string struct tag, trying to unmarshal unquoted value into string`},
 }
 
 // If people misuse the ,string modifier, the error message should be
@@ -705,7 +728,7 @@ func TestErrorMessageFromMisusedString(t *testing.T) {
 }
 
 func noSpace(c rune) rune {
-	if isSpace(c) {
+	if isSpace(byte(c)) { //only used for ascii
 		return -1
 	}
 	return c
@@ -1070,18 +1093,25 @@ func TestEmptyString(t *testing.T) {
 	}
 }
 
-// Test that the returned error is non-nil when trying to unmarshal null string into int, for successive ,string option
-// Issue 7046
+// Test that a null for ,string is not replaced with the previous quoted string (issue 7046).
+// It should also not be an error (issue 2540, issue 8587).
 func TestNullString(t *testing.T) {
 	type T struct {
-		A int `json:",string"`
-		B int `json:",string"`
+		A int  `json:",string"`
+		B int  `json:",string"`
+		C *int `json:",string"`
 	}
-	data := []byte(`{"A": "1", "B": null}`)
+	data := []byte(`{"A": "1", "B": null, "C": null}`)
 	var s T
+	s.B = 1
+	s.C = new(int)
+	*s.C = 2
 	err := Unmarshal(data, &s)
-	if err == nil {
-		t.Fatalf("expected error; got %v", s)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if s.B != 1 || s.C != nil {
+		t.Fatalf("after Unmarshal, s.B=%d, s.C=%p, want 1, nil", s.B, s.C)
 	}
 }
 
@@ -1188,18 +1218,60 @@ func TestStringKind(t *testing.T) {
 
 	data, err := Marshal(m1)
 	if err != nil {
-		t.Errorf("Unexpected error marshalling: %v", err)
+		t.Errorf("Unexpected error marshaling: %v", err)
 	}
 
 	err = Unmarshal(data, &m2)
 	if err != nil {
-		t.Errorf("Unexpected error unmarshalling: %v", err)
+		t.Errorf("Unexpected error unmarshaling: %v", err)
 	}
 
 	if !reflect.DeepEqual(m1, m2) {
 		t.Error("Items should be equal after encoding and then decoding")
 	}
+}
 
+// Custom types with []byte as underlying type could not be marshalled
+// and then unmarshalled.
+// Issue 8962.
+func TestByteKind(t *testing.T) {
+	type byteKind []byte
+
+	a := byteKind("hello")
+
+	data, err := Marshal(a)
+	if err != nil {
+		t.Error(err)
+	}
+	var b byteKind
+	err = Unmarshal(data, &b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("expected %v == %v", a, b)
+	}
+}
+
+// The fix for issue 8962 introduced a regression.
+// Issue 12921.
+func TestSliceOfCustomByte(t *testing.T) {
+	type Uint8 uint8
+
+	a := []Uint8("hello")
+
+	data, err := Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b []Uint8
+	err = Unmarshal(data, &b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(a, b) {
+		t.Fatal("expected %v == %v", a, b)
+	}
 }
 
 var decodeTypeErrorTests = []struct {
@@ -1362,5 +1434,53 @@ func TestInvalidUnmarshal(t *testing.T) {
 		if got := err.Error(); got != tt.want {
 			t.Errorf("Unmarshal = %q; want %q", got, tt.want)
 		}
+	}
+}
+
+var invalidUnmarshalTextTests = []struct {
+	v    interface{}
+	want string
+}{
+	{nil, "json: Unmarshal(nil)"},
+	{struct{}{}, "json: Unmarshal(non-pointer struct {})"},
+	{(*int)(nil), "json: Unmarshal(nil *int)"},
+	{new(net.IP), "json: cannot unmarshal string into Go value of type *net.IP"},
+}
+
+func TestInvalidUnmarshalText(t *testing.T) {
+	buf := []byte(`123`)
+	for _, tt := range invalidUnmarshalTextTests {
+		err := Unmarshal(buf, tt.v)
+		if err == nil {
+			t.Errorf("Unmarshal expecting error, got nil")
+			continue
+		}
+		if got := err.Error(); got != tt.want {
+			t.Errorf("Unmarshal = %q; want %q", got, tt.want)
+		}
+	}
+}
+
+// Test that string option is ignored for invalid types.
+// Issue 9812.
+func TestInvalidStringOption(t *testing.T) {
+	num := 0
+	item := struct {
+		T time.Time         `json:",string"`
+		M map[string]string `json:",string"`
+		S []string          `json:",string"`
+		A [1]string         `json:",string"`
+		I interface{}       `json:",string"`
+		P *int              `json:",string"`
+	}{M: make(map[string]string), S: make([]string, 0), I: num, P: &num}
+
+	data, err := Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	err = Unmarshal(data, &item)
+	if err != nil {
+		t.Fatalf("Unmarshal: %v", err)
 	}
 }

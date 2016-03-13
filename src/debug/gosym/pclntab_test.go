@@ -6,7 +6,7 @@ package gosym
 
 import (
 	"debug/elf"
-	"fmt"
+	"internal/testenv"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -21,43 +21,34 @@ var (
 	pclinetestBinary string
 )
 
-func dotest(self bool) bool {
+func dotest(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
 	// For now, only works on amd64 platforms.
 	if runtime.GOARCH != "amd64" {
-		return false
-	}
-	// Self test reads test binary; only works on Linux.
-	if self && runtime.GOOS != "linux" {
-		return false
-	}
-	// Command below expects "sh", so Unix.
-	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
-		return false
-	}
-	if pclinetestBinary != "" {
-		return true
+		t.Skipf("skipping on non-AMD64 system %s", runtime.GOARCH)
 	}
 	var err error
 	pclineTempDir, err = ioutil.TempDir("", "pclinetest")
 	if err != nil {
-		panic(err)
-	}
-	if strings.Contains(pclineTempDir, " ") {
-		panic("unexpected space in tempdir")
+		t.Fatal(err)
 	}
 	// This command builds pclinetest from pclinetest.asm;
 	// the resulting binary looks like it was built from pclinetest.s,
 	// but we have renamed it to keep it away from the go tool.
 	pclinetestBinary = filepath.Join(pclineTempDir, "pclinetest")
-	command := fmt.Sprintf("go tool 6a -o %s.6 pclinetest.asm && go tool 6l -H linux -E main -o %s %s.6",
-		pclinetestBinary, pclinetestBinary, pclinetestBinary)
-	cmd := exec.Command("sh", "-c", command)
+	cmd := exec.Command("go", "tool", "asm", "-o", pclinetestBinary+".o", "pclinetest.asm")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
-	return true
+	cmd = exec.Command("go", "tool", "link", "-H", "linux", "-E", "main",
+		"-o", pclinetestBinary, pclinetestBinary+".o")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func endtest() {
@@ -65,6 +56,17 @@ func endtest() {
 		os.RemoveAll(pclineTempDir)
 		pclineTempDir = ""
 		pclinetestBinary = ""
+	}
+}
+
+// skipIfNotELF skips the test if we are not running on an ELF system.
+// These tests open and examine the test binary, and use elf.Open to do so.
+func skipIfNotELF(t *testing.T) {
+	switch runtime.GOOS {
+	case "dragonfly", "freebsd", "linux", "netbsd", "openbsd", "solaris":
+		// OK.
+	default:
+		t.Skipf("skipping on non-ELF system %s", runtime.GOOS)
 	}
 }
 
@@ -84,7 +86,11 @@ func crack(file string, t *testing.T) (*elf.File, *Table) {
 }
 
 func parse(file string, f *elf.File, t *testing.T) (*elf.File, *Table) {
-	symdat, err := f.Section(".gosymtab").Data()
+	s := f.Section(".gosymtab")
+	if s == nil {
+		t.Skip("no .gosymtab section")
+	}
+	symdat, err := s.Data()
 	if err != nil {
 		f.Close()
 		t.Fatalf("reading %s gosymtab: %v", file, err)
@@ -108,10 +114,7 @@ func parse(file string, f *elf.File, t *testing.T) (*elf.File, *Table) {
 var goarch = os.Getenv("O")
 
 func TestLineFromAline(t *testing.T) {
-	if !dotest(true) {
-		return
-	}
-	defer endtest()
+	skipIfNotELF(t)
 
 	tab := getTable(t)
 	if tab.go12line != nil {
@@ -160,10 +163,7 @@ func TestLineFromAline(t *testing.T) {
 }
 
 func TestLineAline(t *testing.T) {
-	if !dotest(true) {
-		return
-	}
-	defer endtest()
+	skipIfNotELF(t)
 
 	tab := getTable(t)
 	if tab.go12line != nil {
@@ -206,9 +206,7 @@ func TestLineAline(t *testing.T) {
 }
 
 func TestPCLine(t *testing.T) {
-	if !dotest(false) {
-		return
-	}
+	dotest(t)
 	defer endtest()
 
 	f, tab := crack(pclinetestBinary, t)

@@ -7,13 +7,14 @@
 // in the documentation for the Marshal and Unmarshal functions.
 //
 // See "JSON and Go" for an introduction to this package:
-// http://golang.org/doc/articles/json_and_go.html
+// https://golang.org/doc/articles/json_and_go.html
 package json
 
 import (
 	"bytes"
 	"encoding"
 	"encoding/base64"
+	"fmt"
 	"math"
 	"reflect"
 	"runtime"
@@ -30,7 +31,10 @@ import (
 // Marshal traverses the value v recursively.
 // If an encountered value implements the Marshaler interface
 // and is not a nil pointer, Marshal calls its MarshalJSON method
-// to produce JSON.  The nil pointer exception is not strictly necessary
+// to produce JSON. If no MarshalJSON method is present but the
+// value implements encoding.TextMarshaler instead, Marshal calls
+// its MarshalText method.
+// The nil pointer exception is not strictly necessary
 // but mimics a similar, necessary exception in the behavior of
 // UnmarshalJSON.
 //
@@ -79,8 +83,8 @@ import (
 //
 // The "string" option signals that a field is stored as JSON inside a
 // JSON-encoded string. It applies only to fields of string, floating point,
-// or integer types. This extra level of encoding is sometimes used when
-// communicating with JavaScript programs:
+// integer, or boolean types. This extra level of encoding is sometimes used
+// when communicating with JavaScript programs:
 //
 //    Int64String int64 `json:",string"`
 //
@@ -93,6 +97,8 @@ import (
 // as described in the next paragraph.
 // An anonymous struct field with a name given in its JSON tag is treated as
 // having that name, rather than being anonymous.
+// An anonymous struct field of interface type is treated the same as having
+// that type as its name, rather than being anonymous.
 //
 // The Go visibility rules for struct fields are amended for JSON when
 // deciding which field to marshal or unmarshal. If there are
@@ -111,8 +117,8 @@ import (
 // a JSON tag of "-".
 //
 // Map values encode as JSON objects.
-// The map's key type must be string; the object keys are used directly
-// as map keys.
+// The map's key type must be string; the map keys are used as JSON object
+// keys, subject to the UTF-8 coercion described for string values above.
 //
 // Pointer values encode as the value pointed to.
 // A nil pointer encodes as the null JSON object.
@@ -272,8 +278,6 @@ func (e *encodeState) marshal(v interface{}) (err error) {
 func (e *encodeState) error(err error) {
 	panic(err)
 }
-
-var byteSliceType = reflect.TypeOf([]byte(nil))
 
 func isEmptyValue(v reflect.Value) bool {
 	switch v.Kind() {
@@ -445,12 +449,10 @@ func textMarshalerEncoder(e *encodeState, v reflect.Value, quoted bool) {
 	}
 	m := v.Interface().(encoding.TextMarshaler)
 	b, err := m.MarshalText()
-	if err == nil {
-		_, err = e.stringBytes(b)
-	}
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err})
 	}
+	e.stringBytes(b)
 }
 
 func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, quoted bool) {
@@ -461,12 +463,10 @@ func addrTextMarshalerEncoder(e *encodeState, v reflect.Value, quoted bool) {
 	}
 	m := va.Interface().(encoding.TextMarshaler)
 	b, err := m.MarshalText()
-	if err == nil {
-		_, err = e.stringBytes(b)
-	}
 	if err != nil {
 		e.error(&MarshalerError{v.Type(), err})
 	}
+	e.stringBytes(b)
 }
 
 func boolEncoder(e *encodeState, v reflect.Value, quoted bool) {
@@ -530,8 +530,13 @@ var (
 func stringEncoder(e *encodeState, v reflect.Value, quoted bool) {
 	if v.Type() == numberType {
 		numStr := v.String()
+		// In Go1.5 the empty string encodes to "0", while this is not a valid number literal
+		// we keep compatibility so check validity after this.
 		if numStr == "" {
 			numStr = "0" // Number's zero-val
+		}
+		if !isValidNumber(numStr) {
+			e.error(fmt.Errorf("json: invalid number literal %q", numStr))
 		}
 		e.WriteString(numStr)
 		return
@@ -780,7 +785,7 @@ func (sv stringValues) Less(i, j int) bool { return sv.get(i) < sv.get(j) }
 func (sv stringValues) get(i int) string   { return sv[i].String() }
 
 // NOTE: keep in sync with stringBytes below.
-func (e *encodeState) string(s string) (int, error) {
+func (e *encodeState) string(s string) int {
 	len0 := e.Len()
 	e.WriteByte('"')
 	start := 0
@@ -803,6 +808,9 @@ func (e *encodeState) string(s string) (int, error) {
 			case '\r':
 				e.WriteByte('\\')
 				e.WriteByte('r')
+			case '\t':
+				e.WriteByte('\\')
+				e.WriteByte('t')
 			default:
 				// This encodes bytes < 0x20 except for \n and \r,
 				// as well as <, > and &. The latter are escaped because they
@@ -849,11 +857,11 @@ func (e *encodeState) string(s string) (int, error) {
 		e.WriteString(s[start:])
 	}
 	e.WriteByte('"')
-	return e.Len() - len0, nil
+	return e.Len() - len0
 }
 
 // NOTE: keep in sync with string above.
-func (e *encodeState) stringBytes(s []byte) (int, error) {
+func (e *encodeState) stringBytes(s []byte) int {
 	len0 := e.Len()
 	e.WriteByte('"')
 	start := 0
@@ -876,9 +884,12 @@ func (e *encodeState) stringBytes(s []byte) (int, error) {
 			case '\r':
 				e.WriteByte('\\')
 				e.WriteByte('r')
+			case '\t':
+				e.WriteByte('\\')
+				e.WriteByte('t')
 			default:
 				// This encodes bytes < 0x20 except for \n and \r,
-				// as well as < and >. The latter are escaped because they
+				// as well as <, >, and &. The latter are escaped because they
 				// can lead to security holes when user-controlled strings
 				// are rendered into JSON and served to some browsers.
 				e.WriteString(`\u00`)
@@ -922,7 +933,7 @@ func (e *encodeState) stringBytes(s []byte) (int, error) {
 		e.Write(s[start:])
 	}
 	e.WriteByte('"')
-	return e.Len() - len0, nil
+	return e.Len() - len0
 }
 
 // A field represents a single field found in a struct.
@@ -1016,7 +1027,7 @@ func typeFields(t reflect.Type) []field {
 			// Scan f.typ for fields to include.
 			for i := 0; i < f.typ.NumField(); i++ {
 				sf := f.typ.Field(i)
-				if sf.PkgPath != "" { // unexported
+				if sf.PkgPath != "" && !sf.Anonymous { // unexported
 					continue
 				}
 				tag := sf.Tag.Get("json")
@@ -1037,6 +1048,19 @@ func typeFields(t reflect.Type) []field {
 					ft = ft.Elem()
 				}
 
+				// Only strings, floats, integers, and booleans can be quoted.
+				quoted := false
+				if opts.Contains("string") {
+					switch ft.Kind() {
+					case reflect.Bool,
+						reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+						reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+						reflect.Float32, reflect.Float64,
+						reflect.String:
+						quoted = true
+					}
+				}
+
 				// Record found field and index sequence.
 				if name != "" || !sf.Anonymous || ft.Kind() != reflect.Struct {
 					tagged := name != ""
@@ -1049,7 +1073,7 @@ func typeFields(t reflect.Type) []field {
 						index:     index,
 						typ:       ft,
 						omitEmpty: opts.Contains("omitempty"),
-						quoted:    opts.Contains("string"),
+						quoted:    quoted,
 					}))
 					if count[f.typ] > 1 {
 						// If there were multiple instances, add a second,

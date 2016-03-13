@@ -198,7 +198,7 @@ func signPSSWithSalt(rand io.Reader, priv *PrivateKey, hash crypto.Hash, hashed,
 		return
 	}
 	m := new(big.Int).SetBytes(em)
-	c, err := decrypt(rand, priv, m)
+	c, err := decryptAndCheck(rand, priv, m)
 	if err != nil {
 		return
 	}
@@ -255,7 +255,7 @@ func SignPSS(rand io.Reader, priv *PrivateKey, hash crypto.Hash, hashed []byte, 
 		saltLength = hash.Size()
 	}
 
-	if opts.Hash != 0 {
+	if opts != nil && opts.Hash != 0 {
 		hash = opts.Hash
 	}
 

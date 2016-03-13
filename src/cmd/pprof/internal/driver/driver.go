@@ -106,7 +106,9 @@ func PProf(flagset plugin.FlagSet, fetch plugin.Fetcher, sym plugin.Symbolizer, 
 		return err
 	}
 
-	prof.RemoveUninteresting()
+	if !*f.flagRuntime {
+		prof.RemoveUninteresting()
+	}
 
 	if *f.flagInteractive {
 		return interactive(prof, obj, ui, f)
@@ -427,7 +429,6 @@ type flags struct {
 	flagCommands      map[string]*bool   // pprof commands without parameters
 	flagParamCommands map[string]*string // pprof commands with parameters
 
-	flagSVGPan *string // URL to fetch the SVG Pan library
 	flagOutput *string // Output file name
 
 	flagCum      *bool // Sort by cumulative data
@@ -445,6 +446,7 @@ type flags struct {
 	flagNodeFraction *float64 // Hide nodes below <f>*total
 	flagEdgeFraction *float64 // Hide edges below <f>*total
 	flagTrim         *bool    // Set to false to ignore NodeCount/*Fraction
+	flagRuntime      *bool    // Show runtime call frames in memory profiles
 	flagFocus        *string  // Restricts to paths going through a node matching regexp
 	flagIgnore       *string  // Skips paths going through any nodes matching regexp
 	flagHide         *string  // Skips sample locations matching regexp
@@ -622,7 +624,6 @@ func getFlags(flag plugin.FlagSet, overrides commands.Commands, ui plugin.UI) (*
 		flagBase:         flag.String("base", "", "Source for base profile for comparison"),
 		flagDropNegative: flag.Bool("drop_negative", false, "Ignore negative differences"),
 
-		flagSVGPan: flag.String("svgpan", "https://www.cyberz.org/projects/SVGPan/SVGPan.js", "URL for SVGPan Library"),
 		// Data sorting criteria.
 		flagCum: flag.Bool("cum", false, "Sort by cumulative data"),
 		// Graph handling options.
@@ -640,6 +641,7 @@ func getFlags(flag plugin.FlagSet, overrides commands.Commands, ui plugin.UI) (*
 		flagNodeFraction: flag.Float64("nodefraction", 0.005, "Hide nodes below <f>*total"),
 		flagEdgeFraction: flag.Float64("edgefraction", 0.001, "Hide edges below <f>*total"),
 		flagTrim:         flag.Bool("trim", true, "Honor nodefraction/edgefraction/nodecount defaults"),
+		flagRuntime:      flag.Bool("runtime", false, "Show runtime call frames in memory profiles"),
 		flagFocus:        flag.String("focus", "", "Restricts to paths going through a node matching regexp"),
 		flagIgnore:       flag.String("ignore", "", "Skips paths going through any nodes matching regexp"),
 		flagHide:         flag.String("hide", "", "Skips nodes matching regexp"),
@@ -666,8 +668,7 @@ func getFlags(flag plugin.FlagSet, overrides commands.Commands, ui plugin.UI) (*
 
 	// Flags used during command processing
 	interactive := &f.flagInteractive
-	svgpan := &f.flagSVGPan
-	f.commands = commands.PProf(functionCompleter, interactive, svgpan)
+	f.commands = commands.PProf(functionCompleter, interactive)
 
 	// Override commands
 	for name, cmd := range overrides {
@@ -877,6 +878,7 @@ var usageMsg = "Output file parameters (for file-based output formats):\n" +
 	"  -contentions      Display number of delays at each region\n" +
 	"  -mean_delay       Display mean delay at each region\n" +
 	"Filtering options:\n" +
+	"  -runtime          Show runtime call frames in memory profiles\n" +
 	"  -focus=r          Restricts to paths going through a node matching regexp\n" +
 	"  -ignore=r         Skips paths going through any nodes matching regexp\n" +
 	"  -tagfocus=r       Restrict to samples tagged with key:value matching regexp\n" +
@@ -886,14 +888,13 @@ var usageMsg = "Output file parameters (for file-based output formats):\n" +
 	"Miscellaneous:\n" +
 	"  -call_tree        Generate a context-sensitive call tree\n" +
 	"  -unit=u           Convert all samples to unit u for display\n" +
-	"  -show_bytes       Display all space in bytes\n" +
 	"  -divide_by=f      Scale all samples by dividing them by f\n" +
 	"  -buildid=id       Override build id for main binary in profile\n" +
 	"  -tools=path       Search path for object-level tools\n" +
 	"  -help             This message"
 
 var usageMsgVars = "Environment Variables:\n" +
-	"   PPROF_TMPDIR       Location for temporary files (default $HOME/pprof)\n" +
+	"   PPROF_TMPDIR       Location for saved profiles (default $HOME/pprof)\n" +
 	"   PPROF_TOOLS        Search path for object-level tools\n" +
 	"   PPROF_BINARY_PATH  Search path for local binary files\n" +
 	"                      default: $HOME/pprof/binaries\n" +
@@ -1007,6 +1008,10 @@ func generate(interactive bool, prof *profile.Profile, obj plugin.ObjTool, ui pl
 		}
 		defer outputFile.Close()
 		w = outputFile
+	}
+
+	if prof.Empty() {
+		return fmt.Errorf("profile is empty")
 	}
 
 	value, stype, unit := sampleFormat(prof, f)

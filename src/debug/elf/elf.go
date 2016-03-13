@@ -312,7 +312,7 @@ const (
 	SHN_HIOS      SectionIndex = 0xff3f /* Last operating system-specific. */
 	SHN_ABS       SectionIndex = 0xfff1 /* Absolute values. */
 	SHN_COMMON    SectionIndex = 0xfff2 /* Common data. */
-	SHN_XINDEX    SectionIndex = 0xffff /* Escape -- index stored elsewhere. */
+	SHN_XINDEX    SectionIndex = 0xffff /* Escape; index stored elsewhere. */
 	SHN_HIRESERVE SectionIndex = 0xffff /* Last of reserved range. */
 )
 
@@ -411,6 +411,7 @@ const (
 	SHF_OS_NONCONFORMING SectionFlag = 0x100      /* OS-specific processing required. */
 	SHF_GROUP            SectionFlag = 0x200      /* Member of section group. */
 	SHF_TLS              SectionFlag = 0x400      /* Section contains TLS data. */
+	SHF_COMPRESSED       SectionFlag = 0x800      /* Section is compressed. */
 	SHF_MASKOS           SectionFlag = 0x0ff00000 /* OS-specific semantics. */
 	SHF_MASKPROC         SectionFlag = 0xf0000000 /* Processor-specific semantics. */
 )
@@ -426,10 +427,33 @@ var shfStrings = []intName{
 	{0x100, "SHF_OS_NONCONFORMING"},
 	{0x200, "SHF_GROUP"},
 	{0x400, "SHF_TLS"},
+	{0x800, "SHF_COMPRESSED"},
 }
 
 func (i SectionFlag) String() string   { return flagName(uint32(i), shfStrings, false) }
 func (i SectionFlag) GoString() string { return flagName(uint32(i), shfStrings, true) }
+
+// Section compression type.
+type CompressionType int
+
+const (
+	COMPRESS_ZLIB   CompressionType = 1          /* ZLIB compression. */
+	COMPRESS_LOOS   CompressionType = 0x60000000 /* First OS-specific. */
+	COMPRESS_HIOS   CompressionType = 0x6fffffff /* Last OS-specific. */
+	COMPRESS_LOPROC CompressionType = 0x70000000 /* First processor-specific type. */
+	COMPRESS_HIPROC CompressionType = 0x7fffffff /* Last processor-specific type. */
+)
+
+var compressionStrings = []intName{
+	{0, "COMPRESS_ZLIB"},
+	{0x60000000, "COMPRESS_LOOS"},
+	{0x6fffffff, "COMPRESS_HIOS"},
+	{0x70000000, "COMPRESS_LOPROC"},
+	{0x7fffffff, "COMPRESS_HIPROC"},
+}
+
+func (i CompressionType) String() string   { return stringName(uint32(i), compressionStrings, false) }
+func (i CompressionType) GoString() string { return stringName(uint32(i), compressionStrings, true) }
 
 // Prog.Type
 type ProgType int
@@ -1246,6 +1270,115 @@ var r386Strings = []intName{
 func (i R_386) String() string   { return stringName(uint32(i), r386Strings, false) }
 func (i R_386) GoString() string { return stringName(uint32(i), r386Strings, true) }
 
+// Relocation types for MIPS.
+type R_MIPS int
+
+const (
+	R_MIPS_NONE          R_MIPS = 0
+	R_MIPS_16            R_MIPS = 1
+	R_MIPS_32            R_MIPS = 2
+	R_MIPS_REL32         R_MIPS = 3
+	R_MIPS_26            R_MIPS = 4
+	R_MIPS_HI16          R_MIPS = 5  /* high 16 bits of symbol value */
+	R_MIPS_LO16          R_MIPS = 6  /* low 16 bits of symbol value */
+	R_MIPS_GPREL16       R_MIPS = 7  /* GP-relative reference  */
+	R_MIPS_LITERAL       R_MIPS = 8  /* Reference to literal section  */
+	R_MIPS_GOT16         R_MIPS = 9  /* Reference to global offset table */
+	R_MIPS_PC16          R_MIPS = 10 /* 16 bit PC relative reference */
+	R_MIPS_CALL16        R_MIPS = 11 /* 16 bit call thru glbl offset tbl */
+	R_MIPS_GPREL32       R_MIPS = 12
+	R_MIPS_SHIFT5        R_MIPS = 16
+	R_MIPS_SHIFT6        R_MIPS = 17
+	R_MIPS_64            R_MIPS = 18
+	R_MIPS_GOT_DISP      R_MIPS = 19
+	R_MIPS_GOT_PAGE      R_MIPS = 20
+	R_MIPS_GOT_OFST      R_MIPS = 21
+	R_MIPS_GOT_HI16      R_MIPS = 22
+	R_MIPS_GOT_LO16      R_MIPS = 23
+	R_MIPS_SUB           R_MIPS = 24
+	R_MIPS_INSERT_A      R_MIPS = 25
+	R_MIPS_INSERT_B      R_MIPS = 26
+	R_MIPS_DELETE        R_MIPS = 27
+	R_MIPS_HIGHER        R_MIPS = 28
+	R_MIPS_HIGHEST       R_MIPS = 29
+	R_MIPS_CALL_HI16     R_MIPS = 30
+	R_MIPS_CALL_LO16     R_MIPS = 31
+	R_MIPS_SCN_DISP      R_MIPS = 32
+	R_MIPS_REL16         R_MIPS = 33
+	R_MIPS_ADD_IMMEDIATE R_MIPS = 34
+	R_MIPS_PJUMP         R_MIPS = 35
+	R_MIPS_RELGOT        R_MIPS = 36
+	R_MIPS_JALR          R_MIPS = 37
+
+	R_MIPS_TLS_DTPMOD32    R_MIPS = 38 /* Module number 32 bit */
+	R_MIPS_TLS_DTPREL32    R_MIPS = 39 /* Module-relative offset 32 bit */
+	R_MIPS_TLS_DTPMOD64    R_MIPS = 40 /* Module number 64 bit */
+	R_MIPS_TLS_DTPREL64    R_MIPS = 41 /* Module-relative offset 64 bit */
+	R_MIPS_TLS_GD          R_MIPS = 42 /* 16 bit GOT offset for GD */
+	R_MIPS_TLS_LDM         R_MIPS = 43 /* 16 bit GOT offset for LDM */
+	R_MIPS_TLS_DTPREL_HI16 R_MIPS = 44 /* Module-relative offset, high 16 bits */
+	R_MIPS_TLS_DTPREL_LO16 R_MIPS = 45 /* Module-relative offset, low 16 bits */
+	R_MIPS_TLS_GOTTPREL    R_MIPS = 46 /* 16 bit GOT offset for IE */
+	R_MIPS_TLS_TPREL32     R_MIPS = 47 /* TP-relative offset, 32 bit */
+	R_MIPS_TLS_TPREL64     R_MIPS = 48 /* TP-relative offset, 64 bit */
+	R_MIPS_TLS_TPREL_HI16  R_MIPS = 49 /* TP-relative offset, high 16 bits */
+	R_MIPS_TLS_TPREL_LO16  R_MIPS = 50 /* TP-relative offset, low 16 bits */
+)
+
+var rmipsStrings = []intName{
+	{0, "R_MIPS_NONE"},
+	{1, "R_MIPS_16"},
+	{2, "R_MIPS_32"},
+	{3, "R_MIPS_REL32"},
+	{4, "R_MIPS_26"},
+	{5, "R_MIPS_HI16"},
+	{6, "R_MIPS_LO16"},
+	{7, "R_MIPS_GPREL16"},
+	{8, "R_MIPS_LITERAL"},
+	{9, "R_MIPS_GOT16"},
+	{10, "R_MIPS_PC16"},
+	{11, "R_MIPS_CALL16"},
+	{12, "R_MIPS_GPREL32"},
+	{16, "R_MIPS_SHIFT5"},
+	{17, "R_MIPS_SHIFT6"},
+	{18, "R_MIPS_64"},
+	{19, "R_MIPS_GOT_DISP"},
+	{20, "R_MIPS_GOT_PAGE"},
+	{21, "R_MIPS_GOT_OFST"},
+	{22, "R_MIPS_GOT_HI16"},
+	{23, "R_MIPS_GOT_LO16"},
+	{24, "R_MIPS_SUB"},
+	{25, "R_MIPS_INSERT_A"},
+	{26, "R_MIPS_INSERT_B"},
+	{27, "R_MIPS_DELETE"},
+	{28, "R_MIPS_HIGHER"},
+	{29, "R_MIPS_HIGHEST"},
+	{30, "R_MIPS_CALL_HI16"},
+	{31, "R_MIPS_CALL_LO16"},
+	{32, "R_MIPS_SCN_DISP"},
+	{33, "R_MIPS_REL16"},
+	{34, "R_MIPS_ADD_IMMEDIATE"},
+	{35, "R_MIPS_PJUMP"},
+	{36, "R_MIPS_RELGOT"},
+	{37, "R_MIPS_JALR"},
+	{38, "R_MIPS_TLS_DTPMOD32"},
+	{39, "R_MIPS_TLS_DTPREL32"},
+	{40, "R_MIPS_TLS_DTPMOD64"},
+	{41, "R_MIPS_TLS_DTPREL64"},
+	{42, "R_MIPS_TLS_GD"},
+	{43, "R_MIPS_TLS_LDM"},
+	{44, "R_MIPS_TLS_DTPREL_HI16"},
+	{45, "R_MIPS_TLS_DTPREL_LO16"},
+	{46, "R_MIPS_TLS_GOTTPREL"},
+	{47, "R_MIPS_TLS_TPREL32"},
+	{48, "R_MIPS_TLS_TPREL64"},
+	{49, "R_MIPS_TLS_TPREL_HI16"},
+	{50, "R_MIPS_TLS_TPREL_LO16"},
+}
+
+func (i R_MIPS) String() string   { return stringName(uint32(i), rmipsStrings, false) }
+func (i R_MIPS) GoString() string { return stringName(uint32(i), rmipsStrings, true) }
+
 // Relocation types for PowerPC.
 type R_PPC int
 
@@ -1413,6 +1546,184 @@ var rppcStrings = []intName{
 
 func (i R_PPC) String() string   { return stringName(uint32(i), rppcStrings, false) }
 func (i R_PPC) GoString() string { return stringName(uint32(i), rppcStrings, true) }
+
+// Relocation types for 64-bit PowerPC or Power Architecture processors.
+type R_PPC64 int
+
+const (
+	R_PPC64_NONE               R_PPC64 = 0
+	R_PPC64_ADDR32             R_PPC64 = 1
+	R_PPC64_ADDR24             R_PPC64 = 2
+	R_PPC64_ADDR16             R_PPC64 = 3
+	R_PPC64_ADDR16_LO          R_PPC64 = 4
+	R_PPC64_ADDR16_HI          R_PPC64 = 5
+	R_PPC64_ADDR16_HA          R_PPC64 = 6
+	R_PPC64_ADDR14             R_PPC64 = 7
+	R_PPC64_ADDR14_BRTAKEN     R_PPC64 = 8
+	R_PPC64_ADDR14_BRNTAKEN    R_PPC64 = 9
+	R_PPC64_REL24              R_PPC64 = 10
+	R_PPC64_REL14              R_PPC64 = 11
+	R_PPC64_REL14_BRTAKEN      R_PPC64 = 12
+	R_PPC64_REL14_BRNTAKEN     R_PPC64 = 13
+	R_PPC64_GOT16              R_PPC64 = 14
+	R_PPC64_GOT16_LO           R_PPC64 = 15
+	R_PPC64_GOT16_HI           R_PPC64 = 16
+	R_PPC64_GOT16_HA           R_PPC64 = 17
+	R_PPC64_JMP_SLOT           R_PPC64 = 21
+	R_PPC64_REL32              R_PPC64 = 26
+	R_PPC64_ADDR64             R_PPC64 = 38
+	R_PPC64_ADDR16_HIGHER      R_PPC64 = 39
+	R_PPC64_ADDR16_HIGHERA     R_PPC64 = 40
+	R_PPC64_ADDR16_HIGHEST     R_PPC64 = 41
+	R_PPC64_ADDR16_HIGHESTA    R_PPC64 = 42
+	R_PPC64_REL64              R_PPC64 = 44
+	R_PPC64_TOC16              R_PPC64 = 47
+	R_PPC64_TOC16_LO           R_PPC64 = 48
+	R_PPC64_TOC16_HI           R_PPC64 = 49
+	R_PPC64_TOC16_HA           R_PPC64 = 50
+	R_PPC64_TOC                R_PPC64 = 51
+	R_PPC64_ADDR16_DS          R_PPC64 = 56
+	R_PPC64_ADDR16_LO_DS       R_PPC64 = 57
+	R_PPC64_GOT16_DS           R_PPC64 = 58
+	R_PPC64_GOT16_LO_DS        R_PPC64 = 59
+	R_PPC64_TOC16_DS           R_PPC64 = 63
+	R_PPC64_TOC16_LO_DS        R_PPC64 = 64
+	R_PPC64_TLS                R_PPC64 = 67
+	R_PPC64_DTPMOD64           R_PPC64 = 68
+	R_PPC64_TPREL16            R_PPC64 = 69
+	R_PPC64_TPREL16_LO         R_PPC64 = 70
+	R_PPC64_TPREL16_HI         R_PPC64 = 71
+	R_PPC64_TPREL16_HA         R_PPC64 = 72
+	R_PPC64_TPREL64            R_PPC64 = 73
+	R_PPC64_DTPREL16           R_PPC64 = 74
+	R_PPC64_DTPREL16_LO        R_PPC64 = 75
+	R_PPC64_DTPREL16_HI        R_PPC64 = 76
+	R_PPC64_DTPREL16_HA        R_PPC64 = 77
+	R_PPC64_DTPREL64           R_PPC64 = 78
+	R_PPC64_GOT_TLSGD16        R_PPC64 = 79
+	R_PPC64_GOT_TLSGD16_LO     R_PPC64 = 80
+	R_PPC64_GOT_TLSGD16_HI     R_PPC64 = 81
+	R_PPC64_GOT_TLSGD16_HA     R_PPC64 = 82
+	R_PPC64_GOT_TLSLD16        R_PPC64 = 83
+	R_PPC64_GOT_TLSLD16_LO     R_PPC64 = 84
+	R_PPC64_GOT_TLSLD16_HI     R_PPC64 = 85
+	R_PPC64_GOT_TLSLD16_HA     R_PPC64 = 86
+	R_PPC64_GOT_TPREL16_DS     R_PPC64 = 87
+	R_PPC64_GOT_TPREL16_LO_DS  R_PPC64 = 88
+	R_PPC64_GOT_TPREL16_HI     R_PPC64 = 89
+	R_PPC64_GOT_TPREL16_HA     R_PPC64 = 90
+	R_PPC64_GOT_DTPREL16_DS    R_PPC64 = 91
+	R_PPC64_GOT_DTPREL16_LO_DS R_PPC64 = 92
+	R_PPC64_GOT_DTPREL16_HI    R_PPC64 = 93
+	R_PPC64_GOT_DTPREL16_HA    R_PPC64 = 94
+	R_PPC64_TPREL16_DS         R_PPC64 = 95
+	R_PPC64_TPREL16_LO_DS      R_PPC64 = 96
+	R_PPC64_TPREL16_HIGHER     R_PPC64 = 97
+	R_PPC64_TPREL16_HIGHERA    R_PPC64 = 98
+	R_PPC64_TPREL16_HIGHEST    R_PPC64 = 99
+	R_PPC64_TPREL16_HIGHESTA   R_PPC64 = 100
+	R_PPC64_DTPREL16_DS        R_PPC64 = 101
+	R_PPC64_DTPREL16_LO_DS     R_PPC64 = 102
+	R_PPC64_DTPREL16_HIGHER    R_PPC64 = 103
+	R_PPC64_DTPREL16_HIGHERA   R_PPC64 = 104
+	R_PPC64_DTPREL16_HIGHEST   R_PPC64 = 105
+	R_PPC64_DTPREL16_HIGHESTA  R_PPC64 = 106
+	R_PPC64_TLSGD              R_PPC64 = 107
+	R_PPC64_TLSLD              R_PPC64 = 108
+	R_PPC64_REL16              R_PPC64 = 249
+	R_PPC64_REL16_LO           R_PPC64 = 250
+	R_PPC64_REL16_HI           R_PPC64 = 251
+	R_PPC64_REL16_HA           R_PPC64 = 252
+)
+
+var rppc64Strings = []intName{
+	{0, "R_PPC64_NONE"},
+	{1, "R_PPC64_ADDR32"},
+	{2, "R_PPC64_ADDR24"},
+	{3, "R_PPC64_ADDR16"},
+	{4, "R_PPC64_ADDR16_LO"},
+	{5, "R_PPC64_ADDR16_HI"},
+	{6, "R_PPC64_ADDR16_HA"},
+	{7, "R_PPC64_ADDR14"},
+	{8, "R_PPC64_ADDR14_BRTAKEN"},
+	{9, "R_PPC64_ADDR14_BRNTAKEN"},
+	{10, "R_PPC64_REL24"},
+	{11, "R_PPC64_REL14"},
+	{12, "R_PPC64_REL14_BRTAKEN"},
+	{13, "R_PPC64_REL14_BRNTAKEN"},
+	{14, "R_PPC64_GOT16"},
+	{15, "R_PPC64_GOT16_LO"},
+	{16, "R_PPC64_GOT16_HI"},
+	{17, "R_PPC64_GOT16_HA"},
+	{21, "R_PPC64_JMP_SLOT"},
+	{26, "R_PPC64_REL32"},
+	{38, "R_PPC64_ADDR64"},
+	{39, "R_PPC64_ADDR16_HIGHER"},
+	{40, "R_PPC64_ADDR16_HIGHERA"},
+	{41, "R_PPC64_ADDR16_HIGHEST"},
+	{42, "R_PPC64_ADDR16_HIGHESTA"},
+	{44, "R_PPC64_REL64"},
+	{47, "R_PPC64_TOC16"},
+	{48, "R_PPC64_TOC16_LO"},
+	{49, "R_PPC64_TOC16_HI"},
+	{50, "R_PPC64_TOC16_HA"},
+	{51, "R_PPC64_TOC"},
+	{56, "R_PPC64_ADDR16_DS"},
+	{57, "R_PPC64_ADDR16_LO_DS"},
+	{58, "R_PPC64_GOT16_DS"},
+	{59, "R_PPC64_GOT16_LO_DS"},
+	{63, "R_PPC64_TOC16_DS"},
+	{64, "R_PPC64_TOC16_LO_DS"},
+	{67, "R_PPC64_TLS"},
+	{68, "R_PPC64_DTPMOD64"},
+	{69, "R_PPC64_TPREL16"},
+	{70, "R_PPC64_TPREL16_LO"},
+	{71, "R_PPC64_TPREL16_HI"},
+	{72, "R_PPC64_TPREL16_HA"},
+	{73, "R_PPC64_TPREL64"},
+	{74, "R_PPC64_DTPREL16"},
+	{75, "R_PPC64_DTPREL16_LO"},
+	{76, "R_PPC64_DTPREL16_HI"},
+	{77, "R_PPC64_DTPREL16_HA"},
+	{78, "R_PPC64_DTPREL64"},
+	{79, "R_PPC64_GOT_TLSGD16"},
+	{80, "R_PPC64_GOT_TLSGD16_LO"},
+	{81, "R_PPC64_GOT_TLSGD16_HI"},
+	{82, "R_PPC64_GOT_TLSGD16_HA"},
+	{83, "R_PPC64_GOT_TLSLD16"},
+	{84, "R_PPC64_GOT_TLSLD16_LO"},
+	{85, "R_PPC64_GOT_TLSLD16_HI"},
+	{86, "R_PPC64_GOT_TLSLD16_HA"},
+	{87, "R_PPC64_GOT_TPREL16_DS"},
+	{88, "R_PPC64_GOT_TPREL16_LO_DS"},
+	{89, "R_PPC64_GOT_TPREL16_HI"},
+	{90, "R_PPC64_GOT_TPREL16_HA"},
+	{91, "R_PPC64_GOT_DTPREL16_DS"},
+	{92, "R_PPC64_GOT_DTPREL16_LO_DS"},
+	{93, "R_PPC64_GOT_DTPREL16_HI"},
+	{94, "R_PPC64_GOT_DTPREL16_HA"},
+	{95, "R_PPC64_TPREL16_DS"},
+	{96, "R_PPC64_TPREL16_LO_DS"},
+	{97, "R_PPC64_TPREL16_HIGHER"},
+	{98, "R_PPC64_TPREL16_HIGHERA"},
+	{99, "R_PPC64_TPREL16_HIGHEST"},
+	{100, "R_PPC64_TPREL16_HIGHESTA"},
+	{101, "R_PPC64_DTPREL16_DS"},
+	{102, "R_PPC64_DTPREL16_LO_DS"},
+	{103, "R_PPC64_DTPREL16_HIGHER"},
+	{104, "R_PPC64_DTPREL16_HIGHERA"},
+	{105, "R_PPC64_DTPREL16_HIGHEST"},
+	{106, "R_PPC64_DTPREL16_HIGHESTA"},
+	{107, "R_PPC64_TLSGD"},
+	{108, "R_PPC64_TLSLD"},
+	{249, "R_PPC64_REL16"},
+	{250, "R_PPC64_REL16_LO"},
+	{251, "R_PPC64_REL16_HI"},
+	{252, "R_PPC64_REL16_HA"},
+}
+
+func (i R_PPC64) String() string   { return stringName(uint32(i), rppc64Strings, false) }
+func (i R_PPC64) GoString() string { return stringName(uint32(i), rppc64Strings, true) }
 
 // Relocation types for SPARC.
 type R_SPARC int
@@ -1591,6 +1902,13 @@ type Dyn32 struct {
 	Val uint32 /* Integer/Address value. */
 }
 
+// ELF32 Compression header.
+type Chdr32 struct {
+	Type      uint32
+	Size      uint32
+	Addralign uint32
+}
+
 /*
  * Relocation entries.
  */
@@ -1683,6 +2001,14 @@ type Prog64 struct {
 type Dyn64 struct {
 	Tag int64  /* Entry type. */
 	Val uint64 /* Integer/address value */
+}
+
+// ELF64 Compression header.
+type Chdr64 struct {
+	Type      uint32
+	_         uint32 /* Reserved. */
+	Size      uint64
+	Addralign uint64
 }
 
 /*

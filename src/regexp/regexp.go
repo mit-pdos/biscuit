@@ -7,9 +7,9 @@
 // The syntax of the regular expressions accepted is the same
 // general syntax used by Perl, Python, and other languages.
 // More precisely, it is the syntax accepted by RE2 and described at
-// http://code.google.com/p/re2/wiki/Syntax, except for \C.
+// https://golang.org/s/re2syntax, except for \C.
 // For an overview of the syntax, run
-//   godoc regexp/syntax
+//   go doc regexp/syntax
 //
 // The regexp implementation provided by this package is
 // guaranteed to run in time linear in the size of the input.
@@ -83,7 +83,7 @@ type Regexp struct {
 	// read-only after Compile
 	expr           string         // as passed to Compile
 	prog           *syntax.Prog   // compiled program
-	onepass        *onePassProg   // onpass program or nil
+	onepass        *onePassProg   // onepass program or nil
 	prefix         string         // required prefix in unanchored matches
 	prefixBytes    []byte         // prefix, as a []byte
 	prefixComplete bool           // prefix is the entire regexp
@@ -102,6 +102,17 @@ type Regexp struct {
 // String returns the source text used to compile the regular expression.
 func (re *Regexp) String() string {
 	return re.expr
+}
+
+// Copy returns a new Regexp object copied from re.
+//
+// When using a Regexp in multiple goroutines, giving each goroutine
+// its own copy helps to avoid lock contention.
+func (re *Regexp) Copy() *Regexp {
+	r := *re
+	r.mu = sync.Mutex{}
+	r.machine = nil
+	return &r
 }
 
 // Compile parses a regular expression and returns, if successful,
@@ -452,7 +463,7 @@ func (re *Regexp) ReplaceAllString(src, repl string) string {
 	return string(b)
 }
 
-// ReplaceAllStringLiteral returns a copy of src, replacing matches of the Regexp
+// ReplaceAllLiteralString returns a copy of src, replacing matches of the Regexp
 // with the replacement string repl.  The replacement repl is substituted directly,
 // without using Expand.
 func (re *Regexp) ReplaceAllLiteralString(src, repl string) string {
@@ -482,6 +493,10 @@ func (re *Regexp) replaceAll(bsrc []byte, src string, nmatch int, repl func(dst 
 	} else {
 		endPos = len(src)
 	}
+	if nmatch > re.prog.NumCap {
+		nmatch = re.prog.NumCap
+	}
+
 	for searchPos <= endPos {
 		a := re.doExecute(nil, bsrc, src, searchPos, nmatch)
 		if len(a) == 0 {

@@ -5,6 +5,7 @@
 package os
 
 import (
+	"internal/syscall/windows"
 	"io"
 	"runtime"
 	"sync"
@@ -36,6 +37,7 @@ type file struct {
 }
 
 // Fd returns the Windows handle referencing the open file.
+// The handle is valid only until f.Close is called or f is garbage collected.
 func (file *File) Fd() uintptr {
 	if file == nil {
 		return uintptr(syscall.InvalidHandle)
@@ -88,7 +90,13 @@ func openFile(name string, flag int, perm FileMode) (file *File, err error) {
 }
 
 func openDir(name string) (file *File, err error) {
-	maskp, e := syscall.UTF16PtrFromString(name + `\*`)
+	var mask string
+	if len(name) == 2 && name[1] == ':' { // it is a drive letter, like C:
+		mask = name + `*`
+	} else {
+		mask = name + `\*`
+	}
+	maskp, e := syscall.UTF16PtrFromString(mask)
 	if e != nil {
 		return nil, e
 	}
@@ -132,7 +140,7 @@ func openDir(name string) (file *File, err error) {
 // (O_RDONLY etc.) and perm, (0666 etc.) if applicable.  If successful,
 // methods on the returned File can be used for I/O.
 // If there is an error, it will be of type *PathError.
-func OpenFile(name string, flag int, perm FileMode) (file *File, err error) {
+func OpenFile(name string, flag int, perm FileMode) (*File, error) {
 	if name == "" {
 		return nil, &PathError{"open", name, syscall.ENOENT}
 	}
@@ -255,24 +263,37 @@ func (f *File) readConsole(b []byte) (n int, err error) {
 		return 0, nil
 	}
 	if len(f.readbuf) == 0 {
-		// syscall.ReadConsole seems to fail, if given large buffer.
-		// So limit the buffer to 16000 characters.
 		numBytes := len(b)
-		if numBytes > 16000 {
-			numBytes = 16000
+		// Windows  can't read bytes over max of int16.
+		// Some versions of Windows can read even less.
+		// See golang.org/issue/13697.
+		if numBytes > 10000 {
+			numBytes = 10000
 		}
-		// get more input data from os
-		wchars := make([]uint16, numBytes)
-		var p *uint16
-		if len(b) > 0 {
-			p = &wchars[0]
-		}
-		var nw uint32
-		err := syscall.ReadConsole(f.fd, p, uint32(len(wchars)), &nw, nil)
+		mbytes := make([]byte, numBytes)
+		var nmb uint32
+		err := syscall.ReadFile(f.fd, mbytes, &nmb, nil)
 		if err != nil {
 			return 0, err
 		}
-		f.readbuf = utf16.Decode(wchars[:nw])
+		if nmb > 0 {
+			var pmb *byte
+			if len(b) > 0 {
+				pmb = &mbytes[0]
+			}
+			acp := windows.GetACP()
+			nwc, err := windows.MultiByteToWideChar(acp, 2, pmb, int32(nmb), nil, 0)
+			if err != nil {
+				return 0, err
+			}
+			wchars := make([]uint16, nwc)
+			pwc := &wchars[0]
+			nwc, err = windows.MultiByteToWideChar(acp, 2, pmb, int32(nmb), pwc, int32(nwc))
+			if err != nil {
+				return 0, err
+			}
+			f.readbuf = utf16.Decode(wchars[:nwc])
+		}
 	}
 	for i, r := range f.readbuf {
 		if utf8.RuneLen(r) > len(b) {
@@ -295,7 +316,7 @@ func (f *File) read(b []byte) (n int, err error) {
 	if f.isConsole {
 		return f.readConsole(b)
 	}
-	return syscall.Read(f.fd, b)
+	return fixCount(syscall.Read(f.fd, b))
 }
 
 // pread reads len(b) bytes from the File starting at byte offset off.
@@ -376,7 +397,7 @@ func (f *File) write(b []byte) (n int, err error) {
 	if f.isConsole {
 		return f.writeConsole(b)
 	}
-	return syscall.Write(f.fd, b)
+	return fixCount(syscall.Write(f.fd, b))
 }
 
 // pwrite writes len(b) bytes to the File starting at byte offset off.
@@ -459,6 +480,14 @@ func Remove(name string) error {
 	return &PathError{"remove", name, e}
 }
 
+func rename(oldname, newname string) error {
+	e := windows.Rename(oldname, newname)
+	if e != nil {
+		return &LinkError{"rename", oldname, newname, e}
+	}
+	return nil
+}
+
 // Pipe returns a connected pair of Files; reads from r return bytes written to w.
 // It returns the files and an error, if any.
 func Pipe() (r *File, w *File, err error) {
@@ -480,20 +509,18 @@ func Pipe() (r *File, w *File, err error) {
 
 // TempDir returns the default directory to use for temporary files.
 func TempDir() string {
-	const pathSep = '\\'
-	dirw := make([]uint16, syscall.MAX_PATH)
-	n, _ := syscall.GetTempPath(uint32(len(dirw)), &dirw[0])
-	if n > uint32(len(dirw)) {
-		dirw = make([]uint16, n)
-		n, _ = syscall.GetTempPath(uint32(len(dirw)), &dirw[0])
-		if n > uint32(len(dirw)) {
-			n = 0
+	n := uint32(syscall.MAX_PATH)
+	for {
+		b := make([]uint16, n)
+		n, _ = syscall.GetTempPath(uint32(len(b)), &b[0])
+		if n > uint32(len(b)) {
+			continue
 		}
+		if n > 0 && b[n-1] == '\\' {
+			n--
+		}
+		return string(utf16.Decode(b[:n]))
 	}
-	if n > 0 && dirw[n-1] == pathSep {
-		n--
-	}
-	return string(utf16.Decode(dirw[0:n]))
 }
 
 // Link creates newname as a hard link to the oldname file.
@@ -507,9 +534,8 @@ func Link(oldname, newname string) error {
 	if err != nil {
 		return &LinkError{"link", oldname, newname, err}
 	}
-
-	e := syscall.CreateHardLink(n, o, 0)
-	if e != nil {
+	err = syscall.CreateHardLink(n, o, 0)
+	if err != nil {
 		return &LinkError{"link", oldname, newname, err}
 	}
 	return nil

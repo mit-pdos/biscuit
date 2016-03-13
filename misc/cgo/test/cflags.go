@@ -4,7 +4,7 @@
 
 // Test that the #cgo CFLAGS directive works,
 // with and without platform filters.
-// See http://code.google.com/p/go/issues/detail?id=5224 for details.
+// See https://golang.org/issue/5224 for details.
 package cgotest
 
 /*

@@ -107,6 +107,7 @@ case "$#" in
 	exit 2
 esac
 
+GOOSARCH_in=syscall_$GOOSARCH.go
 case "$GOOSARCH" in
 _* | *_ | _)
 	echo 'undefined $GOOS_$GOARCH:' "$GOOSARCH" 1>&2
@@ -119,6 +120,11 @@ darwin_386)
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
 darwin_amd64)
+	mkerrors="$mkerrors -m64"
+	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	;;
+darwin_arm64)
 	mkerrors="$mkerrors -m64"
 	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
@@ -173,7 +179,32 @@ linux_amd64)
 linux_arm)
 	mkerrors="$mkerrors"
 	mksyscall="./mksyscall.pl -l32 -arm"
-	mksysnum="curl -s 'http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/plain/arch/arm/include/uapi/asm/unistd.h' | ./mksysnum_linux.pl"
+	mksysnum="curl -s 'http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/plain/arch/arm/include/uapi/asm/unistd.h' | ./mksysnum_linux.pl -"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	;;
+linux_arm64)
+	unistd_h=$(ls -1 /usr/include/asm/unistd.h /usr/include/asm-generic/unistd.h 2>/dev/null | head -1)
+	if [ "$unistd_h" = "" ]; then
+		echo >&2 cannot find unistd_64.h
+		exit 1
+	fi
+	mksysnum="./mksysnum_linux.pl $unistd_h"
+	# Let the type of C char be singed for making the bare syscall
+	# API consistent across over platforms.
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs -- -fsigned-char"
+	;;
+linux_ppc64)
+	GOOSARCH_in=syscall_linux_ppc64x.go
+	unistd_h=/usr/include/asm/unistd.h
+	mkerrors="$mkerrors -m64"
+	mksysnum="./mksysnum_linux.pl $unistd_h"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	;;
+linux_ppc64le)
+	GOOSARCH_in=syscall_linux_ppc64x.go
+	unistd_h=/usr/include/powerpc64le-linux-gnu/asm/unistd.h
+	mkerrors="$mkerrors -m64"
+	mksysnum="./mksysnum_linux.pl $unistd_h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
 nacl_386)
@@ -205,7 +236,7 @@ openbsd_386)
 	mksyscall="./mksyscall.pl -l32 -openbsd"
 	mksysctl="./mksysctl_openbsd.pl"
 	zsysctl="zsysctl_openbsd.go"
-	mksysnum="curl -s 'http://www.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
+	mksysnum="curl -s 'http://cvsweb.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
 openbsd_amd64)
@@ -213,7 +244,15 @@ openbsd_amd64)
 	mksyscall="./mksyscall.pl -openbsd"
 	mksysctl="./mksysctl_openbsd.pl"
 	zsysctl="zsysctl_openbsd.go"
-	mksysnum="curl -s 'http://www.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
+	mksysnum="curl -s 'http://cvsweb.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
+	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
+	;;
+openbsd_arm)
+	mkerrors="$mkerrors"
+	mksyscall="./mksyscall.pl -l32 -openbsd -arm"
+	mksysctl="./mksysctl_openbsd.pl"
+	zsysctl="zsysctl_openbsd.go"
+	mksysnum="curl -s 'http://cvsweb.openbsd.org/cgi-bin/cvsweb/~checkout~/src/sys/kern/syscalls.master' | ./mksysnum_openbsd.pl"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
 plan9_386)
@@ -229,9 +268,8 @@ solaris_amd64)
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;
 windows_*)
-	mksyscall=
-	mkerrors=
-	zerrors=
+	echo 'run "go generate syscall_windows.go" instead' 1>&2
+	exit 1
 	;;
 *)
 	echo 'unrecognized $GOOS_$GOARCH: ' "$GOOSARCH" 1>&2
@@ -241,22 +279,13 @@ esac
 
 (
 	if [ -n "$mkerrors" ]; then echo "$mkerrors |gofmt >$zerrors"; fi
-	case "$GOOS" in
-	windows)
-		echo "GOOS= GOARCH= go build mksyscall_windows.go"
-		echo "./mksyscall_windows syscall_windows.go security_windows.go |gofmt >zsyscall_windows.go"
-		echo "rm -f ./mksyscall_windows"
-		;;
-	*)
-		syscall_goos="syscall_$GOOS.go"
-		case "$GOOS" in
-		darwin | dragonfly | freebsd | netbsd | openbsd)
-			syscall_goos="syscall_bsd.go $syscall_goos"
-			;;
-		esac
-		if [ -n "$mksyscall" ]; then echo "$mksyscall $syscall_goos syscall_$GOOSARCH.go |gofmt >zsyscall_$GOOSARCH.go"; fi
-		;;
-	esac
+	syscall_goos="syscall_$GOOS.go"
+ 	case "$GOOS" in
+	darwin | dragonfly | freebsd | netbsd | openbsd)
+		syscall_goos="syscall_bsd.go $syscall_goos"
+ 		;;
+ 	esac
+	if [ -n "$mksyscall" ]; then echo "$mksyscall $syscall_goos $GOOSARCH_in |gofmt >zsyscall_$GOOSARCH.go"; fi
 	if [ -n "$mksysctl" ]; then echo "$mksysctl |gofmt >$zsysctl"; fi
 	if [ -n "$mksysnum" ]; then echo "$mksysnum |gofmt >zsysnum_$GOOSARCH.go"; fi
 	if [ -n "$mktypes" ]; then echo "$mktypes types_$GOOS.go |gofmt >ztypes_$GOOSARCH.go"; fi

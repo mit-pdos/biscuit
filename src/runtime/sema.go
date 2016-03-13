@@ -19,7 +19,11 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"runtime/internal/atomic"
+	"runtime/internal/sys"
+	"unsafe"
+)
 
 // Asynchronous semaphore for sync.Mutex.
 
@@ -35,15 +39,26 @@ const semTabSize = 251
 
 var semtable [semTabSize]struct {
 	root semaRoot
-	pad  [_CacheLineSize - unsafe.Sizeof(semaRoot{})]byte
+	pad  [sys.CacheLineSize - unsafe.Sizeof(semaRoot{})]byte
 }
 
-// Called from sync/net packages.
-func asyncsemacquire(addr *uint32) {
+//go:linkname sync_runtime_Semacquire sync.runtime_Semacquire
+func sync_runtime_Semacquire(addr *uint32) {
 	semacquire(addr, true)
 }
 
-func asyncsemrelease(addr *uint32) {
+//go:linkname net_runtime_Semacquire net.runtime_Semacquire
+func net_runtime_Semacquire(addr *uint32) {
+	semacquire(addr, true)
+}
+
+//go:linkname sync_runtime_Semrelease sync.runtime_Semrelease
+func sync_runtime_Semrelease(addr *uint32) {
+	semrelease(addr)
+}
+
+//go:linkname net_runtime_Semrelease net.runtime_Semrelease
+func net_runtime_Semrelease(addr *uint32) {
 	semrelease(addr)
 }
 
@@ -51,7 +66,7 @@ func asyncsemrelease(addr *uint32) {
 func semacquire(addr *uint32, profile bool) {
 	gp := getg()
 	if gp != gp.m.curg {
-		gothrow("semacquire not on the G stack")
+		throw("semacquire not on the G stack")
 	}
 
 	// Easy case.
@@ -76,17 +91,17 @@ func semacquire(addr *uint32, profile bool) {
 	for {
 		lock(&root.lock)
 		// Add ourselves to nwait to disable "easy case" in semrelease.
-		xadd(&root.nwait, 1)
+		atomic.Xadd(&root.nwait, 1)
 		// Check cansemacquire to avoid missed wakeup.
 		if cansemacquire(addr) {
-			xadd(&root.nwait, -1)
+			atomic.Xadd(&root.nwait, -1)
 			unlock(&root.lock)
 			break
 		}
 		// Any semrelease after the cansemacquire knows we're waiting
 		// (we set nwait above), so go to sleep.
 		root.queue(addr, s)
-		goparkunlock(&root.lock, "semacquire")
+		goparkunlock(&root.lock, "semacquire", traceEvGoBlockSync, 4)
 		if cansemacquire(addr) {
 			break
 		}
@@ -99,18 +114,18 @@ func semacquire(addr *uint32, profile bool) {
 
 func semrelease(addr *uint32) {
 	root := semroot(addr)
-	xadd(addr, 1)
+	atomic.Xadd(addr, 1)
 
 	// Easy case: no waiters?
 	// This check must happen after the xadd, to avoid a missed wakeup
 	// (see loop in semacquire).
-	if atomicload(&root.nwait) == 0 {
+	if atomic.Load(&root.nwait) == 0 {
 		return
 	}
 
 	// Harder case: search for a waiter and wake it.
 	lock(&root.lock)
-	if atomicload(&root.nwait) == 0 {
+	if atomic.Load(&root.nwait) == 0 {
 		// The count is already consumed by another goroutine,
 		// so no need to wake up another goroutine.
 		unlock(&root.lock)
@@ -119,7 +134,7 @@ func semrelease(addr *uint32) {
 	s := root.head
 	for ; s != nil; s = s.next {
 		if s.elem == unsafe.Pointer(addr) {
-			xadd(&root.nwait, -1)
+			atomic.Xadd(&root.nwait, -1)
 			root.dequeue(s)
 			break
 		}
@@ -129,7 +144,7 @@ func semrelease(addr *uint32) {
 		if s.releasetime != 0 {
 			s.releasetime = cputicks()
 		}
-		goready(s.g)
+		goready(s.g, 4)
 	}
 }
 
@@ -139,11 +154,11 @@ func semroot(addr *uint32) *semaRoot {
 
 func cansemacquire(addr *uint32) bool {
 	for {
-		v := atomicload(addr)
+		v := atomic.Load(addr)
 		if v == 0 {
 			return false
 		}
-		if cas(addr, v, v-1) {
+		if atomic.Cas(addr, v, v-1) {
 			return true
 		}
 	}
@@ -185,7 +200,8 @@ type syncSema struct {
 	tail *sudog
 }
 
-// Syncsemacquire waits for a pairing syncsemrelease on the same semaphore s.
+// syncsemacquire waits for a pairing syncsemrelease on the same semaphore s.
+//go:linkname syncsemacquire sync.runtime_Syncsemacquire
 func syncsemacquire(s *syncSema) {
 	lock(&s.lock)
 	if s.head != nil && s.head.nrelease > 0 {
@@ -201,7 +217,8 @@ func syncsemacquire(s *syncSema) {
 		}
 		unlock(&s.lock)
 		if wake != nil {
-			goready(wake.g)
+			wake.next = nil
+			goready(wake.g, 4)
 		}
 	} else {
 		// Enqueue itself.
@@ -221,7 +238,7 @@ func syncsemacquire(s *syncSema) {
 			s.tail.next = w
 		}
 		s.tail = w
-		goparkunlock(&s.lock, "semacquire")
+		goparkunlock(&s.lock, "semacquire", traceEvGoBlockCond, 3)
 		if t0 != 0 {
 			blockevent(int64(w.releasetime)-t0, 2)
 		}
@@ -229,7 +246,8 @@ func syncsemacquire(s *syncSema) {
 	}
 }
 
-// Syncsemrelease waits for n pairing syncsemacquire on the same semaphore s.
+// syncsemrelease waits for n pairing syncsemacquire on the same semaphore s.
+//go:linkname syncsemrelease sync.runtime_Syncsemrelease
 func syncsemrelease(s *syncSema, n uint32) {
 	lock(&s.lock)
 	for n > 0 && s.head != nil && s.head.nrelease < 0 {
@@ -242,7 +260,8 @@ func syncsemrelease(s *syncSema, n uint32) {
 		if wake.releasetime != 0 {
 			wake.releasetime = cputicks()
 		}
-		goready(wake.g)
+		wake.next = nil
+		goready(wake.g, 4)
 		n--
 	}
 	if n > 0 {
@@ -258,15 +277,17 @@ func syncsemrelease(s *syncSema, n uint32) {
 			s.tail.next = w
 		}
 		s.tail = w
-		goparkunlock(&s.lock, "semarelease")
+		goparkunlock(&s.lock, "semarelease", traceEvGoBlockCond, 3)
+		releaseSudog(w)
 	} else {
 		unlock(&s.lock)
 	}
 }
 
+//go:linkname syncsemcheck sync.runtime_Syncsemcheck
 func syncsemcheck(sz uintptr) {
 	if sz != unsafe.Sizeof(syncSema{}) {
 		print("runtime: bad syncSema size - sync=", sz, " runtime=", unsafe.Sizeof(syncSema{}), "\n")
-		gothrow("bad syncSema size")
+		throw("bad syncSema size")
 	}
 }

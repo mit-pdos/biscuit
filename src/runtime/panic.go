@@ -4,7 +4,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"runtime/internal/atomic"
+	"unsafe"
+)
 
 var indexError = error(errorString("index out of range"))
 
@@ -43,41 +46,41 @@ func panicmem() {
 }
 
 func throwreturn() {
-	gothrow("no return at end of a typed function - compiler is broken")
+	throw("no return at end of a typed function - compiler is broken")
 }
 
 func throwinit() {
-	gothrow("recursive call during initialization - linker skew")
+	throw("recursive call during initialization - linker skew")
 }
 
 // Create a new deferred function fn with siz bytes of arguments.
 // The compiler turns a defer statement into a call to this.
 //go:nosplit
 func deferproc(siz int32, fn *funcval) { // arguments of fn follow fn
+	if getg().m.curg != getg() {
+		// go code on the system stack can't defer
+		throw("defer on system stack")
+	}
+
 	// the arguments of fn are in a perilous state.  The stack map
 	// for deferproc does not describe them.  So we can't let garbage
 	// collection or stack copying trigger until we've copied them out
-	// to somewhere safe.  deferproc_m does that.  Until deferproc_m,
-	// we can only call nosplit routines.
-	argp := uintptr(unsafe.Pointer(&fn))
-	argp += unsafe.Sizeof(fn)
-	if GOARCH == "arm" {
-		argp += ptrSize // skip caller's saved link register
-	}
-	mp := acquirem()
-	mp.scalararg[0] = uintptr(siz)
-	mp.ptrarg[0] = unsafe.Pointer(fn)
-	mp.scalararg[1] = argp
-	mp.scalararg[2] = getcallerpc(unsafe.Pointer(&siz))
+	// to somewhere safe.  The memmove below does that.
+	// Until the copy completes, we can only call nosplit routines.
+	sp := getcallersp(unsafe.Pointer(&siz))
+	argp := uintptr(unsafe.Pointer(&fn)) + unsafe.Sizeof(fn)
+	callerpc := getcallerpc(unsafe.Pointer(&siz))
 
-	if mp.curg != getg() {
-		// go code on the m stack can't defer
-		gothrow("defer on m")
-	}
-
-	onM(deferproc_m)
-
-	releasem(mp)
+	systemstack(func() {
+		d := newdefer(siz)
+		if d._panic != nil {
+			throw("deferproc: d.panic != nil after newdefer")
+		}
+		d.fn = fn
+		d.pc = callerpc
+		d.sp = sp
+		memmove(add(unsafe.Pointer(d), unsafe.Sizeof(*d)), unsafe.Pointer(argp), uintptr(siz))
+	})
 
 	// deferproc returns 0 normally.
 	// a deferred func that stops a panic
@@ -130,14 +133,14 @@ func testdefersizes() {
 		if defersc >= uintptr(len(m)) {
 			break
 		}
-		siz := goroundupsize(totaldefersize(i))
+		siz := roundupsize(totaldefersize(i))
 		if m[defersc] < 0 {
 			m[defersc] = int32(siz)
 			continue
 		}
 		if m[defersc] != int32(siz) {
 			print("bad defer size class: i=", i, " siz=", siz, " defersc=", defersc, "\n")
-			gothrow("bad defer size class")
+			throw("bad defer size class")
 		}
 	}
 }
@@ -159,21 +162,32 @@ func init() {
 
 // Allocate a Defer, usually using per-P pool.
 // Each defer must be released with freedefer.
-// Note: runs on M stack
+// Note: runs on g0 stack
 func newdefer(siz int32) *_defer {
 	var d *_defer
 	sc := deferclass(uintptr(siz))
 	mp := acquirem()
 	if sc < uintptr(len(p{}.deferpool)) {
-		pp := mp.p
-		d = pp.deferpool[sc]
-		if d != nil {
-			pp.deferpool[sc] = d.link
+		pp := mp.p.ptr()
+		if len(pp.deferpool[sc]) == 0 && sched.deferpool[sc] != nil {
+			lock(&sched.deferlock)
+			for len(pp.deferpool[sc]) < cap(pp.deferpool[sc])/2 && sched.deferpool[sc] != nil {
+				d := sched.deferpool[sc]
+				sched.deferpool[sc] = d.link
+				d.link = nil
+				pp.deferpool[sc] = append(pp.deferpool[sc], d)
+			}
+			unlock(&sched.deferlock)
+		}
+		if n := len(pp.deferpool[sc]); n > 0 {
+			d = pp.deferpool[sc][n-1]
+			pp.deferpool[sc][n-1] = nil
+			pp.deferpool[sc] = pp.deferpool[sc][:n-1]
 		}
 	}
 	if d == nil {
 		// Allocate new defer+args.
-		total := goroundupsize(totaldefersize(uintptr(siz)))
+		total := roundupsize(totaldefersize(uintptr(siz)))
 		d = (*_defer)(mallocgc(total, deferType, 0))
 	}
 	d.siz = siz
@@ -186,17 +200,53 @@ func newdefer(siz int32) *_defer {
 
 // Free the given defer.
 // The defer cannot be used after this call.
-//go:nosplit
 func freedefer(d *_defer) {
+	if d._panic != nil {
+		freedeferpanic()
+	}
+	if d.fn != nil {
+		freedeferfn()
+	}
 	sc := deferclass(uintptr(d.siz))
 	if sc < uintptr(len(p{}.deferpool)) {
 		mp := acquirem()
-		pp := mp.p
+		pp := mp.p.ptr()
+		if len(pp.deferpool[sc]) == cap(pp.deferpool[sc]) {
+			// Transfer half of local cache to the central cache.
+			var first, last *_defer
+			for len(pp.deferpool[sc]) > cap(pp.deferpool[sc])/2 {
+				n := len(pp.deferpool[sc])
+				d := pp.deferpool[sc][n-1]
+				pp.deferpool[sc][n-1] = nil
+				pp.deferpool[sc] = pp.deferpool[sc][:n-1]
+				if first == nil {
+					first = d
+				} else {
+					last.link = d
+				}
+				last = d
+			}
+			lock(&sched.deferlock)
+			last.link = sched.deferpool[sc]
+			sched.deferpool[sc] = first
+			unlock(&sched.deferlock)
+		}
 		*d = _defer{}
-		d.link = pp.deferpool[sc]
-		pp.deferpool[sc] = d
+		pp.deferpool[sc] = append(pp.deferpool[sc], d)
 		releasem(mp)
 	}
+}
+
+// Separate function so that it can split stack.
+// Windows otherwise runs out of stack space.
+func freedeferpanic() {
+	// _panic must be cleared before d is unlinked from gp.
+	throw("freedefer with d._panic != nil")
+}
+
+func freedeferfn() {
+	// fn must be cleared before d is unlinked from gp.
+	throw("freedefer with d.fn != nil")
 }
 
 // Run a deferred function if there is one.
@@ -219,8 +269,8 @@ func deferreturn(arg0 uintptr) {
 	if d == nil {
 		return
 	}
-	argp := uintptr(unsafe.Pointer(&arg0))
-	if d.argp != argp {
+	sp := getcallersp(unsafe.Pointer(&arg0))
+	if d.sp != sp {
 		return
 	}
 
@@ -229,12 +279,16 @@ func deferreturn(arg0 uintptr) {
 	// won't know the form of the arguments until the jmpdefer can
 	// flip the PC over to fn.
 	mp := acquirem()
-	memmove(unsafe.Pointer(argp), deferArgs(d), uintptr(d.siz))
+	memmove(unsafe.Pointer(&arg0), deferArgs(d), uintptr(d.siz))
 	fn := d.fn
+	d.fn = nil
 	gp._defer = d.link
-	freedefer(d)
+	// Switch to systemstack merely to save nosplit stack space.
+	systemstack(func() {
+		freedefer(d)
+	})
 	releasem(mp)
-	jmpdefer(fn, argp)
+	jmpdefer(fn, uintptr(unsafe.Pointer(&arg0)))
 }
 
 // Goexit terminates the goroutine that calls it.  No other goroutine is affected.
@@ -258,24 +312,26 @@ func Goexit() {
 		if d.started {
 			if d._panic != nil {
 				d._panic.aborted = true
+				d._panic = nil
 			}
+			d.fn = nil
 			gp._defer = d.link
 			freedefer(d)
 			continue
 		}
 		d.started = true
-		reflectcall(unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
+		reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
 		if gp._defer != d {
-			gothrow("bad defer entry in Goexit")
+			throw("bad defer entry in Goexit")
 		}
+		d._panic = nil
+		d.fn = nil
 		gp._defer = d.link
 		freedefer(d)
 		// Note: we ignore recovers here because Goexit isn't a panic
 	}
-	goexit()
+	goexit1()
 }
-
-func canpanic(*g) bool
 
 // Print all currently active panics.  Used when crashing.
 func printpanics(p *_panic) {
@@ -295,7 +351,10 @@ func printpanics(p *_panic) {
 func gopanic(e interface{}) {
 	gp := getg()
 	if gp.m.curg != gp {
-		gothrow("panic on m stack")
+		print("panic: ")
+		printany(e)
+		print("\n")
+		throw("panic on system stack")
 	}
 
 	// m.softfloat is set during software floating point.
@@ -305,25 +364,28 @@ func gopanic(e interface{}) {
 	if gp.m.softfloat != 0 {
 		gp.m.locks--
 		gp.m.softfloat = 0
-		gothrow("panic during softfloat")
+		throw("panic during softfloat")
 	}
 	if gp.m.mallocing != 0 {
 		print("panic: ")
 		printany(e)
 		print("\n")
-		gothrow("panic during malloc")
+		throw("panic during malloc")
 	}
-	if gp.m.gcing != 0 {
+	if gp.m.preemptoff != "" {
 		print("panic: ")
 		printany(e)
 		print("\n")
-		gothrow("panic during gc")
+		print("preempt off reason: ")
+		print(gp.m.preemptoff)
+		print("\n")
+		throw("panic during preemptoff")
 	}
 	if gp.m.locks != 0 {
 		print("panic: ")
 		printany(e)
 		print("\n")
-		gothrow("panic holding locks")
+		throw("panic holding locks")
 	}
 
 	var p _panic
@@ -343,6 +405,8 @@ func gopanic(e interface{}) {
 			if d._panic != nil {
 				d._panic.aborted = true
 			}
+			d._panic = nil
+			d.fn = nil
 			gp._defer = d.link
 			freedefer(d)
 			continue
@@ -350,29 +414,31 @@ func gopanic(e interface{}) {
 
 		// Mark defer as started, but keep on list, so that traceback
 		// can find and update the defer's argument frame if stack growth
-		// or a garbage collection hapens before reflectcall starts executing d.fn.
+		// or a garbage collection happens before reflectcall starts executing d.fn.
 		d.started = true
 
 		// Record the panic that is running the defer.
 		// If there is a new panic during the deferred call, that panic
 		// will find d in the list and will mark d._panic (this panic) aborted.
-		d._panic = (*_panic)(noescape((unsafe.Pointer)(&p)))
+		d._panic = (*_panic)(noescape(unsafe.Pointer(&p)))
 
 		p.argp = unsafe.Pointer(getargp(0))
-		reflectcall(unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
+		reflectcall(nil, unsafe.Pointer(d.fn), deferArgs(d), uint32(d.siz), uint32(d.siz))
 		p.argp = nil
 
 		// reflectcall did not panic. Remove d.
 		if gp._defer != d {
-			gothrow("bad defer entry in panic")
+			throw("bad defer entry in panic")
 		}
+		d._panic = nil
+		d.fn = nil
 		gp._defer = d.link
 
 		// trigger shrinkage to test stack copy.  See stack_test.go:TestStackPanic
 		//GC()
 
 		pc := d.pc
-		argp := unsafe.Pointer(d.argp) // must be pointer so it gets adjusted during stack copy
+		sp := unsafe.Pointer(d.sp) // must be pointer so it gets adjusted during stack copy
 		freedefer(d)
 		if p.recovered {
 			gp._panic = p.link
@@ -385,10 +451,10 @@ func gopanic(e interface{}) {
 				gp.sig = 0
 			}
 			// Pass information about recovering frame to recovery.
-			gp.sigcode0 = uintptr(argp)
+			gp.sigcode0 = uintptr(sp)
 			gp.sigcode1 = pc
-			mcall(recovery_m)
-			gothrow("recovery failed") // mcall should not return
+			mcall(recovery)
+			throw("recovery failed") // mcall should not return
 		}
 	}
 
@@ -439,40 +505,169 @@ func gorecover(argp uintptr) interface{} {
 
 //go:nosplit
 func startpanic() {
-	onM_signalok(startpanic_m)
+	systemstack(startpanic_m)
 }
 
 //go:nosplit
 func dopanic(unused int) {
+	pc := getcallerpc(unsafe.Pointer(&unused))
+	sp := getcallersp(unsafe.Pointer(&unused))
 	gp := getg()
-	mp := acquirem()
-	mp.ptrarg[0] = unsafe.Pointer(gp)
-	mp.scalararg[0] = getcallerpc((unsafe.Pointer)(&unused))
-	mp.scalararg[1] = getcallersp((unsafe.Pointer)(&unused))
-	onM_signalok(dopanic_m) // should never return
+	systemstack(func() {
+		dopanic_m(gp, pc, sp) // should never return
+	})
 	*(*int)(nil) = 0
 }
 
 //go:nosplit
-func throw(s *byte) {
+func throw(s string) {
+	print("fatal error: ", s, "\n")
 	gp := getg()
 	if gp.m.throwing == 0 {
 		gp.m.throwing = 1
 	}
 	startpanic()
-	print("fatal error: ", gostringnocopy(s), "\n")
 	dopanic(0)
 	*(*int)(nil) = 0 // not reached
 }
 
-//go:nosplit
-func gothrow(s string) {
-	gp := getg()
-	if gp.m.throwing == 0 {
-		gp.m.throwing = 1
+//uint32 runtime·panicking;
+var paniclk mutex
+
+// Unwind the stack after a deferred function calls recover
+// after a panic.  Then arrange to continue running as though
+// the caller of the deferred function returned normally.
+func recovery(gp *g) {
+	// Info about defer passed in G struct.
+	sp := gp.sigcode0
+	pc := gp.sigcode1
+
+	// d's arguments need to be in the stack.
+	if sp != 0 && (sp < gp.stack.lo || gp.stack.hi < sp) {
+		print("recover: ", hex(sp), " not in [", hex(gp.stack.lo), ", ", hex(gp.stack.hi), "]\n")
+		throw("bad recovery")
 	}
-	startpanic()
-	print("fatal error: ", s, "\n")
-	dopanic(0)
-	*(*int)(nil) = 0 // not reached
+
+	// Make the deferproc for this d return again,
+	// this time returning 1.  The calling function will
+	// jump to the standard return epilogue.
+	gcUnwindBarriers(gp, sp)
+	gp.sched.sp = sp
+	gp.sched.pc = pc
+	gp.sched.lr = 0
+	gp.sched.ret = 1
+	gogo(&gp.sched)
+}
+
+func startpanic_m() {
+	_g_ := getg()
+	if mheap_.cachealloc.size == 0 { // very early
+		print("runtime: panic before malloc heap initialized\n")
+		_g_.m.mallocing = 1 // tell rest of panic not to try to malloc
+	} else if _g_.m.mcache == nil { // can happen if called from signal handler or throw
+		_g_.m.mcache = allocmcache()
+	}
+
+	switch _g_.m.dying {
+	case 0:
+		_g_.m.dying = 1
+		_g_.writebuf = nil
+		atomic.Xadd(&panicking, 1)
+		lock(&paniclk)
+		if debug.schedtrace > 0 || debug.scheddetail > 0 {
+			schedtrace(true)
+		}
+		freezetheworld()
+		return
+	case 1:
+		// Something failed while panicing, probably the print of the
+		// argument to panic().  Just print a stack trace and exit.
+		_g_.m.dying = 2
+		print("panic during panic\n")
+		dopanic(0)
+		exit(3)
+		fallthrough
+	case 2:
+		// This is a genuine bug in the runtime, we couldn't even
+		// print the stack trace successfully.
+		_g_.m.dying = 3
+		print("stack trace unavailable\n")
+		exit(4)
+		fallthrough
+	default:
+		// Can't even print!  Just exit.
+		exit(5)
+	}
+}
+
+var didothers bool
+var deadlock mutex
+
+func dopanic_m(gp *g, pc, sp uintptr) {
+	if gp.sig != 0 {
+		print("[signal ", hex(gp.sig), " code=", hex(gp.sigcode0), " addr=", hex(gp.sigcode1), " pc=", hex(gp.sigpc), "]\n")
+	}
+
+	level, all, docrash := gotraceback()
+	_g_ := getg()
+	if level > 0 {
+		if gp != gp.m.curg {
+			all = true
+		}
+		if gp != gp.m.g0 {
+			print("\n")
+			goroutineheader(gp)
+			traceback(pc, sp, 0, gp)
+		} else if level >= 2 || _g_.m.throwing > 0 {
+			print("\nruntime stack:\n")
+			traceback(pc, sp, 0, gp)
+		}
+		if !didothers && all {
+			didothers = true
+			tracebackothers(gp)
+		}
+	}
+	unlock(&paniclk)
+
+	if atomic.Xadd(&panicking, -1) != 0 {
+		// Some other m is panicking too.
+		// Let it print what it needs to print.
+		// Wait forever without chewing up cpu.
+		// It will exit when it's done.
+		lock(&deadlock)
+		lock(&deadlock)
+	}
+
+	if docrash {
+		crash()
+	}
+
+	exit(2)
+}
+
+//go:nosplit
+func canpanic(gp *g) bool {
+	// Note that g is m->gsignal, different from gp.
+	// Note also that g->m can change at preemption, so m can go stale
+	// if this function ever makes a function call.
+	_g_ := getg()
+	_m_ := _g_.m
+
+	// Is it okay for gp to panic instead of crashing the program?
+	// Yes, as long as it is running Go code, not runtime code,
+	// and not stuck in a system call.
+	if gp == nil || gp != _m_.curg {
+		return false
+	}
+	if _m_.locks-_m_.softfloat != 0 || _m_.mallocing != 0 || _m_.throwing != 0 || _m_.preemptoff != "" || _m_.dying != 0 {
+		return false
+	}
+	status := readgstatus(gp)
+	if status&^_Gscan != _Grunning || gp.syscallsp != 0 {
+		return false
+	}
+	if GOOS == "windows" && _m_.libcallsp != 0 {
+		return false
+	}
+	return true
 }

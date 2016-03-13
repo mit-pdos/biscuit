@@ -21,37 +21,40 @@ List lists the packages named by the import paths, one per line.
 
 The default output shows the package import path:
 
-    code.google.com/p/google-api-go-client/books/v1
-    code.google.com/p/goauth2/oauth
-    code.google.com/p/sqlite
+    bytes
+    encoding/json
+    github.com/gorilla/mux
+    golang.org/x/net/html
 
 The -f flag specifies an alternate format for the list, using the
 syntax of package template.  The default output is equivalent to -f
 '{{.ImportPath}}'. The struct being passed to the template is:
 
     type Package struct {
-        Dir        string // directory containing package sources
-        ImportPath string // import path of package in dir
-        Name       string // package name
-        Doc        string // package documentation string
-        Target     string // install path
-        Goroot     bool   // is this package in the Go root?
-        Standard   bool   // is this package part of the standard Go library?
-        Stale      bool   // would 'go install' do anything for this package?
-        Root       string // Go root or Go path dir containing this package
+        Dir           string // directory containing package sources
+        ImportPath    string // import path of package in dir
+        ImportComment string // path in import comment on package statement
+        Name          string // package name
+        Doc           string // package documentation string
+        Target        string // install path
+        Shlib         string // the shared library that contains this package (only set when -linkshared)
+        Goroot        bool   // is this package in the Go root?
+        Standard      bool   // is this package part of the standard Go library?
+        Stale         bool   // would 'go install' do anything for this package?
+        Root          string // Go root or Go path dir containing this package
 
         // Source files
-        GoFiles  []string       // .go source files (excluding CgoFiles, TestGoFiles, XTestGoFiles)
-        CgoFiles []string       // .go sources files that import "C"
+        GoFiles        []string // .go source files (excluding CgoFiles, TestGoFiles, XTestGoFiles)
+        CgoFiles       []string // .go sources files that import "C"
         IgnoredGoFiles []string // .go sources ignored due to build constraints
-        CFiles   []string       // .c source files
-        CXXFiles []string       // .cc, .cxx and .cpp source files
-        MFiles   []string       // .m source files
-        HFiles   []string       // .h, .hh, .hpp and .hxx source files
-        SFiles   []string       // .s source files
-        SwigFiles []string      // .swig files
-        SwigCXXFiles []string   // .swigcxx files
-        SysoFiles []string      // .syso object files to add to archive
+        CFiles         []string // .c source files
+        CXXFiles       []string // .cc, .cxx and .cpp source files
+        MFiles         []string // .m source files
+        HFiles         []string // .h, .hh, .hpp and .hxx source files
+        SFiles         []string // .s source files
+        SwigFiles      []string // .swig files
+        SwigCXXFiles   []string // .swigcxx files
+        SysoFiles      []string // .syso object files to add to archive
 
         // Cgo directives
         CgoCFLAGS    []string // cgo: flags for C compiler
@@ -73,6 +76,14 @@ syntax of package template.  The default output is equivalent to -f
         TestImports  []string // imports from TestGoFiles
         XTestGoFiles []string // _test.go files outside package
         XTestImports []string // imports from XTestGoFiles
+    }
+
+The error information, if any, is
+
+    type PackageError struct {
+        ImportStack   []string // shortest path from package named on command line to this one
+        Pos           string   // position of error (if present, file:line:col)
+        Err           string   // the error itself
     }
 
 The template function "join" calls strings.Join.
@@ -125,6 +136,7 @@ var listJson = cmdList.Flag.Bool("json", false, "")
 var nl = []byte{'\n'}
 
 func runList(cmd *Command, args []string) {
+	buildModeInit()
 	out := newTrackingWriter(os.Stdout)
 	defer out.w.Flush()
 
@@ -172,6 +184,10 @@ func runList(cmd *Command, args []string) {
 	}
 
 	for _, pkg := range load(args) {
+		// Show vendor-expanded paths in listing
+		pkg.TestImports = pkg.vendored(pkg.TestImports)
+		pkg.XTestImports = pkg.vendored(pkg.XTestImports)
+
 		do(pkg)
 	}
 }

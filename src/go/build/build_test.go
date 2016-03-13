@@ -5,6 +5,7 @@
 package build
 
 import (
+	"internal/testenv"
 	"io"
 	"os"
 	"path/filepath"
@@ -85,7 +86,37 @@ func TestEmptyImport(t *testing.T) {
 	}
 }
 
+func TestEmptyFolderImport(t *testing.T) {
+	_, err := Import(".", "testdata/empty", 0)
+	if _, ok := err.(*NoGoError); !ok {
+		t.Fatal(`Import("testdata/empty") did not return NoGoError.`)
+	}
+}
+
+func TestMultiplePackageImport(t *testing.T) {
+	_, err := Import(".", "testdata/multi", 0)
+	mpe, ok := err.(*MultiplePackageError)
+	if !ok {
+		t.Fatal(`Import("testdata/multi") did not return MultiplePackageError.`)
+	}
+	want := &MultiplePackageError{
+		Dir:      filepath.FromSlash("testdata/multi"),
+		Packages: []string{"main", "test_package"},
+		Files:    []string{"file.go", "file_appengine.go"},
+	}
+	if !reflect.DeepEqual(mpe, want) {
+		t.Errorf("got %#v; want %#v", mpe, want)
+	}
+}
+
 func TestLocalDirectory(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		switch runtime.GOARCH {
+		case "arm", "arm64":
+			t.Skipf("skipping on %s/%s, no valid GOROOT", runtime.GOOS, runtime.GOARCH)
+		}
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +204,11 @@ var matchFileTests = []struct {
 	{ctxtAndroid, "foo_linux.go", "", true},
 	{ctxtAndroid, "foo_android.go", "", true},
 	{ctxtAndroid, "foo_plan9.go", "", false},
+	{ctxtAndroid, "android.go", "", true},
+	{ctxtAndroid, "plan9.go", "", true},
+	{ctxtAndroid, "plan9_test.go", "", true},
+	{ctxtAndroid, "arm.s", "", true},
+	{ctxtAndroid, "amd64.s", "", true},
 }
 
 func TestMatchFile(t *testing.T) {
@@ -195,11 +231,118 @@ func TestMatchFile(t *testing.T) {
 }
 
 func TestImportCmd(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		switch runtime.GOARCH {
+		case "arm", "arm64":
+			t.Skipf("skipping on %s/%s, no valid GOROOT", runtime.GOOS, runtime.GOARCH)
+		}
+	}
+
 	p, err := Import("cmd/internal/objfile", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(filepath.ToSlash(p.Dir), "src/cmd/internal/objfile") {
 		t.Fatalf("Import cmd/internal/objfile returned Dir=%q, want %q", filepath.ToSlash(p.Dir), ".../src/cmd/internal/objfile")
+	}
+}
+
+var (
+	expandSrcDirPath = filepath.Join(string(filepath.Separator)+"projects", "src", "add")
+)
+
+var expandSrcDirTests = []struct {
+	input, expected string
+}{
+	{"-L ${SRCDIR}/libs -ladd", "-L /projects/src/add/libs -ladd"},
+	{"${SRCDIR}/add_linux_386.a -pthread -lstdc++", "/projects/src/add/add_linux_386.a -pthread -lstdc++"},
+	{"Nothing to expand here!", "Nothing to expand here!"},
+	{"$", "$"},
+	{"$$", "$$"},
+	{"${", "${"},
+	{"$}", "$}"},
+	{"$FOO ${BAR}", "$FOO ${BAR}"},
+	{"Find me the $SRCDIRECTORY.", "Find me the $SRCDIRECTORY."},
+	{"$SRCDIR is missing braces", "$SRCDIR is missing braces"},
+}
+
+func TestExpandSrcDir(t *testing.T) {
+	for _, test := range expandSrcDirTests {
+		output, _ := expandSrcDir(test.input, expandSrcDirPath)
+		if output != test.expected {
+			t.Errorf("%q expands to %q with SRCDIR=%q when %q is expected", test.input, output, expandSrcDirPath, test.expected)
+		} else {
+			t.Logf("%q expands to %q with SRCDIR=%q", test.input, output, expandSrcDirPath)
+		}
+	}
+}
+
+func TestShellSafety(t *testing.T) {
+	tests := []struct {
+		input, srcdir, expected string
+		result                  bool
+	}{
+		{"-I${SRCDIR}/../include", "/projects/src/issue 11868", "-I/projects/src/issue 11868/../include", true},
+		{"-X${SRCDIR}/1,${SRCDIR}/2", "/projects/src/issue 11868", "-X/projects/src/issue 11868/1,/projects/src/issue 11868/2", true},
+		{"-I/tmp -I/tmp", "/tmp2", "-I/tmp -I/tmp", false},
+		{"-I/tmp", "/tmp/[0]", "-I/tmp", true},
+		{"-I${SRCDIR}/dir", "/tmp/[0]", "-I/tmp/[0]/dir", false},
+	}
+	for _, test := range tests {
+		output, ok := expandSrcDir(test.input, test.srcdir)
+		if ok != test.result {
+			t.Errorf("Expected %t while %q expands to %q with SRCDIR=%q; got %t", test.result, test.input, output, test.srcdir, ok)
+		}
+		if output != test.expected {
+			t.Errorf("Expected %q while %q expands with SRCDIR=%q; got %q", test.expected, test.input, test.srcdir, output)
+		}
+	}
+}
+
+func TestImportVendor(t *testing.T) {
+	t.Skip("skipping; hpack has moved to internal for now; golang.org/issue/14047")
+	testenv.MustHaveGoBuild(t) // really must just have source
+	ctxt := Default
+	ctxt.GOPATH = ""
+	p, err := ctxt.Import("golang.org/x/net/http2/hpack", filepath.Join(ctxt.GOROOT, "src/net/http"), 0)
+	if err != nil {
+		t.Fatalf("cannot find vendored golang.org/x/net/http2/hpack from net/http directory: %v", err)
+	}
+	want := "vendor/golang.org/x/net/http2/hpack"
+	if p.ImportPath != want {
+		t.Fatalf("Import succeeded but found %q, want %q", p.ImportPath, want)
+	}
+}
+
+func TestImportVendorFailure(t *testing.T) {
+	testenv.MustHaveGoBuild(t) // really must just have source
+	ctxt := Default
+	ctxt.GOPATH = ""
+	p, err := ctxt.Import("x.com/y/z", filepath.Join(ctxt.GOROOT, "src/net/http"), 0)
+	if err == nil {
+		t.Fatalf("found made-up package x.com/y/z in %s", p.Dir)
+	}
+
+	e := err.Error()
+	if !strings.Contains(e, " (vendor tree)") {
+		t.Fatalf("error on failed import does not mention GOROOT/src/vendor directory:\n%s", e)
+	}
+}
+
+func TestImportVendorParentFailure(t *testing.T) {
+	testenv.MustHaveGoBuild(t) // really must just have source
+	ctxt := Default
+	ctxt.GOPATH = ""
+	// This import should fail because the vendor/golang.org/x/net/http2 directory has no source code.
+	p, err := ctxt.Import("golang.org/x/net/http2", filepath.Join(ctxt.GOROOT, "src/net/http"), 0)
+	if err == nil {
+		t.Fatalf("found empty parent in %s", p.Dir)
+	}
+	if p != nil && p.Dir != "" {
+		t.Fatalf("decided to use %s", p.Dir)
+	}
+	e := err.Error()
+	if !strings.Contains(e, " (vendor tree)") {
+		t.Fatalf("error on failed import does not mention GOROOT/src/vendor directory:\n%s", e)
 	}
 }

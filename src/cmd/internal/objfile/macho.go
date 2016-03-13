@@ -13,6 +13,8 @@ import (
 	"sort"
 )
 
+const stabTypeMask = 0xe0
+
 type machoFile struct {
 	macho *macho.File
 }
@@ -34,12 +36,19 @@ func (f *machoFile) symbols() ([]Sym, error) {
 	// We infer the size of a symbol by looking at where the next symbol begins.
 	var addrs []uint64
 	for _, s := range f.macho.Symtab.Syms {
-		addrs = append(addrs, s.Value)
+		// Skip stab debug info.
+		if s.Type&stabTypeMask == 0 {
+			addrs = append(addrs, s.Value)
+		}
 	}
 	sort.Sort(uint64s(addrs))
 
 	var syms []Sym
 	for _, s := range f.macho.Symtab.Syms {
+		if s.Type&stabTypeMask != 0 {
+			// Skip stab debug info.
+			continue
+		}
 		sym := Sym{Name: s.Name, Addr: s.Value, Code: '?'}
 		i := sort.Search(len(addrs), func(x int) bool { return addrs[x] > s.Value })
 		if i < len(addrs) {
@@ -83,6 +92,30 @@ func (f *machoFile) pcln() (textStart uint64, symtab, pclntab []byte, err error)
 		}
 	}
 	return textStart, symtab, pclntab, nil
+}
+
+func (f *machoFile) text() (textStart uint64, text []byte, err error) {
+	sect := f.macho.Section("__text")
+	if sect == nil {
+		return 0, nil, fmt.Errorf("text section not found")
+	}
+	textStart = sect.Addr
+	text, err = sect.Data()
+	return
+}
+
+func (f *machoFile) goarch() string {
+	switch f.macho.Cpu {
+	case macho.Cpu386:
+		return "386"
+	case macho.CpuAmd64:
+		return "amd64"
+	case macho.CpuArm:
+		return "arm"
+	case macho.CpuPpc64:
+		return "ppc64"
+	}
+	return ""
 }
 
 type uint64s []uint64

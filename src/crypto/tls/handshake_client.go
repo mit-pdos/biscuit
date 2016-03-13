@@ -49,12 +49,20 @@ func (c *Conn) clientHandshake() error {
 		return errors.New("tls: NextProtos values too large")
 	}
 
+	sni := c.config.ServerName
+	// IP address literals are not permitted as SNI values. See
+	// https://tools.ietf.org/html/rfc6066#section-3.
+	if net.ParseIP(sni) != nil {
+		sni = ""
+	}
+
 	hello := &clientHelloMsg{
 		vers:                c.config.maxVersion(),
 		compressionMethods:  []uint8{compressionNone},
 		random:              make([]byte, 32),
 		ocspStapling:        true,
-		serverName:          c.config.ServerName,
+		scts:                true,
+		serverName:          sni,
 		supportedCurves:     c.config.curvePreferences(),
 		supportedPoints:     []uint8{pointFormatUncompressed},
 		nextProtoNeg:        len(c.config.NextProtos) > 0,
@@ -88,7 +96,7 @@ NextCipherSuite:
 	}
 
 	if hello.vers >= VersionTLS12 {
-		hello.signatureAndHashes = supportedSKXSignatureAlgorithms
+		hello.signatureAndHashes = supportedSignatureAlgorithms
 	}
 
 	var session *ClientSessionState
@@ -157,10 +165,10 @@ NextCipherSuite:
 	c.vers = vers
 	c.haveVers = true
 
-	suite := mutualCipherSuite(c.config.cipherSuites(), serverHello.cipherSuite)
+	suite := mutualCipherSuite(hello.cipherSuites, serverHello.cipherSuite)
 	if suite == nil {
 		c.sendAlert(alertHandshakeFailure)
-		return fmt.Errorf("tls: server selected an unsupported cipher suite")
+		return errors.New("tls: server chose an unconfigured cipher suite")
 	}
 
 	hs := &clientHandshakeState{
@@ -168,17 +176,25 @@ NextCipherSuite:
 		serverHello:  serverHello,
 		hello:        hello,
 		suite:        suite,
-		finishedHash: newFinishedHash(c.vers),
+		finishedHash: newFinishedHash(c.vers, suite),
 		session:      session,
 	}
-
-	hs.finishedHash.Write(hs.hello.marshal())
-	hs.finishedHash.Write(hs.serverHello.marshal())
 
 	isResume, err := hs.processServerHello()
 	if err != nil {
 		return err
 	}
+
+	// No signatures of the handshake are needed in a resumption.
+	// Otherwise, in a full handshake, if we don't have any certificates
+	// configured then we will never send a CertificateVerify message and
+	// thus no signatures are needed in that case either.
+	if isResume || len(c.config.Certificates) == 0 {
+		hs.finishedHash.discardHandshakeBuffer()
+	}
+
+	hs.finishedHash.Write(hs.hello.marshal())
+	hs.finishedHash.Write(hs.serverHello.marshal())
 
 	if isResume {
 		if err := hs.establishKeys(); err != nil {
@@ -423,7 +439,6 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 	}
 
 	if chainToSend != nil {
-		var signed []byte
 		certVerify := &certificateVerifyMsg{
 			hasSignatureAndHash: c.vers >= VersionTLS12,
 		}
@@ -433,31 +448,42 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 			c.sendAlert(alertInternalError)
 			return fmt.Errorf("tls: client certificate private key of type %T does not implement crypto.Signer", chainToSend.PrivateKey)
 		}
+
+		var signatureType uint8
 		switch key.Public().(type) {
 		case *ecdsa.PublicKey:
-			digest, hashFunc, hashId := hs.finishedHash.hashForClientCertificate(signatureECDSA)
-			signed, err = key.Sign(c.config.rand(), digest, hashFunc)
-			certVerify.signatureAndHash.signature = signatureECDSA
-			certVerify.signatureAndHash.hash = hashId
+			signatureType = signatureECDSA
 		case *rsa.PublicKey:
-			digest, hashFunc, hashId := hs.finishedHash.hashForClientCertificate(signatureRSA)
-			signed, err = key.Sign(c.config.rand(), digest, hashFunc)
-			certVerify.signatureAndHash.signature = signatureRSA
-			certVerify.signatureAndHash.hash = hashId
+			signatureType = signatureRSA
 		default:
-			err = fmt.Errorf("tls: unknown client certificate key type: %T", key)
+			c.sendAlert(alertInternalError)
+			return fmt.Errorf("tls: failed to sign handshake with client certificate: unknown client certificate key type: %T", key)
 		}
+
+		certVerify.signatureAndHash, err = hs.finishedHash.selectClientCertSignatureAlgorithm(certReq.signatureAndHashes, signatureType)
 		if err != nil {
 			c.sendAlert(alertInternalError)
-			return errors.New("tls: failed to sign handshake with client certificate: " + err.Error())
+			return err
 		}
-		certVerify.signature = signed
+		digest, hashFunc, err := hs.finishedHash.hashForClientCertificate(certVerify.signatureAndHash, hs.masterSecret)
+		if err != nil {
+			c.sendAlert(alertInternalError)
+			return err
+		}
+		certVerify.signature, err = key.Sign(c.config.rand(), digest, hashFunc)
+		if err != nil {
+			c.sendAlert(alertInternalError)
+			return err
+		}
 
 		hs.finishedHash.Write(certVerify.marshal())
 		c.writeRecord(recordTypeHandshake, certVerify.marshal())
 	}
 
-	hs.masterSecret = masterFromPreMasterSecret(c.vers, preMasterSecret, hs.hello.random, hs.serverHello.random)
+	hs.masterSecret = masterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret, hs.hello.random, hs.serverHello.random)
+
+	hs.finishedHash.discardHandshakeBuffer()
+
 	return nil
 }
 
@@ -465,7 +491,7 @@ func (hs *clientHandshakeState) establishKeys() error {
 	c := hs.c
 
 	clientMAC, serverMAC, clientKey, serverKey, clientIV, serverIV :=
-		keysFromMasterSecret(c.vers, hs.masterSecret, hs.hello.random, hs.serverHello.random, hs.suite.macLen, hs.suite.keyLen, hs.suite.ivLen)
+		keysFromMasterSecret(c.vers, hs.suite, hs.masterSecret, hs.hello.random, hs.serverHello.random, hs.suite.macLen, hs.suite.keyLen, hs.suite.ivLen)
 	var clientCipher, serverCipher interface{}
 	var clientHash, serverHash macFunction
 	if hs.suite.cipher != nil {
@@ -522,11 +548,13 @@ func (hs *clientHandshakeState) processServerHello() (bool, error) {
 		c.clientProtocol = hs.serverHello.alpnProtocol
 		c.clientProtocolFallback = false
 	}
+	c.scts = hs.serverHello.scts
 
 	if hs.serverResumedSession() {
 		// Restore masterSecret and peerCerts from previous state
 		hs.masterSecret = hs.session.masterSecret
 		c.peerCertificates = hs.session.serverCertificates
+		c.verifiedChains = hs.session.verifiedChains
 		return true, nil
 	}
 	return false, nil
@@ -584,6 +612,7 @@ func (hs *clientHandshakeState) readSessionTicket() error {
 		cipherSuite:        hs.suite.id,
 		masterSecret:       hs.masterSecret,
 		serverCertificates: c.peerCertificates,
+		verifiedChains:     c.verifiedChains,
 	}
 
 	return nil

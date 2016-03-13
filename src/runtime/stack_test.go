@@ -60,7 +60,7 @@ func TestStackMem(t *testing.T) {
 	if consumed > estimate {
 		t.Fatalf("Stack mem: want %v, got %v", estimate, consumed)
 	}
-	// Due to broken stack memory accounting (http://golang.org/issue/7468),
+	// Due to broken stack memory accounting (https://golang.org/issue/7468),
 	// StackInuse can decrease during function execution, so we cast the values to int64.
 	inuse := int64(s1.StackInuse) - int64(s0.StackInuse)
 	t.Logf("Inuse %vMB for stack mem", inuse>>20)
@@ -111,7 +111,8 @@ func TestStackGrowth(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(20 * time.Second):
-			t.Fatal("finalizer did not run")
+			t.Error("finalizer did not run")
+			return
 		}
 	}()
 	wg.Wait()
@@ -191,7 +192,6 @@ func TestStackGrowthCallback(t *testing.T) {
 			<-done
 		})
 	}()
-
 	wg.Wait()
 }
 
@@ -309,6 +309,40 @@ func TestPanicUseStack(t *testing.T) {
 	panic(1)
 }
 
+func TestPanicFar(t *testing.T) {
+	var xtree *xtreeNode
+	pc := make([]uintptr, 10000)
+	defer func() {
+		// At this point we created a large stack and unwound
+		// it via recovery. Force a stack walk, which will
+		// check the consistency of stack barriers.
+		Callers(0, pc)
+	}()
+	defer func() {
+		recover()
+	}()
+	useStackAndCall(100, func() {
+		// Kick off the GC and make it do something nontrivial
+		// to keep stack barriers installed for a while.
+		xtree = makeTree(18)
+		// Give the GC time to install stack barriers.
+		time.Sleep(time.Millisecond)
+		panic(1)
+	})
+	_ = xtree
+}
+
+type xtreeNode struct {
+	l, r *xtreeNode
+}
+
+func makeTree(d int) *xtreeNode {
+	if d == 0 {
+		return new(xtreeNode)
+	}
+	return &xtreeNode{makeTree(d - 1), makeTree(d - 1)}
+}
+
 // use about n KB of stack and call f
 func useStackAndCall(n int, f func()) {
 	if n == 0 {
@@ -394,4 +428,22 @@ func TestStackPanic(t *testing.T) {
 	}()
 	useStack(32)
 	panic("test panic")
+}
+
+func BenchmarkStackCopy(b *testing.B) {
+	c := make(chan bool)
+	for i := 0; i < b.N; i++ {
+		go func() {
+			count(1000000)
+			c <- true
+		}()
+		<-c
+	}
+}
+
+func count(n int) int {
+	if n == 0 {
+		return 0
+	}
+	return 1 + count(n-1)
 }

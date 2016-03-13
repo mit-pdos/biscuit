@@ -36,7 +36,8 @@ var DefaultTransport RoundTripper = &Transport{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}).Dial,
-	TLSHandshakeTimeout: 10 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: 1 * time.Second,
 }
 
 // DefaultMaxIdleConnsPerHost is the default value of Transport's
@@ -45,7 +46,21 @@ const DefaultMaxIdleConnsPerHost = 2
 
 // Transport is an implementation of RoundTripper that supports HTTP,
 // HTTPS, and HTTP proxies (for either HTTP or HTTPS with CONNECT).
-// Transport can also cache connections for future re-use.
+//
+// By default, Transport caches connections for future re-use.
+// This may leave many open connections when accessing many hosts.
+// This behavior can be managed using Transport's CloseIdleConnections method
+// and the MaxIdleConnsPerHost and DisableKeepAlives fields.
+//
+// Transports should be reused instead of created as needed.
+// Transports are safe for concurrent use by multiple goroutines.
+//
+// A Transport is a low-level primitive for making HTTP and HTTPS requests.
+// For high-level functionality, such as cookies and redirects, see Client.
+//
+// Transport uses HTTP/1.1 for HTTP URLs and either HTTP/1.1 or HTTP/2
+// for HTTPS URLs, depending on whether the server supports HTTP/2.
+// See the package docs for more about HTTP/2.
 type Transport struct {
 	idleMu     sync.Mutex
 	wantIdle   bool // user has requested to close all idle conns
@@ -113,8 +128,65 @@ type Transport struct {
 	// time does not include the time to read the response body.
 	ResponseHeaderTimeout time.Duration
 
+	// ExpectContinueTimeout, if non-zero, specifies the amount of
+	// time to wait for a server's first response headers after fully
+	// writing the request headers if the request has an
+	// "Expect: 100-continue" header. Zero means no timeout.
+	// This time does not include the time to send the request header.
+	ExpectContinueTimeout time.Duration
+
+	// TLSNextProto specifies how the Transport switches to an
+	// alternate protocol (such as HTTP/2) after a TLS NPN/ALPN
+	// protocol negotiation.  If Transport dials an TLS connection
+	// with a non-empty protocol name and TLSNextProto contains a
+	// map entry for that key (such as "h2"), then the func is
+	// called with the request's authority (such as "example.com"
+	// or "example.com:1234") and the TLS connection. The function
+	// must return a RoundTripper that then handles the request.
+	// If TLSNextProto is nil, HTTP/2 support is enabled automatically.
+	TLSNextProto map[string]func(authority string, c *tls.Conn) RoundTripper
+
+	// nextProtoOnce guards initialization of TLSNextProto and
+	// h2transport (via onceSetNextProtoDefaults)
+	nextProtoOnce sync.Once
+	h2transport   *http2Transport // non-nil if http2 wired up
+
 	// TODO: tunable on global max cached connections
 	// TODO: tunable on timeout on cached connections
+	// TODO: tunable on max per-host TCP dials in flight (Issue 13957)
+}
+
+// onceSetNextProtoDefaults initializes TLSNextProto.
+// It must be called via t.nextProtoOnce.Do.
+func (t *Transport) onceSetNextProtoDefaults() {
+	if strings.Contains(os.Getenv("GODEBUG"), "http2client=0") {
+		return
+	}
+	if t.TLSNextProto != nil {
+		// This is the documented way to disable http2 on a
+		// Transport.
+		return
+	}
+	if t.TLSClientConfig != nil {
+		// Be conservative for now (for Go 1.6) at least and
+		// don't automatically enable http2 if they've
+		// specified a custom TLS config. Let them opt-in
+		// themselves via http2.ConfigureTransport so we don't
+		// surprise them by modifying their tls.Config.
+		// Issue 14275.
+		return
+	}
+	if t.ExpectContinueTimeout != 0 {
+		// Unsupported in http2, so disable http2 for now.
+		// Issue 13851.
+		return
+	}
+	t2, err := http2configureTransport(t)
+	if err != nil {
+		log.Printf("Error enabling Transport HTTP/2 support: %v", err)
+	} else {
+		t.h2transport = t2
+	}
 }
 
 // ProxyFromEnvironment returns the URL of the proxy to use for a
@@ -188,7 +260,8 @@ func (tr *transportRequest) extraHeaders() Header {
 //
 // For higher-level HTTP client support (such as handling of cookies
 // and redirects), see Get, Post, and the Client type.
-func (t *Transport) RoundTrip(req *Request) (resp *Response, err error) {
+func (t *Transport) RoundTrip(req *Request) (*Response, error) {
+	t.nextProtoOnce.Do(t.onceSetNextProtoDefaults)
 	if req.URL == nil {
 		req.closeBody()
 		return nil, errors.New("http: nil Request.URL")
@@ -197,43 +270,102 @@ func (t *Transport) RoundTrip(req *Request) (resp *Response, err error) {
 		req.closeBody()
 		return nil, errors.New("http: nil Request.Header")
 	}
-	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-		t.altMu.RLock()
-		var rt RoundTripper
-		if t.altProto != nil {
-			rt = t.altProto[req.URL.Scheme]
+	// TODO(bradfitz): switch to atomic.Value for this map instead of RWMutex
+	t.altMu.RLock()
+	altRT := t.altProto[req.URL.Scheme]
+	t.altMu.RUnlock()
+	if altRT != nil {
+		if resp, err := altRT.RoundTrip(req); err != ErrSkipAltProtocol {
+			return resp, err
 		}
-		t.altMu.RUnlock()
-		if rt == nil {
-			req.closeBody()
-			return nil, &badStringError{"unsupported protocol scheme", req.URL.Scheme}
-		}
-		return rt.RoundTrip(req)
+	}
+	if s := req.URL.Scheme; s != "http" && s != "https" {
+		req.closeBody()
+		return nil, &badStringError{"unsupported protocol scheme", s}
+	}
+	if req.Method != "" && !validMethod(req.Method) {
+		return nil, fmt.Errorf("net/http: invalid method %q", req.Method)
 	}
 	if req.URL.Host == "" {
 		req.closeBody()
 		return nil, errors.New("http: no Host in request URL")
 	}
-	treq := &transportRequest{Request: req}
-	cm, err := t.connectMethodForRequest(treq)
-	if err != nil {
-		req.closeBody()
-		return nil, err
-	}
 
-	// Get the cached or newly-created connection to either the
-	// host (for http or https), the http proxy, or the http proxy
-	// pre-CONNECTed to https server.  In any case, we'll be ready
-	// to send it requests.
-	pconn, err := t.getConn(req, cm)
-	if err != nil {
-		t.setReqCanceler(req, nil)
-		req.closeBody()
-		return nil, err
-	}
+	for {
+		// treq gets modified by roundTrip, so we need to recreate for each retry.
+		treq := &transportRequest{Request: req}
+		cm, err := t.connectMethodForRequest(treq)
+		if err != nil {
+			req.closeBody()
+			return nil, err
+		}
 
-	return pconn.roundTrip(treq)
+		// Get the cached or newly-created connection to either the
+		// host (for http or https), the http proxy, or the http proxy
+		// pre-CONNECTed to https server.  In any case, we'll be ready
+		// to send it requests.
+		pconn, err := t.getConn(req, cm)
+		if err != nil {
+			t.setReqCanceler(req, nil)
+			req.closeBody()
+			return nil, err
+		}
+
+		var resp *Response
+		if pconn.alt != nil {
+			// HTTP/2 path.
+			t.setReqCanceler(req, nil) // not cancelable with CancelRequest
+			resp, err = pconn.alt.RoundTrip(req)
+		} else {
+			resp, err = pconn.roundTrip(treq)
+		}
+		if err == nil {
+			return resp, nil
+		}
+		if err := checkTransportResend(err, req, pconn); err != nil {
+			return nil, err
+		}
+		testHookRoundTripRetried()
+	}
 }
+
+// checkTransportResend checks whether a failed HTTP request can be
+// resent on a new connection. The non-nil input error is the error from
+// roundTrip, which might be wrapped in a beforeRespHeaderError error.
+//
+// The return value is err or the unwrapped error inside a
+// beforeRespHeaderError.
+func checkTransportResend(err error, req *Request, pconn *persistConn) error {
+	brhErr, ok := err.(beforeRespHeaderError)
+	if !ok {
+		return err
+	}
+	err = brhErr.error // unwrap the custom error in case we return it
+	if err != errMissingHost && pconn.isReused() && req.isReplayable() {
+		// If we try to reuse a connection that the server is in the process of
+		// closing, we may end up successfully writing out our request (or a
+		// portion of our request) only to find a connection error when we try to
+		// read from (or finish writing to) the socket.
+
+		// There can be a race between the socket pool checking whether a socket
+		// is still connected, receiving the FIN, and sending/reading data on a
+		// reused socket. If we receive the FIN between the connectedness check
+		// and writing/reading from the socket, we may first learn the socket is
+		// disconnected when we get a ERR_SOCKET_NOT_CONNECTED. This will most
+		// likely happen when trying to retrieve its IP address. See
+		// http://crbug.com/105824 for more details.
+
+		// We resend a request only if we reused a keep-alive connection and did
+		// not yet receive any header data. This automatically prevents an
+		// infinite resend loop because we'll run out of the cached keep-alive
+		// connections eventually.
+		return nil
+	}
+	return err
+}
+
+// ErrSkipAltProtocol is a sentinel error value defined by Transport.RegisterProtocol.
+var ErrSkipAltProtocol = errors.New("net/http: skip alternate protocol")
 
 // RegisterProtocol registers a new protocol with scheme.
 // The Transport will pass requests using the given scheme to rt.
@@ -241,10 +373,11 @@ func (t *Transport) RoundTrip(req *Request) (resp *Response, err error) {
 //
 // RegisterProtocol can be used by other packages to provide
 // implementations of protocol schemes like "ftp" or "file".
+//
+// If rt.RoundTrip returns ErrSkipAltProtocol, the Transport will
+// handle the RoundTrip itself for that one request, as if the
+// protocol were not registered.
 func (t *Transport) RegisterProtocol(scheme string, rt RoundTripper) {
-	if scheme == "http" || scheme == "https" {
-		panic("protocol " + scheme + " already registered")
-	}
 	t.altMu.Lock()
 	defer t.altMu.Unlock()
 	if t.altProto == nil {
@@ -261,6 +394,7 @@ func (t *Transport) RegisterProtocol(scheme string, rt RoundTripper) {
 // a "keep-alive" state. It does not interrupt any connections currently
 // in use.
 func (t *Transport) CloseIdleConnections() {
+	t.nextProtoOnce.Do(t.onceSetNextProtoDefaults)
 	t.idleMu.Lock()
 	m := t.idleConn
 	t.idleConn = nil
@@ -269,16 +403,23 @@ func (t *Transport) CloseIdleConnections() {
 	t.idleMu.Unlock()
 	for _, conns := range m {
 		for _, pconn := range conns {
-			pconn.close()
+			pconn.close(errCloseIdleConns)
 		}
+	}
+	if t2 := t.h2transport; t2 != nil {
+		t2.CloseIdleConnections()
 	}
 }
 
-// CancelRequest cancels an in-flight request by closing its
-// connection.
+// CancelRequest cancels an in-flight request by closing its connection.
+// CancelRequest should only be called after RoundTrip has returned.
+//
+// Deprecated: Use Request.Cancel instead. CancelRequest can not cancel
+// HTTP/2 requests.
 func (t *Transport) CancelRequest(req *Request) {
 	t.reqMu.Lock()
 	cancel := t.reqCanceler[req]
+	delete(t.reqCanceler, req)
 	t.reqMu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -353,23 +494,41 @@ func (cm *connectMethod) proxyAuth() string {
 	return ""
 }
 
-// putIdleConn adds pconn to the list of idle persistent connections awaiting
+// error values for debugging and testing, not seen by users.
+var (
+	errKeepAlivesDisabled = errors.New("http: putIdleConn: keep alives disabled")
+	errConnBroken         = errors.New("http: putIdleConn: connection is in bad state")
+	errWantIdle           = errors.New("http: putIdleConn: CloseIdleConnections was called")
+	errTooManyIdle        = errors.New("http: putIdleConn: too many idle connections")
+	errCloseIdleConns     = errors.New("http: CloseIdleConnections called")
+	errReadLoopExiting    = errors.New("http: persistConn.readLoop exiting")
+	errServerClosedIdle   = errors.New("http: server closed idle conn")
+)
+
+func (t *Transport) putOrCloseIdleConn(pconn *persistConn) {
+	if err := t.tryPutIdleConn(pconn); err != nil {
+		pconn.close(err)
+	}
+}
+
+// tryPutIdleConn adds pconn to the list of idle persistent connections awaiting
 // a new request.
-// If pconn is no longer needed or not in a good state, putIdleConn
-// returns false.
-func (t *Transport) putIdleConn(pconn *persistConn) bool {
+// If pconn is no longer needed or not in a good state, tryPutIdleConn returns
+// an error explaining why it wasn't registered.
+// tryPutIdleConn does not close pconn. Use putOrCloseIdleConn instead for that.
+func (t *Transport) tryPutIdleConn(pconn *persistConn) error {
 	if t.DisableKeepAlives || t.MaxIdleConnsPerHost < 0 {
-		pconn.close()
-		return false
+		return errKeepAlivesDisabled
 	}
 	if pconn.isBroken() {
-		return false
+		return errConnBroken
 	}
 	key := pconn.cacheKey
 	max := t.MaxIdleConnsPerHost
 	if max == 0 {
 		max = DefaultMaxIdleConnsPerHost
 	}
+	pconn.markReused()
 	t.idleMu.Lock()
 
 	waitingDialer := t.idleConnCh[key]
@@ -381,7 +540,7 @@ func (t *Transport) putIdleConn(pconn *persistConn) bool {
 		// first). Chrome calls this socket late binding.  See
 		// https://insouciant.org/tech/connection-management-in-chromium/
 		t.idleMu.Unlock()
-		return true
+		return nil
 	default:
 		if waitingDialer != nil {
 			// They had populated this, but their dial won
@@ -391,16 +550,14 @@ func (t *Transport) putIdleConn(pconn *persistConn) bool {
 	}
 	if t.wantIdle {
 		t.idleMu.Unlock()
-		pconn.close()
-		return false
+		return errWantIdle
 	}
 	if t.idleConn == nil {
 		t.idleConn = make(map[connectMethodKey][]*persistConn)
 	}
 	if len(t.idleConn[key]) >= max {
 		t.idleMu.Unlock()
-		pconn.close()
-		return false
+		return errTooManyIdle
 	}
 	for _, exist := range t.idleConn[key] {
 		if exist == pconn {
@@ -409,7 +566,7 @@ func (t *Transport) putIdleConn(pconn *persistConn) bool {
 	}
 	t.idleConn[key] = append(t.idleConn[key], pconn)
 	t.idleMu.Unlock()
-	return true
+	return nil
 }
 
 // getIdleConnCh returns a channel to receive and return idle
@@ -474,15 +631,35 @@ func (t *Transport) setReqCanceler(r *Request, fn func()) {
 	}
 }
 
-func (t *Transport) dial(network, addr string) (c net.Conn, err error) {
+// replaceReqCanceler replaces an existing cancel function. If there is no cancel function
+// for the request, we don't set the function and return false.
+// Since CancelRequest will clear the canceler, we can use the return value to detect if
+// the request was canceled since the last setReqCancel call.
+func (t *Transport) replaceReqCanceler(r *Request, fn func()) bool {
+	t.reqMu.Lock()
+	defer t.reqMu.Unlock()
+	_, ok := t.reqCanceler[r]
+	if !ok {
+		return false
+	}
+	if fn != nil {
+		t.reqCanceler[r] = fn
+	} else {
+		delete(t.reqCanceler, r)
+	}
+	return true
+}
+
+func (t *Transport) dial(network, addr string) (net.Conn, error) {
 	if t.Dial != nil {
-		return t.Dial(network, addr)
+		c, err := t.Dial(network, addr)
+		if c == nil && err == nil {
+			err = errors.New("net/http: Transport.Dial hook returned (nil, nil)")
+		}
+		return c, err
 	}
 	return net.Dial(network, addr)
 }
-
-// Testing hooks:
-var prePendingDial, postPendingDial func()
 
 // getConn dials and creates a new persistConn to the target as
 // specified in the connectMethod.  This includes doing a proxy CONNECT
@@ -490,6 +667,10 @@ var prePendingDial, postPendingDial func()
 // is ready to write requests to.
 func (t *Transport) getConn(req *Request, cm connectMethod) (*persistConn, error) {
 	if pc := t.getIdleConn(cm); pc != nil {
+		// set request canceler to some non-nil function so we
+		// can detect whether it was cleared between now and when
+		// we enter roundTrip
+		t.setReqCanceler(req, func() {})
 		return pc, nil
 	}
 
@@ -499,17 +680,18 @@ func (t *Transport) getConn(req *Request, cm connectMethod) (*persistConn, error
 	}
 	dialc := make(chan dialRes)
 
+	// Copy these hooks so we don't race on the postPendingDial in
+	// the goroutine we launch. Issue 11136.
+	testHookPrePendingDial := testHookPrePendingDial
+	testHookPostPendingDial := testHookPostPendingDial
+
 	handlePendingDial := func() {
-		if prePendingDial != nil {
-			prePendingDial()
-		}
+		testHookPrePendingDial()
 		go func() {
 			if v := <-dialc; v.err == nil {
-				t.putIdleConn(v.pc)
+				t.putOrCloseIdleConn(v.pc)
 			}
-			if postPendingDial != nil {
-				postPendingDial()
-			}
+			testHookPostPendingDial()
 		}()
 	}
 
@@ -534,9 +716,12 @@ func (t *Transport) getConn(req *Request, cm connectMethod) (*persistConn, error
 		// when it finishes:
 		handlePendingDial()
 		return pc, nil
+	case <-req.Cancel:
+		handlePendingDial()
+		return nil, errRequestCanceledConn
 	case <-cancelc:
 		handlePendingDial()
-		return nil, errors.New("net/http: request canceled while waiting for connection")
+		return nil, errRequestCanceledConn
 	}
 }
 
@@ -556,7 +741,16 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 		if err != nil {
 			return nil, err
 		}
+		if pconn.conn == nil {
+			return nil, errors.New("net/http: Transport.DialTLS returned (nil, nil)")
+		}
 		if tc, ok := pconn.conn.(*tls.Conn); ok {
+			// Handshake here, in case DialTLS didn't. TLSNextProto below
+			// depends on it for knowing the connection state.
+			if err := tc.Handshake(); err != nil {
+				go pconn.conn.Close()
+				return nil, err
+			}
 			cs := tc.ConnectionState()
 			pconn.tlsState = &cs
 		}
@@ -613,16 +807,9 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 
 	if cm.targetScheme == "https" && !tlsDial {
 		// Initiate TLS and check remote host name against certificate.
-		cfg := t.TLSClientConfig
-		if cfg == nil || cfg.ServerName == "" {
-			host := cm.tlsHost()
-			if cfg == nil {
-				cfg = &tls.Config{ServerName: host}
-			} else {
-				clone := *cfg // shallow clone
-				clone.ServerName = host
-				cfg = &clone
-			}
+		cfg := cloneTLSClientConfig(t.TLSClientConfig)
+		if cfg.ServerName == "" {
+			cfg.ServerName = cm.tlsHost()
 		}
 		plainConn := pconn.conn
 		tlsConn := tls.Client(plainConn, cfg)
@@ -655,6 +842,12 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 		pconn.conn = tlsConn
 	}
 
+	if s := pconn.tlsState; s != nil && s.NegotiatedProtocolIsMutual && s.NegotiatedProtocol != "" {
+		if next, ok := t.TLSNextProto[s.NegotiatedProtocol]; ok {
+			return &persistConn{alt: next(cm.targetAddr, pconn.conn.(*tls.Conn))}, nil
+		}
+	}
+
 	pconn.br = bufio.NewReader(noteEOFReader{pconn.conn, &pconn.sawEOF})
 	pconn.bw = bufio.NewWriter(pconn.conn)
 	go pconn.readLoop()
@@ -662,7 +855,7 @@ func (t *Transport) dialConn(cm connectMethod) (*persistConn, error) {
 	return pconn, nil
 }
 
-// useProxy returns true if requests to addr should use a proxy,
+// useProxy reports whether requests to addr should use a proxy,
 // according to the NO_PROXY or no_proxy environment variable.
 // addr is always a canonicalAddr with a host and port.
 func useProxy(addr string) bool {
@@ -784,6 +977,11 @@ func (k connectMethodKey) String() string {
 // persistConn wraps a connection, usually a persistent one
 // (but may be used for non-keep-alive requests as well)
 type persistConn struct {
+	// alt optionally specifies the TLS NextProto RoundTripper.
+	// This is used for HTTP/2 today and future protocol laters.
+	// If it's non-nil, the rest of the fields are unused.
+	alt RoundTripper
+
 	t        *Transport
 	cacheKey connectMethodKey
 	conn     net.Conn
@@ -803,8 +1001,10 @@ type persistConn struct {
 
 	lk                   sync.Mutex // guards following fields
 	numExpectedResponses int
-	closed               bool // whether conn has been closed
-	broken               bool // an error has happened on this connection; marked broken so it's not reused.
+	closed               error // set non-nil when conn is closed, before closech is closed
+	broken               bool  // an error has happened on this connection; marked broken so it's not reused.
+	canceled             bool  // whether this conn was broken due a CancelRequest
+	reused               bool  // whether conn has had successful request/response and is being reused.
 	// mutateHeaderFunc is an optional func to modify extra
 	// headers on each outbound request before it's written. (the
 	// original Request given to RoundTrip is not modified)
@@ -819,37 +1019,61 @@ func (pc *persistConn) isBroken() bool {
 	return b
 }
 
-func (pc *persistConn) cancelRequest() {
-	pc.conn.Close()
+// isCanceled reports whether this connection was closed due to CancelRequest.
+func (pc *persistConn) isCanceled() bool {
+	pc.lk.Lock()
+	defer pc.lk.Unlock()
+	return pc.canceled
 }
 
-var remoteSideClosedFunc func(error) bool // or nil to use default
+// isReused reports whether this connection is in a known broken state.
+func (pc *persistConn) isReused() bool {
+	pc.lk.Lock()
+	r := pc.reused
+	pc.lk.Unlock()
+	return r
+}
 
-func remoteSideClosed(err error) bool {
-	if err == io.EOF {
-		return true
-	}
-	if remoteSideClosedFunc != nil {
-		return remoteSideClosedFunc(err)
-	}
-	return false
+func (pc *persistConn) cancelRequest() {
+	pc.lk.Lock()
+	defer pc.lk.Unlock()
+	pc.canceled = true
+	pc.closeLocked(errRequestCanceled)
 }
 
 func (pc *persistConn) readLoop() {
-	alive := true
+	closeErr := errReadLoopExiting // default value, if not changed below
+	defer func() { pc.close(closeErr) }()
 
+	tryPutIdleConn := func() bool {
+		if err := pc.t.tryPutIdleConn(pc); err != nil {
+			closeErr = err
+			return false
+		}
+		return true
+	}
+
+	// eofc is used to block caller goroutines reading from Response.Body
+	// at EOF until this goroutines has (potentially) added the connection
+	// back to the idle pool.
+	eofc := make(chan struct{})
+	defer close(eofc) // unblock reader on errors
+
+	// Read this once, before loop starts. (to avoid races in tests)
+	testHookMu.Lock()
+	testHookReadLoopBeforeNextRead := testHookReadLoopBeforeNextRead
+	testHookMu.Unlock()
+
+	alive := true
 	for alive {
-		pb, err := pc.br.Peek(1)
+		_, err := pc.br.Peek(1)
+		if err != nil {
+			err = beforeRespHeaderError{err}
+		}
 
 		pc.lk.Lock()
 		if pc.numExpectedResponses == 0 {
-			if !pc.closed {
-				pc.closeLocked()
-				if len(pb) > 0 {
-					log.Printf("Unsolicited response received on idle HTTP channel starting with %q; err=%v",
-						string(pb), err)
-				}
-			}
+			pc.readLoopPeekFailLocked(err)
 			pc.lk.Unlock()
 			return
 		}
@@ -859,83 +1083,187 @@ func (pc *persistConn) readLoop() {
 
 		var resp *Response
 		if err == nil {
-			resp, err = ReadResponse(pc.br, rc.req)
-			if err == nil && resp.StatusCode == 100 {
-				// Skip any 100-continue for now.
-				// TODO(bradfitz): if rc.req had "Expect: 100-continue",
-				// actually block the request body write and signal the
-				// writeLoop now to begin sending it. (Issue 2184) For now we
-				// eat it, since we're never expecting one.
-				resp, err = ReadResponse(pc.br, rc.req)
-			}
+			resp, err = pc.readResponse(rc)
 		}
-
-		if resp != nil {
-			resp.TLS = pc.tlsState
-		}
-
-		hasBody := resp != nil && rc.req.Method != "HEAD" && resp.ContentLength != 0
 
 		if err != nil {
-			pc.close()
-		} else {
-			if rc.addedGzip && hasBody && resp.Header.Get("Content-Encoding") == "gzip" {
-				resp.Header.Del("Content-Encoding")
-				resp.Header.Del("Content-Length")
-				resp.ContentLength = -1
-				resp.Body = &gzipReader{body: resp.Body}
+			// If we won't be able to retry this request later (from the
+			// roundTrip goroutine), mark it as done now.
+			// BEFORE the send on rc.ch, as the client might re-use the
+			// same *Request pointer, and we don't want to set call
+			// t.setReqCanceler from this persistConn while the Transport
+			// potentially spins up a different persistConn for the
+			// caller's subsequent request.
+			if checkTransportResend(err, rc.req, pc) != nil {
+				pc.t.setReqCanceler(rc.req, nil)
 			}
-			resp.Body = &bodyEOFSignal{body: resp.Body}
+			select {
+			case rc.ch <- responseAndError{err: err}:
+			case <-rc.callerGone:
+				return
+			}
+			return
 		}
 
-		if err != nil || resp.Close || rc.req.Close || resp.StatusCode <= 199 {
+		pc.lk.Lock()
+		pc.numExpectedResponses--
+		pc.lk.Unlock()
+
+		hasBody := rc.req.Method != "HEAD" && resp.ContentLength != 0
+
+		if resp.Close || rc.req.Close || resp.StatusCode <= 199 {
 			// Don't do keep-alive on error if either party requested a close
 			// or we get an unexpected informational (1xx) response.
 			// StatusCode 100 is already handled above.
 			alive = false
 		}
 
-		var waitForBodyRead chan bool
-		if hasBody {
-			waitForBodyRead = make(chan bool, 2)
-			resp.Body.(*bodyEOFSignal).earlyCloseFn = func() error {
-				// Sending false here sets alive to
-				// false and closes the connection
-				// below.
-				waitForBodyRead <- false
-				return nil
-			}
-			resp.Body.(*bodyEOFSignal).fn = func(err error) {
-				waitForBodyRead <- alive &&
-					err == nil &&
-					!pc.sawEOF &&
-					pc.wroteRequest() &&
-					pc.t.putIdleConn(pc)
-			}
-		}
+		if !hasBody {
+			pc.t.setReqCanceler(rc.req, nil)
 
-		if alive && !hasBody {
-			alive = !pc.sawEOF &&
+			// Put the idle conn back into the pool before we send the response
+			// so if they process it quickly and make another request, they'll
+			// get this same conn. But we use the unbuffered channel 'rc'
+			// to guarantee that persistConn.roundTrip got out of its select
+			// potentially waiting for this persistConn to close.
+			// but after
+			alive = alive &&
+				!pc.sawEOF &&
 				pc.wroteRequest() &&
-				pc.t.putIdleConn(pc)
-		}
+				tryPutIdleConn()
 
-		rc.ch <- responseAndError{resp, err}
-
-		// Wait for the just-returned response body to be fully consumed
-		// before we race and peek on the underlying bufio reader.
-		if waitForBodyRead != nil {
 			select {
-			case alive = <-waitForBodyRead:
-			case <-pc.closech:
-				alive = false
+			case rc.ch <- responseAndError{res: resp}:
+			case <-rc.callerGone:
+				return
 			}
+
+			// Now that they've read from the unbuffered channel, they're safely
+			// out of the select that also waits on this goroutine to die, so
+			// we're allowed to exit now if needed (if alive is false)
+			testHookReadLoopBeforeNextRead()
+			continue
 		}
 
-		pc.t.setReqCanceler(rc.req, nil)
+		if rc.addedGzip {
+			maybeUngzipResponse(resp)
+		}
+		resp.Body = &bodyEOFSignal{body: resp.Body}
 
-		if !alive {
-			pc.close()
+		waitForBodyRead := make(chan bool, 2)
+		resp.Body.(*bodyEOFSignal).earlyCloseFn = func() error {
+			waitForBodyRead <- false
+			return nil
+		}
+		resp.Body.(*bodyEOFSignal).fn = func(err error) error {
+			isEOF := err == io.EOF
+			waitForBodyRead <- isEOF
+			if isEOF {
+				<-eofc // see comment above eofc declaration
+			} else if err != nil && pc.isCanceled() {
+				return errRequestCanceled
+			}
+			return err
+		}
+
+		select {
+		case rc.ch <- responseAndError{res: resp}:
+		case <-rc.callerGone:
+			return
+		}
+
+		// Before looping back to the top of this function and peeking on
+		// the bufio.Reader, wait for the caller goroutine to finish
+		// reading the response body. (or for cancelation or death)
+		select {
+		case bodyEOF := <-waitForBodyRead:
+			pc.t.setReqCanceler(rc.req, nil) // before pc might return to idle pool
+			alive = alive &&
+				bodyEOF &&
+				!pc.sawEOF &&
+				pc.wroteRequest() &&
+				tryPutIdleConn()
+			if bodyEOF {
+				eofc <- struct{}{}
+			}
+		case <-rc.req.Cancel:
+			alive = false
+			pc.t.CancelRequest(rc.req)
+		case <-pc.closech:
+			alive = false
+		}
+
+		testHookReadLoopBeforeNextRead()
+	}
+}
+
+func maybeUngzipResponse(resp *Response) {
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		resp.Header.Del("Content-Encoding")
+		resp.Header.Del("Content-Length")
+		resp.ContentLength = -1
+		resp.Body = &gzipReader{body: resp.Body}
+	}
+}
+
+func (pc *persistConn) readLoopPeekFailLocked(peekErr error) {
+	if pc.closed != nil {
+		return
+	}
+	if n := pc.br.Buffered(); n > 0 {
+		buf, _ := pc.br.Peek(n)
+		log.Printf("Unsolicited response received on idle HTTP channel starting with %q; err=%v", buf, peekErr)
+	}
+	if peekErr == io.EOF {
+		// common case.
+		pc.closeLocked(errServerClosedIdle)
+	} else {
+		pc.closeLocked(fmt.Errorf("readLoopPeekFailLocked: %v", peekErr))
+	}
+}
+
+// readResponse reads an HTTP response (or two, in the case of "Expect:
+// 100-continue") from the server. It returns the final non-100 one.
+func (pc *persistConn) readResponse(rc requestAndChan) (resp *Response, err error) {
+	resp, err = ReadResponse(pc.br, rc.req)
+	if err != nil {
+		return
+	}
+	if rc.continueCh != nil {
+		if resp.StatusCode == 100 {
+			rc.continueCh <- struct{}{}
+		} else {
+			close(rc.continueCh)
+		}
+	}
+	if resp.StatusCode == 100 {
+		resp, err = ReadResponse(pc.br, rc.req)
+		if err != nil {
+			return
+		}
+	}
+	resp.TLS = pc.tlsState
+	return
+}
+
+// waitForContinue returns the function to block until
+// any response, timeout or connection close. After any of them,
+// the function returns a bool which indicates if the body should be sent.
+func (pc *persistConn) waitForContinue(continueCh <-chan struct{}) func() bool {
+	if continueCh == nil {
+		return nil
+	}
+	return func() bool {
+		timer := time.NewTimer(pc.t.ExpectContinueTimeout)
+		defer timer.Stop()
+
+		select {
+		case _, ok := <-continueCh:
+			return ok
+		case <-timer.C:
+			return true
+		case <-pc.closech:
+			return false
 		}
 	}
 }
@@ -948,7 +1276,7 @@ func (pc *persistConn) writeLoop() {
 				wr.ch <- errors.New("http: can't write HTTP request on broken connection")
 				continue
 			}
-			err := wr.req.Request.write(pc.bw, pc.isProxy, wr.req.extra)
+			err := wr.req.Request.write(pc.bw, pc.isProxy, wr.req.extra, pc.waitForContinue(wr.continueCh))
 			if err == nil {
 				err = pc.bw.Flush()
 			}
@@ -992,19 +1320,29 @@ func (pc *persistConn) wroteRequest() bool {
 	}
 }
 
+// responseAndError is how the goroutine reading from an HTTP/1 server
+// communicates with the goroutine doing the RoundTrip.
 type responseAndError struct {
-	res *Response
+	res *Response // else use this response (see res method)
 	err error
 }
 
 type requestAndChan struct {
 	req *Request
-	ch  chan responseAndError
+	ch  chan responseAndError // unbuffered; always send in select on callerGone
 
 	// did the Transport (as opposed to the client code) add an
 	// Accept-Encoding gzip header? only if it we set it do
 	// we transparently decode the gzip.
 	addedGzip bool
+
+	// Optional blocking chan for Expect: 100-continue (for send).
+	// If the request has an "Expect: 100-continue" header and
+	// the server responds 100 Continue, readLoop send a value
+	// to writeLoop via this chan.
+	continueCh chan<- struct{}
+
+	callerGone <-chan struct{} // closed when roundTrip caller has returned
 }
 
 // A writeRequest is sent by the readLoop's goroutine to the
@@ -1014,6 +1352,11 @@ type requestAndChan struct {
 type writeRequest struct {
 	req *transportRequest
 	ch  chan<- error
+
+	// Optional blocking chan for Expect: 100-continue (for recieve).
+	// If not nil, writeLoop blocks sending request body until
+	// it receives from this chan.
+	continueCh <-chan struct{}
 }
 
 type httpError struct {
@@ -1026,10 +1369,36 @@ func (e *httpError) Timeout() bool   { return e.timeout }
 func (e *httpError) Temporary() bool { return true }
 
 var errTimeout error = &httpError{err: "net/http: timeout awaiting response headers", timeout: true}
-var errClosed error = &httpError{err: "net/http: transport closed before response was received"}
+var errClosed error = &httpError{err: "net/http: server closed connection before response was received"}
+var errRequestCanceled = errors.New("net/http: request canceled")
+var errRequestCanceledConn = errors.New("net/http: request canceled while waiting for connection") // TODO: unify?
+
+func nop() {}
+
+// testHooks. Always non-nil.
+var (
+	testHookEnterRoundTrip   = nop
+	testHookWaitResLoop      = nop
+	testHookRoundTripRetried = nop
+	testHookPrePendingDial   = nop
+	testHookPostPendingDial  = nop
+
+	testHookMu                     sync.Locker = fakeLocker{} // guards following
+	testHookReadLoopBeforeNextRead             = nop
+)
+
+// beforeRespHeaderError is used to indicate when an IO error has occurred before
+// any header data was received.
+type beforeRespHeaderError struct {
+	error
+}
 
 func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err error) {
-	pc.t.setReqCanceler(req.Request, pc.cancelRequest)
+	testHookEnterRoundTrip()
+	if !pc.t.replaceReqCanceler(req.Request, pc.cancelRequest) {
+		pc.t.putOrCloseIdleConn(pc)
+		return nil, errRequestCanceled
+	}
 	pc.lk.Lock()
 	pc.numExpectedResponses++
 	headerFn := pc.mutateHeaderFunc
@@ -1040,11 +1409,14 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 	}
 
 	// Ask for a compressed version if the caller didn't set their
-	// own value for Accept-Encoding. We only attempted to
+	// own value for Accept-Encoding. We only attempt to
 	// uncompress the gzip stream if we were the layer that
 	// requested it.
 	requestedGzip := false
-	if !pc.t.DisableCompression && req.Header.Get("Accept-Encoding") == "" && req.Method != "HEAD" {
+	if !pc.t.DisableCompression &&
+		req.Header.Get("Accept-Encoding") == "" &&
+		req.Header.Get("Range") == "" &&
+		req.Method != "HEAD" {
 		// Request gzip only, not deflate. Deflate is ambiguous and
 		// not as universally supported anyway.
 		// See: http://www.gzip.org/zlib/zlib_faq.html#faq38
@@ -1052,69 +1424,92 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 		// Note that we don't request this for HEAD requests,
 		// due to a bug in nginx:
 		//   http://trac.nginx.org/nginx/ticket/358
-		//   http://golang.org/issue/5522
+		//   https://golang.org/issue/5522
+		//
+		// We don't request gzip if the request is for a range, since
+		// auto-decoding a portion of a gzipped document will just fail
+		// anyway. See https://golang.org/issue/8923
 		requestedGzip = true
 		req.extraHeaders().Set("Accept-Encoding", "gzip")
 	}
+
+	var continueCh chan struct{}
+	if req.ProtoAtLeast(1, 1) && req.Body != nil && req.expectsContinue() {
+		continueCh = make(chan struct{}, 1)
+	}
+
+	if pc.t.DisableKeepAlives {
+		req.extraHeaders().Set("Connection", "close")
+	}
+
+	gone := make(chan struct{})
+	defer close(gone)
 
 	// Write the request concurrently with waiting for a response,
 	// in case the server decides to reply before reading our full
 	// request body.
 	writeErrCh := make(chan error, 1)
-	pc.writech <- writeRequest{req, writeErrCh}
+	pc.writech <- writeRequest{req, writeErrCh, continueCh}
 
-	resc := make(chan responseAndError, 1)
-	pc.reqch <- requestAndChan{req.Request, resc, requestedGzip}
+	resc := make(chan responseAndError)
+	pc.reqch <- requestAndChan{
+		req:        req.Request,
+		ch:         resc,
+		addedGzip:  requestedGzip,
+		continueCh: continueCh,
+		callerGone: gone,
+	}
 
 	var re responseAndError
-	var pconnDeadCh = pc.closech
-	var failTicker <-chan time.Time
 	var respHeaderTimer <-chan time.Time
+	cancelChan := req.Request.Cancel
 WaitResponse:
 	for {
+		testHookWaitResLoop()
 		select {
 		case err := <-writeErrCh:
 			if err != nil {
-				re = responseAndError{nil, err}
-				pc.close()
+				if pc.isCanceled() {
+					err = errRequestCanceled
+				}
+				re = responseAndError{err: beforeRespHeaderError{err}}
+				pc.close(fmt.Errorf("write error: %v", err))
 				break WaitResponse
 			}
 			if d := pc.t.ResponseHeaderTimeout; d > 0 {
-				respHeaderTimer = time.After(d)
+				timer := time.NewTimer(d)
+				defer timer.Stop() // prevent leaks
+				respHeaderTimer = timer.C
 			}
-		case <-pconnDeadCh:
-			// The persist connection is dead. This shouldn't
-			// usually happen (only with Connection: close responses
-			// with no response bodies), but if it does happen it
-			// means either a) the remote server hung up on us
-			// prematurely, or b) the readLoop sent us a response &
-			// closed its closech at roughly the same time, and we
-			// selected this case first, in which case a response
-			// might still be coming soon.
-			//
-			// We can't avoid the select race in b) by using a unbuffered
-			// resc channel instead, because then goroutines can
-			// leak if we exit due to other errors.
-			pconnDeadCh = nil                               // avoid spinning
-			failTicker = time.After(100 * time.Millisecond) // arbitrary time to wait for resc
-		case <-failTicker:
-			re = responseAndError{err: errClosed}
+		case <-pc.closech:
+			var err error
+			if pc.isCanceled() {
+				err = errRequestCanceled
+			} else {
+				err = beforeRespHeaderError{fmt.Errorf("net/http: HTTP/1 transport connection broken: %v", pc.closed)}
+			}
+			re = responseAndError{err: err}
 			break WaitResponse
 		case <-respHeaderTimer:
-			pc.close()
+			pc.close(errTimeout)
 			re = responseAndError{err: errTimeout}
 			break WaitResponse
 		case re = <-resc:
+			if re.err != nil && pc.isCanceled() {
+				re.err = errRequestCanceled
+			}
 			break WaitResponse
+		case <-cancelChan:
+			pc.t.CancelRequest(req.Request)
+			cancelChan = nil
 		}
 	}
 
-	pc.lk.Lock()
-	pc.numExpectedResponses--
-	pc.lk.Unlock()
-
 	if re.err != nil {
 		pc.t.setReqCanceler(req.Request, nil)
+	}
+	if (re.res == nil) == (re.err == nil) {
+		panic("internal error: exactly one of res or err should be set")
 	}
 	return re.res, re.err
 }
@@ -1128,18 +1523,44 @@ func (pc *persistConn) markBroken() {
 	pc.broken = true
 }
 
-func (pc *persistConn) close() {
+// markReused marks this connection as having been successfully used for a
+// request and response.
+func (pc *persistConn) markReused() {
 	pc.lk.Lock()
-	defer pc.lk.Unlock()
-	pc.closeLocked()
+	pc.reused = true
+	pc.lk.Unlock()
 }
 
-func (pc *persistConn) closeLocked() {
+// close closes the underlying TCP connection and closes
+// the pc.closech channel.
+//
+// The provided err is only for testing and debugging; in normal
+// circumstances it should never be seen by users.
+func (pc *persistConn) close(err error) {
+	pc.lk.Lock()
+	defer pc.lk.Unlock()
+	pc.closeLocked(err)
+}
+
+func (pc *persistConn) closeLocked(err error) {
+	if err == nil {
+		panic("nil error")
+	}
 	pc.broken = true
-	if !pc.closed {
-		pc.conn.Close()
-		pc.closed = true
-		close(pc.closech)
+	if pc.closed == nil {
+		pc.closed = err
+		if pc.alt != nil {
+			// Do nothing; can only get here via getConn's
+			// handlePendingDial's putOrCloseIdleConn when
+			// it turns out the abandoned connection in
+			// flight ended up negotiating an alternate
+			// protocol.  We don't use the connection
+			// freelist for http2. That's done by the
+			// alternate protocol's RoundTripper.
+		} else {
+			pc.conn.Close()
+			close(pc.closech)
+		}
 	}
 	pc.mutateHeaderFunc = nil
 }
@@ -1160,16 +1581,18 @@ func canonicalAddr(url *url.URL) string {
 
 // bodyEOFSignal wraps a ReadCloser but runs fn (if non-nil) at most
 // once, right before its final (error-producing) Read or Close call
-// returns. If earlyCloseFn is non-nil and Close is called before
-// io.EOF is seen, earlyCloseFn is called instead of fn, and its
-// return value is the return value from Close.
+// returns. fn should return the new error to return from Read or Close.
+//
+// If earlyCloseFn is non-nil and Close is called before io.EOF is
+// seen, earlyCloseFn is called instead of fn, and its return value is
+// the return value from Close.
 type bodyEOFSignal struct {
 	body         io.ReadCloser
-	mu           sync.Mutex   // guards following 4 fields
-	closed       bool         // whether Close has been called
-	rerr         error        // sticky Read error
-	fn           func(error)  // error will be nil on Read io.EOF
-	earlyCloseFn func() error // optional alt Close func used if io.EOF not seen
+	mu           sync.Mutex        // guards following 4 fields
+	closed       bool              // whether Close has been called
+	rerr         error             // sticky Read error
+	fn           func(error) error // err will be nil on Read io.EOF
+	earlyCloseFn func() error      // optional alt Close func used if io.EOF not seen
 }
 
 func (es *bodyEOFSignal) Read(p []byte) (n int, err error) {
@@ -1190,7 +1613,7 @@ func (es *bodyEOFSignal) Read(p []byte) (n int, err error) {
 		if es.rerr == nil {
 			es.rerr = err
 		}
-		es.condfn(err)
+		err = es.condfn(err)
 	}
 	return
 }
@@ -1206,20 +1629,17 @@ func (es *bodyEOFSignal) Close() error {
 		return es.earlyCloseFn()
 	}
 	err := es.body.Close()
-	es.condfn(err)
-	return err
+	return es.condfn(err)
 }
 
 // caller must hold es.mu.
-func (es *bodyEOFSignal) condfn(err error) {
+func (es *bodyEOFSignal) condfn(err error) error {
 	if es.fn == nil {
-		return
+		return err
 	}
-	if err == io.EOF {
-		err = nil
-	}
-	es.fn(err)
+	err = es.fn(err)
 	es.fn = nil
+	return err
 }
 
 // gzipReader wraps a response body so it can lazily
@@ -1265,4 +1685,90 @@ func (nr noteEOFReader) Read(p []byte) (n int, err error) {
 		*nr.sawEOF = true
 	}
 	return
+}
+
+// fakeLocker is a sync.Locker which does nothing. It's used to guard
+// test-only fields when not under test, to avoid runtime atomic
+// overhead.
+type fakeLocker struct{}
+
+func (fakeLocker) Lock()   {}
+func (fakeLocker) Unlock() {}
+
+func isNetWriteError(err error) bool {
+	switch e := err.(type) {
+	case *url.Error:
+		return isNetWriteError(e.Err)
+	case *net.OpError:
+		return e.Op == "write"
+	default:
+		return false
+	}
+}
+
+// cloneTLSConfig returns a shallow clone of the exported
+// fields of cfg, ignoring the unexported sync.Once, which
+// contains a mutex and must not be copied.
+//
+// The cfg must not be in active use by tls.Server, or else
+// there can still be a race with tls.Server updating SessionTicketKey
+// and our copying it, and also a race with the server setting
+// SessionTicketsDisabled=false on failure to set the random
+// ticket key.
+//
+// If cfg is nil, a new zero tls.Config is returned.
+func cloneTLSConfig(cfg *tls.Config) *tls.Config {
+	if cfg == nil {
+		return &tls.Config{}
+	}
+	return &tls.Config{
+		Rand:                     cfg.Rand,
+		Time:                     cfg.Time,
+		Certificates:             cfg.Certificates,
+		NameToCertificate:        cfg.NameToCertificate,
+		GetCertificate:           cfg.GetCertificate,
+		RootCAs:                  cfg.RootCAs,
+		NextProtos:               cfg.NextProtos,
+		ServerName:               cfg.ServerName,
+		ClientAuth:               cfg.ClientAuth,
+		ClientCAs:                cfg.ClientCAs,
+		InsecureSkipVerify:       cfg.InsecureSkipVerify,
+		CipherSuites:             cfg.CipherSuites,
+		PreferServerCipherSuites: cfg.PreferServerCipherSuites,
+		SessionTicketsDisabled:   cfg.SessionTicketsDisabled,
+		SessionTicketKey:         cfg.SessionTicketKey,
+		ClientSessionCache:       cfg.ClientSessionCache,
+		MinVersion:               cfg.MinVersion,
+		MaxVersion:               cfg.MaxVersion,
+		CurvePreferences:         cfg.CurvePreferences,
+	}
+}
+
+// cloneTLSClientConfig is like cloneTLSConfig but omits
+// the fields SessionTicketsDisabled and SessionTicketKey.
+// This makes it safe to call cloneTLSClientConfig on a config
+// in active use by a server.
+func cloneTLSClientConfig(cfg *tls.Config) *tls.Config {
+	if cfg == nil {
+		return &tls.Config{}
+	}
+	return &tls.Config{
+		Rand:                     cfg.Rand,
+		Time:                     cfg.Time,
+		Certificates:             cfg.Certificates,
+		NameToCertificate:        cfg.NameToCertificate,
+		GetCertificate:           cfg.GetCertificate,
+		RootCAs:                  cfg.RootCAs,
+		NextProtos:               cfg.NextProtos,
+		ServerName:               cfg.ServerName,
+		ClientAuth:               cfg.ClientAuth,
+		ClientCAs:                cfg.ClientCAs,
+		InsecureSkipVerify:       cfg.InsecureSkipVerify,
+		CipherSuites:             cfg.CipherSuites,
+		PreferServerCipherSuites: cfg.PreferServerCipherSuites,
+		ClientSessionCache:       cfg.ClientSessionCache,
+		MinVersion:               cfg.MinVersion,
+		MaxVersion:               cfg.MaxVersion,
+		CurvePreferences:         cfg.CurvePreferences,
+	}
 }

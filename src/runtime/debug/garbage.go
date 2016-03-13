@@ -16,6 +16,7 @@ type GCStats struct {
 	NumGC          int64           // number of garbage collections
 	PauseTotal     time.Duration   // total pause for all collections
 	Pause          []time.Duration // pause history, most recent first
+	PauseEnd       []time.Time     // pause end times history, most recent first
 	PauseQuantiles []time.Duration
 }
 
@@ -30,24 +31,35 @@ type GCStats struct {
 func ReadGCStats(stats *GCStats) {
 	// Create a buffer with space for at least two copies of the
 	// pause history tracked by the runtime. One will be returned
-	// to the caller and the other will be used as a temporary buffer
-	// for computing quantiles.
+	// to the caller and the other will be used as transfer buffer
+	// for end times history and as a temporary buffer for
+	// computing quantiles.
 	const maxPause = len(((*runtime.MemStats)(nil)).PauseNs)
-	if cap(stats.Pause) < 2*maxPause {
-		stats.Pause = make([]time.Duration, 2*maxPause)
+	if cap(stats.Pause) < 2*maxPause+3 {
+		stats.Pause = make([]time.Duration, 2*maxPause+3)
 	}
 
-	// readGCStats fills in the pause history (up to maxPause entries)
-	// and then three more: Unix ns time of last GC, number of GC,
-	// and total pause time in nanoseconds. Here we depend on the
-	// fact that time.Duration's native unit is nanoseconds, so the
-	// pauses and the total pause time do not need any conversion.
+	// readGCStats fills in the pause and end times histories (up to
+	// maxPause entries) and then three more: Unix ns time of last GC,
+	// number of GC, and total pause time in nanoseconds. Here we
+	// depend on the fact that time.Duration's native unit is
+	// nanoseconds, so the pauses and the total pause time do not need
+	// any conversion.
 	readGCStats(&stats.Pause)
 	n := len(stats.Pause) - 3
 	stats.LastGC = time.Unix(0, int64(stats.Pause[n]))
 	stats.NumGC = int64(stats.Pause[n+1])
 	stats.PauseTotal = stats.Pause[n+2]
+	n /= 2 // buffer holds pauses and end times
 	stats.Pause = stats.Pause[:n]
+
+	if cap(stats.PauseEnd) < maxPause {
+		stats.PauseEnd = make([]time.Time, 0, maxPause)
+	}
+	stats.PauseEnd = stats.PauseEnd[:0]
+	for _, ns := range stats.Pause[n : n+n] {
+		stats.PauseEnd = append(stats.PauseEnd, time.Unix(0, int64(ns)))
+	}
 
 	if len(stats.PauseQuantiles) > 0 {
 		if n == 0 {
@@ -143,5 +155,16 @@ func SetPanicOnFault(enabled bool) bool {
 
 // WriteHeapDump writes a description of the heap and the objects in
 // it to the given file descriptor.
-// The heap dump format is defined at http://golang.org/s/go13heapdump.
+// The heap dump format is defined at https://golang.org/s/go13heapdump.
 func WriteHeapDump(fd uintptr)
+
+// SetTraceback sets the amount of detail printed by the runtime in
+// the traceback it prints before exiting due to an unrecovered panic
+// or an internal runtime error.
+// The level argument takes the same values as the GOTRACEBACK
+// environment variable. For example, SetTraceback("all") ensure
+// that the program prints all goroutines when it crashes.
+// See the package runtime documentation for details.
+// If SetTraceback is called with a level lower than that of the
+// environment variable, the call is ignored.
+func SetTraceback(level string)

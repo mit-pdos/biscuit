@@ -12,6 +12,8 @@ func isExist(err error) bool {
 		err = pe.Err
 	case *LinkError:
 		err = pe.Err
+	case *SyscallError:
+		err = pe.Err
 	}
 	return contains(err.Error(), " exists")
 }
@@ -24,8 +26,11 @@ func isNotExist(err error) bool {
 		err = pe.Err
 	case *LinkError:
 		err = pe.Err
+	case *SyscallError:
+		err = pe.Err
 	}
-	return contains(err.Error(), "does not exist") || contains(err.Error(), "not found") || contains(err.Error(), "has been removed")
+	return contains(err.Error(), "does not exist") || contains(err.Error(), "not found") ||
+		contains(err.Error(), "has been removed") || contains(err.Error(), "no parent")
 }
 
 func isPermission(err error) bool {
@@ -35,6 +40,8 @@ func isPermission(err error) bool {
 	case *PathError:
 		err = pe.Err
 	case *LinkError:
+		err = pe.Err
+	case *SyscallError:
 		err = pe.Err
 	}
 	return contains(err.Error(), "permission denied")

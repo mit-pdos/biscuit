@@ -6,8 +6,9 @@
 
 package runtime
 
-func sigpipe()
+import _ "unsafe" // for go:linkname
 
+//go:linkname os_sigpipe os.sigpipe
 func os_sigpipe() {
-	onM(sigpipe)
+	systemstack(sigpipe)
 }

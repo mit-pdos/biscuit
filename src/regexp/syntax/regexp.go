@@ -39,7 +39,7 @@ const (
 	OpEmptyMatch                   // matches empty string
 	OpLiteral                      // matches Runes sequence
 	OpCharClass                    // matches Runes interpreted as range pair list
-	OpAnyCharNotNL                 // matches any character
+	OpAnyCharNotNL                 // matches any character except newline
 	OpAnyChar                      // matches any character
 	OpBeginLine                    // matches empty string at beginning of line
 	OpEndLine                      // matches empty string at end of line
@@ -166,9 +166,9 @@ func writeRegexp(b *bytes.Buffer, re *Regexp) {
 	case OpAnyChar:
 		b.WriteString(`(?s:.)`)
 	case OpBeginLine:
-		b.WriteRune('^')
+		b.WriteString(`(?m:^)`)
 	case OpEndLine:
-		b.WriteRune('$')
+		b.WriteString(`(?m:$)`)
 	case OpBeginText:
 		b.WriteString(`\A`)
 	case OpEndText:

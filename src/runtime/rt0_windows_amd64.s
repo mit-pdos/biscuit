@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#include "zasm_GOOS_GOARCH.h"
+#include "go_asm.h"
+#include "go_tls.h"
 #include "textflag.h"
 
 TEXT _rt0_amd64_windows(SB),NOSPLIT,$-8
@@ -14,6 +15,3 @@ TEXT _rt0_amd64_windows(SB),NOSPLIT,$-8
 TEXT main(SB),NOSPLIT,$-8
 	MOVQ	$runtime·rt0_go(SB), AX
 	JMP	AX
-
-DATA  runtime·iswindows(SB)/4, $1
-GLOBL runtime·iswindows(SB), NOPTR, $4

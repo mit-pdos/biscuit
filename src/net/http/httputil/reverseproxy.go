@@ -46,6 +46,18 @@ type ReverseProxy struct {
 	// If nil, logging goes to os.Stderr via the log package's
 	// standard logger.
 	ErrorLog *log.Logger
+
+	// BufferPool optionally specifies a buffer pool to
+	// get byte slices for use by io.CopyBuffer when
+	// copying HTTP response bodies.
+	BufferPool BufferPool
+}
+
+// A BufferPool is an interface for getting and returning temporary
+// byte slices for use by io.CopyBuffer.
+type BufferPool interface {
+	Get() []byte
+	Put([]byte)
 }
 
 func singleJoiningSlash(a, b string) string {
@@ -60,10 +72,13 @@ func singleJoiningSlash(a, b string) string {
 	return a + b
 }
 
-// NewSingleHostReverseProxy returns a new ReverseProxy that rewrites
+// NewSingleHostReverseProxy returns a new ReverseProxy that routes
 // URLs to the scheme, host, and base path provided in target. If the
 // target's path is "/base" and the incoming request was for "/dir",
 // the target request will be for /base/dir.
+// NewSingleHostReverseProxy does not rewrite the Host header.
+// To rewrite Host headers, use ReverseProxy directly with a custom
+// Director policy.
 func NewSingleHostReverseProxy(target *url.URL) *ReverseProxy {
 	targetQuery := target.RawQuery
 	director := func(req *http.Request) {
@@ -91,13 +106,35 @@ func copyHeader(dst, src http.Header) {
 // http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html
 var hopHeaders = []string{
 	"Connection",
+	"Proxy-Connection", // non-standard but still sent by libcurl and rejected by e.g. google
 	"Keep-Alive",
 	"Proxy-Authenticate",
 	"Proxy-Authorization",
-	"Te", // canonicalized version of "TE"
-	"Trailers",
+	"Te",      // canonicalized version of "TE"
+	"Trailer", // not Trailers per URL above; http://www.rfc-editor.org/errata_search.php?eid=4522
 	"Transfer-Encoding",
 	"Upgrade",
+}
+
+type requestCanceler interface {
+	CancelRequest(*http.Request)
+}
+
+type runOnFirstRead struct {
+	io.Reader // optional; nil means empty body
+
+	fn func() // Run before first Read, then set to nil
+}
+
+func (c *runOnFirstRead) Read(bs []byte) (int, error) {
+	if c.fn != nil {
+		c.fn()
+		c.fn = nil
+	}
+	if c.Reader == nil {
+		return 0, io.EOF
+	}
+	return c.Reader.Read(bs)
 }
 
 func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
@@ -108,6 +145,34 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	outreq := new(http.Request)
 	*outreq = *req // includes shallow copies of maps, but okay
+
+	if closeNotifier, ok := rw.(http.CloseNotifier); ok {
+		if requestCanceler, ok := transport.(requestCanceler); ok {
+			reqDone := make(chan struct{})
+			defer close(reqDone)
+
+			clientGone := closeNotifier.CloseNotify()
+
+			outreq.Body = struct {
+				io.Reader
+				io.Closer
+			}{
+				Reader: &runOnFirstRead{
+					Reader: outreq.Body,
+					fn: func() {
+						go func() {
+							select {
+							case <-clientGone:
+								requestCanceler.CancelRequest(outreq)
+							case <-reqDone:
+							}
+						}()
+					},
+				},
+				Closer: outreq.Body,
+			}
+		}
+	}
 
 	p.Director(outreq)
 	outreq.Proto = "HTTP/1.1"
@@ -148,7 +213,6 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		rw.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	defer res.Body.Close()
 
 	for _, h := range hopHeaders {
 		res.Header.Del(h)
@@ -156,8 +220,28 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	copyHeader(rw.Header(), res.Header)
 
+	// The "Trailer" header isn't included in the Transport's response,
+	// at least for *http.Transport. Build it up from Trailer.
+	if len(res.Trailer) > 0 {
+		var trailerKeys []string
+		for k := range res.Trailer {
+			trailerKeys = append(trailerKeys, k)
+		}
+		rw.Header().Add("Trailer", strings.Join(trailerKeys, ", "))
+	}
+
 	rw.WriteHeader(res.StatusCode)
+	if len(res.Trailer) > 0 {
+		// Force chunking if we saw a response trailer.
+		// This prevents net/http from calculating the length for short
+		// bodies and adding a Content-Length.
+		if fl, ok := rw.(http.Flusher); ok {
+			fl.Flush()
+		}
+	}
 	p.copyResponse(rw, res.Body)
+	res.Body.Close() // close now, instead of defer, to populate res.Trailer
+	copyHeader(rw.Header(), res.Trailer)
 }
 
 func (p *ReverseProxy) copyResponse(dst io.Writer, src io.Reader) {
@@ -174,7 +258,14 @@ func (p *ReverseProxy) copyResponse(dst io.Writer, src io.Reader) {
 		}
 	}
 
-	io.Copy(dst, src)
+	var buf []byte
+	if p.BufferPool != nil {
+		buf = p.BufferPool.Get()
+	}
+	io.CopyBuffer(dst, src, buf)
+	if p.BufferPool != nil {
+		p.BufferPool.Put(buf)
+	}
 }
 
 func (p *ReverseProxy) logf(format string, args ...interface{}) {

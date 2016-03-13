@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package strings implements simple functions to manipulate strings.
+// Package strings implements simple functions to manipulate UTF-8 encoded strings.
+//
+// For information about UTF-8 strings in Go, see https://blog.golang.org/strings.
 package strings
 
 import (
@@ -78,6 +80,7 @@ func hashStrRev(sep string) (uint32, uint32) {
 }
 
 // Count counts the number of non-overlapping instances of sep in s.
+// If sep is an empty string, Count returns 1 + the number of Unicode code points in s.
 func Count(s, sep string) int {
 	n := 0
 	// special cases
@@ -125,56 +128,19 @@ func Count(s, sep string) int {
 	return n
 }
 
-// Contains returns true if substr is within s.
+// Contains reports whether substr is within s.
 func Contains(s, substr string) bool {
 	return Index(s, substr) >= 0
 }
 
-// ContainsAny returns true if any Unicode code points in chars are within s.
+// ContainsAny reports whether any Unicode code points in chars are within s.
 func ContainsAny(s, chars string) bool {
 	return IndexAny(s, chars) >= 0
 }
 
-// ContainsRune returns true if the Unicode code point r is within s.
+// ContainsRune reports whether the Unicode code point r is within s.
 func ContainsRune(s string, r rune) bool {
 	return IndexRune(s, r) >= 0
-}
-
-// Index returns the index of the first instance of sep in s, or -1 if sep is not present in s.
-func Index(s, sep string) int {
-	n := len(sep)
-	switch {
-	case n == 0:
-		return 0
-	case n == 1:
-		return IndexByte(s, sep[0])
-	case n == len(s):
-		if sep == s {
-			return 0
-		}
-		return -1
-	case n > len(s):
-		return -1
-	}
-	// Rabin-Karp search
-	hashsep, pow := hashStr(sep)
-	var h uint32
-	for i := 0; i < n; i++ {
-		h = h*primeRK + uint32(s[i])
-	}
-	if h == hashsep && s[:n] == sep {
-		return 0
-	}
-	for i := n; i < len(s); {
-		h *= primeRK
-		h += uint32(s[i])
-		h -= pow * uint32(s[i-n])
-		i++
-		if h == hashsep && s[i-n:i] == sep {
-			return i - n
-		}
-	}
-	return -1
 }
 
 // LastIndex returns the index of the last instance of sep in s, or -1 if sep is not present in s.
@@ -184,14 +150,7 @@ func LastIndex(s, sep string) int {
 	case n == 0:
 		return len(s)
 	case n == 1:
-		// special case worth making fast
-		c := sep[0]
-		for i := len(s) - 1; i >= 0; i-- {
-			if s[i] == c {
-				return i
-			}
-		}
-		return -1
+		return LastIndexByte(s, sep[0])
 	case n == len(s):
 		if sep == s {
 			return 0
@@ -225,13 +184,8 @@ func LastIndex(s, sep string) int {
 // r, or -1 if rune is not present in s.
 func IndexRune(s string, r rune) int {
 	switch {
-	case r < 0x80:
-		b := byte(r)
-		for i := 0; i < len(s); i++ {
-			if s[i] == b {
-				return i
-			}
-		}
+	case r < utf8.RuneSelf:
+		return IndexByte(s, byte(r))
 	default:
 		for i, c := range s {
 			if c == r {
@@ -270,6 +224,16 @@ func LastIndexAny(s, chars string) int {
 					return i
 				}
 			}
+		}
+	}
+	return -1
+}
+
+// LastIndexByte returns the index of the last instance of c in s, or -1 if c is not present in s.
+func LastIndexByte(s string, c byte) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == c {
+			return i
 		}
 	}
 	return -1
@@ -524,7 +488,7 @@ func isSeparator(r rune) bool {
 // Title returns a copy of the string s with all Unicode letters that begin words
 // mapped to their title case.
 //
-// BUG: The rule Title uses for word boundaries does not handle Unicode punctuation properly.
+// BUG(rsc): The rule Title uses for word boundaries does not handle Unicode punctuation properly.
 func Title(s string) string {
 	// Use a closure here to remember state.
 	// Hackish but effective. Depends on Map scanning in order and calling

@@ -25,7 +25,8 @@ type file struct {
 	dirinfo *dirInfo // nil unless directory being read
 }
 
-// Fd returns the integer Unix file descriptor referencing the open file.
+// Fd returns the integer Plan 9 file descriptor referencing the open file.
+// The file descriptor is valid only until f.Close is called or f is garbage collected.
 func (f *File) Fd() uintptr {
 	if f == nil {
 		return ^(uintptr(0))
@@ -78,7 +79,7 @@ func syscallMode(i FileMode) (o uint32) {
 // (O_RDONLY etc.) and perm, (0666 etc.) if applicable.  If successful,
 // methods on the returned File can be used for I/O.
 // If there is an error, it will be of type *PathError.
-func OpenFile(name string, flag int, perm FileMode) (file *File, err error) {
+func OpenFile(name string, flag int, perm FileMode) (*File, error) {
 	var (
 		fd     int
 		e      error
@@ -158,7 +159,7 @@ func (file *file) close() error {
 
 // Stat returns the FileInfo structure describing file.
 // If there is an error, it will be of type *PathError.
-func (f *File) Stat() (fi FileInfo, err error) {
+func (f *File) Stat() (FileInfo, error) {
 	if f == nil {
 		return nil, ErrInvalid
 	}
@@ -223,7 +224,7 @@ func (f *File) Chmod(mode FileMode) error {
 // Sync commits the current contents of the file to stable storage.
 // Typically, this means flushing the file system's in-memory copy
 // of recently written data to disk.
-func (f *File) Sync() (err error) {
+func (f *File) Sync() error {
 	if f == nil {
 		return ErrInvalid
 	}
@@ -244,14 +245,14 @@ func (f *File) Sync() (err error) {
 // read reads up to len(b) bytes from the File.
 // It returns the number of bytes read and an error, if any.
 func (f *File) read(b []byte) (n int, err error) {
-	return syscall.Read(f.fd, b)
+	return fixCount(syscall.Read(f.fd, b))
 }
 
 // pread reads len(b) bytes from the File starting at byte offset off.
 // It returns the number of bytes read and the error, if any.
 // EOF is signaled by a zero count with err set to nil.
 func (f *File) pread(b []byte, off int64) (n int, err error) {
-	return syscall.Pread(f.fd, b, off)
+	return fixCount(syscall.Pread(f.fd, b, off))
 }
 
 // write writes len(b) bytes to the File.
@@ -262,7 +263,7 @@ func (f *File) write(b []byte) (n int, err error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
-	return syscall.Write(f.fd, b)
+	return fixCount(syscall.Write(f.fd, b))
 }
 
 // pwrite writes len(b) bytes to the File starting at byte offset off.
@@ -273,7 +274,7 @@ func (f *File) pwrite(b []byte, off int64) (n int, err error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
-	return syscall.Pwrite(f.fd, b, off)
+	return fixCount(syscall.Pwrite(f.fd, b, off))
 }
 
 // seek sets the offset for the next Read or Write on file to offset, interpreted
@@ -318,7 +319,7 @@ func hasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[0:len(prefix)] == prefix
 }
 
-// Variant of LastIndex from the strings package.
+// LastIndexByte from the strings package.
 func lastIndex(s string, sep byte) int {
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == sep {
@@ -338,7 +339,9 @@ func rename(oldname, newname string) error {
 
 	// If newname still contains slashes after removing the oldname
 	// prefix, the rename is cross-directory and must be rejected.
-	// This case is caught by d.Marshal below.
+	if lastIndex(newname, '/') >= 0 {
+		return &LinkError{"rename", oldname, newname, ErrInvalid}
+	}
 
 	var d syscall.Dir
 
@@ -350,6 +353,13 @@ func rename(oldname, newname string) error {
 	if err != nil {
 		return &LinkError{"rename", oldname, newname, err}
 	}
+
+	// If newname already exists and is not a directory, rename replaces it.
+	f, err := Stat(dirname + newname)
+	if err == nil && !f.IsDir() {
+		Remove(dirname + newname)
+	}
+
 	if err = syscall.Wstat(oldname, buf[:n]); err != nil {
 		return &LinkError{"rename", oldname, newname, err}
 	}

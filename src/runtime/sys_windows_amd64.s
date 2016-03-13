@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#include "zasm_GOOS_GOARCH.h"
+#include "go_asm.h"
+#include "go_tls.h"
 #include "textflag.h"
 
 // maxargs should be divisible by 2, as Windows stack
@@ -65,7 +66,7 @@ TEXT runtime·badsignal2(SB),NOSPLIT,$48
 	// stderr
 	MOVQ	$-12, CX // stderr
 	MOVQ	CX, 0(SP)
-	MOVQ	runtime·GetStdHandle(SB), AX
+	MOVQ	runtime·_GetStdHandle(SB), AX
 	CALL	AX
 
 	MOVQ	AX, CX	// handle
@@ -78,7 +79,7 @@ TEXT runtime·badsignal2(SB),NOSPLIT,$48
 	MOVQ	$0, 0(R9)
 	MOVQ	R9, 24(SP)
 	MOVQ	$0, 32(SP)	// overlapped
-	MOVQ	runtime·WriteFile(SB), AX
+	MOVQ	runtime·_WriteFile(SB), AX
 	CALL	AX
 	
 	RET
@@ -99,6 +100,7 @@ TEXT runtime·setlasterror(SB),NOSPLIT,$0
 // Called by Windows as a Vectored Exception Handler (VEH).
 // First argument is pointer to struct containing
 // exception record and context pointers.
+// Handler function is stored in AX.
 // Return 0 for 'not handled', -1 for handled.
 TEXT runtime·sigtramp(SB),NOSPLIT,$0-0
 	// CX: PEXCEPTION_POINTERS ExceptionInfo
@@ -115,6 +117,8 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$0-0
 	MOVQ	R13, 40(SP)
 	MOVQ	R14, 32(SP)
 	MOVQ	R15, 88(SP)
+
+	MOVQ	AX, R15	// save handler address
 
 	// find g
 	get_tls(DX)
@@ -135,7 +139,7 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$0-0
 	MOVQ	g_m(DX), BX
 	MOVQ	m_g0(BX), BX
 	CMPQ	DX, BX
-	JEQ	sigtramp_g0
+	JEQ	g0
 
 	// switch to g0 stack
 	get_tls(BP)
@@ -154,14 +158,13 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$0-0
 	MOVQ	SP, 104(DI)
 	MOVQ	DI, SP
 
-sigtramp_g0:
+g0:
 	MOVQ	0(CX), BX // ExceptionRecord*
 	MOVQ	8(CX), CX // Context*
-	// call sighandler(ExceptionRecord*, Context*, G*)
 	MOVQ	BX, 0(SP)
 	MOVQ	CX, 8(SP)
 	MOVQ	DX, 16(SP)
-	CALL	runtime·sighandler(SB)
+	CALL	R15	// call handler
 	// AX is set to report result back to Windows
 	MOVL	24(SP), AX
 
@@ -187,6 +190,18 @@ done:
 
 	RET
 
+TEXT runtime·exceptiontramp(SB),NOSPLIT,$0
+	MOVQ	$runtime·exceptionhandler(SB), AX
+	JMP	runtime·sigtramp(SB)
+
+TEXT runtime·firstcontinuetramp(SB),NOSPLIT,$0-0
+	MOVQ	$runtime·firstcontinuehandler(SB), AX
+	JMP	runtime·sigtramp(SB)
+
+TEXT runtime·lastcontinuetramp(SB),NOSPLIT,$0-0
+	MOVQ	$runtime·lastcontinuehandler(SB), AX
+	JMP	runtime·sigtramp(SB)
+
 TEXT runtime·ctrlhandler(SB),NOSPLIT,$8
 	MOVQ	CX, 16(SP)		// spill
 	MOVQ	$runtime·ctrlhandler1(SB), CX
@@ -210,34 +225,36 @@ TEXT runtime·externalthreadhandler(SB),NOSPLIT,$0
 	MOVQ	SP, DX
 
 	// setup dummy m, g
-	SUBQ	$m_end, SP		// space for M
+	SUBQ	$m__size, SP		// space for M
 	MOVQ	SP, 0(SP)
-	MOVQ	$m_end, 8(SP)
+	MOVQ	$m__size, 8(SP)
 	CALL	runtime·memclr(SB)	// smashes AX,BX,CX
 
 	LEAQ	m_tls(SP), CX
 	MOVQ	CX, 0x28(GS)
 	MOVQ	SP, BX
-	SUBQ	$g_end, SP		// space for G
+	SUBQ	$g__size, SP		// space for G
 	MOVQ	SP, g(CX)
 	MOVQ	SP, m_g0(BX)
 
 	MOVQ	SP, 0(SP)
-	MOVQ	$g_end, 8(SP)
+	MOVQ	$g__size, 8(SP)
 	CALL	runtime·memclr(SB)	// smashes AX,BX,CX
-	LEAQ	g_end(SP), BX
+	LEAQ	g__size(SP), BX
 	MOVQ	BX, g_m(SP)
 
-	LEAQ	-8192(SP), CX
+	LEAQ	-32768(SP), CX		// must be less than SizeOfStackReserve set by linker
 	MOVQ	CX, (g_stack+stack_lo)(SP)
-	ADDQ	$const_StackGuard, CX
+	ADDQ	$const__StackGuard, CX
 	MOVQ	CX, g_stackguard0(SP)
 	MOVQ	CX, g_stackguard1(SP)
 	MOVQ	DX, (g_stack+stack_hi)(SP)
 
+	PUSHQ	AX			// room for return value
 	PUSHQ	32(BP)			// arg for handler
 	CALL	16(BP)
 	POPQ	CX
+	POPQ	AX			// pass return value to Windows in AX
 
 	get_tls(CX)
 	MOVQ	g(CX), CX
@@ -272,15 +289,15 @@ TEXT runtime·callbackasm1(SB),NOSPLIT,$0
 	SUBQ	DX, AX
 	MOVQ	$0, DX
 	MOVQ	$5, CX	// divide by 5 because each call instruction in runtime·callbacks is 5 bytes long
-	DIVL	CX,
+	DIVL	CX
 
 	// find correspondent runtime·cbctxts table entry
 	MOVQ	runtime·cbctxts(SB), CX
 	MOVQ	-8(CX)(AX*8), AX
 
 	// extract callback context
-	MOVQ	cbctxt_argsize(AX), DX
-	MOVQ	cbctxt_gobody(AX), AX
+	MOVQ	wincallbackcontext_argsize(AX), DX
+	MOVQ	wincallbackcontext_gobody(AX), AX
 
 	// preserve whatever's at the memory location that
 	// the callback will use to store the return value
@@ -340,7 +357,7 @@ TEXT runtime·tstart_stdcall(SB),NOSPLIT,$0
 	MOVQ	AX, (g_stack+stack_hi)(DX)
 	SUBQ	$(64*1024), AX		// stack size
 	MOVQ	AX, (g_stack+stack_lo)(DX)
-	ADDQ	$const_StackGuard, AX
+	ADDQ	$const__StackGuard, AX
 	MOVQ	AX, g_stackguard0(DX)
 	MOVQ	AX, g_stackguard1(DX)
 
@@ -393,12 +410,12 @@ TEXT runtime·usleep1(SB),NOSPLIT,$0
 
 	MOVQ	m_g0(R13), R14
 	CMPQ	g(R15), R14
-	JNE	usleep1_switch
+	JNE	switch
 	// executing on m->g0 already
 	CALL	AX
-	JMP	usleep1_ret
+	JMP	ret
 
-usleep1_switch:
+switch:
 	// Switch to m->g0 stack and back.
 	MOVQ	(g_sched+gobuf_sp)(R14), R14
 	MOVQ	SP, -8(R14)
@@ -406,24 +423,26 @@ usleep1_switch:
 	CALL	AX
 	MOVQ	0(SP), SP
 
-usleep1_ret:
+ret:
 	MOVQ	$0, m_libcallsp(R13)
 	RET
 
 // Runs on OS stack. duration (in 100ns units) is in BX.
-TEXT runtime·usleep2(SB),NOSPLIT,$16
+// The function leaves room for 4 syscall parameters
+// (as per windows amd64 calling convention).
+TEXT runtime·usleep2(SB),NOSPLIT,$48
 	MOVQ	SP, AX
 	ANDQ	$~15, SP	// alignment as per Windows requirement
-	MOVQ	AX, 8(SP)
+	MOVQ	AX, 40(SP)
 	// Want negative 100ns units.
 	NEGQ	BX
-	MOVQ	SP, R8 // ptime
+	LEAQ	32(SP), R8  // ptime
 	MOVQ	BX, (R8)
 	MOVQ	$-1, CX // handle
 	MOVQ	$0, DX // alertable
-	MOVQ	runtime·NtWaitForSingleObject(SB), AX
+	MOVQ	runtime·_NtWaitForSingleObject(SB), AX
 	CALL	AX
-	MOVQ	8(SP), SP
+	MOVQ	40(SP), SP
 	RET
 
 // func now() (sec int64, nsec int32)

@@ -12,6 +12,8 @@ package main
 // issue 8142: lost 'addrtaken' bit on inlined variables.
 // no inlining in this test, so just checking that non-inlined works.
 
+func printnl()
+
 type T40 struct {
 	m map[int]int
 }
@@ -23,15 +25,15 @@ func newT40() *T40 {
 }
 
 func bad40() {
-	t := newT40() // ERROR "live at call to makemap: ret"
-	println()     // ERROR "live at call to printnl: ret"
+	t := newT40() // ERROR "live at call to makemap: autotmp_.* ret"
+	printnl()     // ERROR "live at call to printnl: autotmp_.* ret"
 	_ = t
 }
 
 func good40() {
 	ret := T40{}
-	ret.m = make(map[int]int) // ERROR "live at call to makemap: ret"
+	ret.m = make(map[int]int) // ERROR "live at call to makemap: autotmp_.* ret"
 	t := &ret
-	println() // ERROR "live at call to printnl: ret"
+	printnl() // ERROR "live at call to printnl: autotmp_.* ret"
 	_ = t
 }

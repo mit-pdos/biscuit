@@ -37,6 +37,8 @@ Usage:
 	mksyscall_windows [flags] [path ...]
 
 The flags are:
+	-output
+		Specify output file name (outputs to console if blank).
 	-trace
 		Generate print statement after every syscall.
 */
@@ -44,12 +46,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -57,7 +62,10 @@ import (
 	"text/template"
 )
 
-var PrintTraceFlag = flag.Bool("trace", false, "generate print statement after every syscall")
+var (
+	filename       = flag.String("output", "", "output file name (standard output if omitted)")
+	printTraceFlag = flag.Bool("trace", false, "generate print statement after every syscall")
+)
 
 func trim(s string) string {
 	return strings.Trim(s, " \t")
@@ -138,8 +146,6 @@ func (p *Param) StringTmpVarCode() string {
 // TmpVarCode returns source code for temp variable.
 func (p *Param) TmpVarCode() string {
 	switch {
-	case p.Type == "string":
-		return p.StringTmpVarCode()
 	case p.Type == "bool":
 		return p.BoolTmpVarCode()
 	case strings.HasPrefix(p.Type, "[]"):
@@ -149,19 +155,26 @@ func (p *Param) TmpVarCode() string {
 	}
 }
 
+// TmpVarHelperCode returns source code for helper's temp variable.
+func (p *Param) TmpVarHelperCode() string {
+	if p.Type != "string" {
+		return ""
+	}
+	return p.StringTmpVarCode()
+}
+
 // SyscallArgList returns source code fragments representing p parameter
 // in syscall. Slices are translated into 2 syscall parameters: pointer to
 // the first element and length.
 func (p *Param) SyscallArgList() []string {
+	t := p.HelperType()
 	var s string
 	switch {
-	case p.Type[0] == '*':
+	case t[0] == '*':
 		s = fmt.Sprintf("unsafe.Pointer(%s)", p.Name)
-	case p.Type == "string":
-		s = fmt.Sprintf("unsafe.Pointer(%s)", p.tmpVar())
-	case p.Type == "bool":
+	case t == "bool":
 		s = p.tmpVar()
-	case strings.HasPrefix(p.Type, "[]"):
+	case strings.HasPrefix(t, "[]"):
 		return []string{
 			fmt.Sprintf("uintptr(unsafe.Pointer(%s))", p.tmpVar()),
 			fmt.Sprintf("uintptr(len(%s))", p.Name),
@@ -175,6 +188,14 @@ func (p *Param) SyscallArgList() []string {
 // IsError determines if p parameter is used to return error.
 func (p *Param) IsError() bool {
 	return p.Name == "err" && p.Type == "error"
+}
+
+// HelperType returns type of parameter p used in helper function.
+func (p *Param) HelperType() string {
+	if p.Type == "string" {
+		return p.fn.StrconvType()
+	}
+	return p.Type
 }
 
 // join concatenates parameters ps into a string with sep separator.
@@ -366,7 +387,7 @@ func newFn(s string) (*Fn, error) {
 	f := &Fn{
 		Rets:       &Rets{},
 		src:        s,
-		PrintTrace: *PrintTraceFlag,
+		PrintTrace: *printTraceFlag,
 	}
 	// function name and args
 	prefix, body, s, found := extractSection(s, '(', ')')
@@ -454,6 +475,11 @@ func (f *Fn) ParamList() string {
 	return join(f.Params, func(p *Param) string { return p.Name + " " + p.Type }, ", ")
 }
 
+// HelperParamList returns source code for helper function f parameters.
+func (f *Fn) HelperParamList() string {
+	return join(f.Params, func(p *Param) string { return p.Name + " " + p.HelperType() }, ", ")
+}
+
 // ParamPrintList returns source code of trace printing part correspondent
 // to syscall input parameters.
 func (f *Fn) ParamPrintList() string {
@@ -510,6 +536,19 @@ func (f *Fn) SyscallParamList() string {
 	return strings.Join(a, ", ")
 }
 
+// HelperCallParamList returns source code of call into function f helper.
+func (f *Fn) HelperCallParamList() string {
+	a := make([]string, 0, len(f.Params))
+	for _, p := range f.Params {
+		s := p.Name
+		if p.Type == "string" {
+			s = p.tmpVar()
+		}
+		a = append(a, s)
+	}
+	return strings.Join(a, ", ")
+}
+
 // IsUTF16 is true, if f is W (utf16) function. It is false
 // for all A (ascii) functions.
 func (f *Fn) IsUTF16() bool {
@@ -531,6 +570,25 @@ func (f *Fn) StrconvType() string {
 		return "*uint16"
 	}
 	return "*byte"
+}
+
+// HasStringParam is true, if f has at least one string parameter.
+// Otherwise it is false.
+func (f *Fn) HasStringParam() bool {
+	for _, p := range f.Params {
+		if p.Type == "string" {
+			return true
+		}
+	}
+	return false
+}
+
+// HelperName returns name of function f helper.
+func (f *Fn) HelperName() string {
+	if !f.HasStringParam() {
+		return f.Name
+	}
+	return "_" + f.Name
 }
 
 // Source files and functions.
@@ -569,7 +627,7 @@ func (src *Source) DLLs() []string {
 	return r
 }
 
-// ParseFile adds adition file path to a source set src.
+// ParseFile adds additional file path to a source set src.
 func (src *Source) ParseFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -619,8 +677,8 @@ func (src *Source) ParseFile(path string) error {
 // Generate output source file from a source set src.
 func (src *Source) Generate(w io.Writer) error {
 	funcMap := template.FuncMap{
-		"syscalldot":  syscalldot,
 		"packagename": packagename,
+		"syscalldot":  syscalldot,
 	}
 	t := template.Must(template.New("main").Funcs(funcMap).Parse(srcTemplate))
 	err := t.Execute(w, src)
@@ -639,15 +697,31 @@ func usage() {
 func main() {
 	flag.Usage = usage
 	flag.Parse()
-	if len(os.Args) <= 1 {
+	if len(flag.Args()) <= 0 {
 		fmt.Fprintf(os.Stderr, "no files to parse provided\n")
 		usage()
 	}
-	src, err := ParseFiles(os.Args[1:])
+
+	src, err := ParseFiles(flag.Args())
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := src.Generate(os.Stdout); err != nil {
+
+	var buf bytes.Buffer
+	if err := src.Generate(&buf); err != nil {
+		log.Fatal(err)
+	}
+
+	data, err := format.Source(buf.Bytes())
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *filename == "" {
+		_, err = os.Stdout.Write(data)
+	} else {
+		err = ioutil.WriteFile(*filename, data, 0644)
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }
@@ -655,18 +729,19 @@ func main() {
 // TODO: use println instead to print in the following template
 const srcTemplate = `
 
-{{define "main"}}// go build mksyscall_windows.go && ./mksyscall_windows{{range .Files}} {{.}}{{end}}
-// MACHINE GENERATED BY THE COMMAND ABOVE; DO NOT EDIT
+{{define "main"}}// MACHINE GENERATED BY 'go generate' COMMAND; DO NOT EDIT
 
 package {{packagename}}
 
 import "unsafe"{{if syscalldot}}
 import "syscall"{{end}}
 
+var _ unsafe.Pointer
+
 var (
 {{template "dlls" .}}
 {{template "funcnames" .}})
-{{range .Funcs}}{{template "funcbody" .}}{{end}}
+{{range .Funcs}}{{if .HasStringParam}}{{template "helperbody" .}}{{end}}{{template "funcbody" .}}{{end}}
 {{end}}
 
 {{/* help functions */}}
@@ -677,15 +752,26 @@ var (
 {{define "funcnames"}}{{range .Funcs}}	proc{{.DLLFuncName}} = mod{{.DLLName}}.NewProc("{{.DLLFuncName}}")
 {{end}}{{end}}
 
+{{define "helperbody"}}
+func {{.Name}}({{.ParamList}}) {{template "results" .}}{
+{{template "helpertmpvars" .}}	return {{.HelperName}}({{.HelperCallParamList}})
+}
+{{end}}
+
 {{define "funcbody"}}
-func {{.Name}}({{.ParamList}}) {{if .Rets.List}}{{.Rets.List}} {{end}}{
+func {{.HelperName}}({{.HelperParamList}}) {{template "results" .}}{
 {{template "tmpvars" .}}	{{template "syscall" .}}
 {{template "seterror" .}}{{template "printtrace" .}}	return
 }
 {{end}}
 
+{{define "helpertmpvars"}}{{range .Params}}{{if .TmpVarHelperCode}}	{{.TmpVarHelperCode}}
+{{end}}{{end}}{{end}}
+
 {{define "tmpvars"}}{{range .Params}}{{if .TmpVarCode}}	{{.TmpVarCode}}
 {{end}}{{end}}{{end}}
+
+{{define "results"}}{{if .Rets.List}}{{.Rets.List}} {{end}}{{end}}
 
 {{define "syscall"}}{{.Rets.SetReturnValuesCode}}{{.Syscall}}(proc{{.DLLFuncName}}.Addr(), {{.ParamCount}}, {{.SyscallParamList}}){{end}}
 

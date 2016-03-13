@@ -526,8 +526,8 @@ func (f *netFile) listen(backlog int) error {
 	if f.listener != nil {
 		return EINVAL
 	}
-	_, ok := net.listener[netAddr{f.proto, f.sotype, f.addr.key()}]
-	if ok {
+	old, ok := net.listener[netAddr{f.proto, f.sotype, f.addr.key()}]
+	if ok && !old.listenerClosed() {
 		return EADDRINUSE
 	}
 	net.listener[netAddr{f.proto, f.sotype, f.addr.key()}] = f
@@ -577,7 +577,7 @@ func (f *netFile) connect(sa Sockaddr) error {
 		return EISCONN
 	}
 	l, ok := net.listener[netAddr{f.proto, f.sotype, sa.key()}]
-	if !ok {
+	if !ok || l.listenerClosed() {
 		net.Unlock()
 		return ECONNREFUSED
 	}
@@ -674,6 +674,12 @@ func (f *netFile) sendto(p []byte, flags int, to Sockaddr) error {
 	copy(msg.buf, p)
 	l.packet.write(msg, f.writeDeadline())
 	return nil
+}
+
+func (f *netFile) listenerClosed() bool {
+	f.listener.Lock()
+	defer f.listener.Unlock()
+	return f.listener.closed
 }
 
 func (f *netFile) close() error {

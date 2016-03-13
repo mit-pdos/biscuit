@@ -7,7 +7,9 @@
 package runtime_test
 
 import (
+	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -19,101 +21,129 @@ func TestCgoSignalDeadlock(t *testing.T) {
 	if testing.Short() && runtime.GOOS == "windows" {
 		t.Skip("Skipping in short mode") // takes up to 64 seconds
 	}
-	got := executeTest(t, cgoSignalDeadlockSource, nil)
+	got := runTestProg(t, "testprogcgo", "CgoSignalDeadlock")
 	want := "OK\n"
 	if got != want {
-		t.Fatalf("expected %q, but got %q", want, got)
+		t.Fatalf("expected %q, but got:\n%s", want, got)
 	}
 }
 
 func TestCgoTraceback(t *testing.T) {
-	got := executeTest(t, cgoTracebackSource, nil)
+	got := runTestProg(t, "testprogcgo", "CgoTraceback")
 	want := "OK\n"
 	if got != want {
-		t.Fatalf("expected %q, but got %q", want, got)
+		t.Fatalf("expected %q, but got:\n%s", want, got)
 	}
 }
 
-const cgoSignalDeadlockSource = `
-package main
+func TestCgoCallbackGC(t *testing.T) {
+	if runtime.GOOS == "plan9" || runtime.GOOS == "windows" {
+		t.Skipf("no pthreads on %s", runtime.GOOS)
+	}
+	if testing.Short() {
+		switch {
+		case runtime.GOOS == "dragonfly":
+			t.Skip("see golang.org/issue/11990")
+		case runtime.GOOS == "linux" && runtime.GOARCH == "arm":
+			t.Skip("too slow for arm builders")
+		}
+	}
+	got := runTestProg(t, "testprogcgo", "CgoCallbackGC")
+	want := "OK\n"
+	if got != want {
+		t.Fatalf("expected %q, but got:\n%s", want, got)
+	}
+}
 
-import "C"
+func TestCgoExternalThreadPanic(t *testing.T) {
+	if runtime.GOOS == "plan9" {
+		t.Skipf("no pthreads on %s", runtime.GOOS)
+	}
+	got := runTestProg(t, "testprogcgo", "CgoExternalThreadPanic")
+	want := "panic: BOOM"
+	if !strings.Contains(got, want) {
+		t.Fatalf("want failure containing %q. output:\n%s\n", want, got)
+	}
+}
 
-import (
-	"fmt"
-	"runtime"
-	"time"
-)
-
-func main() {
-	runtime.GOMAXPROCS(100)
-	ping := make(chan bool)
-	go func() {
-		for i := 0; ; i++ {
-			runtime.Gosched()
-			select {
-			case done := <-ping:
-				if done {
-					ping <- true
-					return
-				}
-				ping <- true
-			default:
+func TestCgoExternalThreadSIGPROF(t *testing.T) {
+	// issue 9456.
+	switch runtime.GOOS {
+	case "plan9", "windows":
+		t.Skipf("no pthreads on %s", runtime.GOOS)
+	case "darwin":
+		if runtime.GOARCH != "arm" && runtime.GOARCH != "arm64" {
+			// static constructor needs external linking, but we don't support
+			// external linking on OS X 10.6.
+			out, err := exec.Command("uname", "-r").Output()
+			if err != nil {
+				t.Fatalf("uname -r failed: %v", err)
 			}
-			func() {
-				defer func() {
-					recover()
-				}()
-				var s *string
-				*s = ""
-			}()
-		}
-	}()
-	time.Sleep(time.Millisecond)
-	for i := 0; i < 64; i++ {
-		go func() {
-			runtime.LockOSThread()
-			select {}
-		}()
-		go func() {
-			runtime.LockOSThread()
-			select {}
-		}()
-		time.Sleep(time.Millisecond)
-		ping <- false
-		select {
-		case <-ping:
-		case <-time.After(time.Second):
-			fmt.Printf("HANG\n")
-			return
+			// OS X 10.6 == Darwin 10.x
+			if strings.HasPrefix(string(out), "10.") {
+				t.Skipf("no external linking on OS X 10.6")
+			}
 		}
 	}
-	ping <- true
-	select {
-	case <-ping:
-	case <-time.After(time.Second):
-		fmt.Printf("HANG\n")
-		return
+	if runtime.GOARCH == "ppc64" {
+		// TODO(austin) External linking not implemented on
+		// ppc64 (issue #8912)
+		t.Skipf("no external linking on ppc64")
 	}
-	fmt.Printf("OK\n")
+	got := runTestProg(t, "testprogcgo", "CgoExternalThreadSIGPROF")
+	want := "OK\n"
+	if got != want {
+		t.Fatalf("expected %q, but got:\n%s", want, got)
+	}
 }
-`
 
-const cgoTracebackSource = `
-package main
-
-/* void foo(void) {} */
-import "C"
-
-import (
-	"fmt"
-	"runtime"
-)
-
-func main() {
-	C.foo()
-	buf := make([]byte, 1)
-	runtime.Stack(buf, true)
-	fmt.Printf("OK\n")
+func TestCgoExternalThreadSignal(t *testing.T) {
+	// issue 10139
+	switch runtime.GOOS {
+	case "plan9", "windows":
+		t.Skipf("no pthreads on %s", runtime.GOOS)
+	}
+	got := runTestProg(t, "testprogcgo", "CgoExternalThreadSignal")
+	want := "OK\n"
+	if got != want {
+		t.Fatalf("expected %q, but got:\n%s", want, got)
+	}
 }
-`
+
+func TestCgoDLLImports(t *testing.T) {
+	// test issue 9356
+	if runtime.GOOS != "windows" {
+		t.Skip("skipping windows specific test")
+	}
+	got := runTestProg(t, "testprogcgo", "CgoDLLImportsMain")
+	want := "OK\n"
+	if got != want {
+		t.Fatalf("expected %q, but got %v", want, got)
+	}
+}
+
+func TestCgoExecSignalMask(t *testing.T) {
+	// Test issue 13164.
+	switch runtime.GOOS {
+	case "windows", "plan9":
+		t.Skipf("skipping signal mask test on %s", runtime.GOOS)
+	}
+	got := runTestProg(t, "testprogcgo", "CgoExecSignalMask")
+	want := "OK\n"
+	if got != want {
+		t.Errorf("expected %q, got %v", want, got)
+	}
+}
+
+func TestEnsureDropM(t *testing.T) {
+	// Test for issue 13881.
+	switch runtime.GOOS {
+	case "windows", "plan9":
+		t.Skipf("skipping dropm test on %s", runtime.GOOS)
+	}
+	got := runTestProg(t, "testprogcgo", "EnsureDropM")
+	want := "OK\n"
+	if got != want {
+		t.Errorf("expected %q, got %v", want, got)
+	}
+}

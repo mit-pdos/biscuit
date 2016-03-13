@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package debug
+package debug_test
 
 import (
 	"runtime"
+	. "runtime/debug"
 	"testing"
 	"time"
 )
@@ -70,11 +71,28 @@ func TestReadGCStats(t *testing.T) {
 			t.Errorf("stats.PauseQuantiles[%d]=%d > stats.PauseQuantiles[%d]=%d", i, q[i], i+1, q[i+1])
 		}
 	}
+
+	// compare memory stats with gc stats:
+	if len(stats.PauseEnd) != n {
+		t.Fatalf("len(stats.PauseEnd) = %d, want %d", len(stats.PauseEnd), n)
+	}
+	off := (int(mstats.NumGC) + len(mstats.PauseEnd) - 1) % len(mstats.PauseEnd)
+	for i := 0; i < n; i++ {
+		dt := stats.PauseEnd[i]
+		if dt.UnixNano() != int64(mstats.PauseEnd[off]) {
+			t.Errorf("stats.PauseEnd[%d] = %d, want %d", i, dt, mstats.PauseEnd[off])
+		}
+		off = (off + len(mstats.PauseEnd) - 1) % len(mstats.PauseEnd)
+	}
 }
 
 var big = make([]byte, 1<<20)
 
 func TestFreeOSMemory(t *testing.T) {
+	if runtime.GOARCH == "arm64" || runtime.GOARCH == "ppc64" || runtime.GOARCH == "ppc64le" || runtime.GOARCH == "mips64" || runtime.GOARCH == "mips64le" ||
+		runtime.GOOS == "nacl" {
+		t.Skip("issue 9993; scavenger temporarily disabled on systems with physical pages larger than logical pages")
+	}
 	var ms1, ms2 runtime.MemStats
 
 	if big == nil {

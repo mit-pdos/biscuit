@@ -34,12 +34,16 @@
 //
 //	go tool pprof http://localhost:6060/debug/pprof/block
 //
+// Or to collect a 5-second execution trace:
+//
+//	wget http://localhost:6060/debug/pprof/trace?seconds=5
+//
 // To view all available profiles, open http://localhost:6060/debug/pprof/
 // in your browser.
 //
 // For a study of the facility in action, visit
 //
-//	http://blog.golang.org/2011/06/profiling-go-programs.html
+//	https://blog.golang.org/2011/06/profiling-go-programs.html
 //
 package pprof
 
@@ -54,6 +58,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"runtime/trace"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +69,7 @@ func init() {
 	http.Handle("/debug/pprof/cmdline", http.HandlerFunc(Cmdline))
 	http.Handle("/debug/pprof/profile", http.HandlerFunc(Profile))
 	http.Handle("/debug/pprof/symbol", http.HandlerFunc(Symbol))
+	http.Handle("/debug/pprof/trace", http.HandlerFunc(Trace))
 }
 
 // Cmdline responds with the running program's
@@ -72,6 +78,17 @@ func init() {
 func Cmdline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, strings.Join(os.Args, "\x00"))
+}
+
+func sleep(w http.ResponseWriter, d time.Duration) {
+	var clientGone <-chan bool
+	if cn, ok := w.(http.CloseNotifier); ok {
+		clientGone = cn.CloseNotify()
+	}
+	select {
+	case <-time.After(d):
+	case <-clientGone:
+	}
 }
 
 // Profile responds with the pprof-formatted cpu profile.
@@ -94,8 +111,32 @@ func Profile(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Could not enable CPU profiling: %s\n", err)
 		return
 	}
-	time.Sleep(time.Duration(sec) * time.Second)
+	sleep(w, time.Duration(sec)*time.Second)
 	pprof.StopCPUProfile()
+}
+
+// Trace responds with the execution trace in binary form.
+// Tracing lasts for duration specified in seconds GET parameter, or for 1 second if not specified.
+// The package initialization registers it as /debug/pprof/trace.
+func Trace(w http.ResponseWriter, r *http.Request) {
+	sec, _ := strconv.ParseInt(r.FormValue("seconds"), 10, 64)
+	if sec == 0 {
+		sec = 1
+	}
+
+	// Set Content Type assuming trace.Start will work,
+	// because if it does it starts writing.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if err := trace.Start(w); err != nil {
+		// trace.Start failed, so no writes yet.
+		// Can change header back to text content and send error code.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "Could not enable tracing: %s\n", err)
+		return
+	}
+	sleep(w, time.Duration(sec)*time.Second)
+	trace.Stop()
 }
 
 // Symbol looks up the program counters listed in the request,
@@ -162,6 +203,10 @@ func (name handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Unknown profile: %s\n", name)
 		return
 	}
+	gc, _ := strconv.Atoi(r.FormValue("gc"))
+	if name == "heap" && gc > 0 {
+		runtime.GC()
+	}
 	p.WriteTo(w, debug)
 	return
 }
@@ -189,17 +234,17 @@ var indexTmpl = template.Must(template.New("index").Parse(`<html>
 <head>
 <title>/debug/pprof/</title>
 </head>
+<body>
 /debug/pprof/<br>
 <br>
-<body>
 profiles:<br>
 <table>
 {{range .}}
-<tr><td align=right>{{.Count}}<td><a href="/debug/pprof/{{.Name}}?debug=1">{{.Name}}</a>
+<tr><td align=right>{{.Count}}<td><a href="{{.Name}}?debug=1">{{.Name}}</a>
 {{end}}
 </table>
 <br>
-<a href="/debug/pprof/goroutine?debug=2">full goroutine stack dump</a><br>
+<a href="goroutine?debug=2">full goroutine stack dump</a><br>
 </body>
 </html>
 `))

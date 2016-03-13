@@ -19,10 +19,16 @@ import (
 	"io"
 	"io/ioutil"
 	"mime"
+	"mime/quotedprintable"
 	"net/textproto"
 )
 
 var emptyParams = make(map[string]string)
+
+// This constant needs to be at least 76 for this package to work correctly.
+// This is because \r\n--separator_of_len_70- would fill the buffer and it
+// wouldn't be safe to consume a single byte from it.
+const peekBufferSize = 4096
 
 // A Part represents a single part in a multipart body.
 type Part struct {
@@ -90,7 +96,7 @@ func (p *Part) parseContentDisposition() {
 func NewReader(r io.Reader, boundary string) *Reader {
 	b := []byte("\r\n--" + boundary + "--")
 	return &Reader{
-		bufReader:        bufio.NewReader(r),
+		bufReader:        bufio.NewReaderSize(r, peekBufferSize),
 		nl:               b[:2],
 		nlDashBoundary:   b[:len(b)-2],
 		dashBoundaryDash: b[2:],
@@ -111,7 +117,7 @@ func newPart(mr *Reader) (*Part, error) {
 	const cte = "Content-Transfer-Encoding"
 	if bp.Header.Get(cte) == "quoted-printable" {
 		bp.Header.Del(cte)
-		bp.r = newQuotedPrintableReader(bp.r)
+		bp.r = quotedprintable.NewReader(bp.r)
 	}
 	return bp, nil
 }
@@ -147,7 +153,7 @@ func (pr partReader) Read(d []byte) (n int, err error) {
 		// the read request.  No need to parse more at the moment.
 		return p.buffer.Read(d)
 	}
-	peek, err := p.mr.bufReader.Peek(4096) // TODO(bradfitz): add buffer size accessor
+	peek, err := p.mr.bufReader.Peek(peekBufferSize) // TODO(bradfitz): add buffer size accessor
 
 	// Look for an immediate empty part without a leading \r\n
 	// before the boundary separator.  Some MIME code makes empty
@@ -164,16 +170,18 @@ func (pr partReader) Read(d []byte) (n int, err error) {
 	if peek == nil {
 		panic("nil peek buf")
 	}
-
 	// Search the peek buffer for "\r\n--boundary". If found,
 	// consume everything up to the boundary. If not, consume only
 	// as much of the peek buffer as cannot hold the boundary
 	// string.
 	nCopy := 0
 	foundBoundary := false
-	if idx := bytes.Index(peek, p.mr.nlDashBoundary); idx != -1 {
+	if idx, isEnd := p.mr.peekBufferSeparatorIndex(peek); idx != -1 {
 		nCopy = idx
-		foundBoundary = true
+		foundBoundary = isEnd
+		if !isEnd && nCopy == 0 {
+			nCopy = 1 // make some progress.
+		}
 	} else if safeCount := len(peek) - len(p.mr.nlDashBoundary); safeCount > 0 {
 		nCopy = safeCount
 	} else if unexpectedEOF {
@@ -226,6 +234,7 @@ func (r *Reader) NextPart() (*Part, error) {
 	expectNewPart := false
 	for {
 		line, err := r.bufReader.ReadSlice('\n')
+
 		if err == io.EOF && r.isFinalBoundary(line) {
 			// If the buffer ends in "--boundary--" without the
 			// trailing "\r\n", ReadSlice will return an error
@@ -335,6 +344,37 @@ func (mr *Reader) peekBufferIsEmptyPart(peek []byte) bool {
 	rest := peek[len(mr.dashBoundary):]
 	rest = skipLWSPChar(rest)
 	return bytes.HasPrefix(rest, mr.nl)
+}
+
+// peekBufferSeparatorIndex returns the index of mr.nlDashBoundary in
+// peek and whether it is a real boundary (and not a prefix of an
+// unrelated separator). To be the end, the peek buffer must contain a
+// newline after the boundary or contain the ending boundary (--separator--).
+func (mr *Reader) peekBufferSeparatorIndex(peek []byte) (idx int, isEnd bool) {
+	idx = bytes.Index(peek, mr.nlDashBoundary)
+	if idx == -1 {
+		return
+	}
+
+	peek = peek[idx+len(mr.nlDashBoundary):]
+	if len(peek) == 0 || len(peek) == 1 && peek[0] == '-' {
+		return idx, false
+	}
+	if len(peek) > 1 && peek[0] == '-' && peek[1] == '-' {
+		return idx, true
+	}
+	peek = skipLWSPChar(peek)
+	// Don't have a complete line after the peek.
+	if bytes.IndexByte(peek, '\n') == -1 {
+		return idx, false
+	}
+	if len(peek) > 0 && peek[0] == '\n' {
+		return idx, true
+	}
+	if len(peek) > 1 && peek[0] == '\r' && peek[1] == '\n' {
+		return idx, true
+	}
+	return idx, false
 }
 
 // skipLWSPChar returns b with leading spaces and tabs removed.

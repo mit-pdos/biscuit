@@ -547,6 +547,7 @@ const (
 	IOC_WS2                            = 0x08000000
 	SIO_GET_EXTENSION_FUNCTION_POINTER = IOC_INOUT | IOC_WS2 | 6
 	SIO_KEEPALIVE_VALS                 = IOC_IN | IOC_VENDOR | 4
+	SIO_UDP_CONNRESET                  = IOC_IN | IOC_VENDOR | 12
 
 	// cf. http://support.microsoft.com/default.aspx?scid=kb;en-us;257460
 
@@ -1082,12 +1083,7 @@ type TCPKeepalive struct {
 	Interval uint32
 }
 
-type reparseDataBuffer struct {
-	ReparseTag        uint32
-	ReparseDataLength uint16
-	Reserved          uint16
-
-	// SymbolicLinkReparseBuffer
+type symbolicLinkReparseBuffer struct {
 	SubstituteNameOffset uint16
 	SubstituteNameLength uint16
 	PrintNameOffset      uint16
@@ -1096,9 +1092,27 @@ type reparseDataBuffer struct {
 	PathBuffer           [1]uint16
 }
 
+type mountPointReparseBuffer struct {
+	SubstituteNameOffset uint16
+	SubstituteNameLength uint16
+	PrintNameOffset      uint16
+	PrintNameLength      uint16
+	PathBuffer           [1]uint16
+}
+
+type reparseDataBuffer struct {
+	ReparseTag        uint32
+	ReparseDataLength uint16
+	Reserved          uint16
+
+	// GenericReparseBuffer
+	reparseBuffer byte
+}
+
 const (
 	FSCTL_GET_REPARSE_POINT          = 0x900A8
 	MAXIMUM_REPARSE_DATA_BUFFER_SIZE = 16 * 1024
+	_IO_REPARSE_TAG_MOUNT_POINT      = 0xA0000003
 	IO_REPARSE_TAG_SYMLINK           = 0xA000000C
 	SYMBOLIC_LINK_FLAG_DIRECTORY     = 0x1
 )

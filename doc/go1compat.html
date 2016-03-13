@@ -83,16 +83,28 @@ break if the bug is fixed. We reserve the right to fix such bugs.
 <li>
 Struct literals. For the addition of features in later point
 releases, it may be necessary to add fields to exported structs in
-the API. Code that uses untagged struct literals (such as pkg.T{3,
+the API. Code that uses unkeyed struct literals (such as pkg.T{3,
 "x"}) to create values of these types would fail to compile after
-such a change. However, code that uses tagged literals (pkg.T{A:
+such a change. However, code that uses keyed literals (pkg.T{A:
 3, B: "x"}) will continue to compile after such a change. We will
-update such data structures in a way that allows tagged struct
-literals to remain compatible, although untagged literals may fail
+update such data structures in a way that allows keyed struct
+literals to remain compatible, although unkeyed literals may fail
 to compile. (There are also more intricate cases involving nested
 data structures or interfaces, but they have the same resolution.)
 We therefore recommend that composite literals whose type is defined
-in a separate package should use the tagged notation.
+in a separate package should use the keyed notation.
+</li>
+
+<li>
+Methods. As with struct fields, it may be necessary to add methods
+to types.
+Under some circumstances, such as when the type is embedded in
+a struct along with another type,
+the addition of the new method may break
+the struct by creating a conflict with an existing method of the other
+embedded type.
+We cannot protect against this rare case and do not guarantee compatibility
+should it arise.
 </li>
 
 <li>
@@ -102,6 +114,14 @@ imported package in future releases may conflict with other names
 defined in the program.  We do not recommend the use of <code>import .</code>
 outside of tests, and using it may cause a program to fail
 to compile in future releases.
+</li>
+
+<li>
+Use of package <code>unsafe</code>. Packages that import
+<a href="/pkg/unsafe/"><code>unsafe</code></a>
+may depend on internal properties of the Go implementation.
+We reserve the right to make changes to the implementation
+that may break such programs.
 </li>
 
 </ul>
@@ -145,7 +165,7 @@ developed software based on Go 1.
 
 <p>
 Code in sub-repositories of the main go tree, such as
-<a href="//code.google.com/p/go.net">code.google.com/p/go.net</a>,
+<a href="//golang.org/x/net">golang.org/x/net</a>,
 may be developed under
 looser compatibility requirements. However, the sub-repositories
 will be tagged as appropriate to identify versions that are compatible
@@ -162,9 +182,9 @@ is therefore outside the purview of the guarantees made here.
 As of Go version 1.4, the <code>syscall</code> package is frozen.
 Any evolution of the system call interface must be supported elsewhere,
 such as in the
-<a href="http://godoc.org/code.google.com/p/go.sys">go.sys</a> subrepository.
+<a href="//golang.org/x/sys">go.sys</a> subrepository.
 For details and background, see
-<a href="https://golang.org/s/go1.4-syscall">this document</a>.
+<a href="//golang.org/s/go1.4-syscall">this document</a>.
 </p>
 
 <h2 id="tools">Tools</h2>

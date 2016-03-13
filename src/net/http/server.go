@@ -8,6 +8,7 @@ package http
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"net/textproto"
 	"net/url"
 	"os"
 	"path"
@@ -34,30 +36,40 @@ var (
 	ErrContentLength   = errors.New("Conn.Write wrote more than the declared Content-Length")
 )
 
-// Objects implementing the Handler interface can be
-// registered to serve a particular path or subtree
-// in the HTTP server.
+// A Handler responds to an HTTP request.
 //
 // ServeHTTP should write reply headers and data to the ResponseWriter
-// and then return.  Returning signals that the request is finished
-// and that the HTTP server can move on to the next request on
-// the connection.
+// and then return. Returning signals that the request is finished; it
+// is not valid to use the ResponseWriter or read from the
+// Request.Body after or concurrently with the completion of the
+// ServeHTTP call.
+//
+// Depending on the HTTP client software, HTTP protocol version, and
+// any intermediaries between the client and the Go server, it may not
+// be possible to read from the Request.Body after writing to the
+// ResponseWriter. Cautious handlers should read the Request.Body
+// first, and then reply.
 //
 // If ServeHTTP panics, the server (the caller of ServeHTTP) assumes
 // that the effect of the panic was isolated to the active request.
 // It recovers the panic, logs a stack trace to the server error log,
 // and hangs up the connection.
-//
 type Handler interface {
 	ServeHTTP(ResponseWriter, *Request)
 }
 
 // A ResponseWriter interface is used by an HTTP handler to
 // construct an HTTP response.
+//
+// A ResponseWriter may not be used after the Handler.ServeHTTP method
+// has returned.
 type ResponseWriter interface {
-	// Header returns the header map that will be sent by WriteHeader.
-	// Changing the header after a call to WriteHeader (or Write) has
-	// no effect.
+	// Header returns the header map that will be sent by
+	// WriteHeader. Changing the header after a call to
+	// WriteHeader (or Write) has no effect unless the modified
+	// headers were declared as trailers by setting the
+	// "Trailer" header before the call to WriteHeader (see example).
+	// To suppress implicit response headers, set their value to nil.
 	Header() Header
 
 	// Write writes the data to the connection as part of an HTTP reply.
@@ -93,8 +105,14 @@ type Hijacker interface {
 	// Hijack lets the caller take over the connection.
 	// After a call to Hijack(), the HTTP server library
 	// will not do anything else with the connection.
+	//
 	// It becomes the caller's responsibility to manage
 	// and close the connection.
+	//
+	// The returned net.Conn may have read or write deadlines
+	// already set, depending on the configuration of the
+	// Server. It is the caller's responsibility to set
+	// or clear those deadlines as needed.
 	Hijack() (net.Conn, *bufio.ReadWriter, error)
 }
 
@@ -104,25 +122,76 @@ type Hijacker interface {
 // This mechanism can be used to cancel long operations on the server
 // if the client has disconnected before the response is ready.
 type CloseNotifier interface {
-	// CloseNotify returns a channel that receives a single value
-	// when the client connection has gone away.
+	// CloseNotify returns a channel that receives at most a
+	// single value (true) when the client connection has gone
+	// away.
+	//
+	// CloseNotify may wait to notify until Request.Body has been
+	// fully read.
+	//
+	// After the Handler has returned, there is no guarantee
+	// that the channel receives a value.
+	//
+	// If the protocol is HTTP/1.1 and CloseNotify is called while
+	// processing an idempotent request (such a GET) while
+	// HTTP/1.1 pipelining is in use, the arrival of a subsequent
+	// pipelined request may cause a value to be sent on the
+	// returned channel. In practice HTTP/1.1 pipelining is not
+	// enabled in browsers and not seen often in the wild. If this
+	// is a problem, use HTTP/2 or only use CloseNotify on methods
+	// such as POST.
 	CloseNotify() <-chan bool
 }
 
 // A conn represents the server side of an HTTP connection.
 type conn struct {
-	remoteAddr string               // network address of remote side
-	server     *Server              // the Server on which the connection arrived
-	rwc        net.Conn             // i/o connection
-	sr         liveSwitchReader     // where the LimitReader reads from; usually the rwc
-	lr         *io.LimitedReader    // io.LimitReader(sr)
-	buf        *bufio.ReadWriter    // buffered(lr,rwc), reading from bufio->limitReader->sr->rwc
-	tlsState   *tls.ConnectionState // or nil when not using TLS
+	// server is the server on which the connection arrived.
+	// Immutable; never nil.
+	server *Server
 
-	mu           sync.Mutex // guards the following
-	clientGone   bool       // if client has disconnected mid-request
-	closeNotifyc chan bool  // made lazily
-	hijackedv    bool       // connection has been hijacked by handler
+	// rwc is the underlying network connection.
+	// This is never wrapped by other types and is the value given out
+	// to CloseNotifier callers. It is usually of type *net.TCPConn or
+	// *tls.Conn.
+	rwc net.Conn
+
+	// remoteAddr is rwc.RemoteAddr().String(). It is not populated synchronously
+	// inside the Listener's Accept goroutine, as some implementations block.
+	// It is populated immediately inside the (*conn).serve goroutine.
+	// This is the value of a Handler's (*Request).RemoteAddr.
+	remoteAddr string
+
+	// tlsState is the TLS connection state when using TLS.
+	// nil means not TLS.
+	tlsState *tls.ConnectionState
+
+	// werr is set to the first write error to rwc.
+	// It is set via checkConnErrorWriter{w}, where bufw writes.
+	werr error
+
+	// r is bufr's read source. It's a wrapper around rwc that provides
+	// io.LimitedReader-style limiting (while reading request headers)
+	// and functionality to support CloseNotifier. See *connReader docs.
+	r *connReader
+
+	// bufr reads from r.
+	// Users of bufr must hold mu.
+	bufr *bufio.Reader
+
+	// bufw writes to checkConnErrorWriter{c}, which populates werr on error.
+	bufw *bufio.Writer
+
+	// lastMethod is the method of the most recent request
+	// on this connection, if any.
+	lastMethod string
+
+	// mu guards hijackedv, use of bufr, (*response).closeNotifyCh.
+	mu sync.Mutex
+
+	// hijackedv is whether this connection has been hijacked
+	// by a Handler with the Hijacker interface.
+	// It is guarded by mu.
+	hijackedv bool
 }
 
 func (c *conn) hijacked() bool {
@@ -131,85 +200,16 @@ func (c *conn) hijacked() bool {
 	return c.hijackedv
 }
 
-func (c *conn) hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// c.mu must be held.
+func (c *conn) hijackLocked() (rwc net.Conn, buf *bufio.ReadWriter, err error) {
 	if c.hijackedv {
 		return nil, nil, ErrHijacked
 	}
-	if c.closeNotifyc != nil {
-		return nil, nil, errors.New("http: Hijack is incompatible with use of CloseNotifier")
-	}
 	c.hijackedv = true
 	rwc = c.rwc
-	buf = c.buf
-	c.rwc = nil
-	c.buf = nil
+	buf = bufio.NewReadWriter(c.bufr, bufio.NewWriter(rwc))
 	c.setState(rwc, StateHijacked)
 	return
-}
-
-func (c *conn) closeNotify() <-chan bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closeNotifyc == nil {
-		c.closeNotifyc = make(chan bool, 1)
-		if c.hijackedv {
-			// to obey the function signature, even though
-			// it'll never receive a value.
-			return c.closeNotifyc
-		}
-		pr, pw := io.Pipe()
-
-		readSource := c.sr.r
-		c.sr.Lock()
-		c.sr.r = pr
-		c.sr.Unlock()
-		go func() {
-			_, err := io.Copy(pw, readSource)
-			if err == nil {
-				err = io.EOF
-			}
-			pw.CloseWithError(err)
-			c.noteClientGone()
-		}()
-	}
-	return c.closeNotifyc
-}
-
-func (c *conn) noteClientGone() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closeNotifyc != nil && !c.clientGone {
-		c.closeNotifyc <- true
-	}
-	c.clientGone = true
-}
-
-// A switchReader can have its Reader changed at runtime.
-// It's not safe for concurrent Reads and switches.
-type switchReader struct {
-	io.Reader
-}
-
-// A switchWriter can have its Writer changed at runtime.
-// It's not safe for concurrent Writes and switches.
-type switchWriter struct {
-	io.Writer
-}
-
-// A liveSwitchReader is a switchReader that's safe for concurrent
-// reads and switches, if its mutex is held.
-type liveSwitchReader struct {
-	sync.Mutex
-	r io.Reader
-}
-
-func (sr *liveSwitchReader) Read(p []byte) (n int, err error) {
-	sr.Lock()
-	r := sr.r
-	sr.Unlock()
-	return r.Read(p)
 }
 
 // This should be >= 512 bytes for DetectContentType,
@@ -258,15 +258,15 @@ func (cw *chunkWriter) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 	if cw.chunking {
-		_, err = fmt.Fprintf(cw.res.conn.buf, "%x\r\n", len(p))
+		_, err = fmt.Fprintf(cw.res.conn.bufw, "%x\r\n", len(p))
 		if err != nil {
 			cw.res.conn.rwc.Close()
 			return
 		}
 	}
-	n, err = cw.res.conn.buf.Write(p)
+	n, err = cw.res.conn.bufw.Write(p)
 	if cw.chunking && err == nil {
-		_, err = cw.res.conn.buf.Write(crlf)
+		_, err = cw.res.conn.bufw.Write(crlf)
 	}
 	if err != nil {
 		cw.res.conn.rwc.Close()
@@ -278,7 +278,7 @@ func (cw *chunkWriter) flush() {
 	if !cw.wroteHeader {
 		cw.writeHeader(nil)
 	}
-	cw.res.conn.buf.Flush()
+	cw.res.conn.bufw.Flush()
 }
 
 func (cw *chunkWriter) close() {
@@ -286,10 +286,21 @@ func (cw *chunkWriter) close() {
 		cw.writeHeader(nil)
 	}
 	if cw.chunking {
-		// zero EOF chunk, trailer key/value pairs (currently
-		// unsupported in Go's server), followed by a blank
-		// line.
-		cw.res.conn.buf.WriteString("0\r\n\r\n")
+		bw := cw.res.conn.bufw // conn's bufio writer
+		// zero chunk to mark EOF
+		bw.WriteString("0\r\n")
+		if len(cw.res.trailers) > 0 {
+			trailers := make(Header)
+			for _, h := range cw.res.trailers {
+				if vv := cw.res.handlerHeader[h]; len(vv) > 0 {
+					trailers[h] = vv
+				}
+			}
+			trailers.Write(bw) // the writer handles noting errors
+		}
+		// final blank line after the trailers (whether
+		// present or not)
+		bw.WriteString("\r\n")
 	}
 }
 
@@ -297,12 +308,12 @@ func (cw *chunkWriter) close() {
 type response struct {
 	conn          *conn
 	req           *Request // request for this response
-	wroteHeader   bool     // reply header has been (logically) written
-	wroteContinue bool     // 100 Continue response was written
+	reqBody       io.ReadCloser
+	wroteHeader   bool // reply header has been (logically) written
+	wroteContinue bool // 100 Continue response was written
 
 	w  *bufio.Writer // buffers output in chunks to chunkWriter
 	cw chunkWriter
-	sw *switchWriter // of the bufio.Writer, for return to putBufioWriter
 
 	// handlerHeader is the Header that Handlers get access to,
 	// which may be retained and mutated even after WriteHeader.
@@ -330,11 +341,39 @@ type response struct {
 	// input from it.
 	requestBodyLimitHit bool
 
-	handlerDone bool // set true when the handler exits
+	// trailers are the headers to be sent after the handler
+	// finishes writing the body.  This field is initialized from
+	// the Trailer response header when the response header is
+	// written.
+	trailers []string
+
+	handlerDone atomicBool // set true when the handler exits
 
 	// Buffers for Date and Content-Length
 	dateBuf [len(TimeFormat)]byte
 	clenBuf [10]byte
+
+	// closeNotifyCh is non-nil once CloseNotify is called.
+	// Guarded by conn.mu
+	closeNotifyCh <-chan bool
+}
+
+type atomicBool int32
+
+func (b *atomicBool) isSet() bool { return atomic.LoadInt32((*int32)(b)) != 0 }
+func (b *atomicBool) setTrue()    { atomic.StoreInt32((*int32)(b), 1) }
+
+// declareTrailer is called for each Trailer header when the
+// response header is written. It notes that a header will need to be
+// written in the trailers at the end of the response.
+func (w *response) declareTrailer(k string) {
+	k = CanonicalHeaderKey(k)
+	switch k {
+	case "Transfer-Encoding", "Content-Length", "Trailer":
+		// Forbidden by RFC 2616 14.40.
+		return
+	}
+	w.trailers = append(w.trailers, k)
 }
 
 // requestTooLarge is called by maxBytesReader when too much input has
@@ -386,7 +425,9 @@ func (w *response) ReadFrom(src io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	if !ok || !regFile {
-		return io.Copy(writerOnly{w}, src)
+		bufp := copyBufPool.Get().(*[]byte)
+		defer copyBufPool.Put(bufp)
+		return io.CopyBuffer(writerOnly{w}, src, *bufp)
 	}
 
 	// sendfile path:
@@ -419,28 +460,88 @@ func (w *response) ReadFrom(src io.Reader) (n int64, err error) {
 	return n, err
 }
 
-// noLimit is an effective infinite upper bound for io.LimitedReader
-const noLimit int64 = (1 << 63) - 1
-
 // debugServerConnections controls whether all server connections are wrapped
 // with a verbose logging wrapper.
 const debugServerConnections = false
 
 // Create new connection from rwc.
-func (srv *Server) newConn(rwc net.Conn) (c *conn, err error) {
-	c = new(conn)
-	c.remoteAddr = rwc.RemoteAddr().String()
-	c.server = srv
-	c.rwc = rwc
+func (srv *Server) newConn(rwc net.Conn) *conn {
+	c := &conn{
+		server: srv,
+		rwc:    rwc,
+	}
 	if debugServerConnections {
 		c.rwc = newLoggingConn("server", c.rwc)
 	}
-	c.sr = liveSwitchReader{r: c.rwc}
-	c.lr = io.LimitReader(&c.sr, noLimit).(*io.LimitedReader)
-	br := newBufioReader(c.lr)
-	bw := newBufioWriterSize(c.rwc, 4<<10)
-	c.buf = bufio.NewReadWriter(br, bw)
-	return c, nil
+	return c
+}
+
+type readResult struct {
+	n   int
+	err error
+	b   byte // byte read, if n == 1
+}
+
+// connReader is the io.Reader wrapper used by *conn. It combines a
+// selectively-activated io.LimitedReader (to bound request header
+// read sizes) with support for selectively keeping an io.Reader.Read
+// call blocked in a background goroutine to wait for activity and
+// trigger a CloseNotifier channel.
+type connReader struct {
+	r      io.Reader
+	remain int64 // bytes remaining
+
+	// ch is non-nil if a background read is in progress.
+	// It is guarded by conn.mu.
+	ch chan readResult
+}
+
+func (cr *connReader) setReadLimit(remain int64) { cr.remain = remain }
+func (cr *connReader) setInfiniteReadLimit()     { cr.remain = 1<<63 - 1 }
+func (cr *connReader) hitReadLimit() bool        { return cr.remain <= 0 }
+
+func (cr *connReader) Read(p []byte) (n int, err error) {
+	if cr.hitReadLimit() {
+		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return
+	}
+	if int64(len(p)) > cr.remain {
+		p = p[:cr.remain]
+	}
+
+	// Is a background read (started by CloseNotifier) already in
+	// flight? If so, wait for it and use its result.
+	ch := cr.ch
+	if ch != nil {
+		cr.ch = nil
+		res := <-ch
+		if res.n == 1 {
+			p[0] = res.b
+			cr.remain -= 1
+		}
+		return res.n, res.err
+	}
+	n, err = cr.r.Read(p)
+	cr.remain -= int64(n)
+	return
+}
+
+func (cr *connReader) startBackgroundRead(onReadComplete func()) {
+	if cr.ch != nil {
+		// Background read already started.
+		return
+	}
+	cr.ch = make(chan readResult, 1)
+	go cr.closeNotifyAwaitActivityRead(cr.ch, onReadComplete)
+}
+
+func (cr *connReader) closeNotifyAwaitActivityRead(ch chan<- readResult, onReadComplete func()) {
+	var buf [1]byte
+	n, err := cr.r.Read(buf[:1])
+	onReadComplete()
+	ch <- readResult{n, err, buf[0]}
 }
 
 var (
@@ -448,6 +549,13 @@ var (
 	bufioWriter2kPool sync.Pool
 	bufioWriter4kPool sync.Pool
 )
+
+var copyBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 32*1024)
+		return &b
+	},
+}
 
 func bufioWriterPool(size int) *sync.Pool {
 	switch size {
@@ -465,6 +573,8 @@ func newBufioReader(r io.Reader) *bufio.Reader {
 		br.Reset(r)
 		return br
 	}
+	// Note: if this reader size is every changed, update
+	// TestHandlerBodyClose's assumptions.
 	return bufio.NewReader(r)
 }
 
@@ -504,7 +614,7 @@ func (srv *Server) maxHeaderBytes() int {
 	return DefaultMaxHeaderBytes
 }
 
-func (srv *Server) initialLimitedReaderSize() int64 {
+func (srv *Server) initialReadLimitSize() int64 {
 	return int64(srv.maxHeaderBytes()) + 4096 // bufio slop
 }
 
@@ -514,6 +624,7 @@ type expectContinueReader struct {
 	resp       *response
 	readCloser io.ReadCloser
 	closed     bool
+	sawEOF     bool
 }
 
 func (ecr *expectContinueReader) Read(p []byte) (n int, err error) {
@@ -522,10 +633,14 @@ func (ecr *expectContinueReader) Read(p []byte) (n int, err error) {
 	}
 	if !ecr.resp.wroteContinue && !ecr.resp.conn.hijacked() {
 		ecr.resp.wroteContinue = true
-		ecr.resp.conn.buf.WriteString("HTTP/1.1 100 Continue\r\n\r\n")
-		ecr.resp.conn.buf.Flush()
+		ecr.resp.conn.bufw.WriteString("HTTP/1.1 100 Continue\r\n\r\n")
+		ecr.resp.conn.bufw.Flush()
 	}
-	return ecr.readCloser.Read(p)
+	n, err = ecr.readCloser.Read(p)
+	if err == io.EOF {
+		ecr.sawEOF = true
+	}
+	return
 }
 
 func (ecr *expectContinueReader) Close() error {
@@ -533,10 +648,12 @@ func (ecr *expectContinueReader) Close() error {
 	return ecr.readCloser.Close()
 }
 
-// TimeFormat is the time format to use with
-// time.Parse and time.Time.Format when parsing
-// or generating times in HTTP headers.
-// It is like time.RFC1123 but hard codes GMT as the time zone.
+// TimeFormat is the time format to use when generating times in HTTP
+// headers. It is like time.RFC1123 but hard-codes GMT as the time
+// zone. The time being formatted must be in UTC for Format to
+// generate the correct format.
+//
+// For parsing this time format, see ParseTime.
 const TimeFormat = "Mon, 02 Jan 2006 15:04:05 GMT"
 
 // appendTime is a non-allocating version of []byte(t.UTC().Format(TimeFormat))
@@ -578,22 +695,56 @@ func (c *conn) readRequest() (w *response, err error) {
 		}()
 	}
 
-	c.lr.N = c.server.initialLimitedReaderSize()
-	var req *Request
-	if req, err = ReadRequest(c.buf.Reader); err != nil {
-		if c.lr.N == 0 {
+	c.r.setReadLimit(c.server.initialReadLimitSize())
+	c.mu.Lock() // while using bufr
+	if c.lastMethod == "POST" {
+		// RFC 2616 section 4.1 tolerance for old buggy clients.
+		peek, _ := c.bufr.Peek(4) // ReadRequest will get err below
+		c.bufr.Discard(numLeadingCRorLF(peek))
+	}
+	req, err := readRequest(c.bufr, keepHostHeader)
+	c.mu.Unlock()
+	if err != nil {
+		if c.r.hitReadLimit() {
 			return nil, errTooLarge
 		}
 		return nil, err
 	}
-	c.lr.N = noLimit
+	c.lastMethod = req.Method
+	c.r.setInfiniteReadLimit()
+
+	hosts, haveHost := req.Header["Host"]
+	if req.ProtoAtLeast(1, 1) && (!haveHost || len(hosts) == 0) {
+		return nil, badRequestError("missing required Host header")
+	}
+	if len(hosts) > 1 {
+		return nil, badRequestError("too many Host headers")
+	}
+	if len(hosts) == 1 && !validHostHeader(hosts[0]) {
+		return nil, badRequestError("malformed Host header")
+	}
+	for k, vv := range req.Header {
+		if !validHeaderName(k) {
+			return nil, badRequestError("invalid header name")
+		}
+		for _, v := range vv {
+			if !validHeaderValue(v) {
+				return nil, badRequestError("invalid header value")
+			}
+		}
+	}
+	delete(req.Header, "Host")
 
 	req.RemoteAddr = c.remoteAddr
 	req.TLS = c.tlsState
+	if body, ok := req.Body.(*body); ok {
+		body.doEarlyClose = true
+	}
 
 	w = &response{
 		conn:          c,
 		req:           req,
+		reqBody:       req.Body,
 		handlerHeader: make(Header),
 		contentLength: -1,
 	}
@@ -701,7 +852,7 @@ func (h extraHeader) Write(w *bufio.Writer) {
 }
 
 // writeHeader finalizes the header sent to the client and writes it
-// to cw.res.conn.buf.
+// to cw.res.conn.bufw.
 //
 // p is not written by writeHeader, but is the first chunk of the body
 // that will be written.  It is sniffed for a Content-Type if none is
@@ -744,6 +895,15 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	}
 	var setHeader extraHeader
 
+	trailers := false
+	for _, v := range cw.header["Trailer"] {
+		trailers = true
+		foreachHeaderElement(v, cw.res.declareTrailer)
+	}
+
+	te := header.get("Transfer-Encoding")
+	hasTE := te != ""
+
 	// If the handler is done but never sent a Content-Length
 	// response header and this is our first (and last) write, set
 	// it, even to zero. This helps HTTP/1.0 clients keep their
@@ -756,7 +916,9 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	// write non-zero bytes.  If it's actually 0 bytes and the
 	// handler never looked at the Request.Method, we just don't
 	// send a Content-Length header.
-	if w.handlerDone && bodyAllowedForStatus(w.status) && header.get("Content-Length") == "" && (!isHEAD || len(p) > 0) {
+	// Further, we don't send an automatic Content-Length if they
+	// set a Transfer-Encoding, because they're generally incompatible.
+	if w.handlerDone.isSet() && !trailers && !hasTE && bodyAllowedForStatus(w.status) && header.get("Content-Length") == "" && (!isHEAD || len(p) > 0) {
 		w.contentLength = int64(len(p))
 		setHeader.contentLength = strconv.AppendInt(cw.res.clenBuf[:0], int64(len(p)), 10)
 	}
@@ -786,21 +948,78 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		w.closeAfterReply = true
 	}
 
+	// If the client wanted a 100-continue but we never sent it to
+	// them (or, more strictly: we never finished reading their
+	// request body), don't reuse this connection because it's now
+	// in an unknown state: we might be sending this response at
+	// the same time the client is now sending its request body
+	// after a timeout.  (Some HTTP clients send Expect:
+	// 100-continue but knowing that some servers don't support
+	// it, the clients set a timer and send the body later anyway)
+	// If we haven't seen EOF, we can't skip over the unread body
+	// because we don't know if the next bytes on the wire will be
+	// the body-following-the-timer or the subsequent request.
+	// See Issue 11549.
+	if ecr, ok := w.req.Body.(*expectContinueReader); ok && !ecr.sawEOF {
+		w.closeAfterReply = true
+	}
+
 	// Per RFC 2616, we should consume the request body before
 	// replying, if the handler hasn't already done so.  But we
 	// don't want to do an unbounded amount of reading here for
 	// DoS reasons, so we only try up to a threshold.
 	if w.req.ContentLength != 0 && !w.closeAfterReply {
-		ecr, isExpecter := w.req.Body.(*expectContinueReader)
-		if !isExpecter || ecr.resp.wroteContinue {
-			n, _ := io.CopyN(ioutil.Discard, w.req.Body, maxPostHandlerReadBytes+1)
-			if n >= maxPostHandlerReadBytes {
-				w.requestTooLarge()
-				delHeader("Connection")
-				setHeader.connection = "close"
-			} else {
-				w.req.Body.Close()
+		var discard, tooBig bool
+
+		switch bdy := w.req.Body.(type) {
+		case *expectContinueReader:
+			if bdy.resp.wroteContinue {
+				discard = true
 			}
+		case *body:
+			bdy.mu.Lock()
+			switch {
+			case bdy.closed:
+				if !bdy.sawEOF {
+					// Body was closed in handler with non-EOF error.
+					w.closeAfterReply = true
+				}
+			case bdy.unreadDataSizeLocked() >= maxPostHandlerReadBytes:
+				tooBig = true
+			default:
+				discard = true
+			}
+			bdy.mu.Unlock()
+		default:
+			discard = true
+		}
+
+		if discard {
+			_, err := io.CopyN(ioutil.Discard, w.reqBody, maxPostHandlerReadBytes+1)
+			switch err {
+			case nil:
+				// There must be even more data left over.
+				tooBig = true
+			case ErrBodyReadAfterClose:
+				// Body was already consumed and closed.
+			case io.EOF:
+				// The remaining body was just consumed, close it.
+				err = w.reqBody.Close()
+				if err != nil {
+					w.closeAfterReply = true
+				}
+			default:
+				// Some other kind of error occured, like a read timeout, or
+				// corrupt chunked encoding. In any case, whatever remains
+				// on the wire must not be parsed as another HTTP request.
+				w.closeAfterReply = true
+			}
+		}
+
+		if tooBig {
+			w.requestTooLarge()
+			delHeader("Connection")
+			setHeader.connection = "close"
 		}
 	}
 
@@ -808,7 +1027,7 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 	if bodyAllowedForStatus(code) {
 		// If no content type, apply sniffing algorithm to body.
 		_, haveType := header["Content-Type"]
-		if !haveType {
+		if !haveType && !hasTE {
 			setHeader.contentType = DetectContentType(p)
 		}
 	} else {
@@ -821,8 +1040,6 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		setHeader.date = appendTime(cw.res.dateBuf[:0], time.Now())
 	}
 
-	te := header.get("Transfer-Encoding")
-	hasTE := te != ""
 	if hasCL && hasTE && te != "identity" {
 		// TODO: return an error if WriteHeader gets a return parameter
 		// For now just ignore the Content-Length.
@@ -876,10 +1093,28 @@ func (cw *chunkWriter) writeHeader(p []byte) {
 		}
 	}
 
-	w.conn.buf.WriteString(statusLine(w.req, code))
-	cw.header.WriteSubset(w.conn.buf, excludeHeader)
-	setHeader.Write(w.conn.buf.Writer)
-	w.conn.buf.Write(crlf)
+	w.conn.bufw.WriteString(statusLine(w.req, code))
+	cw.header.WriteSubset(w.conn.bufw, excludeHeader)
+	setHeader.Write(w.conn.bufw)
+	w.conn.bufw.Write(crlf)
+}
+
+// foreachHeaderElement splits v according to the "#rule" construction
+// in RFC 2616 section 2.1 and calls fn for each non-empty element.
+func foreachHeaderElement(v string, fn func(string)) {
+	v = textproto.TrimString(v)
+	if v == "" {
+		return
+	}
+	if !strings.Contains(v, ",") {
+		fn(v)
+		return
+	}
+	for _, f := range strings.Split(v, ",") {
+		if f = textproto.TrimString(f); f != "" {
+			fn(f)
+		}
+	}
 }
 
 // statusLines is a cache of Status-Line strings, keyed by code (for
@@ -927,7 +1162,7 @@ func statusLine(req *Request, code int) string {
 	return line
 }
 
-// bodyAllowed returns true if a Write is allowed for this response type.
+// bodyAllowed reports whether a Write is allowed for this response type.
 // It's illegal to call this before the header has been flushed.
 func (w *response) bodyAllowed() bool {
 	if !w.wroteHeader {
@@ -956,8 +1191,10 @@ func (w *response) bodyAllowed() bool {
 // 2. (*response).w, a *bufio.Writer of bufferBeforeChunkingSize bytes
 // 3. chunkWriter.Writer (whose writeHeader finalizes Content-Length/Type)
 //    and which writes the chunk headers, if needed.
-// 4. conn.buf, a bufio.Writer of default (4kB) bytes
-// 5. the rwc, the net.Conn.
+// 4. conn.buf, a bufio.Writer of default (4kB) bytes, writing to ->
+// 5. checkConnErrorWriter{c}, which notes any non-nil error on Write
+//    and populates c.werr with it if so. but otherwise writes to:
+// 6. the rwc, the net.Conn.
 //
 // TODO(bradfitz): short-circuit some of the buffering when the
 // initial header contains both a Content-Type and Content-Length.
@@ -1004,7 +1241,7 @@ func (w *response) write(lenData int, dataB []byte, dataS string) (n int, err er
 }
 
 func (w *response) finishRequest() {
-	w.handlerDone = true
+	w.handlerDone.setTrue()
 
 	if !w.wroteHeader {
 		w.WriteHeader(StatusOK)
@@ -1013,20 +1250,48 @@ func (w *response) finishRequest() {
 	w.w.Flush()
 	putBufioWriter(w.w)
 	w.cw.close()
-	w.conn.buf.Flush()
+	w.conn.bufw.Flush()
 
 	// Close the body (regardless of w.closeAfterReply) so we can
 	// re-use its bufio.Reader later safely.
-	w.req.Body.Close()
+	w.reqBody.Close()
 
 	if w.req.MultipartForm != nil {
 		w.req.MultipartForm.RemoveAll()
 	}
+}
+
+// shouldReuseConnection reports whether the underlying TCP connection can be reused.
+// It must only be called after the handler is done executing.
+func (w *response) shouldReuseConnection() bool {
+	if w.closeAfterReply {
+		// The request or something set while executing the
+		// handler indicated we shouldn't reuse this
+		// connection.
+		return false
+	}
 
 	if w.req.Method != "HEAD" && w.contentLength != -1 && w.bodyAllowed() && w.contentLength != w.written {
 		// Did not write enough. Avoid getting out of sync.
-		w.closeAfterReply = true
+		return false
 	}
+
+	// There was some error writing to the underlying connection
+	// during the request, so don't re-use this conn.
+	if w.conn.werr != nil {
+		return false
+	}
+
+	if w.closedRequestBodyEarly() {
+		return false
+	}
+
+	return true
+}
+
+func (w *response) closedRequestBodyEarly() bool {
+	body, ok := w.req.Body.(*body)
+	return ok && body.didEarlyClose()
 }
 
 func (w *response) Flush() {
@@ -1038,28 +1303,26 @@ func (w *response) Flush() {
 }
 
 func (c *conn) finalFlush() {
-	if c.buf != nil {
-		c.buf.Flush()
-
+	if c.bufr != nil {
 		// Steal the bufio.Reader (~4KB worth of memory) and its associated
 		// reader for a future connection.
-		putBufioReader(c.buf.Reader)
+		putBufioReader(c.bufr)
+		c.bufr = nil
+	}
 
+	if c.bufw != nil {
+		c.bufw.Flush()
 		// Steal the bufio.Writer (~4KB worth of memory) and its associated
 		// writer for a future connection.
-		putBufioWriter(c.buf.Writer)
-
-		c.buf = nil
+		putBufioWriter(c.bufw)
+		c.bufw = nil
 	}
 }
 
 // Close the connection.
 func (c *conn) close() {
 	c.finalFlush()
-	if c.rwc != nil {
-		c.rwc.Close()
-		c.rwc = nil
-	}
+	c.rwc.Close()
 }
 
 // rstAvoidanceDelay is the amount of time we sleep after closing the
@@ -1082,7 +1345,7 @@ var _ closeWriter = (*net.TCPConn)(nil)
 // pause for a bit, hoping the client processes it before any
 // subsequent RST.
 //
-// See http://golang.org/issue/3595
+// See https://golang.org/issue/3595
 func (c *conn) closeWriteAndWait() {
 	c.finalFlush()
 	if tcp, ok := c.rwc.(closeWriter); ok {
@@ -1109,9 +1372,16 @@ func (c *conn) setState(nc net.Conn, state ConnState) {
 	}
 }
 
+// badRequestError is a literal string (used by in the server in HTML,
+// unescaped) to tell the user why their request was bad. It should
+// be plain text without user info or other embeddded errors.
+type badRequestError string
+
+func (e badRequestError) Error() string { return "Bad Request: " + string(e) }
+
 // Serve a new connection.
 func (c *conn) serve() {
-	origConn := c.rwc // copy it before it's set nil on Close or Hijack
+	c.remoteAddr = c.rwc.RemoteAddr().String()
 	defer func() {
 		if err := recover(); err != nil {
 			const size = 64 << 10
@@ -1121,7 +1391,7 @@ func (c *conn) serve() {
 		}
 		if !c.hijacked() {
 			c.close()
-			c.setState(origConn, StateClosed)
+			c.setState(c.rwc, StateClosed)
 		}
 	}()
 
@@ -1147,9 +1417,13 @@ func (c *conn) serve() {
 		}
 	}
 
+	c.r = &connReader{r: c.rwc}
+	c.bufr = newBufioReader(c.r)
+	c.bufw = newBufioWriterSize(checkConnErrorWriter{c}, 4<<10)
+
 	for {
 		w, err := c.readRequest()
-		if c.lr.N != c.server.initialLimitedReaderSize() {
+		if c.r.remain != c.server.initialReadLimitSize() {
 			// If we read any bytes off the wire, we're active.
 			c.setState(c.rwc, StateActive)
 		}
@@ -1160,16 +1434,22 @@ func (c *conn) serve() {
 				// responding to them and hanging up
 				// while they're still writing their
 				// request.  Undefined behavior.
-				io.WriteString(c.rwc, "HTTP/1.1 413 Request Entity Too Large\r\n\r\n")
+				io.WriteString(c.rwc, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n431 Request Header Fields Too Large")
 				c.closeWriteAndWait()
-				break
-			} else if err == io.EOF {
-				break // Don't reply
-			} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-				break // Don't reply
+				return
 			}
-			io.WriteString(c.rwc, "HTTP/1.1 400 Bad Request\r\n\r\n")
-			break
+			if err == io.EOF {
+				return // don't reply
+			}
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				return // don't reply
+			}
+			var publicErr string
+			if v, ok := err.(badRequestError); ok {
+				publicErr = ": " + string(v)
+			}
+			io.WriteString(c.rwc, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n400 Bad Request"+publicErr)
+			return
 		}
 
 		// Expect 100 Continue support
@@ -1179,10 +1459,9 @@ func (c *conn) serve() {
 				// Wrap the Body reader with one that replies on the connection
 				req.Body = &expectContinueReader{readCloser: req.Body, resp: w}
 			}
-			req.Header.Del("Expect")
 		} else if req.Header.get("Expect") != "" {
 			w.sendExpectationFailed()
-			break
+			return
 		}
 
 		// HTTP cannot have multiple simultaneous active requests.[*]
@@ -1195,11 +1474,11 @@ func (c *conn) serve() {
 			return
 		}
 		w.finishRequest()
-		if w.closeAfterReply {
-			if w.requestBodyLimitHit {
+		if !w.shouldReuseConnection() {
+			if w.requestBodyLimitHit || w.closedRequestBodyEarly() {
 				c.closeWriteAndWait()
 			}
-			break
+			return
 		}
 		c.setState(c.rwc, StateIdle)
 	}
@@ -1226,12 +1505,24 @@ func (w *response) sendExpectationFailed() {
 // Hijack implements the Hijacker.Hijack method. Our response is both a ResponseWriter
 // and a Hijacker.
 func (w *response) Hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error) {
+	if w.handlerDone.isSet() {
+		panic("net/http: Hijack called after ServeHTTP finished")
+	}
 	if w.wroteHeader {
 		w.cw.flush()
 	}
+
+	c := w.conn
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if w.closeNotifyCh != nil {
+		return nil, nil, errors.New("http: Hijack is incompatible with use of CloseNotifier in same ServeHTTP call")
+	}
+
 	// Release the bufioWriter that writes to the chunk writer, it is not
 	// used after a connection has been hijacked.
-	rwc, buf, err = w.conn.hijack()
+	rwc, buf, err = c.hijackLocked()
 	if err == nil {
 		putBufioWriter(w.w)
 		w.w = nil
@@ -1240,13 +1531,86 @@ func (w *response) Hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error) {
 }
 
 func (w *response) CloseNotify() <-chan bool {
-	return w.conn.closeNotify()
+	if w.handlerDone.isSet() {
+		panic("net/http: CloseNotify called after ServeHTTP finished")
+	}
+	c := w.conn
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if w.closeNotifyCh != nil {
+		return w.closeNotifyCh
+	}
+	ch := make(chan bool, 1)
+	w.closeNotifyCh = ch
+
+	if w.conn.hijackedv {
+		// CloseNotify is undefined after a hijack, but we have
+		// no place to return an error, so just return a channel,
+		// even though it'll never receive a value.
+		return ch
+	}
+
+	var once sync.Once
+	notify := func() { once.Do(func() { ch <- true }) }
+
+	if requestBodyRemains(w.reqBody) {
+		// They're still consuming the request body, so we
+		// shouldn't notify yet.
+		registerOnHitEOF(w.reqBody, func() {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			startCloseNotifyBackgroundRead(c, notify)
+		})
+	} else {
+		startCloseNotifyBackgroundRead(c, notify)
+	}
+	return ch
+}
+
+// c.mu must be held.
+func startCloseNotifyBackgroundRead(c *conn, notify func()) {
+	if c.bufr.Buffered() > 0 {
+		// They've consumed the request body, so anything
+		// remaining is a pipelined request, which we
+		// document as firing on.
+		notify()
+	} else {
+		c.r.startBackgroundRead(notify)
+	}
+}
+
+func registerOnHitEOF(rc io.ReadCloser, fn func()) {
+	switch v := rc.(type) {
+	case *expectContinueReader:
+		registerOnHitEOF(v.readCloser, fn)
+	case *body:
+		v.registerOnHitEOF(fn)
+	default:
+		panic("unexpected type " + fmt.Sprintf("%T", rc))
+	}
+}
+
+// requestBodyRemains reports whether future calls to Read
+// on rc might yield more data.
+func requestBodyRemains(rc io.ReadCloser) bool {
+	if rc == eofReader {
+		return false
+	}
+	switch v := rc.(type) {
+	case *expectContinueReader:
+		return requestBodyRemains(v.readCloser)
+	case *body:
+		return v.bodyRemains()
+	default:
+		panic("unexpected type " + fmt.Sprintf("%T", rc))
+	}
 }
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as HTTP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
-// Handler object that calls f.
+// Handler that calls f.
 type HandlerFunc func(ResponseWriter, *Request)
 
 // ServeHTTP calls f(w, r).
@@ -1260,6 +1624,7 @@ func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
 // The error message should be plain text.
 func Error(w ResponseWriter, error string, code int) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(code)
 	fmt.Fprintln(w, error)
 }
@@ -1292,6 +1657,9 @@ func StripPrefix(prefix string, h Handler) Handler {
 
 // Redirect replies to the request with a redirect to url,
 // which may be a path relative to the request path.
+//
+// The provided code should be in the 3xx range and is usually
+// StatusMovedPermanently, StatusFound or StatusSeeOther.
 func Redirect(w ResponseWriter, r *Request, urlStr string, code int) {
 	if u, err := url.Parse(urlStr); err == nil {
 		// If url was relative, make absolute by
@@ -1310,11 +1678,12 @@ func Redirect(w ResponseWriter, r *Request, urlStr string, code int) {
 		// Because of this problem, no one pays attention
 		// to the RFC; they all send back just a new path.
 		// So do we.
-		oldpath := r.URL.Path
-		if oldpath == "" { // should not happen, but avoid a crash if it does
-			oldpath = "/"
-		}
-		if u.Scheme == "" {
+		if u.Scheme == "" && u.Host == "" {
+			oldpath := r.URL.Path
+			if oldpath == "" { // should not happen, but avoid a crash if it does
+				oldpath = "/"
+			}
+
 			// no leading http://server
 			if urlStr == "" || urlStr[0] != '/' {
 				// make relative path absolute
@@ -1376,6 +1745,9 @@ func (rh *redirectHandler) ServeHTTP(w ResponseWriter, r *Request) {
 // RedirectHandler returns a request handler that redirects
 // each request it receives to the given url using the given
 // status code.
+//
+// The provided code should be in the 3xx range and is usually
+// StatusMovedPermanently, StatusFound or StatusSeeOther.
 func RedirectHandler(url string, code int) Handler {
 	return &redirectHandler{url, code}
 }
@@ -1398,6 +1770,14 @@ func RedirectHandler(url string, code int) Handler {
 // the pattern "/" matches all paths not matched by other registered
 // patterns, not just the URL with Path == "/".
 //
+// If a subtree has been registered and a request is received naming the
+// subtree root without its trailing slash, ServeMux redirects that
+// request to the subtree root (adding the trailing slash). This behavior can
+// be overridden with a separate registration for the path without
+// the trailing slash. For example, registering "/images/" causes ServeMux
+// to redirect a request for "/images" to "/images/", unless "/images" has
+// been registered separately.
+//
 // Patterns may optionally begin with a host name, restricting matches to
 // URLs on that host only.  Host-specific patterns take precedence over
 // general patterns, so that a handler might register for the two patterns
@@ -1405,8 +1785,8 @@ func RedirectHandler(url string, code int) Handler {
 // requests for "http://www.google.com/".
 //
 // ServeMux also takes care of sanitizing the URL request path,
-// redirecting any request containing . or .. elements to an
-// equivalent .- and ..-free URL.
+// redirecting any request containing . or .. elements or repeated slashes
+// to an equivalent, cleaner URL.
 type ServeMux struct {
 	mu    sync.RWMutex
 	m     map[string]muxEntry
@@ -1565,7 +1945,8 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 			// strings.Index can't be -1.
 			path = pattern[strings.Index(pattern, "/"):]
 		}
-		mux.m[pattern[0:n-1]] = muxEntry{h: RedirectHandler(path, StatusMovedPermanently), pattern: pattern}
+		url := &url.URL{Path: path}
+		mux.m[pattern[0:n-1]] = muxEntry{h: RedirectHandler(url.String(), StatusMovedPermanently), pattern: pattern}
 	}
 }
 
@@ -1612,6 +1993,7 @@ type Server struct {
 	// handle HTTP requests and will initialize the Request's TLS
 	// and RemoteAddr if not already set.  The connection is
 	// automatically closed when the function returns.
+	// If TLSNextProto is nil, HTTP/2 support is enabled automatically.
 	TLSNextProto map[string]func(*Server, *tls.Conn, Handler)
 
 	// ConnState specifies an optional callback function that is
@@ -1625,7 +2007,9 @@ type Server struct {
 	// standard logger.
 	ErrorLog *log.Logger
 
-	disableKeepAlives int32 // accessed atomically.
+	disableKeepAlives int32     // accessed atomically.
+	nextProtoOnce     sync.Once // guards initialization of TLSNextProto in Serve
+	nextProtoErr      error
 }
 
 // A ConnState represents the state of a client connection to a server.
@@ -1645,6 +2029,11 @@ const (
 	// and doesn't fire again until the request has been
 	// handled. After the request is handled, the state
 	// transitions to StateClosed, StateHijacked, or StateIdle.
+	// For HTTP/2, StateActive fires on the transition from zero
+	// to one active request, and only transitions away once all
+	// active requests are complete. That means that ConnState
+	// can not be used to do per-request work; ConnState only notes
+	// the overall state of the connection.
 	StateActive
 
 	// StateIdle represents a connection that has finished
@@ -1693,8 +2082,10 @@ func (sh serverHandler) ServeHTTP(rw ResponseWriter, req *Request) {
 }
 
 // ListenAndServe listens on the TCP network address srv.Addr and then
-// calls Serve to handle requests on incoming connections.  If
-// srv.Addr is blank, ":http" is used.
+// calls Serve to handle requests on incoming connections.
+// Accepted connections are configured to enable TCP keep-alives.
+// If srv.Addr is blank, ":http" is used.
+// ListenAndServe always returns a non-nil error.
 func (srv *Server) ListenAndServe() error {
 	addr := srv.Addr
 	if addr == "" {
@@ -1707,12 +2098,21 @@ func (srv *Server) ListenAndServe() error {
 	return srv.Serve(tcpKeepAliveListener{ln.(*net.TCPListener)})
 }
 
+var testHookServerServe func(*Server, net.Listener) // used if non-nil
+
 // Serve accepts incoming connections on the Listener l, creating a
-// new service goroutine for each.  The service goroutines read requests and
+// new service goroutine for each. The service goroutines read requests and
 // then call srv.Handler to reply to them.
+// Serve always returns a non-nil error.
 func (srv *Server) Serve(l net.Listener) error {
 	defer l.Close()
+	if fn := testHookServerServe; fn != nil {
+		fn(srv, l)
+	}
 	var tempDelay time.Duration // how long to sleep on accept failure
+	if err := srv.setupHTTP2(); err != nil {
+		return err
+	}
 	for {
 		rw, e := l.Accept()
 		if e != nil {
@@ -1732,10 +2132,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			return e
 		}
 		tempDelay = 0
-		c, err := srv.newConn(rw)
-		if err != nil {
-			continue
-		}
+		c := srv.newConn(rw)
 		c.setState(c.rwc, StateNew) // before Serve can return
 		go c.serve()
 	}
@@ -1749,11 +2146,11 @@ func (s *Server) doKeepAlives() bool {
 // By default, keep-alives are always enabled. Only very
 // resource-constrained environments or servers in the process of
 // shutting down should disable them.
-func (s *Server) SetKeepAlivesEnabled(v bool) {
+func (srv *Server) SetKeepAlivesEnabled(v bool) {
 	if v {
-		atomic.StoreInt32(&s.disableKeepAlives, 0)
+		atomic.StoreInt32(&srv.disableKeepAlives, 0)
 	} else {
-		atomic.StoreInt32(&s.disableKeepAlives, 1)
+		atomic.StoreInt32(&srv.disableKeepAlives, 1)
 	}
 }
 
@@ -1767,8 +2164,10 @@ func (s *Server) logf(format string, args ...interface{}) {
 
 // ListenAndServe listens on the TCP network address addr
 // and then calls Serve with handler to handle requests
-// on incoming connections.  Handler is typically nil,
-// in which case the DefaultServeMux is used.
+// on incoming connections.
+// Accepted connections are configured to enable TCP keep-alives.
+// Handler is typically nil, in which case the DefaultServeMux is
+// used.
 //
 // A trivial example server is:
 //
@@ -1787,11 +2186,10 @@ func (s *Server) logf(format string, args ...interface{}) {
 //
 //	func main() {
 //		http.HandleFunc("/hello", HelloServer)
-//		err := http.ListenAndServe(":12345", nil)
-//		if err != nil {
-//			log.Fatal("ListenAndServe: ", err)
-//		}
+//		log.Fatal(http.ListenAndServe(":12345", nil))
 //	}
+//
+// ListenAndServe always returns a non-nil error.
 func ListenAndServe(addr string, handler Handler) error {
 	server := &Server{Addr: addr, Handler: handler}
 	return server.ListenAndServe()
@@ -1801,7 +2199,7 @@ func ListenAndServe(addr string, handler Handler) error {
 // expects HTTPS connections. Additionally, files containing a certificate and
 // matching private key for the server must be provided. If the certificate
 // is signed by a certificate authority, the certFile should be the concatenation
-// of the server's certificate followed by the CA's certificate.
+// of the server's certificate, any intermediates, and the CA's certificate.
 //
 // A trivial example server is:
 //
@@ -1819,44 +2217,56 @@ func ListenAndServe(addr string, handler Handler) error {
 //		http.HandleFunc("/", handler)
 //		log.Printf("About to listen on 10443. Go to https://127.0.0.1:10443/")
 //		err := http.ListenAndServeTLS(":10443", "cert.pem", "key.pem", nil)
-//		if err != nil {
-//			log.Fatal(err)
-//		}
+//		log.Fatal(err)
 //	}
 //
 // One can use generate_cert.go in crypto/tls to generate cert.pem and key.pem.
-func ListenAndServeTLS(addr string, certFile string, keyFile string, handler Handler) error {
+//
+// ListenAndServeTLS always returns a non-nil error.
+func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
 	server := &Server{Addr: addr, Handler: handler}
 	return server.ListenAndServeTLS(certFile, keyFile)
 }
 
 // ListenAndServeTLS listens on the TCP network address srv.Addr and
 // then calls Serve to handle requests on incoming TLS connections.
+// Accepted connections are configured to enable TCP keep-alives.
 //
-// Filenames containing a certificate and matching private key for
-// the server must be provided. If the certificate is signed by a
-// certificate authority, the certFile should be the concatenation
-// of the server's certificate followed by the CA's certificate.
+// Filenames containing a certificate and matching private key for the
+// server must be provided if neither the Server's TLSConfig.Certificates
+// nor TLSConfig.GetCertificate are populated. If the certificate is
+// signed by a certificate authority, the certFile should be the
+// concatenation of the server's certificate, any intermediates, and
+// the CA's certificate.
 //
 // If srv.Addr is blank, ":https" is used.
+//
+// ListenAndServeTLS always returns a non-nil error.
 func (srv *Server) ListenAndServeTLS(certFile, keyFile string) error {
 	addr := srv.Addr
 	if addr == "" {
 		addr = ":https"
 	}
-	config := &tls.Config{}
-	if srv.TLSConfig != nil {
-		*config = *srv.TLSConfig
-	}
-	if config.NextProtos == nil {
-		config.NextProtos = []string{"http/1.1"}
+
+	// Setup HTTP/2 before srv.Serve, to initialize srv.TLSConfig
+	// before we clone it and create the TLS Listener.
+	if err := srv.setupHTTP2(); err != nil {
+		return err
 	}
 
-	var err error
-	config.Certificates = make([]tls.Certificate, 1)
-	config.Certificates[0], err = tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return err
+	config := cloneTLSConfig(srv.TLSConfig)
+	if !strSliceContains(config.NextProtos, "http/1.1") {
+		config.NextProtos = append(config.NextProtos, "http/1.1")
+	}
+
+	configHasCert := len(config.Certificates) > 0 || config.GetCertificate != nil
+	if !configHasCert || certFile != "" || keyFile != "" {
+		var err error
+		config.Certificates = make([]tls.Certificate, 1)
+		config.Certificates[0], err = tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return err
+		}
 	}
 
 	ln, err := net.Listen("tcp", addr)
@@ -1868,6 +2278,25 @@ func (srv *Server) ListenAndServeTLS(certFile, keyFile string) error {
 	return srv.Serve(tlsListener)
 }
 
+func (srv *Server) setupHTTP2() error {
+	srv.nextProtoOnce.Do(srv.onceSetNextProtoDefaults)
+	return srv.nextProtoErr
+}
+
+// onceSetNextProtoDefaults configures HTTP/2, if the user hasn't
+// configured otherwise. (by setting srv.TLSNextProto non-nil)
+// It must only be called via srv.nextProtoOnce (use srv.setupHTTP2).
+func (srv *Server) onceSetNextProtoDefaults() {
+	if strings.Contains(os.Getenv("GODEBUG"), "http2server=0") {
+		return
+	}
+	// Enable HTTP/2 by default if the user hasn't otherwise
+	// configured their TLSNextProto map.
+	if srv.TLSNextProto == nil {
+		srv.nextProtoErr = http2ConfigureServer(srv, nil)
+	}
+}
+
 // TimeoutHandler returns a Handler that runs h with the given time limit.
 //
 // The new Handler calls h.ServeHTTP to handle each request, but if a
@@ -1876,11 +2305,20 @@ func (srv *Server) ListenAndServeTLS(certFile, keyFile string) error {
 // (If msg is empty, a suitable default message will be sent.)
 // After such a timeout, writes by h to its ResponseWriter will return
 // ErrHandlerTimeout.
+//
+// TimeoutHandler buffers all Handler writes to memory and does not
+// support the Hijacker or Flusher interfaces.
 func TimeoutHandler(h Handler, dt time.Duration, msg string) Handler {
-	f := func() <-chan time.Time {
-		return time.After(dt)
+	t := time.NewTimer(dt)
+	return &timeoutHandler{
+		handler: h,
+		body:    msg,
+
+		// Effectively storing a *time.Timer, but decomposed
+		// for testing:
+		timeout:     func() <-chan time.Time { return t.C },
+		cancelTimer: t.Stop,
 	}
-	return &timeoutHandler{h, f, msg}
 }
 
 // ErrHandlerTimeout is returned on ResponseWriter Write calls
@@ -1889,8 +2327,13 @@ var ErrHandlerTimeout = errors.New("http: Handler timeout")
 
 type timeoutHandler struct {
 	handler Handler
-	timeout func() <-chan time.Time // returns channel producing a timeout
 	body    string
+
+	// timeout returns the channel of a *time.Timer and
+	// cancelTimer cancels it.  They're stored separately for
+	// testing purposes.
+	timeout     func() <-chan time.Time // returns channel producing a timeout
+	cancelTimer func() bool             // optional
 }
 
 func (h *timeoutHandler) errorBody() string {
@@ -1901,46 +2344,61 @@ func (h *timeoutHandler) errorBody() string {
 }
 
 func (h *timeoutHandler) ServeHTTP(w ResponseWriter, r *Request) {
-	done := make(chan bool, 1)
-	tw := &timeoutWriter{w: w}
+	done := make(chan struct{})
+	tw := &timeoutWriter{
+		w: w,
+		h: make(Header),
+	}
 	go func() {
 		h.handler.ServeHTTP(tw, r)
-		done <- true
+		close(done)
 	}()
 	select {
 	case <-done:
-		return
+		tw.mu.Lock()
+		defer tw.mu.Unlock()
+		dst := w.Header()
+		for k, vv := range tw.h {
+			dst[k] = vv
+		}
+		w.WriteHeader(tw.code)
+		w.Write(tw.wbuf.Bytes())
+		if h.cancelTimer != nil {
+			h.cancelTimer()
+		}
 	case <-h.timeout():
 		tw.mu.Lock()
 		defer tw.mu.Unlock()
-		if !tw.wroteHeader {
-			tw.w.WriteHeader(StatusServiceUnavailable)
-			tw.w.Write([]byte(h.errorBody()))
-		}
+		w.WriteHeader(StatusServiceUnavailable)
+		io.WriteString(w, h.errorBody())
 		tw.timedOut = true
+		return
 	}
 }
 
 type timeoutWriter struct {
-	w ResponseWriter
+	w    ResponseWriter
+	h    Header
+	wbuf bytes.Buffer
 
 	mu          sync.Mutex
 	timedOut    bool
 	wroteHeader bool
+	code        int
 }
 
-func (tw *timeoutWriter) Header() Header {
-	return tw.w.Header()
-}
+func (tw *timeoutWriter) Header() Header { return tw.h }
 
 func (tw *timeoutWriter) Write(p []byte) (int, error) {
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
-	tw.wroteHeader = true // implicitly at least
 	if tw.timedOut {
 		return 0, ErrHandlerTimeout
 	}
-	return tw.w.Write(p)
+	if !tw.wroteHeader {
+		tw.writeHeader(StatusOK)
+	}
+	return tw.wbuf.Write(p)
 }
 
 func (tw *timeoutWriter) WriteHeader(code int) {
@@ -1949,8 +2407,12 @@ func (tw *timeoutWriter) WriteHeader(code int) {
 	if tw.timedOut || tw.wroteHeader {
 		return
 	}
+	tw.writeHeader(code)
+}
+
+func (tw *timeoutWriter) writeHeader(code int) {
 	tw.wroteHeader = true
-	tw.w.WriteHeader(code)
+	tw.code = code
 }
 
 // tcpKeepAliveListener sets TCP keep-alive timeouts on accepted
@@ -2067,4 +2529,40 @@ func (c *loggingConn) Close() (err error) {
 	err = c.Conn.Close()
 	log.Printf("%s.Close() = %v", c.name, err)
 	return
+}
+
+// checkConnErrorWriter writes to c.rwc and records any write errors to c.werr.
+// It only contains one field (and a pointer field at that), so it
+// fits in an interface value without an extra allocation.
+type checkConnErrorWriter struct {
+	c *conn
+}
+
+func (w checkConnErrorWriter) Write(p []byte) (n int, err error) {
+	n, err = w.c.rwc.Write(p)
+	if err != nil && w.c.werr == nil {
+		w.c.werr = err
+	}
+	return
+}
+
+func numLeadingCRorLF(v []byte) (n int) {
+	for _, b := range v {
+		if b == '\r' || b == '\n' {
+			n++
+			continue
+		}
+		break
+	}
+	return
+
+}
+
+func strSliceContains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

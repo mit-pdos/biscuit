@@ -6,7 +6,8 @@
 // System calls and other sys.stuff for AMD64, Linux
 //
 
-#include "zasm_GOOS_GOARCH.h"
+#include "go_asm.h"
+#include "go_tls.h"
 #include "textflag.h"
 
 TEXT runtime·exit(SB),NOSPLIT,$0-4
@@ -32,13 +33,19 @@ TEXT runtime·open(SB),NOSPLIT,$0-20
 	MOVL	perm+12(FP), DX
 	MOVL	$2, AX			// syscall entry
 	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$-1, AX
 	MOVL	AX, ret+16(FP)
 	RET
 
-TEXT runtime·close(SB),NOSPLIT,$0-12
+TEXT runtime·closefd(SB),NOSPLIT,$0-12
 	MOVL	fd+0(FP), DI
 	MOVL	$3, AX			// syscall entry
 	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$-1, AX
 	MOVL	AX, ret+8(FP)
 	RET
 
@@ -53,6 +60,9 @@ write_skip:
 	MOVL	n+16(FP), DX
 	MOVL	$1, AX			// syscall entry
 	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$-1, AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -62,6 +72,9 @@ TEXT runtime·read(SB),NOSPLIT,$0-28
 	MOVL	n+16(FP), DX
 	MOVL	$0, AX			// syscall entry
 	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$-1, AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -102,12 +115,27 @@ us_skip:
 	SYSCALL
 	RET
 
+TEXT runtime·gettid(SB),NOSPLIT,$0-4
+	MOVL	$186, AX	// syscall - gettid
+	SYSCALL
+	MOVL	AX, ret+0(FP)
+	RET
+
 TEXT runtime·raise(SB),NOSPLIT,$0
 	MOVL	$186, AX	// syscall - gettid
 	SYSCALL
 	MOVL	AX, DI	// arg 1 tid
 	MOVL	sig+0(FP), SI	// arg 2
 	MOVL	$200, AX	// syscall - tkill
+	SYSCALL
+	RET
+
+TEXT runtime·raiseproc(SB),NOSPLIT,$0
+	MOVL	$39, AX	// syscall - getpid
+	SYSCALL
+	MOVL	AX, DI	// arg 1 pid
+	MOVL	sig+0(FP), SI	// arg 2
+	MOVL	$62, AX	// syscall - kill
 	SYSCALL
 	RET
 
@@ -161,7 +189,7 @@ TEXT time·now(SB),NOSPLIT,$16
 now_skip:
 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
 	CMPQ	AX, $0
-	JEQ	fallback_gtod
+	JEQ	fallback
 	MOVL	$0, DI // CLOCK_REALTIME
 	LEAQ	0(SP), SI
 	CALL	AX
@@ -170,7 +198,7 @@ now_skip:
 	MOVQ	AX, sec+0(FP)
 	MOVL	DX, nsec+8(FP)
 	RET
-fallback_gtod:
+fallback:
 	LEAQ	0(SP), DI
 	MOVQ	$0, SI
 	MOVQ	runtime·__vdso_gettimeofday_sym(SB), AX
@@ -196,7 +224,7 @@ TEXT runtime·nanotime(SB),NOSPLIT,$16
 nnow_skip:
 	MOVQ	runtime·__vdso_clock_gettime_sym(SB), AX
 	CMPQ	AX, $0
-	JEQ	fallback_gtod_nt
+	JEQ	fallback
 	MOVL	$1, DI // CLOCK_MONOTONIC
 	LEAQ	0(SP), SI
 	CALL	AX
@@ -208,7 +236,7 @@ nnow_skip:
 	ADDQ	DX, AX
 	MOVQ	AX, ret+0(FP)
 	RET
-fallback_gtod_nt:
+fallback:
 	LEAQ	0(SP), DI
 	MOVQ	$0, SI
 	MOVQ	runtime·__vdso_gettimeofday_sym(SB), AX
@@ -256,11 +284,6 @@ sa_skip:
 	MOVL	AX, ret+32(FP)
 	RET
 
-TEXT intsigret(SB),NOSPLIT,$0
-#define TRAP_SIGRET      $71
-	INT	TRAP_SIGRET
-	INT	$3
-
 // change from using go calling conventions to x86_64 abi conventions
 TEXT ·fakesig(SB),NOSPLIT,$0-24
 	MOVL	signo+0(FP), DI
@@ -268,37 +291,20 @@ TEXT ·fakesig(SB),NOSPLIT,$0-24
 	MOVQ	ctx+16(FP), DX
 	JMP	runtime·sigtramp(SB)
 
-TEXT runtime·sigtramp(SB),NOSPLIT,$64
-	get_tls(BX)
-
-	// check that g exists
-	MOVQ	g(BX), R10
-	CMPQ	R10, $0
-	JNE	5(PC)
-	MOVQ	DI, 0(SP)
-	MOVQ	$runtime·badsignal(SB), AX
+TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
+	MOVL	sig+8(FP), DI
+	MOVQ	info+16(FP), SI
+	MOVQ	ctx+24(FP), DX
+	MOVQ	fn+0(FP), AX
 	CALL	AX
 	RET
 
-	// save g
-	MOVQ	R10, 40(SP)
-
-	// g = m->gsignal
-	MOVQ	g_m(R10), BP
-	MOVQ	m_gsignal(BP), BP
-	MOVQ	BP, g(BX)
-
-	MOVQ	DI, 0(SP)
-	MOVQ	SI, 8(SP)
-	MOVQ	DX, 16(SP)
-	MOVQ	R10, 24(SP)
-
-	CALL	runtime·sighandler(SB)
-
-	// restore g
-	get_tls(BX)
-	MOVQ	40(SP), R10
-	MOVQ	R10, g(BX)
+TEXT runtime·sigtramp(SB),NOSPLIT,$24
+	MOVQ	DI, 0(SP)   // signum
+	MOVQ	SI, 8(SP)   // info
+	MOVQ	DX, 16(SP)  // ctx
+	MOVQ	$runtime·sigtrampgo(SB), AX
+	CALL AX
 	RET
 
 TEXT runtime·sigreturn(SB),NOSPLIT,$0
@@ -306,7 +312,7 @@ TEXT runtime·sigreturn(SB),NOSPLIT,$0
 	SYSCALL
 	INT $3	// not reached
 
-TEXT runtime·mmap(SB),NOSPLIT,$0
+TEXT runtime·sysMmap(SB),NOSPLIT,$0
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	mmap_skip
@@ -325,6 +331,20 @@ mmap_skip:
 	JLS	3(PC)
 	NOTQ	AX
 	INCQ	AX
+	MOVQ	AX, ret+32(FP)
+	RET
+
+// Call the function stored in _cgo_mmap using the GCC calling convention.
+// This must be called on the system stack.
+TEXT runtime·callCgoMmap(SB),NOSPLIT,$0
+	MOVQ	addr+0(FP), DI
+	MOVQ	n+8(FP), SI
+	MOVL	prot+16(FP), DX
+	MOVL	flags+20(FP), CX
+	MOVL	fd+24(FP), R8
+	MOVL	off+28(FP), R9
+	MOVQ	_cgo_mmap(SB), AX
+	CALL	AX
 	MOVQ	AX, ret+32(FP)
 	RET
 
@@ -383,14 +403,16 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	JZ	clone_skip
 	JMP	·hack_clone(SB)
 clone_skip:
-	MOVL	flags+8(SP), DI
-	MOVQ	stack+16(SP), SI
+	MOVL	flags+0(FP), DI
+	MOVQ	stack+8(FP), SI
+	MOVQ	$0, DX
+	MOVQ	$0, R10
 
 	// Copy mp, gp, fn off parent stack for use by child.
 	// Careful: Linux system call clobbers CX and R11.
-	MOVQ	mm+24(SP), R8
-	MOVQ	gg+32(SP), R9
-	MOVQ	fn+40(SP), R12
+	MOVQ	mp+16(FP), R8
+	MOVQ	gp+24(FP), R9
+	MOVQ	fn+32(FP), R12
 
 	MOVL	$56, AX
 	SYSCALL
@@ -403,6 +425,12 @@ clone_skip:
 
 	// In child, on new stack.
 	MOVQ	SI, SP
+
+	// If g or m are nil, skip Go-related setup.
+	CMPQ	R8, $0    // m
+	JEQ	nog
+	CMPQ	R9, $0    // g
+	JEQ	nog
 
 	// Initialize m->procid to Linux tid
 	MOVL	$186, AX	// gettid
@@ -419,10 +447,11 @@ clone_skip:
 	MOVQ	R9, g(CX)
 	CALL	runtime·stackcheck(SB)
 
+nog:
 	// Call fn
 	CALL	R12
 
-	// It shouldn't return.  If it does, exit
+	// It shouldn't return.  If it does, exit that thread.
 	MOVL	$111, DI
 	MOVL	$60, AX
 	SYSCALL
@@ -446,8 +475,14 @@ sas_skip:
 
 // set tls base to DI
 TEXT runtime·settls(SB),NOSPLIT,$32
-	ADDQ	$16, DI	// ELF wants to use -16(FS), -8(FS)
-
+#ifdef GOOS_android
+	// Same as in sys_darwin_386.s:/ugliness, different constant.
+	// DI currently holds m->tls, which must be fs:0x1d0.
+	// See cgo/gcc_android_amd64.c for the derivation of the constant.
+	SUBQ	$0x1d0, DI  // In android, the tls base 
+#else
+	ADDQ	$8, DI	// ELF wants to use -8(FS)
+#endif
 	MOVQ	DI, SI
 	MOVQ	$0x1002, DI	// ARCH_SET_FS
 	MOVQ	$158, AX	// arch_prctl
@@ -525,4 +560,34 @@ TEXT runtime·closeonexec(SB),NOSPLIT,$0
 	MOVQ    $1, DX  // FD_CLOEXEC
 	MOVL	$72, AX  // fcntl
 	SYSCALL
+	RET
+
+
+// int access(const char *name, int mode)
+TEXT runtime·access(SB),NOSPLIT,$0
+	MOVQ	name+0(FP), DI
+	MOVL	mode+8(FP), SI
+	MOVL	$21, AX  // syscall entry
+	SYSCALL
+	MOVL	AX, ret+16(FP)
+	RET
+
+// int connect(int fd, const struct sockaddr *addr, socklen_t addrlen)
+TEXT runtime·connect(SB),NOSPLIT,$0-28
+	MOVL	fd+0(FP), DI
+	MOVQ	addr+8(FP), SI
+	MOVL	addrlen+16(FP), DX
+	MOVL	$42, AX  // syscall entry
+	SYSCALL
+	MOVL	AX, ret+24(FP)
+	RET
+
+// int socket(int domain, int type, int protocol)
+TEXT runtime·socket(SB),NOSPLIT,$0-20
+	MOVL	domain+0(FP), DI
+	MOVL	type+4(FP), SI
+	MOVL	protocol+8(FP), DX
+	MOVL	$41, AX  // syscall entry
+	SYSCALL
+	MOVL	AX, ret+16(FP)
 	RET

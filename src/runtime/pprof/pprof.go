@@ -20,8 +20,8 @@ import (
 	"text/tabwriter"
 )
 
-// BUG(rsc): Profiles are incomplete and inaccurate on NetBSD and OS X.
-// See http://golang.org/issue/6047 for details.
+// BUG(rsc): Profiles are only as good as the kernel support used to generate them.
+// See https://golang.org/issue/13841 for details about known problems.
 
 // A Profile is a collection of stack traces showing the call sequences
 // that led to instances of a particular event, such as allocation.
@@ -40,6 +40,13 @@ import (
 //
 // These predefined profiles maintain themselves and panic on an explicit
 // Add or Remove method call.
+//
+// The heap profile reports statistics as of the most recently completed
+// garbage collection; it elides more recent allocation to avoid skewing
+// the profile away from live data and toward garbage.
+// If there has been no garbage collection at all, the heap profile reports
+// all known allocations. This exception helps mainly in programs running
+// without garbage collection enabled, usually for debugging purposes.
 //
 // The CPU profile is not available as a Profile.  It has a special API,
 // the StartCPUProfile and StopCPUProfile functions, because it streams
@@ -339,7 +346,7 @@ func printStackRecord(w io.Writer, stk []uintptr, allFrames bool) {
 			name := f.Name()
 			// Hide runtime.goexit and any runtime functions at the beginning.
 			// This is useful mainly for allocation traces.
-			wasPanic = name == "runtime.panic"
+			wasPanic = name == "runtime.gopanic"
 			if name == "runtime.goexit" || !show && strings.HasPrefix(name, "runtime.") {
 				continue
 			}
@@ -442,35 +449,33 @@ func writeHeap(w io.Writer, debug int) error {
 
 	// Print memstats information too.
 	// Pprof will ignore, but useful for people
-	if debug > 0 {
-		s := new(runtime.MemStats)
-		runtime.ReadMemStats(s)
-		fmt.Fprintf(w, "\n# runtime.MemStats\n")
-		fmt.Fprintf(w, "# Alloc = %d\n", s.Alloc)
-		fmt.Fprintf(w, "# TotalAlloc = %d\n", s.TotalAlloc)
-		fmt.Fprintf(w, "# Sys = %d\n", s.Sys)
-		fmt.Fprintf(w, "# Lookups = %d\n", s.Lookups)
-		fmt.Fprintf(w, "# Mallocs = %d\n", s.Mallocs)
-		fmt.Fprintf(w, "# Frees = %d\n", s.Frees)
+	s := new(runtime.MemStats)
+	runtime.ReadMemStats(s)
+	fmt.Fprintf(w, "\n# runtime.MemStats\n")
+	fmt.Fprintf(w, "# Alloc = %d\n", s.Alloc)
+	fmt.Fprintf(w, "# TotalAlloc = %d\n", s.TotalAlloc)
+	fmt.Fprintf(w, "# Sys = %d\n", s.Sys)
+	fmt.Fprintf(w, "# Lookups = %d\n", s.Lookups)
+	fmt.Fprintf(w, "# Mallocs = %d\n", s.Mallocs)
+	fmt.Fprintf(w, "# Frees = %d\n", s.Frees)
 
-		fmt.Fprintf(w, "# HeapAlloc = %d\n", s.HeapAlloc)
-		fmt.Fprintf(w, "# HeapSys = %d\n", s.HeapSys)
-		fmt.Fprintf(w, "# HeapIdle = %d\n", s.HeapIdle)
-		fmt.Fprintf(w, "# HeapInuse = %d\n", s.HeapInuse)
-		fmt.Fprintf(w, "# HeapReleased = %d\n", s.HeapReleased)
-		fmt.Fprintf(w, "# HeapObjects = %d\n", s.HeapObjects)
+	fmt.Fprintf(w, "# HeapAlloc = %d\n", s.HeapAlloc)
+	fmt.Fprintf(w, "# HeapSys = %d\n", s.HeapSys)
+	fmt.Fprintf(w, "# HeapIdle = %d\n", s.HeapIdle)
+	fmt.Fprintf(w, "# HeapInuse = %d\n", s.HeapInuse)
+	fmt.Fprintf(w, "# HeapReleased = %d\n", s.HeapReleased)
+	fmt.Fprintf(w, "# HeapObjects = %d\n", s.HeapObjects)
 
-		fmt.Fprintf(w, "# Stack = %d / %d\n", s.StackInuse, s.StackSys)
-		fmt.Fprintf(w, "# MSpan = %d / %d\n", s.MSpanInuse, s.MSpanSys)
-		fmt.Fprintf(w, "# MCache = %d / %d\n", s.MCacheInuse, s.MCacheSys)
-		fmt.Fprintf(w, "# BuckHashSys = %d\n", s.BuckHashSys)
+	fmt.Fprintf(w, "# Stack = %d / %d\n", s.StackInuse, s.StackSys)
+	fmt.Fprintf(w, "# MSpan = %d / %d\n", s.MSpanInuse, s.MSpanSys)
+	fmt.Fprintf(w, "# MCache = %d / %d\n", s.MCacheInuse, s.MCacheSys)
+	fmt.Fprintf(w, "# BuckHashSys = %d\n", s.BuckHashSys)
 
-		fmt.Fprintf(w, "# NextGC = %d\n", s.NextGC)
-		fmt.Fprintf(w, "# PauseNs = %d\n", s.PauseNs)
-		fmt.Fprintf(w, "# NumGC = %d\n", s.NumGC)
-		fmt.Fprintf(w, "# EnableGC = %v\n", s.EnableGC)
-		fmt.Fprintf(w, "# DebugGC = %v\n", s.DebugGC)
-	}
+	fmt.Fprintf(w, "# NextGC = %d\n", s.NextGC)
+	fmt.Fprintf(w, "# PauseNs = %d\n", s.PauseNs)
+	fmt.Fprintf(w, "# NumGC = %d\n", s.NumGC)
+	fmt.Fprintf(w, "# EnableGC = %v\n", s.EnableGC)
+	fmt.Fprintf(w, "# DebugGC = %v\n", s.DebugGC)
 
 	if tw != nil {
 		tw.Flush()
@@ -562,6 +567,14 @@ var cpu struct {
 // StartCPUProfile enables CPU profiling for the current process.
 // While profiling, the profile will be buffered and written to w.
 // StartCPUProfile returns an error if profiling is already enabled.
+//
+// On Unix-like systems, StartCPUProfile does not work by default for
+// Go code built with -buildmode=c-archive or -buildmode=c-shared.
+// StartCPUProfile relies on the SIGPROF signal, but that signal will
+// be delivered to the main program's SIGPROF signal handler (if any)
+// not to the one used by Go.  To make it work, call os/signal.Notify
+// for syscall.SIGPROF, but note that doing so may break any profiling
+// being done by the main program.
 func StartCPUProfile(w io.Writer) error {
 	// The runtime routines allow a variable profiling rate,
 	// but in practice operating systems cannot trigger signals

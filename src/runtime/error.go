@@ -4,16 +4,14 @@
 
 package runtime
 
-import "unsafe"
-
 // The Error interface identifies a run time error.
 type Error interface {
 	error
 
 	// RuntimeError is a no-op function but
-	// serves to distinguish types that are runtime
+	// serves to distinguish types that are run time
 	// errors from ordinary errors: a type is a
-	// runtime error if it has a RuntimeError method.
+	// run time error if it has a RuntimeError method.
 	RuntimeError()
 }
 
@@ -43,25 +41,6 @@ func (e *TypeAssertionError) Error() string {
 		": missing method " + e.missingMethod
 }
 
-// For calling from C.
-func newTypeAssertionError(ps1, ps2, ps3 *string, pmeth *string, ret *interface{}) {
-	var s1, s2, s3, meth string
-
-	if ps1 != nil {
-		s1 = *ps1
-	}
-	if ps2 != nil {
-		s2 = *ps2
-	}
-	if ps3 != nil {
-		s3 = *ps3
-	}
-	if pmeth != nil {
-		meth = *pmeth
-	}
-	*ret = &TypeAssertionError{s1, s2, s3, meth}
-}
-
 // An errorString represents a runtime error described by a single string.
 type errorString string
 
@@ -76,7 +55,7 @@ type stringer interface {
 }
 
 func typestring(x interface{}) string {
-	e := (*eface)(unsafe.Pointer(&x))
+	e := efaceOf(&x)
 	return *e._type._string
 }
 

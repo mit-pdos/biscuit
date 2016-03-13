@@ -6,9 +6,11 @@ package gzip
 
 import (
 	"bytes"
+	"compress/flate"
 	"io"
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -365,5 +367,76 @@ func TestInitialReset(t *testing.T) {
 	}
 	if s := buf.String(); s != gunzipTests[1].raw {
 		t.Errorf("got %q want %q", s, gunzipTests[1].raw)
+	}
+}
+
+func TestMultistreamFalse(t *testing.T) {
+	// Find concatenation test.
+	var tt gunzipTest
+	for _, tt = range gunzipTests {
+		if strings.HasSuffix(tt.desc, " x2") {
+			goto Found
+		}
+	}
+	t.Fatal("cannot find hello.txt x2 in gunzip tests")
+
+Found:
+	br := bytes.NewReader(tt.gzip)
+	var r Reader
+	if err := r.Reset(br); err != nil {
+		t.Fatalf("first reset: %v", err)
+	}
+
+	// Expect two streams with "hello world\n", then real EOF.
+	const hello = "hello world\n"
+
+	r.Multistream(false)
+	data, err := ioutil.ReadAll(&r)
+	if string(data) != hello || err != nil {
+		t.Fatalf("first stream = %q, %v, want %q, %v", string(data), err, hello, nil)
+	}
+
+	if err := r.Reset(br); err != nil {
+		t.Fatalf("second reset: %v", err)
+	}
+	r.Multistream(false)
+	data, err = ioutil.ReadAll(&r)
+	if string(data) != hello || err != nil {
+		t.Fatalf("second stream = %q, %v, want %q, %v", string(data), err, hello, nil)
+	}
+
+	if err := r.Reset(br); err != io.EOF {
+		t.Fatalf("third reset: err=%v, want io.EOF", err)
+	}
+}
+
+func TestNilStream(t *testing.T) {
+	// Go liberally interprets RFC1952 section 2.2 to mean that a gzip file
+	// consist of zero or more members. Thus, we test that a nil stream is okay.
+	_, err := NewReader(bytes.NewReader(nil))
+	if err != io.EOF {
+		t.Fatalf("NewReader(nil) on empty stream: got %v, want io.EOF", err)
+	}
+}
+
+func TestTruncatedStreams(t *testing.T) {
+	const data = "\x1f\x8b\b\x04\x00\tn\x88\x00\xff\a\x00foo bar\xcbH\xcd\xc9\xc9\xd7Q(\xcf/\xcaI\x01\x04:r\xab\xff\f\x00\x00\x00"
+
+	// Intentionally iterate starting with at least one byte in the stream.
+	for i := 1; i < len(data)-1; i++ {
+		r, err := NewReader(strings.NewReader(data[:i]))
+		if err != nil {
+			if err != io.ErrUnexpectedEOF {
+				t.Errorf("NewReader(%d) on truncated stream: got %v, want %v", i, err, io.ErrUnexpectedEOF)
+			}
+			continue
+		}
+		_, err = io.Copy(ioutil.Discard, r)
+		if ferr, ok := err.(*flate.ReadError); ok {
+			err = ferr.Err
+		}
+		if err != io.ErrUnexpectedEOF {
+			t.Errorf("io.Copy(%d) on truncated stream: got %v, want %v", i, err, io.ErrUnexpectedEOF)
+		}
 	}
 }

@@ -168,6 +168,8 @@ func (h Header) WriteSubset(w io.Writer, exclude map[string]bool) error {
 // letter and any letter following a hyphen to upper case;
 // the rest are converted to lowercase.  For example, the
 // canonical key for "accept-encoding" is "Accept-Encoding".
+// If s contains a space or invalid header field bytes, it is
+// returned without modifications.
 func CanonicalHeaderKey(s string) string { return textproto.CanonicalMIMEHeaderKey(s) }
 
 // hasToken reports whether token appears with v, ASCII
@@ -208,4 +210,14 @@ func hasToken(v, token string) bool {
 
 func isTokenBoundary(b byte) bool {
 	return b == ' ' || b == ',' || b == '\t'
+}
+
+func cloneHeader(h Header) Header {
+	h2 := make(Header, len(h))
+	for k, vv := range h {
+		vv2 := make([]string, len(vv))
+		copy(vv2, vv)
+		h2[k] = vv2
+	}
+	return h2
 }
