@@ -193,10 +193,14 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 		Lcr3(p_pmap)
 	}
 	// set shadow pointers for user pmap so it isn't free'd out from under
-	// us if the process terminates soon
-	cpu.pmap = pmap
-	cpu.pms = pms
+	// us if the process terminates soon.
+	//cpu.pmap = pmap
+	//cpu.pms = pms
 	//cpu.pid = uintptr(pid)
+	// avoid write barriers since we are uninterruptible. the caller must
+	// also have these references anyway, so skipping them is ok.
+	*(*uintptr)(unsafe.Pointer(&cpu.pmap)) = uintptr(unsafe.Pointer(pmap))
+	*(*[3]uintptr)(unsafe.Pointer(&cpu.pms)) = *(*[3]uintptr)(unsafe.Pointer(&pms))
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
@@ -208,8 +212,13 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	// during syscall exit/return. this is OK since sys5ABI defines the SSE
 	// registers to be caller-saved.
 	// XXX types
-	ct.user.tf = (*[TFSIZE]uintptr)(unsafe.Pointer(tf))
-	ct.user.fxbuf = (*[FXREGS]uintptr)(unsafe.Pointer(fxbuf))
+	//ct.user.tf = (*[TFSIZE]uintptr)(unsafe.Pointer(tf))
+	//ct.user.fxbuf = (*[FXREGS]uintptr)(unsafe.Pointer(fxbuf))
+
+	// avoid write barriers, see note above
+	*(*uintptr)(unsafe.Pointer(&ct.user.tf)) = uintptr(unsafe.Pointer(tf))
+	*(*uintptr)(unsafe.Pointer(&ct.user.fxbuf)) = uintptr(unsafe.Pointer(fxbuf))
+
 	intno, aux := _Userrun(tf, fastret)
 
 	Wrmsr(ia32_fs_base, kfsbase)
@@ -1881,7 +1890,11 @@ func sched_run(t *thread_t) {
 	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
 		pancake("thread not interurptible", 0)
 	}
-	Gscpu().mythread = t
+	// mythread never references a heap allocated object. avoid
+	// writebarrier since sched_run can be executed at any time, even when
+	// GC invariants do not hold (like when g.m.p == nil).
+	//Gscpu().mythread = t
+	*(*uintptr)(unsafe.Pointer(&Gscpu().mythread)) = uintptr(unsafe.Pointer(t))
 	fxrstor(&t.fx)
 	trapret(&t.tf, t.p_pmap)
 }
@@ -2276,7 +2289,10 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	mt.tf[TF_RFLAGS] = rflags() | TF_FL_IF
 	mt.tf[TF_FSBASE] = uintptr(unsafe.Pointer(&mp.tls[0])) + 8
 
-	gp.m = mp
+	// avoid write barrier for mp here since we have interrupts clear. Ms
+	// are always reachable from allm anyway. see comments in runtime2.go
+	//gp.m = mp
+	*(*uintptr)(unsafe.Pointer(&gp.m)) = uintptr(unsafe.Pointer(mp))
 	mp.tls[0] = uintptr(unsafe.Pointer(gp))
 	mp.procid = uint64(ti)
 	mt.status = ST_RUNNABLE
