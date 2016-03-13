@@ -85,11 +85,6 @@ func _userint()
 func _Userrun(*[24]int, bool) (int, int)
 func Wrmsr(int, int)
 
-// proc.c
-func Trapwake()
-func trapsched_m(*g)
-func trapinit_m(*g)
-
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
 // that have the stack splitting prologue. the following is a list of go code
@@ -535,15 +530,6 @@ func cls() {
 	sc_put('s')
 	sc_put('\n')
 }
-
-//func Trapsched() {
-//	mcall(trapsched_m)
-//}
-
-// called only once to setup
-//func Trapinit() {
-//	mcall(trapinit_m)
-//}
 
 var hackmode int32
 var Halt uint32
@@ -1949,6 +1935,159 @@ func yieldy() {
 	cpu.mythread = nil
 	spunlock(threadlock)
 	sched_halt()
+}
+
+// called only once to setup
+func Trapinit() {
+	mcall(trapinit_m)
+}
+
+func Trapsched() {
+	mcall(trapsched_m)
+}
+
+// called from the CPU interrupt handler. must only be called while interrupts
+// are disabled
+ //go:nosplit
+ func Trapwake() {
+	splock(tlock);
+	_nints++
+	// only flag the Ps if a handler isn't currently active
+	if trapst == IDLE {
+		_ptrap = true
+	}
+	spunlock(tlock)
+}
+// trap handling goroutines first call. it is not an error if there are no
+// interrupts when this is called.
+func trapinit_m(gp *g) {
+	_trapsched(gp, true)
+}
+
+func trapsched_m(gp *g) {
+	_trapsched(gp, false)
+}
+
+var tlock = &spinlock_t{}
+
+var _initted bool
+var _trapsleeper *g
+var _nints int
+
+// i think it is ok for these trap sched/wake functions to be nosplit and call
+// nosplit functions even though they clear interrupts because we first switch
+// to the scheduler stack where preemptions are ignored.
+func _trapsched(gp *g, firsttime bool) {
+	fl := Pushcli()
+	splock(tlock)
+
+	if firsttime {
+		if _initted {
+			pancake("two inits", 0)
+		}
+		_initted = true
+		// if there are traps already, let a P wake us up.
+		//goto bed
+	}
+
+	// decrement handled ints
+	if !firsttime {
+		if _nints <= 0 {
+			pancake("neg ints", uintptr(_nints))
+		}
+		_nints--
+	}
+
+	// check if we are done
+	if !firsttime && _nints != 0 {
+		// keep processing
+		tprepsleep(gp, false)
+		_g_ := getg()
+		runqput(_g_.m.p.ptr(), gp, true)
+	} else {
+		tprepsleep(gp, true)
+		if _trapsleeper != nil {
+			pancake("trapsleeper set", 0)
+		}
+		_trapsleeper = gp
+	}
+
+	spunlock(tlock)
+	Popcli(fl)
+
+	schedule()
+}
+
+var trapst int
+const (
+	IDLE	= iota
+	RUNNING	= iota
+)
+
+func tprepsleep(gp *g, done bool) {
+	if done {
+		trapst = IDLE
+	} else {
+		trapst = RUNNING
+	}
+
+	status := readgstatus(gp)
+	if((status&^_Gscan) != _Grunning){
+		pancake("bad g status", uintptr(status))
+	}
+	nst := uint32(_Grunnable)
+	if done {
+		nst = _Gwaiting
+		gp.waitreason = "waiting for trap"
+	}
+	casgstatus(gp, _Grunning, nst)
+	dropg()
+}
+
+var _ptrap bool
+
+func trapcheck(pp *p) {
+	if !_ptrap {
+		return
+	}
+	fl := Pushcli()
+	splock(tlock)
+
+	var trapgp *g
+	if !_ptrap {
+		goto out
+	}
+	// don't clear the start flag if the handler goroutine hasn't
+	// registered yet.
+	if !_initted {
+		goto out
+	}
+	if trapst == RUNNING {
+		goto out
+	}
+
+	if trapst != IDLE {
+		pancake("bad trap status", uintptr(trapst))
+	}
+
+	_ptrap = false
+	trapst = RUNNING
+
+	trapgp = _trapsleeper
+	_trapsleeper = nil
+
+	spunlock(tlock)
+	Popcli(fl)
+
+	casgstatus(trapgp, _Gwaiting, _Grunnable)
+
+	// hopefully the trap goroutine is executed soon
+	runqput(pp, trapgp, true)
+	return
+out:
+	spunlock(tlock)
+	Popcli(fl)
+	return
 }
 
 // goprofiling is implemented by simulating the SIGPROF signal. when proftick

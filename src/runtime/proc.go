@@ -1812,6 +1812,7 @@ top:
 			ready(gp, 0)
 		}
 	}
+	trapcheck(_g_.m.p.ptr())
 
 	// local runq
 	if gp, inheritTime := runqget(_g_.m.p.ptr()); gp != nil {
@@ -1875,6 +1876,11 @@ top:
 	}
 
 stop:
+	if hackmode != 0 {
+		yield := 49
+		mktrap(yield)
+		goto top
+	}
 
 	// We have nothing to do. If we're in the GC mark phase, can
 	// safely scan and blacken objects, and have work to do, run

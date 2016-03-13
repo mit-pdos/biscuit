@@ -132,7 +132,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 	head = tsnext(head)
 	cpus[lid].tshead = head
 
-	//runtime.Trapwake()
+	runtime.Trapwake()
 
 	switch trapno {
 	case uintptr(INT_DISK), INT_KBD, INT_COM1:
@@ -148,7 +148,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 }
 
 func trap(handlers map[int]func(*trapstore_t)) {
-	//runtime.Trapinit()
+	runtime.Trapinit()
 	for {
 		for cpu := 0; cpu < numcpus; {
 			head := cpus[cpu].tshead
@@ -174,8 +174,7 @@ func trap(handlers map[int]func(*trapstore_t)) {
 			}
 			panic(fmt.Sprintf("no handler for trap %v\n", trapno))
 		}
-		//runtime.Trapsched()
-		runtime.Gosched()
+		runtime.Trapsched()
 	}
 }
 
