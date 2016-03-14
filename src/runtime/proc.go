@@ -1876,12 +1876,6 @@ top:
 	}
 
 stop:
-	if hackmode != 0 {
-		yield := 49
-		mktrap(yield)
-		goto top
-	}
-
 	// We have nothing to do. If we're in the GC mark phase, can
 	// safely scan and blacken objects, and have work to do, run
 	// idle-time marking rather than give up the P.
@@ -1893,6 +1887,12 @@ stop:
 			traceGoUnpark(gp, 0)
 		}
 		return gp, false
+	}
+
+	if hackmode != 0 {
+		yield := 49
+		mktrap(yield)
+		goto top
 	}
 
 	// return P and block
