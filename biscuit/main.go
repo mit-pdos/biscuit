@@ -2778,8 +2778,6 @@ func main() {
 	use_memfs()
 	kbd_init()
 
-	runtime.Resetgcticks()
-
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}

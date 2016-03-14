@@ -516,7 +516,6 @@ func Trapinit() {
 	mcall(trapinit_m)
 }
 
-var hackmode int64
 var Halt uint32
 
 // wait until remove definition from proc.c

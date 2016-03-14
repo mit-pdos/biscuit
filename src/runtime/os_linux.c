@@ -171,6 +171,8 @@ runtime·newosproc(M *mp, void *stk)
 	}
 }
 
+int64 runtime·hackmode;
+
 void
 runtime·osinit(void)
 {
