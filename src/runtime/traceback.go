@@ -68,7 +68,6 @@ func tracebackinit() {
 	mcallPC = funcPC(mcall)
 	morestackPC = funcPC(morestack)
 	mstartPC = funcPC(mstart)
-	newprocPC = funcPC(newproc)
 	rt0_goPC = funcPC(rt0_go)
 	sigpanicPC = funcPC(sigpanic)
 	runfinqPC = funcPC(runfinq)

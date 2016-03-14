@@ -5,6 +5,7 @@
 package runtime
 
 import "unsafe"
+import "runtime/internal/atomic"
 
 type mOS struct{}
 
@@ -133,12 +134,13 @@ type thread_t struct {
 	status		int
 	doingsig	int
 	sigstack	uintptr
+	sigsize		uintptr
 	prof		prof_t
 	sleepfor	int
 	sleepret	int
 	futaddr		uintptr
 	p_pmap		uintptr
-	//_pad		int
+	_pad		int
 }
 
 // XXX fix these misleading names
@@ -290,7 +292,7 @@ func _consumelbr() {
 	// XXX stacklen
 	l := 16 * 2
 	l++
-	idx := int(xadd64(&nmiprof.bufidx, int64(l)))
+	idx := int(atomic.Xadd64(&nmiprof.bufidx, int64(l)))
 	idx -= l
 	for i := 0; i < 16; i++ {
 		cur := (last - i)
@@ -340,7 +342,7 @@ func _lbrreset(en bool) {
 
 //go:nosplit
 func perfgather(tf *[TFSIZE]uintptr) {
-	idx := xadd64(&nmiprof.bufidx, 1) - 1
+	idx := atomic.Xadd64(&nmiprof.bufidx, 1) - 1
 	if idx < uint64(len(nmiprof.buf)) {
 		//nmiprof.buf[idx] = tf[TF_RIP]
 		//pid := Gscpu().pid
@@ -531,7 +533,7 @@ func cls() {
 	sc_put('\n')
 }
 
-var hackmode int32
+var hackmode int64
 var Halt uint32
 
 // wait until remove definition from proc.c
@@ -542,7 +544,7 @@ type spinlock_t struct {
 //go:nosplit
 func splock(l *spinlock_t) {
 	for {
-		if xchg(&l.v, 1) == 0 {
+		if atomic.Xchg(&l.v, 1) == 0 {
 			break
 		}
 		for l.v != 0 {
@@ -553,7 +555,7 @@ func splock(l *spinlock_t) {
 
 //go:nosplit
 func spunlock(l *spinlock_t) {
-	//atomicstore(&l.v, 0)
+	//atomic.Store(&l.v, 0)
 	l.v = 0
 }
 
@@ -643,10 +645,12 @@ func cpupnum(rip uintptr) {
 //go:nosplit
 func pancake(msg string, addr uintptr) {
 	Pushcli()
-	atomicstore(&Halt, 1)
+	atomic.Store(&Halt, 1)
 	_pmsg(msg)
 	_pnum(addr)
 	_pmsg("PANCAKE")
+	a := 0
+	stack_dump(uintptr(unsafe.Pointer(&a)))
 	for {
 		p := (*uint16)(unsafe.Pointer(uintptr(0xb8002)))
 		*p = 0x1400 | 'F'
@@ -854,7 +858,7 @@ func seg_setup() {
 	// now that we have a GDT, setup tls for the first thread.
 	// elf tls specification defines user tls at -16(%fs). go1.5 uses
 	// -8(%fs) though.
-	t := uintptr(unsafe.Pointer(&tls0[0]))
+	t := uintptr(unsafe.Pointer(&m0.tls[0]))
 	tlsaddr := int(t + 8)
 	// we must set fs/gs at least once before we use the MSRs to change
 	// their base address. the MSRs write directly to hidden segment
@@ -1268,7 +1272,7 @@ func rlap(reg uint) uint32 {
 		pancake("lapic not init", 0)
 	}
 	lpg := (*[PGSIZE/4]uint32)(unsafe.Pointer(_lapaddr))
-	return atomicload(&lpg[reg])
+	return atomic.Load(&lpg[reg])
 }
 
 //go:nosplit
@@ -1558,19 +1562,19 @@ var tlbshoot_pmap uintptr
 var tlbshoot_gen uint64
 
 func Tlbadmit(p_pmap, cpuwait, pg, pgcount uintptr) uint64 {
-	for !casuintptr(&tlbshoot_wait, 0, cpuwait) {
+	for !atomic.Casuintptr(&tlbshoot_wait, 0, cpuwait) {
 		preemptok()
 	}
-	xchguintptr(&tlbshoot_pg, pg)
-	xchguintptr(&tlbshoot_count, pgcount)
-	xchguintptr(&tlbshoot_pmap, p_pmap)
-	xadd64(&tlbshoot_gen, 1)
+	atomic.Xchguintptr(&tlbshoot_pg, pg)
+	atomic.Xchguintptr(&tlbshoot_count, pgcount)
+	atomic.Xchguintptr(&tlbshoot_pmap, p_pmap)
+	atomic.Xadd64(&tlbshoot_gen, 1)
 	return tlbshoot_gen
 }
 
 func Tlbwait(gen uint64) {
-	for atomicloaduintptr(&tlbshoot_wait) != 0 {
-		if atomicload64(&tlbshoot_gen) != gen {
+	for atomic.Loaduintptr(&tlbshoot_wait) != 0 {
+		if atomic.Load64(&tlbshoot_gen) != gen {
 			break
 		}
 	}
@@ -1591,7 +1595,7 @@ func tlb_shootdown() {
 		//}
 	}
 	dur := (*uint64)(unsafe.Pointer(&tlbshoot_wait))
-	v := xadd64(dur, -1)
+	v := atomic.Xadd64(dur, -1)
 	if v < 0 {
 		pancake("shootwait < 0", uintptr(v))
 	}
@@ -2187,7 +2191,7 @@ func mksig(t *thread_t, signo int32) {
 	t.status = ST_RUNNABLE
 	t.doingsig = 1
 
-	rsp := t.sigstack
+	rsp := t.sigstack + t.sigsize
 	ucsz := unsafe.Sizeof(ucontext_t{})
 	rsp -= ucsz
 	_ctxt := rsp
@@ -2465,11 +2469,23 @@ func hack_sigaltstack(new, old *sigaltstackt) {
 	fl := Pushcli()
 	ct := Gscpu().mythread
 	SS_DISABLE := int32(2)
-	if new.ss_flags & SS_DISABLE != 0 {
-		ct.sigstack = 0
-	} else {
-		ct.sigstack = uintptr(unsafe.Pointer(new.ss_sp)) +
-		    uintptr(new.ss_size)
+	if old != nil {
+		if ct.sigstack == 0 {
+			old.ss_flags = SS_DISABLE
+		} else {
+			old.ss_sp = (*byte)(unsafe.Pointer(ct.sigstack))
+			old.ss_size = ct.sigsize
+			old.ss_flags = 0
+		}
+	}
+	if new != nil {
+		if new.ss_flags & SS_DISABLE != 0 {
+			ct.sigstack = 0
+			ct.sigsize = 0
+		} else {
+			ct.sigstack = uintptr(unsafe.Pointer(new.ss_sp))
+			ct.sigsize = new.ss_size
+		}
 	}
 	Popcli(fl)
 }
@@ -2603,7 +2619,7 @@ func hack_exit(code int32) {
 	pmsg("exit with code")
 	pnum(uintptr(code))
 	pmsg(".\nhalting\n")
-	atomicstore(&Halt, 1)
+	atomic.Store(&Halt, 1)
 	for {
 	}
 }
@@ -2635,7 +2651,7 @@ func Nanotime() int {
 // useful for basic tests of filesystem durability
 func Crash() {
 	pmsg("CRASH!\n")
-	atomicstore(&Halt, 1)
+	atomic.Store(&Halt, 1)
 	for {
 	}
 }

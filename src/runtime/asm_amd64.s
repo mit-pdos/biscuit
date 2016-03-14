@@ -73,8 +73,8 @@ noavx:
 	MOVB    $0, runtime·support_avx(SB)
 noavx2:
 	MOVB    $0, runtime·support_avx2(SB)
-nocpuinfo:	
-	
+nocpuinfo:
+
 	// if there is an _cgo_init, call it.
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX
@@ -238,11 +238,37 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	JNE	notintel
 	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
 notintel:
+	// Do nothing.
 
 	MOVQ	$1, AX
 	CPUID
 	MOVL	CX, runtime·cpuid_ecx(SB)
 	MOVL	DX, runtime·cpuid_edx(SB)
+	// Detect AVX and AVX2 as per 14.7.1  Detection of AVX2 chapter of [1]
+	// [1] 64-ia-32-architectures-software-developer-manual-325462.pdf
+	// http://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-manual-325462.pdf
+	ANDL    $0x18000000, CX // check for OSXSAVE and AVX bits
+	CMPL    CX, $0x18000000
+	JNE     noavx
+	MOVL    $0, CX
+	// For XGETBV, OSXSAVE bit is required and sufficient
+	XGETBV
+	ANDL    $6, AX
+	CMPL    AX, $6 // Check for OS support of YMM registers
+	JNE     noavx
+	MOVB    $1, runtime·support_avx(SB)
+	MOVL    $7, AX
+	MOVL    $0, CX
+	CPUID
+	ANDL    $0x20, BX // check for AVX2 bit
+	CMPL    BX, $0x20
+	JNE     noavx2
+	MOVB    $1, runtime·support_avx2(SB)
+	JMP     nocpuinfo
+noavx:
+	MOVB    $0, runtime·support_avx(SB)
+noavx2:
+	MOVB    $0, runtime·support_avx2(SB)
 nocpuinfo:
 
 	// if there is an _cgo_init, call it.
@@ -261,19 +287,20 @@ nocpuinfo:
 	MOVQ	AX, g_stackguard0(CX)
 	MOVQ	AX, g_stackguard1(CX)
 
-	CALL	runtime·cls(SB)
-
-	//CMPL	runtime·iswindows(SB), $0
-	//JEQ ok
+//#ifndef GOOS_windows
+//	JMP ok
+//#endif
 needtls:
-	// skip TLS setup on Plan 9
-	//CMPL	runtime·isplan9(SB), $1
-	//JEQ ok
-	//// skip TLS setup on Solaris
-	//CMPL	runtime·issolaris(SB), $1
-	//JEQ ok
+//#ifdef GOOS_plan9
+//	// skip TLS setup on Plan 9
+//	JMP ok
+//#endif
+//#ifdef GOOS_solaris
+//	// skip TLS setup on Solaris
+//	JMP ok
+//#endif
 
-	//LEAQ	runtime·tls0(SB), DI
+	//LEAQ	runtime·m0+m_tls(SB), DI
 	//CALL	runtime·settls(SB)
 
 	CALL	·seg_setup(SB)
@@ -284,9 +311,9 @@ needtls:
 	// store through it, to make sure it works
 	get_tls(BX)
 	MOVQ	$0x123, g(BX)
-	MOVQ	runtime·tls0(SB), AX
+	MOVQ	runtime·m0+m_tls(SB), AX
 	CMPQ	AX, $0x123
-	JEQ	ok
+	JMP	ok
 	MOVQ	$0x42, (SP)
 	CALL	runtime·putch(SB)
 	MOVQ	$0x46, (SP)
