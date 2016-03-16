@@ -239,7 +239,7 @@ type fdops_i interface {
 	fstat(*stat_t) int
 	lseek(int, int) int
 	mmapi(int) ([]mmapinfo_t, int)
-	pathi() inum
+	pathi() *imemnode_t
 	read(*userbuf_t) (int, int)
 	// reopen() is called with proc_t.fdl is held
 	reopen() int
@@ -288,7 +288,7 @@ const(
 	FD_CLOEXEC	= 0x4
 )
 
-var dummyfops	= &devfops_t{priv: -1, maj: D_CONSOLE, min: 0}
+var dummyfops	= &devfops_t{priv: nil, maj: D_CONSOLE, min: 0}
 
 // special fds
 var fd_stdin 	= fd_t{fops: dummyfops, perms: FD_READ}

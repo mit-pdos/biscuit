@@ -1100,7 +1100,7 @@ func (of *pipefops_t) mmapi(int) ([]mmapinfo_t, int) {
 	return nil, -EINVAL
 }
 
-func (of *pipefops_t) pathi() inum {
+func (of *pipefops_t) pathi() *imemnode_t {
 	panic("pipe cwd")
 }
 
@@ -1629,7 +1629,7 @@ func (sf *sudfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
-func (sf *sudfops_t) pathi() inum {
+func (sf *sudfops_t) pathi() *imemnode_t {
 	panic("cwd socket?")
 }
 
@@ -2158,7 +2158,7 @@ func (sus *susfops_t) mmapi(int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
-func (sus *susfops_t) pathi() inum {
+func (sus *susfops_t) pathi() *imemnode_t {
 	panic("unix stream cwd?")
 }
 
@@ -2556,7 +2556,7 @@ func (sul *suslfops_t) mmapi(int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
-func (sul *suslfops_t) pathi() inum {
+func (sul *suslfops_t) pathi() *imemnode_t {
 	panic("unix stream listener cwd?")
 }
 
