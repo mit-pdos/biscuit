@@ -141,8 +141,7 @@ func fs_link(old string, new string, cwd *imemnode_t) int {
 		orig.iunlock()
 		return -EINVAL
 	}
-	orig.icache.links++
-	orig._iupdate()
+	orig._linkup()
 	orig.iunlock()
 
 	dirs, fn := sdirname(new)
@@ -160,7 +159,9 @@ undo:
 	if !orig.ilock_namei() {
 		panic("must succeed")
 	}
-	orig.icache.links--
+	if orig._linkdown() {
+		idaemon_remove(orig.priv)
+	}
 	orig.iunlock()
 	return err
 }
@@ -205,9 +206,7 @@ func fs_unlink(paths string, cwd *imemnode_t) int {
 	if err != 0 {
 		return err
 	}
-	child.icache.links--
-	child._iupdate()
-	dorem := child.icache.links == 0
+	dorem := child._linkdown()
 
 	// finally, remove directory
 	err = par.do_unlink(fn)
