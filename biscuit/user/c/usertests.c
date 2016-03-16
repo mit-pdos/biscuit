@@ -1776,9 +1776,9 @@ rshuffle(char *f1, char *f2, char *n1, char *n2)
 	int i;
 	for (i = 0; i < 100; i++) {
 		while (rename(f1, f2) < 0)
-			;
+			usleep(1);
 		while (rename(n1, n2) < 0)
-			;
+			usleep(1);
 	}
 	exit(0);
 }
@@ -1871,7 +1871,7 @@ renametest()
 	int status;
 	wait(&status);
 
-	if (WEXITSTATUS(status) != 0)
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 		errx(status, "rename test failed");
 
 	printf("rename test finished\n");
@@ -2976,7 +2976,7 @@ main(int argc, char *argv[])
   concreate();
   fourfiles();
   sharedfd();
-  //renametest();
+  renametest();
   lseektest();
   dirtest();
 
