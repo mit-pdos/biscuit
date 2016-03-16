@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
-//import "runtime/debug"
+import "runtime/debug"
 import "sync/atomic"
 import "sync"
 import "time"
@@ -2738,7 +2738,7 @@ func main() {
 	//	for {
 	//	}
 	//}
-	//debug.SetGCPercent(50)
+	debug.SetGCPercent(800)
 
 	//chanbm()
 
