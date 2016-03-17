@@ -53,6 +53,7 @@
 #define SYS_PREAD        31340
 #define SYS_PWRITE       31341
 #define SYS_FUTEX        31342
+#define SYS_GETTID       31343
 
 __thread int errno;
 
@@ -342,6 +343,13 @@ gettimeofday(struct timeval *tv, struct timezone *tz)
 	tv->tv_sec = us / 1000000;
 	tv->tv_usec = us % 1000000;
 	return 0;
+}
+
+// XXX should simply look at TCB
+long
+gettid(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_GETTID);
 }
 
 int
@@ -946,11 +954,11 @@ pthread_once(pthread_once_t *octl, void (*fn)(void))
 pthread_t
 pthread_self(void)
 {
-	return getpid();
+	return gettid();
 }
 
 int
-pthread_barrier_init(pthread_barrier_t *b, pthread_barrierattr_t *attr,uint c)
+pthread_barrier_init(pthread_barrier_t *b, pthread_barrierattr_t *attr, uint c)
 {
 	if (attr)
 		errx(-1, "barrier attributes not supported");
