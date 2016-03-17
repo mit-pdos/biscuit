@@ -230,6 +230,7 @@ int getrusage(int, struct rusage *);
 #define		RUSAGE_CHILDREN	2
 int getsockopt(int, int, int, void *, socklen_t *);
 int gettimeofday(struct timeval *, struct timezone *);
+long gettid(void);
 
 int fcntl(int, int, ...);
 #define		F_GETFL		1
@@ -452,6 +453,7 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		isinf(x)	__builtin_isinf(x)
 #define		isnan(x)	__builtin_isnan(x)
 #define		HUGE_VAL	__builtin_huge_val()
+#define		NAN		__builtin_nanf("")
 
 // these "builtins" sometimes result in a call to the library function. the
 // builtin version just tries to optimize some cases.
@@ -545,7 +547,6 @@ int fsync(int);
 size_t fread(void *, size_t, size_t, FILE *);
 off_t ftello(FILE *);
 size_t fwrite(const void *, size_t, size_t, FILE *);
-//char *getcwd(char *, size_t); /*REDIS*/
 int getopt(int, char * const *, const char *);
 extern char *optarg;
 extern int   optind;

@@ -180,6 +180,11 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
+	// XXX to avoid {rd,wr}msr on int/syscall context switch, we can move
+	// each cpu's cpu_t into it's M's tls memory, thus freeing up %gs. %gs
+	// would then be storage for %fs of the opposite privilege level (%gs
+	// holds kernels %fs in usermode, user's %fs is kernel mode). then we
+	// can use swapgs, like other kernels.
 	ia32_fs_base := 0xc0000100
 	kfsbase := Rdmsr(ia32_fs_base)
 	Wrmsr(ia32_fs_base, tf[TF_FSBASE])

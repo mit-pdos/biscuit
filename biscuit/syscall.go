@@ -194,6 +194,7 @@ const(
     _FUTEX_LAST = FUTEX_CNDGIVE
     // futex internal op
     _FUTEX_CNDTAKE  = 4
+  SYS_GETTID   = 31343
 )
 
 const(
@@ -336,6 +337,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_pwrite(p, a1, a2, a3, a4)
 	case SYS_FUTEX:
 		ret = sys_futex(p, a1, a2, a3, a4, a5)
+	case SYS_GETTID:
+		ret = sys_gettid(p, tid)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
 		sys_exit(p, tid, SIGNALED | mkexitsig(31))
@@ -3460,6 +3463,10 @@ func sys_futex(proc *proc_t, _op, _futn, _fut2n, aux, timespecn int) int {
 	fut.cmd <- fm
 	ret := <- fm.ack
 	return ret
+}
+
+func sys_gettid(proc *proc_t, tid tid_t) int {
+	return int(tid)
 }
 
 func sys_fcntl(proc *proc_t, fdn, cmd, opt int) int {
