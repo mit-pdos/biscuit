@@ -2740,6 +2740,9 @@ func main() {
 	//}
 	//debug.SetGCPercent(50)
 
+	fmt.Printf("              BiscuitOS\n");
+	fmt.Printf("          go version: %v\n", runtime.Version())
+
 	//chanbm()
 
 	//findbm()

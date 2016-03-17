@@ -240,7 +240,7 @@ chomp(Buf *b)
 static char*
 findgoversion(void)
 {
-	return "kernelhack";
+	return " go1.4";
 	char *tag, *rev, *p;
 	int i, nrev;
 	Buf b, path, bmore, branch;
