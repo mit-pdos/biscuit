@@ -3766,6 +3766,13 @@ func sys_fake2(proc *proc_t, n int) int {
 		ret = int(ms.HeapSys)
 	case 5:
 		ret = int(ms.StackSys)
+	case 6:
+		//*(*float64)(unsafe.Pointer(&ret)) = ms.GCCPUFraction
+		ret = 42
+	case 7:
+		//runtime.ResetGCFrac()
+		//ret = 0
+		ret = 42
 	case 10:
 		runtime.GC()
 		ret = 0
