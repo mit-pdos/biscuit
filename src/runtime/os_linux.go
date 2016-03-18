@@ -610,7 +610,7 @@ var _cpuattrs [MAXCPUS]uint16
 func Cpuprint(n uint16, row uintptr) {
 	p := uintptr(0xb8000)
 	num := Gscpu().num
-	p += uintptr(num) + row*80
+	p += uintptr(num) * row*80*2
 	attr := _cpuattrs[num]
 	_cpuattrs[num] += 0x100
 	*(*uint16)(unsafe.Pointer(p)) = attr | n
