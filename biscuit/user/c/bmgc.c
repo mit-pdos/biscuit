@@ -69,10 +69,20 @@ gccpufrac(void)
 	return dur.a;
 }
 
+__attribute__((unused))
+static void
+resetgccpufrac(void)
+{
+	_fetch(7);
+}
+
 static pthread_barrier_t _wbar;
 static long _totalxput;
 
-static void *_work(void * _wf)
+// this workload allocates very little (<3% of CPU time is GC'ing due to
+// allocations)
+__attribute__((unused))
+static void *_work1(void * _wf)
 {
 	int tfd = open("/bin/mailbench", O_RDONLY);
 	if (tfd < 0)
@@ -124,39 +134,124 @@ static void *_work(void * _wf)
 	return (void *)longest;
 }
 
-static void work(long wf, const long nt)
+static void *_workmmap(void * _wf)
+{
+	int ret = pthread_barrier_wait(&_wbar);
+	if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD)
+		errx(ret, "barrier wait");
+
+	long begin = nowms();
+	long secs = (long)_wf;
+
+	long end = begin + secs*1000;
+	long longest = 0;
+	long count = 0;
+	while (1) {
+		long st = nowms();
+		if (st > end)
+			break;
+		size_t sz = 4096 * 100;
+		void *m = mmap(NULL, sz, PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANON, -1, 0);
+		if (m == MAP_FAILED)
+			err(-1, "mmap");
+		if (munmap(m, sz))
+			err(-1, "munmap");
+		long tot = nowms() - st;
+		if (tot > longest)
+			longest = tot;
+		count++;
+	}
+	__atomic_add_fetch(&_totalxput, count, __ATOMIC_RELEASE);
+	return (void *)longest;
+}
+
+static void *_workvnode(void * _wf)
+{
+	char mfn[64];
+	snprintf(mfn, sizeof(mfn), "bmgc.%ld", (long)pthread_self());
+
+	int ret = pthread_barrier_wait(&_wbar);
+	if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD)
+		errx(ret, "barrier wait");
+
+	long begin = nowms();
+	long secs = (long)_wf;
+
+	long end = begin + secs*1000;
+	long longest = 0;
+	long count = 0;
+	while (1) {
+		long st = nowms();
+		if (st > end)
+			break;
+		int fd = open(mfn, O_CREAT | O_EXCL | O_RDWR, 0600);
+		if (fd < 0)
+			err(-1, "open");
+		//if (close(fd))
+		//	err(-1, "close");
+		if (unlink(mfn))
+			err(-1, "unlink");
+		long tot = nowms() - st;
+		if (tot > longest)
+			longest = tot;
+		count++;
+	}
+	__atomic_add_fetch(&_totalxput, count, __ATOMIC_RELEASE);
+	return (void *)longest;
+}
+
+enum work_t {
+	W_MMAP,
+	W_VNODES,
+};
+
+static void work(enum work_t wn, long wf, const long nt)
 {
 	long secs = wf;
 	if (secs < 0)
 		secs = 1;
 	else if (secs > 60)
 		secs = 60;
-	printf("working for %ld seconds with %ld threads...\n", secs,
-	    nt);
+
+	void* (*wfunc)(void *) = _workvnode;
+	if (wn == W_MMAP)
+		wfunc = _workmmap;
+	printf("%s working for %ld seconds with %ld threads...\n",
+	    wn == W_MMAP ? "MMAP" : "VNODE", secs, nt);
+
 	int i, ret;
 	if ((ret = pthread_barrier_init(&_wbar, NULL, nt + 1)))
 		errx(ret, "barrier init");
 
 	pthread_t ts[nt];
 	for (i = 0; i < nt; i++)
-		if ((ret = pthread_create(&ts[i], NULL, _work, (void *)secs)))
+		if ((ret = pthread_create(&ts[i], NULL, wfunc, (void *)secs)))
 			errx(ret, "pthread create");
 
+	resetgccpufrac();
 	long bgcs = gccount();
 	long bgcns = gctotns();
+
+	//fake_sys(1);
 
 	ret = pthread_barrier_wait(&_wbar);
 	if (ret != 0 && ret != PTHREAD_BARRIER_SERIAL_THREAD)
 		errx(ret, "barrier wait");
 
 	long longest = 0;
+	long longarr[nt];
 	for (i = 0; i < nt; i++) {
 		long t;
 		if ((ret = pthread_join(ts[i], (void **)&t)))
 			errx(ret, "join");
+		longarr[i] = t;
 		if (t > longest)
 			longest = t;
 	}
+
+	//fake_sys(0);
+
 	if ((ret = pthread_barrier_destroy(&_wbar)))
 		errx(ret, "bar destroy");
 
@@ -166,35 +261,14 @@ static void work(long wf, const long nt)
 	long xput = __atomic_load_n(&_totalxput, __ATOMIC_ACQUIRE);
 
 	printf("iterations/sec: %ld (%ld total)\n", xput/secs, xput);
+	printf("CPU time GC'ing: %f%%\n", gccpufrac());
 	printf("max latency: %ld ms\n", longest);
+	printf("each thread's latency:\n");
+	for (i = 0; i < nt; i++)
+		printf("     %ld\n", longarr[i]);
 	printf("%ld gcs (%ld ms)\n", gcs, gcns/1000000);
 	printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
 	printf("kernel stack size: %ld Mb\n", kstack()/(1 << 20));
-}
-
-int _mmap(long sf)
-{
-	errx(-1, "worthless; don't use");
-	const size_t pgsize = 1ull << 12;
-	const int pgs = (1ull << 10)*sf;
-	printf("creating %d vm regions...\n", pgs);
-	int i;
-	int tenpct = pgs/10;
-	int next = 1;
-	for (i = 0; i < pgs; i++) {
-		char *mem;
-		void *hack = (void *)(intptr_t)(i*2*pgsize);
-		if ((mem = mmap(hack, pgsize, PROT_READ | PROT_WRITE,
-		    MAP_ANON | MAP_PRIVATE, 0x31337, 0)) == MAP_FAILED)
-			err(-1, "mmap");
-		int cp = i/tenpct;
-		if (cp >= next) {
-			printf("%d%%\n", cp*10);
-			next = cp + 1;
-		}
-	}
-
-	return 0;
 }
 
 int _vnodes(long sf)
@@ -224,10 +298,10 @@ __attribute__((noreturn))
 void usage(void)
 {
 	printf("usage:\n");
-	printf("%s [-mSg] [-s <int>] [-w <int>]\n", __progname);
+	printf("%s [-mSg] [-s <int>] [-w <int>] [-n <int>]\n", __progname);
 	printf("where:\n");
 	printf("-S		sleep forever instead of exiting\n");
-	printf("-m		mmap setup instead of vnodes\n");
+	printf("-m		use mmap busy work instead of vnodes\n");
 	printf("-g		force kernel GC, then exit\n");
 	printf("-s <int>	set scale factor to int\n");
 	printf("-w <int>	set work factor to int\n");
@@ -237,8 +311,10 @@ void usage(void)
 
 int main(int argc, char **argv)
 {
+	errx(-1, "nyet");
 	long sf = 1, wf = 1, nthreads = 1;
-	int dosleep = 0, dommap = 0, dogc = 0;
+	int dosleep = 0, dogc = 0;
+	enum work_t wtype = W_VNODES;
 
 	int c;
 	while ((c = getopt(argc, argv, "n:gms:Sw:")) != -1) {
@@ -247,7 +323,7 @@ int main(int argc, char **argv)
 			dogc = 1;
 			break;
 		case 'm':
-			dommap = 1;
+			wtype = W_MMAP;
 			break;
 		case 'n':
 			nthreads = strtol(optarg, NULL, 0);
@@ -272,6 +348,7 @@ int main(int argc, char **argv)
 
 	if (dogc) {
 		_fetch(10);
+		printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
 		return 0;
 	}
 
@@ -291,17 +368,13 @@ int main(int argc, char **argv)
 	long st = nowms();
 
 	int (*f)(long) = _vnodes;
-	if (dommap)
-		f = _mmap;
 	if (f(sf))
 		return -1;
 
 	long tot = nowms() - st;
 	printf("setup: %ld ms\n", tot);
 
-	//fake_sys(1);
-	work(wf, nthreads);
-	//fake_sys(0);
+	work(wtype, wf, nthreads);
 
 	if (dosleep) {
 		printf("sleeping forever...\n");
