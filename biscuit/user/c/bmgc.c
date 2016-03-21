@@ -82,7 +82,7 @@ static long _totalxput;
 // this workload allocates very little (<3% of CPU time is GC'ing due to
 // allocations)
 __attribute__((unused))
-static void *_work1(void * _wf)
+static void *_workreadfile(void * _wf)
 {
 	int tfd = open("/bin/mailbench", O_RDONLY);
 	if (tfd < 0)
@@ -202,6 +202,7 @@ static void *_workvnode(void * _wf)
 }
 
 enum work_t {
+	W_READF,
 	W_MMAP,
 	W_VNODES,
 };
@@ -214,11 +215,25 @@ static void work(enum work_t wn, long wf, const long nt)
 	else if (secs > 60)
 		secs = 60;
 
-	void* (*wfunc)(void *) = _workvnode;
-	if (wn == W_MMAP)
+	void* (*wfunc)(void *);
+	char *name;
+	switch (wn) {
+	case W_MMAP:
 		wfunc = _workmmap;
-	printf("%s working for %ld seconds with %ld threads...\n",
-	    wn == W_MMAP ? "MMAP" : "VNODE", secs, nt);
+		name = "MMAPS";
+		break;
+	case W_VNODES:
+		wfunc = _workvnode;
+		name = "VNODES";
+		break;
+	case W_READF:
+	default:
+		wfunc = _workreadfile;
+		name = "READFILE";
+		break;
+	}
+	printf("%s work for %ld seconds with %ld threads...\n",
+	    name, secs, nt);
 
 	int i, ret;
 	if ((ret = pthread_barrier_init(&_wbar, NULL, nt + 1)))
@@ -298,10 +313,11 @@ __attribute__((noreturn))
 void usage(void)
 {
 	printf("usage:\n");
-	printf("%s [-mSg] [-s <int>] [-w <int>] [-n <int>]\n", __progname);
+	printf("%s [-mvSg] [-s <int>] [-w <int>] [-n <int>]\n", __progname);
 	printf("where:\n");
 	printf("-S		sleep forever instead of exiting\n");
-	printf("-m		use mmap busy work instead of vnodes\n");
+	printf("-m		use mmap busy work instead of readfile\n");
+	printf("-v		use vnode busy work instead of readfile\n");
 	printf("-g		force kernel GC, then exit\n");
 	printf("-s <int>	set scale factor to int\n");
 	printf("-w <int>	set work factor to int\n");
@@ -311,19 +327,21 @@ void usage(void)
 
 int main(int argc, char **argv)
 {
-	errx(-1, "nyet");
 	long sf = 1, wf = 1, nthreads = 1;
 	int dosleep = 0, dogc = 0;
-	enum work_t wtype = W_VNODES;
+	enum work_t wtype = W_READF;
 
 	int c;
-	while ((c = getopt(argc, argv, "n:gms:Sw:")) != -1) {
+	while ((c = getopt(argc, argv, "vn:gms:Sw:")) != -1) {
 		switch (c) {
 		case 'g':
 			dogc = 1;
 			break;
 		case 'm':
 			wtype = W_MMAP;
+			break;
+		case 'v':
+			wtype = W_VNODES;
 			break;
 		case 'n':
 			nthreads = strtol(optarg, NULL, 0);
