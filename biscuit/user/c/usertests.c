@@ -2974,7 +2974,7 @@ main(int argc, char *argv[])
   concreate();
   fourfiles();
   sharedfd();
-  renametest();
+  //renametest();
   lseektest();
   dirtest();
 

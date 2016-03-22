@@ -63,13 +63,13 @@ int main(int argc, char **argv)
 		err(-1, "wait4");
 	ulong elapsed = now() - start;
 
-	// stop profiling
-	if (profile && sys_prof(PROF_DISABLE) == -1)
-		errx(-1, "prof stop");
 	if (gcstat) {
 		double gccpu = gcfracend(&fracst);
 		printf("GC CPU frac: %f%%\n", gccpu);
 	}
+	// stop profiling
+	if (profile && sys_prof(PROF_DISABLE) == -1)
+		errx(-1, "prof stop");
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status))
 		printf("child failed with status: %d\n", WEXITSTATUS(status));
