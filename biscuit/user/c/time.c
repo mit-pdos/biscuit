@@ -13,17 +13,23 @@ ulong now()
 
 void usage()
 {
-	errx(-1, "usage: %s [-r] <command> <arg1> ...", __progname);
+	errx(-1, "usage: %s [-rg] <command> <arg1> ...\n"
+	         "\n"
+		 "-r     profile command\n"
+		 "-g     report GC statistics for command\n", __progname);
 }
 
 int main(int argc, char **argv)
 {
-	int profile = 0;
+	int profile = 0, gcstat = 0;
 	int ch;
-	while ((ch = getopt(argc, argv, "r")) != -1) {
+	while ((ch = getopt(argc, argv, "gr")) != -1) {
 		switch (ch) {
 		case 'r':
 			profile = 1;
+			break;
+		case 'g':
+			gcstat = 1;
 			break;
 		default:
 			usage();
@@ -39,8 +45,11 @@ int main(int argc, char **argv)
 	ulong start = now();
 
 	// start profiling
-	if (profile && fake_sys(1))
+	if (profile && sys_prof(PROF_ENABLE) == -1)
 		errx(-1, "prof start");
+	struct gcfrac_t fracst;
+	if (gcstat)
+		fracst = gcfracst();
 
 	if (fork() == 0) {
 		execvp(argv[0], &argv[0]);
@@ -55,8 +64,12 @@ int main(int argc, char **argv)
 	ulong elapsed = now() - start;
 
 	// stop profiling
-	if (profile && fake_sys(0))
+	if (profile && sys_prof(PROF_DISABLE) == -1)
 		errx(-1, "prof stop");
+	if (gcstat) {
+		double gccpu = gcfracend(&fracst);
+		printf("GC CPU frac: %f%%\n", gccpu);
+	}
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status))
 		printf("child failed with status: %d\n", WEXITSTATUS(status));

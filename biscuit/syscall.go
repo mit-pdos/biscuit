@@ -182,9 +182,15 @@ const(
   SYS_REBOOT   = 169
   SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
-  SYS_FAKE     = 31337
+  SYS_PROF     = 31337
+    PROF_DISABLE   = 0
+    PROF_ENABLE    = 1
   SYS_THREXIT  = 31338
-  SYS_FAKE2    = 31339
+  SYS_INFO     = 31339
+    SINFO_GCCOUNT    = 0
+    SINFO_GCPAUSENS  = 1
+    SINFO_GCHEAPSZ   = 2
+    SINFO_GCMS       = 4
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
   SYS_FUTEX    = 31342
@@ -325,10 +331,10 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_nanosleep(p, a1, a2)
 	case SYS_PIPE2:
 		ret = sys_pipe2(p, a1, a2)
-	case SYS_FAKE:
-		ret = sys_fake(p, a1)
-	case SYS_FAKE2:
-		ret = sys_fake2(p, a1)
+	case SYS_PROF:
+		ret = sys_prof(p, a1)
+	case SYS_INFO:
+		ret = sys_info(p, a1)
 	case SYS_THREXIT:
 		sys_threxit(p, tid, a1)
 	case SYS_PREAD:
@@ -3731,9 +3737,9 @@ func _prof_pmc(en bool) {
 	}
 }
 
-func sys_fake(proc *proc_t, n int) int {
+func sys_prof(proc *proc_t, n int) int {
 	en := false
-	if n != 0 {
+	if n == PROF_ENABLE {
 		en = true
 	}
 
@@ -3748,31 +3754,20 @@ func sys_fake(proc *proc_t, n int) int {
 	return 0
 }
 
-func sys_fake2(proc *proc_t, n int) int {
+func sys_info(proc *proc_t, n int) int {
 	ms := &runtime.MemStats{}
 	runtime.ReadMemStats(ms)
 
-	ret := -1
+	ret := -EINVAL
 	switch n {
-	case 0:
+	case SINFO_GCCOUNT:
 		ret = int(ms.NumGC)
-	case 1:
+	case SINFO_GCPAUSENS:
 		ret = int(ms.PauseTotalNs)
-	case 2:
+	case SINFO_GCHEAPSZ:
 		ret = int(ms.Alloc)
-	case 3:
-		ret = int(ms.Sys)
-	case 4:
-		ret = int(ms.HeapSys)
-	case 5:
-		ret = int(ms.StackSys)
-	case 6:
-		//*(*float64)(unsafe.Pointer(&ret)) = ms.GCCPUFraction
-		ret = 42
-	case 7:
-		//runtime.ResetGCFrac()
-		//ret = 0
-		ret = 42
+	case SINFO_GCMS:
+		ret = int(ms.PauseTotalNs)/1000000
 	case 10:
 		runtime.GC()
 		ret = 0

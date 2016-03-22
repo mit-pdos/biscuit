@@ -13,67 +13,27 @@ static long
 _fetch(long n)
 {
 	long ret;
-	if ((ret = fake_sys2(n)) < 0)
-		errx(-1, "fake 2");
+	if ((ret = sys_info(n)) == -1)
+		errx(-1, "sysinfo");
 	return ret;
 }
 
 static long
 gccount(void)
 {
-	return _fetch(0);
+	return _fetch(SINFO_GCCOUNT);
 }
 
 static long
 gctotns(void)
 {
-	return _fetch(1);
+	return _fetch(SINFO_GCPAUSENS);
 }
 
 static long
 gcheapuse(void)
 {
-	return _fetch(2);
-}
-
-__attribute__((unused))
-static long
-kmemtotal(void)
-{
-	return _fetch(3);
-}
-
-__attribute__((unused))
-static long
-kheap(void)
-{
-	return _fetch(4);
-}
-
-__attribute__((unused))
-static long
-kstack(void)
-{
-	return _fetch(5);
-}
-
-__attribute__((unused))
-static double
-gccpufrac(void)
-{
-	union {
-		double a;
-		long b;
-	} dur;
-	dur.b = _fetch(6);
-	return dur.a;
-}
-
-__attribute__((unused))
-static void
-resetgccpufrac(void)
-{
-	_fetch(7);
+	return _fetch(SINFO_GCHEAPSZ);
 }
 
 static pthread_barrier_t _wbar;
@@ -244,10 +204,10 @@ static void work(enum work_t wn, long wf, const long nt)
 		if ((ret = pthread_create(&ts[i], NULL, wfunc, (void *)secs)))
 			errx(ret, "pthread create");
 
-	resetgccpufrac();
 	long bgcs = gccount();
 	long bgcns = gctotns();
 
+	struct gcfrac_t gcf = gcfracst();
 	//fake_sys(1);
 
 	ret = pthread_barrier_wait(&_wbar);
@@ -276,14 +236,13 @@ static void work(enum work_t wn, long wf, const long nt)
 	long xput = __atomic_load_n(&_totalxput, __ATOMIC_ACQUIRE);
 
 	printf("iterations/sec: %ld (%ld total)\n", xput/secs, xput);
-	printf("CPU time GC'ing: %f%%\n", gccpufrac());
+	printf("CPU time GC'ing: %f%%\n", gcfracend(&gcf));
 	printf("max latency: %ld ms\n", longest);
 	printf("each thread's latency:\n");
 	for (i = 0; i < nt; i++)
 		printf("     %ld\n", longarr[i]);
 	printf("%ld gcs (%ld ms)\n", gcs, gcns/1000000);
 	printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
-	printf("kernel stack size: %ld Mb\n", kstack()/(1 << 20));
 }
 
 int _vnodes(long sf)

@@ -151,18 +151,6 @@ void *getpids(void *idp)
 	return (void *)total;
 }
 
-void *fake2(void *idp)
-{
-	pthread_barrier_wait(&bar);
-
-	long total = 0;
-	while (!cease) {
-		fake_sys2(0);
-		total++;
-	}
-	return (void *)total;
-}
-
 void bm(char const *tl, void *(*fn)(void *))
 {
 	cease = 0;
@@ -412,7 +400,6 @@ struct {
 	{"create/write/unlink", 'c', crmessage, NULL, NULL},
 	{"unix socket", 'u', sunsend, sunspawn, sunkill},
 	{"getpids", 'p', getpids, NULL, NULL},
-	{"fake2", 'f', fake2, NULL, NULL},
 	{"forkonly", 'k', forkonly, NULL, NULL},
 	{"forkexec", 'e', forkexec, NULL, NULL},
 	{"seqcreate", 's', seqcreate, NULL, NULL},

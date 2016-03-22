@@ -13,67 +13,27 @@ static long
 _fetch(long n)
 {
 	long ret;
-	if ((ret = fake_sys2(n)) < 0)
-		errx(-1, "fake 2");
+	if ((ret = sys_info(n)) < 0)
+		errx(-1, "sysinfo");
 	return ret;
 }
 
 static long
 gccount(void)
 {
-	return _fetch(0);
+	return _fetch(SINFO_GCCOUNT);
 }
 
 static long
 gctotns(void)
 {
-	return _fetch(1);
+	return _fetch(SINFO_GCPAUSENS);
 }
 
 static long
 gcheapuse(void)
 {
-	return _fetch(2);
-}
-
-__attribute__((unused))
-static long
-kmemtotal(void)
-{
-	return _fetch(3);
-}
-
-__attribute__((unused))
-static long
-kheap(void)
-{
-	return _fetch(4);
-}
-
-__attribute__((unused))
-static long
-kstack(void)
-{
-	return _fetch(5);
-}
-
-__attribute__((unused))
-static double
-gccpufrac(void)
-{
-	union {
-		double a;
-		long b;
-	} dur;
-	dur.b = _fetch(6);
-	return dur.a;
-}
-
-__attribute__((unused))
-static void
-resetgccpufrac(void)
-{
-	_fetch(7);
+	return _fetch(SINFO_GCHEAPSZ);
 }
 
 struct res_t {
@@ -122,7 +82,6 @@ static void work(long wf, const long np)
 	if (pipe(resp))
 		err(-1, "pipe");
 
-	resetgccpufrac();
 	long bgcs = gccount();
 	long bgcns = gctotns();
 
@@ -139,6 +98,7 @@ static void work(long wf, const long np)
 	}
 	close(resp[1]);
 
+	struct gcfrac_t gcf = gcfracst();
 	//fake_sys(1);
 
 	long longest = 0, totalxput = 0;
@@ -166,14 +126,13 @@ static void work(long wf, const long np)
 	long gcns = gctotns() - bgcns;
 
 	printf("iterations/sec: %ld (%ld total)\n", totalxput/secs, totalxput);
-	printf("CPU time GC'ing: %f%%\n", gccpufrac());
+	printf("CPU time GC'ing: %f%%\n", gcfracend(&gcf));
 	printf("max latency: %ld ms\n", longest);
 	printf("each process' latency:\n");
 	for (i = 0; i < np; i++)
 		printf("     %ld\n", longarr[i]);
 	printf("%ld gcs (%ld ms)\n", gcs, gcns/1000000);
 	printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
-	printf("kernel stack size: %ld Mb\n", kstack()/(1 << 20));
 }
 
 int _vnodes(long sf)

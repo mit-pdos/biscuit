@@ -210,8 +210,6 @@ void _exit(int)
 int execv(const char *, char * const[]);
 int execve(const char *, char * const[], char * const[]);
 int execvp(const char *, char * const[]);
-long fake_sys(long);
-long fake_sys2(long);
 int fork(void);
 int fstat(int, struct stat *);
 int ftruncate(int, off_t);
@@ -321,6 +319,16 @@ int socket(int, int, int);
 
 int stat(const char *, struct stat *);
 int sync(void);
+long sys_prof(long);
+#define PROF_DISABLE	0
+#define PROF_ENABLE	1
+
+long sys_info(long);
+#define SINFO_GCCOUNT	0
+#define SINFO_GCPAUSENS	1
+#define SINFO_GCHEAPSZ	2
+#define SINFO_GCMS	4
+
 int truncate(const char *, off_t);
 int unlink(const char *);
 int wait(int *);
@@ -547,6 +555,12 @@ int fsync(int);
 size_t fread(void *, size_t, size_t, FILE *);
 off_t ftello(FILE *);
 size_t fwrite(const void *, size_t, size_t, FILE *);
+struct gcfrac_t {
+	long startms;
+	long gcworkms;
+};
+struct gcfrac_t gcfracst(void);
+double gcfracend(struct gcfrac_t *);
 int getopt(int, char * const *, const char *);
 extern char *optarg;
 extern int   optind;
