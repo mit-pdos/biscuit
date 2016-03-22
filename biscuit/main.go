@@ -2113,7 +2113,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			panic("yahoo")
 		} else if c == '@' {
 			_nflip = (_nflip + 1) % 2
-			sys_fake(nil, _nflip)
+			sys_prof(nil, _nflip)
 		}
 	}
 	var reqc chan int

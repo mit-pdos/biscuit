@@ -2703,11 +2703,9 @@ void trunctest(void)
 	fd = open(fp, O_RDONLY | O_CREAT);
 	if (fd < 0)
 		err(-1, "open");
-	fake_sys2(1);
 	for (i = 0; i < newsz; i += sizeof(buf))
 		if ((r = read(fd, buf, sizeof(buf))) != sizeof(buf))
 			err(-1, "expected %lu bytes, got %zd", newsz, r);
-	fake_sys2(0);
 	close(fd);
 
 	printf("trunc test ok\n");

@@ -47,9 +47,9 @@
 #define SYS_REBOOT       169
 #define SYS_NANOSLEEP    230
 #define SYS_PIPE2        293
-#define SYS_FAKE         31337
+#define SYS_PROF         31337
 #define SYS_THREXIT      31338
-#define SYS_FAKE2        31339
+#define SYS_INFO         31339
 #define SYS_PREAD        31340
 #define SYS_PWRITE       31341
 #define SYS_FUTEX        31342
@@ -246,18 +246,6 @@ execvp(const char *path, char * const argv[])
 	if (!p)
 		return -ENOENT;
 	return execv(p, argv);
-}
-
-long
-fake_sys(long n)
-{
-	return syscall(n, 0, 0, 0, 0, SYS_FAKE);
-}
-
-long
-fake_sys2(long n)
-{
-	return syscall(n, 0, 0, 0, 0, SYS_FAKE2);
 }
 
 int
@@ -640,6 +628,22 @@ sync(void)
 {
 	int ret = syscall(0, 0, 0, 0, 0, SYS_SYNC);
 	ERRNO_NZ(ret);
+	return ret;
+}
+
+long
+sys_prof(long n)
+{
+	long ret = syscall(n, 0, 0, 0, 0, SYS_PROF);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
+long
+sys_info(long n)
+{
+	long ret = syscall(n, 0, 0, 0, 0, SYS_INFO);
+	ERRNO_NEG(ret);
 	return ret;
 }
 
@@ -1731,6 +1735,37 @@ fsync(int fd)
 {
 	sync();
 	return 0;
+}
+
+static void
+_gcfrac(long *_nowms, long *_gcwork)
+{
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL))
+		err(-1, "gettimeofday");
+	long nowms = tv.tv_sec*1000 + tv.tv_usec/1000;
+	long gcwork = sys_info(SINFO_GCMS);
+	if (gcwork == -1)
+		err(-1, "sysinfo");
+	*_nowms = nowms;
+	*_gcwork = gcwork;
+}
+
+struct gcfrac_t
+gcfracst(void)
+{
+	long nowms, gcwork;
+	_gcfrac(&nowms, &gcwork);
+	struct gcfrac_t ret = {startms: nowms, gcworkms: gcwork};
+	return ret;
+}
+
+double
+gcfracend(struct gcfrac_t *gf)
+{
+	long nowms, gcwork;
+	_gcfrac(&nowms, &gcwork);
+	return (double)(gcwork - gf->gcworkms)/(nowms - gf->startms);
 }
 
 char *optarg;
