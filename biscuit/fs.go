@@ -44,11 +44,27 @@ func dirname(path string) ([]string, string) {
 }
 
 func sdirname(path string) (string, string) {
-	ds, fn := dirname(path)
-	s := strings.Join(ds, "/")
-	if path != "" && path[0] == '/' {
-		s = "/" + s
+	fn := path
+	l := len(fn)
+	if l > 0 && fn[l-1] == '/' {
+		fn = fn[0:l-1]
+		l--
 	}
+	s := ""
+	for i := l - 1; i >= 0; i-- {
+		if fn[i] == '/' {
+			// remove the rightmost slash only if it is not the
+			// first char (the root).
+			if i == 0 {
+				s = fn[0:1]
+			} else {
+				s = fn[:i]
+			}
+			fn = fn[i+1:]
+			break
+		}
+	}
+
 	return s, fn
 }
 
