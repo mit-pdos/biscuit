@@ -3767,7 +3767,7 @@ func sys_info(proc *proc_t, n int) int {
 	case SINFO_GCHEAPSZ:
 		ret = int(ms.Alloc)
 	case SINFO_GCMS:
-		ret = int(ms.PauseTotalNs)/1000000
+		ret = runtime.GCworktime()/1000000
 	case 10:
 		runtime.GC()
 		ret = 0

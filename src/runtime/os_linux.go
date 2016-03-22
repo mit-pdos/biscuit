@@ -2671,3 +2671,7 @@ func Pnum(n int) {
 func Kpmap_p() uintptr {
 	return p_kpmap
 }
+
+func GCworktime() int {
+	return int(work.totaltime)
+}
