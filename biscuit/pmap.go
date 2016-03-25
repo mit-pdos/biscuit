@@ -38,10 +38,12 @@ type pmtracker_t struct {
 }
 
 func (pmt *pmtracker_t) pminit() {
+	panic("no")
 	pmt.pms = make([]*[512]int, 0, 30)
 }
 
 func (pmt *pmtracker_t) pmadd(pm *[512]int) {
+	panic("no")
 	pmt.pms = append(pmt.pms, pm)
 }
 
@@ -271,7 +273,7 @@ type pgtracker_t map[int]*[512]int
 // allocated by the kernel (not the bootloader/runtime)
 var kplock = sync.Mutex{}
 var kpages = pgtracker_t{}
-var kpmpages = &pmtracker_t{}
+//var kpmpages = &pmtracker_t{}
 
 func kpgadd(pg *[512]int) {
 	va := uintptr(unsafe.Pointer(pg))
@@ -331,6 +333,7 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 // on direct map). the caller should almost always call proc_t.page_insert()
 // after pg_new().
 func pg_new() (*[512]int, int) {
+	panic("no")
 	pt  := new([512]int)
 	ptn := int(uintptr(unsafe.Pointer(pt)))
 	if ptn & PGOFFSET != 0 {
@@ -356,12 +359,14 @@ func kpmap() *[512]int {
 	return kpmapp
 }
 
-var zeropg = new([512]int)
+//var zeropg = new([512]int)
+var zeropg *[512]int
 var p_zeropg int
+var _dmapinit bool
 
 // installs a direct map for 512G of physical memory via the recursive mapping
 func dmap_init() {
-	kpmpages.pminit()
+	//kpmpages.pminit()
 
 	// the default cpu qemu uses for x86_64 supports 1GB pages, but
 	// doesn't report it in cpuid 0x80000001... i wonder why.
@@ -374,6 +379,7 @@ func dmap_init() {
 	}
 
 	pdpt  := new([512]int)
+	//pdpt, p_pdpt := refpg_new()
 	ptn := int(uintptr(unsafe.Pointer(pdpt)))
 	if ptn & PGOFFSET != 0 {
 		panic("page table not aligned")
@@ -402,6 +408,7 @@ func dmap_init() {
 	size = 1 << 21
 	pdptsz := 1 << 30
 	for i := range pdpt {
+		//pd, p_pd := refpg_new()
 		pd := new([512]int)
 		p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
 		if !ok {
@@ -423,12 +430,15 @@ func dmap_init() {
 			kents = append(kents, ent)
 		}
 	}
+	_dmapinit = true
 
-	pte := pmap_lookup(kpmap(), int(uintptr(unsafe.Pointer(zeropg))))
-	if pte == nil || *pte & PTE_P == 0 {
-		panic("wut")
-	}
-	p_zeropg = *pte & PTE_ADDR
+	//pte := pmap_lookup(kpmap(), int(uintptr(unsafe.Pointer(zeropg))))
+	//if pte == nil || *pte & PTE_P == 0 {
+	//	panic("wut")
+	//}
+	//p_zeropg = *pte & PTE_ADDR
+	zeropg, p_zeropg = _refpg_new()
+	refup(uintptr(p_zeropg))
 }
 
 type kent_t struct {
@@ -483,8 +493,10 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool, perms int,
 	}
 
 	instpg := func(pg *[512]int, idx uint) int {
-		np, p_np := pg_new()
-		pmt.pmadd(np)
+		//np, p_np := pg_new()
+		_, p_np := refpg_new()
+		refup(uintptr(p_np))
+		//pmt.pmadd(np)
 		npte :=  p_np | perms | PTE_P
 		pg[idx] = npte
 		return npte
@@ -689,6 +701,11 @@ func ptefork(cpmap, ppmap *[512]int, cpmt *pmtracker_t, start, end int) bool {
 				ps[j] = phys | flags
 			}
 			cs[j] = phys | flags
+			// XXXPANIC
+			if pte & PTE_U == 0 {
+				panic("huh?")
+			}
+			refup(uintptr(phys))
 		}
 		i += len(ps)*PGSIZE
 
@@ -852,9 +869,12 @@ func pmap_iter(ptef func(int, *int), pm *[512]int, va int) {
 func kmalloc(va uintptr, perms int) {
 	kplock.Lock()
 	defer kplock.Unlock()
-	pg, p_pg := pg_new()
-	kpgadd(pg)
-	pte := pmap_walk(kpmap(), int(va), perms, kpmpages)
+	_, p_pg := refpg_new()
+	refup(uintptr(p_pg))
+	//pg, p_pg := pg_new()
+	//kpgadd(pg)
+	//pte := pmap_walk(kpmap(), int(va), perms, kpmpages)
+	pte := pmap_walk(kpmap(), int(va), perms, nil)
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("page already mapped %#x", va))
 	}
