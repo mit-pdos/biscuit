@@ -32,17 +32,6 @@ func pathparts(path string) []string {
 	return nn
 }
 
-func dirname(path string) ([]string, string) {
-	parts := pathparts(path)
-	l := len(parts) - 1
-	if l < 0 {
-		return nil, ""
-	}
-	dirs := parts[:l]
-	name := parts[l]
-	return dirs, name
-}
-
 func sdirname(path string) (string, string) {
 	fn := path
 	l := len(fn)

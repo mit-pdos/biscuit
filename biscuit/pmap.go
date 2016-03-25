@@ -676,6 +676,10 @@ func ptefork(cpmap, ppmap *[512]int, cpmt *pmtracker_t, start, end int) bool {
 			cs = cs[:left]
 		}
 		for j, pte := range ps {
+			// may be guard pages
+			if pte & PTE_P == 0 {
+				continue
+			}
 			phys := pte & PTE_ADDR
 			flags := pte & PTE_FLAGS
 			if flags & PTE_W != 0 {
