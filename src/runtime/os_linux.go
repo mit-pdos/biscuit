@@ -385,27 +385,27 @@ func _pmcreset(en bool) {
 	ia32_global_ctrl := 0x38f
 	//ia32_perf_global_status := uint32(0x38e)
 
-	if en {
-		// disable perf counter before clearing
-		Wrmsr(ia32_perfevtsel0, 0)
+	// disable perf counter before clearing
+	Wrmsr(ia32_perfevtsel0, 0)
 
-		// clear overflow
-		Wrmsr(ia32_perf_global_ovf_ctrl, 1)
-
-		r := dumrand(nmiprof.evtmin, nmiprof.evtmax)
-		Wrmsr(ia32_pmc0, -int(r))
-
-		freeze_pmc_on_pmi := 1 << 12
-		Wrmsr(ia32_debugctl, freeze_pmc_on_pmi)
-		// cpu clears global_ctrl on PMI if freeze-on-pmi is set.
-		// re-enable
-		Wrmsr(ia32_global_ctrl, 1)
-
-		v := nmiprof.evtsel
-		Wrmsr(ia32_perfevtsel0, v)
-	} else {
-		Wrmsr(ia32_perfevtsel0, 0)
+	if !en {
+		return
 	}
+
+	// clear overflow
+	Wrmsr(ia32_perf_global_ovf_ctrl, 1)
+
+	r := dumrand(nmiprof.evtmin, nmiprof.evtmax)
+	Wrmsr(ia32_pmc0, -int(r))
+
+	freeze_pmc_on_pmi := 1 << 12
+	Wrmsr(ia32_debugctl, freeze_pmc_on_pmi)
+	// cpu clears global_ctrl on PMI if freeze-on-pmi is set.
+	// re-enable
+	Wrmsr(ia32_global_ctrl, 1)
+
+	v := nmiprof.evtsel
+	Wrmsr(ia32_perfevtsel0, v)
 
 	// the write to debugctl enabling LBR must come after clearing overflow
 	// via global_ovf_ctrl; otherwise the processor instantly clears lbr...
