@@ -210,7 +210,7 @@ void _exit(int)
 int execv(const char *, char * const[]);
 int execve(const char *, char * const[], char * const[]);
 int execvp(const char *, char * const[]);
-int fork(void);
+pid_t fork(void);
 int fstat(int, struct stat *);
 int ftruncate(int, off_t);
 int futex(const int, void *, void *, int, const struct timespec *);

@@ -276,7 +276,7 @@ fcntl(int fd, int cmd, ...)
 	return ret;
 }
 
-int
+pid_t
 fork(void)
 {
 	long flags = FORK_PROCESS;
