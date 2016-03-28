@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
-//import "runtime/debug"
+import "runtime/debug"
 import "sync/atomic"
 import "sync"
 import "time"
@@ -633,7 +633,7 @@ type proc_t struct {
 	vmregion	vmregion_t
 
 	// pmap pages
-	pmpages		*pmtracker_t
+	//pmpages		*pmtracker_t
 	pmap		*[512]int
 	p_pmap		int
 
@@ -696,8 +696,8 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 
 	ret.name = name
 	ret.pid = np
-	ret.pmpages = &pmtracker_t{}
-	ret.pmpages.pminit()
+	//ret.pmpages = &pmtracker_t{}
+	//ret.pmpages.pminit()
 	ret.fds = fds
 	ret.fdstart = 3
 	ret.cwd = cwd
@@ -863,7 +863,8 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 		copy(ns.pages, ph.pages)
 
 		// fork all ptes for this vmseg
-		if ptefork(child.pmap, parent.pmap, child.pmpages, ph.start,
+		//if ptefork(child.pmap, parent.pmap, child.pmpages, ph.start,
+		if ptefork(child.pmap, parent.pmap, nil, ph.start,
 		    ph.end) {
 			doflush = true
 		}
@@ -914,17 +915,22 @@ func (p *proc_t) mkfxbuf() *[64]int {
 func (p *proc_t) page_insert(va int, seg *vmseg_t, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 	p.lockassert_pmap()
-	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, p.pmpages)
+	refup(uintptr(p_pg))
+	//pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, p.pmpages)
+	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, nil)
 	ninval := false
+	var p_old uintptr
 	if pte != nil && *pte & PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
 		}
 		ninval = true
+		p_old = uintptr(*pte & PTE_ADDR)
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
 		invlpg(va)
+		refdown(p_old)
 	}
 	seg.track(va, pg)
 }
@@ -990,7 +996,8 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
 		intno, aux := runtime.Userrun(tf, fxbuf, p.pmap,
-		    uintptr(p.p_pmap), p.pmpages.pms, fastret)
+		    //uintptr(p.p_pmap), p.pmpages.pms, fastret)
+		    uintptr(p.p_pmap), nil, fastret)
 		fastret = false
 		switch intno {
 		case SYSCALL:
@@ -1089,6 +1096,33 @@ func (p *proc_t) doomall() {
 	p.doomed = true
 }
 
+func _scanadd(pg *[512]int, depth int, l *[]int) {
+	if depth == 0 {
+		return
+	}
+	for _, pte := range pg {
+		if pte & PTE_P == 0 || pte & PTE_U == 0 || pte & PTE_PS != 0 {
+			continue
+		}
+		phys := pte & PTE_ADDR
+		*l = append(*l, phys)
+		_scanadd(dmap(phys), depth - 1, l)
+	}
+}
+
+func vmfree(p_pmap int) int {
+	pgs := make([]int, 0, 10)
+	pgs = append(pgs, p_pmap)
+	_scanadd(dmap(p_pmap), 4, &pgs)
+	if runtime.Rcr3() == uintptr(p_pmap) {
+		runtime.Lcr3(runtime.Kpmap_p())
+	}
+	for _, p_pg := range pgs {
+		refdown(uintptr(p_pg))
+	}
+	return len(pgs)
+}
+
 // termiante a process. must only be called when the process has no more
 // running threads.
 func (p *proc_t) terminate() {
@@ -1115,6 +1149,7 @@ func (p *proc_t) terminate() {
 	close_panic(p.cwd)
 
 	proc_del(p.pid)
+	vmfree(p.p_pmap)
 
 	// send status to parent
 	if p.pwait == nil {
@@ -2732,16 +2767,140 @@ func insertbm() {
 	}
 }
 
+// can account for up to 16TB of mem
+type physpg_t struct {
+	refcnt		int32
+	// index into pgs of next page on free list
+	nexti		uint32
+}
+
+var physmem struct {
+	pgs		[]physpg_t
+	startn		uint32
+	// index into pgs of first free pg
+	freei		uint32
+}
+
+func refup(p_pg uintptr) {
+	idx := _pg2pgn(p_pg) - physmem.startn
+	c := atomic.AddInt32(&physmem.pgs[idx].refcnt, 1)
+	// XXXPANIC
+	if c < 0 {
+		panic("wut")
+	}
+}
+
+func refdown(p_pg uintptr) {
+	idx := _pg2pgn(p_pg) - physmem.startn
+	c := atomic.AddInt32(&physmem.pgs[idx].refcnt, -1)
+	// XXXPANIC
+	if c < 0 {
+		panic("wut")
+	}
+	// add to freelist
+	if c == 0 {
+		for {
+			expi := physmem.freei
+			physmem.pgs[idx].nexti = expi
+			if atomic.CompareAndSwapUint32(&physmem.freei, expi,
+			    idx) {
+				break
+			}
+		}
+	}
+}
+
+func _refpg_new() (*[512]int, int) {
+	if !_dmapinit {
+		panic("dmap not initted")
+	}
+
+	var pi int
+	var p_pg uintptr
+	for {
+		firstfree := physmem.freei
+		if firstfree == ^uint32(0) {
+			panic("refpgs oom")
+		}
+		newhead := physmem.pgs[firstfree].nexti
+		if atomic.CompareAndSwapUint32(&physmem.freei, firstfree,
+		    newhead) {
+			pi = int(firstfree)
+			p_pg = uintptr(firstfree + physmem.startn) << PGSHIFT
+			break
+		}
+	}
+	if physmem.pgs[pi].refcnt < 0 {
+		panic("how?")
+	}
+	dur := int(p_pg)
+	pg := dmap(dur)
+	return pg, dur
+}
+
+// refcnt of returned page is not incremented. requires direct mapping.
+func refpg_new() (*[512]int, int) {
+	pg, p_pg := _refpg_new()
+	*pg = *zeropg
+	return pg, p_pg
+}
+
+func _pg2pgn(p_pg uintptr) uint32 {
+	return uint32(p_pg >> PGSHIFT)
+}
+
+func phys_init() {
+	// reserve 128MB of pages
+	//respgs := 1 << 15
+	respgs := 1 << 16
+	//respgs := 1 << 18 + (1 <<17)
+	physmem.pgs = make([]physpg_t, respgs)
+	for i := range physmem.pgs {
+		physmem.pgs[i].refcnt = -10
+	}
+	first := runtime.Get_phys()
+	fpgn := _pg2pgn(first)
+	physmem.startn = fpgn
+	physmem.freei = 0
+	physmem.pgs[0].refcnt = 0
+	physmem.pgs[0].nexti = ^uint32(0)
+	for i := 0; i < respgs - 1; i++ {
+		p_pg := runtime.Get_phys()
+		pgn := _pg2pgn(p_pg)
+		idx := pgn - physmem.startn
+		// Get_phys() may skip regions.
+		if int(idx) >= len(physmem.pgs) {
+			if respgs - i > int(float64(respgs)*0.01) {
+				panic("got many bad pages")
+			}
+			break
+		}
+		physmem.pgs[idx].refcnt = 0
+		physmem.pgs[idx].nexti = physmem.freei
+		physmem.freei = idx
+	}
+	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs >> 8)
+}
+
+func pgcount() int {
+	s := 0
+	for i := physmem.freei; i != ^uint32(0); i = physmem.pgs[i].nexti {
+		s++
+	}
+	return s
+}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
 	//	for {
 	//	}
 	//}
-	//debug.SetGCPercent(50)
+	phys_init()
 
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
+	debug.SetGCPercent(100)
 
 	//chanbm()
 

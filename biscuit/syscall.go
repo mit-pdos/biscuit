@@ -523,7 +523,8 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	seg := proc.mkvmseg(addr, lenn)
 	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
-		pg, p_pg := pg_new()
+		//pg, p_pg := pg_new()
+		pg, p_pg := refpg_new()
 		proc.page_insert(addr + i, seg, pg, p_pg, perms, true)
 	}
 	// no tlbshoot because mmap never replaces pages for now
@@ -2772,7 +2773,9 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		// fork parent address space
 		parent.Lock_pmap()
-		pmap, p_pmap := pg_new()
+		//pmap, p_pmap := pg_new()
+		pmap, p_pmap := refpg_new()
+		refup(uintptr(p_pmap))
 		child.pmap = pmap
 		child.p_pmap = p_pmap
 		rsp := chtf[TF_RSP]
@@ -2840,7 +2843,8 @@ func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
 
 	if cow {
 		// copy page
-		dst, p_dst := pg_new()
+		//dst, p_dst := pg_new()
+		dst, p_dst := refpg_new()
 		p_src := *pte & PTE_ADDR
 		src := dmap(p_src)
 		if p_src != p_zeropg {
@@ -2900,21 +2904,24 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	defer proc.Unlock_pmap()
 
 	// save page trackers in case the exec fails
-	opmpages := proc.pmpages
-	proc.pmpages = &pmtracker_t{}
-	proc.pmpages.pminit()
+	//opmpages := proc.pmpages
+	//proc.pmpages = &pmtracker_t{}
+	//proc.pmpages.pminit()
 	ovmreg := proc.vmregion.clear()
 
 	// create kernel page table
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
-	proc.pmap, proc.p_pmap = pg_new()
+	//proc.pmap, proc.p_pmap = pg_new()
+	proc.pmap, proc.p_pmap = refpg_new()
+	refup(uintptr(proc.p_pmap))
 	for _, e := range kents {
 		proc.pmap[e.pml4slot] = e.entry
 	}
 
 	restore := func() {
-		proc.pmpages = opmpages
+		//proc.pmpages = opmpages
+		refdown(uintptr(proc.p_pmap))
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
 		proc.vmregion.head = ovmreg
@@ -2949,6 +2956,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		restore()
 		return -EPERM
 	}
+	if op_pmap != 0 {
+		vmfree(op_pmap)
+	}
 
 	// elf_load() will create two copies of TLS section: one for the fresh
 	// copy and one for thread 0
@@ -2966,7 +2976,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		var p_stack int
 		perms := PTE_U
 		if i == 0 {
-			stack, p_stack = pg_new()
+			//stack, p_stack = pg_new()
+			stack, p_stack = refpg_new()
 			perms |= PTE_W
 		} else {
 			stack = zeropg
@@ -3033,7 +3044,8 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	// find free page
 	uva := proc.unusedva_inner(0, PGSIZE)
 	seg := proc.mkvmseg(uva, PGSIZE)
-	pg, p_pg := pg_new()
+	//pg, p_pg := pg_new()
+	pg, p_pg := refpg_new()
 	proc.page_insert(uva, seg, pg, p_pg, PTE_U, true)
 	var args [][]uint8
 	for _, str := range sargs {
@@ -3771,6 +3783,7 @@ func sys_info(proc *proc_t, n int) int {
 	case 10:
 		runtime.GC()
 		ret = 0
+		fmt.Printf("pgcount: %v\n", pgcount())
 	case 11:
 		proc.vmregion.dump()
 		ret = 0
@@ -4079,7 +4092,8 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 		for i := 0; i < l; i += PGSIZE {
 			// allocator zeros objects, so tbss is already
 			// initialized.
-			pg, p_pg := pg_new()
+			//pg, p_pg := pg_new()
+			pg, p_pg := refpg_new()
 			proc.page_insert(freshtls + i, seg, pg, p_pg, perms,
 			    true)
 			src, ok := proc.userdmap8_inner(tlsaddr + i)

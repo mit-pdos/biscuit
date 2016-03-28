@@ -1024,7 +1024,9 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 	created := false
 	if pc.pgs[pgn] == nil {
 		created = true
-		npg, p_npg := pg_new()
+		//npg, p_npg := pg_new()
+		npg, p_npg := refpg_new()
+		refup(uintptr(p_npg))
 		bpg := (*[PGSIZE]uint8)(unsafe.Pointer(npg))
 		pc.pgs[pgn] = bpg
 		var pgi pgcinfo_t

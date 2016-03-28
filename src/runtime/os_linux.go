@@ -1192,6 +1192,10 @@ func phys_init() {
 	}
 }
 
+func Get_phys() uintptr {
+	return get_pg()
+}
+
 //go:nosplit
 func get_pg() uintptr {
 	if pglast == 0 {
