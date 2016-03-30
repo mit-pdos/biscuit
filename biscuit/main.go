@@ -1320,7 +1320,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 		return true
 	}
 	ret := make([]string, 0)
-	argmax := 16
+	argmax := 64
 	addarg := func(cptr []uint8) bool {
 		if len(ret) > argmax {
 			return false
@@ -2113,7 +2113,11 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			panic("yahoo")
 		} else if c == '@' {
 			_nflip = (_nflip + 1) % 2
-			sys_prof(nil, _nflip)
+			act := PROF_GOLANG
+			if _nflip == 0 {
+				act |= PROF_DISABLE
+			}
+			sys_prof(nil, act, 0, 0, 0)
 		}
 	}
 	var reqc chan int
@@ -2291,12 +2295,13 @@ func perfsetup() {
 	ax, bx, _, _ := runtime.Cpuid(0xa, 0)
 	perfv := ax & 0xff
 	npmc := (ax >> 8) & 0xff
+	pmcbits := (ax >> 16) & 0xff
 	pmebits := (ax >> 24) & 0xff
 	cyccnt := bx & 1 == 0
 	_, _, cx, _ := runtime.Cpuid(0x1, 0)
 	pdc := cx & (1 << 15) != 0
 	if pdc && perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 &&
-	    cyccnt {
+	    cyccnt && pmcbits >= 32 {
 		fmt.Printf("Hardware Performance monitoring enabled: " +
 		    "%v counters\n", npmc)
 		profhw = &intelprof_t{}
@@ -2312,22 +2317,20 @@ type pmevid_t uint
 
 const(
 	// architectural
-	EV_UNHALTED_CORE_CYCLES		pmevid_t = iota
-	EV_LLC_MISSES			pmevid_t = iota
-	EV_LLC_REFS			pmevid_t = iota
-	EV_BRANCH_INSTR_RETIRED		pmevid_t = iota
-	EV_BRANCH_MISS_RETIRED		pmevid_t = iota
-	EV_INSTR_RETIRED		pmevid_t = iota
+	EV_UNHALTED_CORE_CYCLES		pmevid_t = 1 << iota
+	EV_LLC_MISSES			pmevid_t = 1 << iota
+	EV_LLC_REFS			pmevid_t = 1 << iota
+	EV_BRANCH_INSTR_RETIRED		pmevid_t = 1 << iota
+	EV_BRANCH_MISS_RETIRED		pmevid_t = 1 << iota
+	EV_INSTR_RETIRED		pmevid_t = 1 << iota
 	// non-architectural
 	// "all TLB misses that cause a page walk"
-	EV_DTLB_LOAD_MISS_ANY		pmevid_t = iota
+	EV_DTLB_LOAD_MISS_ANY		pmevid_t = 1 << iota
 	// "number of completed walks due to miss in sTLB"
-	EV_DTLB_LOAD_MISS_STLB		pmevid_t = iota
+	EV_DTLB_LOAD_MISS_STLB		pmevid_t = 1 << iota
 	// "retired stores that missed in the dTLB"
-	EV_STORE_DTLB_MISS		pmevid_t = iota
-	//EV_WTF1				pmevid_t = iota
-	//EV_WTF2				pmevid_t = iota
-	EV_L2_LD_HITS			pmevid_t = iota
+	EV_STORE_DTLB_MISS		pmevid_t = 1 << iota
+	EV_L2_LD_HITS			pmevid_t = 1 << iota
 )
 
 type pmflag_t uint

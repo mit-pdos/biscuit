@@ -183,8 +183,10 @@ const(
   SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
   SYS_PROF     = 31337
-    PROF_DISABLE   = 0
-    PROF_ENABLE    = 1
+    PROF_DISABLE   = 1 << 0
+    PROF_GOLANG    = 1 << 1
+    PROF_SAMPLE    = 1 << 2
+    PROF_COUNT     = 1 << 3
   SYS_THREXIT  = 31338
   SYS_INFO     = 31339
     SINFO_GCCOUNT    = 0
@@ -332,7 +334,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 	case SYS_PIPE2:
 		ret = sys_pipe2(p, a1, a2)
 	case SYS_PROF:
-		ret = sys_prof(p, a1)
+		ret = sys_prof(p, a1, a2, a3, a4)
 	case SYS_INFO:
 		ret = sys_info(p, a1)
 	case SYS_THREXIT:
@@ -3556,13 +3558,18 @@ func _prof_go(en bool) {
 	}
 }
 
-func _prof_nmi(en bool) {
+func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
 	if en {
-		cyc := runtime.Cpumhz * 1000000
-		samples := uint(1000)
-		min := cyc/samples
-		if !profhw.startnmi(EV_UNHALTED_CORE_CYCLES, EVF_USR,
-		    min, min) {
+		min := uint(intperiod)
+		// default unhalted cycles sampling rate
+		defperiod := intperiod == 0
+		if defperiod && pmev.evid == EV_UNHALTED_CORE_CYCLES {
+			cyc := runtime.Cpumhz * 1000000
+			samples := uint(1000)
+			min = cyc/samples
+		}
+		max := uint(float64(min)*1.2)
+		if !profhw.startnmi(pmev.evid, pmev.pflags, min, max) {
 			fmt.Printf("Failed to start NMI profiling\n")
 		}
 	} else {
@@ -3592,20 +3599,10 @@ func _prof_nmi(en bool) {
 var hacklock sync.Mutex
 var hackctrs []int
 
-func _prof_pmc(en bool) {
+func _prof_pmc(en bool, events []pmev_t) {
 	hacklock.Lock()
 	defer hacklock.Unlock()
 
-	events := []pmev_t{
-	    //{EV_LLC_MISSES, EVF_OS},
-	    //{EV_LLC_MISSES, EVF_USR},
-	    //{EV_DTLB_LOAD_MISS_ANY, EVF_OS},
-	    {EV_DTLB_LOAD_MISS_ANY, EVF_USR},
-	    {EV_DTLB_LOAD_MISS_STLB, EVF_USR},
-	    //{EV_STORE_DTLB_MISS, EVF_USR},
-	    //{EV_WTF1, EVF_USR},
-	    //{EV_WTF2, EVF_USR},
-	}
 	if en {
 		if hackctrs != nil {
 			fmt.Printf("counters in use\n")
@@ -3644,20 +3641,33 @@ func _prof_pmc(en bool) {
 	}
 }
 
-func sys_prof(proc *proc_t, n int) int {
-	en := false
-	if n == PROF_ENABLE {
-		en = true
+func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
+	en := true
+	if ptype & PROF_DISABLE != 0 {
+		en = false
 	}
-
-	nmiprof := false
-	if nmiprof {
-		_prof_nmi(en)
-	} else {
+	switch {
+	case ptype & PROF_GOLANG != 0:
 		_prof_go(en)
-		//_prof_pmc(en)
+	case ptype & PROF_SAMPLE != 0:
+		ev := pmev_t{evid: pmevid_t(_events),
+		    pflags: pmflag_t(_pmflags)}
+		_prof_nmi(en, ev, intperiod)
+	case ptype & PROF_COUNT != 0:
+		evs := make([]pmev_t, 0, 4)
+		for i := uint(0); i < 64; i++ {
+			b := 1 << i
+			if _events & b != 0 {
+				n := pmev_t{}
+				n.evid = pmevid_t(b)
+				n.pflags = pmflag_t(_pmflags)
+				evs = append(evs, n)
+			}
+		}
+		_prof_pmc(en, evs)
+	default:
+		return -EINVAL
 	}
-
 	return 0
 }
 

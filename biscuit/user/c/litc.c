@@ -632,9 +632,9 @@ sync(void)
 }
 
 long
-sys_prof(long n)
+sys_prof(long ptype, long events, long flags, long intperiod)
 {
-	long ret = syscall(n, 0, 0, 0, 0, SYS_PROF);
+	long ret = syscall(ptype, events, flags, intperiod, 0, SYS_PROF);
 	ERRNO_NZ(ret);
 	return ret;
 }

@@ -165,7 +165,7 @@ void bm(char const *tl, void *(*fn)(void *))
 
 	pthread_barrier_wait(&bar);
 
-	if (sys_prof(PROF_ENABLE) == -1)
+	if (sys_prof(PROF_GOLANG, 0, 0, 0) == -1)
 		err(-1, "prof");
 
 	ulong st = now();
@@ -176,7 +176,7 @@ void bm(char const *tl, void *(*fn)(void *))
 	long total = jointot(t, nthreads);
 	ulong actual = now() - st;
 
-	if (sys_prof(PROF_DISABLE) == -1)
+	if (sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
 		err(-1, "prof");
 
 	printf("%s ran for %lu ms (slept %lu)\n", tl, actual, beforejoin - st);

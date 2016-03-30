@@ -11,28 +11,100 @@ ulong now()
 	return t.tv_sec * 1000 + t.tv_usec / 1000;
 }
 
-void usage()
+__attribute__((noreturn))
+void usage(char *pre)
 {
-	errx(-1, "usage: %s [-rg] <command> <arg1> ...\n"
+	if (pre)
+		fprintf(stderr, "%s\n\n", pre);
+	errx(-1, "usage: %s [-rg] [-sc pmf] [-e evt] [-i int] <command> "
+	    "<arg1> ...\n"
 	         "\n"
-		 "-r     profile command\n"
-		 "-g     report GC statistics for command\n", __progname);
+		 "-r     goprofile command\n"
+		 "-g     report GC statistics for command\n"
+		 "-s     sample via PMU. must provide \"pmf\" (see below)\n"
+		 "       and provide an event via -e\n"
+		 "-c     count events via PMU. must provide \"pmf\"\n"
+		 "       (see below) and provide an event via -e\n"
+		 "-e evt use \"evt\" for PMU sampling/counting. for PMU\n"
+		 "       counting, -e may be specified more than once.\n"
+		 "evt    a string indicating which symbolic event the PMU\n"
+		 "       should monitor. valid strings are:\n"
+		 "       \"cpu\"     - unhalted cpu cycles\n"
+		 "       \"bmiss\"   - branch misses\n"
+		 "       \"llcref\" - LLC references\n"
+		 "       \"llcmiss\" - LLC misses\n"
+		 "-i int sample after int PMU events. only used with -c.\n"
+		 "\n"
+		 "pmf    a one or two character string indicating when to\n"
+		 "       count/sample the specified events. \"u\" and \"s\"\n"
+		 "       cause PMU monitoring during userspace and system\n"
+		 "       execution, repsectively. these flags may be\n"
+		 "       combined (\"us\").\n"
+		 , __progname);
+}
+
+long ppmf(char *pmf)
+{
+	long ret = 0;
+	if (strchr(pmf, 'u'))
+		ret |= PROF_EVF_USR;
+	if (strchr(pmf, 's'))
+		ret |= PROF_EVF_OS;
+	if (!ret)
+		usage("invalid pmf");
+	return ret;
+}
+
+long evtadd(char *evt)
+{
+	struct {
+		char *name;
+		long evid;
+	} evs[] = {
+		{"cpu", PROF_EV_UNHALTED_CORE_CYCLES},
+		{"bmiss", PROF_EV_BRANCH_MISS_RETIRED},
+		{"llcmiss", PROF_EV_LLC_MISSES},
+		{"llcref", PROF_EV_LLC_REFS},
+	};
+	const int nevs = sizeof(evs)/sizeof(evs[0]);
+	int i;
+	for (i = 0; i < nevs; i++) {
+		if (strcmp(evs[i].name, evt) != 0)
+			continue;
+		return evs[i].evid;
+	}
+	usage("invalid evt");
 }
 
 int main(int argc, char **argv)
 {
-	int profile = 0, gcstat = 0;
+	int goprof = 0, gcstat = 0, nevts = 0;
+	long pmuc = 0, pmus = 0, evt = 0, intperiod=1000000;
 	int ch;
-	while ((ch = getopt(argc, argv, "gr")) != -1) {
+	while ((ch = getopt(argc, argv, "i:s:c:e:gr")) != -1) {
 		switch (ch) {
-		case 'r':
-			profile = 1;
+		case 'c':
+			pmuc = ppmf(optarg);
+			break;
+		case 'e':
+			evt |= evtadd(optarg);
+			nevts++;
 			break;
 		case 'g':
 			gcstat = 1;
 			break;
+		case 'i':
+			intperiod = strtol(optarg, NULL, 0);
+			break;
+		case 'r':
+			goprof = 1;
+			break;
+		case 's':
+			pmus = ppmf(optarg);
+			break;
 		default:
-			usage();
+			fprintf(stderr, "bad option: %c\n", ch);
+			usage(NULL);
 			break;
 		}
 	}
@@ -40,13 +112,23 @@ int main(int argc, char **argv)
 	argv += optind;
 
 	if (argc < 1)
-		usage();
+		usage(NULL);
+	if (pmuc && pmus)
+		usage("cannot use -s and -c");
+	if ((pmuc || pmus) && evt == 0)
+		usage("must specify -e at least once");
+	if (pmus && nevts != 1)
+		usage("must specify -e exactly once for sampling");
 
 	ulong start = now();
 
 	// start profiling
-	if (profile && sys_prof(PROF_ENABLE) == -1)
+	if (goprof && sys_prof(PROF_GOLANG, 0, 0, 0) == -1)
 		errx(-1, "prof start");
+	if (pmuc && sys_prof(PROF_COUNT, evt, pmuc, 0) == -1)
+		errx(-1, "sys prof");
+	else if (pmus && sys_prof(PROF_SAMPLE, evt, pmus, intperiod) == -1)
+		errx(-1, "sys prof");
 	struct gcfrac_t fracst;
 	if (gcstat)
 		fracst = gcfracst();
@@ -68,8 +150,12 @@ int main(int argc, char **argv)
 		printf("GC CPU frac: %f%%\n", gccpu);
 	}
 	// stop profiling
-	if (profile && sys_prof(PROF_DISABLE) == -1)
+	if (goprof && sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
 		errx(-1, "prof stop");
+	if (pmuc && sys_prof(PROF_DISABLE|PROF_COUNT, evt, pmuc, 0) == -1)
+		errx(-1, "sys prof stop");
+	else if (pmus && sys_prof(PROF_DISABLE|PROF_SAMPLE, 0, 0, 0) == -1)
+		errx(-1, "sys prof stop");
 
 	if (!WIFEXITED(status) || WEXITSTATUS(status))
 		printf("child failed with status: %d\n", WEXITSTATUS(status));
