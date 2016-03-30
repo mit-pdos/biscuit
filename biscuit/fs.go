@@ -57,6 +57,15 @@ func sdirname(path string) (string, string) {
 	return s, fn
 }
 
+func crname(path string, nilpatherr int) (int, bool) {
+	if path == "" {
+		return nilpatherr, false
+	} else if path == "." || path == ".." {
+		return -EINVAL, false
+	}
+	return 0, true
+}
+
 func fs_init() *fd_t {
 	// we are now prepared to take disk interrupts
 	irq_unmask(IRQ_DISK)
@@ -231,8 +240,11 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) int {
 	odirs, ofn := sdirname(oldp)
 	ndirs, nfn := sdirname(newp)
 
-	if ofn == "" || nfn == "" {
-		return -ENOENT
+	if err, ok := crname(ofn, -EINVAL); !ok {
+		return err
+	}
+	if err, ok := crname(nfn, -EINVAL); !ok {
+		return err
 	}
 
 	op_begin()
@@ -693,11 +705,11 @@ func fs_mkdir(paths string, mode int, cwd *imemnode_t) int {
 	defer op_end()
 
 	dirs, fn := sdirname(paths)
+	if err, ok := crname(fn, -EINVAL); !ok {
+		return err
+	}
 	if len(fn) > DNAMELEN {
 		return -ENAMETOOLONG
-	}
-	if fn == "" {
-		return -EINVAL
 	}
 
 	par, err := fs_namei(dirs, cwd)
@@ -750,8 +762,8 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 
 		// must specify at least one path component
 		dirs, fn := sdirname(paths)
-		if fn == "" {
-			return nil, -EISDIR
+		if err, ok := crname(fn, -EEXIST); !ok {
+			return nil, err
 		}
 
 		if len(fn) > DNAMELEN {
