@@ -220,6 +220,7 @@ type nmiprof_t struct {
 	evtsel		int
 	evtmin		uint
 	evtmax		uint
+	gctrl		int
 }
 
 var _nmibuf [4096]uintptr
@@ -230,6 +231,13 @@ func SetNMI(mask bool, evtsel int, min, max uint) {
 	nmiprof.evtsel = evtsel
 	nmiprof.evtmin = min
 	nmiprof.evtmax = max
+	// create value for ia32_perf_global_ctrl, to easily enable pmcs. does
+	// not enable fixed function counters.
+	ax, _, _, _ := Cpuid(0xa, 0)
+	npmc := (ax >> 8) & 0xff
+	for i := uint32(0); i < npmc; i++ {
+		nmiprof.gctrl |= 1 << i
+	}
 }
 
 func TakeNMIBuf() ([]uintptr, bool) {
@@ -376,7 +384,7 @@ func _pmcreset(en bool) {
 	Wrmsr(ia32_debugctl, freeze_pmc_on_pmi)
 	// cpu clears global_ctrl on PMI if freeze-on-pmi is set.
 	// re-enable
-	Wrmsr(ia32_global_ctrl, 1)
+	Wrmsr(ia32_global_ctrl, nmiprof.gctrl)
 
 	v := nmiprof.evtsel
 	Wrmsr(ia32_perfevtsel0, v)
