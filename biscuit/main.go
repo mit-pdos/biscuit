@@ -1320,7 +1320,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 		return true
 	}
 	ret := make([]string, 0)
-	argmax := 16
+	argmax := 64
 	addarg := func(cptr []uint8) bool {
 		if len(ret) > argmax {
 			return false
