@@ -961,6 +961,7 @@ pthread_self(void)
 	return gettid();
 }
 
+// XXX use fancy new futexes
 int
 pthread_barrier_init(pthread_barrier_t *b, pthread_barrierattr_t *attr, uint c)
 {

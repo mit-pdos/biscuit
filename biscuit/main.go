@@ -759,14 +759,6 @@ func (p *proc_t) cowfault(userva int) {
 	sys_pgfault(p, pte, userva)
 }
 
-// XXX use me!
-//func (p *proc_t) cwd() inum {
-//	p.cwdl.Lock()
-//	ret := p.cwd.fops.pathi()
-//	p.cwdl.Unlock()
-//	return ret
-//}
-
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.

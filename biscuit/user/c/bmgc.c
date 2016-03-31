@@ -233,9 +233,10 @@ static void work(enum work_t wn, long wf, const long nt)
 	long gcs = gccount() - bgcs;
 	long gcns = gctotns() - bgcns;
 
-	long xput = __atomic_load_n(&_totalxput, __ATOMIC_ACQUIRE);
+	long totalxput = __atomic_load_n(&_totalxput, __ATOMIC_ACQUIRE);
+	long xput = secs > 0 ? totalxput/secs : 0;
 
-	printf("iterations/sec: %ld (%ld total)\n", xput/secs, xput);
+	printf("iterations/sec: %ld (%ld total)\n", xput, totalxput);
 	printf("CPU time GC'ing: %f%%\n", gcfracend(&gcf));
 	printf("max latency: %ld ms\n", longest);
 	printf("each thread's latency:\n");
