@@ -125,7 +125,8 @@ static void work(long wf, const long np)
 	long gcs = gccount() - bgcs;
 	long gcns = gctotns() - bgcns;
 
-	printf("iterations/sec: %ld (%ld total)\n", totalxput/secs, totalxput);
+	long xput = secs > 0 ? totalxput/secs : 0;
+	printf("iterations/sec: %ld (%ld total)\n", xput, totalxput);
 	printf("CPU time GC'ing: %f%%\n", gcfracend(&gcf));
 	printf("max latency: %ld ms\n", longest);
 	printf("each process' latency:\n");
