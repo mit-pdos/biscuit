@@ -130,8 +130,13 @@ int main(int argc, char **argv)
 	else if (pmus && sys_prof(PROF_SAMPLE, evt, pmus, intperiod) == -1)
 		errx(-1, "sys prof");
 	struct gcfrac_t fracst;
-	if (gcstat)
+	long sgc;
+	if (gcstat) {
 		fracst = gcfracst();
+		sgc = sys_info(SINFO_GCCOUNT);
+		if (sgc == -1)
+			err(-1, "sysinfo");
+	}
 
 	if (fork() == 0) {
 		execvp(argv[0], &argv[0]);
@@ -148,6 +153,10 @@ int main(int argc, char **argv)
 	if (gcstat) {
 		double gccpu = gcfracend(&fracst);
 		printf("GC CPU frac: %f%%\n", gccpu);
+		long egc = sys_info(SINFO_GCCOUNT);
+		if (egc == -1)
+			err(-1, "sysinfo");
+		printf("GCs: %ld\n", egc - sgc);
 	}
 	// stop profiling
 	if (goprof && sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
