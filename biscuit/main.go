@@ -2447,6 +2447,8 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	return v
 }
 
+// XXX counting PMCs only works with one CPU; move counter start/stop to perf
+// IPI.
 func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
 	if cid < 0 || cid >= len(ip.pmcs) {
 		panic("wtf")

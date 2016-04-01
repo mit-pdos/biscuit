@@ -193,6 +193,7 @@ const(
     SINFO_GCPAUSENS  = 1
     SINFO_GCHEAPSZ   = 2
     SINFO_GCMS       = 4
+    SINFO_GCTOTALLOC = 5
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
   SYS_FUTEX    = 31342
@@ -3685,6 +3686,8 @@ func sys_info(proc *proc_t, n int) int {
 		ret = int(ms.Alloc)
 	case SINFO_GCMS:
 		ret = int(ms.PauseTotalNs)/1000000
+	case SINFO_GCTOTALLOC:
+		ret = int(ms.TotalAlloc)
 	case 10:
 		runtime.GC()
 		ret = 0
