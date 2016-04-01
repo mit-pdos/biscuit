@@ -183,14 +183,17 @@ const(
   SYS_NANOSLEEP= 230
   SYS_PIPE2    = 293
   SYS_PROF     = 31337
-    PROF_DISABLE   = 0
-    PROF_ENABLE    = 1
+    PROF_DISABLE   = 1 << 0
+    PROF_GOLANG    = 1 << 1
+    PROF_SAMPLE    = 1 << 2
+    PROF_COUNT     = 1 << 3
   SYS_THREXIT  = 31338
   SYS_INFO     = 31339
     SINFO_GCCOUNT    = 0
     SINFO_GCPAUSENS  = 1
     SINFO_GCHEAPSZ   = 2
     SINFO_GCMS       = 4
+    SINFO_GCTOTALLOC = 5
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
   SYS_FUTEX    = 31342
@@ -332,7 +335,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 	case SYS_PIPE2:
 		ret = sys_pipe2(p, a1, a2)
 	case SYS_PROF:
-		ret = sys_prof(p, a1)
+		ret = sys_prof(p, a1, a2, a3, a4)
 	case SYS_INFO:
 		ret = sys_info(p, a1)
 	case SYS_THREXIT:
@@ -1998,138 +2001,6 @@ func sun_start(sid sunid_t) *sund_t {
 	return ns
 }
 
-// may need this later...
-// unix stream socket with connection
-//type susd_t struct {
-//	// admittance/non-blocking
-//	admit		chan bool
-//
-//	// sharing/closing fd
-//	openc		chan int
-//
-//	// writing
-//	in		chan *userbuf_t
-//	innoblk		chan *userbuf_t
-//	inret		chan int
-//
-//	// reading
-//	out		chan *userbuf_t
-//	outnoblk	chan *userbuf_t
-//	outret		chan int
-//
-//	// polling
-//	poll_in		chan pollmsg_t
-//	poll_out	chan ready_t
-//}
-//
-//func susd_start() *susd_t {
-//	ret := &susd_t{}
-//	admit := make(chan bool)
-//	openc := make(chan int)
-//	in := make(chan *userbuf_t)
-//	inret := make(chan int)
-//	_out := make(chan *userbuf_t)
-//	outret := make(chan int)
-//	poll_in := make(chan pollmsg_t)
-//	poll_out := make(chan ready_t)
-//	ret.admit = admit
-//	ret.openc = openc
-//	ret.in = in
-//	ret.inret = inret
-//	ret.out = _out
-//	ret.outret = outret
-//	ret.poll_in = poll_in
-//	ret.poll_out = poll_out
-//
-//	go func() {
-//		bufsz := 512
-//		cbuf := circbuf_t{}
-//		cbuf.cb_init(bufsz)
-//
-//		pollers := pollers_t{}
-//
-//		admits := 0
-//		opencnt := 2
-//		done := false
-//
-//		// socket initially empty
-//		var out chan *userbuf_t
-//		for !done {
-//			select {
-//			case admit <- true:
-//				admits++
-//				continue
-//			case delta := <- openc:
-//				opencnt += delta
-//			case src := <- in:
-//				if opencnt == 1 {
-//					inret <- -ECONNRESET
-//					break
-//				}
-//				read, err := cbuf.copyin(src)
-//				if err != 0 {
-//					inret <- err
-//				}
-//				inret <- read
-//			case dst := <- out:
-//				wrote, err := cbuf.copyout(dst)
-//				if err != 0 {
-//					outret <- err
-//				}
-//				outret <- wrote
-//			case pm := <- poll_in:
-//				ev := pm.events
-//				var r ready_t
-//				if ev & R_READ != 0 && out != nil {
-//					r |= R_READ
-//				}
-//				if ev & R_WRITE != 0 && in != nil {
-//					r |= R_WRITE
-//				}
-//				if r == 0 {
-//					pollers.addpoller(&pm)
-//				}
-//			}
-//			admits--
-//			// XXXPANIC
-//			if admits < 0 {
-//				panic("neg admits")
-//			}
-//			// block readers/writers if buffer is empty/full or if
-//			// one end of the connection is closed.
-//			if !cbuf.full() || opencnt == 1 {
-//				in = ret.in
-//				pollers.wakeready(R_READ)
-//			} else {
-//				in = nil
-//			}
-//			if !cbuf.empty() || opencnt == 1 {
-//				out = ret.out
-//				pollers.wakeready(R_WRITE)
-//			} else {
-//				out = nil
-//			}
-//			if opencnt == 0 {
-//				done = true
-//			}
-//		}
-//
-//		close(admit)
-//		for i := 0; i < admits; i++ {
-//			select {
-//			case <- openc:
-//			case <- ret.in:
-//				inret <- -ECONNRESET
-//			case <- ret.out:
-//				outret <- -ENOTCONN
-//			case pm := <- poll_in:
-//				poll_out <- pm.events & R_HUP
-//			}
-//		}
-//	}()
-//	return ret
-//}
-
 type susfops_t struct {
 	//susd	*susd_t
 	pipein	*pipefops_t
@@ -2267,25 +2138,22 @@ func (sus *susfops_t) connect(proc *proc_t, saddr []uint8) int {
 	sid := min
 
 	allsusl.Lock()
-	susld, ok := allsusl.m[sid]
+	susl, ok := allsusl.m[sid]
 	allsusl.Unlock()
 	if !ok {
 		return -ECONNREFUSED
 	}
-	_, ok = <- susld.admit
-	if !ok {
-		return -ECONNREFUSED
-	}
-	ch := make(chan *pipe_t)
-	susld.push <- ch
-	pipea := <- ch
-	if pipea == nil {
-		return -ECONNREFUSED
-	}
-	pipeb := <- ch
 
-	sus.pipein = &pipefops_t{pipe: pipea, options: sus.options}
-	sus.pipeout = &pipefops_t{pipe: pipeb, writer: true, options: sus.options}
+	pipein := &pipe_t{}
+	pipein.pipe_start()
+
+	pipeout, err := susl.connectwait(pipein)
+	if err != 0 {
+		return err
+	}
+
+	sus.pipein = &pipefops_t{pipe: pipein, options: sus.options}
+	sus.pipeout = &pipefops_t{pipe: pipeout, writer: true, options: sus.options}
 	sus.conn = true
 	return 0
 }
@@ -2306,15 +2174,16 @@ func (sus *susfops_t) listen(proc *proc_t, backlog int) (fdops_i, int) {
 	sus.lstn = true
 
 	// create a listening socket
-	susld := susld_start(sus.mysid, backlog)
-	newsock := &suslfops_t{susld: susld, myaddr: sus.myaddr,
+	susl := &susl_t{}
+	susl.susl_start(sus.mysid, backlog)
+	newsock := &suslfops_t{susl: susl, myaddr: sus.myaddr,
 	    options: sus.options}
 	allsusl.Lock()
 	// XXXPANIC
 	if _, ok := allsusl.m[sus.mysid]; ok {
 		panic("susl exists")
 	}
-	allsusl.m[sus.mysid] = susld
+	allsusl.m[sus.mysid] = susl
 	allsusl.Unlock()
 
 	return newsock, 0
@@ -2401,278 +2270,319 @@ func susid_new() int {
 }
 
 type allsusl_t struct {
-	m	map[int]*susld_t
+	m	map[int]*susl_t
 	sync.Mutex
 }
 
-var allsusl = allsusl_t{m: map[int]*susld_t{}}
+var allsusl = allsusl_t{m: map[int]*susl_t{}}
 
 // listening unix stream socket
-type susld_t struct {
-	// admittance
-	admit		chan bool
-
-	// sharing/closing fd
-	openc		chan int
-
-	// new connections
-	push		chan chan *pipe_t
-	pop		chan chan *pipe_t
-	popnoblk	chan chan *pipe_t
-
-	// poll
-	poll_in		chan pollmsg_t
-	poll_out	chan ready_t
+type susl_t struct {
+	sync.Mutex
+	waiters		[]_suslblog_t
+	pollers		pollers_t
+	opencount	int
+	mysid		int
 }
 
-func susld_start(mysid, backlog int) *susld_t {
-	ret := &susld_t{}
-	admit := make(chan bool)
-	openc := make(chan int)
-	push := make(chan chan *pipe_t)
-	_pop := make(chan chan *pipe_t)
-	popnoblk := make(chan chan *pipe_t)
-	poll_in := make(chan pollmsg_t)
-	poll_out := make(chan ready_t)
-	ret.admit = admit
-	ret.openc = openc
-	ret.push = push
-	ret.pop = _pop
-	ret.popnoblk = popnoblk
-	ret.poll_in = poll_in
-	ret.poll_out = poll_out
+type _suslblog_t struct {
+	conn	*pipe_t
+	acc	*pipe_t
+	cond	*sync.Cond
+	err	int
+}
 
-	go func() {
-		// circular buffer
-		_conns := make([]chan *pipe_t, 0, backlog)
-		conns := _conns
+func (susl *susl_t) susl_start(mysid, backlog int) {
+	blm := 64
+	if backlog < 0 || backlog > blm {
+		backlog = blm
+	}
+	susl.waiters = make([]_suslblog_t, backlog)
+	for i := range susl.waiters {
+		susl.waiters[i].cond = sync.NewCond(susl)
+	}
+	susl.opencount = 1
+	susl.mysid = mysid
+}
 
-		qpop := func() {
-			conns = conns[1:]
-			if len(conns) == 0 {
-				conns = _conns
-			}
+func (susl *susl_t) _findbed(amconnector bool) (*_suslblog_t, bool) {
+	for i := range susl.waiters {
+		var chk *pipe_t
+		if amconnector {
+			chk = susl.waiters[i].conn
+		} else {
+			chk = susl.waiters[i].acc
 		}
+		if chk == nil {
+			return &susl.waiters[i], true
+		}
+	}
+	return nil, false
+}
 
-		admits := 0
-		opencnt := 2
-		pollers := pollers_t{}
-		// queue is initially empty
-		var pop chan chan *pipe_t
-		done := false
-		for !done {
-			var first chan *pipe_t
-			if len(conns) > 0 {
-				first = conns[0]
-			}
-			select {
-			case admit <- true:
-				admits++
+func (susl *susl_t) _findwaiter(getacceptor bool) (*_suslblog_t, bool) {
+	for i := range susl.waiters {
+		var chk *pipe_t
+		var oth *pipe_t
+		if getacceptor {
+			chk = susl.waiters[i].acc
+			oth = susl.waiters[i].conn
+		} else {
+			chk = susl.waiters[i].conn
+			oth = susl.waiters[i].acc
+		}
+		if chk != nil && oth == nil {
+			return &susl.waiters[i], true
+		}
+	}
+	return nil, false
+}
+
+func (susl *susl_t) _slotreset(slot *_suslblog_t) {
+	slot.acc = nil
+	slot.conn = nil
+}
+
+func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
+    noblk bool) (*pipe_t, int) {
+	susl.Lock()
+	if susl.opencount == 0 {
+		susl.Unlock()
+		return nil, -EBADF
+	}
+
+	var theirs *pipe_t
+	// fastpath: is there a peer already waiting?
+	s, found := susl._findwaiter(getacceptor)
+	if found {
+		if getacceptor {
+			theirs = s.acc
+			s.conn = mypipe
+		} else {
+			theirs = s.conn
+			s.acc = mypipe
+		}
+		susl.Unlock()
+		s.cond.Signal()
+		return theirs, 0
+	}
+	if noblk {
+		susl.Unlock()
+		return nil, -EWOULDBLOCK
+	}
+	// darn. wait for a peer.
+	b, found := susl._findbed(getacceptor)
+	if !found {
+		// backlog is full
+		susl.Unlock()
+		if !getacceptor {
+			panic("fixme: allow more accepts than backlog")
+		}
+		return nil, -ECONNREFUSED
+	}
+	if getacceptor {
+		b.conn = mypipe
+		susl.pollers.wakeready(R_READ)
+	} else {
+		b.acc = mypipe
+	}
+	b.cond.Wait()
+	err := b.err
+	if getacceptor {
+		theirs = b.acc
+	} else {
+		theirs = b.conn
+	}
+	susl._slotreset(b)
+	susl.Unlock()
+	return theirs, err
+}
+
+func (susl *susl_t) connectwait(mypipe *pipe_t) (*pipe_t, int) {
+	noblk := false
+	return susl._getpartner(mypipe, true, noblk)
+}
+
+func (susl *susl_t) acceptwait(mypipe *pipe_t) (*pipe_t, int) {
+	noblk := false
+	return susl._getpartner(mypipe, false, noblk)
+}
+
+func (susl *susl_t) acceptnowait(mypipe *pipe_t) (*pipe_t, int) {
+	noblk := true
+	return susl._getpartner(mypipe, false, noblk)
+}
+
+func (susl *susl_t) susl_reopen(delta int) int {
+	ret := 0
+	dorem := false
+	susl.Lock()
+	if susl.opencount != 0 {
+		susl.opencount += delta
+		if susl.opencount == 0 {
+			dorem = true
+		}
+	} else {
+		ret = -EBADF
+	}
+
+	if dorem {
+		// wake up all blocked connectors/acceptors/pollers
+		for i := range susl.waiters {
+			s := &susl.waiters[i]
+			a := s.acc
+			b := s.conn
+			if a == nil && b == nil {
 				continue
-			case delta := <- openc:
-				opencnt += delta
-			case e := <- push:
-				if len(conns) == backlog {
-					e <- nil
-				}
-				conns = append(conns, e)
-			case pop <- first:
-				qpop()
-			case popnoblk <- first:
-				if len(conns) != 0 {
-					qpop()
-				}
-			case pm := <- poll_in:
-				ev := pm.events
-				// are new connections available?
-				if ev & R_READ != 0 {
-					var st ready_t
-					if pop == nil {
-						st = 0
-						if pm.dowait {
-							pollers.addpoller(&pm)
-						}
-					} else {
-						st = R_READ
-					}
-					poll_out <- st
-				}
 			}
-			admits--
-			// XXXPANIC
-			if admits < 0 {
-				panic("neg admits")
-			}
-			// block acceptors if queue is empty
-			if len(conns) == 0 {
-				pop = nil
-			} else {
-				pop = ret.pop
-				pollers.wakeready(R_READ)
-			}
-			// terminate?
-			if opencnt == 0 {
-				done = true
-			}
+			s.err = -ECONNRESET
+			s.cond.Signal()
 		}
+		susl.pollers.wakeready(R_READ | R_HUP | R_ERROR)
+	}
 
-		// fail requests that race with last close
+	susl.Unlock()
+	if dorem {
 		allsusl.Lock()
-		delete(allsusl.m, mysid)
+		delete(allsusl.m, susl.mysid)
 		allsusl.Unlock()
-		close(admit)
-		for i := 0; i < admits; i++ {
-			select {
-			case <- openc:
-			case e := <- push:
-				e <- nil
-			case ret.pop <- nil:
-			case pm := <- poll_in:
-				poll_out <- pm.events & R_HUP
-			}
-		}
-	}()
+	}
 	return ret
 }
 
+func (susl *susl_t) susl_poll(pm pollmsg_t) ready_t {
+	susl.Lock()
+	if susl.opencount == 0 {
+		susl.Unlock()
+		return 0
+	}
+	if pm.events & R_READ != 0 {
+		if _, found := susl._findwaiter(false); found {
+			susl.Unlock()
+			return R_READ
+		}
+	}
+	if pm.dowait {
+		susl.pollers.addpoller(&pm)
+	}
+	susl.Unlock()
+	return 0
+}
+
 type suslfops_t struct {
-	susld	*susld_t
+	susl	*susl_t
 	myaddr	string
 	options	int
 }
 
-func (sul *suslfops_t) _admit() bool {
-	_, ok := <- sul.susld.admit
-	return ok
+func (sf *suslfops_t) close() int {
+	return sf.susl.susl_reopen(-1)
 }
 
-func (sul *suslfops_t) close() int {
-	if !sul._admit() {
-		return -EBADF
-	}
-	sul.susld.openc <- -1
-	return 0
-}
-
-func (sul *suslfops_t) fstat(*stat_t) int {
+func (sf *suslfops_t) fstat(*stat_t) int {
 	panic("no imp")
 }
 
-func (sul *suslfops_t) lseek(int, int) int {
+func (sf *suslfops_t) lseek(int, int) int {
 	return -ESPIPE
 }
 
-func (sul *suslfops_t) mmapi(int) ([]mmapinfo_t, int) {
+func (sf *suslfops_t) mmapi(int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
-func (sul *suslfops_t) pathi() *imemnode_t {
+func (sf *suslfops_t) pathi() *imemnode_t {
 	panic("unix stream listener cwd?")
 }
 
-func (sul *suslfops_t) read(*userbuf_t) (int, int) {
+func (sf *suslfops_t) read(*userbuf_t) (int, int) {
 	return 0, -ENOTCONN
 }
 
-func (sul *suslfops_t) reopen() int {
-	if !sul._admit() {
-		return -EBADF
-	}
-	sul.susld.openc <- 1
-	return 0
+func (sf *suslfops_t) reopen() int {
+	return sf.susl.susl_reopen(1)
 }
 
-func (sul *suslfops_t) write(*userbuf_t) (int, int) {
+func (sf *suslfops_t) write(*userbuf_t) (int, int) {
 	return 0, -ENOTCONN
 }
 
-func (sul *suslfops_t) fullpath() (string, int) {
+func (sf *suslfops_t) fullpath() (string, int) {
 	panic("weird cwd")
 }
 
-func (sul *suslfops_t) truncate(newlen uint) int {
+func (sf *suslfops_t) truncate(newlen uint) int {
 	return -EINVAL
 }
 
-func (sul *suslfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+func (sf *suslfops_t) pread(dst *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
 
-func (sul *suslfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+func (sf *suslfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
 	return 0, -ESPIPE
 }
 
-func (sul *suslfops_t) accept(proc *proc_t,
+func (sf *suslfops_t) accept(proc *proc_t,
     fromsa *userbuf_t) (fdops_i, int, int) {
-	if !sul._admit() {
-		return nil, 0, -EBADF
-	}
-	noblk := sul.options & O_NONBLOCK != 0
-	popc := sul.susld.pop
-	ferr := -EBADF
+	noblk := sf.options & O_NONBLOCK != 0
+	pipein := &pipe_t{}
+	pipein.pipe_start()
+	var pipeout *pipe_t
+	var err int
 	if noblk {
-		popc = sul.susld.popnoblk
-		ferr = -EWOULDBLOCK
+		pipeout, err = sf.susl.acceptnowait(pipein)
+	} else {
+		pipeout, err = sf.susl.acceptwait(pipein)
 	}
-	newconn := <- popc
-	if newconn == nil {
-		return nil, 0, ferr
+	if err != 0 {
+		return nil, 0, err
 	}
-	pipea := &pipe_t{}
-	pipeb := &pipe_t{}
-	pipea.pipe_start()
-	pipeb.pipe_start()
-	newconn <- pipeb
-	newconn <- pipea
-	pipein := &pipefops_t{pipe: pipea, options: sul.options}
-	pipeout := &pipefops_t{pipe: pipeb, writer: true, options: sul.options}
-	ret := &susfops_t{pipein: pipein, pipeout: pipeout, conn: true,
-	    options: sul.options}
+	pfin := &pipefops_t{pipe: pipein, options: sf.options}
+	pfout := &pipefops_t{pipe: pipeout, writer: true, options: sf.options}
+	ret := &susfops_t{pipein: pfin, pipeout: pfout, conn: true,
+	    options: sf.options}
 	return ret, 0, 0
 }
 
-func (sul *suslfops_t) bind(*proc_t, []uint8) int {
+func (sf *suslfops_t) bind(*proc_t, []uint8) int {
 	return -EINVAL
 }
 
-func (sul *suslfops_t) connect(proc *proc_t, sabuf []uint8) int {
+func (sf *suslfops_t) connect(proc *proc_t, sabuf []uint8) int {
 	return -EINVAL
 }
 
-func (sul *suslfops_t) listen(proc *proc_t, backlog int) (fdops_i, int) {
+func (sf *suslfops_t) listen(proc *proc_t, backlog int) (fdops_i, int) {
 	return nil, -EINVAL
 }
 
-func (sul *suslfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+func (sf *suslfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
 	return 0, -ENOTCONN
 }
 
-func (sul *suslfops_t) recvfrom(*proc_t, *userbuf_t,
+func (sf *suslfops_t) recvfrom(*proc_t, *userbuf_t,
     *userbuf_t) (int, int, int) {
 	return 0, 0, -ENOTCONN
 }
 
-func (sul *suslfops_t) pollone(pm pollmsg_t) ready_t {
-	if !sul._admit() {
-		return pm.events & (R_HUP|R_ERROR)
-	}
-	sul.susld.poll_in <- pm
-	return <- sul.susld.poll_out
+func (sf *suslfops_t) pollone(pm pollmsg_t) ready_t {
+	return sf.susl.susl_poll(pm)
 }
 
-func (sul *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+func (sf *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	switch cmd {
 	case F_GETFL:
-		return sul.options
+		return sf.options
 	case F_SETFL:
-		sul.options = opt
+		sf.options = opt
 		return 0
 	default:
 		panic("weird cmd")
 	}
 }
 
-func (sul *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (sf *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
     intarg int) (int, int) {
 	return 0, -EOPNOTSUPP
 }
@@ -3661,13 +3571,18 @@ func _prof_go(en bool) {
 	}
 }
 
-func _prof_nmi(en bool) {
+func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
 	if en {
-		cyc := runtime.Cpumhz * 1000000
-		samples := uint(1000)
-		min := cyc/samples
-		if !profhw.startnmi(EV_UNHALTED_CORE_CYCLES, EVF_USR,
-		    min, min) {
+		min := uint(intperiod)
+		// default unhalted cycles sampling rate
+		defperiod := intperiod == 0
+		if defperiod && pmev.evid == EV_UNHALTED_CORE_CYCLES {
+			cyc := runtime.Cpumhz * 1000000
+			samples := uint(1000)
+			min = cyc/samples
+		}
+		max := uint(float64(min)*1.2)
+		if !profhw.startnmi(pmev.evid, pmev.pflags, min, max) {
 			fmt.Printf("Failed to start NMI profiling\n")
 		}
 	} else {
@@ -3697,20 +3612,10 @@ func _prof_nmi(en bool) {
 var hacklock sync.Mutex
 var hackctrs []int
 
-func _prof_pmc(en bool) {
+func _prof_pmc(en bool, events []pmev_t) {
 	hacklock.Lock()
 	defer hacklock.Unlock()
 
-	events := []pmev_t{
-	    //{EV_LLC_MISSES, EVF_OS},
-	    //{EV_LLC_MISSES, EVF_USR},
-	    //{EV_DTLB_LOAD_MISS_ANY, EVF_OS},
-	    {EV_DTLB_LOAD_MISS_ANY, EVF_USR},
-	    {EV_DTLB_LOAD_MISS_STLB, EVF_USR},
-	    //{EV_STORE_DTLB_MISS, EVF_USR},
-	    //{EV_WTF1, EVF_USR},
-	    //{EV_WTF2, EVF_USR},
-	}
 	if en {
 		if hackctrs != nil {
 			fmt.Printf("counters in use\n")
@@ -3749,20 +3654,33 @@ func _prof_pmc(en bool) {
 	}
 }
 
-func sys_prof(proc *proc_t, n int) int {
-	en := false
-	if n == PROF_ENABLE {
-		en = true
+func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
+	en := true
+	if ptype & PROF_DISABLE != 0 {
+		en = false
 	}
-
-	nmiprof := false
-	if nmiprof {
-		_prof_nmi(en)
-	} else {
+	switch {
+	case ptype & PROF_GOLANG != 0:
 		_prof_go(en)
-		//_prof_pmc(en)
+	case ptype & PROF_SAMPLE != 0:
+		ev := pmev_t{evid: pmevid_t(_events),
+		    pflags: pmflag_t(_pmflags)}
+		_prof_nmi(en, ev, intperiod)
+	case ptype & PROF_COUNT != 0:
+		evs := make([]pmev_t, 0, 4)
+		for i := uint(0); i < 64; i++ {
+			b := 1 << i
+			if _events & b != 0 {
+				n := pmev_t{}
+				n.evid = pmevid_t(b)
+				n.pflags = pmflag_t(_pmflags)
+				evs = append(evs, n)
+			}
+		}
+		_prof_pmc(en, evs)
+	default:
+		return -EINVAL
 	}
-
 	return 0
 }
 
@@ -3780,6 +3698,8 @@ func sys_info(proc *proc_t, n int) int {
 		ret = int(ms.Alloc)
 	case SINFO_GCMS:
 		ret = runtime.GCworktime()/1000000
+	case SINFO_GCTOTALLOC:
+		ret = int(ms.TotalAlloc)
 	case 10:
 		runtime.GC()
 		ret = 0
@@ -3819,7 +3739,7 @@ func fieldinfo(sizes []int, n int) (int, int) {
 	return sizes[n], off
 }
 
-// XXX use "unsafe" structs instead of the awful "go" way
+// XXX use "unsafe" structs instead of slow (but general) go way
 type stat_t struct {
 	data	[]uint8
 	// field sizes

@@ -210,7 +210,7 @@ void _exit(int)
 int execv(const char *, char * const[]);
 int execve(const char *, char * const[], char * const[]);
 int execvp(const char *, char * const[]);
-int fork(void);
+pid_t fork(void);
 int fstat(int, struct stat *);
 int ftruncate(int, off_t);
 int futex(const int, void *, void *, int, const struct timespec *);
@@ -319,15 +319,38 @@ int socket(int, int, int);
 
 int stat(const char *, struct stat *);
 int sync(void);
-long sys_prof(long);
-#define PROF_DISABLE	0
-#define PROF_ENABLE	1
+long sys_prof(long, long, long, long);
+#define		PROF_DISABLE   (1ul << 0)
+#define		PROF_GOLANG    (1ul << 1)
+#define		PROF_SAMPLE    (1ul << 2)
+#define		PROF_COUNT     (1ul << 3)
+
+// symbolic PMU event ids
+#define		PROF_EV_UNHALTED_CORE_CYCLES		(1ul << 0)
+#define		PROF_EV_LLC_MISSES			(1ul << 1)
+#define		PROF_EV_LLC_REFS			(1ul << 2)
+#define		PROF_EV_BRANCH_INSTR_RETIRED		(1ul << 3)
+#define		PROF_EV_BRANCH_MISS_RETIRED		(1ul << 4)
+#define		PROF_EV_INSTR_RETIRED			(1ul << 5)
+	// non-architectural
+	// "all TLB misses that cause a page walk"
+#define		PROF_EV_DTLB_LOAD_MISS_ANY		(1ul << 6)
+	// "number of completed walks due to miss in sTLB"
+#define		PROF_EV_DTLB_LOAD_MISS_STLB		(1ul << 7)
+	// "retired stores that missed in the dTLB"
+#define		PROF_EV_STORE_DTLB_MISS			(1ul << 8)
+#define		PROF_EV_L2_LD_HITS			(1ul << 9)
+
+// PMU event flags
+#define		PROF_EVF_OS	(1ul << 0)
+#define		PROF_EVF_USR	(1ul << 1)
 
 long sys_info(long);
-#define SINFO_GCCOUNT	0
-#define SINFO_GCPAUSENS	1
-#define SINFO_GCHEAPSZ	2
-#define SINFO_GCMS	4
+#define		SINFO_GCCOUNT				0
+#define		SINFO_GCPAUSENS				1
+#define		SINFO_GCHEAPSZ				2
+#define		SINFO_GCMS				4
+#define		SINFO_GCTOTALLOC			5
 
 int truncate(const char *, off_t);
 int unlink(const char *);

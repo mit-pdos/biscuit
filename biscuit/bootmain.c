@@ -335,13 +335,13 @@ is32(uint64_t in)
 }
 
 static int
-isect(uint64_t a, uint64_t b,uint64_t x, uint64_t y)
+isect(uint64_t a, uint64_t b, uint64_t x, uint64_t y)
 {
-	if (x >= a && x < b)
-		return 1;
-	if (y >= a && y < b)
-		return 1;
-	return 0;
+	if (b < x)
+		return 0;
+	if (y < a)
+		return 0;
+	return 1;
 }
 
 static uint64_t

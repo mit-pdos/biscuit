@@ -276,7 +276,7 @@ fcntl(int fd, int cmd, ...)
 	return ret;
 }
 
-int
+pid_t
 fork(void)
 {
 	long flags = FORK_PROCESS;
@@ -632,9 +632,9 @@ sync(void)
 }
 
 long
-sys_prof(long n)
+sys_prof(long ptype, long events, long flags, long intperiod)
 {
-	long ret = syscall(n, 0, 0, 0, 0, SYS_PROF);
+	long ret = syscall(ptype, events, flags, intperiod, 0, SYS_PROF);
 	ERRNO_NZ(ret);
 	return ret;
 }
@@ -961,6 +961,7 @@ pthread_self(void)
 	return gettid();
 }
 
+// XXX use fancy new futexes
 int
 pthread_barrier_init(pthread_barrier_t *b, pthread_barrierattr_t *attr, uint c)
 {

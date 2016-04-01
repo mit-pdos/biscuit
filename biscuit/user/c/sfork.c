@@ -165,6 +165,9 @@ void bm(char const *tl, void *(*fn)(void *))
 
 	pthread_barrier_wait(&bar);
 
+	//if (sys_prof(PROF_GOLANG, 0, 0, 0) == -1)
+	//	err(-1, "prof");
+
 	ulong st = now();
 	sleep(bmsecs);
 
@@ -172,6 +175,9 @@ void bm(char const *tl, void *(*fn)(void *))
 	ulong beforejoin = now();
 	long total = jointot(t, nthreads);
 	ulong actual = now() - st;
+
+	//if (sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
+	//	err(-1, "prof");
 
 	printf("%s ran for %lu ms (slept %lu)\n", tl, actual, beforejoin - st);
 	double secs = actual / 1000;
@@ -345,7 +351,7 @@ void *seqcreate(void *idp)
 
 void *openonly(void *idp)
 {
-	const char *f = "/tmp/dur";
+	const char *f = "dur";
 	int fd = open(f, O_CREAT | O_WRONLY, 0600);
 	if (fd < 0)
 		err(-1, "create");
@@ -389,6 +395,124 @@ int mbforever()
 	}
 }
 
+const char const *_websock = ".websock";
+
+static void *webclient(void *p)
+{
+	pthread_barrier_wait(&bar);
+
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, _websock, sizeof(sa.sun_path));
+
+	long total = 0;
+	while (!cease) {
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (s == -1)
+			err(-1, "socket");
+
+		if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == -1)
+			err(-1, "connect");
+
+		char gmsg[] = "GET /";
+		if (write(s, gmsg, sizeof(gmsg)) != sizeof(gmsg))
+			err(-1, "write");
+		char buf[1024];
+		ssize_t r;
+		while ((r = read(s, buf, sizeof(buf))) > 0)
+			;
+		if (r == -1)
+			err(-1, "read");
+		if (close(s) == -1)
+			err(-1, "close");
+		total++;
+	}
+	return (void *)total;
+}
+
+static void _websv(void)
+{
+	int sfd = open("/clouseau.txt", O_RDONLY);
+	if (sfd == -1)
+		err(-1, "open");
+
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s == -1)
+		err(-1, "socket");
+
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, _websock, sizeof(sa.sun_path));
+
+	if (bind(s, (struct sockaddr *)&sa, SUN_LEN(&sa)) == -1)
+		err(-1, "bind");
+	if (listen(s, 10) == -1)
+		err(-1, "listen");
+
+	while (1) {
+		int ns;
+		if ((ns = accept(s, NULL, NULL)) == -1)
+			err(-1, "accept");
+
+		char req[64];
+		ssize_t r;
+		if ((r = read(ns, req, sizeof(req))) == -1)
+			err(-1, "read");
+		if (strncmp(req, "exit", sizeof(req)) == 0) {
+			if (unlink(_websock) == -1)
+				err(-1, "unlink");
+			exit(0);
+		}
+
+		if (lseek(sfd, 0, SEEK_SET) == -1)
+			err(-1, "lseek");
+		char buf[1024];
+		while ((r = read(sfd, buf, sizeof(buf))) > 0) {
+			if (write(ns, buf, r) != r)
+				err(-1, "write");
+		}
+		if (r == -1)
+			err(-1, "read");
+		if (close(ns) == -1)
+			err(-1, "close");
+	}
+}
+
+static void webstart(void)
+{
+	pid_t r;
+	if ((r = fork()) == -1)
+		err(-1, "fork");
+	if (!r)
+		_websv();
+	// give server some time to initialize
+	sleep(1);
+}
+
+static void webstop(void)
+{
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s == -1)
+		err(-1, "socket");
+
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, _websock, sizeof(sa.sun_path));
+
+	if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == -1)
+		err(-1, "connect");
+
+	char em[] = "exit";
+	if (write(s, em, sizeof(em)) != sizeof(em))
+		err(-1, "write");
+	if (close(s) == -1)
+		err(-1, "close");
+	int status;
+	wait(&status);
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "websv exited with status %d", status);
+}
+
 struct {
 	char *name;
 	char sname;
@@ -404,6 +528,7 @@ struct {
 	{"forkexec", 'e', forkexec, NULL, NULL},
 	{"seqcreate", 's', seqcreate, NULL, NULL},
 	{"openonly", 'o', openonly, NULL, NULL},
+	{"webserver", 'w', webclient, webstart, webstop},
 };
 
 const int nbms = sizeof(bms)/sizeof(bms[0]);

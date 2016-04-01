@@ -147,7 +147,7 @@ int main(int argc, char **argv)
 		// if you change the output of lsh, you need to update
 		// posixtest() in usertests.c so the test is aware of the new
 		// changes.
-		char *args[10];
+		char *args[64];
 		size_t sz = sizeof(args)/sizeof(args[0]);
 		char *infile, *outfile;
 		int append;

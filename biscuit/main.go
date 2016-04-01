@@ -759,20 +759,11 @@ func (p *proc_t) cowfault(userva int) {
 	sys_pgfault(p, pte, userva)
 }
 
-// XXX use me!
-//func (p *proc_t) cwd() inum {
-//	p.cwdl.Lock()
-//	ret := p.cwd.fops.pathi()
-//	p.cwdl.Unlock()
-//	return ret
-//}
-
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
 func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 	p.fdl.Lock()
-	defer p.fdl.Unlock()
 
 	// find free fd
 	newfd := p.fdstart
@@ -803,6 +794,7 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 	if fd.fops == nil {
 		panic("wtf!")
 	}
+	p.fdl.Unlock()
 	return fdn
 }
 
@@ -822,9 +814,9 @@ func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
 // fdn is not guaranteed to be a sane fd
 func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	p.fdl.Lock()
-	defer p.fdl.Unlock()
 
 	if fdn < 0 || fdn >= len(p.fds) {
+		p.fdl.Unlock()
 		return nil, false
 	}
 	ret := p.fds[fdn]
@@ -833,6 +825,7 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	if ok && fdn < p.fdstart {
 		p.fdstart = fdn
 	}
+	p.fdl.Unlock()
 	return ret, ok
 }
 
@@ -1304,23 +1297,25 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 		return "", false, false
 	}
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
 	i := 0
 	var s string
 	for {
 		str, ok := p.userdmap8_inner(uva + i)
 		if !ok {
+			p.Unlock_pmap()
 			return "", false, false
 		}
 		for j, c := range str {
 			if c == 0 {
 				s = s + string(str[:j])
+				p.Unlock_pmap()
 				return s, true, false
 			}
 		}
 		s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
+			p.Unlock_pmap()
 			return "", true, true
 		}
 	}
@@ -1355,7 +1350,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 		return true
 	}
 	ret := make([]string, 0)
-	argmax := 16
+	argmax := 64
 	addarg := func(cptr []uint8) bool {
 		if len(ret) > argmax {
 			return false
@@ -2148,7 +2143,11 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			panic("yahoo")
 		} else if c == '@' {
 			_nflip = (_nflip + 1) % 2
-			sys_prof(nil, _nflip)
+			act := PROF_GOLANG
+			if _nflip == 0 {
+				act |= PROF_DISABLE
+			}
+			sys_prof(nil, act, 0, 0, 0)
 		}
 	}
 	var reqc chan int
@@ -2326,12 +2325,13 @@ func perfsetup() {
 	ax, bx, _, _ := runtime.Cpuid(0xa, 0)
 	perfv := ax & 0xff
 	npmc := (ax >> 8) & 0xff
+	pmcbits := (ax >> 16) & 0xff
 	pmebits := (ax >> 24) & 0xff
 	cyccnt := bx & 1 == 0
 	_, _, cx, _ := runtime.Cpuid(0x1, 0)
 	pdc := cx & (1 << 15) != 0
 	if pdc && perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 &&
-	    cyccnt {
+	    cyccnt && pmcbits >= 32 {
 		fmt.Printf("Hardware Performance monitoring enabled: " +
 		    "%v counters\n", npmc)
 		profhw = &intelprof_t{}
@@ -2347,22 +2347,20 @@ type pmevid_t uint
 
 const(
 	// architectural
-	EV_UNHALTED_CORE_CYCLES		pmevid_t = iota
-	EV_LLC_MISSES			pmevid_t = iota
-	EV_LLC_REFS			pmevid_t = iota
-	EV_BRANCH_INSTR_RETIRED		pmevid_t = iota
-	EV_BRANCH_MISS_RETIRED		pmevid_t = iota
-	EV_INSTR_RETIRED		pmevid_t = iota
+	EV_UNHALTED_CORE_CYCLES		pmevid_t = 1 << iota
+	EV_LLC_MISSES			pmevid_t = 1 << iota
+	EV_LLC_REFS			pmevid_t = 1 << iota
+	EV_BRANCH_INSTR_RETIRED		pmevid_t = 1 << iota
+	EV_BRANCH_MISS_RETIRED		pmevid_t = 1 << iota
+	EV_INSTR_RETIRED		pmevid_t = 1 << iota
 	// non-architectural
 	// "all TLB misses that cause a page walk"
-	EV_DTLB_LOAD_MISS_ANY		pmevid_t = iota
+	EV_DTLB_LOAD_MISS_ANY		pmevid_t = 1 << iota
 	// "number of completed walks due to miss in sTLB"
-	EV_DTLB_LOAD_MISS_STLB		pmevid_t = iota
+	EV_DTLB_LOAD_MISS_STLB		pmevid_t = 1 << iota
 	// "retired stores that missed in the dTLB"
-	EV_STORE_DTLB_MISS		pmevid_t = iota
-	//EV_WTF1				pmevid_t = iota
-	//EV_WTF2				pmevid_t = iota
-	EV_L2_LD_HITS			pmevid_t = iota
+	EV_STORE_DTLB_MISS		pmevid_t = 1 << iota
+	EV_L2_LD_HITS			pmevid_t = 1 << iota
 )
 
 type pmflag_t uint
@@ -2487,6 +2485,8 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	return v
 }
 
+// XXX counting PMCs only works with one CPU; move counter start/stop to perf
+// IPI.
 func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
 	if cid < 0 || cid >= len(ip.pmcs) {
 		panic("wtf")
@@ -2900,7 +2900,8 @@ func main() {
 
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
-	debug.SetGCPercent(100)
+	pmem := runtime.Totalphysmem()
+	fmt.Printf("  %v MB of physical memory\n", pmem / (1 << 20))
 
 	//chanbm()
 
