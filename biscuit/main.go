@@ -2739,6 +2739,8 @@ func main() {
 
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
+	pmem := runtime.Totalphysmem()
+	fmt.Printf("  %v MB of physical memory\n", pmem / (1 << 20))
 
 	//chanbm()
 

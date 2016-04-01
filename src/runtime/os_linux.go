@@ -1154,9 +1154,11 @@ var pglast uintptr
 
 //go:nosplit
 func phys_init() {
+	origfirst := pgfirst
 	sec := (*secret_t)(unsafe.Pointer(uintptr(0x7c00)))
 	found := false
 	base := sec.e820p
+	maxfound := uintptr(0)
 	// bootloader provides 15 e820 entries at most (it panicks if the PC
 	// provides more).
 	for i := uintptr(0); i < 15; i++ {
@@ -1164,11 +1166,22 @@ func phys_init() {
 		if ep.len == 0 {
 			continue
 		}
-		endpg := ep.start + ep.len
-		if pgfirst >= ep.start && pgfirst < endpg {
-			pglast = endpg
+		// use largest segment
+		if ep.len > maxfound {
+			maxfound = ep.len
+			_eseg = *ep
 			found = true
-			break
+			// initialize pgfirst/pglast. if the segment contains
+			// origfirst, then the bootloader already allocated the
+			// the pages from [ep.start, origfirst). thus set
+			// pgfirst to origfirst.
+			endpg := ep.start + ep.len
+			pglast = endpg
+			if origfirst >= ep.start && origfirst < endpg {
+				pgfirst = origfirst
+			} else {
+				pgfirst = ep.start
+			}
 		}
 	}
 	if !found {
@@ -1177,6 +1190,12 @@ func phys_init() {
 	if pgfirst & PGOFFMASK != 0 {
 		pancake("pgfist not aligned", pgfirst)
 	}
+}
+
+var _eseg e820_t
+
+func Totalphysmem() int {
+	return int(_eseg.start + _eseg.len)
 }
 
 //go:nosplit
