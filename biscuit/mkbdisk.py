@@ -10,7 +10,7 @@ import os
 import sys
 
 blocksz = 512
-hdsize = 4*40 * 1024 * 1024
+hdsize = 16*40 * 1024 * 1024
 # number of inode direct addresses
 iaddrs = 10
 # number of inode indirect addresses
@@ -457,7 +457,7 @@ if __name__ == '__main__':
     lim = roundup(len(kfdata), blocksz)
     of.write('\0'*(lim - len(kfdata)))
 
-    fblen = 20*4
+    fblen = 20*16
     loglen = 31
     dofs(of, usedblocks + 1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
     wrote = of.tell()/(1 << 20)
