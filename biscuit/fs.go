@@ -21,15 +21,33 @@ var fslog	= log_t{}
 // free block bitmap lock
 var fblock	= sync.Mutex{}
 
-func pathparts(path string) []string {
-	sp := strings.Split(path, "/")
-	nn := make([]string, 0, 7)
-	for _, s := range sp {
-		if s != "" {
-			nn = append(nn, s)
+// allocation-less pathparts
+type pathparts_t struct {
+	path	string
+	loc	int
+}
+
+func (pp *pathparts_t) pp_init(path string) {
+	pp.path = path
+	pp.loc = 0
+}
+
+func (pp *pathparts_t) next() (string, bool) {
+	ret := ""
+	for ret == "" {
+		if pp.loc == len(pp.path) {
+			return "", false
+		}
+		ret = pp.path[pp.loc:]
+		nloc := strings.IndexByte(ret, '/')
+		if nloc != -1 {
+			ret = ret[:nloc]
+			pp.loc += nloc + 1
+		} else {
+			pp.loc += len(ret)
 		}
 	}
-	return nn
+	return ret, true
 }
 
 func sdirname(path string) (string, string) {
@@ -745,7 +763,7 @@ type fsfile_t struct {
 }
 
 func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
-    major, minor int) (*fsfile_t, int) {
+    major, minor int) (fsfile_t, int) {
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
 	nodir := false
@@ -754,6 +772,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 		op_begin()
 		defer op_end()
 	}
+	var ret fsfile_t
 	var idm *imemnode_t
 	if creat {
 		nodir = true
@@ -763,11 +782,11 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 		// must specify at least one path component
 		dirs, fn := sdirname(paths)
 		if err, ok := crname(fn, -EEXIST); !ok {
-			return nil, err
+			return ret, err
 		}
 
 		if len(fn) > DNAMELEN {
-			return nil, -ENAMETOOLONG
+			return ret, -ENAMETOOLONG
 		}
 
 		var exists bool
@@ -776,7 +795,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 		for {
 			par, err := fs_namei(dirs, cwd)
 			if err != 0 {
-				return nil, err
+				return ret, err
 			}
 			var childi inum
 			if isdev {
@@ -786,7 +805,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 			}
 			if err != 0 && err != -EEXIST {
 				par.iunlock()
-				return nil, err
+				return ret, err
 			}
 			exists = err == -EEXIST
 			idm = idaemon_ensure(childi)
@@ -801,7 +820,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 		if exists {
 			if oexcl || isdev {
 				idm.iunlock()
-				return nil, -EEXIST
+				return ret, -EEXIST
 			}
 		}
 	} else {
@@ -809,7 +828,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 		var err int
 		idm, err = fs_namei(paths, cwd)
 		if err != 0 {
-			return nil, err
+			return ret, err
 		}
 		// idm is locked
 	}
@@ -827,10 +846,10 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 	// be opened with O_DIRECTORY
 	if o_dir || nodir {
 		if o_dir && itype != I_DIR {
-			return nil, -ENOTDIR
+			return ret, -ENOTDIR
 		}
 		if nodir && itype == I_DIR {
-			return nil, -EISDIR
+			return ret, -EISDIR
 		}
 	}
 
@@ -839,7 +858,6 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 	}
 
 	idm.opencount++
-	ret := &fsfile_t{}
 	ret.priv = idm
 	ret.major = idm.icache.major
 	ret.minor = idm.icache.minor
@@ -884,14 +902,15 @@ func fs_open(paths string, flags, mode int, cwd *imemnode_t,
 
 func fs_close(priv *imemnode_t) int {
 	op_begin()
-	defer op_end()
 
 	if !priv.ilock_opened() {
+		op_end()
 		return -EBADF
 	}
 	priv.opencount--
 	// iunlock() frees underlying inode and blocks, if necessary
 	priv.iunlock()
+	op_end()
 	return 0
 }
 
@@ -931,9 +950,10 @@ func fs_namei(paths string, cwd *imemnode_t) (*imemnode_t, int) {
 		return nil, -ENOENT
 	}
 	idm := start
-	pp := pathparts(paths)
-	for i := range pp {
-		n, err := idm.iget(pp[i])
+	pp := pathparts_t{}
+	pp.pp_init(paths)
+	for cp, ok := pp.next(); ok; cp, ok = pp.next() {
+		n, err := idm.iget(cp)
 		if err != 0 {
 			idm.iunlock()
 			return nil, err
