@@ -165,8 +165,8 @@ void bm(char const *tl, void *(*fn)(void *))
 
 	pthread_barrier_wait(&bar);
 
-	if (sys_prof(PROF_GOLANG, 0, 0, 0) == -1)
-		err(-1, "prof");
+	//if (sys_prof(PROF_GOLANG, 0, 0, 0) == -1)
+	//	err(-1, "prof");
 
 	ulong st = now();
 	sleep(bmsecs);
@@ -176,8 +176,8 @@ void bm(char const *tl, void *(*fn)(void *))
 	long total = jointot(t, nthreads);
 	ulong actual = now() - st;
 
-	if (sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
-		err(-1, "prof");
+	//if (sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
+	//	err(-1, "prof");
 
 	printf("%s ran for %lu ms (slept %lu)\n", tl, actual, beforejoin - st);
 	double secs = actual / 1000;
@@ -351,7 +351,7 @@ void *seqcreate(void *idp)
 
 void *openonly(void *idp)
 {
-	const char *f = "/tmp/dur";
+	const char *f = "dur";
 	int fd = open(f, O_CREAT | O_WRONLY, 0600);
 	if (fd < 0)
 		err(-1, "create");
@@ -397,28 +397,23 @@ int mbforever()
 
 const char const *_websock = ".websock";
 
-static int _webcon(void)
+static void *webclient(void *p)
 {
-	int s = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (s == -1)
-		err(-1, "socket");
+	pthread_barrier_wait(&bar);
 
 	struct sockaddr_un sa;
 	sa.sun_family = AF_UNIX;
 	strncpy(sa.sun_path, _websock, sizeof(sa.sun_path));
 
-	if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == -1)
-		err(-1, "connect");
-	return s;
-}
-
-static void *webclient(void *p)
-{
-	pthread_barrier_wait(&bar);
-
 	long total = 0;
 	while (!cease) {
-		int s = _webcon();
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+		if (s == -1)
+			err(-1, "socket");
+
+		if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == -1)
+			err(-1, "connect");
+
 		char gmsg[] = "GET /";
 		if (write(s, gmsg, sizeof(gmsg)) != sizeof(gmsg))
 			err(-1, "write");
@@ -496,7 +491,17 @@ static void webstart(void)
 
 static void webstop(void)
 {
-	int s = _webcon();
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s == -1)
+		err(-1, "socket");
+
+	struct sockaddr_un sa;
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, _websock, sizeof(sa.sun_path));
+
+	if (connect(s, (struct sockaddr *)&sa, sizeof(sa)) == -1)
+		err(-1, "connect");
+
 	char em[] = "exit";
 	if (write(s, em, sizeof(em)) != sizeof(em))
 		err(-1, "write");

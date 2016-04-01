@@ -346,10 +346,11 @@ long sys_prof(long, long, long, long);
 #define		PROF_EVF_USR	(1ul << 1)
 
 long sys_info(long);
-#define		SINFO_GCCOUNT	0
-#define		SINFO_GCPAUSENS	1
-#define		SINFO_GCHEAPSZ	2
-#define		SINFO_GCMS	4
+#define		SINFO_GCCOUNT				0
+#define		SINFO_GCPAUSENS				1
+#define		SINFO_GCHEAPSZ				2
+#define		SINFO_GCMS				4
+#define		SINFO_GCTOTALLOC			5
 
 int truncate(const char *, off_t);
 int unlink(const char *);

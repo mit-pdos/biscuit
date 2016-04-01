@@ -130,11 +130,14 @@ int main(int argc, char **argv)
 	else if (pmus && sys_prof(PROF_SAMPLE, evt, pmus, intperiod) == -1)
 		errx(-1, "sys prof");
 	struct gcfrac_t fracst;
-	long sgc;
+	long sgc, talloc;
 	if (gcstat) {
 		fracst = gcfracst();
 		sgc = sys_info(SINFO_GCCOUNT);
 		if (sgc == -1)
+			err(-1, "sysinfo");
+		talloc = sys_info(SINFO_GCTOTALLOC);
+		if (talloc == -1)
 			err(-1, "sysinfo");
 	}
 
@@ -157,6 +160,12 @@ int main(int argc, char **argv)
 		if (egc == -1)
 			err(-1, "sysinfo");
 		printf("GCs: %ld\n", egc - sgc);
+		long etalloc = sys_info(SINFO_GCTOTALLOC);
+		if (etalloc == -1)
+			err(-1, "sysinfo");
+		long bpms = (etalloc - talloc) / elapsed;
+		double ar = (double)bpms * 1000 / (1 << 20);
+		printf("Allocation rate: %f MB/sec\n", ar);
 	}
 	// stop profiling
 	if (goprof && sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)

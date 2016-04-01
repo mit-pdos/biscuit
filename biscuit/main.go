@@ -764,7 +764,6 @@ func (p *proc_t) cowfault(userva int) {
 // race with a forking thread when it copies the fd table.
 func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 	p.fdl.Lock()
-	defer p.fdl.Unlock()
 
 	// find free fd
 	newfd := p.fdstart
@@ -795,6 +794,7 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 	if fd.fops == nil {
 		panic("wtf!")
 	}
+	p.fdl.Unlock()
 	return fdn
 }
 
@@ -814,9 +814,9 @@ func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
 // fdn is not guaranteed to be a sane fd
 func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	p.fdl.Lock()
-	defer p.fdl.Unlock()
 
 	if fdn < 0 || fdn >= len(p.fds) {
+		p.fdl.Unlock()
 		return nil, false
 	}
 	ret := p.fds[fdn]
@@ -825,6 +825,7 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	if ok && fdn < p.fdstart {
 		p.fdstart = fdn
 	}
+	p.fdl.Unlock()
 	return ret, ok
 }
 
@@ -1261,23 +1262,25 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 		return "", false, false
 	}
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
 	i := 0
 	var s string
 	for {
 		str, ok := p.userdmap8_inner(uva + i)
 		if !ok {
+			p.Unlock_pmap()
 			return "", false, false
 		}
 		for j, c := range str {
 			if c == 0 {
 				s = s + string(str[:j])
+				p.Unlock_pmap()
 				return s, true, false
 			}
 		}
 		s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
+			p.Unlock_pmap()
 			return "", true, true
 		}
 	}
@@ -2447,6 +2450,8 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	return v
 }
 
+// XXX counting PMCs only works with one CPU; move counter start/stop to perf
+// IPI.
 func (ip *intelprof_t) _pmc_start(cid int, eid pmevid_t, pf pmflag_t) {
 	if cid < 0 || cid >= len(ip.pmcs) {
 		panic("wtf")
@@ -2737,6 +2742,8 @@ func main() {
 
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
+	pmem := runtime.Totalphysmem()
+	fmt.Printf("  %v MB of physical memory\n", pmem / (1 << 20))
 
 	//chanbm()
 
