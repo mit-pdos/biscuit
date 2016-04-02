@@ -27,7 +27,8 @@
 using std::string;
 
 enum { warmup_secs = 1 };
-enum { duration = 5 };
+//enum { duration = 5 };
+int duration = 5;
 
 const char *message =
   "Received: from incoming.csail.mit.edu (incoming.csail.mit.edu [128.30.2.16])\n"
@@ -233,6 +234,7 @@ usage(const char *argv0)
   fprintf(stderr, "     N      Spool in batches of size N\n");
   fprintf(stderr, "     inf    Spool in unbounded batches\n");
   fprintf(stderr, "  -p        Use delivery process pooling\n");
+  fprintf(stderr, "  -d int    Set duration to int\n");
   exit(2);
 }
 
@@ -243,7 +245,7 @@ main(int argc, char **argv)
   size_t batch_size = 0;
   bool pool = false;
   int opt;
-  while ((opt = getopt(argc, argv, "a:b:p")) != -1) {
+  while ((opt = getopt(argc, argv, "d:a:b:p")) != -1) {
     switch (opt) {
     case 'a':
       alt_str = optarg;
@@ -256,6 +258,11 @@ main(int argc, char **argv)
       break;
     case 'p':
       pool = true;
+      break;
+    case 'd':
+      duration = strtol(optarg, nullptr, 0);
+      if (duration < 0)
+        duration = 5;
       break;
     default:
       usage(argv[0]);
