@@ -1932,6 +1932,115 @@ memset(void *d, int c, size_t n)
 	return d;
 }
 
+DIR *
+fdopendir(int fd)
+{
+	struct stat st;
+	if (fstat(fd, &st) == -1)
+		return NULL;
+	if (!S_ISDIR(st.st_mode))
+		return NULL;
+	// allocate enough space for all dirents; count them.
+	if (lseek(fd, 0, SEEK_SET) == -1)
+		return NULL;
+	// on disk format of directory entries
+	struct  __attribute__((packed)) _dirent_t {
+		char	name[_POSIX_NAME_MAX];
+		ulong	inum;
+	};
+	const int nde = 512/sizeof(struct _dirent_t);
+	size_t c = 0;
+	char buf[512];
+	ssize_t r;
+	while ((r = read(fd, buf, sizeof(buf))) > 0) {
+		int i;
+		for (i = 0; i < nde; i++) {
+			struct _dirent_t *de = (struct _dirent_t *)buf + i;
+			if (de->inum != 0)
+				c++;
+		}
+	}
+	if (r == -1)
+		return NULL;
+	if (c > (ULONG_MAX - sizeof(DIR))/sizeof(struct dirent))
+		errx(-1, "very fat dir");
+	DIR *ret = malloc(sizeof(DIR) + c*sizeof(struct dirent));
+	if (!ret)
+		return NULL;
+
+	// copy dirents into ret
+	ret->fd = fd;
+	ret->nent = (int)c;
+	ret->cent = 0;
+	if (lseek(fd, 0, SEEK_SET) == -1)
+		goto out;
+	struct dirent *p = &ret->dents[0];
+	while ((r = read(fd, buf, sizeof(buf))) > 0) {
+		int i;
+		for (i = 0; i < nde; i++) {
+			struct _dirent_t *de = (struct _dirent_t *)buf + i;
+			if (de->inum != 0) {
+				p->d_ino = de->inum;
+				strncpy(p->d_name, de->name,
+				    sizeof(p->d_name));
+				p++;
+			}
+		}
+	}
+	if (r == -1)
+		goto out;
+	return ret;
+out:
+	free(ret);
+	return NULL;
+}
+
+DIR *
+opendir(const char *path)
+{
+	int fd = open(path, O_RDONLY | O_DIRECTORY);
+	if (fd == -1)
+		return NULL;
+	return fdopendir(fd);
+}
+
+int
+closedir(DIR *d)
+{
+	int fd = d->fd;
+	free(d);
+	return close(fd);
+}
+
+struct dirent *
+readdir(DIR *d)
+{
+	static struct dirent _ret;
+	struct dirent *ret;
+	readdir_r(d, &_ret, &ret);
+	return ret;
+}
+
+// POSIX: returns error number, not -1
+int
+readdir_r(DIR *d, struct dirent *entry, struct dirent **ret)
+{
+	if (d->cent == d->nent) {
+		*ret = NULL;
+		return 0;
+	}
+	struct dirent *src = &d->dents[d->cent++];
+	*entry = *src;
+	*ret = entry;
+	return 0;
+}
+
+void
+rewinddir(DIR *d)
+{
+	d->cent = 0;
+}
+
 struct {
 	const char *prefix;
 	int pid;
@@ -3010,6 +3119,8 @@ calloc(size_t n, size_t sz)
 	}
 	size_t big = sz*n;
 	void *ret = malloc(big);
+	if (!ret)
+		return NULL;
 	memset(ret, 0, big);
 	return ret;
 }

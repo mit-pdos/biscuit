@@ -49,6 +49,7 @@ typedef long 		time_t;
 typedef unsigned long 	nfds_t;
 typedef unsigned long 	mode_t;
 typedef long 		dev_t;
+typedef ulong 		ino_t;
 typedef long 		off_t;
 typedef long 		pid_t;
 typedef long 		uid_t;
