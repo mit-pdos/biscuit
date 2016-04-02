@@ -178,6 +178,7 @@ struct stat {
 #define		S_IFDIR		2
 
 #define		S_ISDIR(mode)	(mode == S_IFDIR)
+#define		S_ISDEV(mode)	(MAJOR(mode) != 0)
 #define		S_ISREG(mode)	(mode == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
