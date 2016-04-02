@@ -505,6 +505,19 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		MIN(x, y)	(x < y ? x : y)
 #define		MAX(x, y)	(x > y ? x : y)
 
+#define		_POSIX_NAME_MAX	14
+struct dirent {
+	ino_t d_ino;
+	char d_name[_POSIX_NAME_MAX];
+};
+
+typedef struct {
+	int fd;
+	uint cent;
+	uint nent;
+	struct dirent dents[];
+} DIR;
+
 extern __thread int errno;
 
 #define		BUFSIZ		4096
@@ -553,6 +566,7 @@ struct utsname {
 void abort(void);
 int atoi(const char *);
 double ceil(double);
+int closedir(DIR *);
 char *ctime(const time_t *);
 char *ctime_r(const time_t *, char *);
 void err(int, const char *, ...)
@@ -564,6 +578,7 @@ void errx(int, const char *, ...)
 void exit(int)
     __attribute__((noreturn));
 int fclose(FILE *);
+DIR *fdopendir(int);
 int feof(FILE *);
 int ferror(FILE *);
 int fileno(FILE *);
@@ -604,6 +619,7 @@ int memcmp(const void *, const void *, size_t);
 void *memcpy(void *, const void *, size_t);
 void *memmove(void *, const void *, size_t);
 void *memset(void *, int, size_t);
+DIR *opendir(const char *);
 void openlog(const char *, int, int);
 // log options
 #define		LOG_PID		(1ull << 0)
@@ -621,7 +637,10 @@ int rand_r(uint *);
 #define		RAND_MAX	0x7fffffff
 long random(void);
 ulong rdtsc(void);
+struct dirent *readdir(DIR *);
+int readdir_r(DIR *, struct dirent *, struct dirent **);
 char *readline(const char *);
+void rewinddir(DIR *);
 //int scanf(const char *, ...) /*REDIS*/
 //    __attribute__((format(scanf, 1, 2))); /*REDIS*/
 int setenv(const char *, const char *, int);
