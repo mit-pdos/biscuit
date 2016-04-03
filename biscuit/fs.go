@@ -2138,6 +2138,13 @@ func (idm *imemnode_t) ifree() {
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
+	// free pagecache pages
+	for i := range idm.pgcache.pginfo {
+		if idm.pgcache.pginfo[i].phys == 0 {
+			continue
+		}
+		refdown(uintptr(idm.pgcache.pginfo[i].phys))
+	}
 }
 
 // returns the offset of an empty directory entry

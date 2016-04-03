@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
-import "runtime/debug"
+//import "runtime/debug"
 import "sync/atomic"
 import "sync"
 import "time"
@@ -928,16 +928,18 @@ func (p *proc_t) page_insert(va int, seg *vmseg_t, pg *[512]int, p_pg int,
 	seg.track(va, pg)
 }
 
-func (p *proc_t) page_remove(va int) bool {
+func (p *proc_t) page_remove(va int) (uintptr, bool) {
 	p.lockassert_pmap()
 	remmed := false
 	pte := pmap_lookup(p.pmap, va)
+	var p_old uintptr
 	if pte != nil && *pte & PTE_P != 0 {
+		p_old = uintptr(*pte & PTE_ADDR)
 		*pte = 0
 		invlpg(va)
 		remmed = true
 	}
-	return remmed
+	return p_old, remmed
 }
 
 func (p *proc_t) pgfault(tid tid_t, fa int) bool {

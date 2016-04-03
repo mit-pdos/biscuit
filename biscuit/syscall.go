@@ -544,21 +544,27 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	len = roundup(len, PGSIZE)
 	var ret int
 	var upto int
+	ppgs := make([]uintptr, 0, 4)
 	for i := 0; i < len; i += PGSIZE {
 		p := addrn + i
 		if p < USERMIN {
 			ret = -EINVAL
 			break
 		}
-		if !proc.page_remove(p) {
+		p_pg, ok := proc.page_remove(p)
+		if !ok {
 			ret = -EINVAL
 			break
 		}
+		ppgs = append(ppgs, p_pg)
 		upto += PGSIZE
 	}
 	pgs := upto/PGSIZE
 	proc.tlbshoot(addrn, pgs)
 	proc.vmregion.remove(addrn, upto)
+	for i := range ppgs {
+		refdown(ppgs[i])
+	}
 	return ret
 }
 
