@@ -954,6 +954,9 @@ func (p *proc_t) pgfault(tid tid_t, fa int) bool {
 }
 
 func (p *proc_t) tlbshoot(startva, pgcount int) {
+	if pgcount == 0 {
+		return
+	}
 	p.lockassert_pmap()
 	if p.thread_count() > 1 {
 		tlb_shootdown(p.p_pmap, startva, pgcount)
