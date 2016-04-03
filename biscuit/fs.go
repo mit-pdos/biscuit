@@ -2519,6 +2519,10 @@ func freebit(b uint8) uint {
 	panic("no 0 bit?")
 }
 
+// save last byte we found that had free blocks
+var _lastblkno int
+var _lastbyte int
+
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
@@ -2535,13 +2539,21 @@ func balloc1() int {
 	var blkn int
 	var oct int
 	// 0 is free, 1 is allocated
-	for i := 0; i < flen && !found; i++ {
+	for b := 0; b < flen && !found; b++ {
+		i := (_lastblkno + b) % flen
 		if blk != nil {
 			fbrelse(blk)
 		}
 		blk = fbread(fst + i)
-		for idx, c := range blk.data {
+		start := 0
+		if b == 0 {
+			start = _lastbyte
+		}
+		for idx := start; idx < len(blk.data); idx++ {
+			c := blk.data[idx]
 			if c != 0xff {
+				_lastblkno = i
+				_lastbyte = idx
 				bit = freebit(c)
 				blkn = i
 				oct = idx
