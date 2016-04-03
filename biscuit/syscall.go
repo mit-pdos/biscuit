@@ -542,19 +542,24 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
 	len = roundup(len, PGSIZE)
+	var ret int
+	var upto int
 	for i := 0; i < len; i += PGSIZE {
 		p := addrn + i
 		if p < USERMIN {
-			return -EINVAL
+			ret = -EINVAL
+			break
 		}
 		if !proc.page_remove(p) {
-			return -EINVAL
+			ret = -EINVAL
+			break
 		}
+		upto += PGSIZE
 	}
-	pgs := len/PGSIZE
-	proc.vmregion.remove(addrn, len)
+	pgs := upto/PGSIZE
 	proc.tlbshoot(addrn, pgs)
-	return 0
+	proc.vmregion.remove(addrn, upto)
+	return ret
 }
 
 func sys_sigaction(proc *proc_t, sig, actn, oactn int) int {
