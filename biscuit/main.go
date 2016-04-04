@@ -2858,6 +2858,8 @@ func phys_init() {
 	// reserve 128MB of pages
 	//respgs := 1 << 15
 	respgs := 1 << 16
+	// 7.5 GB
+	//respgs := 1835008
 	//respgs := 1 << 18 + (1 <<17)
 	physmem.pgs = make([]physpg_t, respgs)
 	for i := range physmem.pgs {
