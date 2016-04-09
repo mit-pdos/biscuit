@@ -521,10 +521,11 @@ func (w *wait_t) put(id, status int, atime *accnt_t) {
 	w._orphanwake(owake)
 }
 
-func (w *wait_t) reap(id int) waitst_t {
+func (w *wait_t) reap(id int, noblk bool) waitst_t {
 	if id == WAIT_MYPGRP {
 		panic("no imp")
 	}
+	block := !noblk
 
 	w.Lock()
 
@@ -552,7 +553,7 @@ func (w *wait_t) reap(id int) waitst_t {
 			}
 		}
 		// otherwise, wait
-		if !found {
+		if !found && block {
 			w.wakeany++
 			waitchan = w.anys
 		}
@@ -568,7 +569,7 @@ func (w *wait_t) reap(id int) waitst_t {
 			if ent.isproc {
 				w.childs--
 			}
-		} else {
+		} else if block {
 			// need to wait
 			waitchan = make(chan waitst_t)
 			ent.waiter = waitchan
@@ -2108,6 +2109,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
 		if c == '\\' {
+			//debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
 			_nflip = (_nflip + 1) % 2
@@ -2746,7 +2748,7 @@ func main() {
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
 	pmem := runtime.Totalphysmem()
-	fmt.Printf("  %v MB of physical memory\n", pmem / (1 << 20))
+	fmt.Printf("  %v MB of physical memory\n", pmem >> 20)
 
 	//chanbm()
 

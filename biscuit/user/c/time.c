@@ -33,7 +33,7 @@ void usage(char *pre)
 		 "       \"bmiss\"   - branch misses\n"
 		 "       \"llcref\" - LLC references\n"
 		 "       \"llcmiss\" - LLC misses\n"
-		 "-i int sample after int PMU events. only used with -c.\n"
+		 "-i int sample after int PMU events. only used with -s.\n"
 		 "\n"
 		 "pmf    a one or two character string indicating when to\n"
 		 "       count/sample the specified events. \"u\" and \"s\"\n"
