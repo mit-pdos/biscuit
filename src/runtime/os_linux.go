@@ -2706,3 +2706,11 @@ func Kpmap_p() uintptr {
 func GCworktime() int {
 	return int(work.totaltime)
 }
+
+func Heapsz() int {
+	return int(memstats.next_gc)
+}
+
+func Setheap(n int) {
+	heapminimum = uint64(n)
+}

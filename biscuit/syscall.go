@@ -3693,7 +3693,7 @@ func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
 		}
 		_prof_pmc(en, evs)
 	case ptype & PROF_HACK != 0:
-		return -EINVAL
+		runtime.Setheap(_events << 20)
 	default:
 		return -EINVAL
 	}
@@ -3708,6 +3708,8 @@ func sys_info(proc *proc_t, n int) int {
 	switch n {
 	case SINFO_GCCOUNT:
 		ret = int(ms.NumGC)
+		//fmt.Printf("Total heap size: %v MB\n", ms.HeapSys / (1<<20))
+		fmt.Printf("Total heap size: %v MB\n", runtime.Heapsz() / (1<<20))
 	case SINFO_GCPAUSENS:
 		ret = int(ms.PauseTotalNs)
 	case SINFO_GCHEAPSZ:
