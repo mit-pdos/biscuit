@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "math/rand"
 import "runtime"
-//import "runtime/debug"
+import "runtime/debug"
 import "sync/atomic"
 import "sync"
 import "time"
@@ -2109,7 +2109,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
 		if c == '\\' {
-			//debug.SetTraceback("all")
+			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
 			_nflip = (_nflip + 1) % 2
