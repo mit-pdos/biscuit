@@ -187,6 +187,7 @@ const(
     PROF_GOLANG    = 1 << 1
     PROF_SAMPLE    = 1 << 2
     PROF_COUNT     = 1 << 3
+    PROF_HACK      = 1 << 4
   SYS_THREXIT  = 31338
   SYS_INFO     = 31339
     SINFO_GCCOUNT    = 0
@@ -3019,7 +3020,8 @@ func sys_threxit(proc *proc_t, tid tid_t, status int) {
 
 func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
     threadwait int) int {
-	if wpid == WAIT_MYPGRP || options != 0 {
+	if wpid == WAIT_MYPGRP || options == WCONTINUED ||
+	   options == WUNTRACED {
 		panic("no imp")
 	}
 
@@ -3028,7 +3030,8 @@ func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
 		return -ECHILD
 	}
 
-	resp := proc.mywait.reap(wpid)
+	noblk := options & WNOHANG != 0
+	resp := proc.mywait.reap(wpid, noblk)
 
 	if resp.err != 0 {
 		return resp.err
@@ -3570,7 +3573,7 @@ func _prof_go(en bool) {
 		prof.dump()
 
 		//pprof.WriteHeapProfile(&prof)
-		//fmt.Printf("K    ns: %v\n", kns)
+		//prof.dump()
 
 		//p := pprof.Lookup("block")
 		//err := p.WriteTo(&prof, 0)
@@ -3689,6 +3692,8 @@ func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
 			}
 		}
 		_prof_pmc(en, evs)
+	case ptype & PROF_HACK != 0:
+		return -EINVAL
 	default:
 		return -EINVAL
 	}

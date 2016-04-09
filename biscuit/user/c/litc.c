@@ -1372,9 +1372,6 @@ _fflush(FILE *f)
 		return 0;
 	char * const bst = &f->buf[0];
 	size_t len = f->p - bst;
-	// XXXPANIC
-	if (len == 0)
-		errx(-1, "writing but no data");
 	ssize_t r;
 	if ((r = write(f->fd, bst, len)) < 0) {
 		f->error = errno;
@@ -2255,7 +2252,8 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				break;
 			}
 			default:
-				errx(-1, "unsupported printf format: %c\n", t);
+				//errx(-1, "unsupported printf format: %c\n", t);
+				dst += wc(dst, end, '?');
 				break;
 			}
 		}
