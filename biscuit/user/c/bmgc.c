@@ -273,7 +273,8 @@ __attribute__((noreturn))
 void usage(void)
 {
 	printf("usage:\n");
-	printf("%s [-mvSg] [-s <int>] [-w <int>] [-n <int>]\n", __progname);
+	printf("%s [-mvSg] [-h <int>] [-s <int>] [-w <int>] [-n <int>]\n",
+	    __progname);
 	printf("where:\n");
 	printf("-S		sleep forever instead of exiting\n");
 	printf("-m		use mmap busy work instead of readfile\n");
@@ -281,21 +282,25 @@ void usage(void)
 	printf("-g		force kernel GC, then exit\n");
 	printf("-s <int>	set scale factor to int\n");
 	printf("-w <int>	set work factor to int\n");
-	printf("-n <int>	set number of worker threads int\n\n");
+	printf("-n <int>	set number of worker threads int\n");
+	printf("-h <int>	set kernel heap minimum to int MB\n\n");
 	exit(-1);
 }
 
 int main(int argc, char **argv)
 {
-	long sf = 1, wf = 1, nthreads = 1;
+	long sf = 1, wf = 1, nthreads = 1, kheap = 0;
 	int dosleep = 0, dogc = 0;
 	enum work_t wtype = W_READF;
 
 	int c;
-	while ((c = getopt(argc, argv, "vn:gms:Sw:")) != -1) {
+	while ((c = getopt(argc, argv, "h:vn:gms:Sw:")) != -1) {
 		switch (c) {
 		case 'g':
 			dogc = 1;
+			break;
+		case 'h':
+			kheap = strtol(optarg, NULL, 0);
 			break;
 		case 'm':
 			wtype = W_MMAP;
@@ -327,6 +332,13 @@ int main(int argc, char **argv)
 	if (dogc) {
 		_fetch(10);
 		printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
+		return 0;
+	}
+
+	if (kheap) {
+		const long hack = 1ul << 4;
+		if (sys_prof(hack, kheap, 0, 0) == -1)
+			err(-1, "sys prof");
 		return 0;
 	}
 
