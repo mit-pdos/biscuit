@@ -929,6 +929,14 @@ TEXT ·_Userrun(SB), NOSPLIT, $24-32
 
 syscallreturn:
 	// set SP MSRs manually
+	PUSHQ	$0
+	PUSHQ	IA32_SYSENTER_ESP
+	CALL	·Rdmsr(SB)
+	POPQ	AX
+	POPQ	AX
+	CMPQ	SP, AX
+	JEQ	gut
+
 	MOVQ	SP, AX
 	PUSHQ	AX
 	PUSHQ	IA32_SYSENTER_ESP
@@ -936,6 +944,7 @@ syscallreturn:
 	POPQ	AX
 	POPQ	AX
 
+gut:
 	MOVQ	TF_RAX(R9), AX
 	MOVQ	TF_RSP(R9), CX
 	MOVQ	TF_RIP(R9), DX
