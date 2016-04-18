@@ -374,19 +374,18 @@ func cons_read(ub *userbuf_t, offset int) (int, int) {
 }
 
 func cons_write(src *userbuf_t, off int) (int, int) {
-		// merge into one buffer to avoid taking the console
-		// lock many times.
-		utext := int8(0x17)
-		big := make([]uint8, src.len)
-		read, err := src.read(big)
-		if err != 0 {
-			return 0, err
-		}
-		if read != src.len {
-			panic("short read")
-		}
-		runtime.Pmsga(&big[0], len(big), utext)
-		return len(big), 0
+	// merge into one buffer to avoid taking the console lock many times.
+	utext := int8(0x17)
+	big := make([]uint8, src.len)
+	read, err := src.read(big)
+	if err != 0 {
+		return 0, err
+	}
+	if read != src.len {
+		panic("short read")
+	}
+	runtime.Pmsga(&big[0], len(big), utext)
+	return len(big), 0
 }
 
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
@@ -401,12 +400,13 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		return -EPERM
 	}
 
-	userbuf := proc.mkuserbuf(bufp, sz)
+	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
 	ret, err := fd.fops.read(userbuf)
 	if err != 0 {
 		return err
 	}
+	ubpool.Put(userbuf)
 	return ret
 }
 
@@ -422,12 +422,13 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		return -EPERM
 	}
 
-	userbuf := proc.mkuserbuf(bufp, sz)
+	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
 	ret, err := fd.fops.write(userbuf)
 	if err != 0 {
 		return err
 	}
+	ubpool.Put(userbuf)
 	return ret
 }
 
@@ -710,18 +711,21 @@ func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8,
 	outmask := POLLOUT | POLLWRBAND
 	readyfds := 0
 	writeback := false
+	proc.fdl.Lock()
 	for i := 0; i < nfds; i++ {
 		off := i*8
-		uw := readn(buf, 8, off)
+		//uw := readn(buf, 8, off)
+		uw := *(*int)(unsafe.Pointer(&buf[off]))
 		fdn := int(uint32(uw))
 		// fds < 0 are to be ignored
 		if fdn < 0 {
 			continue
 		}
-		fd, ok := proc.fd_get(fdn)
+		fd, ok := proc.fd_get_inner(fdn)
 		if !ok {
 			uw |= POLLNVAL
-			writen(buf, 8, off, uw)
+			//writen(buf, 8, off, uw)
+			*(*int)(unsafe.Pointer(&buf[off])) = uw
 			writeback = true
 			continue
 		}
@@ -746,11 +750,13 @@ func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8,
 			// other fds send notifications. update user revents
 			wait = false
 			nuw := _ready2rev(uw, devstatus)
-			writen(buf, 8, off, nuw)
+			//writen(buf, 8, off, nuw)
+			*(*int)(unsafe.Pointer(&buf[off])) = nuw
 			readyfds++
 			writeback = true
 		}
 	}
+	proc.fdl.Unlock()
 	return readyfds, writeback
 }
 

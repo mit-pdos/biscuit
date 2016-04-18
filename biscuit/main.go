@@ -800,14 +800,18 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 }
 
 // fdn is not guaranteed to be a sane fd
-func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
-	p.fdl.Lock()
+func (p *proc_t) fd_get_inner(fdn int) (*fd_t, bool) {
 	if fdn < 0 || fdn >= len(p.fds) {
-		p.fdl.Unlock()
 		return nil, false
 	}
 	ret := p.fds[fdn]
 	ok := ret != nil
+	return ret, ok
+}
+
+func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
+	p.fdl.Lock()
+	ret, ok := p.fd_get_inner(fdn)
 	p.fdl.Unlock()
 	return ret, ok
 }
@@ -892,6 +896,14 @@ func (p *proc_t) mkvmseg(start, len int) *vmseg_t {
 
 func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
 	ret := &userbuf_t{}
+	ret.ub_init(p, userva, len)
+	return ret
+}
+
+var ubpool = sync.Pool{New: func() interface{} { return new(userbuf_t) }}
+
+func (p *proc_t) mkuserbuf_pool(userva, len int) *userbuf_t {
+	ret := ubpool.Get().(*userbuf_t)
 	ret.ub_init(p, userva, len)
 	return ret
 }
@@ -2744,6 +2756,11 @@ func main() {
 	//	}
 	//}
 	//debug.SetGCPercent(50)
+
+	go func() {
+		<- time.After(10*time.Second)
+		fmt.Printf("[It is now safe to benchmark...]\n")
+	}()
 
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
