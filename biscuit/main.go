@@ -900,6 +900,14 @@ func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
 	return ret
 }
 
+var ubpool = sync.Pool{New: func() interface{} { return new(userbuf_t) }}
+
+func (p *proc_t) mkuserbuf_pool(userva, len int) *userbuf_t {
+	ret := ubpool.Get().(*userbuf_t)
+	ret.ub_init(p, userva, len)
+	return ret
+}
+
 func (p *proc_t) mkfxbuf() *[64]int {
 	ret := new([64]int)
 	n := uintptr(unsafe.Pointer(ret))

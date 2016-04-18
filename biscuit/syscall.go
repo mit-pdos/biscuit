@@ -401,12 +401,13 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 		return -EPERM
 	}
 
-	userbuf := proc.mkuserbuf(bufp, sz)
+	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
 	ret, err := fd.fops.read(userbuf)
 	if err != 0 {
 		return err
 	}
+	ubpool.Put(userbuf)
 	return ret
 }
 
@@ -422,12 +423,13 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 		return -EPERM
 	}
 
-	userbuf := proc.mkuserbuf(bufp, sz)
+	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
 	ret, err := fd.fops.write(userbuf)
 	if err != 0 {
 		return err
 	}
+	ubpool.Put(userbuf)
 	return ret
 }
 
