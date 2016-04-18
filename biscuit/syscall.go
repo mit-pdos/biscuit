@@ -374,19 +374,18 @@ func cons_read(ub *userbuf_t, offset int) (int, int) {
 }
 
 func cons_write(src *userbuf_t, off int) (int, int) {
-		// merge into one buffer to avoid taking the console
-		// lock many times.
-		utext := int8(0x17)
-		big := make([]uint8, src.len)
-		read, err := src.read(big)
-		if err != 0 {
-			return 0, err
-		}
-		if read != src.len {
-			panic("short read")
-		}
-		runtime.Pmsga(&big[0], len(big), utext)
-		return len(big), 0
+	// merge into one buffer to avoid taking the console lock many times.
+	utext := int8(0x17)
+	big := make([]uint8, src.len)
+	read, err := src.read(big)
+	if err != 0 {
+		return 0, err
+	}
+	if read != src.len {
+		panic("short read")
+	}
+	runtime.Pmsga(&big[0], len(big), utext)
+	return len(big), 0
 }
 
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {

@@ -2757,6 +2757,11 @@ func main() {
 	//}
 	//debug.SetGCPercent(50)
 
+	go func() {
+		<- time.After(10*time.Second)
+		fmt.Printf("[It is now safe to benchmark...]\n")
+	}()
+
 	fmt.Printf("              BiscuitOS\n");
 	fmt.Printf("          go version: %v\n", runtime.Version())
 	pmem := runtime.Totalphysmem()
