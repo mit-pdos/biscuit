@@ -800,14 +800,18 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 }
 
 // fdn is not guaranteed to be a sane fd
-func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
-	p.fdl.Lock()
+func (p *proc_t) fd_get_inner(fdn int) (*fd_t, bool) {
 	if fdn < 0 || fdn >= len(p.fds) {
-		p.fdl.Unlock()
 		return nil, false
 	}
 	ret := p.fds[fdn]
 	ok := ret != nil
+	return ret, ok
+}
+
+func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
+	p.fdl.Lock()
+	ret, ok := p.fd_get_inner(fdn)
 	p.fdl.Unlock()
 	return ret, ok
 }
