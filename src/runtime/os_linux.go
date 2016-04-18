@@ -164,7 +164,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
 	// while other cpus execute user programs.
-	entersyscall()
+	//entersyscall()
 	fl := Pushcli()
 	cpu := Gscpu()
 	ct := cpu.mythread
@@ -201,7 +201,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	ct.user.tf = nil
 	ct.user.fxbuf = nil
 	Popcli(fl)
-	exitsyscall()
+	//exitsyscall()
 	return intno, aux
 }
 
