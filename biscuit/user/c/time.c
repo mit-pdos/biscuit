@@ -25,21 +25,22 @@ void usage(char *pre)
 		 "       and provide an event via -e\n"
 		 "-c     count events via PMU. must provide \"pmf\"\n"
 		 "       (see below) and provide an event via -e\n"
-		 "-e evt use \"evt\" for PMU sampling/counting. for PMU\n"
-		 "       counting, -e may be specified more than once.\n"
-		 "evt    a string indicating which symbolic event the PMU\n"
-		 "       should monitor. valid strings are:\n"
-		 "       \"cpu\"     - unhalted cpu cycles\n"
-		 "       \"bmiss\"   - branch misses\n"
-		 "       \"llcref\" - LLC references\n"
-		 "       \"llcmiss\" - LLC misses\n"
-		 "-i int sample after int PMU events. only used with -s.\n"
-		 "\n"
 		 "pmf    a one or two character string indicating when to\n"
 		 "       count/sample the specified events. \"u\" and \"s\"\n"
 		 "       cause PMU monitoring during userspace and system\n"
 		 "       execution, repsectively. these flags may be\n"
 		 "       combined (\"us\").\n"
+		 "-e evt use \"evt\" for PMU sampling/counting. for PMU\n"
+		 "       counting, -e may be specified more than once.\n"
+		 "evt    a string indicating which symbolic event the PMU\n"
+		 "       should monitor. valid strings are:\n"
+		 "       \"cpu\"     - unhalted cpu cycles\n"
+		 "       \"binst\"   - branch instructions\n"
+		 "       \"bmiss\"   - branch misses\n"
+		 "       \"llcref\" - LLC references\n"
+		 "       \"llcmiss\" - LLC misses\n"
+		 "-i int sample after int PMU events. only used with -s.\n"
+		 "\n"
 		 , __progname);
 }
 
@@ -62,6 +63,7 @@ long evtadd(char *evt)
 		long evid;
 	} evs[] = {
 		{"cpu", PROF_EV_UNHALTED_CORE_CYCLES},
+		{"binst", PROF_EV_BRANCH_INSTR_RETIRED},
 		{"bmiss", PROF_EV_BRANCH_MISS_RETIRED},
 		{"llcmiss", PROF_EV_LLC_MISSES},
 		{"llcref", PROF_EV_LLC_REFS},
