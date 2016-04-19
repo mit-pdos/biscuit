@@ -513,6 +513,73 @@ static void webstop(void)
 		errx(-1, "websv exited with status %d", status);
 }
 
+static int pipec[2];
+static int pipep[2];
+
+static void pingstart(void)
+{
+	if (pipe(pipec) == -1)
+		err(-1, "pipe");
+	if (pipe(pipep) == -1)
+		err(-1, "pipe");
+	pid_t c;
+	if ((c = fork()) == -1)
+		err(-1, "fork");
+	if (c) {
+		close(pipec[0]);
+		close(pipep[1]);
+		return;
+	}
+	close(pipep[0]);
+	close(pipec[1]);
+	char mymsg[] = "pong";
+	char *emsg = "exit";
+	while (1) {
+		char buf[32];
+		if (read(pipec[0], buf, sizeof(buf)) != 5)
+			err(-1, "chald read");
+		if (buf[0] == 'e' && strcmp(buf, emsg) == 0)
+			break;
+		if (write(pipep[1], mymsg, sizeof(mymsg)) != sizeof(mymsg))
+			err(-1, "chald write");
+	}
+	exit(0);
+}
+
+static void pingstop(void)
+{
+	char emsg[] = "exit";
+	if (write(pipec[1], emsg, sizeof(emsg)) != sizeof(emsg))
+		err(-1, "write exit");
+	char buf[64];
+	while (read(pipep[0], buf, sizeof(buf)) > 0)
+		;
+	int status;
+	if (wait(&status) == -1)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "chald failed");
+	close(pipec[1]);
+	close(pipep[0]);
+}
+
+static void *pingpong(void *_a)
+{
+	pthread_barrier_wait(&bar);
+
+	char mymsg[] = "pong";
+	long tot = 0;
+	while (!cease) {
+		char buf[32];
+		if (write(pipec[1], mymsg, sizeof(mymsg)) != sizeof(mymsg))
+			err(-1, "par write");
+		if (read(pipep[0], buf, sizeof(buf)) != 5)
+			err(-1, "par write");
+		tot++;
+	}
+	return (void *)tot;
+}
+
 struct {
 	char *name;
 	char sname;
@@ -529,6 +596,7 @@ struct {
 	{"seqcreate", 's', seqcreate, NULL, NULL},
 	{"openonly", 'o', openonly, NULL, NULL},
 	{"webserver", 'w', webclient, webstart, webstop},
+	{"pipe ping pong", 'P', pingpong, pingstart, pingstop},
 };
 
 const int nbms = sizeof(bms)/sizeof(bms[0]);
