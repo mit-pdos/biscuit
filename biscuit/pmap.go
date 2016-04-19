@@ -45,6 +45,8 @@ func (pmt *pmtracker_t) pmadd(pm *[512]int) {
 	pmt.pms = append(pmt.pms, pm)
 }
 
+// XXX this crap is going away
+
 // XXX right now, the caller has to use a vmseg to keep track of the seg and
 // manually insert it into the page map. it would be easier to only use vmseg:
 // populate vmseg with page information then install a vmseg into a taret page
@@ -223,6 +225,9 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 			mid.end = right.end
 			mid.pages = append(mid.pages, right.pages...)
 			mid.next = right.next
+			if vr.head == right {
+				vr.head = mid
+			}
 		} else {
 			mid.next = right
 		}
