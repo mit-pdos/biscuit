@@ -648,7 +648,6 @@ IH_IRQ(14,·Xirq14 )
 IH_IRQ(15,·Xirq15 )
 
 #define IA32_FS_BASE		$0xc0000100UL
-#define IA32_SYSENTER_ESP	$0x175UL
 #define IA32_SYSENTER_EIP	$0x176UL
 
 TEXT wrfsb(SB), NOSPLIT, $0-8
@@ -691,13 +690,6 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	ORQ	DX, AX
 	PUSHQ	AX
 
-	// save sysenter rsp
-	MOVQ	IA32_SYSENTER_ESP, CX
-	RDMSR
-	SHLQ	$32, DX
-	ORQ	DX, AX
-	PUSHQ	AX
-
 	MOVQ	SP, AX
 	PUSHQ	AX
 
@@ -718,14 +710,6 @@ TEXT ·_trapret(SB), NOSPLIT, $0-8
 	MOVQ	tf+0(FP), AX	// tf is not on the callers stack frame, but in
 				// threads[]
 	MOVQ	AX, SP
-
-	// restore sysenter esp
-	MOVQ	IA32_SYSENTER_ESP, CX
-	POPQ	AX
-	MOVQ	AX, DX
-	ANDQ	$((1 << 32) - 1), AX
-	SHRQ	$32, DX
-	WRMSR
 
 	// restore fsbase
 	MOVQ	IA32_FS_BASE, CX
@@ -866,18 +850,17 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 
 	JMP	alltraps(SB)
 
-#define TFREGS		17
-#define TF_SYSRSP	(8*0)
-#define TF_R13		(8*4)
-#define TF_R12		(8*5)
-#define TF_R8		(8*9)
-#define TF_RBP		(8*10)
-#define TF_RSI		(8*11)
-#define TF_RDI		(8*12)
-#define TF_RDX		(8*13)
-#define TF_RCX		(8*14)
-#define TF_RBX		(8*15)
-#define TF_RAX		(8*16)
+#define TFREGS		16
+#define TF_R13		(8*3)
+#define TF_R12		(8*4)
+#define TF_R8		(8*8)
+#define TF_RBP		(8*9)
+#define TF_RSI		(8*10)
+#define TF_RDI		(8*11)
+#define TF_RDX		(8*12)
+#define TF_RCX		(8*13)
+#define TF_RBX		(8*14)
+#define TF_RAX		(8*15)
 #define TF_RIP		(8*(TFREGS + 2))
 #define TF_RSP		(8*(TFREGS + 5))
 
@@ -887,34 +870,19 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	MOVQ	tf+0(FP), R9
 
+	MOVQ	0(GS), AX
+	MOVQ	SP, 0x20(AX)
+
 	// fastret or iret?
 	MOVB	fastret+8(FP), AX
 	CMPB	AX, $0
 	JNE	syscallreturn
-	// do full state restore, make sure the SP we return with is correct
-	MOVQ	SP, TF_SYSRSP(R9)
+	// do full state restore
 	PUSHQ	R9
 	CALL	·_trapret(SB)
 	INT	$3
 
 syscallreturn:
-	// set SP MSRs manually
-	PUSHQ	$0
-	PUSHQ	IA32_SYSENTER_ESP
-	CALL	·Rdmsr(SB)
-	POPQ	AX
-	POPQ	AX
-	CMPQ	SP, AX
-	JEQ	gut
-
-	MOVQ	SP, AX
-	PUSHQ	AX
-	PUSHQ	IA32_SYSENTER_ESP
-	CALL	·Wrmsr(SB)
-	POPQ	AX
-	POPQ	AX
-
-gut:
 	MOVQ	TF_RAX(R9), AX
 	MOVQ	TF_RSP(R9), CX
 	MOVQ	TF_RIP(R9), DX
@@ -937,6 +905,9 @@ gut:
 // are hand-coded.
 //_sysentry:
 TEXT ·_sysentry(SB), NOSPLIT, $0-0
+	MOVQ	0(GS), SP
+	MOVQ	0x20(SP), SP
+
 	// save user state in fake trapframe
 	MOVQ	0x20(SP), R9
 	MOVQ	R10, TF_RSP(R9)
