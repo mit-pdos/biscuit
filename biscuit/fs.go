@@ -562,11 +562,11 @@ func (fo *fsfops_t) lseek(off, whence int) int {
 
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
-func (fo *fsfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
+func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, int) {
 	if !fo.priv.ilock_opened() {
 		return nil, -EBADF
 	}
-	mmi, err := fo.priv.do_mmapi(offset)
+	mmi, err := fo.priv.do_mmapi(offset, len)
 	fo.priv.iunlock()
 	return mmi, err
 }
@@ -656,7 +656,7 @@ func (df *devfops_t) fstat(st *stat_t) int {
 	panic("no imp")
 }
 
-func (df *devfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
+func (df *devfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
 	df._sane()
 	return nil, -ENODEV
 }
@@ -1380,12 +1380,12 @@ func (idm *imemnode_t) do_stat(st *stat_t) int {
 	return 0
 }
 
-func (idm *imemnode_t) do_mmapi(off int) ([]mmapinfo_t, int) {
+func (idm *imemnode_t) do_mmapi(off, len int) ([]mmapinfo_t, int) {
 	idm._locked()
 	if idm.icache.itype != I_FILE && idm.icache.itype != I_DIR {
 		panic("bad mmapinfo")
 	}
-	return idm.immapinfo(off)
+	return idm.immapinfo(off, len)
 }
 
 func (idm *imemnode_t) do_chkempty() int {
@@ -2069,12 +2069,18 @@ func (idm *imemnode_t) idirempty() bool {
 	return empty
 }
 
-func (idm *imemnode_t) immapinfo(offset int) ([]mmapinfo_t, int) {
+func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, int) {
 	isz := idm.icache.size
-	pgc := roundup(isz, PGSIZE) / PGSIZE
+	if len == -1 || offset + len > isz {
+		len = isz - offset
+	}
+	if offset > isz || offset + len > isz || len < 0 {
+		panic("bad offset")
+	}
+	pgc := roundup(len, PGSIZE) / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
-	for i := 0; i < isz; i += PGSIZE {
-		pg, phys := idm.pgcache.pgraw(i)
+	for i := 0; i < len; i += PGSIZE {
+		pg, phys := idm.pgcache.pgraw(offset + i)
 		pgn := i / PGSIZE
 		ret[pgn].pg = pg
 		ret[pgn].phys = phys

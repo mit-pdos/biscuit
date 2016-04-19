@@ -83,7 +83,7 @@ func _sysentry()
 func _trapret(*[TFSIZE]uintptr)
 func trapret(*[TFSIZE]uintptr, uintptr)
 func _userint()
-func _Userrun(*[24]int, bool) (int, int)
+func _Userrun(*[TFSIZE]int, bool) (int, int)
 func Wrmsr(int, int)
 
 // we have to carefully write go code that may be executed early (during boot)
@@ -100,6 +100,7 @@ type cpu_t struct {
 	mythread	*thread_t
 	rsp		uintptr
 	num		uint
+	sysrsp		uintptr
 	pmap		*[512]int
 	pms		[]*[512]int
 	//pid		uintptr
@@ -127,6 +128,7 @@ type prof_t struct {
 // near front
 type thread_t struct {
 	tf		[TFSIZE]uintptr
+	_pad		int
 	fx		[FXREGS]uintptr
 	user		tuser_t
 	sigtf		[TFSIZE]uintptr
@@ -140,24 +142,23 @@ type thread_t struct {
 	sleepret	int
 	futaddr		uintptr
 	p_pmap		uintptr
-	_pad		int
+	//_pad2		int
 }
 
 // XXX fix these misleading names
 const(
-  TFSIZE       = 24
+  TFSIZE       = 23
   FXREGS       = 64
-  TFREGS       = 17
-  TF_SYSRSP    = 0
-  TF_FSBASE    = 1
-  TF_R8        = 9
-  TF_RBP       = 10
-  TF_RSI       = 11
-  TF_RDI       = 12
-  TF_RDX       = 13
-  TF_RCX       = 14
-  TF_RBX       = 15
-  TF_RAX       = 16
+  TFREGS       = 16
+  TF_FSBASE    = 0
+  TF_R8        = 8
+  TF_RBP       = 9
+  TF_RSI       = 10
+  TF_RDI       = 11
+  TF_RDX       = 12
+  TF_RCX       = 13
+  TF_RBX       = 14
+  TF_RAX       = 15
   TF_TRAPNO    = TFREGS
   TF_RIP       = TFREGS + 2
   TF_CS        = TFREGS + 3
@@ -1588,7 +1589,7 @@ func sysc_setup(myrsp uintptr) {
 	Wrmsr(sysenter_eip, int(sysentryaddr))
 
 	sysenter_esp := 0x175
-	Wrmsr(sysenter_esp, int(myrsp))
+	Wrmsr(sysenter_esp, 0)
 }
 
 var tlbshoot_wait uintptr
@@ -1805,7 +1806,7 @@ func trap(tf *[TFSIZE]uintptr) {
 			utf := ct.user.tf
 			*utf = *tf
 			ct.tf[TF_RIP] = _userintaddr
-			ct.tf[TF_RSP] = utf[TF_SYSRSP]
+			ct.tf[TF_RSP] = Gscpu().sysrsp
 			ct.tf[TF_RAX] = trapno
 			ct.tf[TF_RBX] = Rcr2()
 			// XXXPANIC
