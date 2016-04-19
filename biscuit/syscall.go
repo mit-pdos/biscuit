@@ -1120,7 +1120,7 @@ func (of *pipefops_t) lseek(int, int) int {
 	return -ESPIPE
 }
 
-func (of *pipefops_t) mmapi(int) ([]mmapinfo_t, int) {
+func (of *pipefops_t) mmapi(int, int) ([]mmapinfo_t, int) {
 	return nil, -EINVAL
 }
 
@@ -1649,7 +1649,7 @@ func (sf *sudfops_t) fstat(s *stat_t) int {
 	panic("no imp")
 }
 
-func (sf *sudfops_t) mmapi(offset int) ([]mmapinfo_t, int) {
+func (sf *sudfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
@@ -2046,7 +2046,7 @@ func (sus *susfops_t) lseek(int, int) int {
 	return -ESPIPE
 }
 
-func (sus *susfops_t) mmapi(int) ([]mmapinfo_t, int) {
+func (sus *susfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
@@ -2498,7 +2498,7 @@ func (sf *suslfops_t) lseek(int, int) int {
 	return -ESPIPE
 }
 
-func (sf *suslfops_t) mmapi(int) ([]mmapinfo_t, int) {
+func (sf *suslfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
 	return nil, -ENODEV
 }
 
@@ -3923,7 +3923,7 @@ func segload(proc *proc_t, hdr *elf_phdr, mmapi []mmapinfo_t) {
 
 	var vastart int
 	var did int
-	// this segment's virtual address may start on the same page as the
+	// the bss segment's virtual address may start on the same page as the
 	// previous segment. if that is the case, we may not be able to avoid
 	// copying.
 	if _, _, ok := proc.vmregion.contain(hdr.vaddr); ok {
@@ -3992,7 +3992,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 			tlssize = roundup(hdr.memsz, 8)
 			tlscopylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
-			mmapi, err := f.fops.mmapi(0)
+			mmapi, err := f.fops.mmapi(0, -1)
 			if err != 0 {
 				panic("must succeed")
 			}
