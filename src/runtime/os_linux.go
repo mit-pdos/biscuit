@@ -49,6 +49,7 @@ func fxrstor(*[FXREGS]uintptr)
 func fxsave(*[FXREGS]uintptr)
 func _Gscpu() *cpu_t
 func gs_null()
+func gs_set(*cpu_t)
 func htpause()
 func invlpg(uintptr)
 func Inb(uint16) uint
@@ -83,6 +84,7 @@ func _sysentry()
 func _trapret(*[TFSIZE]uintptr)
 func trapret(*[TFSIZE]uintptr, uintptr)
 func _userint()
+func _userret()
 func _Userrun(*[TFSIZE]int, bool) (int, int)
 func Wrmsr(int, int)
 
@@ -101,6 +103,8 @@ type cpu_t struct {
 	rsp		uintptr
 	num		uint
 	sysrsp		uintptr
+	shadowcr3	uintptr
+	shadowfs	uintptr
 	pmap		*[512]int
 	pms		[]*[512]int
 	//pid		uintptr
@@ -128,7 +132,7 @@ type prof_t struct {
 // near front
 type thread_t struct {
 	tf		[TFSIZE]uintptr
-	_pad		int
+	//_pad		int
 	fx		[FXREGS]uintptr
 	user		tuser_t
 	sigtf		[TFSIZE]uintptr
@@ -142,23 +146,24 @@ type thread_t struct {
 	sleepret	int
 	futaddr		uintptr
 	p_pmap		uintptr
-	//_pad2		int
+	_pad2		int
 }
 
 // XXX fix these misleading names
 const(
-  TFSIZE       = 23
+  TFSIZE       = 24
   FXREGS       = 64
-  TFREGS       = 16
-  TF_FSBASE    = 0
-  TF_R8        = 8
-  TF_RBP       = 9
-  TF_RSI       = 10
-  TF_RDI       = 11
-  TF_RDX       = 12
-  TF_RCX       = 13
-  TF_RBX       = 14
-  TF_RAX       = 15
+  TFREGS       = 17
+  TF_GSBASE    = 0
+  TF_FSBASE    = 1
+  TF_R8        = 9
+  TF_RBP       = 10
+  TF_RSI       = 11
+  TF_RDI       = 12
+  TF_RDX       = 13
+  TF_RCX       = 14
+  TF_RBX       = 15
+  TF_RAX       = 16
   TF_TRAPNO    = TFREGS
   TF_RIP       = TFREGS + 2
   TF_CS        = TFREGS + 3
@@ -184,11 +189,12 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	// while other cpus execute user programs.
 	//entersyscall(0)
 	fl := Pushcli()
-	cpu := Gscpu()
+	cpu := _Gscpu()
 	ct := cpu.mythread
 
-	if Rcr3() != p_pmap {
+	if cpu.shadowcr3 != p_pmap {
 		Lcr3(p_pmap)
+		cpu.shadowcr3 = p_pmap
 	}
 	// set shadow pointers for user pmap so it isn't free'd out from under
 	// us if the process terminates soon.
@@ -202,14 +208,11 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
-	// XXX to avoid {rd,wr}msr on int/syscall context switch, we can move
-	// each cpu's cpu_t into it's M's tls memory, thus freeing up %gs. %gs
-	// would then be storage for %fs of the opposite privilege level (%gs
-	// holds kernels %fs in usermode, user's %fs is kernel mode). then we
-	// can use swapgs, like other kernels.
-	ia32_fs_base := 0xc0000100
-	kfsbase := Rdmsr(ia32_fs_base)
-	Wrmsr(ia32_fs_base, tf[TF_FSBASE])
+	if cpu.shadowfs != uintptr(tf[TF_FSBASE]) {
+		ia32_fs_base := 0xc0000100
+		Wrmsr(ia32_fs_base, tf[TF_FSBASE])
+		cpu.shadowfs = uintptr(tf[TF_FSBASE])
+	}
 
 	// we only save/restore SSE registers on cpu exception/interrupt, not
 	// during syscall exit/return. this is OK since sys5ABI defines the SSE
@@ -224,7 +227,6 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 
 	intno, aux := _Userrun(tf, fastret)
 
-	Wrmsr(ia32_fs_base, kfsbase)
 	ct.user.tf = nil
 	ct.user.fxbuf = nil
 	Popcli(fl)
@@ -880,8 +882,9 @@ func seg_setup() {
 	// descriptor cache, the writes to the MSRs are thrown out (presumably
 	// because the caches are thought to be invalid).
 	fs_null()
-	ia32_fs_base := 0xc0000100
-	Wrmsr(ia32_fs_base, tlsaddr)
+	gs_null()
+	ia32_gs_base := 0xc0000101
+	Wrmsr(ia32_gs_base, tlsaddr)
 }
 
 // interrupt entries, defined in runtime/asm_amd64.s
@@ -1555,23 +1558,12 @@ func Ap_setup(cpunum uint) {
 		pancake("cpu id conflict", uintptr(mycpu.num))
 	}
 	fs_null()
+	gs_null()
 	gs_set(mycpu)
 	Gscpu().num = cpunum
 	Gscpu().mythread = nil
 
 	Popcli(fl)
-}
-
-//go:nosplit
-func gs_set(c *cpu_t) {
-	// we must set fs/gs at least once before we use the MSRs to change
-	// their base address. the MSRs write directly to hidden segment
-	// descriptor cache, and if we don't explicitly fill the segment
-	// descriptor cache, the writes to the MSRs are thrown out (presumably
-	// because the caches are thought to be invalid).
-	gs_null()
-	ia32_gs_base := 0xc0000101
-	Wrmsr(ia32_gs_base, int(uintptr(unsafe.Pointer(c))))
 }
 
 //go:nosplit
@@ -1771,13 +1763,15 @@ func trap(tf *[TFSIZE]uintptr) {
 	}
 
 	Lcr3(p_kpmap)
+	cpu := Gscpu()
+	cpu.shadowcr3 = p_kpmap
 
 	// CPU exceptions in kernel mode are fatal errors
 	if trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0 {
 		kernel_fault(tf)
 	}
 
-	ct := Gscpu().mythread
+	ct := cpu.mythread
 
 	if rflags() & TF_FL_IF != 0 {
 		pancake("ints enabled in trap", 0)
@@ -1806,7 +1800,7 @@ func trap(tf *[TFSIZE]uintptr) {
 			utf := ct.user.tf
 			*utf = *tf
 			ct.tf[TF_RIP] = _userintaddr
-			ct.tf[TF_RSP] = Gscpu().sysrsp
+			ct.tf[TF_RSP] = cpu.sysrsp
 			ct.tf[TF_RAX] = trapno
 			ct.tf[TF_RBX] = Rcr2()
 			// XXXPANIC
@@ -1853,7 +1847,7 @@ func trap(tf *[TFSIZE]uintptr) {
 		}
 		if !yielding {
 			lap_eoi()
-			if Gscpu().num == 0 {
+			if cpu.num == 0 {
 				wakeup()
 				proftick()
 			}
@@ -2467,7 +2461,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	mt.tf[TF_RSP] = rsp
 	mt.tf[TF_RIP] = cloneaddr
 	mt.tf[TF_RFLAGS] = rflags() | TF_FL_IF
-	mt.tf[TF_FSBASE] = uintptr(unsafe.Pointer(&mp.tls[0])) + 8
+	mt.tf[TF_GSBASE] = uintptr(unsafe.Pointer(&mp.tls[0])) + 8
 
 	// avoid write barrier for mp here since we have interrupts clear. Ms
 	// are always reachable from allm anyway. see comments in runtime2.go

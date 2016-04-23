@@ -10,19 +10,19 @@ import "time"
 import "unsafe"
 
 const(
-	TFSIZE		= 23
-	TFREGS		= 16
-	TF_FSBASE	= 0
-	TF_R13		= 3
-	TF_R12		= 4
-	TF_R8		= 8
-	TF_RBP		= 9
-	TF_RSI		= 10
-	TF_RDI		= 11
-	TF_RDX		= 12
-	TF_RCX		= 13
-	TF_RBX		= 14
-	TF_RAX		= 15
+	TFSIZE		= 24
+	TFREGS		= 17
+	TF_FSBASE	= 1
+	TF_R13		= 4
+	TF_R12		= 5
+	TF_R8		= 9
+	TF_RBP		= 10
+	TF_RSI		= 11
+	TF_RDI		= 12
+	TF_RDX		= 13
+	TF_RCX		= 14
+	TF_RBX		= 15
+	TF_RAX		= 16
 	TF_TRAP		= TFREGS
 	TF_RIP		= TFREGS + 2
 	TF_CS		= TFREGS + 3
@@ -214,16 +214,6 @@ const(
 const USERMIN	int = VUSER << 39
 
 func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
-
-	p.threadi.Lock()
-	talive, ok := p.threadi.alive[tid]
-	if !ok {
-		panic("bad thread")
-	}
-	if !talive {
-		panic("thread not alive")
-	}
-	p.threadi.Unlock()
 
 	if p.doomed {
 		// this process has been killed
@@ -2300,6 +2290,7 @@ type susl_t struct {
 	pollers		pollers_t
 	opencount	int
 	mysid		int
+	readyconnectors	int
 }
 
 type _suslblog_t struct {
@@ -2403,6 +2394,9 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 	} else {
 		b.acc = mypipe
 	}
+	if getacceptor {
+		susl.readyconnectors++
+	}
 	b.cond.Wait()
 	err := b.err
 	if getacceptor {
@@ -2411,6 +2405,9 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 		theirs = b.conn
 	}
 	susl._slotreset(b)
+	if getacceptor {
+		susl.readyconnectors--
+	}
 	susl.Unlock()
 	return theirs, err
 }
@@ -2474,7 +2471,8 @@ func (susl *susl_t) susl_poll(pm pollmsg_t) ready_t {
 		return 0
 	}
 	if pm.events & R_READ != 0 {
-		if _, found := susl._findwaiter(false); found {
+		//if _, found := susl._findwaiter(false); found {
+		if susl.readyconnectors > 0 {
 			susl.Unlock()
 			return R_READ
 		}

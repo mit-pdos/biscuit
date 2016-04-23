@@ -104,10 +104,11 @@ $(GOBIN):
 		false
 
 main.gobin: chentry $(GOBIN) bins.go $(KSRC)
-	$(GOBIN) build -o $@ bins.go $(KSRC)
-	ADDR=0x`nm main.gobin |grep _rt0_hack |cut -f1 -d' '`; \
+	$(GOBIN) build -o _$@ bins.go $(KSRC)
+	ADDR=0x`nm _$@ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
-		else ./chentry $@ $$ADDR; fi \
+		else ./chentry _$@ $$ADDR; fi
+	./rewrite.py _$@ $@
 
 # the user/% prereq is built by the CPROGS target
 $(FSCPROGS): fsdir/bin/% : user/c/%
@@ -173,7 +174,7 @@ clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
 	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
 	    user/c/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
-	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS)
+	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) _main.gobin
 	rm -rf user/cxx/sysroot
 
 qemu: gqemu

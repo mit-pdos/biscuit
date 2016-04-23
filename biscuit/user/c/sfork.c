@@ -1,3 +1,6 @@
+// gcc -static -O3 -o sfork sfork.c -Wl,--whole-archive,-lpthread,--no-whole-archive
+// openbsd: gcc -nopie -fno-pic -static -O3 -o sfork sfork.c -Wl,--whole-archive,-lpthread,--no-whole-archive
+
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -5,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -315,14 +319,15 @@ void *forkexec(void *idp)
 		if (pid < 0)
 			err(-1, "fork");
 		if (!pid) {
-			char * const args[] = {"/bin/true", NULL};
+			char * const args[] = {"./true", NULL};
 			execv(args[0], args);
-			errx(-1, "execv");
+			err(-1, "execv");
 		}
 		int status;
 		wait(&status);
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-			errx(-1, "child failed: %d", status);
+		int code = WEXITSTATUS(status);
+		if (!WIFEXITED(status) || code != 0)
+			errx(-1, "child failed: %d", code);
 		total++;
 	}
 	return (void *)total;
@@ -580,6 +585,53 @@ static void *pingpong(void *_a)
 	return (void *)tot;
 }
 
+static void *_poll(const int nfds)
+{
+	if (nfds <= 0)
+		errx(-1, "bad nfds");
+
+	int fds[nfds];
+	int i;
+	for (i = 0; i < nfds; i++) {
+		char buf[64];
+		snprintf(buf, sizeof(buf), "/tmp/.poll%d", i);
+		unlink(buf);
+		if ((fds[i] = open(buf, O_CREAT | O_EXCL | O_RDWR,
+		    0600)) == -1)
+			err(-1, "creat");
+	}
+
+	struct pollfd pfds[nfds];
+	for (i = 0; i < nfds; i++) {
+		pfds[i].fd = fds[i];
+		if (i % 2)
+			pfds[i].events = POLLIN;
+		else
+			pfds[i].events = POLLOUT;
+	}
+
+	pthread_barrier_wait(&bar);
+	long tot = 0;
+	while (!cease) {
+		if (poll(pfds, nfds, 0) == -1)
+			err(-1, "poll");
+		tot++;
+	}
+	for (i = 0; i < nfds; i++)
+		close(fds[i]);
+	return (void *)tot;
+}
+
+static void *poll50(void *_a)
+{
+	return _poll(50);
+}
+
+static void *poll1(void *_a)
+{
+	return _poll(1);
+}
+
 struct {
 	char *name;
 	char sname;
@@ -597,6 +649,9 @@ struct {
 	{"openonly", 'o', openonly, NULL, NULL},
 	{"webserver", 'w', webclient, webstart, webstop},
 	{"pipe ping pong", 'P', pingpong, pingstart, pingstop},
+	{"mmap/munmap", 'm', mapper, NULL, NULL},
+	{"poll50", '5', poll50, NULL, NULL},
+	{"poll1", '1', poll1, NULL, NULL},
 };
 
 const int nbms = sizeof(bms)/sizeof(bms[0]);
