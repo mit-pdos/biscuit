@@ -728,6 +728,7 @@ IH_IRQ(14,·Xirq14 )
 IH_IRQ(15,·Xirq15 )
 
 #define IA32_FS_BASE		$0xc0000100
+#define IA32_GS_BASE		$0xc0000101
 #define IA32_SYSENTER_EIP	$0x176
 
 TEXT wrfsb(SB), NOSPLIT, $0-8
@@ -770,6 +771,13 @@ TEXT alltraps(SB), NOSPLIT, $0-0
 	ORQ	DX, AX
 	PUSHQ	AX
 
+	// save gsbase
+	MOVQ	IA32_GS_BASE, CX
+	RDMSR
+	SHLQ	$32, DX
+	ORQ	DX, AX
+	PUSHQ	AX
+
 	MOVQ	SP, AX
 	PUSHQ	AX
 
@@ -791,13 +799,50 @@ TEXT ·_trapret(SB), NOSPLIT, $0-8
 				// threads[]
 	MOVQ	AX, SP
 
-	// restore fsbase
-	MOVQ	IA32_FS_BASE, CX
+	// restore gsbase
+	MOVQ	IA32_GS_BASE, CX
 	POPQ	AX
 	MOVQ	AX, DX
 	ANDQ	$((1 << 32) - 1), AX
 	SHRQ	$32, DX
 	WRMSR
+
+	// skip fsbase
+	POPQ	CX
+
+	POPQ	R15
+	POPQ	R14
+	POPQ	R13
+	POPQ	R12
+	POPQ	R11
+	POPQ	R10
+	POPQ	R9
+	POPQ	R8
+	POPQ	BP
+	POPQ	SI
+	POPQ	DI
+	POPQ	DX
+	POPQ	CX
+	POPQ	BX
+	POPQ	AX
+	// skip trapno and error code
+	ADDQ	$16, SP
+
+	// iretq
+	BYTE	$0x48
+	BYTE	$0xcf
+
+// identical to _trapret, but doesn't load gsbase from the trapframe
+TEXT ·_userret(SB), NOSPLIT, $0-8
+	MOVQ	tf+0(FP), AX	// tf is not on the callers stack frame, but in
+				// threads[]
+	MOVQ	AX, SP
+
+	// skip gsbase
+	POPQ	AX
+
+	// skip fsbase
+	POPQ	CX
 
 	POPQ	R15
 	POPQ	R14
@@ -831,7 +876,10 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 	CLI
 
 	// do hardware trap frame; get CPU's interrupt stack
-	MOVQ	16(GS), DX
+	SWAPGS
+	MOVQ	0(GS), DX
+	SWAPGS
+	MOVQ	16(DX), DX
 
 	// save rflags first
 	MOVQ	AX, -24(DX)
@@ -880,17 +928,17 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 
 	JMP	alltraps(SB)
 
-#define TFREGS		16
-#define TF_R13		(8*3)
-#define TF_R12		(8*4)
-#define TF_R8		(8*8)
-#define TF_RBP		(8*9)
-#define TF_RSI		(8*10)
-#define TF_RDI		(8*11)
-#define TF_RDX		(8*12)
-#define TF_RCX		(8*13)
-#define TF_RBX		(8*14)
-#define TF_RAX		(8*15)
+#define TFREGS		17
+#define TF_R13		(8*4)
+#define TF_R12		(8*5)
+#define TF_R8		(8*9)
+#define TF_RBP		(8*10)
+#define TF_RSI		(8*11)
+#define TF_RDI		(8*12)
+#define TF_RDX		(8*13)
+#define TF_RCX		(8*14)
+#define TF_RBX		(8*15)
+#define TF_RAX		(8*16)
 #define TF_RIP		(8*(TFREGS + 2))
 #define TF_RSP		(8*(TFREGS + 5))
 
@@ -900,7 +948,9 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	MOVQ	tf+0(FP), R9
 
+	SWAPGS
 	MOVQ	0(GS), AX
+	SWAPGS
 	MOVQ	SP, 0x20(AX)
 
 	// fastret or iret?
@@ -909,7 +959,7 @@ TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	JNE	syscallreturn
 	// do full state restore
 	PUSHQ	R9
-	CALL	·_trapret(SB)
+	CALL	·_userret(SB)
 	INT	$3
 
 syscallreturn:
@@ -935,7 +985,9 @@ syscallreturn:
 // are hand-coded.
 //_sysentry:
 TEXT ·_sysentry(SB), NOSPLIT, $0-0
+	SWAPGS
 	MOVQ	0(GS), SP
+	SWAPGS
 	MOVQ	0x20(SP), SP
 
 	// save user state in fake trapframe
@@ -976,6 +1028,18 @@ TEXT ·gs_null(SB), NOSPLIT, $8-0
 	POPQ	GS
 	RET
 
+// called exactly once by each CPU
+TEXT ·gs_set(SB), NOSPLIT, $0-16
+	SWAPGS
+	MOVQ	IA32_GS_BASE, CX
+	MOVQ	cpu+0(FP), AX
+	MOVQ	AX, DX
+	ANDQ	$((1 << 32) - 1), AX
+	SHRQ	$32, DX
+	WRMSR
+	SWAPGS
+	RET
+
 TEXT ·fs_null(SB), NOSPLIT, $8-0
 	XORQ	AX, AX
 	PUSHQ	AX
@@ -983,8 +1047,10 @@ TEXT ·fs_null(SB), NOSPLIT, $8-0
 	RET
 
 TEXT ·_Gscpu(SB), NOSPLIT, $0-8
+	SWAPGS
 	MOVQ	0(GS), AX
 	MOVQ	AX, ret+0(FP)
+	SWAPGS
 	RET
 
 /*

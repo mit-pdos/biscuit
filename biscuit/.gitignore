@@ -14,6 +14,7 @@
 /go.img
 /net.img
 /main.gobin
+/_main.gobin
 /mpentry.elf
 /mpentry.bin
 /user/c/hello

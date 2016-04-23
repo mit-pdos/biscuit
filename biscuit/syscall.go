@@ -10,19 +10,19 @@ import "time"
 import "unsafe"
 
 const(
-	TFSIZE		= 23
-	TFREGS		= 16
-	TF_FSBASE	= 0
-	TF_R13		= 3
-	TF_R12		= 4
-	TF_R8		= 8
-	TF_RBP		= 9
-	TF_RSI		= 10
-	TF_RDI		= 11
-	TF_RDX		= 12
-	TF_RCX		= 13
-	TF_RBX		= 14
-	TF_RAX		= 15
+	TFSIZE		= 24
+	TFREGS		= 17
+	TF_FSBASE	= 1
+	TF_R13		= 4
+	TF_R12		= 5
+	TF_R8		= 9
+	TF_RBP		= 10
+	TF_RSI		= 11
+	TF_RDI		= 12
+	TF_RDX		= 13
+	TF_RCX		= 14
+	TF_RBX		= 15
+	TF_RAX		= 16
 	TF_TRAP		= TFREGS
 	TF_RIP		= TFREGS + 2
 	TF_CS		= TFREGS + 3
