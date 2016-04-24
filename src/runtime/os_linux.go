@@ -105,8 +105,8 @@ type cpu_t struct {
 	sysrsp		uintptr
 	shadowcr3	uintptr
 	shadowfs	uintptr
-	pmap		*[512]int
-	pms		[]*[512]int
+	//pmap		*[512]int
+	//pms		[]*[512]int
 	//pid		uintptr
 }
 
@@ -203,8 +203,8 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	//cpu.pid = uintptr(pid)
 	// avoid write barriers since we are uninterruptible. the caller must
 	// also have these references anyway, so skipping them is ok.
-	*(*uintptr)(unsafe.Pointer(&cpu.pmap)) = uintptr(unsafe.Pointer(pmap))
-	*(*[3]uintptr)(unsafe.Pointer(&cpu.pms)) = *(*[3]uintptr)(unsafe.Pointer(&pms))
+	//*(*uintptr)(unsafe.Pointer(&cpu.pmap)) = uintptr(unsafe.Pointer(pmap))
+	//*(*[3]uintptr)(unsafe.Pointer(&cpu.pms)) = *(*[3]uintptr)(unsafe.Pointer(&pms))
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
@@ -237,9 +237,9 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 // caller must have interrupts cleared
 //go:nosplit
 func shadow_clear() {
-	cpu := Gscpu()
-	cpu.pmap = nil
-	cpu.pms = nil
+	//cpu := Gscpu()
+	//cpu.pmap = nil
+	//cpu.pms = nil
 }
 
 type nmiprof_t struct {
