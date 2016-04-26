@@ -1121,8 +1121,11 @@ func _scanadd(pg *[512]int, depth int, l *[]int) {
 	}
 }
 
+var fpool = sync.Pool{New: func() interface{} { return make([]int, 0, 10) }}
+
 func vmfree(p_pmap int) int {
-	pgs := make([]int, 0, 10)
+	//pgs := make([]int, 0, 10)
+	pgs := fpool.Get().([]int)
 	pgs = append(pgs, p_pmap)
 	_scanadd(dmap(p_pmap), 4, &pgs)
 	if runtime.Rcr3() == uintptr(p_pmap) {
@@ -1131,6 +1134,7 @@ func vmfree(p_pmap int) int {
 	for _, p_pg := range pgs {
 		refdown(uintptr(p_pg))
 	}
+	fpool.Put(pgs[0:0])
 	return len(pgs)
 }
 
