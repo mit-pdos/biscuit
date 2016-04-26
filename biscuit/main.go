@@ -857,8 +857,8 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 		ns.start = ph.start
 		ns.end = ph.end
 		ns.startn = ph.startn
-		ns.pages = make([]*[512]int, len(ph.pages))
-		copy(ns.pages, ph.pages)
+		//ns.pages = make([]*[512]int, len(ph.pages))
+		//copy(ns.pages, ph.pages)
 
 		// fork all ptes for this vmseg
 		//if ptefork(child.pmap, parent.pmap, child.pmpages, ph.start,
@@ -1207,36 +1207,47 @@ func (p *proc_t) lockassert_pmap() {
 func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
 	p.lockassert_pmap()
 	voff := va & PGOFFSET
-	seg, _, ok := p.vmregion.contain(va)
-	if !ok {
+	//seg, _, ok := p.vmregion.contain(va)
+	//if !ok {
+	//	return nil, false
+	//}
+	//pg, ok := seg.gettrack(va)
+	//if !ok {
+	//	return nil, false
+	//}
+	pte := pmap_lookup(p.pmap, va)
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return nil, false
 	}
-	pg, ok := seg.gettrack(va)
-	if !ok {
-		return nil, false
-	}
+	pg := dmap(*pte & PTE_ADDR)
 	bpg := (*[PGSIZE]uint8)(unsafe.Pointer(pg))
 	return bpg[voff:], true
 }
 
 func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
-	return p.userdmap8_inner(va)
+	ret, ok := p.userdmap8_inner(va)
+	p.Unlock_pmap()
+	return ret, ok
 }
 
 // caller must have the vm lock
 func (p *proc_t) userdmap_inner(va int) (*[512]int, bool) {
 	p.lockassert_pmap()
-	seg, _, ok := p.vmregion.contain(va)
-	if !ok {
+	//seg, _, ok := p.vmregion.contain(va)
+	//if !ok {
+	//	return nil, false
+	//}
+	//pg, ok := seg.gettrack(va)
+	//if !ok {
+	//	return nil, false
+	//}
+	pte := pmap_lookup(p.pmap, va)
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return nil, false
 	}
-	pg, ok := seg.gettrack(va)
-	if !ok {
-		return nil, false
-	}
-	return pg, ok
+	pg := dmap(*pte & PTE_ADDR)
+	return pg, true
 }
 
 // like userdmap8, but returns a pointer to the page

@@ -3323,14 +3323,19 @@ func futex_ensure(uniq uintptr) futex_t {
 func _uva2kva(proc *proc_t, va uintptr) (uintptr, *uint32, int) {
 	proc.lockassert_pmap()
 
-	seg, _, ok := proc.vmregion.contain(int(va))
-	if !ok {
+	pte := pmap_lookup(proc.pmap, int(va))
+	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return 0, nil, -EFAULT
 	}
-	pgva, ok := seg.gettrack(int(va))
-	if !ok {
-		return 0, nil, -EFAULT
-	}
+	pgva := dmap(*pte & PTE_ADDR)
+	//seg, _, ok := proc.vmregion.contain(int(va))
+	//if !ok {
+	//	return 0, nil, -EFAULT
+	//}
+	//pgva, ok := seg.gettrack(int(va))
+	//if !ok {
+	//	return 0, nil, -EFAULT
+	//}
 	pgoff := uintptr(va) & uintptr(PGOFFSET)
 	uniq := uintptr(unsafe.Pointer(pgva)) + pgoff
 	return uniq, (*uint32)(unsafe.Pointer(uniq)), 0

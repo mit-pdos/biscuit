@@ -58,7 +58,7 @@ type vmseg_t struct {
 	end	int
 	startn	int
 	next	*vmseg_t
-	pages	[]*[512]int
+	//pages	[]*[512]int
 }
 
 func (vs *vmseg_t) seg_init(startva, len int) {
@@ -68,27 +68,28 @@ func (vs *vmseg_t) seg_init(startva, len int) {
 	vs.startn = vs.start >> PGSHIFT
 	l := vs.end - vs.start
 	l /= PGSIZE
-	vs.pages = make([]*[512]int, l)
+	//vs.pages = make([]*[512]int, l)
 }
 
 func (vs *vmseg_t) track(va int, pg *[512]int) bool {
-	slot := (va >> PGSHIFT) - vs.startn
-	old := vs.pages[slot]
-	vs.pages[slot] = pg
-	return old != nil
+	//slot := (va >> PGSHIFT) - vs.startn
+	//old := vs.pages[slot]
+	//vs.pages[slot] = pg
+	//return old != nil
+	return false
 }
 
-func (vs *vmseg_t) gettrack(va int) (*[512]int, bool) {
-	if va < vs.start || va >= vs.end {
-		panic("va outside seg")
-	}
-	slot := (va >> PGSHIFT) - vs.startn
-	ret := vs.pages[slot]
-	if ret == nil {
-		return nil, false
-	}
-	return ret, true
-}
+//func (vs *vmseg_t) gettrack(va int) (*[512]int, bool) {
+//	if va < vs.start || va >= vs.end {
+//		panic("va outside seg")
+//	}
+//	slot := (va >> PGSHIFT) - vs.startn
+//	ret := vs.pages[slot]
+//	if ret == nil {
+//		return nil, false
+//	}
+//	return ret, true
+//}
 
 type vmregion_t struct {
 	head	*vmseg_t
@@ -97,7 +98,8 @@ type vmregion_t struct {
 func (vr *vmregion_t) pglen() int {
 	ret := 0
 	for h := vr.head; h != nil; h = h.next {
-		ret += len(h.pages)
+		//ret += len(h.pages)
+		ret += (h.end - h.start) >> uint(PGSHIFT)
 	}
 	return ret
 }
@@ -185,27 +187,27 @@ func (vr *vmregion_t) contain(va int) (*vmseg_t, *vmseg_t, bool) {
 
 func (vr *vmregion_t) _split(old *vmseg_t, rstart, rend int) {
 	if old.start == rstart {
-		l := (rend - old.start) / PGSIZE
+		//l := (rend - old.start) / PGSIZE
 		old.start = rend
 		old.startn = old.start >> PGSHIFT
-		old.pages = old.pages[l:]
+		//old.pages = old.pages[l:]
 	} else if old.end == rend {
-		l := (rstart - old.start) / PGSIZE
+		//l := (rstart - old.start) / PGSIZE
 		old.end = rstart
-		old.pages = old.pages[:l]
+		//old.pages = old.pages[:l]
 	} else {
 		ns := &vmseg_t{}
 		ns.start = rend
 		ns.startn = ns.start >> PGSHIFT
 		ns.end = old.end
 		ns.next = old.next
-		nl := (rend - old.start) / PGSIZE
-		ns.pages = old.pages[nl:]
+		//nl := (rend - old.start) / PGSIZE
+		//ns.pages = old.pages[nl:]
 
 		old.end = rstart
 		old.next = ns
-		ol := (rstart - old.start) / PGSIZE
-		old.pages = old.pages[:ol]
+		//ol := (rstart - old.start) / PGSIZE
+		//old.pages = old.pages[:ol]
 	}
 }
 
@@ -215,7 +217,7 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 		vr._noisect(mid, left)
 		if left.end == mid.start {
 			left.end = mid.end
-			left.pages = append(left.pages, mid.pages...)
+			//left.pages = append(left.pages, mid.pages...)
 			mid = left
 		} else {
 			left.next = mid
@@ -225,7 +227,7 @@ func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
 		vr._noisect(mid, right)
 		if mid.end == right.start {
 			mid.end = right.end
-			mid.pages = append(mid.pages, right.pages...)
+			//mid.pages = append(mid.pages, right.pages...)
 			mid.next = right.next
 			if vr.head == right {
 				vr.head = mid
