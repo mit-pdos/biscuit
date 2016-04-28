@@ -174,6 +174,11 @@ int main(int argc, char **argv)
 		long bpms = (etalloc - talloc) / elapsed;
 		double ar = (double)bpms * 1000 / (1 << 20);
 		printf("Allocation rate: %f MB/sec\n", ar);
+
+		long kobjs = sys_info(SINFO_GCOBJS);
+		if (kobjs == -1)
+			err(-1, "sysinfo");
+		printf("Number of kernel objects: %ld\n", kobjs);
 	}
 	// stop profiling
 	if (goprof && sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
