@@ -183,13 +183,14 @@ int main(int argc, char **argv)
 	else if (pmus && sys_prof(PROF_DISABLE|PROF_SAMPLE, 0, 0, 0) == -1)
 		errx(-1, "sys prof stop");
 
-	if (!WIFEXITED(status) || WEXITSTATUS(status))
-		printf("child failed with status: %d\n", WEXITSTATUS(status));
+	ret = WEXITSTATUS(status);
+	if (!WIFEXITED(status) || ret)
+		printf("child failed with status: %d\n", ret);
 
 	printf("%lu seconds, %lu ms\n", elapsed/1000, elapsed%1000);
 	printf("user   time: %lu seconds, %lu us\n", r.ru_utime.tv_sec,
 	    r.ru_utime.tv_usec);
 	printf("system time: %lu seconds, %lu us\n", r.ru_stime.tv_sec,
 	    r.ru_stime.tv_usec);
-	return 0;
+	return ret;
 }
