@@ -44,7 +44,7 @@ static long _totalxput;
 __attribute__((unused))
 static void *_workreadfile(void * _wf)
 {
-	int tfd = open("/bin/mailbench", O_RDONLY);
+	int tfd = open("/bin/cat", O_RDONLY);
 	if (tfd < 0)
 		err(-1, "open");
 
@@ -237,7 +237,7 @@ static void work(enum work_t wn, long wf, const long nt)
 	long xput = secs > 0 ? totalxput/secs : 0;
 
 	printf("iterations/sec: %ld (%ld total)\n", xput, totalxput);
-	printf("CPU time GC'ing: %f%%\n", gcfracend(&gcf));
+	printf("CPU time GC'ing: %f%%\n", gcfracend(&gcf, NULL, NULL, NULL));
 	printf("max latency: %ld ms\n", longest);
 	printf("each thread's latency:\n");
 	for (i = 0; i < nt; i++)
@@ -284,23 +284,27 @@ void usage(void)
 	printf("-w <int>	set work factor to int\n");
 	printf("-n <int>	set number of worker threads int\n");
 	printf("-h <int>	set kernel heap minimum to int MB\n\n");
+	printf("-H <int>	kernel heap growth factor as int\n\n");
 	exit(-1);
 }
 
 int main(int argc, char **argv)
 {
-	long sf = 1, wf = 1, nthreads = 1, kheap = 0;
+	long sf = 1, wf = 1, nthreads = 1, kheap = 0, growperc = 0;
 	int dosleep = 0, dogc = 0;
 	enum work_t wtype = W_READF;
 
 	int c;
-	while ((c = getopt(argc, argv, "h:vn:gms:Sw:")) != -1) {
+	while ((c = getopt(argc, argv, "H:h:vn:gms:Sw:")) != -1) {
 		switch (c) {
 		case 'g':
 			dogc = 1;
 			break;
 		case 'h':
 			kheap = strtol(optarg, NULL, 0);
+			break;
+		case 'H':
+			growperc = strtol(optarg, NULL, 0);
 			break;
 		case 'm':
 			wtype = W_MMAP;
@@ -338,6 +342,13 @@ int main(int argc, char **argv)
 	if (kheap) {
 		const long hack = 1ul << 4;
 		if (sys_prof(hack, kheap, 0, 0) == -1)
+			err(-1, "sys prof");
+		return 0;
+	}
+
+	if (growperc) {
+		const long hack2 = 1ul << 5;
+		if (sys_prof(hack2, growperc, 0, 0) == -1)
 			err(-1, "sys prof");
 		return 0;
 	}

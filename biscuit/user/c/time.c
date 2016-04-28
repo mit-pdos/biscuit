@@ -156,8 +156,14 @@ int main(int argc, char **argv)
 	ulong elapsed = now() - start;
 
 	if (gcstat) {
-		double gccpu = gcfracend(&fracst);
-		printf("GC CPU frac: %f%%\n", gccpu);
+		long wbms, markms, sweepms;
+		double gccpu = gcfracend(&fracst, &markms, &sweepms, &wbms);
+		printf("GC CPU frac: %f%% (no write barriers)\n", gccpu);
+		printf(" total elapsed times:\n");
+		printf("      mark   ms: %ld\n", markms);
+		printf("      sweep  ms: %ld\n", sweepms);
+		printf("      writeb ms: %ld\n", wbms);
+
 		long egc = sys_info(SINFO_GCCOUNT);
 		if (egc == -1)
 			err(-1, "sysinfo");

@@ -166,6 +166,7 @@ func (s *mspan) ensureSwept() {
 func (s *mspan) sweep(preserve bool) bool {
 	// It's critical that we enter this function with preemption disabled,
 	// GC must not start while we are in the middle of this function.
+	st := nanotime()
 	_g_ := getg()
 	if _g_.m.locks == 0 && _g_.m.mallocing == 0 && _g_ != _g_.m.g0 {
 		throw("MSpan_Sweep: m is not locked")
@@ -347,6 +348,9 @@ func (s *mspan) sweep(preserve bool) bool {
 	}
 	if trace.enabled {
 		traceGCSweepDone()
+	}
+	if bgtrack {
+		atomic.Xaddint64(&work.bgsweeptime, nanotime() - st)
 	}
 	return res
 }

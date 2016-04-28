@@ -247,11 +247,36 @@ const (
 	_GCmarktermination        // GC mark termination: allocate black, P's help GC, write barrier ENABLED
 )
 
+var wbenabledtime int64
+var _wbstart int64
+var _wbshadow bool
+
 //go:nosplit
 func setGCPhase(x uint32) {
 	atomic.Store(&gcphase, x)
 	writeBarrier.needed = gcphase == _GCmark || gcphase == _GCmarktermination
 	writeBarrier.enabled = writeBarrier.needed || writeBarrier.cgo
+	if hackmode != 0 {
+		if writeBarrier.cgo {
+			throw("wut? why?")
+		}
+		if _wbshadow != writeBarrier.needed {
+			_wbshadow = writeBarrier.needed
+			if writeBarrier.needed {
+				if _wbstart != 0 {
+					throw("shat upon")
+				}
+				_wbstart = nanotime()
+			} else {
+				if _wbstart == 0 {
+					throw("shat upon")
+				}
+				n := nanotime()
+				atomic.Xaddint64(&wbenabledtime, n - _wbstart)
+				_wbstart = 0
+			}
+		}
+	}
 }
 
 // gcMarkWorkerMode represents the mode that a concurrent mark worker
@@ -831,6 +856,8 @@ var work struct {
 
 	// debug.gctrace heap sizes for this cycle.
 	heap0, heap1, heap2, heapGoal uint64
+
+	bgsweeptime int64
 }
 
 // GC runs a garbage collection and blocks the caller until the
@@ -938,6 +965,10 @@ func gcStart(mode gcMode, forceTrigger bool) {
 	work.heap0 = memstats.heap_live
 	work.pauseNS = 0
 	work.mode = mode
+
+	// stop counting bgsweeper time since any sweeping done until mark
+	// termination will be included in mark time.
+	bgtrack = false
 
 	work.pauseStart = now
 	systemstack(stopTheWorldWithSema)
@@ -1146,6 +1177,10 @@ top:
 	}
 }
 
+// when bgtrack is enabled, the bgsweeper counts time spent sweeping. need this
+// variable to avoid double counting sweep time.
+var bgtrack bool
+
 func gcMarkTermination() {
 	// World is stopped.
 	// Start marktermination which includes enabling the write barrier.
@@ -1213,6 +1248,9 @@ func gcMarkTermination() {
 			gcSweep(work.mode)
 		}
 	})
+
+	// start counting bgsweeper time again
+	bgtrack = true
 
 	_g_.m.traceback = 0
 	casgstatus(gp, _Gwaiting, _Grunning)

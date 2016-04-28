@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+import "runtime/debug"
 import "runtime/pprof"
 import "sort"
 import "sync"
@@ -187,6 +188,8 @@ const(
     PROF_SAMPLE    = 1 << 2
     PROF_COUNT     = 1 << 3
     PROF_HACK      = 1 << 4
+    PROF_HACK2      = 1 << 5
+    PROF_HACK3      = 1 << 6
   SYS_THREXIT  = 31338
   SYS_INFO     = 31339
     SINFO_GCCOUNT    = 0
@@ -194,6 +197,9 @@ const(
     SINFO_GCHEAPSZ   = 2
     SINFO_GCMS       = 4
     SINFO_GCTOTALLOC = 5
+    SINFO_GCMARKT    = 6
+    SINFO_GCSWEEPT   = 7
+    SINFO_GCWBARRT   = 8
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
   SYS_FUTEX    = 31342
@@ -3653,6 +3659,8 @@ func _prof_pmc(en bool, events []pmev_t) {
 	}
 }
 
+var fakeptr *proc_t
+
 func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
 	en := true
 	if ptype & PROF_DISABLE != 0 {
@@ -3679,6 +3687,22 @@ func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
 		_prof_pmc(en, evs)
 	case ptype & PROF_HACK != 0:
 		runtime.Setheap(_events << 20)
+	case ptype & PROF_HACK2 != 0:
+		if _events < 0 {
+			return -EINVAL
+		}
+		fmt.Printf("GOGC = %v\n", _events)
+		debug.SetGCPercent(_events)
+	case ptype & PROF_HACK3 != 0:
+		if _events < 0 {
+			return -EINVAL
+		}
+		buf := make([]uint8, _events)
+		if buf == nil {
+		}
+		for i := 0; i < _events/8; i++ {
+			fakeptr = proc
+		}
 	default:
 		return -EINVAL
 	}
@@ -3693,16 +3717,24 @@ func sys_info(proc *proc_t, n int) int {
 	switch n {
 	case SINFO_GCCOUNT:
 		ret = int(ms.NumGC)
-		//fmt.Printf("Total heap size: %v MB\n", ms.HeapSys / (1<<20))
-		fmt.Printf("Total heap size: %v MB\n", runtime.Heapsz() / (1<<20))
 	case SINFO_GCPAUSENS:
 		ret = int(ms.PauseTotalNs)
 	case SINFO_GCHEAPSZ:
 		ret = int(ms.Alloc)
+		fmt.Printf("Kernel objects: %14v\n", ms.HeapObjects)
+		fmt.Printf("Total heap size: %v MB (%v MB)\n",
+		    runtime.Heapsz() / (1<<20), ms.Alloc>>20)
 	case SINFO_GCMS:
-		ret = runtime.GCworktime()/1000000
+		tot := runtime.GCmarktime() + runtime.GCbgsweeptime()
+		ret = tot/1000000
 	case SINFO_GCTOTALLOC:
 		ret = int(ms.TotalAlloc)
+	case SINFO_GCMARKT:
+		ret = runtime.GCmarktime()/1000000
+	case SINFO_GCSWEEPT:
+		ret = runtime.GCbgsweeptime()/1000000
+	case SINFO_GCWBARRT:
+		ret = runtime.GCwbenabledtime()/1000000
 	case 10:
 		runtime.GC()
 		ret = 0
