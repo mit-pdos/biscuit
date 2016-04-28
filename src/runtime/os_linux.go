@@ -2698,8 +2698,16 @@ func Kpmap_p() uintptr {
 	return p_kpmap
 }
 
-func GCworktime() int {
+func GCmarktime() int {
 	return int(work.totaltime)
+}
+
+func GCbgsweeptime() int {
+	return int(work.bgsweeptime)
+}
+
+func GCwbenabledtime() int {
+	return int(wbenabledtime)
 }
 
 func Heapsz() int {

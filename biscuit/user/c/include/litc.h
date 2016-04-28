@@ -352,6 +352,9 @@ long sys_info(long);
 #define		SINFO_GCHEAPSZ				2
 #define		SINFO_GCMS				4
 #define		SINFO_GCTOTALLOC			5
+#define		SINFO_GCMARKTIME			6
+#define		SINFO_GCSWEEPTIME			7
+#define		SINFO_GCWBARTIME			8
 
 int truncate(const char *, off_t);
 int unlink(const char *);
@@ -597,9 +600,15 @@ size_t fwrite(const void *, size_t, size_t, FILE *);
 struct gcfrac_t {
 	long startms;
 	long gcworkms;
+	struct {
+		// write barrier ms
+		long wbms;
+		long bgsweepms;
+		long markms;
+	} details;
 };
 struct gcfrac_t gcfracst(void);
-double gcfracend(struct gcfrac_t *);
+double gcfracend(struct gcfrac_t *, long *, long *, long *);
 int getopt(int, char * const *, const char *);
 extern char *optarg;
 extern int   optind;

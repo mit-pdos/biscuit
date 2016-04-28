@@ -1736,34 +1736,47 @@ fsync(int fd)
 }
 
 static void
-_gcfrac(long *_nowms, long *_gcwork)
+_gcfrac(struct gcfrac_t *r)
 {
 	struct timeval tv;
 	if (gettimeofday(&tv, NULL))
 		err(-1, "gettimeofday");
 	long nowms = tv.tv_sec*1000 + tv.tv_usec/1000;
 	long gcwork = sys_info(SINFO_GCMS);
-	if (gcwork == -1)
+	long markt = sys_info(SINFO_GCMARKTIME);
+	long sweept = sys_info(SINFO_GCSWEEPTIME);
+	long wbtime = sys_info(SINFO_GCWBARTIME);
+	if (gcwork == -1 || markt == -1 || sweept == -1 || wbtime == -1)
 		err(-1, "sysinfo");
-	*_nowms = nowms;
-	*_gcwork = gcwork;
+
+	r->startms = nowms;
+	r->gcworkms = gcwork;
+	r->details.wbms = wbtime;
+	r->details.bgsweepms = sweept;
+	r->details.markms = markt;
 }
 
 struct gcfrac_t
 gcfracst(void)
 {
-	long nowms, gcwork;
-	_gcfrac(&nowms, &gcwork);
-	struct gcfrac_t ret = {startms: nowms, gcworkms: gcwork};
+	struct gcfrac_t ret;
+	_gcfrac(&ret);
 	return ret;
 }
 
 double
-gcfracend(struct gcfrac_t *gf)
+gcfracend(struct gcfrac_t *of, long *marke, long *sweepe,
+    long *wbe)
 {
-	long nowms, gcwork;
-	_gcfrac(&nowms, &gcwork);
-	return (double)(gcwork - gf->gcworkms)/(nowms - gf->startms);
+	struct gcfrac_t nf;
+	_gcfrac(&nf);
+	if (marke)
+		*marke = nf.details.markms - of->details.markms;
+	if (sweepe)
+		*sweepe = nf.details.bgsweepms - of->details.bgsweepms;
+	if (wbe)
+		*wbe = nf.details.wbms - of->details.wbms;
+	return (double)(nf.gcworkms - of->gcworkms)/(nf.startms - of->startms);
 }
 
 char *optarg;

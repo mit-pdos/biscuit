@@ -632,6 +632,23 @@ static void *poll1(void *_a)
 	return _poll(1);
 }
 
+static long alloc_amount;
+
+static void *alloc(void *_a)
+{
+	if (alloc_amount <= 0)
+		errx(-1, "bad alloc amount %ld", alloc_amount);
+	pthread_barrier_wait(&bar);
+	long tot = 0;
+	while (!cease) {
+		const long hack3 = 1 << 6;
+		if (sys_prof(hack3, alloc_amount, 0, 0) == -1)
+			err(-1, "sysprof");
+		tot++;
+	}
+	return (void *)tot;
+}
+
 struct {
 	char *name;
 	char sname;
@@ -652,6 +669,7 @@ struct {
 	{"mmap/munmap", 'm', mapper, NULL, NULL},
 	{"poll50", '5', poll50, NULL, NULL},
 	{"poll1", '1', poll1, NULL, NULL},
+	{"alloc", 'a', alloc, NULL, NULL},
 };
 
 const int nbms = sizeof(bms)/sizeof(bms[0]);
@@ -663,7 +681,9 @@ void usage(char *n)
 		"  -s seconds\n"
 		"       run benchmark for seconds\n"
 		"  -b <benchmark id>\n"
-		"       benchmark ids:\n", n);
+		"       benchmark ids:\n"
+		"  -A <int>\n"
+		"       amount to allocate in bytes for alloc benchmark\n", n);
 	int i;
 	for (i = 0; i < nbms; i++)
 		printf("       %c      %s\n", bms[i].sname, bms[i].name);
@@ -686,8 +706,11 @@ int main(int argc, char **argv)
 	char onebm = 0;
 
 	int ch;
-	while ((ch = getopt(argc, argv, "mb:s:")) != -1) {
+	while ((ch = getopt(argc, argv, "A:mb:s:")) != -1) {
 		switch (ch) {
+		case 'A':
+			alloc_amount = strtol(optarg, NULL, 0);
+			break;
 		case 's':
 			bmsecs = atoi(optarg);
 			break;
