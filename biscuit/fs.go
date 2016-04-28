@@ -618,19 +618,27 @@ func (df *devfops_t) _sane() {
 	// make sure this maj/min pair is handled by devfops_t. to handle more
 	// devices, we can either do dispatch in devfops_t or we can return
 	// device-specific fdops_i in fs_open()
-	if df.maj != D_CONSOLE {
+	if df.maj != D_CONSOLE && df.maj != D_DEVNULL {
 		panic("bad dev")
 	}
 }
 
 func (df *devfops_t) read(dst *userbuf_t) (int, int) {
 	df._sane()
-	return cons_read(dst, 0)
+	if df.maj == D_CONSOLE {
+		return cons_read(dst, 0)
+	} else {
+		return 0, 0
+	}
 }
 
 func (df *devfops_t) write(src *userbuf_t) (int, int) {
 	df._sane()
-	return cons_write(src, 0)
+	if df.maj == D_CONSOLE {
+		return cons_write(src, 0)
+	} else {
+		return src.len, 0
+	}
 }
 
 func (df *devfops_t) fullpath() (string, int) {

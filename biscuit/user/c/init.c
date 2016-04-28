@@ -10,6 +10,9 @@ int main(int argc, char **argv)
 	ret = mknod("/dev/console", 0, MKDEV(1, 0));
 	if (ret != 0 && errno != EEXIST)
 		err(-1, "mknod");
+	ret = mknod("/dev/null", 0, MKDEV(4, 0));
+	if (ret != 0 && errno != EEXIST)
+		err(-1, "mknod");
 
 	for (;;) {
 		int pid = fork();
