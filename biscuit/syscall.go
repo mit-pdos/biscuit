@@ -200,6 +200,7 @@ const(
     SINFO_GCMARKT    = 6
     SINFO_GCSWEEPT   = 7
     SINFO_GCWBARRT   = 8
+    SINFO_GCOBJS     = 9
   SYS_PREAD    = 31340
   SYS_PWRITE   = 31341
   SYS_FUTEX    = 31342
@@ -3744,7 +3745,6 @@ func sys_info(proc *proc_t, n int) int {
 		ret = int(ms.PauseTotalNs)
 	case SINFO_GCHEAPSZ:
 		ret = int(ms.Alloc)
-		fmt.Printf("Kernel objects: %14v\n", ms.HeapObjects)
 		fmt.Printf("Total heap size: %v MB (%v MB)\n",
 		    runtime.Heapsz() / (1<<20), ms.Alloc>>20)
 	case SINFO_GCMS:
@@ -3758,6 +3758,8 @@ func sys_info(proc *proc_t, n int) int {
 		ret = runtime.GCbgsweeptime()/1000000
 	case SINFO_GCWBARRT:
 		ret = runtime.GCwbenabledtime()/1000000
+	case SINFO_GCOBJS:
+		ret = int(ms.HeapObjects)
 	case 10:
 		runtime.GC()
 		ret = 0

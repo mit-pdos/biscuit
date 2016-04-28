@@ -66,6 +66,7 @@
 /user/c/uname
 /user/c/pwd
 /user/c/rmtree
+/user/c/halp
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -131,3 +132,4 @@
 /fsdir/bin/rbm
 /fsdir/bin/rs
 /fsdir/bin/rmtree
+/fsdir/bin/halp

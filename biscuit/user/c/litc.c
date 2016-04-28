@@ -1561,6 +1561,8 @@ fread(void *dst, size_t sz, size_t mem, FILE *f)
 	size_t left = mem * sz;
 	while (left > 0 && !_feof(f) && !_ferror(f)) {
 		size_t c = _fread1(dst, left, f);
+		//if (c == 0)
+		//	break;
 		dst += c;
 		left -= c;
 		ret += c;

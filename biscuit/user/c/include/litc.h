@@ -355,6 +355,7 @@ long sys_info(long);
 #define		SINFO_GCMARKTIME			6
 #define		SINFO_GCSWEEPTIME			7
 #define		SINFO_GCWBARTIME			8
+#define		SINFO_GCOBJS				9
 
 int truncate(const char *, off_t);
 int unlink(const char *);
