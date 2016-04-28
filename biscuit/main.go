@@ -228,6 +228,7 @@ const(
 	// UNIX domain sockets
 	D_SUD 		= 2
 	D_SUS 		= 3
+	D_DEVNULL	= 4
 	D_FIRST		= D_CONSOLE
 	D_LAST		= D_SUS
 )
