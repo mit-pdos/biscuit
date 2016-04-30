@@ -250,7 +250,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 	case SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
 	case SYS_POLL:
-		ret = sys_poll(p, a1, a2, a3)
+		ret = sys_poll(p, tid, a1, a2, a3)
 	case SYS_LSEEK:
 		ret = sys_lseek(p, a1, a2, a3)
 	case SYS_MMAP:
@@ -708,7 +708,7 @@ func _ready2rev(orig int, r ready_t) int {
 	return orig | (revents << 48)
 }
 
-func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8,
+func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
     nfds int) (int, bool) {
 	inmask  := POLLIN | POLLPRI
 	outmask := POLLOUT | POLLWRBAND
@@ -746,7 +746,7 @@ func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8,
 		}
 		// poll unconditionally reports ERR, HUP, and NVAL
 		pev |= R_ERROR | R_HUP
-		pm.pm_set(pev, wait)
+		pm.pm_set(tid, pev, wait)
 		devstatus := fd.fops.pollone(*pm)
 		if devstatus != 0 {
 			// found at least one ready fd; don't bother having the
@@ -763,7 +763,7 @@ func _checkfds(proc *proc_t, pm *pollmsg_t, wait bool, buf []uint8,
 	return readyfds, writeback
 }
 
-func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
+func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	if nfds < 0  || timeout < -1 {
 		return -EINVAL
 	}
@@ -783,7 +783,7 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 	// too.
 	devwait := timeout != 0
 	pm := pollmsg_t{}
-	readyfds, writeback := _checkfds(proc, &pm, devwait, buf, nfds)
+	readyfds, writeback := _checkfds(proc, tid, &pm, devwait, buf, nfds)
 
 	if writeback && !proc.k2user(buf, fdsn) {
 		return -EFAULT
@@ -800,11 +800,10 @@ func sys_poll(proc *proc_t, fdsn, nfds, timeout int) int {
 		panic("must succeed")
 	}
 	if timedout {
-		pm.pnote.prune = true
 		return 0
 	}
 	// check the fds one more time, update ready status
-	readyfds, writeback = _checkfds(proc, &pm, false, buf, nfds)
+	readyfds, writeback = _checkfds(proc, tid, &pm, false, buf, nfds)
 	if writeback && !proc.k2user(buf, fdsn) {
 		return -EFAULT
 	}
@@ -868,27 +867,23 @@ const(
 	R_HUP	ready_t	= 1 << iota
 )
 
-type pollnote_t struct {
-	notif	chan bool
-	prune	bool
-}
-
 // used by thread executing poll(2).
 type pollmsg_t struct {
-	pnote	*pollnote_t
+	notif	chan bool
 	events	ready_t
 	dowait	bool
+	tid	tid_t
 }
 
-func (pm *pollmsg_t) pm_set(events ready_t, dowait bool) {
-	if pm.pnote == nil {
-		pm.pnote = &pollnote_t{}
+func (pm *pollmsg_t) pm_set(tid tid_t, events ready_t, dowait bool) {
+	if pm.notif == nil {
 		// 1-element buffered channel; that way devices can send
 		// notifies on the channel asynchronously without blocking.
-		pm.pnote.notif = make(chan bool, 1)
+		pm.notif = make(chan bool, 1)
 	}
 	pm.events = events
 	pm.dowait = dowait
+	pm.tid = tid
 }
 
 // returns whether we timed out, and error
@@ -899,7 +894,7 @@ func (pm *pollmsg_t) pm_wait(to int) (bool, int) {
 	}
 	var timeout bool
 	select {
-	case <- pm.pnote.notif:
+	case <- pm.notif:
 	case <- tochan:
 		timeout = true
 	}
@@ -909,27 +904,41 @@ func (pm *pollmsg_t) pm_wait(to int) (bool, int) {
 // keeps track of all outstanding pollers. used by devices supporting poll(2)
 type pollers_t struct {
 	allmask		ready_t
-	_waiters	[]pollmsg_t
 	waiters		[]pollmsg_t
 }
 
-func (p *pollers_t) _rm(idx int) {
-	if len(p.waiters) == 1 {
-		p.waiters = p._waiters
-		return
+// returns tid pollmsg and empty pollmsg
+func (p *pollers_t) _find(tid tid_t, empty bool) (*pollmsg_t, *pollmsg_t) {
+	var eret *pollmsg_t
+	for i := range p.waiters {
+		if p.waiters[i].tid == tid {
+			return &p.waiters[i], eret
+		}
+		if empty && eret == nil && p.waiters[i].tid == 0 {
+			eret = &p.waiters[i]
+		}
 	}
-	copy(p.waiters[idx:], p.waiters[idx+1:])
-	l := len(p.waiters)
-	p.waiters = p.waiters[:l-1]
+	return nil, eret
+}
+
+func (p *pollers_t) _findempty() *pollmsg_t {
+	_, e := p._find(-1, true)
+	return e
 }
 
 func (p *pollers_t) addpoller(pm *pollmsg_t) {
 	if p.waiters == nil {
-		p._waiters = make([]pollmsg_t, 0, 10)
-		p.waiters = p._waiters
+		p.waiters = make([]pollmsg_t, 10)
 	}
-	p.waiters = append(p.waiters, *pm)
 	p.allmask |= pm.events
+	t, e := p._find(pm.tid, true)
+	if t != nil {
+		*t = *pm
+	} else if e != nil {
+		*e = *pm
+	} else {
+		panic("extend; more than 10 threads polling single fd")
+	}
 }
 
 func (p *pollers_t) wakeready(r ready_t) {
@@ -938,27 +947,17 @@ func (p *pollers_t) wakeready(r ready_t) {
 	}
 	var newallmask ready_t
 	for i := 0; i < len(p.waiters); i++ {
-		rmed := false
 		pm := p.waiters[i]
-		// prune useless waiters
-		if pm.pnote.prune {
-			p._rm(i)
-			i--
-			rmed = true
-		} else if pm.events & r != 0 {
+		if pm.events & r != 0 {
 			// found a waiter
 			pm.events &= r
 			// non-blocking send on a 1-element buffered channel
 			select {
-			case pm.pnote.notif <- true:
-				pm.pnote.prune = true
+			case pm.notif <- true:
 			default:
 			}
-			p._rm(i)
-			i--
-			rmed = true
-		}
-		if !rmed {
+			p.waiters[i].tid = 0
+		} else {
 			newallmask |= pm.events
 		}
 	}
