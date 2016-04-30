@@ -35,9 +35,9 @@ static void gcrun(char * const *cmd, long *_ngcs, long *_xput, double *_gcfrac)
 	char buf[512];
 	ssize_t r;
 	int off = 0;
-	while ((r = read(p[0], &buf[off], sizeof(buf) - off)) > 0) {
-		if (r == -1)
-			err(-1, "read");
+	while ((r = read(p[0], &buf[off], sizeof(buf) - off - 1)) > 0) {
+		char *end = &buf[off+r];
+		*end = '\0';
 		if (strchr(buf, '\n') == NULL) {
 			fprintf(stderr, "warning: ignoring long line\n");
 			off = 0;
@@ -51,10 +51,11 @@ static void gcrun(char * const *cmd, long *_ngcs, long *_xput, double *_gcfrac)
 			sscanf(last, "\tops: %ld", &xput);
 			last = nl + 1;
 		}
-		char *end = buf + sizeof(buf);
-		int off = end - last;
+		off = end - last;
 		memmove(buf, last, off);
 	}
+	if (r == -1)
+		err(-1, "read");
 
 	int status;
 	if (wait(&status) == -1)
@@ -117,13 +118,15 @@ static void _mkbmcmd(char **cmd, size_t ncmd, long allocr, long duration)
 // find the xput for a run of benchmark at a particular allocation rate
 static long nogcxput(long allocr)
 {
-	// set kernel heap size to ~6GB to avoid any gcs
-	char *hcmd[] = {"bmgc", "-H", "6000", NULL};
+	// set kernel heap size to ~16GB to avoid any gcs
+	char *hcmd[] = {"bmgc", "-h", "16000", NULL};
+	char *rcmd2[] = {"bmgc", "-g", NULL};
 	_run(hcmd);
+	_run(rcmd2);
 
 	const int ncmd = 10;
 	char *cmd[ncmd];
-	_mkbmcmd(cmd, ncmd, allocr, 3);
+	_mkbmcmd(cmd, ncmd, allocr, 10);
 	long ngcs, xput;
 	int i;
 	for (i = 0; i < 10; i++) {
@@ -137,7 +140,6 @@ static long nogcxput(long allocr)
 
 	// restore old total heap size
 	char *rcmd1[] = {"bmgc", "-H", "100", NULL};
-	char *rcmd2[] = {"bmgc", "-g", NULL};
 	_run(rcmd1);
 	_run(rcmd2);
 
@@ -147,7 +149,8 @@ static long nogcxput(long allocr)
 // for a given gc cpu fraction upperbound and allocation rate, find total heap
 // sizing to keep gc cpu time < that gc cput fraction upperbound. returns the
 // total heap size in GOGC terms (all heap sizes are in GOGC terms).
-static int findtotalheapsz(double gcfracub, long allocr)
+__attribute__((unused))
+static int findtotalheapsz(double gcfracub, long allocr, const long targetgcs)
 {
 	// first, get the xput of this allocation rate with 0 gcs. we use that
 	// xput to calculate GC CPU time.
@@ -174,6 +177,7 @@ static int findtotalheapsz(double gcfracub, long allocr)
 	const char _higher = 1;
 	char tried[TRIEDSZ] = {0};
 
+	long duration = 10;
 	char lastres = _nottried;
 	while (1) {
 		int curgc = (higc + logc) / 2;
@@ -202,7 +206,6 @@ static int findtotalheapsz(double gcfracub, long allocr)
 
 		// run the benchmark for increasing durations of time until we
 		// have at least 20 gcs.
-		long duration = 10;
 		long foundxput;
 		while (1) {
 			const int ncmds = 32;
@@ -212,7 +215,6 @@ static int findtotalheapsz(double gcfracub, long allocr)
 			printf("trying allocr %ld with heap %d for %ld "
 			    "seconds...\n", allocr, curgc, duration);
 			gcrun(cmds, &ngcs, &xput, NULL);
-			const int targetgcs = 20;
 			if (ngcs >= targetgcs) {
 				printf("good. got %ld gcs\n", ngcs);
 				foundxput = xput;
@@ -238,10 +240,13 @@ static int findtotalheapsz(double gcfracub, long allocr)
 		tried[curslot] = lastres;
 
 		// adjust binary search bounds
-		if (lastres == _lower)
+		if (lastres == _lower) {
 			higc = curgc;
-		else
+			duration /= 2;
+		} else {
 			logc = curgc;
+			duration *= 2;
+		}
 		printf("      GC frac: %f\n", gcfrac);
 		printf("      adjust heap size %s\n",
 		    lastres == _lower ? "SMALLER" : "BIGGER");
@@ -267,14 +272,42 @@ static int findtotalheapsz(double gcfracub, long allocr)
 	}
 }
 
+__attribute__((unused))
+static void usage()
+{
+	fprintf(stderr, "usage: %s [-n target gcs] [-c target gc frac] "
+	    "<allocr>\n", __progname);
+	exit(-1);
+}
+
 int main(int argc, char **argv)
 {
-	if (argc != 2)
-		errx(-1, "usage: %s <allocr>", __progname);
-	long allocr = strtol(argv[1], NULL, 0);
-	if (allocr < 0 || allocr > 512)
+	long targetgcs = 20;
+	double gctarget = 0.055;
+	int c;
+	while ((c = getopt(argc, argv, "n:mc:")) != -1) {
+		switch (c) {
+		case 'c':
+			gctarget = strtod(optarg, NULL);
+			if (gctarget < 0 || gctarget > 100.0)
+				gctarget = 0.055;
+			break;
+		case 'n':
+			targetgcs = strtol(optarg, NULL, 0);
+			if (targetgcs < 0)
+				targetgcs = 20;
+			break;
+		default:
+			usage();
+			break;
+		}
+	}
+	if (argc - optind != 1)
+		usage();
+	long allocr = strtol(argv[optind], NULL, 0);
+	if (allocr < 0)
 		allocr = 32;
-	long idealheap = findtotalheapsz(0.055, allocr);
+	long idealheap = findtotalheapsz(gctarget, allocr, targetgcs);
 	printf("ideal heap for allocr %ld: %ld\n", allocr, idealheap);
 	return 0;
 }
