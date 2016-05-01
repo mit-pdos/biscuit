@@ -1086,6 +1086,7 @@ func (o *pipe_t) op_reopen(rd, wd int) int {
 	}
 	if o.readers == 0 && o.writers == 0 {
 		o.closed = true
+		o.cbuf.cb_release()
 	}
 	o.Unlock()
 	return 0

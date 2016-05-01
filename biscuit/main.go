@@ -1554,14 +1554,24 @@ type circbuf_t struct {
 	tail	int
 }
 
+var _bufpool = sync.Pool{New: func() interface{} { return make([]uint8, 512)}}
+
 func (cb *circbuf_t) cb_init(sz int) {
 	bufmax := 1024*1024
 	if sz < 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
 	cb.bufsz = sz
-	cb.buf = make([]uint8, cb.bufsz)
+	cb.buf = _bufpool.Get().([]uint8)
+	if len(cb.buf) < sz {
+		cb.buf = make([]uint8, cb.bufsz)
+	}
 	cb.head, cb.tail = 0, 0
+}
+
+func (cb *circbuf_t) cb_release() {
+	_bufpool.Put(cb.buf)
+	cb.buf = nil
 }
 
 func (cb *circbuf_t) full() bool {
