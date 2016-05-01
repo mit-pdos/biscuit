@@ -1093,6 +1093,7 @@ func (o *pipe_t) op_reopen(rd, wd int) int {
 	}
 	if o.readers == 0 && o.writers == 0 {
 		o.closed = true
+		o.cbuf.cb_release()
 	}
 	o.Unlock()
 	return 0
@@ -1503,8 +1504,9 @@ func sys_accept(proc *proc_t, fdn, sockaddrn, socklenn int) int {
 		}
 		sl = l
 	}
-	fromsa := proc.mkuserbuf(sockaddrn, sl)
+	fromsa := proc.mkuserbuf_pool(sockaddrn, sl)
 	newfops, fromlen, err := fd.fops.accept(proc, fromsa)
+	ubpool.Put(fromsa)
 	if err != 0 {
 		return err
 	}
@@ -1529,9 +1531,10 @@ func copysockaddr(proc *proc_t, san, sl int) ([]uint8, int) {
 	if sl >= maxsl {
 		return nil, -ENOTSOCK
 	}
-	ub := proc.mkuserbuf(san, sl)
+	ub := proc.mkuserbuf_pool(san, sl)
 	sabuf := make([]uint8, sl)
 	_, err := ub.read(sabuf)
+	ubpool.Put(ub)
 	if err != 0 {
 		return nil, err
 	}
@@ -1558,8 +1561,9 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 		return err
 	}
 
-	buf := proc.mkuserbuf(bufn, buflen)
+	buf := proc.mkuserbuf_pool(bufn, buflen)
 	ret, err := fd.fops.sendto(proc, buf, sabuf, flags)
+	ubpool.Put(buf)
 	if err != 0 {
 		return err
 	}
@@ -1577,7 +1581,7 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	buf := proc.mkuserbuf(bufn, buflen)
+	buf := proc.mkuserbuf_pool(bufn, buflen)
 
 	// is the from address requested?
 	var salen int
@@ -1591,8 +1595,10 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 			return -EFAULT
 		}
 	}
-	fromsa := proc.mkuserbuf(sockaddrn, salen)
+	fromsa := proc.mkuserbuf_pool(sockaddrn, salen)
 	ret, addrlen, err := fd.fops.recvfrom(proc, buf, fromsa)
+	ubpool.Put(buf)
+	ubpool.Put(fromsa)
 	if err != 0 {
 		return err
 	}
