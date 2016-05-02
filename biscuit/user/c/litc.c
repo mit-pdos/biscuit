@@ -2796,7 +2796,7 @@ strerror(int errnum)
 {
 	int nents = sizeof(_errstr)/sizeof(_errstr[0]);
 	const char *p = "Unknown error";
-	if (errnum < nents && _errstr[errnum] != NULL)
+	if (errnum >= 0 && errnum < nents && _errstr[errnum] != NULL)
 		p = _errstr[errnum];
 	return (char *)p;
 }
@@ -2806,7 +2806,7 @@ strerror_r(int errnum, char *dst, size_t dstlen)
 {
 	int nents = sizeof(_errstr)/sizeof(_errstr[0]);
 	const char *p = "Unknown error";
-	if (errnum > 0 && errnum < nents && _errstr[errnum] != NULL)
+	if (errnum >= 0 && errnum < nents && _errstr[errnum] != NULL)
 		p = _errstr[errnum];
 	strncpy(dst, p, dstlen);
 	return 0;
