@@ -27,7 +27,7 @@
 #include <thread>
 
 #define SOCK_DGRAM_UNORDERED	(-1)
-#define O_ANYFD			(-1)
+#define O_ANYFD			(0)
 
 using std::string;
 using std::thread;
