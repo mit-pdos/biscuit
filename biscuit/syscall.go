@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+import "math/rand"
 import "runtime"
 import "runtime/debug"
 import "runtime/pprof"
@@ -190,6 +191,8 @@ const(
     PROF_HACK      = 1 << 4
     PROF_HACK2      = 1 << 5
     PROF_HACK3      = 1 << 6
+    PROF_HACK4      = 1 << 7
+    PROF_HACK5      = 1 << 8
   SYS_THREXIT  = 31338
   SYS_INFO     = 31339
     SINFO_GCCOUNT    = 0
@@ -3667,6 +3670,50 @@ func _prof_pmc(en bool, events []pmev_t) {
 
 var fakeptr *proc_t
 
+//var fakedur = make([][]uint8, 256)
+//var duri int
+
+func (p *proc_t) closehalf() {
+	fmt.Printf("close half\n")
+	p.fdl.Lock()
+	l := make([]int, 0, len(p.fds))
+	for i, fdp := range p.fds {
+		if i > 2 && fdp != nil {
+			l = append(l, i)
+		}
+	}
+	p.fdl.Unlock()
+
+	// sattolos
+	for i := len(l) - 1; i >= 0; i-- {
+		si := rand.Intn(i + 1)
+		t := l[i]
+		l[i] = l[si]
+		l[si] = t
+	}
+
+	c := 0
+	for _, fdn := range l {
+		sys_close(p, fdn)
+		c++
+		if c >= len(l)/2 {
+			break
+		}
+	}
+}
+
+func (p *proc_t) countino() int {
+	c := 0
+	p.fdl.Lock()
+	for i, fdp := range p.fds {
+		if i > 2 && fdp != nil {
+			c++
+		}
+	}
+	p.fdl.Unlock()
+	return c
+}
+
 func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
 	en := true
 	if ptype & PROF_DISABLE != 0 {
@@ -3706,8 +3753,16 @@ func sys_prof(proc *proc_t, ptype, _events, _pmflags, intperiod int) int {
 		buf := make([]uint8, _events)
 		if buf == nil {
 		}
-		for i := 0; i < _events/8; i++ {
-			fakeptr = proc
+		//fakedur[duri] = buf
+		//duri = (duri + 1) % len(fakedur)
+		//for i := 0; i < _events/8; i++ {
+			//fakeptr = proc
+		//}
+	case ptype & PROF_HACK4 != 0:
+		if _events == 0 {
+			proc.closehalf()
+		} else {
+			fmt.Printf("have %v fds\n", proc.countino())
 		}
 	default:
 		return -EINVAL

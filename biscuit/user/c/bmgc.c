@@ -148,8 +148,8 @@ static void *_workvnode(void * _wf)
 		int fd = open(mfn, O_CREAT | O_EXCL | O_RDWR, 0600);
 		if (fd < 0)
 			err(-1, "open");
-		//if (close(fd))
-		//	err(-1, "close");
+		if (close(fd))
+			err(-1, "close");
 		if (unlink(mfn))
 			err(-1, "unlink");
 		long tot = nowms() - st;
@@ -172,8 +172,6 @@ static void work(enum work_t wn, long wf, const long nt)
 	long secs = wf;
 	if (secs < 0)
 		secs = 1;
-	else if (secs > 60)
-		secs = 60;
 
 	void* (*wfunc)(void *);
 	char *name;
@@ -246,6 +244,8 @@ static void work(enum work_t wn, long wf, const long nt)
 	printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
 }
 
+static int newthing;
+
 int _vnodes(long sf)
 {
 	size_t nf = 1000*sf;
@@ -259,12 +259,21 @@ int _vnodes(long sf)
 			err(-1, "open");
 		if (unlink("dummy"))
 			err(-1, "unlink");
+		if (newthing && n == nf - 1) {
+			const long hack4 = 1 << 7;
+			if (sys_prof(hack4, 0, 0, 0) == -1)
+				err(-1, "reset gc param");
+			n -= nf/2;
+			newthing--;
+		}
 		size_t cp = n/tenpct;
 		if (cp >= next) {
 			printf("%zu%%\n", cp*10);
 			next = cp + 1;
 		}
 	}
+	const long hack4 = 1 << 7;
+	sys_prof(hack4, 1, 0, 0);
 
 	return 0;
 }
@@ -280,6 +289,7 @@ void usage(void)
 	printf("-m		use mmap busy work instead of readfile\n");
 	printf("-v		use vnode busy work instead of readfile\n");
 	printf("-g		force kernel GC, then exit\n");
+	printf("-d		do new thing\n");
 	printf("-s <int>	set scale factor to int\n");
 	printf("-w <int>	set work factor to int\n");
 	printf("-n <int>	set number of worker threads int\n");
@@ -295,8 +305,11 @@ int main(int argc, char **argv)
 	enum work_t wtype = W_READF;
 
 	int c;
-	while ((c = getopt(argc, argv, "H:h:vn:gms:Sw:")) != -1) {
+	while ((c = getopt(argc, argv, "dH:h:vn:gms:Sw:")) != -1) {
 		switch (c) {
+		case 'd':
+			newthing = 4;
+			break;
 		case 'g':
 			dogc = 1;
 			break;
