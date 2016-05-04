@@ -116,8 +116,10 @@ static void _mkbmcmd(char **cmd, size_t ncmd, long allocr, long duration)
 #define	GOGC	100
 
 // find the xput for a run of benchmark at a particular allocation rate
+__attribute__((unused))
 static long nogcxput(long allocr)
 {
+	errx(-1, "do not use; taints GC costs for smaller heaps");
 	// set kernel heap size to ~16GB to avoid any gcs
 	char *hcmd[] = {"bmgc", "-h", "16000", NULL};
 	char *rcmd2[] = {"bmgc", "-g", NULL};
@@ -149,12 +151,12 @@ static long nogcxput(long allocr)
 // for a given gc cpu fraction upperbound and allocation rate, find total heap
 // sizing to keep gc cpu time < that gc cput fraction upperbound. returns the
 // total heap size in GOGC terms (all heap sizes are in GOGC terms).
-__attribute__((unused))
-static int findtotalheapsz(double gcfracub, long allocr, const long targetgcs)
+static int findtotalheapsz(double gcfracub, long allocr, const long targetgcs,
+    const long gc0xput)
 {
 	// first, get the xput of this allocation rate with 0 gcs. we use that
 	// xput to calculate GC CPU time.
-	long gc0xput = nogcxput(allocr);
+	//long gc0xput = nogcxput(allocr);
 	printf("0gc xput is %ld\n", gc0xput);
 
 	// initialize binary search bounds
@@ -218,6 +220,10 @@ static int findtotalheapsz(double gcfracub, long allocr, const long targetgcs)
 			if (ngcs >= targetgcs) {
 				printf("good. got %ld gcs\n", ngcs);
 				foundxput = xput;
+				// prevent duration from growing too large too
+				// quickly
+				if (ngcs / targetgcs > 1)
+					duration /= ngcs / targetgcs;
 				break;
 			}
 			printf("only %ld gcs, trying again...\n", ngcs);
@@ -275,8 +281,8 @@ static int findtotalheapsz(double gcfracub, long allocr, const long targetgcs)
 __attribute__((unused))
 static void usage()
 {
-	fprintf(stderr, "usage: %s [-n target gcs] [-c target gc frac] "
-	    "<allocr>\n", __progname);
+	fprintf(stderr, "usage: %s [-n target gcs] [-c target gc frac]"
+	    " -x <0gc xput> <allocr>\n", __progname);
 	exit(-1);
 }
 
@@ -284,8 +290,9 @@ int main(int argc, char **argv)
 {
 	long targetgcs = 20;
 	double gctarget = 0.055;
+	long gc0x = 0;
 	int c;
-	while ((c = getopt(argc, argv, "n:mc:")) != -1) {
+	while ((c = getopt(argc, argv, "x:n:mc:")) != -1) {
 		switch (c) {
 		case 'c':
 			gctarget = strtod(optarg, NULL);
@@ -297,17 +304,20 @@ int main(int argc, char **argv)
 			if (targetgcs < 0)
 				targetgcs = 20;
 			break;
+		case 'x':
+			gc0x = strtol(optarg, NULL, 0);
+			break;
 		default:
 			usage();
 			break;
 		}
 	}
-	if (argc - optind != 1)
+	if (argc - optind != 1 || gc0x <= 0)
 		usage();
 	long allocr = strtol(argv[optind], NULL, 0);
 	if (allocr < 0)
 		allocr = 32;
-	long idealheap = findtotalheapsz(gctarget, allocr, targetgcs);
+	long idealheap = findtotalheapsz(gctarget, allocr, targetgcs, gc0x);
 	printf("ideal heap for allocr %ld: %ld\n", allocr, idealheap);
 	return 0;
 }
