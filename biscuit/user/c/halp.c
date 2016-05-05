@@ -245,14 +245,13 @@ static int findtotalheapsz(double gcfracub, long allocr, const long targetgcs,
 			lastres = _higher;
 		tried[curslot] = lastres;
 
-		// adjust binary search bounds
-		if (lastres == _lower) {
+		// adjust binary search bounds and duration
+		int lastgc = curgc;
+		if (lastres == _lower)
 			higc = curgc;
-			duration /= 2;
-		} else {
+		else
 			logc = curgc;
-			duration *= 2;
-		}
+		duration *= (double)curgc/lastgc;
 		printf("      GC frac: %f\n", gcfrac);
 		printf("      adjust heap size %s\n",
 		    lastres == _lower ? "SMALLER" : "BIGGER");
