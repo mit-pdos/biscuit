@@ -93,8 +93,11 @@ var (
 
 	// Following syscalls are only available on some Windows PCs.
 	// We will load syscalls, if available, before using them.
+	_AddDllDirectory,
 	_AddVectoredContinueHandler,
-	_GetQueuedCompletionStatusEx stdFunction
+	_GetQueuedCompletionStatusEx,
+	_LoadLibraryExW,
+	_ stdFunction
 )
 
 type sigset struct{}
@@ -105,26 +108,38 @@ func asmstdcall(fn unsafe.Pointer)
 
 var asmstdcallAddr unsafe.Pointer
 
+func windowsFindfunc(name []byte, lib uintptr) stdFunction {
+	f := stdcall2(_GetProcAddress, lib, uintptr(unsafe.Pointer(&name[0])))
+	return stdFunction(unsafe.Pointer(f))
+}
+
 func loadOptionalSyscalls() {
-	var buf [50]byte // large enough for longest string
-	strtoptr := func(s string) uintptr {
-		buf[copy(buf[:], s)] = 0 // nil-terminated for OS
-		return uintptr(noescape(unsafe.Pointer(&buf[0])))
+	var (
+		kernel32dll                 = []byte("kernel32.dll\000")
+		addVectoredContinueHandler  = []byte("AddVectoredContinueHandler\000")
+		getQueuedCompletionStatusEx = []byte("GetQueuedCompletionStatusEx\000")
+		addDllDirectory             = []byte("AddDllDirectory\000")
+		loadLibraryExW              = []byte("LoadLibraryExW\000")
+	)
+
+	k32 := stdcall1(_LoadLibraryA, uintptr(unsafe.Pointer(&kernel32dll[0])))
+	if k32 == 0 {
+		throw("kernel32.dll not found")
 	}
-	l := stdcall1(_LoadLibraryA, strtoptr("kernel32.dll"))
-	findfunc := func(name string) stdFunction {
-		f := stdcall2(_GetProcAddress, l, strtoptr(name))
-		return stdFunction(unsafe.Pointer(f))
-	}
-	if l != 0 {
-		_AddVectoredContinueHandler = findfunc("AddVectoredContinueHandler")
-		_GetQueuedCompletionStatusEx = findfunc("GetQueuedCompletionStatusEx")
-	}
+	_AddDllDirectory = windowsFindfunc(addDllDirectory, k32)
+	_AddVectoredContinueHandler = windowsFindfunc(addVectoredContinueHandler, k32)
+	_GetQueuedCompletionStatusEx = windowsFindfunc(getQueuedCompletionStatusEx, k32)
+	_LoadLibraryExW = windowsFindfunc(loadLibraryExW, k32)
 }
 
 //go:nosplit
 func getLoadLibrary() uintptr {
 	return uintptr(unsafe.Pointer(_LoadLibraryW))
+}
+
+//go:nosplit
+func getLoadLibraryEx() uintptr {
+	return uintptr(unsafe.Pointer(_LoadLibraryExW))
 }
 
 //go:nosplit
@@ -161,12 +176,30 @@ const (
 // in sys_windows_386.s and sys_windows_amd64.s
 func externalthreadhandler()
 
+// When loading DLLs, we prefer to use LoadLibraryEx with
+// LOAD_LIBRARY_SEARCH_* flags, if available. LoadLibraryEx is not
+// available on old Windows, though, and the LOAD_LIBRARY_SEARCH_*
+// flags are not available on some versions of Windows without a
+// security patch.
+//
+// https://msdn.microsoft.com/en-us/library/ms684179(v=vs.85).aspx says:
+// "Windows 7, Windows Server 2008 R2, Windows Vista, and Windows
+// Server 2008: The LOAD_LIBRARY_SEARCH_* flags are available on
+// systems that have KB2533623 installed. To determine whether the
+// flags are available, use GetProcAddress to get the address of the
+// AddDllDirectory, RemoveDllDirectory, or SetDefaultDllDirectories
+// function. If GetProcAddress succeeds, the LOAD_LIBRARY_SEARCH_*
+// flags can be used with LoadLibraryEx."
+var useLoadLibraryEx bool
+
 func osinit() {
 	asmstdcallAddr = unsafe.Pointer(funcPC(asmstdcall))
 
 	setBadSignalMsg()
 
 	loadOptionalSyscalls()
+
+	useLoadLibraryEx = (_LoadLibraryExW != nil && _AddDllDirectory != nil)
 
 	disableWER()
 
