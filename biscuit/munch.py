@@ -6,7 +6,7 @@ import sys
 
 def usage():
 	print >> sys.stderr
-	print >> sys.stderr, 'usage: %s <redis PMU profile>' % (sys.argv[0])
+	print >> sys.stderr, 'usage: %s <PMU profile> <kernel binary> <user binary>' % (sys.argv[0])
 	print >> sys.stderr
 	sys.exit(-1)
 
@@ -152,18 +152,14 @@ def dumpsec(secname, rips, binfn, nsamp):
 	print '---------'
 	print 'total %6.2f' % (float(tot)/nsamp)
 
-def dump(rips, dumpips=False):
-	kbin = '/opt/cody/biscuit/biscuit/main.gobin'
-	#ubin = '/opt/cody/biscuit-redis/src/redis-server'
-	ubin = '/opt/cody/biscuit/biscuit/user/c/sfork'
-
+def dump(kbin, ubin, rips, dumpips=False):
 	samples = len(rips)
 	urips, krips = divrips(rips)
 	dumpsec('KERNEL TIME', krips, kbin, samples)
 	dumpsec('USER   TIME', urips, ubin, samples)
 
 opts, args = getopt.getopt(sys.argv[1:], 'd')
-if len(args) != 1:
+if len(args) != 3:
 	usage()
 
 dumpips = False
@@ -171,8 +167,10 @@ for o in opts:
 	if o[0] == '-d':
 		dumpips = True
 prof = args[0]
+kbin = args[1]
+ubin = args[2]
 rips = openrips(prof)
 
 #manual(rips)
 
-dump(rips, dumpips)
+dump(kbin, ubin, rips, dumpips)
