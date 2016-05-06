@@ -39,6 +39,7 @@ void usage(char *pre)
 		 "       \"bmiss\"   - branch misses\n"
 		 "       \"llcref\" - LLC references\n"
 		 "       \"llcmiss\" - LLC misses\n"
+		 "       \"tlbmiss\" - dTLB misses\n"
 		 "-i int sample after int PMU events. only used with -s.\n"
 		 "\n"
 		 , __progname);
@@ -67,6 +68,7 @@ long evtadd(char *evt)
 		{"bmiss", PROF_EV_BRANCH_MISS_RETIRED},
 		{"llcmiss", PROF_EV_LLC_MISSES},
 		{"llcref", PROF_EV_LLC_REFS},
+		{"tlbmiss", PROF_EV_DTLB_LOAD_MISS_ANY},
 	};
 	const int nevs = sizeof(evs)/sizeof(evs[0]);
 	int i;

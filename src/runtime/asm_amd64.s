@@ -956,6 +956,7 @@ TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	// fastret or iret?
 	MOVB	fastret+8(FP), AX
 	CMPB	AX, $0
+	// swap for better branch prediction?
 	JNE	syscallreturn
 	// do full state restore
 	PUSHQ	R9
