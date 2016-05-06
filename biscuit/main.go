@@ -2339,6 +2339,8 @@ func perfsetup() {
 type pmevid_t uint
 
 const(
+	// if you modify the order of these flags, you must update them in libc
+	// too.
 	// architectural
 	EV_UNHALTED_CORE_CYCLES		pmevid_t = 1 << iota
 	EV_LLC_MISSES			pmevid_t = 1 << iota
