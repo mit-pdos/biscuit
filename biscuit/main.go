@@ -2356,6 +2356,9 @@ const(
 	// "retired stores that missed in the dTLB"
 	EV_STORE_DTLB_MISS		pmevid_t = 1 << iota
 	EV_L2_LD_HITS			pmevid_t = 1 << iota
+	// "Counts the number of misses in all levels of the ITLB which causes
+	// a page walk."
+	EV_ITLB_LOAD_MISS_ANY		pmevid_t = 1 << iota
 )
 
 type pmflag_t uint
@@ -2378,6 +2381,7 @@ var pmevid_names = map[pmevid_t]string{
 	EV_BRANCH_MISS_RETIRED: "Branch misses retired",
 	EV_INSTR_RETIRED: "Instructions retired",
 	EV_DTLB_LOAD_MISS_ANY: "dTLB load misses",
+	EV_ITLB_LOAD_MISS_ANY: "iTLB load misses",
 	EV_DTLB_LOAD_MISS_STLB: "sTLB misses",
 	EV_STORE_DTLB_MISS: "Store dTLB misses",
 	//EV_WTF1: "dummy 1",
@@ -2534,12 +2538,13 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 
 	_xeon5000 := map[pmevid_t]pmevent_t{
 	    EV_DTLB_LOAD_MISS_ANY:
-		// "dTLB load misses that cause a page-walk"
 		{0x08, 0x1},
 	    EV_DTLB_LOAD_MISS_STLB:
 		{0x08, 0x2},
 	    EV_STORE_DTLB_MISS:
 		{0x0c, 0x1},
+	    EV_ITLB_LOAD_MISS_ANY:
+		{0x85, 0x1},
 	    //EV_WTF1:
 	    //    {0x49, 0x1},
 	    //EV_WTF2:
