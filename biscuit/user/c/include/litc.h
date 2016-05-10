@@ -334,13 +334,15 @@ long sys_prof(long, long, long, long);
 #define		PROF_EV_BRANCH_MISS_RETIRED		(1ul << 4)
 #define		PROF_EV_INSTR_RETIRED			(1ul << 5)
 	// non-architectural
-	// "all TLB misses that cause a page walk"
+	// "all dTLB misses that cause a page walk"
 #define		PROF_EV_DTLB_LOAD_MISS_ANY		(1ul << 6)
 	// "number of completed walks due to miss in sTLB"
 #define		PROF_EV_DTLB_LOAD_MISS_STLB		(1ul << 7)
 	// "retired stores that missed in the dTLB"
 #define		PROF_EV_STORE_DTLB_MISS			(1ul << 8)
 #define		PROF_EV_L2_LD_HITS			(1ul << 9)
+	// "all iTLB misses that cause a page walk"
+#define		PROF_EV_ITLB_LOAD_MISS_ANY		(1ul << 10)
 
 // PMU event flags
 #define		PROF_EVF_OS	(1ul << 0)
