@@ -300,35 +300,41 @@ func dumrand(low, high uint) uint {
 
 //go:nosplit
 func _consumelbr() {
-	lastbranch_tos := 0x1c9
+	//lastbranch_tos := 0x1c9
 	lastbranch_0_from_ip := 0x680
-	lastbranch_0_to_ip := 0x6c0
+	//lastbranch_0_to_ip := 0x6c0
 
-	last := Rdmsr(lastbranch_tos) & 0xf
+	// top of stack
+	//last := Rdmsr(lastbranch_tos) & 0xf
 	// XXX stacklen
-	l := 16 * 2
-	l++
+	lbrlen := 16
+	//l := 16 * 2
+	l := 0
+	for i := 0; i < lbrlen; i++ {
+		from := uintptr(Rdmsr(lastbranch_0_from_ip + i))
+		mispred := uintptr(1 << 63)
+		if from & mispred != 0 {
+			l++
+		}
+	}
+	if int(nmiprof.bufidx) + l >= len(nmiprof.buf) {
+		return
+	}
 	idx := int(atomic.Xadd64(&nmiprof.bufidx, int64(l)))
 	idx -= l
 	for i := 0; i < 16; i++ {
-		cur := (last - i)
-		if cur < 0 {
-			cur += 16
+		from := uintptr(Rdmsr(lastbranch_0_from_ip + i))
+		Wrmsr(lastbranch_0_from_ip + i, 0)
+		mispred := uintptr(1 << 63)
+		if from & mispred == 0 {
+			continue
 		}
-		from := uintptr(Rdmsr(lastbranch_0_from_ip + cur))
-		to := uintptr(Rdmsr(lastbranch_0_to_ip + cur))
-		Wrmsr(lastbranch_0_from_ip + cur, 0)
-		Wrmsr(lastbranch_0_to_ip + cur, 0)
-		if idx + 2*i + 1 >= len(nmiprof.buf) {
+		if idx >= len(nmiprof.buf) {
 			Cpuprint('!', 1)
 			break
 		}
-		nmiprof.buf[idx+2*i] = from
-		nmiprof.buf[idx+2*i+1] = to
-	}
-	idx += l - 1
-	if idx < len(nmiprof.buf) {
-		nmiprof.buf[idx] = ^uintptr(0)
+		nmiprof.buf[idx] = from
+		idx++
 	}
 }
 
@@ -343,11 +349,16 @@ func _lbrreset(en bool) {
 	// enable last branch records. filter every branch but to direct
 	// calls/jmps (sandybridge onward has better filtering)
 	lbr_select := 0x1c8
-	jcc := 1 << 2
-	indjmp := 1 << 6
-	//reljmp := 1 << 7
-	farbr := 1 << 8
-	dv := jcc | farbr | indjmp
+	nocplgt0 := 1 << 1
+	//nojcc := 1 << 2
+	norelcall := 1 << 3
+	noindcall := 1 << 4
+	nonearret := 1 << 5
+	noindjmp := 1 << 6
+	noreljmp := 1 << 7
+	nofarbr := 1 << 8
+	dv := nocplgt0 | norelcall | noindcall | nonearret | noindjmp |
+	    noreljmp | nofarbr
 	Wrmsr(lbr_select, dv)
 
 	freeze_lbrs_on_pmi := 1 << 11
@@ -1752,6 +1763,7 @@ func kernel_fault(tf *[TFSIZE]uintptr) {
 func trap(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
 
+	// XXX doesn't this clobber SSE regs?
 	if trapno == TRAP_NMI {
 		perfgather(tf)
 		perfmask()
