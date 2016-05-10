@@ -466,16 +466,30 @@ func sc_put_(c int8) {
 	Outb(com1, uint8(c))
 }
 
+var _scx int
+
 //go:nosplit
 func sc_put(c int8) {
 	if c == '\n' {
 		sc_put_('\r')
-	}
-	sc_put_(c)
-	if c == '\b' {
-		// clear the previous character
-		sc_put_(' ')
-		sc_put_('\b')
+		sc_put_(c)
+		_scx = 0
+	} else if _scx == 80 {
+		sc_put_(c)
+		sc_put_('\r')
+		sc_put_('\n')
+		_scx = 0
+	} else if c == '\b' {
+		if _scx > 0 {
+			// clear the previous character
+			sc_put_('\b')
+			sc_put_(' ')
+			sc_put_('\b')
+			_scx--
+		}
+	} else {
+		sc_put_(c)
+		_scx++
 	}
 }
 
