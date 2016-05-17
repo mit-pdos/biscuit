@@ -635,7 +635,6 @@ type proc_t struct {
 	vmregion	vmregion_t
 
 	// pmap pages
-	//pmpages		*pmtracker_t
 	pmap		*[512]int
 	p_pmap		int
 
@@ -698,8 +697,6 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 
 	ret.name = name
 	ret.pid = np
-	//ret.pmpages = &pmtracker_t{}
-	//ret.pmpages.pminit()
 	ret.fds = fds
 	ret.fdstart = 3
 	ret.cwd = cwd
@@ -862,9 +859,7 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 		//copy(ns.pages, ph.pages)
 
 		// fork all ptes for this vmseg
-		//if ptefork(child.pmap, parent.pmap, child.pmpages, ph.start,
-		if ptefork(child.pmap, parent.pmap, nil, ph.start,
-		    ph.end) {
+		if ptefork(child.pmap, parent.pmap, ph.start, ph.end) {
 			doflush = true
 		}
 	}
@@ -923,8 +918,7 @@ func (p *proc_t) page_insert(va int, seg *vmseg_t, pg *[512]int, p_pg int,
     perms int, vempty bool) {
 	p.lockassert_pmap()
 	refup(uintptr(p_pg))
-	//pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, p.pmpages)
-	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W, nil)
+	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W)
 	ninval := false
 	var p_old uintptr
 	if pte != nil && *pte & PTE_P != 0 {
