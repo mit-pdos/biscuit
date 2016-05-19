@@ -2831,13 +2831,14 @@ var physmem struct {
 	startn		uint32
 	// index into pgs of first free pg
 	freei		uint32
+	sync.Mutex
 }
 
 func refup(p_pg uintptr) {
 	idx := _pg2pgn(p_pg) - physmem.startn
 	c := atomic.AddInt32(&physmem.pgs[idx].refcnt, 1)
 	// XXXPANIC
-	if c < 0 {
+	if c <= 0 {
 		panic("wut")
 	}
 }
@@ -2851,14 +2852,13 @@ func refdown(p_pg uintptr) {
 	}
 	// add to freelist
 	if c == 0 {
-		for {
-			expi := physmem.freei
-			physmem.pgs[idx].nexti = expi
-			if atomic.CompareAndSwapUint32(&physmem.freei, expi,
-			    idx) {
-				break
-			}
-		}
+		physmem.Lock()
+		//pg := dmap(int(p_pg))
+		//*pg = *zeropg
+		onext := physmem.freei
+		physmem.pgs[idx].nexti = onext
+		physmem.freei = idx
+		physmem.Unlock()
 	}
 }
 
@@ -2867,21 +2867,19 @@ func _refpg_new() (*[512]int, int) {
 		panic("dmap not initted")
 	}
 
-	var pi int
-	var p_pg uintptr
-	for {
-		firstfree := physmem.freei
-		if firstfree == ^uint32(0) {
-			panic("refpgs oom")
-		}
-		newhead := physmem.pgs[firstfree].nexti
-		if atomic.CompareAndSwapUint32(&physmem.freei, firstfree,
-		    newhead) {
-			pi = int(firstfree)
-			p_pg = uintptr(firstfree + physmem.startn) << PGSHIFT
-			break
-		}
+	physmem.Lock()
+	firstfree := physmem.freei
+	newhead := physmem.pgs[firstfree].nexti
+	physmem.freei = newhead
+	physmem.Unlock()
+
+	if firstfree == ^uint32(0) {
+		panic("refpgs oom")
 	}
+
+	pi := int(firstfree)
+	p_pg := uintptr(firstfree + physmem.startn) << PGSHIFT
+
 	if physmem.pgs[pi].refcnt < 0 {
 		panic("how?")
 	}
