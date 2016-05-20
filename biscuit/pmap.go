@@ -27,228 +27,638 @@ const VDIRECT   int = 0x44
 const VEND      int = 0x50
 const VUSER     int = 0x59
 
-// XXX right now, the caller has to use a vmseg to keep track of the seg and
-// manually insert it into the page map. it would be easier to only use vmseg:
-// populate vmseg with page information then install a vmseg into a taret page
-// map.
-type vmseg_t struct {
-	start	int
-	end	int
-	startn	int
-	next	*vmseg_t
-	//pages	[]*[512]int
+/*
+ * red-black tree based on niels provos' red-black tree macros
+ */
+
+type rbh_t struct {
+	root	*rbn_t
 }
 
-func (vs *vmseg_t) seg_init(startva, len int) {
-	vs.start = rounddown(startva, PGSIZE)
-	vs.end = roundup(startva + len, PGSIZE)
-	vs.next = nil
-	vs.startn = vs.start >> PGSHIFT
-	l := vs.end - vs.start
-	l /= PGSIZE
-	//vs.pages = make([]*[512]int, l)
+type rbc_t int
+
+const (
+	RED	rbc_t = iota
+	BLACK	rbc_t = iota
+)
+
+type rbn_t struct {
+	p	*rbn_t
+	r	*rbn_t
+	l	*rbn_t
+	c	rbc_t
+	vmi	vminfo_t
 }
 
-func (vs *vmseg_t) track(va int, pg *[512]int) bool {
-	//slot := (va >> PGSHIFT) - vs.startn
-	//old := vs.pages[slot]
-	//vs.pages[slot] = pg
-	//return old != nil
-	return false
-}
-
-//func (vs *vmseg_t) gettrack(va int) (*[512]int, bool) {
-//	if va < vs.start || va >= vs.end {
-//		panic("va outside seg")
-//	}
-//	slot := (va >> PGSHIFT) - vs.startn
-//	ret := vs.pages[slot]
-//	if ret == nil {
-//		return nil, false
-//	}
-//	return ret, true
-//}
-
-type vmregion_t struct {
-	head	*vmseg_t
-}
-
-func (vr *vmregion_t) pglen() int {
-	ret := 0
-	for h := vr.head; h != nil; h = h.next {
-		//ret += len(h.pages)
-		ret += (h.end - h.start) >> uint(PGSHIFT)
-	}
-	return ret
-}
-
-func (vr *vmregion_t) dump() {
-	fmt.Printf("SEGS: ")
-	for h := vr.head; h != nil; h = h.next {
-		//fmt.Printf("(%x, %x) - %v\n", h.start, h.end, h.pages)
-		fmt.Printf("(%x, %x)\n", h.start, h.end)
+type vminfo_t struct {
+	mtype	mtype_t
+	pgn	uintptr
+	pglen	int
+	perms	uint
+	file struct {
+		foff	int
+		mfile	*mfile_t
 	}
 }
 
-func (vr *vmregion_t) clear() *vmseg_t {
-	old := vr.head
-	vr.head = nil
+func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr) {
+	if vmi.mtype != VFILE {
+		panic("must be file mapping")
+	}
+	voff := int(va - (vmi.pgn << PGSHIFT))
+	foff := vmi.file.foff + voff
+	mmapi, err := vmi.file.mfile.mfops.mmapi(foff, 1)
+	if err != 0 {
+		panic("must succeed")
+	}
+	return mmapi[0].pg, uintptr(mmapi[0].phys)
+}
+
+type mtype_t uint
+
+// types of mappings
+const (
+	VANON	mtype_t = 1 << iota
+	VFILE	mtype_t = 1 << iota
+)
+
+type mfile_t struct {
+	mfops		fdops_i
+	// once mapcount is 0, close mfops
+	mapcount	int
+}
+
+func (h *rbh_t) _rol(nn *rbn_t) {
+	tmp := nn.r
+	nn.r = tmp.l
+	if nn.r != nil {
+		tmp.l.p = nn
+	}
+	tmp.p = nn.p
+	if tmp.p != nil {
+		if nn == nn.p.l {
+			nn.p.l = tmp
+		} else {
+			nn.p.r = tmp
+		}
+	} else {
+		h.root = tmp
+	}
+	tmp.l = nn
+	nn.p = tmp
+}
+
+func (h *rbh_t) _ror(nn *rbn_t) {
+	tmp := nn.l
+	nn.l = tmp.r
+	if nn.l != nil {
+		tmp.r.p = nn
+	}
+	tmp.p = nn.p
+	if tmp.p != nil {
+		if nn == nn.p.l {
+			nn.p.l = tmp
+		} else {
+			nn.p.r = tmp
+		}
+	} else {
+		h.root = tmp
+	}
+	tmp.r = nn
+	nn.p = tmp
+}
+
+func (h *rbh_t) _balance(nn *rbn_t) {
+	for par := nn.p; par != nil && par.c == RED; par = nn.p {
+		gp := par.p
+		if par == gp.l {
+			tmp := gp.r
+			if tmp != nil && tmp.c == RED {
+				tmp.c = BLACK
+				par.c = BLACK
+				gp.c = RED
+				nn = gp
+				continue
+			}
+			if par.r == nn {
+				h._rol(par)
+				tmp = par
+				par = nn
+				nn = tmp
+			}
+			par.c = BLACK
+			gp.c = RED
+			h._ror(gp)
+		} else {
+			tmp := gp.l
+			if tmp != nil && tmp.c == RED {
+				tmp.c = BLACK
+				par.c = BLACK
+				gp.c = RED
+				nn = gp
+				continue
+			}
+			if par.l == nn {
+				h._ror(par)
+				tmp = par
+				par = nn
+				nn = tmp
+			}
+			par.c = BLACK
+			gp.c = RED
+			h._rol(gp)
+		}
+	}
+	h.root.c = BLACK
+}
+
+func (h *rbh_t) _insert(vmi *vminfo_t) *rbn_t {
+	nn := &rbn_t{vmi: *vmi, c: RED}
+	if h.root == nil {
+		h.root = nn
+		h._balance(nn)
+		return nn
+	}
+
+	n := h.root
+	for {
+		if vmi.pgn > n.vmi.pgn {
+			if n.r == nil {
+				n.r = nn
+				nn.p = n
+				break
+			}
+			n = n.r
+		} else if vmi.pgn < n.vmi.pgn {
+			if n.l == nil {
+				n.l = nn
+				nn.p = n
+				break
+			}
+			n = n.l
+		} else if n.vmi.pgn == vmi.pgn {
+			return n
+		}
+	}
+	h._balance(nn)
+	return nn
+}
+
+func (h *rbh_t) lookup(pgn uintptr) *rbn_t {
+	n := h.root
+	for n != nil {
+		pgend := n.vmi.pgn + uintptr(n.vmi.pglen)
+		if pgn >= n.vmi.pgn && pgn < pgend {
+			break
+		} else if n.vmi.pgn < pgn {
+			n = n.r
+		} else {
+			n = n.l
+		}
+	}
+	return n
+}
+
+func (h *rbh_t) _rembalance(par, nn *rbn_t) {
+	for (nn == nil || nn.c == BLACK) && nn != h.root {
+		if par.l == nn {
+			tmp := par.r
+			if tmp.c == RED {
+				tmp.c = BLACK
+				par.c = RED
+				h._rol(par)
+				tmp = par.r
+			}
+			if (tmp.l == nil || tmp.l.c == BLACK) &&
+			    (tmp.r == nil || tmp.r.c == BLACK) {
+				tmp.c = RED
+				nn = par
+				par = nn.p
+			} else {
+				if tmp.r == nil || tmp.r.c == BLACK {
+					oleft := tmp.l
+					if oleft != nil {
+						oleft.c = BLACK
+					}
+					tmp.c = RED
+					h._ror(tmp)
+					tmp = par.r
+				}
+				tmp.c = par.c
+				par.c = BLACK
+				if tmp.r != nil {
+					tmp.r.c = BLACK
+				}
+				h._rol(par)
+				nn = h.root
+				break
+			}
+		} else {
+			tmp := par.l
+			if tmp.c == RED {
+				tmp.c = BLACK
+				par.c = RED
+				h._ror(par)
+				tmp = par.l
+			}
+			if (tmp.l == nil || tmp.l.c == BLACK) &&
+			    (tmp.r == nil || tmp.r.c == BLACK) {
+				tmp.c = RED
+				nn = par
+				par = nn.p
+			} else {
+				if tmp.l == nil || tmp.l.c == BLACK {
+					oright := tmp.r
+					if oright != nil {
+						oright.c = BLACK
+					}
+					tmp.c = RED
+					h._rol(tmp)
+					tmp = par.l
+				}
+				tmp.c = par.c
+				par.c = BLACK
+				if tmp.l != nil {
+					tmp.l.c = BLACK
+				}
+				h._ror(par)
+				nn = h.root
+				break
+			}
+		}
+	}
+	if nn != nil {
+		nn.c = BLACK
+	}
+}
+
+func (h *rbh_t) remove(nn *rbn_t) *rbn_t {
+	old := nn
+	fast := true
+	var child *rbn_t
+	var par *rbn_t
+	var col rbc_t
+	if nn.l == nil {
+		child = nn.r
+	} else if nn.r == nil  {
+		child = nn.l
+	} else {
+		nn = nn.r
+		left := nn.l
+		for left != nil {
+			nn = left
+			left = nn.l
+		}
+		child = nn.r
+		par = nn.p
+		col = nn.c
+		if child != nil {
+			child.p = par
+		}
+		if par != nil {
+			if par.l == nn {
+				par.l = child
+			} else {
+				par.r = child
+			}
+		} else {
+			h.root = child
+		}
+		if nn.p == old {
+			par = nn
+		}
+		nn.p = old.p
+		nn.l = old.l
+		nn.r = old.r
+		nn.c = old.c
+		if old.p != nil {
+			if old.p.l == old {
+				old.p.l = nn
+			} else {
+				old.p.r = nn
+			}
+		} else {
+			h.root = nn
+		}
+		old.l.p = nn
+		if old.r != nil {
+			old.r.p = nn
+		}
+		fast = false
+	}
+	if fast {
+		par = nn.p
+		col = nn.c
+		if child != nil {
+			child.p = par
+		}
+		if par != nil {
+			if par.l == nn {
+				par.l = child
+			} else {
+				par.r = child
+			}
+		} else {
+			h.root = child
+		}
+	}
+	if col == BLACK {
+		h._rembalance(par, child)
+	}
 	return old
 }
 
-func (vr *vmregion_t) insert(ns *vmseg_t) *vmseg_t {
-	if vr.head == nil {
-		vr.head = ns
-		return vr.head
-	}
-	var prev *vmseg_t
-	var h *vmseg_t
-	found := false
-	for h = vr.head; h != nil; h = h.next {
-		if h.start == ns.end {
-			return vr._merge(prev, ns, h)
-		} else if ns.start == h.end {
-			return vr._merge(h, ns, h.next)
-		} else if ns.end <= h.start {
-			found = true
-			break
-		}
-		prev = h
-	}
-	if !found {
-		// end of list
-		h = prev
-		h.next = ns
-		return ns
-	}
-	if prev != nil {
-		prev.next = ns
-		ns.next = h
-	} else {
-		// head of list
-		ns.next = h
-		vr.head = ns
-	}
-	return ns
+type vmregion_t struct {
+	rb	rbh_t
+	_pglen	int
 }
 
-func (vr *vmregion_t) remove(startva, len int) bool {
-	start := rounddown(startva, PGSIZE)
-	end := roundup(startva + len, PGSIZE)
-	seg, prev, ok := vr.contain(start)
-	if !ok || end > seg.end {
+func (m *vmregion_t) _canmerge(a, b *vminfo_t) bool {
+	aend := a.pgn + uintptr(a.pglen)
+	bend := b.pgn + uintptr(b.pglen)
+	if a.pgn != bend && b.pgn != aend {
 		return false
 	}
-	if start == seg.start && end == seg.end {
-		if prev != nil {
-			prev.next = seg.next
-		} else {
-			vr.head = seg.next
-		}
-		return true
+	if a.mtype != b.mtype {
+		return false
 	}
-	vr._split(seg, start, end)
+	if a.perms != b.perms {
+		return false
+	}
+	if a.mtype == VFILE {
+		if a.file.mfile.mfops.pathi() != b.file.mfile.mfops.pathi() {
+			return false
+		}
+		afend := a.file.foff + (a.pglen << PGSHIFT)
+		bfend := b.file.foff + (b.pglen << PGSHIFT)
+		if a.file.foff != bfend && b.file.foff != afend {
+			return false
+		}
+	}
 	return true
 }
 
-func (vr *vmregion_t) contain(va int) (*vmseg_t, *vmseg_t, bool) {
-	var prev *vmseg_t
-	var h *vmseg_t
-	for h = vr.head; h != nil; h = h.next {
-		if va >= h.start && va < h.end {
-			return h, prev, true
-		}
-		prev = h
+func (m *vmregion_t) _merge(dst, src *vminfo_t) {
+	// XXXPANIC
+	if !m._canmerge(dst, src) {
+		panic("shat upon")
 	}
-	return nil, nil, false
+	if src.pgn < dst.pgn {
+		dst.pgn = src.pgn
+	}
+	if src.mtype == VFILE {
+		if src.file.foff < dst.file.foff {
+			dst.file.foff = src.file.foff
+		}
+		dst.file.mfile.mapcount += src.file.mfile.mapcount
+	}
+	dst.pglen += src.pglen
 }
 
-func (vr *vmregion_t) _split(old *vmseg_t, rstart, rend int) {
-	if old.start == rstart {
-		//l := (rend - old.start) / PGSIZE
-		old.start = rend
-		old.startn = old.start >> PGSHIFT
-		//old.pages = old.pages[l:]
-	} else if old.end == rend {
-		//l := (rstart - old.start) / PGSIZE
-		old.end = rstart
-		//old.pages = old.pages[:l]
+// looks for an adjacent mapping of the same type which can be merged into nn.
+func (m *vmregion_t) _trymerge(nn *rbn_t, larger bool) {
+	var n *rbn_t
+	if larger {
+		n = nn.r
 	} else {
-		ns := &vmseg_t{}
-		ns.start = rend
-		ns.startn = ns.start >> PGSHIFT
-		ns.end = old.end
-		ns.next = old.next
-		//nl := (rend - old.start) / PGSIZE
-		//ns.pages = old.pages[nl:]
-
-		old.end = rstart
-		old.next = ns
-		//ol := (rstart - old.start) / PGSIZE
-		//old.pages = old.pages[:ol]
+		n = nn.l
+	}
+	for n != nil {
+		if m._canmerge(&nn.vmi, &n.vmi) {
+			m._merge(&nn.vmi, &n.vmi)
+			m.rb.remove(n)
+			return
+		}
+		if larger {
+			n = n.l
+		} else {
+			n = n.r
+		}
 	}
 }
 
-// left or right may be nil. left.next == right
-func (vr *vmregion_t) _merge(left, mid, right *vmseg_t) *vmseg_t {
-	if left != nil {
-		vr._noisect(mid, left)
-		if left.end == mid.start {
-			left.end = mid.end
-			//left.pages = append(left.pages, mid.pages...)
-			mid = left
-		} else {
-			left.next = mid
+// insert a new mapping, merging into the mapping both adjacent mappings, if
+// they exist. there are three cases of pre-existing mappings when we do a new
+// insert:
+// 1) two adjacent mappings of the same type exist
+// 2) one adjacent mapping of the same type exists
+// 3) no adjacent mappings exist.
+// my strategy is to check for an adjacent mapping while looking up the place
+// to insert the new node. if we are in case 1 or 2, we must find one adjacent
+// mapping during the traversal. case 3 is the only scenario where we must
+// insert a new node.
+// XXX make arg value to avoid allocations?
+func (m *vmregion_t) insert(vmi *vminfo_t) {
+	// increase opencount for the file, if any
+	if vmi.mtype == VFILE {
+		// XXXPANIC
+		if vmi.file.mfile.mapcount != vmi.pglen {
+			panic("bad mapcount")
 		}
+		vmi.file.mfile.mfops.reopen()
 	}
-	if right != nil {
-		vr._noisect(mid, right)
-		if mid.end == right.start {
-			mid.end = right.end
-			//mid.pages = append(mid.pages, right.pages...)
-			mid.next = right.next
-			if vr.head == right {
-				vr.head = mid
+	m._pglen += vmi.pglen
+	var par *rbn_t
+	for n := m.rb.root; n != nil; {
+		// XXXPANIC
+		if n.vmi.pgn == vmi.pgn {
+			panic("addr exists")
+		}
+		// is this an adjacent, merge-able mapping?
+		if m._canmerge(&n.vmi, vmi) {
+			m._merge(&n.vmi, vmi)
+			if n.vmi.pgn < vmi.pgn {
+				// found the lower piece, check for higher
+				m._trymerge(n, true)
+			} else {
+				// found the higher piece, check for the lower
+				m._trymerge(n, false)
 			}
+			return
+		}
+		par = n
+		if vmi.pgn > n.vmi.pgn {
+			n = n.r
 		} else {
-			mid.next = right
+			n = n.l
 		}
 	}
-	return mid
+	// there are no mergable mappings, otherwise we would have encountered
+	// one during traversal.
+	nn := &rbn_t{p: par, c: RED, vmi: *vmi}
+	if par == nil {
+		m.rb.root = nn
+	} else {
+		if par.vmi.pgn > vmi.pgn {
+			par.l = nn
+		} else {
+			par.r = nn
+		}
+	}
+	m.rb._balance(nn)
 }
 
-func (vr *vmregion_t) _noisect(ns, h *vmseg_t) {
-	if (ns.start < ns.end && ns.end <= h.start && ns.start < ns.end) ||
-	   (h.start < h.end && h.end <= ns.start && h.start < h.end) {
+func (m *vmregion_t) lookup(va uintptr) (*vminfo_t, bool) {
+	pgn := va >> PGSHIFT
+	n := m.rb.lookup(pgn)
+	var ok bool
+	var ret *vminfo_t
+	if n != nil {
+		ret = &n.vmi
+		ok = true
+	}
+	return ret, ok
+}
+
+func (m *vmregion_t) _clear(vmi *vminfo_t, pglen int) {
+	// decrement mapcounts, close file if necessary
+	if vmi.mtype != VFILE {
 		return
 	}
-	vr.dump()
-	fmt.Printf("trying to merge [%x, %x) and" +
-	    " [%x, %x)\n", ns.start, ns.end, h.start, h.end)
-	panic("segs intersect")
+	//oc := vmi.file.mfile.mapcount
+	vmi.file.mfile.mapcount -= pglen
+	// XXXPANIC
+	if vmi.file.mfile.mapcount < 0 {
+		//fmt.Printf("%v %v (%v)\n", oc, pglen, vmi.pglen)
+		panic("negative ref count")
+	}
+	if vmi.file.mfile.mapcount == 0 {
+		vmi.file.mfile.mfops.close()
+	}
 }
 
-// finds an unreserved region of size sz, at startva or higher
-func (vr *vmregion_t) empty(startva, sz int) int {
-	if vr.head == nil {
-		return startva
+func (m *vmregion_t) clear() {
+	m.iter(func (vmi *vminfo_t) {
+		m._clear(vmi, vmi.pglen)
+	})
+}
+
+func (m *vmregion_t) contain(va int) (*vminfo_t, bool) {
+	pgn := uintptr(va) >> PGSHIFT
+	n := m.rb.lookup(pgn)
+	if n == nil {
+		return nil, false
 	}
-	prev := vr.head
-	for h := vr.head.next; h != nil; h = h.next {
-		if startva > h.end {
-			prev = h
-			continue
+	return &n.vmi, true
+}
+
+func (m *vmregion_t) _copy1(par, src *rbn_t) *rbn_t {
+	if src == nil {
+		return nil
+	}
+	ret := &rbn_t{}
+	*ret = *src
+	// create per-process mfile objects and increase opencount for file
+	// mappings
+	if ret.vmi.mtype == VFILE {
+		nmf := &mfile_t{}
+		*nmf = *src.vmi.file.mfile
+		ret.vmi.file.mfile = nmf
+		nmf.mfops.reopen()
+	}
+	ret.p = par
+	ret.l = m._copy1(ret, src.l)
+	ret.r = m._copy1(ret, src.r)
+	return ret
+}
+
+func (m *vmregion_t) copy() vmregion_t {
+	var ret vmregion_t
+	ret.rb.root = m._copy1(nil, m.rb.root)
+	return ret
+}
+
+func (m *vmregion_t) dump() {
+	m.iter(func(vmi *vminfo_t) {
+		end := (vmi.pgn + uintptr(vmi.pglen)) << PGSHIFT
+		var perms string
+		if vmi.mtype == VANON {
+			perms = "A-"
+		} else {
+			perms = "F-"
 		}
-		if h.start - prev.end >= sz {
-			return prev.end
+		if vmi.perms & uint(PTE_U) != 0 {
+			perms += "R"
 		}
-		prev = h
+		if vmi.perms & uint(PTE_W) != 0 {
+			perms += ",W"
+		}
+		if vmi.perms & uint(PTE_U) != 0 {
+			perms += ",U"
+		}
+		fmt.Printf("[%x - %x) (%v)\n", vmi.pgn << PGSHIFT, end,
+		    perms)
+	})
+}
+
+func (m *vmregion_t) _iter1(n *rbn_t, f func(*vminfo_t)) {
+	if n == nil {
+		return
 	}
-	last := prev
-	if startva > last.end {
-		return startva
+	m._iter1(n.l, f)
+	f(&n.vmi)
+	m._iter1(n.r, f)
+}
+
+func (m *vmregion_t) iter(f func(*vminfo_t)) {
+	m._iter1(m.rb.root, f)
+}
+
+func (m *vmregion_t) pglen() int {
+	return m._pglen
+}
+
+func (m *vmregion_t) end() uintptr {
+	last := uintptr(0)
+	n := m.rb.root
+	for n != nil {
+		last = n.vmi.pgn + uintptr(n.vmi.pglen)
+		n = n.r
 	}
-	return last.end
+	return last << PGSHIFT
+}
+
+func (m *vmregion_t) remove(start, len int) {
+	pgn := uintptr(start) >> PGSHIFT
+	pglen := roundup(len, PGSIZE) >> PGSHIFT
+	m._pglen -= pglen
+	n := m.rb.lookup(pgn)
+	if n == nil {
+		//m.dump()
+		panic("addr not mapped")
+	}
+	m._clear(&n.vmi, pglen)
+	// remove the whole node?
+	if n.vmi.pgn == pgn && n.vmi.pglen == pglen {
+		m.rb.remove(n)
+		return
+	}
+	// if we are removing the beginning or end of the mapping, we can
+	// simply adjust the node.
+	pgend := n.vmi.pgn + uintptr(n.vmi.pglen)
+	if pgn == n.vmi.pgn || pgn + uintptr(pglen) == pgend {
+		if pgn == n.vmi.pgn {
+			n.vmi.pgn += uintptr(pglen)
+			n.vmi.pglen -= pglen
+			if n.vmi.mtype == VFILE {
+				n.vmi.file.foff += pglen << PGSHIFT
+			}
+		} else if pgn + uintptr(pglen) == pgend {
+			n.vmi.pglen -= pglen
+		}
+		return
+	}
+	// removing middle of a mapping; must add a new node
+	avmi := &vminfo_t{}
+	*avmi = n.vmi
+
+	n.vmi.pglen = int(pgn - n.vmi.pgn)
+	avmi.pgn = pgn + uintptr(pglen)
+	avmi.pglen = int(pgend - avmi.pgn)
+	if avmi.mtype == VFILE {
+		avmi.file.foff = int((avmi.pgn - n.vmi.pgn) << PGSHIFT)
+	}
+	m.rb._insert(avmi)
 }
 
 // tracks memory pages
@@ -344,6 +754,7 @@ func kpmap() *[512]int {
 }
 
 //var zeropg = new([512]int)
+var zerobpg *[PGSIZE]uint8
 var zeropg *[512]int
 var p_zeropg int
 var _dmapinit bool
@@ -423,6 +834,7 @@ func dmap_init() {
 	//p_zeropg = *pte & PTE_ADDR
 	zeropg, p_zeropg = _refpg_new()
 	refup(uintptr(p_zeropg))
+	zerobpg = (*[PGSIZE]uint8)(unsafe.Pointer(zeropg))
 }
 
 type kent_t struct {

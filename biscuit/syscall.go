@@ -26,6 +26,7 @@ const(
 	TF_RBX		= 15
 	TF_RAX		= 16
 	TF_TRAP		= TFREGS
+	TF_ERROR	= TFREGS + 1
 	TF_RIP		= TFREGS + 2
 	TF_CS		= TFREGS + 3
 	TF_RSP		= TFREGS + 5
@@ -524,12 +525,11 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		return -ENOMEM
 	}
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
-	seg := proc.mkvmseg(addr, lenn)
+	proc.vmadd_anon(addr, lenn, perms)
 	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
-		//pg, p_pg := pg_new()
-		pg, p_pg := refpg_new()
-		proc.page_insert(addr + i, seg, pg, p_pg, perms, true)
+		_, p_pg := refpg_new()
+		proc.page_insert(addr + i, p_pg, perms, true)
 	}
 	// no tlbshoot because mmap never replaces pages for now
 	proc.Unlock_pmap()
@@ -560,7 +560,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 		ppgs = append(ppgs, p_pg)
 		upto += PGSIZE
 	}
-	pgs := upto/PGSIZE
+	pgs := upto >> PGSHIFT
 	proc.tlbshoot(addrn, pgs)
 	proc.vmregion.remove(addrn, upto)
 	for i := range ppgs {
@@ -2773,43 +2773,84 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	return ret
 }
 
-func sys_pgfault(proc *proc_t, pte *int, faultaddr int) {
-	// pmap is Lock'ed in trap_pgfault...
-	cow := *pte & PTE_COW != 0
-	wascow := *pte & PTE_WASCOW != 0
-	if cow && wascow {
-		panic("invalid state")
+func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr) {
+	// pmap is Lock'ed in proc_t.pgfault...
+	if ecode & uintptr(PTE_U) == 0 {
+		// kernel page faults should be noticed and crashed upon in
+		// runtime.trap(), but just in case
+		panic("kernel page fault")
+	}
+	iswrite := ecode & uintptr(PTE_W) != 0
+
+	// XXX could move this pmap walk to only the COW case where a pte is
+	// already mapped as COW.
+	if pte == nil {
+		pte = pmap_walk(proc.pmap, int(faultaddr), PTE_U | PTE_W)
+	}
+	if *pte & PTE_WASCOW != 0 {
+		// two threads simultaneously faulted on same page
+		return
 	}
 
-	if cow {
-		// copy page
-		//dst, p_dst := pg_new()
-		dst, p_dst := refpg_new()
-		p_src := *pte & PTE_ADDR
-		src := dmap(p_src)
-		if p_src != p_zeropg {
-			*dst = *src
-		}
+	var p_pg int
+	perms := PTE_U | PTE_P
+	var tshoot bool
 
-		seg, _, ok := proc.vmregion.contain(faultaddr)
-		if !ok {
-			panic("no seg")
-		}
+	if iswrite {
+		// XXX could avoid copy for last process to fault on a shared
+		// page by verifying that the ref count is 1.
 
-		// insert new page into pmap
-		va := faultaddr & PGMASK
-		perms := (*pte & PTE_FLAGS) & ^PTE_COW
-		perms |= PTE_W | PTE_WASCOW
-		proc.page_insert(va, seg, dst, p_dst, perms, false)
-
-		proc.tlbshoot(faultaddr, 1)
-	} else if wascow {
-		// land here if two threads fault on same page
-		if wascow && *pte & PTE_W == 0 {
-			panic("handled but read-only")
+		// XXXPANIC
+		if *pte & PTE_W != 0 {
+			panic("bad state")
 		}
+		var pgsrc *[512]int
+		var pg *[512]int
+		// don't zero new page
+		pg, p_pg = _refpg_new()
+		// the copy-on-write page may be specified in the pte or it may
+		// not have been mapped at all yet.
+		cow := *pte & PTE_COW != 0
+		if cow {
+			phys := *pte & PTE_ADDR
+			pgsrc = dmap(phys)
+			tshoot = true
+		} else {
+			// XXXPANIC
+			if *pte != 0 {
+				panic("no")
+			}
+			switch vmi.mtype {
+			case VANON:
+				pgsrc = zeropg
+			case VFILE:
+				pgsrc, _ = vmi.filepage(uintptr(faultaddr))
+			}
+		}
+		*pg = *pgsrc
+		perms |= PTE_WASCOW
+		perms |= PTE_W
 	} else {
-		panic("fault on non-cow page")
+		if *pte != 0 {
+			panic("must be 0")
+		}
+		switch vmi.mtype {
+		case VANON:
+			p_pg = p_zeropg
+		case VFILE:
+			_, p := vmi.filepage(uintptr(faultaddr))
+			p_pg = int(p)
+		}
+		if vmi.perms & uint(PTE_W) != 0 {
+			perms |= PTE_COW
+		}
+		tshoot = false
+	}
+
+	isempty := !tshoot
+	proc.page_insert(int(faultaddr), p_pg, perms, isempty)
+	if tshoot {
+		proc.tlbshoot(int(faultaddr), 1)
 	}
 }
 
@@ -2832,6 +2873,8 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 	return sys_execv1(proc, tf, path, args)
 }
 
+var _zvmregion vmregion_t
+
 func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
     args []string) int {
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
@@ -2844,10 +2887,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	defer proc.Unlock_pmap()
 
 	// save page trackers in case the exec fails
-	//opmpages := proc.pmpages
-	//proc.pmpages = &pmtracker_t{}
-	//proc.pmpages.pminit()
-	ovmreg := proc.vmregion.clear()
+	ovmreg := proc.vmregion
+	proc.vmregion = _zvmregion
 
 	// create kernel page table
 	opmap := proc.pmap
@@ -2864,7 +2905,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		refdown(uintptr(proc.p_pmap))
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
-		proc.vmregion.head = ovmreg
+		proc.vmregion = ovmreg
 	}
 
 	// load binary image -- get first block of file
@@ -2896,9 +2937,6 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		restore()
 		return -EPERM
 	}
-	if op_pmap != 0 {
-		vmfree(op_pmap)
-	}
 
 	// elf_load() will create two copies of TLS section: one for the fresh
 	// copy and one for thread 0
@@ -2909,24 +2947,12 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	// +1 for the guard page
 	stksz := (numstkpages + 1) * PGSIZE
 	stackva := proc.unusedva_inner(0x0ff << 39, stksz)
-	seg := proc.mkvmseg(stackva, stksz)
+	proc.vmadd_anon(stackva, PGSIZE, 0)
+	proc.vmadd_anon(stackva + PGSIZE, stksz - PGSIZE, PTE_U | PTE_W)
 	stackva += stksz
-	for i := 0; i < numstkpages; i++ {
-		var stack *[512]int
-		var p_stack int
-		perms := PTE_U
-		if i == 0 {
-			//stack, p_stack = pg_new()
-			stack, p_stack = refpg_new()
-			perms |= PTE_W
-		} else {
-			stack = zeropg
-			p_stack = p_zeropg
-			perms |= PTE_COW
-		}
-		va := stackva - PGSIZE*(i+1)
-		proc.page_insert(va, seg, stack, p_stack, perms, true)
-	}
+	// eagerly map first stack page
+	_, p_pg := refpg_new()
+	proc.page_insert(stackva - 1, p_pg, PTE_U | PTE_W, true)
 
 	// XXX make insertargs not fail by using more than a page...
 	argc, argv, ok := insertargs(proc, args)
@@ -2935,6 +2961,12 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		restore()
 		return -EINVAL
 	}
+
+	// the exec must succeed now; free old pmap/mapped files
+	if op_pmap != 0 {
+		vmfree(op_pmap)
+	}
+	ovmreg.clear()
 
 	// close fds marked with CLOEXEC
 	for fdn, fd := range proc.fds {
@@ -2983,10 +3015,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	// find free page
 	uva := proc.unusedva_inner(0, PGSIZE)
-	seg := proc.mkvmseg(uva, PGSIZE)
-	//pg, p_pg := pg_new()
-	pg, p_pg := refpg_new()
-	proc.page_insert(uva, seg, pg, p_pg, PTE_U, true)
+	proc.vmadd_anon(uva, PGSIZE, PTE_U)
+	_, p_pg := refpg_new()
+	proc.page_insert(uva, p_pg, PTE_U, true)
 	var args [][]uint8
 	for _, str := range sargs {
 		args = append(args, []uint8(str))
@@ -3343,14 +3374,6 @@ func _uva2kva(proc *proc_t, va uintptr) (uintptr, *uint32, int) {
 		return 0, nil, -EFAULT
 	}
 	pgva := dmap(*pte & PTE_ADDR)
-	//seg, _, ok := proc.vmregion.contain(int(va))
-	//if !ok {
-	//	return 0, nil, -EFAULT
-	//}
-	//pgva, ok := seg.gettrack(int(va))
-	//if !ok {
-	//	return 0, nil, -EFAULT
-	//}
 	pgoff := uintptr(va) & uintptr(PGOFFSET)
 	uniq := uintptr(unsafe.Pointer(pgva)) + pgoff
 	return uniq, (*uint32)(unsafe.Pointer(uniq)), 0
@@ -3825,7 +3848,7 @@ func sys_info(proc *proc_t, n int) int {
 		ret = 0
 		fmt.Printf("pgcount: %v\n", pgcount())
 	case 11:
-		proc.vmregion.dump()
+		//proc.vmregion.dump()
 		ret = 0
 	}
 
@@ -4027,7 +4050,7 @@ func (e *elf_t) entry() int {
 	return readn(e.data, ELF_ADDR, e_entry)
 }
 
-func segload(proc *proc_t, hdr *elf_phdr, mmapi []mmapinfo_t) {
+func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 	if hdr.vaddr % PGSIZE != hdr.fileoff % PGSIZE {
 		panic("requires copying")
 	}
@@ -4035,59 +4058,63 @@ func segload(proc *proc_t, hdr *elf_phdr, mmapi []mmapinfo_t) {
 	//PF_X := 1
 	PF_W := 2
 	if hdr.flags & PF_W != 0 {
-		perms |= PTE_COW
+		perms |= PTE_W
 	}
 
-	var vastart int
 	var did int
 	// the bss segment's virtual address may start on the same page as the
 	// previous segment. if that is the case, we may not be able to avoid
 	// copying.
-	if _, _, ok := proc.vmregion.contain(hdr.vaddr); ok {
+	// XXX why does this happen? fix elf segment alignment?
+	if _, ok := proc.vmregion.contain(hdr.vaddr); ok {
 		va := hdr.vaddr
 		proc.cowfault(va)
 		pg, ok := proc.userdmap8_inner(va)
 		if !ok {
 			panic("must be mapped")
 		}
-		pgn := hdr.fileoff / PGSIZE
-		bsrc := (*[PGSIZE]uint8)(unsafe.Pointer(mmapi[pgn].pg))[:]
+		mmapi, err := fops.mmapi(hdr.fileoff, 1)
+		if err != 0 {
+			panic("must succeed")
+		}
+		bsrc := (*[PGSIZE]uint8)(unsafe.Pointer(mmapi[0].pg))[:]
 		bsrc = bsrc[va & PGOFFSET:]
 		if len(pg) > hdr.filesz {
 			pg = pg[0:hdr.filesz]
 		}
 		copy(pg, bsrc)
 		did = len(pg)
-		vastart = PGSIZE
 	}
-	filesz := roundup(hdr.vaddr + hdr.filesz, PGSIZE)
+	filesz := roundup(hdr.vaddr + hdr.filesz - did, PGSIZE)
 	filesz -= rounddown(hdr.vaddr, PGSIZE)
-	seg := proc.mkvmseg(hdr.vaddr + did, hdr.memsz - did)
-	for i := vastart; i < filesz; i += PGSIZE {
-		pgn := (hdr.fileoff + i) / PGSIZE
-		pg := mmapi[pgn].pg
-		p_pg := mmapi[pgn].phys
-		proc.page_insert(hdr.vaddr + i, seg, pg, p_pg, perms, true)
-	}
-	// setup bss: zero first page, map the rest to the zero page
-	for i := hdr.vaddr + hdr.filesz; i < hdr.vaddr + hdr.memsz; {
-		if (i % PGSIZE) == 0 {
-			// user zero pg
-			proc.page_insert(i, seg, zeropg, p_zeropg, perms, true)
-			i += PGSIZE
-		} else {
-			// make our own copy of the file's page
-			proc.cowfault(i)
-			pg, ok := proc.userdmap8_inner(i)
-			if !ok {
-				panic("must be mapped")
-			}
-			for j := range pg {
-				pg[j] = 0
-			}
-			i += len(pg)
+	proc.vmadd_file(hdr.vaddr + did, filesz, perms, fops, hdr.fileoff + did)
+	// eagerly map the page at the entry address
+	if entry >= hdr.vaddr && entry < hdr.vaddr + hdr.memsz {
+		ent := uintptr(entry)
+		vmi, ok := proc.vmregion.lookup(ent)
+		if !ok {
+			panic("just mapped?")
 		}
+		sys_pgfault(proc, vmi, nil, ent, uintptr(PTE_U))
 	}
+	if hdr.filesz == hdr.memsz {
+		return
+	}
+	// if there is bss, fault in the partial page since we need to zero some of it
+	bssva := hdr.vaddr + hdr.filesz
+	proc.cowfault(bssva)
+	bpg, ok := proc.userdmap8_inner(bssva)
+	if !ok {
+		panic("must be mapped")
+	}
+	bsslen := hdr.memsz - hdr.filesz
+	if bsslen < len(bpg) {
+		bpg = bpg[0:bsslen]
+	}
+	copy(bpg, zerobpg[:])
+	bssva += len(bpg)
+	bsslen = roundup(bsslen - len(bpg), PGSIZE)
+	proc.vmadd_anon(bssva, bsslen, perms)
 }
 
 // returns user address of read-only TLS, thread 0's TLS image, and TLS size.
@@ -4100,6 +4127,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 	var tlsaddr int
 	var tlscopylen int
 
+	entry := e.entry()
 	// load each elf segment directly into process memory
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
@@ -4109,11 +4137,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 			tlssize = roundup(hdr.memsz, 8)
 			tlscopylen = hdr.filesz
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= USERMIN {
-			mmapi, err := f.fops.mmapi(0, -1)
-			if err != 0 {
-				panic("must succeed")
-			}
-			segload(proc, &hdr, mmapi)
+			segload(proc, entry, &hdr, f.fops)
 		}
 	}
 
@@ -4126,32 +4150,39 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 
 		freshtls = proc.unusedva_inner(0, 2*l)
 		t0tls = freshtls + l
-		seg := proc.mkvmseg(freshtls, 2*l)
+		proc.vmadd_anon(freshtls, l, PTE_U)
+		proc.vmadd_anon(t0tls, l, PTE_U | PTE_W)
 		perms := PTE_U
 
 		for i := 0; i < l; i += PGSIZE {
 			// allocator zeros objects, so tbss is already
 			// initialized.
-			//pg, p_pg := pg_new()
-			pg, p_pg := refpg_new()
-			proc.page_insert(freshtls + i, seg, pg, p_pg, perms,
-			    true)
-			src, ok := proc.userdmap8_inner(tlsaddr + i)
-			if !ok {
-				panic("must succeed")
-			}
-			bpg := ((*[PGSIZE]uint8)(unsafe.Pointer(pg)))[:]
-			left := tlscopylen - i
-			if len(bpg) > left {
-				bpg = bpg[0:left]
-			}
-			copy(bpg, src)
+			_, p_pg := refpg_new()
+			proc.page_insert(freshtls + i, p_pg, perms, true)
 			// map fresh TLS for thread 0
 			nperms := perms | PTE_COW
-			proc.page_insert(t0tls + i, seg, pg, p_pg, nperms,
-			    true)
+			proc.page_insert(t0tls + i, p_pg, nperms, true)
 		}
-		// map thread 0's TLS
+		// copy TLS data to freshtls
+		tlsvmi, ok := proc.vmregion.lookup(uintptr(tlsaddr))
+		if !ok {
+			panic("must succeed")
+		}
+		for i := 0; i < tlscopylen; {
+			_src, _ := tlsvmi.filepage(uintptr(tlsaddr + i))
+			off := (tlsaddr + i) & PGOFFSET
+			src := ((*[PGSIZE]uint8)(unsafe.Pointer(_src)))[off:]
+			bpg, ok := proc.userdmap8_inner(freshtls + i)
+			if !ok {
+				panic("must be mapped")
+			}
+			left := tlscopylen - i
+			if len(src) > left {
+				src = src[0:left]
+			}
+			copy(bpg, src)
+			i += len(src)
+		}
 
 		// amd64 sys 5 abi specifies that the tls pointer references to
 		// the first invalid word past the end of the tls

@@ -630,8 +630,6 @@ type proc_t struct {
 	pgfl		sync.Mutex
 	pgfltaken	bool
 
-	// vmregion is a linked list of vmseg_t. each describes a contiguous
-	// address space.
 	vmregion	vmregion_t
 
 	// pmap pages
@@ -747,15 +745,21 @@ func proc_del(pid int) {
 // same lock acquisition). this can go away once we can handle syscalls with
 // the user pmap still loaded.
 func (p *proc_t) cowfault(userva int) {
+	// userva is not guaranteed to be valid
 	if userva < USERMIN {
 		return
 	}
 	p.lockassert_pmap()
-	pte := pmap_lookup(p.pmap, userva)
-	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_COW == 0 {
+	pte := pmap_walk(p.pmap, userva, PTE_U | PTE_W)
+	if *pte & PTE_P != 0 && *pte & PTE_COW == 0 {
 		return
 	}
-	sys_pgfault(p, pte, userva)
+	vmi, ok := p.vmregion.lookup(uintptr(userva))
+	if !ok {
+		return
+	}
+	ecode := uintptr(PTE_U | PTE_W)
+	sys_pgfault(p, vmi, pte, uintptr(userva), ecode)
 }
 
 // an fd table invariant: every fd must have its file field set. thus the
@@ -840,32 +844,19 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	// recursive mapping
 	child.pmap[VREC] = child.p_pmap | PTE_P | PTE_W
 
-	// copy vm segments
 	doflush := false
-	var ch *vmseg_t
-	for ph := parent.vmregion.head; ph != nil; ph = ph.next {
-		// add new vmseg to child
-		ns := &vmseg_t{}
-		if ch == nil {
-			child.vmregion.head = ns
-		} else {
-			ch.next = ns
-		}
-		ch = ns
-		ns.start = ph.start
-		ns.end = ph.end
-		ns.startn = ph.startn
-		//ns.pages = make([]*[512]int, len(ph.pages))
-		//copy(ns.pages, ph.pages)
-
-		// fork all ptes for this vmseg
-		if ptefork(child.pmap, parent.pmap, ph.start, ph.end) {
+	child.vmregion = parent.vmregion.copy()
+	parent.vmregion.iter(func(vmi *vminfo_t) {
+		start := int(vmi.pgn << PGSHIFT)
+		end := start + int(vmi.pglen << PGSHIFT)
+		//fmt.Printf("fork reg: %x %x\n", start, end)
+		if ptefork(child.pmap, parent.pmap, start, end) {
 			doflush = true
 		}
-	}
+	})
 
-	// don't mark stack COW since the parent/child are likely to fault
-	// their stacks immediately, even if they plan on exec'ing
+	// don't mark stack COW since the parent/child will fault their stacks
+	// immediately
 	pte := pmap_lookup(child.pmap, rsp)
 	// give up if we can't find the stack
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
@@ -873,7 +864,11 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	}
 	// sys_pgfault expects pmap to be locked
 	child.Lock_pmap()
-	sys_pgfault(child, pte, rsp)
+	vmi, ok := child.vmregion.lookup(uintptr(rsp))
+	if !ok {
+		panic("must be mapped")
+	}
+	sys_pgfault(child, vmi, pte, uintptr(rsp), uintptr(PTE_U | PTE_W))
 	child.Unlock_pmap()
 	pte = pmap_lookup(parent.pmap, rsp)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
@@ -885,10 +880,44 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	return doflush
 }
 
-func (p *proc_t) mkvmseg(start, len int) *vmseg_t {
-	seg := &vmseg_t{}
-	seg.seg_init(start, len)
-	return p.vmregion.insert(seg)
+// does not increase opencount on fops (vmadd_file does). perms should only use
+// PTE_U/PTE_W; the page fault handler will install the correct COW flags.
+// perms == 0 means that no mapping can go here (like for guard pages).
+func (p *proc_t) _mkvmi(mt mtype_t, start, len, perms, foff int,
+    fops fdops_i) *vminfo_t {
+	if (start | len) & PGOFFSET != 0 {
+		//fmt.Printf("%x %x\n", start, len)
+		panic("start and len must be aligned")
+	}
+	// don't specify cow, present etc. -- page fault will handle all that
+	pm := PTE_W | PTE_COW | PTE_WASCOW | PTE_PS | PTE_PCD | PTE_P | PTE_U
+	if r := perms & pm; r != 0 && r != PTE_U && r != (PTE_W | PTE_U) {
+		panic("bad perms")
+	}
+	ret := &vminfo_t{}
+	pgn := uintptr(start) >> PGSHIFT
+	pglen := roundup(len, PGSIZE) >> PGSHIFT
+	ret.mtype = mt
+	ret.pgn = pgn
+	ret.pglen = pglen
+	ret.perms = uint(perms)
+	if mt == VFILE {
+		ret.file.foff = foff
+		ret.file.mfile = &mfile_t{}
+		ret.file.mfile.mfops = fops
+		ret.file.mfile.mapcount = pglen
+	}
+	return ret
+}
+
+func (p *proc_t) vmadd_anon(start, len, perms int) {
+	vmi := p._mkvmi(VANON, start, len, perms, 0, nil)
+	p.vmregion.insert(vmi)
+}
+
+func (p *proc_t) vmadd_file(start, len, perms int, fops fdops_i, foff int) {
+	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops)
+	p.vmregion.insert(vmi)
 }
 
 func (p *proc_t) mkuserbuf(userva, len int) *userbuf_t {
@@ -914,8 +943,7 @@ func (p *proc_t) mkfxbuf() *[64]int {
 	return ret
 }
 
-func (p *proc_t) page_insert(va int, seg *vmseg_t, pg *[512]int, p_pg int,
-    perms int, vempty bool) {
+func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) {
 	p.lockassert_pmap()
 	refup(uintptr(p_pg))
 	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W)
@@ -933,7 +961,6 @@ func (p *proc_t) page_insert(va int, seg *vmseg_t, pg *[512]int, p_pg int,
 		invlpg(va)
 		refdown(p_old)
 	}
-	seg.track(va, pg)
 }
 
 func (p *proc_t) page_remove(va int) (uintptr, bool) {
@@ -950,23 +977,23 @@ func (p *proc_t) page_remove(va int) (uintptr, bool) {
 	return p_old, remmed
 }
 
-func (p *proc_t) pgfault(tid tid_t, fa int) bool {
+func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
-
-	pte := pmap_lookup(p.pmap, fa)
-	if pte != nil {
-		cow := *pte & PTE_COW != 0
-		wascow := *pte & PTE_WASCOW != 0
-		if cow || wascow {
-			if fa < USERMIN {
-				panic("kern addr marked cow")
-			}
-			sys_pgfault(p, pte, fa)
-			return true
+	vmi, ok := p.vmregion.lookup(fa)
+	if ok {
+		iswrite := ecode & uintptr(PTE_W) != 0
+		writeok := vmi.perms & uint(PTE_W) != 0
+		if iswrite && !writeok {
+			ok = false
 		}
 	}
-	return false
+	if !ok {
+		p.Unlock_pmap()
+		return false
+	}
+	sys_pgfault(p, vmi, nil, fa, ecode)
+	p.Unlock_pmap()
+	return true
 }
 
 func (p *proc_t) tlbshoot(startva, pgcount int) {
@@ -1019,8 +1046,8 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			//fmt.Printf(".")
 			runtime.Gosched()
 		case PGFAULT:
-			faultaddr := aux
-			if !p.pgfault(tid, faultaddr) {
+			faultaddr := uintptr(aux)
+			if !p.pgfault(tid, faultaddr, uintptr(tf[TF_ERROR])) {
 				fmt.Printf("*** fault *** %v: addr %x, " +
 				    "rip %x. killing...\n", p.name, faultaddr,
 				    tf[TF_RIP])
@@ -1206,14 +1233,6 @@ func (p *proc_t) lockassert_pmap() {
 func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
 	p.lockassert_pmap()
 	voff := va & PGOFFSET
-	//seg, _, ok := p.vmregion.contain(va)
-	//if !ok {
-	//	return nil, false
-	//}
-	//pg, ok := seg.gettrack(va)
-	//if !ok {
-	//	return nil, false
-	//}
 	pte := pmap_lookup(p.pmap, va)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return nil, false
@@ -1233,14 +1252,6 @@ func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
 // caller must have the vm lock
 func (p *proc_t) userdmap_inner(va int) (*[512]int, bool) {
 	p.lockassert_pmap()
-	//seg, _, ok := p.vmregion.contain(va)
-	//if !ok {
-	//	return nil, false
-	//}
-	//pg, ok := seg.gettrack(va)
-	//if !ok {
-	//	return nil, false
-	//}
 	pte := pmap_lookup(p.pmap, va)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return nil, false
@@ -1482,6 +1493,8 @@ func (p *proc_t) user2k_inner(dst []uint8, uva int) bool {
 }
 
 func (p *proc_t) unusedva_inner(startva, len int) int {
+	// XXX it seems good to choose an address close to startva, otherwise
+	// all memory ends up being next to the stack.
 	p.lockassert_pmap()
 	if len < 0 || len > 1 << 48 {
 		panic("weird len")
@@ -1490,7 +1503,12 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	if startva < USERMIN {
 		startva = USERMIN
 	}
-	return p.vmregion.empty(startva, len)
+	vmlast := int(p.vmregion.end())
+	if vmlast > startva {
+		return vmlast
+	} else {
+		return startva
+	}
 }
 
 // a helper object for read/writing from userspace memory. virtual address
@@ -2882,7 +2900,8 @@ func _refpg_new() (*[512]int, int) {
 	return pg, dur
 }
 
-// refcnt of returned page is not incremented. requires direct mapping.
+// refcnt of returned page is not incremented (it is usually incremented via
+// proc_t.page_insert). requires direct mapping.
 func refpg_new() (*[512]int, int) {
 	pg, p_pg := _refpg_new()
 	*pg = *zeropg
