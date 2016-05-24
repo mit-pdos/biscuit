@@ -1493,8 +1493,6 @@ func (p *proc_t) user2k_inner(dst []uint8, uva int) bool {
 }
 
 func (p *proc_t) unusedva_inner(startva, len int) int {
-	// XXX it seems good to choose an address close to startva, otherwise
-	// all memory ends up being next to the stack.
 	p.lockassert_pmap()
 	if len < 0 || len > 1 << 48 {
 		panic("weird len")
@@ -1503,12 +1501,13 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	if startva < USERMIN {
 		startva = USERMIN
 	}
-	vmlast := int(p.vmregion.end())
-	if vmlast > startva {
-		return vmlast
-	} else {
-		return startva
+	_ret, _l := p.vmregion.empty(uintptr(startva), uintptr(len))
+	ret := int(_ret)
+	l := int(_l)
+	if startva > ret && startva < ret + l {
+		ret = startva
 	}
+	return ret
 }
 
 // a helper object for read/writing from userspace memory. virtual address

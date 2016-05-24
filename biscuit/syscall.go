@@ -3000,8 +3000,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	tf[TF_RFLAGS] = TF_FL_IF
 	ucseg := 5
 	udseg := 6
-	tf[TF_CS] = ucseg << 3 | 3
-	tf[TF_SS] = udseg << 3 | 3
+	tf[TF_CS] = (ucseg << 3) | 3
+	tf[TF_SS] = (udseg << 3) | 3
 	tf[TF_RDI] = argc
 	tf[TF_RSI] = argv
 	tf[TF_RDX] = bufdest

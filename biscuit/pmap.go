@@ -371,6 +371,10 @@ func (h *rbh_t) remove(nn *rbn_t) *rbn_t {
 type vmregion_t struct {
 	rb	rbh_t
 	_pglen	int
+	hole struct {
+		startn	uintptr
+		pglen	uintptr
+	}
 }
 
 func (m *vmregion_t) _canmerge(a, b *vminfo_t) bool {
@@ -456,6 +460,14 @@ func (m *vmregion_t) insert(vmi *vminfo_t) {
 			panic("bad mapcount")
 		}
 		vmi.file.mfile.mfops.reopen()
+	}
+	// adjust the cached hole
+	if vmi.pgn == m.hole.startn {
+		m.hole.startn += uintptr(vmi.pglen)
+		m.hole.pglen -= uintptr(vmi.pglen)
+	} else if vmi.pgn >= m.hole.startn &&
+	    vmi.pgn < m.hole.startn + m.hole.pglen {
+		m.hole.pglen = m.hole.startn - vmi.pgn
 	}
 	m._pglen += vmi.pglen
 	var par *rbn_t
@@ -606,6 +618,51 @@ func (m *vmregion_t) iter(f func(*vminfo_t)) {
 
 func (m *vmregion_t) pglen() int {
 	return m._pglen
+}
+
+func (m *vmregion_t) _findhole(minpgn, minlen uintptr) (uintptr, uintptr) {
+	var startn uintptr
+	var pglen uintptr
+	var done bool
+	m.iter(func(vmi *vminfo_t) {
+		if done {
+			return
+		}
+		if startn == 0 {
+			t := vmi.pgn + uintptr(vmi.pglen)
+			if t >= minpgn {
+				startn = t
+			}
+		} else {
+			if vmi.pgn - startn >= minlen {
+				pglen = startn - vmi.pgn
+				done = true
+			} else {
+				startn = vmi.pgn + uintptr(vmi.pglen)
+			}
+		}
+	})
+	if startn == 0 {
+		startn = minpgn
+	}
+	if pglen == 0 {
+		pglen = (0x100 << 39) - startn
+	}
+	return startn, pglen
+}
+
+func (m *vmregion_t) empty(minva, len uintptr) (uintptr, uintptr) {
+	minn := minva >> PGSHIFT
+	pglen := uintptr(roundup(int(len), PGSIZE) >> PGSHIFT)
+	if minn >= m.hole.startn && pglen <= m.hole.pglen {
+		return m.hole.startn << PGSHIFT, m.hole.pglen << PGSHIFT
+	}
+	nhs, nhl := m._findhole(minn, pglen)
+	m.hole.startn, m.hole.pglen = nhs, nhl
+	if !(minn + pglen <= m.hole.startn + m.hole.pglen) {
+		panic("wut")
+	}
+	return m.hole.startn << PGSHIFT, m.hole.pglen << PGSHIFT
 }
 
 func (m *vmregion_t) end() uintptr {
