@@ -40,7 +40,7 @@ void usage(char *pre)
 		 "       \"llcref\" - LLC references\n"
 		 "       \"llcmiss\" - LLC misses\n"
 		 "       \"dtlbmiss\" - dTLB misses\n"
-		 "       \"itlbmiss\" - dTLB misses\n"
+		 "       \"itlbmiss\" - iTLB misses\n"
 		 "-i int sample after int PMU events. only used with -s.\n"
 		 "\n"
 		 , __progname);
