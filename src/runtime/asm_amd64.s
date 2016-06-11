@@ -197,7 +197,7 @@ DATA	fakeargv+16(SB)/8,$0
 GLOBL	fakeargv(SB),RODATA,$24
 
 TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
-	MOVL	DI, ·p_kpmap(SB)
+	MOVL	DI, ·P_kpmap(SB)
 	MOVL	SI, ·pgfirst(SB)
 	MOVQ	$1, runtime·hackmode(SB)
 	CALL	runtime·sc_setup(SB)

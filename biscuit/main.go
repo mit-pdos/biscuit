@@ -1028,9 +1028,9 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
-		intno, aux := runtime.Userrun(tf, fxbuf, p.pmap,
-		    //uintptr(p.p_pmap), p.pmpages.pms, fastret)
-		    uintptr(p.p_pmap), nil, fastret)
+		refp, _ := _refaddr(uintptr(p.p_pmap))
+		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf, p.pmap,
+		    uintptr(p.p_pmap), nil, fastret, refp)
 		fastret = false
 		switch intno {
 		case SYSCALL:
@@ -1061,6 +1061,11 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			// XXX: shouldn't interrupt user program execution...
 		default:
 			panic(fmt.Sprintf("weird trap: %d", intno))
+		}
+		// did we switch pmaps? if so, the old pmap may need to be
+		// freed.
+		if odec {
+			dec_pmap(op_pmap)
 		}
 	}
 }
@@ -1145,19 +1150,27 @@ func _scanadd(pg *[512]int, depth int, l *[]int) {
 
 var fpool = sync.Pool{New: func() interface{} { return make([]int, 0, 10) }}
 
-func vmfree(p_pmap int) int {
+// walks the pmap, adding each page to a slice to be freed
+func _vmfree(p_pmap uintptr) int {
 	//pgs := make([]int, 0, 10)
+	// XXX try putting pgs on stack; does escape analysis still screw up?
 	pgs := fpool.Get().([]int)
-	pgs = append(pgs, p_pmap)
-	_scanadd(dmap(p_pmap), 4, &pgs)
-	if runtime.Rcr3() == uintptr(p_pmap) {
-		runtime.Lcr3(runtime.Kpmap_p())
-	}
+	_scanadd(dmap(int(p_pmap)), 4, &pgs)
+	// XXX this takes the free list lock many times
 	for _, p_pg := range pgs {
 		refdown(uintptr(p_pg))
 	}
 	fpool.Put(pgs[0:0])
 	return len(pgs)
+}
+
+func dec_pmap(p_pmap uintptr) {
+	freed, idx := _refdown(p_pmap)
+	if !freed {
+		return
+	}
+	_vmfree(p_pmap)
+	_reffree(idx)
 }
 
 // termiante a process. must only be called when the process has no more
@@ -1186,7 +1199,7 @@ func (p *proc_t) terminate() {
 	close_panic(p.cwd)
 
 	proc_del(p.pid)
-	vmfree(p.p_pmap)
+	dec_pmap(uintptr(p.p_pmap))
 
 	// send status to parent
 	if p.pwait == nil {
@@ -1204,9 +1217,6 @@ func (p *proc_t) terminate() {
 	// put process exit status to parent's wait info
 	p.pwait.put(p.pid, p.exitstatus, &na)
 }
-
-// XXX these can probably go away since user processes share kernel pmaps
-// now... (don't switch to kernel pmap, just use the user pmap)
 
 func (p *proc_t) Lock_pmap() {
 	// useful for finding deadlock bugs with one cpu
@@ -2845,31 +2855,44 @@ var physmem struct {
 	sync.Mutex
 }
 
-func refup(p_pg uintptr) {
+func _refaddr(p_pg uintptr) (*int32, uint32) {
 	idx := _pg2pgn(p_pg) - physmem.startn
-	c := atomic.AddInt32(&physmem.pgs[idx].refcnt, 1)
+	return &physmem.pgs[idx].refcnt, idx
+}
+
+func refup(p_pg uintptr) {
+	ref, _ := _refaddr(p_pg)
+	c := atomic.AddInt32(ref, 1)
 	// XXXPANIC
 	if c <= 0 {
 		panic("wut")
 	}
 }
 
-func refdown(p_pg uintptr) {
-	idx := _pg2pgn(p_pg) - physmem.startn
-	c := atomic.AddInt32(&physmem.pgs[idx].refcnt, -1)
+// returns true if p_pg should be added to the free list and the index of the
+// page in the pgs array
+func _refdown(p_pg uintptr) (bool, uint32) {
+	ref, idx := _refaddr(p_pg)
+	c := atomic.AddInt32(ref, -1)
 	// XXXPANIC
 	if c < 0 {
 		panic("wut")
 	}
-	// add to freelist
-	if c == 0 {
-		physmem.Lock()
-		//pg := dmap(int(p_pg))
-		//*pg = *zeropg
-		onext := physmem.freei
-		physmem.pgs[idx].nexti = onext
-		physmem.freei = idx
-		physmem.Unlock()
+	return c == 0, idx
+}
+
+func _reffree(idx uint32) {
+	physmem.Lock()
+	onext := physmem.freei
+	physmem.pgs[idx].nexti = onext
+	physmem.freei = idx
+	physmem.Unlock()
+}
+
+func refdown(p_pg uintptr) {
+	// add to freelist?
+	if add, idx :=_refdown(p_pg); add {
+		_reffree(idx)
 	}
 }
 
