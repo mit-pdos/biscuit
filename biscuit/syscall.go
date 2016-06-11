@@ -2897,7 +2897,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 		return -EPERM
 	}
 	if op_pmap != 0 {
-		vmfree(op_pmap)
+		dec_pmap(uintptr(op_pmap))
 	}
 
 	// elf_load() will create two copies of TLS section: one for the fresh

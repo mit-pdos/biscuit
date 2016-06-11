@@ -182,7 +182,8 @@ func Gscpu() *cpu_t {
 }
 
 func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
-    p_pmap uintptr, pms []*[512]int, fastret bool) (int, int) {
+    p_pmap uintptr, pms []*[512]int, fastret bool,
+    pmap_ref *int32) (int, int, uintptr, bool) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
@@ -192,7 +193,14 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	cpu := _Gscpu()
 	ct := cpu.mythread
 
+	var opmap uintptr
+	var dopdec bool
 	if cpu.shadowcr3 != p_pmap {
+		sh := cpu.shadowcr3
+		dopdec = sh != 0 && sh != P_kpmap
+		opmap = cpu.shadowcr3
+		dur := (*uint32)(unsafe.Pointer(pmap_ref))
+		atomic.Xadd(dur, 1)
 		Lcr3(p_pmap)
 		cpu.shadowcr3 = p_pmap
 	}
@@ -231,7 +239,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	ct.user.fxbuf = nil
 	Popcli(fl)
 	//exitsyscall(0)
-	return intno, aux
+	return intno, aux, opmap, dopdec
 }
 
 // caller must have interrupts cleared
@@ -1068,7 +1076,7 @@ const (
 )
 
 // physical address of kernel's pmap, given to us by bootloader
-var p_kpmap uintptr
+var P_kpmap uintptr
 
 //go:nosplit
 func pml4x(va uintptr) uintptr {
@@ -1537,7 +1545,7 @@ func proc_setup() {
 	fpuinit(true)
 	// initialize the first thread: us
 	threads[0].status = ST_RUNNING
-	threads[0].p_pmap = p_kpmap
+	threads[0].p_pmap = P_kpmap
 
 	// initialize GS pointers
 	for i := range cpus {
@@ -1638,10 +1646,10 @@ func Tlbwait(gen uint64) {
 //go:nosplit
 func tlb_shootdown() {
 	ct := Gscpu().mythread
+	// XXX XXX XXX this is wrong; should be Gscpu().shadowcr3
 	if ct != nil && ct.p_pmap == tlbshoot_pmap {
-		// the TLB was already invalidated since trap() currently
-		// switches to kernel pmap on any exception/interrupt other
-		// than NMI.
+		// lazy way for now
+		Lcr3(Rcr3())
 		//start := tlbshoot_pg
 		//end := tlbshoot_pg + tlbshoot_count * PGSIZE
 		//for ; start < end; start += PGSIZE {
@@ -1781,16 +1789,14 @@ func kernel_fault(tf *[TFSIZE]uintptr) {
 func trap(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
 
-	// XXX doesn't this clobber SSE regs?
+	// XXX XXX XXX XXX make sure this can't clobber SSE regs.
 	if trapno == TRAP_NMI {
 		perfgather(tf)
 		perfmask()
 		_trapret(tf)
 	}
 
-	Lcr3(p_kpmap)
 	cpu := Gscpu()
-	cpu.shadowcr3 = p_kpmap
 
 	// CPU exceptions in kernel mode are fatal errors
 	if trapno < TRAP_TIMER && (tf[TF_CS] & 3) == 0 {
@@ -1943,7 +1949,10 @@ func sched_run(t *thread_t) {
 	//Gscpu().mythread = t
 	*(*uintptr)(unsafe.Pointer(&Gscpu().mythread)) = uintptr(unsafe.Pointer(t))
 	fxrstor(&t.fx)
-	trapret(&t.tf, t.p_pmap)
+	// flush the TLB, otherwise the cpu may use a TLB entry for a page that
+	// has since been unmapped
+	Lcr3(Rcr3())
+	_trapret(&t.tf)
 }
 
 //go:nosplit
@@ -2496,7 +2505,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	mp.tls[0] = uintptr(unsafe.Pointer(gp))
 	mp.procid = uint64(ti)
 	mt.status = ST_RUNNABLE
-	mt.p_pmap = p_kpmap
+	mt.p_pmap = P_kpmap
 
 	mt.fx = fxinit
 
@@ -2718,10 +2727,6 @@ func Crash() {
 //go:nosplit
 func Pnum(n int) {
 	pnum(uintptr(n))
-}
-
-func Kpmap_p() uintptr {
-	return p_kpmap
 }
 
 func GCmarktime() int {
