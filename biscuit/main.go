@@ -1030,7 +1030,7 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 		// syscall.
 		refp, _ := _refaddr(uintptr(p.p_pmap))
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf, p.pmap,
-		    uintptr(p.p_pmap), nil, fastret, refp)
+		    uintptr(p.p_pmap), fastret, refp)
 		fastret = false
 		switch intno {
 		case SYSCALL:

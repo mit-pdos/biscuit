@@ -105,8 +105,6 @@ type cpu_t struct {
 	sysrsp		uintptr
 	shadowcr3	uintptr
 	shadowfs	uintptr
-	//pmap		*[512]int
-	//pms		[]*[512]int
 	//pid		uintptr
 }
 
@@ -182,8 +180,7 @@ func Gscpu() *cpu_t {
 }
 
 func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
-    p_pmap uintptr, pms []*[512]int, fastret bool,
-    pmap_ref *int32) (int, int, uintptr, bool) {
+    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
@@ -204,15 +201,6 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 		Lcr3(p_pmap)
 		cpu.shadowcr3 = p_pmap
 	}
-	// set shadow pointers for user pmap so it isn't free'd out from under
-	// us if the process terminates soon.
-	//cpu.pmap = pmap
-	//cpu.pms = pms
-	//cpu.pid = uintptr(pid)
-	// avoid write barriers since we are uninterruptible. the caller must
-	// also have these references anyway, so skipping them is ok.
-	//*(*uintptr)(unsafe.Pointer(&cpu.pmap)) = uintptr(unsafe.Pointer(pmap))
-	//*(*[3]uintptr)(unsafe.Pointer(&cpu.pms)) = *(*[3]uintptr)(unsafe.Pointer(&pms))
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
@@ -240,14 +228,6 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	Popcli(fl)
 	//exitsyscall(0)
 	return intno, aux, opmap, dopdec
-}
-
-// caller must have interrupts cleared
-//go:nosplit
-func shadow_clear() {
-	//cpu := Gscpu()
-	//cpu.pmap = nil
-	//cpu.pms = nil
 }
 
 type nmiprof_t struct {
@@ -1812,9 +1792,6 @@ func trap(tf *[TFSIZE]uintptr) {
 		for {
 		}
 	}
-
-	// clear shadow pointers to user pmap
-	shadow_clear()
 
 	// don't add code before FPU context saving unless you've thought very
 	// carefully! it is easy to accidentally and silently corrupt FPU state
