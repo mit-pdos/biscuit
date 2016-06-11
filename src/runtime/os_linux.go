@@ -1646,8 +1646,7 @@ func Tlbwait(gen uint64) {
 //go:nosplit
 func tlb_shootdown() {
 	ct := Gscpu().mythread
-	// XXX XXX XXX this is wrong; should be Gscpu().shadowcr3
-	if ct != nil && ct.p_pmap == tlbshoot_pmap {
+	if ct != nil && Rcr3() == tlbshoot_pmap {
 		// lazy way for now
 		Lcr3(Rcr3())
 		//start := tlbshoot_pg
