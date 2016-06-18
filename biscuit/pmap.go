@@ -510,18 +510,6 @@ func (m *vmregion_t) insert(vmi *vminfo_t) {
 	m.rb._balance(nn)
 }
 
-func (m *vmregion_t) lookup(va uintptr) (*vminfo_t, bool) {
-	pgn := va >> PGSHIFT
-	n := m.rb.lookup(pgn)
-	var ok bool
-	var ret *vminfo_t
-	if n != nil {
-		ret = &n.vmi
-		ok = true
-	}
-	return ret, ok
-}
-
 func (m *vmregion_t) _clear(vmi *vminfo_t, pglen int) {
 	// decrement mapcounts, close file if necessary
 	if vmi.mtype != VFILE {
@@ -545,8 +533,8 @@ func (m *vmregion_t) clear() {
 	})
 }
 
-func (m *vmregion_t) contain(va int) (*vminfo_t, bool) {
-	pgn := uintptr(va) >> PGSHIFT
+func (m *vmregion_t) lookup(va uintptr) (*vminfo_t, bool) {
+	pgn := va >> PGSHIFT
 	n := m.rb.lookup(pgn)
 	if n == nil {
 		return nil, false

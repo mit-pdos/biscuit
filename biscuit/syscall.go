@@ -2787,7 +2787,8 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 	if pte == nil {
 		pte = pmap_walk(proc.pmap, int(faultaddr), PTE_U | PTE_W)
 	}
-	if *pte & PTE_WASCOW != 0 {
+	if (iswrite && *pte & PTE_WASCOW != 0) ||
+	   (!iswrite && *pte & PTE_P != 0) {
 		// two threads simultaneously faulted on same page
 		return
 	}
@@ -4066,7 +4067,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 	// previous segment. if that is the case, we may not be able to avoid
 	// copying.
 	// XXX why does this happen? fix elf segment alignment?
-	if _, ok := proc.vmregion.contain(hdr.vaddr); ok {
+	if _, ok := proc.vmregion.lookup(uintptr(hdr.vaddr)); ok {
 		va := hdr.vaddr
 		proc.cowfault(va)
 		pg, ok := proc.userdmap8_inner(va)
