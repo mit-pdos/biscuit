@@ -1240,11 +1240,31 @@ func (p *proc_t) lockassert_pmap() {
 
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
-func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
+// k2u is true if kernel memory is the source and user memory is the
+// destination of the copy, otherwise the opposite.
+func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	p.lockassert_pmap()
+	if va < USERMIN {
+		return nil, false
+	}
+	if k2u {
+		p.cowfault(va)
+	}
 	voff := va & PGOFFSET
 	pte := pmap_lookup(p.pmap, va)
-	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
+	if pte == nil || *pte & PTE_P == 0 {
+		// if user memory is the source, it is possible that the page
+		// just hasn't been faulted in yet. try to fault in the page
+		// before failing.
+		uva := uintptr(va)
+		if vmi, ok := p.vmregion.lookup(uva); ok {
+			ecode := uintptr(PTE_U)
+			sys_pgfault(p, vmi, pte, uva, ecode)
+		} else {
+			return nil, false
+		}
+	}
+	if *pte & PTE_U == 0 {
 		return nil, false
 	}
 	pg := dmap(*pte & PTE_ADDR)
@@ -1252,46 +1272,27 @@ func (p *proc_t) userdmap8_inner(va int) ([]uint8, bool) {
 	return bpg[voff:], true
 }
 
-func (p *proc_t) userdmap8(va int) ([]uint8, bool) {
+func (p *proc_t) _userdmap8(va int, k2u bool) ([]uint8, bool) {
 	p.Lock_pmap()
-	ret, ok := p.userdmap8_inner(va)
+	ret, ok := p.userdmap8_inner(va, k2u)
 	p.Unlock_pmap()
 	return ret, ok
 }
 
-// caller must have the vm lock
-func (p *proc_t) userdmap_inner(va int) (*[512]int, bool) {
-	p.lockassert_pmap()
-	pte := pmap_lookup(p.pmap, va)
-	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
-		return nil, false
-	}
-	pg := dmap(*pte & PTE_ADDR)
-	return pg, true
+func (p *proc_t) userdmap8r(va int) ([]uint8, bool) {
+	return p._userdmap8(va, false)
 }
 
-// like userdmap8, but returns a pointer to the page
-func (p *proc_t) userdmap(va int) (*[512]int, bool) {
-	p.Lock_pmap()
-	defer p.Unlock_pmap()
-	return p.userdmap_inner(va)
+func (p *proc_t) userdmap8w(va int) ([]uint8, bool) {
+	return p._userdmap8(va, true)
 }
 
 func (p *proc_t) usermapped(va, n int) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
 
-	if n < 0 {
-		panic("negative count")
-	}
-	end := roundup(va + n, PGSIZE)
-	for i := rounddown(va, PGSIZE); i < end; i += PGSIZE {
-		pte := pmap_lookup(p.pmap, i)
-		if pte == nil || *pte & PTE_P == 0 {
-			return false
-		}
-	}
-	return true
+	_, ok := p.vmregion.lookup(uintptr(va))
+	return ok
 }
 
 func (p *proc_t) userreadn(va, n int) (int, bool) {
@@ -1304,7 +1305,7 @@ func (p *proc_t) userreadn(va, n int) (int, bool) {
 	var src []uint8
 	var ok bool
 	for i := 0; i < n; i += len(src) {
-		src, ok = p.userdmap8_inner(va + i)
+		src, ok = p.userdmap8_inner(va + i, false)
 		if !ok {
 			return 0, false
 		}
@@ -1327,8 +1328,7 @@ func (p *proc_t) userwriten(va, n, val int) bool {
 	var dst []uint8
 	for i := 0; i < n; i += len(dst) {
 		v := val >> (8*uint(i))
-		p.cowfault(va + i)
-		t, ok := p.userdmap8_inner(va + i)
+		t, ok := p.userdmap8_inner(va + i, true)
 		dst = t
 		if !ok {
 			return false
@@ -1349,7 +1349,7 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	i := 0
 	var s string
 	for {
-		str, ok := p.userdmap8_inner(uva + i)
+		str, ok := p.userdmap8_inner(uva + i, false)
 		if !ok {
 			p.Unlock_pmap()
 			return "", false, false
@@ -1422,7 +1422,7 @@ func (p *proc_t) userargs(uva int) ([]string, bool) {
 	done := false
 	curaddr := make([]uint8, 0, 8)
 	for !done {
-		ptrs, ok := p.userdmap8(uva + uoff)
+		ptrs, ok := p.userdmap8r(uva + uoff)
 		if !ok {
 			return nil, false
 		}
@@ -1458,8 +1458,7 @@ func (p *proc_t) k2user_inner(src []uint8, uva int) bool {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		p.cowfault(uva + cnt)
-		dst, ok := p.userdmap8_inner(uva + cnt)
+		dst, ok := p.userdmap8_inner(uva + cnt, true)
 		if !ok {
 			return false
 		}
@@ -1487,7 +1486,7 @@ func (p *proc_t) user2k_inner(dst []uint8, uva int) bool {
 	cnt := 0
 	l := len(dst)
 	for cnt != l {
-		src, ok := p.userdmap8_inner(uva + cnt)
+		src, ok := p.userdmap8_inner(uva + cnt, false)
 		if !ok {
 			return false
 		}
@@ -1591,10 +1590,7 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
 		va := ub.userva + ub.off
-		if write {
-			ub.proc.cowfault(va)
-		}
-		ubuf, ok := ub.proc.userdmap8_inner(va)
+		ubuf, ok := ub.proc.userdmap8_inner(va, write)
 		if !ok {
 			ub.proc.Unlock_pmap()
 			return ret, -EFAULT

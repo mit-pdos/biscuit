@@ -2958,6 +2958,21 @@ void futextest(void)
 	printf("futex test ok\n");
 }
 
+__attribute__((aligned(4096)))
+char _pagebuf[4096];
+
+void lazyfaults(void)
+{
+	printf("lazy fault test\n");
+	int fd = open("/tmp/lfault.txt", O_CREAT | O_WRONLY);
+	if (fd == -1)
+		err(-1, "open");
+	if (write(fd, _pagebuf, 20) == -1)
+		err(-1, "read");
+	close(fd);
+	printf("lazy fault ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3028,6 +3043,8 @@ main(int argc, char *argv[])
   runsockettest();
   accesstest();
   futextest();
+
+  lazyfaults();
 
   exectest();
 

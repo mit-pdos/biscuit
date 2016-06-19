@@ -3040,7 +3040,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	argptrs[len(argptrs) - 1] = 0
 	// now put the array of strings
 	argstart := uva + cnt
-	vdata, ok := proc.userdmap8_inner(argstart)
+	vdata, ok := proc.userdmap8_inner(argstart, true)
 	if !ok || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
 		return 0, 0, false
@@ -4069,8 +4069,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 	// XXX why does this happen? fix elf segment alignment?
 	if _, ok := proc.vmregion.lookup(uintptr(hdr.vaddr)); ok {
 		va := hdr.vaddr
-		proc.cowfault(va)
-		pg, ok := proc.userdmap8_inner(va)
+		pg, ok := proc.userdmap8_inner(va, true)
 		if !ok {
 			panic("must be mapped")
 		}
@@ -4103,8 +4102,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 	}
 	// if there is bss, fault in the partial page since we need to zero some of it
 	bssva := hdr.vaddr + hdr.filesz
-	proc.cowfault(bssva)
-	bpg, ok := proc.userdmap8_inner(bssva)
+	bpg, ok := proc.userdmap8_inner(bssva, true)
 	if !ok {
 		panic("must be mapped")
 	}
@@ -4173,7 +4171,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 			_src, _ := tlsvmi.filepage(uintptr(tlsaddr + i))
 			off := (tlsaddr + i) & PGOFFSET
 			src := ((*[PGSIZE]uint8)(unsafe.Pointer(_src)))[off:]
-			bpg, ok := proc.userdmap8_inner(freshtls + i)
+			bpg, ok := proc.userdmap8_inner(freshtls + i, true)
 			if !ok {
 				panic("must be mapped")
 			}
