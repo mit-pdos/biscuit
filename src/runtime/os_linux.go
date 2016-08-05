@@ -194,7 +194,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	var dopdec bool
 	if cpu.shadowcr3 != p_pmap {
 		sh := cpu.shadowcr3
-		dopdec = sh != 0 && sh != P_kpmap
+		dopdec = sh != 0
 		opmap = cpu.shadowcr3
 		dur := (*uint32)(unsafe.Pointer(pmap_ref))
 		atomic.Xadd(dur, 1)

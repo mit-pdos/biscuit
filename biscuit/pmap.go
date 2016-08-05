@@ -688,7 +688,7 @@ func (m *vmregion_t) remove(start, len int) {
 			if n.vmi.mtype == VFILE {
 				n.vmi.file.foff += pglen << PGSHIFT
 			}
-		} else if pgn + uintptr(pglen) == pgend {
+		} else {
 			n.vmi.pglen -= pglen
 		}
 		return
@@ -701,7 +701,7 @@ func (m *vmregion_t) remove(start, len int) {
 	avmi.pgn = pgn + uintptr(pglen)
 	avmi.pglen = int(pgend - avmi.pgn)
 	if avmi.mtype == VFILE {
-		avmi.file.foff = int((avmi.pgn - n.vmi.pgn) << PGSHIFT)
+		avmi.file.foff += int((avmi.pgn - n.vmi.pgn) << PGSHIFT)
 	}
 	m.rb._insert(avmi)
 }
