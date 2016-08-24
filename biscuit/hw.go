@@ -8,6 +8,8 @@ const (
 	VENDOR	int	= 0x0
 	DEVICE		= 0x02
 	STATUS		= 0x06
+	CLASS		= 0x0b
+	SUBCLASS	= 0x0a
 	HEADER		= 0x0e
 	BAR0		= 0x10
 	BAR1		= 0x14
@@ -67,16 +69,19 @@ func pci_dump() {
 		if v == 0xffff {
 			return 0, false
 		}
-		d  := pci_read(t, DEVICE, 2)
-		mf := pci_read(t, HEADER, 1)
+		d   := pci_read(t, DEVICE, 2)
+		mf  := pci_read(t, HEADER, 1)
+		cl  := pci_read(t, CLASS, 1)
+		scl := pci_read(t, SUBCLASS, 1)
 		if ind {
 			fmt.Printf("    ")
 		}
-		fmt.Printf("%d: %d: %d: %#x %#x\n", b, dev, f, v, d)
+		fmt.Printf("%d: %d: %d: %#x %#x (%#x %#x)\n", b, dev, f, v, d,
+		    cl, scl)
 		return mf, true
 	}
 	fmt.Printf("PCI dump:\n")
-	for b := 0; b < 3; b++ {
+	for b := 0; b < 256; b++ {
 		for dev := 0; dev < 32; dev++ {
 			mf, ok := pcipr(b, dev, 0, false)
 			if !ok {
@@ -89,7 +94,6 @@ func pci_dump() {
 			}
 		}
 	}
-	cdelay(1000)
 }
 
 func pcibus_attach() {
