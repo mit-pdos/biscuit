@@ -401,3 +401,114 @@ func (d *pciide_disk_t) int_clear() {
 	// and via 8259 pics
 	p8259_eoi(IRQ_DISK)
 }
+
+func _acpi_cpu_count(rsdt []uint8) (int, bool) {
+	// find MADT table. RSDT contains 32bit pointers, XSDT contains 64bit
+	// pointers.
+	hdrlen := 36
+	ptrs := rsdt[hdrlen:]
+	var tbl []uint8
+	found := false
+	for len(ptrs) != 0 {
+		tbln := readn(ptrs, 4, 0)
+		ptrs = ptrs[4:]
+		tbl = dmaplen(tbln, 8)
+		if string(tbl[:4]) == "APIC" {
+			found = true
+			l := readn(tbl, 4, 4)
+			tbl = dmaplen(tbln, l)
+			break
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	marrayoff := 44
+	ncpu := 0
+	nioapic := 0
+	elen := 1
+	// m is array of "interrupt controller structures" in MADT
+	for m := tbl[marrayoff:]; len(m) != 0; m = m[m[elen]:] {
+		// ACPI 5.2.12.2: each processor is required to have a LAPIC
+		// entry
+		tlapic  := uint8(0)
+		tioapic := uint8(1)
+		if m[0] == tlapic {
+			flags := readn(m, 4, 4)
+			enabled := 1
+			if flags & enabled != 0 {
+				ncpu++
+			}
+		}
+		if m[0] == tioapic {
+			nioapic++
+			fmt.Printf("IO APIC addr: %x\n", readn(m, 4, 4))
+		}
+	}
+	return ncpu, ncpu != 0
+}
+
+func _acpi_scan() ([]uint8, bool) {
+	// ACPI 5.2.5: search for RSDP in EBDA and BIOS read-only memory
+	ebdap := (0x40 << 4) | 0xe
+	p := dmap8(ebdap)
+	ebda := readn(p, 2, 0)
+	ebda <<= 4
+
+	isrsdp := func(d []uint8) bool {
+		s := string(d[:8])
+		if s != "RSD PTR " {
+			return false
+		}
+		var cksum uint8
+		for i := 0; i < 20; i++ {
+			cksum += d[i]
+		}
+		if cksum != 0 {
+			return false
+		}
+		return true
+	}
+	rsdplen := 36
+	for i := 0; i < 1 << 10; i += 16 {
+		p = dmaplen(ebda + i, rsdplen)
+		if isrsdp(p) {
+			return p, true
+		}
+	}
+	for bmem := 0xe0000; bmem < 0xfffff; bmem += 16 {
+		p = dmaplen(bmem, rsdplen)
+		if isrsdp(p) {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+func acpi_init() int {
+	rsdp, ok := _acpi_scan()
+	if !ok {
+		panic("no RSDP")
+	}
+	rsdtn := readn(rsdp, 4, 16)
+	//xsdtn := readn(rsdp, 8, 24)
+	rsdt := dmaplen(rsdtn, 8)
+	if rsdtn == 0 || string(rsdt[:4]) != "RSDT" {
+		panic("no RSDT")
+	}
+	rsdtlen := readn(rsdt, 4, 4)
+	rsdt = dmaplen(rsdtn, rsdtlen)
+	// verify RSDT checksum
+	var cksum uint8
+	for i := 0; i < rsdtlen; i++ {
+		cksum += rsdt[i]
+	}
+	if cksum != 0 {
+		panic("bad RSDT")
+	}
+	ncpu, ok := _acpi_cpu_count(rsdt)
+	if !ok {
+		panic("no cpu count")
+	}
+	return ncpu
+}

@@ -1721,131 +1721,6 @@ func (cb *circbuf_t) copyout(dst *userbuf_t) (int, int) {
 	return c, 0
 }
 
-func mp_sum(d []uint8) int {
-	ret := 0
-	for _, c := range d {
-		ret += int(c)
-	}
-	return ret & 0xff
-}
-
-func mp_tblget(f []uint8) ([]uint8, []uint8, []uint8) {
-	feat := readn(f, 1, 11)
-	if feat != 0 {
-		panic("\"default\" configurations not supported")
-	}
-	ctbla := readn(f, 4, 4)
-	c := dmap8(ctbla)
-	sig := readn(c, 4, 0)
-	// sig is "PCMP"
-	if sig != 0x504d4350 {
-		panic("bad conf table sig")
-	}
-
-	bsz := readn(c, 2, 4)
-	base := c[:bsz]
-	if mp_sum(base) != 0 {
-		panic("bad conf table cksum")
-	}
-
-	esz := readn(c, 2, 0x28)
-	eck := readn(c, 1, 0x2a)
-	extended := c[bsz : bsz + esz]
-
-	esum := (mp_sum(extended) + eck) & 0xff
-	if esum != 0 {
-		panic("bad extended table checksum")
-	}
-
-	return f, base, extended
-}
-
-func mp_scan() ([]uint8, []uint8, []uint8) {
-	assert_no_phys(kpmap(), 0)
-
-	// should use ACPI. don't bother to scan other areas as recommended by
-	// MP spec.
-	// try bios readonly memory, from 0xe0000-0xfffff
-	bro := 0xe0000
-	const brolen = 0x1ffff
-	p := (*[brolen]uint8)(unsafe.Pointer(dmap(bro)))
-	for i := 0; i < brolen - 4; i++ {
-		if p[i] == '_' &&
-		   p[i+1] == 'M' &&
-		   p[i+2] == 'P' &&
-		   p[i+3] == '_' && mp_sum(p[i:i+16]) == 0 {
-			return mp_tblget(p[i:i+16])
-		}
-	}
-	return nil, nil, nil
-}
-
-type mpcpu_t struct {
-	lapid    int
-	bsp      bool
-}
-
-func cpus_find() []mpcpu_t {
-
-	fl, base, _ := mp_scan()
-	if fl == nil {
-		fmt.Println("uniprocessor")
-		return nil
-	}
-
-	ret := make([]mpcpu_t, 0, 10)
-
-	// runtime does the same check
-	lapaddr := readn(base, 4, 0x24)
-	if lapaddr != 0xfee00000 {
-		panic(fmt.Sprintf("weird lapic addr %#x", lapaddr))
-	}
-
-	// switch to symmetric mode interrupts if we are in PIC mode
-	mpfeat := readn(fl, 4, 12)
-	imcrp := 1 << 7
-	if mpfeat & imcrp != 0 {
-		fmt.Printf("entering symmetric mode\n")
-		// select imcr
-		runtime.Outb(0x22, 0x70)
-		// "writing a value of 01h forces the NMI and 8259 INTR signals
-		// to pass through the APIC."
-		runtime.Outb(0x23, 0x1)
-	}
-
-	ecount := readn(base, 2, 0x22)
-	entries := base[44:]
-	idx := 0
-	for i := 0; i < ecount; i++ {
-		t := readn(entries, 1, idx)
-		switch t {
-		case 0:		// processor
-			idx += 20
-			lapid  := readn(entries, 1, idx + 1)
-			cpuf   := readn(entries, 1, idx + 3)
-			cpu_en := 1
-			cpu_bp := 2
-
-			bsp := false
-			if cpuf & cpu_bp != 0 {
-				bsp = true
-			}
-
-			if cpuf & cpu_en == 0 {
-				fmt.Printf("cpu %v disabled\n", lapid)
-				continue
-			}
-
-			ret = append(ret, mpcpu_t{lapid, bsp})
-
-		default:	// bus, IO apic, IO int. assignment, local int
-				// assignment.
-			idx += 8
-		}
-	}
-	return ret
-}
-
 func cpus_stack_init(apcnt int, stackstart uintptr) {
 	for i := 0; i < apcnt; i++ {
 		// allocate/map interrupt stack
@@ -1861,19 +1736,14 @@ func cpus_stack_init(apcnt int, stackstart uintptr) {
 	}
 }
 
-func cpus_start(aplim int) {
+func cpus_start(ncpu, aplim int) {
 	runtime.GOMAXPROCS(1 + aplim)
-	cpus := cpus_find()
-	apcnt := len(cpus) - 1
+	apcnt := ncpu - 1
 
-	// XXX how to determine logical cpus, not cores from mp table? my test
-	// hardware has 8 logical cpus and 4 cores but there are only 4 entries
-	// in the mp table...
-
-	fmt.Printf("found %v CPUs\n", len(cpus))
+	fmt.Printf("found %v CPUs\n", ncpu)
 
 	if apcnt == 0 {
-		fmt.Printf("uniprocessor with mpconf\n")
+		fmt.Printf("uniprocessor\n")
 		return
 	}
 
@@ -2991,21 +2861,19 @@ func main() {
 	pmem := runtime.Totalphysmem()
 	fmt.Printf("  %v MB of physical memory\n", pmem >> 20)
 
-	//chanbm()
-
-	//findbm()
-
 	cpuchk()
-	perfsetup()
 
+	dmap_init()
+	perfsetup()
+	ncpu := acpi_init()
 	// control CPUs
 	aplim := 7
 
-	dmap_init()
 	p8259_init()
 
 	//pci_dump()
 	attach_devs()
+
 
 	if disk == nil || INT_DISK < 0 {
 		panic("no disk")
@@ -3022,7 +2890,7 @@ func main() {
 	     }
 	go trap(handlers)
 
-	cpus_start(aplim)
+	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
 	rf := fs_init()
@@ -3071,7 +2939,7 @@ func findbm() {
 	//	aplim = 7
 	//}
 	aplim := 7
-	cpus_start(aplim)
+	cpus_start(aplim, aplim)
 
 	ch := make(chan bool)
 	times := uint64(0)
