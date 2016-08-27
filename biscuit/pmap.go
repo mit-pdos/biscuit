@@ -896,7 +896,7 @@ var _vdirect	= VDIRECT << 39
 func dmap(p int) *[512]int {
 	pa := uint(p)
 	if pa >= 1 << 39 {
-		panic("physical address too large")
+		panic("direct map not large enough")
 	}
 
 	v := _vdirect
@@ -911,6 +911,11 @@ func dmap8(p int) []uint8 {
 	off := p & PGOFFSET
 	bpg := (*[PGSIZE]uint8)(unsafe.Pointer(pg))
 	return bpg[off:]
+}
+
+func dmaplen(p int, l int) []uint8 {
+	_dmap := (*[1<<39]uint8)(unsafe.Pointer(uintptr(_vdirect)))
+	return _dmap[p:p+l]
 }
 
 func pe2pg(pe int) *[512]int {
