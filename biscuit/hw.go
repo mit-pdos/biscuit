@@ -423,6 +423,14 @@ func _acpi_cpu_count(rsdt []uint8) (int, bool) {
 	if !found {
 		return 0, false
 	}
+	var cksum uint8
+	for _, c := range tbl {
+		cksum += c
+	}
+	if cksum != 0 {
+		fmt.Printf("MADT checksum fail\n")
+		return 0, false
+	}
 	marrayoff := 44
 	ncpu := 0
 	nioapic := 0
