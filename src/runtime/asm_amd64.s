@@ -710,7 +710,7 @@ IH_NOEC(71,·Xsigret )
 IH_NOEC(72,·Xperfmask )
 
 // irqs
-// irq0 is Xtimer
+IH_IRQ( 0,·Xirq0 )
 IH_IRQ( 1,·Xirq1 )
 IH_IRQ( 2,·Xirq2 )
 IH_IRQ( 3,·Xirq3 )
@@ -726,6 +726,14 @@ IH_IRQ(12,·Xirq12 )
 IH_IRQ(13,·Xirq13 )
 IH_IRQ(14,·Xirq14 )
 IH_IRQ(15,·Xirq15 )
+IH_IRQ(16,·Xirq16 )
+IH_IRQ(17,·Xirq17 )
+IH_IRQ(18,·Xirq18 )
+IH_IRQ(19,·Xirq19 )
+IH_IRQ(20,·Xirq20 )
+IH_IRQ(21,·Xirq21 )
+IH_IRQ(22,·Xirq22 )
+IH_IRQ(23,·Xirq23 )
 
 #define IA32_FS_BASE		$0xc0000100
 #define IA32_GS_BASE		$0xc0000101

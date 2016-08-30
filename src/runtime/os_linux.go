@@ -944,6 +944,14 @@ func Xirq12()
 func Xirq13()
 func Xirq14()
 func Xirq15()
+func Xirq16()
+func Xirq17()
+func Xirq18()
+func Xirq19()
+func Xirq20()
+func Xirq21()
+func Xirq22()
+func Xirq23()
 
 type idte_t struct {
 	baselow	uint16
@@ -1020,6 +1028,14 @@ func int_setup() {
 	int_set(irqbase+13,  Xirq13,  1)
 	int_set(irqbase+14,  Xirq14,  1)
 	int_set(irqbase+15,  Xirq15,  1)
+	int_set(irqbase+16,  Xirq16,  1)
+	int_set(irqbase+17,  Xirq17,  1)
+	int_set(irqbase+18,  Xirq18,  1)
+	int_set(irqbase+19,  Xirq19,  1)
+	int_set(irqbase+20,  Xirq20,  1)
+	int_set(irqbase+21,  Xirq21,  1)
+	int_set(irqbase+22,  Xirq22,  1)
+	int_set(irqbase+23,  Xirq23,  1)
 
 	int_set(48,  Xspur,    1)
 	// no longer used
