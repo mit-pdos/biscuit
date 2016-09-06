@@ -1885,6 +1885,7 @@ func trap(tf *[TFSIZE]uintptr) {
 		} else {
 			pancake("IRQ without ntrap", trapno)
 		}
+		lap_eoi()
 		sched_resume(ct)
 	} else if is_cpuex(trapno) {
 		// we vet out kernel mode CPU exceptions above must be from
@@ -1906,7 +1907,7 @@ func trap(tf *[TFSIZE]uintptr) {
 
 //go:nosplit
 func is_irq(trapno uintptr) bool {
-	return trapno > IRQ_BASE && trapno <= IRQ_BASE + 15
+	return trapno > IRQ_BASE && trapno <= IRQ_BASE + 24
 }
 
 //go:nosplit

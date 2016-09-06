@@ -42,27 +42,8 @@ var cpus	[maxcpus]cpu_t
 // these functions can only be used when interrupts are cleared
 //go:nosplit
 func lap_id() int {
-	lapaddr := (*[1024]int32)(unsafe.Pointer(uintptr(0xfee00000)))
+	lapaddr := (*[1024]uint32)(unsafe.Pointer(uintptr(0xfee00000)))
 	return int(lapaddr[0x20/4] >> 24)
-}
-
-func p8259_eoi(irq int) {
-	pic1 := uint16(0x20)
-	pic2 := uint16(0xa0)
-	// specific eoi
-	eoi := uint8(0x60)
-	if irq <= 0 {
-		panic("weird irq")
-	}
-	bits := uint8(irq % 8)
-
-	outb := runtime.Outb
-	if irq <= 7 {
-		outb(pic1, eoi | bits)
-	} else {
-		outb(pic1, eoi | 2)
-		outb(pic2, eoi | bits)
-	}
 }
 
 const(
@@ -136,8 +117,19 @@ func trapstub(tf *[TFSIZE]uintptr) {
 
 	switch trapno {
 	case uintptr(INT_DISK), INT_KBD, INT_COM1:
-		// intel documentation for PCH (may 2014) says that AEOI mode
-		// cannot be used on the slave PIC.
+		// we need to mask the interrupt on the IOAPIC since my
+		// hardware's LAPIC automatically send EOIs to IOAPICS when the
+		// LAPIC receives an EOI and does not support disabling these
+		// automatic EOI broadcasts (newer LAPICs do). its probably
+		// better to disable automatic EOI broadcast and send EOIs to
+		// the IOAPICs in the driver (as the code used to when using
+		// 8259s).
+		// masking the IRQ on the IO APIC must happen before writing
+		// EOI to the LAPIC (otherwise the CPU will probably receive
+		// another interrupt from the same IRQ). the LAPIC EOI happens
+		// in the runtime...
+		irqno := int(trapno - IRQ_BASE)
+		apic.irq_mask(irqno)
 	default:
 		// unexpected IRQ
 		runtime.Pnum(int(trapno))
@@ -1923,75 +1915,13 @@ func set_cpucount(n int) {
 	numcpus = n
 }
 
-// since this function is used when interrupts are cleared, it must be marked
-// nosplit. otherwise we may GC and then resume in some other goroutine with
-// interrupts cleared, thus interrupts would never be cleared.
-//go:nosplit
-func poutb(reg uint16, val uint8) {
-	runtime.Outb(reg, val)
-	cdelay(1)
-}
-
-func p8259_init() {
-	// the piix3 provides two 8259 compatible pics. the runtime masks all
-	// irqs for us.
-	pic1 := uint16(0x20)
-	pic1d := pic1 + 1
-	pic2 := uint16(0xa0)
-	pic2d := pic2 + 1
-
-	runtime.Cli()
-
-	// master pic
-	// start icw1: edge triggered, icw4 required
-	poutb(pic1, 0x11)
-	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	poutb(pic1d, uint8(IRQ_BASE))
-	// icw3, cascaded mode
-	poutb(pic1d, 4)
-	// icw4, no auto eoi, 8086 mode.
-	poutb(pic1d, 1)
-
-	// slave pic
-	// start icw1: edge triggered, icw4 required
-	poutb(pic2, 0x11)
-	// icw2, int base -- irq # will be added to base, then delivered to cpu
-	poutb(pic2d, uint8(IRQ_BASE + 8))
-	// icw3, slave identification code
-	poutb(pic2d, 2)
-	// icw4, no auto eoi, 8086 mode.
-	poutb(pic2d, 1)
-
-	// ocw3, enable "special mask mode" (??)
-	poutb(pic1, 0x68)
-	// ocw3, read irq register
-	poutb(pic1, 0x0a)
-
-	// ocw3, enable "special mask mode" (??)
-	poutb(pic2, 0x68)
-	// ocw3, read irq register
-	poutb(pic2, 0x0a)
-
-	// enable slave 8259
-	irq_unmask(2)
-	// all irqs go to CPU 0 until redirected
-
-	runtime.Sti()
-}
-
-var intmask uint 	= 0xffff
-
 func irq_unmask(irq int) {
-	if irq < 0 || irq >= 16 {
-		panic("weird irq")
-	}
-	pic1 := uint16(0x20)
-	pic1d := pic1 + 1
-	pic2 := uint16(0xa0)
-	pic2d := pic2 + 1
-	intmask = intmask & ^(1 << uint(irq))
-	runtime.Outb(pic1d, uint8(intmask))
-	runtime.Outb(pic2d, uint8(intmask >> 8))
+	apic.irq_unmask(irq)
+}
+
+func irq_eoi(irq int) {
+	//apic.eoi(irq)
+	apic.irq_unmask(irq)
 }
 
 func kbd_init() {
@@ -2071,6 +2001,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
 		if c == '\\' {
+			apic.dump()
 			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
@@ -2093,7 +2024,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 					addprint(c)
 				}
 			}
-			p8259_eoi(IRQ_KBD)
+			irq_eoi(IRQ_KBD)
 		case <- cons.com_int:
 			for _comready() {
 				com1data := uint16(0x3f8 + 0)
@@ -2107,7 +2038,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				}
 				addprint(c)
 			}
-			p8259_eoi(IRQ_COM1)
+			irq_eoi(IRQ_COM1)
 		case l := <- reqc:
 			if l > len(data) {
 				l = len(data)
@@ -2135,8 +2066,10 @@ func kbd_get(cnt int) []byte {
 	return <- cons.reader
 }
 
-func attach_devs() {
+func attach_devs() int {
+	ncpu := acpi_attach()
 	pcibus_attach()
+	return ncpu
 }
 
 func tlb_shootdown(p_pmap, va, pgcount int) {
@@ -2865,15 +2798,11 @@ func main() {
 
 	dmap_init()
 	perfsetup()
-	ncpu := acpi_init()
 	// control CPUs
 	aplim := 7
 
-	p8259_init()
-
 	//pci_dump()
-	attach_devs()
-
+	ncpu := attach_devs()
 
 	if disk == nil || INT_DISK < 0 {
 		panic("no disk")
@@ -2893,9 +2822,10 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
+	kbd_init()
+
 	rf := fs_init()
 	use_memfs()
-	kbd_init()
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)
