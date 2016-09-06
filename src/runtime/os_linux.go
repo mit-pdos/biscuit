@@ -54,7 +54,7 @@ func htpause()
 func invlpg(uintptr)
 func Inb(uint16) uint
 func Inl(int) int
-func Insl(int, unsafe.Pointer, int)
+func Insl(uint16, unsafe.Pointer, uint)
 func Invlpg(unsafe.Pointer)
 func Lcr0(uintptr)
 func Lcr3(uintptr)

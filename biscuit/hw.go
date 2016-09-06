@@ -51,16 +51,43 @@ func pci_write(tag pcitag_t, reg, val int) {
 	runtime.Outl(pci_addr, 0)
 }
 
-// XXX enable port IO/mem/busmaster in pci command reg before attaching
-// XXX handle mem mapped bar types too
-func pci_bar(tag pcitag_t, barn int) int {
+// don't forget to enable busmaster in pci command reg before attaching
+func pci_bar_pio(tag pcitag_t, barn int) uintptr {
 	if barn < 0 || barn > 4 {
 		panic("bad bar #")
 	}
 	ret := pci_read(tag, BAR0 + 4*barn, 4)
-	m := ((1 << 16) - 1)
-	m &= ^0x7
-	return ret & m
+	ispio := 1
+	if ret & ispio == 0 {
+		panic("is memory bar")
+	}
+	return uintptr(ret &^ 0x3)
+}
+
+// some memory bars include size in the low bits; this method doesn't mask such
+// bits out.
+func pci_bar_mem(tag pcitag_t, barn int) uintptr {
+	if barn < 0 || barn > 4 {
+		panic("bad bar #")
+	}
+	ret := pci_read(tag, BAR0 + 4*barn, 4)
+	ispio := 1
+	if ret & ispio != 0 {
+		panic("is port io bar")
+	}
+	mtype := (uint32(ret) >> 1) & 0x3
+	if mtype == 1 {
+		// 32bit memory bar
+		return uintptr(ret &^ 0xf)
+	}
+	if mtype != 2 {
+		panic("weird memory bar type")
+	}
+	if barn > 4 {
+		panic("64bit memory bar requires 2 bars")
+	}
+	ret2 := pci_read(tag, BAR0 + 4*(barn + 1), 4)
+	return uintptr((ret2 << 32) | ret &^ 0xf)
 }
 
 func pci_dump() {
@@ -229,9 +256,9 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 
 	d := &pciide_disk_t{}
 	// 3400's PCI-native IDE command/control block
-	rbase := pci_bar(tag, 0)
-	allstats := pci_bar(tag, 1)
-	busmaster := pci_bar(tag, 4)
+	rbase := pci_bar_pio(tag, 0)
+	allstats := pci_bar_pio(tag, 1)
+	busmaster := pci_bar_pio(tag, 4)
 
 	d.init(rbase, allstats, busmaster)
 	disk = d
@@ -258,7 +285,7 @@ const(
 	ide_cmd_write = 0x30
 )
 
-func ide_init(rbase int) bool {
+func ide_init(rbase uintptr) bool {
 	ide_wait(rbase, false)
 
 	found := false
@@ -281,7 +308,7 @@ func ide_init(rbase int) bool {
 	return false
 }
 
-func ide_wait(base int, chk bool) bool {
+func ide_wait(base uintptr, chk bool) bool {
 	var r int
 	c := 0
 	for {
@@ -301,7 +328,7 @@ func ide_wait(base int, chk bool) bool {
 	return true
 }
 
-func idedata_ready(base int) {
+func idedata_ready(base uintptr) {
 	c := 0
 	for {
 		drq := 1 << 3
@@ -315,10 +342,9 @@ func idedata_ready(base int) {
 		}
 	}
 }
-// it is possible that a goroutine is context switched to a new CPU while doing
-// this port io; does this matter? doesn't seem to for qemu...
-func ide_start(rbase, allstatus int, ibuf *idebuf_t, writing bool) {
-	ireg := func(n int) uint16 {
+
+func ide_start(rbase, allstatus uintptr, ibuf *idebuf_t, writing bool) {
+	ireg := func(n uintptr) uint16 {
 		return uint16(rbase + n)
 	}
 	ide_wait(rbase, false)
@@ -341,11 +367,11 @@ func ide_start(rbase, allstatus int, ibuf *idebuf_t, writing bool) {
 	}
 }
 
-func ide_complete(base int, dst []uint8, writing bool) {
+func ide_complete(base uintptr, dst []uint8, writing bool) {
 	if !writing {
 		// read sector
 		if ide_wait(base, true) {
-			runtime.Insl(base + 0,
+			runtime.Insl(uint16(base + 0),
 			    unsafe.Pointer(&dst[0]), 512/4)
 		}
 	} else {
@@ -355,11 +381,11 @@ func ide_complete(base int, dst []uint8, writing bool) {
 }
 
 type legacy_disk_t struct {
-	rbase	int
-	allstat	int
+	rbase	uintptr
+	allstat	uintptr
 }
 
-func (d *legacy_disk_t) init(base, allst int) {
+func (d *legacy_disk_t) init(base, allst uintptr) {
 	d.rbase = base
 	d.allstat = allst
 	ide_init(d.rbase)
@@ -385,12 +411,12 @@ func (d *legacy_disk_t) int_clear() {
 }
 
 type pciide_disk_t struct {
-	rbase	int
-	allstat	int
-	bmaster int
+	rbase	uintptr
+	allstat	uintptr
+	bmaster uintptr
 }
 
-func (d *pciide_disk_t) init(base, allst, busmaster int) {
+func (d *pciide_disk_t) init(base, allst, busmaster uintptr) {
 	d.rbase = base
 	d.allstat = allst
 	d.bmaster = busmaster
@@ -711,7 +737,7 @@ func acpi_attach() int {
  * current resources setting, set resource setting) on the PCI link device to
  * determine/configure the IOAPIC pin to which this PCI link device routes.
  *
- * steps 4 and 5 require an AML interpreter!
+ * steps 3-5 require an AML interpreter!
  *
  * luckily, my hardware exposes these PCI link devices through chipset PCI
  * device registers and memory mapped IO (in fact the ACPI methods in step 5
