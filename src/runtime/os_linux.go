@@ -565,13 +565,12 @@ func cls() {
 var hackmode int64
 var Halt uint32
 
-// wait until remove definition from proc.c
-type spinlock_t struct {
+type Spinlock_t struct {
 	v	uint32
 }
 
 //go:nosplit
-func splock(l *spinlock_t) {
+func Splock(l *Spinlock_t) {
 	for {
 		if atomic.Xchg(&l.v, 1) == 0 {
 			break
@@ -583,14 +582,14 @@ func splock(l *spinlock_t) {
 }
 
 //go:nosplit
-func spunlock(l *spinlock_t) {
+func Spunlock(l *Spinlock_t) {
 	//atomic.Store(&l.v, 0)
 	l.v = 0
 }
 
 // since this lock may be taken during an interrupt (only under fatal error
 // conditions), interrupts must be cleared before attempting to take this lock.
-var pmsglock = &spinlock_t{}
+var pmsglock = &Spinlock_t{}
 
 //go:nosplit
 func _pmsg(msg string) {
@@ -606,9 +605,9 @@ func _pmsg(msg string) {
 //go:nosplit
 func pmsg(msg string) {
 	fl := Pushcli()
-	splock(pmsglock)
+	Splock(pmsglock)
 	_pmsg(msg)
-	spunlock(pmsglock)
+	Spunlock(pmsglock)
 	Popcli(fl)
 }
 
@@ -628,21 +627,21 @@ func _pnum(n uintptr) {
 //go:nosplit
 func pnum(n uintptr) {
 	fl := Pushcli()
-	splock(pmsglock)
+	Splock(pmsglock)
 	_pnum(n)
-	spunlock(pmsglock)
+	Spunlock(pmsglock)
 	Popcli(fl)
 }
 
 func Pmsga(_p *uint8, c int, attr int8) {
 	pn := uintptr(unsafe.Pointer(_p))
 	fl := Pushcli()
-	splock(pmsglock)
+	Splock(pmsglock)
 	for i := uintptr(0); i < uintptr(c); i++ {
 		p := (*int8)(unsafe.Pointer(pn+i))
 		putcha(*p, attr)
 	}
-	spunlock(pmsglock)
+	Spunlock(pmsglock)
 	Popcli(fl)
 }
 
@@ -1569,11 +1568,11 @@ func Ap_setup(cpunum uint) {
 	// interrupts are probably already cleared
 	fl := Pushcli()
 
-	splock(pmsglock)
+	Splock(pmsglock)
 	_pmsg("cpu")
 	_pnum(uintptr(cpunum))
 	_pmsg("joined\n")
-	spunlock(pmsglock)
+	Spunlock(pmsglock)
 
 	if cpunum >= uint(MAXCPUS) {
 		pancake("nice computer!", uintptr(cpunum))
@@ -1702,7 +1701,7 @@ const (
 	IRQ_BASE	= 32
 )
 
-var threadlock = &spinlock_t{}
+var threadlock = &Spinlock_t{}
 
 // maximum # of runtime "OS" threads
 const maxthreads = 64
@@ -1858,13 +1857,13 @@ func trap(tf *[TFSIZE]uintptr) {
 		// does not return
 		tlb_shootdown()
 	} else if trapno == TRAP_TIMER {
-		splock(threadlock)
+		Splock(threadlock)
 		if ct != nil {
 			if ct.status == ST_WILLSLEEP {
 				ct.status = ST_SLEEPING
 				// XXX set IF, unlock
 				ct.tf[TF_RFLAGS] |= TF_FL_IF
-				spunlock(futexlock)
+				Spunlock(futexlock)
 			} else {
 				ct.status = ST_RUNNABLE
 			}
@@ -1990,12 +1989,12 @@ func yieldy() {
 		t := &threads[idx]
 		if t.status == ST_RUNNABLE {
 			t.status = ST_RUNNING
-			spunlock(threadlock)
+			Spunlock(threadlock)
 			sched_run(t)
 		}
 	}
 	cpu.mythread = nil
-	spunlock(threadlock)
+	Spunlock(threadlock)
 	sched_halt()
 }
 
@@ -2012,13 +2011,13 @@ func Trapsched() {
 // are disabled
  //go:nosplit
  func Trapwake() {
-	splock(tlock);
+	Splock(tlock);
 	_nints++
 	// only flag the Ps if a handler isn't currently active
 	if trapst == IDLE {
 		_ptrap = true
 	}
-	spunlock(tlock)
+	Spunlock(tlock)
 }
 // trap handling goroutines first call. it is not an error if there are no
 // interrupts when this is called.
@@ -2030,7 +2029,7 @@ func trapsched_m(gp *g) {
 	_trapsched(gp, false)
 }
 
-var tlock = &spinlock_t{}
+var tlock = &Spinlock_t{}
 
 var _initted bool
 var _trapsleeper *g
@@ -2041,7 +2040,7 @@ var _nints int
 // to the scheduler stack where preemptions are ignored.
 func _trapsched(gp *g, firsttime bool) {
 	fl := Pushcli()
-	splock(tlock)
+	Splock(tlock)
 
 	if firsttime {
 		if _initted {
@@ -2074,7 +2073,7 @@ func _trapsched(gp *g, firsttime bool) {
 		_trapsleeper = gp
 	}
 
-	spunlock(tlock)
+	Spunlock(tlock)
 	Popcli(fl)
 
 	schedule()
@@ -2113,7 +2112,7 @@ func trapcheck(pp *p) {
 		return
 	}
 	fl := Pushcli()
-	splock(tlock)
+	Splock(tlock)
 
 	var trapgp *g
 	if !_ptrap {
@@ -2138,7 +2137,7 @@ func trapcheck(pp *p) {
 	trapgp = _trapsleeper
 	_trapsleeper = nil
 
-	spunlock(tlock)
+	Spunlock(tlock)
 	Popcli(fl)
 
 	casgstatus(trapgp, _Gwaiting, _Grunnable)
@@ -2147,7 +2146,7 @@ func trapcheck(pp *p) {
 	runqput(pp, trapgp, true)
 	return
 out:
-	spunlock(tlock)
+	Spunlock(tlock)
 	Popcli(fl)
 	return
 }
@@ -2336,7 +2335,7 @@ func prot_none(v, sz uintptr) {
 	}
 }
 
-var maplock = &spinlock_t{}
+var maplock = &Spinlock_t{}
 
 // this flag makes hack_mmap panic if a new pml4 entry is ever added to the
 // kernel's pmap. we want to make sure all kernel mappings added after bootup
@@ -2351,7 +2350,7 @@ func Pml4freeze() {
 func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
     fd int32, offset int32) uintptr {
 	fl := Pushcli()
-	splock(maplock)
+	Splock(maplock)
 
 	MAP_ANON := uintptr(0x20)
 	MAP_PRIVATE := uintptr(0x2)
@@ -2411,14 +2410,14 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 	}
 	ret = va
 out:
-	spunlock(maplock)
+	Spunlock(maplock)
 	Popcli(fl)
 	return ret
 }
 
 func hack_munmap(v, _sz uintptr) {
 	fl := Pushcli()
-	splock(maplock)
+	Splock(maplock)
 	sz := pgroundup(_sz)
 	cantuse := uintptr(0xf0)
 	for i := uintptr(0); i < sz; i += PGSIZE {
@@ -2436,7 +2435,7 @@ func hack_munmap(v, _sz uintptr) {
 		}
 	}
 	pmsg("POOF\n")
-	spunlock(maplock)
+	Spunlock(maplock)
 	Popcli(fl)
 }
 
@@ -2472,7 +2471,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	cloneaddr := **(**uintptr)(unsafe.Pointer(&dur))
 
 	fl := Pushcli()
-	splock(threadlock)
+	Splock(threadlock)
 
 	ti := thread_avail()
 	// provide fn as arg to clone_wrap
@@ -2501,7 +2500,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 
 	mt.fx = fxinit
 
-	spunlock(threadlock)
+	Spunlock(threadlock)
 	Popcli(fl)
 }
 
@@ -2553,13 +2552,13 @@ func hack_write(fd int, bufn uintptr, sz uint32) int64 {
 		pancake("unexpected fd", uintptr(fd))
 	}
 	fl := Pushcli()
-	splock(pmsglock)
+	Splock(pmsglock)
 	c := uintptr(sz)
 	for i := uintptr(0); i < c; i++ {
 		p := (*int8)(unsafe.Pointer(bufn + i))
 		putch(*p)
 	}
-	spunlock(pmsglock)
+	Spunlock(pmsglock)
 	Popcli(fl)
 	return int64(sz)
 }
@@ -2597,7 +2596,7 @@ func hack_syscall(trap, a1, a2, a3 int64) (int64, int64, int64) {
 	return 0, 0, -1
 }
 
-var futexlock = &spinlock_t{}
+var futexlock = &Spinlock_t{}
 
 // XXX not sure why stack splitting prologue is not ok here
 //go:nosplit
@@ -2611,7 +2610,7 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 	switch op {
 	case FUTEX_WAIT:
 		Cli()
-		splock(futexlock)
+		Splock(futexlock)
 		dosleep := *uaddr == val
 		if dosleep {
 			ct := Gscpu().mythread
@@ -2630,7 +2629,7 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 			ret = Gscpu().mythread.sleepret
 			Sti()
 		} else {
-			spunlock(futexlock)
+			Spunlock(futexlock)
 			Sti()
 			eagain := -11
 			ret = eagain
@@ -2638,8 +2637,8 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 	case FUTEX_WAKE:
 		woke := 0
 		Cli()
-		splock(futexlock)
-		splock(threadlock)
+		Splock(futexlock)
+		Splock(threadlock)
 		for i := 0; i < maxthreads && val > 0; i++ {
 			t := &threads[i]
 			st := t.status
@@ -2652,8 +2651,8 @@ func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
 				woke++
 			}
 		}
-		spunlock(threadlock)
-		spunlock(futexlock)
+		Spunlock(threadlock)
+		Spunlock(futexlock)
 		Sti()
 		ret = woke
 	default:
