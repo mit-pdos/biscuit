@@ -136,6 +136,7 @@ protcseg:
   pushl %ebx
   pushl %eax
   call  readsect
+  addl	$8, %esp
   addl  $SECTSIZE, %eax
   incl  %ebx
   decl  %ecx
@@ -251,21 +252,6 @@ gdt:
 gdtdesc:
   .word   (gdtdesc - gdt - 1)             # sizeof(gdt) - 1
   .long   gdt                             # address gdt
-
-#define	E820		\
-	.long 0,0;		\
-	.long 0,0;		\
-	.long 0;		\
-	.long 0,0;		\
-//.globl e820m
-//e820m:
-//E820
-//E820
-//E820
-//E820
-//E820
-//E820
-//E820
 
 .globl e820entries
 e820entries:
