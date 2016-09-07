@@ -474,38 +474,45 @@ type acpi_ioapic_t struct {
 	overrides	map[int]_oride_t
 }
 
-// returns number of cpus, IO physcal address of IO APIC, and whether both the
-// number of CPUs and an IO APIC were found.
-func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
-	// find MADT table. RSDT contains 32bit pointers, XSDT contains 64bit
-	// pointers.
-	hdrlen := 36
-	ptrs := rsdt[hdrlen:]
-	var tbl []uint8
-	found := false
-	for len(ptrs) != 0 {
-		tbln := readn(ptrs, 4, 0)
-		ptrs = ptrs[4:]
-		tbl = dmaplen(tbln, 8)
-		if string(tbl[:4]) == "APIC" {
-			found = true
-			l := readn(tbl, 4, 4)
-			tbl = dmaplen(tbln, l)
-			break
-		}
-	}
-	var apicret acpi_ioapic_t
-	if !found {
-		return 0, apicret, false
-	}
+func _acpi_cksum(tbl []uint8) {
 	var cksum uint8
 	for _, c := range tbl {
 		cksum += c
 	}
 	if cksum != 0 {
-		fmt.Printf("MADT checksum fail\n")
+		panic("bad ACPI table checksum")
+	}
+}
+
+// returns a slice of the requested table and whether it was found
+func _acpi_tbl(rsdt []uint8, sig string) ([]uint8, bool) {
+	// RSDT contains 32bit pointers, XSDT contains 64bit pointers.
+	hdrlen := 36
+	ptrs := rsdt[hdrlen:]
+	var tbl []uint8
+	for len(ptrs) != 0 {
+		tbln := readn(ptrs, 4, 0)
+		ptrs = ptrs[4:]
+		tbl = dmaplen(tbln, 8)
+		if string(tbl[:4]) == sig {
+			l := readn(tbl, 4, 4)
+			tbl = dmaplen(tbln, l)
+			return tbl, true
+		}
+	}
+	return nil, false
+}
+
+// returns number of cpus, IO physcal address of IO APIC, and whether both the
+// number of CPUs and an IO APIC were found.
+func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
+	// find MADT table
+	tbl, found := _acpi_tbl(rsdt, "APIC")
+	var apicret acpi_ioapic_t
+	if !found {
 		return 0, apicret, false
 	}
+	_acpi_cksum(tbl)
 	apicret.overrides = make(map[int]_oride_t)
 	marrayoff := 44
 	ncpu := 0
@@ -590,6 +597,18 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 	return ncpu, apicret, ncpu != 0 && apicret.base != 0
 }
 
+// returns false if ACPI claims that MSI is broken
+func _acpi_fadt(rsdt []uint8) bool {
+	tbl, found := _acpi_tbl(rsdt, "FACP")
+	if !found {
+		return false
+	}
+	_acpi_cksum(tbl)
+	flags := readn(tbl, 2, 109)
+	nomsi      := 1 << 3
+	return flags & nomsi == 0
+}
+
 func _acpi_scan() ([]uint8, bool) {
 	// ACPI 5.2.5: search for RSDP in EBDA and BIOS read-only memory
 	ebdap := (0x40 << 4) | 0xe
@@ -641,19 +660,19 @@ func acpi_attach() int {
 	rsdtlen := readn(rsdt, 4, 4)
 	rsdt = dmaplen(rsdtn, rsdtlen)
 	// verify RSDT checksum
-	var cksum uint8
-	for i := 0; i < rsdtlen; i++ {
-		cksum += rsdt[i]
-	}
-	if cksum != 0 {
-		panic("bad RSDT")
-	}
+	_acpi_cksum(rsdt)
+	// may want to search XSDT, too
 	ncpu, ioapic, ok := _acpi_madt(rsdt)
 	if !ok {
 		panic("no cpu count")
 	}
 
 	apic.apic_init(ioapic)
+
+	msi := _acpi_fadt(rsdt)
+	if !msi {
+		panic("no MSI")
+	}
 
 	return ncpu
 }
