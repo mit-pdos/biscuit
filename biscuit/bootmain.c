@@ -5,7 +5,6 @@
  * boot loader
  **********************************************************************/
 
-void waitdisk(void);
 void readsect(void *, uint32_t);
 
 static void *alloc_phys(uint64_t *, uint64_t);
@@ -99,9 +98,7 @@ void
 bootmain(void)
 {
 	// read 1st page of kernel
-	int i;
-	for (i = 0; i < 8; i++)
-		readsect((char *)ELFHDR + i*SECTSIZE, BOOTBLOCKS+i);
+	readsect((char *)ELFHDR, BOOTBLOCKS);
 
 	checkmach();
 
@@ -121,7 +118,7 @@ bootmain(void)
 		if (ph->p_type != 1)	// PT_LOAD
 			continue;
 
-		readseg(pgdir, ph->p_va, ph->p_memsz, ph->p_offset);
+		readseg(pgdir, ph->p_va, ph->p_filesz, ph->p_offset);
 
 		// zero bss
 		if (ph->p_filesz != ph->p_memsz) {
@@ -132,6 +129,7 @@ bootmain(void)
 	}
 
 	// map the bootloader; this also maps our stack
+	int i;
 	for (i = 0; i < BOOTBLOCKS; i++) {
 		uint64_t addr = ROUNDDOWN(0x7c00 + i*SECTSIZE, PGSIZE);
 		mapone(pgdir, addr, addr, 0);
@@ -357,6 +355,8 @@ elfsize(void)
 	return ret;
 }
 
+static char _spin[] = {'|', '/', '-', '\\'};
+
 // Read 'count' bytes at 'offset' from kernel and map to virtual address 'va'.
 // Might copy more than asked
 static void
@@ -373,14 +373,17 @@ readseg(uint64_t *pgdir, uint64_t va, uint64_t count, uint64_t offset)
 	// "BOOTBLOCKS"
 	offset = (offset / SECTSIZE) + BOOTBLOCKS;
 
-	// If this is too slow, we could read lots of sectors at a time.
-	// We'd write more to memory than asked, but it doesn't matter --
-	// we load in increasing order.
+	uint32_t div = 0;
+	uint32_t spini = 0;
 	while (va < end_va) {
 		void *pa = alloc_phys(pgdir, va);
 		readsect(pa, offset);
-		va += SECTSIZE;
-		offset++;
+		va += PGSIZE;
+		offset += 8;
+		if ((div++ % 6) == 0) {
+			uint16_t *p = (uint16_t *)0xb8000;
+			*p = 0x0700 | _spin[spini++ % sizeof(_spin)];
+		}
 	}
 }
 
@@ -390,6 +393,8 @@ static struct {
 	uint64_t start;
 	uint64_t end;
 } badregions[] = {
+	// int 13h bounce buffer
+	{0x5000, 0x6000},
 	// E820 map itself
 	{0x6000, 0x7000},
 	// Elf header

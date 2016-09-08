@@ -9,216 +9,230 @@
 .set BOOTBLOCKS,     9
 .set SECTSIZE,       512
 .globl e820m
-.set e820m,	0x6000
+.set e820m,          0x6000
+// bounce buffer for real-mode int 13h
+.set diskbounce,     0x5000
 
 .globl start
+.code16                     # Assemble for 16-bit mode
 start:
-  .code16                     # Assemble for 16-bit mode
-  cli                         # Disable interrupts
-  cld                         # String operations increment
+	cld                         # String operations increment
 
-  # Set up the important data segment registers (DS, ES, SS).
-  xorw    %ax,%ax             # Segment number zero
-  movw    %ax,%ds             # -> Data Segment
-  movw    %ax,%es             # -> Extra Segment
-  movw    %ax,%ss             # -> Stack Segment
+	movb	%dl, diskid
+	# Set up the important data segment registers (DS, ES, SS).
+	xorw	%ax,%ax             # Segment number zero
+	movw	%ax,%ds             # -> Data Segment
+	movw	%ax,%es             # -> Extra Segment
+	movw	%ax,%ss             # -> Stack Segment
 
-  # Enable A20:
-  #   For backwards compatibility with the earliest PCs, physical
-  #   address line 20 is tied low, so that addresses higher than
-  #   1MB wrap around to zero by default.  This code undoes this.
+	# Enable A20:
+	#   For backwards compatibility with the earliest PCs, physical
+	#   address line 20 is tied low, so that addresses higher than
+	#   1MB wrap around to zero by default.  This code undoes this.
 seta20.1:
-  inb     $0x64,%al               # Wait for not busy
-  testb   $0x2,%al
-  jnz     seta20.1
+	inb     $0x64,%al               # Wait for not busy
+	testb   $0x2,%al
+	jnz     seta20.1
 
-  movb    $0xd1,%al               # 0xd1 -> port 0x64
-  outb    %al,$0x64
+	movb    $0xd1,%al               # 0xd1 -> port 0x64
+	outb    %al,$0x64
 
 seta20.2:
-  inb     $0x64,%al               # Wait for not busy
-  testb   $0x2,%al
-  jnz     seta20.2
+	inb     $0x64,%al               # Wait for not busy
+	testb   $0x2,%al
+	jnz     seta20.2
 
-  movb    $0xdf,%al               # 0xdf -> port 0x60
-  outb    %al,$0x60
+	movb    $0xdf,%al               # 0xdf -> port 0x60
+	outb    %al,$0x60
 
 // maybe use new a20?
 //inb	$0x92, %al
 //orb	$2, %al
 //outb	%al, $0x92
 
-  movw	$(4096/4), %cx
-  movw	  $e820m, %di
-  movl	$0, %eax
-  repnz stosl
+// XXX move e820 code/buffer and diskbounce buffer to bootmain.c
+	movw	$(4096/4), %cx
+	movw	  $e820m, %di
+	movl	$0, %eax
+	repnz stosl
 
 e820:
-  movw    $start, %sp
-  xorl    %ebx, %ebx
-  pushl	  %ebx
-  movw	  $e820m, %di
+	movw    $start, %sp
+	xorl    %ebx, %ebx
+	pushl	  %ebx
+	movw	  $e820m, %di
 
 e820.1:
-  movl	  $0xe820, %eax
-  movl	  $20, %ecx
-  movl    $0x534d4150, %edx
-  int	  $0x15
-  cmpl	  $0x534d4150, %eax
-  je	  e820.4
+	movl	  $0xe820, %eax
+	movl	  $20, %ecx
+	movl    $0x534d4150, %edx
+	int	  $0x15
+	cmpl	  $0x534d4150, %eax
+	je	  e820.4
 e820.fail:
-  movw	  $0xb000, %ax
-  movw	  %ax, %ds
-  xorl	  %eax, %eax
-  movw	  $0x8000, %ax
-  movw	  $0x1742, (%eax)
+	movw	  $0xb000, %ax
+	movw	  %ax, %ds
+	xorl	  %eax, %eax
+	movw	  $0x8000, %ax
+	movw	  $0x1742, (%eax)
 1:
-  jmp	  1b
+	jmp	  1b
 e820.4:
-  popl	  %eax
-  incl	  %eax
-  pushl	  %eax
-  # done?
-  jc	  e820.2
-  test	  %bx, %bx
-  jz	  e820.2
-  # 28 bytes
-  addw	  $28, %di
-  jmp	  e820.1
+	popl	  %eax
+	incl	  %eax
+	pushl	  %eax
+	# done?
+	jc	  e820.2
+	test	  %bx, %bx
+	jz	  e820.2
+	# 28 bytes
+	addw	  $28, %di
+	jmp	  e820.1
 e820.2:
-  popl	  %eax
-  movl	  %eax, e820entries
+	popl	  %eax
+	movl	  %eax, e820entries
 
-  # Switch from real to protected mode, using a bootstrap GDT
-  # and segment translation that makes virtual addresses 
-  # identical to their physical addresses, so that the 
-  # effective memory map does not change during the switch.
-  cli		// some bioses set IF in e820!
-  lgdt    gdtdesc
-  movl    %cr0, %eax
-  orl     $CR0_PE_ON, %eax
-  movl    %eax, %cr0
-  
-  # Jump to next instruction, but in 32-bit code segment.
-  # Switches processor into 32-bit mode.
-  ljmp    $PROT_MODE_CSEG, $protcseg
+	# read the rest of the boot loader
+	movw  $0x7c00 + SECTSIZE, %ax
+	movw	%ax, dap_dest_off
+	movw	$0, dap_dest_seg
+	movw	$1, dap_sectoff_lo
 
-  .code32                     # Assemble for 32-bit mode
+	movb	$0x42, %ah
+	movb	diskid, %dl
+	movw	$dap, %si
+	int	$0x13
+
+	jc	crud
+	testb	%ah, %ah
+	jnz	crud
+
+	# Switch from real to protected mode, using a bootstrap GDT and segment
+	# translation that makes virtual addresses identical to their physical
+	# addresses, so that the effective memory map does not change during
+	# the switch.
+	cli
+	lgdt    gdtdesc
+	movl    %cr0, %eax
+	orl     $CR0_PE_ON, %eax
+	movl    %eax, %cr0
+
+	# Jump to next instruction, but in 32-bit code segment.  Switches
+	# processor into 32-bit mode.
+	ljmp    $PROT_MODE_CSEG, $protcseg
+
+# 16bit code
+crud:
+	movw	$0xb000, %ax
+	movw	%ax, %ds
+	movw	$0x1746, 0x8000
+	jmp	crud
+
+diskid:
+	.byte	0
+dap:
+dap_size:
+	.byte	0x10
+	.byte	0
+dap_nsect:
+	.word	BOOTBLOCKS - 1
+dap_dest_off:
+	.word	0
+dap_dest_seg:
+	.word	0
+dap_sectoff_lo:
+	.long	0
+dap_sectoff_hi:
+	.long	0
+
+.code32
 protcseg:
-  # Set up the protected-mode data segment registers
-  movw    $PROT_MODE_DSEG, %ax    # Our data segment selector
-  movw    %ax, %ds                # -> DS: Data Segment
-  movw    %ax, %es                # -> ES: Extra Segment
-  movw    %ax, %fs                # -> FS
-  movw    %ax, %gs                # -> GS
-  movw    %ax, %ss                # -> SS: Stack Segment
+	# Set up the protected-mode data segment registers
+	movw    $PROT_MODE_DSEG, %ax    # Our data segment selector
+	movw    %ax, %ds                # -> DS: Data Segment
+	movw    %ax, %es                # -> ES: Extra Segment
+	movw    %ax, %fs                # -> FS
+	movw    %ax, %gs                # -> GS
+	movw    %ax, %ss                # -> SS: Stack Segment
 
-  # Set up the stack pointer
-  movl    $start, %esp
+	# Set up the stack pointer
+	movl    $start, %esp
+	call bootmain
 
-  # XXX: Use legacy IDE command block if this is Qemu; use hardcoded IDE
-  # command block otherwise.
-  movl	$1, %eax
-  cpuid
-  // Qemu's Nehalem CPU family/model etc. test hardware is 0x106e5
-  cmpl	$0x106a3, %eax
-  jne	1f
-  movw	$0x1f0, idereg
-1:
-
-  movl	 $0x1753, 0xb8000
-  # Read the remaining sectors of the boot loader; the first was loaded for us.
-  movl  $BOOTBLOCKS-1, %ecx
-  movl  $0x7c00 + SECTSIZE, %eax
-  movl  $1, %ebx
-
-1:
-  pushl %ebx
-  pushl %eax
-  call  readsect
-  addl	$8, %esp
-  addl  $SECTSIZE, %eax
-  incl  %ebx
-  decl  %ecx
-  jnz   1b
-
-  call bootmain
-
-  # If bootmain returns (it shouldn't), loop.
+	# If bootmain returns (it shouldn't), loop.
 spin:
-  jmp spin
+	jmp spin
 
-# void waitdisk(void)
-.globl waitdisk
-waitdisk:
-  movw	idereg, %dx
-  addw	$7, %dx
-1:
-  inb   %dx, %al
-  andb  $0xc0, %al
-  cmpb  $0x40, %al
-  jne   1b
-  ret
-
-# void readsect(void *dst, uint32_t offset)
+.code32
+# void readsect(void *dst, uint32_t sectornum)
 .globl readsect
 readsect:
-  pushl %ebp
-  movl  %esp, %ebp
+	movl	8(%esp), %eax		// arg2
+	movl	%eax, dap_sectoff_lo
+	movl	$0, dap_sectoff_hi
+	movw	$8, dap_nsect
+	movw	$diskbounce, dap_dest_off
+	movw	$0, dap_dest_seg
+	pushl	%esi
+	pushl	%edi
 
-  pushl %edi
-  pushl %eax
-  pushl %edx
-  pushl %ecx
-  pushl %ebx
+.globl prot2real
+prot2real:
+	cli
+	movl	$(5 << 3), %eax
+	movl    %eax,%ds
+	movl    %eax,%es
+	movl    %eax,%ss
 
-  call waitdisk
+	ljmp	$(4 << 3), $fixseg
+fixseg:
+	movl	%cr0, %eax
+	andl	$~CR0_PE_ON, %eax
+	movl	%eax, %cr0
+	ljmp	$0, $realseg
+realseg:
+.code16
+	xorw    %ax,%ax
+	movw    %ax,%ds
+	movw    %ax,%es
+	movw    %ax,%ss
+	sti
 
-  movw	idereg, %bx
+	movb	$0x42, %ah
+	movb	diskid, %dl
+	movw	$dap, %si
+	int	$0x13
 
-  leaw	2(%bx), %dx
-  movb	$1, %al
-  outb	%al, %dx
+	jc	crud
+	testb	%ah, %ah
+	jnz	crud
 
-  leaw	3(%bx), %dx
-  movl  12(%ebp), %eax   // offset
-  outb  %al, %dx
+	cli
+	movl	%cr0, %eax
+	orl	$CR0_PE_ON, %eax
+	movl	%eax, %cr0
+	ljmp    $PROT_MODE_CSEG, $protseg
+.code32
+protseg:
+	movw    $PROT_MODE_DSEG, %ax
+	movw    %ax, %ds
+	movw    %ax, %es
+	movw    %ax, %fs
+	movw    %ax, %gs
+	movw    %ax, %ss
 
-  leaw	4(%bx), %dx
-  shr  $8, %eax
-  outb  %al, %dx
+	// copy sector from diskbounce to destination. we cannot directly read
+	// the sector to the destination address because int 13h is a real mode
+	// BIOS call and thus only has 1MB of addressable memory.
+	movl	$diskbounce, %esi
+	movl	12(%esp), %edi		// arg1
+	movl	$4096, %ecx
+	cld
+	repnz	movsl
 
-  leaw	5(%bx), %dx
-  shr  $8, %eax
-  outb  %al, %dx
-
-  leaw	6(%bx), %dx
-  shr  $8, %eax
-  orb   $0xe0, %al
-  outb  %al, %dx
-
-  leaw	7(%bx), %dx
-  movb	$0x20, %al
-  outb	%al, %dx
-
-  call waitdisk
-
-  movl  $(SECTSIZE/4), %ecx  // divide by 4 because we move one long at a time
-  movl  8(%ebp), %edi
-  leaw	0(%bx), %dx
-  cld
-  repnz insl
-
-  popl  %ebx
-  popl  %ecx
-  popl  %edx
-  popl  %eax
-  popl  %edi
-
-  movl  %ebp, %esp
-  popl  %ebp
-
-  ret
+	popl	%edi
+	popl	%esi
+	ret
 
 # Bootstrap GDT
 .p2align 2                                # force 4 byte alignment
@@ -230,6 +244,12 @@ readsect:
 	.word (((lim) >> 12) & 0xffff), ((base) & 0xffff);	\
 	.byte (((base) >> 16) & 0xff), (0x90 | (type)),		\
 		(0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
+// real-mode segment: has G and D/B clear (since G is clear RSEG doesn't shift
+// limit by page size)
+#define RSEG(type,base,lim)					\
+	.word ((lim) & 0xffff), ((base) & 0xffff);	\
+	.byte (((base) >> 16) & 0xff), (0x90 | (type)),		\
+		(0x00 | (((lim) >> 16) & 0xf)), (((base) >> 24) & 0xff)
 #define SEG64(type,base,lim)					\
 	.word (((lim) >> 12) & 0xffff), ((base) & 0xffff);	\
 	.byte (((base) >> 16) & 0xff), (0x90 | (type)),		\
@@ -244,10 +264,12 @@ readsect:
 #define STA_A		0x1	    // Accessed
 
 gdt:
-  SEG_NULL				# null seg
-  SEG(STA_X|STA_R, 0x0, 0xffffffff)	# code seg
-  SEG(STA_W, 0x0, 0xffffffff)	        # data seg
-  SEG64(STA_X|STA_R, 0x0, 0xffffffff)	# 64bit code seg
+	SEG_NULL				# 0 - null seg
+	SEG(STA_X|STA_R, 0x0, 0xffffffff)	# 1 - code seg
+	SEG(STA_W, 0x0, 0xffffffff)	        # 2 - data seg
+	SEG64(STA_X|STA_R, 0x0, 0xffffffff)	# 3 - 64bit code seg
+	RSEG(STA_X|STA_R, 0, 0xffff)		# 4 - real mode code
+	RSEG(STA_W, 0, 0xffff)			# 5 - real mode data
 
 gdtdesc:
   .word   (gdtdesc - gdt - 1)             # sizeof(gdt) - 1
@@ -256,16 +278,11 @@ gdtdesc:
 .globl e820entries
 e820entries:
 	.long 0
-idereg:
-	// hard coded PCI-native IDE command block for my test hardware's i3400
-	// southbridge
-	.word 0xeca0
-
 .org 506
-  // this location is special: mkbdisk.py puts the number of the first fs block
-  // here
-  .long 0
-  .byte 0x55, 0xaa
+	// this location is special: mkbdisk.py puts the number of the first fs
+	// block here
+	.long 0
+	.byte 0x55, 0xaa
 
 //endy:
 // useful debugging code

@@ -126,6 +126,18 @@ ljmp(uint16_t sel, uint32_t entry, uint32_t a1, uint32_t a2, uint32_t sp)
 		: "memory");
 }
 
+//static uint64_t
+//rdtsc(void)
+//{
+//	uint32_t lo, hi;
+//	asm volatile(
+//		"rdtsc\n"
+//		: "=a"(lo), "=d"(hi)
+//		:
+//		: "memory");
+//	return ((uint64_t)hi << 32) | lo;
+//}
+
 #define PGSIZE          (1UL << 12)
 #define PGOFFMASK       (PGSIZE - 1)
 #define PGMASK          (~PGOFFMASK)
