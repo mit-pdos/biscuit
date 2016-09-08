@@ -58,8 +58,9 @@ all: go.img net.img
 
 -include $(RFS)
 
-boot: boot.o bootmain.o
-	$(LD) --omagic -o $@.elf -m elf_i386 -static -e start -Ttext 0x7c00 $^
+boot: boot.o bootmain.o stamp.py
+	$(LD) --omagic -o $@.elf -m elf_i386 -static -e start -Ttext 0x7c00 \
+	    boot.o bootmain.o
 	objcopy -O binary $@.elf $@.bin
 	$(PYTHON) stamp.py $@.bin
 	mv $@.bin $@
@@ -204,3 +205,4 @@ btest: btest.c
 	objcopy -O binary -j.text $@.elf $@
 
 .PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net linux net
+.PRECIOUS: stamp.py
