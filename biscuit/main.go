@@ -9,35 +9,7 @@ import "sync"
 import "time"
 import "unsafe"
 
-type trapstore_t struct {
-	trapno    uintptr
-	faultaddr uintptr
-	tf        [TFSIZE]uintptr
-	inttime   int
-}
-const maxtstore int = 64
-const maxcpus   int = 32
-
-//go:nosplit
-func tsnext(c int) int {
-	return (c + 1) % maxtstore
-}
-
 var	numcpus	int = 1
-
-type cpu_t struct {
-	// logical number, not lapic id
-	num		int
-	// per-cpus interrupt queues. the cpu interrupt handler is the
-	// producer, the go routine running trap() below is the consumer. each
-	// cpus interrupt handler increments head while the go routine consumer
-	// increments tail
-	trapstore	[maxtstore]trapstore_t
-	tshead		int
-	tstail		int
-}
-
-var cpus	[maxcpus]cpu_t
 
 // these functions can only be used when interrupts are cleared
 //go:nosplit
@@ -55,11 +27,10 @@ const(
 	SYSCALL		= 64
 	TLBSHOOT	= 70
 
-	// low 3 bits must be zero
 	IRQ_BASE	= 32
 	IRQ_KBD		= 1
 	IRQ_COM1	= 4
-	IRQ_LAST	= IRQ_BASE + 16
+	IRQ_LAST	= IRQ_BASE + 24
 
 	INT_KBD		= IRQ_BASE + IRQ_KBD
 	INT_COM1	= IRQ_BASE + IRQ_COM1
@@ -69,54 +40,24 @@ const(
 var IRQ_DISK	int = -1
 var INT_DISK	int = -1
 
-// trap cannot do anything that may have side-effects on the runtime (like
-// fmt.Print, or use panic!). the reason is that goroutines are scheduled
-// cooperatively in the runtime. trap interrupts the runtime though, and then
-// tries to execute more gocode on the same M, thus doing things the runtime
-// did not expect.
+// trapstub() cannot do anything that may have side-effects on the runtime
+// (like allocate, fmt.Print, or use panic) since trapstub() runs in interrupt
+// context and thus may run concurrently with code manipulating the same state.
+// since trapstub() runs on the per-cpu interrupt stack, it must be nosplit.
 //go:nosplit
 func trapstub(tf *[TFSIZE]uintptr) {
-
-	lid := cpus[lap_id()].num
-	head := cpus[lid].tshead
-	tail := cpus[lid].tstail
-	ts := &cpus[lid].trapstore[head]
-
-	// make sure circular buffer has room
-	if tsnext(head) == tail {
-		for i := tail; i != head; i = tsnext(i) {
-			runtime.Pnum(int(cpus[lid].trapstore[i].trapno))
-		}
-		runtime.Pnum(0xbad)
-		for {}
-	}
-
-	// extract process and thread id
-	ts.inttime = runtime.Nanotime()
 
 	trapno := tf[TF_TRAP]
 
 	// only IRQs come through here now
-	if trapno <= TIMER {
+	if trapno <= TIMER || trapno > IRQ_LAST {
 		runtime.Pnum(0x1001)
 		for {}
 	}
 
-	// add to trap circular buffer for actual trap handler
-	ts.trapno = trapno
-	ts.tf = *tf
-	if trapno == PGFAULT {
-		ts.faultaddr = runtime.Rcr2()
-	}
-
-	// commit interrupt
-	head = tsnext(head)
-	cpus[lid].tshead = head
-
-	runtime.Trapwake()
-
 	switch trapno {
 	case uintptr(INT_DISK), INT_KBD, INT_COM1:
+		runtime.IRQwake(uint(trapno))
 		// we need to mask the interrupt on the IOAPIC since my
 		// hardware's LAPIC automatically send EOIs to IOAPICS when the
 		// LAPIC receives an EOI and does not support disabling these
@@ -124,6 +65,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 		// better to disable automatic EOI broadcast and send EOIs to
 		// the IOAPICs in the driver (as the code used to when using
 		// 8259s).
+
 		// masking the IRQ on the IO APIC must happen before writing
 		// EOI to the LAPIC (otherwise the CPU will probably receive
 		// another interrupt from the same IRQ). the LAPIC EOI happens
@@ -139,56 +81,24 @@ func trapstub(tf *[TFSIZE]uintptr) {
 	}
 }
 
-func trap(handlers map[int]func(*trapstore_t)) {
-	runtime.Trapinit()
+func trap_disk(irq uint) {
 	for {
-		for cpu := 0; cpu < numcpus; {
-			head := cpus[cpu].tshead
-			tail := cpus[cpu].tstail
+		runtime.IRQsched(irq)
 
-			if tail == head {
-				// no work for this cpu
-				cpu++
-				continue
-			}
-
-			tcur := trapstore_t{}
-			tcur = cpus[cpu].trapstore[tail]
-
-			trapno := tcur.trapno
-
-			tail = tsnext(tail)
-			cpus[cpu].tstail = tail
-
-			if h, ok := handlers[int(trapno)]; ok {
-				go h(&tcur)
-				continue
-			}
-			panic(fmt.Sprintf("no handler for trap %v\n", trapno))
+		// is this a disk int?
+		if !disk.intr() {
+			fmt.Printf("spurious disk int\n")
+			return
 		}
-		runtime.Trapsched()
+		ide_int_done <- true
 	}
 }
 
-func trap_disk(ts *trapstore_t) {
-	// is this a disk int?
-	if !disk.intr() {
-		fmt.Printf("spurious disk int\n")
-		return
+func trap_cons(irq uint, ch chan bool) {
+	for {
+		runtime.IRQsched(irq)
+		ch <- true
 	}
-	ide_int_done <- true
-}
-
-func trap_cons(ts *trapstore_t) {
-	var ch chan bool
-	if ts.trapno == INT_KBD {
-		ch = cons.kbd_int
-	} else if ts.trapno == INT_COM1 {
-		ch = cons.com_int
-	} else {
-		panic("bad int")
-	}
-	ch <- true
 }
 
 func tfdump(tf *[TFSIZE]int) {
@@ -1897,13 +1807,6 @@ func ap_entry(myid uint) {
 	// myid starts from 1
 	runtime.Ap_setup(myid)
 
-	lid := lap_id()
-	if lid > maxcpus || lid < 0 {
-		runtime.Pnum(0xb1dd1e)
-		for {}
-	}
-	cpus[lid].num = int(myid)
-
 	// ints are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()
 	fl |= TF_FL_IF
@@ -1962,6 +1865,9 @@ func kbd_init() {
 	for _comready() {
 		runtime.Inb(0x3f8)
 	}
+
+	go trap_cons(INT_KBD, cons.kbd_int)
+	go trap_cons(INT_COM1, cons.com_int)
 }
 
 type cons_t struct {
@@ -2798,31 +2704,20 @@ func main() {
 
 	dmap_init()
 	perfsetup()
+
 	// control CPUs
 	aplim := 7
 
 	//pci_dump()
 	ncpu := attach_devs()
 
-	if disk == nil || INT_DISK < 0 {
-		panic("no disk")
-	}
-
-	// XXX pass irqs from attach_devs to trapstub, not global state.
-	// must come before init funcs below
+	// must come before any irq_unmask()s
 	runtime.Install_traphandler(trapstub)
 
-	handlers := map[int]func(*trapstore_t) {
-	     INT_DISK: trap_disk,
-	     INT_KBD: trap_cons,
-	     INT_COM1: trap_cons,
-	     }
-	go trap(handlers)
+	kbd_init()
 
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
-
-	kbd_init()
 
 	rf := fs_init()
 	use_memfs()
@@ -2855,6 +2750,7 @@ func main() {
 	//	}
 	//}()
 
+	// sleep forever
 	var dur chan bool
 	<- dur
 }

@@ -1999,157 +1999,156 @@ func yieldy() {
 	sched_halt()
 }
 
-// called only once to setup
-func Trapinit() {
-	mcall(trapinit_m)
-}
-
-func Trapsched() {
-	mcall(trapsched_m)
-}
-
-// called from the CPU interrupt handler. must only be called while interrupts
-// are disabled
- //go:nosplit
- func Trapwake() {
-	Splock(tlock);
-	_nints++
-	// only flag the Ps if a handler isn't currently active
-	if trapst == IDLE {
-		_ptrap = true
+var _irqv struct {
+	// slock protects everything in _irqv
+	slock		Spinlock_t
+	handlers	[64]struct {
+		igp	*g
+		started	bool
 	}
-	Spunlock(tlock)
-}
-// trap handling goroutines first call. it is not an error if there are no
-// interrupts when this is called.
-func trapinit_m(gp *g) {
-	_trapsched(gp, true)
-}
-
-func trapsched_m(gp *g) {
-	_trapsched(gp, false)
+	// flag indicating whether a thread in schedule() should check for
+	// runnable IRQ-handling goroutines
+	check		bool
+	// bitmask of IRQs that have requested service
+	irqs		uintptr
 }
 
-var tlock = &Spinlock_t{}
+// IRQsched yields iff there have been no new IRQs since the last time the
+// calling goroutine was scheduled.
+func IRQsched(irq uint) {
+	gp := getg()
+	gp.m.irqn = irq
+	mcall(irqsched_m)
+}
 
-var _initted bool
-var _trapsleeper *g
-var _nints int
+func irqsched_m(gp *g) {
+	// have new IRQs arrived?
+	irq := gp.m.irqn
+	gp.m.irqn = 0
+	if irq > 63 {
+		throw("bad irq " + string(irq))
+	}
 
-// i think it is ok for these trap sched/wake functions to be nosplit and call
-// nosplit functions even though they clear interrupts because we first switch
-// to the scheduler stack where preemptions are ignored.
-func _trapsched(gp *g, firsttime bool) {
 	fl := Pushcli()
-	Splock(tlock)
-
-	if firsttime {
-		if _initted {
-			pancake("two inits", 0)
-		}
-		_initted = true
-		// if there are traps already, let a P wake us up.
-		//goto bed
-	}
-
-	// decrement handled ints
-	if !firsttime {
-		if _nints <= 0 {
-			pancake("neg ints", uintptr(_nints))
-		}
-		_nints--
-	}
-
-	// check if we are done
-	if !firsttime && _nints != 0 {
-		// keep processing
-		tprepsleep(gp, false)
-		_g_ := getg()
-		runqput(_g_.m.p.ptr(), gp, true)
-	} else {
-		tprepsleep(gp, true)
-		if _trapsleeper != nil {
-			pancake("trapsleeper set", 0)
-		}
-		_trapsleeper = gp
-	}
-
-	Spunlock(tlock)
-	Popcli(fl)
-
-	schedule()
-}
-
-var trapst int
-const (
-	IDLE	= iota
-	RUNNING	= iota
-)
-
-func tprepsleep(gp *g, done bool) {
-	if done {
-		trapst = IDLE
-	} else {
-		trapst = RUNNING
-	}
+	Splock(&_irqv.slock)
 
 	status := readgstatus(gp)
 	if((status&^_Gscan) != _Grunning){
 		pancake("bad g status", uintptr(status))
 	}
-	nst := uint32(_Grunnable)
-	if done {
-		nst = _Gwaiting
+
+	var nstatus uint32
+	var start bool
+	bit := uintptr(1 << irq)
+	sleeping := _irqv.irqs & bit == 0
+	if sleeping {
+		nstatus = _Gwaiting
 		gp.waitreason = "waiting for trap"
+		if _irqv.handlers[irq].igp != nil {
+			pancake("igp exists", 0)
+		}
+		_irqv.handlers[irq].igp = gp
+		start = false
+	} else {
+		_pmsg("X")
+		nstatus = _Grunnable
+		start = true
+		// clear flag in order to detect any IRQs that occur before the
+		// next IRQsched.
+		_irqv.irqs &^= bit
 	}
-	casgstatus(gp, _Grunning, nst)
+
+	_irqv.handlers[irq].started = start
+	// _Gscan shouldn't be set since gp's status is running
+	casgstatus(gp, _Grunning, nstatus)
+	pp := gp.m.p.ptr()
 	dropg()
+
+	if !sleeping {
+		// casgstatus must happen before runqput
+		runqput(pp, gp, true)
+	}
+
+	Spunlock(&_irqv.slock)
+	Popcli(fl)
+
+	schedule()
 }
 
-var _ptrap bool
+// called from the CPU interrupt handler. must only be called while interrupts
+// are disabled
+//go:nosplit
+func IRQwake(irq uint) {
+	if irq > 63 {
+		pancake("bad irq", uintptr(irq))
+	}
+	Splock(&_irqv.slock)
+	_irqv.irqs |= 1 << irq
+	_irqv.check = true
+	Spunlock(&_irqv.slock)
+}
 
-func trapcheck(pp *p) {
-	if !_ptrap {
+// puts IRQ-handling goroutines for outstanding IRQs on the runq. called by Ms
+// from findrunnable() before checking local run queue
+func IRQcheck(pp *p) {
+	if !_irqv.check {
 		return
 	}
+
 	fl := Pushcli()
-	Splock(tlock)
+	Splock(&_irqv.slock)
 
-	var trapgp *g
-	if !_ptrap {
+	var gps [64]*g
+	var gidx int
+	var newirqs uintptr
+	irqs := _irqv.irqs
+
+	if !_irqv.check {
 		goto out
 	}
-	// don't clear the start flag if the handler goroutine hasn't
-	// registered yet.
-	if !_initted {
-		goto out
-	}
-	if trapst == RUNNING {
+	_irqv.check = false
+
+	if irqs == 0 {
 		goto out
 	}
 
-	if trapst != IDLE {
-		pancake("bad trap status", uintptr(trapst))
+	// wakeup the goroutine for each received IRQ
+	for i := 0; i < 63; i++ {
+		ibit := uintptr(1 << uint(i))
+		if irqs & ibit != 0 {
+			gp := _irqv.handlers[i].igp
+			// the IRQ-handling goroutine has not yet called
+			// IRQsched; keep trying until it does.
+			if gp == nil {
+				newirqs |= ibit
+				continue
+			}
+			gst := readgstatus(gp)
+			if gst &^ _Gscan != _Gwaiting {
+				pancake("bad igp status", uintptr(gst))
+			}
+			_irqv.handlers[i].igp = nil
+			_irqv.handlers[i].started = true
+			// we cannot set gstatus or put to run queue before we
+			// release the spinlock since either operation may
+			// block
+			gps[gidx] = gp
+			gidx++
+		}
 	}
-
-	_ptrap = false
-	trapst = RUNNING
-
-	trapgp = _trapsleeper
-	_trapsleeper = nil
-
-	Spunlock(tlock)
-	Popcli(fl)
-
-	casgstatus(trapgp, _Gwaiting, _Grunnable)
-
-	// hopefully the trap goroutine is executed soon
-	runqput(pp, trapgp, true)
-	return
+	_irqv.irqs = newirqs
+	if newirqs != 0 {
+		_irqv.check = true
+	}
 out:
-	Spunlock(tlock)
+	Spunlock(&_irqv.slock)
 	Popcli(fl)
-	return
+
+	for i := 0; i < gidx; i++ {
+		gp := gps[i]
+		casgstatus(gp, _Gwaiting, _Grunnable)
+		runqput(pp, gp, true)
+	}
 }
 
 // goprofiling is implemented by simulating the SIGPROF signal. when proftick

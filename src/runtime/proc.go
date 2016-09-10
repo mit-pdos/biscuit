@@ -1815,7 +1815,7 @@ top:
 			ready(gp, 0)
 		}
 	}
-	trapcheck(_g_.m.p.ptr())
+	IRQcheck(_g_.m.p.ptr())
 
 	// local runq
 	if gp, inheritTime := runqget(_g_.m.p.ptr()); gp != nil {

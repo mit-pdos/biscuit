@@ -329,6 +329,7 @@ type m struct {
 	waittraceskip int
 	startingtrace bool
 	syscalltick   uint32
+	irqn          uint
 	//#ifdef GOOS_windows
 	thread uintptr // thread handle
 	// these are here because they are too large to be on the stack

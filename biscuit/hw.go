@@ -760,8 +760,8 @@ func acpi_attach() int {
  *
  * luckily, my hardware exposes these PCI link devices through chipset PCI
  * device registers and memory mapped IO (in fact the ACPI methods in step 5
- * use these PCI device registers). thus i can avoid writing an AML
- * interpreter.
+ * are implemented using these PCI device registers). thus i can avoid writing
+ * an AML interpreter.
  *
  * if possible, i would like to use message signaled interrupts (MSI) -- the
  * documentation makes them seem much, much simpler. i think MSI avoids the

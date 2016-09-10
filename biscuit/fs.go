@@ -85,6 +85,10 @@ func crname(path string, nilpatherr int) (int, bool) {
 }
 
 func fs_init() *fd_t {
+	if INT_DISK < 0 {
+		panic("no disk")
+	}
+	go trap_disk(uint(INT_DISK))
 	// we are now prepared to take disk interrupts
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
