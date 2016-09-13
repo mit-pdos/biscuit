@@ -419,6 +419,13 @@ TEXT ·invlpg(SB), NOSPLIT, $0-8
 	INVLPG	(AX)
 	RET
 
+// Used to guarantee 32bit writes without the lock prefix
+TEXT ·Store32(SB), NOSPLIT, $0-16
+	MOVQ	addr+0(FP), AX
+	MOVL	v+8(FP), DX
+	MOVL	DX, (AX)
+	RET
+
 // void lidt(pdesc_t);
 TEXT ·lidt(SB), NOSPLIT, $0-16
 	// lidtq 8(%rsp)

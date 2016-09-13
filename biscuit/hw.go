@@ -869,7 +869,7 @@ func (ap *apic_t) reg_read(reg int) uint32 {
 	}
 	c := uint32(reg)
 	runtime.Splock(&ap._mlock)
-	atomic.StoreUint32(ap.regs.sel, c)
+	runtime.Store32(ap.regs.sel, c)
 	v := atomic.LoadUint32(ap.regs.win)
 	runtime.Spunlock(&ap._mlock)
 	return v
@@ -881,8 +881,8 @@ func (ap *apic_t) reg_write(reg int, v uint32) {
 	}
 	c := uint32(reg)
 	runtime.Splock(&ap._mlock)
-	atomic.StoreUint32(ap.regs.sel, c)
-	atomic.StoreUint32(ap.regs.win, v)
+	runtime.Store32(ap.regs.sel, c)
+	runtime.Store32(ap.regs.win, v)
 	runtime.Spunlock(&ap._mlock)
 }
 
@@ -910,14 +910,14 @@ func (ap *apic_t) irq_mask(irq int) {
 	runtime.Splock(&ap._mlock)
 	mreg := uint32(0x10 + irq*2)
 
-	atomic.StoreUint32(ap.regs.sel, mreg)
+	runtime.Store32(ap.regs.sel, mreg)
 	v := atomic.LoadUint32(ap.regs.win)
 
 	maskbit := uint32(1 << 16)
 	v |= maskbit
 
-	atomic.StoreUint32(ap.regs.sel, mreg)
-	atomic.StoreUint32(ap.regs.win, v)
+	runtime.Store32(ap.regs.sel, mreg)
+	runtime.Store32(ap.regs.win, v)
 	runtime.Spunlock(&ap._mlock)
 }
 
@@ -927,7 +927,7 @@ func (ap *apic_t) eoi(irq int) {
 	if irq &^ 0xff != 0 {
 		panic("bad irq")
 	}
-	atomic.StoreUint32(ap.regs.eoi, uint32(irq + 32))
+	runtime.Store32(ap.regs.eoi, uint32(irq + 32))
 }
 
 func (ap *apic_t) dump() {
@@ -962,3 +962,6 @@ func (ap *apic_t) dump() {
 		    t, act, deliv, destmode, dest)
 	}
 }
+
+var l32 = atomic.LoadUint32
+var s32 = runtime.Store32

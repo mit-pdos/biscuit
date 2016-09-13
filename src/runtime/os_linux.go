@@ -78,6 +78,7 @@ func Rdmsr(int) int
 func Rdtsc() uint64
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
+func Store32(*uint32, uint32)
 func stackcheck()
 func Sti()
 func _sysentry()
