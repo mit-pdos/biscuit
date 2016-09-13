@@ -1907,7 +1907,6 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		fmt.Printf("%c", c)
 		data = append(data, c)
 		if c == '\\' {
-			apic.dump()
 			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {

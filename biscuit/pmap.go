@@ -803,6 +803,7 @@ var zerobpg *[PGSIZE]uint8
 var zeropg *[512]int
 var p_zeropg int
 var _dmapinit bool
+const DMAPLEN int = 1 << 39
 
 // installs a direct map for 512G of physical memory via the recursive mapping
 func dmap_init() {
@@ -913,8 +914,20 @@ func dmap8(p int) []uint8 {
 	return bpg[off:]
 }
 
+// l is length of mapping in bytes
 func dmaplen(p int, l int) []uint8 {
-	_dmap := (*[1<<39]uint8)(unsafe.Pointer(uintptr(_vdirect)))
+	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(uintptr(_vdirect)))
+	return _dmap[p:p+l]
+}
+
+// l is length of mapping in bytes. both p and l must be multiples of 4
+func dmaplen32(p int, l int) []uint32 {
+	if p % 4 != 0 || l % 4 != 0 {
+		panic("not 32bit aligned")
+	}
+	_dmap := (*[DMAPLEN/4]uint32)(unsafe.Pointer(uintptr(_vdirect)))
+	p /= 4
+	l /= 4
 	return _dmap[p:p+l]
 }
 

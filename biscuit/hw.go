@@ -233,9 +233,9 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	}
 	rcba_p &^= ((1 << 14) - 1)
 	// memory reads/writes to RCBA must be 32bit aligned
-	rcba := dmaplen(rcba_p, 0x342c)
+	rcba := dmaplen32(rcba_p, 0x342c)
 	// PCI dev 31 PIRQ routes
-	routes := *(*uint32)(unsafe.Pointer(&rcba[0x3140]))
+	routes := rcba[0x3140/4]
 	pirq := (routes >> (4*(uint32(pin) - 1))) & 0x7
 	// Intel PCH's IOAPIC has PIRQs on input pins 16-24
 	gsi := int(16 + pirq)
@@ -794,18 +794,15 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 	runtime.Outb(0x23, 1)
 
 	base := int(aioapic.base)
-	va := dmap8(base)
-	ap.regs.sel = (*uint32)(unsafe.Pointer(&va[0]))
-	va = dmap8(base + 0x10)
-	if len(va) < 3 {
-		panic("base not page aligned?")
-	}
-	ap.regs.win = (*uint32)(unsafe.Pointer(&va[0]))
-	va = dmap8(base + 0x40)
-	if len(va) < 3 {
-		panic("base not page aligned?")
-	}
-	ap.regs.eoi = (*uint32)(unsafe.Pointer(&va[0]))
+	va := dmaplen32(base, 4)
+	ap.regs.sel = &va[0]
+
+	va = dmaplen32(base + 0x10, 4)
+	ap.regs.win = &va[0]
+
+	va = dmaplen32(base + 0x40, 4)
+	ap.regs.eoi = &va[0]
+
 	pinlast := (apic.reg_read(1) >> 16) & 0xff
 	ap.npins = int(pinlast + 1)
 
