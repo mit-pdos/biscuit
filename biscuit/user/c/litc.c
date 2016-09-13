@@ -57,7 +57,7 @@
 
 __thread int errno;
 
-static long biglock;
+static volatile long biglock;
 static int dolock = 1;
 
 static void acquire(void)
@@ -70,6 +70,7 @@ static void acquire(void)
 
 static void release(void)
 {
+	asm volatile("":::"memory");
 	biglock = 0;
 }
 
