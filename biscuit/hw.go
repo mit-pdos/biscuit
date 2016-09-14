@@ -12,11 +12,11 @@ const (
 	CLASS		= 0x0b
 	SUBCLASS	= 0x0a
 	HEADER		= 0x0e
-	BAR0		= 0x10
-	BAR1		= 0x14
-	BAR2		= 0x18
-	BAR3		= 0x1c
-	BAR4		= 0x20
+	_BAR0		= 0x10
+	_BAR1		= 0x14
+	_BAR2		= 0x18
+	_BAR3		= 0x1c
+	_BAR4		= 0x20
 )
 
 // width is width of the register in bytes
@@ -56,7 +56,7 @@ func pci_bar_pio(tag pcitag_t, barn int) uintptr {
 	if barn < 0 || barn > 4 {
 		panic("bad bar #")
 	}
-	ret := pci_read(tag, BAR0 + 4*barn, 4)
+	ret := pci_read(tag, _BAR0 + 4*barn, 4)
 	ispio := 1
 	if ret & ispio == 0 {
 		panic("is memory bar")
@@ -66,19 +66,28 @@ func pci_bar_pio(tag pcitag_t, barn int) uintptr {
 
 // some memory bars include size in the low bits; this method doesn't mask such
 // bits out.
-func pci_bar_mem(tag pcitag_t, barn int) uintptr {
+func pci_bar_mem(tag pcitag_t, barn int) (uintptr, int) {
 	if barn < 0 || barn > 4 {
 		panic("bad bar #")
 	}
-	ret := pci_read(tag, BAR0 + 4*barn, 4)
+	bari := _BAR0 + 4*barn
+	ret := pci_read(tag, bari, 4)
 	ispio := 1
 	if ret & ispio != 0 {
 		panic("is port io bar")
 	}
+	pci_write(tag, bari, -1)
+	blen := uint32(pci_read(tag, bari, 4))
+	blen &^= 0xf
+	blen = ^blen + 1
+	if blen == 0 {
+		panic("bad bar length")
+	}
+	pci_write(tag, bari, ret)
 	mtype := (uint32(ret) >> 1) & 0x3
 	if mtype == 1 {
 		// 32bit memory bar
-		return uintptr(ret &^ 0xf)
+		return uintptr(ret &^ 0xf), int(blen)
 	}
 	if mtype != 2 {
 		panic("weird memory bar type")
@@ -86,8 +95,8 @@ func pci_bar_mem(tag pcitag_t, barn int) uintptr {
 	if barn > 4 {
 		panic("64bit memory bar requires 2 bars")
 	}
-	ret2 := pci_read(tag, BAR0 + 4*(barn + 1), 4)
-	return uintptr((ret2 << 32) | ret &^ 0xf)
+	ret2 := pci_read(tag, bari + 4, 4)
+	return uintptr((ret2 << 32) | ret &^ 0xf), int(blen)
 }
 
 func pci_dump() {
@@ -154,7 +163,7 @@ func pcibus_attach() {
 			pci_attach(vid, did, b, dev, f)
 		}
 	}
-	for b := 0; b < 3; b++ {
+	for b := 0; b < 256; b++ {
 		for dev := 0; dev < 32; dev++ {
 			devattach(b, dev)
 		}
