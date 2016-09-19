@@ -10,6 +10,7 @@ import "time"
 import "unsafe"
 
 var	numcpus	int = 1
+var	bsp_apic_id int
 
 // these functions can only be used when interrupts are cleared
 //go:nosplit
@@ -2687,6 +2688,7 @@ func main() {
 	//	for {
 	//	}
 	//}
+	bsp_apic_id = lap_id()
 	phys_init()
 
 	go func() {

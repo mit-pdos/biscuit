@@ -921,14 +921,14 @@ func dmaplen(p int, l int) []uint8 {
 }
 
 // l is length of mapping in bytes. both p and l must be multiples of 4
-func dmaplen32(p int, l int) []uint32 {
+func dmaplen32(p uintptr, l int) []uint32 {
 	if p % 4 != 0 || l % 4 != 0 {
 		panic("not 32bit aligned")
 	}
 	_dmap := (*[DMAPLEN/4]uint32)(unsafe.Pointer(uintptr(_vdirect)))
 	p /= 4
 	l /= 4
-	return _dmap[p:p+l]
+	return _dmap[p:p+uintptr(l)]
 }
 
 func pe2pg(pe int) *[512]int {

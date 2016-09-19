@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "runtime"
 import "sync/atomic"
+import "time"
 import "unsafe"
 
 const (
@@ -187,12 +188,14 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_VEND_INTEL := 0x8086
 	PCI_DEV_PIIX3 := 0x7000
 	PCI_DEV_3400  := 0x3b20
+	PCI_DEV_X540T := 0x1528
 
 	// map from vendor ids to a map of device ids to attach functions
 	alldevs := map[int]map[int]func(int, int, pcitag_t) {
 		PCI_VEND_INTEL : {
 			PCI_DEV_PIIX3 : attach_piix3,
 			PCI_DEV_3400 : attach_3400,
+			PCI_DEV_X540T: attach_x540t,
 			},
 		}
 
@@ -242,7 +245,7 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	}
 	rcba_p &^= ((1 << 14) - 1)
 	// memory reads/writes to RCBA must be 32bit aligned
-	rcba := dmaplen32(rcba_p, 0x342c)
+	rcba := dmaplen32(uintptr(rcba_p), 0x342c)
 	// PCI dev 31 PIRQ routes
 	routes := rcba[0x3140/4]
 	pirq := (routes >> (4*(uint32(pin) - 1))) & 0x7
@@ -802,7 +805,7 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 	runtime.Outb(0x22, 0x70)
 	runtime.Outb(0x23, 1)
 
-	base := int(aioapic.base)
+	base := aioapic.base
 	va := dmaplen32(base, 4)
 	ap.regs.sel = &va[0]
 
@@ -815,7 +818,7 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 	pinlast := (apic.reg_read(1) >> 16) & 0xff
 	ap.npins = int(pinlast + 1)
 
-	bspid := uint32(lap_id())
+	bspid := uint32(bsp_apic_id)
 
 	//fmt.Printf("APIC ID:  %#x\n", apic.reg_read(0))
 	for i := 0; i < apic.npins; i++ {
@@ -972,5 +975,391 @@ func (ap *apic_t) dump() {
 	}
 }
 
-var l32 = atomic.LoadUint32
-var s32 = runtime.Store32
+type x540reg_t uint
+const (
+	CTRL		x540reg_t	=    0x0
+	// the x540 terminology is confusing regarding interrupts; an interrupt
+	// is enabled when its bit is set in the mask set register (ims) and
+	// disabled when cleared.
+	CTRL_EXT			=    0x18
+	EICR				=   0x800
+	EIAC				=   0x810
+	EITRi				=   0x820
+	EITR1i				= 0x12300
+	EICS				=   0x808
+	EICS1				=   0xa90
+	EICS2				=   0xa94
+	EIMS				=   0x880
+	EIMS1				=   0xaa0
+	EIMS2				=   0xaa4
+	EIMC				=   0x888
+	EIMC1				=   0xab0
+	EIMC2				=   0xab4
+	EIAM				=   0x890
+	GPIE				=   0x898
+	EIAM1				=   0xad0
+	EIAM2				=   0xad4
+	RDRXCTL				=  0x2f00
+	MSCA				=  0x425c
+	MSRWD				=  0x4260
+	LINKS				=  0x42a4
+	EEMNGCTL			= 0x10110
+	SWSM				= 0x10140
+	SW_FW_SYNC			= 0x10160
+
+	FLA				= 0x1001c
+)
+
+// MDIO device is in bits [20:16] and MDIO reg is in [15:0]
+type x540phyreg_t uint
+const (
+	// link status here (Auto-Negotiation Reserved Vendor Status 1)
+	PHY_LINK	x540phyreg_t	= 0x07c810
+	ALARMS1				= 0x1ecc00
+)
+
+type x540_t struct {
+	tag	pcitag_t
+	bar0	[]uint32
+	_locked	bool
+}
+
+func (x *x540_t) init(t pcitag_t) {
+	x.tag = t
+
+	bar0, l := pci_bar_mem(t, 0)
+	x.bar0 = dmaplen32(bar0, l)
+
+	v := pci_read(t, 0x4, 2)
+	memen := 1 << 1
+	if v & memen == 0 {
+		panic("memory access disabled")
+	}
+	busmaster := 1 << 2
+	if v & busmaster == 0 {
+		panic("busmaster disabled")
+	}
+	pciebmdis := uint32(1 << 2)
+	y := x.rl(CTRL)
+	if y & pciebmdis != 0 {
+		panic("pcie bus master disable set")
+	}
+}
+
+func (x *x540_t) rs(reg x540reg_t, val uint32) {
+	if reg % 4 != 0 {
+		panic("bad reg")
+	}
+	runtime.Store32(&x.bar0[reg/4], val)
+}
+
+func (x *x540_t) rl(reg x540reg_t) uint32 {
+	if reg % 4 != 0 {
+		panic("bad reg")
+	}
+	return atomic.LoadUint32(&x.bar0[reg/4])
+}
+
+func (x *x540_t) log(fm string, args ...interface{}) {
+	b, d, f := breakpcitag(x.tag)
+	s := fmt.Sprintf("X540:(%v:%v:%v): %s\n", b, d, f, fm)
+	fmt.Printf(s, args...)
+}
+
+func (x *x540_t) _reset() {
+	// if there is any chance that DMA may race with _reset, we must modify
+	// _reset to execute the master disable protocol in (5.2.4.3.2)
+
+	// link reset + device reset
+	lrst := uint32(1 << 3)
+	rst :=  uint32(1 << 26)
+	v := x.rl(CTRL)
+	v |= rst
+	v |= lrst
+	x.rs(CTRL, v)
+	// 8.2.4.1.1: wait 1ms before checking reset bit after setting
+	<- time.After(time.Millisecond)
+	for x.rl(CTRL) & rst != 0 {
+	}
+	// x540 doc 4.6.3.2: wait for 10ms after reset "to enable a
+	// smooth initialization flow"
+	<- time.After(10*time.Millisecond)
+}
+
+func (x *x540_t) _int_disable() {
+	maskall := ^uint32(0)
+	x.rs(EIMC, maskall)
+	x.rs(EIMC1, maskall)
+	x.rs(EIMC2, maskall)
+}
+
+func (x *x540_t) _phy_read(preg x540phyreg_t) uint16 {
+	if preg &^ ((1 << 21) - 1) != 0 {
+		panic("bad phy reg")
+	}
+	mdicmd := uint32(1 << 30)
+	// wait for MDIO to be ready
+	for x.rl(MSCA) & mdicmd != 0 {
+	}
+	opaddr := uint32(0)
+	phyport := uint32(0)
+	v := uint32(preg) | phyport << 21 | opaddr << 26 | mdicmd
+	x.rs(MSCA, v)
+	for x.rl(MSCA) & mdicmd != 0 {
+	}
+	opread := uint32(3)
+	v = uint32(preg) | phyport << 21 | opread << 26 | mdicmd
+	x.rs(MSCA, v)
+	for x.rl(MSCA) & mdicmd != 0 {
+	}
+	ret := x.rl(MSRWD)
+	return uint16(ret >> 16)
+}
+
+var dur struct {
+	sw	int
+	hw	int
+	fw	int
+	nvmup	int
+	swmng	int
+}
+
+// acquires the "lock" protecting the semaphores. returns whether fw timedout
+func (x *x540_t) _reg_acquire() bool {
+	to := 3*time.Second
+	st := time.Now()
+	smbi := uint32(1 << 0)
+	for x.rl(SWSM) & smbi != 0 {
+		if time.Since(st) > to {
+			panic("SWSM timeout!")
+		}
+	}
+	var fwdead bool
+	st = time.Now()
+	regsmp := uint32(1 << 31)
+	for x.rl(SW_FW_SYNC) & regsmp != 0 {
+		if time.Since(st) > to {
+			x.log("SW_FW_SYNC timeout!")
+			fwdead = true
+			break
+		}
+	}
+	return fwdead
+}
+
+func (x *x540_t) _reg_release() {
+	regsmp := uint32(1 << 31)
+	x.rs(SW_FW_SYNC, x.rl(SW_FW_SYNC) &^ regsmp)
+	x.rs(SWSM, 0)
+}
+
+// takes the semaphore protecting a hardware resource
+func (x *x540_t) hwlock() {
+	if x._locked {
+		panic("two hwlocks")
+	}
+	for i := 0; i < 100; i++ {
+		if x._hwlock() {
+			x._locked = true
+			return
+		}
+		<- time.After(10*time.Millisecond)
+	}
+	fmt.Printf("lock stats: %v\n", dur)
+	panic("hwlock timedout")
+}
+
+// returns true if the called acquired the software/firmware semaphore
+func (x *x540_t) _hwlock() bool {
+	// 11.7.5; this semaphore protects NVM, PHY[01], and MAC shared regs
+	fwdead := x._reg_acquire()
+
+	//sw_nvm  := uint32(1 << 0)
+	//sw_phy0 := uint32(1 << 1)
+	//sw_phy1 := uint32(1 << 2)
+	//sw_mac  := uint32(1 << 3)
+	hw_nvm  := uint32(1 << 4)
+	fw_nvm  := uint32(1 << 5)
+	fw_phy0 := uint32(1 << 6)
+	fw_phy1 := uint32(1 << 7)
+	fw_mac  := uint32(1 << 8)
+	nvm_up  := uint32(1 << 9)
+	sw_mng  := uint32(1 << 10)
+	fwbits := fw_nvm | fw_phy0 | fw_phy1 | fw_mac
+
+	ret := false
+	v := x.rl(SW_FW_SYNC)
+	if v & hw_nvm != 0 {
+		dur.hw++
+		goto out
+	}
+	if v & 0xf != 0 {
+		dur.sw++
+		goto out
+	}
+	if !fwdead && v & fwbits != 0 {
+		dur.fw++
+		goto out
+	}
+	if v & nvm_up != 0 {
+		dur.nvmup++
+	}
+	if v & sw_mng != 0 {
+		dur.swmng++
+	}
+	x.rs(SW_FW_SYNC, v | 0xf)
+	ret = true
+out:
+	x._reg_release()
+	return ret
+}
+
+func (x *x540_t) hwunlock() {
+	if !x._locked {
+		panic("not locked")
+	}
+	x._locked = false
+	x._reg_acquire()
+	v := x.rl(SW_FW_SYNC)
+	// clear sw bits
+	v &^= 0xf
+	x.rs(SW_FW_SYNC, v)
+	x._reg_release()
+}
+
+func attach_x540t(vid, did int, t pcitag_t) {
+	b, d, f := breakpcitag(t)
+	fmt.Printf("X540: %x %x (%d:%d:%d)\n", vid, did, b, d, f)
+	if uint(f) > 1 {
+		panic("virtual functions not supported")
+	}
+
+	var x x540_t
+	x.init(t)
+
+	// x540 doc 4.6.3 initialization sequence
+	x._int_disable()
+	x._reset()
+	x._int_disable()
+
+	// even though we disable flow control, we write 0 to FCTTV, FCRTL,
+	// FCRTH, FCRTV, and  FCCFG
+	regn := func(r x540reg_t, i int) x540reg_t {
+		return r + x540reg_t(i * 4)
+	}
+	n := 4
+	fcttv := x540reg_t(0x3200)
+	for i := 0; i < n; i++ {
+		x.rs(regn(fcttv, i), 0)
+	}
+	n = 8
+	fcrtl := x540reg_t(0x3220)
+	fcrth := x540reg_t(0x3260)
+	// XXX XXX set default values for FCRTH[n].RTH?
+	for i := 0; i < n; i++ {
+		x.rs(regn(fcrtl, i), 0)
+		x.rs(regn(fcrth, i), 0)
+	}
+
+	fcrtv := x540reg_t(0x32a0)
+	fccfg := x540reg_t(0x3d00)
+	x.rs(fcrtv, 0)
+	x.rs(fccfg, 0)
+
+	mflcn := x540reg_t(0x4294)
+	rfce := uint32(1 << 3)
+	son := x.rl(mflcn) & rfce != 0
+	if son {
+		panic("receive flow control should be off?")
+	}
+
+	// enable snooping, which is disabled by default
+	snoop_dis := uint32(1 << 16)
+	v := x.rl(CTRL_EXT)
+	if v & snoop_dis != 0 {
+		x.log("snoop disabled. enabling.")
+		x.rs(CTRL_EXT, v &^ snoop_dis)
+	}
+
+	x.hwlock()
+	x.log("got lock!")
+	phyreset := uint16(1 << 6)
+	for x._phy_read(ALARMS1) & phyreset == 0 {
+	}
+	x.log("phy reset complete")
+	x.hwunlock()
+
+	// 4.6.3 says to wait for CFG_DONE, but this bit never seems to set.
+	// openbsd does not check this bit.
+
+	//x.log("manage wait")
+	//cfg_done := uint32(1 << 18 + f)
+	//for x.rl(EEMNGCTL) & cfg_done == 0 {
+	//}
+	//x.log("manageability complete")
+
+	dmadone := uint32(1 << 3)
+	for x.rl(RDRXCTL) & dmadone == 0 {
+	}
+	x.log("dma engine initialized")
+
+	msiaddrl := 0x54
+	msiaddrh := 0x58
+
+	msidata := 0x5c
+
+	maddr := 0xfee << 20
+	pci_write(x.tag, msiaddrl, maddr)
+	vec := 19
+	mdata := vec | bsp_apic_id << 12
+	pci_write(x.tag, msidata, mdata)
+
+	maddr = pci_read(x.tag, msiaddrl, 4)
+	maddr |= pci_read(x.tag, msiaddrh, 4) << 32
+	x.log("MSI ADDR: %x", maddr)
+	mdata = pci_read(x.tag, msidata, 4)
+	x.log("MSI DATA: %x", mdata)
+
+	// enable MSI interrupts
+	msictrl := 0x50
+	pv := pci_read(x.tag, msictrl, 4)
+	pv |= 1 << 16
+	pci_write(x.tag, msictrl, pv)
+
+	msimask := 0x60
+	if pci_read(x.tag, msimask, 4) & 1 != 0 {
+		panic("msi pci masked")
+	}
+
+	// make sure legacy PCI interrupts are disabled
+	pciintdis := 1 << 10
+	pv = pci_read(x.tag, 0x4, 2)
+	pci_write(x.tag, 0x4, pv | pciintdis)
+
+	// disable autoclear/automask
+	x.rs(EIAC, 0)
+	x.rs(EIAM, 0)
+	x.rs(EIAM1, 0)
+	x.rs(EIAM2, 0)
+
+	// disable interrupt throttling
+	for n := 0; n < 24; n++ {
+		x.rs(regn(EITRi, n), 0)
+	}
+	for n := 0; n < 104; n++ {
+		x.rs(regn(EITR1i, n), 0)
+	}
+
+	x.rs(GPIE, 0)
+
+	x.rs(EICR, ^uint32(0))
+
+	lstatusint := uint32(1 << 20)
+	x.rs(EIMS, lstatusint)
+
+	x.log("EICR: %#x", x.rl(EICR))
+	x.log("sleep then int!")
+	<- time.After(2*time.Second)
+	x.rs(EICS, lstatusint)
+	x.log("EICR: %#x", x.rl(EICR))
+}

@@ -2051,7 +2051,6 @@ func irqsched_m(gp *g) {
 		_irqv.handlers[irq].igp = gp
 		start = false
 	} else {
-		_pmsg("X")
 		nstatus = _Grunnable
 		start = true
 		// clear flag in order to detect any IRQs that occur before the
