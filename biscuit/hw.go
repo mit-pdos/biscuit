@@ -975,6 +975,13 @@ func (ap *apic_t) dump() {
 	}
 }
 
+func regn(r x540reg_t, i int) x540reg_t {
+	return r + x540reg_t(i * 4)
+}
+func reg40(r x540reg_t, i int) x540reg_t {
+	return r + x540reg_t(i * 40)
+}
+
 type x540reg_t uint
 const (
 	CTRL		x540reg_t	=    0x0
@@ -987,6 +994,7 @@ const (
 	EITRi				=   0x820
 	EITR1i				= 0x12300
 	EICS				=   0x808
+	IVARi				=   0x900
 	EICS1				=   0xa90
 	EICS2				=   0xa94
 	EIMS				=   0x880
@@ -999,13 +1007,44 @@ const (
 	GPIE				=   0x898
 	EIAM1				=   0xad0
 	EIAM2				=   0xad4
+	PFVTCTL				=  0x51b0
+	SRRCTLl				=  0x1014
+	SRRCTL1l			=  0xd014
+	RTRPCS				=  0x2430
 	RDRXCTL				=  0x2f00
+	RXPBSIZEi			=  0x3c00
+	PFQDE				=  0x2f04
+	RTRUP2TC			=  0x3020
+	RTTUP2TC			=  0xc800
+	DTXMXSZRQ			=  0x8100
+	SECTXMINIFG			=  0x8810
+	TXPBSIZEi			=  0xcc00
+	TXPBTHRESHi			=  0x4950
+	HLREG0				=  0x4240
+	MFLCN				=  0x4294
+	RTTDQSEL			=  0x4904
+	RTTDT1C				=  0x4908
+	RTTDT2Ci			=  0x4910
+	RTTPT2Ci			=  0xcd20
+	RTTDCS				=  0x4900
+	RTTPCS				=  0xcd00
+	RTRPT4Ci			=  0x2140
+	MRQC				=  0xec80
+	MTQC				=  0x8120
 	MSCA				=  0x425c
 	MSRWD				=  0x4260
 	LINKS				=  0x42a4
+	DMATXCTL			=  0x4a80
+	DTXTCPFLGL			=  0x4a88
+	DTXTCPFLGH			=  0x4a8c
+	// element width is 0x40 bytes
+	DCA_TXCTRLi			=  0x600c
 	EEMNGCTL			= 0x10110
 	SWSM				= 0x10140
 	SW_FW_SYNC			= 0x10160
+	// element width is 0x40 bytes
+	RSCCTLl				=  0x102c
+	RSCCTL1l			=  0xd02c
 
 	FLA				= 0x1001c
 )
@@ -1043,6 +1082,11 @@ func (x *x540_t) init(t pcitag_t) {
 	y := x.rl(CTRL)
 	if y & pciebmdis != 0 {
 		panic("pcie bus master disable set")
+	}
+	nosnoop_en := 1 << 11
+	v = pci_read(t, 0xa8, 2)
+	if v & nosnoop_en == 0 {
+		panic("pcie no snoop disabled")
 	}
 }
 
@@ -1244,9 +1288,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 	// even though we disable flow control, we write 0 to FCTTV, FCRTL,
 	// FCRTH, FCRTV, and  FCCFG
-	regn := func(r x540reg_t, i int) x540reg_t {
-		return r + x540reg_t(i * 4)
-	}
 	n := 4
 	fcttv := x540reg_t(0x3200)
 	for i := 0; i < n; i++ {
@@ -1273,16 +1314,15 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		panic("receive flow control should be off?")
 	}
 
-	// enable snooping, which is disabled by default
-	snoop_dis := uint32(1 << 16)
+	// enable no snooping
+	nosnoop_dis := uint32(1 << 16)
 	v := x.rl(CTRL_EXT)
-	if v & snoop_dis != 0 {
-		x.log("snoop disabled. enabling.")
-		x.rs(CTRL_EXT, v &^ snoop_dis)
+	if v & nosnoop_dis != 0 {
+		x.log("no snoop disabled. enabling.")
+		x.rs(CTRL_EXT, v &^ nosnoop_dis)
 	}
 
 	x.hwlock()
-	x.log("got lock!")
 	phyreset := uint16(1 << 6)
 	for x._phy_read(ALARMS1) & phyreset == 0 {
 	}
@@ -1304,8 +1344,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	x.log("dma engine initialized")
 
 	msiaddrl := 0x54
-	msiaddrh := 0x58
-
 	msidata := 0x5c
 
 	maddr := 0xfee << 20
@@ -1313,12 +1351,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	vec := 19
 	mdata := vec | bsp_apic_id << 12
 	pci_write(x.tag, msidata, mdata)
-
-	maddr = pci_read(x.tag, msiaddrl, 4)
-	maddr |= pci_read(x.tag, msiaddrh, 4) << 32
-	x.log("MSI ADDR: %x", maddr)
-	mdata = pci_read(x.tag, msidata, 4)
-	x.log("MSI DATA: %x", mdata)
 
 	// enable MSI interrupts
 	msictrl := 0x50
@@ -1350,16 +1382,184 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		x.rs(regn(EITR1i, n), 0)
 	}
 
+	// map all 128 rx/tx queues to interrupt 0
+	for n := 0; n < 64; n++ {
+		v := uint32(0x80808080)
+		x.rs(regn(IVARi, n), v)
+	}
+
+	// disable RSC; docs say RSC is enabled by default, but it isn't on my
+	// card...
+	for n := 0; n < 128; n++ {
+		var reg x540reg_t
+		if n < 64 {
+			reg = reg40(RSCCTLl, n)
+		} else {
+			reg = reg40(RSCCTL1l, n-64)
+		}
+		v := x.rl(reg)
+		rscen := uint32(1 << 0)
+		x.rs(reg, v &^ rscen)
+	}
+
+	// transmit init
+	{
+		txcrc      := uint32(1 <<  0)
+		crcstrip   := uint32(1 <<  1)
+		txpad      := uint32(1 << 10)
+		rxlerr     := uint32(1 << 27)
+		// HLREG0 contains non-zero reserved bits; read first to make
+		// sure reserved bits stay set.
+		v := x.rl(HLREG0)
+		v |= txcrc | crcstrip | txpad | rxlerr
+		x.rs(HLREG0, v)
+
+		nosnoop_tso := uint32(1 << 1)
+		v = x.rl(DMATXCTL)
+		v |= nosnoop_tso
+		x.rs(DMATXCTL, v)
+
+		// XXX fill in mask bits for TCP segment flags
+		//x.rs(DTXTCPFLGL, xxx)
+		//x.rs(DTXTCPFLGH, xxx)
+
+		// XXX may want to enable relaxed ordering or DCA for tx
+		//for n := 0; n < 128; n++ {
+		//	x.rs(reg40(DCA_TXCTRLi, n), xxx)
+		//}
+
+		// if necessary, setup IPG (inter-packet gap) here
+		// ...
+
+		arbdis := uint32(1 << 6)
+		v = x.rl(RTTDCS)
+		v |= arbdis
+		x.rs(RTTDCS, v)
+
+		x._dbc_init()
+
+		v = x.rl(RTTDCS)
+		v &^= arbdis
+		x.rs(RTTDCS, v)
+
+		// XXX setup tx queues...
+	}
+
 	x.rs(GPIE, 0)
 
+	// clear all previous interrupts
 	x.rs(EICR, ^uint32(0))
+}
 
-	lstatusint := uint32(1 << 20)
-	x.rs(EIMS, lstatusint)
+// _dbc_init() must only be called when RTTDCS.ARBDIS == 1 (7.2.1.2.1)
+func (x *x540_t) _dbc_init() {
+	// dbc=off, vt=off (section 4.6.11.3.4)
+	rxpbsize := uint32(0x180 << 10)
+	x.rs(regn(RXPBSIZEi, 0), rxpbsize)
+	for n := 1; n < 8; n++ {
+		x.rs(regn(RXPBSIZEi, n), 0)
+	}
+	txpbsize := uint32(0xa0 << 10)
+	x.rs(regn(TXPBSIZEi, 0), txpbsize)
+	for n := 1; n < 8; n++ {
+		x.rs(regn(TXPBSIZEi, n), 0)
+	}
+	txpbthresh := uint32(0xa0)
+	x.rs(regn(TXPBTHRESHi, 0), txpbthresh)
+	for n := 1; n < 8; n++ {
+		x.rs(regn(TXPBTHRESHi, n), 0)
+	}
 
-	x.log("EICR: %#x", x.rl(EICR))
-	x.log("sleep then int!")
-	<- time.After(2*time.Second)
-	x.rs(EICS, lstatusint)
-	x.log("EICR: %#x", x.rl(EICR))
+	v := x.rl(MRQC)
+	mrqe := uint32(0xf)
+	v &^= mrqe
+	x.rs(MRQC, v)
+
+	v = x.rl(MTQC)
+	vtdbc := uint32(0xf)
+	v &^= vtdbc
+	x.rs(MTQC, v)
+
+	vten := uint32(1 << 0)
+	v = x.rl(PFVTCTL)
+	v &^= vten
+	x.rs(PFVTCTL, v)
+
+	v = x.rl(PFQDE)
+	dropen := uint32(1 << 0)
+	v &^= dropen
+	x.rs(PFQDE, v)
+
+	// XXX per queue dropping?
+	//for n := 0; n < 128; n++ {
+	//	var reg x540reg_t
+	//	if n < 64 {
+	//		reg = reg40(SRRCTLl, n)
+	//	} else {
+	//		reg = reg40(SRRCTL1l, n-64)
+	//	}
+	//}
+
+	x.rs(RTRUP2TC, 0)
+	x.rs(RTTUP2TC, 0)
+
+	x.rs(DTXMXSZRQ, 0xfff)
+
+	v = x.rl(SECTXMINIFG)
+	// docs contradict: says use both 0x10 and 0x1f when in non DBC
+	// mode?
+	mrkrinstert := uint32(0x10 << 8)
+	mrkmask := uint32(((1 << 11) - 1) << 8)
+	v &^= mrkmask
+	v |= mrkrinstert
+	x.rs(SECTXMINIFG, v)
+	v = x.rl(MFLCN)
+	rpfcm := uint32(1 << 2)
+	rpfcemask := uint32(0xff << 4)
+	v &^= rpfcm | rpfcemask
+	// XXX do we really need to enable flow control as 4.6.11.3.4
+	// claims?
+	//rfce := uint32(1 << 3)
+	//v |= rfce
+	x.rs(MFLCN, v)
+	//x.rs(FCCFG,
+
+	for n := 0; n < 128; n++ {
+		x.rs(RTTDQSEL, uint32(n))
+		x.rs(RTTDT1C, 0)
+	}
+	for n := 0; n < 8; n++ {
+		x.rs(regn(RTTDT2Ci, n), 0)
+	}
+	for n := 0; n < 8; n++ {
+		x.rs(regn(RTTPT2Ci, n), 0)
+	}
+	for n := 0; n < 8; n++ {
+		x.rs(regn(RTRPT4Ci, n), 0)
+	}
+
+	v = x.rl(RTTDCS)
+	tdpac  := uint32(1 <<  0)
+	vmpac  := uint32(1 <<  1)
+	tdrm   := uint32(1 <<  4)
+	bdpm   := uint32(1 << 22)
+	bpbfsm := uint32(1 << 23)
+	v &^= tdpac | vmpac | tdrm
+	v |= bdpm | bpbfsm
+	x.rs(RTTDCS, v)
+
+	v = x.rl(RTTPCS)
+	tppac  := uint32(1 << 5)
+	tprm   := uint32(1 << 8)
+	arbd   := uint32(0x224 << 22)
+	arbmask := uint32(((1 << 10) - 1) << 22)
+	v &^= tppac | tprm | arbmask
+	v |= arbd
+	x.rs(RTTPCS, v)
+
+	v = x.rl(RTRPCS)
+	rrm  := uint32(1 << 1)
+	rac  := uint32(1 << 2)
+	v &^= rrm | rac
+	x.rs(RTRPCS, v)
 }
