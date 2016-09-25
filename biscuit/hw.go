@@ -975,13 +975,6 @@ func (ap *apic_t) dump() {
 	}
 }
 
-func regn(r x540reg_t, i int) x540reg_t {
-	return r + x540reg_t(i * 4)
-}
-func reg40(r x540reg_t, i int) x540reg_t {
-	return r + x540reg_t(i * 40)
-}
-
 type x540reg_t uint
 const (
 	CTRL		x540reg_t	=    0x0
@@ -991,10 +984,7 @@ const (
 	CTRL_EXT			=    0x18
 	EICR				=   0x800
 	EIAC				=   0x810
-	EITRi				=   0x820
-	EITR1i				= 0x12300
 	EICS				=   0x808
-	IVARi				=   0x900
 	EICS1				=   0xa90
 	EICS2				=   0xa94
 	EIMS				=   0x880
@@ -1008,27 +998,19 @@ const (
 	EIAM1				=   0xad0
 	EIAM2				=   0xad4
 	PFVTCTL				=  0x51b0
-	SRRCTLl				=  0x1014
-	SRRCTL1l			=  0xd014
 	RTRPCS				=  0x2430
 	RDRXCTL				=  0x2f00
-	RXPBSIZEi			=  0x3c00
 	PFQDE				=  0x2f04
 	RTRUP2TC			=  0x3020
 	RTTUP2TC			=  0xc800
 	DTXMXSZRQ			=  0x8100
 	SECTXMINIFG			=  0x8810
-	TXPBSIZEi			=  0xcc00
-	TXPBTHRESHi			=  0x4950
 	HLREG0				=  0x4240
 	MFLCN				=  0x4294
 	RTTDQSEL			=  0x4904
 	RTTDT1C				=  0x4908
-	RTTDT2Ci			=  0x4910
-	RTTPT2Ci			=  0xcd20
 	RTTDCS				=  0x4900
 	RTTPCS				=  0xcd00
-	RTRPT4Ci			=  0x2140
 	MRQC				=  0xec80
 	MTQC				=  0x8120
 	MSCA				=  0x425c
@@ -1037,17 +1019,155 @@ const (
 	DMATXCTL			=  0x4a80
 	DTXTCPFLGL			=  0x4a88
 	DTXTCPFLGH			=  0x4a8c
-	// element width is 0x40 bytes
-	DCA_TXCTRLi			=  0x600c
 	EEMNGCTL			= 0x10110
 	SWSM				= 0x10140
 	SW_FW_SYNC			= 0x10160
-	// element width is 0x40 bytes
-	RSCCTLl				=  0x102c
-	RSCCTL1l			=  0xd02c
+	// statistic reg4sters
+	SSVPC				=  0x8780
+	GPTC				=  0x4080
+	TXDGPC				=  0x87a0
+	TPT				=  0x40d4
+	PTC64				=  0x40d8
+	PTC127				=  0x40dc
+	MSPDC				=  0x4010
+	XEC				=  0x4120
+	BPTC				=  0x40f4
+	FCCRC				=  0x5118
+	B2OSPC				=  0x41c0
+	B2OGPRC				=  0x2f90
+	O2BGPTC				=  0x41c4
+	O2BSPC				=  0x87b0
+	CRCERRS				=  0x4000
+	ILLERRC				=  0x4004
+	ERRBC				=  0x4008
 
 	FLA				= 0x1001c
 )
+
+func _xreg(start, idx, max, step uint) x540reg_t {
+	// XXX comment this out later so compiler can inline all these register
+	// calculators
+	if idx >= max {
+		panic("bad x540 reg")
+	}
+	return x540reg_t(start + idx*step)
+}
+
+func template(n int) x540reg_t {
+	return _xreg(0xa600, uint(n), 245, 4)
+}
+
+func TDBAL(n int) x540reg_t {
+	return _xreg(0x6000, uint(n), 128, 0x40)
+}
+
+func TDBAH(n int) x540reg_t {
+	return _xreg(0x6004, uint(n), 128, 0x40)
+}
+
+func TDLEN(n int) x540reg_t {
+	return _xreg(0x6008, uint(n), 128, 0x40)
+}
+
+func TDH(n int) x540reg_t {
+	return _xreg(0x6010, uint(n), 128, 0x40)
+}
+
+func TDT(n int) x540reg_t {
+	return _xreg(0x6018, uint(n), 128, 0x40)
+}
+
+func TXDCTL(n int) x540reg_t {
+	return _xreg(0x6028, uint(n), 128, 0x40)
+}
+
+func TDWBAL(n int) x540reg_t {
+	return _xreg(0x6038, uint(n), 128, 0x40)
+}
+
+func TDWBAH(n int) x540reg_t {
+	return _xreg(0x603c, uint(n), 128, 0x40)
+}
+
+func RSCCTL(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x102c, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd02c, uint(n-64), 128-64, 0x40)
+	}
+}
+
+func RTRPT4C(n int) x540reg_t {
+	return _xreg(0x2140, uint(n), 8, 4)
+}
+
+func RTTPT2C(n int) x540reg_t {
+	return _xreg(0xdc20, uint(n), 8, 4)
+}
+
+func RTTDT2C(n int) x540reg_t {
+	return _xreg(0x4910, uint(n), 8, 4)
+}
+
+func RXPBSIZE(n int) x540reg_t {
+	return _xreg(0x3c00, uint(n), 8, 4)
+}
+
+func TXPBSIZE(n int) x540reg_t {
+	return _xreg(0xcc00, uint(n), 8, 4)
+}
+
+func TXPBTHRESH(n int) x540reg_t {
+	return _xreg(0x4950, uint(n), 8, 4)
+}
+
+func TQSM(n int) x540reg_t {
+	return _xreg(0x8600, uint(n), 32, 4)
+}
+
+func IVAR(n int) x540reg_t {
+	return _xreg(0x900, uint(n), 64, 4)
+}
+
+func EITR(n int) x540reg_t {
+	if n < 24 {
+		return _xreg(0x820, uint(n), 128, 4)
+	} else {
+		return _xreg(0x12300, uint(n-24), 128-24, 4)
+	}
+}
+
+func PFVLVFB(n int) x540reg_t {
+	return _xreg(0xf200, uint(n), 128, 4)
+}
+
+func VFTA(n int) x540reg_t {
+	return _xreg(0xa000, uint(n), 128, 4)
+}
+
+func PFVFSPOOF(n int) x540reg_t {
+	return _xreg(0x8200, uint(n), 8, 4)
+}
+
+func MPSAR(n int) x540reg_t {
+	return _xreg(0xa600, uint(n), 256, 4)
+}
+
+func QPTC_L(n int) x540reg_t {
+	return _xreg(0x8700, uint(n), 16, 8)
+}
+
+func QPTC(n int) x540reg_t {
+	return _xreg(0x8680, uint(n), 16, 4)
+}
+
+func RAH(n uint) x540reg_t {
+	return _xreg(0xa204, uint(n), 128, 8)
+}
+
+func RAL(n uint) x540reg_t {
+	return _xreg(0xa200, uint(n), 128, 8)
+}
 
 // MDIO device is in bits [20:16] and MDIO reg is in [15:0]
 type x540phyreg_t uint
@@ -1057,10 +1177,71 @@ const (
 	ALARMS1				= 0x1ecc00
 )
 
+type tdesc_t struct {
+	p_addr	uint64
+	rest	uint64
+}
+
+func (td *tdesc_t) ctx_start() {
+	maclen := uint64(14)
+	td.p_addr = maclen << 9
+	// DTYP = 0010b
+	td.rest = 0x2 << 20
+	// DEXT = 1
+	td.rest |= 1 << 29
+	// leave IDX zero
+}
+
+func (td *tdesc_t) data_start(p_addr, len, paylen uintptr) {
+	td.p_addr = uint64(p_addr)
+	// DTYP = 0011b
+	td.rest = 0x3 << 20
+	// DEXT = 1
+	td.rest |= 1 << 29
+	// RS, EOP, ICFS = 1
+	rs   := uint64(1 << 27)
+	eop  := uint64(1 << 24)
+	icfs := uint64(1 << 25)
+	td.rest |= icfs | eop | rs
+	td._dtalen(uint64(len))
+	td._paylen(uint64(paylen))
+}
+
+func (td *tdesc_t) _dtalen(v uint64) {
+	mask := uint64(0xffff)
+	if v &^ mask != 0 || v == 0 {
+		panic("bad dtalen")
+	}
+	td.rest &^= mask
+	td.rest |= v
+}
+
+func (td *tdesc_t) _paylen(v uint64) {
+	mask := uint64(0x3ffff)
+	if v &^ mask != 0 || v == 0 {
+		panic("bad paylen")
+	}
+	td.rest &^= mask << 46
+	td.rest |= v << 46
+}
+
+func (td *tdesc_t) txdone() bool {
+	rs   := uint64(1 << 27)
+	if td.rest & rs == 0 {
+		panic("dd may set only when rs is set")
+	}
+	dd := uint64(1 << 32)
+	return td.rest & dd != 0
+}
+
 type x540_t struct {
 	tag	pcitag_t
 	bar0	[]uint32
 	_locked	bool
+	tx struct {
+		ndescs	uint32
+		descs	[]tdesc_t
+	}
 }
 
 func (x *x540_t) init(t pcitag_t) {
@@ -1271,7 +1452,29 @@ func (x *x540_t) hwunlock() {
 	x._reg_release()
 }
 
+func (x *x540_t) wait_linkup() bool {
+	x.hwlock()
+	defer x.hwunlock()
+
+	link := uint32(1 << 30)
+	st := time.Now()
+	for {
+		v := x.rl(LINKS)
+		if v & link != 0 {
+			return true
+		}
+		if time.Since(st) > 7*time.Second {
+			return false
+		}
+	}
+}
+
 func attach_x540t(vid, did int, t pcitag_t) {
+	tdescsz := uintptr(16)
+	if unsafe.Sizeof(tdesc_t{}) != tdescsz {
+		panic("unexpected tdesc_t size")
+	}
+
 	b, d, f := breakpcitag(t)
 	fmt.Printf("X540: %x %x (%d:%d:%d)\n", vid, did, b, d, f)
 	if uint(f) > 1 {
@@ -1288,6 +1491,10 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 	// even though we disable flow control, we write 0 to FCTTV, FCRTL,
 	// FCRTH, FCRTV, and  FCCFG
+	regn := func(r x540reg_t, i int) x540reg_t {
+		return r + x540reg_t(i * 4)
+	}
+
 	n := 4
 	fcttv := x540reg_t(0x3200)
 	for i := 0; i < n; i++ {
@@ -1343,6 +1550,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	}
 	x.log("dma engine initialized")
 
+	// enable MSI interrupts
 	msiaddrl := 0x54
 	msidata := 0x5c
 
@@ -1352,7 +1560,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	mdata := vec | bsp_apic_id << 12
 	pci_write(x.tag, msidata, mdata)
 
-	// enable MSI interrupts
 	msictrl := 0x50
 	pv := pci_read(x.tag, msictrl, 4)
 	pv |= 1 << 16
@@ -1375,31 +1582,52 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	x.rs(EIAM2, 0)
 
 	// disable interrupt throttling
-	for n := 0; n < 24; n++ {
-		x.rs(regn(EITRi, n), 0)
-	}
-	for n := 0; n < 104; n++ {
-		x.rs(regn(EITR1i, n), 0)
+	for n := 0; n < 128; n++ {
+		x.rs(EITR(n), 0)
 	}
 
 	// map all 128 rx/tx queues to interrupt 0
 	for n := 0; n < 64; n++ {
 		v := uint32(0x80808080)
-		x.rs(regn(IVARi, n), v)
+		x.rs(IVAR(n), v)
 	}
 
 	// disable RSC; docs say RSC is enabled by default, but it isn't on my
 	// card...
 	for n := 0; n < 128; n++ {
-		var reg x540reg_t
-		if n < 64 {
-			reg = reg40(RSCCTLl, n)
-		} else {
-			reg = reg40(RSCCTL1l, n-64)
-		}
-		v := x.rl(reg)
+		v := x.rl(RSCCTL(n))
 		rscen := uint32(1 << 0)
-		x.rs(reg, v &^ rscen)
+		x.rs(RSCCTL(n), v &^ rscen)
+	}
+
+	// map all per-tx-queue statistics to counter 0
+	for n := 0; n < 32; n++ {
+		x.rs(TQSM(n), 0)
+	}
+
+	// XXX: receive enable here
+	{
+		for i := 0; i < 8; i++ {
+			if x.rl(PFVFSPOOF(0)) != 0 {
+				panic("MAC spoof prevention")
+			}
+		}
+
+		if x.rl(MPSAR(0)) == 0 {
+			x.log("MPSAR is 0!")
+		}
+		allmacs := ^uint32(0)
+		x.rs(MPSAR(0), allmacs)
+		x.rs(MPSAR(1), allmacs)
+		for i := 2; i < 256; i++ {
+			x.rs(MPSAR(i), 0)
+		}
+		for i := 0; i < 128; i++ {
+			x.rs(VFTA(i), ^uint32(0))
+		}
+		for i := 0; i < 128; i++ {
+			x.rs(PFVLVFB(i), 0)
+		}
 	}
 
 	// transmit init
@@ -1425,7 +1653,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 		// XXX may want to enable relaxed ordering or DCA for tx
 		//for n := 0; n < 128; n++ {
-		//	x.rs(reg40(DCA_TXCTRLi, n), xxx)
+		//	x.rs(DCA_TXCTRL(n), xxx)
 		//}
 
 		// if necessary, setup IPG (inter-packet gap) here
@@ -1442,32 +1670,192 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		v &^= arbdis
 		x.rs(RTTDCS, v)
 
-		// XXX setup tx queues...
+		// setup tx queues
+		pg, p_pg := refpg_new()
+		refup(uintptr(p_pg))
+		x.rs(TDBAL(0), uint32(p_pg))
+		x.rs(TDBAH(0), uint32(uint(p_pg) >> 32))
+		x.rs(TDLEN(0), uint32(PGSIZE))
+
+		ndescs := uint32(PGSIZE)/uint32(tdescsz)
+		x.tx.ndescs = ndescs
+		x.tx.descs = (*[PGSIZE/16]tdesc_t)(unsafe.Pointer(pg))[:]
+
+		// disable transmit descriptor head write-back. we may want
+		// this later.
+		x.rs(TDWBAL(0), 0)
+
+		// number of transmit descriptors per cacheline, as per
+		// 7.2.3.4.1.
+		tdcl := uint32(64/tdescsz)
+		// number of internal NIC descriptor buffers
+		nicdescs := uint32(64)
+		pthresh := nicdescs - tdcl
+		hthresh := tdcl
+		wthresh := uint32(0)
+		if pthresh &^ 0x7f != 0 || hthresh &^ 0x7f != 0 ||
+		    wthresh &^ 0x7f != 0 {
+			panic("bad pre-fetcher thresholds")
+		}
+		v = uint32(pthresh | hthresh << 8 | wthresh << 16)
+		x.rs(TXDCTL(0), v)
+
+		x.rs(TDT(0), 0)
+		x.rs(TDH(0), 0)
+
+		v = x.rl(DMATXCTL)
+		dmatxenable := uint32(1 << 0)
+		v |= dmatxenable
+		x.rs(DMATXCTL, v)
+
+		v = x.rl(TXDCTL(0))
+		txenable := uint32(1 << 25)
+		v |= txenable
+		x.rs(TXDCTL(0), v)
+
+		for {
+			v = x.rl(TXDCTL(0))
+			if v & txenable != 0 {
+				break
+			}
+		}
+		x.log("TX enabled!")
+
 	}
 
+	// configure interrupts
 	x.rs(GPIE, 0)
-
 	// clear all previous interrupts
 	x.rs(EICR, ^uint32(0))
+
+	{
+		// RAL/RAH are big-endian
+		v := x.rl(RAH(0))
+		av := uint32(1 << 31)
+		if v & av == 0 {
+			panic("RA 0 invalid?")
+		}
+		mac := (uint64(v) & 0xffff) << 32
+		mac |= uint64(x.rl(RAL(0)))
+		fmt.Printf("  mac: ")
+		for i := 0; i < 6; i++ {
+			b := uint8(mac >> (8*uint(i)))
+			if i < 5 {
+				fmt.Printf("%0.2x:", b)
+			} else {
+				fmt.Printf("%0.2x\n", b)
+			}
+			txdata.macsrc[i] = b
+		}
+	}
+
+	if x.wait_linkup() {
+		x.log("got link!")
+		// statistic regs auto-clear on read; clear them all
+		prstat := func(v bool) {
+			a := x.rl(SSVPC)
+			b := x.rl(GPTC)
+			c := x.rl(TXDGPC)
+			d := x.rl(TPT)
+			var e uint32
+			for i := 0; i < 16; i++ {
+				e += x.rl(QPTC(i))
+			}
+			f := x.rl(PTC64)
+			g := x.rl(PTC127)
+			h := x.rl(MSPDC)
+			i := x.rl(XEC)
+			j := x.rl(BPTC)
+			k := x.rl(QPTC_L(0))
+			l := x.rl(FCCRC)
+			m := x.rl(B2OSPC)
+			n := x.rl(B2OGPRC)
+			o := x.rl(O2BGPTC)
+			p := x.rl(O2BSPC)
+			q := x.rl(CRCERRS)
+			r := x.rl(ILLERRC)
+			s := x.rl(ERRBC)
+			if v {
+				fmt.Println("  TX stats: ", a, b, c, d, e, f, g,
+				    h, i, j, k, l, m, n, o, p, q, r, s)
+			}
+		}
+		prstat(false)
+
+		paylen := uintptr(42)
+		if unsafe.Sizeof(txdata_t{}) != paylen {
+			panic("bad align")
+		}
+
+		for i := 0; i < 3; i++ {
+			x.log("PACKET %v", i)
+			// setup tx descriptor
+			tail := x.rl(TDT(0))
+			tdesc := &x.tx.descs[tail]
+			p_addr, ok := runtime.Vtop(unsafe.Pointer(&txdata))
+			if !ok {
+				panic("eh?")
+			}
+			tdesc.data_start(p_addr, paylen, paylen)
+			tail++
+			if tail == x.tx.ndescs {
+				tail = 0
+			}
+
+			prstat(true)
+			x.log("bump tail: %v", tail)
+			x.rs(TDT(0), tail)
+			for {
+				if tdesc.txdone() {
+					break
+				}
+				prstat(true)
+				<-time.After(1*time.Second)
+			}
+			x.log("transmitted?")
+			head := x.rl(TDH(0))
+			if x.rl(TDH(0)) != tail {
+				x.log("*** WTF: head = %v", head)
+			}
+			prstat(true)
+		}
+	} else {
+		x.log("No link")
+	}
+}
+
+type txdata_t struct {
+	macdst	[6]uint8
+	macsrc	[6]uint8
+	etype	[2]uint8
+	payload	[28]uint8
+}
+
+// fake ARP packet
+var txdata = txdata_t {
+	macdst: [6]uint8{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	macsrc: [6]uint8{0xa0, 0x36, 0x9f, 0xb3, 0xc3, 0x08},
+	etype: [2]uint8{0x08, 0x06},
+	payload: [28]uint8{0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00, 0x02, 0x00, 0x13, 0x72, 0xb6, 0x7b, 0x42, 0x12, 0x1a, 0x05, 0x30, 0xa0, 0x36, 0x9f, 0xb3, 0xc3, 0x08, 0x12, 0x1a, 0x05, 0x31},
 }
 
 // _dbc_init() must only be called when RTTDCS.ARBDIS == 1 (7.2.1.2.1)
 func (x *x540_t) _dbc_init() {
 	// dbc=off, vt=off (section 4.6.11.3.4)
 	rxpbsize := uint32(0x180 << 10)
-	x.rs(regn(RXPBSIZEi, 0), rxpbsize)
+	x.rs(RXPBSIZE(0), rxpbsize)
 	for n := 1; n < 8; n++ {
-		x.rs(regn(RXPBSIZEi, n), 0)
+		x.rs(RXPBSIZE(n), 0)
 	}
 	txpbsize := uint32(0xa0 << 10)
-	x.rs(regn(TXPBSIZEi, 0), txpbsize)
+	x.rs(TXPBSIZE(0), txpbsize)
 	for n := 1; n < 8; n++ {
-		x.rs(regn(TXPBSIZEi, n), 0)
+		x.rs(TXPBSIZE(n), 0)
 	}
 	txpbthresh := uint32(0xa0)
-	x.rs(regn(TXPBTHRESHi, 0), txpbthresh)
+	x.rs(TXPBTHRESH(0), txpbthresh)
 	for n := 1; n < 8; n++ {
-		x.rs(regn(TXPBTHRESHi, n), 0)
+		x.rs(TXPBTHRESH(n), 0)
 	}
 
 	v := x.rl(MRQC)
@@ -1492,12 +1880,7 @@ func (x *x540_t) _dbc_init() {
 
 	// XXX per queue dropping?
 	//for n := 0; n < 128; n++ {
-	//	var reg x540reg_t
-	//	if n < 64 {
-	//		reg = reg40(SRRCTLl, n)
-	//	} else {
-	//		reg = reg40(SRRCTL1l, n-64)
-	//	}
+	//	x.rs(SRCCTL(n), ...)
 	//}
 
 	x.rs(RTRUP2TC, 0)
@@ -1529,13 +1912,13 @@ func (x *x540_t) _dbc_init() {
 		x.rs(RTTDT1C, 0)
 	}
 	for n := 0; n < 8; n++ {
-		x.rs(regn(RTTDT2Ci, n), 0)
+		x.rs(RTTDT2C(n), 0)
 	}
 	for n := 0; n < 8; n++ {
-		x.rs(regn(RTTPT2Ci, n), 0)
+		x.rs(RTTPT2C(n), 0)
 	}
 	for n := 0; n < 8; n++ {
-		x.rs(regn(RTRPT4Ci, n), 0)
+		x.rs(RTRPT4C(n), 0)
 	}
 
 	v = x.rl(RTTDCS)
