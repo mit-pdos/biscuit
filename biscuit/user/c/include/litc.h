@@ -176,9 +176,11 @@ struct stat {
 #define		S_IFMT		((ulong)-1)
 #define		S_IFREG		1
 #define		S_IFDIR		2
+#define		S_IFIFO		3
 
 #define		S_ISDIR(mode)	(mode == S_IFDIR)
 #define		S_ISDEV(mode)	(MAJOR(mode) != 0)
+#define		S_ISFIFO(mode)	(mode == S_IFIFO)
 #define		S_ISREG(mode)	(mode == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 
@@ -592,6 +594,7 @@ int fileno(FILE *);
 int fflush(FILE *);
 int fgetc(FILE *);
 char *fgets(char *, int, FILE *);
+FILE *fdopen(int, const char *);
 FILE *fopen(const char *, const char *);
 int fprintf(FILE *, const char *, ...)
     __attribute__((format(printf, 2, 3)));

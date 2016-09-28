@@ -1118,8 +1118,12 @@ func (of *pipefops_t) close() int {
 	return ret
 }
 
-func (of *pipefops_t) fstat(*stat_t) int {
-	panic("fstat on pipe")
+func (of *pipefops_t) fstat(st *stat_t) int {
+	// linux and openbsd give same mode for all pipes
+	st.wdev(0)
+	pipemode := 3
+	st.wmode(pipemode)
+	return 0
 }
 
 func (of *pipefops_t) lseek(int, int) int {

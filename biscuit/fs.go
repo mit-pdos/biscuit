@@ -665,7 +665,8 @@ func (df *devfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
 
 func (df *devfops_t) fstat(st *stat_t) int {
 	df._sane()
-	panic("no imp")
+	st.wmode(mkdev(df.maj, df.min))
+	return 0
 }
 
 func (df *devfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
@@ -2203,6 +2204,7 @@ func (idm *imemnode_t) mkmode() int {
 	case I_DIR, I_FILE:
 		return itype
 	case I_DEV:
+		// this can happen by fs-internal stats
 		return mkdev(idm.icache.major, idm.icache.minor)
 	default:
 		fmt.Printf("itype: %v\n", itype)

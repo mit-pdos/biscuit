@@ -1406,8 +1406,8 @@ fflush(FILE *f)
 	return ret;
 }
 
-FILE *
-fopen(const char *path, const char *mode)
+static FILE *
+_fopen(const char *path, int gfd, const char *mode)
 {
 	int flags = -1;
 	int plus = strchr(mode, '+') != NULL;
@@ -1450,7 +1450,12 @@ fopen(const char *path, const char *mode)
 	}
 	memset(ret, 0, sizeof(FILE));
 
-	int fd = open(path, flags);
+	int fd = gfd;
+	if (path)
+		fd = open(path, flags);
+	else
+		if (fd < 0)
+			errno = EBADF;
 	if (fd < 0) {
 		free(ret);
 		return NULL;
@@ -1474,6 +1479,18 @@ fopen(const char *path, const char *mode)
 	_allfiles.head = ret;
 	pthread_mutex_unlock(&_allfiles.mut);
 	return ret;
+}
+
+FILE *
+fdopen(int fd, const char *mode)
+{
+	return _fopen(NULL, fd, mode);
+}
+
+FILE *
+fopen(const char *path, const char *mode)
+{
+	return _fopen(path, -1, mode);
 }
 
 int
