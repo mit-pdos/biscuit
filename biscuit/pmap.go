@@ -895,9 +895,9 @@ func dmap8(p int) []uint8 {
 }
 
 // l is length of mapping in bytes
-func dmaplen(p int, l int) []uint8 {
+func dmaplen(p uintptr, l int) []uint8 {
 	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(uintptr(_vdirect)))
-	return _dmap[p:p+l]
+	return _dmap[p:p+uintptr(l)]
 }
 
 // l is length of mapping in bytes. both p and l must be multiples of 4

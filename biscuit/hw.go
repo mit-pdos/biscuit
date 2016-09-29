@@ -503,7 +503,7 @@ func _acpi_tbl(rsdt []uint8, sig string) ([]uint8, bool) {
 	ptrs := rsdt[hdrlen:]
 	var tbl []uint8
 	for len(ptrs) != 0 {
-		tbln := readn(ptrs, 4, 0)
+		tbln := uintptr(readn(ptrs, 4, 0))
 		ptrs = ptrs[4:]
 		tbl = dmaplen(tbln, 8)
 		if string(tbl[:4]) == sig {
@@ -625,7 +625,7 @@ func _acpi_scan() ([]uint8, bool) {
 	// ACPI 5.2.5: search for RSDP in EBDA and BIOS read-only memory
 	ebdap := (0x40 << 4) | 0xe
 	p := dmap8(ebdap)
-	ebda := readn(p, 2, 0)
+	ebda := uintptr(readn(p, 2, 0))
 	ebda <<= 4
 
 	isrsdp := func(d []uint8) bool {
@@ -643,13 +643,13 @@ func _acpi_scan() ([]uint8, bool) {
 		return true
 	}
 	rsdplen := 36
-	for i := 0; i < 1 << 10; i += 16 {
+	for i := uintptr(0); i < 1 << 10; i += 16 {
 		p = dmaplen(ebda + i, rsdplen)
 		if isrsdp(p) {
 			return p, true
 		}
 	}
-	for bmem := 0xe0000; bmem < 0xfffff; bmem += 16 {
+	for bmem := uintptr(0xe0000); bmem < 0xfffff; bmem += 16 {
 		p = dmaplen(bmem, rsdplen)
 		if isrsdp(p) {
 			return p, true
@@ -663,7 +663,7 @@ func acpi_attach() int {
 	if !ok {
 		panic("no RSDP")
 	}
-	rsdtn := readn(rsdp, 4, 16)
+	rsdtn := uintptr(readn(rsdp, 4, 16))
 	//xsdtn := readn(rsdp, 8, 24)
 	rsdt := dmaplen(rsdtn, 8)
 	if rsdtn == 0 || string(rsdt[:4]) != "RSDT" {
