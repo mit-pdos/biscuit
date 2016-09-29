@@ -1022,6 +1022,10 @@ const (
 	EEMNGCTL			= 0x10110
 	SWSM				= 0x10140
 	SW_FW_SYNC			= 0x10160
+	RXFECCERR0			=  0x51b8
+	FCTRL				=  0x5080
+	RXCSUM				=  0x5000
+	RXCTRL				=  0x3000
 	// statistic reg4sters
 	SSVPC				=  0x8780
 	GPTC				=  0x4080
@@ -1040,6 +1044,9 @@ const (
 	CRCERRS				=  0x4000
 	ILLERRC				=  0x4004
 	ERRBC				=  0x4008
+	GPRC				=  0x4074
+	PRC64				=  0x405c
+	PRC127				=  0x4060
 
 	FLA				= 0x1001c
 )
@@ -1055,6 +1062,78 @@ func _xreg(start, idx, max, step uint) x540reg_t {
 
 func template(n int) x540reg_t {
 	return _xreg(0xa600, uint(n), 245, 4)
+}
+
+func FCRTH(n int) x540reg_t {
+	return _xreg(0x3260, uint(n), 8, 4)
+}
+
+func RDBAL(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1000, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd000, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func RDBAH(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1004, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd004, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func RDLEN(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1008, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd008, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func SRRCTL(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1014, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd014, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func RXDCTL(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1028, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd028, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func RDT(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1018, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd018, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func RDH(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x1010, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd010, uint(n)-64, 128-64, 0x40)
+	}
+}
+
+func QPRC(n int) x540reg_t {
+	return _xreg(0x1030, uint(n), 16, 0x40)
+}
+
+func QPRDC(n int) x540reg_t {
+	return _xreg(0x1430, uint(n), 16, 0x40)
+}
+
+func PFUTA(n int) x540reg_t {
+	return _xreg(0xf400, uint(n), 128, 4)
 }
 
 func TDBAL(n int) x540reg_t {
@@ -1094,6 +1173,14 @@ func RSCCTL(n int) x540reg_t {
 		return _xreg(0x102c, uint(n), 64, 0x40)
 	} else {
 		return _xreg(0xd02c, uint(n-64), 128-64, 0x40)
+	}
+}
+
+func DCA_RXCTRL(n int) x540reg_t {
+	if n < 64 {
+		return _xreg(0x100c, uint(n), 64, 0x40)
+	} else {
+		return _xreg(0xd00c, uint(n-64), 128-64, 0x40)
 	}
 }
 
@@ -1177,6 +1264,32 @@ const (
 	ALARMS1				= 0x1ecc00
 )
 
+type rdesc_t struct {
+	p_data	uint64
+	p_hdr	uint64
+}
+
+func (rd *rdesc_t) ready(pbuf, hbuff uintptr) {
+	if (pbuf | hbuff) & 1 != 0 {
+		panic("rx buffers must be word aligned")
+	}
+	rd.p_data = uint64(pbuf)
+	rd.p_hdr = uint64(hbuff)
+}
+
+func (rd *rdesc_t) rxdone() bool {
+	dd := uint64(1)
+	return rd.p_hdr & dd != 0
+}
+
+func (rd *rdesc_t) pktlen() uintptr {
+	return (uintptr(rd.p_hdr) >> 32) & 0xffff
+}
+
+func (rd *rdesc_t) hdrlen() uintptr {
+	return (uintptr(rd.p_data) >> 21) & 0x3ff
+}
+
 type tdesc_t struct {
 	p_addr	uint64
 	rest	uint64
@@ -1241,6 +1354,10 @@ type x540_t struct {
 	tx struct {
 		ndescs	uint32
 		descs	[]tdesc_t
+	}
+	rx struct {
+		ndescs	uint32
+		descs	[]rdesc_t
 	}
 }
 
@@ -1471,7 +1588,11 @@ func (x *x540_t) wait_linkup() bool {
 
 func attach_x540t(vid, did int, t pcitag_t) {
 	tdescsz := uintptr(16)
+	rdescsz := uintptr(16)
 	if unsafe.Sizeof(tdesc_t{}) != tdescsz {
+		panic("unexpected tdesc_t size")
+	}
+	if unsafe.Sizeof(rdesc_t{}) != rdescsz {
 		panic("unexpected tdesc_t size")
 	}
 
@@ -1490,23 +1611,19 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	x._int_disable()
 
 	// even though we disable flow control, we write 0 to FCTTV, FCRTL,
-	// FCRTH, FCRTV, and  FCCFG
+	// FCRTH, FCRTV, and  FCCFG. we program FCRTH.RTH later.
 	regn := func(r x540reg_t, i int) x540reg_t {
 		return r + x540reg_t(i * 4)
 	}
 
-	n := 4
 	fcttv := x540reg_t(0x3200)
-	for i := 0; i < n; i++ {
+	for i := 0; i < 4; i++ {
 		x.rs(regn(fcttv, i), 0)
 	}
-	n = 8
 	fcrtl := x540reg_t(0x3220)
-	fcrth := x540reg_t(0x3260)
-	// XXX XXX set default values for FCRTH[n].RTH?
-	for i := 0; i < n; i++ {
+	for i := 0; i < 8; i++ {
 		x.rs(regn(fcrtl, i), 0)
-		x.rs(regn(fcrth, i), 0)
+		x.rs(FCRTH(i), 0)
 	}
 
 	fcrtv := x540reg_t(0x32a0)
@@ -1528,6 +1645,10 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		x.log("no snoop disabled. enabling.")
 		x.rs(CTRL_EXT, v &^ nosnoop_dis)
 	}
+	// useful for testing whether no snoop/relaxed memory ordering affects
+	// buge behavior
+	//ro_dis := uint32(1 << 17)
+	//x.rs(CTRL_EXT, v | nosnoop_dis | ro_dis)
 
 	x.hwlock()
 	phyreset := uint16(1 << 6)
@@ -1605,29 +1726,98 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		x.rs(TQSM(n), 0)
 	}
 
-	// XXX: receive enable here
+	// receive enable here
 	{
 		for i := 0; i < 8; i++ {
-			if x.rl(PFVFSPOOF(0)) != 0 {
-				panic("MAC spoof prevention")
-			}
+			x.rs(PFVFSPOOF(i), 0)
 		}
-
-		if x.rl(MPSAR(0)) == 0 {
-			x.log("MPSAR is 0!")
-		}
-		allmacs := ^uint32(0)
-		x.rs(MPSAR(0), allmacs)
-		x.rs(MPSAR(1), allmacs)
-		for i := 2; i < 256; i++ {
+		for i := 0; i < 256; i++ {
 			x.rs(MPSAR(i), 0)
 		}
 		for i := 0; i < 128; i++ {
-			x.rs(VFTA(i), ^uint32(0))
-		}
-		for i := 0; i < 128; i++ {
+			x.rs(PFUTA(i), 0)
+			x.rs(VFTA(i), 0)
 			x.rs(PFVLVFB(i), 0)
 		}
+		// XXX enable debugging features: store bad packets, unicast
+		// promiscuous, and broadcast accept
+		v := x.rl(FCTRL)
+		sbp := uint32(1 << 1)
+		upe := uint32(1 << 9)
+		bam := uint32(1 << 10)
+		v |= sbp | upe | bam
+		x.rs(FCTRL, v)
+
+		v = x.rl(RXCSUM)
+		ippcse := uint32(1 << 12)
+		v |= ippcse
+		x.rs(RXCSUM, v)
+
+		v = x.rl(RDRXCTL)
+		// HLREG0.RXCRCSTRP must match RDRXCTL.CRCSTRIP
+		crcstrip := uint32(1 << 1)
+		// for the two following bits, docs say: "reserved, software
+		// should set this bit to 1" but the bit is initialized to 0??
+		res1 := uint32(1 << 25)
+		res2 := uint32(1 << 26)
+		v |= crcstrip | res1 | res2
+		x.rs(RDRXCTL, v)
+
+		// bit 0 of the first word in rdesc_t should disable no snoop
+		// for packet write back when set, but my NIC seems to ignore
+		// this bit! thus i disable no snoop for all rx packet
+		// writebacks
+		rxdatawritensen := uint32(1 << 12)
+		v = x.rl(DCA_RXCTRL(0))
+		v &^= rxdatawritensen
+		x.rs(DCA_RXCTRL(0), v)
+
+		// if we want to, enable jumbo frames here
+
+		// setup rx queues
+		pg, p_pg := refpg_new()
+		refup(uintptr(p_pg))
+		// RDBAL/TDBAL must be 128 byte aligned
+		x.rs(RDBAL(0), uint32(p_pg))
+		x.rs(RDBAH(0), uint32(uint(p_pg) >> 32))
+		x.rs(RDLEN(0), uint32(PGSIZE))
+
+		x.rx.ndescs = uint32(PGSIZE)/uint32(rdescsz)
+		x.rx.descs = (*[PGSIZE/16]rdesc_t)(unsafe.Pointer(pg))[:]
+
+		v = x.rl(SRRCTL(0))
+		// XXX how large should a single rx descriptor's packet buffer
+		// be? leave them the default for now (2K)...
+
+		// program receive descriptor minimum threshold here
+
+		// XXX what is the right DESCTYPE?? section 7.1.10.1
+		// contradicts the register description in section 8! i'll try
+		// section 7.1.10.1's value for non-split buffers first...
+		desctype := uint32(1 << 25)
+		v |= desctype
+		x.rs(SRRCTL(0), v)
+
+		x.rs(RDH(0), 0)
+		x.rs(RDT(0), 0)
+
+		// enable this rx queue
+		v = x.rl(RXDCTL(0))
+		qen := uint32(1 << 25)
+		v |= qen
+		x.rs(RXDCTL(0), v)
+		for x.rl(RXDCTL(0)) & qen == 0 {
+		}
+
+		// enable receive
+		v = x.rl(RXCTRL)
+		rxen := uint32(1 << 0)
+		v |= rxen
+		x.rs(RXCTRL, v)
+
+		// packet buffers must be at least SRRCTL.BSIZEPACKET bytes,
+		// header buffers must be at least SRRCTL.BSIZEHEADER bytes
+		x.log("RX enabled!")
 	}
 
 	// transmit init
@@ -1636,8 +1826,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		crcstrip   := uint32(1 <<  1)
 		txpad      := uint32(1 << 10)
 		rxlerr     := uint32(1 << 27)
-		// HLREG0 contains non-zero reserved bits; read first to make
-		// sure reserved bits stay set.
+		// HLREG0.RXCRCSTRP must match RDRXCTL.CRCSTRIP
 		v := x.rl(HLREG0)
 		v |= txcrc | crcstrip | txpad | rxlerr
 		x.rs(HLREG0, v)
@@ -1673,6 +1862,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		// setup tx queues
 		pg, p_pg := refpg_new()
 		refup(uintptr(p_pg))
+		// RDBAL/TDBAL must be 128 byte aligned
 		x.rs(TDBAL(0), uint32(p_pg))
 		x.rs(TDBAH(0), uint32(uint(p_pg) >> 32))
 		x.rs(TDLEN(0), uint32(PGSIZE))
@@ -1713,14 +1903,9 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		v |= txenable
 		x.rs(TXDCTL(0), v)
 
-		for {
-			v = x.rl(TXDCTL(0))
-			if v & txenable != 0 {
-				break
-			}
+		for x.rl(TXDCTL(0)) & txenable == 0 {
 		}
 		x.log("TX enabled!")
-
 	}
 
 	// configure interrupts
@@ -1728,99 +1913,162 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	// clear all previous interrupts
 	x.rs(EICR, ^uint32(0))
 
-	{
-		// RAL/RAH are big-endian
-		v := x.rl(RAH(0))
-		av := uint32(1 << 31)
-		if v & av == 0 {
-			panic("RA 0 invalid?")
-		}
-		mac := (uint64(v) & 0xffff) << 32
-		mac |= uint64(x.rl(RAL(0)))
-		fmt.Printf("  mac: ")
-		for i := 0; i < 6; i++ {
-			b := uint8(mac >> (8*uint(i)))
-			if i < 5 {
-				fmt.Printf("%0.2x:", b)
-			} else {
-				fmt.Printf("%0.2x\n", b)
-			}
-			txdata.macsrc[i] = b
+	if !x.wait_linkup() {
+		x.log("No link")
+		return
+	}
+	x.log("got link!")
+	x.tx_test()
+	x.rx_test()
+}
+
+func (x *x540_t) rx_test() {
+	go func() {
+	prstat := func(v bool) {
+		a := x.rl(SSVPC)
+		b := x.rl(GPRC)
+		c := x.rl(XEC)
+		d := x.rl(FCCRC)
+		e := x.rl(CRCERRS)
+		f := x.rl(ILLERRC)
+		g := x.rl(ERRBC)
+		h := x.rl(PRC64)
+		i := x.rl(PRC127)
+		j := x.rl(QPRC(0))
+		k := x.rl(QPRDC(0))
+		if v {
+			fmt.Println("  RX stats: ", a, b, c, d, e, f, g,
+			    h, i, j, k)
 		}
 	}
+	prstat(false)
+	_, p_pg1 := refpg_new()
+	refup(uintptr(p_pg1))
 
-	if x.wait_linkup() {
-		x.log("got link!")
-		// statistic regs auto-clear on read; clear them all
-		prstat := func(v bool) {
-			a := x.rl(SSVPC)
-			b := x.rl(GPTC)
-			c := x.rl(TXDGPC)
-			d := x.rl(TPT)
-			var e uint32
-			for i := 0; i < 16; i++ {
-				e += x.rl(QPTC(i))
-			}
-			f := x.rl(PTC64)
-			g := x.rl(PTC127)
-			h := x.rl(MSPDC)
-			i := x.rl(XEC)
-			j := x.rl(BPTC)
-			k := x.rl(QPTC_L(0))
-			l := x.rl(FCCRC)
-			m := x.rl(B2OSPC)
-			n := x.rl(B2OGPRC)
-			o := x.rl(O2BGPTC)
-			p := x.rl(O2BSPC)
-			q := x.rl(CRCERRS)
-			r := x.rl(ILLERRC)
-			s := x.rl(ERRBC)
-			if v {
-				fmt.Println("  TX stats: ", a, b, c, d, e, f, g,
-				    h, i, j, k, l, m, n, o, p, q, r, s)
-			}
-		}
-		prstat(false)
-
-		paylen := uintptr(42)
-		if unsafe.Sizeof(txdata_t{}) != paylen {
-			panic("bad align")
+	i := 0
+	for {
+		i++
+		<-time.After(time.Second)
+		tail := x.rl(RDT(0))
+		rdesc := &x.rx.descs[tail]
+		rdesc.ready(uintptr(p_pg1), 0)
+		tail++
+		if tail == x.rx.ndescs {
+			tail = 0
 		}
 
-		for i := 0; i < 3; i++ {
-			x.log("PACKET %v", i)
-			// setup tx descriptor
-			tail := x.rl(TDT(0))
-			tdesc := &x.tx.descs[tail]
-			p_addr, ok := runtime.Vtop(unsafe.Pointer(&txdata))
-			if !ok {
-				panic("eh?")
-			}
-			tdesc.data_start(p_addr, paylen, paylen)
-			tail++
-			if tail == x.tx.ndescs {
-				tail = 0
-			}
-
-			prstat(true)
-			x.log("bump tail: %v", tail)
-			x.rs(TDT(0), tail)
-			for {
-				if tdesc.txdone() {
-					break
-				}
-				prstat(true)
-				<-time.After(1*time.Second)
-			}
-			x.log("transmitted?")
-			head := x.rl(TDH(0))
-			if x.rl(TDH(0)) != tail {
-				x.log("*** WTF: head = %v", head)
-			}
-			prstat(true)
+		x.rs(RDT(0), tail)
+		for !rdesc.rxdone() {
 		}
-	} else {
-		x.log("No link")
+		eop := uint64(1 << 1)
+		if rdesc.p_hdr & eop == 0 {
+			panic("EOP not set")
+		}
+		if x.rl(RDH(0)) != tail {
+			panic("wtf")
+		}
+
+		hl := rdesc.hdrlen()
+		pl := rdesc.pktlen()
+		if pl > 1 << 11 {
+			panic("expected packet len")
+		}
+		fmt.Printf("packet %v: plen: %v, hdrlen: %v, hdr: ", i, pl, hl)
+		b := dmaplen(p_pg1, int(rdesc.pktlen()))
+		for _, c := range b[:hl] {
+			fmt.Printf("%x ", c)
+		}
+		fmt.Printf("\n")
+	}
+	}()
+}
+
+func (x *x540_t) tx_test() {
+	// RAL/RAH are big-endian
+	v := x.rl(RAH(0))
+	av := uint32(1 << 31)
+	if v & av == 0 {
+		panic("RA 0 invalid?")
+	}
+	mac := (uint64(v) & 0xffff) << 32
+	mac |= uint64(x.rl(RAL(0)))
+	fmt.Printf("  mac: ")
+	for i := 0; i < 6; i++ {
+		b := uint8(mac >> (8*uint(i)))
+		if i < 5 {
+			fmt.Printf("%0.2x:", b)
+		} else {
+			fmt.Printf("%0.2x\n", b)
+		}
+		txdata.macsrc[i] = b
+	}
+
+	// statistic regs auto-clear on read; clear them all
+	prstat := func(v bool) {
+		a := x.rl(SSVPC)
+		b := x.rl(GPTC)
+		c := x.rl(TXDGPC)
+		d := x.rl(TPT)
+		var e uint32
+		for i := 0; i < 16; i++ {
+			e += x.rl(QPTC(i))
+		}
+		f := x.rl(PTC64)
+		g := x.rl(PTC127)
+		h := x.rl(MSPDC)
+		i := x.rl(XEC)
+		j := x.rl(BPTC)
+		k := x.rl(QPTC_L(0))
+		l := x.rl(FCCRC)
+		m := x.rl(B2OSPC)
+		n := x.rl(B2OGPRC)
+		o := x.rl(O2BGPTC)
+		p := x.rl(O2BSPC)
+		q := x.rl(CRCERRS)
+		r := x.rl(ILLERRC)
+		s := x.rl(ERRBC)
+		if v {
+			fmt.Println("  TX stats: ", a, b, c, d, e, f, g,
+			    h, i, j, k, l, m, n, o, p, q, r, s)
+		}
+	}
+	prstat(false)
+
+	paylen := uintptr(42)
+	if unsafe.Sizeof(txdata_t{}) != paylen {
+		panic("bad align")
+	}
+
+	for i := 0; i < 3; i++ {
+		x.log("PACKET %v", i)
+		// setup tx descriptor
+		tail := x.rl(TDT(0))
+		tdesc := &x.tx.descs[tail]
+		p_addr, ok := runtime.Vtop(unsafe.Pointer(&txdata))
+		if !ok {
+			panic("eh?")
+		}
+		tdesc.data_start(p_addr, paylen, paylen)
+		tail++
+		if tail == x.tx.ndescs {
+			tail = 0
+		}
+
+		//prstat(true)
+		x.log("bump tail: %v", tail)
+		x.rs(TDT(0), tail)
+		for {
+			if tdesc.txdone() {
+				break
+			}
+			//prstat(true)
+			<-time.After(10*time.Millisecond)
+		}
+		x.log("transmitted?")
+		if x.rl(TDH(0)) != tail {
+			panic("TDT/TDH mismatch")
+		}
+		prstat(true)
 	}
 }
 
@@ -1847,6 +2095,9 @@ func (x *x540_t) _dbc_init() {
 	for n := 1; n < 8; n++ {
 		x.rs(RXPBSIZE(n), 0)
 	}
+	// 4.6.3.2 "FCRTH.RTH must be set even if flow control is disabled"
+	x.rs(FCRTH(0), x.rl(RXPBSIZE(0)) - 0x6000)
+
 	txpbsize := uint32(0xa0 << 10)
 	x.rs(TXPBSIZE(0), txpbsize)
 	for n := 1; n < 8; n++ {
@@ -1877,11 +2128,6 @@ func (x *x540_t) _dbc_init() {
 	dropen := uint32(1 << 0)
 	v &^= dropen
 	x.rs(PFQDE, v)
-
-	// XXX per queue dropping?
-	//for n := 0; n < 128; n++ {
-	//	x.rs(SRCCTL(n), ...)
-	//}
 
 	x.rs(RTRUP2TC, 0)
 	x.rs(RTTUP2TC, 0)
