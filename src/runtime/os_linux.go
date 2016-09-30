@@ -1784,10 +1784,14 @@ func kernel_fault(tf *[TFSIZE]uintptr) {
 func trap(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
 
-	// XXX XXX XXX XXX make sure this can't clobber SSE regs.
 	if trapno == TRAP_NMI {
+		// prevent SSE corruption: set TS in cr0 to make sure SSE
+		// instructions generate a fault
+		ts := uintptr(1 << 3)
+		Lcr0(Rcr0() | ts)
 		perfgather(tf)
 		perfmask()
+		Lcr0(Rcr0() &^ ts)
 		_trapret(tf)
 	}
 
@@ -1809,12 +1813,12 @@ func trap(tf *[TFSIZE]uintptr) {
 		}
 	}
 
-	// don't add code before FPU context saving unless you've thought very
-	// carefully! it is easy to accidentally and silently corrupt FPU state
-	// (ie calling memmove indirectly by assignment of large datatypes)
-	// before it is saved below.
+	// don't add code before FPU/SSE/MMX context saving unless you've
+	// thought very carefully! it is easy to accidentally and silently
+	// corrupt SSE state (ie calling memmove indirectly by assignment of
+	// large datatypes) before it is saved below.
 
-	// save FPU state immediately before we clobber it
+	// save SSE state immediately before we clobber it
 	if ct != nil {
 		// if in user mode, save to user buffers and make it look like
 		// Userrun returned.

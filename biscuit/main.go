@@ -2765,8 +2765,8 @@ func findbm() {
 	//} else {
 	//	aplim = 7
 	//}
-	aplim := 7
-	cpus_start(aplim, aplim)
+	al := 7
+	cpus_start(al, al)
 
 	ch := make(chan bool)
 	times := uint64(0)
