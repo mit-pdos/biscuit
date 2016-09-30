@@ -31,10 +31,20 @@ const(
 	IRQ_BASE	= 32
 	IRQ_KBD		= 1
 	IRQ_COM1	= 4
-	IRQ_LAST	= IRQ_BASE + 24
 
 	INT_KBD		= IRQ_BASE + IRQ_KBD
 	INT_COM1	= IRQ_BASE + IRQ_COM1
+
+	INT_MSI0	= 56
+	INT_MSI1	= 57
+	INT_MSI2	= 58
+	INT_MSI3	= 59
+	INT_MSI4	= 60
+	INT_MSI5	= 61
+	INT_MSI6	= 62
+	INT_MSI7	= 63
+
+	IRQ_LAST	= INT_MSI7
 )
 
 // initialized by disk attach functions
@@ -73,6 +83,11 @@ func trapstub(tf *[TFSIZE]uintptr) {
 		// in the runtime...
 		irqno := int(trapno - IRQ_BASE)
 		apic.irq_mask(irqno)
+	case INT_MSI0, INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5,
+	    INT_MSI6, INT_MSI7:
+		// MSI dispatch doesn't use the IO APIC, thus no need for
+		// irq_mask
+		runtime.IRQwake(uint(trapno))
 	default:
 		// unexpected IRQ
 		runtime.Pnum(int(trapno))
@@ -82,9 +97,9 @@ func trapstub(tf *[TFSIZE]uintptr) {
 	}
 }
 
-func trap_disk(irq uint) {
+func trap_disk(intn uint) {
 	for {
-		runtime.IRQsched(irq)
+		runtime.IRQsched(intn)
 
 		// is this a disk int?
 		if !disk.intr() {
@@ -95,9 +110,9 @@ func trap_disk(irq uint) {
 	}
 }
 
-func trap_cons(irq uint, ch chan bool) {
+func trap_cons(intn uint, ch chan bool) {
 	for {
-		runtime.IRQsched(irq)
+		runtime.IRQsched(intn)
 		ch <- true
 	}
 }
@@ -960,7 +975,8 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.name, intno,
 			    tf[TF_RIP])
 			sys_exit(p, tid, SIGNALED | mkexitsig(4))
-		case TLBSHOOT, INT_KBD, INT_COM1, INT_DISK:
+		case TLBSHOOT, INT_KBD, INT_COM1, INT_DISK, INT_MSI0, INT_MSI1,
+		    INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6, INT_MSI7:
 			// XXX: shouldn't interrupt user program execution...
 		default:
 			panic(fmt.Sprintf("weird trap: %d", intno))
@@ -2706,17 +2722,16 @@ func main() {
 	dmap_init()
 	perfsetup()
 
-	// control CPUs
-	aplim := 7
+	// must come before any irq_unmask()s
+	runtime.Install_traphandler(trapstub)
 
 	//pci_dump()
 	ncpu := attach_devs()
 
-	// must come before any irq_unmask()s
-	runtime.Install_traphandler(trapstub)
-
 	kbd_init()
 
+	// control CPUs
+	aplim := 7
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 

@@ -924,10 +924,7 @@ func Xfp()
 func Xve()
 func Xtimer()
 func Xspur()
-func Xyield()
-func Xsyscall()
 func Xtlbshoot()
-func Xsigret()
 func Xperfmask()
 func Xirq1()
 func Xirq2()
@@ -952,6 +949,14 @@ func Xirq20()
 func Xirq21()
 func Xirq22()
 func Xirq23()
+func Xmsi0()
+func Xmsi1()
+func Xmsi2()
+func Xmsi3()
+func Xmsi4()
+func Xmsi5()
+func Xmsi6()
+func Xmsi7()
 
 type idte_t struct {
 	baselow	uint16
@@ -1010,41 +1015,47 @@ func int_setup() {
 	int_set(19,  Xfp,  0)
 	int_set(20,  Xve,  0)
 
-	// interrupts
-	irqbase := 32
-	int_set(irqbase+ 0,  Xtimer,  1)
-	int_set(irqbase+ 1,  Xirq1,   1)
-	int_set(irqbase+ 2,  Xirq2,   1)
-	int_set(irqbase+ 3,  Xirq3,   1)
-	int_set(irqbase+ 4,  Xirq4,   1)
-	int_set(irqbase+ 5,  Xirq5,   1)
-	int_set(irqbase+ 6,  Xirq6,   1)
-	int_set(irqbase+ 7,  Xirq7,   1)
-	int_set(irqbase+ 8,  Xirq8,   1)
-	int_set(irqbase+ 9,  Xirq9,   1)
-	int_set(irqbase+10,  Xirq10,  1)
-	int_set(irqbase+11,  Xirq11,  1)
-	int_set(irqbase+12,  Xirq12,  1)
-	int_set(irqbase+13,  Xirq13,  1)
-	int_set(irqbase+14,  Xirq14,  1)
-	int_set(irqbase+15,  Xirq15,  1)
-	int_set(irqbase+16,  Xirq16,  1)
-	int_set(irqbase+17,  Xirq17,  1)
-	int_set(irqbase+18,  Xirq18,  1)
-	int_set(irqbase+19,  Xirq19,  1)
-	int_set(irqbase+20,  Xirq20,  1)
-	int_set(irqbase+21,  Xirq21,  1)
-	int_set(irqbase+22,  Xirq22,  1)
-	int_set(irqbase+23,  Xirq23,  1)
+	// IRQs
+	int_set(32,  Xtimer,  1)
+	int_set(33,  Xirq1,   1)
+	int_set(34,  Xirq2,   1)
+	int_set(35,  Xirq3,   1)
+	int_set(36,  Xirq4,   1)
+	int_set(37,  Xirq5,   1)
+	int_set(38,  Xirq6,   1)
+	int_set(39,  Xirq7,   1)
+	int_set(40,  Xirq8,   1)
+	int_set(41,  Xirq9,   1)
+	int_set(42,  Xirq10,  1)
+	int_set(43,  Xirq11,  1)
+	int_set(44,  Xirq12,  1)
+	int_set(45,  Xirq13,  1)
+	int_set(46,  Xirq14,  1)
+	int_set(47,  Xirq15,  1)
+	int_set(48,  Xirq16,  1)
+	int_set(49,  Xirq17,  1)
+	int_set(50,  Xirq18,  1)
+	int_set(51,  Xirq19,  1)
+	int_set(52,  Xirq20,  1)
+	int_set(53,  Xirq21,  1)
+	int_set(54,  Xirq22,  1)
+	int_set(55,  Xirq23,  1)
 
-	int_set(48,  Xspur,    1)
+	// MSI interrupts
+	int_set(56,  Xmsi0,  1)
+	int_set(57,  Xmsi1,  1)
+	int_set(58,  Xmsi2,  1)
+	int_set(59,  Xmsi3,  1)
+	int_set(60,  Xmsi4,  1)
+	int_set(61,  Xmsi5,  1)
+	int_set(62,  Xmsi6,  1)
+	int_set(63,  Xmsi7,  1)
+
+	int_set(64,  Xspur,    1)
 	// no longer used
-	//int_set(49,  Xyield,   1)
-	//int_set(64,  Xsyscall, 1)
 
 	int_set(70,  Xtlbshoot, 1)
 	// no longer used
-	//int_set(71,  Xsigret,   1)
 	int_set(72,  Xperfmask, 1)
 
 	p := pdesc_t{}
@@ -1694,12 +1705,11 @@ const (
 	TRAP_SYSCALL	= 64
 	TRAP_TIMER	= 32
 	TRAP_DISK	= (32 + 14)
-	TRAP_SPUR	= 48
 	TRAP_YIELD	= 49
+	TRAP_SPUR	= 64
 	TRAP_TLBSHOOT	= 70
 	TRAP_SIGRET	= 71
 	TRAP_PERFMASK	= 72
-	IRQ_BASE	= 32
 )
 
 var threadlock = &Spinlock_t{}
@@ -1882,16 +1892,6 @@ func trap(tf *[TFSIZE]uintptr) {
 		}
 		// yieldy doesn't return
 		yieldy()
-	} else if is_irq(trapno) {
-		if _newtrap != nil {
-			// catch kernel faults that occur while trying to
-			// handle user traps
-			_newtrap(tf)
-		} else {
-			pancake("IRQ without ntrap", trapno)
-		}
-		lap_eoi()
-		sched_resume(ct)
 	} else if is_cpuex(trapno) {
 		// we vet out kernel mode CPU exceptions above must be from
 		// user program. thus return from Userrun() to kernel.
@@ -1904,20 +1904,23 @@ func trap(tf *[TFSIZE]uintptr) {
 		perfmask()
 		sched_resume(ct)
 	} else {
-		pancake("unexpected int", trapno)
+		if _newtrap != nil {
+			// catch kernel faults that occur while trying to
+			// handle user traps
+			_newtrap(tf)
+		} else {
+			pancake("IRQ without ntrap", trapno)
+		}
+		lap_eoi()
+		sched_resume(ct)
 	}
 	// not reached
 	pancake("no returning", 0)
 }
 
 //go:nosplit
-func is_irq(trapno uintptr) bool {
-	return trapno > IRQ_BASE && trapno <= IRQ_BASE + 24
-}
-
-//go:nosplit
 func is_cpuex(trapno uintptr) bool {
-	return trapno < IRQ_BASE
+	return trapno < 32
 }
 
 //go:nosplit
@@ -2050,7 +2053,7 @@ func irqsched_m(gp *g) {
 		nstatus = _Gwaiting
 		gp.waitreason = "waiting for trap"
 		if _irqv.handlers[irq].igp != nil {
-			pancake("igp exists", 0)
+			pancake("igp exists", uintptr(irq))
 		}
 		_irqv.handlers[irq].igp = gp
 		start = false

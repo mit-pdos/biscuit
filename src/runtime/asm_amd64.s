@@ -667,17 +667,6 @@ TEXT fn(SB), NOSPLIT, $0-0;		\
 	RET
 // pops are to silence plan9 assembler warnings
 
-#define IH_IRQ(num, fn)			\
-TEXT fn(SB), NOSPLIT, $0-0;		\
-	PUSHQ	$0;			\
-	PUSHQ	$(32 + num);		\
-	JMP	alltraps(SB);		\
-	BYTE	$0xeb;			\
-	BYTE	$0xfe;			\
-	POPQ	AX;			\
-	POPQ	AX;			\
-	RET
-
 #define IH_EC(num, fn)			\
 TEXT fn(SB), NOSPLIT, $0-0;		\
 	PUSHQ	$num;			\
@@ -708,39 +697,46 @@ IH_EC  (17,·Xac )
 IH_NOEC(18,·Xmc )
 IH_NOEC(19,·Xfp )
 IH_NOEC(20,·Xve )
-IH_NOEC(32,·Xtimer )
-IH_NOEC(48,·Xspur )
-IH_NOEC(49,·Xyield )
-IH_NOEC(64,·Xsyscall )
-IH_NOEC(70,·Xtlbshoot )
-IH_NOEC(71,·Xsigret )
-IH_NOEC(72,·Xperfmask )
 
-// irqs
-IH_IRQ( 0,·Xirq0 )
-IH_IRQ( 1,·Xirq1 )
-IH_IRQ( 2,·Xirq2 )
-IH_IRQ( 3,·Xirq3 )
-IH_IRQ( 4,·Xirq4 )
-IH_IRQ( 5,·Xirq5 )
-IH_IRQ( 6,·Xirq6 )
-IH_IRQ( 7,·Xirq7 )
-IH_IRQ( 8,·Xirq8 )
-IH_IRQ( 9,·Xirq9 )
-IH_IRQ(10,·Xirq10 )
-IH_IRQ(11,·Xirq11 )
-IH_IRQ(12,·Xirq12 )
-IH_IRQ(13,·Xirq13 )
-IH_IRQ(14,·Xirq14 )
-IH_IRQ(15,·Xirq15 )
-IH_IRQ(16,·Xirq16 )
-IH_IRQ(17,·Xirq17 )
-IH_IRQ(18,·Xirq18 )
-IH_IRQ(19,·Xirq19 )
-IH_IRQ(20,·Xirq20 )
-IH_IRQ(21,·Xirq21 )
-IH_IRQ(22,·Xirq22 )
-IH_IRQ(23,·Xirq23 )
+// irqs vectors 32-55
+IH_NOEC(32,·Xtimer )
+IH_NOEC(33,·Xirq1 )
+IH_NOEC(34,·Xirq2 )
+IH_NOEC(35,·Xirq3 )
+IH_NOEC(36,·Xirq4 )
+IH_NOEC(37,·Xirq5 )
+IH_NOEC(38,·Xirq6 )
+IH_NOEC(39,·Xirq7 )
+IH_NOEC(40,·Xirq8 )
+IH_NOEC(41,·Xirq9 )
+IH_NOEC(42,·Xirq10 )
+IH_NOEC(43,·Xirq11 )
+IH_NOEC(44,·Xirq12 )
+IH_NOEC(45,·Xirq13 )
+IH_NOEC(46,·Xirq14 )
+IH_NOEC(47,·Xirq15 )
+IH_NOEC(48,·Xirq16 )
+IH_NOEC(49,·Xirq17 )
+IH_NOEC(50,·Xirq18 )
+IH_NOEC(51,·Xirq19 )
+IH_NOEC(52,·Xirq20 )
+IH_NOEC(53,·Xirq21 )
+IH_NOEC(54,·Xirq22 )
+IH_NOEC(55,·Xirq23 )
+
+// MSI interrupts 56-63
+IH_NOEC(56,·Xmsi0 )
+IH_NOEC(57,·Xmsi1 )
+IH_NOEC(58,·Xmsi2 )
+IH_NOEC(59,·Xmsi3 )
+IH_NOEC(60,·Xmsi4 )
+IH_NOEC(61,·Xmsi5 )
+IH_NOEC(62,·Xmsi6 )
+IH_NOEC(63,·Xmsi7 )
+
+IH_NOEC(64,·Xspur )
+IH_NOEC(70,·Xtlbshoot )
+IH_NOEC(72,·Xperfmask )
 
 #define IA32_FS_BASE		$0xc0000100
 #define IA32_GS_BASE		$0xc0000101

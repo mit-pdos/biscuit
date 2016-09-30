@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "runtime"
+import "sync"
 import "sync/atomic"
 import "time"
 import "unsafe"
@@ -973,6 +974,40 @@ func (ap *apic_t) dump() {
 		    "act: %v, deliv: %v, destm: %v, dest: %#x\n", i, vec, m,
 		    t, act, deliv, destmode, dest)
 	}
+}
+
+type msivec_t uint
+
+type msivecs_t struct {
+	sync.Mutex
+	avail	map[msivec_t]bool
+}
+
+var msivecs = msivecs_t{
+	avail: map[msivec_t]bool { 56:true, 57:true, 58:true, 59:true, 60:true,
+	    61:true, 62:true, 63:true},
+}
+
+// allocates an MSI interrupt vecber
+func msi_alloc() msivec_t {
+	msivecs.Lock()
+	defer msivecs.Unlock()
+
+	for i := range msivecs.avail {
+		delete(msivecs.avail, i)
+		return i
+	}
+	panic("no more MSI vecs")
+}
+
+func msi_free(vector msivec_t) {
+	msivecs.Lock()
+	defer msivecs.Unlock()
+
+	if msivecs.avail[vector] {
+		panic("double free")
+	}
+	msivecs.avail[vector] = true
 }
 
 type x540reg_t uint
