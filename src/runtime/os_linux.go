@@ -2120,7 +2120,7 @@ func IRQcheck(pp *p) {
 	}
 
 	// wakeup the goroutine for each received IRQ
-	for i := 0; i < 63; i++ {
+	for i := 0; i < 64; i++ {
 		ibit := uintptr(1 << uint(i))
 		if irqs & ibit != 0 {
 			gp := _irqv.handlers[i].igp

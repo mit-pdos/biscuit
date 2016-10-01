@@ -1300,9 +1300,9 @@ const (
 )
 
 type rxdesc_t struct {
-	hwdesc struct {
-		p_data	*uint64
-		p_hdr	*uint64
+	hwdesc *struct {
+		p_data	uint64
+		p_hdr	uint64
 	}
 	// saved buffer physical addresses since hardware overwrites them once
 	// a packet is received
@@ -1310,33 +1310,34 @@ type rxdesc_t struct {
 	p_hbuf	uint64
 }
 
-func (rd *rxdesc_t) init(pbuf, hbuf uintptr, descva *int) {
+func (rd *rxdesc_t) init(pbuf, hbuf uintptr, hw *int) {
 	rd.p_pbuf = uint64(pbuf)
 	rd.p_hbuf = uint64(hbuf)
-	rd.hwdesc.p_data = (*uint64)(unsafe.Pointer(descva))
-	n := uintptr(unsafe.Pointer(descva)) + 8
-	rd.hwdesc.p_hdr = (*uint64)(unsafe.Pointer(n))
+	rd.hwdesc = (*struct {
+		p_data uint64
+		p_hdr uint64
+	})(unsafe.Pointer(hw))
 }
 
 func (rd *rxdesc_t) ready() {
 	if (rd.p_pbuf | rd.p_hbuf) & 1 != 0 {
 		panic("rx buffers must be word aligned")
 	}
-	*rd.hwdesc.p_data = uint64(rd.p_pbuf)
-	*rd.hwdesc.p_hdr = uint64(rd.p_hbuf)
+	rd.hwdesc.p_data = rd.p_pbuf
+	rd.hwdesc.p_hdr = rd.p_hbuf
 }
 
 func (rd *rxdesc_t) rxdone() bool {
 	dd := uint64(1)
-	return *rd.hwdesc.p_hdr & dd != 0
+	return rd.hwdesc.p_hdr & dd != 0
 }
 
-func (rd *rxdesc_t) pktlen() uintptr {
-	return (uintptr(*rd.hwdesc.p_hdr) >> 32) & 0xffff
+func (rd *rxdesc_t) pktlen() int {
+	return int((rd.hwdesc.p_hdr >> 32) & 0xffff)
 }
 
-func (rd *rxdesc_t) hdrlen() uintptr {
-	return (uintptr(*rd.hwdesc.p_data) >> 21) & 0x3ff
+func (rd *rxdesc_t) hdrlen() int {
+	return int((rd.hwdesc.p_data >> 21) & 0x3ff)
 }
 
 type txdesc_t struct {
@@ -1534,7 +1535,7 @@ func (x *x540_t) _phy_read(preg x540phyreg_t) uint16 {
 	return uint16(ret >> 16)
 }
 
-var dur struct {
+var lockstat struct {
 	sw	int
 	hw	int
 	fw	int
@@ -1584,7 +1585,7 @@ func (x *x540_t) hwlock() {
 		}
 		<- time.After(10*time.Millisecond)
 	}
-	fmt.Printf("lock stats: %v\n", dur)
+	fmt.Printf("lock stats: %v\n", lockstat)
 	panic("hwlock timedout")
 }
 
@@ -1609,22 +1610,22 @@ func (x *x540_t) _hwlock() bool {
 	ret := false
 	v := x.rl(SW_FW_SYNC)
 	if v & hw_nvm != 0 {
-		dur.hw++
+		lockstat.hw++
 		goto out
 	}
 	if v & 0xf != 0 {
-		dur.sw++
+		lockstat.sw++
 		goto out
 	}
 	if !fwdead && v & fwbits != 0 {
-		dur.fw++
+		lockstat.fw++
 		goto out
 	}
 	if v & nvm_up != 0 {
-		dur.nvmup++
+		lockstat.nvmup++
 	}
 	if v & sw_mng != 0 {
-		dur.swmng++
+		lockstat.swmng++
 	}
 	x.rs(SW_FW_SYNC, v | 0xf)
 	ret = true
@@ -1684,6 +1685,45 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 	return a, b
 }
 
+func (x *x540_t) rx_consume() {
+	newtail := x.rl(RDH(0))
+	//dur := newtail
+	if newtail == 0 {
+		newtail = x.rx.ndescs - 1
+	} else {
+		newtail--
+	}
+	tail := x.rl(RDT(0))
+	//x.log("RDH: %v, newtail: %v, tail: %v", dur, newtail, tail)
+	if tail == newtail {
+		// queue is still full?
+		x.log("spurious rx int")
+		return
+	}
+	// make sure the CPU observes the NIC's writeback of the RDH
+	// descriptor; otherwise the CPU's and NIC's writes may race,
+	// overwritting the CPU's (corrupting the rx descriptor)
+	wd := &x.rx.descs[newtail]
+	for !wd.rxdone() {
+		waits++
+	}
+	for tail != newtail {
+		rd := &x.rx.descs[tail]
+		if !rd.rxdone() {
+			panic("wut?")
+		}
+		headersz += rd.hdrlen()
+		pktsz += rd.pktlen()
+		numpkts++
+		rd.ready()
+		tail++
+		if tail == x.rx.ndescs {
+			tail = 0
+		}
+	}
+	x.rs(RDT(0), newtail)
+}
+
 func (x *x540_t) int_handler(vector msivec_t) {
 	rantest := false
 	for {
@@ -1691,9 +1731,12 @@ func (x *x540_t) int_handler(vector msivec_t) {
 
 		// interrupt status register clears on read
 		st := x.rl(EICR)
-		x.log("*** NIC IRQ %#x", st)
+		//x.log("*** NIC IRQ (%v) %#x", irqs, st)
 
-		lsc := uint32(1 << 20)
+		rx     := uint32(1 << 0)
+		//tx     := uint32(1 << 1)
+		rxmiss := uint32(1 << 17)
+		lsc    := uint32(1 << 20)
 		if st & lsc != 0 {
 			// link status change
 			up, speed := x.linkinfo()
@@ -1705,16 +1748,42 @@ func (x *x540_t) int_handler(vector msivec_t) {
 			}
 			if up && !rantest {
 				rantest = true
+				x.tx_test()
 				go func() {
-					x.tx_test()
-					x.rx_test()
+					stirqs := irqs
+					st := time.Now()
+					for {
+						<-time.After(time.Second)
+						nirqs := irqs - stirqs
+						avgh := float64(headersz) / float64(numpkts + 1)
+						avgp := float64(pktsz) / float64(numpkts + 1)
+						drops  := x.rl(QPRDC(0))
+						secs := time.Since(st).Seconds()
+						pps := float64(numpkts) / secs
+						ips := int(float64(nirqs) / secs)
+						fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
+						    "irqs %v (%v/s), avgs (%.3v %.3v)\n",
+						    numpkts, pps, dropints, drops, waits, nirqs,
+						    ips, avgh, avgp)
+					}
 				}()
 			}
+		}
+		if rxmiss & st != 0 {
+			dropints++
+		}
+		if st & rx != 0 {
+			// rearm rx descriptors
+			x.rx_consume()
 		}
 	}
 }
 
 func attach_x540t(vid, did int, t pcitag_t) {
+	if unsafe.Sizeof(*rxdesc_t{}.hwdesc) != 16 ||
+	   unsafe.Sizeof(*txdesc_t{}.hwdesc) != 16 {
+		panic("unexpected padding")
+	}
 
 	b, d, f := breakpcitag(t)
 	fmt.Printf("X540: %x %x (%d:%d:%d)\n", vid, did, b, d, f)
@@ -1843,7 +1912,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		x.rs(EITR(n), 0)
 	}
 
-	// map all 128 rx queues to bit 0 and tx queues to bit 1
+	// map all 128 rx queues to EICR bit 0 and tx queues to EICR bit 1
 	for n := 0; n < 64; n++ {
 		v := uint32(0x81808180)
 		x.rs(IVAR(n), v)
@@ -1939,8 +2008,16 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		v |= desctype
 		x.rs(SRRCTL(0), v)
 
+		for i := range x.rx.descs {
+			x.rx.descs[i].ready()
+		}
+		// make last rx descriptor look like a 0 length packet so the
+		// receive path doesn't have to distinguish between an unused
+		// descriptor (the first tail after reset) and used descriptors
+		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_data = 0
+		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_hdr = 1
+
 		x.rs(RDH(0), 0)
-		x.rs(RDT(0), 0)
 
 		// enable this rx queue
 		v = x.rl(RXDCTL(0))
@@ -1949,6 +2026,8 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		x.rs(RXDCTL(0), v)
 		for x.rl(RXDCTL(0)) & qen == 0 {
 		}
+		// must enable queue via RXDCTL.ENABLE before setting RDT
+		x.rs(RDT(0), x.rx.ndescs - 1)
 
 		// enable receive
 		v = x.rl(RXCTRL)
@@ -2049,14 +2128,22 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		//x.log("TX enabled!")
 	}
 
-	// configure interrupts
+	// configure interrupts with throttling
 	x.rs(GPIE, 0)
-	// clear all previous interrupts
+	// set minimum interrupt period to 1.048 ms (the largest possible
+	// period). openbsd's period is 125us. EITR[1-128] are reserved for
+	// MSI-X
+	cnt_wdis := uint32(1 << 31)
+	maxitr := uint32(0x1ff << 3)
+	x.rs(EITR(0), cnt_wdis | maxitr)
+
+	// mode clear all previous interrupts
 	x.rs(EICR, ^uint32(0))
 
 	go x.int_handler(vec)
-	// unmask tx/rx queue interrupts
-	x.rs(EIMS, 3)
+	// unmask tx/rx queue interrupts and link change
+	lsc := uint32(1 << 20)
+	x.rs(EIMS, lsc | 3)
 
 	m := x.mac
 	macs := fmt.Sprintf("%0.2x:%0.2x:%0.2x:%0.2x:%0.2x:%0.2x", m[0], m[1],
@@ -2064,6 +2151,12 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	x.log("attached: MAC %s, rxq %v, txq %v, MSI %v, %vKB", macs,
 	    x.rx.ndescs, x.tx.ndescs, vec, x.pgs << 2)
 }
+
+var numpkts int
+var dropints int
+var waits int
+var headersz int
+var pktsz int
 
 func (x *x540_t) rx_test() {
 	prstat := func(v bool) {
@@ -2102,7 +2195,7 @@ func (x *x540_t) rx_test() {
 		for !rdesc.rxdone() {
 		}
 		eop := uint64(1 << 1)
-		if *rdesc.hwdesc.p_hdr & eop == 0 {
+		if rdesc.hwdesc.p_hdr & eop == 0 {
 			panic("EOP not set")
 		}
 		if x.rl(RDH(0)) != tail {

@@ -51,6 +51,8 @@ const(
 var IRQ_DISK	int = -1
 var INT_DISK	int = -1
 
+var irqs int
+
 // trapstub() cannot do anything that may have side-effects on the runtime
 // (like allocate, fmt.Print, or use panic) since trapstub() runs in interrupt
 // context and thus may run concurrently with code manipulating the same state.
@@ -66,6 +68,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 		for {}
 	}
 
+	irqs++
 	switch trapno {
 	case uintptr(INT_DISK), INT_KBD, INT_COM1:
 		runtime.IRQwake(uint(trapno))
