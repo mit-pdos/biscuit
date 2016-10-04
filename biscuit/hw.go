@@ -1332,6 +1332,11 @@ func (rd *rxdesc_t) rxdone() bool {
 	return rd.hwdesc.p_hdr & dd != 0
 }
 
+func (rd *rxdesc_t) eop() bool {
+	eop := uint64(1 << 1)
+	return rd.hwdesc.p_hdr & eop != 0
+}
+
 func (rd *rxdesc_t) pktlen() int {
 	return int((rd.hwdesc.p_hdr >> 32) & 0xffff)
 }
@@ -1448,12 +1453,15 @@ type x540_t struct {
 	bar0	[]uint32
 	_locked	bool
 	tx struct {
+		sync.Mutex
+		cond	*sync.Cond
 		ndescs	uint32
 		descs	[]txdesc_t
 	}
 	rx struct {
 		ndescs	uint32
 		descs	[]rxdesc_t
+		pkt	[][]uint8
 	}
 	pgs	int
 	linkup	bool
@@ -1466,6 +1474,9 @@ func (x *x540_t) init(t pcitag_t) {
 
 	bar0, l := pci_bar_mem(t, 0)
 	x.bar0 = dmaplen32(bar0, l)
+
+	x.tx.cond = sync.NewCond(&x.tx)
+	x.rx.pkt = make([][]uint8, 0, 30)
 
 	v := pci_read(t, 0x4, 2)
 	memen := 1 << 1
@@ -1708,9 +1719,20 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 	return a, b
 }
 
-// returns true if buf was enqueued to be trasmitted. buf's contents are copied
-// to the DMA buffer, so buf's memory can be reused/freed
-func (x *x540_t) tx_enqueue(buf []uint8) bool {
+// returns after buf is enqueued to be trasmitted. buf's contents are copied to
+// the DMA buffer, so buf's memory can be reused/freed
+func (x *x540_t) tx_wait(buf []uint8) {
+	x.tx.Lock()
+	for !x._tx_enqueue(buf) {
+		x.tx.cond.Wait()
+	}
+	x.tx.cond.Signal()
+	x.tx.Unlock()
+}
+
+// caller must hold x.tx lock. returns true if buf was enqueued to be
+// trasmitted.
+func (x *x540_t) _tx_enqueue(buf []uint8) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -1768,16 +1790,15 @@ func (x *x540_t) tx_enqueue(buf []uint8) bool {
 }
 
 func (x *x540_t) rx_consume() {
-	newtail := x.rl(RDH(0))
-	//dur := newtail
-	if newtail == 0 {
-		newtail = x.rx.ndescs - 1
+	tailend := x.rl(RDH(0))
+	//dur := tailend
+	if tailend == 0 {
+		tailend = x.rx.ndescs - 1
 	} else {
-		newtail--
+		tailend--
 	}
 	tail := x.rl(RDT(0))
-	//x.log("RDH: %v, newtail: %v, tail: %v", dur, newtail, tail)
-	if tail == newtail {
+	if tail == tailend {
 		// queue is still full?
 		x.log("spurious rx int")
 		return
@@ -1785,32 +1806,45 @@ func (x *x540_t) rx_consume() {
 	// make sure the CPU observes the NIC's writeback of the RDH
 	// descriptor; otherwise the CPU's and NIC's writes may race,
 	// overwritting the CPU's (corrupting the rx descriptor)
-	wd := &x.rx.descs[newtail]
+	wd := &x.rx.descs[tailend]
 	for !wd.rxdone() {
 		waits++
 	}
-	for tail != newtail {
+	newtail := tail
+	otail := tail
+	tlen := 0
+	pkt := x.rx.pkt[0:0]
+	for tail != tailend {
 		rd := &x.rx.descs[tail]
 		if !rd.rxdone() {
 			panic("wut?")
 		}
-		if uintptr(rd.pktlen()) >= ARPLEN {
-			buf := dmaplen(uintptr(rd.p_pbuf), rd.pktlen())
-			arp := htons(0x0806)
-			etype := uint16(readn(buf, 2, 12))
-			arpop := uint16(readn(buf, 2, 20))
-			reply := htons(2)
-			if etype == arp && arpop == reply {
-				arp_finish(buf)
-			}
+		// packet may span multiple descriptors (only for RSC?)
+		buf := dmaplen(uintptr(rd.p_pbuf), rd.pktlen())
+		tlen += rd.pktlen()
+		pkt = append(pkt, buf)
+		if rd.eop() {
+			net_start(pkt, tlen)
+			numpkts++
+			pkt = x.rx.pkt[0:0]
+			tlen = 0
+			newtail = (newtail + 1) % x.rx.ndescs
 		}
-		headersz += rd.hdrlen()
-		pktsz += rd.pktlen()
-		numpkts++
-		rd.ready()
 		tail++
 		if tail == x.rx.ndescs {
 			tail = 0
+		}
+	}
+	// only reset descriptors for full packets
+	for otail != newtail {
+		rd := &x.rx.descs[otail]
+		if !rd.rxdone() {
+			panic("wut?")
+		}
+		rd.ready()
+		otail++
+		if otail == x.rx.ndescs {
+			otail = 0
 		}
 	}
 	x.rs(RDT(0), newtail)
@@ -1826,7 +1860,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 		//x.log("*** NIC IRQ (%v) %#x", irqs, st)
 
 		rx     := uint32(1 << 0)
-		//tx     := uint32(1 << 1)
+		tx     := uint32(1 << 1)
 		rxmiss := uint32(1 << 17)
 		lsc    := uint32(1 << 20)
 		if st & lsc != 0 {
@@ -1850,43 +1884,57 @@ func (x *x540_t) int_handler(vector msivec_t) {
 			// rearm rx descriptors
 			x.rx_consume()
 		}
+		if st & tx != 0 {
+			// wakeup threads waiting for tx queue buffer
+			x.tx.Lock()
+			x.tx.cond.Signal()
+			x.tx.Unlock()
+		}
 	}
 }
 
 func (x *x540_t) tester() {
-	//const paylen = unsafe.Sizeof(txdata_t{})
-	//fakepacket := (*[paylen]uint8)(unsafe.Pointer(&txdata))[:]
-
 	stirqs := irqs
 	st := time.Now()
 	send := false
+	ai := uint32(0)
+	lpr := time.Now()
 	for {
 		<-time.After(time.Second)
 		nirqs := irqs - stirqs
-		avgh := float64(headersz) / float64(numpkts + 1)
-		avgp := float64(pktsz) / float64(numpkts + 1)
 		drops  := x.rl(QPRDC(0))
 		secs := time.Since(st).Seconds()
 		pps := float64(numpkts) / secs
 		ips := int(float64(nirqs) / secs)
 		fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
-		    "irqs %v (%v/s), avgs (%.3v %.3v)\n",
-		    numpkts, pps, dropints, drops, waits, nirqs,
-		    ips, avgh, avgp)
-
-		//if !x.tx_enqueue(fakepacket) {
-		//	panic("tx q full?")
-		//}
+		    "irqs %v (%v/s)\n", numpkts, pps, dropints, drops,
+		    waits, nirqs, ips)
 
 		send = !send
 		if send {
+			ai++
+			if ai == 255 {
+				ai = 1
+			}
 			// 18.26.5.49 (bhw)
 			me := uint32(0x121a0531)
 			// 18.26.5.50 (rtm)
 			//dip := uint32(0x121a0532)
 			// 18.26.5.48 (bterm)
-			dip := uint32(0x121a0530)
+			//dip := uint32(0x121a0530)
+			dip := uint32(0x121a0500)
+			dip += ai
 			arp_start(dip, x.mac[:], me, x)
+		}
+
+		if time.Since(lpr) > 7*time.Second {
+			m := arptbl.m
+			fmt.Printf("ARP table:\n")
+			for ip, mac := range m {
+				fmt.Printf("    %s -> %s\n", ip2str(ip),
+				    mac2str(mac[:]))
+			}
+			lpr = time.Now()
 		}
 	}
 }
@@ -2128,7 +2176,8 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		// descriptor (the first tail after reset) and used descriptors
 		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_data = 0
 		dd := uint64(1)
-		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_hdr = dd
+		eop := uint64(1 << 1)
+		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_hdr = dd | eop
 
 		x.rs(RDH(0), 0)
 
@@ -2258,9 +2307,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	lsc := uint32(1 << 20)
 	x.rs(EIMS, lsc | 3)
 
-	m := x.mac
-	macs := fmt.Sprintf("%0.2x:%0.2x:%0.2x:%0.2x:%0.2x:%0.2x", m[0], m[1],
-	    m[2], m[3], m[4], m[5])
+	macs := mac2str(x.mac[:])
 	x.log("attached: MAC %s, rxq %v, txq %v, MSI %v, %vKB", macs,
 	    x.rx.ndescs, x.tx.ndescs, vec, x.pgs << 2)
 }
@@ -2268,8 +2315,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 var numpkts int
 var dropints int
 var waits int
-var headersz int
-var pktsz int
 
 func (x *x540_t) rx_test() {
 	prstat := func(v bool) {

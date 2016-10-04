@@ -22,6 +22,16 @@ func sl2ip(sl *[4]uint8) uint32 {
 	return ret
 }
 
+func ip2str(ip uint32) string {
+	return fmt.Sprintf("%d.%d.%d.%d", ip >> 24, uint8(ip >> 16),
+	    uint8(ip >> 8), uint8(ip))
+}
+
+func mac2str(m []uint8) string {
+	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2],
+	    m[3], m[4], m[5])
+}
+
 func htons(v uint16) uint16 {
 	return v >> 8 | (v & 0xff) << 8
 }
@@ -129,32 +139,43 @@ func arp_start(ip uint32, smac []uint8, sip uint32, nic *x540_t) {
 	var arp arpv4_t
 	arp.init_req(smac, sip, ip)
 	buf := arp.bytes()
-	if !nic.tx_enqueue(buf) {
-		panic("no imp")
-	}
+	nic.tx_wait(buf)
 }
 
 func arp_finish(buf []uint8) {
 	if uintptr(len(buf)) < ARPLEN {
-		fmt.Printf("short buf\n")
-		return
+		panic("short buf")
 	}
 	arp := (*arpv4_t)(unsafe.Pointer(&buf[0]))
 	reply := htons(2)
 	if arp.oper != reply {
-		fmt.Printf("not an arp reply\n")
-		return
+		panic("not an arp reply")
 	}
 
 	ip := sl2ip(&arp.spa)
 	mac := &arp.sha
-	sip := fmt.Sprintf("%d.%d.%d.%d", ip >> 24, uint8(ip >> 16),
-	    uint8(ip >> 8), uint8(ip))
-	fmt.Printf("Resolved %s -> %02x\n", sip, mac)
-	if omac, ok := arp_lookup(ip); ok {
-		fmt.Printf("already have arp entry for %s (%02x)\n", sip, omac)
-	} else {
+	if _, ok := arp_lookup(ip); !ok {
+		fmt.Printf("Resolved %s -> %02x\n", ip2str(ip), mac)
 		arp_add(ip, mac)
+	}
+}
+
+// network stack processing begins here
+func net_start(pkt [][]uint8, tlen int) {
+	if tlen == 0 {
+		return
+	}
+
+	// header should always be fully contained in the first slice
+	buf := pkt[0]
+	if uintptr(len(buf)) >= ARPLEN {
+		arp := htons(0x0806)
+		etype := uint16(readn(buf, 2, 12))
+		arpop := uint16(readn(buf, 2, 20))
+		reply := htons(2)
+		if etype == arp && arpop == reply {
+			arp_finish(buf)
+		}
 	}
 }
 
