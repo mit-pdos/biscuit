@@ -1873,8 +1873,10 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				x.log("link down")
 			}
 			if up && !rantest {
+				nic = x
 				rantest = true
-				go x.tester()
+				go x.tester1()
+				go x.tester2()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -1893,12 +1895,9 @@ func (x *x540_t) int_handler(vector msivec_t) {
 	}
 }
 
-func (x *x540_t) tester() {
+func (x *x540_t) tester1() {
 	stirqs := irqs
 	st := time.Now()
-	send := false
-	ai := uint32(0)
-	lpr := time.Now()
 	for {
 		<-time.After(time.Second)
 		nirqs := irqs - stirqs
@@ -1909,32 +1908,42 @@ func (x *x540_t) tester() {
 		fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
 		    "irqs %v (%v/s)\n", numpkts, pps, dropints, drops,
 		    waits, nirqs, ips)
+	}
+}
 
-		send = !send
-		if send {
-			ai++
-			if ai == 255 {
-				ai = 1
-			}
-			// 18.26.5.49 (bhw)
-			me := uint32(0x121a0531)
-			// 18.26.5.50 (rtm)
-			//dip := uint32(0x121a0532)
-			// 18.26.5.48 (bterm)
-			//dip := uint32(0x121a0530)
-			dip := uint32(0x121a0500)
-			dip += ai
-			arp_start(dip, x.mac[:], me, x)
+func (x *x540_t) tester2() {
+	ai := uint32(0)
+	lpr := time.Now()
+	for {
+		<-time.After(2*time.Second)
+		ai++
+		if ai == 255 {
+			ai = 1
 		}
+		dip := uint32(0x121a0500)
+		dip += ai
+		st := time.Now()
+		mac, ok := arp_resolve(dip)
+		took := time.Since(st).Seconds()
 
+		if ok {
+			fmt.Printf("Resolved %s (%s) in %.3v s\n", ip2str(dip),
+			    mac2str(mac[:]), took)
+		} else {
+			fmt.Printf("Timeout for %s (%.3v s)\n", ip2str(dip),
+			    took)
+		}
 		if time.Since(lpr) > 7*time.Second {
-			m := arptbl.m
+			arptbl.Lock()
 			fmt.Printf("ARP table:\n")
-			for ip, mac := range m {
-				fmt.Printf("    %s -> %s\n", ip2str(ip),
-				    mac2str(mac[:]))
+			now := time.Now()
+			for ip, ar := range arptbl.m {
+				mleft := ar.expire.Sub(now).Minutes()
+				fmt.Printf("    %s -> %s (%.4v)\n", ip2str(ip),
+				    mac2str(ar.mac[:]), mleft)
 			}
 			lpr = time.Now()
+			arptbl.Unlock()
 		}
 	}
 }

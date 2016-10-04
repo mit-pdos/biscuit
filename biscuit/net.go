@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 import "sync"
-import "sync/atomic"
+import "time"
 import "unsafe"
 
 // convert little- to big-endian. also, arpv4_t gets padded due to tpa if tpa
@@ -107,42 +107,134 @@ func (ar *arpv4_t) bytes() []uint8 {
 }
 
 var arptbl struct {
-	// writer RCU lock
 	sync.Mutex
-	m	map[uint32]mac_t
+	m		map[uint32]*arprec_t
+	enttimeout	time.Duration
+	restimeout	time.Duration
+	// waiters for arp resolution
+	waiters		map[uint32][]chan bool
+}
+
+type arprec_t struct {
+	mac		mac_t
+	expire		time.Time
 }
 
 func arp_add(ip uint32, mac *mac_t) {
 	arptbl.Lock()
 	defer arptbl.Unlock()
 
-	nm := make(map[uint32]mac_t, len(arptbl.m))
+	now := time.Now()
 	for k, v := range arptbl.m {
-		nm[k] = v
+		if v.expire.After(now) {
+			arptbl.m[k] = v
+		}
 	}
-	nm[ip] = *mac
-	// why is this broken?
-	//dst := (*unsafe.Pointer)(unsafe.Pointer(&arptbl.m))
-	//atomic.StorePointer(dst, unsafe.Pointer(&nm))
-	var dur uint32
-	atomic.StoreUint32(&dur, 0)
-	arptbl.m = nm
+	nr := &arprec_t{}
+	nr.expire = time.Now().Add(arptbl.enttimeout)
+	copy(nr.mac[:], mac[:])
+	// don't replace entries in order to mitigate arp spoofing
+	if _, ok := arptbl.m[ip]; !ok {
+		arptbl.m[ip] = nr
+	}
+
+	if wl, ok := arptbl.waiters[ip]; ok {
+		arptbl.waiters[ip] = nil
+		for i := range wl {
+			wl[i] <- true
+		}
+	}
 }
 
-func arp_lookup(ip uint32) (mac_t, bool) {
-	m := arptbl.m
-	a, b := m[ip]
-	return a, b
+func _arp_lookup(ip uint32) (*arprec_t, bool) {
+	ar, ok := arptbl.m[ip]
+	if !ok {
+		return nil, false
+	}
+	if ar.expire.Before(time.Now()) {
+		delete(arptbl.m, ip)
+		return nil, false
+	}
+	return ar, ok
 }
 
-func arp_start(ip uint32, smac []uint8, sip uint32, nic *x540_t) {
+// returns false if resolution timed out
+func arp_resolve(ip uint32) (*mac_t, bool) {
+	if nic == nil {
+		return nil, false
+	}
+
+	arptbl.Lock()
+
+	ar, ok := _arp_lookup(ip)
+	if ok {
+		arptbl.Unlock()
+		return &ar.mac, true
+	}
+
+	// buffered channel so that a wakeup racing with timeout doesn't
+	// eternally block the waker
+	mychan := make(chan bool, 1)
+	// start a new arp request?
+	wl, ok := arptbl.waiters[ip]
+	needstart := !ok
+	if needstart {
+		arptbl.waiters[ip] = []chan bool{mychan}
+		// 18.26.5.49 (bhw)
+		durip := uint32(0x121a0531)
+		_net_arp_start(ip, nic.mac[:], durip, nic)
+	} else {
+		arptbl.waiters[ip] = append(wl, mychan)
+	}
+	arptbl.Unlock()
+
+	var timeout bool
+	select {
+	case <-mychan:
+		timeout = false
+	case <-time.After(arptbl.restimeout):
+		timeout = true
+	}
+
+	arptbl.Lock()
+
+	if timeout {
+		// remove my channel from waiters
+		wl, ok := arptbl.waiters[ip]
+		if ok {
+			for i := range wl {
+				if wl[i] == mychan {
+					copy(wl[i:], wl[i+1:])
+					wl = wl[:len(wl) - 1]
+					break
+				}
+			}
+			if len(wl) == 0 {
+				arptbl.waiters[ip] = nil
+			} else {
+				arptbl.waiters[ip] = wl
+			}
+		}
+		arptbl.Unlock()
+		return nil, false
+	}
+
+	ar, ok = _arp_lookup(ip)
+	if !ok {
+		panic("arp must be set")
+	}
+	arptbl.Unlock()
+	return &ar.mac, true
+}
+
+func _net_arp_start(ip uint32, smac []uint8, sip uint32, nic *x540_t) {
 	var arp arpv4_t
 	arp.init_req(smac, sip, ip)
 	buf := arp.bytes()
 	nic.tx_wait(buf)
 }
 
-func arp_finish(buf []uint8) {
+func _net_arp_finish(buf []uint8) {
 	if uintptr(len(buf)) < ARPLEN {
 		panic("short buf")
 	}
@@ -154,11 +246,10 @@ func arp_finish(buf []uint8) {
 
 	ip := sl2ip(&arp.spa)
 	mac := &arp.sha
-	if _, ok := arp_lookup(ip); !ok {
-		fmt.Printf("Resolved %s -> %02x\n", ip2str(ip), mac)
-		arp_add(ip, mac)
-	}
+	arp_add(ip, mac)
 }
+
+var nic *x540_t
 
 // network stack processing begins here
 func net_start(pkt [][]uint8, tlen int) {
@@ -174,7 +265,7 @@ func net_start(pkt [][]uint8, tlen int) {
 		arpop := uint16(readn(buf, 2, 20))
 		reply := htons(2)
 		if etype == arp && arpop == reply {
-			arp_finish(buf)
+			_net_arp_finish(buf)
 		}
 	}
 }
@@ -183,4 +274,13 @@ func netchk() {
 	if unsafe.Sizeof(arpv4_t{}) != 42 || ARPLEN != 42 {
 		panic("arp bad size")
 	}
+}
+
+func net_init() {
+	netchk()
+
+	arptbl.m = make(map[uint32]*arprec_t)
+	arptbl.waiters = make(map[uint32][]chan bool)
+	arptbl.enttimeout = 20*time.Minute
+	arptbl.restimeout = 5*time.Second
 }
