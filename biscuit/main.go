@@ -2721,6 +2721,7 @@ func main() {
 	fmt.Printf("  %v MB of physical memory\n", pmem >> 20)
 
 	cpuchk()
+	netchk()
 
 	dmap_init()
 	perfsetup()

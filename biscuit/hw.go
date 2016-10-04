@@ -1370,27 +1370,39 @@ func (td *txdesc_t) ctx_start() {
 	// leave IDX zero
 }
 
-func (td *txdesc_t) data_start(src []uint8) {
-	paylen := uint64(len(src))
-	if paylen > td.bufsz {
-		panic("no imp")
-	}
+// returns number of bytes consumed
+func (td *txdesc_t) data_continue(src []uint8) int {
 	td.ctxt = false
 	dst := dmaplen(uintptr(td.p_buf), int(td.bufsz))
-	copy(dst, src)
+	paylen := uint64(copy(dst, src))
+
+	// does this descriptor contain the end of the packet?
+	last := false
+	if len(src[paylen:]) == 0 {
+		last = true
+	}
 
 	td.hwdesc.p_addr = td.p_buf
 	// DTYP = 0011b
 	td.hwdesc.rest = 0x3 << 20
 	// DEXT = 1
 	td.hwdesc.rest |= 1 << 29
-	// RS, EOP, ICFS = 1
 	rs   := uint64(1 << 27)
 	eop  := uint64(1 << 24)
-	icfs := uint64(1 << 25)
-	td.hwdesc.rest |= icfs | eop | rs
+	ifcs := uint64(1 << 25)
+	td.hwdesc.rest |= ifcs
+	if last {
+		td.hwdesc.rest |= eop | rs
+	}
 	td._dtalen(paylen)
-	td._paylen(paylen)
+	return int(paylen)
+}
+
+// returns number of bytes consumed
+func (td *txdesc_t) data_start(src []uint8) int {
+	ret := td.data_continue(src)
+	td._paylen(uint64(len(src)))
+	return ret
 }
 
 func (td *txdesc_t) _dtalen(v uint64) {
@@ -1418,6 +1430,17 @@ func (td *txdesc_t) txdone() bool {
 	}
 	dd := uint64(1 << 32)
 	return td.hwdesc.rest & dd != 0
+}
+
+// if hw may writeback this descriptor, wait until the CPU observes the hw's
+// write
+func (td *txdesc_t) wbwait() {
+	rs   := uint64(1 << 27)
+	if td.hwdesc.rest & rs != 0 {
+		for !td.txdone() {
+			waits++
+		}
+	}
 }
 
 type x540_t struct {
@@ -1685,6 +1708,65 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 	return a, b
 }
 
+// returns true if buf was enqueued to be trasmitted. buf's contents are copied
+// to the DMA buffer, so buf's memory can be reused/freed
+func (x *x540_t) tx_enqueue(buf []uint8) bool {
+	if len(buf) == 0 {
+		panic("wut")
+	}
+	end := x.rl(TDH(0))
+	if end == 0 {
+		end = x.tx.ndescs - 1
+	} else {
+		end--
+	}
+	tail := x.rl(TDT(0))
+	// make sure buf can fit
+	newtail := tail
+	need := len(buf)
+	for newtail != end && need != 0 {
+		td := &x.tx.descs[newtail]
+		bs := int(td.bufsz)
+		if need <= bs {
+			need = 0
+		} else {
+			need -= bs
+		}
+		newtail++
+		if newtail == x.rx.ndescs {
+			newtail = 0
+		}
+	}
+	if need != 0 {
+		// not enough room
+		return false
+	}
+	// the first descriptors are special
+	fd := &x.tx.descs[tail]
+	fd.wbwait()
+	did := fd.data_start(buf)
+	buf = buf[did:]
+	tail++
+	if tail == x.rx.ndescs {
+		tail = 0
+	}
+	for len(buf) != 0 {
+		td := &x.tx.descs[tail]
+		td.wbwait()
+		did := td.data_continue(buf)
+		buf = buf[did:]
+		tail++
+		if tail == x.rx.ndescs {
+			tail = 0
+		}
+	}
+	if tail != newtail {
+		panic("size miscalculated")
+	}
+	x.rs(TDT(0), newtail)
+	return true
+}
+
 func (x *x540_t) rx_consume() {
 	newtail := x.rl(RDH(0))
 	//dur := newtail
@@ -1711,6 +1793,16 @@ func (x *x540_t) rx_consume() {
 		rd := &x.rx.descs[tail]
 		if !rd.rxdone() {
 			panic("wut?")
+		}
+		if uintptr(rd.pktlen()) >= ARPLEN {
+			buf := dmaplen(uintptr(rd.p_pbuf), rd.pktlen())
+			arp := htons(0x0806)
+			etype := uint16(readn(buf, 2, 12))
+			arpop := uint16(readn(buf, 2, 20))
+			reply := htons(2)
+			if etype == arp && arpop == reply {
+				arp_finish(buf)
+			}
 		}
 		headersz += rd.hdrlen()
 		pktsz += rd.pktlen()
@@ -1748,25 +1840,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 			}
 			if up && !rantest {
 				rantest = true
-				x.tx_test()
-				go func() {
-					stirqs := irqs
-					st := time.Now()
-					for {
-						<-time.After(time.Second)
-						nirqs := irqs - stirqs
-						avgh := float64(headersz) / float64(numpkts + 1)
-						avgp := float64(pktsz) / float64(numpkts + 1)
-						drops  := x.rl(QPRDC(0))
-						secs := time.Since(st).Seconds()
-						pps := float64(numpkts) / secs
-						ips := int(float64(nirqs) / secs)
-						fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
-						    "irqs %v (%v/s), avgs (%.3v %.3v)\n",
-						    numpkts, pps, dropints, drops, waits, nirqs,
-						    ips, avgh, avgp)
-					}
-				}()
+				go x.tester()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -1775,6 +1849,44 @@ func (x *x540_t) int_handler(vector msivec_t) {
 		if st & rx != 0 {
 			// rearm rx descriptors
 			x.rx_consume()
+		}
+	}
+}
+
+func (x *x540_t) tester() {
+	//const paylen = unsafe.Sizeof(txdata_t{})
+	//fakepacket := (*[paylen]uint8)(unsafe.Pointer(&txdata))[:]
+
+	stirqs := irqs
+	st := time.Now()
+	send := false
+	for {
+		<-time.After(time.Second)
+		nirqs := irqs - stirqs
+		avgh := float64(headersz) / float64(numpkts + 1)
+		avgp := float64(pktsz) / float64(numpkts + 1)
+		drops  := x.rl(QPRDC(0))
+		secs := time.Since(st).Seconds()
+		pps := float64(numpkts) / secs
+		ips := int(float64(nirqs) / secs)
+		fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
+		    "irqs %v (%v/s), avgs (%.3v %.3v)\n",
+		    numpkts, pps, dropints, drops, waits, nirqs,
+		    ips, avgh, avgp)
+
+		//if !x.tx_enqueue(fakepacket) {
+		//	panic("tx q full?")
+		//}
+
+		send = !send
+		if send {
+			// 18.26.5.49 (bhw)
+			me := uint32(0x121a0531)
+			// 18.26.5.50 (rtm)
+			//dip := uint32(0x121a0532)
+			// 18.26.5.48 (bterm)
+			dip := uint32(0x121a0530)
+			arp_start(dip, x.mac[:], me, x)
 		}
 	}
 }
@@ -1942,10 +2054,10 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		// XXX enable debugging features: store bad packets, unicast
 		// promiscuous, and broadcast accept
 		v := x.rl(FCTRL)
-		sbp := uint32(1 << 1)
-		upe := uint32(1 << 9)
+		//sbp := uint32(1 << 1)
+		//upe := uint32(1 << 9)
 		bam := uint32(1 << 10)
-		v |= sbp | upe | bam
+		v |= bam
 		x.rs(FCTRL, v)
 
 		v = x.rl(RXCSUM)
@@ -2015,7 +2127,8 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		// receive path doesn't have to distinguish between an unused
 		// descriptor (the first tail after reset) and used descriptors
 		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_data = 0
-		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_hdr = 1
+		dd := uint64(1)
+		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_hdr = dd
 
 		x.rs(RDH(0), 0)
 
@@ -2098,8 +2211,8 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		// number of transmit descriptors per cacheline, as per
 		// 7.2.3.4.1.
 		tdcl := uint32(64/tdescsz)
-		// number of internal NIC descriptor buffers
-		nicdescs := uint32(64)
+		// number of internal NIC descriptor buffers 7.2.1.2
+		nicdescs := uint32(40)
 		pthresh := nicdescs - tdcl
 		hthresh := tdcl
 		wthresh := uint32(0)
