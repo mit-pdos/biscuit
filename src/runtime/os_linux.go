@@ -1512,7 +1512,7 @@ func lapic_setup(calibrate bool) {
 	maskint := uint32(1 << 16)
 	// mask cmci, lint[01], error, perf counters, and thermal sensor
 	wlap(LVCMCI,    maskint)
-	// unmask LINT0 and LINT1. soon, i will use IO APIC instead.
+	// unmask LINT0 and LINT1
 	wlap(LVINT0,    rlap(LVINT0) &^ maskint)
 	wlap(LVINT1,    rlap(LVINT1) &^ maskint)
 	wlap(LVERROR,   maskint)

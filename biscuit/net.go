@@ -126,8 +126,8 @@ func arp_add(ip uint32, mac *mac_t) {
 
 	now := time.Now()
 	for k, v := range arptbl.m {
-		if v.expire.After(now) {
-			arptbl.m[k] = v
+		if v.expire.Before(now) {
+			delete(arptbl.m, k)
 		}
 	}
 	nr := &arprec_t{}
@@ -139,7 +139,7 @@ func arp_add(ip uint32, mac *mac_t) {
 	}
 
 	if wl, ok := arptbl.waiters[ip]; ok {
-		arptbl.waiters[ip] = nil
+		delete(arptbl.waiters, ip)
 		for i := range wl {
 			wl[i] <- true
 		}
@@ -161,13 +161,15 @@ func _arp_lookup(ip uint32) (*arprec_t, bool) {
 // returns false if resolution timed out
 func arp_resolve(ip uint32) (*mac_t, bool) {
 	if nic == nil {
-		return nil, false
+		panic("nil nic")
 	}
 
 	arptbl.Lock()
 
 	ar, ok := _arp_lookup(ip)
 	if ok {
+		// found existing entry. update expire.
+		ar.expire = time.Now().Add(arptbl.enttimeout)
 		arptbl.Unlock()
 		return &ar.mac, true
 	}
@@ -210,7 +212,7 @@ func arp_resolve(ip uint32) (*mac_t, bool) {
 				}
 			}
 			if len(wl) == 0 {
-				arptbl.waiters[ip] = nil
+				delete(arptbl.waiters, ip)
 			} else {
 				arptbl.waiters[ip] = wl
 			}

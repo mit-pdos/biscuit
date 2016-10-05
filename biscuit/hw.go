@@ -1915,13 +1915,14 @@ func (x *x540_t) tester2() {
 	ai := uint32(0)
 	lpr := time.Now()
 	for {
-		<-time.After(2*time.Second)
+		//<-time.After(2*time.Second)
 		ai++
 		if ai == 255 {
 			ai = 1
 		}
 		dip := uint32(0x121a0500)
 		dip += ai
+		//dip := uint32(0x121a0530)
 		st := time.Now()
 		mac, ok := arp_resolve(dip)
 		took := time.Since(st).Seconds()
@@ -1939,8 +1940,8 @@ func (x *x540_t) tester2() {
 			now := time.Now()
 			for ip, ar := range arptbl.m {
 				mleft := ar.expire.Sub(now).Minutes()
-				fmt.Printf("    %s -> %s (%.4v)\n", ip2str(ip),
-				    mac2str(ar.mac[:]), mleft)
+				fmt.Printf("    %s -> %s (%.4v m)\n",
+				    ip2str(ip), mac2str(ar.mac[:]), mleft)
 			}
 			lpr = time.Now()
 			arptbl.Unlock()
