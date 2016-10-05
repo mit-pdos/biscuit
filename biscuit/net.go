@@ -2,27 +2,31 @@ package main
 
 import "fmt"
 import "sync"
+import "sync/atomic"
+import "sort"
 import "time"
 import "unsafe"
 
+type ip4_t uint32
+
 // convert little- to big-endian. also, arpv4_t gets padded due to tpa if tpa
 // is a uint32 instead of a byte array.
-func ip2sl(sl *[4]uint8, ip uint32) {
+func ip2sl(sl *[4]uint8, ip ip4_t) {
 	sl[0] = uint8(ip >> 24)
 	sl[1] = uint8(ip >> 16)
 	sl[2] = uint8(ip >> 8)
 	sl[3] = uint8(ip >> 0)
 }
 
-func sl2ip(sl *[4]uint8) uint32 {
-	ret := uint32(sl[0]) << 24
-	ret |= uint32(sl[1]) << 16
-	ret |= uint32(sl[2]) << 8
-	ret |= uint32(sl[3]) << 0
+func sl2ip(sl *[4]uint8) ip4_t {
+	ret := ip4_t(sl[0]) << 24
+	ret |= ip4_t(sl[1]) << 16
+	ret |= ip4_t(sl[2]) << 8
+	ret |= ip4_t(sl[3]) << 0
 	return ret
 }
 
-func ip2str(ip uint32) string {
+func ip2str(ip ip4_t) string {
 	return fmt.Sprintf("%d.%d.%d.%d", ip >> 24, uint8(ip >> 16),
 	    uint8(ip >> 8), uint8(ip))
 }
@@ -71,7 +75,7 @@ func (ar *arpv4_t) _init(smac []uint8) {
 	copy(ar.src[:], smac)
 }
 
-func (ar *arpv4_t) init_req(smac []uint8, sip, qip uint32) {
+func (ar *arpv4_t) init_req(smac []uint8, sip, qip ip4_t) {
 	if len(smac) != MACLEN {
 		panic("bad addr")
 	}
@@ -88,7 +92,7 @@ func (ar *arpv4_t) init_req(smac []uint8, sip, qip uint32) {
 	}
 }
 
-func (ar *arpv4_t) init_reply(smac, dmac []uint8, sip, dip uint32) {
+func (ar *arpv4_t) init_reply(smac, dmac []uint8, sip, dip ip4_t) {
 	if len(smac) != MACLEN || len(dmac) != MACLEN {
 		panic("bad addr")
 	}
@@ -108,11 +112,11 @@ func (ar *arpv4_t) bytes() []uint8 {
 
 var arptbl struct {
 	sync.Mutex
-	m		map[uint32]*arprec_t
+	m		map[ip4_t]*arprec_t
 	enttimeout	time.Duration
 	restimeout	time.Duration
 	// waiters for arp resolution
-	waiters		map[uint32][]chan bool
+	waiters		map[ip4_t][]chan bool
 }
 
 type arprec_t struct {
@@ -120,7 +124,7 @@ type arprec_t struct {
 	expire		time.Time
 }
 
-func arp_add(ip uint32, mac *mac_t) {
+func arp_add(ip ip4_t, mac *mac_t) {
 	arptbl.Lock()
 	defer arptbl.Unlock()
 
@@ -146,7 +150,7 @@ func arp_add(ip uint32, mac *mac_t) {
 	}
 }
 
-func _arp_lookup(ip uint32) (*arprec_t, bool) {
+func _arp_lookup(ip ip4_t) (*arprec_t, bool) {
 	ar, ok := arptbl.m[ip]
 	if !ok {
 		return nil, false
@@ -159,34 +163,31 @@ func _arp_lookup(ip uint32) (*arprec_t, bool) {
 }
 
 // returns false if resolution timed out
-func arp_resolve(ip uint32) (*mac_t, bool) {
-	if nic == nil {
-		panic("nil nic")
+func arp_resolve(sip, dip ip4_t) (*mac_t, int) {
+	nic, ok := nics[sip]
+	if !ok {
+		return nil, -ENETDOWN
 	}
 
 	arptbl.Lock()
 
-	ar, ok := _arp_lookup(ip)
+	ar, ok := _arp_lookup(dip)
 	if ok {
-		// found existing entry. update expire.
-		ar.expire = time.Now().Add(arptbl.enttimeout)
 		arptbl.Unlock()
-		return &ar.mac, true
+		return &ar.mac, 0
 	}
 
 	// buffered channel so that a wakeup racing with timeout doesn't
 	// eternally block the waker
 	mychan := make(chan bool, 1)
 	// start a new arp request?
-	wl, ok := arptbl.waiters[ip]
+	wl, ok := arptbl.waiters[dip]
 	needstart := !ok
 	if needstart {
-		arptbl.waiters[ip] = []chan bool{mychan}
-		// 18.26.5.49 (bhw)
-		durip := uint32(0x121a0531)
-		_net_arp_start(ip, nic.mac[:], durip, nic)
+		arptbl.waiters[dip] = []chan bool{mychan}
+		_net_arp_start(dip, nic)
 	} else {
-		arptbl.waiters[ip] = append(wl, mychan)
+		arptbl.waiters[dip] = append(wl, mychan)
 	}
 	arptbl.Unlock()
 
@@ -202,7 +203,7 @@ func arp_resolve(ip uint32) (*mac_t, bool) {
 
 	if timeout {
 		// remove my channel from waiters
-		wl, ok := arptbl.waiters[ip]
+		wl, ok := arptbl.waiters[dip]
 		if ok {
 			for i := range wl {
 				if wl[i] == mychan {
@@ -212,26 +213,26 @@ func arp_resolve(ip uint32) (*mac_t, bool) {
 				}
 			}
 			if len(wl) == 0 {
-				delete(arptbl.waiters, ip)
+				delete(arptbl.waiters, dip)
 			} else {
-				arptbl.waiters[ip] = wl
+				arptbl.waiters[dip] = wl
 			}
 		}
 		arptbl.Unlock()
-		return nil, false
+		return nil, -ETIMEDOUT
 	}
 
-	ar, ok = _arp_lookup(ip)
+	ar, ok = _arp_lookup(dip)
 	if !ok {
 		panic("arp must be set")
 	}
 	arptbl.Unlock()
-	return &ar.mac, true
+	return &ar.mac, 0
 }
 
-func _net_arp_start(ip uint32, smac []uint8, sip uint32, nic *x540_t) {
+func _net_arp_start(qip ip4_t, nic *x540_t) {
 	var arp arpv4_t
-	arp.init_req(smac, sip, ip)
+	arp.init_req(nic.mac[:], nic.ip, qip)
 	buf := arp.bytes()
 	nic.tx_wait(buf)
 }
@@ -251,7 +252,186 @@ func _net_arp_finish(buf []uint8) {
 	arp_add(ip, mac)
 }
 
-var nic *x540_t
+type routes_t struct {
+	// sorted (ascending order) slice of bit number of least significant
+	// bit in each subnet mask
+	subnets		[]int
+	// map of subnets to the owning IP of the destination ethernet MAC
+	routes		map[ip4_t]rtentry_t
+	defgw		struct {
+		myip	ip4_t
+		ip	ip4_t
+		valid	bool
+	}
+}
+
+type rtentry_t struct {
+	myip		ip4_t
+	gwip		ip4_t
+	// netmask shift
+	shift		int
+	// if gateway is true, ip is the IP of the gateway for this subnet
+	gateway		bool
+}
+
+func (r *routes_t) init() {
+	r.routes = make(map[ip4_t]rtentry_t)
+	r.defgw.valid = false
+}
+
+func (r *routes_t) defaultgw(myip, gwip ip4_t) {
+	r.defgw.myip = myip
+	r.defgw.ip = gwip
+	r.defgw.valid = true
+}
+
+func (r *routes_t) _insert(myip, netip, netmask, gwip ip4_t, isgw bool) {
+	if netmask == 0 || netmask == ^ip4_t(0) {
+		panic("not a subnet or default gw")
+	}
+	var bit int
+	for bit = 0; bit < 32; bit++ {
+		if netmask & (1 << uint(bit)) != 0 {
+			break
+		}
+	}
+	found := false
+	for _, s := range r.subnets {
+		if s == bit {
+			found = true
+		}
+	}
+	if !found {
+		r.subnets = append(r.subnets, bit)
+		sort.Ints(r.subnets)
+	}
+	nrt := rtentry_t{myip: myip, gwip: gwip, shift: bit, gateway: isgw}
+	key := netip >> uint(bit)
+	if _, ok := r.routes[key]; ok {
+		//panic("subnet must be unique")
+	}
+	r.routes[key] = nrt
+}
+
+func (r *routes_t) insert_gateway(myip, netip, netmask, gwip ip4_t) {
+	r._insert(myip, netip, netmask, gwip, true)
+}
+
+func (r *routes_t) insert_local(myip, netip, netmask ip4_t) {
+	r._insert(myip, netip, netmask, 0, false)
+}
+
+func (r *routes_t) copy() *routes_t {
+	ret := &routes_t{}
+	ret.subnets = make([]int, len(r.subnets), cap(r.subnets))
+	ret.routes = make(map[ip4_t]rtentry_t)
+	for a, b := range r.routes {
+		ret.routes[a] = b
+	}
+	ret.defgw = r.defgw
+	return ret
+}
+
+func (r *routes_t) dump() {
+	fmt.Printf("\nRoutes:\n")
+	fmt.Printf("  %20s    %16s  %16s\n", "net", "NIC IP", "gateway")
+	if r.defgw.valid {
+		net := ip2str(0) + "/0"
+		mine := ip2str(r.defgw.myip)
+		dip := ip2str(r.defgw.ip)
+		fmt.Printf("  %20s -> %16s  %16s\n", net, mine, dip)
+	}
+	for sub, rt := range r.routes {
+		s := rt.shift
+		net := ip2str(sub << uint(s)) + fmt.Sprintf("/%d", 32 - s)
+		mine := ip2str(rt.myip)
+		dip := "X"
+		if rt.gateway {
+			dip = ip2str(rt.gwip)
+		}
+		fmt.Printf("  %20s -> %16s  %16s\n", net, mine, dip)
+	}
+}
+
+// returns the local IP assigned to the NIC where the destination is reachable,
+// the IP whose MAC address the packet to the destination IP should be sent,
+// and error
+func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
+	for _, shift := range r.subnets {
+		try := dip >> uint(shift)
+		if rtent, ok := r.routes[try]; ok {
+			realdest := dip
+			if rtent.gateway {
+				realdest = rtent.gwip
+			}
+			return rtent.myip, realdest, 0
+		}
+	}
+	if !r.defgw.valid {
+		return 0, 0, -EHOSTUNREACH
+	}
+	return r.defgw.myip, r.defgw.ip, 0
+}
+
+// RCU protected routing table
+type routetbl_t struct {
+	// lock for RCU writers
+	sync.Mutex
+	routes	*routes_t
+}
+
+func (rt *routetbl_t) init() {
+	rt.routes = &routes_t{}
+	rt.routes.init()
+}
+
+func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) {
+	rt.Lock()
+	defer rt.Unlock()
+
+	newroutes := rt.routes.copy()
+	newroutes.insert_gateway(myip, netip, netmask, gwip)
+	rt.commit(newroutes)
+}
+
+func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) {
+	rt.Lock()
+	defer rt.Unlock()
+
+	newroutes := rt.routes.copy()
+	newroutes.insert_local(myip, netip, netmask)
+	rt.commit(newroutes)
+}
+
+func (rt *routetbl_t) defaultgw(myip, gwip ip4_t) {
+	rt.Lock()
+	defer rt.Unlock()
+
+	newroutes := rt.routes.copy()
+	newroutes.defaultgw(myip, gwip)
+	rt.commit(newroutes)
+}
+
+func (rt *routetbl_t) commit(newroutes *routes_t) {
+	dst := (* unsafe.Pointer)(unsafe.Pointer(&rt.routes))
+	v := unsafe.Pointer(newroutes)
+	atomic.StorePointer(dst, v)
+	// store-release on x86, so long as go compiler doesn't reorder the
+	// store with the caller
+}
+
+func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
+	src := (* unsafe.Pointer)(unsafe.Pointer(&rt.routes))
+	// load-acquire on x86
+	p := atomic.LoadPointer(src)
+	troutes := (* routes_t)(p)
+	a, b, c := troutes.lookup(dip)
+	return a, b, c
+}
+
+var routetbl routetbl_t
+
+var nics = map[ip4_t]*x540_t{}
 
 // network stack processing begins here
 func net_start(pkt [][]uint8, tlen int) {
@@ -281,8 +461,10 @@ func netchk() {
 func net_init() {
 	netchk()
 
-	arptbl.m = make(map[uint32]*arprec_t)
-	arptbl.waiters = make(map[uint32][]chan bool)
+	arptbl.m = make(map[ip4_t]*arprec_t)
+	arptbl.waiters = make(map[ip4_t][]chan bool)
 	arptbl.enttimeout = 20*time.Minute
 	arptbl.restimeout = 5*time.Second
+
+	routetbl.init()
 }

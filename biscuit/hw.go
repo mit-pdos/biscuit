@@ -1467,6 +1467,7 @@ type x540_t struct {
 	linkup	bool
 	// big-endian
 	mac	[6]uint8
+	ip	ip4_t
 }
 
 func (x *x540_t) init(t pcitag_t) {
@@ -1873,10 +1874,22 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				x.log("link down")
 			}
 			if up && !rantest {
-				nic = x
+				// 18.26.5.49 (bhw)
+				me := ip4_t(0x121a0531)
+				x.ip = me
+				nics[me] = x
+
+				netmask := ip4_t(0xfffffe00)
+				// 18.26.5.1
+				gw := ip4_t(0x121a0401)
+				routetbl.defaultgw(me, gw)
+				net := me & netmask
+				routetbl.insert_local(me, net, netmask)
+				routetbl.routes.dump()
+
 				rantest = true
 				go x.tester1()
-				go x.tester2()
+				//go x.tester2()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -1912,7 +1925,7 @@ func (x *x540_t) tester1() {
 }
 
 func (x *x540_t) tester2() {
-	ai := uint32(0)
+	ai := ip4_t(0)
 	lpr := time.Now()
 	for {
 		//<-time.After(2*time.Second)
@@ -1920,19 +1933,22 @@ func (x *x540_t) tester2() {
 		if ai == 255 {
 			ai = 1
 		}
-		dip := uint32(0x121a0500)
+		dip := ip4_t(0x121a0500)
 		dip += ai
 		//dip := uint32(0x121a0530)
 		st := time.Now()
-		mac, ok := arp_resolve(dip)
+		mac, err := arp_resolve(x.ip, dip)
 		took := time.Since(st).Seconds()
 
-		if ok {
+		switch err {
+		case 0:
 			fmt.Printf("Resolved %s (%s) in %.3v s\n", ip2str(dip),
 			    mac2str(mac[:]), took)
-		} else {
+		case -ETIMEDOUT:
 			fmt.Printf("Timeout for %s (%.3v s)\n", ip2str(dip),
 			    took)
+		default:
+			panic("arp error")
 		}
 		if time.Since(lpr) > 7*time.Second {
 			arptbl.Lock()

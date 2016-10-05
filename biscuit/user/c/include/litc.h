@@ -39,6 +39,8 @@ extern "C" {
 #define		ENAMETOOLONG	36
 #define		ENOSYS		38
 #define		ENOTEMPTY	39
+#define		ENETDOWN	50
+#define		EHOSTUNREACH	65
 #define		EOVERFLOW	75
 #define		ENOTSOCK	88
 #define		EOPNOTSUPP	95
