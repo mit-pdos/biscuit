@@ -308,7 +308,7 @@ func (r *routes_t) _insert(myip, netip, netmask, gwip ip4_t, isgw bool) {
 	nrt := rtentry_t{myip: myip, gwip: gwip, shift: bit, gateway: isgw}
 	key := netip >> uint(bit)
 	if _, ok := r.routes[key]; ok {
-		//panic("subnet must be unique")
+		panic("subnet must be unique")
 	}
 	r.routes[key] = nrt
 }
@@ -324,6 +324,9 @@ func (r *routes_t) insert_local(myip, netip, netmask ip4_t) {
 func (r *routes_t) copy() *routes_t {
 	ret := &routes_t{}
 	ret.subnets = make([]int, len(r.subnets), cap(r.subnets))
+	for i := range r.subnets {
+		ret.subnets[i] = r.subnets[i]
+	}
 	ret.routes = make(map[ip4_t]rtentry_t)
 	for a, b := range r.routes {
 		ret.routes[a] = b
@@ -467,4 +470,53 @@ func net_init() {
 	arptbl.restimeout = 5*time.Second
 
 	routetbl.init()
+	//net_test()
+}
+
+func net_test() {
+	me := ip4_t(0x121a0531)
+	netmask := ip4_t(0xfffffe00)
+	// 18.26.5.1
+	gw := ip4_t(0x121a0401)
+	routetbl.defaultgw(me, gw)
+	net := me & netmask
+	routetbl.insert_local(me, net, netmask)
+
+	net = ip4_t(0x0a000000)
+	netmask = ip4_t(0xffffff00)
+	gw1 := ip4_t(0x0a000001)
+	routetbl.insert_gateway(me, net, netmask, gw1)
+
+	net = ip4_t(0x0a000000)
+	netmask = ip4_t(0xffff0000)
+	gw2 := ip4_t(0x0a000002)
+	routetbl.insert_gateway(me, net, netmask, gw2)
+
+	routetbl.routes.dump()
+
+	dip := ip4_t(0x0a000003)
+	a, b, c := routetbl.lookup(dip)
+	if c != 0 {
+		panic("error")
+	}
+	if a != me {
+		panic("bad local")
+	}
+	if b != gw1 {
+		panic("exp gw1")
+	}
+
+	dip = ip4_t(0x0a000103)
+	a, b, c = routetbl.lookup(dip)
+	if c != 0 {
+		panic("error")
+	}
+	if a != me {
+		panic("bad local")
+	}
+	if b != gw2 {
+		fmt.Printf("** %x %x\n", b, gw1)
+		fmt.Printf("** %v\n", routetbl.routes.subnets)
+		panic("exp gw2")
+	}
 }
