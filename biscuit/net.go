@@ -234,7 +234,8 @@ func _net_arp_start(qip ip4_t, nic *x540_t) {
 	var arp arpv4_t
 	arp.init_req(nic.mac[:], nic.ip, qip)
 	buf := arp.bytes()
-	nic.tx_raw(buf)
+	sgbuf := [][]uint8{buf}
+	nic.tx_raw(sgbuf)
 }
 
 func _net_arp_finish(buf []uint8) {

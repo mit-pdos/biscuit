@@ -1386,14 +1386,28 @@ func (td *txdesc_t) ctx_ipv4(_iphdrlen int) {
 }
 
 // returns number of bytes consumed
-func (td *txdesc_t) data_continue(src []uint8) int {
+func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
+	if len(src) == 0 {
+		panic("empty buf")
+	}
+
 	td.ctxt = false
 	dst := dmaplen(uintptr(td.p_buf), int(td.bufsz))
-	paylen := uint64(copy(dst, src))
+	paylen := uint64(0)
+	for len(dst) != 0 && len(src) != 0 {
+		cursrc := src[0]
+		did := copy(dst, cursrc)
+		paylen += uint64(did)
+		dst = dst[did:]
+		src[0] = cursrc[did:]
+		if len(src[0]) == 0 {
+			src = src[1:]
+		}
+	}
 
 	// does this descriptor contain the end of the packet?
 	last := false
-	if len(src[paylen:]) == 0 {
+	if len(src) == 0 {
 		last = true
 	}
 
@@ -1410,21 +1424,20 @@ func (td *txdesc_t) data_continue(src []uint8) int {
 		td.hwdesc.rest |= eop | rs
 	}
 	td._dtalen(paylen)
-	return int(paylen)
+	return src
 }
 
 // returns number of bytes consumed
-func (td *txdesc_t) raw_start(src []uint8) int {
+func (td *txdesc_t) raw_start(src [][]uint8, tlen int) [][]uint8 {
 	ret := td.data_continue(src)
-	td._paylen(uint64(len(src)))
+	td._paylen(uint64(tlen))
 	return ret
 }
 
-// offloads ipv4 checksum calculation to the NIC. returns number of bytes
-// consumed
-func (td *txdesc_t) ipv4_start(src []uint8) int {
+// offloads ipv4 checksum calculation to the NIC. returns the remaining bytes.
+func (td *txdesc_t) ipv4_start(src [][]uint8, tlen int) [][]uint8 {
 	ret := td.data_continue(src)
-	td._paylen(uint64(len(src)))
+	td._paylen(uint64(tlen))
 	// POPTS.IXSM = 1
 	td.hwdesc.rest |= 1 << 40
 	// set index and CC???
@@ -1744,15 +1757,15 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
-func (x *x540_t) tx_raw(buf []uint8) {
+func (x *x540_t) tx_raw(buf [][]uint8) {
 	x._tx_wait(buf, false)
 }
 
-func (x *x540_t) tx_ipv4(buf []uint8) {
+func (x *x540_t) tx_ipv4(buf [][]uint8) {
 	x._tx_wait(buf, true)
 }
 
-func (x *x540_t) _tx_wait(buf []uint8, ipv4 bool) {
+func (x *x540_t) _tx_wait(buf [][]uint8, ipv4 bool) {
 	x.tx.Lock()
 	for !x._tx_enqueue(buf, ipv4) {
 		x.tx.cond.Wait()
@@ -1763,7 +1776,7 @@ func (x *x540_t) _tx_wait(buf []uint8, ipv4 bool) {
 
 // caller must hold x.tx lock. returns true if buf was enqueued to be
 // trasmitted.
-func (x *x540_t) _tx_enqueue(buf []uint8, ipv4 bool) bool {
+func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -1774,9 +1787,13 @@ func (x *x540_t) _tx_enqueue(buf []uint8, ipv4 bool) bool {
 		end--
 	}
 	tail := x.rl(TDT(0))
-	// make sure buf can fit
+	// make sure there are enough tx descriptor to fit buf
+	tlen := 0
+	for i := range buf {
+		tlen += len(buf[i])
+	}
+	need := tlen
 	newtail := tail
-	need := len(buf)
 	for newtail != end && need != 0 {
 		td := &x.tx.descs[newtail]
 		bs := int(td.bufsz)
@@ -1797,13 +1814,11 @@ func (x *x540_t) _tx_enqueue(buf []uint8, ipv4 bool) bool {
 	// the first descriptors are special
 	fd := &x.tx.descs[tail]
 	fd.wbwait()
-	var did int
 	if ipv4 {
-		did = fd.ipv4_start(buf)
+		buf = fd.ipv4_start(buf, tlen)
 	} else {
-		did = fd.raw_start(buf)
+		buf = fd.raw_start(buf, tlen)
 	}
-	buf = buf[did:]
 	tail++
 	if tail == x.rx.ndescs {
 		tail = 0
@@ -1811,8 +1826,7 @@ func (x *x540_t) _tx_enqueue(buf []uint8, ipv4 bool) bool {
 	for len(buf) != 0 {
 		td := &x.tx.descs[tail]
 		td.wbwait()
-		did := td.data_continue(buf)
-		buf = buf[did:]
+		buf = td.data_continue(buf)
 		tail++
 		if tail == x.rx.ndescs {
 			tail = 0
@@ -2470,7 +2484,6 @@ func (x *x540_t) tx_test() {
 	}
 	prstat(false)
 
-
 	for i := 0; i < 3; i++ {
 		//x.log("PACKET %v", i)
 		// setup tx descriptor
@@ -2478,7 +2491,8 @@ func (x *x540_t) tx_test() {
 		tdesc := &x.tx.descs[tail]
 		const paylen = unsafe.Sizeof(txdata_t{})
 		bytes := (*[paylen]uint8)(unsafe.Pointer(&txdata))[:]
-		tdesc.raw_start(bytes)
+		sgbuf := [][]uint8{bytes}
+		tdesc.raw_start(sgbuf[:], len(bytes))
 		tail++
 		if tail == x.tx.ndescs {
 			tail = 0
