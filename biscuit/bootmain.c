@@ -84,8 +84,8 @@ struct __attribute__((packed)) ss_t {
 // # of sectors this code takes up; i set this after compiling and observing
 // the size of the text
 #define BOOTBLOCKS     9
-// put 15 e820 entries at 0x6000 (boot.S)
-#define	NE820          15
+// boot.S fills page 0x6000 with e820 entries
+#define	NE820          (4096/sizeof(struct e820_t))
 
 #define SECTSIZE	512
 #define ELFHDR		((struct Elf *) 0x10000) // scratch space

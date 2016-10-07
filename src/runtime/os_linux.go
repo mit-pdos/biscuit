@@ -1226,7 +1226,8 @@ func phys_init() {
 	maxfound := uintptr(0)
 	// bootloader provides 15 e820 entries at most (it panicks if the PC
 	// provides more).
-	for i := uintptr(0); i < 15; i++ {
+	e820sz := uintptr(28)
+	for i := uintptr(0); i < 4096/e820sz; i++ {
 		ep := (*e820_t)(unsafe.Pointer(base + i*28))
 		if ep.len == 0 {
 			continue
