@@ -1364,14 +1364,24 @@ func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
 	})(unsafe.Pointer(hw))
 }
 
-func (td *txdesc_t) ctx_start() {
+// ethernet header length assumed to be 14
+func (td *txdesc_t) ctx_ipv4(_iphdrlen int) {
+	hlen := uint64(_iphdrlen)
+	iplenm := uint64(0xff)
+	if hlen &^ iplenm != 0 {
+		panic("bad ip header len")
+	}
+
 	td.ctxt = true
 	maclen := uint64(14)
 	td.hwdesc.p_addr = maclen << 9
+	td.hwdesc.p_addr |= hlen
 	// DTYP = 0010b
 	td.hwdesc.rest = 0x2 << 20
 	// DEXT = 1
 	td.hwdesc.rest |= 1 << 29
+	// IPV4 = 1
+	td.hwdesc.rest |= 1 << 12
 	// leave IDX zero
 }
 
@@ -1404,9 +1414,20 @@ func (td *txdesc_t) data_continue(src []uint8) int {
 }
 
 // returns number of bytes consumed
-func (td *txdesc_t) data_start(src []uint8) int {
+func (td *txdesc_t) raw_start(src []uint8) int {
 	ret := td.data_continue(src)
 	td._paylen(uint64(len(src)))
+	return ret
+}
+
+// offloads ipv4 checksum calculation to the NIC. returns number of bytes
+// consumed
+func (td *txdesc_t) ipv4_start(src []uint8) int {
+	ret := td.data_continue(src)
+	td._paylen(uint64(len(src)))
+	// POPTS.IXSM = 1
+	td.hwdesc.rest |= 1 << 40
+	// set index and CC???
 	return ret
 }
 
@@ -1430,6 +1451,7 @@ func (td *txdesc_t) _paylen(v uint64) {
 
 func (td *txdesc_t) txdone() bool {
 	rs   := uint64(1 << 27)
+	// rs is reserved after writeback...
 	if td.hwdesc.rest & rs == 0 {
 		panic("dd may set only when rs is set")
 	}
@@ -1722,9 +1744,17 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
-func (x *x540_t) tx_wait(buf []uint8) {
+func (x *x540_t) tx_raw(buf []uint8) {
+	x._tx_wait(buf, false)
+}
+
+func (x *x540_t) tx_ipv4(buf []uint8) {
+	x._tx_wait(buf, true)
+}
+
+func (x *x540_t) _tx_wait(buf []uint8, ipv4 bool) {
 	x.tx.Lock()
-	for !x._tx_enqueue(buf) {
+	for !x._tx_enqueue(buf, ipv4) {
 		x.tx.cond.Wait()
 	}
 	x.tx.cond.Signal()
@@ -1733,7 +1763,7 @@ func (x *x540_t) tx_wait(buf []uint8) {
 
 // caller must hold x.tx lock. returns true if buf was enqueued to be
 // trasmitted.
-func (x *x540_t) _tx_enqueue(buf []uint8) bool {
+func (x *x540_t) _tx_enqueue(buf []uint8, ipv4 bool) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -1767,7 +1797,12 @@ func (x *x540_t) _tx_enqueue(buf []uint8) bool {
 	// the first descriptors are special
 	fd := &x.tx.descs[tail]
 	fd.wbwait()
-	did := fd.data_start(buf)
+	var did int
+	if ipv4 {
+		did = fd.ipv4_start(buf)
+	} else {
+		did = fd.raw_start(buf)
+	}
 	buf = buf[did:]
 	tail++
 	if tail == x.rx.ndescs {
@@ -1889,7 +1924,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 
 				rantest = true
 				go x.tester1()
-				//go x.tester2()
+				go x.tester2()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2443,7 +2478,7 @@ func (x *x540_t) tx_test() {
 		tdesc := &x.tx.descs[tail]
 		const paylen = unsafe.Sizeof(txdata_t{})
 		bytes := (*[paylen]uint8)(unsafe.Pointer(&txdata))[:]
-		tdesc.data_start(bytes)
+		tdesc.raw_start(bytes)
 		tail++
 		if tail == x.tx.ndescs {
 			tail = 0

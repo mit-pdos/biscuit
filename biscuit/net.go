@@ -234,7 +234,7 @@ func _net_arp_start(qip ip4_t, nic *x540_t) {
 	var arp arpv4_t
 	arp.init_req(nic.mac[:], nic.ip, qip)
 	buf := arp.bytes()
-	nic.tx_wait(buf)
+	nic.tx_raw(buf)
 }
 
 func _net_arp_finish(buf []uint8) {
@@ -433,6 +433,8 @@ func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
 }
 
 var routetbl routetbl_t
+
+//struct ip4hdr_t
 
 var nics = map[ip4_t]*x540_t{}
 
