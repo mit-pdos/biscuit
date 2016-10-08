@@ -1406,19 +1406,14 @@ func (p *proc_t) user2k(dst []uint8, uva int) bool {
 func (p *proc_t) user2k_inner(dst []uint8, uva int) bool {
 	p.lockassert_pmap()
 	cnt := 0
-	l := len(dst)
-	for cnt != l {
+	for len(dst) != 0 {
 		src, ok := p.userdmap8_inner(uva + cnt, false)
 		if !ok {
 			return false
 		}
-		ub := len(dst)
-		if ub > len(src) {
-			ub = len(src)
-		}
-		copy(dst, src)
-		dst = dst[ub:]
-		cnt += ub
+		did := copy(dst, src)
+		dst = dst[did:]
+		cnt += did
 	}
 	return true
 }
