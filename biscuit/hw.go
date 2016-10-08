@@ -1364,17 +1364,15 @@ func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
 	})(unsafe.Pointer(hw))
 }
 
-// ethernet header length assumed to be 14
-func (td *txdesc_t) ctx_ipv4(_iphdrlen int) {
-	hlen := uint64(_iphdrlen)
-	iplenm := uint64(0xff)
-	if hlen &^ iplenm != 0 {
-		panic("bad ip header len")
-	}
-
+// ethernet header length assumed to be 14, ip header length assumed to be 20.
+func (td *txdesc_t) ctxt_ipv4() {
 	td.ctxt = true
 	maclen := uint64(14)
 	td.hwdesc.p_addr = maclen << 9
+	hlen := uint64(20)
+	if hlen != uint64(IP4LEN) {
+		panic("unexpected ip4 header len")
+	}
 	td.hwdesc.p_addr |= hlen
 	// DTYP = 0010b
 	td.hwdesc.rest = 0x2 << 20
@@ -1440,7 +1438,7 @@ func (td *txdesc_t) ipv4_start(src [][]uint8, tlen int) [][]uint8 {
 	td._paylen(uint64(tlen))
 	// POPTS.IXSM = 1
 	td.hwdesc.rest |= 1 << 40
-	// set index and CC???
+	// no need for index or CC
 	return ret
 }
 
@@ -1476,6 +1474,7 @@ func (td *txdesc_t) txdone() bool {
 // write
 func (td *txdesc_t) wbwait() {
 	rs   := uint64(1 << 27)
+	// rs is reserved after writeback...
 	if td.hwdesc.rest & rs != 0 {
 		for !td.txdone() {
 			waits++
@@ -1794,6 +1793,16 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 	}
 	need := tlen
 	newtail := tail
+	if ipv4 {
+		// XXX the NIC only needs 1 context descriptor total for IPv4
+		// checksums, not 1 per packet! (segmentation offload requires
+		// 1 per packet)
+
+		// first descriptor must be a context descriptor when using
+		// checksum/segmentation offloading (only need 1 context for
+		// all checksum offloads?)
+		newtail = (newtail + 1) % x.tx.ndescs
+	}
 	for newtail != end && need != 0 {
 		td := &x.tx.descs[newtail]
 		bs := int(td.bufsz)
@@ -1802,10 +1811,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 		} else {
 			need -= bs
 		}
-		newtail++
-		if newtail == x.rx.ndescs {
-			newtail = 0
-		}
+		newtail = (newtail + 1) % x.tx.ndescs
 	}
 	if need != 0 {
 		// not enough room
@@ -1815,22 +1821,20 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 	fd := &x.tx.descs[tail]
 	fd.wbwait()
 	if ipv4 {
+		fd.ctxt_ipv4()
+		tail = (tail + 1) % x.tx.ndescs
+		fd = &x.tx.descs[tail]
+		fd.wbwait()
 		buf = fd.ipv4_start(buf, tlen)
 	} else {
 		buf = fd.raw_start(buf, tlen)
 	}
-	tail++
-	if tail == x.rx.ndescs {
-		tail = 0
-	}
+	tail = (tail + 1) % x.tx.ndescs
 	for len(buf) != 0 {
 		td := &x.tx.descs[tail]
 		td.wbwait()
 		buf = td.data_continue(buf)
-		tail++
-		if tail == x.rx.ndescs {
-			tail = 0
-		}
+		tail = (tail + 1) % x.tx.ndescs
 	}
 	if tail != newtail {
 		panic("size miscalculated")
@@ -1938,7 +1942,8 @@ func (x *x540_t) int_handler(vector msivec_t) {
 
 				rantest = true
 				go x.tester1()
-				go x.tester2()
+				//go x.tester2()
+				go x.tester3()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2011,6 +2016,66 @@ func (x *x540_t) tester2() {
 			lpr = time.Now()
 			arptbl.Unlock()
 		}
+	}
+}
+
+var ping = []uint8{
+	// type
+	0x08,
+	// code
+	0x00,
+	// cksum
+	0xa2, 0xd4,
+	// identifier
+	0x7c, 0x52,
+	// sequence
+	0x00, 0x00,
+	// data
+	0xde, 0xad, 0xbe, 0xef,
+	0xde, 0xad, 0xbe, 0xef,
+	0xde, 0xad, 0xbe, 0xef,
+}
+
+func (x *x540_t) tester3() {
+	local := true
+	ai := ip4_t(0)
+	for {
+		local = !local
+
+		target := ip4_t(0x121a0500)
+		if local {
+			ai++
+			if ai == 255 {
+				ai = 1
+			}
+			target += ai
+		} else {
+			target = ip4_t(0x08080808)
+		}
+		localip, routeip, err := routetbl.lookup(target)
+		if err != 0 {
+			panic("must succeed")
+		}
+		if localip != x.ip {
+			panic("bad local")
+		}
+
+		dmac, err := arp_resolve(x.ip, routeip)
+		if err == -ETIMEDOUT {
+			continue
+		} else if err != 0 {
+			panic("no")
+		}
+		<-time.After(time.Second)
+		var ether etherhdr_t
+		copy(ether.smac[:], x.mac[:])
+		copy(ether.dmac[:], dmac[:])
+		ether.etype = htons(0x0800)
+		var iphdr ip4hdr_t
+		iphdr.init_icmp(len(ping), x.ip, target)
+		buf := [][]uint8{ether.bytes(), iphdr.bytes(), ping}
+		fmt.Printf("** ping to %s...\n", ip2str(target))
+		x.tx_ipv4(buf)
 	}
 }
 

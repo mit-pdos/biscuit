@@ -11,14 +11,14 @@ type ip4_t uint32
 
 // convert little- to big-endian. also, arpv4_t gets padded due to tpa if tpa
 // is a uint32 instead of a byte array.
-func ip2sl(sl *[4]uint8, ip ip4_t) {
+func ip2sl(sl []uint8, ip ip4_t) {
 	sl[0] = uint8(ip >> 24)
 	sl[1] = uint8(ip >> 16)
 	sl[2] = uint8(ip >> 8)
 	sl[3] = uint8(ip >> 0)
 }
 
-func sl2ip(sl *[4]uint8) ip4_t {
+func sl2ip(sl []uint8) ip4_t {
 	ret := ip4_t(sl[0]) << 24
 	ret |= ip4_t(sl[1]) << 16
 	ret |= ip4_t(sl[2]) << 8
@@ -83,8 +83,8 @@ func (ar *arpv4_t) init_req(smac []uint8, sip, qip ip4_t) {
 	req := htons(1)
 	ar.oper = req
 	copy(ar.sha[:], smac)
-	ip2sl(&ar.spa, sip)
-	ip2sl(&ar.tpa, qip)
+	ip2sl(ar.spa[:], sip)
+	ip2sl(ar.tpa[:], qip)
 	var dur mac_t
 	copy(ar.tha[:], dur[:])
 	for i := range ar.dst {
@@ -101,8 +101,8 @@ func (ar *arpv4_t) init_reply(smac, dmac []uint8, sip, dip ip4_t) {
 	ar.oper = reply
 	copy(ar.sha[:], smac)
 	copy(ar.tha[:], dmac)
-	ip2sl(&ar.spa, sip)
-	ip2sl(&ar.tpa, dip)
+	ip2sl(ar.spa[:], sip)
+	ip2sl(ar.tpa[:], dip)
 	copy(ar.dst[:], dmac)
 }
 
@@ -248,7 +248,7 @@ func _net_arp_finish(buf []uint8) {
 		panic("not an arp reply")
 	}
 
-	ip := sl2ip(&arp.spa)
+	ip := sl2ip(arp.spa[:])
 	mac := &arp.sha
 	arp_add(ip, mac)
 }
@@ -435,7 +435,55 @@ func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
 
 var routetbl routetbl_t
 
-//struct ip4hdr_t
+const IP4LEN = unsafe.Sizeof(ip4hdr_t{})
+
+// no options
+type ip4hdr_t struct {
+	vers_hdr	uint8
+	dscp		uint8
+	tlen		uint16
+	ident		uint16
+	fl_frag		uint16
+	ttl		uint8
+	proto		uint8
+	cksum		uint16
+	sip		[4]uint8
+	dip		[4]uint8
+}
+
+func (i4 *ip4hdr_t) _init(l4len int, sip, dip ip4_t, proto uint8) {
+	var z ip4hdr_t
+	*i4 = z
+	i4.vers_hdr = 0x45
+	i4.tlen = htons(uint16(l4len) + uint16(IP4LEN))
+	//dontfrag := uint16(1 << 14)
+	//i4.fl_frag = htons(dontfrag)
+	i4.ttl = 0xff
+	i4.proto = proto
+	ip2sl(i4.sip[:], sip)
+	ip2sl(i4.dip[:], dip)
+}
+
+func (i4 *ip4hdr_t) init_icmp(icmplen int, sip, dip ip4_t) {
+	icmp := uint8(0x01)
+	i4._init(icmplen, sip, dip, icmp)
+}
+
+func (i4 *ip4hdr_t) bytes() []uint8 {
+	return (*[IP4LEN]uint8)(unsafe.Pointer(i4))[:]
+}
+
+const ETHERLEN = unsafe.Sizeof(etherhdr_t{})
+
+type etherhdr_t struct {
+	dmac	mac_t
+	smac	mac_t
+	etype	uint16
+}
+
+func (e *etherhdr_t) bytes() []uint8 {
+	return (*[ETHERLEN]uint8)(unsafe.Pointer(e))[:]
+}
 
 var nics = map[ip4_t]*x540_t{}
 
@@ -447,20 +495,41 @@ func net_start(pkt [][]uint8, tlen int) {
 
 	// header should always be fully contained in the first slice
 	buf := pkt[0]
-	if uintptr(len(buf)) >= ARPLEN {
-		arp := htons(0x0806)
-		etype := uint16(readn(buf, 2, 12))
+	etype := uint16(readn(buf, 2, 12))
+	hlen := len(buf)
+	if len(buf) < 14 {
+		return
+	}
+	arp := htons(0x0806)
+	if etype == arp && hlen >= int(ARPLEN) {
 		arpop := uint16(readn(buf, 2, 20))
 		reply := htons(2)
 		if etype == arp && arpop == reply {
 			_net_arp_finish(buf)
 		}
+		return
+	}
+	ip4 := htons(0x0800)
+	if etype == ip4 && hlen >= int(34) {
+		icmp_reply := uint16(0)
+		icmp_type := uint16(readn(buf, 2, 14+20))
+		if icmp_reply == icmp_type {
+			fromip := sl2ip(buf[14+12:])
+			fmt.Printf("** ping reply from %s\n", ip2str(fromip))
+		}
+		return
 	}
 }
 
 func netchk() {
-	if unsafe.Sizeof(arpv4_t{}) != 42 || ARPLEN != 42 {
+	if  ARPLEN != 42 {
 		panic("arp bad size")
+	}
+	if IP4LEN != 20 {
+		panic("bad ip4 header size")
+	}
+	if ETHERLEN != 14 {
+		panic("bad ethernet header size")
 	}
 }
 
