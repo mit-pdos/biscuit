@@ -1364,15 +1364,11 @@ func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
 	})(unsafe.Pointer(hw))
 }
 
-// ethernet header length assumed to be 14, ip header length assumed to be 20.
-func (td *txdesc_t) ctxt_ipv4() {
+func (td *txdesc_t) ctxt_ipv4(_machlen, _ip4len int) {
 	td.ctxt = true
-	maclen := uint64(14)
+	maclen := uint64(_machlen)
 	td.hwdesc.p_addr = maclen << 9
-	hlen := uint64(20)
-	if hlen != uint64(IP4LEN) {
-		panic("unexpected ip4 header len")
-	}
+	hlen := uint64(_ip4len)
 	td.hwdesc.p_addr |= hlen
 	// DTYP = 0010b
 	td.hwdesc.rest = 0x2 << 20
@@ -1383,7 +1379,7 @@ func (td *txdesc_t) ctxt_ipv4() {
 	// leave IDX zero
 }
 
-// returns number of bytes consumed
+// returns remaining bytes
 func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 	if len(src) == 0 {
 		panic("empty buf")
@@ -1425,7 +1421,7 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 	return src
 }
 
-// returns number of bytes consumed
+// returns remaining bytes
 func (td *txdesc_t) raw_start(src [][]uint8, tlen int) [][]uint8 {
 	ret := td.data_continue(src)
 	td._paylen(uint64(tlen))
@@ -1500,7 +1496,7 @@ type x540_t struct {
 	pgs	int
 	linkup	bool
 	// big-endian
-	mac	[6]uint8
+	mac	mac_t
 	ip	ip4_t
 }
 
@@ -1821,7 +1817,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 	fd := &x.tx.descs[tail]
 	fd.wbwait()
 	if ipv4 {
-		fd.ctxt_ipv4()
+		fd.ctxt_ipv4(ETHERLEN, IP4LEN)
 		tail = (tail + 1) % x.tx.ndescs
 		fd = &x.tx.descs[tail]
 		fd.wbwait()
@@ -2019,23 +2015,6 @@ func (x *x540_t) tester2() {
 	}
 }
 
-var ping = []uint8{
-	// type
-	0x08,
-	// code
-	0x00,
-	// cksum
-	0xa2, 0xd4,
-	// identifier
-	0x7c, 0x52,
-	// sequence
-	0x00, 0x00,
-	// data
-	0xde, 0xad, 0xbe, 0xef,
-	0xde, 0xad, 0xbe, 0xef,
-	0xde, 0xad, 0xbe, 0xef,
-}
-
 func (x *x540_t) tester3() {
 	local := true
 	ai := ip4_t(0)
@@ -2066,14 +2045,14 @@ func (x *x540_t) tester3() {
 		} else if err != 0 {
 			panic("no")
 		}
-		<-time.After(time.Second)
-		var ether etherhdr_t
-		copy(ether.smac[:], x.mac[:])
-		copy(ether.dmac[:], dmac[:])
-		ether.etype = htons(0x0800)
-		var iphdr ip4hdr_t
-		iphdr.init_icmp(len(ping), x.ip, target)
-		buf := [][]uint8{ether.bytes(), iphdr.bytes(), ping}
+		<-time.After(100*time.Millisecond)
+		pingdata := []uint8{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe,
+		    0xef}
+		var ping icmp_t
+		pingtype := uint8(8)
+		ping.init(&x.mac, dmac, x.ip, target, pingtype, pingdata)
+		ping.crc()
+		buf := [][]uint8{ping.hdrbytes(), pingdata}
 		fmt.Printf("** ping to %s...\n", ip2str(target))
 		x.tx_ipv4(buf)
 	}

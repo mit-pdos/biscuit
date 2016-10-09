@@ -40,16 +40,14 @@ func htons(v uint16) uint16 {
 	return v >> 8 | (v & 0xff) << 8
 }
 
-const ARPLEN = unsafe.Sizeof(arpv4_t{})
+const ARPLEN = int(unsafe.Sizeof(arpv4_t{}))
 
 // always big-endian
-const MACLEN	int = 6
-type mac_t	[MACLEN]uint8
+const macsz	int = 6
+type mac_t	[macsz]uint8
 
 type arpv4_t struct {
-	dst	mac_t
-	src	mac_t
-	etype	uint16
+	etherhdr_t
 	htype	uint16
 	ptype	uint16
 	hlen	uint8
@@ -72,11 +70,11 @@ func (ar *arpv4_t) _init(smac []uint8) {
 	ar.ptype = ipv4
 	ar.hlen = macsz
 	ar.plen = ipv4sz
-	copy(ar.src[:], smac)
+	copy(ar.smac[:], smac)
 }
 
 func (ar *arpv4_t) init_req(smac []uint8, sip, qip ip4_t) {
-	if len(smac) != MACLEN {
+	if len(smac) != macsz {
 		panic("bad addr")
 	}
 	ar._init(smac)
@@ -87,13 +85,13 @@ func (ar *arpv4_t) init_req(smac []uint8, sip, qip ip4_t) {
 	ip2sl(ar.tpa[:], qip)
 	var dur mac_t
 	copy(ar.tha[:], dur[:])
-	for i := range ar.dst {
-		ar.dst[i] = 0xff
+	for i := range ar.dmac {
+		ar.dmac[i] = 0xff
 	}
 }
 
 func (ar *arpv4_t) init_reply(smac, dmac []uint8, sip, dip ip4_t) {
-	if len(smac) != MACLEN || len(dmac) != MACLEN {
+	if len(smac) != macsz || len(dmac) != macsz {
 		panic("bad addr")
 	}
 	ar._init(smac)
@@ -103,7 +101,7 @@ func (ar *arpv4_t) init_reply(smac, dmac []uint8, sip, dip ip4_t) {
 	copy(ar.tha[:], dmac)
 	ip2sl(ar.spa[:], sip)
 	ip2sl(ar.tpa[:], dip)
-	copy(ar.dst[:], dmac)
+	copy(ar.dmac[:], dmac)
 }
 
 func (ar *arpv4_t) bytes() []uint8 {
@@ -239,7 +237,7 @@ func _net_arp_start(qip ip4_t, nic *x540_t) {
 }
 
 func _net_arp_finish(buf []uint8) {
-	if uintptr(len(buf)) < ARPLEN {
+	if len(buf) < ARPLEN {
 		panic("short buf")
 	}
 	arp := (*arpv4_t)(unsafe.Pointer(&buf[0]))
@@ -435,7 +433,7 @@ func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
 
 var routetbl routetbl_t
 
-const IP4LEN = unsafe.Sizeof(ip4hdr_t{})
+const IP4LEN = int(unsafe.Sizeof(ip4hdr_t{}))
 
 // no options
 type ip4hdr_t struct {
@@ -473,7 +471,7 @@ func (i4 *ip4hdr_t) bytes() []uint8 {
 	return (*[IP4LEN]uint8)(unsafe.Pointer(i4))[:]
 }
 
-const ETHERLEN = unsafe.Sizeof(etherhdr_t{})
+const ETHERLEN = int(unsafe.Sizeof(etherhdr_t{}))
 
 type etherhdr_t struct {
 	dmac	mac_t
@@ -481,43 +479,181 @@ type etherhdr_t struct {
 	etype	uint16
 }
 
+func (et *etherhdr_t) init(smac, dmac *mac_t, etype uint16) {
+	copy(et.smac[:], smac[:])
+	copy(et.dmac[:], dmac[:])
+	et.etype = etype
+}
+
 func (e *etherhdr_t) bytes() []uint8 {
 	return (*[ETHERLEN]uint8)(unsafe.Pointer(e))[:]
 }
 
+type icmp_t struct {
+	ether	etherhdr_t
+	iphdr	ip4hdr_t
+	typ	uint8
+	code	uint8
+	cksum	uint16
+	ident	uint16
+	seq	uint16
+	data	[]uint8
+}
+
+func (ic *icmp_t) init(smac, dmac *mac_t, sip, dip ip4_t, typ uint8,
+    data []uint8) {
+	var z icmp_t
+	*ic = z
+	l4len := len(data) + 2*1 + 3*2
+	ip4 := htons(uint16(0x0800))
+	ic.ether.init(smac, dmac, ip4)
+	ic.iphdr.init_icmp(l4len, sip, dip)
+	ic.typ = typ
+	ic.data = data
+}
+
+func (ic *icmp_t) crc() {
+	sum := uint32(ic.typ) + uint32(ic.code) << 8
+	sum += uint32(ic.cksum)
+	sum += uint32(ic.ident)
+	sum += uint32(ic.seq)
+	buf := ic.data
+	for len(buf) > 1 {
+		sum += uint32(buf[0]) + uint32(buf[1]) << 8
+		buf = buf[2:]
+	}
+	if len(buf) == 1 {
+		sum += uint32(buf[0])
+	}
+	lm := uint32(^uint16(0))
+	for (sum &^ 0xffff) != 0 {
+		sum = (sum & lm) + (sum >> 16)
+	}
+	sum = ^sum
+	ret := uint16(sum)
+	ic.cksum = ret
+}
+
+func (ic *icmp_t) hdrbytes() []uint8 {
+	const hdrsz = ETHERLEN + IP4LEN + 2*1 + 3*2
+	return (*[hdrsz]uint8)(unsafe.Pointer(ic))[:]
+}
+
+var icmp_echos = make(chan []uint8, 30)
+
+func icmp_daemon() {
+	for {
+		buf := <- icmp_echos
+		buf = buf[ETHERLEN:]
+
+		fromip := sl2ip(buf[12:])
+		fmt.Printf("** GOT PING from %s\n", ip2str(fromip))
+
+		localip, routeip, err := routetbl.lookup(fromip)
+		if err != 0 {
+			panic("routing failed")
+		}
+		nic, ok := nics[localip]
+		if !ok {
+			panic("no such nic")
+		}
+		dmac, err := arp_resolve(localip, routeip)
+		if err != 0 {
+			panic("arp failed for ICMP echo")
+		}
+
+		ident := uint16(readn(buf, 2, IP4LEN + 4))
+		seq := uint16(readn(buf, 2, IP4LEN + 6))
+		origdata := buf[IP4LEN + 8:]
+		echodata := make([]uint8, len(origdata))
+		copy(echodata, origdata)
+		var reply icmp_t
+		reply.init(&nic.mac, dmac, nic.ip, fromip, 0, echodata)
+		reply.ident = ident
+		reply.seq = seq
+		reply.crc()
+		txpkt := [][]uint8{reply.hdrbytes(), echodata}
+		nic.tx_ipv4(txpkt)
+	}
+}
+
+func net_icmp(pkt [][]uint8, tlen int) {
+	buf := pkt[0]
+	buf = buf[ETHERLEN:]
+
+	// min ICMP header length is 8
+	if len(buf) < IP4LEN + 8 {
+		return
+	}
+	icmp_reply := uint8(0)
+	icmp_echo := uint8(8)
+
+	fromip := sl2ip(buf[12:])
+	icmp_type := buf[IP4LEN]
+	switch icmp_type {
+	case icmp_reply:
+		fmt.Printf("** ping reply from %s\n", ip2str(fromip))
+	case icmp_echo:
+		// copy out of DMA buffer
+		data := make([]uint8, tlen)
+		tmp := data
+		c := 0
+		for i := range pkt {
+			src := pkt[i]
+			did := copy(tmp, src)
+			tmp = tmp[did:]
+			c += did
+		}
+		if c != tlen {
+			panic("total len mismatch")
+		}
+		select {
+		case icmp_echos <- data:
+		default:
+			fmt.Printf("dropped ICMP echo\n")
+		}
+	}
+}
+
 var nics = map[ip4_t]*x540_t{}
 
-// network stack processing begins here
+// network stack processing begins here. pkt contains DMA memory and will be
+// clobbered once net_start returns to the caller.
 func net_start(pkt [][]uint8, tlen int) {
-	if tlen == 0 {
+	// header should always be fully contained in the first slice
+	buf := pkt[0]
+	hlen := len(buf)
+	if hlen < ETHERLEN {
 		return
 	}
 
-	// header should always be fully contained in the first slice
-	buf := pkt[0]
 	etype := uint16(readn(buf, 2, 12))
-	hlen := len(buf)
-	if len(buf) < 14 {
-		return
-	}
+	ip4 := htons(0x0800)
 	arp := htons(0x0806)
-	if etype == arp && hlen >= int(ARPLEN) {
+	switch etype {
+	case arp:
+		if hlen < ARPLEN {
+			return
+		}
 		arpop := uint16(readn(buf, 2, 20))
 		reply := htons(2)
-		if etype == arp && arpop == reply {
+		if arpop == reply {
 			_net_arp_finish(buf)
 		}
-		return
-	}
-	ip4 := htons(0x0800)
-	if etype == ip4 && hlen >= int(34) {
-		icmp_reply := uint16(0)
-		icmp_type := uint16(readn(buf, 2, 14+20))
-		if icmp_reply == icmp_type {
-			fromip := sl2ip(buf[14+12:])
-			fmt.Printf("** ping reply from %s\n", ip2str(fromip))
+	case ip4:
+		// strip ethernet header
+		buf = buf[ETHERLEN:]
+		if len(buf) < IP4LEN {
+			// short IPv4 header
+			return
 		}
-		return
+
+		proto := buf[9]
+		icmp := uint8(0x01)
+		switch proto {
+		case icmp:
+			net_icmp(pkt, tlen)
+		}
 	}
 }
 
@@ -542,6 +678,9 @@ func net_init() {
 	arptbl.restimeout = 5*time.Second
 
 	routetbl.init()
+
+	go icmp_daemon()
+
 	//net_test()
 }
 
