@@ -236,19 +236,40 @@ func _net_arp_start(qip ip4_t, nic *x540_t) {
 	nic.tx_raw(sgbuf)
 }
 
-func _net_arp_finish(buf []uint8) {
-	if len(buf) < ARPLEN {
-		panic("short buf")
-	}
-	arp := (*arpv4_t)(unsafe.Pointer(&buf[0]))
-	reply := htons(2)
-	if arp.oper != reply {
-		panic("not an arp reply")
-	}
+// the Rx path can try to immediately queue an ARP response for Tx since no ARP
+// resolution is necessary (which may block).
+func net_arp(pkt [][]uint8, tlen int) {
+	buf := pkt[0]
+	hlen := len(buf)
 
-	ip := sl2ip(arp.spa[:])
-	mac := &arp.sha
-	arp_add(ip, mac)
+	if hlen < ARPLEN {
+		return
+	}
+	buf = buf[ETHERLEN:]
+	// is it for us?
+	toip := sl2ip(buf[24:])
+	nic, ok := nics[toip]
+	if !ok {
+		return
+	}
+	fromip := sl2ip(buf[14:])
+	var frommac mac_t
+	copy(frommac[:], buf[8:])
+
+	arpop := uint16(readn(buf, 2, 6))
+	request := htons(1)
+	reply := htons(2)
+	switch arpop {
+	case reply:
+		arp_add(fromip, &frommac)
+	case request:
+		// add the sender to our arp table
+		arp_add(fromip, &frommac)
+		var rep arpv4_t
+		rep.init_reply(nic.mac[:], frommac[:], nic.ip, fromip)
+		sgbuf := [][]uint8{rep.bytes()}
+		nic.tx_raw(sgbuf)
+	}
 }
 
 type routes_t struct {
@@ -269,7 +290,7 @@ type rtentry_t struct {
 	gwip		ip4_t
 	// netmask shift
 	shift		int
-	// if gateway is true, ip is the IP of the gateway for this subnet
+	// if gateway is true, gwip is the IP of the gateway for this subnet
 	gateway		bool
 }
 
@@ -588,6 +609,12 @@ func net_icmp(pkt [][]uint8, tlen int) {
 	icmp_reply := uint8(0)
 	icmp_echo := uint8(8)
 
+	// for us?
+	toip := sl2ip(buf[16:])
+	if _, ok := nics[toip]; !ok {
+		return
+	}
+
 	fromip := sl2ip(buf[12:])
 	icmp_type := buf[IP4LEN]
 	switch icmp_type {
@@ -632,14 +659,7 @@ func net_start(pkt [][]uint8, tlen int) {
 	arp := htons(0x0806)
 	switch etype {
 	case arp:
-		if hlen < ARPLEN {
-			return
-		}
-		arpop := uint16(readn(buf, 2, 20))
-		reply := htons(2)
-		if arpop == reply {
-			_net_arp_finish(buf)
-		}
+		net_arp(pkt, tlen)
 	case ip4:
 		// strip ethernet header
 		buf = buf[ETHERLEN:]
