@@ -814,7 +814,6 @@ TEXT ·_trapret(SB), NOSPLIT, $0-8
 	MOVQ	IA32_GS_BASE, CX
 	POPQ	AX
 	MOVQ	AX, DX
-	ANDQ	$((1 << 32) - 1), AX
 	SHRQ	$32, DX
 	WRMSR
 
