@@ -619,7 +619,11 @@ func net_icmp(pkt [][]uint8, tlen int) {
 	icmp_type := buf[IP4LEN]
 	switch icmp_type {
 	case icmp_reply:
-		fmt.Printf("** ping reply from %s\n", ip2str(fromip))
+		when := int64(readn(buf, 8, IP4LEN + 8))
+		elap := float64(time.Now().UnixNano() - when)
+		elap /= 1000
+		fmt.Printf("** ping reply from %s took %v us\n",
+		    ip2str(fromip), elap)
 	case icmp_echo:
 		// copy out of DMA buffer
 		data := make([]uint8, tlen)

@@ -1728,17 +1728,19 @@ func (x *x540_t) linkinfo() (bool, string) {
 	return v & link != 0, speed
 }
 
-func (x *x540_t) wait_linkup() bool {
+func (x *x540_t) wait_linkup(secs int) bool {
 	link := uint32(1 << 30)
 	st := time.Now()
+	s := time.Duration(secs)
 	for {
 		v := x.rl(LINKS)
 		if v & link != 0 {
 			return true
 		}
-		if time.Since(st) > 7*time.Second {
+		if time.Since(st) > s*time.Second {
 			return false
 		}
+		runtime.Gosched()
 	}
 }
 
@@ -1841,7 +1843,6 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 
 func (x *x540_t) rx_consume() {
 	tailend := x.rl(RDH(0))
-	//dur := tailend
 	if tailend == 0 {
 		tailend = x.rx.ndescs - 1
 	} else {
@@ -1860,11 +1861,12 @@ func (x *x540_t) rx_consume() {
 	for !wd.rxdone() {
 		waits++
 	}
-	newtail := tail
+	// tail references an empty descriptor
+	tail = (tail + 1) % x.rx.ndescs
 	otail := tail
 	tlen := 0
 	pkt := x.rx.pkt[0:0]
-	for tail != tailend {
+	for {
 		rd := &x.rx.descs[tail]
 		if !rd.rxdone() {
 			panic("wut?")
@@ -1878,7 +1880,9 @@ func (x *x540_t) rx_consume() {
 			numpkts++
 			pkt = x.rx.pkt[0:0]
 			tlen = 0
-			newtail = (newtail + 1) % x.rx.ndescs
+		}
+		if tail == tailend {
+			break
 		}
 		tail++
 		if tail == x.rx.ndescs {
@@ -1886,18 +1890,21 @@ func (x *x540_t) rx_consume() {
 		}
 	}
 	// only reset descriptors for full packets
-	for otail != newtail {
+	for {
 		rd := &x.rx.descs[otail]
 		if !rd.rxdone() {
 			panic("wut?")
 		}
 		rd.ready()
+		if otail == tail {
+			break
+		}
 		otail++
 		if otail == x.rx.ndescs {
 			otail = 0
 		}
 	}
-	x.rs(RDT(0), newtail)
+	x.rs(RDT(0), tail)
 }
 
 func (x *x540_t) int_handler(vector msivec_t) {
@@ -1913,6 +1920,30 @@ func (x *x540_t) int_handler(vector msivec_t) {
 		tx     := uint32(1 << 1)
 		rxmiss := uint32(1 << 17)
 		lsc    := uint32(1 << 20)
+
+		// XXX code for polling instead of using interrupts
+		//runtime.Gosched()
+		//var st uint32
+		//if !rantest {
+		//	x.log("link wait...\n")
+		//	if !x.wait_linkup(10) {
+		//		x.log("NO LINK\n")
+		//		return
+		//	}
+		//	x.log("GOT LINK\n")
+		//	st |= lsc
+		//}
+		//rhead := x.rl(RDH(0))
+		//thead := x.rl(TDH(0))
+		//for st == 0 {
+		//	if x.rl(RDH(0)) != rhead {
+		//		st |= rx
+		//	}
+		//	if x.rl(TDH(0)) != thead {
+		//		st |= tx
+		//	}
+		//}
+
 		if st & lsc != 0 {
 			// link status change
 			up, speed := x.linkinfo()
@@ -1939,7 +1970,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				rantest = true
 				go x.tester1()
 				//go x.tester2()
-				go x.tester3()
+				//go x.tester3()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2020,6 +2051,7 @@ func (x *x540_t) tester3() {
 	ai := ip4_t(0)
 	for {
 		local = !local
+		//<-time.After(3*time.Second)
 
 		target := ip4_t(0x121a0500)
 		if local {
@@ -2028,6 +2060,7 @@ func (x *x540_t) tester3() {
 				ai = 1
 			}
 			target += ai
+			//target = ip4_t(0x121a0530)
 		} else {
 			target = ip4_t(0x08080808)
 		}
@@ -2046,8 +2079,8 @@ func (x *x540_t) tester3() {
 			panic("no")
 		}
 		<-time.After(100*time.Millisecond)
-		pingdata := []uint8{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe,
-		    0xef}
+		pingdata := make([]uint8, 8)
+		writen(pingdata, 8, 0, int(time.Now().UnixNano()))
 		var ping icmp_t
 		pingtype := uint8(8)
 		ping.init(&x.mac, dmac, x.ip, target, pingtype, pingdata)
@@ -2218,9 +2251,11 @@ func attach_x540t(vid, did int, t pcitag_t) {
 			x.rs(VFTA(i), 0)
 			x.rs(PFVLVFB(i), 0)
 		}
-		// XXX enable debugging features: store bad packets, unicast
-		// promiscuous, and broadcast accept
+		// enable ethernet broadcast packets via FCTRL.BAM in order to
+		// receive ARP requests.
 		v := x.rl(FCTRL)
+		// XXX debugging features: store bad packets and unicast
+		// promiscuous
 		//sbp := uint32(1 << 1)
 		//upe := uint32(1 << 9)
 		bam := uint32(1 << 10)
@@ -2280,9 +2315,8 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 		// program receive descriptor minimum threshold here
 
-		// XXX what is the right DESCTYPE?? section 7.1.10.1
-		// contradicts the register description in section 8! i'll try
-		// section 7.1.10.1's value for non-split buffers first...
+		// section 7.1.10.1's DESCTYPE values contradict the register
+		// description in section 8! section 7.1.10.1 is correct.
 		desctype := uint32(1 << 25)
 		v |= desctype
 		x.rs(SRRCTL(0), v)
@@ -2290,14 +2324,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		for i := range x.rx.descs {
 			x.rx.descs[i].ready()
 		}
-		// make last rx descriptor look like a 0 length packet so the
-		// receive path doesn't have to distinguish between an unused
-		// descriptor (the first tail after reset) and used descriptors
-		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_data = 0
-		dd := uint64(1)
-		eop := uint64(1 << 1)
-		x.rx.descs[x.rx.ndescs - 1].hwdesc.p_hdr = dd | eop
-
 		x.rs(RDH(0), 0)
 
 		// enable this rx queue
