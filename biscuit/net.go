@@ -568,7 +568,7 @@ func icmp_daemon() {
 		buf = buf[ETHERLEN:]
 
 		fromip := sl2ip(buf[12:])
-		fmt.Printf("** GOT PING from %s\n", ip2str(fromip))
+		//fmt.Printf("** GOT PING from %s\n", ip2str(fromip))
 
 		localip, routeip, err := routetbl.lookup(fromip)
 		if err != 0 {

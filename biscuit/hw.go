@@ -1329,7 +1329,8 @@ func (rd *rxdesc_t) ready() {
 
 func (rd *rxdesc_t) rxdone() bool {
 	dd := uint64(1)
-	return rd.hwdesc.p_hdr & dd != 0
+	// compiler barrier
+	return atomic.LoadUint64(&rd.hwdesc.p_hdr) & dd != 0
 }
 
 func (rd *rxdesc_t) eop() bool {
@@ -1471,7 +1472,8 @@ func (td *txdesc_t) txdone() bool {
 func (td *txdesc_t) wbwait() {
 	rs   := uint64(1 << 27)
 	// rs is reserved after writeback...
-	if td.hwdesc.rest & rs != 0 {
+	// compiler barrier
+	if atomic.LoadUint64(&td.hwdesc.rest) & rs != 0 {
 		for !td.txdone() {
 			waits++
 		}
@@ -1851,7 +1853,7 @@ func (x *x540_t) rx_consume() {
 	tail := x.rl(RDT(0))
 	if tail == tailend {
 		// queue is still full?
-		x.log("spurious rx int")
+		spurs++
 		return
 	}
 	// make sure the CPU observes the NIC's writeback of the RDH
@@ -1993,15 +1995,16 @@ func (x *x540_t) tester1() {
 	stirqs := irqs
 	st := time.Now()
 	for {
-		<-time.After(time.Second)
+		<-time.After(5*time.Second)
 		nirqs := irqs - stirqs
 		drops  := x.rl(QPRDC(0))
 		secs := time.Since(st).Seconds()
 		pps := float64(numpkts) / secs
 		ips := int(float64(nirqs) / secs)
+		spursps := float64(spurs) / secs
 		fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
-		    "irqs %v (%v/s)\n", numpkts, pps, dropints, drops,
-		    waits, nirqs, ips)
+		    "irqs %v (%v/s), spurs %v (%.3v/s)\n", numpkts, pps,
+		    dropints, drops, waits, nirqs, ips, spurs, spursps)
 	}
 }
 
@@ -2460,6 +2463,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 var numpkts int
 var dropints int
 var waits int
+var spurs int
 
 func (x *x540_t) rx_test() {
 	prstat := func(v bool) {
