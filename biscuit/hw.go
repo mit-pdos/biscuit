@@ -1010,6 +1010,7 @@ func msi_free(vector msivec_t) {
 	msivecs.avail[vector] = true
 }
 
+// XXX use uncachable mappings for MMIO?
 type x540reg_t uint
 const (
 	CTRL		x540reg_t	=    0x0

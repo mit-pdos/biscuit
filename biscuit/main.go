@@ -1902,6 +1902,7 @@ func _comready() bool {
 	}
 	return true
 }
+
 func _kready() bool {
 	ibf := uint(1 << 0)
 	st := runtime.Inb(0x64)

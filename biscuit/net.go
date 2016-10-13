@@ -503,7 +503,7 @@ type etherhdr_t struct {
 func (et *etherhdr_t) init(smac, dmac *mac_t, etype uint16) {
 	copy(et.smac[:], smac[:])
 	copy(et.dmac[:], dmac[:])
-	et.etype = etype
+	et.etype = htons(etype)
 }
 
 func (e *etherhdr_t) bytes() []uint8 {
@@ -526,7 +526,7 @@ func (ic *icmp_t) init(smac, dmac *mac_t, sip, dip ip4_t, typ uint8,
 	var z icmp_t
 	*ic = z
 	l4len := len(data) + 2*1 + 3*2
-	ip4 := htons(uint16(0x0800))
+	ip4 := uint16(0x0800)
 	ic.ether.init(smac, dmac, ip4)
 	ic.iphdr.init_icmp(l4len, sip, dip)
 	ic.typ = typ
@@ -668,11 +668,21 @@ func net_start(pkt [][]uint8, tlen int) {
 		// strip ethernet header
 		buf = buf[ETHERLEN:]
 		if len(buf) < IP4LEN {
-			// short IPv4 header
+			// short IP4 header
+			return
+		}
+		ippkt := (*ip4hdr_t)(unsafe.Pointer(&buf[0]))
+		if ippkt.vers_hdr & 0xf0 != 0x40 {
+			// not IP4?
+			return
+		}
+		// no IP options yet
+		if ippkt.vers_hdr & 0xf != 0x5 {
+			fmt.Printf("no imp\n")
 			return
 		}
 
-		proto := buf[9]
+		proto := ippkt.proto
 		icmp := uint8(0x01)
 		switch proto {
 		case icmp:
