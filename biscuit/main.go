@@ -672,12 +672,15 @@ func (p *proc_t) cowfault(userva int) {
 	}
 	p.lockassert_pmap()
 	pte := pmap_walk(p.pmap, userva, PTE_U | PTE_W)
+	if *pte & PTE_P != 0 && *pte & PTE_U == 0 {
+		panic("no kernel addresses")
+	}
 	if *pte & PTE_P != 0 && *pte & PTE_COW == 0 {
 		return
 	}
 	vmi, ok := p.vmregion.lookup(uintptr(userva))
 	if !ok {
-		return
+		panic("must have vminfo")
 	}
 	ecode := uintptr(PTE_U | PTE_W)
 	sys_pgfault(p, vmi, pte, uintptr(userva), ecode)

@@ -277,7 +277,7 @@ type routes_t struct {
 	// bit in each subnet mask
 	subnets		[]int
 	// map of subnets to the owning IP of the destination ethernet MAC
-	routes		map[ip4_t]rtentry_t
+	routes		map[uint64]rtentry_t
 	defgw		struct {
 		myip	ip4_t
 		ip	ip4_t
@@ -295,7 +295,7 @@ type rtentry_t struct {
 }
 
 func (r *routes_t) init() {
-	r.routes = make(map[ip4_t]rtentry_t)
+	r.routes = make(map[uint64]rtentry_t)
 	r.defgw.valid = false
 }
 
@@ -306,7 +306,7 @@ func (r *routes_t) defaultgw(myip, gwip ip4_t) {
 }
 
 func (r *routes_t) _insert(myip, netip, netmask, gwip ip4_t, isgw bool) {
-	if netmask == 0 || netmask == ^ip4_t(0) {
+	if netmask == 0 || netmask == ^ip4_t(0) || netip & netmask == 0 {
 		panic("not a subnet or default gw")
 	}
 	var bit int
@@ -326,7 +326,8 @@ func (r *routes_t) _insert(myip, netip, netmask, gwip ip4_t, isgw bool) {
 		sort.Ints(r.subnets)
 	}
 	nrt := rtentry_t{myip: myip, gwip: gwip, shift: bit, gateway: isgw}
-	key := netip >> uint(bit)
+	key := uint64(netip >> uint(bit))
+	key |= uint64(netmask) << 32
 	if _, ok := r.routes[key]; ok {
 		panic("subnet must be unique")
 	}
@@ -347,7 +348,7 @@ func (r *routes_t) copy() *routes_t {
 	for i := range r.subnets {
 		ret.subnets[i] = r.subnets[i]
 	}
-	ret.routes = make(map[ip4_t]rtentry_t)
+	ret.routes = make(map[uint64]rtentry_t)
 	for a, b := range r.routes {
 		ret.routes[a] = b
 	}
@@ -366,7 +367,8 @@ func (r *routes_t) dump() {
 	}
 	for sub, rt := range r.routes {
 		s := rt.shift
-		net := ip2str(sub << uint(s)) + fmt.Sprintf("/%d", 32 - s)
+		net := ip2str(ip4_t(sub) << uint(s)) +
+		    fmt.Sprintf("/%d", 32 - s)
 		mine := ip2str(rt.myip)
 		dip := "X"
 		if rt.gateway {
@@ -381,7 +383,9 @@ func (r *routes_t) dump() {
 // and error
 func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
 	for _, shift := range r.subnets {
-		try := dip >> uint(shift)
+		s := uint(shift)
+		try := uint64(dip >> s)
+		try |= ^uint64((1 << (s + 32)) - 1)
 		if rtent, ok := r.routes[try]; ok {
 			realdest := dip
 			if rtent.gateway {
