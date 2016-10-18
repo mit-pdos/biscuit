@@ -1286,10 +1286,10 @@ func (idm *imemnode_t) cache_dirents() {
 	}
 }
 
-// if returns true, the inode is valid (not freed) and locked. otherwise the inode
-// is unlocked. it is for locking an imemnode that that has been opened (no name
-// resolution required). checking opencount is to detect races between threads on
-// a single fd.
+// if returns true, the inode is valid (not freed) and locked. otherwise the
+// inode is unlocked. it is for locking an imemnode that that has been opened
+// (no name resolution required). checking opencount is to detect races between
+// threads on a single fd.
 //
 // in general: ilock_opened() is for fds, the rest should use ilock_namei().
 func (idm *imemnode_t) ilock_opened() bool {
@@ -2090,7 +2090,8 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, int) {
 	if offset > isz || offset + len > isz || len < 0 {
 		panic("bad offset")
 	}
-	pgc := roundup(len, PGSIZE) / PGSIZE
+	len = roundup(offset + len, PGSIZE) - rounddown(offset, PGSIZE)
+	pgc := len / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
 	for i := 0; i < len; i += PGSIZE {
 		pg, phys := idm.pgcache.pgraw(offset + i)
