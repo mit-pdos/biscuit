@@ -2050,9 +2050,13 @@ func (b *bprof_t) len() int {
 
 // dumps profile to serial console/vga for xxd -r
 func (b *bprof_t) dump() {
-	l := len(b.data)
+	hexdump(b.data)
+}
+
+func hexdump(buf []uint8) {
+	l := len(buf)
 	for i := 0; i < l; i += 16 {
-		cur := b.data[i:]
+		cur := buf[i:]
 		if len(cur) > 16 {
 			cur = cur[:16]
 		}

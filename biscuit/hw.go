@@ -1376,9 +1376,25 @@ func (td *txdesc_t) ctxt_ipv4(_machlen, _ip4len int) {
 	td.hwdesc.rest = 0x2 << 20
 	// DEXT = 1
 	td.hwdesc.rest |= 1 << 29
-	// IPV4 = 1
-	td.hwdesc.rest |= 1 << 12
+	// TUCMD.IPV4 = 1
+	ipv4 := uint64(1 << 12)
+	td.hwdesc.rest |= ipv4
 	// leave IDX zero
+}
+
+func (td *txdesc_t) ctxt_tcp(_machlen, _ip4len int) {
+	td.ctxt = true
+	maclen := uint64(_machlen)
+	td.hwdesc.p_addr = maclen << 9
+	hlen := uint64(_ip4len)
+	td.hwdesc.p_addr |= hlen
+	// DTYP = 0010b
+	td.hwdesc.rest = 0x2 << 20
+	// DEXT = 1
+	td.hwdesc.rest |= 1 << 29
+	// TUCMD.L4T = 1 (TCP)
+	tcp := uint64(1 << 11)
+	td.hwdesc.rest |= tcp
 }
 
 // returns remaining bytes
@@ -1424,19 +1440,29 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 }
 
 // returns remaining bytes
-func (td *txdesc_t) raw_start(src [][]uint8, tlen int) [][]uint8 {
+func (td *txdesc_t) mkraw(src [][]uint8, tlen int) [][]uint8 {
 	ret := td.data_continue(src)
 	td._paylen(uint64(tlen))
 	return ret
 }
 
 // offloads ipv4 checksum calculation to the NIC. returns the remaining bytes.
-func (td *txdesc_t) ipv4_start(src [][]uint8, tlen int) [][]uint8 {
+func (td *txdesc_t) mkipv4(src [][]uint8, tlen int) [][]uint8 {
 	ret := td.data_continue(src)
 	td._paylen(uint64(tlen))
 	// POPTS.IXSM = 1
-	td.hwdesc.rest |= 1 << 40
+	ixsm := uint64(1 << 40)
+	td.hwdesc.rest |= ixsm
 	// no need for index or CC
+	return ret
+}
+
+// offloads IPv4/TCP checksum to the NIC. returns the remaining bytes.
+func (td *txdesc_t) mktcp(src [][]uint8, tlen int) [][]uint8 {
+	ret := td.mkipv4(src, tlen)
+	// POPTS.TXSM = 1
+	txsm := uint64(1 << 41)
+	td.hwdesc.rest |= txsm
 	return ret
 }
 
@@ -1758,16 +1784,20 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
 func (x *x540_t) tx_raw(buf [][]uint8) {
-	x._tx_wait(buf, false)
+	x._tx_wait(buf, false, false)
 }
 
 func (x *x540_t) tx_ipv4(buf [][]uint8) {
-	x._tx_wait(buf, true)
+	x._tx_wait(buf, true, false)
 }
 
-func (x *x540_t) _tx_wait(buf [][]uint8, ipv4 bool) {
+func (x *x540_t) tx_tcp(buf [][]uint8) {
+	x._tx_wait(buf, true, true)
+}
+
+func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp bool) {
 	x.tx.Lock()
-	for !x._tx_enqueue(buf, ipv4) {
+	for !x._tx_enqueue(buf, ipv4, tcp) {
 		x.tx.cond.Wait()
 	}
 	x.tx.cond.Signal()
@@ -1776,7 +1806,7 @@ func (x *x540_t) _tx_wait(buf [][]uint8, ipv4 bool) {
 
 // caller must hold x.tx lock. returns true if buf was enqueued to be
 // trasmitted.
-func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
+func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp bool) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -1794,7 +1824,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 	}
 	need := tlen
 	newtail := tail
-	if ipv4 {
+	if ipv4 || tcp {
 		// XXX the NIC only needs 1 context descriptor total for IPv4
 		// checksums, not 1 per packet! (segmentation offload requires
 		// 1 per packet)
@@ -1821,14 +1851,20 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4 bool) bool {
 	// the first descriptors are special
 	fd := &x.tx.descs[tail]
 	fd.wbwait()
-	if ipv4 {
+	if tcp {
+		fd.ctxt_tcp(ETHERLEN, IP4LEN)
+		tail = (tail + 1) % x.tx.ndescs
+		fd = &x.tx.descs[tail]
+		fd.wbwait()
+		buf = fd.mktcp(buf, tlen)
+	} else if ipv4 {
 		fd.ctxt_ipv4(ETHERLEN, IP4LEN)
 		tail = (tail + 1) % x.tx.ndescs
 		fd = &x.tx.descs[tail]
 		fd.wbwait()
-		buf = fd.ipv4_start(buf, tlen)
+		buf = fd.mkipv4(buf, tlen)
 	} else {
-		buf = fd.raw_start(buf, tlen)
+		buf = fd.mkraw(buf, tlen)
 	}
 	tail = (tail + 1) % x.tx.ndescs
 	for len(buf) != 0 {
@@ -1974,6 +2010,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				go x.tester1()
 				//go x.tester2()
 				//go x.tester3()
+				go x.tester4()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2085,13 +2122,34 @@ func (x *x540_t) tester3() {
 		<-time.After(100*time.Millisecond)
 		pingdata := make([]uint8, 8)
 		writen(pingdata, 8, 0, int(time.Now().UnixNano()))
-		var ping icmp_t
+		var ping icmppkt_t
 		pingtype := uint8(8)
 		ping.init(&x.mac, dmac, x.ip, target, pingtype, pingdata)
 		ping.crc()
 		buf := [][]uint8{ping.hdrbytes(), pingdata}
 		fmt.Printf("** ping to %s...\n", ip2str(target))
 		x.tx_ipv4(buf)
+	}
+}
+
+func (x *x540_t) tester4() {
+	n := 0
+	for {
+		//mat := ip4_t(0x121a0413)
+		bterm := ip4_t(0x121a0530)
+		dport := uint16(31337)
+		//if n % 3 == 1 {
+		//	dip = ip4_t(0x121a0413)
+		//} else if n % 3 == 2 {
+		//	dip = ip4_t(0xd83adbe4)
+		//	dport = uint16(80)
+		//}
+		n++
+		err := _tcp_connect(bterm, 31337, dport)
+		if err != 0 {
+			fmt.Printf("connect failed: %d\n", err)
+			time.Sleep(30*time.Second)
+		}
 	}
 }
 
@@ -2567,7 +2625,7 @@ func (x *x540_t) tx_test() {
 		const paylen = unsafe.Sizeof(txdata_t{})
 		bytes := (*[paylen]uint8)(unsafe.Pointer(&txdata))[:]
 		sgbuf := [][]uint8{bytes}
-		tdesc.raw_start(sgbuf[:], len(bytes))
+		tdesc.mkraw(sgbuf[:], len(bytes))
 		tail++
 		if tail == x.tx.ndescs {
 			tail = 0

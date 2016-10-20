@@ -2798,6 +2798,7 @@ static const char * const _errstr[] = {
 	[ENAMETOOLONG] = "File name too long",
 	[ENOSYS] = "Function not implemented",
 	[ENOTEMPTY] = "Directory not empty",
+	[EADDRINUSE] = "Address already in use",
 	[ENETDOWN] = "Network is down",
 	[EHOSTUNREACH] = "No route to host",
 	[EOVERFLOW] = "Value too large to be stored in data type",
