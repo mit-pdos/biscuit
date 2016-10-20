@@ -869,8 +869,9 @@ func (t *tcphdr_t) dump(sip, dip ip4_t, opt tcpopt_t) {
 	s := fmt.Sprintf("%s:%d -> %s:%d", ip2str(sip), ntohs(t.sport),
 	    ip2str(dip), ntohs(t.dport))
 	if t.issyn() {
-		s += fmt.Sprintf(", S [%v]", ntohl(t.seq))
+		s += fmt.Sprintf(", S")
 	}
+	s += fmt.Sprintf(" [%v]", ntohl(t.seq))
 	if ack, ok := t.isack(); ok {
 		s += fmt.Sprintf(", A [%v]", ack)
 	}
@@ -910,6 +911,8 @@ type tcptcb_t struct {
 	smac	*mac_t
 	dmac	*mac_t
 	state	tcpstate_t
+	// dead must only be true after both sides have acknowledged all data
+	// (i.e. on receiving reset or after LASTACK/TIMEWAIT)
 	dead	bool
 	rcv struct {
 		nxt	uint32
@@ -922,6 +925,16 @@ type tcptcb_t struct {
 		mss	uint16
 		wl1	uint32
 		wl2	uint32
+	}
+	// remembered stuff to send
+	rem struct {
+		last	time.Time
+		// number of segments received; we try to send 1 ACK per 2 data
+		// segments.
+		num	uint
+		// outstanding ACK?
+		outa	bool
+		tstart	bool
 	}
 }
 
@@ -987,19 +1000,11 @@ func (tc *tcptcb_t) _rst() {
 func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
     opt tcpopt_t, rest [][]uint8) {
 	tc._sanity()
-	var sgbuf [][]uint8
 	switch tc.state {
 		case SYNSENT:
-			dlen := 0
-			for _, r := range rest {
-				dlen += len(r)
-			}
-			if dlen != 0 {
-				panic("data-bearing syn!")
-			}
-			sgbuf = tc.synsent(ip4, tcp, opt.mss)
+			tc.synsent(ip4, tcp, opt.mss, rest)
 		case ESTAB:
-			sgbuf = tc.estab(ip4, tcp, rest)
+			tc.estab(ip4, tcp, rest)
 		default:
 			sn, ok := statestr[tc.state]
 			if !ok {
@@ -1009,19 +1014,59 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			return
 	}
 
+	tc.maybe_ack()
+
 	if tc.dead {
 		tcpcons.tcb_del(tk)
 		return
 	}
+}
 
-	if len(sgbuf) != 0 {
-		nic, ok := nics[tc.lip]
-		if !ok {
-			fmt.Printf("NIC gone!\n")
+func (tc *tcptcb_t) sched_ack(gotdata bool) {
+	if gotdata {
+		tc.rem.num++
+	}
+	tc.rem.outa = true
+}
+
+func (tc *tcptcb_t) maybe_ack() {
+	tc._sanity()
+	if !tc.rem.outa {
+		return
+	}
+	if tc.rem.num % 2 == 0 {
+		now := time.Now()
+		deadline := tc.rem.last.Add(500*time.Millisecond)
+		candefer := now.Before(deadline)
+		if candefer {
+			if !tc.rem.tstart {
+				// XXX goroutine per timeout bad?
+				tc.rem.tstart = true
+				left := deadline.Sub(now)
+				go func() {
+					time.Sleep(left)
+					tc.tcb_lock()
+					tc.rem.tstart = false
+					tc.maybe_ack()
+					tc.tcb_unlock()
+				}()
+			}
 			return
 		}
-		nic.tx_tcp(sgbuf)
 	}
+	tc.rem.outa = false
+
+	pkt := tc.mkack(tc.snd.nxt, tc.rcv.nxt)
+	nic, ok := nics[tc.lip]
+	if !ok {
+		fmt.Printf("NIC gone!\n")
+		tc.dead = true
+		return
+	}
+	eth, ip, th := pkt.hdrbytes()
+	sgbuf := [][]uint8{eth, ip, th}
+	nic.tx_tcp(sgbuf)
+	tc.rem.last = time.Now()
 }
 
 // returns TCP header and TCP option slice
@@ -1051,109 +1096,6 @@ func (tc *tcptcb_t) mkconnect(seq uint32) (*tcppkt_t, []uint8) {
 	return ret, opt
 }
 
-func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t,
-    mss uint16) [][]uint8 {
-	tc._sanity()
-	if ack, ok := tcp.isack(); ok {
-		if !tc.ackok(ack) {
-			if tcp.isrst() {
-				return nil
-			}
-			tc._rst()
-			return nil
-		}
-	}
-	if tcp.isrst() {
-		// XXX wakeup connect(3) thread
-		fmt.Printf("connection refused\n")
-		return nil
-	}
-	// should we allow simultaneous connect?
-	if !tcp.issyn() {
-		return nil
-	}
-	theirseq := ntohl(tcp.seq)
-	tc.rcv.nxt = theirseq + 1
-	ack, ok := tcp.isack()
-	if !ok {
-		// XXX make SYN/ACK, move to SYNRCVD
-		panic("simultaneous connect")
-	}
-	tc._nstate(SYNSENT, ESTAB)
-	tc.snd.mss = mss
-	tc.snd.una = ack
-	ackseq := tc.snd.nxt
-	tpkt := tc.mkhsack(ackseq, theirseq)
-	tc.snd.nxt++
-	tc.winupdate(theirseq, ack, ntohs(tcp.win))
-	eth, ip, tcpb := tpkt.hdrbytes()
-	ret := [][]uint8{eth, ip, tcpb}
-	return ret
-}
-
-// finish handshake: ACK the SYN/ACK. returns sequence number of this ACK.
-func (tc *tcptcb_t) mkhsack(ackseq, theirseq uint32) *tcppkt_t {
-	ret := &tcppkt_t{}
-	ackthem := theirseq + 1
-	ret.tcphdr.init_ack(tc.lport, tc.rport, ackseq, ackthem)
-	ret.tcphdr.win = htons(1 << 14)
-	l4len := ret.tcphdr.hdrlen()
-	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
-	ret.ether.init_ip4(tc.smac, tc.dmac)
-	ret.crc(l4len, tc.lip, tc.rip)
-	return ret
-}
-
-func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t,
-    rest [][]uint8) [][]uint8 {
-	seq := ntohl(tcp.seq)
-	// does this segment contain data in our receive window?
-	var dlen int
-	for _, r := range rest {
-		dlen += len(r)
-	}
-	if !tc.seqok(seq, dlen) {
-		if !tcp.isrst() {
-			return nil
-		}
-		// XXX send ACK so they can fix their sequence
-		return nil
-	}
-	if tcp.isrst() {
-		// XXX fail user reads/writes
-		tc.dead = true
-		return nil
-	}
-	if tcp.issyn() {
-		// XXX fail user reads/writes
-		tc._rst()
-		tc.dead = true
-		return nil
-	}
-	ack, ok := tcp.isack()
-	if !ok {
-		return nil
-	}
-	if !tc.ackok(ack) {
-		// XXX send an ack
-		return nil
-	}
-	// fast retransmit here
-	tc.snd.una = ack
-	tc.winupdate(seq, ack, ntohs(tcp.win))
-	tc.rcv.nxt += uint32(dlen)
-	go func() {
-		fmt.Printf("received: ")
-		for _, r := range rest {
-			fmt.Printf("%s", string(r))
-		}
-	}()
-	pkt := tc.mkack(tc.snd.nxt, tc.rcv.nxt)
-	eth, ip, tcph := pkt.hdrbytes()
-	sgbuf := [][]uint8{eth, ip, tcph}
-	return sgbuf
-}
-
 func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
@@ -1165,23 +1107,182 @@ func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
 	return ret
 }
 
+func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
+    rest [][]uint8) {
+	tc._sanity()
+	if ack, ok := tcp.isack(); ok {
+		if !tc.ackok(ack) {
+			if tcp.isrst() {
+				return
+			}
+			tc._rst()
+			return
+		}
+	}
+	if tcp.isrst() {
+		// XXX wakeup connect(3) thread
+		fmt.Printf("connection refused\n")
+		tc.dead = true
+		return
+	}
+	// should we allow simultaneous connect?
+	if !tcp.issyn() {
+		return
+	}
+	ack, ok := tcp.isack()
+	if !ok {
+		// XXX make SYN/ACK, move to SYNRCVD
+		panic("simultaneous connect")
+	}
+	tc._nstate(SYNSENT, ESTAB)
+	theirseq := ntohl(tcp.seq)
+	tc.rcv.nxt = theirseq + 1
+	tc.snd.mss = mss
+	tc.snd.una = ack
+	var dlen int
+	for _, r := range rest {
+		dlen += len(r)
+	}
+	// snd.wl[12] are bogus, force window update
+	rwin := ntohs(tcp.win)
+	tc.snd.wl1 = theirseq
+	tc.snd.wl2 = ack
+	tc.snd.win = rwin
+	tc.data_in(tc.rcv.nxt, ack, rwin, rest, dlen)
+}
+
+func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
+	seq := ntohl(tcp.seq)
+	// does this segment contain data in our receive window?
+	var dlen int
+	for _, r := range rest {
+		dlen += len(r)
+	}
+	if !tc.seqok(seq, dlen) {
+		if !tcp.isrst() {
+			return
+		}
+		tc.sched_ack(false)
+		return
+	}
+	if tcp.isrst() {
+		// XXX fail user reads/writes
+		tc.dead = true
+		return
+	}
+	if tcp.issyn() {
+		// XXX fail user reads/writes
+		tc._rst()
+		tc.dead = true
+		return
+	}
+	ack, ok := tcp.isack()
+	if !ok {
+		return
+	}
+	if !tc.ackok(ack) {
+		tc.sched_ack(false)
+		return
+	}
+	tc.data_in(seq, ack, ntohs(tcp.win), rest, dlen)
+}
+
+// trims the segment to fit our receive window and acks it
+func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
+    dlen int) {
+	// XXXPANIC
+	if !tc.seqok(rseq, dlen) {
+		panic("must contain in-window data")
+	}
+	tc.snd.una = rack
+	// figure out which bytes are in our window: is the beginning of
+	// segment outside our window?
+	var startoff uint32
+	if !_seqbetween(tc.rcv.nxt, rseq, tc.rcv.nxt + uint32(tc.rcv.win)) {
+		prune := _seqdiff(tc.rcv.nxt, rseq)
+		startoff = uint32(prune)
+		dlen -= prune
+		for i, r := range rest {
+			ub := prune
+			if ub > len(r) {
+				ub = len(r)
+			}
+			rest[i] = r[ub:]
+			prune -= ub
+			if prune == 0 {
+				break
+			}
+		}
+		// XXXPANIC
+		if prune != 0 {
+			panic("can't be in window")
+		}
+	}
+	// prune so the end is within our window
+	winend := tc.rcv.nxt + uint32(tc.rcv.win)
+	if !_seqbetween(tc.rcv.nxt, rseq + uint32(dlen), winend) {
+		prune := _seqdiff(winend, rseq + uint32(dlen))
+		dlen -= prune
+		for i := len(rest) - 1; i >= 0; i-- {
+			r := rest[i]
+			ub := prune
+			if ub > len(r) {
+				ub = len(r)
+			}
+			newlen := len(r) - ub
+			rest[i] = r[:newlen]
+			prune -= ub
+			if prune == 0 {
+				break
+			}
+		}
+		// XXXPANIC
+		if prune != 0 {
+			panic("can't be in window")
+		}
+	}
+	if dlen != 0 {
+		// don't set wl1 to this seq if there is no data (like during
+		// SYN/ACKs, usually) since this seq hasn't arrived yet
+		tc.rwinupdate(rseq + startoff, rack, rwin)
+	}
+	if rseq + startoff == tc.rcv.nxt {
+		tc.rcv.nxt += uint32(dlen)
+		// XXX add out of order sequences. keep list of seq,lens,
+		// remove elements that are contained in this advancing seg,
+		// add differences of endpoints with the seg that this one
+		// intersects with.
+	} else {
+		// XXX save out of order sequence and length.
+		panic("out of order segment")
+	}
+	tc.sched_ack(true)
+	// XXX put data in user buffer
+	fmt.Printf("got: %v bytes (%v)\n", dlen, len(rest))
+	for _, r := range rest {
+		fmt.Printf("%s\n", string(r))
+	}
+}
+
 // is ACK in my send window?
 func (tc *tcptcb_t) ackok(ack uint32) bool {
-	return tc._seqbetween(tc.snd.una, ack, tc.snd.nxt)
+	tc._sanity()
+	return _seqbetween(tc.snd.una, ack, tc.snd.nxt)
 }
 
 // is seq in my receive window?
 func (tc *tcptcb_t) seqok(seq uint32, seglen int) bool {
+	tc._sanity()
 	winstart := tc.rcv.nxt
 	winend := tc.rcv.nxt + uint32(tc.rcv.win)
 	segend := seq + uint32(seglen)
-	return tc._seqbetween(winstart, seq, winend) ||
-	    tc._seqbetween(winstart, segend, winend)
+	return _seqbetween(winstart, seq, winend) ||
+	    _seqbetween(winstart, segend, winend)
 }
 
 // returns true when low <= mid <= hi on uints (i.e. even when sequences
 // numbers wrap to 0)
-func (tc *tcptcb_t) _seqbetween(low, mid, hi uint32) bool {
+func _seqbetween(low, mid, hi uint32) bool {
 	if hi >= low {
 		return mid >= low && mid <= hi
 	} else {
@@ -1190,8 +1291,25 @@ func (tc *tcptcb_t) _seqbetween(low, mid, hi uint32) bool {
 	}
 }
 
-func (tc *tcptcb_t) winupdate(seq, ack uint32, win uint16) {
-	if tc.snd.wl1 < seq || (tc.snd.wl1 == seq && tc.snd.wl2 <= ack) {
+// returns difference of big - small with unsigned wrapping
+func _seqdiff(big, small uint32) int {
+	if big >= small {
+		return int(uint(big - small))
+	} else {
+		diff := ^uint32(0) - small + 1
+		return int(uint(diff + big))
+	}
+}
+
+// update remote receive window
+func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
+	// see if seq is the larger than wl1. does the window wrap?
+	lwinend := tc.rcv.nxt + uint32(tc.rcv.win)
+	w1less := _seqdiff(lwinend, tc.snd.wl1) > _seqdiff(lwinend, seq)
+	rwinend := tc.snd.nxt + uint32(tc.snd.win)
+	wl2less := _seqdiff(rwinend, tc.snd.wl2) > _seqdiff(rwinend, ack)
+	if w1less || (tc.snd.wl1 == seq && wl2less) {
+		fmt.Printf("WINDOW UPDATE\n")
 		tc.snd.win = win
 		tc.snd.wl1 = seq
 		tc.snd.wl2 = ack
@@ -1226,8 +1344,10 @@ func (tc *tcpcons_t) tcb_new(tk tcpkey_t, smac, dmac *mac_t) (*tcptcb_t, bool) {
 	ret.state = INVALID
 	ret.snd.nxt = rand.Uint32()
 	ret.snd.una = ret.snd.nxt
-	defwin := uint16(1 << 14)
-	ret.rcv.win = defwin
+	rdefwin := uint16(4380)
+	ret.snd.win = rdefwin
+	ldefwin := uint16(1 << 14)
+	ret.rcv.win = ldefwin
 	ret.dmac = dmac
 	ret.smac = smac
 
@@ -1355,7 +1475,7 @@ func net_tcp(pkt [][]uint8, tlen int) {
 
 var nics = map[ip4_t]*x540_t{}
 
-// network stack processing begins here. pkt contains DMA memory and will be
+// network stack processing begins here. pkt references DMA memory and will be
 // clobbered once net_start returns to the caller.
 func net_start(pkt [][]uint8, tlen int) {
 	// header should always be fully contained in the first slice
@@ -1373,8 +1493,7 @@ func net_start(pkt [][]uint8, tlen int) {
 		net_arp(pkt, tlen)
 	case ip4:
 		// strip ethernet header
-		buf = buf[ETHERLEN:]
-		ippkt, _, ok := sl2iphdr(buf)
+		ippkt, _, ok := sl2iphdr(buf[ETHERLEN:])
 		if !ok {
 			// short IP4 header
 			return
@@ -1499,6 +1618,7 @@ func net_test() {
 
 	// test ACK check wrapping
 	tcb := &tcptcb_t{}
+	tcb.tcb_lock()
 	t := func(l, h, m uint32, e bool) {
 		tcb.snd.una = l
 		tcb.snd.nxt = h
@@ -1517,4 +1637,14 @@ func net_test() {
 	t(0xfffffff0, 10, 0xfffffff1, true)
 	t(0xfffffff0, 10, 0xfffffff0, true)
 	t(0xfffffff0, 0xffffffff, 0, false)
+
+	d := func(b, s uint32, e int) {
+		r := _seqdiff(b, s)
+		if r != e {
+			panic(fmt.Sprintf("%#x != %#x", r, e))
+		}
+	}
+	d(1, 0, 1)
+	d(0, 0xfffffff0, 0x10)
+	d(30, 0xfffffff0, 0x10 + 30)
 }

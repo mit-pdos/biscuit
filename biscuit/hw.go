@@ -1910,7 +1910,8 @@ func (x *x540_t) rx_consume() {
 		if !rd.rxdone() {
 			panic("wut?")
 		}
-		// packet may span multiple descriptors (only for RSC?)
+		// packet may span multiple descriptors (only for RSC when MTU
+		// less than descriptor DMA buffer size?)
 		buf := dmaplen(uintptr(rd.p_pbuf), rd.pktlen())
 		tlen += rd.pktlen()
 		pkt = append(pkt, buf)
@@ -2033,7 +2034,7 @@ func (x *x540_t) tester1() {
 	stirqs := irqs
 	st := time.Now()
 	for {
-		<-time.After(5*time.Second)
+		<-time.After(30*time.Second)
 		nirqs := irqs - stirqs
 		drops  := x.rl(QPRDC(0))
 		secs := time.Since(st).Seconds()
@@ -2137,19 +2138,23 @@ func (x *x540_t) tester4() {
 	for {
 		//mat := ip4_t(0x121a0413)
 		bterm := ip4_t(0x121a0530)
-		dport := uint16(31337)
+		dport := uint16(31338 + n)
+		//boss := ip4_t(0x9b622046)
+		//dport := uint16(22)
 		//if n % 3 == 1 {
 		//	dip = ip4_t(0x121a0413)
 		//} else if n % 3 == 2 {
 		//	dip = ip4_t(0xd83adbe4)
 		//	dport = uint16(80)
 		//}
-		n++
+		//n++
 		err := _tcp_connect(bterm, 31337, dport)
 		if err != 0 {
-			fmt.Printf("connect failed: %d\n", err)
-			time.Sleep(30*time.Second)
+			fmt.Printf("socket failed: %d\n", err)
+		} else {
+			time.Sleep(10*time.Second)
 		}
+		n++
 	}
 }
 
