@@ -2148,10 +2148,30 @@ func (x *x540_t) tester4() {
 		//	dport = uint16(80)
 		//}
 		//n++
-		err := _tcp_connect(bterm, 31337, dport)
+		err, tcb := _tcp_connect(bterm, 31337, dport)
 		if err != 0 {
 			fmt.Printf("socket failed: %d\n", err)
 		} else {
+			go func() {
+			_buf := make([]uint8, 64)
+			fub := &userbuf_t{}
+			for {
+				time.Sleep(500*time.Millisecond)
+				buf := _buf
+				fub.fake_init(buf)
+
+				tcb.tcb_lock()
+				l, err := tcb.rxbuf.uread(fub)
+				tcb.tcb_unlock()
+				if err != 0 {
+					panic("wut?")
+				}
+				buf = buf[:l]
+				if len(buf) != 0 {
+					fmt.Printf("GOT: %s\n", string(buf))
+				}
+			}
+			}()
 			time.Sleep(10*time.Second)
 		}
 		n++

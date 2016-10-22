@@ -699,6 +699,69 @@ func net_icmp(pkt [][]uint8, tlen int) {
 	}
 }
 
+type tcpbuf_t struct {
+	cbuf	circbuf_t
+	seq	uint32
+	didseq	bool
+}
+
+func (tb *tcpbuf_t) tbuf_init(sz int) {
+	tb.cbuf.cb_init(sz)
+	tb.didseq = false
+}
+
+func (tb *tcpbuf_t) set_seq(seq uint32) {
+	if tb.didseq {
+		panic("seq already set")
+	}
+	tb.seq = seq
+	tb.didseq = true
+}
+
+func (tb *tcpbuf_t) _sanity() {
+	if !tb.didseq {
+		panic("no sequence")
+	}
+}
+
+// allows user to read written data (if next in the sequence) and returns
+// number of bytes written. cannot fail.
+func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
+	tb._sanity()
+	if !_seqbetween(tb.seq, nseq, tb.seq + uint32(tb.cbuf.left())) {
+		panic("bad sequence number")
+	}
+	var dlen int
+	for _, r := range rxdata {
+		dlen += len(r)
+	}
+	if dlen >= tb.cbuf.left() {
+		panic("data out of window")
+	}
+	off := _seqdiff(nseq, tb.seq)
+	var did int
+	for _, r := range rxdata {
+		fmt.Printf("len(r) = %v\n", len(r))
+		dst1, dst2 := tb.cbuf._rawwrite(off + did, len(r))
+		did1 := copy(dst1, r)
+		did2 := copy(dst2, r[did1:])
+		did += did1 + did2
+	}
+	// XXXPANIC
+	if did != dlen {
+		panic("nyet")
+	}
+	if nseq == tb.seq {
+		tb.seq += uint32(did)
+		tb.cbuf._advhead(did)
+	}
+	return did
+}
+
+func (tb *tcpbuf_t) uread(dst *userbuf_t) (int, int) {
+	return tb.cbuf.copyout(dst)
+}
+
 type tcphdr_t struct {
 	sport		be16
 	dport		be16
@@ -917,6 +980,7 @@ type tcptcb_t struct {
 	rcv struct {
 		nxt	uint32
 		win	uint16
+		mss	uint16
 	}
 	snd struct {
 		nxt	uint32
@@ -936,6 +1000,10 @@ type tcptcb_t struct {
 		outa	bool
 		tstart	bool
 	}
+	// data to send over the TCP connection
+	txbuf	tcpbuf_t
+	// data received over the TCP connection
+	rxbuf	tcpbuf_t
 }
 
 type tcpstate_t uint
@@ -1137,6 +1205,7 @@ func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
 	tc._nstate(SYNSENT, ESTAB)
 	theirseq := ntohl(tcp.seq)
 	tc.rcv.nxt = theirseq + 1
+	tc.rxbuf.set_seq(tc.rcv.nxt)
 	tc.snd.mss = mss
 	tc.snd.una = ack
 	var dlen int
@@ -1148,7 +1217,10 @@ func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
 	tc.snd.wl1 = theirseq
 	tc.snd.wl2 = ack
 	tc.snd.win = rwin
-	tc.data_in(tc.rcv.nxt, ack, rwin, rest, dlen)
+	tc.sched_ack(false)
+	if dlen != 0 {
+		tc.data_in(tc.rcv.nxt, ack, rwin, rest, dlen)
+	}
 }
 
 func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
@@ -1241,12 +1313,9 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 			panic("can't be in window")
 		}
 	}
-	if dlen != 0 {
-		// don't set wl1 to this seq if there is no data (like during
-		// SYN/ACKs, usually) since this seq hasn't arrived yet
-		tc.rwinupdate(rseq + startoff, rack, rwin)
-	}
-	if rseq + startoff == tc.rcv.nxt {
+	realseq := rseq + startoff
+	tc.rwinupdate(realseq, rack, rwin)
+	if realseq == tc.rcv.nxt {
 		tc.rcv.nxt += uint32(dlen)
 		// XXX add out of order sequences. keep list of seq,lens,
 		// remove elements that are contained in this advancing seg,
@@ -1256,12 +1325,20 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 		// XXX save out of order sequence and length.
 		panic("out of order segment")
 	}
-	tc.sched_ack(true)
-	// XXX put data in user buffer
-	fmt.Printf("got: %v bytes (%v)\n", dlen, len(rest))
-	for _, r := range rest {
-		fmt.Printf("%s\n", string(r))
+	tc.rxbuf.syswrite(realseq, rest)
+	// we received data, update our window; avoid silly window syndrome
+	left := tc.rxbuf.cbuf.left()
+	if left - int(tc.rcv.win) >= int(tc.rcv.mss) {
+		tc.rcv.win = uint16(left)
+	} else {
+		// keep window static to encourage sender to send MSS sized
+		// segments
+		if uint16(dlen) > tc.rcv.win {
+			panic("how? pruned above")
+		}
+		tc.rcv.win -= uint16(dlen)
 	}
+	tc.sched_ack(true)
 }
 
 // is ACK in my send window?
@@ -1309,7 +1386,6 @@ func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
 	rwinend := tc.snd.nxt + uint32(tc.snd.win)
 	wl2less := _seqdiff(rwinend, tc.snd.wl2) > _seqdiff(rwinend, ack)
 	if w1less || (tc.snd.wl1 == seq && wl2less) {
-		fmt.Printf("WINDOW UPDATE\n")
 		tc.snd.win = win
 		tc.snd.wl1 = seq
 		tc.snd.wl2 = ack
@@ -1344,12 +1420,19 @@ func (tc *tcpcons_t) tcb_new(tk tcpkey_t, smac, dmac *mac_t) (*tcptcb_t, bool) {
 	ret.state = INVALID
 	ret.snd.nxt = rand.Uint32()
 	ret.snd.una = ret.snd.nxt
-	rdefwin := uint16(4380)
-	ret.snd.win = rdefwin
-	ldefwin := uint16(1 << 14)
-	ret.rcv.win = ldefwin
+	defwin := uint16(4380)
+	ret.snd.win = defwin
 	ret.dmac = dmac
 	ret.smac = smac
+	defbufsz := (1 << 11)
+	ret.txbuf.tbuf_init(defbufsz)
+	ret.txbuf.set_seq(ret.snd.nxt + 1)
+	ret.rxbuf.tbuf_init(defbufsz)
+	if uint(ret.rxbuf.cbuf.left()) > uint(^uint16(0)) {
+		panic("need window shift")
+	}
+	ret.rcv.win = uint16(ret.rxbuf.cbuf.left())
+	ret.rcv.mss = 1460
 
 	tc.m[tk] = ret
 	return ret, true
@@ -1402,24 +1485,24 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _tcp_connect(dip ip4_t, sport, dport uint16) int {
+func _tcp_connect(dip ip4_t, sport, dport uint16) (int, *tcptcb_t) {
 	localip, routeip, err := routetbl.lookup(dip)
 	if err != 0 {
-		return err
+		return err, nil
 	}
 	nic, ok := nics[localip]
 	if !ok {
-		return -EHOSTUNREACH
+		return -EHOSTUNREACH, nil
 	}
 	dmac, err := arp_resolve(localip, routeip)
 	if err != 0 {
-		return err
+		return err, nil
 	}
 
 	k := tcpkey_t{lip: localip, rip: dip, lport: sport, rport: dport}
 	tcb, ok := tcpcons.tcb_new(k, &nic.mac, dmac)
 	if !ok {
-		return -EADDRINUSE
+		return -EADDRINUSE, nil
 	}
 
 	tcb.tcb_lock()
@@ -1432,7 +1515,7 @@ func _tcp_connect(dip ip4_t, sport, dport uint16) int {
 	eth, ip, tcp := pkt.hdrbytes()
 	sgbuf := [][]uint8{eth, ip, tcp, opts}
 	nic.tx_tcp(sgbuf)
-	return 0
+	return 0, tcb
 }
 
 func _send_rst(ip4 *ip4hdr_t, tcp *tcphdr_t) {

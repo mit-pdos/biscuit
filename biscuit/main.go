@@ -1641,6 +1641,68 @@ func (cb *circbuf_t) copyout(dst *userbuf_t) (int, int) {
 	return c, 0
 }
 
+func (cb *circbuf_t) left() int {
+	used := cb.head - cb.tail
+	rem := cb.bufsz - used
+	return rem
+}
+
+// returns slices referencing the internal circular buffer [head+offset,
+// head+offset+sz) which must be outside [tail, head). returns two slices when
+// the returned buffer wraps.
+func (cb *circbuf_t) _rawwrite(offset, sz int) ([]uint8, []uint8) {
+	if cb.left() < sz {
+		panic("bad size")
+	}
+	if sz == 0 {
+		return nil, nil
+	}
+	oi := (cb.head + offset) % cb.bufsz
+	oe := (cb.head + offset + sz) % cb.bufsz
+	hi := cb.head % cb.bufsz
+	ti := cb.tail % cb.bufsz
+	var r1 []uint8
+	var r2 []uint8
+	if ti <= hi {
+		if (oi >= ti && oi < hi) || (oe > ti && oe <= hi) {
+			panic("intersects with user data")
+		}
+		r1 = cb.buf[oi:]
+		if len(r1) > sz {
+			r1 = r1[:oe]
+		} else {
+			r2 = cb.buf[:oe]
+		}
+	} else {
+		// user data wraps
+		if oi >= hi && oi < ti && oe > hi && oe <= ti {
+			panic("intersects with user data")
+		}
+		r1 = cb.buf[oi:oe]
+	}
+	return r1, r2
+}
+
+// advances head index sz bytes (allowing the bytes to be copied out)
+func (cb *circbuf_t) _advhead(sz int) {
+	if cb.full() || cb.left() < sz {
+		panic("advancing full cb?")
+	}
+	cb.head += sz
+}
+
+// returns slices referencing the internal circular buffer [tail+offset,
+// tail+offset+sz) which must be inside [tail, head). returns two slices when
+// the returned buffer wraps.
+func (cb *circbuf_t) _rawread(offset, sz int) ([]uint8, []uint8) {
+	panic("no imp")
+}
+
+// advances head index sz bytes (allowing the bytes to be copied out)
+func (cb *circbuf_t) _advtail(sz int) {
+	panic("no imp")
+}
+
 func cpus_stack_init(apcnt int, stackstart uintptr) {
 	for i := 0; i < apcnt; i++ {
 		// allocate/map interrupt stack
