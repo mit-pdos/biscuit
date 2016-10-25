@@ -987,13 +987,14 @@ type tcptcb_t struct {
 	}
 	// remembered stuff to send
 	rem struct {
-		last	time.Time
+		last		time.Time
 		// number of segments received; we try to send 1 ACK per 2 data
 		// segments.
-		num	uint
+		num		uint
+		forcedelay	bool
 		// outstanding ACK?
-		outa	bool
-		tstart	bool
+		outa		bool
+		tstart		bool
 	}
 	// data to send over the TCP connection
 	txbuf	tcpbuf_t
@@ -1077,7 +1078,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			return
 	}
 
-	tc.maybe_ack(false)
+	tc.ack_maybe()
 
 	if tc.dead {
 		tcpcons.tcb_del(tk)
@@ -1085,23 +1086,41 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 	}
 }
 
-func (tc *tcptcb_t) sched_ack(gotdata bool) {
-	if gotdata {
-		tc.rem.num++
-	}
+// sets flag to send an ack which may be delayed.
+func (tc *tcptcb_t) sched_ack() {
+	tc.rem.num++
 	tc.rem.outa = true
 }
 
-func (tc *tcptcb_t) maybe_ack(sendnow bool) {
+func (tc *tcptcb_t) sched_ack_delay() {
+	tc.rem.outa = true
+	tc.rem.forcedelay = true
+}
+
+func (tc *tcptcb_t) ack_maybe() {
+	tc._acktime(false)
+}
+
+func (tc *tcptcb_t) ack_now() {
+	tc._acktime(true)
+}
+
+// sendnow overrides the forcedelay flag
+func (tc *tcptcb_t) _acktime(sendnow bool) {
 	tc._sanity()
 	if !tc.rem.outa {
 		return
 	}
-	if !sendnow && tc.rem.num % 2 == 0 {
+	fdelay := tc.rem.forcedelay
+	tc.rem.forcedelay = false
+
+	segdelay := tc.rem.num % 2 == 0
+	canwait := !sendnow && (segdelay || fdelay)
+	if canwait {
+		// delay at most 500ms
 		now := time.Now()
 		deadline := tc.rem.last.Add(500*time.Millisecond)
-		candefer := now.Before(deadline)
-		if candefer {
+		if now.Before(deadline) {
 			if !tc.rem.tstart {
 				// XXX goroutine per timeout bad?
 				tc.rem.tstart = true
@@ -1110,7 +1129,7 @@ func (tc *tcptcb_t) maybe_ack(sendnow bool) {
 					time.Sleep(left)
 					tc.tcb_lock()
 					tc.rem.tstart = false
-					tc.maybe_ack(false)
+					tc.ack_maybe()
 					tc.tcb_unlock()
 				}()
 			}
@@ -1212,7 +1231,7 @@ func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
 	tc.snd.wl1 = theirseq
 	tc.snd.wl2 = ack
 	tc.snd.win = rwin
-	tc.sched_ack(false)
+	tc.sched_ack()
 	if dlen != 0 {
 		tc.data_in(tc.rcv.nxt, ack, rwin, rest, dlen)
 	}
@@ -1229,7 +1248,7 @@ func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
 		if !tcp.isrst() {
 			return
 		}
-		tc.sched_ack(false)
+		tc.sched_ack()
 		return
 	}
 	if tcp.isrst() {
@@ -1248,7 +1267,7 @@ func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
 		return
 	}
 	if !tc.ackok(ack) {
-		tc.sched_ack(false)
+		tc.sched_ack()
 		return
 	}
 	tc.data_in(seq, ack, ntohs(tcp.win), rest, dlen)
@@ -1321,9 +1340,16 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 		panic("out of order segment")
 	}
 	tc.rxbuf.syswrite(realseq, rest)
-	// we received data, update our window; avoid silly window syndrome
-	tc.lwinshrink(dlen)
-	tc.sched_ack(true)
+	// we received data, update our window; avoid silly window syndrome.
+	// delay acks when the window shrinks to less than an MSS since we will
+	// send an immediate ack once the window reopens due to the user
+	// reading from the receive buffer.
+	delayack := tc.lwinshrink(dlen)
+	if delayack {
+		tc.sched_ack_delay()
+	} else {
+		tc.sched_ack()
+	}
 }
 
 // is ACK in my send window?
@@ -1377,11 +1403,14 @@ func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
 	}
 }
 
-func (tc *tcptcb_t) lwinshrink(dlen int) {
+// returns true if the receive window is less than an MSS
+func (tc *tcptcb_t) lwinshrink(dlen int) bool {
 	tc._sanity()
+	var ret bool
 	left := tc.rxbuf.cbuf.left()
 	if left - int(tc.rcv.win) >= int(tc.rcv.mss) {
 		tc.rcv.win = uint16(left)
+		ret = false
 	} else {
 		// keep window static to encourage sender to send MSS sized
 		// segments
@@ -1389,24 +1418,27 @@ func (tc *tcptcb_t) lwinshrink(dlen int) {
 			panic("how? segments are pruned to window")
 		}
 		tc.rcv.win -= uint16(dlen)
+		ret = true
 	}
+	return ret
 }
 
-func (tc *tcptcb_t) lwingrow(oldwin uint16) {
+func (tc *tcptcb_t) lwingrow(oldwin int) {
 	tc._sanity()
 	left := tc.rxbuf.cbuf.left()
-	if left - int(tc.rcv.win) >= int(tc.rcv.mss) {
+	mss := int(tc.rcv.mss)
+	if oldwin < mss && left >= mss {
 		tc.rcv.win = uint16(left)
 		// does it make sense to delay the ack increasing the receive
 		// window?
-		tc.sched_ack(false)
-		tc.maybe_ack(true)
+		tc.sched_ack()
+		tc.ack_now()
 	}
 }
 
 func (tc *tcptcb_t) uread(dst *userbuf_t) (int, int) {
 	tc._sanity()
-	owin := tc.rcv.win
+	owin := int(tc.rcv.win)
 	wrote, err := tc.rxbuf.cbuf.copyout(dst)
 	// did the user consume enough data to reopen the window?
 	tc.lwingrow(owin)
