@@ -1512,6 +1512,8 @@ type x540_t struct {
 	bar0	[]uint32
 	_locked	bool
 	tx struct {
+		// this lock protecting tx queue descriptors must be acquired
+		// after driver locks are acquired.
 		sync.Mutex
 		cond	*sync.Cond
 		ndescs	uint32
@@ -2153,22 +2155,34 @@ func (x *x540_t) tester4() {
 			fmt.Printf("socket failed: %d\n", err)
 		} else {
 			go func() {
-			_buf := make([]uint8, 64)
+			sum := uint(0)
+			totbytes := 0
+			//_buf := make([]uint8, 64)
+			_buf := make([]uint8, 1024)
 			fub := &userbuf_t{}
 			for {
-				time.Sleep(500*time.Millisecond)
+				//time.Sleep(500*time.Millisecond)
+				time.Sleep(5*time.Millisecond)
 				buf := _buf
 				fub.fake_init(buf)
 
 				tcb.tcb_lock()
-				l, err := tcb.rxbuf.uread(fub)
+				l, err := tcb.uread(fub)
 				tcb.tcb_unlock()
 				if err != 0 {
 					panic("wut?")
 				}
 				buf = buf[:l]
+				//if len(buf) != 0 {
+				//	fmt.Printf("GOT: %s\n", string(buf))
+				//}
+				for _, by := range buf {
+					sum += uint(by)
+				}
+				totbytes += len(buf)
 				if len(buf) != 0 {
-					fmt.Printf("GOT: %s\n", string(buf))
+					fmt.Printf("sum: %x (%v)\n", sum,
+					    totbytes)
 				}
 			}
 			}()

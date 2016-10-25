@@ -741,7 +741,6 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 	off := _seqdiff(nseq, tb.seq)
 	var did int
 	for _, r := range rxdata {
-		fmt.Printf("len(r) = %v\n", len(r))
 		dst1, dst2 := tb.cbuf._rawwrite(off + did, len(r))
 		did1 := copy(dst1, r)
 		did2 := copy(dst2, r[did1:])
@@ -756,10 +755,6 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 		tb.cbuf._advhead(did)
 	}
 	return did
-}
-
-func (tb *tcpbuf_t) uread(dst *userbuf_t) (int, int) {
-	return tb.cbuf.copyout(dst)
 }
 
 type tcphdr_t struct {
@@ -1082,7 +1077,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			return
 	}
 
-	tc.maybe_ack()
+	tc.maybe_ack(false)
 
 	if tc.dead {
 		tcpcons.tcb_del(tk)
@@ -1097,12 +1092,12 @@ func (tc *tcptcb_t) sched_ack(gotdata bool) {
 	tc.rem.outa = true
 }
 
-func (tc *tcptcb_t) maybe_ack() {
+func (tc *tcptcb_t) maybe_ack(sendnow bool) {
 	tc._sanity()
 	if !tc.rem.outa {
 		return
 	}
-	if tc.rem.num % 2 == 0 {
+	if !sendnow && tc.rem.num % 2 == 0 {
 		now := time.Now()
 		deadline := tc.rem.last.Add(500*time.Millisecond)
 		candefer := now.Before(deadline)
@@ -1115,7 +1110,7 @@ func (tc *tcptcb_t) maybe_ack() {
 					time.Sleep(left)
 					tc.tcb_lock()
 					tc.rem.tstart = false
-					tc.maybe_ack()
+					tc.maybe_ack(false)
 					tc.tcb_unlock()
 				}()
 			}
@@ -1327,17 +1322,7 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 	}
 	tc.rxbuf.syswrite(realseq, rest)
 	// we received data, update our window; avoid silly window syndrome
-	left := tc.rxbuf.cbuf.left()
-	if left - int(tc.rcv.win) >= int(tc.rcv.mss) {
-		tc.rcv.win = uint16(left)
-	} else {
-		// keep window static to encourage sender to send MSS sized
-		// segments
-		if uint16(dlen) > tc.rcv.win {
-			panic("how? pruned above")
-		}
-		tc.rcv.win -= uint16(dlen)
-	}
+	tc.lwinshrink(dlen)
 	tc.sched_ack(true)
 }
 
@@ -1390,6 +1375,42 @@ func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
 		tc.snd.wl1 = seq
 		tc.snd.wl2 = ack
 	}
+}
+
+func (tc *tcptcb_t) lwinshrink(dlen int) {
+	tc._sanity()
+	left := tc.rxbuf.cbuf.left()
+	if left - int(tc.rcv.win) >= int(tc.rcv.mss) {
+		tc.rcv.win = uint16(left)
+	} else {
+		// keep window static to encourage sender to send MSS sized
+		// segments
+		if uint16(dlen) > tc.rcv.win {
+			panic("how? segments are pruned to window")
+		}
+		tc.rcv.win -= uint16(dlen)
+	}
+}
+
+func (tc *tcptcb_t) lwingrow(oldwin uint16) {
+	tc._sanity()
+	left := tc.rxbuf.cbuf.left()
+	if left - int(tc.rcv.win) >= int(tc.rcv.mss) {
+		tc.rcv.win = uint16(left)
+		// does it make sense to delay the ack increasing the receive
+		// window?
+		tc.sched_ack(false)
+		tc.maybe_ack(true)
+	}
+}
+
+func (tc *tcptcb_t) uread(dst *userbuf_t) (int, int) {
+	tc._sanity()
+	owin := tc.rcv.win
+	wrote, err := tc.rxbuf.cbuf.copyout(dst)
+	// did the user consume enough data to reopen the window?
+	tc.lwingrow(owin)
+	return wrote, err
 }
 
 type tcpkey_t struct {
