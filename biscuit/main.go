@@ -1669,13 +1669,13 @@ func (cb *circbuf_t) _rawwrite(offset, sz int) ([]uint8, []uint8) {
 		}
 		r1 = cb.buf[oi:]
 		if len(r1) > sz {
-			r1 = r1[:oe]
+			r1 = r1[:sz]
 		} else {
 			r2 = cb.buf[:oe]
 		}
 	} else {
 		// user data wraps
-		if oi >= hi && oi < ti && oe > hi && oe <= ti {
+		if !(oi >= hi && oi < ti && oe > hi && oe <= ti) {
 			panic("intersects with user data")
 		}
 		r1 = cb.buf[oi:oe]

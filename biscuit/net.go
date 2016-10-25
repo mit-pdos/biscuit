@@ -1293,7 +1293,7 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 	// prune so the end is within our window
 	winend := tc.rcv.nxt + uint32(tc.rcv.win)
 	if !_seqbetween(tc.rcv.nxt, rseq + uint32(dlen), winend) {
-		prune := _seqdiff(winend, rseq + uint32(dlen))
+		prune := _seqdiff(rseq + uint32(dlen), winend)
 		dlen -= prune
 		for i := len(rest) - 1; i >= 0; i-- {
 			r := rest[i]
