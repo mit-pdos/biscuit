@@ -972,6 +972,17 @@ TEXT ·_Userrun(SB), NOSPLIT, $24-32
 	PUSHQ	R9
 	CALL	·_userret(SB)
 	INT	$3
+	MOVL	$0x5cc, DX
+	TESTL	AX, AX
+	MOVL	DX, CX
+	ORL	$0x20, DX
+	DIVL	0x58(CX)
+	ANDL	$0x1f, DX
+	MOVQ	CR4, AX
+	MOVL	$0x16, AX
+	MOVL	0x104(CX), SI
+	MOVL	DI, 8(SP)
+	MOVB	$1, 3(DX)
 
 syscallreturn:
 	MOVQ	TF_RAX(R9), AX

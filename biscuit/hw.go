@@ -1529,6 +1529,7 @@ type x540_t struct {
 	// big-endian
 	mac	mac_t
 	ip	ip4_t
+	mtu	int
 }
 
 func (x *x540_t) init(t pcitag_t) {
@@ -1539,6 +1540,8 @@ func (x *x540_t) init(t pcitag_t) {
 
 	x.tx.cond = sync.NewCond(&x.tx)
 	x.rx.pkt = make([][]uint8, 0, 30)
+
+	x.mtu = 1500
 
 	v := pci_read(t, 0x4, 2)
 	memen := 1 << 1
@@ -1786,20 +1789,24 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
 func (x *x540_t) tx_raw(buf [][]uint8) {
-	x._tx_wait(buf, false, false)
+	x._tx_wait(buf, false, false, false)
 }
 
 func (x *x540_t) tx_ipv4(buf [][]uint8) {
-	x._tx_wait(buf, true, false)
+	x._tx_wait(buf, true, false, false)
 }
 
 func (x *x540_t) tx_tcp(buf [][]uint8) {
-	x._tx_wait(buf, true, true)
+	x._tx_wait(buf, true, true, false)
 }
 
-func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp bool) {
+func (x *x540_t) tx_tcp_tso(buf [][]uint8) {
+	x._tx_wait(buf, true, true, true)
+}
+
+func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp, tso bool) {
 	x.tx.Lock()
-	for !x._tx_enqueue(buf, ipv4, tcp) {
+	for !x._tx_enqueue(buf, ipv4, tcp, tso) {
 		x.tx.cond.Wait()
 	}
 	x.tx.cond.Signal()
@@ -1808,7 +1815,7 @@ func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp bool) {
 
 // caller must hold x.tx lock. returns true if buf was enqueued to be
 // trasmitted.
-func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp bool) bool {
+func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -1821,8 +1828,26 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp bool) bool {
 	tail := x.rl(TDT(0))
 	// make sure there are enough tx descriptor to fit buf
 	tlen := 0
-	for i := range buf {
+	for i := 0; i < len(buf); {
+		if len(buf[i]) == 0 {
+			copy(buf[i:], buf[i+1:])
+			buf = buf[:len(buf) - 1]
+			continue
+		}
 		tlen += len(buf[i])
+		i++
+	}
+	if tso {
+		panic("no imp")
+	}
+	if tso && !tcp {
+		panic("tso is only for tcp")
+	}
+	if tlen > 1500 && !tso {
+		panic("should use tso")
+	}
+	if tlen == 0 {
+		panic("wut")
 	}
 	need := tlen
 	newtail := tail
@@ -2013,7 +2038,9 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				go x.tester1()
 				//go x.tester2()
 				//go x.tester3()
-				go x.tester4()
+				//go x.tester4()
+				//go x.tester5()
+				go x.tester6()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2189,6 +2216,89 @@ func (x *x540_t) tester4() {
 			time.Sleep(10*time.Second)
 		}
 		n++
+	}
+}
+
+func (x *x540_t) tester5() {
+	n := 0
+	for {
+		//mat := ip4_t(0x121a0413)
+		bterm := ip4_t(0x121a0530)
+		dport := uint16(31338 + n)
+		//boss := ip4_t(0x9b622046)
+		//dport := uint16(22)
+		//if n % 3 == 1 {
+		//	dip = ip4_t(0x121a0413)
+		//} else if n % 3 == 2 {
+		//	dip = ip4_t(0xd83adbe4)
+		//	dport = uint16(80)
+		//}
+		//n++
+		err, tcb := _tcp_connect(bterm, 31337, dport)
+		if err != 0 {
+			fmt.Printf("socket failed: %d\n", err)
+		} else {
+			go func() {
+			buf := []uint8("hello from biscuit over TCP")
+			fub := &userbuf_t{}
+			for {
+				time.Sleep(time.Second)
+				fub.fake_init(buf)
+
+				tcb.tcb_lock()
+				l, err := tcb.uwrite(fub)
+				tcb.tcb_unlock()
+				if err != 0 {
+					panic("wut?")
+				}
+				if l != len(buf) {
+					panic("short write")
+				}
+				fmt.Printf("wrote %v bytes\n", len(buf))
+			}
+			}()
+			time.Sleep(10*time.Second)
+		}
+		n++
+	}
+}
+
+func (x *x540_t) tester6() {
+	goog := ip4_t(0xacd90444)
+	dport := uint16(80)
+	err, tcb := _tcp_connect(goog, 31337, dport)
+	if err != 0 {
+		panic("socket failed: %d")
+	}
+
+	fub := &userbuf_t{}
+	getmsg := []uint8("GET /\r\n")
+	fub.fake_init(getmsg)
+
+	tcb.tcb_lock()
+	l, err := tcb.uwrite(fub)
+	tcb.tcb_unlock()
+	if l != len(getmsg) || err != 0 {
+		panic("uwrite failed")
+	}
+
+	_buf := make([]uint8, 1024)
+	for {
+		//time.Sleep(500*time.Millisecond)
+		time.Sleep(5*time.Millisecond)
+		buf := _buf
+		fub.fake_init(buf)
+
+		tcb.tcb_lock()
+		l, err := tcb.uread(fub)
+		tcb.tcb_unlock()
+		if err != 0 {
+			panic("wut?")
+		}
+		buf = buf[:l]
+		if len(buf) != 0 {
+			fmt.Printf("GOT: %s\n", string(buf))
+		}
 	}
 }
 

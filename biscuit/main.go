@@ -1647,9 +1647,15 @@ func (cb *circbuf_t) left() int {
 	return rem
 }
 
+func (cb *circbuf_t) used() int {
+	used := cb.head - cb.tail
+	return used
+}
+
 // returns slices referencing the internal circular buffer [head+offset,
 // head+offset+sz) which must be outside [tail, head). returns two slices when
 // the returned buffer wraps.
+// XXX XXX XXX XXX XXX remove arg
 func (cb *circbuf_t) _rawwrite(offset, sz int) ([]uint8, []uint8) {
 	if cb.left() < sz {
 		panic("bad size")
@@ -1686,21 +1692,47 @@ func (cb *circbuf_t) _rawwrite(offset, sz int) ([]uint8, []uint8) {
 // advances head index sz bytes (allowing the bytes to be copied out)
 func (cb *circbuf_t) _advhead(sz int) {
 	if cb.full() || cb.left() < sz {
-		panic("advancing full cb?")
+		panic("advancing full cb")
 	}
 	cb.head += sz
 }
 
-// returns slices referencing the internal circular buffer [tail+offset,
-// tail+offset+sz) which must be inside [tail, head). returns two slices when
-// the returned buffer wraps.
-func (cb *circbuf_t) _rawread(offset, sz int) ([]uint8, []uint8) {
-	panic("no imp")
+// returns slices referencing the circular buffer [tail+offset, tail+offset+sz)
+// which must be inside [tail, head). returns two slices when the returned
+// buffer wraps.
+func (cb *circbuf_t) _rawread(offset int) ([]uint8, []uint8) {
+	oi := (cb.tail + offset) % cb.bufsz
+	hi := cb.head % cb.bufsz
+	ti := cb.tail % cb.bufsz
+	var r1 []uint8
+	var r2 []uint8
+	if ti <= hi {
+		if oi >= hi || oi < ti {
+			panic("outside user data")
+		}
+		r1 = cb.buf[oi:hi]
+	} else {
+		if oi >= hi && oi < ti {
+			panic("outside user data")
+		}
+		tlen := len(cb.buf[ti:])
+		if tlen > offset {
+			r1 = cb.buf[oi:]
+			r2 = cb.buf[:hi]
+		} else {
+			roff := offset - tlen
+			r1 = cb.buf[roff:hi]
+		}
+	}
+	return r1, r2
 }
 
 // advances head index sz bytes (allowing the bytes to be copied out)
 func (cb *circbuf_t) _advtail(sz int) {
-	panic("no imp")
+	if cb.empty() || cb.used() < sz {
+		panic("advancing empty cb")
+	}
+	cb.tail += sz
 }
 
 func cpus_stack_init(apcnt int, stackstart uintptr) {

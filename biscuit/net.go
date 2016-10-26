@@ -718,14 +718,18 @@ func (tb *tcpbuf_t) set_seq(seq uint32) {
 	tb.didseq = true
 }
 
+func (tb *tcpbuf_t) end_seq() uint32 {
+	return uint32(uint(tb.seq) + uint(tb.cbuf.used()))
+}
+
 func (tb *tcpbuf_t) _sanity() {
 	if !tb.didseq {
 		panic("no sequence")
 	}
 }
 
-// allows user to read written data (if next in the sequence) and returns
-// number of bytes written. cannot fail.
+// writes rxdata to the circular buffer, allows user to read written data (if
+// next in the sequence) and returns number of bytes written. cannot fail.
 func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 	tb._sanity()
 	if !_seqbetween(tb.seq, nseq, tb.seq + uint32(tb.cbuf.left())) {
@@ -755,6 +759,200 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 		tb.cbuf._advhead(did)
 	}
 	return did
+}
+
+// returns slices referencing the data written by the user (two when the
+// buffers wrap the circular buffer) whose total length is at most l. does not
+// free up the buffer by advancing the tail (that happens once data is acked).
+func (tb *tcpbuf_t) sysread(nseq uint32, l int) ([]uint8, []uint8) {
+	tb._sanity()
+	if !_seqbetween(tb.seq, nseq, tb.seq + uint32(tb.cbuf.used())) {
+		panic("bad sequence number")
+	}
+	off := _seqdiff(nseq, tb.seq)
+	s1, s2 := tb.cbuf._rawread(off)
+	rl := len(s1) + len(s2)
+	if rl > l {
+		totprune := rl - l
+		if len(s2) > 0 {
+			prune := totprune
+			if prune > len(s2) {
+				prune = len(s2)
+			}
+			newlen := len(s2) - prune
+			s2 = s2[:newlen]
+			totprune -= prune
+		}
+		newlen := len(s1) - totprune
+		s1 = s1[:newlen]
+	}
+	return s1, s2
+}
+
+// advances the circular buffer tail by the difference between rack and the
+// current sequence and updates the seqence.
+func (tb *tcpbuf_t) ackupto(rack uint32) {
+	if !_seqbetween(tb.seq, rack, tb.seq + uint32(tb.cbuf.used())) {
+		panic("ack out of window")
+	}
+	sz := _seqdiff(rack, tb.seq)
+	tb.cbuf._advtail(sz)
+	tb.seq += uint32(sz)
+	// XXX wake up sleeping user
+}
+
+type tseg_t struct {
+	seq	uint32
+	len	uint32
+	when	time.Time
+}
+
+type tcpsegs_t struct {
+	segs	[]tseg_t
+	winend	uint32
+}
+
+func (ts *tcpsegs_t) _sanity() {
+	// XXXPANIC
+	for i := range ts.segs {
+		seq := ts.segs[i].seq
+		slen := ts.segs[i].len
+		if i > 0 {
+			prev := ts.segs[i-1]
+			if prev.seq == seq {
+				panic("same seqs")
+			}
+			if _seqbetween(prev.seq, seq, prev.seq + prev.len - 1) {
+				panic("overlap")
+			}
+		}
+		if i < len(ts.segs) - 1 {
+			next := ts.segs[i + 1]
+			if next.seq == seq {
+				panic("same seqs")
+			}
+			nend := next.seq + next.len
+			if _seqbetween(next.seq, seq + slen - 1, nend) {
+				panic("overlap")
+			}
+		}
+	}
+}
+
+// adds [seq, seq+len) to the segment list with timestamp set to now. seq must
+// not already be in the list. if existing segments are contained in the new
+// segment, they will be coalesced.  winend is the end of the receive window.
+// the segments are sorted in descending order of distance from the window end
+// (needed because sequence numbers may wrap).
+func (ts *tcpsegs_t) addnow(seq, len, winend uint32) {
+	ts._addnoisect(seq, 1, winend)
+	ts.reset(seq, len)
+}
+
+func (ts *tcpsegs_t) _addnoisect(seq, len, winend uint32) {
+	if len == 0 {
+		panic("0 length transmit seg?")
+	}
+	ns := tseg_t{seq: seq, len: len}
+	ns.when = time.Now()
+	ts.segs = append(ts.segs, ns)
+	ts.winend = winend
+	sort.Sort(ts)
+	ts._sanity()
+}
+
+func (ts *tcpsegs_t) ackupto(seq uint32) {
+	var rem int
+	sdiff := _seqdiff(ts.winend, seq)
+	for i := range ts.segs {
+		tdiff := _seqdiff(ts.winend, ts.segs[i].seq)
+		if sdiff >= tdiff {
+			break
+		}
+		tseq := ts.segs[i].seq
+		tlen := ts.segs[i].len
+		if _seqbetween(tseq, seq, tseq + tlen - 1) {
+			oend := tseq + tlen
+			ts.segs[i].seq = seq
+			ts.segs[i].len = uint32(_seqdiff(oend, seq))
+			break
+		}
+		rem++
+	}
+	if rem != 0 {
+		copy(ts.segs, ts.segs[rem:])
+		newlen := len(ts.segs) - rem
+		ts.segs = ts.segs[:newlen]
+	}
+	ts._sanity()
+}
+
+func (ts *tcpsegs_t) reset(seq, nlen uint32) {
+	var found bool
+	var start int
+	for i := range ts.segs {
+		if ts.segs[i].seq == seq {
+			start = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		panic("seq not found")
+	}
+	if nlen == ts.segs[start].len {
+		return
+	}
+	if nlen < ts.segs[start].len {
+		panic("must exceed original seg length")
+	}
+	found = false
+	prunefrom := start + 1
+	for i := start + 1; i < len(ts.segs); i++ {
+		tseq := ts.segs[i].seq
+		tlen := ts.segs[i].len
+		if _seqbetween(tseq, seq + nlen, tseq + tlen - 1) {
+			oend := tseq + tlen
+			ts.segs[i].seq = seq + nlen
+			ts.segs[i].len = uint32(_seqdiff(oend, seq + nlen))
+			break
+		}
+		prunefrom++
+	}
+	copy(ts.segs[start+1:], ts.segs[prunefrom:])
+	rest := len(ts.segs) - prunefrom
+	ts.segs = ts.segs[:start + rest + 1]
+	ts.segs[start].len = nlen
+	ts.segs[start].when = time.Now()
+}
+
+// prune unacknowledged sequences if the window has shrunk
+func (ts *tcpsegs_t) prune(winend uint32) {
+	prunefrom := len(ts.segs)
+	for i := range ts.segs {
+		seq := ts.segs[i].seq
+		l := ts.segs[i].len
+		if _seqbetween(seq, winend, seq + l - 1) {
+			ts.segs[i].len = uint32(_seqdiff(winend, seq))
+			prunefrom = i + 1
+			break
+		}
+	}
+	ts.segs = ts.segs[:prunefrom]
+}
+
+func (ts *tcpsegs_t) Len() int {
+	return len(ts.segs)
+}
+
+func (ts *tcpsegs_t) Less(i, j int) bool {
+	diff1 := _seqdiff(ts.winend, ts.segs[i].seq)
+	diff2 := _seqdiff(ts.winend, ts.segs[j].seq)
+	return diff1 > diff2
+}
+
+func (ts *tcpsegs_t) Swap(i, j int) {
+	ts.segs[i], ts.segs[j] = ts.segs[j], ts.segs[i]
 }
 
 type tcphdr_t struct {
@@ -984,6 +1182,7 @@ type tcptcb_t struct {
 		mss	uint16
 		wl1	uint32
 		wl2	uint32
+		tsegs	tcpsegs_t
 	}
 	// remembered stuff to send
 	rem struct {
@@ -1069,6 +1268,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			tc.synsent(ip4, tcp, opt.mss, rest)
 		case ESTAB:
 			tc.estab(ip4, tcp, rest)
+			tc.seg_maybe()
 		default:
 			sn, ok := statestr[tc.state]
 			if !ok {
@@ -1151,6 +1351,88 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 	tc.rem.last = time.Now()
 }
 
+// transmit new segments and retransmits timed-out segments as the window
+// allows
+func (tc *tcptcb_t) seg_maybe() {
+	winend := tc.snd.una + uint32(tc.snd.win)
+	// prune unacknowledged segments which are now outside of the send
+	// window
+	tc.snd.tsegs.prune(winend)
+	// have retransmit timeouts expired?
+	now := time.Now()
+	for i := 0; i < len(tc.snd.tsegs.segs); i++ {
+		to := time.Second
+		deadline := tc.snd.tsegs.segs[i].when.Add(to)
+		if now.Before(deadline) {
+			continue
+		}
+		seq := tc.snd.tsegs.segs[i].seq
+		did := tc.seg_now(seq)
+		// reset() modifies segs[]
+		tc.snd.tsegs.reset(seq, uint32(did))
+	}
+	// XXX nagle's?
+	// transmit any unsent data in the send window
+	sbegin := tc.snd.una
+	for i := 0; i < len(tc.snd.tsegs.segs); i++ {
+		send := tc.snd.tsegs.segs[i].seq
+		diff := _seqdiff(send, sbegin)
+		if diff > 0 {
+			did := tc.seg_now(sbegin)
+			tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
+		}
+		sbegin = send + tc.snd.tsegs.segs[i].len
+	}
+	upto := winend
+	if _seqbetween(tc.snd.una, tc.txbuf.end_seq(), upto) {
+		upto = tc.txbuf.end_seq()
+	}
+	if _seqdiff(upto, sbegin) > 0 {
+		did := tc.seg_now(sbegin)
+		tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
+	}
+}
+
+func (tc *tcptcb_t) seg_now(seq uint32) int {
+	// XXXPANIC
+	winend := tc.snd.una + uint32(tc.snd.win)
+	if !_seqbetween(tc.snd.una, seq, winend) {
+		panic("must be in send window")
+	}
+	nic, ok := nics[tc.lip]
+	if !ok {
+		panic("NIC gone")
+	}
+	// the data to send may be larger than MSS
+	buf1, buf2 := tc.txbuf.sysread(seq, _seqdiff(winend, seq))
+	dlen := len(buf1) + len(buf2)
+	if dlen == 0 {
+		panic("must send non-zero amount")
+	}
+
+	pkt := tc.mkseg(seq, tc.rcv.nxt, dlen)
+	eth, ip, thdr := pkt.hdrbytes()
+
+	sgbuf := [][]uint8{eth, ip, thdr, buf1, buf2}
+	if dlen > nic.mtu {
+		nic.tx_tcp_tso(sgbuf)
+	} else {
+		nic.tx_tcp(sgbuf)
+	}
+
+	// we just sent an ack, so clear outstanding ack flag
+	tc.rem.outa = false
+	tc.rem.last = time.Now()
+
+	send := seq + uint32(dlen)
+	ndiff := _seqdiff(winend, seq + uint32(dlen))
+	odiff := _seqdiff(winend, tc.snd.nxt)
+	if ndiff < odiff {
+		tc.snd.nxt = send
+	}
+	return dlen
+}
+
 // returns TCP header and TCP option slice
 func (tc *tcptcb_t) mkconnect(seq uint32) (*tcppkt_t, []uint8) {
 	ret := &tcppkt_t{}
@@ -1183,6 +1465,17 @@ func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
 	ret.tcphdr.win = htons(tc.rcv.win)
 	l4len := ret.tcphdr.hdrlen()
+	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
+	ret.ether.init_ip4(tc.smac, tc.dmac)
+	ret.crc(l4len, tc.lip, tc.rip)
+	return ret
+}
+
+func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) *tcppkt_t {
+	ret := &tcppkt_t{}
+	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
+	ret.tcphdr.win = htons(tc.rcv.win)
+	l4len := ret.tcphdr.hdrlen() + seglen
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
 	ret.ether.init_ip4(tc.smac, tc.dmac)
 	ret.crc(l4len, tc.lip, tc.rip)
@@ -1280,7 +1573,12 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 	if !tc.seqok(rseq, dlen) {
 		panic("must contain in-window data")
 	}
-	tc.snd.una = rack
+	swinend := tc.snd.una + uint32(tc.snd.win)
+	if _seqdiff(swinend, rack) < _seqdiff(swinend, tc.snd.una) {
+		tc.txbuf.ackupto(rack)
+		tc.snd.tsegs.ackupto(rack)
+		tc.snd.una = rack
+	}
 	// figure out which bytes are in our window: is the beginning of
 	// segment outside our window?
 	var startoff uint32
@@ -1394,7 +1692,7 @@ func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
 	// see if seq is the larger than wl1. does the window wrap?
 	lwinend := tc.rcv.nxt + uint32(tc.rcv.win)
 	w1less := _seqdiff(lwinend, tc.snd.wl1) > _seqdiff(lwinend, seq)
-	rwinend := tc.snd.nxt + uint32(tc.snd.win)
+	rwinend := tc.snd.una + uint32(tc.snd.win)
 	wl2less := _seqdiff(rwinend, tc.snd.wl2) > _seqdiff(rwinend, ack)
 	if w1less || (tc.snd.wl1 == seq && wl2less) {
 		tc.snd.win = win
@@ -1445,6 +1743,15 @@ func (tc *tcptcb_t) uread(dst *userbuf_t) (int, int) {
 	return wrote, err
 }
 
+func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, int) {
+	tc._sanity()
+	wrote, err := tc.txbuf.cbuf.copyin(src)
+	if tc.state == ESTAB {
+		tc.seg_maybe()
+	}
+	return wrote, err
+}
+
 type tcpkey_t struct {
 	lip	ip4_t
 	rip	ip4_t
@@ -1477,7 +1784,7 @@ func (tc *tcpcons_t) tcb_new(tk tcpkey_t, smac, dmac *mac_t) (*tcptcb_t, bool) {
 	ret.snd.win = defwin
 	ret.dmac = dmac
 	ret.smac = smac
-	defbufsz := (1 << 11)
+	defbufsz := (1 << 14)
 	ret.txbuf.tbuf_init(defbufsz)
 	ret.txbuf.set_seq(ret.snd.nxt + 1)
 	ret.rxbuf.tbuf_init(defbufsz)
@@ -1783,4 +2090,18 @@ func net_test() {
 	d(1, 0, 1)
 	d(0, 0xfffffff0, 0x10)
 	d(30, 0xfffffff0, 0x10 + 30)
+
+	ts := tcpsegs_t{}
+	ts.addnow(0, 5, 40)
+	ts.addnow(5, 5, 40)
+	ts.addnow(10, 5, 40)
+	ts.addnow(15, 5, 40)
+	ts.addnow(20, 5, 40)
+	ts.addnow(25, 5, 40)
+	ts.addnow(30, 5, 40)
+	ts.addnow(35, 5, 40)
+	ts.reset(0, 5)
+	ts.reset(0, 40)
+	ts.ackupto(15)
+	//fmt.Printf("%v\n", ts)
 }
