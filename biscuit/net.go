@@ -1422,6 +1422,7 @@ func (tc *tcptcb_t) seg_now(seq uint32) int {
 
 	// we just sent an ack, so clear outstanding ack flag
 	tc.rem.outa = false
+	tc.rem.forcedelay = false
 	tc.rem.last = time.Now()
 
 	send := seq + uint32(dlen)
@@ -1581,10 +1582,12 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 	}
 	// figure out which bytes are in our window: is the beginning of
 	// segment outside our window?
-	var startoff uint32
 	if !_seqbetween(tc.rcv.nxt, rseq, tc.rcv.nxt + uint32(tc.rcv.win)) {
 		prune := _seqdiff(tc.rcv.nxt, rseq)
-		startoff = uint32(prune)
+		rseq += uint32(prune)
+		if prune > dlen {
+			panic("uh oh")
+		}
 		dlen -= prune
 		for i, r := range rest {
 			ub := prune
@@ -1606,6 +1609,9 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 	winend := tc.rcv.nxt + uint32(tc.rcv.win)
 	if !_seqbetween(tc.rcv.nxt, rseq + uint32(dlen), winend) {
 		prune := _seqdiff(rseq + uint32(dlen), winend)
+		if prune > dlen {
+			panic("uh oh")
+		}
 		dlen -= prune
 		for i := len(rest) - 1; i >= 0; i-- {
 			r := rest[i]
@@ -1625,9 +1631,8 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 			panic("can't be in window")
 		}
 	}
-	realseq := rseq + startoff
-	tc.rwinupdate(realseq, rack, rwin)
-	if realseq == tc.rcv.nxt {
+	tc.rwinupdate(rseq, rack, rwin)
+	if rseq == tc.rcv.nxt {
 		tc.rcv.nxt += uint32(dlen)
 		// XXX add out of order sequences. keep list of seq,lens,
 		// remove elements that are contained in this advancing seg,
@@ -1637,7 +1642,7 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 		// XXX save out of order sequence and length.
 		panic("out of order segment")
 	}
-	tc.rxbuf.syswrite(realseq, rest)
+	tc.rxbuf.syswrite(rseq, rest)
 	// we received data, update our window; avoid silly window syndrome.
 	// delay acks when the window shrinks to less than an MSS since we will
 	// send an immediate ack once the window reopens due to the user
@@ -1845,7 +1850,7 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _tcp_connect(dip ip4_t, sport, dport uint16) (int, *tcptcb_t) {
+func _tcp_connect(sport uint16, dip ip4_t, dport uint16) (int, *tcptcb_t) {
 	localip, routeip, err := routetbl.lookup(dip)
 	if err != 0 {
 		return err, nil

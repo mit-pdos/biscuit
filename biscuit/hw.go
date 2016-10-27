@@ -2177,7 +2177,7 @@ func (x *x540_t) tester4() {
 		//	dport = uint16(80)
 		//}
 		//n++
-		err, tcb := _tcp_connect(bterm, 31337, dport)
+		err, tcb := _tcp_connect(31337, bterm, dport)
 		if err != 0 {
 			fmt.Printf("socket failed: %d\n", err)
 		} else {
@@ -2234,7 +2234,7 @@ func (x *x540_t) tester5() {
 		//	dport = uint16(80)
 		//}
 		//n++
-		err, tcb := _tcp_connect(bterm, 31337, dport)
+		err, tcb := _tcp_connect(31337, bterm, dport)
 		if err != 0 {
 			fmt.Printf("socket failed: %d\n", err)
 		} else {
@@ -2264,15 +2264,16 @@ func (x *x540_t) tester5() {
 }
 
 func (x *x540_t) tester6() {
-	goog := ip4_t(0xacd90444)
+	//goog := ip4_t(0xacd90444)
+	obsd := ip4_t(0x818005c2)
 	dport := uint16(80)
-	err, tcb := _tcp_connect(goog, 31337, dport)
+	err, tcb := _tcp_connect(31337, obsd, dport)
 	if err != 0 {
 		panic("socket failed: %d")
 	}
 
 	fub := &userbuf_t{}
-	getmsg := []uint8("GET /\r\n")
+	getmsg := []uint8("GET / HTTP/1.0\r\n\r\n")
 	fub.fake_init(getmsg)
 
 	tcb.tcb_lock()
@@ -2282,7 +2283,20 @@ func (x *x540_t) tester6() {
 		panic("uwrite failed")
 	}
 
+	sent := false
+	for !sent {
+		tcb.tcb_lock()
+		if tcb.state == ESTAB {
+			tcb.seg_maybe()
+			sent = true
+		}
+		tcb.tcb_unlock()
+		time.Sleep(10*time.Millisecond)
+	}
+
 	_buf := make([]uint8, 1024)
+	//totbytes := 0
+	//sum := 0
 	for {
 		//time.Sleep(500*time.Millisecond)
 		time.Sleep(5*time.Millisecond)
@@ -2296,7 +2310,12 @@ func (x *x540_t) tester6() {
 			panic("wut?")
 		}
 		buf = buf[:l]
+		//totbytes += len(buf)
+		//for _, c := range buf {
+		//	sum += int(c)
+		//}
 		if len(buf) != 0 {
+			//fmt.Printf("sum: %x (%d)\n", sum, totbytes)
 			fmt.Printf("GOT: %s\n", string(buf))
 		}
 	}
