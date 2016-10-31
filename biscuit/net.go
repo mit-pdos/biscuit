@@ -703,11 +703,13 @@ type tcpbuf_t struct {
 	cbuf	circbuf_t
 	seq	uint32
 	didseq	bool
+	cond	*sync.Cond
 }
 
-func (tb *tcpbuf_t) tbuf_init(sz int) {
+func (tb *tcpbuf_t) tbuf_init(sz int, tcb *tcptcb_t) {
 	tb.cbuf.cb_init(sz)
 	tb.didseq = false
+	tb.cond = sync.NewCond(&tcb.l)
 }
 
 func (tb *tcpbuf_t) set_seq(seq uint32) {
@@ -757,6 +759,7 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 	if nseq == tb.seq {
 		tb.seq += uint32(did)
 		tb.cbuf._advhead(did)
+		tb.cond.Broadcast()
 	}
 	return did
 }
@@ -798,7 +801,7 @@ func (tb *tcpbuf_t) ackupto(rack uint32) {
 	sz := _seqdiff(rack, tb.seq)
 	tb.cbuf._advtail(sz)
 	tb.seq += uint32(sz)
-	// XXX wake up sleeping user
+	tb.cond.Broadcast()
 }
 
 type tseg_t struct {
@@ -1170,6 +1173,10 @@ type tcptcb_t struct {
 	// dead must only be true after both sides have acknowledged all data
 	// (i.e. on receiving reset or after LASTACK/TIMEWAIT)
 	dead	bool
+	// remote sent FIN
+	rxdone	bool
+	// we sent FIN
+	txdone	bool
 	rcv struct {
 		nxt	uint32
 		win	uint16
@@ -1216,6 +1223,7 @@ const (
 	CLOSEWAIT
 	LASTACK
 	TIMEWAIT
+	CLOSED
 )
 
 var statestr = map[tcpstate_t]string {
@@ -1240,6 +1248,17 @@ func (tc *tcptcb_t) tcb_lock() {
 func (tc *tcptcb_t) tcb_unlock() {
 	tc.locked = false
 	tc.l.Unlock()
+}
+
+// waits on the receive buffer conditional variable
+func (tc *tcptcb_t) rbufwait() {
+	tc.rxbuf.cond.Wait()
+	tc.locked = true
+}
+
+func (tc *tcptcb_t) tbufwait() {
+	tc.txbuf.cond.Wait()
+	tc.locked = true
 }
 
 func (tc *tcptcb_t) _sanity() {
@@ -1483,6 +1502,14 @@ func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) *tcppkt_t {
 	return ret
 }
 
+func (tc *tcptcb_t) failwake() {
+	tc._sanity()
+	tc.state = CLOSED
+	tc.dead = true
+	tc.rxbuf.cond.Broadcast()
+	tc.txbuf.cond.Broadcast()
+}
+
 func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
     rest [][]uint8) {
 	tc._sanity()
@@ -1496,9 +1523,8 @@ func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
 		}
 	}
 	if tcp.isrst() {
-		// XXX wakeup connect(3) thread
 		fmt.Printf("connection refused\n")
-		tc.dead = true
+		tc.failwake()
 		return
 	}
 	// should we allow simultaneous connect?
@@ -1547,13 +1573,13 @@ func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
 	}
 	if tcp.isrst() {
 		// XXX fail user reads/writes
-		tc.dead = true
+		tc.failwake()
 		return
 	}
 	if tcp.issyn() {
 		// XXX fail user reads/writes
 		tc._rst()
-		tc.dead = true
+		tc.failwake()
 		return
 	}
 	ack, ok := tcp.isack()
@@ -1773,12 +1799,28 @@ func (tc *tcpcons_t) init() {
 	tc.m = make(map[tcpkey_t]*tcptcb_t)
 }
 
-func (tc *tcpcons_t) tcb_new(tk tcpkey_t, smac, dmac *mac_t) (*tcptcb_t, bool) {
+// creates a new TCP with an unused source port
+func (tc *tcpcons_t) tcb_new(lip, rip ip4_t, rport uint16, smac,
+    dmac *mac_t) (*tcptcb_t, int) {
 	tc.Lock()
-	defer tc.Unlock()
 
+	// find available source port
+	tk := tcpkey_t{lip: lip, rip: rip, rport: rport}
+	tk.lport = uint16(rand.Uint32())
+	_, ok := tc.m[tk]
+	for ok {
+		tk.lport = uint16(rand.Uint32())
+		_, ok = tc.m[tk]
+	}
+	ret := tc._tcb_new(tk, smac, dmac)
+	tc.Unlock()
+
+	return ret, 0
+}
+
+func (tc *tcpcons_t) _tcb_new(tk tcpkey_t, smac, dmac *mac_t) *tcptcb_t {
 	if _, ok := tc.m[tk]; ok {
-		return nil, false
+		panic("key exists")
 	}
 	ret := &tcptcb_t{lip: tk.lip, rip: tk.rip, lport: tk.lport,
 	    rport: tk.rport}
@@ -1790,9 +1832,9 @@ func (tc *tcpcons_t) tcb_new(tk tcpkey_t, smac, dmac *mac_t) (*tcptcb_t, bool) {
 	ret.dmac = dmac
 	ret.smac = smac
 	defbufsz := (1 << 14)
-	ret.txbuf.tbuf_init(defbufsz)
+	ret.txbuf.tbuf_init(defbufsz, ret)
 	ret.txbuf.set_seq(ret.snd.nxt + 1)
-	ret.rxbuf.tbuf_init(defbufsz)
+	ret.rxbuf.tbuf_init(defbufsz, ret)
 	if uint(ret.rxbuf.cbuf.left()) > uint(^uint16(0)) {
 		panic("need window shift")
 	}
@@ -1800,7 +1842,7 @@ func (tc *tcpcons_t) tcb_new(tk tcpkey_t, smac, dmac *mac_t) (*tcptcb_t, bool) {
 	ret.rcv.mss = 1460
 
 	tc.m[tk] = ret
-	return ret, true
+	return ret
 }
 
 func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool) {
@@ -1850,7 +1892,7 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _tcp_connect(sport uint16, dip ip4_t, dport uint16) (int, *tcptcb_t) {
+func _tcp_connect(dip ip4_t, dport uint16) (int, *tcptcb_t) {
 	localip, routeip, err := routetbl.lookup(dip)
 	if err != 0 {
 		return err, nil
@@ -1864,10 +1906,9 @@ func _tcp_connect(sport uint16, dip ip4_t, dport uint16) (int, *tcptcb_t) {
 		return err, nil
 	}
 
-	k := tcpkey_t{lip: localip, rip: dip, lport: sport, rport: dport}
-	tcb, ok := tcpcons.tcb_new(k, &nic.mac, dmac)
-	if !ok {
-		return -EADDRINUSE, nil
+	tcb, err := tcpcons.tcb_new(localip, dip, dport, &nic.mac, dmac)
+	if err != 0 {
+		return err, nil
 	}
 
 	tcb.tcb_lock()
@@ -1919,6 +1960,175 @@ func net_tcp(pkt [][]uint8, tlen int) {
 	tcb.tcb_lock()
 	tcb.incoming(k, ip4, tcph, opts, pkt)
 	tcb.tcb_unlock()
+}
+
+type tcpfops_t struct {
+	tcb	*tcptcb_t
+	options	int
+	// lock protecting fd open ref count
+	sync.Mutex
+	openc	int
+}
+
+func (tf *tcpfops_t) close() int {
+	tf.Lock()
+	tf.openc--
+	if tf.openc < 0 {
+		panic("neg ref")
+	}
+	if tf.tcb != nil && tf.openc == 0 {
+		fmt.Printf("terminate: no imp")
+		tf.tcb.tcb_lock()
+		tf.tcb.dead = true
+		tf.tcb.tcb_unlock()
+	}
+	tf.Unlock()
+
+	return 0
+}
+
+func (tf *tcpfops_t) fstat(*stat_t) int {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) lseek(int, int) int {
+	return -ESPIPE
+}
+
+func (tf *tcpfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
+	return nil, -EINVAL
+}
+
+func (tf *tcpfops_t) pathi() *imemnode_t {
+	panic("tcp socket cwd")
+}
+
+func (tf *tcpfops_t) read(dst *userbuf_t) (int, int) {
+	tf.tcb.tcb_lock()
+	var read, err int
+	for {
+		read, err = tf.tcb.uread(dst)
+		if err != 0 {
+			break
+		}
+		if read != 0 || tf.tcb.rxdone {
+			break
+		}
+		tf.tcb.rbufwait()
+	}
+	tf.tcb.tcb_unlock()
+	return read, err
+}
+
+func (tf *tcpfops_t) reopen() int {
+	tf.Lock()
+	tf.openc++
+	tf.Unlock()
+	return 0
+}
+
+func (tf *tcpfops_t) write(src *userbuf_t) (int, int) {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) fullpath() (string, int) {
+	panic("weird cwd")
+}
+
+func (tf *tcpfops_t) truncate(newlen uint) int {
+	return -EINVAL
+}
+
+func (tf *tcpfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (tf *tcpfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+	return 0, -ESPIPE
+}
+
+func (tf *tcpfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) bind(proc *proc_t, saddr []uint8) int {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) int {
+	tf.Lock()
+	defer tf.Unlock()
+
+	blk := true
+	if tf.options & O_NONBLOCK != 0 {
+		blk = false
+	}
+	dip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
+	dport := ntohs(be16(readn(saddr, 2, 2)))
+	err, tcb := _tcp_connect(dip, dport)
+	if err != 0 {
+		return err
+	}
+	tf.tcb = tcb
+	ret := 0
+	if blk {
+		tcb.tcb_lock()
+		for tcb.state == SYNSENT || tcb.state == SYNRCVD {
+			tcb.rbufwait()
+		}
+		if tcb.state != ESTAB && tcb.state != CLOSED {
+			panic("unexpected state")
+		}
+		if tcb.state == CLOSED {
+			ret = -ECONNRESET
+		}
+		tcb.tcb_unlock()
+	}
+	return ret
+}
+
+func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, int) {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) sendto(proc *proc_t, src *userbuf_t,
+    toaddr []uint8, flags int) (int, int) {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
+    fromsa *userbuf_t) (int, int, int) {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
+	panic("no imp")
+}
+
+func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	switch cmd {
+	case F_GETFL:
+		return tf.options
+	case F_SETFL:
+		tf.options = opt
+		return 0
+	default:
+		panic("weird cmd")
+	}
+}
+
+func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, int) {
+	panic("no imp")
+	switch opt {
+	case SO_ERROR:
+		if !proc.userwriten(bufarg.userva, 4, 0) {
+			return 0, -EFAULT
+		}
+		return 4, 0
+	default:
+		return 0, -EOPNOTSUPP
+	}
 }
 
 var nics = map[ip4_t]*x540_t{}

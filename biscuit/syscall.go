@@ -125,6 +125,7 @@ const(
   SYS_SOCKET   = 41
     // domains
     AF_UNIX       = 1
+    AF_INET       = 2
     // types
     SOCK_STREAM   = 1 << 0
     SOCK_DGRAM    = 1 << 1
@@ -1474,6 +1475,8 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 		sfops = &sudfops_t{open: 1}
 	case domain == AF_UNIX && typ & SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
+	case domain == AF_INET && typ & SOCK_STREAM != 0:
+		sfops = &tcpfops_t{options: opts, openc: 1}
 	default:
 		return -EINVAL
 	}

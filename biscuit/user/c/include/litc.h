@@ -168,6 +168,15 @@ struct sockaddr_un {
 
 #define		SUN_LEN(x)	(sizeof(struct sockaddr_un))
 
+struct sockaddr_in {
+	uint8_t		sin_len;
+	uchar		sin_family;
+	uint16_t	sin_port;
+	struct {
+		uint32_t s_addr;
+	} sin_addr;
+};
+
 struct stat {
 	dev_t	st_dev;
 	ulong	st_ino;

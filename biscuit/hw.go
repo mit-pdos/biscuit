@@ -2040,7 +2040,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				//go x.tester3()
 				//go x.tester4()
 				//go x.tester5()
-				go x.tester6()
+				//go x.tester6()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2177,7 +2177,7 @@ func (x *x540_t) tester4() {
 		//	dport = uint16(80)
 		//}
 		//n++
-		err, tcb := _tcp_connect(31337, bterm, dport)
+		err, tcb := _tcp_connect(bterm, dport)
 		if err != 0 {
 			fmt.Printf("socket failed: %d\n", err)
 		} else {
@@ -2234,7 +2234,7 @@ func (x *x540_t) tester5() {
 		//	dport = uint16(80)
 		//}
 		//n++
-		err, tcb := _tcp_connect(31337, bterm, dport)
+		err, tcb := _tcp_connect(bterm, dport)
 		if err != 0 {
 			fmt.Printf("socket failed: %d\n", err)
 		} else {
@@ -2267,7 +2267,7 @@ func (x *x540_t) tester6() {
 	//goog := ip4_t(0xacd90444)
 	obsd := ip4_t(0x818005c2)
 	dport := uint16(80)
-	err, tcb := _tcp_connect(31337, obsd, dport)
+	err, tcb := _tcp_connect(obsd, dport)
 	if err != 0 {
 		panic("socket failed: %d")
 	}
