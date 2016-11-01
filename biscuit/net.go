@@ -704,12 +704,14 @@ type tcpbuf_t struct {
 	seq	uint32
 	didseq	bool
 	cond	*sync.Cond
+	pollers	*pollers_t
 }
 
 func (tb *tcpbuf_t) tbuf_init(sz int, tcb *tcptcb_t) {
 	tb.cbuf.cb_init(sz)
 	tb.didseq = false
 	tb.cond = sync.NewCond(&tcb.l)
+	tb.pollers = &tcb.pollers
 }
 
 func (tb *tcpbuf_t) set_seq(seq uint32) {
@@ -741,6 +743,9 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 	for _, r := range rxdata {
 		dlen += len(r)
 	}
+	if dlen == 0 {
+		panic("nothing to write")
+	}
 	if dlen >= tb.cbuf.left() {
 		panic("data out of window")
 	}
@@ -760,6 +765,7 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 		tb.seq += uint32(did)
 		tb.cbuf._advhead(did)
 		tb.cond.Broadcast()
+		tb.pollers.wakeready(R_READ)
 	}
 	return did
 }
@@ -794,7 +800,7 @@ func (tb *tcpbuf_t) sysread(nseq uint32, l int) ([]uint8, []uint8) {
 
 // advances the circular buffer tail by the difference between rack and the
 // current sequence and updates the seqence.
-func (tb *tcpbuf_t) ackupto(rack uint32) {
+func (tb *tcpbuf_t) ackup(rack uint32) {
 	if !_seqbetween(tb.seq, rack, tb.seq + uint32(tb.cbuf.used())) {
 		panic("ack out of window")
 	}
@@ -802,6 +808,7 @@ func (tb *tcpbuf_t) ackupto(rack uint32) {
 	tb.cbuf._advtail(sz)
 	tb.seq += uint32(sz)
 	tb.cond.Broadcast()
+	tb.pollers.wakeready(R_WRITE)
 }
 
 type tseg_t struct {
@@ -1177,6 +1184,7 @@ type tcptcb_t struct {
 	rxdone	bool
 	// we sent FIN
 	txdone	bool
+	pollers	pollers_t
 	rcv struct {
 		nxt	uint32
 		win	uint16
@@ -1506,8 +1514,10 @@ func (tc *tcptcb_t) failwake() {
 	tc._sanity()
 	tc.state = CLOSED
 	tc.dead = true
+	tc.rxdone = true
 	tc.rxbuf.cond.Broadcast()
 	tc.txbuf.cond.Broadcast()
+	tc.pollers.wakeready(R_READ | R_HUP | R_ERROR)
 }
 
 func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
@@ -1552,9 +1562,9 @@ func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
 	tc.snd.wl2 = ack
 	tc.snd.win = rwin
 	tc.sched_ack()
-	if dlen != 0 {
-		tc.data_in(tc.rcv.nxt, ack, rwin, rest, dlen)
-	}
+	tc.data_in(tc.rcv.nxt, ack, rwin, rest, dlen)
+	// wakeup threads blocking in connect(2)
+	tc.rxbuf.cond.Broadcast()
 }
 
 func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
@@ -1602,7 +1612,7 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 	}
 	swinend := tc.snd.una + uint32(tc.snd.win)
 	if _seqdiff(swinend, rack) < _seqdiff(swinend, tc.snd.una) {
-		tc.txbuf.ackupto(rack)
+		tc.txbuf.ackup(rack)
 		tc.snd.tsegs.ackupto(rack)
 		tc.snd.una = rack
 	}
@@ -1668,7 +1678,9 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 		// XXX save out of order sequence and length.
 		panic("out of order segment")
 	}
-	tc.rxbuf.syswrite(rseq, rest)
+	if dlen != 0 {
+		tc.rxbuf.syswrite(rseq, rest)
+	}
 	// we received data, update our window; avoid silly window syndrome.
 	// delay acks when the window shrinks to less than an MSS since we will
 	// send an immediate ack once the window reopens due to the user
@@ -1945,7 +1957,7 @@ func net_tcp(pkt [][]uint8, tlen int) {
 
 	sip := sl2ip(ip4.sip[:])
 	dip := sl2ip(ip4.dip[:])
-	tcph.dump(sip, dip, opts)
+	//tcph.dump(sip, dip, opts)
 
 	localip := dip
 	k := tcpkey_t{lip: localip, rip: sip, lport: ntohs(tcph.dport),
@@ -2007,11 +2019,14 @@ func (tf *tcpfops_t) read(dst *userbuf_t) (int, int) {
 	tf.tcb.tcb_lock()
 	var read, err int
 	for {
+		if tf.tcb.rxdone {
+			break
+		}
 		read, err = tf.tcb.uread(dst)
 		if err != 0 {
 			break
 		}
-		if read != 0 || tf.tcb.rxdone {
+		if read != 0 {
 			break
 		}
 		tf.tcb.rbufwait()
@@ -2028,7 +2043,24 @@ func (tf *tcpfops_t) reopen() int {
 }
 
 func (tf *tcpfops_t) write(src *userbuf_t) (int, int) {
-	panic("no imp")
+	// XXX XXX XXX XXX nil tcb
+	tf.tcb.tcb_lock()
+	var wrote, err int
+	for src.remain() != 0 {
+		if tf.tcb.txdone {
+			err = -EPIPE
+			break
+		}
+		var did int
+		did, err = tf.tcb.uwrite(src)
+		wrote += did
+		if err != 0 {
+			break
+		}
+		tf.tcb.tbufwait()
+	}
+	tf.tcb.tcb_unlock()
+	return wrote, err
 }
 
 func (tf *tcpfops_t) fullpath() (string, int) {
@@ -2093,16 +2125,37 @@ func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, int) {
 
 func (tf *tcpfops_t) sendto(proc *proc_t, src *userbuf_t,
     toaddr []uint8, flags int) (int, int) {
-	panic("no imp")
+	return tf.write(src)
 }
 
 func (tf *tcpfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
     fromsa *userbuf_t) (int, int, int) {
-	panic("no imp")
+	wrote, err := tf.read(dst)
+	return wrote, err, 0
 }
 
 func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
-	panic("no imp")
+	tf.tcb.tcb_lock()
+	var ret ready_t
+	isdata := !tf.tcb.rxbuf.cbuf.empty()
+	if tf.tcb.dead {
+		ret |= R_ERROR
+	}
+	if pm.events & R_READ != 0 && (isdata || tf.tcb.rxdone) {
+		ret |= R_READ
+	}
+	if tf.tcb.txdone {
+		if pm.events & R_HUP != 0 {
+			ret |= R_HUP
+		}
+	} else if pm.events & R_WRITE != 0 && !tf.tcb.txbuf.cbuf.full() {
+		ret |= R_WRITE
+	}
+	if ret == 0 && pm.dowait {
+		tf.tcb.pollers.addpoller(&pm)
+	}
+	tf.tcb.tcb_unlock()
+	return ret
 }
 
 func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
