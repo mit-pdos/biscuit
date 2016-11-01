@@ -1966,6 +1966,8 @@ func kbd_init() {
 	cons.com_int = make(chan bool)
 	cons.reader = make(chan []byte)
 	cons.reqc = make(chan int)
+	cons.pollc = make(chan pollmsg_t)
+	cons.pollret = make(chan ready_t)
 	go kbd_daemon(&cons, km)
 	irq_unmask(IRQ_KBD)
 	irq_unmask(IRQ_COM1)
@@ -1987,6 +1989,8 @@ type cons_t struct {
 	com_int		chan bool
 	reader		chan []byte
 	reqc		chan int
+	pollc		chan pollmsg_t
+	pollret		chan ready_t
 }
 
 var cons	= cons_t{}
@@ -2032,6 +2036,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 	}
 	var reqc chan int
+	pollers := &pollers_t{}
 	for {
 		select {
 		case <- cons.kbd_int:
@@ -2064,12 +2069,24 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			s := data[0:l]
 			cons.reader <- s
 			data = data[l:]
+		case pm := <- cons.pollc:
+			if pm.events & R_READ == 0 {
+				continue
+			}
+			var ret ready_t
+			if len(data) > 0 {
+				ret |= R_READ
+			} else if pm.dowait {
+				pollers.addpoller(&pm)
+			}
+			cons.pollret <- ret
 		}
 		if len(data) == 0 {
 			reqc = nil
 			data = start
 		} else {
 			reqc = cons.reqc
+			pollers.wakeready(R_READ)
 		}
 	}
 }

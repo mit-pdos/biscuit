@@ -719,7 +719,15 @@ func (df *devfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
 }
 
 func (df *devfops_t) pollone(pm pollmsg_t) ready_t {
-	return pm.events & (R_READ | R_WRITE)
+	switch df.maj {
+	case D_CONSOLE:
+		cons.pollc <- pm
+		return <- cons.pollret
+	case D_DEVNULL:
+		return pm.events & (R_READ | R_WRITE)
+	default:
+		panic("which dev")
+	}
 }
 
 func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
