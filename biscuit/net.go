@@ -185,7 +185,7 @@ func _arp_lookup(ip ip4_t) (*arprec_t, bool) {
 }
 
 // returns false if resolution timed out
-func arp_resolve(sip, dip ip4_t) (*mac_t, int) {
+func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 	nic, ok := nics[sip]
 	if !ok {
 		return nil, -ENETDOWN
@@ -405,7 +405,7 @@ func (r *routes_t) dump() {
 // returns the local IP assigned to the NIC where the destination is reachable,
 // the IP whose MAC address the packet to the destination IP should be sent,
 // and error
-func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
+func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, err_t) {
 	for _, shift := range r.subnets {
 		s := uint(shift)
 		try := uint64(dip >> s)
@@ -471,7 +471,7 @@ func (rt *routetbl_t) commit(newroutes *routes_t) {
 	// store with the caller
 }
 
-func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, int) {
+func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, err_t) {
 	src := (* unsafe.Pointer)(unsafe.Pointer(&rt.routes))
 	// load-acquire on x86
 	p := atomic.LoadPointer(src)
@@ -1777,7 +1777,7 @@ func (tc *tcptcb_t) lwingrow(oldwin int) {
 	}
 }
 
-func (tc *tcptcb_t) uread(dst *userbuf_t) (int, int) {
+func (tc *tcptcb_t) uread(dst *userbuf_t) (int, err_t) {
 	tc._sanity()
 	owin := int(tc.rcv.win)
 	wrote, err := tc.rxbuf.cbuf.copyout(dst)
@@ -1786,7 +1786,7 @@ func (tc *tcptcb_t) uread(dst *userbuf_t) (int, int) {
 	return wrote, err
 }
 
-func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, int) {
+func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, err_t) {
 	tc._sanity()
 	wrote, err := tc.txbuf.cbuf.copyin(src)
 	if tc.state == ESTAB {
@@ -1813,7 +1813,7 @@ func (tc *tcpcons_t) init() {
 
 // creates a new TCP with an unused source port
 func (tc *tcpcons_t) tcb_new(lip, rip ip4_t, rport uint16, smac,
-    dmac *mac_t) (*tcptcb_t, int) {
+    dmac *mac_t) (*tcptcb_t, err_t) {
 	tc.Lock()
 
 	// find available source port
@@ -1904,23 +1904,23 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _tcp_connect(dip ip4_t, dport uint16) (int, *tcptcb_t) {
+func _tcp_connect(dip ip4_t, dport uint16) (*tcptcb_t, err_t) {
 	localip, routeip, err := routetbl.lookup(dip)
 	if err != 0 {
-		return err, nil
+		return nil, err
 	}
 	nic, ok := nics[localip]
 	if !ok {
-		return -EHOSTUNREACH, nil
+		return nil, -EHOSTUNREACH
 	}
 	dmac, err := arp_resolve(localip, routeip)
 	if err != 0 {
-		return err, nil
+		return nil, err
 	}
 
 	tcb, err := tcpcons.tcb_new(localip, dip, dport, &nic.mac, dmac)
 	if err != 0 {
-		return err, nil
+		return nil, err
 	}
 
 	tcb.tcb_lock()
@@ -1933,7 +1933,7 @@ func _tcp_connect(dip ip4_t, dport uint16) (int, *tcptcb_t) {
 	eth, ip, tcp := pkt.hdrbytes()
 	sgbuf := [][]uint8{eth, ip, tcp, opts}
 	nic.tx_tcp(sgbuf)
-	return 0, tcb
+	return tcb, 0
 }
 
 func _send_rst(ip4 *ip4hdr_t, tcp *tcphdr_t) {
@@ -1982,7 +1982,7 @@ type tcpfops_t struct {
 	openc	int
 }
 
-func (tf *tcpfops_t) close() int {
+func (tf *tcpfops_t) close() err_t {
 	tf.Lock()
 	tf.openc--
 	if tf.openc < 0 {
@@ -1999,15 +1999,15 @@ func (tf *tcpfops_t) close() int {
 	return 0
 }
 
-func (tf *tcpfops_t) fstat(*stat_t) int {
+func (tf *tcpfops_t) fstat(*stat_t) err_t {
 	panic("no imp")
 }
 
-func (tf *tcpfops_t) lseek(int, int) int {
-	return -ESPIPE
+func (tf *tcpfops_t) lseek(int, int) (int, err_t) {
+	return 0, -ESPIPE
 }
 
-func (tf *tcpfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
+func (tf *tcpfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
@@ -2015,9 +2015,10 @@ func (tf *tcpfops_t) pathi() *imemnode_t {
 	panic("tcp socket cwd")
 }
 
-func (tf *tcpfops_t) read(dst *userbuf_t) (int, int) {
+func (tf *tcpfops_t) read(dst *userbuf_t) (int, err_t) {
 	tf.tcb.tcb_lock()
-	var read, err int
+	var read int
+	var err err_t
 	for {
 		if tf.tcb.rxdone {
 			break
@@ -2035,17 +2036,18 @@ func (tf *tcpfops_t) read(dst *userbuf_t) (int, int) {
 	return read, err
 }
 
-func (tf *tcpfops_t) reopen() int {
+func (tf *tcpfops_t) reopen() err_t {
 	tf.Lock()
 	tf.openc++
 	tf.Unlock()
 	return 0
 }
 
-func (tf *tcpfops_t) write(src *userbuf_t) (int, int) {
+func (tf *tcpfops_t) write(src *userbuf_t) (int, err_t) {
 	// XXX XXX XXX XXX nil tcb
 	tf.tcb.tcb_lock()
-	var wrote, err int
+	var wrote int
+	var err err_t
 	for src.remain() != 0 {
 		if tf.tcb.txdone {
 			err = -EPIPE
@@ -2063,31 +2065,31 @@ func (tf *tcpfops_t) write(src *userbuf_t) (int, int) {
 	return wrote, err
 }
 
-func (tf *tcpfops_t) fullpath() (string, int) {
+func (tf *tcpfops_t) fullpath() (string, err_t) {
 	panic("weird cwd")
 }
 
-func (tf *tcpfops_t) truncate(newlen uint) int {
+func (tf *tcpfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (tf *tcpfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+func (tf *tcpfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tf *tcpfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+func (tf *tcpfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tf *tcpfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+func (tf *tcpfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
 	panic("no imp")
 }
 
-func (tf *tcpfops_t) bind(proc *proc_t, saddr []uint8) int {
+func (tf *tcpfops_t) bind(proc *proc_t, saddr []uint8) err_t {
 	panic("no imp")
 }
 
-func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) int {
+func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 	tf.Lock()
 	defer tf.Unlock()
 
@@ -2097,12 +2099,12 @@ func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) int {
 	}
 	dip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
 	dport := ntohs(be16(readn(saddr, 2, 2)))
-	err, tcb := _tcp_connect(dip, dport)
+	tcb, err := _tcp_connect(dip, dport)
 	if err != 0 {
 		return err
 	}
 	tf.tcb = tcb
-	ret := 0
+	var ret err_t
 	if blk {
 		tcb.tcb_lock()
 		for tcb.state == SYNSENT || tcb.state == SYNRCVD {
@@ -2119,19 +2121,19 @@ func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) int {
 	return ret
 }
 
-func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, int) {
+func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	panic("no imp")
 }
 
 func (tf *tcpfops_t) sendto(proc *proc_t, src *userbuf_t,
-    toaddr []uint8, flags int) (int, int) {
+    toaddr []uint8, flags int) (int, err_t) {
 	return tf.write(src)
 }
 
 func (tf *tcpfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
-    fromsa *userbuf_t) (int, int, int) {
+    fromsa *userbuf_t) (int, int, err_t) {
 	wrote, err := tf.read(dst)
-	return wrote, err, 0
+	return wrote, 0, err
 }
 
 func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
@@ -2171,7 +2173,7 @@ func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 }
 
 func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
-    intarg int) (int, int) {
+    intarg int) (int, err_t) {
 	panic("no imp")
 	switch opt {
 	case SO_ERROR:

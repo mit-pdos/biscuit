@@ -75,7 +75,7 @@ func sdirname(path string) (string, string) {
 	return s, fn
 }
 
-func crname(path string, nilpatherr int) (int, bool) {
+func crname(path string, nilpatherr err_t) (err_t, bool) {
 	if path == "" {
 		return nilpatherr, false
 	} else if path == "." || path == ".." {
@@ -165,7 +165,7 @@ func use_memfs() {
 // a type for an inode block/offset identifier
 type inum int
 
-func fs_link(old string, new string, cwd *imemnode_t) int {
+func fs_link(old string, new string, cwd *imemnode_t) err_t {
 	op_begin()
 	defer op_end()
 
@@ -202,7 +202,7 @@ undo:
 	return err
 }
 
-func fs_unlink(paths string, cwd *imemnode_t) int {
+func fs_unlink(paths string, cwd *imemnode_t) err_t {
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -EPERM
@@ -215,7 +215,7 @@ func fs_unlink(paths string, cwd *imemnode_t) int {
 	// and yield to avoid deadlock.
 	var par *imemnode_t
 	var child *imemnode_t
-	var err int
+	var err err_t
 	var childi inum
 	for {
 		par, err = fs_namei(dirs, cwd)
@@ -258,7 +258,7 @@ func fs_unlink(paths string, cwd *imemnode_t) int {
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func fs_rename(oldp, newp string, cwd *imemnode_t) int {
+func fs_rename(oldp, newp string, cwd *imemnode_t) err_t {
 	odirs, ofn := sdirname(oldp)
 	ndirs, nfn := sdirname(newp)
 
@@ -388,7 +388,7 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) int {
 	return 0
 }
 
-func _isancestor(anc, here *imemnode_t) int {
+func _isancestor(anc, here *imemnode_t) err_t {
 	if anc == iroot {
 		panic("root is always ancestor")
 	}
@@ -418,7 +418,7 @@ type fsfops_t struct {
 	append	bool
 }
 
-func (fo *fsfops_t) _read(dst *userbuf_t, toff int) (int, int) {
+func (fo *fsfops_t) _read(dst *userbuf_t, toff int) (int, err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -444,15 +444,15 @@ func (fo *fsfops_t) _read(dst *userbuf_t, toff int) (int, int) {
 	return did, err
 }
 
-func (fo *fsfops_t) read(dst *userbuf_t) (int, int) {
+func (fo *fsfops_t) read(dst *userbuf_t) (int, err_t) {
 	return fo._read(dst, -1)
 }
 
-func (fo *fsfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+func (fo *fsfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
 	return fo._read(dst, offset)
 }
 
-func (fo *fsfops_t) _write(src *userbuf_t, toff int) (int, int) {
+func (fo *fsfops_t) _write(src *userbuf_t, toff int) (int, err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -483,11 +483,11 @@ func (fo *fsfops_t) _write(src *userbuf_t, toff int) (int, int) {
 	return did, err
 }
 
-func (fo *fsfops_t) write(src *userbuf_t) (int, int) {
+func (fo *fsfops_t) write(src *userbuf_t) (int, err_t) {
 	return fo._write(src, -1)
 }
 
-func (fo *fsfops_t) fullpath() (string, int) {
+func (fo *fsfops_t) fullpath() (string, err_t) {
 	if !fo.priv.ilock_opened() {
 		return "", -EBADF
 	}
@@ -496,7 +496,7 @@ func (fo *fsfops_t) fullpath() (string, int) {
 	return fp, err
 }
 
-func (fo *fsfops_t) truncate(newlen uint) int {
+func (fo *fsfops_t) truncate(newlen uint) err_t {
 	op_begin()
 	defer op_end()
 	if !fo.priv.ilock_opened() {
@@ -507,11 +507,11 @@ func (fo *fsfops_t) truncate(newlen uint) int {
 	return err
 }
 
-func (fo *fsfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+func (fo *fsfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
 	return fo._write(src, offset)
 }
 
-func (fo *fsfops_t) fstat(st *stat_t) int {
+func (fo *fsfops_t) fstat(st *stat_t) err_t {
 	if !fo.priv.ilock_opened() {
 		return -EBADF
 	}
@@ -523,7 +523,7 @@ func (fo *fsfops_t) fstat(st *stat_t) int {
 // XXX log those files that have no fs links but > 0 memory references to the
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
-func (fo *fsfops_t) close() int {
+func (fo *fsfops_t) close() err_t {
 	return fs_close(fo.priv)
 }
 
@@ -531,7 +531,7 @@ func (fo *fsfops_t) pathi() *imemnode_t {
 	return fo.priv
 }
 
-func (fo *fsfops_t) reopen() int {
+func (fo *fsfops_t) reopen() err_t {
 	if !fo.priv.ilock_opened() {
 		return -EBADF
 	}
@@ -540,7 +540,7 @@ func (fo *fsfops_t) reopen() int {
 	return 0
 }
 
-func (fo *fsfops_t) lseek(off, whence int) int {
+func (fo *fsfops_t) lseek(off, whence int) (int, err_t) {
 	// prevent races on fo.offset
 	fo.Lock()
 	defer fo.Unlock()
@@ -556,17 +556,17 @@ func (fo *fsfops_t) lseek(off, whence int) int {
 		fo.fstat(st)
 		fo.offset = st.size() + off
 	default:
-		return -EINVAL
+		return 0, -EINVAL
 	}
 	if fo.offset < 0 {
 		fo.offset = 0
 	}
-	return fo.offset
+	return fo.offset, 0
 }
 
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
-func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, int) {
+func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, err_t) {
 	if !fo.priv.ilock_opened() {
 		return nil, -EBADF
 	}
@@ -575,27 +575,28 @@ func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, int) {
 	return mmi, err
 }
 
-func (fo *fsfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+func (fo *fsfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
 	return nil, 0, -ENOTSOCK
 }
 
-func (fo *fsfops_t) bind(*proc_t, []uint8) int {
+func (fo *fsfops_t) bind(*proc_t, []uint8) err_t {
 	return -ENOTSOCK
 }
 
-func (fo *fsfops_t) connect(proc *proc_t, sabuf []uint8) int {
+func (fo *fsfops_t) connect(proc *proc_t, sabuf []uint8) err_t {
 	return -ENOTSOCK
 }
 
-func (fo *fsfops_t) listen(*proc_t, int) (fdops_i, int) {
+func (fo *fsfops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (fo *fsfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+func (fo *fsfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (fo *fsfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
+func (fo *fsfops_t) recvfrom(*proc_t, *userbuf_t,
+    *userbuf_t) (int, int, err_t) {
 	return 0, 0, -ENOTSOCK
 }
 
@@ -604,11 +605,11 @@ func (fo *fsfops_t) pollone(pm pollmsg_t) ready_t {
 }
 
 func (fo *fsfops_t) fcntl(proc *proc_t, cmd, opt int) int {
-	return -ENOSYS
+	return int(-ENOSYS)
 }
 
 func (fo *fsfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
-    intarg int) (int, int) {
+    intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
@@ -627,7 +628,7 @@ func (df *devfops_t) _sane() {
 	}
 }
 
-func (df *devfops_t) read(dst *userbuf_t) (int, int) {
+func (df *devfops_t) read(dst *userbuf_t) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_read(dst, 0)
@@ -636,7 +637,7 @@ func (df *devfops_t) read(dst *userbuf_t) (int, int) {
 	}
 }
 
-func (df *devfops_t) write(src *userbuf_t) (int, int) {
+func (df *devfops_t) write(src *userbuf_t) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_write(src, 0)
@@ -645,31 +646,31 @@ func (df *devfops_t) write(src *userbuf_t) (int, int) {
 	}
 }
 
-func (df *devfops_t) fullpath() (string, int) {
+func (df *devfops_t) fullpath() (string, err_t) {
 	panic("weird cwd")
 }
 
-func (df *devfops_t) truncate(newlen uint) int {
+func (df *devfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (df *devfops_t) pread(dst *userbuf_t, offset int) (int, int) {
+func (df *devfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
 	df._sane()
 	return 0, -ESPIPE
 }
 
-func (df *devfops_t) pwrite(src *userbuf_t, offset int) (int, int) {
+func (df *devfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
 	df._sane()
 	return 0, -ESPIPE
 }
 
-func (df *devfops_t) fstat(st *stat_t) int {
+func (df *devfops_t) fstat(st *stat_t) err_t {
 	df._sane()
 	st.wmode(mkdev(df.maj, df.min))
 	return 0
 }
 
-func (df *devfops_t) mmapi(int, int) ([]mmapinfo_t, int) {
+func (df *devfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
 	df._sane()
 	return nil, -ENODEV
 }
@@ -679,42 +680,43 @@ func (df *devfops_t) pathi() *imemnode_t {
 	panic("bad cwd")
 }
 
-func (df *devfops_t) close() int {
+func (df *devfops_t) close() err_t {
 	df._sane()
 	return 0
 }
 
-func (df *devfops_t) reopen() int {
+func (df *devfops_t) reopen() err_t {
 	df._sane()
 	return 0
 }
 
-func (df *devfops_t) lseek(int, int) int {
+func (df *devfops_t) lseek(int, int) (int, err_t) {
 	df._sane()
-	return -ESPIPE
+	return 0, -ESPIPE
 }
 
-func (df *devfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, int) {
+func (df *devfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
 	return nil, 0, -ENOTSOCK
 }
 
-func (df *devfops_t) bind(*proc_t, []uint8) int {
+func (df *devfops_t) bind(*proc_t, []uint8) err_t {
 	return -ENOTSOCK
 }
 
-func (df *devfops_t) connect(proc *proc_t, sabuf []uint8) int {
+func (df *devfops_t) connect(proc *proc_t, sabuf []uint8) err_t {
 	return -ENOTSOCK
 }
 
-func (df *devfops_t) listen(*proc_t, int) (fdops_i, int) {
+func (df *devfops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (df *devfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, int) {
+func (df *devfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (df *devfops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int) {
+func (df *devfops_t) recvfrom(*proc_t, *userbuf_t,
+    *userbuf_t) (int, int, err_t) {
 	return 0, 0, -ENOTSOCK
 }
 
@@ -731,15 +733,15 @@ func (df *devfops_t) pollone(pm pollmsg_t) ready_t {
 }
 
 func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
-	return -ENOSYS
+	return int(-ENOSYS)
 }
 
 func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
-    intarg int) (int, int) {
+    intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func fs_mkdir(paths string, mode int, cwd *imemnode_t) int {
+func fs_mkdir(paths string, mode int, cwd *imemnode_t) err_t {
 	op_begin()
 	defer op_end()
 
@@ -784,7 +786,7 @@ type fsfile_t struct {
 }
 
 func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
-    major, minor int) (fsfile_t, int) {
+    major, minor int) (fsfile_t, err_t) {
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
 	nodir := false
@@ -846,7 +848,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 		}
 	} else {
 		// open existing file
-		var err int
+		var err err_t
 		idm, err = fs_namei(paths, cwd)
 		if err != 0 {
 			return ret, err
@@ -889,7 +891,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 var _denyopen = map[int]bool{ D_SUD: true, D_SUS: true}
 
 func fs_open(paths string, flags, mode int, cwd *imemnode_t,
-    major, minor int) (*fd_t, int) {
+    major, minor int) (*fd_t, err_t) {
 	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
 		return nil, err
@@ -921,7 +923,7 @@ func fs_open(paths string, flags, mode int, cwd *imemnode_t,
 	return ret, 0
 }
 
-func fs_close(priv *imemnode_t) int {
+func fs_close(priv *imemnode_t) err_t {
 	op_begin()
 
 	if !priv.ilock_opened() {
@@ -935,7 +937,7 @@ func fs_close(priv *imemnode_t) int {
 	return 0
 }
 
-func fs_stat(path string, st *stat_t, cwd *imemnode_t) int {
+func fs_stat(path string, st *stat_t, cwd *imemnode_t) err_t {
 	idm, err := fs_namei(path, cwd)
 	if err != 0 {
 		return err
@@ -945,7 +947,7 @@ func fs_stat(path string, st *stat_t, cwd *imemnode_t) int {
 	return err
 }
 
-func fs_sync() int {
+func fs_sync() err_t {
 	if memtime {
 		return 0
 	}
@@ -958,7 +960,7 @@ func fs_sync() int {
 
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
-func fs_namei(paths string, cwd *imemnode_t) (*imemnode_t, int) {
+func fs_namei(paths string, cwd *imemnode_t) (*imemnode_t, err_t) {
 	start := iroot
 	if len(paths) == 0 || paths[0] != '/' {
 		start = cwd
@@ -1005,7 +1007,7 @@ type pgcache_t struct {
 	// destination buffer.
 	_fill	func([]uint8, int) int
 	// flush writes the given buffer to the specified offset of the device.
-	_flush	func([]uint8, int) int
+	_flush	func([]uint8, int) err_t
 }
 
 type pgcinfo_t struct {
@@ -1014,7 +1016,7 @@ type pgcinfo_t struct {
 }
 
 func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) int,
-    flush func([]uint8, int) int) {
+    flush func([]uint8, int) err_t) {
 	if fill == nil || flush == nil {
 		panic("invalid page func")
 	}
@@ -1091,7 +1093,7 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 }
 
 // return error
-func (pc *pgcache_t) _ensurefill(pgn int) int {
+func (pc *pgcache_t) _ensurefill(pgn int) err_t {
 	needsfill := pc._ensureslot(pgn)
 	pgva := pc.pgs[pgn]
 	if needsfill {
@@ -1106,7 +1108,7 @@ func (pc *pgcache_t) _ensurefill(pgn int) int {
 
 // offset <= end. if offset lies on the same page as end, the returned slice is
 // trimmed (bytes >= end are removed).
-func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, int) {
+func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, err_t) {
 	if offset > end {
 		panic("offset must be less than end")
 	}
@@ -1359,7 +1361,7 @@ func (idm *imemnode_t) _iupdate() {
 
 // functions prefixed with "do_" are the conversions of the idaemon CSP code in
 // daemonize.
-func (idm *imemnode_t) do_trunc(truncto uint) int {
+func (idm *imemnode_t) do_trunc(truncto uint) err_t {
 	idm._locked()
 	if idm.icache.itype != I_FILE && idm.icache.itype != I_DEV {
 		panic("bad truncate")
@@ -1371,13 +1373,13 @@ func (idm *imemnode_t) do_trunc(truncto uint) int {
 	return err
 }
 
-func (idm *imemnode_t) do_read(dst *userbuf_t, offset int) (int, int) {
+func (idm *imemnode_t) do_read(dst *userbuf_t, offset int) (int, err_t) {
 	idm._locked()
 	return idm.iread(dst, offset)
 }
 
 func (idm *imemnode_t) do_write(src *userbuf_t, _offset int,
-    append bool) (int, int) {
+    append bool) (int, err_t) {
 	idm._locked()
 	if idm.icache.itype == I_DIR {
 		panic("write to dir")
@@ -1391,7 +1393,7 @@ func (idm *imemnode_t) do_write(src *userbuf_t, _offset int,
 	return wrote, err
 }
 
-func (idm *imemnode_t) do_stat(st *stat_t) int {
+func (idm *imemnode_t) do_stat(st *stat_t) err_t {
 	idm._locked()
 	st.wdev(0)
 	st.wino(int(idm.priv))
@@ -1401,7 +1403,7 @@ func (idm *imemnode_t) do_stat(st *stat_t) int {
 	return 0
 }
 
-func (idm *imemnode_t) do_mmapi(off, len int) ([]mmapinfo_t, int) {
+func (idm *imemnode_t) do_mmapi(off, len int) ([]mmapinfo_t, err_t) {
 	idm._locked()
 	if idm.icache.itype != I_FILE && idm.icache.itype != I_DIR {
 		panic("bad mmapinfo")
@@ -1409,16 +1411,16 @@ func (idm *imemnode_t) do_mmapi(off, len int) ([]mmapinfo_t, int) {
 	return idm.immapinfo(off, len)
 }
 
-func (idm *imemnode_t) do_chkempty() int {
+func (idm *imemnode_t) do_chkempty() err_t {
 	idm._locked()
-	err := 0
+	var err err_t
 	if idm.icache.itype == I_DIR && !idm.idirempty() {
 		err = -ENOTEMPTY
 	}
 	return err
 }
 
-func (idm *imemnode_t) do_unlink(name string) int {
+func (idm *imemnode_t) do_unlink(name string) err_t {
 	idm._locked()
 	_, err := idm.iunlink(name)
 	if err == 0 {
@@ -1427,7 +1429,7 @@ func (idm *imemnode_t) do_unlink(name string) int {
 	return err
 }
 
-func (idm *imemnode_t) do_insert(fn string, n inum) int {
+func (idm *imemnode_t) do_insert(fn string, n inum) err_t {
 	idm._locked()
 	// create new dir ent with given inode number
 	err := idm.iinsert(fn, n)
@@ -1437,7 +1439,7 @@ func (idm *imemnode_t) do_insert(fn string, n inum) int {
 	return err
 }
 
-func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum, int) {
+func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum, err_t) {
 	idm._locked()
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
@@ -1449,7 +1451,7 @@ func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum, int) {
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_createfile(fn string) (inum, int) {
+func (idm *imemnode_t) do_createfile(fn string) (inum, err_t) {
 	idm._locked()
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
@@ -1461,7 +1463,7 @@ func (idm *imemnode_t) do_createfile(fn string) (inum, int) {
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_createdir(fn string) (inum, int) {
+func (idm *imemnode_t) do_createdir(fn string) (inum, err_t) {
 	idm._locked()
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
@@ -1473,7 +1475,7 @@ func (idm *imemnode_t) do_createdir(fn string) (inum, int) {
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_fullpath() (string, int) {
+func (idm *imemnode_t) do_fullpath() (string, err_t) {
 	idm._locked()
 	if idm.icache.itype != I_DIR {
 		panic("fullpath on non-dir")
@@ -1827,7 +1829,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) int {
 	return blkn
 }
 
-func (idm *imemnode_t) iread(dst *userbuf_t, offset int) (int, int) {
+func (idm *imemnode_t) iread(dst *userbuf_t, offset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
 	for offset + c < isz && dst.remain() != 0 {
@@ -1844,7 +1846,7 @@ func (idm *imemnode_t) iread(dst *userbuf_t, offset int) (int, int) {
 	return c, 0
 }
 
-func (idm *imemnode_t) iwrite(src *userbuf_t, offset int) (int, int) {
+func (idm *imemnode_t) iwrite(src *userbuf_t, offset int) (int, err_t) {
 	sz := src.len
 	newsz := offset + sz
 	err := idm._preventhole(idm.icache.size, uint(newsz))
@@ -1876,7 +1878,7 @@ func (idm *imemnode_t) iwrite(src *userbuf_t, offset int) (int, int) {
 // if a progam 1) lseeks past end of file and writes or 2) extends file size
 // via ftruncate/truncate, make sure the page cache is filled with zeros for
 // the new bytes.
-func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) int {
+func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) err_t {
 	// XXX fix sign
 	oldlen := uint(_oldlen)
 	if newlen > oldlen {
@@ -1903,7 +1905,7 @@ func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) int {
 	return 0
 }
 
-func (idm *imemnode_t) itrunc(newlen uint) int {
+func (idm *imemnode_t) itrunc(newlen uint) err_t {
 	err := idm._preventhole(idm.icache.size, newlen)
 	if err != 0 {
 		return err
@@ -1936,7 +1938,7 @@ func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) int {
 }
 
 // flush only the parts of pages whose offset is < file size
-func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) int {
+func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
 	if memtime {
 		return 0
 	}
@@ -1983,7 +1985,7 @@ func (idm *imemnode_t) dirent_add(name string, nblkno int, ioff int) {
 }
 
 func (idm *imemnode_t) icreate(name string, nitype, major,
-    minor int) (inum, int) {
+    minor int) (inum, err_t) {
 	if nitype <= I_INVALID || nitype > I_VALID {
 		fmt.Printf("itype: %v\n", nitype)
 		panic("bad itype!")
@@ -2024,7 +2026,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 	return newinum, 0
 }
 
-func (idm *imemnode_t) iget(name string) (inum, int) {
+func (idm *imemnode_t) iget(name string) (inum, err_t) {
 	// did someone confuse a file with a directory?
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
@@ -2036,7 +2038,7 @@ func (idm *imemnode_t) iget(name string) (inum, int) {
 }
 
 // creates a new directory entry with name "name" and inode number priv
-func (idm *imemnode_t) iinsert(name string, priv inum) int {
+func (idm *imemnode_t) iinsert(name string, priv inum) err_t {
 	if idm.icache.itype != I_DIR {
 		return -ENOTDIR
 	}
@@ -2049,7 +2051,7 @@ func (idm *imemnode_t) iinsert(name string, priv inum) int {
 }
 
 // returns inode number of unliked inode so caller can decrement its ref count
-func (idm *imemnode_t) iunlink(name string) (inum, int) {
+func (idm *imemnode_t) iunlink(name string) (inum, err_t) {
 	if idm.icache.itype != I_DIR {
 		panic("unlink to non-dir")
 	}
@@ -2090,7 +2092,7 @@ func (idm *imemnode_t) idirempty() bool {
 	return empty
 }
 
-func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, int) {
+func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	isz := idm.icache.size
 	if len == -1 || offset + len > isz {
 		len = isz - offset

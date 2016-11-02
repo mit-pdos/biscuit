@@ -157,34 +157,34 @@ const(
 // threads/processes can concurrently call a single fd's methods
 type fdops_i interface {
 	// fd ops
-	close() int
-	fstat(*stat_t) int
-	lseek(int, int) int
-	mmapi(int, int) ([]mmapinfo_t, int)
+	close() err_t
+	fstat(*stat_t) err_t
+	lseek(int, int) (int, err_t)
+	mmapi(int, int) ([]mmapinfo_t, err_t)
 	pathi() *imemnode_t
-	read(*userbuf_t) (int, int)
+	read(*userbuf_t) (int, err_t)
 	// reopen() is called with proc_t.fdl is held
-	reopen() int
-	write(*userbuf_t) (int, int)
-	fullpath() (string, int)
-	truncate(uint) int
+	reopen() err_t
+	write(*userbuf_t) (int, err_t)
+	fullpath() (string, err_t)
+	truncate(uint) err_t
 
-	pread(*userbuf_t, int) (int, int)
-	pwrite(*userbuf_t, int) (int, int)
+	pread(*userbuf_t, int) (int, err_t)
+	pwrite(*userbuf_t, int) (int, err_t)
 
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
 	// space, and error
-	accept(*proc_t, *userbuf_t) (fdops_i, int, int)
-	bind(*proc_t, []uint8) int
-	connect(*proc_t, []uint8) int
+	accept(*proc_t, *userbuf_t) (fdops_i, int, err_t)
+	bind(*proc_t, []uint8) err_t
+	connect(*proc_t, []uint8) err_t
 	// listen changes the underlying socket type; thus is returns the new
 	// fops.
-	listen(*proc_t, int) (fdops_i, int)
-	sendto(*proc_t, *userbuf_t, []uint8, int) (int, int)
+	listen(*proc_t, int) (fdops_i, err_t)
+	sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t)
 	// returns number of bytes read, size of from sock address written, and
 	// error
-	recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, int)
+	recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
@@ -193,7 +193,7 @@ type fdops_i interface {
 	pollone(pollmsg_t) ready_t
 
 	fcntl(*proc_t, int, int) int
-	getsockopt(*proc_t, int, *userbuf_t, int) (int, int)
+	getsockopt(*proc_t, int, *userbuf_t, int) (int, err_t)
 }
 
 // this is the new fd_t
@@ -302,7 +302,7 @@ func (a *accnt_t) to_rusage() []uint8 {
 // - wait for a process should not return thread info and vice versa
 type waitst_t struct {
 	pid		int
-	err		int
+	err		err_t
 	status		int
 	atime		accnt_t
 }
@@ -1295,7 +1295,7 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	}
 }
 
-func (p *proc_t) usertimespec(va int) (time.Duration, time.Time, int) {
+func (p *proc_t) usertimespec(va int) (time.Duration, time.Time, err_t) {
 	secs, ok1 := p.userreadn(va, 8)
 	nsecs, ok2 := p.userreadn(va + 8, 8)
 	var zt time.Time
@@ -1482,17 +1482,17 @@ func (ub *userbuf_t) remain() int {
 	return ub.len - ub.off
 }
 
-func (ub *userbuf_t) read(dst []uint8) (int, int) {
+func (ub *userbuf_t) read(dst []uint8) (int, err_t) {
 	return ub._tx(dst, false)
 }
 
-func (ub *userbuf_t) write(src []uint8) (int, int) {
+func (ub *userbuf_t) write(src []uint8) (int, err_t) {
 	return ub._tx(src, true)
 }
 
 // copies the min of either the provided buffer or ub.len. returns number of
 // bytes copied and error.
-func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, int) {
+func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, err_t) {
 	if ub.fake {
 		var c int
 		if write {
@@ -1571,7 +1571,7 @@ func (cb *circbuf_t) empty() bool {
 	return cb.head == cb.tail
 }
 
-func (cb *circbuf_t) copyin(src *userbuf_t) (int, int) {
+func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
 	if cb.full() {
 		panic("cb.buf full; should have blocked")
 	}
@@ -1606,7 +1606,7 @@ func (cb *circbuf_t) copyin(src *userbuf_t) (int, int) {
 	return c, 0
 }
 
-func (cb *circbuf_t) copyout(dst *userbuf_t) (int, int) {
+func (cb *circbuf_t) copyout(dst *userbuf_t) (int, err_t) {
 	if cb.empty() {
 		return 0, 0
 	}
@@ -2849,7 +2849,7 @@ func main() {
 	kbd_init()
 
 	// control CPUs
-	aplim := 0
+	aplim := 7
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
