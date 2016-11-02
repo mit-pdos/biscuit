@@ -1976,7 +1976,7 @@ func net_tcp(pkt [][]uint8, tlen int) {
 
 type tcpfops_t struct {
 	tcb	*tcptcb_t
-	options	int
+	options	fdopt_t
 	// lock protecting fd open ref count
 	sync.Mutex
 	openc	int
@@ -2163,9 +2163,9 @@ func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
 func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	switch cmd {
 	case F_GETFL:
-		return tf.options
+		return int(tf.options)
 	case F_SETFL:
-		tf.options = opt
+		tf.options = fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")

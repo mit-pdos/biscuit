@@ -77,20 +77,22 @@ const(
 	EINPROGRESS	err_t = 115
 )
 
+type fdopt_t uint
+
 const(
   SYS_READ     = 0
   SYS_WRITE    = 1
   SYS_OPEN     = 2
-    O_RDONLY      = 0
-    O_WRONLY      = 1
-    O_RDWR        = 2
-    O_CREAT       = 0x40
-    O_EXCL        = 0x80
-    O_TRUNC       = 0x200
-    O_APPEND      = 0x400
-    O_NONBLOCK    = 0x800
-    O_DIRECTORY   = 0x10000
-    O_CLOEXEC     = 0x80000
+    O_RDONLY      fdopt_t = 0
+    O_WRONLY      fdopt_t = 1
+    O_RDWR        fdopt_t = 2
+    O_CREAT       fdopt_t = 0x40
+    O_EXCL        fdopt_t = 0x80
+    O_TRUNC       fdopt_t = 0x200
+    O_APPEND      fdopt_t = 0x400
+    O_NONBLOCK    fdopt_t = 0x800
+    O_DIRECTORY   fdopt_t = 0x10000
+    O_CLOEXEC     fdopt_t = 0x80000
   SYS_CLOSE    = 3
   SYS_STAT     = 4
   SYS_FSTAT    = 5
@@ -438,7 +440,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	return ret
 }
 
-func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
+func sys_open(proc *proc_t, pathn int, _flags int, mode int) int {
 	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return int(-EFAULT)
@@ -446,6 +448,7 @@ func sys_open(proc *proc_t, pathn int, flags int, mode int) int {
 	if toolong {
 		return int(-ENAMETOOLONG)
 	}
+	flags := fdopt_t(_flags)
 	temp := flags & (O_RDONLY | O_WRONLY | O_RDWR)
 	if temp != O_RDONLY && temp != O_WRONLY && temp != O_RDWR {
 		return int(-EINVAL)
@@ -835,11 +838,12 @@ func sys_lseek(proc *proc_t, fdn, off, whence int) int {
 	return ret
 }
 
-func sys_pipe2(proc *proc_t, pipen, flags int) int {
+func sys_pipe2(proc *proc_t, pipen, _flags int) int {
 	rfp := FD_READ
 	wfp := FD_WRITE
 
-	var opts int
+	flags := fdopt_t(_flags)
+	var opts fdopt_t
 	if flags & O_NONBLOCK != 0 {
 		opts |= O_NONBLOCK
 	}
@@ -1113,7 +1117,7 @@ func (o *pipe_t) op_reopen(rd, wd int) err_t {
 
 type pipefops_t struct {
 	pipe	*pipe_t
-	options	int
+	options	fdopt_t
 	writer	bool
 }
 
@@ -1227,9 +1231,9 @@ func (of *pipefops_t) pollone(pm pollmsg_t) ready_t {
 func (of *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	switch cmd {
 	case F_GETFL:
-		return of.options
+		return int(of.options)
 	case F_SETFL:
-		of.options = opt
+		of.options = fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
@@ -1465,7 +1469,7 @@ func sys_getpid(proc *proc_t, tid tid_t) int {
 }
 
 func sys_socket(proc *proc_t, domain, typ, proto int) int {
-	var opts int
+	var opts fdopt_t
 	if typ & SOCK_NONBLOCK != 0 {
 		opts |= O_NONBLOCK
 	}
@@ -2049,7 +2053,7 @@ type susfops_t struct {
 	lstn	bool
 	myaddr	string
 	mysid	int
-	options	int
+	options	fdopt_t
 }
 
 func (sus *susfops_t) close() err_t {
@@ -2273,12 +2277,12 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	switch cmd {
 	case F_GETFL:
-		return sus.options
+		return int(sus.options)
 	case F_SETFL:
-		sus.options = opt
+		sus.options = fdopt_t(opt)
 		if sus.conn {
-			sus.pipein.options = opt
-			sus.pipeout.options = opt
+			sus.pipein.options = fdopt_t(opt)
+			sus.pipeout.options = fdopt_t(opt)
 		}
 		return 0
 	default:
@@ -2517,7 +2521,7 @@ func (susl *susl_t) susl_poll(pm pollmsg_t) ready_t {
 type suslfops_t struct {
 	susl	*susl_t
 	myaddr	string
-	options	int
+	options	fdopt_t
 }
 
 func (sf *suslfops_t) close() err_t {
@@ -2618,9 +2622,9 @@ func (sf *suslfops_t) pollone(pm pollmsg_t) ready_t {
 func (sf *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	switch cmd {
 	case F_GETFL:
-		return sf.options
+		return int(sf.options)
 	case F_SETFL:
-		sf.options = opt
+		sf.options = fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")

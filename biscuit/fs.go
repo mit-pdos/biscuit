@@ -785,7 +785,7 @@ type fsfile_t struct {
 	minor	int
 }
 
-func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
+func _fs_open(paths string, flags fdopt_t, mode int, cwd *imemnode_t,
     major, minor int) (fsfile_t, err_t) {
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
@@ -890,7 +890,7 @@ func _fs_open(paths string, flags int, mode int, cwd *imemnode_t,
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{ D_SUD: true, D_SUS: true}
 
-func fs_open(paths string, flags, mode int, cwd *imemnode_t,
+func fs_open(paths string, flags fdopt_t, mode int, cwd *imemnode_t,
     major, minor int) (*fd_t, err_t) {
 	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
