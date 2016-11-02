@@ -1447,7 +1447,7 @@ func (tc *tcptcb_t) seg_now(seq uint32) int {
 		nic.tx_tcp(sgbuf)
 	}
 
-	// we just sent an ack, so clear outstanding ack flag
+	// we just queued an ack, so clear outstanding ack flag
 	tc.rem.outa = false
 	tc.rem.forcedelay = false
 	tc.rem.last = time.Now()
@@ -1885,7 +1885,7 @@ type tcppkt_t struct {
 
 // writes pseudo header partial cksum to the TCP header cksum field. the sum is
 // not complemented so that the partial pseudo header cksum can be summed with
-// the rest of the TCP cksum by the NIC.
+// the rest of the TCP cksum (offloaded to the NIC).
 func (tp *tcppkt_t) crc(l4len int, sip, dip ip4_t) {
 	sum := uint32(uint16(sip))
 	sum += uint32(uint16(sip >> 16))
@@ -2048,7 +2048,7 @@ func (tf *tcpfops_t) write(src *userbuf_t) (int, err_t) {
 	tf.tcb.tcb_lock()
 	var wrote int
 	var err err_t
-	for src.remain() != 0 {
+	for {
 		if tf.tcb.txdone {
 			err = -EPIPE
 			break
@@ -2056,7 +2056,7 @@ func (tf *tcpfops_t) write(src *userbuf_t) (int, err_t) {
 		var did int
 		did, err = tf.tcb.uwrite(src)
 		wrote += did
-		if err != 0 {
+		if src.remain() == 0 || err != 0 {
 			break
 		}
 		tf.tcb.tbufwait()

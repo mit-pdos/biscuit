@@ -32,7 +32,7 @@ int main(int argc, char **argv)
 		for (i = 0; i < nfds; i++) {
 			if ((pfds[i].revents & POLLIN) == 0)
 				continue;
-			ssize_t c = read(pfds[i].fd, buf, sizeof(buf) - 1);
+			ssize_t c = read(pfds[i].fd, buf, sizeof(buf));
 			if (c == -1) {
 				err(-1, "read");
 			} else if (c == 0) {
@@ -40,7 +40,6 @@ int main(int argc, char **argv)
 				done = 1;
 				break;
 			}
-			buf[c] = '\0';
 			ssize_t w = write(i == 0 ? s : 1, buf, c);
 			if (w == -1)
 				err(-1, "write");

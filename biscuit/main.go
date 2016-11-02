@@ -1573,7 +1573,7 @@ func (cb *circbuf_t) empty() bool {
 
 func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
 	if cb.full() {
-		panic("cb.buf full; should have blocked")
+		return 0, 0
 	}
 	hi := cb.head % cb.bufsz
 	ti := cb.tail % cb.bufsz
@@ -1598,10 +1598,10 @@ func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
 	}
 	dst := cb.buf[hi:ti]
 	wrote, err := src.read(dst)
-	if err != 0 {
-		return 0, err
-	}
 	c += wrote
+	if err != 0 {
+		return c, err
+	}
 	cb.head += c
 	return c, 0
 }
