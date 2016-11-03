@@ -1059,34 +1059,47 @@ func (p *proc_t) doomall() {
 	p.doomed = true
 }
 
-func _scanadd(pg *[512]int, depth int, l *[]int) {
-	if depth == 0 {
-		return
-	}
+// frees all user memory (no pmap pages)
+func _uvmfree(pg *[512]int, depth int) {
 	for _, pte := range pg {
 		if pte & PTE_P == 0 || pte & PTE_U == 0 || pte & PTE_PS != 0 {
 			continue
 		}
-		phys := pte & PTE_ADDR
-		*l = append(*l, phys)
-		_scanadd(dmap(phys), depth - 1, l)
+		phys := uintptr(pte & PTE_ADDR)
+		if depth == 1 {
+			// XXX this takes the free list lock many times
+			refdown(phys)
+		} else {
+			_uvmfree(dmap(int(phys)), depth - 1)
+		}
 	}
 }
 
-var fpool = sync.Pool{New: func() interface{} { return make([]int, 0, 10) }}
+// don't forget: there are two places where pmaps/memory are free'd:
+// proc_t.terminate() and exec.
+func uvmfree(p_pg uintptr) {
+	_uvmfree(dmap(int(p_pg)), 4)
+}
 
-// walks the pmap, adding each page to a slice to be freed
-func _vmfree(p_pmap uintptr) int {
-	//pgs := make([]int, 0, 10)
-	// XXX try putting pgs on stack; does escape analysis still screw up?
-	pgs := fpool.Get().([]int)
-	_scanadd(dmap(int(p_pmap)), 4, &pgs)
-	// XXX this takes the free list lock many times
-	for _, p_pg := range pgs {
+func _vmfree1(pg *[512]int, depth int) {
+	for _, pge := range pg {
+		if pge & PTE_P == 0 || pge & PTE_U == 0 || pge & PTE_PS != 0 {
+			continue
+		}
+		p_pg := pge & PTE_ADDR
+		// PTEs have already been freed via uvmfree, so simply free the
+		// page table
+		if depth != 2 {
+			_vmfree1(dmap(p_pg), depth - 1)
+		}
+		// XXX this takes the free list lock many times
 		refdown(uintptr(p_pg))
 	}
-	fpool.Put(pgs[0:0])
-	return len(pgs)
+}
+
+// frees all user pmap pages (not the mapped pages themselves)
+func _vmfree(p_pmap uintptr) {
+	_vmfree1(dmap(int(p_pmap)), 4)
 }
 
 func dec_pmap(p_pmap uintptr) {
@@ -1124,6 +1137,15 @@ func (p *proc_t) terminate() {
 	close_panic(p.cwd)
 
 	proc_del(p.pid)
+
+	// free all user pages in the pmap. the last CPU to call dec_pmap on
+	// the proc's pmap will free the pmap itself. freeing the user pages is
+	// safe since we know that all user threads are dead and thus no CPU
+	// will try to access user mappings. however, any CPU may access kernel
+	// mappings via this pmap.
+	uvmfree(uintptr(p.p_pmap))
+	// dec_pmap could free the pmap itself. thus it must come after
+	// uvmfree.
 	dec_pmap(uintptr(p.p_pmap))
 
 	// send status to parent
@@ -2741,13 +2763,12 @@ func _refpg_new() (*[512]int, int) {
 
 	physmem.Lock()
 	firstfree := physmem.freei
-	newhead := physmem.pgs[firstfree].nexti
-	physmem.freei = newhead
-	physmem.Unlock()
-
 	if firstfree == ^uint32(0) {
 		panic("refpgs oom")
 	}
+	newhead := physmem.pgs[firstfree].nexti
+	physmem.freei = newhead
+	physmem.Unlock()
 
 	pi := int(firstfree)
 	p_pg := uintptr(firstfree + physmem.startn) << PGSHIFT
@@ -2776,6 +2797,7 @@ func phys_init() {
 	// reserve 128MB of pages
 	//respgs := 1 << 15
 	respgs := 1 << 16
+	//respgs := 1 << (31 - 12)
 	// 7.5 GB
 	//respgs := 1835008
 	//respgs := 1 << 18 + (1 <<17)

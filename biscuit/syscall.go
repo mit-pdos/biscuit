@@ -2921,7 +2921,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	}
 
 	restore := func() {
-		//proc.pmpages = opmpages
+		uvmfree(uintptr(proc.p_pmap))
 		refdown(uintptr(proc.p_pmap))
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
@@ -2984,6 +2984,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 
 	// the exec must succeed now; free old pmap/mapped files
 	if op_pmap != 0 {
+		uvmfree(uintptr(op_pmap))
 		dec_pmap(uintptr(op_pmap))
 	}
 	ovmreg.clear()
