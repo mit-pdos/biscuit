@@ -997,6 +997,12 @@ func ptefork(cpmap, ppmap *[512]int, start, end int) bool {
 	i := start
 	for i < end {
 		pptb, slot := pmap_pgtbl(ppmap, i, false, 0)
+		if pptb == nil {
+			// skip to next page directory
+			i += 1 << 21
+			i &^= ((1 << 21) - 1)
+			continue
+		}
 		cptb, _ := pmap_pgtbl(cpmap, i, true, PTE_U | PTE_W)
 		ps := pptb[slot:]
 		cs := cptb[slot:]
