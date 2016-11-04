@@ -1707,7 +1707,7 @@ func (cb *circbuf_t) _rawread(offset int) ([]uint8, []uint8) {
 	var r1 []uint8
 	var r2 []uint8
 	if ti <= hi {
-		if oi >= hi || oi < ti {
+		if !cb.full() && (oi >= hi || oi < ti) {
 			panic("outside user data")
 		}
 		r1 = cb.buf[oi:hi]

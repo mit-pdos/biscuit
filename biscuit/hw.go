@@ -1366,9 +1366,9 @@ func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
 	})(unsafe.Pointer(hw))
 }
 
-func (td *txdesc_t) ctxt_ipv4(_machlen, _ip4len int) {
+func (td *txdesc_t) ctxt_ipv4(_maclen, _ip4len int) {
 	td.ctxt = true
-	maclen := uint64(_machlen)
+	maclen := uint64(_maclen)
 	td.hwdesc.p_addr = maclen << 9
 	hlen := uint64(_ip4len)
 	td.hwdesc.p_addr |= hlen
@@ -1377,14 +1377,14 @@ func (td *txdesc_t) ctxt_ipv4(_machlen, _ip4len int) {
 	// DEXT = 1
 	td.hwdesc.rest |= 1 << 29
 	// TUCMD.IPV4 = 1
-	ipv4 := uint64(1 << 12)
+	ipv4 := uint64(1 << 10)
 	td.hwdesc.rest |= ipv4
 	// leave IDX zero
 }
 
-func (td *txdesc_t) ctxt_tcp(_machlen, _ip4len int) {
+func (td *txdesc_t) ctxt_tcp(_maclen, _ip4len int) {
 	td.ctxt = true
-	maclen := uint64(_machlen)
+	maclen := uint64(_maclen)
 	td.hwdesc.p_addr = maclen << 9
 	hlen := uint64(_ip4len)
 	td.hwdesc.p_addr |= hlen
@@ -1395,6 +1395,37 @@ func (td *txdesc_t) ctxt_tcp(_machlen, _ip4len int) {
 	// TUCMD.L4T = 1 (TCP)
 	tcp := uint64(1 << 11)
 	td.hwdesc.rest |= tcp
+}
+
+func (td *txdesc_t) ctxt_tcp_tso(_maclen, _ip4len, _l4hdrlen, _mss int) {
+	td.ctxt = true
+	maclen := uint64(_maclen)
+	td.hwdesc.p_addr = maclen << 9
+	hlen := uint64(_ip4len)
+	td.hwdesc.p_addr |= hlen
+	// DTYP = 0010b
+	td.hwdesc.rest = 0x2 << 20
+	// DEXT = 1
+	td.hwdesc.rest |= 1 << 29
+	// TUCMD.L4T = 1 (TCP)
+	tcp := uint64(1 << 11)
+	// TUCMD.IPV4 = 1
+	ipv4 := uint64(1 << 10)
+	td.hwdesc.rest |= tcp | ipv4
+	mss := uint64(_mss)
+	if mss &^ 0xffff != 0 {
+		panic("large mss")
+	}
+	td.hwdesc.rest |= mss << 48
+	l4hdrlen := uint64(_l4hdrlen)
+	if l4hdrlen &^ 0xff != 0 {
+		panic("large l4hdrlen")
+	}
+	// XXXPANIC
+	if _l4hdrlen != TCPLEN {
+		panic("weird tcp header len (options?)")
+	}
+	td.hwdesc.rest |= l4hdrlen << 40
 }
 
 // returns remaining bytes
@@ -1463,6 +1494,22 @@ func (td *txdesc_t) mktcp(src [][]uint8, tlen int) [][]uint8 {
 	// POPTS.TXSM = 1
 	txsm := uint64(1 << 41)
 	td.hwdesc.rest |= txsm
+	return ret
+}
+
+// offloads segmentation and checksums to the NIC. the TCP header's
+// pseudo-header checksum must not include the length.
+func (td *txdesc_t) mktcp_tso(src [][]uint8, tlen int) [][]uint8 {
+	ret := td.mktcp(src, tlen)
+	// DCMD.TSE = 1
+	tse := uint64(1 << 31)
+	td.hwdesc.rest |= tse
+	if tlen <= ETHERLEN + IP4LEN + TCPLEN {
+		panic("no payload")
+	}
+	// for TSO, PAYLEN is the # of bytes in the TCP payload (not the total
+	// packet size, as usual).
+	td._paylen(uint64(tlen - ETHERLEN - IP4LEN - TCPLEN))
 	return ret
 }
 
@@ -1789,33 +1836,35 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
 func (x *x540_t) tx_raw(buf [][]uint8) {
-	x._tx_wait(buf, false, false, false)
+	x._tx_wait(buf, false, false, false, 0, 0)
 }
 
 func (x *x540_t) tx_ipv4(buf [][]uint8) {
-	x._tx_wait(buf, true, false, false)
+	x._tx_wait(buf, true, false, false, 0, 0)
 }
 
 func (x *x540_t) tx_tcp(buf [][]uint8) {
-	x._tx_wait(buf, true, true, false)
+	x._tx_wait(buf, true, true, false, 0, 0)
 }
 
-func (x *x540_t) tx_tcp_tso(buf [][]uint8) {
-	x._tx_wait(buf, true, true, true)
+func (x *x540_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) {
+	x._tx_wait(buf, true, true, true, tcphlen, mss)
 }
 
-func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp, tso bool) {
+func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
+    mss int) {
 	x.tx.Lock()
-	for !x._tx_enqueue(buf, ipv4, tcp, tso) {
+	for !x._tx_enqueue(buf, ipv4, tcp, tso, tcphlen, mss) {
 		x.tx.cond.Wait()
 	}
 	x.tx.cond.Signal()
 	x.tx.Unlock()
 }
 
-// caller must hold x.tx lock. returns true if buf was enqueued to be
-// trasmitted.
-func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool) bool {
+// caller must hold x.tx lock. returns true if buf was copied to the
+// transmission queue.
+func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
+    mss int) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -1837,9 +1886,6 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool) bool {
 		tlen += len(buf[i])
 		i++
 	}
-	if tso {
-		panic("no imp")
-	}
 	if tso && !tcp {
 		panic("tso is only for tcp")
 	}
@@ -1851,16 +1897,19 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool) bool {
 	}
 	need := tlen
 	newtail := tail
-	if ipv4 || tcp {
-		// XXX the NIC only needs 1 context descriptor total for IPv4
-		// checksums, not 1 per packet! (segmentation offload requires
-		// 1 per packet)
+	if ipv4 || tcp || tso {
+		// XXX the NIC only needs 1 context descriptor total for
+		// IPv4/TCP checksums, not 1 per packet! (segmentation offload
+		// requires 1 per payload)
 
 		// first descriptor must be a context descriptor when using
 		// checksum/segmentation offloading (only need 1 context for
 		// all checksum offloads?)
 		newtail = (newtail + 1) % x.tx.ndescs
 	}
+	// XXX have to prevent clobbering of context descriptors somehow (does
+	// the NIC advance TDH past TSO context descriptors while the context
+	// descriptor is still in use?)
 	for newtail != end && need != 0 {
 		td := &x.tx.descs[newtail]
 		bs := int(td.bufsz)
@@ -1878,7 +1927,13 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool) bool {
 	// the first descriptors are special
 	fd := &x.tx.descs[tail]
 	fd.wbwait()
-	if tcp {
+	if tso {
+		fd.ctxt_tcp_tso(ETHERLEN, IP4LEN, tcphlen, mss)
+		tail = (tail + 1) % x.tx.ndescs
+		fd = &x.tx.descs[tail]
+		fd.wbwait()
+		buf = fd.mktcp_tso(buf, tlen)
+	} else if tcp {
 		fd.ctxt_tcp(ETHERLEN, IP4LEN)
 		tail = (tail + 1) % x.tx.ndescs
 		fd = &x.tx.descs[tail]

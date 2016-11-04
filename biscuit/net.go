@@ -943,8 +943,12 @@ func (ts *tcpsegs_t) prune(winend uint32) {
 		seq := ts.segs[i].seq
 		l := ts.segs[i].len
 		if _seqbetween(seq, winend, seq + l - 1) {
-			ts.segs[i].len = uint32(_seqdiff(winend, seq))
-			prunefrom = i + 1
+			if seq == winend {
+				prunefrom = i
+			} else {
+				ts.segs[i].len = uint32(_seqdiff(winend, seq))
+				prunefrom = i + 1
+			}
 			break
 		}
 	}
@@ -1295,6 +1299,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			tc.synsent(ip4, tcp, opt.mss, rest)
 		case ESTAB:
 			tc.estab(ip4, tcp, rest)
+			// XXX replace with retransmission timer
 			tc.seg_maybe()
 		default:
 			sn, ok := statestr[tc.state]
@@ -1394,6 +1399,10 @@ func (tc *tcptcb_t) seg_maybe() {
 			continue
 		}
 		seq := tc.snd.tsegs.segs[i].seq
+		// XXXPANIC
+		if seq == winend {
+			panic("how?")
+		}
 		did := tc.seg_now(seq)
 		// reset() modifies segs[]
 		tc.snd.tsegs.reset(seq, uint32(did))
@@ -1405,6 +1414,10 @@ func (tc *tcptcb_t) seg_maybe() {
 		send := tc.snd.tsegs.segs[i].seq
 		diff := _seqdiff(send, sbegin)
 		if diff > 0 {
+			// XXXPANIC
+			if sbegin == winend {
+				panic("how?")
+			}
 			did := tc.seg_now(sbegin)
 			tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
 		}
@@ -1437,12 +1450,13 @@ func (tc *tcptcb_t) seg_now(seq uint32) int {
 		panic("must send non-zero amount")
 	}
 
-	pkt := tc.mkseg(seq, tc.rcv.nxt, dlen)
+	pkt, istso := tc.mkseg(seq, tc.rcv.nxt, dlen)
 	eth, ip, thdr := pkt.hdrbytes()
 
 	sgbuf := [][]uint8{eth, ip, thdr, buf1, buf2}
-	if dlen > nic.mtu {
-		nic.tx_tcp_tso(sgbuf)
+	smss := int(tc.snd.mss)
+	if istso {
+		nic.tx_tcp_tso(sgbuf, len(thdr), smss)
 	} else {
 		nic.tx_tcp(sgbuf)
 	}
@@ -1499,15 +1513,22 @@ func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
 	return ret
 }
 
-func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) *tcppkt_t {
+// returns the new TCP packet and true if the packet should use TSO
+func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) (*tcppkt_t, bool) {
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
 	ret.tcphdr.win = htons(tc.rcv.win)
 	l4len := ret.tcphdr.hdrlen() + seglen
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
 	ret.ether.init_ip4(tc.smac, tc.dmac)
+	istso := seglen > int(tc.snd.mss)
+	// packets using TSO do not include the the TCP payload length in the
+	// pseudo-header checksum.
+	if istso {
+		l4len = 0
+	}
 	ret.crc(l4len, tc.lip, tc.rip)
-	return ret
+	return ret, istso
 }
 
 func (tc *tcptcb_t) failwake() {
@@ -1990,9 +2011,9 @@ func (tf *tcpfops_t) close() err_t {
 	}
 	if tf.tcb != nil && tf.openc == 0 {
 		fmt.Printf("terminate: no imp")
-		tf.tcb.tcb_lock()
-		tf.tcb.dead = true
-		tf.tcb.tcb_unlock()
+		//tf.tcb.tcb_lock()
+		//tf.tcb.dead = true
+		//tf.tcb.tcb_unlock()
 	}
 	tf.Unlock()
 
