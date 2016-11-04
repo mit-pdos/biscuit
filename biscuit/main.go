@@ -1059,19 +1059,18 @@ func (p *proc_t) doomall() {
 	p.doomed = true
 }
 
-// frees all user memory (no pmap pages)
+// frees all user memory and pmap pages
 func _uvmfree(pg *[512]int, depth int) {
 	for _, pte := range pg {
 		if pte & PTE_P == 0 || pte & PTE_U == 0 || pte & PTE_PS != 0 {
 			continue
 		}
 		phys := uintptr(pte & PTE_ADDR)
-		if depth == 1 {
-			// XXX this takes the free list lock many times
-			refdown(phys)
-		} else {
+		if depth != 1 {
 			_uvmfree(dmap(int(phys)), depth - 1)
 		}
+		// XXX this takes the free list lock many times
+		refdown(phys)
 	}
 }
 
@@ -1081,33 +1080,12 @@ func uvmfree(p_pg uintptr) {
 	_uvmfree(dmap(int(p_pg)), 4)
 }
 
-func _vmfree1(pg *[512]int, depth int) {
-	for _, pge := range pg {
-		if pge & PTE_P == 0 || pge & PTE_U == 0 || pge & PTE_PS != 0 {
-			continue
-		}
-		p_pg := pge & PTE_ADDR
-		// PTEs have already been freed via uvmfree, so simply free the
-		// page table
-		if depth != 2 {
-			_vmfree1(dmap(p_pg), depth - 1)
-		}
-		// XXX this takes the free list lock many times
-		refdown(uintptr(p_pg))
-	}
-}
-
-// frees all user pmap pages (not the mapped pages themselves)
-func _vmfree(p_pmap uintptr) {
-	_vmfree1(dmap(int(p_pmap)), 4)
-}
-
+// decrease ref count of pml4, possibly freeing it
 func dec_pmap(p_pmap uintptr) {
 	freed, idx := _refdown(p_pmap)
 	if !freed {
 		return
 	}
-	_vmfree(p_pmap)
 	_reffree(idx)
 }
 
