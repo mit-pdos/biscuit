@@ -1485,7 +1485,9 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	case domain == AF_UNIX && typ & SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
 	case domain == AF_INET && typ & SOCK_STREAM != 0:
-		sfops = &tcpfops_t{options: opts, openc: 1}
+		tfops := &tcpfops_t{options: opts}
+		tfops.tcb.openc = 1
+		sfops = tfops
 	default:
 		return int(-EINVAL)
 	}

@@ -1188,6 +1188,7 @@ type tcptcb_t struct {
 	rxdone	bool
 	// we sent FIN
 	txdone	bool
+	openc	int
 	pollers	pollers_t
 	rcv struct {
 		nxt	uint32
@@ -1224,7 +1225,7 @@ type tcpstate_t uint
 
 const (
 	// the following is for newly created tcbs
-	INVALID		tcpstate_t = iota
+	TCPNEW		tcpstate_t = iota
 	SYNSENT
 	SYNRCVD
 	LISTEN
@@ -1249,7 +1250,7 @@ var statestr = map[tcpstate_t]string {
 	CLOSEWAIT: "CLOSEWAIT",
 	LASTACK: "LASTACK",
 	TIMEWAIT: "TIMEWAIT",
-	INVALID: "INVALID",
+	TCPNEW: "TCPNEW",
 }
 
 func (tc *tcptcb_t) tcb_lock() {
@@ -1816,6 +1817,29 @@ func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, err_t) {
 	return wrote, err
 }
 
+func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, rport uint16, smac, dmac *mac_t) {
+	tc.lip = lip
+	tc.rip = rip
+	// tc.lport set in tcb_insert()
+	tc.rport = rport
+	tc.state = TCPNEW
+	tc.snd.nxt = rand.Uint32()
+	tc.snd.una = tc.snd.nxt
+	defwin := uint16(4380)
+	tc.snd.win = defwin
+	tc.dmac = dmac
+	tc.smac = smac
+	defbufsz := (1 << 14)
+	tc.txbuf.tbuf_init(defbufsz, tc)
+	tc.txbuf.set_seq(tc.snd.nxt + 1)
+	tc.rxbuf.tbuf_init(defbufsz, tc)
+	if uint(tc.rxbuf.cbuf.left()) > uint(^uint16(0)) {
+		panic("need window shift")
+	}
+	tc.rcv.win = uint16(tc.rxbuf.cbuf.left())
+	tc.rcv.mss = 1460
+}
+
 type tcpkey_t struct {
 	lip	ip4_t
 	rip	ip4_t
@@ -1833,49 +1857,28 @@ func (tc *tcpcons_t) init() {
 }
 
 // creates a new TCP with an unused source port
-func (tc *tcpcons_t) tcb_new(lip, rip ip4_t, rport uint16, smac,
-    dmac *mac_t) (*tcptcb_t, err_t) {
+func (tc *tcpcons_t) tcb_insert(tcb *tcptcb_t) err_t {
 	tc.Lock()
 
 	// find available source port
-	tk := tcpkey_t{lip: lip, rip: rip, rport: rport}
+	if len(tc.m) == 0xffff {
+		panic("out of local ports")
+	}
+	tk := tcpkey_t{lip: tcb.lip, rip: tcb.rip, rport: tcb.rport}
 	tk.lport = uint16(rand.Uint32())
 	_, ok := tc.m[tk]
 	for ok {
-		tk.lport = uint16(rand.Uint32())
+		tk.lport++
 		_, ok = tc.m[tk]
 	}
-	ret := tc._tcb_new(tk, smac, dmac)
-	tc.Unlock()
-
-	return ret, 0
-}
-
-func (tc *tcpcons_t) _tcb_new(tk tcpkey_t, smac, dmac *mac_t) *tcptcb_t {
-	if _, ok := tc.m[tk]; ok {
+	if _, ok = tc.m[tk]; ok {
 		panic("key exists")
 	}
-	ret := &tcptcb_t{lip: tk.lip, rip: tk.rip, lport: tk.lport,
-	    rport: tk.rport}
-	ret.state = INVALID
-	ret.snd.nxt = rand.Uint32()
-	ret.snd.una = ret.snd.nxt
-	defwin := uint16(4380)
-	ret.snd.win = defwin
-	ret.dmac = dmac
-	ret.smac = smac
-	defbufsz := (1 << 14)
-	ret.txbuf.tbuf_init(defbufsz, ret)
-	ret.txbuf.set_seq(ret.snd.nxt + 1)
-	ret.rxbuf.tbuf_init(defbufsz, ret)
-	if uint(ret.rxbuf.cbuf.left()) > uint(^uint16(0)) {
-		panic("need window shift")
-	}
-	ret.rcv.win = uint16(ret.rxbuf.cbuf.left())
-	ret.rcv.mss = 1460
+	tcb.lport = tk.lport
+	tc.m[tk] = tcb
+	tc.Unlock()
 
-	tc.m[tk] = ret
-	return ret
+	return 0
 }
 
 func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool) {
@@ -1925,36 +1928,37 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _tcp_connect(dip ip4_t, dport uint16) (*tcptcb_t, err_t) {
+func _tcp_connect(tcb *tcptcb_t, dip ip4_t, dport uint16) err_t {
 	localip, routeip, err := routetbl.lookup(dip)
 	if err != 0 {
-		return nil, err
+		return err
 	}
 	nic, ok := nics[localip]
 	if !ok {
-		return nil, -EHOSTUNREACH
+		return -EHOSTUNREACH
 	}
 	dmac, err := arp_resolve(localip, routeip)
 	if err != 0 {
-		return nil, err
+		return err
 	}
 
-	tcb, err := tcpcons.tcb_new(localip, dip, dport, &nic.mac, dmac)
+	tcb.tcb_init(localip, dip, dport, &nic.mac, dmac)
+	// acquires TCB table lock while holding tcb's lock
+	err = tcpcons.tcb_insert(tcb)
 	if err != 0 {
-		return nil, err
+		return err
 	}
 
-	tcb.tcb_lock()
-	tcb._nstate(INVALID, SYNSENT)
+	tcb._sanity()
+	tcb._nstate(TCPNEW, SYNSENT)
 	seq := tcb.snd.nxt
 	pkt, opts := tcb.mkconnect(seq)
 	tcb.snd.nxt++
-	tcb.tcb_unlock()
 
 	eth, ip, tcp := pkt.hdrbytes()
 	sgbuf := [][]uint8{eth, ip, tcp, opts}
 	nic.tx_tcp(sgbuf)
-	return tcb, 0
+	return 0
 }
 
 func _send_rst(ip4 *ip4hdr_t, tcp *tcphdr_t) {
@@ -1996,26 +2000,35 @@ func net_tcp(pkt [][]uint8, tlen int) {
 }
 
 type tcpfops_t struct {
-	tcb	*tcptcb_t
+	tcb	tcptcb_t
 	options	fdopt_t
-	// lock protecting fd open ref count
-	sync.Mutex
-	openc	int
+}
+
+func (tf *tcpfops_t) _closed() (err_t, bool) {
+	if tf.tcb.openc == 0 {
+		return -EBADF, false
+	}
+	return 0, true
 }
 
 func (tf *tcpfops_t) close() err_t {
-	tf.Lock()
-	tf.openc--
-	if tf.openc < 0 {
+	tf.tcb.tcb_lock()
+	if err, ok := tf._closed(); !ok {
+		tf.tcb.tcb_unlock()
+		return err
+	}
+
+	tf.tcb.openc--
+	if tf.tcb.openc < 0 {
 		panic("neg ref")
 	}
-	if tf.tcb != nil && tf.openc == 0 {
+	if tf.tcb.openc == 0 {
 		fmt.Printf("terminate: no imp")
 		//tf.tcb.tcb_lock()
 		//tf.tcb.dead = true
 		//tf.tcb.tcb_unlock()
 	}
-	tf.Unlock()
+	tf.tcb.tcb_unlock()
 
 	return 0
 }
@@ -2038,6 +2051,11 @@ func (tf *tcpfops_t) pathi() *imemnode_t {
 
 func (tf *tcpfops_t) read(dst *userbuf_t) (int, err_t) {
 	tf.tcb.tcb_lock()
+	if err, ok := tf._closed(); !ok {
+		tf.tcb.tcb_unlock()
+		return 0, err
+	}
+
 	var read int
 	var err err_t
 	for {
@@ -2058,15 +2076,19 @@ func (tf *tcpfops_t) read(dst *userbuf_t) (int, err_t) {
 }
 
 func (tf *tcpfops_t) reopen() err_t {
-	tf.Lock()
-	tf.openc++
-	tf.Unlock()
+	tf.tcb.tcb_lock()
+	tf.tcb.openc++
+	tf.tcb.tcb_unlock()
 	return 0
 }
 
 func (tf *tcpfops_t) write(src *userbuf_t) (int, err_t) {
-	// XXX XXX XXX XXX nil tcb
 	tf.tcb.tcb_lock()
+	if err, ok := tf._closed(); !ok {
+		tf.tcb.tcb_unlock()
+		return 0, err
+	}
+
 	var wrote int
 	var err err_t
 	for {
@@ -2111,8 +2133,15 @@ func (tf *tcpfops_t) bind(proc *proc_t, saddr []uint8) err_t {
 }
 
 func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
-	tf.Lock()
-	defer tf.Unlock()
+	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
+	if tf.tcb.state != TCPNEW {
+		return -EISCONN
+	}
+	if err, ok := tf._closed(); !ok {
+		return err
+	}
 
 	blk := true
 	if tf.options & O_NONBLOCK != 0 {
@@ -2120,14 +2149,13 @@ func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 	}
 	dip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
 	dport := ntohs(be16(readn(saddr, 2, 2)))
-	tcb, err := _tcp_connect(dip, dport)
+	tcb := &tf.tcb
+	err := _tcp_connect(tcb, dip, dport)
 	if err != 0 {
 		return err
 	}
-	tf.tcb = tcb
 	var ret err_t
 	if blk {
-		tcb.tcb_lock()
 		for tcb.state == SYNSENT || tcb.state == SYNRCVD {
 			tcb.rbufwait()
 		}
@@ -2137,7 +2165,6 @@ func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 		if tcb.state == CLOSED {
 			ret = -ECONNRESET
 		}
-		tcb.tcb_unlock()
 	}
 	return ret
 }
@@ -2159,6 +2186,12 @@ func (tf *tcpfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 
 func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
 	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
+	if _, ok := tf._closed(); !ok {
+		return 0
+	}
+
 	var ret ready_t
 	isdata := !tf.tcb.rxbuf.cbuf.empty()
 	if tf.tcb.dead {
@@ -2177,11 +2210,13 @@ func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
 	if ret == 0 && pm.dowait {
 		tf.tcb.pollers.addpoller(&pm)
 	}
-	tf.tcb.tcb_unlock()
 	return ret
 }
 
 func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
 	switch cmd {
 	case F_GETFL:
 		return int(tf.options)
