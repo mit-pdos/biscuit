@@ -70,7 +70,8 @@ int nc(uint32_t dip, uint16_t dport)
 	const int nfds = 2;
 	char buf[512];
 	int closed = 0;
-	while (closed != 2) {
+	//while (closed != 2) {
+	while (closed == 0) {
 		pfds[0].events = pfds[1].events = POLLIN;
 		int ret;
 		if ((ret = poll(pfds, nfds, -1)) == -1)

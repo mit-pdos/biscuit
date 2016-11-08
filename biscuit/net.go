@@ -746,8 +746,8 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 	if dlen == 0 {
 		panic("nothing to write")
 	}
-	if dlen >= tb.cbuf.left() {
-		panic("data out of window")
+	if dlen > tb.cbuf.left() {
+		panic("should be pruned to window")
 	}
 	off := _seqdiff(nseq, tb.seq)
 	var did int
@@ -1202,6 +1202,7 @@ type tcptcb_t struct {
 		mss	uint16
 		wl1	uint32
 		wl2	uint32
+		finseq	uint32
 		tsegs	tcpsegs_t
 	}
 	// remembered stuff to send
@@ -1297,11 +1298,15 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 	tc._sanity()
 	switch tc.state {
 		case SYNSENT:
-			tc.synsent(ip4, tcp, opt.mss, rest)
+			tc.synsent(tcp, opt.mss, rest)
 		case ESTAB:
-			tc.estab(ip4, tcp, rest)
+			tc.estab(tcp, rest)
 			// XXX replace with retransmission timer
 			tc.seg_maybe()
+		case CLOSEWAIT:
+			tc.closewait(tcp)
+		case LASTACK:
+			tc.lastack(tcp)
 		default:
 			sn, ok := statestr[tc.state]
 			if !ok {
@@ -1404,7 +1409,7 @@ func (tc *tcptcb_t) seg_maybe() {
 		if seq == winend {
 			panic("how?")
 		}
-		did := tc.seg_now(seq)
+		did := tc.seg_one(seq)
 		// reset() modifies segs[]
 		tc.snd.tsegs.reset(seq, uint32(did))
 	}
@@ -1419,7 +1424,7 @@ func (tc *tcptcb_t) seg_maybe() {
 			if sbegin == winend {
 				panic("how?")
 			}
-			did := tc.seg_now(sbegin)
+			did := tc.seg_one(sbegin)
 			tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
 		}
 		sbegin = send + tc.snd.tsegs.segs[i].len
@@ -1429,12 +1434,12 @@ func (tc *tcptcb_t) seg_maybe() {
 		upto = tc.txbuf.end_seq()
 	}
 	if _seqdiff(upto, sbegin) > 0 {
-		did := tc.seg_now(sbegin)
+		did := tc.seg_one(sbegin)
 		tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
 	}
 }
 
-func (tc *tcptcb_t) seg_now(seq uint32) int {
+func (tc *tcptcb_t) seg_one(seq uint32) int {
 	// XXXPANIC
 	winend := tc.snd.una + uint32(tc.snd.win)
 	if !_seqbetween(tc.snd.una, seq, winend) {
@@ -1473,6 +1478,15 @@ func (tc *tcptcb_t) seg_now(seq uint32) int {
 	if ndiff < odiff {
 		tc.snd.nxt = send
 	}
+	if pkt.tcphdr.isfin() {
+		if !tc.txdone || send != tc.snd.finseq {
+			panic("fin state inconsistency")
+		}
+		if tc.snd.nxt != tc.snd.finseq {
+			panic("must be")
+		}
+	}
+	// XXX XXX XXX start retransmission timer here
 	return dlen
 }
 
@@ -1503,10 +1517,19 @@ func (tc *tcptcb_t) mkconnect(seq uint32) (*tcppkt_t, []uint8) {
 	return ret, opt
 }
 
+func (tc *tcptcb_t) _setfin(tp *tcphdr_t, seq uint32) {
+	// set FIN?
+	if tc.txdone && seq == tc.snd.finseq {
+		fin := uint8(1 << 0)
+		tp.flags |= fin
+	}
+}
+
 func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
 	ret.tcphdr.win = htons(tc.rcv.win)
+	tc._setfin(&ret.tcphdr, seq)
 	l4len := ret.tcphdr.hdrlen()
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
 	ret.ether.init_ip4(tc.smac, tc.dmac)
@@ -1519,6 +1542,7 @@ func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) (*tcppkt_t, bool) {
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
 	ret.tcphdr.win = htons(tc.rcv.win)
+	tc._setfin(&ret.tcphdr, seq + uint32(seglen))
 	l4len := ret.tcphdr.hdrlen() + seglen
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
 	ret.ether.init_ip4(tc.smac, tc.dmac)
@@ -1542,8 +1566,7 @@ func (tc *tcptcb_t) failwake() {
 	tc.pollers.wakeready(R_READ | R_HUP | R_ERROR)
 }
 
-func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
-    rest [][]uint8) {
+func (tc *tcptcb_t) synsent(tcp *tcphdr_t, mss uint16, rest [][]uint8) {
 	tc._sanity()
 	if ack, ok := tcp.isack(); ok {
 		if !tc.ackok(ack) {
@@ -1589,7 +1612,7 @@ func (tc *tcptcb_t) synsent(ip4 *ip4hdr_t, tcp *tcphdr_t, mss uint16,
 	tc.rxbuf.cond.Broadcast()
 }
 
-func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
+func (tc *tcptcb_t) estab(tcp *tcphdr_t, rest [][]uint8) {
 	seq := ntohl(tcp.seq)
 	// does this segment contain data in our receive window?
 	var dlen int
@@ -1623,6 +1646,14 @@ func (tc *tcptcb_t) estab(ip4 *ip4hdr_t, tcp *tcphdr_t, rest [][]uint8) {
 		return
 	}
 	tc.data_in(seq, ack, ntohs(tcp.win), rest, dlen)
+	if tcp.isfin() && tc.rcv.nxt == seq + uint32(dlen) {
+		tc.rcv.nxt++
+		tc.sched_ack()
+		tc._nstate(ESTAB, CLOSEWAIT)
+		tc.rxdone = true
+		tc.rxbuf.cond.Broadcast()
+		tc.pollers.wakeready(R_READ)
+	}
 }
 
 // trims the segment to fit our receive window and acks it
@@ -1731,6 +1762,29 @@ func (tc *tcptcb_t) seqok(seq uint32, seglen int) bool {
 	    _seqbetween(winstart, segend, winend)
 }
 
+func (tc *tcptcb_t) closewait(tcp *tcphdr_t) {
+	// remote party sent FIN, but will still ACK and send window updates
+	seq := ntohl(tcp.seq)
+	ack := ntohl(tcp.ack)
+	win := ntohs(tcp.win)
+	tc.data_in(seq, ack, win, nil, 0)
+}
+
+func (tc *tcptcb_t) lastack(tcp *tcphdr_t) {
+	ack := ntohl(tcp.ack)
+	if !tc.txdone {
+		panic("txdone must be true")
+	}
+	if ack == tc.snd.finseq + 1 {
+		if tc.txbuf.cbuf.used() != 0 {
+			panic("closed but txdata remains")
+		}
+		k := tcpkey_t{lip: tc.lip, rip: tc.rip, lport: tc.lport,
+		    rport: tc.rport}
+		tcpcons.tcb_del(k)
+	}
+}
+
 // returns true when low <= mid <= hi on uints (i.e. even when sequences
 // numbers wrap to 0)
 func _seqbetween(low, mid, hi uint32) bool {
@@ -1811,10 +1865,36 @@ func (tc *tcptcb_t) uread(dst *userbuf_t) (int, err_t) {
 func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, err_t) {
 	tc._sanity()
 	wrote, err := tc.txbuf.cbuf.copyin(src)
-	if tc.state == ESTAB {
+	if tc.state == ESTAB || tc.state == CLOSEWAIT {
 		tc.seg_maybe()
 	}
 	return wrote, err
+}
+
+func (tc *tcptcb_t) shutdown() err_t {
+	tc._sanity()
+	if tc.state != ESTAB && tc.state != CLOSEWAIT {
+		return -ENOTCONN
+	}
+	if tc.txdone {
+		return 0
+	}
+
+	tc.txdone = true
+	tc.snd.finseq = tc.txbuf.end_seq()
+	switch tc.state {
+	case ESTAB:
+		tc._nstate(ESTAB, FINWAIT1)
+	case CLOSEWAIT:
+		tc._nstate(CLOSEWAIT, LASTACK)
+	default:
+		panic("unexpected state")
+	}
+	if tc.snd.nxt == tc.snd.finseq {
+		tc.sched_ack()
+		tc.ack_now()
+	}
+	return 0
 }
 
 func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, rport uint16, smac, dmac *mac_t) {
@@ -2004,6 +2084,7 @@ type tcpfops_t struct {
 	options	fdopt_t
 }
 
+// to prevent an operation racing with a close
 func (tf *tcpfops_t) _closed() (err_t, bool) {
 	if tf.tcb.openc == 0 {
 		return -EBADF, false
@@ -2013,8 +2094,9 @@ func (tf *tcpfops_t) _closed() (err_t, bool) {
 
 func (tf *tcpfops_t) close() err_t {
 	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
 	if err, ok := tf._closed(); !ok {
-		tf.tcb.tcb_unlock()
 		return err
 	}
 
@@ -2023,12 +2105,8 @@ func (tf *tcpfops_t) close() err_t {
 		panic("neg ref")
 	}
 	if tf.tcb.openc == 0 {
-		fmt.Printf("terminate: no imp")
-		//tf.tcb.tcb_lock()
-		//tf.tcb.dead = true
-		//tf.tcb.tcb_unlock()
+		tf.tcb.shutdown()
 	}
-	tf.tcb.tcb_unlock()
 
 	return 0
 }
@@ -2059,14 +2137,11 @@ func (tf *tcpfops_t) read(dst *userbuf_t) (int, err_t) {
 	var read int
 	var err err_t
 	for {
-		if tf.tcb.rxdone {
-			break
-		}
 		read, err = tf.tcb.uread(dst)
 		if err != 0 {
 			break
 		}
-		if read != 0 {
+		if read != 0 || tf.tcb.rxdone {
 			break
 		}
 		tf.tcb.rbufwait()
