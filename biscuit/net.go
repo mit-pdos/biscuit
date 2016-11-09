@@ -1895,7 +1895,7 @@ func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
 	lwinend := tc.rcv.nxt + uint32(tc.rcv.win)
 	w1less := _seqdiff(lwinend, tc.snd.wl1) > _seqdiff(lwinend, seq)
 	rwinend := tc.snd.una + uint32(tc.snd.win) + 1
-	wl2less := _seqdiff(rwinend, tc.snd.wl2) > _seqdiff(rwinend, ack)
+	wl2less := _seqdiff(rwinend, tc.snd.wl2) >= _seqdiff(rwinend, ack)
 	if w1less || (tc.snd.wl1 == seq && wl2less) {
 		tc.snd.win = win
 		tc.snd.wl1 = seq
