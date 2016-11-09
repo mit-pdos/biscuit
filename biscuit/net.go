@@ -958,6 +958,21 @@ func (ts *tcpsegs_t) prune(winend uint32) {
 	ts.segs = ts.segs[:prunefrom]
 }
 
+// returns the timestamp of the oldest segment in the list or false if the list
+// is empty
+func (ts *tcpsegs_t) nextts() (time.Time, bool) {
+	var ret time.Time
+	if len(ts.segs) > 0 {
+		ret = ts.segs[0].when
+		for i := range ts.segs {
+			if ts.segs[i].when.Before(ret) {
+				ret = ts.segs[i].when
+			}
+		}
+	}
+	return ret, len(ts.segs) > 0
+}
+
 func (ts *tcpsegs_t) Len() int {
 	return len(ts.segs)
 }
@@ -1208,8 +1223,8 @@ type tcptcb_t struct {
 		finseq	uint32
 		tsegs	tcpsegs_t
 	}
-	// remembered stuff to send
-	rem struct {
+	// timer state
+	remack struct {
 		last		time.Time
 		// number of segments received; we try to send 1 ACK per 2 data
 		// segments.
@@ -1218,6 +1233,10 @@ type tcptcb_t struct {
 		// outstanding ACK?
 		outa		bool
 		tstart		bool
+	}
+	remseg struct {
+		tstart		bool
+		target		time.Time
 	}
 	// data to send over the TCP connection
 	txbuf	tcpbuf_t
@@ -1368,7 +1387,6 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			}
 		case TIMEWAIT:
 			// XXX timeout here
-			tc.sched_ack()
 		default:
 			sn, ok := statestr[tc.state]
 			if !ok {
@@ -1433,13 +1451,13 @@ func (tc *tcptcb_t) finacked() bool {
 
 // sets flag to send an ack which may be delayed.
 func (tc *tcptcb_t) sched_ack() {
-	tc.rem.num++
-	tc.rem.outa = true
+	tc.remack.num++
+	tc.remack.outa = true
 }
 
 func (tc *tcptcb_t) sched_ack_delay() {
-	tc.rem.outa = true
-	tc.rem.forcedelay = true
+	tc.remack.outa = true
+	tc.remack.forcedelay = true
 }
 
 func (tc *tcptcb_t) ack_maybe() {
@@ -1453,27 +1471,27 @@ func (tc *tcptcb_t) ack_now() {
 // sendnow overrides the forcedelay flag
 func (tc *tcptcb_t) _acktime(sendnow bool) {
 	tc._sanity()
-	if !tc.rem.outa {
+	if !tc.remack.outa {
 		return
 	}
-	fdelay := tc.rem.forcedelay
-	tc.rem.forcedelay = false
+	fdelay := tc.remack.forcedelay
+	tc.remack.forcedelay = false
 
-	segdelay := tc.rem.num % 2 == 0
+	segdelay := tc.remack.num % 2 == 0
 	canwait := !sendnow && (segdelay || fdelay)
 	if canwait {
 		// delay at most 500ms
 		now := time.Now()
-		deadline := tc.rem.last.Add(500*time.Millisecond)
+		deadline := tc.remack.last.Add(500*time.Millisecond)
 		if now.Before(deadline) {
-			if !tc.rem.tstart {
+			if !tc.remack.tstart {
 				// XXX goroutine per timeout bad?
-				tc.rem.tstart = true
+				tc.remack.tstart = true
 				left := deadline.Sub(now)
 				go func() {
 					time.Sleep(left)
 					tc.tcb_lock()
-					tc.rem.tstart = false
+					tc.remack.tstart = false
 					tc.ack_maybe()
 					tc.tcb_unlock()
 				}()
@@ -1481,7 +1499,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 			return
 		}
 	}
-	tc.rem.outa = false
+	tc.remack.outa = false
 
 	pkt := tc.mkack(tc.snd.nxt, tc.rcv.nxt)
 	nic, ok := nics[tc.lip]
@@ -1493,7 +1511,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 	eth, ip, th := pkt.hdrbytes()
 	sgbuf := [][]uint8{eth, ip, th}
 	nic.tx_tcp(sgbuf)
-	tc.rem.last = time.Now()
+	tc.remack.last = time.Now()
 }
 
 // transmit new segments and retransmits timed-out segments as the window
@@ -1524,30 +1542,28 @@ func (tc *tcptcb_t) seg_maybe() {
 		// reset() modifies segs[]
 		tc.snd.tsegs.reset(seq, uint32(did))
 	}
+	// XXXPANIC
+	{
+		// without sacks, gaps cannot occur
+		ss := tc.snd.tsegs.segs
+		for i := 0; i < len(tc.snd.tsegs.segs) - 1; i++ {
+			if ss[i].seq + ss[i].len != ss[i+1].seq {
+				panic("htf?")
+			}
+		}
+	}
 	// XXX nagle's?
 	// transmit any unsent data in the send window
-	sbegin := tc.snd.una
-	for i := 0; i < len(tc.snd.tsegs.segs); i++ {
-		send := tc.snd.tsegs.segs[i].seq
-		diff := _seqdiff(send, sbegin)
-		if diff > 0 {
-			// XXXPANIC
-			if sbegin == winend {
-				panic("how?")
-			}
-			did := tc.seg_one(sbegin)
-			tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
-		}
-		sbegin = send + tc.snd.tsegs.segs[i].len
-	}
 	upto := winend
 	if _seqbetween(tc.snd.una, tc.txbuf.end_seq(), upto) {
 		upto = tc.txbuf.end_seq()
 	}
+	sbegin := tc.snd.nxt
 	if _seqdiff(upto, sbegin) > 0 {
 		did := tc.seg_one(sbegin)
 		tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
 	}
+	tc._txtimeout_start()
 }
 
 func (tc *tcptcb_t) seg_one(seq uint32) int {
@@ -1579,9 +1595,9 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 	}
 
 	// we just queued an ack, so clear outstanding ack flag
-	tc.rem.outa = false
-	tc.rem.forcedelay = false
-	tc.rem.last = time.Now()
+	tc.remack.outa = false
+	tc.remack.forcedelay = false
+	tc.remack.last = time.Now()
 
 	send := seq + uint32(dlen)
 	ndiff := _seqdiff(winend + 1, seq + uint32(dlen))
@@ -1589,8 +1605,41 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 	if ndiff < odiff {
 		tc.snd.nxt = send
 	}
-	// XXX XXX XXX start retransmission timer here
 	return dlen
+}
+
+// is waiting until the oldest seg timesout a good strategy? maybe wait until
+// the middle timesout?
+func (tc *tcptcb_t) _txtimeout_start() {
+	nts, ok := tc.snd.tsegs.nextts()
+	if !ok {
+		return
+	}
+	if tc.remseg.tstart {
+		// XXXPANIC
+		if nts.Before(tc.remseg.target) {
+			fmt.Printf("** timeout shrink! %v\n",
+			    tc.remseg.target.Sub(nts))
+		}
+		return
+	}
+	tc.remseg.tstart = true
+	tc.remseg.target = nts
+	// XXX rto calculation
+	rto := time.Second*5
+	deadline := nts.Add(rto)
+	now := time.Now()
+	if now.After(deadline) {
+		fmt.Printf("** timeouts are shat upon!\n")
+		return
+	}
+	go func() {
+		time.Sleep(deadline.Sub(now))
+		tc.tcb_lock()
+		tc.remseg.tstart = false
+		tc.seg_maybe()
+		tc.tcb_unlock()
+	}()
 }
 
 // returns TCP header and TCP option slice
