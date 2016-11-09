@@ -1242,6 +1242,7 @@ type tcptcb_t struct {
 	txbuf	tcpbuf_t
 	// data received over the TCP connection
 	rxbuf	tcpbuf_t
+	twdeath	bool
 }
 
 type tcpstate_t uint
@@ -1385,8 +1386,6 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			if tc.finacked() {
 				tc._nstate(CLOSING, TIMEWAIT)
 			}
-		case TIMEWAIT:
-			// XXX timeout here
 		default:
 			sn, ok := statestr[tc.state]
 			if !ok {
@@ -1394,6 +1393,10 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			}
 			fmt.Printf("no imp for state %s\n", sn)
 			return
+	}
+
+	if tc.state == TIMEWAIT {
+		tc.timewaitdeath()
 	}
 
 	if tc.dead {
@@ -1447,6 +1450,20 @@ func (tc *tcptcb_t) finacked() bool {
 		return true
 	}
 	return false
+}
+
+func (tc *tcptcb_t) timewaitdeath() {
+	tc._sanity()
+	if tc.twdeath {
+		return
+	}
+	tc.twdeath = true
+	go func() {
+		time.Sleep(2*time.Minute)
+		k := tcpkey_t{lip: tc.lip, rip: tc.rip, lport: tc.lport,
+		    rport: tc.rport}
+		tcpcons.tcb_del(k)
+	}()
 }
 
 // sets flag to send an ack which may be delayed.
