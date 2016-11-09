@@ -141,6 +141,9 @@ const(
   SYS_ACCEPT   = 43
   SYS_SENDTO   = 44
   SYS_RECVFROM = 45
+  SYS_SHUTDOWN = 48
+    SHUT_WR        = 1 << 0
+    SHUT_RD        = 1 << 1
   SYS_BIND     = 49
   SYS_LISTEN   = 50
   SYS_GETSOCKOPT = 55
@@ -289,6 +292,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_sendto(p, a1, a2, a3, a4, a5)
 	case SYS_RECVFROM:
 		ret = sys_recvfrom(p, a1, a2, a3, a4, a5)
+	case SYS_SHUTDOWN:
+		ret = sys_shutdown(p, a1, a2)
 	case SYS_BIND:
 		ret = sys_bind(p, a1, a2, a3)
 	case SYS_LISTEN:
@@ -1244,6 +1249,10 @@ func (of *pipefops_t) getsockopt(*proc_t, int, *userbuf_t, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
+func (of *pipefops_t) shutdown(read, write bool) err_t {
+	return -ENOTCONN
+}
+
 func sys_rename(proc *proc_t, oldn int, newn int) int {
 	old, ok1, toolong1 := proc.userstr(oldn, NAME_MAX)
 	new, ok2, toolong2 := proc.userstr(newn, NAME_MAX)
@@ -1635,6 +1644,21 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 	return ret
 }
 
+func sys_shutdown(proc *proc_t, fdn, how int) int {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return int(-EBADF)
+	}
+	var rdone, wdone bool
+	if how & SHUT_WR != 0 {
+		wdone = true
+	}
+	if how & SHUT_RD != 0 {
+		rdone = true
+	}
+	return int(fd.fops.shutdown(rdone, wdone))
+}
+
 func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 	fd, ok := proc.fd_get(fdn)
 	if !ok {
@@ -1865,6 +1889,10 @@ func (sf *sudfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 func (sf *sudfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
     intarg int) (int, err_t) {
 	return 0, -EOPNOTSUPP
+}
+
+func (sf *sudfops_t) shutdown(read, write bool) err_t {
+	return -ENOTSOCK
 }
 
 type sunid_t int
@@ -2305,6 +2333,10 @@ func (sus *susfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
 	}
 }
 
+func (sus *susfops_t) shutdown(read, write bool) err_t {
+	panic("no imp")
+}
+
 var _susid uint64
 
 func susid_new() int {
@@ -2636,6 +2668,10 @@ func (sf *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 func (sf *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
     intarg int) (int, err_t) {
 	return 0, -EOPNOTSUPP
+}
+
+func (sf *suslfops_t) shutdown(read, write bool) err_t {
+	return -ENOTCONN
 }
 
 func sys_listen(proc *proc_t, fdn, backlog int) int {

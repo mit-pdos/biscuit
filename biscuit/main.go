@@ -194,6 +194,7 @@ type fdops_i interface {
 
 	fcntl(*proc_t, int, int) int
 	getsockopt(*proc_t, int, *userbuf_t, int) (int, err_t)
+	shutdown(rdone, wdone bool) err_t
 }
 
 // this is the new fd_t
@@ -1706,8 +1707,8 @@ func (cb *circbuf_t) _rawread(offset int) ([]uint8, []uint8) {
 	ti := cb.tail % cb.bufsz
 	var r1 []uint8
 	var r2 []uint8
-	if ti <= hi {
-		if !cb.full() && (oi >= hi || oi < ti) {
+	if ti < hi {
+		if oi >= hi || oi < ti {
 			panic("outside user data")
 		}
 		r1 = cb.buf[oi:hi]
@@ -1729,7 +1730,7 @@ func (cb *circbuf_t) _rawread(offset int) ([]uint8, []uint8) {
 
 // advances head index sz bytes (allowing the bytes to be copied out)
 func (cb *circbuf_t) _advtail(sz int) {
-	if cb.empty() || cb.used() < sz {
+	if sz != 0 && (cb.empty() || cb.used() < sz) {
 		panic("advancing empty cb")
 	}
 	cb.tail += sz

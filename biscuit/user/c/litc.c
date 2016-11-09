@@ -21,6 +21,7 @@
 #define SYS_ACCEPT       43
 #define SYS_SENDTO       44
 #define SYS_RECVFROM     45
+#define SYS_SHUTDOWN     48
 #define SYS_BIND         49
 #define SYS_LISTEN       50
 #define SYS_GETSOCKOPT   55
@@ -606,6 +607,14 @@ void
 	sa.sa_handler = f;
 	sigaction(sig, &sa, &oa);
 	return oa.sa_handler;
+}
+
+int
+shutdown(int fd, int how)
+{
+	int ret = syscall(SA(fd), SA(how), 0, 0, 0, SYS_SHUTDOWN);
+	ERRNO_NZ(ret);
+	return ret;
 }
 
 int

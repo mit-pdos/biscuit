@@ -613,6 +613,10 @@ func (fo *fsfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
 	return 0, -ENOTSOCK
 }
 
+func (fo *fsfops_t) shutdown(read, write bool) err_t {
+	return -ENOTSOCK
+}
+
 type devfops_t struct {
 	priv	*imemnode_t
 	maj	int
@@ -739,6 +743,10 @@ func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
     intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
+}
+
+func (df *devfops_t) shutdown(read, write bool) err_t {
+	return -ENOTSOCK
 }
 
 func fs_mkdir(paths string, mode int, cwd *imemnode_t) err_t {

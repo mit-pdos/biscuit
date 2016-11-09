@@ -805,6 +805,9 @@ func (tb *tcpbuf_t) ackup(rack uint32) {
 		panic("ack out of window")
 	}
 	sz := _seqdiff(rack, tb.seq)
+	if sz == 0 {
+		return
+	}
 	tb.cbuf._advtail(sz)
 	tb.seq += uint32(sz)
 	tb.cond.Broadcast()
@@ -1287,6 +1290,7 @@ func (tc *tcptcb_t) _nstate(old, news tcpstate_t) {
 		panic("bad state transition")
 	}
 	tc.state = news
+	//fmt.Printf("%v -> %v\n", statestr[old], statestr[news])
 }
 
 func (tc *tcptcb_t) _rst() {
@@ -1301,12 +1305,70 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			tc.synsent(tcp, opt.mss, rest)
 		case ESTAB:
 			tc.estab(tcp, rest)
-			// XXX replace with retransmission timer
+			// send window may have increased
 			tc.seg_maybe()
+			if !tc.txfinished(ESTAB, FINWAIT1) {
+				tc.finchk(ip4, tcp, ESTAB, CLOSEWAIT)
+			}
 		case CLOSEWAIT:
-			tc.closewait(tcp)
+			// user may queue for send, receive is done
+			tc.estab(tcp, rest)
+			// send window may have increased
+			tc.seg_maybe()
+			tc.txfinished(CLOSEWAIT, LASTACK)
 		case LASTACK:
-			tc.lastack(tcp)
+			// user may queue for send, receive is done
+			// XXXPANIC
+			if !tc.txdone {
+				panic("txdone must be true")
+			}
+			tc.estab(tcp, rest)
+			tc.seg_maybe()
+			if tc.finacked() {
+				if tc.txbuf.cbuf.used() != 0 {
+					panic("closing but txdata remains")
+				}
+				tc.dead = true
+				fmt.Printf("* done!\n")
+			}
+		case FINWAIT1:
+			// user may no longer queue for send, may still receive
+			// XXXPANIC
+			if !tc.txdone {
+				panic("txdone must be true")
+			}
+			tc.estab(tcp, rest)
+			tc.seg_maybe()
+			// did they ACK our FIN?
+			if tc.finacked() {
+				tc._nstate(FINWAIT1, FINWAIT2)
+				// see if they also sent FIN
+				tc.finchk(ip4, tcp, FINWAIT2, TIMEWAIT)
+			} else {
+				tc.finchk(ip4, tcp, FINWAIT1, CLOSING)
+			}
+		case FINWAIT2:
+			// user may no longer queue for send, may still receive
+			// XXXPANIC
+			if !tc.txdone {
+				panic("txdone must be true")
+			}
+			tc.estab(tcp, rest)
+			tc.finchk(ip4, tcp, FINWAIT2, TIMEWAIT)
+		case CLOSING:
+			// user may no longer queue for send, receive is done
+			// XXXPANIC
+			if !tc.txdone {
+				panic("txdone must be true")
+			}
+			tc.estab(tcp, rest)
+			tc.seg_maybe()
+			if tc.finacked() {
+				tc._nstate(CLOSING, TIMEWAIT)
+			}
+		case TIMEWAIT:
+			// XXX timeout here
+			tc.sched_ack()
 		default:
 			sn, ok := statestr[tc.state]
 			if !ok {
@@ -1316,12 +1378,57 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			return
 	}
 
-	tc.ack_maybe()
-
 	if tc.dead {
 		tcpcons.tcb_del(tk)
 		return
+	} else {
+		tc.ack_maybe()
 	}
+}
+
+// if the packet has FIN set and we've acked all data up to the fin, increase
+// rcv.nxt to ACK the FIN and move to the next state.
+func (tc *tcptcb_t) finchk(ip4 *ip4hdr_t, tcp *tcphdr_t, os, ns tcpstate_t) {
+	hlen := IP4LEN + int(tcp.dataoff >> 4) * 4
+	tlen := int(ntohs(ip4.tlen))
+	if tlen < hlen {
+		panic("bad packet should be pruned")
+	}
+	paylen := tlen - hlen
+	rfinseq := ntohl(tcp.seq) + uint32(paylen)
+	if tcp.isfin() && tc.rcv.nxt == rfinseq {
+		tc.rcv.nxt++
+		tc._nstate(os, ns)
+		tc.rxdone = true
+		tc.rxbuf.cond.Broadcast()
+		tc.pollers.wakeready(R_READ)
+		tc.sched_ack()
+	}
+}
+
+// if all user data has been sent (we must have sent FIN), move to the next
+// state. returns true of this function changed the TCB's state.
+func (tc *tcptcb_t) txfinished(os, ns tcpstate_t) bool {
+	if !tc.txdone {
+		return false
+	}
+	ret := false
+	if tc.snd.nxt == tc.snd.finseq {
+		tc._nstate(os, ns)
+		ret = true
+	}
+	return ret
+}
+
+// returns true if our FIN has been ack'ed
+func (tc *tcptcb_t) finacked() bool {
+	if !tc.txdone {
+		panic("can't have sent FIN yet")
+	}
+	if tc.snd.una == tc.snd.finseq + 1 {
+		return true
+	}
+	return false
 }
 
 // sets flag to send an ack which may be delayed.
@@ -1392,6 +1499,10 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 // transmit new segments and retransmits timed-out segments as the window
 // allows
 func (tc *tcptcb_t) seg_maybe() {
+	if tc.txdone && tc.snd.una == tc.snd.finseq + 1 {
+		// everything has been acknowledged
+		return
+	}
 	winend := tc.snd.una + uint32(tc.snd.win)
 	// prune unacknowledged segments which are now outside of the send
 	// window
@@ -1440,8 +1551,8 @@ func (tc *tcptcb_t) seg_maybe() {
 }
 
 func (tc *tcptcb_t) seg_one(seq uint32) int {
-	// XXXPANIC
 	winend := tc.snd.una + uint32(tc.snd.win)
+	// XXXPANIC
 	if !_seqbetween(tc.snd.una, seq, winend) {
 		panic("must be in send window")
 	}
@@ -1473,18 +1584,10 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 	tc.rem.last = time.Now()
 
 	send := seq + uint32(dlen)
-	ndiff := _seqdiff(winend, seq + uint32(dlen))
-	odiff := _seqdiff(winend, tc.snd.nxt)
+	ndiff := _seqdiff(winend + 1, seq + uint32(dlen))
+	odiff := _seqdiff(winend + 1, tc.snd.nxt)
 	if ndiff < odiff {
 		tc.snd.nxt = send
-	}
-	if pkt.tcphdr.isfin() {
-		if !tc.txdone || send != tc.snd.finseq {
-			panic("fin state inconsistency")
-		}
-		if tc.snd.nxt != tc.snd.finseq {
-			panic("must be")
-		}
 	}
 	// XXX XXX XXX start retransmission timer here
 	return dlen
@@ -1612,6 +1715,8 @@ func (tc *tcptcb_t) synsent(tcp *tcphdr_t, mss uint16, rest [][]uint8) {
 	tc.rxbuf.cond.Broadcast()
 }
 
+// sanity check the packet and segment processing: increase snd.una according
+// to remote ACK, copy data to user buffer, and schedule an ACK of our own.
 func (tc *tcptcb_t) estab(tcp *tcphdr_t, rest [][]uint8) {
 	seq := ntohl(tcp.seq)
 	// does this segment contain data in our receive window?
@@ -1646,28 +1751,27 @@ func (tc *tcptcb_t) estab(tcp *tcphdr_t, rest [][]uint8) {
 		return
 	}
 	tc.data_in(seq, ack, ntohs(tcp.win), rest, dlen)
-	if tcp.isfin() && tc.rcv.nxt == seq + uint32(dlen) {
-		tc.rcv.nxt++
-		tc.sched_ack()
-		tc._nstate(ESTAB, CLOSEWAIT)
-		tc.rxdone = true
-		tc.rxbuf.cond.Broadcast()
-		tc.pollers.wakeready(R_READ)
-	}
 }
 
-// trims the segment to fit our receive window and acks it
+// trims the segment to fit our receive window, copies received data to the
+// user buffer, and acks it.
 func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
     dlen int) {
 	// XXXPANIC
 	if !tc.seqok(rseq, dlen) {
 		panic("must contain in-window data")
 	}
-	swinend := tc.snd.una + uint32(tc.snd.win)
+	// +1 in case our FIN's sequence number is just outside the send window
+	swinend := tc.snd.una + uint32(tc.snd.win) + 1
 	if _seqdiff(swinend, rack) < _seqdiff(swinend, tc.snd.una) {
-		tc.txbuf.ackup(rack)
 		tc.snd.tsegs.ackupto(rack)
 		tc.snd.una = rack
+		// distinguish between acks for data and the ack for our FIN
+		pack := rack
+		if pack > tc.txbuf.end_seq() {
+			pack = tc.txbuf.end_seq()
+		}
+		tc.txbuf.ackup(pack)
 	}
 	// figure out which bytes are in our window: is the beginning of
 	// segment outside our window?
@@ -1749,7 +1853,9 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 // is ACK in my send window?
 func (tc *tcptcb_t) ackok(ack uint32) bool {
 	tc._sanity()
-	return _seqbetween(tc.snd.una, ack, tc.snd.nxt)
+	// special case ack of our FIN
+	return _seqbetween(tc.snd.una, ack, tc.snd.nxt) ||
+	    (tc.txdone && ack == tc.snd.finseq + 1)
 }
 
 // is seq in my receive window?
@@ -1760,29 +1866,6 @@ func (tc *tcptcb_t) seqok(seq uint32, seglen int) bool {
 	segend := seq + uint32(seglen)
 	return _seqbetween(winstart, seq, winend) ||
 	    _seqbetween(winstart, segend, winend)
-}
-
-func (tc *tcptcb_t) closewait(tcp *tcphdr_t) {
-	// remote party sent FIN, but will still ACK and send window updates
-	seq := ntohl(tcp.seq)
-	ack := ntohl(tcp.ack)
-	win := ntohs(tcp.win)
-	tc.data_in(seq, ack, win, nil, 0)
-}
-
-func (tc *tcptcb_t) lastack(tcp *tcphdr_t) {
-	ack := ntohl(tcp.ack)
-	if !tc.txdone {
-		panic("txdone must be true")
-	}
-	if ack == tc.snd.finseq + 1 {
-		if tc.txbuf.cbuf.used() != 0 {
-			panic("closed but txdata remains")
-		}
-		k := tcpkey_t{lip: tc.lip, rip: tc.rip, lport: tc.lport,
-		    rport: tc.rport}
-		tcpcons.tcb_del(k)
-	}
 }
 
 // returns true when low <= mid <= hi on uints (i.e. even when sequences
@@ -1811,7 +1894,7 @@ func (tc *tcptcb_t) rwinupdate(seq, ack uint32, win uint16) {
 	// see if seq is the larger than wl1. does the window wrap?
 	lwinend := tc.rcv.nxt + uint32(tc.rcv.win)
 	w1less := _seqdiff(lwinend, tc.snd.wl1) > _seqdiff(lwinend, seq)
-	rwinend := tc.snd.una + uint32(tc.snd.win)
+	rwinend := tc.snd.una + uint32(tc.snd.win) + 1
 	wl2less := _seqdiff(rwinend, tc.snd.wl2) > _seqdiff(rwinend, ack)
 	if w1less || (tc.snd.wl1 == seq && wl2less) {
 		tc.snd.win = win
@@ -1871,25 +1954,18 @@ func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, err_t) {
 	return wrote, err
 }
 
-func (tc *tcptcb_t) shutdown() err_t {
+func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 	tc._sanity()
 	if tc.state != ESTAB && tc.state != CLOSEWAIT {
+		fmt.Printf("** shutdown bad state %v\n", statestr[tc.state])
 		return -ENOTCONN
 	}
 	if tc.txdone {
-		return 0
+		panic("how")
 	}
 
 	tc.txdone = true
 	tc.snd.finseq = tc.txbuf.end_seq()
-	switch tc.state {
-	case ESTAB:
-		tc._nstate(ESTAB, FINWAIT1)
-	case CLOSEWAIT:
-		tc._nstate(CLOSEWAIT, LASTACK)
-	default:
-		panic("unexpected state")
-	}
 	if tc.snd.nxt == tc.snd.finseq {
 		tc.sched_ack()
 		tc.ack_now()
@@ -2105,7 +2181,7 @@ func (tf *tcpfops_t) close() err_t {
 		panic("neg ref")
 	}
 	if tf.tcb.openc == 0 {
-		tf.tcb.shutdown()
+		tf.tcb.shutdown(true, true)
 	}
 
 	return 0
@@ -2315,6 +2391,13 @@ func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
 	default:
 		return 0, -EOPNOTSUPP
 	}
+}
+
+func (tf *tcpfops_t) shutdown(read, write bool) err_t {
+	tf.tcb.tcb_lock()
+	ret := tf.tcb.shutdown(read, write)
+	tf.tcb.tcb_unlock()
+	return ret
 }
 
 var nics = map[ip4_t]*x540_t{}

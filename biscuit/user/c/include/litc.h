@@ -242,6 +242,9 @@ int getrusage(int, struct rusage *);
 #define		RUSAGE_SELF	1
 #define		RUSAGE_CHILDREN	2
 int getsockopt(int, int, int, void *, socklen_t *);
+#define		SHUT_WR		(1 << 0)
+#define		SHUT_RD		(1 << 1)
+int shutdown(int, int);
 int gettimeofday(struct timeval *, struct timezone *);
 long gettid(void);
 

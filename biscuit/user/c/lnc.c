@@ -70,6 +70,7 @@ int nc(uint32_t dip, uint16_t dport)
 	const int nfds = 2;
 	char buf[512];
 	int closed = 0;
+	ssize_t wtot = 0;
 	//while (closed != 2) {
 	while (closed == 0) {
 		pfds[0].events = pfds[1].events = POLLIN;
@@ -96,9 +97,10 @@ int nc(uint32_t dip, uint16_t dport)
 				err(-1, "write");
 			else if (w != c)
 				errx(-1, "short write");
+			wtot += w;
 		}
 	}
-	printf("lnc finished\n");
+	printf("lnc finished (wrote %zd)\n", wtot);
 	return 0;
 }
 
