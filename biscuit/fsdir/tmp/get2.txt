@@ -1,0 +1,3 @@
+GET /pub/linux/kernel/v4.x/testing/linux-4.9-rc4.tar.xz HTTP/1.0
+Host: cdn.kernel.org
+

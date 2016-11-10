@@ -56,12 +56,17 @@ int nc(int s)
 			if (c == -1) {
 				err(-1, "read");
 			} else if (c == 0) {
-				printf("fd %d closed\n", pfds[i].fd);
+				fprintf(stderr, "fd %d EOF\n", pfds[i].fd);
 				closed++;
 				pfds[i].fd = -1;
-				if (i == 0 && shutdown(s, SHUT_WR) == -1)
-					err(-1, "shutdown");
-				continue;
+				if (i == 0) {
+					if (shutdown(s, SHUT_WR) == -1)
+						err(-1, "shutdown");
+					continue;
+				} else {
+					closed = 2;
+					break;
+				}
 			}
 			ssize_t w = write(i == 0 ? s : 1, buf, c);
 			if (w == -1)
@@ -71,7 +76,7 @@ int nc(int s)
 			wtot += w;
 		}
 	}
-	printf("lnc finished (wrote %zd)\n", wtot);
+	fprintf(stderr, "lnc finished (wrote %zd)\n", wtot);
 	return 0;
 }
 
