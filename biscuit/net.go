@@ -544,13 +544,16 @@ type etherhdr_t struct {
 	etype	be16
 }
 
-func (et *etherhdr_t) _init(smac, dmac *mac_t, etype uint16) {
-	copy(et.smac[:], smac[:])
-	copy(et.dmac[:], dmac[:])
+func (et *etherhdr_t) _init(smac, dmac []uint8, etype uint16) {
+	if len(smac) != 6 || len(dmac) != 6 {
+		panic("weird mac len")
+	}
+	copy(et.smac[:], smac)
+	copy(et.dmac[:], dmac)
 	et.etype = htons(etype)
 }
 
-func (et *etherhdr_t) init_ip4(smac, dmac *mac_t) {
+func (et *etherhdr_t) init_ip4(smac, dmac []uint8) {
 	etype := uint16(0x0800)
 	et._init(smac, dmac, etype)
 }
@@ -577,7 +580,7 @@ func (ic *icmppkt_t) init(smac, dmac *mac_t, sip, dip ip4_t, typ uint8,
 	var z icmppkt_t
 	*ic = z
 	l4len := len(data) + 2*1 + 3*2
-	ic.ether.init_ip4(smac, dmac)
+	ic.ether.init_ip4(smac[:], dmac[:])
 	ic.iphdr.init_icmp(l4len, sip, dip)
 	ic.typ = typ
 	ic.data = data
@@ -1188,6 +1191,165 @@ func (t *tcphdr_t) dump(sip, dip ip4_t, opt tcpopt_t) {
 	fmt.Printf("%s\n", s)
 }
 
+// a type for a listening socket
+type tcplisten_t struct {
+	l	sync.Mutex
+	lip	ip4_t
+	lport	uint16
+	// map of IP/ports to which we've sent SYN+ACK
+	seqs	map[tcpkey_t]tcpinc_t
+	// ready connections
+	rcons struct {
+		sl	[]*tcptcb_t
+		inum	uint
+		cnum	uint
+		cond	*sync.Cond
+	}
+	openc	int
+}
+
+type tcpinc_t struct {
+	lip	ip4_t
+	rip	ip4_t
+	lport	uint16
+	rport	uint16
+	smac	*mac_t
+	dmac	*mac_t
+	rcv struct {
+		nxt	uint32
+	}
+	snd struct {
+		win	uint16
+		nxt	uint32
+	}
+	opt	tcpopt_t
+}
+
+func (tcl *tcplisten_t) tcl_init(lip ip4_t, lport uint16, backlog int) {
+	tcl.lip = lip
+	tcl.lport = lport
+	tcl.seqs = make(map[tcpkey_t]tcpinc_t)
+	tcl.rcons.sl = make([]*tcptcb_t, backlog)
+	tcl.rcons.inum = 0
+	tcl.rcons.cnum = 0
+	tcl.rcons.cond = sync.NewCond(&tcl.l)
+	tcl.openc = 1
+}
+
+func (tcl *tcplisten_t) _conadd(tcb *tcptcb_t) {
+	rc := &tcl.rcons
+	l := uint(len(rc.sl))
+	if rc.inum - rc.cnum == l {
+		// backlog full
+		return
+	}
+	rc.sl[rc.inum % l] = tcb
+	rc.inum++
+	rc.cond.Signal()
+}
+
+func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
+	rc := &tcl.rcons
+	if rc.inum == rc.cnum {
+		// no connections
+		return nil, false
+	}
+	l := uint(len(rc.sl))
+	ret := rc.sl[rc.cnum % l]
+	rc.cnum++
+	return ret, true
+}
+
+// creates a TCB for tinc and adds it to the table of established connections
+func (tcl *tcplisten_t) tcbready(tinc tcpinc_t, rack uint32, rwin uint16,
+    rest [][]uint8) *tcptcb_t {
+	tcb := &tcptcb_t{}
+	tcb.tcb_init(tinc.lip, tinc.rip, tinc.lport, tinc.rport, tinc.smac,
+	    tinc.dmac, tinc.snd.nxt)
+	tcb.state = ESTAB
+	tcb.set_seqs(tinc.snd.nxt, tinc.rcv.nxt)
+	tcb.snd.win = tinc.snd.win
+	tcb.snd.mss = tinc.opt.mss
+
+	tcb.snd.wl1 = tinc.rcv.nxt
+	tcb.snd.wl2 = tinc.snd.nxt
+
+	var dlen int
+	for _, r := range rest {
+		dlen += len(r)
+	}
+
+	tcb.tcb_lock()
+	tcb.data_in(tcb.rcv.nxt, rack, rwin, rest, dlen)
+	tcb.tcb_unlock()
+
+	tcpcons.tcb_linsert(tcb)
+
+	return tcb
+}
+
+func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
+    tcp *tcphdr_t, opt tcpopt_t, rest [][]uint8) {
+
+	ack, ok := tcp.isack()
+	if ok {
+		// handshake complete?
+		tinc, ok := tcl.seqs[tk]
+		if !ok || tcp.issyn() {
+			_send_rst(ip4, tcp)
+			return
+		}
+		seq := ntohl(tcp.seq)
+		if tinc.rcv.nxt != seq || tinc.snd.nxt != ack {
+			// send ack if rst not set?
+			return
+		}
+		delete(tcl.seqs, tk)
+		if tcp.isrst() {
+			return
+		}
+		// make the connection is ready immediately so that received
+		// segments that race with accept(2) aren't unnecessarily timed
+		// out.
+		tcb := tcl.tcbready(tinc, ack, ntohs(tcp.win), rest)
+		tcl._conadd(tcb)
+		return
+	}
+
+	if tcp.isrst() {
+		return
+	}
+
+	if !tcp.issyn() {
+		return
+	}
+
+	nic, ok := nics[tk.lip]
+	if !ok {
+		panic("no such nic")
+	}
+
+	ourseq := rand.Uint32()
+	theirseq := ntohl(tcp.seq)
+	newcon := tcpinc_t{lip: tk.lip, rip: tk.rip, lport: tk.lport,
+	    rport: tk.rport, opt: opt}
+	newcon.rcv.nxt = theirseq + 1
+	newcon.snd.nxt = ourseq + 1
+	newcon.snd.win = ntohs(tcp.win)
+	smac := &nic.mac
+	dmac := rmac
+	newcon.smac = smac
+	newcon.dmac = &mac_t{}
+	copy(newcon.dmac[:], dmac)
+
+	tcl.seqs[tk] = newcon
+	defwin := uint16(2048)
+	pkt, mopt := _mksynack(smac, dmac, tk, defwin, ourseq, theirseq + 1)
+	eth, ip, tph := pkt.hdrbytes()
+	sgbuf := [][]uint8{eth, ip, tph, mopt}
+	nic.tx_tcp(sgbuf)
+}
+
 type tcptcb_t struct {
 	l	sync.Mutex
 	locked	bool
@@ -1196,6 +1358,7 @@ type tcptcb_t struct {
 	rip	ip4_t
 	lport	uint16
 	rport	uint16
+	// embed smac and dmac
 	smac	*mac_t
 	dmac	*mac_t
 	state	tcpstate_t
@@ -1243,6 +1406,7 @@ type tcptcb_t struct {
 	// data received over the TCP connection
 	rxbuf	tcpbuf_t
 	twdeath	bool
+	bound	bool
 }
 
 type tcpstate_t uint
@@ -1252,6 +1416,7 @@ const (
 	TCPNEW		tcpstate_t = iota
 	SYNSENT
 	SYNRCVD
+	// LISTEN is not really used
 	LISTEN
 	ESTAB
 	FINWAIT1
@@ -1317,8 +1482,59 @@ func (tc *tcptcb_t) _rst() {
 	fmt.Printf("tcb reset no imp")
 }
 
+func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) err_t {
+	tc._sanity()
+	localip, routeip, err := routetbl.lookup(dip)
+	if err != 0 {
+		return err
+	}
+
+	nic, ok := nics[localip]
+	if !ok {
+		return -EHOSTUNREACH
+	}
+	dmac, err := arp_resolve(localip, routeip)
+	if err != 0 {
+		return err
+	}
+
+	var wasany bool
+	if tc.bound {
+		if tc.lip != INADDR_ANY && tc.lip != localip {
+			return -ENETUNREACH
+		}
+		if tc.lip == INADDR_ANY {
+			wasany = true
+		}
+	} else {
+		lport, ok := tcpcons.reserve_ephemeral(localip)
+		if !ok {
+			return -EADDRNOTAVAIL
+		}
+		tc.lip = localip
+		tc.lport = lport
+		tc.bound = true
+	}
+
+	tc.tcb_init(localip, dip, tc.lport, dport, &nic.mac, dmac,
+	    rand.Uint32())
+	tcpcons.tcb_insert(tc, wasany)
+
+	tc._nstate(TCPNEW, SYNSENT)
+	// XXX retransmit connect attempts
+	seq := tc.snd.nxt
+	pkt, opts := tc.mkconnect(seq)
+	tc.snd.nxt++
+
+	eth, ip, tcp := pkt.hdrbytes()
+	sgbuf := [][]uint8{eth, ip, tcp, opts}
+	nic.tx_tcp(sgbuf)
+	return 0
+}
+
 func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
     opt tcpopt_t, rest [][]uint8) {
+
 	tc._sanity()
 	switch tc.state {
 		case SYNSENT:
@@ -1338,10 +1554,6 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			tc.txfinished(CLOSEWAIT, LASTACK)
 		case LASTACK:
 			// user may queue for send, receive is done
-			// XXXPANIC
-			if !tc.txdone {
-				panic("txdone must be true")
-			}
 			tc.estab(tcp, rest)
 			tc.seg_maybe()
 			if tc.finacked() {
@@ -1353,10 +1565,6 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			}
 		case FINWAIT1:
 			// user may no longer queue for send, may still receive
-			// XXXPANIC
-			if !tc.txdone {
-				panic("txdone must be true")
-			}
 			tc.estab(tcp, rest)
 			tc.seg_maybe()
 			// did they ACK our FIN?
@@ -1369,18 +1577,10 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			}
 		case FINWAIT2:
 			// user may no longer queue for send, may still receive
-			// XXXPANIC
-			if !tc.txdone {
-				panic("txdone must be true")
-			}
 			tc.estab(tcp, rest)
 			tc.finchk(ip4, tcp, FINWAIT2, TIMEWAIT)
 		case CLOSING:
 			// user may no longer queue for send, receive is done
-			// XXXPANIC
-			if !tc.txdone {
-				panic("txdone must be true")
-			}
 			tc.estab(tcp, rest)
 			tc.seg_maybe()
 			if tc.finacked() {
@@ -1400,7 +1600,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 	}
 
 	if tc.dead {
-		tcpcons.tcb_del(tk)
+		tcpcons.tcb_del(tc)
 		return
 	} else {
 		tc.ack_maybe()
@@ -1410,6 +1610,9 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 // if the packet has FIN set and we've acked all data up to the fin, increase
 // rcv.nxt to ACK the FIN and move to the next state.
 func (tc *tcptcb_t) finchk(ip4 *ip4hdr_t, tcp *tcphdr_t, os, ns tcpstate_t) {
+	if os != ESTAB && !tc.txdone {
+		panic("txdone must be set")
+	}
 	hlen := IP4LEN + int(tcp.dataoff >> 4) * 4
 	tlen := int(ntohs(ip4.tlen))
 	if tlen < hlen {
@@ -1459,10 +1662,10 @@ func (tc *tcptcb_t) timewaitdeath() {
 	}
 	tc.twdeath = true
 	go func() {
-		time.Sleep(2*time.Minute)
-		k := tcpkey_t{lip: tc.lip, rip: tc.rip, lport: tc.lport,
-		    rport: tc.rport}
-		tcpcons.tcb_del(k)
+		//time.Sleep(2*time.Minute)
+		// XXX XXX for testing
+		time.Sleep(10*time.Second)
+		tcpcons.tcb_del(tc)
 	}()
 }
 
@@ -1659,30 +1862,45 @@ func (tc *tcptcb_t) _txtimeout_start() {
 	}()
 }
 
+var _deftcpopts = []uint8{
+    // mss = 1460
+    2, 4, 0x5, 0xb4,
+    // sackok
+    //4, 2, 1, 1,
+    // wscale = 3
+    //3, 3, 3, 1,
+    // timestamp
+    //8, 10, 0, 0, 0xff, 0xff, 0, 0, 0, 0,
+    // timestamp pad
+    //1, 1,
+}
+
 // returns TCP header and TCP option slice
 func (tc *tcptcb_t) mkconnect(seq uint32) (*tcppkt_t, []uint8) {
+	tc._sanity()
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_syn(tc.lport, tc.rport, seq)
 	ret.tcphdr.win = htons(tc.rcv.win)
-	// which TCP options are necessary? linux and openbsd SYN/ACK even if
-	// we send no options.
-	opt := []uint8{
-	    // mss = 1460
-	    2, 4, 0x5, 0xb4,
-	    // sackok
-	    //4, 2, 1, 1,
-	    // wscale = 3
-	    //3, 3, 3, 1,
-	    // timestamp
-	    //8, 10, 0, 0, 0xff, 0xff, 0, 0, 0, 0,
-	    // timestamp pad
-	    //1, 1,
-	}
+	opt := _deftcpopts
 	ret.tcphdr.set_opt(opt)
 	l4len := ret.tcphdr.hdrlen()
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
-	ret.ether.init_ip4(tc.smac, tc.dmac)
+	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
 	ret.crc(l4len, tc.lip, tc.rip)
+	return ret, opt
+}
+
+func _mksynack(smac *mac_t, dmac []uint8, tk tcpkey_t, lwin uint16, seq,
+    ack uint32) (*tcppkt_t, []uint8) {
+	ret := &tcppkt_t{}
+	ret.tcphdr.init_synack(tk.lport, tk.rport, seq, ack)
+	ret.tcphdr.win = htons(lwin)
+	opt := _deftcpopts
+	ret.tcphdr.set_opt(opt)
+	l4len := ret.tcphdr.hdrlen()
+	ret.iphdr.init_tcp(l4len, tk.lip, tk.rip)
+	ret.ether.init_ip4(smac[:], dmac)
+	ret.crc(l4len, tk.lip, tk.rip)
 	return ret, opt
 }
 
@@ -1701,7 +1919,7 @@ func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
 	tc._setfin(&ret.tcphdr, seq)
 	l4len := ret.tcphdr.hdrlen()
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
-	ret.ether.init_ip4(tc.smac, tc.dmac)
+	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
 	ret.crc(l4len, tc.lip, tc.rip)
 	return ret
 }
@@ -1714,7 +1932,7 @@ func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) (*tcppkt_t, bool) {
 	tc._setfin(&ret.tcphdr, seq + uint32(seglen))
 	l4len := ret.tcphdr.hdrlen() + seglen
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
-	ret.ether.init_ip4(tc.smac, tc.dmac)
+	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
 	istso := seglen > int(tc.snd.mss)
 	// packets using TSO do not include the the TCP payload length in the
 	// pseudo-header checksum.
@@ -1762,8 +1980,7 @@ func (tc *tcptcb_t) synsent(tcp *tcphdr_t, mss uint16, rest [][]uint8) {
 	}
 	tc._nstate(SYNSENT, ESTAB)
 	theirseq := ntohl(tcp.seq)
-	tc.rcv.nxt = theirseq + 1
-	tc.rxbuf.set_seq(tc.rcv.nxt)
+	tc.set_seqs(tc.snd.nxt, theirseq + 1)
 	tc.snd.mss = mss
 	tc.snd.una = ack
 	var dlen int
@@ -1930,6 +2147,8 @@ func (tc *tcptcb_t) seqok(seq uint32, seglen int) bool {
 	winstart := tc.rcv.nxt
 	winend := tc.rcv.nxt + uint32(tc.rcv.win)
 	segend := seq + uint32(seglen)
+	// XXX XXX segment may overlap in middle with window (check
+	// non-intersection)
 	return _seqbetween(winstart, seq, winend) ||
 	    _seqbetween(winstart, segend, winend)
 }
@@ -2022,12 +2241,19 @@ func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, err_t) {
 
 func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 	tc._sanity()
-	if tc.state != ESTAB && tc.state != CLOSEWAIT {
-		fmt.Printf("** shutdown bad state %v\n", statestr[tc.state])
+	if tc.state == TCPNEW {
+		if tc.bound {
+			tcpcons.unreserve(tc.lip, tc.lport)
+		}
+		return 0
+	} else if tc.state == SYNSENT || tc.state == SYNRCVD {
+		tcpcons.tcb_del(tc)
+		return 0
+	} else if tc.state != ESTAB && tc.state != CLOSEWAIT {
 		return -ENOTCONN
 	}
 	if tc.txdone {
-		panic("how")
+		return 0
 	}
 
 	tc.txdone = true
@@ -2039,27 +2265,40 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 	return 0
 }
 
-func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, rport uint16, smac, dmac *mac_t) {
+var _nilmac mac_t
+
+func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
+    dmac *mac_t, sndnxt uint32) {
+	if lip == INADDR_ANY || rip == INADDR_ANY || lport == 0 || rport == 0 {
+		panic("all IPs/ports must be known")
+	}
 	tc.lip = lip
 	tc.rip = rip
-	// tc.lport set in tcb_insert()
+	tc.lport = lport
 	tc.rport = rport
 	tc.state = TCPNEW
-	tc.snd.nxt = rand.Uint32()
-	tc.snd.una = tc.snd.nxt
 	defwin := uint16(4380)
 	tc.snd.win = defwin
 	tc.dmac = dmac
 	tc.smac = smac
 	defbufsz := (1 << 14)
 	tc.txbuf.tbuf_init(defbufsz, tc)
-	tc.txbuf.set_seq(tc.snd.nxt + 1)
 	tc.rxbuf.tbuf_init(defbufsz, tc)
 	if uint(tc.rxbuf.cbuf.left()) > uint(^uint16(0)) {
 		panic("need window shift")
 	}
 	tc.rcv.win = uint16(tc.rxbuf.cbuf.left())
 	tc.rcv.mss = 1460
+	tc.snd.nxt = sndnxt
+	tc.snd.una = sndnxt
+}
+
+func (tc *tcptcb_t) set_seqs(sndnxt, rcvnxt uint32) {
+	tc.snd.nxt = sndnxt
+	tc.snd.una = sndnxt
+	tc.txbuf.set_seq(sndnxt)
+	tc.rcv.nxt = rcvnxt
+	tc.rxbuf.set_seq(rcvnxt)
 }
 
 type tcpkey_t struct {
@@ -2069,56 +2308,230 @@ type tcpkey_t struct {
 	rport	uint16
 }
 
+type tcplkey_t struct {
+	lip	ip4_t
+	lport	uint16
+}
+
 type tcpcons_t struct {
-	sync.Mutex
-	m	map[tcpkey_t]*tcptcb_t
+	l	sync.Mutex
+	// established connections
+	econns	map[tcpkey_t]*tcptcb_t
+	// listening sockets
+	listns	map[tcplkey_t]*tcplisten_t
+	// in-use local IP/port pairs. a port may be used on a particular local
+	// IP or all local IPs.
+	ports	map[tcplkey_t]int
 }
 
 func (tc *tcpcons_t) init() {
-	tc.m = make(map[tcpkey_t]*tcptcb_t)
+	tc.econns = make(map[tcpkey_t]*tcptcb_t)
+	tc.listns = make(map[tcplkey_t]*tcplisten_t)
+	tc.ports = make(map[tcplkey_t]int)
 }
 
-// creates a new TCP with an unused source port
-func (tc *tcpcons_t) tcb_insert(tcb *tcptcb_t) err_t {
-	tc.Lock()
+// try to reserve the IP/port pair. returns true on success.
+func (tc *tcpcons_t) reserve(lip ip4_t, lport uint16) bool {
+	tc.l.Lock()
+	defer tc.l.Unlock()
 
-	// find available source port
-	if len(tc.m) == 0xffff {
-		panic("out of local ports")
+	k := tcplkey_t{lip: lip, lport: lport}
+	anyk := k
+	anyk.lip = INADDR_ANY
+	if tc.ports[k] != 0 || tc.ports[anyk] != 0 {
+		return false
 	}
-	tk := tcpkey_t{lip: tcb.lip, rip: tcb.rip, rport: tcb.rport}
-	tk.lport = uint16(rand.Uint32())
-	_, ok := tc.m[tk]
-	for ok {
-		tk.lport++
-		_, ok = tc.m[tk]
-	}
-	if _, ok = tc.m[tk]; ok {
-		panic("key exists")
-	}
-	tcb.lport = tk.lport
-	tc.m[tk] = tcb
-	tc.Unlock()
-
-	return 0
+	tc.ports[k] = 1
+	return true
 }
 
-func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool) {
-	tc.Lock()
-	defer tc.Unlock()
-	t, ok := tc.m[tk]
-	return t, ok
+// returns allocated port and true if successful.
+func (tc *tcpcons_t) reserve_ephemeral(lip ip4_t) (uint16, bool) {
+	tc.l.Lock()
+	defer tc.l.Unlock()
+
+	k := tcplkey_t{lip: lip, lport: uint16(rand.Uint32())}
+	anyk := k
+	anyk.lip = INADDR_ANY
+	ok := tc.ports[k] | tc.ports[anyk] > 0
+	for i := 0; i <= int(^uint16(0)) && ok; i++ {
+		k.lport++
+		anyk.lport++
+		ok = tc.ports[k] | tc.ports[anyk] > 0
+	}
+	if ok {
+		fmt.Printf("out of ephemeral ports\n")
+		return 0, false
+	}
+
+	tc.ports[k] = 1
+
+	return k.lport, true
 }
 
-func (tc *tcpcons_t) tcb_del(tk tcpkey_t) {
-	tc.Lock()
-	defer tc.Unlock()
+func (tc *tcpcons_t) unreserve(lip ip4_t, lport uint16) {
+	tc.l.Lock()
+	defer tc.l.Unlock()
 
-	_, ok := tc.m[tk]
-	if !ok {
-		panic("tk doesn't exist")
+	lk := tcplkey_t{lip: lip, lport: lport}
+	// XXXPANIC
+	if tc.ports[lk] == 0 {
+		panic("must be reserved")
 	}
-	delete(tc.m, tk)
+	delete(tc.ports, lk)
+}
+
+// inserts the TCB into the TCP connection table. wasany is true if the tcb
+// reserved a port on INADDR_ANY.
+func (tc *tcpcons_t) tcb_insert(tcb *tcptcb_t, wasany bool) {
+	tc.l.Lock()
+	tc._tcb_insert(tcb, wasany, false)
+	tc.l.Unlock()
+}
+
+// inserts the TCB, which was created via a passive connect, into the TCP
+// connection table
+func (tc *tcpcons_t) tcb_linsert(tcb *tcptcb_t) {
+	tc.l.Lock()
+	tc._tcb_insert(tcb, false, true)
+	tc.l.Unlock()
+}
+
+func (tc *tcpcons_t) _tcb_insert(tcb *tcptcb_t, wasany, fromlisten bool) {
+	if wasany && fromlisten {
+		panic("impossible args")
+	}
+	lk := tcplkey_t{lip: tcb.lip, lport: tcb.lport}
+	// if the tcb reserved on INADDR_ANY, free up the used port on the
+	// other local IPs
+	anyk := tcplkey_t{lip: INADDR_ANY, lport: tcb.lport}
+	if wasany {
+		// XXXPANIC
+		if tc.ports[anyk] == 0 {
+			panic("no such reservation")
+		}
+		delete(tc.ports, anyk)
+		tc.ports[lk] = 1
+	} else if fromlisten {
+		n := tc.ports[anyk]
+		// XXXPANIC
+		if n == 0 {
+			panic("listen reservation must exist")
+		}
+		tc.ports[anyk] = n + 1
+	}
+
+	// XXXPANIC
+	if tc.ports[lk] == 0 && tc.ports[anyk] == 0 {
+		panic("port must be reserved")
+	}
+
+	k := tcpkey_t{lip: tcb.lip, rip: tcb.rip, lport: tcb.lport,
+	    rport: tcb.rport}
+	// XXXPANIC
+	if _, ok := tc.econns[k]; ok {
+		panic("entry exists")
+	}
+	tc.econns[k] = tcb
+}
+
+// if the first bool return is true, then only the tcb is valid. if the second
+// bool return is true, then only the tcplistener is valid. otherwise, there is
+// no such socket/connection.
+func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool,
+    *tcplisten_t, bool) {
+	if tk.lip == INADDR_ANY {
+		panic("localip must be known")
+	}
+
+	tc.l.Lock()
+	tcb, istcb := tc.econns[tk]
+
+	var l *tcplisten_t
+	var islist bool
+	if !istcb {
+		lk := tcplkey_t{lip: tk.lip, lport: tk.lport}
+		l, islist = tc.listns[lk]
+		if !islist {
+			// check for any IP listener
+			lk.lip = INADDR_ANY
+			l, islist = tc.listns[lk]
+		}
+	}
+	tc.l.Unlock()
+
+	return tcb, istcb, l, islist
+}
+
+func (tc *tcpcons_t) tcb_del(tcb *tcptcb_t) {
+	tc.l.Lock()
+	defer tc.l.Unlock()
+
+	k := tcpkey_t{lip: tcb.lip, rip: tcb.rip, lport: tcb.lport,
+	    rport: tcb.rport}
+	// XXXPANIC
+	if _, ok := tc.econns[k]; !ok {
+		panic("k doesn't exist")
+	}
+	delete(tc.econns, k)
+
+	lk := tcplkey_t{lip: k.lip, lport: k.lport}
+	n := tc.ports[lk]
+	if n == 0 {
+		// connection must be from listening
+		anyk := lk
+		anyk.lip = INADDR_ANY
+		ln := tc.ports[anyk]
+		if ln == 0 {
+			panic("lk doesn't exist")
+		}
+		if ln == 1 {
+			delete(tc.ports, anyk)
+		} else {
+			tc.ports[anyk] = ln - 1
+		}
+	} else {
+		if n != 1 {
+			panic("must be active connect but not 1")
+		}
+		delete(tc.ports, lk)
+	}
+}
+
+func (tc *tcpcons_t) listen_insert(tcl *tcplisten_t) {
+	tc.l.Lock()
+	defer tc.l.Unlock()
+
+	if tcl.lport == 0 {
+		panic("address must be known")
+	}
+	lk := tcplkey_t{lip: tcl.lip, lport: tcl.lport}
+	// XXXPANIC
+	if tc.ports[lk] == 0 {
+		panic("must be reserved")
+	}
+	tc.listns[lk] = tcl
+}
+
+func (tc *tcpcons_t) listen_del(tcl *tcplisten_t) {
+	tc.l.Lock()
+	defer tc.l.Unlock()
+
+	lk := tcplkey_t{lip: tcl.lip, lport: tcl.lport}
+	n := tc.ports[lk]
+	// XXXPANIC
+	if n == 0 {
+		panic("must be reserved")
+	}
+	if n == 1 {
+		delete(tc.ports, lk)
+	} else {
+		tc.ports[lk] = n - 1
+	}
+	if _, ok := tc.listns[lk]; !ok {
+		panic("no such listener")
+	}
+	delete(tc.listns, lk)
 }
 
 var tcpcons tcpcons_t
@@ -2150,39 +2563,6 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _tcp_connect(tcb *tcptcb_t, dip ip4_t, dport uint16) err_t {
-	localip, routeip, err := routetbl.lookup(dip)
-	if err != 0 {
-		return err
-	}
-	nic, ok := nics[localip]
-	if !ok {
-		return -EHOSTUNREACH
-	}
-	dmac, err := arp_resolve(localip, routeip)
-	if err != 0 {
-		return err
-	}
-
-	tcb.tcb_init(localip, dip, dport, &nic.mac, dmac)
-	// acquires TCB table lock while holding tcb's lock
-	err = tcpcons.tcb_insert(tcb)
-	if err != 0 {
-		return err
-	}
-
-	tcb._sanity()
-	tcb._nstate(TCPNEW, SYNSENT)
-	seq := tcb.snd.nxt
-	pkt, opts := tcb.mkconnect(seq)
-	tcb.snd.nxt++
-
-	eth, ip, tcp := pkt.hdrbytes()
-	sgbuf := [][]uint8{eth, ip, tcp, opts}
-	nic.tx_tcp(sgbuf)
-	return 0
-}
-
 func _send_rst(ip4 *ip4hdr_t, tcp *tcphdr_t) {
 	fmt.Printf("RESET!\n")
 }
@@ -2206,23 +2586,30 @@ func net_tcp(pkt [][]uint8, tlen int) {
 	dip := sl2ip(ip4.dip[:])
 	//tcph.dump(sip, dip, opts)
 
+	pkt[0] = rest
+
 	localip := dip
 	k := tcpkey_t{lip: localip, rip: sip, lport: ntohs(tcph.dport),
 	    rport: ntohs(tcph.sport)}
-	tcb, ok := tcpcons.tcb_lookup(k)
-	if !ok {
+	tcb, istcb, listener, islistener := tcpcons.tcb_lookup(k)
+	if istcb {
+		tcb.tcb_lock()
+		tcb.incoming(k, ip4, tcph, opts, pkt)
+		tcb.tcb_unlock()
+	} else if islistener {
+		smac := hdr[6:12]
+		listener.l.Lock()
+		listener.incoming(smac, k, ip4, tcph, opts, pkt)
+		listener.l.Unlock()
+	} else {
 		_send_rst(ip4, tcph)
-		return
 	}
-
-	pkt[0] = rest
-	tcb.tcb_lock()
-	tcb.incoming(k, ip4, tcph, opts, pkt)
-	tcb.tcb_unlock()
 }
 
+// active connect fops
 type tcpfops_t struct {
-	tcb	tcptcb_t
+	// tcb must always be non-nil
+	tcb	*tcptcb_t
 	options	fdopt_t
 }
 
@@ -2247,6 +2634,7 @@ func (tf *tcpfops_t) close() err_t {
 		panic("neg ref")
 	}
 	if tf.tcb.openc == 0 {
+		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
 	}
 
@@ -2346,7 +2734,48 @@ func (tf *tcpfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
 }
 
 func (tf *tcpfops_t) bind(proc *proc_t, saddr []uint8) err_t {
-	panic("no imp")
+	fam := readn(saddr, 1, 1)
+	lport := ntohs(be16(readn(saddr, 2, 2)))
+	lip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
+
+	// why verify saddr.family is AF_INET?
+	if fam != AF_INET {
+		return -EAFNOSUPPORT
+	}
+
+	if lip != INADDR_ANY {
+		if _, ok := nics[lip]; !ok {
+			return -EADDRNOTAVAIL
+		}
+	}
+
+	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
+	if tf.tcb.state != TCPNEW {
+		return -EINVAL
+	}
+
+	if tf.tcb.bound {
+		tcpcons.unreserve(tf.tcb.lip, tf.tcb.lport)
+		tf.tcb.bound = false
+	}
+
+	eph := lport == 0
+	var ok bool
+	if eph {
+		lport, ok = tcpcons.reserve_ephemeral(lip)
+	} else {
+		ok = tcpcons.reserve(lip, lport)
+	}
+	ret := -EADDRINUSE
+	if ok {
+		tf.tcb.lip = lip
+		tf.tcb.lport = lport
+		tf.tcb.bound = true
+		ret = 0
+	}
+	return ret
 }
 
 func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
@@ -2366,8 +2795,8 @@ func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 	}
 	dip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
 	dport := ntohs(be16(readn(saddr, 2, 2)))
-	tcb := &tf.tcb
-	err := _tcp_connect(tcb, dip, dport)
+	tcb := tf.tcb
+	err := tcb._tcp_connect(dip, dport)
 	if err != 0 {
 		return err
 	}
@@ -2387,7 +2816,34 @@ func (tf *tcpfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 }
 
 func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
-	panic("no imp")
+	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
+	if tf.tcb.state != TCPNEW {
+		return nil, -EINVAL
+	}
+
+	if !tf.tcb.bound {
+		lport, ok := tcpcons.reserve_ephemeral(INADDR_ANY)
+		if !ok {
+			return nil, -EADDRINUSE
+		}
+		tf.tcb.lip = INADDR_ANY
+		tf.tcb.lport = lport
+		tf.tcb.bound = true
+	}
+	bl := 32
+	if backlog > 0 && backlog < 128 {
+		bl = backlog
+	}
+
+	tf.tcb._nstate(TCPNEW, LISTEN)
+
+	ret := &tcplfops_t{options: tf.options}
+	ret.tcl.tcl_init(tf.tcb.lip, tf.tcb.lport, bl)
+	tcpcons.listen_insert(&ret.tcl)
+
+	return ret, 0
 }
 
 func (tf *tcpfops_t) sendto(proc *proc_t, src *userbuf_t,
@@ -2464,6 +2920,188 @@ func (tf *tcpfops_t) shutdown(read, write bool) err_t {
 	ret := tf.tcb.shutdown(read, write)
 	tf.tcb.tcb_unlock()
 	return ret
+}
+
+// passive connect fops
+type tcplfops_t struct {
+	tcl	tcplisten_t
+	options	fdopt_t
+}
+
+// to prevent an operation racing with a close
+func (tl *tcplfops_t) _closed() (err_t, bool) {
+	if tl.tcl.openc == 0 {
+		return -EBADF, false
+	}
+	return 0, true
+}
+
+func (tl *tcplfops_t) close() err_t {
+	tl.tcl.l.Lock()
+	defer tl.tcl.l.Unlock()
+
+	if err, ok := tl._closed(); !ok {
+		return err
+	}
+
+	tl.tcl.openc--
+	if tl.tcl.openc < 0 {
+		panic("neg ref")
+	}
+	if tl.tcl.openc == 0 {
+		// close all unaccepted established connections
+		for {
+			tcb, ok := tl.tcl._contake()
+			if !ok {
+				break
+			}
+			tcb._rst()
+			tcpcons.tcb_del(tcb)
+		}
+		tcpcons.listen_del(&tl.tcl)
+	}
+
+	return 0
+}
+
+func (tl *tcplfops_t) fstat(*stat_t) err_t {
+	panic("no imp")
+}
+
+func (tl *tcplfops_t) lseek(int, int) (int, err_t) {
+	return 0, -ESPIPE
+}
+
+func (tl *tcplfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+	return nil, -EINVAL
+}
+
+func (tl *tcplfops_t) pathi() *imemnode_t {
+	panic("tcp socket cwd")
+}
+
+func (tl *tcplfops_t) read(dst *userbuf_t) (int, err_t) {
+	return 0, -ENOTCONN
+}
+
+func (tl *tcplfops_t) reopen() err_t {
+	tl.tcl.l.Lock()
+	tl.tcl.openc++
+	tl.tcl.l.Unlock()
+	return 0
+}
+
+func (tl *tcplfops_t) write(src *userbuf_t) (int, err_t) {
+	return 0, -EPIPE
+}
+
+func (tl *tcplfops_t) fullpath() (string, err_t) {
+	panic("weird cwd")
+}
+
+func (tl *tcplfops_t) truncate(newlen uint) err_t {
+	return -EINVAL
+}
+
+func (tl *tcplfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+	return 0, -ESPIPE
+}
+
+func (tl *tcplfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+	return 0, -ESPIPE
+}
+
+func (tl *tcplfops_t) accept(proc *proc_t, saddr *userbuf_t) (fdops_i, int, err_t) {
+	tl.tcl.l.Lock()
+	defer tl.tcl.l.Unlock()
+
+	var tcb *tcptcb_t
+
+	for {
+		if tl.tcl.openc == 0 {
+			return nil, 0, -EBADF
+		}
+		ltcb, ok := tl.tcl._contake()
+		if ok {
+			tcb = ltcb
+			break
+		}
+		tl.tcl.rcons.cond.Wait()
+	}
+
+	fops := &tcpfops_t{tcb: tcb, options: tl.options}
+	fops.tcb.openc = 1
+
+	// write remote socket address to userspace
+	buf := make([]uint8, 6)
+	writen(buf, 2, 0, int(tcb.rport))
+	writen(buf, 4, 2, int(tcb.rip))
+	did, err := saddr.write(buf)
+	return fops, did, err
+}
+
+func (tl *tcplfops_t) bind(proc *proc_t, saddr []uint8) err_t {
+	return -EINVAL
+}
+
+func (tl *tcplfops_t) connect(proc *proc_t, saddr []uint8) err_t {
+	return -EADDRINUSE
+}
+
+func (tl *tcplfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
+	return nil, -EOPNOTSUPP
+}
+
+func (tl *tcplfops_t) sendto(proc *proc_t, src *userbuf_t,
+    toaddr []uint8, flags int) (int, err_t) {
+	return 0, -ENOTCONN
+}
+
+func (tl *tcplfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
+    fromsa *userbuf_t) (int, int, err_t) {
+	return 0, 0, -ENOTCONN
+}
+
+func (tl *tcplfops_t) pollone(pm pollmsg_t) ready_t {
+	tl.tcl.l.Lock()
+	defer tl.tcl.l.Unlock()
+
+	if _, ok := tl._closed(); !ok {
+		return 0
+	}
+	panic("no imp")
+}
+
+func (tl *tcplfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	tl.tcl.l.Lock()
+	defer tl.tcl.l.Unlock()
+
+	switch cmd {
+	case F_GETFL:
+		return int(tl.options)
+	case F_SETFL:
+		tl.options = fdopt_t(opt)
+		return 0
+	default:
+		panic("weird cmd")
+	}
+}
+
+func (tl *tcplfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+    intarg int) (int, err_t) {
+	switch opt {
+	case SO_ERROR:
+		if !proc.userwriten(bufarg.userva, 4, 0) {
+			return 0, -EFAULT
+		}
+		return 4, 0
+	default:
+		return 0, -EOPNOTSUPP
+	}
+}
+
+func (tl *tcplfops_t) shutdown(read, write bool) err_t {
+	return -ENOTCONN
 }
 
 var nics = map[ip4_t]*x540_t{}

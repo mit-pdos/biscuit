@@ -245,8 +245,10 @@ int
 execvp(const char *path, char * const argv[])
 {
 	const char *p = _binname(path);
-	if (!p)
-		return -ENOENT;
+	if (!p) {
+		errno = ENOENT;
+		return -1;
+	}
 	return execv(p, argv);
 }
 
@@ -271,7 +273,7 @@ fcntl(int fd, int cmd, ...)
 		break;
 	}
 	default:
-		errno = -EINVAL;
+		errno = EINVAL;
 		ret = -1;
 	}
 	va_end(ap);
@@ -2807,8 +2809,12 @@ static const char * const _errstr[] = {
 	[ENAMETOOLONG] = "File name too long",
 	[ENOSYS] = "Function not implemented",
 	[ENOTEMPTY] = "Directory not empty",
+	[EDESTADDRREQ] = "Destination address required",
+	[EAFNOSUPPORT] = "Protocol family not supported",
 	[EADDRINUSE] = "Address already in use",
+	[EADDRNOTAVAIL] = "Can't assign requested address",
 	[ENETDOWN] = "Network is down",
+	[ENETUNREACH] = "Network is unreachable",
 	[EHOSTUNREACH] = "No route to host",
 	[EOVERFLOW] = "Value too large to be stored in data type",
 	[ENOTSOCK] = "Socket operation on non-socket",

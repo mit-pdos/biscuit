@@ -83,7 +83,7 @@ int nc(int s)
 static void usage()
 {
 	fprintf(stderr, "usage:\n"
-	    "%s [-M] [-c host] [-p port] \n", __progname);
+	    "%s [-M] [-c host] [-p port] [-l listen port]\n", __progname);
 	exit(-1);
 }
 
@@ -105,20 +105,47 @@ static int con(uint32_t dip, uint16_t dport)
 	return s;
 }
 
+static int lstn(uint16_t lport)
+{
+	fprintf(stderr, "listen on port %d\n", (int)lport);
+
+	int s = socket(AF_INET, SOCK_STREAM, 0);
+	if (s == -1)
+		err(-1, "socket");
+	struct sockaddr_in sin;
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(lport);
+	sin.sin_addr.s_addr = htonl(INADDR_ANY);
+	if (bind(s, (struct sockaddr *)&sin, sizeof(sin)) == -1)
+		err(-1, "bind");
+	if (listen(s, 10) == -1)
+		err(-1, "listen");
+	int ret;
+	socklen_t slen = sizeof(sin);
+	if ((ret = accept(s, (struct sockaddr *)&sin, &slen)) == -1)
+		err(-1, "accept");
+	// TRY AGAIN
+	//if (close(s))
+	//	err(-1, "close");
+	return ret;
+}
+
 int main(int argc, char **argv)
 {
 	// bhw
 	uint32_t dip = 0x121a0530;
 	uint16_t dport = 31338;
-	int Mss = 0;
+	uint16_t lport = 0;
+	int Mss = 0, usedp = 0;
 	int c;
-	while ((c = getopt(argc, argv, "Mp:c:")) != -1) {
+	while ((c = getopt(argc, argv, "Mp:c:l:")) != -1) {
 		switch (c) {
 		case 'M':
 			Mss = 1;
 			break;
 		case 'p':
 			dport = strtol(optarg, NULL, 0);
+			usedp = 1;
 			break;
 		case 'c': {
 			int a, b, c, d;
@@ -126,13 +153,24 @@ int main(int argc, char **argv)
 				errx(-1, "malformed IP (%s)", optarg);
 			dip = a << 24 | b << 16 | c << 8 | d;
 			break;
+		case 'l':
+			lport = (uint16_t)strtol(optarg, NULL, 0);
+			break;
 		}
 		default:
 			usage();
 		}
 	}
 
-	int s = con(dip, dport);
+	if (usedp && lport) {
+		fprintf(stderr, "-l and -p are mutually exclusive\n");
+		usage();
+	}
+	int s;
+	if (lport)
+		s = lstn(lport);
+	else
+		s = con(dip, dport);
 	printf("connected\n");
 	if (Mss)
 		return mss(s);

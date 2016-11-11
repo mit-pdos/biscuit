@@ -63,8 +63,12 @@ const(
 	ENAMETOOLONG	err_t = 36
 	ENOSYS		err_t = 38
 	ENOTEMPTY	err_t = 39
+	EDESTADDRREQ	err_t = 40
+	EAFNOSUPPORT	err_t = 47
 	EADDRINUSE	err_t = 48
+	EADDRNOTAVAIL	err_t = 49
 	ENETDOWN	err_t = 50
+	ENETUNREACH	err_t = 51
 	EHOSTUNREACH	err_t = 65
 	ENOTSOCK	err_t = 88
 	EMSGSIZE	err_t = 90
@@ -145,6 +149,7 @@ const(
     SHUT_WR        = 1 << 0
     SHUT_RD        = 1 << 1
   SYS_BIND     = 49
+    INADDR_ANY     = 0
   SYS_LISTEN   = 50
   SYS_GETSOCKOPT = 55
     // socket levels
@@ -1494,7 +1499,7 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	case domain == AF_UNIX && typ & SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
 	case domain == AF_INET && typ & SOCK_STREAM != 0:
-		tfops := &tcpfops_t{options: opts}
+		tfops := &tcpfops_t{tcb: &tcptcb_t{}, options: opts}
 		tfops.tcb.openc = 1
 		sfops = tfops
 	default:
@@ -2587,7 +2592,7 @@ func (sf *suslfops_t) reopen() err_t {
 }
 
 func (sf *suslfops_t) write(*userbuf_t) (int, err_t) {
-	return 0, -ENOTCONN
+	return 0, -EPIPE
 }
 
 func (sf *suslfops_t) fullpath() (string, err_t) {

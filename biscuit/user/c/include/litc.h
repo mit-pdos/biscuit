@@ -39,8 +39,12 @@ extern "C" {
 #define		ENAMETOOLONG	36
 #define		ENOSYS		38
 #define		ENOTEMPTY	39
+#define		EDESTADDRREQ	40
+#define		EAFNOSUPPORT	47
 #define		EADDRINUSE	48
+#define		EADDRNOTAVAIL	49
 #define		ENETDOWN	50
+#define		ENETUNREACH	51
 #define		EHOSTUNREACH	65
 #define		EOVERFLOW	75
 #define		ENOTSOCK	88
@@ -169,13 +173,15 @@ struct sockaddr_un {
 #define		SUN_LEN(x)	(sizeof(struct sockaddr_un))
 
 struct sockaddr_in {
-	uint8_t		sin_len;
+	uchar		sin_len;
 	uchar		sin_family;
 	uint16_t	sin_port;
 	struct {
 		uint32_t s_addr;
 	} sin_addr;
 };
+
+#define		INADDR_ANY	((uint32_t)0)
 
 struct stat {
 	dev_t	st_dev;
