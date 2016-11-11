@@ -1836,19 +1836,29 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
 func (x *x540_t) tx_raw(buf [][]uint8) {
-	x._tx_wait(buf, false, false, false, 0, 0)
+	x._tx_nowait(buf, false, false, false, 0, 0)
 }
 
 func (x *x540_t) tx_ipv4(buf [][]uint8) {
-	x._tx_wait(buf, true, false, false, 0, 0)
+	x._tx_nowait(buf, true, false, false, 0, 0)
 }
 
 func (x *x540_t) tx_tcp(buf [][]uint8) {
-	x._tx_wait(buf, true, true, false, 0, 0)
+	x._tx_nowait(buf, true, true, false, 0, 0)
 }
 
 func (x *x540_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) {
-	x._tx_wait(buf, true, true, true, tcphlen, mss)
+	x._tx_nowait(buf, true, true, true, tcphlen, mss)
+}
+
+func (x *x540_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
+    mss int) {
+	x.tx.Lock()
+	ok := x._tx_enqueue(buf, ipv4, tcp, tso, tcphlen, mss)
+	x.tx.Unlock()
+	if !ok {
+		fmt.Printf("tx packet(s) dropped!\n")
+	}
 }
 
 func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
