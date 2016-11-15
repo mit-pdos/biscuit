@@ -2208,25 +2208,28 @@ func (tc *tcptcb_t) lwinshrink(dlen int) bool {
 	return ret
 }
 
-func (tc *tcptcb_t) lwingrow(oldwin int) {
+func (tc *tcptcb_t) lwingrow(dlen int) {
 	tc._sanity()
 	left := tc.rxbuf.cbuf.left()
 	mss := int(tc.rcv.mss)
-	if oldwin < mss && left >= mss {
+	oldwin := int(tc.rcv.win)
+
+	if left - oldwin >= mss {
 		tc.rcv.win = uint16(left)
-		// does it make sense to delay the ack increasing the receive
-		// window?
 		tc.sched_ack()
+		tc.ack_maybe()
+	}
+	// don't delay acks that reopen the window
+	if oldwin < mss && int(tc.rcv.win) >= mss {
 		tc.ack_now()
 	}
 }
 
 func (tc *tcptcb_t) uread(dst *userbuf_t) (int, err_t) {
 	tc._sanity()
-	owin := int(tc.rcv.win)
 	wrote, err := tc.rxbuf.cbuf.copyout(dst)
 	// did the user consume enough data to reopen the window?
-	tc.lwingrow(owin)
+	tc.lwingrow(wrote)
 	return wrote, err
 }
 
