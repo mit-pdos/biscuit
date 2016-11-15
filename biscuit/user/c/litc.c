@@ -1979,8 +1979,10 @@ fdopendir(int fd)
 	struct stat st;
 	if (fstat(fd, &st) == -1)
 		return NULL;
-	if (!S_ISDIR(st.st_mode))
+	if (!S_ISDIR(st.st_mode)) {
+		errno = ENOTDIR;
 		return NULL;
+	}
 	// allocate enough space for all dirents; count them.
 	if (lseek(fd, 0, SEEK_SET) == -1)
 		return NULL;

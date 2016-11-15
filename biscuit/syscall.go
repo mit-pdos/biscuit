@@ -675,12 +675,11 @@ func sys_stat(proc *proc_t, pathn, statn int) int {
 		return int(-ENAMETOOLONG)
 	}
 	buf := &stat_t{}
-	buf.init()
 	err := fs_stat(path, buf, proc.cwd.fops.pathi())
 	if err != 0 {
 		return int(err)
 	}
-	ok = proc.k2user(buf.data, statn)
+	ok = proc.k2user(buf.bytes(), statn)
 	if !ok {
 		return int(-EFAULT)
 	}
@@ -693,13 +692,12 @@ func sys_fstat(proc *proc_t, fdn int, statn int) int {
 		return int(-EBADF)
 	}
 	buf := &stat_t{}
-	buf.init()
 	err := fd.fops.fstat(buf)
 	if err != 0 {
 		return int(err)
 	}
 
-	ok = proc.k2user(buf.data, statn)
+	ok = proc.k2user(buf.bytes(), statn)
 	if !ok {
 		return int(-EFAULT)
 	}
@@ -1144,7 +1142,7 @@ func (of *pipefops_t) close() err_t {
 func (of *pipefops_t) fstat(st *stat_t) err_t {
 	// linux and openbsd give same mode for all pipes
 	st.wdev(0)
-	pipemode := 3
+	pipemode := uint(3)
 	st.wmode(pipemode)
 	return 0
 }
@@ -1416,12 +1414,11 @@ func sys_getrusage(proc *proc_t, who, rusagep int) int {
 	return 0
 }
 
-func mkdev(maj, min int) int {
-	return maj << 32 | min
+func mkdev(maj, min int) uint {
+	return uint(maj << 32 | min)
 }
 
-func unmkdev(di int) (int, int) {
-	d := uint(di)
+func unmkdev(d uint) (int, int) {
 	return int(d >> 32), int(uint32(d))
 }
 
@@ -1811,7 +1808,6 @@ func (sf *sudfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
 		return 0, -EINVAL
 	}
 	st := &stat_t{}
-	st.init()
 	path := slicetostr(sa[poff:])
 	err := fs_stat(path, st, proc.cwd.fops.pathi())
 	if err != 0 {
@@ -2202,7 +2198,6 @@ func (sus *susfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 
 	// lookup sid
 	st := &stat_t{}
-	st.init()
 	err := fs_stat(path, st, proc.cwd.fops.pathi())
 	if err != 0 {
 		return err
@@ -3946,66 +3941,50 @@ func fieldinfo(sizes []int, n int) (int, int) {
 	return sizes[n], off
 }
 
-// XXX use "unsafe" structs instead of slow (but general) go way
 type stat_t struct {
-	data	[]uint8
-	// field sizes
-	sizes	[]int
+	_dev	uint
+	_ino	uint
+	_mode	uint
+	_size	uint
+	_rdev	uint
 }
 
-func (st *stat_t) init() {
-	st.sizes = []int{
-		8, // 0 - dev
-		8, // 1 - ino
-		8, // 2 - mode
-		8, // 3 - size
-		8, // 4 - rdev
-		}
-	sz := 0
-	for _, c := range st.sizes {
-		sz += c
-	}
-	st.data = make([]uint8, sz)
+func (st *stat_t) wdev(v uint) {
+	st._dev = v
 }
 
-func (st *stat_t) wdev(v int) {
-	size, off := fieldinfo(st.sizes, 0)
-	writen(st.data, size, off, v)
+func (st *stat_t) wino(v uint) {
+	st._ino = v
 }
 
-func (st *stat_t) wino(v int) {
-	size, off := fieldinfo(st.sizes, 1)
-	writen(st.data, size, off, v)
+func (st *stat_t) wmode(v uint) {
+	st._mode = v
 }
 
-func (st *stat_t) mode() int {
-	size, off := fieldinfo(st.sizes, 2)
-	return readn(st.data, size, off)
+func (st *stat_t) wsize(v uint) {
+	st._size = v
 }
 
-func (st *stat_t) wmode(v int) {
-	size, off := fieldinfo(st.sizes, 2)
-	writen(st.data, size, off, v)
+func (st *stat_t) wrdev(v uint) {
+	st._rdev = v
 }
 
-func (st *stat_t) size() int {
-	size, off := fieldinfo(st.sizes, 3)
-	return readn(st.data, size, off)
+func (st *stat_t) mode() uint {
+	return st._mode
 }
 
-func (st *stat_t) wsize(v int) {
-	size, off := fieldinfo(st.sizes, 3)
-	writen(st.data, size, off, v)
+func (st *stat_t) size() uint {
+	return st._size
 }
 
-func (st *stat_t) rdev() int {
-	size, off := fieldinfo(st.sizes, 4)
-	return readn(st.data, size, off)
+func (st *stat_t) rdev() uint {
+	return st._rdev
 }
 
-func (st *stat_t) wrdev(v int) {
-	size, off := fieldinfo(st.sizes, 4)
-	writen(st.data, size, off, v)
+func (st *stat_t) bytes() []uint8 {
+	const sz = unsafe.Sizeof(*st)
+	sl := (*[sz]uint8)(unsafe.Pointer(&st._dev))
+	return sl[:]
 }
 
 type elf_t struct {

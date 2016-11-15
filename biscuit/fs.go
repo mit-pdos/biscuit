@@ -552,9 +552,8 @@ func (fo *fsfops_t) lseek(off, whence int) (int, err_t) {
 		fo.offset += off
 	case SEEK_END:
 		st := &stat_t{}
-		st.init()
 		fo.fstat(st)
-		fo.offset = st.size() + off
+		fo.offset = int(st.size()) + off
 	default:
 		return 0, -EINVAL
 	}
@@ -1404,9 +1403,9 @@ func (idm *imemnode_t) do_write(src *userbuf_t, _offset int,
 func (idm *imemnode_t) do_stat(st *stat_t) err_t {
 	idm._locked()
 	st.wdev(0)
-	st.wino(int(idm.priv))
+	st.wino(uint(idm.priv))
 	st.wmode(idm.mkmode())
-	st.wsize(idm.icache.size)
+	st.wsize(uint(idm.icache.size))
 	st.wrdev(mkdev(idm.icache.major, idm.icache.minor))
 	return 0
 }
@@ -2217,11 +2216,11 @@ func (idm *imemnode_t) dirent_getempty() int {
 }
 
 // used for {,f}stat
-func (idm *imemnode_t) mkmode() int {
+func (idm *imemnode_t) mkmode() uint {
 	itype := idm.icache.itype
 	switch itype {
 	case I_DIR, I_FILE:
-		return itype
+		return uint(itype)
 	case I_DEV:
 		// this can happen by fs-internal stats
 		return mkdev(idm.icache.major, idm.icache.minor)

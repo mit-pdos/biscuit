@@ -2817,6 +2817,12 @@ func pgcount() int {
 	return s
 }
 
+func structchk() {
+	if unsafe.Sizeof(stat_t{}) != 5*8 {
+		panic("bad stat_t size")
+	}
+}
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
@@ -2836,6 +2842,7 @@ func main() {
 	pmem := runtime.Totalphysmem()
 	fmt.Printf("  %v MB of physical memory\n", pmem >> 20)
 
+	structchk()
 	cpuchk()
 	net_init()
 

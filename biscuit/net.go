@@ -2644,8 +2644,10 @@ func (tf *tcpfops_t) close() err_t {
 	return 0
 }
 
-func (tf *tcpfops_t) fstat(*stat_t) err_t {
-	panic("no imp")
+func (tf *tcpfops_t) fstat(st *stat_t) err_t {
+	sockmode := mkdev(2, 0)
+	st.wmode(sockmode)
+	return 0
 }
 
 func (tf *tcpfops_t) lseek(int, int) (int, err_t) {
@@ -3014,7 +3016,8 @@ func (tl *tcplfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tl *tcplfops_t) accept(proc *proc_t, saddr *userbuf_t) (fdops_i, int, err_t) {
+func (tl *tcplfops_t) accept(proc *proc_t, saddr *userbuf_t) (fdops_i,
+    int, err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 

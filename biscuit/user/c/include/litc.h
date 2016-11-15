@@ -185,7 +185,7 @@ struct sockaddr_in {
 
 struct stat {
 	dev_t	st_dev;
-	ulong	st_ino;
+	ino_t	st_ino;
 	mode_t	st_mode;
 	off_t	st_size;
 	dev_t	st_rdev;
