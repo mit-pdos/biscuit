@@ -2072,6 +2072,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			data = data[l:]
 		case pm := <- cons.pollc:
 			if pm.events & R_READ == 0 {
+				cons.pollret <- 0
 				continue
 			}
 			var ret ready_t
