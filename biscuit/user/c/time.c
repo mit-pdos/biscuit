@@ -162,27 +162,28 @@ int main(int argc, char **argv)
 	if (gcstat) {
 		long wbms, markms, sweepms;
 		double gccpu = gcfracend(&fracst, &markms, &sweepms, &wbms);
-		printf("GC CPU frac: %f%% (no write barriers)\n", gccpu);
-		printf(" total elapsed times:\n");
-		printf("      mark   ms: %ld\n", markms);
-		printf("      sweep  ms: %ld\n", sweepms);
-		printf("      writeb ms: %ld\n", wbms);
+		fprintf(stderr, "GC CPU frac: %f%% (no write barriers)\n",
+		    gccpu);
+		fprintf(stderr, " total elapsed times:\n");
+		fprintf(stderr, "      mark   ms: %ld\n", markms);
+		fprintf(stderr, "      sweep  ms: %ld\n", sweepms);
+		fprintf(stderr, "      writeb ms: %ld\n", wbms);
 
 		long egc = sys_info(SINFO_GCCOUNT);
 		if (egc == -1)
 			err(-1, "sysinfo");
-		printf("GCs: %ld\n", egc - sgc);
+		fprintf(stderr, "GCs: %ld\n", egc - sgc);
 		long etalloc = sys_info(SINFO_GCTOTALLOC);
 		if (etalloc == -1)
 			err(-1, "sysinfo");
 		long bpms = (etalloc - talloc) / elapsed;
 		double ar = (double)bpms * 1000 / (1 << 20);
-		printf("Allocation rate: %f MB/sec\n", ar);
+		fprintf(stderr, "Allocation rate: %f MB/sec\n", ar);
 
 		long kobjs = sys_info(SINFO_GCOBJS);
 		if (kobjs == -1)
 			err(-1, "sysinfo");
-		printf("Number of kernel objects: %ld\n", kobjs);
+		fprintf(stderr, "Number of kernel objects: %ld\n", kobjs);
 	}
 	// stop profiling
 	if (goprof && sys_prof(PROF_DISABLE|PROF_GOLANG, 0, 0, 0) == -1)
@@ -194,12 +195,12 @@ int main(int argc, char **argv)
 
 	ret = WEXITSTATUS(status);
 	if (!WIFEXITED(status) || ret)
-		printf("child failed with status: %d\n", ret);
+		fprintf(stderr, "child failed with status: %d\n", ret);
 
-	printf("%lu seconds, %lu ms\n", elapsed/1000, elapsed%1000);
-	printf("user   time: %lu seconds, %lu us\n", r.ru_utime.tv_sec,
-	    r.ru_utime.tv_usec);
-	printf("system time: %lu seconds, %lu us\n", r.ru_stime.tv_sec,
-	    r.ru_stime.tv_usec);
+	fprintf(stderr, "%lu seconds, %lu ms\n", elapsed/1000, elapsed%1000);
+	fprintf(stderr, "user   time: %lu seconds, %lu us\n",
+	    r.ru_utime.tv_sec, r.ru_utime.tv_usec);
+	fprintf(stderr, "system time: %lu seconds, %lu us\n",
+	    r.ru_stime.tv_sec, r.ru_stime.tv_usec);
 	return ret;
 }
