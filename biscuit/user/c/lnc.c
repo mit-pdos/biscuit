@@ -124,9 +124,8 @@ static int lstn(uint16_t lport)
 	socklen_t slen = sizeof(sin);
 	if ((ret = accept(s, (struct sockaddr *)&sin, &slen)) == -1)
 		err(-1, "accept");
-	// TRY AGAIN
-	//if (close(s))
-	//	err(-1, "close");
+	if (close(s))
+		err(-1, "close");
 	return ret;
 }
 

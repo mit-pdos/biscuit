@@ -675,33 +675,33 @@ unlink(const char *path)
 	return ret;
 }
 
-int
+pid_t
 wait(int *status)
 {
-	int ret = syscall(WAIT_ANY, SA(status), 0, 0, 0, SYS_WAIT4);
+	pid_t ret = syscall(WAIT_ANY, SA(status), 0, 0, 0, SYS_WAIT4);
 	ERRNO_NEG(ret);
 	return ret;
 }
 
-int
+pid_t
 waitpid(int pid, int *status, int options)
 {
 	return wait4(pid, status, options, NULL);
 }
 
-int
+pid_t
 wait4(int pid, int *status, int options, struct rusage *r)
 {
-	int ret = syscall(pid, SA(status), SA(options), SA(r), 0,
+	pid_t ret = syscall(pid, SA(status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
 	ERRNO_NEG(ret);
 	return ret;
 }
 
-int
+pid_t
 wait3(int *status, int options, struct rusage *r)
 {
-	int ret = syscall(WAIT_ANY, SA(status), SA(options), SA(r), 0,
+	pid_t ret = syscall(WAIT_ANY, SA(status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
 	ERRNO_NEG(ret);
 	return ret;
