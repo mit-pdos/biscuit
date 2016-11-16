@@ -527,6 +527,10 @@ func (i4 *ip4hdr_t) bytes() []uint8 {
 	return (*[IP4LEN]uint8)(unsafe.Pointer(i4))[:]
 }
 
+func (i4 *ip4hdr_t) hdrlen() int {
+	return IP4LEN
+}
+
 func sl2iphdr(buf []uint8) (*ip4hdr_t, []uint8, bool) {
 	if len(buf) < IP4LEN {
 		return nil, nil, false
@@ -1308,7 +1312,7 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 		if tcp.isrst() {
 			return
 		}
-		// make the connection is ready immediately so that received
+		// make the connection immediately ready so that received
 		// segments that race with accept(2) aren't unnecessarily timed
 		// out.
 		tcb := tcl.tcbready(tinc, ack, ntohs(tcp.win), rest)
@@ -1933,7 +1937,8 @@ func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) (*tcppkt_t, bool) {
 	l4len := ret.tcphdr.hdrlen() + seglen
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
 	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
-	istso := seglen > int(tc.snd.mss)
+	ipuplen := l4len + ret.iphdr.hdrlen()
+	istso := ipuplen > int(tc.snd.mss)
 	// packets using TSO do not include the the TCP payload length in the
 	// pseudo-header checksum.
 	if istso {

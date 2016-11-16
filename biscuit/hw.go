@@ -1899,7 +1899,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	if tso && !tcp {
 		panic("tso is only for tcp")
 	}
-	if tlen > 1500 && !tso {
+	if tlen - ETHERLEN > 1500 && !tso {
 		panic("should use tso")
 	}
 	if tlen == 0 {

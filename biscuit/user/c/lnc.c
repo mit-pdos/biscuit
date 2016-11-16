@@ -34,11 +34,12 @@ static int mss(int s)
 	return 0;
 }
 
+static char buf[1460];
+
 int nc(int s)
 {
 	struct pollfd pfds[2] = {{.fd = 0}, {.fd = s}};
 	const int nfds = 2;
-	char buf[512];
 	int closed = 0;
 	ssize_t wtot = 0;
 	while (closed != 2) {
