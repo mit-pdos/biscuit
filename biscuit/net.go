@@ -617,6 +617,45 @@ func (ic *icmppkt_t) hdrbytes() []uint8 {
 	return (*[hdrsz]uint8)(unsafe.Pointer(ic))[:]
 }
 
+type rstmsg_t struct {
+	k	tcpkey_t
+	seq	uint32
+	ack	uint32
+	useack	bool
+}
+
+var _rstchan chan rstmsg_t
+
+func rst_daemon() {
+	for rmsg := range _rstchan {
+		localip, routeip, err := routetbl.lookup(rmsg.k.rip)
+		if err != 0 {
+			fmt.Printf("shat1\n")
+			continue
+		}
+		nic, ok := nics[localip]
+		if !ok {
+			fmt.Printf("shat2\n")
+			continue
+		}
+		dmac, err := arp_resolve(localip, routeip)
+		if err != 0 {
+			fmt.Printf("shat3\n")
+			continue
+		}
+		pkt := _mkrst(rmsg.seq, rmsg.k.lip, rmsg.k.rip, rmsg.k.lport,
+		    rmsg.k.rport, &nic.mac, dmac)
+		if rmsg.useack {
+			ackf := uint8(1 << 4)
+			pkt.tcphdr.flags |= ackf
+			pkt.tcphdr.ack = htonl(rmsg.ack)
+		}
+		eth, iph, tcph := pkt.hdrbytes()
+		sgbuf := [][]uint8{eth, iph, tcph}
+		nic.tx_tcp(sgbuf)
+	}
+}
+
 // i don't want our packet-processing event-loop to block on ARP resolution (or
 // anything that may take seconds), so i use a different goroutine to
 // resolve/transmit to an address.
@@ -1119,6 +1158,12 @@ func (t *tcphdr_t) init_ack(sport, dport uint16, seq, ack uint32) {
 	t.flags |= ackf
 }
 
+func (t *tcphdr_t) init_rst(sport, dport uint16, seq uint32) {
+	t._init(sport, dport, seq, 0)
+	rst := uint8(1 << 2)
+	t.flags |= rst
+}
+
 func (t *tcphdr_t) set_opt(opt []uint8) {
 	if len(opt) % 4 != 0 {
 		panic("options must be 32bit aligned")
@@ -1300,7 +1345,7 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 		// handshake complete?
 		tinc, ok := tcl.seqs[tk]
 		if !ok || tcp.issyn() {
-			_send_rst(ip4, tcp)
+			send_rst(ack, tk)
 			return
 		}
 		seq := ntohl(tcp.seq)
@@ -1908,6 +1953,29 @@ func _mksynack(smac *mac_t, dmac []uint8, tk tcpkey_t, lwin uint16, seq,
 	return ret, opt
 }
 
+func _mkack(seq, ack uint32, lip, rip ip4_t, lport, rport uint16, win uint16,
+    smac, dmac *mac_t) *tcppkt_t {
+	ret := &tcppkt_t{}
+	ret.tcphdr.init_ack(lport, rport, seq, ack)
+	ret.tcphdr.win = htons(win)
+	l4len := ret.tcphdr.hdrlen()
+	ret.iphdr.init_tcp(l4len, lip, rip)
+	ret.ether.init_ip4(smac[:], dmac[:])
+	ret.crc(l4len, lip, rip)
+	return ret
+}
+
+func _mkrst(seq uint32, lip, rip ip4_t, lport, rport uint16, smac,
+    dmac *mac_t) *tcppkt_t {
+	ret := &tcppkt_t{}
+	ret.tcphdr.init_rst(lport, rport, seq)
+	l4len := ret.tcphdr.hdrlen()
+	ret.iphdr.init_tcp(l4len, lip, rip)
+	ret.ether.init_ip4(smac[:], dmac[:])
+	ret.crc(l4len, lip, rip)
+	return ret
+}
+
 func (tc *tcptcb_t) _setfin(tp *tcphdr_t, seq uint32) {
 	// set FIN?
 	if tc.txdone && seq == tc.snd.finseq {
@@ -1917,14 +1985,15 @@ func (tc *tcptcb_t) _setfin(tp *tcphdr_t, seq uint32) {
 }
 
 func (tc *tcptcb_t) mkack(seq, ack uint32) *tcppkt_t {
-	ret := &tcppkt_t{}
-	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
-	ret.tcphdr.win = htons(tc.rcv.win)
+	ret := _mkack(seq, ack, tc.lip, tc.rip, tc.lport, tc.rport, tc.rcv.win,
+	    tc.smac, tc.dmac)
 	tc._setfin(&ret.tcphdr, seq)
-	l4len := ret.tcphdr.hdrlen()
-	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
-	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
-	ret.crc(l4len, tc.lip, tc.rip)
+	return ret
+}
+
+func (tc *tcptcb_t) mkrst(seq uint32) *tcppkt_t {
+	ret := _mkrst(seq, tc.lip, tc.rip, tc.lport, tc.rport, tc.smac,
+	    tc.dmac)
 	return ret
 }
 
@@ -2571,8 +2640,20 @@ func (tp *tcppkt_t) hdrbytes() ([]uint8, []uint8, []uint8) {
 	return tp.ether.bytes(), tp.iphdr.bytes(), tp.tcphdr.bytes()
 }
 
-func _send_rst(ip4 *ip4hdr_t, tcp *tcphdr_t) {
-	fmt.Printf("RESET!\n")
+func send_rst(seq uint32, k tcpkey_t) {
+	_send_rst(seq, 0, k, false)
+}
+
+func send_rstack(seq, ack uint32, k tcpkey_t) {
+	_send_rst(seq, ack, k, true)
+}
+
+func _send_rst(seq, ack uint32, k tcpkey_t, useack bool) {
+	select {
+	case _rstchan <- rstmsg_t{k: k, seq: seq, ack: ack, useack: useack}:
+	default:
+		fmt.Printf("rst dropped\n")
+	}
 }
 
 func net_tcp(pkt [][]uint8, tlen int) {
@@ -2610,7 +2691,13 @@ func net_tcp(pkt [][]uint8, tlen int) {
 		listener.incoming(smac, k, ip4, tcph, opts, pkt)
 		listener.l.Unlock()
 	} else {
-		_send_rst(ip4, tcph)
+		rack, ok := tcph.isack()
+		if ok {
+			send_rst(rack, k)
+		} else {
+			ack := ntohl(tcph.seq) + 1
+			send_rstack(0, ack, k)
+		}
 	}
 }
 
@@ -3205,6 +3292,12 @@ func net_init() {
 	go icmp_daemon()
 
 	tcpcons.init()
+
+	_rstchan = make(chan rstmsg_t, 32)
+	nrst := 10
+	for i := 0; i < nrst; i++ {
+		go rst_daemon()
+	}
 
 	net_test()
 }
