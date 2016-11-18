@@ -1142,7 +1142,7 @@ func (of *pipefops_t) close() err_t {
 func (of *pipefops_t) fstat(st *stat_t) err_t {
 	// linux and openbsd give same mode for all pipes
 	st.wdev(0)
-	pipemode := uint(3)
+	pipemode := uint(3 << 16)
 	st.wmode(pipemode)
 	return 0
 }

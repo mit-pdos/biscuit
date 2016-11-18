@@ -325,8 +325,8 @@ getsockopt(int fd, int level, int opt, void *optv, socklen_t *optlen)
 int
 gettimeofday(struct timeval *tv, struct timezone *tz)
 {
-	//if (tz)
-	//	errx(-1, "timezone not supported");
+	if (tz)
+		errx(-1, "timezone not supported");
 	//int ret = syscall(SA(tv), 0, 0, 0, 0, SYS_GETTOD);
 	//ERRNO_NZ(ret);
 	//return ret;

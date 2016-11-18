@@ -630,17 +630,14 @@ func rst_daemon() {
 	for rmsg := range _rstchan {
 		localip, routeip, err := routetbl.lookup(rmsg.k.rip)
 		if err != 0 {
-			fmt.Printf("shat1\n")
 			continue
 		}
 		nic, ok := nics[localip]
 		if !ok {
-			fmt.Printf("shat2\n")
 			continue
 		}
 		dmac, err := arp_resolve(localip, routeip)
 		if err != 0 {
-			fmt.Printf("shat3\n")
 			continue
 		}
 		pkt := _mkrst(rmsg.seq, rmsg.k.lip, rmsg.k.rip, rmsg.k.lport,

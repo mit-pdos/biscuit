@@ -2220,7 +2220,7 @@ func (idm *imemnode_t) mkmode() uint {
 	itype := idm.icache.itype
 	switch itype {
 	case I_DIR, I_FILE:
-		return uint(itype)
+		return uint(itype << 16)
 	case I_DEV:
 		// this can happen by fs-internal stats
 		return mkdev(idm.icache.major, idm.icache.minor)

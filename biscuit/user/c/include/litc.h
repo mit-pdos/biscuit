@@ -191,16 +191,21 @@ struct stat {
 	dev_t	st_rdev;
 };
 
-#define		S_IFMT		((ulong)-1)
-#define		S_IFREG		1
-#define		S_IFDIR		2
-#define		S_IFIFO		3
+#define		S_IFMT		(0xffff0000ul)
+#define		S_IFREG		(1ul << 16)
+#define		S_IFDIR		(2ul << 16)
+#define		S_IFIFO		(3ul << 16)
 
-#define		S_ISDIR(mode)	(mode == S_IFDIR)
+#define		S_ISDIR(mode)	((mode & S_IFMT) == S_IFDIR)
 #define		S_ISDEV(mode)	(MAJOR(mode) != 0)
-#define		S_ISFIFO(mode)	(mode == S_IFIFO)
-#define		S_ISREG(mode)	(mode == S_IFREG)
+#define		S_ISFIFO(mode)	((mode & S_IFMT) == S_IFIFO)
+#define		S_ISREG(mode)	((mode & S_IFMT) == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
+
+#define		S_IRWXU		(0700)
+#define		S_IRUSR		(0400)
+#define		S_IWUSR		(0200)
+#define		S_IXUSR		(0100)
 
 struct tfork_t {
 	void *tf_tcb;
@@ -287,7 +292,6 @@ int open(const char *, int, ...);
 #define		O_DIRECTORY	0x10000
 #define		O_CLOEXEC	0x80000
 
-#define		S_IRWXU		0700
 int pause(void);
 int pipe(int *);
 int pipe2(int *, int);
