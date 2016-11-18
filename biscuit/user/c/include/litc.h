@@ -17,6 +17,7 @@ extern "C" {
 #define		ERRNO_FIRST	1
 #define		EPERM		1
 #define		ENOENT		2
+#define		ESRCH		3
 #define		EINTR		4
 #define		EIO		5
 #define		E2BIG		7
@@ -25,13 +26,17 @@ extern "C" {
 #define		EAGAIN		11
 #define		EWOULDBLOCK	EAGAIN
 #define		ENOMEM		12
+#define		EACCES		13
 #define		EFAULT		14
 #define		EBUSY		16
 #define		EEXIST		17
+#define		EXDEV		18
 #define		ENODEV		19
 #define		ENOTDIR		20
 #define		EISDIR		21
 #define		EINVAL		22
+#define		ENFILE		23
+#define		EMFILE		24
 #define		ENOSPC		28
 #define		ESPIPE		29
 #define		EPIPE		32
@@ -45,6 +50,9 @@ extern "C" {
 #define		EADDRNOTAVAIL	49
 #define		ENETDOWN	50
 #define		ENETUNREACH	51
+#define		ECONNABORTED	53
+#define		ELOOP		62
+#define		EHOSTDOWN	64
 #define		EHOSTUNREACH	65
 #define		EOVERFLOW	75
 #define		ENOTSOCK	88
@@ -59,7 +67,8 @@ extern "C" {
 
 #define		MAP_FAILED	((void *) -1)
 
-#define		MAP_PRIVATE	0x2
+#define		MAP_PRIVATE	0x02
+#define		MAP_SHARED	0x01
 #define		MAP_ANON	0x20
 #define		MAP_ANONYMOUS	MAP_ANON
 
@@ -115,8 +124,27 @@ struct timeval {
 	time_t tv_usec;
 };
 
+struct tm {
+	int    tm_sec;
+	int    tm_min;
+	int    tm_hour;
+	int    tm_mday;
+	int    tm_mon;
+	int    tm_year;
+	int    tm_wday;
+	int    tm_yday;
+	int    tm_isdst;
+};
+
 struct timezone {
 };
+
+struct timespec {
+	time_t tv_sec;
+	long tv_nsec;
+};
+
+extern long timezone;
 
 struct rlimit {
 	rlim_t rlim_cur;
@@ -172,50 +200,65 @@ struct sockaddr_un {
 
 #define		SUN_LEN(x)	(sizeof(struct sockaddr_un))
 
+typedef uint32_t in_addr_t;
+typedef uint16_t in_port_t;
+
 struct sockaddr_in {
 	uchar		sin_len;
 	uchar		sin_family;
-	uint16_t	sin_port;
+	in_port_t	sin_port;
 	struct {
-		uint32_t s_addr;
+		in_addr_t s_addr;
 	} sin_addr;
 };
 
 #define		INADDR_ANY	((uint32_t)0)
 
 struct stat {
-	dev_t	st_dev;
-	ino_t	st_ino;
-	mode_t	st_mode;
-	off_t	st_size;
-	dev_t	st_rdev;
+	dev_t		st_dev;
+	ino_t		st_ino;
+	mode_t		st_mode;
+	off_t		st_size;
+	dev_t		st_rdev;
+	uid_t		st_uid;
+	blkcnt_t	st_blocks;
+	time_t		st_mtime;
+	ulong		st_mtimensec;
 };
 
 #define		S_IFMT		(0xffff0000ul)
 #define		S_IFREG		(1ul << 16)
 #define		S_IFDIR		(2ul << 16)
 #define		S_IFIFO		(3ul << 16)
+#define		S_IFLNK		(4ul << 16)
 
 #define		S_ISDIR(mode)	((mode & S_IFMT) == S_IFDIR)
 #define		S_ISDEV(mode)	(MAJOR(mode) != 0)
 #define		S_ISFIFO(mode)	((mode & S_IFMT) == S_IFIFO)
 #define		S_ISREG(mode)	((mode & S_IFMT) == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
+#define		S_ISLNK(mode)	((mode & S_IFMT) == S_IFLNK)
 
-#define		S_IRWXU		(0700)
-#define		S_IRUSR		(0400)
-#define		S_IWUSR		(0200)
-#define		S_IXUSR		(0100)
+// please never use these
+#define		S_ISUID		(04000)
+#define		S_ISGID		(02000)
+#define		S_IRWXU		(00700)
+#define		S_IRUSR		(00400)
+#define		S_IWUSR		(00200)
+#define		S_IXUSR		(00100)
+#define		S_IRWXG		(00070)
+#define		S_IRGRP		(00040)
+#define		S_IWGRP		(00020)
+#define		S_IXGRP		(00010)
+#define		S_IRWXO		(00007)
+#define		S_IROTH		(00004)
+#define		S_IWOTH		(00002)
+#define		S_IXOTH		(00001)
 
 struct tfork_t {
 	void *tf_tcb;
 	void *tf_tid;
 	void *tf_stack;
-};
-
-struct timespec {
-	time_t tv_sec;
-	long tv_nsec;
 };
 
 int accept(int, struct sockaddr *, socklen_t*);
@@ -248,6 +291,7 @@ char *getcwd(char *, size_t);
 int getpid(void);
 int getrlimit(int, struct rlimit *);
 #define		RLIMIT_NOFILE	1
+#define		RLIMIT_CORE	2
 #define		RLIM_INFINITY	ULONG_MAX
 int getrusage(int, struct rusage *);
 #define		RUSAGE_SELF	1
@@ -264,6 +308,9 @@ int fcntl(int, int, ...);
 #define		F_SETFL		2
 #define		F_GETFD		3
 #define		F_SETFD		4
+#define		F_SETLK		5
+#define		F_SETLKW	6
+#define		F_SETOWN	7
 
 #define		FD_CLOEXEC	0x4
 
@@ -309,27 +356,46 @@ ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);
 int setrlimit(int, const struct rlimit *);
 pid_t setsid(void);
-//int setsockopt(int, int, int, void *, socklen_t);
 // levels
 #define		SOL_SOCKET	1
+#define		IPPROTO_TCP	2
 // socket options
 #define		SO_SNDBUF	1
 #define		SO_SNDTIMEO	2
 #define		SO_ERROR	3
+#define		SO_TYPE		4
+#define		SO_RCVBUF	5
+#define		SO_REUSEADDR	6
+#define		SO_KEEPALIVE	7
+#define		SO_LINGER	8
+struct linger {
+	int l_onoff;
+	int l_linger;
+};
+// TCP options
+#define		TCP_NODELAY	20
+// not supported on linux...
+#define		SO_SNDLOWAT	8
 int sigaction(int, const struct sigaction *, struct sigaction *);
 #define		SIGHUP		1
 #define		SIGINT		2
+#define		SIGQUIT		3
 #define		SIGILL		4
 #define		SIGKILL		9
 #define		SIGUSR1		10
 #define		SIGSEGV		11
+#define		SIGSYS		12
 #define		SIGPIPE		13
 #define		SIGALRM		14
 #define		SIGTERM		15
+#define		SIGSTOP		17
+#define		SIGCHLD		20
+#define		SIGIO		23
+#define		SIGWINCH	28
+#define		SIGUSR2		31
 void (*signal(int, void (*)(int)))(int);
 #define		SIG_DFL		((void (*)(int))1)
 #define		SIG_IGN		((void (*)(int))2)
-//int sigprocmask(int, sigset_t *, sigset_t *); /*REDIS*/
 #define		SIG_BLOCK	1
 #define		SIG_SETMASK	2
 #define		SIG_UNBLOCK	3
@@ -750,7 +816,6 @@ int vsnprintf(char *, size_t, const char *, va_list)
     __attribute__((format(printf, 3, 0)));
 int vsscanf(const char *, const char *, va_list)
     __attribute__((format(scanf, 2, 0)));
-//void qsort(void *, size_t, size_t, int (*)(const void *, const void *)); /*REDIS*/
 
 void *malloc(size_t);
 void free(void *);
@@ -759,6 +824,138 @@ void *realloc(void *, size_t);
 
 extern char __progname[64];
 extern char **environ;
+
+/* NGINX STUFF */
+char *getenv(char *);
+uid_t geteuid(void);
+
+struct passwd {
+	char *pw_name;
+	uid_t pw_uid;
+	gid_t pw_gid;
+	char *pw_dir;
+	char *pw_shell;
+};
+
+struct passwd *getpwnam(const char *);
+
+struct group {
+	char *gr_name;
+	gid_t gr_gid;
+	char **gr_mem;
+};
+
+struct group *getgrnam(const char *);
+
+struct hostent {
+	char *h_name;
+	char **h_aliases;
+	int h_addrtype;
+	int h_length;
+	char **h_addr_list;
+};
+
+struct hostent *gethostbyname(const char *);
+int chown(const char *, uid_t, gid_t);
+time_t mktime(struct tm *);
+int getsockname(int, struct sockaddr *, socklen_t *);
+int setsockopt(int, int, int, const void *, socklen_t);
+int gethostname(char *, size_t);
+char *strpbrk(const char *, const char *);
+
+struct itimerval {
+	struct timeval it_interval;
+	struct timeval it_value;
+};
+
+#define		ITIMER_REAL	1
+
+int setitimer(int, struct itimerval *, struct itimerval *);
+
+struct iovec {
+	void *iov_base;
+	size_t iov_len;
+};
+
+struct msghdr {
+	void		*msg_name;
+	socklen_t	msg_namelen;
+	struct iovec	*msg_iov;
+	int		msg_iovlen;
+	uint		msg_flags;
+	void		*msg_control;
+	socklen_t	msg_controllen;
+};
+
+struct cmsghdr {
+	socklen_t	cmsg_len;
+	int		cmsg_level;
+	int		cmsg_type;
+#define		SCM_RIGHTS	1
+};
+
+ssize_t recvmsg(int, struct msghdr *, int);
+ssize_t sendmsg(int, struct msghdr *, int);
+
+#define		MSG_TRUNC	(1 << 0)
+#define		MSG_CTRUNC	(1 << 1)
+
+#define		CMSG_FIRSTHDR(x)	(NULL)
+#define		CMSG_NXTHDR(x, y)	(NULL)
+#define		CMSG_DATA(x)		(NULL)
+#define		CMSG_LEN(x)		(sizeof(struct cmsghdr) + x)
+#define		CMSG_SPACE(x)		(sizeof(struct cmsghdr) + x)
+
+struct tm *localtime(const time_t *);
+struct tm *gmtime(const time_t *);
+ssize_t readv(int, const struct iovec *, int);
+ssize_t writev(int, const struct iovec *, int);
+int utimes(const char *, const struct timeval[2]);
+
+typedef struct {
+	int	gl_pathc;
+	int	gl_matchc;
+	char	**gl_pathv;
+	int	gl_offs;
+} glob_t;
+
+int glob(const char *, int, int (*)(const char *, int), glob_t *);
+void globfree(glob_t *);
+
+struct flock {
+	short	l_type;
+#define		F_WRLCK		1
+#define		F_UNLCK		2
+	short	l_whence;
+	off_t	l_start;
+	off_t	l_len;
+	pid_t	l_pid;
+};
+
+int socketpair(int, int, int, int[2]);
+int ioctl(int, ulong, ...);
+#define		FIOASYNC	3
+
+pid_t getppid(void);
+
+int raise(int);
+mode_t umask(mode_t);
+int getpagesize(void);
+int sigprocmask(int, sigset_t *, sigset_t *);
+int sigsuspend(const sigset_t *);
+
+int setpriority(int, int, int);
+#define		PRIO_PROCESS	1
+
+uid_t getuid(void);
+int setuid(uid_t);
+int setgid(gid_t);
+int initgroups(const char *, gid_t);
+
+#define		MSG_PEEK	1
+
+char *realpath(const char *, char *);
+int lstat(const char *, struct stat *);
 
 #ifdef __cplusplus
 }	// extern "C"

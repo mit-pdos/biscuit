@@ -2818,7 +2818,7 @@ func pgcount() int {
 }
 
 func structchk() {
-	if unsafe.Sizeof(stat_t{}) != 5*8 {
+	if unsafe.Sizeof(stat_t{}) != 9*8 {
 		panic("bad stat_t size")
 	}
 }

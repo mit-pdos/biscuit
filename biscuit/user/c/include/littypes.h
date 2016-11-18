@@ -5,6 +5,11 @@ typedef unsigned short 	ushort;
 typedef unsigned int 	uint;
 typedef unsigned long 	ulong;
 
+typedef unsigned char 	u_char;
+typedef unsigned short 	u_short;
+typedef unsigned int 	u_int;
+typedef unsigned long 	u_long;
+
 typedef unsigned long 	size_t;
 typedef long 		ssize_t;
 typedef long 		ptrdiff_t;
@@ -53,9 +58,13 @@ typedef ulong 		ino_t;
 typedef long 		off_t;
 typedef long 		pid_t;
 typedef long 		uid_t;
+typedef long 		gid_t;
 typedef unsigned long 	socklen_t;
 typedef unsigned long 	rlim_t;
 typedef unsigned long 	sigset_t;
+typedef volatile long 	sig_atomic_t;
+typedef long 		blkcnt_t;
+typedef char * 		caddr_t;
 
 #define NULL   ((void *)0)
 

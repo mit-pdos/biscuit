@@ -2788,8 +2788,9 @@ strdup(const char *orig)
 }
 
 static const char * const _errstr[] = {
-	[EPERM] = "Permission denied",
+	[EPERM] = "Operation not permitted",
 	[ENOENT] = "No such file or directory",
+	[ESRCH] = "No such process",
 	[EINTR] = "Interrupted system call",
 	[EIO] = "Input/output error",
 	[E2BIG] = "Argument list too long",
@@ -2797,13 +2798,17 @@ static const char * const _errstr[] = {
 	[EAGAIN] = "Resource temporarily unavailable",
 	[ECHILD] = "No child processes",
 	[ENOMEM] = "Out of memory",
+	[EACCES] = "Permission denied",
 	[EFAULT] = "Bad address",
 	[EBUSY] = "Device busy",
 	[EEXIST] = "File exists",
+	[EXDEV] = "Cross device link",
 	[ENODEV] = "Operation not supported by device",
 	[ENOTDIR] = "Not a directory",
 	[EISDIR] = "Is a directory",
 	[EINVAL] = "Invalid argument",
+	[ENFILE] = "Too many open files in system",
+	[EMFILE] = "Too many open files",
 	[ENOSPC] = "No space left on device",
 	[ESPIPE] = "Illegal seek",
 	[EPIPE] = "Broken pipe",
@@ -2817,6 +2822,9 @@ static const char * const _errstr[] = {
 	[EADDRNOTAVAIL] = "Can't assign requested address",
 	[ENETDOWN] = "Network is down",
 	[ENETUNREACH] = "Network is unreachable",
+	[ECONNABORTED] = "Software caused connection abort",
+	[ELOOP] = "Too many levels of symbolic links",
+	[EHOSTDOWN] = "Host is down",
 	[EHOSTUNREACH] = "No route to host",
 	[EOVERFLOW] = "Value too large to be stored in data type",
 	[ENOTSOCK] = "Socket operation on non-socket",
@@ -3277,4 +3285,189 @@ _entry(void)
 	    "movabs 	$_start, %%rax\n"
 	    "jmpq	*%%rax\n"
 	    ::: "memory", "cc");
+}
+
+/* NGINX STUFF */
+long timezone;
+
+#define FAIL	errx(-1, "%s -- no imp", __FUNCTION__)
+
+char *getenv(char *name)
+{
+	FAIL;
+}
+
+uid_t geteuid(void)
+{
+	FAIL;
+}
+
+struct passwd *getpwnam(const char *a)
+{
+	FAIL;
+}
+
+struct group *getgrnam(const char *a)
+{
+	FAIL;
+}
+
+struct hostent *gethostbyname(const char *a)
+{
+	FAIL;
+}
+
+int chown(const char *a, uid_t b, gid_t c)
+{
+	FAIL;
+}
+
+time_t mktime(struct tm *a)
+{
+	FAIL;
+}
+
+int getsockname(int a, struct sockaddr *b, socklen_t *c)
+{
+	FAIL;
+}
+
+int setsockopt(int a, int b, int c, const void *d, socklen_t e)
+{
+	FAIL;
+}
+
+int gethostname(char *a, size_t b)
+{
+	FAIL;
+}
+
+char *strpbrk(const char *a, const char *b)
+{
+	FAIL;
+}
+
+int setitimer(int a, struct itimerval *b, struct itimerval *c)
+{
+	FAIL;
+}
+
+ssize_t recvmsg(int a, struct msghdr *b, int c)
+{
+	FAIL;
+}
+
+ssize_t sendmsg(int a, struct msghdr *b, int c)
+{
+	FAIL;
+}
+
+struct tm *localtime(const time_t *a)
+{
+	FAIL;
+}
+
+struct tm *gmtime(const time_t *a)
+{
+	FAIL;
+}
+
+ssize_t readv(int a, const struct iovec *b, int c)
+{
+	FAIL;
+}
+
+ssize_t writev(int a, const struct iovec *b, int c)
+{
+	FAIL;
+}
+
+int utimes(const char *a, const struct timeval b[2])
+{
+	FAIL;
+}
+
+int glob(const char *a, int b, int (*c)(const char *, int), glob_t *d)
+{
+	FAIL;
+}
+
+void globfree(glob_t *a)
+{
+	FAIL;
+}
+
+int socketpair(int a, int b, int c, int d[2])
+{
+	FAIL;
+}
+
+int ioctl(int a, ulong b, ...)
+{
+	FAIL;
+}
+
+pid_t getppid(void)
+{
+	FAIL;
+}
+
+int raise(int a)
+{
+	FAIL;
+}
+
+mode_t umask(mode_t a)
+{
+	FAIL;
+}
+
+int getpagesize(void)
+{
+	FAIL;
+}
+
+int sigprocmask(int a, sigset_t *b, sigset_t *c)
+{
+	FAIL;
+}
+
+int sigsuspend(const sigset_t *a)
+{
+	FAIL;
+}
+
+int setpriority(int a, int b, int c)
+{
+	FAIL;
+}
+
+uid_t getuid(void)
+{
+	FAIL;
+}
+
+int setuid(uid_t a)
+{
+	FAIL;
+}
+
+int setgid(gid_t a)
+{
+	FAIL;
+}
+
+int initgroups(const char *a, gid_t b)
+{
+	FAIL;
+}
+
+char *realpath(const char *a, char *b)
+{
+	FAIL;
+}
+
+int lstat(const char *a, struct stat * b)
+{
+	FAIL;
 }

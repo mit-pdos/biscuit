@@ -3947,6 +3947,10 @@ type stat_t struct {
 	_mode	uint
 	_size	uint
 	_rdev	uint
+	_uid	uint
+	_blocks	uint
+	_m_sec	uint
+	_m_nsec	uint
 }
 
 func (st *stat_t) wdev(v uint) {
