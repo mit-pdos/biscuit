@@ -5,9 +5,9 @@ TOP := .
 
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP)
-CFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -fno-stack-protector -fno-builtin
-CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-stack-protector \
-	    -fno-builtin
+CFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -nostdinc -fno-builtin \
+	-mno-red-zone
+CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-builtin -mno-red-zone
 
 # bootloader sources
 ASMS := boot.S
