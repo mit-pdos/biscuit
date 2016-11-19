@@ -777,7 +777,7 @@ func (tb *tcpbuf_t) _sanity() {
 
 // writes rxdata to the circular buffer, allows user to read written data (if
 // next in the sequence) and returns number of bytes written. cannot fail.
-func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
+func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) {
 	tb._sanity()
 	if !_seqbetween(tb.seq, nseq, tb.seq + uint32(tb.cbuf.left())) {
 		panic("bad sequence number")
@@ -804,13 +804,19 @@ func (tb *tcpbuf_t) syswrite(nseq uint32, rxdata [][]uint8) int {
 	if did != dlen {
 		panic("nyet")
 	}
-	if nseq == tb.seq {
-		tb.seq += uint32(did)
-		tb.cbuf._advhead(did)
-		tb.cond.Broadcast()
-		tb.pollers.wakeready(R_READ)
+}
+
+// advances the circular buffer head, allowing the user application to read
+// bytes [tb.seq, upto), and increases tb.seq.
+func (tb *tcpbuf_t) rcvup(upto uint32) {
+	if !_seqbetween(tb.seq, upto, tb.seq + uint32(len(tb.cbuf.buf))) {
+		panic("upto not in window")
 	}
-	return did
+	did := _seqdiff(upto, tb.seq)
+	tb.seq += uint32(did)
+	tb.cbuf._advhead(did)
+	tb.cond.Broadcast()
+	tb.pollers.wakeready(R_READ)
 }
 
 // returns slices referencing the data written by the user (two when the
@@ -1028,6 +1034,78 @@ func (ts *tcpsegs_t) Less(i, j int) bool {
 
 func (ts *tcpsegs_t) Swap(i, j int) {
 	ts.segs[i], ts.segs[j] = ts.segs[j], ts.segs[i]
+}
+
+type tcprsegs_t struct {
+	segs	[]tseg_t
+	winend	uint32
+}
+
+// segment [seq, seq+l) has been received. if seq != rcvnxt, the segment
+// has apparently been received out of order; thus record the segment seq and
+// len in order to coalesce this segment with the one containing rcv.nxt, once
+// it is received.
+func (tr *tcprsegs_t) recvd(rcvnxt, winend, seq uint32, l int) uint32 {
+	if l == 0 {
+		panic("0 len rseg")
+	}
+	tr.winend = winend
+	// expected common case: no recorded received segments because segments
+	// have been received in order
+	if len(tr.segs) == 0 && rcvnxt == seq {
+		return rcvnxt + uint32(l)
+	}
+
+	tr.segs = append(tr.segs, tseg_t{seq: seq, len: uint32(l)})
+	sort.Sort(tr)
+	// segs are now in order by distance from window end to b.seq; coalesce
+	// adjacent segments
+	for i := 0; i < len(tr.segs) - 1; i++ {
+		s := tr.segs[i]
+		b := tr.segs[i+1]
+		d1 := _seqdiff(tr.winend, s.seq + s.len)
+		d2 := _seqdiff(tr.winend, b.seq)
+		if d1 > d2 {
+			// non-intersecting
+			continue
+		}
+		send := s.seq + s.len
+		bend := b.seq + b.len
+		sd := _seqdiff(tr.winend, send)
+		bd := _seqdiff(tr.winend, bend)
+		var newend uint32
+		if sd > bd {
+			newend = bend
+		} else {
+			newend = send
+		}
+		s.len = newend - s.seq
+		tr.segs[i] = s
+		copy(tr.segs[i+1:], tr.segs[i+2:])
+		tr.segs = tr.segs[:len(tr.segs) - 1]
+		i--
+	}
+	if rcvnxt == tr.segs[0].seq {
+		ret := rcvnxt + tr.segs[0].len
+		copy(tr.segs, tr.segs[1:])
+		tr.segs = tr.segs[:len(tr.segs) - 1]
+		return ret
+	}
+	return rcvnxt
+}
+
+func (tr *tcprsegs_t) Len() int {
+	return len(tr.segs)
+}
+
+func (tr *tcprsegs_t) Less(i, j int) bool {
+	diff1 := _seqdiff(tr.winend, tr.segs[i].seq)
+	diff2 := _seqdiff(tr.winend, tr.segs[j].seq)
+	return diff1 > diff2
+}
+
+func (tr *tcprsegs_t) Swap(i, j int) {
+	tr.segs[i], tr.segs[j] = tr.segs[j], tr.segs[i]
 }
 
 type tcphdr_t struct {
@@ -1421,6 +1499,7 @@ type tcptcb_t struct {
 		nxt	uint32
 		win	uint16
 		mss	uint16
+		trsegs	tcprsegs_t
 	}
 	snd struct {
 		nxt	uint32
@@ -1670,6 +1749,9 @@ func (tc *tcptcb_t) finchk(ip4 *ip4hdr_t, tcp *tcphdr_t, os, ns tcpstate_t) {
 		tc.rcv.nxt++
 		tc._nstate(os, ns)
 		tc.rxdone = true
+		if len(tc.rcv.trsegs.segs) != 0 {
+			panic("have uncoalesced segs")
+		}
 		tc.rxbuf.cond.Broadcast()
 		tc.pollers.wakeready(R_READ)
 		tc.sched_ack()
@@ -2179,18 +2261,10 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 		}
 	}
 	tc.rwinupdate(rseq, rack, rwin)
-	if rseq == tc.rcv.nxt {
-		tc.rcv.nxt += uint32(dlen)
-		// XXX add out of order sequences. keep list of seq,lens,
-		// remove elements that are contained in this advancing seg,
-		// add differences of endpoints with the seg that this one
-		// intersects with.
-	} else {
-		// XXX save out of order sequence and length.
-		panic("out of order segment")
-	}
 	if dlen != 0 {
 		tc.rxbuf.syswrite(rseq, rest)
+		tc.rcv.nxt = tc.rcv.trsegs.recvd(tc.rcv.nxt, winend, rseq, dlen)
+		tc.rxbuf.rcvup(tc.rcv.nxt)
 	}
 	// we received data, update our window; avoid silly window syndrome.
 	// delay acks when the window shrinks to less than an MSS since we will
@@ -3383,4 +3457,51 @@ func net_test() {
 	ts.reset(0, 40)
 	ts.ackupto(15)
 	//fmt.Printf("%v\n", ts)
+
+	tr := tcprsegs_t{}
+	winend := uint32(1000)
+	if tr.recvd(0, winend, 0, 10) != 10 {
+		panic("no")
+	}
+	if len(tr.segs) != 0 {
+		panic("no")
+	}
+	if tr.recvd(10, winend, 10, 10) != 20 {
+		panic("no")
+	}
+	if len(tr.segs) != 0 {
+		panic("no")
+	}
+	if tr.recvd(20, winend, 30, 10) != 20 {
+		panic("no")
+	}
+	if tr.recvd(20, winend, 50, 10) != 20 {
+		panic("no")
+	}
+	if len(tr.segs) != 2 {
+		panic("no")
+	}
+	if tr.recvd(20, winend, 40, 10) != 20 {
+		panic("no")
+	}
+	if tr.recvd(20, winend, 20, 10) != 60 {
+		panic("no")
+	}
+	if len(tr.segs) != 0 {
+		panic("no")
+	}
+	winend = 10
+	nxt := uint32(0xffffff00)
+	if tr.recvd(nxt, winend, 0, 10) != nxt {
+		panic("no")
+	}
+	if len(tr.segs) != 1 {
+		panic("no")
+	}
+	if tr.recvd(nxt, winend, nxt, 0x100) != 10 {
+		panic("no")
+	}
+	if len(tr.segs) != 0 {
+		panic("no")
+	}
 }
