@@ -2227,22 +2227,12 @@ func (tc *tcptcb_t) seqok(seq uint32, seglen int) bool {
 // returns true when low <= mid <= hi on uints (i.e. even when sequences
 // numbers wrap to 0)
 func _seqbetween(low, mid, hi uint32) bool {
-	if hi >= low {
-		return mid >= low && mid <= hi
-	} else {
-		// wrapped around
-		return mid >= low || mid <= hi
-	}
+	return _seqdiff(hi, mid) <= _seqdiff(hi, low)
 }
 
 // returns difference of big - small with unsigned wrapping
 func _seqdiff(big, small uint32) int {
-	if big >= small {
-		return int(uint(big - small))
-	} else {
-		diff := ^uint32(0) - small + 1
-		return int(uint(diff + big))
-	}
+	return int(uint(big - small))
 }
 
 // update remote receive window
