@@ -53,8 +53,12 @@ func (pp *pathparts_t) next() (string, bool) {
 func sdirname(path string) (string, string) {
 	fn := path
 	l := len(fn)
-	if l > 0 && fn[l-1] == '/' {
-		fn = fn[0:l-1]
+	// strip all trailing slashes
+	for i := l - 1; i >= 0; i-- {
+		if fn[i] != '/' {
+			break
+		}
+		fn = fn[:i]
 		l--
 	}
 	s := ""
