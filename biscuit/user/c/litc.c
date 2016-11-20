@@ -1960,7 +1960,7 @@ memmove(void *dst, const void *src, size_t n)
 	}
 	while (n--)
 		*d++ = *s++;
-	return d;
+	return dst;
 }
 
 void *
