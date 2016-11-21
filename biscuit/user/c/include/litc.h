@@ -89,7 +89,7 @@ extern "C" {
 /*
  * system calls
  */
-#define 	FD_WORDS	8
+#define 	FD_WORDS	16
 // bits
 #define 	FD_SETSIZE	(FD_WORDS*8*8)
 
