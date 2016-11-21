@@ -4112,8 +4112,9 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 	// the bss segment's virtual address may start on the same page as the
 	// previous segment. if that is the case, we may not be able to avoid
 	// copying.
-	// XXX why does this happen? fix elf segment alignment?
+	// XXX this doesn't seem to happen anymore; why was it ever the case?
 	if _, ok := proc.vmregion.lookup(uintptr(hdr.vaddr)); ok {
+		panic("htf")
 		va := hdr.vaddr
 		pg, ok := proc.userdmap8_inner(va, true)
 		if !ok {
@@ -4146,20 +4147,27 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 	if hdr.filesz == hdr.memsz {
 		return
 	}
-	// if there is bss, fault in the partial page since we need to zero some of it
+	// the bss must be zero, but the first bss address may lie on a page
+	// which is mapped into the page cache. thus we must create a
+	// per-process copy and zero the bss bytes in the copy.
 	bssva := hdr.vaddr + hdr.filesz
-	bpg, ok := proc.userdmap8_inner(bssva, true)
-	if !ok {
-		panic("must be mapped")
-	}
 	bsslen := hdr.memsz - hdr.filesz
-	if bsslen < len(bpg) {
-		bpg = bpg[0:bsslen]
+	if bssva & PGOFFSET != 0 {
+		bpg, ok := proc.userdmap8_inner(bssva, true)
+		if !ok {
+			panic("must be mapped")
+		}
+		if bsslen < len(bpg) {
+			bpg = bpg[:bsslen]
+		}
+		copy(bpg, zerobpg[:])
+		bssva += len(bpg)
+		bsslen = roundup(bsslen - len(bpg), PGSIZE)
 	}
-	copy(bpg, zerobpg[:])
-	bssva += len(bpg)
-	bsslen = roundup(bsslen - len(bpg), PGSIZE)
-	proc.vmadd_anon(bssva, bsslen, perms)
+	// bss may have been completely contained in the copied page.
+	if bsslen > 0 {
+		proc.vmadd_anon(bssva, roundup(bsslen, PGSIZE), perms)
+	}
 }
 
 // returns user address of read-only TLS, thread 0's TLS image, and TLS size.

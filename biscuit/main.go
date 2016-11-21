@@ -810,6 +810,9 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 // perms == 0 means that no mapping can go here (like for guard pages).
 func (p *proc_t) _mkvmi(mt mtype_t, start, len, perms, foff int,
     fops fdops_i) *vminfo_t {
+	if len == 0 {
+		panic("bad vmi len")
+	}
 	if (start | len) & PGOFFSET != 0 {
 		//fmt.Printf("%x %x\n", start, len)
 		panic("start and len must be aligned")
