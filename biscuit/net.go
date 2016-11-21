@@ -2991,7 +2991,7 @@ func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 		tf.tcb.bound = true
 	}
 	bl := 32
-	if backlog > 0 && backlog < 128 {
+	if backlog > 0 && backlog < 512 {
 		bl = backlog
 	}
 
@@ -3207,8 +3207,30 @@ func (tl *tcplfops_t) connect(proc *proc_t, saddr []uint8) err_t {
 	return -EADDRINUSE
 }
 
-func (tl *tcplfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
-	return nil, -EOPNOTSUPP
+func (tl *tcplfops_t) listen(proc *proc_t, _backlog int) (fdops_i, err_t) {
+	backlog := uint(_backlog)
+	if backlog > 512 {
+		return nil, -EINVAL
+	}
+
+	tl.tcl.l.Lock()
+	defer tl.tcl.l.Unlock()
+
+	// resize backlog so long as the unaccepted ready connections will
+	// still fit
+	rc :=  &tl.tcl.rcons
+	nready := rc.inum - rc.cnum
+	if nready > uint(backlog) {
+		return nil, -EBUSY
+	}
+	nsl := make([]*tcptcb_t, backlog)
+	olen := uint(len(rc.sl))
+	for i := uint(0); rc.cnum + i < rc.inum; i++ {
+		oi := (rc.cnum + i) % olen
+		nsl[i] = rc.sl[oi]
+	}
+	rc.sl = nsl
+	return tl, 0
 }
 
 func (tl *tcplfops_t) sendto(proc *proc_t, src *userbuf_t,
