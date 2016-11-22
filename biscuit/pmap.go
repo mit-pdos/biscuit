@@ -80,6 +80,8 @@ type mtype_t uint
 const (
 	VANON	mtype_t = 1 << iota
 	VFILE	mtype_t = 1 << iota
+	// shared anonymous
+	VSANON	mtype_t = 1 << iota
 )
 
 type mfile_t struct {
@@ -572,10 +574,13 @@ func (m *vmregion_t) dump() {
 	m.iter(func(vmi *vminfo_t) {
 		end := (vmi.pgn + uintptr(vmi.pglen)) << PGSHIFT
 		var perms string
-		if vmi.mtype == VANON {
+		switch vmi.mtype {
+		case VANON:
 			perms = "A-"
-		} else {
+		case VFILE:
 			perms = "F-"
+		case VSANON:
+			perms = "SA-"
 		}
 		if vmi.perms & uint(PTE_U) != 0 {
 			perms += "R"
@@ -992,8 +997,9 @@ func pmap_lookup(pml4 *[512]int, v int) *int {
 }
 
 // forks the ptes only for the virtual address range specified
-func ptefork(cpmap, ppmap *[512]int, start, end int) bool {
+func ptefork(cpmap, ppmap *[512]int, start, end int, shared bool) bool {
 	doflush := false
+	mkcow := !shared
 	i := start
 	for i < end {
 		pptb, slot := pmap_pgtbl(ppmap, i, false, 0)
@@ -1018,7 +1024,7 @@ func ptefork(cpmap, ppmap *[512]int, start, end int) bool {
 			}
 			phys := pte & PTE_ADDR
 			flags := pte & PTE_FLAGS
-			if flags & PTE_W != 0 {
+			if flags & PTE_W != 0 && mkcow {
 				flags &^= (PTE_W | PTE_WASCOW)
 				flags |= PTE_COW
 				doflush = true

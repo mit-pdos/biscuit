@@ -67,8 +67,8 @@ extern "C" {
 
 #define		MAP_FAILED	((void *) -1)
 
-#define		MAP_PRIVATE	0x02
 #define		MAP_SHARED	0x01
+#define		MAP_PRIVATE	0x02
 #define		MAP_ANON	0x20
 #define		MAP_ANONYMOUS	MAP_ANON
 
@@ -368,14 +368,14 @@ pid_t setsid(void);
 #define		SO_REUSEADDR	6
 #define		SO_KEEPALIVE	7
 #define		SO_LINGER	8
+// not supported on linux...
+#define		SO_SNDLOWAT	9
 struct linger {
 	int l_onoff;
 	int l_linger;
 };
 // TCP options
 #define		TCP_NODELAY	20
-// not supported on linux...
-#define		SO_SNDLOWAT	8
 int sigaction(int, const struct sigaction *, struct sigaction *);
 #define		SIGHUP		1
 #define		SIGINT		2

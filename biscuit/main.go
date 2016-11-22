@@ -775,7 +775,8 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 		start := int(vmi.pgn << PGSHIFT)
 		end := start + int(vmi.pglen << PGSHIFT)
 		//fmt.Printf("fork reg: %x %x\n", start, end)
-		if ptefork(child.pmap, parent.pmap, start, end) {
+		shared := vmi.mtype == VSANON
+		if ptefork(child.pmap, parent.pmap, start, end, shared) {
 			doflush = true
 		}
 	})
@@ -845,6 +846,11 @@ func (p *proc_t) vmadd_anon(start, len, perms int) {
 
 func (p *proc_t) vmadd_file(start, len, perms int, fops fdops_i, foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops)
+	p.vmregion.insert(vmi)
+}
+
+func (p *proc_t) vmadd_shareanon(start, len, perms int) {
+	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil)
 	p.vmregion.insert(vmi)
 }
 

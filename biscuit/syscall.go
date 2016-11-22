@@ -116,7 +116,8 @@ const(
     SEEK_CUR      = 0x2
     SEEK_END      = 0x4
   SYS_MMAP     = 9
-    MAP_PRIVATE   = 0x2
+    MAP_SHARED    = uint(0x1)
+    MAP_PRIVATE   = uint(0x2)
     MAP_FIXED     = 0x10
     MAP_ANON      = 0x20
     MAP_FAILED    = -1
@@ -522,7 +523,12 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 	prot := uint(protflags) >> 32
 	flags := uint(uint32(protflags))
 
-	if flags != MAP_PRIVATE | MAP_ANON {
+	mask := MAP_SHARED | MAP_PRIVATE
+	if flags & mask == 0 || flags & mask == mask {
+		return int(-EINVAL)
+	}
+	shared := flags & MAP_SHARED != 0
+	if flags & MAP_ANON == 0 || fd != -1 {
 		panic("no imp")
 	}
 	if flags & MAP_FIXED != 0 && addrn < USERMIN {
@@ -544,7 +550,12 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		return int(-ENOMEM)
 	}
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
-	proc.vmadd_anon(addr, lenn, perms)
+	if shared {
+		// no lazy loading for shared anon pages
+		proc.vmadd_shareanon(addr, lenn, perms)
+	} else {
+		proc.vmadd_anon(addr, lenn, perms)
+	}
 	proc.mmapi = addr + lenn
 	for i := 0; i < lenn; i += PGSIZE {
 		_, p_pg := refpg_new()
@@ -2837,6 +2848,9 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 		// runtime.trap(), but just in case
 		panic("kernel page fault")
 	}
+	if vmi.mtype == VSANON {
+		panic("shared anon pages should always be mapped")
+	}
 	iswrite := ecode & uintptr(PTE_W) != 0
 
 	// XXX could move this pmap walk to only the COW case where a pte is
@@ -2883,6 +2897,8 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 				pgsrc = zeropg
 			case VFILE:
 				pgsrc, _ = vmi.filepage(uintptr(faultaddr))
+			default:
+				panic("wut")
 			}
 		}
 		*pg = *pgsrc
@@ -2898,6 +2914,8 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 		case VFILE:
 			_, p := vmi.filepage(uintptr(faultaddr))
 			p_pg = int(p)
+		default:
+			panic("wut")
 		}
 		if vmi.perms & uint(PTE_W) != 0 {
 			perms |= PTE_COW

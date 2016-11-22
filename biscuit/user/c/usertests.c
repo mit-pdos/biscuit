@@ -2973,6 +2973,64 @@ void lazyfaults(void)
 	printf("lazy fault ok\n");
 }
 
+void mapshared(void)
+{
+	printf("mmap shared test\n");
+        size_t sz = 4096;
+        pid_t *p = mmap(NULL, sz, PROT_READ | PROT_WRITE,
+            MAP_ANON | MAP_SHARED, -1, 0);
+        if (p == MAP_FAILED)
+                err(-1, "mmap");
+        int i;
+        for (i = 0; i < sz/sizeof(pid_t); i++) {
+                pid_t c = fork();
+                if (c == -1)
+                        err(-1, "fork");
+                if (c == 0) {
+                        p[i] = getpid();
+                        exit(0);
+                } else {
+                        int status;
+                        pid_t got = wait(&status);
+                        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                                errx(-1, "child failed");
+                        if (got != c || p[i] != got)
+                                errx(-1, "wrong pid");
+                }
+        }
+	memset(p, 0, sz);
+	int pp[2];
+	if (pipe(pp) == -1)
+		err(-1, "pipe");
+	pid_t c = fork();
+	if (c == -1)
+		err(-1, "fork");
+	if (c == 0) {
+		if (close(pp[0]) == -1)
+			err(-1, "close");
+		for (i = 0; i < sz/sizeof(pid_t); i++) {
+			p[i] = (pid_t)i;
+			c = fork();
+			if (c == -1)
+				err(-1, "fork");
+			if (c != 0)
+				exit(0);
+		}
+		if (write(pp[1], "A", 1) != 1)
+			errx(-1, "write");
+		exit(0);
+	}
+	if (close(pp[1]) == -1)
+		err(-1, "close");
+	char buf;
+	if (read(pp[0], &buf, 1) != 1)
+		errx(-1, "read");
+	for (i = 0; i < sz/sizeof(pid_t); i++)
+		if (p[i] != i)
+			errx(-1, "page mismatch");
+	printf("mmap shared ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3045,6 +3103,7 @@ main(int argc, char *argv[])
   futextest();
 
   lazyfaults();
+  mapshared();
 
   exectest();
 
