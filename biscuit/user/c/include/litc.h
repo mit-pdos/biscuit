@@ -340,8 +340,8 @@ int open(const char *, int, ...);
 #define		O_CLOEXEC	0x80000
 
 int pause(void);
-int pipe(int *);
-int pipe2(int *, int);
+int pipe(int[2]);
+int pipe2(int[2], int);
 int poll(struct pollfd *, nfds_t, int);
 ssize_t pread(int, void *, size_t, off_t);
 ssize_t pwrite(int, const void *, size_t, off_t);

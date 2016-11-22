@@ -3022,6 +3022,8 @@ void mapshared(void)
 	}
 	if (close(pp[1]) == -1)
 		err(-1, "close");
+	if (wait(NULL) != c)
+		errx(-1, "wait");
 	char buf;
 	if (read(pp[0], &buf, 1) != 1)
 		errx(-1, "read");
@@ -3029,6 +3031,55 @@ void mapshared(void)
 		if (p[i] != i)
 			errx(-1, "page mismatch");
 	printf("mmap shared ok\n");
+}
+
+void spair(void)
+{
+	printf("socketpair test\n");
+
+	int s[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, s) == -1)
+		err(-1, "socketpair");
+
+	const char *fn = "/bin/usertests";
+	char buf[512];
+	ssize_t r;
+	pid_t c = fork();
+	if (c == -1)
+		err(-1, "fork");
+	else if (c == 0) {
+		close(s[0]);
+		int sfd = open(fn, O_RDONLY);
+		if (sfd == -1)
+			err(-1, "open");
+		while ((r = read(sfd, buf, sizeof(buf))) > 0) {
+			if (write(s[1], buf, r) != r)
+				err(-1, "write");
+		}
+		if (r == -1)
+			err(-1, "read");
+		exit(0);
+	}
+	close(s[1]);
+	int rfd = open(fn, O_RDONLY);
+	if (rfd == -1)
+		err(-1, "open");
+	char buf2[sizeof(buf)];
+	while ((r = read(s[0], buf, sizeof(buf))) > 0) {
+		if (read(rfd, buf2, sizeof(buf2)) != r)
+			err(-1, "read");
+		if (memcmp(buf, buf2, r) != 0)
+			errx(-1, "data mismatch");
+	}
+	if (r == -1)
+		err(-1, "read");
+	int status;
+	if (wait(&status) != c)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+
+	printf("socketpair ok\n");
 }
 
 int
@@ -3104,6 +3155,7 @@ main(int argc, char *argv[])
 
   lazyfaults();
   mapshared();
+  spair();
 
   exectest();
 

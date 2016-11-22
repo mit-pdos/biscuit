@@ -146,6 +146,7 @@ const(
   SYS_ACCEPT   = 43
   SYS_SENDTO   = 44
   SYS_RECVFROM = 45
+  SYS_SOCKPAIR = 46
   SYS_SHUTDOWN = 48
     SHUT_WR        = 1 << 0
     SHUT_RD        = 1 << 1
@@ -298,6 +299,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_sendto(p, a1, a2, a3, a4, a5)
 	case SYS_RECVFROM:
 		ret = sys_recvfrom(p, a1, a2, a3, a4, a5)
+	case SYS_SOCKPAIR:
+		ret = sys_socketpair(p, a1, a2, a3, a4)
 	case SYS_SHUTDOWN:
 		ret = sys_shutdown(p, a1, a2)
 	case SYS_BIND:
@@ -1657,6 +1660,65 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 	return ret
 }
 
+func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
+	var opts fdopt_t
+	if typ & SOCK_NONBLOCK != 0 {
+		opts |= O_NONBLOCK
+	}
+	var clop int
+	if typ & SOCK_CLOEXEC != 0 {
+		clop = FD_CLOEXEC
+	}
+
+	mask := SOCK_STREAM | SOCK_DGRAM
+	if typ & mask == 0 || typ & mask == mask {
+		return int(-EINVAL)
+	}
+
+	var sfops1, sfops2 fdops_i
+	var err err_t
+	switch {
+	case domain == AF_UNIX && typ & SOCK_STREAM != 0:
+		sfops1, sfops2, err = _suspair(opts)
+	default:
+		panic("no imp")
+	}
+
+	if err != 0 {
+		return int(err)
+	}
+
+	fd1 := &fd_t{}
+	fd1.fops = sfops1
+	fd2 := &fd_t{}
+	fd2.fops = sfops2
+	fdn1 := proc.fd_insert(fd1, FD_READ | FD_WRITE | clop)
+	fdn2 := proc.fd_insert(fd2, FD_READ | FD_WRITE | clop)
+	if !proc.userwriten(sockn, 4, fdn1) ||
+	    !proc.userwriten(sockn + 4, 4, fdn2) {
+		return int(-EFAULT)
+	}
+	return 0
+}
+
+func _suspair(opts fdopt_t) (fdops_i, fdops_i, err_t) {
+	pipe1 := &pipe_t{}
+	pipe2 := &pipe_t{}
+	pipe1.pipe_start()
+	pipe2.pipe_start()
+
+	p1r := &pipefops_t{pipe: pipe1, options: opts}
+	p1w := &pipefops_t{pipe: pipe2, writer: true, options: opts}
+
+	p2r := &pipefops_t{pipe: pipe2, options: opts}
+	p2w := &pipefops_t{pipe: pipe1, writer: true, options: opts}
+
+	sfops1 := &susfops_t{pipein: p1r, pipeout: p1w, options: opts}
+	sfops2 := &susfops_t{pipein: p2r, pipeout: p2w, options: opts}
+	sfops1.conn, sfops2.conn = true, true
+	return sfops1, sfops2, 0
+}
+
 func sys_shutdown(proc *proc_t, fdn, how int) int {
 	fd, ok := proc.fd_get(fdn)
 	if !ok {
@@ -2085,7 +2147,6 @@ func sun_start(sid sunid_t) *sund_t {
 }
 
 type susfops_t struct {
-	//susd	*susd_t
 	pipein	*pipefops_t
 	pipeout	*pipefops_t
 	conn	bool

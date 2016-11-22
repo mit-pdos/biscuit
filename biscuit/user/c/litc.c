@@ -21,6 +21,7 @@
 #define SYS_ACCEPT       43
 #define SYS_SENDTO       44
 #define SYS_RECVFROM     45
+#define SYS_SOCKETPAIR   46
 #define SYS_SHUTDOWN     48
 #define SYS_BIND         49
 #define SYS_LISTEN       50
@@ -624,6 +625,15 @@ socket(int dom, int type, int proto)
 {
 	int ret = syscall(SA(dom), SA(type), SA(proto), 0, 0, SYS_SOCKET);
 	ERRNO_NEG(ret);
+	return ret;
+}
+
+int
+socketpair(int dom, int type, int proto, int p[2])
+{
+	int ret = syscall(SA(dom), SA(type), SA(proto), SA(p), 0,
+	    SYS_SOCKETPAIR);
+	ERRNO_NZ(ret);
 	return ret;
 }
 

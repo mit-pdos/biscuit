@@ -97,7 +97,7 @@ static int con(uint32_t dip, uint16_t dport)
 	uint8_t b = dip >> 16;
 	uint8_t c = dip >> 8;
 	uint8_t d = dip;
-	printf("connecting to %d.%d.%d.%d:%d\n", a, b, c, d, dport);
+	fprintf(stderr, "connecting to %d.%d.%d.%d:%d\n", a, b, c, d, dport);
 	struct sockaddr_in sin;
 	sin.sin_port = htons(dport);
 	sin.sin_addr.s_addr = htonl(dip);
@@ -171,7 +171,7 @@ int main(int argc, char **argv)
 		s = lstn(lport);
 	else
 		s = con(dip, dport);
-	printf("connected\n");
+	fprintf(stderr ,"connected\n");
 	if (Mss)
 		return mss(s);
 	else
