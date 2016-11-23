@@ -127,6 +127,8 @@ const(
     PROT_EXEC     = 0x4
   SYS_MUNMAP   = 11
   SYS_SIGACT   = 13
+  SYS_READV    = 19
+  SYS_WRITEV   = 20
   SYS_ACCESS   = 21
   SYS_DUP2     = 33
   SYS_PAUSE    = 34
@@ -279,6 +281,10 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
 	case SYS_MUNMAP:
 		ret = sys_munmap(p, a1, a2)
+	case SYS_READV:
+		ret = sys_readv(p, a1, a2, a3)
+	case SYS_WRITEV:
+		ret = sys_writev(p, a1, a2, a3)
 	case SYS_SIGACT:
 		ret = sys_sigaction(p, a1, a2, a3)
 	case SYS_ACCESS:
@@ -410,18 +416,36 @@ func cons_write(src userio_i, off int) (int, err_t) {
 	return len(big), 0
 }
 
+func _fd_read(proc *proc_t, fdn int) (*fd_t, err_t) {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return nil, -EBADF
+	}
+	if fd.perms & FD_READ == 0 {
+		return nil, -EPERM
+	}
+	return fd, 0
+}
+
+func _fd_write(proc *proc_t, fdn int) (*fd_t, err_t) {
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return nil, -EBADF
+	}
+	if fd.perms & FD_WRITE == 0 {
+		return nil, -EPERM
+	}
+	return fd, 0
+}
+
 func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	fd, ok := proc.fd_get(fdn)
-	if !ok {
-		return int(-EBADF)
+	fd, err := _fd_read(proc, fdn)
+	if err != 0 {
+		return int(err)
 	}
-	if fd.perms & FD_READ == 0 {
-		return int(-EPERM)
-	}
-
 	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
 	ret, err := fd.fops.read(userbuf)
@@ -436,14 +460,10 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	fd, ok := proc.fd_get(fdn)
-	if !ok {
-		return int(-EBADF)
+	fd, err := _fd_write(proc, fdn)
+	if err != 0 {
+		return int(err)
 	}
-	if fd.perms & FD_WRITE == 0 {
-		return int(-EPERM)
-	}
-
 	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
 	ret, err := fd.fops.write(userbuf)
@@ -598,6 +618,40 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	proc.vmregion.remove(addrn, upto)
 	for i := range ppgs {
 		refdown(ppgs[i])
+	}
+	return ret
+}
+
+func sys_readv(proc *proc_t, fdn, _iovn, iovcnt int) int {
+	fd, err := _fd_read(proc, fdn)
+	if err != 0 {
+		return int(err)
+	}
+	iovn := uint(_iovn)
+	iov := &useriovec_t{}
+	if err := iov.iov_init(proc, iovn, iovcnt); err != 0 {
+		return int(err)
+	}
+	ret, err := fd.fops.read(iov)
+	if err != 0 {
+		return int(err)
+	}
+	return ret
+}
+
+func sys_writev(proc *proc_t, fdn, _iovn, iovcnt int) int {
+	fd, err := _fd_write(proc, fdn)
+	if err != 0 {
+		return int(err)
+	}
+	iovn := uint(_iovn)
+	iov := &useriovec_t{}
+	if err := iov.iov_init(proc, iovn, iovcnt); err != 0 {
+		return int(err)
+	}
+	ret, err := fd.fops.write(iov)
+	if err != 0 {
+		return int(err)
 	}
 	return ret
 }
@@ -3260,9 +3314,9 @@ func sys_kill(proc *proc_t, pid, sig int) int {
 }
 
 func sys_pread(proc *proc_t, fdn, bufn, lenn, offset int) int {
-	fd, ok := proc.fd_get(fdn)
-	if !ok {
-		return int(-EBADF)
+	fd, err := _fd_read(proc, fdn)
+	if err != 0 {
+		return int(err)
 	}
 	dst := proc.mkuserbuf(bufn, lenn)
 	ret, err := fd.fops.pread(dst, offset)
@@ -3273,9 +3327,9 @@ func sys_pread(proc *proc_t, fdn, bufn, lenn, offset int) int {
 }
 
 func sys_pwrite(proc *proc_t, fdn, bufn, lenn, offset int) int {
-	fd, ok := proc.fd_get(fdn)
-	if !ok {
-		return int(-EBADF)
+	fd, err := _fd_write(proc, fdn)
+	if err != 0 {
+		return int(err)
 	}
 	src := proc.mkuserbuf(bufn, lenn)
 	ret, err := fd.fops.pwrite(src, offset)

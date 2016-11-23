@@ -3073,6 +3073,8 @@ void spair(void)
 	}
 	if (r == -1)
 		err(-1, "read");
+	if (close(rfd) == -1)
+		err(-1, "close");
 	int status;
 	if (wait(&status) != c)
 		err(-1, "wait");
@@ -3080,6 +3082,64 @@ void spair(void)
 		errx(-1, "child failed");
 
 	printf("socketpair ok\n");
+}
+
+void iovtest(void)
+{
+	printf("iov test\n");
+	int ffd = open("/bin/usertests", O_RDONLY);
+	int bfd = open("/bin/usertests", O_RDONLY);
+	int ofd = open("/tmp/dump", O_CREAT | O_TRUNC | O_RDWR);
+	if (ffd == -1 || bfd == -1 || ofd == -1)
+		err(-1, "open");
+	const size_t bsz = 512;
+	char fbuf[bsz];
+	char bbuf[bsz];
+	ssize_t r;
+	while ((r = read(ffd, fbuf, bsz)) == bsz) {
+		struct iovec iovs[4];
+		size_t fourth = 512 / 4;
+		int i;
+		char *end = &bbuf[bsz];
+		for (i = 0; i < 4; i++) {
+			iovs[i].iov_base = end - i*fourth;
+			iovs[i].iov_len = fourth;
+		}
+		if (readv(bfd, iovs, 4) != bsz)
+			err(-1, "readv");
+		char *a = &fbuf[0];
+		for (i = 0; i < 4; i++) {
+			char *b = end - i*fourth;
+			if (memcmp(a, b, fourth) != 0)
+				errx(-1, "data mismatch");
+			a += fourth;
+		}
+		for (i = 0; i < 4; i++) {
+			iovs[i].iov_base = end - i*fourth;
+			iovs[i].iov_len = fourth;
+		}
+		if (writev(ofd, iovs, 4) != bsz)
+			err(-1, "writev");
+	}
+	if (lseek(ffd, 0, SEEK_SET) == -1)
+		err(-1, "lseek");
+	if (lseek(ofd, 0, SEEK_SET) == -1)
+		err(-1, "lseek");
+	while ((r = read(ffd, fbuf, bsz)) == bsz) {
+		if (read(ofd, bbuf, bsz) != bsz)
+			err(-1, "read");
+		if (memcmp(fbuf, bbuf, bsz) != 0)
+			errx(-1, "data mismatch");
+	}
+	if (r == -1)
+		err(-1, "read");
+	if (close(ffd) == -1)
+		err(-1, "close");
+	if (close(bfd) == -1)
+		err(-1, "close");
+	if (close(ofd) == -1)
+		err(-1, "close");
+	printf("iov ok\n");
 }
 
 int
@@ -3156,6 +3216,7 @@ main(int argc, char *argv[])
   lazyfaults();
   mapshared();
   spair();
+  iovtest();
 
   exectest();
 

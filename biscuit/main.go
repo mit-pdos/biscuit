@@ -1207,6 +1207,8 @@ func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	return bpg[voff:], true
 }
 
+// _userdmap8 and userdmap8r functions must only be used if concurrent
+// modifications to the proc_t's address space is impossible.
 func (p *proc_t) _userdmap8(va int, k2u bool) ([]uint8, bool) {
 	p.Lock_pmap()
 	ret, ok := p.userdmap8_inner(va, k2u)
@@ -1218,10 +1220,6 @@ func (p *proc_t) userdmap8r(va int) ([]uint8, bool) {
 	return p._userdmap8(va, false)
 }
 
-func (p *proc_t) userdmap8w(va int) ([]uint8, bool) {
-	return p._userdmap8(va, true)
-}
-
 func (p *proc_t) usermapped(va, n int) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
@@ -1231,11 +1229,17 @@ func (p *proc_t) usermapped(va, n int) bool {
 }
 
 func (p *proc_t) userreadn(va, n int) (int, bool) {
+	p.Lock_pmap()
+	a, b := p.userreadn_inner(va, n)
+	p.Unlock_pmap()
+	return a, b
+}
+
+func (p *proc_t) userreadn_inner(va, n int) (int, bool) {
+	p.lockassert_pmap()
 	if n > 8 {
 		panic("large n")
 	}
-	p.Lock_pmap()
-	defer p.Unlock_pmap()
 	var ret int
 	var src []uint8
 	var ok bool
@@ -1573,6 +1577,90 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, err_t) {
 	}
 	ub.proc.Unlock_pmap()
 	return ret, 0
+}
+
+type _iove_t struct {
+	uva	uint
+	sz	int
+}
+
+type useriovec_t struct {
+	iovs	[]_iove_t
+	tsz	int
+	proc	*proc_t
+}
+
+func (iov *useriovec_t) iov_init(proc *proc_t, iovarn uint, niovs int) err_t {
+	if niovs > 10 {
+		fmt.Printf("many iovecs\n")
+		return -EINVAL
+	}
+	iov.tsz = 0
+	iov.iovs = make([]_iove_t, niovs)
+	iov.proc = proc
+
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
+	for i := range iov.iovs {
+		elmsz := uint(16)
+		va := iovarn + uint(i)*elmsz
+		dstva, ok1 := proc.userreadn_inner(int(va), 8)
+		sz, ok2    := proc.userreadn_inner(int(va) + 8, 8)
+		if !ok1 || !ok2 {
+			return -EFAULT
+		}
+		iov.iovs[i].uva = uint(dstva)
+		iov.iovs[i].sz = sz
+		iov.tsz += sz
+	}
+	return 0
+}
+
+func (iov *useriovec_t) remain() int {
+	ret := 0
+	for i := range iov.iovs {
+		ret += iov.iovs[i].sz
+	}
+	return ret
+}
+
+func (iov *useriovec_t) totalsz() int {
+	return iov.tsz
+}
+
+func (iov *useriovec_t) _tx(buf []uint8, touser bool) (int, err_t) {
+	ub := &userbuf_t{}
+	did := 0
+	for len(buf) > 0 && len(iov.iovs) > 0 {
+		ciov := &iov.iovs[0]
+		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)
+		var c int
+		var err err_t
+		if touser {
+			c, err = ub.uiowrite(buf)
+		} else {
+			c, err = ub.uioread(buf)
+		}
+		ciov.uva += uint(c)
+		ciov.sz -= c
+		if ciov.sz == 0 {
+			iov.iovs = iov.iovs[1:]
+		}
+		buf = buf[c:]
+		did += c
+		if err != 0 {
+			return did, err
+		}
+	}
+	return did, 0
+}
+
+func (iov *useriovec_t) uioread(dst []uint8) (int, err_t) {
+	return iov._tx(dst, false)
+}
+
+func (iov *useriovec_t) uiowrite(src []uint8) (int, err_t) {
+	return iov._tx(src, true)
 }
 
 // a circular buffer that is read/written by userspace. not thread-safe -- it

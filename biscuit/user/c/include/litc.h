@@ -102,6 +102,11 @@ typedef struct {
 #define 	FD_CLR(n, ft)	(ft)->mask[n/64] &= ~(1ull << (n%64))
 #define 	FD_ISSET(n, ft)	(((ft)->mask[n/64] & (1ull << (n%64))) != 0)
 
+struct iovec {
+	void *iov_base;
+	size_t iov_len;
+};
+
 struct pollfd {
 	int	fd;
 #define		POLLRDNORM	0x1
@@ -346,6 +351,7 @@ int poll(struct pollfd *, nfds_t, int);
 ssize_t pread(int, void *, size_t, off_t);
 ssize_t pwrite(int, const void *, size_t, off_t);
 ssize_t read(int, void*, size_t);
+ssize_t readv(int, const struct iovec *, int);
 int reboot(void);
 ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
@@ -471,6 +477,7 @@ pid_t wait4(int, int *, int, struct rusage *);
 #define		WEXITSTATUS(x)		(x & 0xff)
 #define		WTERMSIG(x)		((int)((uint)x >> 27) & 0x1f)
 ssize_t write(int, const void*, size_t);
+ssize_t writev(int, const struct iovec *, int);
 
 /*
  * thread stuff
@@ -872,11 +879,6 @@ struct itimerval {
 
 int setitimer(int, struct itimerval *, struct itimerval *);
 
-struct iovec {
-	void *iov_base;
-	size_t iov_len;
-};
-
 struct msghdr {
 	void		*msg_name;
 	socklen_t	msg_namelen;
@@ -908,8 +910,6 @@ ssize_t sendmsg(int, struct msghdr *, int);
 
 struct tm *localtime(const time_t *);
 struct tm *gmtime(const time_t *);
-ssize_t readv(int, const struct iovec *, int);
-ssize_t writev(int, const struct iovec *, int);
 int utimes(const char *, const struct timeval[2]);
 
 typedef struct {

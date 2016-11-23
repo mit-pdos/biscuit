@@ -12,6 +12,8 @@
 #define SYS_MMAP         9
 #define SYS_MUNMAP       11
 #define SYS_SIGACTION    13
+#define SYS_READV        19
+#define SYS_WRITEV       20
 #define SYS_ACCESS       21
 #define SYS_DUP2         33
 #define SYS_PAUSE        34
@@ -602,6 +604,14 @@ sigaction(int sig, const struct sigaction *act, struct sigaction *oact)
 	//return ret;
 }
 
+ssize_t
+readv(int fd, const struct iovec *iovs, int niovs)
+{
+	ssize_t ret = syscall(SA(fd), SA(iovs), SA(niovs), 0, 0, SYS_READV);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
 void
 (*signal(int sig, void (*f)(int)))(int)
 {
@@ -721,6 +731,14 @@ long
 write(int fd, const void *buf, size_t c)
 {
 	int ret = syscall(fd, SA(buf), SA(c), 0, 0, SYS_WRITE);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+ssize_t
+writev(int fd, const struct iovec *iovs, int niovs)
+{
+	ssize_t ret = syscall(SA(fd), SA(iovs), SA(niovs), 0, 0, SYS_WRITEV);
 	ERRNO_NEG(ret);
 	return ret;
 }

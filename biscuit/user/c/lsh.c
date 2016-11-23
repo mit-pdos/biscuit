@@ -30,7 +30,7 @@ void mkargs(char *line, char *args[], size_t n)
 int builtins(char *args[], size_t n)
 {
 	char *cmd = args[0];
-	if (strncmp(cmd, "cd", 2) == 0) {
+	if (strncmp(cmd, "cd", 3) == 0) {
 		int ret = chdir(args[1]);
 		if (ret)
 			printf("chdir to %s failed\n", args[1]);
