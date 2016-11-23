@@ -162,29 +162,29 @@ type fdops_i interface {
 	lseek(int, int) (int, err_t)
 	mmapi(int, int) ([]mmapinfo_t, err_t)
 	pathi() *imemnode_t
-	read(*userbuf_t) (int, err_t)
+	read(userio_i) (int, err_t)
 	// reopen() is called with proc_t.fdl is held
 	reopen() err_t
-	write(*userbuf_t) (int, err_t)
+	write(userio_i) (int, err_t)
 	fullpath() (string, err_t)
 	truncate(uint) err_t
 
-	pread(*userbuf_t, int) (int, err_t)
-	pwrite(*userbuf_t, int) (int, err_t)
+	pread(userio_i, int) (int, err_t)
+	pwrite(userio_i, int) (int, err_t)
 
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
 	// space, and error
-	accept(*proc_t, *userbuf_t) (fdops_i, int, err_t)
+	accept(*proc_t, userio_i) (fdops_i, int, err_t)
 	bind(*proc_t, []uint8) err_t
 	connect(*proc_t, []uint8) err_t
 	// listen changes the underlying socket type; thus is returns the new
 	// fops.
 	listen(*proc_t, int) (fdops_i, err_t)
-	sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t)
+	sendto(*proc_t, userio_i, []uint8, int) (int, err_t)
 	// returns number of bytes read, size of from sock address written, and
 	// error
-	recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, err_t)
+	recvfrom(*proc_t, userio_i, userio_i) (int, int, err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
@@ -193,7 +193,7 @@ type fdops_i interface {
 	pollone(pollmsg_t) ready_t
 
 	fcntl(*proc_t, int, int) int
-	getsockopt(*proc_t, int, *userbuf_t, int) (int, err_t)
+	getsockopt(*proc_t, int, userio_i, int) (int, err_t)
 	shutdown(rdone, wdone bool) err_t
 }
 
@@ -1449,6 +1449,59 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 	return ret
 }
 
+// interface for reading/writing from user space memory either via a pointer
+// and length or an array of pointers and lengths (iovec)
+type userio_i interface {
+	// copy src to user memory
+	uiowrite(src []uint8) (int, err_t)
+	// copy user memory to dst
+	uioread(dst []uint8) (int, err_t)
+	// returns the number of unwritten/unread bytes remaining
+	remain() int
+	// the total buffer size
+	totalsz() int
+}
+
+// helper type which kernel code can use as userio_i, but is actually a kernel
+// buffer
+type fakeubuf_t struct {
+	fbuf	[]uint8
+	off	int
+	len	int
+}
+
+func (fb *fakeubuf_t) fake_init(buf []uint8) {
+	fb.fbuf = buf
+	fb.len = len(fb.fbuf)
+}
+
+func (fb *fakeubuf_t) remain() int {
+	return len(fb.fbuf)
+}
+
+func (fb *fakeubuf_t) totalsz() int {
+	return fb.len
+}
+
+func (fb *fakeubuf_t) _tx(buf []uint8, tofbuf bool) (int, err_t) {
+	var c int
+	if tofbuf {
+		c = copy(fb.fbuf, buf)
+	} else {
+		c = copy(buf, fb.fbuf)
+	}
+	fb.fbuf = fb.fbuf[c:]
+	return c, 0
+}
+
+func (fb *fakeubuf_t) uioread(dst []uint8) (int, err_t) {
+	return fb._tx(dst, false)
+}
+
+func (fb *fakeubuf_t) uiowrite(src []uint8) (int, err_t) {
+	return fb._tx(src, true)
+}
+
 // a helper object for read/writing from userspace memory. virtual address
 // lookups and reads/writes to those addresses must be atomic with respect to
 // page faults.
@@ -1458,11 +1511,6 @@ type userbuf_t struct {
 	// 0 <= off <= len
 	off	int
 	proc	*proc_t
-	// "fake" is a hack for easy reading/writing kernel memory only (like
-	// fetching the ELF header from the pagecache during exec)
-	// XXX
-	fake	bool
-	fbuf	[]uint8
 }
 
 func (ub *userbuf_t) ub_init(p *proc_t, uva, len int) {
@@ -1479,41 +1527,24 @@ func (ub *userbuf_t) ub_init(p *proc_t, uva, len int) {
 	ub.proc = p
 }
 
-func (ub *userbuf_t) fake_init(buf []uint8) {
-	ub.fake = true
-	ub.fbuf = buf
-	ub.off = 0
-}
-
 func (ub *userbuf_t) remain() int {
-	if ub.fake {
-		return len(ub.fbuf)
-	}
 	return ub.len - ub.off
 }
 
-func (ub *userbuf_t) read(dst []uint8) (int, err_t) {
+func (ub *userbuf_t) totalsz() int {
+	return ub.len
+}
+func (ub *userbuf_t) uioread(dst []uint8) (int, err_t) {
 	return ub._tx(dst, false)
 }
 
-func (ub *userbuf_t) write(src []uint8) (int, err_t) {
+func (ub *userbuf_t) uiowrite(src []uint8) (int, err_t) {
 	return ub._tx(src, true)
 }
 
 // copies the min of either the provided buffer or ub.len. returns number of
 // bytes copied and error.
 func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, err_t) {
-	if ub.fake {
-		var c int
-		if write {
-			c = copy(ub.fbuf, buf)
-		} else {
-			c = copy(buf, ub.fbuf)
-		}
-		ub.fbuf = ub.fbuf[c:]
-		return c, 0
-	}
-
 	// serialize with page faults
 	ub.proc.Lock_pmap()
 
@@ -1581,7 +1612,7 @@ func (cb *circbuf_t) empty() bool {
 	return cb.head == cb.tail
 }
 
-func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
+func (cb *circbuf_t) copyin(src userio_i) (int, err_t) {
 	if cb.full() {
 		return 0, 0
 	}
@@ -1591,7 +1622,7 @@ func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
 	// wraparound?
 	if ti <= hi {
 		dst := cb.buf[hi:]
-		wrote, err := src.read(dst)
+		wrote, err := src.uioread(dst)
 		if err != 0 {
 			return 0, err
 		}
@@ -1607,7 +1638,7 @@ func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
 		panic("wut?")
 	}
 	dst := cb.buf[hi:ti]
-	wrote, err := src.read(dst)
+	wrote, err := src.uioread(dst)
 	c += wrote
 	if err != 0 {
 		return c, err
@@ -1616,7 +1647,7 @@ func (cb *circbuf_t) copyin(src *userbuf_t) (int, err_t) {
 	return c, 0
 }
 
-func (cb *circbuf_t) copyout(dst *userbuf_t) (int, err_t) {
+func (cb *circbuf_t) copyout(dst userio_i) (int, err_t) {
 	if cb.empty() {
 		return 0, 0
 	}
@@ -1626,7 +1657,7 @@ func (cb *circbuf_t) copyout(dst *userbuf_t) (int, err_t) {
 	// wraparound?
 	if hi <= ti {
 		src := cb.buf[ti:]
-		wrote, err := dst.write(src)
+		wrote, err := dst.uiowrite(src)
 		if err != 0 {
 			return 0, err
 		}
@@ -1642,7 +1673,7 @@ func (cb *circbuf_t) copyout(dst *userbuf_t) (int, err_t) {
 		panic("wut?")
 	}
 	src := cb.buf[ti:hi]
-	wrote, err := dst.write(src)
+	wrote, err := dst.uiowrite(src)
 	if err != 0 {
 		return 0, err
 	}

@@ -385,25 +385,25 @@ func reap_doomed(p *proc_t, tid tid_t) {
 	p.thread_dead(tid, 0, false)
 }
 
-func cons_read(ub *userbuf_t, offset int) (int, err_t) {
-	sz := ub.len
+func cons_read(ub userio_i, offset int) (int, err_t) {
+	sz := ub.remain()
 	kdata := kbd_get(sz)
-	ret, err := ub.write(kdata)
+	ret, err := ub.uiowrite(kdata)
 	if err != 0 || ret != len(kdata) {
 		panic("dropped keys")
 	}
 	return ret, 0
 }
 
-func cons_write(src *userbuf_t, off int) (int, err_t) {
+func cons_write(src userio_i, off int) (int, err_t) {
 	// merge into one buffer to avoid taking the console lock many times.
 	utext := int8(0x17)
-	big := make([]uint8, src.len)
-	read, err := src.read(big)
+	big := make([]uint8, src.totalsz())
+	read, err := src.uioread(big)
 	if err != 0 {
 		return 0, err
 	}
-	if read != src.len {
+	if read != src.totalsz() {
 		panic("short read")
 	}
 	runtime.Pmsga(&big[0], len(big), utext)
@@ -1021,7 +1021,7 @@ func (o *pipe_t) pipe_start() {
 	o.wcond = sync.NewCond(o)
 }
 
-func (o *pipe_t) op_write(src *userbuf_t, noblock bool) (int, err_t) {
+func (o *pipe_t) op_write(src userio_i, noblock bool) (int, err_t) {
 	o.Lock()
 	for {
 		if o.closed {
@@ -1053,7 +1053,7 @@ func (o *pipe_t) op_write(src *userbuf_t, noblock bool) (int, err_t) {
 	return ret, 0
 }
 
-func (o *pipe_t) op_read(dst *userbuf_t, noblock bool) (int, err_t) {
+func (o *pipe_t) op_read(dst userio_i, noblock bool) (int, err_t) {
 	o.Lock()
 	for {
 		if o.closed {
@@ -1173,7 +1173,7 @@ func (of *pipefops_t) pathi() *imemnode_t {
 	panic("pipe cwd")
 }
 
-func (of *pipefops_t) read(dst *userbuf_t) (int, err_t) {
+func (of *pipefops_t) read(dst userio_i) (int, err_t) {
 	noblk := of.options & O_NONBLOCK != 0
 	return of.pipe.op_read(dst, noblk)
 }
@@ -1188,10 +1188,10 @@ func (of *pipefops_t) reopen() err_t {
 	return ret
 }
 
-func (of *pipefops_t) write(src *userbuf_t) (int, err_t) {
+func (of *pipefops_t) write(src userio_i) (int, err_t) {
 	noblk := of.options & O_NONBLOCK != 0
 	c := 0
-	for c != src.len {
+	for c != src.totalsz() {
 		ret, err := of.pipe.op_write(src, noblk)
 		if noblk || err != 0 {
 			return ret, err
@@ -1209,15 +1209,15 @@ func (of *pipefops_t) truncate(uint) err_t {
 	return -EINVAL
 }
 
-func (of *pipefops_t) pread(*userbuf_t, int) (int, err_t) {
+func (of *pipefops_t) pread(userio_i, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (of *pipefops_t) pwrite(*userbuf_t, int) (int, err_t) {
+func (of *pipefops_t) pwrite(userio_i, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (of *pipefops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
+func (of *pipefops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
 	return nil, 0, -ENOTSOCK
 }
 
@@ -1233,11 +1233,11 @@ func (of *pipefops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (of *pipefops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t) {
+func (of *pipefops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (of *pipefops_t) recvfrom(*proc_t, *userbuf_t, *userbuf_t) (int, int, err_t) {
+func (of *pipefops_t) recvfrom(*proc_t, userio_i, userio_i) (int, int, err_t) {
 	return 0, 0, -ENOTSOCK
 }
 
@@ -1262,7 +1262,7 @@ func (of *pipefops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
-func (of *pipefops_t) getsockopt(*proc_t, int, *userbuf_t, int) (int, err_t) {
+func (of *pipefops_t) getsockopt(*proc_t, int, userio_i, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
@@ -1582,7 +1582,7 @@ func copysockaddr(proc *proc_t, san, sl int) ([]uint8, err_t) {
 	}
 	ub := proc.mkuserbuf_pool(san, sl)
 	sabuf := make([]uint8, sl)
-	_, err := ub.read(sabuf)
+	_, err := ub.uioread(sabuf)
 	ubpool.Put(ub)
 	if err != 0 {
 		return nil, err
@@ -1788,7 +1788,7 @@ func (sf *sudfops_t) pathi() *imemnode_t {
 	panic("cwd socket?")
 }
 
-func (sf *sudfops_t) read(dst *userbuf_t) (int, err_t) {
+func (sf *sudfops_t) read(dst userio_i) (int, err_t) {
 	return 0, -ENODEV
 }
 
@@ -1799,7 +1799,7 @@ func (sf *sudfops_t) reopen() err_t {
 	return 0
 }
 
-func (sf *sudfops_t) write(*userbuf_t) (int, err_t) {
+func (sf *sudfops_t) write(userio_i) (int, err_t) {
 	return 0, -ENODEV
 }
 
@@ -1811,11 +1811,11 @@ func (sf *sudfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (sf *sudfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (sf *sudfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (sf *sudfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (sf *sudfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
@@ -1835,7 +1835,7 @@ func slicetostr(buf []uint8) string {
 	return string(buf[:end])
 }
 
-func (sf *sudfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
+func (sf *sudfops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
 	return nil, 0, -EINVAL
 }
 
@@ -1874,7 +1874,7 @@ func (sf *sudfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return nil, -EINVAL
 }
 
-func (sf *sudfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
+func (sf *sudfops_t) sendto(proc *proc_t, src userio_i, sa []uint8,
     flags int) (int, err_t) {
 	poff := 2
 	if len(sa) <= poff {
@@ -1908,8 +1908,8 @@ func (sf *sudfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
 	}
 
 	// XXX pass userbuf directly to sund
-	data := make([]uint8, src.len)
-	_, err = src.read(data)
+	data := make([]uint8, src.totalsz())
+	_, err = src.uioread(data)
 	if err != 0 {
 		return 0, err
 	}
@@ -1919,8 +1919,8 @@ func (sf *sudfops_t) sendto(proc *proc_t, src *userbuf_t, sa []uint8,
 	return <- sund.inret, 0
 }
 
-func (sf *sudfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
-    fromsa *userbuf_t) (int, int, err_t) {
+func (sf *sudfops_t) recvfrom(proc *proc_t, dst userio_i,
+    fromsa userio_i) (int, int, err_t) {
 	// XXX what does recv'ing on an unbound unix datagram socket supposed
 	// to do? openbsd and linux seem to block forever.
 	if !sf.bound {
@@ -1931,7 +1931,7 @@ func (sf *sudfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 	sund.outsz <- dst.remain()
 	sbuf := <- sund.out
 
-	ret, err := dst.write(sbuf.data)
+	ret, err := dst.uiowrite(sbuf.data)
 	if err != 0 {
 		return 0, 0, err
 	}
@@ -1939,7 +1939,7 @@ func (sf *sudfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
 	var addrlen int
 	if fromsa.remain() > 0 {
 		sa := sbuf.from.sockaddr_un()
-		addrlen, err = fromsa.write(sa)
+		addrlen, err = fromsa.uiowrite(sa)
 		if err != 0 {
 			return 0, 0, err
 		}
@@ -1960,7 +1960,7 @@ func (sf *sudfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	return int(-ENOSYS)
 }
 
-func (sf *sudfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (sf *sudfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	return 0, -EOPNOTSUPP
 }
@@ -2187,7 +2187,7 @@ func (sus *susfops_t) pathi() *imemnode_t {
 	panic("unix stream cwd?")
 }
 
-func (sus *susfops_t) read(dst *userbuf_t) (int, err_t) {
+func (sus *susfops_t) read(dst userio_i) (int, err_t) {
 	read, _, err := sus.recvfrom(nil, dst, nil)
 	return read, err
 }
@@ -2204,7 +2204,7 @@ func (sus *susfops_t) reopen() err_t {
 	return err2
 }
 
-func (sus *susfops_t) write(src *userbuf_t) (int, err_t) {
+func (sus *susfops_t) write(src userio_i) (int, err_t) {
 	wrote, err := sus.sendto(nil, src, nil, 0)
 	if err == -EPIPE {
 		err = -ECONNRESET
@@ -2220,15 +2220,15 @@ func (sus *susfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (sus *susfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (sus *susfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (sus *susfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (sus *susfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (sus *susfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
+func (sus *susfops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
 	return nil, 0, -EINVAL
 }
 
@@ -2332,7 +2332,7 @@ func (sus *susfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return newsock, 0
 }
 
-func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
+func (sus *susfops_t) sendto(proc *proc_t, src userio_i,
     toaddr []uint8, flags int) (int, err_t) {
 	if !sus.conn {
 		return 0, -ENOTCONN
@@ -2344,8 +2344,8 @@ func (sus *susfops_t) sendto(proc *proc_t, src *userbuf_t,
 	return sus.pipeout.write(src)
 }
 
-func (sus *susfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
-    fromsa *userbuf_t) (int, int, err_t) {
+func (sus *susfops_t) recvfrom(proc *proc_t, dst userio_i,
+    fromsa userio_i) (int, int, err_t) {
 	if !sus.conn {
 		return 0, 0, -ENOTCONN
 	}
@@ -2392,14 +2392,14 @@ func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
-func (sus *susfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (sus *susfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	switch opt {
 	case SO_ERROR:
-		if !proc.userwriten(bufarg.userva, 4, 0) {
-			return 0, -EFAULT
-		}
-		return 4, 0
+		dur := [4]uint8{}
+		writen(dur[:], 4, 0, 0)
+		did, err := bufarg.uiowrite(dur[:])
+		return did, err
 	default:
 		return 0, -EOPNOTSUPP
 	}
@@ -2650,7 +2650,7 @@ func (sf *suslfops_t) pathi() *imemnode_t {
 	panic("unix stream listener cwd?")
 }
 
-func (sf *suslfops_t) read(*userbuf_t) (int, err_t) {
+func (sf *suslfops_t) read(userio_i) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
@@ -2658,7 +2658,7 @@ func (sf *suslfops_t) reopen() err_t {
 	return sf.susl.susl_reopen(1)
 }
 
-func (sf *suslfops_t) write(*userbuf_t) (int, err_t) {
+func (sf *suslfops_t) write(userio_i) (int, err_t) {
 	return 0, -EPIPE
 }
 
@@ -2670,16 +2670,16 @@ func (sf *suslfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (sf *suslfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (sf *suslfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (sf *suslfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (sf *suslfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
 func (sf *suslfops_t) accept(proc *proc_t,
-    fromsa *userbuf_t) (fdops_i, int, err_t) {
+    fromsa userio_i) (fdops_i, int, err_t) {
 	noblk := sf.options & O_NONBLOCK != 0
 	pipein := &pipe_t{}
 	pipein.pipe_start()
@@ -2712,12 +2712,11 @@ func (sf *suslfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return nil, -EINVAL
 }
 
-func (sf *suslfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t) {
+func (sf *suslfops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
-func (sf *suslfops_t) recvfrom(*proc_t, *userbuf_t,
-    *userbuf_t) (int, int, err_t) {
+func (sf *suslfops_t) recvfrom(*proc_t, userio_i, userio_i) (int, int, err_t) {
 	return 0, 0, -ENOTCONN
 }
 
@@ -2737,7 +2736,7 @@ func (sf *suslfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
-func (sf *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (sf *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	return 0, -EOPNOTSUPP
 }
@@ -3030,7 +3029,6 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	// create kernel page table
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
-	//proc.pmap, proc.p_pmap = pg_new()
 	proc.pmap, proc.p_pmap = refpg_new()
 	refup(uintptr(proc.p_pmap))
 	for _, e := range kents {
@@ -3056,7 +3054,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	}()
 
 	hdata := make([]uint8, 512)
-	ub := &userbuf_t{}
+	ub := &fakeubuf_t{}
 	ub.fake_init(hdata)
 	ret, err := file.fops.read(ub)
 	if err != 0 {
@@ -3654,11 +3652,11 @@ func sys_getcwd(proc *proc_t, bufn, sz int) int {
 	if err != 0 {
 		return int(err)
 	}
-	_, err = dst.write([]uint8(pwd))
+	_, err = dst.uiowrite([]uint8(pwd))
 	if err != 0 {
 		return int(err)
 	}
-	if _, err := dst.write([]uint8{0}); err != 0 {
+	if _, err := dst.uiowrite([]uint8{0}); err != 0 {
 		return int(err)
 	}
 	return 0

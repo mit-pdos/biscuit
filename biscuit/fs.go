@@ -422,7 +422,7 @@ type fsfops_t struct {
 	append	bool
 }
 
-func (fo *fsfops_t) _read(dst *userbuf_t, toff int) (int, err_t) {
+func (fo *fsfops_t) _read(dst userio_i, toff int) (int, err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -448,15 +448,15 @@ func (fo *fsfops_t) _read(dst *userbuf_t, toff int) (int, err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) read(dst *userbuf_t) (int, err_t) {
+func (fo *fsfops_t) read(dst userio_i) (int, err_t) {
 	return fo._read(dst, -1)
 }
 
-func (fo *fsfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (fo *fsfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	return fo._read(dst, offset)
 }
 
-func (fo *fsfops_t) _write(src *userbuf_t, toff int) (int, err_t) {
+func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
@@ -487,7 +487,7 @@ func (fo *fsfops_t) _write(src *userbuf_t, toff int) (int, err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) write(src *userbuf_t) (int, err_t) {
+func (fo *fsfops_t) write(src userio_i) (int, err_t) {
 	return fo._write(src, -1)
 }
 
@@ -511,7 +511,7 @@ func (fo *fsfops_t) truncate(newlen uint) err_t {
 	return err
 }
 
-func (fo *fsfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (fo *fsfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	return fo._write(src, offset)
 }
 
@@ -578,7 +578,7 @@ func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, err_t) {
 	return mmi, err
 }
 
-func (fo *fsfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
+func (fo *fsfops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
 	return nil, 0, -ENOTSOCK
 }
 
@@ -594,12 +594,12 @@ func (fo *fsfops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (fo *fsfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t) {
+func (fo *fsfops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (fo *fsfops_t) recvfrom(*proc_t, *userbuf_t,
-    *userbuf_t) (int, int, err_t) {
+func (fo *fsfops_t) recvfrom(*proc_t, userio_i,
+    userio_i) (int, int, err_t) {
 	return 0, 0, -ENOTSOCK
 }
 
@@ -611,7 +611,7 @@ func (fo *fsfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	return int(-ENOSYS)
 }
 
-func (fo *fsfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (fo *fsfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
@@ -635,7 +635,7 @@ func (df *devfops_t) _sane() {
 	}
 }
 
-func (df *devfops_t) read(dst *userbuf_t) (int, err_t) {
+func (df *devfops_t) read(dst userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_read(dst, 0)
@@ -644,12 +644,12 @@ func (df *devfops_t) read(dst *userbuf_t) (int, err_t) {
 	}
 }
 
-func (df *devfops_t) write(src *userbuf_t) (int, err_t) {
+func (df *devfops_t) write(src userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_write(src, 0)
 	} else {
-		return src.len, 0
+		return src.totalsz(), 0
 	}
 }
 
@@ -661,12 +661,12 @@ func (df *devfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (df *devfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (df *devfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	df._sane()
 	return 0, -ESPIPE
 }
 
-func (df *devfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (df *devfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	df._sane()
 	return 0, -ESPIPE
 }
@@ -702,7 +702,7 @@ func (df *devfops_t) lseek(int, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (df *devfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
+func (df *devfops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
 	return nil, 0, -ENOTSOCK
 }
 
@@ -718,12 +718,12 @@ func (df *devfops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (df *devfops_t) sendto(*proc_t, *userbuf_t, []uint8, int) (int, err_t) {
+func (df *devfops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (df *devfops_t) recvfrom(*proc_t, *userbuf_t,
-    *userbuf_t) (int, int, err_t) {
+func (df *devfops_t) recvfrom(*proc_t, userio_i,
+    userio_i) (int, int, err_t) {
 	return 0, 0, -ENOTSOCK
 }
 
@@ -743,7 +743,7 @@ func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	return int(-ENOSYS)
 }
 
-func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
@@ -1384,12 +1384,12 @@ func (idm *imemnode_t) do_trunc(truncto uint) err_t {
 	return err
 }
 
-func (idm *imemnode_t) do_read(dst *userbuf_t, offset int) (int, err_t) {
+func (idm *imemnode_t) do_read(dst userio_i, offset int) (int, err_t) {
 	idm._locked()
 	return idm.iread(dst, offset)
 }
 
-func (idm *imemnode_t) do_write(src *userbuf_t, _offset int,
+func (idm *imemnode_t) do_write(src userio_i, _offset int,
     append bool) (int, err_t) {
 	idm._locked()
 	if idm.icache.itype == I_DIR {
@@ -1840,7 +1840,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) int {
 	return blkn
 }
 
-func (idm *imemnode_t) iread(dst *userbuf_t, offset int) (int, err_t) {
+func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
 	for offset + c < isz && dst.remain() != 0 {
@@ -1848,7 +1848,7 @@ func (idm *imemnode_t) iread(dst *userbuf_t, offset int) (int, err_t) {
 		if err != 0 {
 			return c, err
 		}
-		wrote, err := dst.write(src)
+		wrote, err := dst.uiowrite(src)
 		c += wrote
 		if err != 0 {
 			return c, err
@@ -1857,8 +1857,8 @@ func (idm *imemnode_t) iread(dst *userbuf_t, offset int) (int, err_t) {
 	return c, 0
 }
 
-func (idm *imemnode_t) iwrite(src *userbuf_t, offset int) (int, err_t) {
-	sz := src.len
+func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
+	sz := src.totalsz()
 	newsz := offset + sz
 	err := idm._preventhole(idm.icache.size, uint(newsz))
 	if err != 0 {
@@ -1871,7 +1871,7 @@ func (idm *imemnode_t) iwrite(src *userbuf_t, offset int) (int, err_t) {
 		if err != 0 {
 			return c, err
 		}
-		read, err := src.read(dst)
+		read, err := src.uioread(dst)
 		if err != 0 {
 			return c, err
 		}

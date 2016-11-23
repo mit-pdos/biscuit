@@ -2360,7 +2360,7 @@ func (tc *tcptcb_t) lwingrow(dlen int) {
 	}
 }
 
-func (tc *tcptcb_t) uread(dst *userbuf_t) (int, err_t) {
+func (tc *tcptcb_t) uread(dst userio_i) (int, err_t) {
 	tc._sanity()
 	wrote, err := tc.rxbuf.cbuf.copyout(dst)
 	// did the user consume enough data to reopen the window?
@@ -2368,7 +2368,7 @@ func (tc *tcptcb_t) uread(dst *userbuf_t) (int, err_t) {
 	return wrote, err
 }
 
-func (tc *tcptcb_t) uwrite(src *userbuf_t) (int, err_t) {
+func (tc *tcptcb_t) uwrite(src userio_i) (int, err_t) {
 	tc._sanity()
 	wrote, err := tc.txbuf.cbuf.copyin(src)
 	if tc.state == ESTAB || tc.state == CLOSEWAIT {
@@ -2815,7 +2815,7 @@ func (tf *tcpfops_t) pathi() *imemnode_t {
 	panic("tcp socket cwd")
 }
 
-func (tf *tcpfops_t) read(dst *userbuf_t) (int, err_t) {
+func (tf *tcpfops_t) read(dst userio_i) (int, err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -2845,7 +2845,7 @@ func (tf *tcpfops_t) reopen() err_t {
 	return 0
 }
 
-func (tf *tcpfops_t) write(src *userbuf_t) (int, err_t) {
+func (tf *tcpfops_t) write(src userio_i) (int, err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -2879,15 +2879,15 @@ func (tf *tcpfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (tf *tcpfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (tf *tcpfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tf *tcpfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (tf *tcpfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tf *tcpfops_t) accept(*proc_t, *userbuf_t) (fdops_i, int, err_t) {
+func (tf *tcpfops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
 	panic("no imp")
 }
 
@@ -3004,13 +3004,13 @@ func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return ret, 0
 }
 
-func (tf *tcpfops_t) sendto(proc *proc_t, src *userbuf_t,
+func (tf *tcpfops_t) sendto(proc *proc_t, src userio_i,
     toaddr []uint8, flags int) (int, err_t) {
 	return tf.write(src)
 }
 
-func (tf *tcpfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
-    fromsa *userbuf_t) (int, int, err_t) {
+func (tf *tcpfops_t) recvfrom(proc *proc_t, dst userio_i,
+    fromsa userio_i) (int, int, err_t) {
 	wrote, err := tf.read(dst)
 	return wrote, 0, err
 }
@@ -3059,15 +3059,15 @@ func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
-func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	panic("no imp")
 	switch opt {
 	case SO_ERROR:
-		if !proc.userwriten(bufarg.userva, 4, 0) {
-			return 0, -EFAULT
-		}
-		return 4, 0
+		dur := [4]uint8{}
+		writen(dur[:], 4, 0, 0)
+		did, err := bufarg.uiowrite(dur[:])
+		return did, err
 	default:
 		return 0, -EOPNOTSUPP
 	}
@@ -3138,7 +3138,7 @@ func (tl *tcplfops_t) pathi() *imemnode_t {
 	panic("tcp socket cwd")
 }
 
-func (tl *tcplfops_t) read(dst *userbuf_t) (int, err_t) {
+func (tl *tcplfops_t) read(dst userio_i) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
@@ -3149,7 +3149,7 @@ func (tl *tcplfops_t) reopen() err_t {
 	return 0
 }
 
-func (tl *tcplfops_t) write(src *userbuf_t) (int, err_t) {
+func (tl *tcplfops_t) write(src userio_i) (int, err_t) {
 	return 0, -EPIPE
 }
 
@@ -3161,15 +3161,15 @@ func (tl *tcplfops_t) truncate(newlen uint) err_t {
 	return -EINVAL
 }
 
-func (tl *tcplfops_t) pread(dst *userbuf_t, offset int) (int, err_t) {
+func (tl *tcplfops_t) pread(dst userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tl *tcplfops_t) pwrite(src *userbuf_t, offset int) (int, err_t) {
+func (tl *tcplfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tl *tcplfops_t) accept(proc *proc_t, saddr *userbuf_t) (fdops_i,
+func (tl *tcplfops_t) accept(proc *proc_t, saddr userio_i) (fdops_i,
     int, err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
@@ -3195,7 +3195,7 @@ func (tl *tcplfops_t) accept(proc *proc_t, saddr *userbuf_t) (fdops_i,
 	buf := make([]uint8, 8)
 	writen(buf, 2, 2, int(htons(tcb.rport)))
 	writen(buf, 4, 4, int(htonl(uint32(tcb.rip))))
-	did, err := saddr.write(buf)
+	did, err := saddr.uiowrite(buf)
 	return fops, did, err
 }
 
@@ -3233,13 +3233,13 @@ func (tl *tcplfops_t) listen(proc *proc_t, _backlog int) (fdops_i, err_t) {
 	return tl, 0
 }
 
-func (tl *tcplfops_t) sendto(proc *proc_t, src *userbuf_t,
+func (tl *tcplfops_t) sendto(proc *proc_t, src userio_i,
     toaddr []uint8, flags int) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
-func (tl *tcplfops_t) recvfrom(proc *proc_t, dst *userbuf_t,
-    fromsa *userbuf_t) (int, int, err_t) {
+func (tl *tcplfops_t) recvfrom(proc *proc_t, dst userio_i,
+    fromsa userio_i) (int, int, err_t) {
 	return 0, 0, -ENOTCONN
 }
 
@@ -3268,14 +3268,14 @@ func (tl *tcplfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 	}
 }
 
-func (tl *tcplfops_t) getsockopt(proc *proc_t, opt int, bufarg *userbuf_t,
+func (tl *tcplfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	switch opt {
 	case SO_ERROR:
-		if !proc.userwriten(bufarg.userva, 4, 0) {
-			return 0, -EFAULT
-		}
-		return 4, 0
+		dur := [4]uint8{}
+		writen(dur[:], 4, 0, 0)
+		did, err := bufarg.uiowrite(dur[:])
+		return did, err
 	default:
 		return 0, -EOPNOTSUPP
 	}
