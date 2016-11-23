@@ -902,9 +902,9 @@ ssize_t sendmsg(int, struct msghdr *, int);
 #define		MSG_TRUNC	(1 << 0)
 #define		MSG_CTRUNC	(1 << 1)
 
-#define		CMSG_FIRSTHDR(x)	(NULL)
-#define		CMSG_NXTHDR(x, y)	(NULL)
-#define		CMSG_DATA(x)		(NULL)
+#define		CMSG_FIRSTHDR(x)	({abort(); NULL;})
+#define		CMSG_NXTHDR(x, y)	({abort(); NULL;})
+#define		CMSG_DATA(x)		({abort(); NULL;})
 #define		CMSG_LEN(x)		(sizeof(struct cmsghdr) + x)
 #define		CMSG_SPACE(x)		(sizeof(struct cmsghdr) + x)
 

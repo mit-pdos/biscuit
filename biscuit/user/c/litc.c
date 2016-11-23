@@ -275,6 +275,12 @@ fcntl(int fd, int cmd, ...)
 		ERRNO_NEG(ret);
 		break;
 	}
+	case F_SETOWN:
+	{
+		fprintf(stderr, "warning: F_SETOWN is no-op\n");
+		ret = 0;
+		break;
+	}
 	default:
 		errno = EINVAL;
 		ret = -1;
@@ -3319,183 +3325,249 @@ _entry(void)
 long timezone;
 
 #define FAIL	errx(-1, "%s -- no imp", __FUNCTION__)
+#define HACK(x)	do { \
+	fprintf(stderr, "warning: %s is a no-op\n", __FUNCTION__);	\
+	return x;	\
+	} while (0)
 
-char *getenv(char *name)
+char *
+getenv(char *name)
+{
+	HACK(NULL);
+}
+
+uid_t
+geteuid(void)
+{
+	HACK(0);
+}
+
+struct passwd *
+getpwnam(const char *a)
+{
+	if (strcmp(a, "nobody") != 0)
+		errx(-1, "unexpected getpwnam");
+
+	static struct passwd dur = {"nobody", 666, 667, "/tmp",
+	    "/bin/cmd.exe"};
+	HACK(&dur);
+}
+
+struct group *
+getgrnam(const char *a)
+{
+	if (strcmp(a, "nogroup") != 0)
+		errx(-1, "unexpected getpwnam");
+
+	static struct group dur = {"nogroup", 667, NULL};
+	HACK(&dur);
+}
+
+struct hostent *
+gethostbyname(const char *a)
 {
 	FAIL;
 }
 
-uid_t geteuid(void)
+int
+chown(const char *a, uid_t b, gid_t c)
+{
+	if (b != 666 || c != -1)
+		errx(-1, "unexpected chown");
+	errno = 0;
+	HACK(0);
+}
+
+time_t
+mktime(struct tm *a)
 {
 	FAIL;
 }
 
-struct passwd *getpwnam(const char *a)
+int
+getsockname(int a, struct sockaddr *b, socklen_t *c)
 {
 	FAIL;
 }
 
-struct group *getgrnam(const char *a)
+int
+setsockopt(int a, int b, int c, const void *d, socklen_t e)
+{
+	static char *on[] = {
+#define F(x) [x] = #x
+		F(SO_SNDBUF),
+		F(SO_SNDTIMEO),
+		F(SO_ERROR),
+		F(SO_TYPE),
+		F(SO_RCVBUF),
+		F(SO_REUSEADDR),
+		F(SO_KEEPALIVE),
+		F(SO_LINGER),
+		F(SO_SNDLOWAT),
+		F(TCP_NODELAY),
+#undef F
+	};
+	errno = 0;
+	fprintf(stderr, "warning: setsockopt no-op for %s\n", on[c]);
+	return 0;
+}
+
+int
+gethostname(char *a, size_t b)
+{
+	snprintf(a, b, "localhost");
+	HACK(0);
+}
+
+char *
+strpbrk(const char *a, const char *bb)
+{
+	while (*a) {
+		const char *b = bb;
+		while (*b)
+			if (*a == *b++)
+				return (char *)a;
+		a++;
+	}
+	return NULL;
+}
+
+int
+setitimer(int a, struct itimerval *b, struct itimerval *c)
 {
 	FAIL;
 }
 
-struct hostent *gethostbyname(const char *a)
+ssize_t
+recvmsg(int a, struct msghdr *b, int c)
 {
 	FAIL;
 }
 
-int chown(const char *a, uid_t b, gid_t c)
+ssize_t
+sendmsg(int a, struct msghdr *b, int c)
 {
 	FAIL;
 }
 
-time_t mktime(struct tm *a)
+struct tm *
+localtime(const time_t *a)
+{
+	static struct tm dur;
+	HACK(&dur);
+}
+
+struct tm *
+gmtime(const time_t *a)
 {
 	FAIL;
 }
 
-int getsockname(int a, struct sockaddr *b, socklen_t *c)
+int
+utimes(const char *a, const struct timeval b[2])
 {
 	FAIL;
 }
 
-int setsockopt(int a, int b, int c, const void *d, socklen_t e)
+int
+glob(const char *a, int b, int (*c)(const char *, int), glob_t *d)
 {
 	FAIL;
 }
 
-int gethostname(char *a, size_t b)
+void
+globfree(glob_t *a)
 {
 	FAIL;
 }
 
-char *strpbrk(const char *a, const char *b)
+int
+ioctl(int fd, ulong req, ...)
+{
+	if (req != FIOASYNC)
+		errx(-1, "nyet");
+	HACK(0);
+}
+
+pid_t
+getppid(void)
 {
 	FAIL;
 }
 
-int setitimer(int a, struct itimerval *b, struct itimerval *c)
+int
+raise(int a)
 {
 	FAIL;
 }
 
-ssize_t recvmsg(int a, struct msghdr *b, int c)
+mode_t
+umask(mode_t a)
+{
+	static mode_t dur = 0022;
+	mode_t old = dur;
+	dur = a;
+	HACK(old);
+}
+
+int
+getpagesize(void)
+{
+	return 1 << 12;
+}
+
+int
+sigprocmask(int a, sigset_t *b, sigset_t *c)
+{
+	if (c)
+		errx(-1, "no old set");
+	HACK(0);
+}
+
+int
+sigsuspend(const sigset_t *a)
 {
 	FAIL;
 }
 
-ssize_t sendmsg(int a, struct msghdr *b, int c)
+int
+setpriority(int a, int b, int c)
 {
 	FAIL;
 }
 
-struct tm *localtime(const time_t *a)
+uid_t
+getuid(void)
 {
 	FAIL;
 }
 
-struct tm *gmtime(const time_t *a)
+int
+setuid(uid_t a)
 {
 	FAIL;
 }
 
-ssize_t readv(int a, const struct iovec *b, int c)
+int
+setgid(gid_t a)
 {
 	FAIL;
 }
 
-ssize_t writev(int a, const struct iovec *b, int c)
+int
+initgroups(const char *a, gid_t b)
 {
 	FAIL;
 }
 
-int utimes(const char *a, const struct timeval b[2])
+char *
+realpath(const char *a, char *b)
 {
 	FAIL;
 }
 
-int glob(const char *a, int b, int (*c)(const char *, int), glob_t *d)
-{
-	FAIL;
-}
-
-void globfree(glob_t *a)
-{
-	FAIL;
-}
-
-int socketpair(int a, int b, int c, int d[2])
-{
-	FAIL;
-}
-
-int ioctl(int a, ulong b, ...)
-{
-	FAIL;
-}
-
-pid_t getppid(void)
-{
-	FAIL;
-}
-
-int raise(int a)
-{
-	FAIL;
-}
-
-mode_t umask(mode_t a)
-{
-	FAIL;
-}
-
-int getpagesize(void)
-{
-	FAIL;
-}
-
-int sigprocmask(int a, sigset_t *b, sigset_t *c)
-{
-	FAIL;
-}
-
-int sigsuspend(const sigset_t *a)
-{
-	FAIL;
-}
-
-int setpriority(int a, int b, int c)
-{
-	FAIL;
-}
-
-uid_t getuid(void)
-{
-	FAIL;
-}
-
-int setuid(uid_t a)
-{
-	FAIL;
-}
-
-int setgid(gid_t a)
-{
-	FAIL;
-}
-
-int initgroups(const char *a, gid_t b)
-{
-	FAIL;
-}
-
-char *realpath(const char *a, char *b)
-{
-	FAIL;
-}
-
-int lstat(const char *a, struct stat * b)
+int
+lstat(const char *a, struct stat * b)
 {
 	FAIL;
 }
