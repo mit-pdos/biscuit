@@ -3102,20 +3102,20 @@ void iovtest(void)
 		int i;
 		char *end = &bbuf[bsz];
 		for (i = 0; i < 4; i++) {
-			iovs[i].iov_base = end - i*fourth;
+			iovs[i].iov_base = end - (i + 1)*fourth;
 			iovs[i].iov_len = fourth;
 		}
 		if (readv(bfd, iovs, 4) != bsz)
 			err(-1, "readv");
 		char *a = &fbuf[0];
 		for (i = 0; i < 4; i++) {
-			char *b = end - i*fourth;
+			char *b = end - (i + 1)*fourth;
 			if (memcmp(a, b, fourth) != 0)
 				errx(-1, "data mismatch");
 			a += fourth;
 		}
 		for (i = 0; i < 4; i++) {
-			iovs[i].iov_base = end - i*fourth;
+			iovs[i].iov_base = end - (i + 1)*fourth;
 			iovs[i].iov_len = fourth;
 		}
 		if (writev(ofd, iovs, 4) != bsz)
