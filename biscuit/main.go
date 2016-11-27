@@ -1539,25 +1539,27 @@ func (ub *userbuf_t) totalsz() int {
 	return ub.len
 }
 func (ub *userbuf_t) uioread(dst []uint8) (int, err_t) {
-	return ub._tx(dst, false)
+	ub.proc.Lock_pmap()
+	a, b := ub._tx(dst, false)
+	ub.proc.Unlock_pmap()
+	return a, b
 }
 
 func (ub *userbuf_t) uiowrite(src []uint8) (int, err_t) {
-	return ub._tx(src, true)
+	ub.proc.Lock_pmap()
+	a, b := ub._tx(src, true)
+	ub.proc.Unlock_pmap()
+	return a, b
 }
 
 // copies the min of either the provided buffer or ub.len. returns number of
 // bytes copied and error.
 func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, err_t) {
-	// serialize with page faults
-	ub.proc.Lock_pmap()
-
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
 		va := ub.userva + ub.off
 		ubuf, ok := ub.proc.userdmap8_inner(va, write)
 		if !ok {
-			ub.proc.Unlock_pmap()
 			return ret, -EFAULT
 		}
 		end := ub.off + len(ubuf)
@@ -1575,7 +1577,6 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, err_t) {
 		ub.off += c
 		ret += c
 	}
-	ub.proc.Unlock_pmap()
 	return ret, 0
 }
 
@@ -1637,9 +1638,9 @@ func (iov *useriovec_t) _tx(buf []uint8, touser bool) (int, err_t) {
 		var c int
 		var err err_t
 		if touser {
-			c, err = ub.uiowrite(buf)
+			c, err = ub._tx(buf, true)
 		} else {
-			c, err = ub.uioread(buf)
+			c, err = ub._tx(buf, false)
 		}
 		ciov.uva += uint(c)
 		ciov.sz -= c
@@ -1656,11 +1657,17 @@ func (iov *useriovec_t) _tx(buf []uint8, touser bool) (int, err_t) {
 }
 
 func (iov *useriovec_t) uioread(dst []uint8) (int, err_t) {
-	return iov._tx(dst, false)
+	iov.proc.Lock_pmap()
+	a, b := iov._tx(dst, false)
+	iov.proc.Unlock_pmap()
+	return a, b
 }
 
 func (iov *useriovec_t) uiowrite(src []uint8) (int, err_t) {
-	return iov._tx(src, true)
+	iov.proc.Lock_pmap()
+	a, b := iov._tx(src, true)
+	iov.proc.Unlock_pmap()
+	return a, b
 }
 
 // a circular buffer that is read/written by userspace. not thread-safe -- it
