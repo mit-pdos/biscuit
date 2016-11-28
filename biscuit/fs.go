@@ -448,7 +448,7 @@ func (fo *fsfops_t) _read(dst userio_i, toff int) (int, err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) read(dst userio_i) (int, err_t) {
+func (fo *fsfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	return fo._read(dst, -1)
 }
 
@@ -487,7 +487,7 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) write(src userio_i) (int, err_t) {
+func (fo *fsfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	return fo._write(src, -1)
 }
 
@@ -594,13 +594,14 @@ func (fo *fsfops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (fo *fsfops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
+func (fo *fsfops_t) sendmsg(*proc_t, userio_i, []uint8, []uint8,
+    int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (fo *fsfops_t) recvfrom(*proc_t, userio_i,
-    userio_i) (int, int, err_t) {
-	return 0, 0, -ENOTSOCK
+func (fo *fsfops_t) recvmsg(*proc_t, userio_i,
+    userio_i, userio_i, int) (int, int, int, msgfl_t, err_t) {
+	return 0, 0, 0, 0, -ENOTSOCK
 }
 
 func (fo *fsfops_t) pollone(pm pollmsg_t) ready_t {
@@ -635,7 +636,7 @@ func (df *devfops_t) _sane() {
 	}
 }
 
-func (df *devfops_t) read(dst userio_i) (int, err_t) {
+func (df *devfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_read(dst, 0)
@@ -644,7 +645,7 @@ func (df *devfops_t) read(dst userio_i) (int, err_t) {
 	}
 }
 
-func (df *devfops_t) write(src userio_i) (int, err_t) {
+func (df *devfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_write(src, 0)
@@ -718,13 +719,14 @@ func (df *devfops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (df *devfops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
+func (df *devfops_t) sendmsg(*proc_t, userio_i, []uint8, []uint8,
+    int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (df *devfops_t) recvfrom(*proc_t, userio_i,
-    userio_i) (int, int, err_t) {
-	return 0, 0, -ENOTSOCK
+func (df *devfops_t) recvmsg(*proc_t, userio_i,
+    userio_i, userio_i, int) (int, int, int, msgfl_t, err_t) {
+	return 0, 0, 0, 0, -ENOTSOCK
 }
 
 func (df *devfops_t) pollone(pm pollmsg_t) ready_t {

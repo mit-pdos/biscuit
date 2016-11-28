@@ -2815,7 +2815,7 @@ func (tf *tcpfops_t) pathi() *imemnode_t {
 	panic("tcp socket cwd")
 }
 
-func (tf *tcpfops_t) read(dst userio_i) (int, err_t) {
+func (tf *tcpfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -2845,7 +2845,7 @@ func (tf *tcpfops_t) reopen() err_t {
 	return 0
 }
 
-func (tf *tcpfops_t) write(src userio_i) (int, err_t) {
+func (tf *tcpfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -3004,15 +3004,22 @@ func (tf *tcpfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return ret, 0
 }
 
-func (tf *tcpfops_t) sendto(proc *proc_t, src userio_i,
-    toaddr []uint8, flags int) (int, err_t) {
-	return tf.write(src)
+// XXX read/write should be wrapper around recvmsg/sendmsg
+func (tf *tcpfops_t) sendmsg(proc *proc_t, src userio_i,
+    toaddr []uint8, cmsg []uint8, flags int) (int, err_t) {
+	if len(cmsg) != 0 {
+		panic("no imp")
+	}
+	return tf.write(proc, src)
 }
 
-func (tf *tcpfops_t) recvfrom(proc *proc_t, dst userio_i,
-    fromsa userio_i) (int, int, err_t) {
-	wrote, err := tf.read(dst)
-	return wrote, 0, err
+func (tf *tcpfops_t) recvmsg(proc *proc_t, dst userio_i,
+    fromsa userio_i, cmsg userio_i, flag int) (int, int, int, msgfl_t, err_t) {
+	if cmsg.totalsz() != 0 {
+		panic("no imp")
+	}
+	wrote, err := tf.read(proc, dst)
+	return wrote, 0, 0, 0, err
 }
 
 func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
@@ -3138,7 +3145,7 @@ func (tl *tcplfops_t) pathi() *imemnode_t {
 	panic("tcp socket cwd")
 }
 
-func (tl *tcplfops_t) read(dst userio_i) (int, err_t) {
+func (tl *tcplfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
@@ -3149,7 +3156,7 @@ func (tl *tcplfops_t) reopen() err_t {
 	return 0
 }
 
-func (tl *tcplfops_t) write(src userio_i) (int, err_t) {
+func (tl *tcplfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	return 0, -EPIPE
 }
 
@@ -3233,14 +3240,14 @@ func (tl *tcplfops_t) listen(proc *proc_t, _backlog int) (fdops_i, err_t) {
 	return tl, 0
 }
 
-func (tl *tcplfops_t) sendto(proc *proc_t, src userio_i,
-    toaddr []uint8, flags int) (int, err_t) {
+func (tl *tcplfops_t) sendmsg(proc *proc_t, src userio_i,
+    toaddr []uint8, cmsg []uint8, flags int) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
-func (tl *tcplfops_t) recvfrom(proc *proc_t, dst userio_i,
-    fromsa userio_i) (int, int, err_t) {
-	return 0, 0, -ENOTCONN
+func (tl *tcplfops_t) recvmsg(proc *proc_t, dst userio_i,
+    fromsa userio_i, cmsg userio_i, flags int) (int, int, int, msgfl_t, err_t) {
+	return 0, 0, 0, 0, -ENOTCONN
 }
 
 func (tl *tcplfops_t) pollone(pm pollmsg_t) ready_t {

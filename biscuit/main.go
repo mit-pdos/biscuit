@@ -162,10 +162,10 @@ type fdops_i interface {
 	lseek(int, int) (int, err_t)
 	mmapi(int, int) ([]mmapinfo_t, err_t)
 	pathi() *imemnode_t
-	read(userio_i) (int, err_t)
+	read(*proc_t, userio_i) (int, err_t)
 	// reopen() is called with proc_t.fdl is held
 	reopen() err_t
-	write(userio_i) (int, err_t)
+	write(*proc_t, userio_i) (int, err_t)
 	fullpath() (string, err_t)
 	truncate(uint) err_t
 
@@ -181,10 +181,14 @@ type fdops_i interface {
 	// listen changes the underlying socket type; thus is returns the new
 	// fops.
 	listen(*proc_t, int) (fdops_i, err_t)
-	sendto(*proc_t, userio_i, []uint8, int) (int, err_t)
-	// returns number of bytes read, size of from sock address written, and
-	// error
-	recvfrom(*proc_t, userio_i, userio_i) (int, int, err_t)
+	sendmsg(p *proc_t, data userio_i, saddr []uint8, cmsg []uint8,
+	    flags int) (int, err_t)
+	// returns number of bytes read, size of from sock address written,
+	// size of ancillary data written, msghdr flags, and error. if no from
+	// address or ancillary data is requested, the userio objects have
+	// length 0.
+	recvmsg(p *proc_t, data userio_i, saddr userio_i,
+	    cmsg userio_i, flags int) (int, int, int, msgfl_t, err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
@@ -1466,8 +1470,32 @@ type userio_i interface {
 	totalsz() int
 }
 
+// a userio_i type that copies nothing. useful as an argument to {send,recv}msg
+// when no from/to address or ancillary data is requested.
+type _nilbuf_t struct {
+}
+
+
+func (nb *_nilbuf_t) uiowrite(src []uint8) (int, err_t) {
+	return 0, 0
+}
+
+func (nb *_nilbuf_t) uioread(dst []uint8) (int, err_t) {
+	return 0, 0
+}
+
+func (nb *_nilbuf_t) remain() int {
+	return 0
+}
+
+func (nb *_nilbuf_t) totalsz() int {
+	return 0
+}
+
+var zeroubuf = &_nilbuf_t{}
+
 // helper type which kernel code can use as userio_i, but is actually a kernel
-// buffer
+// buffer (i.e. reading an ELF header from the file system for exec(2)).
 type fakeubuf_t struct {
 	fbuf	[]uint8
 	off	int

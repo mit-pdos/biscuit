@@ -82,6 +82,7 @@ const(
 )
 
 type fdopt_t uint
+type msgfl_t uint
 
 const(
   SYS_READ     = 0
@@ -155,6 +156,10 @@ const(
   SYS_BIND     = 49
     INADDR_ANY     = 0
   SYS_LISTEN   = 50
+  SYS_RECVMSG  = 51
+    MSG_TRUNC    msgfl_t = 1 << 0
+    MSG_CTRUNC   msgfl_t = 1 << 1
+  SYS_SENDMSG  = 52
   SYS_GETSOCKOPT = 55
     // socket levels
     SOL_SOCKET     = 1
@@ -448,7 +453,7 @@ func sys_read(proc *proc_t, fdn int, bufp int, sz int) int {
 	}
 	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
-	ret, err := fd.fops.read(userbuf)
+	ret, err := fd.fops.read(proc, userbuf)
 	if err != 0 {
 		return int(err)
 	}
@@ -466,7 +471,7 @@ func sys_write(proc *proc_t, fdn int, bufp int, sz int) int {
 	}
 	userbuf := proc.mkuserbuf_pool(bufp, sz)
 
-	ret, err := fd.fops.write(userbuf)
+	ret, err := fd.fops.write(proc, userbuf)
 	if err != 0 {
 		return int(err)
 	}
@@ -632,7 +637,7 @@ func sys_readv(proc *proc_t, fdn, _iovn, iovcnt int) int {
 	if err := iov.iov_init(proc, iovn, iovcnt); err != 0 {
 		return int(err)
 	}
-	ret, err := fd.fops.read(iov)
+	ret, err := fd.fops.read(proc, iov)
 	if err != 0 {
 		return int(err)
 	}
@@ -649,7 +654,7 @@ func sys_writev(proc *proc_t, fdn, _iovn, iovcnt int) int {
 	if err := iov.iov_init(proc, iovn, iovcnt); err != 0 {
 		return int(err)
 	}
-	ret, err := fd.fops.write(iov)
+	ret, err := fd.fops.write(proc, iov)
 	if err != 0 {
 		return int(err)
 	}
@@ -1227,7 +1232,7 @@ func (of *pipefops_t) pathi() *imemnode_t {
 	panic("pipe cwd")
 }
 
-func (of *pipefops_t) read(dst userio_i) (int, err_t) {
+func (of *pipefops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	noblk := of.options & O_NONBLOCK != 0
 	return of.pipe.op_read(dst, noblk)
 }
@@ -1242,7 +1247,7 @@ func (of *pipefops_t) reopen() err_t {
 	return ret
 }
 
-func (of *pipefops_t) write(src userio_i) (int, err_t) {
+func (of *pipefops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	noblk := of.options & O_NONBLOCK != 0
 	c := 0
 	for c != src.totalsz() {
@@ -1287,12 +1292,14 @@ func (of *pipefops_t) listen(*proc_t, int) (fdops_i, err_t) {
 	return nil, -ENOTSOCK
 }
 
-func (of *pipefops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
+func (of *pipefops_t) sendmsg(*proc_t, userio_i, []uint8, []uint8,
+    int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
-func (of *pipefops_t) recvfrom(*proc_t, userio_i, userio_i) (int, int, err_t) {
-	return 0, 0, -ENOTSOCK
+func (of *pipefops_t) recvmsg(*proc_t, userio_i, userio_i,
+    userio_i, int) (int, int, int, msgfl_t, err_t) {
+	return 0, 0, 0, 0, -ENOTSOCK
 }
 
 func (of *pipefops_t) pollone(pm pollmsg_t) ready_t {
@@ -1645,9 +1652,9 @@ func copysockaddr(proc *proc_t, san, sl int) ([]uint8, err_t) {
 }
 
 func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
-	fd, ok := proc.fd_get(fdn)
-	if !ok {
-		return int(-EBADF)
+	fd, err := _fd_write(proc, fdn)
+	if err != 0 {
+		return int(err)
 	}
 	flags := int(uint(uint32(flaglen)))
 	if flags != 0 {
@@ -1665,7 +1672,7 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 	}
 
 	buf := proc.mkuserbuf_pool(bufn, buflen)
-	ret, err := fd.fops.sendto(proc, buf, sabuf, flags)
+	ret, err := fd.fops.sendmsg(proc, buf, sabuf, nil, flags)
 	ubpool.Put(buf)
 	if err != 0 {
 		return int(err)
@@ -1675,9 +1682,9 @@ func sys_sendto(proc *proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
 
 func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
     socklenn int) int {
-	fd, ok := proc.fd_get(fdn)
-	if !ok {
-		return int(-EBADF)
+	fd, err := _fd_read(proc, fdn)
+	if err != 0 {
+		return int(err)
 	}
 	flags := uint(uint32(flaglen))
 	if flags != 0 {
@@ -1699,7 +1706,8 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 		}
 	}
 	fromsa := proc.mkuserbuf_pool(sockaddrn, salen)
-	ret, addrlen, err := fd.fops.recvfrom(proc, buf, fromsa)
+	ret, addrlen, _, _, err := fd.fops.recvmsg(proc, buf, fromsa,
+	    zeroubuf, 0)
 	ubpool.Put(buf)
 	ubpool.Put(fromsa)
 	if err != 0 {
@@ -1842,7 +1850,7 @@ func (sf *sudfops_t) pathi() *imemnode_t {
 	panic("cwd socket?")
 }
 
-func (sf *sudfops_t) read(dst userio_i) (int, err_t) {
+func (sf *sudfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	return 0, -ENODEV
 }
 
@@ -1853,7 +1861,7 @@ func (sf *sudfops_t) reopen() err_t {
 	return 0
 }
 
-func (sf *sudfops_t) write(userio_i) (int, err_t) {
+func (sf *sudfops_t) write(*proc_t, userio_i) (int, err_t) {
 	return 0, -ENODEV
 }
 
@@ -1928,8 +1936,8 @@ func (sf *sudfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return nil, -EINVAL
 }
 
-func (sf *sudfops_t) sendto(proc *proc_t, src userio_i, sa []uint8,
-    flags int) (int, err_t) {
+func (sf *sudfops_t) sendmsg(proc *proc_t, src userio_i, sa []uint8,
+    cmsg []uint8, flags int) (int, err_t) {
 	poff := 2
 	if len(sa) <= poff {
 		return 0, -EINVAL
@@ -1973,12 +1981,15 @@ func (sf *sudfops_t) sendto(proc *proc_t, src userio_i, sa []uint8,
 	return <- sund.inret, 0
 }
 
-func (sf *sudfops_t) recvfrom(proc *proc_t, dst userio_i,
-    fromsa userio_i) (int, int, err_t) {
+func (sf *sudfops_t) recvmsg(proc *proc_t, dst userio_i,
+    fromsa userio_i, cmsg userio_i, flags int) (int, int, int, msgfl_t, err_t) {
+	if cmsg.totalsz() != 0 {
+		panic("no imp")
+	}
 	// XXX what does recv'ing on an unbound unix datagram socket supposed
 	// to do? openbsd and linux seem to block forever.
 	if !sf.bound {
-		return 0, 0, -ECONNREFUSED
+		return 0, 0, 0, 0, -ECONNREFUSED
 	}
 	sund := sf.sunaddr.sund
 	// XXX send userbuf to sund directly
@@ -1987,7 +1998,7 @@ func (sf *sudfops_t) recvfrom(proc *proc_t, dst userio_i,
 
 	ret, err := dst.uiowrite(sbuf.data)
 	if err != 0 {
-		return 0, 0, err
+		return 0, 0, 0, 0, err
 	}
 	// fill in from address
 	var addrlen int
@@ -1995,10 +2006,10 @@ func (sf *sudfops_t) recvfrom(proc *proc_t, dst userio_i,
 		sa := sbuf.from.sockaddr_un()
 		addrlen, err = fromsa.uiowrite(sa)
 		if err != 0 {
-			return 0, 0, err
+			return 0, 0, 0, 0, err
 		}
 	}
-	return ret, addrlen, 0
+	return ret, addrlen, 0, 0, 0
 }
 
 func (sf *sudfops_t) pollone(pm pollmsg_t) ready_t {
@@ -2241,8 +2252,8 @@ func (sus *susfops_t) pathi() *imemnode_t {
 	panic("unix stream cwd?")
 }
 
-func (sus *susfops_t) read(dst userio_i) (int, err_t) {
-	read, _, err := sus.recvfrom(nil, dst, nil)
+func (sus *susfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
+	read, _, _, _, err := sus.recvmsg(p, dst, zeroubuf, zeroubuf, 0)
 	return read, err
 }
 
@@ -2258,8 +2269,8 @@ func (sus *susfops_t) reopen() err_t {
 	return err2
 }
 
-func (sus *susfops_t) write(src userio_i) (int, err_t) {
-	wrote, err := sus.sendto(nil, src, nil, 0)
+func (sus *susfops_t) write(p *proc_t, src userio_i) (int, err_t) {
+	wrote, err := sus.sendmsg(p, src, nil, nil, 0)
 	if err == -EPIPE {
 		err = -ECONNRESET
 	}
@@ -2386,8 +2397,8 @@ func (sus *susfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return newsock, 0
 }
 
-func (sus *susfops_t) sendto(proc *proc_t, src userio_i,
-    toaddr []uint8, flags int) (int, err_t) {
+func (sus *susfops_t) sendmsg(proc *proc_t, src userio_i, toaddr []uint8,
+    cmsg []uint8, flags int) (int, err_t) {
 	if !sus.conn {
 		return 0, -ENOTCONN
 	}
@@ -2395,17 +2406,20 @@ func (sus *susfops_t) sendto(proc *proc_t, src userio_i,
 		return 0, -EISCONN
 	}
 
-	return sus.pipeout.write(src)
+	return sus.pipeout.write(proc, src)
 }
 
-func (sus *susfops_t) recvfrom(proc *proc_t, dst userio_i,
-    fromsa userio_i) (int, int, err_t) {
+func (sus *susfops_t) recvmsg(proc *proc_t, dst userio_i, fromsa userio_i,
+    cmsg userio_i, flags int) (int, int, int, err_t) {
+	if cmsg.totalsz() != 0 {
+		panic("no imp")
+	}
 	if !sus.conn {
-		return 0, 0, -ENOTCONN
+		return 0, 0, 0, -ENOTCONN
 	}
 
-	ret, err := sus.pipein.read(dst)
-	return ret, 0, err
+	ret, err := sus.pipein.read(proc, dst)
+	return ret, 0, 0, err
 }
 
 func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
@@ -2704,7 +2718,7 @@ func (sf *suslfops_t) pathi() *imemnode_t {
 	panic("unix stream listener cwd?")
 }
 
-func (sf *suslfops_t) read(userio_i) (int, err_t) {
+func (sf *suslfops_t) read(*proc_t, userio_i) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
@@ -2712,7 +2726,7 @@ func (sf *suslfops_t) reopen() err_t {
 	return sf.susl.susl_reopen(1)
 }
 
-func (sf *suslfops_t) write(userio_i) (int, err_t) {
+func (sf *suslfops_t) write(*proc_t, userio_i) (int, err_t) {
 	return 0, -EPIPE
 }
 
@@ -2766,12 +2780,14 @@ func (sf *suslfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 	return nil, -EINVAL
 }
 
-func (sf *suslfops_t) sendto(*proc_t, userio_i, []uint8, int) (int, err_t) {
+func (sf *suslfops_t) sendmsg(*proc_t, userio_i, []uint8, []uint8,
+    int) (int, err_t) {
 	return 0, -ENOTCONN
 }
 
-func (sf *suslfops_t) recvfrom(*proc_t, userio_i, userio_i) (int, int, err_t) {
-	return 0, 0, -ENOTCONN
+func (sf *suslfops_t) recvmsg(*proc_t, userio_i, userio_i,
+    userio_i, int) (int, int, int, msgfl_t, err_t) {
+	return 0, 0, 0, 0, -ENOTCONN
 }
 
 func (sf *suslfops_t) pollone(pm pollmsg_t) ready_t {
@@ -3110,7 +3126,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	hdata := make([]uint8, 512)
 	ub := &fakeubuf_t{}
 	ub.fake_init(hdata)
-	ret, err := file.fops.read(ub)
+	ret, err := file.fops.read(proc, ub)
 	if err != 0 {
 		restore()
 		return int(err)
