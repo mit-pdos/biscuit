@@ -2018,6 +2018,8 @@ memmove(void *dst, const void *src, size_t n)
 void *
 memset(void *d, int c, size_t n)
 {
+	if (n == 0)
+		return d;
 	char v = (char)c;
 	char *p = d;
 	while (n--)
@@ -3174,16 +3176,29 @@ _malloc(size_t sz)
 {
 	// Minimum allocation size = 8 bytes.
 	sz = (sz + 7) & ~7;
-	if (!curh || bump + sz > curh->end) {
+	int newhdr = 0;
+	if (curh) {
+		size_t left = curh->end - bump;
+		newhdr = sz > left;
+	} else {
+		newhdr = 1;
+	}
+	if (newhdr) {
 		const size_t pgsize = 1 << 12;
 		// Also account for the header that we embed within the
 		// allocated space.
 		size_t mmapsz = (sz + sizeof(struct header_t) + pgsize - 1) &
 				~(pgsize - 1);
+		if (mmapsz < sz) {
+			errno = EOVERFLOW;
+			return NULL;
+		}
 		struct header_t *nh = mmap(NULL, mmapsz, PROT_READ | PROT_WRITE,
 		    MAP_ANON | MAP_PRIVATE, -1, 0);
-		if (nh == MAP_FAILED)
+		if (nh == MAP_FAILED) {
+			errno = ENOMEM;
 			return NULL;
+		}
 		nh->start = (char *)nh;
 		nh->end = nh->start + mmapsz;
 		nh->objs = 0;
@@ -3214,8 +3229,6 @@ malloc(size_t sz)
 	void *ret = _malloc(sz);
 	release();
 
-	if (!ret)
-		errno = ENOMEM;
 	return ret;
 }
 
