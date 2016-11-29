@@ -469,7 +469,7 @@ func (m *vmregion_t) insert(vmi *vminfo_t) {
 		m.hole.pglen -= uintptr(vmi.pglen)
 	} else if vmi.pgn >= m.hole.startn &&
 	    vmi.pgn < m.hole.startn + m.hole.pglen {
-		m.hole.pglen = m.hole.startn - vmi.pgn
+		m.hole.pglen = vmi.pgn - m.hole.startn
 	}
 	m._pglen += vmi.pglen
 	var par *rbn_t
@@ -628,7 +628,7 @@ func (m *vmregion_t) _findhole(minpgn, minlen uintptr) (uintptr, uintptr) {
 			}
 		} else {
 			if vmi.pgn - startn >= minlen {
-				pglen = startn - vmi.pgn
+				pglen = vmi.pgn - startn
 				done = true
 			} else {
 				startn = vmi.pgn + uintptr(vmi.pglen)
@@ -639,7 +639,7 @@ func (m *vmregion_t) _findhole(minpgn, minlen uintptr) (uintptr, uintptr) {
 		startn = minpgn
 	}
 	if pglen == 0 {
-		pglen = (0x100 << 39) - startn
+		pglen = (0x100 << (39 - PGSHIFT)) - startn
 	}
 	return startn, pglen
 }
