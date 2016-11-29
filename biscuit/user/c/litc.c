@@ -27,6 +27,8 @@
 #define SYS_SHUTDOWN     48
 #define SYS_BIND         49
 #define SYS_LISTEN       50
+#define SYS_RECVMSG      51
+#define SYS_SENDMSG      52
 #define SYS_GETSOCKOPT   55
 #define SYS_FORK         57
 #define SYS_EXECV        59
@@ -558,6 +560,14 @@ recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *sa,
 	return ret;
 }
 
+ssize_t
+recvmsg(int fd, struct msghdr *msg, int flags)
+{
+	ssize_t ret = syscall(SA(fd), SA(msg), SA(flags), 0, 0, SYS_RECVMSG);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
 int
 rename(const char *old, const char *new)
 {
@@ -581,6 +591,14 @@ sendto(int fd, const void *buf, size_t len, int flags,
 	ulong flaglen = len << 32 | flags;
 	int ret = syscall(SA(fd), SA(buf), SA(flaglen), SA(sa), SA(slen),
 	    SYS_SENDTO);
+	ERRNO_NEG(ret);
+	return ret;
+}
+
+ssize_t
+sendmsg(int fd, struct msghdr *msg, int flags)
+{
+	ssize_t ret = syscall(SA(fd), SA(msg), SA(flags), 0, 0, SYS_SENDMSG);
 	ERRNO_NEG(ret);
 	return ret;
 }
@@ -3434,18 +3452,6 @@ strpbrk(const char *a, const char *bb)
 
 int
 setitimer(int a, struct itimerval *b, struct itimerval *c)
-{
-	FAIL;
-}
-
-ssize_t
-recvmsg(int a, struct msghdr *b, int c)
-{
-	FAIL;
-}
-
-ssize_t
-sendmsg(int a, struct msghdr *b, int c)
 {
 	FAIL;
 }

@@ -318,6 +318,10 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		ret = sys_bind(p, a1, a2, a3)
 	case SYS_LISTEN:
 		ret = sys_listen(p, a1, a2)
+	case SYS_RECVMSG:
+		ret = sys_recvmsg(p, a1, a2, a3)
+	case SYS_SENDMSG:
+		ret = sys_sendmsg(p, a1, a2, a3)
 	case SYS_GETSOCKOPT:
 		ret = sys_getsockopt(p, a1, a2, a3, a4, a5)
 	case SYS_FORK:
@@ -1070,6 +1074,7 @@ type pipe_t struct {
 	writers int
 	closed	bool
 	pollers	pollers_t
+	passfds	passfd_t
 }
 
 func (o *pipe_t) pipe_start() {
@@ -1191,9 +1196,31 @@ func (o *pipe_t) op_reopen(rd, wd int) err_t {
 	if o.readers == 0 && o.writers == 0 {
 		o.closed = true
 		o.cbuf.cb_release()
+		o.passfds.closeall()
 	}
 	o.Unlock()
 	return 0
+}
+
+func (o *pipe_t) op_fdadd(nfd *fd_t) err_t {
+	o.Lock()
+	defer o.Unlock()
+
+	for !o.passfds.add(nfd) {
+		o.wcond.Wait()
+	}
+	return 0
+}
+
+func (o *pipe_t) op_fdtake() (*fd_t, bool) {
+	o.Lock()
+	defer o.Unlock()
+	ret, ok := o.passfds.take()
+	if !ok {
+		return nil, false
+	}
+	o.wcond.Broadcast()
+	return ret, true
 }
 
 type pipefops_t struct {
@@ -1718,6 +1745,142 @@ func sys_recvfrom(proc *proc_t, fdn, bufn, flaglen, sockaddrn,
 		if !proc.userwriten(socklenn, 8, addrlen) {
 			return int(-EFAULT)
 		}
+	}
+	return ret
+}
+
+func sys_recvmsg(proc *proc_t, fdn, _msgn, _flags int) int {
+	if _flags != 0 {
+		panic("no imp")
+	}
+	fd, err := _fd_read(proc, fdn)
+	if err != 0 {
+		return int(err)
+	}
+	// maybe copy the msghdr to kernel space?
+	msgn := uint(_msgn)
+	iovn, ok1 := proc.userreadn(int(msgn + 2*8), 8)
+	niov, ok2 := proc.userreadn(int(msgn + 3*8), 4)
+	cmsgl, ok3 := proc.userreadn(int(msgn + 5*8), 8)
+	salen, ok4 := proc.userreadn(int(msgn + 1*8), 8)
+	if !ok1 || !ok2  || !ok3 || !ok4 {
+		return int(-EFAULT)
+	}
+
+	var saddr userio_i
+	saddr = zeroubuf
+	if salen > 0 {
+		saddrn, ok := proc.userreadn(int(msgn + 0*8), 8)
+		if !ok {
+			return int(-EFAULT)
+		}
+		ub := proc.mkuserbuf(saddrn, salen)
+		saddr = ub
+	}
+	var cmsg userio_i
+	cmsg = zeroubuf
+	if cmsgl > 0 {
+		cmsgn, ok := proc.userreadn(int(msgn + 4*8), 8)
+		if !ok {
+			return int(-EFAULT)
+		}
+		ub := proc.mkuserbuf(cmsgn, cmsgl)
+		cmsg = ub
+	}
+
+	iov := &useriovec_t{}
+	err = iov.iov_init(proc, uint(iovn), niov)
+	if err != 0 {
+		return int(err)
+	}
+
+	ret, sawr, cmwr, msgfl, err := fd.fops.recvmsg(proc, iov, saddr,
+	    cmsg, 0)
+	if err != 0 {
+		return int(err)
+	}
+	// write size of socket address, ancillary data, and msg flags back to
+	// user space
+	if !proc.userwriten(int(msgn + 28), 4, int(msgfl)) {
+		return int(-EFAULT)
+	}
+	if saddr.totalsz() != 0 {
+		if !proc.userwriten(int(msgn + 1*8), 8, sawr) {
+			return int(-EFAULT)
+		}
+	}
+	if cmsg.totalsz() != 0 {
+		if !proc.userwriten(int(msgn + 5*8), 8, cmwr) {
+			return int(-EFAULT)
+		}
+	}
+	return ret
+}
+
+func sys_sendmsg(proc *proc_t, fdn, _msgn, _flags int) int {
+	if _flags != 0 {
+		panic("no imp")
+	}
+	fd, err := _fd_write(proc, fdn)
+	if err != 0 {
+		return int(err)
+	}
+	// maybe copy the msghdr to kernel space?
+	msgn := uint(_msgn)
+	iovn, ok1 := proc.userreadn(int(msgn + 2*8), 8)
+	niov, ok2 := proc.userreadn(int(msgn + 3*8), 8)
+	cmsgl, ok3 := proc.userreadn(int(msgn + 6*8), 8)
+	salen, ok4 := proc.userreadn(int(msgn + 1*8), 8)
+	if !ok1 || !ok2  || !ok3 || !ok4 {
+		return int(-EFAULT)
+	}
+	// copy to address and ancillary data to kernel space
+	var saddr []uint8
+	if salen > 0 {
+		if salen > 64 {
+			return int(-EINVAL)
+		}
+		saddrva, ok := proc.userreadn(int(msgn + 0*8), 8)
+		if !ok {
+			return int(-EFAULT)
+		}
+		saddr = make([]uint8, salen)
+		ub := proc.mkuserbuf(saddrva, salen)
+		did, err := ub.uioread(saddr)
+		if err != 0 {
+			return int(err)
+		}
+		if did != salen {
+			panic("how")
+		}
+	}
+	var cmsg []uint8
+	if cmsgl > 0 {
+		if cmsgl > 256 {
+			return int(-EINVAL)
+		}
+		cmsgva, ok := proc.userreadn(int(msgn + 4*8), 8)
+		if !ok {
+			return int(-EFAULT)
+		}
+		cmsg = make([]uint8, cmsgl)
+		ub := proc.mkuserbuf(cmsgva, cmsgl)
+		did, err := ub.uioread(cmsg)
+		if err != 0 {
+			return int(err)
+		}
+		if did != cmsgl {
+			panic("how")
+		}
+	}
+	iov := &useriovec_t{}
+	err = iov.iov_init(proc, uint(iovn), niov)
+	if err != 0 {
+		return int(err)
+	}
+	ret, err := fd.fops.sendmsg(proc, iov, saddr, cmsg, 0)
+	if err != 0 {
+		return int(err)
 	}
 	return ret
 }
@@ -2406,20 +2569,70 @@ func (sus *susfops_t) sendmsg(proc *proc_t, src userio_i, toaddr []uint8,
 		return 0, -EISCONN
 	}
 
+	if len(cmsg) > 0 {
+		scmsz := 16 + 8
+		if len(cmsg) < scmsz {
+			return 0, -EINVAL
+		}
+		// allow fd sending
+		cmsg_len := readn(cmsg, 8, 0)
+		cmsg_level := readn(cmsg, 4, 8)
+		cmsg_type := readn(cmsg, 4, 12)
+		scm_rights := 1
+		if cmsg_len != scmsz || cmsg_level != scm_rights ||
+		    cmsg_type != SOL_SOCKET {
+			return 0, -EINVAL
+		}
+		chdrsz := 16
+		fdn := readn(cmsg, 4, chdrsz)
+		ofd, ok := proc.fd_get(fdn)
+		if !ok {
+			return 0, -EBADF
+		}
+		nfd, err := copyfd(ofd)
+		if err != 0 {
+			return 0, err
+		}
+		err = sus.pipeout.pipe.op_fdadd(nfd)
+		if err != 0 {
+			return 0, err
+		}
+	}
+
 	return sus.pipeout.write(proc, src)
 }
 
 func (sus *susfops_t) recvmsg(proc *proc_t, dst userio_i, fromsa userio_i,
-    cmsg userio_i, flags int) (int, int, int, err_t) {
-	if cmsg.totalsz() != 0 {
-		panic("no imp")
-	}
+    cmsg userio_i, flags int) (int, int, int, msgfl_t, err_t) {
 	if !sus.conn {
-		return 0, 0, 0, -ENOTCONN
+		return 0, 0, 0, 0, -ENOTCONN
 	}
 
 	ret, err := sus.pipein.read(proc, dst)
-	return ret, 0, 0, err
+	if err != 0 {
+		return 0, 0, 0, 0, err
+	}
+
+	var msgfl msgfl_t
+	var cmsglen int
+	scmsz := 16 + 8
+	if cmsg.totalsz() >= scmsz {
+		if nfd, ok := sus.pipein.pipe.op_fdtake(); ok {
+			nfdn := proc.fd_insert(nfd, nfd.perms)
+			buf := make([]uint8, scmsz)
+			writen(buf, 8, 0, scmsz)
+			writen(buf, 4, 8, SOL_SOCKET)
+			scm_rights := 1
+			writen(buf, 4, 12, scm_rights)
+			writen(buf, 4, 16, nfdn)
+			l, err := cmsg.uiowrite(buf)
+			if err != 0 {
+				return 0, 0, 0, 0, err
+			}
+			cmsglen = l
+		}
+	}
+	return ret, 0, cmsglen, msgfl, 0
 }
 
 func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
@@ -2445,6 +2658,9 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 }
 
 func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	sus.bl.Lock()
+	defer sus.bl.Unlock()
+
 	switch cmd {
 	case F_GETFL:
 		return int(sus.options)

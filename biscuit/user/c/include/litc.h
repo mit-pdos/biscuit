@@ -355,11 +355,46 @@ ssize_t readv(int, const struct iovec *, int);
 int reboot(void);
 ssize_t recv(int, void *, size_t, int);
 ssize_t recvfrom(int, void *, size_t, int, struct sockaddr *, socklen_t *);
+
+struct msghdr {
+	void		*msg_name;
+	socklen_t	msg_namelen;
+	struct iovec	*msg_iov;
+	int		msg_iovlen;
+	uint		msg_flags;
+	void		*msg_control;
+	socklen_t	msg_controllen;
+};
+
+struct cmsghdr {
+	socklen_t	cmsg_len;
+	int		cmsg_level;
+	int		cmsg_type;
+#define		SCM_RIGHTS	1
+	char		_data[];
+};
+
+#define		MSG_TRUNC	(1 << 0)
+#define		MSG_CTRUNC	(1 << 1)
+
+#define		CMSG_FIRSTHDR(m)	\
+	(((m)->msg_controllen > 0) ? (struct cmsghdr *)(m)->msg_control : NULL)
+#define		CMSG_NXTHDR(m, c)	\
+	(((char *)c + c->cmsg_len == \
+	  (char *)(m)->msg_control + (m)->msg_controllen) ? \
+	    NULL : (struct cmsghdr *)((char *)c + c->cmsg_len))
+#define		CMSG_DATA(c)		((uchar *)&(c)->_data)
+#define		ROUND2(x, n)		((x + (n - 1)) & ~(n - 1))
+#define		CMSG_LEN(x)		(ROUND2(sizeof(struct cmsghdr) + x, 8ul))
+#define		CMSG_SPACE(x)		(ROUND2(sizeof(struct cmsghdr) + x, 8ul))
+
+ssize_t recvmsg(int, struct msghdr *, int);
 int rename(const char *, const char *);
 int select(int, fd_set*, fd_set*, fd_set*, struct timeval *);
 ssize_t send(int, const void *, size_t, int);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
     socklen_t);
+ssize_t sendmsg(int, struct msghdr *, int);
 int setrlimit(int, const struct rlimit *);
 pid_t setsid(void);
 // levels
@@ -878,35 +913,6 @@ struct itimerval {
 #define		ITIMER_REAL	1
 
 int setitimer(int, struct itimerval *, struct itimerval *);
-
-struct msghdr {
-	void		*msg_name;
-	socklen_t	msg_namelen;
-	struct iovec	*msg_iov;
-	int		msg_iovlen;
-	uint		msg_flags;
-	void		*msg_control;
-	socklen_t	msg_controllen;
-};
-
-struct cmsghdr {
-	socklen_t	cmsg_len;
-	int		cmsg_level;
-	int		cmsg_type;
-#define		SCM_RIGHTS	1
-};
-
-ssize_t recvmsg(int, struct msghdr *, int);
-ssize_t sendmsg(int, struct msghdr *, int);
-
-#define		MSG_TRUNC	(1 << 0)
-#define		MSG_CTRUNC	(1 << 1)
-
-#define		CMSG_FIRSTHDR(x)	({abort(); NULL;})
-#define		CMSG_NXTHDR(x, y)	({abort(); NULL;})
-#define		CMSG_DATA(x)		({abort(); NULL;})
-#define		CMSG_LEN(x)		(sizeof(struct cmsghdr) + x)
-#define		CMSG_SPACE(x)		(sizeof(struct cmsghdr) + x)
 
 struct tm *localtime(const time_t *);
 struct tm *gmtime(const time_t *);

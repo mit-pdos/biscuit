@@ -3142,6 +3142,114 @@ void iovtest(void)
 	printf("iov ok\n");
 }
 
+void _scmchald(int s)
+{
+	char buf[CMSG_SPACE(sizeof(int))];
+	struct msghdr msg;
+	struct iovec iov;
+	memset(&msg, 0, sizeof(msg));
+	memset(&iov, 0, sizeof(iov));
+
+	char dur;
+	iov.iov_base = &dur;
+	iov.iov_len = 1;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+	if (recvmsg(s, &msg, 0) != 1)
+		err(-1, "recvmsg");
+	if (dur != 4)
+		errx(-1, "wrong data");
+	struct cmsghdr *cmsg;
+	for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+		if (cmsg->cmsg_len == CMSG_LEN(sizeof(int)) &&
+		    cmsg->cmsg_level == SOL_SOCKET &&
+		    cmsg->cmsg_type == SCM_RIGHTS) {
+			int *fdp = (int *)CMSG_DATA(cmsg);
+			int fd = *fdp;
+			char chmsg[] = "chald message";
+			size_t chlen = sizeof(chmsg) - 1;
+			if (write(fd, chmsg, chlen) != chlen)
+				err(-1, "write");
+			close(fd);
+		}
+	}
+	exit(0);
+}
+
+void scmtest(void)
+{
+	printf("scm rights test\n");
+
+	int s[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, s) == -1)
+		err(-1, "socketpair");
+	pid_t c = fork();
+	if (c == -1)
+		err(-1, "fork");
+	if (c == 0) {
+		if (close(s[0]) == -1)
+			err(-1, "close");
+		_scmchald(s[1]);
+	}
+	if (close(s[1]) == -1)
+		err(-1, "close");
+
+	int fd;
+	if ((fd = open("/tmp/wtf", O_CREAT | O_TRUNC | O_RDWR)) == -1)
+		err(-1, "open");
+
+	char buf[CMSG_SPACE(sizeof(int))];
+	struct msghdr msg;
+	struct iovec iov;
+	memset(&msg, 0, sizeof(msg));
+	memset(&iov, 0, sizeof(iov));
+	char dur = 4;
+	iov.iov_base = &dur;
+	iov.iov_len = 1;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+	struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_RIGHTS;
+	int *fdp = (int *)CMSG_DATA(cmsg);
+	*fdp = fd;
+	ssize_t r;
+	if ((r = sendmsg(s[0], &msg, 0)) != 1)
+		err(-1, "sendmsg %zd", r);
+	char pmsg[] = "parent message";
+	size_t plen = sizeof(pmsg) - 1;
+	if (write(fd, pmsg, plen) != plen)
+		err(-1, "write");
+	int status;
+	if (wait(&status) != c)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+	if (lseek(fd, 0, SEEK_SET) == -1)
+		err(-1, "lseek");
+	char chmsg[] = "chald message";
+	size_t chlen = sizeof(chmsg) - 1;
+	char rbuf[512];
+	if ((r = read(fd, rbuf, sizeof(rbuf))) != plen + chlen)
+		errx(-1, "par read %zd %zu", r, plen + chlen);
+	char ok1[] = "chald messageparent mesage";
+	char ok2[] = "parent messagechald message";
+	if (strncmp(rbuf, ok1, sizeof(ok1) - 1) != 0 &&
+	    strncmp(rbuf, ok2, sizeof(ok2) - 1) != 0)
+		errx(-1, "bad data");
+	if (close(fd) == -1)
+		err(-1, "close");
+	if (close(s[0]) == -1)
+		err(-1, "close");
+
+	printf("scm rights ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3217,6 +3325,7 @@ main(int argc, char *argv[])
   mapshared();
   spair();
   iovtest();
+  scmtest();
 
   exectest();
 

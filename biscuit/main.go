@@ -1551,7 +1551,7 @@ func (ub *userbuf_t) ub_init(p *proc_t, uva, len int) {
 		panic("negative length")
 	}
 	if len >= 1 << 39 {
-		fmt.Printf("suspiciously large user buffer\n")
+		fmt.Printf("suspiciously large user buffer (%v)\n", len)
 	}
 	ub.userva = uva
 	ub.len = len
@@ -1897,6 +1897,45 @@ func (cb *circbuf_t) _advtail(sz int) {
 		panic("advancing empty cb")
 	}
 	cb.tail += sz
+}
+
+type passfd_t struct {
+	cb	[]*fd_t
+	inum	uint
+	cnum	uint
+}
+
+func (pf *passfd_t) add(nfd *fd_t) bool {
+	if pf.cb == nil {
+		pf.cb = make([]*fd_t, 10)
+	}
+	l := uint(len(pf.cb))
+	if pf.inum - pf.cnum == l {
+		return false
+	}
+	pf.cb[pf.inum % l] = nfd
+	pf.inum++
+	return true
+}
+
+func (pf *passfd_t) take() (*fd_t, bool) {
+	l := uint(len(pf.cb))
+	if pf.inum == pf.cnum {
+		return nil, false
+	}
+	ret := pf.cb[pf.cnum % l]
+	pf.cnum++
+	return ret, true
+}
+
+func (pf *passfd_t) closeall() {
+	for {
+		fd, ok := pf.take()
+		if !ok {
+			break
+		}
+		fd.fops.close()
+	}
 }
 
 func cpus_stack_init(apcnt int, stackstart uintptr) {
