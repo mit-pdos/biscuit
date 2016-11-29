@@ -573,8 +573,10 @@ type proc_t struct {
 	fds		[]*fd_t
 	// where to start scanning for free fds
 	fdstart		int
-	// fds, fdstart protected by fdl
+	// fds, fdstart, nfds protected by fdl
 	fdl		sync.Mutex
+	// number of valid file descriptors
+	nfds		int
 
 	cwd		*fd_t
 	// to serialize chdirs
@@ -604,7 +606,7 @@ func newpid() int {
 var _deflimits = ulimit_t {
 	// mem limit = 128 MB
 	pages: (1 << 27) / (1 << 12),
-	nofile: RLIM_INFINITY,
+	nofile: 1024,
 }
 
 func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
@@ -623,6 +625,11 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 	ret.pid = np
 	ret.fds = fds
 	ret.fdstart = 3
+	for i := range ret.fds {
+		if ret.fds[i] != nil {
+			ret.nfds++
+		}
+	}
 	ret.cwd = cwd
 	if ret.cwd.fops.reopen() != 0 {
 		panic("must succeed")
@@ -694,9 +701,13 @@ func (p *proc_t) cowfault(userva int) {
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
-func (p *proc_t) fd_insert(f *fd_t, perms int) int {
+func (p *proc_t) fd_insert(f *fd_t, perms int) (int, bool) {
 	p.fdl.Lock()
 
+	if uint(p.nfds) >= p.ulim.nofile {
+		p.fdl.Unlock()
+		return -1, false
+	}
 	// find free fd
 	newfd := p.fdstart
 	found := false
@@ -716,7 +727,6 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 		p.fds = nfdt
 	}
 	fdn := newfd
-	//fd := &fd_t{}
 	fd := f
 	fd.perms = perms
 	if p.fds[fdn] != nil {
@@ -726,8 +736,9 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) int {
 	if fd.fops == nil {
 		panic("wtf!")
 	}
+	p.nfds++
 	p.fdl.Unlock()
-	return fdn
+	return fdn, true
 }
 
 // fdn is not guaranteed to be a sane fd
@@ -758,8 +769,14 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	ret := p.fds[fdn]
 	p.fds[fdn] = nil
 	ok := ret != nil
-	if ok && fdn < p.fdstart {
-		p.fdstart = fdn
+	if ok {
+		p.nfds--
+		if p.nfds < 0 {
+			panic("neg nfds")
+		}
+		if fdn < p.fdstart {
+			p.fdstart = fdn
+		}
 	}
 	p.fdl.Unlock()
 	return ret, ok

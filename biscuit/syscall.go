@@ -56,6 +56,7 @@ const(
 	ENOTDIR		err_t = 20
 	EISDIR		err_t = 21
 	EINVAL		err_t = 22
+	EMFILE		err_t = 24
 	ENOSPC		err_t = 28
 	ESPIPE		err_t = 29
 	EPIPE		err_t = 32
@@ -522,7 +523,11 @@ func sys_open(proc *proc_t, pathn int, _flags int, mode int) int {
 	if flags & O_CLOEXEC != 0 {
 		fdperms |= FD_CLOEXEC
 	}
-	fdn := proc.fd_insert(file, fdperms)
+	fdn, ok := proc.fd_insert(file, fdperms)
+	if !ok {
+		close_panic(file)
+		return int(-EMFILE)
+	}
 	return fdn
 }
 
@@ -944,8 +949,19 @@ func sys_pipe2(proc *proc_t, pipen, _flags int) int {
 	wops := &pipefops_t{pipe: p, writer: true, options: opts}
 	rpipe := &fd_t{fops: rops}
 	wpipe := &fd_t{fops: wops}
-	rfd := proc.fd_insert(rpipe, rfp)
-	wfd := proc.fd_insert(wpipe, wfp)
+	rfd, ok := proc.fd_insert(rpipe, rfp)
+	if !ok {
+		close_panic(rpipe)
+		return int(-EMFILE)
+	}
+	wfd, ok := proc.fd_insert(wpipe, wfp)
+	if !ok {
+		if sys_close(proc, rfd) != 0 {
+			panic("must succeed")
+		}
+		close_panic(wpipe)
+		return int(-EMFILE)
+	}
 
 	ok1 := proc.userwriten(pipen, 4, rfd)
 	ok2 := proc.userwriten(pipen + 4, 4, wfd)
@@ -1606,7 +1622,11 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	}
 	file := &fd_t{}
 	file.fops = sfops
-	fdn := proc.fd_insert(file, FD_READ | FD_WRITE | clop)
+	fdn, ok := proc.fd_insert(file, FD_READ | FD_WRITE | clop)
+	if !ok {
+		close_panic(file)
+		return int(-EMFILE)
+	}
 	return fdn
 }
 
@@ -1653,7 +1673,11 @@ func sys_accept(proc *proc_t, fdn, sockaddrn, socklenn int) int {
 		}
 	}
 	newfd := &fd_t{fops: newfops}
-	ret := proc.fd_insert(newfd, FD_READ | FD_WRITE)
+	ret, ok := proc.fd_insert(newfd, FD_READ | FD_WRITE)
+	if !ok {
+		close_panic(newfd)
+		return int(-EMFILE)
+	}
 	return ret
 }
 
@@ -1917,8 +1941,19 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 	fd1.fops = sfops1
 	fd2 := &fd_t{}
 	fd2.fops = sfops2
-	fdn1 := proc.fd_insert(fd1, FD_READ | FD_WRITE | clop)
-	fdn2 := proc.fd_insert(fd2, FD_READ | FD_WRITE | clop)
+	fdn1, ok := proc.fd_insert(fd1, FD_READ | FD_WRITE | clop)
+	if !ok {
+		close_panic(fd1)
+		return int(-EMFILE)
+	}
+	fdn2, ok := proc.fd_insert(fd2, FD_READ | FD_WRITE | clop)
+	if !ok {
+		if sys_close(proc, fdn1) != 0 {
+			panic("must succeed")
+		}
+		close_panic(fd2)
+		return int(-EMFILE)
+	}
 	if !proc.userwriten(sockn, 4, fdn1) ||
 	    !proc.userwriten(sockn + 4, 4, fdn2) {
 		return int(-EFAULT)
@@ -2602,6 +2637,37 @@ func (sus *susfops_t) sendmsg(proc *proc_t, src userio_i, toaddr []uint8,
 	return sus.pipeout.write(proc, src)
 }
 
+func (sus *susfops_t) _fdrecv(proc *proc_t, cmsg userio_i,
+    fl msgfl_t) (int, msgfl_t, err_t) {
+	scmsz := 16 + 8
+	if cmsg.totalsz() < scmsz {
+		return 0, fl, 0
+	}
+	nfd, ok := sus.pipein.pipe.op_fdtake()
+	if !ok {
+		return 0, fl, 0
+	}
+	nfdn, ok := proc.fd_insert(nfd, nfd.perms)
+	if !ok {
+		close_panic(nfd)
+		return 0, fl, -EMFILE
+	}
+	buf := make([]uint8, scmsz)
+	writen(buf, 8, 0, scmsz)
+	writen(buf, 4, 8, SOL_SOCKET)
+	scm_rights := 1
+	writen(buf, 4, 12, scm_rights)
+	writen(buf, 4, 16, nfdn)
+	l, err := cmsg.uiowrite(buf)
+	if err != 0 {
+		return 0, fl, err
+	}
+	if l != scmsz {
+		panic("how")
+	}
+	return scmsz, fl, 0
+}
+
 func (sus *susfops_t) recvmsg(proc *proc_t, dst userio_i, fromsa userio_i,
     cmsg userio_i, flags int) (int, int, int, msgfl_t, err_t) {
 	if !sus.conn {
@@ -2612,27 +2678,8 @@ func (sus *susfops_t) recvmsg(proc *proc_t, dst userio_i, fromsa userio_i,
 	if err != 0 {
 		return 0, 0, 0, 0, err
 	}
-
-	var msgfl msgfl_t
-	var cmsglen int
-	scmsz := 16 + 8
-	if cmsg.totalsz() >= scmsz {
-		if nfd, ok := sus.pipein.pipe.op_fdtake(); ok {
-			nfdn := proc.fd_insert(nfd, nfd.perms)
-			buf := make([]uint8, scmsz)
-			writen(buf, 8, 0, scmsz)
-			writen(buf, 4, 8, SOL_SOCKET)
-			scm_rights := 1
-			writen(buf, 4, 12, scm_rights)
-			writen(buf, 4, 16, nfdn)
-			l, err := cmsg.uiowrite(buf)
-			if err != 0 {
-				return 0, 0, 0, 0, err
-			}
-			cmsglen = l
-		}
-	}
-	return ret, 0, cmsglen, msgfl, 0
+	cmsglen, msgfl, err := sus._fdrecv(proc, cmsg, 0)
+	return ret, 0, cmsglen, msgfl, err
 }
 
 func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
