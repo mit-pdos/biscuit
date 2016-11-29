@@ -3370,7 +3370,7 @@ getenv(char *name)
 uid_t
 geteuid(void)
 {
-	HACK(0);
+	HACK(666);
 }
 
 struct passwd *
@@ -3546,7 +3546,9 @@ sigprocmask(int a, sigset_t *b, sigset_t *c)
 int
 sigsuspend(const sigset_t *a)
 {
-	FAIL;
+	fprintf(stderr, "warning: no signals, thus sleep forever...\n");
+	pause();
+	errx(-1, "sigsuspend no imp");
 }
 
 int

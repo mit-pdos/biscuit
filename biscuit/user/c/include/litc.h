@@ -386,7 +386,7 @@ struct cmsghdr {
 #define		CMSG_DATA(c)		((uchar *)&(c)->_data)
 #define		ROUND2(x, n)		((x + (n - 1)) & ~(n - 1))
 #define		CMSG_LEN(x)		(ROUND2(sizeof(struct cmsghdr) + x, 8ul))
-#define		CMSG_SPACE(x)		(ROUND2(sizeof(struct cmsghdr) + x, 8ul))
+#define		CMSG_SPACE(x)		CMSG_LEN(x)
 
 ssize_t recvmsg(int, struct msghdr *, int);
 int rename(const char *, const char *);

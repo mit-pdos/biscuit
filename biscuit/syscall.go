@@ -1853,7 +1853,7 @@ func sys_sendmsg(proc *proc_t, fdn, _msgn, _flags int) int {
 	msgn := uint(_msgn)
 	iovn, ok1 := proc.userreadn(int(msgn + 2*8), 8)
 	niov, ok2 := proc.userreadn(int(msgn + 3*8), 8)
-	cmsgl, ok3 := proc.userreadn(int(msgn + 6*8), 8)
+	cmsgl, ok3 := proc.userreadn(int(msgn + 5*8), 8)
 	salen, ok4 := proc.userreadn(int(msgn + 1*8), 8)
 	if !ok1 || !ok2  || !ok3 || !ok4 {
 		return int(-EFAULT)
@@ -2413,7 +2413,6 @@ type susfops_t struct {
 	pipein	*pipefops_t
 	pipeout	*pipefops_t
 	conn	bool
-	// to prevent bind(2) and listen(2) races
 	bl	sync.Mutex
 	bound	bool
 	lstn	bool
