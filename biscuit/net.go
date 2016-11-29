@@ -1330,6 +1330,7 @@ type tcplisten_t struct {
 		cond	*sync.Cond
 	}
 	openc	int
+	pollers	pollers_t
 }
 
 type tcpinc_t struct {
@@ -1370,6 +1371,7 @@ func (tcl *tcplisten_t) _conadd(tcb *tcptcb_t) {
 	rc.sl[rc.inum % l] = tcb
 	rc.inum++
 	rc.cond.Signal()
+	tcl.pollers.wakeready(R_READ)
 }
 
 func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
@@ -2792,6 +2794,7 @@ func (tf *tcpfops_t) close() err_t {
 	if tf.tcb.openc == 0 {
 		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
+		tf.tcb.pollers.wakeready(R_READ | R_HUP)
 	}
 
 	return 0
@@ -3257,7 +3260,20 @@ func (tl *tcplfops_t) pollone(pm pollmsg_t) ready_t {
 	if _, ok := tl._closed(); !ok {
 		return 0
 	}
-	panic("no imp")
+	// why poll a listen socket for writing? don't allow it
+	pm.events &^= R_WRITE
+	if pm.events == 0 {
+		return 0
+	}
+	var ret ready_t
+	rc := &tl.tcl.rcons
+	if pm.events & R_READ != 0 && rc.inum != rc.cnum {
+		ret |= R_READ
+	}
+	if ret == 0 && pm.dowait {
+		tl.tcl.pollers.addpoller(&pm)
+	}
+	return ret
 }
 
 func (tl *tcplfops_t) fcntl(proc *proc_t, cmd, opt int) int {
