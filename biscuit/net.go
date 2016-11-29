@@ -3202,7 +3202,10 @@ func (tl *tcplfops_t) accept(proc *proc_t, saddr userio_i) (fdops_i,
 	fops.tcb.openc = 1
 
 	// write remote socket address to userspace
-	buf := make([]uint8, 8)
+	sinsz := 8
+	buf := make([]uint8, sinsz)
+	writen(buf, 1, 0, sinsz)
+	writen(buf, 1, 1, AF_INET)
 	writen(buf, 2, 2, int(htons(tcb.rport)))
 	writen(buf, 4, 4, int(htonl(uint32(tcb.rip))))
 	did, err := saddr.uiowrite(buf)
