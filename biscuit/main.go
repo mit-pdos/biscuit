@@ -919,9 +919,10 @@ func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
 	vmi, ok := p.vmregion.lookup(fa)
 	if ok {
+		isguard := vmi.perms == 0
 		iswrite := ecode & uintptr(PTE_W) != 0
 		writeok := vmi.perms & uint(PTE_W) != 0
-		if iswrite && !writeok {
+		if isguard || (iswrite && !writeok) {
 			ok = false
 		}
 	}
