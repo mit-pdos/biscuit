@@ -3886,6 +3886,10 @@ func sys_futex(proc *proc_t, _op, _futn, _fut2n, aux, timespecn int) int {
 	}
 	futn := uintptr(_futn)
 	fut2n := uintptr(_fut2n)
+	// futn must be 4 byte aligned
+	if (futn | fut2n) & 0x3 != 0 {
+		return int(-EINVAL)
+	}
 	fut, err := va2fut(proc, futn)
 	if err != 0 {
 		return int(err)

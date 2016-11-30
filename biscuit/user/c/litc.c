@@ -284,8 +284,7 @@ fcntl(int fd, int cmd, ...)
 		break;
 	}
 	default:
-		errno = EINVAL;
-		ret = -1;
+		errx(-1, "no imp");
 	}
 	va_end(ap);
 	return ret;
@@ -973,6 +972,8 @@ pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
 int
 pthread_mutex_lock(pthread_mutex_t *m)
 {
+	if (!dolock)
+		return 0;
 	// fast path
 	uint * const p = &m->locks;
 	uint old;
