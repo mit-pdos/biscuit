@@ -1682,13 +1682,14 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 		case LASTACK:
 			// user may queue for send, receive is done
 			tc.estab(tcp, rest)
-			tc.seg_maybe()
 			if tc.finacked() {
 				if tc.txbuf.cbuf.used() != 0 {
 					panic("closing but txdata remains")
 				}
 				tc.dead = true
-				fmt.Printf("* done!\n")
+				//fmt.Printf("* done!\n")
+			} else {
+				tc.seg_maybe()
 			}
 		case FINWAIT1:
 			// user may no longer queue for send, may still receive
@@ -1722,13 +1723,10 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			return
 	}
 
-	if tc.state == TIMEWAIT {
-		tc.timewaitdeath()
-	}
-
 	if tc.dead {
 		tcpcons.tcb_del(tc)
-		return
+	} else if tc.state == TIMEWAIT {
+		tc.timewaitdeath()
 	} else {
 		tc.ack_maybe()
 	}
@@ -1761,7 +1759,7 @@ func (tc *tcptcb_t) finchk(ip4 *ip4hdr_t, tcp *tcphdr_t, os, ns tcpstate_t) {
 }
 
 // if all user data has been sent (we must have sent FIN), move to the next
-// state. returns true of this function changed the TCB's state.
+// state. returns true if this function changed the TCB's state.
 func (tc *tcptcb_t) txfinished(os, ns tcpstate_t) bool {
 	if !tc.txdone {
 		return false
@@ -1821,7 +1819,7 @@ func (tc *tcptcb_t) ack_now() {
 // sendnow overrides the forcedelay flag
 func (tc *tcptcb_t) _acktime(sendnow bool) {
 	tc._sanity()
-	if !tc.remack.outa {
+	if !tc.remack.outa || tc.dead {
 		return
 	}
 	fdelay := tc.remack.forcedelay
@@ -1962,7 +1960,7 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 // the middle timesout?
 func (tc *tcptcb_t) _txtimeout_start() {
 	nts, ok := tc.snd.tsegs.nextts()
-	if !ok {
+	if !ok || tc.dead {
 		return
 	}
 	if tc.remseg.tstart {
@@ -2390,15 +2388,26 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 		tcpcons.tcb_del(tc)
 		return 0
 	} else if tc.state != ESTAB && tc.state != CLOSEWAIT {
-		return -ENOTCONN
+		return -EINVAL
 	}
 	if tc.txdone {
+		panic("how")
 		return 0
 	}
 
 	tc.txdone = true
 	tc.snd.finseq = tc.txbuf.end_seq()
-	if tc.snd.nxt == tc.snd.finseq {
+
+	os := tc.state
+	var ns tcpstate_t
+	if os == ESTAB {
+		ns = FINWAIT1
+	} else if os == CLOSEWAIT {
+		ns = LASTACK
+	} else {
+		panic("unexpected tcb state")
+	}
+	if tc.txfinished(os, ns) {
 		tc.sched_ack()
 		tc.ack_now()
 	}

@@ -2410,10 +2410,6 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		v |= nosnoop_tso
 		x.rs(DMATXCTL, v)
 
-		// XXX fill in mask bits for TCP segment flags
-		//x.rs(DTXTCPFLGL, xxx)
-		//x.rs(DTXTCPFLGH, xxx)
-
 		// XXX may want to enable relaxed ordering or DCA for tx
 		//for n := 0; n < 128; n++ {
 		//	x.rs(DCA_TXCTRL(n), xxx)
@@ -2487,6 +2483,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	// MSI-X
 	cnt_wdis := uint32(1 << 31)
 	maxitr := uint32(0x1ff << 3)
+	//maxitr := uint32(0x3c << 3)
 	x.rs(EITR(0), cnt_wdis | maxitr)
 
 	// mode clear all previous interrupts
