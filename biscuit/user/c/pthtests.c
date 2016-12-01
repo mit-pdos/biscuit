@@ -118,7 +118,10 @@ int main(int argc, char **argv)
 	printf("fork\n");
 
 	// make address space copy-on-write by forking
-	if (fork() == 0)
+	pid_t c = fork();
+	if (c == -1)
+		err(-1, "fork");
+	else if (c == 0)
 		return 0;
 
 	go = 1;

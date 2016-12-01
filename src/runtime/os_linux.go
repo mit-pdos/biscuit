@@ -1625,6 +1625,33 @@ func sysc_setup(myrsp uintptr) {
 	Wrmsr(sysenter_esp, 0)
 }
 
+func Condflush(_refp *int32, p_pmap, va uintptr, pgcount int) bool {
+	var refp *uint32
+	var refc uint32
+	fl := Pushcli()
+	cr3 := Rcr3()
+	ret := true
+	if cr3 != p_pmap {
+		ret = false
+		goto out
+	}
+	// runtime internal atomic doesn't have a load for int32...
+	refp = (*uint32)(unsafe.Pointer(_refp))
+	refc = atomic.Load(refp)
+	if refc > 2 {
+		ret = false
+		goto out
+	}
+	if pgcount == 1 {
+		invlpg(va)
+	} else {
+		Lcr3(cr3)
+	}
+out:
+	Popcli(fl)
+	return ret
+}
+
 var tlbshoot_wait uintptr
 var tlbshoot_pg uintptr
 var tlbshoot_count uintptr

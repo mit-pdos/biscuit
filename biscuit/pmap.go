@@ -1069,11 +1069,6 @@ func is_mapped(pmap *[512]int, va int, size int) bool {
 	return true
 }
 
-func invlpg(va int) {
-	dur := unsafe.Pointer(uintptr(va))
-	runtime.Invlpg(dur)
-}
-
 func physmapped1(pmap *[512]int, phys int, depth int, acc int,
     thresh int, tsz int) (bool, int) {
 	for i, c := range pmap {

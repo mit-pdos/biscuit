@@ -594,11 +594,17 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		proc.vmadd_anon(addr, lenn, perms)
 	}
 	proc.mmapi = addr + lenn
+	tshoot := false
 	for i := 0; i < lenn; i += PGSIZE {
 		_, p_pg := refpg_new()
-		proc.page_insert(addr + i, p_pg, perms, true)
+		ns := proc.page_insert(addr + i, p_pg, perms, true)
+		tshoot = tshoot || ns
 	}
-	// no tlbshoot because mmap never replaces pages for now
+	// sys_mmap won't replace pages since it always finds unused VA space,
+	// so the following TLB shootdown is never used.
+	if tshoot {
+		proc.tlbshoot(0, 1)
+	}
 	proc.Unlock_pmap()
 	return addr
 }
@@ -628,7 +634,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 		upto += PGSIZE
 	}
 	pgs := upto >> PGSHIFT
-	proc.tlbshoot(addrn, pgs)
+	proc.tlbshoot(uintptr(addrn), pgs)
 	proc.vmregion.remove(addrn, upto)
 	for i := range ppgs {
 		refdown(ppgs[i])
@@ -3150,7 +3156,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	chtf = *ptf
 
 	if mkproc {
-
 		// copy fd table
 		parent.fdl.Lock()
 		cfds := make([]*fd_t, len(parent.fds))
@@ -3166,8 +3171,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		}
 		parent.fdl.Unlock()
 
-		child = proc_new(parent.name + " [child]",
-		    parent.cwd, cfds)
+		child = proc_new(parent.name + " [child]", parent.cwd, cfds)
 		child.pwait = &parent.mywait
 		parent.mywait.start_proc(child.pid)
 
@@ -3180,11 +3184,13 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		child.p_pmap = p_pmap
 		rsp := chtf[TF_RSP]
 		doflush := parent.vm_fork(child, rsp)
+		if !doflush {
+			panic("no writable segs?")
+		}
 
 		// flush all ptes now marked COW
 		if doflush {
-			// this flushes the TLB for now
-			parent.tlbshoot(0, 1)
+			parent.tlbflush()
 		}
 		parent.Unlock_pmap()
 
@@ -3258,7 +3264,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 
 	var p_pg int
 	perms := PTE_U | PTE_P
-	var tshoot bool
+	isempty := true
 
 	if iswrite {
 		// XXX could avoid copy for last process to fault on a shared
@@ -3278,7 +3284,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 		if cow {
 			phys := *pte & PTE_ADDR
 			pgsrc = dmap(phys)
-			tshoot = true
+			isempty = false
 		} else {
 			// XXXPANIC
 			if *pte != 0 {
@@ -3312,13 +3318,11 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 		if vmi.perms & uint(PTE_W) != 0 {
 			perms |= PTE_COW
 		}
-		tshoot = false
 	}
 
-	isempty := !tshoot
-	proc.page_insert(int(faultaddr), p_pg, perms, isempty)
+	tshoot := proc.page_insert(int(faultaddr), p_pg, perms, isempty)
 	if tshoot {
-		proc.tlbshoot(int(faultaddr), 1)
+		proc.tlbshoot(faultaddr, 1)
 	}
 }
 

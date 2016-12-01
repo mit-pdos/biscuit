@@ -898,7 +898,8 @@ func (p *proc_t) mkfxbuf() *[64]int {
 	return ret
 }
 
-func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) {
+// returns true if a present mapping was modified (i.e. need to flush TLB)
+func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) bool {
 	p.lockassert_pmap()
 	refup(uintptr(p_pg))
 	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W)
@@ -913,9 +914,9 @@ func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) {
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
-		invlpg(va)
 		refdown(p_old)
 	}
+	return ninval
 }
 
 func (p *proc_t) page_remove(va int) (uintptr, bool) {
@@ -926,7 +927,6 @@ func (p *proc_t) page_remove(va int) (uintptr, bool) {
 	if pte != nil && *pte & PTE_P != 0 {
 		p_old = uintptr(*pte & PTE_ADDR)
 		*pte = 0
-		invlpg(va)
 		remmed = true
 	}
 	return p_old, remmed
@@ -952,14 +952,27 @@ func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {
 	return true
 }
 
-func (p *proc_t) tlbshoot(startva, pgcount int) {
+// flush TLB on all CPUs that may have this processes' pmap loaded
+func (p *proc_t) tlbflush() {
+	// this flushes the TLB for now
+	p.tlbshoot(0, 2)
+}
+
+func (p *proc_t) tlbshoot(startva uintptr, pgcount int) {
 	if pgcount == 0 {
 		return
 	}
 	p.lockassert_pmap()
-	if p.thread_count() > 1 {
-		tlb_shootdown(p.p_pmap, startva, pgcount)
+	// fast path: the pmap is loaded in exactly one CPU's cr3, and it happens
+	// to be this CPU. we detect that one CPU has the pmap loaded by a pmap
+	// ref count == 2 (1 for proc_t ref, 1 for CPU).
+	p_pmap := uintptr(p.p_pmap)
+	refp, _ := _refaddr(p_pmap)
+	if runtime.Condflush(refp, p_pmap, startva, pgcount) {
+		return
 	}
+	// slow path, must send TLB shootdowns
+	tlb_shootdown(uintptr(p.p_pmap), startva, pgcount)
 }
 
 func (p *proc_t) resched(tid tid_t) bool {
@@ -2329,11 +2342,11 @@ func attach_devs() int {
 	return ncpu
 }
 
-func tlb_shootdown(p_pmap, va, pgcount int) {
+func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	if numcpus == 1 {
 		return
 	}
-	othercpus := uintptr(numcpus - 1)
+	othercpus := uintptr(numcpus)
 	mygen := runtime.Tlbadmit(uintptr(p_pmap), othercpus, uintptr(va),
 	    uintptr(pgcount))
 
@@ -2356,7 +2369,7 @@ func tlb_shootdown(p_pmap, va, pgcount int) {
 
 	tlbshootvec := 70
 	// broadcast shootdown
-	low := ipilow(3, 0, tlbshootvec)
+	low := ipilow(2, 0, tlbshootvec)
 	icrw(0, low)
 
 	// wait for other cpus to finish

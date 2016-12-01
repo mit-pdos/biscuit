@@ -2973,6 +2973,31 @@ void lazyfaults(void)
 	printf("lazy fault ok\n");
 }
 
+__attribute__((aligned(4096)))
+volatile long _observe;
+
+void forktlb(void)
+{
+	printf("fork shootdown\n");
+	_observe = 0;
+	pid_t c = fork();
+	if (c == -1) {
+		err(-1, "fork");
+	} else if (c != 0) {
+		_observe = -1;
+	} else {
+		if (_observe != 0)
+			errx(-1, "fork didn't shoot down %ld", _observe);
+		exit(0);
+	}
+	int status;
+	if (wait(&status) != c)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+	printf("fork shootdown success\n");
+}
+
 void mapshared(void)
 {
 	printf("mmap shared test\n");
@@ -3322,6 +3347,7 @@ main(int argc, char *argv[])
   futextest();
 
   lazyfaults();
+  forktlb();
   mapshared();
   spair();
   iovtest();
