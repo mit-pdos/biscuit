@@ -909,6 +909,9 @@ func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) bool {
 		if vempty {
 			panic("pte not empty")
 		}
+		if *pte & PTE_U == 0 {
+			panic("replacing kernel page")
+		}
 		ninval = true
 		p_old = uintptr(*pte & PTE_ADDR)
 	}
@@ -919,17 +922,20 @@ func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) bool {
 	return ninval
 }
 
-func (p *proc_t) page_remove(va int) (uintptr, bool) {
+func (p *proc_t) page_remove(va int) bool {
 	p.lockassert_pmap()
 	remmed := false
 	pte := pmap_lookup(p.pmap, va)
-	var p_old uintptr
 	if pte != nil && *pte & PTE_P != 0 {
-		p_old = uintptr(*pte & PTE_ADDR)
+		if *pte & PTE_U == 0 {
+			panic("removing kernel page")
+		}
+		p_old := uintptr(*pte & PTE_ADDR)
+		refdown(p_old)
 		*pte = 0
 		remmed = true
 	}
-	return p_old, remmed
+	return remmed
 }
 
 func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {

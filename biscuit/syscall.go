@@ -615,30 +615,27 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 	}
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
+
+	vmi1, ok1 := proc.vmregion.lookup(uintptr(addrn))
+	vmi2, ok2 := proc.vmregion.lookup(uintptr(addrn + len) - 1)
+	if !ok1 || !ok2 || vmi1.pgn != vmi2.pgn {
+		return int(-EINVAL)
+	}
+
+	// addrn must be page-aligned
 	len = roundup(len, PGSIZE)
 	var ret int
-	var upto int
-	ppgs := make([]uintptr, 0, 4)
 	for i := 0; i < len; i += PGSIZE {
 		p := addrn + i
 		if p < USERMIN {
 			ret = int(-EINVAL)
 			break
 		}
-		p_pg, ok := proc.page_remove(p)
-		if !ok {
-			ret = int(-EINVAL)
-			break
-		}
-		ppgs = append(ppgs, p_pg)
-		upto += PGSIZE
+		proc.page_remove(p)
 	}
-	pgs := upto >> PGSHIFT
+	pgs := len >> PGSHIFT
 	proc.tlbshoot(uintptr(addrn), pgs)
-	proc.vmregion.remove(addrn, upto)
-	for i := range ppgs {
-		refdown(ppgs[i])
-	}
+	proc.vmregion.remove(addrn, len)
 	return ret
 }
 
