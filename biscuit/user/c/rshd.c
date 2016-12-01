@@ -43,6 +43,8 @@ int main(int argc, char **argv)
 			execv(args[0], args);
 			err(-1, "execv");
 		}
+		if (close(s) == -1)
+			err(-1, "close");
 		uint a = (sin.sin_addr.s_addr >>  0) & 0xff;
 		uint b = (sin.sin_addr.s_addr >>  8) & 0xff;
 		uint c = (sin.sin_addr.s_addr >> 16) & 0xff;
