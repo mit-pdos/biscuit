@@ -82,9 +82,9 @@ extern "C" {
 
 #define		MAXBUF		4096
 
-#define		MAJOR(x)	((long)((ulong)x >> 32))
-#define		MINOR(x)	((long)(ulong)(uint)x)
-#define		MKDEV(x, y)	((dev_t)((ulong)x << 32 | (ulong)y))
+#define		MAJOR(x)	((long)((ulong)x >> 40))
+#define		MINOR(x)	((long)(((ulong)x >> 32) & 0xff))
+#define		MKDEV(x, y)	((dev_t)((ulong)x << 40 | (ulong)y << 32))
 
 /*
  * system calls
@@ -236,13 +236,16 @@ struct stat {
 #define		S_IFDIR		(2ul << 16)
 #define		S_IFIFO		(3ul << 16)
 #define		S_IFLNK		(4ul << 16)
+#define		S_IFBLK		(5ul << 16)
 
+// XXX cleanup modes/dev majors
 #define		S_ISDIR(mode)	((mode & S_IFMT) == S_IFDIR)
 #define		S_ISDEV(mode)	(MAJOR(mode) != 0)
 #define		S_ISFIFO(mode)	((mode & S_IFMT) == S_IFIFO)
 #define		S_ISREG(mode)	((mode & S_IFMT) == S_IFREG)
 #define		S_ISSOCK(mode)	(MAJOR(mode) == 2)
 #define		S_ISLNK(mode)	((mode & S_IFMT) == S_IFLNK)
+#define		S_ISBLK(mode)	(MAJOR(mode) == S_IFBLK)
 
 // please never use these
 #define		S_ISUID		(04000)

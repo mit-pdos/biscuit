@@ -622,7 +622,6 @@ func (fo *fsfops_t) shutdown(read, write bool) err_t {
 }
 
 type devfops_t struct {
-	priv	*imemnode_t
 	maj	int
 	min	int
 }
@@ -751,6 +750,154 @@ func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 }
 
 func (df *devfops_t) shutdown(read, write bool) err_t {
+	return -ENOTSOCK
+}
+
+type rawdfops_t struct {
+	sync.Mutex
+	minor	int
+	offset	int
+}
+
+func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
+	raw.Lock()
+	defer raw.Unlock()
+	buf := new([512]uint8)
+	var did int
+	for dst.remain() != 0 {
+		blkno := raw.offset / 512
+		bdev_read(blkno, buf)
+		boff := raw.offset % 512
+		c, err := dst.uiowrite(buf[boff:])
+		if err != 0 {
+			return 0, err
+		}
+		raw.offset += c
+		did += c
+	}
+	return did, 0
+}
+
+func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
+	raw.Lock()
+	defer raw.Unlock()
+	buf := new([512]uint8)
+	var did int
+	for src.remain() != 0 {
+		blkno := raw.offset / 512
+		boff := raw.offset % 512
+		if boff != 0 || src.remain() < 512 {
+			bdev_read(blkno, buf)
+		}
+		c, err := src.uioread(buf[boff:])
+		if err != 0 {
+			return 0, err
+		}
+		bdev_write(blkno, buf)
+		raw.offset += c
+		did += c
+	}
+	return did, 0
+}
+
+func (raw *rawdfops_t) fullpath() (string, err_t) {
+	panic("weird cwd")
+}
+
+func (raw *rawdfops_t) truncate(newlen uint) err_t {
+	return -EINVAL
+}
+
+func (raw *rawdfops_t) pread(dst userio_i, offset int) (int, err_t) {
+	return 0, -ESPIPE
+}
+
+func (raw *rawdfops_t) pwrite(src userio_i, offset int) (int, err_t) {
+	return 0, -ESPIPE
+}
+
+func (raw *rawdfops_t) fstat(st *stat_t) err_t {
+	raw.Lock()
+	defer raw.Unlock()
+	st.wmode(mkdev(D_RAWDISK, raw.minor))
+	return 0
+}
+
+func (raw *rawdfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+	return nil, -ENODEV
+}
+
+func (raw *rawdfops_t) pathi() *imemnode_t {
+	panic("bad cwd")
+}
+
+func (raw *rawdfops_t) close() err_t {
+	return 0
+}
+
+func (raw *rawdfops_t) reopen() err_t {
+	return 0
+}
+
+func (raw *rawdfops_t) lseek(off, whence int) (int, err_t) {
+	raw.Lock()
+	defer raw.Unlock()
+
+	switch whence {
+	case SEEK_SET:
+		raw.offset = off
+	case SEEK_CUR:
+		raw.offset += off
+	//case SEEK_END:
+	default:
+		return 0, -EINVAL
+	}
+	if raw.offset < 0 {
+		raw.offset = 0
+	}
+	return raw.offset, 0
+}
+
+func (raw *rawdfops_t) accept(*proc_t, userio_i) (fdops_i, int, err_t) {
+	return nil, 0, -ENOTSOCK
+}
+
+func (raw *rawdfops_t) bind(*proc_t, []uint8) err_t {
+	return -ENOTSOCK
+}
+
+func (raw *rawdfops_t) connect(proc *proc_t, sabuf []uint8) err_t {
+	return -ENOTSOCK
+}
+
+func (raw *rawdfops_t) listen(*proc_t, int) (fdops_i, err_t) {
+	return nil, -ENOTSOCK
+}
+
+func (raw *rawdfops_t) sendmsg(*proc_t, userio_i, []uint8, []uint8,
+    int) (int, err_t) {
+	return 0, -ENOTSOCK
+}
+
+func (raw *rawdfops_t) recvmsg(*proc_t, userio_i,
+    userio_i, userio_i, int) (int, int, int, msgfl_t, err_t) {
+	return 0, 0, 0, 0, -ENOTSOCK
+}
+
+func (raw *rawdfops_t) pollone(pm pollmsg_t) ready_t {
+	return pm.events & (R_READ | R_WRITE)
+}
+
+func (raw *rawdfops_t) fcntl(proc *proc_t, cmd, opt int) int {
+	return int(-ENOSYS)
+}
+
+func (raw *rawdfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
+    intarg int) (int, err_t) {
+	return 0, -ENOTSOCK
+}
+
+func (raw *rawdfops_t) shutdown(read, write bool) err_t {
 	return -ENOTSOCK
 }
 
@@ -928,7 +1075,14 @@ func fs_open(paths string, flags fdopt_t, mode int, cwd *imemnode_t,
 		if fs_close(fsf.priv) != 0 {
 			panic("must succeed")
 		}
-		ret.fops = &devfops_t{priv: priv, maj: maj, min: min}
+		switch maj {
+		case D_CONSOLE, D_DEVNULL:
+			ret.fops = &devfops_t{maj: maj, min: min}
+		case D_RAWDISK:
+			ret.fops = &rawdfops_t{minor: min}
+		default:
+			panic("bad dev")
+		}
 	} else {
 		apnd := flags & O_APPEND != 0
 		ret.fops = &fsfops_t{priv: priv, append: apnd}

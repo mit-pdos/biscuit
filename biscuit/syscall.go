@@ -1535,22 +1535,21 @@ func sys_getrusage(proc *proc_t, who, rusagep int) int {
 	return 0
 }
 
-func mkdev(maj, min int) uint {
-	return uint(maj << 32 | min)
+func mkdev(_maj, _min int) uint {
+	maj := uint(_maj)
+	min := uint(_min)
+	if min > 0xff {
+		panic("bad minor")
+	}
+	m := maj << 8 | min
+	return uint(m << 32)
 }
 
 func unmkdev(d uint) (int, int) {
-	return int(d >> 32), int(uint32(d))
+	return int(d >> 40), int(uint8(d >> 32))
 }
 
 func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
-	dsplit := func(n int) (int, int) {
-		a := uint(n)
-		maj := a >> 32
-		min := uint32(a)
-		return int(maj), int(min)
-	}
-
 	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return int(-EFAULT)
@@ -1563,7 +1562,7 @@ func sys_mknod(proc *proc_t, pathn, moden, devn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	maj, min := dsplit(devn)
+	maj, min := unmkdev(uint(devn))
 	fsf, err := _fs_open(path, O_CREAT, 0, proc.cwd.fops.pathi(), maj, min)
 	if err != 0 {
 		return int(err)

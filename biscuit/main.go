@@ -150,6 +150,7 @@ const(
 	D_SUD 		= 2
 	D_SUS 		= 3
 	D_DEVNULL	= 4
+	D_RAWDISK	= 5
 	D_FIRST		= D_CONSOLE
 	D_LAST		= D_SUS
 )
@@ -215,7 +216,7 @@ const(
 	FD_CLOEXEC	= 0x4
 )
 
-var dummyfops	= &devfops_t{priv: nil, maj: D_CONSOLE, min: 0}
+var dummyfops	= &devfops_t{maj: D_CONSOLE, min: 0}
 
 // special fds
 var fd_stdin 	= fd_t{fops: dummyfops, perms: FD_READ}
@@ -3076,7 +3077,7 @@ func main() {
 		fmt.Printf("[It is now safe to benchmark...]\n")
 	}()
 
-	fmt.Printf("              BiscuitOS\n");
+	fmt.Printf("              BiscuitOS\n")
 	fmt.Printf("          go version: %v\n", runtime.Version())
 	pmem := runtime.Totalphysmem()
 	fmt.Printf("  %v MB of physical memory\n", pmem >> 20)
