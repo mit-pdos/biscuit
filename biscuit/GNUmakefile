@@ -24,7 +24,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
 	  pipetest kill killtest mmaptest usertests thtests pthtests \
 	  mknodtest sockettest mv sleep time true init sync reboot ebizzy \
-	  uname pwd rmtree halp less lnc rshd
+	  uname pwd rmtree halp less lnc rshd bimage
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
@@ -89,12 +89,13 @@ BHW := bhw.pdos.csail.mit.edu
 
 net: net.img
 	@echo; echo waiting for client copy...
-	@sha1sum net.img
+	@sha1sum $^
+	@ls -al $^
 	until nc $(BHW) 31337 -q1 < $^; do \
 		echo timed out. trying again...; \
 		sleep 1; \
 	done
-	@sha1sum net.img
+	@ls -al $^
 	@echo; echo copied Biscuit image to $(BHW) ; echo
 
 $(GOBIN):

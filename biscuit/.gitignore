@@ -70,6 +70,7 @@
 /user/c/less
 /user/c/lnc
 /user/c/rshd
+/user/c/bimage
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -139,3 +140,4 @@
 /fsdir/bin/less
 /fsdir/bin/lnc
 /fsdir/bin/rshd
+/fsdir/bin/bimage
