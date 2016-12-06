@@ -499,9 +499,9 @@ long sys_info(long);
 int truncate(const char *, off_t);
 int unlink(const char *);
 pid_t wait(int *);
-pid_t waitpid(int, int *, int);
+pid_t waitpid(pid_t, int *, int);
 pid_t wait3(int *, int, struct rusage *);
-pid_t wait4(int, int *, int, struct rusage *);
+pid_t wait4(pid_t, int *, int, struct rusage *);
 #define		WAIT_ANY	(-1)
 #define		WAIT_MYPGRP	0
 

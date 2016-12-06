@@ -727,13 +727,13 @@ wait(int *status)
 }
 
 pid_t
-waitpid(int pid, int *status, int options)
+waitpid(pid_t pid, int *status, int options)
 {
 	return wait4(pid, status, options, NULL);
 }
 
 pid_t
-wait4(int pid, int *status, int options, struct rusage *r)
+wait4(pid_t pid, int *status, int options, struct rusage *r)
 {
 	pid_t ret = syscall(pid, SA(status), SA(options), SA(r), 0,
 	    SYS_WAIT4);
