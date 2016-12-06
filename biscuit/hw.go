@@ -2100,7 +2100,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				routetbl.routes.dump()
 
 				rantest = true
-				go x.tester1()
+				//go x.tester1()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2478,13 +2478,15 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 	// configure interrupts with throttling
 	x.rs(GPIE, 0)
-	// set minimum interrupt period to 1.048 ms (the largest possible
-	// period). openbsd's period is 125us. EITR[1-128] are reserved for
-	// MSI-X
+	// interrupt throttling significantly affects bulk transfer
+	// performance. openbsd's period is 125us where linux uses anything
+	// from 80us to 672us.  EITR[1-128] are reserved for MSI-X
 	cnt_wdis := uint32(1 << 31)
-	maxitr := uint32(0x1ff << 3)
-	//maxitr := uint32(0x3c << 3)
-	x.rs(EITR(0), cnt_wdis | maxitr)
+	// maxitr's unit is 2.048 us
+	//maxitr := uint32(0x1ff << 3)
+	// 125us period
+	smallitr := uint32(0x3c << 3)
+	x.rs(EITR(0), cnt_wdis | smallitr)
 
 	// mode clear all previous interrupts
 	x.rs(EICR, ^uint32(0))

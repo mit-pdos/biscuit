@@ -1488,8 +1488,8 @@ type tcptcb_t struct {
 	smac	*mac_t
 	dmac	*mac_t
 	state	tcpstate_t
-	// dead must only be true after both sides have acknowledged all data
-	// (i.e. on receiving reset or after LASTACK/TIMEWAIT)
+	// dead indicates that the connection is terminated and shouldn't use
+	// more CPU cycles.
 	dead	bool
 	// remote sent FIN
 	rxdone	bool
@@ -1687,7 +1687,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 					panic("closing but txdata remains")
 				}
 				tc.dead = true
-				//fmt.Printf("* done!\n")
+				tcpcons.tcb_del(tc)
 			} else {
 				tc.seg_maybe()
 			}
@@ -1723,9 +1723,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 			return
 	}
 
-	if tc.dead {
-		tcpcons.tcb_del(tc)
-	} else if tc.state == TIMEWAIT {
+	if tc.state == TIMEWAIT {
 		tc.timewaitdeath()
 	} else {
 		tc.ack_maybe()
@@ -1793,7 +1791,12 @@ func (tc *tcptcb_t) timewaitdeath() {
 		//time.Sleep(2*time.Minute)
 		// XXX XXX for testing
 		time.Sleep(10*time.Second)
-		tcpcons.tcb_del(tc)
+		tc.tcb_lock()
+		if !tc.dead {
+			tc.dead = true
+			tcpcons.tcb_del(tc)
+		}
+		tc.tcb_unlock()
 	}()
 }
 
@@ -1854,6 +1857,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 	if !ok {
 		fmt.Printf("NIC gone!\n")
 		tc.dead = true
+		tcpcons.tcb_del(tc)
 		return
 	}
 	eth, ip, th := pkt.hdrbytes()
@@ -2100,6 +2104,7 @@ func (tc *tcptcb_t) failwake() {
 	tc._sanity()
 	tc.state = CLOSED
 	tc.dead = true
+	tcpcons.tcb_del(tc)
 	tc.rxdone = true
 	tc.rxbuf.cond.Broadcast()
 	tc.txbuf.cond.Broadcast()
@@ -2168,12 +2173,10 @@ func (tc *tcptcb_t) estab(tcp *tcphdr_t, rest [][]uint8) {
 		return
 	}
 	if tcp.isrst() {
-		// XXX fail user reads/writes
 		tc.failwake()
 		return
 	}
 	if tcp.issyn() {
-		// XXX fail user reads/writes
 		tc._rst()
 		tc.failwake()
 		return
@@ -2385,6 +2388,7 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 		}
 		return 0
 	} else if tc.state == SYNSENT || tc.state == SYNRCVD {
+		tc.dead = true
 		tcpcons.tcb_del(tc)
 		return 0
 	} else if tc.state != ESTAB && tc.state != CLOSEWAIT {
@@ -2596,16 +2600,12 @@ func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool,
 	tc.l.Lock()
 	tcb, istcb := tc.econns[tk]
 
-	var l *tcplisten_t
-	var islist bool
-	if !istcb {
-		lk := tcplkey_t{lip: tk.lip, lport: tk.lport}
+	lk := tcplkey_t{lip: tk.lip, lport: tk.lport}
+	l, islist := tc.listns[lk]
+	if !islist {
+		// check for any IP listener
+		lk.lip = INADDR_ANY
 		l, islist = tc.listns[lk]
-		if !islist {
-			// check for any IP listener
-			lk.lip = INADDR_ANY
-			l, islist = tc.listns[lk]
-		}
 	}
 	tc.l.Unlock()
 
@@ -2754,22 +2754,36 @@ func net_tcp(pkt [][]uint8, tlen int) {
 	    rport: ntohs(tcph.sport)}
 	tcb, istcb, listener, islistener := tcpcons.tcb_lookup(k)
 	if istcb {
-		tcb.tcb_lock()
-		tcb.incoming(k, ip4, tcph, opts, pkt)
-		tcb.tcb_unlock()
-	} else if islistener {
+		// is the remote host reusing a closed port? if so, allow reuse
+		// of our port in timewait.
+		if tcb.state == TIMEWAIT && ntohl(tcph.seq) >= tcb.rcv.nxt &&
+		    islistener {
+			tcb.dead = true
+			tcpcons.tcb_del(tcb)
+		} else {
+			tcb.tcb_lock()
+			tcb.incoming(k, ip4, tcph, opts, pkt)
+			tcb.tcb_unlock()
+			return
+		}
+	}
+	if islistener {
 		smac := hdr[6:12]
 		listener.l.Lock()
 		listener.incoming(smac, k, ip4, tcph, opts, pkt)
 		listener.l.Unlock()
 	} else {
-		rack, ok := tcph.isack()
-		if ok {
-			send_rst(rack, k)
-		} else {
-			ack := ntohl(tcph.seq) + 1
-			send_rstack(0, ack, k)
-		}
+		_port_closed(tcph, k)
+	}
+}
+
+func _port_closed(tcph *tcphdr_t, k tcpkey_t) {
+	rack, ok := tcph.isack()
+	if ok {
+		send_rst(rack, k)
+	} else {
+		ack := ntohl(tcph.seq) + 1
+		send_rstack(0, ack, k)
 	}
 }
 
@@ -3044,7 +3058,7 @@ func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
 
 	var ret ready_t
 	isdata := !tf.tcb.rxbuf.cbuf.empty()
-	if tf.tcb.dead {
+	if tf.tcb.dead && pm.events & R_ERROR != 0 {
 		ret |= R_ERROR
 	}
 	if pm.events & R_READ != 0 && (isdata || tf.tcb.rxdone) {
@@ -3133,6 +3147,7 @@ func (tl *tcplfops_t) close() err_t {
 				break
 			}
 			tcb._rst()
+			tcb.dead = true
 			tcpcons.tcb_del(tcb)
 		}
 		tcpcons.listen_del(&tl.tcl)
