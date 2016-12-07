@@ -2814,6 +2814,7 @@ func (tf *tcpfops_t) close() err_t {
 	if tf.tcb.openc < 0 {
 		panic("neg ref")
 	}
+	// XXX linger support
 	if tf.tcb.openc == 0 {
 		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
@@ -2847,6 +2848,7 @@ func (tf *tcpfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 		tf.tcb.tcb_unlock()
 		return 0, err
 	}
+	noblk := tf.options & O_NONBLOCK != 0
 
 	var read int
 	var err err_t
@@ -2856,6 +2858,10 @@ func (tf *tcpfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 			break
 		}
 		if read != 0 || tf.tcb.rxdone {
+			break
+		}
+		if noblk {
+			err = -EAGAIN
 			break
 		}
 		tf.tcb.rbufwait()
@@ -2877,6 +2883,7 @@ func (tf *tcpfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		tf.tcb.tcb_unlock()
 		return 0, err
 	}
+	noblk := tf.options & O_NONBLOCK != 0
 
 	var wrote int
 	var err err_t
@@ -2889,6 +2896,12 @@ func (tf *tcpfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		did, err = tf.tcb.uwrite(src)
 		wrote += did
 		if src.remain() == 0 || err != 0 {
+			break
+		}
+		if noblk {
+			if did == 0 {
+				err = -EAGAIN
+			}
 			break
 		}
 		tf.tcb.tbufwait()
