@@ -4321,6 +4321,12 @@ func sys_info(proc *proc_t, n int) int {
 		fmt.Printf("pgcount: %v\n", pgcount())
 	case 11:
 		//proc.vmregion.dump()
+		fmt.Printf("proc dump:\n")
+		proclock.Lock()
+		for i := range allprocs {
+			fmt.Printf("   %v\n", allprocs[i].name)
+		}
+		proclock.Unlock()
 		ret = 0
 	}
 
