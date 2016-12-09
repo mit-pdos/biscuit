@@ -4341,9 +4341,9 @@ func readn(a []uint8, n int, off int) int {
 	return ret
 }
 
-func writen(a []uint8, n int, off int, val int) {
+func writen(a []uint8, sz int, off int, val int) {
 	v := uint(val)
-	for i := 0; i < n; i++ {
+	for i := 0; i < sz; i++ {
 		a[off + i] = uint8((v >> (uint(i)*8)) & 0xff)
 	}
 }
