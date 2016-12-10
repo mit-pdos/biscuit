@@ -2786,15 +2786,16 @@ func net_tcp(pkt [][]uint8, tlen int) {
 	    rport: ntohs(tcph.sport)}
 	tcb, istcb, listener, islistener := tcpcons.tcb_lookup(k)
 	if istcb {
-		// is the remote host reusing a closed port? if so, allow reuse
-		// of our port in timewait.
+		// is the remote host reusing a port in TIMEWAIT? if so, allow
+		// reuse.
+		tcb.tcb_lock()
 		if tcb.state == TIMEWAIT && islistener &&
-		   !tcb.seqok(ntohl(tcph.seq), 1) && opts.tsok &&
-		   opts.tsval > tcb.tstamp.recent {
+		   opts.tsok && opts.tsval >= tcb.tstamp.recent {
 			tcb.dead = true
+			tcb.tcb_unlock()
 			tcpcons.tcb_del(tcb)
+			// fallthrough to islistener case
 		} else {
-			tcb.tcb_lock()
 			tcb.incoming(k, ip4, tcph, opts, pkt)
 			tcb.tcb_unlock()
 			return
