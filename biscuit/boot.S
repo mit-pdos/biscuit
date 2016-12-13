@@ -278,7 +278,10 @@ gdtdesc:
 .globl e820entries
 e820entries:
 	.long 0
-.org 506
+.org 0x1de
+       .byte 0, 0, 0, 0, 0xb1, 0, 0, 0
+       .long 0, 0
+.org 0x1fa
 	// this location is special: mkbdisk.py puts the number of the first fs
 	// block here
 	.long 0
