@@ -71,6 +71,8 @@
 /user/c/lnc
 /user/c/rshd
 /user/c/bimage
+/user/c/fweb
+/user/c/fcgi
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -141,3 +143,5 @@
 /fsdir/bin/lnc
 /fsdir/bin/rshd
 /fsdir/bin/bimage
+/fsdir/bin/fweb
+/fsdir/bin/fcgi
