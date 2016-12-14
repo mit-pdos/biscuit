@@ -1052,10 +1052,8 @@ func int_setup() {
 	int_set(63,  Xmsi7,  1)
 
 	int_set(64,  Xspur,    1)
-	// no longer used
 
 	int_set(70,  Xtlbshoot, 1)
-	// no longer used
 	int_set(72,  Xperfmask, 1)
 
 	p := pdesc_t{}

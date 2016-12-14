@@ -1534,11 +1534,11 @@ func (td *txdesc_t) _paylen(v uint64) {
 func (td *txdesc_t) txdone() bool {
 	rs   := uint64(1 << 27)
 	// rs is reserved after writeback...
-	if td.hwdesc.rest & rs == 0 {
+	if atomic.LoadUint64(&td.hwdesc.rest) & rs == 0 {
 		panic("dd may set only when rs is set")
 	}
 	dd := uint64(1 << 32)
-	return td.hwdesc.rest & dd != 0
+	return atomic.LoadUint64(&td.hwdesc.rest) & dd != 0
 }
 
 // if hw may writeback this descriptor, wait until the CPU observes the hw's
@@ -2065,9 +2065,13 @@ func (x *x540_t) int_handler(vector msivec_t) {
 		//	x.log("GOT LINK\n")
 		//	st |= lsc
 		//}
+
+		//m := rx | tx | rxmiss | lsc
 		//rhead := x.rl(RDH(0))
 		//thead := x.rl(TDH(0))
-		//for st == 0 {
+		//for st & m == 0 {
+		//	runtime.Gosched()
+		//	st = x.rl(EICR)
 		//	if x.rl(RDH(0)) != rhead {
 		//		st |= rx
 		//	}
@@ -2480,7 +2484,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	x.rs(GPIE, 0)
 	// interrupt throttling significantly affects bulk transfer
 	// performance. openbsd's period is 125us where linux uses anything
-	// from 80us to 672us.  EITR[1-128] are reserved for MSI-X
+	// from 80us to 672us.  EITR[1-128] are reserved for MSI-X mode.
 	cnt_wdis := uint32(1 << 31)
 	// maxitr's unit is 2.048 us
 	//maxitr := uint32(0x1ff << 3)
@@ -2488,7 +2492,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 	smallitr := uint32(0x3c << 3)
 	x.rs(EITR(0), cnt_wdis | smallitr)
 
-	// mode clear all previous interrupts
+	// clear all previous interrupts
 	x.rs(EICR, ^uint32(0))
 
 	go x.int_handler(vec)
