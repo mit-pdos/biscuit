@@ -1,4 +1,4 @@
-// Copyright 2013 The Go Authors.  All rights reserved.
+// Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -29,6 +29,8 @@ type deadState struct {
 }
 
 // checkUnreachable checks a function body for dead code.
+//
+// TODO(adonovan): use the new cfg package, which is more precise.
 func checkUnreachable(f *File, node ast.Node) {
 	var body *ast.BlockStmt
 	switch n := node.(type) {

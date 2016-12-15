@@ -1,4 +1,4 @@
-// Copyright 2013 The Go Authors.  All rights reserved.
+// Copyright 2013 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -26,7 +26,7 @@ func main() {
 	}
 
 	out, err := exec.Command("go", "tool", "api",
-		"-c", file("go1", "go1.1", "go1.2", "go1.3", "go1.4", "go1.5", "go1.6"),
+		"-c", file("go1", "go1.1", "go1.2", "go1.3", "go1.4", "go1.5", "go1.6", "go1.7"),
 		"-next", file("next"),
 		"-except", file("except")).CombinedOutput()
 	if err != nil {

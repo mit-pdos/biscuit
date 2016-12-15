@@ -1,4 +1,4 @@
-// Copyright 2015 The Go Authors.  All rights reserved.
+// Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -120,6 +120,16 @@ var ptrTests = []ptrTest{
 		imports: []string{"unsafe"},
 		support: `type S struct { p *int; a [4]byte }`,
 		body:    `i := 0; p := &S{p:&i}; s := p.a[:]; C.f(unsafe.Pointer(&s[0]))`,
+		fail:    false,
+	},
+	{
+		// Passing the address of a slice of an array that is
+		// an element in a struct, with a type conversion.
+		name:    "slice-ok-4",
+		c:       `typedef void* PV; void f(PV p) {}`,
+		imports: []string{"unsafe"},
+		support: `type S struct { p *int; a [4]byte }`,
+		body:    `i := 0; p := &S{p:&i}; C.f(C.PV(unsafe.Pointer(&p.a[0])))`,
 		fail:    false,
 	},
 	{
@@ -278,6 +288,38 @@ var ptrTests = []ptrTest{
                                  void f() { GoStr(); }`,
 			},
 		},
+		fail: true,
+	},
+	{
+		// Don't check non-pointer data.
+		// Uses unsafe code to get a pointer we shouldn't check.
+		// Although we use unsafe, the uintptr represents an integer
+		// that happens to have the same representation as a pointer;
+		// that is, we are testing something that is not unsafe.
+		name: "ptrdata1",
+		c: `#include <stdlib.h>
+                    void f(void* p) {}`,
+		imports: []string{"unsafe"},
+		support: `type S struct { p *int; a [8*8]byte; u uintptr }`,
+		body:    `i := 0; p := &S{u:uintptr(unsafe.Pointer(&i))}; q := (*S)(C.malloc(C.size_t(unsafe.Sizeof(*p)))); *q = *p; C.f(unsafe.Pointer(q))`,
+		fail:    false,
+	},
+	{
+		// Like ptrdata1, but with a type that uses a GC program.
+		name: "ptrdata2",
+		c: `#include <stdlib.h>
+                    void f(void* p) {}`,
+		imports: []string{"unsafe"},
+		support: `type S struct { p *int; a [32769*8]byte; q *int; u uintptr }`,
+		body:    `i := 0; p := S{u:uintptr(unsafe.Pointer(&i))}; q := (*S)(C.malloc(C.size_t(unsafe.Sizeof(p)))); *q = p; C.f(unsafe.Pointer(q))`,
+		fail:    false,
+	},
+	{
+		// Check deferred pointers when they are used, not
+		// when the defer statement is run.
+		name: "defer",
+		c:    `typedef struct s { int *p; } s; void f(s *ps) {}`,
+		body: `p := &C.s{}; defer C.f(p); p.p = new(C.int)`,
 		fail: true,
 	},
 }

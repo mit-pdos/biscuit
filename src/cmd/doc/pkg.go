@@ -29,17 +29,15 @@ const (
 )
 
 type Package struct {
-	writer     io.Writer // Destination for output.
-	name       string    // Package name, json for encoding/json.
-	userPath   string    // String the user used to find this package.
-	unexported bool
-	matchCase  bool
-	pkg        *ast.Package // Parsed package.
-	file       *ast.File    // Merged from all files in the package
-	doc        *doc.Package
-	build      *build.Package
-	fs         *token.FileSet // Needed for printing.
-	buf        bytes.Buffer
+	writer   io.Writer    // Destination for output.
+	name     string       // Package name, json for encoding/json.
+	userPath string       // String the user used to find this package.
+	pkg      *ast.Package // Parsed package.
+	file     *ast.File    // Merged from all files in the package
+	doc      *doc.Package
+	build    *build.Package
+	fs       *token.FileSet // Needed for printing.
+	buf      bytes.Buffer
 }
 
 type PackageError string // type returned by pkg.Fatalf.
@@ -270,7 +268,7 @@ func (pkg *Package) packageDoc() {
 	pkg.newlines(2) // Guarantee blank line before the components.
 	pkg.valueSummary(pkg.doc.Consts)
 	pkg.valueSummary(pkg.doc.Vars)
-	pkg.funcSummary(pkg.doc.Funcs)
+	pkg.funcSummary(pkg.doc.Funcs, false)
 	pkg.typeSummary()
 	pkg.bugs()
 }
@@ -310,24 +308,46 @@ func (pkg *Package) valueSummary(values []*doc.Value) {
 	}
 }
 
-// funcSummary prints a one-line summary for each function.
-func (pkg *Package) funcSummary(funcs []*doc.Func) {
+// funcSummary prints a one-line summary for each function. Constructors
+// are printed by typeSummary, below, and so can be suppressed here.
+func (pkg *Package) funcSummary(funcs []*doc.Func, showConstructors bool) {
+	// First, identify the constructors. Don't bother figuring out if they're exported.
+	var isConstructor map[*doc.Func]bool
+	if !showConstructors {
+		isConstructor = make(map[*doc.Func]bool)
+		for _, typ := range pkg.doc.Types {
+			for _, constructor := range typ.Funcs {
+				if isExported(typ.Name) {
+					isConstructor[constructor] = true
+				}
+			}
+		}
+	}
 	for _, fun := range funcs {
 		decl := fun.Decl
 		// Exported functions only. The go/doc package does not include methods here.
 		if isExported(fun.Name) {
-			pkg.oneLineFunc(decl)
+			if !isConstructor[fun] {
+				pkg.oneLineFunc(decl)
+			}
 		}
 	}
 }
 
-// typeSummary prints a one-line summary for each type.
+// typeSummary prints a one-line summary for each type, followed by its constructors.
 func (pkg *Package) typeSummary() {
 	for _, typ := range pkg.doc.Types {
 		for _, spec := range typ.Decl.Specs {
 			typeSpec := spec.(*ast.TypeSpec) // Must succeed.
 			if isExported(typeSpec.Name.Name) {
 				pkg.oneLineTypeDecl(typeSpec)
+				// Now print the constructors.
+				for _, constructor := range typ.Funcs {
+					if isExported(constructor.Name) {
+						pkg.Printf(indent)
+						pkg.oneLineFunc(constructor.Decl)
+					}
+				}
 			}
 		}
 	}
@@ -455,8 +475,8 @@ func (pkg *Package) symbolDoc(symbol string) bool {
 		}
 		pkg.valueSummary(typ.Consts)
 		pkg.valueSummary(typ.Vars)
-		pkg.funcSummary(typ.Funcs)
-		pkg.funcSummary(typ.Methods)
+		pkg.funcSummary(typ.Funcs, true)
+		pkg.funcSummary(typ.Methods, true)
 		found = true
 	}
 	if !found {
@@ -476,20 +496,54 @@ func trimUnexportedElems(spec *ast.TypeSpec) {
 	}
 	switch typ := spec.Type.(type) {
 	case *ast.StructType:
-		typ.Fields = trimUnexportedFields(typ.Fields, "fields")
+		typ.Fields = trimUnexportedFields(typ.Fields, false)
 	case *ast.InterfaceType:
-		typ.Methods = trimUnexportedFields(typ.Methods, "methods")
+		typ.Methods = trimUnexportedFields(typ.Methods, true)
 	}
 }
 
 // trimUnexportedFields returns the field list trimmed of unexported fields.
-func trimUnexportedFields(fields *ast.FieldList, what string) *ast.FieldList {
+func trimUnexportedFields(fields *ast.FieldList, isInterface bool) *ast.FieldList {
+	what := "methods"
+	if !isInterface {
+		what = "fields"
+	}
+
 	trimmed := false
 	list := make([]*ast.Field, 0, len(fields.List))
 	for _, field := range fields.List {
+		names := field.Names
+		if len(names) == 0 {
+			// Embedded type. Use the name of the type. It must be of type ident or *ident.
+			// Nothing else is allowed.
+			switch ident := field.Type.(type) {
+			case *ast.Ident:
+				if isInterface && ident.Name == "error" && ident.Obj == nil {
+					// For documentation purposes, we consider the builtin error
+					// type special when embedded in an interface, such that it
+					// always gets shown publicly.
+					list = append(list, field)
+					continue
+				}
+				names = []*ast.Ident{ident}
+			case *ast.StarExpr:
+				// Must have the form *identifier.
+				// This is only valid on embedded types in structs.
+				if ident, ok := ident.X.(*ast.Ident); ok && !isInterface {
+					names = []*ast.Ident{ident}
+				}
+			case *ast.SelectorExpr:
+				// An embedded type may refer to a type in another package.
+				names = []*ast.Ident{ident.Sel}
+			}
+			if names == nil {
+				// Can only happen if AST is incorrect. Safe to continue with a nil list.
+				log.Print("invalid program: unexpected type for embedded field")
+			}
+		}
 		// Trims if any is unexported. Good enough in practice.
 		ok := true
-		for _, name := range field.Names {
+		for _, name := range names {
 			if !isExported(name.Name) {
 				trimmed = true
 				ok = false

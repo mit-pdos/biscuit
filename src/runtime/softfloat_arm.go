@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Software floating point interpretaton of ARM 7500 FP instructions.
+// Software floating point interpretation of ARM 7500 FP instructions.
 // The interpretation is not bit compatible with the 7500.
 // It uses true little-endian doubles, while the 7500 used mixed-endian.
 
@@ -168,14 +168,15 @@ execute:
 		}
 		return 1
 	}
-	if i == 0xe08bb00d {
-		// add sp to r11.
-		// might be part of a large stack offset address
+	if i&0xfffffff0 == 0xe08bb000 {
+		r := i & 0xf
+		// add r to r11.
+		// might be part of a large offset address calculation
 		// (or might not, but again no harm done).
-		regs[11] += regs[13]
+		regs[11] += regs[r]
 
 		if fptrace > 0 {
-			print("*** cpu R[11] += R[13] ", hex(regs[11]), "\n")
+			print("*** cpu R[11] += R[", r, "] ", hex(regs[11]), "\n")
 		}
 		return 1
 	}
@@ -529,7 +530,7 @@ execute:
 	case 0xeeb80ac0: // D[regd] = S[regm] (MOVWF)
 		cmp := int32(m.freglo[regm])
 		if cmp < 0 {
-			fputf(regd, f64to32(fintto64(int64(-cmp))))
+			fputf(regd, f64to32(fintto64(-int64(cmp))))
 			m.freglo[regd] ^= 0x80000000
 		} else {
 			fputf(regd, f64to32(fintto64(int64(cmp))))
@@ -551,7 +552,7 @@ execute:
 	case 0xeeb80bc0: // D[regd] = S[regm] (MOVWD)
 		cmp := int32(m.freglo[regm])
 		if cmp < 0 {
-			fputd(regd, fintto64(int64(-cmp)))
+			fputd(regd, fintto64(-int64(cmp)))
 			m.freghi[regd] ^= 0x80000000
 		} else {
 			fputd(regd, fintto64(int64(cmp)))
@@ -609,7 +610,7 @@ func sfloat2(pc uint32, regs *[15]uint32) uint32 {
 			pc = uint32(funcPC(_sfloatpanic))
 			break
 		}
-		pc += 4 * uint32(skip)
+		pc += 4 * skip
 	}
 	if first {
 		print("sfloat2 ", pc, " ", hex(*(*uint32)(unsafe.Pointer(uintptr(pc)))), "\n")

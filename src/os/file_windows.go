@@ -136,8 +136,8 @@ func openDir(name string) (file *File, err error) {
 }
 
 // OpenFile is the generalized open call; most users will use Open
-// or Create instead.  It opens the named file with specified flag
-// (O_RDONLY etc.) and perm, (0666 etc.) if applicable.  If successful,
+// or Create instead. It opens the named file with specified flag
+// (O_RDONLY etc.) and perm, (0666 etc.) if applicable. If successful,
 // methods on the returned File can be used for I/O.
 // If there is an error, it will be of type *PathError.
 func OpenFile(name string, flag int, perm FileMode) (*File, error) {
@@ -181,9 +181,9 @@ func (file *file) close() error {
 	}
 	var e error
 	if file.isdir() {
-		e = syscall.FindClose(syscall.Handle(file.fd))
+		e = syscall.FindClose(file.fd)
 	} else {
-		e = syscall.CloseHandle(syscall.Handle(file.fd))
+		e = syscall.CloseHandle(file.fd)
 	}
 	var err error
 	if e != nil {
@@ -216,7 +216,7 @@ func (file *File) readdir(n int) (fi []FileInfo, err error) {
 	d := &file.dirinfo.data
 	for n != 0 && !file.dirinfo.isempty {
 		if file.dirinfo.needdata {
-			e := syscall.FindNextFile(syscall.Handle(file.fd), d)
+			e := syscall.FindNextFile(file.fd, d)
 			if e != nil {
 				if e == syscall.ERROR_NO_MORE_FILES {
 					break
@@ -230,7 +230,7 @@ func (file *File) readdir(n int) (fi []FileInfo, err error) {
 			}
 		}
 		file.dirinfo.needdata = true
-		name := string(syscall.UTF16ToString(d.FileName[0:]))
+		name := syscall.UTF16ToString(d.FileName[0:])
 		if name == "." || name == ".." { // Useless names
 			continue
 		}
@@ -288,7 +288,7 @@ func (f *File) readConsole(b []byte) (n int, err error) {
 			}
 			wchars := make([]uint16, nwc)
 			pwc := &wchars[0]
-			nwc, err = windows.MultiByteToWideChar(acp, 2, pmb, int32(nmb), pwc, int32(nwc))
+			nwc, err = windows.MultiByteToWideChar(acp, 2, pmb, int32(nmb), pwc, nwc)
 			if err != nil {
 				return 0, err
 			}
@@ -325,17 +325,17 @@ func (f *File) read(b []byte) (n int, err error) {
 func (f *File) pread(b []byte, off int64) (n int, err error) {
 	f.l.Lock()
 	defer f.l.Unlock()
-	curoffset, e := syscall.Seek(f.fd, 0, 1)
+	curoffset, e := syscall.Seek(f.fd, 0, io.SeekCurrent)
 	if e != nil {
 		return 0, e
 	}
-	defer syscall.Seek(f.fd, curoffset, 0)
+	defer syscall.Seek(f.fd, curoffset, io.SeekStart)
 	o := syscall.Overlapped{
 		OffsetHigh: uint32(off >> 32),
 		Offset:     uint32(off),
 	}
 	var done uint32
-	e = syscall.ReadFile(syscall.Handle(f.fd), b, &done, &o)
+	e = syscall.ReadFile(f.fd, b, &done, &o)
 	if e != nil {
 		if e == syscall.ERROR_HANDLE_EOF {
 			// end of file
@@ -405,17 +405,17 @@ func (f *File) write(b []byte) (n int, err error) {
 func (f *File) pwrite(b []byte, off int64) (n int, err error) {
 	f.l.Lock()
 	defer f.l.Unlock()
-	curoffset, e := syscall.Seek(f.fd, 0, 1)
+	curoffset, e := syscall.Seek(f.fd, 0, io.SeekCurrent)
 	if e != nil {
 		return 0, e
 	}
-	defer syscall.Seek(f.fd, curoffset, 0)
+	defer syscall.Seek(f.fd, curoffset, io.SeekStart)
 	o := syscall.Overlapped{
 		OffsetHigh: uint32(off >> 32),
 		Offset:     uint32(off),
 	}
 	var done uint32
-	e = syscall.WriteFile(syscall.Handle(f.fd), b, &done, &o)
+	e = syscall.WriteFile(f.fd, b, &done, &o)
 	if e != nil {
 		return 0, e
 	}
@@ -474,6 +474,12 @@ func Remove(name string) error {
 		} else {
 			if a&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
 				e = e1
+			} else if a&syscall.FILE_ATTRIBUTE_READONLY != 0 {
+				if e1 = syscall.SetFileAttributes(p, a&^syscall.FILE_ATTRIBUTE_READONLY); e1 == nil {
+					if e = syscall.DeleteFile(p); e == nil {
+						return nil
+					}
+				}
 			}
 		}
 	}

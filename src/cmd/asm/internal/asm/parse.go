@@ -19,6 +19,7 @@ import (
 	"cmd/asm/internal/flags"
 	"cmd/asm/internal/lex"
 	"cmd/internal/obj"
+	"cmd/internal/sys"
 )
 
 type Parser struct {
@@ -130,7 +131,7 @@ func (p *Parser) line() bool {
 		for {
 			tok = p.lex.Next()
 			if len(operands) == 0 && len(items) == 0 {
-				if (p.arch.Thechar == '5' || p.arch.Thechar == '7') && tok == '.' {
+				if p.arch.InFamily(sys.ARM, sys.ARM64) && tok == '.' {
 					// ARM conditionals.
 					tok = p.lex.Next()
 					str := p.lex.Text()
@@ -183,12 +184,10 @@ func (p *Parser) line() bool {
 			p.errorf("missing operand")
 		}
 	}
-	i, present := arch.Pseudos[word]
-	if present {
-		p.pseudo(i, word, operands)
+	if p.pseudo(word, operands) {
 		return true
 	}
-	i, present = p.arch.Instructions[word]
+	i, present := p.arch.Instructions[word]
 	if present {
 		p.instruction(i, word, cond, operands)
 		return true
@@ -197,7 +196,7 @@ func (p *Parser) line() bool {
 	return true
 }
 
-func (p *Parser) instruction(op int, word, cond string, operands [][]lex.Token) {
+func (p *Parser) instruction(op obj.As, word, cond string, operands [][]lex.Token) {
 	p.addr = p.addr[0:0]
 	p.isJump = p.arch.IsJump(word)
 	for _, op := range operands {
@@ -214,21 +213,22 @@ func (p *Parser) instruction(op int, word, cond string, operands [][]lex.Token) 
 	p.asmInstruction(op, cond, p.addr)
 }
 
-func (p *Parser) pseudo(op int, word string, operands [][]lex.Token) {
-	switch op {
-	case obj.ATEXT:
-		p.asmText(word, operands)
-	case obj.ADATA:
+func (p *Parser) pseudo(word string, operands [][]lex.Token) bool {
+	switch word {
+	case "DATA":
 		p.asmData(word, operands)
-	case obj.AGLOBL:
-		p.asmGlobl(word, operands)
-	case obj.APCDATA:
-		p.asmPCData(word, operands)
-	case obj.AFUNCDATA:
+	case "FUNCDATA":
 		p.asmFuncData(word, operands)
+	case "GLOBL":
+		p.asmGlobl(word, operands)
+	case "PCDATA":
+		p.asmPCData(word, operands)
+	case "TEXT":
+		p.asmText(word, operands)
 	default:
-		p.errorf("unimplemented: %s", word)
+		return false
 	}
+	return true
 }
 
 func (p *Parser) start(operand []lex.Token) {
@@ -297,7 +297,7 @@ func (p *Parser) operand(a *obj.Addr) bool {
 			p.errorf("illegal use of register list")
 		}
 		p.registerList(a)
-		p.expect(scanner.EOF)
+		p.expectOperandEnd()
 		return true
 	}
 
@@ -331,7 +331,7 @@ func (p *Parser) operand(a *obj.Addr) bool {
 			}
 		}
 		// fmt.Printf("REG %s\n", obj.Dconv(&emptyProg, 0, a))
-		p.expect(scanner.EOF)
+		p.expectOperandEnd()
 		return true
 	}
 
@@ -363,7 +363,7 @@ func (p *Parser) operand(a *obj.Addr) bool {
 			a.Type = obj.TYPE_FCONST
 			a.Val = p.floatExpr()
 			// fmt.Printf("FCONST %s\n", obj.Dconv(&emptyProg, 0, a))
-			p.expect(scanner.EOF)
+			p.expectOperandEnd()
 			return true
 		}
 		if p.have(scanner.String) {
@@ -378,7 +378,7 @@ func (p *Parser) operand(a *obj.Addr) bool {
 			a.Type = obj.TYPE_SCONST
 			a.Val = str
 			// fmt.Printf("SCONST %s\n", obj.Dconv(&emptyProg, 0, a))
-			p.expect(scanner.EOF)
+			p.expectOperandEnd()
 			return true
 		}
 		a.Offset = int64(p.expr())
@@ -392,7 +392,7 @@ func (p *Parser) operand(a *obj.Addr) bool {
 				a.Type = obj.TYPE_MEM
 			}
 			// fmt.Printf("CONST %d %s\n", a.Offset, obj.Dconv(&emptyProg, 0, a))
-			p.expect(scanner.EOF)
+			p.expectOperandEnd()
 			return true
 		}
 		// fmt.Printf("offset %d \n", a.Offset)
@@ -402,7 +402,7 @@ func (p *Parser) operand(a *obj.Addr) bool {
 	p.registerIndirect(a, prefix)
 	// fmt.Printf("DONE %s\n", p.arch.Dconv(&emptyProg, 0, a))
 
-	p.expect(scanner.EOF)
+	p.expectOperandEnd()
 	return true
 }
 
@@ -421,7 +421,7 @@ func (p *Parser) atStartOfRegister(name string) bool {
 // We have consumed the register or R prefix.
 func (p *Parser) atRegisterShift() bool {
 	// ARM only.
-	if p.arch.Thechar != '5' {
+	if p.arch.Family != sys.ARM {
 		return false
 	}
 	// R1<<...
@@ -477,15 +477,14 @@ func (p *Parser) register(name string, prefix rune) (r1, r2 int16, scale int8, o
 	if c == ':' || c == ',' || c == '+' {
 		// 2nd register; syntax (R1+R2) etc. No two architectures agree.
 		// Check the architectures match the syntax.
-		char := p.arch.Thechar
 		switch p.next().ScanToken {
 		case ',':
-			if char != '5' && char != '7' {
+			if !p.arch.InFamily(sys.ARM, sys.ARM64) {
 				p.errorf("(register,register) not supported on this architecture")
 				return
 			}
 		case '+':
-			if char != '9' {
+			if p.arch.Family != sys.PPC64 {
 				p.errorf("(register+register) not supported on this architecture")
 				return
 			}
@@ -650,7 +649,7 @@ func (p *Parser) registerIndirect(a *obj.Addr, prefix rune) {
 	a.Reg = r1
 	if r2 != 0 {
 		// TODO: Consistency in the encoding would be nice here.
-		if p.arch.Thechar == '5' || p.arch.Thechar == '7' {
+		if p.arch.InFamily(sys.ARM, sys.ARM64) {
 			// Special form
 			// ARM: destination register pair (R1, R2).
 			// ARM64: register pair (R1, R2) for LDP/STP.
@@ -663,7 +662,7 @@ func (p *Parser) registerIndirect(a *obj.Addr, prefix rune) {
 			// Nothing may follow
 			return
 		}
-		if p.arch.Thechar == '9' {
+		if p.arch.Family == sys.PPC64 {
 			// Special form for PPC64: (R1+R2); alias for (R1)(R2*1).
 			if prefix != 0 || scale != 0 {
 				p.errorf("illegal address mode for register+register")
@@ -753,7 +752,7 @@ ListLoop:
 
 // register number is ARM-specific. It returns the number of the specified register.
 func (p *Parser) registerNumber(name string) uint16 {
-	if p.arch.Thechar == '5' && name == "g" {
+	if p.arch.Family == sys.ARM && name == "g" {
 		return 10
 	}
 	if name[0] != 'R' {
@@ -983,14 +982,19 @@ func (p *Parser) more() bool {
 
 // get verifies that the next item has the expected type and returns it.
 func (p *Parser) get(expected lex.ScanToken) lex.Token {
-	p.expect(expected)
+	p.expect(expected, expected.String())
 	return p.next()
 }
 
+// expectOperandEnd verifies that the parsing state is properly at the end of an operand.
+func (p *Parser) expectOperandEnd() {
+	p.expect(scanner.EOF, "end of operand")
+}
+
 // expect verifies that the next item has the expected type. It does not consume it.
-func (p *Parser) expect(expected lex.ScanToken) {
-	if p.peek() != expected {
-		p.errorf("expected %s, found %s", expected, p.next())
+func (p *Parser) expect(expectedToken lex.ScanToken, expectedMessage string) {
+	if p.peek() != expectedToken {
+		p.errorf("expected %s, found %s", expectedMessage, p.next())
 	}
 }
 

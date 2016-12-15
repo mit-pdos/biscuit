@@ -17,9 +17,9 @@ const ecPrivKeyVersion = 1
 
 // ecPrivateKey reflects an ASN.1 Elliptic Curve Private Key Structure.
 // References:
-//   RFC5915
+//   RFC 5915
 //   SEC1 - http://www.secg.org/sec1-v2.pdf
-// Per RFC5915 the NamedCurveOID is marked as ASN.1 OPTIONAL, however in
+// Per RFC 5915 the NamedCurveOID is marked as ASN.1 OPTIONAL, however in
 // most cases it is not.
 type ecPrivateKey struct {
 	Version       int
@@ -29,7 +29,7 @@ type ecPrivateKey struct {
 }
 
 // ParseECPrivateKey parses an ASN.1 Elliptic Curve Private Key Structure.
-func ParseECPrivateKey(der []byte) (key *ecdsa.PrivateKey, err error) {
+func ParseECPrivateKey(der []byte) (*ecdsa.PrivateKey, error) {
 	return parseECPrivateKey(nil, der)
 }
 
@@ -41,8 +41,8 @@ func MarshalECPrivateKey(key *ecdsa.PrivateKey) ([]byte, error) {
 	}
 
 	privateKeyBytes := key.D.Bytes()
-	paddedPrivateKey := make([]byte, (key.Curve.Params().N.BitLen() + 7) / 8)
-	copy(paddedPrivateKey[len(paddedPrivateKey) - len(privateKeyBytes):], privateKeyBytes)
+	paddedPrivateKey := make([]byte, (key.Curve.Params().N.BitLen()+7)/8)
+	copy(paddedPrivateKey[len(paddedPrivateKey)-len(privateKeyBytes):], privateKeyBytes)
 
 	return asn1.Marshal(ecPrivateKey{
 		Version:       1,
@@ -84,7 +84,7 @@ func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key *e
 	priv.Curve = curve
 	priv.D = k
 
-	privateKey := make([]byte, (curveOrder.BitLen() + 7) / 8)
+	privateKey := make([]byte, (curveOrder.BitLen()+7)/8)
 
 	// Some private keys have leading zero padding. This is invalid
 	// according to [SEC1], but this code will ignore it.
@@ -98,7 +98,7 @@ func parseECPrivateKey(namedCurveOID *asn1.ObjectIdentifier, der []byte) (key *e
 	// Some private keys remove all leading zeros, this is also invalid
 	// according to [SEC1] but since OpenSSL used to do this, we ignore
 	// this too.
-	copy(privateKey[len(privateKey) - len(privKey.PrivateKey):], privKey.PrivateKey)
+	copy(privateKey[len(privateKey)-len(privKey.PrivateKey):], privKey.PrivateKey)
 	priv.X, priv.Y = curve.ScalarBaseMult(privateKey)
 
 	return priv, nil

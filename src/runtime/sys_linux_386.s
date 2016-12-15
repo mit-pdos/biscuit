@@ -12,16 +12,17 @@
 
 // Most linux systems use glibc's dynamic linker, which puts the
 // __kernel_vsyscall vdso helper at 0x10(GS) for easy access from position
-// independent code and setldt in this file does the same in the statically
-// linked case. Android, however, uses bionic's dynamic linker, which does not
-// save the helper anywhere, and so the only way to invoke a syscall from
-// position independent code is boring old int $0x80 (which is also what
-// bionic's syscall wrappers use).
-#ifdef GOOS_android
+// independent code and setldt in runtime does the same in the statically
+// linked case. However, systems that use alternative libc such as Android's
+// bionic and musl, do not save the helper anywhere, and so the only way to
+// invoke a syscall from position independent code is boring old int $0x80
+// (which is also what syscall wrappers in bionic/musl use).
+//
+// The benchmarks also showed that using int $0x80 is as fast as calling
+// *%gs:0x10 except on AMD Opteron. See https://golang.org/cl/19833
+// for the benchmark program and raw data.
+//#define INVOKE_SYSCALL	CALL	0x10(GS) // non-portable
 #define INVOKE_SYSCALL	INT	$0x80
-#else
-#define INVOKE_SYSCALL	CALL	0x10(GS)
-#endif
 
 TEXT runtime·exit(SB),NOSPLIT,$0
 	MOVL	$252, AX	// syscall number
@@ -231,6 +232,9 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$12
 	CALL	runtime·sigtrampgo(SB)
 	RET
 
+TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
+	JMP	runtime·sigtramp(SB)
+
 TEXT runtime·sigreturn(SB),NOSPLIT,$0
 	MOVL	$173, AX	// rt_sigreturn
 	// Sigreturn expects same SP as signal handler,
@@ -354,7 +358,7 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	POPL	AX
 	POPAL
 
-	// Now segment is established.  Initialize m, g.
+	// Now segment is established. Initialize m, g.
 	get_tls(AX)
 	MOVL	DX, g(AX)
 	MOVL	BX, g_m(DX)
@@ -405,9 +409,18 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 #define SEG_NOT_PRESENT 0x20
 #define USEABLE 0x40
 
+// `-1` means the kernel will pick a TLS entry on the first setldt call,
+// which happens during runtime init, and that we'll store back the saved
+// entry and reuse that on subsequent calls when creating new threads.
+DATA  runtime·tls_entry_number+0(SB)/4, $-1
+GLOBL runtime·tls_entry_number(SB), NOPTR, $4
+
 // setldt(int entry, int address, int limit)
+// We use set_thread_area, which mucks with the GDT, instead of modify_ldt,
+// which would modify the LDT, but is disabled on some kernels.
+// The name, setldt, is a misnomer, although we leave this name as it is for
+// the compatibility with other platforms.
 TEXT runtime·setldt(SB),NOSPLIT,$32
-	MOVL	entry+0(FP), BX	// entry
 	MOVL	address+4(FP), DX	// base address
 
 #ifdef GOOS_android
@@ -434,26 +447,21 @@ TEXT runtime·setldt(SB),NOSPLIT,$32
 	 */
 	ADDL	$0x4, DX	// address
 	MOVL	DX, 0(DX)
-        // We copy the glibc dynamic linker behaviour of storing the
-        // __kernel_vsyscall entry point at 0x10(GS) so that it can be invoked
-        // by "CALL 0x10(GS)" in all situations, not only those where the
-        // binary is actually dynamically linked.
-	MOVL	runtime·_vdso(SB), AX
-	MOVL	AX, 0x10(DX)
 #endif
+
+	// get entry number
+	MOVL	runtime·tls_entry_number(SB), CX
 
 	// set up user_desc
 	LEAL	16(SP), AX	// struct user_desc
-	MOVL	BX, 0(AX)
-	MOVL	DX, 4(AX)
-	MOVL	$0xfffff, 8(AX)
+	MOVL	CX, 0(AX)	// unsigned int entry_number
+	MOVL	DX, 4(AX)	// unsigned long base_addr
+	MOVL	$0xfffff, 8(AX)	// unsigned int limit
 	MOVL	$(SEG_32BIT|LIMIT_IN_PAGES|USEABLE|CONTENTS_DATA), 12(AX)	// flag bits
 
-	// call modify_ldt
-	MOVL	$1, BX	// func = 1 (write)
-	MOVL	AX, CX	// user_desc
-	MOVL	$16, DX	// sizeof(user_desc)
-	MOVL	$123, AX	// syscall - modify_ldt
+	// call set_thread_area
+	MOVL	AX, BX	// user_desc
+	MOVL	$243, AX	// syscall - set_thread_area
 	// We can't call this via 0x10(GS) because this is called from setldt0 to set that up.
 	INT     $0x80
 
@@ -462,10 +470,18 @@ TEXT runtime·setldt(SB),NOSPLIT,$32
 	JLS 2(PC)
 	INT $3
 
-	// compute segment selector - (entry*8+7)
-	MOVL	entry+0(FP), AX
+	// read allocated entry number back out of user_desc
+	LEAL	16(SP), AX	// get our user_desc back
+	MOVL	0(AX), AX
+
+	// store entry number if the kernel allocated it
+	CMPL	CX, $-1
+	JNE	2(PC)
+	MOVL	AX, runtime·tls_entry_number(SB)
+
+	// compute segment selector - (entry*8+3)
 	SHLL	$3, AX
-	ADDL	$7, AX
+	ADDL	$3, AX
 	MOVW	AX, GS
 
 	RET

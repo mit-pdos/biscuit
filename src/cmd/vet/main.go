@@ -24,10 +24,9 @@ import (
 )
 
 var (
-	verbose  = flag.Bool("v", false, "verbose")
-	testFlag = flag.Bool("test", false, "for testing only: sets -all and -shadow")
-	tags     = flag.String("tags", "", "comma-separated list of build tags to apply when parsing")
-	tagList  = []string{} // exploded version of tags flag; set in main
+	verbose = flag.Bool("v", false, "verbose")
+	tags    = flag.String("tags", "", "comma-separated list of build tags to apply when parsing")
+	tagList = []string{} // exploded version of tags flag; set in main
 )
 
 var exitCode = 0
@@ -101,7 +100,7 @@ func (ts *triState) Set(value string) error {
 func (ts *triState) String() string {
 	switch *ts {
 	case unset:
-		return "unset"
+		return "true" // An unset flag will be set by -all, so defaults to true.
 	case setTrue:
 		return "true"
 	case setFalse:
@@ -116,13 +115,10 @@ func (ts triState) IsBoolFlag() bool {
 
 // vet tells whether to report errors for the named check, a flag name.
 func vet(name string) bool {
-	if *testFlag {
-		return true
-	}
 	return report[name].isTrue()
 }
 
-// setExit sets the value for os.Exit when it is called, later.  It
+// setExit sets the value for os.Exit when it is called, later. It
 // remembers the highest value.
 func setExit(err int) {
 	if err > exitCode {
@@ -143,6 +139,7 @@ var (
 	genDecl       *ast.GenDecl
 	interfaceType *ast.InterfaceType
 	rangeStmt     *ast.RangeStmt
+	returnStmt    *ast.ReturnStmt
 
 	// checkers is a two-level map.
 	// The outer level is keyed by a nil pointer, one of the AST vars above.
@@ -167,8 +164,9 @@ func Usage() {
 	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\tvet [flags] directory...\n")
 	fmt.Fprintf(os.Stderr, "\tvet [flags] files... # Must be a single package\n")
+	fmt.Fprintf(os.Stderr, "By default, -all is set and all non-experimental checks are run.\n")
 	fmt.Fprintf(os.Stderr, "For more information run\n")
-	fmt.Fprintf(os.Stderr, "\tgodoc cmd/vet\n\n")
+	fmt.Fprintf(os.Stderr, "\tgo doc cmd/vet\n\n")
 	fmt.Fprintf(os.Stderr, "Flags:\n")
 	flag.PrintDefaults()
 	os.Exit(2)
@@ -183,6 +181,9 @@ type File struct {
 	content []byte
 	file    *ast.File
 	b       bytes.Buffer // for use by methods
+
+	// Parsed package "foo" when checking package "foo_test"
+	basePkg *Package
 
 	// The objects that are receivers of a "String() string" method.
 	// This is used by the recursiveStringer method in print.go.
@@ -240,7 +241,7 @@ func main() {
 		}
 		os.Exit(exitCode)
 	}
-	if !doPackage(".", flag.Args()) {
+	if doPackage(".", flag.Args(), nil) == nil {
 		warnf("no files checked")
 	}
 	os.Exit(exitCode)
@@ -280,12 +281,12 @@ func doPackageDir(directory string) {
 	names = append(names, pkg.TestGoFiles...) // These are also in the "foo" package.
 	names = append(names, pkg.SFiles...)
 	prefixDirectory(directory, names)
-	doPackage(directory, names)
+	basePkg := doPackage(directory, names, nil)
 	// Is there also a "foo_test" package? If so, do that one as well.
 	if len(pkg.XTestGoFiles) > 0 {
 		names = pkg.XTestGoFiles
 		prefixDirectory(directory, names)
-		doPackage(directory, names)
+		doPackage(directory, names, basePkg)
 	}
 }
 
@@ -301,8 +302,8 @@ type Package struct {
 }
 
 // doPackage analyzes the single package constructed from the named files.
-// It returns whether any files were checked.
-func doPackage(directory string, names []string) bool {
+// It returns the parsed Package or nil if none of the files have been checked.
+func doPackage(directory string, names []string, basePkg *Package) *Package {
 	var files []*File
 	var astFiles []*ast.File
 	fs := token.NewFileSet()
@@ -311,7 +312,7 @@ func doPackage(directory string, names []string) bool {
 		if err != nil {
 			// Warn but continue to next package.
 			warnf("%s: %s", name, err)
-			return false
+			return nil
 		}
 		checkBuildTag(name, data)
 		var parsedFile *ast.File
@@ -319,14 +320,14 @@ func doPackage(directory string, names []string) bool {
 			parsedFile, err = parser.ParseFile(fs, name, data, 0)
 			if err != nil {
 				warnf("%s: %s", name, err)
-				return false
+				return nil
 			}
 			astFiles = append(astFiles, parsedFile)
 		}
 		files = append(files, &File{fset: fs, content: data, name: name, file: parsedFile})
 	}
 	if len(astFiles) == 0 {
-		return false
+		return nil
 	}
 	pkg := new(Package)
 	pkg.path = astFiles[0].Name.Name
@@ -348,13 +349,14 @@ func doPackage(directory string, names []string) bool {
 	}
 	for _, file := range files {
 		file.pkg = pkg
+		file.basePkg = basePkg
 		file.checkers = chk
 		if file.file != nil {
 			file.walkFile(file.name, file.file)
 		}
 	}
 	asmCheck(pkg)
-	return true
+	return pkg
 }
 
 func visit(path string, f os.FileInfo, err error) error {
@@ -435,17 +437,17 @@ func (f *File) loc(pos token.Pos) string {
 	// expression instead of the inner part with the actual error, the
 	// precision can mislead.
 	posn := f.fset.Position(pos)
-	return fmt.Sprintf("%s:%d: ", posn.Filename, posn.Line)
+	return fmt.Sprintf("%s:%d", posn.Filename, posn.Line)
 }
 
 // Warn reports an error but does not set the exit code.
 func (f *File) Warn(pos token.Pos, args ...interface{}) {
-	fmt.Fprint(os.Stderr, f.loc(pos)+fmt.Sprintln(args...))
+	fmt.Fprintf(os.Stderr, "%s: %s", f.loc(pos), fmt.Sprintln(args...))
 }
 
 // Warnf reports a formatted error but does not set the exit code.
 func (f *File) Warnf(pos token.Pos, format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, f.loc(pos)+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "%s: %s\n", f.loc(pos), fmt.Sprintf(format, args...))
 }
 
 // walkFile walks the file's tree.
@@ -480,6 +482,8 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 		key = interfaceType
 	case *ast.RangeStmt:
 		key = rangeStmt
+	case *ast.ReturnStmt:
+		key = returnStmt
 	}
 	for _, fn := range f.checkers[key] {
 		fn(f, node)

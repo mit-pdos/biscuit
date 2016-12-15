@@ -177,7 +177,7 @@ func TestStatDir(t *testing.T) {
 	}
 
 	if !os.SameFile(fi, fi2) {
-		t.Fatal("race condition occured")
+		t.Fatal("race condition occurred")
 	}
 }
 
@@ -221,5 +221,27 @@ func TestOpenVolumeName(t *testing.T) {
 
 	if strings.Join(want, "/") != strings.Join(have, "/") {
 		t.Fatalf("unexpected file list %q, want %q", have, want)
+	}
+}
+
+func TestDeleteReadOnly(t *testing.T) {
+	tmpdir, err := ioutil.TempDir("", "TestDeleteReadOnly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpdir)
+	p := filepath.Join(tmpdir, "a")
+	// This sets FILE_ATTRIBUTE_READONLY.
+	f, err := os.OpenFile(p, os.O_CREATE, 0400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	if err = os.Chmod(p, 0400); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(p); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"cmd/asm/internal/arch"
 	"cmd/asm/internal/lex"
 )
 
@@ -35,8 +34,8 @@ func TestErroneous(t *testing.T) {
 		{"TEXT", "%", "expect two or three operands for TEXT"},
 		{"TEXT", "1, 1", "TEXT symbol \"<erroneous symbol>\" must be a symbol(SB)"},
 		{"TEXT", "$\"foo\", 0, $1", "TEXT symbol \"<erroneous symbol>\" must be a symbol(SB)"},
-		{"TEXT", "$0É:0, 0, $1", "expected EOF, found É"},   // Issue #12467.
-		{"TEXT", "$:0:(SB, 0, $1", "expected '(', found 0"}, // Issue 12468.
+		{"TEXT", "$0É:0, 0, $1", "expected end of operand, found É"}, // Issue #12467.
+		{"TEXT", "$:0:(SB, 0, $1", "expected '(', found 0"},          // Issue 12468.
 		{"FUNCDATA", "", "expect two operands for FUNCDATA"},
 		{"FUNCDATA", "(SB ", "expect two operands for FUNCDATA"},
 		{"DATA", "", "expect two operands for DATA"},
@@ -58,11 +57,9 @@ func TestErroneous(t *testing.T) {
 		parser.errorCount = 0
 		parser.lineNum++
 		parser.histLineNum++
-		op, ok := arch.Pseudos[test.pseudo]
-		if !ok {
+		if !parser.pseudo(test.pseudo, tokenize(test.operands)) {
 			t.Fatalf("Wrong pseudo-instruction: %s", test.pseudo)
 		}
-		parser.pseudo(op, test.pseudo, tokenize(test.operands))
 		errorLine := buf.String()
 		if test.expected != errorLine {
 			t.Errorf("Unexpected error %q; expected %q", errorLine, test.expected)

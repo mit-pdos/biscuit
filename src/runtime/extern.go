@@ -82,6 +82,21 @@ It is a comma-separated list of name=val pairs setting these named variables:
 	If the line ends with "(forced)", this GC was forced by a
 	runtime.GC() call and all phases are STW.
 
+	Setting gctrace to any value > 0 also causes the garbage collector
+	to emit a summary when memory is released back to the system.
+	This process of returning memory to the system is called scavenging.
+	The format of this summary is subject to change.
+	Currently it is:
+		scvg#: # MB released  printed only if non-zero
+		scvg#: inuse: # idle: # sys: # released: # consumed: # (MB)
+	where the fields are as follows:
+		scvg#        the scavenge cycle number, incremented at each scavenge
+		inuse: #     MB used or partially used spans
+		idle: #      MB spans pending scavenging
+		sys: #       MB mapped from the system
+		released: #  MB released to the system
+		consumed: #  MB allocated from the system
+
 	memprofilerate: setting memprofilerate=X will update the value of runtime.MemProfileRate.
 	When set to 0 memory profiling is disabled.  Refer to the description of
 	MemProfileRate for the default value.
@@ -147,11 +162,11 @@ package runtime
 import "runtime/internal/sys"
 
 // Caller reports file and line number information about function invocations on
-// the calling goroutine's stack.  The argument skip is the number of stack frames
+// the calling goroutine's stack. The argument skip is the number of stack frames
 // to ascend, with 0 identifying the caller of Caller.  (For historical reasons the
 // meaning of skip differs between Caller and Callers.) The return values report the
 // program counter, file name, and line number within the file of the corresponding
-// call.  The boolean ok is false if it was not possible to recover the information.
+// call. The boolean ok is false if it was not possible to recover the information.
 func Caller(skip int) (pc uintptr, file string, line int, ok bool) {
 	// Ask for two PCs: the one we were asked for
 	// and what it called, so that we can see if it
@@ -184,22 +199,19 @@ func Caller(skip int) (pc uintptr, file string, line int, ok bool) {
 }
 
 // Callers fills the slice pc with the return program counters of function invocations
-// on the calling goroutine's stack.  The argument skip is the number of stack frames
+// on the calling goroutine's stack. The argument skip is the number of stack frames
 // to skip before recording in pc, with 0 identifying the frame for Callers itself and
 // 1 identifying the caller of Callers.
 // It returns the number of entries written to pc.
 //
 // Note that since each slice entry pc[i] is a return program counter,
 // looking up the file and line for pc[i] (for example, using (*Func).FileLine)
-// will return the file and line number of the instruction immediately
+// will normally return the file and line number of the instruction immediately
 // following the call.
-// To look up the file and line number of the call itself, use pc[i]-1.
-// As an exception to this rule, if pc[i-1] corresponds to the function
-// runtime.sigpanic, then pc[i] is the program counter of a faulting
-// instruction and should be used without any subtraction.
+// To easily look up file/line information for the call sequence, use Frames.
 func Callers(skip int, pc []uintptr) int {
 	// runtime.callers uses pc.array==nil as a signal
-	// to print a stack trace.  Pick off 0-length pc here
+	// to print a stack trace. Pick off 0-length pc here
 	// so that we don't let a nil pc slice get to it.
 	if len(pc) == 0 {
 		return 0
@@ -227,8 +239,8 @@ func Version() string {
 
 // GOOS is the running program's operating system target:
 // one of darwin, freebsd, linux, and so on.
-const GOOS string = sys.TheGoos
+const GOOS string = sys.GOOS
 
 // GOARCH is the running program's architecture target:
-// 386, amd64, or arm.
-const GOARCH string = sys.TheGoarch
+// 386, amd64, arm, or s390x.
+const GOARCH string = sys.GOARCH

@@ -1,7 +1,7 @@
 // +build !nacl
 // run
 
-// Copyright 2014 The Go Authors.  All rights reserved.
+// Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -275,6 +275,9 @@ TestCases:
 		case "amd64":
 			ptrSize = 8
 			fmt.Fprintf(&buf, "#define REGISTER AX\n")
+		case "s390x":
+			ptrSize = 8
+			fmt.Fprintf(&buf, "#define REGISTER R10\n")
 		default:
 			fmt.Fprintf(&buf, "#define REGISTER AX\n")
 		}
@@ -302,9 +305,10 @@ TestCases:
 				// Instead of rewriting the test cases above, adjust
 				// the first stack frame to use up the extra bytes.
 				if i == 0 {
-					size += 592 - 128
+					size += (720 - 128) - 128
 					// Noopt builds have a larger stackguard.
-					// See ../cmd/dist/buildruntime.go:stackGuardMultiplier
+					// See ../src/cmd/dist/buildruntime.go:stackGuardMultiplier
+					// This increase is included in obj.StackGuard
 					for _, s := range strings.Split(os.Getenv("GO_GCFLAGS"), " ") {
 						if s == "-N" {
 							size += 720

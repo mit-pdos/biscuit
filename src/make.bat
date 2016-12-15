@@ -31,6 +31,9 @@
 ::
 :: CC_FOR_TARGET: Command line to run compile C code for GOARCH.
 :: This is used by cgo. Default is CC.
+::
+:: FC: Command line to run to compile Fortran code.
+:: This is used by cgo. Default is "gfortran".
 
 @echo off
 
@@ -65,6 +68,7 @@ setlocal
 set GOROOT=%GOROOT_BOOTSTRAP%
 set GOOS=
 set GOARCH=
+set GOBIN=
 "%GOROOT_BOOTSTRAP%\bin\go" build -o cmd\dist\dist.exe .\cmd\dist
 endlocal
 if errorlevel 1 goto fail

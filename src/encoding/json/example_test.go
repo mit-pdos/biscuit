@@ -1,4 +1,4 @@
-// Copyright 2011 The Go Authors.  All rights reserved.
+// Copyright 2011 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -143,10 +143,9 @@ func ExampleDecoder_Decode_stream() {
 	}
 	fmt.Printf("%T: %v\n", t, t)
 
-	var m Message
 	// while the array contains values
 	for dec.More() {
-
+		var m Message
 		// decode an array value (Message)
 		err := dec.Decode(&m)
 		if err != nil {

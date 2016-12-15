@@ -1,4 +1,4 @@
-// Copyright 2009 The Go Authors.  All rights reserved.
+// Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -165,7 +165,7 @@ type MemStats struct {
 
 // Size of the trailing by_size array differs between Go and C,
 // and all data after by_size is local to runtime, not exported.
-// NumSizeClasses was changed, but we can not change Go struct because of backward compatibility.
+// NumSizeClasses was changed, but we cannot change Go struct because of backward compatibility.
 // sizeof_C_MStats is what C thinks about size of Go struct.
 var sizeof_C_MStats = unsafe.Offsetof(memstats.by_size) + 61*unsafe.Sizeof(memstats.by_size[0])
 
@@ -192,7 +192,7 @@ func readmemstats_m(stats *MemStats) {
 	updatememstats(nil)
 
 	// Size of the trailing by_size array differs between Go and C,
-	// NumSizeClasses was changed, but we can not change Go struct because of backward compatibility.
+	// NumSizeClasses was changed, but we cannot change Go struct because of backward compatibility.
 	memmove(unsafe.Pointer(stats), unsafe.Pointer(&memstats), sizeof_C_MStats)
 
 	// Stack numbers are part of the heap numbers, separate those out for user consumption
@@ -295,9 +295,9 @@ func updatememstats(stats *gcstats) {
 			memstats.nmalloc++
 			memstats.alloc += uint64(s.elemsize)
 		} else {
-			memstats.nmalloc += uint64(s.ref)
-			memstats.by_size[s.sizeclass].nmalloc += uint64(s.ref)
-			memstats.alloc += uint64(s.ref) * uint64(s.elemsize)
+			memstats.nmalloc += uint64(s.allocCount)
+			memstats.by_size[s.sizeclass].nmalloc += uint64(s.allocCount)
+			memstats.alloc += uint64(s.allocCount) * uint64(s.elemsize)
 		}
 	}
 	unlock(&mheap_.lock)
@@ -309,13 +309,13 @@ func updatememstats(stats *gcstats) {
 		memstats.nfree += mheap_.nsmallfree[i]
 		memstats.by_size[i].nfree = mheap_.nsmallfree[i]
 		memstats.by_size[i].nmalloc += mheap_.nsmallfree[i]
-		smallfree += uint64(mheap_.nsmallfree[i]) * uint64(class_to_size[i])
+		smallfree += mheap_.nsmallfree[i] * uint64(class_to_size[i])
 	}
 	memstats.nfree += memstats.tinyallocs
 	memstats.nmalloc += memstats.nfree
 
 	// Calculate derived stats.
-	memstats.total_alloc = uint64(memstats.alloc) + uint64(mheap_.largefree) + smallfree
+	memstats.total_alloc = memstats.alloc + mheap_.largefree + smallfree
 	memstats.heap_alloc = memstats.alloc
 	memstats.heap_objects = memstats.nmalloc - memstats.nfree
 }
@@ -371,7 +371,7 @@ func purgecachedstats(c *mcache) {
 	}
 }
 
-// Atomically increases a given *system* memory stat.  We are counting on this
+// Atomically increases a given *system* memory stat. We are counting on this
 // stat never overflowing a uintptr, so this function must only be used for
 // system memory stats.
 //
@@ -395,7 +395,7 @@ func mSysStatInc(sysStat *uint64, n uintptr) {
 	}
 }
 
-// Atomically decreases a given *system* memory stat.  Same comments as
+// Atomically decreases a given *system* memory stat. Same comments as
 // mSysStatInc apply.
 //go:nosplit
 func mSysStatDec(sysStat *uint64, n uintptr) {

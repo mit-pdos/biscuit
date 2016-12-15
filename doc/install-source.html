@@ -33,7 +33,7 @@ compiler using the GCC back end, see
 </p>
 
 <p>
-The Go compilers support five instruction sets.
+The Go compilers support seven instruction sets.
 There are important differences in the quality of the compilers for the different
 architectures.
 </p>
@@ -43,15 +43,17 @@ architectures.
 	<code>amd64</code> (also known as <code>x86-64</code>)
 </dt>
 <dd>
-	A mature implementation. The compiler has an effective
-	optimizer (registerizer) and generates good code (although
-	<code>gccgo</code> can do noticeably better sometimes).
+	A mature implementation. New in 1.7 is its SSA-based back end
+	that generates compact, efficient code.
 </dd>
 <dt>
 	<code>386</code> (<code>x86</code> or <code>x86-32</code>)
 </dt>
 <dd>
-	Comparable to the <code>amd64</code> port.
+	Comparable to the <code>amd64</code> port, but does
+	not yet use the SSA-based back end. It has an effective
+	optimizer (registerizer) and generates good code (although
+	<code>gccgo</code> can do noticeably better sometimes).
 </dd>
 <dt>
 	<code>arm</code> (<code>ARM</code>)
@@ -63,19 +65,25 @@ architectures.
 	<code>arm64</code> (<code>AArch64</code>)
 </dt>
 <dd>
-	Supports Linux and Darwin binaries. New in 1.5 and not as well excercised as other ports.
+	Supports Linux and Darwin binaries. New in 1.5 and not as well exercised as other ports.
 </dd>
 <dt>
 	<code>ppc64, ppc64le</code> (64-bit PowerPC big- and little-endian)
 </dt>
 <dd>
-	Supports Linux binaries. New in 1.5 and not as well excercised as other ports.
+	Supports Linux binaries. New in 1.5 and not as well exercised as other ports.
 </dd>
 <dt>
 	<code>mips64, mips64le</code> (64-bit MIPS big- and little-endian)
 </dt>
 <dd>
-	Supports Linux binaries. New in 1.6 and not as well excercised as other ports.
+	Supports Linux binaries. New in 1.6 and not as well exercised as other ports.
+</dd>
+<dt>
+	<code>s390x</code> (IBM System z)
+</dt>
+<dd>
+	Supports Linux binaries. New in 1.7 and not as well exercised as other ports.
 </dd>
 </dl>
 
@@ -194,13 +202,18 @@ To build without <code>cgo</code>, set the environment variable
 <p>Go will install to a directory named <code>go</code>.
 Change to the directory that will be its parent
 and make sure the <code>go</code> directory does not exist.
-Then clone the repository and check out the latest release tag:</p>
+Then clone the repository and check out the latest release tag
+(<code class="versionTag">go1.6</code>, for example):</p>
 
 <pre>
 $ git clone https://go.googlesource.com/go
 $ cd go
-$ git checkout go1.5.3
+$ git checkout <span class="versionTag"><i>&lt;tag&gt;</i></span>
 </pre>
+
+<p class="whereTag">
+Where <code>&lt;tag&gt;</code> is the version string of the release.
+</p>
 
 <h2 id="head">(Optional) Switch to the master branch</h2>
 
@@ -378,7 +391,7 @@ New releases are announced on the
 <a href="//groups.google.com/group/golang-announce">golang-announce</a>
 mailing list.
 Each announcement mentions the latest release tag, for instance,
-<code>go1.5.3</code>.
+<code class="versionTag">go1.6</code>.
 </p>
 
 <p>
@@ -388,11 +401,13 @@ To update an existing tree to the latest release, you can run:
 <pre>
 $ cd go/src
 $ git fetch
-$ git checkout <i>&lt;tag&gt;</i>
+$ git checkout <span class="versionTag"><i>&lt;tag&gt;</i></psan>
 $ ./all.bash
 </pre>
 
+<p class="whereTag">
 Where <code>&lt;tag&gt;</code> is the version string of the release.
+</p>
 
 
 <h2 id="environment">Optional environment variables</h2>
@@ -443,6 +458,9 @@ The valid combinations of <code>$GOOS</code> and <code>$GOARCH</code> are:
 <table cellpadding="0">
 <tr>
 <th width="50"></th><th align="left" width="100"><code>$GOOS</code></th> <th align="left" width="100"><code>$GOARCH</code></th>
+</tr>
+<tr>
+<td></td><td><code>android</code></td> <td><code>arm</code></td>
 </tr>
 <tr>
 <td></td><td><code>darwin</code></td> <td><code>386</code></td>

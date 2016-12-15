@@ -1,8 +1,6 @@
-// Copyright 2009 The Go Authors.  All rights reserved.
+// Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
-
-// +build cgo
 
 #include <pthread.h>
 #include <errno.h>
@@ -91,7 +89,9 @@ threadentry(void *v)
 	ThreadStart ts;
 
 	ts = *(ThreadStart*)v;
+	_cgo_tsan_acquire();
 	free(v);
+	_cgo_tsan_release();
 
 	/*
 	 * Set specific keys.

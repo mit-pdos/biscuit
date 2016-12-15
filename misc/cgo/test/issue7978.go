@@ -1,4 +1,4 @@
-// Copyright 2014 The Go Authors.  All rights reserved.
+// Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -102,6 +102,9 @@ func test7978(t *testing.T) {
 	}
 	if C.HAS_SYNC_FETCH_AND_ADD == 0 {
 		t.Skip("clang required for __sync_fetch_and_add support on darwin/arm")
+	}
+	if runtime.GOOS == "android" || runtime.GOOS == "darwin" && (runtime.GOARCH == "arm" || runtime.GOARCH == "arm64") {
+		t.Skip("GOTRACEBACK is not passed on to the exec wrapper")
 	}
 	if os.Getenv("GOTRACEBACK") != "2" {
 		t.Fatalf("GOTRACEBACK must be 2")

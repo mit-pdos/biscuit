@@ -93,13 +93,13 @@ func racer(x *int, done chan bool) {
 }
 `, `==================
 WARNING: DATA RACE
-Write by goroutine [0-9]:
+Write at 0x[0-9,a-f]+ by goroutine [0-9]:
   main\.store\(\)
       .+/main\.go:12 \+0x[0-9,a-f]+
   main\.racer\(\)
       .+/main\.go:19 \+0x[0-9,a-f]+
 
-Previous write by main goroutine:
+Previous write at 0x[0-9,a-f]+ by main goroutine:
   main\.store\(\)
       .+/main\.go:12 \+0x[0-9,a-f]+
   main\.main\(\)
@@ -180,4 +180,21 @@ func TestFail(t *testing.T) {
 PASS
 Found 1 data race\(s\)
 FAIL`},
+
+	{"slicebytetostring_pc", "run", "atexit_sleep_ms=0", `
+package main
+func main() {
+	done := make(chan string)
+	data := make([]byte, 10)
+	go func() {
+		done <- string(data)
+	}()
+	data[0] = 1
+	<-done
+}
+`, `
+  runtime\.slicebytetostring\(\)
+      .*/runtime/string\.go:.*
+  main\.main\.func1\(\)
+      .*/main.go:7`},
 }

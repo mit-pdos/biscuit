@@ -52,7 +52,7 @@ TEXT runtime∕internal∕atomic·Storeuintptr(SB), NOSPLIT, $0-16
 TEXT runtime∕internal∕atomic·Loadint64(SB), NOSPLIT, $0-16
 	JMP	runtime∕internal∕atomic·Load64(SB)
 
-TEXT runtime∕internal∕atomic·Xaddint64(SB), NOSPLIT, $0-16
+TEXT runtime∕internal∕atomic·Xaddint64(SB), NOSPLIT, $0-24
 	JMP	runtime∕internal∕atomic·Xadd64(SB)
 
 // bool Casp(void **val, void *old, void *new)
@@ -115,7 +115,7 @@ TEXT runtime∕internal∕atomic·Xchg64(SB), NOSPLIT, $0-24
 TEXT runtime∕internal∕atomic·Xchguintptr(SB), NOSPLIT, $0-24
 	JMP	runtime∕internal∕atomic·Xchg64(SB)
 
-TEXT runtime∕internal∕atomic·Storep1(SB), NOSPLIT, $0-16
+TEXT runtime∕internal∕atomic·StorepNoWB(SB), NOSPLIT, $0-16
 	MOVQ	ptr+0(FP), BX
 	MOVQ	val+8(FP), AX
 	XCHGQ	AX, 0(BX)

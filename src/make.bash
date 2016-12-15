@@ -44,9 +44,15 @@
 # This is used by cgo. Default is CXX, or, if that is not set, 
 # "g++" or "clang++".
 #
+# FC: Command line to run to compile Fortran code for GOARCH.
+# This is used by cgo. Default is "gfortran".
+#
 # GO_DISTFLAGS: extra flags to provide to "dist bootstrap".
 
 set -e
+
+unset GOBIN # Issue 14340
+
 if [ ! -f run.bash ]; then
 	echo 'make.bash must be run from $GOROOT/src' 1>&2
 	exit 1
@@ -149,6 +155,7 @@ if [ "$1" = "--no-clean" ]; then
 	shift
 fi
 ./cmd/dist/dist bootstrap $buildall $GO_DISTFLAGS -v # builds go_bootstrap
+
 # Delay move of dist tool to now, because bootstrap may clear tool directory.
 mv cmd/dist/dist "$GOTOOLDIR"/dist
 echo

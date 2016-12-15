@@ -1,4 +1,4 @@
-// Copyright 2010 The Go Authors.  All rights reserved.
+// Copyright 2010 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -45,42 +45,6 @@ func LFStackPop(head *uint64) *LFNode {
 	return (*LFNode)(unsafe.Pointer(lfstackpop(head)))
 }
 
-type ParFor struct {
-	body   func(*ParFor, uint32)
-	done   uint32
-	Nthr   uint32
-	thrseq uint32
-	Cnt    uint32
-	wait   bool
-}
-
-func NewParFor(nthrmax uint32) *ParFor {
-	var desc *ParFor
-	systemstack(func() {
-		desc = (*ParFor)(unsafe.Pointer(parforalloc(nthrmax)))
-	})
-	return desc
-}
-
-func ParForSetup(desc *ParFor, nthr, n uint32, wait bool, body func(*ParFor, uint32)) {
-	systemstack(func() {
-		parforsetup((*parfor)(unsafe.Pointer(desc)), nthr, n, wait,
-			*(*func(*parfor, uint32))(unsafe.Pointer(&body)))
-	})
-}
-
-func ParForDo(desc *ParFor) {
-	systemstack(func() {
-		parfordo((*parfor)(unsafe.Pointer(desc)))
-	})
-}
-
-func ParForIters(desc *ParFor, tid uint32) (uint32, uint32) {
-	desc1 := (*parfor)(unsafe.Pointer(desc))
-	pos := desc1.thr[tid].pos
-	return uint32(pos), uint32(pos >> 32)
-}
-
 func GCMask(x interface{}) (ret []byte) {
 	systemstack(func() {
 		ret = getgcmask(x)
@@ -89,10 +53,100 @@ func GCMask(x interface{}) (ret []byte) {
 }
 
 func RunSchedLocalQueueTest() {
-	testSchedLocalQueue()
+	_p_ := new(p)
+	gs := make([]g, len(_p_.runq))
+	for i := 0; i < len(_p_.runq); i++ {
+		if g, _ := runqget(_p_); g != nil {
+			throw("runq is not empty initially")
+		}
+		for j := 0; j < i; j++ {
+			runqput(_p_, &gs[i], false)
+		}
+		for j := 0; j < i; j++ {
+			if g, _ := runqget(_p_); g != &gs[i] {
+				print("bad element at iter ", i, "/", j, "\n")
+				throw("bad element")
+			}
+		}
+		if g, _ := runqget(_p_); g != nil {
+			throw("runq is not empty afterwards")
+		}
+	}
 }
+
 func RunSchedLocalQueueStealTest() {
-	testSchedLocalQueueSteal()
+	p1 := new(p)
+	p2 := new(p)
+	gs := make([]g, len(p1.runq))
+	for i := 0; i < len(p1.runq); i++ {
+		for j := 0; j < i; j++ {
+			gs[j].sig = 0
+			runqput(p1, &gs[j], false)
+		}
+		gp := runqsteal(p2, p1, true)
+		s := 0
+		if gp != nil {
+			s++
+			gp.sig++
+		}
+		for {
+			gp, _ = runqget(p2)
+			if gp == nil {
+				break
+			}
+			s++
+			gp.sig++
+		}
+		for {
+			gp, _ = runqget(p1)
+			if gp == nil {
+				break
+			}
+			gp.sig++
+		}
+		for j := 0; j < i; j++ {
+			if gs[j].sig != 1 {
+				print("bad element ", j, "(", gs[j].sig, ") at iter ", i, "\n")
+				throw("bad element")
+			}
+		}
+		if s != i/2 && s != i/2+1 {
+			print("bad steal ", s, ", want ", i/2, " or ", i/2+1, ", iter ", i, "\n")
+			throw("bad steal")
+		}
+	}
+}
+
+func RunSchedLocalQueueEmptyTest(iters int) {
+	// Test that runq is not spuriously reported as empty.
+	// Runq emptiness affects scheduling decisions and spurious emptiness
+	// can lead to underutilization (both runnable Gs and idle Ps coexist
+	// for arbitrary long time).
+	done := make(chan bool, 1)
+	p := new(p)
+	gs := make([]g, 2)
+	ready := new(uint32)
+	for i := 0; i < iters; i++ {
+		*ready = 0
+		next0 := (i & 1) == 0
+		next1 := (i & 2) == 0
+		runqput(p, &gs[0], next0)
+		go func() {
+			for atomic.Xadd(ready, 1); atomic.Load(ready) != 2; {
+			}
+			if runqempty(p) {
+				println("next:", next0, next1)
+				throw("queue is empty")
+			}
+			done <- true
+		}()
+		for atomic.Xadd(ready, 1); atomic.Load(ready) != 2; {
+		}
+		runqput(p, &gs[1], next1)
+		runqget(p)
+		<-done
+		runqget(p)
+	}
 }
 
 var StringHash = stringHash
@@ -170,4 +224,23 @@ var ForceGCPeriod = &forcegcperiod
 func SetTracebackEnv(level string) {
 	setTraceback(level)
 	traceback_env = traceback_cache
+}
+
+var ReadUnaligned32 = readUnaligned32
+var ReadUnaligned64 = readUnaligned64
+
+func CountPagesInUse() (pagesInUse, counted uintptr) {
+	stopTheWorld("CountPagesInUse")
+
+	pagesInUse = uintptr(mheap_.pagesInUse)
+
+	for _, s := range h_allspans {
+		if s.state == mSpanInUse {
+			counted += s.npages
+		}
+	}
+
+	startTheWorld()
+
+	return
 }

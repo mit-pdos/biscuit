@@ -44,7 +44,7 @@ func main() {
 var dataURL = flag.String("data", "", "full URL for UnicodeData.txt; defaults to --url/UnicodeData.txt")
 var casefoldingURL = flag.String("casefolding", "", "full URL for CaseFolding.txt; defaults to --url/CaseFolding.txt")
 var url = flag.String("url",
-	"http://www.unicode.org/Public/8.0.0/ucd/",
+	"http://www.unicode.org/Public/9.0.0/ucd/",
 	"URL of Unicode database directory")
 var tablelist = flag.String("tables",
 	"all",
@@ -485,7 +485,7 @@ func printCategories() {
 			logger.Fatal("unknown category", name)
 		}
 		// We generate an UpperCase name to serve as concise documentation and an _UnderScored
-		// name to store the data.  This stops godoc dumping all the tables but keeps them
+		// name to store the data. This stops godoc dumping all the tables but keeps them
 		// available to clients.
 		// Cases deserving special comments
 		varDecl := ""
@@ -743,6 +743,10 @@ func fullScriptTest(list []string, installed map[string]*unicode.RangeTable, scr
 	}
 }
 
+var deprecatedAliases = map[string]string{
+	"Sentence_Terminal": "STerm",
+}
+
 // PropList.txt has the same format as Scripts.txt so we can share its parser.
 func printScriptOrProperty(doProps bool) {
 	flag := "scripts"
@@ -797,11 +801,14 @@ func printScriptOrProperty(doProps bool) {
 		}
 		for _, k := range all(table) {
 			printf("\t%q: %s,\n", k, k)
+			if alias, ok := deprecatedAliases[k]; ok {
+				printf("\t%q: %s,\n", alias, k)
+			}
 		}
 		print("}\n\n")
 	}
 
-	decl := make(sort.StringSlice, len(list))
+	decl := make(sort.StringSlice, len(list)+len(deprecatedAliases))
 	ndecl := 0
 	for _, name := range list {
 		if doProps {
@@ -814,6 +821,12 @@ func printScriptOrProperty(doProps bool) {
 				name, name, name, name)
 		}
 		ndecl++
+		if alias, ok := deprecatedAliases[name]; ok {
+			decl[ndecl] = fmt.Sprintf(
+				"\t%[1]s = _%[2]s;\t// %[1]s is an alias for %[2]s.\n",
+				alias, name)
+			ndecl++
+		}
 		printf("var _%s = &RangeTable {\n", name)
 		ranges := foldAdjacent(table[name])
 		print("\tR16: []Range16{\n")
@@ -964,7 +977,7 @@ func getCaseState(i rune) (c *caseState) {
 		c._case = CaseTitle
 	}
 	// Some things such as roman numeral U+2161 don't describe themselves
-	// as upper case, but have a lower case.  Second-guess them.
+	// as upper case, but have a lower case. Second-guess them.
 	if c._case == CaseNone && ch.lowerCase != 0 {
 		c._case = CaseUpper
 	}
@@ -1172,6 +1185,7 @@ func printCasefold() {
 		}
 	}
 
+	printAsciiFold()
 	printCaseOrbit()
 
 	// Tables of category and script folding exceptions: code points
@@ -1267,6 +1281,25 @@ var comment = map[string]string{
 		"// code points outside the script that are equivalent under\n" +
 		"// simple case folding to code points inside the script.\n" +
 		"// If there is no entry for a script name, there are no such points.\n",
+}
+
+func printAsciiFold() {
+	printf("var asciiFold = [MaxASCII + 1]uint16{\n")
+	for i := rune(0); i <= unicode.MaxASCII; i++ {
+		c := chars[i]
+		f := c.caseOrbit
+		if f == 0 {
+			if c.lowerCase != i && c.lowerCase != 0 {
+				f = c.lowerCase
+			} else if c.upperCase != i && c.upperCase != 0 {
+				f = c.upperCase
+			} else {
+				f = i
+			}
+		}
+		printf("\t0x%04X,\n", f)
+	}
+	printf("}\n\n")
 }
 
 func printCaseOrbit() {

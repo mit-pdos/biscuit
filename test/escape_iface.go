@@ -1,6 +1,6 @@
 // errorcheck -0 -m -l
 
-// Copyright 2015 The Go Authors.  All rights reserved.
+// Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -223,5 +223,25 @@ func dotTypeEscape() *T2 { // #11931
 	x = &T1{p: new(int)} // ERROR "new\(int\) escapes to heap" "&T1 literal does not escape"
 	return &T2{
 		T1: *(x.(*T1)), // ERROR "&T2 literal escapes to heap"
+	}
+}
+
+func dotTypeEscape2() { // #13805
+	{
+		i := 0
+		var v int
+		var x interface{} = i // ERROR "i does not escape"
+		*(&v) = x.(int) // ERROR "&v does not escape"
+	}
+	{
+		i := 0
+		var x interface{} = i // ERROR "i does not escape"
+		sink = x.(int)        // ERROR "x.\(int\) escapes to heap"
+
+	}
+	{
+		i := 0 // ERROR "moved to heap: i"
+		var x interface{} = &i // ERROR "&i escapes to heap"
+		sink = x.(*int)        // ERROR "x.\(\*int\) escapes to heap"
 	}
 }

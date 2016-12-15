@@ -25,12 +25,13 @@ import (
 //	  together, so that given (only) calls Push(10, "x.go", 1) and Pop(15),
 //	  virtual line 12 corresponds to x.go line 3.
 type LineHist struct {
-	Top            *LineStack  // current top of stack
-	Ranges         []LineRange // ranges for lookup
-	Dir            string      // directory to qualify relative paths
-	TrimPathPrefix string      // remove leading TrimPath from recorded file names
-	GOROOT         string      // current GOROOT
-	GOROOT_FINAL   string      // target GOROOT
+	Top               *LineStack  // current top of stack
+	Ranges            []LineRange // ranges for lookup
+	Dir               string      // directory to qualify relative paths
+	TrimPathPrefix    string      // remove leading TrimPath from recorded file names
+	PrintFilenameOnly bool        // ignore path when pretty-printing a line; internal use only
+	GOROOT            string      // current GOROOT
+	GOROOT_FINAL      string      // target GOROOT
 }
 
 // A LineStack is an entry in the recorded line history.
@@ -221,20 +222,28 @@ func (h *LineHist) LineString(lineno int) string {
 		return "<unknown line number>"
 	}
 
-	text := fmt.Sprintf("%s:%d", stk.File, stk.fileLineAt(lineno))
+	filename := stk.File
+	if h.PrintFilenameOnly {
+		filename = filepath.Base(filename)
+	}
+	text := fmt.Sprintf("%s:%d", filename, stk.fileLineAt(lineno))
 	if stk.Directive && stk.Parent != nil {
 		stk = stk.Parent
-		text += fmt.Sprintf("[%s:%d]", stk.File, stk.fileLineAt(lineno))
+		filename = stk.File
+		if h.PrintFilenameOnly {
+			filename = filepath.Base(filename)
+		}
+		text += fmt.Sprintf("[%s:%d]", filename, stk.fileLineAt(lineno))
 	}
 	const showFullStack = false // was used by old C compilers
 	if showFullStack {
 		for stk.Parent != nil {
 			lineno = stk.Lineno - 1
 			stk = stk.Parent
-			text += fmt.Sprintf(" %s:%d", stk.File, stk.fileLineAt(lineno))
+			text += fmt.Sprintf(" %s:%d", filename, stk.fileLineAt(lineno))
 			if stk.Directive && stk.Parent != nil {
 				stk = stk.Parent
-				text += fmt.Sprintf("[%s:%d]", stk.File, stk.fileLineAt(lineno))
+				text += fmt.Sprintf("[%s:%d]", filename, stk.fileLineAt(lineno))
 			}
 		}
 	}
@@ -264,20 +273,35 @@ func (h *LineHist) AbsFileLine(lineno int) (file string, line int) {
 // This is a simplified copy of linklinefmt above.
 // It doesn't allow printing the full stack, and it returns the file name and line number separately.
 // TODO: Unify with linklinefmt somehow.
-func linkgetline(ctxt *Link, lineno int32, f **LSym, l *int32) {
+func linkgetline(ctxt *Link, lineno int32) (f *LSym, l int32) {
 	stk := ctxt.LineHist.At(int(lineno))
 	if stk == nil || stk.AbsFile == "" {
-		*f = Linklookup(ctxt, "??", HistVersion)
-		*l = 0
-		return
+		return Linklookup(ctxt, "??", HistVersion), 0
 	}
 	if stk.Sym == nil {
 		stk.Sym = Linklookup(ctxt, stk.AbsFile, HistVersion)
 	}
-	*f = stk.Sym
-	*l = int32(stk.fileLineAt(int(lineno)))
+	return stk.Sym, int32(stk.fileLineAt(int(lineno)))
 }
 
 func Linkprfile(ctxt *Link, line int) {
 	fmt.Printf("%s ", ctxt.LineHist.LineString(line))
+}
+
+func fieldtrack(ctxt *Link, cursym *LSym) {
+	p := cursym.Text
+	if p == nil || p.Link == nil { // handle external functions and ELF section symbols
+		return
+	}
+	ctxt.Cursym = cursym
+
+	for ; p != nil; p = p.Link {
+		if p.As == AUSEFIELD {
+			r := Addrel(ctxt.Cursym)
+			r.Off = 0
+			r.Siz = 0
+			r.Sym = p.From.Sym
+			r.Type = R_USEFIELD
+		}
+	}
 }
