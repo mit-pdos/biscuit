@@ -465,9 +465,6 @@ func decrypt(random io.Reader, priv *PrivateKey, c *big.Int) (m *big.Int, err er
 		err = ErrDecryption
 		return
 	}
-	if priv.N.Sign() == 0 {
-		return nil, ErrDecryption
-	}
 
 	var ir *big.Int
 	if random != nil {
@@ -493,7 +490,7 @@ func decrypt(random io.Reader, priv *PrivateKey, c *big.Int) (m *big.Int, err er
 			}
 		}
 		bigE := big.NewInt(int64(priv.E))
-		rpowe := new(big.Int).Exp(r, bigE, priv.N) // N != 0
+		rpowe := new(big.Int).Exp(r, bigE, priv.N)
 		cCopy := new(big.Int).Set(c)
 		cCopy.Mul(cCopy, rpowe)
 		cCopy.Mod(cCopy, priv.N)

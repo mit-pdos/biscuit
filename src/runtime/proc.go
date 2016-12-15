@@ -443,9 +443,6 @@ func schedinit() {
 
 	sched.lastpoll = uint64(nanotime())
 	procs := int(ncpu)
-	if procs > _MaxGomaxprocs {
-		procs = _MaxGomaxprocs
-	}
 	if n := atoi(gogetenv("GOMAXPROCS")); n > 0 {
 		if n > _MaxGomaxprocs {
 			n = _MaxGomaxprocs
@@ -1879,6 +1876,7 @@ top:
 	}
 
 stop:
+
 	// We have nothing to do. If we're in the GC mark phase, can
 	// safely scan and blacken objects, and have work to do, run
 	// idle-time marking rather than give up the P.

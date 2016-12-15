@@ -356,9 +356,8 @@ func machoshbits(mseg *MachoSeg, sect *Section, segname string) {
 	buf := "__" + strings.Replace(sect.Name[1:], ".", "_", -1)
 
 	var msect *MachoSect
-	if sect.Rwx&1 == 0 && (Thearch.Thechar == '7' || // arm64
-		(Thearch.Thechar == '6' && (Buildmode == BuildmodeCShared || Buildmode == BuildmodeCArchive))) { // amd64
-		// Darwin external linker on arm64 and on amd64 in c-shared/c-archive buildmode
+	if sect.Rwx&1 == 0 && (Thearch.Thechar == '7' || (Thearch.Thechar == '6' && Buildmode == BuildmodeCShared)) {
+		// Darwin external linker on arm64 and on amd64 in c-shared buildmode
 		// complains about absolute relocs in __TEXT, so if the section is not
 		// executable, put it in __DATA segment.
 		msect = newMachoSect(mseg, buf, "__DATA")

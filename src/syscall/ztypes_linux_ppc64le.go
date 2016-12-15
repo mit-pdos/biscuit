@@ -574,10 +574,9 @@ type Ustat_t struct {
 }
 
 type EpollEvent struct {
-	Events  uint32
-	X_padFd int32
-	Fd      int32
-	Pad     int32
+	Events uint32
+	Fd     int32
+	Pad    int32
 }
 
 const (

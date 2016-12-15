@@ -57,7 +57,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -66,8 +65,6 @@ import (
 var (
 	filename       = flag.String("output", "", "output file name (standard output if omitted)")
 	printTraceFlag = flag.Bool("trace", false, "generate print statement after every syscall")
-	systemDLL      = flag.Bool("systemdll", false, "whether all DLLs should be loaded from the Windows system directory")
-	sysRepo        = flag.Bool("xsys", false, "whether this code is for the x/sys subrepo")
 )
 
 func trim(s string) string {
@@ -596,14 +593,8 @@ func (f *Fn) HelperName() string {
 
 // Source files and functions.
 type Source struct {
-	Funcs   []*Fn
-	Files   []string
-	Imports []string
-}
-
-func (src *Source) Import(pkg string) {
-	src.Imports = append(src.Imports, pkg)
-	sort.Strings(src.Imports)
+	Funcs []*Fn
+	Files []string
 }
 
 // ParseFiles parses files listed in fs and extracts all syscall
@@ -613,12 +604,6 @@ func ParseFiles(fs []string) (*Source, error) {
 	src := &Source{
 		Funcs: make([]*Fn, 0),
 		Files: make([]string, 0),
-		Imports: []string{
-			"unsafe",
-		},
-	}
-	if *systemDLL {
-		src.Import("internal/syscall/windows/sysdll")
 	}
 	for _, file := range fs {
 		if err := src.ParseFile(file); err != nil {
@@ -691,30 +676,9 @@ func (src *Source) ParseFile(path string) error {
 
 // Generate output source file from a source set src.
 func (src *Source) Generate(w io.Writer) error {
-	if *sysRepo && packageName != "windows" {
-		src.Import("golang.org/x/sys/windows")
-	}
-	if packageName != "syscall" {
-		src.Import("syscall")
-	}
 	funcMap := template.FuncMap{
 		"packagename": packagename,
 		"syscalldot":  syscalldot,
-		"newlazydll": func(dll string) string {
-			arg := "\"" + dll + ".dll\""
-			if *systemDLL {
-				arg = "sysdll.Add(" + arg + ")"
-			}
-			if *sysRepo {
-				if packageName == "windows" {
-					return "&LazyDLL{Name: " + arg + ", System: true}"
-				} else {
-					return "&windows.LazyDLL{Name: " + arg + ", System: true}"
-				}
-			} else {
-				return syscalldot() + "NewLazyDLL(" + arg + ")"
-			}
-		},
 	}
 	t := template.Must(template.New("main").Funcs(funcMap).Parse(srcTemplate))
 	err := t.Execute(w, src)
@@ -769,10 +733,8 @@ const srcTemplate = `
 
 package {{packagename}}
 
-import (
-{{range .Imports}}"{{.}}"
-{{end}}
-)
+import "unsafe"{{if syscalldot}}
+import "syscall"{{end}}
 
 var _ unsafe.Pointer
 
@@ -784,7 +746,7 @@ var (
 
 {{/* help functions */}}
 
-{{define "dlls"}}{{range .DLLs}}	mod{{.}} = {{newlazydll .}}
+{{define "dlls"}}{{range .DLLs}}	mod{{.}} = {{syscalldot}}NewLazyDLL("{{.}}.dll")
 {{end}}{{end}}
 
 {{define "funcnames"}}{{range .Funcs}}	proc{{.DLLFuncName}} = mod{{.DLLName}}.NewProc("{{.DLLFuncName}}")

@@ -73,8 +73,8 @@ noavx:
 	MOVB    $0, runtime·support_avx(SB)
 noavx2:
 	MOVB    $0, runtime·support_avx2(SB)
-nocpuinfo:
-
+nocpuinfo:	
+	
 	// if there is an _cgo_init, call it.
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX

@@ -44,6 +44,9 @@ go	src=..
 				gofmt_test.go
 				testdata
 					+
+			newlink
+				testdata
+					+
 		archive
 			tar
 				testdata

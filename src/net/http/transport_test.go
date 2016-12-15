@@ -2888,11 +2888,6 @@ func TestTransportAutomaticHTTP2(t *testing.T) {
 	testTransportAutoHTTP(t, &Transport{}, true)
 }
 
-// golang.org/issue/14391: also check DefaultTransport
-func TestTransportAutomaticHTTP2_DefaultTransport(t *testing.T) {
-	testTransportAutoHTTP(t, DefaultTransport.(*Transport), true)
-}
-
 func TestTransportAutomaticHTTP2_TLSNextProto(t *testing.T) {
 	testTransportAutoHTTP(t, &Transport{
 		TLSNextProto: make(map[string]func(string, *tls.Conn) RoundTripper),

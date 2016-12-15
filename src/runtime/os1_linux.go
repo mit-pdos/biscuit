@@ -169,20 +169,12 @@ var failallocatestack = []byte("runtime: failed to allocate stack for the new OS
 var failthreadcreate = []byte("runtime: failed to create new OS thread\n")
 
 func osinit() {
-	if hackmode != 0 {
-		// avoid getproccount which wants an 8k stack
-		ncpu = 1
-	} else {
-		ncpu = getproccount()
-	}
+	ncpu = getproccount()
 }
 
 var urandom_dev = []byte("/dev/urandom\x00")
 
 func getRandomData(r []byte) {
-	if hackmode != 0 {
-		return
-	}
 	if startupRandomData != nil {
 		n := copy(r, startupRandomData)
 		extendRandom(r, n)
