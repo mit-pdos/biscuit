@@ -81,29 +81,29 @@ func futexwakeup(addr *uint32, cnt uint32) {
 	*(*int32)(unsafe.Pointer(uintptr(0x1006))) = 0x1006
 }
 
-func getproccount() int32 {
-	// This buffer is huge (8 kB) but we are on the system stack
-	// and there should be plenty of space (64 kB).
-	// Also this is a leaf, so we're not holding up the memory for long.
-	// See golang.org/issue/11823.
-	// The suggested behavior here is to keep trying with ever-larger
-	// buffers, but we don't have a dynamic memory allocator at the
-	// moment, so that's a bit tricky and seems like overkill.
-	const maxCPUs = 64 * 1024
-	var buf [maxCPUs / (sys.PtrSize * 8)]uintptr
-	r := sched_getaffinity(0, unsafe.Sizeof(buf), &buf[0])
-	n := int32(0)
-	for _, v := range buf[:r/sys.PtrSize] {
-		for v != 0 {
-			n += int32(v & 1)
-			v >>= 1
-		}
-	}
-	if n == 0 {
-		n = 1
-	}
-	return n
-}
+//func getproccount() int32 {
+//	// This buffer is huge (8 kB) but we are on the system stack
+//	// and there should be plenty of space (64 kB).
+//	// Also this is a leaf, so we're not holding up the memory for long.
+//	// See golang.org/issue/11823.
+//	// The suggested behavior here is to keep trying with ever-larger
+//	// buffers, but we don't have a dynamic memory allocator at the
+//	// moment, so that's a bit tricky and seems like overkill.
+//	const maxCPUs = 64 * 1024
+//	var buf [maxCPUs / (sys.PtrSize * 8)]uintptr
+//	r := sched_getaffinity(0, unsafe.Sizeof(buf), &buf[0])
+//	n := int32(0)
+//	for _, v := range buf[:r/sys.PtrSize] {
+//		for v != 0 {
+//			n += int32(v & 1)
+//			v >>= 1
+//		}
+//	}
+//	if n == 0 {
+//		n = 1
+//	}
+//	return n
+//}
 
 // Clone, the Linux rfork.
 const (
@@ -226,12 +226,21 @@ func sysargs(argc int32, argv **byte) {
 }
 
 func osinit() {
-	ncpu = getproccount()
+	//ncpu = getproccount()
+	ncpu = 1
+}
+
+func Setncpu(n int32) {
+	ncpu = n
 }
 
 var urandom_dev = []byte("/dev/urandom\x00")
 
 func getRandomData(r []byte) {
+	if hackmode != 0 {
+		pmsg("no random!\n")
+		return
+	}
 	if startupRandomData != nil {
 		n := copy(r, startupRandomData)
 		extendRandom(r, n)
@@ -304,7 +313,9 @@ func minit() {
 	}
 
 	// for debuggers, in case cgo created the thread
-	_g_.m.procid = uint64(gettid())
+	if hackmode == 0 {
+		_g_.m.procid = uint64(gettid())
+	}
 
 	// restore signal mask from m.sigmask and unblock essential signals
 	nmask := _g_.m.sigmask
@@ -1229,6 +1240,7 @@ func hexdump(_p unsafe.Pointer, sz uintptr) {
 //go:nosplit
 func seg_setup() {
 	p := pdesc_t{}
+	chksize(unsafe.Sizeof(p), 16)
 	chksize(unsafe.Sizeof(seg64_t{}), 8)
 	pdsetup(&p, unsafe.Pointer(&_segs[0]), unsafe.Sizeof(_segs) - 1)
 	lgdt(p)

@@ -2170,6 +2170,7 @@ func ap_entry(myid uint) {
 
 func set_cpucount(n int) {
 	numcpus = n
+	runtime.Setncpu(int32(n))
 }
 
 func irq_unmask(irq int) {
