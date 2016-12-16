@@ -559,6 +559,7 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 	//ct.user.fxbuf = (*[FXREGS]uintptr)(unsafe.Pointer(fxbuf))
 
 	// avoid write barriers, see note above
+	// these write barriers are OK now that kernel uses %gs instead of %fs?
 	*(*uintptr)(unsafe.Pointer(&ct.user.tf)) = uintptr(unsafe.Pointer(tf))
 	*(*uintptr)(unsafe.Pointer(&ct.user.fxbuf)) = uintptr(unsafe.Pointer(fxbuf))
 
@@ -2166,6 +2167,7 @@ func kernel_fault(tf *[TFSIZE]uintptr) {
 // may want to only ·wakeup() on most timer ints since now there is more
 // overhead for timer ints during user time.
 //go:nosplit
+//go:nowritebarrierrec
 func trap(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
 
@@ -2225,8 +2227,10 @@ func trap(tf *[TFSIZE]uintptr) {
 			// before we execute the first instruction of the new
 			// rip, make sure the state we just saved isn't
 			// clobbered
-			ct.user.tf = nil
-			ct.user.fxbuf = nil
+			*(*uintptr)(unsafe.Pointer(&ct.user.tf)) =
+			    uintptr(unsafe.Pointer(nil))
+			*(*uintptr)(unsafe.Pointer(&ct.user.fxbuf)) =
+			    uintptr(unsafe.Pointer(nil))
 		} else {
 			fxsave(&ct.fx)
 			ct.tf = *tf
@@ -2377,7 +2381,8 @@ func yieldy() {
 			sched_run(t)
 		}
 	}
-	cpu.mythread = nil
+	*(*uintptr)(unsafe.Pointer(&cpu.mythread)) =
+	    uintptr(unsafe.Pointer(nil))
 	Spunlock(threadlock)
 	sched_halt()
 }
@@ -2509,7 +2514,8 @@ func IRQcheck(pp *p) {
 			if gst &^ _Gscan != _Gwaiting {
 				pancake("bad igp status", uintptr(gst))
 			}
-			_irqv.handlers[i].igp = nil
+			*(*uintptr)(unsafe.Pointer(&_irqv.handlers[i].igp)) =
+			    uintptr(unsafe.Pointer(nil))
 			_irqv.handlers[i].started = true
 			// we cannot set gstatus or put to run queue before we
 			// release the spinlock since either operation may
