@@ -1674,6 +1674,11 @@ func fpuinit(amfirst bool) {
 	}
 }
 
+//go:nosplit
+func fpuinit0() {
+	fpuinit(true)
+}
+
 // LAPIC registers
 const (
 	LAPID		= 0x20/4
@@ -1897,7 +1902,6 @@ func proc_setup() {
 	_sigsimaddr = **(**uintptr)(unsafe.Pointer(&dur2))
 
 	chksize(TFSIZE*8, unsafe.Sizeof(threads[0].tf))
-	fpuinit(true)
 	// initialize the first thread: us
 	threads[0].status = ST_RUNNING
 	threads[0].p_pmap = P_kpmap

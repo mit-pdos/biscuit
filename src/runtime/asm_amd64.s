@@ -310,6 +310,9 @@ needtls:
 	//LEAQ	runtime·m0+m_tls(SB), DI
 	//CALL	runtime·settls(SB)
 
+	// from this point on, SSE regs may be used. allow SSE instructions
+	// immediately.
+	CALL	·fpuinit0(SB)
 	CALL	·seg_setup(SB)
 	// i cannot fix CS via far call to a label because i don't know how to
 	// call a label with plan9 compiler.
