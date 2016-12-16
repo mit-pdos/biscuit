@@ -257,7 +257,7 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 	JZ	spm_skip
 	RET
 spm_skip:
-	MOVL	sig+0(FP), DI
+	MOVL	how+0(FP), DI
 	MOVQ	new+8(FP), SI
 	MOVQ	old+16(FP), DX
 	MOVL	size+24(FP), R10
@@ -268,7 +268,7 @@ spm_skip:
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 
-TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
+TEXT runtime·sysSigaction(SB),NOSPLIT,$0-36
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	sa_skip
@@ -291,12 +291,30 @@ TEXT ·fakesig(SB),NOSPLIT,$0-24
 	MOVQ	ctx+16(FP), DX
 	JMP	runtime·sigtramp(SB)
 
-TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
-	MOVL	sig+8(FP), DI
-	MOVQ	info+16(FP), SI
-	MOVQ	ctx+24(FP), DX
-	MOVQ	fn+0(FP), AX
+// Call the function stored in _cgo_sigaction using the GCC calling convention.
+TEXT runtime·callCgoSigaction(SB),NOSPLIT,$16
+	MOVQ	sig+0(FP), DI
+	MOVQ	new+8(FP), SI
+	MOVQ	old+16(FP), DX
+	MOVQ	_cgo_sigaction(SB), AX
+	MOVQ	SP, BX	// callee-saved
+	ANDQ	$~15, SP	// alignment as per amd64 psABI
 	CALL	AX
+	MOVQ	BX, SP
+	MOVL	AX, ret+24(FP)
+	RET
+
+TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
+	MOVQ	fn+0(FP),    AX
+	MOVL	sig+8(FP),   DI
+	MOVQ	info+16(FP), SI
+	MOVQ	ctx+24(FP),  DX
+	PUSHQ	BP
+	MOVQ	SP, BP
+	ANDQ	$~15, SP     // alignment for x86_64 ABI
+	CALL	AX
+	MOVQ	BP, SP
+	POPQ	BP
 	RET
 
 TEXT runtime·sigtramp(SB),NOSPLIT,$24
@@ -481,7 +499,7 @@ futex_skip:
 	MOVL	AX, ret+40(FP)
 	RET
 
-// int32 clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void));
+// int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
 TEXT runtime·clone(SB),NOSPLIT,$0
 	MOVQ	runtime·hackmode(SB), DX
 	TESTQ	DX, DX
@@ -489,7 +507,7 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	JMP	·hack_clone(SB)
 clone_skip:
 	MOVL	flags+0(FP), DI
-	MOVQ	stack+8(FP), SI
+	MOVQ	stk+8(FP), SI
 	MOVQ	$0, DX
 	MOVQ	$0, R10
 
@@ -549,8 +567,8 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	JMP	·hack_sigaltstack(SB)
 	INT	$3
 sas_skip:
-	MOVQ	new+8(SP), DI
-	MOVQ	old+16(SP), SI
+	MOVQ	new+0(FP), DI
+	MOVQ	old+8(FP), SI
 	MOVQ	$131, AX
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
@@ -661,7 +679,7 @@ TEXT runtime·access(SB),NOSPLIT,$0
 TEXT runtime·connect(SB),NOSPLIT,$0-28
 	MOVL	fd+0(FP), DI
 	MOVQ	addr+8(FP), SI
-	MOVL	addrlen+16(FP), DX
+	MOVL	len+16(FP), DX
 	MOVL	$42, AX  // syscall entry
 	SYSCALL
 	MOVL	AX, ret+24(FP)
@@ -670,8 +688,8 @@ TEXT runtime·connect(SB),NOSPLIT,$0-28
 // int socket(int domain, int type, int protocol)
 TEXT runtime·socket(SB),NOSPLIT,$0-20
 	MOVL	domain+0(FP), DI
-	MOVL	type+4(FP), SI
-	MOVL	protocol+8(FP), DX
+	MOVL	typ+4(FP), SI
+	MOVL	prot+8(FP), DX
 	MOVL	$41, AX  // syscall entry
 	SYSCALL
 	MOVL	AX, ret+16(FP)
