@@ -1937,8 +1937,7 @@ stop:
 	}
 
 	if hackmode != 0 {
-		yield := 49
-		mktrap(yield)
+		mktrap(TRAP_YIELD)
 		goto top
 	}
 

@@ -2096,11 +2096,11 @@ const (
 	TRAP_SYSCALL	= 64
 	TRAP_TIMER	= 32
 	TRAP_DISK	= (32 + 14)
-	TRAP_YIELD	= 49
 	TRAP_SPUR	= 64
 	TRAP_TLBSHOOT	= 70
 	TRAP_SIGRET	= 71
 	TRAP_PERFMASK	= 72
+	TRAP_YIELD	= 73
 )
 
 var threadlock = &Spinlock_t{}

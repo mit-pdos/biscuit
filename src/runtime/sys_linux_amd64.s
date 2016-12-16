@@ -581,7 +581,7 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 	MOVQ	runtime·hackmode(SB), DI
 	TESTQ	DI, DI
 	JZ	yield_skip
-#define TRAP_YIELD      $49
+#define TRAP_YIELD      $73
 	PUSHQ	TRAP_YIELD
 	CALL	·mktrap(SB)
 	POPQ	AX
