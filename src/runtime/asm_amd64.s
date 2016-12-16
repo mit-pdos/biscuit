@@ -965,7 +965,7 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 // if you change the number of arguments, you must adjust the stack offsets in
 // _sysentry and ·_userint.
 // func _Userrun(tf *[24]int, fastret bool) (int, int)
-TEXT ·_Userrun(SB), NOSPLIT, $24-32
+TEXT ·_Userrun(SB), NOSPLIT, $8-16
 	MOVQ	tf+0(FP), R9
 
 	SWAPGS
@@ -1023,7 +1023,7 @@ TEXT ·_sysentry(SB), NOSPLIT, $0-0
 	MOVQ	0x20(SP), SP
 
 	// save user state in fake trapframe
-	MOVQ	0x20(SP), R9
+	MOVQ	0x18(SP), R9
 	MOVQ	R10, TF_RSP(R9)
 	MOVQ	R11, TF_RIP(R9)
 	// syscall args
@@ -1037,10 +1037,10 @@ TEXT ·_sysentry(SB), NOSPLIT, $0-0
 	MOVQ	BP,  TF_RBP(R9)
 	MOVQ	BX,  TF_RBX(R9)
 	// return val 1
-	MOVQ	TRAP_SYSCALL, 0x30(SP)
+	MOVQ	TRAP_SYSCALL, 0x28(SP)
 	// return val 2
-	MOVQ	$0, 0x38(SP)
-	ADDQ	$0x18, SP
+	MOVQ	$0, 0x30(SP)
+	ADDQ	$0x10, SP
 	RET
 
 // this is the bottom half of _userrun() that is executed if a timer int or CPU
@@ -1049,9 +1049,9 @@ TEXT ·_userint(SB), NOSPLIT, $0-0
 	CLI
 	// user state is already saved by trap handler.
 	// AX holds the interrupt number, BX holds aux (cr2 for page fault)
-	MOVQ	AX, 0x30(SP)
-	MOVQ	BX, 0x38(SP)
-	ADDQ	$0x18, SP
+	MOVQ	AX, 0x28(SP)
+	MOVQ	BX, 0x30(SP)
+	ADDQ	$0x10, SP
 	RET
 
 TEXT ·gs_null(SB), NOSPLIT, $8-0
