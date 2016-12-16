@@ -881,6 +881,8 @@ func (ap *apic_t) reg_read(reg int) uint32 {
 		panic("bad IO APIC reg")
 	}
 	c := uint32(reg)
+	// XXX XXX XXX may deadlock: lock is taken in interrupt handler but
+	// this code acquires the lock while interrupts are enabled.
 	runtime.Splock(&ap._mlock)
 	runtime.Store32(ap.regs.sel, c)
 	v := atomic.LoadUint32(ap.regs.win)
