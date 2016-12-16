@@ -143,9 +143,9 @@ bootmain(void)
 	mapone(pgdir, (uint32_t)e820m, (uint32_t)e820m, 0);
 
 	// get a new stack with guard page
-	ensure_empty(pgdir, NEWSTACK - PGSIZE);
+	ensure_empty(pgdir, NEWSTACK - 1*PGSIZE);
 	ensure_empty(pgdir, NEWSTACK - 2*PGSIZE);
-	alloc_phys(pgdir, NEWSTACK - 1);
+	alloc_phys(pgdir, NEWSTACK - 1*PGSIZE);
 
 	// XXX setup tramp if entry is 64bit address...
 	if (!is32(ELFHDR->e_entry))
