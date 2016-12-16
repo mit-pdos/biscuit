@@ -355,7 +355,7 @@ ok:
 	//MOVQ	24(SP), AX		// copy argv
 	MOVQ	$fakeargv(SB), AX
 	MOVQ	AX, 8(SP)
-	CALL	runtime·args(SB)
+	//CALL	runtime·args(SB)
 	CALL	runtime·osinit(SB)
 	CALL	runtime·schedinit(SB)
 

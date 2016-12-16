@@ -16,6 +16,9 @@ import (
 // binary gets deleted.
 var executablePath, executablePathErr = func() (string, error) {
 	var procfn string
+	if runtime.Hmode() {
+		return "", errors.New("Executable not implemented for " + runtime.GOOS)
+	}
 	switch runtime.GOOS {
 	default:
 		return "", errors.New("Executable not implemented for " + runtime.GOOS)

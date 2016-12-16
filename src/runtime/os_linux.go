@@ -246,6 +246,7 @@ func sysauxv(auxv []uintptr) int {
 func osinit() {
 	//ncpu = getproccount()
 	ncpu = 1
+	physPageSize = 4096
 }
 
 func Setncpu(n int32) {
@@ -271,7 +272,9 @@ func getRandomData(r []byte) {
 }
 
 func goenvs() {
-	goenvs_unix()
+	if hackmode == 0 {
+		goenvs_unix()
+	}
 }
 
 // Called to do synchronous initialization of Go code built with
@@ -900,6 +903,10 @@ func cls() {
 	sc_put('\n')
 }
 
+func Hmode() bool {
+	return hackmode != 0
+}
+
 var hackmode int64
 var Halt uint32
 
@@ -921,8 +928,8 @@ func Splock(l *Spinlock_t) {
 
 //go:nosplit
 func Spunlock(l *Spinlock_t) {
-	//atomic.Store(&l.v, 0)
-	l.v = 0
+	atomic.Store(&l.v, 0)
+	//l.v = 0
 }
 
 // since this lock may be taken during an interrupt (only under fatal error
@@ -1499,7 +1506,7 @@ func zero_phys(_phys uintptr) {
 	*pml4 = phys | PTE_P | PTE_W
 	_tva := caddr(VREC, VREC, VREC, VTEMP, 0)
 	tva := unsafe.Pointer(_tva)
-	memclr(tva, PGSIZE)
+	memclrNoHeapPointers(tva, PGSIZE)
 	*pml4 = 0
 	invlpg(_tva)
 }
@@ -2630,7 +2637,7 @@ func mksig(t *thread_t, signo int32) {
 	ctxt := (*ucontext_t)(unsafe.Pointer(_ctxt))
 
 	// the profiler only uses rip and rsp of the context...
-	memclr(unsafe.Pointer(_ctxt), ucsz)
+	memclrNoHeapPointers(unsafe.Pointer(_ctxt), ucsz)
 	ctxt.uc_mcontext.rip = t.tf[TF_RIP]
 	ctxt.uc_mcontext.rsp = t.tf[TF_RSP]
 
@@ -2857,7 +2864,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	*(*uintptr)(unsafe.Pointer(rsp)) = 0
 
 	mt := &threads[ti]
-	memclr(unsafe.Pointer(mt), unsafe.Sizeof(thread_t{}))
+	memclrNoHeapPointers(unsafe.Pointer(mt), unsafe.Sizeof(thread_t{}))
 	mt.tf[TF_CS] = KCODE64 << 3
 	mt.tf[TF_RSP] = rsp
 	mt.tf[TF_RIP] = cloneaddr
@@ -2897,7 +2904,7 @@ func hack_setitimer(timer uint32, new, old *itimerval) {
 	Popcli(fl)
 }
 
-func hack_sigaltstack(new, old *sigaltstackt) {
+func hack_sigaltstack(new, old *stackt) {
 	fl := Pushcli()
 	ct := Gscpu().mythread
 	SS_DISABLE := int32(2)
