@@ -1418,13 +1418,19 @@ func (td *txdesc_t) ctxt_tcp_tso(_maclen, _ip4len, _l4hdrlen, _mss int) {
 	if mss &^ 0xffff != 0 {
 		panic("large mss")
 	}
+	if _ip4len + _l4hdrlen + _mss > 1500 {
+		panic("packets > mtu")
+	}
 	td.hwdesc.rest |= mss << 48
 	l4hdrlen := uint64(_l4hdrlen)
 	if l4hdrlen &^ 0xff != 0 {
 		panic("large l4hdrlen")
 	}
 	// XXXPANIC
-	if _l4hdrlen != TCPLEN {
+	timeoptpadlen := 12
+	msslen := 4
+	if _l4hdrlen != TCPLEN && _l4hdrlen != TCPLEN + timeoptpadlen &&
+	   _l4hdrlen != TCPLEN + timeoptpadlen + msslen {
 		panic("weird tcp header len (options?)")
 	}
 	td.hwdesc.rest |= l4hdrlen << 40
@@ -1501,7 +1507,7 @@ func (td *txdesc_t) mktcp(src [][]uint8, tlen int) [][]uint8 {
 
 // offloads segmentation and checksums to the NIC. the TCP header's
 // pseudo-header checksum must not include the length.
-func (td *txdesc_t) mktcp_tso(src [][]uint8, tlen int) [][]uint8 {
+func (td *txdesc_t) mktcp_tso(src [][]uint8, tcphlen, tlen int) [][]uint8 {
 	ret := td.mktcp(src, tlen)
 	// DCMD.TSE = 1
 	tse := uint64(1 << 31)
@@ -1511,7 +1517,7 @@ func (td *txdesc_t) mktcp_tso(src [][]uint8, tlen int) [][]uint8 {
 	}
 	// for TSO, PAYLEN is the # of bytes in the TCP payload (not the total
 	// packet size, as usual).
-	td._paylen(uint64(tlen - ETHERLEN - IP4LEN - TCPLEN))
+	td._paylen(uint64(tlen - ETHERLEN - IP4LEN - tcphlen))
 	return ret
 }
 
@@ -1944,7 +1950,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		tail = (tail + 1) % x.tx.ndescs
 		fd = &x.tx.descs[tail]
 		fd.wbwait()
-		buf = fd.mktcp_tso(buf, tlen)
+		buf = fd.mktcp_tso(buf, tcphlen, tlen)
 	} else if tcp {
 		fd.ctxt_tcp(ETHERLEN, IP4LEN)
 		tail = (tail + 1) % x.tx.ndescs

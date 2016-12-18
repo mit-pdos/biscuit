@@ -1892,6 +1892,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 // transmit new segments and retransmits timed-out segments as the window
 // allows
 func (tc *tcptcb_t) seg_maybe() {
+	tc._sanity()
 	if tc.txdone && tc.snd.una == tc.snd.finseq + 1 {
 		// everything has been acknowledged
 		return
@@ -1962,9 +1963,9 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 	eth, ip, thdr := pkt.hdrbytes()
 
 	sgbuf := [][]uint8{eth, ip, thdr, opt, buf1, buf2}
-	smss := int(tc.snd.mss)
 	if istso {
-		nic.tx_tcp_tso(sgbuf, len(thdr), smss)
+		smss := int(tc.snd.mss) - len(opt)
+		nic.tx_tcp_tso(sgbuf, len(thdr) + len(opt), smss)
 	} else {
 		nic.tx_tcp(sgbuf)
 	}
@@ -2101,7 +2102,7 @@ func (tc *tcptcb_t) mkrst(seq uint32) *tcppkt_t {
 }
 
 // returns the new TCP packet/options and true if the packet should use TSO
-func (tc *tcptcb_t) mkseg(seq, ack uint32,seglen int) (*tcppkt_t,
+func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) (*tcppkt_t,
     []uint8, bool) {
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
@@ -2112,8 +2113,7 @@ func (tc *tcptcb_t) mkseg(seq, ack uint32,seglen int) (*tcppkt_t,
 	l4len := ret.tcphdr.hdrlen() + seglen
 	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
 	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
-	ipuplen := l4len + ret.iphdr.hdrlen()
-	istso := ipuplen > int(tc.snd.mss)
+	istso := seglen + len(tc.opt) > int(tc.snd.mss)
 	// packets using TSO do not include the the TCP payload length in the
 	// pseudo-header checksum.
 	if istso {

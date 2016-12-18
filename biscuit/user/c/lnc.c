@@ -34,7 +34,7 @@ static int mss(int s)
 	return 0;
 }
 
-static char buf[1460];
+static char buf[1460 - 12];
 
 int nc(int s)
 {
