@@ -58,7 +58,10 @@ def rewrite(f):
 			data[i] = '\x65'
 	if found == 0:
 		raise ValueError('didnt find a single occurance')
-	print >> sys.stderr, 'patched %d instructions (%d skipped)' % (found, len(spots) - found)
+	skipped = len(spots) - found
+	print >> sys.stderr, 'patched %d instructions (%d skipped)' % (found, skipped)
+	if found < skipped:
+		raise ValueError('more skipped than found')
 	return ''.join(data)
 
 def getspots(fn):
