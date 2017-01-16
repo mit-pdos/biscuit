@@ -2106,7 +2106,7 @@ const (
 
 // scheduler constants
 const (
-	HZ	= 100
+	HZ	= 1000
 )
 
 var _userintaddr uintptr
