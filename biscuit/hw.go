@@ -881,12 +881,14 @@ func (ap *apic_t) reg_read(reg int) uint32 {
 		panic("bad IO APIC reg")
 	}
 	c := uint32(reg)
-	// XXX XXX XXX may deadlock: lock is taken in interrupt handler but
-	// this code acquires the lock while interrupts are enabled.
+	fl := runtime.Pushcli()
+	// XXX don't take this lock in uninterruptible and interruptible
+	// contexts
 	runtime.Splock(&ap._mlock)
 	runtime.Store32(ap.regs.sel, c)
 	v := atomic.LoadUint32(ap.regs.win)
 	runtime.Spunlock(&ap._mlock)
+	runtime.Popcli(fl)
 	return v
 }
 
@@ -895,10 +897,12 @@ func (ap *apic_t) reg_write(reg int, v uint32) {
 		panic("bad IO APIC reg")
 	}
 	c := uint32(reg)
+	fl := runtime.Pushcli()
 	runtime.Splock(&ap._mlock)
 	runtime.Store32(ap.regs.sel, c)
 	runtime.Store32(ap.regs.win, v)
 	runtime.Spunlock(&ap._mlock)
+	runtime.Popcli(fl)
 }
 
 func (ap *apic_t) irq_unmask(irq int) {
@@ -922,6 +926,7 @@ func (ap *apic_t) irq_mask(irq int) {
 		for {}
 	}
 
+	fl := runtime.Pushcli()
 	runtime.Splock(&ap._mlock)
 	mreg := uint32(0x10 + irq*2)
 
@@ -934,6 +939,7 @@ func (ap *apic_t) irq_mask(irq int) {
 	runtime.Store32(ap.regs.sel, mreg)
 	runtime.Store32(ap.regs.win, v)
 	runtime.Spunlock(&ap._mlock)
+	runtime.Popcli(fl)
 }
 
 // LAPIC's are configured to broadcast EOI to IOAPICs for level-triggered
