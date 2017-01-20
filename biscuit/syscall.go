@@ -883,9 +883,10 @@ func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	}
 
 	// first we tell the underlying device to notify us if their fd is
-	// ready. if a device is immediately ready, we don't both to register
+	// ready. if a device is immediately ready, we don't bother to register
 	// notifiers with the rest of the devices -- we just ask their status
 	// too.
+pollrace:
 	devwait := timeout != 0
 	pm := pollmsg_t{}
 	readyfds, writeback := _checkfds(proc, tid, &pm, devwait, buf, nfds)
@@ -912,8 +913,12 @@ func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	if writeback && !proc.k2user(buf, fdsn) {
 		return int(-EFAULT)
 	}
-	if readyfds < 1 {
-		panic("wokeup without ready fd?")
+	if readyfds == 0 {
+		// this can happen when two threads poll the same fd and one
+		// thread removes the ready status before the second thread
+		// observes that ready status in _checkfds
+		//fmt.Printf("[!]")
+		goto pollrace
 	}
 	return readyfds
 }
