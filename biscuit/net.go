@@ -13,8 +13,7 @@ type ip4_t uint32
 type be16 uint16
 type be32 uint32
 
-// convert little- to big-endian. also, arpv4_t gets padded due to tpa if tpa
-// is a uint32 instead of a byte array.
+// convert little- to big-endian.
 func ip2sl(sl []uint8, ip ip4_t) {
 	sl[0] = uint8(ip >> 24)
 	sl[1] = uint8(ip >> 16)
@@ -70,6 +69,7 @@ const ARPLEN = int(unsafe.Sizeof(arpv4_t{}))
 const macsz	int = 6
 type mac_t	[macsz]uint8
 
+// arpv4_t gets padded if tpa is a uint32 instead of a byte array...
 type arpv4_t struct {
 	etherhdr_t
 	htype	be16

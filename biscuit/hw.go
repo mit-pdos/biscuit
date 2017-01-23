@@ -1363,6 +1363,7 @@ type txdesc_t struct {
 	p_buf	uint64
 	bufsz	uint64
 	ctxt	bool
+	eop	bool
 }
 
 func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
@@ -1376,6 +1377,7 @@ func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
 
 func (td *txdesc_t) ctxt_ipv4(_maclen, _ip4len int) {
 	td.ctxt = true
+	td.eop = false
 	maclen := uint64(_maclen)
 	td.hwdesc.p_addr = maclen << 9
 	hlen := uint64(_ip4len)
@@ -1392,6 +1394,7 @@ func (td *txdesc_t) ctxt_ipv4(_maclen, _ip4len int) {
 
 func (td *txdesc_t) ctxt_tcp(_maclen, _ip4len int) {
 	td.ctxt = true
+	td.eop = false
 	maclen := uint64(_maclen)
 	td.hwdesc.p_addr = maclen << 9
 	hlen := uint64(_ip4len)
@@ -1407,6 +1410,7 @@ func (td *txdesc_t) ctxt_tcp(_maclen, _ip4len int) {
 
 func (td *txdesc_t) ctxt_tcp_tso(_maclen, _ip4len, _l4hdrlen, _mss int) {
 	td.ctxt = true
+	td.eop = false
 	maclen := uint64(_maclen)
 	td.hwdesc.p_addr = maclen << 9
 	hlen := uint64(_ip4len)
@@ -1449,6 +1453,7 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 	}
 
 	td.ctxt = false
+	td.eop = false
 	dst := dmaplen(uintptr(td.p_buf), int(td.bufsz))
 	paylen := uint64(0)
 	for len(dst) != 0 && len(src) != 0 {
@@ -1479,6 +1484,7 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 	td.hwdesc.rest |= ifcs
 	if last {
 		td.hwdesc.rest |= eop | rs
+		td.eop = true
 	}
 	td._dtalen(paylen)
 	return src
@@ -1545,26 +1551,38 @@ func (td *txdesc_t) _paylen(v uint64) {
 	td.hwdesc.rest |= v << 46
 }
 
+// returns true when this tx descriptor is guaranteed to no longer be used by
+// the hardware. the hardware does not set DD for context descriptors or
+// descriptors without RS set (which can only be set on the last descriptor of
+// the packet and thus, with this driver, always has EOP set). thus a context
+// descriptor is available for reuse iff there is a data descriptor between
+// this tx descriptor and TDH that has both DD and EOP set (EOP is reserved
+// after writeback, thus we have to keep track of it ourselves).
 func (td *txdesc_t) txdone() bool {
-	rs   := uint64(1 << 27)
-	// rs is reserved after writeback...
-	if atomic.LoadUint64(&td.hwdesc.rest) & rs == 0 {
-		panic("dd may set only when rs is set")
+	if td.ctxt || !td.eop {
+		return false
 	}
 	dd := uint64(1 << 32)
 	return atomic.LoadUint64(&td.hwdesc.rest) & dd != 0
 }
 
+func (td *txdesc_t) _avail() {
+	td.ctxt = false
+	td.eop = true
+	dd := uint64(1 << 32)
+	td.hwdesc.rest |= dd
+}
+
 // if hw may writeback this descriptor, wait until the CPU observes the hw's
 // write
 func (td *txdesc_t) wbwait() {
-	rs   := uint64(1 << 27)
-	// rs is reserved after writeback...
-	// compiler barrier
-	if atomic.LoadUint64(&td.hwdesc.rest) & rs != 0 {
-		for !td.txdone() {
-			waits++
-		}
+	// the hardware does not report when a context descriptor or non-last
+	// data descriptor is no long in use.
+	if td.ctxt || !td.eop {
+		return
+	}
+	for !td.txdone() {
+		waits++
 	}
 }
 
@@ -1900,6 +1918,10 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 	tail := x.rl(TDT(0))
 	// make sure there are enough tx descriptor to fit buf
+	if tail == end {
+		// tx ring is full
+		return false
+	}
 	tlen := 0
 	for i := 0; i < len(buf); {
 		if len(buf[i]) == 0 {
@@ -1931,18 +1953,39 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		// all checksum offloads?)
 		newtail = (newtail + 1) % x.tx.ndescs
 	}
-	// XXX have to prevent clobbering of context descriptors somehow (does
-	// the NIC advance TDH past TSO context descriptors while the context
-	// descriptor is still in use?)
-	for newtail != end && need != 0 {
-		td := &x.tx.descs[newtail]
-		bs := int(td.bufsz)
-		if need <= bs {
-			need = 0
-		} else {
-			need -= bs
+	// look for a data descriptor between [tail, end] that has DD set and
+	// is the last descriptor in a packet (thus any previous context
+	// descriptors [which may contain a packet's header for TSO] are
+	// unused).
+	for {
+		// find data descriptor with DD and eop
+		tt := newtail
+		for tt != end && !x.tx.descs[tt].txdone() {
+			tt = (tt + 1) % x.tx.ndescs
 		}
-		newtail = (newtail + 1) % x.tx.ndescs
+		if !x.tx.descs[tt].txdone() {
+			// not enough tx descriptors
+			return false
+		}
+		// all tx descriptors between [newtail, tt] are available. see
+		// if these descriptors have buffers which are large enough to
+		// hold buf. we cannot use end's buffer since end is the last
+		// acceptable slot for TDT, but TDT references the descriptor
+		// following the last usable descriptor.
+		ttp1 := (tt + 1) % x.tx.ndescs
+		for newtail != ttp1 && newtail != end && need != 0 {
+			td := &x.tx.descs[newtail]
+			bs := int(td.bufsz)
+			if bs > need {
+				need = 0
+			} else {
+				need -= bs
+			}
+			newtail = (newtail + 1) % x.tx.ndescs
+		}
+		if need == 0 {
+			break
+		}
 	}
 	if need != 0 {
 		// not enough room
@@ -2119,6 +2162,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 
 				rantest = true
 				//go x.tester1()
+				//go x.tx_test2()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2455,6 +2499,10 @@ func attach_x540t(vid, did int, t pcitag_t) {
 			ps := uintptr(PGSIZE) / 2
 			x.tx.descs[dn].init(p_bpg, ps, &pg[i])
 			x.tx.descs[dn+1].init(p_bpg + ps, ps, &pg[i+2])
+			// set DD and eop so all tx descriptors appear ready
+			// for use
+			x.tx.descs[dn]._avail()
+			x.tx.descs[dn+1]._avail()
 		}
 
 		// disable transmit descriptor head write-back. we may want
@@ -2582,86 +2630,64 @@ func (x *x540_t) rx_test() {
 	}
 }
 
+
 func (x *x540_t) tx_test() {
-	for i := range x.mac {
-		txdata.macsrc[i] = x.mac[i]
+	x.tx.Lock()
+	defer x.tx.Unlock()
+
+	fmt.Printf("test tx start\n")
+	pkt := &tcppkt_t{}
+	pkt.tcphdr.init_ack(8080, 8081, 31337, 31338)
+	pkt.tcphdr.win = 1<<14
+	l4len := 0
+	pkt.iphdr.init_tcp(l4len, 0x01010101, 0x02020202)
+	bmac := []uint8{0x00, 0x13, 0x72, 0xb6, 0x7b, 0x42}
+	pkt.ether.init_ip4(x.mac[:], bmac)
+	pkt.crc(l4len, 0x01010101, 0x121a0530)
+
+	eth, ip, thdr := pkt.hdrbytes()
+	durdata := new([3*1460]uint8)
+	sgbuf := [][]uint8{eth, ip, thdr, durdata[:]}
+	tlen := 0
+	for _, s := range sgbuf {
+		tlen += len(s)
 	}
-	// statistic regs auto-clear on read; clear them all
-	prstat := func(v bool) {
-		a := x.rl(SSVPC)
-		b := x.rl(GPTC)
-		c := x.rl(TXDGPC)
-		d := x.rl(TPT)
-		var e uint32
-		for i := 0; i < 16; i++ {
-			e += x.rl(QPTC(i))
-		}
-		f := x.rl(PTC64)
-		g := x.rl(PTC127)
-		h := x.rl(MSPDC)
-		i := x.rl(XEC)
-		j := x.rl(BPTC)
-		k := x.rl(QPTC_L(0))
-		l := x.rl(FCCRC)
-		m := x.rl(B2OSPC)
-		n := x.rl(B2OGPRC)
-		o := x.rl(O2BGPTC)
-		p := x.rl(O2BSPC)
-		q := x.rl(CRCERRS)
-		r := x.rl(ILLERRC)
-		s := x.rl(ERRBC)
-		if v {
-			fmt.Println("  TX stats: ", a, b, c, d, e, f, g,
-			    h, i, j, k, l, m, n, o, p, q, r, s)
+
+	h := x.rl(TDH(0))
+	t := x.rl(TDT(0))
+	if h != t {
+		panic("no")
+	}
+	fd := &x.tx.descs[t]
+	fd.wbwait()
+	fd.ctxt_tcp_tso(ETHERLEN, IP4LEN, len(thdr), 1460)
+	t = (t+1) % x.tx.ndescs
+	fd = &x.tx.descs[t]
+	fd.wbwait()
+	sgbuf = fd.mktcp_tso(sgbuf, len(thdr), tlen)
+	t = (t+1) % x.tx.ndescs
+	for len(sgbuf) != 0 {
+		fd = &x.tx.descs[t]
+		fd.wbwait()
+		sgbuf = fd.data_continue(sgbuf)
+		t = (t+1) % x.tx.ndescs
+	}
+	x.rs(TDT(0), t)
+
+	for ot := h; ot != t; ot = (ot+1) % x.tx.ndescs {
+		fd := &x.tx.descs[ot]
+		if fd.eop {
+			fmt.Printf("wait for %v...\n", ot)
+			fd.wbwait()
+			fmt.Printf("%v is ready\n", ot)
+		} else {
+			fmt.Printf("skip %v\n", ot)
 		}
 	}
-	prstat(false)
-
-	for i := 0; i < 3; i++ {
-		//x.log("PACKET %v", i)
-		// setup tx descriptor
-		tail := x.rl(TDT(0))
-		tdesc := &x.tx.descs[tail]
-		const paylen = unsafe.Sizeof(txdata_t{})
-		bytes := (*[paylen]uint8)(unsafe.Pointer(&txdata))[:]
-		sgbuf := [][]uint8{bytes}
-		tdesc.mkraw(sgbuf[:], len(bytes))
-		tail++
-		if tail == x.tx.ndescs {
-			tail = 0
-		}
-
-		//prstat(true)
-		//x.log("bump tail: %v", tail)
-		x.rs(TDT(0), tail)
-		for {
-			if tdesc.txdone() {
-				break
-			}
-			//prstat(true)
-			//<-time.After(10*time.Millisecond)
-		}
-		x.log("transmitted?")
-		if x.rl(TDH(0)) != tail {
-			panic("TDT/TDH mismatch")
-		}
-		prstat(true)
+	if x.rl(TDT(0)) != x.rl(TDH(0)) {
+		panic("htf?")
 	}
-}
-
-type txdata_t struct {
-	macdst	[6]uint8
-	macsrc	[6]uint8
-	etype	[2]uint8
-	payload	[28]uint8
-}
-
-// fake ARP packet
-var txdata = txdata_t {
-	macdst: [6]uint8{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
-	macsrc: [6]uint8{0xa0, 0x36, 0x9f, 0xb3, 0xc3, 0x08},
-	etype: [2]uint8{0x08, 0x06},
-	payload: [28]uint8{0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00, 0x02, 0x00, 0x13, 0x72, 0xb6, 0x7b, 0x42, 0x12, 0x1a, 0x05, 0x30, 0xa0, 0x36, 0x9f, 0xb3, 0xc3, 0x08, 0x12, 0x1a, 0x05, 0x31},
+	fmt.Printf("test tx done\n")
 }
 
 func (x *x540_t) _dbc_init() {
