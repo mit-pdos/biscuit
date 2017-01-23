@@ -3474,7 +3474,13 @@ struct tm *
 localtime(const time_t *a)
 {
 	static struct tm dur;
-	HACK(&dur);
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL) == -1)
+		err(-1, "localtime/gettimeofday");
+	dur.tm_hour = tv.tv_sec / (60*60);
+	dur.tm_min = tv.tv_sec / 60;
+	dur.tm_sec = tv.tv_sec % 60;
+	return &dur;
 }
 
 struct tm *
