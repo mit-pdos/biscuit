@@ -1821,9 +1821,7 @@ func (tc *tcptcb_t) timewaitdeath() {
 	}
 	tc.twdeath = true
 	go func() {
-		//time.Sleep(2*time.Minute)
-		// XXX XXX for testing
-		time.Sleep(10*time.Second)
+		time.Sleep(1*time.Minute)
 		tc.tcb_lock()
 		if !tc.dead {
 			tc.kill()
