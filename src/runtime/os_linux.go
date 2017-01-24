@@ -1568,8 +1568,7 @@ func phys_init() {
 	found := false
 	base := sec.e820p
 	maxfound := uintptr(0)
-	// bootloader provides 15 e820 entries at most (it panicks if the PC
-	// provides more).
+	// bootloader provides e820 entries
 	e820sz := uintptr(28)
 	for i := uintptr(0); i < 4096/e820sz; i++ {
 		ep := (*e820_t)(unsafe.Pointer(base + i*28))
@@ -1605,7 +1604,7 @@ func phys_init() {
 var _eseg e820_t
 
 func Totalphysmem() int {
-	return int(_eseg.start + _eseg.len)
+	return int(pglast - pgfirst)
 }
 
 func Get_phys() uintptr {
