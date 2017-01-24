@@ -27,6 +27,7 @@ const(
 	TIMER		= 32
 	SYSCALL		= 64
 	TLBSHOOT	= 70
+	PERFMASK 	= 72
 
 	IRQ_BASE	= 32
 	IRQ_KBD		= 1
@@ -1034,8 +1035,9 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.name, intno,
 			    tf[TF_RIP])
 			sys_exit(p, tid, SIGNALED | mkexitsig(4))
-		case TLBSHOOT, INT_KBD, INT_COM1, INT_DISK, INT_MSI0, INT_MSI1,
-		    INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6, INT_MSI7:
+		case TLBSHOOT, PERFMASK, INT_KBD, INT_COM1, INT_DISK, INT_MSI0,
+		    INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6,
+		    INT_MSI7:
 			// XXX: shouldn't interrupt user program execution...
 		default:
 			panic(fmt.Sprintf("weird trap: %d", intno))
@@ -1749,6 +1751,9 @@ type circbuf_t struct {
 var _bufpool = sync.Pool{New: func() interface{} { return make([]uint8, 512)}}
 
 func (cb *circbuf_t) cb_init(sz int) {
+	if sz != 512 && sz != 1 << 14 {
+		panic("sz must be power of 2")
+	}
 	bufmax := 1024*1024
 	if sz < 0 || sz > bufmax {
 		panic("bad circbuf size")
@@ -2387,7 +2392,6 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 
 type bprof_t struct {
 	data	[]byte
-	c	int
 }
 
 func (b *bprof_t) init() {
