@@ -1803,6 +1803,17 @@ func (tc *tcptcb_t) finacked() bool {
 	return false
 }
 
+func (tc *tcptcb_t) kill() {
+	tc._sanity()
+	if tc.dead {
+		panic("uh oh")
+	}
+	tc.dead = true
+	tc.txbuf.cbuf.cb_release()
+	tc.rxbuf.cbuf.cb_release()
+	tcpcons.tcb_del(tc)
+}
+
 func (tc *tcptcb_t) timewaitdeath() {
 	tc._sanity()
 	if tc.twdeath {
@@ -1815,8 +1826,7 @@ func (tc *tcptcb_t) timewaitdeath() {
 		time.Sleep(10*time.Second)
 		tc.tcb_lock()
 		if !tc.dead {
-			tc.dead = true
-			tcpcons.tcb_del(tc)
+			tc.kill()
 		}
 		tc.tcb_unlock()
 	}()
@@ -2715,6 +2725,7 @@ func (tc *tcpcons_t) listen_del(tcl *tcplisten_t) {
 	delete(tc.listns, lk)
 }
 
+// tcpcons' mutex is a leaf lock
 var tcpcons tcpcons_t
 
 type tcppkt_t struct {
@@ -2791,9 +2802,8 @@ func net_tcp(pkt [][]uint8, tlen int) {
 		tcb.tcb_lock()
 		if tcb.state == TIMEWAIT && islistener &&
 		   opts.tsok && opts.tsval >= tcb.tstamp.recent {
-			tcb.dead = true
+			tcb.kill()
 			tcb.tcb_unlock()
-			tcpcons.tcb_del(tcb)
 			// fallthrough to islistener case
 		} else {
 			tcb.incoming(k, ip4, tcph, opts, pkt)
@@ -3194,8 +3204,7 @@ func (tl *tcplfops_t) close() err_t {
 				break
 			}
 			tcb._rst()
-			tcb.dead = true
-			tcpcons.tcb_del(tcb)
+			tcb.kill()
 		}
 		tcpcons.listen_del(&tl.tcl)
 	}
