@@ -1597,6 +1597,11 @@ type x540_t struct {
 		cond	*sync.Cond
 		ndescs	uint32
 		descs	[]txdesc_t
+		// cache tail register in order to avoid reading NIC registers,
+		// which apparently takes 1-2us.
+		tailc	uint32
+		ethl	int
+		ip4l	int
 	}
 	rx struct {
 		ndescs	uint32
@@ -1903,6 +1908,13 @@ func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	x.tx.Unlock()
 }
 
+func (x *x540_t) _ctxt_update(ethl, ip4l int) bool {
+	ret := ethl != x.tx.ethl || ip4l != x.tx.ip4l
+	x.tx.ethl = ethl
+	x.tx.ip4l = ip4l
+	return ret
+}
+
 // caller must hold x.tx lock. returns true if buf was copied to the
 // transmission queue.
 func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
@@ -1910,18 +1922,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	if len(buf) == 0 {
 		panic("wut")
 	}
-	end := x.rl(TDH(0))
-	if end == 0 {
-		end = x.tx.ndescs - 1
-	} else {
-		end--
-	}
-	tail := x.rl(TDT(0))
-	// make sure there are enough tx descriptor to fit buf
-	if tail == end {
-		// tx ring is full
-		return false
-	}
+	tail := x.tx.tailc
 	tlen := 0
 	for i := 0; i < len(buf); {
 		if len(buf[i]) == 0 {
@@ -1943,37 +1944,43 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 	need := tlen
 	newtail := tail
-	if ipv4 || tcp || tso {
-		// XXX the NIC only needs 1 context descriptor total for
-		// IPv4/TCP checksums, not 1 per packet! (segmentation offload
-		// requires 1 per payload)
+	ctxtstale := (ipv4 || tcp) && x._ctxt_update(ETHERLEN, IP4LEN)
+	if ctxtstale || tso {
+		// segmentation offload requires a per-packet context
+		// descriptor
 
 		// first descriptor must be a context descriptor when using
 		// checksum/segmentation offloading (only need 1 context for
-		// all checksum offloads?)
+		// all checksum offloads?). a successfull check for DD/eop
+		// below implies that this context descriptor is free.
 		newtail = (newtail + 1) % x.tx.ndescs
 	}
-	// look for a data descriptor between [tail, end] that has DD set and
-	// is the last descriptor in a packet (thus any previous context
-	// descriptors [which may contain a packet's header for TSO] are
-	// unused).
-	for {
+	// starting from the last tail, look for a data descriptor that has DD
+	// set and is the last descriptor in a packet, thus any previous
+	// context descriptors (which may contain a packet's header for TSO)
+	// are unused.
+	for tt := newtail;; {
 		// find data descriptor with DD and eop
-		tt := newtail
-		for tt != end && !x.tx.descs[tt].txdone() {
+		for {
+			fd := &x.tx.descs[tt]
+			done := fd.txdone()
+			if done {
+				break
+			} else if fd.eop && !done {
+				// if this descriptor is the final data
+				// descriptor of a packet and does not have DD
+				// set, there aren't enough free tx descriptors
+				return false
+			}
 			tt = (tt + 1) % x.tx.ndescs
 		}
-		if !x.tx.descs[tt].txdone() {
-			// not enough tx descriptors
-			return false
-		}
-		// all tx descriptors between [newtail, tt] are available. see
-		// if these descriptors have buffers which are large enough to
-		// hold buf. we cannot use end's buffer since end is the last
-		// acceptable slot for TDT, but TDT references the descriptor
-		// following the last usable descriptor.
-		ttp1 := (tt + 1) % x.tx.ndescs
-		for newtail != ttp1 && newtail != end && need != 0 {
+		// all tx descriptors between [tail, tt] are available. see if
+		// these descriptors have buffers which are large enough to
+		// hold buf. however, we cannot use tt even though it is free
+		// since tt may be the last acceptable slot for TDT, but TDT
+		// references the descriptor following the last usable
+		// descriptor (and thus hardware will not process it).
+		for newtail != tt && need != 0 {
 			td := &x.tx.descs[newtail]
 			bs := int(td.bufsz)
 			if bs > need {
@@ -1985,11 +1992,9 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		}
 		if need == 0 {
 			break
+		} else {
+			tt = (tt + 1) % x.tx.ndescs
 		}
-	}
-	if need != 0 {
-		// not enough room
-		return false
 	}
 	// the first descriptors are special
 	fd := &x.tx.descs[tail]
@@ -2001,16 +2006,20 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		fd.wbwait()
 		buf = fd.mktcp_tso(buf, tcphlen, tlen)
 	} else if tcp {
-		fd.ctxt_tcp(ETHERLEN, IP4LEN)
-		tail = (tail + 1) % x.tx.ndescs
-		fd = &x.tx.descs[tail]
-		fd.wbwait()
+		if ctxtstale {
+			fd.ctxt_tcp(ETHERLEN, IP4LEN)
+			tail = (tail + 1) % x.tx.ndescs
+			fd = &x.tx.descs[tail]
+			fd.wbwait()
+		}
 		buf = fd.mktcp(buf, tlen)
 	} else if ipv4 {
-		fd.ctxt_ipv4(ETHERLEN, IP4LEN)
-		tail = (tail + 1) % x.tx.ndescs
-		fd = &x.tx.descs[tail]
-		fd.wbwait()
+		if ctxtstale {
+			fd.ctxt_ipv4(ETHERLEN, IP4LEN)
+			tail = (tail + 1) % x.tx.ndescs
+			fd = &x.tx.descs[tail]
+			fd.wbwait()
+		}
 		buf = fd.mkipv4(buf, tlen)
 	} else {
 		buf = fd.mkraw(buf, tlen)
@@ -2026,6 +2035,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		panic("size miscalculated")
 	}
 	x.rs(TDT(0), newtail)
+	x.tx.tailc = newtail
 	return true
 }
 
@@ -2526,6 +2536,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 		x.rs(TDT(0), 0)
 		x.rs(TDH(0), 0)
+		x.tx.tailc = 0
 
 		v = x.rl(DMATXCTL)
 		dmatxenable := uint32(1 << 0)
