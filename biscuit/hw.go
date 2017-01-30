@@ -1607,6 +1607,7 @@ type x540_t struct {
 		ndescs	uint32
 		descs	[]rxdesc_t
 		pkt	[][]uint8
+		tailc	uint32
 	}
 	pgs	int
 	linkup	bool
@@ -2040,29 +2041,28 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 }
 
 func (x *x540_t) rx_consume() {
-	tailend := x.rl(RDH(0))
-	if tailend == 0 {
-		tailend = x.rx.ndescs - 1
-	} else {
-		tailend--
+	if x.rx.descs[x.rx.tailc].rxdone() {
+		panic("tail must not have dd")
 	}
-	tail := x.rl(RDT(0))
+	tail := (x.rx.tailc + 1) % x.rx.ndescs
+	tailend := tail
+	if x.rx.descs[tailend].rxdone() {
+		for {
+			n := (tailend + 1) % x.rx.ndescs
+			if !x.rx.descs[n].rxdone() {
+				break
+			}
+			tailend = n
+		}
+	}
 	if tail == tailend {
 		// queue is still full?
 		spurs++
 		return
 	}
-	// make sure the CPU observes the NIC's writeback of the RDH
-	// descriptor; otherwise the CPU's and NIC's writes may race,
-	// overwritting the CPU's (corrupting the rx descriptor)
-	wd := &x.rx.descs[tailend]
-	for !wd.rxdone() {
-		waits++
-	}
-	// tail references an empty descriptor
-	tail = (tail + 1) % x.rx.ndescs
 	otail := tail
 	tlen := 0
+	paranoia := false
 	pkt := x.rx.pkt[0:0]
 	for {
 		rd := &x.rx.descs[tail]
@@ -2075,6 +2075,7 @@ func (x *x540_t) rx_consume() {
 		tlen += rd.pktlen()
 		pkt = append(pkt, buf)
 		if rd.eop() {
+			paranoia = true
 			net_start(pkt, tlen)
 			numpkts++
 			pkt = x.rx.pkt[0:0]
@@ -2087,6 +2088,9 @@ func (x *x540_t) rx_consume() {
 		if tail == x.rx.ndescs {
 			tail = 0
 		}
+	}
+	if !paranoia {
+		panic("packet larger than MTU?")
 	}
 	// only reset descriptors for full packets
 	for {
@@ -2104,6 +2108,7 @@ func (x *x540_t) rx_consume() {
 		}
 	}
 	x.rs(RDT(0), tail)
+	x.rx.tailc = tail
 }
 
 func (x *x540_t) int_handler(vector msivec_t) {
@@ -2451,7 +2456,9 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		for x.rl(RXDCTL(0)) & qen == 0 {
 		}
 		// must enable queue via RXDCTL.ENABLE before setting RDT
-		x.rs(RDT(0), x.rx.ndescs - 1)
+		tailc := x.rx.ndescs - 1
+		x.rs(RDT(0), tailc)
+		x.rx.tailc = tailc
 
 		// enable receive
 		v = x.rl(RXCTRL)
