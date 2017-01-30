@@ -1552,6 +1552,7 @@ type tcptcb_t struct {
 	rxbuf	tcpbuf_t
 	twdeath	bool
 	bound	bool
+	twchan	chan bool
 }
 
 type tcpstate_t uint
@@ -1812,6 +1813,10 @@ func (tc *tcptcb_t) kill() {
 	tc.txbuf.cbuf.cb_release()
 	tc.rxbuf.cbuf.cb_release()
 	tcpcons.tcb_del(tc)
+	select {
+	case tc.twchan <- true:
+	default:
+	}
 }
 
 func (tc *tcptcb_t) timewaitdeath() {
@@ -1821,7 +1826,10 @@ func (tc *tcptcb_t) timewaitdeath() {
 	}
 	tc.twdeath = true
 	go func() {
-		time.Sleep(1*time.Minute)
+		select {
+		case <- tc.twchan:
+		case <- time.After(1*time.Minute):
+		}
 		tc.tcb_lock()
 		if !tc.dead {
 			tc.kill()
@@ -2484,6 +2492,7 @@ func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
 	tc.rcv.mss = 1460
 	tc.snd.nxt = sndnxt
 	tc.snd.una = sndnxt
+	tc.twchan = make(chan bool, 1)
 }
 
 func (tc *tcptcb_t) set_seqs(sndnxt, rcvnxt uint32) {

@@ -2140,9 +2140,7 @@ func cpus_start(ncpu, aplim int) {
 	cdelay(1)
 	startupipi()
 
-	// wait a while for hopefully all APs to join. it'd be better to use
-	// ACPI to determine the correct count of CPUs and then wait for them
-	// all to join.
+	// wait a while for hopefully all APs to join.
 	cdelay(500)
 	apcnt = int(ss[sapcnt])
 	if apcnt > aplim {
