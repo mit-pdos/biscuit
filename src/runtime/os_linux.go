@@ -1318,9 +1318,7 @@ var _idt [idtsz]idte_t
 
 //go:nosplit
 func int_set(idx int, intentry func(), istn int) {
-	var f func()
-	f = intentry
-	entry := **(**uint)(unsafe.Pointer(&f))
+	entry := funcPC(intentry)
 
 	p := &_idt[idx]
 	p.baselow = uint16(entry)
@@ -1890,12 +1888,8 @@ func lapic_setup(calibrate bool) {
 }
 
 func proc_setup() {
-	var dur func()
-	dur = _userint
-	_userintaddr = **(**uintptr)(unsafe.Pointer(&dur))
-	var dur2 func(int32, unsafe.Pointer, *ucontext_t)
-	dur2 = sigsim
-	_sigsimaddr = **(**uintptr)(unsafe.Pointer(&dur2))
+	_userintaddr = funcPC(_userint)
+	_sigsimaddr = funcPC(sigsim)
 
 	chksize(TFSIZE*8, unsafe.Sizeof(threads[0].tf))
 	// initialize the first thread: us
@@ -1963,9 +1957,7 @@ func sysc_setup(myrsp uintptr) {
 
 	sysenter_eip := 0x176
 	// asm_amd64.s
-	var dur func()
-	dur = _sysentry
-	sysentryaddr := **(**uintptr)(unsafe.Pointer(&dur))
+	sysentryaddr := funcPC(_sysentry)
 	Wrmsr(sysenter_eip, int(sysentryaddr))
 
 	sysenter_esp := 0x175
@@ -2853,9 +2845,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	if flags != chk {
 		pancake("unexpected clone args", uintptr(flags))
 	}
-	var dur func(uintptr)
-	dur = clone_wrap
-	cloneaddr := **(**uintptr)(unsafe.Pointer(&dur))
+	cloneaddr := funcPC(clone_wrap)
 
 	fl := Pushcli()
 	Splock(threadlock)
