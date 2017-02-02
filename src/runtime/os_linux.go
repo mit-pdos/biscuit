@@ -2305,7 +2305,23 @@ func _tchk() {
 
 //go:nosplit
 func sched_halt() {
-	cpu_halt(Gscpu().rsp)
+	if rflags() & TF_FL_IF != 0 {
+		pancake("must not be interruptible", 0)
+	}
+	// busy loop waiting for runnable thread without the threadlock
+	for {
+		Sti()
+		sidx := int(dumrand(0, uint(len(threads))))
+		for n := 0; n < len(threads); n++ {
+			i := (sidx + n) % len(threads)
+			if threads[i].status == ST_RUNNABLE {
+				Cli()
+				Splock(threadlock)
+				_yieldy()
+				Sti()
+			}
+		}
+	}
 }
 
 //go:nosplit
@@ -2353,6 +2369,12 @@ func wakeup() {
 
 //go:nosplit
 func yieldy() {
+	_yieldy()
+	sched_halt()
+}
+
+//go:nosplit
+func _yieldy() {
 	_tchk()
 	cpu := Gscpu()
 	ct := cpu.mythread
@@ -2375,7 +2397,6 @@ func yieldy() {
 	*(*uintptr)(unsafe.Pointer(&cpu.mythread)) =
 	    uintptr(unsafe.Pointer(nil))
 	Spunlock(threadlock)
-	sched_halt()
 }
 
 var _irqv struct {
