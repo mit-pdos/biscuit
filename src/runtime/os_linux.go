@@ -1609,6 +1609,27 @@ func Get_phys() uintptr {
 	return get_pg()
 }
 
+func Tcount() (int, int) {
+	fl := Pushcli()
+	Splock(threadlock)
+
+	r := 0
+	nr := 0
+	for i := range threads {
+		switch (threads[i].status) {
+		case ST_RUNNING, ST_RUNNABLE:
+			r++
+		case ST_INVALID:
+		default:
+			nr++;
+		}
+	}
+
+	Spunlock(threadlock)
+	Popcli(fl)
+	return r, nr
+}
+
 //go:nosplit
 func get_pg() uintptr {
 	if pglast == 0 {
@@ -2311,12 +2332,20 @@ func sched_halt() {
 	// busy loop waiting for runnable thread without the threadlock
 	for {
 		Sti()
+		now := hack_nanotime()
 		sidx := int(dumrand(0, uint(len(threads))))
 		for n := 0; n < len(threads); n++ {
 			i := (sidx + n) % len(threads)
-			if threads[i].status == ST_RUNNABLE {
+			t := &threads[i]
+			if t.status == ST_RUNNABLE {
 				Cli()
 				Splock(threadlock)
+				_yieldy()
+				Sti()
+			} else if _waketimeout(now, t) {
+				Cli()
+				Splock(threadlock)
+				wakeup()
 				_yieldy()
 				Sti()
 			}
@@ -2357,14 +2386,19 @@ func wakeup() {
 	timedout := -110
 	for i := range threads {
 		t := &threads[i]
-		sf := t.sleepfor
-		if t.status == ST_SLEEPING && sf != -1 && sf < now {
+		if _waketimeout(now, t) {
 			t.status = ST_RUNNABLE
 			t.sleepfor = 0
 			t.futaddr = 0
 			t.sleepret = timedout
 		}
 	}
+}
+
+//go:nosplit
+func _waketimeout(now int, t *thread_t) bool {
+	sf := t.sleepfor
+	return t.status == ST_SLEEPING && sf != -1 && sf < now
 }
 
 //go:nosplit
@@ -2576,6 +2610,8 @@ func proftick() {
 	}
 	_lastprof = n
 
+	// XXX this is broken; only deliver sigprof to thread that was
+	// executing when the timer expired.
 	for i := range threads {
 		// only do fake SIGPROF if we are already
 		t := &threads[i]
@@ -2996,7 +3032,11 @@ func hack_syscall(trap, a1, a2, a3 int64) (int64, int64, int64) {
 
 var futexlock = &Spinlock_t{}
 
-// XXX not sure why stack splitting prologue is not ok here
+// stack splitting prologue is not ok here, even though hack_futex is not
+// called during interrupt context, because the runtime thinks hack_futex makes
+// a system call and thus calls "entersyscallblock" which sets a flag that
+// causes a panic if the stack needs to be split or if the g is preempted
+// (though stackcheck() call below makes sure the stack is not overflowed).
 //go:nosplit
 func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
     val2 int32) int64 {
