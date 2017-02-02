@@ -2041,11 +2041,12 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 }
 
 func (x *x540_t) rx_consume() {
-	if x.rx.descs[x.rx.tailc].rxdone() {
+	// tail itself must be empty
+	tail := x.rx.tailc
+	if x.rx.descs[tail].rxdone() {
 		panic("tail must not have dd")
 	}
-	tail := (x.rx.tailc + 1) % x.rx.ndescs
-	tailend := tail
+	tailend := (tail + 1) % x.rx.ndescs
 	if x.rx.descs[tailend].rxdone() {
 		for {
 			n := (tailend + 1) % x.rx.ndescs
@@ -2054,12 +2055,13 @@ func (x *x540_t) rx_consume() {
 			}
 			tailend = n
 		}
-	}
-	if tail == tailend {
-		// queue is still full?
+	} else {
+		// queue is still full
 		spurs++
 		return
 	}
+	// skip the empty tail
+	tail = (tail + 1) % x.rx.ndescs
 	otail := tail
 	tlen := 0
 	paranoia := false
