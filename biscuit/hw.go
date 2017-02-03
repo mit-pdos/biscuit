@@ -1899,16 +1899,6 @@ func (x *x540_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 }
 
-func (x *x540_t) _tx_wait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
-    mss int) {
-	x.tx.Lock()
-	for !x._tx_enqueue(buf, ipv4, tcp, tso, tcphlen, mss) {
-		x.tx.cond.Wait()
-	}
-	x.tx.cond.Signal()
-	x.tx.Unlock()
-}
-
 func (x *x540_t) _ctxt_update(ethl, ip4l int) bool {
 	ret := ethl != x.tx.ethl || ip4l != x.tx.ip4l
 	x.tx.ethl = ethl
@@ -2180,6 +2170,19 @@ func (x *x540_t) int_handler(vector msivec_t) {
 				rantest = true
 				//go x.tester1()
 				//go x.tx_test2()
+				go func() {
+					for {
+						time.Sleep(10*time.Second)
+						v := x.rl(QPRDC(0))
+						if v != 0 {
+							fmt.Printf("rx drop:"+
+							    " %v\n", v)
+						}
+						if dropints != 0 {
+							fmt.Printf("drop ints: %v\n", dropints)
+						}
+					}
+				}()
 			}
 		}
 		if rxmiss & st != 0 {
@@ -2190,10 +2193,8 @@ func (x *x540_t) int_handler(vector msivec_t) {
 			x.rx_consume()
 		}
 		if st & tx != 0 {
-			// wakeup threads waiting for tx queue buffer
-			x.tx.Lock()
-			x.tx.cond.Signal()
-			x.tx.Unlock()
+			//x.tx.Lock()
+			//x.tx.Unlock()
 		}
 	}
 }
