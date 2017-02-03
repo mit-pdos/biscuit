@@ -608,8 +608,8 @@ func newpid() int {
 var _deflimits = ulimit_t {
 	// mem limit = 128 MB
 	pages: (1 << 27) / (1 << 12),
-	nofile: 1024,
-	//nofile: RLIM_INFINITY,
+	//nofile: 1024,
+	nofile: RLIM_INFINITY,
 }
 
 func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {

@@ -1876,8 +1876,8 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 			if !tc.remack.tstart {
 				// XXX goroutine per timeout bad?
 				tc.remack.tstart = true
-				left := deadline.Sub(now)
 				go func() {
+					left := deadline.Sub(now)
 					time.Sleep(left)
 					tc.tcb_lock()
 					tc.remack.tstart = false

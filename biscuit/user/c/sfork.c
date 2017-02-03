@@ -677,13 +677,14 @@ const int nbms = sizeof(bms)/sizeof(bms[0]);
 void usage(char *n)
 {
 	printf( "usage:\n"
-		"%s [-s seconds] [-b <benchmark id>] <num threads>\n"
+		"%s [-s seconds] [-A int] [-b <benchmark id>] <num threads>\n"
 		"  -s seconds\n"
 		"       run benchmark for seconds\n"
+		"  -A <int>\n"
+		"       amount to allocate in bytes for alloc benchmark\n"
 		"  -b <benchmark id>\n"
 		"       benchmark ids:\n"
-		"  -A <int>\n"
-		"       amount to allocate in bytes for alloc benchmark\n", n);
+		, n);
 	int i;
 	for (i = 0; i < nbms; i++)
 		printf("       %c      %s\n", bms[i].sname, bms[i].name);
