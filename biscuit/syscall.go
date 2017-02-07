@@ -250,7 +250,7 @@ const(
 // lowest userspace address
 const USERMIN	int = VUSER << 39
 
-func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
+func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]uintptr) int {
 
 	if p.doomed {
 		// this process has been killed
@@ -258,12 +258,12 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]int) int {
 		return 0
 	}
 
-	sysno := tf[TF_RAX]
-	a1 := tf[TF_RDI]
-	a2 := tf[TF_RSI]
-	a3 := tf[TF_RDX]
-	a4 := tf[TF_RCX]
-	a5 := tf[TF_R8]
+	sysno := int(tf[TF_RAX])
+	a1 := int(tf[TF_RDI])
+	a2 := int(tf[TF_RSI])
+	a3 := int(tf[TF_RDX])
+	a4 := int(tf[TF_RCX])
+	a5 := int(tf[TF_R8])
 
 	var ret int
 	switch sysno {
@@ -3136,7 +3136,7 @@ func sys_getsockopt(proc *proc_t, fdn, level, opt, optvaln, optlenn int) int {
 	return 0
 }
 
-func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
+func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	tmp := flags & (FORK_THREAD | FORK_PROCESS)
 	if tmp != FORK_THREAD && tmp != FORK_PROCESS {
 		return int(-EINVAL)
@@ -3153,7 +3153,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 	var ret int
 
 	// copy parents trap frame
-	chtf := [TFSIZE]int{}
+	chtf := [TFSIZE]uintptr{}
 	chtf = *ptf
 
 	if mkproc {
@@ -3178,13 +3178,12 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 
 		// fork parent address space
 		parent.Lock_pmap()
-		//pmap, p_pmap := pg_new()
 		pmap, p_pmap := refpg_new()
 		refup(uintptr(p_pmap))
 		child.pmap = pmap
 		child.p_pmap = p_pmap
 		rsp := chtf[TF_RSP]
-		doflush := parent.vm_fork(child, rsp)
+		doflush := parent.vm_fork(child, int(rsp))
 		if !doflush {
 			panic("no writable segs?")
 		}
@@ -3214,7 +3213,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 			return int(-EFAULT)
 		}
 		if tcb != 0 {
-			chtf[TF_FSBASE] = tcb
+			chtf[TF_FSBASE] = uintptr(tcb)
 		}
 		if !parent.usermapped(stack - 8, 8) {
 			fmt.Printf("stack not mapped\n")
@@ -3226,7 +3225,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]int, tforkp int, flags int) int {
 		parent.mywait.start_thread(childtid)
 
 		v := int(childtid)
-		chtf[TF_RSP] = stack
+		chtf[TF_RSP] = uintptr(stack)
 		if writetid && !parent.userwriten(tidaddrn, 8, v) {
 			panic("unexpected unmap")
 		}
@@ -3327,7 +3326,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 	}
 }
 
-func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
+func sys_execv(proc *proc_t, tf *[TFSIZE]uintptr, pathn int, argn int) int {
 	args, ok := proc.userargs(argn)
 	if !ok {
 		return int(-EFAULT)
@@ -3348,7 +3347,7 @@ func sys_execv(proc *proc_t, tf *[TFSIZE]int, pathn int, argn int) int {
 
 var _zvmregion vmregion_t
 
-func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
+func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
     args []string) int {
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
 	// that all threads should terminate before exec.
@@ -3468,17 +3467,17 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]int, paths string,
 	}
 
 	// commit new image state
-	tf[TF_RSP] = bufdest
-	tf[TF_RIP] = elfhdr.entry()
-	tf[TF_RFLAGS] = TF_FL_IF
-	ucseg := 5
-	udseg := 6
+	tf[TF_RSP] = uintptr(bufdest)
+	tf[TF_RIP] = uintptr(elfhdr.entry())
+	tf[TF_RFLAGS] = uintptr(TF_FL_IF)
+	ucseg := uintptr(5)
+	udseg := uintptr(6)
 	tf[TF_CS] = (ucseg << 3) | 3
 	tf[TF_SS] = (udseg << 3) | 3
-	tf[TF_RDI] = argc
-	tf[TF_RSI] = argv
-	tf[TF_RDX] = bufdest
-	tf[TF_FSBASE] = tls0addr
+	tf[TF_RDI] = uintptr(argc)
+	tf[TF_RSI] = uintptr(argv)
+	tf[TF_RDX] = uintptr(bufdest)
+	tf[TF_FSBASE] = uintptr(tls0addr)
 	proc.mmapi = USERMIN
 	proc.name = paths
 

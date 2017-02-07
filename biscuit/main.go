@@ -892,8 +892,8 @@ func (p *proc_t) mkuserbuf_pool(userva, len int) *userbuf_t {
 	return ret
 }
 
-func (p *proc_t) mkfxbuf() *[64]int {
-	ret := new([64]int)
+func (p *proc_t) mkfxbuf() *[64]uintptr {
+	ret := new([64]uintptr)
 	n := uintptr(unsafe.Pointer(ret))
 	if n & ((1 << 4) - 1) != 0 {
 		panic("not 16 byte aligned")
@@ -997,7 +997,7 @@ func (p *proc_t) resched(tid tid_t) bool {
 	return talive
 }
 
-func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
+func (p *proc_t) run(tf *[TFSIZE]uintptr, tid tid_t) {
 	fastret := false
 	// could allocate fxbuf lazily
 	fxbuf := p.mkfxbuf()
@@ -1019,13 +1019,13 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 			if sysno != SYS_EXECV {
 				fastret = true
 			}
-			tf[TF_RAX] = syscall(p, tid, tf)
+			tf[TF_RAX] = uintptr(syscall(p, tid, tf))
 		case TIMER:
 			//fmt.Printf(".")
 			runtime.Gosched()
 		case PGFAULT:
 			faultaddr := uintptr(aux)
-			if !p.pgfault(tid, faultaddr, uintptr(tf[TF_ERROR])) {
+			if !p.pgfault(tid, faultaddr, tf[TF_ERROR]) {
 				fmt.Printf("*** fault *** %v: addr %x, " +
 				    "rip %x. killing...\n", p.name, faultaddr,
 				    tf[TF_RIP])
@@ -1050,7 +1050,7 @@ func (p *proc_t) run(tf *[TFSIZE]int, tid tid_t) {
 	}
 }
 
-func (p *proc_t) sched_add(tf *[TFSIZE]int, tid tid_t) {
+func (p *proc_t) sched_add(tf *[TFSIZE]uintptr, tid tid_t) {
 	go p.run(tf, tid)
 }
 
@@ -3115,7 +3115,7 @@ func main() {
 		nargs = append(nargs, args...)
 		defaultfds := []*fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
 		p := proc_new(cmd, rf, defaultfds)
-		var tf [TFSIZE]int
+		var tf [TFSIZE]uintptr
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))

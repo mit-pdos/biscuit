@@ -426,7 +426,7 @@ func _trapret(*[TFSIZE]uintptr)
 func trapret(*[TFSIZE]uintptr, uintptr)
 func _userint()
 func _userret()
-func _Userrun(*[TFSIZE]int, bool) (int, int)
+func _Userrun(*[TFSIZE]uintptr, bool) (int, int)
 func Wrmsr(int, int)
 
 // we have to carefully write go code that may be executed early (during boot)
@@ -520,7 +520,7 @@ func Gscpu() *cpu_t {
 	return _Gscpu()
 }
 
-func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
+func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr, pmap *[512]int,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
@@ -545,23 +545,18 @@ func Userrun(tf *[TFSIZE]int, fxbuf *[FXREGS]int, pmap *[512]int,
 
 	// if doing a fast return after a syscall, we need to restore some user
 	// state manually
-	if cpu.shadowfs != uintptr(tf[TF_FSBASE]) {
+	if cpu.shadowfs != tf[TF_FSBASE] {
 		ia32_fs_base := 0xc0000100
-		Wrmsr(ia32_fs_base, tf[TF_FSBASE])
-		cpu.shadowfs = uintptr(tf[TF_FSBASE])
+		Wrmsr(ia32_fs_base, int(tf[TF_FSBASE]))
+		cpu.shadowfs = tf[TF_FSBASE]
 	}
 
 	// we only save/restore SSE registers on cpu exception/interrupt, not
 	// during syscall exit/return. this is OK since sys5ABI defines the SSE
 	// registers to be caller-saved.
 	// XXX types
-	//ct.user.tf = (*[TFSIZE]uintptr)(unsafe.Pointer(tf))
-	//ct.user.fxbuf = (*[FXREGS]uintptr)(unsafe.Pointer(fxbuf))
-
-	// avoid write barriers, see note above
-	// these write barriers are OK now that kernel uses %gs instead of %fs?
-	*(*uintptr)(unsafe.Pointer(&ct.user.tf)) = uintptr(unsafe.Pointer(tf))
-	*(*uintptr)(unsafe.Pointer(&ct.user.fxbuf)) = uintptr(unsafe.Pointer(fxbuf))
+	ct.user.tf = tf
+	ct.user.fxbuf = fxbuf
 
 	intno, aux := _Userrun(tf, fastret)
 
