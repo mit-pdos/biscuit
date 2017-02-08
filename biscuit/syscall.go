@@ -1194,7 +1194,7 @@ func (o *pipe_t) op_poll(pm pollmsg_t) ready_t {
 	} else if pm.events & R_WRITE != 0 && writeable {
 		r |= R_WRITE
 	}
-	if r != 0 {
+	if r != 0 || !pm.dowait {
 		o.Unlock()
 		return r
 	}
