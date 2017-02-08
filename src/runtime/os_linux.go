@@ -447,6 +447,8 @@ type cpu_t struct {
 	shadowcr3	uintptr
 	shadowfs	uintptr
 	//pid		uintptr
+	tf	*[TFSIZE]uintptr
+	fxbuf	*[FXREGS]uintptr
 }
 
 var Cpumhz uint
@@ -455,11 +457,6 @@ var Pspercycle uint
 const MAXCPUS int = 32
 
 var cpus [MAXCPUS]cpu_t
-
-type tuser_t struct {
-	tf	*[TFSIZE]uintptr
-	fxbuf	*[FXREGS]uintptr
-}
 
 type prof_t struct {
 	enabled		int
@@ -473,7 +470,6 @@ type thread_t struct {
 	tf		[TFSIZE]uintptr
 	//_pad		int
 	fx		[FXREGS]uintptr
-	user		tuser_t
 	sigtf		[TFSIZE]uintptr
 	sigfx		[FXREGS]uintptr
 	status		int
@@ -520,16 +516,15 @@ func Gscpu() *cpu_t {
 	return _Gscpu()
 }
 
-func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr, pmap *[512]int,
+func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
 	// while other cpus execute user programs.
 	//entersyscall(0)
-	fl := Pushcli()
+	Cli()
 	cpu := _Gscpu()
-	ct := cpu.mythread
 
 	var opmap uintptr
 	var dopdec bool
@@ -550,19 +545,20 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr, pmap *[512]int,
 		Wrmsr(ia32_fs_base, int(tf[TF_FSBASE]))
 		cpu.shadowfs = tf[TF_FSBASE]
 	}
-
-	// we only save/restore SSE registers on cpu exception/interrupt, not
-	// during syscall exit/return. this is OK since sys5ABI defines the SSE
-	// registers to be caller-saved.
-	// XXX types
-	ct.user.tf = tf
-	ct.user.fxbuf = fxbuf
+	// save the user buffers in case an interrupt arrives while in user
+	// mode
+	if cpu.tf != tf {
+		// we only save/restore SSE registers on cpu
+		// exception/interrupt, not during syscall exit/return. this is
+		// OK since sys5ABI defines the SSE registers to be
+		// caller-saved.
+		cpu.tf = tf
+		cpu.fxbuf = fxbuf
+	}
 
 	intno, aux := _Userrun(tf, fastret)
 
-	ct.user.tf = nil
-	ct.user.fxbuf = nil
-	Popcli(fl)
+	Sti()
 	//exitsyscall(0)
 	return intno, aux, opmap, dopdec
 }
@@ -992,7 +988,7 @@ var _cpuattrs [MAXCPUS]uint16
 func Cpuprint(n uint16, row uintptr) {
 	p := uintptr(0xb8000)
 	num := Gscpu().num
-	p += uintptr(num) * row*80*2
+	p += (uintptr(num) + row*80)*2
 	attr := _cpuattrs[num]
 	_cpuattrs[num] += 0x100
 	*(*uint16)(unsafe.Pointer(p)) = attr | n
@@ -2215,11 +2211,12 @@ func trap(tf *[TFSIZE]uintptr) {
 	// save SSE state immediately before we clobber it
 	if ct != nil {
 		// if in user mode, save to user buffers and make it look like
-		// Userrun returned.
-		if ct.user.tf != nil {
-			ufx := ct.user.fxbuf
+		// Userrun returned. did the interrupt occur while in user
+		// mode?
+		if tf[TF_CS] & 3 != 0 {
+			ufx := cpu.fxbuf
 			fxsave(ufx)
-			utf := ct.user.tf
+			utf := cpu.tf
 			*utf = *tf
 			ct.tf[TF_RIP] = _userintaddr
 			ct.tf[TF_RSP] = cpu.sysrsp
@@ -2229,20 +2226,10 @@ func trap(tf *[TFSIZE]uintptr) {
 			if trapno == TRAP_YIELD || trapno == TRAP_SIGRET {
 				pancake("nyet", trapno)
 			}
-			// XXX fix this using RIP method
-			// if we are unlucky enough for a timer int to come in
-			// before we execute the first instruction of the new
-			// rip, make sure the state we just saved isn't
-			// clobbered
-			*(*uintptr)(unsafe.Pointer(&ct.user.tf)) =
-			    uintptr(unsafe.Pointer(nil))
-			*(*uintptr)(unsafe.Pointer(&ct.user.fxbuf)) =
-			    uintptr(unsafe.Pointer(nil))
 		} else {
 			fxsave(&ct.fx)
 			ct.tf = *tf
 		}
-		//timetick(ct)
 	}
 
 	yielding := false

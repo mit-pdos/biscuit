@@ -1007,7 +1007,7 @@ func (p *proc_t) run(tf *[TFSIZE]uintptr, tid tid_t) {
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
 		refp, _ := _refaddr(uintptr(p.p_pmap))
-		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf, p.pmap,
+		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 		    uintptr(p.p_pmap), fastret, refp)
 		fastret = false
 		switch intno {
