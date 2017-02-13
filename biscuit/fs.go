@@ -1390,6 +1390,12 @@ type imemnode_t struct {
 var allidmons	= map[inum]*imemnode_t{}
 var idmonl	= sync.Mutex{}
 
+// idaemon_ensure must only be called while the imemnode_t which contains the
+// directory entry for priv is locked. this protocol ensures that any calls to
+// idaemon_ensure that race with unlinks must observe the imemnode object with
+// links == 0 instead of finding no entry for priv in allidmons, assuming that
+// priv just hasn't been read in from disk yet, and then reopening priv which
+// is now a free inum.
 func idaemon_ensure(priv inum) *imemnode_t {
 	if priv <= 0 {
 		panic("non-positive priv")
@@ -1463,10 +1469,18 @@ func (idm *imemnode_t) cache_dirents() {
 	}
 }
 
-// if returns true, the inode is valid (not freed) and locked. otherwise the
-// inode is unlocked. it is for locking an imemnode that that has been opened
-// (no name resolution required). checking opencount is to detect races between
-// threads on a single fd.
+// biscuit FS locking protocol: rename acquires imemnode locks in any order.
+// all other fs ops that acquire two or more imemnode locks avoid deadlocking
+// with a concurrent rename via a non-blocking acquire that fails if the lock
+// is taken (trylock). pathname lookup (namei) does not use hand-over-hand
+// locking; see the comment for idaemon_ensure for how namei is correct without
+// it.
+
+// ilock_opened returns true when the inode was locked and the fd referencing
+// this imemnode hasn't been closed out from under us by another thread of the
+// same process. otherwise the inode is unlocked. opencount is used to detect
+// when a thread raced and beat us to close(2) (why not put the
+// racing-close-detection into fsfops like other fds?).
 //
 // in general: ilock_opened() is for fds, the rest should use ilock_namei().
 func (idm *imemnode_t) ilock_opened() bool {
@@ -1479,7 +1493,8 @@ func (idm *imemnode_t) ilock_opened() bool {
 	return true
 }
 
-// lock a node for path resolution
+// lock a node for path resolution. a racing thread that unlinks the file
+// causes our open to fail.
 func (idm *imemnode_t) ilock_namei() bool {
 	idm.l.Lock()
 	if idm.icache.links == 0 {
