@@ -446,9 +446,9 @@ type cpu_t struct {
 	sysrsp		uintptr
 	shadowcr3	uintptr
 	shadowfs	uintptr
-	//pid		uintptr
 	tf	*[TFSIZE]uintptr
 	fxbuf	*[FXREGS]uintptr
+	_clpad		[56]uint8
 }
 
 var Cpumhz uint
@@ -2102,7 +2102,6 @@ const (
 	ST_INVALID	= 0
 	ST_RUNNABLE	= 1
 	ST_RUNNING	= 2
-	ST_WAITING	= 3
 	ST_SLEEPING	= 4
 	ST_WILLSLEEP	= 5
 )
@@ -2256,10 +2255,11 @@ func trap(tf *[TFSIZE]uintptr) {
 				ct.status = ST_RUNNABLE
 			}
 		}
+		wakeup()
 		if !yielding {
 			lap_eoi()
 			if cpu.num == 0 {
-				wakeup()
+				//wakeup()
 				proftick()
 			}
 		}
@@ -2394,12 +2394,15 @@ func _yieldy() {
 	_tchk()
 	cpu := Gscpu()
 	ct := cpu.mythread
-	_ti := (uintptr(unsafe.Pointer(ct)) -
-	    uintptr(unsafe.Pointer(&threads[0])))/unsafe.Sizeof(thread_t{})
-	ti := int(_ti)
-	start := (ti + 1) % maxthreads
-	if ct == nil {
-		start = 0
+	var start int
+	if ct != nil {
+		_ti := (uintptr(unsafe.Pointer(ct)) -
+		    uintptr(unsafe.Pointer(&threads[0])))/
+		    unsafe.Sizeof(thread_t{})
+		ti := int(_ti)
+		start = (ti + 1) % maxthreads
+	} else {
+		start = int(dumrand(0, uint(len(threads))))
 	}
 	for i := 0; i < maxthreads; i++ {
 		idx := (start + i) % maxthreads
@@ -3015,7 +3018,7 @@ func hack_syscall(trap, a1, a2, a3 int64) (int64, int64, int64) {
 var futexlock = &Spinlock_t{}
 
 // stack splitting prologue is not ok here, even though hack_futex is not
-// called during interrupt context, because the runtime thinks hack_futex makes
+// called during interrupt context, because notetsleepg thinks hack_futex makes
 // a system call and thus calls "entersyscallblock" which sets a flag that
 // causes a panic if the stack needs to be split or if the g is preempted
 // (though stackcheck() call below makes sure the stack is not overflowed).
