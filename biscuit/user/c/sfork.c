@@ -184,7 +184,7 @@ void bm(char const *tl, void *(*fn)(void *))
 	//	err(-1, "prof");
 
 	printf("%s ran for %lu ms (slept %lu)\n", tl, actual, beforejoin - st);
-	double secs = actual / 1000;
+	double secs = (double)actual / 1000;
 	printf("\tops: %lf /sec\n\n", (double)total/secs);
 }
 
@@ -649,6 +649,20 @@ static void *alloc(void *_a)
 	return (void *)tot;
 }
 
+void *locks(void *_arg)
+{
+	long tot = 0;
+	pthread_barrier_wait(&bar);
+
+	while (!cease) {
+		asm("lock incq %0\n"
+			:
+			: "m"(tot)
+			: "cc", "memory");
+	}
+	return (void *)tot;
+}
+
 struct {
 	char *name;
 	char sname;
@@ -670,6 +684,7 @@ struct {
 	{"poll50", '5', poll50, NULL, NULL},
 	{"poll1", '1', poll1, NULL, NULL},
 	{"alloc", 'a', alloc, NULL, NULL},
+	{"locks", 'l', locks, NULL, NULL},
 };
 
 const int nbms = sizeof(bms)/sizeof(bms[0]);
