@@ -252,7 +252,7 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 	return &ar.mac, 0
 }
 
-func _net_arp_start(qip ip4_t, nic *x540_t) {
+func _net_arp_start(qip ip4_t, nic *ixgbe_t) {
 	var arp arpv4_t
 	arp.init_req(nic.mac[:], nic.ip, qip)
 	buf := arp.bytes()
@@ -3398,7 +3398,7 @@ func (tl *tcplfops_t) shutdown(read, write bool) err_t {
 	return -ENOTCONN
 }
 
-var nics = map[ip4_t]*x540_t{}
+var nics = map[ip4_t]*ixgbe_t{}
 
 // network stack processing begins here. pkt references DMA memory and will be
 // clobbered once net_start returns to the caller.

@@ -196,7 +196,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 		PCI_VEND_INTEL : {
 			PCI_DEV_PIIX3 : attach_piix3,
 			PCI_DEV_3400 : attach_3400,
-			PCI_DEV_X540T: attach_x540t,
+			PCI_DEV_X540T: attach_ixgbe,
 			},
 		}
 
@@ -1019,9 +1019,9 @@ func msi_free(vector msivec_t) {
 }
 
 // XXX use uncachable mappings for MMIO?
-type x540reg_t uint
+type ixgbereg_t uint
 const (
-	CTRL		x540reg_t	=    0x0
+	CTRL		ixgbereg_t	=    0x0
 	// the x540 terminology is confusing regarding interrupts; an interrupt
 	// is enabled when its bit is set in the mask set register (ims) and
 	// disabled when cleared.
@@ -1095,24 +1095,24 @@ const (
 	FLA				= 0x1001c
 )
 
-func _xreg(start, idx, max, step uint) x540reg_t {
+func _xreg(start, idx, max, step uint) ixgbereg_t {
 	// XXX comment this out later so compiler can inline all these register
 	// calculators
 	if idx >= max {
 		panic("bad x540 reg")
 	}
-	return x540reg_t(start + idx*step)
+	return ixgbereg_t(start + idx*step)
 }
 
-func template(n int) x540reg_t {
+func template(n int) ixgbereg_t {
 	return _xreg(0xa600, uint(n), 245, 4)
 }
 
-func FCRTH(n int) x540reg_t {
+func FCRTH(n int) ixgbereg_t {
 	return _xreg(0x3260, uint(n), 8, 4)
 }
 
-func RDBAL(n int) x540reg_t {
+func RDBAL(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1000, uint(n), 64, 0x40)
 	} else {
@@ -1120,7 +1120,7 @@ func RDBAL(n int) x540reg_t {
 	}
 }
 
-func RDBAH(n int) x540reg_t {
+func RDBAH(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1004, uint(n), 64, 0x40)
 	} else {
@@ -1128,7 +1128,7 @@ func RDBAH(n int) x540reg_t {
 	}
 }
 
-func RDLEN(n int) x540reg_t {
+func RDLEN(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1008, uint(n), 64, 0x40)
 	} else {
@@ -1136,7 +1136,7 @@ func RDLEN(n int) x540reg_t {
 	}
 }
 
-func SRRCTL(n int) x540reg_t {
+func SRRCTL(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1014, uint(n), 64, 0x40)
 	} else {
@@ -1144,7 +1144,7 @@ func SRRCTL(n int) x540reg_t {
 	}
 }
 
-func RXDCTL(n int) x540reg_t {
+func RXDCTL(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1028, uint(n), 64, 0x40)
 	} else {
@@ -1152,7 +1152,7 @@ func RXDCTL(n int) x540reg_t {
 	}
 }
 
-func RDT(n int) x540reg_t {
+func RDT(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1018, uint(n), 64, 0x40)
 	} else {
@@ -1160,7 +1160,7 @@ func RDT(n int) x540reg_t {
 	}
 }
 
-func RDH(n int) x540reg_t {
+func RDH(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x1010, uint(n), 64, 0x40)
 	} else {
@@ -1168,51 +1168,51 @@ func RDH(n int) x540reg_t {
 	}
 }
 
-func QPRC(n int) x540reg_t {
+func QPRC(n int) ixgbereg_t {
 	return _xreg(0x1030, uint(n), 16, 0x40)
 }
 
-func QPRDC(n int) x540reg_t {
+func QPRDC(n int) ixgbereg_t {
 	return _xreg(0x1430, uint(n), 16, 0x40)
 }
 
-func PFUTA(n int) x540reg_t {
+func PFUTA(n int) ixgbereg_t {
 	return _xreg(0xf400, uint(n), 128, 4)
 }
 
-func TDBAL(n int) x540reg_t {
+func TDBAL(n int) ixgbereg_t {
 	return _xreg(0x6000, uint(n), 128, 0x40)
 }
 
-func TDBAH(n int) x540reg_t {
+func TDBAH(n int) ixgbereg_t {
 	return _xreg(0x6004, uint(n), 128, 0x40)
 }
 
-func TDLEN(n int) x540reg_t {
+func TDLEN(n int) ixgbereg_t {
 	return _xreg(0x6008, uint(n), 128, 0x40)
 }
 
-func TDH(n int) x540reg_t {
+func TDH(n int) ixgbereg_t {
 	return _xreg(0x6010, uint(n), 128, 0x40)
 }
 
-func TDT(n int) x540reg_t {
+func TDT(n int) ixgbereg_t {
 	return _xreg(0x6018, uint(n), 128, 0x40)
 }
 
-func TXDCTL(n int) x540reg_t {
+func TXDCTL(n int) ixgbereg_t {
 	return _xreg(0x6028, uint(n), 128, 0x40)
 }
 
-func TDWBAL(n int) x540reg_t {
+func TDWBAL(n int) ixgbereg_t {
 	return _xreg(0x6038, uint(n), 128, 0x40)
 }
 
-func TDWBAH(n int) x540reg_t {
+func TDWBAH(n int) ixgbereg_t {
 	return _xreg(0x603c, uint(n), 128, 0x40)
 }
 
-func RSCCTL(n int) x540reg_t {
+func RSCCTL(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x102c, uint(n), 64, 0x40)
 	} else {
@@ -1220,7 +1220,7 @@ func RSCCTL(n int) x540reg_t {
 	}
 }
 
-func DCA_RXCTRL(n int) x540reg_t {
+func DCA_RXCTRL(n int) ixgbereg_t {
 	if n < 64 {
 		return _xreg(0x100c, uint(n), 64, 0x40)
 	} else {
@@ -1228,39 +1228,39 @@ func DCA_RXCTRL(n int) x540reg_t {
 	}
 }
 
-func RTRPT4C(n int) x540reg_t {
+func RTRPT4C(n int) ixgbereg_t {
 	return _xreg(0x2140, uint(n), 8, 4)
 }
 
-func RTTPT2C(n int) x540reg_t {
+func RTTPT2C(n int) ixgbereg_t {
 	return _xreg(0xdc20, uint(n), 8, 4)
 }
 
-func RTTDT2C(n int) x540reg_t {
+func RTTDT2C(n int) ixgbereg_t {
 	return _xreg(0x4910, uint(n), 8, 4)
 }
 
-func RXPBSIZE(n int) x540reg_t {
+func RXPBSIZE(n int) ixgbereg_t {
 	return _xreg(0x3c00, uint(n), 8, 4)
 }
 
-func TXPBSIZE(n int) x540reg_t {
+func TXPBSIZE(n int) ixgbereg_t {
 	return _xreg(0xcc00, uint(n), 8, 4)
 }
 
-func TXPBTHRESH(n int) x540reg_t {
+func TXPBTHRESH(n int) ixgbereg_t {
 	return _xreg(0x4950, uint(n), 8, 4)
 }
 
-func TQSM(n int) x540reg_t {
+func TQSM(n int) ixgbereg_t {
 	return _xreg(0x8600, uint(n), 32, 4)
 }
 
-func IVAR(n int) x540reg_t {
+func IVAR(n int) ixgbereg_t {
 	return _xreg(0x900, uint(n), 64, 4)
 }
 
-func EITR(n int) x540reg_t {
+func EITR(n int) ixgbereg_t {
 	if n < 24 {
 		return _xreg(0x820, uint(n), 128, 4)
 	} else {
@@ -1268,43 +1268,43 @@ func EITR(n int) x540reg_t {
 	}
 }
 
-func PFVLVFB(n int) x540reg_t {
+func PFVLVFB(n int) ixgbereg_t {
 	return _xreg(0xf200, uint(n), 128, 4)
 }
 
-func VFTA(n int) x540reg_t {
+func VFTA(n int) ixgbereg_t {
 	return _xreg(0xa000, uint(n), 128, 4)
 }
 
-func PFVFSPOOF(n int) x540reg_t {
+func PFVFSPOOF(n int) ixgbereg_t {
 	return _xreg(0x8200, uint(n), 8, 4)
 }
 
-func MPSAR(n int) x540reg_t {
+func MPSAR(n int) ixgbereg_t {
 	return _xreg(0xa600, uint(n), 256, 4)
 }
 
-func QPTC_L(n int) x540reg_t {
+func QPTC_L(n int) ixgbereg_t {
 	return _xreg(0x8700, uint(n), 16, 8)
 }
 
-func QPTC(n int) x540reg_t {
+func QPTC(n int) ixgbereg_t {
 	return _xreg(0x8680, uint(n), 16, 4)
 }
 
-func RAH(n uint) x540reg_t {
+func RAH(n uint) ixgbereg_t {
 	return _xreg(0xa204, uint(n), 128, 8)
 }
 
-func RAL(n uint) x540reg_t {
+func RAL(n uint) ixgbereg_t {
 	return _xreg(0xa200, uint(n), 128, 8)
 }
 
 // MDIO device is in bits [20:16] and MDIO reg is in [15:0]
-type x540phyreg_t uint
+type ixgbephyreg_t uint
 const (
 	// link status here (Auto-Negotiation Reserved Vendor Status 1)
-	PHY_LINK	x540phyreg_t	= 0x07c810
+	PHY_LINK	ixgbephyreg_t	= 0x07c810
 	ALARMS1				= 0x1ecc00
 )
 
@@ -1586,7 +1586,7 @@ func (td *txdesc_t) wbwait() {
 	}
 }
 
-type x540_t struct {
+type ixgbe_t struct {
 	tag	pcitag_t
 	bar0	[]uint32
 	_locked	bool
@@ -1626,7 +1626,7 @@ type x540_t struct {
 	mtu	int
 }
 
-func (x *x540_t) init(t pcitag_t) {
+func (x *ixgbe_t) init(t pcitag_t) {
 	x.tag = t
 
 	bar0, l := pci_bar_mem(t, 0)
@@ -1658,27 +1658,27 @@ func (x *x540_t) init(t pcitag_t) {
 	}
 }
 
-func (x *x540_t) rs(reg x540reg_t, val uint32) {
+func (x *ixgbe_t) rs(reg ixgbereg_t, val uint32) {
 	if reg % 4 != 0 {
 		panic("bad reg")
 	}
 	runtime.Store32(&x.bar0[reg/4], val)
 }
 
-func (x *x540_t) rl(reg x540reg_t) uint32 {
+func (x *ixgbe_t) rl(reg ixgbereg_t) uint32 {
 	if reg % 4 != 0 {
 		panic("bad reg")
 	}
 	return atomic.LoadUint32(&x.bar0[reg/4])
 }
 
-func (x *x540_t) log(fm string, args ...interface{}) {
+func (x *ixgbe_t) log(fm string, args ...interface{}) {
 	b, d, f := breakpcitag(x.tag)
 	s := fmt.Sprintf("X540:(%v:%v:%v): %s\n", b, d, f, fm)
 	fmt.Printf(s, args...)
 }
 
-func (x *x540_t) _reset() {
+func (x *ixgbe_t) _reset() {
 	// if there is any chance that DMA may race with _reset, we must modify
 	// _reset to execute the master disable protocol in (5.2.4.3.2)
 
@@ -1698,14 +1698,14 @@ func (x *x540_t) _reset() {
 	<- time.After(10*time.Millisecond)
 }
 
-func (x *x540_t) _int_disable() {
+func (x *ixgbe_t) _int_disable() {
 	maskall := ^uint32(0)
 	x.rs(EIMC, maskall)
 	x.rs(EIMC1, maskall)
 	x.rs(EIMC2, maskall)
 }
 
-func (x *x540_t) _phy_read(preg x540phyreg_t) uint16 {
+func (x *ixgbe_t) _phy_read(preg ixgbephyreg_t) uint16 {
 	if preg &^ ((1 << 21) - 1) != 0 {
 		panic("bad phy reg")
 	}
@@ -1737,7 +1737,7 @@ var lockstat struct {
 }
 
 // acquires the "lock" protecting the semaphores. returns whether fw timedout
-func (x *x540_t) _reg_acquire() bool {
+func (x *ixgbe_t) _reg_acquire() bool {
 	to := 3*time.Second
 	st := time.Now()
 	smbi := uint32(1 << 0)
@@ -1759,7 +1759,7 @@ func (x *x540_t) _reg_acquire() bool {
 	return fwdead
 }
 
-func (x *x540_t) _reg_release() {
+func (x *ixgbe_t) _reg_release() {
 	regsmp := uint32(1 << 31)
 	x.rs(SW_FW_SYNC, x.rl(SW_FW_SYNC) &^ regsmp)
 	x.rs(SWSM, 0)
@@ -1767,7 +1767,7 @@ func (x *x540_t) _reg_release() {
 
 // takes all semaphores protecting NIC's NVM, PHY 0/1, and shared MAC registers
 // from concurrent access by software and firmware
-func (x *x540_t) hwlock() {
+func (x *ixgbe_t) hwlock() {
 	if x._locked {
 		panic("two hwlocks")
 	}
@@ -1783,7 +1783,7 @@ func (x *x540_t) hwlock() {
 }
 
 // returns true if the called acquired the software/firmware semaphore
-func (x *x540_t) _hwlock() bool {
+func (x *ixgbe_t) _hwlock() bool {
 	// 11.7.5; this semaphore protects NVM, PHY[01], and MAC shared regs
 	fwdead := x._reg_acquire()
 
@@ -1827,7 +1827,7 @@ out:
 	return ret
 }
 
-func (x *x540_t) hwunlock() {
+func (x *ixgbe_t) hwunlock() {
 	if !x._locked {
 		panic("not locked")
 	}
@@ -1841,7 +1841,7 @@ func (x *x540_t) hwunlock() {
 }
 
 // returns linkup and link speed
-func (x *x540_t) linkinfo() (bool, string) {
+func (x *ixgbe_t) linkinfo() (bool, string) {
 	link := uint32(1 << 30)
 	v := x.rl(LINKS)
 	speed := "unknown"
@@ -1856,7 +1856,7 @@ func (x *x540_t) linkinfo() (bool, string) {
 	return v & link != 0, speed
 }
 
-func (x *x540_t) wait_linkup(secs int) bool {
+func (x *ixgbe_t) wait_linkup(secs int) bool {
 	link := uint32(1 << 30)
 	st := time.Now()
 	s := time.Duration(secs)
@@ -1872,7 +1872,7 @@ func (x *x540_t) wait_linkup(secs int) bool {
 	}
 }
 
-func (x *x540_t) pg_new() (*[512]int, uintptr) {
+func (x *ixgbe_t) pg_new() (*[512]int, uintptr) {
 	x.pgs++
 	a, _b := refpg_new()
 	b := uintptr(_b)
@@ -1882,23 +1882,23 @@ func (x *x540_t) pg_new() (*[512]int, uintptr) {
 
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
-func (x *x540_t) tx_raw(buf [][]uint8) {
+func (x *ixgbe_t) tx_raw(buf [][]uint8) {
 	x._tx_nowait(buf, false, false, false, 0, 0)
 }
 
-func (x *x540_t) tx_ipv4(buf [][]uint8) {
+func (x *ixgbe_t) tx_ipv4(buf [][]uint8) {
 	x._tx_nowait(buf, true, false, false, 0, 0)
 }
 
-func (x *x540_t) tx_tcp(buf [][]uint8) {
+func (x *ixgbe_t) tx_tcp(buf [][]uint8) {
 	x._tx_nowait(buf, true, true, false, 0, 0)
 }
 
-func (x *x540_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) {
+func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) {
 	x._tx_nowait(buf, true, true, true, tcphlen, mss)
 }
 
-func (x *x540_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
+func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
     mss int) {
 	x.tx.Lock()
 	ok := x._tx_enqueue(buf, ipv4, tcp, tso, tcphlen, mss)
@@ -1911,7 +1911,7 @@ func (x *x540_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 // returns true if the header sizes have changed and thus a new context
 // descriptor should be created. the TCP context descriptor includes IPV4
 // parameters.
-func (x *x540_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
+func (x *ixgbe_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
 	cc := &x.tx.cc
 	if tcp {
 		ret := cc.tcp.ethl != ethl || cc.tcp.ip4l != ip4l
@@ -1933,7 +1933,7 @@ func (x *x540_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
 
 // caller must hold x.tx lock. returns true if buf was copied to the
 // transmission queue.
-func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
+func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
     mss int) bool {
 	if len(buf) == 0 {
 		panic("wut")
@@ -2056,7 +2056,7 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	return true
 }
 
-func (x *x540_t) rx_consume() {
+func (x *ixgbe_t) rx_consume() {
 	// tail itself must be empty
 	tail := x.rx.tailc
 	if x.rx.descs[tail].rxdone() {
@@ -2129,7 +2129,7 @@ func (x *x540_t) rx_consume() {
 	x.rx.tailc = tail
 }
 
-func (x *x540_t) int_handler(vector msivec_t) {
+func (x *ixgbe_t) int_handler(vector msivec_t) {
 	rantest := false
 	for {
 		runtime.IRQsched(uint(vector))
@@ -2225,7 +2225,7 @@ func (x *x540_t) int_handler(vector msivec_t) {
 	}
 }
 
-func (x *x540_t) tester1() {
+func (x *ixgbe_t) tester1() {
 	stirqs := irqs
 	st := time.Now()
 	for {
@@ -2242,7 +2242,7 @@ func (x *x540_t) tester1() {
 	}
 }
 
-func attach_x540t(vid, did int, t pcitag_t) {
+func attach_ixgbe(vid, did int, t pcitag_t) {
 	if unsafe.Sizeof(*rxdesc_t{}.hwdesc) != 16 ||
 	   unsafe.Sizeof(*txdesc_t{}.hwdesc) != 16 {
 		panic("unexpected padding")
@@ -2254,7 +2254,7 @@ func attach_x540t(vid, did int, t pcitag_t) {
 		panic("virtual functions not supported")
 	}
 
-	var x x540_t
+	var x ixgbe_t
 	x.init(t)
 
 	// x540 doc 4.6.3 initialization sequence
@@ -2264,26 +2264,26 @@ func attach_x540t(vid, did int, t pcitag_t) {
 
 	// even though we disable flow control, we write 0 to FCTTV, FCRTL,
 	// FCRTH, FCRTV, and  FCCFG. we program FCRTH.RTH later.
-	regn := func(r x540reg_t, i int) x540reg_t {
-		return r + x540reg_t(i * 4)
+	regn := func(r ixgbereg_t, i int) ixgbereg_t {
+		return r + ixgbereg_t(i * 4)
 	}
 
-	fcttv := x540reg_t(0x3200)
+	fcttv := ixgbereg_t(0x3200)
 	for i := 0; i < 4; i++ {
 		x.rs(regn(fcttv, i), 0)
 	}
-	fcrtl := x540reg_t(0x3220)
+	fcrtl := ixgbereg_t(0x3220)
 	for i := 0; i < 8; i++ {
 		x.rs(regn(fcrtl, i), 0)
 		x.rs(FCRTH(i), 0)
 	}
 
-	fcrtv := x540reg_t(0x32a0)
-	fccfg := x540reg_t(0x3d00)
+	fcrtv := ixgbereg_t(0x32a0)
+	fccfg := ixgbereg_t(0x3d00)
 	x.rs(fcrtv, 0)
 	x.rs(fccfg, 0)
 
-	mflcn := x540reg_t(0x4294)
+	mflcn := ixgbereg_t(0x4294)
 	rfce := uint32(1 << 3)
 	son := x.rl(mflcn) & rfce != 0
 	if son {
@@ -2619,7 +2619,7 @@ var dropints int
 var waits int
 var spurs int
 
-func (x *x540_t) rx_test() {
+func (x *ixgbe_t) rx_test() {
 	prstat := func(v bool) {
 		a := x.rl(SSVPC)
 		b := x.rl(GPRC)
@@ -2678,7 +2678,7 @@ func (x *x540_t) rx_test() {
 }
 
 
-func (x *x540_t) tx_test() {
+func (x *ixgbe_t) tx_test() {
 	x.tx.Lock()
 	defer x.tx.Unlock()
 
@@ -2737,7 +2737,7 @@ func (x *x540_t) tx_test() {
 	fmt.Printf("test tx done\n")
 }
 
-func (x *x540_t) _dbc_init() {
+func (x *ixgbe_t) _dbc_init() {
 	// dbc=off, vt=off (section 4.6.11.3.4)
 	rxpbsize := uint32(0x180 << 10)
 	x.rs(RXPBSIZE(0), rxpbsize)
