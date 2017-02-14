@@ -1600,8 +1600,17 @@ type x540_t struct {
 		// cache tail register in order to avoid reading NIC registers,
 		// which apparently takes 1-2us.
 		tailc	uint32
-		ethl	int
-		ip4l	int
+		// cache of most recent context descriptor parameters
+		cc struct {
+			tcp struct {
+				ethl	int
+				ip4l	int
+			}
+			ip4 struct {
+				ethl	int
+				ip4l	int
+			}
+		}
 	}
 	rx struct {
 		ndescs	uint32
@@ -1899,11 +1908,27 @@ func (x *x540_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 }
 
-func (x *x540_t) _ctxt_update(ethl, ip4l int) bool {
-	ret := ethl != x.tx.ethl || ip4l != x.tx.ip4l
-	x.tx.ethl = ethl
-	x.tx.ip4l = ip4l
-	return ret
+// returns true if the header sizes have changed and thus a new context
+// descriptor should be created. the TCP context descriptor includes IPV4
+// parameters.
+func (x *x540_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
+	cc := &x.tx.cc
+	if tcp {
+		ret := cc.tcp.ethl != ethl || cc.tcp.ip4l != ip4l
+		if ret {
+			cc.tcp.ethl = ethl
+			cc.tcp.ip4l = ip4l
+		}
+		return ret
+	} else if ipv4 {
+		ret := cc.ip4.ethl != ethl || cc.ip4.ip4l != ip4l
+		if ret {
+			cc.ip4.ethl = ethl
+			cc.ip4.ip4l = ip4l
+		}
+		return ret
+	}
+	return false
 }
 
 // caller must hold x.tx lock. returns true if buf was copied to the
@@ -1935,7 +1960,8 @@ func (x *x540_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 	need := tlen
 	newtail := tail
-	ctxtstale := (ipv4 || tcp) && x._ctxt_update(ETHERLEN, IP4LEN)
+	ctxtstale := (ipv4 || tcp) && x._ctxt_update(ipv4, tcp, ETHERLEN,
+	   IP4LEN)
 	if ctxtstale || tso {
 		// segmentation offload requires a per-packet context
 		// descriptor
