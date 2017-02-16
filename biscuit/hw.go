@@ -1602,14 +1602,9 @@ type ixgbe_t struct {
 		tailc	uint32
 		// cache of most recent context descriptor parameters
 		cc struct {
-			tcp struct {
-				ethl	int
-				ip4l	int
-			}
-			ip4 struct {
-				ethl	int
-				ip4l	int
-			}
+			istcp	bool
+			ethl	int
+			ip4l	int
 		}
 	}
 	rx struct {
@@ -1908,27 +1903,24 @@ func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 }
 
-// returns true if the header sizes have changed and thus a new context
-// descriptor should be created. the TCP context descriptor includes IPV4
-// parameters.
+// returns true if the header sizes or context type have changed and thus a new
+// context descriptor should be created. the TCP context descriptor includes
+// IPV4 parameters. alternatively, we could simultaneously use both of the
+// x540's context slots.
 func (x *ixgbe_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
-	cc := &x.tx.cc
-	if tcp {
-		ret := cc.tcp.ethl != ethl || cc.tcp.ip4l != ip4l
-		if ret {
-			cc.tcp.ethl = ethl
-			cc.tcp.ip4l = ip4l
-		}
-		return ret
-	} else if ipv4 {
-		ret := cc.ip4.ethl != ethl || cc.ip4.ip4l != ip4l
-		if ret {
-			cc.ip4.ethl = ethl
-			cc.ip4.ip4l = ip4l
-		}
-		return ret
+	if !ipv4 && !tcp {
+		return false
 	}
-	return false
+	cc := &x.tx.cc
+	wastcp := cc.istcp
+	pdiffer := cc.ethl != ethl || cc.ip4l != ip4l
+	if tcp == wastcp && !pdiffer {
+		return false
+	}
+	cc.istcp = tcp
+	cc.ethl = ethl
+	cc.ip4l = ip4l
+	return true
 }
 
 // caller must hold x.tx lock. returns true if buf was copied to the
