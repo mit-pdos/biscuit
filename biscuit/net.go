@@ -963,6 +963,7 @@ func (ts *tcpsegs_t) reset(seq, nlen uint32) {
 		panic("seq not found")
 	}
 	if nlen == ts.segs[start].len {
+		ts.segs[start].when = time.Now()
 		return
 	}
 	if nlen < ts.segs[start].len {
@@ -1909,7 +1910,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 // allows
 func (tc *tcptcb_t) seg_maybe() {
 	tc._sanity()
-	if tc.txdone && tc.snd.una == tc.snd.finseq + 1 {
+	if tc.txdone && tc.finacked() {
 		// everything has been acknowledged
 		return
 	}
@@ -1918,6 +1919,7 @@ func (tc *tcptcb_t) seg_maybe() {
 	// window
 	tc.snd.tsegs.prune(winend)
 	// have retransmit timeouts expired?
+	segged := false
 	now := time.Now()
 	for i := 0; i < len(tc.snd.tsegs.segs); i++ {
 		to := time.Second
@@ -1933,6 +1935,7 @@ func (tc *tcptcb_t) seg_maybe() {
 		did := tc.seg_one(seq)
 		// reset() modifies segs[]
 		tc.snd.tsegs.reset(seq, uint32(did))
+		segged = true
 	}
 	// XXXPANIC
 	{
@@ -1950,10 +1953,18 @@ func (tc *tcptcb_t) seg_maybe() {
 	if _seqbetween(tc.snd.una, tc.txbuf.end_seq(), upto) {
 		upto = tc.txbuf.end_seq()
 	}
+	isdata := tc.snd.nxt != tc.snd.finseq + 1
 	sbegin := tc.snd.nxt
-	if _seqdiff(upto, sbegin) > 0 {
+	if isdata && _seqdiff(upto, sbegin) > 0 {
 		did := tc.seg_one(sbegin)
 		tc.snd.tsegs.addnow(sbegin, uint32(did), winend)
+		segged = true
+	}
+	// send lone FIN only if FIN wasn't already set on a just-transmitted
+	// segment
+	if !segged && tc.txdone && tc.snd.nxt == tc.snd.finseq {
+		tc.seg_one(tc.snd.finseq)
+		tc.snd.tsegs.addnow(tc.snd.finseq, 1, winend)
 	}
 	tc._txtimeout_start()
 }
@@ -1968,17 +1979,35 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 	if !ok {
 		panic("NIC gone")
 	}
-	// the data to send may be larger than MSS
-	buf1, buf2 := tc.txbuf.sysread(seq, _seqdiff(winend, seq))
-	dlen := len(buf1) + len(buf2)
-	if dlen == 0 {
-		panic("must send non-zero amount")
+	var thdr []uint8
+	var opt []uint8
+	var istso bool
+	var dlen int
+	var sgbuf [][]uint8
+
+	if tc.txdone && seq == tc.snd.finseq {
+		pkt, opts := tc.mkfin(tc.snd.finseq, tc.rcv.nxt)
+		eth, ip, tcph := pkt.hdrbytes()
+		sgbuf = [][]uint8{eth, ip, tcph, opts}
+		thdr = tcph
+		dlen = 1
+		istso = false
+		opt = opts
+	} else {
+		// the data to send may be larger than MSS
+		buf1, buf2 := tc.txbuf.sysread(seq, _seqdiff(winend, seq))
+		dlen = len(buf1) + len(buf2)
+		if dlen == 0 {
+			panic("must send non-zero amount")
+		}
+		pkt, opts, tso := tc.mkseg(seq, tc.rcv.nxt, dlen)
+		eth, ip, tcph := pkt.hdrbytes()
+		sgbuf = [][]uint8{eth, ip, tcph, opts, buf1, buf2}
+		thdr = tcph
+		opt = opts
+		istso = tso
 	}
 
-	pkt, opt, istso := tc.mkseg(seq, tc.rcv.nxt, dlen)
-	eth, ip, thdr := pkt.hdrbytes()
-
-	sgbuf := [][]uint8{eth, ip, thdr, opt, buf1, buf2}
 	if istso {
 		smss := int(tc.snd.mss) - len(opt)
 		nic.tx_tcp_tso(sgbuf, len(thdr) + len(opt), smss)
@@ -2098,6 +2127,25 @@ func (tc *tcptcb_t) _setfin(tp *tcphdr_t, seq uint32) {
 }
 
 func (tc *tcptcb_t) mkack(seq, ack uint32) (*tcppkt_t, []uint8) {
+	tc._sanity()
+	ret := &tcppkt_t{}
+	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
+	ret.tcphdr.win = htons(tc.rcv.win)
+	tsoff := 2
+	ret.tcphdr.set_opt(tc.opt, tc.opt[tsoff:], tc.tstamp.recent)
+	l4len := ret.tcphdr.hdrlen()
+	ret.iphdr.init_tcp(l4len, tc.lip, tc.rip)
+	ret.ether.init_ip4(tc.smac[:], tc.dmac[:])
+	//tc._setfin(&ret.tcphdr, seq)
+	ret.crc(l4len, tc.lip, tc.rip)
+	return ret, tc.opt
+}
+
+func (tc *tcptcb_t) mkfin(seq, ack uint32) (*tcppkt_t, []uint8) {
+	tc._sanity()
+	if !tc.txdone {
+		panic("mkfin but !txdone")
+	}
 	ret := &tcppkt_t{}
 	ret.tcphdr.init_ack(tc.lport, tc.rport, seq, ack)
 	ret.tcphdr.win = htons(tc.rcv.win)
@@ -2309,11 +2357,12 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 		}
 	}
 	tc.rwinupdate(rseq, rack, rwin)
-	if dlen != 0 {
-		tc.rxbuf.syswrite(rseq, rest)
-		tc.rcv.nxt = tc.rcv.trsegs.recvd(tc.rcv.nxt, winend, rseq, dlen)
-		tc.rxbuf.rcvup(tc.rcv.nxt)
+	if dlen == 0 {
+		return
 	}
+	tc.rxbuf.syswrite(rseq, rest)
+	tc.rcv.nxt = tc.rcv.trsegs.recvd(tc.rcv.nxt, winend, rseq, dlen)
+	tc.rxbuf.rcvup(tc.rcv.nxt)
 	// we received data, update our window; avoid silly window syndrome.
 	// delay acks when the window shrinks to less than an MSS since we will
 	// send an immediate ack once the window reopens due to the user
@@ -2329,9 +2378,7 @@ func (tc *tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest[][]uint8,
 // is ACK in my send window?
 func (tc *tcptcb_t) ackok(ack uint32) bool {
 	tc._sanity()
-	// special case ack of our FIN
-	return _seqbetween(tc.snd.una, ack, tc.snd.nxt) ||
-	    (tc.txdone && ack == tc.snd.finseq + 1)
+	return _seqbetween(tc.snd.una, ack, tc.snd.nxt)
 }
 
 // is seq in my receive window?
@@ -2457,8 +2504,7 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 		panic("unexpected tcb state")
 	}
 	if tc.txfinished(os, ns) {
-		tc.sched_ack()
-		tc.ack_now()
+		tc.seg_maybe()
 	}
 	return 0
 }
@@ -3490,7 +3536,7 @@ func net_init() {
 	tcpcons.init()
 
 	_rstchan = make(chan rstmsg_t, 32)
-	nrst := 10
+	nrst := 4
 	for i := 0; i < nrst; i++ {
 		go rst_daemon()
 	}
