@@ -1306,7 +1306,7 @@ char *
 ctime_r(const time_t *t, char *buf)
 {
 	printf("warning: ctime_r not implemented\n");
-	char *msg = "i do not wish to write this code";
+	char *msg = "i dont wish to write this";
 	memmove(buf, msg, strlen(msg) + 1);
 	return buf;
 }

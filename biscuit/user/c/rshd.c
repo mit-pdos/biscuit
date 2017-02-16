@@ -59,7 +59,7 @@ int main(int argc, char **argv)
 				    chald);
 			else
 				printf("pid %ld finished\n", chald);
-		if (chald == -1)
+		if (chald == -1 && errno != ECHILD)
 			err(-1, "wait4");
 	}
 	return 0;
