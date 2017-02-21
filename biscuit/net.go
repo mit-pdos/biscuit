@@ -3318,6 +3318,7 @@ func (tl *tcplfops_t) accept(proc *proc_t, saddr userio_i) (fdops_i,
 	defer tl.tcl.l.Unlock()
 
 	var tcb *tcptcb_t
+	noblk := tl.options & O_NONBLOCK != 0
 
 	for {
 		if tl.tcl.openc == 0 {
@@ -3327,6 +3328,9 @@ func (tl *tcplfops_t) accept(proc *proc_t, saddr userio_i) (fdops_i,
 		if ok {
 			tcb = ltcb
 			break
+		}
+		if noblk {
+			return nil, 0, -EAGAIN
 		}
 		tl.tcl.rcons.cond.Wait()
 	}
