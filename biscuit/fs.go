@@ -206,7 +206,7 @@ undo:
 	return err
 }
 
-func fs_unlink(paths string, cwd *imemnode_t) err_t {
+func fs_unlink(paths string, cwd *imemnode_t, wantdir bool) err_t {
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -EPERM
@@ -242,7 +242,7 @@ func fs_unlink(paths string, cwd *imemnode_t) err_t {
 	defer par.iunlock()
 	defer child.iunlock()
 
-	err = child.do_chkempty()
+	err = child.do_dirchk(wantdir)
 	if err != 0 {
 		return err
 	}
@@ -355,17 +355,10 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) err_t {
 
 		// make sure old and new are either both files or both
 		// directories
-		ndir := nchild.icache.itype == I_DIR
-		if odir && !ndir {
-			return -ENOTDIR
-		} else if !odir && ndir {
-			return -EISDIR
-		}
-
-		// remove pre-existing new
-		if err = nchild.do_chkempty(); err != 0 {
+		if err = nchild.do_dirchk(odir); err != 0 {
 			return err
 		}
+		// remove pre-existing new
 		if nchild._linkdown() {
 			idaemon_remove(nchild.priv)
 		}
@@ -1593,13 +1586,17 @@ func (idm *imemnode_t) do_mmapi(off, len int) ([]mmapinfo_t, err_t) {
 	return idm.immapinfo(off, len)
 }
 
-func (idm *imemnode_t) do_chkempty() err_t {
+func (idm *imemnode_t) do_dirchk(wantdir bool) err_t {
 	idm._locked()
-	var err err_t
-	if idm.icache.itype == I_DIR && !idm.idirempty() {
-		err = -ENOTEMPTY
+	amdir := idm.icache.itype == I_DIR
+	if wantdir && !amdir {
+		return -ENOTDIR
+	} else if !wantdir && amdir {
+		return -EISDIR
+	} else if amdir && !idm.idirempty() {
+		return -ENOTEMPTY
 	}
-	return err
+	return 0
 }
 
 func (idm *imemnode_t) do_unlink(name string) err_t {

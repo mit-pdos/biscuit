@@ -28,8 +28,8 @@ iputtest(void)
     printf("chdir iputdir failed\n");
     exit(0);
   }
-  if(unlink("../iputdir") < 0){
-    printf("unlink ../iputdir failed\n");
+  if(rmdir("../iputdir") < 0){
+    printf("rmdir ../iputdir failed\n");
     exit(0);
   }
   if(chdir("/") < 0){
@@ -61,8 +61,8 @@ exitiputtest(void)
       printf("child chdir failed\n");
       exit(0);
     }
-    if(unlink("../iputdir") < 0){
-      printf("unlink ../iputdir failed\n");
+    if(rmdir("../iputdir") < 0){
+      printf("rmdir ../iputdir failed\n");
       exit(0);
     }
     exit(0);
@@ -106,7 +106,7 @@ openiputtest(void)
     exit(0);
   }
   sleep(1);
-  if(unlink("oidir") != 0){
+  if(rmdir("oidir") != 0){
     printf("unlink failed\n");
     exit(0);
   }
@@ -284,8 +284,8 @@ void dirtest(void)
     exit(0);
   }
 
-  if(unlink("dir0") < 0){
-    printf("unlink dir0 failed\n");
+  if(rmdir("dir0") < 0){
+    printf("rmdir dir0 failed\n");
     exit(0);
   }
   if (mkdir("/") != -1)
@@ -992,7 +992,7 @@ subdir(void)
 
   printf("subdir test\n");
 
-  unlink("ff");
+  rmdir("ff");
   if(mkdir("dd") != 0){
     printf("subdir mkdir dd failed\n");
     exit(0);
@@ -1006,7 +1006,7 @@ subdir(void)
   write(fd, "ff", 2);
   close(fd);
   
-  if(unlink("dd") >= 0){
+  if(rmdir("dd") >= 0){
     printf("unlink dd (non-empty dir) succeeded!\n");
     exit(0);
   }
@@ -1127,12 +1127,12 @@ subdir(void)
     printf("mkdir dd/dd/ffff succeeded!\n");
     exit(0);
   }
-  if(unlink("dd/xx/ff") == 0){
-    printf("unlink dd/xx/ff succeeded!\n");
+  if(rmdir("dd/xx/ff") == 0){
+    printf("rmdir dd/xx/ff succeeded!\n");
     exit(0);
   }
-  if(unlink("dd/ff/ff") == 0){
-    printf("unlink dd/ff/ff succeeded!\n");
+  if(rmdir("dd/ff/ff") == 0){
+    printf("rmdir dd/ff/ff succeeded!\n");
     exit(0);
   }
   if(chdir("dd/ff") == 0){
@@ -1152,16 +1152,16 @@ subdir(void)
     printf("unlink dd/ff failed\n");
     exit(0);
   }
-  if(unlink("dd") == 0){
-    printf("unlink non-empty dd succeeded!\n");
+  if(rmdir("dd") == 0){
+    printf("rmdir non-empty dd succeeded!\n");
     exit(0);
   }
-  if(unlink("dd/dd") < 0){
-    printf("unlink dd/dd failed\n");
+  if(rmdir("dd/dd") < 0){
+    printf("rmdir dd/dd failed\n");
     exit(0);
   }
-  if(unlink("dd") < 0){
-    printf("unlink dd failed\n");
+  if(rmdir("dd") < 0){
+    printf("rmdir dd failed\n");
     exit(0);
   }
 
@@ -1312,11 +1312,11 @@ rmdot(void)
     printf("chdir dots failed\n");
     exit(0);
   }
-  if(unlink(".") == 0){
+  if(rmdir(".") == 0){
     printf("rm . worked!\n");
     exit(0);
   }
-  if(unlink("..") == 0){
+  if(rmdir("..") == 0){
     printf("rm .. worked!\n");
     exit(0);
   }
@@ -1324,16 +1324,16 @@ rmdot(void)
     printf("chdir / failed\n");
     exit(0);
   }
-  if(unlink("dots/.") == 0){
-    printf("unlink dots/. worked!\n");
+  if(rmdir("dots/.") == 0){
+    printf("rmdir dots/. worked!\n");
     exit(0);
   }
-  if(unlink("dots/..") == 0){
-    printf("unlink dots/.. worked!\n");
+  if(rmdir("dots/..") == 0){
+    printf("rmdir dots/.. worked!\n");
     exit(0);
   }
-  if(unlink("dots") != 0){
-    printf("unlink dots failed!\n");
+  if(rmdir("dots") != 0){
+    printf("rmdir dots failed!\n");
     exit(0);
   }
   printf("rmdot ok\n");

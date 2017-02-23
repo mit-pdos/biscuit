@@ -26,8 +26,8 @@ void dirrm(char *dir)
 	}
 	if (chdir("..") == -1)
 		err(-1, "chdir");
-	if (unlink(dir) == -1)
-		err(-1, "unlink");
+	if (rmdir(dir) == -1)
+		err(-1, "rmdir");
 }
 
 void rm(char *fn)

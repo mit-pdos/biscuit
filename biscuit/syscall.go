@@ -354,7 +354,7 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]uintptr) int {
 	case SYS_LINK:
 		ret = sys_link(p, a1, a2)
 	case SYS_UNLINK:
-		ret = sys_unlink(p, a1)
+		ret = sys_unlink(p, a1, a2)
 	case SYS_GETTOD:
 		ret = sys_gettimeofday(p, a1)
 	case SYS_GETRLMT:
@@ -1440,7 +1440,7 @@ func sys_link(proc *proc_t, oldn int, newn int) int {
 	return int(err)
 }
 
-func sys_unlink(proc *proc_t, pathn int) int {
+func sys_unlink(proc *proc_t, pathn, isdiri int) int {
 	path, ok, toolong := proc.userstr(pathn, NAME_MAX)
 	if !ok {
 		return int(-EFAULT)
@@ -1452,7 +1452,8 @@ func sys_unlink(proc *proc_t, pathn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	err = fs_unlink(path, proc.cwd.fops.pathi())
+	wantdir := isdiri != 0
+	err = fs_unlink(path, proc.cwd.fops.pathi(), wantdir)
 	return int(err)
 }
 

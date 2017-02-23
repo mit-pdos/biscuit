@@ -393,6 +393,7 @@ struct cmsghdr {
 
 ssize_t recvmsg(int, struct msghdr *, int);
 int rename(const char *, const char *);
+int rmdir(const char *);
 int select(int, fd_set*, fd_set*, fd_set*, struct timeval *);
 ssize_t send(int, const void *, size_t, int);
 ssize_t sendto(int, const void *, size_t, int, const struct sockaddr *,
@@ -712,6 +713,7 @@ void abort(void);
 int atoi(const char *);
 double ceil(double);
 int closedir(DIR *);
+int creat(const char *, mode_t);
 char *ctime(const time_t *);
 char *ctime_r(const time_t *, char *);
 void err(int, const char *, ...)

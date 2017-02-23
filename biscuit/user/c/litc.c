@@ -710,12 +710,24 @@ truncate(const char *p, off_t newlen)
 	return ret;
 }
 
+static int
+_unlink(const char *path, int wantdir)
+{
+	int ret = syscall(SA(path), SA(wantdir), 0, 0, 0, SYS_UNLINK);
+	ERRNO_NZ(ret);
+	return ret;
+}
+
 int
 unlink(const char *path)
 {
-	int ret = syscall(SA(path), 0, 0, 0, 0, SYS_UNLINK);
-	ERRNO_NZ(ret);
-	return ret;
+	return _unlink(path, 0);
+}
+
+int
+rmdir(const char *path)
+{
+	return _unlink(path, 1);
 }
 
 pid_t
@@ -1293,6 +1305,12 @@ ceil(double x)
 	if (x == trunc(x))
 		return x;
 	return trunc(x + 1);
+}
+
+int
+creat(const char *p, mode_t m)
+{
+	return open(p, O_WRONLY | O_CREAT | O_TRUNC, m);
 }
 
 char *
