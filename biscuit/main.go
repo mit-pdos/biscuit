@@ -531,13 +531,17 @@ func (w *wait_t) start_thread(id tid_t) {
 
 type tid_t int
 
+type tnote_t struct {
+	alive	bool
+}
+
 type threadinfo_t struct {
-	alive	map[tid_t]bool
+	notes	map[tid_t]*tnote_t
 	sync.Mutex
 }
 
 func (t *threadinfo_t) init() {
-	t.alive = make(map[tid_t]bool)
+	t.notes = make(map[tid_t]*tnote_t)
 }
 
 type proc_t struct {
@@ -972,9 +976,9 @@ func (p *proc_t) tlbshoot(startva uintptr, pgcount int) {
 		return
 	}
 	p.lockassert_pmap()
-	// fast path: the pmap is loaded in exactly one CPU's cr3, and it happens
-	// to be this CPU. we detect that one CPU has the pmap loaded by a pmap
-	// ref count == 2 (1 for proc_t ref, 1 for CPU).
+	// fast path: the pmap is loaded in exactly one CPU's cr3, and it
+	// happens to be this CPU. we detect that one CPU has the pmap loaded
+	// by a pmap ref count == 2 (1 for proc_t ref, 1 for CPU).
 	p_pmap := uintptr(p.p_pmap)
 	refp, _ := _refaddr(p_pmap)
 	if runtime.Condflush(refp, p_pmap, startva, pgcount) {
@@ -984,10 +988,8 @@ func (p *proc_t) tlbshoot(startva uintptr, pgcount int) {
 	tlb_shootdown(uintptr(p.p_pmap), startva, pgcount)
 }
 
-func (p *proc_t) resched(tid tid_t) bool {
-	p.threadi.Lock()
-	talive := p.threadi.alive[tid]
-	p.threadi.Unlock()
+func (p *proc_t) resched(tid tid_t, n *tnote_t) bool {
+	talive := n.alive
 	if talive && p.doomed {
 		// although this thread is still alive, the process should
 		// terminate
@@ -998,10 +1000,19 @@ func (p *proc_t) resched(tid tid_t) bool {
 }
 
 func (p *proc_t) run(tf *[TFSIZE]uintptr, tid tid_t) {
+	p.threadi.Lock()
+	mynote, ok := p.threadi.notes[tid]
+	p.threadi.Unlock()
+	// each thread removes itself from threadi.notes; thus mynote must
+	// exist
+	if !ok {
+		panic("note must exist")
+	}
+
 	fastret := false
 	// could allocate fxbuf lazily
 	fxbuf := p.mkfxbuf()
-	for p.resched(tid) {
+	for p.resched(tid, mynote) {
 		// for fast syscalls, we restore little state. thus we must
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
@@ -1058,7 +1069,7 @@ func (p *proc_t) tid_new() tid_t {
 	ret := tid_t(newpid())
 
 	p.threadi.Lock()
-	p.threadi.alive[ret] = true
+	p.threadi.notes[ret] = &tnote_t{alive: true}
 	p.threadi.Unlock()
 
 	return ret
@@ -1066,18 +1077,9 @@ func (p *proc_t) tid_new() tid_t {
 
 func (p *proc_t) thread_count() int {
 	p.threadi.Lock()
-	ret := len(p.threadi.alive)
+	ret := len(p.threadi.notes)
 	p.threadi.Unlock()
 	return ret
-}
-
-// remove a particular thread that was never added to scheduler; like when fork
-// fails.
-func (p *proc_t) thread_del(tid tid_t) {
-	p.threadi.Lock()
-	ti := &p.threadi
-	delete(ti.alive, tid)
-	p.threadi.Unlock()
 }
 
 // terminate a single thread
@@ -1085,8 +1087,13 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	// XXX exit process if thread is thread0, even if other threads exist
 	p.threadi.Lock()
 	ti := &p.threadi
-	delete(ti.alive, tid)
-	destroy := len(ti.alive) == 0
+	mynote, ok := ti.notes[tid]
+	if !ok {
+		panic("note must exist")
+	}
+	mynote.alive = false
+	delete(ti.notes, tid)
+	destroy := len(ti.notes) == 0
 
 	if usestatus {
 		p.exitstatus = status
@@ -1153,7 +1160,7 @@ func (p *proc_t) terminate() {
 
 	p.threadi.Lock()
 	ti := &p.threadi
-	if len(ti.alive) != 0 {
+	if len(ti.notes) != 0 {
 		panic("terminate, but threads alive")
 	}
 	p.threadi.Unlock()

@@ -516,6 +516,7 @@ func Gscpu() *cpu_t {
 	return _Gscpu()
 }
 
+//go:nowritebarrierrec
 func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
 
@@ -552,8 +553,11 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 		// exception/interrupt, not during syscall exit/return. this is
 		// OK since sys5ABI defines the SSE registers to be
 		// caller-saved.
-		cpu.tf = tf
-		cpu.fxbuf = fxbuf
+
+		// disable these write barriers to prevent a CPU being
+		// preempted with interrupts cleared.
+		*(*uintptr)(unsafe.Pointer(&cpu.tf)) = uintptr(unsafe.Pointer(tf))
+		*(*uintptr)(unsafe.Pointer(&cpu.fxbuf)) = uintptr(unsafe.Pointer(fxbuf))
 	}
 
 	intno, aux := _Userrun(tf, fastret)

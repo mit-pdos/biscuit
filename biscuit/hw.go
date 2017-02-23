@@ -2198,6 +2198,7 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 						}
 						if dropints != 0 {
 							fmt.Printf("drop ints: %v\n", dropints)
+							dropints = 0
 						}
 					}
 				}()

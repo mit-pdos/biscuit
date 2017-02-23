@@ -1516,8 +1516,7 @@ func sys_getrusage(proc *proc_t, who, rusagep int) int {
 		tmp := proc.atime
 
 		proc.threadi.Lock()
-		for tid := range proc.threadi.alive {
-			//val := runtime.Proctime(proc.mkptid(tid))
+		for tid := range proc.threadi.notes {
 			if tid == 0 {
 			}
 			val := 42
@@ -1538,7 +1537,7 @@ func sys_getrusage(proc *proc_t, who, rusagep int) int {
 	if !proc.k2user(ru, rusagep) {
 		return int(-EFAULT)
 	}
-	return 0
+	return int(-ENOSYS)
 }
 
 func mkdev(_maj, _min int) uint {
