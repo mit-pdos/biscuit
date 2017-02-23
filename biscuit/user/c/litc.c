@@ -2276,9 +2276,20 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 		int done = 0;
 		int longmode = 0;
 		int sig = 1;
+		int precmode = 0;
+		int prec = 6;
 		while (!done) {
 			char t = *fmt;
 			fmt++;
+			if (isdigit(t) && precmode) {
+				char *nend;
+				long newprec = strtol(fmt - 1, &nend, 10);
+				if (newprec > 0 && newprec < 50) {
+					prec = newprec;
+					fmt = nend;
+					continue;
+				}
+			}
 			switch (t) {
 			case '%':
 				dst += wc(dst, end, '%');
@@ -2286,6 +2297,9 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				break;
 			case '#':
 				prehex = 1;
+				break;
+			case '.':
+				precmode = 1;
 				break;
 			case 'z':
 			case 'l':
@@ -2311,7 +2325,6 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 			case 'g':
 			case 'f':
 			{
-				int prec = 6;
 				double n;
 				// floats are promoted to double when used for
 				// a ... argument
