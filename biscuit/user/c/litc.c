@@ -2278,13 +2278,13 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 		int sig = 1;
 		int precmode = 0;
 		int prec = 6;
-		while (!done) {
+		while (!done && *fmt && !isspace(*fmt)) {
 			char t = *fmt;
 			fmt++;
 			if (isdigit(t) && precmode) {
 				char *nend;
 				long newprec = strtol(fmt - 1, &nend, 10);
-				if (newprec > 0 && newprec < 50) {
+				if (newprec > 0) {
 					prec = newprec;
 					fmt = nend;
 					continue;
@@ -2378,7 +2378,7 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 					done = 1;
 					break;
 				}
-				while (*s)
+				while (*s && (!precmode || prec-- > 0))
 					dst += wc(dst, end, *s++);
 				done = 1;
 				break;
