@@ -2046,6 +2046,40 @@ memset(void *d, int c, size_t n)
 	return d;
 }
 
+int
+mkstemp(char *t)
+{
+	static uint seed;
+	if (seed == 0)
+		seed = (uint)time(NULL);
+	size_t l = strlen(t);
+	if (l < 6)
+		goto inval;
+	char *oe = t + l - 6;
+	if (strncmp(oe, "XXXXXX", 6) != 0)
+		goto inval;
+	for (;;) {
+		char *e = oe;
+		int i;
+		for (i = 0; i < 6; i++) {
+			uint n = rand_r(&seed) % 26*2;
+			if (n >= 26)
+				*e = 'A' + n - 26;
+			else
+				*e = 'a' + n;
+			e++;
+		}
+		int fd = open(t, O_RDWR | O_CREAT | O_EXCL, 0600);
+		if (fd != -1)
+			return fd;
+		else if (errno != EEXIST)
+			return -1;
+	}
+inval:
+	errno = EINVAL;
+	return -1;
+}
+
 DIR *
 fdopendir(int fd)
 {

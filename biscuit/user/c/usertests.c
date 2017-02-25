@@ -3275,6 +3275,33 @@ void scmtest(void)
 	printf("scm rights ok\n");
 }
 
+void mkstemptest(void)
+{
+	printf("mkstemp test\n");
+	char buf[64];
+
+	snprintf(buf, sizeof(buf), "/tmp/wtfXXXXX");
+	if (mkstemp(buf) != -1 || errno != EINVAL)
+		errx(-1, "mkstemp suceeded");
+	snprintf(buf, sizeof(buf), "/tmp/wtfXXXXXX");
+	int fd;
+	if ((fd = mkstemp(buf)) == -1)
+		err(-1, "mkstemp");
+	char msg[] = "hulloo!";
+	if (write(fd, msg, sizeof(msg)) != sizeof(msg))
+		err(-1, "write");
+	int fd2;
+	if ((fd2 = open(buf, O_RDONLY)) == -1)
+		err(-1, "open");
+	if (read(fd2, buf, sizeof(buf)) != sizeof(msg))
+		err(-1, "read");
+	if (strncmp(buf, msg, sizeof(msg)) != 0)
+		errx(-1, "msg mismatch");
+	close(fd2);
+	close(fd);
+	printf("mkstemp test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3291,7 +3318,7 @@ main(int argc, char *argv[])
   concreate();
   fourfiles();
   sharedfd();
-  //renametest();
+  renametest();
   lseektest();
   dirtest();
 
@@ -3352,6 +3379,7 @@ main(int argc, char *argv[])
   spair();
   iovtest();
   scmtest();
+  mkstemptest();
 
   exectest();
 
