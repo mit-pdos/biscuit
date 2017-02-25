@@ -1151,7 +1151,7 @@ func dec_pmap(p_pmap uintptr) {
 	_reffree(idx)
 }
 
-// termiante a process. must only be called when the process has no more
+// terminate a process. must only be called when the process has no more
 // running threads.
 func (p *proc_t) terminate() {
 	if p.pid == 1 {
@@ -1765,11 +1765,11 @@ func (cb *circbuf_t) cb_init(sz int) {
 	if sz < 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
-	cb.bufsz = sz
 	cb.buf = _bufpool.Get().([]uint8)
 	if len(cb.buf) < sz {
-		cb.buf = make([]uint8, cb.bufsz)
+		cb.buf = make([]uint8, sz)
 	}
+	cb.bufsz = len(cb.buf)
 	cb.head, cb.tail = 0, 0
 }
 

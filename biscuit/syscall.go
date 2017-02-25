@@ -2191,8 +2191,8 @@ func (sf *sudfops_t) recvmsg(proc *proc_t, dst userio_i,
 	if cmsg.totalsz() != 0 {
 		panic("no imp")
 	}
-	// XXX what does recv'ing on an unbound unix datagram socket supposed
-	// to do? openbsd and linux seem to block forever.
+	// XXX what is recv'ing on an unbound unix datagram socket supposed to
+	// do? openbsd and linux seem to block forever.
 	if !sf.bound {
 		return 0, 0, 0, 0, -ECONNREFUSED
 	}
@@ -4328,7 +4328,7 @@ func sys_info(proc *proc_t, n int) int {
 		fmt.Printf("proc dump:\n")
 		proclock.Lock()
 		for i := range allprocs {
-			fmt.Printf("   %v\n", allprocs[i].name)
+			fmt.Printf("   %3v %v\n", allprocs[i].pid, allprocs[i].name)
 		}
 		proclock.Unlock()
 		ret = 0
