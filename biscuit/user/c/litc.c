@@ -177,6 +177,17 @@ chdir(const char *path)
 }
 
 int
+dup(int o)
+{
+	int fd;
+	if ((fd = open("/", O_RDONLY | O_DIRECTORY)) == -1)
+		err(-1, "must succeed");
+	if (dup2(o, fd) == -1)
+		err(-1, "must succeed");
+	return fd;
+}
+
+int
 connect(int fd, const struct sockaddr *sa, socklen_t salen)
 {
 	int ret = syscall(SA(fd), SA(sa), SA(salen), 0, 0, SYS_CONNECT);

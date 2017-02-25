@@ -281,6 +281,7 @@ int connect(int, const struct sockaddr *, socklen_t);
 int chmod(const char *, mode_t);
 int close(int);
 int chdir(const char *);
+int dup(int);
 int dup2(int, int);
 void _exit(int)
     __attribute__((noreturn));
