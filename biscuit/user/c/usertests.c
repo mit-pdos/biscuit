@@ -3347,6 +3347,8 @@ void getppidtest(void)
 		errx(-1, "child failed");
 	if (read(p[0], &ret, sizeof(int)) != sizeof(int) || ret != 0)
 		err(-1, "grand child failed");
+	if (close(p[0]) == -1)
+		err(-1, "close");
 	printf("getppid test ok\n");
 }
 
