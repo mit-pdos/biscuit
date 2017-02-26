@@ -41,7 +41,7 @@ public:
     // Create temporary message
     char tmpname[256];
     snprintf(tmpname, sizeof tmpname,
-             "%s/pid/%d", spooldir_.c_str(), getpid());
+             "%s/pid/%d", spooldir_.c_str(), (int)getpid());
     int tmpfd = open(tmpname, O_CREAT|O_EXCL|O_WRONLY, 0600);
     if (tmpfd < 0)
       edie("open %s failed", tmpname);

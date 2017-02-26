@@ -18,6 +18,7 @@
 #define SYS_DUP2         33
 #define SYS_PAUSE        34
 #define SYS_GETPID       39
+#define SYS_GETPPID      40
 #define SYS_SOCKET       41
 #define SYS_CONNECT      42
 #define SYS_ACCEPT       43
@@ -328,10 +329,16 @@ getcwd(char *buf, size_t sz)
 	return buf;
 }
 
-int
+pid_t
 getpid(void)
 {
 	return syscall(0, 0, 0, 0, 0, SYS_GETPID);
+}
+
+pid_t
+getppid(void)
+{
+	return syscall(0, 0, 0, 0, 0, SYS_GETPPID);
 }
 
 int
@@ -3030,7 +3037,7 @@ syslog(int priority, const char *msg, ...)
 	const char *pref = _slogopts.prefix ? _slogopts.prefix : "";
 	char lbuf[2048];
 	if (_slogopts.pid)
-		snprintf(lbuf, sizeof(lbuf), "syslog (pid %d): %s: %s",
+		snprintf(lbuf, sizeof(lbuf), "syslog (pid %ld): %s: %s",
 		    getpid(), pref, msg);
 	else
 		snprintf(lbuf, sizeof(lbuf), "syslog: %s: %s", pref, msg);
@@ -3589,12 +3596,6 @@ ioctl(int fd, ulong req, ...)
 	if (req != FIOASYNC)
 		errx(-1, "nyet");
 	HACK(0);
-}
-
-pid_t
-getppid(void)
-{
-	FAIL;
 }
 
 int

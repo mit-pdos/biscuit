@@ -135,6 +135,7 @@ const(
   SYS_DUP2     = 33
   SYS_PAUSE    = 34
   SYS_GETPID   = 39
+  SYS_GETPPID  = 40
   SYS_SOCKET   = 41
     // domains
     AF_UNIX       = 1
@@ -301,6 +302,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]uintptr) int {
 		ret = sys_pause(p)
 	case SYS_GETPID:
 		ret = sys_getpid(p, tid)
+	case SYS_GETPPID:
+		ret = sys_getppid(p, tid)
 	case SYS_SOCKET:
 		ret = sys_socket(p, a1, a2, a3)
 	case SYS_CONNECT:
@@ -1602,6 +1605,10 @@ func sys_nanosleep(proc *proc_t, sleeptsn, remaintsn int) int {
 
 func sys_getpid(proc *proc_t, tid tid_t) int {
 	return proc.pid
+}
+
+func sys_getppid(proc *proc_t, tid tid_t) int {
+	return proc.pwait.pid
 }
 
 func sys_socket(proc *proc_t, domain, typ, proto int) int {

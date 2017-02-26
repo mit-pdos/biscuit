@@ -297,7 +297,9 @@ int futex(const int, void *, void *, int, const struct timespec *);
 #define		FUTEX_CNDGIVE	3
 
 char *getcwd(char *, size_t);
-int getpid(void);
+pid_t getpid(void);
+pid_t getppid(void);
+
 int getrlimit(int, struct rlimit *);
 #define		RLIMIT_NOFILE	1
 #define		RLIMIT_CORE	2
@@ -952,8 +954,6 @@ struct flock {
 int socketpair(int, int, int, int[2]);
 int ioctl(int, ulong, ...);
 #define		FIOASYNC	3
-
-pid_t getppid(void);
 
 int raise(int);
 mode_t umask(mode_t);

@@ -3302,6 +3302,54 @@ void mkstemptest(void)
 	printf("mkstemp test ok\n");
 }
 
+void getppidtest(void)
+{
+	printf("getppid test\n");
+	int p[2];
+	if (pipe(p) == -1)
+		err(-1, "pipe");
+	pid_t c = fork();
+	if (c == -1)
+		err(-1, "fork");
+	if (c == 0) {
+		if (close(p[0]) == -1)
+			err(-1, "close");
+		pid_t me = getpid();
+		pid_t gc = fork();
+		if (gc == -1)
+			err(-1, "fork");
+		if (gc != 0)
+			exit(0);
+		int ok = 0;
+		int i;
+		for (i = 0; i < 1000; i++) {
+			if (getppid() != me) {
+				ok = 1;
+				break;
+			}
+			usleep(1000);
+		}
+		if (!ok) {
+			errx(-1, "still getting old ppid %ld",
+			    (long)getppid());
+		}
+		int ret = 0;
+		if (write(p[1], &ret, sizeof(ret)) != sizeof(ret))
+			err(-1, "write");
+		exit(0);
+	}
+	if (close(p[1]) == -1)
+		err(-1, "close");
+	int ret;
+	if (wait(&ret) != c)
+		err(-1, "wrong child");
+	if (!WIFEXITED(ret) || WEXITSTATUS(ret) != 0)
+		errx(-1, "child failed");
+	if (read(p[0], &ret, sizeof(int)) != sizeof(int) || ret != 0)
+		err(-1, "grand child failed");
+	printf("getppid test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3380,6 +3428,7 @@ main(int argc, char *argv[])
   iovtest();
   scmtest();
   mkstemptest();
+  getppidtest();
 
   exectest();
 

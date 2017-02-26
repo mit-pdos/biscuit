@@ -31,7 +31,7 @@ public:
   {
     // Generate unique tmp path
     char unique[16];
-    snprintf(unique, sizeof(unique), "%d.%lu", getpid(), seqno_);
+    snprintf(unique, sizeof(unique), "%d.%lu", (int)getpid(), seqno_);
     string tmppath(maildir_);
     tmppath.append("/tmp/").append(unique);
     ++seqno_;

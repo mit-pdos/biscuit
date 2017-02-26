@@ -324,6 +324,7 @@ type waitent_t struct {
 }
 
 type wait_t struct {
+	pid		int
 	sync.Mutex
 	ids		map[int]waitent_t
 	// number of child processes (not threads)
@@ -334,13 +335,14 @@ type wait_t struct {
 	wakeany		int
 }
 
-func (w *wait_t) wait_init() {
+func (w *wait_t) wait_init(mypid int) {
 	w.ids = make(map[int]waitent_t, 10)
 	w.anys = make(chan waitst_t)
 	w._anyhints = make([]int, 0, 10)
 	w.anyhints = w._anyhints
 	w.wakeany = 0
 	w.childs = 0
+	w.pid = mypid
 }
 
 func (w *wait_t) _pop_hint() (int, bool) {
@@ -647,7 +649,7 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 	ret.threadi.init()
 	ret.tid0 = ret.tid_new()
 
-	ret.mywait.wait_init()
+	ret.mywait.wait_init(np)
 	ret.mywait.start_thread(ret.tid0)
 
 	return ret
@@ -1176,6 +1178,7 @@ func (p *proc_t) terminate() {
 	p.fdl.Unlock()
 	close_panic(p.cwd)
 
+	p.mywait.pid = 1
 	proc_del(p.pid)
 
 	// free all user pages in the pmap. the last CPU to call dec_pmap on
