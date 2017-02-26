@@ -3675,3 +3675,10 @@ lstat(const char *a, struct stat * b)
 {
 	FAIL;
 }
+
+/* LMBENCH STUFF */
+unsigned int
+alarm(unsigned int sec)
+{
+	HACK(0);
+}

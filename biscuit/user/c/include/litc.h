@@ -652,6 +652,8 @@ int posix_spawn_file_actions_init(posix_spawn_file_actions_t *);
 #define		MIN(x, y)	(x < y ? x : y)
 #define		MAX(x, y)	(x > y ? x : y)
 
+#define		atof(s)		strtod(s, NULL)
+
 #define		_POSIX_NAME_MAX	14
 struct dirent {
 	ino_t d_ino;
@@ -668,6 +670,7 @@ typedef struct {
 extern __thread int errno;
 
 #define		BUFSIZ		4096
+#define		L_tmpnam	20
 
 struct _FILE {
 	int fd;
@@ -711,6 +714,7 @@ struct utsname {
 };
 
 void abort(void);
+unsigned int alarm(unsigned int);
 int atoi(const char *);
 double ceil(double);
 int closedir(DIR *);
