@@ -904,6 +904,7 @@ func (p *proc_t) mkfxbuf() *[64]uintptr {
 	if n & ((1 << 4) - 1) != 0 {
 		panic("not 16 byte aligned")
 	}
+	*ret = runtime.Fxinit
 	return ret
 }
 

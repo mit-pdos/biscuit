@@ -560,6 +560,9 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 		*(*uintptr)(unsafe.Pointer(&cpu.fxbuf)) = uintptr(unsafe.Pointer(fxbuf))
 	}
 
+	if !fastret {
+		fxrstor(fxbuf)
+	}
 	intno, aux := _Userrun(tf, fastret)
 
 	Sti()
@@ -1655,7 +1658,7 @@ func alloc_map(va uintptr, perms uintptr, fempty bool) {
 	}
 }
 
-var fxinit [FXREGS]uintptr
+var Fxinit [FXREGS]uintptr
 
 // nosplit because APs call this function before FS is setup
 //go:nosplit
@@ -1674,8 +1677,8 @@ func fpuinit(amfirst bool) {
 	Lcr4(cr4);
 
 	if amfirst {
-		chkalign(unsafe.Pointer(&fxinit[0]), 16)
-		fxsave(&fxinit)
+		chkalign(unsafe.Pointer(&Fxinit[0]), 16)
+		fxsave(&Fxinit)
 
 		chksize(FXREGS*8, unsafe.Sizeof(threads[0].fx))
 		for i := range threads {
@@ -2206,10 +2209,10 @@ func trap(tf *[TFSIZE]uintptr) {
 		}
 	}
 
-	// don't add code before FPU/SSE/MMX context saving unless you've
-	// thought very carefully! it is easy to accidentally and silently
-	// corrupt SSE state (ie calling memmove indirectly by assignment of
-	// large datatypes) before it is saved below.
+	// don't add code before SSE context saving unless you've thought very
+	// carefully! it is easy to accidentally and silently corrupt SSE state
+	// (ie calling memmove indirectly by assignment of large datatypes)
+	// before it is saved below.
 
 	// save SSE state immediately before we clobber it
 	if ct != nil {
@@ -2921,7 +2924,7 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	mt.status = ST_RUNNABLE
 	mt.p_pmap = P_kpmap
 
-	mt.fx = fxinit
+	mt.fx = Fxinit
 
 	Spunlock(threadlock)
 	Popcli(fl)
