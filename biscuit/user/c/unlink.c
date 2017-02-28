@@ -9,9 +9,10 @@ int main(int argc, char **argv)
 	struct stat st;
 	if (stat(p, &st) == -1)
 		err(-1, "stat");
-	if (S_ISDIR(st.st_mode) && rmdir(p) == -1)
+	if (S_ISDIR(st.st_mode)) {
+		if (rmdir(p) == -1)
 			err(-1, "rmdir");
-	else if (unlink(p) == -1)
+	} else if (unlink(p) == -1)
 			err(-1, "unlink");
 	return 0;
 }
