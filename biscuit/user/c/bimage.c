@@ -50,12 +50,17 @@ int main(int argc, char **argv)
 	char buf[blksz];
 	size_t did = 0;
 	ssize_t r;
+	int mb = 1;
 	while ((r = read(s, buf, sizeof(buf))) > 0) {
 		if (r < blksz)
 			fprintf(stderr, "slow write\n");
 		if (write(fd, buf, r) != r)
 			err(-1, "write");
 		did += r;
+		if (did >> 20 >= mb) {
+			fprintf(stderr, "%dMB\n", mb);
+			mb += 1;
+		}
 	}
 	if (r == -1)
 		err(-1, "read");
