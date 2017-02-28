@@ -64,22 +64,7 @@
 
 __thread int errno;
 
-static volatile long biglock;
 static int dolock = 1;
-
-static void acquire(void)
-{
-	if (!dolock)
-		return;
-	while (__sync_lock_test_and_set(&biglock, 1) != 0)
-		;
-}
-
-static void release(void)
-{
-	asm volatile("":::"memory");
-	biglock = 0;
-}
 
 static void pmsg(char *, long);
 
@@ -3257,6 +3242,29 @@ vfprintf(FILE *f, const char *fmt, va_list ap)
 	return wrote;
 }
 
+#define _DLMALLOC 0
+
+#if _DLMALLOC
+
+#include <../dlmalloc.c>
+
+#else
+
+static volatile long biglock;
+static void acquire(void)
+{
+	if (!dolock)
+		return;
+	while (__sync_lock_test_and_set(&biglock, 1) != 0)
+		;
+}
+
+static void release(void)
+{
+	asm volatile("":::"memory");
+	biglock = 0;
+}
+
 struct header_t {
 	char *start;
 	char *end;
@@ -3419,6 +3427,7 @@ out:
 	release();
 	return ret;
 }
+#endif
 
 char __progname[64];
 char **environ = _environ;
