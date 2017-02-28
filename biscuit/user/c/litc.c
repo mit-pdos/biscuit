@@ -2381,6 +2381,20 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 				// floats are promoted to double when used for
 				// a ... argument
 				n = va_arg(ap, double);
+				if (isnan(n)) {
+					dst += wc(dst, end, 'n');
+					dst += wc(dst, end, 'a');
+					dst += wc(dst, end, 'n');
+					done = 1;
+					break;
+				}
+				if (isinf(n)) {
+					dst += wc(dst, end, 'i');
+					dst += wc(dst, end, 'n');
+					dst += wc(dst, end, 'f');
+					done = 1;
+					break;
+				}
 				if (n < 0) {
 					dst += wc(dst, end, '-');
 					n = -n;
