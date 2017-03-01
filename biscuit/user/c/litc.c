@@ -1296,10 +1296,7 @@ abort(void)
 int
 atoi(const char *n)
 {
-	int tot = 0;
-	while (*n)
-		tot = tot*10 + (*n++ - '0');
-	return tot;
+	return (int)strtol(n, NULL, 10);
 }
 
 double
