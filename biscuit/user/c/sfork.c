@@ -649,6 +649,38 @@ static void *alloc(void *_a)
 	return (void *)tot;
 }
 
+#define _ST1	"dir1/"
+#define _ST2	"dir2/"
+#define _ST3	"file"
+#define STFN	(_ST1 _ST2 _ST3)
+
+static void *statty(void *_a)
+{
+	long tot = 0;
+	pthread_barrier_wait(&bar);
+
+	struct stat st;
+	while (!cease) {
+		if (stat(STFN, &st) == -1)
+			err(-1, "stat");
+		tot++;
+	}
+	return (void *)tot;
+}
+
+static void stat_st()
+{
+	if (mkdir(_ST1, 0755) == -1 && errno != EEXIST)
+		err(-1, "mkdir");
+	if (mkdir(_ST1 _ST2, 0755) == -1 && errno != EEXIST)
+		err(-1, "mkdir");
+	int fd;
+	if ((fd = open(STFN, O_CREAT | O_WRONLY, 0644)) == -1)
+		err(-1, "mkdir");
+	if (close(fd) == -1)
+		err(-1, "close");
+}
+
 void *locks(void *_arg)
 {
 	long tot = 0;
@@ -684,6 +716,7 @@ struct {
 	{"poll50", '5', poll50, NULL, NULL},
 	{"poll1", '1', poll1, NULL, NULL},
 	{"alloc", 'a', alloc, NULL, NULL},
+	{"stat", 'S', statty, stat_st, NULL},
 	{"locks", 'l', locks, NULL, NULL},
 };
 
