@@ -1,6 +1,8 @@
 #include<stdio.h>
 #include<unistd.h>
 #include<err.h>
+#include<poll.h>
+#include<fcntl.h>
 #include<sys/socket.h>
 
 int main(int argc, char **argv)
