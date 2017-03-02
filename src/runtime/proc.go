@@ -2088,6 +2088,7 @@ func pollWork() bool {
 		return true
 	}
 	p := getg().m.p.ptr()
+	IRQcheck(p)
 	if !runqempty(p) {
 		return true
 	}
