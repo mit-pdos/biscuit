@@ -1255,8 +1255,8 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 // return error
 func (pc *pgcache_t) _ensurefill(pgn int) err_t {
 	needsfill := pc._ensureslot(pgn)
-	pgva := pc.pgs[pgn]
 	if needsfill {
+		pgva := pc.pgs[pgn]
 		devoffset := pgn * PGSIZE
 		err := pc._fill(pgva[:], devoffset)
 		if err != 0 {

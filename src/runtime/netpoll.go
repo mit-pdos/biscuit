@@ -88,7 +88,8 @@ func net_runtime_pollServerInit() {
 }
 
 func netpollinited() bool {
-	return atomic.Load(&netpollInited) != 0
+	//return atomic.Load(&netpollInited) != 0
+	return false
 }
 
 //go:linkname net_runtime_pollOpen net.runtime_pollOpen
