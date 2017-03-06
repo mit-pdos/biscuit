@@ -704,7 +704,9 @@ func (p *proc_t) cowfault(userva int) {
 		panic("must have vminfo")
 	}
 	ecode := uintptr(PTE_U | PTE_W)
-	sys_pgfault(p, vmi, pte, uintptr(userva), ecode)
+	if !sys_pgfault(p, vmi, pte, uintptr(userva), ecode) {
+		panic("must succeed")
+	}
 }
 
 // an fd table invariant: every fd must have its file field set. thus the
@@ -792,6 +794,7 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 }
 
 func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
+	parent.lockassert_pmap()
 	// first add kernel pml4 entries
 	for _, e := range kents {
 		child.pmap[e.pml4slot] = e.entry
@@ -824,7 +827,10 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	if !ok {
 		panic("must be mapped")
 	}
-	sys_pgfault(child, vmi, pte, uintptr(rsp), uintptr(PTE_U | PTE_W))
+	perms := uintptr(PTE_U | PTE_W)
+	if !sys_pgfault(child, vmi, pte, uintptr(rsp), perms) {
+		panic("must succeed")
+	}
 	child.Unlock_pmap()
 	pte = pmap_lookup(parent.pmap, rsp)
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
@@ -836,16 +842,15 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	return doflush
 }
 
-// does not increase opencount on fops (vmadd_file does). perms should only use
-// PTE_U/PTE_W; the page fault handler will install the correct COW flags.
-// perms == 0 means that no mapping can go here (like for guard pages).
+// does not increase opencount on fops (vmregion_t.insert does). perms should
+// only use PTE_U/PTE_W; the page fault handler will install the correct COW
+// flags. perms == 0 means that no mapping can go here (like for guard pages).
 func (p *proc_t) _mkvmi(mt mtype_t, start, len, perms, foff int,
-    fops fdops_i) *vminfo_t {
+    fops fdops_i, shared bool) *vminfo_t {
 	if len == 0 {
 		panic("bad vmi len")
 	}
 	if (start | len) & PGOFFSET != 0 {
-		//fmt.Printf("%x %x\n", start, len)
 		panic("start and len must be aligned")
 	}
 	// don't specify cow, present etc. -- page fault will handle all that
@@ -865,22 +870,29 @@ func (p *proc_t) _mkvmi(mt mtype_t, start, len, perms, foff int,
 		ret.file.mfile = &mfile_t{}
 		ret.file.mfile.mfops = fops
 		ret.file.mfile.mapcount = pglen
+		ret.file.shared = shared
 	}
 	return ret
 }
 
 func (p *proc_t) vmadd_anon(start, len, perms int) {
-	vmi := p._mkvmi(VANON, start, len, perms, 0, nil)
+	vmi := p._mkvmi(VANON, start, len, perms, 0, nil, false)
 	p.vmregion.insert(vmi)
 }
 
 func (p *proc_t) vmadd_file(start, len, perms int, fops fdops_i, foff int) {
-	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops)
+	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, false)
 	p.vmregion.insert(vmi)
 }
 
 func (p *proc_t) vmadd_shareanon(start, len, perms int) {
-	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil)
+	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil, false)
+	p.vmregion.insert(vmi)
+}
+
+func (p *proc_t) vmadd_sharefile(start, len, perms int, fops fdops_i,
+   foff int) {
+	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, true)
 	p.vmregion.insert(vmi)
 }
 
@@ -951,21 +963,13 @@ func (p *proc_t) page_remove(va int) bool {
 func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
 	vmi, ok := p.vmregion.lookup(fa)
-	if ok {
-		isguard := vmi.perms == 0
-		iswrite := ecode & uintptr(PTE_W) != 0
-		writeok := vmi.perms & uint(PTE_W) != 0
-		if isguard || (iswrite && !writeok) {
-			ok = false
-		}
-	}
 	if !ok {
 		p.Unlock_pmap()
 		return false
 	}
-	sys_pgfault(p, vmi, nil, fa, ecode)
+	ret := sys_pgfault(p, vmi, nil, fa, ecode)
 	p.Unlock_pmap()
-	return true
+	return ret
 }
 
 // flush TLB on all CPUs that may have this processes' pmap loaded
@@ -1191,6 +1195,8 @@ func (p *proc_t) terminate() {
 	// dec_pmap could free the pmap itself. thus it must come after
 	// uvmfree.
 	dec_pmap(uintptr(p.p_pmap))
+	// close all open mmap'ed files
+	p.vmregion.clear()
 
 	// send status to parent
 	if p.pwait == nil {
@@ -1250,7 +1256,9 @@ func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 		uva := uintptr(va)
 		if vmi, ok := p.vmregion.lookup(uva); ok {
 			ecode := uintptr(PTE_U)
-			sys_pgfault(p, vmi, pte, uva, ecode)
+			if !sys_pgfault(p, vmi, pte, uva, ecode) {
+				return nil, false
+			}
 		} else {
 			return nil, false
 		}

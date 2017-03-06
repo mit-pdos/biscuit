@@ -58,20 +58,21 @@ type vminfo_t struct {
 	file struct {
 		foff	int
 		mfile	*mfile_t
+		shared	bool
 	}
 }
 
-func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr) {
+func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr, err_t) {
 	if vmi.mtype != VFILE {
 		panic("must be file mapping")
 	}
 	voff := int(va - (vmi.pgn << PGSHIFT))
 	foff := vmi.file.foff + voff
-	mmapi, err := vmi.file.mfile.mfops.mmapi(foff, 1)
+	mmapi, err := vmi.file.mfile.mfops.mmapi(foff, PGSIZE)
 	if err != 0 {
-		panic("must succeed")
+		return nil, 0, err
 	}
-	return mmapi[0].pg, uintptr(mmapi[0].phys)
+	return mmapi[0].pg, uintptr(mmapi[0].phys), 0
 }
 
 type mtype_t uint
@@ -79,6 +80,7 @@ type mtype_t uint
 // types of mappings
 const (
 	VANON	mtype_t = 1 << iota
+	// shared or private file
 	VFILE	mtype_t = 1 << iota
 	// shared anonymous
 	VSANON	mtype_t = 1 << iota
@@ -578,7 +580,11 @@ func (m *vmregion_t) dump() {
 		case VANON:
 			perms = "A-"
 		case VFILE:
-			perms = "F-"
+			if vmi.file.shared {
+				perms = "SF-"
+			} else {
+				perms = "F-"
+			}
 		case VSANON:
 			perms = "SA-"
 		}

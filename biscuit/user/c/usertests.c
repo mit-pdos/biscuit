@@ -3352,6 +3352,136 @@ void getppidtest(void)
 	printf("getppid test ok\n");
 }
 
+static void _v1(char *p)
+{
+	int i;
+	for (i = 0; i < 4096*2; i++) {
+		if (i < 4096 + (4096/2)) {
+			if (p[i] != 'A')
+				errx(-1, "mismatch");
+		} else {
+			if (p[i] != 0)
+				errx(-1, "mismatch");
+		}
+	}
+}
+
+void mmaptest(void)
+{
+	printf("mmap test\n");
+	const char * const f = "/tmp/mmap.dur";
+	unlink(f);
+	int fd = open(f, O_WRONLY | O_CREAT | O_EXCL);
+	if (fd == -1)
+		err(-1, "open");
+	int i;
+	for (i = 0; i < 4096 + (4096/2); i++)
+		if (write(fd, "A", 1) != 1)
+			err(-1, "write");
+	if (close(fd) == -1)
+		err(-1, "close");
+	if ((fd = open(f, O_RDONLY)) == -1)
+		err(-1, "open");
+	char *p = mmap(0, 4096*2, PROT_READ, MAP_PRIVATE, fd, 0);
+	if (p == MAP_FAILED)
+		err(-1, "mmap");
+	_v1(p);
+	if (munmap(p, 4096*2) == -1)
+		err(-1, "munmap");
+	// should be able to map file opened read-only with private writable
+	// mapping
+	p = mmap(0, 4096*2, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+	if (p == MAP_FAILED)
+		err(-1, "mmap");
+	if (close(fd) == -1)
+		err(-1, "close");
+	_v1(p);
+	for (i = 0; i < 4096*2; i++)
+		p[i] = 'Z';
+	if (munmap(p, 4096*2) == -1)
+		err(-1, "munmap");
+
+	if ((fd = open(f, O_RDONLY)) == -1)
+		err(-1, "open");
+	p = mmap(0, 4096*3, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (p != MAP_FAILED)
+		err(-1, "mmap succeeded");
+	if (close(fd) == -1)
+		err(-1, "close");
+
+	if ((fd = open(f, O_RDWR)) == -1)
+		err(-1, "open");
+	p = mmap(0, 4096*3, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (p == MAP_FAILED)
+		err(-1, "mmap");
+	if (close(fd) == -1)
+		err(-1, "close");
+
+	_v1(p);
+	for (i = 0; i < 4096*2; i++)
+		p[i] = 'Z';
+	if (munmap(p, 4096*2) == -1)
+		err(-1, "munmap");
+
+	if ((fd = open(f, O_RDWR)) == -1)
+		err(-1, "open");
+	char b;
+	for (i = 0; i < 4096 + (4096/2); i++)
+		if (read(fd, &b, 1) != 1 || b != 'Z')
+			err(-1, "read");
+	if (close(fd) == -1)
+		err(-1, "close");
+
+	if ((fd = open(f, O_RDONLY)) == -1)
+		err(-1, "open");
+	p = mmap(0, 4096, PROT_READ, MAP_SHARED, fd, 4096);
+	if (p == MAP_FAILED)
+		err(-1, "mmap");
+	if (close(fd) == -1)
+		err(-1, "close");
+	pid_t c = fork();
+	if (c == -1)
+		err(-1, "fork");
+	else if (c == 0) {
+		if ((fd = open(f, O_WRONLY)) == -1)
+			err(-1, "open");
+		if (lseek(fd, 4096, SEEK_SET) == -1)
+			err(-1, "lseek");
+		char b = 'B';
+		for (i = 0; i < 4096; i++)
+			if (write(fd, &b, 1) != 1)
+				err(-1, "write");
+		if (close(fd) == -1)
+			err(-1, "close");
+		if (unlink(f) == -1)
+			err(-1, "unlink");
+		if ((fd = open(f, O_WRONLY | O_CREAT | O_EXCL)) == -1)
+			err(-1, "open");
+		b = 'X';
+		for (i = 0; i < 4096*4; i++)
+			if (write(fd, &b, 1) != 1)
+				err(-1, "write");
+		if (close(fd) == -1)
+			err(-1, "close");
+		if (unlink(f) == -1)
+			err(-1, "unlink");
+		exit(0);
+	}
+	int status;
+	if (wait(&status) != c)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed");
+	for (i = 0; i < 4096; i++)
+		if (p[i] != 'B')
+			errx(-1, "mismatch");
+	if (munmap(p, 4096*2) != -1)
+		err(-1, "munmap succeeded");
+	if (munmap(p, 4096) == -1)
+		err(-1, "munmap");
+	printf("mmap test ok\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3431,6 +3561,7 @@ main(int argc, char *argv[])
   scmtest();
   mkstemptest();
   getppidtest();
+  mmaptest();
 
   exectest();
 

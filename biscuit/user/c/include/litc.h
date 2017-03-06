@@ -65,7 +65,7 @@ extern "C" {
 #define		EINPROGRESS	115
 #define		ERRNO_LAST	115
 
-#define		MAP_FAILED	((void *) -1)
+#define		MAP_FAILED	((void *)(long) -1)
 
 #define		MAP_SHARED	0x01
 #define		MAP_PRIVATE	0x02

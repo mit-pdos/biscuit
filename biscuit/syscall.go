@@ -49,6 +49,7 @@ const(
 	EAGAIN		err_t = 11
 	EWOULDBLOCK	= EAGAIN
 	ENOMEM		err_t = 12
+	EACCES		err_t = 13
 	EFAULT		err_t = 14
 	EBUSY		err_t = 16
 	EEXIST		err_t = 17
@@ -556,7 +557,7 @@ type mmapinfo_t struct {
 	phys	int
 }
 
-func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
+func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	if lenn == 0 {
 		return int(-EINVAL)
 	}
@@ -568,14 +569,40 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		return int(-EINVAL)
 	}
 	shared := flags & MAP_SHARED != 0
-	if flags & MAP_ANON == 0 || fd != -1 {
-		panic("no imp")
+	anon := flags & MAP_ANON != 0
+	fdmap := !anon
+	if (fdmap && fdn < 0) || (fdmap && offset < 0) || (anon && fdn >= 0) {
+		return int(-EINVAL)
 	}
-	if flags & MAP_FIXED != 0 && addrn < USERMIN {
+	if flags & MAP_FIXED != 0 {
+		return int(-EINVAL)
+	}
+	// OpenBSD allows mappings of only PROT_WRITE and read accesses that
+	// fault-in the page cause a segfault while writes do not. Reads
+	// following a write do not cause segfault (of course). POSIX
+	// apparently requires an implementation to support only PROT_WRITE,
+	// but it seems better to disallow permission schemes that the CPU
+	// cannot enforce.
+	if prot & PROT_READ == 0 {
 		return int(-EINVAL)
 	}
 	if prot == PROT_NONE {
+		panic("no imp")
 		return proc.mmapi
+	}
+
+	var fd *fd_t
+	if fdmap {
+		var ok bool
+		fd, ok = proc.fd_get(fdn)
+		if !ok {
+			return int(-EBADF)
+		}
+		if fd.perms & FD_READ == 0 ||
+		   (shared && prot & PROT_WRITE != 0 &&
+		      fd.perms & FD_WRITE == 0) {
+			return int(-EACCES)
+		}
 	}
 
 	proc.Lock_pmap()
@@ -590,18 +617,30 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fd, offset int) int {
 		return int(-ENOMEM)
 	}
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
-	if shared {
-		// no lazy loading for shared anon pages
-		proc.vmadd_shareanon(addr, lenn, perms)
-	} else {
-		proc.vmadd_anon(addr, lenn, perms)
-	}
 	proc.mmapi = addr + lenn
+	switch {
+	case anon && shared:
+		proc.vmadd_shareanon(addr, lenn, perms)
+	case anon && !shared:
+		proc.vmadd_anon(addr, lenn, perms)
+	case fdmap:
+		fops := fd.fops
+		// vmadd_*file will increase the open count on the file
+		if shared {
+			proc.vmadd_sharefile(addr, lenn, perms, fops, offset)
+		} else {
+			proc.vmadd_file(addr, lenn, perms, fops, offset)
+		}
+	}
 	tshoot := false
-	for i := 0; i < lenn; i += PGSIZE {
-		_, p_pg := refpg_new()
-		ns := proc.page_insert(addr + i, p_pg, perms, true)
-		tshoot = tshoot || ns
+	// eagerly map anonymous pages, lazily-map file pages. our vm system
+	// supports lazily-mapped private anonymous pages though.
+	if anon {
+		for i := 0; i < lenn; i += PGSIZE {
+			_, p_pg := refpg_new()
+			ns := proc.page_insert(addr + i, p_pg, perms, true)
+			tshoot = tshoot || ns
+		}
 	}
 	// sys_mmap won't replace pages since it always finds unused VA space,
 	// so the following TLB shootdown is never used.
@@ -3246,7 +3285,15 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	return ret
 }
 
-func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr) {
+// returns true if the fault was handled successfully
+func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
+   ecode uintptr) bool {
+	isguard := vmi.perms == 0
+	iswrite := ecode & uintptr(PTE_W) != 0
+	writeok := vmi.perms & uint(PTE_W) != 0
+	if isguard || (iswrite && !writeok) {
+		return false
+	}
 	// pmap is Lock'ed in proc_t.pgfault...
 	if ecode & uintptr(PTE_U) == 0 {
 		// kernel page faults should be noticed and crashed upon in
@@ -3256,7 +3303,6 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 	if vmi.mtype == VSANON {
 		panic("shared anon pages should always be mapped")
 	}
-	iswrite := ecode & uintptr(PTE_W) != 0
 
 	// XXX could move this pmap walk to only the COW case where a pte is
 	// already mapped as COW.
@@ -3266,14 +3312,25 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 	if (iswrite && *pte & PTE_WASCOW != 0) ||
 	   (!iswrite && *pte & PTE_P != 0) {
 		// two threads simultaneously faulted on same page
-		return
+		return true
 	}
 
 	var p_pg int
 	perms := PTE_U | PTE_P
 	isempty := true
 
-	if iswrite {
+	// shared file mappings are handled the same way regardless of whether
+	// the fault is read or write
+	if vmi.mtype == VFILE && vmi.file.shared {
+		_, dur, err := vmi.filepage(uintptr(faultaddr))
+		if err != 0 {
+			return false
+		}
+		p_pg = int(dur)
+		if vmi.perms & uint(PTE_W) != 0 {
+			perms |= PTE_W
+		}
+	} else if iswrite {
 		// XXX could avoid copy for last process to fault on a shared
 		// page by verifying that the ref count is 1.
 
@@ -3301,7 +3358,11 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 			case VANON:
 				pgsrc = zeropg
 			case VFILE:
-				pgsrc, _ = vmi.filepage(uintptr(faultaddr))
+				var err err_t
+				pgsrc, _, err = vmi.filepage(uintptr(faultaddr))
+				if err != 0 {
+					return false
+				}
 			default:
 				panic("wut")
 			}
@@ -3317,7 +3378,10 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 		case VANON:
 			p_pg = p_zeropg
 		case VFILE:
-			_, p := vmi.filepage(uintptr(faultaddr))
+			_, p, err := vmi.filepage(uintptr(faultaddr))
+			if err != 0 {
+				return false
+			}
 			p_pg = int(p)
 		default:
 			panic("wut")
@@ -3331,6 +3395,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr, ecode uintptr
 	if tshoot {
 		proc.tlbshoot(faultaddr, 1)
 	}
+	return true
 }
 
 func sys_execv(proc *proc_t, tf *[TFSIZE]uintptr, pathn int, argn int) int {
@@ -4572,7 +4637,9 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 		if !ok {
 			panic("just mapped?")
 		}
-		sys_pgfault(proc, vmi, nil, ent, uintptr(PTE_U))
+		if !sys_pgfault(proc, vmi, nil, ent, uintptr(PTE_U)) {
+			panic("must succed")
+		}
 	}
 	if hdr.filesz == hdr.memsz {
 		return
@@ -4652,7 +4719,10 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 			panic("must succeed")
 		}
 		for i := 0; i < tlscopylen; {
-			_src, _ := tlsvmi.filepage(uintptr(tlsaddr + i))
+			_src, _, err := tlsvmi.filepage(uintptr(tlsaddr + i))
+			if err != 0 {
+				panic("must succeed")
+			}
 			off := (tlsaddr + i) & PGOFFSET
 			src := ((*[PGSIZE]uint8)(unsafe.Pointer(_src)))[off:]
 			bpg, ok := proc.userdmap8_inner(freshtls + i, true)

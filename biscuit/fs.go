@@ -2273,11 +2273,14 @@ func (idm *imemnode_t) idirempty() bool {
 
 func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	isz := idm.icache.size
+	if (len != -1 && len < 0) || offset < 0 {
+		panic("bad off/len")
+	}
+	if offset >= isz {
+		return nil, -EINVAL
+	}
 	if len == -1 || offset + len > isz {
 		len = isz - offset
-	}
-	if offset > isz || offset + len > isz || len < 0 {
-		panic("bad offset")
 	}
 	len = roundup(offset + len, PGSIZE) - rounddown(offset, PGSIZE)
 	pgc := len / PGSIZE
