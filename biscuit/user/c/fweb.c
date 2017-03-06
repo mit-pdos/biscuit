@@ -54,8 +54,7 @@ int main(int argc, char **argv)
 			err(-1, "wait");
 		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
 			errx(-1, "child failed");
-		//if (sys_prof(PROF_SAMPLE, PROF_EV_UNHALTED_CORE_CYCLES,
-		//    PROF_EVF_OS | PROF_EVF_USR, 6816) == -1)
+		//if (sys_prof(PROF_SAMPLE | PROF_DISABLE, 0, 0, 0) == -1)
 		//	err(-1, "sysprof");
 	}
 }
