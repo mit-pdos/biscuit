@@ -2049,6 +2049,7 @@ memset(void *d, int c, size_t n)
 int
 mkstemp(char *t)
 {
+	// XXX
 	static uint seed;
 	if (seed == 0)
 		seed = (uint)time(NULL);
@@ -2318,7 +2319,7 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 			if (isdigit(t) && precmode) {
 				char *nend;
 				long newprec = strtol(fmt - 1, &nend, 10);
-				if (newprec > 0) {
+				if (newprec > 0 || t == '0') {
 					prec = newprec;
 					fmt = nend;
 					continue;
@@ -2382,6 +2383,10 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 					n = -n;
 				}
 				dst += putn(dst, end, (ulong)n, 10);
+				if (prec == 0) {
+					done = 1;
+					break;
+				}
 				dst += wc(dst, end, '.');
 				n -= (ulong)n;
 				for (; prec > 0; prec--) {
