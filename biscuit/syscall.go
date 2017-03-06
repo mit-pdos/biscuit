@@ -3322,7 +3322,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
 	// shared file mappings are handled the same way regardless of whether
 	// the fault is read or write
 	if vmi.mtype == VFILE && vmi.file.shared {
-		_, dur, err := vmi.filepage(uintptr(faultaddr))
+		_, dur, err := vmi.filepage(faultaddr)
 		if err != 0 {
 			return false
 		}
@@ -3359,7 +3359,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
 				pgsrc = zeropg
 			case VFILE:
 				var err err_t
-				pgsrc, _, err = vmi.filepage(uintptr(faultaddr))
+				pgsrc, _, err = vmi.filepage(faultaddr)
 				if err != 0 {
 					return false
 				}
@@ -3378,7 +3378,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
 		case VANON:
 			p_pg = p_zeropg
 		case VFILE:
-			_, p, err := vmi.filepage(uintptr(faultaddr))
+			_, p, err := vmi.filepage(faultaddr)
 			if err != 0 {
 				return false
 			}
