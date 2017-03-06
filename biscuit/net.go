@@ -3256,8 +3256,10 @@ func (tl *tcplfops_t) close() err_t {
 			if !ok {
 				break
 			}
+			tcb.tcb_lock()
 			tcb._rst()
 			tcb.kill()
+			tcb.tcb_unlock()
 		}
 		tcpcons.listen_del(&tl.tcl)
 	}
