@@ -2279,6 +2279,57 @@ func _kready() bool {
 	return true
 }
 
+func netdump() {
+	fmt.Printf("net dump\n")
+	tcpcons.l.Lock()
+	for _, tcb := range tcpcons.econns {
+		tcb.l.Lock()
+		if tcb.state == TIMEWAIT {
+			tcb.l.Unlock()
+			continue
+		}
+		fmt.Printf("%v:%v -> %v:%v: %s\n",
+		    ip2str(tcb.lip), tcb.lport,
+		    ip2str(tcb.rip), tcb.rport,
+		    statestr[tcb.state])
+		tcb.rxbuf.syswrite(tcb.rcv.nxt,
+		   [][]uint8{[]uint8{'h'}})
+		tcb.rcv.nxt++
+		tcb.rxbuf.rcvup(tcb.rcv.nxt)
+		tcb.rxbuf.cond.Broadcast()
+		tcb.txbuf.cond.Broadcast()
+		tcb.pollers.wakeready(R_READ|R_WRITE|R_ERROR|
+		   R_HUP)
+		tcb.l.Unlock()
+	}
+	tcpcons.l.Unlock()
+}
+
+func loping() {
+	fmt.Printf("POING\n")
+	sip, dip, err := routetbl.lookup(ip4_t(0x7f000001))
+	if err != 0 {
+		panic("error")
+	}
+	dmac, err := arp_resolve(sip, dip)
+	if err != 0 {
+		panic("error")
+	}
+	nic, ok := nic_lookup(sip)
+	if !ok {
+		panic("not ok")
+	}
+	pkt := &icmppkt_t{}
+	data := make([]uint8, 8)
+	writen(data, 8, 0, int(time.Now().UnixNano()))
+	pkt.init(nic.lmac(), dmac, sip, dip, 8, data)
+	pkt.ident = 0
+	pkt.seq = 0
+	pkt.crc()
+	sgbuf := [][]uint8{pkt.hdrbytes(), data}
+	nic.tx_ipv4(sgbuf)
+}
+
 var _nflip int
 
 func kbd_daemon(cons *cons_t, km map[int]byte) {
@@ -2292,12 +2343,20 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
-			_nflip = (_nflip + 1) % 2
-			act := PROF_GOLANG
-			if _nflip == 0 {
-				act |= PROF_DISABLE
-			}
-			sys_prof(nil, act, 0, 0, 0)
+
+		} else if c == '%' {
+			//loping()
+			//netdump()
+
+			//bp := &bprof_t{}
+			//err := pprof.WriteHeapProfile(bp)
+			//if err != nil {
+			//	fmt.Printf("shat on: %v\n", err)
+			//} else {
+			//	bp.dump()
+			//	fmt.Printf("success?\n")
+			//}
+
 		}
 	}
 	var reqc chan int
