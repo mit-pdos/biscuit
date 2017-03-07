@@ -83,7 +83,7 @@ type arpv4_t struct {
 	tpa	[4]uint8
 }
 
-func (ar *arpv4_t) _init(smac []uint8) {
+func (ar *arpv4_t) _init(smac *mac_t) {
 	arp := htons(0x0806)
 	ethernet := htons(1)
 	ipv4 := htons(0x0800)
@@ -94,17 +94,14 @@ func (ar *arpv4_t) _init(smac []uint8) {
 	ar.ptype = ipv4
 	ar.hlen = macsz
 	ar.plen = ipv4sz
-	copy(ar.smac[:], smac)
+	copy(ar.smac[:], smac[:])
 }
 
-func (ar *arpv4_t) init_req(smac []uint8, sip, qip ip4_t) {
-	if len(smac) != macsz {
-		panic("bad addr")
-	}
+func (ar *arpv4_t) init_req(smac *mac_t, sip, qip ip4_t) {
 	ar._init(smac)
 	req := htons(1)
 	ar.oper = req
-	copy(ar.sha[:], smac)
+	copy(ar.sha[:], smac[:])
 	ip2sl(ar.spa[:], sip)
 	ip2sl(ar.tpa[:], qip)
 	var dur mac_t
@@ -114,18 +111,15 @@ func (ar *arpv4_t) init_req(smac []uint8, sip, qip ip4_t) {
 	}
 }
 
-func (ar *arpv4_t) init_reply(smac, dmac []uint8, sip, dip ip4_t) {
-	if len(smac) != macsz || len(dmac) != macsz {
-		panic("bad addr")
-	}
+func (ar *arpv4_t) init_reply(smac, dmac *mac_t, sip, dip ip4_t) {
 	ar._init(smac)
 	reply := htons(2)
 	ar.oper = reply
-	copy(ar.sha[:], smac)
-	copy(ar.tha[:], dmac)
+	copy(ar.sha[:], smac[:])
+	copy(ar.tha[:], dmac[:])
 	ip2sl(ar.spa[:], sip)
 	ip2sl(ar.tpa[:], dip)
-	copy(ar.dmac[:], dmac)
+	copy(ar.dmac[:], dmac[:])
 }
 
 func (ar *arpv4_t) bytes() []uint8 {
@@ -186,7 +180,7 @@ func _arp_lookup(ip ip4_t) (*arprec_t, bool) {
 
 // returns false if resolution timed out
 func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
-	nic, ok := nics[sip]
+	nic, ok := nic_lookup(sip)
 	if !ok {
 		return nil, -ENETDOWN
 	}
@@ -207,7 +201,7 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 	needstart := !ok
 	if needstart {
 		arptbl.waiters[dip] = []chan bool{mychan}
-		_net_arp_start(dip, nic)
+		_net_arp_start(nic, sip, dip)
 	} else {
 		arptbl.waiters[dip] = append(wl, mychan)
 	}
@@ -252,9 +246,9 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 	return &ar.mac, 0
 }
 
-func _net_arp_start(qip ip4_t, nic *ixgbe_t) {
+func _net_arp_start(nic nic_i, lip, qip ip4_t) {
 	var arp arpv4_t
-	arp.init_req(nic.mac[:], nic.ip, qip)
+	arp.init_req(nic.lmac(), lip, qip)
 	buf := arp.bytes()
 	sgbuf := [][]uint8{buf}
 	nic.tx_raw(sgbuf)
@@ -272,7 +266,7 @@ func net_arp(pkt [][]uint8, tlen int) {
 	buf = buf[ETHERLEN:]
 	// is it for us?
 	toip := sl2ip(buf[24:])
-	nic, ok := nics[toip]
+	nic, ok := nic_lookup(toip)
 	if !ok {
 		return
 	}
@@ -290,7 +284,7 @@ func net_arp(pkt [][]uint8, tlen int) {
 		// add the sender to our arp table
 		arp_add(fromip, &frommac)
 		var rep arpv4_t
-		rep.init_reply(nic.mac[:], frommac[:], nic.ip, fromip)
+		rep.init_reply(nic.lmac(), &frommac, toip, fromip)
 		sgbuf := [][]uint8{rep.bytes()}
 		nic.tx_raw(sgbuf)
 	}
@@ -323,7 +317,7 @@ func (r *routes_t) init() {
 	r.defgw.valid = false
 }
 
-func (r *routes_t) defaultgw(myip, gwip ip4_t) {
+func (r *routes_t) _defaultgw(myip, gwip ip4_t) {
 	r.defgw.myip = myip
 	r.defgw.ip = gwip
 	r.defgw.valid = true
@@ -358,11 +352,11 @@ func (r *routes_t) _insert(myip, netip, netmask, gwip ip4_t, isgw bool) {
 	r.routes[key] = nrt
 }
 
-func (r *routes_t) insert_gateway(myip, netip, netmask, gwip ip4_t) {
+func (r *routes_t) _insert_gateway(myip, netip, netmask, gwip ip4_t) {
 	r._insert(myip, netip, netmask, gwip, true)
 }
 
-func (r *routes_t) insert_local(myip, netip, netmask ip4_t) {
+func (r *routes_t) _insert_local(myip, netip, netmask ip4_t) {
 	r._insert(myip, netip, netmask, 0, false)
 }
 
@@ -441,7 +435,7 @@ func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) {
 	defer rt.Unlock()
 
 	newroutes := rt.routes.copy()
-	newroutes.insert_gateway(myip, netip, netmask, gwip)
+	newroutes._insert_gateway(myip, netip, netmask, gwip)
 	rt.commit(newroutes)
 }
 
@@ -450,7 +444,7 @@ func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) {
 	defer rt.Unlock()
 
 	newroutes := rt.routes.copy()
-	newroutes.insert_local(myip, netip, netmask)
+	newroutes._insert_local(myip, netip, netmask)
 	rt.commit(newroutes)
 }
 
@@ -459,7 +453,7 @@ func (rt *routetbl_t) defaultgw(myip, gwip ip4_t) {
 	defer rt.Unlock()
 
 	newroutes := rt.routes.copy()
-	newroutes.defaultgw(myip, gwip)
+	newroutes._defaultgw(myip, gwip)
 	rt.commit(newroutes)
 }
 
@@ -632,7 +626,7 @@ func rst_daemon() {
 		if err != 0 {
 			continue
 		}
-		nic, ok := nics[localip]
+		nic, ok := nic_lookup(localip)
 		if !ok {
 			continue
 		}
@@ -641,7 +635,7 @@ func rst_daemon() {
 			continue
 		}
 		pkt := _mkrst(rmsg.seq, rmsg.k.lip, rmsg.k.rip, rmsg.k.lport,
-		    rmsg.k.rport, &nic.mac, dmac)
+		    rmsg.k.rport, nic.lmac(), dmac)
 		if rmsg.useack {
 			ackf := uint8(1 << 4)
 			pkt.tcphdr.flags |= ackf
@@ -670,7 +664,7 @@ func icmp_daemon() {
 		if err != 0 {
 			panic("routing failed")
 		}
-		nic, ok := nics[localip]
+		nic, ok := nic_lookup(localip)
 		if !ok {
 			panic("no such nic")
 		}
@@ -685,7 +679,7 @@ func icmp_daemon() {
 		echodata := make([]uint8, len(origdata))
 		copy(echodata, origdata)
 		var reply icmppkt_t
-		reply.init(&nic.mac, dmac, nic.ip, fromip, 0, echodata)
+		reply.init(nic.lmac(), dmac, localip, fromip, 0, echodata)
 		reply.ident = ident
 		reply.seq = seq
 		reply.crc()
@@ -707,7 +701,7 @@ func net_icmp(pkt [][]uint8, tlen int) {
 
 	// for us?
 	toip := sl2ip(buf[16:])
-	if _, ok := nics[toip]; !ok {
+	if _, ok := nic_lookup(toip); !ok {
 		return
 	}
 
@@ -1460,7 +1454,7 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 		return
 	}
 
-	nic, ok := nics[tk.lip]
+	nic, ok := nic_lookup(tk.lip)
 	if !ok {
 		panic("no such nic")
 	}
@@ -1476,7 +1470,7 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 	newcon.rcv.nxt = theirseq + 1
 	newcon.snd.nxt = ourseq + 1
 	newcon.snd.win = ntohs(tcp.win)
-	smac := &nic.mac
+	smac := nic.lmac()
 	dmac := rmac
 	newcon.smac = smac
 	newcon.dmac = &mac_t{}
@@ -1637,7 +1631,7 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) err_t {
 		return err
 	}
 
-	nic, ok := nics[localip]
+	nic, ok := nic_lookup(localip)
 	if !ok {
 		return -EHOSTUNREACH
 	}
@@ -1664,7 +1658,7 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) err_t {
 		tc.bound = true
 	}
 
-	tc.tcb_init(localip, dip, tc.lport, dport, &nic.mac, dmac,
+	tc.tcb_init(localip, dip, tc.lport, dport, nic.lmac(), dmac,
 	    rand.Uint32())
 	tcpcons.tcb_insert(tc, wasany)
 
@@ -1894,7 +1888,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 
 	pkt, opt := tc.mkack(tc.snd.nxt, tc.rcv.nxt)
 	tc.tstamp.acksent = ntohl(pkt.tcphdr.ack)
-	nic, ok := nics[tc.lip]
+	nic, ok := nic_lookup(tc.lip)
 	if !ok {
 		fmt.Printf("NIC gone!\n")
 		tc.dead = true
@@ -1976,7 +1970,7 @@ func (tc *tcptcb_t) seg_one(seq uint32) int {
 	if !_seqbetween(tc.snd.una, seq, winend) {
 		panic("must be in send window")
 	}
-	nic, ok := nics[tc.lip]
+	nic, ok := nic_lookup(tc.lip)
 	if !ok {
 		panic("NIC gone")
 	}
@@ -3035,7 +3029,7 @@ func (tf *tcpfops_t) bind(proc *proc_t, saddr []uint8) err_t {
 	}
 
 	if lip != INADDR_ANY {
-		if _, ok := nics[lip]; !ok {
+		if _, ok := nic_lookup(lip); !ok {
 			return -EADDRNOTAVAIL
 		}
 	}
@@ -3461,7 +3455,46 @@ func (tl *tcplfops_t) shutdown(read, write bool) err_t {
 	return -ENOTCONN
 }
 
-var nics = map[ip4_t]*ixgbe_t{}
+type nic_i interface {
+	// the argument is scatter-gather buffer of the entire packet including
+	// all headers. returns true if the packet was enqueued in the NIC's
+	// transmit buffer, false otherwise.
+	tx_raw([][]uint8) bool
+	tx_ipv4([][]uint8) bool
+	tx_tcp([][]uint8) bool
+	tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool
+	lmac() *mac_t
+}
+
+var nics struct {
+	l	sync.Mutex
+	m	*map[ip4_t]nic_i
+}
+
+func nic_insert(ip ip4_t, n nic_i) {
+	nics.l.Lock()
+	defer nics.l.Unlock()
+
+	newm := make(map[ip4_t]nic_i, len(*nics.m) + 1)
+	for k, v := range *nics.m {
+		newm[k] = v
+	}
+	if _, ok := newm[ip]; ok {
+		panic("two nics for same ip")
+	}
+	newm[ip] = n
+	p := unsafe.Pointer(&newm)
+	dst := (*unsafe.Pointer)(unsafe.Pointer(&nics.m))
+	// store-release on x86
+	atomic.StorePointer(dst, p)
+}
+
+func nic_lookup(lip ip4_t) (nic_i, bool) {
+	pa := (*unsafe.Pointer)(unsafe.Pointer(&nics.m))
+	mappy := *(*map[ip4_t]nic_i)(atomic.LoadPointer(pa))
+	nic, ok := mappy[lip]
+	return nic, ok
+}
 
 // network stack processing begins here. pkt references DMA memory and will be
 // clobbered once net_start returns to the caller.
@@ -3541,6 +3574,7 @@ func netchk() {
 func net_init() {
 	netchk()
 
+	nics.m = new(map[ip4_t]nic_i)
 	arptbl.m = make(map[ip4_t]*arprec_t)
 	arptbl.waiters = make(map[ip4_t][]chan bool)
 	arptbl.enttimeout = 20*time.Minute
@@ -3609,6 +3643,13 @@ func net_test() {
 			panic("exp gw2")
 		}
 	}
+	ix := &ixgbe_t{}
+	nic_insert(0, ix)
+	got, ok := nic_lookup(0)
+	if !ok || got != ix {
+		panic("eh?")
+	}
+	nics.m = new(map[ip4_t]nic_i)
 
 	// test ACK check wrapping
 	tcb := &tcptcb_t{}

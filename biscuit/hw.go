@@ -1875,32 +1875,37 @@ func (x *ixgbe_t) pg_new() (*[512]int, uintptr) {
 	return a, b
 }
 
+func (x *ixgbe_t) lmac() *mac_t {
+	return &x.mac
+}
+
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
-func (x *ixgbe_t) tx_raw(buf [][]uint8) {
-	x._tx_nowait(buf, false, false, false, 0, 0)
+func (x *ixgbe_t) tx_raw(buf [][]uint8) bool {
+	return x._tx_nowait(buf, false, false, false, 0, 0)
 }
 
-func (x *ixgbe_t) tx_ipv4(buf [][]uint8) {
-	x._tx_nowait(buf, true, false, false, 0, 0)
+func (x *ixgbe_t) tx_ipv4(buf [][]uint8) bool {
+	return x._tx_nowait(buf, true, false, false, 0, 0)
 }
 
-func (x *ixgbe_t) tx_tcp(buf [][]uint8) {
-	x._tx_nowait(buf, true, true, false, 0, 0)
+func (x *ixgbe_t) tx_tcp(buf [][]uint8) bool {
+	return x._tx_nowait(buf, true, true, false, 0, 0)
 }
 
-func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) {
-	x._tx_nowait(buf, true, true, true, tcphlen, mss)
+func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
+	return x._tx_nowait(buf, true, true, true, tcphlen, mss)
 }
 
 func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
-    mss int) {
+    mss int) bool {
 	x.tx.Lock()
 	ok := x._tx_enqueue(buf, ipv4, tcp, tso, tcphlen, mss)
 	x.tx.Unlock()
 	if !ok {
 		fmt.Printf("tx packet(s) dropped!\n")
 	}
+	return ok
 }
 
 // returns true if the header sizes or context type have changed and thus a new
@@ -2175,7 +2180,7 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 				// 18.26.5.49 (bhw)
 				me := ip4_t(0x121a0531)
 				x.ip = me
-				nics[me] = x
+				nic_insert(me, x)
 
 				netmask := ip4_t(0xfffffe00)
 				// 18.26.5.1
