@@ -178,11 +178,15 @@ func _arp_lookup(ip ip4_t) (*arprec_t, bool) {
 	return ar, ok
 }
 
-// returns false if resolution timed out
+// returns destination mac and error
 func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 	nic, ok := nic_lookup(sip)
 	if !ok {
 		return nil, -ENETDOWN
+	}
+
+	if dip == lo.lip {
+		return &lo.mac, 0
 	}
 
 	arptbl.Lock()
@@ -465,7 +469,12 @@ func (rt *routetbl_t) commit(newroutes *routes_t) {
 	// store with the caller
 }
 
+// returns the local IP, the destination IP (gateway or destination host), and
+// error
 func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, err_t) {
+	if dip == lo.lip {
+		return lo.lip, lo.lip, 0
+	}
 	src := (* unsafe.Pointer)(unsafe.Pointer(&rt.routes))
 	// load-acquire on x86
 	p := atomic.LoadPointer(src)
@@ -3457,11 +3466,12 @@ func (tl *tcplfops_t) shutdown(read, write bool) err_t {
 
 type nic_i interface {
 	// the argument is scatter-gather buffer of the entire packet including
-	// all headers. returns true if the packet was enqueued in the NIC's
-	// transmit buffer, false otherwise.
-	tx_raw([][]uint8) bool
-	tx_ipv4([][]uint8) bool
-	tx_tcp([][]uint8) bool
+	// all headers. returns true if the packet was copied to the NIC's
+	// transmit buffer (ie buf cannot be referenced once tx_* returns),
+	// false otherwise.
+	tx_raw(buf [][]uint8) bool
+	tx_ipv4(buf [][]uint8) bool
+	tx_tcp(buf [][]uint8) bool
 	tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool
 	lmac() *mac_t
 }
@@ -3580,6 +3590,9 @@ func net_init() {
 	arptbl.enttimeout = 20*time.Minute
 	arptbl.restimeout = 5*time.Second
 
+	lo.lo_start()
+	nic_insert(lo.lip, lo)
+
 	routetbl.init()
 
 	go icmp_daemon()
@@ -3643,13 +3656,6 @@ func net_test() {
 			panic("exp gw2")
 		}
 	}
-	ix := &ixgbe_t{}
-	nic_insert(0, ix)
-	got, ok := nic_lookup(0)
-	if !ok || got != ix {
-		panic("eh?")
-	}
-	nics.m = new(map[ip4_t]nic_i)
 
 	// test ACK check wrapping
 	tcb := &tcptcb_t{}
@@ -3743,4 +3749,149 @@ func net_test() {
 	if len(tr.segs) != 0 {
 		panic("no")
 	}
+}
+
+type lomsg_t struct {
+	buf	[]uint8
+	tcphlen	int
+	mss	int
+	tso	bool
+}
+
+type lo_t struct {
+	txc	chan lomsg_t
+	mac	mac_t
+	lip	ip4_t
+}
+
+var lo = &lo_t{}
+
+func (l *lo_t) lo_start() {
+	l.lip = ip4_t(0x7f000001)
+	l.txc = make(chan lomsg_t, 128)
+	go l._daemon()
+}
+
+func (l *lo_t) _daemon() {
+	for {
+		lm := <- l.txc
+		if lm.tso {
+			l._tso(lm.buf, lm.tcphlen, lm.mss)
+		} else {
+			sg := [][]uint8{lm.buf}
+			net_start(sg, len(lm.buf))
+		}
+	}
+}
+
+func (l *lo_t) _send(lm lomsg_t) bool {
+	sent := true
+	select {
+	case l.txc <- lm:
+	default:
+		sent = false
+	}
+	return sent
+}
+
+func (l *lo_t) _copysend(buf [][]uint8, tcphl, mss int) bool {
+	if (tcphl == 0) != (mss == 0) {
+		panic("both or none")
+	}
+	tlen := 0
+	for _, s := range buf {
+		tlen += len(s)
+	}
+	b := make([]uint8, tlen)
+	to := b
+	for _, s := range buf {
+		did := copy(to, s)
+		if did < len(s) {
+			panic("must fit")
+		}
+		to = to[did:]
+	}
+	return l._send(lomsg_t{buf: b, tcphlen: tcphl, mss: mss, tso: false})
+}
+
+func (l *lo_t) _tso(buf []uint8, tcphl, mss int) {
+	if len(buf) < ETHERLEN + IP4LEN + TCPLEN {
+		return
+	}
+	ip4, rest, ok := sl2iphdr(buf[ETHERLEN:])
+	if !ok {
+		return
+	}
+	tcph, _, rest, ok := sl2tcphdr(rest)
+	if !ok {
+		return
+	}
+	if tcph.isrst() {
+		panic("tcp tso reset")
+	}
+	doff := int(tcph.dataoff >> 4)*4
+	flen := ETHERLEN + IP4LEN + TCPLEN + doff
+	if len(buf) < flen {
+		return
+	}
+	lastfin := tcph.isfin()
+	lastpush := tcph.ispush()
+	fin := uint8(1 << 0)
+	pu := uint8(1 << 3)
+	tcph.flags &^= (fin | pu)
+
+	fullhdr := buf[ETHERLEN + IP4LEN + TCPLEN + doff:]
+	sgbuf := [][]uint8{fullhdr, nil}
+	for len(rest) != 0 {
+		s := rest
+		last := true
+		if len(s) > mss {
+			s = s[:mss]
+			last = false
+		}
+		if last {
+			if lastfin {
+				tcph.flags |= fin
+			}
+			if lastpush {
+				tcph.flags |= pu
+			}
+		}
+		iplen := len(fullhdr[ETHERLEN:]) + len(s)
+		if iplen > mss {
+			panic("very naughty")
+		}
+		ip4.tlen = htons(uint16(iplen))
+		sgbuf[1] = s
+		net_start(sgbuf, len(sgbuf[0]) + len(sgbuf[1]))
+		// only first packet gets syn
+		if tcph.issyn() {
+			synf := uint8(1 << 1)
+			tcph.flags &^= synf
+		}
+		// increase sequence
+		did := len(s)
+		tcph.seq = htonl(uint32(did) + ntohl(tcph.seq))
+		rest = rest[did:]
+	}
+}
+
+func (l *lo_t) tx_raw(buf [][]uint8) bool {
+	return l._copysend(buf, 0, 0)
+}
+
+func (l *lo_t) tx_ipv4(buf [][]uint8) bool {
+	return l._copysend(buf, 0, 0)
+}
+
+func (l *lo_t) tx_tcp(buf [][]uint8) bool {
+	return l._copysend(buf, 0, 0)
+}
+
+func (l *lo_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
+	return l._copysend(buf, tcphlen, mss)
+}
+
+func (l *lo_t) lmac() *mac_t {
+	return &l.mac
 }
