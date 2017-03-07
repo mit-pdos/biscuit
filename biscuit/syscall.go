@@ -170,6 +170,8 @@ const(
     SO_SNDBUF      = 1
     SO_SNDTIMEO    = 2
     SO_ERROR       = 3
+    SO_NAME        = 10
+    SO_PEER        = 11
   SYS_FORK     = 57
     FORK_PROCESS = 0x1
     FORK_THREAD  = 0x2
@@ -3165,6 +3167,7 @@ func sys_getsockopt(proc *proc_t, fdn, level, opt, optvaln, optlenn int) int {
 		olen = l
 	}
 	bufarg := proc.mkuserbuf(optvaln, olen)
+	// XXX why intarg??
 	intarg := optvaln
 	fd, ok := proc.fd_get(fdn)
 	if !ok {

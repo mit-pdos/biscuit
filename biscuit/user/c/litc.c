@@ -336,6 +336,18 @@ getsockopt(int fd, int level, int opt, void *optv, socklen_t *optlen)
 }
 
 int
+getpeername(int s, struct sockaddr *sa, socklen_t *sl)
+{
+	return getsockopt(s, SOL_SOCKET, SO_PEER, sa, sl);
+}
+
+int
+getsockname(int s, struct sockaddr *sa, socklen_t *sl)
+{
+	return getsockopt(s, SOL_SOCKET, SO_NAME, sa, sl);
+}
+
+int
 gettimeofday(struct timeval *tv, struct timezone *tz)
 {
 	if (tz)
@@ -3520,12 +3532,6 @@ chown(const char *a, uid_t b, gid_t c)
 
 time_t
 mktime(struct tm *a)
-{
-	FAIL;
-}
-
-int
-getsockname(int a, struct sockaddr *b, socklen_t *c)
 {
 	FAIL;
 }

@@ -1401,6 +1401,7 @@ func (tcl *tcplisten_t) tcbready(tinc tcpinc_t, rack uint32, rwin uint16,
 	tcb := &tcptcb_t{}
 	tcb.tcb_init(tinc.lip, tinc.rip, tinc.lport, tinc.rport, tinc.smac,
 	    tinc.dmac, tinc.snd.nxt)
+	tcb.bound = true
 	tcb.state = ESTAB
 	tcb.set_seqs(tinc.snd.nxt, tinc.rcv.nxt)
 	tcb.snd.win = tinc.snd.win
@@ -2486,10 +2487,6 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 	} else if tc.state != ESTAB && tc.state != CLOSEWAIT {
 		return -EINVAL
 	}
-	if tc.txdone {
-		panic("how")
-		return 0
-	}
 
 	tc.txdone = true
 	tc.snd.finseq = tc.txbuf.end_seq()
@@ -3204,12 +3201,26 @@ func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 
 func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
-	panic("no imp")
+	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
 	switch opt {
-	case SO_ERROR:
-		dur := [4]uint8{}
-		writen(dur[:], 4, 0, 0)
-		did, err := bufarg.uiowrite(dur[:])
+	case SO_NAME, SO_PEER:
+		if !tf.tcb.bound {
+			return 0, -EADDRNOTAVAIL
+		}
+		b := []uint8{8, AF_INET, 0, 0, 0, 0, 0, 0}
+		var port, ip int
+		if opt == SO_NAME {
+			port = int(tf.tcb.lport)
+			ip = int(tf.tcb.lip)
+		} else {
+			port = int(tf.tcb.rport)
+			ip = int(tf.tcb.rip)
+		}
+		writen(b, 2, 2, port)
+		writen(b, 4, 4, ip)
+		did, err := bufarg.uiowrite(b)
 		return did, err
 	default:
 		return 0, -EOPNOTSUPP

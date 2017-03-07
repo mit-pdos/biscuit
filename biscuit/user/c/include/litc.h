@@ -418,6 +418,8 @@ pid_t setsid(void);
 #define		SO_LINGER	8
 // not supported on linux...
 #define		SO_SNDLOWAT	9
+#define		SO_NAME		10
+#define		SO_PEER		11
 struct linger {
 	int l_onoff;
 	int l_linger;
@@ -913,6 +915,7 @@ struct hostent {
 struct hostent *gethostbyname(const char *);
 int chown(const char *, uid_t, gid_t);
 time_t mktime(struct tm *);
+int getpeername(int, struct sockaddr *, socklen_t *);
 int getsockname(int, struct sockaddr *, socklen_t *);
 int setsockopt(int, int, int, const void *, socklen_t);
 int gethostname(char *, size_t);
