@@ -1347,6 +1347,32 @@ func (rd *rxdesc_t) eop() bool {
 	return rd.hwdesc.p_hdr & eop != 0
 }
 
+func (rd *rxdesc_t) _fcoe() bool {
+	t := atomic.LoadUint64(&rd.hwdesc.p_data)
+	return t & (1 << 15) != 0
+}
+
+// the NIC drops IP4/TCP packets that have a bad checksum when FCTRL.SBP is 0.
+func (rd *rxdesc_t) ipcsumok() bool {
+	if rd._fcoe() {
+		return true
+	}
+	v := atomic.LoadUint64(&rd.hwdesc.p_hdr)
+	ipcs := v & (1 << 6) != 0
+	ipe :=  v & (1 << 31) != 0
+	return !ipcs || (ipcs && !ipe)
+}
+
+func (rd *rxdesc_t) l4csumok() bool {
+	if rd._fcoe() {
+		return true
+	}
+	v := atomic.LoadUint64(&rd.hwdesc.p_hdr)
+	l4i := v & (1 << 5) != 0
+	l4e :=  v & (1 << 30) != 0
+	return !l4i || (l4i && !l4e)
+}
+
 func (rd *rxdesc_t) pktlen() int {
 	return int((rd.hwdesc.p_hdr >> 32) & 0xffff)
 }
@@ -2076,9 +2102,7 @@ func (x *ixgbe_t) rx_consume() {
 	// skip the empty tail
 	tail = (tail + 1) % x.rx.ndescs
 	otail := tail
-	tlen := 0
-	paranoia := false
-	pkt := x.rx.pkt[0:0]
+	pkt := x.rx.pkt[0:1]
 	for {
 		rd := &x.rx.descs[tail]
 		if !rd.rxdone() {
@@ -2087,15 +2111,12 @@ func (x *ixgbe_t) rx_consume() {
 		// packet may span multiple descriptors (only for RSC when MTU
 		// less than descriptor DMA buffer size?)
 		buf := dmaplen(uintptr(rd.p_pbuf), rd.pktlen())
-		tlen += rd.pktlen()
-		pkt = append(pkt, buf)
-		if rd.eop() {
-			paranoia = true
-			net_start(pkt, tlen)
-			numpkts++
-			pkt = x.rx.pkt[0:0]
-			tlen = 0
+		pkt[0] = buf
+		if !rd.eop() {
+			panic("pkt > mtu?")
 		}
+		net_start(pkt, len(buf))
+		numpkts++
 		if tail == tailend {
 			break
 		}
@@ -2103,9 +2124,6 @@ func (x *ixgbe_t) rx_consume() {
 		if tail == x.rx.ndescs {
 			tail = 0
 		}
-	}
-	if !paranoia {
-		panic("packet larger than MTU?")
 	}
 	// only reset descriptors for full packets
 	for {
