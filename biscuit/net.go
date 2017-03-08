@@ -1343,6 +1343,8 @@ type tcplisten_t struct {
 	}
 	openc	int
 	pollers	pollers_t
+	sndsz	int
+	rcvsz	int
 }
 
 type tcpinc_t struct {
@@ -1403,7 +1405,7 @@ func (tcl *tcplisten_t) tcbready(tinc tcpinc_t, rack uint32, rwin uint16,
     ropt tcpopt_t, rest [][]uint8) *tcptcb_t {
 	tcb := &tcptcb_t{}
 	tcb.tcb_init(tinc.lip, tinc.rip, tinc.lport, tinc.rport, tinc.smac,
-	    tinc.dmac, tinc.snd.nxt)
+	    tinc.dmac, tinc.snd.nxt, tcl.sndsz, tcl.rcvsz)
 	tcb.bound = true
 	tcb.state = ESTAB
 	tcb.set_seqs(tinc.snd.nxt, tinc.rcv.nxt)
@@ -1558,6 +1560,8 @@ type tcptcb_t struct {
 	twdeath	bool
 	bound	bool
 	twchan	chan bool
+	sndsz	int
+	rcvsz	int
 }
 
 type tcpstate_t uint
@@ -1668,7 +1672,7 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) err_t {
 	}
 
 	tc.tcb_init(localip, dip, tc.lport, dport, nic.lmac(), dmac,
-	    rand.Uint32())
+	    rand.Uint32(), tc.sndsz, tc.rcvsz)
 	tcpcons.tcb_insert(tc, wasany)
 
 	tc._nstate(TCPNEW, SYNSENT)
@@ -2512,7 +2516,7 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 var _nilmac mac_t
 
 func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
-    dmac *mac_t, sndnxt uint32) {
+    dmac *mac_t, sndnxt uint32, sndsz, rcvsz int) {
 	if lip == INADDR_ANY || rip == INADDR_ANY || lport == 0 || rport == 0 {
 		panic("all IPs/ports must be known")
 	}
@@ -2526,8 +2530,14 @@ func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
 	tc.dmac = dmac
 	tc.smac = smac
 	defbufsz := (1 << 14)
-	tc.txbuf.tbuf_init(defbufsz, tc)
-	tc.rxbuf.tbuf_init(defbufsz, tc)
+	if sndsz == 0 {
+		sndsz = defbufsz
+	}
+	if rcvsz == 0 {
+		rcvsz = defbufsz
+	}
+	tc.txbuf.tbuf_init(sndsz, tc)
+	tc.rxbuf.tbuf_init(rcvsz, tc)
 	// cached tcp timestamp option
 	_opt := [12]uint8{1, 1, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0}
 	tc.opt = _opt[:]
@@ -3230,6 +3240,59 @@ func (tf *tcpfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 	}
 }
 
+func (tf *tcpfops_t) setsockopt(p *proc_t, lev, opt int, src userio_i,
+   intarg int) err_t {
+	tf.tcb.tcb_lock()
+	defer tf.tcb.tcb_unlock()
+
+	if lev != SOL_SOCKET {
+		return -EOPNOTSUPP
+	}
+	ret := -EOPNOTSUPP
+	switch opt {
+	case SO_SNDBUF, SO_RCVBUF:
+		n := uint(intarg)
+		// circbuf requires that the buffer size is power-of-2. my
+		// window handling assumes the buffer size > mss.
+		mn := uint(1 << 11)
+		mx := uint(1 << 15)
+		if n < mn || n > mx || n & (n - 1) != 0 {
+			ret = -EINVAL
+			break
+		}
+		var cb *circbuf_t
+		var sp *int
+		if opt == SO_SNDBUF {
+			cb = &tf.tcb.txbuf.cbuf
+			sp = &tf.tcb.sndsz
+		} else {
+			cb = &tf.tcb.rxbuf.cbuf
+			sp = &tf.tcb.rcvsz
+		}
+		if cb.used() > int(n) {
+			ret = -EINVAL
+			break
+		}
+		*sp = int(n)
+		ret = 0
+		if cb.bufsz == 0 {
+			break
+		}
+		nb := make([]uint8, n)
+		fb := &fakeubuf_t{}
+		fb.fake_init(nb)
+		did, err := cb.copyout(fb)
+		if err != 0 {
+			panic("must succeed")
+		}
+		cb.buf = nb
+		cb.bufsz = len(nb)
+		cb.head = did
+		cb.tail = 0
+	}
+	return ret
+}
+
 func (tf *tcpfops_t) shutdown(read, write bool) err_t {
 	tf.tcb.tcb_lock()
 	ret := tf.tcb.shutdown(read, write)
@@ -3458,6 +3521,36 @@ func (tl *tcplfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 	default:
 		return 0, -EOPNOTSUPP
 	}
+}
+
+func (tl *tcplfops_t) setsockopt(proc *proc_t, lev, opt int, bufarg userio_i,
+   intarg int) err_t {
+	tl.tcl.l.Lock()
+	defer tl.tcl.l.Unlock()
+
+	if lev != SOL_SOCKET {
+		return -EOPNOTSUPP
+	}
+	ret := -EOPNOTSUPP
+	switch opt {
+	case SO_SNDBUF, SO_RCVBUF:
+		n := uint(intarg)
+		mn := uint(1 << 11)
+		mx := uint(1 << 20)
+		if n < mn || n > mx || n & (n - 1) != 0 {
+			ret = -EINVAL
+			break
+		}
+		var sp *int
+		if opt == SO_SNDBUF {
+			sp = &tl.tcl.sndsz
+		} else {
+			sp = &tl.tcl.rcvsz
+		}
+		*sp = int(n)
+		ret = 0
+	}
+	return ret
 }
 
 func (tl *tcplfops_t) shutdown(read, write bool) err_t {

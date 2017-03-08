@@ -200,6 +200,7 @@ type fdops_i interface {
 
 	fcntl(*proc_t, int, int) int
 	getsockopt(*proc_t, int, userio_i, int) (int, err_t)
+	setsockopt(*proc_t, int, int, userio_i, int) err_t
 	shutdown(rdone, wdone bool) err_t
 }
 
@@ -1770,11 +1771,8 @@ type circbuf_t struct {
 var _bufpool = sync.Pool{New: func() interface{} { return make([]uint8, 512)}}
 
 func (cb *circbuf_t) cb_init(sz int) {
-	if sz != 512 && sz != 1 << 14 {
-		panic("sz must be power of 2")
-	}
 	bufmax := 1024*1024
-	if sz < 0 || sz > bufmax {
+	if sz <= 0 || sz > bufmax || sz & (sz - 1) != 0 {
 		panic("bad circbuf size")
 	}
 	cb.buf = _bufpool.Get().([]uint8)

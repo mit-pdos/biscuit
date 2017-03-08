@@ -31,6 +31,7 @@
 #define SYS_RECVMSG      51
 #define SYS_SENDMSG      52
 #define SYS_GETSOCKOPT   55
+#define SYS_SETSOCKOPT   56
 #define SYS_FORK         57
 #define SYS_EXECV        59
 #define SYS_EXIT         60
@@ -630,6 +631,33 @@ setsid(void)
 {
 	printf("warning: no sessions or process groups yet\n");
 	return getpid();
+}
+
+int
+setsockopt(int a, int b, int c, const void *d, socklen_t e)
+{
+	static char *on[] = {
+#define F(x) [x] = #x
+		F(SO_SNDTIMEO),
+		F(SO_ERROR),
+		F(SO_TYPE),
+		F(SO_REUSEADDR),
+		F(SO_KEEPALIVE),
+		F(SO_LINGER),
+		F(SO_SNDLOWAT),
+		F(TCP_NODELAY),
+#undef F
+	};
+	long ret = 0;
+	if (on[c] != NULL) {
+		errno = 0;
+		fprintf(stderr, "warning: setsockopt no-op for %s\n", on[c]);
+	} else {
+		ret = syscall(SA(a), SA(b), SA(c), SA(d), SA(e),
+		    SYS_SETSOCKOPT);
+		ERRNO_NEG(ret);
+	}
+	return (int)ret;
 }
 
 int
@@ -3534,28 +3562,6 @@ time_t
 mktime(struct tm *a)
 {
 	FAIL;
-}
-
-int
-setsockopt(int a, int b, int c, const void *d, socklen_t e)
-{
-	static char *on[] = {
-#define F(x) [x] = #x
-		F(SO_SNDBUF),
-		F(SO_SNDTIMEO),
-		F(SO_ERROR),
-		F(SO_TYPE),
-		F(SO_RCVBUF),
-		F(SO_REUSEADDR),
-		F(SO_KEEPALIVE),
-		F(SO_LINGER),
-		F(SO_SNDLOWAT),
-		F(TCP_NODELAY),
-#undef F
-	};
-	errno = 0;
-	fprintf(stderr, "warning: setsockopt no-op for %s\n", on[c]);
-	return 0;
 }
 
 int

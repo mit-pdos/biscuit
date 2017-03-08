@@ -610,6 +610,10 @@ func (fo *fsfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 	return 0, -ENOTSOCK
 }
 
+func (fo *fsfops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -ENOTSOCK
+}
+
 func (fo *fsfops_t) shutdown(read, write bool) err_t {
 	return -ENOTSOCK
 }
@@ -740,6 +744,10 @@ func (df *devfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 func (df *devfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
+}
+
+func (df *devfops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -ENOTSOCK
 }
 
 func (df *devfops_t) shutdown(read, write bool) err_t {
@@ -888,6 +896,10 @@ func (raw *rawdfops_t) fcntl(proc *proc_t, cmd, opt int) int {
 func (raw *rawdfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
     intarg int) (int, err_t) {
 	return 0, -ENOTSOCK
+}
+
+func (raw *rawdfops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -ENOTSOCK
 }
 
 func (raw *rawdfops_t) shutdown(read, write bool) err_t {

@@ -164,12 +164,14 @@ const(
     MSG_CTRUNC   msgfl_t = 1 << 1
   SYS_SENDMSG  = 52
   SYS_GETSOCKOPT = 55
+  SYS_SETSOCKOPT = 56
     // socket levels
     SOL_SOCKET     = 1
     // socket options
     SO_SNDBUF      = 1
     SO_SNDTIMEO    = 2
     SO_ERROR       = 3
+    SO_RCVBUF      = 5
     SO_NAME        = 10
     SO_PEER        = 11
   SYS_FORK     = 57
@@ -331,6 +333,8 @@ func syscall(p *proc_t, tid tid_t, tf *[TFSIZE]uintptr) int {
 		ret = sys_sendmsg(p, a1, a2, a3)
 	case SYS_GETSOCKOPT:
 		ret = sys_getsockopt(p, a1, a2, a3, a4, a5)
+	case SYS_SETSOCKOPT:
+		ret = sys_setsockopt(p, a1, a2, a3, a4, a5)
 	case SYS_FORK:
 		ret = sys_fork(p, tf, a1, a2)
 	case SYS_EXECV:
@@ -1422,6 +1426,10 @@ func (of *pipefops_t) getsockopt(*proc_t, int, userio_i, int) (int, err_t) {
 	return 0, -ENOTSOCK
 }
 
+func (of *pipefops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -ENOTSOCK
+}
+
 func (of *pipefops_t) shutdown(read, write bool) err_t {
 	return -ENOTCONN
 }
@@ -2283,6 +2291,10 @@ func (sf *sudfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 	return 0, -EOPNOTSUPP
 }
 
+func (sf *sudfops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -EOPNOTSUPP
+}
+
 func (sf *sudfops_t) shutdown(read, write bool) err_t {
 	return -ENOTSOCK
 }
@@ -2790,6 +2802,10 @@ func (sus *susfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 	}
 }
 
+func (sus *susfops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -EOPNOTSUPP
+}
+
 func (sus *susfops_t) shutdown(read, write bool) err_t {
 	panic("no imp")
 }
@@ -3128,6 +3144,10 @@ func (sf *suslfops_t) getsockopt(proc *proc_t, opt int, bufarg userio_i,
 	return 0, -EOPNOTSUPP
 }
 
+func (sf *suslfops_t) setsockopt(*proc_t, int, int, userio_i, int) err_t {
+	return -EOPNOTSUPP
+}
+
 func (sf *suslfops_t) shutdown(read, write bool) err_t {
 	return -ENOTCONN
 }
@@ -3183,6 +3203,27 @@ func sys_getsockopt(proc *proc_t, fdn, level, opt, optvaln, optlenn int) int {
 		}
 	}
 	return 0
+}
+
+func sys_setsockopt(proc *proc_t, fdn, level, opt, optvaln, optlenn int) int {
+	if optlenn < 0 {
+		return int(-EFAULT)
+	}
+	var intarg int
+	if optlenn >= 4 {
+		var ok bool
+		intarg, ok = proc.userreadn(optvaln, 4)
+		if !ok {
+			return int(-EFAULT)
+		}
+	}
+	bufarg := proc.mkuserbuf(optvaln, optlenn)
+	fd, ok := proc.fd_get(fdn)
+	if !ok {
+		return int(-EBADF)
+	}
+	err := fd.fops.setsockopt(proc, level, opt, bufarg, intarg)
+	return int(err)
 }
 
 func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
