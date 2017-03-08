@@ -132,12 +132,6 @@ func tfdump(tf *[TFSIZE]int) {
 	fmt.Printf("RSP: %#x\n", tf[TF_RSP])
 }
 
-// XXX
-func cdelay(n int) {
-	for i := 0; i < n*1000000; i++ {
-	}
-}
-
 type dev_t struct {
 	major	int
 	minor	int
@@ -2134,7 +2128,7 @@ func cpus_start(ncpu, aplim int) {
 	// sgdt and sidt save 10 bytes
 	runtime.Sgdt(&ss[sgdt])
 	runtime.Sidt(&ss[sidt])
-	ss[sapcnt] = 0
+	atomic.StoreUintptr(&ss[sapcnt], 0)
 	// for BSP:
 	// 	int stack	[0xa100000000, 0xa100001000)
 	// 	guard page	[0xa100001000, 0xa100002000)
@@ -2144,25 +2138,25 @@ func cpus_start(ncpu, aplim int) {
 	// 	int stack	BSP's + apnum*4*PGSIZE + 0*PGSIZE
 	// 	NMI stack	BSP's + apnum*4*PGSIZE + 2*PGSIZE
 	stackstart := uintptr(0xa100004000)
-	ss[sstacks] = stackstart   // each ap grabs a unique stack
-	ss[sproceed] = 0
+	// each ap grabs a unique stack
+	atomic.StoreUintptr(&ss[sstacks], stackstart)
+	atomic.StoreUintptr(&ss[sproceed], 0)
 
-	// XXX make sure secret storage values are not in store buffer
 	dummy := int64(0)
 	atomic.CompareAndSwapInt64(&dummy, 0, 10)
 
 	initipi(true)
 	// not necessary since we assume lapic version >= 1.x (ie not 82489DX)
 	//initipi(false)
-	cdelay(1)
+	time.Sleep(10*time.Millisecond)
 
 	startupipi()
-	cdelay(1)
+	time.Sleep(10*time.Millisecond)
 	startupipi()
 
 	// wait a while for hopefully all APs to join.
-	cdelay(500)
-	apcnt = int(ss[sapcnt])
+	time.Sleep(500*time.Millisecond)
+	apcnt = int(atomic.LoadUintptr(&ss[sapcnt]))
 	if apcnt > aplim {
 		apcnt = aplim
 	}
@@ -2172,7 +2166,7 @@ func cpus_start(ncpu, aplim int) {
 	cpus_stack_init(apcnt, stackstart)
 
 	// tell the cpus to carry on
-	ss[sproceed] = uintptr(apcnt)
+	atomic.StoreUintptr(&ss[sproceed], uintptr(apcnt))
 
 	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], apcnt)
 }
