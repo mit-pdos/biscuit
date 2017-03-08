@@ -265,6 +265,7 @@ struct stat {
 
 struct tfork_t {
 	void *tf_tcb;
+	// tf_tid is merely a convenient way for a new thread to learn its tid.
 	void *tf_tid;
 	void *tf_stack;
 };

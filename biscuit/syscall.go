@@ -3233,15 +3233,18 @@ func sys_setsockopt(proc *proc_t, fdn, level, opt, optvaln, optlenn int) int {
 	return int(err)
 }
 
+func _closefds(fds []*fd_t) {
+	for _, fd := range fds {
+		if fd != nil {
+			close_panic(fd)
+		}
+	}
+}
+
 func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	tmp := flags & (FORK_THREAD | FORK_PROCESS)
 	if tmp != FORK_THREAD && tmp != FORK_PROCESS {
 		return int(-EINVAL)
-	}
-	sztfork_t := 24
-	if tmp == FORK_THREAD && !parent.usermapped(tforkp, sztfork_t) {
-		fmt.Printf("no tforkp thingy\n")
-		return int(-EFAULT)
 	}
 
 	mkproc := flags & FORK_PROCESS != 0
@@ -3269,9 +3272,21 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		}
 		parent.fdl.Unlock()
 
-		child = proc_new(parent.name + " [child]", parent.cwd, cfds)
+		var ok bool
+		child, ok = proc_new(parent.name + " [child]", parent.cwd,
+		   cfds)
+		if !ok {
+			_closefds(cfds)
+			return int(-ENOMEM)
+		}
 		child.pwait = &parent.mywait
-		parent.mywait.start_proc(child.pid)
+		ok = parent.start_proc(child.pid)
+		if !ok {
+			tid_del()
+			proc_del(child.pid)
+			_closefds(cfds)
+			return int(-ENOMEM)
+		}
 
 		// fork parent address space
 		parent.Lock_pmap()
@@ -3294,9 +3309,6 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		childtid = child.tid0
 		ret = child.pid
 	} else {
-		// XXX XXX XXX need to copy FPU state from parent thread to
-		// child thread
-
 		// validate tfork struct
 		tcb, ok1      := parent.userreadn(tforkp + 0, 8)
 		tidaddrn, ok2 := parent.userreadn(tforkp + 8, 8)
@@ -3305,28 +3317,31 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 			return int(-EFAULT)
 		}
 		writetid := tidaddrn != 0
-		if writetid && !parent.usermapped(tidaddrn, 8) {
-			fmt.Printf("nonzero tid but bad addr\n")
-			return int(-EFAULT)
-		}
 		if tcb != 0 {
 			chtf[TF_FSBASE] = uintptr(tcb)
 		}
-		if !parent.usermapped(stack - 8, 8) {
-			fmt.Printf("stack not mapped\n")
-			return int(-EFAULT)
-		}
 
 		child = parent
-		childtid = parent.tid_new()
-		parent.mywait.start_thread(childtid)
+		var ok bool
+		childtid, ok = parent.thread_new()
+		if !ok {
+			return int(-ENOMEM)
+		}
+		ok = parent.start_thread(childtid)
+		if !ok {
+			parent.thread_undo(childtid)
+			return int(-ENOMEM)
+		}
 
 		v := int(childtid)
 		chtf[TF_RSP] = uintptr(stack)
-		if writetid && !parent.userwriten(tidaddrn, 8, v) {
-			panic("unexpected unmap")
-		}
 		ret = v
+		if writetid {
+			// it is not a fatal error if some thread unmapped the
+			// memory that was supposed to hold the new thread's
+			// tid out from under us.
+			parent.userwriten(tidaddrn, 8, v)
+		}
 	}
 
 	chtf[TF_RAX] = 0

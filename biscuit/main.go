@@ -219,10 +219,21 @@ var fd_stdin 	= fd_t{fops: dummyfops, perms: FD_READ}
 var fd_stdout 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 
+// system-wide limits
+type syslimit_t struct {
+	sysprocs	uint
+}
+
+var syslimit = syslimit_t{
+	sysprocs: 2048,
+}
+
+// per-process limits
 type ulimit_t struct {
 	pages	int
 	nofile	uint
 	novma	uint
+	noproc	uint
 }
 
 // accnt_t is thread-safe
@@ -357,9 +368,15 @@ func (w *wait_t) _push_hint(id int) {
 	w.anyhints = append(w.anyhints, id)
 }
 
-func (w *wait_t) _start(id int, isproc bool) {
+// if there are more unreaped child statuses (procs or threads) than noproc,
+// _start() returns false and id is not added to the status map.
+func (w *wait_t) _start(id int, isproc bool, noproc uint) bool {
 	w.Lock()
 
+	if uint(len(w.ids)) >= noproc {
+		w.Unlock()
+		return false
+	}
 	ent, ok := w.ids[id]
 	if ok {
 		panic("two start for same id")
@@ -371,6 +388,7 @@ func (w *wait_t) _start(id int, isproc bool) {
 	}
 	w.ids[id] = ent
 	w.Unlock()
+	return true
 }
 
 // caller must have the wait_t locked. returns the number of WAIT_ANYs that
@@ -519,14 +537,6 @@ out:
 	return ret
 }
 
-func (w *wait_t) start_proc(id int) {
-	w._start(id, true)
-}
-
-func (w *wait_t) start_thread(id tid_t) {
-	w._start(int(id), false)
-}
-
 type tid_t int
 
 type tnote_t struct {
@@ -595,16 +605,33 @@ type proc_t struct {
 
 var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
+// total number of all threads
+var nthreads uint
 
 var pid_cur  int
 
-func newpid() int {
+// returns false if system-wide limit is hit.
+func tid_new() (tid_t, bool) {
 	proclock.Lock()
+	if nthreads > syslimit.sysprocs {
+		proclock.Unlock()
+		return 0, false
+	}
+	nthreads++
 	pid_cur++
 	ret := pid_cur
 	proclock.Unlock()
 
-	return ret
+	return tid_t(ret), true
+}
+
+func tid_del() {
+	proclock.Lock()
+	if nthreads == 0 {
+		panic("oh shite")
+	}
+	nthreads--
+	proclock.Unlock()
 }
 
 var _deflimits = ulimit_t {
@@ -613,14 +640,26 @@ var _deflimits = ulimit_t {
 	//nofile: 1024,
 	nofile: RLIM_INFINITY,
 	novma: (1 << 10),
+	noproc: (1 << 10),
 }
 
-func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
+// returns the new proc and success; can fail if the system-wide limit of
+// procs/threads has been reached.
+func proc_new(name string, cwd *fd_t, fds []*fd_t) (*proc_t, bool) {
 	ret := &proc_t{}
 
 	proclock.Lock()
+
+	if nthreads >= syslimit.sysprocs {
+		proclock.Unlock()
+		return nil, false
+	}
+	nthreads++
+
 	pid_cur++
 	np := pid_cur
+	pid_cur++
+	tid0 := tid_t(pid_cur)
 	if _, ok := allprocs[np]; ok {
 		panic("pid exists")
 	}
@@ -644,22 +683,15 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
 	ret.ulim = _deflimits
 
 	ret.threadi.init()
-	ret.tid0 = ret.tid_new()
+	ret.tid0 = tid0
+	ret._thread_new(tid0)
 
 	ret.mywait.wait_init(np)
-	ret.mywait.start_thread(ret.tid0)
-
-	return ret
-}
-
-func proc_get(pid int) *proc_t {
-	proclock.Lock()
-	p, ok := allprocs[pid]
-	proclock.Unlock()
-	if !ok {
-		panic(fmt.Sprintf("no such pid %d", pid))
+	if !ret.start_thread(ret.tid0) {
+		panic("silly noproc")
 	}
-	return p
+
+	return ret, true
 }
 
 func proc_check(pid int) (*proc_t, bool) {
@@ -1069,14 +1101,28 @@ func (p *proc_t) sched_add(tf *[TFSIZE]uintptr, tid tid_t) {
 	go p.run(tf, tid)
 }
 
-func (p *proc_t) tid_new() tid_t {
-	ret := tid_t(newpid())
+func (p *proc_t) _thread_new(t tid_t) {
+	p.threadi.Lock()
+	p.threadi.notes[t] = &tnote_t{alive: true}
+	p.threadi.Unlock()
+}
+
+func (p *proc_t) thread_new() (tid_t, bool) {
+	ret, ok := tid_new()
+	if !ok {
+		return 0, false
+	}
+	p._thread_new(ret)
+	return ret, true
+}
+
+// undo thread_new(); sched_add() must not have been called on t.
+func (p *proc_t) thread_undo(t tid_t) {
+	tid_del()
 
 	p.threadi.Lock()
-	p.threadi.notes[ret] = &tnote_t{alive: true}
+	delete(p.threadi.notes, t)
 	p.threadi.Unlock()
-
-	return ret
 }
 
 func (p *proc_t) thread_count() int {
@@ -1115,6 +1161,7 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	// put thread status in this process's wait info; threads don't have
 	// rusage for now.
 	p.mywait.put(int(tid), status, nil)
+	tid_del()
 
 	if destroy {
 		p.terminate()
@@ -1513,6 +1560,18 @@ func (p *proc_t) unusedva_inner(startva, len int) int {
 		ret = startva
 	}
 	return ret
+}
+
+// returns false if the number of running threads or unreaped child statuses is
+// larger than noproc.
+func (p *proc_t) start_proc(pid int) bool {
+	return p.mywait._start(pid, true, p.ulim.noproc)
+}
+
+// returns false if the number of running threads or unreaped child statuses is
+// larger than noproc.
+func (p *proc_t) start_thread(t tid_t) bool {
+	return p.mywait._start(int(t), false, p.ulim.noproc)
 }
 
 // interface for reading/writing from user space memory either via a pointer
@@ -3187,7 +3246,10 @@ func main() {
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p := proc_new(cmd, rf, defaultfds)
+		p, ok := proc_new(cmd, rf, defaultfds)
+		if !ok {
+			panic("silly sysprocs")
+		}
 		var tf [TFSIZE]uintptr
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {

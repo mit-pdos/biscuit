@@ -1432,17 +1432,21 @@ iref(void)
   printf("empty file name OK\n");
 }
 
-// test that fork fails gracefully
-// the forktest binary also does this, but it runs out of proc entries first.
-// inside the bigger usertests binary, we run out of memory first.
+void *
+_ptexit(void *a)
+{
+	return NULL;
+}
+
 void
 forktest(void)
 {
   int n, pid;
+  int ulim = 1024;
 
   printf("fork test\n");
 
-  for(n=0; n<1000; n++){
+  for(n=0; n<ulim; n++){
     pid = fork();
     if(pid < 0)
       break;
@@ -1450,24 +1454,40 @@ forktest(void)
       exit(0);
   }
   
-  if(n == 1000){
-    printf("fork claimed to work 1000 times!\n");
-    printf("continuing...\n");
-    //exit(0);
+  if(n == ulim){
+    printf("fork claimed to work %d times!\n", ulim);
+    exit(0);
   }
-  
+
   for(; n > 0; n--){
     if(wait(NULL) < 0){
       printf("wait stopped early\n");
       exit(0);
     }
   }
-  
+
   if(wait(NULL) != -1 || errno != ECHILD){
     printf("wait got too many\n");
     exit(0);
   }
+
+  pthread_t t[ulim];
+  for(n=0; n<ulim; n++) {
+    if (pthread_create(&t[n], NULL, _ptexit, NULL))
+      break;
+  }
   
+  if(n == ulim)
+    errx(-1, "pthread_create claimed to work %d times!\n", ulim);
+
+  for(; n > 0; n--){
+    void *st;
+    if(pthread_join(t[n - 1], &st))
+      errx(-1, "too few joins");
+    if (st != NULL)
+      errx(-1, "bad status");
+  }
+
   printf("fork test OK\n");
 }
 
@@ -1880,8 +1900,9 @@ renametest()
 void *
 _bigstack(void *no)
 {
-	char *test = (char *)&no - 4096*30;
-	test += 32;
+	uintptr_t stktop = (uintptr_t)&no;
+	stktop = (stktop & ~((1 << 12) - 1)) + (1 << 12);
+	char *test = (char *)stktop - 4096*30;
 	*test = 0;
 	asm volatile ("" ::"r"(test) : "memory");
 	return NULL;
