@@ -618,10 +618,16 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 		perms |= PTE_W
 	}
 	lenn = roundup(lenn, PGSIZE)
+	// limit checks
 	if lenn/PGSIZE + proc.vmregion.pglen() > proc.ulim.pages {
 		proc.Unlock_pmap()
 		return int(-ENOMEM)
 	}
+	if proc.vmregion.novma >= proc.ulim.novma {
+		proc.Unlock_pmap()
+		return int(-ENOMEM)
+	}
+
 	addr := proc.unusedva_inner(proc.mmapi, lenn)
 	proc.mmapi = addr + lenn
 	switch {
@@ -670,21 +676,22 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 		return int(-EINVAL)
 	}
 
+	err := proc.vmregion.remove(addrn, len, proc.ulim.novma)
+	if err != 0 {
+		return int(err)
+	}
 	// addrn must be page-aligned
 	len = roundup(len, PGSIZE)
-	var ret int
 	for i := 0; i < len; i += PGSIZE {
 		p := addrn + i
 		if p < USERMIN {
-			ret = int(-EINVAL)
-			break
+			panic("how")
 		}
 		proc.page_remove(p)
 	}
 	pgs := len >> PGSHIFT
 	proc.tlbshoot(uintptr(addrn), pgs)
-	proc.vmregion.remove(addrn, len)
-	return ret
+	return 0
 }
 
 func sys_readv(proc *proc_t, fdn, _iovn, iovcnt int) int {

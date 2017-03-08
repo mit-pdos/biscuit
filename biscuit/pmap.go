@@ -375,6 +375,7 @@ func (h *rbh_t) remove(nn *rbn_t) *rbn_t {
 type vmregion_t struct {
 	rb	rbh_t
 	_pglen	int
+	novma	uint
 	hole struct {
 		startn	uintptr
 		pglen	uintptr
@@ -455,7 +456,6 @@ func (m *vmregion_t) _trymerge(nn *rbn_t, larger bool) {
 // to insert the new node. if we are in case 1 or 2, we must find one adjacent
 // mapping during the traversal. case 3 is the only scenario where we must
 // insert a new node.
-// XXX make arg value to avoid allocations?
 func (m *vmregion_t) insert(vmi *vminfo_t) {
 	// increase opencount for the file, if any
 	if vmi.mtype == VFILE {
@@ -501,6 +501,7 @@ func (m *vmregion_t) insert(vmi *vminfo_t) {
 	}
 	// there are no mergable mappings, otherwise we would have encountered
 	// one during traversal.
+	m.novma++
 	nn := &rbn_t{p: par, c: RED, vmi: *vmi}
 	if par == nil {
 		m.rb.root = nn
@@ -568,11 +569,13 @@ func (m *vmregion_t) _copy1(par, src *rbn_t) *rbn_t {
 
 func (m *vmregion_t) copy() vmregion_t {
 	var ret vmregion_t
+	ret._pglen, ret.novma = m._pglen, m.novma
 	ret.rb.root = m._copy1(nil, m.rb.root)
 	return ret
 }
 
 func (m *vmregion_t) dump() {
+	fmt.Printf("novma: %v\n", m.novma)
 	m.iter(func(vmi *vminfo_t) {
 		end := (vmi.pgn + uintptr(vmi.pglen)) << PGSHIFT
 		var perms string
@@ -674,7 +677,7 @@ func (m *vmregion_t) end() uintptr {
 	return last << PGSHIFT
 }
 
-func (m *vmregion_t) remove(start, len int) {
+func (m *vmregion_t) remove(start, len int, novma uint) err_t {
 	pgn := uintptr(start) >> PGSHIFT
 	pglen := roundup(len, PGSIZE) >> PGSHIFT
 	m._pglen -= pglen
@@ -687,7 +690,11 @@ func (m *vmregion_t) remove(start, len int) {
 	// remove the whole node?
 	if n.vmi.pgn == pgn && n.vmi.pglen == pglen {
 		m.rb.remove(n)
-		return
+		m.novma--
+		if m.novma < 0 {
+			panic("shaish!")
+		}
+		return 0
 	}
 	// if we are removing the beginning or end of the mapping, we can
 	// simply adjust the node.
@@ -702,7 +709,11 @@ func (m *vmregion_t) remove(start, len int) {
 		} else {
 			n.vmi.pglen -= pglen
 		}
-		return
+		return 0
+	}
+	// too many vma objects
+	if m.novma >= novma {
+		return -ENOMEM
 	}
 	// removing middle of a mapping; must add a new node
 	avmi := &vminfo_t{}
@@ -715,6 +726,8 @@ func (m *vmregion_t) remove(start, len int) {
 		avmi.file.foff += int((avmi.pgn - n.vmi.pgn) << PGSHIFT)
 	}
 	m.rb._insert(avmi)
+	m.novma++
+	return 0
 }
 
 // tracks memory pages

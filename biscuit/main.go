@@ -228,6 +228,7 @@ var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 type ulimit_t struct {
 	pages	int
 	nofile	uint
+	novma	uint
 }
 
 // accnt_t is thread-safe
@@ -617,6 +618,7 @@ var _deflimits = ulimit_t {
 	pages: (1 << 27) / (1 << 12),
 	//nofile: 1024,
 	nofile: RLIM_INFINITY,
+	novma: (1 << 10),
 }
 
 func proc_new(name string, cwd *fd_t, fds []*fd_t) *proc_t {
@@ -1146,6 +1148,7 @@ func _uvmfree(pg *[512]int, depth int) {
 
 // don't forget: there are two places where pmaps/memory are free'd:
 // proc_t.terminate() and exec.
+// XXX why not use vmregion to avoid scanning 0 ptes? (that is what it is for!)
 func uvmfree(p_pg uintptr) {
 	_uvmfree(dmap(int(p_pg)), 4)
 }
