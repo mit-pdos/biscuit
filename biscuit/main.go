@@ -1840,8 +1840,10 @@ func (cb *circbuf_t) cb_init(sz int) {
 }
 
 func (cb *circbuf_t) cb_release() {
-	_bufpool.Put(cb.buf)
-	cb.buf = nil
+	if cb.buf != nil {
+		_bufpool.Put(cb.buf)
+		cb.buf = nil
+	}
 }
 
 func (cb *circbuf_t) full() bool {

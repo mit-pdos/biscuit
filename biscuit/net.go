@@ -1813,14 +1813,19 @@ func (tc *tcptcb_t) finacked() bool {
 	return false
 }
 
+func (tc *tcptcb_t) _bufrelease() {
+	tc._sanity()
+	tc.txbuf.cbuf.cb_release()
+	tc.rxbuf.cbuf.cb_release()
+}
+
 func (tc *tcptcb_t) kill() {
 	tc._sanity()
 	if tc.dead {
 		panic("uh oh")
 	}
 	tc.dead = true
-	tc.txbuf.cbuf.cb_release()
-	tc.rxbuf.cbuf.cb_release()
+	tc._bufrelease()
 	tcpcons.tcb_del(tc)
 	select {
 	case tc.twchan <- true:
@@ -1834,6 +1839,7 @@ func (tc *tcptcb_t) timewaitdeath() {
 		return
 	}
 	tc.twdeath = true
+	tc._bufrelease()
 	go func() {
 		select {
 		case <- tc.twchan:
