@@ -4685,7 +4685,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) {
 		if err != 0 {
 			panic("must succeed")
 		}
-		bsrc := (*[PGSIZE]uint8)(unsafe.Pointer(mmapi[0].pg))[:]
+		bsrc := pg2bytes(mmapi[0].pg)[:]
 		bsrc = bsrc[va & PGOFFSET:]
 		if len(pg) > hdr.filesz {
 			pg = pg[0:hdr.filesz]
@@ -4790,7 +4790,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int) {
 				panic("must succeed")
 			}
 			off := (tlsaddr + i) & PGOFFSET
-			src := ((*[PGSIZE]uint8)(unsafe.Pointer(_src)))[off:]
+			src := pg2bytes(_src)[off:]
 			bpg, ok := proc.userdmap8_inner(freshtls + i, true)
 			if !ok {
 				panic("must be mapped")

@@ -27,6 +27,10 @@ const VDIRECT   int = 0x44
 const VEND      int = 0x50
 const VUSER     int = 0x59
 
+func pg2bytes(pg *[512]int) *[PGSIZE]uint8 {
+	return (*[PGSIZE]uint8)(unsafe.Pointer(pg))
+}
+
 /*
  * red-black tree based on niels provos' red-black tree macros
  */
@@ -884,7 +888,7 @@ func dmap_init() {
 	//p_zeropg = *pte & PTE_ADDR
 	zeropg, p_zeropg = _refpg_new()
 	refup(uintptr(p_zeropg))
-	zerobpg = (*[PGSIZE]uint8)(unsafe.Pointer(zeropg))
+	zerobpg = pg2bytes(zeropg)
 }
 
 type kent_t struct {
@@ -914,7 +918,7 @@ func dmap(p int) *[512]int {
 func dmap8(p int) []uint8 {
 	pg := dmap(p)
 	off := p & PGOFFSET
-	bpg := (*[PGSIZE]uint8)(unsafe.Pointer(pg))
+	bpg := pg2bytes(pg)
 	return bpg[off:]
 }
 

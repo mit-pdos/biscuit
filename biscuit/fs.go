@@ -1254,7 +1254,7 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 		//npg, p_npg := pg_new()
 		npg, p_npg := refpg_new()
 		refup(uintptr(p_npg))
-		bpg := (*[PGSIZE]uint8)(unsafe.Pointer(npg))
+		bpg := pg2bytes(npg)
 		pc.pgs[pgn] = bpg
 		var pgi pgcinfo_t
 		pgi.phys = p_npg

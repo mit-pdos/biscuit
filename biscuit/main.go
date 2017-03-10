@@ -1312,7 +1312,7 @@ func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 		return nil, false
 	}
 	pg := dmap(*pte & PTE_ADDR)
-	bpg := (*[PGSIZE]uint8)(unsafe.Pointer(pg))
+	bpg := pg2bytes(pg)
 	return bpg[voff:], true
 }
 
