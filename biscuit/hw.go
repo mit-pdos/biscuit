@@ -1895,7 +1895,10 @@ func (x *ixgbe_t) wait_linkup(secs int) bool {
 
 func (x *ixgbe_t) pg_new() (*[512]int, uintptr) {
 	x.pgs++
-	a, _b := refpg_new()
+	a, _b, ok := refpg_new()
+	if !ok {
+		panic("oom during ixgbe init")
+	}
 	b := uintptr(_b)
 	refup(b)
 	return a, b

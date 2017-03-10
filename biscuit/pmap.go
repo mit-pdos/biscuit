@@ -828,7 +828,6 @@ func dmap_init() {
 	}
 
 	pdpt  := new([512]int)
-	//pdpt, p_pdpt := refpg_new()
 	ptn := int(uintptr(unsafe.Pointer(pdpt)))
 	if ptn & PGOFFSET != 0 {
 		panic("page table not aligned")
@@ -857,7 +856,6 @@ func dmap_init() {
 	size = 1 << 21
 	pdptsz := 1 << 30
 	for i := range pdpt {
-		//pd, p_pd := refpg_new()
 		pd := new([512]int)
 		p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
 		if !ok {
@@ -881,12 +879,14 @@ func dmap_init() {
 	}
 	_dmapinit = true
 
-	//pte := pmap_lookup(kpmap(), int(uintptr(unsafe.Pointer(zeropg))))
-	//if pte == nil || *pte & PTE_P == 0 {
-	//	panic("wut")
-	//}
-	//p_zeropg = *pte & PTE_ADDR
-	zeropg, p_zeropg = _refpg_new()
+	// refpg_new() uses the zeropg to zero the page
+	zeropg, p_zeropg, ok = _refpg_new()
+	if !ok {
+		panic("oom in dmap init")
+	}
+	for i := range zeropg {
+		zeropg[i] = 0
+	}
 	refup(uintptr(p_zeropg))
 	zerobpg = pg2bytes(zeropg)
 }
@@ -944,6 +944,19 @@ func pe2pg(pe int) *[512]int {
 	return dmap(addr)
 }
 
+func _instpg(pg *[512]int, idx uint, perms int) (int, bool) {
+	_, p_np, ok := refpg_new()
+	if !ok {
+		return 0, false
+	}
+	refup(uintptr(p_np))
+	npte :=  p_np | perms | PTE_P
+	pg[idx] = npte
+	return npte, true
+}
+
+// returns nil if either 1) create was false and the mapping doesn't exist or
+// 2) create was true but we failed to allocate a page to create the mapping.
 func pmap_pgtbl(pml4 *[512]int, v int, create bool,
     perms int) (*[512]int, int) {
 	vn := uint(uintptr(v))
@@ -959,14 +972,6 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool,
 		panic("mapping page 0");
 	}
 
-	instpg := func(pg *[512]int, idx uint) int {
-		_, p_np := refpg_new()
-		refup(uintptr(p_np))
-		npte :=  p_np | perms | PTE_P
-		pg[idx] = npte
-		return npte
-	}
-
 	cpe := func(pe int) *[512]int {
 		if pe & PTE_PS != 0 {
 			panic("insert mapping into PS page")
@@ -975,12 +980,16 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool,
 		return (*[512]int)(unsafe.Pointer(uintptr(_vdirect + phys)))
 	}
 
+	var ok bool
 	pe := pml4[l4b]
 	if pe & PTE_P == 0 {
 		if !create {
 			return nil, 0
 		}
-		pe = instpg(pml4, l4b)
+		pe, ok = _instpg(pml4, l4b, perms)
+		if !ok {
+			return nil, 0
+		}
 	}
 	next := cpe(pe)
 	pe = next[pdpb]
@@ -988,7 +997,10 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool,
 		if !create {
 			return nil, 0
 		}
-		pe = instpg(next, pdpb)
+		pe, ok = _instpg(next, pdpb, perms)
+		if !ok {
+			return nil, 0
+		}
 	}
 	next = cpe(pe)
 	pe = next[pdb]
@@ -996,7 +1008,10 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool,
 		if !create {
 			return nil, 0
 		}
-		pe = instpg(next, pdb)
+		pe, ok = _instpg(next, pdb, perms)
+		if !ok {
+			return nil, 0
+		}
 	}
 	next = cpe(pe)
 	return next, int(ptb)
@@ -1011,16 +1026,24 @@ func _pmap_walk(pml4 *[512]int, v int, create bool, perms int) *int {
 	return &pgtbl[slot]
 }
 
-func pmap_walk(pml4 *[512]int, v int, perms int) *int {
-	return _pmap_walk(pml4, v, true, perms)
+func pmap_walk(pml4 *[512]int, v int, perms int) (*int, err_t) {
+	ret := _pmap_walk(pml4, v, true, perms)
+	if ret == nil {
+		// create was set; failed to allocate a page
+		return nil, -ENOMEM
+	}
+	return ret, 0
 }
 
 func pmap_lookup(pml4 *[512]int, v int) *int {
 	return _pmap_walk(pml4, v, false, 0)
 }
 
-// forks the ptes only for the virtual address range specified
-func ptefork(cpmap, ppmap *[512]int, start, end int, shared bool) bool {
+// forks the ptes only for the virtual address range specified. returns true if
+// the parent's TLB should be flushed because we added COW bits to PTEs and
+// whether the fork failed due to allocation failure
+func ptefork(cpmap, ppmap *[512]int, start, end int,
+   shared bool) (bool, bool) {
 	doflush := false
 	mkcow := !shared
 	i := start
@@ -1033,6 +1056,10 @@ func ptefork(cpmap, ppmap *[512]int, start, end int, shared bool) bool {
 			continue
 		}
 		cptb, _ := pmap_pgtbl(cpmap, i, true, PTE_U | PTE_W)
+		if cptb == nil {
+			// failed to allocate user page table
+			return doflush, false
+		}
 		ps := pptb[slot:]
 		cs := cptb[slot:]
 		left := (end - i) / PGSIZE
@@ -1063,33 +1090,28 @@ func ptefork(cpmap, ppmap *[512]int, start, end int, shared bool) bool {
 		i += len(ps)*PGSIZE
 
 	}
-	return doflush
+	return doflush, true
 }
 
 // allocates a page tracked by kpages and maps it at va. only used during AP
 // bootup.
+// XXX remove this crap
 func kmalloc(va uintptr, perms int) {
 	kplock.Lock()
 	defer kplock.Unlock()
-	_, p_pg := refpg_new()
+	_, p_pg, ok := refpg_new()
+	if !ok {
+		panic("oom in init?")
+	}
 	refup(uintptr(p_pg))
-	pte := pmap_walk(kpmap(), int(va), perms)
+	pte, err := pmap_walk(kpmap(), int(va), perms)
+	if err != 0 {
+		panic("oom during AP init")
+	}
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("page already mapped %#x", va))
 	}
 	*pte = p_pg | PTE_P | perms
-}
-
-func is_mapped(pmap *[512]int, va int, size int) bool {
-	p := rounddown(va, PGSIZE)
-	end := roundup(va + size, PGSIZE)
-	for ; p < end; p += PGSIZE {
-		pte := pmap_lookup(pmap, p)
-		if pte == nil || *pte & PTE_P == 0 {
-			return false
-		}
-	}
-	return true
 }
 
 func physmapped1(pmap *[512]int, phys int, depth int, acc int,

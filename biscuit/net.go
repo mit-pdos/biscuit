@@ -748,14 +748,14 @@ func net_icmp(pkt [][]uint8, tlen int) {
 // allocates two pages for the send/receive buffers. returns false if it failed
 // to allocate pages.
 func tcppgs() ([]uint8, uintptr, []uint8, uintptr, bool) {
-	spg, _sp_pg := refpg_new_nozero()
-	if false {
+	spg, _sp_pg, ok := refpg_new_nozero()
+	if !ok {
 		return nil, 0, nil, 0, false
 	}
 	sp_pg := uintptr(_sp_pg)
 	refup(sp_pg)
-	rpg, _rp_pg := refpg_new_nozero()
-	if false {
+	rpg, _rp_pg, ok := refpg_new_nozero()
+	if !ok {
 		refdown(sp_pg)
 		return nil, 0, nil, 0, false
 	}

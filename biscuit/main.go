@@ -741,18 +741,21 @@ func proc_del(pid int) {
 // COW.  caller must hold pmap lock (and the copy must take place under the
 // same lock acquisition). this can go away once we can handle syscalls with
 // the user pmap still loaded.
-func (p *proc_t) cowfault(userva int) {
+func (p *proc_t) cowfault(userva int) bool {
 	// userva is not guaranteed to be valid
 	if userva < USERMIN {
-		return
+		return false
 	}
 	p.lockassert_pmap()
-	pte := pmap_walk(p.pmap, userva, PTE_U | PTE_W)
+	pte, err := pmap_walk(p.pmap, userva, PTE_U | PTE_W)
+	if err != 0 {
+		return false
+	}
 	if *pte & PTE_P != 0 && *pte & PTE_U == 0 {
 		panic("no kernel addresses")
 	}
 	if *pte & PTE_P != 0 && *pte & PTE_COW == 0 {
-		return
+		return true
 	}
 	vmi, ok := p.vmregion.lookup(uintptr(userva))
 	if !ok {
@@ -760,8 +763,9 @@ func (p *proc_t) cowfault(userva int) {
 	}
 	ecode := uintptr(PTE_U | PTE_W)
 	if !sys_pgfault(p, vmi, pte, uintptr(userva), ecode) {
-		panic("must succeed")
+		return false
 	}
+	return true
 }
 
 // an fd table invariant: every fd must have its file field set. thus the
@@ -848,7 +852,9 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	return ret, ok
 }
 
-func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
+// returns whether the parent's TLB should be flushed and whether the we
+// successfully copied the parent's address space.
+func (parent *proc_t) vm_fork(child *proc_t, rsp int) (bool, bool) {
 	parent.lockassert_pmap()
 	// first add kernel pml4 entries
 	for _, e := range kents {
@@ -857,6 +863,7 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	// recursive mapping
 	child.pmap[VREC] = child.p_pmap | PTE_P | PTE_W
 
+	failed := false
 	doflush := false
 	child.vmregion = parent.vmregion.copy()
 	parent.vmregion.iter(func(vmi *vminfo_t) {
@@ -864,17 +871,21 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 		end := start + int(vmi.pglen << PGSHIFT)
 		//fmt.Printf("fork reg: %x %x\n", start, end)
 		shared := vmi.mtype == VSANON
-		if ptefork(child.pmap, parent.pmap, start, end, shared) {
-			doflush = true
-		}
+		fl, ok := ptefork(child.pmap, parent.pmap, start, end, shared)
+		failed = failed || !ok
+		doflush = doflush || fl
 	})
+
+	if failed {
+		return doflush, false
+	}
 
 	// don't mark stack COW since the parent/child will fault their stacks
 	// immediately
 	pte := pmap_lookup(child.pmap, rsp)
 	// give up if we can't find the stack
 	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
-		return doflush
+		return doflush, true
 	}
 	// sys_pgfault expects pmap to be locked
 	child.Lock_pmap()
@@ -884,7 +895,7 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	}
 	perms := uintptr(PTE_U | PTE_W)
 	if !sys_pgfault(child, vmi, pte, uintptr(rsp), perms) {
-		panic("must succeed")
+		return doflush, false
 	}
 	child.Unlock_pmap()
 	pte = pmap_lookup(parent.pmap, rsp)
@@ -894,7 +905,7 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) bool {
 	*pte &^= PTE_COW
 	*pte |= PTE_W | PTE_WASCOW
 
-	return doflush
+	return doflush, true
 }
 
 // does not increase opencount on fops (vmregion_t.insert does). perms should
@@ -975,14 +986,21 @@ func (p *proc_t) mkfxbuf() *[64]uintptr {
 	return ret
 }
 
-// returns true if a present mapping was modified (i.e. need to flush TLB)
-func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) bool {
+// the first return value is true if a present mapping was modified (i.e. need
+// to flush TLB). the second return value is false if the page insertion failed
+// due to lack of user pages. p_pg's ref count is increased so the caller can
+// simply refdown()
+func (p *proc_t) page_insert(va int, p_pg int, perms int,
+   vempty bool) (bool, bool) {
 	p.lockassert_pmap()
 	refup(uintptr(p_pg))
-	pte := pmap_walk(p.pmap, va, PTE_U | PTE_W)
+	pte, err := pmap_walk(p.pmap, va, PTE_U | PTE_W)
+	if err != 0 {
+		return false, false
+	}
 	ninval := false
 	var p_old uintptr
-	if pte != nil && *pte & PTE_P != 0 {
+	if *pte & PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
 		}
@@ -996,7 +1014,7 @@ func (p *proc_t) page_insert(va int, p_pg int, perms int, vempty bool) bool {
 	if ninval {
 		refdown(p_old)
 	}
-	return ninval
+	return ninval, true
 }
 
 func (p *proc_t) page_remove(va int) bool {
@@ -1309,14 +1327,18 @@ func (p *proc_t) lockassert_pmap() {
 // returns a slice whose underlying buffer points to va, which can be
 // page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
 // k2u is true if kernel memory is the source and user memory is the
-// destination of the copy, otherwise the opposite.
+// destination of the copy, otherwise the opposite. returns false if we failed
+// to 1) allocate a page for a COW mapping or 2) allocate a page for a lazily
+// read-only mapping.
 func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	p.lockassert_pmap()
 	if va < USERMIN {
 		return nil, false
 	}
 	if k2u {
-		p.cowfault(va)
+		if !p.cowfault(va) {
+			return nil, false
+		}
 	}
 	voff := va & PGOFFSET
 	pte := pmap_lookup(p.pmap, va)
@@ -3163,7 +3185,8 @@ func _refpg_new() (*[512]int, int) {
 	physmem.Lock()
 	firstfree := physmem.freei
 	if firstfree == ^uint32(0) {
-		panic("refpgs oom")
+		physmem.Unlock()
+		return nil, 0, false
 	}
 	newhead := physmem.pgs[firstfree].nexti
 	physmem.freei = newhead
@@ -3177,20 +3200,26 @@ func _refpg_new() (*[512]int, int) {
 	}
 	dur := int(p_pg)
 	pg := dmap(dur)
-	return pg, dur
+	return pg, dur, true
 }
 
 // refcnt of returned page is not incremented (it is usually incremented via
 // proc_t.page_insert). requires direct mapping.
-func refpg_new() (*[512]int, int) {
-	pg, p_pg := _refpg_new()
+func refpg_new() (*[512]int, int, bool) {
+	pg, p_pg, ok := _refpg_new()
+	if !ok {
+		return nil, 0, false
+	}
 	*pg = *zeropg
-	return pg, p_pg
+	return pg, p_pg, true
 }
 
-func refpg_new_nozero() (*[512]int, int) {
-	pg, p_pg := _refpg_new()
-	return pg, p_pg
+func refpg_new_nozero() (*[512]int, int, bool) {
+	pg, p_pg, ok := _refpg_new()
+	if !ok {
+		return nil, 0, false
+	}
+	return pg, p_pg, true
 }
 
 func _pg2pgn(p_pg uintptr) uint32 {
@@ -3299,8 +3328,8 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf := fs_init()
 	use_memfs()
+	rf := fs_init()
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)
