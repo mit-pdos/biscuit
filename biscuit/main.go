@@ -222,10 +222,36 @@ var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 // system-wide limits
 type syslimit_t struct {
 	sysprocs	uint
+	// socks includes all TCP connections in TIMEWAIT.
+	socks		sysatomic_t
+	// shared buffer space
+	shared		sysatomic_t
 }
 
-var syslimit = syslimit_t{
-	sysprocs: 2048,
+var syslimit = syslimit_t {
+	sysprocs:	2048,
+	socks:		(1 << 17),
+}
+
+// a type for system limits that aren't protected by a lock.
+type sysatomic_t int64
+
+func (s *sysatomic_t) _aptr() *int64 {
+	return (*int64)(unsafe.Pointer(s))
+}
+
+// returns false if the limit has been reached.
+func (s *sysatomic_t) take() bool {
+	g := atomic.AddInt64(s._aptr(), -1)
+	if g >= 0 {
+		return true
+	}
+	atomic.AddInt64(s._aptr(), 1)
+	return false
+}
+
+func (s *sysatomic_t) give() {
+	atomic.AddInt64(s._aptr(), 1)
 }
 
 // per-process limits
@@ -3162,6 +3188,11 @@ func refpg_new() (*[512]int, int) {
 	return pg, p_pg
 }
 
+func refpg_new_nozero() (*[512]int, int) {
+	pg, p_pg := _refpg_new()
+	return pg, p_pg
+}
+
 func _pg2pgn(p_pg uintptr) uint32 {
 	return uint32(p_pg >> PGSHIFT)
 }
@@ -3216,6 +3247,8 @@ func structchk() {
 	}
 }
 
+var lhits int
+
 func main() {
 	// magic loop
 	//if rand.Int() != 0 {
@@ -3228,6 +3261,17 @@ func main() {
 	go func() {
 		<- time.After(10*time.Second)
 		fmt.Printf("[It is now safe to benchmark...]\n")
+	}()
+
+	go func() {
+		for {
+			<- time.After(1*time.Second)
+			got := lhits
+			lhits = 0
+			if got != 0 {
+				fmt.Printf("*** limit hits: %v\n", got)
+			}
+		}
 	}()
 
 	fmt.Printf("              BiscuitOS\n")

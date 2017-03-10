@@ -621,10 +621,12 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	// limit checks
 	if lenn/PGSIZE + proc.vmregion.pglen() > proc.ulim.pages {
 		proc.Unlock_pmap()
+		lhits++
 		return int(-ENOMEM)
 	}
 	if proc.vmregion.novma >= proc.ulim.novma {
 		proc.Unlock_pmap()
+		lhits++
 		return int(-ENOMEM)
 	}
 
@@ -678,6 +680,7 @@ func sys_munmap(proc *proc_t, addrn, len int) int {
 
 	err := proc.vmregion.remove(addrn, len, proc.ulim.novma)
 	if err != 0 {
+		lhits++
 		return int(err)
 	}
 	// addrn must be page-aligned
@@ -1690,11 +1693,16 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	default:
 		return int(-EINVAL)
 	}
+	if !syslimit.socks.take() {
+		lhits++
+		return int(-ENOMEM)
+	}
 	file := &fd_t{}
 	file.fops = sfops
 	fdn, ok := proc.fd_insert(file, FD_READ | FD_WRITE | clop)
 	if !ok {
 		close_panic(file)
+		syslimit.socks.give()
 		return int(-EMFILE)
 	}
 	return fdn
@@ -3276,12 +3284,14 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		child, ok = proc_new(parent.name + " [child]", parent.cwd,
 		   cfds)
 		if !ok {
+			lhits++
 			_closefds(cfds)
 			return int(-ENOMEM)
 		}
 		child.pwait = &parent.mywait
 		ok = parent.start_proc(child.pid)
 		if !ok {
+			lhits++
 			tid_del()
 			proc_del(child.pid)
 			_closefds(cfds)
@@ -3325,10 +3335,12 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		var ok bool
 		childtid, ok = parent.thread_new()
 		if !ok {
+			lhits++
 			return int(-ENOMEM)
 		}
 		ok = parent.start_thread(childtid)
 		if !ok {
+			lhits++
 			parent.thread_undo(childtid)
 			return int(-ENOMEM)
 		}

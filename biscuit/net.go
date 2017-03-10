@@ -745,6 +745,25 @@ func net_icmp(pkt [][]uint8, tlen int) {
 	}
 }
 
+// allocates two pages for the send/receive buffers. returns false if it failed
+// to allocate pages.
+func tcppgs() ([]uint8, uintptr, []uint8, uintptr, bool) {
+	spg, _sp_pg := refpg_new_nozero()
+	if false {
+		return nil, 0, nil, 0, false
+	}
+	sp_pg := uintptr(_sp_pg)
+	refup(sp_pg)
+	rpg, _rp_pg := refpg_new_nozero()
+	if false {
+		refdown(sp_pg)
+		return nil, 0, nil, 0, false
+	}
+	rp_pg := uintptr(_rp_pg)
+	refup(rp_pg)
+	return pg2bytes(spg)[:], sp_pg, pg2bytes(rpg)[:], rp_pg, true
+}
+
 type tcpbuf_t struct {
 	cbuf	circbuf_t
 	seq	uint32
@@ -753,8 +772,8 @@ type tcpbuf_t struct {
 	pollers	*pollers_t
 }
 
-func (tb *tcpbuf_t) tbuf_init(sz int, tcb *tcptcb_t) {
-	tb.cbuf.cb_init(sz)
+func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg uintptr, tcb *tcptcb_t) {
+	tb.cbuf.cb_phys(v, p_pg)
 	tb.didseq = false
 	tb.cond = sync.NewCond(&tcb.l)
 	tb.pollers = &tcb.pollers
@@ -1362,6 +1381,12 @@ type tcpinc_t struct {
 		nxt	uint32
 	}
 	opt	tcpopt_t
+	bufs struct {
+		sp	[]uint8
+		sp_pg	uintptr
+		rp	[]uint8
+		rp_pg	uintptr
+	}
 }
 
 func (tcl *tcplisten_t) tcl_init(lip ip4_t, lport uint16, backlog int) {
@@ -1402,10 +1427,11 @@ func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
 
 // creates a TCB for tinc and adds it to the table of established connections
 func (tcl *tcplisten_t) tcbready(tinc tcpinc_t, rack uint32, rwin uint16,
-    ropt tcpopt_t, rest [][]uint8) *tcptcb_t {
+    ropt tcpopt_t, rest [][]uint8, sp []uint8, sp_pg uintptr,
+    rp []uint8, rp_pg uintptr) *tcptcb_t {
 	tcb := &tcptcb_t{}
 	tcb.tcb_init(tinc.lip, tinc.rip, tinc.lport, tinc.rport, tinc.smac,
-	    tinc.dmac, tinc.snd.nxt, tcl.sndsz, tcl.rcvsz)
+	    tinc.dmac, tinc.snd.nxt, sp, sp_pg, rp, rp_pg)
 	tcb.bound = true
 	tcb.state = ESTAB
 	tcb.set_seqs(tinc.snd.nxt, tinc.rcv.nxt)
@@ -1452,7 +1478,9 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 		// make the connection immediately ready so that received
 		// segments that race with accept(2) aren't unnecessarily timed
 		// out.
-		tcb := tcl.tcbready(tinc, ack, ntohs(tcp.win), opt, rest)
+		b := &tinc.bufs
+		tcb := tcl.tcbready(tinc, ack, ntohs(tcp.win), opt, rest,
+		   b.sp, b.sp_pg, b.rp, b.rp_pg)
 		tcl._conadd(tcb)
 		return
 	}
@@ -1474,10 +1502,25 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 		fmt.Printf("no listen ts!\n")
 	}
 
+	if !syslimit.socks.take() {
+		lhits++
+		return
+	}
+
+	sp, sp_pg, rp, rp_pg, ok := tcppgs()
+	if !ok {
+		lhits++
+		syslimit.socks.give()
+		return
+	}
+
 	ourseq := rand.Uint32()
 	theirseq := ntohl(tcp.seq)
 	newcon := tcpinc_t{lip: tk.lip, rip: tk.rip, lport: tk.lport,
 	    rport: tk.rport, opt: opt}
+	b := &newcon.bufs
+	b.sp, b.sp_pg = sp, sp_pg
+	b.rp, b.rp_pg = rp, rp_pg
 	newcon.rcv.nxt = theirseq + 1
 	newcon.snd.nxt = ourseq + 1
 	newcon.snd.win = ntohs(tcp.win)
@@ -1671,8 +1714,14 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) err_t {
 		tc.bound = true
 	}
 
+	// do we have enough buffers?
+	sp, sp_pg, rp, rp_pg, ok := tcppgs()
+	if !ok {
+		return -ENOMEM
+	}
+
 	tc.tcb_init(localip, dip, tc.lport, dport, nic.lmac(), dmac,
-	    rand.Uint32(), tc.sndsz, tc.rcvsz)
+	    rand.Uint32(), sp, sp_pg, rp, rp_pg)
 	tcpcons.tcb_insert(tc, wasany)
 
 	tc._nstate(TCPNEW, SYNSENT)
@@ -1826,6 +1875,7 @@ func (tc *tcptcb_t) kill() {
 	}
 	tc.dead = true
 	tc._bufrelease()
+	syslimit.socks.give()
 	tcpcons.tcb_del(tc)
 	select {
 	case tc.twchan <- true:
@@ -2488,14 +2538,19 @@ func (tc *tcptcb_t) uwrite(src userio_i) (int, err_t) {
 
 func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 	tc._sanity()
+	if tc.dead {
+		return -EINVAL
+	}
 	if tc.state == TCPNEW {
 		if tc.bound {
 			tcpcons.unreserve(tc.lip, tc.lport)
 		}
+		tc.dead = true
+		// this tcb cannot be in tcpcons
+		syslimit.socks.give()
 		return 0
 	} else if tc.state == SYNSENT || tc.state == SYNRCVD {
-		tc.dead = true
-		tcpcons.tcb_del(tc)
+		tc.kill()
 		return 0
 	} else if tc.state != ESTAB && tc.state != CLOSEWAIT {
 		return -EINVAL
@@ -2522,7 +2577,8 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 var _nilmac mac_t
 
 func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
-    dmac *mac_t, sndnxt uint32, sndsz, rcvsz int) {
+    dmac *mac_t, sndnxt uint32, sv []uint8, sp uintptr,
+    rv []uint8, rp uintptr) {
 	if lip == INADDR_ANY || rip == INADDR_ANY || lport == 0 || rport == 0 {
 		panic("all IPs/ports must be known")
 	}
@@ -2535,15 +2591,15 @@ func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
 	tc.snd.win = defwin
 	tc.dmac = dmac
 	tc.smac = smac
-	defbufsz := (1 << 14)
-	if sndsz == 0 {
-		sndsz = defbufsz
-	}
-	if rcvsz == 0 {
-		rcvsz = defbufsz
-	}
-	tc.txbuf.tbuf_init(sndsz, tc)
-	tc.rxbuf.tbuf_init(rcvsz, tc)
+	//defbufsz := (1 << 12)
+	//if sndsz == 0 {
+	//	sndsz = defbufsz
+	//}
+	//if rcvsz == 0 {
+	//	rcvsz = defbufsz
+	//}
+	tc.txbuf.tbuf_init(sv, sp, tc)
+	tc.rxbuf.tbuf_init(rv, rp, tc)
 	// cached tcp timestamp option
 	_opt := [12]uint8{1, 1, 8, 10, 0, 0, 0, 0, 0, 0, 0, 0}
 	tc.opt = _opt[:]
@@ -3260,8 +3316,9 @@ func (tf *tcpfops_t) setsockopt(p *proc_t, lev, opt int, src userio_i,
 		n := uint(intarg)
 		// circbuf requires that the buffer size is power-of-2. my
 		// window handling assumes the buffer size > mss.
-		mn := uint(1 << 11)
-		mx := uint(1 << 15)
+		// XXX
+		mn := uint(1 << 12)
+		mx := uint(1 << 12)
 		if n < mn || n > mx || n & (n - 1) != 0 {
 			ret = -EINVAL
 			break
@@ -3333,6 +3390,7 @@ func (tl *tcplfops_t) close() err_t {
 		panic("neg ref")
 	}
 	if tl.tcl.openc == 0 {
+		syslimit.socks.give()
 		// close all unaccepted established connections
 		for {
 			tcb, ok := tl.tcl._contake()
