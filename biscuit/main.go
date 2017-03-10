@@ -1822,6 +1822,7 @@ type circbuf_t struct {
 	bufsz	int
 	head	int
 	tail	int
+	p_pg	uintptr
 }
 
 var _bufpool = sync.Pool{New: func() interface{} { return make([]uint8, 512)}}
@@ -1837,13 +1838,27 @@ func (cb *circbuf_t) cb_init(sz int) {
 	}
 	cb.bufsz = len(cb.buf)
 	cb.head, cb.tail = 0, 0
+	cb.p_pg = 0
+}
+
+func (cb *circbuf_t) cb_phys(v []uint8, p_pg uintptr) {
+	cb.p_pg = p_pg
+	cb.buf = v
+	cb.bufsz = len(cb.buf)
+	cb.head, cb.tail = 0, 0
 }
 
 func (cb *circbuf_t) cb_release() {
-	if cb.buf != nil {
-		_bufpool.Put(cb.buf)
-		cb.buf = nil
+	if cb.buf == nil {
+		return
 	}
+	if cb.p_pg != 0 {
+		refdown(cb.p_pg)
+		cb.p_pg = 0
+	} else {
+		_bufpool.Put(cb.buf)
+	}
+	cb.buf = nil
 }
 
 func (cb *circbuf_t) full() bool {
