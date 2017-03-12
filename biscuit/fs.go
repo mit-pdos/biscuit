@@ -1466,7 +1466,7 @@ func idaemon_ensure(priv inum) (*imemnode_t, err_t) {
 	ret, ok := allidmons[priv]
 	if !ok {
 		for {
-			if uint(len(allidmons)) < syslimit.vnodes {
+			if len(allidmons) < syslimit.vnodes {
 				break
 			}
 			if !memreclaim() {

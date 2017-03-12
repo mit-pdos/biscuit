@@ -2026,6 +2026,10 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 		return int(-EINVAL)
 	}
 
+	if !syslimit.socks.taken(2) {
+		return int(-ENOMEM)
+	}
+
 	var sfops1, sfops2 fdops_i
 	var err err_t
 	switch {
@@ -2036,6 +2040,7 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 	}
 
 	if err != 0 {
+		syslimit.socks.given(2)
 		return int(err)
 	}
 
@@ -2043,17 +2048,10 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 	fd1.fops = sfops1
 	fd2 := &fd_t{}
 	fd2.fops = sfops2
-	fdn1, ok := proc.fd_insert(fd1, FD_READ | FD_WRITE | clop)
+	perms := FD_READ | FD_WRITE | clop
+	fdn1, fdn2, ok := proc.fd_insert2(fd1, perms, fd2, perms)
 	if !ok {
-		close_panic(fd1)
-		return int(-EMFILE)
-	}
-	fdn2, ok := proc.fd_insert(fd2, FD_READ | FD_WRITE | clop)
-	if !ok {
-		if sys_close(proc, fdn1) != 0 {
-			panic("must succeed")
-		}
-		close_panic(fd2)
+		syslimit.socks.given(2)
 		return int(-EMFILE)
 	}
 	if !proc.userwriten(sockn, 4, fdn1) ||
@@ -2129,11 +2127,14 @@ func (sf *sudfops_t) close() err_t {
 	termsund := sf.open == 0
 	sf.Unlock()
 
-	if termsund && sf.bound {
-		allsunds.Lock()
-		delete(allsunds.m, sf.sunaddr.id)
-		sf.sunaddr.sund.finish <- true
-		allsunds.Unlock()
+	if termsund {
+		if sf.bound {
+			allsunds.Lock()
+			delete(allsunds.m, sf.sunaddr.id)
+			sf.sunaddr.sund.finish <- true
+			allsunds.Unlock()
+		}
+		syslimit.socks.give()
 	}
 	return 0
 }
@@ -2535,6 +2536,13 @@ func (sus *susfops_t) close() err_t {
 	err2 := sus.pipeout.close()
 	if err1 != 0 {
 		return err1
+	}
+	// XXX
+	sus.pipein.pipe.Lock()
+	term := sus.pipein.pipe.closed
+	sus.pipein.pipe.Unlock()
+	if term {
+		syslimit.socks.give()
 	}
 	return err2
 }
@@ -3021,6 +3029,7 @@ func (susl *susl_t) susl_reopen(delta int) err_t {
 	}
 
 	if dorem {
+		syslimit.socks.give()
 		// wake up all blocked connectors/acceptors/pollers
 		for i := range susl.waiters {
 			s := &susl.waiters[i]

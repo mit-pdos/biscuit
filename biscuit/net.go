@@ -1766,8 +1766,7 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
 				if tc.txbuf.cbuf.used() != 0 {
 					panic("closing but txdata remains")
 				}
-				tc.dead = true
-				tcpcons.tcb_del(tc)
+				tc.kill()
 			} else {
 				tc.seg_maybe()
 			}
@@ -1960,8 +1959,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 	nic, ok := nic_lookup(tc.lip)
 	if !ok {
 		fmt.Printf("NIC gone!\n")
-		tc.dead = true
-		tcpcons.tcb_del(tc)
+		tc.kill()
 		return
 	}
 	eth, ip, th := pkt.hdrbytes()
@@ -2254,8 +2252,7 @@ func (tc *tcptcb_t) mkseg(seq, ack uint32, seglen int) (*tcppkt_t,
 func (tc *tcptcb_t) failwake() {
 	tc._sanity()
 	tc.state = CLOSED
-	tc.dead = true
-	tcpcons.tcb_del(tc)
+	tc.kill()
 	tc.rxdone = true
 	tc.rxbuf.cond.Broadcast()
 	tc.txbuf.cond.Broadcast()

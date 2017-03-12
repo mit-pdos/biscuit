@@ -222,10 +222,10 @@ var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 // system-wide limits
 type syslimit_t struct {
 	// protected by proclock
-	sysprocs	uint
+	sysprocs	int
 	// proctected by idmonl lock
-	vnodes		uint
-	// socks includes all TCP connections in TIMEWAIT.
+	vnodes		int
+	// socks includes pipes and all TCP connections in TIMEWAIT.
 	socks		sysatomic_t
 	// shared buffer space
 	//shared		sysatomic_t
@@ -246,16 +246,32 @@ func (s *sysatomic_t) _aptr() *int64 {
 
 // returns false if the limit has been reached.
 func (s *sysatomic_t) take() bool {
-	g := atomic.AddInt64(s._aptr(), -1)
+	return s.taken(1)
+}
+
+func (s *sysatomic_t) taken(_n uint) bool {
+	n := int64(_n)
+	if n < 0 {
+		panic("too mighty")
+	}
+	g := atomic.AddInt64(s._aptr(), -n)
 	if g >= 0 {
 		return true
 	}
-	atomic.AddInt64(s._aptr(), 1)
+	atomic.AddInt64(s._aptr(), n)
 	return false
 }
 
 func (s *sysatomic_t) give() {
-	atomic.AddInt64(s._aptr(), 1)
+	s.given(1)
+}
+
+func (s *sysatomic_t) given(_n uint) {
+	n := int64(_n)
+	if n < 0 {
+		panic("too mighty")
+	}
+	atomic.AddInt64(s._aptr(), n)
 }
 
 // per-process limits
@@ -636,14 +652,14 @@ type proc_t struct {
 var proclock = sync.Mutex{}
 var allprocs = map[int]*proc_t{}
 // total number of all threads
-var nthreads uint
+var nthreads int64
 
 var pid_cur  int
 
 // returns false if system-wide limit is hit.
 func tid_new() (tid_t, bool) {
 	proclock.Lock()
-	if nthreads > syslimit.sysprocs {
+	if nthreads > int64(syslimit.sysprocs) {
 		proclock.Unlock()
 		return 0, false
 	}
@@ -680,7 +696,7 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) (*proc_t, bool) {
 
 	proclock.Lock()
 
-	if nthreads >= syslimit.sysprocs {
+	if nthreads >= int64(syslimit.sysprocs) {
 		proclock.Unlock()
 		return nil, false
 	}
@@ -777,9 +793,14 @@ func (p *proc_t) cowfault(userva int) bool {
 // race with a forking thread when it copies the fd table.
 func (p *proc_t) fd_insert(f *fd_t, perms int) (int, bool) {
 	p.fdl.Lock()
+	a, b := p.fd_insert_inner(f, perms)
+	p.fdl.Unlock()
+	return a, b
+}
+
+func (p *proc_t) fd_insert_inner(f *fd_t, perms int) (int, bool) {
 
 	if uint(p.nfds) >= p.ulim.nofile {
-		p.fdl.Unlock()
 		return -1, false
 	}
 	// find free fd
@@ -811,8 +832,29 @@ func (p *proc_t) fd_insert(f *fd_t, perms int) (int, bool) {
 		panic("wtf!")
 	}
 	p.nfds++
-	p.fdl.Unlock()
 	return fdn, true
+}
+
+// returns the fd numbers and success
+func (p *proc_t) fd_insert2(f1 *fd_t, perms1 int,
+   f2 *fd_t, perms2 int) (int, int, bool) {
+	p.fdl.Lock()
+	var fd2 int
+	var ok2 bool
+	fd1, ok1 := p.fd_insert_inner(f1, perms1)
+	if !ok1 {
+		goto out
+	}
+	fd2, ok2 = p.fd_insert_inner(f2, perms2)
+	if !ok2 {
+		p.fd_del_inner(fd1)
+		goto out
+	}
+	p.fdl.Unlock()
+	return fd1, fd2, true
+out:
+	p.fdl.Unlock()
+	return 0, 0, false
 }
 
 // fdn is not guaranteed to be a sane fd
@@ -835,9 +877,13 @@ func (p *proc_t) fd_get(fdn int) (*fd_t, bool) {
 // fdn is not guaranteed to be a sane fd
 func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 	p.fdl.Lock()
+	a, b := p.fd_del_inner(fdn)
+	p.fdl.Unlock()
+	return a, b
+}
 
+func (p *proc_t) fd_del_inner(fdn int) (*fd_t, bool) {
 	if fdn < 0 || fdn >= len(p.fds) {
-		p.fdl.Unlock()
 		return nil, false
 	}
 	ret := p.fds[fdn]
@@ -852,7 +898,6 @@ func (p *proc_t) fd_del(fdn int) (*fd_t, bool) {
 			p.fdstart = fdn
 		}
 	}
-	p.fdl.Unlock()
 	return ret, ok
 }
 
@@ -2405,26 +2450,19 @@ func _kready() bool {
 func netdump() {
 	fmt.Printf("net dump\n")
 	tcpcons.l.Lock()
-	for _, tcb := range tcpcons.econns {
-		tcb.l.Lock()
-		if tcb.state == TIMEWAIT {
-			tcb.l.Unlock()
-			continue
-		}
-		fmt.Printf("%v:%v -> %v:%v: %s\n",
-		    ip2str(tcb.lip), tcb.lport,
-		    ip2str(tcb.rip), tcb.rport,
-		    statestr[tcb.state])
-		tcb.rxbuf.syswrite(tcb.rcv.nxt,
-		   [][]uint8{[]uint8{'h'}})
-		tcb.rcv.nxt++
-		tcb.rxbuf.rcvup(tcb.rcv.nxt)
-		tcb.rxbuf.cond.Broadcast()
-		tcb.txbuf.cond.Broadcast()
-		tcb.pollers.wakeready(R_READ|R_WRITE|R_ERROR|
-		   R_HUP)
-		tcb.l.Unlock()
-	}
+	fmt.Printf("tcp table len: %v\n", len(tcpcons.econns))
+	//for _, tcb := range tcpcons.econns {
+	//	tcb.l.Lock()
+	//	//if tcb.state == TIMEWAIT {
+	//	//	tcb.l.Unlock()
+	//	//	continue
+	//	//}
+	//	fmt.Printf("%v:%v -> %v:%v: %s\n",
+	//	    ip2str(tcb.lip), tcb.lport,
+	//	    ip2str(tcb.rip), tcb.rport,
+	//	    statestr[tcb.state])
+	//	tcb.l.Unlock()
+	//}
 	tcpcons.l.Unlock()
 }
 
