@@ -3720,3 +3720,7 @@ alarm(unsigned int sec)
 {
 	HACK(0);
 }
+
+#if 0
+#include <../bloat.c>
+#endif
