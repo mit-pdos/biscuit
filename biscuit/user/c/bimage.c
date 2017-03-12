@@ -49,21 +49,27 @@ int main(int argc, char **argv)
 	const int blksz = 512;
 	char buf[blksz];
 	size_t did = 0;
-	ssize_t r;
 	int mb = 1;
-	while ((r = read(s, buf, sizeof(buf))) > 0) {
-		if (r < blksz)
+	for (;;) {
+		ssize_t bs = 0;
+		ssize_t r = 0;
+		while (bs != blksz &&
+		    (r = read(s, buf + bs, sizeof(buf) - bs)) > 0)
+			bs += r;
+		if (r == -1)
+			err(-1, "read");
+		if (bs == 0)
+			break;
+		if ((did % blksz) != 0)
 			fprintf(stderr, "slow write\n");
-		if (write(fd, buf, r) != r)
+		if (write(fd, buf, bs) != bs)
 			err(-1, "write");
-		did += r;
+		did += bs;
 		if (did >> 20 >= mb) {
 			fprintf(stderr, "%dMB\n", mb);
 			mb += 1;
 		}
 	}
-	if (r == -1)
-		err(-1, "read");
 	if (close(s) == -1)
 		err(-1, "close");
 	if (close(fd) == -1)
