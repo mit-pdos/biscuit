@@ -221,16 +221,20 @@ var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 
 // system-wide limits
 type syslimit_t struct {
+	// protected by proclock
 	sysprocs	uint
+	// proctected by idmonl lock
+	vnodes		uint
 	// socks includes all TCP connections in TIMEWAIT.
 	socks		sysatomic_t
 	// shared buffer space
-	shared		sysatomic_t
+	//shared		sysatomic_t
 }
 
 var syslimit = syslimit_t {
 	sysprocs:	2048,
 	socks:		(1 << 17),
+	vnodes:		(1 << 24),
 }
 
 // a type for system limits that aren't protected by a lock.

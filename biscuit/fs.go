@@ -129,7 +129,11 @@ func fs_init() *fd_t {
 
 	// anything that reads disk blocks needs to happen after recovery
 	fblkcache.fblkc_init(free_start, free_len)
-	iroot = idaemon_ensure(ri)
+	var err err_t
+	iroot, err = idaemon_ensure(ri)
+	if err != 0 {
+		panic("error loading root inode")
+	}
 
 	return &fd_t{fops: &fsfops_t{priv: iroot}}
 }
@@ -232,7 +236,11 @@ func fs_unlink(paths string, cwd *imemnode_t, wantdir bool) err_t {
 			return err
 		}
 
-		child = idaemon_ensure(childi)
+		child, err = idaemon_ensure(childi)
+		if err != 0 {
+			par.iunlock()
+			return err
+		}
 		if child.itrylock() {
 			break
 		}
@@ -246,13 +254,13 @@ func fs_unlink(paths string, cwd *imemnode_t, wantdir bool) err_t {
 	if err != 0 {
 		return err
 	}
-	dorem := child._linkdown()
 
 	// finally, remove directory
 	err = par.do_unlink(fn)
 	if err != 0 {
-		panic("must succeed")
+		return err
 	}
+	dorem := child._linkdown()
 	if dorem {
 		idaemon_remove(childi)
 	}
@@ -346,6 +354,12 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) err_t {
 		}
 	}
 
+	// guarantee that any page allocations will succeed before starting the
+	// operation, which will be messy to piece-wise undo.
+	if err := npar.probe_insert(); err != 0 {
+		return err
+	}
+
 	odir := ochild.icache.itype == I_DIR
 	if newexists {
 		if !nchild.ilock_namei() {
@@ -367,19 +381,19 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) err_t {
 
 	// finally, do the move
 	if opar.do_unlink(ofn) != 0 {
-		panic("must succeed")
+		panic("cannot oom")
 	}
 	if npar.do_insert(nfn, ochild.priv) != 0 {
-		panic("must succeed")
+		panic("verified")
 	}
 
 	// update '..'
 	if odir {
 		if ochild.do_unlink("..") != 0 {
-			panic("must succeed")
+			panic("cannot oom")
 		}
 		if ochild.do_insert("..", npar.priv) != 0 {
-			panic("must succeed")
+			panic("insert after unlink must succeed")
 		}
 	}
 	return 0
@@ -400,8 +414,11 @@ func _isancestor(anc, here *imemnode_t) err_t {
 		if err != 0 {
 			panic(".. must exist")
 		}
-		next := idaemon_ensure(nexti)
+		next, err := idaemon_ensure(nexti)
 		here.iunlock()
+		if err != 0 {
+			return err
+		}
 		here = next
 	}
 	return 0
@@ -930,7 +947,12 @@ func fs_mkdir(paths string, mode int, cwd *imemnode_t) err_t {
 		return err
 	}
 
-	child := idaemon_ensure(childi)
+	child, err := idaemon_ensure(childi)
+	if err != 0 {
+		par.create_undo(childi, fn)
+		par.iunlock()
+		return err
+	}
 	if !child.ilock_namei() {
 		panic("cannot be free")
 	}
@@ -996,7 +1018,12 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd *imemnode_t,
 				return ret, err
 			}
 			exists = err == -EEXIST
-			idm = idaemon_ensure(childi)
+			idm, err = idaemon_ensure(childi)
+			if err != 0 {
+				par.create_undo(childi, fn)
+				par.iunlock()
+				return ret, err
+			}
 			got := idm.itrylock()
 			par.iunlock()
 			if got {
@@ -1155,8 +1182,11 @@ func fs_namei(paths string, cwd *imemnode_t) (*imemnode_t, err_t) {
 		}
 		// get reference to imemnode_t before unlocking, to make sure
 		// the inode isn't repurposed.
-		next := idaemon_ensure(n)
+		next, err := idaemon_ensure(n)
 		idm.iunlock()
+		if err != 0 {
+			return nil, err
+		}
 		idm = next
 		if !idm.ilock_namei() {
 			return nil, -ENOENT
@@ -1222,18 +1252,18 @@ func (pc *pgcache_t) pgdirty(offset, end int) {
 
 // returns the raw page and physical address of requested page. fills the page
 // if necessary.
-func (pc *pgcache_t) pgraw(offset int) (*[512]int, int) {
+func (pc *pgcache_t) pgraw(offset int) (*[512]int, int, err_t) {
 	pgn := offset / PGSIZE
 	err := pc._ensurefill(pgn)
 	if err != 0 {
-		panic("must succeed")
+		return nil, 0, err
 	}
 	pgi := pc.pginfo[pgn]
 	wpg := (*[512]int)(unsafe.Pointer(pc.pgs[pgn]))
-	return wpg, pgi.phys
+	return wpg, pgi.phys, 0
 }
 
-func (pc *pgcache_t) _ensureslot(pgn int) bool {
+func (pc *pgcache_t) _ensureslot(pgn int) (bool, bool) {
 	// XXXPANIC
 	if len(pc.pgs) != len(pc.pginfo) {
 		panic("weird lens")
@@ -1251,8 +1281,18 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 	created := false
 	if pc.pgs[pgn] == nil {
 		created = true
-		//npg, p_npg := pg_new()
-		npg, p_npg := refpg_new()
+		var npg *[512]int
+		var p_npg int
+		for {
+			var ok bool
+			npg, p_npg, ok = refpg_new()
+			if ok {
+				break
+			}
+			if !memreclaim() {
+				return false, false
+			}
+		}
 		refup(uintptr(p_npg))
 		bpg := pg2bytes(npg)
 		pc.pgs[pgn] = bpg
@@ -1261,12 +1301,15 @@ func (pc *pgcache_t) _ensureslot(pgn int) bool {
 		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
 		pc.pginfo[pgn] = pgi
 	}
-	return created
+	return created, true
 }
 
 // return error
 func (pc *pgcache_t) _ensurefill(pgn int) err_t {
-	needsfill := pc._ensureslot(pgn)
+	needsfill, ok := pc._ensureslot(pgn)
+	if !ok {
+		return -ENOMEM
+	}
 	if needsfill {
 		pgva := pc.pgs[pgn]
 		devoffset := pgn * PGSIZE
@@ -1287,7 +1330,7 @@ func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, err_t) {
 	pgn := offset / PGSIZE
 	err := pc._ensurefill(pgn)
 	if err != 0 {
-		panic("must succeed")
+		return nil, err
 	}
 	pgva := pc.pgs[pgn]
 	pg := pgva[:]
@@ -1327,6 +1370,20 @@ func (pc *pgcache_t) flush() {
 			pgi.dirtyblocks[j] = false
 		}
 	}
+}
+
+// decrements the refcounts of all pages in the page cache
+func (pc *pgcache_t) release() {
+	for i := range pc.pginfo {
+		if pc.pginfo[i].phys == 0 {
+			continue
+		}
+		refdown(uintptr(pc.pginfo[i].phys))
+	}
+	pc.pgs = nil
+	pc.pginfo = nil
+	pc._fill = nil
+	pc._flush = nil
 }
 
 // a mutex that allows attempting to acuire the mutex without blocking. useful
@@ -1401,19 +1458,32 @@ var idmonl	= sync.Mutex{}
 // links == 0 instead of finding no entry for priv in allidmons, assuming that
 // priv just hasn't been read in from disk yet, and then reopening priv which
 // is now a free inum.
-func idaemon_ensure(priv inum) *imemnode_t {
+func idaemon_ensure(priv inum) (*imemnode_t, err_t) {
 	if priv <= 0 {
 		panic("non-positive priv")
 	}
 	idmonl.Lock()
 	ret, ok := allidmons[priv]
 	if !ok {
+		for {
+			if uint(len(allidmons)) < syslimit.vnodes {
+				break
+			}
+			if !memreclaim() {
+				idmonl.Unlock()
+				return nil, -ENOMEM
+			}
+		}
 		ret = &imemnode_t{}
-		ret.idm_init(priv)
+		err := ret.idm_init(priv)
+		if err != 0 {
+			idmonl.Unlock()
+			return nil, -ENOMEM
+		}
 		allidmons[priv] = ret
 	}
 	idmonl.Unlock()
-	return ret
+	return ret, 0
 }
 
 // caller must have containing directory locked and the directory entry for
@@ -1428,8 +1498,8 @@ func idaemon_remove(priv inum) {
 }
 
 // creates a new idaemon struct and fills its inode
-func (idm *imemnode_t) idm_init(priv inum) {
-	blkno, ioff := bidecode(int(priv))
+func (idm *imemnode_t) idm_init(priv inum) err_t {
+	blkno, ioff := bidecode(priv)
 	idm.priv = priv
 	idm.blkno = blkno
 	idm.ioff = ioff
@@ -1442,11 +1512,16 @@ func (idm *imemnode_t) idm_init(priv inum) {
 	idm.icache.fill(blk, ioff)
 	ibrelse(blk)
 	if idm.icache.itype == I_DIR {
-		idm.cache_dirents()
+		if err := idm.cache_dirents(); err != 0 {
+			// XXX safely purge from iblock cache
+			idm.pgcache.release()
+			return err
+		}
 	}
+	return 0
 }
 
-func (idm *imemnode_t) cache_dirents() {
+func (idm *imemnode_t) cache_dirents() err_t {
 	ic := &idm.icache
 	ic.dents = make(map[string]icdent_t)
 	ic._free_dents = make([]icdent_t, 0, NDIRENTS)
@@ -1454,7 +1529,7 @@ func (idm *imemnode_t) cache_dirents() {
 	for i := 0; i < idm.icache.size; i+= 512 {
 		pg, err := idm.pgcache.pgfor(i, i+512)
 		if err != 0 {
-			panic("must succeed")
+			return err
 		}
 		// XXXPANIC
 		if len(pg) != 512 {
@@ -1472,6 +1547,7 @@ func (idm *imemnode_t) cache_dirents() {
 			}
 		}
 	}
+	return 0
 }
 
 // biscuit FS locking protocol: rename acquires imemnode locks in any order.
@@ -1611,6 +1687,7 @@ func (idm *imemnode_t) do_dirchk(wantdir bool) err_t {
 	return 0
 }
 
+// unlink cannot encounter OOM since directory page caches are eagerly loaded.
 func (idm *imemnode_t) do_unlink(name string) err_t {
 	idm._locked()
 	_, err := idm.iunlink(name)
@@ -1681,8 +1758,11 @@ func (idm *imemnode_t) do_fullpath() (string, err_t) {
 		if err != 0 {
 			panic(".. must exist")
 		}
-		par := idaemon_ensure(pari)
+		par, err := idaemon_ensure(pari)
 		c.iunlock()
+		if err != 0 {
+			return "", err
+		}
 		if !par.ilock_namei() {
 			return "", -ENOENT
 		}
@@ -2072,6 +2152,7 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
 func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) err_t {
 	// XXX fix sign
 	oldlen := uint(_oldlen)
+	ret := err_t(0)
 	if newlen > oldlen {
 		// extending file; fill new content in page cache with zeros
 		first := true
@@ -2079,7 +2160,8 @@ func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) err_t {
 		for c < newlen {
 			pg, err := idm.pgcache.pgfor(int(c), int(newlen))
 			if err != 0 {
-				panic("must succeed")
+				ret = -ENOMEM
+				break
 			}
 			if first {
 				// XXX go doesn't seem to have a good way to
@@ -2091,9 +2173,9 @@ func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) err_t {
 			}
 			c += uint(len(pg))
 		}
-		idm.pgcache.pgdirty(int(oldlen), int(newlen))
+		idm.pgcache.pgdirty(int(oldlen), int(c))
 	}
-	return 0
+	return ret
 }
 
 func (idm *imemnode_t) itrunc(newlen uint) err_t {
@@ -2151,15 +2233,19 @@ func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
 	return 0
 }
 
-func (idm *imemnode_t) dirent_add(name string, nblkno int, ioff int) {
+// if dirent_add fails to allocate a page, idm is left unchanged.
+func (idm *imemnode_t) dirent_add(name string, nblkno int, ioff int) err_t {
 	if _, ok := idm.icache.dents[name]; ok {
 		panic("dirent already exists")
 	}
 	var ddata dirdata_t
-	noff := idm.dirent_getempty()
+	noff, err := idm.dirent_getempty()
+	if err != 0 {
+		return err
+	}
 	pg, err := idm.pgcache.pgfor(noff, noff+NDBYTES)
 	if err != 0 {
-		panic("must succeed")
+		panic("dirent_getempty implies success")
 	}
 	ddata.data = pg
 
@@ -2173,6 +2259,62 @@ func (idm *imemnode_t) dirent_add(name string, nblkno int, ioff int) {
 	idm.pgcache.flush()
 	de := icdent_t{noff, inum(biencode(nblkno, ioff))}
 	idm.icache.dents[name] = de
+	return 0
+}
+
+// a function to guarantee that there is enough memory to insert at least one
+// directory entry.
+func (idm *imemnode_t) probe_insert() err_t {
+	// insert and remove a fake directory entry, forcing a page allocation
+	// is necessary.
+	if err := idm.dirent_add("", 0, 0); err != 0 {
+		return err
+	}
+	if _, err := idm.iunlink(""); err != 0 {
+		panic("success implied")
+	}
+	return 0
+}
+
+// returns true if all the inodes on ib are also marked dead and thus this
+// inode block should be freed.
+func _alldead(ib *ibuf_t) bool {
+	bwords := 512/8
+	ret := true
+	for i := 0; i < bwords/NIWORDS; i++ {
+		icache := inode_t{ib, i}
+		if icache.itype() != I_DEAD {
+			ret = false
+			break
+		}
+	}
+	return ret
+}
+
+// caller must flush ib to disk
+func _iallocundo(iblkn int, ni *inode_t, ib *ibuf_t) {
+	ni.w_itype(I_DEAD)
+	if _alldead(ib) {
+		ibpurge(ib)
+		bfree(iblkn)
+	}
+}
+
+// reverts icreate(). called after failure to allocate that prevents an FS
+// operation from continuing.
+func (idm *imemnode_t) create_undo(childi inum, childn string) {
+	ci, err := idm.iunlink(childn)
+	if err != 0 {
+		panic("but insert just succeeded")
+	}
+	if ci != childi {
+		panic("inconsistent")
+	}
+	bn, ioff := bidecode(childi)
+	ib := ibread(bn)
+	ni := &inode_t{ib, ioff}
+	_iallocundo(bn, ni, ib)
+	ibrelse(ib)
 }
 
 func (idm *imemnode_t) icreate(name string, nitype, major,
@@ -2207,14 +2349,16 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 		newinode.w_addr(i, 0)
 	}
 
+	// write new directory entry referencing newinode
+	err := idm.dirent_add(name, newbn, newioff)
+	if err != 0 {
+		_iallocundo(newbn, newinode, newiblk)
+	}
 	newiblk.log_write()
 	ibrelse(newiblk)
 
-	// write new directory entry referencing newinode
-	idm.dirent_add(name, newbn, newioff)
-
 	newinum := inum(biencode(newbn, newioff))
-	return newinum, 0
+	return newinum, err
 }
 
 func (idm *imemnode_t) iget(name string) (inum, err_t) {
@@ -2236,9 +2380,9 @@ func (idm *imemnode_t) iinsert(name string, priv inum) err_t {
 	if _, ok := idm.icache.dents[name]; ok {
 		return -EEXIST
 	}
-	a, b := bidecode(int(priv))
-	idm.dirent_add(name, a, b)
-	return 0
+	a, b := bidecode(priv)
+	err := idm.dirent_add(name, a, b)
+	return err
 }
 
 // returns inode number of unliked inode so caller can decrement its ref count
@@ -2252,7 +2396,7 @@ func (idm *imemnode_t) iunlink(name string) (inum, err_t) {
 	}
 	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES)
 	if err != 0 {
-		panic("must succeed")
+		return 0, err
 	}
 	dirdata := dirdata_t{pg}
 	dirdata.w_filename(0, "")
@@ -2298,7 +2442,10 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	pgc := len / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
 	for i := 0; i < len; i += PGSIZE {
-		pg, phys := idm.pgcache.pgraw(offset + i)
+		pg, phys, err := idm.pgcache.pgraw(offset + i)
+		if err != 0 {
+			return nil, err
+		}
 		pgn := i / PGSIZE
 		ret[pgn].pg = pg
 		ret[pgn].phys = phys
@@ -2333,24 +2480,10 @@ func (idm *imemnode_t) ifree() {
 		idm.icache.mbrelse(blk)
 	}
 
-	// mark this inode as dead and free the inode block if all inodes on it
-	// are marked dead.
-	alldead := func(blk *ibuf_t) bool {
-		bwords := 512/8
-		ret := true
-		for i := 0; i < bwords/NIWORDS; i++ {
-			icache := inode_t{blk, i}
-			if icache.itype() != I_DEAD {
-				ret = false
-				break
-			}
-		}
-		return ret
-	}
 	iblk := ibread(idm.blkno)
 	idm.icache.itype = I_DEAD
 	idm.icache.flushto(iblk, idm.ioff)
-	if alldead(iblk) {
+	if _alldead(iblk) {
 		add(idm.blkno)
 		ibpurge(iblk)
 	} else {
@@ -2362,17 +2495,12 @@ func (idm *imemnode_t) ifree() {
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
-	// free pagecache pages
-	for i := range idm.pgcache.pginfo {
-		if idm.pgcache.pginfo[i].phys == 0 {
-			continue
-		}
-		refdown(uintptr(idm.pgcache.pginfo[i].phys))
-	}
+	idm.pgcache.release()
 }
 
-// returns the offset of an empty directory entry
-func (idm *imemnode_t) dirent_getempty() int {
+// returns the offset of an empty directory entry. returns false if failed to
+// allocate page for the new directory entry.
+func (idm *imemnode_t) dirent_getempty() (int, err_t) {
 	frd := idm.icache.free_dents
 	if len(frd) > 0 {
 		ret := frd[0]
@@ -2380,7 +2508,7 @@ func (idm *imemnode_t) dirent_getempty() int {
 		if len(idm.icache.free_dents) == 0 {
 			idm.icache.free_dents = idm.icache._free_dents
 		}
-		return ret.offset
+		return ret.offset, 0
 	}
 
 	// current dir blocks are full -- allocate new dirdata block. make
@@ -2388,7 +2516,7 @@ func (idm *imemnode_t) dirent_getempty() int {
 	newsz := idm.icache.size + 512
 	_, err := idm.pgcache.pgfor(idm.icache.size, newsz)
 	if err != 0 {
-		panic("must succeed")
+		return 0, err
 	}
 	idm.pgcache.pgdirty(idm.icache.size, newsz)
 	newoff := idm.icache.size
@@ -2399,7 +2527,7 @@ func (idm *imemnode_t) dirent_getempty() int {
 		idm.icache.free_dents = append(idm.icache.free_dents, fde)
 	}
 	idm.icache.size = newsz
-	return newoff
+	return newoff, 0
 }
 
 // used for {,f}stat
@@ -2435,10 +2563,10 @@ func biencode(blk int, iidx int) int {
 	return int(blk << logisperblk | iidx)
 }
 
-func bidecode(val int) (int, int) {
+func bidecode(val inum) (int, int) {
 	logisperblk := uint(2)
 	blk := int(uint(val) >> logisperblk)
-	iidx := val & 0x3
+	iidx := int(val) & 0x3
 	return blk, iidx
 }
 
@@ -2543,6 +2671,8 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 // 32-39,  minor
 // 40-47,  indirect block
 // 48-80,  block addresses
+
+// ...the above comment may be out of date
 type inode_t struct {
 	iblk	*ibuf_t
 	ioff	int
@@ -3089,4 +3219,17 @@ func bdev_read(blkn int, dst *[512]uint8) {
 	ider := idereq_new(blkn, false, dst)
 	ide_request <- ider
 	<- ider.ack
+}
+
+func memreclaim() bool {
+	if memtime {
+		// cannot evict vnodes on a memory file system!
+		return false
+	}
+	// memreclaim can be called while an inode is locked. a caller may also
+	// created a defer statement that tries to close the file on which an
+	// operation failed to allocate. thus we panic while the file is locked
+	// and the defer statement deadlocks trying to close the file.
+	fmt.Printf("eviction no imp\n")
+	panic("eviction no imp\n")
 }
