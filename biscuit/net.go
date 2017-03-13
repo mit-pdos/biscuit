@@ -1972,7 +1972,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 // allows
 func (tc *tcptcb_t) seg_maybe() {
 	tc._sanity()
-	if tc.txdone && tc.finacked() {
+	if tc.dead || (tc.txdone && tc.finacked()) {
 		// everything has been acknowledged
 		return
 	}
