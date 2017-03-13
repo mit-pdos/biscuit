@@ -984,6 +984,21 @@ int initgroups(const char *, gid_t);
 char *realpath(const char *, char *);
 int lstat(const char *, struct stat *);
 
+//static inline pid_t
+//getppid(void)
+//{
+//	pid_t ret;
+//	asm volatile(
+//		"movq	%%rsp, %%r10\n"
+//		"leaq	2(%%rip), %%r11\n"
+//		"sysenter\n"
+//		"callq	flea\n"
+//		: "=a"(ret)
+//		: "0"(40)
+//		: "cc", "rdi", "rsi", "rdx", "rcx", "r8", "memory", "r9", "r10", "r11", "r12", "r13", "r14", "r15");
+//	return ret;
+//}
+
 #ifdef __cplusplus
 }	// extern "C"
 #endif
