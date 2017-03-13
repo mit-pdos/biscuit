@@ -217,6 +217,12 @@ struct sockaddr_in {
 	} sin_addr;
 };
 
+struct sockaddr_storage {
+	uchar		ss_len;
+	uchar		ss_family;
+	char		ss_data[sizeof(struct sockaddr_un) - 2];
+};
+
 #define		INADDR_ANY	((uint32_t)0)
 
 struct stat {
