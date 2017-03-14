@@ -1539,9 +1539,317 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 	nic.tx_tcp(sgbuf)
 }
 
+// the owning tcb must be locked before calling any tcptlist_t methods.
+type tcptlist_t struct {
+	next	*tcptlist_t
+	prev	*tcptlist_t
+	tcb	*tcptcb_t
+	bucket	int
+}
+
+func (tl *tcptlist_t) linit(tcb *tcptcb_t) {
+	tl.tcb = tcb
+	tl.clear()
+}
+
+// zeroes the pointers for debugging and returns the next list item
+func (tl *tcptlist_t) clear() *tcptcb_t {
+	var ret *tcptcb_t
+	if tl.next != nil {
+		ret = tl.next.tcb
+	}
+	tl.next, tl.prev, tl.bucket = nil, nil, -1
+	return ret
+}
+
+// timerwheel is not thread-safe
+type timerwheel_t struct {
+	ep	time.Time
+	gran	time.Duration
+	lbucket	int
+	bucks	[]*tcptlist_t
+}
+
+// must call dormant() before first timer is added in order to determine the
+// current bucket.
+func (tw *timerwheel_t) twinit(gran, width time.Duration) {
+	tw.gran = gran
+	sz := width/gran
+	tw.bucks = make([]*tcptlist_t, sz)
+	tw.lbucket = -1
+}
+
+var _ztime time.Time
+
+// inserts tl into the wheel linked list with deadline, updating tcptlist_t's
+// pointers and bucket. the containting tcb must be locked.
+func (tw *timerwheel_t) toadd(deadline time.Time, tl *tcptlist_t) {
+	if tl.bucket != -1 || tl.next != nil || tl.prev != nil || tw.ep == _ztime {
+		panic("oh noes")
+	}
+	bn := int(deadline.Sub(tw.ep)/tw.gran) % len(tw.bucks)
+	tl.bucket = bn
+	//if bn == tw.lbucket {
+	//	fmt.Printf("vewy suspicious widf (diff: %v)\n", time.Until(deadline).Nanoseconds())
+	//}
+	tl.next = tw.bucks[bn]
+	tl.prev = nil
+	if tw.bucks[bn] != nil {
+		tw.bucks[bn].prev = tl
+	}
+	tw.bucks[bn] = tl
+}
+
+// returns the Time of the oldest timeout or false if there are no more
+// timeouts.
+func (tw *timerwheel_t) nextto(now time.Time) (time.Time, bool) {
+	for i := 0; i < len(tw.bucks); i++ {
+		bn := (tw.lbucket + i) % len(tw.bucks)
+		if tw.bucks[bn] != nil {
+			then := now.Add(time.Duration(i)*tw.gran)
+			return then, true
+		}
+	}
+	var z time.Time
+	return z, false
+}
+
+// returns all the lists between the last bucket processed and the bucket
+// belonging to now, if any. also makes sure concurrent list removals won't
+// touch the returned lists.
+func (tw *timerwheel_t) advance_to(now time.Time) []*tcptcb_t {
+	maxbn := int(now.Sub(tw.ep)/tw.gran) % len(tw.bucks)
+	if tw.lbucket == maxbn {
+		return nil
+	}
+	var ret []*tcptcb_t
+	for tw.lbucket != maxbn {
+		tw.lbucket = (tw.lbucket + 1) % len(tw.bucks)
+		p := tw.bucks[tw.lbucket]
+		if p != nil {
+			ret = append(ret, p.tcb)
+			tw.bucks[tw.lbucket] = nil
+		}
+	}
+	return ret
+}
+
+func (tw *timerwheel_t) torem(tl *tcptlist_t) {
+	// tl is not in the list
+	if tl.bucket == -1 {
+		return
+	}
+	// make sure list removals are allowed. tcbs are not allowed to remove
+	// themselves from a list while the timer daemon is processing the
+	// timers (though they could be if the pointer zeroing is removed).
+	if tw.bucks[tl.bucket] == nil {
+		// removes not allowed
+		return
+	}
+	if tl.next != nil {
+		tl.next.prev = tl.prev
+	}
+	if tl.prev != nil {
+		tl.prev.next = tl.next
+	} else {
+		tw.bucks[tl.bucket] = tl.next
+	}
+	tl.clear()
+}
+
+func (tw *timerwheel_t) dormant(now time.Time) {
+	tw.ep = now
+	tw.lbucket = 0
+}
+
+type tcptimers_t struct {
+	// tcptimers_t.l is a leaf lock
+	l	sync.Mutex
+	// 1-element buffered channel
+	kicker	chan bool
+	// cvalid is true iff curto is valid; otherwise there is no outstanding
+	// timeout
+	cvalid	bool
+	curto	time.Time
+	// ackw granularity: 10ms, width: 1s
+	ackw	timerwheel_t
+	// txw granularity: 100ms, width: 10s
+	txw	timerwheel_t
+	// twaitw granularity: 1s, width: 2m
+	twaitw	timerwheel_t
+}
+
+var bigtw = &tcptimers_t{}
+
+func (tt *tcptimers_t) _tcptimers_start() {
+	tt.ackw.twinit(10*time.Millisecond, time.Second)
+	tt.txw.twinit(100*time.Millisecond, 10*time.Second)
+	tt.twaitw.twinit(time.Second, 2*time.Minute)
+	tt.kicker = make(chan bool, 1)
+	go tt._tcptimers_daemon()
+}
+
+func (tt *tcptimers_t) _tcptimers_daemon() {
+	var curtoc <-chan time.Time
+	for {
+		dotos := false
+		select {
+		case <-curtoc:
+			dotos = true
+		case <-tt.kicker:
+		}
+
+		var acklists []*tcptcb_t
+		var txlists []*tcptcb_t
+		var twaitlists []*tcptcb_t
+
+		tt.l.Lock()
+		now := time.Now()
+		if dotos {
+			acklists = tt.ackw.advance_to(now)
+			txlists = tt.txw.advance_to(now)
+			twaitlists = tt.twaitw.advance_to(now)
+		}
+		tt.cvalid = false
+		ws := []*timerwheel_t{&tt.ackw, &tt.txw, &tt.twaitw}
+		for _, w := range ws {
+			if newto, ok := w.nextto(now); ok {
+				tt.cvalid = true
+				tt.curto = newto
+				break
+			}
+		}
+		if tt.cvalid {
+			curtoc = time.After(time.Until(tt.curto))
+		}
+		tt.l.Unlock()
+
+		if dotos {
+			// we cannot process the timeouts while tcptimers_t is locked,
+			// since tcptcb_t locks in the opposite order since it is
+			// convenient to add to the timeout list while a tcb is locked.
+			for _, list := range acklists {
+				var next *tcptcb_t
+				for tcb := list; tcb != nil; tcb = next {
+					tcb.tcb_lock()
+					tcb.remack.tstart = false
+					next = tcb.ackl.clear()
+					tcb.ack_maybe()
+					tcb.tcb_unlock()
+				}
+			}
+			for _, list := range txlists {
+				var next *tcptcb_t
+				for tcb := list; tcb != nil; tcb = next {
+					tcb.tcb_lock()
+					tcb.remseg.tstart = false
+					next = tcb.txl.clear()
+					tcb.seg_maybe()
+					tcb.tcb_unlock()
+				}
+			}
+			for _, list := range twaitlists {
+				var next *tcptcb_t
+				for tcb := list; tcb != nil; tcb = next {
+					tcb.tcb_lock()
+					next = tcb.twaitl.clear()
+					if !tcb.dead {
+						tcb.kill()
+					}
+					tcb.tcb_unlock()
+				}
+			}
+		}
+	}
+}
+
+// our timewheel doesn't use timer ticks to track the passage of time -- it
+// waits until the minimum timeout finishes, then processes all buckets between
+// the last timeout and the current bucket.  well if there were previously no
+// timers, the current bucket indicies will be garbage. _was_dormant
+// reinitializes them.
+func (tt *tcptimers_t) _was_dormant() {
+	now := time.Now()
+	tt.ackw.dormant(now)
+	tt.txw.dormant(now)
+	tt.twaitw.dormant(now)
+}
+
+// tcb must be locked.
+func (tt *tcptimers_t) tosched_ack(tcb *tcptcb_t) {
+	tcb._sanity()
+	dline := time.Now().Add(500*time.Millisecond)
+	tt._tosched(&tcb.ackl, &tt.ackw, dline)
+}
+
+// tcb must be locked.
+func (tt *tcptimers_t) tosched_tx(tcb *tcptcb_t) {
+	tcb._sanity()
+	dline := time.Now().Add(5*time.Second)
+	tt._tosched(&tcb.txl, &tt.txw, dline)
+}
+
+// tcb must be locked.
+func (tt *tcptimers_t) tosched_twait(tcb *tcptcb_t) {
+	tcb._sanity()
+	dline := time.Now().Add(1*time.Minute)
+	tt._tosched(&tcb.twaitl, &tt.twaitw, dline)
+}
+
+func (tt *tcptimers_t) _tosched(tl *tcptlist_t, tw *timerwheel_t,
+   dline time.Time) {
+
+	kickit := true
+	tt.l.Lock()
+	cur := tt.curto
+	if tt.cvalid {
+		if dline.After(cur) {
+			kickit = false
+		}
+	} else {
+		tt._was_dormant()
+		tt.cvalid = true
+		tt.curto = dline
+	}
+	tw.toadd(dline, tl)
+	tt.l.Unlock()
+
+	// make sure timer goroutine observes our timeout which will apparently
+	// expire sooner than all the other timeouts. we cannot simply block on
+	// the kicker channel since the timer goroutine may be blocking, trying
+	// to lock the caller's tcb, thus we would deadlock. this dance is
+	// expected to rarely occur.
+	if kickit {
+		select {
+		case tt.kicker <- true:
+			kickit = false
+		default:
+			// kicker is already full; the timer goroutine must
+			// observe our timer.
+		}
+	}
+}
+
+func (tt *tcptimers_t) tocancel_all(tcb *tcptcb_t) {
+	tcb._sanity()
+
+	tt.l.Lock()
+	tt._tocancel(&tcb.ackl, &tt.ackw)
+	tt._tocancel(&tcb.txl, &tt.txw)
+	tt._tocancel(&tcb.twaitl, &tt.twaitw)
+	tt.l.Unlock()
+}
+
+func (tt *tcptimers_t) _tocancel(tl *tcptlist_t, tw *timerwheel_t) {
+	tw.torem(tl)
+}
+
 type tcptcb_t struct {
 	l	sync.Mutex
 	locked	bool
+	ackl	tcptlist_t
+	txl	tcptlist_t
+	twaitl	tcptlist_t
 	// local/remote ip/ports
 	lip	ip4_t
 	rip	ip4_t
@@ -1602,7 +1910,6 @@ type tcptcb_t struct {
 	rxbuf	tcpbuf_t
 	twdeath	bool
 	bound	bool
-	twchan	chan bool
 	sndsz	int
 	rcvsz	int
 }
@@ -1740,9 +2047,9 @@ func (tc *tcptcb_t) incoming(tk tcpkey_t, ip4 *ip4hdr_t, tcp *tcphdr_t,
     opt tcpopt_t, rest [][]uint8) {
 
 	tc._sanity()
-	if !opt.tsok {
-		fmt.Printf("no ts!\n")
-	}
+	//if !opt.tsok {
+	//	fmt.Printf("no ts!\n")
+	//}
 	switch tc.state {
 		case SYNSENT:
 			tc.synsent(tcp, opt.mss, opt, rest)
@@ -1876,10 +2183,7 @@ func (tc *tcptcb_t) kill() {
 	tc._bufrelease()
 	syslimit.socks.give()
 	tcpcons.tcb_del(tc)
-	select {
-	case tc.twchan <- true:
-	default:
-	}
+	bigtw.tocancel_all(tc)
 }
 
 func (tc *tcptcb_t) timewaitdeath() {
@@ -1889,17 +2193,8 @@ func (tc *tcptcb_t) timewaitdeath() {
 	}
 	tc.twdeath = true
 	tc._bufrelease()
-	go func() {
-		select {
-		case <- tc.twchan:
-		case <- time.After(1*time.Minute):
-		}
-		tc.tcb_lock()
-		if !tc.dead {
-			tc.kill()
-		}
-		tc.tcb_unlock()
-	}()
+
+	bigtw.tosched_twait(tc)
 }
 
 // sets flag to send an ack which may be delayed.
@@ -1938,16 +2233,8 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 		deadline := tc.remack.last.Add(500*time.Millisecond)
 		if now.Before(deadline) {
 			if !tc.remack.tstart {
-				// XXX goroutine per timeout bad?
 				tc.remack.tstart = true
-				go func() {
-					left := deadline.Sub(now)
-					time.Sleep(left)
-					tc.tcb_lock()
-					tc.remack.tstart = false
-					tc.ack_maybe()
-					tc.tcb_unlock()
-				}()
+				bigtw.tosched_ack(tc)
 			}
 			return
 		}
@@ -1972,7 +2259,7 @@ func (tc *tcptcb_t) _acktime(sendnow bool) {
 // allows
 func (tc *tcptcb_t) seg_maybe() {
 	tc._sanity()
-	if tc.dead || (tc.txdone && tc.finacked()) {
+	if tc.twdeath || tc.dead || (tc.txdone && tc.finacked()) {
 		// everything has been acknowledged
 		return
 	}
@@ -2116,13 +2403,7 @@ func (tc *tcptcb_t) _txtimeout_start() {
 		fmt.Printf("** timeouts are shat upon!\n")
 		return
 	}
-	go func() {
-		time.Sleep(deadline.Sub(now))
-		tc.tcb_lock()
-		tc.remseg.tstart = false
-		tc.seg_maybe()
-		tc.tcb_unlock()
-	}()
+	bigtw.tosched_tx(tc)
 }
 
 var _deftcpopts = []uint8{
@@ -2607,7 +2888,9 @@ func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
 	tc.rcv.mss = 1460
 	tc.snd.nxt = sndnxt
 	tc.snd.una = sndnxt
-	tc.twchan = make(chan bool, 1)
+	tc.ackl.linit(tc)
+	tc.txl.linit(tc)
+	tc.twaitl.linit(tc)
 }
 
 func (tc *tcptcb_t) set_seqs(sndnxt, rcvnxt uint32) {
@@ -3737,6 +4020,8 @@ func netchk() {
 
 func net_init() {
 	netchk()
+
+	bigtw._tcptimers_start()
 
 	nics.m = new(map[ip4_t]nic_i)
 	arptbl.m = make(map[ip4_t]*arprec_t)
