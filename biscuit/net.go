@@ -1822,11 +1822,10 @@ func (tt *tcptimers_t) _tosched(tl *tcptlist_t, tw *timerwheel_t,
 	if kickit {
 		select {
 		case tt.kicker <- true:
-			kickit = false
 		default:
-			// kicker is already full; the timer goroutine must
-			// observe our timer.
 		}
+		// the timer goroutine won't sleep on a timeout until it has
+		// observed our timer.
 	}
 }
 

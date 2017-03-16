@@ -1956,6 +1956,7 @@ func (cb *circbuf_t) cb_release() {
 		_bufpool.Put(cb.buf)
 	}
 	cb.buf = nil
+	cb.head, cb.tail = 0, 0
 }
 
 func (cb *circbuf_t) full() bool {
