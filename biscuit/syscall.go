@@ -968,41 +968,28 @@ func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	// ready. if a device is immediately ready, we don't bother to register
 	// notifiers with the rest of the devices -- we just ask their status
 	// too.
-pollrace:
-	devwait := timeout != 0
 	pm := pollmsg_t{}
-	readyfds, writeback := _checkfds(proc, tid, &pm, devwait, buf, nfds)
+	for {
+		wait := timeout != 0
+		rfds, writeback := _checkfds(proc, tid, &pm, wait, buf, nfds)
+		if writeback && !proc.k2user(buf, fdsn) {
+			return int(-EFAULT)
+		}
 
-	if writeback && !proc.k2user(buf, fdsn) {
-		return int(-EFAULT)
-	}
+		// if we found a ready fd, we are done
+		if rfds != 0 || !wait {
+			return rfds
+		}
 
-	// if we found a ready fd, we are done
-	if readyfds != 0 || !devwait {
-		return readyfds
+		// otherwise, wait for a notification
+		timedout, err := pm.pm_wait(timeout)
+		if err != 0 {
+			panic("must succeed")
+		}
+		if timedout {
+			return 0
+		}
 	}
-
-	// otherwise, wait for a notification
-	timedout, err := pm.pm_wait(timeout)
-	if err != 0 {
-		panic("must succeed")
-	}
-	if timedout {
-		return 0
-	}
-	// check the fds one more time, update ready status
-	readyfds, writeback = _checkfds(proc, tid, &pm, false, buf, nfds)
-	if writeback && !proc.k2user(buf, fdsn) {
-		return int(-EFAULT)
-	}
-	if readyfds == 0 {
-		// this can happen when two threads poll the same fd and one
-		// thread removes the ready status before the second thread
-		// observes that ready status in _checkfds
-		//fmt.Printf("[!]")
-		goto pollrace
-	}
-	return readyfds
 }
 
 func sys_lseek(proc *proc_t, fdn, off, whence int) int {
