@@ -1616,23 +1616,7 @@ type ixgbe_t struct {
 	tag	pcitag_t
 	bar0	[]uint32
 	_locked	bool
-	tx struct {
-		// this lock protecting tx queue descriptors must be acquired
-		// after driver locks are acquired.
-		sync.Mutex
-		cond	*sync.Cond
-		ndescs	uint32
-		descs	[]txdesc_t
-		// cache tail register in order to avoid reading NIC registers,
-		// which apparently takes 1-2us.
-		tailc	uint32
-		// cache of most recent context descriptor parameters
-		cc struct {
-			istcp	bool
-			ethl	int
-			ip4l	int
-		}
-	}
+	txs	[]ixgbetx_t
 	rx struct {
 		ndescs	uint32
 		descs	[]rxdesc_t
@@ -1647,13 +1631,28 @@ type ixgbe_t struct {
 	mtu	int
 }
 
+type ixgbetx_t struct {
+	sync.Mutex
+	qnum	int
+	ndescs	uint32
+	descs	[]txdesc_t
+	// cache tail register in order to avoid reading NIC registers, which
+	// apparently take 1-2us.
+	tailc	uint32
+	// cache of most recent context descriptor parameters
+	cc struct {
+		istcp	bool
+		ethl	int
+		ip4l	int
+	}
+}
+
 func (x *ixgbe_t) init(t pcitag_t) {
 	x.tag = t
 
 	bar0, l := pci_bar_mem(t, 0)
 	x.bar0 = dmaplen32(bar0, l)
 
-	x.tx.cond = sync.NewCond(&x.tx)
 	x.rx.pkt = make([][]uint8, 0, 30)
 
 	x.mtu = 1500
@@ -1928,9 +1927,11 @@ func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
 
 func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
     mss int) bool {
-	x.tx.Lock()
-	ok := x._tx_enqueue(buf, ipv4, tcp, tso, tcphlen, mss)
-	x.tx.Unlock()
+	tq := runtime.CPUHint()
+	myq := &x.txs[tq]
+	myq.Lock()
+	ok := x._tx_enqueue(myq, buf, ipv4, tcp, tso, tcphlen, mss)
+	myq.Unlock()
 	if !ok {
 		fmt.Printf("tx packet(s) dropped!\n")
 	}
@@ -1941,11 +1942,12 @@ func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 // context descriptor should be created. the TCP context descriptor includes
 // IPV4 parameters. alternatively, we could simultaneously use both of the
 // x540's context slots.
-func (x *ixgbe_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
+func (x *ixgbe_t) _ctxt_update(myq *ixgbetx_t, ipv4, tcp bool, ethl,
+   ip4l int) bool {
 	if !ipv4 && !tcp {
 		return false
 	}
-	cc := &x.tx.cc
+	cc := &myq.cc
 	wastcp := cc.istcp
 	pdiffer := cc.ethl != ethl || cc.ip4l != ip4l
 	if tcp == wastcp && !pdiffer {
@@ -1957,14 +1959,14 @@ func (x *ixgbe_t) _ctxt_update(ipv4, tcp bool, ethl, ip4l int) bool {
 	return true
 }
 
-// caller must hold x.tx lock. returns true if buf was copied to the
+// caller must hold the ixgbetx_t's lock. returns true if buf was copied to the
 // transmission queue.
-func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
-    mss int) bool {
+func (x *ixgbe_t) _tx_enqueue(myq *ixgbetx_t, buf [][]uint8, ipv4, tcp,
+   tso bool, tcphlen, mss int) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
-	tail := x.tx.tailc
+	tail := myq.tailc
 	tlen := 0
 	for i := 0; i < len(buf); {
 		if len(buf[i]) == 0 {
@@ -1986,7 +1988,7 @@ func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	}
 	need := tlen
 	newtail := tail
-	ctxtstale := (ipv4 || tcp) && x._ctxt_update(ipv4, tcp, ETHERLEN,
+	ctxtstale := (ipv4 || tcp) && x._ctxt_update(myq, ipv4, tcp, ETHERLEN,
 	   IP4LEN)
 	if ctxtstale || tso {
 		// segmentation offload requires a per-packet context
@@ -1996,7 +1998,7 @@ func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		// checksum/segmentation offloading (only need 1 context for
 		// all checksum offloads?). a successfull check for DD/eop
 		// below implies that this context descriptor is free.
-		newtail = (newtail + 1) % x.tx.ndescs
+		newtail = (newtail + 1) % myq.ndescs
 	}
 	// starting from the last tail, look for a data descriptor that has DD
 	// set and is the last descriptor in a packet, thus any previous
@@ -2005,7 +2007,7 @@ func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 	for tt := newtail;; {
 		// find data descriptor with DD and eop
 		for {
-			fd := &x.tx.descs[tt]
+			fd := &myq.descs[tt]
 			done := fd.txdone()
 			if done {
 				break
@@ -2015,7 +2017,7 @@ func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 				// set, there aren't enough free tx descriptors
 				return false
 			}
-			tt = (tt + 1) % x.tx.ndescs
+			tt = (tt + 1) % myq.ndescs
 		}
 		// all tx descriptors between [tail, tt] are available. see if
 		// these descriptors have buffers which are large enough to
@@ -2024,61 +2026,61 @@ func (x *ixgbe_t) _tx_enqueue(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 		// references the descriptor following the last usable
 		// descriptor (and thus hardware will not process it).
 		for newtail != tt && need != 0 {
-			td := &x.tx.descs[newtail]
+			td := &myq.descs[newtail]
 			bs := int(td.bufsz)
 			if bs > need {
 				need = 0
 			} else {
 				need -= bs
 			}
-			newtail = (newtail + 1) % x.tx.ndescs
+			newtail = (newtail + 1) % myq.ndescs
 		}
 		if need == 0 {
 			break
 		} else {
-			tt = (tt + 1) % x.tx.ndescs
+			tt = (tt + 1) % myq.ndescs
 		}
 	}
 	// the first descriptors are special
-	fd := &x.tx.descs[tail]
+	fd := &myq.descs[tail]
 	fd.wbwait()
 	if tso {
 		fd.ctxt_tcp_tso(ETHERLEN, IP4LEN, tcphlen, mss)
-		tail = (tail + 1) % x.tx.ndescs
-		fd = &x.tx.descs[tail]
+		tail = (tail + 1) % myq.ndescs
+		fd = &myq.descs[tail]
 		fd.wbwait()
 		buf = fd.mktcp_tso(buf, tcphlen, tlen)
 	} else if tcp {
 		if ctxtstale {
 			fd.ctxt_tcp(ETHERLEN, IP4LEN)
-			tail = (tail + 1) % x.tx.ndescs
-			fd = &x.tx.descs[tail]
+			tail = (tail + 1) % myq.ndescs
+			fd = &myq.descs[tail]
 			fd.wbwait()
 		}
 		buf = fd.mktcp(buf, tlen)
 	} else if ipv4 {
 		if ctxtstale {
 			fd.ctxt_ipv4(ETHERLEN, IP4LEN)
-			tail = (tail + 1) % x.tx.ndescs
-			fd = &x.tx.descs[tail]
+			tail = (tail + 1) % myq.ndescs
+			fd = &myq.descs[tail]
 			fd.wbwait()
 		}
 		buf = fd.mkipv4(buf, tlen)
 	} else {
 		buf = fd.mkraw(buf, tlen)
 	}
-	tail = (tail + 1) % x.tx.ndescs
+	tail = (tail + 1) % myq.ndescs
 	for len(buf) != 0 {
-		td := &x.tx.descs[tail]
+		td := &myq.descs[tail]
 		td.wbwait()
 		buf = td.data_continue(buf)
-		tail = (tail + 1) % x.tx.ndescs
+		tail = (tail + 1) % myq.ndescs
 	}
 	if tail != newtail {
 		panic("size miscalculated")
 	}
-	x.rs(TDT(0), newtail)
-	x.tx.tailc = newtail
+	x.rs(TDT(myq.qnum), newtail)
+	myq.tailc = newtail
 	return true
 }
 
@@ -2238,8 +2240,8 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 			x.rx_consume()
 		}
 		if st & tx != 0 {
-			//x.tx.Lock()
-			//x.tx.Unlock()
+			//x.txs[0].Lock()
+			//x.txs[0].Unlock()
 		}
 	}
 }
@@ -2548,69 +2550,78 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 		x._dbc_init()
 
 		// setup tx queues
-		pg, p_pg := x.pg_new()
-		// RDBAL/TDBAL must be 128 byte aligned
-		x.rs(TDBAL(0), uint32(p_pg))
-		x.rs(TDBAH(0), uint32(p_pg >> 32))
-		x.rs(TDLEN(0), uint32(PGSIZE))
+		ntxqs := 4
+		x.txs = make([]ixgbetx_t, ntxqs)
+		for i := range x.txs {
+			ttx := &x.txs[i]
+			ttx.qnum = i
+			pg, p_pg := x.pg_new()
+			// RDBAL/TDBAL must be 128 byte aligned
+			x.rs(TDBAL(i), uint32(p_pg))
+			x.rs(TDBAH(i), uint32(p_pg >> 32))
+			x.rs(TDLEN(i), uint32(PGSIZE))
 
-		tdescsz := uint32(16)
-		ndescs := uint32(PGSIZE)/tdescsz
-		x.tx.ndescs = ndescs
-		x.tx.descs = make([]txdesc_t, x.tx.ndescs)
-		for i := 0; i < len(pg); i += 4 {
-			_, p_bpg := x.pg_new()
-			dn := i / 2
-			ps := uintptr(PGSIZE) / 2
-			x.tx.descs[dn].init(p_bpg, ps, &pg[i])
-			x.tx.descs[dn+1].init(p_bpg + ps, ps, &pg[i+2])
-			// set DD and eop so all tx descriptors appear ready
-			// for use
-			x.tx.descs[dn]._avail()
-			x.tx.descs[dn+1]._avail()
+			tdescsz := uint32(16)
+			ndescs := uint32(PGSIZE)/tdescsz
+			ttx.ndescs = ndescs
+			ttx.descs = make([]txdesc_t, ttx.ndescs)
+			for j := 0; j < len(pg); j += 4 {
+				_, p_bpg := x.pg_new()
+				dn := j / 2
+				ps := uintptr(PGSIZE) / 2
+				ttx.descs[dn].init(p_bpg, ps, &pg[j])
+				ttx.descs[dn+1].init(p_bpg + ps, ps,
+				   &pg[j+2])
+				// set DD and eop so all tx descriptors appear
+				// ready for use
+				ttx.descs[dn]._avail()
+				ttx.descs[dn+1]._avail()
+			}
+
+			// disable transmit descriptor head write-back. we may want
+			// this later.
+			x.rs(TDWBAL(i), 0)
+
+			// number of transmit descriptors per cacheline, as per
+			// 7.2.3.4.1.
+			tdcl := uint32(64/tdescsz)
+			// number of internal NIC descriptor buffers 7.2.1.2
+			nicdescs := uint32(40)
+			pthresh := nicdescs - tdcl
+			hthresh := tdcl
+			wthresh := uint32(0)
+			if pthresh &^ 0x7f != 0 || hthresh &^ 0x7f != 0 ||
+			    wthresh &^ 0x7f != 0 {
+				panic("bad pre-fetcher thresholds")
+			}
+			v = uint32(pthresh | hthresh << 8 | wthresh << 16)
+			x.rs(TXDCTL(i), v)
+
+			x.rs(TDT(ttx.qnum), 0)
+			x.rs(TDH(ttx.qnum), 0)
+			ttx.tailc = 0
 		}
-
-		// disable transmit descriptor head write-back. we may want
-		// this later.
-		x.rs(TDWBAL(0), 0)
-
-		// number of transmit descriptors per cacheline, as per
-		// 7.2.3.4.1.
-		tdcl := uint32(64/tdescsz)
-		// number of internal NIC descriptor buffers 7.2.1.2
-		nicdescs := uint32(40)
-		pthresh := nicdescs - tdcl
-		hthresh := tdcl
-		wthresh := uint32(0)
-		if pthresh &^ 0x7f != 0 || hthresh &^ 0x7f != 0 ||
-		    wthresh &^ 0x7f != 0 {
-			panic("bad pre-fetcher thresholds")
-		}
-		v = uint32(pthresh | hthresh << 8 | wthresh << 16)
-		x.rs(TXDCTL(0), v)
-
-		x.rs(TDT(0), 0)
-		x.rs(TDH(0), 0)
-		x.tx.tailc = 0
 
 		v = x.rl(DMATXCTL)
 		dmatxenable := uint32(1 << 0)
 		v |= dmatxenable
 		x.rs(DMATXCTL, v)
 
-		v = x.rl(TXDCTL(0))
-		txenable := uint32(1 << 25)
-		v |= txenable
-		x.rs(TXDCTL(0), v)
+		for i := 0; i < ntxqs; i++ {
+			v = x.rl(TXDCTL(i))
+			txenable := uint32(1 << 25)
+			v |= txenable
+			x.rs(TXDCTL(i), v)
 
-		for x.rl(TXDCTL(0)) & txenable == 0 {
+			for x.rl(TXDCTL(i)) & txenable == 0 {
+			}
 		}
 		//x.log("TX enabled!")
 	}
 
 	// configure interrupts with throttling
 	x.rs(GPIE, 0)
-	// interrupt throttling significantly affects bulk transfer
+	// interrupt throttling significantly affects TCP bulk transfer
 	// performance. openbsd's period is 125us where linux uses anything
 	// from 80us to 672us.  EITR[1-128] are reserved for MSI-X mode.
 	cnt_wdis := uint32(1 << 31)
@@ -2628,9 +2639,13 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	lsc := uint32(1 << 20)
 	x.rs(EIMS, lsc | 3)
 
+	ntx := uint32(0)
+	for i := range x.txs {
+		ntx += x.txs[i].ndescs
+	}
 	macs := mac2str(x.mac[:])
 	x.log("attached: MAC %s, rxq %v, txq %v, MSI %v, %vKB", macs,
-	    x.rx.ndescs, x.tx.ndescs, vec, x.pgs << 2)
+	    x.rx.ndescs, ntx, vec, x.pgs << 2)
 }
 
 var numpkts int
@@ -2698,8 +2713,8 @@ func (x *ixgbe_t) rx_test() {
 
 
 func (x *ixgbe_t) tx_test() {
-	x.tx.Lock()
-	defer x.tx.Unlock()
+	x.txs[0].Lock()
+	defer x.txs[0].Unlock()
 
 	fmt.Printf("test tx start\n")
 	pkt := &tcppkt_t{}
@@ -2724,24 +2739,24 @@ func (x *ixgbe_t) tx_test() {
 	if h != t {
 		panic("no")
 	}
-	fd := &x.tx.descs[t]
+	fd := &x.txs[0].descs[t]
 	fd.wbwait()
 	fd.ctxt_tcp_tso(ETHERLEN, IP4LEN, len(thdr), 1460)
-	t = (t+1) % x.tx.ndescs
-	fd = &x.tx.descs[t]
+	t = (t+1) % x.txs[0].ndescs
+	fd = &x.txs[0].descs[t]
 	fd.wbwait()
 	sgbuf = fd.mktcp_tso(sgbuf, len(thdr), tlen)
-	t = (t+1) % x.tx.ndescs
+	t = (t+1) % x.txs[0].ndescs
 	for len(sgbuf) != 0 {
-		fd = &x.tx.descs[t]
+		fd = &x.txs[0].descs[t]
 		fd.wbwait()
 		sgbuf = fd.data_continue(sgbuf)
-		t = (t+1) % x.tx.ndescs
+		t = (t+1) % x.txs[0].ndescs
 	}
 	x.rs(TDT(0), t)
 
-	for ot := h; ot != t; ot = (ot+1) % x.tx.ndescs {
-		fd := &x.tx.descs[ot]
+	for ot := h; ot != t; ot = (ot+1) % x.txs[0].ndescs {
+		fd := &x.txs[0].descs[ot]
 		if fd.eop {
 			fmt.Printf("wait for %v...\n", ot)
 			fd.wbwait()

@@ -1725,9 +1725,10 @@ func (tt *tcptimers_t) _tcptimers_daemon() {
 		tt.l.Unlock()
 
 		if dotos {
-			// we cannot process the timeouts while tcptimers_t is locked,
-			// since tcptcb_t locks in the opposite order since it is
-			// convenient to add to the timeout list while a tcb is locked.
+			// we cannot process the timeouts while tcptimers_t is
+			// locked, since tcptcb_t locks in the opposite order
+			// since it is convenient to add to the timeout list
+			// while a tcb is locked.
 			for _, list := range acklists {
 				var next *tcptcb_t
 				for tcb := list; tcb != nil; tcb = next {

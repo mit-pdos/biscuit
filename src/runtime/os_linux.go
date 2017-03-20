@@ -516,6 +516,15 @@ func Gscpu() *cpu_t {
 	return _Gscpu()
 }
 
+// returns the logical CPU identifier on which the calling thread was executing
+// at some point.
+func CPUHint() int {
+	fl := Pushcli()
+	ret := int(_Gscpu().num)
+	Popcli(fl)
+	return ret
+}
+
 //go:nowritebarrierrec
 func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
