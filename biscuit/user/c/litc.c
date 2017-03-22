@@ -2039,8 +2039,13 @@ makedev(uint maj, uint min)
 int
 memcmp(const void *q, const void *p, size_t sz)
 {
-	const char *s1 = (char *)q;
-	const char *s2 = (char *)p;
+	const long *e1 = (long *)q;
+	const long *e2 = (long *)p;
+	while (sz >= 8 && *e1 == *e2)
+		sz -= 8, e1++, e2++;
+
+	const char *s1 = (char *)e1;
+	const char *s2 = (char *)e2;
 	while (sz && *s1 == *s2)
 		sz--, s1++, s2++;
 	if (!sz)
@@ -2065,9 +2070,25 @@ memmove(void *dst, const void *src, size_t n)
 		// copy backwards
 		s += n;
 		d += n;
+		if (n >= 8) {
+			long *dst8 = (long *)d;
+			const long *src8 = (const long *)s;
+			for (; n >= 8; n -= 8)
+				*--dst8 = *--src8;
+			d = (char *)dst8;
+			s = (const char *)src8;
+		}
 		while (n--)
 			*--d = *--s;
 		return d;
+	}
+	if (n >= 8) {
+		long *dst8 = dst;
+		const long *src8 = src;
+		for (; n >= 8; n -= 8)
+			*dst8++ = *src8++;
+		d = (char *)dst8;
+		s = (const char *)src8;
 	}
 	while (n--)
 		*d++ = *s++;
@@ -2079,10 +2100,19 @@ memset(void *d, int c, size_t n)
 {
 	if (n == 0)
 		return d;
+	long *pl = d;
+	if (n >= 8) {
+		ulong c8 = (uchar)c;
+		c8 = c8 | c8 << 8;
+		c8 |= c8 << 16;
+		c8 |= c8 << 32;
+		for (; n >= 8; n -= 8)
+			*pl++ = c8;
+	}
+	char *pc = (char *)pl;
 	char v = (char)c;
-	char *p = d;
 	while (n--)
-		*p++ = v;
+		*pc++ = v;
 	return d;
 }
 
