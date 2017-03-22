@@ -2594,13 +2594,17 @@ func attach_devs() int {
 	return ncpu
 }
 
+var _tlblock	= sync.Mutex{}
+
 func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	if numcpus == 1 {
 		return
 	}
-	othercpus := uintptr(numcpus)
-	mygen := runtime.Tlbadmit(uintptr(p_pmap), othercpus, uintptr(va),
-	    uintptr(pgcount))
+	_tlblock.Lock()
+	defer _tlblock.Unlock()
+
+	runtime.Tlbshoot.Waitfor = int64(numcpus)
+	runtime.Tlbshoot.P_pmap = p_pmap
 
 	lapaddr := 0xfee00000
 	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
@@ -2621,11 +2625,15 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 
 	tlbshootvec := 70
 	// broadcast shootdown
-	low := ipilow(2, 0, tlbshootvec)
+	allandself := 2
+	low := ipilow(allandself, 0, tlbshootvec)
 	icrw(0, low)
 
-	// wait for other cpus to finish
-	runtime.Tlbwait(mygen)
+	// if we make it here, the IPI must have been sent and thus we
+	// shouldn't spin in this loop for very long. this loop does not
+	// contain a stack check and thus cannot be preempted by the runtime.
+	for atomic.LoadInt64(&runtime.Tlbshoot.Waitfor) != 0 {
+	}
 }
 
 type bprof_t struct {

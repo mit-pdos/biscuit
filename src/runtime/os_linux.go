@@ -2019,36 +2019,16 @@ out:
 	return ret
 }
 
-var tlbshoot_wait uintptr
-var tlbshoot_pg uintptr
-var tlbshoot_count uintptr
-var tlbshoot_pmap uintptr
-var tlbshoot_gen uint64
-
-func Tlbadmit(p_pmap, cpuwait, pg, pgcount uintptr) uint64 {
-	for !atomic.Casuintptr(&tlbshoot_wait, 0, cpuwait) {
-		preemptok()
-	}
-	atomic.Xchguintptr(&tlbshoot_pg, pg)
-	atomic.Xchguintptr(&tlbshoot_count, pgcount)
-	atomic.Xchguintptr(&tlbshoot_pmap, p_pmap)
-	atomic.Xadd64(&tlbshoot_gen, 1)
-	return tlbshoot_gen
-}
-
-func Tlbwait(gen uint64) {
-	for atomic.Loaduintptr(&tlbshoot_wait) != 0 {
-		if atomic.Load64(&tlbshoot_gen) != gen {
-			break
-		}
-	}
+var Tlbshoot struct {
+	Waitfor	int64
+	P_pmap	uintptr
 }
 
 // must be nosplit since called at interrupt time
 //go:nosplit
 func tlb_shootdown() {
 	ct := Gscpu().mythread
-	if ct != nil && Rcr3() == tlbshoot_pmap {
+	if ct != nil && Rcr3() == Tlbshoot.P_pmap {
 		// lazy way for now
 		Lcr3(Rcr3())
 		//start := tlbshoot_pg
@@ -2057,40 +2037,11 @@ func tlb_shootdown() {
 		//	invlpg(start)
 		//}
 	}
-	dur := (*uint64)(unsafe.Pointer(&tlbshoot_wait))
-	v := atomic.Xadd64(dur, -1)
+	v := atomic.Xaddint64(&Tlbshoot.Waitfor, -1)
 	if v < 0 {
 		pancake("shootwait < 0", uintptr(v))
 	}
 	sched_resume(ct)
-}
-
-// this function checks to see if another thread is trying to preempt this
-// thread (perhaps to start a GC). this is called when go code is spinning on a
-// spinlock in order to avoid a deadlock where the thread that acquired the
-// spinlock starts a GC and waits forever for the spinning thread. (go code
-// should probably not use spinlocks. tlb shootdown code is the only code
-// protected by a spinlock since the lock must both be acquired in go code and
-// in interrupt context.)
-//
-// alternatively, we could make sure that no allocations are made while the
-// spinlock is acquired.
-func preemptok() {
-	gp := getg()
-	StackPreempt := uintptr(0xfffffffffffffade)
-	if gp.stackguard0 == StackPreempt {
-		pmsg("!")
-		// call function with stack splitting prologue
-		_dummy()
-	}
-}
-
-var _notdeadcode uint32
-func _dummy() {
-	if _notdeadcode != 0 {
-		_dummy()
-	}
-	_notdeadcode = 0
 }
 
 // cpu exception/interrupt vectors
