@@ -138,6 +138,7 @@ def dumpsec(secname, rips, binfn, nsamp):
 	smap = getsmap2(binfn)
 	fin, ipbn = rip2func(rips, binfn, smap)
 	print '==== %s ====' % (secname)
+	cum = 0.0
 	tot = 0
 	for f in fin:
 		n = f[1].strip()
@@ -145,7 +146,9 @@ def dumpsec(secname, rips, binfn, nsamp):
 		s = float(c)
 		tot += c
 		cs = '(%d)' % (c)
-		print '%-35s %6.2f %6s' % (n, s/nsamp, cs)
+		frac = s/nsamp
+		cum += s
+		print '%-35s %6.4f %6s (%6.4f)' % (n, frac, cs, cum/nsamp)
 		fname = f[1]
 		if dumpips:
 			disass(fname, ipbn[fname], smap, binfn)
