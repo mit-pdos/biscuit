@@ -1917,6 +1917,7 @@ func (iov *useriovec_t) uiowrite(src []uint8) (int, err_t) {
 type circbuf_t struct {
 	buf	[]uint8
 	bufsz	int
+	// XXX uint
 	head	int
 	tail	int
 	p_pg	uintptr
@@ -1926,7 +1927,7 @@ var _bufpool = sync.Pool{New: func() interface{} { return make([]uint8, 512)}}
 
 func (cb *circbuf_t) cb_init(sz int) {
 	bufmax := 1024*1024
-	if sz <= 0 || sz > bufmax || sz & (sz - 1) != 0 {
+	if sz <= 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
 	cb.buf = _bufpool.Get().([]uint8)
@@ -2003,6 +2004,10 @@ func (cb *circbuf_t) copyin(src userio_i) (int, err_t) {
 }
 
 func (cb *circbuf_t) copyout(dst userio_i) (int, err_t) {
+	return cb.copyout_n(dst, 0)
+}
+
+func (cb *circbuf_t) copyout_n(dst userio_i, max int) (int, err_t) {
 	if cb.empty() {
 		return 0, 0
 	}
@@ -2012,15 +2017,21 @@ func (cb *circbuf_t) copyout(dst userio_i) (int, err_t) {
 	// wraparound?
 	if hi <= ti {
 		src := cb.buf[ti:]
+		if max != 0 && max < len(src) {
+			src = src[:max]
+		}
 		wrote, err := dst.uiowrite(src)
 		if err != 0 {
 			return 0, err
 		}
-		if wrote != len(src) {
+		if wrote != len(src) || wrote == max {
 			cb.tail += wrote
 			return wrote, 0
 		}
 		c += wrote
+		if max != 0 {
+			max -= c
+		}
 		ti = (cb.tail + wrote) % cb.bufsz
 	}
 	// XXXPANIC
@@ -2028,6 +2039,9 @@ func (cb *circbuf_t) copyout(dst userio_i) (int, err_t) {
 		panic("wut?")
 	}
 	src := cb.buf[ti:hi]
+	if max != 0 && max < len(src) {
+		src = src[:max]
+	}
 	wrote, err := dst.uiowrite(src)
 	if err != 0 {
 		return 0, err

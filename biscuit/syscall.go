@@ -1694,6 +1694,9 @@ func sys_socket(proc *proc_t, domain, typ, proto int) int {
 	var sfops fdops_i
 	switch {
 	case domain == AF_UNIX && typ & SOCK_DGRAM != 0:
+		if opts != 0 {
+			panic("no imp")
+		}
 		sfops = &sudfops_t{open: 1}
 	case domain == AF_UNIX && typ & SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
@@ -2096,12 +2099,11 @@ func sys_bind(proc *proc_t, fdn, sockaddrn, socklen int) int {
 }
 
 type sudfops_t struct {
-	sunaddr	sunaddr_t
+	// this lock protects open and bound; bud has its own lock
+	sync.Mutex
+	bud	*bud_t
 	open	int
 	bound	bool
-	// XXX use new method
-	// to protect the "open" field from racing close()s
-	sync.Mutex
 }
 
 func (sf *sudfops_t) close() err_t {
@@ -2111,18 +2113,16 @@ func (sf *sudfops_t) close() err_t {
 	if sf.open < 0 {
 		panic("negative ref count")
 	}
-	termsund := sf.open == 0
-	sf.Unlock()
-
-	if termsund {
+	term := sf.open == 0
+	if term {
 		if sf.bound {
-			allsunds.Lock()
-			delete(allsunds.m, sf.sunaddr.id)
-			sf.sunaddr.sund.finish <- true
-			allsunds.Unlock()
+			sf.bud.bud_close()
+			sf.bound = false
+			sf.bud = nil
 		}
 		syslimit.socks.give()
 	}
+	sf.Unlock()
 	return 0
 }
 
@@ -2131,7 +2131,7 @@ func (sf *sudfops_t) fstat(s *stat_t) err_t {
 }
 
 func (sf *sudfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
-	return nil, -ENODEV
+	return nil, -EINVAL
 }
 
 func (sf *sudfops_t) pathi() *imemnode_t {
@@ -2139,7 +2139,7 @@ func (sf *sudfops_t) pathi() *imemnode_t {
 }
 
 func (sf *sudfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
-	return 0, -ENODEV
+	return 0, -EBADF
 }
 
 func (sf *sudfops_t) reopen() err_t {
@@ -2150,7 +2150,7 @@ func (sf *sudfops_t) reopen() err_t {
 }
 
 func (sf *sudfops_t) write(*proc_t, userio_i) (int, err_t) {
-	return 0, -ENODEV
+	return 0, -EBADF
 }
 
 func (sf *sudfops_t) fullpath() (string, err_t) {
@@ -2200,18 +2200,18 @@ func (sf *sudfops_t) bind(proc *proc_t, sa []uint8) err_t {
 	poff := 2
 	path := slicetostr(sa[poff:])
 	// try to create the specified file as a special device
-	sid := sun_new()
+	bid := allbuds.bud_id_new()
 	pi := proc.cwd.fops.pathi()
-	fsf, err := _fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUD, int(sid))
+	fsf, err := _fs_open(path, O_CREAT | O_EXCL, 0, pi, D_SUD, int(bid))
 	if err != 0 {
 		return err
 	}
+	inum := fsf.priv.priv
+	bud := allbuds.bud_new(bid, path, inum)
 	if fs_close(fsf.priv) != 0 {
 		panic("must succeed")
 	}
-	sf.sunaddr.id = sid
-	sf.sunaddr.path = path
-	sf.sunaddr.sund = sun_start(sid)
+	sf.bud = bud
 	sf.bound = true
 	return 0
 }
@@ -2226,6 +2226,9 @@ func (sf *sudfops_t) listen(proc *proc_t, backlog int) (fdops_i, err_t) {
 
 func (sf *sudfops_t) sendmsg(proc *proc_t, src userio_i, sa []uint8,
     cmsg []uint8, flags int) (int, err_t) {
+	if len(cmsg) != 0 || flags != 0 {
+		panic("no imp")
+	}
 	poff := 2
 	if len(sa) <= poff {
 		return 0, -EINVAL
@@ -2240,73 +2243,60 @@ func (sf *sudfops_t) sendmsg(proc *proc_t, src userio_i, sa []uint8,
 	if maj != D_SUD {
 		return 0, -ECONNREFUSED
 	}
+	ino := st._ino
 
-	sunid := sunid_t(min)
-	// XXX use new way
-	// lookup sid, get admission to write. we must get admission in order
-	// to ensure that after the socket daemon terminates 1) no writers are
-	// left blocking indefinitely and 2) that no new writers attempt to
-	// write to a channel that no one is listening on
-	allsunds.Lock()
-	sund, ok := allsunds.m[sunid]
-	if ok {
-		sund.adm <- true
-	}
-	allsunds.Unlock()
+	bid := budid_t(min)
+	bud, ok := allbuds.bud_lookup(bid, inum(ino))
 	if !ok {
 		return 0, -ECONNREFUSED
 	}
 
-	// XXX pass userbuf directly to sund
-	data := make([]uint8, src.totalsz())
-	_, err = src.uioread(data)
+	var bp string
+	sf.Lock()
+	if sf.bound {
+		bp = sf.bud.bpath
+	}
+	sf.Unlock()
+
+	did, err := bud.bud_in(src, bp, cmsg)
 	if err != 0 {
 		return 0, err
 	}
-
-	sbuf := sunbuf_t{from: sf.sunaddr, data: data}
-	sund.in <- sbuf
-	return <- sund.inret, 0
+	return did, 0
 }
 
 func (sf *sudfops_t) recvmsg(proc *proc_t, dst userio_i,
     fromsa userio_i, cmsg userio_i, flags int) (int, int, int, msgfl_t, err_t) {
-	if cmsg.totalsz() != 0 {
+	if cmsg.totalsz() != 0 || flags != 0 {
 		panic("no imp")
 	}
+
+	sf.Lock()
+	defer sf.Unlock()
+
 	// XXX what is recv'ing on an unbound unix datagram socket supposed to
 	// do? openbsd and linux seem to block forever.
 	if !sf.bound {
 		return 0, 0, 0, 0, -ECONNREFUSED
 	}
-	sund := sf.sunaddr.sund
-	// XXX send userbuf to sund directly
-	sund.outsz <- dst.remain()
-	sbuf := <- sund.out
+	bud := sf.bud
 
-	ret, err := dst.uiowrite(sbuf.data)
+	datadid, addrdid, ancdid, msgfl, err := bud.bud_out(dst, fromsa, cmsg)
 	if err != 0 {
 		return 0, 0, 0, 0, err
 	}
-	// fill in from address
-	var addrlen int
-	if fromsa.remain() > 0 {
-		sa := sbuf.from.sockaddr_un()
-		addrlen, err = fromsa.uiowrite(sa)
-		if err != 0 {
-			return 0, 0, 0, 0, err
-		}
-	}
-	return ret, addrlen, 0, 0, 0
+	return datadid, addrdid, ancdid, msgfl, 0
 }
 
 func (sf *sudfops_t) pollone(pm pollmsg_t) ready_t {
+	sf.Lock()
+	defer sf.Unlock()
+
 	if !sf.bound {
 		return pm.events & R_ERROR
 	}
-	sf.sunaddr.sund.poll_in <- pm
-	status := <- sf.sunaddr.sund.poll_out
-	return status
+	r := sf.bud.bud_poll(pm)
+	return r
 }
 
 func (sf *sudfops_t) fcntl(proc *proc_t, cmd, opt int) int {
@@ -2326,181 +2316,270 @@ func (sf *sudfops_t) shutdown(read, write bool) err_t {
 	return -ENOTSOCK
 }
 
-type sunid_t int
+type budid_t int
 
-// globally unique unix socket minor number
-var sunid_cur	sunid_t
+var allbuds = allbud_t{m: make(map[budkey_t]*bud_t)}
 
-type sunaddr_t struct {
-	id	sunid_t
-	path	string
-	sund	*sund_t
+// buds are indexed by bid and inode number in order to detect stale socket
+// files that happen to have the same bid.
+type budkey_t struct {
+	bid	budid_t
+	priv	inum
 }
 
-// used by recvfrom to fill in "fromaddr"
-func (sa *sunaddr_t) sockaddr_un() []uint8 {
-	ret := make([]uint8, 16)
+type allbud_t struct {
+	// leaf lock
+	sync.Mutex
+	m	map[budkey_t]*bud_t
+	nextbid	budid_t
+}
+
+func (ab *allbud_t) bud_lookup(bid budid_t, fpriv inum) (*bud_t, bool) {
+	key := budkey_t{bid, fpriv}
+
+	ab.Lock()
+	bud, ok := ab.m[key]
+	ab.Unlock()
+
+	return bud, ok
+}
+
+func (ab *allbud_t) bud_id_new() budid_t {
+	ab.Lock()
+	ret := ab.nextbid
+	ab.nextbid++
+	ab.Unlock()
+	return ret
+}
+
+func (ab *allbud_t) bud_new(bid budid_t, budpath string, fpriv inum) *bud_t {
+	ret := &bud_t{}
+	ret.bud_init(bid, budpath, fpriv)
+
+	key := budkey_t{bid, fpriv}
+	ab.Lock()
+	if _, ok := ab.m[key]; ok {
+		panic("bud exists")
+	}
+	ab.m[key] = ret
+	ab.Unlock()
+	return ret
+}
+
+func (ab *allbud_t) bud_del(bid budid_t, fpriv inum) {
+	key := budkey_t{bid, fpriv}
+	ab.Lock()
+	if _, ok := ab.m[key]; !ok {
+		panic("no such bud")
+	}
+	delete(ab.m, key)
+	ab.Unlock()
+}
+
+type dgram_t struct {
+	from	string
+	sz	int
+}
+
+// a circular buffer for datagrams and their source addresses
+type dgrambuf_t struct {
+	cbuf	circbuf_t
+	dgrams	[]dgram_t
+	// add dgrams at head, remove from tail
+	head	uint
+	tail	uint
+}
+
+func (db *dgrambuf_t) dg_init(sz int) {
+	db.cbuf.cb_init(sz)
+	// assume that messages are about 10 bytes
+	db.dgrams = make([]dgram_t, sz/10)
+	db.head, db.tail = 0, 0
+}
+
+// returns true if there is enough buffers to hold a datagram of size sz
+func (db *dgrambuf_t) _canhold(sz int) bool {
+	if (db.head - db.tail) == uint(len(db.dgrams)) ||
+	   db.cbuf.left() < sz {
+		return false
+	}
+	return true
+}
+
+func (db *dgrambuf_t) _havedgram() bool {
+	return db.head != db.tail
+}
+
+func (db *dgrambuf_t) copyin(src userio_i, from string) (int, err_t) {
+	// is there a free source address slot and buffer space?
+	if !db._canhold(src.totalsz()) {
+		panic("should have blocked")
+	}
+	did, err := db.cbuf.copyin(src)
+	if err != 0 {
+		return 0, err
+	}
+	slot := &db.dgrams[db.head % uint(len(db.dgrams))]
+	db.head++
+	slot.from = from
+	slot.sz = did
+	return did, 0
+}
+
+func (db *dgrambuf_t) copyout(dst, fromsa, cmsg userio_i) (int, int, err_t) {
+	if cmsg.totalsz() != 0 {
+		panic("no imp")
+	}
+	if db.head == db.tail {
+		panic("should have blocked")
+	}
+	slot := &db.dgrams[db.tail % uint(len(db.dgrams))]
+	sz := slot.sz
+	if sz == 0 {
+		panic("huh?")
+	}
+	did, err := db.cbuf.copyout_n(dst, sz)
+	if err != 0 {
+		return 0, 0, err
+	}
+	var fdid int
+	if fromsa.totalsz() != 0 {
+		fsaddr := _sockaddr_un(slot.from)
+		var err err_t
+		fdid, err = fromsa.uiowrite(fsaddr)
+		if err != 0 {
+			return 0, 0, err
+		}
+	}
+	// commit tail
+	db.tail++
+	return did, fdid, 0
+}
+
+// convert bound socket path to struct sockaddr_un
+func _sockaddr_un(budpath string) []uint8 {
+	ret := make([]uint8, 2, 16)
 	// len
-	writen(ret, 1, 0, len(sa.path))
+	writen(ret, 1, 0, len(budpath))
 	// family
 	writen(ret, 1, 1, AF_UNIX)
 	// path
-	ret = append(ret, sa.path...)
+	ret = append(ret, budpath...)
 	ret = append(ret, 0)
 	return ret
 }
 
-type sunbuf_t struct {
-	from	sunaddr_t
-	data	[]uint8
-}
-
-type sund_t struct {
-	adm		chan bool
-	finish		chan bool
-	outsz		chan int
-	out		chan sunbuf_t
-	inret		chan int
-	in		chan sunbuf_t
-	poll_in		chan pollmsg_t
-	poll_out 	chan ready_t
-	pollers		pollers_t
-}
-
-func sun_new() sunid_t {
-	sunid_cur++
-	return sunid_cur
-}
-
-type allsund_t struct {
-	m	map[sunid_t]*sund_t
+// a type for bound UNIX datagram sockets
+type bud_t struct {
 	sync.Mutex
+	bid	budid_t
+	fpriv	inum
+	dbuf	dgrambuf_t
+	pollers	pollers_t
+	cond	*sync.Cond
+	closed	bool
+	bpath	string
 }
 
-var allsunds = allsund_t{m: map[sunid_t]*sund_t{}}
+func (bud *bud_t) bud_init(bid budid_t, bpath string, priv inum) {
+	bud.bid = bid
+	bud.fpriv = priv
+	bud.bpath = bpath
+	bud.dbuf.dg_init(512)
+	bud.cond = sync.NewCond(bud)
+}
 
-func sun_start(sid sunid_t) *sund_t {
-	if _, ok := allsunds.m[sid]; ok {
-		panic("sund exists")
+func (bud *bud_t) _rready() {
+	bud.cond.Broadcast()
+	bud.pollers.wakeready(R_READ)
+}
+
+func (bud *bud_t) _wready() {
+	bud.cond.Broadcast()
+	bud.pollers.wakeready(R_WRITE)
+}
+
+// returns number of bytes written and error
+func (bud *bud_t) bud_in(src userio_i, from string, cmsg []uint8) (int, err_t) {
+	if len(cmsg) != 0 {
+		panic("no imp")
 	}
-	ns := &sund_t{}
-	adm := make(chan bool)
-	finish := make(chan bool)
-	outsz := make(chan int)
-	out := make(chan sunbuf_t)
-	inret := make(chan int)
-	in := make(chan sunbuf_t)
-	poll_in := make(chan pollmsg_t)
-	poll_out := make(chan ready_t)
-
-	ns.adm = adm
-	ns.finish = finish
-	ns.outsz = outsz
-	ns.out = out
-	ns.inret = inret
-	ns.in = in
-	ns.poll_in = poll_in
-	ns.poll_out = poll_out
-
-	go func() {
-		bstart := make([]sunbuf_t, 0, 10)
-		buf := bstart
-		buflen := 0
-		bufadd := func(n sunbuf_t) {
-			if len(n.data) == 0 {
-				return
-			}
-			buf = append(buf, n)
-			buflen += len(n.data)
+	need := src.totalsz()
+	bud.Lock()
+	for {
+		if bud.closed {
+			bud.Unlock()
+			return 0, -EBADF
 		}
-
-		bufdeq := func(sz int) sunbuf_t {
-			if sz == 0 {
-				return sunbuf_t{}
-			}
-			ret := buf[0]
-			buf = buf[1:]
-			if len(buf) == 0 {
-				buf = bstart
-			}
-			buflen -= len(ret.data)
-			return ret
+		if bud.dbuf._canhold(need) || bud.closed {
+			break
 		}
+		bud.cond.Wait()
+	}
+	did, err := bud.dbuf.copyin(src, from)
+	bud._rready()
+	bud.Unlock()
+	if err != 0 && did != need {
+		panic("wut")
+	}
+	return did, err
+}
 
-		done := false
-		sunbufsz := 512
-		admitted := 0
-		var toutsz chan int
-		tin := in
-		for !done {
-			select {
-			case <- finish:
-				done = true
-			case <- adm:
-				admitted++
-			// writing
-			case sbuf := <- tin:
-				if buflen >= sunbufsz {
-					panic("buf full")
-				}
-				if len(sbuf.data) > 2*sunbufsz {
-					inret <- int(-EMSGSIZE)
-					break
-				}
-				bufadd(sbuf)
-				inret <- len(sbuf.data)
-				admitted--
-			// reading
-			case sz := <- toutsz:
-				if buflen == 0 {
-					panic("no data")
-				}
-				d := bufdeq(sz)
-				out <- d
-			case pm := <- ns.poll_in:
-				ev := pm.events
-				var ret ready_t
-				// check if reading, writing, or errors are
-				// available. ignore R_ERROR
-				if ev & R_READ != 0 && toutsz != nil {
-					ret |= R_READ
-				}
-				if ev & R_WRITE != 0 && tin != nil {
-					ret |= R_WRITE
-				}
-				if ret == 0 && pm.dowait {
-					ns.pollers.addpoller(&pm)
-				}
-				ns.poll_out <- ret
-			}
-
-			// block writes if socket is full
-			// block reads if socket is empty
-			if buflen > 0 {
-				toutsz = outsz
-				ns.pollers.wakeready(R_READ)
-			} else {
-				toutsz = nil
-			}
-			if buflen < sunbufsz {
-				tin = in
-				ns.pollers.wakeready(R_WRITE)
-			} else {
-				tin = nil
-			}
+// returns number of bytes written of data, socket address, ancillary data, and
+// ancillary message flags...
+func (bud *bud_t) bud_out(dst, fromsa, cmsg userio_i) (int, int, int,
+   msgfl_t, err_t) {
+	if cmsg.totalsz() != 0 {
+		panic("no imp")
+	}
+	bud.Lock()
+	for {
+		if bud.closed {
+			bud.Unlock()
+			return 0, 0, 0, 0, -EBADF
 		}
-
-		for i := admitted; i > 0; i-- {
-			<- in
-			inret <- int(-ECONNREFUSED)
+		if bud.dbuf._havedgram() {
+			break
 		}
-	}()
+		bud.cond.Wait()
+	}
+	ddid, fdid, err := bud.dbuf.copyout(dst, fromsa, cmsg)
+	bud._wready()
+	bud.Unlock()
+	return ddid, fdid, 0, 0, err
+}
 
-	allsunds.Lock()
-	allsunds.m[sid] = ns
-	allsunds.Unlock()
+func (bud *bud_t) bud_poll(pm pollmsg_t) ready_t {
+	var ret ready_t
+	bud.Lock()
+	if bud.closed {
+		goto out
+	}
+	if pm.events & R_READ != 0 && bud.dbuf._havedgram() {
+		ret |= R_READ
+	}
+	if pm.events & R_WRITE != 0 && bud.dbuf._canhold(32) {
+		ret |= R_WRITE
+	}
+	if ret == 0 && pm.dowait {
+		bud.pollers.addpoller(&pm)
+	}
+out:
+	bud.Unlock()
+	return ret
+}
 
-	return ns
+// the bud is closed; wake up any waiting threads
+func (bud *bud_t) bud_close() {
+	bud.Lock()
+	bud.closed = true
+	bud.cond.Broadcast()
+	bud.pollers.wakeready(R_READ | R_WRITE | R_ERROR)
+	bid := bud.bid
+	fpriv := bud.fpriv
+	bud.Unlock()
+
+	allbuds.bud_del(bid, fpriv)
 }
 
 type susfops_t struct {
