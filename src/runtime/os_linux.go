@@ -1416,6 +1416,8 @@ const (
 	PTE_P		uintptr = 1 << 0
 	PTE_W		uintptr = 1 << 1
 	PTE_U		uintptr = 1 << 2
+	PTE_PS		uintptr = 1 << 7
+	PTE_G		uintptr = 1 << 8
 	PTE_PCD		uintptr = 1 << 4
 	PGSIZE		uintptr = 1 << 12
 	PGOFFMASK	uintptr = PGSIZE - 1
@@ -1497,6 +1499,9 @@ func pgdir_walk1(slot, van uintptr, create bool) *uintptr {
 		p_pg := get_pg()
 		zero_phys(p_pg)
 		*sp = p_pg | PTE_P | PTE_W
+	}
+	if *sp & PTE_PS != 0 {
+		pancake("map in PS", *sp)
 	}
 	return pgdir_walk1(ns, slotnext(van), create)
 }
@@ -1945,10 +1950,15 @@ func proc_setup() {
 	Gscpu().mythread = &threads[0]
 }
 
+// XXX to prevent CPUs from calling zero_phys concurrently when allocating pmap
+// pages...
+var joinlock = &Spinlock_t{}
+
 //go:nosplit
 func Ap_setup(cpunum uint) {
 	// interrupts are probably already cleared
 	fl := Pushcli()
+	Splock(joinlock)
 
 	Splock(pmsglock)
 	_pmsg("cpu")
@@ -1973,6 +1983,7 @@ func Ap_setup(cpunum uint) {
 	Gscpu().num = cpunum
 	Gscpu().mythread = nil
 
+	Spunlock(joinlock)
 	Popcli(fl)
 }
 
@@ -2690,7 +2701,7 @@ func sigret(t *thread_t) {
 // construct siginfo_t and more of context.
 
 func find_empty(sz uintptr) uintptr {
-	v := caddr(0, 0, 0, 1, 0)
+	v := caddr(0, 0, 256, 0, 0)
 	cantuse := uintptr(0xf0)
 	for {
 		pte := pgdir_walk(v, false)

@@ -6,7 +6,7 @@ fn = 'boot.bin'
 sz = os.path.getsize(fn)
 # both bootmain.c and boot.S also need to know the size of the bootloader in
 # blocks (see BOOTBLOCKS)
-numblocks = 9
+numblocks = 10
 left = numblocks*512 - sz
 if left < 0:
     sb = sz/512

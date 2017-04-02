@@ -7,7 +7,7 @@
 
 void readsect(void *, uint32_t);
 
-static void *alloc_phys(uint64_t *, uint64_t);
+static void *alloc_phys(uint64_t *, uint64_t, int);
 static uint32_t alloc_start(void);
 static void bss_zero(uint64_t *, uint64_t, uint64_t);
 static void checkmach(void);
@@ -15,6 +15,7 @@ static uint32_t getpg(void);
 static uint64_t elfsize(void);
 static void ensure_empty(uint64_t *, uint64_t);
 static uint32_t ensure_pg(uint64_t *, int);
+static uint32_t getlpg(void);
 static int is32(uint64_t);
 static int isect(uint64_t, uint64_t,uint64_t, uint64_t);
 static void mapone(uint64_t *, uint64_t, uint64_t, int);
@@ -23,6 +24,7 @@ static uint64_t mem_sizeadjust(uint64_t, uint64_t, uint64_t);
 static uint64_t mem_bump(uint64_t);
 static void pancake(char *msg, uint64_t addr);
 static uint64_t *pgdir_walk(uint64_t *, uint64_t, int);
+static uint64_t *_pgdir_walk(uint64_t *, uint64_t, int, int);
 static void pmsg(char *);
 static void pnum(uint64_t);
 static void putch(char);
@@ -83,7 +85,7 @@ struct __attribute__((packed)) ss_t {
 
 // # of sectors this code takes up; i set this after compiling and observing
 // the size of the text
-#define BOOTBLOCKS     9
+#define BOOTBLOCKS     10
 // boot.S fills page 0x6000 with e820 entries
 #define	NE820          (4096/sizeof(struct e820_t))
 
@@ -145,7 +147,7 @@ bootmain(void)
 	// get a new stack with guard page
 	ensure_empty(pgdir, NEWSTACK - 1*PGSIZE);
 	ensure_empty(pgdir, NEWSTACK - 2*PGSIZE);
-	alloc_phys(pgdir, NEWSTACK - 1*PGSIZE);
+	alloc_phys(pgdir, NEWSTACK - 1*PGSIZE, 0);
 
 	// XXX setup tramp if entry is 64bit address...
 	if (!is32(ELFHDR->e_entry))
@@ -188,15 +190,27 @@ bad:
 
 // returns the physical address for va, allocating a page if necessary
 static void *
-alloc_phys(uint64_t *pgdir, uint64_t va)
+alloc_phys(uint64_t *pgdir, uint64_t va, int lpg)
 {
 	if (!is32(va))
 		pancake("va too large for poor ol' 32-bit me", va);
 
-	uint64_t *pte = pgdir_walk(pgdir, va, 1);
-	uint32_t ma = ensure_pg(pte, 1);
+	uint32_t pgoffm;
+	uint32_t ma;
+	if (lpg) {
+		uint64_t *pde = _pgdir_walk(pgdir, va, 1, 1);
+		pgoffm = (1ul << 21) - 1;
+		if ((*pde & PTE_P) == 0) {
+			*pde = getlpg() | PTE_P | PTE_W | PTE_PS;
+		}
+		ma = *pde & (~pgoffm);
+	} else {
+		uint64_t *pte = pgdir_walk(pgdir, va, 1);
+		ma = ensure_pg(pte, 1);
+		pgoffm = PGOFFMASK;
+	}
 
-	return (void *)(ma | ((uint32_t)va & PGOFFMASK));
+	return (void *)(ma | ((uint32_t)va & pgoffm));
 }
 
 static uint32_t
@@ -256,7 +270,7 @@ bss_zero(uint64_t *pgdir, uint64_t va, uint64_t size)
 	uint64_t sz;
 
 	for (; va < end; va += sz) {
-		uint64_t *pa = alloc_phys(pgdir, va);
+		uint64_t *pa = alloc_phys(pgdir, va, 1);
 		sz = PGSIZE - (va & PGOFFMASK);
 		if (sz > size)
 			sz = size;
@@ -298,6 +312,35 @@ getpg(void)
 	memset(p, 0, PGSIZE);
 
 	return ret;
+}
+
+static uint32_t
+getlpg(void)
+{
+	uint32_t m = (1ul << 21) - 1;
+	//int waste = 0;
+	for (;;) {
+		uint32_t first = getpg();
+		while ((first & m) != 0) {
+			first = getpg();
+			//waste++;
+		}
+		int havelpg = 1;
+		uint32_t last = first;
+		int sz;
+		for (sz = PGSIZE; sz < (1ul << 21); sz += PGSIZE) {
+			uint32_t next = getpg();
+			if (next != last + PGSIZE) {
+				havelpg = 0;
+				break;
+			}
+			last = next;
+		}
+		if (havelpg) {
+			return first;
+		}
+		//waste += sz / PGSIZE;
+	}
 }
 
 static uint32_t
@@ -376,7 +419,7 @@ readseg(uint64_t *pgdir, uint64_t va, uint64_t count, uint64_t offset)
 	uint32_t div = 0;
 	uint32_t spini = 0;
 	while (va < end_va) {
-		void *pa = alloc_phys(pgdir, va);
+		void *pa = alloc_phys(pgdir, va, 1);
 		readsect(pa, offset);
 		va += PGSIZE;
 		offset += 8;
@@ -393,6 +436,8 @@ static struct {
 	uint64_t start;
 	uint64_t end;
 } badregions[] = {
+	// real-mode interrupt vector table (needed for int 13h disk calls)
+	{0x0, 0x1000},
 	// int 13h bounce buffer
 	{0x5000, 0x6000},
 	// E820 map itself
@@ -406,7 +451,6 @@ static struct {
 	    ROUNDUP(0x7c00+BOOTBLOCKS*SECTSIZE, PGSIZE)},
 };
 
-__attribute__((unused))
 static uint64_t
 mem_bump(uint64_t s)
 {
@@ -504,6 +548,12 @@ pancake(char *msg, uint64_t addr)
 static uint64_t *
 pgdir_walk(uint64_t *pgdir, uint64_t va, int create)
 {
+	return _pgdir_walk(pgdir, va, create, 0);
+}
+
+static uint64_t *
+_pgdir_walk(uint64_t *pgdir, uint64_t va, int create, int lpg)
+{
 	uint64_t *curpage;
 	uint64_t *pml4e = &pgdir[PML4X(va)];
 	curpage = (uint64_t *)ensure_pg(pml4e, create);
@@ -514,6 +564,10 @@ pgdir_walk(uint64_t *pgdir, uint64_t va, int create)
 	if (curpage == 0)
 		return 0;
 	uint64_t *pde = &curpage[PDX(va)];
+	if (lpg)
+		return pde;
+	if (*pde & PTE_PS)
+		pancake("walk into large mapping", *pde);
 	curpage = (uint64_t *)ensure_pg(pde, create);
 	if (curpage == 0)
 		return 0;
