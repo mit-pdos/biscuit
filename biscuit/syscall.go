@@ -3524,26 +3524,28 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
 			perms |= PTE_W
 		}
 	} else if iswrite {
-		// XXX could avoid copy for last process to fault on a shared
-		// page by verifying that the ref count is 1.
-
 		// XXXPANIC
 		if *pte & PTE_W != 0 {
 			panic("bad state")
 		}
 		var pgsrc *[512]int
-		var pg *[512]int
-		var ok bool
-		// don't zero new page
-		pg, p_pg, ok = refpg_new_nozero()
-		if !ok {
-			return false
-		}
 		// the copy-on-write page may be specified in the pte or it may
 		// not have been mapped at all yet.
 		cow := *pte & PTE_COW != 0
 		if cow {
+			// if this COW page is mapped exactly once (i.e.  only
+			// this mapping maps the page), we can claim the page,
+			// skip the copy, and mark it writable.
 			phys := *pte & PTE_ADDR
+			ref, _ := _refaddr(uintptr(phys))
+			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
+			   phys != p_zeropg {
+				tmp := *pte &^ PTE_COW
+				tmp |= PTE_W | PTE_WASCOW
+				*pte = tmp
+				proc.tlbshoot(faultaddr, 1)
+				return true
+			}
 			pgsrc = dmap(phys)
 			isempty = false
 		} else {
@@ -3563,6 +3565,13 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
 			default:
 				panic("wut")
 			}
+		}
+		var pg *[512]int
+		var ok bool
+		// don't zero new page
+		pg, p_pg, ok = refpg_new_nozero()
+		if !ok {
+			return false
 		}
 		*pg = *pgsrc
 		perms |= PTE_WASCOW
