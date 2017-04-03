@@ -1436,6 +1436,7 @@ func (tm *trymutex_t) trylock() bool {
 
 type imemnode_t struct {
 	priv		inum
+	myib		*ibuf_t
 	blkno		int
 	ioff		int
 	// cache of file data
@@ -1508,7 +1509,7 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 	idm.pgcache.pgc_init(512, idm.fs_fill, idm.fs_flush)
 
-	blk := ibread(blkno)
+	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
 	ibrelse(blk)
 	if idm.icache.itype == I_DIR {
@@ -1615,7 +1616,7 @@ func (idm *imemnode_t) _locked() {
 }
 
 func (idm *imemnode_t) _iupdate() {
-	iblk := ibread(idm.blkno)
+	iblk := idm.idibread()
 	if idm.icache.flushto(iblk, idm.ioff) {
 		iblk.log_write()
 	}
@@ -2311,7 +2312,7 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 		panic("inconsistent")
 	}
 	bn, ioff := bidecode(childi)
-	ib := ibread(bn)
+	ib := idm.idibread()
 	ni := &inode_t{ib, ioff}
 	_iallocundo(bn, ni, ib)
 	ibrelse(ib)
@@ -2453,6 +2454,15 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	return ret, 0
 }
 
+func (idm *imemnode_t) idibread() *ibuf_t {
+	if idm.myib == nil {
+		idm.myib = ibread(idm.blkno)
+	} else {
+		idm.myib.Lock()
+	}
+	return idm.myib
+}
+
 // frees all blocks occupied by idm
 func (idm *imemnode_t) ifree() {
 	allb := make([]int, 0, 10)
@@ -2480,7 +2490,7 @@ func (idm *imemnode_t) ifree() {
 		idm.icache.mbrelse(blk)
 	}
 
-	iblk := ibread(idm.blkno)
+	iblk := idm.idibread()
 	idm.icache.itype = I_DEAD
 	idm.icache.flushto(iblk, idm.ioff)
 	if _alldead(iblk) {
