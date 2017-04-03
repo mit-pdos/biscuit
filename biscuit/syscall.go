@@ -3707,18 +3707,20 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
 	proc.vmadd_anon(stackva, PGSIZE, 0)
 	proc.vmadd_anon(stackva + PGSIZE, stksz - PGSIZE, PTE_U | PTE_W)
 	stackva += stksz
-	// eagerly map first stack page
-	_, p_pg, ok := refpg_new()
-	if !ok {
-		// restore old process
-		restore()
-		return int(-EINVAL)
-	}
-	_, ok = proc.page_insert(stackva - 1, p_pg, PTE_U | PTE_W, true)
-	if !ok {
-		refdown(uintptr(p_pg))
-		restore()
-		return int(-ENOMEM)
+	// eagerly map first two pages for stack
+	stkeagermap := 2
+	for i := 0; i < stkeagermap; i++ {
+		p := uintptr(stackva - (i+1)*PGSIZE)
+		_, p_pg, ok := refpg_new()
+		if !ok {
+			restore()
+			return int(-ENOMEM)
+		}
+		_, ok = proc.page_insert(int(p), p_pg, PTE_W | PTE_U, true)
+		if !ok {
+			restore()
+			return int(-ENOMEM)
+		}
 	}
 
 	// XXX make insertargs not fail by using more than a page...
