@@ -1207,7 +1207,7 @@ type pgcache_t struct {
 	// device or layer. its arguments are the destination slice and offset
 	// and returns error. fill may write fewer bytes than the length of the
 	// destination buffer.
-	_fill	func([]uint8, int) int
+	_fill	func([]uint8, int) (int, err_t)
 	// flush writes the given buffer to the specified offset of the device.
 	_flush	func([]uint8, int) err_t
 }
@@ -1217,7 +1217,7 @@ type pgcinfo_t struct {
 	dirtyblocks	[]bool
 }
 
-func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) int,
+func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) (int, err_t),
     flush func([]uint8, int) err_t) {
 	if fill == nil || flush == nil {
 		panic("invalid page func")
@@ -1285,7 +1285,7 @@ func (pc *pgcache_t) _ensureslot(pgn int) (bool, bool) {
 		var p_npg int
 		for {
 			var ok bool
-			npg, p_npg, ok = refpg_new()
+			npg, p_npg, ok = refpg_new_nozero()
 			if ok {
 				break
 			}
@@ -1313,10 +1313,11 @@ func (pc *pgcache_t) _ensurefill(pgn int) err_t {
 	if needsfill {
 		pgva := pc.pgs[pgn]
 		devoffset := pgn * PGSIZE
-		err := pc._fill(pgva[:], devoffset)
+		did, err := pc._fill(pgva[:], devoffset)
 		if err != 0 {
 			panic("must succeed")
 		}
+		copy(pgva[did:], pg2bytes(zeropg)[:])
 	}
 	return 0
 }
@@ -2194,7 +2195,7 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 
 // fills the parts of pages whose offset < the file size (extending the file
 // shouldn't read any blocks).
-func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) int {
+func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
 	for len(pgdst) != 0 && fileoffset + c < isz {
@@ -2208,7 +2209,7 @@ func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) int {
 		c += len(p)
 		pgdst = pgdst[len(p):]
 	}
-	return 0
+	return c, 0
 }
 
 // flush only the parts of pages whose offset is < file size
