@@ -757,37 +757,6 @@ func proc_del(pid int) {
 	proclock.Unlock()
 }
 
-// prepare to write to the user page that contains userva that may be marked
-// COW.  caller must hold pmap lock (and the copy must take place under the
-// same lock acquisition). this can go away once we can handle syscalls with
-// the user pmap still loaded.
-func (p *proc_t) cowfault(userva int) bool {
-	// userva is not guaranteed to be valid
-	if userva < USERMIN {
-		return false
-	}
-	p.lockassert_pmap()
-	pte, err := pmap_walk(p.pmap, userva, PTE_U | PTE_W)
-	if err != 0 {
-		return false
-	}
-	if *pte & PTE_P != 0 && *pte & PTE_U == 0 {
-		panic("no kernel addresses")
-	}
-	if *pte & PTE_P != 0 && *pte & PTE_COW == 0 {
-		return true
-	}
-	vmi, ok := p.vmregion.lookup(uintptr(userva))
-	if !ok {
-		panic("must have vminfo")
-	}
-	ecode := uintptr(PTE_U | PTE_W)
-	if !sys_pgfault(p, vmi, pte, uintptr(userva), ecode) {
-		return false
-	}
-	return true
-}
-
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
@@ -903,7 +872,7 @@ func (p *proc_t) fd_del_inner(fdn int) (*fd_t, bool) {
 
 // returns whether the parent's TLB should be flushed and whether the we
 // successfully copied the parent's address space.
-func (parent *proc_t) vm_fork(child *proc_t, rsp int) (bool, bool) {
+func (parent *proc_t) vm_fork(child *proc_t, rsp uintptr) (bool, bool) {
 	parent.lockassert_pmap()
 	// first add kernel pml4 entries
 	for _, e := range kents {
@@ -918,9 +887,8 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) (bool, bool) {
 	parent.vmregion.iter(func(vmi *vminfo_t) {
 		start := int(vmi.pgn << PGSHIFT)
 		end := start + int(vmi.pglen << PGSHIFT)
-		//fmt.Printf("fork reg: %x %x\n", start, end)
-		shared := vmi.mtype == VSANON
-		fl, ok := ptefork(child.pmap, parent.pmap, start, end, shared)
+		ashared := vmi.mtype == VSANON
+		fl, ok := ptefork(child.pmap, parent.pmap, start, end, ashared)
 		failed = failed || !ok
 		doflush = doflush || fl
 	})
@@ -931,30 +899,34 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp int) (bool, bool) {
 
 	// don't mark stack COW since the parent/child will fault their stacks
 	// immediately
-	pte := pmap_lookup(child.pmap, rsp)
+	vmi, ok := child.vmregion.lookup(rsp)
 	// give up if we can't find the stack
-	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
+	if !ok {
+		return doflush, true
+	}
+	pte, ok := vmi.ptefor(child.pmap, rsp)
+	if !ok || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return doflush, true
 	}
 	// sys_pgfault expects pmap to be locked
 	child.Lock_pmap()
-	vmi, ok := child.vmregion.lookup(uintptr(rsp))
-	if !ok {
-		panic("must be mapped")
-	}
 	perms := uintptr(PTE_U | PTE_W)
-	if !sys_pgfault(child, vmi, pte, uintptr(rsp), perms) {
+	if !sys_pgfault(child, vmi, rsp, perms) {
 		return doflush, false
 	}
 	child.Unlock_pmap()
-	pte = pmap_lookup(parent.pmap, rsp)
-	if pte == nil || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
+	vmi, ok = parent.vmregion.lookup(rsp)
+	if !ok ||*pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		panic("child has stack but not parent")
+	}
+	pte, ok = vmi.ptefor(parent.pmap, rsp)
+	if !ok {
+		panic("must exist")
 	}
 	*pte &^= PTE_COW
 	*pte |= PTE_W | PTE_WASCOW
 
-	return doflush, true
+	return true, true
 }
 
 // does not increase opencount on fops (vmregion_t.insert does). perms should
@@ -1089,7 +1061,7 @@ func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {
 		p.Unlock_pmap()
 		return false
 	}
-	ret := sys_pgfault(p, vmi, nil, fa, ecode)
+	ret := sys_pgfault(p, vmi, fa, ecode)
 	p.Unlock_pmap()
 	return ret
 }
@@ -1373,41 +1345,47 @@ func (p *proc_t) lockassert_pmap() {
 	}
 }
 
-// returns a slice whose underlying buffer points to va, which can be
-// page-unaligned. the length of the returned slice is (PGSIZE - (va % PGSIZE))
-// k2u is true if kernel memory is the source and user memory is the
-// destination of the copy, otherwise the opposite. returns false if we failed
-// to 1) allocate a page for a COW mapping or 2) allocate a page for a lazily
-// read-only mapping.
 func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	p.lockassert_pmap()
-	if va < USERMIN {
-		return nil, false
-	}
-	if k2u {
-		if !p.cowfault(va) {
-			return nil, false
-		}
-	}
+
 	voff := va & PGOFFSET
-	pte := pmap_lookup(p.pmap, va)
-	if pte == nil || *pte & PTE_P == 0 {
-		// if user memory is the source, it is possible that the page
-		// just hasn't been faulted in yet. try to fault in the page
-		// before failing.
-		uva := uintptr(va)
-		if vmi, ok := p.vmregion.lookup(uva); ok {
-			ecode := uintptr(PTE_U)
-			if !sys_pgfault(p, vmi, pte, uva, ecode) {
-				return nil, false
-			}
-		} else {
+	uva := uintptr(va)
+	vmi, ok := p.vmregion.lookup(uva)
+	if !ok {
+		return nil, false
+	}
+	pte, ok := vmi.ptefor(p.pmap, uva)
+	if !ok {
+		return nil, false
+	}
+	ecode := uintptr(PTE_U)
+	needfault := true
+	isp := *pte & PTE_P != 0
+	if k2u {
+		ecode |= uintptr(PTE_W)
+		// XXX how to distinguish between user asking kernel to write
+		// to read-only page and kernel writing a page mapped read-only
+		// to user? (exec args)
+
+		//isw := *pte & PTE_W != 0
+		//if isp && isw {
+		iscow := *pte & PTE_COW != 0
+		if isp && !iscow {
+			needfault = false
+		}
+	} else {
+		if isp {
+			needfault = false
+		}
+	}
+
+	if needfault {
+		if !sys_pgfault(p, vmi, uva, ecode) {
+			panic("no")
 			return nil, false
 		}
 	}
-	if *pte & PTE_U == 0 {
-		return nil, false
-	}
+
 	pg := dmap(*pte & PTE_ADDR)
 	bpg := pg2bytes(pg)
 	return bpg[voff:], true

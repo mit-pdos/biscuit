@@ -8,6 +8,7 @@ import "unsafe"
 const PTE_P      int = 1 << 0
 const PTE_W      int = 1 << 1
 const PTE_U      int = 1 << 2
+const PTE_G      int = 1 << 8
 const PTE_PCD    int = 1 << 4
 const PTE_PS     int = 1 << 7
 // our flags; bits 9-11 are ignored for all page map entries in long mode
@@ -64,6 +65,7 @@ type vminfo_t struct {
 		mfile	*mfile_t
 		shared	bool
 	}
+	pch	[]int
 }
 
 func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr, err_t) {
@@ -77,6 +79,30 @@ func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr, err_t) {
 		return nil, 0, err
 	}
 	return mmapi[0].pg, uintptr(mmapi[0].phys), 0
+}
+
+func (vmi *vminfo_t) ptefor(pmap *[512]int, va uintptr) (*int, bool) {
+	if vmi.pch == nil {
+		bva := int(vmi.pgn) << PGSHIFT
+		ptbl, slot := pmap_pgtbl(pmap, bva, true, PTE_U|PTE_W)
+		if ptbl == nil {
+			return nil, false
+		}
+		vmi.pch = ptbl[slot:]
+	}
+	vn := (va >> uintptr(PGSHIFT)) - vmi.pgn
+	if vn >= uintptr(vmi.pglen) {
+		panic("uh oh")
+	}
+	if vn < uintptr(len(vmi.pch)) {
+		return &vmi.pch[vn], true
+	} else {
+		ptbl, slot := pmap_pgtbl(pmap, int(va), true, PTE_U|PTE_W)
+		if ptbl == nil {
+			return nil, false
+		}
+		return &ptbl[slot], true
+	}
 }
 
 type mtype_t uint
@@ -418,6 +444,7 @@ func (m *vmregion_t) _merge(dst, src *vminfo_t) {
 	}
 	if src.pgn < dst.pgn {
 		dst.pgn = src.pgn
+		dst.pch = src.pch
 	}
 	if src.mtype == VFILE {
 		if src.file.foff < dst.file.foff {
@@ -557,6 +584,7 @@ func (m *vmregion_t) _copy1(par, src *rbn_t) *rbn_t {
 	}
 	ret := &rbn_t{}
 	*ret = *src
+	ret.vmi.pch = nil
 	// create per-process mfile objects and increase opencount for file
 	// mappings
 	if ret.vmi.mtype == VFILE {
@@ -691,6 +719,7 @@ func (m *vmregion_t) remove(start, len int, novma uint) err_t {
 		panic("addr not mapped")
 	}
 	m._clear(&n.vmi, pglen)
+	n.vmi.pch = nil
 	// remove the whole node?
 	if n.vmi.pgn == pgn && n.vmi.pglen == pglen {
 		m.rb.remove(n)

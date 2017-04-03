@@ -3404,7 +3404,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		// fork parent address space
 		parent.Lock_pmap()
 		rsp := chtf[TF_RSP]
-		doflush, ok := parent.vm_fork(child, int(rsp))
+		doflush, ok := parent.vm_fork(child, rsp)
 		if ok && !doflush {
 			panic("no writable segs?")
 		}
@@ -3475,8 +3475,7 @@ outproc:
 }
 
 // returns true if the fault was handled successfully
-func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
-   ecode uintptr) bool {
+func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 	isguard := vmi.perms == 0
 	iswrite := ecode & uintptr(PTE_W) != 0
 	writeok := vmi.perms & uint(PTE_W) != 0
@@ -3493,14 +3492,9 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, pte *int, faultaddr,
 		panic("shared anon pages should always be mapped")
 	}
 
-	// XXX could move this pmap walk to only the COW case where a pte is
-	// already mapped as COW.
-	if pte == nil {
-		var err err_t
-		pte, err = pmap_walk(proc.pmap, int(faultaddr), PTE_U | PTE_W)
-		if err != 0 {
-			return false
-		}
+	pte, ok := vmi.ptefor(proc.pmap, faultaddr)
+	if !ok {
+		return false
 	}
 	if (iswrite && *pte & PTE_WASCOW != 0) ||
 	   (!iswrite && *pte & PTE_P != 0) {
@@ -4873,7 +4867,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) err_t {
 		if !ok {
 			panic("just mapped?")
 		}
-		if !sys_pgfault(proc, vmi, nil, ent, uintptr(PTE_U)) {
+		if !sys_pgfault(proc, vmi, ent, uintptr(PTE_U)) {
 			return -ENOMEM
 		}
 	}
