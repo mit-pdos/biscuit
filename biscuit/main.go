@@ -1237,35 +1237,56 @@ func (p *proc_t) doomall() {
 	p.doomed = true
 }
 
-// frees all user memory and pmap pages
-func _uvmfree(pg *[512]int, depth int) {
-	for _, pte := range pg {
-		if pte & PTE_P == 0 || pte & PTE_U == 0 || pte & PTE_PS != 0 {
+func pmfree(pml4 *[512]int, start, end uintptr) {
+	for i := start; i < end; {
+		pg, slot := pmap_pgtbl(pml4, int(i), false, 0)
+		if pg == nil {
+			// this level is not mapped; skip to the next va that
+			// may have a mapping at this level
+			i += (1 << 21)
+			i &^= (1 << 21) - 1
 			continue
 		}
-		phys := uintptr(pte & PTE_ADDR)
-		if depth != 1 {
-			_uvmfree(dmap(int(phys)), depth - 1)
+		tofree := pg[slot:]
+		left := (end - i) >> PGSHIFT
+		if left < uintptr(len(tofree)) {
+			tofree = tofree[:left]
 		}
-		// XXX this takes the free list lock many times
-		refdown(phys)
+		for idx, p_pg := range tofree {
+			if p_pg & PTE_P != 0 {
+				if p_pg & PTE_U == 0 {
+					panic("kernel pages in vminfo?")
+				}
+				refdown(uintptr(p_pg & PTE_ADDR))
+				tofree[idx] = 0
+			}
+		}
+		i += uintptr(len(tofree)) << PGSHIFT
 	}
 }
 
 // don't forget: there are two places where pmaps/memory are free'd:
 // proc_t.terminate() and exec.
-// XXX why not use vmregion to avoid scanning 0 ptes? (that is what it is for!)
-func uvmfree(p_pg uintptr) {
-	_uvmfree(dmap(int(p_pg)), 4)
+func _uvmfree(pmg *[512]int, p_pmap uintptr, vmr *vmregion_t) {
+	vmr.iter(func(vmi *vminfo_t) {
+		start := uintptr(vmi.pgn << PGSHIFT)
+		end := start + uintptr(vmi.pglen << PGSHIFT)
+		pmfree(pmg, start, end)
+	})
 }
 
-// decrease ref count of pml4, possibly freeing it
+func (p *proc_t) uvmfree() {
+	_uvmfree(p.pmap, uintptr(p.p_pmap), &p.vmregion)
+	// dec_pmap could free the pmap itself. thus it must come after
+	// _uvmfree.
+	dec_pmap(uintptr(p.p_pmap))
+	// close all open mmap'ed files
+	p.vmregion.clear()
+}
+
+// decrease ref count of pml4, freeing it if no CPUs have it loaded into cr3.
 func dec_pmap(p_pmap uintptr) {
-	freed, idx := _refdown(p_pmap)
-	if !freed {
-		return
-	}
-	_reffree(idx)
+	_phys_put(&physmem.pmaps, p_pmap)
 }
 
 // terminate a process. must only be called when the process has no more
@@ -1301,12 +1322,7 @@ func (p *proc_t) terminate() {
 	// safe since we know that all user threads are dead and thus no CPU
 	// will try to access user mappings. however, any CPU may access kernel
 	// mappings via this pmap.
-	uvmfree(uintptr(p.p_pmap))
-	// dec_pmap could free the pmap itself. thus it must come after
-	// uvmfree.
-	dec_pmap(uintptr(p.p_pmap))
-	// close all open mmap'ed files
-	p.vmregion.clear()
+	p.uvmfree()
 
 	// send status to parent
 	if p.pwait == nil {
@@ -3176,6 +3192,7 @@ var physmem struct {
 	startn		uint32
 	// index into pgs of first free pg
 	freei		uint32
+	pmaps		uint32
 	sync.Mutex
 }
 
@@ -3195,7 +3212,7 @@ func refup(p_pg uintptr) {
 
 // returns true if p_pg should be added to the free list and the index of the
 // page in the pgs array
-func _refdown(p_pg uintptr) (bool, uint32) {
+func _refdec(p_pg uintptr) (bool, uint32) {
 	ref, idx := _refaddr(p_pg)
 	c := atomic.AddInt32(ref, -1)
 	// XXXPANIC
@@ -3215,7 +3232,7 @@ func _reffree(idx uint32) {
 
 func refdown(p_pg uintptr) {
 	// add to freelist?
-	if add, idx :=_refdown(p_pg); add {
+	if add, idx := _refdec(p_pg); add {
 		_reffree(idx)
 	}
 }
@@ -3285,30 +3302,7 @@ func _fakefail() bool {
 }
 
 func _refpg_new() (*[512]int, int, bool) {
-	if !_dmapinit {
-		panic("dmap not initted")
-	}
-
-	physmem.Lock()
-	firstfree := physmem.freei
-	//if _fakefail() || firstfree == ^uint32(0) {
-	if firstfree == ^uint32(0) {
-		physmem.Unlock()
-		return nil, 0, false
-	}
-	newhead := physmem.pgs[firstfree].nexti
-	physmem.freei = newhead
-	physmem.Unlock()
-
-	pi := int(firstfree)
-	p_pg := uintptr(firstfree + physmem.startn) << PGSHIFT
-
-	if physmem.pgs[pi].refcnt < 0 {
-		panic("how?")
-	}
-	dur := int(p_pg)
-	pg := dmap(dur)
-	return pg, dur, true
+	return _phys_new(&physmem.freei)
 }
 
 // refcnt of returned page is not incremented (it is usually incremented via
@@ -3328,6 +3322,49 @@ func refpg_new_nozero() (*[512]int, int, bool) {
 		return nil, 0, false
 	}
 	return pg, p_pg, true
+}
+
+func pmap_new() (*[512]int, int, bool) {
+	a, b, ok := _phys_new(&physmem.pmaps)
+	if ok {
+		return a, b, true
+	}
+	//fmt.Printf("!")
+	return refpg_new()
+}
+
+func _phys_new(fl *uint32) (*[512]int, int, bool) {
+	if !_dmapinit {
+		panic("dmap not initted")
+	}
+
+	var p_pg uintptr
+	var ok bool
+	physmem.Lock()
+	ff := *fl
+	if ff != ^uint32(0) {
+		p_pg = uintptr(ff + physmem.startn) << PGSHIFT
+		*fl = physmem.pgs[ff].nexti
+		ok = true
+		if physmem.pgs[ff].refcnt < 0 {
+			panic("negative ref count")
+		}
+	}
+	physmem.Unlock()
+	if ok {
+		dur := int(p_pg)
+		return dmap(dur), dur, true
+	}
+	return nil, 0, false
+}
+
+func _phys_put(fl *uint32, p_pg uintptr) {
+	if add, idx := _refdec(p_pg); add {
+		physmem.Lock()
+		physmem.pgs[idx].nexti = *fl
+		*fl = idx
+		physmem.Unlock()
+	}
 }
 
 func _pg2pgn(p_pg uintptr) uint32 {
@@ -3350,6 +3387,7 @@ func phys_init() {
 	fpgn := _pg2pgn(first)
 	physmem.startn = fpgn
 	physmem.freei = 0
+	physmem.pmaps = ^uint32(0)
 	physmem.pgs[0].refcnt = 0
 	physmem.pgs[0].nexti = ^uint32(0)
 	for i := 0; i < respgs - 1; i++ {
@@ -3375,7 +3413,30 @@ func pgcount() int {
 	for i := physmem.freei; i != ^uint32(0); i = physmem.pgs[i].nexti {
 		s++
 	}
+	s += pmapcount()
 	return s
+}
+
+func _pmcount(pml4 uintptr, lev int) int {
+	pg := dmap(int(pml4))
+	ret := 0
+	for _, pte := range pg {
+		if pte & PTE_U != 0 && pte & PTE_P != 0 {
+			ret += 1 + _pmcount(uintptr(pte & PTE_ADDR), lev - 1)
+		}
+	}
+	return ret
+}
+
+func pmapcount() int {
+	c := 0
+	physmem.Lock()
+	for ni := physmem.pmaps; ni != ^uint32(0); ni = physmem.pgs[ni].nexti {
+		v := _pmcount(uintptr(ni+ physmem.startn) << PGSHIFT, 4)
+		c += v
+	}
+	physmem.Unlock()
+	return c
 }
 
 func structchk() {

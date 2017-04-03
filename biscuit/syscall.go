@@ -3360,8 +3360,8 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	var ret int
 
 	// copy parents trap frame
-	chtf := [TFSIZE]uintptr{}
-	chtf = *ptf
+	chtf := &[TFSIZE]uintptr{}
+	*chtf = *ptf
 	var cfds []*fd_t
 
 	if mkproc {
@@ -3388,7 +3388,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 			return int(-ENOMEM)
 		}
 
-		child.pmap, child.p_pmap, ok = refpg_new()
+		child.pmap, child.p_pmap, ok = pmap_new()
 		if !ok {
 			goto outproc
 		}
@@ -3463,7 +3463,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	}
 
 	chtf[TF_RAX] = 0
-	child.sched_add(&chtf, childtid)
+	child.sched_add(chtf, childtid)
 	return ret
 outmem:
 	refdown(uintptr(child.p_pmap))
@@ -3642,7 +3642,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
 	opmap := proc.pmap
 	op_pmap := proc.p_pmap
 	var ok bool
-	proc.pmap, proc.p_pmap, ok = refpg_new()
+	proc.pmap, proc.p_pmap, ok = pmap_new()
 	if !ok {
 		proc.pmap, proc.p_pmap = opmap, op_pmap
 		return int(-ENOMEM)
@@ -3653,9 +3653,9 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
 	}
 
 	restore := func() {
-		proc.vmregion.clear()
-		uvmfree(uintptr(proc.p_pmap))
+		_uvmfree(proc.pmap, uintptr(proc.p_pmap), &proc.vmregion)
 		refdown(uintptr(proc.p_pmap))
+		proc.vmregion.clear()
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
 		proc.vmregion = ovmreg
@@ -3730,7 +3730,7 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
 
 	// the exec must succeed now; free old pmap/mapped files
 	if op_pmap != 0 {
-		uvmfree(uintptr(op_pmap))
+		_uvmfree(opmap, uintptr(op_pmap), &ovmreg)
 		dec_pmap(uintptr(op_pmap))
 	}
 	ovmreg.clear()
