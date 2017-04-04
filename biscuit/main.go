@@ -2522,6 +2522,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	data := start
 	addprint := func(c byte) {
 		fmt.Printf("%c", c)
+		if len(data) > 1024 {
+			fmt.Printf("key dropped!\n")
+			return
+		}
 		data = append(data, c)
 		if c == '\\' {
 			debug.SetTraceback("all")
