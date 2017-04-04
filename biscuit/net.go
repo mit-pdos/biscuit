@@ -399,7 +399,11 @@ func (r *routes_t) _insert_local(myip, netip, netmask ip4_t) {
 	r._insert(myip, netip, netmask, 0, false)
 }
 
-func (r *routes_t) copy() *routes_t {
+// caller must hold r's lock
+func (r *routes_t) copy() (*routes_t, err_t) {
+	if len(r.routes) >= syslimit.routes {
+		return nil, -ENOMEM
+	}
 	ret := &routes_t{}
 	ret.subnets = make([]int, len(r.subnets), cap(r.subnets))
 	for i := range r.subnets {
@@ -410,7 +414,7 @@ func (r *routes_t) copy() *routes_t {
 		ret.routes[a] = b
 	}
 	ret.defgw = r.defgw
-	return ret
+	return ret, 0
 }
 
 func (r *routes_t) dump() {
@@ -469,31 +473,43 @@ func (rt *routetbl_t) init() {
 	rt.routes.init()
 }
 
-func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) {
+func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
-	newroutes := rt.routes.copy()
+	newroutes, err := rt.routes.copy()
+	if err != 0 {
+		return err
+	}
 	newroutes._insert_gateway(myip, netip, netmask, gwip)
 	rt.commit(newroutes)
+	return 0
 }
 
-func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) {
+func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
-	newroutes := rt.routes.copy()
+	newroutes, err := rt.routes.copy()
+	if err != 0 {
+		return err
+	}
 	newroutes._insert_local(myip, netip, netmask)
 	rt.commit(newroutes)
+	return 0
 }
 
-func (rt *routetbl_t) defaultgw(myip, gwip ip4_t) {
+func (rt *routetbl_t) defaultgw(myip, gwip ip4_t) err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
-	newroutes := rt.routes.copy()
+	newroutes, err := rt.routes.copy()
+	if err != 0 {
+		return err
+	}
 	newroutes._defaultgw(myip, gwip)
 	rt.commit(newroutes)
+	return 0
 }
 
 func (rt *routetbl_t) commit(newroutes *routes_t) {
@@ -706,7 +722,8 @@ func icmp_daemon() {
 
 		localip, routeip, err := routetbl.lookup(fromip)
 		if err != 0 {
-			panic("routing failed")
+			fmt.Printf("ICMP route failure\n")
+			continue
 		}
 		nic, ok := nic_lookup(localip)
 		if !ok {
@@ -4088,19 +4105,27 @@ func net_test() {
 		netmask := ip4_t(0xfffffe00)
 		// 18.26.5.1
 		gw := ip4_t(0x121a0401)
-		routetbl.defaultgw(me, gw)
+		if routetbl.defaultgw(me, gw) != 0 {
+			panic("no")
+		}
 		net := me & netmask
-		routetbl.insert_local(me, net, netmask)
+		if routetbl.insert_local(me, net, netmask) != 0 {
+			panic("no")
+		}
 
 		net = ip4_t(0x0a000000)
 		netmask = ip4_t(0xffffff00)
 		gw1 := ip4_t(0x0a000001)
-		routetbl.insert_gateway(me, net, netmask, gw1)
+		if routetbl.insert_gateway(me, net, netmask, gw1) != 0 {
+			panic("no")
+		}
 
 		net = ip4_t(0x0a000000)
 		netmask = ip4_t(0xffff0000)
 		gw2 := ip4_t(0x0a000002)
-		routetbl.insert_gateway(me, net, netmask, gw2)
+		if routetbl.insert_gateway(me, net, netmask, gw2) != 0 {
+			panic("no")
+		}
 
 		routetbl.routes.dump()
 

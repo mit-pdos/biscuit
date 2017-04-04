@@ -231,6 +231,8 @@ type syslimit_t struct {
 	futexes		int
 	// proctected by arptbl lock
 	arpents		int
+	// proctected by routetbl lock
+	routes		int
 	// socks includes pipes and all TCP connections in TIMEWAIT.
 	socks		sysatomic_t
 	// shared buffer space
@@ -242,6 +244,7 @@ var syslimit = syslimit_t {
 	vnodes:		(1 << 24),
 	futexes:	1024,
 	arpents:	1024,
+	routes:		32,
 	socks:		(1 << 17),
 }
 
