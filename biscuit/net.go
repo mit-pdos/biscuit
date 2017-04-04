@@ -133,6 +133,7 @@ var arptbl struct {
 	restimeout	time.Duration
 	// waiters for arp resolution
 	waiters		map[ip4_t][]chan bool
+	waittot		int
 }
 
 type arprec_t struct {
@@ -150,6 +151,31 @@ func arp_add(ip ip4_t, mac *mac_t) {
 			delete(arptbl.m, k)
 		}
 	}
+	if len(arptbl.m) >= syslimit.arpents {
+		// first evict resolved arp entries.
+		evict := 0
+		for ip := range arptbl.m {
+			if _, ok := arptbl.waiters[ip]; !ok {
+				delete(arptbl.m, ip)
+				evict++
+			}
+			if evict > 3 {
+				break
+			}
+		}
+		// didn't get enough, evict unresolved arp entries. the waiting
+		// threads will timeout.
+		if evict == 0 {
+			for ip, chans := range arptbl.waiters {
+				delete(arptbl.waiters, ip)
+				arptbl.waittot -= len(chans)
+				evict++
+				if evict > 3 {
+					break
+				}
+			}
+		}
+	}
 	nr := &arprec_t{}
 	nr.expire = time.Now().Add(arptbl.enttimeout)
 	copy(nr.mac[:], mac[:])
@@ -163,6 +189,7 @@ func arp_add(ip ip4_t, mac *mac_t) {
 		for i := range wl {
 			wl[i] <- true
 		}
+		arptbl.waittot -= len(wl)
 	}
 }
 
@@ -191,10 +218,16 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 
 	arptbl.Lock()
 
+evictrace:
 	ar, ok := _arp_lookup(dip)
 	if ok {
 		arptbl.Unlock()
 		return &ar.mac, 0
+	}
+
+	if arptbl.waittot >= syslimit.arpents {
+		arptbl.Unlock()
+		return nil, -ENOMEM
 	}
 
 	// buffered channel so that a wakeup racing with timeout doesn't
@@ -209,6 +242,7 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 	} else {
 		arptbl.waiters[dip] = append(wl, mychan)
 	}
+	arptbl.waittot++
 	arptbl.Unlock()
 
 	var timeout bool
@@ -221,6 +255,7 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 
 	arptbl.Lock()
 
+	arptbl.waittot--
 	if timeout {
 		// remove my channel from waiters
 		wl, ok := arptbl.waiters[dip]
@@ -244,7 +279,7 @@ func arp_resolve(sip, dip ip4_t) (*mac_t, err_t) {
 
 	ar, ok = _arp_lookup(dip)
 	if !ok {
-		panic("arp must be set")
+		goto evictrace
 	}
 	arptbl.Unlock()
 	return &ar.mac, 0
