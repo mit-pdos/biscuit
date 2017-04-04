@@ -4035,9 +4035,10 @@ func (f *futex_t) towake(who chan int, v int) {
 }
 
 func (f *futex_t) futex_start() {
-	f._cnds = make([]chan int, 0, 10)
+	maxwait := 10
+	f._cnds = make([]chan int, 0, maxwait)
 	f.cnds = f._cnds
-	f._tos = make([]_futto_t, 0, 10)
+	f._tos = make([]_futto_t, 0, maxwait)
 	f.tos = f._tos
 
 	pack := make(chan int)
@@ -4062,6 +4063,11 @@ func (f *futex_t) futex_start() {
 					// thread's turn; don't sleep
 					fm.ack <- 0
 				} else {
+					if (fm.useto && len(f.tos) >= maxwait) ||
+					   len(f.cnds) >= maxwait {
+						fm.ack <- int(-ENOMEM)
+						break
+					}
 					if fm.useto {
 						f.toadd(fm.ack, fm.timeout)
 					}
@@ -4109,8 +4115,13 @@ func (f *futex_t) futex_start() {
 				// add new waiters to our queue; get them
 				// tickets
 				here := fm.cndtake
-				f.cnds = append(f.cnds, here...)
 				tohere := fm.totake
+				if len(f.cnds) + len(here) >= maxwait ||
+				   len(f.tos) + len(tohere) >= maxwait {
+					fm.ack <- int(-ENOMEM)
+					break
+				}
+				f.cnds = append(f.cnds, here...)
 				f.tos = append(f.tos, tohere...)
 				fm.ack <- 0
 			default:
@@ -4127,8 +4138,13 @@ type allfutex_t struct {
 
 var _allfutex = allfutex_t{m: map[uintptr]futex_t{}}
 
-func futex_ensure(uniq uintptr) futex_t {
+func futex_ensure(uniq uintptr) (futex_t, err_t) {
 	_allfutex.Lock()
+	if len(_allfutex.m) > syslimit.futexes {
+		_allfutex.Unlock()
+		var zf futex_t
+		return zf, -ENOMEM
+	}
 	r, ok := _allfutex.m[uniq]
 	if !ok {
 		r.reopen = make(chan int)
@@ -4137,7 +4153,7 @@ func futex_ensure(uniq uintptr) futex_t {
 		go r.futex_start()
 	}
 	_allfutex.Unlock()
-	return r
+	return r, 0
 }
 
 // pmap must be locked. maps user va to kernel va. returns kva as uintptr and
@@ -4164,7 +4180,7 @@ func va2fut(proc *proc_t, va uintptr) (futex_t, err_t) {
 	if err != 0 {
 		return zf, err
 	}
-	return futex_ensure(uniq), 0
+	return futex_ensure(uniq)
 }
 
 // an object for atomically looking-up and incrementing/loading from a user

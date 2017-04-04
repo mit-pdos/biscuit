@@ -219,12 +219,16 @@ var fd_stdin 	= fd_t{fops: dummyfops, perms: FD_READ}
 var fd_stdout 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 var fd_stderr 	= fd_t{fops: dummyfops, perms: FD_WRITE}
 
-// system-wide limits
+// system-wide limits. the limits of type int are read-only while the
+// sysatomic_t limits are incremented/decremented on object
+// allocation/deallocation.
 type syslimit_t struct {
 	// protected by proclock
 	sysprocs	int
 	// proctected by idmonl lock
 	vnodes		int
+	// proctected by _allfutex lock
+	futexes		int
 	// socks includes pipes and all TCP connections in TIMEWAIT.
 	socks		sysatomic_t
 	// shared buffer space
@@ -233,8 +237,9 @@ type syslimit_t struct {
 
 var syslimit = syslimit_t {
 	sysprocs:	2048,
-	socks:		(1 << 17),
 	vnodes:		(1 << 24),
+	futexes:	1024,
+	socks:		(1 << 17),
 }
 
 // a type for system limits that aren't protected by a lock.
