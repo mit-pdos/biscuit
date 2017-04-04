@@ -980,9 +980,20 @@ func (ts *tcpsegs_t) _sanity() {
 // segment, they will be coalesced.  winend is the end of the receive window.
 // the segments are sorted in descending order of distance from the window end
 // (needed because sequence numbers may wrap).
-func (ts *tcpsegs_t) addnow(seq, len, winend uint32) {
+func (ts *tcpsegs_t) addnow(seq, l, winend uint32) {
+	if len(ts.segs) >= syslimit.tcpsegs {
+		// to prevent allocating too many segments, collapse some
+		// segments together, thus we may retransmit some segments
+		// sooner than their actual timeout.
+		tlen := uint32(0)
+		for i := range ts.segs {
+			tlen += ts.segs[i].len
+		}
+		ts.segs[0].len = tlen
+		ts.segs = ts.segs[:1]
+	}
 	ts._addnoisect(seq, 1, winend)
-	ts.reset(seq, len)
+	ts.reset(seq, l)
 }
 
 func (ts *tcpsegs_t) _addnoisect(seq, len, winend uint32) {
@@ -1159,6 +1170,13 @@ func (tr *tcprsegs_t) recvd(rcvnxt, winend, seq uint32, l int) uint32 {
 		copy(tr.segs[i+1:], tr.segs[i+2:])
 		tr.segs = tr.segs[:len(tr.segs) - 1]
 		i--
+	}
+	// keep the amount of memory used by remembering out-of-order segments
+	// bounded -- forget that we received the non-coalesced segments that
+	// are farthest from rcv.nxt (in hopes that we can advance rcv.nxt as
+	// far as possible).
+	if len(tr.segs) > syslimit.tcpsegs {
+		tr.segs = tr.segs[:syslimit.tcpsegs]
 	}
 	if rcvnxt == tr.segs[0].seq {
 		ret := rcvnxt + tr.segs[0].len
@@ -1918,6 +1936,8 @@ type tcptcb_t struct {
 	rxdone	bool
 	// we sent FIN
 	txdone	bool
+	twdeath	bool
+	bound	bool
 	openc	int
 	pollers	pollers_t
 	rcv struct {
@@ -1960,8 +1980,6 @@ type tcptcb_t struct {
 	txbuf	tcpbuf_t
 	// data received over the TCP connection
 	rxbuf	tcpbuf_t
-	twdeath	bool
-	bound	bool
 	sndsz	int
 	rcvsz	int
 }
