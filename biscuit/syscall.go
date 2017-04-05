@@ -1029,22 +1029,22 @@ func sys_pipe2(proc *proc_t, pipen, _flags int) int {
 		wfp |= FD_CLOEXEC
 	}
 
-	p := &pipe_t{}
+	// if there is an error, pipe_t.op_reopen() will release the pipe
+	// reservation.
+	if !syslimit.pipes.take() {
+		lhits++
+		return int(-ENOMEM)
+	}
+
+	p := &pipe_t{lraise: true}
 	p.pipe_start()
 	rops := &pipefops_t{pipe: p, writer: false, options: opts}
 	wops := &pipefops_t{pipe: p, writer: true, options: opts}
 	rpipe := &fd_t{fops: rops}
 	wpipe := &fd_t{fops: wops}
-	rfd, ok := proc.fd_insert(rpipe, rfp)
+	rfd, wfd, ok := proc.fd_insert2(rpipe, rfp, wpipe, wfp)
 	if !ok {
 		close_panic(rpipe)
-		return int(-EMFILE)
-	}
-	wfd, ok := proc.fd_insert(wpipe, wfp)
-	if !ok {
-		if sys_close(proc, rfd) != 0 {
-			panic("must succeed")
-		}
 		close_panic(wpipe)
 		return int(-EMFILE)
 	}
@@ -1177,6 +1177,9 @@ type pipe_t struct {
 	closed	bool
 	pollers	pollers_t
 	passfds	passfd_t
+	// if true, this pipe was allocated against the pipe limit; raise it on
+	// termination.
+	lraise	bool
 }
 
 func (o *pipe_t) pipe_start() {
@@ -1299,6 +1302,9 @@ func (o *pipe_t) op_reopen(rd, wd int) err_t {
 		o.closed = true
 		o.cbuf.cb_release()
 		o.passfds.closeall()
+		if o.lraise {
+			syslimit.pipes.give()
+		}
 	}
 	o.Unlock()
 	return 0

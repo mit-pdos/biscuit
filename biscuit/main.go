@@ -240,6 +240,8 @@ type syslimit_t struct {
 	socks		sysatomic_t
 	// total cached dirents
 	dirents		sysatomic_t
+	// total pipes
+	pipes		sysatomic_t
 	// shared buffer space
 	//shared		sysatomic_t
 }
@@ -253,6 +255,7 @@ var syslimit = syslimit_t {
 	tcpsegs:	16,
 	socks:		1 << 17,
 	dirents:	1 << 20,
+	pipes:		1024,
 }
 
 // a type for system limits that aren't protected by a lock.
