@@ -423,6 +423,7 @@ func cons_read(ub userio_i, offset int) (int, err_t) {
 
 func cons_write(src userio_i, off int) (int, err_t) {
 	// merge into one buffer to avoid taking the console lock many times.
+	// what a sweet optimization.
 	utext := int8(0x17)
 	big := make([]uint8, src.totalsz())
 	read, err := src.uioread(big)
@@ -959,6 +960,14 @@ func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	// (locking pmap and looking up uva mapping).
 	pollfdsz := 8
 	sz := pollfdsz*nfds
+	// chosen arbitrarily...
+	maxsz := 4096
+	if sz > maxsz {
+		// fall back to holding lock over user pmap if they want to
+		// poll so many fds.
+		fmt.Printf("poll limit hit\n")
+		return int(-EINVAL)
+	}
 	buf := make([]uint8, sz)
 	if !proc.user2k(buf, fdsn) {
 		return int(-EFAULT)
