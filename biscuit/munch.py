@@ -29,7 +29,7 @@ def divrips(rips):
 	ur = []
 	kr = []
 	for r in rips:
-		if r.find('2c8') != -1:
+		if r.startswith('00002c8'):
 			ur.append(r)
 		else:
 			kr.append(r)
