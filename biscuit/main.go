@@ -6,6 +6,7 @@ import "runtime"
 import "runtime/debug"
 import "sync/atomic"
 import "sync"
+import "strings"
 import "time"
 import "unsafe"
 
@@ -3320,6 +3321,28 @@ func _fakefail() bool {
 		return true
 	}
 	return false
+}
+
+func callerdump() {
+	i := 3
+	s := ""
+	for {
+		_, f, l, ok := runtime.Caller(i)
+		if !ok {
+			break
+		}
+		i++
+		li := strings.LastIndex(f, "/")
+		if li != -1 {
+			f = f[li + 1:]
+		}
+		if s == "" {
+			s = fmt.Sprintf("%s:%d", f, l)
+		} else {
+			s += fmt.Sprintf("<-%s:%d", f, l)
+		}
+	}
+	fmt.Printf("%s\n", s)
 }
 
 func _refpg_new() (*[512]int, int, bool) {
