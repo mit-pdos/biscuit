@@ -359,8 +359,16 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) err_t {
 	if err := npar.probe_insert(); err != 0 {
 		return err
 	}
-
+	if err = opar.probe_unlink(ofn); err != 0 {
+		return err
+	}
 	odir := ochild.icache.itype == I_DIR
+	if odir {
+		if err = ochild.probe_unlink(".."); err != 0 {
+			return err
+		}
+	}
+
 	if newexists {
 		if !nchild.ilock_namei() {
 			return -ENOENT
@@ -369,28 +377,30 @@ func fs_rename(oldp, newp string, cwd *imemnode_t) err_t {
 
 		// make sure old and new are either both files or both
 		// directories
-		if err = nchild.do_dirchk(odir); err != 0 {
+		if err := nchild.do_dirchk(odir); err != 0 {
 			return err
 		}
 		// remove pre-existing new
+		if err = npar.do_unlink(nfn); err != 0 {
+			return err
+		}
 		if nchild._linkdown() {
 			idaemon_remove(nchild.priv)
 		}
-		npar.do_unlink(nfn)
 	}
 
 	// finally, do the move
 	if opar.do_unlink(ofn) != 0 {
-		panic("cannot oom")
+		panic("probed")
 	}
 	if npar.do_insert(nfn, ochild.priv) != 0 {
-		panic("verified")
+		panic("probed")
 	}
 
 	// update '..'
 	if odir {
 		if ochild.do_unlink("..") != 0 {
-			panic("cannot oom")
+			panic("probed")
 		}
 		if ochild.do_insert("..", npar.priv) != 0 {
 			panic("insert after unlink must succeed")
@@ -1513,42 +1523,6 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
 	ibrelse(blk)
-	if idm.icache.itype == I_DIR {
-		if err := idm.cache_dirents(); err != 0 {
-			// XXX safely purge from iblock cache
-			idm.pgcache.release()
-			return err
-		}
-	}
-	return 0
-}
-
-func (idm *imemnode_t) cache_dirents() err_t {
-	ic := &idm.icache
-	ic.dents = make(map[string]icdent_t)
-	ic._free_dents = make([]icdent_t, 0, NDIRENTS)
-	ic.free_dents = ic._free_dents
-	for i := 0; i < idm.icache.size; i+= 512 {
-		pg, err := idm.pgcache.pgfor(i, i+512)
-		if err != 0 {
-			return err
-		}
-		// XXXPANIC
-		if len(pg) != 512 {
-			panic("wut")
-		}
-		dd := dirdata_t{pg}
-		for j := 0; j < NDIRENTS; j++ {
-			fn := dd.filename(j)
-			priv := dd.inodenext(j)
-			nde := icdent_t{i+j*NDBYTES, priv}
-			if fn == "" {
-				ic.free_dents = append(ic.free_dents, nde)
-			} else {
-				ic.dents[fn] = nde
-			}
-		}
-	}
 	return 0
 }
 
@@ -1605,6 +1579,7 @@ func (idm *imemnode_t) itrylock() bool {
 func (idm *imemnode_t) iunlock() {
 	if idm.opencount == 0 && idm.icache.links == 0 {
 		idm.ifree()
+		idm._derelease()
 	}
 	idm._amlocked = false
 	idm.l.Unlock()
@@ -1683,8 +1658,14 @@ func (idm *imemnode_t) do_dirchk(wantdir bool) err_t {
 		return -ENOTDIR
 	} else if !wantdir && amdir {
 		return -EISDIR
-	} else if amdir && !idm.idirempty() {
-		return -ENOTEMPTY
+	} else if amdir {
+		amempty, err := idm.idirempty()
+		if err != 0 {
+			return err
+		}
+		if !amempty {
+			return -ENOTEMPTY
+		}
 	}
 	return 0
 }
@@ -1768,22 +1749,19 @@ func (idm *imemnode_t) do_fullpath() (string, err_t) {
 		if !par.ilock_namei() {
 			return "", -ENOENT
 		}
-		found := false
-		for name, icd := range par.icache.dents {
-			if icd.priv == last {
-				// POSIX: "no unnecessary slashes"
-				if acc == "" {
-					acc = name
-				} else {
-					acc = name + "/" + acc
-				}
-				found = true
-				break
+		name, err := par._denamefor(last)
+		if err != 0 {
+			if err == -ENOENT {
+				panic("child must exist")
 			}
+			par.iunlock()
+			return "", err
 		}
-		// XXXPANIC
-		if !found {
-			panic("child must exist")
+		// POSIX: "no unnecessary slashes"
+		if acc == "" {
+			acc = name
+		} else {
+			acc = name + "/" + acc
 		}
 		last = par.priv
 		c = par
@@ -1895,10 +1873,17 @@ type icache_t struct {
 	minor		int
 	indir		int
 	addrs		[NIADDRS]int
-	dents		map[string]icdent_t
-	_free_dents	[]icdent_t
-	free_dents	[]icdent_t
 	// inode specific metadata blocks
+	dentc struct {
+		// true iff all directory entries are cached, thus there is no
+		// need to check the disk
+		haveall		bool
+		// maximum number of cached dents this icache is allowed to
+		// have
+		max		int
+		dents		map[string]icdent_t
+		freem		[]int
+	}
 	metablks	map[int]*mdbuf_t
 }
 
@@ -2235,19 +2220,66 @@ func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
 	return 0
 }
 
-// if dirent_add fails to allocate a page, idm is left unchanged.
-func (idm *imemnode_t) dirent_add(name string, nblkno int, ioff int) err_t {
-	if _, ok := idm.icache.dents[name]; ok {
+// returns the offset of an empty directory entry. returns error if failed to
+// allocate page for the new directory entry.
+func (idm *imemnode_t) _denextempty() (int, err_t) {
+	dc := &idm.icache.dentc
+	if len(dc.freem) > 0 {
+		ret := dc.freem[0]
+		copy(dc.freem[0:], dc.freem[1:])
+		dc.freem = dc.freem[:len(dc.freem) - 1]
+		return ret, 0
+	}
+
+	// see if we have an empty slot before expanding the directory
+	var de icdent_t
+	found, err := idm._descan(func(fn string, tde icdent_t) bool {
+		if fn == "" {
+			de = tde
+			return true
+		}
+		return false
+	})
+	if err != 0 {
+		return 0, err
+	}
+	if found {
+		return de.offset, 0
+	}
+
+	// current dir blocks are full -- allocate new dirdata block. make
+	// sure its in the page cache but not fill'ed from disk
+	newsz := idm.icache.size + 512
+	_, err = idm.pgcache.pgfor(idm.icache.size, newsz)
+	if err != 0 {
+		return 0, err
+	}
+	idm.pgcache.pgdirty(idm.icache.size, newsz)
+	newoff := idm.icache.size
+	// start from 1 since we return slot 0 directly
+	for i := 1; i < NDIRENTS; i++ {
+		noff := newoff + NDBYTES*i
+		//dc.freem = append(dc.freem, noff)
+		idm._deputempty(noff)
+	}
+	idm.icache.size = newsz
+	return newoff, 0
+}
+
+// if _deinsert fails to allocate a page, idm is left unchanged.
+func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
+	// XXXPANIC
+	if _, err := idm._delookup(name); err == 0 {
 		panic("dirent already exists")
 	}
 	var ddata dirdata_t
-	noff, err := idm.dirent_getempty()
+	noff, err := idm._denextempty()
 	if err != 0 {
 		return err
 	}
 	pg, err := idm.pgcache.pgfor(noff, noff+NDBYTES)
 	if err != 0 {
-		panic("dirent_getempty implies success")
+		return err
 	}
 	ddata.data = pg
 
@@ -2259,21 +2291,243 @@ func (idm *imemnode_t) dirent_add(name string, nblkno int, ioff int) err_t {
 	ddata.w_inodenext(0, nblkno, ioff)
 	idm.pgcache.pgdirty(noff, noff+NDBYTES)
 	idm.pgcache.flush()
-	de := icdent_t{noff, inum(biencode(nblkno, ioff))}
-	idm.icache.dents[name] = de
+	ok := idm._dceput(name, icdent_t{noff, inum(biencode(nblkno, ioff))})
+	dc := &idm.icache.dentc
+	dc.haveall = dc.haveall && ok
 	return 0
 }
 
-// a function to guarantee that there is enough memory to insert at least one
-// directory entry.
-func (idm *imemnode_t) probe_insert() err_t {
-	// insert and remove a fake directory entry, forcing a page allocation
-	// is necessary.
-	if err := idm.dirent_add("", 0, 0); err != 0 {
+// calls f on each directory entry (including empty ones) until f returns true
+// or it has been called on all directory entries. _descan returns true if f
+// returned true.
+func (idm *imemnode_t) _descan(
+   f func(fn string, de icdent_t)bool) (bool, err_t) {
+	for i := 0; i < idm.icache.size; i+= 512 {
+		pg, err := idm.pgcache.pgfor(i, i+512)
+		if err != 0 {
+			return false, err
+		}
+		// XXXPANIC
+		if len(pg) != 512 {
+			panic("wut")
+		}
+		dd := dirdata_t{pg}
+		for j := 0; j < NDIRENTS; j++ {
+			tfn := dd.filename(j)
+			tpriv := dd.inodenext(j)
+			tde := icdent_t{i+j*NDBYTES, tpriv}
+			if f(tfn, tde) {
+				return true, 0
+			}
+		}
+	}
+	return false, 0
+}
+
+func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
+	if fn == "" {
+		panic("bad lookup")
+	}
+	if de, ok := idm.icache.dentc.dents[fn]; ok {
+		return de, 0
+	}
+	var zi icdent_t
+	if idm.icache.dentc.haveall {
+		// cache negative entries?
+		return zi, -ENOENT
+	}
+
+	// not in cached dirents
+	found := false
+	haveall := true
+	var de icdent_t
+	_, err := idm._descan(func(tfn string, tde icdent_t) bool {
+		if tfn == "" {
+			return false
+		}
+		if tfn == fn {
+			de = tde
+			found = true
+		}
+		if !idm._dceput(tfn, tde) {
+			haveall = false
+		}
+		return found && !haveall
+	})
+	if err != 0 {
+		return zi, err
+	}
+	idm.icache.dentc.haveall = haveall
+	if !found {
+		return zi, -ENOENT
+	}
+	return de, 0
+}
+
+func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
+	var zi icdent_t
+	de, err := idm._delookup(fn)
+	if err != 0 {
+		return zi, err
+	}
+	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES)
+	if err != 0 {
+		return zi, err
+	}
+	dirdata := dirdata_t{pg}
+	dirdata.w_filename(0, "")
+	dirdata.w_inodenext(0, 0, 0)
+	idm.pgcache.pgdirty(de.offset, de.offset + NDBYTES)
+	idm.pgcache.flush()
+	// add back to free dents
+	delete(idm.icache.dentc.dents, fn)
+	idm._deputempty(de.offset)
+	return de, 0
+}
+
+// returns the filename mapping to tnum
+func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
+	// check cache first
+	for fn, de := range idm.icache.dentc.dents {
+		if de.priv == tnum {
+			return fn, 0
+		}
+	}
+
+	// not in cache; shucks!
+	var fn string
+	var de icdent_t
+	found, err := idm._descan(func(tfn string, tde icdent_t) bool {
+		if tde.priv == tnum {
+			fn = tfn
+			return true
+		}
+		return false
+	})
+	if err != 0 {
+		return "", err
+	}
+	if !found {
+		return "", -ENOENT
+	}
+	idm._dceput(fn, de)
+	return fn, 0
+}
+
+// returns true if idm, a directory, is empty (excluding ".." and ".").
+func (idm *imemnode_t) _deempty() (bool, err_t) {
+	if idm.icache.dentc.haveall {
+		for fn := range idm.icache.dentc.dents {
+			if fn != "." && fn != ".." {
+				return false, 0
+			}
+		}
+	}
+	notempty, err := idm._descan(func(fn string, de icdent_t) bool {
+		return fn != "" && fn != "." && fn != ".."
+	})
+	if err != 0 {
+		return false, err
+	}
+	return !notempty, 0
+}
+
+// empties the dirent cache, returning the number of dents purged.
+func (idm *imemnode_t) _derelease() int {
+	dc := &idm.icache.dentc
+	dc.haveall = false
+	dc.dents = nil
+	dc.freem = nil
+	ret := dc.max
+	syslimit.dirents.given(uint(ret))
+	dc.max = 0
+	return ret
+}
+
+// ensure that an insert/unlink cannot fail i.e. fail to allocate a page. if fn
+// == "", look for an empty dirent, otherwise make sure the page containing fn
+// is in the page cache.
+func (idm *imemnode_t) _deprobe(fn string) err_t {
+	if fn != "" {
+		de, err := idm._delookup(fn)
+		if err != 0 {
+			return err
+		}
+		noff := de.offset
+		_, err = idm.pgcache.pgfor(noff, noff+NDBYTES)
 		return err
 	}
-	if _, err := idm.iunlink(""); err != 0 {
-		panic("success implied")
+	noff, err := idm._denextempty()
+	if err != 0 {
+		return err
+	}
+	_, err = idm.pgcache.pgfor(noff, noff+NDBYTES)
+	if err != 0 {
+		return err
+	}
+	idm._deputempty(noff)
+	return 0
+}
+
+// returns true if this idm has enough free cache space for a single dentry
+func (idm *imemnode_t) _demaycache() bool {
+	dc := &idm.icache.dentc
+	have := len(dc.dents) + len(dc.freem)
+	if have < dc.max {
+		return true
+	}
+	// reserve more directory entries
+	take := 64
+	if syslimit.dirents.taken(uint(take)) {
+		dc.max += take
+		return true
+	}
+	lhits++
+	return false
+}
+
+// caching is best-effort. returns true if fn was added to the cache
+func (idm *imemnode_t) _dceput(fn string, de icdent_t) bool {
+	dc := &idm.icache.dentc
+	if dc.dents != nil {
+		if _, ok := dc.dents[fn]; ok {
+			return true
+		}
+	}
+	if !idm._demaycache() {
+		return false
+	}
+	if dc.dents == nil {
+		dc.dents = make(map[string]icdent_t)
+	}
+	dc.dents[fn] = de
+	return true
+}
+
+func (idm *imemnode_t) _deputempty(off int) {
+	if !idm._demaycache() {
+		return
+	}
+	dc := &idm.icache.dentc
+	dc.freem = append(dc.freem, off)
+}
+
+// guarantee that there is enough memory to insert at least one directory
+// entry.
+func (idm *imemnode_t) probe_insert() err_t {
+	// insert and remove a fake directory entry, forcing a page allocation
+	// if necessary.
+	if err := idm._deprobe(""); err != 0 {
+		return err
+	}
+	return 0
+}
+
+// guarantee that there is enough memory to unlink a dirent (which may require
+// allocating a page to load the dirents from disk).
+func (idm *imemnode_t) probe_unlink(fn string) err_t {
+	if err := idm._deprobe(fn); err != 0 {
+		return err
 	}
 	return 0
 }
@@ -2332,7 +2586,8 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 		panic("inconsistent args")
 	}
 	// make sure file does not already exist
-	if de, ok := idm.icache.dents[name]; ok {
+	de, err := idm._delookup(name)
+	if err == 0 {
 		return de.priv, -EEXIST
 	}
 
@@ -2352,7 +2607,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 	}
 
 	// write new directory entry referencing newinode
-	err := idm.dirent_add(name, newbn, newioff)
+	err = idm._deinsert(name, newbn, newioff)
 	if err != 0 {
 		_iallocundo(newbn, newinode, newiblk)
 	}
@@ -2368,10 +2623,11 @@ func (idm *imemnode_t) iget(name string) (inum, err_t) {
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
 	}
-	if de, ok := idm.icache.dents[name]; ok {
-		return de.priv, 0
+	de, err := idm._delookup(name)
+	if err != 0 {
+		return 0, err
 	}
-	return 0, -ENOENT
+	return de.priv, 0
 }
 
 // creates a new directory entry with name "name" and inode number priv
@@ -2379,11 +2635,13 @@ func (idm *imemnode_t) iinsert(name string, priv inum) err_t {
 	if idm.icache.itype != I_DIR {
 		return -ENOTDIR
 	}
-	if _, ok := idm.icache.dents[name]; ok {
+	if _, err := idm._delookup(name); err == 0 {
 		return -EEXIST
+	} else if err != -ENOENT {
+		return err
 	}
 	a, b := bidecode(priv)
-	err := idm.dirent_add(name, a, b)
+	err := idm._deinsert(name, a, b)
 	return err
 }
 
@@ -2392,41 +2650,19 @@ func (idm *imemnode_t) iunlink(name string) (inum, err_t) {
 	if idm.icache.itype != I_DIR {
 		panic("unlink to non-dir")
 	}
-	de, ok := idm.icache.dents[name]
-	if !ok {
-		return 0, -ENOENT
-	}
-	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES)
+	de, err := idm._deremove(name)
 	if err != 0 {
 		return 0, err
 	}
-	dirdata := dirdata_t{pg}
-	dirdata.w_filename(0, "")
-	dirdata.w_inodenext(0, 0, 0)
-	idm.pgcache.pgdirty(de.offset, de.offset + NDBYTES)
-	idm.pgcache.flush()
-	// add back to free dents
-	delete(idm.icache.dents, name)
-	icd := icdent_t{de.offset, 0}
-	idm.icache.free_dents = append(idm.icache.free_dents, icd)
 	return de.priv, 0
 }
 
 // returns true if the inode has no directory entries
-func (idm *imemnode_t) idirempty() bool {
-	canrem := func(s string) bool {
-		if s == ".." || s == "." {
-			return false
-		}
-		return true
+func (idm *imemnode_t) idirempty() (bool, err_t) {
+	if idm.icache.itype != I_DIR {
+		panic("i am not a dir")
 	}
-	empty := true
-	for fn := range idm.icache.dents {
-		if canrem(fn) {
-			empty = false
-		}
-	}
-	return empty
+	return idm._deempty()
 }
 
 func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
@@ -2507,38 +2743,6 @@ func (idm *imemnode_t) ifree() {
 		bfree(blkno)
 	}
 	idm.pgcache.release()
-}
-
-// returns the offset of an empty directory entry. returns false if failed to
-// allocate page for the new directory entry.
-func (idm *imemnode_t) dirent_getempty() (int, err_t) {
-	frd := idm.icache.free_dents
-	if len(frd) > 0 {
-		ret := frd[0]
-		idm.icache.free_dents = frd[1:]
-		if len(idm.icache.free_dents) == 0 {
-			idm.icache.free_dents = idm.icache._free_dents
-		}
-		return ret.offset, 0
-	}
-
-	// current dir blocks are full -- allocate new dirdata block. make
-	// sure its in the page cache but not fill'ed from disk
-	newsz := idm.icache.size + 512
-	_, err := idm.pgcache.pgfor(idm.icache.size, newsz)
-	if err != 0 {
-		return 0, err
-	}
-	idm.pgcache.pgdirty(idm.icache.size, newsz)
-	newoff := idm.icache.size
-	// NDIRENTS - 1 because we return slot 0 directly
-	idm.icache.free_dents = idm.icache._free_dents
-	for i := 1; i < NDIRENTS; i++ {
-		fde := icdent_t{newoff + NDBYTES*i, 0}
-		idm.icache.free_dents = append(idm.icache.free_dents, fde)
-	}
-	idm.icache.size = newsz
-	return newoff, 0
 }
 
 // used for {,f}stat
@@ -3233,6 +3437,7 @@ func bdev_read(blkn int, dst *[512]uint8) {
 }
 
 func memreclaim() bool {
+	// XXX purge cached dirents
 	if memtime {
 		// cannot evict vnodes on a memory file system!
 		return false

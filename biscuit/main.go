@@ -237,18 +237,21 @@ type syslimit_t struct {
 	tcpsegs		int
 	// socks includes pipes and all TCP connections in TIMEWAIT.
 	socks		sysatomic_t
+	// total cached dirents
+	dirents		sysatomic_t
 	// shared buffer space
 	//shared		sysatomic_t
 }
 
 var syslimit = syslimit_t {
 	sysprocs:	2048,
-	vnodes:		(1 << 24),
+	vnodes:		1 << 24,
 	futexes:	1024,
 	arpents:	1024,
 	routes:		32,
 	tcpsegs:	16,
-	socks:		(1 << 17),
+	socks:		1 << 17,
+	dirents:	1 << 20,
 }
 
 // a type for system limits that aren't protected by a lock.
