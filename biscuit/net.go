@@ -798,21 +798,22 @@ func net_icmp(pkt [][]uint8, tlen int) {
 }
 
 // allocates two pages for the send/receive buffers. returns false if it failed
-// to allocate pages.
+// to allocate pages. does not increase the reference count of the pages
+// (circbuf_t should do that).
 func tcppgs() ([]uint8, uintptr, []uint8, uintptr, bool) {
 	spg, _sp_pg, ok := refpg_new_nozero()
 	if !ok {
 		return nil, 0, nil, 0, false
 	}
 	sp_pg := uintptr(_sp_pg)
-	refup(sp_pg)
 	rpg, _rp_pg, ok := refpg_new_nozero()
 	if !ok {
+		// ...
+		refup(sp_pg)
 		refdown(sp_pg)
 		return nil, 0, nil, 0, false
 	}
 	rp_pg := uintptr(_rp_pg)
-	refup(rp_pg)
 	return pg2bytes(spg)[:], sp_pg, pg2bytes(rpg)[:], rp_pg, true
 }
 
@@ -825,7 +826,7 @@ type tcpbuf_t struct {
 }
 
 func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg uintptr, tcb *tcptcb_t) {
-	tb.cbuf.cb_phys(v, p_pg)
+	tb.cbuf.cb_init_phys(v, p_pg)
 	tb.didseq = false
 	tb.cond = sync.NewCond(&tcb.l)
 	tb.pollers = &tcb.pollers
@@ -3663,6 +3664,7 @@ func (tf *tcpfops_t) setsockopt(p *proc_t, lev, opt int, src userio_i,
 	ret := -EOPNOTSUPP
 	switch opt {
 	case SO_SNDBUF, SO_RCVBUF:
+		panic("fixme")
 		n := uint(intarg)
 		// circbuf requires that the buffer size is power-of-2. my
 		// window handling assumes the buffer size > mss.
@@ -3751,6 +3753,15 @@ func (tl *tcplfops_t) close() err_t {
 			tcb._rst()
 			tcb.kill()
 			tcb.tcb_unlock()
+		}
+		// free all TCP buffers allocated for half-established
+		// connections.
+		for _, inc := range tl.tcl.seqs {
+			// ...
+			refup(inc.bufs.sp_pg)
+			refdown(inc.bufs.sp_pg)
+			refup(inc.bufs.rp_pg)
+			refdown(inc.bufs.rp_pg)
 		}
 		tcpcons.listen_del(&tl.tcl)
 	}

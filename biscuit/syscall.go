@@ -2401,7 +2401,7 @@ type dgrambuf_t struct {
 
 func (db *dgrambuf_t) dg_init(sz int) {
 	db.cbuf.cb_init(sz)
-	// assume that messages are about 10 bytes
+	// assume that messages are at least 10 bytes
 	db.dgrams = make([]dgram_t, sz/10)
 	db.head, db.tail = 0, 0
 }
@@ -2463,6 +2463,10 @@ func (db *dgrambuf_t) copyout(dst, fromsa, cmsg userio_i) (int, int, err_t) {
 	// commit tail
 	db.tail++
 	return did, fdid, 0
+}
+
+func (db *dgrambuf_t) dg_release() {
+	db.cbuf.cb_release()
 }
 
 // convert bound socket path to struct sockaddr_un
@@ -2586,6 +2590,7 @@ func (bud *bud_t) bud_close() {
 	bud.pollers.wakeready(R_READ | R_WRITE | R_ERROR)
 	bid := bud.bid
 	fpriv := bud.fpriv
+	bud.dbuf.dg_release()
 	bud.Unlock()
 
 	allbuds.bud_del(bid, fpriv)

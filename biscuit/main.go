@@ -1935,23 +1935,25 @@ type circbuf_t struct {
 	p_pg	uintptr
 }
 
-var _bufpool = sync.Pool{New: func() interface{} { return make([]uint8, 512)}}
-
-func (cb *circbuf_t) cb_init(sz int) {
-	bufmax := 1024*1024
+// may fail to allocate a page for the buffer. when cb's life is over, someone
+// must free the buffer page by calling cb_release().
+func (cb *circbuf_t) cb_init(sz int) err_t {
+	bufmax := PGSIZE
 	if sz <= 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
-	cb.buf = _bufpool.Get().([]uint8)
-	if len(cb.buf) < sz {
-		cb.buf = make([]uint8, sz)
-	}
-	cb.bufsz = len(cb.buf)
+	cb.bufsz = sz
 	cb.head, cb.tail = 0, 0
-	cb.p_pg = 0
+	// lazily allocated the buffers. it is easier to handle an error at the
+	// time of read or write instead of during the initialization of the
+	// object using a circbuf.
+	return 0
 }
 
-func (cb *circbuf_t) cb_phys(v []uint8, p_pg uintptr) {
+// provide the page for the buffer explicitly; useful for guaranteeing that
+// read/writes won't fail to allocate memory.
+func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg uintptr) {
+	refup(p_pg)
 	cb.p_pg = p_pg
 	cb.buf = v
 	cb.bufsz = len(cb.buf)
@@ -1962,14 +1964,27 @@ func (cb *circbuf_t) cb_release() {
 	if cb.buf == nil {
 		return
 	}
-	if cb.p_pg != 0 {
-		refdown(cb.p_pg)
-		cb.p_pg = 0
-	} else {
-		_bufpool.Put(cb.buf)
-	}
+	refdown(cb.p_pg)
+	cb.p_pg = 0
 	cb.buf = nil
 	cb.head, cb.tail = 0, 0
+}
+
+func (cb *circbuf_t) cb_ensure() err_t {
+	if cb.buf != nil {
+		return 0
+	}
+	if cb.bufsz == 0 {
+		panic("not initted")
+	}
+	pg, p_pg, ok := refpg_new_nozero()
+	if !ok {
+		return -ENOMEM
+	}
+	bpg := pg2bytes(pg)[:]
+	bpg = bpg[:cb.bufsz]
+	cb.cb_init_phys(bpg, uintptr(p_pg))
+	return 0
 }
 
 func (cb *circbuf_t) full() bool {
@@ -1980,7 +1995,21 @@ func (cb *circbuf_t) empty() bool {
 	return cb.head == cb.tail
 }
 
+func (cb *circbuf_t) left() int {
+	used := cb.head - cb.tail
+	rem := cb.bufsz - used
+	return rem
+}
+
+func (cb *circbuf_t) used() int {
+	used := cb.head - cb.tail
+	return used
+}
+
 func (cb *circbuf_t) copyin(src userio_i) (int, err_t) {
+	if err := cb.cb_ensure(); err != 0 {
+		return 0, err
+	}
 	if cb.full() {
 		return 0, 0
 	}
@@ -2020,6 +2049,9 @@ func (cb *circbuf_t) copyout(dst userio_i) (int, err_t) {
 }
 
 func (cb *circbuf_t) copyout_n(dst userio_i, max int) (int, err_t) {
+	if err := cb.cb_ensure(); err != 0 {
+		return 0, err
+	}
 	if cb.empty() {
 		return 0, 0
 	}
@@ -2063,22 +2095,14 @@ func (cb *circbuf_t) copyout_n(dst userio_i, max int) (int, err_t) {
 	return c, 0
 }
 
-func (cb *circbuf_t) left() int {
-	used := cb.head - cb.tail
-	rem := cb.bufsz - used
-	return rem
-}
-
-func (cb *circbuf_t) used() int {
-	used := cb.head - cb.tail
-	return used
-}
-
 // returns slices referencing the internal circular buffer [head+offset,
 // head+offset+sz) which must be outside [tail, head). returns two slices when
 // the returned buffer wraps.
 // XXX XXX XXX XXX XXX remove arg
 func (cb *circbuf_t) _rawwrite(offset, sz int) ([]uint8, []uint8) {
+	if cb.buf == nil {
+		panic("no lazy allocation for tcp")
+	}
 	if cb.left() < sz {
 		panic("bad size")
 	}
@@ -2123,6 +2147,9 @@ func (cb *circbuf_t) _advhead(sz int) {
 // which must be inside [tail, head). returns two slices when the returned
 // buffer wraps.
 func (cb *circbuf_t) _rawread(offset int) ([]uint8, []uint8) {
+	if cb.buf == nil {
+		panic("no lazy allocation for tcp")
+	}
 	oi := (cb.tail + offset) % cb.bufsz
 	hi := cb.head % cb.bufsz
 	ti := cb.tail % cb.bufsz
