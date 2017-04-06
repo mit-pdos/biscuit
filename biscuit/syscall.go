@@ -3547,9 +3547,9 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 		// not have been mapped at all yet.
 		cow := *pte & PTE_COW != 0
 		if cow {
-			// if this COW page is mapped exactly once (i.e.  only
-			// this mapping maps the page), we can claim the page,
-			// skip the copy, and mark it writable.
+			// if this anonymous COW page is mapped exactly once
+			// (i.e.  only this mapping maps the page), we can
+			// claim the page, skip the copy, and mark it writable.
 			phys := *pte & PTE_ADDR
 			ref, _ := _refaddr(uintptr(phys))
 			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&

@@ -242,13 +242,16 @@ type syslimit_t struct {
 	dirents		sysatomic_t
 	// total pipes
 	pipes		sysatomic_t
+	// additional memory filesystem per-page objects; each file gets one
+	// freebie.
+	mfspgs		sysatomic_t
 	// shared buffer space
 	//shared		sysatomic_t
 }
 
 var syslimit = syslimit_t {
 	sysprocs:	2048,
-	vnodes:		1 << 24,
+	vnodes:		1 << 20,
 	futexes:	1024,
 	arpents:	1024,
 	routes:		32,
@@ -256,6 +259,8 @@ var syslimit = syslimit_t {
 	socks:		1 << 17,
 	dirents:	1 << 20,
 	pipes:		1024,
+	// 8GB of mfs pages
+	mfspgs:		1 << 21,
 }
 
 // a type for system limits that aren't protected by a lock.

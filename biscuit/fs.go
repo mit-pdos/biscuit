@@ -1205,14 +1205,20 @@ func fs_namei(paths string, cwd *imemnode_t) (*imemnode_t, err_t) {
 	return idm, 0
 }
 
+type pgn_t uint
+
+func off2pgn(off int) pgn_t {
+	return pgn_t(off) >> PGSHIFT
+}
+
 // XXX don't need to fill the destination page if the write covers the whole
 // page
 // XXX need a mechanism for evicting page cache...
 type pgcache_t struct {
-	pgs	[]*[PGSIZE]uint8
-	pginfo	[]pgcinfo_t
+	pgs	frbh_t
 	// the unit size of underlying device
 	blocksz		int
+	pglim		int
 	// fill is used to fill empty pages with data from the underlying
 	// device or layer. its arguments are the destination slice and offset
 	// and returns error. fill may write fewer bytes than the length of the
@@ -1222,8 +1228,10 @@ type pgcache_t struct {
 	_flush	func([]uint8, int) err_t
 }
 
-type pgcinfo_t struct {
-	phys		int
+type pginfo_t struct {
+	pgn		pgn_t
+	pg		*[PGSIZE]uint8
+	p_pg		uintptr
 	dirtyblocks	[]bool
 }
 
@@ -1238,11 +1246,12 @@ func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) (int, err_t),
 		panic("block size does not divide pgsize")
 	}
 	pc.blocksz = bsz
+	pc.pglim = 0
 }
 
 // takes an offset, returns the page number and starting block
-func (pc *pgcache_t) _pgblock(offset int) (int, int) {
-	pgn := offset / PGSIZE
+func (pc *pgcache_t) _pgblock(offset int) (pgn_t, int) {
+	pgn := off2pgn(offset)
 	block := (offset % PGSIZE) / pc.blocksz
 	return pgn, block
 }
@@ -1251,51 +1260,31 @@ func (pc *pgcache_t) _pgblock(offset int) (int, int) {
 func (pc *pgcache_t) pgdirty(offset, end int) {
 	for i := offset; i < end; i += pc.blocksz {
 		pgn, chn := pc._pgblock(i)
-		pgi := pc.pginfo[pgn]
-		if pc.pgs[pgn] == nil {
-			panic("pg not init'ed")
+		pgi, ok := pc.pgs.lookup(pgn)
+		if !ok {
+			panic("dirtying absent page?")
 		}
 		pgi.dirtyblocks[chn] = true
-		pc.pginfo[pgn] = pgi
 	}
 }
 
-// returns the raw page and physical address of requested page. fills the page
-// if necessary.
-func (pc *pgcache_t) pgraw(offset int) (*[512]int, int, err_t) {
-	pgn := offset / PGSIZE
-	err := pc._ensurefill(pgn)
-	if err != 0 {
-		return nil, 0, err
-	}
-	pgi := pc.pginfo[pgn]
-	wpg := (*[512]int)(unsafe.Pointer(pc.pgs[pgn]))
-	return wpg, pgi.phys, 0
-}
-
-func (pc *pgcache_t) _ensureslot(pgn int) (bool, bool) {
-	// XXXPANIC
-	if len(pc.pgs) != len(pc.pginfo) {
-		panic("weird lens")
-	}
-	// make arrays large enough to hold this page
-	if pgn >= len(pc.pgs) {
-		nlen := pgn + 3
-		npgs := make([]*[PGSIZE]uint8, nlen)
-		copy(npgs, pc.pgs)
-		npgi := make([]pgcinfo_t, nlen)
-		copy(npgi, pc.pginfo)
-		pc.pgs = npgs
-		pc.pginfo = npgi
+// returns whether the page for pgn needs to be filled from disk and success.
+func (pc *pgcache_t) _ensureslot(pgn pgn_t) (bool, bool) {
+	// every file gets a free 1-page object
+	if pc.pgs.nodes >= pc.pglim {
+		if !syslimit.mfspgs.take() {
+			return false, false
+		}
+		pc.pglim++
 	}
 	created := false
-	if pc.pgs[pgn] == nil {
+	if _, ok := pc.pgs.lookup(pgn); !ok {
 		created = true
-		var npg *[512]int
-		var p_npg int
+		var pg *[512]int
+		var p_pg int
 		for {
 			var ok bool
-			npg, p_npg, ok = refpg_new_nozero()
+			pg, p_pg, ok = refpg_new_nozero()
 			if ok {
 				break
 			}
@@ -1303,26 +1292,27 @@ func (pc *pgcache_t) _ensureslot(pgn int) (bool, bool) {
 				return false, false
 			}
 		}
-		refup(uintptr(p_npg))
-		bpg := pg2bytes(npg)
-		pc.pgs[pgn] = bpg
-		var pgi pgcinfo_t
-		pgi.phys = p_npg
+		refup(uintptr(p_pg))
+		bpg := pg2bytes(pg)
+		pgi := &pginfo_t{pgn: pgn, pg: bpg, p_pg: uintptr(p_pg)}
 		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
-		pc.pginfo[pgn] = pgi
+		pc.pgs.insert(pgi)
 	}
 	return created, true
 }
 
-// return error
-func (pc *pgcache_t) _ensurefill(pgn int) err_t {
+func (pc *pgcache_t) _ensurefill(pgn pgn_t) err_t {
 	needsfill, ok := pc._ensureslot(pgn)
 	if !ok {
 		return -ENOMEM
 	}
 	if needsfill {
-		pgva := pc.pgs[pgn]
-		devoffset := pgn * PGSIZE
+		pgi, ok := pc.pgs.lookup(pgn)
+		if !ok {
+			panic("eh")
+		}
+		pgva := pgi.pg
+		devoffset := int(pgn << PGSHIFT)
 		did, err := pc._fill(pgva[:], devoffset)
 		if err != 0 {
 			panic("must succeed")
@@ -1332,19 +1322,33 @@ func (pc *pgcache_t) _ensurefill(pgn int) err_t {
 	return 0
 }
 
+// returns the raw page and physical address of requested page. fills the page
+// if necessary.
+func (pc *pgcache_t) pgraw(offset int) (*[512]int, int, err_t) {
+	pgn, _ := pc._pgblock(offset)
+	err := pc._ensurefill(pgn)
+	if err != 0 {
+		return nil, 0, err
+	}
+	pgi, ok := pc.pgs.lookup(pgn)
+	if !ok {
+		panic("eh")
+	}
+	wpg := (*[512]int)(unsafe.Pointer(pgi.pg))
+	return wpg, int(pgi.p_pg), 0
+}
+
 // offset <= end. if offset lies on the same page as end, the returned slice is
 // trimmed (bytes >= end are removed).
 func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, err_t) {
 	if offset > end {
 		panic("offset must be less than end")
 	}
-	pgn := offset / PGSIZE
-	err := pc._ensurefill(pgn)
+	pgva, _, err := pc.pgraw(offset)
 	if err != 0 {
 		return nil, err
 	}
-	pgva := pc.pgs[pgn]
-	pg := pgva[:]
+	pg := pg2bytes(pgva)[:]
 
 	pgoff := offset % PGSIZE
 	pg = pg[pgoff:]
@@ -1360,12 +1364,8 @@ func (pc *pgcache_t) flush() {
 	if memtime {
 		return
 	}
-	for i := range pc.pgs {
-		pgva := pc.pgs[i]
-		if pgva == nil {
-			continue
-		}
-		pgi := pc.pginfo[i]
+	pc.pgs.iter(func(pgi *pginfo_t) {
+		pgva := pgi.pg
 		for j, dirty := range pgi.dirtyblocks {
 			if !dirty {
 				continue
@@ -1373,28 +1373,28 @@ func (pc *pgcache_t) flush() {
 			pgoffset := j*pc.blocksz
 			pgend := pgoffset + pc.blocksz
 			s := pgva[pgoffset:pgend]
-			devoffset := i*PGSIZE + pgoffset
+			devoffset := (int(pgi.pgn) << PGSHIFT) + pgoffset
 			err := pc._flush(s, devoffset)
 			if err != 0 {
 				panic("flush must succeed")
 			}
 			pgi.dirtyblocks[j] = false
 		}
-	}
+	})
 }
 
 // decrements the refcounts of all pages in the page cache
 func (pc *pgcache_t) release() {
-	for i := range pc.pginfo {
-		if pc.pginfo[i].phys == 0 {
-			continue
-		}
-		refdown(uintptr(pc.pginfo[i].phys))
-	}
-	pc.pgs = nil
-	pc.pginfo = nil
+	pc.pgs.iter(func(pgi *pginfo_t) {
+		refdown(pgi.p_pg)
+	})
+	pc.pgs.clear()
 	pc._fill = nil
 	pc._flush = nil
+	if pc.pglim != 0 {
+		syslimit.mfspgs.given(uint(pc.pglim))
+		pc.pglim = 0
+	}
 }
 
 // a mutex that allows attempting to acuire the mutex without blocking. useful
