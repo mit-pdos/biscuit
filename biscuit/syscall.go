@@ -897,7 +897,7 @@ func _ready2rev(orig int, r ready_t) int {
 }
 
 func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
-    nfds int) (int, bool) {
+    nfds int) (int, bool, err_t) {
 	inmask  := POLLIN | POLLPRI
 	outmask := POLLOUT | POLLWRBAND
 	readyfds := 0
@@ -933,7 +933,11 @@ func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
 		// poll unconditionally reports ERR, HUP, and NVAL
 		pev |= R_ERROR | R_HUP
 		pm.pm_set(tid, pev, wait)
-		devstatus := fd.fops.pollone(*pm)
+		devstatus, err := fd.fops.pollone(*pm)
+		if err != 0 {
+			proc.fdl.Lock()
+			return 0, false, err
+		}
 		if devstatus != 0 {
 			// found at least one ready fd; don't bother having the
 			// other fds send notifications. update user revents
@@ -945,7 +949,7 @@ func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
 		}
 	}
 	proc.fdl.Unlock()
-	return readyfds, writeback
+	return readyfds, writeback, 0
 }
 
 func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
@@ -977,7 +981,11 @@ func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	pm := pollmsg_t{}
 	for {
 		wait := timeout != 0
-		rfds, writeback := _checkfds(proc, tid, &pm, wait, buf, nfds)
+		rfds, writeback, err := _checkfds(proc, tid, &pm, wait, buf,
+		   nfds)
+		if err != 0 {
+			return int(err)
+		}
 		if writeback && !proc.k2user(buf, fdsn) {
 			return int(-EFAULT)
 		}
@@ -1126,7 +1134,7 @@ func (p *pollers_t) _findempty() *pollmsg_t {
 	return e
 }
 
-func (p *pollers_t) addpoller(pm *pollmsg_t) {
+func (p *pollers_t) addpoller(pm *pollmsg_t) err_t {
 	if p.waiters == nil {
 		p.waiters = make([]pollmsg_t, 10)
 	}
@@ -1137,8 +1145,10 @@ func (p *pollers_t) addpoller(pm *pollmsg_t) {
 	} else if e != nil {
 		*e = *pm
 	} else {
-		panic("extend; more than 10 threads polling single fd")
+		lhits++
+		return -ENOMEM
 	}
+	return 0
 }
 
 func (p *pollers_t) wakeready(r ready_t) {
@@ -1247,12 +1257,12 @@ func (o *pipe_t) op_read(dst userio_i, noblock bool) (int, err_t) {
 	return ret, 0
 }
 
-func (o *pipe_t) op_poll(pm pollmsg_t) ready_t {
+func (o *pipe_t) op_poll(pm pollmsg_t) (ready_t, err_t) {
 	o.Lock()
 
 	if o.closed {
 		o.Unlock()
-		return 0
+		return 0, 0
 	}
 
 	var r ready_t
@@ -1274,11 +1284,11 @@ func (o *pipe_t) op_poll(pm pollmsg_t) ready_t {
 	}
 	if r != 0 || !pm.dowait {
 		o.Unlock()
-		return r
+		return r, 0
 	}
-	o.pollers.addpoller(&pm)
+	err := o.pollers.addpoller(&pm)
 	o.Unlock()
-	return 0
+	return 0, err
 }
 
 func (o *pipe_t) op_reopen(rd, wd int) err_t {
@@ -1434,7 +1444,7 @@ func (of *pipefops_t) recvmsg(*proc_t, userio_i, userio_i,
 	return 0, 0, 0, 0, -ENOTSOCK
 }
 
-func (of *pipefops_t) pollone(pm pollmsg_t) ready_t {
+func (of *pipefops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	if of.writer {
 		pm.events &^= R_READ
 	} else {
@@ -2304,15 +2314,15 @@ func (sf *sudfops_t) recvmsg(proc *proc_t, dst userio_i,
 	return datadid, addrdid, ancdid, msgfl, 0
 }
 
-func (sf *sudfops_t) pollone(pm pollmsg_t) ready_t {
+func (sf *sudfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	sf.Lock()
 	defer sf.Unlock()
 
 	if !sf.bound {
-		return pm.events & R_ERROR
+		return pm.events & R_ERROR, 0
 	}
-	r := sf.bud.bud_poll(pm)
-	return r
+	r, err := sf.bud.bud_poll(pm)
+	return r, err
 }
 
 func (sf *sudfops_t) fcntl(proc *proc_t, cmd, opt int) int {
@@ -2569,8 +2579,9 @@ func (bud *bud_t) bud_out(dst, fromsa, cmsg userio_i) (int, int, int,
 	return ddid, fdid, 0, 0, err
 }
 
-func (bud *bud_t) bud_poll(pm pollmsg_t) ready_t {
+func (bud *bud_t) bud_poll(pm pollmsg_t) (ready_t, err_t) {
 	var ret ready_t
+	var err err_t
 	bud.Lock()
 	if bud.closed {
 		goto out
@@ -2582,11 +2593,11 @@ func (bud *bud_t) bud_poll(pm pollmsg_t) ready_t {
 		ret |= R_WRITE
 	}
 	if ret == 0 && pm.dowait {
-		bud.pollers.addpoller(&pm)
+		err = bud.pollers.addpoller(&pm)
 	}
 out:
 	bud.Unlock()
-	return ret
+	return ret, err
 }
 
 // the bud is closed; wake up any waiting threads
@@ -2882,9 +2893,9 @@ func (sus *susfops_t) recvmsg(proc *proc_t, dst userio_i, fromsa userio_i,
 	return ret, 0, cmsglen, msgfl, err
 }
 
-func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
+func (sus *susfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	if !sus.conn {
-		return pm.events & R_ERROR
+		return pm.events & R_ERROR, 0
 	}
 
 	// pipefops_t.pollone() doesn't allow polling for reading on write-end
@@ -2892,16 +2903,20 @@ func (sus *susfops_t) pollone(pm pollmsg_t) ready_t {
 	var readyin ready_t
 	var readyout ready_t
 	both := pm.events & (R_READ|R_WRITE) == 0
+	var err err_t
 	if both || pm.events & R_READ != 0 {
-		readyin = sus.pipein.pollone(pm)
+		readyin, err = sus.pipein.pollone(pm)
+	}
+	if err != 0 {
+		return 0, err
 	}
 	if readyin != 0 {
-		return readyin
+		return readyin, 0
 	}
 	if both || pm.events & R_WRITE != 0 {
-		readyout = sus.pipeout.pollone(pm)
+		readyout, err = sus.pipeout.pollone(pm)
 	}
-	return readyin | readyout
+	return readyin | readyout, err
 }
 
 func (sus *susfops_t) fcntl(proc *proc_t, cmd, opt int) int {
@@ -3140,24 +3155,24 @@ func (susl *susl_t) susl_reopen(delta int) err_t {
 	return ret
 }
 
-func (susl *susl_t) susl_poll(pm pollmsg_t) ready_t {
+func (susl *susl_t) susl_poll(pm pollmsg_t) (ready_t, err_t) {
 	susl.Lock()
 	if susl.opencount == 0 {
 		susl.Unlock()
-		return 0
+		return 0, 0
 	}
 	if pm.events & R_READ != 0 {
-		//if _, found := susl._findwaiter(false); found {
 		if susl.readyconnectors > 0 {
 			susl.Unlock()
-			return R_READ
+			return R_READ, 0
 		}
 	}
+	var err err_t
 	if pm.dowait {
-		susl.pollers.addpoller(&pm)
+		err = susl.pollers.addpoller(&pm)
 	}
 	susl.Unlock()
-	return 0
+	return 0, err
 }
 
 type suslfops_t struct {
@@ -3260,7 +3275,7 @@ func (sf *suslfops_t) recvmsg(*proc_t, userio_i, userio_i,
 	return 0, 0, 0, 0, -ENOTCONN
 }
 
-func (sf *suslfops_t) pollone(pm pollmsg_t) ready_t {
+func (sf *suslfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	return sf.susl.susl_poll(pm)
 }
 

@@ -191,7 +191,7 @@ type fdops_i interface {
 	// returns the current ready flags. pollone() will only cause the
 	// device to send a notification if none of the states being polled are
 	// currently true.
-	pollone(pollmsg_t) ready_t
+	pollone(pollmsg_t) (ready_t, err_t)
 
 	fcntl(*proc_t, int, int) int
 	getsockopt(*proc_t, int, userio_i, int) (int, err_t)

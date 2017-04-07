@@ -3581,12 +3581,12 @@ func (tf *tcpfops_t) recvmsg(proc *proc_t, dst userio_i,
 	return wrote, 0, 0, 0, err
 }
 
-func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
+func (tf *tcpfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
 	if _, ok := tf._closed(); !ok {
-		return 0
+		return 0, 0
 	}
 
 	var ret ready_t
@@ -3604,10 +3604,11 @@ func (tf *tcpfops_t) pollone(pm pollmsg_t) ready_t {
 	} else if pm.events & R_WRITE != 0 && !tf.tcb.txbuf.cbuf.full() {
 		ret |= R_WRITE
 	}
+	var err err_t
 	if ret == 0 && pm.dowait {
-		tf.tcb.pollers.addpoller(&pm)
+		err = tf.tcb.pollers.addpoller(&pm)
 	}
-	return ret
+	return ret, err
 }
 
 func (tf *tcpfops_t) fcntl(proc *proc_t, cmd, opt int) int {
@@ -3897,27 +3898,28 @@ func (tl *tcplfops_t) recvmsg(proc *proc_t, dst userio_i,
 	return 0, 0, 0, 0, -ENOTCONN
 }
 
-func (tl *tcplfops_t) pollone(pm pollmsg_t) ready_t {
+func (tl *tcplfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
 	if _, ok := tl._closed(); !ok {
-		return 0
+		return 0, 0
 	}
 	// why poll a listen socket for writing? don't allow it
 	pm.events &^= R_WRITE
 	if pm.events == 0 {
-		return 0
+		return 0, 0
 	}
 	var ret ready_t
 	rc := &tl.tcl.rcons
 	if pm.events & R_READ != 0 && rc.inum != rc.cnum {
 		ret |= R_READ
 	}
+	var err err_t
 	if ret == 0 && pm.dowait {
-		tl.tcl.pollers.addpoller(&pm)
+		err = tl.tcl.pollers.addpoller(&pm)
 	}
-	return ret
+	return ret, err
 }
 
 func (tl *tcplfops_t) fcntl(proc *proc_t, cmd, opt int) int {

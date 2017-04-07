@@ -624,8 +624,8 @@ func (fo *fsfops_t) recvmsg(*proc_t, userio_i,
 	return 0, 0, 0, 0, -ENOTSOCK
 }
 
-func (fo *fsfops_t) pollone(pm pollmsg_t) ready_t {
-	return pm.events & (R_READ | R_WRITE)
+func (fo *fsfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
+	return pm.events & (R_READ | R_WRITE), 0
 }
 
 func (fo *fsfops_t) fcntl(proc *proc_t, cmd, opt int) int {
@@ -752,13 +752,13 @@ func (df *devfops_t) recvmsg(*proc_t, userio_i,
 	return 0, 0, 0, 0, -ENOTSOCK
 }
 
-func (df *devfops_t) pollone(pm pollmsg_t) ready_t {
+func (df *devfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	switch df.maj {
 	case D_CONSOLE:
 		cons.pollc <- pm
-		return <- cons.pollret
+		return <- cons.pollret, 0
 	case D_DEVNULL:
-		return pm.events & (R_READ | R_WRITE)
+		return pm.events & (R_READ | R_WRITE), 0
 	default:
 		panic("which dev")
 	}
@@ -912,8 +912,8 @@ func (raw *rawdfops_t) recvmsg(*proc_t, userio_i,
 	return 0, 0, 0, 0, -ENOTSOCK
 }
 
-func (raw *rawdfops_t) pollone(pm pollmsg_t) ready_t {
-	return pm.events & (R_READ | R_WRITE)
+func (raw *rawdfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
+	return pm.events & (R_READ | R_WRITE), 0
 }
 
 func (raw *rawdfops_t) fcntl(proc *proc_t, cmd, opt int) int {

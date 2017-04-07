@@ -132,7 +132,7 @@ x <main.(*pgcache_t)._ensureslot>:
 x <main.(*pipe_t).pipe_start>:
 	- pipe limit
 
-_ <main.(*pollers_t).addpoller>:
+x <main.(*pollers_t).addpoller>:
 
 x <main.(*proc_t).mkfxbuf>:
 	- thread limit
