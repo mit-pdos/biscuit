@@ -905,8 +905,7 @@ func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
 	proc.fdl.Lock()
 	for i := 0; i < nfds; i++ {
 		off := i*8
-		//uw := readn(buf, 8, off)
-		uw := *(*int)(unsafe.Pointer(&buf[off]))
+		uw := readn(buf, 8, off)
 		fdn := int(uint32(uw))
 		// fds < 0 are to be ignored
 		if fdn < 0 {
@@ -915,8 +914,7 @@ func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
 		fd, ok := proc.fd_get_inner(fdn)
 		if !ok {
 			uw |= POLLNVAL
-			//writen(buf, 8, off, uw)
-			*(*int)(unsafe.Pointer(&buf[off])) = uw
+			writen(buf, 8, off, uw)
 			writeback = true
 			continue
 		}
@@ -941,8 +939,7 @@ func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
 			// other fds send notifications. update user revents
 			wait = false
 			nuw := _ready2rev(uw, devstatus)
-			//writen(buf, 8, off, nuw)
-			*(*int)(unsafe.Pointer(&buf[off])) = nuw
+			writen(buf, 8, off, nuw)
 			readyfds++
 			writeback = true
 		}
