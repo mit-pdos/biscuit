@@ -2291,7 +2291,7 @@ void polltest()
 		pp[1], rwfl, POLLOUT);
 
 	// notice reads
-	char buf[512];
+	char buf[4096];
 	long ret;
 	ret = write(pp[1], buf, sizeof(buf));
 	if (ret < 0)

@@ -1067,7 +1067,7 @@ func sys_pipe2(proc *proc_t, pipen, _flags int) int {
 	return 0
 }
 
-type ready_t uint
+type ready_t uint8
 const(
 	R_READ 	ready_t	= 1 << iota
 	R_WRITE	ready_t	= 1 << iota
@@ -1190,7 +1190,7 @@ type pipe_t struct {
 }
 
 func (o *pipe_t) pipe_start() {
-	pipesz := 512
+	pipesz := PGSIZE
 	o.cbuf.cb_init(pipesz)
 	o.readers, o.writers = 1, 1
 	o.rcond = sync.NewCond(o)
