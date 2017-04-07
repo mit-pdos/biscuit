@@ -1,0 +1,214 @@
+=========== ALL ALLOCATIONS ==============
+see mem-allocs.txt for missing explanations
+
+x <main.(*accnt_t).to_rusage>:
+x <main.arp_resolve>:
+x <main.attach_ixgbe>:
+x <main.(*bprof_t).Write>:
+x <main.cons_write>:
+x <main.copysockaddr>:
+x <main.(*dgrambuf_t).dg_init>:
+x <main.(*dirdata_t).filename>:
+x <main.dmap_init>:
+x <main.(*elf_t).headers>:
+x <main.(*fblkcache_t).fblkc_init>:
+x <main.(*futex_t).futex_start>:
+x <main.(*futex_t).toadd>:
+x <main.icmp_daemon>:
+x <main.(*imemnode_t).ifree.func1>:
+x <main.(*imemnode_t).immapinfo>:
+x <main.init>:
+x <main.insertargs>:
+x <main.(*intelprof_t).prof_init>:
+x <main.(*intelprof_t).startpmc>:
+x <main.(*intelprof_t).stoppmc>:
+x <main.(*ixgbe_t).init>:
+x <main.kbd_daemon>:
+x <main.kbd_daemon.func1>:
+x <main.(*log_t).init>:
+x <main.(*lo_t)._copysend>:
+x <main.main.func3>:
+x <main.net_icmp>:
+x <main.(*perfrips_t).init>:
+x <main.phys_init>:
+x <main.(*pipe_t).op_fdadd>:
+x <main.proc_new>:
+x <main.(*proc_t).closehalf>:
+x <main.(*proc_t).fd_insert_inner>:
+x <main.(*proc_t).userargs>:
+x <main.(*proc_t).userargs.func2>:
+x <main._prof_go>:
+x <main.(*routes_t).copy>:
+x <main.(*routes_t)._insert>:
+x <main._sockaddr_un>:
+x <main.(*susfops_t)._fdrecv>:
+x <main.(*susl_t).susl_start>:
+x <main.sys_execv1>:
+x <main.sys_fork>:
+x <main.sys_gettimeofday>:
+x <main.sys_poll>:
+x <main.sys_prof>:
+x <main.sys_sendmsg>:
+x <main.(*tcpfops_t).listen>:
+x <main.(*tcplfops_t).accept>:
+x <main.(*tcplfops_t).listen>:
+x <main.(*tcprsegs_t).recvd>:
+x <main.(*tcpsegs_t)._addnoisect>:
+x <main.(*tcptimers_t)._tcptimers_start>:
+x <main.(*timerwheel_t).advance_to>:
+x <main.(*useriovec_t).iov_init>:
+x <main.(*wait_t).put>:
+
+x <main._acpi_madt>:
+	- transient
+x <main.(*allbud_t).bud_new>:
+	- socket limit
+x <main.arp_add>:
+	- arp limit
+x <main.attach_3400>:
+	- called once
+x <main.attach_piix3>:
+	- called once
+x <main.(*bud_t).bud_init>:
+	- socket limit
+x <main._checkfds>:
+	- transient
+x <main.copyfd>:
+	- ulimit
+x <main.cpus_start>:
+	- called once
+x <main.fs_init>:
+	- called once
+x <main.fs_open>:
+	- transient, ulimit
+x <main.fs_recover>:
+	- called once
+x <main.futex_ensure>:
+	- futex limit
+x <main.glob..func1>: userbufpool
+	- transient (useful??)
+x <main.ibempty>:
+	- vnode limit
+x <main.ibread>:
+	- vnode limit
+x <main.(*icache_t).fill>:
+	- vnode limit
+x <main.(*icache_t)._mbensure>:
+	- vnode limit
+x <main.idaemon_ensure>:
+	- vnode limit
+x <main.idereq_new>:
+	- transient
+x <main.(*imemnode_t)._dceput>:
+	- dent limit
+x <main.(*imemnode_t)._deputempty>:
+	- dent limit
+x <main.(*imemnode_t).idm_init>:
+	- vnode limit
+x <main.kbd_init>:
+	- called once
+x <main.(*lo_t).lo_start>:
+	- called once
+x <main._mkrst>:
+	- transient
+x <main._mksynack>:
+	- transient
+x <main.net_arp>:
+	- transient
+x <main._net_arp_start>:
+	- transient
+x <main.net_init>:
+	- called once
+x <main.net_test>:
+	- debugging
+x <main.nic_insert>:
+	- transient
+x <main.pci_attach>:
+	- called once
+x <main.perfsetup>:
+	- called once
+x <main.(*pgcache_t)._ensureslot>:
+	- mfs limit
+x <main.(*pipe_t).pipe_start>:
+	- pipe limit
+
+_ <main.(*pollers_t).addpoller>:
+
+x <main.(*proc_t).mkfxbuf>:
+	- thread limit
+x <main.(*proc_t).mkuserbuf>:
+	- transient
+x <main.(*proc_t)._mkvmi>:
+	- transient/ulimit
+x <main.(*proc_t)._thread_new>:
+	- proc limit
+x <main._prof_nmi>:
+	- transient
+x <main.(*rawdfops_t).read>:
+	- transient
+x <main.(*rawdfops_t).write>:
+	- transient
+x <main.(*rbh_t)._insert>:
+	- ulimit
+x <main.rst_daemon>:
+	- transient
+x <main.(*susfops_t).connect>:
+	- transient/socket limit
+x <main.(*susfops_t).getsockopt>:
+	- transient
+x <main.(*susfops_t).listen>:
+	- socket limit
+x <main.(*suslfops_t).accept>:
+	- socket limit
+x <main._suspair>:
+-	- socket limit
+x <main.sys_accept>:
+	- transient/ulimit
+x <main.sys_fstat>:
+	- transient
+x <main.sys_futex>:
+	- transient
+x <main.sys_pipe2>:
+	- pipe limit/ulimit
+x <main.sys_readv>:
+	- transient
+x <main.sys_recvmsg>:
+	- transient
+x <main.sys_socket>:
+	- socket limit/ulimit
+x <main.sys_socketpair>:
+	- transient/socket limit
+x <main.sys_writev>:
+	- transient
+x <main.(*tcpbuf_t).tbuf_init>:
+	- transient
+x <main.(*tcpfops_t).getsockopt>:
+	- transient
+x <main.(*tcplfops_t).getsockopt>:
+	- transient
+x <main.(*tcplisten_t).incoming>:
+	- socket limit/max backlog
+x <main.(*tcplisten_t).tcbready>:
+	- socket limit
+x <main.(*tcptcb_t)._acktime>:
+	- transient
+x <main.(*tcptcb_t).mkack>:
+	- transient
+x <main.(*tcptcb_t).mkconnect>:
+	- transient
+x <main.(*tcptcb_t).mkfin>:
+	- transient
+x <main.(*tcptcb_t).mkseg>:
+	- transient
+x <main.(*tcptcb_t).seg_one>:
+	- transient
+x <main.(*tcptcb_t).tcb_init>:
+	- transient/socks limit
+x <main.(*tcptcb_t)._tcp_connect>:
+	- transient/socks limit
+x <main.(*vmregion_t)._copy1>:
+	- vma/thread ulimit
+x <main.(*vmregion_t).insert>:
+	- vma ulimit
+x <main.(*wait_t).reap>:
+	- thread ulimit
