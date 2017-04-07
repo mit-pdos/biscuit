@@ -2031,7 +2031,7 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 		return int(-EINVAL)
 	}
 
-	if !syslimit.socks.taken(2) {
+	if !syslimit.socks.take() {
 		return int(-ENOMEM)
 	}
 
@@ -2045,7 +2045,7 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 	}
 
 	if err != 0 {
-		syslimit.socks.given(2)
+		syslimit.socks.give()
 		return int(err)
 	}
 
@@ -2056,11 +2056,15 @@ func sys_socketpair(proc *proc_t, domain, typ, proto int, sockn int) int {
 	perms := FD_READ | FD_WRITE | clop
 	fdn1, fdn2, ok := proc.fd_insert2(fd1, perms, fd2, perms)
 	if !ok {
-		syslimit.socks.given(2)
+		close_panic(fd1)
+		close_panic(fd2)
 		return int(-EMFILE)
 	}
 	if !proc.userwriten(sockn, 4, fdn1) ||
 	    !proc.userwriten(sockn + 4, 4, fdn2) {
+		if sys_close(proc, fdn1) != 0 || sys_close(proc, fdn2) != 0 {
+			panic("must succeed")
+		}
 		return int(-EFAULT)
 	}
 	return 0
@@ -2605,8 +2609,8 @@ func (bud *bud_t) bud_close() {
 type susfops_t struct {
 	pipein	*pipefops_t
 	pipeout	*pipefops_t
-	conn	bool
 	bl	sync.Mutex
+	conn	bool
 	bound	bool
 	lstn	bool
 	myaddr	string
@@ -3215,6 +3219,8 @@ func (sf *suslfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 
 func (sf *suslfops_t) accept(proc *proc_t,
     fromsa userio_i) (fdops_i, int, err_t) {
+	// the connector has already taken syslimit.socks (1 sock reservation
+	// counts for a connected pair of UNIX stream sockets).
 	noblk := sf.options & O_NONBLOCK != 0
 	pipein := &pipe_t{}
 	pipein.pipe_start()
