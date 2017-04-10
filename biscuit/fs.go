@@ -139,7 +139,6 @@ func fs_init() *fd_t {
 	return &fd_t{fops: &fsfops_t{priv: iroot}}
 }
 
-// XXX why not method of log_t???
 func fs_recover() {
 	l := &fslog
 	bdev_read(l.logstart, &l.tmpblk)
@@ -1214,12 +1213,13 @@ func off2pgn(off int) pgn_t {
 
 // XXX don't need to fill the destination page if the write covers the whole
 // page
-// XXX need a mechanism for evicting page cache...
 type pgcache_t struct {
 	pgs	frbh_t
 	// the unit size of underlying device
 	blocksz		int
 	pglim		int
+	chklog		bool
+	log_gen		uint8
 	// fill is used to fill empty pages with data from the underlying
 	// device or layer. its arguments are the destination slice and offset
 	// and returns error. fill may write fewer bytes than the length of the
@@ -1404,7 +1404,7 @@ func (pc *pgcache_t) release() int {
 // returns the number of pages whose ref count was decreased (and thus should
 // be freed). the pages cannot be dirty because the eviction code locks each
 // imemnode and imemnodes must be flushed before they are unlocked.
-func (pc *pgcache_t) release_nomap() int {
+func (pc *pgcache_t) evict() int {
 	failed := false
 	pc.pgs.iter(func(pgi *pginfo_t) {
 		ref, _ := _refaddr(pgi.p_pg)
@@ -1420,6 +1420,10 @@ func (pc *pgcache_t) release_nomap() int {
 	var pgs int
 	if !failed {
 		pgs = pc.release()
+		// make sure any reads for the just evicted blocks read the
+		// latest version of the block from the log, not the stale
+		// version out on disk.
+		pc.chklog = true
 	}
 	return pgs
 }
@@ -2283,7 +2287,21 @@ func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) (int, err_t) {
 			panic("no")
 		}
 		p := (*[512]uint8)(unsafe.Pointer(&pgdst[0]))
-		bdev_read(blkno, p)
+		had := false
+		if idm.pgcache.chklog {
+			// our pages were evicted; avoid reading the block from
+			// the disk which may now be stale.
+			ibuf := idebuf_t{block: blkno, data: p}
+			loggen := idm.pgcache.log_gen
+			filled, logcommitted := log_read(loggen, ibuf)
+			if logcommitted {
+				idm.pgcache.chklog = false
+			}
+			had = filled
+		}
+		if !had {
+			bdev_read(blkno, p)
+		}
 		c += len(p)
 		pgdst = pgdst[len(p):]
 	}
@@ -2305,7 +2323,7 @@ func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
 		}
 		p := (*[512]uint8)(unsafe.Pointer(&pgsrc[0]))
 		dur := idebuf_t{block: blkno, data: p}
-		log_write(dur)
+		idm.pgcache.log_gen = log_write(dur)
 		wrote := len(p)
 		c += wrote
 		pgsrc = pgsrc[wrote:]
@@ -3356,6 +3374,13 @@ func idereq_new(block int, write bool, data *[512]uint8) *idereq_t {
 	return ret
 }
 
+type logread_t struct {
+	loggen		uint8
+	ibuf		idebuf_t
+	had		bool
+	gencommit	bool
+}
+
 // list of dirty blocks that are pending commit.
 type log_t struct {
 	blks		[]idebuf_t
@@ -3363,6 +3388,9 @@ type log_t struct {
 	logstart	int
 	loglen		int
 	incoming	chan idebuf_t
+	incgen		chan uint8
+	logread		chan logread_t
+	logreadret	chan logread_t
 	admission	chan bool
 	done		chan bool
 	force		chan bool
@@ -3380,6 +3408,9 @@ func (log *log_t) init(ls int, ll int) {
 		log.blks[i].data = new([512]uint8)
 	}
 	log.incoming = make(chan idebuf_t)
+	log.incgen = make(chan uint8)
+	log.logread = make(chan logread_t)
+	log.logreadret = make(chan logread_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
 	log.force = make(chan bool)
@@ -3451,6 +3482,7 @@ func log_daemon(l *log_t) {
 	// is necessary in order to guarantee that the log is long enough for
 	// the allowed number of concurrent fs syscalls.
 	maxblkspersys := 10
+	loggen := uint8(0)
 	for {
 		tickets := l.loglen / maxblkspersys
 		adm := l.admission
@@ -3466,6 +3498,7 @@ func log_daemon(l *log_t) {
 					panic("log write without admission")
 				}
 				l.addlog(nb)
+				l.incgen <- loggen
 			case <- l.done:
 				t--
 				if t == 0 {
@@ -3483,9 +3516,28 @@ func log_daemon(l *log_t) {
 				if t == 0 {
 					done = true
 				}
+			case lr := <- l.logread:
+				if lr.loggen != loggen {
+					ret := logread_t{}
+					ret.had, ret.gencommit = false, true
+					l.logreadret <- ret
+					continue
+				}
+				want := lr.ibuf.block
+				had := false
+				for _, lblk := range l.blks {
+					if lblk.block == want {
+						dest := lr.ibuf.data[:]
+						copy(dest, lblk.data[:])
+						had = true
+						break
+					}
+				}
+				l.logreadret <- logread_t{had: had}
 			}
 		}
 		l.commit()
+		loggen++
 		// wake up waiters
 		if waiters > 0 {
 			go func() {
@@ -3511,11 +3563,28 @@ func op_end() {
 	fslog.done <- true
 }
 
-func log_write(b idebuf_t) {
+func log_write(b idebuf_t) uint8 {
 	if memtime {
-		return
+		return 0
 	}
 	fslog.incoming <- b
+	return <- fslog.incgen
+}
+
+// returns whether the log contained the requested block and whether the log
+// identified by loggen has been committed (i.e. there is no need to check the
+// log for blocks).
+func log_read(loggen uint8, b idebuf_t) (bool, bool) {
+	if memtime {
+		return false, true
+	}
+	lr := logread_t{loggen: loggen, ibuf: b}
+	fslog.logread <- lr
+	ret := <- fslog.logreadret
+	if ret.had && ret.gencommit {
+		panic("bad state")
+	}
+	return ret.had, ret.gencommit
 }
 
 func bdev_write(blkn int, src *[512]uint8) {
@@ -3548,7 +3617,7 @@ func memreclaim() bool {
 		if !h.itrylock() {
 			continue
 		}
-		got += h.pgcache.release_nomap()
+		got += h.pgcache.evict()
 		// iunlock cannot attempt to acquire the pglru lock to remove h
 		// from the list because this code does not modify the
 		// opencount or linkcount and the itrylock succeeded; therefore
