@@ -4,6 +4,7 @@ import "fmt"
 import "runtime"
 import "strings"
 import "sync"
+import "sync/atomic"
 import "unsafe"
 
 const NAME_MAX    int = 512
@@ -1270,7 +1271,6 @@ func (pc *pgcache_t) pgdirty(offset, end int) {
 
 // returns whether the page for pgn needs to be filled from disk and success.
 func (pc *pgcache_t) _ensureslot(pgn pgn_t) (bool, bool) {
-	// every file gets a free 1-page object
 	if pc.pgs.nodes >= pc.pglim {
 		if !syslimit.mfspgs.take() {
 			return false, false
@@ -1383,18 +1383,45 @@ func (pc *pgcache_t) flush() {
 	})
 }
 
-// decrements the refcounts of all pages in the page cache
-func (pc *pgcache_t) release() {
+// decrements the refcounts of all pages in the page cache. returns the number
+// of pages that the pgcache contained.
+func (pc *pgcache_t) release() int {
+	pgs := 0
 	pc.pgs.iter(func(pgi *pginfo_t) {
 		refdown(pgi.p_pg)
+		pgs++
 	})
 	pc.pgs.clear()
-	pc._fill = nil
-	pc._flush = nil
 	if pc.pglim != 0 {
 		syslimit.mfspgs.given(uint(pc.pglim))
 		pc.pglim = 0
 	}
+	return pgs
+}
+
+// frees all pgcache pages iff no pages are also mapped. it would be better to
+// fail the release only when at least one page is mapped shared, instead.
+// returns the number of pages whose ref count was decreased (and thus should
+// be freed). the pages cannot be dirty because the eviction code locks each
+// imemnode and imemnodes must be flushed before they are unlocked.
+func (pc *pgcache_t) release_nomap() int {
+	failed := false
+	pc.pgs.iter(func(pgi *pginfo_t) {
+		ref, _ := _refaddr(pgi.p_pg)
+		if atomic.LoadInt32(ref) != 1 {
+			failed = true
+		}
+		for _, d := range pgi.dirtyblocks {
+			if d {
+				panic("cannot be dirty")
+			}
+		}
+	})
+	var pgs int
+	if !failed {
+		pgs = pc.release()
+	}
+	return pgs
 }
 
 // a mutex that allows attempting to acuire the mutex without blocking. useful
@@ -1445,6 +1472,64 @@ func (tm *trymutex_t) trylock() bool {
 	return ret
 }
 
+// pglru_t's lock is a leaf lock
+type pglru_t struct {
+	sync.Mutex
+	head	*imemnode_t
+	tail	*imemnode_t
+}
+
+func (pl *pglru_t) mkhead(im *imemnode_t) {
+	if memtime {
+		return
+	}
+	pl.Lock()
+	pl._mkhead(im)
+	pl.Unlock()
+}
+
+func (pl *pglru_t) _mkhead(im *imemnode_t) {
+	if pl.head == im {
+		return
+	}
+	pl._remove(im)
+	if pl.head != nil {
+		pl.head.pgprev = im
+	}
+	im.pgnext = pl.head
+	pl.head = im
+	if pl.tail == nil {
+		pl.tail = im
+	}
+}
+
+func (pl *pglru_t) _remove(im *imemnode_t) {
+	if pl.tail == im {
+		pl.tail = im.pgprev
+	}
+	if pl.head == im {
+		pl.head = im.pgnext
+	}
+	if im.pgprev != nil {
+		im.pgprev.pgnext = im.pgnext
+	}
+	if im.pgnext != nil {
+		im.pgnext.pgprev = im.pgprev
+	}
+	im.pgprev, im.pgnext = nil, nil
+}
+
+func (pl *pglru_t) remove(im *imemnode_t) {
+	if memtime {
+		return
+	}
+	pl.Lock()
+	pl._remove(im)
+	pl.Unlock()
+}
+
+var pglru pglru_t
+
 type imemnode_t struct {
 	priv		inum
 	myib		*ibuf_t
@@ -1452,6 +1537,10 @@ type imemnode_t struct {
 	ioff		int
 	// cache of file data
 	pgcache		pgcache_t
+	// pgnext and pgprev can only be read/modified while holding the lru
+	// list lock
+	pgnext		*imemnode_t
+	pgprev		*imemnode_t
 	// cache of inode metadata
 	icache		icache_t
 	//l		sync.Mutex
@@ -1492,6 +1581,7 @@ func idaemon_ensure(priv inum) (*imemnode_t, err_t) {
 			idmonl.Unlock()
 			return nil, -ENOMEM
 		}
+		pglru.mkhead(ret)
 		allidmons[priv] = ret
 	}
 	idmonl.Unlock()
@@ -1580,6 +1670,7 @@ func (idm *imemnode_t) iunlock() {
 	if idm.opencount == 0 && idm.icache.links == 0 {
 		idm.ifree()
 		idm._derelease()
+		pglru.remove(idm)
 	}
 	idm._amlocked = false
 	idm.l.Unlock()
@@ -2088,6 +2179,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) int {
 }
 
 func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
+	pglru.mkhead(idm)
 	isz := idm.icache.size
 	c := 0
 	for offset + c < isz && dst.remain() != 0 {
@@ -2105,6 +2197,7 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 }
 
 func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
+	pglru.mkhead(idm)
 	sz := src.totalsz()
 	newsz := offset + sz
 	err := idm._preventhole(idm.icache.size, uint(newsz))
@@ -2619,6 +2712,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 }
 
 func (idm *imemnode_t) iget(name string) (inum, err_t) {
+	pglru.mkhead(idm)
 	// did someone confuse a file with a directory?
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
@@ -3437,7 +3531,6 @@ func bdev_read(blkn int, dst *[512]uint8) {
 }
 
 func memreclaim() bool {
-	// XXX purge cached dirents
 	if memtime {
 		// cannot evict vnodes on a memory file system!
 		return false
@@ -3446,6 +3539,25 @@ func memreclaim() bool {
 	// created a defer statement that tries to close the file on which an
 	// operation failed to allocate. thus we panic while the file is locked
 	// and the defer statement deadlocks trying to close the file.
-	fmt.Printf("eviction no imp\n")
-	panic("eviction no imp\n")
+	got := 0
+	want := 10
+	pglru.Lock()
+	for h := pglru.tail; h != nil && got < want; h = h.pgprev {
+		// the fs locking order requires that imemnode is locked before
+		// pglru. thus avoid deadlock via itrylock.
+		if !h.itrylock() {
+			continue
+		}
+		got += h.pgcache.release_nomap()
+		// iunlock cannot attempt to acquire the pglru lock to remove h
+		// from the list because this code does not modify the
+		// opencount or linkcount and the itrylock succeeded; therefore
+		// the file cannot be unlinked.
+		if h.opencount == 0 && h.icache.links == 0 {
+			panic("how?")
+		}
+		h.iunlock()
+	}
+	pglru.Unlock()
+	return got > 0
 }
