@@ -896,6 +896,31 @@ func (p *proc_t) fd_del_inner(fdn int) (*fd_t, bool) {
 	return ret, ok
 }
 
+// fdn is not guaranteed to be a sane fd. returns the the fd replaced by ofdn
+// and whether it exists and needs to be closed, and success.
+func (p *proc_t) fd_dup(ofdn, nfdn int) (*fd_t, bool, err_t) {
+	if ofdn == nfdn {
+		return nil, false, 0
+	}
+
+	p.fdl.Lock()
+	defer p.fdl.Unlock()
+
+	ofd, ok := p.fd_get_inner(ofdn)
+	if !ok {
+		return nil, false, -EBADF
+	}
+	cpy, err := copyfd(ofd)
+	if err != 0 {
+		return nil, false, err
+	}
+	cpy.perms &^= FD_CLOEXEC
+	rfd, needclose := p.fd_get_inner(nfdn)
+	p.fds[nfdn] = cpy
+
+	return rfd, needclose, 0
+}
+
 // returns whether the parent's TLB should be flushed and whether the we
 // successfully copied the parent's address space.
 func (parent *proc_t) vm_fork(child *proc_t, rsp uintptr) (bool, bool) {

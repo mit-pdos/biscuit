@@ -536,6 +536,7 @@ func sys_open(proc *proc_t, pathn int, _flags int, mode int) int {
 	}
 	fdn, ok := proc.fd_insert(file, fdperms)
 	if !ok {
+		lhits++
 		close_panic(file)
 		return int(-EMFILE)
 	}
@@ -806,30 +807,16 @@ func close_panic(f *fd_t) {
 	}
 }
 
-func sys_dup2(proc *proc_t, oldn, newn int) int{
+func sys_dup2(proc *proc_t, oldn, newn int) int {
 	if oldn == newn {
 		return newn
 	}
-
-	ofd, ok := proc.fd_get(oldn)
-	if !ok {
-		return int(-EBADF)
-	}
-	nfd, err := copyfd(ofd)
+	ofd, needclose, err := proc.fd_dup(oldn, newn)
 	if err != 0 {
 		return int(err)
 	}
-	nfd.perms &^= FD_CLOEXEC
-
-	// lock fd table to prevent racing on the same fd number
-	proc.fdl.Lock()
-	cfd := proc.fds[newn]
-	needclose := cfd != nil
-	proc.fds[newn] = nfd
-	proc.fdl.Unlock()
-
 	if needclose {
-		close_panic(cfd)
+		close_panic(ofd)
 	}
 	return newn
 }
