@@ -2343,25 +2343,27 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	}
 
 	// see if we have an empty slot before expanding the directory
-	var de icdent_t
-	found, err := idm._descan(func(fn string, tde icdent_t) bool {
-		if fn == "" {
-			de = tde
-			return true
+	if !idm.icache.dentc.haveall {
+		var de icdent_t
+		found, err := idm._descan(func(fn string, tde icdent_t) bool {
+			if fn == "" {
+				de = tde
+				return true
+			}
+			return false
+		})
+		if err != 0 {
+			return 0, err
 		}
-		return false
-	})
-	if err != 0 {
-		return 0, err
-	}
-	if found {
-		return de.offset, 0
+		if found {
+			return de.offset, 0
+		}
 	}
 
 	// current dir blocks are full -- allocate new dirdata block. make
 	// sure its in the page cache but not fill'ed from disk
 	newsz := idm.icache.size + 512
-	_, err = idm.pgcache.pgfor(idm.icache.size, newsz)
+	_, err := idm.pgcache.pgfor(idm.icache.size, newsz)
 	if err != 0 {
 		return 0, err
 	}
