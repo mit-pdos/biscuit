@@ -168,9 +168,9 @@ dup(int o)
 {
 	int fd;
 	if ((fd = open("/", O_RDONLY | O_DIRECTORY)) == -1)
-		err(-1, "must succeed");
+		return -1;
 	if (dup2(o, fd) == -1)
-		err(-1, "must succeed");
+		return -1;
 	return fd;
 }
 
@@ -240,6 +240,8 @@ _binname(const char *bin)
 		struct stat st;
 		if (stat(buf, &st) == 0)
 			return buf;
+		else if (errno != ENOENT)
+			return NULL;
 	}
 	return NULL;
 }
@@ -248,10 +250,8 @@ int
 execvp(const char *path, char * const argv[])
 {
 	const char *p = _binname(path);
-	if (!p) {
-		errno = ENOENT;
+	if (!p)
 		return -1;
-	}
 	return execv(p, argv);
 }
 
