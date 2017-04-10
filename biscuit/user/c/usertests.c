@@ -3283,7 +3283,7 @@ void scmtest(void)
 	char rbuf[512];
 	if ((r = read(fd, rbuf, sizeof(rbuf))) != plen + chlen)
 		errx(-1, "par read %zd %zu", r, plen + chlen);
-	char ok1[] = "chald messageparent mesage";
+	char ok1[] = "chald messageparent message";
 	char ok2[] = "parent messagechald message";
 	if (strncmp(rbuf, ok1, sizeof(ok1) - 1) != 0 &&
 	    strncmp(rbuf, ok2, sizeof(ok2) - 1) != 0)
