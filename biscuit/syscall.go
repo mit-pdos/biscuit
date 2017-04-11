@@ -3410,7 +3410,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		   cfds)
 		if !ok {
 			lhits++
-			return int(-ENOMEM)
+			goto outfds
 		}
 
 		child.pmap, child.p_pmap, ok = pmap_new()
@@ -3495,6 +3495,7 @@ outmem:
 outproc:
 	tid_del()
 	proc_del(child.pid)
+outfds:
 	_closefds(cfds)
 	return int(-ENOMEM)
 }
