@@ -3022,6 +3022,9 @@ func (tc *tcpcons_t) reserve_ephemeral(lip ip4_t) (uint16, bool) {
 	defer tc.l.Unlock()
 
 	k := tcplkey_t{lip: lip, lport: uint16(rand.Uint32())}
+	if k.lport == 0 {
+		k.lport++
+	}
 	anyk := k
 	anyk.lip = INADDR_ANY
 	ok := tc.ports[k] | tc.ports[anyk] > 0
