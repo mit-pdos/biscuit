@@ -812,7 +812,14 @@ func (p *proc_t) fd_insert_inner(f *fd_t, perms int) (int, bool) {
 	if !found {
 		// double size of fd table
 		ol := len(p.fds)
-		nfdt := make([]*fd_t, 2*ol)
+		nl := 2*ol
+		if nl > int(p.ulim.nofile) {
+			nl = int(p.ulim.nofile)
+			if nl < ol {
+				panic("how")
+			}
+		}
+		nfdt := make([]*fd_t, nl, nl)
 		copy(nfdt, p.fds)
 		p.fds = nfdt
 	}
@@ -1390,6 +1397,9 @@ func (p *proc_t) terminate() {
 
 	// put process exit status to parent's wait info
 	p.pwait.put(p.pid, p.exitstatus, &na)
+	// remove pointer to parent to prevent deep fork trees from consuming
+	// unbounded memory.
+	p.pwait = nil
 }
 
 func (p *proc_t) Lock_pmap() {
