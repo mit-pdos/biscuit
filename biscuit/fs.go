@@ -1432,7 +1432,6 @@ func (pc *pgcache_t) evict() int {
 // for deadlock avoidance for creat/unlink/rename.
 type trymutex_t struct {
 	m	sync.Mutex
-	waiters	int
 	lock	uint
 	cond	*sync.Cond
 }
@@ -1449,7 +1448,6 @@ func (tm *trymutex_t) Lock() {
 			tm.m.Unlock()
 			return
 		}
-		tm.waiters++
 		tm.cond.Wait()
 	}
 }
@@ -1457,10 +1455,6 @@ func (tm *trymutex_t) Lock() {
 func (tm *trymutex_t) Unlock() {
 	tm.m.Lock()
 	tm.lock = 0
-	dowake := tm.waiters > 0
-	if dowake {
-		tm.waiters--
-	}
 	tm.m.Unlock()
 	tm.cond.Signal()
 }
