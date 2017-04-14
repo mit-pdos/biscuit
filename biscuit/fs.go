@@ -2680,7 +2680,7 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 		panic("inconsistent")
 	}
 	bn, ioff := bidecode(childi)
-	ib := idm.idibread()
+	ib := ibread(bn)
 	ni := &inode_t{ib, ioff}
 	_iallocundo(bn, ni, ib)
 	ibrelse(ib)
