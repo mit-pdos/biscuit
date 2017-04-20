@@ -947,9 +947,9 @@ func sys_poll(proc *proc_t, tid tid_t, fdsn, nfds, timeout int) int {
 	// copy pollfds from userspace to avoid reading/writing overhead
 	// (locking pmap and looking up uva mapping).
 	pollfdsz := 8
-	sz := pollfdsz*nfds
+	sz := uint(pollfdsz*nfds)
 	// chosen arbitrarily...
-	maxsz := 4096
+	maxsz := uint(4096)
 	if sz > maxsz {
 		// fall back to holding lock over user pmap if they want to
 		// poll so many fds.
