@@ -1928,7 +1928,7 @@ func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
 func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
     mss int) bool {
 	tq := runtime.CPUHint()
-	myq := &x.txs[tq]
+	myq := &x.txs[tq % len(x.txs)]
 	myq.Lock()
 	ok := x._tx_enqueue(myq, buf, ipv4, tcp, tso, tcphlen, mss)
 	myq.Unlock()
