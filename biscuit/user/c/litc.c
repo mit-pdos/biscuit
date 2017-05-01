@@ -2129,6 +2129,7 @@ mkstemp(char *t)
 	char *oe = t + l - 6;
 	if (strncmp(oe, "XXXXXX", 6) != 0)
 		goto inval;
+	int fails = 0;
 	for (;;) {
 		char *e = oe;
 		int i;
@@ -2144,6 +2145,8 @@ mkstemp(char *t)
 		if (fd != -1)
 			return fd;
 		else if (errno != EEXIST)
+			return -1;
+		else if (fails++ == 10)
 			return -1;
 	}
 inval:
