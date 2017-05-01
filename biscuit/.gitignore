@@ -73,6 +73,7 @@
 /user/c/bimage
 /user/c/fweb
 /user/c/fcgi
+/user/c/stress
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -145,3 +146,4 @@
 /fsdir/bin/bimage
 /fsdir/bin/fweb
 /fsdir/bin/fcgi
+/fsdir/bin/stress

@@ -24,7 +24,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fault2 echo cat bmgc bmsmallfile bmgc2 sfork unlink touch mkdir \
 	  pipetest kill killtest mmaptest usertests thtests pthtests \
 	  mknodtest sockettest mv sleep time true init sync reboot ebizzy \
-	  uname pwd rmtree halp less lnc rshd bimage fweb fcgi
+	  uname pwd rmtree halp less lnc rshd bimage fweb fcgi stress
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))
 
@@ -46,7 +46,7 @@ SKEL := fsdir
 SKELDEPS := $(shell find $(SKEL))
 
 CPUS := $(shell echo $${CPUS:-1})
-QOPTS := -m 512M -smp cpus=$(CPUS) -cpu Nehalem
+QOPTS := -m 8G -smp cpus=$(CPUS) -cpu Nehalem
 
 OS := $(shell uname -s)
 
