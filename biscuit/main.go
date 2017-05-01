@@ -2588,6 +2588,54 @@ func loping() {
 	nic.tx_ipv4(sgbuf)
 }
 
+func sizedump() {
+	is := unsafe.Sizeof(int(0))
+	condsz := unsafe.Sizeof(sync.Cond{})
+
+	//pollersz := unsafe.Sizeof(pollers_t{}) + 10*unsafe.Sizeof(pollmsg_t{})
+	var tf [TFSIZE]uintptr
+	var fx [64]uintptr
+	tfsz := unsafe.Sizeof(tf)
+	fxsz := unsafe.Sizeof(fx)
+	waitsz := unsafe.Sizeof(waitent_t{}) + is
+	tnotesz := is
+	timer := uintptr(2*8 + 8*8)
+	polls := unsafe.Sizeof(pollers_t{}) + 10*(unsafe.Sizeof(pollmsg_t{}) + timer)
+	fdsz := unsafe.Sizeof(fd_t{})
+	mfile := unsafe.Sizeof(mfile_t{})
+	// add fops, pollers_t, Conds
+
+	fmt.Printf("in bytes\n")
+	fmt.Printf("ARP rec: %v + 1map\n", unsafe.Sizeof(arprec_t{}))
+	fmt.Printf("dentry : %v\n", unsafe.Sizeof(dc_rbn_t{}))
+	fmt.Printf("futex  : %v + stack\n", unsafe.Sizeof(futex_t{}))
+	fmt.Printf("route  : %v + 1map\n", unsafe.Sizeof(rtentry_t{}) + is)
+	dirtyarray := uintptr(8)
+	fmt.Printf("mfs    : %v\n", uintptr(2*8 + dirtyarray) +
+		unsafe.Sizeof(frbn_t{}) + unsafe.Sizeof(pginfo_t{}))
+	fmt.Printf("vnode  : %v + 1map\n", unsafe.Sizeof(imemnode_t{}) +
+		unsafe.Sizeof(ibuf_t{}) + 512 + condsz +
+		unsafe.Sizeof(fsfops_t{}))
+	fmt.Printf("pipe   : %v\n", unsafe.Sizeof(pipe_t{}) +
+		unsafe.Sizeof(pipefops_t{}) + 2*condsz)
+	fmt.Printf("process: %v + stack + wait\n", unsafe.Sizeof(proc_t{}) +
+		tfsz + fxsz + waitsz + tnotesz + timer)
+	fmt.Printf("\tvma    : %v\n", unsafe.Sizeof(rbn_t{}) + mfile)
+	fmt.Printf("\t1 RBfd : %v\n", unsafe.Sizeof(frbn_t{}))
+	fmt.Printf("\t1 fd   : %v\n", fdsz)
+	fmt.Printf("\tper-dev poll md: %v\n", polls)
+	fmt.Printf("TCB    : %v + 1map\n", unsafe.Sizeof(tcptcb_t{}) +
+		unsafe.Sizeof(tcpkey_t{}) + unsafe.Sizeof(tcpfops_t{}) +
+		2*condsz + timer)
+	fmt.Printf("LTCB   : %v + 1map\n", unsafe.Sizeof(tcplisten_t{}) +
+		unsafe.Sizeof(tcplkey_t{}) + is + unsafe.Sizeof(tcplfops_t{}) +
+		timer)
+	fmt.Printf("US sock: %v + 1map\n", unsafe.Sizeof(susfops_t{}) +
+		2*unsafe.Sizeof(pipefops_t{}) + unsafe.Sizeof(pipe_t{}) + 2*condsz)
+	fmt.Printf("UD sock: %v + 1map\n", unsafe.Sizeof(sudfops_t{}) +
+		unsafe.Sizeof(bud_t{}) + condsz + uintptr(PGSIZE)/10)
+}
+
 var _nflip int
 
 func kbd_daemon(cons *cons_t, km map[int]byte) {
