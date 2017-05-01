@@ -813,7 +813,7 @@ func (p *proc_t) fd_insert_inner(f *fd_t, perms int) (int, bool) {
 		// double size of fd table
 		ol := len(p.fds)
 		nl := 2*ol
-		if nl > int(p.ulim.nofile) {
+		if p.ulim.nofile != RLIM_INFINITY && nl > int(p.ulim.nofile) {
 			nl = int(p.ulim.nofile)
 			if nl < ol {
 				panic("how")
