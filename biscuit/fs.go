@@ -1971,9 +1971,41 @@ type icache_t struct {
 		// have
 		max		int
 		dents		map[string]icdent_t
-		freem		[]int
+		freel		fdelist_t
 	}
 	metablks	map[int]*mdbuf_t
+}
+
+type fdent_t struct {
+	offset	int
+	next	*fdent_t
+}
+
+// linked list of free directory entries
+type fdelist_t struct {
+	head	*fdent_t
+	n	int
+}
+
+func (il *fdelist_t) addhead(off int) {
+	d := &fdent_t{offset: off}
+	d.next = il.head
+	il.head = d
+	il.n++
+}
+
+func (il *fdelist_t) remhead() (*fdent_t, bool) {
+	var ret *fdent_t
+	if il.head != nil {
+		ret = il.head
+		il.head = ret.next
+		il.n--
+	}
+	return ret, ret != nil
+}
+
+func (il *fdelist_t) count() int {
+	return il.n
 }
 
 // struct to hold the offset/priv of directory entry slots
@@ -2329,11 +2361,8 @@ func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
 // allocate page for the new directory entry.
 func (idm *imemnode_t) _denextempty() (int, err_t) {
 	dc := &idm.icache.dentc
-	if len(dc.freem) > 0 {
-		ret := dc.freem[0]
-		copy(dc.freem[0:], dc.freem[1:])
-		dc.freem = dc.freem[:len(dc.freem) - 1]
-		return ret, 0
+	if ret, ok := dc.freel.remhead(); ok {
+		return ret.offset, 0
 	}
 
 	// see if we have an empty slot before expanding the directory
@@ -2366,7 +2395,6 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	// start from 1 since we return slot 0 directly
 	for i := 1; i < NDIRENTS; i++ {
 		noff := newoff + NDBYTES*i
-		//dc.freem = append(dc.freem, noff)
 		idm._deputempty(noff)
 	}
 	idm.icache.size = newsz
@@ -2544,7 +2572,7 @@ func (idm *imemnode_t) _derelease() int {
 	dc := &idm.icache.dentc
 	dc.haveall = false
 	dc.dents = nil
-	dc.freem = nil
+	dc.freel.head = nil
 	ret := dc.max
 	syslimit.dirents.given(uint(ret))
 	dc.max = 0
@@ -2577,10 +2605,10 @@ func (idm *imemnode_t) _deprobe(fn string) err_t {
 }
 
 // returns true if this idm has enough free cache space for a single dentry
-func (idm *imemnode_t) _demaycache() bool {
+func (idm *imemnode_t) _demayadd() bool {
 	dc := &idm.icache.dentc
-	have := len(dc.dents) + len(dc.freem)
-	if have < dc.max {
+	have := len(dc.dents) + dc.freel.count()
+	if have + 1 < dc.max {
 		return true
 	}
 	// reserve more directory entries
@@ -2601,7 +2629,7 @@ func (idm *imemnode_t) _dceput(fn string, de icdent_t) bool {
 			return true
 		}
 	}
-	if !idm._demaycache() {
+	if !idm._demayadd() {
 		return false
 	}
 	if dc.dents == nil {
@@ -2612,11 +2640,11 @@ func (idm *imemnode_t) _dceput(fn string, de icdent_t) bool {
 }
 
 func (idm *imemnode_t) _deputempty(off int) {
-	if !idm._demaycache() {
+	if !idm._demayadd() {
 		return
 	}
 	dc := &idm.icache.dentc
-	dc.freem = append(dc.freem, off)
+	dc.freel.addhead(off)
 }
 
 // guarantee that there is enough memory to insert at least one directory
