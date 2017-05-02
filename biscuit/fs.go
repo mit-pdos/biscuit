@@ -1548,7 +1548,7 @@ type imemnode_t struct {
 	opencount	int
 }
 
-var allidmons	= map[inum]*imemnode_t{}
+var allidmons	= make(map[inum]*imemnode_t, 1e6)
 var idmonl	= sync.Mutex{}
 
 // idaemon_ensure must only be called while the imemnode_t which contains the
@@ -1970,7 +1970,7 @@ type icache_t struct {
 		// maximum number of cached dents this icache is allowed to
 		// have
 		max		int
-		dents		map[string]icdent_t
+		dents		dc_rbh_t
 		freel		fdelist_t
 	}
 	metablks	map[int]*mdbuf_t
@@ -2021,6 +2021,7 @@ type mdbuf_t struct {
 	data	[512]uint8
 }
 
+// XXX XXX XXX must count against mfs limit
 func (ic *icache_t) _mbensure(blockn int, fill bool) *mdbuf_t {
 	mb, ok := ic.metablks[blockn]
 	if !ok {
@@ -2104,7 +2105,7 @@ func (ic *icache_t) flushto(blk *ibuf_t, ioff int) bool {
 
 // takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
-func (idm *imemnode_t) offsetblk(offset int, writing bool) int {
+func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	// ensure block exists
 	ensureb := func(blkno int) (int, bool) {
 		if !writing || blkno != 0 {
@@ -2205,7 +2206,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) int {
 	if blkn <= 0 || blkn >= superb.lastblock() {
 		panic("bad data blocks")
 	}
-	return blkn
+	return blkn, 0
 }
 
 func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
@@ -2307,7 +2308,10 @@ func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
 	for len(pgdst) != 0 && fileoffset + c < isz {
-		blkno := idm.offsetblk(fileoffset + c, false)
+		blkno, err := idm.offsetblk(fileoffset + c, false)
+		if err != 0 {
+			return c, err
+		}
 		// XXXPANIC
 		if len(pgdst) < 512 {
 			panic("no")
@@ -2342,7 +2346,10 @@ func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
 	isz := idm.icache.size
 	c := 0
 	for len(pgsrc) != 0 && fileoffset + c < isz {
-		blkno := idm.offsetblk(fileoffset + c, true)
+		blkno, err := idm.offsetblk(fileoffset + c, true)
+		if err != 0 {
+			return err
+		}
 		// XXXPANIC
 		if len(pgsrc) < 512 {
 			panic("no")
@@ -2395,7 +2402,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	// start from 1 since we return slot 0 directly
 	for i := 1; i < NDIRENTS; i++ {
 		noff := newoff + NDBYTES*i
-		idm._deputempty(noff)
+		idm._deaddempty(noff)
 	}
 	idm.icache.size = newsz
 	return newoff, 0
@@ -2404,9 +2411,9 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 // if _deinsert fails to allocate a page, idm is left unchanged.
 func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 	// XXXPANIC
-	if _, err := idm._delookup(name); err == 0 {
-		panic("dirent already exists")
-	}
+	//if _, err := idm._delookup(name); err == 0 {
+	//	panic("dirent already exists")
+	//}
 	var ddata dirdata_t
 	noff, err := idm._denextempty()
 	if err != 0 {
@@ -2419,14 +2426,15 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 	ddata.data = pg
 
 	// write dir entry
-	if ddata.filename(0) != "" {
-		panic("dir entry slot is not free")
-	}
+	//if ddata.filename(0) != "" {
+	//	panic("dir entry slot is not free")
+	//}
 	ddata.w_filename(0, name)
 	ddata.w_inodenext(0, nblkno, ioff)
 	idm.pgcache.pgdirty(noff, noff+NDBYTES)
 	idm.pgcache.flush()
-	ok := idm._dceput(name, icdent_t{noff, inum(biencode(nblkno, ioff))})
+	icd := icdent_t{noff, inum(biencode(nblkno, ioff))}
+	ok := idm._dceadd(name, icd)
 	dc := &idm.icache.dentc
 	dc.haveall = dc.haveall && ok
 	return 0
@@ -2463,7 +2471,7 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
 	if fn == "" {
 		panic("bad lookup")
 	}
-	if de, ok := idm.icache.dentc.dents[fn]; ok {
+	if de, ok := idm.icache.dentc.dents.lookup(fn); ok {
 		return de, 0
 	}
 	var zi icdent_t
@@ -2484,7 +2492,7 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
 			de = tde
 			found = true
 		}
-		if !idm._dceput(tfn, tde) {
+		if !idm._dceadd(tfn, tde) {
 			haveall = false
 		}
 		return found && !haveall
@@ -2515,26 +2523,32 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 	idm.pgcache.pgdirty(de.offset, de.offset + NDBYTES)
 	idm.pgcache.flush()
 	// add back to free dents
-	delete(idm.icache.dentc.dents, fn)
-	idm._deputempty(de.offset)
+	idm.icache.dentc.dents.remove(fn)
+	idm._deaddempty(de.offset)
 	return de, 0
 }
 
 // returns the filename mapping to tnum
 func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
 	// check cache first
-	for fn, de := range idm.icache.dentc.dents {
+	var fn string
+	found := idm.icache.dentc.dents.iter(func(dn string, de icdent_t) bool {
 		if de.priv == tnum {
-			return fn, 0
+			fn = dn
+			return true
 		}
+		return false
+	})
+	if found {
+		return fn, 0
 	}
 
 	// not in cache; shucks!
-	var fn string
 	var de icdent_t
 	found, err := idm._descan(func(tfn string, tde icdent_t) bool {
 		if tde.priv == tnum {
 			fn = tfn
+			de = tde
 			return true
 		}
 		return false
@@ -2545,18 +2559,21 @@ func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
 	if !found {
 		return "", -ENOENT
 	}
-	idm._dceput(fn, de)
+	idm._dceadd(fn, de)
 	return fn, 0
 }
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
 func (idm *imemnode_t) _deempty() (bool, err_t) {
 	if idm.icache.dentc.haveall {
-		for fn := range idm.icache.dentc.dents {
-			if fn != "." && fn != ".." {
-				return false, 0
+		dentc := &idm.icache.dentc
+		hasfiles := dentc.dents.iter(func(dn string, de icdent_t) bool {
+			if dn != "." && dn != ".." {
+				return true
 			}
-		}
+			return false
+		})
+		return !hasfiles, 0
 	}
 	notempty, err := idm._descan(func(fn string, de icdent_t) bool {
 		return fn != "" && fn != "." && fn != ".."
@@ -2571,7 +2588,7 @@ func (idm *imemnode_t) _deempty() (bool, err_t) {
 func (idm *imemnode_t) _derelease() int {
 	dc := &idm.icache.dentc
 	dc.haveall = false
-	dc.dents = nil
+	dc.dents.clear()
 	dc.freel.head = nil
 	ret := dc.max
 	syslimit.dirents.given(uint(ret))
@@ -2600,14 +2617,15 @@ func (idm *imemnode_t) _deprobe(fn string) err_t {
 	if err != 0 {
 		return err
 	}
-	idm._deputempty(noff)
+	idm._deaddempty(noff)
 	return 0
 }
 
 // returns true if this idm has enough free cache space for a single dentry
 func (idm *imemnode_t) _demayadd() bool {
 	dc := &idm.icache.dentc
-	have := len(dc.dents) + dc.freel.count()
+	//have := len(dc.dents) + len(dc.freem)
+	have := dc.dents.nodes + dc.freel.count()
 	if have + 1 < dc.max {
 		return true
 	}
@@ -2622,24 +2640,16 @@ func (idm *imemnode_t) _demayadd() bool {
 }
 
 // caching is best-effort. returns true if fn was added to the cache
-func (idm *imemnode_t) _dceput(fn string, de icdent_t) bool {
+func (idm *imemnode_t) _dceadd(fn string, de icdent_t) bool {
 	dc := &idm.icache.dentc
-	if dc.dents != nil {
-		if _, ok := dc.dents[fn]; ok {
-			return true
-		}
-	}
 	if !idm._demayadd() {
 		return false
 	}
-	if dc.dents == nil {
-		dc.dents = make(map[string]icdent_t)
-	}
-	dc.dents[fn] = de
+	dc.dents.insert(fn, de)
 	return true
 }
 
-func (idm *imemnode_t) _deputempty(off int) {
+func (idm *imemnode_t) _deaddempty(off int) {
 	if !idm._demayadd() {
 		return
 	}
