@@ -250,15 +250,15 @@ type syslimit_t struct {
 }
 
 var syslimit = syslimit_t {
-	sysprocs:	2048,
-	vnodes:		1 << 20,
+	sysprocs:	1e4,
 	futexes:	1024,
 	arpents:	1024,
 	routes:		32,
 	tcpsegs:	16,
-	socks:		1 << 17,
+	socks:		1e5,
+	vnodes:		1e6,
 	dirents:	1 << 20,
-	pipes:		1024,
+	pipes:		1e4,
 	// 8GB of mfs pages
 	mfspgs:		1 << 21,
 }
@@ -640,7 +640,6 @@ type proc_t struct {
 
 	// lock for vmregion, pmpages, pmap, and p_pmap
 	pgfl		sync.Mutex
-	pgfltaken	bool
 
 	vmregion	vmregion_t
 
@@ -653,6 +652,7 @@ type proc_t struct {
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
+	pgfltaken	bool
 	doomed		bool
 	exitstatus	int
 
@@ -676,7 +676,7 @@ type proc_t struct {
 }
 
 var proclock = sync.Mutex{}
-var allprocs = map[int]*proc_t{}
+var allprocs = make(map[int]*proc_t, syslimit.sysprocs)
 // total number of all threads
 var nthreads int64
 
@@ -709,9 +709,9 @@ func tid_del() {
 var _deflimits = ulimit_t {
 	// mem limit = 128 MB
 	pages: (1 << 27) / (1 << 12),
-	//nofile: 1024,
+	//nofile: 512,
 	nofile: RLIM_INFINITY,
-	novma: (1 << 10),
+	novma: (1 << 8),
 	noproc: (1 << 10),
 }
 
