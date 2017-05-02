@@ -716,16 +716,15 @@ var _deflimits = ulimit_t {
 }
 
 // returns the new proc and success; can fail if the system-wide limit of
-// procs/threads has been reached.
+// procs/threads has been reached. the parent's fdtable must be locked.
 func proc_new(name string, cwd *fd_t, fds []*fd_t) (*proc_t, bool) {
-	ret := &proc_t{}
-
 	proclock.Lock()
 
 	if nthreads >= int64(syslimit.sysprocs) {
 		proclock.Unlock()
 		return nil, false
 	}
+
 	nthreads++
 
 	pid_cur++
@@ -735,17 +734,25 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) (*proc_t, bool) {
 	if _, ok := allprocs[np]; ok {
 		panic("pid exists")
 	}
+	ret := &proc_t{}
 	allprocs[np] = ret
 	proclock.Unlock()
 
 	ret.name = name
 	ret.pid = np
-	ret.fds = fds
+	ret.fds = make([]*fd_t, len(fds))
 	ret.fdstart = 3
-	for i := range ret.fds {
-		if ret.fds[i] != nil {
-			ret.nfds++
+	for i := range fds {
+		if fds[i] == nil {
+			continue
 		}
+		tfd, err := copyfd(fds[i])
+		// copying an fd may fail if another thread closes the fd out
+		// from under us
+		if err == 0 {
+			ret.fds[i] = tfd
+		}
+		ret.nfds++
 	}
 	ret.cwd = cwd
 	if ret.cwd.fops.reopen() != 0 {

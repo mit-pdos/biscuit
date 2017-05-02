@@ -3387,30 +3387,16 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	// copy parents trap frame
 	chtf := &[TFSIZE]uintptr{}
 	*chtf = *ptf
-	var cfds []*fd_t
 
 	if mkproc {
-		// copy fd table
-		parent.fdl.Lock()
-		cfds = make([]*fd_t, len(parent.fds))
-		for i := range parent.fds {
-			if parent.fds[i] != nil {
-				tfd, err := copyfd(parent.fds[i])
-				// copying an fd may fail if another thread
-				// closes the fd out from under us
-				if err == 0 {
-					cfds[i] = tfd
-				}
-			}
-		}
-		parent.fdl.Unlock()
-
 		var ok bool
-		child, ok = proc_new(parent.name + " [child]", parent.cwd,
-		   cfds)
+		// lock fd table for copying
+		parent.fdl.Lock()
+		child, ok = proc_new(parent.name, parent.cwd, parent.fds)
+		parent.fdl.Unlock()
 		if !ok {
 			lhits++
-			goto outfds
+			return int(-ENOMEM)
 		}
 
 		child.pmap, child.p_pmap, ok = pmap_new()
@@ -3495,8 +3481,7 @@ outmem:
 outproc:
 	tid_del()
 	proc_del(child.pid)
-outfds:
-	_closefds(cfds)
+	_closefds(child.fds)
 	return int(-ENOMEM)
 }
 
