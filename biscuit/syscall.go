@@ -4653,7 +4653,8 @@ func sys_info(proc *proc_t, n int) int {
 	case 10:
 		runtime.GC()
 		ret = 0
-		fmt.Printf("pgcount: %v\n", pgcount())
+		p1, p2 := pgcount()
+		fmt.Printf("pgcount: %v, %v\n", p1, p2)
 	case 11:
 		//proc.vmregion.dump()
 		fmt.Printf("proc dump:\n")

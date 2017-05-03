@@ -3577,13 +3577,15 @@ func phys_init() {
 	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs >> 8)
 }
 
-func pgcount() int {
-	s := 0
+func pgcount() (int, int) {
+	physmem.Lock()
+	r1 := 0
 	for i := physmem.freei; i != ^uint32(0); i = physmem.pgs[i].nexti {
-		s++
+		r1++
 	}
-	s += pmapcount()
-	return s
+	r2 := pmapcount()
+	physmem.Unlock()
+	return r1, r2
 }
 
 func _pmcount(pml4 uintptr, lev int) int {
@@ -3599,12 +3601,10 @@ func _pmcount(pml4 uintptr, lev int) int {
 
 func pmapcount() int {
 	c := 0
-	physmem.Lock()
 	for ni := physmem.pmaps; ni != ^uint32(0); ni = physmem.pgs[ni].nexti {
 		v := _pmcount(uintptr(ni+ physmem.startn) << PGSHIFT, 4)
 		c += v
 	}
-	physmem.Unlock()
 	return c
 }
 
