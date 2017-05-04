@@ -642,14 +642,13 @@ var pid_cur  int
 // returns false if system-wide limit is hit.
 func tid_new() (tid_t, bool) {
 	proclock.Lock()
+	defer proclock.Unlock()
 	if nthreads > int64(syslimit.sysprocs) {
-		proclock.Unlock()
 		return 0, false
 	}
 	nthreads++
 	pid_cur++
 	ret := pid_cur
-	proclock.Unlock()
 
 	return tid_t(ret), true
 }
@@ -805,6 +804,7 @@ func (p *proc_t) fd_insert_inner(f *fd_t, perms int) (int, bool) {
 func (p *proc_t) fd_insert2(f1 *fd_t, perms1 int,
    f2 *fd_t, perms2 int) (int, int, bool) {
 	p.fdl.Lock()
+	defer p.fdl.Unlock()
 	var fd2 int
 	var ok2 bool
 	fd1, ok1 := p.fd_insert_inner(f1, perms1)
@@ -816,10 +816,8 @@ func (p *proc_t) fd_insert2(f1 *fd_t, perms1 int,
 		p.fd_del_inner(fd1)
 		goto out
 	}
-	p.fdl.Unlock()
 	return fd1, fd2, true
 out:
-	p.fdl.Unlock()
 	return 0, 0, false
 }
 
@@ -1078,13 +1076,12 @@ func (p *proc_t) page_remove(va int) bool {
 
 func (p *proc_t) pgfault(tid tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
+	defer p.Unlock_pmap()
 	vmi, ok := p.vmregion.lookup(fa)
 	if !ok {
-		p.Unlock_pmap()
 		return false
 	}
 	ret := sys_pgfault(p, vmi, fa, ecode)
-	p.Unlock_pmap()
 	return ret
 }
 
@@ -1508,25 +1505,23 @@ func (p *proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 		return "", false, false
 	}
 	p.Lock_pmap()
+	defer p.Unlock_pmap()
 	i := 0
 	var s string
 	for {
 		str, ok := p.userdmap8_inner(uva + i, false)
 		if !ok {
-			p.Unlock_pmap()
 			return "", false, false
 		}
 		for j, c := range str {
 			if c == 0 {
 				s = s + string(str[:j])
-				p.Unlock_pmap()
 				return s, true, false
 			}
 		}
 		s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
-			p.Unlock_pmap()
 			return "", true, true
 		}
 	}
