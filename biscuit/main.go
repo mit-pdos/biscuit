@@ -388,225 +388,182 @@ func (a *accnt_t) to_rusage() []uint8 {
 // - wait for a process should not return thread info and vice versa
 type waitst_t struct {
 	pid		int
-	err		err_t
 	status		int
 	atime		accnt_t
-}
-
-type waitent_t struct {
-	waiter		chan waitst_t
-	wstatus		waitst_t
-	// we need this flag so that WAIT_ANY can differentiate threads from
-	// procs when looking for a proc that has already terminated
-	isproc		bool
-	dead		bool
+	// true iff the exit status is valid
+	valid		bool
 }
 
 type wait_t struct {
-	pid		int
 	sync.Mutex
-	ids		map[int]waitent_t
-	// number of child processes (not threads)
-	childs		int
-	_anyhints	[]int
-	anyhints	[]int
-	anys		chan waitst_t
-	wakeany		int
+	pwait		whead_t
+	twait		whead_t
+	cond		*sync.Cond
+	pid		int
 }
 
 func (w *wait_t) wait_init(mypid int) {
-	w.ids = make(map[int]waitent_t, 10)
-	w.anys = make(chan waitst_t)
-	w._anyhints = make([]int, 0, 10)
-	w.anyhints = w._anyhints
-	w.wakeany = 0
-	w.childs = 0
+	w.cond = sync.NewCond(w)
 	w.pid = mypid
 }
 
-func (w *wait_t) _pop_hint() (int, bool) {
-	if len(w.anyhints) == 0 {
-		return 0, false
-	}
-	ret := w.anyhints[0]
-	w.anyhints = w.anyhints[1:]
-	if len(w.anyhints) == 0 {
-		w.anyhints = w._anyhints
-	}
-	return ret, true
+type wlist_t struct {
+	next	*wlist_t
+	wst	waitst_t
 }
 
-func (w *wait_t) _push_hint(id int) {
-	w.anyhints = append(w.anyhints, id)
+type whead_t struct {
+	head	*wlist_t
+	count	int
+}
+
+func (wh *whead_t) wpush(id int) {
+	n := &wlist_t{}
+	n.wst.pid = id
+	n.next = wh.head
+	wh.head = n
+	wh.count++
+}
+
+func (wh *whead_t) wpopvalid() (waitst_t, bool) {
+	var prev *wlist_t
+	n := wh.head
+	for n != nil {
+		if n.wst.valid {
+			wh.wremove(prev, n)
+			return n.wst, true
+		}
+		prev = n
+		n = n.next
+	}
+	var zw waitst_t
+	return zw, false
+}
+
+// returns the previous element in the wait status singly-linked list (in order
+// to remove the requested element), the requested element, and whether the
+// requested element was found.
+func (wh *whead_t) wfind(id int) (*wlist_t, *wlist_t, bool) {
+	var prev *wlist_t
+	ret := wh.head
+	for ret != nil {
+		if ret.wst.pid == id {
+			return prev, ret, true
+		}
+		prev = ret
+		ret = ret.next
+	}
+	return nil, nil, false
+}
+
+func (wh *whead_t) wremove(prev, h *wlist_t) {
+	if prev != nil {
+		prev.next = h.next
+	} else {
+		wh.head = h.next
+	}
+	h.next = nil
+	wh.count--
 }
 
 // if there are more unreaped child statuses (procs or threads) than noproc,
 // _start() returns false and id is not added to the status map.
 func (w *wait_t) _start(id int, isproc bool, noproc uint) bool {
 	w.Lock()
-
-	if uint(len(w.ids)) >= noproc {
-		w.Unlock()
+	defer w.Unlock()
+	if uint(w.pwait.count + w.twait.count) > noproc {
 		return false
 	}
-	ent, ok := w.ids[id]
-	if ok {
-		panic("two start for same id")
-	}
-	// put zero value
+	var wh *whead_t
 	if isproc {
-		ent.isproc = true
-		w.childs++
+		wh = &w.pwait
+	} else {
+		wh = &w.twait
 	}
-	w.ids[id] = ent
-	w.Unlock()
+	wh.wpush(id)
 	return true
 }
 
-// caller must have the wait_t locked. returns the number of WAIT_ANYs that
-// need to be woken up.
-func (w *wait_t) _orphancount() int {
-	ret := 0
-	// wakeup WAIT_ANYs with error if there are no procs
-	if w.childs == 0 && w.wakeany != 0 {
-		ret = w.wakeany
-		w.wakeany = 0
-	}
-	return ret
+func (w *wait_t) putpid(pid, status int, atime *accnt_t) {
+	w._put(pid, status, true, atime)
 }
 
-func (w *wait_t) _orphanwake(times int) {
-	if times > 0 {
-		fail := waitst_t{err: -ECHILD}
-		for ; times > 0; times-- {
-			w.anys <- fail
-		}
-	}
+func (w *wait_t) puttid(tid, status int, atime *accnt_t) {
+	w._put(tid, status, false, atime)
 }
 
-// id can be a pid or a tid
-func (w *wait_t) put(id, status int, atime *accnt_t) {
+func (w *wait_t) _put(id, status int, isproc bool, atime *accnt_t) {
 	w.Lock()
-
-	ent, ok := w.ids[id]
-	if !ok {
-		panic("put without start")
-	}
-
-	ent.wstatus.pid = id
-	ent.wstatus.err = 0
-	ent.wstatus.status = status
-	if atime != nil {
-		ent.wstatus.atime.userns = atime.userns
-		ent.wstatus.atime.sysns = atime.sysns
-	}
-	ent.dead = true
-
-	// wakeup someone waiting for this pid
-	var wakechan chan waitst_t
-	if ent.waiter != nil {
-		wakechan = ent.waiter
-	// see if there are WAIT_ANYs
-	} else if ent.isproc && w.wakeany != 0 {
-		wakechan = w.anys
-		w.wakeany--
-		if w.wakeany < 0 {
-			panic("nyet!")
-		}
+	defer w.Unlock()
+	var wh *whead_t
+	if isproc {
+		wh = &w.pwait
 	} else {
-		// no waiters, add to map so someone can later reap
-		w.ids[id] = ent
-		if ent.isproc {
-			w._push_hint(id)
-		}
+		wh = &w.twait
 	}
-
-	if wakechan != nil {
-		delete(w.ids, id)
-		if ent.isproc {
-			w.childs--
-		}
+	_, wn, ok := wh.wfind(id)
+	if !ok {
+		panic("id must exist")
 	}
-	owake := w._orphancount()
-
-	w.Unlock()
-
-	if wakechan != nil {
-		wakechan <- ent.wstatus
+	wn.wst.valid = true
+	wn.wst.status = status
+	if atime != nil {
+		wn.wst.atime.userns += atime.userns
+		wn.wst.atime.sysns += atime.sysns
 	}
-
-	w._orphanwake(owake)
+	w.cond.Broadcast()
 }
 
-func (w *wait_t) reap(id int, noblk bool) waitst_t {
+func (w *wait_t) reappid(pid int, noblk bool) (waitst_t, err_t) {
+	return w._reap(pid, true, noblk)
+}
+
+func (w *wait_t) reaptid(tid int, noblk bool) (waitst_t, err_t) {
+	return w._reap(tid, false, noblk)
+}
+
+func (w *wait_t) _reap(id int, isproc bool, noblk bool) (waitst_t, err_t) {
 	if id == WAIT_MYPGRP {
 		panic("no imp")
 	}
-	block := !noblk
+	var wh *whead_t
+	if isproc {
+		wh = &w.pwait
+	} else {
+		wh = &w.twait
+	}
 
 	w.Lock()
-
-	var ret waitst_t
-	var waitchan chan waitst_t
-	var owake int
-
-	if id == WAIT_ANY {
-		if w.childs < 0 {
-			panic("neg childs")
-		}
-		if w.childs == 0 {
-			ret.err = -ECHILD
-			goto out
-		}
-		found := false
-		for hint, ok := w._pop_hint(); ok; hint, ok = w._pop_hint() {
-			ent := w.ids[hint]
-			if ent.dead && ent.isproc {
-				ret = ent.wstatus
-				delete(w.ids, hint)
-				found = true
-				w.childs--
-				break
+	defer w.Unlock()
+	var zw waitst_t
+	for {
+		if id == WAIT_ANY {
+			// XXXPANIC
+			if wh.count < 0 {
+				panic("neg childs")
+			}
+			if wh.count == 0 {
+				return zw, -ECHILD
+			}
+			if ret, ok := wh.wpopvalid(); ok {
+				return ret, 0
+			}
+		} else {
+			wp, wn, ok := wh.wfind(id)
+			if !ok {
+				return zw, -ECHILD
+			}
+			if wn.wst.valid {
+				wh.wremove(wp, wn)
+				return wn.wst, 0
 			}
 		}
-		// otherwise, wait
-		if !found && block {
-			w.wakeany++
-			waitchan = w.anys
+		if noblk {
+			return zw, 0
 		}
-	} else {
-		ent, ok := w.ids[id]
-		if !ok || ent.waiter != nil {
-			ret.err = -ECHILD
-			goto out
-		}
-		if ent.dead {
-			ret = ent.wstatus
-			delete(w.ids, id)
-			if ent.isproc {
-				w.childs--
-			}
-		} else if block {
-			// need to wait
-			waitchan = make(chan waitst_t)
-			ent.waiter = waitchan
-			w.ids[id] = ent
-		}
+		// wait for someone to exit
+		w.cond.Wait()
 	}
-	owake = w._orphancount()
-
-	w.Unlock()
-
-	if waitchan != nil {
-		ret = <- waitchan
-	}
-
-	w._orphanwake(owake)
-
-	return ret
-out:
-	w.Unlock()
-	return ret
 }
 
 type tid_t int
@@ -765,7 +722,7 @@ func proc_new(name string, cwd *fd_t, fds []*fd_t) (*proc_t, bool) {
 	ret.tid0 = tid0
 	ret._thread_new(tid0)
 
-	ret.mywait.wait_init(np)
+	ret.mywait.wait_init(ret.pid)
 	if !ret.start_thread(ret.tid0) {
 		panic("silly noproc")
 	}
@@ -1225,6 +1182,7 @@ func (p *proc_t) run(tf *[TFSIZE]uintptr, tid tid_t) {
 			dec_pmap(op_pmap)
 		}
 	}
+	tid_del()
 }
 
 func (p *proc_t) sched_add(tf *[TFSIZE]uintptr, tid tid_t) {
@@ -1281,21 +1239,18 @@ func (p *proc_t) thread_dead(tid tid_t, status int, usestatus bool) {
 	p.threadi.Unlock()
 
 	// update rusage user time
-	//utime := runtime.Proctime(p.mkptid(tid))
-	//if utime < 0 {
-	//	panic("tid must exist")
-	//}
+	// XXX
 	utime := 42
 	p.atime.utadd(utime)
 
 	// put thread status in this process's wait info; threads don't have
 	// rusage for now.
-	p.mywait.put(int(tid), status, nil)
-	tid_del()
+	p.mywait.puttid(int(tid), status, nil)
 
 	if destroy {
 		p.terminate()
 	}
+	//tid_del()
 }
 
 func (p *proc_t) doomall() {
@@ -1403,7 +1358,7 @@ func (p *proc_t) terminate() {
 	na.sysns += p.catime.sysns
 
 	// put process exit status to parent's wait info
-	p.pwait.put(p.pid, p.exitstatus, &na)
+	p.pwait.putpid(p.pid, p.exitstatus, &na)
 	// remove pointer to parent to prevent deep fork trees from consuming
 	// unbounded memory.
 	p.pwait = nil
@@ -2604,7 +2559,7 @@ func sizedump() {
 	var fx [64]uintptr
 	tfsz := unsafe.Sizeof(tf)
 	fxsz := unsafe.Sizeof(fx)
-	waitsz := unsafe.Sizeof(waitent_t{}) + is
+	waitsz := uintptr(1e9)
 	tnotesz := is
 	timer := uintptr(2*8 + 8*8)
 	polls := unsafe.Sizeof(pollers_t{}) + 10*(unsafe.Sizeof(pollmsg_t{}) + timer)

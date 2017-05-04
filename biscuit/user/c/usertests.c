@@ -1442,7 +1442,8 @@ void
 forktest(void)
 {
   int n, pid;
-  int ulim = 1024;
+  // XXX use getrlimit
+  int ulim = 1025;
 
   printf("fork test\n");
 
@@ -2158,7 +2159,7 @@ void *_waitany(void *a)
 
 void *_waitchild(void *a)
 {
-	long pid = (long)a;
+	long pid = (pid_t)a;
 	waitpid(pid, NULL, 0);
 	printf("waitchild woke\n");
 	return NULL;

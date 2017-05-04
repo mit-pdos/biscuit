@@ -3855,7 +3855,7 @@ func sys_threxit(proc *proc_t, tid tid_t, status int) {
 }
 
 func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
-    threadwait int) int {
+    _isthread int) int {
 	if wpid == WAIT_MYPGRP || options == WCONTINUED ||
 	   options == WUNTRACED {
 		panic("no imp")
@@ -3865,14 +3865,30 @@ func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
 	if tid == tid_t(wpid) {
 		return int(-ECHILD)
 	}
+	isthread := _isthread != 0
+	if isthread && wpid == WAIT_ANY {
+		return int(-EINVAL)
+	}
 
 	noblk := options & WNOHANG != 0
-	resp := proc.mywait.reap(wpid, noblk)
-
-	if resp.err != 0 {
-		return int(resp.err)
+	var resp waitst_t
+	var err err_t
+	if isthread {
+		resp, err = proc.mywait.reaptid(wpid, noblk)
+	} else {
+		resp, err = proc.mywait.reappid(wpid, noblk)
 	}
-	if threadwait == 0 {
+
+	if err != 0 {
+		return int(err)
+	}
+	if isthread {
+		if statusp != 0 {
+			if !proc.userwriten(statusp, 8, resp.status) {
+				return int(-EFAULT)
+			}
+		}
+	} else {
 		ok :=  true
 		if statusp != 0 {
 			ok = proc.userwriten(statusp, 4, resp.status)
@@ -3887,12 +3903,6 @@ func sys_wait4(proc *proc_t, tid tid_t, wpid, statusp, options, rusagep,
 		}
 		if !ok {
 			return int(-EFAULT)
-		}
-	} else {
-		if statusp != 0 {
-			if !proc.userwriten(statusp, 8, resp.status) {
-				return int(-EFAULT)
-			}
 		}
 	}
 	return resp.pid
