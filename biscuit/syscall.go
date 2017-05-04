@@ -922,7 +922,7 @@ func _checkfds(proc *proc_t, tid tid_t, pm *pollmsg_t, wait bool, buf []uint8,
 		pm.pm_set(tid, pev, wait)
 		devstatus, err := fd.fops.pollone(*pm)
 		if err != 0 {
-			proc.fdl.Lock()
+			proc.fdl.Unlock()
 			return 0, false, err
 		}
 		if devstatus != 0 {
