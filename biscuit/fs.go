@@ -1231,8 +1231,8 @@ type pgcache_t struct {
 
 type pginfo_t struct {
 	pgn		pgn_t
-	pg		*[PGSIZE]uint8
-	p_pg		uintptr
+	pg		*bytepg_t
+	p_pg		pa_t
 	dirtyblocks	[]bool
 }
 
@@ -1280,8 +1280,8 @@ func (pc *pgcache_t) _ensureslot(pgn pgn_t) (bool, bool) {
 	created := false
 	if _, ok := pc.pgs.lookup(pgn); !ok {
 		created = true
-		var pg *[512]int
-		var p_pg int
+		var pg *pg_t
+		var p_pg pa_t
 		for {
 			var ok bool
 			pg, p_pg, ok = refpg_new_nozero()
@@ -1292,9 +1292,9 @@ func (pc *pgcache_t) _ensureslot(pgn pgn_t) (bool, bool) {
 				return false, false
 			}
 		}
-		refup(uintptr(p_pg))
+		refup(p_pg)
 		bpg := pg2bytes(pg)
-		pgi := &pginfo_t{pgn: pgn, pg: bpg, p_pg: uintptr(p_pg)}
+		pgi := &pginfo_t{pgn: pgn, pg: bpg, p_pg: p_pg}
 		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
 		pc.pgs.insert(pgi)
 	}
@@ -1324,7 +1324,7 @@ func (pc *pgcache_t) _ensurefill(pgn pgn_t) err_t {
 
 // returns the raw page and physical address of requested page. fills the page
 // if necessary.
-func (pc *pgcache_t) pgraw(offset int) (*[512]int, int, err_t) {
+func (pc *pgcache_t) pgraw(offset int) (*pg_t, pa_t, err_t) {
 	pgn, _ := pc._pgblock(offset)
 	err := pc._ensurefill(pgn)
 	if err != 0 {
@@ -1334,8 +1334,8 @@ func (pc *pgcache_t) pgraw(offset int) (*[512]int, int, err_t) {
 	if !ok {
 		panic("eh")
 	}
-	wpg := (*[512]int)(unsafe.Pointer(pgi.pg))
-	return wpg, int(pgi.p_pg), 0
+	wpg := (*pg_t)(unsafe.Pointer(pgi.pg))
+	return wpg, pgi.p_pg, 0
 }
 
 // offset <= end. if offset lies on the same page as end, the returned slice is

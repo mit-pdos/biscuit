@@ -5,22 +5,28 @@ import "runtime"
 import "sync"
 import "unsafe"
 
-const PTE_P      int = 1 << 0
-const PTE_W      int = 1 << 1
-const PTE_U      int = 1 << 2
-const PTE_G      int = 1 << 8
-const PTE_PCD    int = 1 << 4
-const PTE_PS     int = 1 << 7
+type pa_t	uintptr
+type pmap_t	[512]pa_t
+type pg_t	[512]int
+type bytepg_t	[PGSIZE]uint8
+
+const PTE_P      pa_t = 1 << 0
+const PTE_W      pa_t = 1 << 1
+const PTE_U      pa_t = 1 << 2
+const PTE_G      pa_t = 1 << 8
+const PTE_PCD    pa_t = 1 << 4
+const PTE_PS     pa_t = 1 << 7
 // our flags; bits 9-11 are ignored for all page map entries in long mode
-const PTE_COW    int = 1 << 9
-const PTE_WASCOW int = 1 << 10
+const PTE_COW    pa_t = 1 << 9
+const PTE_WASCOW pa_t = 1 << 10
 const PGSIZE     int = 1 << 12
 const PGSIZEW    uintptr = uintptr(PGSIZE)
 const PGSHIFT    uint = 12
-const PGOFFSET   int = 0xfff
-const PGMASK     int = ^(PGOFFSET)
-const PTE_ADDR   int = PGMASK
-const PTE_FLAGS  int = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
+const PGOFFSET   pa_t = 0xfff
+const PGMASK     pa_t = ^(PGOFFSET)
+const IPGMASK    int  = ^(int(PGOFFSET))
+const PTE_ADDR   pa_t = PGMASK
+const PTE_FLAGS  pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
     PTE_WASCOW)
 
 const VREC      int = 0x42
@@ -28,8 +34,12 @@ const VDIRECT   int = 0x44
 const VEND      int = 0x50
 const VUSER     int = 0x59
 
-func pg2bytes(pg *[512]int) *[PGSIZE]uint8 {
-	return (*[PGSIZE]uint8)(unsafe.Pointer(pg))
+func pg2bytes(pg *pg_t) *bytepg_t {
+	return (*bytepg_t)(unsafe.Pointer(pg))
+}
+
+func pg2pmap(pg *pg_t) *pmap_t {
+	return (*pmap_t)(unsafe.Pointer(pg))
 }
 
 /*
@@ -65,10 +75,10 @@ type vminfo_t struct {
 		mfile	*mfile_t
 		shared	bool
 	}
-	pch	[]int
+	pch	[]pa_t
 }
 
-func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr, err_t) {
+func (vmi *vminfo_t) filepage(va uintptr) (*pg_t, pa_t, err_t) {
 	if vmi.mtype != VFILE {
 		panic("must be file mapping")
 	}
@@ -78,10 +88,10 @@ func (vmi *vminfo_t) filepage(va uintptr) (*[512]int, uintptr, err_t) {
 	if err != 0 {
 		return nil, 0, err
 	}
-	return mmapi[0].pg, uintptr(mmapi[0].phys), 0
+	return mmapi[0].pg, pa_t(mmapi[0].phys), 0
 }
 
-func (vmi *vminfo_t) ptefor(pmap *[512]int, va uintptr) (*int, bool) {
+func (vmi *vminfo_t) ptefor(pmap *pmap_t, va uintptr) (*pa_t, bool) {
 	if vmi.pch == nil {
 		bva := int(vmi.pgn) << PGSHIFT
 		ptbl, slot := pmap_pgtbl(pmap, bva, true, PTE_U|PTE_W)
@@ -90,7 +100,7 @@ func (vmi *vminfo_t) ptefor(pmap *[512]int, va uintptr) (*int, bool) {
 		}
 		vmi.pch = ptbl[slot:]
 	}
-	vn := (va >> uintptr(PGSHIFT)) - vmi.pgn
+	vn := (va >> PGSHIFT) - vmi.pgn
 	if vn >= uintptr(vmi.pglen) {
 		panic("uh oh")
 	}
@@ -763,15 +773,15 @@ func (m *vmregion_t) remove(start, len int, novma uint) err_t {
 	return 0
 }
 
-// tracks memory pages
-type pgtracker_t map[int]*[512]int
+// tracks pages
+type pgtracker_t map[int]*pmap_t
 
 // tracks all pages allocated by go internally by the kernel such as pmap pages
 // allocated by the kernel (not the bootloader/runtime)
 var kplock = sync.Mutex{}
 var kpages = pgtracker_t{}
 
-func kpgadd(pg *[512]int) {
+func kpgadd(pg *pmap_t) {
 	va := uintptr(unsafe.Pointer(pg))
 	pgn := int(va >> 12)
 	if _, ok := kpages[pgn]; ok {
@@ -825,20 +835,19 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
-var kpmapp      *[512]int
+var kpmapp      *pmap_t
 
-func kpmap() *[512]int {
+func kpmap() *pmap_t {
 	if kpmapp == nil {
 		dur := caddr(VREC, VREC, VREC, VREC, 0)
-		kpmapp = (*[512]int)(unsafe.Pointer(dur))
+		kpmapp = (*pmap_t)(unsafe.Pointer(dur))
 	}
 	return kpmapp
 }
 
-//var zeropg = new([512]int)
-var zerobpg *[PGSIZE]uint8
-var zeropg *[512]int
-var p_zeropg int
+var zerobpg *bytepg_t
+var zeropg *pg_t
+var p_zeropg pa_t
 var _dmapinit bool
 const DMAPLEN int = 1 << 39
 
@@ -851,13 +860,14 @@ func dmap_init() {
 	_, _, _, edx  := runtime.Cpuid(0x80000001, 0)
 	gbpages := edx & (1 << 26) != 0
 
-	dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
+	_dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
+	dpte := (*pa_t)(unsafe.Pointer(_dpte))
 	if *dpte & PTE_P != 0 {
 		panic("dmap slot taken")
 	}
 
-	pdpt  := new([512]int)
-	ptn := int(uintptr(unsafe.Pointer(pdpt)))
+	pdpt  := new(pmap_t)
+	ptn := pa_t(unsafe.Pointer(pdpt))
 	if ptn & PGOFFSET != 0 {
 		panic("page table not aligned")
 	}
@@ -867,34 +877,35 @@ func dmap_init() {
 	}
 	kpgadd(pdpt)
 
-	*dpte = int(p_pdpt) | PTE_P | PTE_W
+	*dpte = pa_t(p_pdpt) | PTE_P | PTE_W
 
-	size := (1 << 30)
+	size := pa_t(1 << 30)
 
 	// make qemu use 2MB pages, like my hardware, to help expose bugs that
 	// the hardware may encounter.
 	if gbpages {
 		fmt.Printf("dmap via 1GB pages\n")
 		for i := range pdpt {
-			pdpt[i] = i*size | PTE_P | PTE_W | PTE_PS
+			pdpt[i] = pa_t(i)*size | PTE_P | PTE_W | PTE_PS
 		}
 		return
 	}
 	fmt.Printf("1GB pages not supported\n")
 
 	size = 1 << 21
-	pdptsz := 1 << 30
+	pdptsz := pa_t(1 << 30)
 	for i := range pdpt {
-		pd := new([512]int)
+		pd := new(pmap_t)
 		p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
 		if !ok {
 			panic("must succeed")
 		}
 		kpgadd(pd)
 		for j := range pd {
-			pd[j] = i*pdptsz + j*size | PTE_P | PTE_W | PTE_PS
+			pd[j] = pa_t(i)*pdptsz +
+			   pa_t(j)*size | PTE_P | PTE_W | PTE_PS
 		}
-		pdpt[i] = int(p_pd) | PTE_P | PTE_W
+		pdpt[i] = pa_t(p_pd) | PTE_P | PTE_W
 	}
 
 	// fill in kent, the list of kernel pml4 entries. make sure we will
@@ -916,35 +927,35 @@ func dmap_init() {
 	for i := range zeropg {
 		zeropg[i] = 0
 	}
-	refup(uintptr(p_zeropg))
+	refup(p_zeropg)
 	zerobpg = pg2bytes(zeropg)
 }
 
 type kent_t struct {
 	pml4slot	int
-	entry		int
+	entry		pa_t
 }
 
 var kents = make([]kent_t, 0, 5)
 
-var _vdirect	= VDIRECT << 39
+var _vdirect	= uintptr(VDIRECT << 39)
 
 // returns a page-aligned virtual address for the given physical address using
 // the direct mapping
-func dmap(p int) *[512]int {
-	pa := uint(p)
+func dmap(p pa_t) *pg_t {
+	pa := uintptr(p)
 	if pa >= 1 << 39 {
 		panic("direct map not large enough")
 	}
 
 	v := _vdirect
-	v += rounddown(int(pa), PGSIZE)
-	return (*[512]int)(unsafe.Pointer(uintptr(v)))
+	v += uintptr(rounddown(int(pa), PGSIZE))
+	return (*pg_t)(unsafe.Pointer(v))
 }
 
 // returns a byte aligned virtual address for the physical address as slice of
 // uint8s
-func dmap8(p int) []uint8 {
+func dmap8(p pa_t) []uint8 {
 	pg := dmap(p)
 	off := p & PGOFFSET
 	bpg := pg2bytes(pg)
@@ -952,9 +963,9 @@ func dmap8(p int) []uint8 {
 }
 
 // l is length of mapping in bytes
-func dmaplen(p uintptr, l int) []uint8 {
-	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(uintptr(_vdirect)))
-	return _dmap[p:p+uintptr(l)]
+func dmaplen(p pa_t, l int) []uint8 {
+	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(_vdirect))
+	return _dmap[p:p+pa_t(l)]
 }
 
 // l is length of mapping in bytes. both p and l must be multiples of 4
@@ -962,23 +973,18 @@ func dmaplen32(p uintptr, l int) []uint32 {
 	if p % 4 != 0 || l % 4 != 0 {
 		panic("not 32bit aligned")
 	}
-	_dmap := (*[DMAPLEN/4]uint32)(unsafe.Pointer(uintptr(_vdirect)))
+	_dmap := (*[DMAPLEN/4]uint32)(unsafe.Pointer(_vdirect))
 	p /= 4
 	l /= 4
 	return _dmap[p:p+uintptr(l)]
 }
 
-func pe2pg(pe int) *[512]int {
-	addr := pe & PTE_ADDR
-	return dmap(addr)
-}
-
-func _instpg(pg *[512]int, idx uint, perms int) (int, bool) {
+func _instpg(pg *pmap_t, idx uint, perms pa_t) (pa_t, bool) {
 	_, p_np, ok := refpg_new()
 	if !ok {
 		return 0, false
 	}
-	refup(uintptr(p_np))
+	refup(p_np)
 	npte :=  p_np | perms | PTE_P
 	pg[idx] = npte
 	return npte, true
@@ -986,8 +992,7 @@ func _instpg(pg *[512]int, idx uint, perms int) (int, bool) {
 
 // returns nil if either 1) create was false and the mapping doesn't exist or
 // 2) create was true but we failed to allocate a page to create the mapping.
-func pmap_pgtbl(pml4 *[512]int, v int, create bool,
-    perms int) (*[512]int, int) {
+func pmap_pgtbl(pml4 *pmap_t, v int, create bool, perms pa_t) (*pmap_t, int) {
 	vn := uint(uintptr(v))
 	l4b  := (vn >> (12 + 9*3)) & 0x1ff
 	pdpb := (vn >> (12 + 9*2)) & 0x1ff
@@ -997,16 +1002,16 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool,
 		panic(fmt.Sprintf("map in special slots: %#x", l4b))
 	}
 
-	if v & PGMASK == 0 && create {
+	if v & IPGMASK == 0 && create {
 		panic("mapping page 0");
 	}
 
-	cpe := func(pe int) *[512]int {
+	cpe := func(pe pa_t) *pmap_t {
 		if pe & PTE_PS != 0 {
 			panic("insert mapping into PS page")
 		}
-		phys := pe & PTE_ADDR
-		return (*[512]int)(unsafe.Pointer(uintptr(_vdirect + phys)))
+		phys := uintptr(pe & PTE_ADDR)
+		return (*pmap_t)(unsafe.Pointer(_vdirect + phys))
 	}
 
 	var ok bool
@@ -1047,7 +1052,7 @@ func pmap_pgtbl(pml4 *[512]int, v int, create bool,
 }
 
 // requires direct mapping
-func _pmap_walk(pml4 *[512]int, v int, create bool, perms int) *int {
+func _pmap_walk(pml4 *pmap_t, v int, create bool, perms pa_t) *pa_t {
 	pgtbl, slot := pmap_pgtbl(pml4, v, create, perms)
 	if pgtbl == nil {
 		return nil
@@ -1055,7 +1060,7 @@ func _pmap_walk(pml4 *[512]int, v int, create bool, perms int) *int {
 	return &pgtbl[slot]
 }
 
-func pmap_walk(pml4 *[512]int, v int, perms int) (*int, err_t) {
+func pmap_walk(pml4 *pmap_t, v int, perms pa_t) (*pa_t, err_t) {
 	ret := _pmap_walk(pml4, v, true, perms)
 	if ret == nil {
 		// create was set; failed to allocate a page
@@ -1064,14 +1069,14 @@ func pmap_walk(pml4 *[512]int, v int, perms int) (*int, err_t) {
 	return ret, 0
 }
 
-func pmap_lookup(pml4 *[512]int, v int) *int {
+func pmap_lookup(pml4 *pmap_t, v int) *pa_t {
 	return _pmap_walk(pml4, v, false, 0)
 }
 
 // forks the ptes only for the virtual address range specified. returns true if
 // the parent's TLB should be flushed because we added COW bits to PTEs and
 // whether the fork failed due to allocation failure
-func ptefork(cpmap, ppmap *[512]int, start, end int,
+func ptefork(cpmap, ppmap *pmap_t, start, end int,
    shared bool) (bool, bool) {
 	doflush := false
 	mkcow := !shared
@@ -1114,7 +1119,7 @@ func ptefork(cpmap, ppmap *[512]int, start, end int,
 			if pte & PTE_U == 0 {
 				panic("huh?")
 			}
-			refup(uintptr(phys))
+			refup(phys)
 		}
 		i += len(ps)*PGSIZE
 
@@ -1125,14 +1130,14 @@ func ptefork(cpmap, ppmap *[512]int, start, end int,
 // allocates a page tracked by kpages and maps it at va. only used during AP
 // bootup.
 // XXX remove this crap
-func kmalloc(va uintptr, perms int) {
+func kmalloc(va uintptr, perms pa_t) {
 	kplock.Lock()
 	defer kplock.Unlock()
 	_, p_pg, ok := refpg_new()
 	if !ok {
 		panic("oom in init?")
 	}
-	refup(uintptr(p_pg))
+	refup(p_pg)
 	pte, err := pmap_walk(kpmap(), int(va), perms)
 	if err != 0 {
 		panic("oom during AP init")
@@ -1143,56 +1148,7 @@ func kmalloc(va uintptr, perms int) {
 	*pte = p_pg | PTE_P | perms
 }
 
-func physmapped1(pmap *[512]int, phys int, depth int, acc int,
-    thresh int, tsz int) (bool, int) {
-	for i, c := range pmap {
-		if c & PTE_P == 0 {
-			continue
-		}
-		if depth == 1 || c & PTE_PS != 0 {
-			if c & PTE_ADDR == phys & PGMASK {
-				ret := acc << 9 | i
-				ret <<= 12
-				if thresh == 0 {
-					return true, ret
-				}
-				if  ret >= thresh && ret < thresh + tsz {
-					return true, ret
-				}
-			}
-			continue
-		}
-		// skip direct and recursive maps
-		if depth == 4 && (i == VDIRECT || i == VREC) {
-			continue
-		}
-		nextp := pe2pg(c)
-		nexta := acc << 9 | i
-		mapped, va := physmapped1(nextp, phys, depth - 1, nexta,
-		    thresh, tsz)
-		if mapped {
-			return true, va
-		}
-	}
-	return false, 0
-}
-
-func physmapped(pmap *[512]int, phys int) (bool, int) {
-	return physmapped1(pmap, phys, 4, 0, 0, 0)
-}
-
-func physmapped_above(pmap *[512]int, phys int, thresh int, size int) (bool, int) {
-	return physmapped1(pmap, phys, 4, 0, thresh, size)
-}
-
-func assert_no_phys(pmap *[512]int, phys int) {
-	mapped, va := physmapped(pmap, phys)
-	if mapped {
-		panic(fmt.Sprintf("%v is mapped at page %#x", phys, va))
-	}
-}
-
-func assert_no_va_map(pmap *[512]int, va uintptr) {
+func assert_no_va_map(pmap *pmap_t, va uintptr) {
 	pte := pmap_lookup(pmap, int(va))
 	if pte != nil && *pte & PTE_P != 0 {
 		panic(fmt.Sprintf("va %#x is mapped", va))

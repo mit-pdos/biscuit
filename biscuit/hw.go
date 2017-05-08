@@ -504,7 +504,7 @@ func _acpi_tbl(rsdt []uint8, sig string) ([]uint8, bool) {
 	ptrs := rsdt[hdrlen:]
 	var tbl []uint8
 	for len(ptrs) != 0 {
-		tbln := uintptr(readn(ptrs, 4, 0))
+		tbln := pa_t(readn(ptrs, 4, 0))
 		ptrs = ptrs[4:]
 		tbl = dmaplen(tbln, 8)
 		if string(tbl[:4]) == sig {
@@ -624,9 +624,9 @@ func _acpi_fadt(rsdt []uint8) bool {
 
 func _acpi_scan() ([]uint8, bool) {
 	// ACPI 5.2.5: search for RSDP in EBDA and BIOS read-only memory
-	ebdap := (0x40 << 4) | 0xe
+	ebdap := pa_t((0x40 << 4) | 0xe)
 	p := dmap8(ebdap)
-	ebda := uintptr(readn(p, 2, 0))
+	ebda := pa_t(readn(p, 2, 0))
 	ebda <<= 4
 
 	isrsdp := func(d []uint8) bool {
@@ -644,13 +644,13 @@ func _acpi_scan() ([]uint8, bool) {
 		return true
 	}
 	rsdplen := 36
-	for i := uintptr(0); i < 1 << 10; i += 16 {
+	for i := pa_t(0); i < 1 << 10; i += 16 {
 		p = dmaplen(ebda + i, rsdplen)
 		if isrsdp(p) {
 			return p, true
 		}
 	}
-	for bmem := uintptr(0xe0000); bmem < 0xfffff; bmem += 16 {
+	for bmem := pa_t(0xe0000); bmem < 0xfffff; bmem += 16 {
 		p = dmaplen(bmem, rsdplen)
 		if isrsdp(p) {
 			return p, true
@@ -664,7 +664,7 @@ func acpi_attach() int {
 	if !ok {
 		panic("no RSDP")
 	}
-	rsdtn := uintptr(readn(rsdp, 4, 16))
+	rsdtn := pa_t(readn(rsdp, 4, 16))
 	//xsdtn := readn(rsdp, 8, 24)
 	rsdt := dmaplen(rsdtn, 8)
 	if rsdtn == 0 || string(rsdt[:4]) != "RSDT" {
@@ -1319,7 +1319,7 @@ type rxdesc_t struct {
 	p_hbuf	uint64
 }
 
-func (rd *rxdesc_t) init(pbuf, hbuf uintptr, hw *int) {
+func (rd *rxdesc_t) init(pbuf pa_t, hbuf uintptr, hw *int) {
 	rd.p_pbuf = uint64(pbuf)
 	rd.p_hbuf = uint64(hbuf)
 	rd.hwdesc = (*struct {
@@ -1392,7 +1392,7 @@ type txdesc_t struct {
 	eop	bool
 }
 
-func (td *txdesc_t) init(p_addr, len uintptr, hw *int) {
+func (td *txdesc_t) init(p_addr pa_t, len uintptr, hw *int) {
 	td.p_buf = uint64(p_addr)
 	td.bufsz = uint64(len)
 	td.hwdesc = (*struct {
@@ -1480,7 +1480,7 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 
 	td.ctxt = false
 	td.eop = false
-	dst := dmaplen(uintptr(td.p_buf), int(td.bufsz))
+	dst := dmaplen(pa_t(td.p_buf), int(td.bufsz))
 	paylen := uint64(0)
 	for len(dst) != 0 && len(src) != 0 {
 		cursrc := src[0]
@@ -1892,13 +1892,12 @@ func (x *ixgbe_t) wait_linkup(secs int) bool {
 	}
 }
 
-func (x *ixgbe_t) pg_new() (*[512]int, uintptr) {
+func (x *ixgbe_t) pg_new() (*pg_t, pa_t) {
 	x.pgs++
-	a, _b, ok := refpg_new()
+	a, b, ok := refpg_new()
 	if !ok {
 		panic("oom during ixgbe init")
 	}
-	b := uintptr(_b)
 	refup(b)
 	return a, b
 }
@@ -2115,7 +2114,7 @@ func (x *ixgbe_t) rx_consume() {
 		}
 		// packet may span multiple descriptors (only for RSC when MTU
 		// less than descriptor DMA buffer size?)
-		buf := dmaplen(uintptr(rd.p_pbuf), rd.pktlen())
+		buf := dmaplen(pa_t(rd.p_pbuf), rd.pktlen())
 		pkt[0] = buf
 		if !rd.eop() {
 			panic("pkt > mtu?")
@@ -2476,7 +2475,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 			_, p_bpg := x.pg_new()
 			// SRRCTL.BSIZEPACKET
 			dn := i / 2
-			ps := uintptr(2 << 10)
+			ps := pa_t(2 << 10)
 			x.rx.descs[dn].init(p_bpg, 0, &pg[i])
 			x.rx.descs[dn+1].init(p_bpg + ps, 0, &pg[i+2])
 		}
@@ -2570,7 +2569,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 				dn := j / 2
 				ps := uintptr(PGSIZE) / 2
 				ttx.descs[dn].init(p_bpg, ps, &pg[j])
-				ttx.descs[dn+1].init(p_bpg + ps, ps,
+				ttx.descs[dn+1].init(p_bpg + pa_t(ps), ps,
 				   &pg[j+2])
 				// set DD and eop so all tx descriptors appear
 				// ready for use
@@ -2703,7 +2702,7 @@ func (x *ixgbe_t) rx_test() {
 			panic("expected packet len")
 		}
 		fmt.Printf("packet %v: plen: %v, hdrlen: %v, hdr: ", i, pl, hl)
-		b := dmaplen(uintptr(rdesc.p_pbuf), int(rdesc.pktlen()))
+		b := dmaplen(pa_t(rdesc.p_pbuf), int(rdesc.pktlen()))
 		for _, c := range b[:hl] {
 			fmt.Printf("%0.2x ", c)
 		}

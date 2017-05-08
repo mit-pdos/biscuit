@@ -561,8 +561,8 @@ func sys_close(proc *proc_t, fdn int) int {
 
 // a type to hold the virtual/physical addresses of memory mapped files
 type mmapinfo_t struct {
-	pg	*[512]int
-	phys	int
+	pg	*pg_t
+	phys	pa_t
 }
 
 func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
@@ -621,7 +621,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	}
 	lenn = roundup(lenn, PGSIZE)
 	// limit checks
-	if lenn/PGSIZE + proc.vmregion.pglen() > proc.ulim.pages {
+	if lenn/int(PGSIZE) + proc.vmregion.pglen() > proc.ulim.pages {
 		proc.Unlock_pmap()
 		lhits++
 		return int(-ENOMEM)
@@ -654,7 +654,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	var ub int
 	failed := false
 	if anon {
-		for i := 0; i < lenn; i += PGSIZE {
+		for i := 0; i < lenn; i += int(PGSIZE) {
 			_, p_pg, ok := refpg_new()
 			if !ok {
 				failed = true
@@ -662,7 +662,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 			}
 			ns, ok := proc.page_insert(addr + i, p_pg, perms, true)
 			if !ok {
-				refdown(uintptr(p_pg))
+				refdown(p_pg)
 				failed = true
 				break
 			}
@@ -692,7 +692,7 @@ func sys_mmap(proc *proc_t, addrn, lenn, protflags, fdn, offset int) int {
 }
 
 func sys_munmap(proc *proc_t, addrn, len int) int {
-	if addrn & PGOFFSET != 0 || addrn < USERMIN {
+	if addrn & int(PGOFFSET) != 0 || addrn < USERMIN {
 		return int(-EINVAL)
 	}
 	proc.Lock_pmap()
@@ -3403,7 +3403,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 		if !ok {
 			goto outproc
 		}
-		refup(uintptr(child.p_pmap))
+		refup(child.p_pmap)
 
 		child.pwait = &parent.mywait
 		ok = parent.start_proc(child.pid)
@@ -3477,7 +3477,7 @@ func sys_fork(parent *proc_t, ptf *[TFSIZE]uintptr, tforkp int, flags int) int {
 	child.sched_add(chtf, childtid)
 	return ret
 outmem:
-	refdown(uintptr(child.p_pmap))
+	refdown(child.p_pmap)
 outproc:
 	tid_del()
 	proc_del(child.pid)
@@ -3513,18 +3513,18 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 		return true
 	}
 
-	var p_pg int
+	var p_pg pa_t
 	perms := PTE_U | PTE_P
 	isempty := true
 
 	// shared file mappings are handled the same way regardless of whether
 	// the fault is read or write
 	if vmi.mtype == VFILE && vmi.file.shared {
-		_, dur, err := vmi.filepage(faultaddr)
+		var err err_t
+		_, p_pg, err = vmi.filepage(faultaddr)
 		if err != 0 {
 			return false
 		}
-		p_pg = int(dur)
 		if vmi.perms & uint(PTE_W) != 0 {
 			perms |= PTE_W
 		}
@@ -3533,7 +3533,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 		if *pte & PTE_W != 0 {
 			panic("bad state")
 		}
-		var pgsrc *[512]int
+		var pgsrc *pg_t
 		// the copy-on-write page may be specified in the pte or it may
 		// not have been mapped at all yet.
 		cow := *pte & PTE_COW != 0
@@ -3542,7 +3542,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 			// (i.e.  only this mapping maps the page), we can
 			// claim the page, skip the copy, and mark it writable.
 			phys := *pte & PTE_ADDR
-			ref, _ := _refaddr(uintptr(phys))
+			ref, _ := _refaddr(phys)
 			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
 			   phys != p_zeropg {
 				tmp := *pte &^ PTE_COW
@@ -3571,7 +3571,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 				panic("wut")
 			}
 		}
-		var pg *[512]int
+		var pg *pg_t
 		var ok bool
 		// don't zero new page
 		pg, p_pg, ok = refpg_new_nozero()
@@ -3589,11 +3589,11 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 		case VANON:
 			p_pg = p_zeropg
 		case VFILE:
-			_, p, err := vmi.filepage(faultaddr)
+			var err err_t
+			_, p_pg, err = vmi.filepage(faultaddr)
 			if err != 0 {
 				return false
 			}
-			p_pg = int(p)
 		default:
 			panic("wut")
 		}
@@ -3604,7 +3604,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 
 	tshoot, ok := proc.page_insert(int(faultaddr), p_pg, perms, isempty)
 	if !ok {
-		refdown(uintptr(p_pg))
+		refdown(p_pg)
 		return false
 	}
 	if tshoot {
@@ -3658,14 +3658,14 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
 		proc.pmap, proc.p_pmap = opmap, op_pmap
 		return int(-ENOMEM)
 	}
-	refup(uintptr(proc.p_pmap))
+	refup(proc.p_pmap)
 	for _, e := range kents {
 		proc.pmap[e.pml4slot] = e.entry
 	}
 
 	restore := func() {
-		_uvmfree(proc.pmap, uintptr(proc.p_pmap), &proc.vmregion)
-		refdown(uintptr(proc.p_pmap))
+		_uvmfree(proc.pmap, proc.p_pmap, &proc.vmregion)
+		refdown(proc.p_pmap)
 		proc.vmregion.clear()
 		proc.pmap = opmap
 		proc.p_pmap = op_pmap
@@ -3743,8 +3743,8 @@ func sys_execv1(proc *proc_t, tf *[TFSIZE]uintptr, paths string,
 
 	// the exec must succeed now; free old pmap/mapped files
 	if op_pmap != 0 {
-		_uvmfree(opmap, uintptr(op_pmap), &ovmreg)
-		dec_pmap(uintptr(op_pmap))
+		_uvmfree(opmap, op_pmap, &ovmreg)
+		dec_pmap(op_pmap)
 	}
 	ovmreg.clear()
 
@@ -3802,7 +3802,7 @@ func insertargs(proc *proc_t, sargs []string) (int, int, bool) {
 	}
 	_, ok = proc.page_insert(uva, p_pg, PTE_U, true)
 	if !ok {
-		refdown(uintptr(p_pg))
+		refdown(p_pg)
 		return 0, 0, false
 	}
 	var args [][]uint8
@@ -4909,7 +4909,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) err_t {
 			return err
 		}
 		bsrc := pg2bytes(mmapi[0].pg)[:]
-		bsrc = bsrc[va & PGOFFSET:]
+		bsrc = bsrc[va & int(PGOFFSET):]
 		if len(pg) > hdr.filesz {
 			pg = pg[0:hdr.filesz]
 		}
@@ -4938,7 +4938,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) err_t {
 	// per-process copy and zero the bss bytes in the copy.
 	bssva := hdr.vaddr + hdr.filesz
 	bsslen := hdr.memsz - hdr.filesz
-	if bssva & PGOFFSET != 0 {
+	if bssva & int(PGOFFSET) != 0 {
 		bpg, ok := proc.userdmap8_inner(bssva, true)
 		if !ok {
 			return -ENOMEM
@@ -5007,14 +5007,14 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int, bool) {
 			_, ok = proc.page_insert(freshtls + i, p_pg, perms,
 			   true)
 			if !ok {
-				refdown(uintptr(p_pg))
+				refdown(p_pg)
 				return 0, 0, 0, false
 			}
 			// map fresh TLS for thread 0
 			nperms := perms | PTE_COW
 			_, ok = proc.page_insert(t0tls + i, p_pg, nperms, true)
 			if !ok {
-				refdown(uintptr(p_pg))
+				refdown(p_pg)
 				return 0, 0, 0, false
 			}
 		}
@@ -5028,7 +5028,7 @@ func (e *elf_t) elf_load(proc *proc_t, f *fd_t) (int, int, int, bool) {
 			if err != 0 {
 				return 0, 0, 0, false
 			}
-			off := (tlsaddr + i) & PGOFFSET
+			off := (tlsaddr + i) & int(PGOFFSET)
 			src := pg2bytes(_src)[off:]
 			bpg, ok := proc.userdmap8_inner(freshtls + i, true)
 			if !ok {

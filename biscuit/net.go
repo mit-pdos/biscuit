@@ -800,20 +800,18 @@ func net_icmp(pkt [][]uint8, tlen int) {
 // allocates two pages for the send/receive buffers. returns false if it failed
 // to allocate pages. does not increase the reference count of the pages
 // (circbuf_t should do that).
-func tcppgs() ([]uint8, uintptr, []uint8, uintptr, bool) {
-	spg, _sp_pg, ok := refpg_new_nozero()
+func tcppgs() ([]uint8, pa_t, []uint8, pa_t, bool) {
+	spg, sp_pg, ok := refpg_new_nozero()
 	if !ok {
 		return nil, 0, nil, 0, false
 	}
-	sp_pg := uintptr(_sp_pg)
-	rpg, _rp_pg, ok := refpg_new_nozero()
+	rpg, rp_pg, ok := refpg_new_nozero()
 	if !ok {
 		// ...
 		refup(sp_pg)
 		refdown(sp_pg)
 		return nil, 0, nil, 0, false
 	}
-	rp_pg := uintptr(_rp_pg)
 	return pg2bytes(spg)[:], sp_pg, pg2bytes(rpg)[:], rp_pg, true
 }
 
@@ -825,7 +823,7 @@ type tcpbuf_t struct {
 	pollers	*pollers_t
 }
 
-func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg uintptr, tcb *tcptcb_t) {
+func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg pa_t, tcb *tcptcb_t) {
 	tb.cbuf.cb_init_phys(v, p_pg)
 	tb.didseq = false
 	tb.cond = sync.NewCond(&tcb.l)
@@ -1454,9 +1452,9 @@ type tcpinc_t struct {
 	opt	tcpopt_t
 	bufs struct {
 		sp	[]uint8
-		sp_pg	uintptr
+		sp_pg	pa_t
 		rp	[]uint8
-		rp_pg	uintptr
+		rp_pg	pa_t
 	}
 }
 
@@ -1498,8 +1496,8 @@ func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
 
 // creates a TCB for tinc and adds it to the table of established connections
 func (tcl *tcplisten_t) tcbready(tinc tcpinc_t, rack uint32, rwin uint16,
-    ropt tcpopt_t, rest [][]uint8, sp []uint8, sp_pg uintptr,
-    rp []uint8, rp_pg uintptr) *tcptcb_t {
+    ropt tcpopt_t, rest [][]uint8, sp []uint8, sp_pg pa_t,
+    rp []uint8, rp_pg pa_t) *tcptcb_t {
 	tcb := &tcptcb_t{}
 	tcb.tcb_init(tinc.lip, tinc.rip, tinc.lport, tinc.rport, tinc.smac,
 	    tinc.dmac, tinc.snd.nxt, sp, sp_pg, rp, rp_pg)
@@ -2926,8 +2924,7 @@ func (tc *tcptcb_t) shutdown(read, write bool) err_t {
 var _nilmac mac_t
 
 func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
-    dmac *mac_t, sndnxt uint32, sv []uint8, sp uintptr,
-    rv []uint8, rp uintptr) {
+    dmac *mac_t, sndnxt uint32, sv []uint8, sp pa_t, rv []uint8, rp pa_t) {
 	if lip == INADDR_ANY || rip == INADDR_ANY || lport == 0 || rport == 0 {
 		panic("all IPs/ports must be known")
 	}

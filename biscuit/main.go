@@ -601,8 +601,8 @@ type proc_t struct {
 	vmregion	vmregion_t
 
 	// pmap pages
-	pmap		*[512]int
-	p_pmap		int
+	pmap		*pmap_t
+	p_pmap		pa_t
 
 	// mmap next virtual address hint
 	mmapi		int
@@ -952,12 +952,12 @@ func (parent *proc_t) vm_fork(child *proc_t, rsp uintptr) (bool, bool) {
 // does not increase opencount on fops (vmregion_t.insert does). perms should
 // only use PTE_U/PTE_W; the page fault handler will install the correct COW
 // flags. perms == 0 means that no mapping can go here (like for guard pages).
-func (p *proc_t) _mkvmi(mt mtype_t, start, len, perms, foff int,
+func (p *proc_t) _mkvmi(mt mtype_t, start, len int, perms pa_t, foff int,
     fops fdops_i, shared bool) *vminfo_t {
-	if len == 0 {
+	if len <= 0 {
 		panic("bad vmi len")
 	}
-	if (start | len) & PGOFFSET != 0 {
+	if pa_t(start | len) & PGOFFSET != 0 {
 		panic("start and len must be aligned")
 	}
 	// don't specify cow, present etc. -- page fault will handle all that
@@ -982,22 +982,23 @@ func (p *proc_t) _mkvmi(mt mtype_t, start, len, perms, foff int,
 	return ret
 }
 
-func (p *proc_t) vmadd_anon(start, len, perms int) {
+func (p *proc_t) vmadd_anon(start, len int, perms pa_t) {
 	vmi := p._mkvmi(VANON, start, len, perms, 0, nil, false)
 	p.vmregion.insert(vmi)
 }
 
-func (p *proc_t) vmadd_file(start, len, perms int, fops fdops_i, foff int) {
+func (p *proc_t) vmadd_file(start, len int, perms pa_t, fops fdops_i,
+   foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, false)
 	p.vmregion.insert(vmi)
 }
 
-func (p *proc_t) vmadd_shareanon(start, len, perms int) {
+func (p *proc_t) vmadd_shareanon(start, len int, perms pa_t) {
 	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil, false)
 	p.vmregion.insert(vmi)
 }
 
-func (p *proc_t) vmadd_sharefile(start, len, perms int, fops fdops_i,
+func (p *proc_t) vmadd_sharefile(start, len int, perms pa_t, fops fdops_i,
    foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, true)
 	p.vmregion.insert(vmi)
@@ -1031,16 +1032,16 @@ func (p *proc_t) mkfxbuf() *[64]uintptr {
 // to flush TLB). the second return value is false if the page insertion failed
 // due to lack of user pages. p_pg's ref count is increased so the caller can
 // simply refdown()
-func (p *proc_t) page_insert(va int, p_pg int, perms int,
+func (p *proc_t) page_insert(va int, p_pg pa_t, perms pa_t,
    vempty bool) (bool, bool) {
 	p.lockassert_pmap()
-	refup(uintptr(p_pg))
+	refup(p_pg)
 	pte, err := pmap_walk(p.pmap, va, PTE_U | PTE_W)
 	if err != 0 {
 		return false, false
 	}
 	ninval := false
-	var p_old uintptr
+	var p_old pa_t
 	if *pte & PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
@@ -1049,7 +1050,7 @@ func (p *proc_t) page_insert(va int, p_pg int, perms int,
 			panic("replacing kernel page")
 		}
 		ninval = true
-		p_old = uintptr(*pte & PTE_ADDR)
+		p_old = pa_t(*pte & PTE_ADDR)
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
@@ -1066,7 +1067,7 @@ func (p *proc_t) page_remove(va int) bool {
 		if *pte & PTE_U == 0 {
 			panic("removing kernel page")
 		}
-		p_old := uintptr(*pte & PTE_ADDR)
+		p_old := pa_t(*pte & PTE_ADDR)
 		refdown(p_old)
 		*pte = 0
 		remmed = true
@@ -1099,9 +1100,9 @@ func (p *proc_t) tlbshoot(startva uintptr, pgcount int) {
 	// fast path: the pmap is loaded in exactly one CPU's cr3, and it
 	// happens to be this CPU. we detect that one CPU has the pmap loaded
 	// by a pmap ref count == 2 (1 for proc_t ref, 1 for CPU).
-	p_pmap := uintptr(p.p_pmap)
+	p_pmap := p.p_pmap
 	refp, _ := _refaddr(p_pmap)
-	if runtime.Condflush(refp, p_pmap, startva, pgcount) {
+	if runtime.Condflush(refp, uintptr(p_pmap), startva, pgcount) {
 		return
 	}
 	// slow path, must send TLB shootdowns
@@ -1137,7 +1138,7 @@ func (p *proc_t) run(tf *[TFSIZE]uintptr, tid tid_t) {
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
-		refp, _ := _refaddr(uintptr(p.p_pmap))
+		refp, _ := _refaddr(p.p_pmap)
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 		    uintptr(p.p_pmap), fastret, refp)
 		fastret = false
@@ -1176,7 +1177,7 @@ func (p *proc_t) run(tf *[TFSIZE]uintptr, tid tid_t) {
 		// did we switch pmaps? if so, the old pmap may need to be
 		// freed.
 		if odec {
-			dec_pmap(op_pmap)
+			dec_pmap(pa_t(op_pmap))
 		}
 	}
 	tid_del()
@@ -1254,7 +1255,7 @@ func (p *proc_t) doomall() {
 	p.doomed = true
 }
 
-func pmfree(pml4 *[512]int, start, end uintptr) {
+func pmfree(pml4 *pmap_t, start, end uintptr) {
 	for i := start; i < end; {
 		pg, slot := pmap_pgtbl(pml4, int(i), false, 0)
 		if pg == nil {
@@ -1274,7 +1275,7 @@ func pmfree(pml4 *[512]int, start, end uintptr) {
 				if p_pg & PTE_U == 0 {
 					panic("kernel pages in vminfo?")
 				}
-				refdown(uintptr(p_pg & PTE_ADDR))
+				refdown(p_pg & PTE_ADDR)
 				tofree[idx] = 0
 			}
 		}
@@ -1284,7 +1285,7 @@ func pmfree(pml4 *[512]int, start, end uintptr) {
 
 // don't forget: there are two places where pmaps/memory are free'd:
 // proc_t.terminate() and exec.
-func _uvmfree(pmg *[512]int, p_pmap uintptr, vmr *vmregion_t) {
+func _uvmfree(pmg *pmap_t, p_pmap pa_t, vmr *vmregion_t) {
 	vmr.iter(func(vmi *vminfo_t) {
 		start := uintptr(vmi.pgn << PGSHIFT)
 		end := start + uintptr(vmi.pglen << PGSHIFT)
@@ -1293,16 +1294,16 @@ func _uvmfree(pmg *[512]int, p_pmap uintptr, vmr *vmregion_t) {
 }
 
 func (p *proc_t) uvmfree() {
-	_uvmfree(p.pmap, uintptr(p.p_pmap), &p.vmregion)
+	_uvmfree(p.pmap, p.p_pmap, &p.vmregion)
 	// dec_pmap could free the pmap itself. thus it must come after
 	// _uvmfree.
-	dec_pmap(uintptr(p.p_pmap))
+	dec_pmap(p.p_pmap)
 	// close all open mmap'ed files
 	p.vmregion.clear()
 }
 
 // decrease ref count of pml4, freeing it if no CPUs have it loaded into cr3.
-func dec_pmap(p_pmap uintptr) {
+func dec_pmap(p_pmap pa_t) {
 	_phys_put(&physmem.pmaps, p_pmap)
 }
 
@@ -1384,7 +1385,7 @@ func (p *proc_t) lockassert_pmap() {
 func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	p.lockassert_pmap()
 
-	voff := va & PGOFFSET
+	voff := va & int(PGOFFSET)
 	uva := uintptr(va)
 	vmi, ok := p.vmregion.lookup(uva)
 	if !ok {
@@ -1932,13 +1933,13 @@ type circbuf_t struct {
 	// XXX uint
 	head	int
 	tail	int
-	p_pg	uintptr
+	p_pg	pa_t
 }
 
 // may fail to allocate a page for the buffer. when cb's life is over, someone
 // must free the buffer page by calling cb_release().
 func (cb *circbuf_t) cb_init(sz int) err_t {
-	bufmax := PGSIZE
+	bufmax := int(PGSIZE)
 	if sz <= 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
@@ -1952,7 +1953,7 @@ func (cb *circbuf_t) cb_init(sz int) err_t {
 
 // provide the page for the buffer explicitly; useful for guaranteeing that
 // read/writes won't fail to allocate memory.
-func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg uintptr) {
+func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg pa_t) {
 	refup(p_pg)
 	cb.p_pg = p_pg
 	cb.buf = v
@@ -1983,7 +1984,7 @@ func (cb *circbuf_t) cb_ensure() err_t {
 	}
 	bpg := pg2bytes(pg)[:]
 	bpg = bpg[:cb.bufsz]
-	cb.cb_init_phys(bpg, uintptr(p_pg))
+	cb.cb_init_phys(bpg, p_pg)
 	return 0
 }
 
@@ -2251,15 +2252,15 @@ func cpus_start(ncpu, aplim int) {
 
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
-	mpaddr := 0x8000
+	mpaddr := pa_t(0x8000)
 	mpcode := allbins["mpentry.bin"].data
-	c := 0
-	mpl := len(mpcode)
+	c := pa_t(0)
+	mpl := pa_t(len(mpcode))
 	for c < mpl {
 		mppg := dmap8(mpaddr + c)
 		did := copy(mppg, mpcode)
 		mpcode = mpcode[did:]
-		c += did
+		c += pa_t(did)
 	}
 
 	// skip mucking with CMOS reset code/warm reset vector (as per the the
@@ -2315,7 +2316,7 @@ func cpus_start(ncpu, aplim int) {
 	}
 
 	startupipi := func() {
-		vec       := mpaddr >> 12
+		vec       := int(mpaddr >> 12)
 		delivmode := 0x6
 		level     := 0x1
 		trig      := 0x0
@@ -3293,12 +3294,12 @@ var physmem struct {
 	sync.Mutex
 }
 
-func _refaddr(p_pg uintptr) (*int32, uint32) {
+func _refaddr(p_pg pa_t) (*int32, uint32) {
 	idx := _pg2pgn(p_pg) - physmem.startn
 	return &physmem.pgs[idx].refcnt, idx
 }
 
-func refup(p_pg uintptr) {
+func refup(p_pg pa_t) {
 	ref, _ := _refaddr(p_pg)
 	c := atomic.AddInt32(ref, 1)
 	// XXXPANIC
@@ -3309,7 +3310,7 @@ func refup(p_pg uintptr) {
 
 // returns true if p_pg should be added to the free list and the index of the
 // page in the pgs array
-func _refdec(p_pg uintptr) (bool, uint32) {
+func _refdec(p_pg pa_t) (bool, uint32) {
 	ref, idx := _refaddr(p_pg)
 	c := atomic.AddInt32(ref, -1)
 	// XXXPANIC
@@ -3327,7 +3328,7 @@ func _reffree(idx uint32) {
 	physmem.Unlock()
 }
 
-func refdown(p_pg uintptr) {
+func refdown(p_pg pa_t) {
 	// add to freelist?
 	if add, idx := _refdec(p_pg); add {
 		_reffree(idx)
@@ -3420,13 +3421,13 @@ func callerdump() {
 	fmt.Printf("%s\n", s)
 }
 
-func _refpg_new() (*[512]int, int, bool) {
+func _refpg_new() (*pg_t, pa_t, bool) {
 	return _phys_new(&physmem.freei)
 }
 
 // refcnt of returned page is not incremented (it is usually incremented via
 // proc_t.page_insert). requires direct mapping.
-func refpg_new() (*[512]int, int, bool) {
+func refpg_new() (*pg_t, pa_t, bool) {
 	pg, p_pg, ok := _refpg_new()
 	if !ok {
 		return nil, 0, false
@@ -3435,7 +3436,7 @@ func refpg_new() (*[512]int, int, bool) {
 	return pg, p_pg, true
 }
 
-func refpg_new_nozero() (*[512]int, int, bool) {
+func refpg_new_nozero() (*pg_t, pa_t, bool) {
 	pg, p_pg, ok := _refpg_new()
 	if !ok {
 		return nil, 0, false
@@ -3443,26 +3444,26 @@ func refpg_new_nozero() (*[512]int, int, bool) {
 	return pg, p_pg, true
 }
 
-func pmap_new() (*[512]int, int, bool) {
+func pmap_new() (*pmap_t, pa_t, bool) {
 	a, b, ok := _phys_new(&physmem.pmaps)
 	if ok {
-		return a, b, true
+		return pg2pmap(a), b, true
 	}
-	//fmt.Printf("!")
-	return refpg_new()
+	a, b, ok = refpg_new()
+	return pg2pmap(a), b, ok
 }
 
-func _phys_new(fl *uint32) (*[512]int, int, bool) {
+func _phys_new(fl *uint32) (*pg_t, pa_t, bool) {
 	if !_dmapinit {
 		panic("dmap not initted")
 	}
 
-	var p_pg uintptr
+	var p_pg pa_t
 	var ok bool
 	physmem.Lock()
 	ff := *fl
 	if ff != ^uint32(0) {
-		p_pg = uintptr(ff + physmem.startn) << PGSHIFT
+		p_pg = pa_t(ff + physmem.startn) << PGSHIFT
 		*fl = physmem.pgs[ff].nexti
 		ok = true
 		if physmem.pgs[ff].refcnt < 0 {
@@ -3471,13 +3472,12 @@ func _phys_new(fl *uint32) (*[512]int, int, bool) {
 	}
 	physmem.Unlock()
 	if ok {
-		dur := int(p_pg)
-		return dmap(dur), dur, true
+		return dmap(p_pg), p_pg, true
 	}
 	return nil, 0, false
 }
 
-func _phys_put(fl *uint32, p_pg uintptr) {
+func _phys_put(fl *uint32, p_pg pa_t) {
 	if add, idx := _refdec(p_pg); add {
 		physmem.Lock()
 		physmem.pgs[idx].nexti = *fl
@@ -3486,7 +3486,7 @@ func _phys_put(fl *uint32, p_pg uintptr) {
 	}
 }
 
-func _pg2pgn(p_pg uintptr) uint32 {
+func _pg2pgn(p_pg pa_t) uint32 {
 	return uint32(p_pg >> PGSHIFT)
 }
 
@@ -3502,7 +3502,7 @@ func phys_init() {
 	for i := range physmem.pgs {
 		physmem.pgs[i].refcnt = -10
 	}
-	first := runtime.Get_phys()
+	first := pa_t(runtime.Get_phys())
 	fpgn := _pg2pgn(first)
 	physmem.startn = fpgn
 	physmem.freei = 0
@@ -3510,7 +3510,7 @@ func phys_init() {
 	physmem.pgs[0].refcnt = 0
 	physmem.pgs[0].nexti = ^uint32(0)
 	for i := 0; i < respgs - 1; i++ {
-		p_pg := runtime.Get_phys()
+		p_pg := pa_t(runtime.Get_phys())
 		pgn := _pg2pgn(p_pg)
 		idx := pgn - physmem.startn
 		// Get_phys() may skip regions.
@@ -3538,12 +3538,12 @@ func pgcount() (int, int) {
 	return r1, r2
 }
 
-func _pmcount(pml4 uintptr, lev int) int {
-	pg := dmap(int(pml4))
+func _pmcount(pml4 pa_t, lev int) int {
+	pg := pg2pmap(dmap(pml4))
 	ret := 0
 	for _, pte := range pg {
 		if pte & PTE_U != 0 && pte & PTE_P != 0 {
-			ret += 1 + _pmcount(uintptr(pte & PTE_ADDR), lev - 1)
+			ret += 1 + _pmcount(pa_t(pte & PTE_ADDR), lev - 1)
 		}
 	}
 	return ret
@@ -3552,7 +3552,7 @@ func _pmcount(pml4 uintptr, lev int) int {
 func pmapcount() int {
 	c := 0
 	for ni := physmem.pmaps; ni != ^uint32(0); ni = physmem.pgs[ni].nexti {
-		v := _pmcount(uintptr(ni+ physmem.startn) << PGSHIFT, 4)
+		v := _pmcount(pa_t(ni+ physmem.startn) << PGSHIFT, 4)
 		c += v
 	}
 	return c
