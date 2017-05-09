@@ -1418,7 +1418,6 @@ func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 
 	if needfault {
 		if !sys_pgfault(p, vmi, uva, ecode) {
-			panic("no")
 			return nil, false
 		}
 	}
