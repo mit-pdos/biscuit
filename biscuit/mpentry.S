@@ -92,15 +92,15 @@ protcseg:
 protocseg64:
 
 // prevent bhw's hypthreads from joining
-//	movl	$0xb, %eax
-//	movl	$0, %ecx
-//	cpuid
-//	andl	$1, %edx
-//	jz	1f
-//2:
-//	hlt
-//	jmp	2b
-//1:
+	movl	$0xb, %eax
+	movl	$0, %ecx
+	cpuid
+	andl	$1, %edx
+	jz	1f
+2:
+	hlt
+	jmp	2b
+1:
 	SPLOCK(lock1)
 
 	// increment ap count
