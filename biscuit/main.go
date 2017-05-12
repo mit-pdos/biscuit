@@ -1,7 +1,7 @@
 package main
 
 import "fmt"
-import "math/rand"
+//import "math/rand"
 import "runtime"
 import "runtime/debug"
 import "sync/atomic"
