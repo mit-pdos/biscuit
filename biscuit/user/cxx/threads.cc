@@ -1,3 +1,5 @@
+#include "max_align.h"
+
 #include <thread>
 
 #include <pthread.h>

@@ -1,5 +1,7 @@
 // mail-enqueue - queue a mail message for delivery
 
+#include "max_align.h"
+
 #include "libutil.h"
 #include "shutil.h"
 

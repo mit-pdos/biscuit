@@ -7,6 +7,9 @@
 // * notify - a UNIX socket that receives an <inumber> when a message
 //   is added to the spool
 
+
+#include "max_align.h"
+
 #include "libutil.h"
 #include "shutil.h"
 //#include "xsys.h"

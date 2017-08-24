@@ -1,3 +1,5 @@
+#include "max_align.h"
+
 //#include "amd64.h"
 #include "distribution.hh"
 #include "spinbarrier.hh"

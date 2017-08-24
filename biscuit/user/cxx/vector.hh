@@ -1,5 +1,7 @@
 #pragma once
 
+#include "max_align.h"
+
 #include <cstddef>
 #include <initializer_list>
 #include <stdexcept>
