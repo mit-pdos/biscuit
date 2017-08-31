@@ -2332,7 +2332,7 @@ void polltest()
 	char *spath = "/tmp/pollsock";
 	struct sockaddr_un sa;
 	sa.sun_family = AF_UNIX;
-	snprintf(sa.sun_path, sizeof(sa.sun_path), spath);
+	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", spath);
 
 	unlink(spath);
 	if (bind(sock, (struct sockaddr *)&sa, SUN_LEN(&sa)) < 0)
