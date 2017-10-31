@@ -4107,6 +4107,7 @@ func net_init() {
 	bigtw._tcptimers_start()
 
 	nics.m = new(map[ip4_t]nic_i)
+	*nics.m = make(map[ip4_t]nic_i)
 	arptbl.m = make(map[ip4_t]*arprec_t)
 	arptbl.waiters = make(map[ip4_t][]chan bool)
 	arptbl.enttimeout = 20*time.Minute
