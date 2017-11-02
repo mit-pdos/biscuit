@@ -3518,13 +3518,18 @@ func log_daemon(l *log_t) {
 	maxblkspersys := 10
 	loggen := uint8(0)
 	for {
-		tickets := l.loglen / maxblkspersys
+		tickets := (l.loglen - l.lhead)/ maxblkspersys
 		adm := l.admission
 
 		done := false
 		given := 0
 		t := 0
 		waiters := 0
+
+                if l.loglen-l.lhead < maxblkspersys {
+                       panic("must flush. not enough space left")
+                }
+		
 		for !done {
 			select {
 			case nb := <- l.incoming:
@@ -3570,10 +3575,11 @@ func log_daemon(l *log_t) {
 				l.logreadret <- logread_t{had: had}
 			}
 		}
-		l.commit()
-		loggen++
-		// wake up waiters
-		if waiters > 0 {
+		if waiters > 0 || l.loglen-l.lhead < maxblkspersys {
+			fmt.Printf("commit %v %v\n", l.lhead, l.loglen)
+			l.commit()   // XX make asynchrounous
+			loggen++
+			// wake up waiters
 			go func() {
 				for i := 0; i < waiters; i++ {
 					l.commitwait <- true
