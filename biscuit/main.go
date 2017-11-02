@@ -3515,7 +3515,7 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	use_memfs()
+	// use_memfs()
 	rf := fs_init()
 
 	exec := func(cmd string, args []string) {
