@@ -2892,6 +2892,7 @@ func (x *ixgbe_t) _dbc_init() {
 // AHCI from sv6 from HiStar.
 //
 
+
 type ahci_reg_t struct {
 	cap uint32;		// host capabilities
 	ghc uint32;		// global host control
@@ -2906,6 +2907,7 @@ type ahci_reg_t struct {
 	bohc uint32;		// BIOS/OS handoff control and status
 }
 
+	
 type port_reg_t struct {
 	clb uint64		// command list base address
 	fb uint64		// FIS base address
@@ -3031,31 +3033,50 @@ type ahci_port_mem struct {
 
 const (
 	HBD_PORT_IPM_ACTIVE uint32 = 1
-	HBD_PORT_DET_PRESENT       = 3
+	HBD_PORT_DET_PRESENT uint32 = 3
 	
 	SATA_SIG_ATA                 = 0x00000101	// SATA drive
 
-	AHCI_GHC_AE		     = (1 << 31)        // Use AHCI to communicat
-	AHCI_GHC_IE		     = (1 << 1)         // Enable interrupts from AHCI
+	AHCI_GHC_AE uint32 = (1 << 31)        // Use AHCI to communicat
+	AHCI_GHC_IE uint32 = (1 << 1)         // Enable interrupts from AHCI
 	
-	AHCI_PORT_CMD_ST	= (1 << 0)	// start 
-	AHCI_PORT_CMD_SUD	= (1 << 1)	// spin-up device 
-	AHCI_PORT_CMD_POD	= (1 << 2)	// power on device 
-	AHCI_PORT_CMD_FRE	= (1 << 4)	// FIS receive enable 
-	AHCI_PORT_CMD_FR	= (1 << 14)	// FIS receive running 
-	AHCI_PORT_CMD_CR	= (1 << 15)	// command list running 
-	AHCI_PORT_CMD_ACTIVE	= (1 << 28)	// ICC active 
+	AHCI_PORT_CMD_ST uint32	= (1 << 0)	// start 
+	AHCI_PORT_CMD_SUD uint32 = (1 << 1)	// spin-up device 
+	AHCI_PORT_CMD_POD uint32 = (1 << 2)	// power on device 
+	AHCI_PORT_CMD_FRE uint32 = (1 << 4)	// FIS receive enable 
+	AHCI_PORT_CMD_FR uint32 = (1 << 14)	// FIS receive running 
+	AHCI_PORT_CMD_CR uint32 = (1 << 15)	// command list running 
+	AHCI_PORT_CMD_ACTIVE uint32 = (1 << 28)	// ICC active 
 )
 
+func LD (f *uint32) uint32 {
+	return atomic.LoadUint32(f)
+}
+
+func ST (f *uint32, v uint32) {
+	runtime.Store32(f, v)
+}
+
+func SET (f *uint32, v uint32) {
+	runtime.Store32(f, LD(f) | v)
+}
+
+func CLR (f *uint32, v uint32) {
+	n := LD(f) & ^v
+	runtime.Store32(f, n)
+}
+
+
 func (port *port_reg_t) init() bool {
-	if port.ssts & 0x0F != HBD_PORT_DET_PRESENT {
+
+	if LD(&port.ssts) & 0x0F != HBD_PORT_DET_PRESENT {
 		return false
 	}
-	if (port.ssts >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
+	if (LD(&port.ssts) >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
 		return false
 	}
 	// Only SATA drives
-	if port.sig != SATA_SIG_ATA {
+	if LD(&port.sig) != SATA_SIG_ATA {
 		return false
 	}
 
@@ -3065,18 +3086,18 @@ func (port *port_reg_t) init() bool {
 	// portmem := &ahci_port_mem{};
 
 	// Wait for port to quiesce:
-	if port.cmd & (AHCI_PORT_CMD_ST | AHCI_PORT_CMD_CR |
+	if LD(&port.cmd) & (AHCI_PORT_CMD_ST | AHCI_PORT_CMD_CR |
 		AHCI_PORT_CMD_FRE | AHCI_PORT_CMD_FR) != 0 {
 
-		port.cmd &^= AHCI_PORT_CMD_ST | AHCI_PORT_CMD_FRE;
+		CLR(&port.cmd, AHCI_PORT_CMD_ST | AHCI_PORT_CMD_FRE)
+
+		fmt.Printf("AHCI: port active, clearing ..\n")
 
 		c := 0
-		for port.cmd & (AHCI_PORT_CMD_CR | AHCI_PORT_CMD_FR) != 0 {
-			if c % 1000 == 0 {
-				fmt.Printf("AHCI: port active, clearing ..\n")
-			}
+		for LD(&port.cmd) & (AHCI_PORT_CMD_CR | AHCI_PORT_CMD_FR) != 0 {
 			c++
-			if c > 1000000000 {
+			// XXX longer ...
+			if c > 10000 {
 				fmt.Printf("AHCI: port still active, giving up\n")
 				return false
 			}
@@ -3118,17 +3139,17 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
-	d.ahci.ghc |= AHCI_GHC_AE;
+	SET(&d.ahci.ghc, AHCI_GHC_AE);
 
-	d.ncs = ((d.ahci.cap >> 8) &0x1f)+1
+	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
 	fmt.Printf("d.ahci %#x ncs %#x\n", d.ahci, d.ncs)
 
 	for i := 0; i < 32; i++ {
-		if d.ahci.pi & (1 << uint32(i)) != 0x0 {
+		if LD(&d.ahci.pi) & (1 << uint32(i)) != 0x0 {
 			d.probe_port(i)
 		}
 	}
 
-	d.ahci.ghc |= AHCI_GHC_IE;
+	SET(&d.ahci.ghc, AHCI_GHC_IE)
 }
 
