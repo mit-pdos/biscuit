@@ -3364,6 +3364,7 @@ func ialloc() (int, int) {
 
 // our actual disk
 var disk	disk_t
+//var disk1       disk_t
 
 type idebuf_t struct {
 	disk	int

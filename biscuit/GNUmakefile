@@ -183,6 +183,10 @@ qemu: gqemu
 qemux: gqemux
 qemu-gdb: gqemu-gdb
 
+QOPTS += -device ahci,id=ahci0 \
+	-drive file=go.img,if=none,format=raw,id=drive-sata0-0-0 \
+	-device ide-drive,drive=drive-sata0-0-0,id=sata0-0-0,bus=ahci0.0
+
 old_qemu: d.img
 	$(QEMU) $(QOPTS) -hda d.img
 

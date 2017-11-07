@@ -19,6 +19,7 @@ const (
 	_BAR2		= 0x18
 	_BAR3		= 0x1c
 	_BAR4		= 0x20
+	_BAR5           = 0x24
 )
 
 // width is width of the register in bytes
@@ -190,6 +191,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_DEV_PIIX3 := 0x7000
 	PCI_DEV_3400  := 0x3b20
 	PCI_DEV_X540T := 0x1528
+	PCI_DEV_AHCI := 0x2922
 
 	// map from vendor ids to a map of device ids to attach functions
 	alldevs := map[int]map[int]func(int, int, pcitag_t) {
@@ -197,6 +199,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 			PCI_DEV_PIIX3 : attach_piix3,
 			PCI_DEV_3400 : attach_3400,
 			PCI_DEV_X540T: attach_ixgbe,
+			PCI_DEV_AHCI: attach_ahci,
 			},
 		}
 
@@ -2884,3 +2887,248 @@ func (x *ixgbe_t) _dbc_init() {
 	v &^= rrm | rac
 	x.rs(RTRPCS, v)
 }
+
+//
+// AHCI from sv6 from HiStar.
+//
+
+type ahci_reg_t struct {
+	cap uint32;		// host capabilities
+	ghc uint32;		// global host control
+	is uint32;		// interrupt status
+	pi uint32;		// ports implemented
+	vs uint32;		// version
+	ccc_ctl uint32;		// command completion coalescing control
+	ccc_ports uint32;       // command completion coalescing ports
+	em_loc uint32;		// enclosure management location
+	em_ctl uint32;		// enclosure management control
+	cap2 uint32;		// extended host capabilities
+	bohc uint32;		// BIOS/OS handoff control and status
+}
+
+type port_reg_t struct {
+	clb uint64		// command list base address
+	fb uint64		// FIS base address
+	is uint32		// interrupt status
+	ie uint32		// interrupt enable
+	cmd uint32		// command and status
+	reserved uint32
+	tfd uint32		// task file data
+	sig uint32		// signature
+	ssts uint32		// sata phy status: SStatus
+	sctl uint32		// sata phy control: SControl
+	serr uint32		// sata phy error: SError
+	sact uint32		// sata phy active: SActive
+	ci uint32		// command issue
+	sntf uint32		// sata phy notification: SNotify
+	fbs uint32            // FIS-based switching control
+};
+
+type ahci_disk_t struct {
+	bara int
+	ahci *ahci_reg_t
+	ncs uint32
+	ports [32]*ahci_port_t
+}
+
+type ahci_port_t struct {
+	port *port_reg_t
+	num_cmdslots int
+	cmd_issued int
+	las_cmdslot int
+}
+
+type sata_fis_reg_h2d struct {
+	fis_type uint8
+	cflag uint8
+	command uint8
+	features uint8
+
+	lba_0 uint8
+	lba_1 uint8
+	lba_2 uint8
+	dev_head uint8
+
+	lba_3 uint8
+	lba_4 uint8
+	lba_5 uint8
+	features_ex uint8
+
+	sector_count uint8
+	sector_count_ex uint8
+	__pad1 uint8
+	control uint8
+
+	__pad2 [4]uint8
+}
+
+type sata_fis_reg_d2h struct {
+	fis_type uint8
+	cflag uint8
+	status uint8
+	error uint8
+	
+	lba_0 uint8
+	lba_1 uint8
+	lba_2 uint8
+	dev_head uint8
+
+	lba_3 uint8
+	lba_4 uint8
+	lba_5 uint8
+	features_ex uint8
+
+	sector_count uint8
+	sector_count_ex uint8
+	__pad1 uint8
+	control uint8
+
+	__pad2 [4]uint8
+}
+
+type ahci_recv_fis struct {
+	dsfis [0x20]uint8	// DMA setup FIS
+	psfis [0x20]uint8	// PIO setup FIS
+	reg sata_fis_reg_d2h	// D2H register FIS
+	_pad [0x4]uint8
+	sdbfis [0x8]uint8	// set device bits FIS
+	ufis [0x40]uint8	// unknown FIS
+	reserved [0x60]uint8
+}
+
+type ahci_cmd_header struct {
+	flags uint16
+	prdtl uint16
+	prdbc uint32
+	ctba uint64
+	reserved0 uint64
+	reserved1 uint64
+}
+
+type ahci_prd struct {
+	dba uint64
+	reserved uint32
+	dbc uint32		// one less than #bytes
+}
+
+const MAX_PRD_ENTRIES int = 65536
+
+type ahci_cmd_table struct {
+	cfis [0x40]uint8		// command FIS
+	acmd [0x10]uint8		// ATAPI command
+	reserved [0x30]uint8
+	prdt [MAX_PRD_ENTRIES]ahci_prd
+}
+
+
+type ahci_port_mem struct {
+  rfis ahci_recv_fis 
+  pad [0x300]uint8
+
+  cmdh [32]ahci_cmd_header
+  cmdt [32]ahci_cmd_table
+};
+
+const (
+	HBD_PORT_IPM_ACTIVE uint32 = 1
+	HBD_PORT_DET_PRESENT       = 3
+	
+	SATA_SIG_ATA                 = 0x00000101	// SATA drive
+
+	AHCI_GHC_AE		     = (1 << 31)        // Use AHCI to communicat
+	AHCI_GHC_IE		     = (1 << 1)         // Enable interrupts from AHCI
+	
+	AHCI_PORT_CMD_ST	= (1 << 0)	// start 
+	AHCI_PORT_CMD_SUD	= (1 << 1)	// spin-up device 
+	AHCI_PORT_CMD_POD	= (1 << 2)	// power on device 
+	AHCI_PORT_CMD_FRE	= (1 << 4)	// FIS receive enable 
+	AHCI_PORT_CMD_FR	= (1 << 14)	// FIS receive running 
+	AHCI_PORT_CMD_CR	= (1 << 15)	// command list running 
+	AHCI_PORT_CMD_ACTIVE	= (1 << 28)	// ICC active 
+)
+
+func (port *port_reg_t) init() bool {
+	if port.ssts & 0x0F != HBD_PORT_DET_PRESENT {
+		return false
+	}
+	if (port.ssts >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
+		return false
+	}
+	// Only SATA drives
+	if port.sig != SATA_SIG_ATA {
+		return false
+	}
+
+	// XXX Round up the size to make it an integral multiple of PGSIZE.
+	// Crashes on boot otherwise.
+	// size_t portmem_size = (sizeof(ahci_port_mem) + PGSIZE-1) & ~(PGSIZE-1);
+	// portmem := &ahci_port_mem{};
+
+	// Wait for port to quiesce:
+	if port.cmd & (AHCI_PORT_CMD_ST | AHCI_PORT_CMD_CR |
+		AHCI_PORT_CMD_FRE | AHCI_PORT_CMD_FR) != 0 {
+
+		port.cmd &^= AHCI_PORT_CMD_ST | AHCI_PORT_CMD_FRE;
+
+		c := 0
+		for port.cmd & (AHCI_PORT_CMD_CR | AHCI_PORT_CMD_FR) != 0 {
+			if c % 1000 == 0 {
+				fmt.Printf("AHCI: port active, clearing ..\n")
+			}
+			c++
+			if c > 1000000000 {
+				fmt.Printf("AHCI: port still active, giving up\n")
+				return false
+			}
+		}
+	}
+
+	// Initialize memory buffers
+	for cmdslot := 0; cmdslot < 32; cmdslot++ {
+		// portmem.cmdh[cmdslot].ctba = v2p((void*) &portmem.cmdt[cmdslot]);
+	}
+
+  // port.clb = v2p((void*) &portmem->cmdh);
+  // port.fb = v2p((void*) &portmem->rfis);
+  // port.ci = 0;
+
+  // /* Clear any errors first, otherwise the chip wedges
+  // port.serr = ~0;
+  // port.serr = 0;
+
+
+	return true
+}
+
+func (ahci *ahci_disk_t) probe_port(pid int) {
+	p := &ahci_port_t{}
+	a := ahci.bara + 0x100 + 0x80 * pid
+	m := dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
+	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
+	if p.port.init() {
+		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
+		ahci.ports[pid] = p
+	}
+}
+
+func attach_ahci(vid, did int, t pcitag_t) {
+	d := &ahci_disk_t{}
+	d.bara = pci_read(t, _BAR5, 4)
+	fmt.Printf("attach AHCI disk %#x %#x %#x\n", did, _BAR5, d.bara)
+	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
+	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
+
+	d.ahci.ghc |= AHCI_GHC_AE;
+
+	d.ncs = ((d.ahci.cap >> 8) &0x1f)+1
+	fmt.Printf("d.ahci %#x ncs %#x\n", d.ahci, d.ncs)
+
+	for i := 0; i < 32; i++ {
+		if d.ahci.pi & (1 << uint32(i)) != 0x0 {
+			d.probe_port(i)
+		}
+	}
+
+	d.ahci.ghc |= AHCI_GHC_IE;
+}
+
