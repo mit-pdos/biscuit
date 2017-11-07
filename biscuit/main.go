@@ -1427,25 +1427,11 @@ func (p *proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	return bpg[voff:], true
 }
 
-// _userdmap8 and userdmap8r functions must only be used if concurrent
-// modifications to the proc_t's address space is impossible.
-func (p *proc_t) _userdmap8(va int, k2u bool) ([]uint8, bool) {
+func (p *proc_t) userdmap8r(va int) ([]uint8, bool) {
 	p.Lock_pmap()
-	ret, ok := p.userdmap8_inner(va, k2u)
+	ret, ok := p.userdmap8_inner(va, false)
 	p.Unlock_pmap()
 	return ret, ok
-}
-
-func (p *proc_t) userdmap8r(va int) ([]uint8, bool) {
-	return p._userdmap8(va, false)
-}
-
-func (p *proc_t) usermapped(va, n int) bool {
-	p.Lock_pmap()
-	defer p.Unlock_pmap()
-
-	_, ok := p.vmregion.lookup(uintptr(va))
-	return ok
 }
 
 func (p *proc_t) userreadn(va, n int) (int, bool) {
