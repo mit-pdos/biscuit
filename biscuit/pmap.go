@@ -953,6 +953,16 @@ func dmap(p pa_t) *pg_t {
 	return (*pg_t)(unsafe.Pointer(v))
 }
 
+func dmap_v2p(v *pg_t) pa_t {
+	va := (uintptr)(unsafe.Pointer(v))
+	if va <= 1 << 39 {
+		panic("address isn't in the direct map")
+	}
+
+	pa := va - _vdirect
+	return pa_t(pa)
+}
+
 // returns a byte aligned virtual address for the physical address as slice of
 // uint8s
 func dmap8(p pa_t) []uint8 {
