@@ -2929,15 +2929,9 @@ type port_reg_t struct {
 type ahci_disk_t struct {
 	bara int
 	ahci *ahci_reg_t
-	ncs uint32
+	ncs uint16
+	nsectors uint64
 	ports [32]*ahci_port_t
-}
-
-type ahci_port_t struct {
-	port *port_reg_t
-	num_cmdslots int
-	cmd_issued int
-	las_cmdslot int
 }
 
 type sata_fis_reg_h2d struct {
@@ -3013,23 +3007,54 @@ type ahci_prd struct {
 	dbc uint32		// one less than #bytes
 }
 
-const MAX_PRD_ENTRIES int = 65536
+const MAX_PRD_ENTRIES int = 2
 
 type ahci_cmd_table struct {
-	cfis [0x40]uint8		// command FIS
+	cfis [0x10]uint32		// command FIS
 	acmd [0x10]uint8		// ATAPI command
 	reserved [0x30]uint8
 	prdt [MAX_PRD_ENTRIES]ahci_prd
 }
 
 
-type ahci_port_mem struct {
-  rfis ahci_recv_fis 
-  pad [0x300]uint8
+type ahci_port_t struct {
+	port *port_reg_t
+	num_cmdslots int
+	cmd_issued int
+	las_cmdslot int
+	rfis_pa uintptr
+	rfis *ahci_recv_fis
+	cmdh_pa uintptr
+	cmdh *[32]ahci_cmd_header
+	cmdt_pa uintptr
+	cmdt *[32]ahci_cmd_table
+}
 
-  cmdh [32]ahci_cmd_header
-  cmdt [32]ahci_cmd_table
-};
+type identify_device struct {
+	pad0 [10]uint16         // Words 0-9
+	serial [20]uint8        // Words 10-19
+	pad1 [3]uint16          // Words 20-22
+	firmware [8]uint8       // Words 23-26
+	model [40]uint8         // Words 27-46
+	pad2 [13]uint16         // Words 47-59
+	lba_sectors uint32      // Words 60-61, assuming little-endian
+	pad3 [13]uint16         // Words 62-74
+	queue_depth uint16      // Word 75
+	sata_caps uint16        // Word 76
+	pad4 [9]uint16          // Words 77-85
+	features86 uint16       // Word 86
+	features87 uint16       // Word 87
+	udma_mode uint16        // Word 88
+	pad5 [4]uint16          // Words 89-92
+	hwreset uint16          // Word 93
+	pad6 [6]uint16          // Words 94-99
+	lba48_sectors uint64    // Words 100-104, assuming little-endian
+}
+
+type kiovec struct {
+	pa uint64
+	len uint64
+}
 
 const (
 	HBD_PORT_IPM_ACTIVE uint32 = 1
@@ -3046,55 +3071,103 @@ const (
 	AHCI_PORT_CMD_FRE uint32 = (1 << 4)	// FIS receive enable 
 	AHCI_PORT_CMD_FR uint32 = (1 << 14)	// FIS receive running 
 	AHCI_PORT_CMD_CR uint32 = (1 << 15)	// command list running 
-	AHCI_PORT_CMD_ACTIVE uint32 = (1 << 28)	// ICC active 
+	AHCI_PORT_CMD_ACTIVE uint32 = (1 << 28)	// ICC active
+
+
+	AHCI_PORT_INTR_DPE         = (1 << 5)  // Descriptor (PRD) processed 
+	AHCI_PORT_INTR_SDBE        = (1 << 3)  // Set Device Bits FIS received
+	AHCI_PORT_INTR_DSE         = (1 << 2)  // DMA Setup FIS received
+	AHCI_PORT_INTR_PSE         = (1 << 1)  // PIO Setup FIS received
+	AHCI_PORT_INTR_DHRE        = (1 << 0)  // D2H Register FIS received
+
+	AHCI_PORT_INTR_DEFAULT  = AHCI_PORT_INTR_DPE | AHCI_PORT_INTR_SDBE |
+                               AHCI_PORT_INTR_DSE | AHCI_PORT_INTR_PSE  |
+                               AHCI_PORT_INTR_DHRE
+
+	SATA_FIS_TYPE_REG_H2D uint8 = 0x27
+	SATA_FIS_TYPE_REG_D2H uint8 = 0x34
+	SATA_FIS_REG_CFLAG uint8 = (1 << 7)      // issuing new command
+
+	IDE_CMD_IDENTIFY uint8 = 0xec
+	IDE_FEATURE86_LBA48 uint16 = (1 << 10)
+	IDE_STAT_BSY uint32 = 0x80
+
+	IDE_SATA_NCQ_SUPPORTED  = (1 << 8)
+	IDE_SATA_NCQ_QUEUE_DEPTH = 0x1f
 )
 
-func LD (f *uint32) uint32 {
+func LD(f *uint32) uint32 {
 	return atomic.LoadUint32(f)
 }
 
-func ST (f *uint32, v uint32) {
-	runtime.Store32(f, v)
+func LD64(f *uint64) uint64 {
+	return atomic.LoadUint64(f)
 }
 
-func SET (f *uint32, v uint32) {
+func LD32(f *uint32) uint32 {
+	return atomic.LoadUint32(f)
+}
+
+func ST(f *uint32, v uint32) {
+	atomic.StoreUint32(f, v)
+}
+
+func ST16(f *uint16, v uint16) {
+	a := (*uint32)(unsafe.Pointer(f))
+	v32 := LD(a)
+	SET(a, (v32 & 0x0000) | uint32(v))
+}
+
+func LD16(f *uint16) uint16 {
+	a := (*uint32)(unsafe.Pointer(f))
+	v := LD(a)
+	return uint16 (v & 0xFFFF)
+}
+
+func ST64(f *uint64, v uint64) {
+	atomic.StoreUint64(f, v)
+}
+
+func SET(f *uint32, v uint32) {
 	runtime.Store32(f, LD(f) | v)
 }
 
-func CLR (f *uint32, v uint32) {
+func CLR(f *uint32, v uint32) {
 	n := LD(f) & ^v
 	runtime.Store32(f, n)
 }
 
+func (p *ahci_port_t) pg_new() (*pg_t, pa_t) {
+	a, b, ok := refpg_new()
+	if !ok {
+		panic("oom during port pg_new")
+	}
+	refup(b)
+	return a, b
+}
 
-func (port *port_reg_t) init() bool {
-
-	if LD(&port.ssts) & 0x0F != HBD_PORT_DET_PRESENT {
+func (p *ahci_port_t) init() bool {
+	if LD(&p.port.ssts) & 0x0F != HBD_PORT_DET_PRESENT {
 		return false
 	}
-	if (LD(&port.ssts) >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
+	if (LD(&p.port.ssts) >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
 		return false
 	}
 	// Only SATA drives
-	if LD(&port.sig) != SATA_SIG_ATA {
+	if LD(&p.port.sig) != SATA_SIG_ATA {
 		return false
 	}
 
-	// XXX Round up the size to make it an integral multiple of PGSIZE.
-	// Crashes on boot otherwise.
-	// size_t portmem_size = (sizeof(ahci_port_mem) + PGSIZE-1) & ~(PGSIZE-1);
-	// portmem := &ahci_port_mem{};
-
 	// Wait for port to quiesce:
-	if LD(&port.cmd) & (AHCI_PORT_CMD_ST | AHCI_PORT_CMD_CR |
+	if LD(&p.port.cmd) & (AHCI_PORT_CMD_ST | AHCI_PORT_CMD_CR |
 		AHCI_PORT_CMD_FRE | AHCI_PORT_CMD_FR) != 0 {
 
-		CLR(&port.cmd, AHCI_PORT_CMD_ST | AHCI_PORT_CMD_FRE)
+		CLR(&p.port.cmd, AHCI_PORT_CMD_ST | AHCI_PORT_CMD_FRE)
 
 		fmt.Printf("AHCI: port active, clearing ..\n")
 
 		c := 0
-		for LD(&port.cmd) & (AHCI_PORT_CMD_CR | AHCI_PORT_CMD_FR) != 0 {
+		for LD(&p.port.cmd) & (AHCI_PORT_CMD_CR | AHCI_PORT_CMD_FR) != 0 {
 			c++
 			// XXX longer ...
 			if c > 10000 {
@@ -3104,21 +3177,144 @@ func (port *port_reg_t) init() bool {
 		}
 	}
 
+	// Allocate memory for rfis
+	_, pa := p.pg_new()
+	if int(unsafe.Sizeof(*p.rfis)) > PGSIZE {
+		panic("not enough mem for rfis")
+	}
+	p.rfis_pa = uintptr(pa)
+
+	// Allocate memory for cmdh
+	_, pa = p.pg_new()
+	if int(unsafe.Sizeof(*p.cmdh)) > PGSIZE {
+		panic("not enough mem for cmdh")
+	}
+	p.cmdh_pa = uintptr(pa)
+	p.cmdh = (*[32]ahci_cmd_header)(unsafe.Pointer(dmap(pa)))
+
+	// Allocate memory for cmdt
+	_, pa = p.pg_new()  // XXX need to get a few physical pages in row
+
+	// if int(unsafe.Sizeof(*p.cmdt)) > PGSIZE {
+	//	panic("not enough mem cmdt")
+	//}
+	p.cmdt_pa = uintptr(pa)
+	p.cmdt = (*[32]ahci_cmd_table)(unsafe.Pointer(dmap(pa)))
+	
 	// Initialize memory buffers
 	for cmdslot := 0; cmdslot < 32; cmdslot++ {
-		// portmem.cmdh[cmdslot].ctba = v2p((void*) &portmem.cmdt[cmdslot]);
+		v := &p.cmdt[cmdslot]
+		pa := dmap_v2p((*pg_t)(unsafe.Pointer(v)))
+		p.cmdh[cmdslot].ctba = (uint64)(pa)
 	}
 
-  // port.clb = v2p((void*) &portmem->cmdh);
-  // port.fb = v2p((void*) &portmem->rfis);
-  // port.ci = 0;
+	ST64(&p.port.clb, uint64(p.cmdh_pa))
+	ST64(&p.port.fb, uint64(p.rfis_pa))
+        ST(&p.port.ci, 0)
+	// Clear any errors first, otherwise the chip wedges
+	CLR(&p.port.serr, 0xFFFF)
+	ST(&p.port.serr, 0)
 
-  // /* Clear any errors first, otherwise the chip wedges
-  // port.serr = ~0;
-  // port.serr = 0;
+	SET(&p.port.cmd, AHCI_PORT_CMD_FRE | AHCI_PORT_CMD_ST |
+               AHCI_PORT_CMD_SUD | AHCI_PORT_CMD_POD |
+               AHCI_PORT_CMD_ACTIVE)
 
-
+	phystat := LD(&p.port.ssts)
+	if (phystat == 0) {
+		fmt.Printf("AHCI: port not connected\n");
+		return false
+	}
 	return true
+}
+
+func (p *ahci_port_t) identify() (*identify_device, bool) {
+	fis := &sata_fis_reg_h2d{}
+	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
+	fis.cflag = SATA_FIS_REG_CFLAG;
+	fis.command = IDE_CMD_IDENTIFY;
+	fis.sector_count = 1;
+
+	// To receive the identity 
+	_, pa, ok := refpg_new()   // free the page on return
+	if !ok {
+		return nil, false
+	}
+	p.fill_prd(0, uint64(pa), uint64(PGSIZE))
+	p.fill_fis(0, fis)
+
+	ST(&p.port.ci, uint32(1))
+
+	if !p.wait() {
+		fmt.Printf("timeout waiting for identity\n")
+		return nil, false
+	}
+
+	id := (*identify_device)(unsafe.Pointer(dmap(pa)))
+	if LD16(&id.features86) & IDE_FEATURE86_LBA48 == 0 {
+		fmt.Printf("AHCI: disk too small, driver requires LBA48\n");
+		return nil, false
+	}
+
+	ret_id := &identify_device{}
+	*ret_id = *id
+	
+	// XXX maybe load the struct this way?
+	// id1 := (*[unsafe.Sizeof(*id)/4]uint32)(unsafe.Pointer(id))
+	// for i := 0; i < len(id1); i++ {
+	// 	fmt.Printf("%#x ", LD(&id1[i]))
+	// }
+
+	return ret_id, true
+}
+
+func (p *ahci_port_t) wait() bool {
+	for c := 0; c < 10; c++ {
+		c++
+		stat := LD(&p.port.tfd) & 0xff
+		ci := LD(&p.port.ci) & 0x1
+		if stat&IDE_STAT_BSY == 0 && ci == 0 {
+			return true
+		}
+		fmt.Printf("wait: ..\n")
+		
+	}
+	return false
+}
+
+func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
+	if unsafe.Sizeof(*fis) != 20 {
+		panic("fill_fis: fis wrong length")
+	}
+	f := (*[5]uint32)(unsafe.Pointer(fis))
+	for i := 0; i < len(f); i++ {
+		ST(&p.cmdt[cmdslot].cfis[i], f[i])
+	}
+	ST16(&p.cmdh[cmdslot].flags, uint16(20))
+	fmt.Printf("fis %#x\n", fis)
+}
+
+func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
+	nbytes := uint64(0)
+	cmd := &p.cmdt[cmdslot];
+	for slot := 0; slot < len(iov); slot++ {
+		ST64(&cmd.prdt[slot].dba, iov[slot].pa)
+		ST(&cmd.prdt[slot].dbc, uint32(iov[slot].len - 1))
+		SET(&cmd.prdt[slot].dbc, 1 << 31)
+		nbytes += iov[slot].len;
+	}
+
+	ST16(&p.cmdh[cmdslot].prdtl, uint16(len(iov)));
+	return nbytes;
+}
+
+func (p *ahci_port_t) fill_prd(cmdslot int, addr uint64, nbytes uint64) {
+	io := kiovec{addr, nbytes}
+	iov := []kiovec{io}
+	p.fill_prd_v(cmdslot, iov)
+}
+
+func (p *ahci_port_t) enable_interrupt() {
+	ST(&p.port.ie, AHCI_PORT_INTR_DEFAULT)
 }
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
@@ -3126,9 +3322,27 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	a := ahci.bara + 0x100 + 0x80 * pid
 	m := dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
-	if p.port.init() {
+	if p.init() {
 		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
 		ahci.ports[pid] = p
+		id, ok := p.identify()
+		if ok {
+			ahci.nsectors = LD64(&id.lba48_sectors)
+			fmt.Printf("AHCI: sectors %#x\n", ahci.nsectors);
+			if (id.sata_caps & IDE_SATA_NCQ_SUPPORTED == 0) {
+				fmt.Printf("AHCI: SATA Native Command Queuing not supported\n");
+				return;
+			}
+			nslots := 1 + (id.queue_depth & IDE_SATA_NCQ_QUEUE_DEPTH)
+			fmt.Printf("AHCI: slots %v\n", nslots)
+			if (nslots < ahci.ncs) {
+				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
+				nslots, ahci.ncs)
+			}
+			// XXX enable write caching and read-ahead
+			// XXX enable interrupts
+
+		}
 	}
 }
 
@@ -3141,7 +3355,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
 
-	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
+	d.ncs = uint16(((LD(&d.ahci.cap) >> 8) & 0x1f)+1)
 	fmt.Printf("d.ahci %#x ncs %#x\n", d.ahci, d.ncs)
 
 	for i := 0; i < 32; i++ {
