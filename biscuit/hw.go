@@ -3007,7 +3007,7 @@ type ahci_prd struct {
 	dbc uint32		// one less than #bytes
 }
 
-const MAX_PRD_ENTRIES int = 2
+const MAX_PRD_ENTRIES int = 65536
 
 type ahci_cmd_table struct {
 	cfis [0x10]uint32		// command FIS
@@ -3192,12 +3192,19 @@ func (p *ahci_port_t) init() bool {
 	p.cmdh_pa = uintptr(pa)
 	p.cmdh = (*[32]ahci_cmd_header)(unsafe.Pointer(dmap(pa)))
 
-	// Allocate memory for cmdt
-	_, pa = p.pg_new()  // XXX need to get a few physical pages in row
-
-	// if int(unsafe.Sizeof(*p.cmdt)) > PGSIZE {
-	//	panic("not enough mem cmdt")
-	//}
+	// Allocate memory for cmdt, which spans several physical pages that
+	// must be consecutive. pg_new() returns physical pages during boot
+	// consecutively (in increasing order).
+	n :=  int(unsafe.Sizeof(*p.cmdt))/PGSIZE + 1
+	fmt.Printf("AHCI: size cmdt %v pages %v\n", unsafe.Sizeof(*p.cmdt), n)
+	_, pa = p.pg_new()
+	pa1 := pa
+	for i := 1; i < n; i++ {
+		_, pa1 = p.pg_new()
+		if int(pa1 - pa) != PGSIZE*i {
+			panic("AHCI: port init phys page not in order")
+		}
+	}
 	p.cmdt_pa = uintptr(pa)
 	p.cmdt = (*[32]ahci_cmd_table)(unsafe.Pointer(dmap(pa)))
 	
@@ -3245,7 +3252,7 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 	ST(&p.port.ci, uint32(1))
 
 	if !p.wait() {
-		fmt.Printf("timeout waiting for identity\n")
+		fmt.Printf("AHCI: timeout waiting for identity\n")
 		return nil, false
 	}
 
@@ -3275,7 +3282,7 @@ func (p *ahci_port_t) wait() bool {
 		if stat&IDE_STAT_BSY == 0 && ci == 0 {
 			return true
 		}
-		fmt.Printf("wait: ..\n")
+		fmt.Printf("AHCI: wait: ..\n")
 		
 	}
 	return false
@@ -3290,7 +3297,7 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 		ST(&p.cmdt[cmdslot].cfis[i], f[i])
 	}
 	ST16(&p.cmdh[cmdslot].flags, uint16(20))
-	fmt.Printf("fis %#x\n", fis)
+	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
 func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
@@ -3339,8 +3346,8 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
 				nslots, ahci.ncs)
 			}
+			// XXX p.enable_interrupt()
 			// XXX enable write caching and read-ahead
-			// XXX enable interrupts
 
 		}
 	}
