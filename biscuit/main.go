@@ -3408,6 +3408,7 @@ func phys_init() {
 	physmem.pmaps = ^uint32(0)
 	physmem.pgs[0].refcnt = 0
 	physmem.pgs[0].nexti = ^uint32(0)
+	last := physmem.freei
 	for i := 0; i < respgs - 1; i++ {
 		p_pg := pa_t(runtime.Get_phys())
 		pgn := _pg2pgn(p_pg)
@@ -3420,8 +3421,9 @@ func phys_init() {
 			break
 		}
 		physmem.pgs[idx].refcnt = 0
-		physmem.pgs[idx].nexti = physmem.freei
-		physmem.freei = idx
+		physmem.pgs[last].nexti = idx;
+		physmem.pgs[idx].nexti =  ^uint32(0)
+		last = idx
 	}
 	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs >> 8)
 }
