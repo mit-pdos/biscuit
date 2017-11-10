@@ -3577,10 +3577,14 @@ func log_daemon(l *log_t) {
 				l.logreadret <- logread_t{had: had}
 			}
 		}
+		// XXX because writei doesn't break big writes up in smaller transactions
+		// commit every transaction, instead of inside the if statement below
+		l.commit()
+		loggen++
 		if waiters > 0 || l.loglen-l.lhead < maxblkspersys {
 			fmt.Printf("commit %v %v\n", l.lhead, l.loglen)
-			l.commit()   // XX make asynchrounous
-			loggen++
+			// l.commit()   // XX make asynchrounous
+			// loggen++
 			// wake up waiters
 			go func() {
 				for i := 0; i < waiters; i++ {
