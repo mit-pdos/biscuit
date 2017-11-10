@@ -3101,6 +3101,7 @@ const (
 	SATA_FIS_REG_CFLAG uint8 = (1 << 7)      // issuing new command
 
 	IDE_CMD_READ_DMA_EXT uint8 = 0x25
+	IDE_CMD_WRITE_DMA_EXT uint8 = 0x35
 	IDE_CMD_IDENTIFY uint8 = 0xec
 
 	IDE_DEV_LBA = 0x40
@@ -3373,9 +3374,6 @@ func (p *ahci_port_t) find_cmdslot() uint32 {
 
 
 func (p *ahci_port_t) start(ibuf *idebuf_t, writing bool) {
-	if writing {
-		panic("AHCI: no writing yet")
-	}
 	s := p.find_cmdslot()
 
 	if p.inprogress {
@@ -3388,11 +3386,17 @@ func (p *ahci_port_t) start(ibuf *idebuf_t, writing bool) {
 	}
 	io := kiovec{uint64(p.block_pa), uint64(len(*ibuf.data))}
 	iov := []kiovec{io}
-	p.issue(s, iov, uint64(ibuf.block), IDE_CMD_READ_DMA_EXT)
+	if writing {
+		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_WRITE_DMA_EXT)
+	} else {
+		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_READ_DMA_EXT)
+	}
 
 	if !p.wait(s) {
-		panic("AHCI: timeout waiting for read\n")
+		panic("AHCI: timeout waiting for read/write\n")
 	}
+	
+	// XXX simulate interrupt done
 	go func() {
 		// fmt.Printf("intr done\n")
 		ide_int_done <- true
@@ -3518,8 +3522,20 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 func disk_test() {
 	tmp := new([512]uint8)
-	for b := 0; b < 1000; b++ {
+	tmp1 := new([512]uint8)
+	for b := 0; b < 10; b++ {
 		fmt.Printf("b %#x\n", b)
 		bdev_read(b, tmp)
 	}
+	for i,_ := range tmp {
+		tmp[i] = 1
+	}
+	bdev_write(0, tmp)
+	bdev_read(0, tmp1)
+	for i, v := range tmp1 {
+		if tmp[i] != v {
+			panic("disk_test\n")
+		}
+	}
+	
 }
