@@ -1,14 +1,22 @@
 /*
  * TODO
+ * - count ssa.Make{Slice, Closure, Chan, Interface, Map}?
+ * - account for append and any other builtins that may affect the analysis
+ */
+
+/*
+ * TO USE
+ * - make sure the looping calls that this tool ignores are actually prevented
+ *   at runtime (this was the case at the time of writing)
  */
 package main
 
 import "fmt"
-import "bufio"
-import "strconv"
-import _"time"
+import _"bufio"
+import _"strconv"
+import "time"
 import "strings"
-import "os"
+import _"os"
 import "sort"
 import "go/token"
 import "go/types"
@@ -138,6 +146,18 @@ func (c *calls_t) dump() {
 	c.dump1(0)
 }
 
+func human(_bytes int) string {
+	bytes := float64(_bytes)
+	div := float64(1)
+	order := 0
+	for bytes / div > 1024 {
+		div *= 1024
+		order++
+	}
+	sufs := map[int]string{0: "B", 1: "kB", 2: "MB", 3: "GB", 4: "TB"}
+	return fmt.Sprintf("%.2f%s", float64(bytes) / div, sufs[order])
+}
+
 func (c *calls_t) dump1(depth int) {
 	for i := 0; i < depth; i++ {
 		fmt.Printf("  ")
@@ -146,7 +166,7 @@ func (c *calls_t) dump1(depth int) {
 	if c.looper {
 		lop = "=L"
 	}
-	fmt.Printf("%c %s [%v]%s\n", 'A' + depth, c.me, c.csum, lop)
+	fmt.Printf("%c %s [%v]%s\n", 'A' + depth, c.me, human(c.csum), lop)
 	for i := range c.calls {
 		c.calls[i].dump1(depth + 1)
 	}
@@ -161,7 +181,9 @@ func ignore(f *ssa.Function, cs *callstack_t) bool {
 	me := realname(f)
 	//for _, t := range []string{".memreclaim", "fmt.", ".mbempty", ".mbread", ".ibread"} {
 	//for _, t := range []string{"fmt.", ".evict", "pgcache_t).release"} {
-	for _, t := range []string{"fmt.", "mbempty", "mbread", "memreclaim"} {
+	for _, t := range []string{"fmt.", "mbempty", "mbread", "memreclaim", "ibread"} {
+	//for _, t := range []string{"fmt.", "mbempty", "mbread", "memreclaim", "do_mmapi", "iunlock",
+	//    "pgraw", "seg_maybe", "ptefork"} {
 	//for _, t := range []string{"fmt."} {
 		if strings.Contains(me, t) {
 			return true
@@ -183,12 +205,14 @@ func ignore(f *ssa.Function, cs *callstack_t) bool {
 	return false
 }
 
+var funcvisit = map[*callgraph.Node]bool{}
+
 var memos = map[*callgraph.Node]*calls_t{}
 
 func maxcall(tnode *callgraph.Node, target *ssa.CallCommon, cs *callstack_t) (*calls_t, bool) {
+	var calls *calls_t
 	found := false
 	var max int
-	var calls *calls_t
 	for _, e := range tnode.Out {
 		// XXX how to identify the particular call instruction from
 		// ssa.CallInstruction provided by callgraph.Edge? is comparing
@@ -197,15 +221,10 @@ func maxcall(tnode *callgraph.Node, target *ssa.CallCommon, cs *callstack_t) (*c
 		if tt != target {
 			continue
 		}
-		if tedge := callgraph.PathSearch(e.Callee,
-		    func(n *callgraph.Node) bool {
-			return n.ID == tnode.ID
-		    }); tedge != nil {
-			fmt.Printf("LOOP AVOID %v %v\n", tnode.Func,
-			    e.Callee.Func)
-			for _, dur := range tedge {
-				fmt.Printf("\t%v -> %v\n", dur.Caller.Func,
-				    dur. Callee.Func)
+		if funcvisit[e.Callee] {
+			fmt.Printf("LOOP AVOID %v %v\n", tnode.Func, e.Callee.Func)
+			for _, e := range cs.cs {
+				fmt.Printf("\t%v\n", e)
 			}
 			continue
 		}
@@ -304,17 +323,18 @@ func calcexit(node *callgraph.Node, cur *ssa.BasicBlock, cs *callstack_t) *enode
 		if !ok {
 			panic("no")
 		}
-again:
+//again:
 		fmt.Printf("WHAT IS BOUND at %v (%vk)?\n", sline, ret.loopalloc >> 10)
-		dur := bufio.NewReader(os.Stdin)
-		str, err := dur.ReadString('\n')
-		if err != nil {
-			goto again
-		}
-		iterinput, err = strconv.Atoi(str[:len(str) - 1])
-		if err != nil {
-			goto again
-		}
+		iterinput = 10
+		//dur := bufio.NewReader(os.Stdin)
+		//str, err := dur.ReadString('\n')
+		//if err != nil {
+		//	goto again
+		//}
+		//iterinput, err = strconv.Atoi(str[:len(str) - 1])
+		//if err != nil {
+		//	goto again
+		//}
 	} else {
 		iterinput = 0
 	}
@@ -366,7 +386,7 @@ func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
 		if blk == exitblk {
 			panic("should have terminated before")
 		}
-		fmt.Printf("%v NOPPER\n", node.Func)
+		//fmt.Printf("%v NOPPER\n", node.Func)
 		return newcalls("NOLOOP")
 	}
 	visit[blk] = true
@@ -375,6 +395,9 @@ func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
 	var ret int
 	for _, ip := range blk.Instrs {
 		switch v := ip.(type) {
+		//case *ssa.Go:
+		//	sl := node.Func.Prog.Fset.Position(v.Pos())
+		//	fmt.Printf("IGNORE GO SUM %v\n", sl)
 		case ssa.CallInstruction:
 			// find which function for this call site allocates
 			// most
@@ -389,7 +412,8 @@ func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
 				//fmt.Printf("failed for: %v\n", v)
 			}
 		case *ssa.Alloc:
-			if !v.Heap {
+			if !v.Heap || !reachable[v] {
+			//if !v.Heap {
 				continue
 			}
 			tp := v.Type().Underlying().(*types.Pointer)
@@ -420,6 +444,10 @@ func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
 	}
 	ret += maxc.csum
 	calls.csum = ret
+	// merge sibling calls
+	for _, tc := range maxc.calls {
+		calls.addchild(tc)
+	}
 	// only consider loops
 	calls.loopend = maxc.loopend
 	if !calls.loopend {
@@ -430,6 +458,12 @@ func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
 }
 
 func funcsum(node *callgraph.Node, cs *callstack_t) *calls_t {
+	if funcvisit[node] {
+		panic("should terminate in maxcall")
+	}
+	funcvisit[node] = true
+	defer delete(funcvisit, node)
+
 	if len(node.Func.Blocks) == 0 {
 		fmt.Printf("**** NO BLOCKS %v\n", node.Func)
 		return newcalls("NOB")
@@ -455,39 +489,15 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 		return newcalls("LOOP")
 	}
 	visit[blk] = true
+	defer delete(visit, blk)
 
 	calls := newcalls(node.Func.String())
 	var ret int
 	for _, ip := range blk.Instrs {
 		switch v := ip.(type) {
-		//case *ssa.Store:
-		//	//fmt.Printf("== STORE TO %T\n", v.Addr)
+		//case *ssa.Go:
 		//	sl := node.Func.Prog.Fset.Position(v.Pos())
-		//	if alloc, ok := v.Addr.(*ssa.Alloc); ok {
-		//		if !alloc.Heap {
-		//			//fmt.Printf("HEAPY WRITE %v %v\n", alloc.Type().String(), sl)
-		//			continue
-		//		}
-		//	}
-		//	switch vp := v.Addr.Type().(type) {
-		//	case *types.Pointer:
-		//		var name string
-		//		switch ue := vp.Elem().(type) {
-		//		default:
-		//			name = fmt.Sprintf("wtf %T", ue)
-		//		// XXX all interface stores are from
-		//		// fmt.Printf/Sprintf?
-		//		case *types.Basic, *types.Interface:
-		//			continue
-		//		case *types.Slice:
-		//			name = "SLICE"
-		//		case *types.Chan:
-		//			name = "CHAN"
-		//		case *types.Pointer:
-		//			name = "PTR"
-		//		}
-		//		fmt.Printf("== %s STORE %v %v\n", name, vp.Elem().String(), sl)
-		//	}
+		//	fmt.Printf("IGNORE GO SUM %v\n", sl)
 		case ssa.CallInstruction:
 			// find which function for this call site allocates
 			// most
@@ -502,7 +512,8 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 				fmt.Printf("failed for: %v\n", v)
 			}
 		case *ssa.Alloc:
-			if !v.Heap {
+			if !v.Heap || !reachable[v] {
+			//if !v.Heap {
 				continue
 			}
 			tp := v.Type().Underlying().(*types.Pointer)
@@ -515,21 +526,31 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 	// we must charge for the full loop allocation cost to the path that
 	// takes the exit edge.
 	enode, amexit := _exits[blk]
+	var chosesuc *ssa.BasicBlock
 	var max int
 	var maxc *calls_t
 	for _, suc := range blk.Succs {
-		var bonus int
-		if amexit && enode.isexit(suc) {
-			bonus = enode.cost()
-		}
 		tc := _sumblock(node, suc, visit, cs)
-		tc.csum += bonus
+		if amexit && enode.isexit(suc) {
+			bonus := enode.cost()
+			// add loop cost
+			tc.csum += bonus
+		}
 		if tc.csum > max {
+			chosesuc = suc
 			max = tc.csum
 			maxc = tc
 		}
 		if tc.looper {
 			calls.looper = true
+		}
+	}
+	if amexit {
+		calls.looper = true
+		// use exit node calls, which are a super set of this blocks
+		// calls
+		if enode.isexit(chosesuc) {
+			calls.calls = enode.loopcalls.calls
 		}
 	}
 	if maxc != nil {
@@ -538,11 +559,7 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 		}
 		ret += maxc.csum
 	}
-	if amexit {
-		calls.looper = true
-	}
 	calls.csum = ret
-	delete(visit, blk)
 	return calls
 }
 
@@ -578,7 +595,7 @@ func (h *halp_t) dumpcallees(root *ssa.Function) {
 	//}
 
 	calls := funcsum(rootnode, &callstack_t{})
-	fmt.Printf("TOTAL ALLOCATIONS for %v: %v\n", root, calls.csum)
+	fmt.Printf("TOTAL ALLOCATIONS for %v: %v\n", root, human(calls.csum))
 	fmt.Printf("calls:\n")
 	calls.dump()
 
@@ -626,30 +643,32 @@ func main() {
 	// Create SSA-form program representation.
 	prog := ssautil.CreateProgram(iprog, 0)
 	mpkg := ssautil.MainPackages(prog.AllPackages())[0]
-	_sysfunc, ok := mpkg.Members["syscall"]
 	//_sysfunc, ok := mpkg.Members["sys_recvmsg"]
 	//_sysfunc, ok := mpkg.Members["proc_new"]
 	//_sysfunc, ok := mpkg.Members["sys_socket"]
 	//_sysfunc, ok := mpkg.Members["main"]
+	//_sysfunc, ok := mpkg.Members["syscall"]
+	//_sysfunc, ok := mpkg.Members["flea"]
+	//if !ok {
+	//	panic("none")
+	//}
+	//sysfunc := _sysfunc.(*ssa.Function)
 
 	//T := mpkg.Type("imemnode_t").Type()
 	//pT := types.NewPointer(T)
-	////sysfunc := prog.LookupMethod(pT, mpkg.Pkg, "offsetblk")
 	//sysfunc := prog.LookupMethod(pT, mpkg.Pkg, "_deinsert")
-	sysfunc := _sysfunc.(*ssa.Function)
-	if !ok {
-		panic("no")
-	}
+	T := mpkg.Type("proc_t").Type()
+	pT := types.NewPointer(T)
+	sysfunc := prog.LookupMethod(pT, mpkg.Pkg, "run")
 	// Build SSA code for bodies of all functions in the whole program.
 	prog.Build()
 
-	cg := mkcallgraph(prog)
+	allocio(sysfunc)
 
-	allocio(cg, sysfunc)
-
-	//var h halp_t
-	//h.init(cg)
-	//h.dumpcallees(sysfunc)
+	cg := mkcallgraph(sysfunc.Prog)
+	var h halp_t
+	h.init(cg)
+	h.dumpcallees(sysfunc)
 }
 
 func mkcallgraph(prog *ssa.Program) *callgraph.Graph {
@@ -667,15 +686,6 @@ func mkcallgraph(prog *ssa.Program) *callgraph.Graph {
 	return result.CallGraph
 }
 
-func pdump(prog *ssa.Program, pp *pointer.Pointer) {
-	for _, l := range pp.PointsTo().Labels() {
-		fmt.Printf("  %s: %s\n", prog.Fset.Position(l.Pos()), l)
-	}
-}
-
-// XXX direct and indirect pointer queries on ssa.Global maps don't seem to
-// work... surely there is a better way to find an ssa.Value to query the
-// contents of a map given its ssa.Global?
 func findmaplookup(cg *callgraph.Graph, glob *ssa.Global) ssa.Value {
 	for _, node := range cg.Nodes {
 		for _, blk := range node.Func.Blocks {
@@ -710,40 +720,366 @@ func findmaplookup(cg *callgraph.Graph, glob *ssa.Global) ssa.Value {
 	panic("no such thing")
 }
 
-func allocio(cg *callgraph.Graph, sf *ssa.Function) {
-	pkg := sf.Pkg
+func pdump(prog *ssa.Program, val ssa.Value, pp *pointer.Pointer) {
+	for _, l := range pp.PointsTo().Labels() {
+		fmt.Printf("  %T %v %s: %s\n", l.Value(), l.Value(),
+		    prog.Fset.Position(l.Pos()), l)
+	}
+}
 
-	config := &pointer.Config{
+type qs_t struct {
+	conf	*pointer.Config
+	res	*pointer.Result
+	pkg	*ssa.Package
+	qs	[]*pointer.Pointer
+	fvisit	map[types.Type]bool
+	save	map[*pointer.Pointer]ssa.Instruction
+}
+
+func (q *qs_t) qinit(pkg *ssa.Package) {
+	q.pkg = pkg
+	q.conf = &pointer.Config{
 		Mains:          []*ssa.Package{pkg},
-		//Mains:          ssautil.MainPackages(sf.Prog.AllPackages()),
 		BuildCallGraph: false,
 	}
+	q.fvisit = make(map[types.Type]bool)
+	q.save = make(map[*pointer.Pointer]ssa.Instruction)
+}
 
-	//arg := pkg.Members["flea"].(*ssa.Function).Params[0]
-	//config.AddQuery(arg)
-	//arg = pkg.Members["flea"].(*ssa.Function).Params[1]
-	//config.AddQuery(arg)
+func (q *qs_t) addq(v ssa.Value, in ssa.Instruction) {
+	if pointer.CanPoint(v.Type()) {
+		//q.conf.AddQuery(v)
+		wtfp, err := q.conf.AddExtendedQuery(v, "x")
+		if err != nil {
+			panic(err)
+		}
+		q.qs = append(q.qs, wtfp)
+		if _, ok := q.save[wtfp]; ok {
+			panic("...")
+		}
+		q.save[wtfp] = in
+	}
+}
 
-	allprocs := pkg.Members["allprocs"].(*ssa.Global)
-	//config.AddQuery(allprocs)
-	config.AddQuery(findmaplookup(cg, allprocs))
-	//wtfp, err := config.AddExtendedQuery(allprocs, "(*x)[0]")
-	//if err != nil {
-	//	panic(err)
-	//}
+func (q *qs_t) funcquery(sf *ssa.Function) {
+	for _, blk := range sf.Blocks {
+		for _, in := range blk.Instrs {
+			v, ok := in.(ssa.Value)
+			if !ok {
+				continue
+			}
+			q.addq(v, in)
+		}
+	}
+}
 
-	result, err := pointer.Analyze(config)
+func (q *qs_t) analyze() {
+	fmt.Printf("analyzing %v queries...\n", len(q.conf.Queries) +
+	    len(q.conf.IndirectQueries) + len(q.qs))
+	st := time.Now()
+	res, err := pointer.Analyze(q.conf)
 	if err != nil {
 		panic(err)
 	}
+	q.res = res
+	fmt.Printf("took %v\n", time.Now().Sub(st))
+}
 
-	//fmt.Printf("wtf:\n")
-	//pdump(sf.Prog, wtfp)
-	fmt.Printf("points to (%v):\n", len(result.Queries))
-	for _, q := range result.Queries {
-		fmt.Printf("query: %v\n", q)
-		pdump(sf.Prog, &q)
+func (q *qs_t) dump() {
+	fmt.Printf("extendeds:\n")
+	for _, wtfp := range q.qs {
+		pdump(q.pkg.Prog, nil, wtfp)
 	}
+	fmt.Printf("points to (%v):\n", len(q.res.Queries))
+	for k, v := range q.res.Queries {
+		fmt.Printf("query: %v\n", k)
+		pdump(q.pkg.Prog, k, &v)
+	}
+	fmt.Printf("WARNINGS: %v\n", len(q.res.Warnings))
+	//for _, w := range q.res.Warnings {
+	//	fmt.Printf("%v\n\t%v\n", w.Message,
+	//	    sf.Prog.Fset.Position(w.Pos))
+	//}
+}
+
+func (q *qs_t) _liter(fun func(ssa.Instruction, *pointer.Label)) {
+	for _, wtfp := range q.qs {
+		for _, l := range wtfp.PointsTo().Labels() {
+			in, ok := q.save[wtfp]
+			if !ok {
+				panic("no save")
+			}
+			fun(in, l)
+		}
+	}
+	//for _, qr := range q.res.Queries {
+	//	for _, l := range qr.PointsTo().Labels() {
+	//		fun(nil, l)
+	//	}
+	//}
+	//for _, qr := range q.res.IndirectQueries {
+	//	for _, l := range qr.PointsTo().Labels() {
+	//		fun(nil, l)
+	//	}
+	//}
+}
+
+func (q *qs_t) ifpoint(v ssa.Value, fun func(ssa.Instruction, *pointer.Label)) {
+	q._liter(func (in ssa.Instruction, pp *pointer.Label) {
+		if pp.Value() == v {
+			fun(in, pp)
+		}
+	})
+}
+
+func (q *qs_t) addrec(v ssa.Value) {
+        q.addrec1(v, v.Type(), "x")
+}
+
+func (q *qs_t) addrec1(v ssa.Value, T types.Type, qstr string) {
+	if q.fvisit[T] {
+		return
+	}
+	q.fvisit[T] = true
+outter:
+        for pointer.CanPoint(T) {
+                fmt.Printf("addy %v %v\n", T, qstr)
+                np, err := q.conf.AddExtendedQuery(v, qstr)
+                if err != nil {
+                        panic(err)
+                }
+                q.qs = append(q.qs, np)
+		switch t := T.(type) {
+		case *types.Pointer:
+			T = t.Elem()
+			if pointer.CanPoint(T) {
+				qstr = "*" + qstr
+			}
+		case *types.Named:
+			//fmt.Printf("underlie: %T %v\n", t.Underlying(), t.Underlying())
+			fmt.Printf("SKIP %T %v\n", t, t)
+			break outter
+			//panic("no")
+		default:
+			fmt.Printf("%T %v can point\n", t, t)
+			panic("no")
+		}
+        }
+        // check all pointers of a struct
+        switch T.(type) {
+        default:
+                fmt.Printf("HANDLE %v %T\n", T, T)
+        case *types.Named:
+                switch un := T.Underlying().(type) {
+                default:
+                        fmt.Printf("HANDLE named %v %T\n", un, un)
+                case *types.Struct:
+                        for i := 0; i < un.NumFields(); i++ {
+                                f := un.Field(i)
+                                n := f.Name()
+                                q.addrec1(v, f.Type(), qstr + "." + n)
+                        }
+                }
+        }
+}
+
+var reachable = map[ssa.Value]bool{}
+
+func allocio(sf *ssa.Function) {
+	//var q qs_t
+	//q.qinit(sf.Pkg)
+	//for _, p := range sf.Params {
+	//	q.addrec(p)
+	//}
+	//q.analyze()
+	//q.dump()
+
+	allfuncs := make([]*ssa.Function, 0)
+	for _, mem := range sf.Pkg.Members {
+		switch rt:= mem.(type) {
+		case *ssa.Function:
+			allfuncs = append(allfuncs, rt)
+		case *ssa.Type:
+			if nam, ok := rt.Type().(*types.Named); ok {
+				for i := 0; i < nam.NumMethods(); i++ {
+					meth := nam.Method(i)
+					safunc := sf.Prog.FuncValue(meth)
+					allfuncs = append(allfuncs, safunc)
+				}
+			}
+		}
+	}
+
+	_glob, ok := sf.Pkg.Members["pglru"]
+	if !ok {
+		panic("none globerton")
+	}
+	glob := _glob.(*ssa.Global)
+	fmt.Printf("%v %T %T\n", glob, glob, glob.Type().(*types.Pointer).Elem())
+
+	var saddr qs_t
+	saddr.qinit(sf.Pkg)
+	var sval qs_t
+	sval.qinit(sf.Pkg)
+	for _, fun := range allfuncs {
+		//fmt.Printf("%v\n", fun)
+		for _, blk := range fun.Blocks {
+			for _, in := range blk.Instrs {
+				//ops := in.Operands(nil)
+				//for _, oo := range ops {
+				//	if o, ok := (*oo).(*ssa.Global); ok && o == glob {
+				//		fmt.Printf("FOUND %T %v\n", in, in)
+				//	}
+				//}
+				//if val, ok := in.(ssa.Value); ok && pointer.CanPoint(val.Type()) {
+				//	saddr.addq(val, in)
+				//}
+				//sl := sf.Prog.Fset.Position(in.Pos()).String()
+				//if strings.Contains(sl, "fs.go:1498") {
+				//	fmt.Printf("HAP %v %T %v\n", in, in, sl)
+				//}
+				switch rin := in.(type) {
+				//case *ssa.FieldAddr:
+				//	//saddr.addq(rin.X, rin)
+				//	if x, ok := rin.X.(*ssa.Global); ok && x == glob {
+				//		fmt.Printf("GOOD FOUND\n")
+				//		roots = append(roots, rin)
+				//	}
+				case *ssa.Store:
+					//if g, ok := rin.Addr.(*ssa.Global); ok && g == glob {
+					//	fmt.Printf("HAPY\n")
+					//}
+					ue := rin.Addr.Type().(*types.Pointer).Elem()
+					if pointer.CanPoint(ue) {
+						//sl := sf.Prog.Fset.Position(in.Pos())
+						//fmt.Printf("   %v %v\n", rin.Addr, sl)
+						saddr.addq(rin.Addr, in)
+						if !pointer.CanPoint(rin.Val.Type()) {
+							panic("wtf")
+						}
+						sval.addq(rin.Val, in)
+					}
+				//case *ssa.MapUpdate:
+				//	fmt.Printf("%v %T\n", rin.Map, rin.Map)
+				}
+			}
+		}
+	}
+	saddr.analyze()
+	sval.analyze()
+	st2val := make(map[ssa.Instruction][]*pointer.Label)
+	sval._liter(func (in ssa.Instruction, l *pointer.Label) {
+		sl := st2val[in]
+		st2val[in] = append(sl, l)
+	})
+
+	didvals := make(map[ssa.Value]bool)
+	roots := []ssa.Value{glob}
+	for len(roots) != 0 {
+		var newroots []ssa.Value
+		for _, r := range roots {
+			saddr.ifpoint(r, func(in ssa.Instruction, l *pointer.Label) {
+				// the points-to-set of nil writes is empty and
+				// thus the corresponding instructions are not
+				// visited in _liter when st2val is created
+				ls, ok := st2val[in]
+				if !ok {
+					return
+				}
+				//sl := sf.Prog.Fset.Position(in.Pos())
+				//fmt.Printf("YAHOO %v %v %v\n", l.Value(), in.Parent(), sl)
+				for _, l := range ls {
+					alloc, ok := l.Value().(*ssa.Alloc)
+					if ok && alloc.Heap && !didvals[alloc] {
+						didvals[alloc] = true
+						newroots = append(newroots, alloc)
+					}
+				}
+			})
+		}
+		roots = newroots
+	}
+	fmt.Printf("dyune!\n")
+
+	for val := range didvals {
+		reachable[val] = true
+	}
+
+	//for _, root := range roots {
+	//	for _, mem := range sf.Pkg.Members {
+	//		fun, ok := mem.(*ssa.Function)
+	//		if !ok {
+	//			continue
+	//		}
+	//		for _, blk := range fun.Blocks {
+	//			for _, in := range blk.Instrs {
+	//				ops := in.Operands(nil)
+	//				for _, oo := range ops {
+	//					if *oo == root {
+	//						fmt.Printf("R FOUND %T %v\n", in, in)
+	//					}
+	//				}
+	//				//switch rin := in.(type) {
+	//				//case *ssa.Store:
+	//				//	q.addq(rin.Addr)
+	//				//case *ssa.MapUpdate:
+	//				//	fmt.Printf("%v %T\n", rin.Map, rin.Map)
+	//				//}
+	//			}
+	//		}
+	//	}
+	//}
+
+	//conf := &pointer.Config{
+	//	Mains:          []*ssa.Package{sf.Pkg},
+	//	BuildCallGraph: false,
+	//}
+	////wtfp, err := conf.AddExtendedQuery(sf.Params[0], "x.fds[0].fops")
+	//wtfp, err := conf.AddExtendedQuery(sf.Params[0], "x.fds[0]")
+	//if err != nil {
+	//	panic(err)
+	//}
+	//_, err = pointer.Analyze(conf)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//dt := wtfp.DynamicTypes()
+	//if dt.Len() > 0 {
+	//	dt.Iterate(func (key types.Type, val interface{}) {
+	//		T := key.(*types.Pointer).Elem().(*types.Named)
+	//		pt := val.(pointer.PointsToSet)
+	//		for _, l := range pt.Labels() {
+	//			sl := sf.Prog.Fset.Position(l.Pos())
+	//			fmt.Printf("= %v %v\n", T.String(), sl)
+	//		}
+	//	})
+	//} else {
+	//	for _, l := range wtfp.PointsTo().Labels() {
+	//		sl := sf.Prog.Fset.Position(l.Pos())
+	//		fmt.Printf("%v %v\n", l.Value(), sl)
+	//	}
+	//}
+
+	//for _, mem := range sf.Pkg.Members {
+	//	ff, ok := mem.(*ssa.Function)
+	//	if !ok {
+	//		continue
+	//	}
+	//	q.funcquery(ff)
+	//	fmt.Printf(".")
+	//}
+	//q.analyze()
+	////q.dump()
+	//r := []map[ssa.Value]pointer.Pointer{ q.res.Queries, q.res.IndirectQueries}
+	//for _, m := range r {
+	//	for _, p := range m {
+	//		for _, l := range p.PointsTo().Labels() {
+	//			if _, ok := l.Value().(*ssa.Alloc); ok {
+	//				reachable[l.Value()] = true
+	//			}
+	//		}
+	//	}
+	//}
 }
 
 func ptrstores(f *ssa.Function) []*ssa.Store {
