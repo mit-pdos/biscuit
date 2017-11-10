@@ -117,6 +117,8 @@ func fs_init() *fd_t {
 	free_start = superb.freeblock()
 	free_len = superb.freeblocklen()
 
+	disk_test()
+	
 	logstart := free_start + free_len
 	loglen := superb.loglen()
 	usable_start = logstart + loglen
@@ -3364,7 +3366,6 @@ func ialloc() (int, int) {
 
 // our actual disk
 var disk	disk_t
-//var disk1       disk_t
 
 type idebuf_t struct {
 	disk	int

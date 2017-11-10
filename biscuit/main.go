@@ -106,6 +106,7 @@ func trap_disk(intn uint) {
 	for {
 		runtime.IRQsched(intn)
 
+		fmt.Printf("disk intr\n")
 		// is this a disk int?
 		if !disk.intr() {
 			fmt.Printf("spurious disk int\n")

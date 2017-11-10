@@ -188,7 +188,7 @@ func breakpcitag(b pcitag_t) (int, int, int) {
 
 func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_VEND_INTEL := 0x8086
-	PCI_DEV_PIIX3 := 0x7000
+	// PCI_DEV_PIIX3 := 0x7000
 	PCI_DEV_3400  := 0x3b20
 	PCI_DEV_X540T := 0x1528
 	PCI_DEV_AHCI := 0x2922
@@ -196,7 +196,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	// map from vendor ids to a map of device ids to attach functions
 	alldevs := map[int]map[int]func(int, int, pcitag_t) {
 		PCI_VEND_INTEL : {
-			PCI_DEV_PIIX3 : attach_piix3,
+			// PCI_DEV_PIIX3 : attach_piix3,
 			PCI_DEV_3400 : attach_3400,
 			PCI_DEV_X540T: attach_ixgbe,
 			PCI_DEV_AHCI: attach_ahci,
@@ -228,13 +228,10 @@ func attach_piix3(vendorid, devid int, tag pcitag_t) {
 	fmt.Printf("legacy disk attached\n")
 }
 
-func attach_3400(vendorid, devid int, tag pcitag_t) {
-	if disk != nil {
-		panic("adding two disks")
-	}
-
+// (FK) I don't understand this code; maybe it works on Cody's machine.
+func pci_disk_interrupt_wiring(t pcitag_t) int {
 	intline := 0x3d
-	pin := pci_read(tag, intline, 1)
+	pin := pci_read(t, intline, 1)
 	if pin < 1 || pin > 4 {
 		panic("bad PCI pin")
 	}
@@ -266,10 +263,18 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	disable := 0x80
 	v |= disable << ((pirq % 4)*8)
 	pci_write(taglpc, proutereg, v)
+	return gsi;
+}
 
+func attach_3400(vendorid, devid int, tag pcitag_t) {
+	if disk != nil {
+		panic("adding two disks")
+	}
+
+	gsi := pci_disk_interrupt_wiring(tag)
 	IRQ_DISK = gsi
 	INT_DISK = IRQ_BASE + IRQ_DISK
-
+	
 	d := &pciide_disk_t{}
 	// 3400's PCI-native IDE command/control block
 	rbase := pci_bar_pio(tag, 0)
@@ -910,7 +915,7 @@ func (ap *apic_t) reg_write(reg int, v uint32) {
 
 func (ap *apic_t) irq_unmask(irq int) {
 	if irq < 0 || irq > ap.npins {
-		panic("bad irq")
+		panic("irq_unmask: bad irq")
 	}
 
 	mreg := 0x10 + irq*2
@@ -949,7 +954,7 @@ func (ap *apic_t) irq_mask(irq int) {
 // interrupts automatically. newer CPUs let you disable EOI broadcast.
 func (ap *apic_t) eoi(irq int) {
 	if irq &^ 0xff != 0 {
-		panic("bad irq")
+		panic("eio bad irq")
 	}
 	runtime.Store32(ap.regs.eoi, uint32(irq + 32))
 }
@@ -2929,9 +2934,9 @@ type port_reg_t struct {
 type ahci_disk_t struct {
 	bara int
 	ahci *ahci_reg_t
-	ncs uint16
+	ncs uint32
 	nsectors uint64
-	ports [32]*ahci_port_t
+	port *ahci_port_t
 }
 
 type sata_fis_reg_h2d struct {
@@ -3007,7 +3012,10 @@ type ahci_prd struct {
 	dbc uint32		// one less than #bytes
 }
 
-const MAX_PRD_ENTRIES int = 65536
+const (
+	MAX_PRD_ENTRIES int = 65536
+	MAX_PRD_SIZE    int = 4*1024*1024
+)
 
 type ahci_cmd_table struct {
 	cfis [0x10]uint32		// command FIS
@@ -3019,9 +3027,13 @@ type ahci_cmd_table struct {
 
 type ahci_port_t struct {
 	port *port_reg_t
-	num_cmdslots int
-	cmd_issued int
-	las_cmdslot int
+	nslot uint32
+	cmd_issued uint32
+	last_slot uint32
+	block_pa uintptr
+	block *[512]uint8
+	inprogress bool
+
 	rfis_pa uintptr
 	rfis *ahci_recv_fis
 	cmdh_pa uintptr
@@ -3088,7 +3100,13 @@ const (
 	SATA_FIS_TYPE_REG_D2H uint8 = 0x34
 	SATA_FIS_REG_CFLAG uint8 = (1 << 7)      // issuing new command
 
+	IDE_CMD_READ_DMA_EXT uint8 = 0x25
 	IDE_CMD_IDENTIFY uint8 = 0xec
+
+	IDE_DEV_LBA = 0x40
+	
+	IDE_CTL_LBA48 = 0x80
+
 	IDE_FEATURE86_LBA48 uint16 = (1 << 10)
 	IDE_STAT_BSY uint32 = 0x80
 
@@ -3147,6 +3165,7 @@ func (p *ahci_port_t) pg_new() (*pg_t, pa_t) {
 }
 
 func (p *ahci_port_t) init() bool {
+	p.inprogress = false
 	if LD(&p.port.ssts) & 0x0F != HBD_PORT_DET_PRESENT {
 		return false
 	}
@@ -3231,6 +3250,12 @@ func (p *ahci_port_t) init() bool {
 		fmt.Printf("AHCI: port not connected\n");
 		return false
 	}
+
+	// Allocate memory for holding a sector
+	_, pa = p.pg_new()
+	p.block_pa = uintptr(pa)
+	p.block = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+
 	return true
 }
 
@@ -3251,7 +3276,7 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 
 	ST(&p.port.ci, uint32(1))
 
-	if !p.wait() {
+	if !p.wait(0) {
 		fmt.Printf("AHCI: timeout waiting for identity\n")
 		return nil, false
 	}
@@ -3274,21 +3299,25 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 	return ret_id, true
 }
 
-func (p *ahci_port_t) wait() bool {
-	for c := 0; c < 10; c++ {
-		c++
+func (p *ahci_port_t) wait(s uint32) bool {
+	// fmt.Printf("wait slot %v\n", s)
+	for c := 0; c < 100000; c++ {
 		stat := LD(&p.port.tfd) & 0xff
-		ci := LD(&p.port.ci) & 0x1
-		if stat&IDE_STAT_BSY == 0 && ci == 0 {
+		ci := LD(&p.port.ci) & (1 << s)
+		sact := LD(&p.port.sact) & (1 << s)
+		// XXX sact == 0 instead of stat for requests other than identify?
+		if stat&IDE_STAT_BSY == 0 && ci == 0  {
 			return true
 		}
-		fmt.Printf("AHCI: wait: ..\n")
+		if c % 10000 == 0 {
+			fmt.Printf("AHCI: wait: ci %#x sact %#x..\n", ci, sact)
+		}
 		
 	}
 	return false
 }
 
-func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
+func (p *ahci_port_t) fill_fis(cmdslot uint32, fis *sata_fis_reg_h2d) {
 	if unsafe.Sizeof(*fis) != 20 {
 		panic("fill_fis: fis wrong length")
 	}
@@ -3300,7 +3329,7 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
-func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
+func (p *ahci_port_t) fill_prd_v(cmdslot uint32, iov []kiovec) uint64 {
 	nbytes := uint64(0)
 	cmd := &p.cmdt[cmdslot];
 	for slot := 0; slot < len(iov); slot++ {
@@ -3314,7 +3343,7 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
 	return nbytes;
 }
 
-func (p *ahci_port_t) fill_prd(cmdslot int, addr uint64, nbytes uint64) {
+func (p *ahci_port_t) fill_prd(cmdslot uint32, addr uint64, nbytes uint64) {
 	io := kiovec{addr, nbytes}
 	iov := []kiovec{io}
 	p.fill_prd_v(cmdslot, iov)
@@ -3324,6 +3353,93 @@ func (p *ahci_port_t) enable_interrupt() {
 	ST(&p.port.ie, AHCI_PORT_INTR_DEFAULT)
 }
 
+func (p *ahci_port_t) find_cmdslot() uint32 {
+	all_scanned := false;
+	for s := (p.last_slot + 1) % p.nslot; s < p.nslot; {
+		if LD(&p.port.ci) & uint32(1 << s) == uint32(0) &&
+			LD(&p.port.sact) & uint32(1 << s) == uint32(0) {
+			p.last_slot = s
+			return s
+		}
+		if (s == p.nslot - 1 && !all_scanned) {
+			s = 0
+			all_scanned = true
+		} else {
+			s++
+		}
+	}
+	panic("XXX couldn't find cmdslot\n")
+}
+
+
+func (p *ahci_port_t) start(ibuf *idebuf_t, writing bool) {
+	if writing {
+		panic("AHCI: no writing yet")
+	}
+	s := p.find_cmdslot()
+
+	if p.inprogress {
+		panic("AHCI: in progress\n")
+	}
+	p.inprogress = true
+
+	if (len(*ibuf.data) != 512) {
+		panic("AHCI: start wrong len")
+	}
+	io := kiovec{uint64(p.block_pa), uint64(len(*ibuf.data))}
+	iov := []kiovec{io}
+	p.issue(s, iov, uint64(ibuf.block), IDE_CMD_READ_DMA_EXT)
+
+	if !p.wait(s) {
+		panic("AHCI: timeout waiting for read\n")
+	}
+	go func() {
+		// fmt.Printf("intr done\n")
+		ide_int_done <- true
+	}()
+}
+
+func (p *ahci_port_t) issue(s uint32, iov []kiovec, bn uint64, cmd uint8) {
+	fis := &sata_fis_reg_h2d{}
+	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
+	fis.cflag = SATA_FIS_REG_CFLAG;
+	fis.command = cmd
+
+	len := p.fill_prd_v(s, iov)
+	if len % 512 != 0 {
+		panic("ACHI: issue len not multiple of 512 ")
+	}
+	if len >= uint64(MAX_PRD_SIZE) * (uint64)(MAX_PRD_ENTRIES) {
+		panic("ACHI: issue len too large")
+	}
+	nsector := len/512
+	ST(&p.cmdh[s].prdbc, 0);
+	fis.dev_head = IDE_DEV_LBA;
+	fis.control = IDE_CTL_LBA48;
+	fis.lba_0 = uint8((bn >>  0) & 0xff)
+	fis.lba_1 = uint8((bn >>  8) & 0xff)
+	fis.lba_2 = uint8((bn >> 16) & 0xff)
+	fis.lba_3 = uint8((bn >> 24) & 0xff)
+	fis.lba_4 = uint8((bn >> 32) & 0xff)
+	fis.lba_5 = uint8((bn >> 40) & 0xff)
+
+	fis.sector_count = uint8(nsector & 0xff);
+	fis.sector_count_ex = uint8((nsector >> 8) & 0xff);
+
+	p.fill_fis(s, fis);
+
+	// Update the Write bit in the flags *after* invoking fill_fis(), to ensure
+	// that it remains set (and hence allow the disk write to go through).
+	// Otherwise, disk writes never complete on ben.
+	// if (cmd == IDE_CMD_WRITE_DMA_EXT || cmd == IDE_CMD_WRITE_FPDMA_QUEUED)
+	// cmdh[cmdslot].flags |= AHCI_CMD_FLAGS_WRITE;
+
+	// Mark the command as issued, for the interrupt handler's benefit.
+	// The cmdslot_alloc_lock protects 'cmds_issued' as well.
+	// cmds_issued |= (1 << cmdslot);
+	ST(&p.port.ci, (1 << s));
+}
+
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
 	a := ahci.bara + 0x100 + 0x80 * pid
@@ -3331,7 +3447,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
 	if p.init() {
 		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
-		ahci.ports[pid] = p
+		ahci.port = p
 		id, ok := p.identify()
 		if ok {
 			ahci.nsectors = LD64(&id.lba48_sectors)
@@ -3340,29 +3456,54 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				fmt.Printf("AHCI: SATA Native Command Queuing not supported\n");
 				return;
 			}
-			nslots := 1 + (id.queue_depth & IDE_SATA_NCQ_QUEUE_DEPTH)
-			fmt.Printf("AHCI: slots %v\n", nslots)
-			if (nslots < ahci.ncs) {
+			p.nslot = uint32(1+(id.queue_depth & IDE_SATA_NCQ_QUEUE_DEPTH))
+			fmt.Printf("AHCI: slots %v\n", p.nslot)
+			if (p.nslot < ahci.ncs) {
 				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
-				nslots, ahci.ncs)
+				p.nslot, ahci.ncs)
 			}
-			// XXX p.enable_interrupt()
+			p.enable_interrupt()
 			// XXX enable write caching and read-ahead
-
+			return  // only one port
 		}
 	}
 }
 
+func (ahci *ahci_disk_t) start(ibuf *idebuf_t, writing bool) {
+	ahci.port.start(ibuf, writing)
+}
+
+func (ahci *ahci_disk_t) complete(dst []uint8, b bool) {
+	copy(dst, ahci.port.block[:])
+	ahci.port.inprogress = false
+}
+
+func (ahci *ahci_disk_t) intr() bool {
+	return true
+}
+
+func (ahci *ahci_disk_t) int_clear() {
+}
+
+	
 func attach_ahci(vid, did int, t pcitag_t) {
+	if disk != nil {
+		panic("adding two disks")
+	}
+
 	d := &ahci_disk_t{}
 	d.bara = pci_read(t, _BAR5, 4)
 	fmt.Printf("attach AHCI disk %#x %#x %#x\n", did, _BAR5, d.bara)
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
+	gsi := pci_disk_interrupt_wiring(t)
+	IRQ_DISK = gsi
+	INT_DISK = IRQ_BASE + IRQ_DISK
+
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
 
-	d.ncs = uint16(((LD(&d.ahci.cap) >> 8) & 0x1f)+1)
+	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
 	fmt.Printf("d.ahci %#x ncs %#x\n", d.ahci, d.ncs)
 
 	for i := 0; i < 32; i++ {
@@ -3372,5 +3513,13 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	}
 
 	SET(&d.ahci.ghc, AHCI_GHC_IE)
+	disk = d
 }
 
+func disk_test() {
+	tmp := new([512]uint8)
+	for b := 0; b < 1000; b++ {
+		fmt.Printf("b %#x\n", b)
+		bdev_read(b, tmp)
+	}
+}
