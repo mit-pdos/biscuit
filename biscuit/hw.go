@@ -3502,8 +3502,8 @@ func (ahci *ahci_disk_t) int_clear() {
 	// status.  It's fine to do this even after we've processed the
 	// port interrupt: if any port interrupts happened in the mean
 	// time, the host interrupt bit will just get set again. */
-	SET(&ahci.port.port.is, 0x3)  // XXX check which bit is set?  why 3?
-	CLR(&ahci.ahci.is, (1 << 0))  // XXX 
+	SET(&ahci.port.port.is, 0xFFFF)  // XXX check which bit is set?
+	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
 	irq_eoi(IRQ_DISK)
 }
 
