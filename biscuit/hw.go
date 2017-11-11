@@ -236,6 +236,8 @@ func pci_disk_interrupt_wiring(t pcitag_t) int {
 		panic("bad PCI pin")
 	}
 
+	fmt.Printf("pin %v\n", pin)
+
 	// map PCI pin to IOAPIC pin number. the Intel PCH chipset exposes this
 	// mapping through PCI registers and memory mapped IO so we don't need
 	// to parse AML (thank you flying spaghetti monster!)
@@ -2937,6 +2939,7 @@ type ahci_disk_t struct {
 	ncs uint32
 	nsectors uint64
 	port *ahci_port_t
+	portid int
 }
 
 type sata_fis_reg_h2d struct {
@@ -3392,15 +3395,15 @@ func (p *ahci_port_t) start(ibuf *idebuf_t, writing bool) {
 		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_READ_DMA_EXT)
 	}
 
-	if !p.wait(s) {
-		panic("AHCI: timeout waiting for read/write\n")
-	}
+	// if !p.wait(s) {
+	// 	panic("AHCI: timeout waiting for read/write\n")
+	// }
 	
-	// XXX simulate interrupt done
-	go func() {
-		// fmt.Printf("intr done\n")
-		ide_int_done <- true
-	}()
+	// // XXX simulate interrupt done
+	// go func() {
+	// 	// fmt.Printf("intr done\n")
+	// 	ide_int_done <- true
+	// }()
 }
 
 func (p *ahci_port_t) issue(s uint32, iov []kiovec, bn uint64, cmd uint8) {
@@ -3452,6 +3455,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	if p.init() {
 		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
 		ahci.port = p
+		ahci.portid = pid
 		id, ok := p.identify()
 		if ok {
 			ahci.nsectors = LD64(&id.lba48_sectors)
@@ -3477,16 +3481,30 @@ func (ahci *ahci_disk_t) start(ibuf *idebuf_t, writing bool) {
 	ahci.port.start(ibuf, writing)
 }
 
+// XXX race between interrupt thread and daemon thread
 func (ahci *ahci_disk_t) complete(dst []uint8, b bool) {
 	copy(dst, ahci.port.block[:])
-	ahci.port.inprogress = false
+	ahci.port.inprogress = false   
 }
 
 func (ahci *ahci_disk_t) intr() bool {
-	return true
+	for i := uint32(0); i < 32; i++ {
+		if LD(&ahci.ahci.is) & (1 << i) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (ahci *ahci_disk_t) int_clear() {
+	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
+	// port interrupt status and then clear the host interrupt
+	// status.  It's fine to do this even after we've processed the
+	// port interrupt: if any port interrupts happened in the mean
+	// time, the host interrupt bit will just get set again. */
+	SET(&ahci.port.port.is, 0x3)  // XXX check which bit is set?  why 3?
+	CLR(&ahci.ahci.is, (1 << 0))  // XXX 
+	irq_eoi(IRQ_DISK)
 }
 
 	
@@ -3501,8 +3519,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
-	gsi := pci_disk_interrupt_wiring(t)
-	IRQ_DISK = gsi
+	IRQ_DISK = 11  	// pci_disk_interrupt_wiring(t) returns 23, but 11 works ...
 	INT_DISK = IRQ_BASE + IRQ_DISK
 
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
@@ -3521,9 +3538,10 @@ func attach_ahci(vid, did int, t pcitag_t) {
 }
 
 func disk_test() {
+	fmt.Printf("disk test\n")
 	tmp := new([512]uint8)
 	tmp1 := new([512]uint8)
-	for b := 0; b < 10; b++ {
+	for b := 0; b < 1; b++ {
 		fmt.Printf("b %#x\n", b)
 		bdev_read(b, tmp)
 	}

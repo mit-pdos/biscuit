@@ -98,6 +98,8 @@ func fs_init() *fd_t {
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
 
+	disk_test()
+
 	iblkcache.blks = make(map[int]*ibuf_t, 30)
 
 	// find the first fs block; the build system installs it in block 0 for
@@ -117,8 +119,6 @@ func fs_init() *fd_t {
 	free_start = superb.freeblock()
 	free_len = superb.freeblocklen()
 
-	disk_test()
-	
 	logstart := free_start + free_len
 	loglen := superb.loglen()
 	usable_start = logstart + loglen
