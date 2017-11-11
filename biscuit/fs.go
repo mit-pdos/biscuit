@@ -98,7 +98,7 @@ func fs_init() *fd_t {
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
 
-	disk_test()
+	// disk_test()
 
 	iblkcache.blks = make(map[int]*ibuf_t, 30)
 

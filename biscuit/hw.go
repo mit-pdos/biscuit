@@ -3388,6 +3388,9 @@ func (p *ahci_port_t) start(ibuf *idebuf_t, writing bool) {
 		panic("AHCI: start wrong len")
 	}
 	io := kiovec{uint64(p.block_pa), uint64(len(*ibuf.data))}
+	if writing {
+		copy(p.block[:], ibuf.data[:])
+	}
 	iov := []kiovec{io}
 	if writing {
 		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_WRITE_DMA_EXT)
@@ -3482,8 +3485,10 @@ func (ahci *ahci_disk_t) start(ibuf *idebuf_t, writing bool) {
 }
 
 // XXX race between interrupt thread and daemon thread
-func (ahci *ahci_disk_t) complete(dst []uint8, b bool) {
-	copy(dst, ahci.port.block[:])
+func (ahci *ahci_disk_t) complete(dst []uint8, writing bool) {
+	if !writing {
+		copy(dst, ahci.port.block[:])
+	}
 	ahci.port.inprogress = false   
 }
 
@@ -3539,21 +3544,22 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 func disk_test() {
 	fmt.Printf("disk test\n")
-	tmp := new([512]uint8)
-	tmp1 := new([512]uint8)
-	for b := 0; b < 1; b++ {
-		fmt.Printf("b %#x\n", b)
-		bdev_read(b, tmp)
+	wbuf := new([10][512]uint8)
+	rbuf := new([512]uint8)
+	for b := 0; b < 10; b++ {
+		for i,_ := range wbuf[b] {
+			wbuf[b][i] = uint8(b)
+		}
+		bdev_write(b, &wbuf[b])
 	}
-	for i,_ := range tmp {
-		tmp[i] = 1
-	}
-	bdev_write(0, tmp)
-	bdev_read(0, tmp1)
-	for i, v := range tmp1 {
-		if tmp[i] != v {
-			panic("disk_test\n")
+	for b := 0; b < 10; b++ {
+		bdev_read(b, rbuf)
+		for i, v := range rbuf {
+			if v != uint8(b) {
+				fmt.Printf("buf %v i %v v %v\n", b, i, v)
+				panic("disk_test\n")
+			}
 		}
 	}
-	
+	fmt.Printf("disk test passed\n")
 }
