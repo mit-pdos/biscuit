@@ -3366,6 +3366,7 @@ func ialloc() (int, int) {
 
 // our actual disk
 var disk	disk_t
+var adisk	adisk_t
 
 type idebuf_t struct {
 	disk	int
@@ -3377,30 +3378,69 @@ type idereq_t struct {
 	buf	*idebuf_t
 	ack	chan bool
 	write	bool
+	sync   bool
 }
 
 var ide_int_done	= make(chan bool)
 var ide_request		= make(chan *idereq_t)
+var ide_debug           = false
+
+func ide_interrupt_done(inflight []*idereq_t) {
+	for i, v := range inflight {
+		if v != nil {
+			if adisk.complete(i, v.buf.data[:], v.write) {
+				if ide_debug {
+					fmt.Printf("slot %v block %v completed\n", i, v.buf.block)
+				}
+				if v.sync {
+					if ide_debug {
+						fmt.Printf("ack block %v\n", v.buf.block)
+					}
+					v.ack <- true
+				}
+				inflight[i] = nil
+			}
+		}
+	}
+	// fmt.Printf("ide_interrupt_clear interrupts\n")
+	adisk.int_clear()
+}
 
 func ide_daemon() {
+	n := adisk.slots()
+	inflight := make([]*idereq_t, n)
 	for {
-		req := <- ide_request
-		if req.buf == nil {
-			panic("nil idebuf")
+		slot, ok := adisk.find_slot()
+		if ok {
+			select {
+			case req := <- ide_request:
+				if req.buf == nil {
+					panic("nil idebuf")
+				}
+				adisk.start(slot, req.buf, req.write)
+				inflight[slot] = req
+				if ide_debug {
+					fmt.Printf("issued slot %v req for block %v sync %v\n", slot,
+						req.buf.block, req.sync)
+				}
+			case <- ide_int_done:
+				ide_interrupt_done(inflight)
+			}
+		} else {
+			if ide_debug {
+				fmt.Print("no slot available\n")
+			}
+			<- ide_int_done
+			ide_interrupt_done(inflight)
 		}
-		writing := req.write
-		disk.start(req.buf, writing)
-		<- ide_int_done
-		disk.complete(req.buf.data[:], writing)
-		disk.int_clear()
-		req.ack <- true
 	}
 }
 
-func idereq_new(block int, write bool, data *[512]uint8) *idereq_t {
+func idereq_new(block int, write bool, data *[512]uint8, sync bool) *idereq_t {
 	ret := &idereq_t{}
 	ret.ack = make(chan bool)
 	ret.write = write
+	ret.sync = sync
 	ret.buf = &idebuf_t{}
 	ret.buf.block = block
 	ret.buf.data = data
@@ -3634,13 +3674,18 @@ func log_read(loggen uint8, b idebuf_t) (bool, bool) {
 }
 
 func bdev_write(blkn int, src *[512]uint8) {
-	ider := idereq_new(blkn, true, src)
+	ider := idereq_new(blkn, true, src, true)
 	ide_request <- ider
 	<- ider.ack
 }
 
+func bdev_write_async(blkn int, src *[512]uint8) {
+	ider := idereq_new(blkn, true, src, false)
+	ide_request <- ider
+}
+
 func bdev_read(blkn int, dst *[512]uint8) {
-	ider := idereq_new(blkn, false, dst)
+	ider := idereq_new(blkn, false, dst, true)
 	ide_request <- ider
 	<- ider.ack
 }
