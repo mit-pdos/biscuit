@@ -98,7 +98,7 @@ func fs_init() *fd_t {
 	irq_unmask(IRQ_DISK)
 	go ide_daemon()
 
-	// disk_test()
+	disk_test()
 
 	iblkcache.blks = make(map[int]*ibuf_t, 30)
 
@@ -3385,16 +3385,18 @@ var ide_int_done	= make(chan bool)
 var ide_request		= make(chan *idereq_t)
 var ide_debug           = false
 
-func ide_interrupt_done(inflight []*idereq_t) {
+func ide_done(inflight []*idereq_t) {
 	for i, v := range inflight {
 		if v != nil {
 			if adisk.complete(i, v.buf.data[:], v.write) {
 				if ide_debug {
-					fmt.Printf("slot %v block %v completed\n", i, v.buf.block)
+					fmt.Printf("slot %v block %v completed\n",
+						i, v.buf.block)
 				}
 				if v.sync {
 					if ide_debug {
-						fmt.Printf("ack block %v\n", v.buf.block)
+						fmt.Printf("ack block %v\n",
+							v.buf.block)
 					}
 					v.ack <- true
 				}
@@ -3417,6 +3419,9 @@ func ide_daemon() {
 				if req.buf == nil {
 					panic("nil idebuf")
 				}
+				if ide_debug {
+					fmt.Printf("req received %v\n", req.buf.block)
+				}
 				adisk.start(slot, req.buf, req.write)
 				inflight[slot] = req
 				if ide_debug {
@@ -3424,14 +3429,18 @@ func ide_daemon() {
 						req.buf.block, req.sync)
 				}
 			case <- ide_int_done:
-				ide_interrupt_done(inflight)
+				if ide_debug {
+					fmt.Printf("interrupt received\n")
+				}
+				ide_done(inflight)
 			}
 		} else {
 			if ide_debug {
 				fmt.Print("no slot available\n")
 			}
 			<- ide_int_done
-			ide_interrupt_done(inflight)
+			ide_done(inflight)
+
 		}
 	}
 }
@@ -3526,7 +3535,7 @@ func (log *log_t) commit() {
 
 		// and write block to the log
 		logblkn := log.logstart + 1 + i
-		bdev_write(logblkn, lb.data)
+		bdev_write_async(logblkn, lb.data)
 	}
 
 	lh.w_recovernum(log.lhead)

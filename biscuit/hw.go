@@ -2904,10 +2904,14 @@ func (x *ixgbe_t) _dbc_init() {
 	x.rs(RTRPCS, v)
 }
 
+
 //
 // AHCI from sv6 from HiStar.
 //
-
+// Some useful docs:
+// - http://wiki.osdev.org/AHCI
+// - https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
+//
 
 type ahci_reg_t struct {
 	cap uint32;		// host capabilities
@@ -2922,7 +2926,6 @@ type ahci_reg_t struct {
 	cap2 uint32;		// extended host capabilities
 	bohc uint32;		// BIOS/OS handoff control and status
 }
-
 	
 type port_reg_t struct {
 	clb uint64		// command list base address
@@ -3456,8 +3459,8 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	ST(&p.port.ci, (1 << uint(s)))
 	SET(&p.cmd_issued, (1 << uint(s)))
 	if ide_debug {
-		fmt.Printf("issue: issued %v ci %#x cmd_issued %#x\n", s, p.port.ci,
-			p.cmd_issued)
+		fmt.Printf("issue: issued %v ci %#x cmd_issued %#x\n", s,
+			LD(&p.port.ci), p.cmd_issued)
 	}
 }
 
@@ -3507,14 +3510,16 @@ func (ahci *ahci_disk_t) start(s int, ibuf *idebuf_t, writing bool) {
 func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
 	s := uint(slot)
 	if ide_debug {
-		fmt.Printf("complete: %v ci %#x cmd_issued %#x\n", slot,
-			LD(&ahci.port.port.ci), ahci.port.cmd_issued)
+		fmt.Printf("complete: %v ci %#x sact %#x cmd_issued %#x\n", slot,
+			LD(&ahci.port.port.ci), LD(&ahci.port.port.sact),
+			ahci.port.cmd_issued)
 	}
 	if ahci.port.cmd_issued & (1 << s) != 0 &&
-		LD(&ahci.port.port.ci) & (1 << s) == 0 {
+		LD(&ahci.port.port.ci) & (1 << s) == 0  &&
+		LD(&ahci.port.port.sact) & (1 << s) == 0 {
 		CLR(&ahci.port.cmd_issued, (1 << s))
 		if ide_debug {
-			fmt.Printf("complete: clear cmd_issued %#x\n",
+			fmt.Printf("complete: %v clear cmd_issued %#x\n", slot,
 				ahci.port.cmd_issued)
 		}
 		if !writing {
@@ -3527,6 +3532,7 @@ func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
 
 func (ahci *ahci_disk_t) intr() bool {
 	// XXX we have only one port
+	runtime.Pnum(0xD)
 	for i := uint32(0); i < 32; i++ {
 		if LD(&ahci.ahci.is) & (1 << i) != 0 {
 			return true
@@ -3545,7 +3551,7 @@ func (ahci *ahci_disk_t) int_clear() {
 	// time, the host interrupt bit will just get set again. */
 
 	if ide_debug {
-		fmt.Printf("int_clear: %#x\n", ahci.port.port.is)
+		fmt.Printf("int_clear: %#x\n", LD(&ahci.port.port.is))
 	}
 	
 	SET(&ahci.port.port.is, 0xFFFF)  // XXX check which bit is set?
@@ -3584,6 +3590,10 @@ func attach_ahci(vid, did int, t pcitag_t) {
 }
 
 func disk_test() {
+	ide_debug = true
+
+	return
+	
 	fmt.Printf("disk test\n")
 	wbuf := new([10][512]uint8)
 	rbuf := new([512]uint8)
