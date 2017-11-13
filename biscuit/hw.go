@@ -3509,13 +3509,13 @@ func (ahci *ahci_disk_t) start(s int, ibuf *idebuf_t, writing bool) {
 // XXX race between interrupt thread and daemon thread
 func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
 	s := uint(slot)
+	ci := LD(&ahci.port.port.ci)
 	if ide_debug {
 		fmt.Printf("complete: %v ci %#x sact %#x cmd_issued %#x\n", slot,
-			LD(&ahci.port.port.ci), LD(&ahci.port.port.sact),
+			ci, LD(&ahci.port.port.sact),
 			ahci.port.cmd_issued)
 	}
-	if ahci.port.cmd_issued & (1 << s) != 0 &&
-		LD(&ahci.port.port.ci) & (1 << s) == 0  &&
+	if ahci.port.cmd_issued & (1 << s) != 0 && ci & (1 << s) == 0  &&
 		LD(&ahci.port.port.sact) & (1 << s) == 0 {
 		CLR(&ahci.port.cmd_issued, (1 << s))
 		if ide_debug {
@@ -3533,12 +3533,15 @@ func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
 func (ahci *ahci_disk_t) intr() bool {
 	// XXX we have only one port
 	runtime.Pnum(0xD)
-	for i := uint32(0); i < 32; i++ {
-		if LD(&ahci.ahci.is) & (1 << i) != 0 {
-			return true
-		}
-	}
-	return false
+	return true
+
+	// is := LD(&ahci.ahci.is)
+	// for i := uint32(0); i < 32; i++ {
+	// 	if  is & (1 << i) != 0 {
+	// 		return true
+	// 	}
+	// }
+	// return false
 }
 
 // XXX is it ok to clear if drive is working on commands?
@@ -3550,10 +3553,6 @@ func (ahci *ahci_disk_t) int_clear() {
 	// port interrupt: if any port interrupts happened in the mean
 	// time, the host interrupt bit will just get set again. */
 
-	if ide_debug {
-		fmt.Printf("int_clear: %#x\n", LD(&ahci.port.port.is))
-	}
-	
 	SET(&ahci.port.port.is, 0xFFFF)  // XXX check which bit is set?
 	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
 	irq_eoi(IRQ_DISK)
