@@ -3039,7 +3039,6 @@ type ahci_cmd_table struct {
 	prdt [MAX_PRD_ENTRIES]ahci_prd
 }
 
-
 type ahci_port_t struct {
 	port *port_reg_t
 	nslot uint32
@@ -3308,12 +3307,6 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 
 	ret_id := &identify_device{}
 	*ret_id = *id
-	
-	// XXX maybe load the struct this way?
-	// id1 := (*[unsafe.Sizeof(*id)/4]uint32)(unsafe.Pointer(id))
-	// for i := 0; i < len(id1); i++ {
-	// 	fmt.Printf("%#x ", LD(&id1[i]))
-	// }
 
 	return ret_id, true
 }
@@ -3390,7 +3383,6 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 	return 0, false
 }
 
-
 func (p *ahci_port_t) start(s int, ibuf *idebuf_t, writing bool){
 	if (len(*ibuf.data) != 512) {
 		panic("AHCI: start wrong len")
@@ -3406,16 +3398,6 @@ func (p *ahci_port_t) start(s int, ibuf *idebuf_t, writing bool){
 	} else {
 		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_READ_DMA_EXT)
 	}
-	
-	// if !p.wait(s) {
-	// 	panic("AHCI: timeout waiting for read/write\n")
-	// }
-	
-	// // XXX simulate interrupt done
-	// go func() {
-	// 	// fmt.Printf("intr done\n")
-	// 	ide_int_done <- true
-	// }()
 }
 
 func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
@@ -3506,58 +3488,59 @@ func (ahci *ahci_disk_t) start(s int, ibuf *idebuf_t, writing bool) {
 	ahci.port.start(s, ibuf, writing)
 }
 
-// XXX race between interrupt thread and daemon thread
+// Called only by sata_daemon
 func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
 	s := uint(slot)
 	ci := LD(&ahci.port.port.ci)
+	sact := LD(&ahci.port.port.sact)
+	p := ahci.port
 	if ide_debug {
 		fmt.Printf("complete: %v ci %#x sact %#x cmd_issued %#x\n", slot,
-			ci, LD(&ahci.port.port.sact),
-			ahci.port.cmd_issued)
+			ci, sact, p.cmd_issued)
 	}
-	if ahci.port.cmd_issued & (1 << s) != 0 && ci & (1 << s) == 0  &&
-		LD(&ahci.port.port.sact) & (1 << s) == 0 {
-		CLR(&ahci.port.cmd_issued, (1 << s))
+	if p.cmd_issued & (1 << s) != 0 && ci & (1 << s) == 0  &&
+		sact & (1 << s) == 0 {
+		CLR(&p.cmd_issued, (1 << s))
 		if ide_debug {
 			fmt.Printf("complete: %v clear cmd_issued %#x\n", slot,
-				ahci.port.cmd_issued)
+				p.cmd_issued)
 		}
 		if !writing {
-			copy(dst, ahci.port.block[slot][:])
+			copy(dst, p.block[slot][:])
 		}
 		return true
 	}
 	return false
 }
 
+// Called by interrupt handler
 func (ahci *ahci_disk_t) intr() bool {
-	// XXX we have only one port
-	runtime.Pnum(0xD)
-	return true
-
-	// is := LD(&ahci.ahci.is)
-	// for i := uint32(0); i < 32; i++ {
-	// 	if  is & (1 << i) != 0 {
-	// 		return true
-	// 	}
-	// }
-	// return false
+	is := LD(&ahci.ahci.is)
+	for i := uint32(0); i < 32; i++ {
+		if is & (1 << i) != 0 {
+			if i != uint32(ahci.portid) {
+				panic("intr: wrong port\n")
+			}
+			// clear it, so that we don't lose interrupts from
+			// port. however, they won't be delivered until after
+			// int_clear().
+	                SET(&ahci.port.port.is, 0xffffffff) 
+			return true
+		}
+	}
+	return false
 }
 
-// XXX is it ok to clear if drive is working on commands?
+// Called only by sata_daemon
 func (ahci *ahci_disk_t) int_clear() {
-
 	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
 	// port interrupt status and then clear the host interrupt
 	// status.  It's fine to do this even after we've processed the
 	// port interrupt: if any port interrupts happened in the mean
 	// time, the host interrupt bit will just get set again. */
-
-	SET(&ahci.port.port.is, 0xFFFF)  // XXX check which bit is set?
 	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
 	irq_eoi(IRQ_DISK)
 }
-
 	
 func attach_ahci(vid, did int, t pcitag_t) {
 	if disk != nil {
@@ -3570,7 +3553,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
-	IRQ_DISK = 11  	// pci_disk_interrupt_wiring(t) returns 23, but 11 works ...
+	IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
 	INT_DISK = IRQ_BASE + IRQ_DISK
 
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
@@ -3589,7 +3572,6 @@ func attach_ahci(vid, did int, t pcitag_t) {
 }
 
 func disk_test() {
-	ide_debug = true
 
 	return
 	

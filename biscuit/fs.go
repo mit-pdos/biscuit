@@ -96,7 +96,7 @@ func fs_init() *fd_t {
 	go trap_disk(uint(INT_DISK))
 	// we are now prepared to take disk interrupts
 	irq_unmask(IRQ_DISK)
-	go ide_daemon()
+	go sata_daemon()
 
 	disk_test()
 
@@ -3385,7 +3385,7 @@ var ide_int_done	= make(chan bool)
 var ide_request		= make(chan *idereq_t)
 var ide_debug           = false
 
-func ide_done(inflight []*idereq_t) {
+func sata_done(inflight []*idereq_t) {
 	for i, v := range inflight {
 		if v != nil {
 			if adisk.complete(i, v.buf.data[:], v.write) {
@@ -3408,7 +3408,7 @@ func ide_done(inflight []*idereq_t) {
 	adisk.int_clear()
 }
 
-func ide_daemon() {
+func sata_daemon() {
 	n := adisk.slots()
 	inflight := make([]*idereq_t, n)
 	for {
@@ -3429,17 +3429,14 @@ func ide_daemon() {
 						req.buf.block, req.sync)
 				}
 			case <- ide_int_done:
-				if ide_debug {
-					fmt.Printf("interrupt received\n")
-				}
-				ide_done(inflight)
+				sata_done(inflight)
 			}
 		} else {
 			if ide_debug {
 				fmt.Print("no slot available\n")
 			}
 			<- ide_int_done
-			ide_done(inflight)
+			sata_done(inflight)
 
 		}
 	}
