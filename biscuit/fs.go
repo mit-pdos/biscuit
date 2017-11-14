@@ -3377,8 +3377,8 @@ type idebuf_t struct {
 type idereq_t struct {
 	buf	*idebuf_t
 	ack	chan bool
-	write	bool
-	sync   bool
+	cmd	bdevcmd_t
+	sync    bool
 }
 
 var ide_int_done	= make(chan bool)
@@ -3388,10 +3388,10 @@ var ide_debug           = false
 func sata_done(inflight []*idereq_t) {
 	for i, v := range inflight {
 		if v != nil {
-			if adisk.complete(i, v.buf.data[:], v.write) {
+			if adisk.complete(i, v.buf.data, v.cmd == BDEV_READ) {
 				if ide_debug {
-					fmt.Printf("slot %v block %v completed\n",
-						i, v.buf.block)
+					fmt.Printf("slot %v req %v block %v completed\n",
+						i, v.cmd, v.buf.block)
 				}
 				if v.sync {
 					if ide_debug {
@@ -3422,11 +3422,11 @@ func sata_daemon() {
 				if ide_debug {
 					fmt.Printf("req received %v\n", req.buf.block)
 				}
-				adisk.start(slot, req.buf, req.write)
+				adisk.start(slot, req.buf, req.cmd)
 				inflight[slot] = req
 				if ide_debug {
-					fmt.Printf("issued slot %v req for block %v sync %v\n", slot,
-						req.buf.block, req.sync)
+					fmt.Printf("issued slot %v req %v for block %v sync %v\n", slot,
+						req.cmd, req.buf.block, req.sync)
 				}
 			case <- ide_int_done:
 				sata_done(inflight)
@@ -3442,17 +3442,14 @@ func sata_daemon() {
 	}
 }
 
-func idereq_new(block int, write bool, data *[512]uint8, sync bool) *idereq_t {
+func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t {
 	ret := &idereq_t{}
 	ret.ack = make(chan bool)
-	ret.write = write
+	ret.cmd = cmd
 	ret.sync = sync
 	ret.buf = &idebuf_t{}
 	ret.buf.block = block
 	ret.buf.data = data
-	if data == nil {
-		panic("no nil")
-	}
 	return ret
 }
 
@@ -3534,11 +3531,15 @@ func (log *log_t) commit() {
 		logblkn := log.logstart + 1 + i
 		bdev_write_async(logblkn, lb.data)
 	}
+	
+	bdev_flush()   // flush log
 
 	lh.w_recovernum(log.lhead)
 
 	// commit log: flush log header
 	bdev_write(log.logstart, &log.tmpblk)
+
+	bdev_flush()   // commit log
 
 	//rn := lh.recovernum()
 	//if rn > 0 {
@@ -3549,13 +3550,16 @@ func (log *log_t) commit() {
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {
 		lb := log.blks[i]
-		bdev_write(lb.block, lb.data)
+		bdev_write_async(lb.block, lb.data)
 	}
 
+	bdev_flush()  // flush apply
+	
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
 	bdev_write(log.logstart, &log.tmpblk)
-
+	
+	bdev_flush()  // flush cleared commit
 	log.lhead = 0
 }
 
@@ -3679,19 +3683,32 @@ func log_read(loggen uint8, b idebuf_t) (bool, bool) {
 	return ret.had, ret.gencommit
 }
 
+type bdevcmd_t uint
+const (
+	BDEV_WRITE  bdevcmd_t = 1
+	BDEV_READ = 2
+	BDEV_FLUSH = 3
+)
+
 func bdev_write(blkn int, src *[512]uint8) {
-	ider := idereq_new(blkn, true, src, true)
+	ider := idereq_new(blkn, BDEV_WRITE, src, true)
 	ide_request <- ider
 	<- ider.ack
 }
 
 func bdev_write_async(blkn int, src *[512]uint8) {
-	ider := idereq_new(blkn, true, src, false)
+	ider := idereq_new(blkn, BDEV_WRITE, src, false)
 	ide_request <- ider
 }
 
 func bdev_read(blkn int, dst *[512]uint8) {
-	ider := idereq_new(blkn, false, dst, true)
+	ider := idereq_new(blkn, BDEV_READ, dst, true)
+	ide_request <- ider
+	<- ider.ack
+}
+
+func bdev_flush() {
+	ider := idereq_new(0, BDEV_FLUSH, nil, true)
 	ide_request <- ider
 	<- ider.ack
 }

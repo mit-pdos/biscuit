@@ -299,8 +299,8 @@ type disk_t interface {
 type adisk_t interface {
 	slots() int
 	find_slot() (int, bool)
-	start(int, *idebuf_t, bool)
-	complete(int, []uint8, bool) bool
+	start(int, *idebuf_t, bdevcmd_t)
+	complete(int, *[512]uint8, bool) bool
 	intr() bool
 	int_clear()
 }
@@ -2910,7 +2910,9 @@ func (x *ixgbe_t) _dbc_init() {
 //
 // Some useful docs:
 // - http://wiki.osdev.org/AHCI
-// - https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
+// - AHCI: https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
+// - FIS: http://www.ece.umd.edu/courses/enee759h.S2003/references/serialata10a.pdf
+// - CMD: http://www.t13.org/documents/uploadeddocuments/docs2007/d1699r4a-ata8-acs.pdf
 //
 
 type ahci_reg_t struct {
@@ -3067,7 +3069,8 @@ type identify_device struct {
 	pad3 [13]uint16         // Words 62-74
 	queue_depth uint16      // Word 75
 	sata_caps uint16        // Word 76
-	pad4 [9]uint16          // Words 77-85
+	pad4 [8]uint16          // Words 77-84	
+	features85 uint16       // Word 86
 	features86 uint16       // Word 86
 	features87 uint16       // Word 87
 	udma_mode uint16        // Word 88
@@ -3116,10 +3119,11 @@ const (
 
 	IDE_CMD_READ_DMA_EXT uint8 = 0x25
 	IDE_CMD_WRITE_DMA_EXT uint8 = 0x35
+	IDE_CMD_FLUSH_CACHE_EXT = 0xea
 	IDE_CMD_IDENTIFY uint8 = 0xec
+	IDE_CMD_SETFEATURES uint8 = 0xef
 
 	IDE_DEV_LBA = 0x40
-	
 	IDE_CTL_LBA48 = 0x80
 
 	IDE_FEATURE86_LBA48 uint16 = (1 << 10)
@@ -3127,6 +3131,9 @@ const (
 
 	IDE_SATA_NCQ_SUPPORTED  = (1 << 8)
 	IDE_SATA_NCQ_QUEUE_DEPTH = 0x1f
+
+	IDE_FEATURE_WCACHE_ENA = 0x02    
+	IDE_FEATURE_RLA_ENA = 0xAA
 )
 
 func LD(f *uint32) uint32 {
@@ -3274,6 +3281,8 @@ func (p *ahci_port_t) init() bool {
 		p.block[i] = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	}
 
+	
+
 	return true
 }
 
@@ -3309,6 +3318,44 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 	*ret_id = *id
 
 	return ret_id, true
+}
+
+func (p *ahci_port_t) enable_write_cache() bool {
+	fis := &sata_fis_reg_h2d{}
+	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
+	fis.cflag = SATA_FIS_REG_CFLAG;
+	fis.command = IDE_CMD_SETFEATURES;
+	fis.features = IDE_FEATURE_WCACHE_ENA;
+
+	p.fill_prd(0, uint64(0), uint64(0))
+	p.fill_fis(0, fis)
+
+	ST(&p.port.ci, uint32(1))
+
+	if !p.wait(0) {
+		fmt.Printf("AHCI: timeout waiting for write_cache\n")
+		return false
+	}
+	return true
+}
+
+func (p *ahci_port_t) enable_read_ahead() bool {
+	fis := &sata_fis_reg_h2d{}
+	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
+	fis.cflag = SATA_FIS_REG_CFLAG;
+	fis.command = IDE_CMD_SETFEATURES;
+	fis.features = IDE_FEATURE_RLA_ENA;
+
+	p.fill_prd(0, uint64(0), uint64(0))
+	p.fill_fis(0, fis)
+
+	ST(&p.port.ci, uint32(1))
+
+	if !p.wait(0) {
+		fmt.Printf("AHCI: timeout waiting for read_ahead\n")
+		return false
+	}
+	return true
 }
 
 func (p *ahci_port_t) wait(s uint32) bool {
@@ -3383,20 +3430,23 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 	return 0, false
 }
 
-func (p *ahci_port_t) start(s int, ibuf *idebuf_t, writing bool){
-	if (len(*ibuf.data) != 512) {
-		panic("AHCI: start wrong len")
+func (p *ahci_port_t) start(s int, ibuf *idebuf_t, cmd bdevcmd_t){
+	var iov []kiovec
+	if cmd != BDEV_FLUSH {
+		if (len(*ibuf.data) != 512) {
+			panic("AHCI: start wrong len")
+		}
+		io := kiovec{uint64(p.block_pa[s]), uint64(len(*ibuf.data))}
+		iov = []kiovec{io}
 	}
-	io := kiovec{uint64(p.block_pa[s]), uint64(len(*ibuf.data))}
-	if writing {
+	switch cmd {
+	case BDEV_WRITE:
 		copy(p.block[s][:], ibuf.data[:])
-	}
-	iov := []kiovec{io}
-
-	if writing {
 		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_WRITE_DMA_EXT)
-	} else {
+	case BDEV_READ:
 		p.issue(s, iov, uint64(ibuf.block), IDE_CMD_READ_DMA_EXT)
+	case BDEV_FLUSH:
+		p.issue(s, nil, 0, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 }
 
@@ -3406,7 +3456,10 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	fis.cflag = SATA_FIS_REG_CFLAG;
 	fis.command = cmd
 
-	len := p.fill_prd_v(s, iov)
+	len := uint64(0)
+	if iov != nil {
+		len = p.fill_prd_v(s, iov)
+	}
 	if len % 512 != 0 {
 		panic("ACHI: issue len not multiple of 512 ")
 	}
@@ -3435,13 +3488,11 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	// if (cmd == IDE_CMD_WRITE_DMA_EXT || cmd == IDE_CMD_WRITE_FPDMA_QUEUED)
 	// cmdh[cmdslot].flags |= AHCI_CMD_FLAGS_WRITE;
 
-	// Mark the command as issued, for the interrupt handler's benefit.
-	// The cmdslot_alloc_lock protects 'cmds_issued' as well.
-	// cmds_issued |= (1 << cmdslot);
+	// cmds_issued tracks which commands are outstanding
 	ST(&p.port.ci, (1 << uint(s)))
 	SET(&p.cmd_issued, (1 << uint(s)))
 	if ide_debug {
-		fmt.Printf("issue: issued %v ci %#x cmd_issued %#x\n", s,
+		fmt.Printf("issue: issued %v %v ci %#x cmd_issued %#x\n", s, cmd,
 			LD(&p.port.ci), p.cmd_issued)
 	}
 }
@@ -3469,8 +3520,13 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
 				p.nslot, ahci.ncs)
 			}
+			_ = p.enable_write_cache()
+			_ = p.enable_read_ahead()
 			p.enable_interrupt()
-			// XXX enable write caching and read-ahead
+			id, _ = p.identify()
+			fmt.Printf("AHCI: write cache %v read ahead %v\n",
+				LD16(&id.features85) & (1 << 5) != 0,
+				LD16(&id.features85) & (1 << 4) != 0)
 			return  // only one port
 		}
 	}
@@ -3484,12 +3540,12 @@ func (ahci *ahci_disk_t) find_slot() (int, bool) {
 	return ahci.port.find_slot()
 }
 	
-func (ahci *ahci_disk_t) start(s int, ibuf *idebuf_t, writing bool) {
-	ahci.port.start(s, ibuf, writing)
+func (ahci *ahci_disk_t) start(s int, ibuf *idebuf_t, cmd bdevcmd_t) {
+	ahci.port.start(s, ibuf, cmd)
 }
 
 // Called only by sata_daemon
-func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
+func (ahci *ahci_disk_t) complete(slot int, dst *[512]uint8, out bool) bool {
 	s := uint(slot)
 	ci := LD(&ahci.port.port.ci)
 	sact := LD(&ahci.port.port.sact)
@@ -3505,8 +3561,8 @@ func (ahci *ahci_disk_t) complete(slot int, dst []uint8, writing bool) bool {
 			fmt.Printf("complete: %v clear cmd_issued %#x\n", slot,
 				p.cmd_issued)
 		}
-		if !writing {
-			copy(dst, p.block[slot][:])
+		if out {
+			copy(dst[:], p.block[slot][:])
 		}
 		return true
 	}
@@ -3572,6 +3628,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 }
 
 func disk_test() {
+	// ide_debug = true
 
 	return
 	
