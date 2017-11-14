@@ -1,7 +1,15 @@
 /*
  * TODO
- * - count ssa.Make{Slice, Closure, Chan, Interface, Map}?
+ * - Verify that Make{Interface, Closure} do not cause more heap
+ *   allocations besides the ssa.Allocs already present for them.
+ * - sends on buffered channel accumulate live data too
+ * 	- I dumped all channel sends with pointer types and verified that all
+ * 	  such sends are on unbuffered channels, thus the live data
+ * 	  accumulation is already accounted for in the allocation of the object
+ * 	  being sent. This check could be easily automated via more pointer
+ * 	  analysis.
  * - account for append and any other builtins that may affect the analysis
+ * - recursive iteration loops
  */
 
 /*
@@ -11,13 +19,16 @@
  */
 package main
 
+import "bufio"
+import "strconv"
+import "os"
+
 import "fmt"
-import _"bufio"
-import _"strconv"
 import "time"
 import "strings"
-import _"os"
-import "sort"
+import _"sort"
+
+import "go/constant"
 import "go/token"
 import "go/types"
 
@@ -47,6 +58,22 @@ func array_align(t types.Type) int {
 	return int(truesz)
 }
 
+func slicesz(v *ssa.MakeSlice, num int) int {
+	// the element type could be types.Named...
+	elmsz := array_align(v.Type().(*types.Slice).Elem())
+	return num*elmsz + 3*8
+}
+
+func chansz(v *ssa.MakeChan) int {
+	ue := v.Type().(*types.Chan).Elem()
+	elmsz := array_align(ue)
+	// all biscuit channel buffer sizes are constant
+	num, ok := constant.Int64Val(v.Size.(*ssa.Const).Value)
+	if !ok {
+		panic("nuts")
+	}
+	return int(num)*elmsz + 3*8
+}
 
 // returns true if there is a successor path from cur to target
 func blockpath1(cur, target *ssa.BasicBlock, v map[*ssa.BasicBlock]bool) bool {
@@ -179,12 +206,11 @@ var _impossible = map[string][]string {
 
 func ignore(f *ssa.Function, cs *callstack_t) bool {
 	me := realname(f)
-	//for _, t := range []string{".memreclaim", "fmt.", ".mbempty", ".mbread", ".ibread"} {
-	//for _, t := range []string{"fmt.", ".evict", "pgcache_t).release"} {
-	for _, t := range []string{"fmt.", "mbempty", "mbread", "memreclaim", "ibread"} {
-	//for _, t := range []string{"fmt.", "mbempty", "mbread", "memreclaim", "do_mmapi", "iunlock",
-	//    "pgraw", "seg_maybe", "ptefork"} {
-	//for _, t := range []string{"fmt."} {
+	//for _, t := range []string{"fmt.", "mbempty", "mbread", "memreclaim", ".ibread",
+	//    "_ensureslot", "_dceadd", "idaemon_ensure", "fdelist_t).addhead", ".ibempty"} {
+	for _, t := range []string{"fmt."} {
+	//for _, t := range []string{"fmt.", "._mbensure", ".ibread", "frbh_t).insert", "_ensureslot",
+	//    "dc_rbh_t).insert", "fdelist_t).addhead", "trymutex_t).tm_init"} {
 		if strings.Contains(me, t) {
 			return true
 		}
@@ -228,22 +254,18 @@ func maxcall(tnode *callgraph.Node, target *ssa.CallCommon, cs *callstack_t) (*c
 			}
 			continue
 		}
-		if ignore(tnode.Func, cs) {
-			me := tnode.Func.String()
+		if ignore(e.Callee.Func, cs) {
+			me := e.Callee.Func.String()
 			fmt.Printf("**** SKIP %s\n", me)
 			continue
 		}
-		//choopy := cs.calledfrom("(*main.pgcache_t).evict")
-		choopy := false
 		found = true
 		var tc *calls_t
-		if v, ok := memos[e.Callee]; ok && !choopy {
+		if v, ok := memos[e.Callee]; ok {
 			tc = v
 		} else {
 			tc = funcsum(e.Callee, cs)
-			if !choopy {
-				memos[e.Callee] = tc
-			}
+			memos[e.Callee] = tc
 		}
 		if tc.csum >= max {
 			max = tc.csum
@@ -276,20 +298,22 @@ func (e *enode_t) cost() int {
 	return ret
 }
 
-func revblksrc(blk *ssa.BasicBlock) (string, bool) {
+func revblksrc(blk *ssa.BasicBlock) (token.Position, bool) {
 	v := make(map[*ssa.BasicBlock]bool)
 	return revblksrc1(blk, v)
 }
 
-func revblksrc1(blk *ssa.BasicBlock, v map[*ssa.BasicBlock]bool) (string, bool) {
+func revblksrc1(blk *ssa.BasicBlock,
+    v map[*ssa.BasicBlock]bool) (token.Position, bool) {
+	var zt token.Position
 	if v[blk] {
-		return "", false
+		return zt, false
 	}
 	v[blk] = true
 	for i := len(blk.Instrs) - 1; i >= 0; i-- {
 		pos := blk.Instrs[i].Pos()
 		if pos != token.NoPos {
-			ret := blk.Instrs[0].Parent().Prog.Fset.Position(pos).String()
+			ret := blk.Instrs[0].Parent().Prog.Fset.Position(pos)
 			return ret, true
 		}
 	}
@@ -298,7 +322,23 @@ func revblksrc1(blk *ssa.BasicBlock, v map[*ssa.BasicBlock]bool) (string, bool) 
 			return ret, true
 		}
 	}
-	return "", false
+	return zt, false
+}
+
+func readnum(msg string) int {
+	var ret int
+again:
+	fmt.Print(msg)
+	dur := bufio.NewReader(os.Stdin)
+	str, err := dur.ReadString('\n')
+	if err != nil {
+		goto again
+	}
+	ret, err = strconv.Atoi(str[:len(str) - 1])
+	if err != nil {
+		goto again
+	}
+	return ret
 }
 
 var _exits = map[*ssa.BasicBlock]*enode_t{}
@@ -319,27 +359,15 @@ func calcexit(node *callgraph.Node, cur *ssa.BasicBlock, cs *callstack_t) *enode
 	ret.loopalloc = ret.loopcalls.csum
 	iterinput := -1
 	if ret.loopalloc > 0 {
-		sline, ok := revblksrc(cur)
+		posi, ok := revblksrc(cur)
 		if !ok {
 			panic("no")
 		}
-//again:
-		fmt.Printf("WHAT IS BOUND at %v (%vk)?\n", sline, ret.loopalloc >> 10)
-		iterinput = 10
-		//dur := bufio.NewReader(os.Stdin)
-		//str, err := dur.ReadString('\n')
-		//if err != nil {
-		//	goto again
-		//}
-		//iterinput, err = strconv.Atoi(str[:len(str) - 1])
-		//if err != nil {
-		//	goto again
-		//}
+		iterinput = loopbound(posi)
 	} else {
 		iterinput = 0
 	}
 	ret.maxiter = iterinput
-	fmt.Printf("USING %v\n", ret.maxiter)
 	return ret
 }
 
@@ -411,6 +439,17 @@ func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
 			} else {
 				//fmt.Printf("failed for: %v\n", v)
 			}
+		case *ssa.MakeChan:
+			if !reachable[v] {
+				continue
+			}
+			ret += chansz(v)
+		case *ssa.MakeSlice:
+			if !reachable[v] {
+				continue
+			}
+			num := slicebound(v)
+			ret += slicesz(v, num)
 		case *ssa.Alloc:
 			if !v.Heap || !reachable[v] {
 			//if !v.Heap {
@@ -511,6 +550,17 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 			} else {
 				fmt.Printf("failed for: %v\n", v)
 			}
+		case *ssa.MakeChan:
+			if !reachable[v] {
+				continue
+			}
+			ret += chansz(v)
+		case *ssa.MakeSlice:
+			if !reachable[v] {
+				continue
+			}
+			num := slicebound(v)
+			ret += slicesz(v, num)
 		case *ssa.Alloc:
 			if !v.Heap || !reachable[v] {
 			//if !v.Heap {
@@ -663,7 +713,7 @@ func main() {
 	// Build SSA code for bodies of all functions in the whole program.
 	prog.Build()
 
-	allocio(sysfunc)
+	reachallocs(sysfunc)
 
 	cg := mkcallgraph(sysfunc.Prog)
 	var h halp_t
@@ -727,13 +777,17 @@ func pdump(prog *ssa.Program, val ssa.Value, pp *pointer.Pointer) {
 	}
 }
 
+type stores_t struct {
+	addrs	[]*pointer.Pointer
+	vals	[]*pointer.Pointer
+}
+
 type qs_t struct {
 	conf	*pointer.Config
 	res	*pointer.Result
 	pkg	*ssa.Package
-	qs	[]*pointer.Pointer
-	fvisit	map[types.Type]bool
-	save	map[*pointer.Pointer]ssa.Instruction
+	ins	map[ssa.Instruction]*stores_t
+	numq	int
 }
 
 func (q *qs_t) qinit(pkg *ssa.Package) {
@@ -742,40 +796,50 @@ func (q *qs_t) qinit(pkg *ssa.Package) {
 		Mains:          []*ssa.Package{pkg},
 		BuildCallGraph: false,
 	}
-	q.fvisit = make(map[types.Type]bool)
-	q.save = make(map[*pointer.Pointer]ssa.Instruction)
+	q.ins = make(map[ssa.Instruction]*stores_t)
 }
 
-func (q *qs_t) addq(v ssa.Value, in ssa.Instruction) {
-	if pointer.CanPoint(v.Type()) {
-		//q.conf.AddQuery(v)
+func (q *qs_t) addop(in ssa.Instruction) {
+	var addrs []*pointer.Pointer
+	var vals []*pointer.Pointer
+
+	_add := func(v ssa.Value) *pointer.Pointer {
 		wtfp, err := q.conf.AddExtendedQuery(v, "x")
 		if err != nil {
 			panic(err)
 		}
-		q.qs = append(q.qs, wtfp)
-		if _, ok := q.save[wtfp]; ok {
-			panic("...")
-		}
-		q.save[wtfp] = in
+		q.numq++
+		return wtfp
 	}
-}
+	adda := func(v ssa.Value) {
+		addrs = append(addrs, _add(v))
+	}
+	addv := func(v ssa.Value) {
+		vals = append(vals, _add(v))
+	}
 
-func (q *qs_t) funcquery(sf *ssa.Function) {
-	for _, blk := range sf.Blocks {
-		for _, in := range blk.Instrs {
-			v, ok := in.(ssa.Value)
-			if !ok {
-				continue
-			}
-			q.addq(v, in)
+	switch rin := in.(type) {
+	case *ssa.MapUpdate:
+		adda(rin.Map)
+		if pointer.CanPoint(rin.Key.Type()) {
+			addv(rin.Key)
 		}
+		if pointer.CanPoint(rin.Value.Type()) {
+			addv(rin.Value)
+		}
+	case *ssa.Store:
+		adda(rin.Addr)
+		addv(rin.Val)
 	}
+	st := &stores_t{addrs: addrs, vals: vals}
+	if _, ok := q.ins[in]; ok {
+		panic("oh noes")
+	}
+	q.ins[in] = st
 }
 
 func (q *qs_t) analyze() {
-	fmt.Printf("analyzing %v queries...\n", len(q.conf.Queries) +
-	    len(q.conf.IndirectQueries) + len(q.qs))
+	fmt.Printf("analyzing %v queries...\n", q.numq)
 	st := time.Now()
 	res, err := pointer.Analyze(q.conf)
 	if err != nil {
@@ -786,15 +850,6 @@ func (q *qs_t) analyze() {
 }
 
 func (q *qs_t) dump() {
-	fmt.Printf("extendeds:\n")
-	for _, wtfp := range q.qs {
-		pdump(q.pkg.Prog, nil, wtfp)
-	}
-	fmt.Printf("points to (%v):\n", len(q.res.Queries))
-	for k, v := range q.res.Queries {
-		fmt.Printf("query: %v\n", k)
-		pdump(q.pkg.Prog, k, &v)
-	}
 	fmt.Printf("WARNINGS: %v\n", len(q.res.Warnings))
 	//for _, w := range q.res.Warnings {
 	//	fmt.Printf("%v\n\t%v\n", w.Message,
@@ -802,98 +857,25 @@ func (q *qs_t) dump() {
 	//}
 }
 
-func (q *qs_t) _liter(fun func(ssa.Instruction, *pointer.Label)) {
-	for _, wtfp := range q.qs {
-		for _, l := range wtfp.PointsTo().Labels() {
-			in, ok := q.save[wtfp]
-			if !ok {
-				panic("no save")
-			}
-			fun(in, l)
+func (q *qs_t) iiter(fun func(ssa.Instruction, []*pointer.Label,
+    []*pointer.Label)) {
+	for in, st := range q.ins {
+		var la []*pointer.Label
+		var lv []*pointer.Label
+		for _, pp := range st.addrs {
+			la = append(la, pp.PointsTo().Labels()...)
 		}
+		for _, pp := range st.vals {
+			lv = append(la, pp.PointsTo().Labels()...)
+		}
+		fun(in, la, lv)
 	}
-	//for _, qr := range q.res.Queries {
-	//	for _, l := range qr.PointsTo().Labels() {
-	//		fun(nil, l)
-	//	}
-	//}
-	//for _, qr := range q.res.IndirectQueries {
-	//	for _, l := range qr.PointsTo().Labels() {
-	//		fun(nil, l)
-	//	}
-	//}
-}
-
-func (q *qs_t) ifpoint(v ssa.Value, fun func(ssa.Instruction, *pointer.Label)) {
-	q._liter(func (in ssa.Instruction, pp *pointer.Label) {
-		if pp.Value() == v {
-			fun(in, pp)
-		}
-	})
-}
-
-func (q *qs_t) addrec(v ssa.Value) {
-        q.addrec1(v, v.Type(), "x")
-}
-
-func (q *qs_t) addrec1(v ssa.Value, T types.Type, qstr string) {
-	if q.fvisit[T] {
-		return
-	}
-	q.fvisit[T] = true
-outter:
-        for pointer.CanPoint(T) {
-                fmt.Printf("addy %v %v\n", T, qstr)
-                np, err := q.conf.AddExtendedQuery(v, qstr)
-                if err != nil {
-                        panic(err)
-                }
-                q.qs = append(q.qs, np)
-		switch t := T.(type) {
-		case *types.Pointer:
-			T = t.Elem()
-			if pointer.CanPoint(T) {
-				qstr = "*" + qstr
-			}
-		case *types.Named:
-			//fmt.Printf("underlie: %T %v\n", t.Underlying(), t.Underlying())
-			fmt.Printf("SKIP %T %v\n", t, t)
-			break outter
-			//panic("no")
-		default:
-			fmt.Printf("%T %v can point\n", t, t)
-			panic("no")
-		}
-        }
-        // check all pointers of a struct
-        switch T.(type) {
-        default:
-                fmt.Printf("HANDLE %v %T\n", T, T)
-        case *types.Named:
-                switch un := T.Underlying().(type) {
-                default:
-                        fmt.Printf("HANDLE named %v %T\n", un, un)
-                case *types.Struct:
-                        for i := 0; i < un.NumFields(); i++ {
-                                f := un.Field(i)
-                                n := f.Name()
-                                q.addrec1(v, f.Type(), qstr + "." + n)
-                        }
-                }
-        }
 }
 
 var reachable = map[ssa.Value]bool{}
 
-func allocio(sf *ssa.Function) {
-	//var q qs_t
-	//q.qinit(sf.Pkg)
-	//for _, p := range sf.Params {
-	//	q.addrec(p)
-	//}
-	//q.analyze()
-	//q.dump()
-
+func reachallocs(sf *ssa.Function) {
+	var roots []ssa.Value
 	allfuncs := make([]*ssa.Function, 0)
 	for _, mem := range sf.Pkg.Members {
 		switch rt:= mem.(type) {
@@ -907,20 +889,22 @@ func allocio(sf *ssa.Function) {
 					allfuncs = append(allfuncs, safunc)
 				}
 			}
+		case *ssa.Global:
+			roots = append(roots, rt)
 		}
 	}
 
-	_glob, ok := sf.Pkg.Members["pglru"]
-	if !ok {
-		panic("none globerton")
-	}
-	glob := _glob.(*ssa.Global)
-	fmt.Printf("%v %T %T\n", glob, glob, glob.Type().(*types.Pointer).Elem())
+	//_glob, ok := sf.Pkg.Members["allprocs"]
+	//_glob, ok := sf.Pkg.Members["flea"]
+	//if !ok {
+	//	panic("none globerton")
+	//}
+	//glob := _glob.(*ssa.Global)
+	//fmt.Printf("%v %T %T\n", glob, glob, glob.Type().(*types.Pointer).Elem())
+	//roots = []ssa.Value{glob}
 
-	var saddr qs_t
-	saddr.qinit(sf.Pkg)
-	var sval qs_t
-	sval.qinit(sf.Pkg)
+	var stores qs_t
+	stores.qinit(sf.Pkg)
 	for _, fun := range allfuncs {
 		//fmt.Printf("%v\n", fun)
 		for _, blk := range fun.Blocks {
@@ -931,68 +915,95 @@ func allocio(sf *ssa.Function) {
 				//		fmt.Printf("FOUND %T %v\n", in, in)
 				//	}
 				//}
-				//if val, ok := in.(ssa.Value); ok && pointer.CanPoint(val.Type()) {
-				//	saddr.addq(val, in)
-				//}
-				//sl := sf.Prog.Fset.Position(in.Pos()).String()
-				//if strings.Contains(sl, "fs.go:1498") {
-				//	fmt.Printf("HAP %v %T %v\n", in, in, sl)
-				//}
 				switch rin := in.(type) {
-				//case *ssa.FieldAddr:
-				//	//saddr.addq(rin.X, rin)
-				//	if x, ok := rin.X.(*ssa.Global); ok && x == glob {
-				//		fmt.Printf("GOOD FOUND\n")
-				//		roots = append(roots, rin)
+				//case *ssa.Send:
+				//	ue := rin.Chan.Type().(*types.Chan).Elem()
+				//	if pointer.CanPoint(ue) {
+				//		sl := sf.Prog.Fset.Position(rin.Pos())
+				//		fmt.Printf("  SEND POINTER %v\n", sl)
 				//	}
+				case *ssa.MapUpdate:
+					if pointer.CanPoint(rin.Key.Type()) ||
+					   pointer.CanPoint(rin.Value.Type()) {
+						stores.addop(rin)
+					}
 				case *ssa.Store:
-					//if g, ok := rin.Addr.(*ssa.Global); ok && g == glob {
-					//	fmt.Printf("HAPY\n")
-					//}
 					ue := rin.Addr.Type().(*types.Pointer).Elem()
 					if pointer.CanPoint(ue) {
-						//sl := sf.Prog.Fset.Position(in.Pos())
-						//fmt.Printf("   %v %v\n", rin.Addr, sl)
-						saddr.addq(rin.Addr, in)
 						if !pointer.CanPoint(rin.Val.Type()) {
 							panic("wtf")
 						}
-						sval.addq(rin.Val, in)
+						stores.addop(rin)
 					}
-				//case *ssa.MapUpdate:
-				//	fmt.Printf("%v %T\n", rin.Map, rin.Map)
 				}
 			}
 		}
 	}
-	saddr.analyze()
-	sval.analyze()
-	st2val := make(map[ssa.Instruction][]*pointer.Label)
-	sval._liter(func (in ssa.Instruction, l *pointer.Label) {
-		sl := st2val[in]
-		st2val[in] = append(sl, l)
-	})
 
+	stores.analyze()
+
+	didid := 0
+	didids := make(map[ssa.Value]int)
+	for _, r := range roots {
+		didids[r] = didid
+		didid++
+		//fmt.Printf("SOOT %v %v\n", didids[r], r)
+	}
 	didvals := make(map[ssa.Value]bool)
-	roots := []ssa.Value{glob}
+	rnd := 0
 	for len(roots) != 0 {
+		fmt.Printf("round %v\n", rnd)
+		rnd++
 		var newroots []ssa.Value
 		for _, r := range roots {
-			saddr.ifpoint(r, func(in ssa.Instruction, l *pointer.Label) {
-				// the points-to-set of nil writes is empty and
-				// thus the corresponding instructions are not
-				// visited in _liter when st2val is created
-				ls, ok := st2val[in]
-				if !ok {
+			stores.iiter(func(in ssa.Instruction, ap []*pointer.Label, vp []*pointer.Label) {
+				addallocs := false
+				for _, l := range ap {
+					if l.Value() == r {
+						addallocs = true
+					}
+				}
+				// check for direct store to static storage
+				if !addallocs {
+					var addr ssa.Value
+					switch rin := in.(type) {
+					case *ssa.MapUpdate:
+						addr = rin.Map
+					case *ssa.Store:
+						addr = rin.Addr
+					}
+					if addr == r {
+						addallocs = true
+					}
+				}
+				if !addallocs {
 					return
 				}
-				//sl := sf.Prog.Fset.Position(in.Pos())
-				//fmt.Printf("YAHOO %v %v %v\n", l.Value(), in.Parent(), sl)
-				for _, l := range ls {
-					alloc, ok := l.Value().(*ssa.Alloc)
-					if ok && alloc.Heap && !didvals[alloc] {
-						didvals[alloc] = true
-						newroots = append(newroots, alloc)
+				// the address pointer may point to a root, add
+				// any allocations that may be written by this
+				// store to the root set
+				for _, l := range vp {
+					val := l.Value()
+					addval := false
+					switch alloc := val.(type) {
+					case *ssa.MakeChan:
+						addval = true
+					case *ssa.MakeSlice:
+						addval = true
+					case *ssa.Alloc:
+						if alloc.Heap {
+							addval = true
+						}
+					case *ssa.MakeMap:
+						addval = true
+					}
+					if addval && !didvals[val] {
+						didids[val] = didid
+						didid++
+						didvals[val] = true
+						newroots = append(newroots, val)
+						//sl := sf.Prog.Fset.Position(in.Pos())
+						//fmt.Printf("   ROOT %v <- %v %v %T\n", didids[r], didids[val], sl, val)
 					}
 				}
 			})
@@ -1004,233 +1015,127 @@ func allocio(sf *ssa.Function) {
 	for val := range didvals {
 		reachable[val] = true
 	}
-
-	//for _, root := range roots {
-	//	for _, mem := range sf.Pkg.Members {
-	//		fun, ok := mem.(*ssa.Function)
-	//		if !ok {
-	//			continue
-	//		}
-	//		for _, blk := range fun.Blocks {
-	//			for _, in := range blk.Instrs {
-	//				ops := in.Operands(nil)
-	//				for _, oo := range ops {
-	//					if *oo == root {
-	//						fmt.Printf("R FOUND %T %v\n", in, in)
-	//					}
-	//				}
-	//				//switch rin := in.(type) {
-	//				//case *ssa.Store:
-	//				//	q.addq(rin.Addr)
-	//				//case *ssa.MapUpdate:
-	//				//	fmt.Printf("%v %T\n", rin.Map, rin.Map)
-	//				//}
-	//			}
-	//		}
-	//	}
-	//}
-
-	//conf := &pointer.Config{
-	//	Mains:          []*ssa.Package{sf.Pkg},
-	//	BuildCallGraph: false,
-	//}
-	////wtfp, err := conf.AddExtendedQuery(sf.Params[0], "x.fds[0].fops")
-	//wtfp, err := conf.AddExtendedQuery(sf.Params[0], "x.fds[0]")
-	//if err != nil {
-	//	panic(err)
-	//}
-	//_, err = pointer.Analyze(conf)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//dt := wtfp.DynamicTypes()
-	//if dt.Len() > 0 {
-	//	dt.Iterate(func (key types.Type, val interface{}) {
-	//		T := key.(*types.Pointer).Elem().(*types.Named)
-	//		pt := val.(pointer.PointsToSet)
-	//		for _, l := range pt.Labels() {
-	//			sl := sf.Prog.Fset.Position(l.Pos())
-	//			fmt.Printf("= %v %v\n", T.String(), sl)
-	//		}
-	//	})
-	//} else {
-	//	for _, l := range wtfp.PointsTo().Labels() {
-	//		sl := sf.Prog.Fset.Position(l.Pos())
-	//		fmt.Printf("%v %v\n", l.Value(), sl)
-	//	}
-	//}
-
-	//for _, mem := range sf.Pkg.Members {
-	//	ff, ok := mem.(*ssa.Function)
-	//	if !ok {
-	//		continue
-	//	}
-	//	q.funcquery(ff)
-	//	fmt.Printf(".")
-	//}
-	//q.analyze()
-	////q.dump()
-	//r := []map[ssa.Value]pointer.Pointer{ q.res.Queries, q.res.IndirectQueries}
-	//for _, m := range r {
-	//	for _, p := range m {
-	//		for _, l := range p.PointsTo().Labels() {
-	//			if _, ok := l.Value().(*ssa.Alloc); ok {
-	//				reachable[l.Value()] = true
-	//			}
-	//		}
-	//	}
-	//}
 }
 
-func ptrstores(f *ssa.Function) []*ssa.Store {
-	var ret []*ssa.Store
-	for _, b := range f.Blocks {
-		for _, is := range b.Instrs {
-			st, ok := is.(*ssa.Store)
-			if !ok {
-				continue
-			}
-			sline := f.Prog.Fset.Position(is.Pos())
-			selm := st.Addr.Type().(*types.Pointer).Elem()
-			switch selm.(type) {
-			case *types.Basic, *types.Slice:
-				continue
-			}
-			if selm.String() == "main.pollmsg_t" {
-				fmt.Printf("%v %v\n", selm.String(), sline)
-				ret = append(ret, st)
-			}
-		}
-	}
-	return ret
+// types to save maximum loop bounds and slice sizes.
+type nument_t struct {
+	file	string
+	sline	int
+	eline	int
+	bound	int
 }
 
-func analysis(prog *ssa.Program) {
-	pkg := ssautil.MainPackages(prog.AllPackages())[0]
-	pt := pkg.Type("pollers_t").Type()
-	ppt := types.NewPointer(pt)
-	addpt := prog.LookupMethod(ppt, pkg.Pkg, "addpoller")
-	pstores := ptrstores(addpt)
-
-	// Configure the pointer analysis to build a call-graph.
-	config := &pointer.Config{
-		//Mains:          prog.AllPackages(),
-		Mains:          ssautil.MainPackages(prog.AllPackages()),
-		BuildCallGraph: false,
-	}
-
-	for _, st := range pstores {
-		//config.AddIndirectQuery(st.Addr)
-		config.AddQuery(st.Addr)
-	}
-	//config.AddQuery(addpt.Params[1])
-
-	arg := prog.LookupMethod(ppt, pkg.Pkg, "addpoller").Params[1]
-	wtfp, err := config.AddExtendedQuery(arg, "x.notif")
-	if err != nil {
-		panic(err)
-	}
-
-	result, err := pointer.Analyze(config)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("wtfp:\n")
-	for _, l := range wtfp.PointsTo().Labels() {
-		fmt.Printf("  %s: %s\n", prog.Fset.Position(l.Pos()), l)
-	}
-
-	fmt.Printf("points to (%v):\n", len(result.Queries))
-	for _, q := range result.Queries {
-		var labels []string
-		fmt.Printf("query: %v\n", q)
-		for _, l := range q.PointsTo().Labels() {
-		    label := fmt.Sprintf("  %s: %s", prog.Fset.Position(l.Pos()), l)
-		    labels = append(labels, label)
-		}
-		sort.Strings(labels)
-		for _, label := range labels {
-		    fmt.Println(label)
-		}
-	}
+type numdb_t struct {
+	ents []nument_t
 }
 
-//c.CreateFromFilenames("runtime",
-//    "/home/ccutler/biscuit/src/runtime/runtime.go",
-//    "/home/ccutler/biscuit/src/runtime/runtime1.go",
-//    "/home/ccutler/biscuit/src/runtime/runtime2.go",
-//    "/home/ccutler/biscuit/src/runtime/type.go",
-//    "/home/ccutler/biscuit/src/runtime/alg.go",
-//    "/home/ccutler/biscuit/src/runtime/os_linux_generic.go",
-//    "/home/ccutler/biscuit/src/runtime/mcache.go",
-//    "/home/ccutler/biscuit/src/runtime/sizeclasses.go",
-//    "/home/ccutler/biscuit/src/runtime/mheap.go",
-//    "/home/ccutler/biscuit/src/runtime/malloc.go",
-//    "/home/ccutler/biscuit/src/runtime/chan.go",
-//    "/home/ccutler/biscuit/src/runtime/trace.go",
-//    "/home/ccutler/biscuit/src/runtime/mgc.go",
-//    "/home/ccutler/biscuit/src/runtime/mgcwork.go",
-//    "/home/ccutler/biscuit/src/runtime/cgocall.go",
-//    "/home/ccutler/biscuit/src/runtime/stack.go",
-//    "/home/ccutler/biscuit/src/runtime/mgcsweepbuf.go",
-//    "/home/ccutler/biscuit/src/runtime/mcentral.go",
-//    "/home/ccutler/biscuit/src/runtime/mfixalloc.go",
-//    "/home/ccutler/biscuit/src/runtime/mprof.go",
-//    "/home/ccutler/biscuit/src/runtime/symtab.go",
-//    "/home/ccutler/biscuit/src/runtime/plugin.go",
-//    "/home/ccutler/biscuit/src/runtime/defs_linux_amd64.go",
-//    "/home/ccutler/biscuit/src/runtime/signal_linux_amd64.go",
-//    "/home/ccutler/biscuit/src/runtime/typekind.go",
-//    "/home/ccutler/biscuit/src/runtime/stubs.go",
-//    "/home/ccutler/biscuit/src/runtime/stubs2.go",
-//    "/home/ccutler/biscuit/src/runtime/hashmap.go",
-//    "/home/ccutler/biscuit/src/runtime/string.go",
-//    "/home/ccutler/biscuit/src/runtime/print.go",
-//    "/home/ccutler/biscuit/src/runtime/panic.go",
-//    "/home/ccutler/biscuit/src/runtime/error.go",
-//    "/home/ccutler/biscuit/src/runtime/mbitmap.go",
-//    "/home/ccutler/biscuit/src/runtime/hash64.go",
-//    "/home/ccutler/biscuit/src/runtime/lock_futex.go",
-//    "/home/ccutler/biscuit/src/runtime/race.go",
-//    "/home/ccutler/biscuit/src/runtime/slice.go",
-//    "/home/ccutler/biscuit/src/runtime/extern.go",
-//    "/home/ccutler/biscuit/src/runtime/mstats.go",
-//    "/home/ccutler/biscuit/src/runtime/mgcsweep.go",
-//    "/home/ccutler/biscuit/src/runtime/atomic_pointer.go",
-//    "/home/ccutler/biscuit/src/runtime/env_posix.go",
-//    "/home/ccutler/biscuit/src/runtime/mstkbar.go",
-//    "/home/ccutler/biscuit/src/runtime/msan.go",
-//    "/home/ccutler/biscuit/src/runtime/mem_linux.go",
-//    "/home/ccutler/biscuit/src/runtime/mfinal.go",
-//    "/home/ccutler/biscuit/src/runtime/mgcmark.go",
-//    "/home/ccutler/biscuit/src/runtime/fastlog2.go",
-//    "/home/ccutler/biscuit/src/runtime/proc.go",
-//    "/home/ccutler/biscuit/src/runtime/mbarrier.go",
-//    "/home/ccutler/biscuit/src/runtime/sema.go",
-//    "/home/ccutler/biscuit/src/runtime/time.go",
-//    "/home/ccutler/biscuit/src/runtime/traceback.go",
-//    "/home/ccutler/biscuit/src/runtime/lfstack.go",
-//    "/home/ccutler/biscuit/src/runtime/cgo.go",
-//    "/home/ccutler/biscuit/src/runtime/sys_x86.go",
-//    "/home/ccutler/biscuit/src/runtime/iface.go",
-//    "/home/ccutler/biscuit/src/runtime/utf8.go",
-//    "/home/ccutler/biscuit/src/runtime/msize.go",
-//    "/home/ccutler/biscuit/src/runtime/write_err.go",
-//    "/home/ccutler/biscuit/src/runtime/signal_unix.go",
-//    "/home/ccutler/biscuit/src/runtime/signal_amd64x.go",
-//    "/home/ccutler/biscuit/src/runtime/unaligned1.go",
-//    "/home/ccutler/biscuit/src/runtime/mmap.go",
-//    "/home/ccutler/biscuit/src/runtime/fastlog2table.go",
-//    "/home/ccutler/biscuit/src/runtime/netpoll_stub.go",
-//    "/home/ccutler/biscuit/src/runtime/sys_nonppc64x.go",
-//    "/home/ccutler/biscuit/src/runtime/cpuprof.go",
-//    "/home/ccutler/biscuit/src/runtime/cgocheck.go",
-//    "/home/ccutler/biscuit/src/runtime/lfstack_64bit.go",
-//    "/home/ccutler/biscuit/src/runtime/sigtab_linux_generic.go",
-//    "/home/ccutler/biscuit/src/runtime/signal_sighandler.go",
-//    "/home/ccutler/biscuit/src/runtime/sigqueue.go",
-//    "/home/ccutler/biscuit/src/runtime/vdso_linux_amd64.go",
-//    "/home/ccutler/biscuit/src/runtime/sigaction_linux.go",
-//    "/home/ccutler/biscuit/src/runtime/cputicks.go",
-//    "/home/ccutler/biscuit/src/runtime/os_linux.go")
+func (n *numdb_t) lookup(posi token.Position) (int, bool) {
+	for _, e := range n.ents {
+		//fmt.Printf("%v %v\n", posi.Filename, e.file)
+		if posi.Filename != e.file {
+			continue
+		}
+		if posi.Line >= e.sline && posi.Line <= e.eline {
+			return e.bound, true
+		}
+	}
+	return 0, false
+}
+
+var BROOT = "/home/ccutler/biscuit/biscuit/"
+var FS = BROOT + "fs.go"
+var MAIN = BROOT + "main.go"
+var SYSC = BROOT + "syscall.go"
+var NET = BROOT + "net.go"
+
+// INF is just a large constant for unbounded loops. the allocations for such
+// loops need special handling, like evicting as much memory as they allocate
+// when memory is tight
+var INF = 10
+
+var loopdb = numdb_t{
+	ents: []nument_t{
+		{FS, 2862, 2874, INF},	// unlink free blocks XXX
+		{FS, 2126, 2140, 64},	// fill indirect with zero blocks
+		{FS, 2180, 2190, INF},	// fill file with zero blocks XXX
+		{FS, 2348, 2363, 8},	// flush dirty part of page
+		{FS, 1369, 1382, 8},	// flush dirty part of page (again?)
+		{FS, 3648, 3663, INF},	// iterate all inodes for evict
+		{FS, 1285, 1294, INF},	// attempt pg cache evict
+		{FS, 2310, 2337, 8},	// fill page from disk
+		{FS, 2828, 2836, 1},	// get phys pages for file (no loop)
+		{FS, 795, 805, INF},	// read raw dev
+		{FS, 814, 827, INF},	// write raw dev
+		{FS, 2216, 2226, INF},	// loop over file pages for read
+		{FS, 2239, 2251, INF},	// loop over file pages for write
+		{FS, 2271, 2286, INF},	// zero fill empty file blocks XXX
+		{FS, 2448, 2466, INF},	// callback over file's pages
+		{FS, 1567, 1575, INF},	// evict idaemon XXX
+		{FS, 1187, 1204, INF},	// namei path
+		{FS, 2403, 2406, 23},	// add free des for new dir page
+		{FS, 1015, 1043, INF},	// O_CREAT deadlock avoidance XXX
+		{FS, 1828, 1857, INF},	// loop inodes for getcwd
+		{FS, 416, 433, INF},	// loop inodes for for ancestor check
+		{FS, 228, 249, INF},	// unlink deadlock avoidance
+		{MAIN, 2203, 2209, INF},// fds buffered in passfd XXX
+		{MAIN, 1326, 1331, 512},// close all fds on exit
+		{MAIN, 1799, 1819, INF},// translate/copy to/from usermem
+		{MAIN, 1875, 1895, INF},// iovec translate/copy to/from usermem
+		{MAIN, 1497, 1513, 512},// trans/copy pages for user string
+		{MAIN, 1603, 1615, INF},// trans/copy to user mem
+		{MAIN, 1630, 1638, INF},// trans/copy from user mem
+		{MAIN, 1452, 1463, 2},  // user readn (8 bytes max)
+		{MAIN, 1845, 1856, 10}, // user iovs
+		{MAIN, 1474, 1482, 2},  // user writen (8 bytes max)
+		//{MAIN, 701, 712, INF},  // copy parent's fds
+		{MAIN, 700, 712, INF},  // copy parent's fds
+		//{MAIN, 1567, 1586, 64}, // copy user exec args to kernel
+		{MAIN, 1566, 1586, 64}, // copy user exec args to kernel
+		{MAIN, 1136, 1182, INF},// user syscall/exception loop
+		{NET, 3377, 3390, INF}, // read wait for tcp data
+		{NET, 3412, 3430, INF}, // write wait for tcp buffer
+		{NET, 280, 283, INF},   // arp evict race detection
+		{NET, 228, 231, INF},   // arp evict race detection again
+		{NET, 222, 226, INF},   // arp evict race detection again
+		{NET, 258, 258, INF},   // arp evict race detection again
+		{NET, 249, 249, INF},   // arp evict race detection again
+		{SYSC, 1382, 1388, INF},// write wait for pipe buffer
+		{SYSC, 1311, 1313, INF},// fd add wait for buffer
+		{SYSC, 893, 937, 512},  // maximum poll fds
+		{SYSC, 969, 993, INF},  // re-check fds? XXX
+		{SYSC, 2986, 2988, 64},	// unix incoming sleep conds
+		{SYSC, 3369, 3373, 512},// close child fds on fork fail
+		{SYSC, 3752, 3761, 512},// close CLOEXEC fds
+		{SYSC, 5027, 5044, INF},// copy TLS data XXX
+		//{SYSC, 4973, 4986, INF},// all ELF headers
+		{SYSC, 4969, 4986, INF},// all ELF headers
+		{SYSC, 3814, 3825, 64},// copy user exec args to user
+	},
+}
+
+var slicedb = numdb_t{
+	ents: []nument_t{
+		{FS, 1298, 1298, 8},		// dirty blocks slice
+		{MAIN, 785, 785, 512},		// fd table expansion
+		{MAIN, 699, 699, 512},		// copy fd table for fork
+		{MAIN, 3084, 3084, 8},		// enable CPU PMCs
+		{SYSC, 2409, 2409, 51},		// datagram sender addresses
+		{NET, 1467, 1467, 512},		// listen tcp backlog
+		{NET, 3883, 3883, 512},		// also listen tcp backlog
+		{SYSC, 2985, 2985, 64},		// unix domain backlog
+	},
+}
+
+func loopbound(posi token.Position) int {
+	if num, ok := loopdb.lookup(posi); ok {
+		return num
+	}
+	return readnum(fmt.Sprintf("LOOP BOUND at %v: ", posi))
+}
+func slicebound(v ssa.Instruction) int {
+	posi := v.Parent().Prog.Fset.Position(v.Pos())
+	if num, ok := slicedb.lookup(posi); ok {
+		return num
+	}
+	return readnum(fmt.Sprintf("MAX SLICE LENGTH at %v: ", posi))
+}
