@@ -3359,7 +3359,7 @@ func (p *ahci_port_t) enable_read_ahead() bool {
 }
 
 func (p *ahci_port_t) wait(s uint32) bool {
-	// fmt.Printf("wait slot %v\n", s)
+	fmt.Printf("wait slot %v\n", s)
 	for c := 0; c < 100000; c++ {
 		stat := LD(&p.port.tfd) & 0xff
 		ci := LD(&p.port.ci) & (1 << s)
@@ -3369,7 +3369,8 @@ func (p *ahci_port_t) wait(s uint32) bool {
 			return true
 		}
 		if c % 10000 == 0 {
-			fmt.Printf("AHCI: wait: ci %#x sact %#x..\n", ci, sact)
+			fmt.Printf("AHCI: wait: stat %#x ci %#x sact %#x..\n",
+				stat & IDE_STAT_BSY, ci, sact)
 		}
 		
 	}
