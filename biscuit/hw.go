@@ -3259,7 +3259,7 @@ func (p *ahci_port_t) init() bool {
 	ST64(&p.port.fb, uint64(p.rfis_pa))
         ST(&p.port.ci, 0)
 	// Clear any errors first, otherwise the chip wedges
-	CLR(&p.port.serr, 0xFFFF)
+	CLR(&p.port.serr, 0xFFFFFFFF)
 	ST(&p.port.serr, 0)
 
 	SET(&p.port.cmd, AHCI_PORT_CMD_FRE | AHCI_PORT_CMD_ST |
@@ -3384,7 +3384,7 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 	for i := 0; i < len(f); i++ {
 		ST(&p.cmdt[cmdslot].cfis[i], f[i])
 	}
-	ST16(&p.cmdh[cmdslot].flags, uint16(20))
+	ST16(&p.cmdh[cmdslot].flags, uint16(5))
 	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
@@ -3496,6 +3496,18 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 			LD(&p.port.ci), p.cmd_issued)
 	}
 }
+
+
+// attach AHCI disk 0x3b22 0x24 0xdfcfe000
+// pin 1
+// d.ahci &{0xe722ff65 0x80000002 0x1 0x3f 0x10300 0x0 0x0 0x1600002
+//          0x7010000 0x4 0x0} ncs 0x20
+// AHCI: port active, clearing ..
+// AHCI: size cmdt 33558528 pages 8194
+// AHCI SATA ATA port 0 &{0x10296c000 0x10296b000 0x1 0x7d80007f 0xc017 0x0
+// 0x50 0x1
+// 01 0x113 0x300 0x0 0x0 0x0 0x0 0x0}
+// AHCI: wait: ci 0x1 sact 0x0..
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
