@@ -194,16 +194,16 @@ old_qemu-gdb: d.img
 	$(QEMU) $(QOPTS) -S -s -hda d.img
 
 gqemu: go.img
-	$(QEMU) $(QOPTS) -nographic -hda go.img
+	$(QEMU) $(QOPTS) -nographic
 
 gqemux: go.img
-	$(QEMU) $(QOPTS) -serial stdio -hda go.img
+	$(QEMU) $(QOPTS) -serial stdio
 
 gqemu-gdb: go.img
-	$(QEMU) $(QOPTS) -nographic -S -s -hda go.img
+	$(QEMU) $(QOPTS) -nographic -S -s
 
 gqemux-gdb: go.img
-	$(QEMU) $(QOPTS) -S -s -serial stdio -hda go.img
+	$(QEMU) $(QOPTS) -S -s -serial stdio
 
 btest: btest.c
 	gcc -Os -m32 -I./ -o $@.elf $^ -nostdlib -nostdinc -e main -Ttext 0x7c00
