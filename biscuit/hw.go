@@ -2944,7 +2944,7 @@ type port_reg_t struct {
 	sact uint32		// sata phy active: SActive
 	ci uint32		// command issue
 	sntf uint32		// sata phy notification: SNotify
-	fbs uint32            // FIS-based switching control
+	fbs uint32              // FIS-based switching control
 };
 
 type ahci_disk_t struct {
@@ -3070,7 +3070,7 @@ type identify_device struct {
 	queue_depth uint16      // Word 75
 	sata_caps uint16        // Word 76
 	pad4 [8]uint16          // Words 77-84	
-	features85 uint16       // Word 86
+	features85 uint16       // Word 85
 	features86 uint16       // Word 86
 	features87 uint16       // Word 87
 	udma_mode uint16        // Word 88
@@ -3193,6 +3193,7 @@ func (p *ahci_port_t) init() bool {
 	if (LD(&p.port.ssts) >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
 		return false
 	}
+	
 	// Only SATA drives
 	if LD(&p.port.sig) != SATA_SIG_ATA {
 		return false
@@ -3257,7 +3258,9 @@ func (p *ahci_port_t) init() bool {
 
 	ST64(&p.port.clb, uint64(p.cmdh_pa))
 	ST64(&p.port.fb, uint64(p.rfis_pa))
+	
         ST(&p.port.ci, 0)
+	
 	// Clear any errors first, otherwise the chip wedges
 	CLR(&p.port.serr, 0xFFFFFFFF)
 	ST(&p.port.serr, 0)
@@ -3281,8 +3284,6 @@ func (p *ahci_port_t) init() bool {
 		p.block[i] = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	}
 
-	
-
 	return true
 }
 
@@ -3294,7 +3295,7 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 	fis.sector_count = 1;
 
 	// To receive the identity 
-	_, pa, ok := refpg_new()   // free the page on return
+	_, pa, ok := refpg_new()   // frees the page on return
 	if !ok {
 		return nil, false
 	}
@@ -3364,7 +3365,6 @@ func (p *ahci_port_t) wait(s uint32) bool {
 		stat := LD(&p.port.tfd) & 0xff
 		ci := LD(&p.port.ci) & (1 << s)
 		sact := LD(&p.port.sact) & (1 << s)
-		// XXX sact == 0 instead of stat for requests other than identify?
 		if stat&IDE_STAT_BSY == 0 && ci == 0  {
 			return true
 		}
@@ -3398,7 +3398,6 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
 		SET(&cmd.prdt[slot].dbc, 1 << 31)
 		nbytes += iov[slot].len;
 	}
-
 	ST16(&p.cmdh[cmdslot].prdtl, uint16(len(iov)));
 	return nbytes;
 }
@@ -3497,18 +3496,6 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 			LD(&p.port.ci), p.cmd_issued)
 	}
 }
-
-
-// attach AHCI disk 0x3b22 0x24 0xdfcfe000
-// pin 1
-// d.ahci &{0xe722ff65 0x80000002 0x1 0x3f 0x10300 0x0 0x0 0x1600002
-//          0x7010000 0x4 0x0} ncs 0x20
-// AHCI: port active, clearing ..
-// AHCI: size cmdt 33558528 pages 8194
-// AHCI SATA ATA port 0 &{0x10296c000 0x10296b000 0x1 0x7d80007f 0xc017 0x0
-// 0x50 0x1
-// 01 0x113 0x300 0x0 0x0 0x0 0x0 0x0}
-// AHCI: wait: ci 0x1 sact 0x0..
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
