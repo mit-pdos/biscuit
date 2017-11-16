@@ -186,18 +186,19 @@ func breakpcitag(b pcitag_t) (int, int, int) {
 	return bus, d, f
 }
 
+
 func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_VEND_INTEL := 0x8086
 	// PCI_DEV_PIIX3 := 0x7000
-	PCI_DEV_3400  := 0x3b20
+	// PCI_DEV_3400  := 0x3b20
 	PCI_DEV_X540T := 0x1528
-	PCI_DEV_AHCI := 0x2922
+	PCI_DEV_AHCI := 0x2922 // 0x3b22 // 0x2922
 
 	// map from vendor ids to a map of device ids to attach functions
 	alldevs := map[int]map[int]func(int, int, pcitag_t) {
 		PCI_VEND_INTEL : {
 			// PCI_DEV_PIIX3 : attach_piix3,
-			PCI_DEV_3400 : attach_3400,
+			// PCI_DEV_3400 : attach_3400,
 			PCI_DEV_X540T: attach_ixgbe,
 			PCI_DEV_AHCI: attach_ahci,
 			},
@@ -2949,6 +2950,7 @@ type port_reg_t struct {
 
 type ahci_disk_t struct {
 	bara int
+	model string
 	ahci *ahci_reg_t
 	tag pcitag_t
 	ncs uint32
@@ -3290,7 +3292,17 @@ func (p *ahci_port_t) init() bool {
 	return true
 }
 
-func (p *ahci_port_t) identify() (*identify_device, bool) {
+func swap(info []uint8) []uint8{
+	for i := 0; i < len(info); i += 2 {
+		c := info[i]
+		info[i] = info[i+1]
+		info[i+1] = c
+		
+	}
+	return info
+}
+
+func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis := &sata_fis_reg_h2d{}
 	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
 	fis.cflag = SATA_FIS_REG_CFLAG;
@@ -3300,7 +3312,7 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 	// To receive the identity 
 	_, pa, ok := refpg_new()   // frees the page on return
 	if !ok {
-		return nil, false
+		return nil,nil, false
 	}
 	p.fill_prd(0, uint64(pa), uint64(PGSIZE))
 	p.fill_fis(0, fis)
@@ -3309,19 +3321,22 @@ func (p *ahci_port_t) identify() (*identify_device, bool) {
 
 	if !p.wait(0) {
 		fmt.Printf("AHCI: timeout waiting for identity\n")
-		return nil, false
+		return nil, nil, false
 	}
 
 	id := (*identify_device)(unsafe.Pointer(dmap(pa)))
 	if LD16(&id.features86) & IDE_FEATURE86_LBA48 == 0 {
 		fmt.Printf("AHCI: disk too small, driver requires LBA48\n");
-		return nil, false
+		return nil, nil, false
 	}
 
 	ret_id := &identify_device{}
 	*ret_id = *id
 
-	return ret_id, true
+	m := swap(id.model[:])
+	s := string(m)
+	
+	return ret_id, &s, true
 }
 
 func (p *ahci_port_t) enable_write_cache() bool {
@@ -3500,6 +3515,7 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	}
 }
 
+
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
 	a := ahci.bara + 0x100 + 0x80 * pid
@@ -3509,10 +3525,11 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
 		ahci.port = p
 		ahci.portid = pid
-		id, ok := p.identify()
+		id, m, ok := p.identify()
 		if ok {
+			ahci.model = *m
 			ahci.nsectors = LD64(&id.lba48_sectors)
-			fmt.Printf("AHCI: sectors %#x\n", ahci.nsectors);
+			fmt.Printf("AHCI: model %v sectors %#x\n", ahci.model, ahci.nsectors);
 			if (id.sata_caps & IDE_SATA_NCQ_SUPPORTED == 0) {
 				fmt.Printf("AHCI: SATA Native Command Queuing not supported\n");
 				return;
@@ -3526,7 +3543,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
 			p.enable_interrupt()
-			id, _ = p.identify()
+			id, _,  _ = p.identify()
 			fmt.Printf("AHCI: write cache %v read ahead %v\n",
 				LD16(&id.features85) & (1 << 5) != 0,
 				LD16(&id.features85) & (1 << 4) != 0)
