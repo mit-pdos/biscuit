@@ -89,7 +89,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 		irqno := int(trapno - IRQ_BASE)
 		apic.irq_mask(irqno)
 	case INT_MSI0, INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5,
-	    INT_MSI6, INT_MSI7:
+		INT_MSI6, INT_MSI7:
 		// MSI dispatch doesn't use the IO APIC, thus no need for
 		// irq_mask
 		runtime.IRQwake(uint(trapno))

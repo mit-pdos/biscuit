@@ -90,12 +90,14 @@ func crname(path string, nilpatherr err_t) (err_t, bool) {
 }
 
 func fs_init() *fd_t {
-	if INT_DISK < 0 {
-		panic("no disk")
-	}
-	go trap_disk(uint(INT_DISK))
-	// we are now prepared to take disk interrupts
-	irq_unmask(IRQ_DISK)
+
+	// if INT_DISK < 0 {
+	// 	panic("no disk")
+	// }
+	// go trap_disk(uint(INT_DISK))
+	// // we are now prepared to take disk interrupts
+	// irq_unmask(IRQ_DISK)
+
 	go sata_daemon()
 
 	disk_test()
@@ -3383,18 +3385,18 @@ type idereq_t struct {
 
 var ide_int_done	= make(chan bool)
 var ide_request		= make(chan *idereq_t)
-var ide_debug           = false
+var sata_debug           = false
 
 func sata_done(inflight []*idereq_t) {
 	for i, v := range inflight {
 		if v != nil {
 			if adisk.complete(i, v.buf.data, v.cmd == BDEV_READ) {
-				if ide_debug {
+				if sata_debug {
 					fmt.Printf("slot %v req %v block %v completed\n",
 						i, v.cmd, v.buf.block)
 				}
 				if v.sync {
-					if ide_debug {
+					if sata_debug {
 						fmt.Printf("ack block %v\n",
 							v.buf.block)
 					}
@@ -3419,12 +3421,12 @@ func sata_daemon() {
 				if req.buf == nil {
 					panic("nil idebuf")
 				}
-				if ide_debug {
+				if sata_debug {
 					fmt.Printf("req received %v\n", req.buf.block)
 				}
 				adisk.start(slot, req.buf, req.cmd)
 				inflight[slot] = req
-				if ide_debug {
+				if sata_debug {
 					fmt.Printf("issued slot %v req %v for block %v sync %v\n", slot,
 						req.cmd, req.buf.block, req.sync)
 				}
@@ -3432,7 +3434,7 @@ func sata_daemon() {
 				sata_done(inflight)
 			}
 		} else {
-			if ide_debug {
+			if sata_debug {
 				fmt.Print("no slot available\n")
 			}
 			<- ide_int_done

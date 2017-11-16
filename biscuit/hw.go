@@ -2950,6 +2950,7 @@ type port_reg_t struct {
 type ahci_disk_t struct {
 	bara int
 	ahci *ahci_reg_t
+	tag pcitag_t
 	ncs uint32
 	nsectors uint64
 	port *ahci_port_t
@@ -3086,6 +3087,8 @@ type kiovec struct {
 }
 
 const (
+	PCI_MSI_MCR_64BIT  = 0x00800000
+	
 	HBD_PORT_IPM_ACTIVE uint32 = 1
 	HBD_PORT_DET_PRESENT uint32 = 3
 	
@@ -3491,7 +3494,7 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	// cmds_issued tracks which commands are outstanding
 	ST(&p.port.ci, (1 << uint(s)))
 	SET(&p.cmd_issued, (1 << uint(s)))
-	if ide_debug {
+	if sata_debug {
 		fmt.Printf("issue: issued %v %v ci %#x cmd_issued %#x\n", s, cmd,
 			LD(&p.port.ci), p.cmd_issued)
 	}
@@ -3550,14 +3553,14 @@ func (ahci *ahci_disk_t) complete(slot int, dst *[512]uint8, out bool) bool {
 	ci := LD(&ahci.port.port.ci)
 	sact := LD(&ahci.port.port.sact)
 	p := ahci.port
-	if ide_debug {
+	if sata_debug {
 		fmt.Printf("complete: %v ci %#x sact %#x cmd_issued %#x\n", slot,
 			ci, sact, p.cmd_issued)
 	}
 	if p.cmd_issued & (1 << s) != 0 && ci & (1 << s) == 0  &&
 		sact & (1 << s) == 0 {
 		CLR(&p.cmd_issued, (1 << s))
-		if ide_debug {
+		if sata_debug {
 			fmt.Printf("complete: %v clear cmd_issued %#x\n", slot,
 				p.cmd_issued)
 		}
@@ -3567,6 +3570,18 @@ func (ahci *ahci_disk_t) complete(slot int, dst *[512]uint8, out bool) bool {
 		return true
 	}
 	return false
+}
+
+// Called only by sata_daemon
+func (ahci *ahci_disk_t) int_clear() {
+	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
+	// port interrupt status and then clear the host interrupt
+	// status.  It's fine to do this even after we've processed the
+	// port interrupt: if any port interrupts happened in the mean
+	// time, the host interrupt bit will just get set again. */
+	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
+	// irq_eoi(IRQ_DISK)
+	// apic.eoi(0x3B)   XXX ack local APIC?
 }
 
 // Called by interrupt handler
@@ -3587,31 +3602,103 @@ func (ahci *ahci_disk_t) intr() bool {
 	return false
 }
 
-// Called only by sata_daemon
-func (ahci *ahci_disk_t) int_clear() {
-	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
-	// port interrupt status and then clear the host interrupt
-	// status.  It's fine to do this even after we've processed the
-	// port interrupt: if any port interrupts happened in the mean
-	// time, the host interrupt bit will just get set again. */
-	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
-	irq_eoi(IRQ_DISK)
+func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
+	for {
+		runtime.IRQsched(uint(vec))
+		if ahci.intr() {
+			ide_int_done <- true
+		} else {
+			fmt.Printf("Spurious interrupt?\n")
+		}
+	}
 }
-	
+
 func attach_ahci(vid, did int, t pcitag_t) {
 	if disk != nil {
 		panic("adding two disks")
 	}
 
 	d := &ahci_disk_t{}
+	d.tag = t
 	d.bara = pci_read(t, _BAR5, 4)
-	fmt.Printf("attach AHCI disk %#x %#x %#x\n", did, _BAR5, d.bara)
+	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
-	IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
-	INT_DISK = IRQ_BASE + IRQ_DISK
+	vec := msivec_t(0)
+	cap_off := 128
+	cap_entry := pci_read(d.tag, cap_off, 4)
+	fmt.Printf("msicap %#x\n", cap_entry)
+	if (cap_entry == 0) {
+		fmt.Printf("no MSI")
+		IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
+		INT_DISK = IRQ_BASE + IRQ_DISK
+	} else {
+		// enable MSI interrupts
+		vec = msi_alloc()
+		fmt.Printf("AHCI: msi_alloc %v\n", vec)
 
+		var is_64bit = false
+		if (cap_entry & PCI_MSI_MCR_64BIT != 0) {
+			is_64bit = true
+		}
+
+		log2_messages := uint32((cap_entry >> 17) & 0x7)
+		if (log2_messages != 0) {
+			fmt.Printf("pci_map_msi_irq: requested messages %u, granted 1 message\n",
+				1 << log2_messages);
+			// Multiple Message Enable is bits 20-22.
+			pci_write(d.tag, cap_off, cap_entry & ^(0x7 << 20))
+		}
+
+		// Non-remapped ("compatibility format") interrupts
+		pci_write(d.tag, cap_off + 4*1,
+			(0x0fee << 20) |   // magic constant for northbridge
+				(bsp_apic_id << 12) |     // destination ID
+				(1 << 3) |         // redirection hint
+				(0 << 2))         // destination mode
+
+		if (is_64bit) {
+			// Zero out the most-significant 32-bits of the Message Address Register,
+			// which is at Dword 2 for 64-bit devices.
+			pci_write(d.tag, cap_off + 4*2, 0);
+		}
+
+		// Step 5 and 6. Allocate messages for the device.  Since we
+		// support only one message and that is the default value in
+		// the message control register, we do nothing.
+
+		// Step 7. Write base message data pattern into the device's
+		// Message Data Register.
+		// (The Message Data Register format is mandated by the x86
+		// architecture.  See 9.11.2 in the Vol. 3 of the Intel architecture
+		// manual.
+
+		// Message Data Register is at Dword 2 for 32-bit devices, and at Dword 3
+		// for 64-bit devices.
+		var offset = 2
+		if is_64bit {
+			offset = 3
+		}
+		pci_write(d.tag, cap_off + 4*offset,
+				(0 << 15) |        // trigger mode (edge)
+					//(0 << 14) |      // level for trigger mode (don't care)
+					(0 << 8) |         // delivery mode (fixed)
+					int(vec));       // vector
+
+		// Step 8. Set the MSI enable bit in the device's Message
+		// control register.
+		pci_write(d.tag, cap_off, cap_entry | (1 << 16));
+
+		// XXX make sure legacy PCI interrupts are disabled
+		// pciintdis := 1 << 10
+		// pv = pci_read(d.tag, 0x4, 2)
+		// pci_write(d.tag, 0x4, pv | pciintdis)
+
+	}
+	
+	fmt.Printf("ghc %#x\n", LD(&d.ahci.ghc))
+	
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
 
 	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
@@ -3623,12 +3710,15 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		}
 	}
 
+	go d.int_handler(vec)
+
 	SET(&d.ahci.ghc, AHCI_GHC_IE)
 	adisk = d
 }
 
+
 func disk_test() {
-	// ide_debug = true
+	// sata_debug = true
 
 	return
 	
