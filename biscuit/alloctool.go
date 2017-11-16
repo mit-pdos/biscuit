@@ -149,7 +149,6 @@ type calls_t struct {
 	me	string
 	csum	int
 	looper	bool
-	loopend	bool
 	// cannot share nodes that have parent fields
 	//par	*calls_t
 	calls	[]*calls_t
@@ -160,7 +159,7 @@ func newcalls(me string) *calls_t {
 }
 
 func newloopend() *calls_t {
-	return &calls_t{loopend: true, calls: make([]*calls_t, 0)}
+	return &calls_t{calls: make([]*calls_t, 0)}
 }
 
 func (c *calls_t) addchild(child *calls_t) {
@@ -280,26 +279,6 @@ func maxcall(tnode *callgraph.Node, target *ssa.CallCommon, cs *callstack_t) (*c
 	return calls, found
 }
 
-type enode_t struct {
-	exitedge	*ssa.BasicBlock
-	loopedge	*ssa.BasicBlock
-	maxiter		int
-	loopalloc	int
-	loopcalls	*calls_t
-}
-
-func (e *enode_t) isexit(suc *ssa.BasicBlock) bool {
-	return suc == e.exitedge
-}
-
-func (e *enode_t) cost() int {
-	ret := e.maxiter * e.loopalloc
-	if ret < 0 {
-		panic("oh shit")
-	}
-	return ret
-}
-
 func revblksrc(blk *ssa.BasicBlock) (token.Position, bool) {
 	v := make(map[*ssa.BasicBlock]bool)
 	return revblksrc1(blk, v)
@@ -343,279 +322,8 @@ again:
 	return ret
 }
 
-var _exits = map[*ssa.BasicBlock]*enode_t{}
-
-// find the maximum allocation cost that starts and ends at cur
-func calcexit(node *callgraph.Node, cur *ssa.BasicBlock, cs *callstack_t) *enode_t {
-	ret := &enode_t{}
-	exit, loop, ok := ammexit(cur)
-	if !ok {
-		panic("not exit node")
-	}
-	ret.exitedge = exit
-	ret.loopedge = loop
-
-	ret.loopcalls = _loopblocks(node, cur, cur, cs)
-	if !ret.loopcalls.loopend {
-		panic("nein!")
-	}
-	ret.loopalloc = ret.loopcalls.csum
-	iterinput := -1
-	if ret.loopalloc > 0 {
-		if biter, ok := findboundcall(cur); ok {
-			iterinput = biter
-		} else {
-			posi, ok := revblksrc(cur)
-			if !ok {
-				panic("no")
-			}
-			iterinput = loopbound(posi)
-		}
-	} else {
-		iterinput = 0
-	}
-	ret.maxiter = iterinput
-	return ret
-}
-
-func findboundcall(cur *ssa.BasicBlock) (int, bool) {
-	if _, _, ok := ammexit(cur); !ok {
-		panic("only call on exit nodes")
-	}
-	// BFS to find shortest loop back to this exit node, search all
-	// instructions for special call
-	type bnd_t struct {
-		bb *ssa.BasicBlock
-		next *bnd_t
-	}
-	// map block to parent block in this BFS search
-	var final *ssa.BasicBlock
-	par := make(map[*ssa.BasicBlock]*ssa.BasicBlock)
-	head := &bnd_t{cur, nil}
-	tail := head
-outter:
-	for head != nil {
-		n := head.bb
-		for _, suc := range n.Succs {
-			// finish loop?
-			if suc == cur {
-				final = n
-				break outter
-			} else if _, ok := par[suc]; !ok {
-				par[suc] = n
-				nn := &bnd_t{suc, nil}
-				tail.next = nn
-				tail = nn
-			}
-		}
-		head = head.next
-	}
-	if final == nil {
-		panic("no loop; not exit")
-	}
-	BB, ok := cur.Parent().Pkg.Members["BOUND"]
-	if !ok {
-		panic("no BOUND() defined")
-	}
-	for final != nil {
-		for _, in := range final.Instrs {
-			rin, ok := in.(*ssa.Call)
-			if !ok {
-				continue
-			}
-			sc := rin.Common().StaticCallee()
-			if sc == nil {
-				continue
-			}
-			if sc == BB {
-				fmt.Printf("BOUNDER %v\n", rin)
-			}
-		}
-		final = par[final]
-	}
-	return 0, false
-}
-
-func mkexitnodes(node *callgraph.Node, cur *ssa.BasicBlock, cs *callstack_t) {
-	visited := make(map[*ssa.BasicBlock]bool)
-	mkexitnodes1(node, cur, visited, cs)
-}
-
-func mkexitnodes1(node *callgraph.Node, cur *ssa.BasicBlock,
-    visited map[*ssa.BasicBlock]bool, cs *callstack_t) {
-	if _, ok := visited[cur]; ok {
-		return
-	}
-	visited[cur] = true
-	// is cur an exit node?
-	_, _, amexit := ammexit(cur)
-	// calculate exit values in post-order since cost of outter loop
-	// includes inner loops.
-	for _, suc := range cur.Succs {
-		mkexitnodes1(node, suc, visited, cs)
-	}
-	// we found all exit nodes among this block's children in this function
-	if amexit {
-		n := calcexit(node, cur, cs)
-		_exits[cur] = n
-	}
-}
-
-// returns exit edge, loop edge, whether exit node
-func ammexit(cur *ssa.BasicBlock) (*ssa.BasicBlock, *ssa.BasicBlock, bool) {
-	if len(cur.Succs) != 2 {
-		return nil, nil, false
-	}
-	a := blockpath(cur.Succs[0], cur) && !blockpath(cur.Succs[1], cur)
-	b := !blockpath(cur.Succs[0], cur) && blockpath(cur.Succs[1], cur)
-	if a {
-		return cur.Succs[1], cur.Succs[0], true
-	}
-	if b {
-		return cur.Succs[0], cur.Succs[1], true
-	}
-	return nil, nil, false
-}
-
-// _loopblocks only considers loop iterations, i.e. paths that reach the given
-// exit node.
-func _loopblocks(node *callgraph.Node, blk, exitblk *ssa.BasicBlock, cs *callstack_t) *calls_t {
-	visited := make(map[*ssa.BasicBlock]bool)
-	return _loopblocks1(node, blk, exitblk, visited, cs)
-}
-
-func _loopblocks1(node *callgraph.Node, blk, exitblk *ssa.BasicBlock,
-    visit map[*ssa.BasicBlock]bool, cs *callstack_t) *calls_t {
-	if visit[blk] {
-		if blk == exitblk {
-			panic("should have terminated before")
-		}
-		//fmt.Printf("%v NOPPER\n", node.Func)
-		return newcalls("NOLOOP")
-	}
-	visit[blk] = true
-	defer delete(visit, blk)
-
-	calls := newcalls(node.Func.String())
-	var ret int
-	for _, ip := range blk.Instrs {
-		switch v := ip.(type) {
-		//case *ssa.Go:
-		//	sl := node.Func.Prog.Fset.Position(v.Pos())
-		//	fmt.Printf("IGNORE GO SUM %v\n", sl)
-		case ssa.CallInstruction:
-			// see if this is a fake call with bound information
-			comm := v.Common()
-			// find which function for this call site allocates
-			// most
-			maxc, found := maxcall(node, comm, cs)
-			if found {
-				// ignore calls that don't allocate
-				if maxc.csum > 0 {
-					ret += maxc.csum
-					calls.addchild(maxc)
-				}
-			} else {
-				//fmt.Printf("failed for: %v\n", v)
-			}
-		case *ssa.MakeChan:
-			if !reachable[v] {
-				continue
-			}
-			ret += chansz(v)
-		case *ssa.MakeSlice:
-			if !reachable[v] {
-				continue
-			}
-			num := slicebound(v)
-			ret += slicesz(v, num)
-		case *ssa.Alloc:
-			if !v.Heap || !reachable[v] {
-			//if !v.Heap {
-				continue
-			}
-			tp := v.Type().Underlying().(*types.Pointer)
-			ut := tp.Elem().Underlying()
-			truesz := array_align(ut)
-			ret += truesz
-		}
-	}
-	// find maximum allocating block included in a loop
-	exfound := false
-	got := false
-	var maxc calls_t
-	for _, suc := range blk.Succs {
-		var tc *calls_t
-		if suc == exitblk {
-			tc = newloopend()
-		} else if !blockpath(suc, exitblk) {
-			continue
-		} else {
-			tc = _loopblocks1(node, suc, exitblk, visit, cs)
-		}
-		if tc.loopend {
-			exfound = true
-		}
-		if exfound && !tc.loopend {
-			continue
-		}
-		got = true
-		if tc.csum >= maxc.csum {
-			maxc = *tc
-		}
-	}
-	if !got {
-		panic("loop succ must exist; called on non-loop node?")
-	}
-	ret += maxc.csum
-	calls.csum = ret
-	// merge sibling calls
-	for _, tc := range maxc.calls {
-		calls.addchild(tc)
-	}
-	// only consider loops
-	calls.loopend = maxc.loopend
-	if !calls.loopend {
-		calls.csum = 0
-	}
-	return calls
-}
-
-func funcsum(node *callgraph.Node, cs *callstack_t) *calls_t {
-	if funcvisit[node] {
-		panic("should terminate in maxcall")
-	}
-	funcvisit[node] = true
-	defer delete(funcvisit, node)
-
-	if len(node.Func.Blocks) == 0 {
-		fmt.Printf("**** NO BLOCKS %v\n", node.Func)
-		return newcalls("NOB")
-	}
-	cs.push(node.Func)
-	defer cs.pop()
-	// the function entry block has Index == 0 and is the first block in
-	// the slice
-	entry := node.Func.Blocks[0]
-	// find exit nodes, compute maximum iteration allocation
-	mkexitnodes(node, entry, cs)
-
-	visited := make(map[*ssa.BasicBlock]bool)
-	return _sumblock(node, entry, visited, cs)
-}
-
-// _sumblock is called on a function's blocks once all of a function's exit
-// nodes have been found and calculated.
-func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
-    visit map[*ssa.BasicBlock]bool, cs *callstack_t) *calls_t {
-	if visit[blk] {
-		//fmt.Printf("BLOCK LOOP AVOID in %v\n", node.Func)
-		return newcalls("LOOP")
-	}
-	visit[blk] = true
-	defer delete(visit, blk)
-
-	calls := newcalls(node.Func.String())
+func suminstructions(node *callgraph.Node, blk *ssa.BasicBlock,
+    calls *calls_t, cs *callstack_t) int {
 	var ret int
 	for _, ip := range blk.Instrs {
 		switch v := ip.(type) {
@@ -648,7 +356,6 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 			ret += slicesz(v, num)
 		case *ssa.Alloc:
 			if !v.Heap || !reachable[v] {
-			//if !v.Heap {
 				continue
 			}
 			tp := v.Type().Underlying().(*types.Pointer)
@@ -657,43 +364,129 @@ func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
 			ret += truesz
 		}
 	}
-	// find which successor block allocates most. if this is an exit node,
-	// we must charge for the full loop allocation cost to the path that
-	// takes the exit edge.
-	enode, amexit := _exits[blk]
-	var chosesuc *ssa.BasicBlock
-	var max int
-	var maxc *calls_t
+	return ret
+}
+
+var _heads = map[*ssa.BasicBlock]*natl_t{}
+
+func loopcalc(node *callgraph.Node, cs *callstack_t) {
+	floops := funcloops(node.Func)
+	// calculate each loop's allocations and iterations in post-order since
+	// we must calculate the cost of a inner loops before we can calculate
+	// the cost of the outer loops.
+	floops.iter(func(nat *natl_t) {
+		if _heads[nat.head] != nil {
+			panic(">1 loops per head after loop merge")
+		}
+		_heads[nat.head] = nat
+		lcalls := newcalls(node.Func.String())
+		ret := 0
+		for bb := range nat.lblock {
+			ret += suminstructions(node, bb, lcalls, cs)
+		}
+		// include nested loops in cost
+		for _, nest := range nat.nests {
+			ret += nest.cost()
+			for _, tc := range nest.lcalls.calls {
+				lcalls.addchild(tc)
+			}
+		}
+		nat.lcalls = lcalls
+		nat.alloc = ret
+		if it, ok := nat.boundcall(); ok {
+			nat.liters = it
+		} else {
+			posi := node.Func.Prog.Fset.Position(nat.head.Instrs[0].Pos())
+			nat.liters = loopbound(posi)
+		}
+	})
+	//floops.dump()
+}
+
+func funcsum(node *callgraph.Node, cs *callstack_t) *calls_t {
+	if funcvisit[node] {
+		panic("should terminate in maxcall")
+	}
+	funcvisit[node] = true
+	defer delete(funcvisit, node)
+
+	if len(node.Func.Blocks) == 0 {
+		fmt.Printf("**** NO BLOCKS %v\n", node.Func)
+		return newcalls("NOB")
+	}
+	cs.push(node.Func)
+	defer cs.pop()
+	// the function entry block has Index == 0 and is the first block in
+	// the slice
+	entry := node.Func.Blocks[0]
+	// find natural loops, compute maximum iteration allocation, and save
+	// them for _sumblock
+	loopcalc(node, cs)
+
+	visited := make(map[*ssa.BasicBlock]bool)
+	return _sumblock(node, entry, visited, cs)
+}
+
+// visited loop blocks
+var _lbvisit = map[*ssa.BasicBlock]bool{}
+
+// _sumblock is called on a function's blocks once all of a function's natural
+// loops have been found and calculated.
+func _sumblock(node *callgraph.Node, blk *ssa.BasicBlock,
+    visit map[*ssa.BasicBlock]bool, cs *callstack_t) *calls_t {
+	if visit[blk] {
+		//fmt.Printf("BLOCK LOOP AVOID in %v\n", node.Func)
+		return newcalls("LOOP")
+	}
+	visit[blk] = true
+	defer delete(visit, blk)
+
+	calls := newcalls(node.Func.String())
+	var ret int
+	// if this is a head loop block, simply use the pre-calculated loop
+	// cost
+	hnat, amhead := _heads[blk]
+	// avoid double-counting loop blocks
+	if amhead && !_lbvisit[blk] {
+		if hnat.liters == 0 || hnat.lcalls == nil {
+			panic("warn")
+		}
+		ret = hnat.cost()
+		calls.looper = true
+		for _, tc := range hnat.lcalls.calls {
+			calls.addchild(tc)
+		}
+		for bb := range hnat.lblock {
+			if _lbvisit[bb] {
+				panic("double count loop block")
+			}
+			_lbvisit[bb] = true
+		}
+		defer func() {
+			for bb := range hnat.lblock {
+				if !_lbvisit[bb] {
+					panic("shite")
+				}
+				delete(_lbvisit, bb)
+			}
+		}()
+	} else if !amhead && !_lbvisit[blk] {
+		ret = suminstructions(node, blk, calls, cs)
+	}
+	var maxc calls_t
 	for _, suc := range blk.Succs {
 		tc := _sumblock(node, suc, visit, cs)
-		if amexit && enode.isexit(suc) {
-			bonus := enode.cost()
-			// add loop cost
-			tc.csum += bonus
-		}
-		if tc.csum > max {
-			chosesuc = suc
-			max = tc.csum
-			maxc = tc
+		if tc.csum >= maxc.csum {
+			maxc = *tc
 		}
 		if tc.looper {
 			calls.looper = true
 		}
 	}
-	if amexit {
-		calls.looper = true
-		// use exit node calls, which are a super set of this blocks
-		// calls
-		if enode.isexit(chosesuc) {
-			calls.calls = enode.loopcalls.calls
-		}
+	for _, tc := range maxc.calls {
+		calls.addchild(tc)
 	}
-	if maxc != nil {
-		for _, tc := range maxc.calls {
-			calls.addchild(tc)
-		}
-		ret += maxc.csum
-	}
+	ret += maxc.csum
 	calls.csum = ret
 	return calls
 }
@@ -725,21 +518,11 @@ func (h *halp_t) dumpcallees(root *ssa.Function) {
 			edges = append(edges, s)
 		}
 	}
-	//for k := range did {
-	//	fmt.Printf("%v\n", k.Func)
-	//}
 
 	calls := funcsum(rootnode, &callstack_t{})
 	fmt.Printf("TOTAL ALLOCATIONS for %v: %v\n", root, human(calls.csum))
 	fmt.Printf("calls:\n")
 	calls.dump()
-
-	// Print the edges in sorted order.
-	//sort.Strings(edges)
-	//for _, edge := range edges {
-	//	fmt.Println(edge)
-	//}
-	//fmt.Println()
 }
 
 func crud() {
@@ -779,28 +562,24 @@ func main() {
 	prog := ssautil.CreateProgram(iprog, 0)
 	mpkg := ssautil.MainPackages(prog.AllPackages())[0]
 	//_sysfunc, ok := mpkg.Members["sys_recvmsg"]
-	//_sysfunc, ok := mpkg.Members["proc_new"]
-	//_sysfunc, ok := mpkg.Members["sys_socket"]
-	//_sysfunc, ok := mpkg.Members["main"]
 	//_sysfunc, ok := mpkg.Members["syscall"]
-	_sysfunc, ok := mpkg.Members["flea"]
-	if !ok {
-		panic("none")
-	}
-	sysfunc := _sysfunc.(*ssa.Function)
+	//_sysfunc, ok := mpkg.Members["flea"]
+	//if !ok {
+	//	panic("none")
+	//}
+	//sysfunc := _sysfunc.(*ssa.Function)
 
 	//T := mpkg.Type("imemnode_t").Type()
 	//pT := types.NewPointer(T)
 	//sysfunc := prog.LookupMethod(pT, mpkg.Pkg, "_deinsert")
-	//T := mpkg.Type("proc_t").Type()
-	//pT := types.NewPointer(T)
-	//sysfunc := prog.LookupMethod(pT, mpkg.Pkg, "run")
+	T := mpkg.Type("proc_t").Type()
+	pT := types.NewPointer(T)
+	sysfunc := prog.LookupMethod(pT, mpkg.Pkg, "run")
 	// Build SSA code for bodies of all functions in the whole program.
-	mpkg.SetDebugMode(true)
+	//mpkg.SetDebugMode(true)
 	prog.Build()
 
 	reachallocs(sysfunc)
-	//natch(sysfunc)
 
 	cg := mkcallgraph(sysfunc.Prog)
 	var h halp_t
@@ -821,40 +600,6 @@ func mkcallgraph(prog *ssa.Program) *callgraph.Graph {
 		panic(err)
 	}
 	return result.CallGraph
-}
-
-func findmaplookup(cg *callgraph.Graph, glob *ssa.Global) ssa.Value {
-	for _, node := range cg.Nodes {
-		for _, blk := range node.Func.Blocks {
-			for _, in := range blk.Instrs {
-				lk, ok := in.(*ssa.Lookup)
-				if !ok {
-					continue
-				}
-				//fmt.Printf("%v %v %T\n", lk, lk.X.Type(), lk.X)
-				uo, ok := lk.X.(*ssa.UnOp)
-				if !ok {
-					continue
-				}
-				//fmt.Printf("unop: %v, %v %T (%v)\n", uo, uo.Type(), uo, uo.Op)
-				if uo.X == glob {
-					if lk.CommaOk {
-						// find the Extract instruction
-						// to return the element value
-						for _, ref := range *lk.Referrers() {
-							ex, ok := ref.(*ssa.Extract)
-							if ok && ex.Index == 0 {
-								return ex
-							}
-						}
-					} else {
-						return lk
-					}
-				}
-			}
-		}
-	}
-	panic("no such thing")
 }
 
 func pdump(prog *ssa.Program, val ssa.Value, pp *pointer.Pointer) {
@@ -980,10 +725,6 @@ func reachallocs(sf *ssa.Function) {
 			roots = append(roots, rt)
 		}
 	}
-	//boundfunc, ok := sf.Pkg.Members["BOUND"]
-	//if !ok {
-	//	panic("none globerton")
-	//}
 
 	//_glob, ok := sf.Pkg.Members["allprocs"]
 	//_glob, ok := sf.Pkg.Members["flea"]
@@ -997,9 +738,6 @@ func reachallocs(sf *ssa.Function) {
 	var stores qs_t
 	stores.qinit(sf.Pkg)
 	for _, fun := range allfuncs {
-		{
-			flop := funcloops(fun)
-		}
 		for _, blk := range fun.Blocks {
 			for _, in := range blk.Instrs {
 				//ops := in.Operands(nil)
@@ -1014,11 +752,6 @@ func reachallocs(sf *ssa.Function) {
 				//	if pointer.CanPoint(ue) {
 				//		sl := sf.Prog.Fset.Position(rin.Pos())
 				//		fmt.Printf("  SEND POINTER %v\n", sl)
-				//	}
-				//case *ssa.Call:
-				//	dur := rin.Common().StaticCallee()
-				//	if dur == boundfunc {
-				//		fmt.Printf("BOUND %v\n", dur)
 				//	}
 				case *ssa.MapUpdate:
 					if pointer.CanPoint(rin.Key.Type()) ||
@@ -1225,10 +958,11 @@ var slicedb = numdb_t{
 }
 
 func loopbound(posi token.Position) int {
-	return 10
 	if num, ok := loopdb.lookup(posi); ok {
 		return num
 	}
+	fmt.Printf("LOOP BOUND at %v\n", posi)
+	return 10
 	return readnum(fmt.Sprintf("LOOP BOUND at %v: ", posi))
 }
 func slicebound(v ssa.Instruction) int {
@@ -1277,6 +1011,9 @@ type natl_t struct {
 	head	*ssa.BasicBlock
 	lblock	map[*ssa.BasicBlock]bool
 	nests	[]*natl_t
+	lcalls	*calls_t
+	liters	int
+	alloc	int
 }
 
 func newnatl(head *ssa.BasicBlock) *natl_t {
@@ -1299,7 +1036,7 @@ func (nt *natl_t) dump(depth int) {
 	for bn := range nt.lblock {
 		fmt.Printf(" %v", bn)
 	}
-	fmt.Printf("\n")
+	fmt.Printf(" [ %v %v ]\n", nt.liters, nt.alloc)
 	for _, nest := range nt.nests {
 		nest.dump(depth + 1)
 	}
@@ -1316,11 +1053,58 @@ func (nt *natl_t) maxdepth1(d int) int {
 	return max
 }
 
+// iterates in post-order
 func (nt *natl_t) iter(fun func(*natl_t)) {
-	fun(nt)
 	for _, nat := range nt.nests {
-		fun(nat)
+		nat.iter(fun)
 	}
+	fun(nt)
+}
+
+func (nt *natl_t) cost() int {
+	return nt.alloc * nt.liters
+}
+
+var usedbounds = map[*ssa.BasicBlock]bool{}
+
+func (nt *natl_t) boundcall() (int, bool) {
+	var anyb *ssa.BasicBlock
+	for bb := range nt.lblock {
+		anyb = bb
+	}
+	BB, ok := ssautil.MainPackages(anyb.Parent().Prog.AllPackages())[0].Members["BOUND"]
+	if !ok {
+		panic("no BOUND() defined")
+	}
+	ret := -1
+	found := false
+	for bb := range nt.lblock {
+		for _, in := range bb.Instrs {
+			rin, ok := in.(*ssa.Call)
+			if !ok {
+				continue
+			}
+			comm := rin.Common()
+			sc := comm.StaticCallee()
+			if sc == nil {
+				continue
+			}
+			if usedbounds[bb] {
+				// this is a BOUND call for a nested loop
+				continue
+			}
+			if sc == BB {
+				if found {
+					panic("two BOUND calls in one loop")
+				}
+				found = true
+				usedbounds[bb] = true
+				ret = int(comm.Args[0].(*ssa.Const).Int64())
+				//fmt.Printf("BOUND %v %v\n", ret, nt.lblock)
+			}
+		}
+	}
+	return ret, found
 }
 
 // yahoooo...
