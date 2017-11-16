@@ -91,7 +91,7 @@ net: net.img
 	@echo; echo waiting for client copy...
 	@sha1sum $^
 	@ls -al $^
-	until nc $(BHW) 31337 -q1 < $^; do \
+	until nc $(BHW) 31338 -q1 < $^; do \
 		echo timed out. trying again...; \
 		sleep 1; \
 	done
