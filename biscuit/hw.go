@@ -3428,10 +3428,6 @@ func (p *ahci_port_t) fill_prd(cmdslot int, addr uint64, nbytes uint64) {
 	p.fill_prd_v(cmdslot, iov)
 }
 
-func (p *ahci_port_t) enable_interrupt() {
-	ST(&p.port.ie, AHCI_PORT_INTR_DEFAULT)
-}
-
 func (p *ahci_port_t) find_slot() (int, bool) {
 	all_scanned := false;
 	for s := (p.last_slot + 1) % p.nslot; s < p.nslot; {
@@ -3517,6 +3513,15 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	}
 }
 
+func (ahci *ahci_disk_t) enable_interrupt() {
+	// Clear interrupt status
+	SET(&ahci.port.port.is, 0xffffffff)
+	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
+	// And enable interrupts
+	ST(&ahci.port.port.ie, AHCI_PORT_INTR_DEFAULT)
+	SET(&ahci.ahci.ghc, AHCI_GHC_IE)
+	fmt.Printf("AHCI: interrupts enabled 0x%x\n", LD(&ahci.ahci.ghc) & 0x2)
+}
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
@@ -3544,7 +3549,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 			}
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
-			p.enable_interrupt()
+			ahci.enable_interrupt()
 			id, _,  _ = p.identify()
 			fmt.Printf("AHCI: write cache %v read ahead %v\n",
 				LD16(&id.features85) & (1 << 5) != 0,
@@ -3727,9 +3732,6 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	}
 
 	go d.int_handler(vec)
-
-	SET(&d.ahci.ghc, AHCI_GHC_IE)
-	fmt.Printf("AHCI: interrupts enabled 0x%x\n", LD(&d.ahci.ghc) & 0x2)
 	adisk = d
 }
 
