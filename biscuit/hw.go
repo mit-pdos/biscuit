@@ -3648,15 +3648,14 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	vec := msivec_t(0)
 	msicap := 128
 	cap_entry := pci_read(d.tag, msicap, 4)
-	fmt.Printf("msicap %#x %#x\n", cap_entry, cap_entry&0x1F)
 	if cap_entry & 0x1F != 0x5 {
-		fmt.Printf("no MSI\n")
+		fmt.Printf("AHCI: no MSI\n")
 		IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
 		INT_DISK = IRQ_BASE + IRQ_DISK
-	} else {
-		// enable MSI interrupts
+	} else {  // enable MSI interrupts
 		vec = msi_alloc()
-		fmt.Printf("AHCI: msi_alloc %v\n", vec)
+
+		fmt.Printf("AHCI: msicap %#x MSI to vec %#x\n", cap_entry, vec)
 
 		var is_64bit = false
 		if cap_entry & PCI_MSI_MCR_64BIT != 0 {
@@ -3719,7 +3718,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
 
 	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
-	fmt.Printf("d.ahci %#x ncs %#x\n", d.ahci, d.ncs)
+	fmt.Printf("AHCI: ahci %#x ncs %#x\n", d.ahci, d.ncs)
 
 	for i := 0; i < 32; i++ {
 		if LD(&d.ahci.pi) & (1 << uint32(i)) != 0x0 {
@@ -3730,6 +3729,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	go d.int_handler(vec)
 
 	SET(&d.ahci.ghc, AHCI_GHC_IE)
+	fmt.Printf("AHCI: interrupts enabled 0x%x\n", LD(&d.ahci.ghc) & 0x2)
 	adisk = d
 }
 
