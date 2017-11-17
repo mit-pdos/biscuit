@@ -192,7 +192,8 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	// PCI_DEV_PIIX3 := 0x7000
 	// PCI_DEV_3400  := 0x3b20
 	PCI_DEV_X540T := 0x1528
-	PCI_DEV_AHCI := 0x2922 // 0x3b22 // 0x2922
+	PCI_DEV_AHCI_QEMU := 0x2922
+	PCI_DEV_AHCI_BHW := 0x3b22
 
 	// map from vendor ids to a map of device ids to attach functions
 	alldevs := map[int]map[int]func(int, int, pcitag_t) {
@@ -200,7 +201,8 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 			// PCI_DEV_PIIX3 : attach_piix3,
 			// PCI_DEV_3400 : attach_3400,
 			PCI_DEV_X540T: attach_ixgbe,
-			PCI_DEV_AHCI: attach_ahci,
+			PCI_DEV_AHCI_QEMU: attach_ahci,
+			PCI_DEV_AHCI_BHW: attach_ahci,
 			},
 		}
 
@@ -3622,6 +3624,7 @@ func (ahci *ahci_disk_t) intr() bool {
 func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 	for {
 		runtime.IRQsched(uint(vec))
+		// fmt.Printf("ahci interrupt\n")
 		if ahci.intr() {
 			ide_int_done <- true
 		} else {
@@ -3643,11 +3646,11 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
 	vec := msivec_t(0)
-	cap_off := 128
-	cap_entry := pci_read(d.tag, cap_off, 4)
-	fmt.Printf("msicap %#x\n", cap_entry)
-	if (cap_entry == 0) {
-		fmt.Printf("no MSI")
+	msicap := 128
+	cap_entry := pci_read(d.tag, msicap, 4)
+	fmt.Printf("msicap %#x %#x\n", cap_entry, cap_entry&0x1F)
+	if cap_entry & 0x1F != 0x5 {
+		fmt.Printf("no MSI\n")
 		IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
 		INT_DISK = IRQ_BASE + IRQ_DISK
 	} else {
@@ -3656,62 +3659,59 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		fmt.Printf("AHCI: msi_alloc %v\n", vec)
 
 		var is_64bit = false
-		if (cap_entry & PCI_MSI_MCR_64BIT != 0) {
+		if cap_entry & PCI_MSI_MCR_64BIT != 0 {
 			is_64bit = true
 		}
 
+		// Disable multiple messages.  Since we specify only one message
+		// and that is the default value in the message control
+		// register, this simplifies configuration.
 		log2_messages := uint32((cap_entry >> 17) & 0x7)
-		if (log2_messages != 0) {
+		if log2_messages != 0 {
 			fmt.Printf("pci_map_msi_irq: requested messages %u, granted 1 message\n",
 				1 << log2_messages);
 			// Multiple Message Enable is bits 20-22.
-			pci_write(d.tag, cap_off, cap_entry & ^(0x7 << 20))
+			pci_write(d.tag, msicap, cap_entry & ^(0x7 << 20))
 		}
 
+		// [PCI SA pg 253] Assign a dword-aligned memory address to the
+		// device's Message Address Register.  (The Message Address
+		// Register format is mandated by the x86 architecture.  See
+		// 9.11.1 in the Vol. 3 of the Intel architecture manual.)
+
 		// Non-remapped ("compatibility format") interrupts
-		pci_write(d.tag, cap_off + 4*1,
+		pci_write(d.tag, msicap + 4*1,
 			(0x0fee << 20) |   // magic constant for northbridge
 				(bsp_apic_id << 12) |     // destination ID
 				(1 << 3) |         // redirection hint
 				(0 << 2))         // destination mode
 
-		if (is_64bit) {
+		if is_64bit {
 			// Zero out the most-significant 32-bits of the Message Address Register,
 			// which is at Dword 2 for 64-bit devices.
-			pci_write(d.tag, cap_off + 4*2, 0);
+			pci_write(d.tag, msicap + 4*2, 0);
 		}
 
-		// Step 5 and 6. Allocate messages for the device.  Since we
-		// support only one message and that is the default value in
-		// the message control register, we do nothing.
 
-		// Step 7. Write base message data pattern into the device's
-		// Message Data Register.
-		// (The Message Data Register format is mandated by the x86
-		// architecture.  See 9.11.2 in the Vol. 3 of the Intel architecture
-		// manual.
-
-		// Message Data Register is at Dword 2 for 32-bit devices, and at Dword 3
-		// for 64-bit devices.
+		//  Write base message data pattern into the device's Message
+		//  Data Register.  (The Message Data Register format is
+		//  mandated by the x86 architecture.  See 9.11.2 in the Vol. 3
+		//  of the Intel architecture manual.  Message Data Register is
+		//  at Dword 2 for 32-bit devices, and at Dword 3 for 64-bit
+		//  devices.
 		var offset = 2
 		if is_64bit {
 			offset = 3
 		}
-		pci_write(d.tag, cap_off + 4*offset,
+		pci_write(d.tag, msicap + 4*offset,
 				(0 << 15) |        // trigger mode (edge)
 					//(0 << 14) |      // level for trigger mode (don't care)
 					(0 << 8) |         // delivery mode (fixed)
 					int(vec));       // vector
 
-		// Step 8. Set the MSI enable bit in the device's Message
-		// control register.
-		pci_write(d.tag, cap_off, cap_entry | (1 << 16));
-
-		// XXX make sure legacy PCI interrupts are disabled
-		// pciintdis := 1 << 10
-		// pv = pci_read(d.tag, 0x4, 2)
-		// pci_write(d.tag, 0x4, pv | pciintdis)
-
+		// Set the MSI enable bit in the device's Message control
+		// register.
+		pci_write(d.tag, msicap, cap_entry | (1 << 16));
 	}
 	
 	fmt.Printf("ghc %#x\n", LD(&d.ahci.ghc))
@@ -3758,4 +3758,5 @@ func disk_test() {
 		}
 	}
 	fmt.Printf("disk test passed\n")
+
 }
