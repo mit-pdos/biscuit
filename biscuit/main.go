@@ -102,12 +102,14 @@ func trapstub(tf *[TFSIZE]uintptr) {
 	}
 }
 
+var ide_int_done       = make(chan bool)
+
 func trap_disk(intn uint) {
 	for {
 		runtime.IRQsched(intn)
 
 		// is this a disk int?
-		if !adisk.intr() {
+		if !disk.intr() {
 			fmt.Printf("spurious disk int\n")
 			return
 		}
@@ -3596,15 +3598,3 @@ func findbm() {
 	}
 }
 
-func nvcount() int {
-	var data [512]uint8
-	req := idereq_new(0, BDEV_READ, &data, true)
-	ide_request <- req
-	<- req.ack
-	ret := req.buf.data[505]
-	req.buf.data[505] = ret + 1
-	req.cmd = BDEV_WRITE
-	ide_request <- req
-	<- req.ack
-	return int(ret)
-}

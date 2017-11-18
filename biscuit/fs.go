@@ -98,8 +98,6 @@ func fs_init() *fd_t {
 	// // we are now prepared to take disk interrupts
 	// irq_unmask(IRQ_DISK)
 
-	go sata_daemon()
-
 	disk_test()
 
 	iblkcache.blks = make(map[int]*ibuf_t, 30)
@@ -3376,84 +3374,6 @@ type idebuf_t struct {
 	data	*[512]uint8
 }
 
-type idereq_t struct {
-	buf	*idebuf_t
-	ack	chan bool
-	cmd	bdevcmd_t
-	sync    bool
-}
-
-var ide_int_done	= make(chan bool)
-var ide_request		= make(chan *idereq_t)
-var sata_debug           = false
-
-func sata_done(inflight []*idereq_t) {
-	for i, v := range inflight {
-		if v != nil {
-			if adisk.complete(i, v.buf.data, v.cmd == BDEV_READ) {
-				if sata_debug {
-					fmt.Printf("slot %v req %v block %v completed\n",
-						i, v.cmd, v.buf.block)
-				}
-				if v.sync {
-					if sata_debug {
-						fmt.Printf("ack block %v\n",
-							v.buf.block)
-					}
-					v.ack <- true
-				}
-				inflight[i] = nil
-			}
-		}
-	}
-	// fmt.Printf("ide_interrupt_clear interrupts\n")
-	adisk.int_clear()
-}
-
-func sata_daemon() {
-	n := adisk.slots()
-	inflight := make([]*idereq_t, n)
-	for {
-		slot, ok := adisk.find_slot()
-		if ok {
-			select {
-			case req := <- ide_request:
-				if req.buf == nil {
-					panic("nil idebuf")
-				}
-				if sata_debug {
-					fmt.Printf("req received %v\n", req.buf.block)
-				}
-				adisk.start(slot, req.buf, req.cmd)
-				inflight[slot] = req
-				if sata_debug {
-					fmt.Printf("issued slot %v req %v for block %v sync %v\n", slot,
-						req.cmd, req.buf.block, req.sync)
-				}
-			case <- ide_int_done:
-				sata_done(inflight)
-			}
-		} else {
-			if sata_debug {
-				fmt.Print("no slot available\n")
-			}
-			<- ide_int_done
-			sata_done(inflight)
-
-		}
-	}
-}
-
-func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t {
-	ret := &idereq_t{}
-	ret.ack = make(chan bool)
-	ret.cmd = cmd
-	ret.sync = sync
-	ret.buf = &idebuf_t{}
-	ret.buf.block = block
-	ret.buf.data = data
-	return ret
-}
 
 type logread_t struct {
 	loggen		uint8
@@ -3685,33 +3605,61 @@ func log_read(loggen uint8, b idebuf_t) (bool, bool) {
 	return ret.had, ret.gencommit
 }
 
+
 type bdevcmd_t uint
+
 const (
 	BDEV_WRITE  bdevcmd_t = 1
 	BDEV_READ = 2
 	BDEV_FLUSH = 3
 )
 
+type idereq_t struct {
+	buf	*idebuf_t
+	ack	chan bool
+	cmd	bdevcmd_t
+	sync    bool
+}
+
+func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t {
+	ret := &idereq_t{}
+	ret.ack = make(chan bool)
+	ret.cmd = cmd
+	ret.sync = sync
+	ret.buf = &idebuf_t{}
+	ret.buf.block = block
+	ret.buf.data = data
+	return ret
+}
+
+func bdev_start(req *idereq_t) {
+	slot := adisk.start(req)
+	if ahci_debug {
+		fmt.Printf("issued slot %v req %v for block %v sync %v\n", slot,
+			req.cmd, req.buf.block, req.sync)
+	}
+}
+
 func bdev_write(blkn int, src *[512]uint8) {
 	ider := idereq_new(blkn, BDEV_WRITE, src, true)
-	ide_request <- ider
+	bdev_start(ider)
 	<- ider.ack
 }
 
 func bdev_write_async(blkn int, src *[512]uint8) {
 	ider := idereq_new(blkn, BDEV_WRITE, src, false)
-	ide_request <- ider
+	bdev_start(ider)
 }
 
 func bdev_read(blkn int, dst *[512]uint8) {
 	ider := idereq_new(blkn, BDEV_READ, dst, true)
-	ide_request <- ider
+	bdev_start(ider)
 	<- ider.ack
 }
 
 func bdev_flush() {
 	ider := idereq_new(0, BDEV_FLUSH, nil, true)
-	ide_request <- ider
+	bdev_start(ider)
 	<- ider.ack
 }
 
