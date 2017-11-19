@@ -303,9 +303,7 @@ type disk_t interface {
 
 type adisk_t interface {
 	slots() int
-	available_slots() bool
-	start(*idereq_t) int
-	complete(int, *[512]uint8, bool) bool
+	start(*idereq_t)
 }
 
 // use ata pio for fair comparisons against xv6, but i want to use ahci (or
@@ -2951,7 +2949,6 @@ type port_reg_t struct {
 };
 
 type ahci_disk_t struct {
-	sync.Mutex
 	bara int
 	model string
 	ahci *ahci_reg_t
@@ -3048,11 +3045,14 @@ type ahci_cmd_table struct {
 }
 
 type ahci_port_t struct {
+	sync.Mutex
+	cond *sync.Cond
+
 	port *port_reg_t
 	nslot uint32
-	cmd_issued uint32
 	last_slot uint32
 	inflight []*idereq_t
+	nwaiting int
 	
 	block_pa [32]uintptr
 	block [32]*[512]uint8
@@ -3262,7 +3262,6 @@ func (p *ahci_port_t) init() bool {
 	for cmdslot, _ := range p.cmdh {
 		v := &p.cmdt[cmdslot]
 		pa := dmap_v2p((*pg_t)(unsafe.Pointer(v)))
-		fmt.Printf("slot %v ctba %#x\n", cmdslot, uint64(pa))
 		p.cmdh[cmdslot].ctba = (uint64)(pa)
 	}
 
@@ -3431,14 +3430,10 @@ func (p *ahci_port_t) fill_prd(cmdslot int, addr uint64, nbytes uint64) {
 	p.fill_prd_v(cmdslot, iov)
 }
 
-func (p *ahci_port_t) available_slots() bool {
-	return p.cmd_issued & 0XFFFFFFFF != 0xFFFFFFFF
-}
-
 func (p *ahci_port_t) find_slot() (int, bool) {
 	all_scanned := false;
 	for s := (p.last_slot + 1) % p.nslot; s < p.nslot; {
-		if p.cmd_issued & (1 << s) == 0 &&
+		if p.inflight[s] == nil &&
 			LD(&p.port.ci) & uint32(1 << s) == uint32(0) &&
 			LD(&p.port.sact) & uint32(1 << s) == uint32(0) {
 			p.last_slot = s
@@ -3455,33 +3450,43 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 }
 
 func (p *ahci_port_t) start(req *idereq_t) int {
-	s, ok := p.find_slot()
-	if !ok {
-		panic("no slot\n")
+	defer p.Unlock()
+	p.Lock()
+
+	var s int
+	ok := false
+	for !ok {
+		s, ok = p.find_slot()
+		if !ok {
+			fmt.Printf("AHCI start: wait for slot\n")
+			p.nwaiting++
+			p.cond.Wait()
+			p.nwaiting--
+		}
 	}
+
 	var iov []kiovec
 	if req.cmd != BDEV_FLUSH {
-		if (len(*req.buf.data) != 512) {
+		if (len(*req.data) != 512) {
 			panic("AHCI: start wrong len")
 		}
-		io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.buf.data))}
+		io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.data))}
 		iov = []kiovec{io}
 	}
 	switch req.cmd {
 	case BDEV_WRITE:
-		copy(p.block[s][:], req.buf.data[:])
-		p.issue(s, iov, uint64(req.buf.block), IDE_CMD_WRITE_DMA_EXT)
+		copy(p.block[s][:], req.data[:])
+		p.issue(s, iov, uint64(req.block), IDE_CMD_WRITE_DMA_EXT)
 	case BDEV_READ:
-		p.issue(s, iov, uint64(req.buf.block), IDE_CMD_READ_DMA_EXT)
+		p.issue(s, iov, uint64(req.block), IDE_CMD_READ_DMA_EXT)
 	case BDEV_FLUSH:
+		// XXX should we wait until outstanding commands have finished?
 		p.issue(s, nil, 0, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
 	if ahci_debug {
-		fmt.Printf("started: issued %v %v ci %#x cmd_issued %#x\n", s, req.cmd,
-			LD(&p.port.ci), p.cmd_issued)
+		fmt.Printf("started: issued %v %v ci %#x\n", s, req.cmd, LD(&p.port.ci))
 	}
-
 	return s
 }
 
@@ -3523,9 +3528,8 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	// if (cmd == IDE_CMD_WRITE_DMA_EXT || cmd == IDE_CMD_WRITE_FPDMA_QUEUED)
 	// cmdh[cmdslot].flags |= AHCI_CMD_FLAGS_WRITE;
 
-	// cmds_issued tracks which commands are outstanding
+	// issue command
 	ST(&p.port.ci, (1 << uint(s)))
-	SET(&p.cmd_issued, (1 << uint(s)))
 }
 
 func (ahci *ahci_disk_t) enable_interrupt() {
@@ -3540,6 +3544,7 @@ func (ahci *ahci_disk_t) enable_interrupt() {
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
+	p.cond = sync.NewCond(p)
 	a := ahci.bara + 0x100 + 0x80 * pid
 	m := dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
@@ -3579,43 +3584,11 @@ func (ahci *ahci_disk_t) slots() int {
 	return int(ahci.port.nslot)
 }
 
-func (ahci *ahci_disk_t) available_slots() bool {
-	defer ahci.Unlock()
-	ahci.Lock()
-	return ahci.port.available_slots()
-}
-	
-func (ahci *ahci_disk_t) start(req *idereq_t) int {
-	defer ahci.Unlock()
-	ahci.Lock()
-	return ahci.port.start(req)
+func (ahci *ahci_disk_t) start(req *idereq_t) {
+	ahci.port.start(req)
 }
 
-// Called only by sata_daemon
-func (ahci *ahci_disk_t) complete(slot int, dst *[512]uint8, out bool) bool {
-	defer ahci.Unlock()
-	ahci.Lock()
-
-	s := uint(slot)
-	p := ahci.port
-	if ahci_debug {
-		fmt.Printf("complete: %v cmd_issued %#x\n", slot, p.cmd_issued)
-	}
-	if p.cmd_issued & (1 << s) != 0 {
-		CLR(&p.cmd_issued, (1 << s))
-		if ahci_debug {
-			fmt.Printf("complete: %v clear cmd_issued %#x\n", slot,
-				p.cmd_issued)
-		}
-		if out {
-			copy(dst[:], p.block[slot][:])
-		}
-		return true
-	}
-	return false
-}
-
-// Called by interrupt handler, which holds lock
+// Called by int_handler, which holds lock
 func (ahci *ahci_disk_t) int_clear() {
 	// fmt.Printf("int_clear\n")
 	
@@ -3625,82 +3598,76 @@ func (ahci *ahci_disk_t) int_clear() {
 	// port interrupt: if any port interrupts happened in the mean
 	// time, the host interrupt bit will just get set again. */
 	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
-	// irq_eoi(IRQ_DISK)
-	// apic.eoi(0x3B)
 }
 
 
-// Called by interrupt handler, which holds lock
-func (p *ahci_port_t) port_intr() bool {
+// Called by int_handler(), which holds lock through intr()
+func (p *ahci_port_t) port_intr() {
+	defer p.Unlock()
+	p.Lock()
+
+
 	ci := LD(&p.port.ci)
 	sact := LD(&p.port.sact)
-	i := false
+	int := false
 	for s := uint(0); s < 32; s++ {
-		if p.cmd_issued & (1 << s) != 0 && ci & (1 << s) == 0  &&
-			sact & (1 << s) == 0 {
-			i = true
+		if p.inflight[s] != nil && ci & (1 << s) == 0  && sact & (1 << s) == 0 {
+			int = true
 			if ahci_debug {
 				fmt.Printf("port_intr: slot %v interrupt\n", s)
 			}
-			if p.inflight[s] == nil {
-				panic("port_intr: no inflight\n")
-			}
 			if p.inflight[s].cmd == BDEV_READ {
-				copy(p.inflight[s].buf.data[:], p.block[s][:])
+				copy(p.inflight[s].data[:], p.block[s][:])
 			}
-			CLR(&p.cmd_issued, (1 << s))
 			if p.inflight[s].sync {
 				if ahci_debug {
-					fmt.Printf("port_intr: ack block %v\n", p.inflight[s].buf.block)
+					fmt.Printf("port_intr: ack block %v\n", p.inflight[s].block)
 				}
-				p.inflight[s].ack <- true
+				// writing to channel while holding ahci lock, but should be ok
+				p.inflight[s].ackCh <- true
 
 			}
 			p.inflight[s] = nil
+			if p.nwaiting > 0 {
+				fmt.Printf("wakeup waiter\n")
+				p.cond.Signal()
+				
+			}
 		}
 	}
-	return i
+	if !int {
+		fmt.Printf("?")
+	}
 }
 
 
-// Called by interrupt handler, which holds lock
-func (ahci *ahci_disk_t) intr() bool {
+func (ahci *ahci_disk_t) intr() {
+	int := false
 	is := LD(&ahci.ahci.is)
 	for i := uint32(0); i < 32; i++ {
 		if is & (1 << i) != 0 {
 			if i != uint32(ahci.portid) {
 				panic("intr: wrong port\n")
 			}
+			int = true
 			// clear it, so that we don't lose interrupts from
 			// port. however, they won't be delivered until after
 			// int_clear().
 	                SET(&ahci.port.port.is, 0xffffffff)
-			inter := ahci.port.port_intr()
+			ahci.port.port_intr()
 			ahci.int_clear()
-			return inter;
 		}
 	}
-	return false
+	if !int {
+		fmt.Printf("!")
+	}
 }
 
+// Go routing for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 	for {
 		runtime.IRQsched(uint(vec))
-		// i := false
-		{
-			ahci.Lock()
-			
-			if ahci.intr() {
-				// i = true
-			} else {
-				fmt.Printf("?")
-			}
-			ahci.Unlock()
-
-		}
-		// if i {
-		//	ide_int_done <- true
-		// }
+		ahci.intr()
 	}
 }
 
@@ -3803,13 +3770,12 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 
 func disk_test() {
+	// ahci_debug = true
 
 	return
 	
-	ahci_debug = true
-
 	fmt.Printf("disk test\n")
-	const N = 10
+	const N = 100
 	wbuf := new([N][512]uint8)
 	rbuf := new([512]uint8)
 	for b := 0; b < N; b++ {
@@ -3829,4 +3795,5 @@ func disk_test() {
 		}
 	}
 	fmt.Printf("disk test passed\n")
+
 }

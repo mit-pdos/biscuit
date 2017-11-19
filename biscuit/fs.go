@@ -3615,35 +3615,34 @@ const (
 )
 
 type idereq_t struct {
-	buf	*idebuf_t
-	ack	chan bool
+	block   uint64
+	data    *[512]uint8
+	ackCh	chan bool
 	cmd	bdevcmd_t
 	sync    bool
 }
 
 func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t {
 	ret := &idereq_t{}
-	ret.ack = make(chan bool)
+	ret.ackCh = make(chan bool)
 	ret.cmd = cmd
 	ret.sync = sync
-	ret.buf = &idebuf_t{}
-	ret.buf.block = block
-	ret.buf.data = data
+	ret.block = uint64(block)
+	ret.data = data
 	return ret
 }
 
 func bdev_start(req *idereq_t) {
-	slot := adisk.start(req)
+	adisk.start(req)
 	if ahci_debug {
-		fmt.Printf("issued slot %v req %v for block %v sync %v\n", slot,
-			req.cmd, req.buf.block, req.sync)
+		fmt.Printf("issued req %v for block %v sync %v\n", req.cmd, req.block, req.sync)
 	}
 }
 
 func bdev_write(blkn int, src *[512]uint8) {
-	ider := idereq_new(blkn, BDEV_WRITE, src, true)
-	bdev_start(ider)
-	<- ider.ack
+	req := idereq_new(blkn, BDEV_WRITE, src, true)
+	bdev_start(req)
+	<- req.ackCh
 }
 
 func bdev_write_async(blkn int, src *[512]uint8) {
@@ -3654,13 +3653,13 @@ func bdev_write_async(blkn int, src *[512]uint8) {
 func bdev_read(blkn int, dst *[512]uint8) {
 	ider := idereq_new(blkn, BDEV_READ, dst, true)
 	bdev_start(ider)
-	<- ider.ack
+	<- ider.ackCh
 }
 
 func bdev_flush() {
 	ider := idereq_new(0, BDEV_FLUSH, nil, true)
 	bdev_start(ider)
-	<- ider.ack
+	<- ider.ackCh
 }
 
 func memreclaim() bool {
