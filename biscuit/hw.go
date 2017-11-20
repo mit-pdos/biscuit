@@ -303,7 +303,7 @@ type disk_t interface {
 
 type adisk_t interface {
 	slots() int
-	start(*idereq_t)
+	start(*idereq_t) bool
 }
 
 // use ata pio for fair comparisons against xv6, but i want to use ahci (or
@@ -2957,6 +2957,7 @@ type ahci_disk_t struct {
 	nsectors uint64
 	port *ahci_port_t
 	portid int
+	use_interrupt bool
 }
 
 type sata_fis_reg_h2d struct {
@@ -3053,6 +3054,7 @@ type ahci_port_t struct {
 	last_slot uint32
 	inflight []*idereq_t
 	nwaiting int
+	nflush int
 	
 	block_pa [32]uintptr
 	block [32]*[512]uint8
@@ -3118,9 +3120,12 @@ const (
 	AHCI_PORT_INTR_PSE         = (1 << 1)  // PIO Setup FIS received
 	AHCI_PORT_INTR_DHRE        = (1 << 0)  // D2H Register FIS received
 
+
 	AHCI_PORT_INTR_DEFAULT  = AHCI_PORT_INTR_DPE | AHCI_PORT_INTR_SDBE |
                                AHCI_PORT_INTR_DSE | AHCI_PORT_INTR_PSE  |
                                AHCI_PORT_INTR_DHRE
+
+	AHCI_CMD_FLAGS_WRITE uint16 = (1 << 6)
 
 	SATA_FIS_TYPE_REG_H2D uint8 = 0x27
 	SATA_FIS_TYPE_REG_D2H uint8 = 0x34
@@ -3179,6 +3184,10 @@ func ST64(f *uint64, v uint64) {
 
 func SET(f *uint32, v uint32) {
 	runtime.Store32(f, LD(f) | v)
+}
+
+func SET16(f *uint16, v uint16) {
+	ST16(f, LD16(f) | v)
 }
 
 func CLR(f *uint32, v uint32) {
@@ -3269,6 +3278,7 @@ func (p *ahci_port_t) init() bool {
 	ST64(&p.port.fb, uint64(p.rfis_pa))
 	
         ST(&p.port.ci, 0)
+	ST(&p.port.sact, 0)
 	
 	// Clear any errors first, otherwise the chip wedges
 	CLR(&p.port.serr, 0xFFFFFFFF)
@@ -3382,17 +3392,17 @@ func (p *ahci_port_t) enable_read_ahead() bool {
 }
 
 func (p *ahci_port_t) wait(s uint32) bool {
-	fmt.Printf("wait slot %v\n", s)
 	for c := 0; c < 100000; c++ {
 		stat := LD(&p.port.tfd) & 0xff
 		ci := LD(&p.port.ci) & (1 << s)
 		sact := LD(&p.port.sact) & (1 << s)
-		if stat&IDE_STAT_BSY == 0 && ci == 0  {
+		serr := LD(&p.port.serr)
+		is := LD(&p.port.is)
+		if stat&IDE_STAT_BSY == 0 && ci == 0 {
 			return true
 		}
 		if c % 10000 == 0 {
-			fmt.Printf("AHCI: wait: stat %#x ci %#x sact %#x..\n",
-				stat & IDE_STAT_BSY, ci, sact)
+			fmt.Printf("AHCI: wait %v: stat %#x ci %#x sact %#x error %#x is %#x\n", s, stat & IDE_STAT_BSY, ci, sact, serr, is)
 		}
 		
 	}
@@ -3408,7 +3418,9 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 		ST(&p.cmdt[cmdslot].cfis[i], f[i])
 	}
 	ST16(&p.cmdh[cmdslot].flags, uint16(5))
-	// fmt.Printf("AHCI: fis %#x\n", fis)
+	if ahci_debug {
+		fmt.Printf("AHCI: fis %#x\n", fis)
+	}
 }
 
 func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
@@ -3453,11 +3465,29 @@ func (p *ahci_port_t) start(req *idereq_t) int {
 	defer p.Unlock()
 	p.Lock()
 
+	// Flush must wait until outstanding commands have finished
+	// XXX should support FUA in writes?
+	for req.cmd == BDEV_FLUSH {
+		ci := LD(&p.port.ci)
+		// sact := LD(&p.port.sact)
+		if ci == 0 { // && sact == 0 {
+			break
+		} else {
+			// fmt.Printf("flush: slots in progress %#x %#x\n", ci, sact)
+			p.nflush++
+			p.cond.Wait()
+			p.nflush--
+		}
+	}
+
+	// Find slot; if none is available, wait
 	var s int
-	ok := false
-	for !ok {
+	for {
+		var ok bool
 		s, ok = p.find_slot()
-		if !ok {
+		if ok {
+			break
+		} else {
 			fmt.Printf("AHCI start: wait for slot\n")
 			p.nwaiting++
 			p.cond.Wait()
@@ -3480,7 +3510,6 @@ func (p *ahci_port_t) start(req *idereq_t) int {
 	case BDEV_READ:
 		p.issue(s, iov, uint64(req.block), IDE_CMD_READ_DMA_EXT)
 	case BDEV_FLUSH:
-		// XXX should we wait until outstanding commands have finished?
 		p.issue(s, nil, 0, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
@@ -3500,6 +3529,7 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	if iov != nil {
 		len = p.fill_prd_v(s, iov)
 	}
+
 	if len % 512 != 0 {
 		panic("ACHI: issue len not multiple of 512 ")
 	}
@@ -3525,21 +3555,25 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	// Update the Write bit in the flags *after* invoking fill_fis(), to ensure
 	// that it remains set (and hence allow the disk write to go through).
 	// Otherwise, disk writes never complete on ben.
-	// if (cmd == IDE_CMD_WRITE_DMA_EXT || cmd == IDE_CMD_WRITE_FPDMA_QUEUED)
-	// cmdh[cmdslot].flags |= AHCI_CMD_FLAGS_WRITE;
+	if cmd == IDE_CMD_WRITE_DMA_EXT {
+		SET16(&p.cmdh[s].flags, AHCI_CMD_FLAGS_WRITE)
+	}
 
 	// issue command
 	ST(&p.port.ci, (1 << uint(s)))
 }
 
-func (ahci *ahci_disk_t) enable_interrupt() {
-	// Clear interrupt status
+// Clear interrupt status
+func (ahci *ahci_disk_t) clear_is() {
 	SET(&ahci.port.port.is, 0xffffffff)
 	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
-	// And enable interrupts
+}
+
+func (ahci *ahci_disk_t) enable_interrupt() {
 	ST(&ahci.port.port.ie, AHCI_PORT_INTR_DEFAULT)
 	SET(&ahci.ahci.ghc, AHCI_GHC_IE)
-	fmt.Printf("AHCI: interrupts enabled 0x%x\n", LD(&ahci.ahci.ghc) & 0x2)
+	fmt.Printf("AHCI: interrupts enabled ghc %#x ie %#x\n",
+		LD(&ahci.ahci.ghc) & 0x2, LD(&ahci.port.port.ie))
 }
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
@@ -3570,7 +3604,10 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 			p.inflight = make([]*idereq_t, p.nslot)
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
-			ahci.enable_interrupt()
+			ahci.clear_is()
+			if ahci.use_interrupt {
+				ahci.enable_interrupt()
+			}
 			id, _,  _ = p.identify()
 			fmt.Printf("AHCI: write cache %v read ahead %v\n",
 				LD16(&id.features85) & (1 << 5) != 0,
@@ -3584,14 +3621,27 @@ func (ahci *ahci_disk_t) slots() int {
 	return int(ahci.port.nslot)
 }
 
-func (ahci *ahci_disk_t) start(req *idereq_t) {
-	ahci.port.start(req)
+// returns true if start is asynchronous
+func (ahci *ahci_disk_t) start(req *idereq_t) bool {
+	s := ahci.port.start(req)
+	if !ahci.use_interrupt {  // poll port
+		if !ahci.port.wait(uint32(s)) {
+			panic("start: wait times out polling\n")
+		}
+		if req.cmd == BDEV_READ {
+			copy(req.data[:], ahci.port.block[s][:])
+		}
+		ahci.port.inflight[s] = nil
+		if ahci.port.nwaiting > 0 || ahci.port.nflush > 0 {
+			panic("polling mode\n")
+		}
+		return false
+	}
+	return true
 }
 
 // Called by int_handler, which holds lock
 func (ahci *ahci_disk_t) int_clear() {
-	// fmt.Printf("int_clear\n")
-	
 	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
 	// port interrupt status and then clear the host interrupt
 	// status.  It's fine to do this even after we've processed the
@@ -3605,7 +3655,6 @@ func (ahci *ahci_disk_t) int_clear() {
 func (p *ahci_port_t) port_intr() {
 	defer p.Unlock()
 	p.Lock()
-
 
 	ci := LD(&p.port.ci)
 	sact := LD(&p.port.sact)
@@ -3629,9 +3678,11 @@ func (p *ahci_port_t) port_intr() {
 			}
 			p.inflight[s] = nil
 			if p.nwaiting > 0 {
-				fmt.Printf("wakeup waiter\n")
 				p.cond.Signal()
 				
+			}
+			if p.nflush > 0 {
+				p.cond.Signal()
 			}
 		}
 	}
@@ -3665,6 +3716,7 @@ func (ahci *ahci_disk_t) intr() {
 
 // Go routing for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
+	fmt.Printf("AHCI: interrupt handler running\n")
 	for {
 		runtime.IRQsched(uint(vec))
 		ahci.intr()
@@ -3679,12 +3731,13 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	d := &ahci_disk_t{}
 	d.tag = t
 	d.bara = pci_read(t, _BAR5, 4)
+	d.use_interrupt = false
 	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
 	vec := msivec_t(0)
-	msicap := 128
+	msicap := 0x80
 	cap_entry := pci_read(d.tag, msicap, 4)
 	if cap_entry & 0x1F != 0x5 {
 		fmt.Printf("AHCI: no MSI\n")
@@ -3749,8 +3802,14 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		// Set the MSI enable bit in the device's Message control
 		// register.
 		pci_write(d.tag, msicap, cap_entry | (1 << 16));
+
+		msimask := 0x60
+		if pci_read(d.tag, msimask, 4) & 1 != 0 {
+			panic("msi pci masked")
+		}
+
 	}
-	
+
 	fmt.Printf("ghc %#x\n", LD(&d.ahci.ghc))
 	
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
@@ -3764,7 +3823,9 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		}
 	}
 
-	go d.int_handler(vec)
+	if d.use_interrupt {
+		go d.int_handler(vec)
+	}
 	adisk = d
 }
 
@@ -3775,7 +3836,7 @@ func disk_test() {
 	return
 	
 	fmt.Printf("disk test\n")
-	const N = 100
+	const N = 10
 	wbuf := new([N][512]uint8)
 	rbuf := new([512]uint8)
 	for b := 0; b < N; b++ {

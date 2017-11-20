@@ -3632,17 +3632,19 @@ func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t
 	return ret
 }
 
-func bdev_start(req *idereq_t) {
-	adisk.start(req)
+func bdev_start(req *idereq_t) bool {
+	r := adisk.start(req)
 	if ahci_debug {
-		fmt.Printf("issued req %v for block %v sync %v\n", req.cmd, req.block, req.sync)
+		fmt.Printf("issued req %v for block %v sync %v r %v\n", req.cmd, req.block, req.sync, r)
 	}
+	return r
 }
 
 func bdev_write(blkn int, src *[512]uint8) {
 	req := idereq_new(blkn, BDEV_WRITE, src, true)
-	bdev_start(req)
-	<- req.ackCh
+	if bdev_start(req) {
+		<- req.ackCh
+	}
 }
 
 func bdev_write_async(blkn int, src *[512]uint8) {
@@ -3652,14 +3654,16 @@ func bdev_write_async(blkn int, src *[512]uint8) {
 
 func bdev_read(blkn int, dst *[512]uint8) {
 	ider := idereq_new(blkn, BDEV_READ, dst, true)
-	bdev_start(ider)
-	<- ider.ackCh
+	if bdev_start(ider) {
+		<- ider.ackCh
+	}
 }
 
 func bdev_flush() {
 	ider := idereq_new(0, BDEV_FLUSH, nil, true)
-	bdev_start(ider)
-	<- ider.ackCh
+	if bdev_start(ider) {
+		<- ider.ackCh
+	}
 }
 
 func memreclaim() bool {
