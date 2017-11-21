@@ -72,7 +72,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 
 	irqs++
 	switch trapno {
-	case uintptr(INT_DISK), INT_KBD, INT_COM1:
+	case INT_KBD, INT_COM1:
 		runtime.IRQwake(uint(trapno))
 		// we need to mask the interrupt on the IOAPIC since my
 		// hardware's LAPIC automatically send EOIs to IOAPICS when the
@@ -88,7 +88,7 @@ func trapstub(tf *[TFSIZE]uintptr) {
 		// in the runtime...
 		irqno := int(trapno - IRQ_BASE)
 		apic.irq_mask(irqno)
-	case INT_MSI0, INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5,
+	case uintptr(INT_DISK), INT_MSI0, INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5,
 		INT_MSI6, INT_MSI7:
 		// MSI dispatch doesn't use the IO APIC, thus no need for
 		// irq_mask

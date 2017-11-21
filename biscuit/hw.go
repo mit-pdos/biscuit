@@ -3051,7 +3051,7 @@ type ahci_port_t struct {
 
 	port *port_reg_t
 	nslot uint32
-	last_slot uint32
+	next_slot uint32
 	inflight []*idereq_t
 	nwaiting int
 	nflush int
@@ -3196,7 +3196,8 @@ func CLR16(f *uint16, v uint16) {
 }
 
 func CLR(f *uint32, v uint32) {
-	n := LD(f) & ^v
+	v32 := LD(f)
+	n :=  v32 & ^v
 	runtime.Store32(f, n)
 }
 
@@ -3447,11 +3448,11 @@ func (p *ahci_port_t) fill_prd(cmdslot int, addr uint64, nbytes uint64) {
 
 func (p *ahci_port_t) find_slot() (int, bool) {
 	all_scanned := false;
-	for s := (p.last_slot + 1) % p.nslot; s < p.nslot; {
+	for s := p.next_slot; s < p.nslot; {
+		ci := LD(&p.port.ci)
 		if p.inflight[s] == nil &&
-			LD(&p.port.ci) & uint32(1 << s) == uint32(0) &&
-			LD(&p.port.sact) & uint32(1 << s) == uint32(0) {
-			p.last_slot = s
+			 ci & uint32(1 << s) == uint32(0) {
+			p.next_slot = (p.next_slot+1) % p.nslot
 			return int(s), true
 		}
 		if (s == p.nslot - 1 && !all_scanned) {
@@ -3496,16 +3497,6 @@ func (p *ahci_port_t) start(req *idereq_t) int {
 			p.cond.Wait()
 			p.nwaiting--
 		}
-	}
-
-	stat := LD(&p.port.tfd) & 0xff
-	ci := LD(&p.port.ci) & (1 << uint32(s))
-	sact := LD(&p.port.sact) & (1 << uint32(s))
-	serr := LD(&p.port.serr)
-	is := LD(&p.port.is)
-	if ahci_debug {
-		fmt.Printf("AHCI find_slot: s %v stat %#x ci %#x sactt %#x serr %#x is %#x\n",
-			s, stat, ci, sact, serr, is)
 	}
 
 	var iov []kiovec
@@ -3580,8 +3571,17 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 
 // Clear interrupt status
 func (ahci *ahci_disk_t) clear_is() {
-	SET(&ahci.port.port.is, 0xffffffff)
-	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
+	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
+	// port interrupt status and then clear the host interrupt
+	// status.  It's fine to do this even after we've processed the
+	// port interrupt: if any port interrupts happened in the mean
+	// time, the host interrupt bit will just get set again. */
+	SET(&ahci.ahci.is, (1 << uint32(ahci.portid)))
+	if ahci_debug {
+		fmt.Printf("clear_is: %v is %#x sact %#x gis %#x\n", ahci.portid,
+		LD(&ahci.port.port.is), LD(&ahci.port.port.sact),
+			LD(&ahci.ahci.is))
+	}
 }
 
 func (ahci *ahci_disk_t) enable_interrupt() {
@@ -3619,14 +3619,15 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 			p.inflight = make([]*idereq_t, p.nslot)
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
-			ahci.clear_is()
-			if ahci.use_interrupt {
-				ahci.enable_interrupt()
-			}
 			id, _,  _ = p.identify()
 			fmt.Printf("AHCI: write cache %v read ahead %v\n",
 				LD16(&id.features85) & (1 << 5) != 0,
 				LD16(&id.features85) & (1 << 4) != 0)
+			ahci.clear_is()
+			if ahci.use_interrupt {
+				ahci.enable_interrupt()
+			}
+
 			return  // only one port
 		}
 	}
@@ -3655,15 +3656,6 @@ func (ahci *ahci_disk_t) start(req *idereq_t) bool {
 	return true
 }
 
-// Called by int_handler, which holds lock
-func (ahci *ahci_disk_t) int_clear() {
-	// AHCI 1.3, section 10.7.2.1 says we need to first clear the
-	// port interrupt status and then clear the host interrupt
-	// status.  It's fine to do this even after we've processed the
-	// port interrupt: if any port interrupts happened in the mean
-	// time, the host interrupt bit will just get set again. */
-	CLR(&ahci.ahci.is, (1 << uint32(ahci.portid)))
-}
 
 
 // Called by int_handler(), which holds lock through intr()
@@ -3672,10 +3664,9 @@ func (p *ahci_port_t) port_intr() {
 	p.Lock()
 
 	ci := LD(&p.port.ci)
-	sact := LD(&p.port.sact)
 	int := false
 	for s := uint(0); s < 32; s++ {
-		if p.inflight[s] != nil && ci & (1 << s) == 0  && sact & (1 << s) == 0 {
+		if p.inflight[s] != nil && ci & (1 << s) == 0  {
 			int = true
 			if ahci_debug {
 				fmt.Printf("port_intr: slot %v interrupt\n", s)
@@ -3716,12 +3707,13 @@ func (ahci *ahci_disk_t) intr() {
 				panic("intr: wrong port\n")
 			}
 			int = true
-			// clear it, so that we don't lose interrupts from
-			// port. however, they won't be delivered until after
-			// int_clear().
-	                SET(&ahci.port.port.is, 0xffffffff)
+			
+			// clear port interrupt. interrupts coming while we are
+			// processing will be deliver after clear_is().
+			SET(&ahci.port.port.is, 0xFFFFFFFF)
 			ahci.port.port_intr()
-			ahci.int_clear()
+			
+			ahci.clear_is()
 		}
 	}
 	if !int {
@@ -3825,8 +3817,6 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 	}
 
-	fmt.Printf("ghc %#x\n", LD(&d.ahci.ghc))
-	
 	SET(&d.ahci.ghc, AHCI_GHC_AE);
 
 	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
@@ -3846,9 +3836,10 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 
 func disk_test() {
-	ahci_debug = true
 
 	return
+
+	ahci_debug = true
 
 	fmt.Printf("disk test\n")
 	
@@ -3857,7 +3848,7 @@ func disk_test() {
 	wbuf := new([N][512]uint8)
 	rbuf := new([512]uint8)
 
-	for j := 0; j < 1000; j++ {
+	for j := 0; j < 100; j++ {
 
 		for b := 0; b < N; b++ {
 			fmt.Printf("req %v,%v\n", j, b)
@@ -3865,8 +3856,9 @@ func disk_test() {
 			for i,_ := range wbuf[b] {
 				wbuf[b][i] = uint8(b)
 			}
-			bdev_write(b, &wbuf[b])
+			bdev_write_async(b, &wbuf[b])
 		}
+		bdev_flush()
 		for b := 0; b < N; b++ {
 			bdev_read(b, rbuf)
 			
@@ -3878,6 +3870,5 @@ func disk_test() {
 			}
 		}
 	}
-	
 	panic("disk test passed\n")
 }
