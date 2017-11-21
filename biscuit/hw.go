@@ -193,7 +193,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_VEND_INTEL := 0x8086
 	// PCI_DEV_PIIX3 := 0x7000
 	// PCI_DEV_3400  := 0x3b20
-	// PCI_DEV_X540T := 0x1528
+	PCI_DEV_X540T := 0x1528
 	PCI_DEV_AHCI_QEMU := 0x2922
 	PCI_DEV_AHCI_BHW := 0x3b22
 
@@ -202,7 +202,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 		PCI_VEND_INTEL : {
 			// PCI_DEV_PIIX3 : attach_piix3,
 			// PCI_DEV_3400 : attach_3400,
-			// PCI_DEV_X540T: attach_ixgbe,
+			PCI_DEV_X540T: attach_ixgbe,
 			PCI_DEV_AHCI_QEMU: attach_ahci,
 			PCI_DEV_AHCI_BHW: attach_ahci,
 			},
