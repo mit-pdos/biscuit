@@ -3210,6 +3210,10 @@ func (p *ahci_port_t) pg_new() (*pg_t, pa_t) {
 	return a, b
 }
 
+func (p *ahci_port_t) pg_free(pa pa_t) {
+	refdown	(pa)
+}
+
 func (p *ahci_port_t) init() bool {
 	if LD(&p.port.ssts) & 0x0F != HBD_PORT_DET_PRESENT {
 		return false
@@ -3330,10 +3334,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.sector_count = 1;
 
 	// To receive the identity 
-	_, pa, ok := refpg_new()   // frees the page on return
-	if !ok {
-		return nil,nil, false
-	}
+	_, pa := p.pg_new()
 	p.fill_prd(0, uint64(pa), uint64(PGSIZE))
 	p.fill_fis(0, fis)
 
@@ -3352,6 +3353,8 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 
 	ret_id := &identify_device{}
 	*ret_id = *id
+
+	p.pg_free(pa)
 
 	m := swap(id.model[:])
 	s := string(m)
