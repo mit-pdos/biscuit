@@ -193,7 +193,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_VEND_INTEL := 0x8086
 	// PCI_DEV_PIIX3 := 0x7000
 	// PCI_DEV_3400  := 0x3b20
-	PCI_DEV_X540T := 0x1528
+	// PCI_DEV_X540T := 0x1528
 	PCI_DEV_AHCI_QEMU := 0x2922
 	PCI_DEV_AHCI_BHW := 0x3b22
 
@@ -202,7 +202,7 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 		PCI_VEND_INTEL : {
 			// PCI_DEV_PIIX3 : attach_piix3,
 			// PCI_DEV_3400 : attach_3400,
-			PCI_DEV_X540T: attach_ixgbe,
+			// PCI_DEV_X540T: attach_ixgbe,
 			PCI_DEV_AHCI_QEMU: attach_ahci,
 			PCI_DEV_AHCI_BHW: attach_ahci,
 			},
@@ -3169,7 +3169,7 @@ func ST(f *uint32, v uint32) {
 func ST16(f *uint16, v uint16) {
 	a := (*uint32)(unsafe.Pointer(f))
 	v32 := LD(a)
-	SET(a, (v32 & 0x0000) | uint32(v))
+	ST(a, (v32 & 0xFFFF0000) | uint32(v))
 }
 
 func LD16(f *uint16) uint16 {
@@ -3188,6 +3188,11 @@ func SET(f *uint32, v uint32) {
 
 func SET16(f *uint16, v uint16) {
 	ST16(f, LD16(f) | v)
+}
+
+func CLR16(f *uint16, v uint16) {
+	n := LD16(f) & ^v
+	ST16(f, n)
 }
 
 func CLR(f *uint32, v uint32) {
@@ -3418,9 +3423,7 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 		ST(&p.cmdt[cmdslot].cfis[i], f[i])
 	}
 	ST16(&p.cmdh[cmdslot].flags, uint16(5))
-	if ahci_debug {
-		fmt.Printf("AHCI: fis %#x\n", fis)
-	}
+	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
 func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
@@ -3495,6 +3498,16 @@ func (p *ahci_port_t) start(req *idereq_t) int {
 		}
 	}
 
+	stat := LD(&p.port.tfd) & 0xff
+	ci := LD(&p.port.ci) & (1 << uint32(s))
+	sact := LD(&p.port.sact) & (1 << uint32(s))
+	serr := LD(&p.port.serr)
+	is := LD(&p.port.is)
+	if ahci_debug {
+		fmt.Printf("AHCI find_slot: s %v stat %#x ci %#x sactt %#x serr %#x is %#x\n",
+			s, stat, ci, sact, serr, is)
+	}
+
 	var iov []kiovec
 	if req.cmd != BDEV_FLUSH {
 		if (len(*req.data) != 512) {
@@ -3514,7 +3527,8 @@ func (p *ahci_port_t) start(req *idereq_t) int {
 	}
 	p.inflight[s] = req
 	if ahci_debug {
-		fmt.Printf("started: issued %v %v ci %#x\n", s, req.cmd, LD(&p.port.ci))
+		fmt.Printf("AHCI start: issued slot %v req %v bn %v sync %v ci %#x\n",
+			s, req.cmd,req.block, req.sync, LD(&p.port.ci))
 	}
 	return s
 }
@@ -3538,6 +3552,7 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	}
 	nsector := len/512
 	ST(&p.cmdh[s].prdbc, 0);
+	
 	fis.dev_head = IDE_DEV_LBA;
 	fis.control = IDE_CTL_LBA48;
 	fis.lba_0 = uint8((bn >>  0) & 0xff)
@@ -3550,15 +3565,15 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	fis.sector_count = uint8(nsector & 0xff);
 	fis.sector_count_ex = uint8((nsector >> 8) & 0xff);
 
-	p.fill_fis(s, fis);
-
-	// Update the Write bit in the flags *after* invoking fill_fis(), to ensure
-	// that it remains set (and hence allow the disk write to go through).
-	// Otherwise, disk writes never complete on ben.
+	p.fill_fis(s, fis)   // sets flags to length fis
 	if cmd == IDE_CMD_WRITE_DMA_EXT {
 		SET16(&p.cmdh[s].flags, AHCI_CMD_FLAGS_WRITE)
 	}
-
+	if ahci_debug {
+		fmt.Printf("cmdh: prdtl %#x flags %#x bc %v\n", LD16(&p.cmdh[s].prdtl),
+			LD16(&p.cmdh[s].flags), LD(&p.cmdh[s].prdbc))
+	}
+	
 	// issue command
 	ST(&p.port.ci, (1 << uint(s)))
 }
@@ -3731,7 +3746,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	d := &ahci_disk_t{}
 	d.tag = t
 	d.bara = pci_read(t, _BAR5, 4)
-	d.use_interrupt = false
+	d.use_interrupt = true
 	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
@@ -3831,30 +3846,38 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 
 func disk_test() {
-	// ahci_debug = true
+	ahci_debug = true
 
 	return
-	
+
 	fmt.Printf("disk test\n")
-	const N = 10
+	
+	const N = 3
+
 	wbuf := new([N][512]uint8)
 	rbuf := new([512]uint8)
-	for b := 0; b < N; b++ {
-		for i,_ := range wbuf[b] {
-			wbuf[b][i] = uint8(b)
+
+	for j := 0; j < 1000; j++ {
+
+		for b := 0; b < N; b++ {
+			fmt.Printf("req %v,%v\n", j, b)
+
+			for i,_ := range wbuf[b] {
+				wbuf[b][i] = uint8(b)
+			}
+			bdev_write(b, &wbuf[b])
 		}
-		bdev_write_async(b, &wbuf[b])
-	}
-	bdev_flush()
-	for b := 0; b < N; b++ {
-		bdev_read(b, rbuf)
-		for i, v := range rbuf {
-			if v != uint8(b) {
-				fmt.Printf("buf %v i %v v %v\n", b, i, v)
-				panic("disk_test\n")
+		for b := 0; b < N; b++ {
+			bdev_read(b, rbuf)
+			
+			for i, v := range rbuf {
+				if v != uint8(b) {
+					fmt.Printf("buf %v i %v v %v\n", j, i, v)
+					panic("disk_test\n")
+				}
 			}
 		}
 	}
-	fmt.Printf("disk test passed\n")
-
+	
+	panic("disk test passed\n")
 }

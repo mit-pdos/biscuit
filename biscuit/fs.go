@@ -3634,9 +3634,6 @@ func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t
 
 func bdev_start(req *idereq_t) bool {
 	r := adisk.start(req)
-	if ahci_debug {
-		fmt.Printf("issued req %v for block %v sync %v r %v\n", req.cmd, req.block, req.sync, r)
-	}
 	return r
 }
 
