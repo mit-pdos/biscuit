@@ -100,20 +100,22 @@ func fs_init() *fd_t {
 
 	disk_test()
 
-	iblkcache.blks = make(map[int]*ibuf_t, 30)
+	iblkcache.blks = make(map[int]*bdev_block_t, 30)
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	buffer := new([512]uint8)
-	bdev_read(0, buffer)
+	// buffer := new([512]uint8)
+	// bdev_read(0, buffer)
+	b := bdev_read_block(0)   // XXX release
 	FSOFF := 506
-	superb_start = readn(buffer[:], 4, FSOFF)
+	superb_start = readn(b.data[:], 4, FSOFF)
 	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
+	// XXX release b?
 	// superblock is never changed, so reading before recovery is fine
-	bdev_read(superb_start, buffer)
-	superb = superblock_t{buffer}
+	b = bdev_read_block(superb_start)
+	superb = superblock_t{b.data}
 	ri := superb.rootinode()
 
 	free_start = superb.freeblock()
@@ -143,8 +145,8 @@ func fs_init() *fd_t {
 
 func fs_recover() {
 	l := &fslog
-	bdev_read(l.logstart, &l.tmpblk)
-	lh := logheader_t{&l.tmpblk}
+	b := bdev_read_block(l.logstart)
+	lh := logheader_t{b.data}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
@@ -152,16 +154,18 @@ func fs_recover() {
 	}
 	fmt.Printf("starting FS recovery...")
 
-	buffer := new([512]uint8)
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		bdev_read(l.logstart + 1 + i, buffer)
-		bdev_write(bdest, buffer)
+		lb := bdev_read_block(l.logstart + 1 + i)
+		fb := bdev_read_block(bdest)
+		copy(fb.data[:], lb.data[:])
+		bdev_write(fb)
+		// XXX release b
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
-	bdev_write(l.logstart, &l.tmpblk)
+	bdev_write(l.tmpblk)
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
@@ -792,18 +796,18 @@ type rawdfops_t struct {
 func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	raw.Lock()
 	defer raw.Unlock()
-	buf := new([512]uint8)
 	var did int
 	for dst.remain() != 0 {
 		blkno := raw.offset / 512
-		bdev_read(blkno, buf)
+		b := bdev_read_block(blkno)
 		boff := raw.offset % 512
-		c, err := dst.uiowrite(buf[boff:])
+		c, err := dst.uiowrite(b.data[boff:])
 		if err != 0 {
 			return 0, err
 		}
 		raw.offset += c
 		did += c
+		b.bdev_done()
 	}
 	return did, 0
 }
@@ -811,19 +815,20 @@ func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	raw.Lock()
 	defer raw.Unlock()
-	buf := new([512]uint8)
 	var did int
 	for src.remain() != 0 {
 		blkno := raw.offset / 512
 		boff := raw.offset % 512
-		if boff != 0 || src.remain() < 512 {
-			bdev_read(blkno, buf)
-		}
-		c, err := src.uioread(buf[boff:])
+		// if boff != 0 || src.remain() < 512 {
+		//	buf := bdev_read_block(blkno)
+		//}
+		// XXX don't always have to read block in from disk
+		buf := bdev_read_block(blkno)
+		c, err := src.uioread(buf.data[boff:])
 		if err != 0 {
 			return 0, err
 		}
-		bdev_write(blkno, buf)
+		bdev_write(buf)
 		raw.offset += c
 		did += c
 	}
@@ -1228,7 +1233,7 @@ type pgcache_t struct {
 	// destination buffer.
 	_fill	func([]uint8, int) (int, err_t)
 	// flush writes the given buffer to the specified offset of the device.
-	_flush	func([]uint8, int) err_t
+	_flush	func(pa_t, int) err_t
 }
 
 type pginfo_t struct {
@@ -1239,7 +1244,7 @@ type pginfo_t struct {
 }
 
 func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) (int, err_t),
-    flush func([]uint8, int) err_t) {
+    flush func(pa_t, int) err_t) {
 	if fill == nil || flush == nil {
 		panic("invalid page func")
 	}
@@ -1367,16 +1372,16 @@ func (pc *pgcache_t) flush() {
 		return
 	}
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		pgva := pgi.pg
 		for j, dirty := range pgi.dirtyblocks {
+			
 			if !dirty {
 				continue
 			}
 			pgoffset := j*pc.blocksz
-			pgend := pgoffset + pc.blocksz
-			s := pgva[pgoffset:pgend]
 			devoffset := (int(pgi.pgn) << PGSHIFT) + pgoffset
-			err := pc._flush(s, devoffset)
+			pa := uintptr(pgi.p_pg) + uintptr(pgoffset)
+			err := pc._flush(pa_t(pa), devoffset)
+
 			if err != 0 {
 				panic("flush must succeed")
 			}
@@ -1532,7 +1537,7 @@ var pglru pglru_t
 
 type imemnode_t struct {
 	priv		inum
-	myib		*ibuf_t
+	myib		*bdev_block_t
 	blkno		int
 	ioff		int
 	// cache of file data
@@ -1878,57 +1883,41 @@ func (idm *imemnode_t) _linkup() {
 
 // inode block cache. there are 4 inodes per inode block. we need a block cache
 // so that writes aren't lost due to concurrent inode updates.
-type ibuf_t struct {
-	block		int
-	data		*[512]uint8
-	sync.Mutex
-}
 
 type iblkcache_t struct {
 	// inode blkno -> disk contents
-	blks		map[int]*ibuf_t
+	blks		map[int]*bdev_block_t
 	sync.Mutex
 }
 
-func (ib *ibuf_t) log_write() {
-	dur := idebuf_t{}
-	dur.block = ib.block
-	dur.data = ib.data
-	log_write(dur)
+func (ib *bdev_block_t) log_write() {
+	log_write(ib)
 }
 
 var iblkcache = iblkcache_t{}
 
 // XXX shouldn't synchronize; idaemon's don't share anything but we need to
 // combine the writes of different inodes that share the same block.
-func ibread(blkn int) *ibuf_t {
+func ibread(blkn int) *bdev_block_t {
 	if blkn < superb_start {
 		panic("no")
 	}
-	created := false
 
 	iblkcache.Lock()
 	iblk, ok := iblkcache.blks[blkn]
-	if !ok {
-		iblk = &ibuf_t{}
-		iblk.Lock()
-		iblkcache.blks[blkn] = iblk
-		created = true
-	}
 	iblkcache.Unlock()
 
-	if !created {
-		iblk.Lock()
-	} else {
-		// fill new iblkcache entry
-		iblk.data = new([512]uint8)
-		iblk.block = blkn
-		bdev_read(blkn, iblk.data)
+	if !ok {
+		// XXX a second ibread for same missing blkn
+		// filling new iblkcache entry
+		iblk = bdev_read_block(blkn)
+		iblkcache.blks[blkn] = iblk
 	}
+	iblk.Lock()
 	return iblk
 }
 
-func ibempty(blkn int) *ibuf_t {
+func ibempty(blkn int) *bdev_block_t {
 	iblkcache.Lock()
 	if oiblk, ok := iblkcache.blks[blkn]; ok {
 		iblkcache.Unlock()
@@ -1937,22 +1926,23 @@ func ibempty(blkn int) *ibuf_t {
 		*oiblk.data = zdata
 		return oiblk
 	}
-	iblk := &ibuf_t{}
-	iblk.block = blkn
-	iblk.data = new([512]uint8)
+	iblk := bdev_block_new(blkn)
 	iblkcache.blks[blkn] = iblk
 	iblk.Lock()
 	iblkcache.Unlock()
 	return iblk
 }
 
-func ibrelse(ib *ibuf_t) {
+func ibrelse(ib *bdev_block_t) {
 	ib.Unlock()
 }
 
-func ibpurge(ib *ibuf_t) {
+func ibpurge(ib *bdev_block_t) {
 	iblkcache.Lock()
+	ib.bdev_done()
 	delete(iblkcache.blks, ib.block)
+	// XXX release page?
+	// integrate with block cache?
 	iblkcache.Unlock()
 }
 
@@ -1975,7 +1965,7 @@ type icache_t struct {
 		dents		dc_rbh_t
 		freel		fdelist_t
 	}
-	metablks	map[int]*mdbuf_t
+	metablks	map[int]*bdev_block_t
 }
 
 type fdent_t struct {
@@ -2018,47 +2008,36 @@ type icdent_t struct {
 
 // metadata block cache; only one idaemon touches these blocks at a time, thus
 // no concurrency control
-type mdbuf_t struct {
-	block	int
-	data	[512]uint8
-}
 
 // XXX XXX XXX must count against mfs limit
-func (ic *icache_t) _mbensure(blockn int, fill bool) *mdbuf_t {
+func (ic *icache_t) _mbensure(blockn int, fill bool) *bdev_block_t {
 	mb, ok := ic.metablks[blockn]
 	if !ok {
-		mb = &mdbuf_t{}
-		mb.block = blockn
 		if fill {
-			bdev_read(blockn, &mb.data)
+			mb = bdev_read_block(blockn)
+		} else {
+			mb = bdev_block_new(blockn)
 		}
 		ic.metablks[blockn] = mb
 	}
 	return mb
 }
 
-func (mb *mdbuf_t) log_write() {
-	dur := idebuf_t{}
-	dur.block = mb.block
-	dur.data = &mb.data
-	log_write(dur)
-}
-
-func (ic *icache_t) mbread(blockn int) *mdbuf_t {
+func (ic *icache_t) mbread(blockn int) *bdev_block_t {
 	return ic._mbensure(blockn, true)
 }
 
-func (ic *icache_t) mbrelse(mb *mdbuf_t) {
+func (ic *icache_t) mbrelse(mb *bdev_block_t) {
 }
 
-func (ic *icache_t) mbempty(blockn int) *mdbuf_t {
+func (ic *icache_t) mbempty(blockn int) *bdev_block_t {
 	if _, ok := ic.metablks[blockn]; ok {
 		panic("block present")
 	}
 	return ic._mbensure(blockn, false)
 }
 
-func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
+func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
 	inode := inode_t{blk, ioff}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
@@ -2074,11 +2053,11 @@ func (ic *icache_t) fill(blk *ibuf_t, ioff int) {
 	for i := 0; i < NIADDRS; i++ {
 		ic.addrs[i] = inode.addr(i)
 	}
-	ic.metablks = make(map[int]*mdbuf_t, 5)
+	ic.metablks = make(map[int]*bdev_block_t, 5)
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *icache_t) flushto(blk *ibuf_t, ioff int) bool {
+func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 	inode := inode_t{blk, ioff}
 	j := inode
 	k := ic
@@ -2120,7 +2099,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	// the given indirect block has a block allocated. it is necessary to
 	// allocate a bunch of zero'd blocks for a file when someone lseek()s
 	// past the end of the file and then writes.
-	ensureind := func(blk *mdbuf_t, idx int) {
+	ensureind := func(blk *bdev_block_t, idx int) {
 		if !writing {
 			return
 		}
@@ -2332,7 +2311,9 @@ func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) (int, err_t) {
 			had = filled
 		}
 		if !had {
-			bdev_read(blkno, p)
+			b := bdev_read_block(blkno)
+			copy(p[:], b.data[:])
+			b.bdev_done()
 		}
 		c += len(p)
 		pgdst = pgdst[len(p):]
@@ -2340,31 +2321,20 @@ func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) (int, err_t) {
 	return c, 0
 }
 
-// flush only the parts of pages whose offset is < file size
-func (idm *imemnode_t) fs_flush(pgsrc []uint8, fileoffset int) err_t {
+// write the data at physical address pa to the block backing this pa
+func (idm *imemnode_t) fs_flush(pa pa_t, fileoffset int) err_t {
 	if memtime {
 		return 0
 	}
-	isz := idm.icache.size
-	c := 0
-	for len(pgsrc) != 0 && fileoffset + c < isz {
-		blkno, err := idm.offsetblk(fileoffset + c, true)
-		if err != 0 {
-			return err
-		}
-		// XXXPANIC
-		if len(pgsrc) < 512 {
-			panic("no")
-		}
-		p := (*[512]uint8)(unsafe.Pointer(&pgsrc[0]))
-		dur := idebuf_t{block: blkno, data: p}
-		idm.pgcache.log_gen = log_write(dur)
-		wrote := len(p)
-		c += wrote
-		pgsrc = pgsrc[wrote:]
+	blkno, err := idm.offsetblk(fileoffset, true)
+	if err != 0 {
+		return err
 	}
+	dur := bdev_block_new_pa(blkno, pa)    // XXX keep track of this in pageinfo? refdown?
+	idm.pgcache.log_gen = log_write(dur)
 	return 0
 }
+
 
 // returns the offset of an empty directory entry. returns error if failed to
 // allocate page for the new directory entry.
@@ -2681,7 +2651,7 @@ func (idm *imemnode_t) probe_unlink(fn string) err_t {
 
 // returns true if all the inodes on ib are also marked dead and thus this
 // inode block should be freed.
-func _alldead(ib *ibuf_t) bool {
+func _alldead(ib *bdev_block_t) bool {
 	bwords := 512/8
 	ret := true
 	for i := 0; i < bwords/NIWORDS; i++ {
@@ -2695,7 +2665,7 @@ func _alldead(ib *ibuf_t) bool {
 }
 
 // caller must flush ib to disk
-func _iallocundo(iblkn int, ni *inode_t, ib *ibuf_t) {
+func _iallocundo(iblkn int, ni *inode_t, ib *bdev_block_t) {
 	ni.w_itype(I_DEAD)
 	if _alldead(ib) {
 		ibpurge(ib)
@@ -2723,7 +2693,6 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 func (idm *imemnode_t) icreate(name string, nitype, major,
     minor int) (inum, err_t) {
 	if nitype <= I_INVALID || nitype > I_VALID {
-		fmt.Printf("itype: %v\n", nitype)
 		panic("bad itype!")
 	}
 	if name == "" {
@@ -2740,7 +2709,6 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 
 	// allocate new inode
 	newbn, newioff := ialloc()
-
 	newiblk := ibread(newbn)
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
@@ -2839,7 +2807,7 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	return ret, 0
 }
 
-func (idm *imemnode_t) idibread() *ibuf_t {
+func (idm *imemnode_t) idibread() *bdev_block_t {
 	if idm.myib == nil {
 		idm.myib = ibread(idm.blkno)
 	} else {
@@ -2876,6 +2844,9 @@ func (idm *imemnode_t) ifree() {
 	}
 
 	iblk := idm.idibread()
+	if iblk == nil {
+		panic("ifree")
+	}
 	idm.icache.itype = I_DEAD
 	idm.icache.flushto(iblk, idm.ioff)
 	if _alldead(iblk) {
@@ -2903,7 +2874,6 @@ func (idm *imemnode_t) mkmode() uint {
 		// this can happen by fs-internal stats
 		return mkdev(idm.icache.major, idm.icache.minor)
 	default:
-		fmt.Printf("itype: %v\n", itype)
 		panic("weird itype")
 	}
 }
@@ -3037,7 +3007,7 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 
 // ...the above comment may be out of date
 type inode_t struct {
-	iblk	*ibuf_t
+	iblk	*bdev_block_t
 	ioff	int
 }
 
@@ -3196,26 +3166,22 @@ func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
 }
 
 type fblkcache_t struct {
-	blks		[]*ibuf_t
+	blks		[]*bdev_block_t
 	free_start	int
 }
 
 var fblkcache = fblkcache_t{}
 
 func (fbc *fblkcache_t) fblkc_init(free_start, free_len int) {
-	fbc.blks = make([]*ibuf_t, free_len)
+	fbc.blks = make([]*bdev_block_t, free_len)
 	fbc.free_start = free_start
 	for i := range fbc.blks {
 		blkno := free_start + i
-		fb := &ibuf_t{}
-		fbc.blks[i] = fb
-		fb.block = blkno
-		fb.data = new([512]uint8)
-		bdev_read(blkno, fb.data)
+		fbc.blks[i] = bdev_read_block(blkno)
 	}
 }
 
-func fbread(blockno int) *ibuf_t {
+func fbread(blockno int) *bdev_block_t {
 	if blockno < superb_start {
 		panic("naughty blockno")
 	}
@@ -3224,9 +3190,6 @@ func fbread(blockno int) *ibuf_t {
 	return fblkcache.blks[n]
 }
 
-func fbrelse(fb *ibuf_t) {
-	fb.Unlock()
-}
 
 func freebit(b uint8) uint {
 	for m := uint(0); m < 8; m++ {
@@ -3253,14 +3216,14 @@ func balloc1() int {
 
 	found := false
 	var bit uint
-	var blk *ibuf_t
+	var blk *bdev_block_t
 	var blkn int
 	var oct int
 	// 0 is free, 1 is allocated
 	for b := 0; b < flen && !found; b++ {
 		i := (_lastblkno + b) % flen
 		if blk != nil {
-			fbrelse(blk)
+			blk.relse()
 		}
 		blk = fbread(fst + i)
 		start := 0
@@ -3287,7 +3250,7 @@ func balloc1() int {
 	// mark as allocated
 	blk.data[oct] |= 1 << bit
 	blk.log_write()
-	fbrelse(blk)
+	blk.relse()
 
 	boffset := usable_start
 	bitsperblk := 512*8
@@ -3326,7 +3289,7 @@ func bfree(blkno int) {
 	fblk := fbread(fblkno)
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.log_write()
-	fbrelse(fblk)
+	fblk.relse()
 
 	// force allocation of free inode block
 	if ifreeblk == blkno {
@@ -3384,11 +3347,11 @@ type logread_t struct {
 
 // list of dirty blocks that are pending commit.
 type log_t struct {
-	blks		[]idebuf_t
+	blks		[]*bdev_block_t
 	lhead		int
 	logstart	int
 	loglen		int
-	incoming	chan idebuf_t
+	incoming	chan bdev_block_t
 	incgen		chan uint8
 	logread		chan logread_t
 	logreadret	chan logread_t
@@ -3396,7 +3359,7 @@ type log_t struct {
 	done		chan bool
 	force		chan bool
 	commitwait	chan bool
-	tmpblk		[512]uint8
+	tmpblk		*bdev_block_t
 }
 
 func (log *log_t) init(ls int, ll int) {
@@ -3404,11 +3367,12 @@ func (log *log_t) init(ls int, ll int) {
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
-	log.blks = make([]idebuf_t, log.loglen)
+	log.blks = make([]*bdev_block_t, log.loglen)
 	for i := range log.blks {
-		log.blks[i].data = new([512]uint8)
+		log.blks[i] = bdev_block_new(log.logstart+1+i)
 	}
-	log.incoming = make(chan idebuf_t)
+	log.tmpblk = bdev_block_new(log.logstart)
+	log.incoming = make(chan bdev_block_t)
 	log.incgen = make(chan uint8)
 	log.logread = make(chan logread_t)
 	log.logreadret = make(chan logread_t)
@@ -3418,7 +3382,7 @@ func (log *log_t) init(ls int, ll int) {
 	log.commitwait = make(chan bool)
 }
 
-func (log *log_t) addlog(buf idebuf_t) {
+func (log *log_t) addlog(buf bdev_block_t) {
 	// log absorption
 	for i := 0; i < log.lhead; i++ {
 		b := log.blks[i]
@@ -3443,15 +3407,12 @@ func (log *log_t) commit() {
 		return
 	}
 
-	lh := logheader_t{&log.tmpblk}
+	lh := logheader_t{log.tmpblk.data}
 	for i := 0; i < log.lhead; i++ {
 		lb := log.blks[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, lb.block)
-
-		// and write block to the log
-		logblkn := log.logstart + 1 + i
-		bdev_write_async(logblkn, lb.data)
+		bdev_write_async(lb)
 	}
 	
 	bdev_flush()   // flush log
@@ -3459,7 +3420,7 @@ func (log *log_t) commit() {
 	lh.w_recovernum(log.lhead)
 
 	// commit log: flush log header
-	bdev_write(log.logstart, &log.tmpblk)
+	bdev_write(log.tmpblk)
 
 	bdev_flush()   // commit log
 
@@ -3472,14 +3433,16 @@ func (log *log_t) commit() {
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {
 		lb := log.blks[i]
-		bdev_write_async(lb.block, lb.data)
+		b := bdev_read_block(lb.block)  // XXX don't read block
+		copy(b.data[:], lb.data[:])
+		bdev_write_async(b)
 	}
 
 	bdev_flush()  // flush apply
 	
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
-	bdev_write(log.logstart, &log.tmpblk)
+	bdev_write(log.tmpblk)
 	
 	bdev_flush()  // flush cleared commit
 	log.lhead = 0
@@ -3581,11 +3544,12 @@ func op_end() {
 	fslog.done <- true
 }
 
-func log_write(b idebuf_t) uint8 {
+func log_write(b *bdev_block_t) uint8 {
 	if memtime {
 		return 0
 	}
-	fslog.incoming <- b
+	// fmt.Printf("log_write %v\n", b.block)
+	fslog.incoming <- *b
 	return <- fslog.incgen
 }
 
@@ -3614,50 +3578,107 @@ const (
 	BDEV_FLUSH = 3
 )
 
-type idereq_t struct {
-	block   uint64
-	data    *[512]uint8
+type bdev_req_t struct {
+	blk     *bdev_block_t
 	ackCh	chan bool
 	cmd	bdevcmd_t
 	sync    bool
 }
 
-func idereq_new(block int, cmd bdevcmd_t, data *[512]uint8, sync bool) *idereq_t {
-	ret := &idereq_t{}
+type bdev_block_t struct {
+	sync.Mutex
+	disk	int
+	block	int
+	pa      pa_t
+	data	*[512]uint8
+}
+
+func bdev_block_new(block int) *bdev_block_t {
+	_, pa, ok := refpg_new()
+	if !ok {
+		panic("oom during bdev_block_new")
+	}
+	refup(pa)
+	b := &bdev_block_t{};
+	b.block = block
+	b.pa = pa
+	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	return b
+}
+
+func bdev_block_new_pa(block int, pa pa_t) *bdev_block_t {
+	refup(pa)
+	b := &bdev_block_t{};
+	b.block = block
+	b.pa = pa
+	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	return b
+}
+
+func (blk *bdev_block_t) bdev_done() {
+	if refdown(blk.pa) {
+		fmt.Printf("bdev_done: returned page\n")
+	}
+}
+
+func (b *bdev_block_t) relse() {
+	b.Unlock()
+}
+
+func bdev_req_new(blk *bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
+	ret := &bdev_req_t{}
+	ret.blk = blk
 	ret.ackCh = make(chan bool)
 	ret.cmd = cmd
 	ret.sync = sync
-	ret.block = uint64(block)
-	ret.data = data
 	return ret
 }
-
-func bdev_start(req *idereq_t) bool {
+	
+func bdev_start(req *bdev_req_t) bool {
+	if req.blk != nil {
+		a := (uintptr)(unsafe.Pointer(req.blk.data))
+		if uint64(a) != 0 && uint64(a) < uint64(_vdirect) {
+			panic("xx")
+		}
+	}
 	r := adisk.start(req)
 	return r
 }
 
-func bdev_write(blkn int, src *[512]uint8) {
-	req := idereq_new(blkn, BDEV_WRITE, src, true)
+func bdev_write(b *bdev_block_t) {
+	if b.data[0] == 0xc && b.data[1] == 0xc {
+		panic("write\n")
+	}
+	req := bdev_req_new(b, BDEV_WRITE, true)
 	if bdev_start(req) {
 		<- req.ackCh
 	}
 }
 
-func bdev_write_async(blkn int, src *[512]uint8) {
-	ider := idereq_new(blkn, BDEV_WRITE, src, false)
+func bdev_write_async(b *bdev_block_t) {
+	if b.data[0] == 0xc && b.data[1] == 0xc {
+		panic("write_async\n")
+	}
+
+	ider := bdev_req_new(b, BDEV_WRITE, false)
 	bdev_start(ider)
 }
 
-func bdev_read(blkn int, dst *[512]uint8) {
-	ider := idereq_new(blkn, BDEV_READ, dst, true)
+func bdev_read_block(blkn int) *bdev_block_t {
+	buf := bdev_block_new(blkn)
+	ider := bdev_req_new(buf, BDEV_READ, true)
 	if bdev_start(ider) {
 		<- ider.ackCh
 	}
+	// fmt.Printf("read %v %#x %#x\n", buf.block, buf.data[0], buf.data[1])
+	if buf.data[0] == 0xc && buf.data[1] == 0xc {
+		panic("xxx\n")
+	}
+	return buf
 }
 
 func bdev_flush() {
-	ider := idereq_new(0, BDEV_FLUSH, nil, true)
+	ider := bdev_req_new(nil, BDEV_FLUSH, true)
 	if bdev_start(ider) {
 		<- ider.ackCh
 	}

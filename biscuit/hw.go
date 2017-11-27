@@ -303,7 +303,7 @@ type disk_t interface {
 
 type adisk_t interface {
 	slots() int
-	start(*idereq_t) bool
+	start(*bdev_req_t) bool
 }
 
 // use ata pio for fair comparisons against xv6, but i want to use ahci (or
@@ -3052,7 +3052,7 @@ type ahci_port_t struct {
 	port *port_reg_t
 	nslot uint32
 	next_slot uint32
-	inflight []*idereq_t
+	inflight []*bdev_req_t
 	nwaiting int
 	nflush int
 	
@@ -3468,7 +3468,7 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 	return 0, false
 }
 
-func (p *ahci_port_t) start(req *idereq_t) int {
+func (p *ahci_port_t) start(req *bdev_req_t) int {
 	defer p.Unlock()
 	p.Lock()
 
@@ -3504,25 +3504,29 @@ func (p *ahci_port_t) start(req *idereq_t) int {
 
 	var iov []kiovec
 	if req.cmd != BDEV_FLUSH {
-		if (len(*req.data) != 512) {
+		if (len(*req.blk.data) != 512) {
 			panic("AHCI: start wrong len")
 		}
-		io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.data))}
+		io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.blk.data))}
 		iov = []kiovec{io}
 	}
+	var bln uint64
 	switch req.cmd {
 	case BDEV_WRITE:
-		copy(p.block[s][:], req.data[:])
-		p.issue(s, iov, uint64(req.block), IDE_CMD_WRITE_DMA_EXT)
+		copy(p.block[s][:], req.blk.data[:])
+		bln = uint64(req.blk.block)
+		p.issue(s, iov, bln, IDE_CMD_WRITE_DMA_EXT)
 	case BDEV_READ:
-		p.issue(s, iov, uint64(req.block), IDE_CMD_READ_DMA_EXT)
+		bln = uint64(req.blk.block)
+		p.issue(s, iov, bln, IDE_CMD_READ_DMA_EXT)
 	case BDEV_FLUSH:
-		p.issue(s, nil, 0, IDE_CMD_FLUSH_CACHE_EXT)
+		bln = uint64(0)
+		p.issue(s, nil, bln, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
 	if ahci_debug {
 		fmt.Printf("AHCI start: issued slot %v req %v bn %v sync %v ci %#x\n",
-			s, req.cmd,req.block, req.sync, LD(&p.port.ci))
+			s, req.cmd, bln, req.sync, LD(&p.port.ci))
 	}
 	return s
 }
@@ -3619,7 +3623,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
 				p.nslot, ahci.ncs)
 			}
-			p.inflight = make([]*idereq_t, p.nslot)
+			p.inflight = make([]*bdev_req_t, p.nslot)
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
 			id, _,  _ = p.identify()
@@ -3641,14 +3645,14 @@ func (ahci *ahci_disk_t) slots() int {
 }
 
 // returns true if start is asynchronous
-func (ahci *ahci_disk_t) start(req *idereq_t) bool {
+func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
 	s := ahci.port.start(req)
 	if !ahci.use_interrupt {  // poll port
 		if !ahci.port.wait(uint32(s)) {
 			panic("start: wait times out polling\n")
 		}
 		if req.cmd == BDEV_READ {
-			copy(req.data[:], ahci.port.block[s][:])
+			copy(req.blk.data[:], ahci.port.block[s][:])
 		}
 		ahci.port.inflight[s] = nil
 		if ahci.port.nwaiting > 0 || ahci.port.nflush > 0 {
@@ -3675,11 +3679,11 @@ func (p *ahci_port_t) port_intr() {
 				fmt.Printf("port_intr: slot %v interrupt\n", s)
 			}
 			if p.inflight[s].cmd == BDEV_READ {
-				copy(p.inflight[s].data[:], p.block[s][:])
+				copy(p.inflight[s].blk.data[:], p.block[s][:])
 			}
 			if p.inflight[s].sync {
 				if ahci_debug {
-					fmt.Printf("port_intr: ack block %v\n", p.inflight[s].block)
+					fmt.Printf("port_intr: ack inflight %v\n", s)
 				}
 				// writing to channel while holding ahci lock, but should be ok
 				p.inflight[s].ackCh <- true
@@ -3848,24 +3852,26 @@ func disk_test() {
 	
 	const N = 3
 
-	wbuf := new([N][512]uint8)
-	rbuf := new([512]uint8)
+	wbuf := new([N]*bdev_block_t)
 
+	for b := 0; b < N; b++ {
+		wbuf[b] = bdev_block_new(b)
+	}
 	for j := 0; j < 100; j++ {
 
 		for b := 0; b < N; b++ {
 			fmt.Printf("req %v,%v\n", j, b)
 
-			for i,_ := range wbuf[b] {
-				wbuf[b][i] = uint8(b)
+			for i,_ := range wbuf[b].data {
+				wbuf[b].data[i] = uint8(b)
 			}
-			bdev_write_async(b, &wbuf[b])
+			bdev_write_async(wbuf[b])
 		}
 		bdev_flush()
 		for b := 0; b < N; b++ {
-			bdev_read(b, rbuf)
+			rbuf := bdev_read_block(b)
 			
-			for i, v := range rbuf {
+			for i, v := range rbuf.data {
 				if v != uint8(b) {
 					fmt.Printf("buf %v i %v v %v\n", j, i, v)
 					panic("disk_test\n")

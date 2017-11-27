@@ -2573,7 +2573,7 @@ func sizedump() {
 	fmt.Printf("mfs    : %v\n", uintptr(2*8 + dirtyarray) +
 		unsafe.Sizeof(frbn_t{}) + unsafe.Sizeof(pginfo_t{}))
 	fmt.Printf("vnode  : %v + 1map\n", unsafe.Sizeof(imemnode_t{}) +
-		unsafe.Sizeof(ibuf_t{}) + 512 + condsz +
+		unsafe.Sizeof(bdev_block_t{}) + 512 + condsz +
 		unsafe.Sizeof(fsfops_t{}))
 	fmt.Printf("pipe   : %v\n", unsafe.Sizeof(pipe_t{}) +
 		unsafe.Sizeof(pipefops_t{}) + 2*condsz)
@@ -3229,11 +3229,13 @@ func _reffree(idx uint32) {
 	physmem.Unlock()
 }
 
-func refdown(p_pg pa_t) {
+func refdown(p_pg pa_t) bool {
 	// add to freelist?
 	if add, idx := _refdec(p_pg); add {
 		_reffree(idx)
+		return true
 	}
+	return false
 }
 
 var failalloc bool = false
