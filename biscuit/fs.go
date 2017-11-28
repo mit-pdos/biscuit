@@ -1901,18 +1901,25 @@ func ibread(blkn int) *bdev_block_t {
 	if blkn < superb_start {
 		panic("no")
 	}
+	created := false
 
 	iblkcache.Lock()
 	iblk, ok := iblkcache.blks[blkn]
+	if !ok {
+		iblk = bdev_block_new(blkn, "ibread")
+		iblk.Lock()
+		iblkcache.blks[blkn] = iblk
+		created = true
+	}
 	iblkcache.Unlock()
 
-	if !ok {
-		// XXX a second ibread for same missing blkn
-		// filling new iblkcache entry
-		iblk = bdev_read_block(blkn, "ibread")
-		iblkcache.blks[blkn] = iblk
+	if !created {
+		// No refup() because only one thread has iblk
+		iblk.Lock()
+	} else {
+		// fill in new iblkcache entry
+		iblk.bdev_read()
 	}
-	iblk.Lock()
 	return iblk
 }
 
@@ -3589,38 +3596,39 @@ var _npages int
 
 func bdev_block_new(block int, s string) *bdev_block_t {
 	_, pa, ok := refpg_new()
+	_npages++
 	if !ok {
 		panic("oom during bdev_block_new")
 	}
-	refup(pa)
-	_npages++
 	// fmt.Printf("new page %v\n", _npages)
 	b := &bdev_block_t{};
 	b.block = block
 	b.pa = pa
 	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	b.s = s
+	b.bdev_refup()
 	return b
 }
 
 
 func bdev_block_new_pa(block int, s string, pa pa_t) *bdev_block_t {
-	refup(pa)
 	b := &bdev_block_t{};
 	b.block = block
 	b.pa = pa
 	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	b.s = s
+	b.bdev_refup()
 	return b
 }
 
 func (blk *bdev_block_t) bdev_refup() {
-	// fmt.Printf("bdev_refup: block %v\n", blk.s)
 	refup(blk.pa)
+	fmt.Printf("bdev_refup: block %v %v npages %v\n", blk.block, blk.s, _npages)
 }
 
 func (blk *bdev_block_t) bdev_refdown() {
 	ref, _ := _refaddr(blk.pa)
+	fmt.Printf("bdev_refdown: %v %v npages %v\n", blk.block, blk.s, _npages)
 	if *ref == 0 {
 		fmt.Printf("bdev_refdown: ref is 0 %v page %v\n", blk.s, _npages)
 	}
@@ -3677,19 +3685,24 @@ func bdev_write_async(b *bdev_block_t) {
 	bdev_start(ider)
 }
 
+func (b *bdev_block_t) bdev_read() {
+	ider := bdev_req_new(b, BDEV_READ, true)
+	if bdev_start(ider) {
+		<- ider.ackCh
+	}
+	// fmt.Printf("fill %v %#x %#x\n", buf.block, buf.data[0], buf.data[1])
+	if b.data[0] == 0xc && b.data[1] == 0xc {
+		fmt.Printf("fall: %v %v\n", b.s, b.block)
+		panic("xxx\n")
+	}
+	
+}
+
 // after bdev_read_block returns, the caller owns the physical page.  the caller
 // must call bdev_refdown when it is done with the page in the buffer returned.
 func bdev_read_block(blkn int, s string) *bdev_block_t {
 	buf := bdev_block_new(blkn, s)
-	ider := bdev_req_new(buf, BDEV_READ, true)
-	if bdev_start(ider) {
-		<- ider.ackCh
-	}
-	// fmt.Printf("read %v %#x %#x\n", buf.block, buf.data[0], buf.data[1])
-	if buf.data[0] == 0xc && buf.data[1] == 0xc {
-		fmt.Printf("block %v %v\n", buf.s, buf.block)
-		panic("xxx\n")
-	}
+	buf.bdev_read()
 	return buf
 }
 
