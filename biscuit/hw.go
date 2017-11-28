@@ -3681,6 +3681,10 @@ func (p *ahci_port_t) port_intr() {
 			if p.inflight[s].cmd == BDEV_READ {
 				copy(p.inflight[s].blk.data[:], p.block[s][:])
 			}
+			if p.inflight[s].cmd == BDEV_WRITE {
+				// page has been written, don't need a reference to it
+				p.inflight[s].blk.bdev_refdown()
+			}
 			if p.inflight[s].sync {
 				if ahci_debug {
 					fmt.Printf("port_intr: ack inflight %v\n", s)
@@ -3855,7 +3859,7 @@ func disk_test() {
 	wbuf := new([N]*bdev_block_t)
 
 	for b := 0; b < N; b++ {
-		wbuf[b] = bdev_block_new(b)
+		wbuf[b] = bdev_block_new(b, "disktest")
 	}
 	for j := 0; j < 100; j++ {
 
@@ -3869,7 +3873,7 @@ func disk_test() {
 		}
 		bdev_flush()
 		for b := 0; b < N; b++ {
-			rbuf := bdev_read_block(b)
+			rbuf := bdev_read_block(b, "read test")
 			
 			for i, v := range rbuf.data {
 				if v != uint8(b) {
