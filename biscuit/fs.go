@@ -162,12 +162,14 @@ func fs_recover() {
 		fb := bdev_read_block(bdest, "bdest")
 		copy(fb.data[:], lb.data[:])
 		bdev_write(fb)
-		// XXX release b
+		lb.bdev_refdown()
+		fb.bdev_refdown()
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
-	bdev_write(l.tmpblk)
+	bdev_write(b)
+	b.bdev_refdown()
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
@@ -3457,10 +3459,10 @@ func (log *log_t) commit() {
 
 	bdev_flush()   // commit log
 
-	//rn := lh.recovernum()
-	//if rn > 0 {
-	//	runtime.Crash()
-	//}
+	// rn := lh.recovernum()
+	// if rn > 0 {
+	// 	runtime.Crash()
+	// }
 
 	// the log is committed. if we crash while installing the blocks to
 	// their destinations, we should be able to recover
