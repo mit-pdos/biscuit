@@ -1946,6 +1946,7 @@ func ibrelse(ib *bdev_block_t) {
 func ibpurge(ib *bdev_block_t) {
 	iblkcache.Lock()
 	ib.bdev_refdown()
+	fmt.Printf("ibpurge: %v\n", ib.block)
 	delete(iblkcache.blks, ib.block)
 	iblkcache.Unlock()
 }
@@ -2088,6 +2089,13 @@ func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 	return ret
 }
 
+func (ic *icache_t) purge_metablks() {
+	for _, b := range ic.metablks {
+		fmt.Printf("purge metablocks %v\n", b.block)
+		b.bdev_refdown()
+	}
+}
+	
 // takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
@@ -2866,6 +2874,9 @@ func (idm *imemnode_t) ifree() {
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
+
+	idm.icache.purge_metablks()
+
 	idm.pgcache.release()
 }
 
@@ -3436,12 +3447,11 @@ func (log *log_t) commit() {
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {
 		lb := log.blks[i]
-		b := bdev_read_block(lb.block, "log apply")  // XXX don't read block
+		b := bdev_read_block(lb.block, "logapply")  // XXX don't read block
 		copy(b.data[:], lb.data[:])
 		bdev_write_async(b) 
 		b.bdev_refdown()
 		lb.bdev_refdown()   // log layer is done with this block
-		// log.blks[i] = nil
 	}
 
 	bdev_flush()  // flush apply
