@@ -1184,7 +1184,7 @@ func print_live_blocks() {
 }
 
 func fs_sync() err_t {
-	print_live_blocks()
+	// print_live_blocks()
 	if memtime {
 		return 0
 	}
@@ -1964,7 +1964,6 @@ func ibrelse(ib *bdev_block_t) {
 func ibpurge(ib *bdev_block_t) {
 	iblkcache.Lock()
 	ib.bdev_refdown()
-	fmt.Printf("ibpurge: %v\n", ib.block)
 	delete(iblkcache.blks, ib.block)
 	iblkcache.Unlock()
 }
@@ -2109,7 +2108,6 @@ func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 
 func (ic *icache_t) purge_metablks() {
 	for _, b := range ic.metablks {
-		fmt.Printf("purge metablocks %v\n", b.block)
 		b.bdev_refdown()
 	}
 }
@@ -3628,7 +3626,6 @@ func bdev_block_new(block int, s string) *bdev_block_t {
 	if !ok {
 		panic("oom during bdev_block_new")
 	}
-	// fmt.Printf("new page %v\n", _npages)
 	b := &bdev_block_t{};
 	b.block = block
 	b.pa = pa
@@ -3651,14 +3648,15 @@ func bdev_block_new_pa(block int, s string, pa pa_t) *bdev_block_t {
 
 func (blk *bdev_block_t) bdev_refup() {
 	refup(blk.pa)
-	fmt.Printf("bdev_refup: block %v %v npages %v\n", blk.block, blk.s, _npages)
+	// fmt.Printf("bdev_refup: block %v %v npages %v\n", blk.block, blk.s, _npages)
 }
 
 func (blk *bdev_block_t) bdev_refdown() {
 	ref, _ := _refaddr(blk.pa)
-	fmt.Printf("bdev_refdown: %v %v npages %v\n", blk.block, blk.s, _npages)
+	// fmt.Printf("bdev_refdown: %v %v npages %v\n", blk.block, blk.s, _npages)
 	if *ref == 0 {
 		fmt.Printf("bdev_refdown: ref is 0 %v page %v\n", blk.s, _npages)
+		panic("ouch")
 	}
 	if refdown(blk.pa) {
 		_npages--
@@ -3682,8 +3680,7 @@ func bdev_start(req *bdev_req_t) bool {
 	if req.blk != nil {
 		a := (uintptr)(unsafe.Pointer(req.blk.data))
 		if uint64(a) != 0 && uint64(a) < uint64(_vdirect) {
-			fmt.Printf("block %v\n", req.blk.s)
-			panic("xx")
+			panic("bdev_start")
 		}
 	}
 	r := adisk.start(req)
