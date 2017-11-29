@@ -3507,13 +3507,14 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 		if (len(*req.blk.data) != 512) {
 			panic("AHCI: start wrong len")
 		}
-		io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.blk.data))}
+		// io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.blk.data))}
+		io := kiovec{uint64(req.blk.pa), uint64(len(*req.blk.data))}
 		iov = []kiovec{io}
 	}
 	var bln uint64
 	switch req.cmd {
 	case BDEV_WRITE:
-		copy(p.block[s][:], req.blk.data[:])
+		// copy(p.block[s][:], req.blk.data[:])
 		bln = uint64(req.blk.block)
 		p.issue(s, iov, bln, IDE_CMD_WRITE_DMA_EXT)
 	case BDEV_READ:
@@ -3651,9 +3652,9 @@ func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
 		if !ahci.port.wait(uint32(s)) {
 			panic("start: wait times out polling\n")
 		}
-		if req.cmd == BDEV_READ {
-			copy(req.blk.data[:], ahci.port.block[s][:])
-		}
+		//if req.cmd == BDEV_READ {
+		//	copy(req.blk.data[:], ahci.port.block[s][:])
+		//}
 		ahci.port.inflight[s] = nil
 		if ahci.port.nwaiting > 0 || ahci.port.nflush > 0 {
 			panic("polling mode\n")
@@ -3678,9 +3679,9 @@ func (p *ahci_port_t) port_intr() {
 			if ahci_debug {
 				fmt.Printf("port_intr: slot %v interrupt\n", s)
 			}
-			if p.inflight[s].cmd == BDEV_READ {
-				copy(p.inflight[s].blk.data[:], p.block[s][:])
-			}
+			//if p.inflight[s].cmd == BDEV_READ {
+			//	copy(p.inflight[s].blk.data[:], p.block[s][:])
+			//}
 			if p.inflight[s].cmd == BDEV_WRITE {
 				// page has been written, don't need a reference to it
 				p.inflight[s].blk.bdev_refdown()
