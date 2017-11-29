@@ -1167,6 +1167,19 @@ func fs_stat(path string, st *stat_t, cwd *imemnode_t) err_t {
 }
 
 func fs_sync() err_t {
+	for _, m := range allidmons {
+		for _, b := range m.icache.metablks {
+			fmt.Printf("idm block %v\n", b)
+		}
+	}
+	for _, b := range iblkcache.blks {
+		fmt.Printf("iblocks %v\n", b)
+	}
+
+	for _, b := range fblkcache.blks {
+		fmt.Printf("free block %v\n", b)
+	}
+
 	if memtime {
 		return 0
 	}
@@ -3424,12 +3437,15 @@ func (log *log_t) commit() {
 		lb := log.blks[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, lb.block)
-		bdev_write_async(lb)
+
+		// write block into log
+		b := bdev_read_block(log.logstart+i+1, "logblock")  // XXX don't read block
+		copy(b.data[:], lb.data[:])
+		bdev_write_async(b)
+		b.bdev_refdown()
 	}
 	
 	bdev_flush()   // flush log
-
-	// XXX could free lb's now
 
 	lh.w_recovernum(log.lhead)
 
@@ -3447,10 +3463,7 @@ func (log *log_t) commit() {
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {
 		lb := log.blks[i]
-		b := bdev_read_block(lb.block, "logapply")  // XXX don't read block
-		copy(b.data[:], lb.data[:])
-		bdev_write_async(b) 
-		b.bdev_refdown()
+		bdev_write_async(lb)
 		lb.bdev_refdown()   // log layer is done with this block
 	}
 
