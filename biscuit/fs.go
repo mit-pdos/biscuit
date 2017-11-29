@@ -1166,20 +1166,25 @@ func fs_stat(path string, st *stat_t, cwd *imemnode_t) err_t {
 	return err
 }
 
-func fs_sync() err_t {
+func print_live_blocks() {
+	fmt.Printf("meta\n")
 	for _, m := range allidmons {
 		for _, b := range m.icache.metablks {
-			fmt.Printf("idm block %v\n", b)
+			fmt.Printf("block %v\n", b)
 		}
 	}
+	fmt.Printf("inode\n")
 	for _, b := range iblkcache.blks {
-		fmt.Printf("iblocks %v\n", b)
+		fmt.Printf("block %v\n", b)
 	}
-
+	fmt.Printf("free\n")
 	for _, b := range fblkcache.blks {
-		fmt.Printf("free block %v\n", b)
+		fmt.Printf("block %v\n", b)
 	}
+}
 
+func fs_sync() err_t {
+	print_live_blocks()
 	if memtime {
 		return 0
 	}
