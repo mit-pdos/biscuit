@@ -1251,10 +1251,9 @@ type pgcache_t struct {
 	chklog		bool
 	log_gen		uint8
 	// fill is used to fill empty pages with data from the underlying
-	// device or layer. its arguments are the destination slice and offset
-	// and returns error. fill may write fewer bytes than the length of the
+	// device or layer. fill may write fewer bytes than the length of the
 	// destination buffer.
-	_fill	func([]uint8, int) (int, err_t)
+	_fill	func(pa_t, int) (int, err_t)
 	// flush writes the given buffer to the specified offset of the device.
 	_flush	func(pa_t, int) err_t
 }
@@ -1266,7 +1265,7 @@ type pginfo_t struct {
 	dirtyblocks	[]bool
 }
 
-func (pc *pgcache_t) pgc_init(bsz int, fill func([]uint8, int) (int, err_t),
+func (pc *pgcache_t) pgc_init(bsz int, fill func(pa_t, int) (int, err_t),
     flush func(pa_t, int) err_t) {
 	if fill == nil || flush == nil {
 		panic("invalid page func")
@@ -1341,13 +1340,12 @@ func (pc *pgcache_t) _ensurefill(pgn pgn_t) err_t {
 		if !ok {
 			panic("eh")
 		}
-		pgva := pgi.pg
-		devoffset := int(pgn << PGSHIFT)
-		did, err := pc._fill(pgva[:], devoffset)
+		devoffset := (int(pgi.pgn) << PGSHIFT)
+		c, err := pc._fill(pgi.p_pg, devoffset)
 		if err != 0 {
 			panic("must succeed")
 		}
-		copy(pgva[did:], pg2bytes(zeropg)[:])
+		copy(pgi.pg[c:], pg2bytes(zeropg)[:])
 	}
 	return 0
 }
@@ -2315,40 +2313,36 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 
 // fills the parts of pages whose offset < the file size (extending the file
 // shouldn't read any blocks).
-func (idm *imemnode_t) fs_fill(pgdst []uint8, fileoffset int) (int, err_t) {
+func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
-	for len(pgdst) != 0 && fileoffset + c < isz {
+	for c < 4096 && fileoffset + c < isz {
 		blkno, err := idm.offsetblk(fileoffset + c, false)
 		if err != 0 {
 			return c, err
 		}
-		// XXXPANIC
-		if len(pgdst) < 512 {
-			panic("no")
-		}
-		p := (*[512]uint8)(unsafe.Pointer(&pgdst[0]))
 		had := false
+		a := uintptr(pa) + (uintptr)(c)
 		if idm.pgcache.chklog {
+			fmt.Printf("fs_fill check log\n")
 			// our pages were evicted; avoid reading the block from
 			// the disk which may now be stale.
-			ibuf := idebuf_t{block: blkno, data: p}
+			b := bdev_block_new_pa(blkno, "log_read", pa_t(a))
 			loggen := idm.pgcache.log_gen
-			filled, logcommitted := log_read(loggen, ibuf)
+			filled, logcommitted := log_read(loggen, b)
 			if logcommitted {
 				idm.pgcache.chklog = false
 			}
 			had = filled
 		}
 		if !had {
-			b := bdev_read_block(blkno, "fs_fill")
-			copy(p[:], b.data[:])
+			b := bdev_block_new_pa(blkno, "fs_fill", pa_t(a))
+			b.bdev_read()
 			b.bdev_refdown()
 		}
-		c += len(p)
-		pgdst = pgdst[len(p):]
+		c += 512
 	}
-	return c, 0
+        return c, 0
 }
 
 // write the data at physical address pa to the block backing this pa
@@ -3362,19 +3356,19 @@ func ialloc() (int, int) {
 }
 
 // our actual disk
-var disk	disk_t
+var disk	disk_t   // XXX delete?
 var adisk	adisk_t
 
+// XXX delete and the disks that use it?
 type idebuf_t struct {
 	disk	int
 	block	int
 	data	*[512]uint8
 }
 
-
 type logread_t struct {
 	loggen		uint8
-	ibuf		idebuf_t
+	buf		*bdev_block_t
 	had		bool
 	gencommit	bool
 }
@@ -3423,11 +3417,18 @@ func (log *log_t) addlog(buf bdev_block_t) {
 			return
 		}
 	}
+	
+	// copy the data into a new page, because caller may modify it in a
+	// later transaction.  XXX should use COW.
+	lb := bdev_block_new(buf.block, "addlog/"+buf.s)
+	copy(lb.data[:], buf.data[:])
+	buf.bdev_refdown()
+	
 	lhead := log.lhead
 	if lhead >= len(log.blks) {
 		panic("log overflow")
 	}
-	log.blks[lhead] = &buf
+	log.blks[lhead] = lb
 	log.lhead++
 }
 
@@ -3533,12 +3534,11 @@ func log_daemon(l *log_t) {
 					l.logreadret <- ret
 					continue
 				}
-				want := lr.ibuf.block
+				want := lr.buf.block
 				had := false
 				for _, lblk := range l.blks {
 					if lblk.block == want {
-						dest := lr.ibuf.data[:]
-						copy(dest, lblk.data[:])
+						copy(lr.buf.data[:], lblk.data[:])
 						had = true
 						break
 					}
@@ -3582,11 +3582,11 @@ func op_end() {
 // returns whether the log contained the requested block and whether the log
 // identified by loggen has been committed (i.e. there is no need to check the
 // log for blocks).
-func log_read(loggen uint8, b idebuf_t) (bool, bool) {
+func log_read(loggen uint8, b *bdev_block_t) (bool, bool) {
 	if memtime {
 		return false, true
 	}
-	lr := logread_t{loggen: loggen, ibuf: b}
+	lr := logread_t{loggen: loggen, buf: b}
 	fslog.logread <- lr
 	ret := <- fslog.logreadret
 	if ret.had && ret.gencommit {
@@ -3691,7 +3691,7 @@ func bdev_start(req *bdev_req_t) bool {
 
 // bdev_write_async increments ref to keep the page around utnil write completes
 func bdev_write(b *bdev_block_t) {
-	if b.data[0] == 0xc && b.data[1] == 0xc {
+	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
 	b.bdev_refup()
@@ -3704,7 +3704,7 @@ func bdev_write(b *bdev_block_t) {
 
 // bdev_write_async increments ref to keep the page around until write completes
 func bdev_write_async(b *bdev_block_t) {
-	if b.data[0] == 0xc && b.data[1] == 0xc {
+	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write_async\n")
 	}
 	b.bdev_refup()
