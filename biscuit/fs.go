@@ -1173,7 +1173,7 @@ func print_live_blocks() {
 }
 
 func fs_sync() err_t {
-	print_live_blocks()
+	// print_live_blocks()
 	if memtime {
 		return 0
 	}
@@ -3515,7 +3515,6 @@ const (
 	BDEV_FLUSH = 3
 )
 
-// XXX no reason to have this. change driver to have read, write, and flush
 type bdev_req_t struct {
 	blk     *bdev_block_t
 	ackCh	chan bool
@@ -3606,11 +3605,11 @@ func (blk *bdev_block_t) bdev_refcnt() int {
 
 func (blk *bdev_block_t) bdev_refup(s string) {
 	refup(blk.pa)
-	fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
+	// fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
 }
 
 func (blk *bdev_block_t) bdev_refdown(s string) {
-	fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
+	// fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
 	if blk.bdev_refcnt() == 0 {
 		fmt.Printf("bdev_refdown %s: ref is 0 block %v %v\n", s, blk.block, blk.s)
 		panic("ouch")

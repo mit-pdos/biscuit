@@ -301,11 +301,6 @@ type disk_t interface {
 	int_clear()
 }
 
-type adisk_t interface {
-	slots() int
-	start(*bdev_req_t) bool
-}
-
 // use ata pio for fair comparisons against xv6, but i want to use ahci (or
 // something) eventually. unlike xv6, we always use disk 0
 const(
@@ -3641,30 +3636,6 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	}
 }
 
-func (ahci *ahci_disk_t) slots() int {
-	return int(ahci.port.nslot)
-}
-
-// returns true if start is asynchronous
-func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
-	s := ahci.port.start(req)
-	if !ahci.use_interrupt {  // poll port
-		if !ahci.port.wait(uint32(s)) {
-			panic("start: wait times out polling\n")
-		}
-		//if req.cmd == BDEV_READ {
-		//	copy(req.blk.data[:], ahci.port.block[s][:])
-		//}
-		ahci.port.inflight[s] = nil
-		if ahci.port.nwaiting > 0 || ahci.port.nflush > 0 {
-			panic("polling mode\n")
-		}
-		return false
-	}
-	return true
-}
-
-
 
 // Called by int_handler(), which holds lock through intr()
 func (p *ahci_port_t) port_intr() {
@@ -3740,6 +3711,29 @@ func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 		runtime.IRQsched(uint(vec))
 		ahci.intr()
 	}
+}
+
+type adisk_t interface {
+	start(*bdev_req_t) bool
+}
+
+// returns true if start is asynchronous
+func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
+	s := ahci.port.start(req)
+	if !ahci.use_interrupt {  // poll port
+		if !ahci.port.wait(uint32(s)) {
+			panic("start: wait times out polling\n")
+		}
+		//if req.cmd == BDEV_READ {
+		//	copy(req.blk.data[:], ahci.port.block[s][:])
+		//}
+		ahci.port.inflight[s] = nil
+		if ahci.port.nwaiting > 0 || ahci.port.nflush > 0 {
+			panic("polling mode\n")
+		}
+		return false
+	}
+	return true
 }
 
 func attach_ahci(vid, did int, t pcitag_t) {
