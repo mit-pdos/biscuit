@@ -3684,7 +3684,7 @@ func (p *ahci_port_t) port_intr() {
 			//}
 			if p.inflight[s].cmd == BDEV_WRITE {
 				// page has been written, don't need a reference to it
-				p.inflight[s].blk.bdev_refdown()
+				p.inflight[s].blk.bdev_refdown("interrupt")
 			}
 			if p.inflight[s].sync {
 				if ahci_debug {
