@@ -1166,13 +1166,6 @@ func fs_stat(path string, st *stat_t, cwd *imemnode_t) err_t {
 }
 
 func print_live_blocks() {
-	fmt.Printf("meta\n")
-	for _, m := range allidmons {
-		fmt.Printf("block %v\n", m.myib)
-		for _, b := range m.icache.metablks {
-			fmt.Printf("block %v\n", b)
-		}
-	}
 	fmt.Printf("bdev\n")
 	for _, b := range bdev_cache.blks {
 		fmt.Printf("block %v\n", b)
@@ -1552,7 +1545,6 @@ var pglru pglru_t
 
 type imemnode_t struct {
 	priv		inum
-	myib		*bdev_block_t
 	blkno		int
 	ioff		int
 	// cache of file data
@@ -1632,6 +1624,7 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
+	blk.bdev_refdown("idm_init")
 	blk.relse()
 	return 0
 }
@@ -1707,6 +1700,7 @@ func (idm *imemnode_t) _iupdate() {
 	if idm.icache.flushto(iblk, idm.ioff) {
 		iblk.log_write()
 	}
+	iblk.bdev_refdown("_iupdate")
 	iblk.relse()
 }
 
@@ -1915,7 +1909,6 @@ type icache_t struct {
 		dents		dc_rbh_t
 		freel		fdelist_t
 	}
-	metablks	map[int]*bdev_block_t
 }
 
 type fdent_t struct {
@@ -1956,20 +1949,17 @@ type icdent_t struct {
 	priv	inum
 }
 
-// metadata block cache; only one idaemon touches these blocks at a time, thus
-// no concurrency control
+// metadata block interface; only one idaemon touches these blocks at a time,
+// thus no concurrency control
 
-// XXX XXX XXX must count against mfs limit
 func (ic *icache_t) _mbensure(blockn int, fill bool) *bdev_block_t {
-	mb, ok := ic.metablks[blockn]
-	if !ok {
-		if fill {
-			mb = bdev_read_block(blockn, " read mbensure")
-		} else {
-			mb = bdev_block_new(blockn, "mbensure")
-		}
-		ic.metablks[blockn] = mb
+	var mb *bdev_block_t
+	if fill {
+		mb = bdev_lookup_fill(blockn, "_mbensure")
+	} else {
+		mb = bdev_lookup_zero(blockn, "_mbensure")
 	}
+	mb.relse()
 	return mb
 }
 
@@ -1977,14 +1967,14 @@ func (ic *icache_t) mbread(blockn int) *bdev_block_t {
 	return ic._mbensure(blockn, true)
 }
 
-func (ic *icache_t) mbrelse(mb *bdev_block_t) {
-}
-
-func (ic *icache_t) mbempty(blockn int) *bdev_block_t {
-	if _, ok := ic.metablks[blockn]; ok {
+// ensure the block is in the bdev cache and zero-ed
+// XXX evict should write it out
+func (ic *icache_t) mbempty(blockn int) {
+	if ok := bdev_cache_present(blockn); ok {
 		panic("block present")
 	}
-	return ic._mbensure(blockn, false)
+	b := ic._mbensure(blockn, false)
+	b.bdev_refdown("mbempty")
 }
 
 func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
@@ -2003,7 +1993,6 @@ func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
 	for i := 0; i < NIADDRS; i++ {
 		ic.addrs[i] = inode.addr(i)
 	}
-	ic.metablks = make(map[int]*bdev_block_t, 5)
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
@@ -2034,12 +2023,6 @@ func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 	return ret
 }
 
-func (ic *icache_t) purge_metablks() {
-	for _, b := range ic.metablks {
-		b.bdev_refdown("purge_meta")
-	}
-}
-	
 // takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
@@ -2122,7 +2105,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			ensureind(indblk, slotpb)
 
 			indno = readn(indblk.data[:], 8, nextindb)
-			idm.icache.mbrelse(indblk)
+			indblk.bdev_refdown("offsetblk1")
 			indblk = idm.icache.mbread(indno)
 		}
 		// finally get data block from indirect block
@@ -2136,7 +2119,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			writen(s, 8, noff, blkn)
 			indblk.log_write()
 		}
-		idm.icache.mbrelse(indblk)
+		indblk.bdev_refdown("offsetblk2")
 	} else {
 		blkn = idm.icache.addrs[whichblk]
 	}
@@ -2763,12 +2746,7 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 }
 
 func (idm *imemnode_t) idibread() *bdev_block_t {
-	if idm.myib == nil {
-		idm.myib = bdev_lookup_fill(idm.blkno, "idibread")
-	} else {
-		idm.myib.Lock()
-	}
-	return idm.myib
+	return bdev_lookup_fill(idm.blkno, "idibread")
 }
 
 // frees all blocks occupied by idm
@@ -2795,7 +2773,7 @@ func (idm *imemnode_t) ifree() {
 		}
 		nextoff := 63*8
 		indno = readn(blks, 8, nextoff)
-		idm.icache.mbrelse(blk)
+		blk.bdev_refdown("ifree1")
 	}
 
 	iblk := idm.idibread()
@@ -2810,15 +2788,13 @@ func (idm *imemnode_t) ifree() {
 	} else {
 		iblk.log_write()
 	}
-	iblk.bdev_refdown("ifree")
+	iblk.bdev_refdown("ifree2")
 	iblk.relse()
 
 	// could batch free
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
-
-	idm.icache.purge_metablks()
 
 	idm.pgcache.release()
 }
@@ -3601,6 +3577,7 @@ func (blk *bdev_block_t) bdev_refdown(s string) {
 
 // block cache. there are 4 inodes per inode block. we need a block cache for
 // correctness so that writes aren't lost due to concurrent inode updates.
+// XXX XXX XXX must count against mfs limit
 type bdev_cache_t struct {
 	// inode blkno -> disk contents
 	blks		map[int]*bdev_block_t
@@ -3613,6 +3590,12 @@ func bdev_init() {
 	bdev_cache.blks = make(map[int]*bdev_block_t, 30)
 }
 
+func bdev_cache_present(blkn int) bool {
+	bdev_cache.Lock()
+	_, ok := bdev_cache.blks[blkn]
+	bdev_cache.Unlock()
+	return ok
+}
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_refdown when done with buf.

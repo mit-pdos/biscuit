@@ -43,4 +43,4 @@ for k, v in inuse.items():
         print (k, v)
         if not k in blks:
             print("missing", k)
-print("cnt", cnt)
+print("cnt in-use", cnt)
