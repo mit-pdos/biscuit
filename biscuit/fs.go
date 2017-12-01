@@ -1968,7 +1968,7 @@ func (ic *icache_t) mbread(blockn int) *bdev_block_t {
 }
 
 // ensure the block is in the bdev cache and zero-ed
-// XXX evict should write it out
+// XXX ifree writes it out, but evict should too, if we had evict.
 func (ic *icache_t) mbempty(blockn int) {
 	if ok := bdev_cache_present(blockn); ok {
 		panic("block present")
@@ -3515,6 +3515,7 @@ const (
 	BDEV_FLUSH = 3
 )
 
+// XXX no reason to have this. change driver to have read, write, and flush
 type bdev_req_t struct {
 	blk     *bdev_block_t
 	ackCh	chan bool
@@ -3522,6 +3523,45 @@ type bdev_req_t struct {
 	sync    bool
 }
 
+func bdev_req_new(blk *bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
+	ret := &bdev_req_t{}
+	ret.blk = blk
+	ret.ackCh = make(chan bool)
+	ret.cmd = cmd
+	ret.sync = sync
+	return ret
+}
+	
+func bdev_start(req *bdev_req_t) bool {
+	if req.blk != nil {
+		a := (uintptr)(unsafe.Pointer(req.blk.data))
+		if uint64(a) != 0 && uint64(a) < uint64(_vdirect) {
+			panic("bdev_start")
+		}
+	}
+	r := adisk.start(req)
+	return r
+}
+
+// A block has a lock, since, it may store an inode block, which has 4 inodes,
+// and we need to ensure that hat writes aren't lost due to concurrent inode
+// updates.  the inode code is careful about releasing lock.  other types of
+// blocks not shared and the caller releases the lock immediately.
+//
+// The data of a block is either a page in an inode's page cache or a page
+// allocated from the page allocator.  The disk DMAs to and from the physical
+// address for the page.  data is the virtual address for the page.
+//
+// When a bdev_block is initialized with a page, is sent to the log daemon, or
+// handed to the disk driver, we increment the refcount on the physical page
+// using bdev_refup(). When code (including driver) is done with a bdev_block,
+// it decrements the reference count with bdev_refdown (e.g., in the driver
+// interrupt handler).
+//
+// Two separately allocated block_dev_t instances may have the same block number
+// but not share a physical page.  For example, the log allocates a block_dev_t
+// for a block number which may also in the block cache, but has a diferent
+// physical page.
 type bdev_block_t struct {
 	sync.Mutex
 	disk	int
@@ -3529,6 +3569,10 @@ type bdev_block_t struct {
 	pa      pa_t
 	data	*[512]uint8
 	s       string
+}
+
+func (b *bdev_block_t) relse() {
+	b.Unlock()
 }
 
 func bdev_block_new(block int, s string) *bdev_block_t {
@@ -3545,7 +3589,6 @@ func bdev_block_new(block int, s string) *bdev_block_t {
 	return b
 }
 
-
 func bdev_block_new_pa(block int, s string, pa pa_t) *bdev_block_t {
 	b := &bdev_block_t{};
 	b.block = block
@@ -3556,14 +3599,14 @@ func bdev_block_new_pa(block int, s string, pa pa_t) *bdev_block_t {
 	return b
 }
 
-func (blk *bdev_block_t) bdev_refup(s string) {
-	refup(blk.pa)
-	fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
-}
-
 func (blk *bdev_block_t) bdev_refcnt() int {
 	ref, _ := _refaddr(blk.pa)
 	return int(*ref)
+}
+
+func (blk *bdev_block_t) bdev_refup(s string) {
+	refup(blk.pa)
+	fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
 }
 
 func (blk *bdev_block_t) bdev_refdown(s string) {
@@ -3575,8 +3618,77 @@ func (blk *bdev_block_t) bdev_refdown(s string) {
 	refdown(blk.pa)
 }
 
-// block cache. there are 4 inodes per inode block. we need a block cache for
-// correctness so that writes aren't lost due to concurrent inode updates.
+// bdev_write_async increments ref to keep the page around utnil write completes
+func bdev_write(b *bdev_block_t) {
+	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
+		panic("write\n")
+	}
+	b.bdev_refup("bdev_write")
+	req := bdev_req_new(b, BDEV_WRITE, true)
+	if bdev_start(req) {
+		<- req.ackCh
+	}
+}
+
+// bdev_write_async increments ref to keep the page around until write completes
+func bdev_write_async(b *bdev_block_t) {
+	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
+		panic("write_async\n")
+	}
+	b.bdev_refup("bdev_write_async")
+	ider := bdev_req_new(b, BDEV_WRITE, false)
+	bdev_start(ider)
+}
+
+func (b *bdev_block_t) bdev_read() {
+	ider := bdev_req_new(b, BDEV_READ, true)
+	if bdev_start(ider) {
+		<- ider.ackCh
+	}
+	//fmt.Printf("fill %v %#x %#x\n", buf.block, buf.data[0], buf.data[1])
+	if b.data[0] == 0xc && b.data[1] == 0xc {
+		fmt.Printf("fall: %v %v\n", b.s, b.block)
+		panic("xxx\n")
+	}
+	
+}
+
+// after bdev_read_block returns, the caller owns the physical page.  the caller
+// must call bdev_refdown when it is done with the page in the buffer returned.
+func bdev_read_block(blkn int, s string) *bdev_block_t {
+	buf := bdev_block_new(blkn, s)
+	buf.bdev_read()
+	return buf
+}
+
+func bdev_flush() {
+	ider := bdev_req_new(nil, BDEV_FLUSH, true)
+	if bdev_start(ider) {
+		<- ider.ackCh
+	}
+}
+
+// log_write increments ref so that the log has always a valid ref to the buf's page
+// the logging layer refdowns when it it is done with the page
+func (b *bdev_block_t) log_write() uint8 {
+	if memtime {
+		return 0
+	}
+	b.bdev_refup("log_write")
+	fslog.incoming <- *b
+	return <- fslog.incgen
+}
+
+// block cache. the block cache stores inode blocks, free bit-map blocks,
+// metadata blocks. file blocks are stored in the inode's page cache, which also
+// interacts with the VM system.
+//
+// the cache returns the same pointer to a block_dev_t to callers, and thus the
+// callers share the physical page in the block_dev_t. the callers must
+// coordinate using the lock of the block.
+//
+// XXX do eviction.
+
 // XXX XXX XXX must count against mfs limit
 type bdev_cache_t struct {
 	// inode blkno -> disk contents
@@ -3666,98 +3778,15 @@ func bdev_lookup_empty(blkn int, s string) *bdev_block_t {
 	return buf
 }
 
-func (b *bdev_block_t) relse() {
-	b.Unlock()
-}
 
 func bdev_purge(b *bdev_block_t) {
 	bdev_cache.Lock()
 	b.bdev_refdown("bdev_purge")
-	fmt.Printf("bdev_purge %v\n", b.block)
+	// fmt.Printf("bdev_purge %v\n", b.block)
 	delete(bdev_cache.blks, b.block)
 	bdev_cache.Unlock()
 }
 
-func bdev_req_new(blk *bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
-	ret := &bdev_req_t{}
-	ret.blk = blk
-	ret.ackCh = make(chan bool)
-	ret.cmd = cmd
-	ret.sync = sync
-	return ret
-}
-	
-func bdev_start(req *bdev_req_t) bool {
-	if req.blk != nil {
-		a := (uintptr)(unsafe.Pointer(req.blk.data))
-		if uint64(a) != 0 && uint64(a) < uint64(_vdirect) {
-			panic("bdev_start")
-		}
-	}
-	r := adisk.start(req)
-	return r
-}
-
-// bdev_write_async increments ref to keep the page around utnil write completes
-func bdev_write(b *bdev_block_t) {
-	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
-		panic("write\n")
-	}
-	b.bdev_refup("bdev_write")
-	req := bdev_req_new(b, BDEV_WRITE, true)
-	if bdev_start(req) {
-		<- req.ackCh
-	}
-}
-
-// bdev_write_async increments ref to keep the page around until write completes
-func bdev_write_async(b *bdev_block_t) {
-	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
-		panic("write_async\n")
-	}
-	b.bdev_refup("bdev_write_async")
-	ider := bdev_req_new(b, BDEV_WRITE, false)
-	bdev_start(ider)
-}
-
-func (b *bdev_block_t) bdev_read() {
-	ider := bdev_req_new(b, BDEV_READ, true)
-	if bdev_start(ider) {
-		<- ider.ackCh
-	}
-	//fmt.Printf("fill %v %#x %#x\n", buf.block, buf.data[0], buf.data[1])
-	if b.data[0] == 0xc && b.data[1] == 0xc {
-		fmt.Printf("fall: %v %v\n", b.s, b.block)
-		panic("xxx\n")
-	}
-	
-}
-
-// after bdev_read_block returns, the caller owns the physical page.  the caller
-// must call bdev_refdown when it is done with the page in the buffer returned.
-func bdev_read_block(blkn int, s string) *bdev_block_t {
-	buf := bdev_block_new(blkn, s)
-	buf.bdev_read()
-	return buf
-}
-
-func bdev_flush() {
-	ider := bdev_req_new(nil, BDEV_FLUSH, true)
-	if bdev_start(ider) {
-		<- ider.ackCh
-	}
-}
-
-// log_write increments ref so that the log has always a valid ref to the buf's page
-// the logging layer refdowns when it it is done with the page
-func (b *bdev_block_t) log_write() uint8 {
-	if memtime {
-		return 0
-	}
-	b.bdev_refup("log_write")
-	fslog.incoming <- *b
-	return <- fslog.incgen
-}
 
 func memreclaim() bool {
 	if memtime {
