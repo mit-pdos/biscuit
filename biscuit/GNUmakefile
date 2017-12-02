@@ -8,14 +8,14 @@ ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP)
 CFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -nostdinc -fno-builtin \
 	-mno-red-zone
 CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-builtin -mno-red-zone
-
+GOPATH := /home/kaashoek/hack/biscuit/biscuit
 # bootloader sources
 ASMS := boot.S
 CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
 
 # kernel sources
-KSRC := main.go syscall.go pmap.go fs.go hw.go net.go fsrb.go
+KSRC := main.go syscall.go pmap.go fs.go hw.go net.go fsrb.go log.go bdev.go ahci.go
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
