@@ -1232,8 +1232,6 @@ type pgcache_t struct {
 	// the unit size of underlying device
 	blocksz		int
 	pglim		int
-	chklog		bool
-	log_gen		uint8
 	// fill is used to fill empty pages with data from the underlying
 	// device or layer. fill may write fewer bytes than the length of the
 	// destination buffer.
@@ -1432,10 +1430,6 @@ func (pc *pgcache_t) evict() int {
 	var pgs int
 	if !failed {
 		pgs = pc.release()
-		// make sure any reads for the just evicted blocks read the
-		// latest version of the block from the log, not the stale
-		// version out on disk.
-		pc.chklog = true
 	}
 	return pgs
 }
@@ -1694,11 +1688,11 @@ func (idm *imemnode_t) _locked() {
 
 func (idm *imemnode_t) _iupdate() {
 	iblk := idm.idibread()
+	iblk.relse()
 	if idm.icache.flushto(iblk, idm.ioff) {
 		iblk.log_write()
 	}
 	iblk.bdev_refdown("_iupdate")
-	iblk.relse()
 }
 
 // functions prefixed with "do_" are the conversions of the idaemon CSP code in
@@ -1952,7 +1946,7 @@ type icdent_t struct {
 func (ic *icache_t) _mbensure(blockn int, fill bool) *bdev_block_t {
 	var mb *bdev_block_t
 	if fill {
-		mb = bdev_lookup_fill(blockn, "_mbensure")
+		mb = bdev_lookup_fill(blockn, "_mbensure", pa_t(0))
 	} else {
 		mb = bdev_lookup_zero(blockn, "_mbensure")
 	}
@@ -2229,25 +2223,11 @@ func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
 		if err != 0 {
 			return c, err
 		}
-		had := false
 		a := uintptr(pa) + (uintptr)(c)
-		if idm.pgcache.chklog {
-			fmt.Printf("fs_fill check log\n")
-			// our pages were evicted; avoid reading the block from
-			// the disk which may now be stale.
-			b := bdev_block_new_pa(blkno, "log_read", pa_t(a))
-			loggen := idm.pgcache.log_gen
-			filled, logcommitted := log_read(loggen, b)
-			if logcommitted {
-				idm.pgcache.chklog = false
-			}
-			had = filled
-		}
-		if !had {
-			b := bdev_block_new_pa(blkno, "fs_fill", pa_t(a))
-			b.bdev_read()
-			b.bdev_refdown("fs_fill")
-		}
+
+		b := bdev_lookup_fill(blkno, "log_read", pa_t(a))
+		b.relse()
+		b.bdev_refdown("fs_fill")
 		c += 512
 	}
         return c, 0
@@ -2262,8 +2242,15 @@ func (idm *imemnode_t) fs_flush(pa pa_t, fileoffset int) err_t {
 	if err != 0 {
 		return err
 	}
-	dur := bdev_block_new_pa(blkno, "dur", pa) 
-	idm.pgcache.log_gen = dur.log_write()
+
+	// XXX pa maybe different for the same block. maybe better coordination
+	// between page cache and bdev.  do a copy for now.
+
+	dur := bdev_lookup_empty(blkno, "dur")
+	va := (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	copy(dur.data[:], va[:])
+	dur.relse()
+	dur.log_write()
 	dur.bdev_refdown("fs_flush")
 	return 0
 }
@@ -2601,7 +2588,7 @@ func _alldead(ib *bdev_block_t) bool {
 func _iallocundo(iblkn int, ni *inode_t, ib *bdev_block_t) {
 	ni.w_itype(I_DEAD)
 	if _alldead(ib) {
-		bdev_purge(ib)
+		ib.purge()
 		bfree(iblkn)
 	}
 }
@@ -2617,7 +2604,7 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 		panic("inconsistent")
 	}
 	bn, ioff := bidecode(childi)
-	ib := bdev_lookup_fill(bn, "create_undo")
+	ib := bdev_lookup_fill(bn, "create_undo", pa_t(0))
 	ni := &inode_t{ib, ioff}
 	_iallocundo(bn, ni, ib)
 	ib.bdev_refdown("create_undo")
@@ -2643,7 +2630,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 
 	// allocate new inode
 	newbn, newioff := ialloc()
-	newiblk := bdev_lookup_fill(newbn, "icreate")
+	newiblk := bdev_lookup_fill(newbn, "icreate", pa_t(0))
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
 	newinode.w_linkcount(1)
@@ -2660,8 +2647,8 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 	if err != 0 {
 		_iallocundo(newbn, newinode, newiblk)
 	}
-	newiblk.log_write()
 	newiblk.relse()
+	newiblk.log_write()
 	newiblk.bdev_refdown("icreate")
 
 	newinum := inum(biencode(newbn, newioff))
@@ -2743,7 +2730,7 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 }
 
 func (idm *imemnode_t) idibread() *bdev_block_t {
-	return bdev_lookup_fill(idm.blkno, "idibread")
+	return bdev_lookup_fill(idm.blkno, "idibread", pa_t(0))
 }
 
 // frees all blocks occupied by idm
@@ -2781,12 +2768,13 @@ func (idm *imemnode_t) ifree() {
 	idm.icache.flushto(iblk, idm.ioff)
 	if _alldead(iblk) {
 		add(idm.blkno)
-		bdev_purge(iblk)
+		iblk.relse()
+		iblk.purge()
 	} else {
+		iblk.relse()
 		iblk.log_write()
 	}
 	iblk.bdev_refdown("ifree2")
-	iblk.relse()
 
 	// could batch free
 	for _, blkno := range allb {
@@ -3106,7 +3094,7 @@ func fbread(blockno int) *bdev_block_t {
 	if blockno < superb_start {
 		panic("naughty blockno")
 	}
-	return bdev_lookup_fill(blockno, "fbread")
+	return bdev_lookup_fill(blockno, "fbread", pa_t(0))
 }
 
 
@@ -3142,8 +3130,8 @@ func balloc1() int {
 	for b := 0; b < flen && !found; b++ {
 		i := (_lastblkno + b) % flen
 		if blk != nil {
-			blk.bdev_refdown("balloc1")
 			blk.relse()
+			blk.bdev_refdown("balloc1")
 		}
 		blk = fbread(fst + i)
 		start := 0
@@ -3169,9 +3157,9 @@ func balloc1() int {
 
 	// mark as allocated
 	blk.data[oct] |= 1 << bit
+	blk.relse()
 	blk.log_write()
 	blk.bdev_refdown("balloc1")
-	blk.relse()
 
 	boffset := usable_start
 	bitsperblk := 512*8
@@ -3209,9 +3197,9 @@ func bfree(blkno int) {
 	}
 	fblk := fbread(fblkno)
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
+	fblk.relse()
 	fblk.log_write()
 	fblk.bdev_refdown("bfree")
-	fblk.relse()
 
 	// force allocation of free inode block
 	if ifreeblk == blkno {
@@ -3243,13 +3231,14 @@ func ialloc() (int, int) {
 	ifreeoff = 0
 	zblk := bdev_lookup_zero(ifreeblk, "ialloc")
 	zblk.s += "+log_write"
+	zblk.relse()
 	zblk.log_write()
 	zblk.bdev_refdown("ialloc")
 	zblk.s += "-log_write"
-	if zblk.bdev_refcnt() != 1 {
+	if zblk.bdev_refcnt() < 2 {
+		fmt.Printf("ref_cnt = %v\n", zblk.bdev_refcnt())
 		panic("xxxx")
 	}
-	zblk.relse()
 	reti := ifreeoff
 	ifreeoff++
 	return ifreeblk, reti
@@ -3264,9 +3253,6 @@ type idebuf_t struct {
 	block	int
 	data	*[512]uint8
 }
-
-
-
 
 func memreclaim() bool {
 	if memtime {

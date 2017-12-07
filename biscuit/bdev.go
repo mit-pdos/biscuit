@@ -6,7 +6,7 @@ import "unsafe"
 
 // A block has a lock, since, it may store an inode block, which has 4 inodes,
 // and we need to ensure that hat writes aren't lost due to concurrent inode
-// updates.  the inode code is careful about releasing lock.  other types of
+// updates.  The inode code is careful about releasing lock.  Other types of
 // blocks not shared and the caller releases the lock immediately.
 //
 // The data of a block is either a page in an inode's page cache or a page
@@ -19,10 +19,7 @@ import "unsafe"
 // it decrements the reference count with bdev_refdown (e.g., in the driver
 // interrupt handler).
 //
-// Two separately allocated block_dev_t instances may have the same block number
-// but not share a physical page.  For example, the log allocates a block_dev_t
-// for a block number which may also in the block cache, but has a diferent
-// physical page.
+
 type bdev_block_t struct {
 	sync.Mutex
 	disk	int
@@ -30,10 +27,36 @@ type bdev_block_t struct {
 	pa      pa_t
 	data	*[512]uint8
 	s       string
+	pinned  bool
 }
 
 func (b *bdev_block_t) relse() {
 	b.Unlock()
+}
+
+func (b *bdev_block_t) pin() {
+	b.Lock()
+	defer b.Unlock()
+	
+	b.pinned = true
+}
+
+func (b *bdev_block_t) unpin() {
+	b.Lock()
+	defer b.Unlock()
+	
+	b.pinned = false
+}
+
+func (b *bdev_block_t) purge() {
+	// XXX block may still be in log, plus we are going to have our own eviction
+	// lock buffer?
+	
+	// bdev_cache.Lock()
+	// b.bdev_refdown("bdev_purge")
+	// fmt.Printf("bdev_purge %v\n", b.block)
+	// delete(bdev_cache.blks, b.block)
+	// bdev_cache.Unlock()
 }
 
 func bdev_block_new(block int, s string) *bdev_block_t {
@@ -46,6 +69,7 @@ func bdev_block_new(block int, s string) *bdev_block_t {
 	b.pa = pa
 	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	b.s = s
+	b.pinned = false
 	b.bdev_refup("new")
 	return b
 }
@@ -56,6 +80,7 @@ func bdev_block_new_pa(block int, s string, pa pa_t) *bdev_block_t {
 	b.pa = pa
 	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	b.s = s
+	b.pinned = false
 	b.bdev_refup("new_pa")
 	return b
 }
@@ -130,15 +155,20 @@ func bdev_flush() {
 }
 
 
-// block cache. the block cache stores inode blocks, free bit-map blocks,
-// metadata blocks. file blocks are stored in the inode's page cache, which also
+// block cache. The block cache stores inode blocks, free bit-map blocks,
+// metadata blocks. File blocks are stored in the inode's page cache, which also
 // interacts with the VM system.
 //
-// the cache returns the same pointer to a block_dev_t to callers, and thus the
-// callers share the physical page in the block_dev_t. the callers must
+// The cache returns the same pointer to a block_dev_t to callers, and thus the
+// callers share the physical page in the block_dev_t. The callers must
 // coordinate using the lock of the block.
+
+// There is *one* bdev_block_t for a block number (and physical page associated
+// with that blockno).  The log layer's log_write pins blocks in the cache to
+// avoid eviction, so that a read always sees the last write.
 //
-// XXX do eviction.
+// XXX need to support dirty bit too and eviction.
+//
 
 // XXX XXX XXX must count against mfs limit
 type bdev_cache_t struct {
@@ -164,7 +194,7 @@ func bdev_cache_present(blkn int) bool {
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_refdown when done with buf.
-func bdev_lookup_fill(blkn int, s string) *bdev_block_t {
+func bdev_lookup_fill(blkn int, s string, pa pa_t) *bdev_block_t {
 	if blkn < superb_start {
 		panic("no")
 	}
@@ -173,7 +203,11 @@ func bdev_lookup_fill(blkn int, s string) *bdev_block_t {
 	bdev_cache.Lock()
 	buf, ok := bdev_cache.blks[blkn]
 	if !ok {
-		buf = bdev_block_new(blkn, s)
+		if pa != 0 {
+			buf = bdev_block_new_pa(blkn, s, pa)
+		} else {
+			buf = bdev_block_new(blkn, s)
+		}
 		buf.Lock()
 		bdev_cache.blks[blkn] = buf
 		created = true
@@ -187,6 +221,7 @@ func bdev_lookup_fill(blkn int, s string) *bdev_block_t {
 		buf.bdev_read() // fill in new bdev_cache entry
 
 	}
+	// fmt.Printf("bdev_lookup_fill: %v %p\n", blkn, buf)
 	buf.bdev_refup("lookup_fill")
 	return buf
 }
@@ -229,15 +264,6 @@ func bdev_lookup_empty(blkn int, s string) *bdev_block_t {
 	buf.Lock()
 	bdev_cache.Unlock()
 	return buf
-}
-
-
-func bdev_purge(b *bdev_block_t) {
-	bdev_cache.Lock()
-	b.bdev_refdown("bdev_purge")
-	// fmt.Printf("bdev_purge %v\n", b.block)
-	delete(bdev_cache.blks, b.block)
-	bdev_cache.Unlock()
 }
 
 
