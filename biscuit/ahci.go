@@ -607,7 +607,7 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 
 	var iov []kiovec
 	if req.cmd != BDEV_FLUSH {
-		if (len(*req.blk.data) != 512) {
+		if (len(*req.blk.data) != BSIZE) {
 			panic("AHCI: start wrong len")
 		}
 		// io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.blk.data))}
@@ -657,12 +657,13 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	
 	fis.dev_head = IDE_DEV_LBA;
 	fis.control = IDE_CTL_LBA48;
-	fis.lba_0 = uint8((bn >>  0) & 0xff)
-	fis.lba_1 = uint8((bn >>  8) & 0xff)
-	fis.lba_2 = uint8((bn >> 16) & 0xff)
-	fis.lba_3 = uint8((bn >> 24) & 0xff)
-	fis.lba_4 = uint8((bn >> 32) & 0xff)
-	fis.lba_5 = uint8((bn >> 40) & 0xff)
+	sector_offset := bn * uint64(BSIZE/512);
+	fis.lba_0 = uint8((sector_offset >>  0) & 0xff)
+	fis.lba_1 = uint8((sector_offset >>  8) & 0xff)
+	fis.lba_2 = uint8((sector_offset >> 16) & 0xff)
+	fis.lba_3 = uint8((sector_offset >> 24) & 0xff)
+	fis.lba_4 = uint8((sector_offset >> 32) & 0xff)
+	fis.lba_5 = uint8((sector_offset >> 40) & 0xff)
 
 	fis.sector_count = uint8(nsector & 0xff);
 	fis.sector_count_ex = uint8((nsector >> 8) & 0xff);

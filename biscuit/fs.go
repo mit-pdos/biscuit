@@ -799,9 +799,9 @@ func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	defer raw.Unlock()
 	var did int
 	for dst.remain() != 0 {
-		blkno := raw.offset / 512
+		blkno := raw.offset / BSIZE
 		b := bdev_read_block(blkno, "read")
-		boff := raw.offset % 512
+		boff := raw.offset % BSIZE
 		c, err := dst.uiowrite(b.data[boff:])
 		if err != 0 {
 			return 0, err
@@ -818,8 +818,8 @@ func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	defer raw.Unlock()
 	var did int
 	for src.remain() != 0 {
-		blkno := raw.offset / 512
-		boff := raw.offset % 512
+		blkno := raw.offset / BSIZE
+		boff := raw.offset % BSIZE
 		// if boff != 0 || src.remain() < 512 {
 		//	buf := bdev_read_block(blkno)
 		//}
@@ -1607,7 +1607,7 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 	idm.l.tm_init()
 
-	idm.pgcache.pgc_init(512, idm.fs_fill, idm.fs_flush)
+	idm.pgcache.pgc_init(BSIZE, idm.fs_fill, idm.fs_flush)
 
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
@@ -2050,7 +2050,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		}
 	}
 
-	whichblk := offset/512
+	whichblk := offset/BSIZE
 	// make sure there is no empty space for writes past the end of the
 	// file
 	if writing {
@@ -2224,7 +2224,7 @@ func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
 		b := bdev_get_fill(blkno, "log_read", pa_t(a))
 		b.relse()
 		b.bdev_refdown("fs_fill")
-		c += 512
+		c += BSIZE
 	}
         return c, 0
 }
@@ -2243,7 +2243,7 @@ func (idm *imemnode_t) fs_flush(pa pa_t, fileoffset int) err_t {
 	// between page cache and bdev.  do a copy for now.
 
 	dur := bdev_get_nofill(blkno, "dur")
-	va := (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	va := (*[BSIZE]uint8)(unsafe.Pointer(dmap(pa)))
 	copy(dur.data[:], va[:])
 	dur.relse()
 	dur.log_write()
@@ -2280,7 +2280,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 
 	// current dir blocks are full -- allocate new dirdata block. make
 	// sure its in the page cache but not fill'ed from disk
-	newsz := idm.icache.size + 512
+	newsz := idm.icache.size + BSIZE
 	_, err := idm.pgcache.pgfor(idm.icache.size, newsz)
 	if err != 0 {
 		return 0, err
@@ -2333,13 +2333,13 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 // returned true.
 func (idm *imemnode_t) _descan(
    f func(fn string, de icdent_t)bool) (bool, err_t) {
-	for i := 0; i < idm.icache.size; i+= 512 {
-		pg, err := idm.pgcache.pgfor(i, i+512)
+	for i := 0; i < idm.icache.size; i+= BSIZE {
+		pg, err := idm.pgcache.pgfor(i, i+BSIZE)
 		if err != 0 {
 			return false, err
 		}
 		// XXXPANIC
-		if len(pg) != 512 {
+		if len(pg) != BSIZE {
 			panic("wut")
 		}
 		dd := dirdata_t{pg}
@@ -2568,7 +2568,7 @@ func (idm *imemnode_t) probe_unlink(fn string) err_t {
 // returns true if all the inodes on ib are also marked dead and thus this
 // inode block should be freed.
 func _alldead(ib *bdev_block_t) bool {
-	bwords := 512/8
+	bwords := BSIZE/8
 	ret := true
 	for i := 0; i < bwords/NIWORDS; i++ {
 		icache := inode_t{ib, i}
@@ -2802,11 +2802,11 @@ func (idm *imemnode_t) mkmode() uint {
 }
 
 // XXX: remove
-func fieldr(p *[512]uint8, field int) int {
+func fieldr(p *[BSIZE]uint8, field int) int {
 	return readn(p[:], 8, field*8)
 }
 
-func fieldw(p *[512]uint8, field int, val int) {
+func fieldw(p *[BSIZE]uint8, field int, val int) {
 	writen(p[:], 8, field*8, val)
 }
 
@@ -2836,7 +2836,7 @@ func bidecode(val inum) (int, int) {
 // 40-47, inode block that may have room for an inode
 // 48-55, recovery log length; if non-zero, recovery procedure should run
 type superblock_t struct {
-	data	*[512]uint8
+	data	*[BSIZE]uint8
 }
 
 func (sb *superblock_t) freeblock() int {
@@ -2893,7 +2893,7 @@ func (sb *superblock_t) w_freeinode(n int) {
 // 0-7,   valid log blocks
 // 8-511, log destination (63)
 type logheader_t struct {
-	data	*[512]uint8
+	data	*[BSIZE]uint8
 }
 
 func (lh *logheader_t) recovernum() int {
@@ -3040,7 +3040,7 @@ type dirdata_t struct {
 const(
 	DNAMELEN = 14
 	NDBYTES  = 22
-	NDIRENTS = 512/NDBYTES
+	NDIRENTS = BSIZE/NDBYTES
 )
 
 func doffset(didx int, off int) int {
@@ -3165,7 +3165,7 @@ func balloc1() int {
 	blk.bdev_refdown("balloc1")
 
 	boffset := usable_start
-	bitsperblk := 512*8
+	bitsperblk := BSIZE*8
 	return boffset + blkn*bitsperblk + oct*8 + int(bit)
 }
 
@@ -3190,7 +3190,7 @@ func bfree(blkno int) {
 	defer fblock.Unlock()
 
 	bit := blkno - usable_start
-	bitsperblk := 512*8
+	bitsperblk := BSIZE*8
 	fblkno := fst + bit/bitsperblk
 	fbit := bit%bitsperblk
 	fbyteoff := fbit/8
@@ -3222,7 +3222,7 @@ func ialloc() (int, int) {
 		ret := ifreeblk
 		retoff := ifreeoff
 		ifreeoff++
-		blkwords := 512/8
+		blkwords := BSIZE/8
 		if ifreeoff >= blkwords/NIWORDS {
 			// allocate a new inode block next time
 			ifreeblk = 0
@@ -3254,7 +3254,7 @@ var disk	disk_t   // XXX delete?
 type idebuf_t struct {
 	disk	int
 	block	int
-	data	*[512]uint8
+	data	*[BSIZE]uint8
 }
 
 func memreclaim() bool {

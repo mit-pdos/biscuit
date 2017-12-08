@@ -20,12 +20,14 @@ import "unsafe"
 // interrupt handler).
 //
 
+const BSIZE=512
+
 type bdev_block_t struct {
 	sync.Mutex
 	disk	int
 	block	int
 	pa      pa_t
-	data	*[512]uint8
+	data	*[BSIZE]uint8
 	s       string
 }
 
@@ -33,7 +35,7 @@ func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
 	b := &bdev_block_t{};
 	b.block = block
 	b.pa = pa
-	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	b.data = (*[BSIZE]uint8)(unsafe.Pointer(dmap(pa)))
 	b.s = s
 	return b
 }
@@ -49,7 +51,7 @@ func (blk *bdev_block_t) new_page() {
 		panic("oom during bdev.new_page")
 	}
 	blk.pa = pa
-	blk.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	blk.data = (*[BSIZE]uint8)(unsafe.Pointer(dmap(pa)))
 	blk.bdev_refup("new_page")
 }
 
@@ -230,7 +232,7 @@ func bdev_get_zero(blkn int, s string) *bdev_block_t {
 	if created {
 		b.new_page()   // zero
 	} else {
-		var zdata [512]uint8
+		var zdata [BSIZE]uint8
 		*b.data = zdata
 	}
 	b.bdev_refup("bdev_get_zero")
