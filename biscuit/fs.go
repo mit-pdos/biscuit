@@ -17,7 +17,6 @@ var free_len		int
 var usable_start	int
 
 
-// free block bitmap lock
 var fblock	= sync.Mutex{}
 
 // allocation-less pathparts
@@ -2631,6 +2630,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 	// allocate new inode
 	newbn, newioff := ialloc()
 	newiblk := bdev_lookup_fill(newbn, "icreate", pa_t(0))
+
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
 	newinode.w_linkcount(1)
@@ -2642,12 +2642,18 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 		newinode.w_addr(i, 0)
 	}
 
+	// deinsert will call write_log and we don't want to hold newiblk's lock
+	// while sending on the channel to the daemon.  The daemon might want to
+	// lock this block (e.g., to pin) when adding it to the log, but it
+	// would block and not read from the channel again.  it is safe to
+	// unlock because we are done creating a legit inode in the block.
+	newiblk.relse()
+
 	// write new directory entry referencing newinode
 	err = idm._deinsert(name, newbn, newioff)
 	if err != 0 {
 		_iallocundo(newbn, newinode, newiblk)
 	}
-	newiblk.relse()
 	newiblk.log_write()
 	newiblk.bdev_refdown("icreate")
 

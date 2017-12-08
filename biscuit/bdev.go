@@ -31,6 +31,7 @@ type bdev_block_t struct {
 }
 
 func (b *bdev_block_t) relse() {
+	// fmt.Printf("bdev.unlock %v\n", b.block)
 	b.Unlock()
 }
 
@@ -44,7 +45,7 @@ func (b *bdev_block_t) pin() {
 func (b *bdev_block_t) unpin() {
 	b.Lock()
 	defer b.Unlock()
-	
+
 	b.pinned = false
 }
 
@@ -198,9 +199,11 @@ func bdev_lookup_fill(blkn int, s string, pa pa_t) *bdev_block_t {
 	if blkn < superb_start {
 		panic("no")
 	}
+	bdev_cache.Lock()
 	created := false
 
-	bdev_cache.Lock()
+	// fmt.Printf("bdev_lookup_fill: %v\n", blkn)
+
 	buf, ok := bdev_cache.blks[blkn]
 	if !ok {
 		if pa != 0 {
@@ -230,6 +233,9 @@ func bdev_lookup_fill(blkn int, s string, pa pa_t) *bdev_block_t {
 // bdev_refdown when done with buf
 func bdev_lookup_zero(blkn int, s string) *bdev_block_t {
 	bdev_cache.Lock()
+
+	// fmt.Printf("bdev_lookup_zero: %v\n", blkn)
+	
 	if obuf, ok := bdev_cache.blks[blkn]; ok {
 		bdev_cache.Unlock()
 		obuf.Lock()
@@ -251,6 +257,9 @@ func bdev_lookup_zero(blkn int, s string) *bdev_block_t {
 // bdev_refdown when done with buf
 func bdev_lookup_empty(blkn int, s string) *bdev_block_t {
 	bdev_cache.Lock()
+
+	// fmt.Printf("bdev_lookup_empty: %v\n", blkn)
+	
 	if obuf, ok := bdev_cache.blks[blkn]; ok {
 		bdev_cache.Unlock()
 		obuf.Lock()

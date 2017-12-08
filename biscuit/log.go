@@ -24,7 +24,6 @@ type log_t struct {
 	logstart	int
 	loglen		int
 	incoming	chan *bdev_block_t
-	incgen		chan uint8
 	admission	chan bool
 	done		chan bool
 	force		chan bool
@@ -40,7 +39,6 @@ func (log *log_t) init(ls int, ll int) {
 	log.log = make([]log_entry_t, log.loglen)
 	log.tmpblk = bdev_block_new(log.logstart, "logstart")
 	log.incoming = make(chan *bdev_block_t)
-	log.incgen = make(chan uint8)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
 	log.force = make(chan bool)
@@ -55,11 +53,11 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			if l.buf != buf {
 				panic("absorption")
 			}
-			// buffer is already in log. if the write of this block
-			// is in a later transaction, we know this later
-			// transaction will commit with the one that modified
-			// this block earlier.
-		         return
+			// buffer is already in log and pinned. if the write of
+			// this block is in a later transaction, we know this
+			// later transaction will commit with the one that
+			// modified this block earlier.
+			return
 		}
 	}
 
@@ -156,7 +154,6 @@ func log_daemon(l *log_t) {
 					panic("log write without admission")
 				}
 				l.addlog(nb)
-				l.incgen <- loggen
 			case <- l.done:
 				t--
 				if t == 0 {
@@ -209,13 +206,13 @@ func op_end() {
 }
 
 
-// log_write increments ref so that the log has always a valid ref to the buf's page
-// the logging layer refdowns when it it is done with the page
+// log_write increments ref so that the log has always a valid ref to the buf's
+// page the logging layer refdowns when it it is done with the page.  the caller
+// of log_write shouldn't hold *any* buf locks.
 func (b *bdev_block_t) log_write() {
 	if memtime {
 		return
 	}
 	b.bdev_refup("log_write")
 	fslog.incoming <- b
-	<- fslog.incgen
 }
