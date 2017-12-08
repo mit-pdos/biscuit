@@ -28,7 +28,6 @@ type log_t struct {
 	done		chan bool
 	force		chan bool
 	commitwait	chan bool
-	headblk		*bdev_block_t
 }
 
 func (log *log_t) init(ls int, ll int) {
@@ -37,7 +36,6 @@ func (log *log_t) init(ls int, ll int) {
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
 	log.log = make([]log_entry_t, log.loglen)
-	log.headblk = bdev_block_new(log.logstart, "logstart")
 	log.incoming = make(chan *bdev_block_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
@@ -57,6 +55,7 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			// this block is in a later transaction, we know this
 			// later transaction will commit with the one that
 			// modified this block earlier.
+			buf.bdev_refdown("absoprtion")
 			return
 		}
 	}
@@ -73,7 +72,6 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 	log.log[lhead] = log_entry_t{buf.block, buf}
 	log.lhead++
 
-	buf.pin()
 	buf.s += "-addlog"
 }
 
@@ -83,14 +81,17 @@ func (log *log_t) commit() {
 		return
 	}
 
-	lh := logheader_t{log.headblk.data}
+	headblk := bdev_get_zero(log.logstart, "commit")
+	headblk.relse()  // not sharing header
+	
+	lh := logheader_t{headblk.data}
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, l.block)
 
 		// write block into log
-                b := bdev_get_nofill(log.logstart+i+1, "logapply")
+                b := bdev_get_nofill(log.logstart+i+1, "log")
 		copy(b.data[:], l.buf.data[:])
 		b.relse()
 		b.bdev_write_async()
@@ -103,7 +104,7 @@ func (log *log_t) commit() {
 	lh.w_recovernum(log.lhead)
 
 	// write log header
-	log.headblk.bdev_write()
+	headblk.bdev_write()
 
 	bdev_flush()   // commit log header
 
@@ -117,14 +118,15 @@ func (log *log_t) commit() {
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
 		l.buf.bdev_write_async()
-		l.buf.bdev_refdown("logapply")
+		l.buf.bdev_refdown("apply")
 	}
 
 	bdev_flush()  // flush apply
 	
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
-	log.headblk.bdev_write()
+	headblk.bdev_write()
+	headblk.bdev_refdown("commit")
 	
 	bdev_flush()  // flush cleared commit
 	log.lhead = 0

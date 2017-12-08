@@ -27,7 +27,6 @@ type bdev_block_t struct {
 	pa      pa_t
 	data	*[512]uint8
 	s       string
-	pinned  bool
 }
 
 func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
@@ -36,38 +35,12 @@ func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
 	b.pa = pa
 	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	b.s = s
-	b.pinned = false
 	return b
 }
 
 func (b *bdev_block_t) relse() {
 	// fmt.Printf("bdev.unlock %v\n", b.block)
 	b.Unlock()
-}
-
-func (b *bdev_block_t) pin() {
-	b.Lock()
-	defer b.Unlock()
-	
-	b.pinned = true
-}
-
-func (b *bdev_block_t) unpin() {
-	b.Lock()
-	defer b.Unlock()
-
-	b.pinned = false
-}
-
-func (b *bdev_block_t) purge() {
-	// XXX block may still be in log, plus we are going to have our own eviction
-	// lock buffer?
-	
-	// bdev_cache.Lock()
-	// b.bdev_refdown("bdev_purge")
-	// fmt.Printf("bdev_purge %v\n", b.block)
-	// delete(bdev_cache.blks, b.block)
-	// bdev_cache.Unlock()
 }
 
 func (blk *bdev_block_t) new_page() {
@@ -105,6 +78,12 @@ func (blk *bdev_block_t) bdev_refdown(s string) {
 	refdown(blk.pa)
 }
 
+func (b *bdev_block_t) purge() {
+	fmt.Printf("bdev_purge %v %v\n", b.block, b.bdev_refcnt())
+	// b.bdev_refdown("bdev_purge")
+	// delete(bdev_cache.blks, b.block)  when we are done 
+}
+
 // increment ref to keep the page around until write completes. interrupt routine
 // decrecements.
 func (b *bdev_block_t) bdev_write() {
@@ -116,7 +95,7 @@ func (b *bdev_block_t) bdev_write() {
 	if ahci_start(req) {
 		<- req.ackCh
 	}
-}
+} 
 
 // increment ref to keep the page around until write completes.  interrupt
 // routine decrecements.
@@ -232,14 +211,14 @@ func bdev_get_fill(blkn int, s string, pa pa_t) *bdev_block_t {
 			b.new_page()
 		} else {
 			b.pa = pa
-			b.bdev_refup("lookup_fill")
+			b.bdev_refup("bdev_get_fill1")
 		}
 		b.bdev_read() // fill in new bdev_cache entry
 	}
 	if pa != 0 && pa != b.pa {
 		panic("bdev_get_fill")
 	}
-	b.bdev_refup("lookup_fill")
+	b.bdev_refup("bdev_get_fill2")
 	return b
 }
 
@@ -254,7 +233,7 @@ func bdev_get_zero(blkn int, s string) *bdev_block_t {
 		var zdata [512]uint8
 		*b.data = zdata
 	}
-	b.bdev_refup("lookup_fill")
+	b.bdev_refup("bdev_get_zero")
 	return b
 }
 

@@ -762,8 +762,6 @@ func (p *ahci_port_t) port_intr() {
 			//	copy(p.inflight[s].blk.data[:], p.block[s][:])
 			//}
 			if p.inflight[s].cmd == BDEV_WRITE {
-				// blk has been written; in case it was pinned, unpin it
-				p.inflight[s].blk.unpin()
 				// page has been written, don't need a reference to it
 				p.inflight[s].blk.bdev_refdown("interrupt")
 			}
