@@ -140,20 +140,24 @@ func fs_init() *fd_t {
 
 func fs_recover() {
 	l := &fslog
-	b := bdev_read_block(l.logstart, "logstart")
+	b := bdev_get_fill(l.logstart, "fs_recover_logstart", pa_t(0))
+	b.relse()
 	lh := logheader_t{b.data}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
+		b.bdev_refdown("fs_recover0")
 		return
 	}
 	fmt.Printf("starting FS recovery...")
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		lb := bdev_read_block(l.logstart + 1 + i, "i")
-		fb := bdev_read_block(bdest, "bdest")
+		lb := bdev_get_fill(l.logstart + 1 + i, "i", pa_t(0))
+		fb := bdev_get_fill(bdest, "bdest", pa_t(0))
 		copy(fb.data[:], lb.data[:])
+		fb.relse()
+		lb.relse()
 		fb.bdev_write()
 		lb.bdev_refdown("fs_recover1")
 		fb.bdev_refdown("fs_recover2")
