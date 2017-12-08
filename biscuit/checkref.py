@@ -43,4 +43,6 @@ for k, v in inuse.items():
         print (k, v)
         if not k in blks:
             print("missing", k)
+        if v > 5:
+            print("high cnt", k, v)
 print("cnt in-use", cnt)

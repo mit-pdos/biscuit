@@ -30,6 +30,16 @@ type bdev_block_t struct {
 	pinned  bool
 }
 
+func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
+	b := &bdev_block_t{};
+	b.block = block
+	b.pa = pa
+	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	b.s = s
+	b.pinned = false
+	return b
+}
+
 func (b *bdev_block_t) relse() {
 	// fmt.Printf("bdev.unlock %v\n", b.block)
 	b.Unlock()
@@ -60,29 +70,19 @@ func (b *bdev_block_t) purge() {
 	// bdev_cache.Unlock()
 }
 
-func bdev_block_new(block int, s string) *bdev_block_t {
+func (blk *bdev_block_t) new_page() {
 	_, pa, ok := refpg_new()
 	if !ok {
-		panic("oom during bdev_block_new")
+		panic("oom during bdev.new_page")
 	}
-	b := &bdev_block_t{};
-	b.block = block
-	b.pa = pa
-	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
-	b.s = s
-	b.pinned = false
-	b.bdev_refup("new")
-	return b
+	blk.pa = pa
+	blk.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
+	blk.bdev_refup("new_page")
 }
 
-func bdev_block_new_pa(block int, s string, pa pa_t) *bdev_block_t {
-	b := &bdev_block_t{};
-	b.block = block
-	b.pa = pa
-	b.data = (*[512]uint8)(unsafe.Pointer(dmap(pa)))
-	b.s = s
-	b.pinned = false
-	b.bdev_refup("new_pa")
+func bdev_block_new(block int, s string) *bdev_block_t {
+	b := bdev_make(block, pa_t(0), s)
+	b.new_page()
 	return b
 }
 
@@ -93,11 +93,11 @@ func (blk *bdev_block_t) bdev_refcnt() int {
 
 func (blk *bdev_block_t) bdev_refup(s string) {
 	refup(blk.pa)
-	// fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
+	fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
 }
 
 func (blk *bdev_block_t) bdev_refdown(s string) {
-	// fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
+	fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
 	if blk.bdev_refcnt() == 0 {
 		fmt.Printf("bdev_refdown %s: ref is 0 block %v %v\n", s, blk.block, blk.s)
 		panic("ouch")
@@ -105,8 +105,9 @@ func (blk *bdev_block_t) bdev_refdown(s string) {
 	refdown(blk.pa)
 }
 
-// bdev_write_async increments ref to keep the page around utnil write completes
-func bdev_write(b *bdev_block_t) {
+// increment ref to keep the page around until write completes. interrupt routine
+// decrecements.
+func (b *bdev_block_t) bdev_write() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
@@ -117,8 +118,9 @@ func bdev_write(b *bdev_block_t) {
 	}
 }
 
-// bdev_write_async increments ref to keep the page around until write completes
-func bdev_write_async(b *bdev_block_t) {
+// increment ref to keep the page around until write completes.  interrupt
+// routine decrecements.
+func (b *bdev_block_t) bdev_write_async() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write_async\n")
 	}
@@ -140,10 +142,11 @@ func (b *bdev_block_t) bdev_read() {
 	
 }
 
-// after bdev_read_block returns, the caller owns the physical page.  the caller
-// must call bdev_refdown when it is done with the page in the buffer returned.
+// after bdev_read_block returns, the caller owns the block.  the caller must
+// call bdev_refdown when it is done with the buffer
 func bdev_read_block(blkn int, s string) *bdev_block_t {
-	buf := bdev_block_new(blkn, s)
+	buf := bdev_make(blkn, pa_t(0), s)
+	buf.new_page()
 	buf.bdev_read()
 	return buf
 }
@@ -160,13 +163,13 @@ func bdev_flush() {
 // metadata blocks. File blocks are stored in the inode's page cache, which also
 // interacts with the VM system.
 //
-// The cache returns the same pointer to a block_dev_t to callers, and thus the
-// callers share the physical page in the block_dev_t. The callers must
-// coordinate using the lock of the block.
-
-// There is *one* bdev_block_t for a block number (and physical page associated
-// with that blockno).  The log layer's log_write pins blocks in the cache to
-// avoid eviction, so that a read always sees the last write.
+// The cache returns a pointer to a block_dev_t.  There is *one* bdev_block_t
+//for a block number (and physical page associated with that blockno).  Callers
+//share same block_dev_t (and physical page) for a block. The callers must
+//coordinate using the lock of the block.
+//
+// The log layer's log_write pins blocks in the cache to avoid eviction, so that
+// a read always sees the last write.
 //
 // XXX need to support dirty bit too and eviction.
 //
@@ -193,88 +196,86 @@ func bdev_cache_present(blkn int) bool {
 	return ok
 }
 
-// returns locked buf with refcnt on page bumped up by 1. caller must call
-// bdev_refdown when done with buf.
-func bdev_lookup_fill(blkn int, s string, pa pa_t) *bdev_block_t {
+// returns locked buf with refcnt on page bumped up by 1. The caller must call
+// bdev_refdown when done with buf.  Return true if block was created in the
+// cache, false if it was already present.
+func bdev_get_empty(blkn int, s string) (*bdev_block_t, bool) {
 	if blkn < superb_start {
 		panic("no")
 	}
 	bdev_cache.Lock()
-	created := false
 
-	// fmt.Printf("bdev_lookup_fill: %v\n", blkn)
+	// fmt.Printf("bdev_get_empty: %v\n", blkn)
+	
+	if obuf, ok := bdev_cache.blks[blkn]; ok {
+		bdev_cache.Unlock()
+		obuf.Lock()
+		obuf.s = s
+		return obuf, false
+	}
+	buf := bdev_make(blkn, pa_t(0), s)
+	bdev_cache.blks[blkn] = buf
+	buf.Lock()
+	bdev_cache.Unlock()
+	return buf, true
+}
 
-	buf, ok := bdev_cache.blks[blkn]
-	if !ok {
-		if pa != 0 {
-			buf = bdev_block_new_pa(blkn, s, pa)
+// returns locked buf with refcnt on page bumped up by 1. caller must call
+// bdev_refdown when done with buf.
+func bdev_get_fill(blkn int, s string, pa pa_t) *bdev_block_t {
+	b, created := bdev_get_empty(blkn, s)
+
+	// fmt.Printf("bdev_get_fill: %v\n", blkn)
+
+	if created {
+		if pa == 0 {
+			b.new_page()
 		} else {
-			buf = bdev_block_new(blkn, s)
+			b.pa = pa
+			b.bdev_refup("lookup_fill")
 		}
-		buf.Lock()
-		bdev_cache.blks[blkn] = buf
-		created = true
+		b.bdev_read() // fill in new bdev_cache entry
 	}
-	bdev_cache.Unlock()
+	if pa != 0 && pa != b.pa {
+		panic("bdev_get_fill")
+	}
+	b.bdev_refup("lookup_fill")
+	return b
+}
 
-	if !created {
-		buf.Lock()
-		buf.s = s
+// returns locked buf with refcnt on page bumped up by 1. caller must call
+// bdev_refdown when done with buf
+func bdev_get_zero(blkn int, s string) *bdev_block_t {
+	b, created := bdev_get_empty(blkn, s)
+	// fmt.Printf("bdev_get_zero: %v\n", blkn)
+	if created {
+		b.new_page()   // zero
 	} else {
-		buf.bdev_read() // fill in new bdev_cache entry
-
-	}
-	// fmt.Printf("bdev_lookup_fill: %v %p\n", blkn, buf)
-	buf.bdev_refup("lookup_fill")
-	return buf
-}
-
-// returns locked buf with refcnt on page bumped up by 1. caller must call
-// bdev_refdown when done with buf
-func bdev_lookup_zero(blkn int, s string) *bdev_block_t {
-	bdev_cache.Lock()
-
-	// fmt.Printf("bdev_lookup_zero: %v\n", blkn)
-	
-	if obuf, ok := bdev_cache.blks[blkn]; ok {
-		bdev_cache.Unlock()
-		obuf.Lock()
-		obuf.bdev_refup("lookup_zero1")
 		var zdata [512]uint8
-		*obuf.data = zdata
-		obuf.s = s
-		return obuf
+		*b.data = zdata
 	}
-	buf := bdev_block_new(blkn, s)   // get a zero page
-	bdev_cache.blks[blkn] = buf
-	buf.bdev_refup("lookup_zero2")
-	buf.Lock()
-	bdev_cache.Unlock()
-	return buf
+	b.bdev_refup("lookup_fill")
+	return b
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_refdown when done with buf
-func bdev_lookup_empty(blkn int, s string) *bdev_block_t {
-	bdev_cache.Lock()
-
-	// fmt.Printf("bdev_lookup_empty: %v\n", blkn)
-	
-	if obuf, ok := bdev_cache.blks[blkn]; ok {
-		bdev_cache.Unlock()
-		obuf.Lock()
-		obuf.s = s
-		obuf.bdev_refup("lookup_empty 1")
-		return obuf
+func bdev_get_nofill(blkn int, s string) *bdev_block_t {
+	b, created := bdev_get_empty(blkn, s)
+	// fmt.Printf("bdev_get_zero: %v\n", blkn)
+	if created {
+		b.new_page()   // XXX a non-zero page would be fine
 	}
-	buf := bdev_block_new(blkn, s)   // XXX get a zero page, not really necesary
-	bdev_cache.blks[blkn] = buf
-	buf.bdev_refup("lookup_empty 2")
-	buf.Lock()
-	bdev_cache.Unlock()
-	return buf
+	b.bdev_refup("bdev_get_nofill")
+	return b
 }
 
+func print_live_blocks() {
+	fmt.Printf("bdev cache\n")
+	for _, b := range bdev_cache.blks {
+		fmt.Printf("block %v\n", b)
+	}
+}
 
 func bdev_test() {
 
@@ -299,7 +300,7 @@ func bdev_test() {
 			for i,_ := range wbuf[b].data {
 				wbuf[b].data[i] = uint8(b)
 			}
-			bdev_write_async(wbuf[b])
+			wbuf[b].bdev_write_async()
 		}
 		bdev_flush()
 		for b := 0; b < N; b++ {

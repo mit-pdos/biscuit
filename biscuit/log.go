@@ -28,7 +28,7 @@ type log_t struct {
 	done		chan bool
 	force		chan bool
 	commitwait	chan bool
-	tmpblk		*bdev_block_t
+	headblk		*bdev_block_t
 }
 
 func (log *log_t) init(ls int, ll int) {
@@ -37,7 +37,7 @@ func (log *log_t) init(ls int, ll int) {
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
 	log.log = make([]log_entry_t, log.loglen)
-	log.tmpblk = bdev_block_new(log.logstart, "logstart")
+	log.headblk = bdev_block_new(log.logstart, "logstart")
 	log.incoming = make(chan *bdev_block_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
@@ -83,15 +83,17 @@ func (log *log_t) commit() {
 		return
 	}
 
-	lh := logheader_t{log.tmpblk.data}
+	lh := logheader_t{log.headblk.data}
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, l.block)
 
 		// write block into log
-                b := bdev_block_new_pa(log.logstart+i+1, "logapply", l.buf.pa)
-		bdev_write_async(l.buf)
+                b := bdev_get_nofill(log.logstart+i+1, "logapply")
+		copy(b.data[:], l.buf.data[:])
+		b.relse()
+		b.bdev_write_async()
 		b.bdev_refdown("writelog")
 
 	}
@@ -101,7 +103,7 @@ func (log *log_t) commit() {
 	lh.w_recovernum(log.lhead)
 
 	// write log header
-	bdev_write(log.tmpblk)
+	log.headblk.bdev_write()
 
 	bdev_flush()   // commit log header
 
@@ -114,7 +116,7 @@ func (log *log_t) commit() {
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
-		bdev_write_async(l.buf)
+		l.buf.bdev_write_async()
 		l.buf.bdev_refdown("logapply")
 	}
 
@@ -122,7 +124,7 @@ func (log *log_t) commit() {
 	
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
-	bdev_write(log.tmpblk)
+	log.headblk.bdev_write()
 	
 	bdev_flush()  // flush cleared commit
 	log.lhead = 0

@@ -154,14 +154,14 @@ func fs_recover() {
 		lb := bdev_read_block(l.logstart + 1 + i, "i")
 		fb := bdev_read_block(bdest, "bdest")
 		copy(fb.data[:], lb.data[:])
-		bdev_write(fb)
+		fb.bdev_write()
 		lb.bdev_refdown("fs_recover1")
 		fb.bdev_refdown("fs_recover2")
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
-	bdev_write(b)
+	b.bdev_write()
 	b.bdev_refdown("fs_recover3")
 	fmt.Printf("restored %v blocks\n", rlen)
 }
@@ -825,7 +825,7 @@ func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		if err != 0 {
 			return 0, err
 		}
-		bdev_write(buf)
+		buf.bdev_write()
 		raw.offset += c
 		did += c
 		buf.bdev_refdown("write")
@@ -1161,15 +1161,8 @@ func fs_stat(path string, st *stat_t, cwd *imemnode_t) err_t {
 	return err
 }
 
-func print_live_blocks() {
-	fmt.Printf("bdev\n")
-	for _, b := range bdev_cache.blks {
-		fmt.Printf("block %v\n", b)
-	}
-}
-
 func fs_sync() err_t {
-	// print_live_blocks()
+	print_live_blocks()
 	if memtime {
 		return 0
 	}
@@ -1945,9 +1938,9 @@ type icdent_t struct {
 func (ic *icache_t) _mbensure(blockn int, fill bool) *bdev_block_t {
 	var mb *bdev_block_t
 	if fill {
-		mb = bdev_lookup_fill(blockn, "_mbensure", pa_t(0))
+		mb = bdev_get_fill(blockn, "_mbensure", pa_t(0))
 	} else {
-		mb = bdev_lookup_zero(blockn, "_mbensure")
+		mb = bdev_get_zero(blockn, "_mbensure")
 	}
 	mb.relse()
 	return mb
@@ -2224,7 +2217,7 @@ func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
 		}
 		a := uintptr(pa) + (uintptr)(c)
 
-		b := bdev_lookup_fill(blkno, "log_read", pa_t(a))
+		b := bdev_get_fill(blkno, "log_read", pa_t(a))
 		b.relse()
 		b.bdev_refdown("fs_fill")
 		c += 512
@@ -2245,7 +2238,7 @@ func (idm *imemnode_t) fs_flush(pa pa_t, fileoffset int) err_t {
 	// XXX pa maybe different for the same block. maybe better coordination
 	// between page cache and bdev.  do a copy for now.
 
-	dur := bdev_lookup_empty(blkno, "dur")
+	dur := bdev_get_nofill(blkno, "dur")
 	va := (*[512]uint8)(unsafe.Pointer(dmap(pa)))
 	copy(dur.data[:], va[:])
 	dur.relse()
@@ -2603,7 +2596,7 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 		panic("inconsistent")
 	}
 	bn, ioff := bidecode(childi)
-	ib := bdev_lookup_fill(bn, "create_undo", pa_t(0))
+	ib := bdev_get_fill(bn, "create_undo", pa_t(0))
 	ni := &inode_t{ib, ioff}
 	_iallocundo(bn, ni, ib)
 	ib.bdev_refdown("create_undo")
@@ -2629,7 +2622,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 
 	// allocate new inode
 	newbn, newioff := ialloc()
-	newiblk := bdev_lookup_fill(newbn, "icreate", pa_t(0))
+	newiblk := bdev_get_fill(newbn, "icreate", pa_t(0))
 
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
@@ -2736,7 +2729,7 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 }
 
 func (idm *imemnode_t) idibread() *bdev_block_t {
-	return bdev_lookup_fill(idm.blkno, "idibread", pa_t(0))
+	return bdev_get_fill(idm.blkno, "idibread", pa_t(0))
 }
 
 // frees all blocks occupied by idm
@@ -3100,7 +3093,7 @@ func fbread(blockno int) *bdev_block_t {
 	if blockno < superb_start {
 		panic("naughty blockno")
 	}
-	return bdev_lookup_fill(blockno, "fbread", pa_t(0))
+	return bdev_get_fill(blockno, "fbread", pa_t(0))
 }
 
 
@@ -3235,7 +3228,7 @@ func ialloc() (int, int) {
 
 	ifreeblk = balloc1()
 	ifreeoff = 0
-	zblk := bdev_lookup_zero(ifreeblk, "ialloc")
+	zblk := bdev_get_zero(ifreeblk, "ialloc")
 	zblk.s += "+log_write"
 	zblk.relse()
 	zblk.log_write()
