@@ -2157,6 +2157,8 @@ inval:
 DIR *
 fdopendir(int fd)
 {
+        #define BSIZE 4096
+  
 	struct stat st;
 	if (fstat(fd, &st) == -1)
 		return NULL;
@@ -2172,9 +2174,9 @@ fdopendir(int fd)
 		char	name[_POSIX_NAME_MAX];
 		ulong	inum;
 	};
-	const int nde = 512/sizeof(struct _dirent_t);
+	const int nde = BSIZE/sizeof(struct _dirent_t);
 	size_t c = 0;
-	char buf[512];
+	char buf[BSIZE];
 	ssize_t r;
 	while ((r = read(fd, buf, sizeof(buf))) > 0) {
 		int i;

@@ -20,7 +20,9 @@ import "unsafe"
 // interrupt handler).
 //
 
-const BSIZE=512
+// If you change this, you must change corresponding constants in mkbdisk.py,
+// fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
+const BSIZE=4096
 
 type bdev_block_t struct {
 	sync.Mutex
@@ -68,11 +70,11 @@ func (blk *bdev_block_t) bdev_refcnt() int {
 
 func (blk *bdev_block_t) bdev_refup(s string) {
 	refup(blk.pa)
-	fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
+	// fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
 }
 
 func (blk *bdev_block_t) bdev_refdown(s string) {
-	fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
+	// fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
 	if blk.bdev_refcnt() == 0 {
 		fmt.Printf("bdev_refdown %s: ref is 0 block %v %v\n", s, blk.block, blk.s)
 		panic("ouch")
@@ -259,12 +261,11 @@ func print_live_blocks() {
 }
 
 func bdev_test() {
-
 	return
+	
+	fmt.Printf("disk test\n")
 
 	ahci_debug = true
-
-	fmt.Printf("disk test\n")
 	
 	const N = 3
 

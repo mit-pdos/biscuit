@@ -9,6 +9,10 @@ import "unsafe"
 
 const NAME_MAX    int = 512
 
+const LOGINODEBLK     = 5 // 2
+const INODEMASK       = (1 << LOGINODEBLK)-1
+const INDADDR        = (BSIZE/8)-1
+
 var superb_start	int
 var superb		superblock_t
 var iroot		*imemnode_t
@@ -99,9 +103,10 @@ func fs_init() *fd_t {
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b := bdev_read_block(0, "fsoff")   
+	b := bdev_read_block(0, "fsoff")
 	FSOFF := 506
 	superb_start = readn(b.data[:], 4, FSOFF)
+	fmt.Printf("superb_start %v %#x\n", superb_start, superb_start)
 	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
@@ -118,7 +123,9 @@ func fs_init() *fd_t {
 	logstart := free_start + free_len
 	loglen := superb.loglen()
 	usable_start = logstart + loglen
-	if loglen < 0 || loglen > 63 {
+
+	if loglen <= 0 || loglen > 63 {
+		fmt.Printf("log len %v\n", loglen)
 		panic("bad log len")
 	}
 	// b.bdev_refdown()
@@ -1323,6 +1330,7 @@ func (pc *pgcache_t) _ensurefill(pgn pgn_t) err_t {
 		if err != 0 {
 			panic("must succeed")
 		}
+		// fmt.Printf("_ensurefill c %v %v\n", c, devoffset)
 		copy(pgi.pg[c:], pg2bytes(zeropg)[:])
 	}
 	return 0
@@ -1611,6 +1619,7 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
+
 	blk.bdev_refdown("idm_init")
 	blk.relse()
 	return 0
@@ -2040,7 +2049,8 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 				added = true
 				// make sure to zero indirect pointer block if
 				// allocated
-				if idx == 63 {
+				if idx == INDADDR {
+					fmt.Printf("indirect indx\n")
 					idm.icache.mbempty(blkn)
 				}
 			}
@@ -2072,8 +2082,8 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	var blkn int
 	if whichblk >= NIADDRS {
 		indslot := whichblk - NIADDRS
-		slotpb := 63
-		nextindb := 63*8
+		slotpb := INDADDR
+		nextindb :=  INDADDR *8
 		indno := idm.icache.indir
 		// get first indirect block
 		indno, isnew := ensureb(indno)
@@ -2214,7 +2224,7 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
-	for c < 4096 && fileoffset + c < isz {
+	for c < PGSIZE  && fileoffset + c < isz {
 		blkno, err := idm.offsetblk(fileoffset + c, false)
 		if err != 0 {
 			return c, err
@@ -2753,12 +2763,12 @@ func (idm *imemnode_t) ifree() {
 		add(indno)
 		blk := idm.icache.mbread(indno)
 		blks := blk.data[:]
-		for i := 0; i < 63; i++ {
+		for i := 0; i < INDADDR; i++ {
 			off := i*8
 			nblkno := readn(blks, 8, off)
 			add(nblkno)
 		}
-		nextoff := 63*8
+		nextoff := INDADDR*8
 		indno = readn(blks, 8, nextoff)
 		blk.bdev_refdown("ifree1")
 	}
@@ -2811,7 +2821,7 @@ func fieldw(p *[BSIZE]uint8, field int, val int) {
 }
 
 func biencode(blk int, iidx int) int {
-	logisperblk := uint(2)
+	logisperblk := uint(LOGINODEBLK)
 	isperblk := 1 << logisperblk
 	if iidx < 0 || iidx >= isperblk {
 		panic("bad inode index")
@@ -2820,9 +2830,9 @@ func biencode(blk int, iidx int) int {
 }
 
 func bidecode(val inum) (int, int) {
-	logisperblk := uint(2)
+	logisperblk := uint(LOGINODEBLK)
 	blk := int(uint(val) >> logisperblk)
-	iidx := int(val) & 0x3
+	iidx := int(val) & INODEMASK
 	return blk, iidx
 }
 

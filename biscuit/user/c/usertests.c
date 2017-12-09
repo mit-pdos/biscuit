@@ -800,6 +800,8 @@ linktest(void)
   printf("linktest ok\n");
 }
 
+#define BSIZE  4096
+
 struct  __attribute__((packed)) dirent_t {
 #define NMAX	14
        char	name[NMAX];
@@ -807,7 +809,7 @@ struct  __attribute__((packed)) dirent_t {
 };
 
 struct dirdata_t {
-#define NDIRENTS	(512/sizeof(struct dirent_t))
+#define NDIRENTS	(BSIZE/sizeof(struct dirent_t))
        struct dirent_t de[NDIRENTS];
 };
 
@@ -818,7 +820,7 @@ concreate(void)
   char file[3];
   int i, pid, n, fd;
   char fa[40];
-  char buf[512];
+  char buf[BSIZE];
 
   printf("concreate test\n");
   file[0] = 'C';
@@ -1756,8 +1758,8 @@ fsfull()
     }
     int total = 0;
     while(1){
-      int cc = write(fd, buf, 512);
-      if(cc < 512)
+      int cc = write(fd, buf, BSIZE);
+      if(cc < BSIZE)
         break;
       total += cc;
       fsblocks++;
@@ -2424,7 +2426,7 @@ runsockettest(void)
 
 void _testnoblk(int rfd, int wfd)
 {
-	char buf[512];
+	char buf[BSIZE];
 	memset(buf, 'A', sizeof(buf));
 	ssize_t ret, tot = 0;
 	while ((ret = write(wfd, buf, 10)) > 0)
@@ -2550,7 +2552,7 @@ void stdiotest(void)
 	FILE *f = fopen("/bigfile.txt", "r");
 	if (f == NULL)
 		err(-1, "fopen");
-	char buf[512];
+	char buf[BSIZE];
 	ulong cksum = 0;
 	size_t tot = 0, r;
 	while ((r = fread(buf, 1, sizeof(buf), f)) > 0) {
@@ -3089,7 +3091,7 @@ void spair(void)
 		err(-1, "socketpair");
 
 	const char *fn = "/bin/usertests";
-	char buf[512];
+	char buf[BSIZE];
 	ssize_t r;
 	pid_t c = fork();
 	if (c == -1)
@@ -3139,13 +3141,13 @@ void iovtest(void)
 	int ofd = open("/tmp/dump", O_CREAT | O_TRUNC | O_RDWR);
 	if (ffd == -1 || bfd == -1 || ofd == -1)
 		err(-1, "open");
-	const size_t bsz = 512;
+	const size_t bsz = BSIZE;
 	char fbuf[bsz];
 	char bbuf[bsz];
 	ssize_t r;
 	while ((r = read(ffd, fbuf, bsz)) == bsz) {
 		struct iovec iovs[4];
-		size_t fourth = 512 / 4;
+		size_t fourth = BSIZE / 4;
 		int i;
 		char *end = &bbuf[bsz];
 		for (i = 0; i < 4; i++) {
@@ -3281,7 +3283,7 @@ void scmtest(void)
 		err(-1, "lseek");
 	char chmsg[] = "chald message";
 	size_t chlen = sizeof(chmsg) - 1;
-	char rbuf[512];
+	char rbuf[BSIZE];
 	if ((r = read(fd, rbuf, sizeof(rbuf))) != plen + chlen)
 		errx(-1, "par read %zd %zu", r, plen + chlen);
 	char ok1[] = "chald messageparent message";
@@ -3583,7 +3585,7 @@ main(int argc, char *argv[])
   scmtest();
   mkstemptest();
   getppidtest();
-  // mmaptest();
+  mmaptest();
 
   exectest();
 

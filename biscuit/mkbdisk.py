@@ -9,12 +9,15 @@ import getopt
 import os
 import sys
 
-blocksz = 512
+blocksz = 4096  # 512
+loginodeblk = 5 # 2
+inodesz = 128
+
 hdsize = 2*8*40 * 1024 * 1024
 # number of inode direct addresses
 iaddrs = 10
 # number of inode indirect addresses
-indaddrs = 63
+indaddrs = (blocksz/8)-1
 
 class Balloc:
   def __init__(self, ff):
@@ -75,6 +78,7 @@ class Dirb:
       raise ValueError('dir entry filename too long')
     l = len(fn)
     data = fn + '\0'*(maxfn - l)
+    # print "addentry", self.bn, self.ioff, self.curblk.bn, fn, inodeb, inodeoff, len(c.cont)
     c.append(data)
     c.append(le8(biencode(inodeb, inodeoff)))
 
@@ -181,11 +185,11 @@ class Indirectb:
     return ret
 
 class Inodeb:
-  # class for managing inodes: 4 per block
+  # class for managing inodes
   def __init__(self, bn):
     self.bn = bn
     self.icur = 0
-    self.itop = 4
+    self.itop = blocksz/inodesz
     self.imap = {}
 
   def getfree(self):
@@ -309,19 +313,28 @@ class Fsrep:
       raise ValueError('skeldir too big/out of blocks')
     blockorder = sorted(ab.keys())
     for b in blockorder:
-      #before = of.tell()
+      if of.tell()/blocksz != b:
+        print '**** object', type(ab[b]), " ***** number and offset don't match", b, of.tell()/blocksz
+      before = of.tell()
       ab[b].writeto(of)
-      #after = of.tell()
-      #diff = after - before
-      #if diff % blocksz != 0:
-      #  print '**** object', type(ab[b]), 'didnt write a whole block'
-      #print 'wrote %d bytes' % (diff)
+      after = of.tell()
+      diff = after - before
+      if diff % blocksz != 0:
+        print '**** object', type(ab[b]), 'didnt write a whole block'
     # free space
     if dozero:
       for i in range(remaining - len(ab)):
 	# fill with crap to detect fs bugs
         of.write('\x0c'*blocksz)
 
+  def pr_dir(self, cont):
+    while len(cont) > 0:
+      e = cont[0:22]
+      cont = cont[22:]
+      n = e[14:18]
+      m = e[18:22]
+      print e, len(e), n, m
+    
   def pr(self):
     print 'print all blocks'
     ab = self.ba.allblocks
@@ -329,11 +342,13 @@ class Fsrep:
     for k in keys:
       if isinstance(ab[k], Inodeb):
         print '%d, Inodeb, %d inode entries' % (k, len(ab[k].imap))
+        i = 0
         for  v in ab[k].imap.values():
           if isinstance(v, Fileb):
-            print '\tfile of len %d' % (v.size)
+            print i, '\tfile of name len %d' % (v.size), v.blks
           elif isinstance(v, Dirb):
-            print '\tdirectory of len %d' % (v.size)
+            print i, '\tdirectory of len %d' % (v.size), v.blks
+          i += 1
       elif isinstance(ab[k], Datab):
         print '%d, Datab' % (k)
       else:
@@ -358,7 +373,7 @@ def le8(num):
   return ''.join(l)
 
 def biencode(block, ioff):
-  return (block << 2) | ioff
+  return (block << loginodeblk) | ioff
 
 def dofree(of, allocblocks, freeblock, freeblocklen):
   for i in range(allocblocks/8):
@@ -373,7 +388,7 @@ def dofree(of, allocblocks, freeblock, freeblocklen):
     of.write(chr(val))
     bmbytes += 1
   # pad out to a block
-  rem = roundup(bmbytes, 512) - bmbytes
+  rem = roundup(bmbytes, blocksz) - bmbytes
   of.write('\0'*rem)
   bmblocks = roundup(bmbytes, blocksz)/blocksz
   remaining = freeblocklen - bmblocks
@@ -394,12 +409,14 @@ def dofs(of, freeblock, freeblocklen, loglen, lastblock, remaining, skeldir, doz
 
   # start superblock: freeblock start, freeblock length, log length, and
   # rootinode
+  print "super", freeblock, freeblocklen, loglen
   of.write(le8(freeblock))
   of.write(le8(freeblocklen))
   of.write(le8(loglen))
 
   fsrep = Fsrep(skeldir, ba)
-  #fsrep.pr()
+  
+  # fsrep.pr()
 
   rootinode, rootioff = fsrep.rooti()
 
@@ -453,14 +470,18 @@ if __name__ == '__main__':
 
     of.write(''.join(bfdata))
     of.write(kfdata)
-    # pad out kernel image to block
-    lim = roundup(len(kfdata), blocksz)
-    of.write('\0'*(lim - len(kfdata)))
 
+    # pad out to block  
+    lim = roundup(len(bfdata) + len(kfdata), blocksz)
+    of.write('\0'*(lim - len(bfdata) - len(kfdata)))
+
+    if of.tell()%blocksz != 0:
+      print "*** fs doesn't start at block boundary!! ****"
+    
     fblen = 2*20*8
     loglen = 31
     dofs(of, usedblocks + 1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
     wrote = of.tell()/(1 << 20)
 
   print >> sys.stderr, 'created "%s" of length %d MB' % (ofn, wrote)
-  print >> sys.stderr, '(fs starts at %#x in "%s")' % (usedblocks*blocksz, ofn)
+  print >> sys.stderr, '(fs starts at %#x(%d) in "%s")' % (usedblocks*blocksz, usedblocks, ofn)
