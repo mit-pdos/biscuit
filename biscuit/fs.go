@@ -4,7 +4,6 @@ import "fmt"
 import "runtime"
 import "strings"
 import "sync"
-import "sync/atomic"
 import "unsafe"
 
 const NAME_MAX    int = 512
@@ -22,6 +21,7 @@ var usable_start	int
 
 
 var fblock	= sync.Mutex{}
+const fs_debug    = true
 
 // allocation-less pathparts
 type pathparts_t struct {
@@ -125,7 +125,6 @@ func fs_init() *fd_t {
 	usable_start = logstart + loglen
 
 	if loglen <= 0 || loglen > 63 {
-		fmt.Printf("log len %v\n", loglen)
 		panic("bad log len")
 	}
 	// b.bdev_refdown()
@@ -1235,33 +1234,26 @@ type pgcache_t struct {
 	// the unit size of underlying device
 	blocksz		int
 	pglim		int
-	// fill is used to fill empty pages with data from the underlying
-	// device or layer. fill may write fewer bytes than the length of the
-	// destination buffer.
-	_fill	func(pa_t, int) (int, err_t)
-	// flush writes the given buffer to the specified offset of the device.
-	_flush	func(pa_t, int) err_t
+	idm             *imemnode_t
 }
 
 type pginfo_t struct {
 	pgn		pgn_t
 	pg		*bytepg_t
-	p_pg		pa_t
 	dirtyblocks	[]bool
+	buf             *bdev_block_t
 }
 
-func (pc *pgcache_t) pgc_init(bsz int, fill func(pa_t, int) (int, err_t),
-    flush func(pa_t, int) err_t) {
-	if fill == nil || flush == nil {
-		panic("invalid page func")
+func (pc *pgcache_t) pgc_init(bsz int, idm *imemnode_t) {
+	if idm == nil {
+		panic("invalid idm")
 	}
-	pc._fill = fill
-	pc._flush = flush
 	if PGSIZE % bsz != 0 {
 		panic("block size does not divide pgsize")
 	}
 	pc.blocksz = bsz
 	pc.pglim = 0
+	pc.idm = idm
 }
 
 // takes an offset, returns the page number and starting block
@@ -1284,63 +1276,49 @@ func (pc *pgcache_t) pgdirty(offset, end int) {
 }
 
 // returns whether the page for pgn needs to be filled from disk and success.
-func (pc *pgcache_t) _ensureslot(pgn pgn_t) (bool, bool) {
+func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) bool {
 	if pc.pgs.nodes >= pc.pglim {
 		if !syslimit.mfspgs.take() {
-			return false, false
+			return false
 		}
 		pc.pglim++
 	}
-	created := false
 	if _, ok := pc.pgs.lookup(pgn); !ok {
-		created = true
-		var pg *pg_t
-		var p_pg pa_t
-		for {
-			var ok bool
-			pg, p_pg, ok = refpg_new_nozero()
-			if ok {
-				break
-			}
-			if !memreclaim() {
-				return false, false
-			}
+		offset := (int(pgn) << PGSHIFT)
+		blkno, err := pc.idm.offsetblk(offset, true)
+		if fs_debug {
+			fmt.Printf("_ensureslot %v %v\n", pgn, blkno)
 		}
-		refup(p_pg)
-		bpg := pg2bytes(pg)
-		pgi := &pginfo_t{pgn: pgn, pg: bpg, p_pg: p_pg}
+		if err != 0 {
+			return false
+		}
+		var b *bdev_block_t
+		if fill {
+			b = bdev_get_fill(blkno, "_ensureslot1", 0)
+		} else {
+			b = bdev_get_zero(blkno, "_ensureslot2")
+		}
+		b.relse()
+		pgi := &pginfo_t{pgn: pgn, pg: b.data, buf: b}
 		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
 		pc.pgs.insert(pgi)
 	}
-	return created, true
+	return true
 }
 
-func (pc *pgcache_t) _ensurefill(pgn pgn_t) err_t {
-	needsfill, ok := pc._ensureslot(pgn)
+func (pc *pgcache_t) _ensurefill(pgn pgn_t,fill bool) err_t {
+	ok := pc._ensureslot(pgn, fill)
 	if !ok {
 		return -ENOMEM
-	}
-	if needsfill {
-		pgi, ok := pc.pgs.lookup(pgn)
-		if !ok {
-			panic("eh")
-		}
-		devoffset := (int(pgi.pgn) << PGSHIFT)
-		c, err := pc._fill(pgi.p_pg, devoffset)
-		if err != 0 {
-			panic("must succeed")
-		}
-		// fmt.Printf("_ensurefill c %v %v\n", c, devoffset)
-		copy(pgi.pg[c:], pg2bytes(zeropg)[:])
 	}
 	return 0
 }
 
 // returns the raw page and physical address of requested page. fills the page
 // if necessary.
-func (pc *pgcache_t) pgraw(offset int) (*pg_t, pa_t, err_t) {
+func (pc *pgcache_t) pgraw(offset int, fill bool) (*pg_t, pa_t, err_t) {
 	pgn, _ := pc._pgblock(offset)
-	err := pc._ensurefill(pgn)
+	err := pc._ensurefill(pgn, fill)
 	if err != 0 {
 		return nil, 0, err
 	}
@@ -1349,16 +1327,16 @@ func (pc *pgcache_t) pgraw(offset int) (*pg_t, pa_t, err_t) {
 		panic("eh")
 	}
 	wpg := (*pg_t)(unsafe.Pointer(pgi.pg))
-	return wpg, pgi.p_pg, 0
+	return wpg, pgi.buf.pa, 0
 }
 
 // offset <= end. if offset lies on the same page as end, the returned slice is
 // trimmed (bytes >= end are removed).
-func (pc *pgcache_t) pgfor(offset, end int) ([]uint8, err_t) {
+func (pc *pgcache_t) pgfor(offset, end int, fill bool) ([]uint8, err_t) {
 	if offset > end {
 		panic("offset must be less than end")
 	}
-	pgva, _, err := pc.pgraw(offset)
+	pgva, _, err := pc.pgraw(offset, fill)
 	if err != 0 {
 		return nil, err
 	}
@@ -1380,18 +1358,11 @@ func (pc *pgcache_t) flush() {
 	}
 	pc.pgs.iter(func(pgi *pginfo_t) {
 		for j, dirty := range pgi.dirtyblocks {
-			
 			if !dirty {
 				continue
 			}
-			pgoffset := j*pc.blocksz
-			devoffset := (int(pgi.pgn) << PGSHIFT) + pgoffset
-			pa := uintptr(pgi.p_pg) + uintptr(pgoffset)
-			err := pc._flush(pa_t(pa), devoffset)
-
-			if err != 0 {
-				panic("flush must succeed")
-			}
+			fmt.Printf("flush %v\n", pgi.buf.block)
+			pgi.buf.bdev_write()
 			pgi.dirtyblocks[j] = false
 		}
 	})
@@ -1402,7 +1373,8 @@ func (pc *pgcache_t) flush() {
 func (pc *pgcache_t) release() int {
 	pgs := 0
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		refdown(pgi.p_pg)
+		// refdown(pgi.p_pg)
+		pgi.buf.bdev_refdown("release")
 		pgs++
 	})
 	pc.pgs.clear()
@@ -1421,8 +1393,7 @@ func (pc *pgcache_t) release() int {
 func (pc *pgcache_t) evict() int {
 	failed := false
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		ref, _ := _refaddr(pgi.p_pg)
-		if atomic.LoadInt32(ref) != 1 {
+		if pgi.buf.bdev_refcnt() != 2 {   // one for the cache?
 			failed = true
 		}
 		for _, d := range pgi.dirtyblocks {
@@ -1615,7 +1586,7 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 	idm.l.tm_init()
 
-	idm.pgcache.pgc_init(BSIZE, idm.fs_fill, idm.fs_flush)
+	idm.pgcache.pgc_init(BSIZE, idm)
 
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
@@ -2131,7 +2102,7 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
 	for offset + c < isz && dst.remain() != 0 {
-		src, err := idm.pgcache.pgfor(offset + c, isz)
+		src, err := idm.pgcache.pgfor(offset + c, isz, true)
 		if err != 0 {
 			return c, err
 		}
@@ -2155,7 +2126,7 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
 	c := 0
 	for c < sz {
 		noff := offset + c
-		dst, err := idm.pgcache.pgfor(noff, newsz)
+		dst, err := idm.pgcache.pgfor(noff, newsz, false)
 		if err != 0 {
 			return c, err
 		}
@@ -2186,7 +2157,7 @@ func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) err_t {
 		first := true
 		c := oldlen
 		for c < newlen {
-			pg, err := idm.pgcache.pgfor(int(c), int(newlen))
+			pg, err := idm.pgcache.pgfor(int(c), int(newlen), false)
 			if err != 0 {
 				ret = -ENOMEM
 				break
@@ -2241,6 +2212,7 @@ func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
 
 // write the data at physical address pa to the block backing this pa
 func (idm *imemnode_t) fs_flush(pa pa_t, fileoffset int) err_t {
+	panic("fs_flush")
 	if memtime {
 		return 0
 	}
@@ -2291,7 +2263,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	// current dir blocks are full -- allocate new dirdata block. make
 	// sure its in the page cache but not fill'ed from disk
 	newsz := idm.icache.size + BSIZE
-	_, err := idm.pgcache.pgfor(idm.icache.size, newsz)
+	_, err := idm.pgcache.pgfor(idm.icache.size, newsz, false)
 	if err != 0 {
 		return 0, err
 	}
@@ -2317,7 +2289,8 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 	if err != 0 {
 		return err
 	}
-	pg, err := idm.pgcache.pgfor(noff, noff+NDBYTES)
+        // dennextempty() made the slot so we won't fill
+	pg, err := idm.pgcache.pgfor(noff, noff+NDBYTES, true) 
 	if err != 0 {
 		return err
 	}
@@ -2344,7 +2317,7 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 func (idm *imemnode_t) _descan(
    f func(fn string, de icdent_t)bool) (bool, err_t) {
 	for i := 0; i < idm.icache.size; i+= BSIZE {
-		pg, err := idm.pgcache.pgfor(i, i+BSIZE)
+		pg, err := idm.pgcache.pgfor(i, i+BSIZE, true)
 		if err != 0 {
 			return false, err
 		}
@@ -2411,7 +2384,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 	if err != 0 {
 		return zi, err
 	}
-	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES)
+	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES, true)
 	if err != 0 {
 		return zi, err
 	}
@@ -2504,14 +2477,15 @@ func (idm *imemnode_t) _deprobe(fn string) err_t {
 			return err
 		}
 		noff := de.offset
-		_, err = idm.pgcache.pgfor(noff, noff+NDBYTES)
+		_, err = idm.pgcache.pgfor(noff, noff+NDBYTES, true)
 		return err
 	}
 	noff, err := idm._denextempty()
 	if err != 0 {
 		return err
 	}
-	_, err = idm.pgcache.pgfor(noff, noff+NDBYTES)
+	// dennextempty() made the slot so we won't fill
+	_, err = idm.pgcache.pgfor(noff, noff+NDBYTES, true)
 	if err != 0 {
 		return err
 	}
@@ -2636,7 +2610,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 
 	// allocate new inode
 	newbn, newioff := ialloc()
-	newiblk := bdev_get_fill(newbn, "icreate", pa_t(0))
+	newiblk := bdev_get_zero(newbn, "icreate")
 
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
@@ -2731,7 +2705,7 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	pgc := len / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
 	for i := 0; i < len; i += PGSIZE {
-		pg, phys, err := idm.pgcache.pgraw(offset + i)
+		pg, phys, err := idm.pgcache.pgraw(offset + i, true)
 		if err != 0 {
 			return nil, err
 		}
@@ -2812,11 +2786,11 @@ func (idm *imemnode_t) mkmode() uint {
 }
 
 // XXX: remove
-func fieldr(p *[BSIZE]uint8, field int) int {
+func fieldr(p *bytepg_t, field int) int {
 	return readn(p[:], 8, field*8)
 }
 
-func fieldw(p *[BSIZE]uint8, field int, val int) {
+func fieldw(p *bytepg_t, field int, val int) {
 	writen(p[:], 8, field*8, val)
 }
 
@@ -2846,7 +2820,7 @@ func bidecode(val inum) (int, int) {
 // 40-47, inode block that may have room for an inode
 // 48-55, recovery log length; if non-zero, recovery procedure should run
 type superblock_t struct {
-	data	*[BSIZE]uint8
+	data	*bytepg_t
 }
 
 func (sb *superblock_t) freeblock() int {
@@ -2903,7 +2877,7 @@ func (sb *superblock_t) w_freeinode(n int) {
 // 0-7,   valid log blocks
 // 8-511, log destination (63)
 type logheader_t struct {
-	data	*[BSIZE]uint8
+	data	*bytepg_t
 }
 
 func (lh *logheader_t) recovernum() int {
@@ -3224,6 +3198,11 @@ var ifreeblk int	= 0
 var ifreeoff int 	= 0
 
 // returns block/index of free inode.
+//
+// XXX biscuit will not use free inodes if a crash happens after we allocated
+// one inode but then crash.  on recovery ifreeblk will be zero and we will
+// allocate a new block and not use the remaining free entries of ifreeblk
+// before crash.
 func ialloc() (int, int) {
 	fblock.Lock()
 	defer fblock.Unlock()
@@ -3257,15 +3236,6 @@ func ialloc() (int, int) {
 	return ifreeblk, reti
 }
 
-// our actual disk
-var disk	disk_t   // XXX delete?
-
-// XXX delete and the disks that use it?
-type idebuf_t struct {
-	disk	int
-	block	int
-	data	*[BSIZE]uint8
-}
 
 func memreclaim() bool {
 	if memtime {

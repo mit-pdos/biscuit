@@ -292,6 +292,16 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	    allstats, busmaster, gsi)
 }
 
+// our actual disk
+var disk	disk_t   // XXX delete?
+
+// XXX delete and the disks that use it?
+type idebuf_t struct {
+	disk	int
+	block	int
+	data	*[BSIZE]uint8
+}
+
 type disk_t interface {
 	start(*idebuf_t, bool)
 	complete([]uint8, bool)

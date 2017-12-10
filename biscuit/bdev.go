@@ -24,12 +24,14 @@ import "unsafe"
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE=4096
 
+const bdev_debug = false
+	
 type bdev_block_t struct {
 	sync.Mutex
 	disk	int
 	block	int
 	pa      pa_t
-	data	*[BSIZE]uint8
+	data	*bytepg_t
 	s       string
 }
 
@@ -37,7 +39,7 @@ func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
 	b := &bdev_block_t{};
 	b.block = block
 	b.pa = pa
-	b.data = (*[BSIZE]uint8)(unsafe.Pointer(dmap(pa)))
+	b.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
 	b.s = s
 	return b
 }
@@ -53,7 +55,7 @@ func (blk *bdev_block_t) new_page() {
 		panic("oom during bdev.new_page")
 	}
 	blk.pa = pa
-	blk.data = (*[BSIZE]uint8)(unsafe.Pointer(dmap(pa)))
+	blk.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
 	blk.bdev_refup("new_page")
 }
 
@@ -91,6 +93,9 @@ func (b *bdev_block_t) purge() {
 // increment ref to keep the page around until write completes. interrupt routine
 // decrecements.
 func (b *bdev_block_t) bdev_write() {
+	if bdev_debug {
+		fmt.Printf("bdev_write %v %v\n", b.block, b.s)
+	}
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
@@ -104,6 +109,9 @@ func (b *bdev_block_t) bdev_write() {
 // increment ref to keep the page around until write completes.  interrupt
 // routine decrecements.
 func (b *bdev_block_t) bdev_write_async() {
+	if bdev_debug {
+		fmt.Printf("bdev_write_async %v %s\n", b.block, b.s)
+	}
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write_async\n")
 	}
@@ -117,9 +125,11 @@ func (b *bdev_block_t) bdev_read() {
 	if ahci_start(ider) {
 		<- ider.ackCh
 	}
-	//fmt.Printf("fill %v %#x %#x\n", buf.block, buf.data[0], buf.data[1])
+	if bdev_debug {
+		fmt.Printf("bdev_read %v %v %#x %#x\n", b.block, b.s, b.data[0], b.data[1])
+	}
 	if b.data[0] == 0xc && b.data[1] == 0xc {
-		fmt.Printf("fall: %v %v\n", b.s, b.block)
+		fmt.Printf("fail: %v %v\n", b.s, b.block)
 		panic("xxx\n")
 	}
 	
@@ -265,8 +275,6 @@ func bdev_test() {
 	
 	fmt.Printf("disk test\n")
 
-	ahci_debug = true
-	
 	const N = 3
 
 	wbuf := new([N]*bdev_block_t)

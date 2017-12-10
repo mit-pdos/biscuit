@@ -6,7 +6,7 @@ import "sync"
 import "sync/atomic"
 import "unsafe"
 
-var ahci_debug = false
+const ahci_debug = false
 var adisk	adisk_t
 
 //
