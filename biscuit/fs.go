@@ -21,7 +21,7 @@ var usable_start	int
 
 
 var fblock	= sync.Mutex{}
-const fs_debug    = true
+const fs_debug    = false
 
 // allocation-less pathparts
 type pathparts_t struct {
@@ -1361,8 +1361,10 @@ func (pc *pgcache_t) flush() {
 			if !dirty {
 				continue
 			}
-			fmt.Printf("flush %v\n", pgi.buf.block)
-			pgi.buf.bdev_write()
+			if fs_debug {
+				fmt.Printf("flush %v\n", pgi.buf.block)
+			}
+			pgi.buf.log_write()
 			pgi.dirtyblocks[j] = false
 		}
 	})
@@ -1373,7 +1375,6 @@ func (pc *pgcache_t) flush() {
 func (pc *pgcache_t) release() int {
 	pgs := 0
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		// refdown(pgi.p_pg)
 		pgi.buf.bdev_refdown("release")
 		pgs++
 	})
@@ -1393,7 +1394,7 @@ func (pc *pgcache_t) release() int {
 func (pc *pgcache_t) evict() int {
 	failed := false
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		if pgi.buf.bdev_refcnt() != 2 {   // one for the cache?
+		if pgi.buf.bdev_refcnt() != 2 {   // one for the cache and one for VM?
 			failed = true
 		}
 		for _, d := range pgi.dirtyblocks {
@@ -2187,49 +2188,6 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 	// <= icache.size
 	idm.icache.size = int(newlen)
 	idm.pgcache.flush()
-	return 0
-}
-
-// fills the parts of pages whose offset < the file size (extending the file
-// shouldn't read any blocks).
-func (idm *imemnode_t) fs_fill(pa pa_t, fileoffset int) (int, err_t) {
-	isz := idm.icache.size
-	c := 0
-	for c < PGSIZE  && fileoffset + c < isz {
-		blkno, err := idm.offsetblk(fileoffset + c, false)
-		if err != 0 {
-			return c, err
-		}
-		a := uintptr(pa) + (uintptr)(c)
-
-		b := bdev_get_fill(blkno, "log_read", pa_t(a))
-		b.relse()
-		b.bdev_refdown("fs_fill")
-		c += BSIZE
-	}
-        return c, 0
-}
-
-// write the data at physical address pa to the block backing this pa
-func (idm *imemnode_t) fs_flush(pa pa_t, fileoffset int) err_t {
-	panic("fs_flush")
-	if memtime {
-		return 0
-	}
-	blkno, err := idm.offsetblk(fileoffset, true)
-	if err != 0 {
-		return err
-	}
-
-	// XXX pa maybe different for the same block. maybe better coordination
-	// between page cache and bdev.  do a copy for now.
-
-	dur := bdev_get_nofill(blkno, "dur")
-	va := (*[BSIZE]uint8)(unsafe.Pointer(dmap(pa)))
-	copy(dur.data[:], va[:])
-	dur.relse()
-	dur.log_write()
-	dur.bdev_refdown("fs_flush")
 	return 0
 }
 
@@ -3242,6 +3200,9 @@ func memreclaim() bool {
 		// cannot evict vnodes on a memory file system!
 		return false
 	}
+	
+	fmt.Printf("memreclaim\n")
+	
 	// memreclaim can be called while an inode is locked. a caller may also
 	// created a defer statement that tries to close the file on which an
 	// operation failed to allocate. thus we panic while the file is locked
