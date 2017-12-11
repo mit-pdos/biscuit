@@ -3,7 +3,7 @@
 import sys
 
 inuse = {}
-blks = []
+refcnt = {}
 
 start = False
 
@@ -32,17 +32,23 @@ with open(sys.argv[1]) as f:
            extra = inuse[b]
            p = True
        if l[0] == "block":
-           blks.append(l[4])      
+           refcnt[l[4]] = l[8].rstrip('\n')
        print(l, extra)
 
-print(len(blks), blks)
 cnt = 0
+ninuse = 0
 for k, v in inuse.items():
     if v > 0:
         cnt = cnt+1
+        if v > 1:
+            ninuse += 1
         print (k, v)
-        if not k in blks:
+        if not k in refcnt.keys():
             print("missing", k)
+        else:
+            if int(refcnt[k]) != int(v):
+                print("refcnt doesn't match", k, v, refcnt[k])
         if v > 5:
             print("high cnt", k, v)
-print("cnt in-use", cnt)
+
+print("cnt in-use", cnt, ninuse)

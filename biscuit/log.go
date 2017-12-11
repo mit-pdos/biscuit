@@ -71,8 +71,6 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 	// the log.
 	log.log[lhead] = log_entry_t{buf.block, buf}
 	log.lhead++
-
-	buf.s += "-addlog"
 }
 
 func (log *log_t) commit() {

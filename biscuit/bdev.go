@@ -67,22 +67,16 @@ func (blk *bdev_block_t) bdev_refcnt() int {
 
 func (blk *bdev_block_t) bdev_refup(s string) {
 	refup(blk.pa)
-	// fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
+	fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
 }
 
 func (blk *bdev_block_t) bdev_refdown(s string) {
-	// fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
+	fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
 	if blk.bdev_refcnt() == 0 {
 		fmt.Printf("bdev_refdown %s: ref is 0 block %v %v\n", s, blk.block, blk.s)
 		panic("ouch")
 	}
 	refdown(blk.pa)
-}
-
-func (b *bdev_block_t) purge() {
-	fmt.Printf("bdev_purge %v %v\n", b.block, b.bdev_refcnt())
-	// b.bdev_refdown("bdev_purge")
-	// delete(bdev_cache.blks, b.block)  when we are done 
 }
 
 // increment ref to keep the page around until write completes. interrupt routine
@@ -259,7 +253,7 @@ func bdev_get_nofill(blkn int, s string) *bdev_block_t {
 func print_live_blocks() {
 	fmt.Printf("bdev cache\n")
 	for _, b := range bdev_cache.blks {
-		fmt.Printf("block %v\n", b)
+		fmt.Printf("block %v %v\n", b, b.bdev_refcnt())
 	}
 }
 

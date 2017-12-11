@@ -1388,9 +1388,10 @@ func (pc *pgcache_t) release() int {
 // be freed). the pages cannot be dirty because the eviction code locks each
 // imemnode and imemnodes must be flushed before they are unlocked.
 func (pc *pgcache_t) evict() int {
+	fmt.Printf("evict\n")
 	failed := false
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		if pgi.buf.bdev_refcnt() != 2 {   // one for the cache and one for VM?
+		if pgi.buf.bdev_refcnt() > 2 {   // one for the cache and one for VM?
 			failed = true
 		}
 		for _, d := range pgi.dirtyblocks {
@@ -1401,6 +1402,7 @@ func (pc *pgcache_t) evict() int {
 	})
 	var pgs int
 	if !failed {
+		fmt.Printf("evict: release\n")
 		pgs = pc.release()
 	}
 	return pgs
@@ -2521,7 +2523,6 @@ func _alldead(ib *bdev_block_t) bool {
 func _iallocundo(iblkn int, ni *inode_t, ib *bdev_block_t) {
 	ni.w_itype(I_DEAD)
 	if _alldead(ib) {
-		ib.purge()
 		bfree(iblkn)
 	}
 }
@@ -2709,7 +2710,6 @@ func (idm *imemnode_t) ifree() {
 	if _alldead(iblk) {
 		add(idm.blkno)
 		iblk.Unlock()
-		iblk.purge()
 	} else {
 		iblk.Unlock()
 		iblk.log_write()
