@@ -44,11 +44,6 @@ func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
 	return b
 }
 
-func (b *bdev_block_t) relse() {
-	// fmt.Printf("bdev.unlock %v\n", b.block)
-	b.Unlock()
-}
-
 func (blk *bdev_block_t) new_page() {
 	_, pa, ok := refpg_new()
 	if !ok {
@@ -215,30 +210,25 @@ func bdev_get_empty(blkn int, s string) (*bdev_block_t, bool) {
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_refdown when done with buf.
-func bdev_get_fill(blkn int, s string, pa pa_t) *bdev_block_t {
+func bdev_get_fill(blkn int, s string, lock bool) *bdev_block_t {
 	b, created := bdev_get_empty(blkn, s)
 
 	// fmt.Printf("bdev_get_fill: %v\n", blkn)
 
 	if created {
-		if pa == 0 {
-			b.new_page()
-		} else {
-			b.pa = pa
-			b.bdev_refup("bdev_get_fill1")
-		}
+		b.new_page()
 		b.bdev_read() // fill in new bdev_cache entry
 	}
-	if pa != 0 && pa != b.pa {
-		panic("bdev_get_fill")
-	}
 	b.bdev_refup("bdev_get_fill2")
+	if !lock {
+		b.Unlock()
+	}
 	return b
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_refdown when done with buf
-func bdev_get_zero(blkn int, s string) *bdev_block_t {
+func bdev_get_zero(blkn int, s string, lock bool) *bdev_block_t {
 	b, created := bdev_get_empty(blkn, s)
 	// fmt.Printf("bdev_get_zero: %v\n", blkn)
 	if created {
@@ -248,6 +238,9 @@ func bdev_get_zero(blkn int, s string) *bdev_block_t {
 		*b.data = zdata
 	}
 	b.bdev_refup("bdev_get_zero")
+	if !lock {
+		b.Unlock()
+	}
 	return b
 }
 

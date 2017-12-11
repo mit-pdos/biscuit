@@ -81,8 +81,7 @@ func (log *log_t) commit() {
 		return
 	}
 
-	headblk := bdev_get_zero(log.logstart, "commit")
-	headblk.relse()  // not sharing header
+	headblk := bdev_get_zero(log.logstart, "commit", false)
 	
 	lh := logheader_t{headblk.data}
 	for i := 0; i < log.lhead; i++ {
@@ -93,7 +92,7 @@ func (log *log_t) commit() {
 		// write block into log
                 b := bdev_get_nofill(log.logstart+i+1, "log")
 		copy(b.data[:], l.buf.data[:])
-		b.relse()
+		b.Unlock()
 		b.bdev_write_async()
 		b.bdev_refdown("writelog")
 
