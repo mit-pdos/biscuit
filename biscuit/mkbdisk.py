@@ -360,7 +360,7 @@ def roundup(n, to):
 
 def fblocks(fn):
   s = os.stat(fn)
-  return roundup(s.st_size, blocksz) / blocksz
+  return s.st_size
 
 def poke(data, where, num):
   data[where+0] = chr((num >> 0*8) & 0xff)
@@ -376,8 +376,14 @@ def biencode(block, ioff):
   return (block << loginodeblk) | ioff
 
 def dofree(of, allocblocks, freeblock, freeblocklen):
+
+  if freeblock != of.tell()/blocksz:
+      print "dofree: **** don't match ***", freeblock, of.tell()/blocksz
+  
+  
   for i in range(allocblocks/8):
     of.write(chr(0xff))
+    
   bits = allocblocks % 8
   val = 0
   for i in range(bits):
@@ -390,6 +396,7 @@ def dofree(of, allocblocks, freeblock, freeblocklen):
   # pad out to a block
   rem = roundup(bmbytes, blocksz) - bmbytes
   of.write('\0'*rem)
+
   bmblocks = roundup(bmbytes, blocksz)/blocksz
   remaining = freeblocklen - bmblocks
   if remaining < 0:
@@ -457,6 +464,8 @@ if __name__ == '__main__':
   hdblocks = roundup(hdsize, blocksz) / blocksz
   usedblocks = fblocks(bfn)
   usedblocks += fblocks(kfn)
+  usedblocks = roundup(usedblocks, blocksz) / blocksz
+  
   remaining = hdblocks - usedblocks
 
   FSOFF = 506
@@ -469,18 +478,21 @@ if __name__ == '__main__':
     poke(bfdata, FSOFF, usedblocks)
 
     of.write(''.join(bfdata))
+
     of.write(kfdata)
 
-    # pad out to block  
-    lim = roundup(len(bfdata) + len(kfdata), blocksz)
-    of.write('\0'*(lim - len(bfdata) - len(kfdata)))
+    lim = roundup(len(kfdata)+len(bfdata), blocksz)
+    of.write('\0'*(lim - len(kfdata)-len(bfdata)))
 
     if of.tell()%blocksz != 0:
       print "*** fs doesn't start at block boundary!! ****"
-    
+
+    if of.tell()/blocksz != usedblocks:
+      print "*** used blocks don't match", of.tell() / blocksz, usedblocks
+
     fblen = 2*20*8
     loglen = 31
-    dofs(of, usedblocks + 1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
+    dofs(of, usedblocks+1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
     wrote = of.tell()/(1 << 20)
 
   print >> sys.stderr, 'created "%s" of length %d MB' % (ofn, wrote)
