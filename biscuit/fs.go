@@ -12,6 +12,8 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
+const fs_debug    = true
+
 var superb_start	int
 var superb		superblock_t
 var iroot		*imemnode_t
@@ -19,9 +21,7 @@ var free_start		int
 var free_len		int
 var usable_start	int
 
-
 var fblock	= sync.Mutex{}
-const fs_debug    = false
 
 // allocation-less pathparts
 type pathparts_t struct {
@@ -1357,9 +1357,6 @@ func (pc *pgcache_t) flush() {
 			if !dirty {
 				continue
 			}
-			if fs_debug {
-				fmt.Printf("flush %v\n", pgi.buf.block)
-			}
 			pgi.buf.log_write()
 			pgi.dirtyblocks[j] = false
 		}
@@ -1946,8 +1943,8 @@ func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
 	inode := inode_t{blk, ioff}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
-		fmt.Printf("itype: %v for %v\n", ic.itype,
-		    biencode(blk.block, ioff))
+		fmt.Printf("itype: %v for %v (%v,%v)\n", ic.itype,
+		    biencode(blk.block, ioff), blk.block, ioff)
 		panic("bad itype in fill")
 	}
 	ic.links = inode.linkcount()
@@ -2566,6 +2563,10 @@ func (idm *imemnode_t) icreate(name string, nitype, major,
 	newbn, newioff := ialloc()
 	newiblk := bdev_get_zero(newbn, "icreate", true)
 
+	if fs_debug {
+		fmt.Printf("ialloc: %v %v %v\n", newbn, newioff, biencode(newbn, newioff))
+	}
+	
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
 	newinode.w_linkcount(1)
@@ -3126,6 +3127,8 @@ func bfree(blkno int) {
 	fblock.Lock()
 	defer fblock.Unlock()
 
+	fmt.Printf("bfree blkno\n")
+
 	bit := blkno - usable_start
 	bitsperblk := BSIZE*8
 	fblkno := fst + bit/bitsperblk
@@ -3174,7 +3177,10 @@ func ialloc() (int, int) {
 
 	ifreeblk = balloc1()
 	ifreeoff = 0
-	zblk := bdev_get_zero(ifreeblk, "ialloc", false)
+	zblk := bdev_get_zero(ifreeblk, "ialloc", true)
+	var zdata [BSIZE]uint8
+	copy(zblk.data[:], zdata[:])
+	zblk.Unlock()
 	zblk.log_write()
 	zblk.bdev_refdown("ialloc")
 	if zblk.bdev_refcnt() < 2 {

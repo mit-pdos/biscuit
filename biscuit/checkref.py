@@ -4,6 +4,7 @@ import sys
 
 inuse = {}
 refcnt = {}
+pgis = {}
 
 start = False
 
@@ -33,6 +34,8 @@ with open(sys.argv[1]) as f:
            p = True
        if l[0] == "block":
            refcnt[l[4]] = l[8].rstrip('\n')
+       if l[0] == "pgi":
+           pgis[l[1].rstrip('\n')] = ""
        print(l, extra)
 
 cnt = 0

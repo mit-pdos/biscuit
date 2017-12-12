@@ -2,8 +2,11 @@ package main
 
 import "fmt"
 
+const log_debug = false
+
 // file system journal
 var fslog	= log_t{}
+
 
 type logread_t struct {
 	loggen		uint8
@@ -77,6 +80,10 @@ func (log *log_t) commit() {
 	if log.lhead == 0 {
 		// nothing to commit
 		return
+	}
+
+	if log_debug {
+		fmt.Printf("commit\n")
 	}
 
 	headblk := bdev_get_zero(log.logstart, "commit", false)
@@ -213,6 +220,9 @@ func op_end() {
 func (b *bdev_block_t) log_write() {
 	if memtime {
 		return
+	}
+	if log_debug {
+		fmt.Printf("log_write %v\n", b.block)
 	}
 	b.bdev_refup("log_write")
 	fslog.incoming <- b
