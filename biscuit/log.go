@@ -199,11 +199,13 @@ func log_daemon(l *log_t) {
 	}
 }
 
-func op_begin() {
+func op_begin(s string) {
 	if memtime {
 		return
 	}
+	fmt.Printf("op_begin: wait %v\n", s)
 	<- fslog.admission
+	fmt.Printf("op_begin: go %v\n", s)
 }
 
 func op_end() {

@@ -160,7 +160,7 @@ type fdops_i interface {
 	fstat(*stat_t) err_t
 	lseek(int, int) (int, err_t)
 	mmapi(int, int) ([]mmapinfo_t, err_t)
-	pathi() *imemnode_t
+	pathi() inum
 	read(*proc_t, userio_i) (int, err_t)
 	// reopen() is called with proc_t.fdl is held
 	reopen() err_t

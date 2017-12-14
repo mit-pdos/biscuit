@@ -1357,7 +1357,7 @@ func (of *pipefops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
-func (of *pipefops_t) pathi() *imemnode_t {
+func (of *pipefops_t) pathi() inum {
 	panic("pipe cwd")
 }
 
@@ -2147,7 +2147,7 @@ func (sf *sudfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
-func (sf *sudfops_t) pathi() *imemnode_t {
+func (sf *sudfops_t) pathi() inum {
 	panic("cwd socket?")
 }
 
@@ -2219,7 +2219,7 @@ func (sf *sudfops_t) bind(proc *proc_t, sa []uint8) err_t {
 	if err != 0 {
 		return err
 	}
-	inum := fsf.priv.priv
+	inum := fsf.priv
 	bud := allbuds.bud_new(bid, path, inum)
 	if fs_close(fsf.priv) != 0 {
 		panic("must succeed")
@@ -2644,7 +2644,7 @@ func (sus *susfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
-func (sus *susfops_t) pathi() *imemnode_t {
+func (sus *susfops_t) pathi() inum {
 	panic("unix stream cwd?")
 }
 
@@ -3184,7 +3184,7 @@ func (sf *suslfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
-func (sf *suslfops_t) pathi() *imemnode_t {
+func (sf *suslfops_t) pathi() inum {
 	panic("unix stream listener cwd?")
 }
 

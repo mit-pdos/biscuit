@@ -117,6 +117,7 @@ func (b *bdev_block_t) bdev_read() {
 	if bdev_debug {
 		fmt.Printf("bdev_read %v %v %#x %#x\n", b.block, b.s, b.data[0], b.data[1])
 	}
+	// XXX uncommment before recovery, but nice for testing during normal operation
 	if b.data[0] == 0xc && b.data[1] == 0xc {
 		fmt.Printf("fail: %v %v\n", b.s, b.block)
 		panic("xxx\n")
@@ -252,10 +253,10 @@ func print_live_blocks() {
 	for _, b := range bdev_cache.blks {
 		fmt.Printf("block %v %v\n", b, b.bdev_refcnt())
 	}
-	fmt.Printf("idaemons %v\n", allidmons)
-	fmt.Printf("%v %v\n", len(allidmons), allidmons)
-	for _, v := range allidmons {
-		v.pgcache.pgs.iter(func(pgi *pginfo_t) {
+	fmt.Printf("irefcache %v\n", irefcache)
+	fmt.Printf("%v %v\n", len(irefcache.irefs), irefcache)
+	for _, v := range irefcache.irefs {
+		v.imem.pgcache.pgs.iter(func(pgi *pginfo_t) {
 			fmt.Printf("pgi %v\n", pgi.buf.block)
 		})
 	}
