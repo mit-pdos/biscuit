@@ -1,10 +1,10 @@
 package main
 
 import "fmt"
-//import "runtime"
 import "strings"
 import "sync"
 import "unsafe"
+import "sort"
 
 const NAME_MAX    int = 512
 
@@ -12,7 +12,7 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
-const fs_debug    = true
+const fs_debug    = false
 
 var superb_start	int
 var superb		superblock_t
@@ -181,45 +181,36 @@ func fs_link(old string, new string, cwd inum) err_t {
 	op_begin("fs_link")
 	defer op_end()
 
-	inum, err := fs_namei(old, cwd)
-	if err != 0 {
-		return err
-	}
-	orig, err := irefcache.iref(inum, "fs_link_orig")
+	orig, err := fs_namei_locked(old, cwd, "fs_link_org")
 	if err != 0 {
 		return err
 	}
 	if orig.icache.itype != I_FILE {
-		orig.refdown("fs_link")
+		orig.iunlock_refdown("fs_link")
 		return -EINVAL
 	}
+	inum := orig.priv
 	orig._linkup()
-	orig.refdown("fs_link_orig")
+	orig.iunlock_refdown("fs_link_orig")
 
-	var newd *imemnode_t
 	dirs, fn := sdirname(new)
-	dinum, err := fs_namei(dirs, cwd)
-	if err != 0 {
-		goto undo
-	}
-	newd, err = irefcache.iref(dinum, "fs_link_newd")
+	newd, err := fs_namei_locked(dirs, cwd, "fs_link_newd")
 	if err != 0 {
 		goto undo
 	}
 	err = newd.do_insert(fn, inum)
-	newd.refdown("fs_link_newd")
+	newd.iunlock_refdown("fs_link_newd")
 	if err != 0 {
 		goto undo
 	}
 	return 0
 undo:
-	fmt.Printf("fs_link: %v %v failed\n", old, new)
-	orig, err1 := irefcache.iref(inum, "fs_link_undo")
+	orig, err1 := irefcache.iref_locked(inum, "fs_link_undo")
 	if err1 != 0 {
 		panic("bizare")
 	}
 	orig._linkdown()
-	orig.refdown("fs_link_undo")
+	orig.iunlock_refdown("fs_link_undo")
 	return err
 }
 
@@ -232,31 +223,40 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 	op_begin("fs_unlink")
 	defer op_end()
 
-	// lock parent and attempt to acquire child. if we fail, unlock parent
-	// and yield to avoid deadlock.
+
 	var child *imemnode_t
+	var par *imemnode_t
 	var err err_t
-	var childinum inum
+	var childi inum
 
-	parinum, err := fs_namei(dirs, cwd)
+	par, err = fs_namei_locked(dirs, cwd, "fs_unlink")
 	if err != 0 {
 		return err
 	}
-	par, err := irefcache.iref(parinum, "fs_unlink_par")
+	childi, err = par.ilookup(fn)
+	par.iunlock("fs_unlink_par")
 	if err != 0 {
+		par.refdown("fs_unlink_par")
 		return err
 	}
-	defer par.refdown("fs_unlink_par")
+	child, err = irefcache.iref(childi, "fs_unlink_child")
+	if err != 0 {
+		par.refdown("fs_unlink_par")
+		return err
+	}
 
-	childinum, err = par.ilookup(fn)
+	// acquire both locks
+	irefcache.lockall([]*imemnode_t{par, child})
+	defer par.iunlock_refdown("fs_unlink_par")
+	defer child.iunlock_refdown("fs_unlink_child")
+	
+	// recheck if child still exists, since some other thread may have
+	// modifed par but par and child won't disappear because we have
+	// references to them.
+	childi, err = par.ilookup(fn)
 	if err != 0 {
 		return err
 	}
-	child, err = irefcache.iref(childinum, "fs_unlink_child")
-	if err != 0 {
-		return err
-	}
-	defer child.refdown("fs_unlink_child")
 
 	err = child.do_dirchk(wantdir)
 	if err != 0 {
@@ -290,81 +290,136 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 	op_begin("fs_rename")
 	defer op_end()
 
+	// one rename at the time
 	_renamelock.Lock()
 	defer _renamelock.Unlock()
 
-	// lookup all four files, but don't lock them yet. since we hold the
-	// rename lock, none of them can be moved out from under us. they can
-	// be unlinked though.
-	oparinum, err := fs_namei(odirs, cwd)
+	// lookup all inode references, but we will release locks and lock them
+	// together when we know all references.  the references to the inodes
+	// cannot disppear, however.
+	opar, err := fs_namei_locked(odirs, cwd, "fs_rename_opar")
 	if err != 0 {
 		return err
 	}
 
-	ochildinum, err := fs_namei(oldp, cwd)
+	childi, err := opar.ilookup(ofn)
+	opar.iunlock("fs_rename_par")
 	if err != 0 {
+		opar.refdown("fs_rename_opar")
+		return err
+	}
+	ochild, err := irefcache.iref(childi, "fs_rename_ochild")
+	if err != 0 {
+		opar.refdown("fs_rename_opar")
 		return err
 	}
 
-	nparinum, err := fs_namei(ndirs, cwd)
+	ochild.iunlocked("ochild1")
+	
+	npar, err := fs_namei(ndirs, cwd)
 	if err != 0 {
-		return err
-	}
-
-	// the new file may not exist
-	newexists := false
-	var newinum inum
-	newinum, err = fs_namei(newp, cwd)
-	if err == 0 {
-		newexists = true
-	} else if err != 0 && err != -ENOENT {
+		opar.refdown("fs_rename_opar")
+		ochild.refdown("fs_rename_ochild")
 		return err
 	}
 	
+	// verify that ochild is not an ancestor of npar, since we would
+	// disconnect ochild subtree from root.  it is safe to do without
+	// holding locks because unlink cannot modify the path to the root by
+	// removing a directory because the directories aren't empty.  it could
+	// delete npar and an ancestor, but rename has already a reference to to
+	// npar.
+	if err = _isancestor(ochild, npar); err != 0 {
+		opar.refdown("fs_rename_opar")
+		ochild.refdown("fs_rename_ochild")
+		npar.refdown("fs_rename_npar")
+		return err
+	}
+
+	ochild.iunlocked("ochild1")
+
+	var nchild *imemnode_t
+	cnt := 0
+	newexists := false
+	// lookup newchild and try to lock all inodes involved
+	for {
+		nchild, err = fs_namei(newp, cwd)
+		if err != 0 && err != -ENOENT {
+			opar.refdown("fs_name_opar")
+			ochild.refdown("fs_name_ochild")	
+			npar.refdown("fs_name_npar")
+			return err
+		}
+		
+		ochild.iunlocked("ochild1")
+		npar.iunlocked("npar")
+		opar.iunlocked("opar")
+
+		var locked []*imemnode_t
+		if err == 0 {
+			newexists = true
+			locked = irefcache.lockall([]*imemnode_t{opar, ochild, npar, nchild})
+		} else {
+			locked = irefcache.lockall([]*imemnode_t{opar, ochild, npar})
+		}
+		for _, v := range locked {
+			defer v.iunlock_refdown("rename_opar")
+		}
+		
+		// check if the tree is still the same. an unlink or link may
+		// have modified the tree.
+		childi, err := opar.ilookup(ofn) 
+		if err != 0 {
+			return err
+		}
+		if childi != ochild.priv {
+			panic("fs_rename\n")
+		}
+		
+		_, err = npar.ilookup(nfn)
+		// it existed before and still exists
+		if newexists && err == 0 { 
+			break
+		}
+		// it didn't exist before and still doesn't exist
+		if !newexists && err == -ENOENT {
+			break
+		}
+		// it existed but now it doesn't. but, we now have
+		// parent locked and we don't need nchild lock.
+		if newexists && err == -ENOENT {
+			newexists = false
+			nchild.iunlock_refdown("rename_child")
+			break
+		}
+
+		cnt++
+		fmt.Printf("rename: retry %v %v\n", newexists, err)
+		if cnt > 100 {
+			panic("rename: panic\n")
+		}
+		
+		// ochildi changed or childi was created; retry, to grab also its lock
+		for _, v := range locked {
+			v.iunlock("fs_rename_opar")
+		}
+	}
+
 	// if src and dst are the same file, we are done
-	if newexists && ochildinum == newinum {
+	if newexists && ochild.priv == nchild.priv { 
 		return 0
 	}
 
-	// XXX get locks for all inum at the same time?
-	
-	npar, err := irefcache.iref(nparinum, "fs_name_npar")
-	if err != 0 {
-		return err
-	}
-	defer npar.refdown("fs_name_npar")
-	
-
-	var ochild *imemnode_t
-	ochild, err = irefcache.iref(ochildinum, "fs_name_ochild")
-	if err != 0 {
-		return err
-	}
-	defer ochild.refdown("fs_name_ochild")
-
-	// verify that ochild is not an ancestor of npar
-	if err = _isancestor(ochild, npar); err != 0 {
-		return err
-	}
-	
 	// guarantee that any page allocations will succeed before starting the
 	// operation, which will be messy to piece-wise undo.
 	if err := npar.probe_insert(); err != 0 {
 		return err
 	}
 
-	var opar *imemnode_t
-	opar, err = irefcache.iref(oparinum, "fs_name_opar")
-	if err != 0 {
-		return err
-	}
-	defer opar.refdown("fs_name_opar")
-	
 	if err = opar.probe_unlink(ofn); err != 0 {
 		return err
 	}
 
-	
 	odir := ochild.icache.itype == I_DIR
 	if odir {
 		if err = ochild.probe_unlink(".."); err != 0 {
@@ -373,12 +428,6 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 	}
 
 	if newexists {
-		nchild, err := irefcache.iref(ochildinum, "fs_name_nchild")
-		if err != 0 {
-			return err
-		}
-		defer nchild.refdown("fs_rename_nchild")
-		
 		// make sure old and new are either both files or both
 		// directories
 		if err := nchild.do_dirchk(odir); err != 0 {
@@ -412,26 +461,36 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 	return 0
 }
 
-func _isancestor(anc, here *imemnode_t) err_t {
+// end and start are locked
+func _isancestor(anc, start *imemnode_t) err_t {
 	if anc.priv == iroot {
 		panic("root is always ancestor")
 	}
+	// walk up to iroot
+	here, err := irefcache.iref(start.priv, "_isancestor")
+	if err != 0 {
+		panic("_isancestor: start must exist")
+	}
 	for here.priv != iroot {
 		if anc == here {
+			here.refdown("_isancestor_here")
 			return -EINVAL
 		}
+		here.ilock("_isancestor")
 		nexti, err := here.ilookup("..")
 		if err != 0 {
 			panic(".. must exist")
 		}
 		var next *imemnode_t
-		next, err = irefcache.iref(nexti, "_isancestor")
-		here.refdown("_isancestor")  // XXX caller uses ref?
+		next, err = irefcache.iref(nexti, "_isancestor_next")
+		here.iunlock("_isancestor")
 		if err != 0 {
+			here.refdown("_isancestor_here")
 			return err
 		}
 		here = next
 	}
+	here.refdown("_isancestor")
 	return 0
 }
 
@@ -457,7 +516,7 @@ func (fo *fsfops_t) _read(dst userio_i, toff int) (int, err_t) {
 		}
 		offset = toff
 	}
-	idm, err := irefcache.iref(fo.priv, "_read")
+	idm, err := irefcache.iref_locked(fo.priv, "_read")
 	if err != 0 {
 		return 0, err
 	}
@@ -465,7 +524,7 @@ func (fo *fsfops_t) _read(dst userio_i, toff int) (int, err_t) {
 	if !useoffset && err == 0 {
 		fo.offset += did
 	}
-	idm.refdown("_read")
+	idm.iunlock_refdown("_read")
 	return did, err
 }
 
@@ -496,7 +555,7 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 		offset = toff
 		append = false
 	}
-	idm, err := irefcache.iref(fo.priv, "_write")
+	idm, err := irefcache.iref_locked(fo.priv, "_write")
 	if err != 0 {
 		return 0, err
 	}
@@ -504,7 +563,7 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 	if !useoffset && err == 0 {
 		fo.offset += did
 	}
-	idm.refdown("_write")
+	idm.iunlock_refdown("_write")
 	return did, err
 }
 
@@ -521,12 +580,12 @@ func (fo *fsfops_t) truncate(newlen uint) err_t {
 	op_begin("truncate")
 	defer op_end()
 
-	idm, err := irefcache.iref(fo.priv, "truncate")
+	idm, err := irefcache.iref_locked(fo.priv, "truncate")
 	if err != 0 {
 		return err
 	}
 	err = idm.do_trunc(newlen)
-	idm.refdown("truncate")
+	idm.iunlock_refdown("truncate")
 	return err
 }
 
@@ -535,12 +594,12 @@ func (fo *fsfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 }
 
 func (fo *fsfops_t) fstat(st *stat_t) err_t {
-	idm, err := irefcache.iref(fo.priv, "fstat")
+	idm, err := irefcache.iref_locked(fo.priv, "fstat")
 	if err != 0 {
 		return err
 	}
 	err = idm.do_stat(st)
-	idm.refdown("fstat")
+	idm.iunlock_refdown("fstat")
 	return err
 }
 
@@ -556,12 +615,12 @@ func (fo *fsfops_t) pathi() inum {
 }
 
 func (fo *fsfops_t) reopen() err_t {
-	idm, err := irefcache.iref(fo.priv, "reopen")
+	idm, err := irefcache.iref_locked(fo.priv, "reopen")
 	if err != 0 {
 		return err
 	}
 	idm.opencount++   // close will decrease it
-	idm.refdown("reopen")
+	idm.iunlock_refdown("reopen")
 	return 0
 }
 
@@ -591,12 +650,12 @@ func (fo *fsfops_t) lseek(off, whence int) (int, err_t) {
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
 func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, err_t) {
-	idm, err := irefcache.iref(fo.priv, "mmapi")
+	idm, err := irefcache.iref_locked(fo.priv, "mmapi")
 	if err != 0 {
 		return nil, err
 	}
 	mmi, err := idm.do_mmapi(offset, len)
-	idm.refdown("mmapi")
+	idm.iunlock_refdown("mmapi")
 	return mmi, err
 }
 
@@ -949,15 +1008,11 @@ func fs_mkdir(paths string, mode int, cwd inum) err_t {
 		return -ENAMETOOLONG
 	}
 
-	parinum, err := fs_namei(dirs, cwd)
+	par, err := fs_namei_locked(dirs, cwd, "mkdir")
 	if err != 0 {
 		return err
 	}
-	par, err := irefcache.iref(parinum, "fs_mkdir_par")
-	if err != 0 {
-		return err
-	}
-	defer par.refdown("fs_mkdir_par")
+	defer par.iunlock_refdown("fs_mkdir_par")
 
 	var childi inum
 	childi, err = par.do_createdir(fn)
@@ -965,18 +1020,14 @@ func fs_mkdir(paths string, mode int, cwd inum) err_t {
 		return err
 	}
 
-	fmt.Printf("createdir done %v\n", childi)
-
 	child, err := irefcache.iref(childi, "fs_mkdir_child")
 	if err != 0 {
 		par.create_undo(childi, fn)
 		return err
 	}
 
-	fmt.Printf("createdir child insert %v\n", childi)
-	
 	child.do_insert(".", childi)
-	child.do_insert("..", parinum)
+	child.do_insert("..", par.priv)
 	child.refdown("fs_mkdir3")
 	return 0
 }
@@ -992,8 +1043,6 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
 	nodir := false
-
-	fmt.Printf("_fs_open: %v %v\n", paths, creat)
 
 	// open with O_TRUNC is not read-only
 	if trunc || creat {
@@ -1021,16 +1070,11 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 		// with O_CREAT, the file may exist. use itrylock and
 		// unlock/retry to avoid deadlock.
 		for {
-			parinum, err := fs_namei(dirs, cwd)
+			par, err := fs_namei_locked(dirs, cwd, "_fs_open")
 			if err != 0 {
 				return ret, err
 			}
-			var par *imemnode_t
-			par, err = irefcache.iref(parinum, "_fs_open_par")
-			if err != 0 {
-				return ret, err
-			}
-			defer par.refdown("_fs_open_par")
+			defer par.iunlock_refdown("_fs_open_par")
 
 			var childi inum
 			if isdev {
@@ -1039,42 +1083,36 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 				childi, err = par.do_createfile(fn)
 			}
 			if err != 0 && err != -EEXIST {
-				fmt.Printf("_fs_open: failed %v\n", err)
 				return ret, err
 			}
 			exists = err == -EEXIST
-			fmt.Printf("_fs_open: create file %v done %v %v\n", fn, childi, err)
 			if childi <= 0 {
 				panic("non-positive childi\n")
 			}
-			idm, err = irefcache.iref(childi, "_fs_open_child")
+			idm, err = irefcache.iref_locked(childi, "_fs_open_child")
 			if err != 0 {
 				par.create_undo(childi, fn)
 				return ret, err
 			}
-			fmt.Printf("iretref parent\n")
 			break
 		}
 		oexcl := flags & O_EXCL != 0
 		if exists {
 			if oexcl || isdev {
-				idm.refdown("_fs_open2")
+				idm.iunlock_refdown("_fs_open2")
 				return ret, -EEXIST
 			}
 		}
 	} else {
 		// open existing file
-		childi, err := fs_namei(paths, cwd)
-		if err != 0 {
-			return ret, err
-		}
-		idm, err = irefcache.iref(childi, "_fs_open_child")
+		var err err_t
+		idm, err = fs_namei_locked(paths, cwd, "_fs_open_existing")
 		if err != 0 {
 			return ret, err
 		}
 		// idm is locked
 	}
-	defer idm.refdown("_fs_open_idem")
+	defer idm.iunlock_refdown("_fs_open_idem")
 
 	itype := idm.icache.itype
 
@@ -1153,25 +1191,19 @@ func fs_close(priv inum) err_t {
 	defer op_end()
 	op_begin("fs_close")
 
-	idm, err := irefcache.iref(priv, "fs_close")
+	idm, err := irefcache.iref_locked(priv, "fs_close")
 	if err != 0 {
 		return err
 	}
 	idm.opencount--
-	// iretref() frees underlying inode and blocks, if necessary
-	idm.refdown("fs_close")
+	idm.iunlock_refdown("fs_close")
 	return 0
 }
 
 func fs_stat(path string, st *stat_t, cwd inum) err_t {
-	inum, err := fs_namei(path, cwd)
-	if err != 0 {
-		return err
-	}
-	var idm *imemnode_t
-	idm, err = irefcache.iref(inum, "fs_stat")
+	idm, err := fs_namei_locked(path, cwd, "fs_stat")
 	err = idm.do_stat(st)
-	idm.refdown("fs_stat")
+	idm.iunlock_refdown("fs_stat")
 	return err
 }
 
@@ -1189,8 +1221,7 @@ func fs_sync() err_t {
 
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
-func fs_namei(paths string, cwd inum) (inum, err_t) {
-	fmt.Printf("fs_namei %v %v\n", paths, cwd)
+func fs_namei(paths string, cwd inum) (*imemnode_t, err_t) {
 	var start *imemnode_t
 	var err err_t
 	if len(paths) == 0 || paths[0] != '/' {
@@ -1208,31 +1239,35 @@ func fs_namei(paths string, cwd inum) (inum, err_t) {
 	pp := pathparts_t{}
 	pp.pp_init(paths)
 	for cp, ok := pp.next(); ok; cp, ok = pp.next() {
+		idm.ilock("fs_namei")
 		n, err := idm.ilookup(cp)
 		if err != 0 {
-			idm.refdown("fs_namei_ilookup")
-			return 0, err
-		}
-		if n == idm.priv {
-			fmt.Printf("next is cur %v %v\n", n, cp)
-
+			idm.iunlock_refdown("fs_namei_ilookup")
+			return nil, err
 		}
 		if n != idm.priv {
-			// get reference to the next imemnode_t before unlocking
-			// (if next is a different inode), to make sure the
-			// inode isn't repurposed.
-			next, err1 := irefcache.iref(n, "fs_namei_next")
-			idm.refdown("fs_namei_next")
-			if err1 != 0 {
-				return 0, err1
+			next, err := irefcache.iref(n, "fs_namei_next")
+			idm.iunlock_refdown("fs_namei_idm")
+			if err != 0 {
+				return nil, err
 			}
 			idm = next
+		} else {
+			idm.iunlock_refdown("fs_namei_idm_next")
 		}
 	}
-	priv := idm.priv
-	idm.refdown("fs_namei_idm")
-	return priv, 0
+	return idm, 0
 }
+
+func fs_namei_locked(paths string, cwd inum, s string) (*imemnode_t, err_t) {
+	idm, err := fs_namei(paths, cwd)
+	if err != 0 {
+		return nil, err
+	}
+	idm.ilock(s + "/fs_namei_locked")
+	return idm, 0
+}
+
 
 type pgn_t uint
 
@@ -1565,7 +1600,9 @@ var irefcache	= make_irefcache()
 func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	irc.Lock()
 	b, i :=  bidecode(priv)
-	fmt.Printf("iref %v (%v/%v) %s\n", priv, b, i, s)
+	if fs_debug {
+		fmt.Printf("iref %v (%v/%v) %s\n", priv, b, i, s)
+	}
 	if priv <= 0 {
 		panic("non-positive priv")
 	}
@@ -1573,8 +1610,6 @@ func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	if ok {
 		iref.refcnt++
 		irc.Unlock()
-		iref.imem.ilock("iref")
-		fmt.Printf("iref: done %v (%v/%v) %s\n", priv, b, i, s)
 		return iref.imem, 0
 	}
 	
@@ -1594,7 +1629,7 @@ func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	iref.imem = imem
 	irc.irefs[priv] = iref
 	
-	imem.ilock("igetret")
+	imem.ilock("iref")
 	irc.Unlock()
 
 	// holding inode lock while reading it from disk
@@ -1603,8 +1638,18 @@ func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 		return nil, err
 	}
 	pglru.mkhead(imem)
-	fmt.Printf("iref: %v added to table\n", priv)
-	return iref.imem, 0
+	
+	imem.iunlock("iref")
+	return imem, 0
+}
+
+func (irc *irefcache_t) iref_locked(priv inum, s string) (*imemnode_t, err_t) {
+	idm, err := irc.iref(priv, s)
+	if err != 0 {
+		return nil, err
+	}
+	idm.ilock(s)
+	return idm, err
 }
 
 func (irc *irefcache_t) getrefcnt(priv inum) int {
@@ -1633,11 +1678,46 @@ func (irc *irefcache_t) decrefcnt(priv inum, deleted bool) {
 	}
 }
 
+func print_locks(locks []*imemnode_t) {
+	for _, l := range locks {
+		fmt.Printf("%v ", l.priv)
+	}
+	fmt.Printf("\n")
+}
+
+func (irc *irefcache_t) lockall(imems []*imemnode_t) []*imemnode_t {
+	//fmt.Printf("lockall: ")
+	//print_locks(imems)
+
+	var locked []*imemnode_t
+	sort.Slice(imems, func(i, j int) bool { return imems[i].priv < imems[j].priv })
+	for _, imem := range imems {
+		dup := false
+		for _, l := range locked {
+			if imem.priv == l.priv {
+				dup = true
+			}
+		}
+		if !dup {
+			locked = append(locked, imem)
+			imem.ilock("lockall")
+		}
+	}
+	
+	//fmt.Printf("lockall: locked: ")
+	//print_locks(locked)
+	
+	return locked
+}
+
 func (idm *imemnode_t) refdown(s string) {
+	idm.ilock(s+"_refdown")
 	refcnt := irefcache.getrefcnt(idm.priv)
 	priv := idm.priv
 
-	fmt.Printf("refdown %v refcnt %v opencount %v %v\n", priv, refcnt, idm.opencount, s)
+	if fs_debug {
+		fmt.Printf("refdown %v refcnt %v opencount %v %v\n", priv, refcnt, idm.opencount, s)
+	}
 
 	deleted := false
 	if refcnt == 1 && idm.opencount == 0 {
@@ -1650,6 +1730,12 @@ func (idm *imemnode_t) refdown(s string) {
 	irefcache.decrefcnt(priv, deleted)
 }
 
+func (idm *imemnode_t) iunlock_refdown(s string) {
+	idm.iunlock(s + "/iunlock_refdown")
+	idm.refdown(s)
+}
+
+
 // opencount should be 0
 func (idm *imemnode_t) evict() {
 	fmt.Printf("evict %v\n", idm.priv)
@@ -1661,18 +1747,19 @@ func (idm *imemnode_t) evict() {
 
 func (idm *imemnode_t) ilock(s string) {
 	if idm._amlocked {
-		fmt.Printf("ilocked  warning %v\n", idm.priv)
+		fmt.Printf("ilocked: warning %v %v\n", idm.priv, s)
 	}
 	idm.Lock()
 	if idm.priv <= 0 {
 		panic("non-positive priv")
 	}
 	idm._amlocked = true
-	fmt.Printf("ilock acquired %v %s\n", idm.priv, s)
+	// fmt.Printf("ilock: acquired %v %s\n", idm.priv, s)
 }
 
 
 func (idm *imemnode_t) iunlock(s string) {
+	// fmt.Printf("iunlock: release %v %v\n", idm.priv, s)
 	if !idm._amlocked {
 		panic("iunlock")
 	}
@@ -1680,6 +1767,14 @@ func (idm *imemnode_t) iunlock(s string) {
 		panic("non-positive priv")
 	}
 	idm._amlocked = false
+	idm.Unlock()
+}
+
+func (idm *imemnode_t) iunlocked(s string) {
+	idm.Lock()
+	if idm._amlocked {
+		panic("iunlock: is locked " + s)
+	}
 	idm.Unlock()
 }
 
@@ -1753,8 +1848,9 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 	idm.pgcache.pgc_init(BSIZE, idm)
 
-	// XXX holding idm lock ... 
-	fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
+	if fs_debug {
+		fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
+	}
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
 
@@ -1765,7 +1861,6 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 
 
 func (idm *imemnode_t) _iupdate() {
-	fmt.Printf("_iupdate %v\n", idm.priv)
 	iblk := idm.idibread()
 	iblk.Unlock()
 	if idm.icache.flushto(iblk, idm.ioff) {
@@ -1888,7 +1983,7 @@ func (idm *imemnode_t) do_createdir(fn string) (inum, err_t) {
 }
 
 func _fullpath(priv inum) (string, err_t) {
-	c, err := irefcache.iref(priv, "fullpath")
+	c, err := irefcache.iref_locked(priv, "_fullpath")
 	if err != 0 {
 		return "", err
 	}
@@ -1898,7 +1993,6 @@ func _fullpath(priv inum) (string, err_t) {
 
 	// starting at the target file, walk up to the root prepending the name
 	// (which is stored in the parent's directory entry)
-	
 	last := c.priv
 	acc := ""
 	for c.priv != iroot {
@@ -1907,16 +2001,17 @@ func _fullpath(priv inum) (string, err_t) {
 			panic(".. must exist")
 		}
 		par, err := irefcache.iref(pari, "do_fullpath_par")
-		c.refdown("do_fullpath_c")
+		c.iunlock("do_fullpath_c")
 		if err != 0 {
 			return "", err
 		}
+		par.ilock("do_fullpath_par")
 		name, err := par._denamefor(last)
 		if err != 0 {
 			if err == -ENOENT {
 				panic("child must exist")
 			}
-			par.refdown("do_fullpath_par")
+			par.iunlock_refdown("do_fullpath_par")
 			return "", err
 		}
 		// POSIX: "no unnecessary slashes"
@@ -1928,7 +2023,7 @@ func _fullpath(priv inum) (string, err_t) {
 		last = par.priv
 		c = par
 	}
-	c.refdown("do_fullpath_c2")
+	c.iunlock_refdown("do_fullpath_c2")
 	acc = "/" + acc
 	return acc, 0
 }
@@ -2385,7 +2480,6 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
 		panic("bad lookup")
 	}
 	if de, ok := idm.icache.dentc.dents.lookup(fn); ok {
-		fmt.Printf("delookup %v %v\n", de, ok)
 		return de, 0
 	}
 	var zi icdent_t
@@ -2635,8 +2729,6 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 
 func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err_t) {
 	
-	fmt.Printf("icreate: %v %s\n", idm.priv, name)
-	
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")
 	}
@@ -2649,7 +2741,6 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 	// make sure file does not already exist
 	de, err := idm._delookup(name)
 	if err == 0 {
-		fmt.Printf("icreate: eexists %v\n", de.priv)
 		return de.priv, -EEXIST
 	}
 
@@ -2689,7 +2780,6 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 
 	newinum := inum(biencode(newbn, newioff))
 
-	fmt.Printf("icreate returns %v\n", newinum)
 	if newinum <= 0 {
 		panic("icreate")
 	}
@@ -3230,8 +3320,6 @@ func bfree(blkno int) {
 
 	fblock.Lock()
 	defer fblock.Unlock()
-
-	fmt.Printf("bfree blkno\n")
 
 	bit := blkno - usable_start
 	bitsperblk := BSIZE*8
