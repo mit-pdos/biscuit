@@ -181,6 +181,10 @@ func fs_link(old string, new string, cwd inum) err_t {
 	op_begin("fs_link")
 	defer op_end()
 
+	if fs_debug {
+		fmt.Printf("fs_link: %v %v %v\n", old, new, cwd)
+	}
+
 	orig, err := fs_namei_locked(old, cwd, "fs_link_org")
 	if err != 0 {
 		return err
@@ -223,6 +227,9 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 	op_begin("fs_unlink")
 	defer op_end()
 
+	if fs_debug {
+		fmt.Printf("fs_unlink: %v %v %v\n", paths, cwd, wantdir)
+	}
 
 	var child *imemnode_t
 	var par *imemnode_t
@@ -255,17 +262,20 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 	// references to them.
 	childi, err = par.ilookup(fn)
 	if err != 0 {
+		fmt.Printf("unlink failed child doesn't exist %v %v\n", childi, err)
 		return err
 	}
 
 	err = child.do_dirchk(wantdir)
 	if err != 0 {
+		fmt.Printf("unlink failed child dirchk %v %v\n", childi, err)
 		return err
 	}
 
 	// finally, remove directory
 	err = par.do_unlink(fn)
 	if err != 0 {
+		fmt.Printf("unlink failed unlink %v %v\n", childi, err)
 		return err
 	}
 	child._linkdown()
@@ -289,6 +299,10 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 
 	op_begin("fs_rename")
 	defer op_end()
+
+	if fs_debug {
+		fmt.Printf("fs_rename: %v %v %v\n", oldp, newp, cwd)
+	}
 
 	// one rename at the time
 	_renamelock.Lock()
@@ -544,6 +558,10 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 	op_begin("_write")
 	defer op_end()
 
+	if fs_debug {
+		fmt.Printf("_write: %v %v\n", fo.priv, toff)
+	}
+
 	useoffset := toff != -1
 	offset := fo.offset
 	append := fo.append
@@ -579,6 +597,10 @@ func (fo *fsfops_t) fullpath() (string, err_t) {
 func (fo *fsfops_t) truncate(newlen uint) err_t {
 	op_begin("truncate")
 	defer op_end()
+
+	if fs_debug {
+		fmt.Printf("truncate: %v %v\n", fo.priv, newlen)
+	}
 
 	idm, err := irefcache.iref_locked(fo.priv, "truncate")
 	if err != 0 {
@@ -1000,6 +1022,10 @@ func fs_mkdir(paths string, mode int, cwd inum) err_t {
 	op_begin("fs_mkdir")
 	defer op_end()
 
+	if fs_debug {
+		fmt.Printf("mkdir: %v %v\n", paths, cwd)
+	}
+
 	dirs, fn := sdirname(paths)
 	if err, ok := crname(fn, -EINVAL); !ok {
 		return err
@@ -1043,6 +1069,10 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
 	nodir := false
+
+	if fs_debug {
+		fmt.Printf("fs_open: %v %v\n", paths, cwd)
+	}
 
 	// open with O_TRUNC is not read-only
 	if trunc || creat {
@@ -1112,7 +1142,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 		}
 		// idm is locked
 	}
-	defer idm.iunlock_refdown("_fs_open_idem")
+	defer idm.iunlock_refdown("_fs_open_idm")
 
 	itype := idm.icache.itype
 
@@ -1191,6 +1221,10 @@ func fs_close(priv inum) err_t {
 	defer op_end()
 	op_begin("fs_close")
 
+	if fs_debug {
+		fmt.Printf("fs_close: %v\n", priv)
+	}
+
 	idm, err := irefcache.iref_locked(priv, "fs_close")
 	if err != 0 {
 		return err
@@ -1253,7 +1287,7 @@ func fs_namei(paths string, cwd inum) (*imemnode_t, err_t) {
 			}
 			idm = next
 		} else {
-			idm.iunlock_refdown("fs_namei_idm_next")
+			idm.iunlock("fs_namei_idm_next")
 		}
 	}
 	return idm, 0
@@ -1600,15 +1634,15 @@ var irefcache	= make_irefcache()
 func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	irc.Lock()
 	b, i :=  bidecode(priv)
-	if fs_debug {
-		fmt.Printf("iref %v (%v/%v) %s\n", priv, b, i, s)
-	}
 	if priv <= 0 {
 		panic("non-positive priv")
 	}
 	iref, ok := irc.irefs[priv]
 	if ok {
 		iref.refcnt++
+		if fs_debug {
+			fmt.Printf("iref hit %v (%v/%v) cnt %v %s\n", priv, b, i, iref.refcnt, s)
+		}
 		irc.Unlock()
 		return iref.imem, 0
 	}
@@ -1629,6 +1663,10 @@ func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	iref.imem = imem
 	irc.irefs[priv] = iref
 	
+	if fs_debug {
+		fmt.Printf("iref miss %v (%v/%v) cnt %v %s\n", priv, b, i, iref.refcnt, s)
+	}
+
 	imem.ilock("iref")
 	irc.Unlock()
 
@@ -1662,7 +1700,7 @@ func (irc *irefcache_t) getrefcnt(priv inum) int {
 	return ref.refcnt
 }
 
-func (irc *irefcache_t) decrefcnt(priv inum, deleted bool) {
+func (irc *irefcache_t) decrefcnt(priv inum, removable bool) {
 	defer irefcache.Unlock()
 	irefcache.Lock()
 	ref, ok := irefcache.irefs[priv]
@@ -1670,11 +1708,13 @@ func (irc *irefcache_t) decrefcnt(priv inum, deleted bool) {
 		panic("decrefcnt of non-existant inode")
 	}
 	ref.refcnt--
-	if ref.refcnt == 0 && deleted {
+	if ref.refcnt == 0 && removable {
+		// fmt.Printf("decrefcnt: delete inode %v %v from icache\n", priv, ref.imem)
+		if ref.imem.opencount > 0 {
+			panic("decrefcnt")
+		}
+		ref.imem.priv = 0
 		delete(irefcache.irefs, priv)
-	}
-	if deleted && ref.refcnt > 0 {
-		panic("decrefcnt")   // could happen but then reload the inode again?
 	}
 }
 
@@ -1719,15 +1759,19 @@ func (idm *imemnode_t) refdown(s string) {
 		fmt.Printf("refdown %v refcnt %v opencount %v %v\n", priv, refcnt, idm.opencount, s)
 	}
 
-	deleted := false
+	if refcnt < 1 {
+		panic(s + " refdown\n")
+	}
+
+	removable := false
 	if refcnt == 1 && idm.opencount == 0 {
+		removable = true
 		if idm.icache.links == 0 {
 			idm.evict()
-			deleted = true
 		}
 	}
 	idm.iunlock("refdown")
-	irefcache.decrefcnt(priv, deleted)
+	irefcache.decrefcnt(priv, removable)
 }
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
@@ -1843,8 +1887,6 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 	idm.priv = priv
 	idm.blkno = blkno
 	idm.ioff = ioff
-
-	// idm.l.tm_init()
 
 	idm.pgcache.pgc_init(BSIZE, idm)
 
@@ -2118,6 +2160,7 @@ func (ic *icache_t) mbread(blockn int) *bdev_block_t {
 // XXX ifree writes it out, but evict should too, if we had evict.
 func (ic *icache_t) mbempty(blockn int) {
 	if ok := bdev_cache_present(blockn); ok {
+		fmt.Printf("mbemtpy: blockno %v\n", blockn)
 		panic("block present")
 	}
 	b := ic._mbensure(blockn, false)
@@ -2202,7 +2245,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 				// allocated
 				if idx == INDADDR {
 					fmt.Printf("indirect indx\n")
-					idm.icache.mbempty(blkn)
+					// idm.icache.mbempty(blkn)
 				}
 			}
 		}
@@ -2239,7 +2282,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		// get first indirect block
 		indno, isnew := ensureb(indno)
 		if isnew {
-			idm.icache.mbempty(indno)
+			// idm.icache.mbempty(indno)
 			// new indirect block will be written to log below
 			idm.icache.indir = indno
 		}
@@ -2451,8 +2494,7 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 // calls f on each directory entry (including empty ones) until f returns true
 // or it has been called on all directory entries. _descan returns true if f
 // returned true.
-func (idm *imemnode_t) _descan(
-   f func(fn string, de icdent_t)bool) (bool, err_t) {
+func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, err_t) {
 	for i := 0; i < idm.icache.size; i+= BSIZE {
 		pg, err := idm.pgcache.pgfor(i, i+BSIZE, true)
 		if err != 0 {
@@ -2573,6 +2615,8 @@ func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
 func (idm *imemnode_t) _deempty() (bool, err_t) {
+	fmt.Printf("_deempty %v: %v\n", idm.priv, idm.icache.dentc.haveall)
+	
 	if idm.icache.dentc.haveall {
 		dentc := &idm.icache.dentc
 		hasfiles := dentc.dents.iter(func(dn string, de icdent_t) bool {
@@ -2584,8 +2628,10 @@ func (idm *imemnode_t) _deempty() (bool, err_t) {
 		return !hasfiles, 0
 	}
 	notempty, err := idm._descan(func(fn string, de icdent_t) bool {
+		fmt.Printf("eempty: %v %v\n", fn, de)
 		return fn != "" && fn != "." && fn != ".."
 	})
+	fmt.Printf("noteempty: %v\n", notempty)
 	if err != 0 {
 		return false, err
 	}
@@ -3300,15 +3346,31 @@ func balloc1() int {
 	return boffset + blkn*bitsperblk + oct*8 + int(bit)
 }
 
-// XXX should we zero this ret?
 func balloc() int {
 	fblock.Lock()
 	ret := balloc1()
 	fblock.Unlock()
+
+	// zero the block in the buffer cache
+	blk := bdev_get_zero(ret, "balloc", true)
+	
+	if fs_debug {
+		fmt.Printf("balloc: %v\n", ret)
+	}
+
+	var zdata [BSIZE]uint8
+	copy(blk.data[:], zdata[:])
+	blk.Unlock()
+	blk.bdev_refdown("balloc")
+	
 	return ret
 }
 
 func bfree(blkno int) {
+
+	if fs_debug {
+		fmt.Printf("bfree: %v\n", blkno)
+	}
 	fst := free_start
 	flen := free_len
 	if fst == 0 || flen == 0 {
@@ -3369,13 +3431,18 @@ func ialloc() (int, int) {
 
 	ifreeblk = balloc1()
 	ifreeoff = 0
+
 	zblk := bdev_get_zero(ifreeblk, "ialloc", true)
+	
+	// block may have been int the cache and is now reused, zero it in the cache
 	var zdata [BSIZE]uint8
 	copy(zblk.data[:], zdata[:])
 	zblk.Unlock()
-	zblk.log_write()
+	
+	// zblk.log_write()
 	zblk.bdev_refdown("ialloc")
-	if zblk.bdev_refcnt() < 2 {
+	
+	if zblk.bdev_refcnt() < 1 {
 		fmt.Printf("ref_cnt = %v\n", zblk.bdev_refcnt())
 		panic("xxxx")
 	}

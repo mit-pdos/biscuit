@@ -130,7 +130,7 @@ func (log *log_t) commit() {
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
 	headblk.bdev_write()
-	headblk.bdev_refdown("commit")
+	headblk.bdev_refdown("commit done")
 	
 	bdev_flush()  // flush cleared commit
 	log.lhead = 0
