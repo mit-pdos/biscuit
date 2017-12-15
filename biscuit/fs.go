@@ -12,7 +12,7 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
-const fs_debug    = false
+const fs_debug    = true
 
 var superb_start	int
 var superb		superblock_t
@@ -616,6 +616,9 @@ func (fo *fsfops_t) pwrite(src userio_i, offset int) (int, err_t) {
 }
 
 func (fo *fsfops_t) fstat(st *stat_t) err_t {
+	if fs_debug {
+		fmt.Printf("fstat: %v %v\n", fo.priv, st)
+	}
 	idm, err := irefcache.iref_locked(fo.priv, "fstat")
 	if err != 0 {
 		return err
@@ -1235,7 +1238,13 @@ func fs_close(priv inum) err_t {
 }
 
 func fs_stat(path string, st *stat_t, cwd inum) err_t {
+	if fs_debug {
+		fmt.Printf("fstat: %v %v\n", path, cwd)
+	}
 	idm, err := fs_namei_locked(path, cwd, "fs_stat")
+	if err != 0 {
+		return err
+	}
 	err = idm.do_stat(st)
 	idm.iunlock_refdown("fs_stat")
 	return err
@@ -1668,16 +1677,17 @@ func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	}
 
 	imem.ilock("iref")
+	defer imem.iunlock("iref")
 	irc.Unlock()
 
 	// holding inode lock while reading it from disk
 	err := imem.idm_init(priv)
 	if err != 0 {
+		delete(irefcache.irefs, priv)
 		return nil, err
 	}
 	pglru.mkhead(imem)
-	
-	imem.iunlock("iref")
+
 	return imem, 0
 }
 
@@ -2615,8 +2625,6 @@ func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
 func (idm *imemnode_t) _deempty() (bool, err_t) {
-	fmt.Printf("_deempty %v: %v\n", idm.priv, idm.icache.dentc.haveall)
-	
 	if idm.icache.dentc.haveall {
 		dentc := &idm.icache.dentc
 		hasfiles := dentc.dents.iter(func(dn string, de icdent_t) bool {
@@ -2628,10 +2636,8 @@ func (idm *imemnode_t) _deempty() (bool, err_t) {
 		return !hasfiles, 0
 	}
 	notempty, err := idm._descan(func(fn string, de icdent_t) bool {
-		fmt.Printf("eempty: %v %v\n", fn, de)
 		return fn != "" && fn != "." && fn != ".."
 	})
-	fmt.Printf("noteempty: %v\n", notempty)
 	if err != 0 {
 		return false, err
 	}
@@ -3438,14 +3444,8 @@ func ialloc() (int, int) {
 	var zdata [BSIZE]uint8
 	copy(zblk.data[:], zdata[:])
 	zblk.Unlock()
-	
-	// zblk.log_write()
 	zblk.bdev_refdown("ialloc")
 	
-	if zblk.bdev_refcnt() < 1 {
-		fmt.Printf("ref_cnt = %v\n", zblk.bdev_refcnt())
-		panic("xxxx")
-	}
 	reti := ifreeoff
 	ifreeoff++
 	return ifreeblk, reti
