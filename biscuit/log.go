@@ -73,6 +73,7 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 	// accepting transactions until commit has completed, which will clean
 	// the log.
 	log.log[lhead] = log_entry_t{buf.block, buf}
+	buf.bdev_pin()
 	log.lhead++
 }
 

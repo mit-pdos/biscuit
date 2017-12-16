@@ -764,6 +764,8 @@ func (p *ahci_port_t) port_intr() {
 			//}
 			if p.inflight[s].cmd == BDEV_WRITE {
 				// page has been written, don't need a reference to it
+				// and can be removed from cache.
+				p.inflight[s].blk.bdev_unpin()
 				p.inflight[s].blk.bdev_refdown("interrupt")
 			}
 			if p.inflight[s].sync {

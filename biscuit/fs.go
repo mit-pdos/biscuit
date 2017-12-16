@@ -12,7 +12,7 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
-const fs_debug    = true
+const fs_debug    = false
 
 var superb_start	int
 var superb		superblock_t
@@ -129,7 +129,6 @@ func fs_init() *fd_t {
 	if loglen <= 0 || loglen > 63 {
 		panic("bad log len")
 	}
-	// b.bdev_refdown()
 	
 	fslog.init(logstart, loglen)
 	fs_recover()
@@ -145,7 +144,7 @@ func fs_recover() {
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
-		b.bdev_refdown("fs_recover0")
+		bdev_relse(b, "fs_recover0")
 		return
 	}
 	fmt.Printf("starting FS recovery...")
@@ -156,14 +155,14 @@ func fs_recover() {
 		fb := bdev_get_fill(bdest, "bdest", false)
 		copy(fb.data[:], lb.data[:])
 		fb.bdev_write()
-		lb.bdev_refdown("fs_recover1")
-		fb.bdev_refdown("fs_recover2")
+		bdev_relse(lb, "fs_recover1")
+		bdev_relse(fb, "fs_recover2")
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
 	b.bdev_write()
-	b.bdev_refdown("fs_recover3")
+	bdev_relse(b, "fs_recover3")
 	fmt.Printf("restored %v blocks\n", rlen)
 }
 
@@ -262,20 +261,17 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 	// references to them.
 	childi, err = par.ilookup(fn)
 	if err != 0 {
-		fmt.Printf("unlink failed child doesn't exist %v %v\n", childi, err)
 		return err
 	}
 
 	err = child.do_dirchk(wantdir)
 	if err != 0 {
-		fmt.Printf("unlink failed child dirchk %v %v\n", childi, err)
 		return err
 	}
 
 	// finally, remove directory
 	err = par.do_unlink(fn)
 	if err != 0 {
-		fmt.Printf("unlink failed unlink %v %v\n", childi, err)
 		return err
 	}
 	child._linkdown()
@@ -1251,6 +1247,7 @@ func fs_stat(path string, st *stat_t, cwd inum) err_t {
 }
 
 func fs_sync() err_t {
+	print_live_inodes()
 	print_live_blocks()
 	if memtime {
 		return 0
@@ -1457,46 +1454,18 @@ func (pc *pgcache_t) flush() {
 	})
 }
 
-// decrements the refcounts of all pages in the page cache. returns the number
-// of pages that the pgcache contained.
-func (pc *pgcache_t) release() int {
-	pgs := 0
-	pc.pgs.iter(func(pgi *pginfo_t) {
-		pgi.buf.bdev_refdown("release")
-		pgs++
-	})
-	pc.pgs.clear()
-	if pc.pglim != 0 {
-		syslimit.mfspgs.given(uint(pc.pglim))
-		pc.pglim = 0
-	}
-	return pgs
-}
-
-// frees all pgcache pages iff no pages are also mapped. it would be better to
-// fail the release only when at least one page is mapped shared, instead.
-// returns the number of pages whose ref count was decreased (and thus should
-// be freed). the pages cannot be dirty because the eviction code locks each
-// imemnode and imemnodes must be flushed before they are unlocked.
+// Returning buffer to bdev cache
 func (pc *pgcache_t) evict() int {
-	fmt.Printf("evict\n")
-	failed := false
 	pc.pgs.iter(func(pgi *pginfo_t) {
-		if pgi.buf.bdev_refcnt() > 2 {   // one for the cache and one for VM?
-			failed = true
-		}
+		bdev_relse(pgi.buf, "evict")
 		for _, d := range pgi.dirtyblocks {
 			if d {
 				panic("cannot be dirty")
 			}
 		}
 	})
-	var pgs int
-	if !failed {
-		fmt.Printf("evict: release\n")
-		pgs = pc.release()
-	}
-	return pgs
+	pc.pgs.clear()
+	return 0
 }
 
 // a mutex that allows attempting to acuire the mutex without blocking. useful
@@ -1600,6 +1569,7 @@ func (pl *pglru_t) remove(im *imemnode_t) {
 var pglru pglru_t
 
 
+// In-memory representation of an inode.
 type imemnode_t struct {
 	sync.Mutex
 	priv		inum
@@ -1626,6 +1596,9 @@ type iref_t struct {
 	refcnt          int
 }
 
+
+// Cache of in-mmory inodes. Main invariant: an inode is in memory // once so
+// that threads see each other updates.
 type irefcache_t struct {
 	sync.Mutex
 	irefs          map[inum]*iref_t
@@ -1639,6 +1612,12 @@ func make_irefcache() *irefcache_t {
 }
 
 var irefcache	= make_irefcache()
+
+func print_live_inodes() {
+	for _, v := range irefcache.irefs {
+		fmt.Printf("inode %v\n", v.imem.priv)
+	}
+}
 
 func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	irc.Lock()
@@ -1683,10 +1662,15 @@ func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
 	// holding inode lock while reading it from disk
 	err := imem.idm_init(priv)
 	if err != 0 {
+		panic("idm_init")
 		delete(irefcache.irefs, priv)
 		return nil, err
 	}
 	pglru.mkhead(imem)
+
+	if fs_debug {
+		fmt.Printf("iref loaded %v (%v/%v) cnt %v %s %v\n", priv, b, i, iref.refcnt, s, imem)
+	}
 
 	return imem, 0
 }
@@ -1719,9 +1703,10 @@ func (irc *irefcache_t) decrefcnt(priv inum, removable bool) {
 	}
 	ref.refcnt--
 	if ref.refcnt == 0 && removable {
-		// fmt.Printf("decrefcnt: delete inode %v %v from icache\n", priv, ref.imem)
-		if ref.imem.opencount > 0 {
-			panic("decrefcnt")
+		b, i :=  bidecode(priv)
+		if fs_debug {
+			fmt.Printf("decrefcnt: delete inode %v (%v,%v) %v %v\n", priv, b, i,
+				ref.imem.opencount, ref.imem)
 		}
 		ref.imem.priv = 0
 		delete(irefcache.irefs, priv)
@@ -1766,7 +1751,9 @@ func (idm *imemnode_t) refdown(s string) {
 	priv := idm.priv
 
 	if fs_debug {
-		fmt.Printf("refdown %v refcnt %v opencount %v %v\n", priv, refcnt, idm.opencount, s)
+		b, i :=  bidecode(priv)
+		fmt.Printf("refdown %v (%v,%v) refcnt %v opencount %v %v\n", priv, b, i, refcnt,
+			idm.opencount, s)
 	}
 
 	if refcnt < 1 {
@@ -1776,12 +1763,13 @@ func (idm *imemnode_t) refdown(s string) {
 	removable := false
 	if refcnt == 1 && idm.opencount == 0 {
 		removable = true
+		idm.evict()
 		if idm.icache.links == 0 {
-			idm.evict()
+			idm.free()
 		}
 	}
-	idm.iunlock("refdown")
 	irefcache.decrefcnt(priv, removable)
+	idm.iunlock("refdown")
 }
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
@@ -1789,20 +1777,28 @@ func (idm *imemnode_t) iunlock_refdown(s string) {
 	idm.refdown(s)
 }
 
-
-// opencount should be 0
+// refcount should be 0
 func (idm *imemnode_t) evict() {
-	fmt.Printf("evict %v\n", idm.priv)
-	// XXX hold idm lock across free
-	idm.ifree()
 	idm._derelease()
+	idm.pgcache.evict()
+	b, i :=  bidecode(idm.priv)
+	if fs_debug {
+		fmt.Printf("evict: %v (%v,%v)\n", idm.priv, b, i)
+	}
 	pglru.remove(idm)
 }
 
+// opencount should be 0
+func (idm *imemnode_t) free() {
+	// fmt.Printf("free %v\n", idm.priv)
+	idm.ifree()
+	idm._derelease()
+}
+
 func (idm *imemnode_t) ilock(s string) {
-	if idm._amlocked {
-		fmt.Printf("ilocked: warning %v %v\n", idm.priv, s)
-	}
+	// if idm._amlocked {
+	//	fmt.Printf("ilocked: warning %v %v\n", idm.priv, s)
+	// }
 	idm.Lock()
 	if idm.priv <= 0 {
 		panic("non-positive priv")
@@ -1816,9 +1812,6 @@ func (idm *imemnode_t) iunlock(s string) {
 	// fmt.Printf("iunlock: release %v %v\n", idm.priv, s)
 	if !idm._amlocked {
 		panic("iunlock")
-	}
-	if idm.priv <= 0 && s != "downref" {
-		panic("non-positive priv")
 	}
 	idm._amlocked = false
 	idm.Unlock()
@@ -1889,8 +1882,6 @@ func (idm *imemnode_t) itrylock() bool {
 	return true
 }
 
-
-
 // creates a new idaemon struct and fills its inode
 func (idm *imemnode_t) idm_init(priv inum) err_t {
 	blkno, ioff := bidecode(priv)
@@ -1905,9 +1896,8 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 	}
 	blk := idm.idibread()
 	idm.icache.fill(blk, ioff)
-
-	blk.bdev_refdown("idm_init")
 	blk.Unlock()
+	bdev_relse(blk, "idm_init")
 	return 0
 }
 
@@ -1918,7 +1908,7 @@ func (idm *imemnode_t) _iupdate() {
 	if idm.icache.flushto(iblk, idm.ioff) {
 		iblk.log_write()
 	}
-	iblk.bdev_refdown("_iupdate")
+	bdev_relse(iblk, "_iupdate")
 }
 
 func (idm *imemnode_t) do_trunc(truncto uint) err_t {
@@ -2149,32 +2139,11 @@ type icdent_t struct {
 	priv	inum
 }
 
-// metadata block interface; only one idaemon touches these blocks at a time,
+// metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
-
-func (ic *icache_t) _mbensure(blockn int, fill bool) *bdev_block_t {
-	var mb *bdev_block_t
-	if fill {
-		mb = bdev_get_fill(blockn, "_mbensure", false)
-	} else {
-		mb = bdev_get_zero(blockn, "_mbensure", false)
-	}
-	return mb
-}
-
 func (ic *icache_t) mbread(blockn int) *bdev_block_t {
-	return ic._mbensure(blockn, true)
-}
-
-// ensure the block is in the bdev cache and zero-ed
-// XXX ifree writes it out, but evict should too, if we had evict.
-func (ic *icache_t) mbempty(blockn int) {
-	if ok := bdev_cache_present(blockn); ok {
-		fmt.Printf("mbemtpy: blockno %v\n", blockn)
-		panic("block present")
-	}
-	b := ic._mbensure(blockn, false)
-	b.bdev_refdown("mbempty")
+	mb := bdev_get_fill(blockn, "_mbensure", false)
+	return mb
 }
 
 func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
@@ -2255,7 +2224,6 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 				// allocated
 				if idx == INDADDR {
 					fmt.Printf("indirect indx\n")
-					// idm.icache.mbempty(blkn)
 				}
 			}
 		}
@@ -2292,7 +2260,6 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		// get first indirect block
 		indno, isnew := ensureb(indno)
 		if isnew {
-			// idm.icache.mbempty(indno)
 			// new indirect block will be written to log below
 			idm.icache.indir = indno
 		}
@@ -2306,7 +2273,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			ensureind(indblk, slotpb)
 
 			indno = readn(indblk.data[:], 8, nextindb)
-			indblk.bdev_refdown("offsetblk1")
+			bdev_relse(indblk, "offsetblk1")
 			indblk = idm.icache.mbread(indno)
 		}
 		// finally get data block from indirect block
@@ -2320,7 +2287,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			writen(s, 8, noff, blkn)
 			indblk.log_write()
 		}
-		indblk.bdev_refdown("offsetblk2")
+		bdev_relse(indblk, "offsetblk2")
 	} else {
 		blkn = idm.icache.addrs[whichblk]
 	}
@@ -2776,7 +2743,7 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 	ni := &inode_t{ib, ioff}
 	_iallocundo(bn, ni, ib)
 	ib.Unlock()
-	ib.bdev_refdown("create_undo")
+	bdev_relse(ib, "create_undo")
 }
 
 func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err_t) {
@@ -2828,7 +2795,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 		_iallocundo(newbn, newinode, newiblk)
 	}
 	newiblk.log_write()
-	newiblk.bdev_refdown("icreate")
+	bdev_relse(newiblk, "icreate")
 
 	newinum := inum(biencode(newbn, newioff))
 
@@ -2944,7 +2911,7 @@ func (idm *imemnode_t) ifree() {
 		}
 		nextoff := INDADDR*8
 		indno = readn(blks, 8, nextoff)
-		blk.bdev_refdown("ifree1")
+		bdev_relse(blk, "ifree1")
 	}
 
 	iblk := idm.idibread()
@@ -2960,14 +2927,14 @@ func (idm *imemnode_t) ifree() {
 		iblk.Unlock()
 		iblk.log_write()
 	}
-	iblk.bdev_refdown("ifree2")
+	bdev_relse(iblk, "ifree2")
 
 	// could batch free
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
 
-	idm.pgcache.release()
+	// idm.pgcache.release()
 }
 
 // used for {,f}stat
@@ -3317,7 +3284,7 @@ func balloc1() int {
 		i := (_lastblkno + b) % flen
 		if blk != nil {
 			blk.Unlock()
-			blk.bdev_refdown("balloc1")
+			bdev_relse(blk, "balloc1")
 		}
 		blk = fbread(fst + i)
 		start := 0
@@ -3345,7 +3312,7 @@ func balloc1() int {
 	blk.data[oct] |= 1 << bit
 	blk.Unlock()
 	blk.log_write()
-	blk.bdev_refdown("balloc1")
+	bdev_relse(blk, "balloc1")
 
 	boffset := usable_start
 	bitsperblk := BSIZE*8
@@ -3367,7 +3334,7 @@ func balloc() int {
 	var zdata [BSIZE]uint8
 	copy(blk.data[:], zdata[:])
 	blk.Unlock()
-	blk.bdev_refdown("balloc")
+	bdev_relse(blk, "balloc")
 	
 	return ret
 }
@@ -3402,7 +3369,7 @@ func bfree(blkno int) {
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
 	fblk.log_write()
-	fblk.bdev_refdown("bfree")
+	bdev_relse(fblk, "bfree")
 
 	// force allocation of free inode block
 	if ifreeblk == blkno {
@@ -3438,13 +3405,17 @@ func ialloc() (int, int) {
 	ifreeblk = balloc1()
 	ifreeoff = 0
 
+	if fs_debug {
+		fmt.Printf("ialloc %d\n", ifreeblk)
+	}
+
 	zblk := bdev_get_zero(ifreeblk, "ialloc", true)
 	
 	// block may have been int the cache and is now reused, zero it in the cache
 	var zdata [BSIZE]uint8
 	copy(zblk.data[:], zdata[:])
 	zblk.Unlock()
-	zblk.bdev_refdown("ialloc")
+	bdev_relse(zblk, "ialloc")
 	
 	reti := ifreeoff
 	ifreeoff++

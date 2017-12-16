@@ -33,6 +33,7 @@ type bdev_block_t struct {
 	pa      pa_t
 	data	*bytepg_t
 	s       string
+	pinned  bool
 }
 
 func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
@@ -51,7 +52,7 @@ func (blk *bdev_block_t) new_page() {
 	}
 	blk.pa = pa
 	blk.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
-	blk.bdev_refup("new_page")
+	blk._bdev_refup("new_page")
 }
 
 func bdev_block_new(block int, s string) *bdev_block_t {
@@ -61,22 +62,53 @@ func bdev_block_new(block int, s string) *bdev_block_t {
 }
 
 func (blk *bdev_block_t) bdev_refcnt() int {
+	blk.Lock()
 	ref, _ := _refaddr(blk.pa)
+	blk.Unlock()
 	return int(*ref)
 }
 
-func (blk *bdev_block_t) bdev_refup(s string) {
-	refup(blk.pa)
-	// fmt.Printf("bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
+func (blk *bdev_block_t) bdev_removable() bool {
+	blk.Lock()
+	ref, _ := _refaddr(blk.pa)
+	r := *ref <= 1 && !blk.pinned
+	blk.Unlock()
+	return r
 }
 
-func (blk *bdev_block_t) bdev_refdown(s string) {
+func (blk *bdev_block_t) bdev_pin() {
+	blk.Lock()
+	blk.pinned = true
+	blk.Unlock()
+}
+
+func (blk *bdev_block_t) bdev_unpin() {
+	blk.Lock()
+	blk.pinned = false
+	blk.Unlock()
+}
+
+// caller holds lock
+func (blk *bdev_block_t) _bdev_refup(s string) {
+	refup(blk.pa)
+	// fmt.Printf("_bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
+}
+
+// caller holds lock
+func (blk *bdev_block_t) bdev_refup(s string) {
+	blk.Lock()
+	blk._bdev_refup(s)
+	blk.Unlock()
+}
+
+func (blk *bdev_block_t) bdev_refdown(s string) int {
 	// fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
 	if blk.bdev_refcnt() == 0 {
 		fmt.Printf("bdev_refdown %s: ref is 0 block %v %v\n", s, blk.block, blk.s)
 		panic("ouch")
 	}
 	refdown(blk.pa)
+	return blk.bdev_refcnt()
 }
 
 // increment ref to keep the page around until write completes. interrupt routine
@@ -88,7 +120,7 @@ func (b *bdev_block_t) bdev_write() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
-	b.bdev_refup("bdev_write")
+	b._bdev_refup("bdev_write")
 	req := bdev_req_new(b, BDEV_WRITE, true)
 	if ahci_start(req) {
 		<- req.ackCh
@@ -104,7 +136,7 @@ func (b *bdev_block_t) bdev_write_async() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write_async\n")
 	}
-	b.bdev_refup("bdev_write_async")
+	b._bdev_refup("bdev_write_async")
 	ider := bdev_req_new(b, BDEV_WRITE, false)
 	ahci_start(ider)
 }
@@ -172,10 +204,8 @@ func bdev_init() {
 	bdev_test()
 }
 
-func bdev_cache_present(blkn int) bool {
-	bdev_cache.Lock()
+func _bdev_cache_present(blkn int) bool {
 	_, ok := bdev_cache.blks[blkn]
-	bdev_cache.Unlock()
 	return ok
 }
 
@@ -208,13 +238,15 @@ func bdev_get_empty(blkn int, s string) (*bdev_block_t, bool) {
 func bdev_get_fill(blkn int, s string, lock bool) *bdev_block_t {
 	b, created := bdev_get_empty(blkn, s)
 
-	// fmt.Printf("bdev_get_fill: %v\n", blkn)
+	if bdev_debug {
+		fmt.Printf("bdev_get_fill: %v %v %v\n", blkn, s, created)
+	}
 
 	if created {
 		b.new_page()
 		b.bdev_read() // fill in new bdev_cache entry
 	}
-	b.bdev_refup("bdev_get_fill2")
+	b._bdev_refup("bdev_get_fill2")
 	if !lock {
 		b.Unlock()
 	}
@@ -225,11 +257,13 @@ func bdev_get_fill(blkn int, s string, lock bool) *bdev_block_t {
 // bdev_refdown when done with buf
 func bdev_get_zero(blkn int, s string, lock bool) *bdev_block_t {
 	b, created := bdev_get_empty(blkn, s)
-	// fmt.Printf("bdev_get_zero: %v\n", blkn)
+	if bdev_debug {
+		fmt.Printf("bdev_get_zero: %v %v %v\n", blkn, s, created)
+	}
 	if created {
 		b.new_page()   // zero
 	} 
-	b.bdev_refup("bdev_get_zero")
+	b._bdev_refup("bdev_get_zero")
 	if !lock {
 		b.Unlock()
 	}
@@ -240,12 +274,31 @@ func bdev_get_zero(blkn int, s string, lock bool) *bdev_block_t {
 // bdev_refdown when done with buf
 func bdev_get_nofill(blkn int, s string) *bdev_block_t {
 	b, created := bdev_get_empty(blkn, s)
-	// fmt.Printf("bdev_get_zero: %v\n", blkn)
+	if bdev_debug {
+		fmt.Printf("bdev_get_zero: %v %v %v\n", blkn, s, created)
+	}
 	if created {
 		b.new_page()   // XXX a non-zero page would be fine
 	}
-	b.bdev_refup("bdev_get_nofill")
+	b._bdev_refup("bdev_get_nofill")
 	return b
+}
+
+func bdev_relse(b *bdev_block_t, s string) {
+	// fmt.Printf("bdev_relse: %v %v\n", b.block, s)
+	bdev_cache.Lock()	
+	if !_bdev_cache_present(b.block) {
+		fmt.Printf("bdev_relse: %v %v\n", b.block, s)
+		panic("bdev_relse\n")
+	}
+	ok := b.bdev_removable()
+	if bdev_debug {
+		fmt.Printf("bdev_relse: free entry %v %v\n", b.block, ok)
+	}
+	if ok {
+		delete(bdev_cache.blks, b.block)
+	}
+	bdev_cache.Unlock()
 }
 
 func print_live_blocks() {
