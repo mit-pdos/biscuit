@@ -9,6 +9,116 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
+// inode format:
+// bytes, meaning
+// 0-7,    inode type
+// 8-15,   link count
+// 16-23,  size in bytes
+// 24-31,  major
+// 32-39,  minor
+// 40-47,  indirect block
+// 48-80,  block addresses
+
+// ...the above comment may be out of date
+type inode_t struct {
+	iblk	*bdev_block_t
+	ioff	int
+}
+
+// inode file types
+const(
+	I_FIRST = 0
+	I_INVALID = I_FIRST
+	I_FILE  = 1
+	I_DIR   = 2
+	I_DEV   = 3
+	I_VALID = I_DEV
+	// ready to be reclaimed
+	I_DEAD  = 4
+	I_LAST = I_DEAD
+
+	// direct block addresses
+	NIADDRS = 10
+	// number of words in an inode
+	NIWORDS = 6 + NIADDRS
+)
+
+func ifield(iidx int, fieldn int) int {
+	return iidx*NIWORDS + fieldn
+}
+
+// iidx is the inode index; necessary since there are four inodes in one block
+func (ind *inode_t) itype() int {
+	it := fieldr(ind.iblk.data, ifield(ind.ioff, 0))
+	if it < I_FIRST || it > I_LAST {
+		panic(fmt.Sprintf("weird inode type %d", it))
+	}
+	return it
+}
+
+func (ind *inode_t) linkcount() int {
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 1))
+}
+
+func (ind *inode_t) size() int {
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 2))
+}
+
+func (ind *inode_t) major() int {
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 3))
+}
+
+func (ind *inode_t) minor() int {
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 4))
+}
+
+func (ind *inode_t) indirect() int {
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 5))
+}
+
+func (ind *inode_t) addr(i int) int {
+	if i < 0 || i > NIADDRS {
+		panic("bad inode block index")
+	}
+	addroff := 6
+	return fieldr(ind.iblk.data, ifield(ind.ioff, addroff + i))
+}
+
+func (ind *inode_t) w_itype(n int) {
+	if n < I_FIRST || n > I_LAST {
+		panic("weird inode type")
+	}
+	fieldw(ind.iblk.data, ifield(ind.ioff, 0), n)
+}
+
+func (ind *inode_t) w_linkcount(n int) {
+	fieldw(ind.iblk.data, ifield(ind.ioff, 1), n)
+}
+
+func (ind *inode_t) w_size(n int) {
+	fieldw(ind.iblk.data, ifield(ind.ioff, 2), n)
+}
+
+func (ind *inode_t) w_major(n int) {
+	fieldw(ind.iblk.data, ifield(ind.ioff, 3), n)
+}
+
+func (ind *inode_t) w_minor(n int) {
+	fieldw(ind.iblk.data, ifield(ind.ioff, 4), n)
+}
+
+// blk is the block number and iidx in the index of the inode on block blk.
+func (ind *inode_t) w_indirect(blk int) {
+	fieldw(ind.iblk.data, ifield(ind.ioff, 5), blk)
+}
+
+func (ind *inode_t) w_addr(i int, blk int) {
+	if i < 0 || i > NIADDRS {
+		panic("bad inode block index")
+	}
+	addroff := 6
+	fieldw(ind.iblk.data, ifield(ind.ioff, addroff + i), blk)
+}
 
 type pgn_t uint
 
