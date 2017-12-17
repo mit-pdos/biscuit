@@ -7,7 +7,6 @@ const log_debug = false
 // file system journal
 var fslog	= log_t{}
 
-
 type logread_t struct {
 	loggen		uint8
 	buf		*bdev_block_t
@@ -31,6 +30,36 @@ type log_t struct {
 	done		chan bool
 	force		chan bool
 	commitwait	chan bool
+}
+
+// first log header block format
+// bytes, meaning
+// 0-7,   valid log blocks
+// 8-511, log destination (63)
+type logheader_t struct {
+	data	*bytepg_t
+}
+
+func (lh *logheader_t) recovernum() int {
+	return fieldr(lh.data, 0)
+}
+
+func (lh *logheader_t) w_recovernum(n int) {
+	fieldw(lh.data, 0, n)
+}
+
+func (lh *logheader_t) logdest(p int) int {
+	if p < 0 || p > 62 {
+		panic("bad dnum")
+	}
+	return fieldr(lh.data, 8 + p)
+}
+
+func (lh *logheader_t) w_logdest(p int, n int) {
+	if p < 0 || p > 62 {
+		panic("bad dnum")
+	}
+	fieldw(lh.data, 8 + p, n)
 }
 
 func (log *log_t) init(ls int, ll int) {
@@ -229,4 +258,40 @@ func (b *bdev_block_t) log_write() {
 	}
 	bcache_refup(b, "log_write")
 	fslog.incoming <- b
+}
+
+func log_init(logstart, loglen int) {
+	fslog.init(logstart, loglen)
+	log_recover()
+	go log_daemon(&fslog)
+}
+
+
+func log_recover() {
+	l := &fslog
+	b := bcache_get_fill(l.logstart, "fs_recover_logstart", false)
+	lh := logheader_t{b.data}
+	rlen := lh.recovernum()
+	if rlen == 0 {
+		fmt.Printf("no FS recovery needed\n")
+		bcache_relse(b, "fs_recover0")
+		return
+	}
+	fmt.Printf("starting FS recovery...")
+
+	for i := 0; i < rlen; i++ {
+		bdest := lh.logdest(i)
+		lb := bcache_get_fill(l.logstart + 1 + i, "i", false)
+		fb := bcache_get_fill(bdest, "bdest", false)
+		copy(fb.data[:], lb.data[:])
+		bcache_write(fb)
+		bcache_relse(lb, "fs_recover1")
+		bcache_relse(fb, "fs_recover2")
+	}
+
+	// clear recovery flag
+	lh.w_recovernum(0)
+	bcache_write(b)
+	bcache_relse(b, "fs_recover3")
+	fmt.Printf("restored %v blocks\n", rlen)
 }
