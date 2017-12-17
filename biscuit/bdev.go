@@ -9,15 +9,9 @@ import "unsafe"
 // updates.  The inode code is careful about releasing lock.  Other types of
 // blocks not shared and the caller releases the lock immediately.
 //
-// The data of a block is either a page in an inode's page cache or a page
-// allocated from the page allocator.  The disk DMAs to and from the physical
-// address for the page.  data is the virtual address for the page.
-//
-// When a bdev_block is initialized with a page, is sent to the log daemon, or
-// handed to the disk driver, we increment the refcount on the physical page
-// using bdev_refup(). When code (including driver) is done with a bdev_block,
-// it decrements the reference count with bdev_refdown (e.g., in the driver
-// interrupt handler).
+// The data of a block is a page allocated from the page allocator.  The disk
+// DMAs to and from the physical address for the page.  data is the virtual
+// address for the page.
 //
 
 // If you change this, you must change corresponding constants in mkbdisk.py,
@@ -33,7 +27,6 @@ type bdev_block_t struct {
 	pa      pa_t
 	data	*bytepg_t
 	s       string
-	pinned  bool
 }
 
 func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
@@ -52,7 +45,11 @@ func (blk *bdev_block_t) new_page() {
 	}
 	blk.pa = pa
 	blk.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
-	blk._bdev_refup("new_page")
+	refup(blk.pa)
+}
+
+func (blk *bdev_block_t) free_page() {
+	refdown(blk.pa)
 }
 
 func bdev_block_new(block int, s string) *bdev_block_t {
@@ -61,58 +58,6 @@ func bdev_block_new(block int, s string) *bdev_block_t {
 	return b
 }
 
-func (blk *bdev_block_t) bdev_refcnt() int {
-	blk.Lock()
-	ref, _ := _refaddr(blk.pa)
-	blk.Unlock()
-	return int(*ref)
-}
-
-func (blk *bdev_block_t) bdev_removable() bool {
-	blk.Lock()
-	ref, _ := _refaddr(blk.pa)
-	r := *ref <= 1 && !blk.pinned
-	blk.Unlock()
-	return r
-}
-
-func (blk *bdev_block_t) bdev_pin() {
-	blk.Lock()
-	blk.pinned = true
-	blk.Unlock()
-}
-
-func (blk *bdev_block_t) bdev_unpin() {
-	blk.Lock()
-	blk.pinned = false
-	blk.Unlock()
-}
-
-// caller holds lock
-func (blk *bdev_block_t) _bdev_refup(s string) {
-	refup(blk.pa)
-	// fmt.Printf("_bdev_refup: %s block %v %v\n", s, blk.block, blk.s)
-}
-
-// caller holds lock
-func (blk *bdev_block_t) bdev_refup(s string) {
-	blk.Lock()
-	blk._bdev_refup(s)
-	blk.Unlock()
-}
-
-func (blk *bdev_block_t) bdev_refdown(s string) int {
-	// fmt.Printf("bdev_refdown: %v %v %v\n", s, blk.block, blk.s)
-	if blk.bdev_refcnt() == 0 {
-		fmt.Printf("bdev_refdown %s: ref is 0 block %v %v\n", s, blk.block, blk.s)
-		panic("ouch")
-	}
-	refdown(blk.pa)
-	return blk.bdev_refcnt()
-}
-
-// increment ref to keep the page around until write completes. interrupt routine
-// decrecements.
 func (b *bdev_block_t) bdev_write() {
 	if bdev_debug {
 		fmt.Printf("bdev_write %v %v\n", b.block, b.s)
@@ -120,15 +65,12 @@ func (b *bdev_block_t) bdev_write() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
-	b._bdev_refup("bdev_write")
 	req := bdev_req_new(b, BDEV_WRITE, true)
 	if ahci_start(req) {
 		<- req.ackCh
 	}
 } 
 
-// increment ref to keep the page around until write completes.  interrupt
-// routine decrecements.
 func (b *bdev_block_t) bdev_write_async() {
 	if bdev_debug {
 		fmt.Printf("bdev_write_async %v %s\n", b.block, b.s)
@@ -136,7 +78,6 @@ func (b *bdev_block_t) bdev_write_async() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write_async\n")
 	}
-	b._bdev_refup("bdev_write_async")
 	ider := bdev_req_new(b, BDEV_WRITE, false)
 	ahci_start(ider)
 }
@@ -151,19 +92,10 @@ func (b *bdev_block_t) bdev_read() {
 	}
 	// XXX uncommment before recovery, but nice for testing during normal operation
 	if b.data[0] == 0xc && b.data[1] == 0xc {
-		fmt.Printf("fail: %v %v\n", b.s, b.block)
-		panic("xxx\n")
+		fmt.Printf("FAIL: %v %v\n", b.s, b.block)
+		panic("xxx")
 	}
 	
-}
-
-// after bdev_read_block returns, the caller owns the block.  the caller must
-// call bdev_refdown when it is done with the buffer
-func bdev_read_block(blkn int, s string) *bdev_block_t {
-	buf := bdev_make(blkn, pa_t(0), s)
-	buf.new_page()
-	buf.bdev_read()
-	return buf
 }
 
 func bdev_flush() {
@@ -174,79 +106,85 @@ func bdev_flush() {
 }
 
 
-// block cache. The block cache stores inode blocks, free bit-map blocks,
-// metadata blocks. File blocks are stored in the inode's page cache, which also
-// interacts with the VM system.
+// block cache, all device interactions run through block cache.
 //
 // The cache returns a pointer to a block_dev_t.  There is *one* bdev_block_t
-//for a block number (and physical page associated with that blockno).  Callers
-//share same block_dev_t (and physical page) for a block. The callers must
-//coordinate using the lock of the block.
+// for a block number (and physical page associated with that blockno).  Callers
+// share same block_dev_t (and physical page) for a block. The callers must
+// coordinate using the lock of the block.
 //
-// The log layer's log_write pins blocks in the cache to avoid eviction, so that
-// a read always sees the last write.
+// When a reference to a bdev block in the cache is sent to the log daemon, or
+// handed to the disk driver, we increment the refcount on the physical page
+// using bcache_refup(). When code (including driver) is done with a bdev_block,
+// it decrements the reference count with bdev_relse (e.g., in the driver
+// interrupt handler).
 //
-// XXX need to support dirty bit too and eviction.
+// XXX need to support dirty bit too
 //
 
 // XXX XXX XXX must count against mfs limit
+
+type bdev_ref_t struct {
+	buf *bdev_block_t
+	refcnt int
+}
+
 type bdev_cache_t struct {
-	// inode blkno -> disk contents
-	blks		map[int]*bdev_block_t
+	refs		map[int]*bdev_ref_t
 	sync.Mutex
 }
 
 var bdev_cache = bdev_cache_t{}
 
-func bdev_init() {
-	bdev_cache.blks = make(map[int]*bdev_block_t, 30)
+func bcache_init() {
+	bdev_cache.refs = make(map[int]*bdev_ref_t, 30)
 
 	bdev_test()
 }
 
-func _bdev_cache_present(blkn int) bool {
-	_, ok := bdev_cache.blks[blkn]
-	return ok
-}
-
 // returns locked buf with refcnt on page bumped up by 1. The caller must call
-// bdev_refdown when done with buf.  Return true if block was created in the
+// bcache_relse when done with buf.  Return true if block was created in the
 // cache, false if it was already present.
-func bdev_get_empty(blkn int, s string) (*bdev_block_t, bool) {
+func bcache_get_empty(blkn int, s string) (*bdev_block_t, bool) {
 	if blkn < superb_start {
 		panic("no")
 	}
 	bdev_cache.Lock()
 
-	// fmt.Printf("bdev_get_empty: %v\n", blkn)
+	// fmt.Printf("bcache_get_empty: %v\n", blkn)
 	
-	if obuf, ok := bdev_cache.blks[blkn]; ok {
+	if ref, ok := bdev_cache.refs[blkn]; ok {
+		ref.refcnt++
 		bdev_cache.Unlock()
-		obuf.Lock()
-		obuf.s = s
-		return obuf, false
+		ref.buf.Lock()
+		ref.buf.s = s
+		return ref.buf, false
 	}
 	buf := bdev_make(blkn, pa_t(0), s)
-	bdev_cache.blks[blkn] = buf
+	
+	ref := &bdev_ref_t{}
+	ref.refcnt = 1
+	ref.buf = buf
+	
+	bdev_cache.refs[blkn] = ref
 	buf.Lock()
 	bdev_cache.Unlock()
 	return buf, true
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
-// bdev_refdown when done with buf.
-func bdev_get_fill(blkn int, s string, lock bool) *bdev_block_t {
-	b, created := bdev_get_empty(blkn, s)
+// bdev_relse when done with buf.
+func bcache_get_fill(blkn int, s string, lock bool) *bdev_block_t {
+	b, created := bcache_get_empty(blkn, s)
 
 	if bdev_debug {
-		fmt.Printf("bdev_get_fill: %v %v %v\n", blkn, s, created)
+		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)
 	}
 
 	if created {
 		b.new_page()
 		b.bdev_read() // fill in new bdev_cache entry
 	}
-	b._bdev_refup("bdev_get_fill2")
 	if !lock {
 		b.Unlock()
 	}
@@ -254,16 +192,15 @@ func bdev_get_fill(blkn int, s string, lock bool) *bdev_block_t {
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
-// bdev_refdown when done with buf
-func bdev_get_zero(blkn int, s string, lock bool) *bdev_block_t {
-	b, created := bdev_get_empty(blkn, s)
+// bcache_relse when done with buf
+func bcache_get_zero(blkn int, s string, lock bool) *bdev_block_t {
+	b, created := bcache_get_empty(blkn, s)
 	if bdev_debug {
-		fmt.Printf("bdev_get_zero: %v %v %v\n", blkn, s, created)
+		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
 	}
 	if created {
 		b.new_page()   // zero
 	} 
-	b._bdev_refup("bdev_get_zero")
 	if !lock {
 		b.Unlock()
 	}
@@ -271,44 +208,90 @@ func bdev_get_zero(blkn int, s string, lock bool) *bdev_block_t {
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
-// bdev_refdown when done with buf
-func bdev_get_nofill(blkn int, s string) *bdev_block_t {
-	b, created := bdev_get_empty(blkn, s)
+// bcache_relse when done with buf
+func bcache_get_nofill(blkn int, s string) *bdev_block_t {
+	b, created := bcache_get_empty(blkn, s)
 	if bdev_debug {
-		fmt.Printf("bdev_get_zero: %v %v %v\n", blkn, s, created)
+		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
 	}
 	if created {
 		b.new_page()   // XXX a non-zero page would be fine
 	}
-	b._bdev_refup("bdev_get_nofill")
 	return b
 }
 
-func bdev_relse(b *bdev_block_t, s string) {
-	// fmt.Printf("bdev_relse: %v %v\n", b.block, s)
-	bdev_cache.Lock()	
-	if !_bdev_cache_present(b.block) {
+func bcache_write(b *bdev_block_t) {
+	bdev_cache.Lock()
+	ref, ok := bdev_cache.refs[b.block]
+	if !ok {
+		panic("bcache_pin")
+	}
+	ref.refcnt++
+	bdev_cache.Unlock()
+	b.bdev_write()
+}
+
+func bcache_write_async(b *bdev_block_t) {
+	bdev_cache.Lock()
+	ref, ok := bdev_cache.refs[b.block]
+	if !ok {
+		panic("bcache_unpin")
+	}
+	ref.refcnt++
+	bdev_cache.Unlock()
+	b.bdev_write_async()
+}
+
+func bcache_refup(b *bdev_block_t, s string) {
+	bdev_cache.Lock()
+	defer bdev_cache.Unlock()
+
+	ref, ok := bdev_cache.refs[b.block]
+	if !ok {
 		fmt.Printf("bdev_relse: %v %v\n", b.block, s)
 		panic("bdev_relse\n")
 	}
-	ok := b.bdev_removable()
+	ref.refcnt++
+}
+
+func bcache_relse(b *bdev_block_t, s string) {
+	bdev_cache.Lock()
+	defer bdev_cache.Unlock()
+
+	ref, ok := bdev_cache.refs[b.block]
+	if !ok {
+		fmt.Printf("bdev_relse: %v %v\n", b.block, s)
+		panic("bdev_relse\n")
+	}
+	if ref.buf != b {
+		fmt.Printf("bdev_relse: %v %v\n", ref.buf, b)
+		panic("bdev_relse\n")
+	}
 	if bdev_debug {
-		fmt.Printf("bdev_relse: free entry %v %v\n", b.block, ok)
+		fmt.Printf("bcache_relse: %v %v %v %v\n", b.block, s, ok, ref.refcnt)
 	}
-	if ok {
-		delete(bdev_cache.blks, b.block)
+	ref.refcnt--
+	if ref.refcnt < 0 {
+		panic("bdev_relse\n")
 	}
-	bdev_cache.Unlock()
+	if ref.refcnt == 0 {
+		if bdev_debug {
+			fmt.Printf("bcache_relse: %v delete from cache\n", b.block)
+		}
+		b.free_page()
+		delete(bdev_cache.refs, b.block)
+	}
 }
 
 func print_live_blocks() {
-	fmt.Printf("bdev cache\n")
-	for _, b := range bdev_cache.blks {
-		fmt.Printf("block %v %v\n", b, b.bdev_refcnt())
+	fmt.Printf("bcache %v\n", len(bdev_cache.refs))
+	for _, r := range bdev_cache.refs {
+		fmt.Printf("block %v %v\n", r.buf.block, r.refcnt)
 	}
-	fmt.Printf("irefcache %v\n", irefcache)
-	fmt.Printf("%v %v\n", len(irefcache.irefs), irefcache)
+	fmt.Printf("irefcache %v\n", len(irefcache.irefs))
 	for _, v := range irefcache.irefs {
+		b,i := bidecode(v.imem.priv)
+		fmt.Printf("inode %v (%v,%v)\n", v.imem.priv, b, i)
 		v.imem.pgcache.pgs.iter(func(pgi *pginfo_t) {
 			fmt.Printf("pgi %v\n", pgi.buf.block)
 		})
@@ -339,7 +322,7 @@ func bdev_test() {
 		}
 		bdev_flush()
 		for b := 0; b < N; b++ {
-			rbuf := bdev_read_block(b, "read test")
+			rbuf := bcache_get_fill(b, "read test", false)
 			
 			for i, v := range rbuf.data {
 				if v != uint8(b) {

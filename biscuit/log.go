@@ -58,7 +58,7 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			// this block is in a later transaction, we know this
 			// later transaction will commit with the one that
 			// modified this block earlier.
-			buf.bdev_refdown("absoprtion")
+			bcache_relse(buf, "absoprtion")
 			return
 		}
 	}
@@ -73,7 +73,6 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 	// accepting transactions until commit has completed, which will clean
 	// the log.
 	log.log[lhead] = log_entry_t{buf.block, buf}
-	buf.bdev_pin()
 	log.lhead++
 }
 
@@ -87,7 +86,7 @@ func (log *log_t) commit() {
 		fmt.Printf("commit\n")
 	}
 
-	headblk := bdev_get_zero(log.logstart, "commit", false)
+	headblk := bcache_get_zero(log.logstart, "commit", false)
 	
 	lh := logheader_t{headblk.data}
 	for i := 0; i < log.lhead; i++ {
@@ -96,11 +95,11 @@ func (log *log_t) commit() {
 		lh.w_logdest(i, l.block)
 
 		// write block into log
-                b := bdev_get_nofill(log.logstart+i+1, "log")
+                b := bcache_get_nofill(log.logstart+i+1, "log")
 		copy(b.data[:], l.buf.data[:])
 		b.Unlock()
-		b.bdev_write_async()
-		b.bdev_refdown("writelog")
+		bcache_write_async(b)
+		bcache_relse(b, "writelog")
 
 	}
 	
@@ -109,7 +108,7 @@ func (log *log_t) commit() {
 	lh.w_recovernum(log.lhead)
 
 	// write log header
-	headblk.bdev_write()
+	bcache_write(headblk)
 
 	bdev_flush()   // commit log header
 
@@ -122,16 +121,16 @@ func (log *log_t) commit() {
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
-		l.buf.bdev_write_async()
-		l.buf.bdev_refdown("apply")
+		bcache_write_async(l.buf)
+		bcache_relse(l.buf, "apply")
 	}
 
 	bdev_flush()  // flush apply
 	
 	// success; clear flag indicating to recover from log
 	lh.w_recovernum(0)
-	headblk.bdev_write()
-	headblk.bdev_refdown("commit done")
+	bcache_write(headblk)
+	bcache_relse(headblk, "commit done")
 	
 	bdev_flush()  // flush cleared commit
 	log.lhead = 0
@@ -228,6 +227,6 @@ func (b *bdev_block_t) log_write() {
 	if log_debug {
 		fmt.Printf("log_write %v\n", b.block)
 	}
-	b.bdev_refup("log_write")
+	bcache_refup(b, "log_write")
 	fslog.incoming <- b
 }

@@ -759,14 +759,10 @@ func (p *ahci_port_t) port_intr() {
 			if ahci_debug {
 				fmt.Printf("port_intr: slot %v interrupt\n", s)
 			}
-			//if p.inflight[s].cmd == BDEV_READ {
-			//	copy(p.inflight[s].blk.data[:], p.block[s][:])
-			//}
 			if p.inflight[s].cmd == BDEV_WRITE {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
-				p.inflight[s].blk.bdev_unpin()
-				p.inflight[s].blk.bdev_refdown("interrupt")
+				bcache_relse(p.inflight[s].blk, "interrupt")
 			}
 			if p.inflight[s].sync {
 				if ahci_debug {
