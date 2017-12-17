@@ -90,7 +90,8 @@ func (b *bdev_block_t) bdev_read() {
 	if bdev_debug {
 		fmt.Printf("bdev_read %v %v %#x %#x\n", b.block, b.s, b.data[0], b.data[1])
 	}
-	// XXX uncommment before recovery, but nice for testing during normal operation
+	
+	// XXX sanity check, but ignore it during recovery
 	if b.data[0] == 0xc && b.data[1] == 0xc {
 		fmt.Printf("WARNING: %v %v\n", b.s, b.block)
 	}
@@ -117,8 +118,6 @@ func bdev_flush() {
 // using bcache_refup(). When code (including driver) is done with a bdev_block,
 // it decrements the reference count with bdev_relse (e.g., in the driver
 // interrupt handler).
-//
-// XXX need to support dirty bit too
 //
 
 // XXX XXX XXX must count against mfs limit
@@ -150,8 +149,6 @@ func bcache_get_empty(blkn int, s string) (*bdev_block_t, bool) {
 	}
 	bdev_cache.Lock()
 
-	// fmt.Printf("bcache_get_empty: %v\n", blkn)
-	
 	if ref, ok := bdev_cache.refs[blkn]; ok {
 		ref.refcnt++
 		bdev_cache.Unlock()

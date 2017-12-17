@@ -54,10 +54,10 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			if l.buf != buf {
 				panic("absorption")
 			}
-			// buffer is already in log and pinned. if the write of
-			// this block is in a later transaction, we know this
-			// later transaction will commit with the one that
-			// modified this block earlier.
+			// buffer is already in log. if the write of this block
+			// is in a later transaction, we know this later
+			// transaction will commit with the one that modified
+			// this block earlier.
 			bcache_relse(buf, "absoprtion")
 			return
 		}
@@ -219,7 +219,7 @@ func op_end() {
 
 // log_write increments ref so that the log has always a valid ref to the buf's
 // page the logging layer refdowns when it it is done with the page.  the caller
-// of log_write shouldn't hold *any* buf locks.
+// of log_write shouldn't hold buf's lock.
 func (b *bdev_block_t) log_write() {
 	if memtime {
 		return
