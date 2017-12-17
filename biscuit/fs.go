@@ -324,8 +324,6 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 		return err
 	}
 
-	ochild.iunlocked("ochild1")
-	
 	npar, err := fs_namei(ndirs, cwd)
 	if err != 0 {
 		opar.refdown("fs_rename_opar")
@@ -346,8 +344,6 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 		return err
 	}
 
-	ochild.iunlocked("ochild1")
-
 	var nchild *imemnode_t
 	cnt := 0
 	newexists := false
@@ -365,15 +361,22 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 		npar.iunlocked("npar")
 		opar.iunlocked("opar")
 
+		var inodes []*imemnode_t
 		var locked []*imemnode_t
 		if err == 0 {
 			newexists = true
-			locked = irefcache.lockall([]*imemnode_t{opar, ochild, npar, nchild})
+			inodes = []*imemnode_t{opar, ochild, npar, nchild}
 		} else {
-			locked = irefcache.lockall([]*imemnode_t{opar, ochild, npar})
+			inodes = []*imemnode_t{opar, ochild, npar}
 		}
+		locked = irefcache.lockall(inodes)
+		// defers are run last-in-first-out
+		for _, v := range inodes {
+			defer v.refdown("rename_opar")
+		}
+
 		for _, v := range locked {
-			defer v.iunlock_refdown("rename_opar")
+			defer v.iunlock("rename_opar")
 		}
 		
 		// check if the tree is still the same. an unlink or link may
@@ -491,13 +494,18 @@ func _isancestor(anc, start *imemnode_t) err_t {
 		if err != 0 {
 			panic(".. must exist")
 		}
-		var next *imemnode_t
-		next, err = irefcache.iref(nexti, "_isancestor_next")
-		here.iunlock_refdown("_isancestor")
-		if err != 0 {
-			return err
+		if nexti == here.priv {
+			here.iunlock("_isancestor")
+			panic("xxx")
+		} else {
+			var next *imemnode_t
+			next, err = irefcache.iref(nexti, "_isancestor_next")
+			here.iunlock_refdown("_isancestor")
+			if err != 0 {
+				return err
+			}
+			here = next
 		}
-		here = next
 	}
 	here.refdown("_isancestor")
 	return 0
@@ -1373,9 +1381,6 @@ func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) bool {
 	if _, ok := pc.pgs.lookup(pgn); !ok {
 		offset := (int(pgn) << PGSHIFT)
 		blkno, err := pc.idm.offsetblk(offset, true)
-		if fs_debug {
-			fmt.Printf("_ensureslot %v %v\n", pgn, blkno)
-		}
 		if err != 0 {
 			return false
 		}
@@ -1615,7 +1620,7 @@ var irefcache	= make_irefcache()
 func print_live_inodes() {
 	fmt.Printf("icache %v\n", len(irefcache.irefs))
 	for _, v := range irefcache.irefs {
-		fmt.Printf("inode %v %v\n", v.imem.priv, v.refcnt)
+		fmt.Printf("inode %v refcnt %v opencnt %v\n", v.imem.priv, v.refcnt, v.imem.opencount)
 	}
 }
 
