@@ -1276,49 +1276,6 @@ func fs_namei_locked(paths string, cwd inum, s string) (*imemnode_t, err_t) {
 }
 
 
-
-// a mutex that allows attempting to acuire the mutex without blocking. useful
-// for deadlock avoidance for creat/unlink/rename.
-type trymutex_t struct {
-	m	sync.Mutex
-	lock	uint
-	cond	*sync.Cond
-}
-
-func (tm *trymutex_t) tm_init() {
-	tm.cond = sync.NewCond(&tm.m)
-}
-
-func (tm *trymutex_t) Lock() {
-	tm.m.Lock()
-	for {
-		if tm.lock == 0 {
-			tm.lock = 1
-			tm.m.Unlock()
-			return
-		}
-		tm.cond.Wait()
-	}
-}
-
-func (tm *trymutex_t) Unlock() {
-	tm.m.Lock()
-	tm.lock = 0
-	tm.m.Unlock()
-	tm.cond.Signal()
-}
-
-func (tm *trymutex_t) trylock() bool {
-	tm.m.Lock()
-	ret := false
-	if tm.lock == 0 {
-		tm.lock = 1
-		ret = true
-	}
-	tm.m.Unlock()
-	return ret
-}
-
 // superblock format:
 // bytes, meaning
 // 0-7,   freeblock start
