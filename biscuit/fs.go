@@ -12,7 +12,7 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
-const fs_debug    = true
+const fs_debug    = false
 
 var superb_start	int
 var superb		superblock_t
@@ -357,10 +357,6 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 			return err
 		}
 		
-		ochild.iunlocked("ochild1")
-		npar.iunlocked("npar")
-		opar.iunlocked("opar")
-
 		var inodes []*imemnode_t
 		var locked []*imemnode_t
 		if err == 0 {
@@ -1601,8 +1597,8 @@ type iref_t struct {
 }
 
 
-// Cache of in-mmory inodes. Main invariant: an inode is in memory // once so
-// that threads see each other updates.
+// Cache of in-mmory inodes. Main invariant: an inode is in memory once so that
+// threads see each other updates.
 type irefcache_t struct {
 	sync.Mutex
 	irefs          map[inum]*iref_t
@@ -1820,71 +1816,6 @@ func (idm *imemnode_t) iunlock(s string) {
 	}
 	idm._amlocked = false
 	idm.Unlock()
-}
-
-func (idm *imemnode_t) iunlocked(s string) {
-	idm.Lock()
-	if idm._amlocked {
-		panic("iunlock: is locked " + s)
-	}
-	idm.Unlock()
-}
-
-
-// biscuit FS locking protocol: rename acquires imemnode locks in any order.
-// all other fs ops that acquire two or more imemnode locks avoid deadlocking
-// with a concurrent rename via a non-blocking acquire that fails if the lock
-// is taken (trylock). pathname lookup (namei) does not use hand-over-hand
-// locking; see the comment for idaemon_ensure for how namei is correct without
-// it.
-
-// ilock_opened returns true when the inode was locked and the fd referencing
-// this imemnode hasn't been closed out from under us by another thread of the
-// same process. otherwise the inode is unlocked. opencount is used to detect
-// when a thread raced and beat us to close(2) (why not put the
-// racing-close-detection into fsfops like other fds?).
-//
-// in general: ilock_opened() is for fds, the rest should use ilock_namei().
-
-func (idm *imemnode_t) ilock_opened() bool {
-	panic("ilock_opened")
-	if idm._amlocked {
-		fmt.Printf("ilocked_opened  warning %v\n", idm.priv)
-	}
-	//idm.l.Lock()
-	fmt.Printf("ilock_opened %v\n", idm.priv)
-	if idm.opencount == 0 && idm.icache.links == 0 {
-		// idm.l.Unlock()
-		return false
-	}
-	idm._amlocked = true
-	fmt.Printf("ilock_opened %v done\n", idm.priv)
-	return true
-}
-
-// lock a node for path resolution. a racing thread that unlinks the file
-// causes our open to fail.
-func (idm *imemnode_t) ilock_namei() bool {
-	panic("ilock_namei")
-	// idm.l.Lock()
-	if idm.icache.links == 0 {
-		// idm.l.Unlock()
-		return false
-	}
-	idm._amlocked = true
-	return true
-}
-
-func (idm *imemnode_t) itrylock() bool {
-	//if !idm.l.trylock() {
-	//	return false
-	//}
-	if idm.icache.links == 0 {
-		// idm.l.Unlock()
-		return false
-	}
-	idm._amlocked = true
-	return true
 }
 
 // creates a new idaemon struct and fills its inode
@@ -3459,9 +3390,11 @@ func memreclaim() bool {
 	for h := pglru.tail; h != nil && got < want; h = h.pgprev {
 		// the fs locking order requires that imemnode is locked before
 		// pglru. thus avoid deadlock via itrylock.
-		if !h.itrylock() {
-			continue
-		}
+
+		//if !h.itrylock() {
+		//		continue
+		//	}
+
 		got += h.pgcache.evict()
 		// iunlock cannot attempt to acquire the pglru lock to remove h
 		// from the list because this code does not modify the

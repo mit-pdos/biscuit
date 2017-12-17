@@ -92,8 +92,7 @@ func (b *bdev_block_t) bdev_read() {
 	}
 	// XXX uncommment before recovery, but nice for testing during normal operation
 	if b.data[0] == 0xc && b.data[1] == 0xc {
-		fmt.Printf("FAIL: %v %v\n", b.s, b.block)
-		panic("xxx")
+		fmt.Printf("WARNING: %v %v\n", b.s, b.block)
 	}
 	
 }
