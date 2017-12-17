@@ -12,7 +12,7 @@ const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
 const INDADDR        = (BSIZE/8)-1
 
-const fs_debug    = false
+const fs_debug    = true
 
 var superb_start	int
 var superb		superblock_t
@@ -471,7 +471,7 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 	return 0
 }
 
-// end and start are locked
+// anc and start are in memory
 func _isancestor(anc, start *imemnode_t) err_t {
 	if anc.priv == iroot {
 		panic("root is always ancestor")
@@ -493,9 +493,8 @@ func _isancestor(anc, start *imemnode_t) err_t {
 		}
 		var next *imemnode_t
 		next, err = irefcache.iref(nexti, "_isancestor_next")
-		here.iunlock("_isancestor")
+		here.iunlock_refdown("_isancestor")
 		if err != 0 {
-			here.refdown("_isancestor_here")
 			return err
 		}
 		here = next
