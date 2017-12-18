@@ -487,7 +487,6 @@ func (idm *imemnode_t) probe_unlink(fn string) err_t {
 
 
 func (idm *imemnode_t) ilookup(name string) (inum, err_t) {
-	pglru.mkhead(idm)
 	// did someone confuse a file with a directory?
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR

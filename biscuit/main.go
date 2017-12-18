@@ -258,7 +258,7 @@ var syslimit = syslimit_t {
 	routes:		32,
 	tcpsegs:	16,
 	socks:		1e5,
-	vnodes:		1e6,
+	vnodes:		20, // 1e6,
 	dirents:	1 << 20,
 	pipes:		1e4,
 	// 8GB of mfs pages
