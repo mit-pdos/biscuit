@@ -29,6 +29,17 @@ type bdev_block_t struct {
 	s       string
 }
 
+func (blk *bdev_block_t) key() int {
+	return blk.block
+}
+
+func (blk *bdev_block_t) evict() {
+	if bdev_debug {
+		fmt.Printf("evict: block %v\n", blk.block)
+	}
+	blk.free_page()
+}
+
 func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
 	b := &bdev_block_t{};
 	b.block = block
@@ -120,63 +131,46 @@ func bdev_flush() {
 // interrupt handler).
 //
 
-// XXX XXX XXX must count against mfs limit
+var brefcache = make_refcache(syslimit.blocks)
 
-type bdev_ref_t struct {
-	buf *bdev_block_t
-	refcnt int
-}
-
-type bdev_cache_t struct {
-	refs		map[int]*bdev_ref_t
-	sync.Mutex
-}
-
-var bdev_cache = bdev_cache_t{}
-
-func bcache_init() {
-	bdev_cache.refs = make(map[int]*bdev_ref_t, 30)
-
-	bdev_test()
-}
-
-// returns locked buf with refcnt on page bumped up by 1. The caller must call
-// bcache_relse when done with buf.  Return true if block was created in the
-// cache, false if it was already present.
-func bcache_get_empty(blkn int, s string) (*bdev_block_t, bool) {
-	if blkn < superb_start {
-		panic("no")
+// returns the reference to a locked buffer
+func bref(blk int, s string) (*bdev_block_t, bool, err_t) {
+	ref, err := brefcache.lookup(blk, s)
+	if err != 0 {
+		fmt.Printf("bref %v\n", err)
+		return nil, false, err
 	}
-	bdev_cache.Lock()
+	defer ref.Unlock()
 
-	if ref, ok := bdev_cache.refs[blkn]; ok {
-		ref.refcnt++
-		bdev_cache.Unlock()
-		ref.buf.Lock()
-		ref.buf.s = s
-		return ref.buf, false
+	created := false
+	if !ref.valid {
+		if bdev_debug {
+			fmt.Printf("bref fill %v %v\n", blk, s)
+		}
+		buf := bdev_make(blk, pa_t(0), s)
+		ref.obj = buf
+		ref.valid = true
+		created = true
 	}
-	buf := bdev_make(blkn, pa_t(0), s)
-	
-	ref := &bdev_ref_t{}
-	ref.refcnt = 1
-	ref.buf = buf
-	
-	bdev_cache.refs[blkn] = ref
-	buf.Lock()
-	bdev_cache.Unlock()
-	return buf, true
+	b := ref.obj.(*bdev_block_t)
+	b.Lock()
+	b.s = s
+	return b, created, err
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_relse when done with buf.
-func bcache_get_fill(blkn int, s string, lock bool) *bdev_block_t {
-	b, created := bcache_get_empty(blkn, s)
+func bcache_get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	b, created, err := bref(blkn, s)
 
 	if bdev_debug {
 		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)
 	}
 
+	if err != 0 {
+		return nil, err
+	}
+	
 	if created {
 		b.new_page()
 		b.bdev_read() // fill in new bdev_cache entry
@@ -184,15 +178,18 @@ func bcache_get_fill(blkn int, s string, lock bool) *bdev_block_t {
 	if !lock {
 		b.Unlock()
 	}
-	return b
+	return b, 0
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func bcache_get_zero(blkn int, s string, lock bool) *bdev_block_t {
-	b, created := bcache_get_empty(blkn, s)
+func bcache_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	b, created, err := bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
+	}
+	if err != 0 {
+		return nil, err
 	}
 	if created {
 		b.new_page()   // zero
@@ -200,97 +197,54 @@ func bcache_get_zero(blkn int, s string, lock bool) *bdev_block_t {
 	if !lock {
 		b.Unlock()
 	}
-	return b
+	return b, 0
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func bcache_get_nofill(blkn int, s string) *bdev_block_t {
-	b, created := bcache_get_empty(blkn, s)
+func bcache_get_nofill(blkn int, s string) (*bdev_block_t, err_t) {
+	b, created, err := bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
+	}
+	if err != 0 {
+		return nil, err
 	}
 	if created {
 		b.new_page()   // XXX a non-zero page would be fine
 	}
-	return b
+	return b, 0
 }
 
 func bcache_write(b *bdev_block_t) {
-	bdev_cache.Lock()
-	ref, ok := bdev_cache.refs[b.block]
-	if !ok {
-		panic("bcache_pin")
-	}
-	ref.refcnt++
-	bdev_cache.Unlock()
+	brefcache.refup(b, "bcache_write")
 	b.bdev_write()
 }
 
 func bcache_write_async(b *bdev_block_t) {
-	bdev_cache.Lock()
-	ref, ok := bdev_cache.refs[b.block]
-	if !ok {
-		panic("bcache_unpin")
-	}
-	ref.refcnt++
-	bdev_cache.Unlock()
+	brefcache.refup(b, "bcache_write_async")
 	b.bdev_write_async()
 }
 
 func bcache_refup(b *bdev_block_t, s string) {
-	bdev_cache.Lock()
-	defer bdev_cache.Unlock()
-
-	ref, ok := bdev_cache.refs[b.block]
-	if !ok {
-		fmt.Printf("bdev_relse: %v %v\n", b.block, s)
-		panic("bdev_relse\n")
-	}
-	ref.refcnt++
+	brefcache.refup(b, s)
 }
 
 func bcache_relse(b *bdev_block_t, s string) {
-	bdev_cache.Lock()
-	defer bdev_cache.Unlock()
-
-	ref, ok := bdev_cache.refs[b.block]
-	if !ok {
-		fmt.Printf("bdev_relse: %v %v\n", b.block, s)
-		panic("bdev_relse\n")
-	}
-	if ref.buf != b {
-		fmt.Printf("bdev_relse: %v %v\n", ref.buf, b)
-		panic("bdev_relse\n")
-	}
+	brefcache.refdown(b, s)
 	if bdev_debug {
-		fmt.Printf("bcache_relse: %v %v %v %v\n", b.block, s, ok, ref.refcnt)
-	}
-	ref.refcnt--
-	if ref.refcnt < 0 {
-		panic("bdev_relse\n")
-	}
-	if ref.refcnt == 0 {
-		if bdev_debug {
-			fmt.Printf("bcache_relse: %v delete from cache\n", b.block)
-		}
-		b.free_page()
-		delete(bdev_cache.refs, b.block)
+		fmt.Printf("bcache_relse: %v %v\n", b.block, s)
 	}
 }
 
 func print_live_blocks() {
-	fmt.Printf("bcache %v\n", len(bdev_cache.refs))
-	for _, r := range bdev_cache.refs {
-		fmt.Printf("block %v %v\n", r.buf.block, r.refcnt)
+	fmt.Printf("bcache %v\n", len(brefcache.refs))
+	for _, r := range brefcache.refs {
+		fmt.Printf("block %v %v\n", r.key, r.refcnt)
 	}
 	fmt.Printf("irefcache %v\n", len(irefcache.refs))
 	for _, v := range irefcache.refs {
-		// b,i := bidecode(v.imem.priv)
 		fmt.Printf("inode %v\n", v)
-		//v.imem.pgcache.pgs.iter(func(pgi *pginfo_t) {
-		//	fmt.Printf("pgi %v\n", pgi.buf.block)
-		//})
 	}
 }
 
@@ -318,8 +272,10 @@ func bdev_test() {
 		}
 		bdev_flush()
 		for b := 0; b < N; b++ {
-			rbuf := bcache_get_fill(b, "read test", false)
-			
+			rbuf, err := bcache_get_fill(b, "read test", false)
+			if err != 0 {
+				panic("bdev_test\n")
+			}
 			for i, v := range rbuf.data {
 				if v != uint8(b) {
 					fmt.Printf("buf %v i %v v %v\n", j, i, v)

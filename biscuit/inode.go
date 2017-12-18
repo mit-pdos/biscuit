@@ -3,6 +3,8 @@ package main
 import "fmt"
 import "sync"
 import "unsafe"
+import "sort"
+import "strconv"
 
 const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
@@ -180,7 +182,7 @@ func (idm *imemnode_t) iunlock(s string) {
 var irefcache	= make_refcache(syslimit.vnodes)
 
 
-// obtain a reference for an unlocked inode
+// obtain the reference for an inode
 func iref(priv inum, s string) (*imemnode_t, err_t) {
 	ref, err := irefcache.lookup(int(priv), s)
 	defer ref.Unlock()
@@ -205,7 +207,7 @@ func iref(priv inum, s string) (*imemnode_t, err_t) {
 	return ref.obj.(*imemnode_t), err
 }
 
-// obtained a reference for a locked inode
+// obtained the reference for an inode with the inode locked
 func iref_locked(priv inum, s string) (*imemnode_t, err_t) {
 	idm, err := iref(priv, s)
 	if err != 0 {
@@ -213,6 +215,25 @@ func iref_locked(priv inum, s string) (*imemnode_t, err_t) {
 	}
 	idm.ilock(s)
 	return idm, err
+}
+
+
+func iref_lockall(imems []*imemnode_t) []*imemnode_t {
+	var locked []*imemnode_t
+	sort.Slice(imems, func(i, j int) bool { return imems[i].key() < imems[j].key() })
+	for _, imem := range imems {
+		dup := false
+		for _, l := range locked {
+			if imem.priv == l.priv {
+				dup = true
+			}
+		}
+		if !dup {
+			locked = append(locked, imem)
+			imem.ilock("lockall")
+		}
+	}
+	return locked
 }
 
 
@@ -228,7 +249,10 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 	if fs_debug {
 		fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
 	}
-	blk := idm.idibread()
+	blk, err := idm.idibread()
+	if err != 0 {
+		return err
+	}
 	// print_inodes(blk)
 	idm.icache.fill(blk, ioff)
 	blk.Unlock()
@@ -241,8 +265,11 @@ func (idm *imemnode_t) iunlock_refdown(s string) {
 	irefcache.refdown(idm, s)
 }
 
-func (idm *imemnode_t) _iupdate() {
-	iblk := idm.idibread()
+func (idm *imemnode_t) _iupdate() err_t {
+	iblk, err := idm.idibread()
+	if err != 0 {
+		return err
+	}
 	if idm.icache.flushto(iblk, idm.ioff) {
 		iblk.Unlock()
 		iblk.log_write()
@@ -250,6 +277,7 @@ func (idm *imemnode_t) _iupdate() {
 		iblk.Unlock()
 	}
 	bcache_relse(iblk, "_iupdate")
+	return 0
 }
 
 func (idm *imemnode_t) do_trunc(truncto uint) err_t {
@@ -444,9 +472,9 @@ type icache_t struct {
 
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
-func (ic *icache_t) mbread(blockn int) *bdev_block_t {
-	mb := bcache_get_fill(blockn, "_mbensure", false)
-	return mb
+func (ic *icache_t) mbread(blockn int) (*bdev_block_t, err_t) {
+	mb, err := bcache_get_fill(blockn, "_mbensure", false)
+	return mb, err
 }
 
 func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
@@ -499,27 +527,30 @@ func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	// ensure block exists
-	ensureb := func(blkno int) (int, bool) {
+	ensureb := func(blkno int) (int, bool, err_t) {
 		if !writing || blkno != 0 {
-			return blkno, false
+			return blkno, false, 0
 		}
-		nblkno := balloc()
-		return nblkno, true
+		nblkno, err := balloc()
+		return nblkno, true, err
 	}
 	// this function makes sure that every slot up to and including idx of
 	// the given indirect block has a block allocated. it is necessary to
 	// allocate a bunch of zero'd blocks for a file when someone lseek()s
 	// past the end of the file and then writes.
-	ensureind := func(blk *bdev_block_t, idx int) {
+	ensureind := func(blk *bdev_block_t, idx int) err_t {
 		if !writing {
-			return
+			return 0
 		}
 		added := false
 		for i := 0; i <= idx; i++ {
 			slot := i * 8
 			s := blk.data[:]
 			blkn := readn(s, 8, slot)
-			blkn, isnew := ensureb(blkn)
+			blkn, isnew, err := ensureb(blkn)
+			if err != 0 {
+				return err
+			}
 			if isnew {
 				writen(s, 8, slot, blkn)
 				added = true
@@ -533,6 +564,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		if added {
 			blk.log_write()
 		}
+		return 0
 	}
 
 	whichblk := offset/BSIZE
@@ -547,7 +579,10 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			if idm.icache.addrs[i] != 0 {
 				continue
 			}
-			tblkn := balloc()
+			tblkn, err := balloc()
+			if err != 0 {
+				
+			}
 			// imemnode_t.iupdate() will make sure the
 			// icache is updated on disk
 			idm.icache.addrs[i] = tblkn
@@ -561,13 +596,19 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		nextindb :=  INDADDR *8
 		indno := idm.icache.indir
 		// get first indirect block
-		indno, isnew := ensureb(indno)
+		indno, isnew, err := ensureb(indno)
+		if err != 0 {
+			return indno, err
+		}
 		if isnew {
 			// new indirect block will be written to log below
 			idm.icache.indir = indno
 		}
 		// follow indirect block chain
-		indblk := idm.icache.mbread(indno)
+		indblk, err := idm.icache.mbread(indno)
+		if err != 0 {
+			return 0, err
+		}
 		for i := 0; i < indslot/slotpb; i++ {
 			// make sure the indirect block has no empty spaces if
 			// we are writing past the end of the file. if
@@ -577,7 +618,10 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 
 			indno = readn(indblk.data[:], 8, nextindb)
 			bcache_relse(indblk, "offsetblk1")
-			indblk = idm.icache.mbread(indno)
+			indblk, err = idm.icache.mbread(indno)
+			if err != 0 {
+				return 0, err
+			}
 		}
 		// finally get data block from indirect block
 		slotoff := (indslot % slotpb)
@@ -585,7 +629,10 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		noff := (slotoff)*8
 		s := indblk.data[:]
 		blkn = readn(s, 8, noff)
-		blkn, isnew = ensureb(blkn)
+		blkn, isnew, err = ensureb(blkn)
+		if err != 0 {
+			return blkn, err
+		}
 		if isnew {
 			writen(s, 8, noff, blkn)
 			indblk.log_write()
@@ -718,7 +765,7 @@ func _iallocundo(iblkn int, ni *inode_t, ib *bdev_block_t) {
 
 // reverts icreate(). called after failure to allocate that prevents an FS
 // operation from continuing.
-func (idm *imemnode_t) create_undo(childi inum, childn string) {
+func (idm *imemnode_t) create_undo(childi inum, childn string) err_t {
 	ci, err := idm.iunlink(childn)
 	if err != 0 {
 		panic("but insert just succeeded")
@@ -727,11 +774,15 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 		panic("inconsistent")
 	}
 	bn, ioff := bidecode(childi)
-	ib := bcache_get_fill(bn, "create_undo", true)
+	ib, err := bcache_get_fill(bn, "create_undo", true)
+	if err != 0 {
+		return err
+	}
 	ni := &inode_t{ib, ioff}
 	_iallocundo(bn, ni, ib)
 	ib.Unlock()
 	bcache_relse(ib, "create_undo")
+	return 0
 }
 
 func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err_t) {
@@ -753,8 +804,14 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 
 	// allocate new inode but read from disk, because block may have gotten
 	// evicted from bcache.
-	newbn, newioff := ialloc()
-	newiblk := bcache_get_fill(newbn, "icreate", true)
+	newbn, newioff, err := ialloc()
+	if err != 0 {
+		return 0, err
+	}
+	newiblk, err := bcache_get_fill(newbn, "icreate", true)
+	if err != 0 {
+		return 0, err
+	}
 
 	if fs_debug {
 		fmt.Printf("ialloc: %v %v %v\n", newbn, newioff, biencode(newbn, newioff))
@@ -821,12 +878,12 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	return ret, 0
 }
 
-func (idm *imemnode_t) idibread() *bdev_block_t {
+func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
 	return bcache_get_fill(idm.blkno, "idibread", true)
 }
 
 // frees all blocks occupied by idm
-func (idm *imemnode_t) ifree() {
+func (idm *imemnode_t) ifree() err_t {
 	allb := make([]int, 0, 10)
 	add := func(blkno int) {
 		if blkno != 0 {
@@ -840,7 +897,10 @@ func (idm *imemnode_t) ifree() {
 	indno := idm.icache.indir
 	for indno != 0 {
 		add(indno)
-		blk := idm.icache.mbread(indno)
+		blk, err := idm.icache.mbread(indno)
+		if err != 0 {
+			return err
+		}
 		blks := blk.data[:]
 		for i := 0; i < INDADDR; i++ {
 			off := i*8
@@ -852,7 +912,10 @@ func (idm *imemnode_t) ifree() {
 		bcache_relse(blk, "ifree1")
 	}
 
-	iblk := idm.idibread()
+	iblk, err := idm.idibread()
+	if err != 0 {
+		return err
+	}
 	if iblk == nil {
 		panic("ifree")
 	}
@@ -871,8 +934,7 @@ func (idm *imemnode_t) ifree() {
 	for _, blkno := range allb {
 		bfree(blkno)
 	}
-
-	// idm.pgcache.release()
+	return 0
 }
 
 // used for {,f}stat
@@ -969,36 +1031,47 @@ func (pc *pgcache_t) pgdirty(offset, end int) {
 }
 
 // returns whether the page for pgn needs to be filled from disk and success.
-func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) bool {
+func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) (err_t) {
 	if pc.pgs.nodes >= pc.pglim {
 		if !syslimit.mfspgs.take() {
-			return false
+			return -ENOMEM
 		}
 		pc.pglim++
 	}
 	if _, ok := pc.pgs.lookup(pgn); !ok {
 		offset := (int(pgn) << PGSHIFT)
 		blkno, err := pc.idm.offsetblk(offset, true)
+		if err == -ENOMEM {
+			fmt.Printf("_ensureslot %v\n", offset)
+		}
 		if err != 0 {
-			return false
+			return err
 		}
 		var b *bdev_block_t
+		s := strconv.Itoa(int(pc.idm.priv))
 		if fill {
-			b = bcache_get_fill(blkno, "_ensureslot1", false)
+			b, err  = bcache_get_fill(blkno, "_ensureslot1: " + s, false)
 		} else {
-			b = bcache_get_zero(blkno, "_ensureslot2", false)
+			b, err = bcache_get_zero(blkno, "_ensureslot2: " + s, false)
+		}
+		if err == -ENOMEM {
+			fmt.Printf("_ensureslot1 %v\n", offset)
+		}
+
+		if err != 0 {
+			return err
 		}
 		pgi := &pginfo_t{pgn: pgn, pg: b.data, buf: b}
 		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
 		pc.pgs.insert(pgi)
 	}
-	return true
+	return 0
 }
 
 func (pc *pgcache_t) _ensurefill(pgn pgn_t,fill bool) err_t {
-	ok := pc._ensureslot(pgn, fill)
-	if !ok {
-		return -ENOMEM
+	err := pc._ensureslot(pgn, fill)
+	if err != 0 {
+		return err
 	}
 	return 0
 }

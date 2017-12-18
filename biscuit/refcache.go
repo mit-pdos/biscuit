@@ -2,16 +2,15 @@ package main
 
 import "fmt"
 import "sync"
-import "sort"
 
 // Cache of in-mmory objects. Main invariant: an object is in memory once so
 // that threads see each other's updates.
 
+var refcache_debug = false
+
 type obj_t interface {
 	evict()
 	key() int
-	ilock(s string)
-	iunlock(s string)
 }
 
 // The cache contains refcounted references to obj
@@ -21,6 +20,7 @@ type ref_t struct {
 	refcnt          int
 	key             int
 	valid           bool
+	s               string
 	refnext		*ref_t
 	refprev		*ref_t
 }
@@ -39,18 +39,18 @@ func make_refcache(size int) *refcache_t {
 	return ic
 }
 
-func print_live_refs() {
-	fmt.Printf("refs %v\n", len(irefcache.refs))
-	for _, r := range irefcache.refs {
-		fmt.Printf("inode %v refcnt %v opencnt %v\n", r)
+func (irc *refcache_t) print_live_refs() {
+	fmt.Printf("refs %v\n", len(irc.refs))
+	for _, r := range irc.refs {
+		fmt.Printf("ref %v refcnt %v %v\n", r.key, r.refcnt, r.s)
 	}
 }
 
 func (irc *refcache_t) _replace() obj_t {
 	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
 		if ir.refcnt == 0 {
-			if fs_debug {
-				fmt.Printf("_replace: victim %v\n", ir.key)
+			if true {
+				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
 			}
 			delete(irc.refs, ir.key)
 			irc.reflru.remove(ir)
@@ -67,7 +67,7 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 	ref, ok := irc.refs[key]
 	if ok {
 		ref.refcnt++
-		if fs_debug {
+		if refcache_debug {
 			fmt.Printf("ref hit %v %v %v\n", key, ref.refcnt, s)
 		}
 		irc.reflru.mkhead(ref)
@@ -80,23 +80,23 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 	if len(irc.refs) >= irc.size {
 		victim = irc._replace()
 		if victim == nil {
-			fmt.Printf("inodes in use %v limited %v\n", len(irc.refs), irc.size)
-			panic("too many inodes")
+			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.size)
+			irc.print_live_refs()
 			return nil, -ENOMEM
 		}
         }
  	
-
 	ref = &ref_t{}
 	ref.refcnt = 1
 	ref.key = key
 	ref.valid = false
+	ref.s = s
 	ref.Lock()
 	
 	irc.refs[key] = ref
 	irc.reflru.mkhead(ref)
 	
-	if fs_debug {
+	if refcache_debug {
 		fmt.Printf("ref miss %v cnt %v %s\n", key, ref.refcnt, s)
 	}
 
@@ -112,51 +112,42 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 }
 
 
-func (irc *refcache_t) refup(o obj_t) {
+func (irc *refcache_t) refup(o obj_t, s string) {
 	irc.Lock()
 	defer irc.Unlock()
 	
-	iref, ok := irc.refs[o.key()]
+	ref, ok := irc.refs[o.key()]
 	if !ok {
 		panic("refup")
 	}
-	iref.refcnt++
+	
+	if refcache_debug {
+		fmt.Printf("refdup %v cnt %v %s\n", o.key(), ref.refcnt, s)
+	}
+
+	ref.refcnt++
 }
 
 func (irc *refcache_t) refdown(o obj_t, s string) {
 	irc.Lock()
 	defer irc.Unlock()
-	
-	iref, ok := irc.refs[o.key()]
+
+	ref, ok := irc.refs[o.key()]
 	if !ok {
 		panic("refdown: key not present")
 	}
-	if o != iref.obj {
+	if o != ref.obj {
 		panic("refdown: different obj")
 	}
+
+	if refcache_debug {
+		fmt.Printf("refdown %v cnt %v %s\n", o.key(), ref.refcnt, s)
+	}
 	
-	iref.refcnt--
-	if iref.refcnt < 0 {
+	ref.refcnt--
+	if ref.refcnt < 0 {
 		panic("refdown")
 	}
-}
-
-func (irc *refcache_t) lockall(imems []obj_t) []obj_t {
-	var locked []obj_t
-	sort.Slice(imems, func(i, j int) bool { return imems[i].key() < imems[j].key() })
-	for _, imem := range imems {
-		dup := false
-		for _, l := range locked {
-			if imem.key() == l.key() {
-				dup = true
-			}
-		}
-		if !dup {
-			locked = append(locked, imem)
-			imem.ilock("lockall")
-		}
-	}
-	return locked
 }
 
 // LRU list of references

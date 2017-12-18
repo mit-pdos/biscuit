@@ -115,7 +115,10 @@ func (log *log_t) commit() {
 		fmt.Printf("commit\n")
 	}
 
-	headblk := bcache_get_zero(log.logstart, "commit", false)
+	headblk, err := bcache_get_zero(log.logstart, "commit", false)
+	if err != 0 {
+		panic("cannot read commit block\n")
+	}
 	
 	lh := logheader_t{headblk.data}
 	for i := 0; i < log.lhead; i++ {
@@ -124,7 +127,10 @@ func (log *log_t) commit() {
 		lh.w_logdest(i, l.block)
 
 		// write block into log
-                b := bcache_get_nofill(log.logstart+i+1, "log")
+                b, err := bcache_get_nofill(log.logstart+i+1, "log")
+		if err != 0 {
+			panic("cannot get log block\n")
+		}
 		copy(b.data[:], l.buf.data[:])
 		b.Unlock()
 		bcache_write_async(b)
@@ -260,29 +266,42 @@ func (b *bdev_block_t) log_write() {
 	fslog.incoming <- b
 }
 
-func log_init(logstart, loglen int) {
+func log_init(logstart, loglen int) err_t {
 	fslog.init(logstart, loglen)
-	log_recover()
+	err := log_recover()
+	if err != 0 {
+		return err
+	}
 	go log_daemon(&fslog)
+	return 0
 }
 
 
-func log_recover() {
+func log_recover() err_t {
 	l := &fslog
-	b := bcache_get_fill(l.logstart, "fs_recover_logstart", false)
+	b, err := bcache_get_fill(l.logstart, "fs_recover_logstart", false)
+	if err != 0 { 
+		return err
+	}
 	lh := logheader_t{b.data}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
-		bcache_relse(b, "fs_recover0")
-		return
+		bcache_relse(b, "fs_recover_logstart")
+		return 0
 	}
 	fmt.Printf("starting FS recovery...")
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		lb := bcache_get_fill(l.logstart + 1 + i, "i", false)
-		fb := bcache_get_fill(bdest, "bdest", false)
+		lb, err := bcache_get_fill(l.logstart + 1 + i, "i", false)
+		if err != 0 {
+			return err
+		}
+		fb, err := bcache_get_fill(bdest, "bdest", false)
+		if err != 0 {
+			return err
+		}
 		copy(fb.data[:], lb.data[:])
 		bcache_write(fb)
 		bcache_relse(lb, "fs_recover1")
@@ -292,6 +311,7 @@ func log_recover() {
 	// clear recovery flag
 	lh.w_recovernum(0)
 	bcache_write(b)
-	bcache_relse(b, "fs_recover3")
+	bcache_relse(b, "fs_recover_logstart")
 	fmt.Printf("restored %v blocks\n", rlen)
+	return 0
 }

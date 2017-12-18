@@ -249,6 +249,8 @@ type syslimit_t struct {
 	mfspgs		sysatomic_t
 	// shared buffer space
 	//shared		sysatomic_t
+	// bdev blocks
+	blocks          int
 }
 
 var syslimit = syslimit_t {
@@ -263,6 +265,7 @@ var syslimit = syslimit_t {
 	pipes:		1e4,
 	// 8GB of mfs pages
 	mfspgs:		1 << 21,
+        blocks:         100,
 }
 
 // a type for system limits that aren't protected by a lock.

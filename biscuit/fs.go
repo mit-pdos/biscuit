@@ -23,11 +23,12 @@ func fs_init() *fd_t {
 	// // we are now prepared to take disk interrupts
 	// irq_unmask(IRQ_DISK)
 
-	bcache_init()
-
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b := bcache_get_fill(0, "fsoff", false)
+	b, err := bcache_get_fill(0, "fsoff", false)
+	if err != 0 {
+		panic("fs_init")
+	}
 	FSOFF := 506
 	superb_start = readn(b.data[:], 4, FSOFF)
 	fmt.Printf("superb_start %v %#x\n", superb_start, superb_start)
@@ -37,7 +38,10 @@ func fs_init() *fd_t {
 	bcache_relse(b, "fs_init")
 
 	// superblock is never changed, so reading before recovery is fine
-	b = bcache_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
+	b, err = bcache_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
+	if err != 0 {
+		panic("fs_init")
+	}
 	superb = superblock_t{b.data}
 	iroot = superb.rootinode()
 
@@ -54,7 +58,10 @@ func fs_init() *fd_t {
 		panic("bad log len")
 	}
 
-	log_init(logstart, loglen)
+	err = log_init(logstart, loglen)
+	if err != 0 {
+		panic("log_init failed")
+	}
 	
 	return &fd_t{fops: &fsfops_t{priv: iroot}}
 }
@@ -146,7 +153,7 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 	}
 
 	// acquire both locks
-	irefcache.lockall([]obj_t{par, child})
+	iref_lockall([]*imemnode_t{par, child})
 	defer par.iunlock_refdown("fs_unlink_par")
 	defer child.iunlock_refdown("fs_unlink_child")
 	
@@ -251,15 +258,15 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 			return err
 		}
 		
-		var inodes []obj_t
-		var locked []obj_t
+		var inodes []*imemnode_t
+		var locked []*imemnode_t
 		if err == 0 {
 			newexists = true
-			inodes = []obj_t{opar, ochild, npar, nchild}
+			inodes = []*imemnode_t{opar, ochild, npar, nchild}
 		} else {
-			inodes = []obj_t{opar, ochild, npar}
+			inodes = []*imemnode_t{opar, ochild, npar}
 		}
-		locked = irefcache.lockall(inodes)
+		locked = iref_lockall(inodes)
 		// defers are run last-in-first-out
 		for _, v := range inodes {
 			defer irefcache.refdown(v, "rename_opar")
@@ -537,7 +544,7 @@ func (fo *fsfops_t) reopen() err_t {
 	if err != 0 {
 		return err
 	}
-	irefcache.refup(idm)   // close will decrease it
+	irefcache.refup(idm, "reopen")   // close will decrease it
 	idm.iunlock_refdown("reopen")
 	return 0
 }
@@ -772,7 +779,10 @@ func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	var did int
 	for dst.remain() != 0 {
 		blkno := raw.offset / BSIZE
-		b := bcache_get_fill(blkno, "read", false)
+		b, err := bcache_get_fill(blkno, "read", false)
+		if err != 0 {
+			return 0, err
+		}
 		boff := raw.offset % BSIZE
 		c, err := dst.uiowrite(b.data[boff:])
 		if err != 0 {
@@ -796,7 +806,10 @@ func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		//	buf := bdev_read_block(blkno)
 		//}
 		// XXX don't always have to read block in from disk
-		buf := bcache_get_fill(blkno, "write", false)
+		buf, err := bcache_get_fill(blkno, "write", false)
+		if err != 0 {
+			return 0, err
+		}
 		c, err := src.uioread(buf.data[boff:])
 		if err != 0 {
 			return 0, err
@@ -1063,7 +1076,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 		idm.do_trunc(0)
 	}
 
-	irefcache.refup(idm)
+	irefcache.refup(idm, "_fs_open")
 
 	ret.priv = idm.priv
 	ret.major = idm.icache.major
@@ -1144,8 +1157,9 @@ func fs_stat(path string, st *stat_t, cwd inum) err_t {
 }
 
 func fs_sync() err_t {
-	print_live_refs()
-	print_live_blocks()
+       irefcache.print_live_refs()
+       brefcache.print_live_refs()
+
 	if memtime {
 		return 0
 	}
@@ -1274,7 +1288,7 @@ type fblkcache_t struct {
 	free_start	int
 }
 
-func fbread(blockno int) *bdev_block_t {
+func fbread(blockno int) (*bdev_block_t, err_t) {
 	if blockno < superb_start {
 		panic("naughty blockno")
 	}
@@ -1298,7 +1312,7 @@ var _lastbyte int
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func balloc1() int {
+func balloc1() (int, err_t) {
 	fst := free_start
 	flen := free_len
 	if fst == 0 || flen == 0 {
@@ -1310,6 +1324,7 @@ func balloc1() int {
 	var blk *bdev_block_t
 	var blkn int
 	var oct int
+	var err err_t
 	// 0 is free, 1 is allocated
 	for b := 0; b < flen && !found; b++ {
 		i := (_lastblkno + b) % flen
@@ -1317,7 +1332,10 @@ func balloc1() int {
 			blk.Unlock()
 			bcache_relse(blk, "balloc1")
 		}
-		blk = fbread(fst + i)
+		blk, err = fbread(fst + i)
+		if err != 0 {
+			return 0, err
+		}
 		start := 0
 		if b == 0 {
 			start = _lastbyte
@@ -1347,16 +1365,20 @@ func balloc1() int {
 
 	boffset := usable_start
 	bitsperblk := BSIZE*8
-	return boffset + blkn*bitsperblk + oct*8 + int(bit)
+	return boffset + blkn*bitsperblk + oct*8 + int(bit), 0
 }
 
-func balloc() int {
+func balloc() (int, err_t) {
 	fblock.Lock()
-	ret := balloc1()
+	ret, err := balloc1()
 	fblock.Unlock()
-
-	blk := bcache_get_zero(ret, "balloc", true)
-
+	if err != 0 {
+		return 0, err
+	}
+	blk, err := bcache_get_zero(ret, "balloc", true)
+	if err != 0 {
+		return 0, err
+	}
 	if fs_debug {
 		fmt.Printf("balloc: %v\n", ret)
 	}
@@ -1367,10 +1389,10 @@ func balloc() int {
 	blk.log_write()
 	bcache_relse(blk, "balloc")
 	
-	return ret
+	return ret, 0
 }
 
-func bfree(blkno int) {
+func bfree(blkno int) err_t {
 
 	if fs_debug {
 		fmt.Printf("bfree: %v\n", blkno)
@@ -1396,7 +1418,10 @@ func bfree(blkno int) {
 	if fblkno >= fst + flen {
 		panic("bad blockno")
 	}
-	fblk := fbread(fblkno)
+	fblk, err := fbread(fblkno)
+	if err != 0 {
+		return err
+	}
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
 	fblk.log_write()
@@ -1406,6 +1431,7 @@ func bfree(blkno int) {
 	if ifreeblk == blkno {
 		ifreeblk = 0
 	}
+	return 0
 }
 
 var ifreeblk int	= 0
@@ -1417,7 +1443,7 @@ var ifreeoff int 	= 0
 // one inode but then crash.  on recovery ifreeblk will be zero and we will
 // allocate a new block and not use the remaining free entries of ifreeblk
 // before crash.
-func ialloc() (int, int) {
+func ialloc() (int, int, err_t) {
 	fblock.Lock()
 	defer fblock.Unlock()
 
@@ -1430,17 +1456,24 @@ func ialloc() (int, int) {
 			// allocate a new inode block next time
 			ifreeblk = 0
 		}
-		return ret, retoff
+		return ret, retoff, 0
 	}
 
-	ifreeblk = balloc1()
+	ifreeblk, err := balloc1()
+	if err != 0 {
+		return 0, 0, err
+	}
+	
 	ifreeoff = 0
 
 	if fs_debug {
 		fmt.Printf("ialloc %d\n", ifreeblk)
 	}
 
-	zblk := bcache_get_zero(ifreeblk, "ialloc", true)
+	zblk, err := bcache_get_zero(ifreeblk, "ialloc", true)
+	if err != 0 {
+		return 0, 0, err
+	}
 	
 	// block may have been int the cache and is now reused, zero it in the cache
 	var zdata [BSIZE]uint8
@@ -1451,5 +1484,5 @@ func ialloc() (int, int) {
 	
 	reti := ifreeoff
 	ifreeoff++
-	return ifreeblk, reti
+	return ifreeblk, reti, 0
 }
