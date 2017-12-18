@@ -1,10 +1,7 @@
 package main
 
 import "fmt"
-import "strings"
 import "sync"
-
-const NAME_MAX    int = 512
 
 const fs_debug    = false
 
@@ -16,73 +13,6 @@ var free_len		int
 var usable_start	int
 
 var fblock	= sync.Mutex{}
-
-// allocation-less pathparts
-type pathparts_t struct {
-	path	string
-	loc	int
-}
-
-func (pp *pathparts_t) pp_init(path string) {
-	pp.path = path
-	pp.loc = 0
-}
-
-func (pp *pathparts_t) next() (string, bool) {
-	ret := ""
-	for ret == "" {
-		if pp.loc == len(pp.path) {
-			return "", false
-		}
-		ret = pp.path[pp.loc:]
-		nloc := strings.IndexByte(ret, '/')
-		if nloc != -1 {
-			ret = ret[:nloc]
-			pp.loc += nloc + 1
-		} else {
-			pp.loc += len(ret)
-		}
-	}
-	return ret, true
-}
-
-func sdirname(path string) (string, string) {
-	fn := path
-	l := len(fn)
-	// strip all trailing slashes
-	for i := l - 1; i >= 0; i-- {
-		if fn[i] != '/' {
-			break
-		}
-		fn = fn[:i]
-		l--
-	}
-	s := ""
-	for i := l - 1; i >= 0; i-- {
-		if fn[i] == '/' {
-			// remove the rightmost slash only if it is not the
-			// first char (the root).
-			if i == 0 {
-				s = fn[0:1]
-			} else {
-				s = fn[:i]
-			}
-			fn = fn[i+1:]
-			break
-		}
-	}
-
-	return s, fn
-}
-
-func crname(path string, nilpatherr err_t) (err_t, bool) {
-	if path == "" {
-		return nilpatherr, false
-	} else if path == "." || path == ".." {
-		return -EINVAL, false
-	}
-	return 0, true
-}
 
 func fs_init() *fd_t {
 
@@ -1338,64 +1268,6 @@ func (sb *superblock_t) w_freeinode(n int) {
 	fieldw(sb.data, 5, n)
 }
 
-// directory data format
-// 0-13,  file name characters
-// 14-21, inode block/offset
-// ...repeated, totaling 23 times
-type dirdata_t struct {
-	data	[]uint8
-}
-
-const(
-	DNAMELEN = 14
-	NDBYTES  = 22
-	NDIRENTS = BSIZE/NDBYTES
-)
-
-func doffset(didx int, off int) int {
-	if didx < 0 || didx >= NDIRENTS {
-		panic("bad dirent index")
-	}
-	return NDBYTES*didx + off
-}
-
-func (dir *dirdata_t) filename(didx int) string {
-	st := doffset(didx, 0)
-	sl := dir.data[st : st + DNAMELEN]
-	ret := make([]byte, 0, 14)
-	for _, c := range sl {
-		if c == 0 {
-			break
-		}
-		ret = append(ret, c)
-	}
-	return string(ret)
-}
-
-func (dir *dirdata_t) inodenext(didx int) inum {
-	st := doffset(didx, 14)
-	v := readn(dir.data[:], 8, st)
-	return inum(v)
-}
-
-func (dir *dirdata_t) w_filename(didx int, fn string) {
-	st := doffset(didx, 0)
-	sl := dir.data[st : st + DNAMELEN]
-	l := len(fn)
-	for i := range sl {
-		if i >= l {
-			sl[i] = 0
-		} else {
-			sl[i] = fn[i]
-		}
-	}
-}
-
-func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
-	st := doffset(didx, 14)
-	v := biencode(blk, iidx)
-	writen(dir.data[:], 8, st, v)
-}
 
 type fblkcache_t struct {
 	blks		[]*bdev_block_t

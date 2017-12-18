@@ -120,220 +120,14 @@ func (ind *inode_t) w_addr(i int, blk int) {
 	fieldw(ind.iblk.data, ifield(ind.ioff, addroff + i), blk)
 }
 
-type pgn_t uint
-
-func off2pgn(off int) pgn_t {
-	return pgn_t(off) >> PGSHIFT
-}
-
-// XXX don't need to fill the destination page if the write covers the whole
-// page
-type pgcache_t struct {
-	pgs	frbh_t
-	// the unit size of underlying device
-	blocksz		int
-	pglim		int
-	idm             *imemnode_t
-}
-
-type pginfo_t struct {
-	pgn		pgn_t
-	pg		*bytepg_t
-	dirtyblocks	[]bool
-	buf             *bdev_block_t
-}
-
-func (pc *pgcache_t) pgc_init(bsz int, idm *imemnode_t) {
-	if idm == nil {
-		panic("invalid idm")
-	}
-	if PGSIZE % bsz != 0 {
-		panic("block size does not divide pgsize")
-	}
-	pc.blocksz = bsz
-	pc.pglim = 0
-	pc.idm = idm
-}
-
-// takes an offset, returns the page number and starting block
-func (pc *pgcache_t) _pgblock(offset int) (pgn_t, int) {
-	pgn := off2pgn(offset)
-	block := (offset % PGSIZE) / pc.blocksz
-	return pgn, block
-}
-
-// mark the range [offset, end) as dirty
-func (pc *pgcache_t) pgdirty(offset, end int) {
-	for i := offset; i < end; i += pc.blocksz {
-		pgn, chn := pc._pgblock(i)
-		pgi, ok := pc.pgs.lookup(pgn)
-		if !ok {
-			panic("dirtying absent page?")
-		}
-		pgi.dirtyblocks[chn] = true
+func print_inodes(b *bdev_block_t) {
+	blkwords := BSIZE/8
+	n := blkwords/NIWORDS
+	for i := 0; i < n; i++ {
+		inode := &inode_t{b, i}
+		fmt.Printf("inode: %v %v %v %v\n", i, b.block, inode.itype(), biencode(b.block,i))
 	}
 }
-
-// returns whether the page for pgn needs to be filled from disk and success.
-func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) bool {
-	if pc.pgs.nodes >= pc.pglim {
-		if !syslimit.mfspgs.take() {
-			return false
-		}
-		pc.pglim++
-	}
-	if _, ok := pc.pgs.lookup(pgn); !ok {
-		offset := (int(pgn) << PGSHIFT)
-		blkno, err := pc.idm.offsetblk(offset, true)
-		if err != 0 {
-			return false
-		}
-		var b *bdev_block_t
-		if fill {
-			b = bcache_get_fill(blkno, "_ensureslot1", false)
-		} else {
-			b = bcache_get_zero(blkno, "_ensureslot2", false)
-		}
-		pgi := &pginfo_t{pgn: pgn, pg: b.data, buf: b}
-		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
-		pc.pgs.insert(pgi)
-	}
-	return true
-}
-
-func (pc *pgcache_t) _ensurefill(pgn pgn_t,fill bool) err_t {
-	ok := pc._ensureslot(pgn, fill)
-	if !ok {
-		return -ENOMEM
-	}
-	return 0
-}
-
-// returns the raw page and physical address of requested page. fills the page
-// if necessary.
-func (pc *pgcache_t) pgraw(offset int, fill bool) (*pg_t, pa_t, err_t) {
-	pgn, _ := pc._pgblock(offset)
-	err := pc._ensurefill(pgn, fill)
-	if err != 0 {
-		return nil, 0, err
-	}
-	pgi, ok := pc.pgs.lookup(pgn)
-	if !ok {
-		panic("eh")
-	}
-	wpg := (*pg_t)(unsafe.Pointer(pgi.pg))
-	return wpg, pgi.buf.pa, 0
-}
-
-// offset <= end. if offset lies on the same page as end, the returned slice is
-// trimmed (bytes >= end are removed).
-func (pc *pgcache_t) pgfor(offset, end int, fill bool) ([]uint8, err_t) {
-	if offset > end {
-		panic("offset must be less than end")
-	}
-	pgva, _, err := pc.pgraw(offset, fill)
-	if err != 0 {
-		return nil, err
-	}
-	pg := pg2bytes(pgva)[:]
-
-	pgoff := offset % PGSIZE
-	pg = pg[pgoff:]
-	if offset + len(pg) > end {
-		left := end - offset
-		pg = pg[:left]
-	}
-	return pg, 0
-}
-
-// write all dirty pages back to device
-func (pc *pgcache_t) flush() {
-	if memtime {
-		return
-	}
-	pc.pgs.iter(func(pgi *pginfo_t) {
-		for j, dirty := range pgi.dirtyblocks {
-			if !dirty {
-				continue
-			}
-			pgi.buf.log_write()
-			pgi.dirtyblocks[j] = false
-		}
-	})
-}
-
-// Returning buffer to bdev cache
-func (pc *pgcache_t) evict() int {
-	pc.pgs.iter(func(pgi *pginfo_t) {
-		bcache_relse(pgi.buf, "evict")
-		for _, d := range pgi.dirtyblocks {
-			if d {
-				panic("cannot be dirty")
-			}
-		}
-	})
-	pc.pgs.clear()
-	return 0
-}
-
-// pglru_t's lock is a leaf lock
-type pglru_t struct {
-	sync.Mutex
-	head	*imemnode_t
-	tail	*imemnode_t
-}
-
-func (pl *pglru_t) mkhead(im *imemnode_t) {
-	if memtime {
-		return
-	}
-	pl.Lock()
-	pl._mkhead(im)
-	pl.Unlock()
-}
-
-func (pl *pglru_t) _mkhead(im *imemnode_t) {
-	if pl.head == im {
-		return
-	}
-	pl._remove(im)
-	if pl.head != nil {
-		pl.head.pgprev = im
-	}
-	im.pgnext = pl.head
-	pl.head = im
-	if pl.tail == nil {
-		pl.tail = im
-	}
-}
-
-func (pl *pglru_t) _remove(im *imemnode_t) {
-	if pl.tail == im {
-		pl.tail = im.pgprev
-	}
-	if pl.head == im {
-		pl.head = im.pgnext
-	}
-	if im.pgprev != nil {
-		im.pgprev.pgnext = im.pgnext
-	}
-	if im.pgnext != nil {
-		im.pgnext.pgprev = im.pgprev
-	}
-	im.pgprev, im.pgnext = nil, nil
-}
-
-func (pl *pglru_t) remove(im *imemnode_t) {
-	if memtime {
-		return
-	}
-	pl.Lock()
-	pl._remove(im)
-	pl.Unlock()
-}
-
-var pglru pglru_t
-
 
 // In-memory representation of an inode.
 type imemnode_t struct {
@@ -349,8 +143,6 @@ type imemnode_t struct {
 	pgprev		*imemnode_t
 	// cache of inode metadata
 	icache		icache_t
-	//l		sync.Mutex
-	//l		trymutex_t
 	// XXXPANIC for sanity
 	_amlocked	bool
 }
@@ -370,13 +162,14 @@ type irefcache_t struct {
 }
 
 
+var pglru pglru_t
+var irefcache	= make_irefcache()
+
 func make_irefcache() *irefcache_t {
 	ic := &irefcache_t{}
 	ic.irefs = make(map[inum]*iref_t, 1e6)
 	return ic
 }
-
-var irefcache	= make_irefcache()
 
 func print_live_inodes() {
 	fmt.Printf("icache %v\n", len(irefcache.irefs))
@@ -769,44 +562,6 @@ type icache_t struct {
 	}
 }
 
-type fdent_t struct {
-	offset	int
-	next	*fdent_t
-}
-
-// linked list of free directory entries
-type fdelist_t struct {
-	head	*fdent_t
-	n	int
-}
-
-func (il *fdelist_t) addhead(off int) {
-	d := &fdent_t{offset: off}
-	d.next = il.head
-	il.head = d
-	il.n++
-}
-
-func (il *fdelist_t) remhead() (*fdent_t, bool) {
-	var ret *fdent_t
-	if il.head != nil {
-		ret = il.head
-		il.head = ret.next
-		il.n--
-	}
-	return ret, ret != nil
-}
-
-func (il *fdelist_t) count() int {
-	return il.n
-}
-
-// struct to hold the offset/priv of directory entry slots
-type icdent_t struct {
-	offset	int
-	priv	inum
-}
-
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
 func (ic *icache_t) mbread(blockn int) *bdev_block_t {
@@ -1059,319 +814,6 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 }
 
 
-// returns the offset of an empty directory entry. returns error if failed to
-// allocate page for the new directory entry.
-func (idm *imemnode_t) _denextempty() (int, err_t) {
-	dc := &idm.icache.dentc
-	if ret, ok := dc.freel.remhead(); ok {
-		return ret.offset, 0
-	}
-
-	// see if we have an empty slot before expanding the directory
-	if !idm.icache.dentc.haveall {
-		var de icdent_t
-		found, err := idm._descan(func(fn string, tde icdent_t) bool {
-			if fn == "" {
-				de = tde
-				return true
-			}
-			return false
-		})
-		if err != 0 {
-			return 0, err
-		}
-		if found {
-			return de.offset, 0
-		}
-	}
-
-	// current dir blocks are full -- allocate new dirdata block. make
-	// sure its in the page cache but not fill'ed from disk
-	newsz := idm.icache.size + BSIZE
-	_, err := idm.pgcache.pgfor(idm.icache.size, newsz, false)
-	if err != 0 {
-		return 0, err
-	}
-	idm.pgcache.pgdirty(idm.icache.size, newsz)
-	newoff := idm.icache.size
-	// start from 1 since we return slot 0 directly
-	for i := 1; i < NDIRENTS; i++ {
-		noff := newoff + NDBYTES*i
-		idm._deaddempty(noff)
-	}
-	idm.icache.size = newsz
-	return newoff, 0
-}
-
-// if _deinsert fails to allocate a page, idm is left unchanged.
-func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
-	// XXXPANIC
-	//if _, err := idm._delookup(name); err == 0 {
-	//	panic("dirent already exists")
-	//}
-	var ddata dirdata_t
-	noff, err := idm._denextempty()
-	if err != 0 {
-		return err
-	}
-        // dennextempty() made the slot so we won't fill
-	pg, err := idm.pgcache.pgfor(noff, noff+NDBYTES, true) 
-	if err != 0 {
-		return err
-	}
-	ddata.data = pg
-
-	// write dir entry
-	//if ddata.filename(0) != "" {
-	//	panic("dir entry slot is not free")
-	//}
-	ddata.w_filename(0, name)
-	ddata.w_inodenext(0, nblkno, ioff)
-	idm.pgcache.pgdirty(noff, noff+NDBYTES)
-	idm.pgcache.flush()
-	icd := icdent_t{noff, inum(biencode(nblkno, ioff))}
-	ok := idm._dceadd(name, icd)
-	dc := &idm.icache.dentc
-	dc.haveall = dc.haveall && ok
-	return 0
-}
-
-// calls f on each directory entry (including empty ones) until f returns true
-// or it has been called on all directory entries. _descan returns true if f
-// returned true.
-func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, err_t) {
-	for i := 0; i < idm.icache.size; i+= BSIZE {
-		pg, err := idm.pgcache.pgfor(i, i+BSIZE, true)
-		if err != 0 {
-			return false, err
-		}
-		// XXXPANIC
-		if len(pg) != BSIZE {
-			panic("wut")
-		}
-		dd := dirdata_t{pg}
-		for j := 0; j < NDIRENTS; j++ {
-			tfn := dd.filename(j)
-			tpriv := dd.inodenext(j)
-			tde := icdent_t{i+j*NDBYTES, tpriv}
-			if f(tfn, tde) {
-				return true, 0
-			}
-		}
-	}
-	return false, 0
-}
-
-func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
-	if fn == "" {
-		panic("bad lookup")
-	}
-	if de, ok := idm.icache.dentc.dents.lookup(fn); ok {
-		return de, 0
-	}
-	var zi icdent_t
-	if idm.icache.dentc.haveall {
-		// cache negative entries?
-		return zi, -ENOENT
-	}
-
-	// not in cached dirents
-	found := false
-	haveall := true
-	var de icdent_t
-	_, err := idm._descan(func(tfn string, tde icdent_t) bool {
-		if tfn == "" {
-			return false
-		}
-		if tfn == fn {
-			de = tde
-			found = true
-		}
-		if !idm._dceadd(tfn, tde) {
-			haveall = false
-		}
-		return found && !haveall
-	})
-	if err != 0 {
-		return zi, err
-	}
-	idm.icache.dentc.haveall = haveall
-	if !found {
-		return zi, -ENOENT
-	}
-	return de, 0
-}
-
-func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
-	var zi icdent_t
-	de, err := idm._delookup(fn)
-	if err != 0 {
-		return zi, err
-	}
-	pg, err := idm.pgcache.pgfor(de.offset, de.offset + NDBYTES, true)
-	if err != 0 {
-		return zi, err
-	}
-	dirdata := dirdata_t{pg}
-	dirdata.w_filename(0, "")
-	dirdata.w_inodenext(0, 0, 0)
-	idm.pgcache.pgdirty(de.offset, de.offset + NDBYTES)
-	idm.pgcache.flush()
-	// add back to free dents
-	idm.icache.dentc.dents.remove(fn)
-	idm._deaddempty(de.offset)
-	return de, 0
-}
-
-// returns the filename mapping to tnum
-func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
-	// check cache first
-	var fn string
-	found := idm.icache.dentc.dents.iter(func(dn string, de icdent_t) bool {
-		if de.priv == tnum {
-			fn = dn
-			return true
-		}
-		return false
-	})
-	if found {
-		return fn, 0
-	}
-
-	// not in cache; shucks!
-	var de icdent_t
-	found, err := idm._descan(func(tfn string, tde icdent_t) bool {
-		if tde.priv == tnum {
-			fn = tfn
-			de = tde
-			return true
-		}
-		return false
-	})
-	if err != 0 {
-		return "", err
-	}
-	if !found {
-		return "", -ENOENT
-	}
-	idm._dceadd(fn, de)
-	return fn, 0
-}
-
-// returns true if idm, a directory, is empty (excluding ".." and ".").
-func (idm *imemnode_t) _deempty() (bool, err_t) {
-	if idm.icache.dentc.haveall {
-		dentc := &idm.icache.dentc
-		hasfiles := dentc.dents.iter(func(dn string, de icdent_t) bool {
-			if dn != "." && dn != ".." {
-				return true
-			}
-			return false
-		})
-		return !hasfiles, 0
-	}
-	notempty, err := idm._descan(func(fn string, de icdent_t) bool {
-		return fn != "" && fn != "." && fn != ".."
-	})
-	if err != 0 {
-		return false, err
-	}
-	return !notempty, 0
-}
-
-// empties the dirent cache, returning the number of dents purged.
-func (idm *imemnode_t) _derelease() int {
-	dc := &idm.icache.dentc
-	dc.haveall = false
-	dc.dents.clear()
-	dc.freel.head = nil
-	ret := dc.max
-	syslimit.dirents.given(uint(ret))
-	dc.max = 0
-	return ret
-}
-
-// ensure that an insert/unlink cannot fail i.e. fail to allocate a page. if fn
-// == "", look for an empty dirent, otherwise make sure the page containing fn
-// is in the page cache.
-func (idm *imemnode_t) _deprobe(fn string) err_t {
-	if fn != "" {
-		de, err := idm._delookup(fn)
-		if err != 0 {
-			return err
-		}
-		noff := de.offset
-		_, err = idm.pgcache.pgfor(noff, noff+NDBYTES, true)
-		return err
-	}
-	noff, err := idm._denextempty()
-	if err != 0 {
-		return err
-	}
-	// dennextempty() made the slot so we won't fill
-	_, err = idm.pgcache.pgfor(noff, noff+NDBYTES, true)
-	if err != 0 {
-		return err
-	}
-	idm._deaddempty(noff)
-	return 0
-}
-
-// returns true if this idm has enough free cache space for a single dentry
-func (idm *imemnode_t) _demayadd() bool {
-	dc := &idm.icache.dentc
-	//have := len(dc.dents) + len(dc.freem)
-	have := dc.dents.nodes + dc.freel.count()
-	if have + 1 < dc.max {
-		return true
-	}
-	// reserve more directory entries
-	take := 64
-	if syslimit.dirents.taken(uint(take)) {
-		dc.max += take
-		return true
-	}
-	lhits++
-	return false
-}
-
-// caching is best-effort. returns true if fn was added to the cache
-func (idm *imemnode_t) _dceadd(fn string, de icdent_t) bool {
-	dc := &idm.icache.dentc
-	if !idm._demayadd() {
-		return false
-	}
-	dc.dents.insert(fn, de)
-	return true
-}
-
-func (idm *imemnode_t) _deaddempty(off int) {
-	if !idm._demayadd() {
-		return
-	}
-	dc := &idm.icache.dentc
-	dc.freel.addhead(off)
-}
-
-// guarantee that there is enough memory to insert at least one directory
-// entry.
-func (idm *imemnode_t) probe_insert() err_t {
-	// insert and remove a fake directory entry, forcing a page allocation
-	// if necessary.
-	if err := idm._deprobe(""); err != 0 {
-		return err
-	}
-	return 0
-}
-
-// guarantee that there is enough memory to unlink a dirent (which may require
-// allocating a page to load the dirents from disk).
-func (idm *imemnode_t) probe_unlink(fn string) err_t {
-	if err := idm._deprobe(fn); err != 0 {
-		return err
-	}
-	return 0
-}
 
 // returns true if all the inodes on ib are also marked dead and thus this
 // inode block should be freed.
@@ -1412,15 +854,6 @@ func (idm *imemnode_t) create_undo(childi inum, childn string) {
 	_iallocundo(bn, ni, ib)
 	ib.Unlock()
 	bcache_relse(ib, "create_undo")
-}
-
-func print_inodes(b *bdev_block_t) {
-	blkwords := BSIZE/8
-	n := blkwords/NIWORDS
-	for i := 0; i < n; i++ {
-		inode := &inode_t{b, i}
-		fmt.Printf("inode: %v %v %v %v\n", i, b.block, inode.itype(), biencode(b.block,i))
-	}
 }
 
 func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err_t) {
@@ -1483,57 +916,6 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 	return newinum, err
 }
 
-func (idm *imemnode_t) ilookup(name string) (inum, err_t) {
-	pglru.mkhead(idm)
-	// did someone confuse a file with a directory?
-	if idm.icache.itype != I_DIR {
-		return 0, -ENOTDIR
-	}
-	de, err := idm._delookup(name)
-	if err != 0 {
-		return 0, err
-	}
-	return de.priv, 0
-}
-
-// creates a new directory entry with name "name" and inode number priv
-func (idm *imemnode_t) iinsert(name string, priv inum) err_t {
-	if idm.icache.itype != I_DIR {
-		return -ENOTDIR
-	}
-	if _, err := idm._delookup(name); err == 0 {
-		return -EEXIST
-	} else if err != -ENOENT {
-		return err
-	}
-	if priv <= 0 {
-		fmt.Printf("insert: non-positive inum %v %v\n", name, priv)
-		panic("iinsert")
-	}
-	a, b := bidecode(priv)
-	err := idm._deinsert(name, a, b)
-	return err
-}
-
-// returns inode number of unliked inode so caller can decrement its ref count
-func (idm *imemnode_t) iunlink(name string) (inum, err_t) {
-	if idm.icache.itype != I_DIR {
-		panic("unlink to non-dir")
-	}
-	de, err := idm._deremove(name)
-	if err != 0 {
-		return 0, err
-	}
-	return de.priv, 0
-}
-
-// returns true if the inode has no directory entries
-func (idm *imemnode_t) idirempty() (bool, err_t) {
-	if idm.icache.itype != I_DIR {
-		panic("i am not a dir")
-	}
-	return idm._deempty()
-}
 
 func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	isz := idm.icache.size
@@ -1653,4 +1035,234 @@ func bidecode(val inum) (int, int) {
 	iidx := int(val) & INODEMASK
 	return blk, iidx
 }
+
+
+type pgn_t uint
+
+func off2pgn(off int) pgn_t {
+	return pgn_t(off) >> PGSHIFT
+}type pgn_t uint
+
+func off2pgn(off int) pgn_t {
+	return pgn_t(off) >> PGSHIFT
+}
+
+// XXX don't need to fill the destination page if the write covers the whole
+// page
+type pgcache_t struct {
+	pgs	frbh_t
+	// the unit size of underlying device
+	blocksz		int
+	pglim		int
+	idm             *imemnode_t
+}
+
+
+// XXX don't need to fill the destination page if the write covers the whole
+// page
+type pgcache_t struct {
+	pgs	frbh_t
+	// the unit size of underlying device
+	blocksz		int
+	pglim		int
+	idm             *imemnode_t
+}
+
+type pginfo_t struct {
+	pgn		pgn_t
+	pg		*bytepg_t
+	dirtyblocks	[]bool
+	buf             *bdev_block_t
+}
+
+func (pc *pgcache_t) pgc_init(bsz int, idm *imemnode_t) {
+	if idm == nil {
+		panic("invalid idm")
+	}
+	if PGSIZE % bsz != 0 {
+		panic("block size does not divide pgsize")
+	}
+	pc.blocksz = bsz
+	pc.pglim = 0
+	pc.idm = idm
+}
+
+// takes an offset, returns the page number and starting block
+func (pc *pgcache_t) _pgblock(offset int) (pgn_t, int) {
+	pgn := off2pgn(offset)
+	block := (offset % PGSIZE) / pc.blocksz
+	return pgn, block
+}
+
+// mark the range [offset, end) as dirty
+func (pc *pgcache_t) pgdirty(offset, end int) {
+	for i := offset; i < end; i += pc.blocksz {
+		pgn, chn := pc._pgblock(i)
+		pgi, ok := pc.pgs.lookup(pgn)
+		if !ok {
+			panic("dirtying absent page?")
+		}
+		pgi.dirtyblocks[chn] = true
+	}
+}
+
+// returns whether the page for pgn needs to be filled from disk and success.
+func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) bool {
+	if pc.pgs.nodes >= pc.pglim {
+		if !syslimit.mfspgs.take() {
+			return false
+		}
+		pc.pglim++
+	}
+	if _, ok := pc.pgs.lookup(pgn); !ok {
+		offset := (int(pgn) << PGSHIFT)
+		blkno, err := pc.idm.offsetblk(offset, true)
+		if err != 0 {
+			return false
+		}
+		var b *bdev_block_t
+		if fill {
+			b = bcache_get_fill(blkno, "_ensureslot1", false)
+		} else {
+			b = bcache_get_zero(blkno, "_ensureslot2", false)
+		}
+		pgi := &pginfo_t{pgn: pgn, pg: b.data, buf: b}
+		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
+		pc.pgs.insert(pgi)
+	}
+	return true
+}
+
+func (pc *pgcache_t) _ensurefill(pgn pgn_t,fill bool) err_t {
+	ok := pc._ensureslot(pgn, fill)
+	if !ok {
+		return -ENOMEM
+	}
+	return 0
+}
+
+// returns the raw page and physical address of requested page. fills the page
+// if necessary.
+func (pc *pgcache_t) pgraw(offset int, fill bool) (*pg_t, pa_t, err_t) {
+	pgn, _ := pc._pgblock(offset)
+	err := pc._ensurefill(pgn, fill)
+	if err != 0 {
+		return nil, 0, err
+	}
+	pgi, ok := pc.pgs.lookup(pgn)
+	if !ok {
+		panic("eh")
+	}
+	wpg := (*pg_t)(unsafe.Pointer(pgi.pg))
+	return wpg, pgi.buf.pa, 0
+}
+
+// offset <= end. if offset lies on the same page as end, the returned slice is
+// trimmed (bytes >= end are removed).
+func (pc *pgcache_t) pgfor(offset, end int, fill bool) ([]uint8, err_t) {
+	if offset > end {
+		panic("offset must be less than end")
+	}
+	pgva, _, err := pc.pgraw(offset, fill)
+	if err != 0 {
+		return nil, err
+	}
+	pg := pg2bytes(pgva)[:]
+
+	pgoff := offset % PGSIZE
+	pg = pg[pgoff:]
+	if offset + len(pg) > end {
+		left := end - offset
+		pg = pg[:left]
+	}
+	return pg, 0
+}
+
+// write all dirty pages back to device
+func (pc *pgcache_t) flush() {
+	if memtime {
+		return
+	}
+	pc.pgs.iter(func(pgi *pginfo_t) {
+		for j, dirty := range pgi.dirtyblocks {
+			if !dirty {
+				continue
+			}
+			pgi.buf.log_write()
+			pgi.dirtyblocks[j] = false
+		}
+	})
+}
+
+// Returning buffer to bdev cache
+func (pc *pgcache_t) evict() int {
+	pc.pgs.iter(func(pgi *pginfo_t) {
+		bcache_relse(pgi.buf, "evict")
+		for _, d := range pgi.dirtyblocks {
+			if d {
+				panic("cannot be dirty")
+			}
+		}
+	})
+	pc.pgs.clear()
+	return 0
+}
+
+// pglru_t's lock is a leaf lock
+type pglru_t struct {
+	sync.Mutex
+	head	*imemnode_t
+	tail	*imemnode_t
+}
+
+func (pl *pglru_t) mkhead(im *imemnode_t) {
+	if memtime {
+		return
+	}
+	pl.Lock()
+	pl._mkhead(im)
+	pl.Unlock()
+}
+
+func (pl *pglru_t) _mkhead(im *imemnode_t) {
+	if pl.head == im {
+		return
+	}
+	pl._remove(im)
+	if pl.head != nil {
+		pl.head.pgprev = im
+	}
+	im.pgnext = pl.head
+	pl.head = im
+	if pl.tail == nil {
+		pl.tail = im
+	}
+}
+
+func (pl *pglru_t) _remove(im *imemnode_t) {
+	if pl.tail == im {
+		pl.tail = im.pgprev
+	}
+	if pl.head == im {
+		pl.head = im.pgnext
+	}
+	if im.pgprev != nil {
+		im.pgprev.pgnext = im.pgnext
+	}
+	if im.pgnext != nil {
+		im.pgnext.pgprev = im.pgprev
+	}
+	im.pgprev, im.pgnext = nil, nil
+}
+
+func (pl *pglru_t) remove(im *imemnode_t) {
+	if memtime {
+		return
+	}
+	pl.Lock()
+	pl._remove(im)
+	pl.Unlock()
+}
+
+
 

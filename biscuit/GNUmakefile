@@ -15,7 +15,7 @@ CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
 
 # kernel sources
-KSRC := main.go syscall.go pmap.go fs.go inode.go hw.go net.go fsrb.go log.go bdev.go ahci.go
+KSRC := main.go syscall.go pmap.go fs.go dir.go inode.go hw.go net.go fsrb.go log.go bdev.go ahci.go
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
