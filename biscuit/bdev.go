@@ -284,13 +284,13 @@ func print_live_blocks() {
 	for _, r := range bdev_cache.refs {
 		fmt.Printf("block %v %v\n", r.buf.block, r.refcnt)
 	}
-	fmt.Printf("irefcache %v\n", len(irefcache.irefs))
-	for _, v := range irefcache.irefs {
-		b,i := bidecode(v.imem.priv)
-		fmt.Printf("inode %v (%v,%v)\n", v.imem.priv, b, i)
-		v.imem.pgcache.pgs.iter(func(pgi *pginfo_t) {
-			fmt.Printf("pgi %v\n", pgi.buf.block)
-		})
+	fmt.Printf("irefcache %v\n", len(irefcache.refs))
+	for _, v := range irefcache.refs {
+		// b,i := bidecode(v.imem.priv)
+		fmt.Printf("inode %v\n", v)
+		//v.imem.pgcache.pgs.iter(func(pgi *pginfo_t) {
+		//	fmt.Printf("pgi %v\n", pgi.buf.block)
+		//})
 	}
 }
 

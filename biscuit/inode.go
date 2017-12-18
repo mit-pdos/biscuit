@@ -3,7 +3,6 @@ package main
 import "fmt"
 import "sync"
 import "unsafe"
-import "sort"
 
 const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
@@ -143,211 +142,8 @@ type imemnode_t struct {
 	_amlocked	bool
 }
 
-
-type iref_t struct {
-	imem           *imemnode_t
-	refcnt          int
-	pgnext		*iref_t
-	pgprev		*iref_t
-
-}
-
-// Cache of in-mmory inodes. Main invariant: an inode is in memory once so that
-// threads see each other updates.
-type irefcache_t struct {
-	sync.Mutex
-	irefs          map[inum]*iref_t
-	pglru          pglru_t
-}
-
-var irefcache	= make_irefcache()
-
-func make_irefcache() *irefcache_t {
-	ic := &irefcache_t{}
-	ic.irefs = make(map[inum]*iref_t, 1e6)
-	return ic
-}
-
-func print_live_inodes() {
-	fmt.Printf("icache %v\n", len(irefcache.irefs))
-	for _, v := range irefcache.irefs {
-		fmt.Printf("inode %v refcnt %v opencnt %v\n", v.imem.priv, v.refcnt)
-	}
-}
-
-func (irc *irefcache_t) _replace() *imemnode_t {
-	for ir := irc.pglru.tail; ir != nil; ir = ir.pgprev {
-		if ir.refcnt == 0 {
-			priv := ir.imem.priv
-			b, i :=  bidecode(priv)
-			if true {
-				fmt.Printf("_replace: victim %v (%v,%v)\n", priv, b, i)
-			}
-			ir.imem.priv = 0
-			delete(irefcache.irefs, priv)
-			irc.pglru.remove(ir)
-			return ir.imem
-		}
-	}
-	return nil
-}
-
-func (irc *irefcache_t) iref(priv inum, s string) (*imemnode_t, err_t) {
-	irc.Lock()
-	
-	b, i :=  bidecode(priv)
-	if priv <= 0 {
-		panic("non-positive priv")
-	}
-	iref, ok := irc.irefs[priv]
-	if ok {
-		iref.refcnt++
-		if fs_debug {
-			fmt.Printf("iref hit %v (%v/%v) cnt %v %s\n", priv, b, i, iref.refcnt, s)
-		}
-		irc.pglru.mkhead(iref)
-		irc.Unlock()
-		return iref.imem, 0
-	}
-
-	// do we need to replace an inode ref?
-	var victim *imemnode_t
-	if len(irc.irefs) > syslimit.vnodes {
-		victim = irc._replace()
-		if victim == nil {
-			fmt.Printf("inodes in use %v limited %v\n", len(irc.irefs), syslimit.vnodes)
-			panic("too many inodes")
-			return nil, -ENOMEM
-		}
-        }
- 	
-	imem := &imemnode_t{}
-	imem.priv = priv
-
-	iref = &iref_t{}
-	iref.refcnt = 1
-	iref.imem = imem
-	irc.irefs[priv] = iref
-	
-	if fs_debug {
-		fmt.Printf("iref miss %v (%v/%v) cnt %v %s\n", priv, b, i, iref.refcnt, s)
-	}
-
-	imem.ilock("iref")
-	defer imem.iunlock("iref")
-	irc.pglru.mkhead(iref)
-	irc.Unlock()
-
-	// release cache lock, now free victim
-	if victim != nil {
-		victim.evict()   // XXX in another thread?
-	}
-
-	// holding inode lock while reading it from disk
-	err := imem.idm_init(priv)
-	if err != 0 {
-		panic("idm_init")
-		delete(irefcache.irefs, priv)
-		return nil, err
-	}
-
-	if fs_debug {
-		fmt.Printf("iref loaded %v (%v/%v) cnt %v %s %v\n", priv, b, i, iref.refcnt, s, imem)
-	}
-
-	return imem, 0
-}
-
-func (irc *irefcache_t) refup(idm *imemnode_t) {
-	irc.Lock()
-	defer irc.Unlock()
-	
-	iref, ok := irc.irefs[idm.priv]
-	if !ok {
-		panic("refup")
-	}
-	iref.refcnt++
-}
-
-func (irc *irefcache_t) refdown(idm *imemnode_t, s string) {
-	irc.Lock()
-	
-	iref, ok := irc.irefs[idm.priv]
-	if !ok {
-		panic("refdown")
-	}
-	if idm != iref.imem {
-		panic("refdown")
-	}
-	iref.refcnt--
-	if iref.refcnt < 0 {
-		panic("refdown")
-	}
-	defer irc.Unlock()
-	// if iref.refcnt == 0 {
-	// 	priv := iref.imem.priv
-	// 	b, i :=  bidecode(priv)
-	// 	if fs_debug {
-	// 		fmt.Printf("decrefcnt: delete inode %v (%v,%v) %v %v %v\n", priv, b, i, s)
-	// 	}
-	// 	iref.imem.priv = 0
-	// 	delete(irefcache.irefs, priv)
-	// 	irc.pglru.remove(iref)
-	// 	defer irc.Unlock()
-	// 	// no need to hold lock because no other thread has access to idm
-	// 	idm.evict()
-	// } else {
-	// 	defer irc.Unlock()
-	// }
-}
-
-
-func (irc *irefcache_t) iref_locked(priv inum, s string) (*imemnode_t, err_t) {
-	idm, err := irc.iref(priv, s)
-	if err != 0 {
-		return nil, err
-	}
-	idm.ilock(s)
-	return idm, err
-}
-
-func (irc *irefcache_t) lockall(imems []*imemnode_t) []*imemnode_t {
-	var locked []*imemnode_t
-	sort.Slice(imems, func(i, j int) bool { return imems[i].priv < imems[j].priv })
-	for _, imem := range imems {
-		dup := false
-		for _, l := range locked {
-			if imem.priv == l.priv {
-				dup = true
-			}
-		}
-		if !dup {
-			locked = append(locked, imem)
-			imem.ilock("lockall")
-		}
-	}
-	return locked
-}
-
-
-// creates a new idaemon struct and fills its inode
-func (idm *imemnode_t) idm_init(priv inum) err_t {
-	blkno, ioff := bidecode(priv)
-	idm.priv = priv
-	idm.blkno = blkno
-	idm.ioff = ioff
-
-	idm.pgcache.pgc_init(BSIZE, idm)
-
-	if fs_debug {
-		fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
-	}
-	blk := idm.idibread()
-	// print_inodes(blk)
-	idm.icache.fill(blk, ioff)
-	blk.Unlock()
-	bcache_relse(blk, "idm_init")
-	return 0
+func (idm *imemnode_t) key() int {
+	return int(idm.priv)
 }
 
 func (idm *imemnode_t) evict() {
@@ -380,6 +176,65 @@ func (idm *imemnode_t) iunlock(s string) {
 	idm.Unlock()
 }
 
+// inode refcache
+var irefcache	= make_refcache(syslimit.vnodes)
+
+
+// obtain a reference for an unlocked inode
+func iref(priv inum, s string) (*imemnode_t, err_t) {
+	ref, err := irefcache.lookup(int(priv), s)
+	defer ref.Unlock()
+
+	if !ref.valid {
+		if fs_debug {
+			fmt.Printf("iref load %v %v\n", priv, s)
+		}
+
+		imem := &imemnode_t{}
+		imem.priv = priv
+		ref.obj = imem
+		err := imem.idm_init(priv)
+		if err != 0 {
+			panic("idm_init")
+			// delete(refcache.refs, priv)
+			return nil, err
+		}
+		ref.valid = true
+	}
+	
+	return ref.obj.(*imemnode_t), err
+}
+
+// obtained a reference for a locked inode
+func iref_locked(priv inum, s string) (*imemnode_t, err_t) {
+	idm, err := iref(priv, s)
+	if err != 0 {
+		return nil, err
+	}
+	idm.ilock(s)
+	return idm, err
+}
+
+
+// Fill in inode
+func (idm *imemnode_t) idm_init(priv inum) err_t {
+	blkno, ioff := bidecode(priv)
+	idm.priv = priv
+	idm.blkno = blkno
+	idm.ioff = ioff
+
+	idm.pgcache.pgc_init(BSIZE, idm)
+
+	if fs_debug {
+		fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
+	}
+	blk := idm.idibread()
+	// print_inodes(blk)
+	idm.icache.fill(blk, ioff)
+	blk.Unlock()
+	bcache_relse(blk, "idm_init")
+	return 0
+}
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
 	idm.iunlock(s)
@@ -511,7 +366,7 @@ func (idm *imemnode_t) do_createdir(fn string) (inum, err_t) {
 }
 
 func _fullpath(priv inum) (string, err_t) {
-	c, err := irefcache.iref_locked(priv, "_fullpath")
+	c, err := iref_locked(priv, "_fullpath")
 	if err != 0 {
 		return "", err
 	}
@@ -528,7 +383,7 @@ func _fullpath(priv inum) (string, err_t) {
 		if err != 0 {
 			panic(".. must exist")
 		}
-		par, err := irefcache.iref(pari, "do_fullpath_par")
+		par, err := iref(pari, "do_fullpath_par")
 		c.iunlock("do_fullpath_c")
 		if err != 0 {
 			return "", err
@@ -1215,56 +1070,6 @@ func (pc *pgcache_t) evict() int {
 	return 0
 }
 
-// pglru_t's lock is a leaf lock
-type pglru_t struct {
-	head	*iref_t
-	tail	*iref_t
-}
-
-func (pl *pglru_t) mkhead(ir *iref_t) {
-	if memtime {
-		return
-	}
-	pl._mkhead(ir)
-}
-
-func (pl *pglru_t) _mkhead(ir *iref_t) {
-	if pl.head == ir {
-		return
-	}
-	pl._remove(ir)
-	if pl.head != nil {
-		pl.head.pgprev = ir
-	}
-	ir.pgnext = pl.head
-	pl.head = ir
-	if pl.tail == nil {
-		pl.tail = ir
-	}
-}
-
-func (pl *pglru_t) _remove(ir *iref_t) {
-	if pl.tail == ir {
-		pl.tail = ir.pgprev
-	}
-	if pl.head == ir {
-		pl.head = ir.pgnext
-	}
-	if ir.pgprev != nil {
-		ir.pgprev.pgnext = ir.pgnext
-	}
-	if ir.pgnext != nil {
-		ir.pgnext.pgprev = ir.pgprev
-	}
-	ir.pgprev, ir.pgnext = nil, nil
-}
-
-func (pl *pglru_t) remove(ir *iref_t) {
-	if memtime {
-		return
-	}
-	pl._remove(ir)
-}
 
 
 
