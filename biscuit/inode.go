@@ -728,48 +728,18 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
 	return wrote, 0
 }
 
-// if a progam 1) lseeks past end of file and writes or 2) extends file size
-// via ftruncate/truncate, make sure the page cache is filled with zeros for
-// the new bytes.
-func (idm *imemnode_t) _preventhole(_oldlen int, newlen uint) err_t {
-	// XXX fix sign
-	oldlen := uint(_oldlen)
-	ret := err_t(0)
-	if newlen > oldlen {
-		// extending file; fill new content in page cache with zeros
-		first := true
-		c := oldlen
-		for c < newlen {
-			pg, err := idm.pgcache.pgfor(int(c), int(newlen), false)
-			if err != 0 {
-				ret = -ENOMEM
-				break
-			}
-			if first {
-				// XXX go doesn't seem to have a good way to
-				// zero a slice
-				for i := range pg {
-					pg[i] = 0
-				}
-				first = false
-			}
-			c += uint(len(pg))
-		}
-		idm.pgcache.pgdirty(int(oldlen), int(c))
-	}
-	return ret
-}
-
 func (idm *imemnode_t) itrunc(newlen uint) err_t {
-	err := idm._preventhole(idm.icache.size, newlen)
-	if err != 0 {
-		return err
+	if newlen > uint(idm.icache.size) {
+		// this will cause the hole to filled in with zero blocks which
+		// are logged to disk
+		_, err := idm.offsetblk(int(newlen), true)
+		if err != 0 {
+			return err
+		}
+
 	}
-	// it's important that the icache.size is updated after filling the
-	// page cache since fs_fill reads from disk any pages whose offset is
-	// <= icache.size
+	// inode is flushed by do_itrunc
 	idm.icache.size = int(newlen)
-	idm.pgcache.flush()
 	return 0
 }
 
