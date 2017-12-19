@@ -148,19 +148,20 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 		panic("refdown")
 	}
 
-	var victim obj_t
-	if ref.refcnt == 0 {
-		victim = irc._replace()   // should succeed
-		if victim == nil {
-			panic("refdown")
-		}
-	}
+	// Uncomment to test eagerly evicting references
+	// var victim obj_t
+	// if ref.refcnt == 0 {
+	// 	victim = irc._replace()   // should succeed
+	// 	if victim == nil {
+	// 		panic("refdown")
+	// 	}
+	// }
 
 	defer irc.Unlock()
 
-	if victim != nil {
-		victim.evict()   // XXX in another thread?
-	}
+	// if victim != nil {
+	// 	victim.evict()   // XXX in another thread?
+	// }
 }
 
 // LRU list of references

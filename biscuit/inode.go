@@ -690,11 +690,9 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 		b.Unlock()
 		bcache_relse(b, "_iread")
 		if err != 0 {
-			fmt.Printf("iread %v %v\n", idm.priv, err)
 			return c, err
 		}
 	}
-	fmt.Printf("iread1 %v\n", idm.priv)
 	return c, 0
 }
 
@@ -861,8 +859,6 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 
 
 func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t) {
-
-	fmt.Printf("immapinfo %v %v %v %v\n", idm.priv, offset, len, inc)
 	isz := idm.icache.size
 	if (len != -1 && len < 0) || offset < 0 {
 		panic("bad off/len")
@@ -884,7 +880,6 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 		}
 		buf.Unlock()
 		if inc {    // the VM system is going to use the page
-			fmt.Printf("refup %#x\n", buf.pa)
 			refup(buf.pa)
 		}
 		pgn := i / PGSIZE
