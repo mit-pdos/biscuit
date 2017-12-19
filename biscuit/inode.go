@@ -555,7 +555,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 				writen(s, 8, slot, blkn)
 				added = true
 				// make sure to zero indirect pointer block if
-				// allocated
+				// allocated.  XXX balloc zeros.
 				if idx == INDADDR {
 					fmt.Printf("indirect indx\n")
 				}
@@ -581,7 +581,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			}
 			tblkn, err := balloc()
 			if err != 0 {
-				
+				return tblkn, err
 			}
 			// imemnode_t.iupdate() will make sure the
 			// icache is updated on disk
@@ -647,16 +647,40 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	return blkn, 0
 }
 
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
+}
+
 func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
-	for offset + c < isz && dst.remain() != 0 {
-		src, err := idm.pgcache.pgfor(offset + c, isz, true)
+	for offset < isz && dst.remain() != 0 {
+		blkno, err := idm.offsetblk(offset, false)
 		if err != 0 {
 			return c, err
 		}
+		b, err  := bcache_get_fill(blkno, "_iread", true)
+		if err != 0 {
+			return c, err
+		}
+		m := min(BSIZE-offset%BSIZE, dst.remain())
+		m = min(isz - offset, m)
+		s := offset%BSIZE
+		src := b.data[s:s+m]
+
+		if fs_debug {
+			fmt.Printf("_iread1 c %v isz %v remain %v offset %v m %v s %v s+m %v blk %v\n",
+				c, isz, dst.remain(), offset, m, s, s+m, blkno)
+		}
+		
 		wrote, err := dst.uiowrite(src)
 		c += wrote
+		offset += wrote
+		b.Unlock()
+		bcache_relse(b, "_iread")
 		if err != 0 {
 			return c, err
 		}
@@ -667,29 +691,40 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
 	sz := src.totalsz()
 	newsz := offset + sz
-	err := idm._preventhole(idm.icache.size, uint(newsz))
-	if err != 0 {
-		return 0, err
-	}
 	c := 0
 	for c < sz {
-		noff := offset + c
-		dst, err := idm.pgcache.pgfor(noff, newsz, false)
+		m := min(BSIZE-offset%BSIZE, sz -c)
+		blkno, err := idm.offsetblk(offset, true)
 		if err != 0 {
 			return c, err
 		}
+		// XXX maybe don't load it when overwriting complete block
+		b, err  := bcache_get_fill(blkno, "_iwrite", true)
+		if err != 0 {
+			return c, err
+		}
+		s := offset%BSIZE
+
+		if fs_debug {
+			fmt.Printf("_iwrite1 c %v sz %v off %v m %v s %v s+m %v blk %v\n",
+				c, sz, offset, m, s, s+m, blkno)
+		}
+
+		dst := b.data[s:s+m]
 		read, err := src.uioread(dst)
+		b.Unlock()
+		b.log_write()
+		bcache_relse(b, "_iwrite")
 		if err != 0 {
 			return c, err
 		}
-		idm.pgcache.pgdirty(noff, noff + read)
 		c += read
+		offset += read
 	}
 	wrote := c
 	if newsz > idm.icache.size {
 		idm.icache.size = newsz
 	}
-	idm.pgcache.flush()
 	return wrote, 0
 }
 
@@ -737,8 +772,6 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 	idm.pgcache.flush()
 	return 0
 }
-
-
 
 // returns true if all the inodes on ib are also marked dead and thus this
 // inode block should be freed.

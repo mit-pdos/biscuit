@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "sync"
 
-const fs_debug    = false
+var fs_debug    = false
 
 var superb_start	int
 var superb		superblock_t
@@ -473,6 +473,11 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 		offset = toff
 		append = false
 	}
+	
+	if fs_debug {
+		fmt.Printf("_write off: %v %v\n", fo.priv, offset)
+	}
+	
 	idm, err := iref_locked(fo.priv, "_write")
 	if err != 0 {
 		return 0, err
