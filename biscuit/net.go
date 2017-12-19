@@ -3354,7 +3354,7 @@ func (tf *tcpfops_t) lseek(int, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tf *tcpfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (tf *tcpfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
@@ -3778,7 +3778,7 @@ func (tl *tcplfops_t) lseek(int, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (tl *tcplfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (tl *tcplfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 

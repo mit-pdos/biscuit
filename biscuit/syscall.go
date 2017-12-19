@@ -1353,7 +1353,7 @@ func (of *pipefops_t) lseek(int, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (of *pipefops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (of *pipefops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
@@ -2143,7 +2143,7 @@ func (sf *sudfops_t) fstat(s *stat_t) err_t {
 	panic("no imp")
 }
 
-func (sf *sudfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (sf *sudfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
@@ -2640,7 +2640,7 @@ func (sus *susfops_t) lseek(int, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (sus *susfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (sus *susfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
@@ -3180,7 +3180,7 @@ func (sf *suslfops_t) lseek(int, int) (int, err_t) {
 	return 0, -ESPIPE
 }
 
-func (sf *suslfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (sf *suslfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
@@ -3547,7 +3547,7 @@ func sys_pgfault(proc *proc_t, vmi *vminfo_t, faultaddr, ecode uintptr) bool {
 			   phys != p_zeropg {
 				tmp := *pte &^ PTE_COW
 				tmp |= PTE_W | PTE_WASCOW
-				*pte = tmp
+			        *pte = tmp
 				proc.tlbshoot(faultaddr, 1)
 				return true
 			}
@@ -4904,7 +4904,7 @@ func segload(proc *proc_t, entry int, hdr *elf_phdr, fops fdops_i) err_t {
 		if !ok {
 			panic("must be mapped")
 		}
-		mmapi, err := fops.mmapi(hdr.fileoff, 1)
+		mmapi, err := fops.mmapi(hdr.fileoff, 1, false)
 		if err != 0 {
 			return err
 		}

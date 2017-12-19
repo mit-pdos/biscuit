@@ -159,7 +159,7 @@ type fdops_i interface {
 	close() err_t
 	fstat(*stat_t) err_t
 	lseek(int, int) (int, err_t)
-	mmapi(int, int) ([]mmapinfo_t, err_t)
+	mmapi(int, int, bool) ([]mmapinfo_t, err_t)
 	pathi() inum
 	read(*proc_t, userio_i) (int, err_t)
 	// reopen() is called with proc_t.fdl is held
@@ -3204,6 +3204,12 @@ var physmem struct {
 func _refaddr(p_pg pa_t) (*int32, uint32) {
 	idx := _pg2pgn(p_pg) - physmem.startn
 	return &physmem.pgs[idx].refcnt, idx
+}
+
+func refcnt(p_pg pa_t) int {
+	ref, _ := _refaddr(p_pg)
+	c := atomic.AddInt32(ref, 1)
+	return int(c)
 }
 
 func refup(p_pg pa_t) {

@@ -84,7 +84,7 @@ func (vmi *vminfo_t) filepage(va uintptr) (*pg_t, pa_t, err_t) {
 	}
 	voff := int(va - (vmi.pgn << PGSHIFT))
 	foff := vmi.file.foff + voff
-	mmapi, err := vmi.file.mfile.mfops.mmapi(foff, 1)
+	mmapi, err := vmi.file.mfile.mfops.mmapi(foff, 1, true)
 	if err != 0 {
 		return nil, 0, err
 	}

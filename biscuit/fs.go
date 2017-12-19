@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "sync"
 
-var fs_debug    = false
+var fs_debug    = true
 
 var superb_start	int
 var superb		superblock_t
@@ -585,12 +585,12 @@ func (fo *fsfops_t) lseek(off, whence int) (int, err_t) {
 
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
-func (fo *fsfops_t) mmapi(offset, len int) ([]mmapinfo_t, err_t) {
+func (fo *fsfops_t) mmapi(offset, len int, inc bool) ([]mmapinfo_t, err_t) {
 	idm, err := iref_locked(fo.priv, "mmapi")
 	if err != 0 {
 		return nil, err
 	}
-	mmi, err := idm.do_mmapi(offset, len)
+	mmi, err := idm.do_mmapi(offset, len, inc)
 	idm.iunlock_refdown("mmapi")
 	return mmi, err
 }
@@ -698,7 +698,7 @@ func (df *devfops_t) fstat(st *stat_t) err_t {
 	return 0
 }
 
-func (df *devfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (df *devfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	df._sane()
 	return nil, -ENODEV
 }
@@ -856,7 +856,7 @@ func (raw *rawdfops_t) fstat(st *stat_t) err_t {
 	return 0
 }
 
-func (raw *rawdfops_t) mmapi(int, int) ([]mmapinfo_t, err_t) {
+func (raw *rawdfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 

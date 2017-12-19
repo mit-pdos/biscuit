@@ -130,7 +130,6 @@ func (irc *refcache_t) refup(o obj_t, s string) {
 
 func (irc *refcache_t) refdown(o obj_t, s string) {
 	irc.Lock()
-	defer irc.Unlock()
 
 	ref, ok := irc.refs[o.key()]
 	if !ok {
@@ -147,6 +146,20 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 	ref.refcnt--
 	if ref.refcnt < 0 {
 		panic("refdown")
+	}
+
+	var victim obj_t
+	if ref.refcnt == 0 {
+		victim = irc._replace()   // should succeed
+		if victim == nil {
+			panic("refdown")
+		}
+	}
+
+	defer irc.Unlock()
+
+	if victim != nil {
+		victim.evict()   // XXX in another thread?
 	}
 }
 

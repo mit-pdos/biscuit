@@ -35,7 +35,7 @@ func (blk *bdev_block_t) key() int {
 
 func (blk *bdev_block_t) evict() {
 	if bdev_debug {
-		fmt.Printf("evict: block %v\n", blk.block)
+		fmt.Printf("evict: block %v %#x %v\n", blk.block, blk.pa, refcnt(blk.pa))
 	}
 	blk.free_page()
 }
