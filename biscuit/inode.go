@@ -882,7 +882,11 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 		pgn := i / PGSIZE
 		wpg := (*pg_t)(unsafe.Pointer(buf.data))
 		ret[pgn].pg = wpg
-		ret[pgn].phys = buf.pa 	
+		ret[pgn].phys = buf.pa
+		// release buffer. the VM system will increase the page count.
+		// XXX race? vm system may not do this for a while. maybe we
+		// should increase page count here.
+		bcache_relse(buf, "immapinfo")
 	}
 	return ret, 0
 }

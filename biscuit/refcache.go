@@ -49,7 +49,7 @@ func (irc *refcache_t) print_live_refs() {
 func (irc *refcache_t) _replace() obj_t {
 	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
 		if ir.refcnt == 0 {
-			if true {
+			if refcache_debug {
 				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
 			}
 			delete(irc.refs, ir.key)
