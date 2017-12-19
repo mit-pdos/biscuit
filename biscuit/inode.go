@@ -469,7 +469,7 @@ type icache_t struct {
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
 func (ic *icache_t) mbread(blockn int) (*bdev_block_t, err_t) {
-	mb, err := bcache_get_fill(blockn, "_mbensure", false)
+	mb, err := bcache_get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
