@@ -322,19 +322,25 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 
 	// guarantee that any page allocations will succeed before starting the
 	// operation, which will be messy to piece-wise undo.
-	if err := npar.probe_insert(); err != 0 {
+	b1, err := npar.probe_insert()
+	if err != 0 {
 		return err
 	}
-
-	if err = opar.probe_unlink(ofn); err != 0 {
+	defer bcache_relse(b1, "probe_insert")
+	
+	b2, err := opar.probe_unlink(ofn)
+	if err != 0 {
 		return err
 	}
+	defer bcache_relse(b2, "probe_unlink_opar")
 
 	odir := ochild.icache.itype == I_DIR
 	if odir {
-		if err = ochild.probe_unlink(".."); err != 0 {
+		b3, err := ochild.probe_unlink("..")
+		if err != 0 {
 			return err
 		}
+		defer bcache_relse(b3, "probe_unlink_ochild")
 	}
 
 	if newexists {

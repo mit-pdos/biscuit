@@ -647,6 +647,22 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	return blkn, 0
 }
 
+// Return locked buffer for offset
+func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, s string) (*bdev_block_t, err_t) {
+	if offset%PGSIZE  + len > PGSIZE {
+		panic("off2buf")
+	}
+	blkno, err := idm.offsetblk(offset, fillhole)
+	if err != 0 {
+		return nil, err
+	}
+	b, err  := bcache_get_fill(blkno, s, true)
+	if err != 0 {
+		return nil, err
+	}
+	return b, 0
+}
+
 func min(a, b int) int {
     if a < b {
         return a
@@ -658,22 +674,18 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	isz := idm.icache.size
 	c := 0
 	for offset < isz && dst.remain() != 0 {
-		blkno, err := idm.offsetblk(offset, false)
-		if err != 0 {
-			return c, err
-		}
-		b, err  := bcache_get_fill(blkno, "_iread", true)
-		if err != 0 {
-			return c, err
-		}
 		m := min(BSIZE-offset%BSIZE, dst.remain())
 		m = min(isz - offset, m)
+		b, err := idm.off2buf(offset, m, false, "iread")
+		if err != 0 {
+			return c, err
+		}
 		s := offset%BSIZE
 		src := b.data[s:s+m]
 
 		if fs_debug {
-			fmt.Printf("_iread1 c %v isz %v remain %v offset %v m %v s %v s+m %v blk %v\n",
-				c, isz, dst.remain(), offset, m, s, s+m, blkno)
+			fmt.Printf("_iread1 c %v isz %v remain %v offset %v m %v s %v s+m %v\n",
+				c, isz, dst.remain(), offset, m, s, s+m)
 		}
 		
 		wrote, err := dst.uiowrite(src)
@@ -694,20 +706,15 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
 	c := 0
 	for c < sz {
 		m := min(BSIZE-offset%BSIZE, sz -c)
-		blkno, err := idm.offsetblk(offset, true)
-		if err != 0 {
-			return c, err
-		}
-		// XXX maybe don't load it when overwriting complete block
-		b, err  := bcache_get_fill(blkno, "_iwrite", true)
+		b, err := idm.off2buf(offset, m, true, "iwrite")
 		if err != 0 {
 			return c, err
 		}
 		s := offset%BSIZE
 
 		if fs_debug {
-			fmt.Printf("_iwrite1 c %v sz %v off %v m %v s %v s+m %v blk %v\n",
-				c, sz, offset, m, s, s+m, blkno)
+			fmt.Printf("_iwrite1 c %v sz %v off %v m %v s %v s+m %v\n",
+				c, sz, offset, m, s, s+m)
 		}
 
 		dst := b.data[s:s+m]
@@ -866,19 +873,16 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	if len == -1 || offset + len > isz {
 		len = isz - offset
 	}
-	len = roundup(offset + len, PGSIZE) - rounddown(offset, PGSIZE)
+	o := rounddown(offset, PGSIZE)
+	len = roundup(offset + len, PGSIZE) - o
 	pgc := len / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
 	for i := 0; i < len; i += PGSIZE {
-		// will fill in holes too
-		blkno, err := idm.offsetblk(offset+i, true)
+		buf, err := idm.off2buf(o+i, PGSIZE, false, "immapinfo")
 		if err != 0 {
 			return nil, err
 		}
-		buf, err  := bcache_get_fill(blkno, "immapinfo", false)
-		if err != 0 {
-			return nil, err
-		}
+		buf.Unlock()
 		pgn := i / PGSIZE
 		wpg := (*pg_t)(unsafe.Pointer(buf.data))
 		ret[pgn].pg = wpg
