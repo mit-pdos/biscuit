@@ -870,13 +870,19 @@ func (idm *imemnode_t) immapinfo(offset, len int) ([]mmapinfo_t, err_t) {
 	pgc := len / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
 	for i := 0; i < len; i += PGSIZE {
-		pg, phys, err := idm.pgcache.pgraw(offset + i, true)
+		// will fill in holes too
+		blkno, err := idm.offsetblk(offset+i, true)
+		if err != 0 {
+			return nil, err
+		}
+		buf, err  := bcache_get_fill(blkno, "immapinfo", false)
 		if err != 0 {
 			return nil, err
 		}
 		pgn := i / PGSIZE
-		ret[pgn].pg = pg
-		ret[pgn].phys = phys
+		wpg := (*pg_t)(unsafe.Pointer(buf.data))
+		ret[pgn].pg = wpg
+		ret[pgn].phys = buf.pa 	
 	}
 	return ret, 0
 }
