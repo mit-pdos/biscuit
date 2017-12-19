@@ -14,7 +14,7 @@ type frbn_t struct {
 	r	*frbn_t
 	l	*frbn_t
 	c	rbc_t
-	pgi	*pginfo_t
+	pgi	*bdev_block_t
 }
 
 func (h *frbh_t) _rol(nn *frbn_t) {
@@ -101,7 +101,7 @@ func (h *frbh_t) _balance(nn *frbn_t) {
 	h.root.c = BLACK
 }
 
-func (h *frbh_t) insert(pgi *pginfo_t) *frbn_t {
+func (h *frbh_t) insert(pgi *bdev_block_t) *frbn_t {
 	nn := &frbn_t{pgi: pgi, c: RED}
 	if h.root == nil {
 		h.root = nn
@@ -111,21 +111,21 @@ func (h *frbh_t) insert(pgi *pginfo_t) *frbn_t {
 
 	n := h.root
 	for {
-		if pgi.pgn > n.pgi.pgn {
+		if pgi.block > n.pgi.block {
 			if n.r == nil {
 				n.r = nn
 				nn.p = n
 				break
 			}
 			n = n.r
-		} else if pgi.pgn < n.pgi.pgn {
+		} else if pgi.block < n.pgi.block {
 			if n.l == nil {
 				n.l = nn
 				nn.p = n
 				break
 			}
 			n = n.l
-		} else if n.pgi.pgn == pgi.pgn {
+		} else if n.pgi.block == pgi.block {
 			return n
 		}
 	}
@@ -134,12 +134,12 @@ func (h *frbh_t) insert(pgi *pginfo_t) *frbn_t {
 	return nn
 }
 
-func (h *frbh_t) _lookup(pgn pgn_t) *frbn_t {
+func (h *frbh_t) _lookup(pgn int) *frbn_t {
 	n := h.root
 	for n != nil {
-		if pgn == n.pgi.pgn {
+		if pgn == n.pgi.block {
 			break
-		} else if n.pgi.pgn < pgn {
+		} else if n.pgi.block < pgn {
 			n = n.r
 		} else {
 			n = n.l
@@ -148,7 +148,7 @@ func (h *frbh_t) _lookup(pgn pgn_t) *frbn_t {
 	return n
 }
 
-func (h *frbh_t) lookup(pgn pgn_t) (*pginfo_t, bool) {
+func (h *frbh_t) lookup(pgn int) (*bdev_block_t, bool) {
 	r := h._lookup(pgn)
 	if r == nil {
 		return nil, false
@@ -306,7 +306,7 @@ func (h *frbh_t) remove(nn *frbn_t) *frbn_t {
 	return old
 }
 
-func (h *frbh_t) iter1(n *frbn_t, f func(*pginfo_t)) {
+func (h *frbh_t) iter1(n *frbn_t, f func(*bdev_block_t)) {
 	if n == nil {
 		return
 	}
@@ -315,7 +315,7 @@ func (h *frbh_t) iter1(n *frbn_t, f func(*pginfo_t)) {
 	h.iter1(n.r, f)
 }
 
-func (h *frbh_t) iter(f func(*pginfo_t)) {
+func (h *frbh_t) iter(f func(*bdev_block_t)) {
 	h.iter1(h.root, f)
 }
 
@@ -323,6 +323,7 @@ func (h *frbh_t) clear() {
 	h.root = nil
 	h.nodes = 0
 }
+
 
 type dc_rbh_t struct {
 	root	*dc_rbn_t

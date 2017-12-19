@@ -2572,9 +2572,13 @@ func sizedump() {
 	fmt.Printf("dentry : %v\n", unsafe.Sizeof(dc_rbn_t{}))
 	fmt.Printf("futex  : %v + stack\n", unsafe.Sizeof(futex_t{}))
 	fmt.Printf("route  : %v + 1map\n", unsafe.Sizeof(rtentry_t{}) + is)
-	dirtyarray := uintptr(8)
-	fmt.Printf("mfs    : %v\n", uintptr(2*8 + dirtyarray) +
-		unsafe.Sizeof(frbn_t{}) + unsafe.Sizeof(pginfo_t{}))
+
+	// XXX account for block and inode cache
+
+	// dirtyarray := uintptr(8)
+	//fmt.Printf("mfs    : %v\n", uintptr(2*8 + dirtyarray) +
+	//	unsafe.Sizeof(frbn_t{}) + unsafe.Sizeof(pginfo_t{}))
+
 	fmt.Printf("vnode  : %v + 1map\n", unsafe.Sizeof(imemnode_t{}) +
 		unsafe.Sizeof(bdev_block_t{}) + 512 + condsz +
 		unsafe.Sizeof(fsfops_t{}))

@@ -4,7 +4,6 @@ import "fmt"
 import "sync"
 import "unsafe"
 import "sort"
-import "strconv"
 
 const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
@@ -136,8 +135,6 @@ type imemnode_t struct {
 	priv		inum
 	blkno		int
 	ioff		int
-	// cache of file data
-	pgcache		pgcache_t
 	// cache of inode metadata
 	icache		icache_t
 	// XXXPANIC for sanity
@@ -150,7 +147,6 @@ func (idm *imemnode_t) key() int {
 
 func (idm *imemnode_t) evict() {
 	idm._derelease()
-	idm.pgcache.evict()
 	b, i :=  bidecode(idm.priv)
 	if fs_debug {
 		fmt.Printf("evict: %v (%v,%v)\n", idm.priv, b, i)
@@ -244,7 +240,7 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 	idm.blkno = blkno
 	idm.ioff = ioff
 
-	idm.pgcache.pgc_init(BSIZE, idm)
+	// idm.pgcache.pgc_init(BSIZE, idm)
 
 	if fs_debug {
 		fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
@@ -999,166 +995,7 @@ func off2pgn(off int) pgn_t {
 	return pgn_t(off) >> PGSHIFT
 }
 
-// XXX don't need to fill the destination page if the write covers the whole
-// page
-type pgcache_t struct {
-	pgs	frbh_t
-	// the unit size of underlying device
-	blocksz		int
-	pglim		int
-	idm             *imemnode_t
-}
 
-type pginfo_t struct {
-	pgn		pgn_t
-	pg		*bytepg_t
-	dirtyblocks	[]bool
-	buf             *bdev_block_t
-}
-
-func (pc *pgcache_t) pgc_init(bsz int, idm *imemnode_t) {
-	if idm == nil {
-		panic("invalid idm")
-	}
-	if PGSIZE % bsz != 0 {
-		panic("block size does not divide pgsize")
-	}
-	pc.blocksz = bsz
-	pc.pglim = 0
-	pc.idm = idm
-}
-
-// takes an offset, returns the page number and starting block
-func (pc *pgcache_t) _pgblock(offset int) (pgn_t, int) {
-	pgn := off2pgn(offset)
-	block := (offset % PGSIZE) / pc.blocksz
-	return pgn, block
-}
-
-// mark the range [offset, end) as dirty
-func (pc *pgcache_t) pgdirty(offset, end int) {
-	for i := offset; i < end; i += pc.blocksz {
-		pgn, chn := pc._pgblock(i)
-		pgi, ok := pc.pgs.lookup(pgn)
-		if !ok {
-			panic("dirtying absent page?")
-		}
-		pgi.dirtyblocks[chn] = true
-	}
-}
-
-// returns whether the page for pgn needs to be filled from disk and success.
-func (pc *pgcache_t) _ensureslot(pgn pgn_t, fill bool) (err_t) {
-	if pc.pgs.nodes >= pc.pglim {
-		if !syslimit.mfspgs.take() {
-			return -ENOMEM
-		}
-		pc.pglim++
-	}
-	if _, ok := pc.pgs.lookup(pgn); !ok {
-		offset := (int(pgn) << PGSHIFT)
-		blkno, err := pc.idm.offsetblk(offset, true)
-		if err == -ENOMEM {
-			fmt.Printf("_ensureslot %v\n", offset)
-		}
-		if err != 0 {
-			return err
-		}
-		var b *bdev_block_t
-		s := strconv.Itoa(int(pc.idm.priv))
-		if fill {
-			b, err  = bcache_get_fill(blkno, "_ensureslot1: " + s, false)
-		} else {
-			b, err = bcache_get_zero(blkno, "_ensureslot2: " + s, false)
-		}
-		if err == -ENOMEM {
-			fmt.Printf("_ensureslot1 %v\n", offset)
-		}
-
-		if err != 0 {
-			return err
-		}
-		pgi := &pginfo_t{pgn: pgn, pg: b.data, buf: b}
-		pgi.dirtyblocks = make([]bool, PGSIZE / pc.blocksz)
-		pc.pgs.insert(pgi)
-	}
-	return 0
-}
-
-func (pc *pgcache_t) _ensurefill(pgn pgn_t,fill bool) err_t {
-	err := pc._ensureslot(pgn, fill)
-	if err != 0 {
-		return err
-	}
-	return 0
-}
-
-// returns the raw page and physical address of requested page. fills the page
-// if necessary.
-func (pc *pgcache_t) pgraw(offset int, fill bool) (*pg_t, pa_t, err_t) {
-	pgn, _ := pc._pgblock(offset)
-	err := pc._ensurefill(pgn, fill)
-	if err != 0 {
-		return nil, 0, err
-	}
-	pgi, ok := pc.pgs.lookup(pgn)
-	if !ok {
-		panic("eh")
-	}
-	wpg := (*pg_t)(unsafe.Pointer(pgi.pg))
-	return wpg, pgi.buf.pa, 0
-}
-
-// offset <= end. if offset lies on the same page as end, the returned slice is
-// trimmed (bytes >= end are removed).
-func (pc *pgcache_t) pgfor(offset, end int, fill bool) ([]uint8, err_t) {
-	if offset > end {
-		panic("offset must be less than end")
-	}
-	pgva, _, err := pc.pgraw(offset, fill)
-	if err != 0 {
-		return nil, err
-	}
-	pg := pg2bytes(pgva)[:]
-
-	pgoff := offset % PGSIZE
-	pg = pg[pgoff:]
-	if offset + len(pg) > end {
-		left := end - offset
-		pg = pg[:left]
-	}
-	return pg, 0
-}
-
-// write all dirty pages back to device
-func (pc *pgcache_t) flush() {
-	if memtime {
-		return
-	}
-	pc.pgs.iter(func(pgi *pginfo_t) {
-		for j, dirty := range pgi.dirtyblocks {
-			if !dirty {
-				continue
-			}
-			pgi.buf.log_write()
-			pgi.dirtyblocks[j] = false
-		}
-	})
-}
-
-// Returning buffer to bdev cache
-func (pc *pgcache_t) evict() int {
-	pc.pgs.iter(func(pgi *pginfo_t) {
-		bcache_relse(pgi.buf, "evict")
-		for _, d := range pgi.dirtyblocks {
-			if d {
-				panic("cannot be dirty")
-			}
-		}
-	})
-	pc.pgs.clear()
-	return 0
-}
 
 
 
