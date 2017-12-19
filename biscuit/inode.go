@@ -989,14 +989,3 @@ func bidecode(val inum) (int, int) {
 	return blk, iidx
 }
 
-type pgn_t uint
-
-func off2pgn(off int) pgn_t {
-	return pgn_t(off) >> PGSHIFT
-}
-
-
-
-
-
-
