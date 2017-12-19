@@ -415,7 +415,7 @@ func _isancestor(anc, start *imemnode_t) err_t {
 }
 
 type fsfops_t struct {
-	priv	inum // *imemnode_t
+	priv	inum
 	// protects offset
 	sync.Mutex
 	offset	int
