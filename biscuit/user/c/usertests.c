@@ -515,7 +515,6 @@ sharedfd(void)
 
   printf("sharedfd test\n");
 
-  unlink("sharedfd");
   fd = open("sharedfd", O_CREATE|O_RDWR);
   if(fd < 0)
     err(fd, "fstests: cannot open sharedfd for writing");
@@ -566,7 +565,7 @@ fourfiles(void)
   for(pi = 0; pi < 4; pi++){
     fname = names[pi];
     unlink(fname);
-
+      
     pid = fork();
     if(pid < 0){
       printf("fork failed\n");
@@ -595,7 +594,7 @@ fourfiles(void)
     wait(NULL);
   }
 
-  for(i = 0; i < 2; i++){
+  for(i = 0; i < 4; i++){
     fname = names[i];
     fd = open(fname, 0);
     total = 0;
@@ -1919,9 +1918,6 @@ posixtest()
 	char *of = "poutfile";
 	char *inf = "pinfile";
 
-	unlink(of);
-	unlink(inf);
-
 	// create input for child lsh
 	int infd;
 	if ((infd = open(inf, O_CREAT | O_WRONLY)) < 0)
@@ -2000,6 +1996,9 @@ posixtest()
 		errx(-1, "thread failed");
 	pthread_attr_destroy(&pa);
 
+	unlink(inf);
+	unlink(of);
+
 	printf("posix test ok\n");
 }
 
@@ -2009,11 +2008,13 @@ lseektest()
 	printf("lseek test\n");
 
 	char *f = "lseekfile";
-	unlink(f);
 
 	int fd = open(f, O_CREAT | O_RDWR);
 	if (fd < 0)
 		err(fd, "open");
+
+	unlink(f);
+
 	char *msg = "duhee hi";
 	int ret = write(fd, msg, strlen(msg));
 	if (ret < 0)
@@ -3563,8 +3564,6 @@ main(int argc, char *argv[])
 
   logtest();
 
-  //    exit(0);
-  
   createdelete();
   linkunlink();
   concreate();
