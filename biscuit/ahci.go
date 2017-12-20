@@ -192,11 +192,6 @@ type identify_device struct {
 	lba48_sectors uint64    // Words 100-104, assuming little-endian
 }
 
-type kiovec struct {
-	pa uint64
-	len uint64
-}
-
 const (
 	PCI_MSI_MCR_64BIT  = 0x00800000
 	
@@ -436,9 +431,9 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.command = IDE_CMD_IDENTIFY;
 	fis.sector_count = 1;
 
-	// To receive the identity 
-	_, pa := p.pg_new()
-	p.fill_prd(0, uint64(pa), uint64(PGSIZE))
+	// To receive the identity
+        b := bdev_block_new(-1, "identify")
+	p.fill_prd(0, b)
 	p.fill_fis(0, fis)
 
 	ST(&p.port.ci, uint32(1))
@@ -448,7 +443,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 		return nil, nil, false
 	}
 
-	id := (*identify_device)(unsafe.Pointer(dmap(pa)))
+	id := (*identify_device)(unsafe.Pointer(dmap(b.pa)))
 	if LD16(&id.features86) & IDE_FEATURE86_LBA48 == 0 {
 		fmt.Printf("AHCI: disk too small, driver requires LBA48\n");
 		return nil, nil, false
@@ -457,7 +452,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	ret_id := &identify_device{}
 	*ret_id = *id
 
-	p.pg_free(pa)
+	p.pg_free(b.pa)
 
 	m := swap(id.model[:])
 	s := string(m)
@@ -472,7 +467,7 @@ func (p *ahci_port_t) enable_write_cache() bool {
 	fis.command = IDE_CMD_SETFEATURES;
 	fis.features = IDE_FEATURE_WCACHE_ENA;
 
-	p.fill_prd(0, uint64(0), uint64(0))
+	p.fill_prd(0, nil)
 	p.fill_fis(0, fis)
 
 	ST(&p.port.ci, uint32(1))
@@ -491,7 +486,7 @@ func (p *ahci_port_t) enable_read_ahead() bool {
 	fis.command = IDE_CMD_SETFEATURES;
 	fis.features = IDE_FEATURE_RLA_ENA;
 
-	p.fill_prd(0, uint64(0), uint64(0))
+	p.fill_prd(0, nil)
 	p.fill_fis(0, fis)
 
 	ST(&p.port.ci, uint32(1))
@@ -533,23 +528,29 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
-func (p *ahci_port_t) fill_prd_v(cmdslot int, iov []kiovec) uint64 {
+func (p *ahci_port_t) fill_prd_v(cmdslot int, blks []*bdev_block_t) uint64 {
 	nbytes := uint64(0)
 	cmd := &p.cmdt[cmdslot];
-	for slot, _ := range iov {
-		ST64(&cmd.prdt[slot].dba, iov[slot].pa)
-		ST(&cmd.prdt[slot].dbc, uint32(iov[slot].len - 1))
+	for slot, _ := range blks {
+		ST64(&cmd.prdt[slot].dba, uint64(blks[slot].pa))
+		l := len(blks[slot].data)
+		if l != BSIZE {
+			panic("fill_prd_v")
+		}
+		ST(&cmd.prdt[slot].dbc, uint32(l - 1))
 		SET(&cmd.prdt[slot].dbc, 1 << 31)
-		nbytes += iov[slot].len;
+		nbytes += uint64(l)
 	}
-	ST16(&p.cmdh[cmdslot].prdtl, uint16(len(iov)));
+	ST16(&p.cmdh[cmdslot].prdtl, uint16(len(blks)));
 	return nbytes;
 }
 
-func (p *ahci_port_t) fill_prd(cmdslot int, addr uint64, nbytes uint64) {
-	io := kiovec{addr, nbytes}
-	iov := []kiovec{io}
-	p.fill_prd_v(cmdslot, iov)
+func (p *ahci_port_t) fill_prd(cmdslot int, b *bdev_block_t) {
+	var blks []*bdev_block_t
+	if b != nil {
+		blks = append(blks, b)
+	}
+	p.fill_prd_v(cmdslot, blks)
 }
 
 func (p *ahci_port_t) find_slot() (int, bool) {
@@ -605,45 +606,36 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 		}
 	}
 
-	var iov []kiovec
-	if req.cmd != BDEV_FLUSH {
-		if (len(*req.blk.data) != BSIZE) {
-			panic("AHCI: start wrong len")
-		}
-		// io := kiovec{uint64(p.block_pa[s]), uint64(len(*req.blk.data))}
-		io := kiovec{uint64(req.blk.pa), uint64(len(*req.blk.data))}
-		iov = []kiovec{io}
-	}
-	var bln uint64
 	switch req.cmd {
 	case BDEV_WRITE:
 		// copy(p.block[s][:], req.blk.data[:])
-		bln = uint64(req.blk.block)
-		p.issue(s, iov, bln, IDE_CMD_WRITE_DMA_EXT)
+		// bln = uint64(req.blk.block)
+		p.issue(s, req.blks, IDE_CMD_WRITE_DMA_EXT)
 	case BDEV_READ:
-		bln = uint64(req.blk.block)
-		p.issue(s, iov, bln, IDE_CMD_READ_DMA_EXT)
+		//bln = uint64(req.blk.block)
+		p.issue(s, req.blks, IDE_CMD_READ_DMA_EXT)
 	case BDEV_FLUSH:
-		bln = uint64(0)
-		p.issue(s, nil, bln, IDE_CMD_FLUSH_CACHE_EXT)
+		//bln = uint64(0)
+		p.issue(s, nil, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
 	if ahci_debug {
-		fmt.Printf("AHCI start: issued slot %v req %v bn %v sync %v ci %#x\n",
-			s, req.cmd, bln, req.sync, LD(&p.port.ci))
+		fmt.Printf("AHCI start: issued slot %v req %v sync %v ci %#x\n",
+			s, req.cmd, req.sync, LD(&p.port.ci))
 	}
 	return s
 }
 
-func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
+// blks must be contiguous
+func (p *ahci_port_t) issue(s int, blks []*bdev_block_t, cmd uint8) {
 	fis := &sata_fis_reg_h2d{}
 	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
 	fis.cflag = SATA_FIS_REG_CFLAG;
 	fis.command = cmd
 
 	len := uint64(0)
-	if iov != nil {
-		len = p.fill_prd_v(s, iov)
+	if blks != nil {
+		len = p.fill_prd_v(s, blks)
 	}
 
 	if len % 512 != 0 {
@@ -657,6 +649,12 @@ func (p *ahci_port_t) issue(s int, iov []kiovec, bn uint64, cmd uint8) {
 	
 	fis.dev_head = IDE_DEV_LBA;
 	fis.control = IDE_CTL_LBA48;
+	var bn uint64
+	if blks == nil {
+		bn = uint64(0)
+	} else {
+		bn = uint64(blks[0].block)
+	}
 	sector_offset := bn * uint64(BSIZE/512);
 	fis.lba_0 = uint8((sector_offset >>  0) & 0xff)
 	fis.lba_1 = uint8((sector_offset >>  8) & 0xff)
@@ -762,7 +760,9 @@ func (p *ahci_port_t) port_intr() {
 			if p.inflight[s].cmd == BDEV_WRITE {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
-				bcache_relse(p.inflight[s].blk, "interrupt")
+				for i := 0; i < len(p.inflight[s].blks); i++ {
+					bcache_relse(p.inflight[s].blks[i], "interrupt")
+				}
 			}
 			if p.inflight[s].sync {
 				if ahci_debug {
@@ -832,15 +832,15 @@ const (
 )
 
 type bdev_req_t struct {
-	blk     *bdev_block_t
+	blks     []*bdev_block_t
 	ackCh	chan bool
 	cmd	bdevcmd_t
 	sync    bool
 }
 
-func bdev_req_new(blk *bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
+func bdev_req_new(blks []*bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
 	ret := &bdev_req_t{}
-	ret.blk = blk
+	ret.blks = blks
 	ret.ackCh = make(chan bool)
 	ret.cmd = cmd
 	ret.sync = sync
@@ -873,12 +873,6 @@ func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
 func ahci_start(req *bdev_req_t) bool {
 	if adisk == nil {
 		panic("no adisk")
-	}
-	if req.blk != nil {
-		a := (uintptr)(unsafe.Pointer(req.blk.data))
-		if uint64(a) != 0 && uint64(a) < uint64(_vdirect) {
-			panic("bdev_start")
-		}
 	}
 	r := adisk.start(req)
 	return r

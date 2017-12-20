@@ -76,7 +76,7 @@ func (b *bdev_block_t) bdev_write() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
-	req := bdev_req_new(b, BDEV_WRITE, true)
+	req := bdev_req_new([]*bdev_block_t{b}, BDEV_WRITE, true)
 	if ahci_start(req) {
 		<- req.ackCh
 	}
@@ -89,12 +89,12 @@ func (b *bdev_block_t) bdev_write_async() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write_async\n")
 	}
-	ider := bdev_req_new(b, BDEV_WRITE, false)
+	ider := bdev_req_new([]*bdev_block_t{b}, BDEV_WRITE, false)
 	ahci_start(ider)
 }
 
 func (b *bdev_block_t) bdev_read() {
-	ider := bdev_req_new(b, BDEV_READ, true)
+	ider := bdev_req_new([]*bdev_block_t{b}, BDEV_READ, true)
 	if ahci_start(ider) {
 		<- ider.ackCh
 	}
@@ -114,6 +114,14 @@ func bdev_flush() {
 	if ahci_start(ider) {
 		<- ider.ackCh
 	}
+}
+
+func bdev_write_async_blks(blks []*bdev_block_t) {
+	if bdev_debug {
+		fmt.Printf("bdev_write_async_blkks %v\n", len(blks))
+	}
+	ider := bdev_req_new(blks, BDEV_WRITE, false)
+	ahci_start(ider)
 }
 
 

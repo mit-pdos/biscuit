@@ -3563,7 +3563,7 @@ main(int argc, char *argv[])
 
   logtest();
 
-    exit(0);
+  //    exit(0);
   
   createdelete();
   linkunlink();

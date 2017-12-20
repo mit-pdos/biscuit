@@ -72,6 +72,10 @@ func (log *log_t) init(ls int, ll int) {
 	log.done = make(chan bool)
 	log.force = make(chan bool)
 	log.commitwait = make(chan bool)
+
+	if log.loglen >= BSIZE/4 {
+		panic("log_t.init: log will not fill in one header block\n")
+	}
 }
 
 func (log *log_t) addlog(buf *bdev_block_t) {
@@ -120,6 +124,7 @@ func (log *log_t) commit() {
 	}
 	
 	lh := logheader_t{headblk.data}
+	// blks := make([]*bdev_block_t, log.lhead+1)
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
@@ -132,11 +137,13 @@ func (log *log_t) commit() {
 		}
 		copy(b.data[:], l.buf.data[:])
 		b.Unlock()
+		// blks[i] = b
 		bcache_write_async(b)
 		bcache_relse(b, "writelog")
-
 	}
-	
+
+	// bdev_write_async_blks(blks)
+
 	bdev_flush()   // flush log
 
 	lh.w_recovernum(log.lhead)
