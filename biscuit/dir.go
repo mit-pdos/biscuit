@@ -329,12 +329,12 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 	if err != 0 {
 		return zi, err
 	}
-	
+
 	b, err := idm.off2buf(de.offset, NDBYTES, true, "_deremove")
 	if err != 0 {
 		return zi, err
 	}
-	dirdata := dirdata_t{b.data[:]}
+	dirdata := dirdata_t{b.data[de.offset%PGSIZE:]}
 	dirdata.w_filename(0, "")
 	dirdata.w_inodenext(0, 0, 0)
 	b.Unlock()
