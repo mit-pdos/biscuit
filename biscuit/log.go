@@ -124,26 +124,26 @@ func (log *log_t) commit() {
 	}
 	
 	lh := logheader_t{headblk.data}
-	// blks := make([]*bdev_block_t, log.lhead+1)
+	blks := make([]*bdev_block_t, log.lhead)
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, l.block)
 
-		// write block into log
+		// fill in log blocks
                 b, err := bcache_get_nofill(log.logstart+i+1, "log")
 		if err != 0 {
 			panic("cannot get log block\n")
 		}
 		copy(b.data[:], l.buf.data[:])
 		b.Unlock()
-		// blks[i] = b
-		bcache_write_async(b)
+		blks[i] = b
+		
 		bcache_relse(b, "writelog")
 	}
 
-	// bdev_write_async_blks(blks)
-
+	bcache_write_async_blks(blks)
+	
 	bdev_flush()   // flush log
 
 	lh.w_recovernum(log.lhead)
@@ -158,6 +158,8 @@ func (log *log_t) commit() {
 	// 	runtime.Crash()
 	// }
 
+	// panic("log\n")
+	
 	// the log is committed. if we crash while installing the blocks to
 	// their destinations, we should be able to recover
 	for i := 0; i < log.lhead; i++ {

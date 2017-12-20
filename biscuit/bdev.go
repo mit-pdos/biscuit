@@ -116,14 +116,6 @@ func bdev_flush() {
 	}
 }
 
-func bdev_write_async_blks(blks []*bdev_block_t) {
-	if bdev_debug {
-		fmt.Printf("bdev_write_async_blkks %v\n", len(blks))
-	}
-	ider := bdev_req_new(blks, BDEV_WRITE, false)
-	ahci_start(ider)
-}
-
 
 // block cache, all device interactions run through block cache.
 //
@@ -233,6 +225,29 @@ func bcache_write_async(b *bdev_block_t) {
 	brefcache.refup(b, "bcache_write_async")
 	b.bdev_write_async()
 }
+
+// blks must be contiguous on disk
+func bcache_write_async_blks(blks []*bdev_block_t) {
+	if bdev_debug {
+		fmt.Printf("bcache_write_async_blks %v\n", len(blks))
+	}
+	if len(blks) == 0  {
+		panic("bcache_write_async_blks\n")
+	}
+	n := blks[0].block-1
+	for _, b := range blks {
+		// sanity check
+		if b.block != n + 1 {
+			panic("not contiguous\n")
+		}
+		n++
+		brefcache.refup(b, "bcache_write_async_blks")
+	}
+	// one request for all blks
+	ider := bdev_req_new(blks, BDEV_WRITE, false)
+	ahci_start(ider)
+}
+
 
 func bcache_refup(b *bdev_block_t, s string) {
 	brefcache.refup(b, s)

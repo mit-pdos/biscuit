@@ -626,7 +626,7 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 	return s
 }
 
-// blks must be contiguous
+// blks must be contiguous on disk (but not necessarily in memory)
 func (p *ahci_port_t) issue(s int, blks []*bdev_block_t, cmd uint8) {
 	fis := &sata_fis_reg_h2d{}
 	fis.fis_type = SATA_FIS_TYPE_REG_H2D;
