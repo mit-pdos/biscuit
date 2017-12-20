@@ -8,7 +8,6 @@ const log_debug = false
 var fslog	= log_t{}
 
 type logread_t struct {
-	loggen		uint8
 	buf		*bdev_block_t
 	had		bool
 	gencommit	bool
@@ -76,7 +75,7 @@ func (log *log_t) init(ls int, ll int) {
 }
 
 func (log *log_t) addlog(buf *bdev_block_t) {
-	// log absorption
+	// log absorption.   XXX use map to keep track of blocks in log?
 	for i := 0; i < log.lhead; i++ {
 		l := log.log[i]
 		if l.block == buf.block {
@@ -171,60 +170,81 @@ func (log *log_t) commit() {
 	log.lhead = 0
 }
 
+var maxentries_per_op = 0
+var nblkcommited = 0
+var ncommit = 0
+
+
+// an upperbound on the number of blocks written per system call. this is
+// necessary in order to guarantee that the log is long enough for the allowed
+// number of concurrent fs syscalls.
+const maxblkspersys = 10
+
+func (l *log_t) full(nops int) bool {
+	reserved := maxblkspersys * nops
+	return reserved + l.lhead >= l.loglen
+}
+
 func log_daemon(l *log_t) {
-	// an upperbound on the number of blocks written per system call. this
-	// is necessary in order to guarantee that the log is long enough for
-	// the allowed number of concurrent fs syscalls.
-	maxblkspersys := 10
-	loggen := uint8(0)
 	for {
-		tickets := (l.loglen - l.lhead)/ maxblkspersys
 		adm := l.admission
-
 		done := false
-		given := 0
-		t := 0
+		nops := 0
 		waiters := 0
-
-                if l.loglen-l.lhead < maxblkspersys {
-                       panic("must flush. not enough space left")
-                }
 		
 		for !done {
 			select {
 			case nb := <- l.incoming:
-				if t <= 0 {
-					panic("log write without admission")
+				if nops <= 0 {
+					panic("no admit")
+				}
+				if l.lhead >= l.loglen {
+					panic("full")
 				}
 				l.addlog(nb)
 			case <- l.done:
-				t--
-				if t == 0 {
-					done = true
+				nops--
+				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
+				//	l.lhead)
+				if adm == nil {   // is an op waiting for admission
+					if l.full(nops+1) {
+						// still full; maybe commit?
+						if nops == 0 {
+							done = true
+						}
+					} else {
+						// admit another op
+						adm = l.admission
+					}
 				}
 			case adm <- true:
-				given++
-				t++
-				if given == tickets {
+				nops++
+				//fmt.Printf("adm: next wait? %v %v %v %v\n", nops, l.full(nops+1),
+				//	l.loglen, l.lhead)
+				if l.full(nops+1) {  // next one wait?
 					adm = nil
 				}
 			case <- l.force:
 				waiters++
 				adm = nil
-				if t == 0 {
+				if nops == 0 {
 					done = true
 				}
 			}
 		}
-		// XXX because writei doesn't break big writes up in smaller transactions
-		// commit every transaction, instead of inside the if statement below
+		
+		if l.lhead > maxentries_per_op {
+			maxentries_per_op = l.lhead
+		}
+		ncommit++
+
+		//fmt.Printf("commit %v\n", l.lhead)
+
+		nblkcommited += l.lhead
 		l.commit()
-		loggen++
-		if waiters > 0 || l.loglen-l.lhead < maxblkspersys {
-			fmt.Printf("commit %v %v\n", l.lhead, l.loglen)
-			// l.commit()   // XX make asynchrounous
-			// loggen++
-			// wake up waiters
+
+		if waiters > 0 {
+			fmt.Printf("wakeup waiters/syncers %v\n", waiters)
 			go func() {
 				for i := 0; i < waiters; i++ {
 					l.commitwait <- true

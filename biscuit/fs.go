@@ -1168,8 +1168,14 @@ func fs_stat(path string, st *stat_t, cwd inum) err_t {
 }
 
 func fs_sync() err_t {
-       irefcache.print_live_refs()
-       brefcache.print_live_refs()
+
+	fmt.Printf("max entries %v #commits %v #blkcommitted %v\n", maxentries_per_op, ncommit,
+		nblkcommited)
+
+	if fs_debug {
+		irefcache.print_live_refs()
+		brefcache.print_live_refs()
+	}
 
 	if memtime {
 		return 0

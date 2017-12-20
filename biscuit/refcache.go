@@ -28,7 +28,7 @@ type ref_t struct {
 type refcache_t struct {
 	sync.Mutex
 	size           int
-	refs           map[int]*ref_t
+	refs           map[int]*ref_t    // XXX use fsrb.go instead?
 	reflru         reflru_t
 }
 

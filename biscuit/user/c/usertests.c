@@ -3506,6 +3506,50 @@ void mmaptest(void)
 	printf("mmap test ok\n");
 }
 
+
+void
+logtest()
+{
+  #define N 100
+  char *buf = malloc(BSIZE*N);
+  #define NPROC 5
+
+  printf("log test\n");
+
+  char *names[NPROC] = { "f0", "f1", "f2", "f3", "f4" };
+
+  for(int pi = 0; pi < NPROC; pi++){
+    int pid = fork();
+    if(pid < 0){
+      err(-1, "fork failed\n");
+    }
+    if(pid == 0){
+      char *fname = names[pi];
+      int fd = open(fname, O_CREATE | O_RDWR);
+      if(fd < 0){
+	err(-1, "create failed\n");
+      }
+      unlink(fname);
+
+      for (int i = 0; i < N; i ++) {
+	if (write(fd, buf+i*BSIZE, BSIZE) != BSIZE)
+	  err(-1, "write");
+      }
+
+      exit(0);
+    }
+  }
+
+  for(int pi = 0; pi < NPROC; pi++){
+    wait(NULL);
+  }
+
+  free(buf);
+    
+  printf("log test OK\n");
+}
+
+
 int
 main(int argc, char *argv[])
 {
@@ -3517,6 +3561,10 @@ main(int argc, char *argv[])
   }
   close(open("usertests.ran", O_CREATE));
 
+  logtest();
+
+    exit(0);
+  
   createdelete();
   linkunlink();
   concreate();
@@ -3585,7 +3633,7 @@ main(int argc, char *argv[])
   scmtest();
   mkstemptest();
   getppidtest();
-  mmaptest();
+  // mmaptest();
 
   exectest();
 
