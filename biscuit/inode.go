@@ -181,6 +181,9 @@ var irefcache	= make_refcache(syslimit.vnodes)
 // obtain the reference for an inode
 func iref(priv inum, s string) (*imemnode_t, err_t) {
 	ref, err := irefcache.lookup(int(priv), s)
+	if err != 0 {
+		return nil, err
+	}
 	defer ref.Unlock()
 
 	if !ref.valid {
