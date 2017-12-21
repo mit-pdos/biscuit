@@ -199,7 +199,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 
 	// current dir blocks are full -- allocate new dirdata block
 	newsz := idm.icache.size + BSIZE
-	b, err := idm.off2buf(idm.icache.size, BSIZE, true, "_denextempty")
+	b, err := idm.off2buf(idm.icache.size, BSIZE, true, true, "_denextempty")
 	if err != 0 {
 		return 0, err
 	}
@@ -230,7 +230,7 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 		return err
 	}
         // dennextempty() made the slot so we won't fill
-	b, err := idm.off2buf(noff, NDBYTES, true, "_deinsert")
+	b, err := idm.off2buf(noff, NDBYTES, true, true, "_deinsert")
 	if err != 0 {
 		return err
 	}
@@ -263,7 +263,7 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, err_t) {
 	found := false
 	for i := 0; i < idm.icache.size; i+= BSIZE {
-		b, err := idm.off2buf(i, BSIZE, false, "_descan")
+		b, err := idm.off2buf(i, BSIZE, false, true, "_descan")
 		if err != 0 {
 			return false, err
 		}
@@ -330,7 +330,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 		return zi, err
 	}
 
-	b, err := idm.off2buf(de.offset, NDBYTES, true, "_deremove")
+	b, err := idm.off2buf(de.offset, NDBYTES, true, true, "_deremove")
 	if err != 0 {
 		return zi, err
 	}
@@ -424,7 +424,7 @@ func (idm *imemnode_t) _deprobe(fn string) (*bdev_block_t, err_t) {
 			return nil, err
 		}
 		noff := de.offset
-		b, err := idm.off2buf(noff, NDBYTES, true, "_deprobe_fn")
+		b, err := idm.off2buf(noff, NDBYTES, true, true, "_deprobe_fn")
 		b.Unlock()
 		return b, err
 	}
@@ -432,7 +432,7 @@ func (idm *imemnode_t) _deprobe(fn string) (*bdev_block_t, err_t) {
 	if err != 0 {
 		return nil, err
 	}
-	b, err := idm.off2buf(noff, NDBYTES, true, "_deprobe_nil")
+	b, err := idm.off2buf(noff, NDBYTES, true, true, "_deprobe_nil")
 	if err != 0 {
 		return nil, err
 	}

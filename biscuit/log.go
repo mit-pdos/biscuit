@@ -185,7 +185,7 @@ func (log *log_t) commit() {
 		lh.w_logdest(i, l.block)
 
 		// fill in log blocks
-                b, err := bcache_get_nofill(log.logstart+i+1, "log")
+                b, err := bcache_get_nofill(log.logstart+i+1, "log", true)
 		if err != 0 {
 			panic("cannot get log block\n")
 		}

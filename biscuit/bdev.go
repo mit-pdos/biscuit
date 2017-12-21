@@ -203,7 +203,7 @@ func bcache_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func bcache_get_nofill(blkn int, s string) (*bdev_block_t, err_t) {
+func bcache_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 	b, created, err := bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
@@ -213,6 +213,9 @@ func bcache_get_nofill(blkn int, s string) (*bdev_block_t, err_t) {
 	}
 	if created {
 		b.new_page()   // XXX a non-zero page would be fine
+	}
+	if !lock {
+		b.Unlock()
 	}
 	return b, 0
 }

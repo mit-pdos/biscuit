@@ -653,7 +653,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 }
 
 // Return locked buffer for offset
-func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, s string) (*bdev_block_t, err_t) {
+func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s string) (*bdev_block_t, err_t) {
 	if offset%PGSIZE  + len > PGSIZE {
 		panic("off2buf")
 	}
@@ -661,7 +661,12 @@ func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, s string) (*b
 	if err != 0 {
 		return nil, err
 	}
-	b, err  := bcache_get_fill(blkno, s, true)
+	var b *bdev_block_t
+	if fill {
+		b, err = bcache_get_fill(blkno, s, true)
+	} else {
+		b, err = bcache_get_nofill(blkno, s, true)
+        }
 	if err != 0 {
 		return nil, err
 	}
@@ -681,7 +686,7 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	for offset < isz && dst.remain() != 0 {
 		m := min(BSIZE-offset%BSIZE, dst.remain())
 		m = min(isz - offset, m)
-		b, err := idm.off2buf(offset, m, false, "iread")
+		b, err := idm.off2buf(offset, m, false, true, "iread")
 		if err != 0 {
 			return c, err
 		}
@@ -711,7 +716,8 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
 	c := 0
 	for c < sz {
 		m := min(BSIZE-offset%BSIZE, sz -c)
-		b, err := idm.off2buf(offset, m, true, "iwrite")
+		fill := m != BSIZE
+		b, err := idm.off2buf(offset, m, true, fill, "iwrite")
 		if err != 0 {
 			return c, err
 		}
@@ -883,7 +889,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 	pgc := len / PGSIZE
 	ret := make([]mmapinfo_t, pgc)
 	for i := 0; i < len; i += PGSIZE {
-		buf, err := idm.off2buf(o+i, PGSIZE, false, "immapinfo")
+		buf, err := idm.off2buf(o+i, PGSIZE, false, true, "immapinfo")
 		if err != 0 {
 			return nil, err
 		}
