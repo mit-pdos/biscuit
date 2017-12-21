@@ -421,6 +421,25 @@ func cons_read(ub userio_i, offset int) (int, err_t) {
 	return ret, 0
 }
 
+var stats_string = ""
+
+func stat_read(ub userio_i, offset int) (int, err_t) {
+	sz := ub.remain()
+	s := stats_string
+	if len(s) > sz {
+		s = s[:sz]
+		stats_string = stats_string[sz:]
+	} else {
+		stats_string = ""
+	}
+	kdata := []byte(s)
+	ret, err := ub.uiowrite(kdata)
+	if err != 0 || ret != len(kdata) {
+		panic("dropped stats")
+	}
+	return ret, 0
+}
+
 func cons_write(src userio_i, off int) (int, err_t) {
 	// merge into one buffer to avoid taking the console lock many times.
 	// what a sweet optimization.

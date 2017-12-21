@@ -149,6 +149,7 @@ const(
 	D_SUS 		= 3
 	D_DEVNULL	= 4
 	D_RAWDISK	= 5
+	D_STAT          = 6
 	D_FIRST		= D_CONSOLE
 	D_LAST		= D_SUS
 )

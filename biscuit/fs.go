@@ -66,6 +66,11 @@ func fs_init() *fd_t {
 	return &fd_t{fops: &fsfops_t{priv: iroot}}
 }
 
+func fs_statistics() string {
+	s := log_stat()
+	s += bcache_stat()
+	return s
+}
 
 var memtime = false
 
@@ -651,7 +656,7 @@ func (df *devfops_t) _sane() {
 	// make sure this maj/min pair is handled by devfops_t. to handle more
 	// devices, we can either do dispatch in devfops_t or we can return
 	// device-specific fdops_i in fs_open()
-	if df.maj != D_CONSOLE && df.maj != D_DEVNULL {
+	if df.maj != D_CONSOLE && df.maj != D_DEVNULL && df.maj != D_STAT  {
 		panic("bad dev")
 	}
 }
@@ -660,6 +665,8 @@ func (df *devfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
 		return cons_read(dst, 0)
+	} else if df.maj == D_STAT {
+		return stat_read(dst, 0)
 	} else {
 		return 0, 0
 	}
@@ -1123,7 +1130,10 @@ func fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int)
 			panic("must succeed")
 		}
 		switch maj {
-		case D_CONSOLE, D_DEVNULL:
+		case D_CONSOLE, D_DEVNULL, D_STAT:
+			if maj == D_STAT {
+				stats_string = fs_statistics()
+			}
 			ret.fops = &devfops_t{maj: maj, min: min}
 		case D_RAWDISK:
 			ret.fops = &rawdfops_t{minor: min}
@@ -1168,13 +1178,6 @@ func fs_stat(path string, st *stat_t, cwd inum) err_t {
 }
 
 func fs_sync() err_t {
-
-
-	// XXX have a stats call
-	// fslog.print_log_stats()
-	// irefcache.print_live_refs()
-	// brefcache.print_live_refs()
-
 	if memtime {
 		return 0
 	}

@@ -30,6 +30,10 @@ type refcache_t struct {
 	size           int
 	refs           map[int]*ref_t    // XXX use fsrb.go instead?
 	reflru         reflru_t
+	
+	// stats
+	nevict          int
+
 }
 
 func make_refcache(size int) *refcache_t {
@@ -39,11 +43,14 @@ func make_refcache(size int) *refcache_t {
 	return ic
 }
 
-func (irc *refcache_t) print_live_refs() {
-	fmt.Printf("refs %v\n", len(irc.refs))
+func (irc *refcache_t) nlive() int {
+	n := 0
 	for _, r := range irc.refs {
-		fmt.Printf("ref %v refcnt %v %v\n", r.key, r.refcnt, r.s)
+		if r.refcnt > 0 {
+			n++
+		}
 	}
+	return n
 }
 
 func (irc *refcache_t) _replace() obj_t {
@@ -52,6 +59,7 @@ func (irc *refcache_t) _replace() obj_t {
 			if refcache_debug {
 				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
 			}
+			irc.nevict++
 			delete(irc.refs, ir.key)
 			irc.reflru.remove(ir)
 			return ir.obj
@@ -81,7 +89,6 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 		victim = irc._replace()
 		if victim == nil {
 			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.size)
-			irc.print_live_refs()
 			return nil, -ENOMEM
 		}
         }

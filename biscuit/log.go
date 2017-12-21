@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+import "strconv"
 
 const log_debug = false
 
@@ -87,12 +88,6 @@ func (log *log_t) init(ls int, ll int) {
 	if log.loglen >= BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
 	}
-}
-
-func (l *log_t) print_log_stats() {
-	fmt.Printf("max entries %v #commits %v #apply %v #blkcommitted %v\n", l.maxentries_per_op,
-		l.ncommit, l.napply, l.nblkcommitted)
-
 }
 
 // an upperbound on the number of blocks written per system call. this is
@@ -337,6 +332,18 @@ func log_init(logstart, loglen int) err_t {
 	return 0
 }
 
+func log_stat() string {
+	s := "log: maxentries_per_op "
+	s += strconv.Itoa(fslog.maxentries_per_op)
+	s += " nblkcommited "
+	s += strconv.Itoa(fslog.nblkcommitted)
+	s += " ncommit "
+	s += strconv.Itoa(fslog.ncommit)
+	s += " napply "
+	s += strconv.Itoa(fslog.napply)
+	s += "\n"
+	return s
+}
 
 func log_recover() err_t {
 	l := &fslog

@@ -3,6 +3,7 @@ package main
 import "fmt"
 import "sync"
 import "unsafe"
+import "strconv"
 
 // A block has a lock, since, it may store an inode block, which has 4 inodes,
 // and we need to ensure that hat writes aren't lost due to concurrent inode
@@ -260,15 +261,15 @@ func bcache_relse(b *bdev_block_t, s string) {
 	}
 }
 
-func print_live_blocks() {
-	fmt.Printf("bcache %v\n", len(brefcache.refs))
-	for _, r := range brefcache.refs {
-		fmt.Printf("block %v %v\n", r.key, r.refcnt)
-	}
-	fmt.Printf("irefcache %v\n", len(irefcache.refs))
-	for _, v := range irefcache.refs {
-		fmt.Printf("inode %v\n", v)
-	}
+func bcache_stat() string {
+	s := "bcache: size "
+	s += strconv.Itoa(len(brefcache.refs))
+	s += " #evictions "
+	s += strconv.Itoa(brefcache.nevict)
+	s += " #live "
+	s += strconv.Itoa(brefcache.nlive())
+	s += "\n"
+	return s
 }
 
 func bdev_test() {
