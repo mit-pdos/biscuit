@@ -22,6 +22,7 @@ type log_entry_t struct {
 // list of dirty blocks that are pending commit.
 type log_t struct {
 	log		[]log_entry_t
+	logmap          map[int]int   // map from block number to index in log
 	lhead		int
 	logstart	int
 	loglen		int
@@ -69,6 +70,7 @@ func (log *log_t) init(ls int, ll int) {
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
 	log.log = make([]log_entry_t, log.loglen)
+	log.logmap = make(map[int]int, log.loglen)
 	log.incoming = make(chan *bdev_block_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
@@ -81,8 +83,8 @@ func (log *log_t) init(ls int, ll int) {
 }
 
 func (log *log_t) addlog(buf *bdev_block_t) {
-	// log absorption.   XXX use map to keep track of blocks in log?
-	for i := 0; i < log.lhead; i++ {
+	// log absorption.
+	if i, ok := log.logmap[buf.block]; ok {
 		l := log.log[i]
 		if l.block == buf.block {
 			if l.buf != buf {
@@ -96,6 +98,10 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			return
 		}
 	}
+	
+	// for i := 0; i < log.lhead; i++ {
+	// 	l := log.log[i]
+	// }
 
 	lhead := log.lhead
 	if lhead >= len(log.log) {
@@ -107,6 +113,7 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 	// accepting transactions until commit has completed, which will clean
 	// the log.
 	log.log[lhead] = log_entry_t{buf.block, buf}
+	log.logmap[buf.block] = lhead
 	log.lhead++
 }
 
@@ -178,6 +185,9 @@ func (log *log_t) commit() {
 	bcache_relse(headblk, "commit done")
 	
 	bdev_flush()  // flush cleared commit
+
+	// reset log.
+	log.logmap = make(map[int]int, log.loglen)
 	log.lhead = 0
 }
 
