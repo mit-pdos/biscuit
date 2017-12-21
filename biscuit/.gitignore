@@ -74,6 +74,8 @@
 /user/c/fweb
 /user/c/fcgi
 /user/c/stress
+/user/c/smallfile
+/user/c/largefile
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
