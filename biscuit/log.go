@@ -23,7 +23,8 @@ type log_entry_t struct {
 type log_t struct {
 	log		[]log_entry_t
 	logmap          map[int]int   // map from block number to index in log
-	lhead		int
+	memhead		int           // head of the log in memory
+	diskhead        int           // head of the log on disk 
 	logstart	int
 	loglen		int
 	incoming	chan *bdev_block_t
@@ -31,6 +32,12 @@ type log_t struct {
 	done		chan bool
 	force		chan bool
 	commitwait	chan bool
+
+	// some stats
+	maxentries_per_op int
+	nblkcommitted      int
+	ncommit           int
+	napply            int
 }
 
 // first log header block format
@@ -65,7 +72,7 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 
 func (log *log_t) init(ls int, ll int) {
 	loglen = ll-1
-	log.lhead = 0
+	log.memhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
@@ -80,6 +87,22 @@ func (log *log_t) init(ls int, ll int) {
 	if log.loglen >= BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
 	}
+}
+
+func (l *log_t) print_log_stats() {
+	fmt.Printf("max entries %v #commits %v #apply %v #blkcommitted %v\n", l.maxentries_per_op,
+		l.ncommit, l.napply, l.nblkcommitted)
+
+}
+
+// an upperbound on the number of blocks written per system call. this is
+// necessary in order to guarantee that the log is long enough for the allowed
+// number of concurrent fs syscalls.
+const maxblkspersys = 10
+
+func (l *log_t) full(nops int) bool {
+	reserved := maxblkspersys * nops
+	return reserved + l.memhead >= l.loglen
 }
 
 func (log *log_t) addlog(buf *bdev_block_t) {
@@ -99,42 +122,69 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 		}
 	}
 	
-	// for i := 0; i < log.lhead; i++ {
-	// 	l := log.log[i]
-	// }
-
-	lhead := log.lhead
-	if lhead >= len(log.log) {
+	memhead := log.memhead
+	if memhead >= len(log.log) {
 		panic("log overflow")
 	}
 
-	// No need to copy because later transactions who read the modified
-	// block will commmit with this transaction.  If log commits, log stops
-	// accepting transactions until commit has completed, which will clean
-	// the log.
-	log.log[lhead] = log_entry_t{buf.block, buf}
-	log.logmap[buf.block] = lhead
-	log.lhead++
+	// No need to copy data of buf because later ops who reads the modified
+	// block will commmit with this transaction or not commit.  We never
+	// commit while an operation is still on-going.
+	log.log[memhead] = log_entry_t{buf.block, buf}
+	log.logmap[buf.block] = memhead
+	log.memhead++
+}
+
+// headblk is in cache
+func (log *log_t) apply(headblk *bdev_block_t) {
+	if log_debug {
+		fmt.Printf("apply log: %v %v %v\n", log.memhead, log.diskhead, log.loglen)
+	}
+	
+	// the log is committed. if we crash while installing the blocks to
+	// their destinations, we should be able to recover
+	for i := 0; i < log.memhead; i++ {
+		l := log.log[i]
+		bcache_write_async(l.buf)
+		bcache_relse(l.buf, "apply")
+	}
+
+	bdev_flush()  // flush apply
+	
+	// success; clear flag indicating to recover from log
+	lh := logheader_t{headblk.data}
+	lh.w_recovernum(0)
+	bcache_write(headblk)
+
+	bdev_flush()  // flush cleared commit
 }
 
 func (log *log_t) commit() {
-	if log.lhead == 0 {
+	if log.memhead == log.diskhead {
 		// nothing to commit
 		return
 	}
 
 	if log_debug {
-		fmt.Printf("commit\n")
+		fmt.Printf("commit %v %v\n", log.memhead, log.diskhead)
 	}
 
-	headblk, err := bcache_get_zero(log.logstart, "commit", false)
+	log.ncommit++
+	newblks := log.memhead-log.diskhead
+	if newblks > log.maxentries_per_op {
+		log.maxentries_per_op = newblks
+	}
+
+	// read the log header from disk; it may contain commit blocks from
+	// current transactions, if we haven't applied yet.
+	headblk, err := bcache_get_fill(log.logstart, "commit", false)
 	if err != 0 {
 		panic("cannot read commit block\n")
 	}
 	
 	lh := logheader_t{headblk.data}
-	blks := make([]*bdev_block_t, log.lhead)
-	for i := 0; i < log.lhead; i++ {
+	blks := make([]*bdev_block_t, newblks)
+	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, l.block)
@@ -146,64 +196,38 @@ func (log *log_t) commit() {
 		}
 		copy(b.data[:], l.buf.data[:])
 		b.Unlock()
-		blks[i] = b
+		
+		blks[i-log.diskhead] = b
 		
 		bcache_relse(b, "writelog")
 	}
+	
+	lh.w_recovernum(log.memhead)
 
-	bcache_write_async_blks(blks)
+	bcache_write_async_blks(blks)  // write head
 	
 	bdev_flush()   // flush log
 
-	lh.w_recovernum(log.lhead)
-
-	// write log header
-	bcache_write(headblk)
+	bcache_write(headblk)  	// write log header
 
 	bdev_flush()   // commit log header
 
-	// rn := lh.recovernum()
-	// if rn > 0 {
-	// 	runtime.Crash()
-	// }
+	log.nblkcommitted += newblks
 
-	// panic("log\n")
-	
-	// the log is committed. if we crash while installing the blocks to
-	// their destinations, we should be able to recover
-	for i := 0; i < log.lhead; i++ {
-		l := log.log[i]
-		bcache_write_async(l.buf)
-		bcache_relse(l.buf, "apply")
+	// apply log only when there is no room for another op. this avoids
+	// applies when there room in the log (e.g., a sync forced the log)
+	if log.full(1) {
+		log.napply++
+		log.apply(headblk)
+		log.memhead = 0
+		log.diskhead = 0
 	}
-
-	bdev_flush()  // flush apply
-	
-	// success; clear flag indicating to recover from log
-	lh.w_recovernum(0)
-	bcache_write(headblk)
-	bcache_relse(headblk, "commit done")
-	
-	bdev_flush()  // flush cleared commit
-
-	// reset log.
+	// data till log.memhead has been written to log
+	log.diskhead = log.memhead
+	// reset absorption map
 	log.logmap = make(map[int]int, log.loglen)
-	log.lhead = 0
-}
 
-var maxentries_per_op = 0
-var nblkcommited = 0
-var ncommit = 0
-
-
-// an upperbound on the number of blocks written per system call. this is
-// necessary in order to guarantee that the log is long enough for the allowed
-// number of concurrent fs syscalls.
-const maxblkspersys = 10
-
-func (l *log_t) full(nops int) bool {
-	reserved := maxblkspersys * nops
-	return reserved + l.lhead >= l.loglen
+	bcache_relse(headblk, "commit done")
 }
 
 func log_daemon(l *log_t) {
@@ -219,29 +243,31 @@ func log_daemon(l *log_t) {
 				if nops <= 0 {
 					panic("no admit")
 				}
-				if l.lhead >= l.loglen {
+				if l.memhead >= l.loglen {
 					panic("full")
 				}
 				l.addlog(nb)
 			case <- l.done:
 				nops--
 				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
-				//	l.lhead)
-				if adm == nil {   // is an op waiting for admission
-					if l.full(nops+1) {
-						// still full; maybe commit?
+				//	l.memhead)
+				if adm == nil {   // is an op waiting for admission?
+					if waiters > 0 || l.full(nops+1) {
+						// No more log space or forced to commit
 						if nops == 0 {
 							done = true
 						}
 					} else {
-						// admit another op
+						// admit another op. this may op
+						// did not use all the space
+						// that it reserved.
 						adm = l.admission
 					}
 				}
 			case adm <- true:
 				nops++
 				//fmt.Printf("adm: next wait? %v %v %v %v\n", nops, l.full(nops+1),
-				//	l.loglen, l.lhead)
+				//	l.loglen, l.memhead)
 				if l.full(nops+1) {  // next one wait?
 					adm = nil
 				}
@@ -253,19 +279,13 @@ func log_daemon(l *log_t) {
 				}
 			}
 		}
-		
-		if l.lhead > maxentries_per_op {
-			maxentries_per_op = l.lhead
-		}
-		ncommit++
 
-		//fmt.Printf("commit %v\n", l.lhead)
-
-		nblkcommited += l.lhead
 		l.commit()
 
 		if waiters > 0 {
-			fmt.Printf("wakeup waiters/syncers %v\n", waiters)
+			if log_debug {
+				fmt.Printf("wakeup waiters/syncers %v\n", waiters)
+			}
 			go func() {
 				for i := 0; i < waiters; i++ {
 					l.commitwait <- true

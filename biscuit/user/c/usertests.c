@@ -3511,7 +3511,8 @@ void mmaptest(void)
 void
 logtest()
 {
-  #define N 100
+  #define N 1000
+  #define NSYNC 20
   char *buf = malloc(BSIZE*N);
   #define NPROC 5
 
@@ -3535,6 +3536,9 @@ logtest()
       for (int i = 0; i < N; i ++) {
 	if (write(fd, buf+i*BSIZE, BSIZE) != BSIZE)
 	  err(-1, "write");
+	if (i % NSYNC == 0) {
+	  fsync(fd);
+	}
       }
 
       exit(0);

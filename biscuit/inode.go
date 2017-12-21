@@ -553,11 +553,6 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 			if isnew {
 				writen(s, 8, slot, blkn)
 				added = true
-				// make sure to zero indirect pointer block if
-				// allocated.  XXX balloc zeros.
-				if idx == INDADDR {
-					fmt.Printf("indirect indx\n")
-				}
 			}
 		}
 		if added {

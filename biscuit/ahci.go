@@ -599,10 +599,15 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 		if ok {
 			break
 		} else {
-			fmt.Printf("AHCI start: wait for slot\n")
+			if ahci_debug {
+				fmt.Printf("AHCI start: wait for slot\n")
+			}
 			p.nwaiting++
 			p.cond.Wait()
 			p.nwaiting--
+			if ahci_debug {
+				fmt.Printf("AHCI start: wait for slot; try again\n")
+			}
 		}
 	}
 
