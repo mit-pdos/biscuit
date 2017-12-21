@@ -573,9 +573,11 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	}
 
 	whichblk := offset/BSIZE
+	grow := offset >= idm.icache.size
+	// fmt.Printf("whichblk %v grow %v\n", whichblk, grow)
 	// make sure there is no empty space for writes past the end of the
 	// file
-	if writing {
+	if writing && grow {
 		ub := whichblk + 1
 		if ub > NIADDRS {
 			ub = NIADDRS
@@ -614,23 +616,27 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 		if err != 0 {
 			return 0, err
 		}
-		for i := 0; i < indslot/slotpb; i++ {
-			// make sure the indirect block has no empty spaces if
-			// we are writing past the end of the file. if
-			// necessary, ensureind also allocates the next
-			// indirect pointer block.
-			ensureind(indblk, slotpb)
+		if grow {
+			for i := 0; i < indslot/slotpb; i++ {
+				// make sure the indirect block has no empty spaces if
+				// we are writing past the end of the file. if
+				// necessary, ensureind also allocates the next
+				// indirect pointer block.
+				ensureind(indblk, slotpb)
 
-			indno = readn(indblk.data[:], 8, nextindb)
-			bcache_relse(indblk, "offsetblk1")
-			indblk, err = idm.icache.mbread(indno)
-			if err != 0 {
-				return 0, err
+				indno = readn(indblk.data[:], 8, nextindb)
+				bcache_relse(indblk, "offsetblk1")
+				indblk, err = idm.icache.mbread(indno)
+				if err != 0 {
+					return 0, err
+				}
 			}
 		}
 		// finally get data block from indirect block
 		slotoff := (indslot % slotpb)
-		ensureind(indblk, slotoff)
+		if grow {
+			ensureind(indblk, slotoff)
+		}
 		noff := (slotoff)*8
 		s := indblk.data[:]
 		blkn = readn(s, 8, noff)
