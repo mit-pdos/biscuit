@@ -54,7 +54,7 @@ func fs_init() *fd_t {
 	loglen := superb.loglen()
 	usable_start = logstart + loglen
 
-	if loglen <= 0 || loglen > 63 {
+	if loglen <= 0 || loglen > 256 {
 		panic("bad log len")
 	}
 

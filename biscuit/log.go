@@ -6,6 +6,7 @@ const log_debug = false
 
 // file system journal
 var fslog	= log_t{}
+var loglen = 0
 
 type logread_t struct {
 	buf		*bdev_block_t
@@ -48,20 +49,21 @@ func (lh *logheader_t) w_recovernum(n int) {
 }
 
 func (lh *logheader_t) logdest(p int) int {
-	if p < 0 || p > 62 {
+	if p < 0 || p > loglen {
 		panic("bad dnum")
 	}
 	return fieldr(lh.data, 8 + p)
 }
 
 func (lh *logheader_t) w_logdest(p int, n int) {
-	if p < 0 || p > 62 {
+	if p < 0 || p > loglen {
 		panic("bad dnum")
 	}
 	fieldw(lh.data, 8 + p, n)
 }
 
 func (log *log_t) init(ls int, ll int) {
+	loglen = ll-1
 	log.lhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations

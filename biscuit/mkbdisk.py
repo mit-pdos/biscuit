@@ -491,7 +491,7 @@ if __name__ == '__main__':
       print "*** used blocks don't match", of.tell() / blocksz, usedblocks
 
     fblen = 2*20*8
-    loglen = 31
+    loglen = 256
     dofs(of, usedblocks+1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
     wrote = of.tell()/(1 << 20)
 
