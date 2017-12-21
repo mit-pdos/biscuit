@@ -804,7 +804,7 @@ func (p *ahci_port_t) port_intr() {
 			}
 		}
 	}
-	if !int {
+	if !int && ahci_debug {
 		fmt.Printf("?")
 	}
 }
@@ -828,7 +828,7 @@ func (ahci *ahci_disk_t) intr() {
 			ahci.clear_is()
 		}
 	}
-	if !int {
+	if !int && ahci_debug {
 		fmt.Printf("!")
 	}
 }
