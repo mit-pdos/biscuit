@@ -69,6 +69,8 @@ func fs_init() *fd_t {
 func fs_statistics() string {
 	s := log_stat()
 	s += bcache_stat()
+	s += inode_stat()
+	s += ahci_stat()
 	return s
 }
 

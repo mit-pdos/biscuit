@@ -5,6 +5,7 @@ import "runtime"
 import "sync"
 import "sync/atomic"
 import "unsafe"
+import "strconv"
 
 const ahci_debug = false
 var adisk	adisk_t
@@ -168,6 +169,11 @@ type ahci_port_t struct {
 	cmdh *[32]ahci_cmd_header
 	cmdt_pa uintptr
 	cmdt *[32]ahci_cmd_table
+
+	// stats
+	nbarrier int
+	nwrite int
+	nread int
 }
 
 type identify_device struct {
@@ -414,6 +420,18 @@ func (p *ahci_port_t) init() bool {
 	return true
 }
 
+func (p *ahci_port_t) stat() string {
+	s := "ahci: "
+	s += " #flush "
+	s += strconv.Itoa(p.nbarrier)
+	s += " #read "
+	s += strconv.Itoa(p.nread)
+	s += " #write "
+	s += strconv.Itoa(p.nwrite)
+	s += "\n"
+	return s
+}
+
 func swap(info []uint8) []uint8{
 	for i := 0; i < len(info); i += 2 {
 		c := info[i]
@@ -613,14 +631,13 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 
 	switch req.cmd {
 	case BDEV_WRITE:
-		// copy(p.block[s][:], req.blk.data[:])
-		// bln = uint64(req.blk.block)
+		p.nwrite++
 		p.issue(s, req.blks, IDE_CMD_WRITE_DMA_EXT)
 	case BDEV_READ:
-		//bln = uint64(req.blk.block)
+		p.nread++
 		p.issue(s, req.blks, IDE_CMD_READ_DMA_EXT)
 	case BDEV_FLUSH:
-		//bln = uint64(0)
+		p.nbarrier++
 		p.issue(s, nil, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
@@ -854,6 +871,7 @@ func bdev_req_new(blks []*bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
 
 type adisk_t interface {
 	start(*bdev_req_t) bool
+	stat() string
 }
 
 // returns true if start is asynchronous
@@ -873,6 +891,21 @@ func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
 		return false
 	}
 	return true
+}
+
+func (ahci *ahci_disk_t) stat() string {
+	if adisk == nil {
+		panic("no adisk")
+	}
+	return ahci.port.stat()
+}
+
+
+func ahci_stat() string {
+	if adisk == nil {
+		panic("no adisk")
+	}
+	return adisk.stat()
 }
 
 func ahci_start(req *bdev_req_t) bool {

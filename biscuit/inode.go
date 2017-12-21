@@ -4,6 +4,7 @@ import "fmt"
 import "sync"
 import "unsafe"
 import "sort"
+import "strconv"
 
 const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
@@ -177,6 +178,16 @@ func (idm *imemnode_t) iunlock(s string) {
 // inode refcache
 var irefcache	= make_refcache(syslimit.vnodes)
 
+func inode_stat() string {
+	s := "icache: size "
+	s += strconv.Itoa(len(irefcache.refs))
+	s += " #evictions "
+	s += strconv.Itoa(irefcache.nevict)
+	s += " #live "
+	s += strconv.Itoa(irefcache.nlive())
+	s += "\n"
+	return s
+}
 
 // obtain the reference for an inode
 func iref(priv inum, s string) (*imemnode_t, err_t) {
