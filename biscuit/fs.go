@@ -1000,7 +1000,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 	nodir := false
 
 	if fs_debug {
-		fmt.Printf("fs_open: %v %v\n", paths, cwd)
+		fmt.Printf("fs_open: %v %v %v\n", paths, cwd, creat)
 	}
 
 	// open with O_TRUNC is not read-only

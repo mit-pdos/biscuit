@@ -261,11 +261,11 @@ var syslimit = syslimit_t {
 	routes:		32,
 	tcpsegs:	16,
 	socks:		1e5,
-	vnodes:		10000, // 1e6,
+	vnodes:		1000, // 1e6,
 	dirents:	1 << 20,
 	pipes:		1e4,
 	// 8GB of block pages
-        blocks:         100000, // 50,  // 1 << 21,
+        blocks:         100000,  // 1 << 21,
 }
 
 // a type for system limits that aren't protected by a lock.

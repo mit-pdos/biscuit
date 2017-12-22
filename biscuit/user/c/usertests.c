@@ -1203,6 +1203,8 @@ void
 bigfile(void)
 {
   int fd, i, total, cc;
+  #define NBLOCK 10000
+  #define SZ 8000
 
   printf("bigfile test\n");
 
@@ -1212,15 +1214,17 @@ bigfile(void)
     printf("cannot create bigfile");
     exit(0);
   }
-  for(i = 0; i < 20; i++){
-    memset(buf, i, 600);
-    if(write(fd, buf, 600) != 600){
+  for(i = 0; i < NBLOCK; i++){
+    memset(buf, i%10, SZ);
+    if(write(fd, buf, SZ) != SZ){
       printf("write bigfile failed\n");
       exit(0);
     }
   }
+  fsync(fd);
   close(fd);
 
+  
   fd = open("bigfile", 0);
   if(fd < 0){
     printf("cannot open bigfile\n");
@@ -1228,25 +1232,25 @@ bigfile(void)
   }
   total = 0;
   for(i = 0; ; i++){
-    cc = read(fd, buf, 300);
+    cc = read(fd, buf, SZ/2);
     if(cc < 0){
       printf("read bigfile failed\n");
       exit(0);
     }
     if(cc == 0)
       break;
-    if(cc != 300){
+    if(cc != SZ/2){
       printf("short read bigfile\n");
       exit(0);
     }
-    if(buf[0] != i/2 || buf[299] != i/2){
-      printf("read bigfile wrong data\n");
+    if(buf[0] != (i/2)%10 || buf[SZ/2-1] != (i/2)%10){
+      printf("read bigfile wrong data %d %c %c\n", i, buf[0], buf[SZ/2-1]);
       exit(0);
     }
     total += cc;
   }
   close(fd);
-  if(total != 20*600){
+  if(total != NBLOCK*SZ){
     printf("read bigfile wrong total\n");
     exit(0);
   }

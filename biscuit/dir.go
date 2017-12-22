@@ -506,6 +506,7 @@ func (idm *imemnode_t) ilookup(name string) (inum, err_t) {
 		return 0, -ENOTDIR
 	}
 	de, err := idm._delookup(name)
+
 	if err != 0 {
 		return 0, err
 	}

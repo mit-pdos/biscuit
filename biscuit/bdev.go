@@ -87,9 +87,9 @@ func (b *bdev_block_t) bdev_write_async() {
 	if bdev_debug {
 		fmt.Printf("bdev_write_async %v %s\n", b.block, b.s)
 	}
-	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
-		panic("write_async\n")
-	}
+	// if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
+	//	panic("write_async\n")
+	//}
 	ider := bdev_req_new([]*bdev_block_t{b}, BDEV_WRITE, false)
 	ahci_start(ider)
 }

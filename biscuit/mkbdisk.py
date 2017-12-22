@@ -15,9 +15,9 @@ inodesz = 128
 
 hdsize = 2*8*40 * 1024 * 1024
 # number of inode direct addresses
-iaddrs = 10
+iaddrs = 9
 # number of inode indirect addresses
-indaddrs = (blocksz/8)-1
+indaddrs = (blocksz/8)
 
 class Balloc:
   def __init__(self, ff):
@@ -65,8 +65,10 @@ class Dirb:
     self.blks = []
     self.curblk = None
     self.namechk = {}
-    self.indirect = 0
+    self.indbn = 0
     self.indblk = None
+    self.dindbn = 0
+    self.dindblk = None
     self.addentry('.', bn, io)
     self.addentry('..', pbn, pio)
 
@@ -105,7 +107,7 @@ class Dirb:
     if len(self.blks) == iaddrs:
         if self.indblk == None:
             self.indblk = Indirectb(self.ba)
-            self.indirect = self.indblk.init()
+            self.indbn = self.indblk.init()
         self.curblk = self.indblk.grow()
     else:
         nb = self.ba.balloc()
@@ -123,8 +125,11 @@ class Fileb:
     self.bn, self.ba = bn, ba
     self.blks = []
     self.size = 0
-    self.indirect = 0
+    self.indbn = 0
     self.indblk = None
+    self.dindblk = None
+    self.dindbn = 0
+    self.curindblk = None
 
   def itype(self):
     return 1
@@ -135,21 +140,47 @@ class Fileb:
     for i in range(roundup(l, blocksz)/blocksz):
       start = i*blocksz
       end = min(start + blocksz, l)
+      nb = i
+      # use direct blocks
+      if nb < iaddrs:
+        nb = self.ba.balloc()
+        db = Datab(nb, d[start:end])
+        self.ba.pair(nb, db)
+        self.blks.append(nb)
+        continue
+      nb -= iaddrs
+
       # use indirect block?
-      if i >= iaddrs:
+      if nb < indaddrs:
         # initialize indirect block
         if self.indblk == None:
           self.indblk = Indirectb(self.ba)
-          self.indirect = self.indblk.init()
+          self.indbn = self.indblk.init()
         db = self.indblk.grow()
         db.append(d[start:end])
         continue
-      # use direct blocks
-      nb = self.ba.balloc()
-      db = Datab(nb, d[start:end])
-      self.ba.pair(nb, db)
-      self.blks.append(nb)
 
+      # use double inblk?
+      if bn < indaddrs * indaddrs:
+        bn -= indaddrs
+
+        # allocate double?
+        if self.dindblk == None:
+          print "allocate double", bn
+          self.dindblk = Indirectb(self.ba)
+          self.dindbn = self.dindblk.init()
+
+        bno = bn % indaddrs
+        if bno == 0:  # allocate indirect block?
+          print "allocate indirect for double", bn
+          self.curindblk = self.dindblk.grow(true)
+
+        db = self.curindblk.grow()
+        db.append(d[start:end])
+        continue
+
+      raise ValueError('file is too large')
+          
 class Indirectb:
   # class that writes an indirect block to disk
   def __init__(self, ba):
@@ -164,24 +195,21 @@ class Indirectb:
       self.ba.pair(nb, self.curblk)
       return nb
 
-  def grow(self):
+  def grow(self, indirect=False):
     # allocates a new block in the indirect block; returns a Datab for the new
     # block
     assert self.curblk != None
-    # last 8 bytes of an indirect block reference a new indirect block
-    # allocate new indirect block?
-    if self.curblk.len()/8 == indaddrs:
-      nb = self.ba.balloc()
-      newblk = Datab(nb)
-      self.ba.pair(nb, newblk)
-      self.curblk.append(le8(nb))
-      assert self.curblk.len() == blocksz
-      self.curblk = newblk
-    # finally allocate a new data block
+    # allocate a new data/indirect block
     nb = self.ba.balloc()
-    ret = Datab(nb)
+    if indirect:
+      ret = Indirectb(nb)
+      ret.init()
+    else:
+      ret = Datab(nb)
     self.ba.pair(nb, ret)
     self.curblk.append(le8(nb))
+    assert self.curblk.len() <= blocksz
+      
     return ret
 
 class Inodeb:
@@ -220,7 +248,9 @@ class Inodeb:
     # minor
     wrnum(0)
     # indirect block
-    wrnum(blk.indirect)
+    wrnum(blk.indbn)
+    # dindirect block
+    wrnum(blk.dindbn)
     # block addresses
     for i in blk.blks:
       wrnum(i)
@@ -233,7 +263,7 @@ class Inodeb:
       blk = self.imap[i]
       self.iwrite(of, blk)
     # write unallocated inodes
-    isize = (6 + iaddrs)*8
+    isize = (7 + iaddrs)*8
     for i in range(self.itop - len(self.imap)):
       of.write('\0'*isize)
 
@@ -345,7 +375,7 @@ class Fsrep:
         i = 0
         for  v in ab[k].imap.values():
           if isinstance(v, Fileb):
-            print i, '\tfile of name len %d' % (v.size), v.blks
+            print i, '\tfile of len %d' % (v.size), v.indbn, v.blks
           elif isinstance(v, Dirb):
             print i, '\tdirectory of len %d' % (v.size), v.blks
           i += 1

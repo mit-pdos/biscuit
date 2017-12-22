@@ -8,7 +8,7 @@ import "strconv"
 
 const LOGINODEBLK     = 5 // 2
 const INODEMASK       = (1 << LOGINODEBLK)-1
-const INDADDR        = (BSIZE/8)-1
+const INDADDR        = (BSIZE/8)
 
 // inode format:
 // bytes, meaning
@@ -39,9 +39,9 @@ const(
 	I_LAST = I_DEAD
 
 	// direct block addresses
-	NIADDRS = 10
+	NIADDRS = 9
 	// number of words in an inode
-	NIWORDS = 6 + NIADDRS
+	NIWORDS = 7 + NIADDRS
 )
 
 func ifield(iidx int, fieldn int) int {
@@ -77,11 +77,15 @@ func (ind *inode_t) indirect() int {
 	return fieldr(ind.iblk.data, ifield(ind.ioff, 5))
 }
 
+func (ind *inode_t) dindirect() int {
+	return fieldr(ind.iblk.data, ifield(ind.ioff, 6))
+}
+
 func (ind *inode_t) addr(i int) int {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
-	addroff := 6
+	addroff := 7
 	return fieldr(ind.iblk.data, ifield(ind.ioff, addroff + i))
 }
 
@@ -113,11 +117,16 @@ func (ind *inode_t) w_indirect(blk int) {
 	fieldw(ind.iblk.data, ifield(ind.ioff, 5), blk)
 }
 
+// blk is the block number and iidx in the index of the inode on block blk.
+func (ind *inode_t) w_dindirect(blk int) {
+	fieldw(ind.iblk.data, ifield(ind.ioff, 6), blk)
+}
+
 func (ind *inode_t) w_addr(i int, blk int) {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
-	addroff := 6
+	addroff := 7
 	fieldw(ind.iblk.data, ifield(ind.ioff, addroff + i), blk)
 }
 
@@ -464,6 +473,7 @@ type icache_t struct {
 	major		int
 	minor		int
 	indir		int
+	dindir          int
 	addrs		[NIADDRS]int
 	// inode specific metadata blocks
 	dentc struct {
@@ -498,6 +508,7 @@ func (ic *icache_t) fill(blk *bdev_block_t, ioff int) {
 	ic.major = inode.major()
 	ic.minor = inode.minor()
 	ic.indir = inode.indirect()
+	ic.dindir = inode.dindirect()
 	for i := 0; i < NIADDRS; i++ {
 		ic.addrs[i] = inode.addr(i)
 	}
@@ -525,6 +536,7 @@ func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 	inode.w_major(ic.major)
 	inode.w_minor(ic.minor)
 	inode.w_indirect(ic.indir)
+	inode.w_dindirect(ic.dindir)
 	for i := 0; i < NIADDRS; i++ {
 		inode.w_addr(i, ic.addrs[i])
 	}
@@ -541,98 +553,86 @@ func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, err_t) {
 }
 
 // ensure entry in indirect block exists
-func (idm *imemnode_t) ensureind(blk *bdev_block_t, writing bool) err_t {
-	if !writing {
-		return 0
-	}
-	slot := INDADDR * 8
+func (idm *imemnode_t) ensureind(blk *bdev_block_t, slot int, writing bool) (int, err_t) {
+	off := slot * 8
 	s := blk.data[:]
-	blkn := readn(s, 8, slot)
+	blkn := readn(s, 8, off)
 	blkn, isnew, err := idm.ensureb(blkn, writing)
 	if err != 0 {
-		return err
+		return 0, err
 	}
 	if isnew {
-		writen(s, 8, slot, blkn)
+		writen(s, 8, off, blkn)
 		blk.log_write()
 	}
-	return 0
-}
-
-// Find indirect block that hosts fbn
-func (idm *imemnode_t) find_indblock(fbn int, writing bool) (*bdev_block_t, err_t) {
-	indslot := fbn - NIADDRS
-	nextindb :=  INDADDR *8
-	indno := idm.icache.indir
-	
-	// get first indirect block
-	indno, isnew, err := idm.ensureb(indno, writing)
-	if err != 0 {
-		return nil, err
-	}
-	if isnew {
-		// new indirect block will be written to log by iupdate()
-		idm.icache.indir = indno
-	}
-
-	// follow indirect block chain
-	indblk, err := idm.icache.mbread(indno)
-	if err != 0 {
-		return nil, err
-	}
-	for i := 0;  i < indslot/INDADDR; i++ {
-		err := idm.ensureind(indblk, writing)
-		if err != 0 {
-			return nil, err
-		}
-		indno = readn(indblk.data[:], 8, nextindb)
-		bcache_relse(indblk, "offsetblk_chain")
-		indblk, err = idm.icache.mbread(indno)
-		if err != 0 {
-			return nil, err
-		}
-	}
-	return indblk, 0
+	return blkn, 0
 }
 
 // Assumes that every block until b exits
 func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
-	var blkn int
-	var err err_t
 	if fbn < NIADDRS {
 		if idm.icache.addrs[fbn] != 0 {
 			return idm.icache.addrs[fbn], 0
 		}
-		blkn, err = balloc()
+		blkn, err := balloc()
 		if err != 0 {
 			return 0, err
 		}
 		// imemnode_t.iupdate() will make sure the
 		// icache is updated on disk
 		idm.icache.addrs[fbn] = blkn
+		return blkn, 0
 	} else {
-		var isnew bool
-		indblk, err := idm.find_indblock(fbn, writing)
-		if err != 0 {
-			return 0, err
+		fbn -= NIADDRS
+		if fbn < INDADDR {
+			indno := idm.icache.indir
+			indno, isnew, err := idm.ensureb(indno, writing)
+			if err != 0 {
+				return 0, err
+			}
+			if isnew {
+				// new indirect block will be written to log by iupdate()
+				idm.icache.indir = indno
+			}
+			indblk, err := idm.icache.mbread(indno)
+			if err != 0 {
+				return 0, err
+			}
+			blkn, err := idm.ensureind(indblk, fbn, writing)
+			bcache_relse(indblk, "indblk")
+			return blkn, err
+		} else if fbn < INDADDR * INDADDR {
+			fbn -= INDADDR
+			dindno := idm.icache.dindir
+			dindno, isnew, err := idm.ensureb(dindno, writing)
+			if err != 0 {
+				return 0, err
+			}
+			if isnew {
+				// new dindirect block will be written to log by iupdate()
+				idm.icache.dindir = dindno
+			}
+			dindblk, err := idm.icache.mbread(dindno)
+			if err != 0 {
+				return 0, err
+			}
+			
+			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
+			bcache_relse(dindblk, "dindblk")
+
+			indblk, err := idm.icache.mbread(indno)
+			if err != 0 {
+				return 0, err
+			}
+			blkn, err := idm.ensureind(indblk, fbn%INDADDR, writing)
+			bcache_relse(indblk, "indblk2")
+			return blkn, err
+		} else {
+			panic("too big fbn")
+			return 0, 0
+
 		}
-		// get data block from indirect block
-		indslot := fbn - NIADDRS
-		slotoff := (indslot % INDADDR)
-		noff := (slotoff)*8
-		s := indblk.data[:]
-		blkn = readn(s, 8, noff)
-		blkn, isnew, err = idm.ensureb(blkn, writing)
-		if err != 0 {
-			return 0, err
-		}
-		if isnew {
-			writen(s, 8, noff, blkn)
-			indblk.log_write()
-		}
-		bcache_relse(indblk, "offsetblk2")
 	}
-	return blkn, 0
 }
 
 // make sure there are blocks from startblock through endblock. return blkn
@@ -870,6 +870,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum, err
 	newinode.w_major(major)
 	newinode.w_minor(minor)
 	newinode.w_indirect(0)
+	newinode.w_dindirect(0)
 	for i := 0; i < NIADDRS; i++ {
 		newinode.w_addr(i, 0)
 	}
