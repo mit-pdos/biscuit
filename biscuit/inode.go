@@ -637,7 +637,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 
 // make sure there are blocks from startblock through endblock. return blkn
 // endblock.
-func (idm *imemnode_t) fillhole(lastblk int, whichblk int, writing bool) (int, err_t) {
+func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, err_t) {
 	blkn := 0
 	var err err_t
 
@@ -666,7 +666,7 @@ func (idm *imemnode_t) fillhole(lastblk int, whichblk int, writing bool) (int, e
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	whichblk := offset/BSIZE
 	lastblk := idm.icache.size/BSIZE
-	blkn, err := idm.fillhole(lastblk, whichblk, writing)
+	blkn, err := idm.bmapfill(lastblk, whichblk, writing)
 	if err != 0 {
 		return blkn, err
 	}
