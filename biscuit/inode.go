@@ -254,8 +254,6 @@ func (idm *imemnode_t) idm_init(priv inum) err_t {
 	idm.blkno = blkno
 	idm.ioff = ioff
 
-	// idm.pgcache.pgc_init(BSIZE, idm)
-
 	if fs_debug {
 		fmt.Printf("idm_init: readinode block %v(%v,%v)\n", priv, blkno, ioff)
 	}
@@ -533,126 +531,147 @@ func (ic *icache_t) flushto(blk *bdev_block_t, ioff int) bool {
 	return ret
 }
 
-// takes as input the file offset and whether the operation is a write and
-// returns the block number of the block responsible for that offset.
-func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
-	// ensure block exists
-	ensureb := func(blkno int) (int, bool, err_t) {
-		if !writing || blkno != 0 {
-			return blkno, false, 0
-		}
-		nblkno, err := balloc()
-		return nblkno, true, err
+// ensure block exists
+func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, err_t) {
+	if !writing || blkno != 0 {
+		return blkno, false, 0
 	}
-	// this function makes sure that every slot up to and including idx of
-	// the given indirect block has a block allocated. it is necessary to
-	// allocate a bunch of zero'd blocks for a file when someone lseek()s
-	// past the end of the file and then writes.
-	ensureind := func(blk *bdev_block_t, idx int) err_t {
-		if !writing {
-			return 0
-		}
-		added := false
-		for i := 0; i <= idx; i++ {
-			slot := i * 8
-			s := blk.data[:]
-			blkn := readn(s, 8, slot)
-			blkn, isnew, err := ensureb(blkn)
-			if err != 0 {
-				return err
-			}
-			if isnew {
-				writen(s, 8, slot, blkn)
-				added = true
-			}
-		}
-		if added {
-			blk.log_write()
-		}
+	nblkno, err := balloc()
+	return nblkno, true, err
+}
+
+// ensure entry in indirect block exists
+func (idm *imemnode_t) ensureind(blk *bdev_block_t, writing bool) err_t {
+	if !writing {
 		return 0
 	}
+	slot := INDADDR * 8
+	s := blk.data[:]
+	blkn := readn(s, 8, slot)
+	blkn, isnew, err := idm.ensureb(blkn, writing)
+	if err != 0 {
+		return err
+	}
+	if isnew {
+		writen(s, 8, slot, blkn)
+		blk.log_write()
+	}
+	return 0
+}
 
-	whichblk := offset/BSIZE
-	grow := offset >= idm.icache.size
-	// fmt.Printf("whichblk %v grow %v\n", whichblk, grow)
-	// make sure there is no empty space for writes past the end of the
-	// file
-	if writing && grow {
-		ub := whichblk + 1
-		if ub > NIADDRS {
-			ub = NIADDRS
-		}
-		for i := 0; i < ub; i++ {
-			if idm.icache.addrs[i] != 0 {
-				continue
-			}
-			tblkn, err := balloc()
-			if err != 0 {
-				return tblkn, err
-			}
-			// imemnode_t.iupdate() will make sure the
-			// icache is updated on disk
-			idm.icache.addrs[i] = tblkn
-		}
+// Find indirect block that hosts fbn
+func (idm *imemnode_t) find_indblock(fbn int, writing bool) (*bdev_block_t, err_t) {
+	indslot := fbn - NIADDRS
+	nextindb :=  INDADDR *8
+	indno := idm.icache.indir
+	
+	// get first indirect block
+	indno, isnew, err := idm.ensureb(indno, writing)
+	if err != 0 {
+		return nil, err
+	}
+	if isnew {
+		// new indirect block will be written to log by iupdate()
+		idm.icache.indir = indno
 	}
 
-	var blkn int
-	if whichblk >= NIADDRS {
-		indslot := whichblk - NIADDRS
-		slotpb := INDADDR
-		nextindb :=  INDADDR *8
-		indno := idm.icache.indir
-		// get first indirect block
-		indno, isnew, err := ensureb(indno)
+	// follow indirect block chain
+	indblk, err := idm.icache.mbread(indno)
+	if err != 0 {
+		return nil, err
+	}
+	for i := 0;  i < indslot/INDADDR; i++ {
+		err := idm.ensureind(indblk, writing)
 		if err != 0 {
-			return indno, err
+			return nil, err
 		}
-		if isnew {
-			// new indirect block will be written to log below
-			idm.icache.indir = indno
+		indno = readn(indblk.data[:], 8, nextindb)
+		bcache_relse(indblk, "offsetblk_chain")
+		indblk, err = idm.icache.mbread(indno)
+		if err != 0 {
+			return nil, err
 		}
-		// follow indirect block chain
-		indblk, err := idm.icache.mbread(indno)
+	}
+	return indblk, 0
+}
+
+// Assumes that every block until b exits
+func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
+	var blkn int
+	var err err_t
+	if fbn < NIADDRS {
+		if idm.icache.addrs[fbn] != 0 {
+			return idm.icache.addrs[fbn], 0
+		}
+		blkn, err = balloc()
 		if err != 0 {
 			return 0, err
 		}
-		if grow {
-			for i := 0; i < indslot/slotpb; i++ {
-				// make sure the indirect block has no empty spaces if
-				// we are writing past the end of the file. if
-				// necessary, ensureind also allocates the next
-				// indirect pointer block.
-				ensureind(indblk, slotpb)
-
-				indno = readn(indblk.data[:], 8, nextindb)
-				bcache_relse(indblk, "offsetblk1")
-				indblk, err = idm.icache.mbread(indno)
-				if err != 0 {
-					return 0, err
-				}
-			}
+		// imemnode_t.iupdate() will make sure the
+		// icache is updated on disk
+		idm.icache.addrs[fbn] = blkn
+	} else {
+		var isnew bool
+		indblk, err := idm.find_indblock(fbn, writing)
+		if err != 0 {
+			return 0, err
 		}
-		// finally get data block from indirect block
-		slotoff := (indslot % slotpb)
-		if grow {
-			ensureind(indblk, slotoff)
-		}
+		// get data block from indirect block
+		indslot := fbn - NIADDRS
+		slotoff := (indslot % INDADDR)
 		noff := (slotoff)*8
 		s := indblk.data[:]
 		blkn = readn(s, 8, noff)
-		blkn, isnew, err = ensureb(blkn)
+		blkn, isnew, err = idm.ensureb(blkn, writing)
 		if err != 0 {
-			return blkn, err
+			return 0, err
 		}
 		if isnew {
 			writen(s, 8, noff, blkn)
 			indblk.log_write()
 		}
 		bcache_relse(indblk, "offsetblk2")
+	}
+	return blkn, 0
+}
+
+// make sure there are blocks from startblock through endblock. return blkn
+// endblock.
+func (idm *imemnode_t) fillhole(lastblk int, whichblk int, writing bool) (int, err_t) {
+	blkn := 0
+	var err err_t
+
+	if whichblk >= lastblk {   // a hole?
+		// allocate the missing blocks
+		for b := lastblk; b <= whichblk; b++ {
+			// XXX we could remember where the last slot was, but
+			// maybe better to switch a tree instead of traversing a
+			// linked list
+			blkn, err = idm.fbn2block(b, writing)
+			if err != 0 {
+				return blkn, err
+			}
+		}
 	} else {
-		blkn = idm.icache.addrs[whichblk]
+		blkn, err = idm.fbn2block(whichblk, writing)
+		if err != 0 {
+			return blkn, err
+		}
+	}
+	return blkn, 0
+}
+
+// takes as input the file offset and whether the operation is a write and
+// returns the block number of the block responsible for that offset.
+func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
+	whichblk := offset/BSIZE
+	lastblk := idm.icache.size/BSIZE
+	blkn, err := idm.fillhole(lastblk, whichblk, writing)
+	if err != 0 {
+		return blkn, err
 	}
 	if blkn <= 0 || blkn >= superb.lastblock() {
+		fmt.Printf("blkn %v\n", blkn)
 		panic("bad data blocks")
 	}
 	return blkn, 0

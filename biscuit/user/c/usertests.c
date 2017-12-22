@@ -3636,7 +3636,7 @@ main(int argc, char *argv[])
   scmtest();
   mkstemptest();
   getppidtest();
-  // mmaptest();
+  mmaptest();
 
   exectest();
 
