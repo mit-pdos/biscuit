@@ -1303,11 +1303,6 @@ func (sb *superblock_t) w_freeinode(n int) {
 }
 
 
-type fblkcache_t struct {
-	blks		[]*bdev_block_t
-	free_start	int
-}
-
 func fbread(blockno int) (*bdev_block_t, err_t) {
 	if blockno < superb_start {
 		panic("naughty blockno")
