@@ -8,9 +8,6 @@ const fs_debug    = false
 var superb_start	int
 var superb		superblock_t
 var iroot		inum
-var free_start		int
-var free_len		int
-var usable_start	int
 
 var fblock	= sync.Mutex{}
 
@@ -47,8 +44,9 @@ func fs_init() *fd_t {
 
 	fmt.Printf("root inode %v\n", iroot)
 
-	free_start = superb.freeblock()
-	free_len = superb.freeblocklen()
+	free_start := superb.freeblock()
+	free_len := superb.freeblocklen()
+	balloc_init(free_start, free_len)
 
 	logstart := free_start + free_len
 	loglen := superb.loglen()
@@ -1303,13 +1301,19 @@ func (sb *superblock_t) w_freeinode(n int) {
 }
 
 
-func fbread(blockno int) (*bdev_block_t, err_t) {
-	if blockno < superb_start {
-		panic("naughty blockno")
-	}
-	return bcache_get_fill(blockno, "fbread", true)
+type allocater_t struct {
+	freestart  int
+	freelen  int
+	lastblk int
+	lastbyte int
 }
 
+func make_allocater(start, len int) (*allocater_t) {
+	a := &allocater_t{}
+	a.freestart = start
+	a.freelen = len
+	return a
+}
 
 func freebit(b uint8) uint {
 	for m := uint(0); m < 8; m++ {
@@ -1320,46 +1324,41 @@ func freebit(b uint8) uint {
 	panic("no 0 bit?")
 }
 
-// save last byte we found that had free blocks
-var _lastblkno int
-var _lastbyte int
-
-// allocates a block, marking it used in the free block bitmap. free blocks and
-// log blocks are not accounted for in the free bitmap; all others are. balloc
-// should only ever acquire fblock.
-func balloc1() (int, err_t) {
-	fst := free_start
-	flen := free_len
-	if fst == 0 || flen == 0 {
-		panic("fs not initted")
+func (alloc *allocater_t) fbread(blockno int) (*bdev_block_t, err_t) {
+	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
+		panic("naughty blockno")
 	}
+	return bcache_get_fill(blockno, "fbread", true)
+}
 
+func (alloc *allocater_t) alloc() (int, err_t) {
 	found := false
 	var bit uint
 	var blk *bdev_block_t
 	var blkn int
 	var oct int
 	var err err_t
+	
 	// 0 is free, 1 is allocated
-	for b := 0; b < flen && !found; b++ {
-		i := (_lastblkno + b) % flen
+	for b := 0; b < alloc.freelen && !found; b++ {
+		i := (alloc.lastblk + b) % alloc.freelen
 		if blk != nil {
 			blk.Unlock()
-			bcache_relse(blk, "balloc1")
+			bcache_relse(blk, "alloc")
 		}
-		blk, err = fbread(fst + i)
+		blk, err = alloc.fbread(alloc.freestart + i)
 		if err != 0 {
 			return 0, err
 		}
 		start := 0
 		if b == 0 {
-			start = _lastbyte
+			start = alloc.lastbyte
 		}
 		for idx := start; idx < len(blk.data); idx++ {
 			c := blk.data[idx]
 			if c != 0xff {
-				_lastblkno = i
-				_lastbyte = idx
+				alloc.lastblk = i
+				alloc.lastbyte = idx
 				bit = freebit(c)
 				blkn = i
 				oct = idx
@@ -1369,7 +1368,7 @@ func balloc1() (int, err_t) {
 		}
 	}
 	if !found {
-		panic("no free blocks")
+		panic("no free entries")
 	}
 
 	// mark as allocated
@@ -1378,45 +1377,16 @@ func balloc1() (int, err_t) {
 	blk.log_write()
 	bcache_relse(blk, "balloc1")
 
-	boffset := usable_start
 	bitsperblk := BSIZE*8
-	return boffset + blkn*bitsperblk + oct*8 + int(bit), 0
+	return blkn*bitsperblk + oct*8 + int(bit), 0
 }
 
-func balloc() (int, err_t) {
-	fblock.Lock()
-	ret, err := balloc1()
-	fblock.Unlock()
-	if err != 0 {
-		return 0, err
-	}
-	blk, err := bcache_get_zero(ret, "balloc", true)
-	if err != 0 {
-		return 0, err
-	}
-	if fs_debug {
-		fmt.Printf("balloc: %v\n", ret)
-	}
 
-	var zdata [BSIZE]uint8
-	copy(blk.data[:], zdata[:])
-	blk.Unlock()
-	blk.log_write()
-	bcache_relse(blk, "balloc")
-	
-	return ret, 0
-}
-
-func bfree(blkno int) err_t {
-
+func (alloc *allocater_t) free(blkno int) err_t {
 	if fs_debug {
 		fmt.Printf("bfree: %v\n", blkno)
 	}
-	fst := free_start
-	flen := free_len
-	if fst == 0 || flen == 0 {
-		panic("fs not initted")
-	}
+	
 	if blkno < 0 {
 		panic("bad blockno")
 	}
@@ -1424,80 +1394,29 @@ func bfree(blkno int) err_t {
 	fblock.Lock()
 	defer fblock.Unlock()
 
-	bit := blkno - usable_start
+	bit := blkno
 	bitsperblk := BSIZE*8
-	fblkno := fst + bit/bitsperblk
+	fblkno := alloc.freestart + bit/bitsperblk
 	fbit := bit%bitsperblk
 	fbyteoff := fbit/8
 	fbitoff := uint(fbit%8)
-	if fblkno >= fst + flen {
+	if fblkno >= alloc.freestart + alloc.freelen {
 		panic("bad blockno")
 	}
-	fblk, err := fbread(fblkno)
+	fblk, err := alloc.fbread(fblkno)
 	if err != 0 {
 		return err
 	}
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
 	fblk.log_write()
-	bcache_relse(fblk, "bfree")
+	bcache_relse(fblk, "free")
 
-	// force allocation of free inode block
+	// XXX force allocation of free inode block
 	if ifreeblk == blkno {
 		ifreeblk = 0
 	}
 	return 0
 }
 
-var ifreeblk int	= 0
-var ifreeoff int 	= 0
 
-// returns block/index of free inode.
-//
-// XXX biscuit will not use free inodes if a crash happens after we allocated
-// one inode but then crash.  on recovery ifreeblk will be zero and we will
-// allocate a new block and not use the remaining free entries of ifreeblk
-// before crash.
-func ialloc() (int, int, err_t) {
-	fblock.Lock()
-	defer fblock.Unlock()
-
-	if ifreeblk != 0 {
-		ret := ifreeblk
-		retoff := ifreeoff
-		ifreeoff++
-		blkwords := BSIZE/8
-		if ifreeoff >= blkwords/NIWORDS {
-			// allocate a new inode block next time
-			ifreeblk = 0
-		}
-		return ret, retoff, 0
-	}
-
-	ifreeblk, err := balloc1()
-	if err != 0 {
-		return 0, 0, err
-	}
-	
-	ifreeoff = 0
-
-	if fs_debug {
-		fmt.Printf("ialloc %d\n", ifreeblk)
-	}
-
-	zblk, err := bcache_get_zero(ifreeblk, "ialloc", true)
-	if err != 0 {
-		return 0, 0, err
-	}
-	
-	// block may have been int the cache and is now reused, zero it in the cache
-	var zdata [BSIZE]uint8
-	copy(zblk.data[:], zdata[:])
-	zblk.Unlock()
-	zblk.log_write()
-	bcache_relse(zblk, "ialloc")
-	
-	reti := ifreeoff
-	ifreeoff++
-	return ifreeblk, reti, 0
-}

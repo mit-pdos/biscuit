@@ -1033,3 +1033,58 @@ func bidecode(val inum) (int, int) {
 	return blk, iidx
 }
 
+
+// Inode allocator
+
+var ifreeblk int	= 0
+var ifreeoff int 	= 0
+
+// returns block/index of free inode.
+//
+// XXX biscuit will not use free inodes if a crash happens after we allocated
+// one inode but then crash.  on recovery ifreeblk will be zero and we will
+// allocate a new block and not use the remaining free entries of ifreeblk
+// before crash.
+func ialloc() (int, int, err_t) {
+	fblock.Lock()
+	defer fblock.Unlock()
+
+	if ifreeblk != 0 {
+		ret := ifreeblk
+		retoff := ifreeoff
+		ifreeoff++
+		blkwords := BSIZE/8
+		if ifreeoff >= blkwords/NIWORDS {
+			// allocate a new inode block next time
+			ifreeblk = 0
+		}
+		return ret, retoff, 0
+	}
+
+	ifreeblk, err := balloc1()
+	if err != 0 {
+		return 0, 0, err
+	}
+	
+	ifreeoff = 0
+
+	if fs_debug {
+		fmt.Printf("ialloc %d\n", ifreeblk)
+	}
+
+	zblk, err := bcache_get_zero(ifreeblk, "ialloc", true)
+	if err != 0 {
+		return 0, 0, err
+	}
+	
+	// block may have been int the cache and is now reused, zero it in the cache
+	var zdata [BSIZE]uint8
+	copy(zblk.data[:], zdata[:])
+	zblk.Unlock()
+	zblk.log_write()
+	bcache_relse(zblk, "ialloc")
+	
+	reti := ifreeoff
+	ifreeoff++
+	return ifreeblk, reti, 0
+}

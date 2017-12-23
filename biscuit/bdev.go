@@ -313,3 +313,52 @@ func bdev_test() {
 	}
 	panic("disk test passed\n")
 }
+
+
+// Block allocator
+
+var ballocater *allocater_t
+var usable_start	int
+
+func balloc_init(start,len int) {
+	ballocater = make_allocater(start, len)
+}
+
+// allocates a block, marking it used in the free block bitmap. free blocks and
+// log blocks are not accounted for in the free bitmap; all others are. balloc
+// should only ever acquire fblock.
+func balloc1() (int, err_t) {
+	blkn, err := ballocater.alloc()
+	if err != 0 {
+		return 0, err
+	}
+	return blkn+usable_start, err
+}
+
+func balloc() (int, err_t) {
+	fblock.Lock()
+	ret, err := balloc1()
+	fblock.Unlock()
+	if err != 0 {
+		return 0, err
+	}
+	blk, err := bcache_get_zero(ret, "balloc", true)
+	if err != 0 {
+		return 0, err
+	}
+	if fs_debug {
+		fmt.Printf("balloc: %v\n", ret)
+	}
+
+	var zdata [BSIZE]uint8
+	copy(blk.data[:], zdata[:])
+	blk.Unlock()
+	blk.log_write()
+	bcache_relse(blk, "balloc")
+	
+	return ret, 0
+}
+
+func bfree(blkno int) err_t {
+	return ballocater.free(blkno-usable_start)
+}
