@@ -112,7 +112,7 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			// is in a later transaction, we know this later
 			// transaction will commit with the one that modified
 			// this block earlier.
-			bcache_relse(buf, "absoprtion")
+			bcache_relse(buf, "absorption")
 			return
 		}
 	}

@@ -9,21 +9,20 @@ import getopt
 import os
 import sys
 
-blocksz = 4096  # 512
-loginodeblk = 5 # 2
-inodesz = 128
+blocksz = 4096         # block size
+inodesz = 128          # size of inodes in bytes
+hdsize = 50000         # size of disk in blocks
+loglen = 256           # number of log blocks
+inodelen = 50          # number of inode map blocks
+loginodeblk = 5        # log of number of inodes per block
+iaddrs = 9             # number of inode direct addresses
+indaddrs = (blocksz/8) # number of inode indirect addresses
 
-hdsize = 2*8*40 * 1024 * 1024
-# number of inode direct addresses
-iaddrs = 9
-# number of inode indirect addresses
-indaddrs = (blocksz/8)
 
 class Balloc:
   def __init__(self, ff):
     self.ff = ff
-    # allblocks maps each allocated block number to a block object: either a
-    # Datab or an Inodeb
+    # allblocks maps each allocated block number to a Datab
     self.allblocks = {}
     self.cblock = 0
   def balloc(self):
@@ -55,24 +54,85 @@ class Datab:
     of.write(self.cont)
     of.write('\0'*(blocksz - l))
 
-class Dirb:
-  # class used internally by Inodeb; it writes a directory inode to disk
-  def __init__(self, pbn, pio, bn, io, ba, dirpart):
-    # p{bn,io} are parent directory bn/ioffset
-    # bn,io are this directory's bn/ioffset
-    self.bn, self.ioff, self.ba, self.dirpart = bn, io, ba, dirpart
-    self.size = 0
+
+class Ialloc:
+  def __init__(self):
+    # allblocks maps each allocated inode number to an Inode object
+    self.allinodes = {}
+    self.cinode = 0
+    
+  def ialloc(self):
+    ret = self.cinode
+    self.cinode += 1
+    return ret
+  
+  def pair(self, inum, inode):
+    if inum in self.allinodes:
+      raise ValueError('block already paired')
+    self.allinodes[inum] = inode
+    
+  def iget(self, inum):
+    return self.allinodes[inum]
+
+class Inode:
+  def __init__(self, type, ia):
+    self.inum = ia.ialloc()
     self.blks = []
-    self.curblk = None
-    self.namechk = {}
+    self.size = 0
+    self.type = type
     self.indbn = 0
     self.indblk = None
     self.dindbn = 0
     self.dindblk = None
-    self.addentry('.', bn, io)
-    self.addentry('..', pbn, pio)
 
-  def addentry(self, fn, inodeb, inodeoff):
+  def __str__(self):
+    return "inum %d type %d sz %d" % (self.inum, self.type, self.size) + " " + str(self.blks)
+  
+  def writeto(self, of):
+    def wrnum(num):
+      of.write(le8(num))
+    # inode type
+    wrnum(self.type)
+    # link count
+    wrnum(1)
+    # size in bytes
+    wrnum(self.size)
+    # major
+    wrnum(0)
+    # minor
+    wrnum(0)
+    # indirect block
+    wrnum(self.indbn)
+    # dindirect block
+    wrnum(self.dindbn)
+    # block addresses
+    for i in self.blks:
+      wrnum(i)
+    for i in range(iaddrs - len(self.blks)):
+      wrnum(0)
+
+  # write unallocated inodes
+  def iwritez(self, of):
+    isize = (7 + iaddrs)*8
+    of.write('\0'*isize)
+
+  def pr(self):
+    print self.inum, '\t len %d' % self.size, self.blks
+
+
+class Dir(Inode):
+
+  def __init__(self, pinum, ba, ia, dirpart):
+    Inode.__init__(self, 2, ia)
+    self.ba = ba
+    self.dirpart = dirpart
+    self.curblk = None
+    self.namechk = {}
+    self.addentry('.', self.inum)
+    self.addentry('..', pinum)
+    ia.pair(self.inum, self)
+
+  def addentry(self, fn, inum):
     self.chkname(fn)
     maxfn = 14
     c = self.ensure_cont()
@@ -80,9 +140,8 @@ class Dirb:
       raise ValueError('dir entry filename too long')
     l = len(fn)
     data = fn + '\0'*(maxfn - l)
-    # print "addentry", self.bn, self.ioff, self.curblk.bn, fn, inodeb, inodeoff, len(c.cont)
     c.append(data)
-    c.append(le8(biencode(inodeb, inodeoff)))
+    c.append(le8(inum))
 
   def chkname(self, fn):
     if fn in self.namechk:
@@ -116,23 +175,20 @@ class Dirb:
         self.blks.append(nb)
     return self.curblk
 
-  def itype(self):
-    return 2
+    # while len(cont) > 0:
+    #   e = cont[0:22]
+    #   cont = cont[22:]
+    #   n = e[14:18]
+    #   m = e[18:22]
+    #   print e, len(e), n, m
+  
+class File(Inode):
 
-class Fileb:
-  # class used internally by Inodeb; it writes a file inode to disk
-  def __init__(self, bn, ba):
-    self.bn, self.ba = bn, ba
-    self.blks = []
-    self.size = 0
-    self.indbn = 0
-    self.indblk = None
-    self.dindblk = None
-    self.dindbn = 0
+  def __init__(self, ba, ia):
+    Inode.__init__(self, 1, ia)
+    self.ba = ba
     self.curindblk = None
-
-  def itype(self):
-    return 1
+    ia.pair(self.inum, self)
 
   def setcont(self, d):
     l = len(d)
@@ -209,97 +265,22 @@ class Indirectb:
     self.ba.pair(nb, ret)
     self.curblk.append(le8(nb))
     assert self.curblk.len() <= blocksz
-      
     return ret
-
-class Inodeb:
-  # class for managing inodes
-  def __init__(self, bn):
-    self.bn = bn
-    self.icur = 0
-    self.itop = blocksz/inodesz
-    self.imap = {}
-
-  def getfree(self):
-    if self.icur >= self.itop:
-      return None
-    ret = self.icur
-    self.icur += 1
-    return ret
-
-  def ipair(self, islot, itype):
-    if islot >= self.itop:
-      raise ValueError('islot too high')
-    if islot in self.imap:
-      raise ValueError('islot already allocated')
-    self.imap[islot] = itype
-
-  def iwrite(self, of, blk):
-    def wrnum(num):
-      of.write(le8(num))
-    # inode type
-    wrnum(blk.itype())
-    # link count
-    wrnum(1)
-    # size in bytes
-    wrnum(blk.size)
-    # major
-    wrnum(0)
-    # minor
-    wrnum(0)
-    # indirect block
-    wrnum(blk.indbn)
-    # dindirect block
-    wrnum(blk.dindbn)
-    # block addresses
-    for i in blk.blks:
-      wrnum(i)
-    for i in range(iaddrs - len(blk.blks)):
-      wrnum(0)
-
-  def writeto(self, of):
-    sortedinodes = sorted(self.imap.keys())
-    for i in sortedinodes:
-      blk = self.imap[i]
-      self.iwrite(of, blk)
-    # write unallocated inodes
-    isize = (7 + iaddrs)*8
-    for i in range(self.itop - len(self.imap)):
-      of.write('\0'*isize)
 
 class Fsrep:
   # class for representing the whole file system
-  def __init__(self, skeldir, ba):
+  def __init__(self, skeldir, ba, ia):
     if not os.path.isdir(skeldir):
       raise ValueError('%s is not a directory' % (skeldir))
     self.sd = skeldir
     self.ba = ba
+    self.ia = ia
     self.indf = None
-    self.rootinode = None
-    self.rootioff = None
     self.build()
 
   def build(self):
-    rootinode, rioff, iblk = self.ialloc()
-    rootdir = Dirb(rootinode, rioff, rootinode, rioff, self.ba, '')
-    iblk.ipair(rioff, rootdir)
-    self.rootinode = rootinode
-    self.rootioff = rioff
+    rootdir = Dir(0, self.ba, self.ia, '')
     self.recursedir(rootdir, self.sd)
-
-  def ialloc(self):
-    if self.indf is not None:
-      indfb = self.ba.blkget(self.indf)
-      rioff = indfb.getfree()
-      if rioff is not None:
-        return self.indf, rioff, indfb
-    self.indf = self.ba.balloc()
-    indfb = Inodeb(self.indf)
-    self.ba.pair(self.indf, indfb)
-    ioff = indfb.getfree()
-    if ioff is None:
-      raise RuntimeError('wut')
-    return self.indf, ioff, indfb
 
   def recursedir(self, dirb, dirname):
     # recursively populates dir inode with the contents of the folder 'dirname'
@@ -312,77 +293,61 @@ class Fsrep:
 
     # allocate file inodes, fill with data blocks
     for f in files:
-      fileb, filei, inodeb = self.ialloc()
-      fb = Fileb(fileb, self.ba)
-      inodeb.ipair(filei, fb)
+      fb = File(self.ba, self.ia)
       p = os.path.join(dirname, f)
       with open(p) as injectfile:
         fb.setcont(injectfile.read())
-      dirb.addentry(f, fileb, filei)
+      dirb.addentry(f, fb.inum)
 
     # allocate inodes for all dirs
     rec = []
     for d in dirs:
-      dib, dii, inodeb = self.ialloc()
-      db = Dirb(dirb.bn, dirb.ioff, dib, dii, self.ba, d)
-      inodeb.ipair(dii, db)
+      db = Dir(dirb.inum, self.ba, self.ia, d)
       rec.append(db)
-      dirb.addentry(d, dib, dii)
+      dirb.addentry(d, db.inum)
 
     # recursively populate dirs
     for d in rec:
       newdn = os.path.join(dirname, d.dirpart)
       self.recursedir(d, newdn)
 
-  def rooti(self):
-    return self.rootinode, self.rootioff
-
   def writeto(self, of, remaining, dozero):
+    ai = self.ia.allinodes
+    assert len(ai) <= remaining
+    order = sorted(ai.keys())
+    for i in order:
+      # print of.tell()/blocksz, ai[i]
+      before = of.tell()
+      ai[i].writeto(of)
+      after = of.tell()
+      diff = after - before
+      assert diff % inodesz == 0
+
+    # free inodes
+    ninode = (inodelen*blocksz)/inodesz - len(ai)
+    assert ninode/blocksz <= remaining
+    for i in range(ninode):
+      # fill with crap to detect fs bugs
+      of.write('\x0d'*inodesz)
+
+    # blocks
     ab = self.ba.allblocks
-    if len(ab) > remaining:
-      raise ValueError('skeldir too big/out of blocks')
+    assert len(ab) <= remaining
     blockorder = sorted(ab.keys())
     for b in blockorder:
-      if of.tell()/blocksz != b:
-        print '**** object', type(ab[b]), " ***** number and offset don't match", b, of.tell()/blocksz
+      assert of.tell()/blocksz == b
       before = of.tell()
       ab[b].writeto(of)
       after = of.tell()
       diff = after - before
-      if diff % blocksz != 0:
-        print '**** object', type(ab[b]), 'didnt write a whole block'
+      assert diff % blocksz == 0
+
     # free space
     if dozero:
       for i in range(remaining - len(ab)):
 	# fill with crap to detect fs bugs
         of.write('\x0c'*blocksz)
-
-  def pr_dir(self, cont):
-    while len(cont) > 0:
-      e = cont[0:22]
-      cont = cont[22:]
-      n = e[14:18]
-      m = e[18:22]
-      print e, len(e), n, m
-    
-  def pr(self):
-    print 'print all blocks'
-    ab = self.ba.allblocks
-    keys = sorted(ab.keys())
-    for k in keys:
-      if isinstance(ab[k], Inodeb):
-        print '%d, Inodeb, %d inode entries' % (k, len(ab[k].imap))
-        i = 0
-        for  v in ab[k].imap.values():
-          if isinstance(v, Fileb):
-            print i, '\tfile of len %d' % (v.size), v.indbn, v.blks
-          elif isinstance(v, Dirb):
-            print i, '\tdirectory of len %d' % (v.size), v.blks
-          i += 1
-      elif isinstance(ab[k], Datab):
-        print '%d, Datab' % (k)
-      else:
-        raise ValueError('unknown block')
+      assert hdsize == of.tell()/blocksz
 
 def roundup(n, to):
   ret = n + to - 1
@@ -402,24 +367,18 @@ def le8(num):
   l = [chr((num >> i*8) & 0xff) for i in range(8)]
   return ''.join(l)
 
-def biencode(block, ioff):
-  return (block << loginodeblk) | ioff
+def dofreemap(of, nallocated, freeblock, freeblocklen):
+  assert freeblock == of.tell()/blocksz
 
-def dofree(of, allocblocks, freeblock, freeblocklen):
-
-  if freeblock != of.tell()/blocksz:
-      print "dofree: **** don't match ***", freeblock, of.tell()/blocksz
-  
-  
-  for i in range(allocblocks/8):
+  for i in range(nallocated/8):
     of.write(chr(0xff))
     
-  bits = allocblocks % 8
+  bits = nallocated % 8
   val = 0
   for i in range(bits):
     val |= 1 << i
-  bmbytes = allocblocks/8
-  # allocblocks divides by 8?
+  bmbytes = nallocated/8
+  # nallocated divides by 8?
   if val != 0:
     of.write(chr(val))
     bmbytes += 1
@@ -429,54 +388,77 @@ def dofree(of, allocblocks, freeblock, freeblocklen):
 
   bmblocks = roundup(bmbytes, blocksz)/blocksz
   remaining = freeblocklen - bmblocks
-  if remaining < 0:
-    raise ValueError('alloced too much')
+  assert remaining >= 0
   for i in range(remaining):
     of.write('\0'*blocksz)
+    
+  assert freeblock+freeblocklen == of.tell()/blocksz
+    
 
-def dofs(of, freeblock, freeblocklen, loglen, lastblock, remaining, skeldir, dozero):
-  ff = freeblock + freeblocklen + loglen
-  ba = Balloc(ff)
+def dofs(of, used, skeldir, dozero):
+  superblock = used
+  assert superblock == of.tell()/blocksz
+  used += 1  # for super block
+  used += loglen
 
-  remaining -= 1
-  remaining -= freeblocklen
-  remaining -= loglen
+  imapstart = used
+  imapsz = (inodelen*inodesz) / blocksz + 1
+  used += imapsz
+
+  bmapstart = used
+  bmapsz = hdsize - used - inodelen
+  bmapsz = bmapsz / blocksz + 1
+  used += bmapsz
+
+  used += inodelen
+
+  ba = Balloc(used)
+  bi = Ialloc()
+
+  remaining = hdsize - used 
   if remaining < 0:
-    raise ValueError('ruh roh')
+    raise ValueError('hard disk too small')
 
-  # start superblock: freeblock start, freeblock length, log length, and
-  # rootinode
-  print "super", freeblock, freeblocklen, loglen
-  of.write(le8(freeblock))
-  of.write(le8(freeblocklen))
+  # superblock
+  print "super:", "blkn", superblock
+  print "\tloglen", loglen
+  print "\timapstart", imapstart, "imapsz", imapsz
+  print "\tbmapstart", bmapstart, "bmapsz", bmapsz
+  print "\tinodelen", inodelen
+  print "\thdsize", hdsize
+
   of.write(le8(loglen))
-
-  fsrep = Fsrep(skeldir, ba)
+  of.write(le8(imapstart))
+  of.write(le8(imapsz))
+  of.write(le8(bmapstart))
+  of.write(le8(bmapsz))
+  of.write(le8(inodelen))
+  of.write(le8(hdsize))  
+  of.write('\0'*(blocksz - 7*8))
   
-  # fsrep.pr()
-
-  rootinode, rootioff = fsrep.rooti()
-
-  # write root inode to superblock
-  of.write(le8(biencode(rootinode, rootioff)))
-  # last block
-  of.write(le8(lastblock))
-  of.write('\0'*(blocksz - 5*8))
-
-  # super block is done, write free bitmap
-  dofree(of, ba.cblock, freeblock, freeblocklen)
+  fsrep = Fsrep(skeldir, ba, bi)
 
   # write empty log blocks
   for i in range(loglen):
     of.write('\0'*blocksz)
 
+  assert imapstart == of.tell()/blocksz
+  # write free inode bitmap
+  dofreemap(of, bi.cinode, imapstart, imapsz)
+  assert imapstart+imapsz == of.tell()/blocksz
+
+  assert bmapstart == of.tell()/blocksz
+  dofreemap(of, ba.cblock, bmapstart, bmapsz)
+  assert bmapstart+bmapsz == of.tell()/blocksz
+
   # finally, write fs
   fsrep.writeto(of, remaining, dozero)
 
+
 if __name__ == '__main__':
 
-  dozero = True
   opts, args = getopt.getopt(sys.argv[1:], 'n')
+  dozero = True
   for o, v in opts:
     if o == '-n':
       # don't write empty blocks
@@ -491,13 +473,10 @@ if __name__ == '__main__':
   ofn = args[2]
   skeldir = args[3]
 
-  hdblocks = roundup(hdsize, blocksz) / blocksz
   usedblocks = fblocks(bfn)
   usedblocks += fblocks(kfn)
   usedblocks = roundup(usedblocks, blocksz) / blocksz
   
-  remaining = hdblocks - usedblocks
-
   FSOFF = 506
   print >> sys.stderr, 'free blocks start at %d' % (usedblocks)
   print >> sys.stderr, 'writing fs start to %#x' % (FSOFF)
@@ -520,9 +499,8 @@ if __name__ == '__main__':
     if of.tell()/blocksz != usedblocks:
       print "*** used blocks don't match", of.tell() / blocksz, usedblocks
 
-    fblen = 2*20*8
-    loglen = 256
-    dofs(of, usedblocks+1, fblen, loglen, hdblocks, remaining, skeldir, dozero)
+    dofs(of, usedblocks, skeldir, dozero)
+
     wrote = of.tell()/(1 << 20)
 
   print >> sys.stderr, 'created "%s" of length %d MB' % (ofn, wrote)

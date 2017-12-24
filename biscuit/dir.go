@@ -106,10 +106,10 @@ func (dir *dirdata_t) filename(didx int) string {
 	return string(ret)
 }
 
-func (dir *dirdata_t) inodenext(didx int) inum {
+func (dir *dirdata_t) inodenext(didx int) inum_t {
 	st := doffset(didx, 14)
 	v := readn(dir.data[:], 8, st)
-	return inum(v)
+	return inum_t(v)
 }
 
 func (dir *dirdata_t) w_filename(didx int, fn string) {
@@ -125,12 +125,10 @@ func (dir *dirdata_t) w_filename(didx int, fn string) {
 	}
 }
 
-func (dir *dirdata_t) w_inodenext(didx int, blk int, iidx int) {
+func (dir *dirdata_t) w_inodenext(didx int, inum inum_t) {
 	st := doffset(didx, 14)
-	v := biencode(blk, iidx)
-	writen(dir.data[:], 8, st, v)
+	writen(dir.data[:], 8, st, int(inum))
 }
-
 
 type fdent_t struct {
 	offset	int
@@ -167,7 +165,7 @@ func (il *fdelist_t) count() int {
 // struct to hold the offset/priv of directory entry slots
 type icdent_t struct {
 	offset	int
-	priv	inum
+	inum	inum_t
 }
 
 
@@ -219,7 +217,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 }
 
 // if _deinsert fails to allocate a page, idm is left unchanged.
-func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
+func (idm *imemnode_t) _deinsert(name string, inum inum_t) err_t {
 	// XXXPANIC
 	//if _, err := idm._delookup(name); err == 0 {
 	//	panic("dirent already exists")
@@ -236,20 +234,15 @@ func (idm *imemnode_t) _deinsert(name string, nblkno int, ioff int) err_t {
 	}
 	ddata := dirdata_t{b.data[noff%PGSIZE:]}
 
-	// write dir entry
-	//if ddata.filename(0) != "" {
-	//	panic("dir entry slot is not free")
-	//}
-
 	ddata.w_filename(0, name)
-	ddata.w_inodenext(0, nblkno, ioff)
+	ddata.w_inodenext(0, inum)
 
 
 	b.Unlock()
 	b.log_write()
 	bcache_relse(b, "_deinsert")
 	
-	icd := icdent_t{noff, inum(biencode(nblkno, ioff))}
+	icd := icdent_t{noff, inum}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.icache.dentc
 	dc.haveall = dc.haveall && ok
@@ -336,7 +329,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 	}
 	dirdata := dirdata_t{b.data[de.offset%PGSIZE:]}
 	dirdata.w_filename(0, "")
-	dirdata.w_inodenext(0, 0, 0)
+	dirdata.w_inodenext(0, inum_t(0))
 	b.Unlock()
 	b.log_write()
 	bcache_relse(b, "_deremove")
@@ -347,11 +340,11 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 }
 
 // returns the filename mapping to tnum
-func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
+func (idm *imemnode_t) _denamefor(tnum inum_t) (string, err_t) {
 	// check cache first
 	var fn string
 	found := idm.icache.dentc.dents.iter(func(dn string, de icdent_t) bool {
-		if de.priv == tnum {
+		if de.inum == tnum {
 			fn = dn
 			return true
 		}
@@ -364,7 +357,7 @@ func (idm *imemnode_t) _denamefor(tnum inum) (string, err_t) {
 	// not in cache; shucks!
 	var de icdent_t
 	found, err := idm._descan(func(tfn string, tde icdent_t) bool {
-		if tde.priv == tnum {
+		if tde.inum == tnum {
 			fn = tfn
 			de = tde
 			return true
@@ -500,7 +493,7 @@ func (idm *imemnode_t) probe_unlink(fn string) (*bdev_block_t, err_t) {
 }
 
 
-func (idm *imemnode_t) ilookup(name string) (inum, err_t) {
+func (idm *imemnode_t) ilookup(name string) (inum_t, err_t) {
 	// did someone confuse a file with a directory?
 	if idm.icache.itype != I_DIR {
 		return 0, -ENOTDIR
@@ -510,11 +503,11 @@ func (idm *imemnode_t) ilookup(name string) (inum, err_t) {
 	if err != 0 {
 		return 0, err
 	}
-	return de.priv, 0
+	return de.inum, 0
 }
 
 // creates a new directory entry with name "name" and inode number priv
-func (idm *imemnode_t) iinsert(name string, priv inum) err_t {
+func (idm *imemnode_t) iinsert(name string, inum inum_t) err_t {
 	if idm.icache.itype != I_DIR {
 		return -ENOTDIR
 	}
@@ -523,17 +516,16 @@ func (idm *imemnode_t) iinsert(name string, priv inum) err_t {
 	} else if err != -ENOENT {
 		return err
 	}
-	if priv <= 0 {
-		fmt.Printf("insert: non-positive inum %v %v\n", name, priv)
+	if inum < 0 {
+		fmt.Printf("insert: negative inum %v %v\n", name, inum)
 		panic("iinsert")
 	}
-	a, b := bidecode(priv)
-	err := idm._deinsert(name, a, b)
+	err := idm._deinsert(name, inum)
 	return err
 }
 
 // returns inode number of unliked inode so caller can decrement its ref count
-func (idm *imemnode_t) iunlink(name string) (inum, err_t) {
+func (idm *imemnode_t) iunlink(name string) (inum_t, err_t) {
 	if idm.icache.itype != I_DIR {
 		panic("unlink to non-dir")
 	}
@@ -541,7 +533,7 @@ func (idm *imemnode_t) iunlink(name string) (inum, err_t) {
 	if err != 0 {
 		return 0, err
 	}
-	return de.priv, 0
+	return de.inum, 0
 }
 
 // returns true if the inode has no directory entries

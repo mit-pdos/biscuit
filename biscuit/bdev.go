@@ -317,36 +317,44 @@ func bdev_test() {
 
 // Block allocator
 
-var ballocater *allocater_t
-var usable_start	int
+type ballocater_t struct {
+	alloc *allocater_t
+	first int
+}
+var ballocater *ballocater_t
 
-func balloc_init(start,len int) {
-	ballocater = make_allocater(start, len)
+func balloc_init(start,len, first int) {
+	ballocater = &ballocater_t{}
+	ballocater.alloc = make_allocater(start, len)
+	fmt.Printf("first %v\n", first)
+	ballocater.first = first
 }
 
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
 func balloc1() (int, err_t) {
-	blkn, err := ballocater.alloc()
+	blkn, err := ballocater.alloc.alloc()
 	if err != 0 {
 		return 0, err
 	}
-	return blkn+usable_start, err
+	return blkn+ballocater.first, err
 }
 
 func balloc() (int, err_t) {
-	fblock.Lock()
 	ret, err := balloc1()
-	fblock.Unlock()
 	if err != 0 {
 		return 0, err
+	}
+	if ret < 0 || ret >= superb.lastblock() {
+		fmt.Printf("blkn %v last %v\n", ret, superb.lastblock())
+		panic("balloc: too big blkn")
 	}
 	blk, err := bcache_get_zero(ret, "balloc", true)
 	if err != 0 {
 		return 0, err
 	}
-	if fs_debug {
+	if bdev_debug {
 		fmt.Printf("balloc: %v\n", ret)
 	}
 
@@ -355,10 +363,16 @@ func balloc() (int, err_t) {
 	blk.Unlock()
 	blk.log_write()
 	bcache_relse(blk, "balloc")
-	
 	return ret, 0
 }
 
 func bfree(blkno int) err_t {
-	return ballocater.free(blkno-usable_start)
+	if bdev_debug {
+		fmt.Printf("bfree: %v\n", blkno)
+	}
+	blkno -= ballocater.first
+	if blkno < 0 {
+		panic("bfree")
+	}
+	return ballocater.alloc.free(blkno)
 }

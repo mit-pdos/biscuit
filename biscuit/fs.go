@@ -4,12 +4,10 @@ import "fmt"
 import "sync"
 
 const fs_debug    = false
+const iroot = 0
 
 var superb_start	int
 var superb		superblock_t
-var iroot		inum
-
-var fblock	= sync.Mutex{}
 
 func fs_init() *fd_t {
 
@@ -28,7 +26,7 @@ func fs_init() *fd_t {
 	}
 	FSOFF := 506
 	superb_start = readn(b.data[:], 4, FSOFF)
-	fmt.Printf("superb_start %v %#x\n", superb_start, superb_start)
+	fmt.Printf("superb_start %v\n", superb_start)
 	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
@@ -40,27 +38,34 @@ func fs_init() *fd_t {
 		panic("fs_init")
 	}
 	superb = superblock_t{b.data}
-	iroot = superb.rootinode()
 
-	fmt.Printf("root inode %v\n", iroot)
-
-	free_start := superb.freeblock()
-	free_len := superb.freeblocklen()
-	balloc_init(free_start, free_len)
-
-	logstart := free_start + free_len
+	logstart := superb_start + 1
 	loglen := superb.loglen()
-	usable_start = logstart + loglen
-
 	if loglen <= 0 || loglen > 256 {
 		panic("bad log len")
 	}
-
+	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
 	err = log_init(logstart, loglen)
 	if err != 0 {
 		panic("log_init failed")
 	}
-	
+
+	imapstart := superb.imapblock()
+        imaplen := superb.imaplen()
+	fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
+
+	bmapstart := superb.freeblock()
+	bmaplen := superb.freeblocklen()
+	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
+
+	ialloc_init(imapstart, imaplen, bmapstart+bmaplen)
+
+
+	inodelen := superb.inodelen()
+	fmt.Printf("inodelen %v\n", inodelen)
+
+	balloc_init(bmapstart, bmaplen, bmapstart + bmaplen + inodelen)
+
 	return &fd_t{fops: &fsfops_t{priv: iroot}}
 }
 
@@ -80,9 +85,9 @@ func use_memfs() {
 }
 
 // a type for an inode block/offset identifier
-type inum int
+type inum_t int
 
-func fs_link(old string, new string, cwd inum) err_t {
+func fs_link(old string, new string, cwd inum_t) err_t {
 	op_begin("fs_link")
 	defer op_end()
 
@@ -98,7 +103,7 @@ func fs_link(old string, new string, cwd inum) err_t {
 		orig.iunlock_refdown("fs_link")
 		return -EINVAL
 	}
-	inum := orig.priv
+	inum := orig.inum
 	orig._linkup()
 	orig.iunlock_refdown("fs_link_orig")
 
@@ -123,7 +128,7 @@ undo:
 	return err
 }
 
-func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
+func fs_unlink(paths string, cwd inum_t, wantdir bool) err_t {
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -EPERM
@@ -139,7 +144,7 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 	var child *imemnode_t
 	var par *imemnode_t
 	var err err_t
-	var childi inum
+	var childi inum_t
 
 	par, err = fs_namei_locked(dirs, cwd, "fs_unlink")
 	if err != 0 {
@@ -188,7 +193,7 @@ func fs_unlink(paths string, cwd inum, wantdir bool) err_t {
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func fs_rename(oldp, newp string, cwd inum) err_t {
+func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	odirs, ofn := sdirname(oldp)
 	ndirs, nfn := sdirname(newp)
 
@@ -287,7 +292,7 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 		if err != 0 {
 			return err
 		}
-		if childi != ochild.priv {
+		if childi != ochild.inum {
 			panic("fs_rename\n")
 		}
 		
@@ -321,7 +326,7 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 	}
 
 	// if src and dst are the same file, we are done
-	if newexists && ochild.priv == nchild.priv { 
+	if newexists && ochild.inum == nchild.inum { 
 		return 0
 	}
 
@@ -366,7 +371,7 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 	if opar.do_unlink(ofn) != 0 {
 		panic("probed")
 	}
-	if npar.do_insert(nfn, ochild.priv) != 0 {
+	if npar.do_insert(nfn, ochild.inum) != 0 {
 		panic("probed")
 	}
 
@@ -375,7 +380,7 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 		if ochild.do_unlink("..") != 0 {
 			panic("probed")
 		}
-		if ochild.do_insert("..", npar.priv) != 0 {
+		if ochild.do_insert("..", npar.inum) != 0 {
 			panic("insert after unlink must succeed")
 		}
 	}
@@ -384,15 +389,15 @@ func fs_rename(oldp, newp string, cwd inum) err_t {
 
 // anc and start are in memory
 func _isancestor(anc, start *imemnode_t) err_t {
-	if anc.priv == iroot {
+	if anc.inum == iroot {
 		panic("root is always ancestor")
 	}
 	// walk up to iroot
-	here, err := iref(start.priv, "_isancestor")
+	here, err := iref(start.inum, "_isancestor")
 	if err != 0 {
 		panic("_isancestor: start must exist")
 	}
-	for here.priv != iroot {
+	for here.inum != iroot {
 		if anc == here {
 			irefcache.refdown(here, "_isancestor_here")
 			return -EINVAL
@@ -402,7 +407,7 @@ func _isancestor(anc, start *imemnode_t) err_t {
 		if err != 0 {
 			panic(".. must exist")
 		}
-		if nexti == here.priv {
+		if nexti == here.inum {
 			here.iunlock("_isancestor")
 			panic("xxx")
 		} else {
@@ -420,7 +425,7 @@ func _isancestor(anc, start *imemnode_t) err_t {
 }
 
 type fsfops_t struct {
-	priv	inum
+	priv	inum_t
 	// protects offset
 	sync.Mutex
 	offset	int
@@ -551,7 +556,7 @@ func (fo *fsfops_t) close() err_t {
 	return fs_close(fo.priv)
 }
 
-func (fo *fsfops_t) pathi() inum {
+func (fo *fsfops_t) pathi() inum_t {
 	return fo.priv
 }
 
@@ -710,7 +715,7 @@ func (df *devfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
-func (df *devfops_t) pathi() inum {
+func (df *devfops_t) pathi() inum_t {
 	df._sane()
 	panic("bad cwd")
 }
@@ -867,7 +872,7 @@ func (raw *rawdfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
-func (raw *rawdfops_t) pathi() inum {
+func (raw *rawdfops_t) pathi() inum_t {
 	panic("bad cwd")
 }
 
@@ -945,7 +950,7 @@ func (raw *rawdfops_t) shutdown(read, write bool) err_t {
 	return -ENOTSOCK
 }
 
-func fs_mkdir(paths string, mode int, cwd inum) err_t {
+func fs_mkdir(paths string, mode int, cwd inum_t) err_t {
 	op_begin("fs_mkdir")
 	defer op_end()
 
@@ -967,7 +972,7 @@ func fs_mkdir(paths string, mode int, cwd inum) err_t {
 	}
 	defer par.iunlock_refdown("fs_mkdir_par")
 
-	var childi inum
+	var childi inum_t
 	childi, err = par.do_createdir(fn)
 	if err != 0 {
 		return err
@@ -980,19 +985,19 @@ func fs_mkdir(paths string, mode int, cwd inum) err_t {
 	}
 
 	child.do_insert(".", childi)
-	child.do_insert("..", par.priv)
+	child.do_insert("..", par.inum)
 	irefcache.refdown(child, "fs_mkdir3")
 	return 0
 }
 
 // a type to represent on-disk files
 type fsfile_t struct {
-	priv	inum
+	inum	inum_t
 	major	int
 	minor	int
 }
 
-func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int) (fsfile_t, err_t) {
+func _fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor int) (fsfile_t, err_t) {
 	trunc := flags & O_TRUNC != 0
 	creat := flags & O_CREAT != 0
 	nodir := false
@@ -1033,7 +1038,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 			}
 			defer par.iunlock_refdown("_fs_open_par")
 
-			var childi inum
+			var childi inum_t
 			if isdev {
 				childi, err = par.do_createnod(fn, major, minor)
 			} else {
@@ -1096,7 +1101,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 
 	irefcache.refup(idm, "_fs_open")
 
-	ret.priv = idm.priv
+	ret.inum = idm.inum
 	ret.major = idm.icache.major
 	ret.minor = idm.icache.minor
 	return ret, 0
@@ -1105,7 +1110,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{ D_SUD: true, D_SUS: true}
 
-func fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int) (*fd_t, err_t) {
+func fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor int) (*fd_t, err_t) {
 	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
 		return nil, err
@@ -1113,20 +1118,20 @@ func fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int)
 
 	// some special files (sockets) cannot be opened with fops this way
 	if denied := _denyopen[fsf.major]; denied {
-		if fs_close(fsf.priv) != 0 {
+		if fs_close(fsf.inum) != 0 {
 			panic("must succeed")
 		}
 		return nil, -EPERM
 	}
 
 	// convert on-disk file to fd with fops
-	priv := fsf.priv
+	priv := fsf.inum
 	maj := fsf.major
 	min := fsf.minor
 	ret := &fd_t{}
 	if maj != 0 {
 		// don't need underlying file open
-		if fs_close(fsf.priv) != 0 {
+		if fs_close(fsf.inum) != 0 {
 			panic("must succeed")
 		}
 		switch maj {
@@ -1147,7 +1152,7 @@ func fs_open(paths string, flags fdopt_t, mode int, cwd inum,  major, minor int)
 	return ret, 0
 }
 
-func fs_close(priv inum) err_t {
+func fs_close(priv inum_t) err_t {
 	defer op_end()
 	op_begin("fs_close")
 
@@ -1164,7 +1169,7 @@ func fs_close(priv inum) err_t {
 	return 0
 }
 
-func fs_stat(path string, st *stat_t, cwd inum) err_t {
+func fs_stat(path string, st *stat_t, cwd inum_t) err_t {
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", path, cwd)
 	}
@@ -1190,7 +1195,7 @@ func fs_sync() err_t {
 
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
-func fs_namei(paths string, cwd inum) (*imemnode_t, err_t) {
+func fs_namei(paths string, cwd inum_t) (*imemnode_t, err_t) {
 	var start *imemnode_t
 	var err err_t
 	if len(paths) == 0 || paths[0] != '/' {
@@ -1214,7 +1219,7 @@ func fs_namei(paths string, cwd inum) (*imemnode_t, err_t) {
 			idm.iunlock_refdown("fs_namei_ilookup")
 			return nil, err
 		}
-		if n != idm.priv {
+		if n != idm.inum {
 			next, err := iref(n, "fs_namei_next")
 			idm.iunlock_refdown("fs_namei_idm")
 			if err != 0 {
@@ -1228,7 +1233,7 @@ func fs_namei(paths string, cwd inum) (*imemnode_t, err_t) {
 	return idm, 0
 }
 
-func fs_namei_locked(paths string, cwd inum, s string) (*imemnode_t, err_t) {
+func fs_namei_locked(paths string, cwd inum_t, s string) (*imemnode_t, err_t) {
 	idm, err := fs_namei(paths, cwd)
 	if err != 0 {
 		return nil, err
@@ -1238,70 +1243,41 @@ func fs_namei_locked(paths string, cwd inum, s string) (*imemnode_t, err_t) {
 }
 
 
-// superblock format:
-// bytes, meaning
-// 0-7,   freeblock start
-// 8-15,  freeblock length
-// 16-23, number of log blocks
-// 24-31, root inode
-// 32-39, last block
-// 40-47, inode block that may have room for an inode
-// 48-55, recovery log length; if non-zero, recovery procedure should run
+// superblock format (see mkbdisk.py)
 type superblock_t struct {
 	data	*bytepg_t
 }
 
-func (sb *superblock_t) freeblock() int {
+func (sb *superblock_t) loglen() int {
 	return fieldr(sb.data, 0)
 }
 
-func (sb *superblock_t) freeblocklen() int {
+func (sb *superblock_t) imapblock() int {
 	return fieldr(sb.data, 1)
 }
 
-func (sb *superblock_t) loglen() int {
+func (sb *superblock_t) imaplen() int {
 	return fieldr(sb.data, 2)
 }
 
-func (sb *superblock_t) rootinode() inum {
-	v := fieldr(sb.data, 3)
-	return inum(v)
+func (sb *superblock_t) freeblock() int {
+	return fieldr(sb.data, 3)
 }
 
-func (sb *superblock_t) lastblock() int {
+func (sb *superblock_t) freeblocklen() int {
 	return fieldr(sb.data, 4)
 }
 
-func (sb *superblock_t) freeinode() int {
+func (sb *superblock_t) inodelen() int {
 	return fieldr(sb.data, 5)
 }
 
-func (sb *superblock_t) w_freeblock(n int) {
-	fieldw(sb.data, 0, n)
+func (sb *superblock_t) lastblock() int {
+	return fieldr(sb.data, 6)
 }
-
-func (sb *superblock_t) w_freeblocklen(n int) {
-	fieldw(sb.data, 1, n)
-}
-
-func (sb *superblock_t) w_loglen(n int) {
-	fieldw(sb.data, 2, n)
-}
-
-func (sb *superblock_t) w_rootinode(blk int, iidx int) {
-	fieldw(sb.data, 3, biencode(blk, iidx))
-}
-
-func (sb *superblock_t) w_lastblock(n int) {
-	fieldw(sb.data, 4, n)
-}
-
-func (sb *superblock_t) w_freeinode(n int) {
-	fieldw(sb.data, 5, n)
-}
-
 
 type allocater_t struct {
+	sync.Mutex
 	freestart  int
 	freelen  int
 	lastblk int
@@ -1332,6 +1308,9 @@ func (alloc *allocater_t) fbread(blockno int) (*bdev_block_t, err_t) {
 }
 
 func (alloc *allocater_t) alloc() (int, err_t) {
+	alloc.Lock()
+	defer alloc.Unlock()
+
 	found := false
 	var bit uint
 	var blk *bdev_block_t
@@ -1378,21 +1357,22 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 	bcache_relse(blk, "balloc1")
 
 	bitsperblk := BSIZE*8
-	return blkn*bitsperblk + oct*8 + int(bit), 0
+	blkn = blkn*bitsperblk + oct*8 + int(bit)
+	return blkn, 0
 }
 
 
 func (alloc *allocater_t) free(blkno int) err_t {
+	alloc.Lock()
+	defer alloc.Unlock()
+
 	if fs_debug {
 		fmt.Printf("bfree: %v\n", blkno)
 	}
 	
 	if blkno < 0 {
-		panic("bad blockno")
+		panic("free bad blockno")
 	}
-
-	fblock.Lock()
-	defer fblock.Unlock()
 
 	bit := blkno
 	bitsperblk := BSIZE*8
@@ -1401,7 +1381,7 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	fbyteoff := fbit/8
 	fbitoff := uint(fbit%8)
 	if fblkno >= alloc.freestart + alloc.freelen {
-		panic("bad blockno")
+		panic("free: bad blockno")
 	}
 	fblk, err := alloc.fbread(fblkno)
 	if err != 0 {
@@ -1412,11 +1392,5 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	fblk.log_write()
 	bcache_relse(fblk, "free")
 
-	// XXX force allocation of free inode block
-	if ifreeblk == blkno {
-		ifreeblk = 0
-	}
 	return 0
 }
-
-
