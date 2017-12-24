@@ -6,7 +6,8 @@ import "sync"
 // Cache of in-mmory objects. Main invariant: an object is in memory once so
 // that threads see each other's updates.
 
-var refcache_debug = false
+const refcache_debug = false
+const eager = false
 
 type obj_t interface {
 	evict()
@@ -156,19 +157,19 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 	}
 
 	// Uncomment to test eagerly evicting references
-	// var victim obj_t
-	// if ref.refcnt == 0 {
-	// 	victim = irc._replace()   // should succeed
-	// 	if victim == nil {
-	// 		panic("refdown")
-	// 	}
-	// }
+	var victim obj_t
+	if eager && ref.refcnt == 0 {
+		victim = irc._replace()   // should succeed
+		if victim == nil {
+			panic("refdown")
+		}
+	}
 
 	defer irc.Unlock()
 
-	// if victim != nil {
-	// 	victim.evict()   // XXX in another thread?
-	// }
+	if eager && victim != nil {
+		victim.evict()   // XXX in another thread?
+	}
 }
 
 // LRU list of references

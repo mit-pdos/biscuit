@@ -138,6 +138,9 @@ func (idm *imemnode_t) evict() {
 	if fs_debug {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
+	if idm.icache.links == 0 {
+		idm.ifree()
+	}
 }
 
 func (idm *imemnode_t) ilock(s string) {
@@ -882,34 +885,64 @@ func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
 
 // frees all blocks occupied by idm
 func (idm *imemnode_t) ifree() err_t {
+	if fs_debug {
+		fmt.Printf("ifree: %d\n", idm.inum)
+	}
+	
 	allb := make([]int, 0, 10)
 	add := func(blkno int) {
 		if blkno != 0 {
 			allb = append(allb, blkno)
 		}
 	}
-
-	for i := 0; i < NIADDRS; i++ {
-		add(idm.icache.addrs[i])
-	}
-	indno := idm.icache.indir
-	for indno != 0 {
+	freeind := func(indno int) err_t {
+		if indno == 0 {
+			return 0
+		}
 		add(indno)
 		blk, err := idm.icache.mbread(indno)
 		if err != 0 {
 			return err
 		}
-		blks := blk.data[:]
+		data := blk.data[:]
 		for i := 0; i < INDADDR; i++ {
 			off := i*8
-			nblkno := readn(blks, 8, off)
+			nblkno := readn(data, 8, off)
 			add(nblkno)
 		}
-		nextoff := INDADDR*8
-		indno = readn(blks, 8, nextoff)
 		bcache_relse(blk, "ifree1")
+		return 0
 	}
 
+	for i := 0; i < NIADDRS; i++ {
+		add(idm.icache.addrs[i])
+	}
+	err := freeind(idm.icache.indir)
+	if err != 0 {
+		panic("freeind")
+	}
+	dindno := idm.icache.dindir
+	if dindno != 0 {
+		fmt.Printf("dindo %v\n", dindno)
+		add(dindno)
+		blk, err := idm.icache.mbread(dindno)
+		if err != 0 {
+			return err
+		}
+		data := blk.data[:]
+		for i := 0; i < INDADDR; i++ {
+			off := i*8
+			nblkno := readn(data, 8, off)
+			if nblkno != 0 {
+				err := freeind(nblkno)
+				if err != 0 {
+					panic("freeind")
+				}
+			}
+		}
+		bcache_relse(blk, "dindno")
+	}
+	
 	iblk, err := idm.idibread()
 	if err != 0 {
 		return err
@@ -925,6 +958,8 @@ func (idm *imemnode_t) ifree() err_t {
 
 	ifree(idm.inum)
 
+	fmt.Printf("delete %v blocks\n", len(allb))
+	
 	// could batch free
 	for _, blkno := range allb {
 		bfree(blkno)
@@ -983,6 +1018,9 @@ func ialloc() (inum_t, err_t) {
 }
 
 func ifree(inum inum_t) err_t {
+	if fs_debug {
+		fmt.Printf("ifree: mark free %d\n", inum)
+	}
 	return iallocater.alloc.free(int(inum))
 }
 

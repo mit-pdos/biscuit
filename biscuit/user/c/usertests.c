@@ -1203,7 +1203,7 @@ void
 bigfile(void)
 {
   int fd, i, total, cc;
-  #define NBLOCK 10000
+  #define NBLOCK 5000
   #define SZ 8000
 
   printf("bigfile test\n");
@@ -3571,7 +3571,6 @@ main(int argc, char *argv[])
   close(open("usertests.ran", O_CREATE));
 
   logtest();
-
   createdelete();
   linkunlink();
   concreate();

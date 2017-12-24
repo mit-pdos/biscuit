@@ -3,7 +3,7 @@ package main
 import "fmt"
 import "sync"
 
-const fs_debug    = false
+const fs_debug = false
 const iroot = 0
 
 var superb_start	int

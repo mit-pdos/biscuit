@@ -193,13 +193,15 @@ func (log *log_t) commit() {
 		b.Unlock()
 		
 		blks[i-log.diskhead] = b
-		
-		bcache_relse(b, "writelog")
 	}
 	
 	lh.w_recovernum(log.memhead)
 
 	bcache_write_async_blks(blks)  // write head
+
+	for _, b := range blks {
+		bcache_relse(b, "writelog")
+	}
 	
 	bdev_flush()   // flush log
 
