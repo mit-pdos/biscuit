@@ -754,29 +754,6 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 	return 0
 }
 
-// returns true if all the inodes on ib are also marked dead and thus this
-// inode block should be freed.
-func _alldead(ib *bdev_block_t) bool {
-	bwords := BSIZE/8
-	ret := true
-	for i := 0; i < bwords/NIWORDS; i++ {
-		icache := inode_t{ib, i}
-		if icache.itype() != I_DEAD {
-			ret = false
-			break
-		}
-	}
-	return ret
-}
-
-// caller must flush ib to disk
-func _iallocundo(iblkn int, ni *inode_t, ib *bdev_block_t) {
-	ni.w_itype(I_DEAD)
-	if _alldead(ib) {
-		bfree(iblkn)
-	}
-}
-
 // reverts icreate(). called after failure to allocate that prevents an FS
 // operation from continuing.
 func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
@@ -792,9 +769,10 @@ func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
 		return err
 	}
 	ni := &inode_t{ib, ioffset(childi)}
-	_iallocundo(iblock(childi), ni, ib)
+	ni.w_itype(I_DEAD)
 	ib.Unlock()
 	bcache_relse(ib, "create_undo")
+	ifree(childi)
 	return 0
 }
 
@@ -853,11 +831,11 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 	// write new directory entry referencing newinode
 	err = idm._deinsert(name, newinum)
 	if err != 0 {
-		_iallocundo(newbn, newinode, newiblk)
+		newinode.w_itype(I_DEAD)
+		ifree(newinum)
 	}
 	newiblk.log_write()
 	bcache_relse(newiblk, "icreate")
-
 	return newinum, err
 }
 
@@ -941,14 +919,11 @@ func (idm *imemnode_t) ifree() err_t {
 	}
 	idm.icache.itype = I_DEAD
 	idm.icache.flushto(iblk, idm.inum)
-	if _alldead(iblk) {
-		add(iblock(idm.inum))
-		iblk.Unlock()    // XXX log_write first?
-	} else {
-		iblk.Unlock()
-		iblk.log_write()
-	}
+	iblk.Unlock()
+	iblk.log_write()
 	bcache_relse(iblk, "ifree2")
+
+	ifree(idm.inum)
 
 	// could batch free
 	for _, blkno := range allb {
