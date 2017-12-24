@@ -6,17 +6,7 @@ import "unsafe"
 import "sort"
 import "strconv"
 
-// inode format:
-// bytes, meaning
-// 0-7,    inode type
-// 8-15,   link count
-// 16-23,  size in bytes
-// 24-31,  major
-// 32-39,  minor
-// 40-47,  indirect block
-// 48-80,  block addresses
-
-// ...the above comment may be out of date
+// inode format (see mkbfs.py)
 type inode_t struct {
 	iblk	*bdev_block_t
 	ioff    int
@@ -213,7 +203,7 @@ func iref(inum inum_t, s string) (*imemnode_t, err_t) {
 	return ref.obj.(*imemnode_t), err
 }
 
-// obtained the reference for an inode with the inode locked
+// Obtain the reference for an inode with the inode locked
 func iref_locked(inum inum_t, s string) (*imemnode_t, err_t) {
 	idm, err := iref(inum, s)
 	if err != 0 {
@@ -224,6 +214,7 @@ func iref_locked(inum inum_t, s string) (*imemnode_t, err_t) {
 }
 
 
+// Grab locks on inodes references in imems.  handles duplicates.
 func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 	var locked []*imemnode_t
 	sort.Slice(imems, func(i, j int) bool { return imems[i].key() < imems[j].key() })
@@ -350,8 +341,8 @@ func (idm *imemnode_t) do_unlink(name string) err_t {
 	return err
 }
 
+// create new dir ent with given inode number
 func (idm *imemnode_t) do_insert(fn string, n inum_t) err_t {
-	// create new dir ent with given inode number
 	err := idm.iinsert(fn, n)
 	if err == 0 {
 		idm._iupdate()
@@ -616,8 +607,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 	}
 }
 
-// make sure there are blocks from startblock through endblock. return blkn
-// endblock.
+// Allocates blocks from startblock through endblock. Returns blkn of endblock.
 func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, err_t) {
 	blkn := 0
 	var err err_t
@@ -640,7 +630,7 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, e
 	return blkn, 0
 }
 
-// takes as input the file offset and whether the operation is a write and
+// Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	whichblk := offset/BSIZE

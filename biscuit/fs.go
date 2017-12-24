@@ -84,7 +84,7 @@ func use_memfs() {
 	fmt.Printf("Using MEMORY FS\n")
 }
 
-// a type for an inode block/offset identifier
+// a type for an inum
 type inum_t int
 
 func fs_link(old string, new string, cwd inum_t) err_t {
@@ -1276,6 +1276,7 @@ func (sb *superblock_t) lastblock() int {
 	return fieldr(sb.data, 6)
 }
 
+// Bitmap allocater. Used for inodes and blocks
 type allocater_t struct {
 	sync.Mutex
 	freestart  int
