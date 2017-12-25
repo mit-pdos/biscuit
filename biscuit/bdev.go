@@ -380,3 +380,7 @@ func bfree(blkno int) err_t {
 	}
 	return ballocater.alloc.free(blkno)
 }
+
+func balloc_stat() string {
+	return "balloc " + ballocater.alloc.stat()
+}

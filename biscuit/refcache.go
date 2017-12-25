@@ -36,7 +36,6 @@ type refcache_t struct {
 	
 	// stats
 	nevict          int
-
 }
 
 func make_refcache(size int, async bool) *refcache_t {

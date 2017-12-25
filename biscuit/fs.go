@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "sync"
+import "strconv"
 
 const fs_debug = false
 const iroot = 0
@@ -71,6 +72,8 @@ func fs_init() *fd_t {
 
 func fs_statistics() string {
 	s := log_stat()
+	s += ialloc_stat()
+	s += balloc_stat()
 	s += bcache_stat()
 	s += inode_stat()
 	s += ahci_stat()
@@ -1283,6 +1286,11 @@ type allocater_t struct {
 	freelen  int
 	lastblk int
 	lastbyte int
+
+	// stats
+	nalloc int
+	nfree int
+	nhit  int
 }
 
 func make_allocater(start, len int) (*allocater_t) {
@@ -1313,6 +1321,7 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 	defer alloc.Unlock()
 
 	found := false
+	hit := true
 	var bit uint
 	var blk *bdev_block_t
 	var blkn int
@@ -1344,11 +1353,17 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 				oct = idx
 				found = true
 				break
+			} else {
+				hit = false
 			}
 		}
 	}
 	if !found {
 		panic("no free entries")
+	}
+	alloc.nalloc++
+	if hit {
+		alloc.nhit++
 	}
 
 	// mark as allocated
@@ -1392,6 +1407,17 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	fblk.Unlock()
 	fblk.log_write()
 	bcache_relse(fblk, "free")
-
+	alloc.nfree++
 	return 0
+}
+
+func (alloc *allocater_t) stat() string {
+	s := "allocater: #alloc "
+	s += strconv.Itoa(alloc.nalloc)
+	s += " #free "
+	s += strconv.Itoa(alloc.nfree)
+	s += " #hit "
+	s += strconv.Itoa(alloc.nhit)
+	s += "\n"
+	return s
 }

@@ -1040,3 +1040,7 @@ func ioffset(inum inum_t) int {
 	o := int(inum) % (BSIZE / ISIZE)
         return o
 }
+
+func ialloc_stat() string {
+	return "inode " + iallocater.alloc.stat()
+}

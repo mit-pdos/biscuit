@@ -173,7 +173,9 @@ type ahci_port_t struct {
 	// stats
 	nbarrier int
 	nwrite int
+	nvwrite int
 	nread int
+	nnoslot int
 }
 
 type identify_device struct {
@@ -421,13 +423,17 @@ func (p *ahci_port_t) init() bool {
 }
 
 func (p *ahci_port_t) stat() string {
-	s := "ahci: "
+	s := "ahci:"
 	s += " #flush "
 	s += strconv.Itoa(p.nbarrier)
 	s += " #read "
 	s += strconv.Itoa(p.nread)
 	s += " #write "
 	s += strconv.Itoa(p.nwrite)
+	s += " #vwrite "
+	s += strconv.Itoa(p.nvwrite)
+	s += " #noslot "
+	s += strconv.Itoa(p.nnoslot)
 	s += "\n"
 	return s
 }
@@ -620,6 +626,7 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 			if ahci_debug {
 				fmt.Printf("AHCI start: wait for slot\n")
 			}
+			p.nnoslot++
 			p.nwaiting++
 			p.cond.Wait()
 			p.nwaiting--
@@ -655,6 +662,9 @@ func (p *ahci_port_t) issue(s int, blks []*bdev_block_t, cmd uint8) {
 	fis.cflag = SATA_FIS_REG_CFLAG;
 	fis.command = cmd
 
+	if len(blks) > 1 {
+		p.nvwrite++
+	}
 	len := uint64(0)
 	if blks != nil {
 		len = p.fill_prd_v(s, blks)
