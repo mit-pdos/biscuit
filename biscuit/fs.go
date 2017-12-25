@@ -71,11 +71,12 @@ func fs_init() *fd_t {
 }
 
 func fs_statistics() string {
-	s := log_stat()
+	s := inode_stats()
+	s += log_stat()
 	s += ialloc_stat()
 	s += balloc_stat()
 	s += bcache_stat()
-	s += inode_stat()
+	s += icache_stat()
 	s += ahci_stat()
 	return s
 }
@@ -97,6 +98,8 @@ func fs_link(old string, new string, cwd inum_t) err_t {
 	if fs_debug {
 		fmt.Printf("fs_link: %v %v %v\n", old, new, cwd)
 	}
+
+	istats.nilink++
 
 	orig, err := fs_namei_locked(old, cwd, "fs_link_org")
 	if err != 0 {
@@ -139,6 +142,8 @@ func fs_unlink(paths string, cwd inum_t, wantdir bool) err_t {
 
 	op_begin("fs_unlink")
 	defer op_end()
+
+	istats.nunlink++
 
 	if fs_debug {
 		fmt.Printf("fs_unlink: %v %v %v\n", paths, cwd, wantdir)
@@ -210,6 +215,8 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	op_begin("fs_rename")
 	defer op_end()
 
+	istats.nrename++
+	
 	if fs_debug {
 		fmt.Printf("fs_rename: %v %v %v\n", oldp, newp, cwd)
 	}
@@ -568,6 +575,7 @@ func (fo *fsfops_t) reopen() err_t {
 	if err != 0 {
 		return err
 	}
+	istats.nreopen++
 	irefcache.refup(idm, "reopen")   // close will decrease it
 	idm.iunlock_refdown("reopen")
 	return 0
@@ -578,6 +586,8 @@ func (fo *fsfops_t) lseek(off, whence int) (int, err_t) {
 	fo.Lock()
 	defer fo.Unlock()
 
+	istats.nlseek++
+	
 	switch whence {
 	case SEEK_SET:
 		fo.offset = off
@@ -957,6 +967,8 @@ func fs_mkdir(paths string, mode int, cwd inum_t) err_t {
 	op_begin("fs_mkdir")
 	defer op_end()
 
+	istats.nmkdir++
+
 	if fs_debug {
 		fmt.Printf("mkdir: %v %v\n", paths, cwd)
 	}
@@ -1114,6 +1126,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor i
 var _denyopen = map[int]bool{ D_SUD: true, D_SUS: true}
 
 func fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor int) (*fd_t, err_t) {
+	istats.nopen++
 	fsf, err := _fs_open(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
 		return nil, err
@@ -1159,6 +1172,8 @@ func fs_close(priv inum_t) err_t {
 	defer op_end()
 	op_begin("fs_close")
 
+	istats.nclose++
+	
 	if fs_debug {
 		fmt.Printf("fs_close: %v\n", priv)
 	}
@@ -1189,6 +1204,7 @@ func fs_sync() err_t {
 	if memtime {
 		return 0
 	}
+	istats.nsync++
 	// ensure any fs ops in the journal preceding this sync call are
 	// flushed to disk by waiting for log commit.
 	fslog.force <- true
@@ -1201,6 +1217,7 @@ func fs_sync() err_t {
 func fs_namei(paths string, cwd inum_t) (*imemnode_t, err_t) {
 	var start *imemnode_t
 	var err err_t
+	istats.nnamei++
 	if len(paths) == 0 || paths[0] != '/' {
 		start, err = iref(cwd, "fs_namei_cwd")
 		if err != 0 {

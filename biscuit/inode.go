@@ -6,6 +6,78 @@ import "unsafe"
 import "sort"
 import "strconv"
 
+var istats inode_stats_t
+
+type inode_stats_t struct {
+	nopen int
+	nnamei int
+	nifill int
+	niupdate int
+	nistat int
+	niread int
+	niwrite int
+	nfillhole  int
+	ngrow int
+	nitrunc int
+	nimmap int
+	nifree int
+	nicreate int
+	nilink int
+	nunlink int
+	nrename int
+	nlseek int
+	nmkdir int
+	nclose int
+	nsync int
+	nreopen int
+}
+
+func inode_stats() string {
+	s := "inode"
+	s += "\n\t#nopen: "
+	s += strconv.Itoa(istats.nopen)
+	s += " \n\t#namei: "
+	s += strconv.Itoa(istats.nnamei)
+	s += " \n\t#ifill: "
+	s += strconv.Itoa(istats.nifill)
+	s += " \n\t#iupdate: "
+	s += strconv.Itoa(istats.niupdate)
+	s += " \n\t#istat: "
+	s += strconv.Itoa(istats.nistat)
+	s += " \n\t#iread: "
+	s += strconv.Itoa(istats.niread)
+	s += " \n\t#iwrite: "
+	s += strconv.Itoa(istats.niwrite)
+	s += " \n\t#grow: "
+	s += strconv.Itoa(istats.ngrow)
+	s += " \n\t#fillhole: "
+	s += strconv.Itoa(istats.nfillhole)
+	s += " \n\t#trunc: "
+	s += strconv.Itoa(istats.nitrunc)
+	s += " \n\t#mmap: "
+	s += strconv.Itoa(istats.nimmap)
+	s += " \n\t#ifree: "
+	s += strconv.Itoa(istats.nifree)
+	s += " \n\t#icreate: "
+	s += strconv.Itoa(istats.nicreate)
+	s += " \n\t#link: "
+	s += strconv.Itoa(istats.nilink)
+	s += " \n\t#unlink: "
+	s += strconv.Itoa(istats.nunlink)
+	s += " \n\t#rename: "
+	s += strconv.Itoa(istats.nrename)
+	s += " \n\t#lseek: "
+	s += strconv.Itoa(istats.nlseek)
+	s += " \n\t#mkdir: "
+	s += strconv.Itoa(istats.nmkdir)
+	s += " \n\t#close: "
+	s += strconv.Itoa(istats.nclose)
+	s += " \n\t#reopen: "
+	s += strconv.Itoa(istats.nreopen)
+	s += "\n"
+	return s
+}
+
 // inode format (see mkbfs.py)
 type inode_t struct {
 	iblk	*bdev_block_t
@@ -176,7 +248,7 @@ func (idm *imemnode_t) iunlock(s string) {
 // inode refcache
 var irefcache	= make_refcache(syslimit.vnodes, true)
 
-func inode_stat() string {
+func icache_stat() string {
 	s := "icache: size "
 	s += strconv.Itoa(len(irefcache.refs))
 	s += " #evictions "
@@ -256,6 +328,7 @@ func (idm *imemnode_t) idm_init(inum inum_t) err_t {
 	if err != 0 {
 		return err
 	}
+	istats.nifill++
 	idm.icache.fill(blk, inum)
 	blk.Unlock()
 	bcache_relse(blk, "idm_init")
@@ -268,6 +341,7 @@ func (idm *imemnode_t) iunlock_refdown(s string) {
 }
 
 func (idm *imemnode_t) _iupdate() err_t {
+	istats.niupdate++
 	iblk, err := idm.idibread()
 	if err != 0 {
 		return err
@@ -311,6 +385,7 @@ func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, er
 }
 
 func (idm *imemnode_t) do_stat(st *stat_t) err_t {
+	istats.nistat++
 	st.wdev(0)
 	st.wino(uint(idm.inum))
 	st.wmode(idm.mkmode())
@@ -626,6 +701,11 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, e
 
 	if whichblk >= lastblk {   // a hole?
 		// allocate the missing blocks
+		if whichblk > lastblk && writing {
+			istats.nfillhole++
+		} else if writing {
+			istats.ngrow++
+		}
 		for b := lastblk; b <= whichblk; b++ {
 			// XXX we could remember where the last slot was
 			blkn, err = idm.fbn2block(b, writing)
@@ -686,6 +766,7 @@ func min(a, b int) int {
 }
 
 func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
+	istats.niread++
 	isz := idm.icache.size
 	c := 0
 	for offset < isz && dst.remain() != 0 {
@@ -716,6 +797,7 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 }
 
 func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
+	istats.niwrite++
 	sz := src.totalsz()
 	newsz := offset + sz
 	c := 0
@@ -761,6 +843,7 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 		}
 
 	}
+	istats.nitrunc++
 	// inode is flushed by do_itrunc
 	idm.icache.size = int(newlen)
 	return 0
@@ -805,6 +888,8 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 		return de.inum, -EEXIST
 	}
 
+	istats.nicreate++
+	
 	// allocate new inode
 	newinum, err := ialloc()
 	newbn := iblock(newinum)
@@ -863,6 +948,8 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 	if len == -1 || offset + len > isz {
 		len = isz - offset
 	}
+
+	istats.nimmap++
 	o := rounddown(offset, PGSIZE)
 	len = roundup(offset + len, PGSIZE) - o
 	pgc := len / PGSIZE
@@ -874,6 +961,9 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 		}
 		buf.Unlock()
 		if inc {    // the VM system is going to use the page
+			// XXX don't release buffer (i.e., pin in cache)
+			// so that writes make it to the file. modify vm
+			// system to call bcache_relse.
 			refup(buf.pa)
 		}
 		pgn := i / PGSIZE
@@ -894,6 +984,7 @@ func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
 
 // frees all blocks occupied by idm
 func (idm *imemnode_t) ifree() err_t {
+	istats.nifree++
 	if fs_debug {
 		fmt.Printf("ifree: %d\n", idm.inum)
 	}
