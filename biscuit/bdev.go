@@ -41,6 +41,10 @@ func (blk *bdev_block_t) evict() {
 	blk.free_page()
 }
 
+func (blk *bdev_block_t) evictnow() bool {
+	return false
+}
+
 func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
 	b := &bdev_block_t{};
 	b.block = block
@@ -132,7 +136,7 @@ func bdev_flush() {
 // interrupt handler).
 //
 
-var brefcache = make_refcache(syslimit.blocks)
+var brefcache = make_refcache(syslimit.blocks, false)
 
 // returns the reference to a locked buffer
 func bref(blk int, s string) (*bdev_block_t, bool, err_t) {

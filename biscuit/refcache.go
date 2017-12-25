@@ -7,10 +7,11 @@ import "sync"
 // that threads see each other's updates.
 
 const refcache_debug = false
-const eager = false
+const always_eager = false
 
 type obj_t interface {
 	evict()
+	evictnow() bool
 	key() int
 }
 
@@ -28,18 +29,20 @@ type ref_t struct {
 
 type refcache_t struct {
 	sync.Mutex
-	size           int
+	maxsize           int
 	refs           map[int]*ref_t    // XXX use fsrb.go instead?
 	reflru         reflru_t
+	evict_async    bool
 	
 	// stats
 	nevict          int
 
 }
 
-func make_refcache(size int) *refcache_t {
+func make_refcache(size int, async bool) *refcache_t {
 	ic := &refcache_t{}
-	ic.size = size
+	ic.maxsize = size
+	ic.evict_async = async
 	ic.refs = make(map[int]*ref_t, size)
 	return ic
 }
@@ -54,15 +57,19 @@ func (irc *refcache_t) nlive() int {
 	return n
 }
 
+func (irc *refcache_t) _delete(ir *ref_t) {
+	delete(irc.refs, ir.key)
+	irc.reflru.remove(ir)
+	irc.nevict++
+}
+
 func (irc *refcache_t) _replace() obj_t {
 	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
 		if ir.refcnt == 0 {
 			if refcache_debug {
 				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
 			}
-			irc.nevict++
-			delete(irc.refs, ir.key)
-			irc.reflru.remove(ir)
+			irc._delete(ir)
 			return ir.obj
 		}
 	}
@@ -86,10 +93,10 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 	}
 
 	var victim obj_t
-	if len(irc.refs) >= irc.size {
+	if len(irc.refs) >= irc.maxsize {
 		victim = irc._replace()
 		if victim == nil {
-			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.size)
+			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
 			return nil, -ENOMEM
 		}
         }
@@ -107,13 +114,12 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 	if refcache_debug {
 		fmt.Printf("ref miss %v cnt %v %s\n", key, ref.refcnt, s)
 	}
-
 	
 	irc.Unlock()
 
 	// release cache lock, now free victim
 	if victim != nil {
-		victim.evict()   // XXX in another thread?
+		irc.doevict(victim)
 	}
 
 	return ref, 0
@@ -156,21 +162,29 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 		panic("refdown")
 	}
 
-	// Uncomment to test eagerly evicting references
 	var victim obj_t
-	if eager && ref.refcnt == 0 {
-		victim = irc._replace()   // should succeed
-		if victim == nil {
-			panic("refdown")
+	if ref.refcnt == 0 {
+		if ref.obj.evictnow() || always_eager {
+			irc._delete(ref)
+			victim = ref.obj
 		}
 	}
 
 	defer irc.Unlock()
 
-	if eager && victim != nil {
-		victim.evict()   // XXX in another thread?
+	if victim != nil {
+		irc.doevict(victim)
 	}
 }
+
+func (irc *refcache_t) doevict(victim obj_t) {
+	if irc.evict_async {
+		go victim.evict()
+	} else {
+		victim.evict()
+	}
+}
+
 
 // LRU list of references
 type reflru_t struct {

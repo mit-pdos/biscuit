@@ -139,8 +139,17 @@ func (idm *imemnode_t) evict() {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
 	if idm.icache.links == 0 {
+		op_begin("evict")
 		idm.ifree()
+		op_end()
 	}
+}
+
+func (idm *imemnode_t) evictnow() bool {
+	idm.Lock()
+	r := idm.icache.links == 0
+	idm.Unlock()
+	return r
 }
 
 func (idm *imemnode_t) ilock(s string) {
@@ -165,7 +174,7 @@ func (idm *imemnode_t) iunlock(s string) {
 }
 
 // inode refcache
-var irefcache	= make_refcache(syslimit.vnodes)
+var irefcache	= make_refcache(syslimit.vnodes, true)
 
 func inode_stat() string {
 	s := "icache: size "
@@ -923,7 +932,6 @@ func (idm *imemnode_t) ifree() err_t {
 	}
 	dindno := idm.icache.dindir
 	if dindno != 0 {
-		fmt.Printf("dindo %v\n", dindno)
 		add(dindno)
 		blk, err := idm.icache.mbread(dindno)
 		if err != 0 {
@@ -958,8 +966,6 @@ func (idm *imemnode_t) ifree() err_t {
 
 	ifree(idm.inum)
 
-	fmt.Printf("delete %v blocks\n", len(allb))
-	
 	// could batch free
 	for _, blkno := range allb {
 		bfree(blkno)
