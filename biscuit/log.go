@@ -36,9 +36,11 @@ type log_t struct {
 
 	// some stats
 	maxentries_per_op int
-	nblkcommitted      int
+	nblkcommitted     int
 	ncommit           int
 	napply            int
+	nabsorption       int
+	nlogwrite         int
 }
 
 // first log header block format
@@ -101,6 +103,7 @@ func (l *log_t) full(nops int) bool {
 }
 
 func (log *log_t) addlog(buf *bdev_block_t) {
+	log.nlogwrite++
 	// log absorption.
 	if i, ok := log.logmap[buf.block]; ok {
 		l := log.log[i]
@@ -112,6 +115,7 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 			// is in a later transaction, we know this later
 			// transaction will commit with the one that modified
 			// this block earlier.
+			log.nabsorption++
 			bcache_relse(buf, "absorption")
 			return
 		}
@@ -343,6 +347,10 @@ func log_stat() string {
 	s += strconv.Itoa(fslog.ncommit)
 	s += " napply "
 	s += strconv.Itoa(fslog.napply)
+	s += " nlogwrite "
+	s += strconv.Itoa(fslog.nlogwrite)
+	s += " nabsorption "
+	s += strconv.Itoa(fslog.nabsorption)
 	s += "\n"
 	return s
 }

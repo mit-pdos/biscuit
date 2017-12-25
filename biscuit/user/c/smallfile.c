@@ -12,9 +12,10 @@
 #define N 1000
 #define FILESIZE 100
 #define NAMESIZE 100
+#define BUFSIZE  4096
 
 static char name[NAMESIZE];
-static char buf[FILESIZE]; 
+static char buf[BUFSIZE]; 
 static char *dir;
 
 void printstats(int reset)
@@ -22,14 +23,14 @@ void printstats(int reset)
   int fd;
   int r;
 
-  sprintf(name, "%s/stats", dir);
+  sprintf(name, "dev/stats");
   if((fd = open(name, O_RDONLY)) < 0) {
     return;
   }
 
   memset(buf, 0, FILESIZE);
 
-  if ((r = read(fd, buf, FILESIZE)) < 0) {
+  if ((r = read(fd, buf, BUFSIZE)) < 0) {
     perror("read");
     exit(1);
   }

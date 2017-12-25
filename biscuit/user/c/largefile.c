@@ -24,7 +24,7 @@ void printstats(int reset)
   int fd;
   int r;
 
-  sprintf(name, "%s/stats", dir);
+  sprintf(name, "dev/stats");
   if((fd = open(name, O_RDONLY)) < 0) {
     return;
   }
