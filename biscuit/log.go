@@ -35,12 +35,14 @@ type log_t struct {
 	commitwait	chan bool
 
 	// some stats
-	maxentries_per_op int
+	maxblks_per_op int
 	nblkcommitted     int
 	ncommit           int
 	napply            int
 	nabsorption       int
 	nlogwrite         int
+	nblkapply         int
+	nabsorpapply      int
 }
 
 // first log header block format
@@ -136,16 +138,25 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 
 // headblk is in cache
 func (log *log_t) apply(headblk *bdev_block_t) {
+	done := make(map[int]bool, log.loglen)
+		
 	if log_debug {
 		fmt.Printf("apply log: %v %v %v\n", log.memhead, log.diskhead, log.loglen)
 	}
 	
 	// the log is committed. if we crash while installing the blocks to
-	// their destinations, we should be able to recover
-	for i := 0; i < log.memhead; i++ {
+	// their destinations, we should be able to recover.  install backwards,
+	// writing the last version of a block (and not earlier versions).
+	for i := log.memhead-1; i >= 0; i-- {
 		l := log.log[i]
-		bcache_write_async(l.buf)
-		bcache_relse(l.buf, "apply")
+		log.nblkapply++
+		if _, ok := done[l.buf.block]; !ok {
+			bcache_write_async(l.buf)
+			bcache_relse(l.buf, "apply")
+			done[l.buf.block] = true
+		} else {
+			log.nabsorpapply++
+		}
 	}
 
 	bdev_flush()  // flush apply
@@ -170,8 +181,8 @@ func (log *log_t) commit() {
 
 	log.ncommit++
 	newblks := log.memhead-log.diskhead
-	if newblks > log.maxentries_per_op {
-		log.maxentries_per_op = newblks
+	if newblks > log.maxblks_per_op {
+		log.maxblks_per_op = newblks
 	}
 
 	// read the log header from disk; it may contain commit blocks from
@@ -214,6 +225,10 @@ func (log *log_t) commit() {
 	bdev_flush()   // commit log header
 
 	log.nblkcommitted += newblks
+
+	if newblks != len(blks) {
+		panic("xxx")
+	}
 
 	// apply log only when there is no room for another op. this avoids
 	// applies when there room in the log (e.g., a sync forced the log)
@@ -339,18 +354,23 @@ func log_init(logstart, loglen int) err_t {
 }
 
 func log_stat() string {
-	s := "log: maxentries_per_op "
-	s += strconv.Itoa(fslog.maxentries_per_op)
-	s += " nblkcommited "
-	s += strconv.Itoa(fslog.nblkcommitted)
-	s += " ncommit "
-	s += strconv.Itoa(fslog.ncommit)
-	s += " napply "
-	s += strconv.Itoa(fslog.napply)
-	s += " nlogwrite "
+	s := "log:"
+	s += "\n\tnlogwrite "
 	s += strconv.Itoa(fslog.nlogwrite)
-	s += " nabsorption "
+	s += "\n\tnabsorp "
 	s += strconv.Itoa(fslog.nabsorption)
+	s += "\n\tnblkcommited "
+	s += strconv.Itoa(fslog.nblkcommitted)
+	s += "\n\tncommit "
+	s += strconv.Itoa(fslog.ncommit)
+	s += "\n\tmaxblks_per_commit "
+	s += strconv.Itoa(fslog.maxblks_per_op)
+	s += "\n\tnapply "
+	s += strconv.Itoa(fslog.napply)
+	s += "\n\tnblkapply "
+	s += strconv.Itoa(fslog.nblkapply)
+	s += "\n\tnabsorpapply "
+	s += strconv.Itoa(fslog.nabsorpapply)
 	s += "\n"
 	return s
 }
