@@ -330,7 +330,7 @@ var ballocater *ballocater_t
 func balloc_init(start,len, first int) {
 	ballocater = &ballocater_t{}
 	ballocater.alloc = make_allocater(start, len)
-	fmt.Printf("first %v\n", first)
+	fmt.Printf("first datablock %v\n", first)
 	ballocater.first = first
 }
 
