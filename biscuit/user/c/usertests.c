@@ -1178,20 +1178,26 @@ bigwrite(void)
   printf("bigwrite test\n");
 
   unlink("bigwrite");
-  for(sz = 499; sz < 12*512; sz += 471){
+  for(sz = 499; sz < 12*BSIZE; sz += 471){
     fd = open("bigwrite", O_CREATE | O_RDWR);
     if(fd < 0){
       printf("cannot create bigwrite\n");
       exit(0);
     }
     int i;
+    char *b = malloc(sz);
+    if (b == NULL) {
+      printf("malloc failed\n");
+      exit(0);
+    }
     for(i = 0; i < 2; i++){
-      int cc = write(fd, buf, sz);
+      int cc = write(fd, b, sz);
       if(cc != sz){
         printf("write(%d) ret %d\n", sz, cc);
         exit(0);
       }
     }
+    free(b);
     close(fd);
     unlink("bigwrite");
   }

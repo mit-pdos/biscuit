@@ -7,7 +7,7 @@ const log_debug = false
 
 // file system journal
 var fslog	= log_t{}
-var loglen = 0
+var loglen      = 0    // for marshalling/unmarshalling
 
 type logread_t struct {
 	buf		*bdev_block_t
@@ -35,7 +35,7 @@ type log_t struct {
 	commitwait	chan bool
 
 	// some stats
-	maxblks_per_op int
+	maxblks_per_op    int
 	nblkcommitted     int
 	ncommit           int
 	napply            int

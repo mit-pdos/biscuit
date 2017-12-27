@@ -16,6 +16,7 @@ type inode_stats_t struct {
 	nistat int
 	niread int
 	niwrite int
+	ndo_write int
 	nfillhole  int
 	ngrow int
 	nitrunc int
@@ -46,6 +47,8 @@ func inode_stats() string {
 	s += strconv.Itoa(istats.nistat)
 	s += " \n\t#iread: "
 	s += strconv.Itoa(istats.niread)
+	s += " \n\t#do_write: "
+	s += strconv.Itoa(istats.ndo_write)
 	s += " \n\t#iwrite: "
 	s += strconv.Itoa(istats.niwrite)
 	s += " \n\t#grow: "
@@ -379,9 +382,35 @@ func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, er
 	if append {
 		offset = idm.icache.size
 	}
-	wrote, err := idm.iwrite(src, offset)
-	idm._iupdate()
-	return wrote, err
+
+	// break write system calls into one or more calls with no more than
+	// maxblkpersys blocks per call.
+	max := maxblkspersys * BSIZE
+	sz := src.totalsz()
+	i := 0
+
+	if fs_debug {
+		fmt.Printf("dowrite: %v %v %v\n", idm.inum, offset, sz)
+	}
+
+	istats.ndo_write++
+	for i < sz {
+		n := sz-i
+		if n > max {
+			n = max
+		}
+		op_begin("dowrite")
+		wrote, err := idm.iwrite(src, offset+i, n)
+		idm._iupdate()
+		op_end()
+
+		if err != 0 {
+			return i, err			
+		}
+
+		i += wrote
+	}
+	return i, 0
 }
 
 func (idm *imemnode_t) do_stat(st *stat_t) err_t {
@@ -796,9 +825,9 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	return c, 0
 }
 
-func (idm *imemnode_t) iwrite(src userio_i, offset int) (int, err_t) {
+func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
 	istats.niwrite++
-	sz := src.totalsz()
+	sz := min(src.totalsz(), n)
 	newsz := offset + sz
 	c := 0
 	for c < sz {

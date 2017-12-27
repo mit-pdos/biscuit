@@ -481,13 +481,6 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 	fo.Lock()
 	defer fo.Unlock()
 
-	op_begin("_write")
-	defer op_end()
-
-	if fs_debug {
-		fmt.Printf("_write: %v %v\n", fo.priv, toff)
-	}
-
 	useoffset := toff != -1
 	offset := fo.offset
 	append := fo.append
@@ -499,11 +492,6 @@ func (fo *fsfops_t) _write(src userio_i, toff int) (int, err_t) {
 		offset = toff
 		append = false
 	}
-	
-	if fs_debug {
-		fmt.Printf("_write off: %v %v\n", fo.priv, offset)
-	}
-	
 	idm, err := iref_locked(fo.priv, "_write")
 	if err != 0 {
 		return 0, err
