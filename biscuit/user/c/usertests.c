@@ -2,7 +2,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-char buf[8192];
+#define BSIZE  4096
+char buf[2*BSIZE];
 char name[3];
 char *echoargv[] = { "echo", "ALL", "TESTS", "PASSED", 0 };
 
@@ -579,9 +580,9 @@ fourfiles(void)
         exit(0);
       }
       
-      memset(buf, '0'+pi, 512);
+      memset(buf, '0'+pi, BSIZE);
       for(i = 0; i < 12; i++){
-        if((n = write(fd, buf, 500)) != 500){
+        if((n = write(fd, buf, BSIZE)) != BSIZE){
           printf("write failed %d\n", n);
           exit(0);
         }
@@ -608,7 +609,7 @@ fourfiles(void)
       total += n;
     }
     close(fd);
-    if(total != 12*500){
+    if(total != 12*BSIZE){
       printf("wrong length %d\n", total);
       exit(0);
     }
@@ -798,8 +799,6 @@ linktest(void)
 
   printf("linktest ok\n");
 }
-
-#define BSIZE  4096
 
 struct  __attribute__((packed)) dirent_t {
 #define NMAX	14
