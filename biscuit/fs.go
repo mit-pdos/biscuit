@@ -146,7 +146,7 @@ func fs_unlink(paths string, cwd inum_t, wantdir bool) err_t {
 	istats.nunlink++
 
 	if fs_debug {
-		fmt.Printf("fs_unlink: %v %v %v\n", paths, cwd, wantdir)
+		fmt.Printf("fs_unlink: %v cwd %v dir? %v\n", paths, cwd, wantdir)
 	}
 
 	var child *imemnode_t
@@ -154,33 +154,38 @@ func fs_unlink(paths string, cwd inum_t, wantdir bool) err_t {
 	var err err_t
 	var childi inum_t
 
-	par, err = fs_namei_locked(dirs, cwd, "fs_unlink")
+	par, err = fs_namei_locked(dirs, cwd, "fs_unlink_par")
 	if err != 0 {
 		return err
 	}
 	childi, err = par.ilookup(fn)
-	par.iunlock("fs_unlink_par")
 	if err != 0 {
-		irefcache.refdown(par, "fs_unlink_par")
+		par.iunlock_refdown("fs_unlink_par")
 		return err
 	}
 	child, err = iref(childi, "fs_unlink_child")
 	if err != 0 {
-		irefcache.refdown(par, "fs_unlink_par")
+		par.iunlock_refdown("fs_unlink_par")
 		return err
 	}
+	// unlock parent after we have a ref to child
+	par.iunlock("fs_unlink_par")
 
 	// acquire both locks
 	iref_lockall([]*imemnode_t{par, child})
 	defer par.iunlock_refdown("fs_unlink_par")
 	defer child.iunlock_refdown("fs_unlink_child")
 	
-	// recheck if child still exists, since some other thread may have
-	// modifed par but par and child won't disappear because we have
-	// references to them.
-	childi, err = par.ilookup(fn)
+	// recheck if child still exists (same name, same inum), since some
+	// other thread may have modifed par but par and child won't disappear
+	// because we have references to them.
+	inum, err := par.ilookup(fn)
 	if err != 0 {
 		return err
+	}
+	// name was deleted and recreated?
+	if inum != childi {
+		return -ENOENT
 	}
 
 	err = child.do_dirchk(wantdir)
@@ -188,7 +193,7 @@ func fs_unlink(paths string, cwd inum_t, wantdir bool) err_t {
 		return err
 	}
 
-	// finally, remove directory
+	// finally, remove directory entry
 	err = par.do_unlink(fn)
 	if err != 0 {
 		return err
@@ -218,7 +223,7 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	istats.nrename++
 	
 	if fs_debug {
-		fmt.Printf("fs_rename: %v %v %v\n", oldp, newp, cwd)
+		fmt.Printf("fs_rename: src %v dst %v %v\n", oldp, newp, cwd)
 	}
 
 	// one rename at the time
@@ -234,16 +239,17 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	}
 
 	childi, err := opar.ilookup(ofn)
-	opar.iunlock("fs_rename_par")
 	if err != 0 {
-		irefcache.refdown(opar, "fs_rename_opar")
+		opar.iunlock_refdown("fs_rename_opar")
 		return err
 	}
 	ochild, err := iref(childi, "fs_rename_ochild")
 	if err != 0 {
-		irefcache.refdown(opar, "fs_rename_opar")
+		opar.iunlock_refdown("fs_rename_opar")
 		return err
 	}
+	// unlock par after we have ref to child
+	opar.iunlock("fs_rename_par")
 
 	npar, err := fs_namei(ndirs, cwd)
 	if err != 0 {
@@ -270,14 +276,24 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	newexists := false
 	// lookup newchild and try to lock all inodes involved
 	for {
-		nchild, err = fs_namei(newp, cwd)
+		npar.Lock()
+		nchildinum, err := npar.ilookup(nfn)
 		if err != 0 && err != -ENOENT {
 			irefcache.refdown(opar, "fs_name_opar")
 			irefcache.refdown(ochild, "fs_name_ochild")	
-			irefcache.refdown(npar, "fs_name_npar")
+			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
-		
+		var err1 err_t
+		nchild, err1 = iref(nchildinum, "fs_rename_ochild")
+		if err1 != 0 {
+			irefcache.refdown(opar, "fs_name_opar")
+			irefcache.refdown(ochild, "fs_name_ochild")	
+			npar.iunlock_refdown("fs_name_npar")
+			return err
+		}
+		npar.Unlock()
+
 		var inodes []*imemnode_t
 		var locked []*imemnode_t
 		if err == 0 {
@@ -286,14 +302,15 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		} else {
 			inodes = []*imemnode_t{opar, ochild, npar}
 		}
+		
 		locked = iref_lockall(inodes)
 		// defers are run last-in-first-out
 		for _, v := range inodes {
-			defer irefcache.refdown(v, "rename_opar")
+			defer irefcache.refdown(v, "rename")
 		}
 
 		for _, v := range locked {
-			defer v.iunlock("rename_opar")
+			defer v.iunlock("rename")
 		}
 		
 		// check if the tree is still the same. an unlink or link may
@@ -302,21 +319,21 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		if err != 0 {
 			return err
 		}
+		// has ofn been removed but a new file ofn has been created?
 		if childi != ochild.inum {
-			panic("fs_rename\n")
+			return -ENOENT
 		}
 		
-		_, err = npar.ilookup(nfn)
+		childi, err = npar.ilookup(nfn)
 		// it existed before and still exists
-		if newexists && err == 0 { 
+		if newexists && err == 0 && childi == nchild.inum { 
 			break
 		}
 		// it didn't exist before and still doesn't exist
 		if !newexists && err == -ENOENT {
 			break
 		}
-		// it existed but now it doesn't. but, we now have
-		// parent locked and we don't need nchild lock.
+		// it existed but now it doesn't.
 		if newexists && err == -ENOENT {
 			newexists = false
 			nchild.iunlock_refdown("rename_child")
@@ -328,10 +345,13 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		if cnt > 100 {
 			panic("rename: panic\n")
 		}
-		
+
 		// ochildi changed or childi was created; retry, to grab also its lock
 		for _, v := range locked {
 			v.iunlock("fs_rename_opar")
+		}
+		if newexists {
+			irefcache.refdown(nchild, "fs_rename_nchild")
 		}
 	}
 

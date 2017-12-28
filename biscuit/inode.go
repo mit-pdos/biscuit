@@ -208,6 +208,7 @@ func (idm *imemnode_t) key() int {
 	return int(idm.inum)
 }
 
+// No other thread should have a reference to this inode.
 func (idm *imemnode_t) evict() {
 	idm._derelease()
 	if fs_debug {
@@ -236,13 +237,13 @@ func (idm *imemnode_t) ilock(s string) {
 		panic("negative inum")
 	}
 	idm._amlocked = true
-	// fmt.Printf("ilock: acquired %v %s\n", idm.inum, s)
+	//fmt.Printf("ilock: acquired %v %s\n", idm.inum, s)
 }
 
 func (idm *imemnode_t) iunlock(s string) {
-	// fmt.Printf("iunlock: release %v %v\n", idm.inum, s)
+	//fmt.Printf("iunlock: release %v %v\n", idm.inum, s)
 	if !idm._amlocked {
-		panic("iunlock")
+		panic("iunlock:" + s)
 	}
 	idm._amlocked = false
 	idm.Unlock()
