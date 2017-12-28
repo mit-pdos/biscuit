@@ -350,9 +350,12 @@ func balloc() (int, err_t) {
 	if err != 0 {
 		return 0, err
 	}
-	if ret < 0 || ret >= superb.lastblock() {
+	if ret < 0 {
+		panic("balloc: bad blkn")
+	}
+	if ret >= superb.lastblock() {
 		fmt.Printf("blkn %v last %v\n", ret, superb.lastblock())
-		panic("balloc: too big blkn")
+		return 0, -ENOMEM
 	}
 	blk, err := bcache_get_zero(ret, "balloc", true)
 	if err != 0 {

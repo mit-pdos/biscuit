@@ -3,6 +3,8 @@
 #include <unistd.h>
 
 #define BSIZE  4096
+#define NADDR  (BSIZE/8)
+
 char buf[2*BSIZE];
 char name[3];
 char *echoargv[] = { "echo", "ALL", "TESTS", "PASSED", 0 };
@@ -12,8 +14,9 @@ char *echoargv[] = { "echo", "ALL", "TESTS", "PASSED", 0 };
 #define exec(x, y)	execv(x, y)
 #define kill(x)		kill(x, SIGKILL)
 
+
 #define O_CREATE	O_CREAT
-#define MAXFILE		1024
+#define MAXFILE		NADDR*NADDR
 
 // does chdir() call iput(p->cwd) in a transaction?
 void
@@ -201,7 +204,7 @@ writetest1(void)
 
   for(i = 0; i < MAXFILE; i++){
     ((int*)buf)[0] = i;
-    if(write(fd, buf, 512) != 512){
+    if(write(fd, buf, BSIZE) != BSIZE){
       printf("error: write big file failed\n");
       exit(0);
     }
@@ -217,14 +220,14 @@ writetest1(void)
 
   n = 0;
   for(;;){
-    i = read(fd, buf, 512);
+    i = read(fd, buf, BSIZE);
     if(i == 0){
       if(n == MAXFILE - 1){
         printf("read only %d blocks from big", n);
         exit(0);
       }
       break;
-    } else if(i != 512){
+    } else if(i != BSIZE){
       printf("read failed %d\n", i);
       exit(0);
     }
@@ -3597,7 +3600,7 @@ main(int argc, char *argv[])
 
   opentest();
   writetest();
-  writetest1();
+  // writetest1();    // make sure disk is bigger then MAXFILE blocks
   createtest();
 
   openiputtest();
