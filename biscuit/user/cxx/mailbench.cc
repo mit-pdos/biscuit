@@ -215,6 +215,7 @@ create_spool(const string &base)
   xmkdir(base + "/pid");
   xmkdir(base + "/todo");
   xmkdir(base + "/mess");
+  sync();
 }
 
 static void
@@ -224,6 +225,7 @@ create_maildir(const string &base)
   xmkdir(base + "/tmp");
   xmkdir(base + "/new");
   xmkdir(base + "/cur");
+  sync();
 }
 
 void

@@ -55,6 +55,7 @@ public:
     if (fstatx(tmpfd, &st, STAT_OMIT_NLINK) < 0)
       edie("fstat failed");
 
+    fsync(tmpfd);
     close(tmpfd);
 
     // Create envelope
@@ -65,6 +66,7 @@ public:
     if (envfd < 0)
       edie("open %s failed", envname);
     xwrite(envfd, recipient, strlen(recipient));
+    fsync(envfd);
     close(envfd);
 
     // Move message into spool

@@ -47,6 +47,7 @@ public:
     struct stat st;
     if (fstatx(fd, &st, STAT_OMIT_NLINK) < 0)
       edie("fstat %s failed", tmppath.c_str());
+    fsync(fd);
     close(fd);
 
     // Deliver message
