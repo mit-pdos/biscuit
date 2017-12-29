@@ -312,7 +312,7 @@ func log_daemon(l *log_t) {
 }
 
 func op_begin(s string) {
-	if memtime {
+	if memfs {
 		return
 	}
 	<- fslog.admission
@@ -322,7 +322,7 @@ func op_begin(s string) {
 }
 
 func op_end() {
-	if memtime {
+	if memfs {
 		return
 	}
 	fslog.done <- true
@@ -333,7 +333,7 @@ func op_end() {
 // page the logging layer refdowns when it it is done with the page.  the caller
 // of log_write shouldn't hold buf's lock.
 func (b *bdev_block_t) log_write() {
-	if memtime {
+	if memfs {
 		return
 	}
 	if log_debug {
@@ -344,6 +344,9 @@ func (b *bdev_block_t) log_write() {
 }
 
 func log_init(logstart, loglen int) err_t {
+	if memfs {
+		return 0
+	}
 	fslog.init(logstart, loglen)
 	err := log_recover()
 	if err != 0 {

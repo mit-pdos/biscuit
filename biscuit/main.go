@@ -261,7 +261,7 @@ var syslimit = syslimit_t {
 	routes:		32,
 	tcpsegs:	16,
 	socks:		1e5,
-	vnodes:		1000, // 1e6,
+	vnodes:		10000, // 1e6,
 	dirents:	1 << 20,
 	pipes:		1e4,
 	// 8GB of block pages
@@ -3534,7 +3534,6 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	// use_memfs()
 	rf := fs_init()
 
 	exec := func(cmd string, args []string) {

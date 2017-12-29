@@ -4,6 +4,7 @@ import "fmt"
 import "sync"
 import "strconv"
 
+const memfs = false
 const fs_debug = false
 const iroot = 0
 
@@ -11,13 +12,9 @@ var superb_start	int
 var superb		superblock_t
 
 func fs_init() *fd_t {
-
-	// if INT_DISK < 0 {
-	// 	panic("no disk")
-	// }
-	// go trap_disk(uint(INT_DISK))
-	// // we are now prepared to take disk interrupts
-	// irq_unmask(IRQ_DISK)
+	if memfs {
+		fmt.Printf("Using MEMORY FS\n")
+	}
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
@@ -81,12 +78,6 @@ func fs_statistics() string {
 	return s
 }
 
-var memtime = false
-
-func use_memfs() {
-	memtime = true
-	fmt.Printf("Using MEMORY FS\n")
-}
 
 // a type for an inum
 type inum_t int
@@ -1209,7 +1200,7 @@ func fs_stat(path string, st *stat_t, cwd inum_t) err_t {
 }
 
 func fs_sync() err_t {
-	if memtime {
+	if memfs {
 		return 0
 	}
 	istats.nsync++

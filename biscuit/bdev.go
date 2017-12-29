@@ -38,6 +38,9 @@ func (blk *bdev_block_t) evict() {
 	if bdev_debug {
 		fmt.Printf("evict: block %v %#x %v\n", blk.block, blk.pa, refcnt(blk.pa))
 	}
+	if memfs {
+		panic("Running with memory FS")
+	}
 	blk.free_page()
 }
 

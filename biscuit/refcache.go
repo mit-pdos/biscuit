@@ -192,7 +192,7 @@ type reflru_t struct {
 }
 
 func (rl *reflru_t) mkhead(ir *ref_t) {
-	if memtime {
+	if memfs {
 		return
 	}
 	rl._mkhead(ir)
@@ -230,7 +230,7 @@ func (rl *reflru_t) _remove(ir *ref_t) {
 }
 
 func (rl *reflru_t) remove(ir *ref_t) {
-	if memtime {
+	if memfs {
 		return
 	}
 	rl._remove(ir)
