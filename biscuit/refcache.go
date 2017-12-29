@@ -3,8 +3,9 @@ package main
 import "fmt"
 import "sync"
 
-// Cache of in-mmory objects. Main invariant: an object is in memory once so
-// that threads see each other's updates.
+// Fixed-size cache of objects. Main invariant: an object is in memory once so
+// that threads see each other's updates.  An object can be evicted only when no
+// thread has a reference to the object.
 
 const refcache_debug = false
 const always_eager = false
