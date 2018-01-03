@@ -147,7 +147,7 @@ int main(int argc, char *argv[])
   time = (after.tv_sec - before.tv_sec) * 1000000 +
 	(after.tv_usec - before.tv_usec);
   tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
-  printf("makefile %d MB %ld usec throughput %5.1f KB/s\n", FILESIZE/(1024*1024), time, tput);
+  printf("makefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
 
   printstats(0);
     
@@ -158,7 +158,7 @@ int main(int argc, char *argv[])
   time = (after.tv_sec - before.tv_sec) * 1000000 +
 	(after.tv_usec - before.tv_usec);
   tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
-  printf("writefile %d MB %ld usec throughput %5.1f KB/s\n", FILESIZE/(1024*1024), time, tput);
+  printf("writefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
 
   printstats(0);
   return 0;
