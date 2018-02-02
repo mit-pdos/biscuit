@@ -848,8 +848,8 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
 		dst := b.data[s:s+m]
 		read, err := src.uioread(dst)
 		b.Unlock()
-		b.log_write()
-		bcache_relse(b, "_iwrite")
+		b.log_write_ordered()
+		bcache_relse(b, "iwrite")
 		if err != 0 {
 			return c, err
 		}

@@ -265,10 +265,10 @@ func bcache_refup(b *bdev_block_t, s string) {
 }
 
 func bcache_relse(b *bdev_block_t, s string) {
-	brefcache.refdown(b, s)
 	if bdev_debug {
 		fmt.Printf("bcache_relse: %v %v\n", b.block, s)
 	}
+	brefcache.refdown(b, s)
 }
 
 func bcache_stat() string {
