@@ -4,7 +4,7 @@ import "fmt"
 import "sync"
 import "strconv"
 
-const memfs = false
+const memfs = false     // in-memory file system?
 const fs_debug = false
 const iroot = 0
 

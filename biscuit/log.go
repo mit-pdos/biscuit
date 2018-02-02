@@ -14,18 +14,13 @@ type buf_t struct {
 	ordered         bool
 }
 
-type log_entry_t struct {
-	blockno           int            // the final destination of buf
-	block             *bdev_block_t
-}
-
 // The in-memory log. The in-memory log is appended to the on-disk log when a
 // transaction commits (i.e., when the in-memory log is full or on a sync).  The
 // on-disk is applied when the on-disk log is full.  All writes go through the
 // log, but ordered writes are not appended to the on-disk log, but overwrite
 // their home location.
 type log_t struct {
-	log		[]log_entry_t         // in-memory log
+	log		[]*bdev_block_t       // in-memory log
 	logpresent      map[int]bool          // enable quick check to see if block is in log
 	absorb          map[int]*bdev_block_t // map from block number to block
 	ordered         []*bdev_block_t       // slice of ordered blocks
@@ -89,7 +84,7 @@ func (log *log_t) init(ls int, ll int) {
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
-	log.log = make([]log_entry_t, log.loglen)
+	log.log = make([]*bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
 	log.absorb = make(map[int]*bdev_block_t, log.loglen)   // XXX bounded by len ordered list?
 	log.ordered = make([]*bdev_block_t, 0)                 // XXX bounded by cache size?
@@ -161,7 +156,7 @@ func (log *log_t) addlog(buf buf_t) {
 		if memhead >= len(log.log) {
 			panic("log overflow")
 		}
-		log.log[memhead] = log_entry_t{buf.block.block, buf.block}
+		log.log[memhead] = buf.block
 		log.memhead++
 		log.logpresent[buf.block.block] = true
 	}
@@ -181,10 +176,10 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 	for i := log.memhead-1; i >= 0; i-- {
 		l := log.log[i]
 		log.nblkapply++
-		if _, ok := done[l.block.block]; !ok {
-			bcache_write_async(l.block)
-			bcache_relse(l.block, "apply")
-			done[l.block.block] = true
+		if _, ok := done[l.block]; !ok {
+			bcache_write_async(l)
+			bcache_relse(l, "apply")
+			done[l.block] = true
 		} else {
 			log.nabsorbapply++
 		}
@@ -246,14 +241,14 @@ func (log *log_t) commit() {
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
-		lh.w_logdest(i, l.blockno)
+		lh.w_logdest(i, l.block)
 
 		// fill in log blocks
 		b, err := bcache_get_nofill(log.logstart+i+1, "log", true)
 		if err != 0 {
 			panic("cannot get log block\n")
 		}
-		copy(b.data[:], l.block.data[:])
+		copy(b.data[:], l.data[:])
 		b.Unlock()
 		blks[i-log.diskhead] = b
 	}
