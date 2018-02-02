@@ -17,7 +17,13 @@ type logread_t struct {
 
 type log_entry_t struct {
 	block           int            // the final destination of buf
-	buf             *bdev_block_t 
+	buf             *bdev_block_t
+	ordered         bool
+}
+
+type incoming_t struct {
+	buf             *bdev_block_t
+	ordered         bool
 }
 
 // list of dirty blocks that are pending commit.
@@ -28,7 +34,7 @@ type log_t struct {
 	diskhead        int           // head of the log on disk 
 	logstart	int
 	loglen		int
-	incoming	chan *bdev_block_t
+	incoming	chan incoming_t
 	admission	chan bool
 	done		chan bool
 	force		chan bool
@@ -41,6 +47,7 @@ type log_t struct {
 	napply            int
 	nabsorption       int
 	nlogwrite         int
+	nlogorderedwrite  int
 	nblkapply         int
 	nabsorpapply      int
 }
@@ -83,7 +90,7 @@ func (log *log_t) init(ls int, ll int) {
 	log.loglen = ll - 1
 	log.log = make([]log_entry_t, log.loglen)
 	log.logmap = make(map[int]int, log.loglen)
-	log.incoming = make(chan *bdev_block_t)
+	log.incoming = make(chan incoming_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
 	log.force = make(chan bool)
@@ -104,8 +111,13 @@ func (l *log_t) full(nops int) bool {
 	return reserved + l.memhead >= l.loglen
 }
 
-func (log *log_t) addlog(buf *bdev_block_t) {
-	log.nlogwrite++
+func (log *log_t) addlog(buf *bdev_block_t, ordered bool) {
+	if ordered {
+		log.nlogorderedwrite++
+	} else {
+		log.nlogwrite++
+	}
+	
 	// log absorption.
 	if i, ok := log.logmap[buf.block]; ok {
 		l := log.log[i]
@@ -131,9 +143,14 @@ func (log *log_t) addlog(buf *bdev_block_t) {
 	// No need to copy data of buf because later ops who reads the modified
 	// block will commmit with this transaction or not commit.  We never
 	// commit while an operation is still on-going.
-	log.log[memhead] = log_entry_t{buf.block, buf}
-	log.logmap[buf.block] = memhead
-	log.memhead++
+	if ordered {
+		// XXX add to list or ordered writes and hash map of ordered
+		// writes.
+	} else {
+		log.log[memhead] = log_entry_t{buf.block, buf, ordered}
+		log.logmap[buf.block] = memhead
+		log.memhead++
+	}
 }
 
 // headblk is in cache
@@ -194,25 +211,25 @@ func (log *log_t) commit() {
 	
 	lh := logheader_t{headblk.data}
 	blks := make([]*bdev_block_t, newblks)
+
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
 		lh.w_logdest(i, l.block)
 
 		// fill in log blocks
-                b, err := bcache_get_nofill(log.logstart+i+1, "log", true)
+		b, err := bcache_get_nofill(log.logstart+i+1, "log", true)
 		if err != 0 {
 			panic("cannot get log block\n")
 		}
 		copy(b.data[:], l.buf.data[:])
 		b.Unlock()
-		
 		blks[i-log.diskhead] = b
 	}
 	
 	lh.w_recovernum(log.memhead)
 
-	bcache_write_async_blks(blks)  // write head
+	bcache_write_async_blks(blks)  // write blocks in batch
 
 	for _, b := range blks {
 		bcache_relse(b, "writelog")
@@ -262,7 +279,7 @@ func log_daemon(l *log_t) {
 				if l.memhead >= l.loglen {
 					panic("full")
 				}
-				l.addlog(nb)
+				l.addlog(nb.buf, nb.ordered)
 			case <- l.done:
 				nops--
 				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
@@ -340,7 +357,18 @@ func (b *bdev_block_t) log_write() {
 		fmt.Printf("log_write %v\n", b.block)
 	}
 	bcache_refup(b, "log_write")
-	fslog.incoming <- b
+	fslog.incoming <- incoming_t{b, false}
+}
+
+func (b *bdev_block_t) log_write_ordered() {
+	if memfs {
+		return
+	}
+	if log_debug {
+		fmt.Printf("log_write %v\n", b.block)
+	}
+	bcache_refup(b, "log_write")
+	fslog.incoming <- incoming_t{b, true}
 }
 
 func log_init(logstart, loglen int) err_t {
@@ -360,6 +388,8 @@ func log_stat() string {
 	s := "log:"
 	s += "\n\tnlogwrite "
 	s += strconv.Itoa(fslog.nlogwrite)
+	s += "\n\tnlogorderedwrite "
+	s += strconv.Itoa(fslog.nlogorderedwrite)
 	s += "\n\tnabsorp "
 	s += strconv.Itoa(fslog.nabsorption)
 	s += "\n\tnblkcommited "
