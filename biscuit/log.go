@@ -5,7 +5,19 @@ import "strconv"
 
 const log_debug = false
 
-// file system journal
+// File system journal.  The file system brackets FS calls (e.g.,create) with
+// op_begin and op_end(); the log makes sure that these operations happen
+// atomically with respect to crashes.  Operations are grouped in
+// transactions. A transaction is committed to the on-disk log on sync() or when
+// the log is close to full.  After a transaction is committed, a new
+// transaction starts.  Transactions in the log are applied to the file system
+// when the on-disk log close to full.  All writes go through the log, but
+// ordered writes are not appended to the on-disk log, but overwrite their home
+// location.  The file system should use logged writes for all its data
+// structures, and use ordered writes only for file data.  The file system must
+// guarantee that it performs no more than maxblkspersys logged writes in an
+// operation, to ensure that its operation will fit in the log.
+
 var fslog	= log_t{}
 var loglen      = 0    // for marshalling/unmarshalling
 
@@ -14,15 +26,10 @@ type buf_t struct {
 	ordered         bool
 }
 
-// The in-memory log. The in-memory log is appended to the on-disk log when a
-// transaction commits (i.e., when the in-memory log is full or on a sync).  The
-// on-disk is applied when the on-disk log is full.  All writes go through the
-// log, but ordered writes are not appended to the on-disk log, but overwrite
-// their home location.
 type log_t struct {
 	log		[]*bdev_block_t       // in-memory log
 	logpresent      map[int]bool          // enable quick check to see if block is in log
-	absorb          map[int]*bdev_block_t // map from block number to block
+	absorb          map[int]*bdev_block_t // map from block number to block to absorb in current transaction
 	ordered         []*bdev_block_t       // slice of ordered blocks
 	orderedpresent  map[int]bool          // enable quick check so see if block is in ordered
 	memhead		int                   // head of the log in memory
@@ -112,9 +119,10 @@ func (l *log_t) full(nops int) bool {
 
 func (log *log_t) addlog(buf buf_t) {
 
-	// if a write for buf.block is present in the in-memory log, then we put
-	// new ordered writes to that block in the log too. otherwise, we run
-	// the risk that apply will overwrite the value of a more recent ordered
+	// If a write for buf.block is present in the in-memory log (i.e.,
+	// either in memory or in the unapplied disk log), then we put new
+	// ordered writes to that block in the log too. Otherwise, we run the
+	// risk that apply will overwrite the value of a more recent ordered
 	// write.
 	_, present := log.logpresent[buf.block.block]
 	if buf.ordered && !present {
@@ -134,11 +142,14 @@ func (log *log_t) addlog(buf buf_t) {
 	
 	// log absorption.
 	if _, ok := log.absorb[buf.block.block]; ok {
-		// buffer is already in log or in ordered, and we wrote it
-		// (since there is only one bdev_block_t for each blockno). if
-		// the write of this block is in a later file system op, we know
-		// this later op will commit with the one that modified this
-		// block earlier, because the op was admitted.
+		// Buffer is already in log or in ordered, but not on disk
+		// yet. We wrote it (since there is only one bdev_block_t for
+		// each blockno), so it has already been absorbed.
+		//
+		// If the write of this block is in a later file
+		// system op, we know this later op will commit with the one
+		// that modified this block earlier, because the op was
+		// admitted.
 		log.nabsorption++
 		bcache_relse(buf.block, "absorption")
 		return
@@ -170,8 +181,8 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 		fmt.Printf("apply log: %v %v %v\n", log.memhead, log.diskhead, log.loglen)
 	}
 	
-	// the log is committed. if we crash while installing the blocks to
-	// their destinations, we should be able to recover.  install backwards,
+	// The log is committed. If we crash while installing the blocks to
+	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
 	for i := log.memhead-1; i >= 0; i-- {
 		l := log.log[i]
