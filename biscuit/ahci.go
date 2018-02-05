@@ -177,6 +177,7 @@ type ahci_port_t struct {
 	nvwrite int
 	nread int
 	nnoslot int
+	ncoalesce int
 }
 
 type identify_device struct {
@@ -435,6 +436,8 @@ func (p *ahci_port_t) stat() string {
 	s += strconv.Itoa(p.nvwrite)
 	s += " #noslot "
 	s += strconv.Itoa(p.nnoslot)
+	s += " #ncoalesce "
+	s += strconv.Itoa(p.ncoalesce)
 	s += "\n"
 	return s
 }
@@ -619,6 +622,30 @@ func (p *ahci_port_t) queuemgr() {
 	}
 }
 
+func (p *ahci_port_t) queue_coalesce(req *bdev_req_t) {
+	ok := false
+	for _, r := range p.queued {
+		if len(r.blks) == 0 {
+			continue
+		}
+		n := r.blks[len(r.blks)-1].block
+		if len(req.blks) > 0 && req.blks[0].block == n+1 {
+			if ahci_debug {
+				fmt.Printf("collapse %d %d %d\n", req.blks[0].block, n, len(r.blks))
+			}
+			p.ncoalesce++
+			for _, b := range(req.blks) {
+				r.blks = append(r.blks, b)
+			}
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		p.queued = append(p.queued, req)
+	}
+}
+
 func (p *ahci_port_t) start(req *bdev_req_t) {
 	defer p.Unlock()
 	p.Lock()
@@ -641,7 +668,7 @@ func (p *ahci_port_t) start(req *bdev_req_t) {
 	}
 
 	if len(p.queued) > 0 {
-		p.queued = append(p.queued, req)
+		p.queue_coalesce(req)
 		p.nnoslot++
 		return
 	}
