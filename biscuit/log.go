@@ -136,8 +136,16 @@ func (log *log_t) addlog(buf buf_t) {
 
 	_, presentordered := log.orderedpresent[buf.block.block]
 	if !buf.ordered && presentordered {
-		fmt.Printf("XXX don't absorb %d?\n", buf.block.block);
-		panic("xxx; remove from ordered list")
+		// XXX maybe orderedpresent should keep track of index in log.ordered
+		// XXX test case: alloc b for f, write b, unlink f, grow dir with b, and write b
+		for i, b := range log.ordered {
+			if b.block == buf.block.block {
+				fmt.Printf("remove %v from ordered\n", i)
+				log.ordered = append(log.ordered[:i], log.ordered[i+1:]...)
+			}
+		}
+		delete(log.orderedpresent, buf.block.block)
+		delete(log.absorb, buf.block.block)
 	}
 	
 	// log absorption.
