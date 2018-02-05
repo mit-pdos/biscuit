@@ -49,6 +49,8 @@ void makefile()
   int fd;
 
   int n = FILESIZE/WSIZE;
+
+  memset(buf, 'a', WSIZE);
   
   sprintf(name, "%s/d/f", dir);
   if((fd = open(name, O_RDWR | O_CREAT | O_TRUNC, S_IRWXU)) < 0) {
@@ -56,23 +58,19 @@ void makefile()
     exit(1);
   }
 
-  sprintf(buf, "%s/stats", dir);
-    
   for (i = 0; i < n; i++) {
     if (write(fd, buf, WSIZE) != WSIZE) {
       printf("%s: write %s failed %s\n", prog, name, strerror(errno));
       exit(1);
     }
   }
+
   if (fsync(fd) < 0) {
     printf("%s: fsync %s failed %s\n", prog, name, strerror(errno));
     exit(1);
   }
 
-  lseek(fd, SEEK_SET, 0);
-  write(fd, buf, WSIZE);
-  close(fd);
-  
+
   fd = open(".", O_DIRECTORY | O_RDONLY);
   if (fd < 0) {
     perror("open dir");
@@ -97,8 +95,8 @@ void writefile()
     exit(1);
   }
   
-  sprintf(buf, "%s/stats", dir);
-  
+  memset(buf, 'b', WSIZE);
+    
   for (i = 0; i < n; i++) {
     if (write(fd, buf, WSIZE) != WSIZE) {
       printf("%s: write %s failed %s\n", prog, name, strerror(errno));
@@ -151,14 +149,14 @@ int main(int argc, char *argv[])
 
   printstats(0);
     
-  gettimeofday ( &before, NULL );  
-  writefile();
-  gettimeofday ( &after, NULL );
+  /* gettimeofday ( &before, NULL );   */
+  /* writefile(); */
+  /* gettimeofday ( &after, NULL ); */
   
-  time = (after.tv_sec - before.tv_sec) * 1000000 +
-	(after.tv_usec - before.tv_usec);
-  tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
-  printf("writefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
+  /* time = (after.tv_sec - before.tv_sec) * 1000000 + */
+  /* 	(after.tv_usec - before.tv_usec); */
+  /* tput = ((float) (FILESIZE/1024) /  (time / 1000000.0)); */
+  /* printf("writefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput); */
 
   printstats(0);
   return 0;

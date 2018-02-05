@@ -76,6 +76,8 @@
 /user/c/stress
 /user/c/smallfile
 /user/c/largefile
+/user/c/cksum
+/user/c/head
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
