@@ -61,7 +61,6 @@ type ahci_disk_t struct {
 	nsectors uint64
 	port *ahci_port_t
 	portid int
-	use_interrupt bool
 }
 
 type sata_fis_reg_h2d struct {
@@ -151,12 +150,14 @@ type ahci_cmd_table struct {
 
 type ahci_port_t struct {
 	sync.Mutex
-	cond *sync.Cond
+	cond_flush *sync.Cond
+	cond_queued *sync.Cond
 
 	port *port_reg_t
 	nslot uint32
 	next_slot uint32
 	inflight []*bdev_req_t
+	queued []*bdev_req_t
 	nwaiting int
 	nflush int
 	
@@ -596,7 +597,29 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 	return 0, false
 }
 
-func (p *ahci_port_t) start(req *bdev_req_t) int {
+func (p *ahci_port_t) queuemgr() {
+	defer p.Unlock()
+	p.Lock()
+	for {
+		ok := false
+		if len(p.queued) > 0 {
+			s, ok := p.find_slot()
+			if ok {
+				req := p.queued[0]
+				p.queued = p.queued[1:]
+				p.startslot(req, s)
+			}
+		}
+		if len(p.queued) == 0 || !ok {
+			if ahci_debug {
+				fmt.Printf("queuemgr: go to sleep: %v %v\n", len(p.queued), ok)
+			}
+			p.cond_queued.Wait()
+		}
+	}
+}
+
+func (p *ahci_port_t) start(req *bdev_req_t) {
 	defer p.Unlock()
 	p.Lock()
 
@@ -604,38 +627,39 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 	// XXX should support FUA in writes?
 	for req.cmd == BDEV_FLUSH {
 		ci := LD(&p.port.ci)
-		// sact := LD(&p.port.sact)
+		sact := LD(&p.port.sact)
 		if ci == 0 { // && sact == 0 {
 			break
 		} else {
-			// fmt.Printf("flush: slots in progress %#x %#x\n", ci, sact)
+			if ahci_debug {
+				fmt.Printf("flush: slots in progress %#x %#x\n", ci, sact)
+			}
 			p.nflush++
-			p.cond.Wait()
+			p.cond_flush.Wait()
 			p.nflush--
 		}
 	}
 
-	// Find slot; if none is available, wait
-	var s int
-	for {
-		var ok bool
-		s, ok = p.find_slot()
-		if ok {
-			break
-		} else {
-			if ahci_debug {
-				fmt.Printf("AHCI start: wait for slot\n")
-			}
-			p.nnoslot++
-			p.nwaiting++
-			p.cond.Wait()
-			p.nwaiting--
-			if ahci_debug {
-				fmt.Printf("AHCI start: wait for slot; try again\n")
-			}
-		}
+	if len(p.queued) > 0 {
+		p.queued = append(p.queued, req)
+		p.nnoslot++
+		return
 	}
 
+	// Find slot; if none is available, return
+	s, ok := p.find_slot()
+	if !ok {
+		if ahci_debug {
+			fmt.Printf("AHCI start: queue for slot\n")
+		}
+		p.queued = append(p.queued, req)
+		p.nnoslot++
+		return
+	}
+	p.startslot(req, s)
+}
+
+func (p *ahci_port_t) startslot(req *bdev_req_t, s int) {
 	switch req.cmd {
 	case BDEV_WRITE:
 		p.nwrite++
@@ -652,7 +676,6 @@ func (p *ahci_port_t) start(req *bdev_req_t) int {
 		fmt.Printf("AHCI start: issued slot %v req %v sync %v ci %#x\n",
 			s, req.cmd, req.sync, LD(&p.port.ci))
 	}
-	return s
 }
 
 // blks must be contiguous on disk (but not necessarily in memory)
@@ -735,7 +758,8 @@ func (ahci *ahci_disk_t) enable_interrupt() {
 
 func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
-	p.cond = sync.NewCond(p)
+	p.cond_flush = sync.NewCond(p)
+	p.cond_queued = sync.NewCond(p)
 	a := ahci.bara + 0x100 + 0x80 * pid
 	m := dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
@@ -759,6 +783,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				p.nslot, ahci.ncs)
 			}
 			p.inflight = make([]*bdev_req_t, p.nslot)
+			p.queued = make([]*bdev_req_t, 0)
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
 			id, _,  _ = p.identify()
@@ -766,10 +791,8 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				LD16(&id.features85) & (1 << 5) != 0,
 				LD16(&id.features85) & (1 << 4) != 0)
 			ahci.clear_is()
-			if ahci.use_interrupt {
-				ahci.enable_interrupt()
-			}
-
+			ahci.enable_interrupt()
+			go p.queuemgr()
 			return  // only one port
 		}
 	}
@@ -777,7 +800,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 
 
 // Called by int_handler(), which holds lock through intr()
-func (p *ahci_port_t) port_intr() {
+func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 	defer p.Unlock()
 	p.Lock()
 
@@ -805,18 +828,22 @@ func (p *ahci_port_t) port_intr() {
 
 			}
 			p.inflight[s] = nil
-			if p.nwaiting > 0 {
-				p.cond.Signal()
+			if len(p.queued) > 0 {
+				p.cond_queued.Signal()
 				
 			}
-			if p.nflush > 0 {
-				p.cond.Signal()
+			if p.nflush > 0 && len(p.queued) == 0 {
+				if ahci_debug {
+					fmt.Printf("port_intr: wakeup sync %v\n", s)
+				}
+				p.cond_flush.Signal()
 			}
 		}
 	}
 	if !int && ahci_debug {
 		fmt.Printf("?")
 	}
+	ahci.clear_is()
 }
 
 
@@ -830,12 +857,11 @@ func (ahci *ahci_disk_t) intr() {
 			}
 			int = true
 			
-			// clear port interrupt. interrupts coming while we are
+			// clear port interrupt. interrupts coming in while we are
 			// processing will be deliver after clear_is().
 			SET(&ahci.port.port.is, 0xFFFFFFFF)
-			ahci.port.port_intr()
-			
-			ahci.clear_is()
+			ahci.port.port_intr(ahci)
+			// ahci.clear_is()
 		}
 	}
 	if !int && ahci_debug {
@@ -886,20 +912,7 @@ type adisk_t interface {
 
 // returns true if start is asynchronous
 func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
-	s := ahci.port.start(req)
-	if !ahci.use_interrupt {  // poll port
-		if !ahci.port.wait(uint32(s)) {
-			panic("start: wait times out polling\n")
-		}
-		//if req.cmd == BDEV_READ {
-		//	copy(req.blk.data[:], ahci.port.block[s][:])
-		//}
-		ahci.port.inflight[s] = nil
-		if ahci.port.nwaiting > 0 || ahci.port.nflush > 0 {
-			panic("polling mode\n")
-		}
-		return false
-	}
+	ahci.port.start(req)
 	return true
 }
 
@@ -934,7 +947,6 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	d := &ahci_disk_t{}
 	d.tag = t
 	d.bara = pci_read(t, _BAR5, 4)
-	d.use_interrupt = true
 	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
 	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
@@ -1024,9 +1036,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		}
 	}
 
-	if d.use_interrupt {
-		go d.int_handler(vec)
-	}
+	go d.int_handler(vec)
 	adisk = d
 }
 

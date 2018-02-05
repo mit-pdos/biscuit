@@ -222,7 +222,7 @@ func (log *log_t) commit() {
 	if log.memhead == log.diskhead {
 		// nothing to commit, but maybe some file blocks to sync
 		if log_debug {
-			fmt.Printf("commit flush ordered blks %d\n", len(log.ordered))
+			fmt.Printf("commit: flush ordered blks %d\n", len(log.ordered))
 		}
 		log.write_ordered();
 		bdev_flush();
