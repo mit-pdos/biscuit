@@ -61,8 +61,8 @@ func (b *bdev_block_t) Write() {
 	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
-	req := bdev_req_new([]*bdev_block_t{b}, BDEV_WRITE, true)
-	if ahci_start(req) {
+	req := ahci.mkRequest([]*bdev_block_t{b}, BDEV_WRITE, true)
+	if ahci.Start(req) {
 		<- req.ackCh
 	}
 } 
@@ -74,13 +74,13 @@ func (b *bdev_block_t) Write_async() {
 	// if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 	//	panic("write_async\n")
 	//}
-	ider := bdev_req_new([]*bdev_block_t{b}, BDEV_WRITE, false)
-	ahci_start(ider)
+	ider := ahci.mkRequest([]*bdev_block_t{b}, BDEV_WRITE, false)
+	ahci.Start(ider)
 }
 
 func (b *bdev_block_t) Read() {
-	ider := bdev_req_new([]*bdev_block_t{b}, BDEV_READ, true)
-	if ahci_start(ider) {
+	ider := ahci.mkRequest([]*bdev_block_t{b}, BDEV_READ, true)
+	if ahci.Start(ider) {
 		<- ider.ackCh
 	}
 	if bdev_debug {
@@ -235,8 +235,8 @@ func (bcache *bcache_t) Write_async_blks(blks []*bdev_block_t) {
 		bcache.refcache.Refup(b, "bcache_write_async_blks")
 	}
 	// one request for all blks
-	ider := bdev_req_new(blks, BDEV_WRITE, false)
-	ahci_start(ider)
+	ider := ahci.mkRequest(blks, BDEV_WRITE, false)
+	ahci.Start(ider)
 }
 
 func (bcache *bcache_t) Refup(b *bdev_block_t, s string) {

@@ -76,7 +76,7 @@ func fs_statistics() string {
 	s += balloc.Stats()
 	s += bcache.Stats()
 	s += icache_stat()
-	s += ahci_stat()
+	s += ahci.Stats()
 	return s
 }
 

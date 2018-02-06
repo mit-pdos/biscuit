@@ -8,7 +8,6 @@ import "unsafe"
 import "strconv"
 
 const ahci_debug = false
-var adisk	adisk_t
 
 //
 // AHCI from sv6 from HiStar.
@@ -18,6 +17,161 @@ var adisk	adisk_t
 // - AHCI: https://www.intel.com/content/dam/www/public/us/en/documents/technical-specifications/serial-ata-ahci-spec-rev1-3-1.pdf
 // - FIS: http://www.ece.umd.edu/courses/enee759h.S2003/references/serialata10a.pdf
 // - CMD: http://www.t13.org/documents/uploadeddocuments/docs2007/d1699r4a-ata8-acs.pdf
+//
+
+
+//
+// Interface to ahci driver
+//
+
+var ahci adisk_t
+
+type bdevcmd_t uint
+
+const (
+	BDEV_WRITE  bdevcmd_t = 1
+	BDEV_READ = 2
+	BDEV_FLUSH = 3
+)
+
+type bdev_req_t struct {
+	blks     []*bdev_block_t
+	ackCh	chan bool
+	cmd	bdevcmd_t
+	sync    bool
+}
+
+type adisk_t interface {
+	Start(*bdev_req_t) bool
+	Stats() string
+	mkRequest([]*bdev_block_t, bdevcmd_t, bool) *bdev_req_t
+}
+
+func (ahci *ahci_disk_t) mkRequest(blks []*bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
+	ret := &bdev_req_t{}
+	ret.blks = blks
+	ret.ackCh = make(chan bool)
+	ret.cmd = cmd
+	ret.sync = sync
+	return ret
+}
+
+// returns true if start is asynchronous
+func (ahci *ahci_disk_t) Start(req *bdev_req_t) bool {
+	ahci.port.start(req)
+	return true
+}
+
+func (ahci *ahci_disk_t) Stats() string {
+	if ahci == nil {
+		panic("no adisk")
+	}
+	return ahci.port.stat()
+}
+
+func attach_ahci(vid, did int, t pcitag_t) {
+	if disk != nil {
+		panic("adding two disks")
+	}
+
+	d := &ahci_disk_t{}
+	d.tag = t
+	d.bara = pci_read(t, _BAR5, 4)
+	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
+	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
+	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
+
+	vec := msivec_t(0)
+	msicap := 0x80
+	cap_entry := pci_read(d.tag, msicap, 4)
+	if cap_entry & 0x1F != 0x5 {
+		fmt.Printf("AHCI: no MSI\n")
+		IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
+		INT_DISK = IRQ_BASE + IRQ_DISK
+	} else {  // enable MSI interrupts
+		vec = msi_alloc()
+
+		fmt.Printf("AHCI: msicap %#x MSI to vec %#x\n", cap_entry, vec)
+
+		var is_64bit = false
+		if cap_entry & PCI_MSI_MCR_64BIT != 0 {
+			is_64bit = true
+		}
+
+		// Disable multiple messages.  Since we specify only one message
+		// and that is the default value in the message control
+		// register, this simplifies configuration.
+		log2_messages := uint32((cap_entry >> 17) & 0x7)
+		if log2_messages != 0 {
+			fmt.Printf("pci_map_msi_irq: requested messages %u, granted 1 message\n",
+				1 << log2_messages);
+			// Multiple Message Enable is bits 20-22.
+			pci_write(d.tag, msicap, cap_entry & ^(0x7 << 20))
+		}
+
+		// [PCI SA pg 253] Assign a dword-aligned memory address to the
+		// device's Message Address Register.  (The Message Address
+		// Register format is mandated by the x86 architecture.  See
+		// 9.11.1 in the Vol. 3 of the Intel architecture manual.)
+
+		// Non-remapped ("compatibility format") interrupts
+		pci_write(d.tag, msicap + 4*1,
+			(0x0fee << 20) |   // magic constant for northbridge
+				(bsp_apic_id << 12) |     // destination ID
+				(1 << 3) |         // redirection hint
+				(0 << 2))         // destination mode
+
+		if is_64bit {
+			// Zero out the most-significant 32-bits of the Message Address Register,
+			// which is at Dword 2 for 64-bit devices.
+			pci_write(d.tag, msicap + 4*2, 0);
+		}
+
+
+		//  Write base message data pattern into the device's Message
+		//  Data Register.  (The Message Data Register format is
+		//  mandated by the x86 architecture.  See 9.11.2 in the Vol. 3
+		//  of the Intel architecture manual.  Message Data Register is
+		//  at Dword 2 for 32-bit devices, and at Dword 3 for 64-bit
+		//  devices.
+		var offset = 2
+		if is_64bit {
+			offset = 3
+		}
+		pci_write(d.tag, msicap + 4*offset,
+				(0 << 15) |        // trigger mode (edge)
+					//(0 << 14) |      // level for trigger mode (don't care)
+					(0 << 8) |         // delivery mode (fixed)
+					int(vec));       // vector
+
+		// Set the MSI enable bit in the device's Message control
+		// register.
+		pci_write(d.tag, msicap, cap_entry | (1 << 16));
+
+		msimask := 0x60
+		if pci_read(d.tag, msimask, 4) & 1 != 0 {
+			panic("msi pci masked")
+		}
+
+	}
+
+	SET(&d.ahci.ghc, AHCI_GHC_AE);
+
+	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
+	fmt.Printf("AHCI: ahci %#x ncs %#x\n", d.ahci, d.ncs)
+
+	for i := 0; i < 32; i++ {
+		if LD(&d.ahci.pi) & (1 << uint32(i)) != 0x0 {
+			d.probe_port(i)
+		}
+	}
+
+	go d.int_handler(vec)
+	ahci = d
+}
+
+//
+// Implementation
 //
 
 type ahci_reg_t struct {
@@ -906,164 +1060,4 @@ func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 }
 
 
-// Interface to ahci driver
-
-type bdevcmd_t uint
-
-const (
-	BDEV_WRITE  bdevcmd_t = 1
-	BDEV_READ = 2
-	BDEV_FLUSH = 3
-)
-
-type bdev_req_t struct {
-	blks     []*bdev_block_t
-	ackCh	chan bool
-	cmd	bdevcmd_t
-	sync    bool
-}
-
-func bdev_req_new(blks []*bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
-	ret := &bdev_req_t{}
-	ret.blks = blks
-	ret.ackCh = make(chan bool)
-	ret.cmd = cmd
-	ret.sync = sync
-	return ret
-}
-
-type adisk_t interface {
-	start(*bdev_req_t) bool
-	stat() string
-}
-
-// returns true if start is asynchronous
-func (ahci *ahci_disk_t) start(req *bdev_req_t) bool {
-	ahci.port.start(req)
-	return true
-}
-
-func (ahci *ahci_disk_t) stat() string {
-	if adisk == nil {
-		panic("no adisk")
-	}
-	return ahci.port.stat()
-}
-
-
-func ahci_stat() string {
-	if adisk == nil {
-		panic("no adisk")
-	}
-	return adisk.stat()
-}
-
-func ahci_start(req *bdev_req_t) bool {
-	if adisk == nil {
-		panic("no adisk")
-	}
-	r := adisk.start(req)
-	return r
-}
-
-func attach_ahci(vid, did int, t pcitag_t) {
-	if disk != nil {
-		panic("adding two disks")
-	}
-
-	d := &ahci_disk_t{}
-	d.tag = t
-	d.bara = pci_read(t, _BAR5, 4)
-	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
-	m := dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
-	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
-
-	vec := msivec_t(0)
-	msicap := 0x80
-	cap_entry := pci_read(d.tag, msicap, 4)
-	if cap_entry & 0x1F != 0x5 {
-		fmt.Printf("AHCI: no MSI\n")
-		IRQ_DISK = 11  	// XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
-		INT_DISK = IRQ_BASE + IRQ_DISK
-	} else {  // enable MSI interrupts
-		vec = msi_alloc()
-
-		fmt.Printf("AHCI: msicap %#x MSI to vec %#x\n", cap_entry, vec)
-
-		var is_64bit = false
-		if cap_entry & PCI_MSI_MCR_64BIT != 0 {
-			is_64bit = true
-		}
-
-		// Disable multiple messages.  Since we specify only one message
-		// and that is the default value in the message control
-		// register, this simplifies configuration.
-		log2_messages := uint32((cap_entry >> 17) & 0x7)
-		if log2_messages != 0 {
-			fmt.Printf("pci_map_msi_irq: requested messages %u, granted 1 message\n",
-				1 << log2_messages);
-			// Multiple Message Enable is bits 20-22.
-			pci_write(d.tag, msicap, cap_entry & ^(0x7 << 20))
-		}
-
-		// [PCI SA pg 253] Assign a dword-aligned memory address to the
-		// device's Message Address Register.  (The Message Address
-		// Register format is mandated by the x86 architecture.  See
-		// 9.11.1 in the Vol. 3 of the Intel architecture manual.)
-
-		// Non-remapped ("compatibility format") interrupts
-		pci_write(d.tag, msicap + 4*1,
-			(0x0fee << 20) |   // magic constant for northbridge
-				(bsp_apic_id << 12) |     // destination ID
-				(1 << 3) |         // redirection hint
-				(0 << 2))         // destination mode
-
-		if is_64bit {
-			// Zero out the most-significant 32-bits of the Message Address Register,
-			// which is at Dword 2 for 64-bit devices.
-			pci_write(d.tag, msicap + 4*2, 0);
-		}
-
-
-		//  Write base message data pattern into the device's Message
-		//  Data Register.  (The Message Data Register format is
-		//  mandated by the x86 architecture.  See 9.11.2 in the Vol. 3
-		//  of the Intel architecture manual.  Message Data Register is
-		//  at Dword 2 for 32-bit devices, and at Dword 3 for 64-bit
-		//  devices.
-		var offset = 2
-		if is_64bit {
-			offset = 3
-		}
-		pci_write(d.tag, msicap + 4*offset,
-				(0 << 15) |        // trigger mode (edge)
-					//(0 << 14) |      // level for trigger mode (don't care)
-					(0 << 8) |         // delivery mode (fixed)
-					int(vec));       // vector
-
-		// Set the MSI enable bit in the device's Message control
-		// register.
-		pci_write(d.tag, msicap, cap_entry | (1 << 16));
-
-		msimask := 0x60
-		if pci_read(d.tag, msimask, 4) & 1 != 0 {
-			panic("msi pci masked")
-		}
-
-	}
-
-	SET(&d.ahci.ghc, AHCI_GHC_AE);
-
-	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f)+1
-	fmt.Printf("AHCI: ahci %#x ncs %#x\n", d.ahci, d.ncs)
-
-	for i := 0; i < 32; i++ {
-		if LD(&d.ahci.pi) & (1 << uint32(i)) != 0x0 {
-			d.probe_port(i)
-		}
-	}
-
-	go d.int_handler(vec)
-	adisk = d
-}
 

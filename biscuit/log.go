@@ -431,8 +431,8 @@ func (log *log_t) commit() {
 }
 
 func flush() {
-	ider := bdev_req_new(nil, BDEV_FLUSH, true)
-	if ahci_start(ider) {
+	ider := ahci.mkRequest(nil, BDEV_FLUSH, true)
+	if ahci.Start(ider) {
 		<- ider.ackCh
 	}
 }
