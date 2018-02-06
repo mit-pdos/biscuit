@@ -843,7 +843,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
 				for i := 0; i < len(p.inflight[s].blks); i++ {
-					bcache_relse(p.inflight[s].blks[i], "interrupt")
+					bcache.Relse(p.inflight[s].blks[i], "interrupt")
 				}
 			}
 			if p.inflight[s].sync {

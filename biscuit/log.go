@@ -96,7 +96,7 @@ func (log *log_t) Write(b *bdev_block_t) {
 	if log_debug {
 		fmt.Printf("log_write %v\n", b.block)
 	}
-	bcache_refup(b, "log_write")
+	bcache.Refup(b, "log_write")
 	log.incoming <- buf_t{b, false}
 }
 
@@ -107,22 +107,22 @@ func (log *log_t) Write_ordered(b *bdev_block_t) {
 	if log_debug {
 		fmt.Printf("log_write_ordered %v\n", b.block)
 	}
-	bcache_refup(b, "log_write_ordered")
+	bcache.Refup(b, "log_write_ordered")
 	log.incoming <- buf_t{b, true}
 }
 
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return log.read(mkread(bcache_get_fill, blkn, s, lock))
+	return log.read(mkread(bcache.Get_fill, blkn, s, lock))
 }
 
 func (log *log_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return log.read(mkread(bcache_get_zero, blkn, s, lock))
+	return log.read(mkread(bcache.Get_zero, blkn, s, lock))
 }
 
 func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return log.read(mkread(bcache_get_nofill, blkn, s, lock))
+	return log.read(mkread(bcache.Get_nofill, blkn, s, lock))
 }
 
 func (log *log_t) Stats() string {
@@ -277,7 +277,7 @@ func (log *log_t) addlog(buf buf_t) {
 		// that modified this block earlier, because the op was
 		// admitted.
 		log.nabsorption++
-		bcache_relse(buf.block, "absorption")
+		bcache.Relse(buf.block, "absorption")
 		return
 	}
 	log.absorb[buf.block.block] = buf.block
@@ -314,8 +314,8 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 		l := log.log[i]
 		log.nblkapply++
 		if _, ok := done[l.block]; !ok {
-			bcache_write_async(l)
-			bcache_relse(l, "apply")
+			bcache.Write_async(l)
+			bcache.Relse(l, "apply")
 			done[l.block] = true
 		} else {
 			log.nabsorbapply++
@@ -327,7 +327,7 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 	// success; clear flag indicating to recover from log
 	lh := logheader_t{headblk.data}
 	lh.w_recovernum(0)
-	bcache_write(headblk)
+	bcache.Write(headblk)
 
 	flush()  // flush cleared commit
 
@@ -337,8 +337,8 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
 	for _, b := range(log.ordered) {
-		bcache_write_async(b)
-		bcache_relse(b, "writeordered")
+		bcache.Write_async(b)
+		bcache.Relse(b, "writeordered")
 	}
 	log.ordered = make([]*bdev_block_t, 0)
 	log.orderedpresent = make(map[int]bool)
@@ -367,7 +367,7 @@ func (log *log_t) commit() {
 
 	// read the log header from disk; it may contain commit blocks from
 	// current transactions, if we haven't applied yet.
-	headblk, err := bcache_get_fill(log.logstart, "commit", false)
+	headblk, err := bcache.Get_fill(log.logstart, "commit", false)
 	if err != 0 {
 		panic("cannot read commit block\n")
 	}
@@ -381,7 +381,7 @@ func (log *log_t) commit() {
 		lh.w_logdest(i, l.block)
 
 		// fill in log blocks
-		b, err := bcache_get_nofill(log.logstart+i+1, "log", true)
+		b, err := bcache.Get_nofill(log.logstart+i+1, "log", true)
 		if err != 0 {
 			panic("cannot get log block\n")
 		}
@@ -393,16 +393,16 @@ func (log *log_t) commit() {
 	lh.w_recovernum(log.memhead)
 
 	// write blocks to log in batch
-	bcache_write_async_blks(blks)
+	bcache.Write_async_blks(blks)
 	for _, b := range blks {
-		bcache_relse(b, "writelog")
+		bcache.Relse(b, "writelog")
 	}
 
 	log.write_ordered()
 	
 	flush()   // flush outstanding writes
 
-	bcache_write(headblk)  	// write log header
+	bcache.Write(headblk)  	// write log header
 
 	flush()   // commit log header
 
@@ -427,7 +427,7 @@ func (log *log_t) commit() {
 	log.absorb = make(map[int]*bdev_block_t, log.loglen)
 
 	// done with log header
-	bcache_relse(headblk, "commit done")
+	bcache.Relse(headblk, "commit done")
 }
 
 func flush() {
@@ -438,7 +438,7 @@ func flush() {
 }
 
 func (log *log_t) recover()  err_t {
-	b, err := bcache_get_fill(log.logstart, "fs_recover_logstart", false)
+	b, err := bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 { 
 		return err
 	}
@@ -446,31 +446,31 @@ func (log *log_t) recover()  err_t {
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
-		bcache_relse(b, "fs_recover_logstart")
+		bcache.Relse(b, "fs_recover_logstart")
 		return 0
 	}
 	fmt.Printf("starting FS recovery...")
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		lb, err := bcache_get_fill(log.logstart + 1 + i, "i", false)
+		lb, err := bcache.Get_fill(log.logstart + 1 + i, "i", false)
 		if err != 0 {
 			return err
 		}
-		fb, err := bcache_get_fill(bdest, "bdest", false)
+		fb, err := bcache.Get_fill(bdest, "bdest", false)
 		if err != 0 {
 			return err
 		}
 		copy(fb.data[:], lb.data[:])
-		bcache_write(fb)
-		bcache_relse(lb, "fs_recover1")
-		bcache_relse(fb, "fs_recover2")
+		bcache.Write(fb)
+		bcache.Relse(lb, "fs_recover1")
+		bcache.Relse(fb, "fs_recover2")
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
-	bcache_write(b)
-	bcache_relse(b, "fs_recover_logstart")
+	bcache.Write(b)
+	bcache.Relse(b, "fs_recover_logstart")
 	fmt.Printf("restored %v blocks\n", rlen)
 	return 0
 }

@@ -16,9 +16,11 @@ func fs_init() *fd_t {
 		fmt.Printf("Using MEMORY FS\n")
 	}
 
+	mkBcache()
+	
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b, err := bcache_get_fill(0, "fsoff", false)
+	b, err := bcache.Get_fill(0, "fsoff", false)
 	if err != 0 {
 		panic("fs_init")
 	}
@@ -28,10 +30,10 @@ func fs_init() *fd_t {
 	if superb_start <= 0 {
 		panic("bad superblock start")
 	}
-	bcache_relse(b, "fs_init")
+	bcache.Relse(b, "fs_init")
 
 	// superblock is never changed, so reading before recovery is fine
-	b, err = bcache_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
+	b, err = bcache.Get_fill(superb_start, "super", false)   // don't relse b, because superb is global
 	if err != 0 {
 		panic("fs_init")
 	}
@@ -72,7 +74,7 @@ func fs_statistics() string {
 	s += fslog.Stats()
 	s += ialloc_stat()
 	s += balloc_stat()
-	s += bcache_stat()
+	s += bcache.Stats()
 	s += icache_stat()
 	s += ahci_stat()
 	return s
@@ -357,13 +359,13 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	if err != 0 {
 		return err
 	}
-	defer bcache_relse(b1, "probe_insert")
+	defer bcache.Relse(b1, "probe_insert")
 	
 	b2, err := opar.probe_unlink(ofn)
 	if err != 0 {
 		return err
 	}
-	defer bcache_relse(b2, "probe_unlink_opar")
+	defer bcache.Relse(b2, "probe_unlink_opar")
 
 	odir := ochild.icache.itype == I_DIR
 	if odir {
@@ -371,7 +373,7 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		if err != 0 {
 			return err
 		}
-		defer bcache_relse(b3, "probe_unlink_ochild")
+		defer bcache.Relse(b3, "probe_unlink_ochild")
 	}
 
 	if newexists {
@@ -825,7 +827,7 @@ func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 		}
 		raw.offset += c
 		did += c
-		bcache_relse(b, "read")
+		bcache.Relse(b, "read")
 	}
 	return did, 0
 }
@@ -849,10 +851,10 @@ func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		if err != 0 {
 			return 0, err
 		}
-		bcache_write(buf)
+		bcache.Write(buf)
 		raw.offset += c
 		did += c
-		bcache_relse(buf, "write")
+		bcache.Relse(buf, "write")
 	}
 	return did, 0
 }
@@ -1346,7 +1348,7 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 		i := (alloc.lastblk + b) % alloc.freelen
 		if blk != nil {
 			blk.Unlock()
-			bcache_relse(blk, "alloc")
+			bcache.Relse(blk, "alloc")
 		}
 		blk, err = alloc.fbread(alloc.freestart + i)
 		if err != 0 {
@@ -1383,7 +1385,7 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 	blk.data[oct] |= 1 << bit
 	blk.Unlock()
 	fslog.Write(blk)
-	bcache_relse(blk, "balloc1")
+	bcache.Relse(blk, "balloc1")
 
 	bitsperblk := BSIZE*8
 	blkn = blkn*bitsperblk + oct*8 + int(bit)
@@ -1419,7 +1421,7 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
 	fslog.Write(fblk)
-	bcache_relse(fblk, "free")
+	bcache.Relse(fblk, "free")
 	alloc.nfree++
 	return 0
 }

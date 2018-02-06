@@ -136,11 +136,138 @@ func (blk *bdev_block_t) free_page() {
 // interrupt handler).
 //
 
-var brefcache = mkRefcache(syslimit.blocks, false)
+var bcache = bcache_t{}
+
+type bcache_t struct {
+	refcache  *refcache_t
+}
+
+func mkBcache() {
+	bcache.refcache = mkRefcache(syslimit.blocks, false)
+}
+
+// returns locked buf with refcnt on page bumped up by 1. caller must call
+// bdev_relse when done with buf.
+func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	b, created, err := bcache.bref(blkn, s)
+
+	if bdev_debug {
+		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)
+	}
+
+	if err != 0 {
+		return nil, err
+	}
+	
+	if created {
+		b.New_page()
+		b.Read() // fill in new bdev_cache entry
+	}
+	if !lock {
+		b.Unlock()
+	}
+	return b, 0
+}
+
+// returns locked buf with refcnt on page bumped up by 1. caller must call
+// bcache_relse when done with buf
+func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	b, created, err := bcache.bref(blkn, s)
+	if bdev_debug {
+		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
+	}
+	if err != 0 {
+		return nil, err
+	}
+	if created {
+		b.New_page()   // zero
+	} 
+	if !lock {
+		b.Unlock()
+	}
+	return b, 0
+}
+
+// returns locked buf with refcnt on page bumped up by 1. caller must call
+// bcache_relse when done with buf
+func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	b, created, err := bcache.bref(blkn, s)
+	if bdev_debug {
+		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
+	}
+	if err != 0 {
+		return nil, err
+	}
+	if created {
+		b.New_page()   // XXX a non-zero page would be fine
+	}
+	if !lock {
+		b.Unlock()
+	}
+	return b, 0
+}
+
+func (bcache *bcache_t) Write(b *bdev_block_t) {
+	bcache.refcache.Refup(b, "bcache_write")
+	b.Write()
+}
+
+func (bcache *bcache_t) Write_async(b *bdev_block_t) {
+	bcache.refcache.Refup(b, "bcache_write_async")
+	b.Write_async()
+}
+
+// blks must be contiguous on disk
+func (bcache *bcache_t) Write_async_blks(blks []*bdev_block_t) {
+	if bdev_debug {
+		fmt.Printf("bcache_write_async_blks %v\n", len(blks))
+	}
+	if len(blks) == 0  {
+		panic("bcache_write_async_blks\n")
+	}
+	n := blks[0].block-1
+	for _, b := range blks {
+		// sanity check
+		if b.block != n + 1 {
+			panic("not contiguous\n")
+		}
+		n++
+		bcache.refcache.Refup(b, "bcache_write_async_blks")
+	}
+	// one request for all blks
+	ider := bdev_req_new(blks, BDEV_WRITE, false)
+	ahci_start(ider)
+}
+
+func (bcache *bcache_t) Refup(b *bdev_block_t, s string) {
+	bcache.refcache.Refup(b, s)
+}
+
+func (bcache *bcache_t) Relse(b *bdev_block_t, s string) {
+	if bdev_debug {
+		fmt.Printf("bcache_relse: %v %v\n", b.block, s)
+	}
+	bcache.refcache.Refdown(b, s)
+}
+
+func (bcache *bcache_t) Stats() string {
+	s := "bcache: size "
+	s += strconv.Itoa(len(bcache.refcache.refs))
+	s += " #evictions "
+	s += strconv.Itoa(bcache.refcache.nevict)
+	s += " #live "
+	s += strconv.Itoa(bcache.refcache.nlive())
+	s += "\n"
+	return s
+}
+
+//
+// Implementation
+//
 
 // returns the reference to a locked buffer
-func bref(blk int, s string) (*bdev_block_t, bool, err_t) {
-	ref, err := brefcache.Lookup(blk, s)
+func (bcache *bcache_t) bref(blk int, s string) (*bdev_block_t, bool, err_t) {
+	ref, err := bcache.refcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
@@ -163,121 +290,7 @@ func bref(blk int, s string) (*bdev_block_t, bool, err_t) {
 	return b, created, err
 }
 
-// returns locked buf with refcnt on page bumped up by 1. caller must call
-// bdev_relse when done with buf.
-func bcache_get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	b, created, err := bref(blkn, s)
 
-	if bdev_debug {
-		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)
-	}
-
-	if err != 0 {
-		return nil, err
-	}
-	
-	if created {
-		b.New_page()
-		b.Read() // fill in new bdev_cache entry
-	}
-	if !lock {
-		b.Unlock()
-	}
-	return b, 0
-}
-
-// returns locked buf with refcnt on page bumped up by 1. caller must call
-// bcache_relse when done with buf
-func bcache_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	b, created, err := bref(blkn, s)
-	if bdev_debug {
-		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
-	}
-	if err != 0 {
-		return nil, err
-	}
-	if created {
-		b.New_page()   // zero
-	} 
-	if !lock {
-		b.Unlock()
-	}
-	return b, 0
-}
-
-// returns locked buf with refcnt on page bumped up by 1. caller must call
-// bcache_relse when done with buf
-func bcache_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	b, created, err := bref(blkn, s)
-	if bdev_debug {
-		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
-	}
-	if err != 0 {
-		return nil, err
-	}
-	if created {
-		b.New_page()   // XXX a non-zero page would be fine
-	}
-	if !lock {
-		b.Unlock()
-	}
-	return b, 0
-}
-
-func bcache_write(b *bdev_block_t) {
-	brefcache.Refup(b, "bcache_write")
-	b.Write()
-}
-
-func bcache_write_async(b *bdev_block_t) {
-	brefcache.Refup(b, "bcache_write_async")
-	b.Write_async()
-}
-
-// blks must be contiguous on disk
-func bcache_write_async_blks(blks []*bdev_block_t) {
-	if bdev_debug {
-		fmt.Printf("bcache_write_async_blks %v\n", len(blks))
-	}
-	if len(blks) == 0  {
-		panic("bcache_write_async_blks\n")
-	}
-	n := blks[0].block-1
-	for _, b := range blks {
-		// sanity check
-		if b.block != n + 1 {
-			panic("not contiguous\n")
-		}
-		n++
-		brefcache.Refup(b, "bcache_write_async_blks")
-	}
-	// one request for all blks
-	ider := bdev_req_new(blks, BDEV_WRITE, false)
-	ahci_start(ider)
-}
-
-
-func bcache_refup(b *bdev_block_t, s string) {
-	brefcache.Refup(b, s)
-}
-
-func bcache_relse(b *bdev_block_t, s string) {
-	if bdev_debug {
-		fmt.Printf("bcache_relse: %v %v\n", b.block, s)
-	}
-	brefcache.Refdown(b, s)
-}
-
-func bcache_stat() string {
-	s := "bcache: size "
-	s += strconv.Itoa(len(brefcache.refs))
-	s += " #evictions "
-	s += strconv.Itoa(brefcache.nevict)
-	s += " #live "
-	s += strconv.Itoa(brefcache.nlive())
-	s += "\n"
-	return s
-}
 
 func bdev_test() {
 	return
@@ -303,7 +316,7 @@ func bdev_test() {
 		}
 		flush()
 		for b := 0; b < N; b++ {
-			rbuf, err := bcache_get_fill(b, "read test", false)
+			rbuf, err := bcache.Get_fill(b, "read test", false)
 			if err != 0 {
 				panic("bdev_test\n")
 			}
@@ -357,7 +370,7 @@ func balloc() (int, err_t) {
 		fmt.Printf("blkn %v last %v\n", ret, superb.lastblock())
 		return 0, -ENOMEM
 	}
-	blk, err := bcache_get_zero(ret, "balloc", true)
+	blk, err := bcache.Get_zero(ret, "balloc", true)
 	if err != 0 {
 		return 0, err
 	}
@@ -369,7 +382,7 @@ func balloc() (int, err_t) {
 	copy(blk.data[:], zdata[:])
 	blk.Unlock()
 	fslog.Write(blk)
-	bcache_relse(blk, "balloc")
+	bcache.Relse(blk, "balloc")
 	return ret, 0
 }
 
