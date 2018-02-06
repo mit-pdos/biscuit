@@ -6,7 +6,7 @@ import "strconv"
 const log_debug = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
-// op_begin and op_end(); the log makes sure that these operations happen
+// Op_begin and Op_end(); the log makes sure that these operations happen
 // atomically with respect to crashes.  Operations are grouped in
 // transactions. A transaction is committed to the on-disk log on sync() or when
 // the log is close to full.  After a transaction is committed, a new

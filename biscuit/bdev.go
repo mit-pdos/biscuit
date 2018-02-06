@@ -30,11 +30,11 @@ type bdev_block_t struct {
 	s       string
 }
 
-func (blk *bdev_block_t) key() int {
+func (blk *bdev_block_t) Key() int {
 	return blk.block
 }
 
-func (blk *bdev_block_t) evict() {
+func (blk *bdev_block_t) Evict() {
 	if bdev_debug {
 		fmt.Printf("evict: block %v %#x %v\n", blk.block, blk.pa, refcnt(blk.pa))
 	}
@@ -44,7 +44,7 @@ func (blk *bdev_block_t) evict() {
 	blk.free_page()
 }
 
-func (blk *bdev_block_t) evictnow() bool {
+func (blk *bdev_block_t) Evictnow() bool {
 	return false
 }
 
@@ -139,11 +139,11 @@ func bdev_flush() {
 // interrupt handler).
 //
 
-var brefcache = make_refcache(syslimit.blocks, false)
+var brefcache = mkRefcache(syslimit.blocks, false)
 
 // returns the reference to a locked buffer
 func bref(blk int, s string) (*bdev_block_t, bool, err_t) {
-	ref, err := brefcache.lookup(blk, s)
+	ref, err := brefcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
@@ -228,12 +228,12 @@ func bcache_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 }
 
 func bcache_write(b *bdev_block_t) {
-	brefcache.refup(b, "bcache_write")
+	brefcache.Refup(b, "bcache_write")
 	b.bdev_write()
 }
 
 func bcache_write_async(b *bdev_block_t) {
-	brefcache.refup(b, "bcache_write_async")
+	brefcache.Refup(b, "bcache_write_async")
 	b.bdev_write_async()
 }
 
@@ -252,7 +252,7 @@ func bcache_write_async_blks(blks []*bdev_block_t) {
 			panic("not contiguous\n")
 		}
 		n++
-		brefcache.refup(b, "bcache_write_async_blks")
+		brefcache.Refup(b, "bcache_write_async_blks")
 	}
 	// one request for all blks
 	ider := bdev_req_new(blks, BDEV_WRITE, false)
@@ -261,14 +261,14 @@ func bcache_write_async_blks(blks []*bdev_block_t) {
 
 
 func bcache_refup(b *bdev_block_t, s string) {
-	brefcache.refup(b, s)
+	brefcache.Refup(b, s)
 }
 
 func bcache_relse(b *bdev_block_t, s string) {
 	if bdev_debug {
 		fmt.Printf("bcache_relse: %v %v\n", b.block, s)
 	}
-	brefcache.refdown(b, s)
+	brefcache.Refdown(b, s)
 }
 
 func bcache_stat() string {

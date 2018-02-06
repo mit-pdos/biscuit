@@ -10,10 +10,11 @@ import "sync"
 const refcache_debug = false
 const always_eager = false
 
+// Objects in the cache must support the following interface:
 type obj_t interface {
-	evict()
-	evictnow() bool
-	key() int
+	Evict()
+	Evictnow() bool
+	Key() int
 }
 
 // The cache contains refcounted references to obj
@@ -39,7 +40,11 @@ type refcache_t struct {
 	nevict          int
 }
 
-func make_refcache(size int, async bool) *refcache_t {
+//
+// Public interface
+//
+
+func mkRefcache(size int, async bool) *refcache_t {
 	ic := &refcache_t{}
 	ic.maxsize = size
 	ic.evict_async = async
@@ -47,37 +52,8 @@ func make_refcache(size int, async bool) *refcache_t {
 	return ic
 }
 
-func (irc *refcache_t) nlive() int {
-	n := 0
-	for _, r := range irc.refs {
-		if r.refcnt > 0 {
-			n++
-		}
-	}
-	return n
-}
-
-func (irc *refcache_t) _delete(ir *ref_t) {
-	delete(irc.refs, ir.key)
-	irc.reflru.remove(ir)
-	irc.nevict++
-}
-
-func (irc *refcache_t) _replace() obj_t {
-	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
-		if ir.refcnt == 0 {
-			if refcache_debug {
-				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
-			}
-			irc._delete(ir)
-			return ir.obj
-		}
-	}
-	return nil
-}
-
 // returns a locked ref
-func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
+func (irc *refcache_t) Lookup(key int, s string) (*ref_t, err_t) {
 	irc.Lock()
 	
 	ref, ok := irc.refs[key]
@@ -127,26 +103,26 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 }
 
 
-func (irc *refcache_t) refup(o obj_t, s string) {
+func (irc *refcache_t) Refup(o obj_t, s string) {
 	irc.Lock()
 	defer irc.Unlock()
 	
-	ref, ok := irc.refs[o.key()]
+	ref, ok := irc.refs[o.Key()]
 	if !ok {
 		panic("refup")
 	}
 	
 	if refcache_debug {
-		fmt.Printf("refdup %v cnt %v %s\n", o.key(), ref.refcnt, s)
+		fmt.Printf("refdup %v cnt %v %s\n", o.Key(), ref.refcnt, s)
 	}
 
 	ref.refcnt++
 }
 
-func (irc *refcache_t) refdown(o obj_t, s string) {
+func (irc *refcache_t) Refdown(o obj_t, s string) {
 	irc.Lock()
 
-	ref, ok := irc.refs[o.key()]
+	ref, ok := irc.refs[o.Key()]
 	if !ok {
 		panic("refdown: key not present")
 	}
@@ -155,7 +131,7 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 	}
 
 	if refcache_debug {
-		fmt.Printf("refdown %v cnt %v %s\n", o.key(), ref.refcnt, s)
+		fmt.Printf("refdown %v cnt %v %s\n", o.Key(), ref.refcnt, s)
 	}
 	
 	ref.refcnt--
@@ -165,7 +141,7 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 
 	var victim obj_t
 	if ref.refcnt == 0 {
-		if ref.obj.evictnow() || always_eager {
+		if ref.obj.Evictnow() || always_eager {
 			irc._delete(ref)
 			victim = ref.obj
 		}
@@ -178,11 +154,44 @@ func (irc *refcache_t) refdown(o obj_t, s string) {
 	}
 }
 
+//
+// Implementation
+//
+
+func (irc *refcache_t) nlive() int {
+	n := 0
+	for _, r := range irc.refs {
+		if r.refcnt > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func (irc *refcache_t) _delete(ir *ref_t) {
+	delete(irc.refs, ir.key)
+	irc.reflru.remove(ir)
+	irc.nevict++
+}
+
+func (irc *refcache_t) _replace() obj_t {
+	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
+		if ir.refcnt == 0 {
+			if refcache_debug {
+				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
+			}
+			irc._delete(ir)
+			return ir.obj
+		}
+	}
+	return nil
+}
+
 func (irc *refcache_t) doevict(victim obj_t) {
 	if irc.evict_async {
-		go victim.evict()
+		go victim.Evict()
 	} else {
-		victim.evict()
+		victim.Evict()
 	}
 }
 

@@ -204,12 +204,12 @@ type imemnode_t struct {
 	_amlocked	bool
 }
 
-func (idm *imemnode_t) key() int {
+func (idm *imemnode_t) Key() int {
 	return int(idm.inum)
 }
 
 // No other thread should have a reference to this inode.
-func (idm *imemnode_t) evict() {
+func (idm *imemnode_t) Evict() {
 	idm._derelease()
 	if fs_debug {
 		fmt.Printf("evict: %v\n", idm.inum)
@@ -221,7 +221,7 @@ func (idm *imemnode_t) evict() {
 	}
 }
 
-func (idm *imemnode_t) evictnow() bool {
+func (idm *imemnode_t) Evictnow() bool {
 	idm.Lock()
 	r := idm.icache.links == 0
 	idm.Unlock()
@@ -250,7 +250,7 @@ func (idm *imemnode_t) iunlock(s string) {
 }
 
 // inode refcache
-var irefcache	= make_refcache(syslimit.vnodes, true)
+var irefcache	= mkRefcache(syslimit.vnodes, true)
 
 func icache_stat() string {
 	s := "icache: size "
@@ -265,7 +265,7 @@ func icache_stat() string {
 
 // obtain the reference for an inode
 func iref(inum inum_t, s string) (*imemnode_t, err_t) {
-	ref, err := irefcache.lookup(int(inum), s)
+	ref, err := irefcache.Lookup(int(inum), s)
 	if err != 0 {
 		return nil, err
 	}
@@ -305,7 +305,7 @@ func iref_locked(inum inum_t, s string) (*imemnode_t, err_t) {
 // Grab locks on inodes references in imems.  handles duplicates.
 func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 	var locked []*imemnode_t
-	sort.Slice(imems, func(i, j int) bool { return imems[i].key() < imems[j].key() })
+	sort.Slice(imems, func(i, j int) bool { return imems[i].Key() < imems[j].Key() })
 	for _, imem := range imems {
 		dup := false
 		for _, l := range locked {
@@ -341,7 +341,7 @@ func (idm *imemnode_t) idm_init(inum inum_t) err_t {
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
 	idm.iunlock(s)
-	irefcache.refdown(idm, s)
+	irefcache.Refdown(idm, s)
 }
 
 func (idm *imemnode_t) _iupdate() err_t {

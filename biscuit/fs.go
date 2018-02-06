@@ -244,8 +244,8 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 
 	npar, err := fs_namei(ndirs, cwd)
 	if err != 0 {
-		irefcache.refdown(opar, "fs_rename_opar")
-		irefcache.refdown(ochild, "fs_rename_ochild")
+		irefcache.Refdown(opar, "fs_rename_opar")
+		irefcache.Refdown(ochild, "fs_rename_ochild")
 		return err
 	}
 	
@@ -256,9 +256,9 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 	// delete npar and an ancestor, but rename has already a reference to to
 	// npar.
 	if err = _isancestor(ochild, npar); err != 0 {
-		irefcache.refdown(opar, "fs_rename_opar")
-		irefcache.refdown(ochild, "fs_rename_ochild")
-		irefcache.refdown(npar, "fs_rename_npar")
+		irefcache.Refdown(opar, "fs_rename_opar")
+		irefcache.Refdown(ochild, "fs_rename_ochild")
+		irefcache.Refdown(npar, "fs_rename_npar")
 		return err
 	}
 
@@ -270,16 +270,16 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		npar.Lock()
 		nchildinum, err := npar.ilookup(nfn)
 		if err != 0 && err != -ENOENT {
-			irefcache.refdown(opar, "fs_name_opar")
-			irefcache.refdown(ochild, "fs_name_ochild")	
+			irefcache.Refdown(opar, "fs_name_opar")
+			irefcache.Refdown(ochild, "fs_name_ochild")	
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
 		var err1 err_t
 		nchild, err1 = iref(nchildinum, "fs_rename_ochild")
 		if err1 != 0 {
-			irefcache.refdown(opar, "fs_name_opar")
-			irefcache.refdown(ochild, "fs_name_ochild")	
+			irefcache.Refdown(opar, "fs_name_opar")
+			irefcache.Refdown(ochild, "fs_name_ochild")	
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
@@ -297,7 +297,7 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		locked = iref_lockall(inodes)
 		// defers are run last-in-first-out
 		for _, v := range inodes {
-			defer irefcache.refdown(v, "rename")
+			defer irefcache.Refdown(v, "rename")
 		}
 
 		for _, v := range locked {
@@ -342,7 +342,7 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 			v.iunlock("fs_rename_opar")
 		}
 		if newexists {
-			irefcache.refdown(nchild, "fs_rename_nchild")
+			irefcache.Refdown(nchild, "fs_rename_nchild")
 		}
 	}
 
@@ -420,7 +420,7 @@ func _isancestor(anc, start *imemnode_t) err_t {
 	}
 	for here.inum != iroot {
 		if anc == here {
-			irefcache.refdown(here, "_isancestor_here")
+			irefcache.Refdown(here, "_isancestor_here")
 			return -EINVAL
 		}
 		here.ilock("_isancestor")
@@ -441,7 +441,7 @@ func _isancestor(anc, start *imemnode_t) err_t {
 			here = next
 		}
 	}
-	irefcache.refdown(here, "_isancestor")
+	irefcache.Refdown(here, "_isancestor")
 	return 0
 }
 
@@ -575,7 +575,7 @@ func (fo *fsfops_t) reopen() err_t {
 		return err
 	}
 	istats.nreopen++
-	irefcache.refup(idm, "reopen")   // close will decrease it
+	irefcache.Refup(idm, "reopen")   // close will decrease it
 	idm.iunlock_refdown("reopen")
 	return 0
 }
@@ -1000,7 +1000,7 @@ func fs_mkdir(paths string, mode int, cwd inum_t) err_t {
 
 	child.do_insert(".", childi)
 	child.do_insert("..", par.inum)
-	irefcache.refdown(child, "fs_mkdir3")
+	irefcache.Refdown(child, "fs_mkdir3")
 	return 0
 }
 
@@ -1113,7 +1113,7 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor i
 		idm.do_trunc(0)
 	}
 
-	irefcache.refup(idm, "_fs_open")
+	irefcache.Refup(idm, "_fs_open")
 
 	ret.inum = idm.inum
 	ret.major = idm.icache.major
@@ -1181,7 +1181,7 @@ func fs_close(priv inum_t) err_t {
 	if err != 0 {
 		return err
 	}
-	irefcache.refdown(idm, "fs_close")
+	irefcache.Refdown(idm, "fs_close")
 	idm.iunlock_refdown("fs_close")
 	return 0
 }
