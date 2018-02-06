@@ -209,7 +209,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	}
 	
 	b.Unlock()
-	b.log_write()  // log empty dir block, later writes absorpt it hopefully
+	fslog.Write(b)  // log empty dir block, later writes absorpt it hopefully
 	bcache_relse(b, "_denextempty")
 	
 	idm.icache.size = newsz
@@ -239,7 +239,7 @@ func (idm *imemnode_t) _deinsert(name string, inum inum_t) err_t {
 
 
 	b.Unlock()
-	b.log_write()
+	fslog.Write(b)
 	bcache_relse(b, "_deinsert")
 	
 	icd := icdent_t{noff, inum}
@@ -331,7 +331,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 	dirdata.w_filename(0, "")
 	dirdata.w_inodenext(0, inum_t(0))
 	b.Unlock()
-	b.log_write()
+	fslog.Write(b)
 	bcache_relse(b, "_deremove")
 	// add back to free dents
 	idm.icache.dentc.dents.remove(fn)

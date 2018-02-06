@@ -371,7 +371,7 @@ func balloc() (int, err_t) {
 	var zdata [BSIZE]uint8
 	copy(blk.data[:], zdata[:])
 	blk.Unlock()
-	blk.log_write()
+	fslog.Write(blk)
 	bcache_relse(blk, "balloc")
 	return ret, 0
 }

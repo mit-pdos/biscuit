@@ -58,6 +58,119 @@ type log_t struct {
 	nforceordered     int
 }
 
+//
+// The public interface to the logging layer
+//
+
+func (log *log_t) Op_begin(s string) {
+	if memfs {
+		return
+	}
+	<- log.admission
+	if log_debug {
+		fmt.Printf("op_begin: go %v\n", s)
+	}
+}
+
+func (log *log_t) Op_end() {
+	if memfs {
+		return
+	}
+	log.done <- true
+}
+
+// ensure any fs ops in the journal preceding this sync call are flushed to disk
+// by waiting for log commit.
+func (log *log_t) Force() {
+	log.force <- true
+	<- log.commitwait
+}
+
+// Write increments ref so that the log has always a valid ref to the buf's page
+// the logging layer refdowns when it it is done with the page.  the caller of
+// log_write shouldn't hold buf's lock.
+func (log *log_t) Write(b *bdev_block_t) {
+	if memfs {
+		return
+	}
+	if log_debug {
+		fmt.Printf("log_write %v\n", b.block)
+	}
+	bcache_refup(b, "log_write")
+	log.incoming <- buf_t{b, false}
+}
+
+func (log *log_t) Write_ordered(b *bdev_block_t) {
+	if memfs {
+		return
+	}
+	if log_debug {
+		fmt.Printf("log_write_ordered %v\n", b.block)
+	}
+	bcache_refup(b, "log_write_ordered")
+	log.incoming <- buf_t{b, true}
+}
+
+// All layers above log read blocks through the log layer, which are mostly
+// wrappers for the the corresponding cache operations.
+func (log *log_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	return log.read(mkread(bcache_get_fill, blkn, s, lock))
+}
+
+func (log *log_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	return log.read(mkread(bcache_get_zero, blkn, s, lock))
+}
+
+func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	return log.read(mkread(bcache_get_nofill, blkn, s, lock))
+}
+
+func (log *log_t) Stats() string {
+	s := "log:"
+	s += "\n\tnlogwrite "
+	s += strconv.Itoa(log.nlogwrite)
+	s += "\n\tnorderedwrite "
+	s += strconv.Itoa(log.norderedwrite)
+	s += "\n\tnordered2logwrite "
+	s += strconv.Itoa(log.norder2logwrite)
+	s += "\n\tnabsorb "
+	s += strconv.Itoa(log.nabsorption)
+	s += "\n\tnblkcommited "
+	s += strconv.Itoa(log.nblkcommitted)
+	s += "\n\tncommit "
+	s += strconv.Itoa(log.ncommit)
+	s += "\n\tmaxblks_per_commit "
+	s += strconv.Itoa(log.maxblks_per_op)
+	s += "\n\tnapply "
+	s += strconv.Itoa(log.napply)
+	s += "\n\tnblkapply "
+	s += strconv.Itoa(log.nblkapply)
+	s += "\n\tnabsorbapply "
+	s += strconv.Itoa(log.nabsorbapply)
+	s += "\n\tnforceordered "
+	s += strconv.Itoa(log.nforceordered)
+	s += "\n"
+	return s
+}
+
+func mkLog(logstart, loglen int) err_t {
+	if memfs {
+		return 0
+	}
+	fslog.init(logstart, loglen)
+	err := fslog.recover()
+	if err != 0 {
+		return err
+	}
+	go log_daemon(&fslog)
+	return 0
+}
+
+
+//
+// Log implementation
+//
+
 // first log header block format
 // bytes, meaning
 // 0-7,   valid log blocks
@@ -317,6 +430,44 @@ func (log *log_t) commit() {
 	bcache_relse(headblk, "commit done")
 }
 
+func (log *log_t) recover()  err_t {
+	b, err := bcache_get_fill(log.logstart, "fs_recover_logstart", false)
+	if err != 0 { 
+		return err
+	}
+	lh := logheader_t{b.data}
+	rlen := lh.recovernum()
+	if rlen == 0 {
+		fmt.Printf("no FS recovery needed\n")
+		bcache_relse(b, "fs_recover_logstart")
+		return 0
+	}
+	fmt.Printf("starting FS recovery...")
+
+	for i := 0; i < rlen; i++ {
+		bdest := lh.logdest(i)
+		lb, err := bcache_get_fill(log.logstart + 1 + i, "i", false)
+		if err != 0 {
+			return err
+		}
+		fb, err := bcache_get_fill(bdest, "bdest", false)
+		if err != 0 {
+			return err
+		}
+		copy(fb.data[:], lb.data[:])
+		bcache_write(fb)
+		bcache_relse(lb, "fs_recover1")
+		bcache_relse(fb, "fs_recover2")
+	}
+
+	// clear recovery flag
+	lh.w_recovernum(0)
+	bcache_write(b)
+	bcache_relse(b, "fs_recover_logstart")
+	fmt.Printf("restored %v blocks\n", rlen)
+	return 0
+}
+
 func log_daemon(l *log_t) {
 	for {
 		adm := l.admission
@@ -390,73 +541,20 @@ func log_daemon(l *log_t) {
 	}
 }
 
-//
-// The interface to the logging layer
-//
-
-func op_begin(s string) {
-	if memfs {
-		return
-	}
-	<- fslog.admission
-	if log_debug {
-		fmt.Printf("op_begin: go %v\n", s)
-	}
-}
-
-func op_end() {
-	if memfs {
-		return
-	}
-	fslog.done <- true
-}
-
-// ensure any fs ops in the journal preceding this sync call are flushed to disk
-// by waiting for log commit.
-func log_force() {
-	fslog.force <- true
-	<- fslog.commitwait
-}
-
-// log_write increments ref so that the log has always a valid ref to the buf's
-// page the logging layer refdowns when it it is done with the page.  the caller
-// of log_write shouldn't hold buf's lock.
-func (b *bdev_block_t) log_write() {
-	if memfs {
-		return
-	}
-	if log_debug {
-		fmt.Printf("log_write %v\n", b.block)
-	}
-	bcache_refup(b, "log_write")
-	fslog.incoming <- buf_t{b, false}
-}
-
-func (b *bdev_block_t) log_write_ordered() {
-	if memfs {
-		return
-	}
-	if log_debug {
-		fmt.Printf("log_write_ordered %v\n", b.block)
-	}
-	bcache_refup(b, "log_write_ordered")
-	fslog.incoming <- buf_t{b, true}
-}
-
-func log_force_ordered() {
+func (log *log_t) force_ordered() {
 	if log_debug {
 		fmt.Printf("log_force_ordered\n")
 	}
-	fslog.forceordered <- true
-	<- fslog.orderedwait
+	log.forceordered <- true
+	<- log.orderedwait
 }
 
 
 // If cache has no space, ask logdaemon to create some space
-func log_read(readfn func() (*bdev_block_t, err_t)) (*bdev_block_t, err_t) {
+func (log *log_t) read(readfn func() (*bdev_block_t, err_t)) (*bdev_block_t, err_t) {
 	b, err := readfn()
 	if err == -ENOMEM {
-		log_force_ordered()
+		log.force_ordered()
 		b, err = readfn()
 		if err == -ENOMEM {
 			panic("still no mem")
@@ -471,96 +569,4 @@ func mkread(readfn func(int,string,bool) (*bdev_block_t, err_t), b int, s string
 	}
 }
 
-// All layers above log read blocks through the log layer, which are mostly
-// wrappers for the the corresponding cache operations.
-func log_get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return log_read(mkread(bcache_get_fill, blkn, s, lock))
-}
 
-func log_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return log_read(mkread(bcache_get_zero, blkn, s, lock))
-}
-
-func log_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return log_read(mkread(bcache_get_nofill, blkn, s, lock))
-}
-	
-func log_init(logstart, loglen int) err_t {
-	if memfs {
-		return 0
-	}
-	fslog.init(logstart, loglen)
-	err := log_recover()
-	if err != 0 {
-		return err
-	}
-	go log_daemon(&fslog)
-	return 0
-}
-
-func log_stat() string {
-	s := "log:"
-	s += "\n\tnlogwrite "
-	s += strconv.Itoa(fslog.nlogwrite)
-	s += "\n\tnorderedwrite "
-	s += strconv.Itoa(fslog.norderedwrite)
-	s += "\n\tnordered2logwrite "
-	s += strconv.Itoa(fslog.norder2logwrite)
-	s += "\n\tnabsorb "
-	s += strconv.Itoa(fslog.nabsorption)
-	s += "\n\tnblkcommited "
-	s += strconv.Itoa(fslog.nblkcommitted)
-	s += "\n\tncommit "
-	s += strconv.Itoa(fslog.ncommit)
-	s += "\n\tmaxblks_per_commit "
-	s += strconv.Itoa(fslog.maxblks_per_op)
-	s += "\n\tnapply "
-	s += strconv.Itoa(fslog.napply)
-	s += "\n\tnblkapply "
-	s += strconv.Itoa(fslog.nblkapply)
-	s += "\n\tnabsorbapply "
-	s += strconv.Itoa(fslog.nabsorbapply)
-	s += "\n\tnforceordered "
-	s += strconv.Itoa(fslog.nforceordered)
-	s += "\n"
-	return s
-}
-
-func log_recover() err_t {
-	l := &fslog
-	b, err := bcache_get_fill(l.logstart, "fs_recover_logstart", false)
-	if err != 0 { 
-		return err
-	}
-	lh := logheader_t{b.data}
-	rlen := lh.recovernum()
-	if rlen == 0 {
-		fmt.Printf("no FS recovery needed\n")
-		bcache_relse(b, "fs_recover_logstart")
-		return 0
-	}
-	fmt.Printf("starting FS recovery...")
-
-	for i := 0; i < rlen; i++ {
-		bdest := lh.logdest(i)
-		lb, err := bcache_get_fill(l.logstart + 1 + i, "i", false)
-		if err != 0 {
-			return err
-		}
-		fb, err := bcache_get_fill(bdest, "bdest", false)
-		if err != 0 {
-			return err
-		}
-		copy(fb.data[:], lb.data[:])
-		bcache_write(fb)
-		bcache_relse(lb, "fs_recover1")
-		bcache_relse(fb, "fs_recover2")
-	}
-
-	// clear recovery flag
-	lh.w_recovernum(0)
-	bcache_write(b)
-	bcache_relse(b, "fs_recover_logstart")
-	fmt.Printf("restored %v blocks\n", rlen)
-	return 0
-}

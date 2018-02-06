@@ -18,7 +18,7 @@ func fs_init() *fd_t {
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b, err := log_get_fill(0, "fsoff", false)
+	b, err := bcache_get_fill(0, "fsoff", false)
 	if err != 0 {
 		panic("fs_init")
 	}
@@ -31,7 +31,7 @@ func fs_init() *fd_t {
 	bcache_relse(b, "fs_init")
 
 	// superblock is never changed, so reading before recovery is fine
-	b, err = log_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
+	b, err = bcache_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
 	if err != 0 {
 		panic("fs_init")
 	}
@@ -43,7 +43,7 @@ func fs_init() *fd_t {
 		panic("bad log len")
 	}
 	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
-	err = log_init(logstart, loglen)
+	err = mkLog(logstart, loglen)
 	if err != 0 {
 		panic("log_init failed")
 	}
@@ -69,7 +69,7 @@ func fs_init() *fd_t {
 
 func fs_statistics() string {
 	s := inode_stats()
-	s += log_stat()
+	s += fslog.Stats()
 	s += ialloc_stat()
 	s += balloc_stat()
 	s += bcache_stat()
@@ -83,8 +83,8 @@ func fs_statistics() string {
 type inum_t int
 
 func fs_link(old string, new string, cwd inum_t) err_t {
-	op_begin("fs_link")
-	defer op_end()
+	fslog.Op_begin("fs_link")
+	defer fslog.Op_end()
 
 	if fs_debug {
 		fmt.Printf("fs_link: %v %v %v\n", old, new, cwd)
@@ -131,8 +131,8 @@ func fs_unlink(paths string, cwd inum_t, wantdir bool) err_t {
 		return -EPERM
 	}
 
-	op_begin("fs_unlink")
-	defer op_end()
+	fslog.Op_begin("fs_unlink")
+	defer fslog.Op_end()
 
 	istats.nunlink++
 
@@ -208,8 +208,8 @@ func fs_rename(oldp, newp string, cwd inum_t) err_t {
 		return err
 	}
 
-	op_begin("fs_rename")
-	defer op_end()
+	fslog.Op_begin("fs_rename")
+	defer fslog.Op_end()
 
 	istats.nrename++
 	
@@ -525,8 +525,8 @@ func (fo *fsfops_t) fullpath() (string, err_t) {
 }
 
 func (fo *fsfops_t) truncate(newlen uint) err_t {
-	op_begin("truncate")
-	defer op_end()
+	fslog.Op_begin("truncate")
+	defer fslog.Op_end()
 
 	if fs_debug {
 		fmt.Printf("truncate: %v %v\n", fo.priv, newlen)
@@ -814,7 +814,7 @@ func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	var did int
 	for dst.remain() != 0 {
 		blkno := raw.offset / BSIZE
-		b, err := log_get_fill(blkno, "read", false)
+		b, err := fslog.Get_fill(blkno, "read", false)
 		if err != 0 {
 			return 0, err
 		}
@@ -841,7 +841,7 @@ func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		//	buf := bdev_read_block(blkno)
 		//}
 		// XXX don't always have to read block in from disk
-		buf, err := log_get_fill(blkno, "write", false)
+		buf, err := fslog.Get_fill(blkno, "write", false)
 		if err != 0 {
 			return 0, err
 		}
@@ -963,8 +963,8 @@ func (raw *rawdfops_t) shutdown(read, write bool) err_t {
 }
 
 func fs_mkdir(paths string, mode int, cwd inum_t) err_t {
-	op_begin("fs_mkdir")
-	defer op_end()
+	fslog.Op_begin("fs_mkdir")
+	defer fslog.Op_end()
 
 	istats.nmkdir++
 
@@ -1022,8 +1022,8 @@ func _fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor i
 
 	// open with O_TRUNC is not read-only
 	if trunc || creat {
-		op_begin("fs_open")
-		defer op_end()
+		fslog.Op_begin("fs_open")
+		defer fslog.Op_end()
 	}
 	var ret fsfile_t
 	var idm *imemnode_t
@@ -1168,8 +1168,8 @@ func fs_open(paths string, flags fdopt_t, mode int, cwd inum_t,  major, minor in
 }
 
 func fs_close(priv inum_t) err_t {
-	defer op_end()
-	op_begin("fs_close")
+	fslog.Op_begin("fs_close")
+	defer fslog.Op_end()
 
 	istats.nclose++
 	
@@ -1204,7 +1204,7 @@ func fs_sync() err_t {
 		return 0
 	}
 	istats.nsync++
-	log_force()
+	fslog.Force()
 	return 0
 }
 
@@ -1326,7 +1326,7 @@ func (alloc *allocater_t) fbread(blockno int) (*bdev_block_t, err_t) {
 	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
 		panic("naughty blockno")
 	}
-	return log_get_fill(blockno, "fbread", true)
+	return fslog.Get_fill(blockno, "fbread", true)
 }
 
 func (alloc *allocater_t) alloc() (int, err_t) {
@@ -1382,7 +1382,7 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 	// mark as allocated
 	blk.data[oct] |= 1 << bit
 	blk.Unlock()
-	blk.log_write()
+	fslog.Write(blk)
 	bcache_relse(blk, "balloc1")
 
 	bitsperblk := BSIZE*8
@@ -1418,7 +1418,7 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	}
 	fblk.data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
-	fblk.log_write()
+	fslog.Write(fblk)
 	bcache_relse(fblk, "free")
 	alloc.nfree++
 	return 0

@@ -215,9 +215,9 @@ func (idm *imemnode_t) evict() {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
 	if idm.icache.links == 0 {
-		op_begin("evict")
+		fslog.Op_begin("evict")
 		idm.ifree()
-		op_end()
+		fslog.Op_end()
 	}
 }
 
@@ -352,7 +352,7 @@ func (idm *imemnode_t) _iupdate() err_t {
 	}
 	if idm.icache.flushto(iblk, idm.inum) {
 		iblk.Unlock()
-		iblk.log_write()
+		fslog.Write(iblk)
 	} else {
 		iblk.Unlock()
 	}
@@ -400,10 +400,10 @@ func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, er
 		if n > max {
 			n = max
 		}
-		op_begin("dowrite")
+		fslog.Op_begin("dowrite")
 		wrote, err := idm.iwrite(src, offset+i, n)
 		idm._iupdate()
-		op_end()
+		fslog.Op_end()
 
 		if err != 0 {
 			return i, err			
@@ -581,7 +581,7 @@ type icache_t struct {
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
 func (ic *icache_t) mbread(blockn int) (*bdev_block_t, err_t) {
-	mb, err := log_get_fill(blockn, "mbread", false)
+	mb, err := fslog.Get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
@@ -652,7 +652,7 @@ func (idm *imemnode_t) ensureind(blk *bdev_block_t, slot int, writing bool) (int
 	}
 	if isnew {
 		writen(s, 8, off, blkn)
-		blk.log_write()
+		fslog.Write(blk)
 	}
 	return blkn, 0
 }
@@ -778,9 +778,9 @@ func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s 
 	}
 	var b *bdev_block_t
 	if fill {
-		b, err = log_get_fill(blkno, s, true)
+		b, err = fslog.Get_fill(blkno, s, true)
 	} else {
-		b, err = log_get_nofill(blkno, s, true)
+		b, err = fslog.Get_nofill(blkno, s, true)
         }
 	if err != 0 {
 		return nil, err
@@ -848,7 +848,7 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
 		dst := b.data[s:s+m]
 		read, err := src.uioread(dst)
 		b.Unlock()
-		b.log_write_ordered()
+		fslog.Write_ordered(b)
 		bcache_relse(b, "iwrite")
 		if err != 0 {
 			return c, err
@@ -889,7 +889,7 @@ func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
 	if ci != childi {
 		panic("inconsistent")
 	}
-	ib, err := log_get_fill(iblock(childi), "create_undo", true)
+	ib, err := fslog.Get_fill(iblock(childi), "create_undo", true)
 	if err != 0 {
 		return err
 	}
@@ -927,7 +927,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 	if err != 0 {
 		return 0, err
 	}
-	newiblk, err := log_get_fill(newbn, "icreate", true)
+	newiblk, err := fslog.Get_fill(newbn, "icreate", true)
 	if err != 0 {
 		return 0, err
 	}
@@ -961,7 +961,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 		newinode.w_itype(I_DEAD)
 		ifree(newinum)
 	}
-	newiblk.log_write()
+	fslog.Write(newiblk)
 	bcache_relse(newiblk, "icreate")
 	return newinum, err
 }
@@ -1009,7 +1009,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 }
 
 func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
-	return log_get_fill(iblock(idm.inum), "idibread", true)
+	return fslog.Get_fill(iblock(idm.inum), "idibread", true)
 }
 
 // frees all blocks occupied by idm
@@ -1082,7 +1082,7 @@ func (idm *imemnode_t) ifree() err_t {
 	idm.icache.itype = I_DEAD
 	idm.icache.flushto(iblk, idm.inum)
 	iblk.Unlock()
-	iblk.log_write()
+	fslog.Write(iblk)
 	bcache_relse(iblk, "ifree2")
 
 	ifree(idm.inum)
