@@ -58,7 +58,7 @@ func fs_init() *fd_t {
 	bmaplen := superb.freeblocklen()
 	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
 
-	ialloc_init(imapstart, imaplen, bmapstart+bmaplen)
+	mkIalloc(imapstart, imaplen, bmapstart+bmaplen)
 
 
 	inodelen := superb.inodelen()
@@ -72,7 +72,7 @@ func fs_init() *fd_t {
 func fs_statistics() string {
 	s := inode_stats()
 	s += fslog.Stats()
-	s += ialloc_stat()
+	s += ialloc.Stats()
 	s += balloc.Stats()
 	s += bcache.Stats()
 	s += icache_stat()
@@ -1308,7 +1308,7 @@ type allocater_t struct {
 	nhit  int
 }
 
-func make_allocater(start, len int) (*allocater_t) {
+func mkAllocater(start, len int) (*allocater_t) {
 	a := &allocater_t{}
 	a.freestart = start
 	a.freelen = len
@@ -1324,14 +1324,14 @@ func freebit(b uint8) uint {
 	panic("no 0 bit?")
 }
 
-func (alloc *allocater_t) fbread(blockno int) (*bdev_block_t, err_t) {
+func (alloc *allocater_t) Fbread(blockno int) (*bdev_block_t, err_t) {
 	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
 		panic("naughty blockno")
 	}
 	return fslog.Get_fill(blockno, "fbread", true)
 }
 
-func (alloc *allocater_t) alloc() (int, err_t) {
+func (alloc *allocater_t) Alloc() (int, err_t) {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -1350,7 +1350,7 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 			blk.Unlock()
 			bcache.Relse(blk, "alloc")
 		}
-		blk, err = alloc.fbread(alloc.freestart + i)
+		blk, err = alloc.Fbread(alloc.freestart + i)
 		if err != 0 {
 			return 0, err
 		}
@@ -1393,7 +1393,7 @@ func (alloc *allocater_t) alloc() (int, err_t) {
 }
 
 
-func (alloc *allocater_t) free(blkno int) err_t {
+func (alloc *allocater_t) Free(blkno int) err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -1414,7 +1414,7 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	if fblkno >= alloc.freestart + alloc.freelen {
 		panic("free: bad blockno")
 	}
-	fblk, err := alloc.fbread(fblkno)
+	fblk, err := alloc.Fbread(fblkno)
 	if err != 0 {
 		return err
 	}
@@ -1426,7 +1426,7 @@ func (alloc *allocater_t) free(blkno int) err_t {
 	return 0
 }
 
-func (alloc *allocater_t) stat() string {
+func (alloc *allocater_t) Stats() string {
 	s := "allocater: #alloc "
 	s += strconv.Itoa(alloc.nalloc)
 	s += " #free "

@@ -344,7 +344,7 @@ var balloc *ballocater_t
 
 func mkBallocater(start,len, first int) {
 	balloc = &ballocater_t{}
-	balloc.alloc = make_allocater(start, len)
+	balloc.alloc = mkAllocater(start, len)
 	fmt.Printf("first datablock %v\n", first)
 	balloc.first = first
 }
@@ -385,18 +385,18 @@ func (balloc *ballocater_t) Bfree(blkno int) err_t {
 	if blkno < 0 {
 		panic("bfree")
 	}
-	return balloc.alloc.free(blkno)
+	return balloc.alloc.Free(blkno)
 }
 
 func (balloc *ballocater_t) Stats() string {
-	return "balloc " + balloc.alloc.stat()
+	return "balloc " + balloc.alloc.Stats()
 }
 
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
 func (balloc *ballocater_t) balloc1() (int, err_t) {
-	blkn, err := balloc.alloc.alloc()
+	blkn, err := balloc.alloc.Alloc()
 	if err != 0 {
 		return 0, err
 	}

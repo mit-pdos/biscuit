@@ -889,7 +889,7 @@ func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
 	if ci != childi {
 		panic("inconsistent")
 	}
-	ib, err := fslog.Get_fill(iblock(childi), "create_undo", true)
+	ib, err := fslog.Get_fill(ialloc.Iblock(childi), "create_undo", true)
 	if err != 0 {
 		return err
 	}
@@ -897,7 +897,7 @@ func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
 	ni.w_itype(I_DEAD)
 	ib.Unlock()
 	bcache.Relse(ib, "create_undo")
-	ifree(childi)
+	ialloc.Ifree(childi)
 	return 0
 }
 
@@ -921,8 +921,8 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 	istats.nicreate++
 	
 	// allocate new inode
-	newinum, err := ialloc()
-	newbn := iblock(newinum)
+	newinum, err := ialloc.Ialloc()
+	newbn := ialloc.Iblock(newinum)
 	newioff := ioffset(newinum)
 	if err != 0 {
 		return 0, err
@@ -959,7 +959,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 	err = idm._deinsert(name, newinum)
 	if err != 0 {
 		newinode.w_itype(I_DEAD)
-		ifree(newinum)
+		ialloc.Ifree(newinum)
 	}
 	fslog.Write(newiblk)
 	bcache.Relse(newiblk, "icreate")
@@ -1009,7 +1009,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 }
 
 func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
-	return fslog.Get_fill(iblock(idm.inum), "idibread", true)
+	return fslog.Get_fill(ialloc.Iblock(idm.inum), "idibread", true)
 }
 
 // frees all blocks occupied by idm
@@ -1085,7 +1085,7 @@ func (idm *imemnode_t) ifree() err_t {
 	fslog.Write(iblk)
 	bcache.Relse(iblk, "ifree2")
 
-	ifree(idm.inum)
+	ialloc.Ifree(idm.inum)
 
 	// could batch free
 	for _, blkno := range allb {
@@ -1124,16 +1124,16 @@ type iallocater_t struct {
 	alloc *allocater_t
 	first int
 }
-var iallocater  *iallocater_t
+var ialloc  *iallocater_t
 
-func ialloc_init(start, len, first int) {
-	iallocater = &iallocater_t{}
-	iallocater.alloc = make_allocater(start, len)
-	iallocater.first = first
+func mkIalloc(start, len, first int) {
+	ialloc = &iallocater_t{}
+	ialloc.alloc = mkAllocater(start, len)
+	ialloc.first = first
 }
 
-func ialloc() (inum_t, err_t) {
-	n, err := iallocater.alloc.alloc()
+func (ialloc *iallocater_t) Ialloc() (inum_t, err_t) {
+	n, err := ialloc.alloc.Alloc()
 	inum := inum_t(n)
 	if err != 0 {
 		return 0, err
@@ -1144,16 +1144,16 @@ func ialloc() (inum_t, err_t) {
 	return inum, 0
 }
 
-func ifree(inum inum_t) err_t {
+func (ialloc *iallocater_t) Ifree(inum inum_t) err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d\n", inum)
 	}
-	return iallocater.alloc.free(int(inum))
+	return ialloc.alloc.Free(int(inum))
 }
 
-func iblock(inum inum_t) int {
+func (ialloc *iallocater_t) Iblock(inum inum_t) int {
 	b := int(inum) / (BSIZE / ISIZE)
-	b += iallocater.first
+	b += ialloc.first
         return b
 }
 
@@ -1162,6 +1162,6 @@ func ioffset(inum inum_t) int {
         return o
 }
 
-func ialloc_stat() string {
-	return "inode " + iallocater.alloc.stat()
+func (ialloc *iallocater_t) Stats() string {
+	return "inode " + ialloc.alloc.Stats()
 }
