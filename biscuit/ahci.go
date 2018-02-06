@@ -460,7 +460,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.sector_count = 1;
 
 	// To receive the identity
-        b := bdev_block_new(-1, "identify")
+        b := mkBlock_newpage(-1, "identify")
 	p.fill_prd(0, b)
 	p.fill_fis(0, fis)
 

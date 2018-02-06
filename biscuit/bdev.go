@@ -48,36 +48,13 @@ func (blk *bdev_block_t) Evictnow() bool {
 	return false
 }
 
-func bdev_make(block int, pa pa_t, s string) *bdev_block_t {
-	b := &bdev_block_t{};
-	b.block = block
-	b.pa = pa
-	b.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
-	b.s = s
+func mkBlock_newpage(block int, s string) *bdev_block_t {
+	b := mkblock(block, pa_t(0), s)
+	b.New_page()
 	return b
 }
 
-func (blk *bdev_block_t) new_page() {
-	_, pa, ok := refpg_new()
-	if !ok {
-		panic("oom during bdev.new_page")
-	}
-	blk.pa = pa
-	blk.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
-	refup(blk.pa)
-}
-
-func (blk *bdev_block_t) free_page() {
-	refdown(blk.pa)
-}
-
-func bdev_block_new(block int, s string) *bdev_block_t {
-	b := bdev_make(block, pa_t(0), s)
-	b.new_page()
-	return b
-}
-
-func (b *bdev_block_t) bdev_write() {
+func (b *bdev_block_t) Write() {
 	if bdev_debug {
 		fmt.Printf("bdev_write %v %v\n", b.block, b.s)
 	}
@@ -90,7 +67,7 @@ func (b *bdev_block_t) bdev_write() {
 	}
 } 
 
-func (b *bdev_block_t) bdev_write_async() {
+func (b *bdev_block_t) Write_async() {
 	if bdev_debug {
 		fmt.Printf("bdev_write_async %v %s\n", b.block, b.s)
 	}
@@ -101,7 +78,7 @@ func (b *bdev_block_t) bdev_write_async() {
 	ahci_start(ider)
 }
 
-func (b *bdev_block_t) bdev_read() {
+func (b *bdev_block_t) Read() {
 	ider := bdev_req_new([]*bdev_block_t{b}, BDEV_READ, true)
 	if ahci_start(ider) {
 		<- ider.ackCh
@@ -117,13 +94,33 @@ func (b *bdev_block_t) bdev_read() {
 	
 }
 
-func bdev_flush() {
-	ider := bdev_req_new(nil, BDEV_FLUSH, true)
-	if ahci_start(ider) {
-		<- ider.ackCh
+func (blk *bdev_block_t) New_page() {
+	_, pa, ok := refpg_new()
+	if !ok {
+		panic("oom during bdev.new_page")
 	}
+	blk.pa = pa
+	blk.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
+	refup(blk.pa)
 }
 
+//
+// Implementation of blocks
+//
+
+func mkblock(block int, pa pa_t, s string) *bdev_block_t {
+	b := &bdev_block_t{};
+	b.block = block
+	b.pa = pa
+	b.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
+	b.s = s
+	return b
+}
+
+
+func (blk *bdev_block_t) free_page() {
+	refdown(blk.pa)
+}
 
 // block cache, all device interactions run through block cache.
 //
@@ -155,7 +152,7 @@ func bref(blk int, s string) (*bdev_block_t, bool, err_t) {
 		if bdev_debug {
 			fmt.Printf("bref fill %v %v\n", blk, s)
 		}
-		buf := bdev_make(blk, pa_t(0), s)
+		buf := mkblock(blk, pa_t(0), s)
 		ref.obj = buf
 		ref.valid = true
 		created = true
@@ -180,8 +177,8 @@ func bcache_get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 	}
 	
 	if created {
-		b.new_page()
-		b.bdev_read() // fill in new bdev_cache entry
+		b.New_page()
+		b.Read() // fill in new bdev_cache entry
 	}
 	if !lock {
 		b.Unlock()
@@ -200,7 +197,7 @@ func bcache_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 		return nil, err
 	}
 	if created {
-		b.new_page()   // zero
+		b.New_page()   // zero
 	} 
 	if !lock {
 		b.Unlock()
@@ -219,7 +216,7 @@ func bcache_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 		return nil, err
 	}
 	if created {
-		b.new_page()   // XXX a non-zero page would be fine
+		b.New_page()   // XXX a non-zero page would be fine
 	}
 	if !lock {
 		b.Unlock()
@@ -229,12 +226,12 @@ func bcache_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
 
 func bcache_write(b *bdev_block_t) {
 	brefcache.Refup(b, "bcache_write")
-	b.bdev_write()
+	b.Write()
 }
 
 func bcache_write_async(b *bdev_block_t) {
 	brefcache.Refup(b, "bcache_write_async")
-	b.bdev_write_async()
+	b.Write_async()
 }
 
 // blks must be contiguous on disk
@@ -292,7 +289,7 @@ func bdev_test() {
 	wbuf := new([N]*bdev_block_t)
 
 	for b := 0; b < N; b++ {
-		wbuf[b] = bdev_block_new(b, "disktest")
+		wbuf[b] = mkBlock_newpage(b, "disktest")
 	}
 	for j := 0; j < 100; j++ {
 
@@ -302,9 +299,9 @@ func bdev_test() {
 			for i,_ := range wbuf[b].data {
 				wbuf[b].data[i] = uint8(b)
 			}
-			wbuf[b].bdev_write_async()
+			wbuf[b].Write_async()
 		}
-		bdev_flush()
+		flush()
 		for b := 0; b < N; b++ {
 			rbuf, err := bcache_get_fill(b, "read test", false)
 			if err != 0 {

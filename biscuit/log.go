@@ -322,14 +322,14 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 		}
 	}
 
-	bdev_flush()  // flush apply
+	flush()  // flush apply
 	
 	// success; clear flag indicating to recover from log
 	lh := logheader_t{headblk.data}
 	lh.w_recovernum(0)
 	bcache_write(headblk)
 
-	bdev_flush()  // flush cleared commit
+	flush()  // flush cleared commit
 
 	log.logpresent = make(map[int]bool, log.loglen)
 }
@@ -351,7 +351,7 @@ func (log *log_t) commit() {
 			fmt.Printf("commit: flush ordered blks %d\n", len(log.ordered))
 		}
 		log.write_ordered();
-		bdev_flush();
+		flush();
 		return
 	}
 
@@ -400,11 +400,11 @@ func (log *log_t) commit() {
 
 	log.write_ordered()
 	
-	bdev_flush()   // flush outstanding writes
+	flush()   // flush outstanding writes
 
 	bcache_write(headblk)  	// write log header
 
-	bdev_flush()   // commit log header
+	flush()   // commit log header
 
 	log.nblkcommitted += newblks
 
@@ -428,6 +428,13 @@ func (log *log_t) commit() {
 
 	// done with log header
 	bcache_relse(headblk, "commit done")
+}
+
+func flush() {
+	ider := bdev_req_new(nil, BDEV_FLUSH, true)
+	if ahci_start(ider) {
+		<- ider.ackCh
+	}
 }
 
 func (log *log_t) recover()  err_t {
@@ -521,7 +528,7 @@ func log_daemon(l *log_t) {
 				}
 				l.nforceordered++
 				l.write_ordered()
-				bdev_flush()
+				flush()
 				l.orderedwait <- true
 			}
 		}
