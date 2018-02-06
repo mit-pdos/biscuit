@@ -64,7 +64,7 @@ func fs_init() *fd_t {
 	inodelen := superb.inodelen()
 	fmt.Printf("inodelen %v\n", inodelen)
 
-	balloc_init(bmapstart, bmaplen, bmapstart + bmaplen + inodelen)
+	mkBallocater(bmapstart, bmaplen, bmapstart + bmaplen + inodelen)
 
 	return &fd_t{fops: &fsfops_t{priv: iroot}}
 }
@@ -73,7 +73,7 @@ func fs_statistics() string {
 	s := inode_stats()
 	s += fslog.Stats()
 	s += ialloc_stat()
-	s += balloc_stat()
+	s += balloc.Stats()
 	s += bcache.Stats()
 	s += icache_stat()
 	s += ahci_stat()

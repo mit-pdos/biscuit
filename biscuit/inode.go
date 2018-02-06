@@ -637,7 +637,7 @@ func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, err_t) {
 	if !writing || blkno != 0 {
 		return blkno, false, 0
 	}
-	nblkno, err := balloc()
+	nblkno, err := balloc.Balloc()
 	return nblkno, true, err
 }
 
@@ -663,7 +663,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 		if idm.icache.addrs[fbn] != 0 {
 			return idm.icache.addrs[fbn], 0
 		}
-		blkn, err := balloc()
+		blkn, err := balloc.Balloc()
 		if err != 0 {
 			return 0, err
 		}
@@ -1089,7 +1089,7 @@ func (idm *imemnode_t) ifree() err_t {
 
 	// could batch free
 	for _, blkno := range allb {
-		bfree(blkno)
+		balloc.Bfree(blkno)
 	}
 	return 0
 }
