@@ -96,7 +96,8 @@ func (irc *refcache_t) lookup(key int, s string) (*ref_t, err_t) {
 	if len(irc.refs) >= irc.maxsize {
 		victim = irc._replace()
 		if victim == nil {
-			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
+			// fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
+			irc.Unlock()
 			return nil, -ENOMEM
 		}
         }

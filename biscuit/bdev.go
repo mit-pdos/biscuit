@@ -145,7 +145,7 @@ var brefcache = make_refcache(syslimit.blocks, false)
 func bref(blk int, s string) (*bdev_block_t, bool, err_t) {
 	ref, err := brefcache.lookup(blk, s)
 	if err != 0 {
-		fmt.Printf("bref %v\n", err)
+		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
 	}
 	defer ref.Unlock()

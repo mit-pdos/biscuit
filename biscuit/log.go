@@ -41,6 +41,8 @@ type log_t struct {
 	done		chan bool
 	force		chan bool
 	commitwait	chan bool
+	forceordered	chan bool
+	orderedwait	chan bool
 
 	// some stats
 	maxblks_per_op    int
@@ -53,6 +55,7 @@ type log_t struct {
 	norder2logwrite   int
 	nblkapply         int
 	nabsorbapply      int
+	nforceordered     int
 }
 
 // first log header block format
@@ -101,6 +104,8 @@ func (log *log_t) init(ls int, ll int) {
 	log.done = make(chan bool)
 	log.force = make(chan bool)
 	log.commitwait = make(chan bool)
+	log.forceordered = make(chan bool)
+	log.orderedwait = make(chan bool)
 
 	if log.loglen >= BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
@@ -280,7 +285,7 @@ func (log *log_t) commit() {
 		bcache_relse(b, "writelog")
 	}
 
-	log.write_ordered();
+	log.write_ordered()
 	
 	bdev_flush()   // flush outstanding writes
 
@@ -359,6 +364,14 @@ func log_daemon(l *log_t) {
 				if nops == 0 {
 					done = true
 				}
+			case <- l.forceordered:
+				if log_debug {
+					fmt.Printf("Force ordered %v\n", len(l.ordered))
+				}
+				l.nforceordered++
+				l.write_ordered()
+				bdev_flush()
+				l.orderedwait <- true
 			}
 		}
 
@@ -430,18 +443,46 @@ func (b *bdev_block_t) log_write_ordered() {
 	fslog.incoming <- buf_t{b, true}
 }
 
+func log_force_ordered() {
+	if log_debug {
+		fmt.Printf("log_force_ordered\n")
+	}
+	fslog.forceordered <- true
+	<- fslog.orderedwait
+}
+
+
+// If cache has no space, ask logdaemon to create some space
+func log_read(readfn func() (*bdev_block_t, err_t)) (*bdev_block_t, err_t) {
+	b, err := readfn()
+	if err == -ENOMEM {
+		log_force_ordered()
+		b, err = readfn()
+		if err == -ENOMEM {
+			panic("still no mem")
+		}
+	}
+	return b, err
+}
+
+func mkread(readfn func(int,string,bool) (*bdev_block_t, err_t), b int, s string, l bool) func()(*bdev_block_t, err_t) {
+	return func() (*bdev_block_t, err_t) {
+		return readfn(b, s, l)
+	}
+}
+
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func log_get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return bcache_get_fill(blkn, s, lock)
+	return log_read(mkread(bcache_get_fill, blkn, s, lock))
 }
 
 func log_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return bcache_get_zero(blkn, s, lock)
+	return log_read(mkread(bcache_get_zero, blkn, s, lock))
 }
 
 func log_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
-	return bcache_get_nofill(blkn, s, lock)
+	return log_read(mkread(bcache_get_nofill, blkn, s, lock))
 }
 	
 func log_init(logstart, loglen int) err_t {
@@ -479,6 +520,8 @@ func log_stat() string {
 	s += strconv.Itoa(fslog.nblkapply)
 	s += "\n\tnabsorbapply "
 	s += strconv.Itoa(fslog.nabsorbapply)
+	s += "\n\tnforceordered "
+	s += strconv.Itoa(fslog.nforceordered)
 	s += "\n"
 	return s
 }
