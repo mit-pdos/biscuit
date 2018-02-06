@@ -377,6 +377,10 @@ func log_daemon(l *log_t) {
 	}
 }
 
+//
+// The interface to the logging layer
+//
+
 func op_begin(s string) {
 	if memfs {
 		return
@@ -394,6 +398,12 @@ func op_end() {
 	fslog.done <- true
 }
 
+// ensure any fs ops in the journal preceding this sync call are flushed to disk
+// by waiting for log commit.
+func log_force() {
+	fslog.force <- true
+	<- fslog.commitwait
+}
 
 // log_write increments ref so that the log has always a valid ref to the buf's
 // page the logging layer refdowns when it it is done with the page.  the caller
@@ -420,6 +430,20 @@ func (b *bdev_block_t) log_write_ordered() {
 	fslog.incoming <- buf_t{b, true}
 }
 
+// All layers above log read blocks through the log layer, which are mostly
+// wrappers for the the corresponding cache operations.
+func log_get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	return bcache_get_fill(blkn, s, lock)
+}
+
+func log_get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	return bcache_get_zero(blkn, s, lock)
+}
+
+func log_get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+	return bcache_get_nofill(blkn, s, lock)
+}
+	
 func log_init(logstart, loglen int) err_t {
 	if memfs {
 		return 0

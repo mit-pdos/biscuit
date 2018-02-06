@@ -18,7 +18,7 @@ func fs_init() *fd_t {
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b, err := bcache_get_fill(0, "fsoff", false)
+	b, err := log_get_fill(0, "fsoff", false)
 	if err != 0 {
 		panic("fs_init")
 	}
@@ -31,7 +31,7 @@ func fs_init() *fd_t {
 	bcache_relse(b, "fs_init")
 
 	// superblock is never changed, so reading before recovery is fine
-	b, err = bcache_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
+	b, err = log_get_fill(superb_start, "super", false)   // don't relse b, because superb is global
 	if err != 0 {
 		panic("fs_init")
 	}
@@ -814,7 +814,7 @@ func (raw *rawdfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	var did int
 	for dst.remain() != 0 {
 		blkno := raw.offset / BSIZE
-		b, err := bcache_get_fill(blkno, "read", false)
+		b, err := log_get_fill(blkno, "read", false)
 		if err != 0 {
 			return 0, err
 		}
@@ -841,7 +841,7 @@ func (raw *rawdfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 		//	buf := bdev_read_block(blkno)
 		//}
 		// XXX don't always have to read block in from disk
-		buf, err := bcache_get_fill(blkno, "write", false)
+		buf, err := log_get_fill(blkno, "write", false)
 		if err != 0 {
 			return 0, err
 		}
@@ -1204,10 +1204,7 @@ func fs_sync() err_t {
 		return 0
 	}
 	istats.nsync++
-	// ensure any fs ops in the journal preceding this sync call are
-	// flushed to disk by waiting for log commit.
-	fslog.force <- true
-	<- fslog.commitwait
+	log_force()
 	return 0
 }
 
@@ -1329,7 +1326,7 @@ func (alloc *allocater_t) fbread(blockno int) (*bdev_block_t, err_t) {
 	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
 		panic("naughty blockno")
 	}
-	return bcache_get_fill(blockno, "fbread", true)
+	return log_get_fill(blockno, "fbread", true)
 }
 
 func (alloc *allocater_t) alloc() (int, err_t) {

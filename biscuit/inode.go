@@ -581,7 +581,7 @@ type icache_t struct {
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
 func (ic *icache_t) mbread(blockn int) (*bdev_block_t, err_t) {
-	mb, err := bcache_get_fill(blockn, "mbread", false)
+	mb, err := log_get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
@@ -778,9 +778,9 @@ func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s 
 	}
 	var b *bdev_block_t
 	if fill {
-		b, err = bcache_get_fill(blkno, s, true)
+		b, err = log_get_fill(blkno, s, true)
 	} else {
-		b, err = bcache_get_nofill(blkno, s, true)
+		b, err = log_get_nofill(blkno, s, true)
         }
 	if err != 0 {
 		return nil, err
@@ -889,7 +889,7 @@ func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
 	if ci != childi {
 		panic("inconsistent")
 	}
-	ib, err := bcache_get_fill(iblock(childi), "create_undo", true)
+	ib, err := log_get_fill(iblock(childi), "create_undo", true)
 	if err != 0 {
 		return err
 	}
@@ -927,7 +927,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 	if err != 0 {
 		return 0, err
 	}
-	newiblk, err := bcache_get_fill(newbn, "icreate", true)
+	newiblk, err := log_get_fill(newbn, "icreate", true)
 	if err != 0 {
 		return 0, err
 	}
@@ -1009,7 +1009,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 }
 
 func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
-	return bcache_get_fill(iblock(idm.inum), "idibread", true)
+	return log_get_fill(iblock(idm.inum), "idibread", true)
 }
 
 // frees all blocks occupied by idm
