@@ -198,10 +198,28 @@ func (ind *inode_t) w_addr(i int, blk int) {
 type imemnode_t struct {
 	sync.Mutex
 	inum		inum_t
-	// cache of inode metadata
-	icache		icache_t
 	// XXXPANIC for sanity
 	_amlocked	bool
+
+	itype		int
+	links		int
+	size		int
+	major		int
+	minor		int
+	indir		int
+	dindir          int
+	addrs		[NIADDRS]int
+	// inode specific metadata blocks
+	dentc struct {
+		// true iff all directory entries are cached, thus there is no
+		// need to check the disk
+		haveall		bool
+		// maximum number of cached dents this icache is allowed to
+		// have
+		max		int
+		dents		dc_rbh_t
+		freel		fdelist_t
+	}
 }
 
 func (idm *imemnode_t) Key() int {
@@ -214,7 +232,7 @@ func (idm *imemnode_t) Evict() {
 	if fs_debug {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
-	if idm.icache.links == 0 {
+	if idm.links == 0 {
 		fslog.Op_begin("evict")
 		idm.ifree()
 		fslog.Op_end()
@@ -223,7 +241,7 @@ func (idm *imemnode_t) Evict() {
 
 func (idm *imemnode_t) Evictnow() bool {
 	idm.Lock()
-	r := idm.icache.links == 0
+	r := idm.links == 0
 	idm.Unlock()
 	return r
 }
@@ -249,78 +267,6 @@ func (idm *imemnode_t) iunlock(s string) {
 	idm.Unlock()
 }
 
-// inode refcache
-var irefcache	= mkRefcache(syslimit.vnodes, true)
-
-func icache_stat() string {
-	s := "icache: size "
-	s += strconv.Itoa(len(irefcache.refs))
-	s += " #evictions "
-	s += strconv.Itoa(irefcache.nevict)
-	s += " #live "
-	s += strconv.Itoa(irefcache.nlive())
-	s += "\n"
-	return s
-}
-
-// obtain the reference for an inode
-func iref(inum inum_t, s string) (*imemnode_t, err_t) {
-	ref, err := irefcache.Lookup(int(inum), s)
-	if err != 0 {
-		return nil, err
-	}
-	defer ref.Unlock()
-
-	if !ref.valid {
-		if fs_debug {
-			fmt.Printf("iref load %v %v\n", inum, s)
-		}
-
-		imem := &imemnode_t{}
-		imem.inum = inum
-		ref.obj = imem
-		err := imem.idm_init(inum)
-		if err != 0 {
-			panic("idm_init")
-			// delete(refcache.refs, inum)
-			return nil, err
-		}
-		ref.valid = true
-	}
-	
-	return ref.obj.(*imemnode_t), err
-}
-
-// Obtain the reference for an inode with the inode locked
-func iref_locked(inum inum_t, s string) (*imemnode_t, err_t) {
-	idm, err := iref(inum, s)
-	if err != 0 {
-		return nil, err
-	}
-	idm.ilock(s)
-	return idm, err
-}
-
-
-// Grab locks on inodes references in imems.  handles duplicates.
-func iref_lockall(imems []*imemnode_t) []*imemnode_t {
-	var locked []*imemnode_t
-	sort.Slice(imems, func(i, j int) bool { return imems[i].Key() < imems[j].Key() })
-	for _, imem := range imems {
-		dup := false
-		for _, l := range locked {
-			if imem.inum == l.inum {
-				dup = true
-			}
-		}
-		if !dup {
-			locked = append(locked, imem)
-			imem.ilock("lockall")
-		}
-	}
-	return locked
-}
-
 
 // Fill in inode
 func (idm *imemnode_t) idm_init(inum inum_t) err_t {
@@ -333,7 +279,7 @@ func (idm *imemnode_t) idm_init(inum inum_t) err_t {
 		return err
 	}
 	istats.nifill++
-	idm.icache.fill(blk, inum)
+	idm.fill(blk, inum)
 	blk.Unlock()
 	bcache.Relse(blk, "idm_init")
 	return 0
@@ -341,7 +287,7 @@ func (idm *imemnode_t) idm_init(inum inum_t) err_t {
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
 	idm.iunlock(s)
-	irefcache.Refdown(idm, s)
+	icache.Refdown(idm, s)
 }
 
 func (idm *imemnode_t) _iupdate() err_t {
@@ -350,7 +296,7 @@ func (idm *imemnode_t) _iupdate() err_t {
 	if err != 0 {
 		return err
 	}
-	if idm.icache.flushto(iblk, idm.inum) {
+	if idm.flushto(iblk, idm.inum) {
 		iblk.Unlock()
 		fslog.Write(iblk)
 	} else {
@@ -361,7 +307,7 @@ func (idm *imemnode_t) _iupdate() err_t {
 }
 
 func (idm *imemnode_t) do_trunc(truncto uint) err_t {
-	if idm.icache.itype != I_FILE && idm.icache.itype != I_DEV {
+	if idm.itype != I_FILE && idm.itype != I_DEV {
 		panic("bad truncate")
 	}
 	err := idm.itrunc(truncto)
@@ -376,12 +322,12 @@ func (idm *imemnode_t) do_read(dst userio_i, offset int) (int, err_t) {
 }
 
 func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, err_t) {
-	if idm.icache.itype == I_DIR {
+	if idm.itype == I_DIR {
 		panic("write to dir")
 	}
 	offset := _offset
 	if append {
-		offset = idm.icache.size
+		offset = idm.size
 	}
 
 	// break write system calls into one or more calls with no more than
@@ -419,20 +365,20 @@ func (idm *imemnode_t) do_stat(st *stat_t) err_t {
 	st.wdev(0)
 	st.wino(uint(idm.inum))
 	st.wmode(idm.mkmode())
-	st.wsize(uint(idm.icache.size))
-	st.wrdev(mkdev(idm.icache.major, idm.icache.minor))
+	st.wsize(uint(idm.size))
+	st.wrdev(mkdev(idm.major, idm.minor))
 	return 0
 }
 
 func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]mmapinfo_t, err_t) {
-	if idm.icache.itype != I_FILE && idm.icache.itype != I_DIR {
+	if idm.itype != I_FILE && idm.itype != I_DIR {
 		panic("bad mmapinfo")
 	}
 	return idm.immapinfo(off, len, inc)
 }
 
 func (idm *imemnode_t) do_dirchk(wantdir bool) err_t {
-	amdir := idm.icache.itype == I_DIR
+	amdir := idm.itype == I_DIR
 	if wantdir && !amdir {
 		return -ENOTDIR
 	} else if !wantdir && amdir {
@@ -468,7 +414,7 @@ func (idm *imemnode_t) do_insert(fn string, n inum_t) err_t {
 }
 
 func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum_t, err_t) {
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		return 0, -ENOTDIR
 	}
 
@@ -479,7 +425,7 @@ func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum_t, err_t) {
 }
 
 func (idm *imemnode_t) do_createfile(fn string) (inum_t, err_t) {
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		return 0, -ENOTDIR
 	}
 
@@ -490,7 +436,7 @@ func (idm *imemnode_t) do_createfile(fn string) (inum_t, err_t) {
 }
 
 func (idm *imemnode_t) do_createdir(fn string) (inum_t, err_t) {
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		return 0, -ENOTDIR
 	}
 
@@ -501,11 +447,11 @@ func (idm *imemnode_t) do_createdir(fn string) (inum_t, err_t) {
 }
 
 func _fullpath(inum inum_t) (string, err_t) {
-	c, err := iref_locked(inum, "_fullpath")
+	c, err := icache.Iref_locked(inum, "_fullpath")
 	if err != 0 {
 		return "", err
 	}
-	if c.icache.itype != I_DIR {
+	if c.itype != I_DIR {
 		panic("fullpath on non-dir")
 	}
 
@@ -518,7 +464,7 @@ func _fullpath(inum inum_t) (string, err_t) {
 		if err != 0 {
 			panic(".. must exist")
 		}
-		par, err := iref(pari, "do_fullpath_par")
+		par, err := icache.Iref(pari, "do_fullpath_par")
 		c.iunlock("do_fullpath_c")
 		if err != 0 {
 			return "", err
@@ -547,45 +493,24 @@ func _fullpath(inum inum_t) (string, err_t) {
 }
 
 func (idm *imemnode_t) _linkdown() {
-	idm.icache.links--
+	idm.links--
 	idm._iupdate()
 }
 
 func (idm *imemnode_t) _linkup() {
-	idm.icache.links++
+	idm.links++
 	idm._iupdate()
 }
 
-type icache_t struct {
-	itype		int
-	links		int
-	size		int
-	major		int
-	minor		int
-	indir		int
-	dindir          int
-	addrs		[NIADDRS]int
-	// inode specific metadata blocks
-	dentc struct {
-		// true iff all directory entries are cached, thus there is no
-		// need to check the disk
-		haveall		bool
-		// maximum number of cached dents this icache is allowed to
-		// have
-		max		int
-		dents		dc_rbh_t
-		freel		fdelist_t
-	}
-}
 
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
-func (ic *icache_t) mbread(blockn int) (*bdev_block_t, err_t) {
+func (ic *imemnode_t) mbread(blockn int) (*bdev_block_t, err_t) {
 	mb, err := fslog.Get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
-func (ic *icache_t) fill(blk *bdev_block_t, inum inum_t) {
+func (ic *imemnode_t) fill(blk *bdev_block_t, inum inum_t) {
 	inode := inode_t{blk, ioffset(inum)}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
@@ -604,7 +529,7 @@ func (ic *icache_t) fill(blk *bdev_block_t, inum inum_t) {
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *icache_t) flushto(blk *bdev_block_t, inum inum_t) bool {
+func (ic *imemnode_t) flushto(blk *bdev_block_t, inum inum_t) bool {
 	inode := inode_t{blk, ioffset(inum)}
 	j := inode
 	k := ic
@@ -660,8 +585,8 @@ func (idm *imemnode_t) ensureind(blk *bdev_block_t, slot int, writing bool) (int
 // Assumes that every block until b exits
 func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 	if fbn < NIADDRS {
-		if idm.icache.addrs[fbn] != 0 {
-			return idm.icache.addrs[fbn], 0
+		if idm.addrs[fbn] != 0 {
+			return idm.addrs[fbn], 0
 		}
 		blkn, err := balloc.Balloc()
 		if err != 0 {
@@ -669,21 +594,21 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 		}
 		// imemnode_t.iupdate() will make sure the
 		// icache is updated on disk
-		idm.icache.addrs[fbn] = blkn
+		idm.addrs[fbn] = blkn
 		return blkn, 0
 	} else {
 		fbn -= NIADDRS
 		if fbn < INDADDR {
-			indno := idm.icache.indir
+			indno := idm.indir
 			indno, isnew, err := idm.ensureb(indno, writing)
 			if err != 0 {
 				return 0, err
 			}
 			if isnew {
 				// new indirect block will be written to log by iupdate()
-				idm.icache.indir = indno
+				idm.indir = indno
 			}
-			indblk, err := idm.icache.mbread(indno)
+			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
@@ -692,16 +617,16 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 			return blkn, err
 		} else if fbn < INDADDR * INDADDR {
 			fbn -= INDADDR
-			dindno := idm.icache.dindir
+			dindno := idm.dindir
 			dindno, isnew, err := idm.ensureb(dindno, writing)
 			if err != 0 {
 				return 0, err
 			}
 			if isnew {
 				// new dindirect block will be written to log by iupdate()
-				idm.icache.dindir = dindno
+				idm.dindir = dindno
 			}
-			dindblk, err := idm.icache.mbread(dindno)
+			dindblk, err := idm.mbread(dindno)
 			if err != 0 {
 				return 0, err
 			}
@@ -709,7 +634,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
 			bcache.Relse(dindblk, "dindblk")
 
-			indblk, err := idm.icache.mbread(indno)
+			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
@@ -756,7 +681,7 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, e
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 	whichblk := offset/BSIZE
-	lastblk := idm.icache.size/BSIZE
+	lastblk := idm.size/BSIZE
 	blkn, err := idm.bmapfill(lastblk, whichblk, writing)
 	if err != 0 {
 		return blkn, err
@@ -797,7 +722,7 @@ func min(a, b int) int {
 
 func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	istats.niread++
-	isz := idm.icache.size
+	isz := idm.size
 	c := 0
 	for offset < isz && dst.remain() != 0 {
 		m := min(BSIZE-offset%BSIZE, dst.remain())
@@ -857,14 +782,14 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
 		offset += read
 	}
 	wrote := c
-	if newsz > idm.icache.size {
-		idm.icache.size = newsz
+	if newsz > idm.size {
+		idm.size = newsz
 	}
 	return wrote, 0
 }
 
 func (idm *imemnode_t) itrunc(newlen uint) err_t {
-	if newlen > uint(idm.icache.size) {
+	if newlen > uint(idm.size) {
 		// this will cause the hole to filled in with zero blocks which
 		// are logged to disk
 		_, err := idm.offsetblk(int(newlen), true)
@@ -875,7 +800,7 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 	}
 	istats.nitrunc++
 	// inode is flushed by do_itrunc
-	idm.icache.size = int(newlen)
+	idm.size = int(newlen)
 	return 0
 }
 
@@ -968,7 +893,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 
 
 func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t) {
-	isz := idm.icache.size
+	isz := idm.size
 	if (len != -1 && len < 0) || offset < 0 {
 		panic("bad off/len")
 	}
@@ -1030,7 +955,7 @@ func (idm *imemnode_t) ifree() err_t {
 			return 0
 		}
 		add(indno)
-		blk, err := idm.icache.mbread(indno)
+		blk, err := idm.mbread(indno)
 		if err != 0 {
 			return err
 		}
@@ -1045,16 +970,16 @@ func (idm *imemnode_t) ifree() err_t {
 	}
 
 	for i := 0; i < NIADDRS; i++ {
-		add(idm.icache.addrs[i])
+		add(idm.addrs[i])
 	}
-	err := freeind(idm.icache.indir)
+	err := freeind(idm.indir)
 	if err != 0 {
 		panic("freeind")
 	}
-	dindno := idm.icache.dindir
+	dindno := idm.dindir
 	if dindno != 0 {
 		add(dindno)
-		blk, err := idm.icache.mbread(dindno)
+		blk, err := idm.mbread(dindno)
 		if err != 0 {
 			return err
 		}
@@ -1079,8 +1004,8 @@ func (idm *imemnode_t) ifree() err_t {
 	if iblk == nil {
 		panic("ifree")
 	}
-	idm.icache.itype = I_DEAD
-	idm.icache.flushto(iblk, idm.inum)
+	idm.itype = I_DEAD
+	idm.flushto(iblk, idm.inum)
 	iblk.Unlock()
 	fslog.Write(iblk)
 	bcache.Relse(iblk, "ifree2")
@@ -1096,13 +1021,13 @@ func (idm *imemnode_t) ifree() err_t {
 
 // used for {,f}stat
 func (idm *imemnode_t) mkmode() uint {
-	itype := idm.icache.itype
+	itype := idm.itype
 	switch itype {
 	case I_DIR, I_FILE:
 		return uint(itype << 16)
 	case I_DEV:
 		// this can happen by fs-internal stats
-		return mkdev(idm.icache.major, idm.icache.minor)
+		return mkdev(idm.major, idm.minor)
 	default:
 		panic("weird itype")
 	}
@@ -1117,8 +1042,101 @@ func fieldw(p *bytepg_t, field int, val int) {
 	writen(p[:], 8, field*8, val)
 }
 
+//
+// Inode cache
+//
 
+type icache_t struct {
+	refcache *refcache_t
+}
+
+// inode refcache
+var icache = icache_t{}
+
+func mkIcache() {
+	icache.refcache = mkRefcache(syslimit.vnodes, true)
+}
+
+func (icache *icache_t) Stats() string {
+	s := "icache: size "
+	s += strconv.Itoa(len(icache.refcache.refs))
+	s += " #evictions "
+	s += strconv.Itoa(icache.refcache.nevict)
+	s += " #live "
+	s += strconv.Itoa(icache.refcache.nlive())
+	s += "\n"
+	return s
+}
+
+// obtain the reference for an inode
+func (icache *icache_t) Iref(inum inum_t, s string) (*imemnode_t, err_t) {
+	ref, err := icache.refcache.Lookup(int(inum), s)
+	if err != 0 {
+		return nil, err
+	}
+	defer ref.Unlock()
+
+	if !ref.valid {
+		if fs_debug {
+			fmt.Printf("iref load %v %v\n", inum, s)
+		}
+
+		imem := &imemnode_t{}
+		imem.inum = inum
+		ref.obj = imem
+		err := imem.idm_init(inum)
+		if err != 0 {
+			panic("idm_init")
+			// delete(refcache.refs, inum)
+			return nil, err
+		}
+		ref.valid = true
+	}
+	
+	return ref.obj.(*imemnode_t), err
+}
+
+// Obtain the reference for an inode with the inode locked
+func (icache *icache_t) Iref_locked(inum inum_t, s string) (*imemnode_t, err_t) {
+	idm, err := icache.Iref(inum, s)
+	if err != 0 {
+		return nil, err
+	}
+	idm.ilock(s)
+	return idm, err
+}
+
+func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
+	icache.refcache.Refdown(imem, "fs_rename_opar")
+}
+
+func (icache *icache_t) Refup(imem *imemnode_t, s string) {
+	icache.refcache.Refup(imem, "_fs_open")
+}
+
+// Grab locks on inodes references in imems.  handles duplicates.
+func iref_lockall(imems []*imemnode_t) []*imemnode_t {
+	var locked []*imemnode_t
+	sort.Slice(imems, func(i, j int) bool { return imems[i].Key() < imems[j].Key() })
+	for _, imem := range imems {
+		dup := false
+		for _, l := range locked {
+			if imem.inum == l.inum {
+				dup = true
+			}
+		}
+		if !dup {
+			locked = append(locked, imem)
+			imem.ilock("lockall")
+		}
+	}
+	return locked
+}
+
+
+//
 // Inode allocator
+//
 
 type iallocater_t struct {
 	alloc *allocater_t

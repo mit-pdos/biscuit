@@ -172,13 +172,13 @@ type icdent_t struct {
 // returns the offset of an empty directory entry. returns error if failed to
 // allocate page for the new directory entry.
 func (idm *imemnode_t) _denextempty() (int, err_t) {
-	dc := &idm.icache.dentc
+	dc := &idm.dentc
 	if ret, ok := dc.freel.remhead(); ok {
 		return ret.offset, 0
 	}
 
 	// see if we have an empty slot before expanding the directory
-	if !idm.icache.dentc.haveall {
+	if !idm.dentc.haveall {
 		var de icdent_t
 		found, err := idm._descan(func(fn string, tde icdent_t) bool {
 			if fn == "" {
@@ -196,12 +196,12 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	}
 
 	// current dir blocks are full -- allocate new dirdata block
-	newsz := idm.icache.size + BSIZE
-	b, err := idm.off2buf(idm.icache.size, BSIZE, true, true, "_denextempty")
+	newsz := idm.size + BSIZE
+	b, err := idm.off2buf(idm.size, BSIZE, true, true, "_denextempty")
 	if err != 0 {
 		return 0, err
 	}
-	newoff := idm.icache.size
+	newoff := idm.size
 	// start from 1 since we return slot 0 directly
 	for i := 1; i < NDIRENTS; i++ {
 		noff := newoff + NDBYTES*i
@@ -212,7 +212,7 @@ func (idm *imemnode_t) _denextempty() (int, err_t) {
 	fslog.Write(b)  // log empty dir block, later writes absorpt it hopefully
 	bcache.Relse(b, "_denextempty")
 	
-	idm.icache.size = newsz
+	idm.size = newsz
 	return newoff, 0
 }
 
@@ -244,7 +244,7 @@ func (idm *imemnode_t) _deinsert(name string, inum inum_t) err_t {
 	
 	icd := icdent_t{noff, inum}
 	ok := idm._dceadd(name, icd)
-	dc := &idm.icache.dentc
+	dc := &idm.dentc
 	dc.haveall = dc.haveall && ok
 
 	return 0
@@ -255,7 +255,7 @@ func (idm *imemnode_t) _deinsert(name string, inum inum_t) err_t {
 // returned true.
 func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, err_t) {
 	found := false
-	for i := 0; i < idm.icache.size; i+= BSIZE {
+	for i := 0; i < idm.size; i+= BSIZE {
 		b, err := idm.off2buf(i, BSIZE, false, true, "_descan")
 		if err != 0 {
 			return false, err
@@ -280,11 +280,11 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
 	if fn == "" {
 		panic("bad lookup")
 	}
-	if de, ok := idm.icache.dentc.dents.lookup(fn); ok {
+	if de, ok := idm.dentc.dents.lookup(fn); ok {
 		return de, 0
 	}
 	var zi icdent_t
-	if idm.icache.dentc.haveall {
+	if idm.dentc.haveall {
 		// cache negative entries?
 		return zi, -ENOENT
 	}
@@ -309,7 +309,7 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, err_t) {
 	if err != 0 {
 		return zi, err
 	}
-	idm.icache.dentc.haveall = haveall
+	idm.dentc.haveall = haveall
 	if !found {
 		return zi, -ENOENT
 	}
@@ -334,7 +334,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 	fslog.Write(b)
 	bcache.Relse(b, "_deremove")
 	// add back to free dents
-	idm.icache.dentc.dents.remove(fn)
+	idm.dentc.dents.remove(fn)
 	idm._deaddempty(de.offset)
 	return de, 0
 }
@@ -343,7 +343,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, err_t) {
 func (idm *imemnode_t) _denamefor(tnum inum_t) (string, err_t) {
 	// check cache first
 	var fn string
-	found := idm.icache.dentc.dents.iter(func(dn string, de icdent_t) bool {
+	found := idm.dentc.dents.iter(func(dn string, de icdent_t) bool {
 		if de.inum == tnum {
 			fn = dn
 			return true
@@ -376,8 +376,8 @@ func (idm *imemnode_t) _denamefor(tnum inum_t) (string, err_t) {
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
 func (idm *imemnode_t) _deempty() (bool, err_t) {
-	if idm.icache.dentc.haveall {
-		dentc := &idm.icache.dentc
+	if idm.dentc.haveall {
+		dentc := &idm.dentc
 		hasfiles := dentc.dents.iter(func(dn string, de icdent_t) bool {
 			if dn != "." && dn != ".." {
 				return true
@@ -397,7 +397,7 @@ func (idm *imemnode_t) _deempty() (bool, err_t) {
 
 // empties the dirent cache, returning the number of dents purged.
 func (idm *imemnode_t) _derelease() int {
-	dc := &idm.icache.dentc
+	dc := &idm.dentc
 	dc.haveall = false
 	dc.dents.clear()
 	dc.freel.head = nil
@@ -436,7 +436,7 @@ func (idm *imemnode_t) _deprobe(fn string) (*bdev_block_t, err_t) {
 
 // returns true if this idm has enough free cache space for a single dentry
 func (idm *imemnode_t) _demayadd() bool {
-	dc := &idm.icache.dentc
+	dc := &idm.dentc
 	//have := len(dc.dents) + len(dc.freem)
 	have := dc.dents.nodes + dc.freel.count()
 	if have + 1 < dc.max {
@@ -454,7 +454,7 @@ func (idm *imemnode_t) _demayadd() bool {
 
 // caching is best-effort. returns true if fn was added to the cache
 func (idm *imemnode_t) _dceadd(fn string, de icdent_t) bool {
-	dc := &idm.icache.dentc
+	dc := &idm.dentc
 	if !idm._demayadd() {
 		return false
 	}
@@ -466,7 +466,7 @@ func (idm *imemnode_t) _deaddempty(off int) {
 	if !idm._demayadd() {
 		return
 	}
-	dc := &idm.icache.dentc
+	dc := &idm.dentc
 	dc.freel.addhead(off)
 }
 
@@ -495,7 +495,7 @@ func (idm *imemnode_t) probe_unlink(fn string) (*bdev_block_t, err_t) {
 
 func (idm *imemnode_t) ilookup(name string) (inum_t, err_t) {
 	// did someone confuse a file with a directory?
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		return 0, -ENOTDIR
 	}
 	de, err := idm._delookup(name)
@@ -508,7 +508,7 @@ func (idm *imemnode_t) ilookup(name string) (inum_t, err_t) {
 
 // creates a new directory entry with name "name" and inode number priv
 func (idm *imemnode_t) iinsert(name string, inum inum_t) err_t {
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		return -ENOTDIR
 	}
 	if _, err := idm._delookup(name); err == 0 {
@@ -526,7 +526,7 @@ func (idm *imemnode_t) iinsert(name string, inum inum_t) err_t {
 
 // returns inode number of unliked inode so caller can decrement its ref count
 func (idm *imemnode_t) iunlink(name string) (inum_t, err_t) {
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		panic("unlink to non-dir")
 	}
 	de, err := idm._deremove(name)
@@ -538,7 +538,7 @@ func (idm *imemnode_t) iunlink(name string) (inum_t, err_t) {
 
 // returns true if the inode has no directory entries
 func (idm *imemnode_t) idirempty() (bool, err_t) {
-	if idm.icache.itype != I_DIR {
+	if idm.itype != I_DIR {
 		panic("i am not a dir")
 	}
 	return idm._deempty()
