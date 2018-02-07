@@ -1,4 +1,4 @@
-package main
+package fs
 
 import "fmt"
 import "sync"
@@ -19,7 +19,7 @@ import "strconv"
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE=4096
 
-const bdev_debug = false
+const bdev_debug = true
 	
 type bdev_block_t struct {
 	sync.Mutex
@@ -83,6 +83,7 @@ func (b *bdev_block_t) Read() {
 	if ahci.Start(ider) {
 		<- ider.ackCh
 	}
+	fmt.Printf("Read done %v %p\n", len(b.data), b.data)
 	if bdev_debug {
 		fmt.Printf("bdev_read %v %v %#x %#x\n", b.block, b.s, b.data[0], b.data[1])
 	}
@@ -96,6 +97,7 @@ func (b *bdev_block_t) Read() {
 
 func (blk *bdev_block_t) New_page() {
 	_, pa, ok := refpg_new()
+	fmt.Printf("New_page %v\n", pa)
 	if !ok {
 		panic("oom during bdev.new_page")
 	}

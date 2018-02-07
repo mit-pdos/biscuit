@@ -1,8 +1,9 @@
-package main
+package fs
 
 /*
  * red-black tree based on niels provos' red-black tree macros
  */
+
 
 type frbh_t struct {
 	root	*frbn_t

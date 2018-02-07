@@ -1,11 +1,11 @@
-package main
+package fs
 
 import "fmt"
 import "sync"
 import "strconv"
 
 const memfs = false     // in-memory file system?
-const fs_debug = false
+const fs_debug = true
 const iroot = 0
 
 var superb_start	int
@@ -684,9 +684,9 @@ func (df *devfops_t) _sane() {
 func (df *devfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
-		return cons_read(dst, 0)
+		return 0, 0 // YYY cons_read(dst, 0)
 	} else if df.maj == D_STAT {
-		return stat_read(dst, 0)
+		return 0,0 // YYY stat_read(dst, 0)
 	} else {
 		return 0, 0
 	}
@@ -695,7 +695,7 @@ func (df *devfops_t) read(p *proc_t, dst userio_i) (int, err_t) {
 func (df *devfops_t) write(p *proc_t, src userio_i) (int, err_t) {
 	df._sane()
 	if df.maj == D_CONSOLE {
-		return cons_write(src, 0)
+		return 0, 0 // YYY cons_write(src, 0)
 	} else {
 		return src.totalsz(), 0
 	}
@@ -778,11 +778,11 @@ func (df *devfops_t) recvmsg(*proc_t, userio_i,
 
 func (df *devfops_t) pollone(pm pollmsg_t) (ready_t, err_t) {
 	switch df.maj {
-	case D_CONSOLE:
-		cons.pollc <- pm
-		return <- cons.pollret, 0
-	case D_DEVNULL:
-		return pm.events & (R_READ | R_WRITE), 0
+	// case D_CONSOLE:
+	// 	cons.pollc <- pm
+	// 	return <- cons.pollret, 0
+	// case D_DEVNULL:
+	// 	return pm.events & (R_READ | R_WRITE), 0
 	default:
 		panic("which dev")
 	}

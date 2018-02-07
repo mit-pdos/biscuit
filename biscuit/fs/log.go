@@ -1,9 +1,9 @@
-package main
+package fs
 
 import "fmt"
 import "strconv"
 
-const log_debug = false
+const log_debug = true
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen

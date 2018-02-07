@@ -3341,6 +3341,8 @@ func _refpg_new() (*pg_t, pa_t, bool) {
 	return _phys_new(&physmem.freei)
 }
 
+var zeropg *pg_t
+
 // refcnt of returned page is not incremented (it is usually incremented via
 // proc_t.page_insert). requires direct mapping.
 func refpg_new() (*pg_t, pa_t, bool) {
