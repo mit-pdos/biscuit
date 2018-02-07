@@ -2,6 +2,7 @@ package fs
 
 import "fmt"
 import "sync"
+import "common"
 
 // Fixed-size cache of objects. Main invariant: an object is in memory once so
 // that threads see each other's updates.  An object can be evicted only when no
@@ -53,7 +54,7 @@ func mkRefcache(size int, async bool) *refcache_t {
 }
 
 // returns a locked ref
-func (irc *refcache_t) Lookup(key int, s string) (*ref_t, err_t) {
+func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 	irc.Lock()
 	
 	ref, ok := irc.refs[key]
@@ -74,7 +75,7 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, err_t) {
 		if victim == nil {
 			// fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
 			irc.Unlock()
-			return nil, -ENOMEM
+			return nil, -common.ENOMEM
 		}
         }
  	

@@ -10,6 +10,8 @@ import "strings"
 import "time"
 import "unsafe"
 
+import "fs"
+
 var	numcpus	int = 1
 var	bsp_apic_id int
 

@@ -5,6 +5,8 @@ import "sync"
 import "unsafe"
 import "strconv"
 
+import "common"
+
 // A block has a lock, since, it may store an inode block, which has 4 inodes,
 // and we need to ensure that hat writes aren't lost due to concurrent inode
 // updates.  The inode code is careful about releasing lock.  Other types of
@@ -25,8 +27,8 @@ type bdev_block_t struct {
 	sync.Mutex
 	disk	int
 	block	int
-	pa      pa_t
-	data	*bytepg_t
+	pa      common.Pa_t
+	data	*common.Bytepg_t
 	s       string
 }
 
@@ -49,7 +51,7 @@ func (blk *bdev_block_t) Evictnow() bool {
 }
 
 func mkBlock_newpage(block int, s string) *bdev_block_t {
-	b := mkblock(block, pa_t(0), s)
+	b := mkblock(block, common.Pa_t(0), s)
 	b.New_page()
 	return b
 }
@@ -102,7 +104,7 @@ func (blk *bdev_block_t) New_page() {
 		panic("oom during bdev.new_page")
 	}
 	blk.pa = pa
-	blk.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
+	blk.data = (*common.Bytepg_t)(unsafe.Pointer(dmap(pa)))
 	refup(blk.pa)
 }
 
@@ -110,11 +112,11 @@ func (blk *bdev_block_t) New_page() {
 // Implementation of blocks
 //
 
-func mkblock(block int, pa pa_t, s string) *bdev_block_t {
+func mkblock(block int, pa common.Pa_t, s string) *bdev_block_t {
 	b := &bdev_block_t{};
 	b.block = block
 	b.pa = pa
-	b.data = (*bytepg_t)(unsafe.Pointer(dmap(pa)))
+	b.data = (*common.Bytepg_t)(unsafe.Pointer(dmap(pa)))
 	b.s = s
 	return b
 }
@@ -145,12 +147,12 @@ type bcache_t struct {
 }
 
 func mkBcache() {
-	bcache.refcache = mkRefcache(syslimit.blocks, false)
+	bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_relse when done with buf.
-func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
 
 	if bdev_debug {
@@ -173,7 +175,7 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, 
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
@@ -192,7 +194,7 @@ func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, 
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
@@ -268,7 +270,7 @@ func (bcache *bcache_t) Stats() string {
 //
 
 // returns the reference to a locked buffer
-func (bcache *bcache_t) bref(blk int, s string) (*bdev_block_t, bool, err_t) {
+func (bcache *bcache_t) bref(blk int, s string) (*bdev_block_t, bool, common.Err_t) {
 	ref, err := bcache.refcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
@@ -281,7 +283,7 @@ func (bcache *bcache_t) bref(blk int, s string) (*bdev_block_t, bool, err_t) {
 		if bdev_debug {
 			fmt.Printf("bref fill %v %v\n", blk, s)
 		}
-		buf := mkblock(blk, pa_t(0), s)
+		buf := mkblock(blk, common.Pa_t(0), s)
 		ref.obj = buf
 		ref.valid = true
 		created = true
@@ -351,7 +353,7 @@ func mkBallocater(start,len, first int) {
 	balloc.first = first
 }
 
-func (balloc *ballocater_t) Balloc() (int, err_t) {
+func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 	ret, err := balloc.balloc1()
 	if err != 0 {
 		return 0, err
@@ -361,7 +363,7 @@ func (balloc *ballocater_t) Balloc() (int, err_t) {
 	}
 	if ret >= superb.lastblock() {
 		fmt.Printf("blkn %v last %v\n", ret, superb.lastblock())
-		return 0, -ENOMEM
+		return 0, -common.ENOMEM
 	}
 	blk, err := bcache.Get_zero(ret, "balloc", true)
 	if err != 0 {
@@ -379,7 +381,7 @@ func (balloc *ballocater_t) Balloc() (int, err_t) {
 	return ret, 0
 }
 
-func (balloc *ballocater_t) Bfree(blkno int) err_t {
+func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	if bdev_debug {
 		fmt.Printf("bfree: %v\n", blkno)
 	}
@@ -397,7 +399,7 @@ func (balloc *ballocater_t) Stats() string {
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func (balloc *ballocater_t) balloc1() (int, err_t) {
+func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
 	blkn, err := balloc.alloc.Alloc()
 	if err != 0 {
 		return 0, err

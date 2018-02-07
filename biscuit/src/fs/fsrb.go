@@ -1,9 +1,15 @@
 package fs
 
+import "common"
+
 /*
  * red-black tree based on niels provos' red-black tree macros
  */
 
+const (
+	RED	common.Rbc_t = iota
+	BLACK	common.Rbc_t = iota
+)
 
 type frbh_t struct {
 	root	*frbn_t
@@ -14,9 +20,10 @@ type frbn_t struct {
 	p	*frbn_t
 	r	*frbn_t
 	l	*frbn_t
-	c	rbc_t
+	c	common.Rbc_t
 	pgi	*bdev_block_t
 }
+
 
 func (h *frbh_t) _rol(nn *frbn_t) {
 	tmp := nn.r
@@ -235,7 +242,7 @@ func (h *frbh_t) remove(nn *frbn_t) *frbn_t {
 	fast := true
 	var child *frbn_t
 	var par *frbn_t
-	var col rbc_t
+	var col common.Rbc_t
 	if nn.l == nil {
 		child = nn.r
 	} else if nn.r == nil  {
@@ -335,7 +342,7 @@ type dc_rbn_t struct {
 	p	*dc_rbn_t
 	r	*dc_rbn_t
 	l	*dc_rbn_t
-	c	rbc_t
+	c	common.Rbc_t
 	name	string
 	icd	icdent_t
 }
@@ -569,7 +576,7 @@ func (h *dc_rbh_t) _remove(nn *dc_rbn_t) *dc_rbn_t {
 	fast := true
 	var child *dc_rbn_t
 	var par *dc_rbn_t
-	var col rbc_t
+	var col common.Rbc_t
 	if nn.l == nil {
 		child = nn.r
 	} else if nn.r == nil  {

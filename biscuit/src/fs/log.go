@@ -2,6 +2,7 @@ package fs
 
 import "fmt"
 import "strconv"
+import "common"
 
 const log_debug = true
 
@@ -113,15 +114,15 @@ func (log *log_t) Write_ordered(b *bdev_block_t) {
 
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
-func (log *log_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+func (log *log_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
 	return log.read(mkread(bcache.Get_fill, blkn, s, lock))
 }
 
-func (log *log_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+func (log *log_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
 	return log.read(mkread(bcache.Get_zero, blkn, s, lock))
 }
 
-func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, err_t) {
+func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
 	return log.read(mkread(bcache.Get_nofill, blkn, s, lock))
 }
 
@@ -153,7 +154,7 @@ func (log *log_t) Stats() string {
 	return s
 }
 
-func mkLog(logstart, loglen int) err_t {
+func mkLog(logstart, loglen int) common.Err_t {
 	if memfs {
 		return 0
 	}
@@ -176,7 +177,7 @@ func mkLog(logstart, loglen int) err_t {
 // 0-7,   valid log blocks
 // 8-511, log destination (63)
 type logheader_t struct {
-	data	*bytepg_t
+	data	*common.Bytepg_t
 }
 
 func (lh *logheader_t) recovernum() int {
@@ -437,7 +438,7 @@ func flush() {
 	}
 }
 
-func (log *log_t) recover()  err_t {
+func (log *log_t) recover()  common.Err_t {
 	b, err := bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 { 
 		return err
@@ -558,20 +559,20 @@ func (log *log_t) force_ordered() {
 
 
 // If cache has no space, ask logdaemon to create some space
-func (log *log_t) read(readfn func() (*bdev_block_t, err_t)) (*bdev_block_t, err_t) {
+func (log *log_t) read(readfn func() (*bdev_block_t, common.Err_t)) (*bdev_block_t, common.Err_t) {
 	b, err := readfn()
-	if err == -ENOMEM {
+	if err == -common.ENOMEM {
 		log.force_ordered()
 		b, err = readfn()
-		if err == -ENOMEM {
+		if err == -common.ENOMEM {
 			panic("still no mem")
 		}
 	}
 	return b, err
 }
 
-func mkread(readfn func(int,string,bool) (*bdev_block_t, err_t), b int, s string, l bool) func()(*bdev_block_t, err_t) {
-	return func() (*bdev_block_t, err_t) {
+func mkread(readfn func(int,string,bool) (*bdev_block_t, common.Err_t), b int, s string, l bool) func()(*bdev_block_t, common.Err_t) {
+	return func() (*bdev_block_t, common.Err_t) {
 		return readfn(b, s, l)
 	}
 }

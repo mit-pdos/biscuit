@@ -15,7 +15,10 @@ CS   := bootmain.c main.c chentry.c
 SRCS := $(ASMS) $(CS)
 
 # kernel sources
-KSRC := main.go syscall.go pmap.go fs.go dir.go inode.go refcache.go hw.go net.go fsrb.go log.go bdev.go ahci.go
+
+K := src/kernel
+KSRC := main.go syscall.go pmap.go hw.go net.go
+KSRC := $(addprefix $(K)/,$(KSRC))
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
 
@@ -60,17 +63,17 @@ all: go.img net.img
 
 -include $(RFS)
 
-boot: boot.o bootmain.o stamp.py
+$(K)/boot: $(K)/boot.o $(K)/bootmain.o $(K)/stamp.py
 	$(LD) --omagic -o $@.elf -m elf_i386 -static -e start -Ttext 0x7c00 \
-	    boot.o bootmain.o
+	    $(K)/boot.o $(K)/bootmain.o
 	objcopy -O binary $@.elf $@.bin
-	$(PYTHON) stamp.py $@.bin
+	$(PYTHON) $(K)/stamp.py $@.bin
 	mv $@.bin $@
 
-boot.o: ASFLAGS += -m32
+$(K)/boot.o: ASFLAGS += -m32
 
-bootmain.o: CFLAGS += -I$(TOP)
-bootmain.o: bootmain.c
+$(K)/bootmain.o: CFLAGS += -I$(TOP)
+$(K)/bootmain.o: $(K)/bootmain.c
 	@# don't use -Os because it rearranges code in .text such that start
 	@# isn't first. htf do i force ld to put a specific function first in
 	@# the section?
@@ -80,11 +83,11 @@ bootmain.o: bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: boot main.gobin $(SKELDEPS) $(FSPROGS) mkbdisk.py
-	$(PYTHON) mkbdisk.py boot main.gobin $@ $(SKEL) || { rm -f $@; false; }
+go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) $(K)/mkbdisk.py
+	$(PYTHON) $(K)/mkbdisk.py $(K)/boot $(K)/main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
-net.img: boot main.gobin $(SKELDEPS) $(FSPROGS) mkbdisk.py
-	$(PYTHON) mkbdisk.py -n boot main.gobin $@ $(SKEL) || \
+net.img: $(K)/boot $(K)/main.gobin $(SKELDEPS) $(FSPROGS) $(K)/mkbdisk.py
+	$(PYTHON) $(K)/mkbdisk.py -n $(K)/boot $(K)/main.gobin $@ $(SKEL) || \
 	    { rm -f $@; false; }
 
 BHW := bhw.pdos.csail.mit.edu
@@ -107,12 +110,12 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-main.gobin: chentry $(GOBIN) bins.go $(KSRC)
-	$(GOBIN) build -o _$@ bins.go $(KSRC)
-	ADDR=0x`nm _$@ |grep _rt0_hack |cut -f1 -d' '`; \
+$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC)
+	$(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
+	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
-		else ./chentry _$@ $$ADDR; fi
-	./rewrite.py _$@ $@
+		else ./chentry $@_ $$ADDR; fi
+	./rewrite.py $@_ $@
 
 # the user/% prereq is built by the CPROGS target
 $(FSCPROGS): fsdir/bin/% : user/c/%
@@ -157,28 +160,28 @@ $(LINS) : user/cxx/linux/% : user/cxx/%.cc
 
 linux: $(LINS)
 
-mpentry.bin: mpentry.S
+mpentry.bin: $(K)/mpentry.S
 	$(CC) -o mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
 	objcopy -O binary -j.text mpentry.elf $@
 
 $(BGOS): %.bgo : %
-	./bin2go.sh $< > $@
+	./$(K)/bin2go.sh $< > $@
 
-bins.go: $(BGOS) prepbins.py
-	$(PYTHON) prepbins.py $(BGOS) > _$@
-	mv _$@ $@
+$(K)/bins.go: $(BGOS) $(K)/prepbins.py
+	$(PYTHON) $(K)/prepbins.py $(BGOS) > $@_
+	mv $@_ $@
 
 main: main.o
 	$(LD) -static -e main -o $@ $<
 
-chentry: chentry.c
-	$(CC) $(BASEFLAGS) -o $@ chentry.c
+chentry: $(K)/chentry.c
+	$(CC) $(BASEFLAGS) -o $@ $(K)/chentry.c
 
 clean:
-	rm -f $(BGOS) $(OBJS) $(RFS) boot.elf d.img main boot main.gobin \
-	    go.img chentry mpentry.elf mpentry.bin _bins.go bins.go \
+	rm -f $(BGOS) $(OBJS) $(RFS) $(K)/boot.elf $(K)/d.img $(K)/main $(K)/boot $(K)/main.gobin \
+	    $(K)/go.img $(K)/chentry $(K)/mpentry.elf $(K)/mpentry.bin $(K)/_bins.go $(K)/bins.go \
 	    user/c/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
-	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) _main.gobin
+	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) $(K)/_main.gobin
 	rm -rf user/cxx/sysroot
 
 qemu: gqemu

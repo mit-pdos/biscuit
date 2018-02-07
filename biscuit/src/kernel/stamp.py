@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
 import os
+import sys
 
-fn = 'boot.bin'
+fn = sys.argv[1]
 sz = os.path.getsize(fn)
 # both bootmain.c and boot.S also need to know the size of the bootloader in
 # blocks (see BOOTBLOCKS)

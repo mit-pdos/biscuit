@@ -5,6 +5,8 @@ import "fmt"
 import "unsafe"
 import "os"
 
+import "common"
+
 //
 // The "driver"
 //
@@ -65,7 +67,7 @@ func (ahci *ahci_disk_t) Start(req *bdev_req_t) bool {
 		if n != BSIZE || err != nil {
 			panic("Read failed")
 		}
-		req.blks[0].data = &bytepg_t{}
+		req.blks[0].data = &common.Bytepg_t{}
 		for i, _ := range(b) {
 			req.blks[0].data[i] = uint8(b[i])
 		}
@@ -98,18 +100,32 @@ func (ahci *ahci_disk_t) Stats() string {
 // Glue
 //
 
-func refpg_new() (*pg_t, pa_t, bool) {
-	// p_pg := &bytepg_t{}
+func refpg_new() (*common.Pg_t, common.Pa_t, bool) {
+	// p_pg := &bytecommon.Pg_t{}
 	// r := (*pa_t)(unsafe.Pointer(&p_pg))
 	// printf("p_pg = %p r = %p\n", &_pgr)
 	return nil, 0, true
 }
 
-func dmap(p pa_t) *pg_t {
-	r := (*pg_t)(unsafe.Pointer(p))
+func dmap(p common.Pa_t) *common.Pg_t {
+	r := (*common.Pg_t)(unsafe.Pointer(p))
 	fmt.Printf("r = %p\n", r)
 	return r
 }
+
+func refcnt(p_pg common.Pa_t) int {
+	return 0
+}
+
+// XXX
+func refup(p_pg common.Pa_t) {
+}
+
+// XXX
+func refdown(p_pg common.Pa_t) bool {
+	return false
+}
+
 
 //
 // Test

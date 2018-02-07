@@ -5,6 +5,7 @@ import "sync"
 import "unsafe"
 import "sort"
 import "strconv"
+import "common"
 
 var istats inode_stats_t
 
@@ -197,7 +198,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 // In-memory representation of an inode.
 type imemnode_t struct {
 	sync.Mutex
-	inum		inum_t
+	inum		common.Inum_t
 	// XXXPANIC for sanity
 	_amlocked	bool
 
@@ -269,7 +270,7 @@ func (idm *imemnode_t) iunlock(s string) {
 
 
 // Fill in inode
-func (idm *imemnode_t) idm_init(inum inum_t) err_t {
+func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	idm.inum = inum
 	if fs_debug {
 		fmt.Printf("idm_init: read inode %v\n", inum)
@@ -290,7 +291,7 @@ func (idm *imemnode_t) iunlock_refdown(s string) {
 	icache.Refdown(idm, s)
 }
 
-func (idm *imemnode_t) _iupdate() err_t {
+func (idm *imemnode_t) _iupdate() common.Err_t {
 	istats.niupdate++
 	iblk, err := idm.idibread()
 	if err != 0 {
@@ -306,7 +307,7 @@ func (idm *imemnode_t) _iupdate() err_t {
 	return 0
 }
 
-func (idm *imemnode_t) do_trunc(truncto uint) err_t {
+func (idm *imemnode_t) do_trunc(truncto uint) common.Err_t {
 	if idm.itype != I_FILE && idm.itype != I_DEV {
 		panic("bad truncate")
 	}
@@ -317,11 +318,11 @@ func (idm *imemnode_t) do_trunc(truncto uint) err_t {
 	return err
 }
 
-func (idm *imemnode_t) do_read(dst userio_i, offset int) (int, err_t) {
+func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err_t) {
 	return idm.iread(dst, offset)
 }
 
-func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, err_t) {
+func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (int, common.Err_t) {
 	if idm.itype == I_DIR {
 		panic("write to dir")
 	}
@@ -333,7 +334,7 @@ func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, er
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call.
 	max := maxblkspersys * BSIZE
-	sz := src.totalsz()
+	sz := src.Totalsz()
 	i := 0
 
 	if fs_debug {
@@ -360,43 +361,43 @@ func (idm *imemnode_t) do_write(src userio_i, _offset int, append bool) (int, er
 	return i, 0
 }
 
-func (idm *imemnode_t) do_stat(st *stat_t) err_t {
+func (idm *imemnode_t) do_stat(st *common.Stat_t) common.Err_t {
 	istats.nistat++
-	st.wdev(0)
-	st.wino(uint(idm.inum))
-	st.wmode(idm.mkmode())
-	st.wsize(uint(idm.size))
-	st.wrdev(mkdev(idm.major, idm.minor))
+	st.Wdev(0)
+	st.Wino(uint(idm.inum))
+	st.Wmode(idm.mkmode())
+	st.Wsize(uint(idm.size))
+	st.Wrdev(common.Mkdev(idm.major, idm.minor))
 	return 0
 }
 
-func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]mmapinfo_t, err_t) {
+func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
 	if idm.itype != I_FILE && idm.itype != I_DIR {
 		panic("bad mmapinfo")
 	}
 	return idm.immapinfo(off, len, inc)
 }
 
-func (idm *imemnode_t) do_dirchk(wantdir bool) err_t {
+func (idm *imemnode_t) do_dirchk(wantdir bool) common.Err_t {
 	amdir := idm.itype == I_DIR
 	if wantdir && !amdir {
-		return -ENOTDIR
+		return -common.ENOTDIR
 	} else if !wantdir && amdir {
-		return -EISDIR
+		return -common.EISDIR
 	} else if amdir {
 		amempty, err := idm.idirempty()
 		if err != 0 {
 			return err
 		}
 		if !amempty {
-			return -ENOTEMPTY
+			return -common.ENOTEMPTY
 		}
 	}
 	return 0
 }
 
 // unlink cannot encounter OOM since directory page caches are eagerly loaded.
-func (idm *imemnode_t) do_unlink(name string) err_t {
+func (idm *imemnode_t) do_unlink(name string) common.Err_t {
 	_, err := idm.iunlink(name)
 	if err == 0 {
 		idm._iupdate()
@@ -405,7 +406,7 @@ func (idm *imemnode_t) do_unlink(name string) err_t {
 }
 
 // create new dir ent with given inode number
-func (idm *imemnode_t) do_insert(fn string, n inum_t) err_t {
+func (idm *imemnode_t) do_insert(fn string, n common.Inum_t) common.Err_t {
 	err := idm.iinsert(fn, n)
 	if err == 0 {
 		idm._iupdate()
@@ -413,9 +414,9 @@ func (idm *imemnode_t) do_insert(fn string, n inum_t) err_t {
 	return err
 }
 
-func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum_t, err_t) {
+func (idm *imemnode_t) do_createnod(fn string, maj, min int) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
-		return 0, -ENOTDIR
+		return 0, -common.ENOTDIR
 	}
 
 	itype := I_DEV
@@ -424,9 +425,9 @@ func (idm *imemnode_t) do_createnod(fn string, maj, min int) (inum_t, err_t) {
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_createfile(fn string) (inum_t, err_t) {
+func (idm *imemnode_t) do_createfile(fn string) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
-		return 0, -ENOTDIR
+		return 0, -common.ENOTDIR
 	}
 
 	itype := I_FILE
@@ -435,9 +436,9 @@ func (idm *imemnode_t) do_createfile(fn string) (inum_t, err_t) {
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_createdir(fn string) (inum_t, err_t) {
+func (idm *imemnode_t) do_createdir(fn string) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
-		return 0, -ENOTDIR
+		return 0, -common.ENOTDIR
 	}
 
 	itype := I_DIR
@@ -446,7 +447,7 @@ func (idm *imemnode_t) do_createdir(fn string) (inum_t, err_t) {
 	return cnext, err
 }
 
-func _fullpath(inum inum_t) (string, err_t) {
+func _fullpath(inum common.Inum_t) (string, common.Err_t) {
 	c, err := icache.Iref_locked(inum, "_fullpath")
 	if err != 0 {
 		return "", err
@@ -472,7 +473,7 @@ func _fullpath(inum inum_t) (string, err_t) {
 		par.ilock("do_fullpath_par")
 		name, err := par._denamefor(last)
 		if err != 0 {
-			if err == -ENOENT {
+			if err == -common.ENOENT {
 				panic("child must exist")
 			}
 			par.iunlock_refdown("do_fullpath_par")
@@ -505,12 +506,12 @@ func (idm *imemnode_t) _linkup() {
 
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
-func (ic *imemnode_t) mbread(blockn int) (*bdev_block_t, err_t) {
+func (ic *imemnode_t) mbread(blockn int) (*bdev_block_t, common.Err_t) {
 	mb, err := fslog.Get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
-func (ic *imemnode_t) fill(blk *bdev_block_t, inum inum_t) {
+func (ic *imemnode_t) fill(blk *bdev_block_t, inum common.Inum_t) {
 	inode := inode_t{blk, ioffset(inum)}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
@@ -529,7 +530,7 @@ func (ic *imemnode_t) fill(blk *bdev_block_t, inum inum_t) {
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *imemnode_t) flushto(blk *bdev_block_t, inum inum_t) bool {
+func (ic *imemnode_t) flushto(blk *bdev_block_t, inum common.Inum_t) bool {
 	inode := inode_t{blk, ioffset(inum)}
 	j := inode
 	k := ic
@@ -558,7 +559,7 @@ func (ic *imemnode_t) flushto(blk *bdev_block_t, inum inum_t) bool {
 }
 
 // ensure block exists
-func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, err_t) {
+func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, common.Err_t) {
 	if !writing || blkno != 0 {
 		return blkno, false, 0
 	}
@@ -567,23 +568,23 @@ func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, err_t) {
 }
 
 // ensure entry in indirect block exists
-func (idm *imemnode_t) ensureind(blk *bdev_block_t, slot int, writing bool) (int, err_t) {
+func (idm *imemnode_t) ensureind(blk *bdev_block_t, slot int, writing bool) (int, common.Err_t) {
 	off := slot * 8
 	s := blk.data[:]
-	blkn := readn(s, 8, off)
+	blkn := common.Readn(s, 8, off)
 	blkn, isnew, err := idm.ensureb(blkn, writing)
 	if err != 0 {
 		return 0, err
 	}
 	if isnew {
-		writen(s, 8, off, blkn)
+		common.Writen(s, 8, off, blkn)
 		fslog.Write(blk)
 	}
 	return blkn, 0
 }
 
 // Assumes that every block until b exits
-func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
+func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 	if fbn < NIADDRS {
 		if idm.addrs[fbn] != 0 {
 			return idm.addrs[fbn], 0
@@ -650,9 +651,9 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, err_t) {
 }
 
 // Allocates blocks from startblock through endblock. Returns blkn of endblock.
-func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, err_t) {
+func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, common.Err_t) {
 	blkn := 0
-	var err err_t
+	var err common.Err_t
 
 	if whichblk >= lastblk {   // a hole?
 		// allocate the missing blocks
@@ -679,7 +680,7 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, e
 
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
-func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
+func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, common.Err_t) {
 	whichblk := offset/BSIZE
 	lastblk := idm.size/BSIZE
 	blkn, err := idm.bmapfill(lastblk, whichblk, writing)
@@ -693,8 +694,8 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, err_t) {
 }
 
 // Return locked buffer for offset
-func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s string) (*bdev_block_t, err_t) {
-	if offset%PGSIZE  + len > PGSIZE {
+func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s string) (*bdev_block_t, common.Err_t) {
+	if offset%common.PGSIZE  + len > common.PGSIZE {
 		panic("off2buf")
 	}
 	blkno, err := idm.offsetblk(offset, fillhole)
@@ -720,12 +721,12 @@ func min(a, b int) int {
     return b
 }
 
-func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
+func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t) {
 	istats.niread++
 	isz := idm.size
 	c := 0
-	for offset < isz && dst.remain() != 0 {
-		m := min(BSIZE-offset%BSIZE, dst.remain())
+	for offset < isz && dst.Remain() != 0 {
+		m := min(BSIZE-offset%BSIZE, dst.Remain())
 		m = min(isz - offset, m)
 		b, err := idm.off2buf(offset, m, false, true, "iread")
 		if err != 0 {
@@ -736,10 +737,10 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 
 		if fs_debug {
 			fmt.Printf("_iread c %v isz %v remain %v offset %v m %v s %v s+m %v\n",
-				c, isz, dst.remain(), offset, m, s, s+m)
+				c, isz, dst.Remain(), offset, m, s, s+m)
 		}
 		
-		wrote, err := dst.uiowrite(src)
+		wrote, err := dst.Uiowrite(src)
 		c += wrote
 		offset += wrote
 		b.Unlock()
@@ -751,9 +752,9 @@ func (idm *imemnode_t) iread(dst userio_i, offset int) (int, err_t) {
 	return c, 0
 }
 
-func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
+func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, common.Err_t) {
 	istats.niwrite++
-	sz := min(src.totalsz(), n)
+	sz := min(src.Totalsz(), n)
 	newsz := offset + sz
 	c := 0
 	for c < sz {
@@ -771,7 +772,7 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
 		}
 
 		dst := b.data[s:s+m]
-		read, err := src.uioread(dst)
+		read, err := src.Uioread(dst)
 		b.Unlock()
 		fslog.Write_ordered(b)
 		bcache.Relse(b, "iwrite")
@@ -788,7 +789,7 @@ func (idm *imemnode_t) iwrite(src userio_i, offset int, n int) (int, err_t) {
 	return wrote, 0
 }
 
-func (idm *imemnode_t) itrunc(newlen uint) err_t {
+func (idm *imemnode_t) itrunc(newlen uint) common.Err_t {
 	if newlen > uint(idm.size) {
 		// this will cause the hole to filled in with zero blocks which
 		// are logged to disk
@@ -806,7 +807,7 @@ func (idm *imemnode_t) itrunc(newlen uint) err_t {
 
 // reverts icreate(). called after failure to allocate that prevents an FS
 // operation from continuing.
-func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
+func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.Err_t {
 	ci, err := idm.iunlink(childn)
 	if err != 0 {
 		panic("but insert just succeeded")
@@ -826,7 +827,7 @@ func (idm *imemnode_t) create_undo(childi inum_t, childn string) err_t {
 	return 0
 }
 
-func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, err_t) {
+func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.Inum_t, common.Err_t) {
 	
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")
@@ -840,7 +841,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 	// make sure file does not already exist
 	de, err := idm._delookup(name)
 	if err == 0 {
-		return de.inum, -EEXIST
+		return de.inum, -common.EEXIST
 	}
 
 	istats.nicreate++
@@ -892,25 +893,25 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (inum_t, e
 }
 
 
-func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t) {
+func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
 	isz := idm.size
 	if (len != -1 && len < 0) || offset < 0 {
 		panic("bad off/len")
 	}
 	if offset >= isz {
-		return nil, -EINVAL
+		return nil, -common.EINVAL
 	}
 	if len == -1 || offset + len > isz {
 		len = isz - offset
 	}
 
 	istats.nimmap++
-	o := rounddown(offset, PGSIZE)
-	len = roundup(offset + len, PGSIZE) - o
-	pgc := len / PGSIZE
-	ret := make([]mmapinfo_t, pgc)
-	for i := 0; i < len; i += PGSIZE {
-		buf, err := idm.off2buf(o+i, PGSIZE, false, true, "immapinfo")
+	o := common.Rounddown(offset, common.PGSIZE)
+	len = common.Roundup(offset + len, common.PGSIZE) - o
+	pgc := len / common.PGSIZE
+	ret := make([]common.Mmapinfo_t, pgc)
+	for i := 0; i < len; i += common.PGSIZE {
+		buf, err := idm.off2buf(o+i, common.PGSIZE, false, true, "immapinfo")
 		if err != 0 {
 			return nil, err
 		}
@@ -921,10 +922,10 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 			// system to call bcache.Relse.
 			refup(buf.pa)
 		}
-		pgn := i / PGSIZE
-		wpg := (*pg_t)(unsafe.Pointer(buf.data))
-		ret[pgn].pg = wpg
-		ret[pgn].phys = buf.pa
+		pgn := i / common.PGSIZE
+		wpg := (*common.Pg_t)(unsafe.Pointer(buf.data))
+		ret[pgn].Pg = wpg
+		ret[pgn].Phys = buf.pa
 		// release buffer. the VM system will increase the page count.
 		// XXX race? vm system may not do this for a while. maybe we
 		// should increase page count here.
@@ -933,12 +934,12 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]mmapinfo_t, err_t
 	return ret, 0
 }
 
-func (idm *imemnode_t) idibread() (*bdev_block_t, err_t) {
+func (idm *imemnode_t) idibread() (*bdev_block_t, common.Err_t) {
 	return fslog.Get_fill(ialloc.Iblock(idm.inum), "idibread", true)
 }
 
 // frees all blocks occupied by idm
-func (idm *imemnode_t) ifree() err_t {
+func (idm *imemnode_t) ifree() common.Err_t {
 	istats.nifree++
 	if fs_debug {
 		fmt.Printf("ifree: %d\n", idm.inum)
@@ -950,7 +951,7 @@ func (idm *imemnode_t) ifree() err_t {
 			allb = append(allb, blkno)
 		}
 	}
-	freeind := func(indno int) err_t {
+	freeind := func(indno int) common.Err_t {
 		if indno == 0 {
 			return 0
 		}
@@ -962,7 +963,7 @@ func (idm *imemnode_t) ifree() err_t {
 		data := blk.data[:]
 		for i := 0; i < INDADDR; i++ {
 			off := i*8
-			nblkno := readn(data, 8, off)
+			nblkno := common.Readn(data, 8, off)
 			add(nblkno)
 		}
 		bcache.Relse(blk, "ifree1")
@@ -986,7 +987,7 @@ func (idm *imemnode_t) ifree() err_t {
 		data := blk.data[:]
 		for i := 0; i < INDADDR; i++ {
 			off := i*8
-			nblkno := readn(data, 8, off)
+			nblkno := common.Readn(data, 8, off)
 			if nblkno != 0 {
 				err := freeind(nblkno)
 				if err != 0 {
@@ -1027,19 +1028,19 @@ func (idm *imemnode_t) mkmode() uint {
 		return uint(itype << 16)
 	case I_DEV:
 		// this can happen by fs-internal stats
-		return mkdev(idm.major, idm.minor)
+		return common.Mkdev(idm.major, idm.minor)
 	default:
 		panic("weird itype")
 	}
 }
 
 // XXX: remove
-func fieldr(p *bytepg_t, field int) int {
-	return readn(p[:], 8, field*8)
+func fieldr(p *common.Bytepg_t, field int) int {
+	return common.Readn(p[:], 8, field*8)
 }
 
-func fieldw(p *bytepg_t, field int, val int) {
-	writen(p[:], 8, field*8, val)
+func fieldw(p *common.Bytepg_t, field int, val int) {
+	common.Writen(p[:], 8, field*8, val)
 }
 
 //
@@ -1054,7 +1055,7 @@ type icache_t struct {
 var icache = icache_t{}
 
 func mkIcache() {
-	icache.refcache = mkRefcache(syslimit.vnodes, true)
+	icache.refcache = mkRefcache(common.Syslimit.Vnodes, true)
 }
 
 func (icache *icache_t) Stats() string {
@@ -1069,7 +1070,7 @@ func (icache *icache_t) Stats() string {
 }
 
 // obtain the reference for an inode
-func (icache *icache_t) Iref(inum inum_t, s string) (*imemnode_t, err_t) {
+func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
 	ref, err := icache.refcache.Lookup(int(inum), s)
 	if err != 0 {
 		return nil, err
@@ -1097,7 +1098,7 @@ func (icache *icache_t) Iref(inum inum_t, s string) (*imemnode_t, err_t) {
 }
 
 // Obtain the reference for an inode with the inode locked
-func (icache *icache_t) Iref_locked(inum inum_t, s string) (*imemnode_t, err_t) {
+func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
 	idm, err := icache.Iref(inum, s)
 	if err != 0 {
 		return nil, err
@@ -1150,9 +1151,9 @@ func mkIalloc(start, len, first int) {
 	ialloc.first = first
 }
 
-func (ialloc *iallocater_t) Ialloc() (inum_t, err_t) {
+func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 	n, err := ialloc.alloc.Alloc()
-	inum := inum_t(n)
+	inum := common.Inum_t(n)
 	if err != 0 {
 		return 0, err
 	}
@@ -1162,20 +1163,20 @@ func (ialloc *iallocater_t) Ialloc() (inum_t, err_t) {
 	return inum, 0
 }
 
-func (ialloc *iallocater_t) Ifree(inum inum_t) err_t {
+func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d\n", inum)
 	}
 	return ialloc.alloc.Free(int(inum))
 }
 
-func (ialloc *iallocater_t) Iblock(inum inum_t) int {
+func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
 	b := int(inum) / (BSIZE / ISIZE)
 	b += ialloc.first
         return b
 }
 
-func ioffset(inum inum_t) int {
+func ioffset(inum common.Inum_t) int {
 	o := int(inum) % (BSIZE / ISIZE)
         return o
 }
