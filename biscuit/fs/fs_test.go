@@ -46,13 +46,20 @@ func (ahci *ahci_disk_t) mkRequest(blks []*bdev_block_t, cmd bdevcmd_t, sync boo
 	return ret
 }
 
-func (ahci *ahci_disk_t) doreq(req *bdev_req_t) {
+func (ahci *ahci_disk_t) Seek(o int) {
+	_, err := ahci.f.Seek(int64(o), 0)
+	if err != nil {
+		panic("Seek failed")
+	}
+}
+
+func (ahci *ahci_disk_t) Start(req *bdev_req_t) bool {
 	switch req.cmd {
 	case BDEV_READ:
-		_, err := ahci.f.Seek(int64(req.blks[0].block * BSIZE), 0)
-		if err != nil {
-			panic("Seek failed")
+		if len(req.blks) != 1 {
+			panic("read: too many blocks")
 		}
+		ahci.Seek(req.blks[0].block * BSIZE)
 		b := make([]byte, BSIZE)
 		n, err := ahci.f.Read(b)
 		if n != BSIZE || err != nil {
@@ -63,16 +70,23 @@ func (ahci *ahci_disk_t) doreq(req *bdev_req_t) {
 			req.blks[0].data[i] = uint8(b[i])
 		}
 		fmt.Printf("read is done\n")
-		req.ackCh <- true
 	case BDEV_WRITE:
+		for _, b := range(req.blks) {
+			ahci.Seek(b.block * BSIZE)
+			buf := make([]byte, BSIZE)
+			for i, _ := range(buf) {
+				buf[i] = byte(b.data[i])
+			}
+			n, err := ahci.f.Write(buf)
+			if n != BSIZE || err != nil {
+				panic("Write failed")
+			}
+		}
+		fmt.Printf("write is done\n")
 	case BDEV_FLUSH:
-		panic("xxx")
+		ahci.f.Sync()
 	}
-}
-
-func (ahci *ahci_disk_t) Start(req *bdev_req_t) bool {
-	go ahci.doreq(req)
-	return true
+	return false
 }
 
 func (ahci *ahci_disk_t) Stats() string {
