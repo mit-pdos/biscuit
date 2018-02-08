@@ -39,10 +39,10 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 		if len(req.Blks) != 1 {
 			panic("read: too many blocks")
 		}
-		ahci.Seek(req.Blks[0].Block * BSIZE)
-		b := make([]byte, BSIZE)
+		ahci.Seek(req.Blks[0].Block * common.BSIZE)
+		b := make([]byte, common.BSIZE)
 		n, err := ahci.f.Read(b)
-		if n != BSIZE || err != nil {
+		if n != common.BSIZE || err != nil {
 			panic("Read failed")
 		}
 		req.Blks[0].Data = &common.Bytepg_t{}
@@ -52,13 +52,13 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 		fmt.Printf("read is done\n")
 	case common.BDEV_WRITE:
 		for _, b := range(req.Blks) {
-			ahci.Seek(b.Block * BSIZE)
-			buf := make([]byte, BSIZE)
+			ahci.Seek(b.Block * common.BSIZE)
+			buf := make([]byte, common.BSIZE)
 			for i, _ := range(buf) {
 				buf[i] = byte(b.Data[i])
 			}
 			n, err := ahci.f.Write(buf)
-			if n != BSIZE || err != nil {
+			if n != common.BSIZE || err != nil {
 				panic("Write failed")
 			}
 		}
@@ -118,6 +118,6 @@ func TestFS(*testing.T) {
 	ahci.f = f
 	mem := mem_t{}
 	fmt.Printf("testFS")
-	_ = fs_init(mem, ahci)
+	_ = MkFS(mem, ahci)
 }
 

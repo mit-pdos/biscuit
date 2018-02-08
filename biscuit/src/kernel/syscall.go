@@ -10,6 +10,7 @@ import "sync"
 import "sync/atomic"
 import "time"
 import "unsafe"
+import "common"
 
 const(
 	TFSIZE		= 24
@@ -1376,7 +1377,7 @@ func (of *pipefops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
-func (of *pipefops_t) pathi() inum_t {
+func (of *pipefops_t) pathi() common.Inum_t {
 	panic("pipe cwd")
 }
 
@@ -2166,7 +2167,7 @@ func (sf *sudfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
-func (sf *sudfops_t) pathi() inum_t {
+func (sf *sudfops_t) pathi() common.Inum_t {
 	panic("cwd socket?")
 }
 
@@ -2278,7 +2279,7 @@ func (sf *sudfops_t) sendmsg(proc *proc_t, src userio_i, sa []uint8,
 	ino := st._ino
 
 	bid := budid_t(min)
-	bud, ok := allbuds.bud_lookup(bid, inum_t(ino))
+	bud, ok := allbuds.bud_lookup(bid, common.Inum_t(ino))
 	if !ok {
 		return 0, -ECONNREFUSED
 	}
@@ -2356,7 +2357,7 @@ var allbuds = allbud_t{m: make(map[budkey_t]*bud_t)}
 // files that happen to have the same bid.
 type budkey_t struct {
 	bid	budid_t
-	priv	inum_t
+	priv	common.Inum_t
 }
 
 type allbud_t struct {
@@ -2366,7 +2367,7 @@ type allbud_t struct {
 	nextbid	budid_t
 }
 
-func (ab *allbud_t) bud_lookup(bid budid_t, fpriv inum_t) (*bud_t, bool) {
+func (ab *allbud_t) bud_lookup(bid budid_t, fpriv common.Inum_t) (*bud_t, bool) {
 	key := budkey_t{bid, fpriv}
 
 	ab.Lock()
@@ -2384,7 +2385,7 @@ func (ab *allbud_t) bud_id_new() budid_t {
 	return ret
 }
 
-func (ab *allbud_t) bud_new(bid budid_t, budpath string, fpriv inum_t) *bud_t {
+func (ab *allbud_t) bud_new(bid budid_t, budpath string, fpriv common.Inum_t) *bud_t {
 	ret := &bud_t{}
 	ret.bud_init(bid, budpath, fpriv)
 
@@ -2398,7 +2399,7 @@ func (ab *allbud_t) bud_new(bid budid_t, budpath string, fpriv inum_t) *bud_t {
 	return ret
 }
 
-func (ab *allbud_t) bud_del(bid budid_t, fpriv inum_t) {
+func (ab *allbud_t) bud_del(bid budid_t, fpriv common.Inum_t) {
 	key := budkey_t{bid, fpriv}
 	ab.Lock()
 	if _, ok := ab.m[key]; !ok {
@@ -2509,7 +2510,7 @@ func _sockaddr_un(budpath string) []uint8 {
 type bud_t struct {
 	sync.Mutex
 	bid	budid_t
-	fpriv	inum_t
+	fpriv	common.Inum_t
 	dbuf	dgrambuf_t
 	pollers	pollers_t
 	cond	*sync.Cond
@@ -2517,7 +2518,7 @@ type bud_t struct {
 	bpath	string
 }
 
-func (bud *bud_t) bud_init(bid budid_t, bpath string, priv inum_t) {
+func (bud *bud_t) bud_init(bid budid_t, bpath string, priv common.Inum_t) {
 	bud.bid = bid
 	bud.fpriv = priv
 	bud.bpath = bpath
@@ -2663,7 +2664,7 @@ func (sus *susfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
-func (sus *susfops_t) pathi() inum_t {
+func (sus *susfops_t) pathi() common.Inum_t {
 	panic("unix stream cwd?")
 }
 
@@ -3203,7 +3204,7 @@ func (sf *suslfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -ENODEV
 }
 
-func (sf *suslfops_t) pathi() inum_t {
+func (sf *suslfops_t) pathi() common.Inum_t {
 	panic("unix stream listener cwd?")
 }
 

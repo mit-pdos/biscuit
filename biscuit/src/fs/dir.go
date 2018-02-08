@@ -86,7 +86,7 @@ type dirdata_t struct {
 const(
 	DNAMELEN = 14
 	NDBYTES  = 22
-	NDIRENTS = BSIZE/NDBYTES
+	NDIRENTS = common.BSIZE/NDBYTES
 )
 
 func doffset(didx int, off int) int {
@@ -199,8 +199,8 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 	}
 
 	// current dir blocks are full -- allocate new dirdata block
-	newsz := idm.size + BSIZE
-	b, err := idm.off2buf(idm.size, BSIZE, true, true, "_denextempty")
+	newsz := idm.size + common.BSIZE
+	b, err := idm.off2buf(idm.size, common.BSIZE, true, true, "_denextempty")
 	if err != 0 {
 		return 0, err
 	}
@@ -258,8 +258,8 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 // returned true.
 func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, common.Err_t) {
 	found := false
-	for i := 0; i < idm.size; i+= BSIZE {
-		b, err := idm.off2buf(i, BSIZE, false, true, "_descan")
+	for i := 0; i < idm.size; i+= common.BSIZE {
+		b, err := idm.off2buf(i, common.BSIZE, false, true, "_descan")
 		if err != 0 {
 			return false, err
 		}

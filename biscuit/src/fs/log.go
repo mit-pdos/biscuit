@@ -225,7 +225,7 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	log.orderedwait = make(chan bool)
 	log.disk = disk
 
-	if log.loglen >= BSIZE/4 {
+	if log.loglen >= common.BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
 	}
 }

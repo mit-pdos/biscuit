@@ -17,11 +17,6 @@ const bdev_debug = true
 // address for the page.
 //
 
-// If you change this, you must change corresponding constants in mkbdisk.py,
-// fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
-const BSIZE=4096
-
-
 // block cache, all device interactions run through block cache.
 //
 // The cache returns a pointer to a block_dev_t.  There is *one* common.Bdev_block_t
@@ -274,7 +269,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 		fmt.Printf("balloc: %v\n", ret)
 	}
 
-	var zdata [BSIZE]uint8
+	var zdata [common.BSIZE]uint8
 	copy(blk.Data[:], zdata[:])
 	blk.Unlock()
 	fslog.Write(blk)

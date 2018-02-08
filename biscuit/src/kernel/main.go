@@ -10,6 +10,7 @@ import "strings"
 import "time"
 import "unsafe"
 
+import "common"
 import "fs"
 
 var	numcpus	int = 1
@@ -163,7 +164,7 @@ type fdops_i interface {
 	fstat(*stat_t) err_t
 	lseek(int, int) (int, err_t)
 	mmapi(int, int, bool) ([]mmapinfo_t, err_t)
-	pathi() inum_t
+	pathi() common.Inum_t
 	read(*proc_t, userio_i) (int, err_t)
 	// reopen() is called with proc_t.fdl is held
 	reopen() err_t
@@ -3538,7 +3539,7 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf := fs_init()
+	rf := fs.MkFS()
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)

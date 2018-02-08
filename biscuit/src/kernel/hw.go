@@ -7,6 +7,8 @@ import "sync/atomic"
 import "time"
 import "unsafe"
 
+const BSIZE=4096
+
 const (
 	VENDOR	int	= 0x0
 	DEVICE		= 0x02

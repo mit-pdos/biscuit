@@ -105,7 +105,7 @@ const(
 	// number of words in an inode
 	NIWORDS = 7 + NIADDRS
 	// number of address in indirect block
-	INDADDR        = (BSIZE/8)
+	INDADDR        = (common.BSIZE/8)
 	ISIZE          = 128
 )
 
@@ -333,7 +333,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call.
-	max := maxblkspersys * BSIZE
+	max := maxblkspersys * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 
@@ -681,8 +681,8 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, c
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, common.Err_t) {
-	whichblk := offset/BSIZE
-	lastblk := idm.size/BSIZE
+	whichblk := offset/common.BSIZE
+	lastblk := idm.size/common.BSIZE
 	blkn, err := idm.bmapfill(lastblk, whichblk, writing)
 	if err != 0 {
 		return blkn, err
@@ -726,13 +726,13 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 	isz := idm.size
 	c := 0
 	for offset < isz && dst.Remain() != 0 {
-		m := min(BSIZE-offset%BSIZE, dst.Remain())
+		m := min(common.BSIZE-offset%common.BSIZE, dst.Remain())
 		m = min(isz - offset, m)
 		b, err := idm.off2buf(offset, m, false, true, "iread")
 		if err != 0 {
 			return c, err
 		}
-		s := offset%BSIZE
+		s := offset%common.BSIZE
 		src := b.Data[s:s+m]
 
 		if fs_debug {
@@ -758,13 +758,13 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 	newsz := offset + sz
 	c := 0
 	for c < sz {
-		m := min(BSIZE-offset%BSIZE, sz -c)
-		fill := m != BSIZE
+		m := min(common.BSIZE-offset%common.BSIZE, sz -c)
+		fill := m != common.BSIZE
 		b, err := idm.off2buf(offset, m, true, fill, "iwrite")
 		if err != 0 {
 			return c, err
 		}
-		s := offset%BSIZE
+		s := offset%common.BSIZE
 
 		if fs_debug {
 			fmt.Printf("_iwrite c %v sz %v off %v m %v s %v s+m %v\n",
@@ -1171,13 +1171,13 @@ func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
 }
 
 func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
-	b := int(inum) / (BSIZE / ISIZE)
+	b := int(inum) / (common.BSIZE / ISIZE)
 	b += ialloc.first
         return b
 }
 
 func ioffset(inum common.Inum_t) int {
-	o := int(inum) % (BSIZE / ISIZE)
+	o := int(inum) % (common.BSIZE / ISIZE)
         return o
 }
 

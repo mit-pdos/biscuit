@@ -846,7 +846,6 @@ func kpmap() *pmap_t {
 }
 
 var zerobpg *bytepg_t
-var zeropg *pg_t
 var p_zeropg pa_t
 var _dmapinit bool
 const DMAPLEN int = 1 << 39

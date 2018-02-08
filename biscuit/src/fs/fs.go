@@ -14,7 +14,7 @@ var superb		superblock_t
 
 var stats_string = ""
 
-func fs_init(mem common.Page_i, disk common.Disk_i) *common.Fd_t {
+func MkFS(mem common.Page_i, disk common.Disk_i) *common.Fd_t {
 	if memfs {
 		fmt.Printf("Using MEMORY FS\n")
 	}
@@ -80,7 +80,7 @@ func fs_statistics() string {
 	s += balloc.Stats()
 	s += bcache.Stats()
 	s += icache.Stats()
-	s += ahci.Stats()
+	// s += ahci.Stats()
 	return s
 }
 
@@ -818,12 +818,12 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 	defer raw.Unlock()
 	var did int
 	for dst.Remain() != 0 {
-		blkno := raw.offset / BSIZE
+		blkno := raw.offset / common.BSIZE
 		b, err := fslog.Get_fill(blkno, "read", false)
 		if err != 0 {
 			return 0, err
 		}
-		boff := raw.offset % BSIZE
+		boff := raw.offset % common.BSIZE
 		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {
 			return 0, err
@@ -840,8 +840,8 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 	defer raw.Unlock()
 	var did int
 	for src.Remain() != 0 {
-		blkno := raw.offset / BSIZE
-		boff := raw.offset % BSIZE
+		blkno := raw.offset / common.BSIZE
+		boff := raw.offset % common.BSIZE
 		// if boff != 0 || src.remain() < 512 {
 		//	buf := bdev_read_block(blkno)
 		//}
@@ -1390,7 +1390,7 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	fslog.Write(blk)
 	bcache.Relse(blk, "balloc1")
 
-	bitsperblk := BSIZE*8
+	bitsperblk := common.BSIZE*8
 	blkn = blkn*bitsperblk + oct*8 + int(bit)
 	return blkn, 0
 }
@@ -1409,7 +1409,7 @@ func (alloc *allocater_t) Free(blkno int) common.Err_t {
 	}
 
 	bit := blkno
-	bitsperblk := BSIZE*8
+	bitsperblk := common.BSIZE*8
 	fblkno := alloc.freestart + bit/bitsperblk
 	fbit := bit%bitsperblk
 	fbyteoff := fbit/8
