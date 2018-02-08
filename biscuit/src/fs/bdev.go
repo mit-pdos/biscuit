@@ -1,11 +1,11 @@
 package fs
 
 import "fmt"
-import "sync"
-import "unsafe"
 import "strconv"
 
 import "common"
+
+const bdev_debug = true
 
 // A block has a lock, since, it may store an inode block, which has 4 inodes,
 // and we need to ensure that hat writes aren't lost due to concurrent inode
@@ -21,114 +21,10 @@ import "common"
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE=4096
 
-const bdev_debug = true
-	
-type bdev_block_t struct {
-	sync.Mutex
-	disk	int
-	block	int
-	pa      common.Pa_t
-	data	*common.Bytepg_t
-	s       string
-}
-
-func (blk *bdev_block_t) Key() int {
-	return blk.block
-}
-
-func (blk *bdev_block_t) Evict() {
-	if bdev_debug {
-		fmt.Printf("evict: block %v %#x %v\n", blk.block, blk.pa, refcnt(blk.pa))
-	}
-	if memfs {
-		panic("Running with memory FS")
-	}
-	blk.free_page()
-}
-
-func (blk *bdev_block_t) Evictnow() bool {
-	return false
-}
-
-func mkBlock_newpage(block int, s string) *bdev_block_t {
-	b := mkblock(block, common.Pa_t(0), s)
-	b.New_page()
-	return b
-}
-
-func (b *bdev_block_t) Write() {
-	if bdev_debug {
-		fmt.Printf("bdev_write %v %v\n", b.block, b.s)
-	}
-	if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
-		panic("write\n")
-	}
-	req := ahci.mkRequest([]*bdev_block_t{b}, BDEV_WRITE, true)
-	if ahci.Start(req) {
-		<- req.ackCh
-	}
-} 
-
-func (b *bdev_block_t) Write_async() {
-	if bdev_debug {
-		fmt.Printf("bdev_write_async %v %s\n", b.block, b.s)
-	}
-	// if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
-	//	panic("write_async\n")
-	//}
-	ider := ahci.mkRequest([]*bdev_block_t{b}, BDEV_WRITE, false)
-	ahci.Start(ider)
-}
-
-func (b *bdev_block_t) Read() {
-	ider := ahci.mkRequest([]*bdev_block_t{b}, BDEV_READ, true)
-	if ahci.Start(ider) {
-		<- ider.ackCh
-	}
-	fmt.Printf("Read done %v %p\n", len(b.data), b.data)
-	if bdev_debug {
-		fmt.Printf("bdev_read %v %v %#x %#x\n", b.block, b.s, b.data[0], b.data[1])
-	}
-	
-	// XXX sanity check, but ignore it during recovery
-	if b.data[0] == 0xc && b.data[1] == 0xc {
-		fmt.Printf("WARNING: %v %v\n", b.s, b.block)
-	}
-	
-}
-
-func (blk *bdev_block_t) New_page() {
-	_, pa, ok := refpg_new()
-	fmt.Printf("New_page %v\n", pa)
-	if !ok {
-		panic("oom during bdev.new_page")
-	}
-	blk.pa = pa
-	blk.data = (*common.Bytepg_t)(unsafe.Pointer(dmap(pa)))
-	refup(blk.pa)
-}
-
-//
-// Implementation of blocks
-//
-
-func mkblock(block int, pa common.Pa_t, s string) *bdev_block_t {
-	b := &bdev_block_t{};
-	b.block = block
-	b.pa = pa
-	b.data = (*common.Bytepg_t)(unsafe.Pointer(dmap(pa)))
-	b.s = s
-	return b
-}
-
-
-func (blk *bdev_block_t) free_page() {
-	refdown(blk.pa)
-}
 
 // block cache, all device interactions run through block cache.
 //
-// The cache returns a pointer to a block_dev_t.  There is *one* bdev_block_t
+// The cache returns a pointer to a block_dev_t.  There is *one* common.Bdev_block_t
 // for a block number (and physical page associated with that blockno).  Callers
 // share same block_dev_t (and physical page) for a block. The callers must
 // coordinate using the lock of the block.
@@ -144,15 +40,19 @@ var bcache = bcache_t{}
 
 type bcache_t struct {
 	refcache  *refcache_t
+	mem common.Page_i
+	disk common.Disk_i
 }
 
-func mkBcache() {
+func mkBcache(mem common.Page_i, disk common.Disk_i) {
+	bcache.mem = mem
+	bcache.disk = disk
 	bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_relse when done with buf.
-func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
 
 	if bdev_debug {
@@ -175,7 +75,7 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, 
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
@@ -194,7 +94,7 @@ func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, 
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
@@ -211,45 +111,45 @@ func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t
 	return b, 0
 }
 
-func (bcache *bcache_t) Write(b *bdev_block_t) {
+func (bcache *bcache_t) Write(b *common.Bdev_block_t) {
 	bcache.refcache.Refup(b, "bcache_write")
 	b.Write()
 }
 
-func (bcache *bcache_t) Write_async(b *bdev_block_t) {
+func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
 	bcache.refcache.Refup(b, "bcache_write_async")
 	b.Write_async()
 }
 
 // blks must be contiguous on disk
-func (bcache *bcache_t) Write_async_blks(blks []*bdev_block_t) {
+func (bcache *bcache_t) Write_async_blks(blks []*common.Bdev_block_t) {
 	if bdev_debug {
 		fmt.Printf("bcache_write_async_blks %v\n", len(blks))
 	}
 	if len(blks) == 0  {
 		panic("bcache_write_async_blks\n")
 	}
-	n := blks[0].block-1
+	n := blks[0].Block-1
 	for _, b := range blks {
 		// sanity check
-		if b.block != n + 1 {
+		if b.Block != n + 1 {
 			panic("not contiguous\n")
 		}
 		n++
 		bcache.refcache.Refup(b, "bcache_write_async_blks")
 	}
 	// one request for all blks
-	ider := ahci.mkRequest(blks, BDEV_WRITE, false)
-	ahci.Start(ider)
+	ider := blks[0].Disk.MkRequest(blks, common.BDEV_WRITE, false)
+	blks[0].Disk.Start(ider)
 }
 
-func (bcache *bcache_t) Refup(b *bdev_block_t, s string) {
+func (bcache *bcache_t) Refup(b *common.Bdev_block_t, s string) {
 	bcache.refcache.Refup(b, s)
 }
 
-func (bcache *bcache_t) Relse(b *bdev_block_t, s string) {
+func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	if bdev_debug {
-		fmt.Printf("bcache_relse: %v %v\n", b.block, s)
+		fmt.Printf("bcache_relse: %v %v\n", b.Block, s)
 	}
 	bcache.refcache.Refdown(b, s)
 }
@@ -270,7 +170,7 @@ func (bcache *bcache_t) Stats() string {
 //
 
 // returns the reference to a locked buffer
-func (bcache *bcache_t) bref(blk int, s string) (*bdev_block_t, bool, common.Err_t) {
+func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, common.Err_t) {
 	ref, err := bcache.refcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
@@ -283,48 +183,49 @@ func (bcache *bcache_t) bref(blk int, s string) (*bdev_block_t, bool, common.Err
 		if bdev_debug {
 			fmt.Printf("bref fill %v %v\n", blk, s)
 		}
-		buf := mkblock(blk, common.Pa_t(0), s)
+		buf := common.MkBlock(blk, common.Pa_t(0), s, bcache.mem, bcache.disk)
 		ref.obj = buf
 		ref.valid = true
 		created = true
 	}
-	b := ref.obj.(*bdev_block_t)
+	b := ref.obj.(*common.Bdev_block_t)
 	b.Lock()
-	b.s = s
+	b.Name = s
 	return b, created, err
 }
 
-
-
-func bdev_test() {
+func bdev_test(mem common.Page_i, disk common.Disk_i) {
 	return
 	
 	fmt.Printf("disk test\n")
 
 	const N = 3
 
-	wbuf := new([N]*bdev_block_t)
+	wbuf := new([N]*common.Bdev_block_t)
 
 	for b := 0; b < N; b++ {
-		wbuf[b] = mkBlock_newpage(b, "disktest")
+		wbuf[b] = common.MkBlock_newpage(b, "disktest", mem, disk)
 	}
 	for j := 0; j < 100; j++ {
 
 		for b := 0; b < N; b++ {
 			fmt.Printf("req %v,%v\n", j, b)
 
-			for i,_ := range wbuf[b].data {
-				wbuf[b].data[i] = uint8(b)
+			for i,_ := range wbuf[b].Data {
+				wbuf[b].Data[i] = uint8(b)
 			}
 			wbuf[b].Write_async()
 		}
-		flush()
+		ider := disk.MkRequest(nil, common.BDEV_FLUSH, true)
+		if disk.Start(ider) {
+			<- ider.AckCh
+		}
 		for b := 0; b < N; b++ {
 			rbuf, err := bcache.Get_fill(b, "read test", false)
 			if err != 0 {
 				panic("bdev_test\n")
 			}
-			for i, v := range rbuf.data {
+			for i, v := range rbuf.Data {
 				if v != uint8(b) {
 					fmt.Printf("buf %v i %v v %v\n", j, i, v)
 					panic("bdev_test\n")
@@ -374,7 +275,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 	}
 
 	var zdata [BSIZE]uint8
-	copy(blk.data[:], zdata[:])
+	copy(blk.Data[:], zdata[:])
 	blk.Unlock()
 	fslog.Write(blk)
 	bcache.Relse(blk, "balloc")

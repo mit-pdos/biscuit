@@ -21,7 +21,7 @@ type frbn_t struct {
 	r	*frbn_t
 	l	*frbn_t
 	c	common.Rbc_t
-	pgi	*bdev_block_t
+	pgi	*common.Bdev_block_t
 }
 
 
@@ -109,7 +109,7 @@ func (h *frbh_t) _balance(nn *frbn_t) {
 	h.root.c = BLACK
 }
 
-func (h *frbh_t) insert(pgi *bdev_block_t) *frbn_t {
+func (h *frbh_t) insert(pgi *common.Bdev_block_t) *frbn_t {
 	nn := &frbn_t{pgi: pgi, c: RED}
 	if h.root == nil {
 		h.root = nn
@@ -119,21 +119,21 @@ func (h *frbh_t) insert(pgi *bdev_block_t) *frbn_t {
 
 	n := h.root
 	for {
-		if pgi.block > n.pgi.block {
+		if pgi.Block > n.pgi.Block {
 			if n.r == nil {
 				n.r = nn
 				nn.p = n
 				break
 			}
 			n = n.r
-		} else if pgi.block < n.pgi.block {
+		} else if pgi.Block < n.pgi.Block {
 			if n.l == nil {
 				n.l = nn
 				nn.p = n
 				break
 			}
 			n = n.l
-		} else if n.pgi.block == pgi.block {
+		} else if n.pgi.Block == pgi.Block {
 			return n
 		}
 	}
@@ -145,9 +145,9 @@ func (h *frbh_t) insert(pgi *bdev_block_t) *frbn_t {
 func (h *frbh_t) _lookup(pgn int) *frbn_t {
 	n := h.root
 	for n != nil {
-		if pgn == n.pgi.block {
+		if pgn == n.pgi.Block {
 			break
-		} else if n.pgi.block < pgn {
+		} else if n.pgi.Block < pgn {
 			n = n.r
 		} else {
 			n = n.l
@@ -156,7 +156,7 @@ func (h *frbh_t) _lookup(pgn int) *frbn_t {
 	return n
 }
 
-func (h *frbh_t) lookup(pgn int) (*bdev_block_t, bool) {
+func (h *frbh_t) lookup(pgn int) (*common.Bdev_block_t, bool) {
 	r := h._lookup(pgn)
 	if r == nil {
 		return nil, false
@@ -314,7 +314,7 @@ func (h *frbh_t) remove(nn *frbn_t) *frbn_t {
 	return old
 }
 
-func (h *frbh_t) iter1(n *frbn_t, f func(*bdev_block_t)) {
+func (h *frbh_t) iter1(n *frbn_t, f func(*common.Bdev_block_t)) {
 	if n == nil {
 		return
 	}
@@ -323,7 +323,7 @@ func (h *frbh_t) iter1(n *frbn_t, f func(*bdev_block_t)) {
 	h.iter1(n.r, f)
 }
 
-func (h *frbh_t) iter(f func(*bdev_block_t)) {
+func (h *frbh_t) iter(f func(*common.Bdev_block_t)) {
 	h.iter1(h.root, f)
 }
 

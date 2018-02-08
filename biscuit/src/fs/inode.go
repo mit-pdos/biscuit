@@ -84,7 +84,7 @@ func inode_stats() string {
 
 // inode format (see mkbfs.py)
 type inode_t struct {
-	iblk	*bdev_block_t
+	iblk	*common.Bdev_block_t
 	ioff    int
 }
 
@@ -115,7 +115,7 @@ func ifield(iidx int, fieldn int) int {
 
 // iidx is the inode index; necessary since there are four inodes in one block
 func (ind *inode_t) itype() int {
-	it := fieldr(ind.iblk.data, ifield(ind.ioff, 0))
+	it := fieldr(ind.iblk.Data, ifield(ind.ioff, 0))
 	if it < I_FIRST || it > I_LAST {
 		panic(fmt.Sprintf("weird inode type %d", it))
 	}
@@ -123,27 +123,27 @@ func (ind *inode_t) itype() int {
 }
 
 func (ind *inode_t) linkcount() int {
-	return fieldr(ind.iblk.data, ifield(ind.ioff, 1))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, 1))
 }
 
 func (ind *inode_t) size() int {
-	return fieldr(ind.iblk.data, ifield(ind.ioff, 2))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, 2))
 }
 
 func (ind *inode_t) major() int {
-	return fieldr(ind.iblk.data, ifield(ind.ioff, 3))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, 3))
 }
 
 func (ind *inode_t) minor() int {
-	return fieldr(ind.iblk.data, ifield(ind.ioff, 4))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, 4))
 }
 
 func (ind *inode_t) indirect() int {
-	return fieldr(ind.iblk.data, ifield(ind.ioff, 5))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, 5))
 }
 
 func (ind *inode_t) dindirect() int {
-	return fieldr(ind.iblk.data, ifield(ind.ioff, 6))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, 6))
 }
 
 func (ind *inode_t) addr(i int) int {
@@ -151,40 +151,40 @@ func (ind *inode_t) addr(i int) int {
 		panic("bad inode block index")
 	}
 	addroff := 7
-	return fieldr(ind.iblk.data, ifield(ind.ioff, addroff + i))
+	return fieldr(ind.iblk.Data, ifield(ind.ioff, addroff + i))
 }
 
 func (ind *inode_t) w_itype(n int) {
 	if n < I_FIRST || n > I_LAST {
 		panic("weird inode type")
 	}
-	fieldw(ind.iblk.data, ifield(ind.ioff, 0), n)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 0), n)
 }
 
 func (ind *inode_t) w_linkcount(n int) {
-	fieldw(ind.iblk.data, ifield(ind.ioff, 1), n)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 1), n)
 }
 
 func (ind *inode_t) w_size(n int) {
-	fieldw(ind.iblk.data, ifield(ind.ioff, 2), n)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 2), n)
 }
 
 func (ind *inode_t) w_major(n int) {
-	fieldw(ind.iblk.data, ifield(ind.ioff, 3), n)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 3), n)
 }
 
 func (ind *inode_t) w_minor(n int) {
-	fieldw(ind.iblk.data, ifield(ind.ioff, 4), n)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 4), n)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
 func (ind *inode_t) w_indirect(blk int) {
-	fieldw(ind.iblk.data, ifield(ind.ioff, 5), blk)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 5), blk)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
 func (ind *inode_t) w_dindirect(blk int) {
-	fieldw(ind.iblk.data, ifield(ind.ioff, 6), blk)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, 6), blk)
 }
 
 func (ind *inode_t) w_addr(i int, blk int) {
@@ -192,7 +192,7 @@ func (ind *inode_t) w_addr(i int, blk int) {
 		panic("bad inode block index")
 	}
 	addroff := 7
-	fieldw(ind.iblk.data, ifield(ind.ioff, addroff + i), blk)
+	fieldw(ind.iblk.Data, ifield(ind.ioff, addroff + i), blk)
 }
 
 // In-memory representation of an inode.
@@ -506,12 +506,12 @@ func (idm *imemnode_t) _linkup() {
 
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
-func (ic *imemnode_t) mbread(blockn int) (*bdev_block_t, common.Err_t) {
+func (ic *imemnode_t) mbread(blockn int) (*common.Bdev_block_t, common.Err_t) {
 	mb, err := fslog.Get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
-func (ic *imemnode_t) fill(blk *bdev_block_t, inum common.Inum_t) {
+func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
 	inode := inode_t{blk, ioffset(inum)}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
@@ -530,7 +530,7 @@ func (ic *imemnode_t) fill(blk *bdev_block_t, inum common.Inum_t) {
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *imemnode_t) flushto(blk *bdev_block_t, inum common.Inum_t) bool {
+func (ic *imemnode_t) flushto(blk *common.Bdev_block_t, inum common.Inum_t) bool {
 	inode := inode_t{blk, ioffset(inum)}
 	j := inode
 	k := ic
@@ -568,9 +568,9 @@ func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, common.Err_t
 }
 
 // ensure entry in indirect block exists
-func (idm *imemnode_t) ensureind(blk *bdev_block_t, slot int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) ensureind(blk *common.Bdev_block_t, slot int, writing bool) (int, common.Err_t) {
 	off := slot * 8
-	s := blk.data[:]
+	s := blk.Data[:]
 	blkn := common.Readn(s, 8, off)
 	blkn, isnew, err := idm.ensureb(blkn, writing)
 	if err != 0 {
@@ -694,7 +694,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, common.Err_t) {
 }
 
 // Return locked buffer for offset
-func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s string) (*bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s string) (*common.Bdev_block_t, common.Err_t) {
 	if offset%common.PGSIZE  + len > common.PGSIZE {
 		panic("off2buf")
 	}
@@ -702,7 +702,7 @@ func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s 
 	if err != 0 {
 		return nil, err
 	}
-	var b *bdev_block_t
+	var b *common.Bdev_block_t
 	if fill {
 		b, err = fslog.Get_fill(blkno, s, true)
 	} else {
@@ -733,7 +733,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 			return c, err
 		}
 		s := offset%BSIZE
-		src := b.data[s:s+m]
+		src := b.Data[s:s+m]
 
 		if fs_debug {
 			fmt.Printf("_iread c %v isz %v remain %v offset %v m %v s %v s+m %v\n",
@@ -771,7 +771,7 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 				c, sz, offset, m, s, s+m)
 		}
 
-		dst := b.data[s:s+m]
+		dst := b.Data[s:s+m]
 		read, err := src.Uioread(dst)
 		b.Unlock()
 		fslog.Write_ordered(b)
@@ -920,12 +920,12 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 			// XXX don't release buffer (i.e., pin in cache)
 			// so that writes make it to the file. modify vm
 			// system to call bcache.Relse.
-			refup(buf.pa)
+			// mem.Refup(buf.Pa)
 		}
 		pgn := i / common.PGSIZE
-		wpg := (*common.Pg_t)(unsafe.Pointer(buf.data))
+		wpg := (*common.Pg_t)(unsafe.Pointer(buf.Data))
 		ret[pgn].Pg = wpg
-		ret[pgn].Phys = buf.pa
+		ret[pgn].Phys = buf.Pa
 		// release buffer. the VM system will increase the page count.
 		// XXX race? vm system may not do this for a while. maybe we
 		// should increase page count here.
@@ -934,7 +934,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 	return ret, 0
 }
 
-func (idm *imemnode_t) idibread() (*bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 	return fslog.Get_fill(ialloc.Iblock(idm.inum), "idibread", true)
 }
 
@@ -960,7 +960,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		if err != 0 {
 			return err
 		}
-		data := blk.data[:]
+		data := blk.Data[:]
 		for i := 0; i < INDADDR; i++ {
 			off := i*8
 			nblkno := common.Readn(data, 8, off)
@@ -984,7 +984,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		if err != 0 {
 			return err
 		}
-		data := blk.data[:]
+		data := blk.Data[:]
 		for i := 0; i < INDADDR; i++ {
 			off := i*8
 			nblkno := common.Readn(data, 8, off)

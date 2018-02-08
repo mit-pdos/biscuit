@@ -1,3 +1,4 @@
+package main
 
 const (
 	black = 0

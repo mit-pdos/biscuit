@@ -23,15 +23,15 @@ var fslog	= log_t{}
 var loglen      = 0    // for marshalling/unmarshalling
 
 type buf_t struct {
-	block             *bdev_block_t
+	block             *common.Bdev_block_t
 	ordered         bool
 }
 
 type log_t struct {
-	log		[]*bdev_block_t       // in-memory log
+	log		[]*common.Bdev_block_t       // in-memory log
 	logpresent      map[int]bool          // enable quick check to see if block is in log
-	absorb          map[int]*bdev_block_t // map from block number to block to absorb in current transaction
-	ordered         []*bdev_block_t       // slice of ordered blocks
+	absorb          map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
+	ordered         []*common.Bdev_block_t       // slice of ordered blocks
 	orderedpresent  map[int]bool          // enable quick check so see if block is in ordered
 	memhead		int                   // head of the log in memory
 	diskhead        int                   // head of the log on disk 
@@ -44,6 +44,9 @@ type log_t struct {
 	commitwait	chan bool
 	forceordered	chan bool
 	orderedwait	chan bool
+
+	disk            common.Disk_i
+
 
 	// some stats
 	maxblks_per_op    int
@@ -90,23 +93,23 @@ func (log *log_t) Force() {
 // Write increments ref so that the log has always a valid ref to the buf's page
 // the logging layer refdowns when it it is done with the page.  the caller of
 // log_write shouldn't hold buf's lock.
-func (log *log_t) Write(b *bdev_block_t) {
+func (log *log_t) Write(b *common.Bdev_block_t) {
 	if memfs {
 		return
 	}
 	if log_debug {
-		fmt.Printf("log_write %v\n", b.block)
+		fmt.Printf("log_write %v\n", b.Block)
 	}
 	bcache.Refup(b, "log_write")
 	log.incoming <- buf_t{b, false}
 }
 
-func (log *log_t) Write_ordered(b *bdev_block_t) {
+func (log *log_t) Write_ordered(b *common.Bdev_block_t) {
 	if memfs {
 		return
 	}
 	if log_debug {
-		fmt.Printf("log_write_ordered %v\n", b.block)
+		fmt.Printf("log_write_ordered %v\n", b.Block)
 	}
 	bcache.Refup(b, "log_write_ordered")
 	log.incoming <- buf_t{b, true}
@@ -114,15 +117,15 @@ func (log *log_t) Write_ordered(b *bdev_block_t) {
 
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
-func (log *log_t) Get_fill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
+func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	return log.read(mkread(bcache.Get_fill, blkn, s, lock))
 }
 
-func (log *log_t) Get_zero(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
+func (log *log_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	return log.read(mkread(bcache.Get_zero, blkn, s, lock))
 }
 
-func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*bdev_block_t, common.Err_t) {
+func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	return log.read(mkread(bcache.Get_nofill, blkn, s, lock))
 }
 
@@ -154,11 +157,11 @@ func (log *log_t) Stats() string {
 	return s
 }
 
-func mkLog(logstart, loglen int) common.Err_t {
+func mkLog(logstart, loglen int, disk common.Disk_i) common.Err_t {
 	if memfs {
 		return 0
 	}
-	fslog.init(logstart, loglen)
+	fslog.init(logstart, loglen, disk)
 	err := fslog.recover()
 	if err != 0 {
 		return err
@@ -202,16 +205,16 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 	fieldw(lh.data, 8 + p, n)
 }
 
-func (log *log_t) init(ls int, ll int) {
+func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	loglen = ll-1
 	log.memhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
-	log.log = make([]*bdev_block_t, log.loglen)
+	log.log = make([]*common.Bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
-	log.absorb = make(map[int]*bdev_block_t, log.loglen)   // XXX bounded by len ordered list?
-	log.ordered = make([]*bdev_block_t, 0)                 // XXX bounded by cache size?
+	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)   // XXX bounded by len ordered list?
+	log.ordered = make([]*common.Bdev_block_t, 0)                 // XXX bounded by cache size?
 	log.orderedpresent = make(map[int]bool)                // XXX bounded by len ordered list
 	log.incoming = make(chan buf_t)
 	log.admission = make(chan bool)
@@ -220,6 +223,7 @@ func (log *log_t) init(ls int, ll int) {
 	log.commitwait = make(chan bool)
 	log.forceordered = make(chan bool)
 	log.orderedwait = make(chan bool)
+	log.disk = disk
 
 	if log.loglen >= BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
@@ -243,7 +247,7 @@ func (log *log_t) addlog(buf buf_t) {
 	// ordered writes to that block in the log too. Otherwise, we run the
 	// risk that apply will overwrite the value of a more recent ordered
 	// write.
-	_, present := log.logpresent[buf.block.block]
+	_, present := log.logpresent[buf.block.Block]
 	if buf.ordered && !present {
 		log.norderedwrite++
 	} else {
@@ -253,24 +257,24 @@ func (log *log_t) addlog(buf buf_t) {
 		}
 	}
 
-	_, presentordered := log.orderedpresent[buf.block.block]
+	_, presentordered := log.orderedpresent[buf.block.Block]
 	if !buf.ordered && presentordered {
 		// XXX maybe orderedpresent should keep track of index in log.ordered
 		// XXX test case: alloc b for f, write b, unlink f, grow dir with b, and write b
 		for i, b := range log.ordered {
-			if b.block == buf.block.block {
+			if b.Block == buf.block.Block {
 				fmt.Printf("remove %v from ordered\n", i)
 				log.ordered = append(log.ordered[:i], log.ordered[i+1:]...)
 			}
 		}
-		delete(log.orderedpresent, buf.block.block)
-		delete(log.absorb, buf.block.block)
+		delete(log.orderedpresent, buf.block.Block)
+		delete(log.absorb, buf.block.Block)
 	}
 	
 	// log absorption.
-	if _, ok := log.absorb[buf.block.block]; ok {
+	if _, ok := log.absorb[buf.block.Block]; ok {
 		// Buffer is already in log or in ordered, but not on disk
-		// yet. We wrote it (since there is only one bdev_block_t for
+		// yet. We wrote it (since there is only one common.Bdev_block_t for
 		// each blockno), so it has already been absorbed.
 		//
 		// If the write of this block is in a later file
@@ -281,14 +285,14 @@ func (log *log_t) addlog(buf buf_t) {
 		bcache.Relse(buf.block, "absorption")
 		return
 	}
-	log.absorb[buf.block.block] = buf.block
+	log.absorb[buf.block.Block] = buf.block
 
 	// No need to copy data of buf because later ops who reads the modified
 	// block will commmit with this transaction (or crash, but then nop will
 	// commit).  We never commit while an operation is still on-going.
 	if buf.ordered && !present {
 		log.ordered = append(log.ordered, buf.block)
-		log.orderedpresent[buf.block.block] = true
+		log.orderedpresent[buf.block.Block] = true
 	} else {
 		memhead := log.memhead
 		if memhead >= len(log.log) {
@@ -296,12 +300,12 @@ func (log *log_t) addlog(buf buf_t) {
 		}
 		log.log[memhead] = buf.block
 		log.memhead++
-		log.logpresent[buf.block.block] = true
+		log.logpresent[buf.block.Block] = true
 	}
 }
 
 // headblk is in cache
-func (log *log_t) apply(headblk *bdev_block_t) {
+func (log *log_t) apply(headblk *common.Bdev_block_t) {
 	done := make(map[int]bool, log.loglen)
 		
 	if log_debug {
@@ -314,23 +318,23 @@ func (log *log_t) apply(headblk *bdev_block_t) {
 	for i := log.memhead-1; i >= 0; i-- {
 		l := log.log[i]
 		log.nblkapply++
-		if _, ok := done[l.block]; !ok {
+		if _, ok := done[l.Block]; !ok {
 			bcache.Write_async(l)
 			bcache.Relse(l, "apply")
-			done[l.block] = true
+			done[l.Block] = true
 		} else {
 			log.nabsorbapply++
 		}
 	}
 
-	flush()  // flush apply
+	log.flush()  // flush apply
 	
 	// success; clear flag indicating to recover from log
-	lh := logheader_t{headblk.data}
+	lh := logheader_t{headblk.Data}
 	lh.w_recovernum(0)
 	bcache.Write(headblk)
 
-	flush()  // flush cleared commit
+	log.flush()  // flush cleared commit
 
 	log.logpresent = make(map[int]bool, log.loglen)
 }
@@ -341,7 +345,7 @@ func (log *log_t) write_ordered() {
 		bcache.Write_async(b)
 		bcache.Relse(b, "writeordered")
 	}
-	log.ordered = make([]*bdev_block_t, 0)
+	log.ordered = make([]*common.Bdev_block_t, 0)
 	log.orderedpresent = make(map[int]bool)
 }
 
@@ -352,7 +356,7 @@ func (log *log_t) commit() {
 			fmt.Printf("commit: flush ordered blks %d\n", len(log.ordered))
 		}
 		log.write_ordered();
-		flush();
+		log.flush();
 		return
 	}
 
@@ -373,20 +377,20 @@ func (log *log_t) commit() {
 		panic("cannot read commit block\n")
 	}
 	
-	lh := logheader_t{headblk.data}
-	blks := make([]*bdev_block_t, newblks)
+	lh := logheader_t{headblk.Data}
+	blks := make([]*common.Bdev_block_t, newblks)
 
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
 		// install log destination in the first log block
-		lh.w_logdest(i, l.block)
+		lh.w_logdest(i, l.Block)
 
 		// fill in log blocks
 		b, err := bcache.Get_nofill(log.logstart+i+1, "log", true)
 		if err != 0 {
 			panic("cannot get log block\n")
 		}
-		copy(b.data[:], l.data[:])
+		copy(b.Data[:], l.Data[:])
 		b.Unlock()
 		blks[i-log.diskhead] = b
 	}
@@ -401,11 +405,11 @@ func (log *log_t) commit() {
 
 	log.write_ordered()
 	
-	flush()   // flush outstanding writes
+	log.flush()   // flush outstanding writes
 
 	bcache.Write(headblk)  	// write log header
 
-	flush()   // commit log header
+	log.flush()   // commit log header
 
 	log.nblkcommitted += newblks
 
@@ -425,16 +429,16 @@ func (log *log_t) commit() {
 	log.diskhead = log.memhead
 	
 	// reset absorption map and ordered list
-	log.absorb = make(map[int]*bdev_block_t, log.loglen)
+	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
 
 	// done with log header
 	bcache.Relse(headblk, "commit done")
 }
 
-func flush() {
-	ider := ahci.mkRequest(nil, BDEV_FLUSH, true)
-	if ahci.Start(ider) {
-		<- ider.ackCh
+func (log *log_t) flush() {
+	ider := log.disk.MkRequest(nil, common.BDEV_FLUSH, true)
+	if log.disk.Start(ider) {
+		<- ider.AckCh
 	}
 }
 
@@ -443,7 +447,7 @@ func (log *log_t) recover()  common.Err_t {
 	if err != 0 { 
 		return err
 	}
-	lh := logheader_t{b.data}
+	lh := logheader_t{b.Data}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
@@ -462,7 +466,7 @@ func (log *log_t) recover()  common.Err_t {
 		if err != 0 {
 			return err
 		}
-		copy(fb.data[:], lb.data[:])
+		copy(fb.Data[:], lb.Data[:])
 		bcache.Write(fb)
 		bcache.Relse(lb, "fs_recover1")
 		bcache.Relse(fb, "fs_recover2")
@@ -529,7 +533,7 @@ func log_daemon(l *log_t) {
 				}
 				l.nforceordered++
 				l.write_ordered()
-				flush()
+				l.flush()
 				l.orderedwait <- true
 			}
 		}
@@ -559,7 +563,7 @@ func (log *log_t) force_ordered() {
 
 
 // If cache has no space, ask logdaemon to create some space
-func (log *log_t) read(readfn func() (*bdev_block_t, common.Err_t)) (*bdev_block_t, common.Err_t) {
+func (log *log_t) read(readfn func() (*common.Bdev_block_t, common.Err_t)) (*common.Bdev_block_t, common.Err_t) {
 	b, err := readfn()
 	if err == -common.ENOMEM {
 		log.force_ordered()
@@ -571,8 +575,8 @@ func (log *log_t) read(readfn func() (*bdev_block_t, common.Err_t)) (*bdev_block
 	return b, err
 }
 
-func mkread(readfn func(int,string,bool) (*bdev_block_t, common.Err_t), b int, s string, l bool) func()(*bdev_block_t, common.Err_t) {
-	return func() (*bdev_block_t, common.Err_t) {
+func mkread(readfn func(int,string,bool) (*common.Bdev_block_t, common.Err_t), b int, s string, l bool) func()(*common.Bdev_block_t, common.Err_t) {
+	return func() (*common.Bdev_block_t, common.Err_t) {
 		return readfn(b, s, l)
 	}
 }

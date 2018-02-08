@@ -235,7 +235,7 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	ddata := dirdata_t{b.data[noff%common.PGSIZE:]}
+	ddata := dirdata_t{b.Data[noff%common.PGSIZE:]}
 
 	ddata.w_filename(0, name)
 	ddata.w_inodenext(0, inum)
@@ -263,7 +263,7 @@ func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, commo
 		if err != 0 {
 			return false, err
 		}
-		dd := dirdata_t{b.data[:]}
+		dd := dirdata_t{b.Data[:]}
 		for j := 0; j < NDIRENTS; j++ {
 			tfn := dd.filename(j)
 			tpriv := dd.inodenext(j)
@@ -330,7 +330,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, common.Err_t) {
 	if err != 0 {
 		return zi, err
 	}
-	dirdata := dirdata_t{b.data[de.offset%common.PGSIZE:]}
+	dirdata := dirdata_t{b.Data[de.offset%common.PGSIZE:]}
 	dirdata.w_filename(0, "")
 	dirdata.w_inodenext(0, common.Inum_t(0))
 	b.Unlock()
@@ -413,7 +413,7 @@ func (idm *imemnode_t) _derelease() int {
 // ensure that an insert/unlink cannot fail i.e. fail to allocate a page. if fn
 // == "", look for an empty dirent, otherwise make sure the page containing fn
 // is in the page cache.
-func (idm *imemnode_t) _deprobe(fn string) (*bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) _deprobe(fn string) (*common.Bdev_block_t, common.Err_t) {
 	if fn != "" {
 		de, err := idm._delookup(fn)
 		if err != 0 {
@@ -475,7 +475,7 @@ func (idm *imemnode_t) _deaddempty(off int) {
 
 // guarantee that there is enough memory to insert at least one directory
 // entry.
-func (idm *imemnode_t) probe_insert() (*bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) probe_insert() (*common.Bdev_block_t, common.Err_t) {
 	// insert and remove a fake directory entry, forcing a page allocation
 	// if necessary.
 	b, err := idm._deprobe("")
@@ -487,7 +487,7 @@ func (idm *imemnode_t) probe_insert() (*bdev_block_t, common.Err_t) {
 
 // guarantee that there is enough memory to unlink a dirent (which may require
 // allocating a page to load the dirents from disk).
-func (idm *imemnode_t) probe_unlink(fn string) (*bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) probe_unlink(fn string) (*common.Bdev_block_t, common.Err_t) {
 	b, err := idm._deprobe(fn)
 	if err != 0 {
 		return nil, err

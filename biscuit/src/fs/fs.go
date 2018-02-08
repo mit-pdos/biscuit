@@ -14,12 +14,12 @@ var superb		superblock_t
 
 var stats_string = ""
 
-func fs_init() *common.Fd_t {
+func fs_init(mem common.Page_i, disk common.Disk_i) *common.Fd_t {
 	if memfs {
 		fmt.Printf("Using MEMORY FS\n")
 	}
 
-	mkBcache()
+	mkBcache(mem, disk)
 	mkIcache()
 	
 	// find the first fs block; the build system installs it in block 0 for
@@ -29,7 +29,7 @@ func fs_init() *common.Fd_t {
 		panic("fs_init")
 	}
 	FSOFF := 506
-	superb_start = common.Readn(b.data[:], 4, FSOFF)
+	superb_start = common.Readn(b.Data[:], 4, FSOFF)
 	fmt.Printf("superb_start %v\n", superb_start)
 	if superb_start <= 0 {
 		panic("bad superblock start")
@@ -41,7 +41,7 @@ func fs_init() *common.Fd_t {
 	if err != 0 {
 		panic("fs_init")
 	}
-	superb = superblock_t{b.data}
+	superb = superblock_t{b.Data}
 
 	logstart := superb_start + 1
 	loglen := superb.loglen()
@@ -49,7 +49,7 @@ func fs_init() *common.Fd_t {
 		panic("bad log len")
 	}
 	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
-	err = mkLog(logstart, loglen)
+	err = mkLog(logstart, loglen, disk)
 	if err != 0 {
 		panic("log_init failed")
 	}
@@ -824,7 +824,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 			return 0, err
 		}
 		boff := raw.offset % BSIZE
-		c, err := dst.Uiowrite(b.data[boff:])
+		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {
 			return 0, err
 		}
@@ -850,7 +850,7 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		if err != 0 {
 			return 0, err
 		}
-		c, err := src.Uioread(buf.data[boff:])
+		c, err := src.Uioread(buf.Data[boff:])
 		if err != 0 {
 			return 0, err
 		}
@@ -1327,7 +1327,7 @@ func freebit(b uint8) uint {
 	panic("no 0 bit?")
 }
 
-func (alloc *allocater_t) Fbread(blockno int) (*bdev_block_t, common.Err_t) {
+func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
 	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
 		panic("naughty blockno")
 	}
@@ -1341,7 +1341,7 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	found := false
 	hit := true
 	var bit uint
-	var blk *bdev_block_t
+	var blk *common.Bdev_block_t
 	var blkn int
 	var oct int
 	var err common.Err_t
@@ -1361,8 +1361,8 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 		if b == 0 {
 			start = alloc.lastbyte
 		}
-		for idx := start; idx < len(blk.data); idx++ {
-			c := blk.data[idx]
+		for idx := start; idx < len(blk.Data); idx++ {
+			c := blk.Data[idx]
 			if c != 0xff {
 				alloc.lastblk = i
 				alloc.lastbyte = idx
@@ -1385,7 +1385,7 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	}
 
 	// mark as allocated
-	blk.data[oct] |= 1 << bit
+	blk.Data[oct] |= 1 << bit
 	blk.Unlock()
 	fslog.Write(blk)
 	bcache.Relse(blk, "balloc1")
@@ -1421,7 +1421,7 @@ func (alloc *allocater_t) Free(blkno int) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	fblk.data[fbyteoff] &= ^(1 << fbitoff)
+	fblk.Data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
 	fslog.Write(fblk)
 	bcache.Relse(fblk, "free")

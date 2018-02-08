@@ -11,40 +11,18 @@ import "common"
 // The "driver"
 //
 
-const ahci_debug = true
 var ahci = &ahci_disk_t{}
-
-type bdevcmd_t uint
-
-const (
-	BDEV_WRITE bdevcmd_t = 1
-	BDEV_READ = 2
-	BDEV_FLUSH = 3
-)
-
-type bdev_req_t struct {
-	blks     []*bdev_block_t
-	ackCh	chan bool
-	cmd	bdevcmd_t
-	sync    bool
-}
-
-type adisk_t interface {
-	Start(*bdev_req_t) bool
-	Stats() string
-	mkRequest([]*bdev_block_t, bdevcmd_t, bool) *bdev_req_t
-}
 
 type ahci_disk_t struct {
 	f *os.File
 }
 
-func (ahci *ahci_disk_t) mkRequest(blks []*bdev_block_t, cmd bdevcmd_t, sync bool) *bdev_req_t {
-	ret := &bdev_req_t{}
-	ret.blks = blks
-	ret.ackCh = make(chan bool)
-	ret.cmd = cmd
-	ret.sync = sync
+func (ahci *ahci_disk_t) MkRequest(blks []*common.Bdev_block_t, cmd common.Bdevcmd_t, sync bool) *common.Bdev_req_t {
+	ret := &common.Bdev_req_t{}
+	ret.Blks = blks
+	ret.AckCh = make(chan bool)
+	ret.Cmd = cmd
+	ret.Sync = sync
 	return ret
 }
 
@@ -55,29 +33,29 @@ func (ahci *ahci_disk_t) Seek(o int) {
 	}
 }
 
-func (ahci *ahci_disk_t) Start(req *bdev_req_t) bool {
-	switch req.cmd {
-	case BDEV_READ:
-		if len(req.blks) != 1 {
+func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
+	switch req.Cmd {
+	case common.BDEV_READ:
+		if len(req.Blks) != 1 {
 			panic("read: too many blocks")
 		}
-		ahci.Seek(req.blks[0].block * BSIZE)
+		ahci.Seek(req.Blks[0].Block * BSIZE)
 		b := make([]byte, BSIZE)
 		n, err := ahci.f.Read(b)
 		if n != BSIZE || err != nil {
 			panic("Read failed")
 		}
-		req.blks[0].data = &common.Bytepg_t{}
+		req.Blks[0].Data = &common.Bytepg_t{}
 		for i, _ := range(b) {
-			req.blks[0].data[i] = uint8(b[i])
+			req.Blks[0].Data[i] = uint8(b[i])
 		}
 		fmt.Printf("read is done\n")
-	case BDEV_WRITE:
-		for _, b := range(req.blks) {
-			ahci.Seek(b.block * BSIZE)
+	case common.BDEV_WRITE:
+		for _, b := range(req.Blks) {
+			ahci.Seek(b.Block * BSIZE)
 			buf := make([]byte, BSIZE)
 			for i, _ := range(buf) {
-				buf[i] = byte(b.data[i])
+				buf[i] = byte(b.Data[i])
 			}
 			n, err := ahci.f.Write(buf)
 			if n != BSIZE || err != nil {
@@ -85,7 +63,7 @@ func (ahci *ahci_disk_t) Start(req *bdev_req_t) bool {
 			}
 		}
 		fmt.Printf("write is done\n")
-	case BDEV_FLUSH:
+	case common.BDEV_FLUSH:
 		ahci.f.Sync()
 	}
 	return false
@@ -100,29 +78,30 @@ func (ahci *ahci_disk_t) Stats() string {
 // Glue
 //
 
-func refpg_new() (*common.Pg_t, common.Pa_t, bool) {
+type mem_t struct {
+}
+
+func (mem mem_t) Refpg_new() (*common.Pg_t, common.Pa_t, bool) {
 	// p_pg := &bytecommon.Pg_t{}
 	// r := (*pa_t)(unsafe.Pointer(&p_pg))
 	// printf("p_pg = %p r = %p\n", &_pgr)
 	return nil, 0, true
 }
 
-func dmap(p common.Pa_t) *common.Pg_t {
+func (mem mem_t) Dmap(p common.Pa_t) *common.Pg_t {
 	r := (*common.Pg_t)(unsafe.Pointer(p))
 	fmt.Printf("r = %p\n", r)
 	return r
 }
 
-func refcnt(p_pg common.Pa_t) int {
+func (mem mem_t) Refcnt(p_pg common.Pa_t) int {
 	return 0
 }
 
-// XXX
-func refup(p_pg common.Pa_t) {
+func (mem mem_t) Refup(p_pg common.Pa_t) {
 }
 
-// XXX
-func refdown(p_pg common.Pa_t) bool {
+func (mem mem_t) Refdown(p_pg common.Pa_t) bool {
 	return false
 }
 
@@ -132,12 +111,13 @@ func refdown(p_pg common.Pa_t) bool {
 //
 
 func TestFS(*testing.T) {
-	f, err := os.Open("../go.img")
+	f, err := os.Open("go.img")
 	if err != nil {
 		panic("couldn't open disk image\n")
 	}
 	ahci.f = f
+	mem := mem_t{}
 	fmt.Printf("testFS")
-	_ = fs_init()
+	_ = fs_init(mem, ahci)
 }
 
