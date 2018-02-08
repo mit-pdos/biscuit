@@ -3358,7 +3358,7 @@ func (tf *tcpfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
-func (tf *tcpfops_t) pathi() inum_t {
+func (tf *tcpfops_t) pathi() common.Inum_t {
 	panic("tcp socket cwd")
 }
 
@@ -3782,7 +3782,7 @@ func (tl *tcplfops_t) mmapi(int, int, bool) ([]mmapinfo_t, err_t) {
 	return nil, -EINVAL
 }
 
-func (tl *tcplfops_t) pathi() inum_t {
+func (tl *tcplfops_t) pathi() common.Inum_t {
 	panic("tcp socket cwd")
 }
 

@@ -32,3 +32,154 @@ type whead_t struct {
 	head	*wlist_t
 	count	int
 }
+
+
+func (wh *whead_t) wpush(id int) {
+	n := &wlist_t{}
+	n.wst.pid = id
+	n.next = wh.head
+	wh.head = n
+	wh.count++
+}
+
+func (wh *whead_t) wpopvalid() (Waitst_t, bool) {
+	var prev *wlist_t
+	n := wh.head
+	for n != nil {
+		if n.wst.valid {
+			wh.wremove(prev, n)
+			return n.wst, true
+		}
+		prev = n
+		n = n.next
+	}
+	var zw Waitst_t
+	return zw, false
+}
+
+// returns the previous element in the wait status singly-linked list (in order
+// to remove the requested element), the requested element, and whether the
+// requested element was found.
+func (wh *whead_t) wfind(id int) (*wlist_t, *wlist_t, bool) {
+	var prev *wlist_t
+	ret := wh.head
+	for ret != nil {
+		if ret.wst.pid == id {
+			return prev, ret, true
+		}
+		prev = ret
+		ret = ret.next
+	}
+	return nil, nil, false
+}
+
+func (wh *whead_t) wremove(prev, h *wlist_t) {
+	if prev != nil {
+		prev.next = h.next
+	} else {
+		wh.head = h.next
+	}
+	h.next = nil
+	wh.count--
+}
+
+// if there are more unreaped child statuses (procs or threads) than noproc,
+// _start() returns false and id is not added to the status map.
+func (w *Wait_t) _start(id int, isproc bool, noproc uint) bool {
+	w.Lock()
+	defer w.Unlock()
+	if uint(w.pwait.count + w.twait.count) > noproc {
+		return false
+	}
+	var wh *whead_t
+	if isproc {
+		wh = &w.pwait
+	} else {
+		wh = &w.twait
+	}
+	wh.wpush(id)
+	return true
+}
+
+func (w *Wait_t) putpid(pid, status int, atime *Accnt_t) {
+	w._put(pid, status, true, atime)
+}
+
+func (w *Wait_t) puttid(tid, status int, atime *Accnt_t) {
+	w._put(tid, status, false, atime)
+}
+
+func (w *Wait_t) _put(id, status int, isproc bool, atime *Accnt_t) {
+	w.Lock()
+	defer w.Unlock()
+	var wh *whead_t
+	if isproc {
+		wh = &w.pwait
+	} else {
+		wh = &w.twait
+	}
+	_, wn, ok := wh.wfind(id)
+	if !ok {
+		panic("id must exist")
+	}
+	wn.wst.valid = true
+	wn.wst.status = status
+	if atime != nil {
+		wn.wst.atime.userns += atime.userns
+		wn.wst.atime.sysns += atime.sysns
+	}
+	w.cond.Broadcast()
+}
+
+func (w *Wait_t) reappid(pid int, noblk bool) (Waitst_t, Err_t) {
+	return w._reap(pid, true, noblk)
+}
+
+func (w *Wait_t) reaptid(tid int, noblk bool) (Waitst_t, Err_t) {
+	return w._reap(tid, false, noblk)
+}
+
+func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
+	if id == WAIT_MYPGRP {
+		panic("no imp")
+	}
+	var wh *whead_t
+	if isproc {
+		wh = &w.pwait
+	} else {
+		wh = &w.twait
+	}
+
+	w.Lock()
+	defer w.Unlock()
+	var zw Waitst_t
+	for {
+		if id == WAIT_ANY {
+			// XXXPANIC
+			if wh.count < 0 {
+				panic("neg childs")
+			}
+			if wh.count == 0 {
+				return zw, -ECHILD
+			}
+			if ret, ok := wh.wpopvalid(); ok {
+				return ret, 0
+			}
+		} else {
+			wp, wn, ok := wh.wfind(id)
+			if !ok {
+				return zw, -ECHILD
+			}
+			if wn.wst.valid {
+				wh.wremove(wp, wn)
+				return wn.wst, 0
+			}
+		}
+		if noblk {
+			return zw, 0
+		}
+		// wait for someone to exit
+		w.cond.Wait()
+	}
+}
+
