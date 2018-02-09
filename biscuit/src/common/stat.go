@@ -1,5 +1,7 @@
 package common
 
+import "unsafe"
+
 type Stat_t struct {
 	_dev	uint
 	_ino	uint
@@ -43,3 +45,14 @@ func (st *Stat_t) Size() uint {
 func (st *Stat_t) Rdev() uint {
 	return st._rdev
 }
+
+func (st *Stat_t) Rino() uint {
+	return st._ino
+}
+
+func (st *Stat_t) Bytes() []uint8 {
+	const sz = unsafe.Sizeof(*st)
+	sl := (*[sz]uint8)(unsafe.Pointer(&st._dev))
+	return sl[:]
+}
+

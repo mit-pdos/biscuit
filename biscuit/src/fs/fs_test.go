@@ -17,14 +17,6 @@ type ahci_disk_t struct {
 	f *os.File
 }
 
-func (ahci *ahci_disk_t) MkRequest(blks []*common.Bdev_block_t, cmd common.Bdevcmd_t, sync bool) *common.Bdev_req_t {
-	ret := &common.Bdev_req_t{}
-	ret.Blks = blks
-	ret.AckCh = make(chan bool)
-	ret.Cmd = cmd
-	ret.Sync = sync
-	return ret
-}
 
 func (ahci *ahci_disk_t) Seek(o int) {
 	_, err := ahci.f.Seek(int64(o), 0)

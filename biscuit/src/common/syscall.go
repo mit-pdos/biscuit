@@ -160,9 +160,6 @@ const(
     FUTEX_SLEEP    = 1
     FUTEX_WAKE     = 2
     FUTEX_CNDGIVE  = 3
-    _FUTEX_LAST = FUTEX_CNDGIVE
-    // futex internal op
-    _FUTEX_CNDTAKE  = 4
   SYS_GETTID   = 31343
 )
 
@@ -200,7 +197,7 @@ type Syscall_i interface {
 	Sys_exit(Proc *Proc_t, tid Tid_t, status int)
 }
 
-func mkexitsig(sig int) int {
+func Mkexitsig(sig int) int {
 	if sig < 0 || sig > 32 {
 		panic("bad sig")
 	}

@@ -12,47 +12,49 @@ type Tnote_t struct {
 }
 
 type Threadinfo_t struct {
-	notes	map[Tid_t]*Tnote_t
+	Notes	map[Tid_t]*Tnote_t
 	sync.Mutex
 }
 
-type threadinfo_t struct {
-	notes	map[Tid_t]*Tnote_t
-	sync.Mutex
+func (t *Threadinfo_t) init() {
+	t.Notes = make(map[Tid_t]*Tnote_t)
 }
 
-func (t *threadinfo_t) init() {
-	t.notes = make(map[Tid_t]*Tnote_t)
+// per-process limits
+type Ulimit_t struct {
+	Pages	int
+	Nofile	uint
+	Novma	uint
+	Noproc	uint
 }
-
 
 type Tid_t int
 
 type Proc_t struct {
-	pid		int
+	Pid		int
 	// first thread id
 	tid0		Tid_t
-	name		string
+	Name		string
 
 	// waitinfo for my child processes
-	mywait		Wait_t
+	Mywait		Wait_t
 	// waitinfo of my parent
-	pwait		*Wait_t
+	Pwait		*Wait_t
 
 	// thread tids of this process
-	threadi		Threadinfo_t
+	Threadi		Threadinfo_t
 
 	// lock for vmregion, pmpages, pmap, and p_pmap
 	pgfl		sync.Mutex
 
-	vmregion	Vmregion_t
+	Vmregion	Vmregion_t
 
 	// pmap pages
-	pmap		*pmap_t
-	p_pmap		Pa_t
+	Pmap		*Pmap_t
+	P_pmap		Pa_t
 
 	// mmap next virtual address hint
-	mmapi		int
+	Mmapi		int
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
@@ -60,50 +62,66 @@ type Proc_t struct {
 	doomed		bool
 	exitstatus	int
 
-	fds		[]*Fd_t
+	Fds		[]*Fd_t
 	// where to start scanning for free fds
 	fdstart		int
 	// fds, fdstart, nfds protected by fdl
-	fdl		sync.Mutex
+	Fdl		sync.Mutex
 	// number of valid file descriptors
 	nfds		int
 
 	cwd		*Fd_t
 	// to serialize chdirs
-	cwdl		sync.Mutex
-	ulim		ulimit_t
+	Cwdl		sync.Mutex
+	Ulim		Ulimit_t
 
 	// this proc's rusage
-	atime		Accnt_t
+	Atime		Accnt_t
 	// total child rusage
-	catime		Accnt_t
+	Catime		Accnt_t
 
 	//
 	syscall         Syscall_i
 }
 
-var allprocs = make(map[int]*Proc_t, Syslimit.Sysprocs)
+var Allprocs = make(map[int]*Proc_t, Syslimit.Sysprocs)
+
+func (p *Proc_t) Tid0() Tid_t {
+	return p.tid0
+}
+
+func (p *Proc_t) Doomed() bool {
+	return p.doomed
+}
+
+func (p *Proc_t) Cwd() *Fd_t {
+	return p.cwd
+}
+
+func (p *Proc_t) Set_cwd(cwd *Fd_t) {
+	p.cwd = cwd
+}
 
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
-func (p *Proc_t) fd_insert(f *Fd_t, perms int) (int, bool) {
-	p.fdl.Lock()
+func (p *Proc_t) Fd_insert(f *Fd_t, perms int) (int, bool) {
+	p.Fdl.Lock()
 	a, b := p.fd_insert_inner(f, perms)
-	p.fdl.Unlock()
+	p.Fdl.Unlock()
 	return a, b
 }
 
 func (p *Proc_t) fd_insert_inner(f *Fd_t, perms int) (int, bool) {
 
-	if uint(p.nfds) >= p.ulim.nofile {
+	if uint(p.nfds) >= p.Ulim.Nofile {
 		return -1, false
 	}
 	// find free fd
 	newfd := p.fdstart
 	found := false
-	for newfd < len(p.fds) {
-		if p.fds[newfd] == nil {
+	for newfd < len(p.Fds) {
+		if p.Fds[newfd] == nil {
 			p.fdstart = newfd + 1
 			found = true
 			break
@@ -112,25 +130,25 @@ func (p *Proc_t) fd_insert_inner(f *Fd_t, perms int) (int, bool) {
 	}
 	if !found {
 		// double size of fd table
-		ol := len(p.fds)
+		ol := len(p.Fds)
 		nl := 2*ol
-		if p.ulim.nofile != RLIM_INFINITY && nl > int(p.ulim.nofile) {
-			nl = int(p.ulim.nofile)
+		if p.Ulim.Nofile != RLIM_INFINITY && nl > int(p.Ulim.Nofile) {
+			nl = int(p.Ulim.Nofile)
 			if nl < ol {
 				panic("how")
 			}
 		}
 		nfdt := make([]*Fd_t, nl, nl)
-		copy(nfdt, p.fds)
-		p.fds = nfdt
+		copy(nfdt, p.Fds)
+		p.Fds = nfdt
 	}
 	fdn := newfd
 	fd := f
 	fd.Perms = perms
-	if p.fds[fdn] != nil {
+	if p.Fds[fdn] != nil {
 		panic(fmt.Sprintf("new fd exists %d", fdn))
 	}
-	p.fds[fdn] = fd
+	p.Fds[fdn] = fd
 	if fd.Fops == nil {
 		panic("wtf!")
 	}
@@ -139,10 +157,10 @@ func (p *Proc_t) fd_insert_inner(f *Fd_t, perms int) (int, bool) {
 }
 
 // returns the fd numbers and success
-func (p *Proc_t) fd_insert2(f1 *Fd_t, perms1 int,
+func (p *Proc_t) Fd_insert2(f1 *Fd_t, perms1 int,
    f2 *Fd_t, perms2 int) (int, int, bool) {
-	p.fdl.Lock()
-	defer p.fdl.Unlock()
+	p.Fdl.Lock()
+	defer p.Fdl.Unlock()
 	var fd2 int
 	var ok2 bool
 	fd1, ok1 := p.fd_insert_inner(f1, perms1)
@@ -160,36 +178,36 @@ out:
 }
 
 // fdn is not guaranteed to be a sane fd
-func (p *Proc_t) fd_get_inner(fdn int) (*Fd_t, bool) {
-	if fdn < 0 || fdn >= len(p.fds) {
+func (p *Proc_t) Fd_get_inner(fdn int) (*Fd_t, bool) {
+	if fdn < 0 || fdn >= len(p.Fds) {
 		return nil, false
 	}
-	ret := p.fds[fdn]
+	ret := p.Fds[fdn]
 	ok := ret != nil
 	return ret, ok
 }
 
-func (p *Proc_t) fd_get(fdn int) (*Fd_t, bool) {
-	p.fdl.Lock()
-	ret, ok := p.fd_get_inner(fdn)
-	p.fdl.Unlock()
+func (p *Proc_t) Fd_get(fdn int) (*Fd_t, bool) {
+	p.Fdl.Lock()
+	ret, ok := p.Fd_get_inner(fdn)
+	p.Fdl.Unlock()
 	return ret, ok
 }
 
 // fdn is not guaranteed to be a sane fd
-func (p *Proc_t) fd_del(fdn int) (*Fd_t, bool) {
-	p.fdl.Lock()
+func (p *Proc_t) Fd_del(fdn int) (*Fd_t, bool) {
+	p.Fdl.Lock()
 	a, b := p.fd_del_inner(fdn)
-	p.fdl.Unlock()
+	p.Fdl.Unlock()
 	return a, b
 }
 
 func (p *Proc_t) fd_del_inner(fdn int) (*Fd_t, bool) {
-	if fdn < 0 || fdn >= len(p.fds) {
+	if fdn < 0 || fdn >= len(p.Fds) {
 		return nil, false
 	}
-	ret := p.fds[fdn]
-	p.fds[fdn] = nil
+	ret := p.Fds[fdn]
+	p.Fds[fdn] = nil
 	ok := ret != nil
 	if ok {
 		p.nfds--
@@ -205,48 +223,48 @@ func (p *Proc_t) fd_del_inner(fdn int) (*Fd_t, bool) {
 
 // fdn is not guaranteed to be a sane fd. returns the the fd replaced by ofdn
 // and whether it exists and needs to be closed, and success.
-func (p *Proc_t) fd_dup(ofdn, nfdn int) (*Fd_t, bool, Err_t) {
+func (p *Proc_t) Fd_dup(ofdn, nfdn int) (*Fd_t, bool, Err_t) {
 	if ofdn == nfdn {
 		return nil, false, 0
 	}
 
-	p.fdl.Lock()
-	defer p.fdl.Unlock()
+	p.Fdl.Lock()
+	defer p.Fdl.Unlock()
 
-	ofd, ok := p.fd_get_inner(ofdn)
+	ofd, ok := p.Fd_get_inner(ofdn)
 	if !ok {
 		return nil, false, -EBADF
 	}
-	cpy, err := copyfd(ofd)
+	cpy, err := Copyfd(ofd)
 	if err != 0 {
 		return nil, false, err
 	}
 	cpy.Perms &^= FD_CLOEXEC
-	rfd, needclose := p.fd_get_inner(nfdn)
-	p.fds[nfdn] = cpy
+	rfd, needclose := p.Fd_get_inner(nfdn)
+	p.Fds[nfdn] = cpy
 
 	return rfd, needclose, 0
 }
 
 // returns whether the parent's TLB should be flushed and whether the we
 // successfully copied the parent's address space.
-func (parent *Proc_t) vm_fork(child *Proc_t, rsp uintptr, kents []kent_t) (bool, bool) {
-	parent.lockassert_pmap()
+func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
+	parent.Lockassert_pmap()
 	// first add kernel pml4 entries
-	for _, e := range kents {
-		child.pmap[e.pml4slot] = e.entry
+	for _, e := range Kents {
+		child.Pmap[e.Pml4slot] = e.Entry
 	}
 	// recursive mapping
-	child.pmap[VREC] = child.p_pmap | PTE_P | PTE_W
+	child.Pmap[VREC] = child.P_pmap | PTE_P | PTE_W
 
 	failed := false
 	doflush := false
-	child.vmregion = parent.vmregion.copy()
-	parent.vmregion.iter(func(vmi *Vminfo_t) {
+	child.Vmregion = parent.Vmregion.copy()
+	parent.Vmregion.iter(func(vmi *Vminfo_t) {
 		start := int(vmi.pgn << PGSHIFT)
 		end := start + int(vmi.pglen << PGSHIFT)
 		ashared := vmi.mtype == VSANON
-		fl, ok := ptefork(child.pmap, parent.pmap, start, end, ashared)
+		fl, ok := ptefork(child.Pmap, parent.Pmap, start, end, ashared)
 		failed = failed || !ok
 		doflush = doflush || fl
 	})
@@ -257,27 +275,27 @@ func (parent *Proc_t) vm_fork(child *Proc_t, rsp uintptr, kents []kent_t) (bool,
 
 	// don't mark stack COW since the parent/child will fault their stacks
 	// immediately
-	vmi, ok := child.vmregion.lookup(rsp)
+	vmi, ok := child.Vmregion.Lookup(rsp)
 	// give up if we can't find the stack
 	if !ok {
 		return doflush, true
 	}
-	pte, ok := vmi.ptefor(child.pmap, rsp)
+	pte, ok := vmi.ptefor(child.Pmap, rsp)
 	if !ok || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		return doflush, true
 	}
 	// sys_pgfault expects pmap to be locked
 	child.Lock_pmap()
 	perms := uintptr(PTE_U | PTE_W)
-	if !sys_pgfault(child, vmi, rsp, perms) {
+	if !Sys_pgfault(child, vmi, rsp, perms) {
 		return doflush, false
 	}
 	child.Unlock_pmap()
-	vmi, ok = parent.vmregion.lookup(rsp)
+	vmi, ok = parent.Vmregion.Lookup(rsp)
 	if !ok ||*pte & PTE_P == 0 || *pte & PTE_U == 0 {
 		panic("child has stack but not parent")
 	}
-	pte, ok = vmi.ptefor(parent.pmap, rsp)
+	pte, ok = vmi.ptefor(parent.Pmap, rsp)
 	if !ok {
 		panic("must exist")
 	}
@@ -312,7 +330,7 @@ func (p *Proc_t) _mkvmi(mt mtype_t, start, len int, perms Pa_t, foff int,
 	ret.perms = uint(perms)
 	if mt == VFILE {
 		ret.file.foff = foff
-		ret.file.mfile = &mfile_t{}
+		ret.file.mfile = &Mfile_t{}
 		ret.file.mfile.mfops = fops
 		ret.file.mfile.mapcount = pglen
 		ret.file.shared = shared
@@ -320,38 +338,38 @@ func (p *Proc_t) _mkvmi(mt mtype_t, start, len int, perms Pa_t, foff int,
 	return ret
 }
 
-func (p *Proc_t) vmadd_anon(start, len int, perms Pa_t) {
+func (p *Proc_t) Vmadd_anon(start, len int, perms Pa_t) {
 	vmi := p._mkvmi(VANON, start, len, perms, 0, nil, false)
-	p.vmregion.insert(vmi)
+	p.Vmregion.insert(vmi)
 }
 
-func (p *Proc_t) vmadd_file(start, len int, perms Pa_t, fops Fdops_i,
+func (p *Proc_t) Vmadd_file(start, len int, perms Pa_t, fops Fdops_i,
    foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, false)
-	p.vmregion.insert(vmi)
+	p.Vmregion.insert(vmi)
 }
 
-func (p *Proc_t) vmadd_shareanon(start, len int, perms Pa_t) {
+func (p *Proc_t) Vmadd_shareanon(start, len int, perms Pa_t) {
 	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil, false)
-	p.vmregion.insert(vmi)
+	p.Vmregion.insert(vmi)
 }
 
-func (p *Proc_t) vmadd_sharefile(start, len int, perms Pa_t, fops Fdops_i,
+func (p *Proc_t) Vmadd_sharefile(start, len int, perms Pa_t, fops Fdops_i,
    foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, true)
-	p.vmregion.insert(vmi)
+	p.Vmregion.insert(vmi)
 }
 
-func (p *Proc_t) mkuserbuf(userva, len int) *userbuf_t {
-	ret := &userbuf_t{}
+func (p *Proc_t) Mkuserbuf(userva, len int) *Userbuf_t {
+	ret := &Userbuf_t{}
 	ret.ub_init(p, userva, len)
 	return ret
 }
 
-var ubpool = sync.Pool{New: func() interface{} { return new(userbuf_t) }}
+var Ubpool = sync.Pool{New: func() interface{} { return new(Userbuf_t) }}
 
-func (p *Proc_t) mkuserbuf_pool(userva, len int) *userbuf_t {
-	ret := ubpool.Get().(*userbuf_t)
+func (p *Proc_t) Mkuserbuf_pool(userva, len int) *Userbuf_t {
+	ret := Ubpool.Get().(*Userbuf_t)
 	ret.ub_init(p, userva, len)
 	return ret
 }
@@ -369,12 +387,12 @@ func (p *Proc_t) mkfxbuf() *[64]uintptr {
 // the first return value is true if a present mapping was modified (i.e. need
 // to flush TLB). the second return value is false if the page insertion failed
 // due to lack of user pages. p_pg's ref count is increased so the caller can
-// simply refdown()
-func (p *Proc_t) page_insert(va int, p_pg Pa_t, perms Pa_t,
+// simply Physmem.Refdown()
+func (p *Proc_t) Page_insert(va int, p_pg Pa_t, perms Pa_t,
    vempty bool) (bool, bool) {
-	p.lockassert_pmap()
-	refup(p_pg)
-	pte, err := pmap_walk(p.pmap, va, PTE_U | PTE_W)
+	p.Lockassert_pmap()
+	Physmem.Refup(p_pg)
+	pte, err := pmap_walk(p.Pmap, va, PTE_U | PTE_W)
 	if err != 0 {
 		return false, false
 	}
@@ -392,21 +410,21 @@ func (p *Proc_t) page_insert(va int, p_pg Pa_t, perms Pa_t,
 	}
 	*pte = p_pg | perms | PTE_P
 	if ninval {
-		refdown(p_old)
+		Physmem.Refdown(p_old)
 	}
 	return ninval, true
 }
 
-func (p *Proc_t) page_remove(va int) bool {
-	p.lockassert_pmap()
+func (p *Proc_t) Page_remove(va int) bool {
+	p.Lockassert_pmap()
 	remmed := false
-	pte := pmap_lookup(p.pmap, va)
+	pte := Pmap_lookup(p.Pmap, va)
 	if pte != nil && *pte & PTE_P != 0 {
 		if *pte & PTE_U == 0 {
 			panic("removing kernel page")
 		}
 		p_old := Pa_t(*pte & PTE_ADDR)
-		refdown(p_old)
+		Physmem.Refdown(p_old)
 		*pte = 0
 		remmed = true
 	}
@@ -416,35 +434,35 @@ func (p *Proc_t) page_remove(va int) bool {
 func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
-	vmi, ok := p.vmregion.lookup(fa)
+	vmi, ok := p.Vmregion.Lookup(fa)
 	if !ok {
 		return false
 	}
-	ret := sys_pgfault(p, vmi, fa, ecode)
+	ret := Sys_pgfault(p, vmi, fa, ecode)
 	return ret
 }
 
 // flush TLB on all CPUs that may have this processes' pmap loaded
-func (p *Proc_t) tlbflush() {
+func (p *Proc_t) Tlbflush() {
 	// this flushes the TLB for now
-	p.tlbshoot(0, 2)
+	p.Tlbshoot(0, 2)
 }
 
-func (p *Proc_t) tlbshoot(startva uintptr, pgcount int) {
+func (p *Proc_t) Tlbshoot(startva uintptr, pgcount int) {
 	if pgcount == 0 {
 		return
 	}
-	p.lockassert_pmap()
+	p.Lockassert_pmap()
 	// fast path: the pmap is loaded in exactly one CPU's cr3, and it
 	// happens to be this CPU. we detect that one CPU has the pmap loaded
 	// by a pmap ref count == 2 (1 for Proc_t ref, 1 for CPU).
-	p_pmap := p.p_pmap
+	p_pmap := p.P_pmap
 	refp, _ := _refaddr(p_pmap)
 	if runtime.Condflush(refp, uintptr(p_pmap), startva, pgcount) {
 		return
 	}
 	// slow path, must send TLB shootdowns
-	tlb_shootdown(uintptr(p.p_pmap), startva, pgcount)
+	tlb_shootdown(uintptr(p.P_pmap), startva, pgcount)
 }
 
 func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
@@ -452,17 +470,17 @@ func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
 	if talive && p.doomed {
 		// although this thread is still alive, the process should
 		// terminate
-		reap_doomed(p, tid)
+		p.Reap_doomed(tid)
 		return false
 	}
 	return talive
 }
 
 func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
-	p.threadi.Lock()
-	mynote, ok := p.threadi.notes[tid]
-	p.threadi.Unlock()
-	// each thread removes itself from threadi.notes; thus mynote must
+	p.Threadi.Lock()
+	mynote, ok := p.Threadi.Notes[tid]
+	p.Threadi.Unlock()
+	// each thread removes itself from threadi.Notes; thus mynote must
 	// exist
 	if !ok {
 		panic("note must exist")
@@ -476,9 +494,9 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
-		refp, _ := _refaddr(p.p_pmap)
+		refp, _ := _refaddr(p.P_pmap)
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
-		    uintptr(p.p_pmap), fastret, refp)
+		    uintptr(p.P_pmap), fastret, refp)
 		fastret = false
 		switch intno {
 		case SYSCALL:
@@ -497,14 +515,14 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 			faultaddr := uintptr(aux)
 			if !p.pgfault(tid, faultaddr, tf[TF_ERROR]) {
 				fmt.Printf("*** fault *** %v: addr %x, " +
-				    "rip %x. killing...\n", p.name, faultaddr,
+				    "rip %x. killing...\n", p.Name, faultaddr,
 				    tf[TF_RIP])
-				p.syscall.Sys_exit(p, tid, SIGNALED | mkexitsig(11))
+				p.syscall.Sys_exit(p, tid, SIGNALED | Mkexitsig(11))
 			}
 		case DIVZERO, GPFAULT, UD:
-			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.name, intno,
+			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.Name, intno,
 			    tf[TF_RIP])
-			p.syscall.Sys_exit(p, tid, SIGNALED | mkexitsig(4))
+			p.syscall.Sys_exit(p, tid, SIGNALED | Mkexitsig(4))
 		case TLBSHOOT, PERFMASK, INT_KBD, INT_COM1, INT_MSI0,
 		    INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6,
 		    INT_MSI7:
@@ -515,23 +533,23 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		// did we switch pmaps? if so, the old pmap may need to be
 		// freed.
 		if odec {
-			dec_pmap(Pa_t(op_pmap))
+			Physmem.Dec_pmap(Pa_t(op_pmap))
 		}
 	}
-	tid_del()
+	Tid_del()
 }
 
-func (p *Proc_t) sched_add(tf *[TFSIZE]uintptr, tid Tid_t) {
+func (p *Proc_t) Sched_add(tf *[TFSIZE]uintptr, tid Tid_t) {
 	go p.run(tf, tid)
 }
 
 func (p *Proc_t) _thread_new(t Tid_t) {
-	p.threadi.Lock()
-	p.threadi.notes[t] = &Tnote_t{alive: true}
-	p.threadi.Unlock()
+	p.Threadi.Lock()
+	p.Threadi.Notes[t] = &Tnote_t{alive: true}
+	p.Threadi.Unlock()
 }
 
-func (p *Proc_t) thread_new() (Tid_t, bool) {
+func (p *Proc_t) Thread_new() (Tid_t, bool) {
 	ret, ok := tid_new()
 	if !ok {
 		return 0, false
@@ -541,47 +559,47 @@ func (p *Proc_t) thread_new() (Tid_t, bool) {
 }
 
 // undo thread_new(); sched_add() must not have been called on t.
-func (p *Proc_t) thread_undo(t Tid_t) {
-	tid_del()
+func (p *Proc_t) Thread_undo(t Tid_t) {
+	Tid_del()
 
-	p.threadi.Lock()
-	delete(p.threadi.notes, t)
-	p.threadi.Unlock()
+	p.Threadi.Lock()
+	delete(p.Threadi.Notes, t)
+	p.Threadi.Unlock()
 }
 
-func (p *Proc_t) thread_count() int {
-	p.threadi.Lock()
-	ret := len(p.threadi.notes)
-	p.threadi.Unlock()
+func (p *Proc_t) Thread_count() int {
+	p.Threadi.Lock()
+	ret := len(p.Threadi.Notes)
+	p.Threadi.Unlock()
 	return ret
 }
 
 // terminate a single thread
-func (p *Proc_t) thread_dead(tid Tid_t, status int, usestatus bool) {
+func (p *Proc_t) Thread_dead(tid Tid_t, status int, usestatus bool) {
 	// XXX exit process if thread is thread0, even if other threads exist
-	p.threadi.Lock()
-	ti := &p.threadi
-	mynote, ok := ti.notes[tid]
+	p.Threadi.Lock()
+	ti := &p.Threadi
+	mynote, ok := ti.Notes[tid]
 	if !ok {
 		panic("note must exist")
 	}
 	mynote.alive = false
-	delete(ti.notes, tid)
-	destroy := len(ti.notes) == 0
+	delete(ti.Notes, tid)
+	destroy := len(ti.Notes) == 0
 
 	if usestatus {
 		p.exitstatus = status
 	}
-	p.threadi.Unlock()
+	p.Threadi.Unlock()
 
 	// update rusage user time
 	// XXX
 	utime := 42
-	p.atime.utadd(utime)
+	p.Atime.Utadd(utime)
 
 	// put thread status in this process's wait info; threads don't have
 	// rusage for now.
-	p.mywait.puttid(int(tid), status, nil)
+	p.Mywait.puttid(int(tid), status, nil)
 
 	if destroy {
 		p.terminate()
@@ -589,7 +607,7 @@ func (p *Proc_t) thread_dead(tid Tid_t, status int, usestatus bool) {
 	//tid_del()
 }
 
-func (p *Proc_t) doomall() {
+func (p *Proc_t) Doomall() {
 	p.doomed = true
 }
 
@@ -607,22 +625,22 @@ func (p *Proc_t) Unlock_pmap() {
 	p.pgfl.Unlock()
 }
 
-func (p *Proc_t) lockassert_pmap() {
+func (p *Proc_t) Lockassert_pmap() {
 	if !p.pgfltaken {
 		panic("pgfl lock must be held")
 	}
 }
 
-func (p *Proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
-	p.lockassert_pmap()
+func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
+	p.Lockassert_pmap()
 
 	voff := va & int(PGOFFSET)
 	uva := uintptr(va)
-	vmi, ok := p.vmregion.lookup(uva)
+	vmi, ok := p.Vmregion.Lookup(uva)
 	if !ok {
 		return nil, false
 	}
-	pte, ok := vmi.ptefor(p.pmap, uva)
+	pte, ok := vmi.ptefor(p.Pmap, uva)
 	if !ok {
 		return nil, false
 	}
@@ -648,13 +666,13 @@ func (p *Proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	}
 
 	if needfault {
-		if !sys_pgfault(p, vmi, uva, ecode) {
+		if !Sys_pgfault(p, vmi, uva, ecode) {
 			return nil, false
 		}
 	}
 
-	pg := dmap(*pte & PTE_ADDR)
-	bpg := pg2bytes(pg)
+	pg := Physmem.Dmap(*pte & PTE_ADDR)
+	bpg := Pg2bytes(pg)
 	return bpg[voff:], true
 }
 
@@ -662,12 +680,12 @@ func (p *Proc_t) userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 // modifications to the Proc_t's address space is impossible.
 func (p *Proc_t) _userdmap8(va int, k2u bool) ([]uint8, bool) {
 	p.Lock_pmap()
-	ret, ok := p.userdmap8_inner(va, k2u)
+	ret, ok := p.Userdmap8_inner(va, k2u)
 	p.Unlock_pmap()
 	return ret, ok
 }
 
-func (p *Proc_t) userdmap8r(va int) ([]uint8, bool) {
+func (p *Proc_t) Userdmap8r(va int) ([]uint8, bool) {
 	return p._userdmap8(va, false)
 }
 
@@ -675,11 +693,11 @@ func (p *Proc_t) usermapped(va, n int) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
 
-	_, ok := p.vmregion.lookup(uintptr(va))
+	_, ok := p.Vmregion.Lookup(uintptr(va))
 	return ok
 }
 
-func (p *Proc_t) userreadn(va, n int) (int, bool) {
+func (p *Proc_t) Userreadn(va, n int) (int, bool) {
 	p.Lock_pmap()
 	a, b := p.userreadn_inner(va, n)
 	p.Unlock_pmap()
@@ -687,7 +705,7 @@ func (p *Proc_t) userreadn(va, n int) (int, bool) {
 }
 
 func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
-	p.lockassert_pmap()
+	p.Lockassert_pmap()
 	if n > 8 {
 		panic("large n")
 	}
@@ -695,7 +713,7 @@ func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
 	var src []uint8
 	var ok bool
 	for i := 0; i < n; i += len(src) {
-		src, ok = p.userdmap8_inner(va + i, false)
+		src, ok = p.Userdmap8_inner(va + i, false)
 		if !ok {
 			return 0, false
 		}
@@ -709,7 +727,7 @@ func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
 	return ret, true
 }
 
-func (p *Proc_t) userwriten(va, n, val int) bool {
+func (p *Proc_t) Userwriten(va, n, val int) bool {
 	if n > 8 {
 		panic("large n")
 	}
@@ -718,7 +736,7 @@ func (p *Proc_t) userwriten(va, n, val int) bool {
 	var dst []uint8
 	for i := 0; i < n; i += len(dst) {
 		v := val >> (8*uint(i))
-		t, ok := p.userdmap8_inner(va + i, true)
+		t, ok := p.Userdmap8_inner(va + i, true)
 		dst = t
 		if !ok {
 			return false
@@ -731,7 +749,7 @@ func (p *Proc_t) userwriten(va, n, val int) bool {
 // first ret value is the string from user space
 // second ret value is whether or not the string is mapped
 // third ret value is whether the string length is less than lenmax
-func (p *Proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
+func (p *Proc_t) Userstr(uva int, lenmax int) (string, bool, bool) {
 	if lenmax < 0 {
 		return "", false, false
 	}
@@ -740,7 +758,7 @@ func (p *Proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	i := 0
 	var s string
 	for {
-		str, ok := p.userdmap8_inner(uva + i, false)
+		str, ok := p.Userdmap8_inner(uva + i, false)
 		if !ok {
 			return "", false, false
 		}
@@ -758,9 +776,9 @@ func (p *Proc_t) userstr(uva int, lenmax int) (string, bool, bool) {
 	}
 }
 
-func (p *Proc_t) usertimespec(va int) (time.Duration, time.Time, Err_t) {
-	secs, ok1 := p.userreadn(va, 8)
-	nsecs, ok2 := p.userreadn(va + 8, 8)
+func (p *Proc_t) Usertimespec(va int) (time.Duration, time.Time, Err_t) {
+	secs, ok1 := p.Userreadn(va, 8)
+	nsecs, ok2 := p.Userreadn(va + 8, 8)
 	var zt time.Time
 	if !ok1 || !ok2 {
 		return 0, zt, -EFAULT
@@ -774,7 +792,7 @@ func (p *Proc_t) usertimespec(va int) (time.Duration, time.Time, Err_t) {
 	return tot, t, 0
 }
 
-func (p *Proc_t) userargs(uva int) ([]string, bool) {
+func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 	if uva == 0 {
 		return nil, true
 	}
@@ -798,7 +816,7 @@ func (p *Proc_t) userargs(uva int) ([]string, bool) {
 			uva = uva | int(uint(b)) << uint(i*8)
 		}
 		lenmax := 128
-		str, ok, long := p.userstr(uva, lenmax)
+		str, ok, long := p.Userstr(uva, lenmax)
 		if !ok || long {
 			return false
 		}
@@ -810,7 +828,7 @@ func (p *Proc_t) userargs(uva int) ([]string, bool) {
 	done := false
 	curaddr := make([]uint8, 0, 8)
 	for !done {
-		ptrs, ok := p.userdmap8r(uva + uoff)
+		ptrs, ok := p.Userdmap8r(uva + uoff)
 		if !ok {
 			return nil, false
 		}
@@ -834,19 +852,19 @@ func (p *Proc_t) userargs(uva int) ([]string, bool) {
 
 // copies src to the user virtual address uva. may copy part of src if uva +
 // len(src) is not mapped
-func (p *Proc_t) k2user(src []uint8, uva int) bool {
+func (p *Proc_t) K2user(src []uint8, uva int) bool {
 	p.Lock_pmap()
-	ret := p.k2user_inner(src, uva)
+	ret := p.K2user_inner(src, uva)
 	p.Unlock_pmap()
 	return ret
 }
 
-func (p *Proc_t) k2user_inner(src []uint8, uva int) bool {
-	p.lockassert_pmap()
+func (p *Proc_t) K2user_inner(src []uint8, uva int) bool {
+	p.Lockassert_pmap()
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		dst, ok := p.userdmap8_inner(uva + cnt, true)
+		dst, ok := p.Userdmap8_inner(uva + cnt, true)
 		if !ok {
 			return false
 		}
@@ -862,18 +880,18 @@ func (p *Proc_t) k2user_inner(src []uint8, uva int) bool {
 }
 
 // copies len(dst) bytes from userspace address uva to dst
-func (p *Proc_t) user2k(dst []uint8, uva int) bool {
+func (p *Proc_t) User2k(dst []uint8, uva int) bool {
 	p.Lock_pmap()
-	ret := p.user2k_inner(dst, uva)
+	ret := p.User2k_inner(dst, uva)
 	p.Unlock_pmap()
 	return ret
 }
 
-func (p *Proc_t) user2k_inner(dst []uint8, uva int) bool {
-	p.lockassert_pmap()
+func (p *Proc_t) User2k_inner(dst []uint8, uva int) bool {
+	p.Lockassert_pmap()
 	cnt := 0
 	for len(dst) != 0 {
-		src, ok := p.userdmap8_inner(uva + cnt, false)
+		src, ok := p.Userdmap8_inner(uva + cnt, false)
 		if !ok {
 			return false
 		}
@@ -884,8 +902,8 @@ func (p *Proc_t) user2k_inner(dst []uint8, uva int) bool {
 	return true
 }
 
-func (p *Proc_t) unusedva_inner(startva, len int) int {
-	p.lockassert_pmap()
+func (p *Proc_t) Unusedva_inner(startva, len int) int {
+	p.Lockassert_pmap()
 	if len < 0 || len > 1 << 48 {
 		panic("weird len")
 	}
@@ -893,7 +911,7 @@ func (p *Proc_t) unusedva_inner(startva, len int) int {
 	if startva < USERMIN {
 		startva = USERMIN
 	}
-	_ret, _l := p.vmregion.empty(uintptr(startva), uintptr(len))
+	_ret, _l := p.Vmregion.empty(uintptr(startva), uintptr(len))
 	ret := int(_ret)
 	l := int(_l)
 	if startva > ret && startva < ret + l {
@@ -904,7 +922,7 @@ func (p *Proc_t) unusedva_inner(startva, len int) int {
 
 // don't forget: there are two places where pmaps/memory are free'd:
 // Proc_t.terminate() and exec.
-func _uvmfree(pmg *pmap_t, p_pmap Pa_t, vmr *Vmregion_t) {
+func Uvmfree_inner(pmg *Pmap_t, p_pmap Pa_t, vmr *Vmregion_t) {
 	vmr.iter(func(vmi *Vminfo_t) {
 		start := uintptr(vmi.pgn << PGSHIFT)
 		end := start + uintptr(vmi.pglen << PGSHIFT)
@@ -912,96 +930,96 @@ func _uvmfree(pmg *pmap_t, p_pmap Pa_t, vmr *Vmregion_t) {
 	})
 }
 
-func (p *Proc_t) uvmfree() {
-	_uvmfree(p.pmap, p.p_pmap, &p.vmregion)
-	// dec_pmap could free the pmap itself. thus it must come after
-	// _uvmfree.
-	dec_pmap(p.p_pmap)
+func (p *Proc_t) Uvmfree() {
+	Uvmfree_inner(p.Pmap, p.P_pmap, &p.Vmregion)
+	// Dec_pmap could free the pmap itself. thus it must come after
+	// Uvmfree.
+	Physmem.Dec_pmap(p.P_pmap)
 	// close all open mmap'ed files
-	p.vmregion.clear()
+	p.Vmregion.Clear()
 }
 
 
 // terminate a process. must only be called when the process has no more
 // running threads.
 func (p *Proc_t) terminate() {
-	if p.pid == 1 {
+	if p.Pid == 1 {
 		panic("killed init")
 	}
 
-	p.threadi.Lock()
-	ti := &p.threadi
-	if len(ti.notes) != 0 {
+	p.Threadi.Lock()
+	ti := &p.Threadi
+	if len(ti.Notes) != 0 {
 		panic("terminate, but threads alive")
 	}
-	p.threadi.Unlock()
+	p.Threadi.Unlock()
 
 	// close open fds
-	p.fdl.Lock()
-	for i := range p.fds {
-		if p.fds[i] == nil {
+	p.Fdl.Lock()
+	for i := range p.Fds {
+		if p.Fds[i] == nil {
 			continue
 		}
-		close_panic(p.fds[i])
+		Close_panic(p.Fds[i])
 	}
-	p.fdl.Unlock()
-	close_panic(p.cwd)
+	p.Fdl.Unlock()
+	Close_panic(p.cwd)
 
-	p.mywait.pid = 1
-	proc_del(p.pid)
+	p.Mywait.Pid = 1
+	Proc_del(p.Pid)
 
-	// free all user pages in the pmap. the last CPU to call dec_pmap on
+	// free all user pages in the pmap. the last CPU to call Dec_pmap on
 	// the proc's pmap will free the pmap itself. freeing the user pages is
 	// safe since we know that all user threads are dead and thus no CPU
 	// will try to access user mappings. however, any CPU may access kernel
 	// mappings via this pmap.
-	p.uvmfree()
+	p.Uvmfree()
 
 	// send status to parent
-	if p.pwait == nil {
+	if p.Pwait == nil {
 		panic("nil pwait")
 	}
 
 	// combine total child rusage with ours, send to parent
-	na := Accnt_t{userns: p.atime.userns, sysns: p.atime.sysns}
+	na := Accnt_t{Userns: p.Atime.Userns, Sysns: p.Atime.Sysns}
 	// calling na.add() makes the compiler allocate na in the heap! escape
 	// analysis' fault?
-	//na.add(&p.catime)
-	na.userns += p.catime.userns
-	na.sysns += p.catime.sysns
+	//na.add(&p.Catime)
+	na.Userns += p.Catime.Userns
+	na.Sysns += p.Catime.Sysns
 
 	// put process exit status to parent's wait info
-	p.pwait.putpid(p.pid, p.exitstatus, &na)
+	p.Pwait.putpid(p.Pid, p.exitstatus, &na)
 	// remove pointer to parent to prevent deep fork trees from consuming
 	// unbounded memory.
-	p.pwait = nil
+	p.Pwait = nil
 }
 
 
 
 // returns false if the number of running threads or unreaped child statuses is
 // larger than noproc.
-func (p *Proc_t) start_proc(pid int) bool {
-	return p.mywait._start(pid, true, p.ulim.noproc)
+func (p *Proc_t) Start_proc(pid int) bool {
+	return p.Mywait._start(pid, true, p.Ulim.Noproc)
 }
 
 // returns false if the number of running threads or unreaped child statuses is
 // larger than noproc.
-func (p *Proc_t) start_thread(t Tid_t) bool {
-	return p.mywait._start(int(t), false, p.ulim.noproc)
+func (p *Proc_t) Start_thread(t Tid_t) bool {
+	return p.Mywait._start(int(t), false, p.Ulim.Noproc)
 }
 
 
-func (p *Proc_t) closehalf() {
+func (p *Proc_t) Closehalf() {
 	fmt.Printf("close half\n")
-	p.fdl.Lock()
-	l := make([]int, 0, len(p.fds))
-	for i, fdp := range p.fds {
+	p.Fdl.Lock()
+	l := make([]int, 0, len(p.Fds))
+	for i, fdp := range p.Fds {
 		if i > 2 && fdp != nil {
 			l = append(l, i)
 		}
 	}
-	p.fdl.Unlock()
+	p.Fdl.Unlock()
 
 	// sattolos
 	for i := len(l) - 1; i >= 0; i-- {
@@ -1021,43 +1039,110 @@ func (p *Proc_t) closehalf() {
 	}
 }
 
-func (p *Proc_t) countino() int {
+func (p *Proc_t) Countino() int {
 	c := 0
-	p.fdl.Lock()
-	for i, fdp := range p.fds {
+	p.Fdl.Lock()
+	for i, fdp := range p.Fds {
 		if i > 2 && fdp != nil {
 			c++
 		}
 	}
-	p.fdl.Unlock()
+	p.Fdl.Unlock()
 	return c
 }
 
-var proclock = sync.Mutex{}
+var Proclock = sync.Mutex{}
 
-func proc_check(pid int) (*Proc_t, bool) {
-	proclock.Lock()
-	p, ok := allprocs[pid]
-	proclock.Unlock()
+func Proc_check(pid int) (*Proc_t, bool) {
+	Proclock.Lock()
+	p, ok := Allprocs[pid]
+	Proclock.Unlock()
 	return p, ok
 }
 
-func proc_del(pid int) {
-	proclock.Lock()
-	_, ok := allprocs[pid]
+func Proc_del(pid int) {
+	Proclock.Lock()
+	_, ok := Allprocs[pid]
 	if !ok {
 		panic("bad pid")
 	}
-	delete(allprocs, pid)
-	proclock.Unlock()
+	delete(Allprocs, pid)
+	Proclock.Unlock()
+}
+
+var _deflimits = Ulimit_t {
+	// mem limit = 128 MB
+	Pages: (1 << 27) / (1 << 12),
+	//nofile: 512,
+	Nofile: RLIM_INFINITY,
+	Novma: (1 << 8),
+	Noproc: (1 << 10),
+}
+
+// returns the new proc and success; can fail if the system-wide limit of
+// procs/threads has been reached. the parent's fdtable must be locked.
+func Proc_new(name string, cwd *Fd_t, fds []*Fd_t) (*Proc_t, bool) {
+	Proclock.Lock()
+
+	if nthreads >= int64(Syslimit.Sysprocs) {
+		Proclock.Unlock()
+		return nil, false
+	}
+
+	nthreads++
+
+	pid_cur++
+	np := pid_cur
+	pid_cur++
+	tid0 := Tid_t(pid_cur)
+	if _, ok := Allprocs[np]; ok {
+		panic("pid exists")
+	}
+	ret := &Proc_t{}
+	Allprocs[np] = ret
+	Proclock.Unlock()
+
+	ret.Name = name
+	ret.Pid = np
+	ret.Fds = make([]*Fd_t, len(fds))
+	ret.fdstart = 3
+	for i := range fds {
+		if fds[i] == nil {
+			continue
+		}
+		tfd, err := Copyfd(fds[i])
+		// copying an fd may fail if another thread closes the fd out
+		// from under us
+		if err == 0 {
+			ret.Fds[i] = tfd
+		}
+		ret.nfds++
+	}
+	ret.cwd = cwd
+	if ret.cwd.Fops.Reopen() != 0 {
+		panic("must succeed")
+	}
+	ret.Mmapi = USERMIN
+	ret.Ulim = _deflimits
+
+	ret.Threadi.init()
+	ret.tid0 = tid0
+	ret._thread_new(tid0)
+
+	ret.Mywait.Wait_init(ret.Pid)
+	if !ret.Start_thread(ret.tid0) {
+		panic("silly noproc")
+	}
+
+	return ret, true
 }
 
 
-func reap_doomed(p *Proc_t, tid Tid_t) {
+func (p *Proc_t) Reap_doomed(tid Tid_t) {
 	if !p.doomed {
 		panic("p not doomed")
 	}
-	p.thread_dead(tid, 0, false)
+	p.Thread_dead(tid, 0, false)
 }
 
 
@@ -1067,8 +1152,8 @@ var pid_cur  int
 
 // returns false if system-wide limit is hit.
 func tid_new() (Tid_t, bool) {
-	proclock.Lock()
-	defer proclock.Unlock()
+	Proclock.Lock()
+	defer Proclock.Unlock()
 	if nthreads > int64(Syslimit.Sysprocs) {
 		return 0, false
 	}
@@ -1079,11 +1164,11 @@ func tid_new() (Tid_t, bool) {
 	return Tid_t(ret), true
 }
 
-func tid_del() {
-	proclock.Lock()
+func Tid_del() {
+	Proclock.Lock()
 	if nthreads == 0 {
 		panic("oh shite")
 	}
 	nthreads--
-	proclock.Unlock()
+	Proclock.Unlock()
 }

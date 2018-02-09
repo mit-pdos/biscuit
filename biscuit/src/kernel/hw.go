@@ -7,7 +7,12 @@ import "sync/atomic"
 import "time"
 import "unsafe"
 
+import "common"
+
 const BSIZE=4096
+
+var IRQ_DISK    int = -1
+var INT_DISK    int = -1
 
 const (
 	VENDOR	int	= 0x0
@@ -225,7 +230,7 @@ func attach_piix3(vendorid, devid int, tag pcitag_t) {
 		panic("adding two disks")
 	}
 	IRQ_DISK = 14
-	INT_DISK = IRQ_BASE + IRQ_DISK
+	INT_DISK = common.IRQ_BASE + IRQ_DISK
 
 	d := &legacy_disk_t{}
 	d.init(0x1f0, 0x3f6)
@@ -253,7 +258,7 @@ func pci_disk_interrupt_wiring(t pcitag_t) int {
 	}
 	rcba_p &^= ((1 << 14) - 1)
 	// memory reads/writes to RCBA must be 32bit aligned
-	rcba := dmaplen32(uintptr(rcba_p), 0x342c)
+	rcba := common.Dmaplen32(uintptr(rcba_p), 0x342c)
 	// PCI dev 31 PIRQ routes
 	routes := rcba[0x3140/4]
 	pirq := (routes >> (4*(uint32(pin) - 1))) & 0x7
@@ -280,7 +285,7 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 
 	gsi := pci_disk_interrupt_wiring(tag)
 	IRQ_DISK = gsi
-	INT_DISK = IRQ_BASE + IRQ_DISK
+	INT_DISK = common.IRQ_BASE + IRQ_DISK
 	
 	d := &pciide_disk_t{}
 	// 3400's PCI-native IDE command/control block
@@ -529,12 +534,12 @@ func _acpi_tbl(rsdt []uint8, sig string) ([]uint8, bool) {
 	ptrs := rsdt[hdrlen:]
 	var tbl []uint8
 	for len(ptrs) != 0 {
-		tbln := pa_t(readn(ptrs, 4, 0))
+		tbln := common.Pa_t(readn(ptrs, 4, 0))
 		ptrs = ptrs[4:]
-		tbl = dmaplen(tbln, 8)
+		tbl = common.Dmaplen(tbln, 8)
 		if string(tbl[:4]) == sig {
 			l := readn(tbl, 4, 4)
-			tbl = dmaplen(tbln, l)
+			tbl = common.Dmaplen(tbln, l)
 			return tbl, true
 		}
 	}
@@ -649,9 +654,9 @@ func _acpi_fadt(rsdt []uint8) bool {
 
 func _acpi_scan() ([]uint8, bool) {
 	// ACPI 5.2.5: search for RSDP in EBDA and BIOS read-only memory
-	ebdap := pa_t((0x40 << 4) | 0xe)
-	p := dmap8(ebdap)
-	ebda := pa_t(readn(p, 2, 0))
+	ebdap := common.Pa_t((0x40 << 4) | 0xe)
+	p := physmem.Dmap8(ebdap)
+	ebda := common.Pa_t(readn(p, 2, 0))
 	ebda <<= 4
 
 	isrsdp := func(d []uint8) bool {
@@ -669,14 +674,14 @@ func _acpi_scan() ([]uint8, bool) {
 		return true
 	}
 	rsdplen := 36
-	for i := pa_t(0); i < 1 << 10; i += 16 {
-		p = dmaplen(ebda + i, rsdplen)
+	for i := common.Pa_t(0); i < 1 << 10; i += 16 {
+		p = common.Dmaplen(ebda + i, rsdplen)
 		if isrsdp(p) {
 			return p, true
 		}
 	}
-	for bmem := pa_t(0xe0000); bmem < 0xfffff; bmem += 16 {
-		p = dmaplen(bmem, rsdplen)
+	for bmem := common.Pa_t(0xe0000); bmem < 0xfffff; bmem += 16 {
+		p = common.Dmaplen(bmem, rsdplen)
 		if isrsdp(p) {
 			return p, true
 		}
@@ -689,14 +694,14 @@ func acpi_attach() int {
 	if !ok {
 		panic("no RSDP")
 	}
-	rsdtn := pa_t(readn(rsdp, 4, 16))
+	rsdtn := common.Pa_t(readn(rsdp, 4, 16))
 	//xsdtn := readn(rsdp, 8, 24)
-	rsdt := dmaplen(rsdtn, 8)
+	rsdt := common.Dmaplen(rsdtn, 8)
 	if rsdtn == 0 || string(rsdt[:4]) != "RSDT" {
 		panic("no RSDT")
 	}
 	rsdtlen := readn(rsdt, 4, 4)
-	rsdt = dmaplen(rsdtn, rsdtlen)
+	rsdt = common.Dmaplen(rsdtn, rsdtlen)
 	// verify RSDT checksum
 	_acpi_cksum(rsdt)
 	// may want to search XSDT, too
@@ -832,13 +837,13 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 	runtime.Outb(0x23, 1)
 
 	base := aioapic.base
-	va := dmaplen32(base, 4)
+	va := common.Dmaplen32(base, 4)
 	ap.regs.sel = &va[0]
 
-	va = dmaplen32(base + 0x10, 4)
+	va = common.Dmaplen32(base + 0x10, 4)
 	ap.regs.win = &va[0]
 
-	va = dmaplen32(base + 0x40, 4)
+	va = common.Dmaplen32(base + 0x40, 4)
 	ap.regs.eoi = &va[0]
 
 	pinlast := (apic.reg_read(1) >> 16) & 0xff
@@ -1344,7 +1349,7 @@ type rxdesc_t struct {
 	p_hbuf	uint64
 }
 
-func (rd *rxdesc_t) init(pbuf pa_t, hbuf uintptr, hw *int) {
+func (rd *rxdesc_t) init(pbuf common.Pa_t, hbuf uintptr, hw *int) {
 	rd.p_pbuf = uint64(pbuf)
 	rd.p_hbuf = uint64(hbuf)
 	rd.hwdesc = (*struct {
@@ -1417,7 +1422,7 @@ type txdesc_t struct {
 	eop	bool
 }
 
-func (td *txdesc_t) init(p_addr pa_t, len uintptr, hw *int) {
+func (td *txdesc_t) init(p_addr common.Pa_t, len uintptr, hw *int) {
 	td.p_buf = uint64(p_addr)
 	td.bufsz = uint64(len)
 	td.hwdesc = (*struct {
@@ -1505,7 +1510,7 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 
 	td.ctxt = false
 	td.eop = false
-	dst := dmaplen(pa_t(td.p_buf), int(td.bufsz))
+	dst := common.Dmaplen(common.Pa_t(td.p_buf), int(td.bufsz))
 	paylen := uint64(0)
 	for len(dst) != 0 && len(src) != 0 {
 		cursrc := src[0]
@@ -1676,7 +1681,7 @@ func (x *ixgbe_t) init(t pcitag_t) {
 	x.tag = t
 
 	bar0, l := pci_bar_mem(t, 0)
-	x.bar0 = dmaplen32(bar0, l)
+	x.bar0 = common.Dmaplen32(bar0, l)
 
 	x.rx.pkt = make([][]uint8, 0, 30)
 
@@ -1917,13 +1922,13 @@ func (x *ixgbe_t) wait_linkup(secs int) bool {
 	}
 }
 
-func (x *ixgbe_t) pg_new() (*pg_t, pa_t) {
+func (x *ixgbe_t) pg_new() (*common.Pg_t, common.Pa_t) {
 	x.pgs++
-	a, b, ok := refpg_new()
+	a, b, ok := physmem.Refpg_new()
 	if !ok {
 		panic("oom during ixgbe init")
 	}
-	refup(b)
+	physmem.Refup(b)
 	return a, b
 }
 
@@ -2139,7 +2144,7 @@ func (x *ixgbe_t) rx_consume() {
 		}
 		// packet may span multiple descriptors (only for RSC when MTU
 		// less than descriptor DMA buffer size?)
-		buf := dmaplen(pa_t(rd.p_pbuf), rd.pktlen())
+		buf := common.Dmaplen(common.Pa_t(rd.p_pbuf), rd.pktlen())
 		pkt[0] = buf
 		if !rd.eop() {
 			panic("pkt > mtu?")
@@ -2489,18 +2494,18 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 		// RDBAL/TDBAL must be 128 byte aligned
 		x.rs(RDBAL(0), uint32(p_pg))
 		x.rs(RDBAH(0), uint32(p_pg >> 32))
-		x.rs(RDLEN(0), uint32(PGSIZE))
+		x.rs(RDLEN(0), uint32(common.PGSIZE))
 
 		// packet buffers must be at least SRRCTL.BSIZEPACKET bytes,
 		// header buffers must be at least SRRCTL.BSIZEHEADER bytes
 		rdescsz := uint32(16)
-		x.rx.ndescs = uint32(PGSIZE)/rdescsz
+		x.rx.ndescs = uint32(common.PGSIZE)/rdescsz
 		x.rx.descs = make([]rxdesc_t, x.rx.ndescs)
 		for i := 0; i < len(pg); i += 4 {
 			_, p_bpg := x.pg_new()
 			// SRRCTL.BSIZEPACKET
 			dn := i / 2
-			ps := pa_t(2 << 10)
+			ps := common.Pa_t(2 << 10)
 			x.rx.descs[dn].init(p_bpg, 0, &pg[i])
 			x.rx.descs[dn+1].init(p_bpg + ps, 0, &pg[i+2])
 		}
@@ -2583,18 +2588,18 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 			// RDBAL/TDBAL must be 128 byte aligned
 			x.rs(TDBAL(i), uint32(p_pg))
 			x.rs(TDBAH(i), uint32(p_pg >> 32))
-			x.rs(TDLEN(i), uint32(PGSIZE))
+			x.rs(TDLEN(i), uint32(common.PGSIZE))
 
 			tdescsz := uint32(16)
-			ndescs := uint32(PGSIZE)/tdescsz
+			ndescs := uint32(common.PGSIZE)/tdescsz
 			ttx.ndescs = ndescs
 			ttx.descs = make([]txdesc_t, ttx.ndescs)
 			for j := 0; j < len(pg); j += 4 {
 				_, p_bpg := x.pg_new()
 				dn := j / 2
-				ps := uintptr(PGSIZE) / 2
+				ps := uintptr(common.PGSIZE) / 2
 				ttx.descs[dn].init(p_bpg, ps, &pg[j])
-				ttx.descs[dn+1].init(p_bpg + pa_t(ps), ps,
+				ttx.descs[dn+1].init(p_bpg + common.Pa_t(ps), ps,
 				   &pg[j+2])
 				// set DD and eop so all tx descriptors appear
 				// ready for use
@@ -2727,7 +2732,7 @@ func (x *ixgbe_t) rx_test() {
 			panic("expected packet len")
 		}
 		fmt.Printf("packet %v: plen: %v, hdrlen: %v, hdr: ", i, pl, hl)
-		b := dmaplen(pa_t(rdesc.p_pbuf), int(rdesc.pktlen()))
+		b := common.Dmaplen(common.Pa_t(rdesc.p_pbuf), int(rdesc.pktlen()))
 		for _, c := range b[:hl] {
 			fmt.Printf("%0.2x ", c)
 		}

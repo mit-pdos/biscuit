@@ -10,16 +10,6 @@ const bdev_debug = true
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE=4096
 
-
-
-type Page_i interface {
-	Refpg_new() (*Pg_t, Pa_t, bool)
-	Refcnt(Pa_t) int
-	Dmap(Pa_t) *Pg_t
-	Refup(Pa_t)
-	Refdown(Pa_t) bool
-}
-
 type Bdev_block_t struct {
 	sync.Mutex
 	Block	int
@@ -45,10 +35,18 @@ type Bdev_req_t struct {
 	Sync    bool
 }
 
+func MkRequest(blks []*Bdev_block_t, cmd Bdevcmd_t, sync bool) *Bdev_req_t {
+	ret := &Bdev_req_t{}
+	ret.Blks = blks
+	ret.AckCh = make(chan bool)
+	ret.Cmd = cmd
+	ret.Sync = sync
+	return ret
+}
+
 type Disk_i interface {
 	Start(*Bdev_req_t) bool
 	Stats() string
-	MkRequest([]*Bdev_block_t, Bdevcmd_t, bool) *Bdev_req_t
 }
 
 func (blk *Bdev_block_t) Key() int {
@@ -79,7 +77,7 @@ func (b *Bdev_block_t) Write() {
 	if b.Data[0] == 0xc && b.Data[1] == 0xc {  // XXX check
 		panic("write\n")
 	}
-	req := b.Disk.MkRequest([]*Bdev_block_t{b}, BDEV_WRITE, true)
+	req := MkRequest([]*Bdev_block_t{b}, BDEV_WRITE, true)
 	if b.Disk.Start(req) {
 		<- req.AckCh
 	}
@@ -92,12 +90,12 @@ func (b *Bdev_block_t) Write_async() {
 	// if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 	//	panic("write_async\n")
 	//}
-	ider := b.Disk.MkRequest([]*Bdev_block_t{b}, BDEV_WRITE, false)
+	ider := MkRequest([]*Bdev_block_t{b}, BDEV_WRITE, false)
 	b.Disk.Start(ider)
 }
 
 func (b *Bdev_block_t) Read() {
-	ider := b.Disk.MkRequest([]*Bdev_block_t{b}, BDEV_READ, true)
+	ider := MkRequest([]*Bdev_block_t{b}, BDEV_READ, true)
 	if b.Disk.Start(ider) {
 		<- ider.AckCh
 	}

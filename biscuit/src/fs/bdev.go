@@ -31,7 +31,7 @@ const bdev_debug = true
 // interrupt handler).
 //
 
-var bcache = bcache_t{}
+var Bcache = bcache_t{}
 
 type bcache_t struct {
 	refcache  *refcache_t
@@ -40,15 +40,15 @@ type bcache_t struct {
 }
 
 func mkBcache(mem common.Page_i, disk common.Disk_i) {
-	bcache.mem = mem
-	bcache.disk = disk
-	bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
+	Bcache.mem = mem
+	Bcache.disk = disk
+	Bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_relse when done with buf.
 func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	b, created, err := bcache.bref(blkn, s)
+	b, created, err := Bcache.bref(blkn, s)
 
 	if bdev_debug {
 		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)
@@ -71,7 +71,7 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_bl
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
 func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	b, created, err := bcache.bref(blkn, s)
+	b, created, err := Bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
 	}
@@ -90,7 +90,7 @@ func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_bl
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
 func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	b, created, err := bcache.bref(blkn, s)
+	b, created, err := Bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
 	}
@@ -107,12 +107,12 @@ func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_
 }
 
 func (bcache *bcache_t) Write(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b, "bcache_write")
+	Bcache.refcache.Refup(b, "bcache_write")
 	b.Write()
 }
 
 func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b, "bcache_write_async")
+	Bcache.refcache.Refup(b, "bcache_write_async")
 	b.Write_async()
 }
 
@@ -131,31 +131,31 @@ func (bcache *bcache_t) Write_async_blks(blks []*common.Bdev_block_t) {
 			panic("not contiguous\n")
 		}
 		n++
-		bcache.refcache.Refup(b, "bcache_write_async_blks")
+		Bcache.refcache.Refup(b, "bcache_write_async_blks")
 	}
 	// one request for all blks
-	ider := blks[0].Disk.MkRequest(blks, common.BDEV_WRITE, false)
+	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
 	blks[0].Disk.Start(ider)
 }
 
 func (bcache *bcache_t) Refup(b *common.Bdev_block_t, s string) {
-	bcache.refcache.Refup(b, s)
+	Bcache.refcache.Refup(b, s)
 }
 
 func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	if bdev_debug {
 		fmt.Printf("bcache_relse: %v %v\n", b.Block, s)
 	}
-	bcache.refcache.Refdown(b, s)
+	Bcache.refcache.Refdown(b, s)
 }
 
 func (bcache *bcache_t) Stats() string {
 	s := "bcache: size "
-	s += strconv.Itoa(len(bcache.refcache.refs))
+	s += strconv.Itoa(len(Bcache.refcache.refs))
 	s += " #evictions "
-	s += strconv.Itoa(bcache.refcache.nevict)
+	s += strconv.Itoa(Bcache.refcache.nevict)
 	s += " #live "
-	s += strconv.Itoa(bcache.refcache.nlive())
+	s += strconv.Itoa(Bcache.refcache.nlive())
 	s += "\n"
 	return s
 }
@@ -166,7 +166,7 @@ func (bcache *bcache_t) Stats() string {
 
 // returns the reference to a locked buffer
 func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, common.Err_t) {
-	ref, err := bcache.refcache.Lookup(blk, s)
+	ref, err := Bcache.refcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
@@ -178,7 +178,7 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 		if bdev_debug {
 			fmt.Printf("bref fill %v %v\n", blk, s)
 		}
-		buf := common.MkBlock(blk, common.Pa_t(0), s, bcache.mem, bcache.disk)
+		buf := common.MkBlock(blk, common.Pa_t(0), s, Bcache.mem, Bcache.disk)
 		ref.obj = buf
 		ref.valid = true
 		created = true
@@ -211,12 +211,12 @@ func bdev_test(mem common.Page_i, disk common.Disk_i) {
 			}
 			wbuf[b].Write_async()
 		}
-		ider := disk.MkRequest(nil, common.BDEV_FLUSH, true)
+		ider := common.MkRequest(nil, common.BDEV_FLUSH, true)
 		if disk.Start(ider) {
 			<- ider.AckCh
 		}
 		for b := 0; b < N; b++ {
-			rbuf, err := bcache.Get_fill(b, "read test", false)
+			rbuf, err := Bcache.Get_fill(b, "read test", false)
 			if err != 0 {
 				panic("bdev_test\n")
 			}
@@ -261,7 +261,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 		fmt.Printf("blkn %v last %v\n", ret, superb.lastblock())
 		return 0, -common.ENOMEM
 	}
-	blk, err := bcache.Get_zero(ret, "balloc", true)
+	blk, err := Bcache.Get_zero(ret, "balloc", true)
 	if err != 0 {
 		return 0, err
 	}
@@ -273,7 +273,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 	copy(blk.Data[:], zdata[:])
 	blk.Unlock()
 	fslog.Write(blk)
-	bcache.Relse(blk, "balloc")
+	Bcache.Relse(blk, "balloc")
 	return ret, 0
 }
 

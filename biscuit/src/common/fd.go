@@ -15,7 +15,7 @@ type Fd_t struct {
 	Perms	int
 }
 
-func copyfd(fd *Fd_t) (*Fd_t, Err_t) {
+func Copyfd(fd *Fd_t) (*Fd_t, Err_t) {
 	nfd := &Fd_t{}
 	*nfd = *fd
 	err := nfd.Fops.Reopen()
@@ -25,7 +25,7 @@ func copyfd(fd *Fd_t) (*Fd_t, Err_t) {
 	return nfd, 0
 }
 
-func close_panic(f *Fd_t) {
+func Close_panic(f *Fd_t) {
 	if f.Fops.Close() != 0 {
 		panic("must succeed")
 	}
@@ -93,23 +93,23 @@ type Fdops_i interface {
 type Pollmsg_t struct {
 	notif	chan bool
 	Events	Ready_t
-	dowait	bool
+	Dowait	bool
 	tid	Tid_t
 }
 
-func (pm *Pollmsg_t) pm_set(tid Tid_t, events Ready_t, dowait bool) {
+func (pm *Pollmsg_t) Pm_set(tid Tid_t, events Ready_t, dowait bool) {
 	if pm.notif == nil {
 		// 1-element buffered channel; that way devices can send
 		// notifies on the channel asynchronously without blocking.
 		pm.notif = make(chan bool, 1)
 	}
 	pm.Events = events
-	pm.dowait = dowait
+	pm.Dowait = dowait
 	pm.tid = tid
 }
 
 // returns whether we timed out, and error
-func (pm *Pollmsg_t) pm_wait(to int) (bool, Err_t) {
+func (pm *Pollmsg_t) Pm_wait(to int) (bool, Err_t) {
 	var tochan <-chan time.Time
 	if to != -1 {
 		tochan = time.After(time.Duration(to)*time.Millisecond)
@@ -150,7 +150,7 @@ func (p *Pollers_t) _findempty() *Pollmsg_t {
 
 var lhits int
 
-func (p *Pollers_t) addpoller(pm *Pollmsg_t) Err_t {
+func (p *Pollers_t) Addpoller(pm *Pollmsg_t) Err_t {
 	if p.waiters == nil {
 		p.waiters = make([]Pollmsg_t, 10)
 	}
@@ -167,7 +167,7 @@ func (p *Pollers_t) addpoller(pm *Pollmsg_t) Err_t {
 	return 0
 }
 
-func (p *Pollers_t) wakeready(r Ready_t) {
+func (p *Pollers_t) Wakeready(r Ready_t) {
 	if p.allmask & r == 0 {
 		return
 	}

@@ -282,7 +282,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	istats.nifill++
 	idm.fill(blk, inum)
 	blk.Unlock()
-	bcache.Relse(blk, "idm_init")
+	Bcache.Relse(blk, "idm_init")
 	return 0
 }
 
@@ -303,7 +303,7 @@ func (idm *imemnode_t) _iupdate() common.Err_t {
 	} else {
 		iblk.Unlock()
 	}
-	bcache.Relse(iblk, "_iupdate")
+	Bcache.Relse(iblk, "_iupdate")
 	return 0
 }
 
@@ -614,7 +614,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn, writing)
-			bcache.Relse(indblk, "indblk")
+			Bcache.Relse(indblk, "indblk")
 			return blkn, err
 		} else if fbn < INDADDR * INDADDR {
 			fbn -= INDADDR
@@ -633,14 +633,14 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 			}
 			
 			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
-			bcache.Relse(dindblk, "dindblk")
+			Bcache.Relse(dindblk, "dindblk")
 
 			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn%INDADDR, writing)
-			bcache.Relse(indblk, "indblk2")
+			Bcache.Relse(indblk, "indblk2")
 			return blkn, err
 		} else {
 			panic("too big fbn")
@@ -744,7 +744,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 		c += wrote
 		offset += wrote
 		b.Unlock()
-		bcache.Relse(b, "_iread")
+		Bcache.Relse(b, "_iread")
 		if err != 0 {
 			return c, err
 		}
@@ -775,7 +775,7 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		read, err := src.Uioread(dst)
 		b.Unlock()
 		fslog.Write_ordered(b)
-		bcache.Relse(b, "iwrite")
+		Bcache.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
 		}
@@ -822,7 +822,7 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 	ni := &inode_t{ib, ioffset(childi)}
 	ni.w_itype(I_DEAD)
 	ib.Unlock()
-	bcache.Relse(ib, "create_undo")
+	Bcache.Relse(ib, "create_undo")
 	ialloc.Ifree(childi)
 	return 0
 }
@@ -888,7 +888,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		ialloc.Ifree(newinum)
 	}
 	fslog.Write(newiblk)
-	bcache.Relse(newiblk, "icreate")
+	Bcache.Relse(newiblk, "icreate")
 	return newinum, err
 }
 
@@ -919,7 +919,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 		if inc {    // the VM system is going to use the page
 			// XXX don't release buffer (i.e., pin in cache)
 			// so that writes make it to the file. modify vm
-			// system to call bcache.Relse.
+			// system to call Bcache.Relse.
 			// mem.Refup(buf.Pa)
 		}
 		pgn := i / common.PGSIZE
@@ -929,7 +929,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 		// release buffer. the VM system will increase the page count.
 		// XXX race? vm system may not do this for a while. maybe we
 		// should increase page count here.
-		bcache.Relse(buf, "immapinfo")
+		Bcache.Relse(buf, "immapinfo")
 	}
 	return ret, 0
 }
@@ -966,7 +966,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 			nblkno := common.Readn(data, 8, off)
 			add(nblkno)
 		}
-		bcache.Relse(blk, "ifree1")
+		Bcache.Relse(blk, "ifree1")
 		return 0
 	}
 
@@ -995,7 +995,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 				}
 			}
 		}
-		bcache.Relse(blk, "dindno")
+		Bcache.Relse(blk, "dindno")
 	}
 	
 	iblk, err := idm.idibread()
@@ -1009,7 +1009,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	idm.flushto(iblk, idm.inum)
 	iblk.Unlock()
 	fslog.Write(iblk)
-	bcache.Relse(iblk, "ifree2")
+	Bcache.Relse(iblk, "ifree2")
 
 	ialloc.Ifree(idm.inum)
 

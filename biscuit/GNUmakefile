@@ -17,7 +17,7 @@ SRCS := $(ASMS) $(CS)
 # kernel sources
 
 K := src/kernel
-KSRC := main.go syscall.go pmap.go hw.go net.go
+KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 
 OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
@@ -115,7 +115,7 @@ $(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC)
 	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@_ $$ADDR; fi
-	./rewrite.py $@_ $@
+	$(K)/rewrite.py $@_ $@
 
 # the user/% prereq is built by the CPROGS target
 $(FSCPROGS): fsdir/bin/% : user/c/%

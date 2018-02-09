@@ -71,3 +71,12 @@ func (s *Sysatomic_t) Taken(_n uint) bool {
 	atomic.AddInt64(s._aptr(), n)
 	return false
 }
+
+// returns false if the limit has been reached.
+func (s *Sysatomic_t) Take() bool {
+        return s.Taken(1)
+}
+
+func (s *Sysatomic_t) Give() {
+        s.Given(1)
+}

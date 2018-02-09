@@ -3,9 +3,9 @@ package common
 import "fmt"
 import "sync/atomic"
 
-type kent_t struct {
-	pml4slot	int
-	entry		Pa_t
+type Kent_t struct {
+	Pml4slot	int
+	Entry		Pa_t
 }
 
 const VREC      int = 0x42
@@ -32,7 +32,7 @@ const PTE_ADDR   Pa_t = PGMASK
 const PTE_FLAGS  Pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
     PTE_WASCOW)
 
-var p_zeropg Pa_t
+var P_zeropg Pa_t
 
 type Mmapinfo_t struct {
 	Pg	*Pg_t
@@ -50,7 +50,7 @@ const (
 	VSANON	mtype_t = 1 << iota
 )
 
-type mfile_t struct {
+type Mfile_t struct {
 	mfops		Fdops_i
 	// once mapcount is 0, close mfops
 	mapcount	int
@@ -63,23 +63,27 @@ type Vminfo_t struct {
 	perms	uint
 	file struct {
 		foff	int
-		mfile	*mfile_t
+		mfile	*Mfile_t
 		shared	bool
 	}
 	pch	[]Pa_t
 }
 
+func (vmi *Vminfo_t) Pgn() uintptr {
+	return vmi.pgn
+}
+
 type Vmregion_t struct {
 	rb	Rbh_t
 	_pglen	int
-	novma	uint
+	Novma	uint
 	hole struct {
 		startn	uintptr
 		pglen	uintptr
 	}
 }
 
-func (vmi *Vminfo_t) filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
+func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
 	if vmi.mtype != VFILE {
 		panic("must be file mapping")
 	}
@@ -92,7 +96,7 @@ func (vmi *Vminfo_t) filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
 	return mmapi[0].Pg, Pa_t(mmapi[0].Phys), 0
 }
 
-func (vmi *Vminfo_t) ptefor(pmap *pmap_t, va uintptr) (*Pa_t, bool) {
+func (vmi *Vminfo_t) ptefor(pmap *Pmap_t, va uintptr) (*Pa_t, bool) {
 	if vmi.pch == nil {
 		bva := int(vmi.pgn) << PGSHIFT
 		ptbl, slot := pmap_pgtbl(pmap, bva, true, PTE_U|PTE_W)
@@ -236,7 +240,7 @@ func (m *Vmregion_t) insert(vmi *Vminfo_t) {
 	}
 	// there are no mergable mappings, otherwise we would have encountered
 	// one during traversal.
-	m.novma++
+	m.Novma++
 	nn := &Rbn_t{p: par, c: RED, vmi: *vmi}
 	if par == nil {
 		m.rb.root = nn
@@ -267,13 +271,13 @@ func (m *Vmregion_t) _clear(vmi *Vminfo_t, pglen int) {
 	}
 }
 
-func (m *Vmregion_t) clear() {
+func (m *Vmregion_t) Clear() {
 	m.iter(func (vmi *Vminfo_t) {
 		m._clear(vmi, vmi.pglen)
 	})
 }
 
-func (m *Vmregion_t) lookup(va uintptr) (*Vminfo_t, bool) {
+func (m *Vmregion_t) Lookup(va uintptr) (*Vminfo_t, bool) {
 	pgn := va >> PGSHIFT
 	n := m.rb.lookup(pgn)
 	if n == nil {
@@ -292,7 +296,7 @@ func (m *Vmregion_t) _copy1(par, src *Rbn_t) *Rbn_t {
 	// create per-process mfile objects and increase opencount for file
 	// mappings
 	if ret.vmi.mtype == VFILE {
-		nmf := &mfile_t{}
+		nmf := &Mfile_t{}
 		*nmf = *src.vmi.file.mfile
 		ret.vmi.file.mfile = nmf
 		nmf.mfops.Reopen()
@@ -305,13 +309,13 @@ func (m *Vmregion_t) _copy1(par, src *Rbn_t) *Rbn_t {
 
 func (m *Vmregion_t) copy() Vmregion_t {
 	var ret Vmregion_t
-	ret._pglen, ret.novma = m._pglen, m.novma
+	ret._pglen, ret.Novma = m._pglen, m.Novma
 	ret.rb.root = m._copy1(nil, m.rb.root)
 	return ret
 }
 
 func (m *Vmregion_t) dump() {
-	fmt.Printf("novma: %v\n", m.novma)
+	fmt.Printf("novma: %v\n", m.Novma)
 	m.iter(func(vmi *Vminfo_t) {
 		end := (vmi.pgn + uintptr(vmi.pglen)) << PGSHIFT
 		var perms string
@@ -354,7 +358,7 @@ func (m *Vmregion_t) iter(f func(*Vminfo_t)) {
 	m._iter1(m.rb.root, f)
 }
 
-func (m *Vmregion_t) pglen() int {
+func (m *Vmregion_t) Pglen() int {
 	return m._pglen
 }
 
@@ -413,7 +417,7 @@ func (m *Vmregion_t) end() uintptr {
 	return last << PGSHIFT
 }
 
-func (m *Vmregion_t) remove(start, len int, novma uint) Err_t {
+func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
 	pgn := uintptr(start) >> PGSHIFT
 	pglen := Roundup(len, PGSIZE) >> PGSHIFT
 	m._pglen -= pglen
@@ -427,8 +431,8 @@ func (m *Vmregion_t) remove(start, len int, novma uint) Err_t {
 	// remove the whole node?
 	if n.vmi.pgn == pgn && n.vmi.pglen == pglen {
 		m.rb.remove(n)
-		m.novma--
-		if m.novma < 0 {
+		m.Novma--
+		if m.Novma < 0 {
 			panic("shaish!")
 		}
 		return 0
@@ -449,7 +453,7 @@ func (m *Vmregion_t) remove(start, len int, novma uint) Err_t {
 		return 0
 	}
 	// too many vma objects
-	if m.novma >= novma {
+	if m.Novma >= novma {
 		return -ENOMEM
 	}
 	// removing middle of a mapping; must add a new node
@@ -463,13 +467,13 @@ func (m *Vmregion_t) remove(start, len int, novma uint) Err_t {
 		avmi.file.foff += int((avmi.pgn - n.vmi.pgn) << PGSHIFT)
 	}
 	m.rb._insert(avmi)
-	m.novma++
+	m.Novma++
 	return 0
 }
 
 
 // returns true if the fault was handled successfully
-func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
+func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 	isguard := vmi.perms == 0
 	iswrite := ecode & uintptr(PTE_W) != 0
 	writeok := vmi.perms & uint(PTE_W) != 0
@@ -486,7 +490,7 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		panic("shared anon pages should always be mapped")
 	}
 
-	pte, ok := vmi.ptefor(proc.pmap, faultaddr)
+	pte, ok := vmi.ptefor(proc.Pmap, faultaddr)
 	if !ok {
 		return false
 	}
@@ -504,7 +508,7 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 	// the fault is read or write
 	if vmi.mtype == VFILE && vmi.file.shared {
 		var err Err_t
-		_, p_pg, err = vmi.filepage(faultaddr)
+		_, p_pg, err = vmi.Filepage(faultaddr)
 		if err != 0 {
 			return false
 		}
@@ -527,14 +531,14 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 			phys := *pte & PTE_ADDR
 			ref, _ := _refaddr(phys)
 			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
-			   phys != p_zeropg {
+			   phys != P_zeropg {
 				tmp := *pte &^ PTE_COW
 				tmp |= PTE_W | PTE_WASCOW
 			        *pte = tmp
-				proc.tlbshoot(faultaddr, 1)
+				proc.Tlbshoot(faultaddr, 1)
 				return true
 			}
-			pgsrc = dmap(phys)
+			pgsrc = Physmem.Dmap(phys)
 			isempty = false
 		} else {
 			// XXXPANIC
@@ -543,10 +547,10 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 			}
 			switch vmi.mtype {
 			case VANON:
-				pgsrc = zeropg
+				pgsrc = Zeropg
 			case VFILE:
 				var err Err_t
-				pgsrc, _, err = vmi.filepage(faultaddr)
+				pgsrc, _, err = vmi.Filepage(faultaddr)
 				if err != 0 {
 					return false
 				}
@@ -557,7 +561,7 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		var pg *Pg_t
 		var ok bool
 		// don't zero new page
-		pg, p_pg, ok = refpg_new_nozero()
+		pg, p_pg, ok = Physmem.Refpg_new_nozero()
 		if !ok {
 			return false
 		}
@@ -570,10 +574,10 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		}
 		switch vmi.mtype {
 		case VANON:
-			p_pg = p_zeropg
+			p_pg = P_zeropg
 		case VFILE:
 			var err Err_t
-			_, p_pg, err = vmi.filepage(faultaddr)
+			_, p_pg, err = vmi.Filepage(faultaddr)
 			if err != 0 {
 				return false
 			}
@@ -585,13 +589,13 @@ func sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		}
 	}
 
-	tshoot, ok := proc.page_insert(int(faultaddr), p_pg, perms, isempty)
+	tshoot, ok := proc.Page_insert(int(faultaddr), p_pg, perms, isempty)
 	if !ok {
-		refdown(p_pg)
+		Physmem.Refdown(p_pg)
 		return false
 	}
 	if tshoot {
-		proc.tlbshoot(faultaddr, 1)
+		proc.Tlbshoot(faultaddr, 1)
 	}
 	return true
 }

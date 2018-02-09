@@ -2,10 +2,23 @@ package common
 
 import "fmt"
 
+// interface for reading/writing from user space memory either via a pointer
+// and length or an array of pointers and lengths (iovec)
+type Userio_i interface {
+	// copy src to user memory
+	Uiowrite(src []uint8) (int, Err_t)
+	// copy user memory to dst
+	Uioread(dst []uint8) (int, Err_t)
+	// returns the number of unwritten/unread bytes remaining
+	Remain() int
+	// the total buffer size
+	Totalsz() int
+}
+
 // a helper object for read/writing from userspace memory. virtual address
 // lookups and reads/writes to those addresses must be atomic with respect to
 // page faults.
-type userbuf_t struct {
+type Userbuf_t struct {
 	userva	int
 	len	int
 	// 0 <= off <= len
@@ -13,7 +26,7 @@ type userbuf_t struct {
 	proc	*Proc_t
 }
 
-func (ub *userbuf_t) ub_init(p *Proc_t, uva, len int) {
+func (ub *Userbuf_t) ub_init(p *Proc_t, uva, len int) {
 	// XXX fix signedness
 	if len < 0 {
 		panic("negative length")
@@ -27,21 +40,21 @@ func (ub *userbuf_t) ub_init(p *Proc_t, uva, len int) {
 	ub.proc = p
 }
 
-func (ub *userbuf_t) remain() int {
+func (ub *Userbuf_t) Remain() int {
 	return ub.len - ub.off
 }
 
-func (ub *userbuf_t) totalsz() int {
+func (ub *Userbuf_t) Totalsz() int {
 	return ub.len
 }
-func (ub *userbuf_t) uioread(dst []uint8) (int, Err_t) {
+func (ub *Userbuf_t) Uioread(dst []uint8) (int, Err_t) {
 	ub.proc.Lock_pmap()
 	a, b := ub._tx(dst, false)
 	ub.proc.Unlock_pmap()
 	return a, b
 }
 
-func (ub *userbuf_t) uiowrite(src []uint8) (int, Err_t) {
+func (ub *Userbuf_t) Uiowrite(src []uint8) (int, Err_t) {
 	ub.proc.Lock_pmap()
 	a, b := ub._tx(src, true)
 	ub.proc.Unlock_pmap()
@@ -50,11 +63,11 @@ func (ub *userbuf_t) uiowrite(src []uint8) (int, Err_t) {
 
 // copies the min of either the provided buffer or ub.len. returns number of
 // bytes copied and error.
-func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
+func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
 		va := ub.userva + ub.off
-		ubuf, ok := ub.proc.userdmap8_inner(va, write)
+		ubuf, ok := ub.proc.Userdmap8_inner(va, write)
 		if !ok {
 			return ret, -EFAULT
 		}
@@ -74,4 +87,95 @@ func (ub *userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
 		ret += c
 	}
 	return ret, 0
+}
+
+
+type _iove_t struct {
+	uva	uint
+	sz	int
+}
+
+type Useriovec_t struct {
+	iovs	[]_iove_t
+	tsz	int
+	proc	*Proc_t
+}
+
+func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
+	if niovs > 10 {
+		fmt.Printf("many iovecs\n")
+		return -EINVAL
+	}
+	iov.tsz = 0
+	iov.iovs = make([]_iove_t, niovs)
+	iov.proc = proc
+
+	proc.Lock_pmap()
+	defer proc.Unlock_pmap()
+	for i := range iov.iovs {
+		elmsz := uint(16)
+		va := iovarn + uint(i)*elmsz
+		dstva, ok1 := proc.userreadn_inner(int(va), 8)
+		sz, ok2    := proc.userreadn_inner(int(va) + 8, 8)
+		if !ok1 || !ok2 {
+			return -EFAULT
+		}
+		iov.iovs[i].uva = uint(dstva)
+		iov.iovs[i].sz = sz
+		iov.tsz += sz
+	}
+	return 0
+}
+
+func (iov *Useriovec_t) Remain() int {
+	ret := 0
+	for i := range iov.iovs {
+		ret += iov.iovs[i].sz
+	}
+	return ret
+}
+
+func (iov *Useriovec_t) Totalsz() int {
+	return iov.tsz
+}
+
+func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
+	ub := &Userbuf_t{}
+	did := 0
+	for len(buf) > 0 && len(iov.iovs) > 0 {
+		ciov := &iov.iovs[0]
+		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)
+		var c int
+		var err Err_t
+		if touser {
+			c, err = ub._tx(buf, true)
+		} else {
+			c, err = ub._tx(buf, false)
+		}
+		ciov.uva += uint(c)
+		ciov.sz -= c
+		if ciov.sz == 0 {
+			iov.iovs = iov.iovs[1:]
+		}
+		buf = buf[c:]
+		did += c
+		if err != 0 {
+			return did, err
+		}
+	}
+	return did, 0
+}
+
+func (iov *Useriovec_t) Uioread(dst []uint8) (int, Err_t) {
+	iov.proc.Lock_pmap()
+	a, b := iov._tx(dst, false)
+	iov.proc.Unlock_pmap()
+	return a, b
+}
+
+func (iov *Useriovec_t) Uiowrite(src []uint8) (int, Err_t) {
+	iov.proc.Lock_pmap()
+	a, b := iov._tx(src, true)
+	iov.proc.Unlock_pmap()
+	return a, b
 }

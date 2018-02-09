@@ -70,10 +70,11 @@ const(
 	TLBSHOOT	= 70
 	PERFMASK 	= 72
 
+
 	IRQ_BASE	= 32
+	
 	IRQ_KBD		= 1
 	IRQ_COM1	= 4
-
 	INT_KBD		= IRQ_BASE + IRQ_KBD
 	INT_COM1	= IRQ_BASE + IRQ_COM1
 
@@ -85,32 +86,10 @@ const(
 	INT_MSI5	= 61
 	INT_MSI6	= 62
 	INT_MSI7	= 63
-
-	IRQ_LAST	= INT_MSI7
 )
 
 
 
-type Userio_i interface {
-	// copy src to user memory
-	Uiowrite(src []uint8) (int, Err_t)
-	// copy user memory to dst
-	Uioread(dst []uint8) (int, Err_t)
-	// returns the number of unwritten/unread bytes remaining
-	Remain() int
-	// the total buffer size
-	Totalsz() int
-}
-
-
-
-// per-process limits
-type ulimit_t struct {
-	pages	int
-	nofile	uint
-	novma	uint
-	noproc	uint
-}
 
 
 

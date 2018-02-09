@@ -8,11 +8,11 @@ import "sync"
 // - wait when there are no children must fail
 // - wait for a process should not return thread info and vice versa
 type Waitst_t struct {
-	pid		int
-	status		int
-	atime		Accnt_t
+	Pid		int
+	Status		int
+	Atime		Accnt_t
 	// true iff the exit status is valid
-	valid		bool
+	Valid		bool
 }
 
 type Wait_t struct {
@@ -20,7 +20,12 @@ type Wait_t struct {
 	pwait		whead_t
 	twait		whead_t
 	cond		*sync.Cond
-	pid		int
+	Pid		int
+}
+
+func (w *Wait_t) Wait_init(mypid int) {
+        w.cond = sync.NewCond(w)
+        w.Pid = mypid
 }
 
 type wlist_t struct {
@@ -36,7 +41,7 @@ type whead_t struct {
 
 func (wh *whead_t) wpush(id int) {
 	n := &wlist_t{}
-	n.wst.pid = id
+	n.wst.Pid = id
 	n.next = wh.head
 	wh.head = n
 	wh.count++
@@ -46,7 +51,7 @@ func (wh *whead_t) wpopvalid() (Waitst_t, bool) {
 	var prev *wlist_t
 	n := wh.head
 	for n != nil {
-		if n.wst.valid {
+		if n.wst.Valid {
 			wh.wremove(prev, n)
 			return n.wst, true
 		}
@@ -64,7 +69,7 @@ func (wh *whead_t) wfind(id int) (*wlist_t, *wlist_t, bool) {
 	var prev *wlist_t
 	ret := wh.head
 	for ret != nil {
-		if ret.wst.pid == id {
+		if ret.wst.Pid == id {
 			return prev, ret, true
 		}
 		prev = ret
@@ -122,20 +127,20 @@ func (w *Wait_t) _put(id, status int, isproc bool, atime *Accnt_t) {
 	if !ok {
 		panic("id must exist")
 	}
-	wn.wst.valid = true
-	wn.wst.status = status
+	wn.wst.Valid = true
+	wn.wst.Status = status
 	if atime != nil {
-		wn.wst.atime.userns += atime.userns
-		wn.wst.atime.sysns += atime.sysns
+		wn.wst.Atime.Userns += atime.Userns
+		wn.wst.Atime.Sysns += atime.Sysns
 	}
 	w.cond.Broadcast()
 }
 
-func (w *Wait_t) reappid(pid int, noblk bool) (Waitst_t, Err_t) {
+func (w *Wait_t) Reappid(pid int, noblk bool) (Waitst_t, Err_t) {
 	return w._reap(pid, true, noblk)
 }
 
-func (w *Wait_t) reaptid(tid int, noblk bool) (Waitst_t, Err_t) {
+func (w *Wait_t) Reaptid(tid int, noblk bool) (Waitst_t, Err_t) {
 	return w._reap(tid, false, noblk)
 }
 
@@ -170,7 +175,7 @@ func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
 			if !ok {
 				return zw, -ECHILD
 			}
-			if wn.wst.valid {
+			if wn.wst.Valid {
 				wh.wremove(wp, wn)
 				return wn.wst, 0
 			}
