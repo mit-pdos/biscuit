@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const bdev_debug = true
+const bdev_debug = false
 
 // A block has a lock, since, it may store an inode block, which has 4 inodes,
 // and we need to ensure that hat writes aren't lost due to concurrent inode

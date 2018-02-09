@@ -24,8 +24,6 @@ const ahci_debug = false
 
 
 //
-// Interface to ahci driver
-//
 
 var ahci common.Disk_i
 

@@ -4,7 +4,7 @@ import "sync"
 import "fmt"
 import "unsafe"
 
-const bdev_debug = true
+const bdev_debug = false
 
 // If you change this, you must change corresponding constants in mkbdisk.py,
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
@@ -99,7 +99,6 @@ func (b *Bdev_block_t) Read() {
 	if b.Disk.Start(ider) {
 		<- ider.AckCh
 	}
-	fmt.Printf("Read done %v %p\n", len(b.Data), b.Data)
 	if bdev_debug {
 		fmt.Printf("bdev_read %v %v %#x %#x\n", b.Block, b.Name, b.Data[0], b.Data[1])
 	}
@@ -113,7 +112,6 @@ func (b *Bdev_block_t) Read() {
 
 func (blk *Bdev_block_t) New_page() {
 	_, pa, ok := blk.Mem.Refpg_new()
-	fmt.Printf("New_page %v\n", pa)
 	if !ok {
 		panic("oom during bdev.new_page")
 	}

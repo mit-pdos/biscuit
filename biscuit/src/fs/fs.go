@@ -6,15 +6,18 @@ import "strconv"
 import "common"
 
 const memfs = false     // in-memory file system?
-const fs_debug = true
+const fs_debug = false
 const iroot = 0
 
 var superb_start	int
 var superb		superblock_t
 
-var stats_string = ""
+var cons common.Cons_i
 
-func MkFS(mem common.Page_i, disk common.Disk_i) *common.Fd_t {
+func MkFS(mem common.Page_i, disk common.Disk_i, console common.Cons_i) *common.Fd_t {
+
+	cons = console
+	
 	if memfs {
 		fmt.Printf("Using MEMORY FS\n")
 	}
@@ -683,12 +686,31 @@ func (df *Devfops_t) _sane() {
 	}
 }
 
+var stats_string = ""
+
+func stat_read(ub common.Userio_i, offset int) (int, common.Err_t) {
+	sz := ub.Remain()
+	s := stats_string
+	if len(s) > sz {
+		s = s[:sz]
+		stats_string = stats_string[sz:]
+	} else {
+		stats_string = ""
+	}
+	kdata := []byte(s)
+	ret, err := ub.Uiowrite(kdata)
+	if err != 0 || ret != len(kdata) {
+		panic("dropped stats")
+	}
+	return ret, 0
+}
+
 func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
 	df._sane()
 	if df.Maj == common.D_CONSOLE {
-		return 0, 0 // YYY cons_read(dst, 0)
+		return cons.Cons_read(dst, 0)
 	} else if df.Maj == common.D_STAT {
-		return 0,0 // YYY stat_read(dst, 0)
+		return stat_read(dst, 0)
 	} else {
 		return 0, 0
 	}
@@ -697,7 +719,7 @@ func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Er
 func (df *Devfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
 	df._sane()
 	if df.Maj == common.D_CONSOLE {
-		return 0, 0 // YYY cons_write(src, 0)
+		return cons.Cons_write(src, 0)
 	} else {
 		return src.Totalsz(), 0
 	}
@@ -1439,3 +1461,5 @@ func (alloc *allocater_t) Stats() string {
 	s += "\n"
 	return s
 }
+
+

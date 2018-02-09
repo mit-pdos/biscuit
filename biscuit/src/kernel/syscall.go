@@ -13,7 +13,13 @@ import "unsafe"
 import "common"
 import "fs"
 
-func syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int {
+// Implements Syscall_i
+type syscall_t struct {
+}
+var sys = &syscall_t{}
+var sysi = sys
+
+func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int {
 
 	if p.Doomed() {
 		// this process has been killed
@@ -37,7 +43,7 @@ func syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int
 	case common.SYS_OPEN:
 		ret = sys_open(p, a1, a2, a3)
 	case common.SYS_CLOSE:
-		ret = sys_close(p, a1)
+		ret = s.Sys_close(p, a1)
 	case common.SYS_STAT:
 		ret = sys_stat(p, a1, a2)
 	case common.SYS_FSTAT:
@@ -99,7 +105,7 @@ func syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int
 	case common.SYS_EXIT:
 		status := a1 & 0xff
 		status |= common.EXITED
-		sys_exit(p, tid, status)
+		s.Sys_exit(p, tid, status)
 	case common.SYS_WAIT4:
 		ret = sys_wait4(p, tid, a1, a2, a3, a4, a5)
 	case common.SYS_KILL:
@@ -156,13 +162,18 @@ func syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int
 		ret = sys_gettid(p, tid)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
-		sys_exit(p, tid, common.SIGNALED | common.Mkexitsig(31))
+		s.Sys_exit(p, tid, common.SIGNALED | common.Mkexitsig(31))
 	}
 	return ret
 }
 
+// Implements Console_i
+type console_t struct {
+}
+var console = &console_t{}
+var consi = console
 
-func cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
+func (c *console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
 	sz := ub.Remain()
 	kdata := kbd_get(sz)
 	ret, err := ub.Uiowrite(kdata)
@@ -172,26 +183,7 @@ func cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
 	return ret, 0
 }
 
-var stats_string = ""
-
-func stat_read(ub common.Userio_i, offset int) (int, common.Err_t) {
-	sz := ub.Remain()
-	s := stats_string
-	if len(s) > sz {
-		s = s[:sz]
-		stats_string = stats_string[sz:]
-	} else {
-		stats_string = ""
-	}
-	kdata := []byte(s)
-	ret, err := ub.Uiowrite(kdata)
-	if err != 0 || ret != len(kdata) {
-		panic("dropped stats")
-	}
-	return ret, 0
-}
-
-func cons_write(src common.Userio_i, off int) (int, common.Err_t) {
+func (c *console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) {
 	// merge into one buffer to avoid taking the console lock many times.
 	// what a sweet optimization.
 	utext := int8(0x17)
@@ -206,6 +198,7 @@ func cons_write(src common.Userio_i, off int) (int, common.Err_t) {
 	runtime.Pmsga(&big[0], len(big), utext)
 	return len(big), 0
 }
+
 
 func _fd_read(proc *common.Proc_t, fdn int) (*common.Fd_t, common.Err_t) {
 	fd, ok := proc.Fd_get(fdn)
@@ -320,7 +313,7 @@ func sys_pause(proc *common.Proc_t) int {
 	return -1
 }
 
-func sys_close(proc *common.Proc_t, fdn int) int {
+func (s *syscall_t) Sys_close(proc *common.Proc_t, fdn int) int {
 	fd, ok := proc.Fd_del(fdn)
 	if !ok {
 		return int(-common.EBADF)
@@ -799,8 +792,8 @@ func sys_pipe2(proc *common.Proc_t, pipen, _flags int) int {
 	ok1 := proc.Userwriten(pipen, 4, rfd)
 	ok2 := proc.Userwriten(pipen + 4, 4, wfd)
 	if !ok1 || !ok2 {
-		err1 := sys_close(proc, rfd)
-		err2 := sys_close(proc, wfd)
+		err1 := sys.Sys_close(proc, rfd)
+		err2 := sys.Sys_close(proc, wfd)
 		if err1 != 0 || err2 != 0 {
 			panic("must succeed")
 		}
@@ -1705,7 +1698,7 @@ func sys_socketpair(proc *common.Proc_t, domain, typ, proto int, sockn int) int 
 	}
 	if !proc.Userwriten(sockn, 4, fdn1) ||
 	    !proc.Userwriten(sockn + 4, 4, fdn2) {
-		if sys_close(proc, fdn1) != 0 || sys_close(proc, fdn2) != 0 {
+		if sys.Sys_close(proc, fdn1) != 0 || sys.Sys_close(proc, fdn2) != 0 {
 			panic("must succeed")
 		}
 		return int(-common.EFAULT)
@@ -3041,7 +3034,7 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		var ok bool
 		// lock fd table for copying
 		parent.Fdl.Lock()
-		child, ok = common.Proc_new(parent.Name, parent.Cwd(), parent.Fds)
+		child, ok = common.Proc_new(parent.Name, parent.Cwd(), parent.Fds, sys)
 		parent.Fdl.Unlock()
 		if !ok {
 			lhits++
@@ -3276,7 +3269,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 			continue
 		}
 		if fd.Perms & common.FD_CLOEXEC != 0 {
-			if sys_close(proc, fdn) != 0 {
+			if sys.Sys_close(proc, fdn) != 0 {
 				panic("close")
 			}
 		}
@@ -3360,7 +3353,7 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, bool) {
 }
 
 
-func sys_exit(proc *common.Proc_t, tid common.Tid_t, status int) {
+func (s *syscall_t) Sys_exit(proc *common.Proc_t, tid common.Tid_t, status int) {
 	// set doomed to all other threads die
 	proc.Doomall()
 	proc.Thread_dead(tid, status, true)

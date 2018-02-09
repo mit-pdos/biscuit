@@ -85,12 +85,14 @@ func (phys *Physmem_t) Refdown(p_pg Pa_t) bool {
 	return false
 }
 
-
 var Zeropg *Pg_t
 
 // refcnt of returned page is not incremented (it is usually incremented via
 // Proc_t.page_insert). requires direct mapping.
 func (phys *Physmem_t) Refpg_new() (*Pg_t, Pa_t, bool) {
+	if !dmapinit {
+		panic("refpg_new")
+	}
 	pg, p_pg, ok := phys._refpg_new()
 	if !ok {
 		return nil, 0, false
@@ -385,7 +387,7 @@ func Dmap_init() {
 	dmapinit = true
 
 	// Physmem.Refpg_new() uses the Zeropg to zero the page
-	Zeropg, P_zeropg, ok = Physmem.Refpg_new()
+	Zeropg, P_zeropg, ok = Physmem._refpg_new()
 	if !ok {
 		panic("oom in dmap init")
 	}

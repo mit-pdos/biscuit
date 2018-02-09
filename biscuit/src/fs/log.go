@@ -4,7 +4,7 @@ import "fmt"
 import "strconv"
 import "common"
 
-const log_debug = true
+const log_debug = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen

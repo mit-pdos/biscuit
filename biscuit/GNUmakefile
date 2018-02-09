@@ -110,7 +110,7 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC)
+$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) src/common/*.go src/fs/*.go
 	$(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
 	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \

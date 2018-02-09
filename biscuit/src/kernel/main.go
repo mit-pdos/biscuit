@@ -1553,14 +1553,14 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf := fs.MkFS(physmem, ahci)
+	rf := fs.MkFS(physmem, ahci, console)
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := common.Proc_new(cmd, rf, defaultfds)
+		p, ok := common.Proc_new(cmd, rf, defaultfds, sysi)
 		if !ok {
 			panic("silly sysprocs")
 		}

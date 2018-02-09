@@ -3,6 +3,18 @@ package common
 type Msgfl_t uint
 type Fdopt_t uint
 
+type Syscall_i interface {
+	Syscall(p *Proc_t, tid Tid_t, tf *[TFSIZE]uintptr) int
+	Sys_close(proc *Proc_t, fdn int) int 
+	Sys_exit(Proc *Proc_t, tid Tid_t, status int)
+}
+
+type Cons_i interface {
+	Cons_read(ub Userio_i, offset int) (int, Err_t)
+	Cons_write(src Userio_i, off int) (int, Err_t)
+	
+}
+
 const(
   SYS_READ     = 0
   SYS_WRITE    = 1
@@ -191,11 +203,6 @@ const(
 	TF_FL_IF	= 1 << 9
 )
 
-type Syscall_i interface {
-	Syscall(p *Proc_t, tid Tid_t, tf *[TFSIZE]uintptr) int
-	Sys_close(proc *Proc_t, fdn int) int 
-	Sys_exit(Proc *Proc_t, tid Tid_t, status int)
-}
 
 func Mkexitsig(sig int) int {
 	if sig < 0 || sig > 32 {

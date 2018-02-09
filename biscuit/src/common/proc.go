@@ -1081,7 +1081,7 @@ var _deflimits = Ulimit_t {
 
 // returns the new proc and success; can fail if the system-wide limit of
 // procs/threads has been reached. the parent's fdtable must be locked.
-func Proc_new(name string, cwd *Fd_t, fds []*Fd_t) (*Proc_t, bool) {
+func Proc_new(name string, cwd *Fd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool) {
 	Proclock.Lock()
 
 	if nthreads >= int64(Syslimit.Sysprocs) {
@@ -1134,6 +1134,7 @@ func Proc_new(name string, cwd *Fd_t, fds []*Fd_t) (*Proc_t, bool) {
 		panic("silly noproc")
 	}
 
+	ret.syscall = sys
 	return ret, true
 }
 
