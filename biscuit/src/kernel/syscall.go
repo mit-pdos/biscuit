@@ -3195,8 +3195,8 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	}()
 
 	hdata := make([]uint8, 512)
-	ub := &fakeubuf_t{}
-	ub.fake_init(hdata)
+	ub := &common.Fakeubuf_t{}
+	ub.Fake_init(hdata)
 	ret, err := file.Fops.Read(proc, ub)
 	if err != 0 {
 		restore()

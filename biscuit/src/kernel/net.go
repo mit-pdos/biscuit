@@ -3697,8 +3697,8 @@ func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Useri
 			break
 		}
 		nb := make([]uint8, n)
-		fb := &fakeubuf_t{}
-		fb.fake_init(nb)
+		fb := &common.Fakeubuf_t{}
+		fb.Fake_init(nb)
 		did, err := cb.copyout(fb)
 		if err != 0 {
 			panic("must succeed")

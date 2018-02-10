@@ -24,6 +24,26 @@ const ahci_debug = false
 
 var ahci common.Disk_i
 
+type blockmem_t struct {
+}
+var blockmem = &blockmem_t{}
+
+func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
+	_, pa, ok := physmem.Refpg_new()
+	if ok {
+		d := (*common.Bytepg_t)(unsafe.Pointer(physmem.Dmap(pa)))
+		physmem.Refup(pa)
+		return pa, d, ok
+	} else {
+		return pa, nil, ok
+	}
+}
+
+func (bm *blockmem_t) Free(pa common.Pa_t) {
+	physmem.Refdown(pa)
+}
+
+
 // returns true if start is asynchronous
 func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 	ahci.port.start(req)
@@ -582,7 +602,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.sector_count = 1;
 
 	// To receive the identity
-        b := common.MkBlock_newpage(-1, "identify", physmem, ahci)
+        b := common.MkBlock_newpage(-1, "identify", blockmem, ahci)
 	p.fill_prd(0, b)
 	p.fill_fis(0, fis)
 

@@ -179,3 +179,45 @@ func (iov *Useriovec_t) Uiowrite(src []uint8) (int, Err_t) {
 	iov.proc.Unlock_pmap()
 	return a, b
 }
+
+
+// helper type which kernel code can use as userio_i, but is actually a kernel
+// buffer (i.e. reading an ELF header from the file system for exec(2)).
+type Fakeubuf_t struct {
+	fbuf	[]uint8
+	off	int
+	len	int
+}
+
+func (fb *Fakeubuf_t) Fake_init(buf []uint8) {
+	fb.fbuf = buf
+	fb.len = len(fb.fbuf)
+}
+
+func (fb *Fakeubuf_t) Remain() int {
+	return len(fb.fbuf)
+}
+
+func (fb *Fakeubuf_t) Totalsz() int {
+	return fb.len
+}
+
+func (fb *Fakeubuf_t) _tx(buf []uint8, tofbuf bool) (int, Err_t) {
+	var c int
+	if tofbuf {
+		c = copy(fb.fbuf, buf)
+	} else {
+		c = copy(buf, fb.fbuf)
+	}
+	fb.fbuf = fb.fbuf[c:]
+	return c, 0
+}
+
+func (fb *Fakeubuf_t) Uioread(dst []uint8) (int, Err_t) {
+	return fb._tx(dst, false)
+}
+
+func (fb *Fakeubuf_t) Uiowrite(src []uint8) (int, Err_t) {
+	return fb._tx(src, true)
+}
+

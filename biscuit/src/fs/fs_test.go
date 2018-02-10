@@ -2,7 +2,6 @@ package fs
 
 import "testing"
 import "fmt"
-import "unsafe"
 import "os"
 
 import "common"
@@ -57,6 +56,7 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 		fmt.Printf("write is done\n")
 	case common.BDEV_FLUSH:
 		ahci.f.Sync()
+		fmt.Printf("flush is done\n")
 	}
 	return false
 }
@@ -70,28 +70,19 @@ func (ahci *ahci_disk_t) Stats() string {
 // Glue
 //
 
-type mem_t struct {
+type blockmem_t struct {
+}
+var blockmem = &blockmem_t{}
+
+func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
+	d := &common.Bytepg_t{}
+	return common.Pa_t(0), d, true
 }
 
-func (mem mem_t) Refpg_new() (*common.Pg_t, common.Pa_t, bool) {
-	return nil, 0, true
+func (bm *blockmem_t) Free(pa common.Pa_t) {
 }
 
-func (mem mem_t) Dmap(p common.Pa_t) *common.Pg_t {
-	r := (*common.Pg_t)(unsafe.Pointer(p))
-	return r
-}
 
-func (mem mem_t) Refcnt(p_pg common.Pa_t) int {
-	return 0
-}
-
-func (mem mem_t) Refup(p_pg common.Pa_t) {
-}
-
-func (mem mem_t) Refdown(p_pg common.Pa_t) bool {
-	return false
-}
 
 type console_t struct {
 }
@@ -110,13 +101,37 @@ func (c console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) 
 //
 
 func TestFS(*testing.T) {
-	f, err := os.Open("../../go.img")
-	if err != nil {
+	f, uerr := os.OpenFile("../../go.img", os.O_RDWR, 0755)
+	if uerr != nil {
 		panic("couldn't open disk image\n")
 	}
 	ahci.f = f
-	mem := mem_t{}
 	fmt.Printf("testFS")
-	_ = MkFS(mem, ahci, c)
+	_ = MkFS(blockmem, ahci, c)
+	
+	fd, err := Fs_open("f1", common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+	if err != 0 {
+		fmt.Printf("Fs_open f1 failed %v\n", err)
+	}
+	
+	hdata := make([]uint8, 512)
+	ub := &common.Fakeubuf_t{}
+	ub.Fake_init(hdata)
+
+	n, err := fd.Fops.Write(nil, ub)
+	if err != 0 || n != len(hdata) {
+		fmt.Printf("Write f1 failed %v %d\n", err, n)
+	}
+	
+	err = fd.Fops.Close()
+	if err != 0 {
+		fmt.Printf("Close f1 failed %v\n", err)
+	}
+
+	err = Fs_sync()
+	if err != 0 {
+		fmt.Printf("Sync failed %v\n", err)
+	}
+
 }
 

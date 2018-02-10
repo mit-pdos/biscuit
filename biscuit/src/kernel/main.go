@@ -147,46 +147,6 @@ func (nb *_nilbuf_t) Totalsz() int {
 
 var zeroubuf = &_nilbuf_t{}
 
-// helper type which kernel code can use as userio_i, but is actually a kernel
-// buffer (i.e. reading an ELF header from the file system for exec(2)).
-type fakeubuf_t struct {
-	fbuf	[]uint8
-	off	int
-	len	int
-}
-
-func (fb *fakeubuf_t) fake_init(buf []uint8) {
-	fb.fbuf = buf
-	fb.len = len(fb.fbuf)
-}
-
-func (fb *fakeubuf_t) Remain() int {
-	return len(fb.fbuf)
-}
-
-func (fb *fakeubuf_t) Totalsz() int {
-	return fb.len
-}
-
-func (fb *fakeubuf_t) _tx(buf []uint8, tofbuf bool) (int, common.Err_t) {
-	var c int
-	if tofbuf {
-		c = copy(fb.fbuf, buf)
-	} else {
-		c = copy(buf, fb.fbuf)
-	}
-	fb.fbuf = fb.fbuf[c:]
-	return c, 0
-}
-
-func (fb *fakeubuf_t) Uioread(dst []uint8) (int, common.Err_t) {
-	return fb._tx(dst, false)
-}
-
-func (fb *fakeubuf_t) Uiowrite(src []uint8) (int, common.Err_t) {
-	return fb._tx(src, true)
-}
-
 
 
 // a circular buffer that is read/written by userspace. not thread-safe -- it
@@ -1553,7 +1513,7 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf := fs.MkFS(physmem, ahci, console)
+	rf := fs.MkFS(blockmem, ahci, console)
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)

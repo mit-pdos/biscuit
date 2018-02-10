@@ -14,7 +14,7 @@ var superb		superblock_t
 
 var cons common.Cons_i
 
-func MkFS(mem common.Page_i, disk common.Disk_i, console common.Cons_i) *common.Fd_t {
+func MkFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) *common.Fd_t {
 
 	cons = console
 	

@@ -2,13 +2,17 @@ package common
 
 import "sync"
 import "fmt"
-import "unsafe"
 
-const bdev_debug = false
+const bdev_debug = true
 
 // If you change this, you must change corresponding constants in mkbdisk.py,
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE=4096
+
+type Blockmem_i interface {
+	Alloc() (Pa_t, *Bytepg_t, bool)
+	Free(Pa_t)
+}
 
 type Bdev_block_t struct {
 	sync.Mutex
@@ -16,7 +20,7 @@ type Bdev_block_t struct {
 	Pa      Pa_t
 	Data	*Bytepg_t
 	Name    string
-	Mem     Page_i
+	Mem     Blockmem_i
 	Disk    Disk_i
 }
 
@@ -55,19 +59,13 @@ func (blk *Bdev_block_t) Key() int {
 
 func (blk *Bdev_block_t) Evict() {
 	if bdev_debug {
-		fmt.Printf("evict: block %v %#x %v\n", blk.Block, blk.Pa, blk.Mem.Refcnt(blk.Pa))
+		fmt.Printf("evict: block %v %#x\n", blk.Block, blk.Pa)
 	}
-	blk.free_page()
+	blk.Mem.Free(blk.Pa)
 }
 
 func (blk *Bdev_block_t) Evictnow() bool {
 	return false
-}
-
-func MkBlock_newpage(block int, s string, mem Page_i, d Disk_i) *Bdev_block_t {
-	b := MkBlock(block, Pa_t(0), s, mem, d)
-	b.New_page()
-	return b
 }
 
 func (b *Bdev_block_t) Write() {
@@ -111,28 +109,32 @@ func (b *Bdev_block_t) Read() {
 }
 
 func (blk *Bdev_block_t) New_page() {
-	_, pa, ok := blk.Mem.Refpg_new()
+	pa, d, ok := blk.Mem.Alloc()
 	if !ok {
 		panic("oom during bdev.new_page")
 	}
 	blk.Pa = pa
-	blk.Data = (*Bytepg_t)(unsafe.Pointer(blk.Mem.Dmap(pa)))
-	blk.Mem.Refup(blk.Pa)
+	blk.Data = d
 }
 
-func MkBlock(block int, pa Pa_t, s string, mem Page_i, d Disk_i) *Bdev_block_t {
+func MkBlock_newpage(block int, s string, mem Blockmem_i, d Disk_i) *Bdev_block_t {
+	b := MkBlock(block, s, mem, d)
+	b.New_page()
+	return b
+}
+
+func MkBlock(block int, s string, mem Blockmem_i, d Disk_i) *Bdev_block_t {
 	b := &Bdev_block_t{};
 	b.Block = block
-	b.Pa = pa
-	b.Data = (*Bytepg_t)(unsafe.Pointer(mem.Dmap(pa)))
+	b.Pa = Pa_t(0)
+	b.Data = nil
 	b.Name = s
 	b.Mem = mem
 	b.Disk = d
 	return b
 }
 
-
 func (blk *Bdev_block_t) free_page() {
-	blk.Mem.Refdown(blk.Pa)
+	blk.Mem.Free(blk.Pa)
 }
 

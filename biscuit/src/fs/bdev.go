@@ -35,11 +35,11 @@ var Bcache = bcache_t{}
 
 type bcache_t struct {
 	refcache  *refcache_t
-	mem common.Page_i
+	mem common.Blockmem_i
 	disk common.Disk_i
 }
 
-func mkBcache(mem common.Page_i, disk common.Disk_i) {
+func mkBcache(mem common.Blockmem_i, disk common.Disk_i) {
 	Bcache.mem = mem
 	Bcache.disk = disk
 	Bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
@@ -178,7 +178,7 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 		if bdev_debug {
 			fmt.Printf("bref fill %v %v\n", blk, s)
 		}
-		buf := common.MkBlock(blk, common.Pa_t(0), s, Bcache.mem, Bcache.disk)
+		buf := common.MkBlock(blk, s, Bcache.mem, Bcache.disk)
 		ref.obj = buf
 		ref.valid = true
 		created = true
@@ -189,7 +189,7 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 	return b, created, err
 }
 
-func bdev_test(mem common.Page_i, disk common.Disk_i) {
+func bdev_test(mem common.Blockmem_i, disk common.Disk_i) {
 	return
 	
 	fmt.Printf("disk test\n")
