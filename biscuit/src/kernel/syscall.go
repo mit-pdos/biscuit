@@ -17,7 +17,6 @@ import "fs"
 type syscall_t struct {
 }
 var sys = &syscall_t{}
-var sysi = sys
 
 func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int {
 
@@ -171,7 +170,6 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 type console_t struct {
 }
 var console = &console_t{}
-var consi = console
 
 func (c *console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
 	sz := ub.Remain()

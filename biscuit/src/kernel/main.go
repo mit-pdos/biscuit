@@ -1560,7 +1560,7 @@ func main() {
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := common.Proc_new(cmd, rf, defaultfds, sysi)
+		p, ok := common.Proc_new(cmd, rf, defaultfds, sys)
 		if !ok {
 			panic("silly sysprocs")
 		}

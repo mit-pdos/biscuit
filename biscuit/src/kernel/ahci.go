@@ -22,9 +22,6 @@ const ahci_debug = false
 // - CMD: http://www.t13.org/documents/uploadeddocuments/docs2007/d1699r4a-ata8-acs.pdf
 //
 
-
-//
-
 var ahci common.Disk_i
 
 // returns true if start is asynchronous

@@ -28,10 +28,10 @@ type buf_t struct {
 }
 
 type log_t struct {
-	log		[]*common.Bdev_block_t       // in-memory log
-	logpresent      map[int]bool          // enable quick check to see if block is in log
+	log		[]*common.Bdev_block_t // in-memory log
+	logpresent      map[int]bool           // enable quick check to see if block is in log
 	absorb          map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
-	ordered         []*common.Bdev_block_t       // slice of ordered blocks
+	ordered         []*common.Bdev_block_t // slice of ordered blocks
 	orderedpresent  map[int]bool          // enable quick check so see if block is in ordered
 	memhead		int                   // head of the log in memory
 	diskhead        int                   // head of the log on disk 
