@@ -44,7 +44,7 @@ var Syslimit = Syslimit_t {
 	Dirents:	1 << 20,
 	Pipes:		1e4,
 	// 8GB of block pages
-        Blocks:         1000, // 100000, // 1 << 21,
+        Blocks:         20000, // 100000, // 1 << 21,
 }
 
 func (s *Sysatomic_t) _aptr() *int64 {
