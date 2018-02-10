@@ -74,15 +74,11 @@ type mem_t struct {
 }
 
 func (mem mem_t) Refpg_new() (*common.Pg_t, common.Pa_t, bool) {
-	// p_pg := &bytecommon.Pg_t{}
-	// r := (*pa_t)(unsafe.Pointer(&p_pg))
-	// printf("p_pg = %p r = %p\n", &_pgr)
 	return nil, 0, true
 }
 
 func (mem mem_t) Dmap(p common.Pa_t) *common.Pg_t {
 	r := (*common.Pg_t)(unsafe.Pointer(p))
-	fmt.Printf("r = %p\n", r)
 	return r
 }
 
@@ -97,19 +93,30 @@ func (mem mem_t) Refdown(p_pg common.Pa_t) bool {
 	return false
 }
 
+type console_t struct {
+}
+var c console_t
+
+func (c console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
+	return -1, 0
+}
+
+func (c console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) {
+	return 0, 0
+}
 
 //
 // Test
 //
 
 func TestFS(*testing.T) {
-	f, err := os.Open("go.img")
+	f, err := os.Open("../../go.img")
 	if err != nil {
 		panic("couldn't open disk image\n")
 	}
 	ahci.f = f
 	mem := mem_t{}
 	fmt.Printf("testFS")
-	_ = MkFS(mem, ahci)
+	_ = MkFS(mem, ahci, c)
 }
 

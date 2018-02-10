@@ -197,7 +197,6 @@ func (c *console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t)
 	return len(big), 0
 }
 
-
 func _fd_read(proc *common.Proc_t, fdn int) (*common.Fd_t, common.Err_t) {
 	fd, ok := proc.Fd_get(fdn)
 	if !ok {
