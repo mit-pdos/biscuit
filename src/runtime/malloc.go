@@ -81,6 +81,7 @@
 package runtime
 
 import (
+	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
 )
@@ -537,6 +538,19 @@ func (c *mcache) nextFree(sizeclass uint8) (v gclinkptr, s *mspan, shouldhelpgc 
 	return
 }
 
+func _takecredit(n int64) {
+	if hackmode == 0 {
+		return
+	}
+
+	g := getg()
+	g.res.credit -= n
+	if g.res.credit < 0 {
+		atomic.Xadd64(&nocreds, 1)
+		g.res.credit = 0
+	}
+}
+
 // Allocate an object of size bytes.
 // Small objects are allocated from the per-P cache's free lists.
 // Large objects (> 32 kB) are allocated straight from the heap.
@@ -554,6 +568,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		if typ != nil {
 			align = uintptr(typ.align)
 		}
+		_takecredit(int64(size))
 		return persistentalloc(size, align, &memstats.other_sys)
 	}
 
@@ -640,6 +655,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 				c.local_tinyallocs++
 				mp.mallocing = 0
 				releasem(mp)
+				_takecredit(int64(size))
 				return x
 			}
 			// Allocate a new maxTinySize block.
@@ -687,6 +703,8 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		x = unsafe.Pointer(s.base())
 		size = s.elemsize
 	}
+
+	_takecredit(int64(size))
 
 	var scanSize uintptr
 	if noscan {

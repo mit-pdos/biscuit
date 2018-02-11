@@ -3150,6 +3150,65 @@ func Setheap(n int) {
 	heapminimum = uint64(n)
 }
 
+// the units of maxheap and rescredit is bytes
+var maxheap int64 = 1 << 30
+var rescredit int64 = maxheap
+
+var lastswept	int64
+
+var Printres bool
+
+var nocreds uint64
+
+func Setmaxheap(n int) {
+	// XXX if less than last maxheap, make sure the difference is no larger
+	// than available reservation
+	maxheap = int64(n)
+}
+
+func Memreserve(_n int) bool {
+	want := int64(_n)
+	g := getg()
+	if g.res.credit != 0 {
+		pmsg("inconsistent state\n")
+	}
+	for {
+		v := atomic.Loadint64(&rescredit)
+		if want > v {
+			//if Printres {
+			//	print("failed to res ", want)
+			//}
+			return false
+		}
+		if atomic.Cas64((*uint64)(unsafe.Pointer(&rescredit)), uint64(v), uint64(v - want)) {
+			g.res.credit = want
+			g.res.got = g.res.credit
+			//if Printres {
+			//	print("took ", want)
+			//}
+			return true
+		}
+	}
+}
+
+func Memunres() {
+	g := getg()
+	if g.res.credit == 0 {
+		pmsg("No credit?\n")
+	}
+	left := g.res.credit
+	//if Printres && left != g.res.got {
+	//	print("used ", g.res.got - left)
+	//}
+	g.res.credit = 0
+	g.res.got = 0
+	if left < 0 {
+		pmsg("Give negative\n")
+		return
+	}
+	atomic.Xadd64((*uint64)(unsafe.Pointer(&rescredit)), left)
+}
+
 //go:nosplit
 //go:nowritebarrierrec
 func setsig(i uint32, fn uintptr) {

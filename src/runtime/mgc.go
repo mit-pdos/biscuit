@@ -1725,6 +1725,31 @@ func gcMark(start_time int64) {
 
 	cachestats()
 
+	// XXX this increases the credit by the number of swept bytes from the
+	// previous completed GC, not the bytes that will be swept this GC...
+	if hackmode != 0 {
+		// largefree and nsmallfree are updated via cachestats() and
+		// are totals over all GCs
+		var swept int64
+		swept += int64(mheap_.largefree)
+		for i := 0; i < _NumSizeClasses; i++ {
+			esz := int64(class_to_size[i])
+			t := esz * int64(mheap_.nsmallfree[i])
+			swept += t
+			if t < 0 || swept < 0 {
+				throw("signed overflow")
+			}
+		}
+		newcredit := swept - lastswept
+		lastswept = swept
+
+		rescredit += newcredit
+		nc := atomic.Xchg64(&nocreds, 0)
+		if Printres {
+			print("rescredit=", rescredit, " new=", newcredit, " nocreds=", nc, "\n")
+		}
+	}
+
 	// Update the marked heap stat.
 	memstats.heap_marked = work.bytesMarked
 
