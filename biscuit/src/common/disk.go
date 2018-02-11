@@ -3,7 +3,7 @@ package common
 import "sync"
 import "fmt"
 
-const bdev_debug = true
+const bdev_debug = false
 
 // If you change this, you must change corresponding constants in mkbdisk.py,
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
