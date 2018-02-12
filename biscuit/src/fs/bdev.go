@@ -31,7 +31,7 @@ const bdev_debug = false
 // interrupt handler).
 //
 
-var Bcache = bcache_t{}
+var Bcache *bcache_t
 
 type bcache_t struct {
 	refcache  *refcache_t
@@ -40,6 +40,7 @@ type bcache_t struct {
 }
 
 func mkBcache(mem common.Blockmem_i, disk common.Disk_i) {
+	Bcache = &bcache_t{}
 	Bcache.mem = mem
 	Bcache.disk = disk
 	Bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)

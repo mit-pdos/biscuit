@@ -19,7 +19,7 @@ const log_debug = false
 // guarantee that it performs no more than maxblkspersys logged writes in an
 // operation, to ensure that its operation will fit in the log.
 
-var fslog	= log_t{}
+var fslog *log_t
 var loglen      = 0    // for marshalling/unmarshalling
 
 type buf_t struct {
@@ -161,12 +161,13 @@ func mkLog(logstart, loglen int, disk common.Disk_i) common.Err_t {
 	if memfs {
 		return 0
 	}
+	fslog = &log_t{}
 	fslog.init(logstart, loglen, disk)
 	err := fslog.recover()
 	if err != 0 {
 		return err
 	}
-	go log_daemon(&fslog)
+	go log_daemon(fslog)
 	return 0
 }
 

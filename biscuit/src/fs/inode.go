@@ -1052,9 +1052,10 @@ type icache_t struct {
 }
 
 // inode refcache
-var icache = icache_t{}
+var icache *icache_t
 
 func mkIcache() {
+	icache = &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, true)
 }
 
