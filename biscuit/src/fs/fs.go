@@ -78,7 +78,9 @@ func MkFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) *com
 
 func Fs_statistics() string {
 	s := inode_stats()
-	s += fslog.Stats()
+	if !memfs {
+		s += fslog.Stats()
+	}
 	s += ialloc.Stats()
 	s += balloc.Stats()
 	s += Bcache.Stats()
