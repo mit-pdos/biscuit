@@ -8,13 +8,14 @@ import "io"
 import "encoding/json"
 import "common"
 
+var diskimg = "../../go.img"
 
 //
 //  trace file of writes and syncs
 //
 
 
-type trace_t struct {
+type tracef_t struct {
 	file *os.File
 	enc *json.Encoder
 }
@@ -25,8 +26,12 @@ type record_t struct {
 	BlkData []byte
 }
 
-func mkTrace() *trace_t {
-	t := &trace_t{}
+type trace_t []record_t
+type order_t []int
+type orders_t []order_t
+
+func mkTrace() *tracef_t {
+	t := &tracef_t{}
 	f, uerr := os.Create("trace.json")
 	if uerr != nil {
 		panic(uerr)
@@ -36,7 +41,25 @@ func mkTrace() *trace_t {
 	return t
 }
 
-func (t *trace_t) write(n int, v *common.Bytepg_t) {
+func readTrace(p string) []record_t {
+	res := make([]record_t, 0)
+	f, uerr := os.Open("trace.json")
+	if uerr != nil {
+		panic(uerr)
+	}
+	dec := json.NewDecoder(f)
+	for {
+		var r record_t
+		if err := dec.Decode(&r); err != nil {
+			break
+		}
+		res = append(res, r)
+		
+	}
+	return res
+}	
+
+func (t *tracef_t) write(n int, v *common.Bytepg_t) {
 	r := record_t{}
 	r.BlkNo = n
 	r.Cmd = "write"
@@ -49,7 +72,7 @@ func (t *trace_t) write(n int, v *common.Bytepg_t) {
         }
 }
 
-func (t  *trace_t) sync() {
+func (t  *tracef_t) sync() {
 	r := record_t{}
 	r.BlkNo = 0
 	r.Cmd = "sync"
@@ -59,7 +82,7 @@ func (t  *trace_t) sync() {
 }
 
 
-func (t *trace_t) close() {
+func (t *tracef_t) close() {
 	t.file.Sync()
 	t.file.Close()
 }
@@ -70,7 +93,7 @@ func (t *trace_t) close() {
 
 type ahci_disk_t struct {
 	f *os.File
-	t *trace_t
+	t *tracef_t
 }
 
 func mkDisk(d string, doTrace bool) *ahci_disk_t {
@@ -354,30 +377,30 @@ func doTest(t *testing.T) {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
 	
-	e = mkDir("d0")
-	if e != 0 {
-		t.Fatalf("Mkdir %v failed", "d0")
-	}
+	// e = mkDir("d0")
+	// if e != 0 {
+	// 	t.Fatalf("Mkdir %v failed", "d0")
+	// }
 
-	e = mkDir("d0/d1")
-	if e != 0 {
-		t.Fatalf("Mkdir %v failed", "d1")
-	}
+	// e = mkDir("d0/d1")
+	// if e != 0 {
+	// 	t.Fatalf("Mkdir %v failed", "d1")
+	// }
 
-	e = doRename("d0/d1", "e0")
-	if e != 0 {
-		t.Fatalf("Rename failed")
-	}
+	// e = doRename("d0/d1", "e0")
+	// if e != 0 {
+	// 	t.Fatalf("Rename failed")
+	// }
 	
-	e = doAppend("f1")
-	if e != 0 {
-		t.Fatalf("Append failed")
-	}
+	// e = doAppend("f1")
+	// if e != 0 {
+	// 	t.Fatalf("Append failed")
+	// }
 	
-	e = doUnlink("f2")
-	if e != 0 {
-		t.Fatalf("Unlink failed")
-	}
+	// e = doUnlink("f2")
+	// if e != 0 {
+	// 	t.Fatalf("Unlink failed")
+	//}
 }
 
 
@@ -390,29 +413,30 @@ func doCheck(t *testing.T) {
 	if !ok {
 		t.Fatalf("f1 not present")
 	}
-	if st.Size() != 1024 {
-		t.Fatalf("f1 wrong size")
+	if st.Size() != 512 {    // 1024
+	 	t.Fatalf("f1 wrong size")
 	}
-	st, ok = res["f2"]
-	if ok {
-		t.Fatalf("f2 present")
-	}
-	st, ok = res["d0"]
-	if !ok {
-		t.Fatalf("d0 not present")
-	}
-	st, ok = res["e0"]
-	if !ok {
-		t.Fatalf("e0 not present")
-	}
-	res, e = doLs("/d0")
-	if e != 0 {
-		t.Fatalf("doLs d0 failed")
-	}
-	st, ok = res["e0"]
-	if ok {
-		t.Fatalf("e0 present in d0")
-	}
+	
+	// st, ok = res["f2"]
+	// if ok {
+	// 	t.Fatalf("f2 present")
+	// }
+	// st, ok = res["d0"]
+	// if !ok {
+	// 	t.Fatalf("d0 not present")
+	// }
+	// st, ok = res["e0"]
+	// if !ok {
+	// 	t.Fatalf("e0 not present")
+	// }
+	// res, e = doLs("/d0")
+	// if e != 0 {
+	// 	t.Fatalf("doLs d0 failed")
+	// }
+	// st, ok = res["e0"]
+	// if ok {
+	// 	t.Fatalf("e0 present in d0")
+	// }
 }
 
 func copyFileContents(src, dst string) (err error) {
@@ -438,10 +462,17 @@ func copyFileContents(src, dst string) (err error) {
     return
 }
 
+func check(t *testing.T, d string) {
+	fmt.Printf("reboot and check %v ...\n", d)
+	ahci := mkDisk(d, false)
+	_ = MkFS(blockmem, ahci, c)
+	doCheck(t)
+	ahci.close()
+}
+
 func TestFS(t *testing.T) {
-	src := "../../go.img"
-	dst := "disk.img"
-	copyFileContents(src, dst)
+	dst := "tmp.img"
+	copyFileContents(diskimg, dst)
 
 	ahci := mkDisk(dst, true)
 	
@@ -451,19 +482,140 @@ func TestFS(t *testing.T) {
 	doTest(t)
 	ahci.close()
 
-	fmt.Printf("reboot and check %v ...\n", dst)
-	ahci = mkDisk(dst, false)
-	_ = MkFS(blockmem, ahci, c)
-	doCheck(t)
-	ahci.close()
+	check(t, dst)
 }
 
-func TestCheck(t *testing.T) {
-	dst := "disk.img"
+func genOrder(blks []int, o order_t, r orders_t) orders_t {
+	if len(blks) == 0 {
+		// fmt.Printf("find order: %v\n", o)
+		r = append(r, o)
+		return r
+	}
+	// fmt.Printf("genOrder %v %v %v\n", blks, o, r)
+	for i, v := range(blks) {
+		t := make([]int, len(blks))
+		copy(t, blks)
+		t = append(t[0:i], t[i+1:]...)
+		o1 := append(o, v)
+		r = genOrder(t, o1, r)
+	}
+	return r
+}
+
+func genOrders(blks []int) orders_t {
+	r := make(orders_t, 0)
+	o := make(order_t, 0)
+	r = genOrder(blks, o, r)
+	// fmt.Printf("r=%v\n", r)
+	return r
+}
+
+func printTrace(t trace_t, start int, end int) {
+	fmt.Printf("trace (%d,%d):\n", start, end)
+	for i, r := range(t) {
+		if i >= start && i < end {
+			fmt.Printf("  %d: %v %v\n", i, r.Cmd, r.BlkNo)
+		}
+	}
+}
+
+func findSync(t trace_t, index int) int {
+	for i := index; i < len(t); i++ {
+		if t[i].Cmd == "sync" {
+			return i
+		}
+	}
+	return -1
+}
+
+func copyRecord(r record_t) record_t {
+	c := record_t{}
+	c.BlkNo = r.BlkNo
+	c.Cmd = r.Cmd
+	c.BlkData = make([]byte, len(r.BlkData))
+	copy(c.BlkData, r.BlkData)
+	return c
+}
+
+func copyTrace(t trace_t, start int, end int) trace_t {
+	sub := make([]record_t, end-start)
+	for i, _ := range(sub) {
+		sub[i] = copyRecord(t[start+i])
+	}
+	return sub
+}
+	
+func permTrace(t trace_t, sub trace_t, index int, o order_t) {
+	// fmt.Printf("o = %v\n", o)
+	for i, j := range(o) {
+		t[index+i] = sub[j]
+		
+	}
+	// printTrace(t, index, index+len(o))
+}
+
+func genDisk(trace trace_t, dst string) {
+	copyFileContents(diskimg, dst)
+	f, uerr := os.OpenFile(dst, os.O_RDWR, 0755)
+	if uerr != nil {
+		panic(uerr)
+	}
+	for _, r := range(trace) {
+		if r.Cmd == "write" {
+			fmt.Printf("update block %v\n", r.BlkNo)
+			f.Seek(int64(r.BlkNo * common.BSIZE), 0)
+			buf := make([]byte, common.BSIZE)
+			for i, _ := range(buf) {
+				buf[i] = byte(r.BlkData[i])
+			}
+			n, err := f.Write(buf)
+			if n != common.BSIZE || err != nil {
+				panic(err)
+			}
+		}
+	}
+	//f.Sync()
+	f.Close()
+}
+
+func applyTrace(trace trace_t, t *testing.T) {
+	fmt.Printf("apply trace:\n")
+	printTrace(trace, 0, len(trace))
+	
+	dst := "tmp.img"
+	genDisk(trace, dst)
+	
 	fmt.Printf("reboot and check %v ...\n", dst)
 	ahci := mkDisk(dst, false)
 	_ = MkFS(blockmem, ahci, c)
 	doCheck(t)
 	ahci.close()
+}
+
+func genTraces(trace trace_t, index int, t *testing.T) {
+	if index >= len(trace) {
+		applyTrace(trace, t)
+		return
+	}
+	n := findSync(trace, index)
+	so := make([]int, n-index)
+	for i := 0; i < len(so); i++ {
+		so[i] = i
+	}
+	orders := genOrders(so)
+	subtrace := copyTrace(trace, index, n)
+	// printTrace(subtrace, 0, len(subtrace))
+	for _, o := range(orders) {
+		permTrace(trace, subtrace, index, o)
+		genTraces(trace, n+1, t)
+	}
+}
+	
+func TestTraces(t *testing.T) {
+	fmt.Printf("testTraces ...\n")
+	
+	trace := readTrace("trace.json")
+	printTrace(trace, 0, len(trace))
+	genTraces(trace, 0, t)
 }
 
