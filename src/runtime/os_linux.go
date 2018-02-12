@@ -3172,6 +3172,20 @@ func Memreserve(_n int) bool {
 	if g.res.credit != 0 {
 		pmsg("inconsistent state\n")
 	}
+	return _restake(want)
+}
+
+func Memresadd(_n int) bool {
+	want := int64(_n)
+	g := getg()
+	if g.res.credit <= 0 {
+		pmsg("no res?\n")
+	}
+	return _restake(want)
+}
+
+func _restake(want int64) bool {
+	g := getg()
 	for {
 		v := atomic.Loadint64(&rescredit)
 		if want > v {
@@ -3181,8 +3195,8 @@ func Memreserve(_n int) bool {
 			return false
 		}
 		if atomic.Cas64((*uint64)(unsafe.Pointer(&rescredit)), uint64(v), uint64(v - want)) {
-			g.res.credit = want
-			g.res.got = g.res.credit
+			g.res.credit += want
+			g.res.got += want
 			//if Printres {
 			//	print("took ", want)
 			//}
@@ -3206,7 +3220,9 @@ func Memunres() {
 		pmsg("Give negative\n")
 		return
 	}
-	atomic.Xadd64((*uint64)(unsafe.Pointer(&rescredit)), left)
+	if left > 0 {
+		atomic.Xadd64((*uint64)(unsafe.Pointer(&rescredit)), left)
+	}
 }
 
 //go:nosplit
