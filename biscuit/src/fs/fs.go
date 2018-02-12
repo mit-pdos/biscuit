@@ -5,7 +5,7 @@ import "sync"
 import "strconv"
 import "common"
 
-const memfs = false     // in-memory file system?
+const memfs = true     // in-memory file system?
 const fs_debug = false
 const iroot = 0
 
@@ -13,10 +13,13 @@ var superb_start	int
 var superb		superblock_t
 
 var cons common.Cons_i
+var ahci common.Disk_i
 
 func MkFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) *common.Fd_t {
 
+	// XXX it would be nice to avoid these goals ...
 	cons = console
+	ahci = disk
 	
 	if memfs {
 		fmt.Printf("Using MEMORY FS\n")
@@ -85,12 +88,9 @@ func Fs_statistics() string {
 	s += balloc.Stats()
 	s += Bcache.Stats()
 	s += icache.Stats()
-	// s += ahci.Stats()
+	s += ahci.Stats()
 	return s
 }
-
-
-// a type for an inum
 
 func Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	fslog.Op_begin("Fs_link")
