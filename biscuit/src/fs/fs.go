@@ -5,7 +5,7 @@ import "sync"
 import "strconv"
 import "common"
 
-const memfs = true     // in-memory file system?
+const memfs = false     // in-memory file system?
 const fs_debug = false
 const iroot = 0
 
