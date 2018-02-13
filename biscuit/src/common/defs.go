@@ -72,7 +72,7 @@ const(
 
 
 	IRQ_BASE	= 32
-
+	
 	IRQ_KBD		= 1
 	IRQ_COM1	= 4
 	INT_KBD		= IRQ_BASE + IRQ_KBD

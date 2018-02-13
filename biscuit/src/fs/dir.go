@@ -210,11 +210,11 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 		noff := newoff + NDBYTES*i
 		idm._deaddempty(noff)  
 	}
-
+	
 	b.Unlock()
 	fslog.Write(b)  // log empty dir block, later writes absorpt it hopefully
 	Bcache.Relse(b, "_denextempty")
-
+	
 	idm.size = newsz
 	return newoff, 0
 }
@@ -244,7 +244,7 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 	b.Unlock()
 	fslog.Write(b)
 	Bcache.Relse(b, "_deinsert")
-
+	
 	icd := icdent_t{noff, inum}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.dentc

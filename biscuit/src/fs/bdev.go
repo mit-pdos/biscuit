@@ -58,7 +58,7 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_bl
 	if err != 0 {
 		return nil, err
 	}
-
+	
 	if created {
 		b.New_page()
 		b.Read() // fill in new bdev_cache entry
@@ -192,7 +192,7 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 
 func bdev_test(mem common.Blockmem_i, disk common.Disk_i) {
 	return
-
+	
 	fmt.Printf("disk test\n")
 
 	const N = 3

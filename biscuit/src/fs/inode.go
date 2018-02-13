@@ -631,7 +631,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 			if err != 0 {
 				return 0, err
 			}
-
+			
 			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
 			Bcache.Relse(dindblk, "dindblk")
 
@@ -739,7 +739,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 			fmt.Printf("_iread c %v isz %v remain %v offset %v m %v s %v s+m %v\n",
 				c, isz, dst.Remain(), offset, m, s, s+m)
 		}
-
+		
 		wrote, err := dst.Uiowrite(src)
 		c += wrote
 		offset += wrote
@@ -828,7 +828,7 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 }
 
 func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.Inum_t, common.Err_t) {
-
+	
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")
 	}
@@ -845,7 +845,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 	}
 
 	istats.nicreate++
-
+	
 	// allocate new inode
 	newinum, err := ialloc.Ialloc()
 	newbn := ialloc.Iblock(newinum)
@@ -861,7 +861,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 	if fs_debug {
 		fmt.Printf("ialloc: %v %v %v\n", newbn, newioff, newinum)
 	}
-
+	
 	newinode := &inode_t{newiblk, newioff}
 	newinode.w_itype(nitype)
 	newinode.w_linkcount(1)
@@ -944,7 +944,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: %d\n", idm.inum)
 	}
-
+	
 	allb := make([]int, 0, 10)
 	add := func(blkno int) {
 		if blkno != 0 {
@@ -997,7 +997,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		}
 		Bcache.Relse(blk, "dindno")
 	}
-
+	
 	iblk, err := idm.idibread()
 	if err != 0 {
 		return err
@@ -1094,7 +1094,7 @@ func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.
 		}
 		ref.valid = true
 	}
-
+	
 	return ref.obj.(*imemnode_t), err
 }
 

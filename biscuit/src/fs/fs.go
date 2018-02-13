@@ -20,14 +20,14 @@ func MkFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) *com
 	// XXX it would be nice to avoid these goals ...
 	cons = console
 	ahci = disk
-
+	
 	if memfs {
 		fmt.Printf("Using MEMORY FS\n")
 	}
 
 	mkBcache(mem, disk)
 	mkIcache()
-
+	
 	// find the first fs block; the build system installs it in block 0 for
 	// us
 	b, err := Bcache.Get_fill(0, "fsoff", false)
@@ -176,7 +176,7 @@ func Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 	iref_lockall([]*imemnode_t{par, child})
 	defer par.iunlock_refdown("fs_unlink_par")
 	defer child.iunlock_refdown("fs_unlink_child")
-
+	
 	// recheck if child still exists (same name, same inum), since some
 	// other thread may have modifed par but par and child won't disappear
 	// because we have references to them.
@@ -222,7 +222,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	defer fslog.Op_end()
 
 	istats.nrename++
-
+	
 	if fs_debug {
 		fmt.Printf("fs_rename: src %v dst %v %v\n", oldp, newp, cwd)
 	}
@@ -258,7 +258,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		icache.Refdown(ochild, "fs_rename_ochild")
 		return err
 	}
-
+	
 	// verify that ochild is not an ancestor of npar, since we would
 	// disconnect ochild subtree from root.  it is safe to do without
 	// holding locks because unlink cannot modify the path to the root by
@@ -303,7 +303,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		} else {
 			inodes = []*imemnode_t{opar, ochild, npar}
 		}
-
+		
 		locked = iref_lockall(inodes)
 		// defers are run last-in-first-out
 		for _, v := range inodes {
@@ -313,7 +313,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		for _, v := range locked {
 			defer v.iunlock("rename")
 		}
-
+		
 		// check if the tree is still the same. an unlink or link may
 		// have modified the tree.
 		childi, err := opar.ilookup(ofn) 
@@ -324,7 +324,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		if childi != ochild.inum {
 			return -common.ENOENT
 		}
-
+		
 		childi, err = npar.ilookup(nfn)
 		// it existed before and still exists
 		if newexists && err == 0 && childi == nchild.inum { 
@@ -368,7 +368,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		return err
 	}
 	defer Bcache.Relse(b1, "probe_insert")
-
+	
 	b2, err := opar.probe_unlink(ofn)
 	if err != 0 {
 		return err
@@ -596,7 +596,7 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 	defer fo.Unlock()
 
 	istats.nlseek++
-
+	
 	switch whence {
 	case common.SEEK_SET:
 		fo.offset = off
@@ -1201,7 +1201,7 @@ func Fs_close(priv common.Inum_t) common.Err_t {
 	defer fslog.Op_end()
 
 	istats.nclose++
-
+	
 	if fs_debug {
 		fmt.Printf("Fs_close: %v\n", priv)
 	}
@@ -1369,7 +1369,7 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	var blkn int
 	var oct int
 	var err common.Err_t
-
+	
 	// 0 is free, 1 is allocated
 	for b := 0; b < alloc.freelen && !found; b++ {
 		i := (alloc.lastblk + b) % alloc.freelen
@@ -1427,7 +1427,7 @@ func (alloc *allocater_t) Free(blkno int) common.Err_t {
 	if fs_debug {
 		fmt.Printf("bfree: %v\n", blkno)
 	}
-
+	
 	if blkno < 0 {
 		panic("free bad blockno")
 	}

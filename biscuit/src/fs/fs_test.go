@@ -54,7 +54,7 @@ func readTrace(p string) []record_t {
 			break
 		}
 		res = append(res, r)
-
+		
 	}
 	return res
 }	
@@ -206,7 +206,7 @@ func mkFile(p string) common.Err_t {
 	if err != 0 {
 		fmt.Printf("Fs_open %v failed %v\n", p, err)
 	}
-
+	
 	hdata := make([]uint8, 512)
 	ub := &common.Fakeubuf_t{}
 	ub.Fake_init(hdata)
@@ -216,7 +216,7 @@ func mkFile(p string) common.Err_t {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
-
+	
 	err = fd.Fops.Close()
 	if err != 0 {
 		fmt.Printf("Close %s failed %v\n", p, err)
@@ -268,7 +268,7 @@ func doAppend(p string) common.Err_t {
 		fmt.Printf("Lseek %v failed %v\n", p, err)
 		return err
 	}
-
+	
 	hdata := make([]uint8, 512)
 	ub := &common.Fakeubuf_t{}
 	ub.Fake_init(hdata)
@@ -278,7 +278,7 @@ func doAppend(p string) common.Err_t {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
-
+	
 	err = fd.Fops.Close()
 	if err != 0 {
 		fmt.Printf("Close %s failed %v\n", p, err)
@@ -371,12 +371,12 @@ func doTest(t *testing.T) {
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
 	}
-
+	
 	e = mkFile("f2")
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
-
+	
 	// e = mkDir("d0")
 	// if e != 0 {
 	// 	t.Fatalf("Mkdir %v failed", "d0")
@@ -391,12 +391,12 @@ func doTest(t *testing.T) {
 	// if e != 0 {
 	// 	t.Fatalf("Rename failed")
 	// }
-
+	
 	// e = doAppend("f1")
 	// if e != 0 {
 	// 	t.Fatalf("Append failed")
 	// }
-
+	
 	// e = doUnlink("f2")
 	// if e != 0 {
 	// 	t.Fatalf("Unlink failed")
@@ -416,7 +416,7 @@ func doCheck(t *testing.T) {
 	if st.Size() != 512 {    // 1024
 	 	t.Fatalf("f1 wrong size")
 	}
-
+	
 	// st, ok = res["f2"]
 	// if ok {
 	// 	t.Fatalf("f2 present")
@@ -475,7 +475,7 @@ func TestFS(t *testing.T) {
 	copyFileContents(diskimg, dst)
 
 	ahci := mkDisk(dst, true)
-
+	
 	fmt.Printf("testFS %v ...\n", dst)
 
 	_ = MkFS(blockmem, ahci, c)
@@ -544,12 +544,12 @@ func copyTrace(t trace_t, start int, end int) trace_t {
 	}
 	return sub
 }
-
+	
 func permTrace(t trace_t, sub trace_t, index int, o order_t) {
 	// fmt.Printf("o = %v\n", o)
 	for i, j := range(o) {
 		t[index+i] = sub[j]
-
+		
 	}
 	// printTrace(t, index, index+len(o))
 }
@@ -581,10 +581,10 @@ func genDisk(trace trace_t, dst string) {
 func applyTrace(trace trace_t, t *testing.T) {
 	fmt.Printf("apply trace:\n")
 	printTrace(trace, 0, len(trace))
-
+	
 	dst := "tmp.img"
 	genDisk(trace, dst)
-
+	
 	fmt.Printf("reboot and check %v ...\n", dst)
 	ahci := mkDisk(dst, false)
 	_ = MkFS(blockmem, ahci, c)
@@ -610,10 +610,10 @@ func genTraces(trace trace_t, index int, t *testing.T) {
 		genTraces(trace, n+1, t)
 	}
 }
-
+	
 func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
-
+	
 	trace := readTrace("trace.json")
 	printTrace(trace, 0, len(trace))
 	genTraces(trace, 0, t)
