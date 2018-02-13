@@ -8,11 +8,11 @@ import "runtime"
 import "math/rand"
 
 type Tnote_t struct {
-	alive	bool
+	alive bool
 }
 
 type Threadinfo_t struct {
-	Notes	map[Tid_t]*Tnote_t
+	Notes map[Tid_t]*Tnote_t
 	sync.Mutex
 }
 
@@ -22,66 +22,66 @@ func (t *Threadinfo_t) init() {
 
 // per-process limits
 type Ulimit_t struct {
-	Pages	int
-	Nofile	uint
-	Novma	uint
-	Noproc	uint
+	Pages  int
+	Nofile uint
+	Novma  uint
+	Noproc uint
 }
 
 type Tid_t int
 
 type Proc_t struct {
-	Pid		int
+	Pid int
 	// first thread id
-	tid0		Tid_t
-	Name		string
+	tid0 Tid_t
+	Name string
 
 	// waitinfo for my child processes
-	Mywait		Wait_t
+	Mywait Wait_t
 	// waitinfo of my parent
-	Pwait		*Wait_t
+	Pwait *Wait_t
 
 	// thread tids of this process
-	Threadi		Threadinfo_t
+	Threadi Threadinfo_t
 
 	// lock for vmregion, pmpages, pmap, and p_pmap
-	pgfl		sync.Mutex
+	pgfl sync.Mutex
 
-	Vmregion	Vmregion_t
+	Vmregion Vmregion_t
 
 	// pmap pages
-	Pmap		*Pmap_t
-	P_pmap		Pa_t
+	Pmap   *Pmap_t
+	P_pmap Pa_t
 
 	// mmap next virtual address hint
-	Mmapi		int
+	Mmapi int
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
-	pgfltaken	bool
-	doomed		bool
-	exitstatus	int
+	pgfltaken  bool
+	doomed     bool
+	exitstatus int
 
-	Fds		[]*Fd_t
+	Fds []*Fd_t
 	// where to start scanning for free fds
-	fdstart		int
+	fdstart int
 	// fds, fdstart, nfds protected by fdl
-	Fdl		sync.Mutex
+	Fdl sync.Mutex
 	// number of valid file descriptors
-	nfds		int
+	nfds int
 
-	cwd		*Fd_t
+	cwd *Fd_t
 	// to serialize chdirs
-	Cwdl		sync.Mutex
-	Ulim		Ulimit_t
+	Cwdl sync.Mutex
+	Ulim Ulimit_t
 
 	// this proc's rusage
-	Atime		Accnt_t
+	Atime Accnt_t
 	// total child rusage
-	Catime		Accnt_t
+	Catime Accnt_t
 
 	//
-	syscall         Syscall_i
+	syscall Syscall_i
 }
 
 var Allprocs = make(map[int]*Proc_t, Syslimit.Sysprocs)
@@ -131,7 +131,7 @@ func (p *Proc_t) fd_insert_inner(f *Fd_t, perms int) (int, bool) {
 	if !found {
 		// double size of fd table
 		ol := len(p.Fds)
-		nl := 2*ol
+		nl := 2 * ol
 		if p.Ulim.Nofile != RLIM_INFINITY && nl > int(p.Ulim.Nofile) {
 			nl = int(p.Ulim.Nofile)
 			if nl < ol {
@@ -158,7 +158,7 @@ func (p *Proc_t) fd_insert_inner(f *Fd_t, perms int) (int, bool) {
 
 // returns the fd numbers and success
 func (p *Proc_t) Fd_insert2(f1 *Fd_t, perms1 int,
-   f2 *Fd_t, perms2 int) (int, int, bool) {
+	f2 *Fd_t, perms2 int) (int, int, bool) {
 	p.Fdl.Lock()
 	defer p.Fdl.Unlock()
 	var fd2 int
@@ -262,7 +262,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 	child.Vmregion = parent.Vmregion.copy()
 	parent.Vmregion.iter(func(vmi *Vminfo_t) {
 		start := int(vmi.pgn << PGSHIFT)
-		end := start + int(vmi.pglen << PGSHIFT)
+		end := start + int(vmi.pglen<<PGSHIFT)
 		ashared := vmi.mtype == VSANON
 		fl, ok := ptefork(child.Pmap, parent.Pmap, start, end, ashared)
 		failed = failed || !ok
@@ -281,7 +281,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 		return doflush, true
 	}
 	pte, ok := vmi.ptefor(child.Pmap, rsp)
-	if !ok || *pte & PTE_P == 0 || *pte & PTE_U == 0 {
+	if !ok || *pte&PTE_P == 0 || *pte&PTE_U == 0 {
 		return doflush, true
 	}
 	// sys_pgfault expects pmap to be locked
@@ -292,7 +292,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 	}
 	child.Unlock_pmap()
 	vmi, ok = parent.Vmregion.Lookup(rsp)
-	if !ok ||*pte & PTE_P == 0 || *pte & PTE_U == 0 {
+	if !ok || *pte&PTE_P == 0 || *pte&PTE_U == 0 {
 		panic("child has stack but not parent")
 	}
 	pte, ok = vmi.ptefor(parent.Pmap, rsp)
@@ -309,16 +309,16 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 // only use PTE_U/PTE_W; the page fault handler will install the correct COW
 // flags. perms == 0 means that no mapping can go here (like for guard pages).
 func (p *Proc_t) _mkvmi(mt mtype_t, start, len int, perms Pa_t, foff int,
-    fops Fdops_i, shared bool) *Vminfo_t {
+	fops Fdops_i, shared bool) *Vminfo_t {
 	if len <= 0 {
 		panic("bad vmi len")
 	}
-	if Pa_t(start | len) & PGOFFSET != 0 {
+	if Pa_t(start|len)&PGOFFSET != 0 {
 		panic("start and len must be aligned")
 	}
 	// don't specify cow, present etc. -- page fault will handle all that
 	pm := PTE_W | PTE_COW | PTE_WASCOW | PTE_PS | PTE_PCD | PTE_P | PTE_U
-	if r := perms & pm; r != 0 && r != PTE_U && r != (PTE_W | PTE_U) {
+	if r := perms & pm; r != 0 && r != PTE_U && r != (PTE_W|PTE_U) {
 		panic("bad perms")
 	}
 	ret := &Vminfo_t{}
@@ -344,7 +344,7 @@ func (p *Proc_t) Vmadd_anon(start, len int, perms Pa_t) {
 }
 
 func (p *Proc_t) Vmadd_file(start, len int, perms Pa_t, fops Fdops_i,
-   foff int) {
+	foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, false)
 	p.Vmregion.insert(vmi)
 }
@@ -355,7 +355,7 @@ func (p *Proc_t) Vmadd_shareanon(start, len int, perms Pa_t) {
 }
 
 func (p *Proc_t) Vmadd_sharefile(start, len int, perms Pa_t, fops Fdops_i,
-   foff int) {
+	foff int) {
 	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, true)
 	p.Vmregion.insert(vmi)
 }
@@ -377,7 +377,7 @@ func (p *Proc_t) Mkuserbuf_pool(userva, len int) *Userbuf_t {
 func (p *Proc_t) mkfxbuf() *[64]uintptr {
 	ret := new([64]uintptr)
 	n := uintptr(unsafe.Pointer(ret))
-	if n & ((1 << 4) - 1) != 0 {
+	if n&((1<<4)-1) != 0 {
 		panic("not 16 byte aligned")
 	}
 	*ret = runtime.Fxinit
@@ -389,20 +389,20 @@ func (p *Proc_t) mkfxbuf() *[64]uintptr {
 // due to lack of user pages. p_pg's ref count is increased so the caller can
 // simply Physmem.Refdown()
 func (p *Proc_t) Page_insert(va int, p_pg Pa_t, perms Pa_t,
-   vempty bool) (bool, bool) {
+	vempty bool) (bool, bool) {
 	p.Lockassert_pmap()
 	Physmem.Refup(p_pg)
-	pte, err := pmap_walk(p.Pmap, va, PTE_U | PTE_W)
+	pte, err := pmap_walk(p.Pmap, va, PTE_U|PTE_W)
 	if err != 0 {
 		return false, false
 	}
 	ninval := false
 	var p_old Pa_t
-	if *pte & PTE_P != 0 {
+	if *pte&PTE_P != 0 {
 		if vempty {
 			panic("pte not empty")
 		}
-		if *pte & PTE_U == 0 {
+		if *pte&PTE_U == 0 {
 			panic("replacing kernel page")
 		}
 		ninval = true
@@ -419,8 +419,8 @@ func (p *Proc_t) Page_remove(va int) bool {
 	p.Lockassert_pmap()
 	remmed := false
 	pte := Pmap_lookup(p.Pmap, va)
-	if pte != nil && *pte & PTE_P != 0 {
-		if *pte & PTE_U == 0 {
+	if pte != nil && *pte&PTE_P != 0 {
+		if *pte&PTE_U == 0 {
 			panic("removing kernel page")
 		}
 		p_old := Pa_t(*pte & PTE_ADDR)
@@ -496,7 +496,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		// syscall.
 		refp, _ := _refaddr(p.P_pmap)
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
-		    uintptr(p.P_pmap), fastret, refp)
+			uintptr(p.P_pmap), fastret, refp)
 		fastret = false
 		switch intno {
 		case SYSCALL:
@@ -514,18 +514,18 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		case PGFAULT:
 			faultaddr := uintptr(aux)
 			if !p.pgfault(tid, faultaddr, tf[TF_ERROR]) {
-				fmt.Printf("*** fault *** %v: addr %x, " +
-				    "rip %x. killing...\n", p.Name, faultaddr,
-				    tf[TF_RIP])
-				p.syscall.Sys_exit(p, tid, SIGNALED | Mkexitsig(11))
+				fmt.Printf("*** fault *** %v: addr %x, "+
+					"rip %x. killing...\n", p.Name, faultaddr,
+					tf[TF_RIP])
+				p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(11))
 			}
 		case DIVZERO, GPFAULT, UD:
 			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.Name, intno,
-			    tf[TF_RIP])
-			p.syscall.Sys_exit(p, tid, SIGNALED | Mkexitsig(4))
+				tf[TF_RIP])
+			p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(4))
 		case TLBSHOOT, PERFMASK, INT_KBD, INT_COM1, INT_MSI0,
-		    INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6,
-		    INT_MSI7:
+			INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6,
+			INT_MSI7:
 			// XXX: shouldn't interrupt user program execution...
 		default:
 			panic(fmt.Sprintf("weird trap: %d", intno))
@@ -646,7 +646,7 @@ func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	}
 	ecode := uintptr(PTE_U)
 	needfault := true
-	isp := *pte & PTE_P != 0
+	isp := *pte&PTE_P != 0
 	if k2u {
 		ecode |= uintptr(PTE_W)
 		// XXX how to distinguish between user asking kernel to write
@@ -655,7 +655,7 @@ func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 
 		//isw := *pte & PTE_W != 0
 		//if isp && isw {
-		iscow := *pte & PTE_COW != 0
+		iscow := *pte&PTE_COW != 0
 		if isp && !iscow {
 			needfault = false
 		}
@@ -713,7 +713,7 @@ func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
 	var src []uint8
 	var ok bool
 	for i := 0; i < n; i += len(src) {
-		src, ok = p.Userdmap8_inner(va + i, false)
+		src, ok = p.Userdmap8_inner(va+i, false)
 		if !ok {
 			return 0, false
 		}
@@ -722,7 +722,7 @@ func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
 			l = len(src)
 		}
 		v := Readn(src, l, 0)
-		ret |= v << (8*uint(i))
+		ret |= v << (8 * uint(i))
 	}
 	return ret, true
 }
@@ -735,13 +735,13 @@ func (p *Proc_t) Userwriten(va, n, val int) bool {
 	defer p.Unlock_pmap()
 	var dst []uint8
 	for i := 0; i < n; i += len(dst) {
-		v := val >> (8*uint(i))
-		t, ok := p.Userdmap8_inner(va + i, true)
+		v := val >> (8 * uint(i))
+		t, ok := p.Userdmap8_inner(va+i, true)
 		dst = t
 		if !ok {
 			return false
 		}
-		Writen(dst, n - i, 0, v)
+		Writen(dst, n-i, 0, v)
 	}
 	return true
 }
@@ -758,7 +758,7 @@ func (p *Proc_t) Userstr(uva int, lenmax int) (string, bool, bool) {
 	i := 0
 	var s string
 	for {
-		str, ok := p.Userdmap8_inner(uva + i, false)
+		str, ok := p.Userdmap8_inner(uva+i, false)
 		if !ok {
 			return "", false, false
 		}
@@ -778,7 +778,7 @@ func (p *Proc_t) Userstr(uva int, lenmax int) (string, bool, bool) {
 
 func (p *Proc_t) Usertimespec(va int) (time.Duration, time.Time, Err_t) {
 	secs, ok1 := p.Userreadn(va, 8)
-	nsecs, ok2 := p.Userreadn(va + 8, 8)
+	nsecs, ok2 := p.Userreadn(va+8, 8)
 	var zt time.Time
 	if !ok1 || !ok2 {
 		return 0, zt, -EFAULT
@@ -813,7 +813,7 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 		var uva int
 		// cptr is little-endian
 		for i, b := range cptr {
-			uva = uva | int(uint(b)) << uint(i*8)
+			uva = uva | int(uint(b))<<uint(i*8)
 		}
 		lenmax := 128
 		str, ok, long := p.Userstr(uva, lenmax)
@@ -864,7 +864,7 @@ func (p *Proc_t) K2user_inner(src []uint8, uva int) bool {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		dst, ok := p.Userdmap8_inner(uva + cnt, true)
+		dst, ok := p.Userdmap8_inner(uva+cnt, true)
 		if !ok {
 			return false
 		}
@@ -891,7 +891,7 @@ func (p *Proc_t) User2k_inner(dst []uint8, uva int) bool {
 	p.Lockassert_pmap()
 	cnt := 0
 	for len(dst) != 0 {
-		src, ok := p.Userdmap8_inner(uva + cnt, false)
+		src, ok := p.Userdmap8_inner(uva+cnt, false)
 		if !ok {
 			return false
 		}
@@ -904,7 +904,7 @@ func (p *Proc_t) User2k_inner(dst []uint8, uva int) bool {
 
 func (p *Proc_t) Unusedva_inner(startva, len int) int {
 	p.Lockassert_pmap()
-	if len < 0 || len > 1 << 48 {
+	if len < 0 || len > 1<<48 {
 		panic("weird len")
 	}
 	startva = Rounddown(startva, PGSIZE)
@@ -914,7 +914,7 @@ func (p *Proc_t) Unusedva_inner(startva, len int) int {
 	_ret, _l := p.Vmregion.empty(uintptr(startva), uintptr(len))
 	ret := int(_ret)
 	l := int(_l)
-	if startva > ret && startva < ret + l {
+	if startva > ret && startva < ret+l {
 		ret = startva
 	}
 	return ret
@@ -925,7 +925,7 @@ func (p *Proc_t) Unusedva_inner(startva, len int) int {
 func Uvmfree_inner(pmg *Pmap_t, p_pmap Pa_t, vmr *Vmregion_t) {
 	vmr.iter(func(vmi *Vminfo_t) {
 		start := uintptr(vmi.pgn << PGSHIFT)
-		end := start + uintptr(vmi.pglen << PGSHIFT)
+		end := start + uintptr(vmi.pglen<<PGSHIFT)
 		pmfree(pmg, start, end)
 	})
 }
@@ -938,7 +938,6 @@ func (p *Proc_t) Uvmfree() {
 	// close all open mmap'ed files
 	p.Vmregion.Clear()
 }
-
 
 // terminate a process. must only be called when the process has no more
 // running threads.
@@ -995,8 +994,6 @@ func (p *Proc_t) terminate() {
 	p.Pwait = nil
 }
 
-
-
 // returns false if the number of running threads or unreaped child statuses is
 // larger than noproc.
 func (p *Proc_t) Start_proc(pid int) bool {
@@ -1008,7 +1005,6 @@ func (p *Proc_t) Start_proc(pid int) bool {
 func (p *Proc_t) Start_thread(t Tid_t) bool {
 	return p.Mywait._start(int(t), false, p.Ulim.Noproc)
 }
-
 
 func (p *Proc_t) Closehalf() {
 	fmt.Printf("close half\n")
@@ -1070,12 +1066,12 @@ func Proc_del(pid int) {
 	Proclock.Unlock()
 }
 
-var _deflimits = Ulimit_t {
+var _deflimits = Ulimit_t{
 	// mem limit = 128 MB
 	Pages: (1 << 27) / (1 << 12),
 	//nofile: 512,
 	Nofile: RLIM_INFINITY,
-	Novma: (1 << 8),
+	Novma:  (1 << 8),
 	Noproc: (1 << 10),
 }
 
@@ -1138,7 +1134,6 @@ func Proc_new(name string, cwd *Fd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool
 	return ret, true
 }
 
-
 func (p *Proc_t) Reap_doomed(tid Tid_t) {
 	if !p.doomed {
 		panic("p not doomed")
@@ -1146,10 +1141,9 @@ func (p *Proc_t) Reap_doomed(tid Tid_t) {
 	p.Thread_dead(tid, 0, false)
 }
 
-
 // total number of all threads
 var nthreads int64
-var pid_cur  int
+var pid_cur int
 
 // returns false if system-wide limit is hit.
 func tid_new() (Tid_t, bool) {

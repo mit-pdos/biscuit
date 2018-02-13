@@ -6,8 +6,8 @@ import "time"
 
 type Accnt_t struct {
 	// nanoseconds
-	Userns		int64
-	Sysns		int64
+	Userns int64
+	Sysns  int64
 	// for getting consistent snapshot of both times; not always needed
 	sync.Mutex
 }
@@ -56,8 +56,8 @@ func (a *Accnt_t) To_rusage() []uint8 {
 	words := 4
 	ret := make([]uint8, words*8)
 	totv := func(nano int64) (int, int) {
-		secs := int(nano/1e9)
-		usecs := int((nano%1e9)/1000)
+		secs := int(nano / 1e9)
+		usecs := int((nano % 1e9) / 1000)
 		return secs, usecs
 	}
 	off := 0

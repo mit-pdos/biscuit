@@ -7,7 +7,7 @@ func Rounddown(v int, b int) int {
 }
 
 func Roundup(v int, b int) int {
-	return Rounddown(v + b - 1, b)
+	return Rounddown(v+b-1, b)
 }
 
 func Mkdev(_maj, _min int) uint {
@@ -16,7 +16,7 @@ func Mkdev(_maj, _min int) uint {
 	if min > 0xff {
 		panic("bad minor")
 	}
-	m := maj << 8 | min
+	m := maj<<8 | min
 	return uint(m << 32)
 }
 

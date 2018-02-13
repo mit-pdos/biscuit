@@ -1,23 +1,23 @@
 package common
 
 type Rbc_t int
+
 const (
-	RED	Rbc_t = iota
-	BLACK	Rbc_t = iota
+	RED   Rbc_t = iota
+	BLACK Rbc_t = iota
 )
 
 type Rbh_t struct {
-	root	*Rbn_t
+	root *Rbn_t
 }
 
 type Rbn_t struct {
-	p	*Rbn_t
-	r	*Rbn_t
-	l	*Rbn_t
-	c	Rbc_t
-	vmi	Vminfo_t
+	p   *Rbn_t
+	r   *Rbn_t
+	l   *Rbn_t
+	c   Rbc_t
+	vmi Vminfo_t
 }
-
 
 func (h *Rbh_t) _rol(nn *Rbn_t) {
 	tmp := nn.r
@@ -161,7 +161,7 @@ func (h *Rbh_t) _rembalance(par, nn *Rbn_t) {
 				tmp = par.r
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -193,7 +193,7 @@ func (h *Rbh_t) _rembalance(par, nn *Rbn_t) {
 				tmp = par.l
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -231,7 +231,7 @@ func (h *Rbh_t) remove(nn *Rbn_t) *Rbn_t {
 	var col Rbc_t
 	if nn.l == nil {
 		child = nn.r
-	} else if nn.r == nil  {
+	} else if nn.r == nil {
 		child = nn.l
 	} else {
 		nn = nn.r

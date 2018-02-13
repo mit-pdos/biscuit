@@ -32,9 +32,9 @@ const bdev_debug = false
 //
 
 type bcache_t struct {
-	refcache  *refcache_t
-	mem common.Blockmem_i
-	disk common.Disk_i
+	refcache *refcache_t
+	mem      common.Blockmem_i
+	disk     common.Disk_i
 }
 
 func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
@@ -57,7 +57,7 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_bl
 	if err != 0 {
 		return nil, err
 	}
-	
+
 	if created {
 		b.New_page()
 		b.Read() // fill in new bdev_cache entry
@@ -79,8 +79,8 @@ func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_bl
 		return nil, err
 	}
 	if created {
-		b.New_page()   // zero
-	} 
+		b.New_page() // zero
+	}
 	if !lock {
 		b.Unlock()
 	}
@@ -98,7 +98,7 @@ func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_
 		return nil, err
 	}
 	if created {
-		b.New_page()   // XXX a non-zero page would be fine
+		b.New_page() // XXX a non-zero page would be fine
 	}
 	if !lock {
 		b.Unlock()
@@ -121,13 +121,13 @@ func (bcache *bcache_t) Write_async_blks(blks []*common.Bdev_block_t) {
 	if bdev_debug {
 		fmt.Printf("bcache_write_async_blks %v\n", len(blks))
 	}
-	if len(blks) == 0  {
+	if len(blks) == 0 {
 		panic("bcache_write_async_blks\n")
 	}
-	n := blks[0].Block-1
+	n := blks[0].Block - 1
 	for _, b := range blks {
 		// sanity check
-		if b.Block != n + 1 {
+		if b.Block != n+1 {
 			panic("not contiguous\n")
 		}
 		n++
@@ -191,7 +191,7 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 
 func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
 	return
-	
+
 	fmt.Printf("disk test\n")
 
 	const N = 3
@@ -206,14 +206,14 @@ func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
 		for b := 0; b < N; b++ {
 			fmt.Printf("req %v,%v\n", j, b)
 
-			for i,_ := range wbuf[b].Data {
+			for i, _ := range wbuf[b].Data {
 				wbuf[b].Data[i] = uint8(b)
 			}
 			wbuf[b].Write_async()
 		}
 		ider := common.MkRequest(nil, common.BDEV_FLUSH, true)
 		if disk.Start(ider) {
-			<- ider.AckCh
+			<-ider.AckCh
 		}
 		for b := 0; b < N; b++ {
 			rbuf, err := bcache.Get_fill(b, "read test", false)
@@ -231,13 +231,12 @@ func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
 	panic("disk test passed\n")
 }
 
-
 //
 // Block allocator interface
 //
 
 type ballocater_t struct {
-	fs *Fs_t
+	fs    *Fs_t
 	alloc *allocater_t
 	first int
 }
@@ -302,6 +301,5 @@ func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
 	if err != 0 {
 		return 0, err
 	}
-	return blkn+balloc.first, err
+	return blkn + balloc.first, err
 }
-

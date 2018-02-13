@@ -19,11 +19,11 @@ type Userio_i interface {
 // lookups and reads/writes to those addresses must be atomic with respect to
 // page faults.
 type Userbuf_t struct {
-	userva	int
-	len	int
+	userva int
+	len    int
 	// 0 <= off <= len
-	off	int
-	proc	*Proc_t
+	off  int
+	proc *Proc_t
 }
 
 func (ub *Userbuf_t) ub_init(p *Proc_t, uva, len int) {
@@ -31,7 +31,7 @@ func (ub *Userbuf_t) ub_init(p *Proc_t, uva, len int) {
 	if len < 0 {
 		panic("negative length")
 	}
-	if len >= 1 << 39 {
+	if len >= 1<<39 {
 		fmt.Printf("suspiciously large user buffer (%v)\n", len)
 	}
 	ub.userva = uva
@@ -89,16 +89,15 @@ func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
 	return ret, 0
 }
 
-
 type _iove_t struct {
-	uva	uint
-	sz	int
+	uva uint
+	sz  int
 }
 
 type Useriovec_t struct {
-	iovs	[]_iove_t
-	tsz	int
-	proc	*Proc_t
+	iovs []_iove_t
+	tsz  int
+	proc *Proc_t
 }
 
 func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
@@ -116,7 +115,7 @@ func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
 		elmsz := uint(16)
 		va := iovarn + uint(i)*elmsz
 		dstva, ok1 := proc.userreadn_inner(int(va), 8)
-		sz, ok2    := proc.userreadn_inner(int(va) + 8, 8)
+		sz, ok2 := proc.userreadn_inner(int(va)+8, 8)
 		if !ok1 || !ok2 {
 			return -EFAULT
 		}
@@ -180,13 +179,12 @@ func (iov *Useriovec_t) Uiowrite(src []uint8) (int, Err_t) {
 	return a, b
 }
 
-
 // helper type which kernel code can use as userio_i, but is actually a kernel
 // buffer (i.e. reading an ELF header from the file system for exec(2)).
 type Fakeubuf_t struct {
-	fbuf	[]uint8
-	off	int
-	len	int
+	fbuf []uint8
+	off  int
+	len  int
 }
 
 func (fb *Fakeubuf_t) Fake_init(buf []uint8) {
@@ -220,4 +218,3 @@ func (fb *Fakeubuf_t) Uioread(dst []uint8) (int, Err_t) {
 func (fb *Fakeubuf_t) Uiowrite(src []uint8) (int, Err_t) {
 	return fb._tx(src, true)
 }
-

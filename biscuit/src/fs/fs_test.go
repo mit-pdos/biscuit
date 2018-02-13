@@ -14,15 +14,14 @@ var diskimg = "../../go.img"
 //  trace file of writes and syncs
 //
 
-
 type tracef_t struct {
 	file *os.File
-	enc *json.Encoder
+	enc  *json.Encoder
 }
 
 type record_t struct {
-	Cmd string
-	BlkNo int
+	Cmd     string
+	BlkNo   int
 	BlkData []byte
 }
 
@@ -54,33 +53,32 @@ func readTrace(p string) []record_t {
 			break
 		}
 		res = append(res, r)
-		
+
 	}
 	return res
-}	
+}
 
 func (t *tracef_t) write(n int, v *common.Bytepg_t) {
 	r := record_t{}
 	r.BlkNo = n
 	r.Cmd = "write"
 	r.BlkData = make([]byte, common.BSIZE)
-	for i, _ := range(v) {
+	for i, _ := range v {
 		r.BlkData[i] = byte(v[i])
 	}
 	if err := t.enc.Encode(&r); err != nil {
 		panic(err)
-        }
+	}
 }
 
-func (t  *tracef_t) sync() {
+func (t *tracef_t) sync() {
 	r := record_t{}
 	r.BlkNo = 0
 	r.Cmd = "sync"
 	if err := t.enc.Encode(&r); err != nil {
 		panic(err)
-        }
+	}
 }
-
 
 func (t *tracef_t) close() {
 	t.file.Sync()
@@ -129,14 +127,14 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 			panic(err)
 		}
 		req.Blks[0].Data = &common.Bytepg_t{}
-		for i, _ := range(b) {
+		for i, _ := range b {
 			req.Blks[0].Data[i] = uint8(b[i])
 		}
 	case common.BDEV_WRITE:
-		for _, b := range(req.Blks) {
+		for _, b := range req.Blks {
 			ahci.Seek(b.Block * common.BSIZE)
 			buf := make([]byte, common.BSIZE)
-			for i, _ := range(buf) {
+			for i, _ := range buf {
 				buf[i] = byte(b.Data[i])
 			}
 			n, err := ahci.f.Write(buf)
@@ -175,6 +173,7 @@ func (ahci *ahci_disk_t) close() {
 
 type blockmem_t struct {
 }
+
 var blockmem = &blockmem_t{}
 
 func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
@@ -187,6 +186,7 @@ func (bm *blockmem_t) Free(pa common.Pa_t) {
 
 type console_t struct {
 }
+
 var c console_t
 
 func (c console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
@@ -210,7 +210,7 @@ func (tfs *testfs_t) mkFile(p string) common.Err_t {
 	if err != 0 {
 		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
 	}
-	
+
 	hdata := make([]uint8, 512)
 	ub := &common.Fakeubuf_t{}
 	ub.Fake_init(hdata)
@@ -220,7 +220,7 @@ func (tfs *testfs_t) mkFile(p string) common.Err_t {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
-	
+
 	err = fd.Fops.Close()
 	if err != 0 {
 		fmt.Printf("Close %s failed %v\n", p, err)
@@ -272,7 +272,7 @@ func (tfs *testfs_t) doAppend(p string) common.Err_t {
 		fmt.Printf("Lseek %v failed %v\n", p, err)
 		return err
 	}
-	
+
 	hdata := make([]uint8, 512)
 	ub := &common.Fakeubuf_t{}
 	ub.Fake_init(hdata)
@@ -282,7 +282,7 @@ func (tfs *testfs_t) doAppend(p string) common.Err_t {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
-	
+
 	err = fd.Fops.Close()
 	if err != 0 {
 		fmt.Printf("Close %s failed %v\n", p, err)
@@ -375,12 +375,12 @@ func (tfs *testfs_t) doTest(t *testing.T) {
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
 	}
-	
+
 	e = tfs.mkFile("f2")
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
-	
+
 	// e = mkDir("d0")
 	// if e != 0 {
 	// 	t.Fatalf("Mkdir %v failed", "d0")
@@ -395,18 +395,17 @@ func (tfs *testfs_t) doTest(t *testing.T) {
 	// if e != 0 {
 	// 	t.Fatalf("Rename failed")
 	// }
-	
+
 	// e = doAppend("f1")
 	// if e != 0 {
 	// 	t.Fatalf("Append failed")
 	// }
-	
+
 	// e = doUnlink("f2")
 	// if e != 0 {
 	// 	t.Fatalf("Unlink failed")
 	//}
 }
-
 
 func (tfs *testfs_t) doCheck(t *testing.T) {
 	res, e := tfs.doLs("/")
@@ -417,10 +416,10 @@ func (tfs *testfs_t) doCheck(t *testing.T) {
 	if !ok {
 		t.Fatalf("f1 not present")
 	}
-	if st.Size() != 512 {    // 1024
-	 	t.Fatalf("f1 wrong size")
+	if st.Size() != 512 { // 1024
+		t.Fatalf("f1 wrong size")
 	}
-	
+
 	// st, ok = res["f2"]
 	// if ok {
 	// 	t.Fatalf("f2 present")
@@ -444,26 +443,26 @@ func (tfs *testfs_t) doCheck(t *testing.T) {
 }
 
 func copyFileContents(src, dst string) (err error) {
-    in, err := os.Open(src)
-    if err != nil {
-        return
-    }
-    defer in.Close()
-    out, err := os.Create(dst)
-    if err != nil {
-        return
-    }
-    defer func() {
-        cerr := out.Close()
-        if err == nil {
-            err = cerr
-        }
-    }()
-    if _, err = io.Copy(out, in); err != nil {
-        return
-    }
-    err = out.Sync()
-    return
+	in, err := os.Open(src)
+	if err != nil {
+		return
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return
+	}
+	defer func() {
+		cerr := out.Close()
+		if err == nil {
+			err = cerr
+		}
+	}()
+	if _, err = io.Copy(out, in); err != nil {
+		return
+	}
+	err = out.Sync()
+	return
 }
 
 func check(t *testing.T, d string) {
@@ -481,9 +480,9 @@ func TestFS(t *testing.T) {
 	copyFileContents(diskimg, dst)
 
 	ahci := mkDisk(dst, true)
-	
+
 	fmt.Printf("testFS %v ...\n", dst)
-	
+
 	tfs := &testfs_t{}
 	_, tfs.fs = StartFS(blockmem, ahci, c)
 	tfs.doTest(t)
@@ -498,7 +497,7 @@ func genOrder(blks []int, o order_t, r orders_t) orders_t {
 		return r
 	}
 	// fmt.Printf("genOrder %v %v %v\n", blks, o, r)
-	for i, v := range(blks) {
+	for i, v := range blks {
 		t := make([]int, len(blks))
 		copy(t, blks)
 		t = append(t[0:i], t[i+1:]...)
@@ -518,7 +517,7 @@ func genOrders(blks []int) orders_t {
 
 func printTrace(t trace_t, start int, end int) {
 	fmt.Printf("trace (%d,%d):\n", start, end)
-	for i, r := range(t) {
+	for i, r := range t {
 		if i >= start && i < end {
 			fmt.Printf("  %d: %v %v\n", i, r.Cmd, r.BlkNo)
 		}
@@ -545,17 +544,17 @@ func copyRecord(r record_t) record_t {
 
 func copyTrace(t trace_t, start int, end int) trace_t {
 	sub := make([]record_t, end-start)
-	for i, _ := range(sub) {
+	for i, _ := range sub {
 		sub[i] = copyRecord(t[start+i])
 	}
 	return sub
 }
-	
+
 func permTrace(t trace_t, sub trace_t, index int, o order_t) {
 	// fmt.Printf("o = %v\n", o)
-	for i, j := range(o) {
+	for i, j := range o {
 		t[index+i] = sub[j]
-		
+
 	}
 	// printTrace(t, index, index+len(o))
 }
@@ -566,12 +565,12 @@ func genDisk(trace trace_t, dst string) {
 	if uerr != nil {
 		panic(uerr)
 	}
-	for _, r := range(trace) {
+	for _, r := range trace {
 		if r.Cmd == "write" {
 			fmt.Printf("update block %v\n", r.BlkNo)
-			f.Seek(int64(r.BlkNo * common.BSIZE), 0)
+			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
 			buf := make([]byte, common.BSIZE)
-			for i, _ := range(buf) {
+			for i, _ := range buf {
 				buf[i] = byte(r.BlkData[i])
 			}
 			n, err := f.Write(buf)
@@ -596,8 +595,8 @@ func checkTrace(dst string, trace trace_t, t *testing.T) {
 
 type msg_t struct {
 	trace trace_t
-	t *testing.T
-	dst string
+	t     *testing.T
+	dst   string
 }
 
 var checkChan chan msg_t
@@ -605,7 +604,7 @@ var okChan chan bool
 
 func Checker() {
 	for true {
-		m := <- checkChan
+		m := <-checkChan
 		fmt.Printf("Run checker\n")
 		genDisk(m.trace, m.dst)
 		checkTrace(m.dst, m.trace, m.t)
@@ -638,12 +637,12 @@ func genTraces(trace trace_t, index int, t *testing.T) {
 	orders := genOrders(so)
 	subtrace := copyTrace(trace, index, n)
 	// printTrace(subtrace, 0, len(subtrace))
-	for _, o := range(orders) {
+	for _, o := range orders {
 		permTrace(trace, subtrace, index, o)
 		genTraces(trace, n+1, t)
 	}
 }
-	
+
 func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
 
@@ -654,4 +653,3 @@ func TestTraces(t *testing.T) {
 	printTrace(trace, 0, len(trace))
 	genTraces(trace, 0, t)
 }
-

@@ -6,16 +6,16 @@ type rbnode_i interface {
 }
 
 type grbh_t struct {
-	root	*grbn_t
-	nodes	int
+	root  *grbn_t
+	nodes int
 }
 
 type grbn_t struct {
-	p	*grbn_t
-	r	*grbn_t
-	l	*grbn_t
-	c	rbc_t
-	priv	rbnode_i
+	p    *grbn_t
+	r    *grbn_t
+	l    *grbn_t
+	c    rbc_t
+	priv rbnode_i
 }
 
 func (h *grbh_t) _rol(nn *grbn_t) {
@@ -168,7 +168,7 @@ func (h *grbh_t) _rembalance(par, nn *grbn_t) {
 				tmp = par.r
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -200,7 +200,7 @@ func (h *grbh_t) _rembalance(par, nn *grbn_t) {
 				tmp = par.l
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -238,7 +238,7 @@ func (h *grbh_t) remove(nn *grbn_t) *grbn_t {
 	var col rbc_t
 	if nn.l == nil {
 		child = nn.r
-	} else if nn.r == nil  {
+	} else if nn.r == nil {
 		child = nn.l
 	} else {
 		nn = nn.r

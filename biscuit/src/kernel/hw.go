@@ -9,24 +9,24 @@ import "unsafe"
 
 import "common"
 
-const BSIZE=4096
+const BSIZE = 4096
 
-var IRQ_DISK    int = -1
-var INT_DISK    int = -1
+var IRQ_DISK int = -1
+var INT_DISK int = -1
 
 const (
-	VENDOR	int	= 0x0
-	DEVICE		= 0x02
-	STATUS		= 0x06
-	CLASS		= 0x0b
-	SUBCLASS	= 0x0a
-	HEADER		= 0x0e
-	_BAR0		= 0x10
-	_BAR1		= 0x14
-	_BAR2		= 0x18
-	_BAR3		= 0x1c
-	_BAR4		= 0x20
-	_BAR5           = 0x24
+	VENDOR   int = 0x0
+	DEVICE       = 0x02
+	STATUS       = 0x06
+	CLASS        = 0x0b
+	SUBCLASS     = 0x0a
+	HEADER       = 0x0e
+	_BAR0        = 0x10
+	_BAR1        = 0x14
+	_BAR2        = 0x18
+	_BAR3        = 0x1c
+	_BAR4        = 0x20
+	_BAR5        = 0x24
 )
 
 // width is width of the register in bytes
@@ -43,12 +43,12 @@ func pci_read(tag pcitag_t, reg, width int) int {
 	runtime.Outl(pci_addr, 0)
 
 	ret := int(uint(d) >> uint(rsh*8))
-	m := ((1 << (8*uint(width))) - 1)
+	m := ((1 << (8 * uint(width))) - 1)
 	return ret & m
 }
 
 func pci_write(tag pcitag_t, reg, val int) {
-	if reg & 3 != 0 {
+	if reg&3 != 0 {
 		panic("reg must be 32bit aligned")
 	}
 	enable := 1 << 31
@@ -66,9 +66,9 @@ func pci_bar_pio(tag pcitag_t, barn int) uintptr {
 	if barn < 0 || barn > 4 {
 		panic("bad bar #")
 	}
-	ret := pci_read(tag, _BAR0 + 4*barn, 4)
+	ret := pci_read(tag, _BAR0+4*barn, 4)
 	ispio := 1
-	if ret & ispio == 0 {
+	if ret&ispio == 0 {
 		panic("is memory bar")
 	}
 	return uintptr(ret &^ 0x3)
@@ -83,7 +83,7 @@ func pci_bar_mem(tag pcitag_t, barn int) (uintptr, int) {
 	bari := _BAR0 + 4*barn
 	ret := pci_read(tag, bari, 4)
 	ispio := 1
-	if ret & ispio != 0 {
+	if ret&ispio != 0 {
 		panic("is port io bar")
 	}
 	pci_write(tag, bari, -1)
@@ -105,26 +105,26 @@ func pci_bar_mem(tag pcitag_t, barn int) (uintptr, int) {
 	if barn > 4 {
 		panic("64bit memory bar requires 2 bars")
 	}
-	ret2 := pci_read(tag, bari + 4, 4)
-	return uintptr((ret2 << 32) | ret &^ 0xf), int(blen)
+	ret2 := pci_read(tag, bari+4, 4)
+	return uintptr((ret2 << 32) | ret&^0xf), int(blen)
 }
 
 func pci_dump() {
 	pcipr := func(b, dev, f int, ind bool) (int, bool) {
 		t := mkpcitag(b, dev, f)
-		v  := pci_read(t, VENDOR, 2)
+		v := pci_read(t, VENDOR, 2)
 		if v == 0xffff {
 			return 0, false
 		}
-		d   := pci_read(t, DEVICE, 2)
-		mf  := pci_read(t, HEADER, 1)
-		cl  := pci_read(t, CLASS, 1)
+		d := pci_read(t, DEVICE, 2)
+		mf := pci_read(t, HEADER, 1)
+		cl := pci_read(t, CLASS, 1)
 		scl := pci_read(t, SUBCLASS, 1)
 		if ind {
 			fmt.Printf("    ")
 		}
 		fmt.Printf("%d: %d: %d: %#x %#x (%#x %#x)\n", b, dev, f, v, d,
-		    cl, scl)
+			cl, scl)
 		return mf, true
 	}
 	fmt.Printf("PCI dump:\n")
@@ -134,7 +134,7 @@ func pci_dump() {
 			if !ok {
 				continue
 			}
-			if mf & 0x80 != 0 {
+			if mf&0x80 != 0 {
 				for f := 1; f < 8; f++ {
 					pcipr(b, dev, f, true)
 				}
@@ -146,13 +146,13 @@ func pci_dump() {
 func pcibus_attach() {
 	pciinfo := func(b, dev, f int) (int, int, bool, bool) {
 		t := mkpcitag(b, dev, f)
-		v  := pci_read(t, VENDOR, 2)
+		v := pci_read(t, VENDOR, 2)
 		if v == 0xffff {
 			return 0, 0, false, false
 		}
-		d  := pci_read(t, DEVICE, 2)
+		d := pci_read(t, DEVICE, 2)
 		mf := pci_read(t, HEADER, 1)
-		ismf := mf & 0x80 != 0
+		ismf := mf&0x80 != 0
 		return v, d, ismf, true
 	}
 	devattach := func(b, dev int) {
@@ -183,7 +183,7 @@ func pcibus_attach() {
 type pcitag_t uint
 
 func mkpcitag(b, d, f int) pcitag_t {
-	return pcitag_t(b << 16 | d << 11 | f << 8)
+	return pcitag_t(b<<16 | d<<11 | f<<8)
 }
 
 func breakpcitag(b pcitag_t) (int, int, int) {
@@ -192,7 +192,6 @@ func breakpcitag(b pcitag_t) (int, int, int) {
 	f := int((b >> 8) & 0x7)
 	return bus, d, f
 }
-
 
 func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_VEND_INTEL := 0x8086
@@ -203,15 +202,15 @@ func pci_attach(vendorid, devid, bus, dev, fu int) {
 	PCI_DEV_AHCI_BHW := 0x3b22
 
 	// map from vendor ids to a map of device ids to attach functions
-	alldevs := map[int]map[int]func(int, int, pcitag_t) {
-		PCI_VEND_INTEL : {
+	alldevs := map[int]map[int]func(int, int, pcitag_t){
+		PCI_VEND_INTEL: {
 			// PCI_DEV_PIIX3 : attach_piix3,
 			// PCI_DEV_3400 : attach_3400,
-			PCI_DEV_X540T: attach_ixgbe,
+			PCI_DEV_X540T:     attach_ixgbe,
 			PCI_DEV_AHCI_QEMU: attach_ahci,
-			PCI_DEV_AHCI_BHW: attach_ahci,
-			},
-		}
+			PCI_DEV_AHCI_BHW:  attach_ahci,
+		},
+	}
 
 	tag := mkpcitag(bus, dev, fu)
 	devs, ok := alldevs[vendorid]
@@ -253,7 +252,7 @@ func pci_disk_interrupt_wiring(t pcitag_t) int {
 	// to parse AML (thank you flying spaghetti monster!)
 	taglpc := mkpcitag(0, 31, 0)
 	rcba_p := pci_read(taglpc, 0xf0, 4)
-	if rcba_p & 1 == 0 {
+	if rcba_p&1 == 0 {
 		panic("no root complex base")
 	}
 	rcba_p &^= ((1 << 14) - 1)
@@ -261,7 +260,7 @@ func pci_disk_interrupt_wiring(t pcitag_t) int {
 	rcba := common.Dmaplen32(uintptr(rcba_p), 0x342c)
 	// PCI dev 31 PIRQ routes
 	routes := rcba[0x3140/4]
-	pirq := (routes >> (4*(uint32(pin) - 1))) & 0x7
+	pirq := (routes >> (4 * (uint32(pin) - 1))) & 0x7
 	// Intel PCH's IOAPIC has PIRQs on input pins 16-24
 	gsi := int(16 + pirq)
 
@@ -273,9 +272,9 @@ func pci_disk_interrupt_wiring(t pcitag_t) int {
 	}
 	v := pci_read(taglpc, proutereg, 4)
 	disable := 0x80
-	v |= disable << ((pirq % 4)*8)
+	v |= disable << ((pirq % 4) * 8)
 	pci_write(taglpc, proutereg, v)
-	return gsi;
+	return gsi
 }
 
 func attach_3400(vendorid, devid int, tag pcitag_t) {
@@ -286,7 +285,7 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	gsi := pci_disk_interrupt_wiring(tag)
 	IRQ_DISK = gsi
 	INT_DISK = common.IRQ_BASE + IRQ_DISK
-	
+
 	d := &pciide_disk_t{}
 	// 3400's PCI-native IDE command/control block
 	rbase := pci_bar_pio(tag, 0)
@@ -296,17 +295,17 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	d.init(rbase, allstats, busmaster)
 	disk = d
 	fmt.Printf("3400: base %#x, cntrl: %#x, bm: %#x, irq: %d\n", rbase,
-	    allstats, busmaster, gsi)
+		allstats, busmaster, gsi)
 }
 
 // our actual disk
-var disk	disk_t   // XXX delete?
+var disk disk_t // XXX delete?
 
 // XXX delete and the disks that use it?
 type idebuf_t struct {
-	disk	int
-	block	int
-	data	*[BSIZE]uint8
+	disk  int
+	block int
+	data  *[BSIZE]uint8
 }
 
 type disk_t interface {
@@ -318,13 +317,13 @@ type disk_t interface {
 
 // use ata pio for fair comparisons against xv6, but i want to use ahci (or
 // something) eventually. unlike xv6, we always use disk 0
-const(
-	ide_bsy = 0x80
+const (
+	ide_bsy  = 0x80
 	ide_drdy = 0x40
-	ide_df = 0x20
-	ide_err = 0x01
+	ide_df   = 0x20
+	ide_err  = 0x01
 
-	ide_cmd_read = 0x20
+	ide_cmd_read  = 0x20
 	ide_cmd_write = 0x30
 )
 
@@ -343,11 +342,11 @@ func ide_init(rbase uintptr) bool {
 		}
 	}
 	if found {
-		fmt.Printf("IDE disk detected\n");
+		fmt.Printf("IDE disk detected\n")
 		return true
 	}
 
-	fmt.Printf("no IDE disk\n");
+	fmt.Printf("no IDE disk\n")
 	return false
 }
 
@@ -356,7 +355,7 @@ func ide_wait(base uintptr, chk bool) bool {
 	c := 0
 	for {
 		r = int(runtime.Inb(uint16(base + 7)))
-		if r & (ide_bsy | ide_drdy) == ide_drdy {
+		if r&(ide_bsy|ide_drdy) == ide_drdy {
 			break
 		}
 		c++
@@ -365,7 +364,7 @@ func ide_wait(base uintptr, chk bool) bool {
 			c = 0
 		}
 	}
-	if chk && r & (ide_df | ide_err) != 0 {
+	if chk && r&(ide_df|ide_err) != 0 {
 		return false
 	}
 	return true
@@ -376,7 +375,7 @@ func idedata_ready(base uintptr) {
 	for {
 		drq := 1 << 3
 		st := int(runtime.Inb(uint16(base + 7)))
-		if st & drq != 0 {
+		if st&drq != 0 {
 			return
 		}
 		c++
@@ -396,15 +395,15 @@ func ide_start(rbase, allstatus uintptr, ibuf *idebuf_t, writing bool) {
 	outb(ireg(2), 1)
 	bn := ibuf.block
 	bd := ibuf.disk
-	outb(ireg(3), uint8(bn & 0xff))
-	outb(ireg(4), uint8((bn >> 8) & 0xff))
-	outb(ireg(5), uint8((bn >> 16) & 0xff))
-	outb(ireg(6), uint8(0xe0 | ((bd & 1) << 4) | (bn >> 24) & 0xf))
+	outb(ireg(3), uint8(bn&0xff))
+	outb(ireg(4), uint8((bn>>8)&0xff))
+	outb(ireg(5), uint8((bn>>16)&0xff))
+	outb(ireg(6), uint8(0xe0|((bd&1)<<4)|(bn>>24)&0xf))
 	if writing {
 		outb(ireg(7), ide_cmd_write)
 		idedata_ready(rbase)
 		runtime.Outsl(int(ireg(0)), unsafe.Pointer(&ibuf.data[0]),
-		    512/4)
+			512/4)
 	} else {
 		outb(ireg(7), ide_cmd_read)
 	}
@@ -414,8 +413,8 @@ func ide_complete(base uintptr, dst []uint8, writing bool) {
 	if !writing {
 		// read sector
 		if ide_wait(base, true) {
-			runtime.Insl(uint16(base + 0),
-			    unsafe.Pointer(&dst[0]), 512/4)
+			runtime.Insl(uint16(base+0),
+				unsafe.Pointer(&dst[0]), 512/4)
 		}
 	} else {
 		// cache flush; only needed for old disks?
@@ -424,8 +423,8 @@ func ide_complete(base uintptr, dst []uint8, writing bool) {
 }
 
 type legacy_disk_t struct {
-	rbase	uintptr
-	allstat	uintptr
+	rbase   uintptr
+	allstat uintptr
 }
 
 func (d *legacy_disk_t) init(base, allst uintptr) {
@@ -454,8 +453,8 @@ func (d *legacy_disk_t) int_clear() {
 }
 
 type pciide_disk_t struct {
-	rbase	uintptr
-	allstat	uintptr
+	rbase   uintptr
+	allstat uintptr
 	bmaster uintptr
 }
 
@@ -478,7 +477,7 @@ func (d *pciide_disk_t) intr() bool {
 	streg := uint16(d.bmaster + 0x02)
 	bmintr := uint(1 << 2)
 	st := runtime.Inb(streg)
-	if st & bmintr == 0 {
+	if st&bmintr == 0 {
 		return false
 	}
 	return true
@@ -494,7 +493,7 @@ func (d *pciide_disk_t) int_clear() {
 	streg := uint16(d.bmaster + 0x02)
 	st := runtime.Inb(streg)
 	er := uint(1 << 1)
-	if st & er != 0 {
+	if st&er != 0 {
 		panic("disk error")
 	}
 	runtime.Outb(streg, uint8(st))
@@ -504,17 +503,17 @@ func (d *pciide_disk_t) int_clear() {
 }
 
 type _oride_t struct {
-	src	int
-	dst	int
+	src int
+	dst int
 	// trigger sense
-	level	bool
+	level bool
 	// polarity
-	low	bool
+	low bool
 }
 
 type acpi_ioapic_t struct {
-	base		uintptr
-	overrides	map[int]_oride_t
+	base      uintptr
+	overrides map[int]_oride_t
 }
 
 func _acpi_cksum(tbl []uint8) {
@@ -564,8 +563,8 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 	for m := tbl[marrayoff:]; len(m) != 0; m = m[m[elen]:] {
 		// ACPI 5.2.12.2: each processor is required to have a LAPIC
 		// entry
-		tlapic    := uint8(0)
-		tioapic   := uint8(1)
+		tlapic := uint8(0)
+		tioapic := uint8(1)
 		toverride := uint8(2)
 
 		tiosapic := uint8(6)
@@ -574,7 +573,7 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 		if m[0] == tlapic {
 			flags := readn(m, 4, 4)
 			enabled := 1
-			if flags & enabled != 0 {
+			if flags&enabled != 0 {
 				ncpu++
 			}
 		} else if m[0] == tioapic {
@@ -589,7 +588,7 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 			nover.src = src
 			nover.dst = dst
 			//var active string
-			switch (v & 0x3) {
+			switch v & 0x3 {
 			case 0:
 				//active = "conforms"
 				if dst < 16 {
@@ -608,7 +607,7 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 				nover.low = true
 			}
 			//var trig string
-			switch ((v & 0xc) >> 2) {
+			switch (v & 0xc) >> 2 {
 			case 0:
 				//trig = "conforms"
 				if dst < 16 {
@@ -648,8 +647,8 @@ func _acpi_fadt(rsdt []uint8) bool {
 	}
 	_acpi_cksum(tbl)
 	flags := readn(tbl, 2, 109)
-	nomsi      := 1 << 3
-	return flags & nomsi == 0
+	nomsi := 1 << 3
+	return flags&nomsi == 0
 }
 
 func _acpi_scan() ([]uint8, bool) {
@@ -674,8 +673,8 @@ func _acpi_scan() ([]uint8, bool) {
 		return true
 	}
 	rsdplen := 36
-	for i := common.Pa_t(0); i < 1 << 10; i += 16 {
-		p = common.Dmaplen(ebda + i, rsdplen)
+	for i := common.Pa_t(0); i < 1<<10; i += 16 {
+		p = common.Dmaplen(ebda+i, rsdplen)
 		if isrsdp(p) {
 			return p, true
 		}
@@ -812,23 +811,23 @@ func acpi_attach() int {
  * need to upgrade my PIO disk driver to AHCI first since my SATA controller
  * won't generate MSI intterupts in IDE mode. also, we will still need the
  * IOAPIC to handle IRQs (COM1, keyboard, etc.).
-*/
+ */
 
 var apic apic_t
 
 type apic_t struct {
 	regs struct {
-		sel	*uint32
-		win	*uint32
-		eoi	*uint32
+		sel *uint32
+		win *uint32
+		eoi *uint32
 	}
-	npins	int
+	npins int
 	// spinlock to protect access to the IOAPIC registers. because writing
 	// an IOAPIC register requires two distinct memory writes, a single
 	// IOAPIC register write cannot be atomic with respect to other memory
 	// IOAPIC register writes. we must use a spinlock instead of a mutex
 	// because we need to acquire this lock in interrupt context too.
-	_mlock	runtime.Spinlock_t
+	_mlock runtime.Spinlock_t
 }
 
 func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
@@ -840,10 +839,10 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 	va := common.Dmaplen32(base, 4)
 	ap.regs.sel = &va[0]
 
-	va = common.Dmaplen32(base + 0x10, 4)
+	va = common.Dmaplen32(base+0x10, 4)
 	ap.regs.win = &va[0]
 
-	va = common.Dmaplen32(base + 0x40, 4)
+	va = common.Dmaplen32(base+0x40, 4)
 	ap.regs.eoi = &va[0]
 
 	pinlast := (apic.reg_read(1) >> 16) & 0xff
@@ -907,7 +906,7 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 }
 
 func (ap *apic_t) reg_read(reg int) uint32 {
-	if reg &^ 0xff != 0 {
+	if reg&^0xff != 0 {
 		panic("bad IO APIC reg")
 	}
 	c := uint32(reg)
@@ -923,7 +922,7 @@ func (ap *apic_t) reg_read(reg int) uint32 {
 }
 
 func (ap *apic_t) reg_write(reg int, v uint32) {
-	if reg &^ 0xff != 0 {
+	if reg&^0xff != 0 {
 		panic("bad IO APIC reg")
 	}
 	c := uint32(reg)
@@ -953,7 +952,8 @@ func (ap *apic_t) irq_unmask(irq int) {
 func (ap *apic_t) irq_mask(irq int) {
 	if irq < 0 || irq > ap.npins {
 		runtime.Pnum(0xbad2)
-		for {}
+		for {
+		}
 	}
 
 	fl := runtime.Pushcli()
@@ -975,10 +975,10 @@ func (ap *apic_t) irq_mask(irq int) {
 // LAPIC's are configured to broadcast EOI to IOAPICs for level-triggered
 // interrupts automatically. newer CPUs let you disable EOI broadcast.
 func (ap *apic_t) eoi(irq int) {
-	if irq &^ 0xff != 0 {
+	if irq&^0xff != 0 {
 		panic("eio bad irq")
 	}
-	runtime.Store32(ap.regs.eoi, uint32(irq + 32))
+	runtime.Store32(ap.regs.eoi, uint32(irq+32))
 }
 
 func (ap *apic_t) dump() {
@@ -988,29 +988,29 @@ func (ap *apic_t) dump() {
 	for i := 0; i < ap.npins; i++ {
 		r1 := ap.reg_read(0x10 + i*2)
 		r2 := ap.reg_read(0x10 + i*2 + 1)
-		intv := uint64(r2) << 32 | uint64(r1)
+		intv := uint64(r2)<<32 | uint64(r1)
 		vec := intv & 0xff
-		m := intv & (1 << 16) != 0
+		m := intv&(1<<16) != 0
 		t := "edge"
 		act := "high"
-		if intv & (1 << 13) != 0 {
+		if intv&(1<<13) != 0 {
 			act = "low"
 		}
-		if intv & (1 << 15) != 0 {
+		if intv&(1<<15) != 0 {
 			t = "level"
 		}
-		delivs := map[uint64]string{0:"fixed", 1:"lowest priority",
-		    2:"smi", 3:"reserved", 4:"NMI", 5:"INIT", 6:"reserved",
-		    7:"ExtINIT"}
+		delivs := map[uint64]string{0: "fixed", 1: "lowest priority",
+			2: "smi", 3: "reserved", 4: "NMI", 5: "INIT", 6: "reserved",
+			7: "ExtINIT"}
 		deliv := delivs[((intv >> 8) & 3)]
 		destmode := "physical"
-		if intv & (1 << 11) != 0 {
+		if intv&(1<<11) != 0 {
 			destmode = "logical"
 		}
 		dest := intv >> 56
-		fmt.Printf("IRQ %v: vec: %v, mask: %v, mode: %v, " +
-		    "act: %v, deliv: %v, destm: %v, dest: %#x\n", i, vec, m,
-		    t, act, deliv, destmode, dest)
+		fmt.Printf("IRQ %v: vec: %v, mask: %v, mode: %v, "+
+			"act: %v, deliv: %v, destm: %v, dest: %#x\n", i, vec, m,
+			t, act, deliv, destmode, dest)
 	}
 }
 
@@ -1018,12 +1018,12 @@ type msivec_t uint
 
 type msivecs_t struct {
 	sync.Mutex
-	avail	map[msivec_t]bool
+	avail map[msivec_t]bool
 }
 
 var msivecs = msivecs_t{
-	avail: map[msivec_t]bool { 56:true, 57:true, 58:true, 59:true, 60:true,
-	    61:true, 62:true, 63:true},
+	avail: map[msivec_t]bool{56: true, 57: true, 58: true, 59: true, 60: true,
+		61: true, 62: true, 63: true},
 }
 
 // allocates an MSI interrupt vecber
@@ -1050,79 +1050,80 @@ func msi_free(vector msivec_t) {
 
 // XXX use uncachable mappings for MMIO?
 type ixgbereg_t uint
+
 const (
-	CTRL		ixgbereg_t	=    0x0
+	CTRL ixgbereg_t = 0x0
 	// the x540 terminology is confusing regarding interrupts; an interrupt
 	// is enabled when its bit is set in the mask set register (ims) and
 	// disabled when cleared.
-	CTRL_EXT			=    0x18
-	EICR				=   0x800
-	EIAC				=   0x810
-	EICS				=   0x808
-	EICS1				=   0xa90
-	EICS2				=   0xa94
-	EIMS				=   0x880
-	EIMS1				=   0xaa0
-	EIMS2				=   0xaa4
-	EIMC				=   0x888
-	EIMC1				=   0xab0
-	EIMC2				=   0xab4
-	EIAM				=   0x890
-	GPIE				=   0x898
-	EIAM1				=   0xad0
-	EIAM2				=   0xad4
-	PFVTCTL				=  0x51b0
-	RTRPCS				=  0x2430
-	RDRXCTL				=  0x2f00
-	PFQDE				=  0x2f04
-	RTRUP2TC			=  0x3020
-	RTTUP2TC			=  0xc800
-	DTXMXSZRQ			=  0x8100
-	SECTXMINIFG			=  0x8810
-	HLREG0				=  0x4240
-	MFLCN				=  0x4294
-	RTTDQSEL			=  0x4904
-	RTTDT1C				=  0x4908
-	RTTDCS				=  0x4900
-	RTTPCS				=  0xcd00
-	MRQC				=  0xec80
-	MTQC				=  0x8120
-	MSCA				=  0x425c
-	MSRWD				=  0x4260
-	LINKS				=  0x42a4
-	DMATXCTL			=  0x4a80
-	DTXTCPFLGL			=  0x4a88
-	DTXTCPFLGH			=  0x4a8c
-	EEMNGCTL			= 0x10110
-	SWSM				= 0x10140
-	SW_FW_SYNC			= 0x10160
-	RXFECCERR0			=  0x51b8
-	FCTRL				=  0x5080
-	RXCSUM				=  0x5000
-	RXCTRL				=  0x3000
+	CTRL_EXT    = 0x18
+	EICR        = 0x800
+	EIAC        = 0x810
+	EICS        = 0x808
+	EICS1       = 0xa90
+	EICS2       = 0xa94
+	EIMS        = 0x880
+	EIMS1       = 0xaa0
+	EIMS2       = 0xaa4
+	EIMC        = 0x888
+	EIMC1       = 0xab0
+	EIMC2       = 0xab4
+	EIAM        = 0x890
+	GPIE        = 0x898
+	EIAM1       = 0xad0
+	EIAM2       = 0xad4
+	PFVTCTL     = 0x51b0
+	RTRPCS      = 0x2430
+	RDRXCTL     = 0x2f00
+	PFQDE       = 0x2f04
+	RTRUP2TC    = 0x3020
+	RTTUP2TC    = 0xc800
+	DTXMXSZRQ   = 0x8100
+	SECTXMINIFG = 0x8810
+	HLREG0      = 0x4240
+	MFLCN       = 0x4294
+	RTTDQSEL    = 0x4904
+	RTTDT1C     = 0x4908
+	RTTDCS      = 0x4900
+	RTTPCS      = 0xcd00
+	MRQC        = 0xec80
+	MTQC        = 0x8120
+	MSCA        = 0x425c
+	MSRWD       = 0x4260
+	LINKS       = 0x42a4
+	DMATXCTL    = 0x4a80
+	DTXTCPFLGL  = 0x4a88
+	DTXTCPFLGH  = 0x4a8c
+	EEMNGCTL    = 0x10110
+	SWSM        = 0x10140
+	SW_FW_SYNC  = 0x10160
+	RXFECCERR0  = 0x51b8
+	FCTRL       = 0x5080
+	RXCSUM      = 0x5000
+	RXCTRL      = 0x3000
 	// statistic reg4sters
-	SSVPC				=  0x8780
-	GPTC				=  0x4080
-	TXDGPC				=  0x87a0
-	TPT				=  0x40d4
-	PTC64				=  0x40d8
-	PTC127				=  0x40dc
-	MSPDC				=  0x4010
-	XEC				=  0x4120
-	BPTC				=  0x40f4
-	FCCRC				=  0x5118
-	B2OSPC				=  0x41c0
-	B2OGPRC				=  0x2f90
-	O2BGPTC				=  0x41c4
-	O2BSPC				=  0x87b0
-	CRCERRS				=  0x4000
-	ILLERRC				=  0x4004
-	ERRBC				=  0x4008
-	GPRC				=  0x4074
-	PRC64				=  0x405c
-	PRC127				=  0x4060
+	SSVPC   = 0x8780
+	GPTC    = 0x4080
+	TXDGPC  = 0x87a0
+	TPT     = 0x40d4
+	PTC64   = 0x40d8
+	PTC127  = 0x40dc
+	MSPDC   = 0x4010
+	XEC     = 0x4120
+	BPTC    = 0x40f4
+	FCCRC   = 0x5118
+	B2OSPC  = 0x41c0
+	B2OGPRC = 0x2f90
+	O2BGPTC = 0x41c4
+	O2BSPC  = 0x87b0
+	CRCERRS = 0x4000
+	ILLERRC = 0x4004
+	ERRBC   = 0x4008
+	GPRC    = 0x4074
+	PRC64   = 0x405c
+	PRC127  = 0x4060
 
-	FLA				= 0x1001c
+	FLA = 0x1001c
 )
 
 func _xreg(start, idx, max, step uint) ixgbereg_t {
@@ -1332,21 +1333,22 @@ func RAL(n uint) ixgbereg_t {
 
 // MDIO device is in bits [20:16] and MDIO reg is in [15:0]
 type ixgbephyreg_t uint
+
 const (
 	// link status here (Auto-Negotiation Reserved Vendor Status 1)
-	PHY_LINK	ixgbephyreg_t	= 0x07c810
-	ALARMS1				= 0x1ecc00
+	PHY_LINK ixgbephyreg_t = 0x07c810
+	ALARMS1                = 0x1ecc00
 )
 
 type rxdesc_t struct {
 	hwdesc *struct {
-		p_data	uint64
-		p_hdr	uint64
+		p_data uint64
+		p_hdr  uint64
 	}
 	// saved buffer physical addresses since hardware overwrites them once
 	// a packet is received
-	p_pbuf	uint64
-	p_hbuf	uint64
+	p_pbuf uint64
+	p_hbuf uint64
 }
 
 func (rd *rxdesc_t) init(pbuf common.Pa_t, hbuf uintptr, hw *int) {
@@ -1354,12 +1356,12 @@ func (rd *rxdesc_t) init(pbuf common.Pa_t, hbuf uintptr, hw *int) {
 	rd.p_hbuf = uint64(hbuf)
 	rd.hwdesc = (*struct {
 		p_data uint64
-		p_hdr uint64
+		p_hdr  uint64
 	})(unsafe.Pointer(hw))
 }
 
 func (rd *rxdesc_t) ready() {
-	if (rd.p_pbuf | rd.p_hbuf) & 1 != 0 {
+	if (rd.p_pbuf|rd.p_hbuf)&1 != 0 {
 		panic("rx buffers must be word aligned")
 	}
 	rd.hwdesc.p_data = rd.p_pbuf
@@ -1369,17 +1371,17 @@ func (rd *rxdesc_t) ready() {
 func (rd *rxdesc_t) rxdone() bool {
 	dd := uint64(1)
 	// compiler barrier
-	return atomic.LoadUint64(&rd.hwdesc.p_hdr) & dd != 0
+	return atomic.LoadUint64(&rd.hwdesc.p_hdr)&dd != 0
 }
 
 func (rd *rxdesc_t) eop() bool {
 	eop := uint64(1 << 1)
-	return rd.hwdesc.p_hdr & eop != 0
+	return rd.hwdesc.p_hdr&eop != 0
 }
 
 func (rd *rxdesc_t) _fcoe() bool {
 	t := atomic.LoadUint64(&rd.hwdesc.p_data)
-	return t & (1 << 15) != 0
+	return t&(1<<15) != 0
 }
 
 // the NIC drops IP4/TCP packets that have a bad checksum when FCTRL.SBP is 0.
@@ -1388,8 +1390,8 @@ func (rd *rxdesc_t) ipcsumok() bool {
 		return true
 	}
 	v := atomic.LoadUint64(&rd.hwdesc.p_hdr)
-	ipcs := v & (1 << 6) != 0
-	ipe :=  v & (1 << 31) != 0
+	ipcs := v&(1<<6) != 0
+	ipe := v&(1<<31) != 0
 	return !ipcs || (ipcs && !ipe)
 }
 
@@ -1398,8 +1400,8 @@ func (rd *rxdesc_t) l4csumok() bool {
 		return true
 	}
 	v := atomic.LoadUint64(&rd.hwdesc.p_hdr)
-	l4i := v & (1 << 5) != 0
-	l4e :=  v & (1 << 30) != 0
+	l4i := v&(1<<5) != 0
+	l4e := v&(1<<30) != 0
 	return !l4i || (l4i && !l4e)
 }
 
@@ -1413,21 +1415,21 @@ func (rd *rxdesc_t) hdrlen() int {
 
 type txdesc_t struct {
 	hwdesc *struct {
-		p_addr	uint64
-		rest	uint64
+		p_addr uint64
+		rest   uint64
 	}
-	p_buf	uint64
-	bufsz	uint64
-	ctxt	bool
-	eop	bool
+	p_buf uint64
+	bufsz uint64
+	ctxt  bool
+	eop   bool
 }
 
 func (td *txdesc_t) init(p_addr common.Pa_t, len uintptr, hw *int) {
 	td.p_buf = uint64(p_addr)
 	td.bufsz = uint64(len)
 	td.hwdesc = (*struct {
-		p_addr	uint64
-		rest	uint64
+		p_addr uint64
+		rest   uint64
 	})(unsafe.Pointer(hw))
 }
 
@@ -1481,22 +1483,22 @@ func (td *txdesc_t) ctxt_tcp_tso(_maclen, _ip4len, _l4hdrlen, _mss int) {
 	ipv4 := uint64(1 << 10)
 	td.hwdesc.rest |= tcp | ipv4
 	mss := uint64(_mss)
-	if mss &^ 0xffff != 0 {
+	if mss&^0xffff != 0 {
 		panic("large mss")
 	}
-	if _ip4len + _l4hdrlen + _mss > 1500 {
+	if _ip4len+_l4hdrlen+_mss > 1500 {
 		panic("packets > mtu")
 	}
 	td.hwdesc.rest |= mss << 48
 	l4hdrlen := uint64(_l4hdrlen)
-	if l4hdrlen &^ 0xff != 0 {
+	if l4hdrlen&^0xff != 0 {
 		panic("large l4hdrlen")
 	}
 	// XXXPANIC
 	timeoptpadlen := 12
 	msslen := 4
-	if _l4hdrlen != TCPLEN && _l4hdrlen != TCPLEN + timeoptpadlen &&
-	   _l4hdrlen != TCPLEN + timeoptpadlen + msslen {
+	if _l4hdrlen != TCPLEN && _l4hdrlen != TCPLEN+timeoptpadlen &&
+		_l4hdrlen != TCPLEN+timeoptpadlen+msslen {
 		panic("weird tcp header len (options?)")
 	}
 	td.hwdesc.rest |= l4hdrlen << 40
@@ -1534,8 +1536,8 @@ func (td *txdesc_t) data_continue(src [][]uint8) [][]uint8 {
 	td.hwdesc.rest = 0x3 << 20
 	// DEXT = 1
 	td.hwdesc.rest |= 1 << 29
-	rs   := uint64(1 << 27)
-	eop  := uint64(1 << 24)
+	rs := uint64(1 << 27)
+	eop := uint64(1 << 24)
 	ifcs := uint64(1 << 25)
 	td.hwdesc.rest |= ifcs
 	if last {
@@ -1580,7 +1582,7 @@ func (td *txdesc_t) mktcp_tso(src [][]uint8, tcphlen, tlen int) [][]uint8 {
 	// DCMD.TSE = 1
 	tse := uint64(1 << 31)
 	td.hwdesc.rest |= tse
-	if tlen <= ETHERLEN + IP4LEN + TCPLEN {
+	if tlen <= ETHERLEN+IP4LEN+TCPLEN {
 		panic("no payload")
 	}
 	// for TSO, PAYLEN is the # of bytes in the TCP payload (not the total
@@ -1591,7 +1593,7 @@ func (td *txdesc_t) mktcp_tso(src [][]uint8, tcphlen, tlen int) [][]uint8 {
 
 func (td *txdesc_t) _dtalen(v uint64) {
 	mask := uint64(0xffff)
-	if v &^ mask != 0 || v == 0 {
+	if v&^mask != 0 || v == 0 {
 		panic("bad dtalen")
 	}
 	td.hwdesc.rest &^= mask
@@ -1600,7 +1602,7 @@ func (td *txdesc_t) _dtalen(v uint64) {
 
 func (td *txdesc_t) _paylen(v uint64) {
 	mask := uint64(0x3ffff)
-	if v &^ mask != 0 || v == 0 {
+	if v&^mask != 0 || v == 0 {
 		panic("bad paylen")
 	}
 	td.hwdesc.rest &^= mask << 46
@@ -1619,7 +1621,7 @@ func (td *txdesc_t) txdone() bool {
 		return false
 	}
 	dd := uint64(1 << 32)
-	return atomic.LoadUint64(&td.hwdesc.rest) & dd != 0
+	return atomic.LoadUint64(&td.hwdesc.rest)&dd != 0
 }
 
 func (td *txdesc_t) _avail() {
@@ -1643,37 +1645,37 @@ func (td *txdesc_t) wbwait() {
 }
 
 type ixgbe_t struct {
-	tag	pcitag_t
-	bar0	[]uint32
-	_locked	bool
-	txs	[]ixgbetx_t
-	rx struct {
-		ndescs	uint32
-		descs	[]rxdesc_t
-		pkt	[][]uint8
-		tailc	uint32
+	tag     pcitag_t
+	bar0    []uint32
+	_locked bool
+	txs     []ixgbetx_t
+	rx      struct {
+		ndescs uint32
+		descs  []rxdesc_t
+		pkt    [][]uint8
+		tailc  uint32
 	}
-	pgs	int
-	linkup	bool
+	pgs    int
+	linkup bool
 	// big-endian
-	mac	mac_t
-	ip	ip4_t
-	mtu	int
+	mac mac_t
+	ip  ip4_t
+	mtu int
 }
 
 type ixgbetx_t struct {
 	sync.Mutex
-	qnum	int
-	ndescs	uint32
-	descs	[]txdesc_t
+	qnum   int
+	ndescs uint32
+	descs  []txdesc_t
 	// cache tail register in order to avoid reading NIC registers, which
 	// apparently take 1-2us.
-	tailc	uint32
+	tailc uint32
 	// cache of most recent context descriptor parameters
 	cc struct {
-		istcp	bool
-		ethl	int
-		ip4l	int
+		istcp bool
+		ethl  int
+		ip4l  int
 	}
 }
 
@@ -1689,34 +1691,34 @@ func (x *ixgbe_t) init(t pcitag_t) {
 
 	v := pci_read(t, 0x4, 2)
 	memen := 1 << 1
-	if v & memen == 0 {
+	if v&memen == 0 {
 		panic("memory access disabled")
 	}
 	busmaster := 1 << 2
-	if v & busmaster == 0 {
+	if v&busmaster == 0 {
 		panic("busmaster disabled")
 	}
 	pciebmdis := uint32(1 << 2)
 	y := x.rl(CTRL)
-	if y & pciebmdis != 0 {
+	if y&pciebmdis != 0 {
 		panic("pcie bus master disable set")
 	}
 	nosnoop_en := 1 << 11
 	v = pci_read(t, 0xa8, 2)
-	if v & nosnoop_en == 0 {
+	if v&nosnoop_en == 0 {
 		panic("pcie no snoop disabled")
 	}
 }
 
 func (x *ixgbe_t) rs(reg ixgbereg_t, val uint32) {
-	if reg % 4 != 0 {
+	if reg%4 != 0 {
 		panic("bad reg")
 	}
 	runtime.Store32(&x.bar0[reg/4], val)
 }
 
 func (x *ixgbe_t) rl(reg ixgbereg_t) uint32 {
-	if reg % 4 != 0 {
+	if reg%4 != 0 {
 		panic("bad reg")
 	}
 	return atomic.LoadUint32(&x.bar0[reg/4])
@@ -1734,18 +1736,18 @@ func (x *ixgbe_t) _reset() {
 
 	// link reset + device reset
 	lrst := uint32(1 << 3)
-	rst :=  uint32(1 << 26)
+	rst := uint32(1 << 26)
 	v := x.rl(CTRL)
 	v |= rst
 	v |= lrst
 	x.rs(CTRL, v)
 	// 8.2.4.1.1: wait 1ms before checking reset bit after setting
-	<- time.After(time.Millisecond)
-	for x.rl(CTRL) & rst != 0 {
+	<-time.After(time.Millisecond)
+	for x.rl(CTRL)&rst != 0 {
 	}
 	// x540 doc 4.6.3.2: wait for 10ms after reset "to enable a
 	// smooth initialization flow"
-	<- time.After(10*time.Millisecond)
+	<-time.After(10 * time.Millisecond)
 }
 
 func (x *ixgbe_t) _int_disable() {
@@ -1756,42 +1758,42 @@ func (x *ixgbe_t) _int_disable() {
 }
 
 func (x *ixgbe_t) _phy_read(preg ixgbephyreg_t) uint16 {
-	if preg &^ ((1 << 21) - 1) != 0 {
+	if preg&^((1<<21)-1) != 0 {
 		panic("bad phy reg")
 	}
 	mdicmd := uint32(1 << 30)
 	// wait for MDIO to be ready
-	for x.rl(MSCA) & mdicmd != 0 {
+	for x.rl(MSCA)&mdicmd != 0 {
 	}
 	opaddr := uint32(0)
 	phyport := uint32(0)
-	v := uint32(preg) | phyport << 21 | opaddr << 26 | mdicmd
+	v := uint32(preg) | phyport<<21 | opaddr<<26 | mdicmd
 	x.rs(MSCA, v)
-	for x.rl(MSCA) & mdicmd != 0 {
+	for x.rl(MSCA)&mdicmd != 0 {
 	}
 	opread := uint32(3)
-	v = uint32(preg) | phyport << 21 | opread << 26 | mdicmd
+	v = uint32(preg) | phyport<<21 | opread<<26 | mdicmd
 	x.rs(MSCA, v)
-	for x.rl(MSCA) & mdicmd != 0 {
+	for x.rl(MSCA)&mdicmd != 0 {
 	}
 	ret := x.rl(MSRWD)
 	return uint16(ret >> 16)
 }
 
 var lockstat struct {
-	sw	int
-	hw	int
-	fw	int
-	nvmup	int
-	swmng	int
+	sw    int
+	hw    int
+	fw    int
+	nvmup int
+	swmng int
 }
 
 // acquires the "lock" protecting the semaphores. returns whether fw timedout
 func (x *ixgbe_t) _reg_acquire() bool {
-	to := 3*time.Second
+	to := 3 * time.Second
 	st := time.Now()
 	smbi := uint32(1 << 0)
-	for x.rl(SWSM) & smbi != 0 {
+	for x.rl(SWSM)&smbi != 0 {
 		if time.Since(st) > to {
 			panic("SWSM timeout!")
 		}
@@ -1799,7 +1801,7 @@ func (x *ixgbe_t) _reg_acquire() bool {
 	var fwdead bool
 	st = time.Now()
 	regsmp := uint32(1 << 31)
-	for x.rl(SW_FW_SYNC) & regsmp != 0 {
+	for x.rl(SW_FW_SYNC)&regsmp != 0 {
 		if time.Since(st) > to {
 			x.log("SW_FW_SYNC timeout!")
 			fwdead = true
@@ -1811,7 +1813,7 @@ func (x *ixgbe_t) _reg_acquire() bool {
 
 func (x *ixgbe_t) _reg_release() {
 	regsmp := uint32(1 << 31)
-	x.rs(SW_FW_SYNC, x.rl(SW_FW_SYNC) &^ regsmp)
+	x.rs(SW_FW_SYNC, x.rl(SW_FW_SYNC)&^regsmp)
 	x.rs(SWSM, 0)
 }
 
@@ -1826,7 +1828,7 @@ func (x *ixgbe_t) hwlock() {
 			x._locked = true
 			return
 		}
-		<- time.After(10*time.Millisecond)
+		<-time.After(10 * time.Millisecond)
 	}
 	fmt.Printf("lock stats: %v\n", lockstat)
 	panic("hwlock timedout")
@@ -1841,36 +1843,36 @@ func (x *ixgbe_t) _hwlock() bool {
 	//sw_phy0 := uint32(1 << 1)
 	//sw_phy1 := uint32(1 << 2)
 	//sw_mac  := uint32(1 << 3)
-	hw_nvm  := uint32(1 << 4)
-	fw_nvm  := uint32(1 << 5)
+	hw_nvm := uint32(1 << 4)
+	fw_nvm := uint32(1 << 5)
 	fw_phy0 := uint32(1 << 6)
 	fw_phy1 := uint32(1 << 7)
-	fw_mac  := uint32(1 << 8)
-	nvm_up  := uint32(1 << 9)
-	sw_mng  := uint32(1 << 10)
+	fw_mac := uint32(1 << 8)
+	nvm_up := uint32(1 << 9)
+	sw_mng := uint32(1 << 10)
 	fwbits := fw_nvm | fw_phy0 | fw_phy1 | fw_mac
 
 	ret := false
 	v := x.rl(SW_FW_SYNC)
-	if v & hw_nvm != 0 {
+	if v&hw_nvm != 0 {
 		lockstat.hw++
 		goto out
 	}
-	if v & 0xf != 0 {
+	if v&0xf != 0 {
 		lockstat.sw++
 		goto out
 	}
-	if !fwdead && v & fwbits != 0 {
+	if !fwdead && v&fwbits != 0 {
 		lockstat.fw++
 		goto out
 	}
-	if v & nvm_up != 0 {
+	if v&nvm_up != 0 {
 		lockstat.nvmup++
 	}
-	if v & sw_mng != 0 {
+	if v&sw_mng != 0 {
 		lockstat.swmng++
 	}
-	x.rs(SW_FW_SYNC, v | 0xf)
+	x.rs(SW_FW_SYNC, v|0xf)
 	ret = true
 out:
 	x._reg_release()
@@ -1903,7 +1905,7 @@ func (x *ixgbe_t) linkinfo() (bool, string) {
 	case 3:
 		speed = "10 Gb/s"
 	}
-	return v & link != 0, speed
+	return v&link != 0, speed
 }
 
 func (x *ixgbe_t) wait_linkup(secs int) bool {
@@ -1912,7 +1914,7 @@ func (x *ixgbe_t) wait_linkup(secs int) bool {
 	s := time.Duration(secs)
 	for {
 		v := x.rl(LINKS)
-		if v & link != 0 {
+		if v&link != 0 {
 			return true
 		}
 		if time.Since(st) > s*time.Second {
@@ -1955,9 +1957,9 @@ func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
 }
 
 func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
-    mss int) bool {
+	mss int) bool {
 	tq := runtime.CPUHint()
-	myq := &x.txs[tq % len(x.txs)]
+	myq := &x.txs[tq%len(x.txs)]
 	myq.Lock()
 	ok := x._tx_enqueue(myq, buf, ipv4, tcp, tso, tcphlen, mss)
 	myq.Unlock()
@@ -1972,7 +1974,7 @@ func (x *ixgbe_t) _tx_nowait(buf [][]uint8, ipv4, tcp, tso bool, tcphlen,
 // IPV4 parameters. alternatively, we could simultaneously use both of the
 // x540's context slots.
 func (x *ixgbe_t) _ctxt_update(myq *ixgbetx_t, ipv4, tcp bool, ethl,
-   ip4l int) bool {
+	ip4l int) bool {
 	if !ipv4 && !tcp {
 		return false
 	}
@@ -1991,7 +1993,7 @@ func (x *ixgbe_t) _ctxt_update(myq *ixgbetx_t, ipv4, tcp bool, ethl,
 // caller must hold the ixgbetx_t's lock. returns true if buf was copied to the
 // transmission queue.
 func (x *ixgbe_t) _tx_enqueue(myq *ixgbetx_t, buf [][]uint8, ipv4, tcp,
-   tso bool, tcphlen, mss int) bool {
+	tso bool, tcphlen, mss int) bool {
 	if len(buf) == 0 {
 		panic("wut")
 	}
@@ -2000,7 +2002,7 @@ func (x *ixgbe_t) _tx_enqueue(myq *ixgbetx_t, buf [][]uint8, ipv4, tcp,
 	for i := 0; i < len(buf); {
 		if len(buf[i]) == 0 {
 			copy(buf[i:], buf[i+1:])
-			buf = buf[:len(buf) - 1]
+			buf = buf[:len(buf)-1]
 			continue
 		}
 		tlen += len(buf[i])
@@ -2009,7 +2011,7 @@ func (x *ixgbe_t) _tx_enqueue(myq *ixgbetx_t, buf [][]uint8, ipv4, tcp,
 	if tso && !tcp {
 		panic("tso is only for tcp")
 	}
-	if tlen - ETHERLEN > 1500 && !tso {
+	if tlen-ETHERLEN > 1500 && !tso {
 		panic("should use tso")
 	}
 	if tlen == 0 {
@@ -2018,7 +2020,7 @@ func (x *ixgbe_t) _tx_enqueue(myq *ixgbetx_t, buf [][]uint8, ipv4, tcp,
 	need := tlen
 	newtail := tail
 	ctxtstale := (ipv4 || tcp) && x._ctxt_update(myq, ipv4, tcp, ETHERLEN,
-	   IP4LEN)
+		IP4LEN)
 	if ctxtstale || tso {
 		// segmentation offload requires a per-packet context
 		// descriptor
@@ -2033,7 +2035,7 @@ func (x *ixgbe_t) _tx_enqueue(myq *ixgbetx_t, buf [][]uint8, ipv4, tcp,
 	// set and is the last descriptor in a packet, thus any previous
 	// context descriptors (which may contain a packet's header for TSO)
 	// are unused.
-	for tt := newtail;; {
+	for tt := newtail; ; {
 		// find data descriptor with DD and eop
 		for {
 			fd := &myq.descs[tt]
@@ -2187,10 +2189,10 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 		st := x.rl(EICR)
 		//x.log("*** NIC IRQ (%v) %#x", irqs, st)
 
-		rx     := uint32(1 << 0)
-		tx     := uint32(1 << 1)
+		rx := uint32(1 << 0)
+		tx := uint32(1 << 1)
 		rxmiss := uint32(1 << 17)
-		lsc    := uint32(1 << 20)
+		lsc := uint32(1 << 20)
 
 		// XXX code for polling instead of using interrupts
 		//runtime.Gosched()
@@ -2219,7 +2221,7 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 		//	}
 		//}
 
-		if st & lsc != 0 {
+		if st&lsc != 0 {
 			// link status change
 			up, speed := x.linkinfo()
 			x.linkup = up
@@ -2247,11 +2249,11 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 				//go x.tx_test2()
 				go func() {
 					for {
-						time.Sleep(10*time.Second)
+						time.Sleep(10 * time.Second)
 						v := x.rl(QPRDC(0))
 						if v != 0 {
 							fmt.Printf("rx drop:"+
-							    " %v\n", v)
+								" %v\n", v)
 						}
 						if dropints != 0 {
 							fmt.Printf("drop ints: %v\n", dropints)
@@ -2261,14 +2263,14 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 				}()
 			}
 		}
-		if rxmiss & st != 0 {
+		if rxmiss&st != 0 {
 			dropints++
 		}
-		if st & rx != 0 {
+		if st&rx != 0 {
 			// rearm rx descriptors
 			x.rx_consume()
 		}
-		if st & tx != 0 {
+		if st&tx != 0 {
 			//x.txs[0].Lock()
 			//x.txs[0].Unlock()
 		}
@@ -2279,22 +2281,22 @@ func (x *ixgbe_t) tester1() {
 	stirqs := irqs
 	st := time.Now()
 	for {
-		<-time.After(30*time.Second)
+		<-time.After(30 * time.Second)
 		nirqs := irqs - stirqs
-		drops  := x.rl(QPRDC(0))
+		drops := x.rl(QPRDC(0))
 		secs := time.Since(st).Seconds()
 		pps := float64(numpkts) / secs
 		ips := int(float64(nirqs) / secs)
 		spursps := float64(spurs) / secs
 		fmt.Printf("pkt %6v (%.4v/s), dr %v %v, ws %v, "+
-		    "irqs %v (%v/s), spurs %v (%.3v/s)\n", numpkts, pps,
-		    dropints, drops, waits, nirqs, ips, spurs, spursps)
+			"irqs %v (%v/s), spurs %v (%.3v/s)\n", numpkts, pps,
+			dropints, drops, waits, nirqs, ips, spurs, spursps)
 	}
 }
 
 func attach_ixgbe(vid, did int, t pcitag_t) {
 	if unsafe.Sizeof(*rxdesc_t{}.hwdesc) != 16 ||
-	   unsafe.Sizeof(*txdesc_t{}.hwdesc) != 16 {
+		unsafe.Sizeof(*txdesc_t{}.hwdesc) != 16 {
 		panic("unexpected padding")
 	}
 
@@ -2315,7 +2317,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	// even though we disable flow control, we write 0 to FCTTV, FCRTL,
 	// FCRTH, FCRTV, and  FCCFG. we program FCRTH.RTH later.
 	regn := func(r ixgbereg_t, i int) ixgbereg_t {
-		return r + ixgbereg_t(i * 4)
+		return r + ixgbereg_t(i*4)
 	}
 
 	fcttv := ixgbereg_t(0x3200)
@@ -2335,7 +2337,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 
 	mflcn := ixgbereg_t(0x4294)
 	rfce := uint32(1 << 3)
-	son := x.rl(mflcn) & rfce != 0
+	son := x.rl(mflcn)&rfce != 0
 	if son {
 		panic("receive flow control should be off?")
 	}
@@ -2343,9 +2345,9 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	// enable no snooping
 	nosnoop_dis := uint32(1 << 16)
 	v := x.rl(CTRL_EXT)
-	if v & nosnoop_dis != 0 {
+	if v&nosnoop_dis != 0 {
 		x.log("no snoop disabled. enabling.")
-		x.rs(CTRL_EXT, v &^ nosnoop_dis)
+		x.rs(CTRL_EXT, v&^nosnoop_dis)
 	}
 	// useful for testing whether no snoop/relaxed memory ordering affects
 	// buge behavior
@@ -2354,7 +2356,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 
 	x.hwlock()
 	phyreset := uint16(1 << 6)
-	for x._phy_read(ALARMS1) & phyreset == 0 {
+	for x._phy_read(ALARMS1)&phyreset == 0 {
 	}
 	//x.log("phy reset complete")
 	x.hwunlock()
@@ -2369,7 +2371,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	////x.log("manageability complete")
 
 	dmadone := uint32(1 << 3)
-	for x.rl(RDRXCTL) & dmadone == 0 {
+	for x.rl(RDRXCTL)&dmadone == 0 {
 	}
 	//x.log("dma engine initialized")
 
@@ -2378,13 +2380,13 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	// RAL/RAH are big-endian
 	v = x.rl(RAH(0))
 	av := uint32(1 << 31)
-	if v & av == 0 {
+	if v&av == 0 {
 		panic("RA 0 invalid?")
 	}
 	mac := (uint64(v) & 0xffff) << 32
 	mac |= uint64(x.rl(RAL(0)))
 	for i := 0; i < 6; i++ {
-		b := uint8(mac >> (8*uint(i)))
+		b := uint8(mac >> (8 * uint(i)))
 		x.mac[i] = b
 	}
 
@@ -2395,7 +2397,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	maddr := 0xfee << 20
 	pci_write(x.tag, msiaddrl, maddr)
 	vec := msi_alloc()
-	mdata := int(vec) | bsp_apic_id << 12
+	mdata := int(vec) | bsp_apic_id<<12
 	pci_write(x.tag, msidata, mdata)
 
 	msictrl := 0x50
@@ -2405,14 +2407,14 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	pci_write(x.tag, msictrl, pv)
 
 	msimask := 0x60
-	if pci_read(x.tag, msimask, 4) & 1 != 0 {
+	if pci_read(x.tag, msimask, 4)&1 != 0 {
 		panic("msi pci masked")
 	}
 
 	// make sure legacy PCI interrupts are disabled
 	pciintdis := 1 << 10
 	pv = pci_read(x.tag, 0x4, 2)
-	pci_write(x.tag, 0x4, pv | pciintdis)
+	pci_write(x.tag, 0x4, pv|pciintdis)
 
 	// disable autoclear/automask
 	x.rs(EIAC, 0)
@@ -2436,7 +2438,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	for n := 0; n < 128; n++ {
 		v := x.rl(RSCCTL(n))
 		rscen := uint32(1 << 0)
-		x.rs(RSCCTL(n), v &^ rscen)
+		x.rs(RSCCTL(n), v&^rscen)
 	}
 
 	// receive enable here
@@ -2493,13 +2495,13 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 		pg, p_pg := x.pg_new()
 		// RDBAL/TDBAL must be 128 byte aligned
 		x.rs(RDBAL(0), uint32(p_pg))
-		x.rs(RDBAH(0), uint32(p_pg >> 32))
+		x.rs(RDBAH(0), uint32(p_pg>>32))
 		x.rs(RDLEN(0), uint32(common.PGSIZE))
 
 		// packet buffers must be at least SRRCTL.BSIZEPACKET bytes,
 		// header buffers must be at least SRRCTL.BSIZEHEADER bytes
 		rdescsz := uint32(16)
-		x.rx.ndescs = uint32(common.PGSIZE)/rdescsz
+		x.rx.ndescs = uint32(common.PGSIZE) / rdescsz
 		x.rx.descs = make([]rxdesc_t, x.rx.ndescs)
 		for i := 0; i < len(pg); i += 4 {
 			_, p_bpg := x.pg_new()
@@ -2507,7 +2509,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 			dn := i / 2
 			ps := common.Pa_t(2 << 10)
 			x.rx.descs[dn].init(p_bpg, 0, &pg[i])
-			x.rx.descs[dn+1].init(p_bpg + ps, 0, &pg[i+2])
+			x.rx.descs[dn+1].init(p_bpg+ps, 0, &pg[i+2])
 		}
 
 		v = x.rl(SRRCTL(0))
@@ -2532,7 +2534,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 		qen := uint32(1 << 25)
 		v |= qen
 		x.rs(RXDCTL(0), v)
-		for x.rl(RXDCTL(0)) & qen == 0 {
+		for x.rl(RXDCTL(0))&qen == 0 {
 		}
 		// must enable queue via RXDCTL.ENABLE before setting RDT
 		tailc := x.rx.ndescs - 1
@@ -2554,10 +2556,10 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 			x.rs(TQSM(n), 0)
 		}
 
-		txcrc      := uint32(1 <<  0)
-		crcstrip   := uint32(1 <<  1)
-		txpad      := uint32(1 << 10)
-		rxlerr     := uint32(1 << 27)
+		txcrc := uint32(1 << 0)
+		crcstrip := uint32(1 << 1)
+		txpad := uint32(1 << 10)
+		rxlerr := uint32(1 << 27)
 		// HLREG0.RXCRCSTRP must match RDRXCTL.CRCSTRIP
 		v := x.rl(HLREG0)
 		v |= txcrc | crcstrip | txpad | rxlerr
@@ -2587,11 +2589,11 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 			pg, p_pg := x.pg_new()
 			// RDBAL/TDBAL must be 128 byte aligned
 			x.rs(TDBAL(i), uint32(p_pg))
-			x.rs(TDBAH(i), uint32(p_pg >> 32))
+			x.rs(TDBAH(i), uint32(p_pg>>32))
 			x.rs(TDLEN(i), uint32(common.PGSIZE))
 
 			tdescsz := uint32(16)
-			ndescs := uint32(common.PGSIZE)/tdescsz
+			ndescs := uint32(common.PGSIZE) / tdescsz
 			ttx.ndescs = ndescs
 			ttx.descs = make([]txdesc_t, ttx.ndescs)
 			for j := 0; j < len(pg); j += 4 {
@@ -2599,8 +2601,8 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 				dn := j / 2
 				ps := uintptr(common.PGSIZE) / 2
 				ttx.descs[dn].init(p_bpg, ps, &pg[j])
-				ttx.descs[dn+1].init(p_bpg + common.Pa_t(ps), ps,
-				   &pg[j+2])
+				ttx.descs[dn+1].init(p_bpg+common.Pa_t(ps), ps,
+					&pg[j+2])
 				// set DD and eop so all tx descriptors appear
 				// ready for use
 				ttx.descs[dn]._avail()
@@ -2613,17 +2615,17 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 
 			// number of transmit descriptors per cacheline, as per
 			// 7.2.3.4.1.
-			tdcl := uint32(64/tdescsz)
+			tdcl := uint32(64 / tdescsz)
 			// number of internal NIC descriptor buffers 7.2.1.2
 			nicdescs := uint32(40)
 			pthresh := nicdescs - tdcl
 			hthresh := tdcl
 			wthresh := uint32(0)
-			if pthresh &^ 0x7f != 0 || hthresh &^ 0x7f != 0 ||
-			    wthresh &^ 0x7f != 0 {
+			if pthresh&^0x7f != 0 || hthresh&^0x7f != 0 ||
+				wthresh&^0x7f != 0 {
 				panic("bad pre-fetcher thresholds")
 			}
-			v = uint32(pthresh | hthresh << 8 | wthresh << 16)
+			v = uint32(pthresh | hthresh<<8 | wthresh<<16)
 			x.rs(TXDCTL(i), v)
 
 			x.rs(TDT(ttx.qnum), 0)
@@ -2642,7 +2644,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 			v |= txenable
 			x.rs(TXDCTL(i), v)
 
-			for x.rl(TXDCTL(i)) & txenable == 0 {
+			for x.rl(TXDCTL(i))&txenable == 0 {
 			}
 		}
 		//x.log("TX enabled!")
@@ -2658,7 +2660,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	//maxitr := uint32(0x1ff << 3)
 	// 125us period
 	smallitr := uint32(0x3c << 3)
-	x.rs(EITR(0), cnt_wdis | smallitr)
+	x.rs(EITR(0), cnt_wdis|smallitr)
 
 	// clear all previous interrupts
 	x.rs(EICR, ^uint32(0))
@@ -2666,7 +2668,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	go x.int_handler(vec)
 	// unmask tx/rx queue interrupts and link change
 	lsc := uint32(1 << 20)
-	x.rs(EIMS, lsc | 3)
+	x.rs(EIMS, lsc|3)
 
 	ntx := uint32(0)
 	for i := range x.txs {
@@ -2674,7 +2676,7 @@ func attach_ixgbe(vid, did int, t pcitag_t) {
 	}
 	macs := mac2str(x.mac[:])
 	x.log("attached: MAC %s, rxq %v, txq %v, MSI %v, %vKB", macs,
-	    x.rx.ndescs, ntx, vec, x.pgs << 2)
+		x.rx.ndescs, ntx, vec, x.pgs<<2)
 }
 
 var numpkts int
@@ -2697,7 +2699,7 @@ func (x *ixgbe_t) rx_test() {
 		k := x.rl(QPRDC(0))
 		if v {
 			fmt.Println("  RX stats: ", a, b, c, d, e, f, g,
-			    h, i, j, k)
+				h, i, j, k)
 		}
 	}
 	prstat(false)
@@ -2705,7 +2707,7 @@ func (x *ixgbe_t) rx_test() {
 	i := 0
 	for {
 		i++
-	//for i := 0; i < 3; i++ {
+		//for i := 0; i < 3; i++ {
 		<-time.After(time.Second)
 		tail := x.rl(RDT(0))
 		rdesc := &x.rx.descs[tail]
@@ -2719,7 +2721,7 @@ func (x *ixgbe_t) rx_test() {
 		for !rdesc.rxdone() {
 		}
 		eop := uint64(1 << 1)
-		if rdesc.hwdesc.p_hdr & eop == 0 {
+		if rdesc.hwdesc.p_hdr&eop == 0 {
 			panic("EOP not set")
 		}
 		if x.rl(RDH(0)) != tail {
@@ -2728,7 +2730,7 @@ func (x *ixgbe_t) rx_test() {
 
 		hl := rdesc.hdrlen()
 		pl := rdesc.pktlen()
-		if pl > 1 << 11 {
+		if pl > 1<<11 {
 			panic("expected packet len")
 		}
 		fmt.Printf("packet %v: plen: %v, hdrlen: %v, hdr: ", i, pl, hl)
@@ -2740,7 +2742,6 @@ func (x *ixgbe_t) rx_test() {
 	}
 }
 
-
 func (x *ixgbe_t) tx_test() {
 	x.txs[0].Lock()
 	defer x.txs[0].Unlock()
@@ -2748,7 +2749,7 @@ func (x *ixgbe_t) tx_test() {
 	fmt.Printf("test tx start\n")
 	pkt := &tcppkt_t{}
 	pkt.tcphdr.init_ack(8080, 8081, 31337, 31338)
-	pkt.tcphdr.win = 1<<14
+	pkt.tcphdr.win = 1 << 14
 	l4len := 0
 	pkt.iphdr.init_tcp(l4len, 0x01010101, 0x02020202)
 	bmac := []uint8{0x00, 0x13, 0x72, 0xb6, 0x7b, 0x42}
@@ -2756,7 +2757,7 @@ func (x *ixgbe_t) tx_test() {
 	pkt.crc(l4len, 0x01010101, 0x121a0530)
 
 	eth, ip, thdr := pkt.hdrbytes()
-	durdata := new([3*1460]uint8)
+	durdata := new([3 * 1460]uint8)
 	sgbuf := [][]uint8{eth, ip, thdr, durdata[:]}
 	tlen := 0
 	for _, s := range sgbuf {
@@ -2771,20 +2772,20 @@ func (x *ixgbe_t) tx_test() {
 	fd := &x.txs[0].descs[t]
 	fd.wbwait()
 	fd.ctxt_tcp_tso(ETHERLEN, IP4LEN, len(thdr), 1460)
-	t = (t+1) % x.txs[0].ndescs
+	t = (t + 1) % x.txs[0].ndescs
 	fd = &x.txs[0].descs[t]
 	fd.wbwait()
 	sgbuf = fd.mktcp_tso(sgbuf, len(thdr), tlen)
-	t = (t+1) % x.txs[0].ndescs
+	t = (t + 1) % x.txs[0].ndescs
 	for len(sgbuf) != 0 {
 		fd = &x.txs[0].descs[t]
 		fd.wbwait()
 		sgbuf = fd.data_continue(sgbuf)
-		t = (t+1) % x.txs[0].ndescs
+		t = (t + 1) % x.txs[0].ndescs
 	}
 	x.rs(TDT(0), t)
 
-	for ot := h; ot != t; ot = (ot+1) % x.txs[0].ndescs {
+	for ot := h; ot != t; ot = (ot + 1) % x.txs[0].ndescs {
 		fd := &x.txs[0].descs[ot]
 		if fd.eop {
 			fmt.Printf("wait for %v...\n", ot)
@@ -2808,7 +2809,7 @@ func (x *ixgbe_t) _dbc_init() {
 		x.rs(RXPBSIZE(n), 0)
 	}
 	// 4.6.3.2 "FCRTH.RTH must be set even if flow control is disabled"
-	x.rs(FCRTH(0), x.rl(RXPBSIZE(0)) - 0x6000)
+	x.rs(FCRTH(0), x.rl(RXPBSIZE(0))-0x6000)
 
 	txpbsize := uint32(0xa0 << 10)
 	x.rs(TXPBSIZE(0), txpbsize)
@@ -2890,29 +2891,27 @@ func (x *ixgbe_t) _dbc_init() {
 	}
 
 	v = x.rl(RTTDCS)
-	tdpac  := uint32(1 <<  0)
-	vmpac  := uint32(1 <<  1)
-	tdrm   := uint32(1 <<  4)
-	bdpm   := uint32(1 << 22)
+	tdpac := uint32(1 << 0)
+	vmpac := uint32(1 << 1)
+	tdrm := uint32(1 << 4)
+	bdpm := uint32(1 << 22)
 	bpbfsm := uint32(1 << 23)
 	v &^= tdpac | vmpac | tdrm
 	v |= bdpm | bpbfsm
 	x.rs(RTTDCS, v)
 
 	v = x.rl(RTTPCS)
-	tppac  := uint32(1 << 5)
-	tprm   := uint32(1 << 8)
-	arbd   := uint32(0x224 << 22)
+	tppac := uint32(1 << 5)
+	tprm := uint32(1 << 8)
+	arbd := uint32(0x224 << 22)
 	arbmask := uint32(((1 << 10) - 1) << 22)
 	v &^= tppac | tprm | arbmask
 	v |= arbd
 	x.rs(RTTPCS, v)
 
 	v = x.rl(RTRPCS)
-	rrm  := uint32(1 << 1)
-	rac  := uint32(1 << 2)
+	rrm := uint32(1 << 1)
+	rac := uint32(1 << 2)
 	v &^= rrm | rac
 	x.rs(RTRPCS, v)
 }
-
-

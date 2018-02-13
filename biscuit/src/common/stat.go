@@ -3,15 +3,15 @@ package common
 import "unsafe"
 
 type Stat_t struct {
-	_dev	uint
-	_ino	uint
-	_mode	uint
-	_size	uint
-	_rdev	uint
-	_uid	uint
-	_blocks	uint
-	_m_sec	uint
-	_m_nsec	uint
+	_dev    uint
+	_ino    uint
+	_mode   uint
+	_size   uint
+	_rdev   uint
+	_uid    uint
+	_blocks uint
+	_m_sec  uint
+	_m_nsec uint
 }
 
 func (st *Stat_t) Wdev(v uint) {
@@ -55,4 +55,3 @@ func (st *Stat_t) Bytes() []uint8 {
 	sl := (*[sz]uint8)(unsafe.Pointer(&st._dev))
 	return sl[:]
 }
-

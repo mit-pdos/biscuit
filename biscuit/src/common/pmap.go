@@ -6,12 +6,12 @@ import "sync"
 import "sync/atomic"
 import "runtime"
 
-const PGSIZE     int = 1 << 12
+const PGSIZE int = 1 << 12
 
-type Pa_t	uintptr
-type Bytepg_t	[PGSIZE]uint8
-type Pg_t	[512]int
-type Pmap_t	[512]Pa_t
+type Pa_t uintptr
+type Bytepg_t [PGSIZE]uint8
+type Pg_t [512]int
+type Pmap_t [512]Pa_t
 
 func Pg2bytes(pg *Pg_t) *Bytepg_t {
 	return (*Bytepg_t)(unsafe.Pointer(pg))
@@ -30,7 +30,7 @@ func _refaddr(p_pg Pa_t) (*int32, uint32) {
 	return &Physmem.pgs[idx].refcnt, idx
 }
 
-var _vdirect	= uintptr(VDIRECT << 39)
+var _vdirect = uintptr(VDIRECT << 39)
 
 func _instpg(pg *Pmap_t, idx uint, perms Pa_t) (Pa_t, bool) {
 	_, p_np, ok := Physmem.Refpg_new()
@@ -38,7 +38,7 @@ func _instpg(pg *Pmap_t, idx uint, perms Pa_t) (Pa_t, bool) {
 		return 0, false
 	}
 	Physmem.Refup(p_np)
-	npte :=  p_np | perms | PTE_P
+	npte := p_np | perms | PTE_P
 	pg[idx] = npte
 	return npte, true
 }
@@ -47,20 +47,20 @@ func _instpg(pg *Pmap_t, idx uint, perms Pa_t) (Pa_t, bool) {
 // 2) create was true but we failed to allocate a page to create the mapping.
 func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
 	vn := uint(uintptr(v))
-	l4b  := (vn >> (12 + 9*3)) & 0x1ff
+	l4b := (vn >> (12 + 9*3)) & 0x1ff
 	pdpb := (vn >> (12 + 9*2)) & 0x1ff
-	pdb  := (vn >> (12 + 9*1)) & 0x1ff
-	ptb  := (vn >> (12 + 9*0)) & 0x1ff
+	pdb := (vn >> (12 + 9*1)) & 0x1ff
+	ptb := (vn >> (12 + 9*0)) & 0x1ff
 	if l4b >= uint(VREC) && l4b <= uint(VEND) {
 		panic(fmt.Sprintf("map in special slots: %#x", l4b))
 	}
 
-	if v & IPGMASK == 0 && create {
-		panic("mapping page 0");
+	if v&IPGMASK == 0 && create {
+		panic("mapping page 0")
 	}
 
 	cpe := func(pe Pa_t) *Pmap_t {
-		if pe & PTE_PS != 0 {
+		if pe&PTE_PS != 0 {
 			panic("insert mapping into PS page")
 		}
 		phys := uintptr(pe & PTE_ADDR)
@@ -69,7 +69,7 @@ func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
 
 	var ok bool
 	pe := pml4[l4b]
-	if pe & PTE_P == 0 {
+	if pe&PTE_P == 0 {
 		if !create {
 			return nil, 0
 		}
@@ -80,7 +80,7 @@ func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
 	}
 	next := cpe(pe)
 	pe = next[pdpb]
-	if pe & PTE_P == 0 {
+	if pe&PTE_P == 0 {
 		if !create {
 			return nil, 0
 		}
@@ -91,7 +91,7 @@ func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
 	}
 	next = cpe(pe)
 	pe = next[pdb]
-	if pe & PTE_P == 0 {
+	if pe&PTE_P == 0 {
 		if !create {
 			return nil, 0
 		}
@@ -142,8 +142,8 @@ func pmfree(pml4 *Pmap_t, start, end uintptr) {
 			tofree = tofree[:left]
 		}
 		for idx, p_pg := range tofree {
-			if p_pg & PTE_P != 0 {
-				if p_pg & PTE_U == 0 {
+			if p_pg&PTE_P != 0 {
+				if p_pg&PTE_U == 0 {
 					panic("kernel pages in vminfo?")
 				}
 				Physmem.Refdown(p_pg & PTE_ADDR)
@@ -158,7 +158,7 @@ func pmfree(pml4 *Pmap_t, start, end uintptr) {
 // the parent's TLB should be flushed because we added COW bits to PTEs and
 // whether the fork failed due to allocation failure
 func ptefork(cpmap, ppmap *Pmap_t, start, end int,
-   shared bool) (bool, bool) {
+	shared bool) (bool, bool) {
 	doflush := false
 	mkcow := !shared
 	i := start
@@ -170,7 +170,7 @@ func ptefork(cpmap, ppmap *Pmap_t, start, end int,
 			i &^= ((1 << 21) - 1)
 			continue
 		}
-		cptb, _ := pmap_pgtbl(cpmap, i, true, PTE_U | PTE_W)
+		cptb, _ := pmap_pgtbl(cpmap, i, true, PTE_U|PTE_W)
 		if cptb == nil {
 			// failed to allocate user page table
 			return doflush, false
@@ -184,12 +184,12 @@ func ptefork(cpmap, ppmap *Pmap_t, start, end int,
 		}
 		for j, pte := range ps {
 			// may be guard pages
-			if pte & PTE_P == 0 {
+			if pte&PTE_P == 0 {
 				continue
 			}
 			phys := pte & PTE_ADDR
 			flags := pte & PTE_FLAGS
-			if flags & PTE_W != 0 && mkcow {
+			if flags&PTE_W != 0 && mkcow {
 				flags &^= (PTE_W | PTE_WASCOW)
 				flags |= PTE_COW
 				doflush = true
@@ -197,19 +197,19 @@ func ptefork(cpmap, ppmap *Pmap_t, start, end int,
 			}
 			cs[j] = phys | flags
 			// XXXPANIC
-			if pte & PTE_U == 0 {
+			if pte&PTE_U == 0 {
 				panic("huh?")
 			}
 			Physmem.Refup(phys)
 		}
-		i += len(ps)*PGSIZE
+		i += len(ps) * PGSIZE
 
 	}
 	return doflush, true
 }
 
-var Numcpus	int = 1
-var _tlblock	= sync.Mutex{}
+var Numcpus int = 1
+var _tlblock = sync.Mutex{}
 
 func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	if Numcpus == 1 {
@@ -223,19 +223,19 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	runtime.Tlbshoot.P_pmap = p_pmap
 
 	lapaddr := 0xfee00000
-	lap := (*[PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 	ipilow := func(ds int, deliv int, vec int) uint32 {
-		return uint32(ds << 18 | 1 << 14 | deliv << 8 | vec)
+		return uint32(ds<<18 | 1<<14 | deliv<<8 | vec)
 	}
 
 	icrw := func(hi uint32, low uint32) {
-		icrh := 0x310/4
-		icrl := 0x300/4
+		icrh := 0x310 / 4
+		icrl := 0x300 / 4
 		// use sync to guarantee order
 		atomic.StoreUint32(&lap[icrh], hi)
 		atomic.StoreUint32(&lap[icrl], low)
 		ipisent := uint32(1 << 12)
-		for atomic.LoadUint32(&lap[icrl]) & ipisent != 0 {
+		for atomic.LoadUint32(&lap[icrl])&ipisent != 0 {
 		}
 	}
 

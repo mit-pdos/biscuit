@@ -4,14 +4,14 @@ import "fmt"
 import "strings"
 import "common"
 
-const NAME_MAX    int = 512
+const NAME_MAX int = 512
 
-var lhits=0
+var lhits = 0
 
 // allocation-less pathparts
 type pathparts_t struct {
-	path	string
-	loc	int
+	path string
+	loc  int
 }
 
 func (pp *pathparts_t) pp_init(path string) {
@@ -80,13 +80,13 @@ func crname(path string, nilpatherr common.Err_t) (common.Err_t, bool) {
 // 14-21, inode block/offset
 // ...repeated, totaling 23 times
 type dirdata_t struct {
-	data	[]uint8
+	data []uint8
 }
 
-const(
+const (
 	DNAMELEN = 14
 	NDBYTES  = 22
-	NDIRENTS = common.BSIZE/NDBYTES
+	NDIRENTS = common.BSIZE / NDBYTES
 )
 
 func doffset(didx int, off int) int {
@@ -98,7 +98,7 @@ func doffset(didx int, off int) int {
 
 func (dir *dirdata_t) filename(didx int) string {
 	st := doffset(didx, 0)
-	sl := dir.data[st : st + DNAMELEN]
+	sl := dir.data[st : st+DNAMELEN]
 	ret := make([]byte, 0, 14)
 	for _, c := range sl {
 		if c == 0 {
@@ -117,7 +117,7 @@ func (dir *dirdata_t) inodenext(didx int) common.Inum_t {
 
 func (dir *dirdata_t) w_filename(didx int, fn string) {
 	st := doffset(didx, 0)
-	sl := dir.data[st : st + DNAMELEN]
+	sl := dir.data[st : st+DNAMELEN]
 	l := len(fn)
 	for i := range sl {
 		if i >= l {
@@ -134,14 +134,14 @@ func (dir *dirdata_t) w_inodenext(didx int, inum common.Inum_t) {
 }
 
 type fdent_t struct {
-	offset	int
-	next	*fdent_t
+	offset int
+	next   *fdent_t
 }
 
 // linked list of free directory entries
 type fdelist_t struct {
-	head	*fdent_t
-	n	int
+	head *fdent_t
+	n    int
 }
 
 func (il *fdelist_t) addhead(off int) {
@@ -167,10 +167,9 @@ func (il *fdelist_t) count() int {
 
 // struct to hold the offset/priv of directory entry slots
 type icdent_t struct {
-	offset	int
-	inum	common.Inum_t
+	offset int
+	inum   common.Inum_t
 }
-
 
 // returns the offset of an empty directory entry. returns error if failed to
 // allocate page for the new directory entry.
@@ -208,13 +207,13 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 	// start from 1 since we return slot 0 directly
 	for i := 1; i < NDIRENTS; i++ {
 		noff := newoff + NDBYTES*i
-		idm._deaddempty(noff)  
+		idm._deaddempty(noff)
 	}
-	
+
 	b.Unlock()
-	idm.fs.fslog.Write(b)  // log empty dir block, later writes absorpt it hopefully
+	idm.fs.fslog.Write(b) // log empty dir block, later writes absorpt it hopefully
 	idm.fs.bcache.Relse(b, "_denextempty")
-	
+
 	idm.size = newsz
 	return newoff, 0
 }
@@ -230,7 +229,7 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-        // dennextempty() made the slot so we won't fill
+	// dennextempty() made the slot so we won't fill
 	b, err := idm.off2buf(noff, NDBYTES, true, true, "_deinsert")
 	if err != 0 {
 		return err
@@ -240,11 +239,10 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 	ddata.w_filename(0, name)
 	ddata.w_inodenext(0, inum)
 
-
 	b.Unlock()
 	idm.fs.fslog.Write(b)
 	idm.fs.bcache.Relse(b, "_deinsert")
-	
+
 	icd := icdent_t{noff, inum}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.dentc
@@ -258,7 +256,7 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 // returned true.
 func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, common.Err_t) {
 	found := false
-	for i := 0; i < idm.size; i+= common.BSIZE {
+	for i := 0; i < idm.size; i += common.BSIZE {
 		b, err := idm.off2buf(i, common.BSIZE, false, true, "_descan")
 		if err != 0 {
 			return false, err
@@ -267,7 +265,7 @@ func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, commo
 		for j := 0; j < NDIRENTS; j++ {
 			tfn := dd.filename(j)
 			tpriv := dd.inodenext(j)
-			tde := icdent_t{i+j*NDBYTES, tpriv}
+			tde := icdent_t{i + j*NDBYTES, tpriv}
 			if f(tfn, tde) {
 				found = true
 				break
@@ -442,7 +440,7 @@ func (idm *imemnode_t) _demayadd() bool {
 	dc := &idm.dentc
 	//have := len(dc.dents) + len(dc.freem)
 	have := dc.dents.nodes + dc.freel.count()
-	if have + 1 < dc.max {
+	if have+1 < dc.max {
 		return true
 	}
 	// reserve more directory entries
@@ -494,7 +492,6 @@ func (idm *imemnode_t) probe_unlink(fn string) (*common.Bdev_block_t, common.Err
 	}
 	return b, 0
 }
-
 
 func (idm *imemnode_t) ilookup(name string) (common.Inum_t, common.Err_t) {
 	// did someone confuse a file with a directory?

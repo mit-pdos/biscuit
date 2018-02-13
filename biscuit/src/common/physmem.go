@@ -7,8 +7,9 @@ import "runtime"
 import "fmt"
 
 // lowest userspace address
-const USERMIN	int = VUSER << 39
+const USERMIN int = VUSER << 39
 const DMAPLEN int = 1 << 39
+
 var dmapinit bool
 
 type Page_i interface {
@@ -21,17 +22,17 @@ type Page_i interface {
 
 // can account for up to 16TB of mem
 type Physpg_t struct {
-	refcnt		int32
+	refcnt int32
 	// index into pgs of next page on free list
-	nexti		uint32
+	nexti uint32
 }
 
 type Physmem_t struct {
-	pgs		[]Physpg_t
-	startn		uint32
+	pgs    []Physpg_t
+	startn uint32
 	// index into pgs of first free pg
-	freei		uint32
-	pmaps		uint32
+	freei uint32
+	pmaps uint32
 	sync.Mutex
 }
 
@@ -128,7 +129,7 @@ func (phys *Physmem_t) _phys_new(fl *uint32) (*Pg_t, Pa_t, bool) {
 	phys.Lock()
 	ff := *fl
 	if ff != ^uint32(0) {
-		p_pg = Pa_t(ff + phys.startn) << PGSHIFT
+		p_pg = Pa_t(ff+phys.startn) << PGSHIFT
 		*fl = phys.pgs[ff].nexti
 		ok = true
 		if phys.pgs[ff].refcnt < 0 {
@@ -160,7 +161,7 @@ func (phys *Physmem_t) Dec_pmap(p_pmap Pa_t) {
 // the direct mapping
 func (phys *Physmem_t) Dmap(p Pa_t) *Pg_t {
 	pa := uintptr(p)
-	if pa >= 1 << 39 {
+	if pa >= 1<<39 {
 		panic("direct map not large enough")
 	}
 
@@ -171,7 +172,7 @@ func (phys *Physmem_t) Dmap(p Pa_t) *Pg_t {
 
 func Dmap_v2p(v *Pg_t) Pa_t {
 	va := (uintptr)(unsafe.Pointer(v))
-	if va <= 1 << 39 {
+	if va <= 1<<39 {
 		panic("address isn't in the direct map")
 	}
 
@@ -191,21 +192,21 @@ func (phys *Physmem_t) Dmap8(p Pa_t) []uint8 {
 // l is length of mapping in bytes
 func Dmaplen(p Pa_t, l int) []uint8 {
 	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(_vdirect))
-	return _dmap[p:p+Pa_t(l)]
+	return _dmap[p : p+Pa_t(l)]
 }
 
 // l is length of mapping in bytes. both p and l must be multiples of 4
 func Dmaplen32(p uintptr, l int) []uint32 {
-	if p % 4 != 0 || l % 4 != 0 {
+	if p%4 != 0 || l%4 != 0 {
 		panic("not 32bit aligned")
 	}
-	_dmap := (*[DMAPLEN/4]uint32)(unsafe.Pointer(_vdirect))
+	_dmap := (*[DMAPLEN / 4]uint32)(unsafe.Pointer(_vdirect))
 	p /= 4
 	l /= 4
-	return _dmap[p:p+uintptr(l)]
+	return _dmap[p : p+uintptr(l)]
 }
 
-func Phys_init() (*Physmem_t) {
+func Phys_init() *Physmem_t {
 	// reserve 128MB of pages
 	//respgs := 1 << 15
 	respgs := 1 << 16
@@ -226,23 +227,23 @@ func Phys_init() (*Physmem_t) {
 	phys.pgs[0].refcnt = 0
 	phys.pgs[0].nexti = ^uint32(0)
 	last := phys.freei
-	for i := 0; i < respgs - 1; i++ {
+	for i := 0; i < respgs-1; i++ {
 		p_pg := Pa_t(runtime.Get_phys())
 		pgn := _pg2pgn(p_pg)
 		idx := pgn - phys.startn
 		// Get_phys() may skip regions.
 		if int(idx) >= len(phys.pgs) {
-			if respgs - i > int(float64(respgs)*0.01) {
+			if respgs-i > int(float64(respgs)*0.01) {
 				panic("got many bad pages")
 			}
 			break
 		}
 		phys.pgs[idx].refcnt = 0
-		phys.pgs[last].nexti = idx;
-		phys.pgs[idx].nexti =  ^uint32(0)
+		phys.pgs[last].nexti = idx
+		phys.pgs[idx].nexti = ^uint32(0)
 		last = idx
 	}
-	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs >> 8)
+	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs>>8)
 	return phys
 }
 
@@ -261,8 +262,8 @@ func (phys *Physmem_t) _pmcount(pml4 Pa_t, lev int) int {
 	pg := pg2pmap(phys.Dmap(pml4))
 	ret := 0
 	for _, pte := range pg {
-		if pte & PTE_U != 0 && pte & PTE_P != 0 {
-			ret += 1 + phys._pmcount(Pa_t(pte & PTE_ADDR), lev - 1)
+		if pte&PTE_U != 0 && pte&PTE_P != 0 {
+			ret += 1 + phys._pmcount(Pa_t(pte&PTE_ADDR), lev-1)
 		}
 	}
 	return ret
@@ -271,25 +272,25 @@ func (phys *Physmem_t) _pmcount(pml4 Pa_t, lev int) int {
 func (phys *Physmem_t) pmapcount() int {
 	c := 0
 	for ni := phys.pmaps; ni != ^uint32(0); ni = phys.pgs[ni].nexti {
-		v := phys._pmcount(Pa_t(ni+ phys.startn) << PGSHIFT, 4)
+		v := phys._pmcount(Pa_t(ni+phys.startn)<<PGSHIFT, 4)
 		c += v
 	}
 	return c
 }
 
 func shl(c uint) uint {
-	return 12 + 9 * c
+	return 12 + 9*c
 }
 
 func pgbits(v uint) (uint, uint, uint, uint) {
-	lb := func (c uint) uint {
+	lb := func(c uint) uint {
 		return (v >> shl(c)) & 0x1ff
 	}
 	return lb(3), lb(2), lb(1), lb(0)
 }
 
 func mkpg(l4 int, l3 int, l2 int, l1 int) int {
-	lb := func (c uint) uint {
+	lb := func(c uint) uint {
 		var ret uint
 		switch c {
 		case 3:
@@ -307,10 +308,9 @@ func mkpg(l4 int, l3 int, l2 int, l1 int) int {
 	return int(lb(3) | lb(2) | lb(1) | lb(0))
 }
 
-
 func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	ret := mkpg(l4, ppd, pd, pt)
-	ret += off*8
+	ret += off * 8
 
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
@@ -324,18 +324,18 @@ func Dmap_init() {
 
 	// the default cpu qemu uses for x86_64 supports 1GB pages, but
 	// doesn't report it in cpuid 0x80000001... i wonder why.
-	_, _, _, edx  := runtime.Cpuid(0x80000001, 0)
-	gbpages := edx & (1 << 26) != 0
+	_, _, _, edx := runtime.Cpuid(0x80000001, 0)
+	gbpages := edx&(1<<26) != 0
 
 	_dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
 	dpte := (*Pa_t)(unsafe.Pointer(_dpte))
-	if *dpte & PTE_P != 0 {
+	if *dpte&PTE_P != 0 {
 		panic("dmap slot taken")
 	}
 
-	pdpt  := new(Pmap_t)
+	pdpt := new(Pmap_t)
 	ptn := Pa_t(unsafe.Pointer(pdpt))
-	if ptn & PGOFFSET != 0 {
+	if ptn&PGOFFSET != 0 {
 		panic("page table not aligned")
 	}
 	p_pdpt, ok := runtime.Vtop(unsafe.Pointer(pdpt))
@@ -370,7 +370,7 @@ func Dmap_init() {
 		kpgadd(pd)
 		for j := range pd {
 			pd[j] = Pa_t(i)*pdptsz +
-			   Pa_t(j)*size | PTE_P | PTE_W | PTE_PS
+				Pa_t(j)*size | PTE_P | PTE_W | PTE_PS
 		}
 		pdpt[i] = Pa_t(p_pd) | PTE_P | PTE_W
 	}
@@ -379,7 +379,7 @@ func Dmap_init() {
 	// panic if the runtime adds new mappings that we don't record here.
 	runtime.Pml4freeze()
 	for i, e := range Kpmap() {
-		if e & PTE_U == 0 && e & PTE_P != 0 {
+		if e&PTE_U == 0 && e&PTE_P != 0 {
 			ent := Kent_t{i, e}
 			Kents = append(Kents, ent)
 		}
@@ -398,7 +398,7 @@ func Dmap_init() {
 	Zerobpg = Pg2bytes(Zeropg)
 }
 
-var Kpmapp      *Pmap_t
+var Kpmapp *Pmap_t
 
 func Kpmap() *Pmap_t {
 	if Kpmapp == nil {
@@ -422,13 +422,8 @@ func kpgadd(pg *Pmap_t) {
 	kpages[pgn] = pg
 }
 
-
-
-
-
 // tracks pages
 type pgtracker_t map[int]*Pmap_t
-
 
 // allocates a page tracked by kpages and maps it at va. only used during AP
 // bootup.
@@ -445,7 +440,7 @@ func Kmalloc(va uintptr, perms Pa_t) {
 	if err != 0 {
 		panic("oom during AP init")
 	}
-	if pte != nil && *pte & PTE_P != 0 {
+	if pte != nil && *pte&PTE_P != 0 {
 		panic(fmt.Sprintf("page already mapped %#x", va))
 	}
 	*pte = p_pg | PTE_P | perms
@@ -453,7 +448,7 @@ func Kmalloc(va uintptr, perms Pa_t) {
 
 func Assert_no_va_map(pmap *Pmap_t, va uintptr) {
 	pte := Pmap_lookup(pmap, int(va))
-	if pte != nil && *pte & PTE_P != 0 {
+	if pte != nil && *pte&PTE_P != 0 {
 		panic(fmt.Sprintf("va %#x is mapped", va))
 	}
 }

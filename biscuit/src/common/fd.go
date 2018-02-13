@@ -2,17 +2,17 @@ package common
 
 import "time"
 
-const(
-	FD_READ		= 0x1
-	FD_WRITE	= 0x2
-	FD_CLOEXEC	= 0x4
+const (
+	FD_READ    = 0x1
+	FD_WRITE   = 0x2
+	FD_CLOEXEC = 0x4
 )
 
 type Fd_t struct {
 	// fops is an interface implemented via a "pointer receiver", thus fops
 	// is a reference, not a value
-	Fops	Fdops_i
-	Perms	int
+	Fops  Fdops_i
+	Perms int
 }
 
 func Copyfd(fd *Fd_t) (*Fd_t, Err_t) {
@@ -35,11 +35,11 @@ type Inum_t int
 
 type Ready_t uint8
 
-const(
-	R_READ 	Ready_t	= 1 << iota
-	R_WRITE	Ready_t	= 1 << iota
-	R_ERROR	Ready_t	= 1 << iota
-	R_HUP	Ready_t	= 1 << iota
+const (
+	R_READ  Ready_t = 1 << iota
+	R_WRITE Ready_t = 1 << iota
+	R_ERROR Ready_t = 1 << iota
+	R_HUP   Ready_t = 1 << iota
 )
 
 type Fdops_i interface {
@@ -69,13 +69,13 @@ type Fdops_i interface {
 	// fops.
 	Listen(*Proc_t, int) (Fdops_i, Err_t)
 	Sendmsg(p *Proc_t, data Userio_i, saddr []uint8, cmsg []uint8,
-	    flags int) (int, Err_t)
+		flags int) (int, Err_t)
 	// returns number of bytes read, size of from sock address written,
 	// size of ancillary data written, msghdr flags, and error. if no from
 	// address or ancillary data is requested, the userio objects have
 	// length 0.
 	Recvmsg(p *Proc_t, data Userio_i, saddr Userio_i,
-	    cmsg Userio_i, flags int) (int, int, int, Msgfl_t, Err_t)
+		cmsg Userio_i, flags int) (int, int, int, Msgfl_t, Err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
@@ -89,12 +89,11 @@ type Fdops_i interface {
 	Shutdown(rdone, wdone bool) Err_t
 }
 
-
 type Pollmsg_t struct {
-	notif	chan bool
-	Events	Ready_t
-	Dowait	bool
-	tid	Tid_t
+	notif  chan bool
+	Events Ready_t
+	Dowait bool
+	tid    Tid_t
 }
 
 func (pm *Pollmsg_t) Pm_set(tid Tid_t, events Ready_t, dowait bool) {
@@ -112,12 +111,12 @@ func (pm *Pollmsg_t) Pm_set(tid Tid_t, events Ready_t, dowait bool) {
 func (pm *Pollmsg_t) Pm_wait(to int) (bool, Err_t) {
 	var tochan <-chan time.Time
 	if to != -1 {
-		tochan = time.After(time.Duration(to)*time.Millisecond)
+		tochan = time.After(time.Duration(to) * time.Millisecond)
 	}
 	var timeout bool
 	select {
-	case <- pm.notif:
-	case <- tochan:
+	case <-pm.notif:
+	case <-tochan:
 		timeout = true
 	}
 	return timeout, 0
@@ -125,8 +124,8 @@ func (pm *Pollmsg_t) Pm_wait(to int) (bool, Err_t) {
 
 // keeps track of all outstanding pollers. used by devices supporting poll(2)
 type Pollers_t struct {
-	allmask		Ready_t
-	waiters		[]Pollmsg_t
+	allmask Ready_t
+	waiters []Pollmsg_t
 }
 
 // returns tid pollmsg and empty pollmsg
@@ -168,13 +167,13 @@ func (p *Pollers_t) Addpoller(pm *Pollmsg_t) Err_t {
 }
 
 func (p *Pollers_t) Wakeready(r Ready_t) {
-	if p.allmask & r == 0 {
+	if p.allmask&r == 0 {
 		return
 	}
 	var newallmask Ready_t
 	for i := 0; i < len(p.waiters); i++ {
 		pm := p.waiters[i]
-		if pm.Events & r != 0 {
+		if pm.Events&r != 0 {
 			// found a waiter
 			pm.Events &= r
 			// non-blocking send on a 1-element buffered channel

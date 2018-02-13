@@ -7,23 +7,22 @@ import "common"
  */
 
 const (
-	RED	common.Rbc_t = iota
-	BLACK	common.Rbc_t = iota
+	RED   common.Rbc_t = iota
+	BLACK common.Rbc_t = iota
 )
 
 type frbh_t struct {
-	root	*frbn_t
-	nodes	int
+	root  *frbn_t
+	nodes int
 }
 
 type frbn_t struct {
-	p	*frbn_t
-	r	*frbn_t
-	l	*frbn_t
-	c	common.Rbc_t
-	pgi	*common.Bdev_block_t
+	p   *frbn_t
+	r   *frbn_t
+	l   *frbn_t
+	c   common.Rbc_t
+	pgi *common.Bdev_block_t
 }
-
 
 func (h *frbh_t) _rol(nn *frbn_t) {
 	tmp := nn.r
@@ -175,7 +174,7 @@ func (h *frbh_t) _rembalance(par, nn *frbn_t) {
 				tmp = par.r
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -207,7 +206,7 @@ func (h *frbh_t) _rembalance(par, nn *frbn_t) {
 				tmp = par.l
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -245,7 +244,7 @@ func (h *frbh_t) remove(nn *frbn_t) *frbn_t {
 	var col common.Rbc_t
 	if nn.l == nil {
 		child = nn.r
-	} else if nn.r == nil  {
+	} else if nn.r == nil {
 		child = nn.l
 	} else {
 		nn = nn.r
@@ -332,19 +331,18 @@ func (h *frbh_t) clear() {
 	h.nodes = 0
 }
 
-
 type dc_rbh_t struct {
-	root	*dc_rbn_t
-	nodes	int
+	root  *dc_rbn_t
+	nodes int
 }
 
 type dc_rbn_t struct {
-	p	*dc_rbn_t
-	r	*dc_rbn_t
-	l	*dc_rbn_t
-	c	common.Rbc_t
-	name	string
-	icd	icdent_t
+	p    *dc_rbn_t
+	r    *dc_rbn_t
+	l    *dc_rbn_t
+	c    common.Rbc_t
+	name string
+	icd  icdent_t
 }
 
 func (h *dc_rbh_t) _rol(nn *dc_rbn_t) {
@@ -501,7 +499,7 @@ func (h *dc_rbh_t) _rembalance(par, nn *dc_rbn_t) {
 				tmp = par.r
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -533,7 +531,7 @@ func (h *dc_rbh_t) _rembalance(par, nn *dc_rbn_t) {
 				tmp = par.l
 			}
 			if (tmp.l == nil || tmp.l.c == BLACK) &&
-			    (tmp.r == nil || tmp.r.c == BLACK) {
+				(tmp.r == nil || tmp.r.c == BLACK) {
 				tmp.c = RED
 				nn = par
 				par = nn.p
@@ -579,7 +577,7 @@ func (h *dc_rbh_t) _remove(nn *dc_rbn_t) *dc_rbn_t {
 	var col common.Rbc_t
 	if nn.l == nil {
 		child = nn.r
-	} else if nn.r == nil  {
+	} else if nn.r == nil {
 		child = nn.l
 	} else {
 		nn = nn.r

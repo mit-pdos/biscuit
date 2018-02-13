@@ -4,69 +4,70 @@ import "fmt"
 import "sync/atomic"
 
 type Kent_t struct {
-	Pml4slot	int
-	Entry		Pa_t
+	Pml4slot int
+	Entry    Pa_t
 }
 
-const VREC      int = 0x42
-const VDIRECT   int = 0x44
-const VEND      int = 0x50
-const VUSER     int = 0x59
+const VREC int = 0x42
+const VDIRECT int = 0x44
+const VEND int = 0x50
+const VUSER int = 0x59
 
-const PTE_P      Pa_t = 1 << 0
-const PTE_W      Pa_t = 1 << 1
-const PTE_U      Pa_t = 1 << 2
-const PTE_G      Pa_t = 1 << 8
-const PTE_PCD    Pa_t = 1 << 4
-const PTE_PS     Pa_t = 1 << 7
+const PTE_P Pa_t = 1 << 0
+const PTE_W Pa_t = 1 << 1
+const PTE_U Pa_t = 1 << 2
+const PTE_G Pa_t = 1 << 8
+const PTE_PCD Pa_t = 1 << 4
+const PTE_PS Pa_t = 1 << 7
+
 // our flags; bits 9-11 are ignored for all page map entries in long mode
-const PTE_COW    Pa_t = 1 << 9
+const PTE_COW Pa_t = 1 << 9
 const PTE_WASCOW Pa_t = 1 << 10
 
-const PGSIZEW    uintptr = uintptr(PGSIZE)
-const PGSHIFT    uint = 12
-const PGOFFSET   Pa_t = 0xfff
-const PGMASK     Pa_t = ^(PGOFFSET)
-const IPGMASK    int  = ^(int(PGOFFSET))
-const PTE_ADDR   Pa_t = PGMASK
-const PTE_FLAGS  Pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
-    PTE_WASCOW)
+const PGSIZEW uintptr = uintptr(PGSIZE)
+const PGSHIFT uint = 12
+const PGOFFSET Pa_t = 0xfff
+const PGMASK Pa_t = ^(PGOFFSET)
+const IPGMASK int = ^(int(PGOFFSET))
+const PTE_ADDR Pa_t = PGMASK
+const PTE_FLAGS Pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
+	PTE_WASCOW)
 
 var P_zeropg Pa_t
 
 type Mmapinfo_t struct {
-	Pg	*Pg_t
-	Phys	Pa_t
+	Pg   *Pg_t
+	Phys Pa_t
 }
 
 type mtype_t uint
 
 // types of mappings
 const (
-	VANON	mtype_t = 1 << iota
+	VANON mtype_t = 1 << iota
 	// shared or private file
-	VFILE	mtype_t = 1 << iota
+	VFILE mtype_t = 1 << iota
 	// shared anonymous
-	VSANON	mtype_t = 1 << iota
+	VSANON mtype_t = 1 << iota
 )
 
 type Mfile_t struct {
-	mfops		Fdops_i
+	mfops Fdops_i
 	// once mapcount is 0, close mfops
-	mapcount	int
+	mapcount int
 }
 
 type Vminfo_t struct {
-	mtype	mtype_t
-	pgn	uintptr
-	pglen	int
-	perms	uint
-	file struct {
-		foff	int
-		mfile	*Mfile_t
-		shared	bool
+	mtype mtype_t
+	pgn   uintptr
+	pglen int
+	perms uint
+	file  struct {
+		foff   int
+		mfile  *Mfile_t
+		shared bool
 	}
-	pch	[]Pa_t
+	pch []Pa_t
 }
 
 func (vmi *Vminfo_t) Pgn() uintptr {
@@ -74,12 +75,12 @@ func (vmi *Vminfo_t) Pgn() uintptr {
 }
 
 type Vmregion_t struct {
-	rb	Rbh_t
-	_pglen	int
-	Novma	uint
-	hole struct {
-		startn	uintptr
-		pglen	uintptr
+	rb     Rbh_t
+	_pglen int
+	Novma  uint
+	hole   struct {
+		startn uintptr
+		pglen  uintptr
 	}
 }
 
@@ -209,7 +210,7 @@ func (m *Vmregion_t) insert(vmi *Vminfo_t) {
 		m.hole.startn += uintptr(vmi.pglen)
 		m.hole.pglen -= uintptr(vmi.pglen)
 	} else if vmi.pgn >= m.hole.startn &&
-	    vmi.pgn < m.hole.startn + m.hole.pglen {
+		vmi.pgn < m.hole.startn+m.hole.pglen {
 		m.hole.pglen = vmi.pgn - m.hole.startn
 	}
 	m._pglen += vmi.pglen
@@ -272,7 +273,7 @@ func (m *Vmregion_t) _clear(vmi *Vminfo_t, pglen int) {
 }
 
 func (m *Vmregion_t) Clear() {
-	m.iter(func (vmi *Vminfo_t) {
+	m.iter(func(vmi *Vminfo_t) {
 		m._clear(vmi, vmi.pglen)
 	})
 }
@@ -331,17 +332,17 @@ func (m *Vmregion_t) dump() {
 		case VSANON:
 			perms = "SA-"
 		}
-		if vmi.perms & uint(PTE_U) != 0 {
+		if vmi.perms&uint(PTE_U) != 0 {
 			perms += "R"
 		}
-		if vmi.perms & uint(PTE_W) != 0 {
+		if vmi.perms&uint(PTE_W) != 0 {
 			perms += ",W"
 		}
-		if vmi.perms & uint(PTE_U) != 0 {
+		if vmi.perms&uint(PTE_U) != 0 {
 			perms += ",U"
 		}
-		fmt.Printf("[%x - %x) (%v)\n", vmi.pgn << PGSHIFT, end,
-		    perms)
+		fmt.Printf("[%x - %x) (%v)\n", vmi.pgn<<PGSHIFT, end,
+			perms)
 	})
 }
 
@@ -376,7 +377,7 @@ func (m *Vmregion_t) _findhole(minpgn, minlen uintptr) (uintptr, uintptr) {
 				startn = t
 			}
 		} else {
-			if vmi.pgn - startn >= minlen {
+			if vmi.pgn-startn >= minlen {
 				pglen = vmi.pgn - startn
 				done = true
 			} else {
@@ -401,7 +402,7 @@ func (m *Vmregion_t) empty(minva, len uintptr) (uintptr, uintptr) {
 	}
 	nhs, nhl := m._findhole(minn, pglen)
 	m.hole.startn, m.hole.pglen = nhs, nhl
-	if !(minn + pglen <= m.hole.startn + m.hole.pglen) {
+	if !(minn+pglen <= m.hole.startn+m.hole.pglen) {
 		panic("wut")
 	}
 	return m.hole.startn << PGSHIFT, m.hole.pglen << PGSHIFT
@@ -440,7 +441,7 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
 	// if we are removing the beginning or end of the mapping, we can
 	// simply adjust the node.
 	pgend := n.vmi.pgn + uintptr(n.vmi.pglen)
-	if pgn == n.vmi.pgn || pgn + uintptr(pglen) == pgend {
+	if pgn == n.vmi.pgn || pgn+uintptr(pglen) == pgend {
 		if pgn == n.vmi.pgn {
 			n.vmi.pgn += uintptr(pglen)
 			n.vmi.pglen -= pglen
@@ -471,17 +472,16 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
 	return 0
 }
 
-
 // returns true if the fault was handled successfully
 func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 	isguard := vmi.perms == 0
-	iswrite := ecode & uintptr(PTE_W) != 0
-	writeok := vmi.perms & uint(PTE_W) != 0
+	iswrite := ecode&uintptr(PTE_W) != 0
+	writeok := vmi.perms&uint(PTE_W) != 0
 	if isguard || (iswrite && !writeok) {
 		return false
 	}
 	// pmap is Lock'ed in Proc_t.pgfault...
-	if ecode & uintptr(PTE_U) == 0 {
+	if ecode&uintptr(PTE_U) == 0 {
 		// kernel page faults should be noticed and crashed upon in
 		// runtime.trap(), but just in case
 		panic("kernel page fault")
@@ -494,8 +494,8 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 	if !ok {
 		return false
 	}
-	if (iswrite && *pte & PTE_WASCOW != 0) ||
-	   (!iswrite && *pte & PTE_P != 0) {
+	if (iswrite && *pte&PTE_WASCOW != 0) ||
+		(!iswrite && *pte&PTE_P != 0) {
 		// two threads simultaneously faulted on same page
 		return true
 	}
@@ -512,18 +512,18 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		if err != 0 {
 			return false
 		}
-		if vmi.perms & uint(PTE_W) != 0 {
+		if vmi.perms&uint(PTE_W) != 0 {
 			perms |= PTE_W
 		}
 	} else if iswrite {
 		// XXXPANIC
-		if *pte & PTE_W != 0 {
+		if *pte&PTE_W != 0 {
 			panic("bad state")
 		}
 		var pgsrc *Pg_t
 		// the copy-on-write page may be specified in the pte or it may
 		// not have been mapped at all yet.
-		cow := *pte & PTE_COW != 0
+		cow := *pte&PTE_COW != 0
 		if cow {
 			// if this anonymous COW page is mapped exactly once
 			// (i.e.  only this mapping maps the page), we can
@@ -531,10 +531,10 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 			phys := *pte & PTE_ADDR
 			ref, _ := _refaddr(phys)
 			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
-			   phys != P_zeropg {
+				phys != P_zeropg {
 				tmp := *pte &^ PTE_COW
 				tmp |= PTE_W | PTE_WASCOW
-			        *pte = tmp
+				*pte = tmp
 				proc.Tlbshoot(faultaddr, 1)
 				return true
 			}
@@ -584,7 +584,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		default:
 			panic("wut")
 		}
-		if vmi.perms & uint(PTE_W) != 0 {
+		if vmi.perms&uint(PTE_W) != 0 {
 			perms |= PTE_COW
 		}
 	}

@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+
 //import "math/rand"
 import "runtime"
 import "runtime/debug"
@@ -13,12 +14,11 @@ import "unsafe"
 import "common"
 import "fs"
 
-const(
-	IRQ_LAST	= common.INT_MSI7
+const (
+	IRQ_LAST = common.INT_MSI7
 )
 
-
-var	bsp_apic_id int
+var bsp_apic_id int
 
 // these functions can only be used when interrupts are cleared
 //go:nosplit
@@ -41,7 +41,8 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 	// only IRQs come through here now
 	if trapno <= common.TIMER || trapno > IRQ_LAST {
 		runtime.Pnum(0x1001)
-		for {}
+		for {
+		}
 	}
 
 	irqs++
@@ -72,11 +73,12 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 		runtime.Pnum(int(trapno))
 		runtime.Pnum(int(tf[common.TF_RIP]))
 		runtime.Pnum(0xbadbabe)
-		for {}
+		for {
+		}
 	}
 }
 
-var ide_int_done       = make(chan bool)
+var ide_int_done = make(chan bool)
 
 func trap_disk(intn uint) {
 	for {
@@ -110,24 +112,21 @@ func tfdump(tf *[common.TFSIZE]int) {
 }
 
 type dev_t struct {
-	major	int
-	minor	int
+	major int
+	minor int
 }
 
-var dummyfops	= &fs.Devfops_t{Maj: common.D_CONSOLE, Min: 0}
+var dummyfops = &fs.Devfops_t{Maj: common.D_CONSOLE, Min: 0}
 
 // special fds
-var fd_stdin 	= common.Fd_t{Fops: dummyfops, Perms: common.FD_READ}
-var fd_stdout 	= common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
-var fd_stderr 	= common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
-
-
+var fd_stdin = common.Fd_t{Fops: dummyfops, Perms: common.FD_READ}
+var fd_stdout = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
+var fd_stderr = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
 
 // a userio_i type that copies nothing. useful as an argument to {send,recv}msg
 // when no from/to address or ancillary data is requested.
 type _nilbuf_t struct {
 }
-
 
 func (nb *_nilbuf_t) Uiowrite(src []uint8) (int, common.Err_t) {
 	return 0, 0
@@ -147,17 +146,15 @@ func (nb *_nilbuf_t) Totalsz() int {
 
 var zeroubuf = &_nilbuf_t{}
 
-
-
 // a circular buffer that is read/written by userspace. not thread-safe -- it
 // is intended to be used by one daemon.
 type circbuf_t struct {
-	buf	[]uint8
-	bufsz	int
+	buf   []uint8
+	bufsz int
 	// XXX uint
-	head	int
-	tail	int
-	p_pg	common.Pa_t
+	head int
+	tail int
+	p_pg common.Pa_t
 }
 
 // may fail to allocate a page for the buffer. when cb's life is over, someone
@@ -213,7 +210,7 @@ func (cb *circbuf_t) cb_ensure() common.Err_t {
 }
 
 func (cb *circbuf_t) full() bool {
-	return cb.head - cb.tail == cb.bufsz
+	return cb.head-cb.tail == cb.bufsz
 }
 
 func (cb *circbuf_t) empty() bool {
@@ -410,9 +407,9 @@ func (cb *circbuf_t) _advtail(sz int) {
 }
 
 type passfd_t struct {
-	cb	[]*common.Fd_t
-	inum	uint
-	cnum	uint
+	cb   []*common.Fd_t
+	inum uint
+	cnum uint
 }
 
 func (pf *passfd_t) add(nfd *common.Fd_t) bool {
@@ -420,10 +417,10 @@ func (pf *passfd_t) add(nfd *common.Fd_t) bool {
 		pf.cb = make([]*common.Fd_t, 10)
 	}
 	l := uint(len(pf.cb))
-	if pf.inum - pf.cnum == l {
+	if pf.inum-pf.cnum == l {
 		return false
 	}
-	pf.cb[pf.inum % l] = nfd
+	pf.cb[pf.inum%l] = nfd
 	pf.inum++
 	return true
 }
@@ -433,7 +430,7 @@ func (pf *passfd_t) take() (*common.Fd_t, bool) {
 	if pf.inum == pf.cnum {
 		return nil, false
 	}
-	ret := pf.cb[pf.cnum % l]
+	ret := pf.cb[pf.cnum%l]
 	pf.cnum++
 	return ret, true
 }
@@ -497,16 +494,16 @@ func cpus_start(ncpu, aplim int) {
 
 	lapaddr := 0xfee00000
 	pte := common.Pmap_lookup(common.Kpmap(), lapaddr)
-	if pte == nil || *pte & common.PTE_P == 0 || *pte & common.PTE_PCD == 0 {
+	if pte == nil || *pte&common.PTE_P == 0 || *pte&common.PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}
-	lap := (*[common.PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
-	icrh := 0x310/4
-	icrl := 0x300/4
+	lap := (*[common.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	icrh := 0x310 / 4
+	icrl := 0x300 / 4
 
 	ipilow := func(ds int, t int, l int, deliv int, vec int) uint32 {
-		return uint32(ds << 18 | t << 15 | l << 14 |
-		    deliv << 8 | vec)
+		return uint32(ds<<18 | t<<15 | l<<14 |
+			deliv<<8 | vec)
 	}
 
 	icrw := func(hi uint32, low uint32) {
@@ -514,7 +511,7 @@ func cpus_start(ncpu, aplim int) {
 		atomic.StoreUint32(&lap[icrh], hi)
 		atomic.StoreUint32(&lap[icrl], low)
 		ipisent := uint32(1 << 12)
-		for atomic.LoadUint32(&lap[icrl]) & ipisent != 0 {
+		for atomic.LoadUint32(&lap[icrl])&ipisent != 0 {
 		}
 	}
 
@@ -527,24 +524,24 @@ func cpus_start(ncpu, aplim int) {
 		vec := 0
 		delivmode := 0x5
 		level := 1
-		trig  := 0
-		dshort:= 3
+		trig := 0
+		dshort := 3
 		if !assert {
 			trig = 1
 			level = 0
 			dshort = 2
 		}
-		hi  := uint32(0)
+		hi := uint32(0)
 		low := ipilow(dshort, trig, level, delivmode, vec)
 		icrw(hi, low)
 	}
 
 	startupipi := func() {
-		vec       := int(mpaddr >> 12)
+		vec := int(mpaddr >> 12)
 		delivmode := 0x6
-		level     := 0x1
-		trig      := 0x0
-		dshort    := 0x3
+		level := 0x1
+		trig := 0x0
+		dshort := 0x3
 
 		hi := uint32(0)
 		low := ipilow(dshort, trig, level, delivmode, vec)
@@ -569,11 +566,11 @@ func cpus_start(ncpu, aplim int) {
 
 	ss := (*[11]uintptr)(unsafe.Pointer(uintptr(0x7c00)))
 	sap_entry := 3
-	sgdt      := 4
-	sidt      := 6
-	sapcnt    := 8
-	sstacks   := 9
-	sproceed  := 10
+	sgdt := 4
+	sidt := 6
+	sapcnt := 8
+	sstacks := 9
+	sproceed := 10
 	var _dur func(uint)
 	_dur = ap_entry
 	ss[sap_entry] = **(**uintptr)(unsafe.Pointer(&_dur))
@@ -600,14 +597,14 @@ func cpus_start(ncpu, aplim int) {
 	initipi(true)
 	// not necessary since we assume lapic version >= 1.x (ie not 82489DX)
 	//initipi(false)
-	time.Sleep(10*time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	startupipi()
-	time.Sleep(10*time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	startupipi()
 
 	// wait a while for hopefully all APs to join.
-	time.Sleep(500*time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	apcnt = int(atomic.LoadUintptr(&ss[sapcnt]))
 	if apcnt > aplim {
 		apcnt = aplim
@@ -634,7 +631,8 @@ func ap_entry(myid uint) {
 	fl := runtime.Pushcli()
 	fl |= common.TF_FL_IF
 	runtime.Popcli(fl)
-	for {}
+	for {
+	}
 }
 
 func set_cpucount(n int) {
@@ -655,19 +653,19 @@ func kbd_init() {
 	km := make(map[int]byte)
 	NO := byte(0)
 	tm := []byte{
-	    // ty xv6
-	    NO,   0x1B, '1',  '2',  '3',  '4',  '5',  '6',  // 0x00
-	    '7',  '8',  '9',  '0',  '-',  '=',  '\b', '\t',
-	    'q',  'w',  'e',  'r',  't',  'y',  'u',  'i',  // 0x10
-	    'o',  'p',  '[',  ']',  '\n', NO,   'a',  's',
-	    'd',  'f',  'g',  'h',  'j',  'k',  'l',  ';',  // 0x20
-	    '\'', '`',  NO,   '\\', 'z',  'x',  'c',  'v',
-	    'b',  'n',  'm',  ',',  '.',  '/',  NO,   '*',  // 0x30
-	    NO,   ' ',  NO,   NO,   NO,   NO,   NO,   NO,
-	    NO,   NO,   NO,   NO,   NO,   NO,   NO,   '7',  // 0x40
-	    '8',  '9',  '-',  '4',  '5',  '6',  '+',  '1',
-	    '2',  '3',  '0',  '.',  NO,   NO,   NO,   NO,   // 0x50
-	    }
+		// ty xv6
+		NO, 0x1B, '1', '2', '3', '4', '5', '6', // 0x00
+		'7', '8', '9', '0', '-', '=', '\b', '\t',
+		'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', // 0x10
+		'o', 'p', '[', ']', '\n', NO, 'a', 's',
+		'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', // 0x20
+		'\'', '`', NO, '\\', 'z', 'x', 'c', 'v',
+		'b', 'n', 'm', ',', '.', '/', NO, '*', // 0x30
+		NO, ' ', NO, NO, NO, NO, NO, NO,
+		NO, NO, NO, NO, NO, NO, NO, '7', // 0x40
+		'8', '9', '-', '4', '5', '6', '+', '1',
+		'2', '3', '0', '.', NO, NO, NO, NO, // 0x50
+	}
 
 	for i, c := range tm {
 		if c != NO {
@@ -697,20 +695,20 @@ func kbd_init() {
 }
 
 type cons_t struct {
-	kbd_int		chan bool
-	com_int		chan bool
-	reader		chan []byte
-	reqc		chan int
-	pollc		chan common.Pollmsg_t
-	pollret		chan common.Ready_t
+	kbd_int chan bool
+	com_int chan bool
+	reader  chan []byte
+	reqc    chan int
+	pollc   chan common.Pollmsg_t
+	pollret chan common.Ready_t
 }
 
-var cons	= cons_t{}
+var cons = cons_t{}
 
 func _comready() bool {
 	com1ctl := uint16(0x3f8 + 5)
 	b := runtime.Inb(com1ctl)
-	if b & 0x01 == 0 {
+	if b&0x01 == 0 {
 		return false
 	}
 	return true
@@ -719,7 +717,7 @@ func _comready() bool {
 func _kready() bool {
 	ibf := uint(1 << 0)
 	st := runtime.Inb(0x64)
-	if st & ibf == 0 {
+	if st&ibf == 0 {
 		//panic("no kbd data?")
 		return false
 	}
@@ -782,7 +780,7 @@ func sizedump() {
 	waitsz := uintptr(1e9)
 	tnotesz := is
 	timer := uintptr(2*8 + 8*8)
-	polls := unsafe.Sizeof(common.Pollers_t{}) + 10*(unsafe.Sizeof(common.Pollmsg_t{}) + timer)
+	polls := unsafe.Sizeof(common.Pollers_t{}) + 10*(unsafe.Sizeof(common.Pollmsg_t{})+timer)
 	fdsz := unsafe.Sizeof(common.Fd_t{})
 	// mfile := unsafe.Sizeof(common.Mfile_t{})
 	// add fops, pollers_t, Conds
@@ -791,7 +789,7 @@ func sizedump() {
 	fmt.Printf("ARP rec: %v + 1map\n", unsafe.Sizeof(arprec_t{}))
 	// fmt.Printf("dentry : %v\n", unsafe.Sizeof(dc_rbn_t{}))
 	fmt.Printf("futex  : %v + stack\n", unsafe.Sizeof(futex_t{}))
-	fmt.Printf("route  : %v + 1map\n", unsafe.Sizeof(rtentry_t{}) + is)
+	fmt.Printf("route  : %v + 1map\n", unsafe.Sizeof(rtentry_t{})+is)
 
 	// XXX account for block and inode cache
 
@@ -802,24 +800,24 @@ func sizedump() {
 	//fmt.Printf("vnode  : %v + 1map\n", unsafe.Sizeof(imemnode_t{}) +
 	//	unsafe.Sizeof(bdev_block_t{}) + 512 + condsz +
 	//	unsafe.Sizeof(fsfops_t{}))
-	fmt.Printf("pipe   : %v\n", unsafe.Sizeof(pipe_t{}) +
-		unsafe.Sizeof(pipefops_t{}) + 2*condsz)
-	fmt.Printf("process: %v + stack + wait\n", unsafe.Sizeof(common.Proc_t{}) +
-		tfsz + fxsz + waitsz + tnotesz + timer)
+	fmt.Printf("pipe   : %v\n", unsafe.Sizeof(pipe_t{})+
+		unsafe.Sizeof(pipefops_t{})+2*condsz)
+	fmt.Printf("process: %v + stack + wait\n", unsafe.Sizeof(common.Proc_t{})+
+		tfsz+fxsz+waitsz+tnotesz+timer)
 	//fmt.Printf("\tvma    : %v\n", unsafe.Sizeof(rbn_t{}) + mfile)
 	//fmt.Printf("\t1 RBfd : %v\n", unsafe.Sizeof(frbn_t{}))
 	fmt.Printf("\t1 fd   : %v\n", fdsz)
 	fmt.Printf("\tper-dev poll md: %v\n", polls)
-	fmt.Printf("TCB    : %v + 1map\n", unsafe.Sizeof(tcptcb_t{}) +
-		unsafe.Sizeof(tcpkey_t{}) + unsafe.Sizeof(tcpfops_t{}) +
-		2*condsz + timer)
-	fmt.Printf("LTCB   : %v + 1map\n", unsafe.Sizeof(tcplisten_t{}) +
-		unsafe.Sizeof(tcplkey_t{}) + is + unsafe.Sizeof(tcplfops_t{}) +
+	fmt.Printf("TCB    : %v + 1map\n", unsafe.Sizeof(tcptcb_t{})+
+		unsafe.Sizeof(tcpkey_t{})+unsafe.Sizeof(tcpfops_t{})+
+		2*condsz+timer)
+	fmt.Printf("LTCB   : %v + 1map\n", unsafe.Sizeof(tcplisten_t{})+
+		unsafe.Sizeof(tcplkey_t{})+is+unsafe.Sizeof(tcplfops_t{})+
 		timer)
-	fmt.Printf("US sock: %v + 1map\n", unsafe.Sizeof(susfops_t{}) +
-		2*unsafe.Sizeof(pipefops_t{}) + unsafe.Sizeof(pipe_t{}) + 2*condsz)
-	fmt.Printf("UD sock: %v + 1map\n", unsafe.Sizeof(sudfops_t{}) +
-		unsafe.Sizeof(bud_t{}) + condsz + uintptr(common.PGSIZE)/10)
+	fmt.Printf("US sock: %v + 1map\n", unsafe.Sizeof(susfops_t{})+
+		2*unsafe.Sizeof(pipefops_t{})+unsafe.Sizeof(pipe_t{})+2*condsz)
+	fmt.Printf("UD sock: %v + 1map\n", unsafe.Sizeof(sudfops_t{})+
+		unsafe.Sizeof(bud_t{})+condsz+uintptr(common.PGSIZE)/10)
 }
 
 var _nflip int
@@ -859,7 +857,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	pollers := &common.Pollers_t{}
 	for {
 		select {
-		case <- cons.kbd_int:
+		case <-cons.kbd_int:
 			for _kready() {
 				sc := int(inb(0x60))
 				c, ok := km[sc]
@@ -868,7 +866,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				}
 			}
 			irq_eoi(common.IRQ_KBD)
-		case <- cons.com_int:
+		case <-cons.com_int:
 			for _comready() {
 				com1data := uint16(0x3f8 + 0)
 				sc := inb(com1data)
@@ -882,15 +880,15 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				addprint(c)
 			}
 			irq_eoi(common.IRQ_COM1)
-		case l := <- reqc:
+		case l := <-reqc:
 			if l > len(data) {
 				l = len(data)
 			}
 			s := data[0:l]
 			cons.reader <- s
 			data = data[l:]
-		case pm := <- cons.pollc:
-			if pm.Events & common.R_READ == 0 {
+		case pm := <-cons.pollc:
+			if pm.Events&common.R_READ == 0 {
 				cons.pollret <- 0
 				continue
 			}
@@ -919,7 +917,7 @@ func kbd_get(cnt int) []byte {
 		panic("negative cnt")
 	}
 	cons.reqc <- cnt
-	return <- cons.reader
+	return <-cons.reader
 }
 
 func attach_devs() int {
@@ -928,9 +926,8 @@ func attach_devs() int {
 	return ncpu
 }
 
-
 type bprof_t struct {
-	data	[]byte
+	data []byte
 }
 
 func (b *bprof_t) init() {
@@ -963,7 +960,7 @@ func hexdump(buf []uint8) {
 		for _, b := range cur {
 			fmt.Printf("%02x", b)
 			prc++
-			if prc % 2 == 0 {
+			if prc%2 == 0 {
 				fmt.Printf(" ")
 			}
 		}
@@ -975,12 +972,12 @@ var prof = bprof_t{}
 
 func cpuidfamily() (uint, uint) {
 	ax, _, _, _ := runtime.Cpuid(1, 0)
-	model :=  (ax >> 4) & 0xf
+	model := (ax >> 4) & 0xf
 	family := (ax >> 8) & 0xf
 	emodel := (ax >> 16) & 0xf
 	efamily := (ax >> 20) & 0xff
 
-	dispmodel := emodel << 4 + model
+	dispmodel := emodel<<4 + model
 	dispfamily := efamily + family
 	return uint(dispmodel), uint(dispfamily)
 }
@@ -988,7 +985,7 @@ func cpuidfamily() (uint, uint) {
 func cpuchk() {
 	_, _, _, dx := runtime.Cpuid(0x80000001, 0)
 	arch64 := uint32(1 << 29)
-	if dx & arch64 == 0 {
+	if dx&arch64 == 0 {
 		panic("not intel 64 arch?")
 	}
 
@@ -999,13 +996,13 @@ func cpuchk() {
 	stepping := ax & 0xf
 	oldp := rfamily == 6 && rmodel < 3 && stepping < 3
 	sep := uint32(1 << 11)
-	if dx & sep == 0 || oldp {
+	if dx&sep == 0 || oldp {
 		panic("sysenter not supported")
 	}
 
 	_, _, _, dx = runtime.Cpuid(0x80000007, 0)
 	invartsc := uint32(1 << 8)
-	if dx & invartsc == 0 {
+	if dx&invartsc == 0 {
 		// no qemu CPUs support invariant tsc, but my hardware does...
 		//panic("invariant tsc not supported")
 		fmt.Printf("invariant TSC not supported\n")
@@ -1018,13 +1015,13 @@ func perfsetup() {
 	npmc := (ax >> 8) & 0xff
 	pmcbits := (ax >> 16) & 0xff
 	pmebits := (ax >> 24) & 0xff
-	cyccnt := bx & 1 == 0
+	cyccnt := bx&1 == 0
 	_, _, cx, _ := runtime.Cpuid(0x1, 0)
-	pdc := cx & (1 << 15) != 0
+	pdc := cx&(1<<15) != 0
 	if pdc && perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 &&
-	    cyccnt && pmcbits >= 32 {
-		fmt.Printf("Hardware Performance monitoring enabled: " +
-		    "%v counters\n", npmc)
+		cyccnt && pmcbits >= 32 {
+		fmt.Printf("Hardware Performance monitoring enabled: "+
+			"%v counters\n", npmc)
 		profhw = &intelprof_t{}
 		profhw.prof_init(uint(npmc))
 	} else {
@@ -1036,52 +1033,52 @@ func perfsetup() {
 // performance monitoring event id
 type pmevid_t uint
 
-const(
+const (
 	// if you modify the order of these flags, you must update them in libc
 	// too.
 	// architectural
-	EV_UNHALTED_CORE_CYCLES		pmevid_t = 1 << iota
-	EV_LLC_MISSES			pmevid_t = 1 << iota
-	EV_LLC_REFS			pmevid_t = 1 << iota
-	EV_BRANCH_INSTR_RETIRED		pmevid_t = 1 << iota
-	EV_BRANCH_MISS_RETIRED		pmevid_t = 1 << iota
-	EV_INSTR_RETIRED		pmevid_t = 1 << iota
+	EV_UNHALTED_CORE_CYCLES pmevid_t = 1 << iota
+	EV_LLC_MISSES           pmevid_t = 1 << iota
+	EV_LLC_REFS             pmevid_t = 1 << iota
+	EV_BRANCH_INSTR_RETIRED pmevid_t = 1 << iota
+	EV_BRANCH_MISS_RETIRED  pmevid_t = 1 << iota
+	EV_INSTR_RETIRED        pmevid_t = 1 << iota
 	// non-architectural
 	// "all TLB misses that cause a page walk"
-	EV_DTLB_LOAD_MISS_ANY		pmevid_t = 1 << iota
+	EV_DTLB_LOAD_MISS_ANY pmevid_t = 1 << iota
 	// "number of completed walks due to miss in sTLB"
-	EV_DTLB_LOAD_MISS_STLB		pmevid_t = 1 << iota
+	EV_DTLB_LOAD_MISS_STLB pmevid_t = 1 << iota
 	// "retired stores that missed in the dTLB"
-	EV_STORE_DTLB_MISS		pmevid_t = 1 << iota
-	EV_L2_LD_HITS			pmevid_t = 1 << iota
+	EV_STORE_DTLB_MISS pmevid_t = 1 << iota
+	EV_L2_LD_HITS      pmevid_t = 1 << iota
 	// "Counts the number of misses in all levels of the ITLB which causes
 	// a page walk."
-	EV_ITLB_LOAD_MISS_ANY		pmevid_t = 1 << iota
+	EV_ITLB_LOAD_MISS_ANY pmevid_t = 1 << iota
 )
 
 type pmflag_t uint
 
-const(
-	EVF_OS				pmflag_t = 1 << iota
-	EVF_USR				pmflag_t = 1 << iota
+const (
+	EVF_OS  pmflag_t = 1 << iota
+	EVF_USR pmflag_t = 1 << iota
 )
 
 type pmev_t struct {
-	evid	pmevid_t
-	pflags	pmflag_t
+	evid   pmevid_t
+	pflags pmflag_t
 }
 
 var pmevid_names = map[pmevid_t]string{
 	EV_UNHALTED_CORE_CYCLES: "Unhalted core cycles",
-	EV_LLC_MISSES: "LLC misses",
-	EV_LLC_REFS: "LLC references",
+	EV_LLC_MISSES:           "LLC misses",
+	EV_LLC_REFS:             "LLC references",
 	EV_BRANCH_INSTR_RETIRED: "Branch instructions retired",
-	EV_BRANCH_MISS_RETIRED: "Branch misses retired",
-	EV_INSTR_RETIRED: "Instructions retired",
-	EV_DTLB_LOAD_MISS_ANY: "dTLB load misses",
-	EV_ITLB_LOAD_MISS_ANY: "iTLB load misses",
-	EV_DTLB_LOAD_MISS_STLB: "sTLB misses",
-	EV_STORE_DTLB_MISS: "Store dTLB misses",
+	EV_BRANCH_MISS_RETIRED:  "Branch misses retired",
+	EV_INSTR_RETIRED:        "Instructions retired",
+	EV_DTLB_LOAD_MISS_ANY:   "dTLB load misses",
+	EV_ITLB_LOAD_MISS_ANY:   "iTLB load misses",
+	EV_DTLB_LOAD_MISS_STLB:  "sTLB misses",
+	EV_STORE_DTLB_MISS:      "Store dTLB misses",
 	//EV_WTF1: "dummy 1",
 	//EV_WTF2: "dummy 2",
 	EV_L2_LD_HITS: "L2 load hits",
@@ -1121,19 +1118,19 @@ func (n *nilprof_t) stopnmi() []uintptr {
 }
 
 type intelprof_t struct {
-	l		sync.Mutex
-	pmcs		[]intelpmc_t
-	events		map[pmevid_t]pmevent_t
+	l      sync.Mutex
+	pmcs   []intelpmc_t
+	events map[pmevid_t]pmevent_t
 }
 
 type intelpmc_t struct {
-	alloced		bool
-	eventid		pmevid_t
+	alloced bool
+	eventid pmevid_t
 }
 
 type pmevent_t struct {
-	event	int
-	umask	int
+	event int
+	umask int
 }
 
 func (ip *intelprof_t) _disableall() {
@@ -1146,16 +1143,16 @@ func (ip *intelprof_t) _enableall() {
 
 func (ip *intelprof_t) _perfmaskipi() {
 	lapaddr := 0xfee00000
-	lap := (*[common.PGSIZE/4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[common.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 
 	allandself := 2
 	trap_perfmask := 72
 	level := 1 << 14
-	low := uint32(allandself << 18 | level | trap_perfmask)
-	icrl := 0x300/4
+	low := uint32(allandself<<18 | level | trap_perfmask)
+	icrl := 0x300 / 4
 	atomic.StoreUint32(&lap[icrl], low)
 	ipisent := uint32(1 << 12)
-	for atomic.LoadUint32(&lap[icrl]) & ipisent != 0 {
+	for atomic.LoadUint32(&lap[icrl])&ipisent != 0 {
 	}
 }
 
@@ -1165,15 +1162,15 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 		panic("no such event")
 	}
 	usr := 1 << 16
-	os  := 1 << 17
-	en  := 1 << 22
+	os := 1 << 17
+	en := 1 << 22
 	event := ev.event
 	umask := ev.umask << 8
 	v := umask | event | en
-	if pf & EVF_OS != 0 {
+	if pf&EVF_OS != 0 {
 		v |= os
 	}
-	if pf & EVF_USR != 0 {
+	if pf&EVF_USR != 0 {
 		v |= usr
 	}
 	if pf == 0 {
@@ -1220,35 +1217,24 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 	ip.pmcs = make([]intelpmc_t, npmc)
 	// architectural events
 	ip.events = map[pmevid_t]pmevent_t{
-	    EV_UNHALTED_CORE_CYCLES:
-		{0x3c, 0},
-	    EV_LLC_MISSES:
-		{0x2e, 0x41},
-	    EV_LLC_REFS:
-		{0x2e, 0x4f},
-	    EV_BRANCH_INSTR_RETIRED:
-		{0xc4, 0x0},
-	    EV_BRANCH_MISS_RETIRED:
-		{0xc5, 0x0},
-	    EV_INSTR_RETIRED:
-		{0xc0, 0x0},
+		EV_UNHALTED_CORE_CYCLES: {0x3c, 0},
+		EV_LLC_MISSES:           {0x2e, 0x41},
+		EV_LLC_REFS:             {0x2e, 0x4f},
+		EV_BRANCH_INSTR_RETIRED: {0xc4, 0x0},
+		EV_BRANCH_MISS_RETIRED:  {0xc5, 0x0},
+		EV_INSTR_RETIRED:        {0xc0, 0x0},
 	}
 
 	_xeon5000 := map[pmevid_t]pmevent_t{
-	    EV_DTLB_LOAD_MISS_ANY:
-		{0x08, 0x1},
-	    EV_DTLB_LOAD_MISS_STLB:
-		{0x08, 0x2},
-	    EV_STORE_DTLB_MISS:
-		{0x0c, 0x1},
-	    EV_ITLB_LOAD_MISS_ANY:
-		{0x85, 0x1},
-	    //EV_WTF1:
-	    //    {0x49, 0x1},
-	    //EV_WTF2:
-	    //    {0x14, 0x2},
-	    EV_L2_LD_HITS:
-		{0x24, 0x1},
+		EV_DTLB_LOAD_MISS_ANY:  {0x08, 0x1},
+		EV_DTLB_LOAD_MISS_STLB: {0x08, 0x2},
+		EV_STORE_DTLB_MISS:     {0x0c, 0x1},
+		EV_ITLB_LOAD_MISS_ANY:  {0x85, 0x1},
+		//EV_WTF1:
+		//    {0x49, 0x1},
+		//EV_WTF2:
+		//    {0x14, 0x2},
+		EV_L2_LD_HITS: {0x24, 0x1},
 	}
 
 	dispmodel, dispfamily := cpuidfamily()
@@ -1286,7 +1272,7 @@ func (ip *intelprof_t) startpmc(evs []pmev_t) ([]int, bool) {
 	ret := make([]int, len(evs))
 	ri := 0
 	// find available counter
-	outer:
+outer:
 	for _, ev := range evs {
 		eid := ev.evid
 		for i := range ip.pmcs {
@@ -1324,7 +1310,7 @@ func (ip *intelprof_t) stoppmc(idxs []int) []uint {
 }
 
 func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
-    max uint) bool {
+	max uint) bool {
 	ip.l.Lock()
 	defer ip.l.Unlock()
 	if ip.pmcs[0].alloced {
@@ -1365,13 +1351,13 @@ func (ip *intelprof_t) stopnmi() []uintptr {
 	return buf
 }
 
-
 var failalloc bool = false
 
 var failsites = make(map[uintptr]bool)
+
 // white-listed functions; don't fail these allocations. terminate() is for
 // init resurrection.
-var oksites = map[string]bool{"main.main":true, "main.(*common.Proc_t).terminate":true,}
+var oksites = map[string]bool{"main.main": true, "main.(*common.Proc_t).terminate": true}
 
 func _pchash(pcs []uintptr) uintptr {
 	if len(pcs) == 0 {
@@ -1379,7 +1365,7 @@ func _pchash(pcs []uintptr) uintptr {
 	}
 	var ret uintptr
 	for _, pc := range pcs {
-		pc = pc * 1103515245 + 12345
+		pc = pc*1103515245 + 12345
 		ret ^= pc
 	}
 	return ret
@@ -1416,7 +1402,7 @@ func _fakefail() bool {
 			}
 			if fs == "" {
 				fs = fmt.Sprintf("%v (%v:%v)->", fr.Function,
-				   fr.File, fr.Line)
+					fr.File, fr.Line)
 			} else {
 				fs += fr.Function + "->"
 			}
@@ -1441,7 +1427,7 @@ func callerdump() {
 		i++
 		li := strings.LastIndex(f, "/")
 		if li != -1 {
-			f = f[li + 1:]
+			f = f[li+1:]
 		}
 		if s == "" {
 			s = fmt.Sprintf("%s:%d", f, l)
@@ -1451,8 +1437,6 @@ func callerdump() {
 	}
 	fmt.Printf("%s\n", s)
 }
-
-
 
 func structchk() {
 	if unsafe.Sizeof(common.Stat_t{}) != 9*8 {
@@ -1474,13 +1458,13 @@ func main() {
 	physmem = common.Phys_init()
 
 	go func() {
-		<- time.After(10*time.Second)
+		<-time.After(10 * time.Second)
 		fmt.Printf("[It is now safe to benchmark...]\n")
 	}()
 
 	go func() {
 		for {
-			<- time.After(1*time.Second)
+			<-time.After(1 * time.Second)
 			got := lhits
 			lhits = 0
 			if got != 0 {
@@ -1492,7 +1476,7 @@ func main() {
 	fmt.Printf("              BiscuitOS\n")
 	fmt.Printf("          go version: %v\n", runtime.Version())
 	pmem := runtime.Totalphysmem()
-	fmt.Printf("  %v MB of physical memory\n", pmem >> 20)
+	fmt.Printf("  %v MB of physical memory\n", pmem>>20)
 
 	structchk()
 	cpuchk()
@@ -1550,7 +1534,7 @@ func main() {
 
 	// sleep forever
 	var dur chan bool
-	<- dur
+	<-dur
 }
 
 func findbm() {
@@ -1574,18 +1558,19 @@ func findbm() {
 			tot := runtime.Rdtsc() - st
 			sum += tot
 			times++
-			if times % 1000000 == 0 {
+			if times%1000000 == 0 {
 				fmt.Printf("%9v cycles to find (avg)\n",
-				    sum/times)
+					sum/times)
 				sum = 0
 				times = 0
 			}
 			ch <- true
 		}(st0)
 		//<- ch
-		loopy: for {
+	loopy:
+		for {
 			select {
-			case <- ch:
+			case <-ch:
 				break loopy
 			default:
 			}

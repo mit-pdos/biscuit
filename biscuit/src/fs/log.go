@@ -19,48 +19,48 @@ const log_debug = false
 // guarantee that it performs no more than maxblkspersys logged writes in an
 // operation, to ensure that its operation will fit in the log.
 
-var loglen      = 0    // for marshalling/unmarshalling
+var loglen = 0 // for marshalling/unmarshalling
 
 type buf_t struct {
-	block             *common.Bdev_block_t
-	ordered         bool
+	block   *common.Bdev_block_t
+	ordered bool
 }
 
 type log_t struct {
-	log		[]*common.Bdev_block_t // in-memory log
-	logpresent      map[int]bool           // enable quick check to see if block is in log
-	absorb          map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
-	ordered         []*common.Bdev_block_t // slice of ordered blocks
-	orderedpresent  map[int]bool          // enable quick check so see if block is in ordered
-	memhead		int                   // head of the log in memory
-	diskhead        int                   // head of the log on disk 
-	logstart	int
-	loglen		int
-	incoming	chan buf_t
-	admission	chan bool
-	done		chan bool
-	force		chan bool
-	commitwait	chan bool
-	forceordered	chan bool
-	orderedwait	chan bool
-	stop       	chan bool
-	stopwait	chan bool
+	log            []*common.Bdev_block_t       // in-memory log
+	logpresent     map[int]bool                 // enable quick check to see if block is in log
+	absorb         map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
+	ordered        []*common.Bdev_block_t       // slice of ordered blocks
+	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
+	memhead        int                          // head of the log in memory
+	diskhead       int                          // head of the log on disk
+	logstart       int
+	loglen         int
+	incoming       chan buf_t
+	admission      chan bool
+	done           chan bool
+	force          chan bool
+	commitwait     chan bool
+	forceordered   chan bool
+	orderedwait    chan bool
+	stop           chan bool
+	stopwait       chan bool
 
-	disk            common.Disk_i
-	bcache          *bcache_t
+	disk   common.Disk_i
+	bcache *bcache_t
 
 	// some stats
-	maxblks_per_op    int
-	nblkcommitted     int
-	ncommit           int
-	napply            int
-	nabsorption       int
-	nlogwrite         int
-	norderedwrite  int
-	norder2logwrite   int
-	nblkapply         int
-	nabsorbapply      int
-	nforceordered     int
+	maxblks_per_op  int
+	nblkcommitted   int
+	ncommit         int
+	napply          int
+	nabsorption     int
+	nlogwrite       int
+	norderedwrite   int
+	norder2logwrite int
+	nblkapply       int
+	nabsorbapply    int
+	nforceordered   int
 }
 
 //
@@ -71,7 +71,7 @@ func (log *log_t) Op_begin(s string) {
 	if memfs {
 		return
 	}
-	<- log.admission
+	<-log.admission
 	if log_debug {
 		fmt.Printf("op_begin: go %v\n", s)
 	}
@@ -88,7 +88,7 @@ func (log *log_t) Op_end() {
 // by waiting for log commit.
 func (log *log_t) Force() {
 	log.force <- true
-	<- log.commitwait
+	<-log.commitwait
 }
 
 // Write increments ref so that the log has always a valid ref to the buf's page
@@ -175,7 +175,7 @@ func StartLog(logstart, loglen int, disk common.Disk_i, bcache *bcache_t) *log_t
 
 func (log *log_t) stopLog() {
 	log.stop <- true
-	<- log.stopwait
+	<-log.stopwait
 }
 
 //
@@ -187,7 +187,7 @@ func (log *log_t) stopLog() {
 // 0-7,   valid log blocks
 // 8-511, log destination (63)
 type logheader_t struct {
-	data	*common.Bytepg_t
+	data *common.Bytepg_t
 }
 
 func (lh *logheader_t) recovernum() int {
@@ -202,27 +202,27 @@ func (lh *logheader_t) logdest(p int) int {
 	if p < 0 || p > loglen {
 		panic("bad dnum")
 	}
-	return fieldr(lh.data, 8 + p)
+	return fieldr(lh.data, 8+p)
 }
 
 func (lh *logheader_t) w_logdest(p int, n int) {
 	if p < 0 || p > loglen {
 		panic("bad dnum")
 	}
-	fieldw(lh.data, 8 + p, n)
+	fieldw(lh.data, 8+p, n)
 }
 
 func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
-	loglen = ll-1
+	loglen = ll - 1
 	log.memhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = ll - 1
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
-	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)   // XXX bounded by len ordered list?
-	log.ordered = make([]*common.Bdev_block_t, 0)                 // XXX bounded by cache size?
-	log.orderedpresent = make(map[int]bool)                // XXX bounded by len ordered list
+	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen) // XXX bounded by len ordered list?
+	log.ordered = make([]*common.Bdev_block_t, 0)               // XXX bounded by cache size?
+	log.orderedpresent = make(map[int]bool)                     // XXX bounded by len ordered list
 	log.incoming = make(chan buf_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
@@ -246,7 +246,7 @@ const maxblkspersys = 10
 
 func (l *log_t) full(nops int) bool {
 	reserved := maxblkspersys * nops
-	return reserved + l.memhead >= l.loglen
+	return reserved+l.memhead >= l.loglen
 }
 
 func (log *log_t) addlog(buf buf_t) {
@@ -279,7 +279,7 @@ func (log *log_t) addlog(buf buf_t) {
 		delete(log.orderedpresent, buf.block.Block)
 		delete(log.absorb, buf.block.Block)
 	}
-	
+
 	// log absorption.
 	if _, ok := log.absorb[buf.block.Block]; ok {
 		// Buffer is already in log or in ordered, but not on disk
@@ -316,15 +316,15 @@ func (log *log_t) addlog(buf buf_t) {
 // headblk is in cache
 func (log *log_t) apply(headblk *common.Bdev_block_t) {
 	done := make(map[int]bool, log.loglen)
-		
+
 	if log_debug {
 		fmt.Printf("apply log: %v %v %v\n", log.memhead, log.diskhead, log.loglen)
 	}
-	
+
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
-	for i := log.memhead-1; i >= 0; i-- {
+	for i := log.memhead - 1; i >= 0; i-- {
 		l := log.log[i]
 		log.nblkapply++
 		if _, ok := done[l.Block]; !ok {
@@ -336,21 +336,21 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 		}
 	}
 
-	log.flush()  // flush apply
-	
+	log.flush() // flush apply
+
 	// success; clear flag indicating to recover from log
 	lh := logheader_t{headblk.Data}
 	lh.w_recovernum(0)
 	log.bcache.Write(headblk)
 
-	log.flush()  // flush cleared commit
+	log.flush() // flush cleared commit
 
 	log.logpresent = make(map[int]bool, log.loglen)
 }
 
 func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
-	for _, b := range(log.ordered) {
+	for _, b := range log.ordered {
 		log.bcache.Write_async(b)
 		log.bcache.Relse(b, "writeordered")
 	}
@@ -364,8 +364,8 @@ func (log *log_t) commit() {
 		if log_debug {
 			fmt.Printf("commit: flush ordered blks %d\n", len(log.ordered))
 		}
-		log.write_ordered();
-		log.flush();
+		log.write_ordered()
+		log.flush()
 		return
 	}
 
@@ -374,7 +374,7 @@ func (log *log_t) commit() {
 	}
 
 	log.ncommit++
-	newblks := log.memhead-log.diskhead
+	newblks := log.memhead - log.diskhead
 	if newblks > log.maxblks_per_op {
 		log.maxblks_per_op = newblks
 	}
@@ -385,7 +385,7 @@ func (log *log_t) commit() {
 	if err != 0 {
 		panic("cannot read commit block\n")
 	}
-	
+
 	lh := logheader_t{headblk.Data}
 	blks := make([]*common.Bdev_block_t, newblks)
 
@@ -403,7 +403,7 @@ func (log *log_t) commit() {
 		b.Unlock()
 		blks[i-log.diskhead] = b
 	}
-	
+
 	lh.w_recovernum(log.memhead)
 
 	// write blocks to log in batch
@@ -413,12 +413,12 @@ func (log *log_t) commit() {
 	}
 
 	log.write_ordered()
-	
-	log.flush()   // flush outstanding writes
 
-	log.bcache.Write(headblk)  	// write log header
+	log.flush() // flush outstanding writes
 
-	log.flush()   // commit log header
+	log.bcache.Write(headblk) // write log header
+
+	log.flush() // commit log header
 
 	log.nblkcommitted += newblks
 
@@ -436,7 +436,7 @@ func (log *log_t) commit() {
 	}
 	// data till log.memhead has been written to log
 	log.diskhead = log.memhead
-	
+
 	// reset absorption map and ordered list
 	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
 
@@ -447,13 +447,13 @@ func (log *log_t) commit() {
 func (log *log_t) flush() {
 	ider := common.MkRequest(nil, common.BDEV_FLUSH, true)
 	if log.disk.Start(ider) {
-		<- ider.AckCh
+		<-ider.AckCh
 	}
 }
 
-func (log *log_t) recover()  common.Err_t {
+func (log *log_t) recover() common.Err_t {
 	b, err := log.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
-	if err != 0 { 
+	if err != 0 {
 		return err
 	}
 	lh := logheader_t{b.Data}
@@ -467,7 +467,7 @@ func (log *log_t) recover()  common.Err_t {
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		lb, err := log.bcache.Get_fill(log.logstart + 1 + i, "i", false)
+		lb, err := log.bcache.Get_fill(log.logstart+1+i, "i", false)
 		if err != 0 {
 			return err
 		}
@@ -495,10 +495,10 @@ func log_daemon(l *log_t) {
 		done := false
 		nops := 0
 		waiters := 0
-		
+
 		for !done {
 			select {
-			case nb := <- l.incoming:
+			case nb := <-l.incoming:
 				if nops <= 0 {
 					panic("no admit")
 				}
@@ -506,11 +506,11 @@ func log_daemon(l *log_t) {
 					panic("full")
 				}
 				l.addlog(nb)
-			case <- l.done:
+			case <-l.done:
 				nops--
 				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
 				//	l.memhead)
-				if adm == nil {   // is an op waiting for admission?
+				if adm == nil { // is an op waiting for admission?
 					if waiters > 0 || l.full(nops+1) {
 						// No more log space or forced to commit
 						if nops == 0 {
@@ -527,16 +527,16 @@ func log_daemon(l *log_t) {
 				nops++
 				//fmt.Printf("adm: next wait? %v %v %v %v\n", nops, l.full(nops+1),
 				//	l.loglen, l.memhead)
-				if l.full(nops+1) {  // next one wait?
+				if l.full(nops + 1) { // next one wait?
 					adm = nil
 				}
-			case <- l.force:
+			case <-l.force:
 				waiters++
 				adm = nil
 				if nops == 0 {
 					done = true
 				}
-			case <- l.forceordered:
+			case <-l.forceordered:
 				if log_debug {
 					fmt.Printf("Force ordered %v\n", len(l.ordered))
 				}
@@ -544,7 +544,7 @@ func log_daemon(l *log_t) {
 				l.write_ordered()
 				l.flush()
 				l.orderedwait <- true
-			case <- l.stop:
+			case <-l.stop:
 				l.stopwait <- true
 				return
 			}
@@ -570,9 +570,8 @@ func (log *log_t) force_ordered() {
 		fmt.Printf("log_force_ordered\n")
 	}
 	log.forceordered <- true
-	<- log.orderedwait
+	<-log.orderedwait
 }
-
 
 // If cache has no space, ask logdaemon to create some space
 func (log *log_t) read(readfn func() (*common.Bdev_block_t, common.Err_t)) (*common.Bdev_block_t, common.Err_t) {
@@ -587,10 +586,8 @@ func (log *log_t) read(readfn func() (*common.Bdev_block_t, common.Err_t)) (*com
 	return b, err
 }
 
-func mkread(readfn func(int,string,bool) (*common.Bdev_block_t, common.Err_t), b int, s string, l bool) func()(*common.Bdev_block_t, common.Err_t) {
+func mkread(readfn func(int, string, bool) (*common.Bdev_block_t, common.Err_t), b int, s string, l bool) func() (*common.Bdev_block_t, common.Err_t) {
 	return func() (*common.Bdev_block_t, common.Err_t) {
 		return readfn(b, s, l)
 	}
 }
-
-

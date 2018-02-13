@@ -20,25 +20,25 @@ type obj_t interface {
 
 // The cache contains refcounted references to obj
 type ref_t struct {
-	sync.Mutex      // only there to initialize obj
-	obj             obj_t
-	refcnt          int
-	key             int
-	valid           bool
-	s               string
-	refnext		*ref_t
-	refprev		*ref_t
+	sync.Mutex // only there to initialize obj
+	obj        obj_t
+	refcnt     int
+	key        int
+	valid      bool
+	s          string
+	refnext    *ref_t
+	refprev    *ref_t
 }
 
 type refcache_t struct {
 	sync.Mutex
-	maxsize           int
-	refs           map[int]*ref_t    // XXX use fsrb.go instead?
-	reflru         reflru_t
-	evict_async    bool
-	
+	maxsize     int
+	refs        map[int]*ref_t // XXX use fsrb.go instead?
+	reflru      reflru_t
+	evict_async bool
+
 	// stats
-	nevict          int
+	nevict int
 }
 
 //
@@ -56,7 +56,7 @@ func mkRefcache(size int, async bool) *refcache_t {
 // returns a locked ref
 func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 	irc.Lock()
-	
+
 	ref, ok := irc.refs[key]
 	if ok {
 		ref.refcnt++
@@ -77,22 +77,22 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 			irc.Unlock()
 			return nil, -common.ENOMEM
 		}
-        }
- 	
+	}
+
 	ref = &ref_t{}
 	ref.refcnt = 1
 	ref.key = key
 	ref.valid = false
 	ref.s = s
 	ref.Lock()
-	
+
 	irc.refs[key] = ref
 	irc.reflru.mkhead(ref)
-	
+
 	if refcache_debug {
 		fmt.Printf("ref miss %v cnt %v %s\n", key, ref.refcnt, s)
 	}
-	
+
 	irc.Unlock()
 
 	// release cache lock, now free victim
@@ -103,16 +103,15 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 	return ref, 0
 }
 
-
 func (irc *refcache_t) Refup(o obj_t, s string) {
 	irc.Lock()
 	defer irc.Unlock()
-	
+
 	ref, ok := irc.refs[o.Key()]
 	if !ok {
 		panic("refup")
 	}
-	
+
 	if refcache_debug {
 		fmt.Printf("refdup %v cnt %v %s\n", o.Key(), ref.refcnt, s)
 	}
@@ -134,7 +133,7 @@ func (irc *refcache_t) Refdown(o obj_t, s string) {
 	if refcache_debug {
 		fmt.Printf("refdown %v cnt %v %s\n", o.Key(), ref.refcnt, s)
 	}
-	
+
 	ref.refcnt--
 	if ref.refcnt < 0 {
 		panic("refdown")
@@ -196,11 +195,10 @@ func (irc *refcache_t) doevict(victim obj_t) {
 	}
 }
 
-
 // LRU list of references
 type reflru_t struct {
-	head	*ref_t
-	tail	*ref_t
+	head *ref_t
+	tail *ref_t
 }
 
 func (rl *reflru_t) mkhead(ir *ref_t) {
@@ -247,4 +245,3 @@ func (rl *reflru_t) remove(ir *ref_t) {
 	}
 	rl._remove(ir)
 }
-

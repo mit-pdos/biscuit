@@ -6,8 +6,8 @@ import "sync"
 import "runtime"
 
 type packet struct {
-	ipaddr 		int
-	payload		int
+	ipaddr  int
+	payload int
 }
 
 func wtf(tf *uint64) {
@@ -60,14 +60,14 @@ func process_packets(in chan packet) {
 	outbound := make(map[int]chan packet)
 
 	for {
-		p := <- in
+		p := <-in
 		spawnsend(p, outbound, ip_process)
 	}
 }
 
 func ip_process(ipchan chan packet) {
 	for {
-		p := <- ipchan
+		p := <-ipchan
 		if rand.Intn(1000) == 1 {
 			fmt.Printf("%v ", p_priority(p))
 		}
@@ -75,69 +75,69 @@ func ip_process(ipchan chan packet) {
 }
 
 func parcopy(to []byte, from []byte, done chan int) {
-        for i, c := range from {
-                to[i] = c
-        }
-        done <- 1
+	for i, c := range from {
+		to[i] = c
+	}
+	done <- 1
 }
 
 func sys_write(to []byte, p []byte) int {
-        PGSIZE := 4096
-        done := make(chan int)
-        cnt := len(p)
-        fmt.Printf("len is %v\n", cnt)
+	PGSIZE := 4096
+	done := make(chan int)
+	cnt := len(p)
+	fmt.Printf("len is %v\n", cnt)
 
-        for i := 0; i < cnt / PGSIZE; i++ {
-                s := i*PGSIZE
-                e := (i+1)*PGSIZE
-                if cnt < e {
-                        e = cnt
-                }
-                go parcopy(to[s:e], p[s:e], done)
-        }
+	for i := 0; i < cnt/PGSIZE; i++ {
+		s := i * PGSIZE
+		e := (i + 1) * PGSIZE
+		if cnt < e {
+			e = cnt
+		}
+		go parcopy(to[s:e], p[s:e], done)
+	}
 
-        left := cnt % PGSIZE
-        if left != 0 {
-                t := cnt - left
-                for i := t; i < cnt; i++ {
-                        to[i] = p[i]
-                }
-        }
+	left := cnt % PGSIZE
+	if left != 0 {
+		t := cnt - left
+		for i := t; i < cnt; i++ {
+			to[i] = p[i]
+		}
+	}
 
-        for i := 0; i < cnt / PGSIZE; i++ {
-                <- done
-        }
+	for i := 0; i < cnt/PGSIZE; i++ {
+		<-done
+	}
 
-        return cnt
+	return cnt
 }
 
 func ver(a []byte, b []byte) {
-        for i, c := range b {
-                if a[i] != c {
-                        panic("bad")
-                }
-        }
+	for i, c := range b {
+		if a[i] != c {
+			panic("bad")
+		}
+	}
 }
 
 func main_write() {
-        to := make([]byte, 4096*1)
-        from := make([]byte, 4096*1)
+	to := make([]byte, 4096*1)
+	from := make([]byte, 4096*1)
 
-        for i, _ := range from {
-                from[i] = byte(rand.Int())
-        }
+	for i, _ := range from {
+		from[i] = byte(rand.Int())
+	}
 
-        sys_write(to, from)
+	sys_write(to, from)
 
-        ver(to, from)
-        fmt.Printf("done\n")
+	ver(to, from)
+	fmt.Printf("done\n")
 }
 
 type bnode struct {
-	fd	int
-	data	int
-	l	*bnode
-	r	*bnode
+	fd   int
+	data int
+	l    *bnode
+	r    *bnode
 }
 
 func binsert(root *bnode, nfd int, ndata int) {
@@ -224,7 +224,7 @@ func reader(cnt int, ch chan int) {
 		}
 		t++
 
-		if t % 100000 == 0 {
+		if t%100000 == 0 {
 			ch <- 1
 		}
 	}
@@ -235,7 +235,7 @@ func rup() {
 	defer wlock.Unlock()
 
 	i := rand.Intn(100)
-	for ;blookup(&root, i) != nil; i = rand.Intn(100) {
+	for ; blookup(&root, i) != nil; i = rand.Intn(100) {
 	}
 
 	newroot := bcopy(&root, nil)
@@ -276,6 +276,7 @@ var rtlock sync.Mutex
 
 var wlock sync.Mutex
 var root bnode
+
 func main_rcu() {
 	root.fd = 50
 	for i := 0; i < 9; i++ {
@@ -286,7 +287,7 @@ func main_rcu() {
 	go reader(cnt, ch)
 
 	for {
-		<- ch
+		<-ch
 		rup()
 	}
 	fmt.Printf("done")

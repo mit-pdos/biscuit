@@ -7,44 +7,44 @@ type Sysatomic_t int64
 
 type Syslimit_t struct {
 	// protected by proclock
-	Sysprocs	int
+	Sysprocs int
 	// proctected by idmonl lock
-	Vnodes		int
+	Vnodes int
 	// proctected by _allfutex lock
-	Futexes		int
+	Futexes int
 	// proctected by arptbl lock
-	Arpents		int
+	Arpents int
 	// proctected by routetbl lock
-	Routes		int
+	Routes int
 	// per TCP socket tx/rx segments to remember
-	Tcpsegs		int
+	Tcpsegs int
 	// socks includes pipes and all TCP connections in TIMEWAIT.
-	Socks		Sysatomic_t
+	Socks Sysatomic_t
 	// total cached dirents
-	Dirents		Sysatomic_t
+	Dirents Sysatomic_t
 	// total pipes
-	Pipes		Sysatomic_t
+	Pipes Sysatomic_t
 	// additional memory filesystem per-page objects; each file gets one
 	// freebie.
-	Mfspgs		Sysatomic_t
+	Mfspgs Sysatomic_t
 	// shared buffer space
 	//shared		Sysatomic_t
 	// bdev blocks
-	Blocks          int
+	Blocks int
 }
 
-var Syslimit = Syslimit_t {
-	Sysprocs:	1e4,
-	Futexes:	1024,
-	Arpents:	1024,
-	Routes:		32,
-	Tcpsegs:	16,
-	Socks:		1e5,
-	Vnodes:		10000, // 1e6,
-	Dirents:	1 << 20,
-	Pipes:		1e4,
+var Syslimit = Syslimit_t{
+	Sysprocs: 1e4,
+	Futexes:  1024,
+	Arpents:  1024,
+	Routes:   32,
+	Tcpsegs:  16,
+	Socks:    1e5,
+	Vnodes:   10000, // 1e6,
+	Dirents:  1 << 20,
+	Pipes:    1e4,
 	// 8GB of block pages
-        Blocks:         20000, // 100000, // 1 << 21,
+	Blocks: 20000, // 100000, // 1 << 21,
 }
 
 func (s *Sysatomic_t) _aptr() *int64 {
@@ -74,9 +74,9 @@ func (s *Sysatomic_t) Taken(_n uint) bool {
 
 // returns false if the limit has been reached.
 func (s *Sysatomic_t) Take() bool {
-        return s.Taken(1)
+	return s.Taken(1)
 }
 
 func (s *Sysatomic_t) Give() {
-        s.Given(1)
+	s.Given(1)
 }

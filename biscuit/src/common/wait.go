@@ -8,36 +8,35 @@ import "sync"
 // - wait when there are no children must fail
 // - wait for a process should not return thread info and vice versa
 type Waitst_t struct {
-	Pid		int
-	Status		int
-	Atime		Accnt_t
+	Pid    int
+	Status int
+	Atime  Accnt_t
 	// true iff the exit status is valid
-	Valid		bool
+	Valid bool
 }
 
 type Wait_t struct {
 	sync.Mutex
-	pwait		whead_t
-	twait		whead_t
-	cond		*sync.Cond
-	Pid		int
+	pwait whead_t
+	twait whead_t
+	cond  *sync.Cond
+	Pid   int
 }
 
 func (w *Wait_t) Wait_init(mypid int) {
-        w.cond = sync.NewCond(w)
-        w.Pid = mypid
+	w.cond = sync.NewCond(w)
+	w.Pid = mypid
 }
 
 type wlist_t struct {
-	next	*wlist_t
-	wst	Waitst_t
+	next *wlist_t
+	wst  Waitst_t
 }
 
 type whead_t struct {
-	head	*wlist_t
-	count	int
+	head  *wlist_t
+	count int
 }
-
 
 func (wh *whead_t) wpush(id int) {
 	n := &wlist_t{}
@@ -93,7 +92,7 @@ func (wh *whead_t) wremove(prev, h *wlist_t) {
 func (w *Wait_t) _start(id int, isproc bool, noproc uint) bool {
 	w.Lock()
 	defer w.Unlock()
-	if uint(w.pwait.count + w.twait.count) > noproc {
+	if uint(w.pwait.count+w.twait.count) > noproc {
 		return false
 	}
 	var wh *whead_t
@@ -187,4 +186,3 @@ func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
 		w.cond.Wait()
 	}
 }
-

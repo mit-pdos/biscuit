@@ -2,21 +2,21 @@ package main
 
 const (
 	black = 0
-	red = 1
-	dead = 2
+	red   = 1
+	dead  = 2
 )
 
 type rb_t struct {
-	l	*rb_t
-	r	*rb_t
-	p	*rb_t
-	color	int
-	k	int
-	v	unsafe.Pointer
+	l     *rb_t
+	r     *rb_t
+	p     *rb_t
+	color int
+	k     int
+	v     unsafe.Pointer
 }
 
 type rb_root struct {
-	n	*rb_t
+	n *rb_t
 }
 
 func gp(n *rb_t) *rb_t {
@@ -93,7 +93,7 @@ func rotater(n *rb_t, root *rb_root) {
 	temp.p = p
 	if p != nil && p.r == n {
 		p.r = temp
-	}else if p != nil {
+	} else if p != nil {
 		p.l = temp
 	}
 	if temp.p == nil {
@@ -268,4 +268,3 @@ func rb_test() {
 	}
 	fmt.Printf("checked %v values\n", dur)
 }
-
