@@ -44,7 +44,7 @@ int main(int argc, char **argv)
 	if ((fd = open("/dev/rsd0c", O_WRONLY)) == -1)
 		err(-1, "open");
 
-	int s = lstn(31337);
+	int s = lstn(31338);
 
 	const int blksz = 512;
 	char buf[blksz];
