@@ -2030,6 +2030,15 @@ out:
 	return ret
 }
 
+func TLBflush() {
+	// maintaining coherency between cpu.shadowcr3 and cr3 requires that
+	// interrupts are cleared before reading cr3 until after loading that
+	// value into c3.
+	fl := Pushcli()
+	Lcr3(Rcr3())
+	Popcli(fl)
+}
+
 var Tlbshoot struct {
 	Waitfor	int64
 	P_pmap	uintptr
