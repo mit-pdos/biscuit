@@ -1462,6 +1462,7 @@ func structchk() {
 
 var lhits int
 var physmem *common.Physmem_t
+var thefs *fs.Fs_t
 
 func main() {
 	// magic loop
@@ -1513,7 +1514,8 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf := fs.MkFS(blockmem, ahci, console)
+	rf, fs := fs.StartFS(blockmem, ahci, console)
+	thefs = fs
 
 	exec := func(cmd string, args []string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)

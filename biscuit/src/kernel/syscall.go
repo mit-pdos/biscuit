@@ -287,7 +287,7 @@ func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
 		return int(err)
 	}
 	pi := proc.Cwd().Fops.Pathi()
-	file, err := fs.Fs_open(path, flags, mode, pi, 0, 0)
+	file, err := thefs.Fs_open(path, flags, mode, pi, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -534,7 +534,7 @@ func sys_access(proc *common.Proc_t, pathn, mode int) int {
 	}
 
 	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := fs.Fs_open_inner(path, common.O_RDONLY, 0, pi, 0, 0)
+	fsf, err := thefs.Fs_open_inner(path, common.O_RDONLY, 0, pi, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -545,7 +545,7 @@ func sys_access(proc *common.Proc_t, pathn, mode int) int {
 	//X_OK := 1 << 2
 	ret := 0
 
-	if fs.Fs_close(fsf.Inum) != 0 {
+	if thefs.Fs_close(fsf.Inum) != 0 {
 		panic("must succeed")
 	}
 	return ret
@@ -575,7 +575,7 @@ func sys_stat(proc *common.Proc_t, pathn, statn int) int {
 		return int(-common.ENAMETOOLONG)
 	}
 	buf := &common.Stat_t{}
-	err := fs.Fs_stat(path, buf, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_stat(path, buf, proc.Cwd().Fops.Pathi())
 	if err != 0 {
 		return int(err)
 	}
@@ -1121,7 +1121,7 @@ func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return int(err2)
 	}
-	err := fs.Fs_rename(old, new, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_rename(old, new, proc.Cwd().Fops.Pathi())
 	return int(err)
 }
 
@@ -1137,7 +1137,7 @@ func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
 	if err != 0 {
 		return int(err)
 	}
-	err = fs.Fs_mkdir(path, mode, proc.Cwd().Fops.Pathi())
+	err = thefs.Fs_mkdir(path, mode, proc.Cwd().Fops.Pathi())
 	return int(err)
 }
 
@@ -1158,7 +1158,7 @@ func sys_link(proc *common.Proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return int(err2)
 	}
-	err := fs.Fs_link(old, new, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_link(old, new, proc.Cwd().Fops.Pathi())
 	return int(err)
 }
 
@@ -1175,7 +1175,7 @@ func sys_unlink(proc *common.Proc_t, pathn, isdiri int) int {
 		return int(err)
 	}
 	wantdir := isdiri != 0
-	err = fs.Fs_unlink(path, proc.Cwd().Fops.Pathi(), wantdir)
+	err = thefs.Fs_unlink(path, proc.Cwd().Fops.Pathi(), wantdir)
 	return int(err)
 }
 
@@ -1290,18 +1290,18 @@ func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
 		return int(err)
 	}
 	maj, min := unmkdev(uint(devn))
-	fsf, err := fs.Fs_open_inner(path, common.O_CREAT, 0, proc.Cwd().Fops.Pathi(), maj, min)
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT, 0, proc.Cwd().Fops.Pathi(), maj, min)
 	if err != 0 {
 		return int(err)
 	}
-	if fs.Fs_close(fsf.Inum) != 0 {
+	if thefs.Fs_close(fsf.Inum) != 0 {
 		panic("must succeed")
 	}
 	return 0
 }
 
 func sys_sync(proc *common.Proc_t) int {
-	return int(fs.Fs_sync())
+	return int(thefs.Fs_sync())
 }
 
 func sys_reboot(proc *common.Proc_t) int {
@@ -1854,13 +1854,13 @@ func (sf *sudfops_t) Bind(proc *common.Proc_t, sa []uint8) common.Err_t {
 	// try to create the specified file as a special device
 	bid := allbuds.bud_id_new()
 	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := fs.Fs_open_inner(path, common.O_CREAT | common.O_EXCL, 0, pi, common.D_SUD, int(bid))
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT | common.O_EXCL, 0, pi, common.D_SUD, int(bid))
 	if err != 0 {
 		return err
 	}
 	inum := fsf.Inum
 	bud := allbuds.bud_new(bid, path, inum)
-	if fs.Fs_close(fsf.Inum) != 0 {
+	if thefs.Fs_close(fsf.Inum) != 0 {
 		panic("must succeed")
 	}
 	sf.bud = bud
@@ -1887,7 +1887,7 @@ func (sf *sudfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, sa []uint
 	}
 	st := &common.Stat_t{}
 	path := slicetostr(sa[poff:])
-	err := fs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
 	if err != 0 {
 		return 0, err
 	}
@@ -2345,11 +2345,11 @@ func (sus *susfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 
 	// create special file
 	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := fs.Fs_open_inner(path, common.O_CREAT | common.O_EXCL, 0, pi, common.D_SUS, sid)
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT | common.O_EXCL, 0, pi, common.D_SUS, sid)
 	if err != 0 {
 		return err
 	}
-	if fs.Fs_close(fsf.Inum) != 0 {
+	if thefs.Fs_close(fsf.Inum) != 0 {
 		panic("must succeed")
 	}
 	sus.myaddr = path
@@ -2370,7 +2370,7 @@ func (sus *susfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 
 	// lookup sid
 	st := &common.Stat_t{}
-	err := fs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
 	if err != 0 {
 		return err
 	}
@@ -3185,7 +3185,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	}
 
 	// load binary image -- get first block of file
-	file, err := fs.Fs_open(paths, common.O_RDONLY, 0, proc.Cwd().Fops.Pathi(), 0, 0)
+	file, err := thefs.Fs_open(paths, common.O_RDONLY, 0, proc.Cwd().Fops.Pathi(), 0, 0)
 	if err != 0 {
 		restore()
 		return int(err)
@@ -3822,7 +3822,7 @@ func sys_truncate(proc *common.Proc_t, pathn int, newlen uint) int {
 		return int(err)
 	}
 	pi := proc.Cwd().Fops.Pathi()
-	f, err := fs.Fs_open(path, common.O_WRONLY, 0, pi, 0, 0)
+	f, err := thefs.Fs_open(path, common.O_WRONLY, 0, pi, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -3872,7 +3872,7 @@ func sys_chdir(proc *common.Proc_t, dirn int) int {
 	defer proc.Cwdl.Unlock()
 
 	pi := proc.Cwd().Fops.Pathi()
-	newcwd, err := fs.Fs_open(path, common.O_RDONLY | common.O_DIRECTORY, 0, pi, 0, 0)
+	newcwd, err := thefs.Fs_open(path, common.O_RDONLY | common.O_DIRECTORY, 0, pi, 0, 0)
 	if err != 0 {
 		return int(err)
 	}

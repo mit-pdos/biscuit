@@ -201,10 +201,14 @@ func (c console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) 
 // Test
 //
 
-func mkFile(p string) common.Err_t {
-	fd, err := Fs_open(p, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+type testfs_t struct {
+	fs *Fs_t
+}
+
+func (tfs *testfs_t) mkFile(p string) common.Err_t {
+	fd, err := tfs.fs.Fs_open(p, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
-		fmt.Printf("Fs_open %v failed %v\n", p, err)
+		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
 	}
 	
 	hdata := make([]uint8, 512)
@@ -223,7 +227,7 @@ func mkFile(p string) common.Err_t {
 		return err
 	}
 
-	err = Fs_sync()
+	err = tfs.fs.Fs_sync()
 	if err != 0 {
 		fmt.Printf("Sync failed %v\n", err)
 		return err
@@ -231,13 +235,13 @@ func mkFile(p string) common.Err_t {
 	return err
 }
 
-func mkDir(p string) common.Err_t {
-	err := Fs_mkdir(p, 0755, 0)
+func (tfs *testfs_t) mkDir(p string) common.Err_t {
+	err := tfs.fs.Fs_mkdir(p, 0755, 0)
 	if err != 0 {
 		fmt.Printf("mkDir %v failed %v\n", p, err)
 		return err
 	}
-	err = Fs_sync()
+	err = tfs.fs.Fs_sync()
 	if err != 0 {
 		fmt.Printf("Sync failed %v\n", err)
 		return err
@@ -245,22 +249,22 @@ func mkDir(p string) common.Err_t {
 	return err
 }
 
-func doRename (oldp, newp string) common.Err_t {
-	err := Fs_rename(oldp, newp, 0)
+func (tfs *testfs_t) doRename(oldp, newp string) common.Err_t {
+	err := tfs.fs.Fs_rename(oldp, newp, 0)
 	if err != 0 {
 		fmt.Printf("doRename %v %v failed %v\n", oldp, newp, err)
 	}
-	err = Fs_sync()
+	err = tfs.fs.Fs_sync()
 	if err != 0 {
 		fmt.Printf("Sync failed %v\n", err)
 	}
 	return err
 }
 
-func doAppend(p string) common.Err_t {
-	fd, err := Fs_open(p, common.O_RDWR, 0, common.Inum_t(0), 0, 0)
+func (tfs *testfs_t) doAppend(p string) common.Err_t {
+	fd, err := tfs.fs.Fs_open(p, common.O_RDWR, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
-		fmt.Printf("Fs_open %v failed %v\n", p, err)
+		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
 	}
 
 	_, err = fd.Fops.Lseek(0, common.SEEK_END)
@@ -284,7 +288,7 @@ func doAppend(p string) common.Err_t {
 		fmt.Printf("Close %s failed %v\n", p, err)
 		return err
 	}
-	err = Fs_sync()
+	err = tfs.fs.Fs_sync()
 	if err != 0 {
 		fmt.Printf("Sync failed %v\n", err)
 		return err
@@ -292,13 +296,13 @@ func doAppend(p string) common.Err_t {
 	return err
 }
 
-func doUnlink(p string) common.Err_t {
-	err := Fs_unlink(p, 0, false)
+func (tfs *testfs_t) doUnlink(p string) common.Err_t {
+	err := tfs.fs.Fs_unlink(p, 0, false)
 	if err != 0 {
 		fmt.Printf("doUnlink %v failed %v\n", p, err)
 		return err
 	}
-	err = Fs_sync()
+	err = tfs.fs.Fs_sync()
 	if err != 0 {
 		fmt.Printf("Sync failed %v\n", err)
 		return err
@@ -306,9 +310,9 @@ func doUnlink(p string) common.Err_t {
 	return err
 }
 
-func doStat(p string) (*common.Stat_t, common.Err_t) {
+func (tfs *testfs_t) doStat(p string) (*common.Stat_t, common.Err_t) {
 	s := &common.Stat_t{}
-	err := Fs_stat(p, s, 0)
+	err := tfs.fs.Fs_stat(p, s, 0)
 	if err != 0 {
 		fmt.Printf("doStat %v failed %v\n", p, err)
 		return nil, err
@@ -316,15 +320,15 @@ func doStat(p string) (*common.Stat_t, common.Err_t) {
 	return s, err
 }
 
-func doRead(p string) ([]byte, common.Err_t) {
-	st, err := doStat(p)
+func (tfs *testfs_t) doRead(p string) ([]byte, common.Err_t) {
+	st, err := tfs.doStat(p)
 	if err != 0 {
 		fmt.Printf("doStat %v failed %v\n", p, err)
 		return nil, err
 	}
-	fd, err := Fs_open(p, common.O_RDONLY, 0, common.Inum_t(0), 0, 0)
+	fd, err := tfs.fs.Fs_open(p, common.O_RDONLY, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
-		fmt.Printf("Fs_open %v failed %v\n", p, err)
+		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
 		return nil, err
 	}
 	hdata := make([]uint8, st.Size())
@@ -343,9 +347,9 @@ func doRead(p string) ([]byte, common.Err_t) {
 	return v, err
 }
 
-func doLs(p string) (map[string]*common.Stat_t, common.Err_t) {
+func (tfs *testfs_t) doLs(p string) (map[string]*common.Stat_t, common.Err_t) {
 	res := make(map[string]*common.Stat_t, 100)
-	d, e := doRead(p)
+	d, e := tfs.doRead(p)
 	if e != 0 {
 		return nil, e
 	}
@@ -355,7 +359,7 @@ func doLs(p string) (map[string]*common.Stat_t, common.Err_t) {
 			tfn := dd.filename(j)
 			if len(tfn) > 0 {
 				f := p + "/" + tfn
-				st, e := doStat(f)
+				st, e := tfs.doStat(f)
 				if e != 0 {
 					return nil, e
 				}
@@ -366,13 +370,13 @@ func doLs(p string) (map[string]*common.Stat_t, common.Err_t) {
 	return res, 0
 }
 
-func doTest(t *testing.T) {
-	e := mkFile("f1")
+func (tfs *testfs_t) doTest(t *testing.T) {
+	e := tfs.mkFile("f1")
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
 	}
 	
-	e = mkFile("f2")
+	e = tfs.mkFile("f2")
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
@@ -404,8 +408,8 @@ func doTest(t *testing.T) {
 }
 
 
-func doCheck(t *testing.T) {
-	res, e := doLs("/")
+func (tfs *testfs_t) doCheck(t *testing.T) {
+	res, e := tfs.doLs("/")
 	if e != 0 {
 		t.Fatalf("doLs failed")
 	}
@@ -463,10 +467,12 @@ func copyFileContents(src, dst string) (err error) {
 }
 
 func check(t *testing.T, d string) {
+	tfs := &testfs_t{}
 	fmt.Printf("reboot and check %v ...\n", d)
 	ahci := mkDisk(d, false)
-	_ = MkFS(blockmem, ahci, c)
-	doCheck(t)
+	_, tfs.fs = StartFS(blockmem, ahci, c)
+	tfs.doCheck(t)
+	tfs.fs.StopFS()
 	ahci.close()
 }
 
@@ -477,12 +483,12 @@ func TestFS(t *testing.T) {
 	ahci := mkDisk(dst, true)
 	
 	fmt.Printf("testFS %v ...\n", dst)
-
-	_ = MkFS(blockmem, ahci, c)
-	doTest(t)
+	
+	tfs := &testfs_t{}
+	_, tfs.fs = StartFS(blockmem, ahci, c)
+	tfs.doTest(t)
+	tfs.fs.StopFS()
 	ahci.close()
-
-	check(t, dst)
 }
 
 func genOrder(blks []int, o order_t, r orders_t) orders_t {
@@ -574,22 +580,49 @@ func genDisk(trace trace_t, dst string) {
 			}
 		}
 	}
-	//f.Sync()
+	f.Sync()
 	f.Close()
 }
 
-func applyTrace(trace trace_t, t *testing.T) {
-	fmt.Printf("apply trace:\n")
-	printTrace(trace, 0, len(trace))
-	
-	dst := "tmp.img"
-	genDisk(trace, dst)
-	
+func checkTrace(dst string, trace trace_t, t *testing.T) {
 	fmt.Printf("reboot and check %v ...\n", dst)
 	ahci := mkDisk(dst, false)
-	_ = MkFS(blockmem, ahci, c)
-	doCheck(t)
+	tfs := &testfs_t{}
+	_, tfs.fs = StartFS(blockmem, ahci, c)
+	tfs.doCheck(t)
+	tfs.fs.StopFS()
 	ahci.close()
+}
+
+type msg_t struct {
+	trace trace_t
+	t *testing.T
+	dst string
+}
+
+var checkChan chan msg_t
+var okChan chan bool
+
+func Checker() {
+	for true {
+		m := <- checkChan
+		fmt.Printf("Run checker\n")
+		genDisk(m.trace, m.dst)
+		checkTrace(m.dst, m.trace, m.t)
+		okChan <- true
+	}
+}
+
+func applyTrace(trace trace_t, t *testing.T) {
+	fmt.Printf("Send trace to Checker:\n")
+	printTrace(trace, 0, len(trace))
+	dst := "tmp.img"
+	// tracecp := make([]record_t, len(trace))
+	// copy(tracecp, trace)
+	// checkChan <- msg_t{trace, t, dst}
+	//<- okChan
+	genDisk(trace, dst)
+	checkTrace(dst, trace, t)
 }
 
 func genTraces(trace trace_t, index int, t *testing.T) {
@@ -613,7 +646,10 @@ func genTraces(trace trace_t, index int, t *testing.T) {
 	
 func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
-	
+
+	checkChan = make(chan msg_t)
+	okChan = make(chan bool)
+	go Checker()
 	trace := readTrace("trace.json")
 	printTrace(trace, 0, len(trace))
 	genTraces(trace, 0, t)

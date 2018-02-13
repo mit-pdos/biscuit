@@ -14,6 +14,10 @@ type Blockmem_i interface {
 	Free(Pa_t)
 }
 
+type Block_cb_i interface {
+	Relse(*Bdev_block_t, string)
+}
+
 type Bdev_block_t struct {
 	sync.Mutex
 	Block	int
@@ -22,6 +26,8 @@ type Bdev_block_t struct {
 	Name    string
 	Mem     Blockmem_i
 	Disk    Disk_i
+	Cb      Block_cb_i
+
 }
 
 type Bdevcmd_t uint
@@ -33,9 +39,9 @@ const (
 )
 
 type Bdev_req_t struct {
+	Cmd	Bdevcmd_t
 	Blks     []*Bdev_block_t
 	AckCh	chan bool
-	Cmd	Bdevcmd_t
 	Sync    bool
 }
 
@@ -66,6 +72,12 @@ func (blk *Bdev_block_t) Evict() {
 
 func (blk *Bdev_block_t) Evictnow() bool {
 	return false
+}
+
+func (blk *Bdev_block_t) Done(s string) {
+	if blk.Cb != nil {
+		blk.Cb.Relse(blk, s)
+	}
 }
 
 func (b *Bdev_block_t) Write() {
@@ -117,13 +129,13 @@ func (blk *Bdev_block_t) New_page() {
 	blk.Data = d
 }
 
-func MkBlock_newpage(block int, s string, mem Blockmem_i, d Disk_i) *Bdev_block_t {
-	b := MkBlock(block, s, mem, d)
+func MkBlock_newpage(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev_block_t {
+	b := MkBlock(block, s, mem, d, cb)
 	b.New_page()
 	return b
 }
 
-func MkBlock(block int, s string, mem Blockmem_i, d Disk_i) *Bdev_block_t {
+func MkBlock(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev_block_t {
 	b := &Bdev_block_t{};
 	b.Block = block
 	b.Pa = Pa_t(0)
@@ -131,6 +143,7 @@ func MkBlock(block int, s string, mem Blockmem_i, d Disk_i) *Bdev_block_t {
 	b.Name = s
 	b.Mem = mem
 	b.Disk = d
+	b.Cb = cb
 	return b
 }
 

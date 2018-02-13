@@ -212,8 +212,8 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 	}
 	
 	b.Unlock()
-	fslog.Write(b)  // log empty dir block, later writes absorpt it hopefully
-	Bcache.Relse(b, "_denextempty")
+	idm.fs.fslog.Write(b)  // log empty dir block, later writes absorpt it hopefully
+	idm.fs.bcache.Relse(b, "_denextempty")
 	
 	idm.size = newsz
 	return newoff, 0
@@ -242,8 +242,8 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 
 
 	b.Unlock()
-	fslog.Write(b)
-	Bcache.Relse(b, "_deinsert")
+	idm.fs.fslog.Write(b)
+	idm.fs.bcache.Relse(b, "_deinsert")
 	
 	icd := icdent_t{noff, inum}
 	ok := idm._dceadd(name, icd)
@@ -274,7 +274,7 @@ func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, commo
 			}
 		}
 		b.Unlock()
-		Bcache.Relse(b, "_descan")
+		idm.fs.bcache.Relse(b, "_descan")
 	}
 	return found, 0
 }
@@ -334,8 +334,8 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, common.Err_t) {
 	dirdata.w_filename(0, "")
 	dirdata.w_inodenext(0, common.Inum_t(0))
 	b.Unlock()
-	fslog.Write(b)
-	Bcache.Relse(b, "_deremove")
+	idm.fs.fslog.Write(b)
+	idm.fs.bcache.Relse(b, "_deremove")
 	// add back to free dents
 	idm.dentc.dents.remove(fn)
 	idm._deaddempty(de.offset)

@@ -9,92 +9,103 @@ const memfs = false     // in-memory file system?
 const fs_debug = false
 const iroot = 0
 
-var superb_start	int
-var superb		superblock_t
-
 var cons common.Cons_i
-var ahci common.Disk_i
 
-func MkFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) *common.Fd_t {
+type Fs_t struct {
+	ahci            common.Disk_i
+	superb_start	int
+	superb		superblock_t
+	bcache          *bcache_t
+	icache          *icache_t
+	fslog           *log_t
+	ialloc          *iallocater_t
+	balloc          *ballocater_t
+}
 
-	// XXX it would be nice to avoid these goals ...
+func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
+
 	cons = console
-	ahci = disk
-	
+
+	fs := &Fs_t{}
+	fs.ahci = disk
+		
 	if memfs {
 		fmt.Printf("Using MEMORY FS\n")
 	}
 
-	mkBcache(mem, disk)
-	mkIcache()
+	fs.bcache = mkBcache(mem, disk)
+	fs.icache = mkIcache(fs)
 	
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b, err := Bcache.Get_fill(0, "fsoff", false)
+	b, err := fs.bcache.Get_fill(0, "fsoff", false)
 	if err != 0 {
 		panic("fs_init")
 	}
 	FSOFF := 506
-	superb_start = common.Readn(b.Data[:], 4, FSOFF)
-	fmt.Printf("superb_start %v\n", superb_start)
-	if superb_start <= 0 {
+	fs.superb_start = common.Readn(b.Data[:], 4, FSOFF)
+	fmt.Printf("fs.superb_start %v\n", fs.superb_start)
+	if fs.superb_start <= 0 {
 		panic("bad superblock start")
 	}
-	Bcache.Relse(b, "fs_init")
+	fs.bcache.Relse(b, "fs_init")
 
 	// superblock is never changed, so reading before recovery is fine
-	b, err = Bcache.Get_fill(superb_start, "super", false)   // don't relse b, because superb is global
+	b, err = fs.bcache.Get_fill(fs.superb_start, "super", false)   // don't relse b, because superb is global
 	if err != 0 {
 		panic("fs_init")
 	}
-	superb = superblock_t{b.Data}
+	fs.superb = superblock_t{b.Data}
 
-	logstart := superb_start + 1
-	loglen := superb.loglen()
+	logstart := fs.superb_start + 1
+	loglen := fs.superb.loglen()
 	if loglen <= 0 || loglen > 256 {
 		panic("bad log len")
 	}
 	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
-	err = mkLog(logstart, loglen, disk)
-	if err != 0 {
-		panic("log_init failed")
+	fs.fslog = StartLog(logstart, loglen, disk, fs.bcache)
+	if fs.fslog == nil {
+		panic("Startlog failed")
 	}
 
-	imapstart := superb.imapblock()
-        imaplen := superb.imaplen()
+	imapstart := fs.superb.imapblock()
+        imaplen := fs.superb.imaplen()
 	fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
 
-	bmapstart := superb.freeblock()
-	bmaplen := superb.freeblocklen()
+	bmapstart := fs.superb.freeblock()
+	bmaplen := fs.superb.freeblocklen()
 	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
 
-	mkIalloc(imapstart, imaplen, bmapstart+bmaplen)
+	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen)
 
-
-	inodelen := superb.inodelen()
+	inodelen := fs.superb.inodelen()
 	fmt.Printf("inodelen %v\n", inodelen)
 
-	mkBallocater(bmapstart, bmaplen, bmapstart + bmaplen + inodelen)
+	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart + bmaplen + inodelen)
 
-	return &common.Fd_t{Fops: &fsfops_t{priv: iroot}}
+	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs:fs}}, fs
 }
 
-func Fs_statistics() string {
+func (fs *Fs_t) StopFS() {
+	fs.fslog.stopLog()
+}
+
+func (fs *Fs_t) Fs_statistics() string {
 	s := inode_stats()
 	if !memfs {
-		s += fslog.Stats()
+		s += fs.fslog.Stats()
 	}
-	s += ialloc.Stats()
-	s += balloc.Stats()
-	s += Bcache.Stats()
-	s += icache.Stats()
-	s += ahci.Stats()
+	s += fs.ialloc.Stats()
+	s += fs.balloc.Stats()
+	s += fs.bcache.Stats()
+	s += fs.icache.Stats()
+	s += fs.ahci.Stats()
 	return s
 }
 
-func Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
-	fslog.Op_begin("Fs_link")
-	defer fslog.Op_end()
+func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
+	fs.fslog.Op_begin("Fs_link")
+	defer fs.fslog.Op_end()
 
 	if fs_debug {
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)
@@ -102,7 +113,7 @@ func Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 
 	istats.nilink++
 
-	orig, err := fs_namei_locked(old, cwd, "Fs_link_org")
+	orig, err := fs.fs_namei_locked(old, cwd, "Fs_link_org")
 	if err != 0 {
 		return err
 	}
@@ -115,7 +126,7 @@ func Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	orig.iunlock_refdown("fs_link_orig")
 
 	dirs, fn := sdirname(new)
-	newd, err := fs_namei_locked(dirs, cwd, "fs_link_newd")
+	newd, err := fs.fs_namei_locked(dirs, cwd, "fs_link_newd")
 	if err != 0 {
 		goto undo
 	}
@@ -126,7 +137,7 @@ func Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	}
 	return 0
 undo:
-	orig, err1 := icache.Iref_locked(inum, "fs_link_undo")
+	orig, err1 := fs.icache.Iref_locked(inum, "fs_link_undo")
 	if err1 != 0 {
 		panic("bizare")
 	}
@@ -135,14 +146,14 @@ undo:
 	return err
 }
 
-func Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
+func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -common.EPERM
 	}
 
-	fslog.Op_begin("fs_unlink")
-	defer fslog.Op_end()
+	fs.fslog.Op_begin("fs_unlink")
+	defer fs.fslog.Op_end()
 
 	istats.nunlink++
 
@@ -155,7 +166,7 @@ func Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 	var err common.Err_t
 	var childi common.Inum_t
 
-	par, err = fs_namei_locked(dirs, cwd, "fs_unlink_par")
+	par, err = fs.fs_namei_locked(dirs, cwd, "fs_unlink_par")
 	if err != 0 {
 		return err
 	}
@@ -164,7 +175,7 @@ func Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 		par.iunlock_refdown("fs_unlink_par")
 		return err
 	}
-	child, err = icache.Iref(childi, "fs_unlink_child")
+	child, err = fs.icache.Iref(childi, "fs_unlink_child")
 	if err != 0 {
 		par.iunlock_refdown("fs_unlink_par")
 		return err
@@ -207,7 +218,7 @@ func Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
+func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	odirs, ofn := sdirname(oldp)
 	ndirs, nfn := sdirname(newp)
 
@@ -218,8 +229,8 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		return err
 	}
 
-	fslog.Op_begin("fs_rename")
-	defer fslog.Op_end()
+	fs.fslog.Op_begin("fs_rename")
+	defer fs.fslog.Op_end()
 
 	istats.nrename++
 	
@@ -234,7 +245,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	// lookup all inode references, but we will release locks and lock them
 	// together when we know all references.  the references to the inodes
 	// cannot disppear, however.
-	opar, err := fs_namei_locked(odirs, cwd, "fs_rename_opar")
+	opar, err := fs.fs_namei_locked(odirs, cwd, "fs_rename_opar")
 	if err != 0 {
 		return err
 	}
@@ -244,7 +255,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		opar.iunlock_refdown("fs_rename_opar")
 		return err
 	}
-	ochild, err := icache.Iref(childi, "fs_rename_ochild")
+	ochild, err := fs.icache.Iref(childi, "fs_rename_ochild")
 	if err != 0 {
 		opar.iunlock_refdown("fs_rename_opar")
 		return err
@@ -252,10 +263,10 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
 
-	npar, err := fs_namei(ndirs, cwd)
+	npar, err := fs.fs_namei(ndirs, cwd)
 	if err != 0 {
-		icache.Refdown(opar, "fs_rename_opar")
-		icache.Refdown(ochild, "fs_rename_ochild")
+		fs.icache.Refdown(opar, "fs_rename_opar")
+		fs.icache.Refdown(ochild, "fs_rename_ochild")
 		return err
 	}
 	
@@ -265,10 +276,10 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	// removing a directory because the directories aren't empty.  it could
 	// delete npar and an ancestor, but rename has already a reference to to
 	// npar.
-	if err = _isancestor(ochild, npar); err != 0 {
-		icache.Refdown(opar, "fs_rename_opar")
-		icache.Refdown(ochild, "fs_rename_ochild")
-		icache.Refdown(npar, "fs_rename_npar")
+	if err = fs._isancestor(ochild, npar); err != 0 {
+		fs.icache.Refdown(opar, "fs_rename_opar")
+		fs.icache.Refdown(ochild, "fs_rename_ochild")
+		fs.icache.Refdown(npar, "fs_rename_npar")
 		return err
 	}
 
@@ -280,16 +291,16 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		npar.Lock()
 		nchildinum, err := npar.ilookup(nfn)
 		if err != 0 && err != -common.ENOENT {
-			icache.Refdown(opar, "fs_name_opar")
-			icache.Refdown(ochild, "fs_name_ochild")	
+			fs.icache.Refdown(opar, "fs_name_opar")
+			fs.icache.Refdown(ochild, "fs_name_ochild")	
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
 		var err1 common.Err_t
-		nchild, err1 = icache.Iref(nchildinum, "fs_rename_ochild")
+		nchild, err1 = fs.icache.Iref(nchildinum, "fs_rename_ochild")
 		if err1 != 0 {
-			icache.Refdown(opar, "fs_name_opar")
-			icache.Refdown(ochild, "fs_name_ochild")	
+			fs.icache.Refdown(opar, "fs_name_opar")
+			fs.icache.Refdown(ochild, "fs_name_ochild")	
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
@@ -307,7 +318,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		locked = iref_lockall(inodes)
 		// defers are run last-in-first-out
 		for _, v := range inodes {
-			defer icache.Refdown(v, "rename")
+			defer fs.icache.Refdown(v, "rename")
 		}
 
 		for _, v := range locked {
@@ -352,7 +363,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 			v.iunlock("fs_rename_opar")
 		}
 		if newexists {
-			icache.Refdown(nchild, "fs_rename_nchild")
+			fs.icache.Refdown(nchild, "fs_rename_nchild")
 		}
 	}
 
@@ -367,13 +378,13 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	defer Bcache.Relse(b1, "probe_insert")
+	defer fs.bcache.Relse(b1, "probe_insert")
 	
 	b2, err := opar.probe_unlink(ofn)
 	if err != 0 {
 		return err
 	}
-	defer Bcache.Relse(b2, "probe_unlink_opar")
+	defer fs.bcache.Relse(b2, "probe_unlink_opar")
 
 	odir := ochild.itype == I_DIR
 	if odir {
@@ -381,7 +392,7 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		if err != 0 {
 			return err
 		}
-		defer Bcache.Relse(b3, "probe_unlink_ochild")
+		defer fs.bcache.Relse(b3, "probe_unlink_ochild")
 	}
 
 	if newexists {
@@ -419,18 +430,18 @@ func Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 }
 
 // anc and start are in memory
-func _isancestor(anc, start *imemnode_t) common.Err_t {
+func (fs *Fs_t) _isancestor(anc, start *imemnode_t) common.Err_t {
 	if anc.inum == iroot {
 		panic("root is always ancestor")
 	}
 	// walk up to iroot
-	here, err := icache.Iref(start.inum, "_isancestor")
+	here, err := fs.icache.Iref(start.inum, "_isancestor")
 	if err != 0 {
 		panic("_isancestor: start must exist")
 	}
 	for here.inum != iroot {
 		if anc == here {
-			icache.Refdown(here, "_isancestor_here")
+			fs.icache.Refdown(here, "_isancestor_here")
 			return -common.EINVAL
 		}
 		here.ilock("_isancestor")
@@ -443,7 +454,7 @@ func _isancestor(anc, start *imemnode_t) common.Err_t {
 			panic("xxx")
 		} else {
 			var next *imemnode_t
-			next, err = icache.Iref(nexti, "_isancestor_next")
+			next, err = fs.icache.Iref(nexti, "_isancestor_next")
 			here.iunlock_refdown("_isancestor")
 			if err != 0 {
 				return err
@@ -451,16 +462,18 @@ func _isancestor(anc, start *imemnode_t) common.Err_t {
 			here = next
 		}
 	}
-	icache.Refdown(here, "_isancestor")
+	fs.icache.Refdown(here, "_isancestor")
 	return 0
 }
 
 type fsfops_t struct {
 	priv	common.Inum_t
+	fs      *Fs_t
 	// protects offset
 	sync.Mutex
 	offset	int
 	append	bool
+	
 }
 
 func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
@@ -477,7 +490,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		}
 		offset = toff
 	}
-	idm, err := icache.Iref_locked(fo.priv, "_read")
+	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_read")
 	if err != 0 {
 		return 0, err
 	}
@@ -513,7 +526,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 		offset = toff
 		append = false
 	}
-	idm, err := icache.Iref_locked(fo.priv, "_write")
+	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_write")
 	if err != 0 {
 		return 0, err
 	}
@@ -530,19 +543,19 @@ func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Er
 }
 
 func (fo *fsfops_t) Fullpath() (string, common.Err_t) {
-	fp, err := _fullpath(fo.priv)
+	fp, err := fo.fs._fullpath(fo.priv)
 	return fp, err
 }
 
 func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
-	fslog.Op_begin("truncate")
-	defer fslog.Op_end()
+	fo.fs.fslog.Op_begin("truncate")
+	defer fo.fs.fslog.Op_end()
 
 	if fs_debug {
 		fmt.Printf("truncate: %v %v\n", fo.priv, newlen)
 	}
 
-	idm, err := icache.Iref_locked(fo.priv, "truncate")
+	idm, err := fo.fs.icache.Iref_locked(fo.priv, "truncate")
 	if err != 0 {
 		return err
 	}
@@ -559,7 +572,7 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", fo.priv, st)
 	}
-	idm, err := icache.Iref_locked(fo.priv, "fstat")
+	idm, err := fo.fs.icache.Iref_locked(fo.priv, "fstat")
 	if err != 0 {
 		return err
 	}
@@ -572,7 +585,7 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
 func (fo *fsfops_t) Close() common.Err_t {
-	return Fs_close(fo.priv)
+	return fo.fs.Fs_close(fo.priv)
 }
 
 func (fo *fsfops_t) Pathi() common.Inum_t {
@@ -580,12 +593,12 @@ func (fo *fsfops_t) Pathi() common.Inum_t {
 }
 
 func (fo *fsfops_t) Reopen() common.Err_t {
-	idm, err := icache.Iref_locked(fo.priv, "reopen")
+	idm, err := fo.fs.icache.Iref_locked(fo.priv, "reopen")
 	if err != 0 {
 		return err
 	}
 	istats.nreopen++
-	icache.Refup(idm, "reopen")   // close will decrease it
+	fo.fs.icache.Refup(idm, "reopen")   // close will decrease it
 	idm.iunlock_refdown("reopen")
 	return 0
 }
@@ -618,7 +631,7 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
 func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
-	idm, err := icache.Iref_locked(fo.priv, "mmapi")
+	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	if err != 0 {
 		return nil, err
 	}
@@ -835,6 +848,7 @@ type rawdfops_t struct {
 	sync.Mutex
 	minor	int
 	offset	int
+	fs *Fs_t
 }
 
 func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
@@ -843,7 +857,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 	var did int
 	for dst.Remain() != 0 {
 		blkno := raw.offset / common.BSIZE
-		b, err := fslog.Get_fill(blkno, "read", false)
+		b, err := raw.fs.fslog.Get_fill(blkno, "read", false)
 		if err != 0 {
 			return 0, err
 		}
@@ -854,7 +868,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 		}
 		raw.offset += c
 		did += c
-		Bcache.Relse(b, "read")
+		raw.fs.bcache.Relse(b, "read")
 	}
 	return did, 0
 }
@@ -870,7 +884,7 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		//	buf := bdev_read_block(blkno)
 		//}
 		// XXX don't always have to read block in from disk
-		buf, err := fslog.Get_fill(blkno, "write", false)
+		buf, err := raw.fs.fslog.Get_fill(blkno, "write", false)
 		if err != 0 {
 			return 0, err
 		}
@@ -878,10 +892,10 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		if err != 0 {
 			return 0, err
 		}
-		Bcache.Write(buf)
+		raw.fs.bcache.Write(buf)
 		raw.offset += c
 		did += c
-		Bcache.Relse(buf, "write")
+		raw.fs.bcache.Relse(buf, "write")
 	}
 	return did, 0
 }
@@ -991,9 +1005,9 @@ func (raw *rawdfops_t) Shutdown(read, write bool) common.Err_t {
 	return -common.ENOTSOCK
 }
 
-func Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t {
-	fslog.Op_begin("fs_mkdir")
-	defer fslog.Op_end()
+func (fs *Fs_t) Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t {
+	fs.fslog.Op_begin("fs_mkdir")
+	defer fs.fslog.Op_end()
 
 	istats.nmkdir++
 
@@ -1009,7 +1023,7 @@ func Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t {
 		return -common.ENAMETOOLONG
 	}
 
-	par, err := fs_namei_locked(dirs, cwd, "mkdir")
+	par, err := fs.fs_namei_locked(dirs, cwd, "mkdir")
 	if err != 0 {
 		return err
 	}
@@ -1021,7 +1035,7 @@ func Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t {
 		return err
 	}
 
-	child, err := icache.Iref(childi, "fs_mkdir_child")
+	child, err := fs.icache.Iref(childi, "fs_mkdir_child")
 	if err != 0 {
 		par.create_undo(childi, fn)
 		return err
@@ -1029,7 +1043,7 @@ func Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t {
 
 	child.do_insert(".", childi)
 	child.do_insert("..", par.inum)
-	icache.Refdown(child, "fs_mkdir3")
+	fs.icache.Refdown(child, "fs_mkdir3")
 	return 0
 }
 
@@ -1040,7 +1054,7 @@ type Fsfile_t struct {
 	Minor	int
 }
 
-func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t,  major, minor int) (Fsfile_t, common.Err_t) {
+func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t,  major, minor int) (Fsfile_t, common.Err_t) {
 	trunc := flags & common.O_TRUNC != 0
 	creat := flags & common.O_CREAT != 0
 	nodir := false
@@ -1051,8 +1065,8 @@ func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum
 
 	// open with O_TRUNC is not read-only
 	if trunc || creat {
-		fslog.Op_begin("fs_open")
-		defer fslog.Op_end()
+		fs.fslog.Op_begin("fs_open")
+		defer fs.fslog.Op_end()
 	}
 	var ret Fsfile_t
 	var idm *imemnode_t
@@ -1075,7 +1089,7 @@ func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum
 		// with O_CREAT, the file may exist. use itrylock and
 		// unlock/retry to avoid deadlock.
 		for {
-			par, err := fs_namei_locked(dirs, cwd, "Fs_open_inner")
+			par, err := fs.fs_namei_locked(dirs, cwd, "Fs_open_inner")
 			if err != 0 {
 				return ret, err
 			}
@@ -1094,7 +1108,7 @@ func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum
 			if childi <= 0 {
 				panic("non-positive childi\n")
 			}
-			idm, err = icache.Iref_locked(childi, "Fs_open_inner_child")
+			idm, err = fs.icache.Iref_locked(childi, "Fs_open_inner_child")
 			if err != 0 {
 				par.create_undo(childi, fn)
 				return ret, err
@@ -1111,7 +1125,7 @@ func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum
 	} else {
 		// open existing file
 		var err common.Err_t
-		idm, err = fs_namei_locked(paths, cwd, "Fs_open_inner_existing")
+		idm, err = fs.fs_namei_locked(paths, cwd, "Fs_open_inner_existing")
 		if err != 0 {
 			return ret, err
 		}
@@ -1142,7 +1156,7 @@ func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum
 		idm.do_trunc(0)
 	}
 
-	icache.Refup(idm, "Fs_open_inner")
+	fs.icache.Refup(idm, "Fs_open_inner")
 
 	ret.Inum = idm.inum
 	ret.Major = idm.major
@@ -1153,16 +1167,16 @@ func Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd common.Inum
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{ common.D_SUD: true, common.D_SUS: true}
 
-func Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t,  major, minor int) (*common.Fd_t, common.Err_t) {
+func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t,  major, minor int) (*common.Fd_t, common.Err_t) {
 	istats.nopen++
-	fsf, err := Fs_open_inner(paths, flags, mode, cwd, major, minor)
+	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
 		return nil, err
 	}
 
 	// some special files (sockets) cannot be opened with fops this way
 	if denied := _denyopen[fsf.Major]; denied {
-		if Fs_close(fsf.Inum) != 0 {
+		if fs.Fs_close(fsf.Inum) != 0 {
 			panic("must succeed")
 		}
 		return nil, -common.EPERM
@@ -1175,13 +1189,13 @@ func Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t,  m
 	ret := &common.Fd_t{}
 	if maj != 0 {
 		// don't need underlying file open
-		if Fs_close(fsf.Inum) != 0 {
+		if fs.Fs_close(fsf.Inum) != 0 {
 			panic("must succeed")
 		}
 		switch maj {
 		case common.D_CONSOLE, common.D_DEVNULL, common.D_STAT:
 			if maj == common.D_STAT {
-				stats_string = Fs_statistics()
+				stats_string = fs.Fs_statistics()
 			}
 			ret.Fops = &Devfops_t{Maj: maj, Min: min}
 		case common.D_RAWDISK:
@@ -1191,14 +1205,14 @@ func Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t,  m
 		}
 	} else {
 		apnd := flags & common.O_APPEND != 0
-		ret.Fops = &fsfops_t{priv: priv, append: apnd}
+		ret.Fops = &fsfops_t{priv: priv, fs: fs, append: apnd}
 	}
 	return ret, 0
 }
 
-func Fs_close(priv common.Inum_t) common.Err_t {
-	fslog.Op_begin("Fs_close")
-	defer fslog.Op_end()
+func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
+	fs.fslog.Op_begin("Fs_close")
+	defer fs.fslog.Op_end()
 
 	istats.nclose++
 	
@@ -1206,20 +1220,20 @@ func Fs_close(priv common.Inum_t) common.Err_t {
 		fmt.Printf("Fs_close: %v\n", priv)
 	}
 
-	idm, err := icache.Iref_locked(priv, "Fs_close")
+	idm, err := fs.icache.Iref_locked(priv, "Fs_close")
 	if err != 0 {
 		return err
 	}
-	icache.Refdown(idm, "Fs_close")
+	fs.icache.Refdown(idm, "Fs_close")
 	idm.iunlock_refdown("Fs_close")
 	return 0
 }
 
-func Fs_stat(path string, st *common.Stat_t, cwd common.Inum_t) common.Err_t {
+func (fs *Fs_t) Fs_stat(path string, st *common.Stat_t, cwd common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", path, cwd)
 	}
-	idm, err := fs_namei_locked(path, cwd, "Fs_stat")
+	idm, err := fs.fs_namei_locked(path, cwd, "Fs_stat")
 	if err != 0 {
 		return err
 	}
@@ -1228,28 +1242,28 @@ func Fs_stat(path string, st *common.Stat_t, cwd common.Inum_t) common.Err_t {
 	return err
 }
 
-func Fs_sync() common.Err_t {
+func (fs *Fs_t) Fs_sync() common.Err_t {
 	if memfs {
 		return 0
 	}
 	istats.nsync++
-	fslog.Force()
+	fs.fslog.Force()
 	return 0
 }
 
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
-func fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
 	var err common.Err_t
 	istats.nnamei++
 	if len(paths) == 0 || paths[0] != '/' {
-		start, err = icache.Iref(cwd, "fs_namei_cwd")
+		start, err = fs.icache.Iref(cwd, "fs_namei_cwd")
 		if err != 0 {
 			panic("cannot load cwd")
 		}
 	} else {
-		start, err = icache.Iref(iroot, "fs_namei_root")
+		start, err = fs.icache.Iref(iroot, "fs_namei_root")
 		if err != 0 {
 			panic("cannot load iroot")
 		}
@@ -1265,7 +1279,7 @@ func fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
 			return nil, err
 		}
 		if n != idm.inum {
-			next, err := icache.Iref(n, "fs_namei_next")
+			next, err := fs.icache.Iref(n, "fs_namei_next")
 			idm.iunlock_refdown("fs_namei_idm")
 			if err != 0 {
 				return nil, err
@@ -1278,8 +1292,8 @@ func fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
 	return idm, 0
 }
 
-func fs_namei_locked(paths string, cwd common.Inum_t, s string) (*imemnode_t, common.Err_t) {
-	idm, err := fs_namei(paths, cwd)
+func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*imemnode_t, common.Err_t) {
+	idm, err := fs.fs_namei(paths, cwd)
 	if err != 0 {
 		return nil, err
 	}
@@ -1324,6 +1338,8 @@ func (sb *superblock_t) lastblock() int {
 // Bitmap allocater. Used for inodes and blocks
 type allocater_t struct {
 	sync.Mutex
+
+	fs *Fs_t
 	freestart  int
 	freelen  int
 	lastblk int
@@ -1335,8 +1351,9 @@ type allocater_t struct {
 	nhit  int
 }
 
-func mkAllocater(start, len int) (*allocater_t) {
+func mkAllocater(fs *Fs_t, start, len int) (*allocater_t) {
 	a := &allocater_t{}
+	a.fs = fs
 	a.freestart = start
 	a.freelen = len
 	return a
@@ -1355,7 +1372,7 @@ func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_
 	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
 		panic("naughty blockno")
 	}
-	return fslog.Get_fill(blockno, "fbread", true)
+	return alloc.fs.fslog.Get_fill(blockno, "fbread", true)
 }
 
 func (alloc *allocater_t) Alloc() (int, common.Err_t) {
@@ -1375,7 +1392,7 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 		i := (alloc.lastblk + b) % alloc.freelen
 		if blk != nil {
 			blk.Unlock()
-			Bcache.Relse(blk, "alloc")
+			alloc.fs.bcache.Relse(blk, "alloc")
 		}
 		blk, err = alloc.Fbread(alloc.freestart + i)
 		if err != 0 {
@@ -1411,8 +1428,8 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	// mark as allocated
 	blk.Data[oct] |= 1 << bit
 	blk.Unlock()
-	fslog.Write(blk)
-	Bcache.Relse(blk, "balloc1")
+	alloc.fs.fslog.Write(blk)
+	alloc.fs.bcache.Relse(blk, "balloc1")
 
 	bitsperblk := common.BSIZE*8
 	blkn = blkn*bitsperblk + oct*8 + int(bit)
@@ -1447,8 +1464,8 @@ func (alloc *allocater_t) Free(blkno int) common.Err_t {
 	}
 	fblk.Data[fbyteoff] &= ^(1 << fbitoff)
 	fblk.Unlock()
-	fslog.Write(fblk)
-	Bcache.Relse(fblk, "free")
+	alloc.fs.fslog.Write(fblk)
+	alloc.fs.bcache.Relse(fblk, "free")
 	alloc.nfree++
 	return 0
 }

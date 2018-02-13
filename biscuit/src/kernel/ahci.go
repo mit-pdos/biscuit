@@ -8,7 +8,6 @@ import "unsafe"
 import "strconv"
 
 import "common"
-import "fs"
 
 const ahci_debug = false
 
@@ -602,7 +601,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.sector_count = 1;
 
 	// To receive the identity
-        b := common.MkBlock_newpage(-1, "identify", blockmem, ahci)
+        b := common.MkBlock_newpage(-1, "identify", blockmem, ahci, nil)
 	p.fill_prd(0, b)
 	p.fill_fis(0, fis)
 
@@ -985,7 +984,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
 				for i := 0; i < len(p.inflight[s].Blks); i++ {
-					fs.Bcache.Relse(p.inflight[s].Blks[i], "interrupt")
+					p.inflight[s].Blks[i].Done("interrupt")
 				}
 			}
 			if p.inflight[s].Sync {
