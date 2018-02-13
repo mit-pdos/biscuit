@@ -4,8 +4,9 @@ import "testing"
 import "fmt"
 import "os"
 import "io"
-
+import "strconv"
 import "encoding/json"
+
 import "common"
 
 var diskimg = "../../go.img"
@@ -163,7 +164,7 @@ func (ahci *ahci_disk_t) close() {
 	if ahci.t != nil {
 		ahci.t.close()
 	}
-	ahci.f.Sync()
+	// ahci.f.Sync()
 	ahci.f.Close()
 }
 
@@ -583,7 +584,7 @@ func genDisk(trace trace_t, dst string) {
 	f.Close()
 }
 
-func checkTrace(dst string, trace trace_t, t *testing.T) {
+func checkDisk(dst string, t *testing.T) {
 	fmt.Printf("reboot and check %v ...\n", dst)
 	ahci := mkDisk(dst, false)
 	tfs := &testfs_t{}
@@ -600,28 +601,26 @@ type msg_t struct {
 }
 
 var checkChan chan msg_t
-var okChan chan bool
+var cnt int
 
 func Checker() {
 	for true {
 		m := <-checkChan
-		fmt.Printf("Run checker\n")
-		genDisk(m.trace, m.dst)
-		checkTrace(m.dst, m.trace, m.t)
-		okChan <- true
+		fmt.Printf("Run checker %v\n", m.dst)
+		checkDisk(m.dst, m.t)
+		os.Remove(m.dst)
 	}
 }
 
 func applyTrace(trace trace_t, t *testing.T) {
-	fmt.Printf("Send trace to Checker:\n")
 	printTrace(trace, 0, len(trace))
-	dst := "tmp.img"
-	// tracecp := make([]record_t, len(trace))
-	// copy(tracecp, trace)
-	// checkChan <- msg_t{trace, t, dst}
-	//<- okChan
+	fmt.Printf("applyTrace")
+	dst := "tmp" + strconv.Itoa(cnt) + ".img"
+	cnt++
+	tracecp := make([]record_t, len(trace))
+	copy(tracecp, trace)
 	genDisk(trace, dst)
-	checkTrace(dst, trace, t)
+	checkChan <- msg_t{trace, t, dst}
 }
 
 func genTraces(trace trace_t, index int, t *testing.T) {
@@ -647,7 +646,6 @@ func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
 
 	checkChan = make(chan msg_t)
-	okChan = make(chan bool)
 	go Checker()
 	trace := readTrace("trace.json")
 	printTrace(trace, 0, len(trace))
