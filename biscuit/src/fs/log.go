@@ -271,7 +271,7 @@ func (log *log_t) addlog(buf buf_t) {
 		delete(log.orderedpresent, buf.block.Block)
 		delete(log.absorb, buf.block.Block)
 	}
-	
+
 	// log absorption.
 	if _, ok := log.absorb[buf.block.Block]; ok {
 		// Buffer is already in log or in ordered, but not on disk
@@ -308,11 +308,11 @@ func (log *log_t) addlog(buf buf_t) {
 // headblk is in cache
 func (log *log_t) apply(headblk *common.Bdev_block_t) {
 	done := make(map[int]bool, log.loglen)
-		
+
 	if log_debug {
 		fmt.Printf("apply log: %v %v %v\n", log.memhead, log.diskhead, log.loglen)
 	}
-	
+
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
@@ -329,7 +329,7 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 	}
 
 	log.flush()  // flush apply
-	
+
 	// success; clear flag indicating to recover from log
 	lh := logheader_t{headblk.Data}
 	lh.w_recovernum(0)
@@ -377,7 +377,7 @@ func (log *log_t) commit() {
 	if err != 0 {
 		panic("cannot read commit block\n")
 	}
-	
+
 	lh := logheader_t{headblk.Data}
 	blks := make([]*common.Bdev_block_t, newblks)
 
@@ -395,7 +395,7 @@ func (log *log_t) commit() {
 		b.Unlock()
 		blks[i-log.diskhead] = b
 	}
-	
+
 	lh.w_recovernum(log.memhead)
 
 	// write blocks to log in batch
@@ -405,7 +405,7 @@ func (log *log_t) commit() {
 	}
 
 	log.write_ordered()
-	
+
 	log.flush()   // flush outstanding writes
 
 	Bcache.Write(headblk)  	// write log header
@@ -428,7 +428,7 @@ func (log *log_t) commit() {
 	}
 	// data till log.memhead has been written to log
 	log.diskhead = log.memhead
-	
+
 	// reset absorption map and ordered list
 	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
 
@@ -487,7 +487,7 @@ func log_daemon(l *log_t) {
 		done := false
 		nops := 0
 		waiters := 0
-		
+
 		for !done {
 			select {
 			case nb := <- l.incoming:

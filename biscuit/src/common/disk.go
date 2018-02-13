@@ -100,12 +100,12 @@ func (b *Bdev_block_t) Read() {
 	if bdev_debug {
 		fmt.Printf("bdev_read %v %v %#x %#x\n", b.Block, b.Name, b.Data[0], b.Data[1])
 	}
-	
+
 	// XXX sanity check, but ignore it during recovery
 	if b.Data[0] == 0xc && b.Data[1] == 0xc {
 		fmt.Printf("WARNING: %v %v\n", b.Name, b.Block)
 	}
-	
+
 }
 
 func (blk *Bdev_block_t) New_page() {

@@ -12,7 +12,7 @@ type Syscall_i interface {
 type Cons_i interface {
 	Cons_read(ub Userio_i, offset int) (int, Err_t)
 	Cons_write(src Userio_i, off int) (int, Err_t)
-	
+
 }
 
 const(

@@ -286,7 +286,7 @@ func attach_3400(vendorid, devid int, tag pcitag_t) {
 	gsi := pci_disk_interrupt_wiring(tag)
 	IRQ_DISK = gsi
 	INT_DISK = common.IRQ_BASE + IRQ_DISK
-	
+
 	d := &pciide_disk_t{}
 	// 3400's PCI-native IDE command/control block
 	rbase := pci_bar_pio(tag, 0)

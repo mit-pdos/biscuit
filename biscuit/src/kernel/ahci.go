@@ -175,7 +175,7 @@ type ahci_reg_t struct {
 	cap2 uint32;		// extended host capabilities
 	bohc uint32;		// BIOS/OS handoff control and status
 }
-	
+
 type port_reg_t struct {
 	clb uint64		// command list base address
 	fb uint64		// FIS base address
@@ -234,7 +234,7 @@ type sata_fis_reg_d2h struct {
 	cflag uint8
 	status uint8
 	error uint8
-	
+
 	lba_0 uint8
 	lba_1 uint8
 	lba_2 uint8
@@ -302,7 +302,7 @@ type ahci_port_t struct {
 	queued []*common.Bdev_req_t
 	nwaiting int
 	nflush int
-	
+
 	block_pa [32]uintptr
 	block [32]*[512]uint8
 
@@ -346,15 +346,15 @@ type identify_device struct {
 
 const (
 	PCI_MSI_MCR_64BIT  = 0x00800000
-	
+
 	HBD_PORT_IPM_ACTIVE uint32 = 1
 	HBD_PORT_DET_PRESENT uint32 = 3
-	
+
 	SATA_SIG_ATA                 = 0x00000101	// SATA drive
 
 	AHCI_GHC_AE uint32 = (1 << 31)        // Use AHCI to communicat
 	AHCI_GHC_IE uint32 = (1 << 1)         // Enable interrupts from AHCI
-	
+
 	AHCI_PORT_CMD_ST uint32	= (1 << 0)	// start 
 	AHCI_PORT_CMD_SUD uint32 = (1 << 1)	// spin-up device 
 	AHCI_PORT_CMD_POD uint32 = (1 << 2)	// power on device 
@@ -471,7 +471,7 @@ func (p *ahci_port_t) init() bool {
 	if (LD(&p.port.ssts) >> 8) & 0x0F != HBD_PORT_IPM_ACTIVE {
 		return false
 	}
-	
+
 	// Only SATA drives
 	if LD(&p.port.sig) != SATA_SIG_ATA {
 		return false
@@ -526,7 +526,7 @@ func (p *ahci_port_t) init() bool {
 	}
 	p.cmdt_pa = uintptr(pa)
 	p.cmdt = (*[32]ahci_cmd_table)(unsafe.Pointer(physmem.Dmap(pa)))
-	
+
 	// Initialize memory buffers
 	for cmdslot, _ := range p.cmdh {
 		v := &p.cmdt[cmdslot]
@@ -536,10 +536,10 @@ func (p *ahci_port_t) init() bool {
 
 	ST64(&p.port.clb, uint64(p.cmdh_pa))
 	ST64(&p.port.fb, uint64(p.rfis_pa))
-	
+
         ST(&p.port.ci, 0)
 	ST(&p.port.sact, 0)
-	
+
 	// Clear any errors first, otherwise the chip wedges
 	CLR(&p.port.serr, 0xFFFFFFFF)
 	ST(&p.port.serr, 0)
@@ -589,7 +589,7 @@ func swap(info []uint8) []uint8{
 		c := info[i]
 		info[i] = info[i+1]
 		info[i+1] = c
-		
+
 	}
 	return info
 }
@@ -626,7 +626,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 
 	m := swap(id.model[:])
 	s := string(m)
-	
+
 	return ret_id, &s, true
 }
 
@@ -681,7 +681,7 @@ func (p *ahci_port_t) wait(s uint32) bool {
 		if c % 10000 == 0 {
 			fmt.Printf("AHCI: wait %v: stat %#x ci %#x sact %#x error %#x is %#x\n", s, stat & IDE_STAT_BSY, ci, sact, serr, is)
 		}
-		
+
 	}
 	return false
 }
@@ -870,7 +870,7 @@ func (p *ahci_port_t) issue(s int, blks []*common.Bdev_block_t, cmd uint8) {
 	}
 	nsector := len/512
 	ST(&p.cmdh[s].prdbc, 0);
-	
+
 	fis.dev_head = IDE_DEV_LBA;
 	fis.control = IDE_CTL_LBA48;
 	var bn uint64
@@ -898,7 +898,7 @@ func (p *ahci_port_t) issue(s int, blks []*common.Bdev_block_t, cmd uint8) {
 		fmt.Printf("cmdh: prdtl %#x flags %#x bc %v\n", LD16(&p.cmdh[s].prdtl),
 			LD16(&p.cmdh[s].flags), LD(&p.cmdh[s].prdbc))
 	}
-	
+
 	// issue command
 	ST(&p.port.ci, (1 << uint(s)))
 }
@@ -999,7 +999,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 			p.inflight[s] = nil
 			if len(p.queued) > 0 {
 				p.cond_queued.Signal()
-				
+
 			}
 			if p.nflush > 0 && len(p.queued) == 0 {
 				if ahci_debug {
@@ -1025,7 +1025,7 @@ func (ahci *ahci_disk_t) intr() {
 				panic("intr: wrong port\n")
 			}
 			int = true
-			
+
 			// clear port interrupt. interrupts coming in while we are
 			// processing will be deliver after clear_is().
 			SET(&ahci.port.port.is, 0xFFFFFFFF)
