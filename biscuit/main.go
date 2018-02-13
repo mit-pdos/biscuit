@@ -2689,6 +2689,7 @@ var _tlblock	= sync.Mutex{}
 
 func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	if numcpus == 1 {
+		runtime.TLBflush()
 		return
 	}
 	_tlblock.Lock()
