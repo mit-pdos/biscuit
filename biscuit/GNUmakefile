@@ -8,7 +8,7 @@ ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP)
 CFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -nostdinc -fno-builtin \
 	-mno-red-zone
 CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-builtin -mno-red-zone
-GOPATH := /home/kaashoek/hack/biscuit/biscuit
+GOPATH := $(shell pwd)
 # bootloader sources
 ASMS := boot.S
 CS   := bootmain.c main.c chentry.c
@@ -20,7 +20,7 @@ K := src/kernel
 KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 
-OBJS := $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS)))
+OBJS := $(addprefix $(K)/, $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS))))
 
 CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  fslink fsunlink fsfree ls bmwrite bmread conio lsh bmopen cls \
@@ -72,7 +72,7 @@ $(K)/boot: $(K)/boot.o $(K)/bootmain.o $(K)/stamp.py
 
 $(K)/boot.o: ASFLAGS += -m32
 
-$(K)/bootmain.o: CFLAGS += -I$(TOP)
+$(K)/bootmain.o: CFLAGS += -I$(K) -o $@
 $(K)/bootmain.o: $(K)/bootmain.c
 	@# don't use -Os because it rearranges code in .text such that start
 	@# isn't first. htf do i force ld to put a specific function first in
@@ -111,7 +111,7 @@ $(GOBIN):
 		false
 
 $(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) src/common/*.go src/fs/*.go
-	$(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
+	GOPATH="$(GOPATH)" $(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
 	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
 		else ./chentry $@_ $$ADDR; fi
@@ -121,7 +121,7 @@ $(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) src/common/*.go src/fs/*.
 $(FSCPROGS): fsdir/bin/% : user/c/%
 	objcopy -S $^ $@
 
-$(CPROGS): CFLAGS += -I user/c/include -fPIC
+$(CPROGS): CFLAGS += -I user/c/include -fPIC -std=gnu11
 $(CPROGS): % : %.c user/c/litc.o
 	$(CC) $(CFLAGS) -Wl,-T user/c/linker.ld -Wl,--build-id=none \
 	    -o $@ user/c/litc.o $<
