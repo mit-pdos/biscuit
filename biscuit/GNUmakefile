@@ -1,4 +1,4 @@
-QEMU := qemu-system-x86_64
+QEMU ?= qemu-system-x86_64
 PYTHON ?= python2
 
 TOP := .
