@@ -604,7 +604,7 @@ func genDisk(trace trace_t, dst string) {
 	}
 	for _, r := range trace {
 		if r.Cmd == "write" {
-			log.Printf("update block %v\n", r.BlkNo)
+			// log.Printf("update block %v\n", r.BlkNo)
 			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
 			buf := make([]byte, common.BSIZE)
 			for i, _ := range buf {
@@ -632,7 +632,12 @@ func applyTrace(trace trace_t, t *testing.T) {
 	dst := "tmp" + strconv.Itoa(cnt) + ".img"
 	cnt++
 	genDisk(trace, dst)
-	checkChan <- msg_t{t, dst}
+	go func() {
+		checkDisk(dst, t)
+		os.Remove(dst)
+
+	}()
+	// checkChan <- msg_t{t, dst}
 }
 
 // Recursively generate all possible traces, for any order of writes between two
