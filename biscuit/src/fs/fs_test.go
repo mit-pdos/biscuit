@@ -6,6 +6,7 @@ import "os"
 import "io"
 import "strconv"
 import "encoding/json"
+import "log"
 
 import "common"
 
@@ -56,7 +57,50 @@ func readTrace(p string) []record_t {
 		res = append(res, r)
 
 	}
+	f.Close()
 	return res
+}
+
+func (trace trace_t) printTrace(start int, end int) {
+	fmt.Printf("trace (%d,%d):\n", start, end)
+	for i, r := range trace {
+		if i >= start && i < end {
+			fmt.Printf("  %d: %v %v\n", i, r.Cmd, r.BlkNo)
+		}
+	}
+}
+
+func (trace trace_t) findSync(index int) int {
+	for i := index; i < len(trace); i++ {
+		if trace[i].Cmd == "sync" {
+			return i
+		}
+	}
+	return -1
+}
+
+func (r *record_t) copyRecord() record_t {
+	c := record_t{}
+	c.BlkNo = r.BlkNo
+	c.Cmd = r.Cmd
+	c.BlkData = make([]byte, len(r.BlkData))
+	copy(c.BlkData, r.BlkData)
+	return c
+}
+
+func (trace trace_t) copyTrace(start int, end int) trace_t {
+	sub := make([]record_t, end-start)
+	for i, _ := range sub {
+		sub[i] = trace[start+i].copyRecord()
+	}
+	return sub
+}
+
+func (trace trace_t) permTrace(sub trace_t, index int, o order_t) {
+	for i, j := range o {
+		trace[index+i] = sub[j]
+
+	}
 }
 
 func (t *tracef_t) write(n int, v *common.Bytepg_t) {
@@ -165,7 +209,10 @@ func (ahci *ahci_disk_t) close() {
 		ahci.t.close()
 	}
 	// ahci.f.Sync()
-	ahci.f.Close()
+	err := ahci.f.Close()
+	if err != nil {
+		panic(err)
+	}
 }
 
 //
@@ -443,33 +490,40 @@ func (tfs *testfs_t) doCheck(t *testing.T) {
 	// }
 }
 
+//
+// Util
+//
+
 func copyFileContents(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
-		return
+		return err
 	}
 	defer in.Close()
 	out, err := os.Create(dst)
 	if err != nil {
-		return
+		return err
 	}
-	defer func() {
-		cerr := out.Close()
-		if err == nil {
-			err = cerr
-		}
-	}()
-	if _, err = io.Copy(out, in); err != nil {
-		return
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	if err != nil {
+		return err
 	}
-	err = out.Sync()
-	return
+	//err = out.Sync()
+	//if err != nil {
+	//	return err
+	//}
+	return err
 }
 
-func check(t *testing.T, d string) {
+//
+// Simple test
+//
+
+func checkDisk(dst string, t *testing.T) {
+	log.Printf("reboot and check %v ...\n", dst)
+	ahci := mkDisk(dst, false)
 	tfs := &testfs_t{}
-	fmt.Printf("reboot and check %v ...\n", d)
-	ahci := mkDisk(d, false)
 	_, tfs.fs = StartFS(blockmem, ahci, c)
 	tfs.doCheck(t)
 	tfs.fs.StopFS()
@@ -478,7 +532,10 @@ func check(t *testing.T, d string) {
 
 func TestFS(t *testing.T) {
 	dst := "tmp.img"
-	copyFileContents(diskimg, dst)
+	err := copyFileContents(diskimg, dst)
+	if err != nil {
+		panic(err)
+	}
 
 	ahci := mkDisk(dst, true)
 
@@ -489,6 +546,29 @@ func TestFS(t *testing.T) {
 	tfs.doTest(t)
 	tfs.fs.StopFS()
 	ahci.close()
+
+	checkDisk(dst, t)
+}
+
+//
+// Check traces
+//
+
+type msg_t struct {
+	t   *testing.T
+	dst string
+}
+
+var checkChan chan msg_t
+var cnt int
+
+func Checker() {
+	for true {
+		m := <-checkChan
+		log.Printf("Run checker %v\n", m.dst)
+		checkDisk(m.dst, m.t)
+		os.Remove(m.dst)
+	}
 }
 
 func genOrder(blks []int, o order_t, r orders_t) orders_t {
@@ -516,59 +596,15 @@ func genOrders(blks []int) orders_t {
 	return r
 }
 
-func printTrace(t trace_t, start int, end int) {
-	fmt.Printf("trace (%d,%d):\n", start, end)
-	for i, r := range t {
-		if i >= start && i < end {
-			fmt.Printf("  %d: %v %v\n", i, r.Cmd, r.BlkNo)
-		}
-	}
-}
-
-func findSync(t trace_t, index int) int {
-	for i := index; i < len(t); i++ {
-		if t[i].Cmd == "sync" {
-			return i
-		}
-	}
-	return -1
-}
-
-func copyRecord(r record_t) record_t {
-	c := record_t{}
-	c.BlkNo = r.BlkNo
-	c.Cmd = r.Cmd
-	c.BlkData = make([]byte, len(r.BlkData))
-	copy(c.BlkData, r.BlkData)
-	return c
-}
-
-func copyTrace(t trace_t, start int, end int) trace_t {
-	sub := make([]record_t, end-start)
-	for i, _ := range sub {
-		sub[i] = copyRecord(t[start+i])
-	}
-	return sub
-}
-
-func permTrace(t trace_t, sub trace_t, index int, o order_t) {
-	// fmt.Printf("o = %v\n", o)
-	for i, j := range o {
-		t[index+i] = sub[j]
-
-	}
-	// printTrace(t, index, index+len(o))
-}
-
 func genDisk(trace trace_t, dst string) {
 	copyFileContents(diskimg, dst)
-	f, uerr := os.OpenFile(dst, os.O_RDWR, 0755)
-	if uerr != nil {
-		panic(uerr)
+	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
+	if err != nil {
+		panic(err)
 	}
 	for _, r := range trace {
 		if r.Cmd == "write" {
-			fmt.Printf("update block %v\n", r.BlkNo)
+			log.Printf("update block %v\n", r.BlkNo)
 			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
 			buf := make([]byte, common.BSIZE)
 			for i, _ := range buf {
@@ -580,64 +616,41 @@ func genDisk(trace trace_t, dst string) {
 			}
 		}
 	}
-	f.Sync()
-	f.Close()
-}
-
-func checkDisk(dst string, t *testing.T) {
-	fmt.Printf("reboot and check %v ...\n", dst)
-	ahci := mkDisk(dst, false)
-	tfs := &testfs_t{}
-	_, tfs.fs = StartFS(blockmem, ahci, c)
-	tfs.doCheck(t)
-	tfs.fs.StopFS()
-	ahci.close()
-}
-
-type msg_t struct {
-	trace trace_t
-	t     *testing.T
-	dst   string
-}
-
-var checkChan chan msg_t
-var cnt int
-
-func Checker() {
-	for true {
-		m := <-checkChan
-		fmt.Printf("Run checker %v\n", m.dst)
-		checkDisk(m.dst, m.t)
-		os.Remove(m.dst)
+	//err = f.Sync()
+	//if err != nil {
+	//	panic(err)
+	//}
+	err = f.Close()
+	if err != nil {
+		panic(err)
 	}
 }
 
 func applyTrace(trace trace_t, t *testing.T) {
-	printTrace(trace, 0, len(trace))
-	fmt.Printf("applyTrace")
+	trace.printTrace(0, len(trace))
+	log.Printf("applyTrace")
 	dst := "tmp" + strconv.Itoa(cnt) + ".img"
 	cnt++
-	tracecp := make([]record_t, len(trace))
-	copy(tracecp, trace)
 	genDisk(trace, dst)
-	checkChan <- msg_t{trace, t, dst}
+	checkChan <- msg_t{t, dst}
 }
 
+// Recursively generate all possible traces, for any order of writes between two
+// syncs.
 func genTraces(trace trace_t, index int, t *testing.T) {
 	if index >= len(trace) {
 		applyTrace(trace, t)
 		return
 	}
-	n := findSync(trace, index)
+	n := trace.findSync(index)
 	so := make([]int, n-index)
 	for i := 0; i < len(so); i++ {
 		so[i] = i
 	}
 	orders := genOrders(so)
-	subtrace := copyTrace(trace, index, n)
-	// printTrace(subtrace, 0, len(subtrace))
+	subtrace := trace.copyTrace(index, n)
 	for _, o := range orders {
-		permTrace(trace, subtrace, index, o)
+		trace.permTrace(subtrace, index, o)
 		genTraces(trace, n+1, t)
 	}
 }
@@ -648,6 +661,6 @@ func TestTraces(t *testing.T) {
 	checkChan = make(chan msg_t)
 	go Checker()
 	trace := readTrace("trace.json")
-	printTrace(trace, 0, len(trace))
+	// trace.printTrace(0, len(trace))
 	genTraces(trace, 0, t)
 }
