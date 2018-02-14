@@ -1,0 +1,7 @@
+- write/close race (concurrent write on memnode that has since been closed and
+  unlinked)
+- batch ifree()
+- linked list instead of slice in ahci command queues
+- linked list instead of slice in log_t for ordered
+- no goroutine() per imemnodes eviction
+	- daemon evicts instead of on inode lookup?
