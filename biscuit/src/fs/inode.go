@@ -236,9 +236,9 @@ func (idm *imemnode_t) Evict() {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
 	if idm.links == 0 {
-		idm.fs.fslog.Op_begin("evict")
+		//idm.fs.fslog.Op_begin("evict")
 		idm.ifree()
-		idm.fs.fslog.Op_end()
+		//idm.fs.fslog.Op_end()
 	}
 }
 
@@ -1053,7 +1053,7 @@ type icache_t struct {
 
 func mkIcache(fs *Fs_t) *icache_t {
 	icache := &icache_t{}
-	icache.refcache = mkRefcache(common.Syslimit.Vnodes, true)
+	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
 	return icache
 }
