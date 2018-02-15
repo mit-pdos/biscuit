@@ -139,19 +139,6 @@ type ahci_disk_t struct {
 	t *tracef_t
 }
 
-func mkDisk(d string, doTrace bool) *ahci_disk_t {
-	a := &ahci_disk_t{}
-	f, uerr := os.OpenFile(d, os.O_RDWR, 0755)
-	if uerr != nil {
-		panic(uerr)
-	}
-	a.f = f
-	if doTrace {
-		a.t = mkTrace()
-	}
-	return a
-}
-
 func (ahci *ahci_disk_t) Seek(o int) {
 	_, err := ahci.f.Seek(int64(o), 0)
 	if err != nil {
@@ -250,21 +237,28 @@ func (c console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) 
 //
 
 type testfs_t struct {
-	fs *Fs_t
+	ahci *ahci_disk_t
+	fs   *Fs_t
 }
 
-func (tfs *testfs_t) mkFile(p string) common.Err_t {
+func mkData(v uint8) *common.Fakeubuf_t {
+	hdata := make([]uint8, 512)
+	for i := range hdata {
+		hdata[i] = v
+	}
+	ub := &common.Fakeubuf_t{}
+	ub.Fake_init(hdata)
+	fmt.Printf("sz = %v\n", ub.Totalsz())
+	return ub
+}
+
+func (tfs *testfs_t) mkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := tfs.fs.Fs_open(p, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
 		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
 	}
-
-	hdata := make([]uint8, 512)
-	ub := &common.Fakeubuf_t{}
-	ub.Fake_init(hdata)
-
 	n, err := fd.Fops.Write(nil, ub)
-	if err != 0 || n != len(hdata) {
+	if err != 0 || ub.Remain() != 0 {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
@@ -309,7 +303,7 @@ func (tfs *testfs_t) doRename(oldp, newp string) common.Err_t {
 	return err
 }
 
-func (tfs *testfs_t) doAppend(p string) common.Err_t {
+func (tfs *testfs_t) doAppend(p string, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := tfs.fs.Fs_open(p, common.O_RDWR, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
 		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
@@ -321,12 +315,8 @@ func (tfs *testfs_t) doAppend(p string) common.Err_t {
 		return err
 	}
 
-	hdata := make([]uint8, 512)
-	ub := &common.Fakeubuf_t{}
-	ub.Fake_init(hdata)
-
 	n, err := fd.Fops.Write(nil, ub)
-	if err != 0 || n != len(hdata) {
+	if err != 0 || ub.Remain() != 0 {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
@@ -418,44 +408,51 @@ func (tfs *testfs_t) doLs(p string) (map[string]*common.Stat_t, common.Err_t) {
 	return res, 0
 }
 
-func (tfs *testfs_t) doTest(t *testing.T) {
-	e := tfs.mkFile("f1")
+//
+// A simple test
+//
+
+func (tfs *testfs_t) doTestSimple(t *testing.T) {
+	ub := mkData(1)
+	e := tfs.mkFile("f1", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
 	}
 
-	e = tfs.mkFile("f2")
+	ub = mkData(2)
+	e = tfs.mkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
 
-	// e = mkDir("d0")
-	// if e != 0 {
-	// 	t.Fatalf("Mkdir %v failed", "d0")
-	// }
+	e = tfs.mkDir("d0")
+	if e != 0 {
+		t.Fatalf("Mkdir %v failed", "d0")
+	}
 
-	// e = mkDir("d0/d1")
-	// if e != 0 {
-	// 	t.Fatalf("Mkdir %v failed", "d1")
-	// }
+	e = tfs.mkDir("d0/d1")
+	if e != 0 {
+		t.Fatalf("Mkdir %v failed", "d1")
+	}
 
-	// e = doRename("d0/d1", "e0")
-	// if e != 0 {
-	// 	t.Fatalf("Rename failed")
-	// }
+	e = tfs.doRename("d0/d1", "e0")
+	if e != 0 {
+		t.Fatalf("Rename failed")
+	}
 
-	// e = doAppend("f1")
-	// if e != 0 {
-	// 	t.Fatalf("Append failed")
-	// }
+	ub = mkData(3)
+	e = tfs.doAppend("f1", ub)
+	if e != 0 {
+		t.Fatalf("Append failed")
+	}
 
-	// e = doUnlink("f2")
-	// if e != 0 {
-	// 	t.Fatalf("Unlink failed")
-	//}
+	e = tfs.doUnlink("f2")
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
 }
 
-func (tfs *testfs_t) doCheck(t *testing.T) {
+func (tfs *testfs_t) doCheckSimple(t *testing.T) {
 	res, e := tfs.doLs("/")
 	if e != 0 {
 		t.Fatalf("doLs failed")
@@ -464,37 +461,84 @@ func (tfs *testfs_t) doCheck(t *testing.T) {
 	if !ok {
 		t.Fatalf("f1 not present")
 	}
-	if st.Size() != 512 { // 1024
+	if st.Size() != 1024 {
 		t.Fatalf("f1 wrong size")
 	}
 
-	// st, ok = res["f2"]
-	// if ok {
-	// 	t.Fatalf("f2 present")
-	// }
-	// st, ok = res["d0"]
-	// if !ok {
-	// 	t.Fatalf("d0 not present")
-	// }
-	// st, ok = res["e0"]
-	// if !ok {
-	// 	t.Fatalf("e0 not present")
-	// }
-	// res, e = doLs("/d0")
-	// if e != 0 {
-	// 	t.Fatalf("doLs d0 failed")
-	// }
-	// st, ok = res["e0"]
-	// if ok {
-	// 	t.Fatalf("e0 present in d0")
-	// }
+	st, ok = res["f2"]
+	if ok {
+		t.Fatalf("f2 present")
+	}
+	st, ok = res["d0"]
+	if !ok {
+		t.Fatalf("d0 not present")
+	}
+	st, ok = res["e0"]
+	if !ok {
+		t.Fatalf("e0 not present")
+	}
+	res, e = tfs.doLs("/d0")
+	if e != 0 {
+		t.Fatalf("doLs d0 failed")
+	}
+	st, ok = res["e0"]
+	if ok {
+		t.Fatalf("e0 present in d0")
+	}
+}
+
+//
+// Test block reuse
+//
+
+func (tfs *testfs_t) doTestReuse(t *testing.T) {
+	ub := mkData(1)
+	e := tfs.mkFile("f1", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f1")
+	}
+	e = tfs.doUnlink("f1")
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
+	ub = mkData(2)
+	e = tfs.mkFile("f2", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f2")
+	}
+}
+
+func (tfs *testfs_t) doCheckReuse() (string, bool) {
+	res, e := tfs.doLs("/")
+	if e != 0 {
+		return "doLs failed", false
+	}
+	st, ok := res["f1"]
+	if ok {
+		return "f1 present", false
+	}
+	st, ok = res["f2"]
+	if !ok {
+		return "f2 not present", false
+	}
+	if st.Size() != 512 {
+		return "f2 wrong size", false
+	}
+	d, e := tfs.doRead("f2")
+	if e != 0 || len(d) != int(st.Size()) {
+		return "Read f2 failed", false
+	}
+	if uint8(d[0]) != 2 {
+		return "Wrong data in f2", false
+	}
+	return "", true
 }
 
 //
 // Util
 //
 
-func copyFileContents(src, dst string) (err error) {
+func copyDisk(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -516,60 +560,59 @@ func copyFileContents(src, dst string) (err error) {
 	return err
 }
 
+func mkDisk(d string, doTrace bool) *ahci_disk_t {
+	a := &ahci_disk_t{}
+	f, uerr := os.OpenFile(d, os.O_RDWR, 0755)
+	if uerr != nil {
+		panic(uerr)
+	}
+	a.f = f
+	if doTrace {
+		a.t = mkTrace()
+	}
+	return a
+}
+
+func bootFS(dst string) *testfs_t {
+	log.Printf("reboot and check %v ...\n", dst)
+	tfs := &testfs_t{}
+	tfs.ahci = mkDisk(dst, false)
+	_, tfs.fs = StartFS(blockmem, tfs.ahci, c)
+	return tfs
+}
+
+func shutdownFS(tfs *testfs_t) {
+	tfs.fs.StopFS()
+	tfs.ahci.close()
+}
+
 //
 // Simple test
 //
 
-func checkDisk(dst string, t *testing.T) {
-	log.Printf("reboot and check %v ...\n", dst)
-	ahci := mkDisk(dst, false)
-	tfs := &testfs_t{}
-	_, tfs.fs = StartFS(blockmem, ahci, c)
-	tfs.doCheck(t)
-	tfs.fs.StopFS()
-	ahci.close()
-}
-
 func TestFS(t *testing.T) {
 	dst := "tmp.img"
-	err := copyFileContents(diskimg, dst)
+	err := copyDisk(diskimg, dst)
 	if err != nil {
 		panic(err)
 	}
 
-	ahci := mkDisk(dst, true)
-
 	fmt.Printf("testFS %v ...\n", dst)
 
-	tfs := &testfs_t{}
-	_, tfs.fs = StartFS(blockmem, ahci, c)
-	tfs.doTest(t)
-	tfs.fs.StopFS()
-	ahci.close()
+	tfs := bootFS(dst)
+	tfs.doTestSimple(t)
+	shutdownFS(tfs)
 
-	checkDisk(dst, t)
+	tfs = bootFS(dst)
+	tfs.doCheckSimple(t)
+	shutdownFS(tfs)
 }
 
 //
 // Check traces
 //
 
-type msg_t struct {
-	t   *testing.T
-	dst string
-}
-
-var checkChan chan msg_t
 var cnt int
-
-func Checker() {
-	for true {
-		m := <-checkChan
-		log.Printf("Run checker %v\n", m.dst)
-		checkDisk(m.dst, m.t)
-		os.Remove(m.dst)
-	}
-}
 
 func genOrder(blks []int, o order_t, r orders_t) orders_t {
 	if len(blks) == 0 {
@@ -597,7 +640,7 @@ func genOrders(blks []int) orders_t {
 }
 
 func genDisk(trace trace_t, dst string) {
-	copyFileContents(diskimg, dst)
+	copyDisk(diskimg, dst)
 	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
 	if err != nil {
 		panic(err)
@@ -633,20 +676,26 @@ func applyTrace(trace trace_t, t *testing.T) {
 	cnt++
 	genDisk(trace, dst)
 	go func() {
-		checkDisk(dst, t)
+		tfs := bootFS(dst)
+		s, ok := tfs.doCheckReuse()
+		shutdownFS(tfs)
 		os.Remove(dst)
-
+		if !ok {
+			panic(s)
+		}
 	}()
-	// checkChan <- msg_t{t, dst}
 }
 
 // Recursively generate all possible traces, for any order of writes between two
 // syncs.
-func genTraces(trace trace_t, index int, t *testing.T) {
+func genTraces(trace trace_t, index int, t *testing.T, apply bool) int {
 	if index >= len(trace) {
-		applyTrace(trace, t)
-		return
+		if apply {
+			applyTrace(trace, t)
+		}
+		return 1
 	}
+	cnt := 0
 	n := trace.findSync(index)
 	so := make([]int, n-index)
 	for i := 0; i < len(so); i++ {
@@ -656,16 +705,32 @@ func genTraces(trace trace_t, index int, t *testing.T) {
 	subtrace := trace.copyTrace(index, n)
 	for _, o := range orders {
 		trace.permTrace(subtrace, index, o)
-		genTraces(trace, n+1, t)
+		cnt += genTraces(trace, n+1, t, apply)
 	}
+	return cnt
+}
+
+func produceTrace(t *testing.T) {
+	dst := "tmp.img"
+	err := copyDisk(diskimg, dst)
+	if err != nil {
+		panic(err)
+	}
+	ahci := mkDisk(dst, true)
+
+	fmt.Printf("produceTrace %v ...\n", dst)
+	tfs := &testfs_t{}
+	_, tfs.fs = StartFS(blockmem, ahci, c)
+	tfs.doTestReuse(t)
+	tfs.fs.StopFS()
+	ahci.close()
 }
 
 func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
-
-	checkChan = make(chan msg_t)
-	go Checker()
+	produceTrace(t)
 	trace := readTrace("trace.json")
 	// trace.printTrace(0, len(trace))
-	genTraces(trace, 0, t)
+	cnt := genTraces(trace, 0, t, true)
+	fmt.Printf("#traces = %v\n", cnt)
 }
