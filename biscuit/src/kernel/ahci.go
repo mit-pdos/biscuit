@@ -6,6 +6,7 @@ import "sync"
 import "sync/atomic"
 import "unsafe"
 import "strconv"
+import "container/list"
 
 import "common"
 
@@ -297,7 +298,7 @@ type ahci_port_t struct {
 	nslot     uint32
 	next_slot uint32
 	inflight  []*common.Bdev_req_t
-	queued    []*common.Bdev_req_t
+	queued    *list.List
 	nwaiting  int
 	nflush    int
 
@@ -743,17 +744,18 @@ func (p *ahci_port_t) queuemgr() {
 	p.Lock()
 	for {
 		ok := false
-		if len(p.queued) > 0 {
+		if p.queued.Len() > 0 {
 			s, ok := p.find_slot()
 			if ok {
-				req := p.queued[0]
-				p.queued = p.queued[1:]
+				e := p.queued.Front()
+				p.queued.Remove(e)
+				req := e.Value.(*common.Bdev_req_t)
 				p.startslot(req, s)
 			}
 		}
-		if len(p.queued) == 0 || !ok {
+		if p.queued.Len() == 0 || !ok {
 			if ahci_debug {
-				fmt.Printf("queuemgr: go to sleep: %v %v\n", len(p.queued), ok)
+				fmt.Printf("queuemgr: go to sleep: %v %v\n", p.queued.Len(), ok)
 			}
 			p.cond_queued.Wait()
 		}
@@ -762,7 +764,8 @@ func (p *ahci_port_t) queuemgr() {
 
 func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 	ok := false
-	for _, r := range p.queued {
+	for e := p.queued.Front(); e != nil; e = e.Next() {
+		r := e.Value.(*common.Bdev_req_t)
 		if len(r.Blks) == 0 {
 			continue
 		}
@@ -780,7 +783,7 @@ func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 		}
 	}
 	if !ok {
-		p.queued = append(p.queued, req)
+		p.queued.PushBack(req)
 	}
 }
 
@@ -805,7 +808,7 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 		}
 	}
 
-	if len(p.queued) > 0 {
+	if p.queued.Len() > 0 {
 		p.queue_coalesce(req)
 		p.nnoslot++
 		return
@@ -817,7 +820,7 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 		if ahci_debug {
 			fmt.Printf("AHCI start: queue for slot\n")
 		}
-		p.queued = append(p.queued, req)
+		p.queued.PushBack(req)
 		p.nnoslot++
 		return
 	}
@@ -948,7 +951,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 					p.nslot, ahci.ncs)
 			}
 			p.inflight = make([]*common.Bdev_req_t, p.nslot)
-			p.queued = make([]*common.Bdev_req_t, 0)
+			p.queued = list.New()
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
 			id, _, _ = p.identify()
@@ -992,11 +995,11 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 
 			}
 			p.inflight[s] = nil
-			if len(p.queued) > 0 {
+			if p.queued.Len() > 0 {
 				p.cond_queued.Signal()
 
 			}
-			if p.nflush > 0 && len(p.queued) == 0 {
+			if p.nflush > 0 && p.queued.Len() == 0 {
 				if ahci_debug {
 					fmt.Printf("port_intr: wakeup sync %v\n", s)
 				}
