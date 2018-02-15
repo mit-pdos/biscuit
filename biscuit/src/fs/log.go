@@ -2,6 +2,8 @@ package fs
 
 import "fmt"
 import "strconv"
+import "container/list"
+
 import "common"
 
 const log_debug = false
@@ -30,7 +32,7 @@ type log_t struct {
 	log            []*common.Bdev_block_t       // in-memory log
 	logpresent     map[int]bool                 // enable quick check to see if block is in log
 	absorb         map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
-	ordered        []*common.Bdev_block_t       // slice of ordered blocks
+	ordered        *list.List                   // list of ordered blocks
 	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
 	memhead        int                          // head of the log in memory
 	diskhead       int                          // head of the log on disk
@@ -221,7 +223,7 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
 	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen) // XXX bounded by len ordered list?
-	log.ordered = make([]*common.Bdev_block_t, 0)               // XXX bounded by cache size?
+	log.ordered = list.New()                                    // XXX bounded by cache size?
 	log.orderedpresent = make(map[int]bool)                     // XXX bounded by len ordered list
 	log.incoming = make(chan buf_t)
 	log.admission = make(chan bool)
@@ -270,10 +272,13 @@ func (log *log_t) addlog(buf buf_t) {
 	if !buf.ordered && presentordered {
 		// XXX maybe orderedpresent should keep track of index in log.ordered
 		// XXX test case: alloc b for f, write b, unlink f, grow dir with b, and write b
-		for i, b := range log.ordered {
+		var next *list.Element
+		for e := log.ordered.Front(); e != nil; e = next {
+			next = e.Next()
+			b := e.Value.(*common.Bdev_block_t)
 			if b.Block == buf.block.Block {
-				fmt.Printf("remove %v from ordered\n", i)
-				log.ordered = append(log.ordered[:i], log.ordered[i+1:]...)
+				fmt.Printf("remove %v from ordered\n")
+				log.ordered.Remove(e)
 			}
 		}
 		delete(log.orderedpresent, buf.block.Block)
@@ -300,7 +305,7 @@ func (log *log_t) addlog(buf buf_t) {
 	// block will commmit with this transaction (or crash, but then nop will
 	// commit).  We never commit while an operation is still on-going.
 	if buf.ordered && !present {
-		log.ordered = append(log.ordered, buf.block)
+		log.ordered.PushBack(buf.block)
 		log.orderedpresent[buf.block.Block] = true
 	} else {
 		memhead := log.memhead
@@ -350,11 +355,15 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 
 func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
-	for _, b := range log.ordered {
+
+	var next *list.Element
+	for e := log.ordered.Front(); e != nil; e = next {
+		next = e.Next()
+		b := e.Value.(*common.Bdev_block_t)
 		log.bcache.Write_async(b)
 		log.bcache.Relse(b, "writeordered")
+		log.ordered.Remove(e)
 	}
-	log.ordered = make([]*common.Bdev_block_t, 0)
 	log.orderedpresent = make(map[int]bool)
 }
 
@@ -362,7 +371,7 @@ func (log *log_t) commit() {
 	if log.memhead == log.diskhead {
 		// nothing to commit, but maybe some file blocks to sync
 		if log_debug {
-			fmt.Printf("commit: flush ordered blks %d\n", len(log.ordered))
+			fmt.Printf("commit: flush ordered blks %d\n", log.ordered.Len())
 		}
 		log.write_ordered()
 		log.flush()
@@ -538,7 +547,7 @@ func log_daemon(l *log_t) {
 				}
 			case <-l.forceordered:
 				if log_debug {
-					fmt.Printf("Force ordered %v\n", len(l.ordered))
+					fmt.Printf("Force ordered %v\n", l.ordered.Len())
 				}
 				l.nforceordered++
 				l.write_ordered()
