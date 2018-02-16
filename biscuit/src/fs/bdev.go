@@ -238,14 +238,20 @@ func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
 type ballocater_t struct {
 	fs    *Fs_t
 	alloc *allocater_t
+	start int
+	len   int
 	first int
+	blen  int
 }
 
-func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
+func mkBallocater(fs *Fs_t, start, len, first, blen int) *ballocater_t {
 	balloc := &ballocater_t{}
 	balloc.alloc = mkAllocater(fs, start, len)
-	fmt.Printf("first datablock %v\n", first)
+	fmt.Printf("bmap start %v bmaplen %v first datablock %v blen %v\n", start, len, first, blen)
 	balloc.first = first
+	balloc.start = start
+	balloc.len = len
+	balloc.blen = blen
 	balloc.fs = fs
 	return balloc
 }
@@ -286,6 +292,9 @@ func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	if blkno < 0 {
 		panic("bfree")
 	}
+	if blkno >= balloc.blen {
+		panic("bfree too large")
+	}
 	return balloc.alloc.Free(blkno)
 }
 
@@ -300,6 +309,10 @@ func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
 	blkn, err := balloc.alloc.Alloc()
 	if err != 0 {
 		return 0, err
+	}
+	if blkn >= balloc.blen {
+		fmt.Printf("balloc1: blkn %v len %v\n", blkn, balloc.blen)
+		panic("balloc1: too large blkn\n")
 	}
 	return blkn + balloc.first, err
 }

@@ -1146,26 +1146,34 @@ func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 //
 
 type iallocater_t struct {
-	alloc *allocater_t
-	first int
+	alloc    *allocater_t
+	start    int
+	first    int
+	inodelen int
 }
 
-func mkIalloc(fs *Fs_t, start, len, first int) *iallocater_t {
+func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 	ialloc := &iallocater_t{}
 	ialloc.alloc = mkAllocater(fs, start, len)
 	ialloc.first = first
+	ialloc.inodelen = inodelen * (common.BSIZE / ISIZE)
+	fmt.Printf("ialloc: mapstart %v maplen %v inode start %v inode len %v\n", start, len, first, inodelen)
 	return ialloc
 }
 
 func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 	n, err := ialloc.alloc.Alloc()
-	inum := common.Inum_t(n)
 	if err != 0 {
 		return 0, err
 	}
 	if fs_debug {
-		fmt.Printf("ialloc %d\n", inum)
+		fmt.Printf("ialloc %d\n", n)
 	}
+	// we may have more bits in inode bitmap blocks than inodes on disk
+	if n >= ialloc.inodelen {
+		return 0, -common.ENOMEM
+	}
+	inum := common.Inum_t(n)
 	return inum, 0
 }
 
@@ -1179,6 +1187,10 @@ func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
 func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
 	b := int(inum) / (common.BSIZE / ISIZE)
 	b += ialloc.first
+	if b < ialloc.first || b >= ialloc.first+ialloc.inodelen {
+		fmt.Printf("inum=%v b = %d\n", inum, b)
+		panic("Iblock: too big inum")
+	}
 	return b
 }
 

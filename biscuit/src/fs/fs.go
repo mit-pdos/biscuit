@@ -76,12 +76,11 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	bmaplen := fs.superb.freeblocklen()
 	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
 
-	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen)
-
 	inodelen := fs.superb.inodelen()
-	fmt.Printf("inodelen %v\n", inodelen)
+	fmt.Printf("inodestart %v inodelen %v\n", bmapstart+bmaplen, inodelen)
 
-	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
+	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen, inodelen)
+	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen, bmaplen*common.BSIZE)
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
@@ -589,13 +588,8 @@ func (fo *fsfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) 
 	return fo._write(src, offset)
 }
 
-func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
-	fo.Lock()
-	defer fo.Unlock()
-	if fo.count <= 0 {
-		return -common.EBADF
-	}
-
+// caller holds fo lock
+func (fo *fsfops_t) fstat(st *common.Stat_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", fo.priv, st)
 	}
@@ -606,6 +600,15 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 	err = idm.do_stat(st)
 	idm.iunlock_refdown("fstat")
 	return err
+}
+
+func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.count <= 0 {
+		return -common.EBADF
+	}
+	return fo.fstat(st)
 }
 
 // XXX log those files that have no fs links but > 0 memory references to the
@@ -669,7 +672,7 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 		fo.offset += off
 	case common.SEEK_END:
 		st := &common.Stat_t{}
-		fo.Fstat(st)
+		fo.fstat(st)
 		fo.offset = int(st.Size()) + off
 	default:
 		return 0, -common.EINVAL
