@@ -46,7 +46,7 @@ int main(int argc, char **argv)
 
 	int s = lstn(31338);
 
-	const int blksz = 512;
+	const int blksz = 4096;
 	char buf[blksz];
 	size_t did = 0;
 	int mb = 1;
@@ -70,6 +70,8 @@ int main(int argc, char **argv)
 			mb += 1;
 		}
 	}
+	if (fsync(fd) == -1)
+		err(-1, "fsync");
 	if (close(s) == -1)
 		err(-1, "close");
 	if (close(fd) == -1)

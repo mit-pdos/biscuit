@@ -925,6 +925,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 		boff := raw.offset % common.BSIZE
 		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {
+			raw.fs.bcache.Relse(b, "read")
 			return 0, err
 		}
 		raw.offset += c
@@ -951,6 +952,7 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		}
 		c, err := src.Uioread(buf.Data[boff:])
 		if err != 0 {
+			raw.fs.bcache.Relse(buf, "write")
 			return 0, err
 		}
 		raw.fs.bcache.Write(buf)
@@ -1260,7 +1262,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 			}
 			ret.Fops = &Devfops_t{Maj: maj, Min: min}
 		case common.D_RAWDISK:
-			ret.Fops = &rawdfops_t{minor: min}
+			ret.Fops = &rawdfops_t{minor: min, fs: fs}
 		default:
 			panic("bad dev")
 		}
