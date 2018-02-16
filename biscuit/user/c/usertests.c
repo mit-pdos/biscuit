@@ -2980,6 +2980,48 @@ static void _condbctest(const int nt)
 		err(-1, "cond destroy");
 }
 
+int pthreadsharedfd;
+
+void *threadfd(void *arg)
+{
+  long n = (long) arg;
+  
+  for (int i = 0; i < 1000; i++) {
+    if (n == 0) {
+      pthreadsharedfd = open("sharedfdf", O_CREATE|O_RDWR);
+      if(pthreadsharedfd < 0)
+	err(pthreadsharedfd, "fstests: cannot open sharedfd for writing");
+      int n = write(pthreadsharedfd, "aaaaaaaaaa", 10);
+      if(n != 10 || n == EBADF) {
+	printf("error: write should have returned 10 or error %d\n", n);
+      }
+    } else {
+      unlink("sharedfdf");
+      close(pthreadsharedfd);
+    }
+  }
+  return NULL;
+}
+
+void pthreadfd(void) {
+  const int nthreads = 2;
+
+  printf("pthread shared fd\n");
+	
+  int i;
+  pthread_t t[nthreads];
+  for (int i = 0; i < nthreads; i++) {
+    if (pthread_create(&t[i], NULL, threadfd, (void *) (long) i))
+      errx(-1, "pthread create");
+  }    
+  for (i = 0; i < nthreads; i++) {
+    if (pthread_join(t[i], NULL))
+      errx(-1, "pthread join");
+  }
+  unlink("sharedfdf");
+  printf("pthread shared fd ok\n");
+}
+
 void futextest(void)
 {
 	printf("futex test\n");
@@ -3626,6 +3668,9 @@ main(int argc, char *argv[])
   posixtest();
   barriertest();
   threadwait();
+  
+  pthreadfd();
+  
   fnonblock();
   preadwrite();
   stdiotest();

@@ -292,6 +292,10 @@ func (idm *imemnode_t) iunlock_refdown(s string) {
 	idm.fs.icache.Refdown(idm, s)
 }
 
+func (idm *imemnode_t) refdown(s string) {
+	idm.fs.icache.Refdown(idm, s)
+}
+
 func (idm *imemnode_t) _iupdate() common.Err_t {
 	istats.niupdate++
 	iblk, err := idm.idibread()
@@ -349,8 +353,10 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 			n = max
 		}
 		idm.fs.fslog.Op_begin("dowrite")
+		idm.ilock("iwrite")
 		wrote, err := idm.iwrite(src, offset+i, n)
 		idm._iupdate()
+		idm.iunlock("iwrite")
 		idm.fs.fslog.Op_end()
 
 		if err != 0 {

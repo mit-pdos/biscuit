@@ -83,7 +83,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
 
-	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs}}, fs
+	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
 
 func (fs *Fs_t) StopFS() {
@@ -147,13 +147,13 @@ undo:
 }
 
 func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
+	fs.fslog.Op_begin("fs_unlink")
+	defer fs.fslog.Op_end()
+
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
 		return -common.EPERM
 	}
-
-	fs.fslog.Op_begin("fs_unlink")
-	defer fs.fslog.Op_end()
 
 	istats.nunlink++
 
@@ -473,12 +473,17 @@ type fsfops_t struct {
 	sync.Mutex
 	offset int
 	append bool
+	count  int
 }
 
 func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
+
+	if fo.count <= 0 {
+		return 0, -common.EBADF
+	}
 
 	useoffset := toff != -1
 	offset := fo.offset
@@ -514,6 +519,10 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 	fo.Lock()
 	defer fo.Unlock()
 
+	if fo.count <= 0 {
+		return 0, -common.EBADF
+	}
+
 	useoffset := toff != -1
 	offset := fo.offset
 	append := fo.append
@@ -525,7 +534,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 		offset = toff
 		append = false
 	}
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_write")
+	idm, err := fo.fs.icache.Iref(fo.priv, "_write")
 	if err != 0 {
 		return 0, err
 	}
@@ -533,7 +542,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 	if !useoffset && err == 0 {
 		fo.offset += did
 	}
-	idm.iunlock_refdown("_write")
+	idm.refdown("_write")
 	return did, err
 }
 
@@ -542,11 +551,24 @@ func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Er
 }
 
 func (fo *fsfops_t) Fullpath() (string, common.Err_t) {
+	fo.Lock()
+	defer fo.Unlock()
+
+	if fo.count <= 0 {
+		return "", -common.EBADF
+	}
+
 	fp, err := fo.fs._fullpath(fo.priv)
 	return fp, err
 }
 
 func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.count <= 0 {
+		return -common.EBADF
+	}
+
 	fo.fs.fslog.Op_begin("truncate")
 	defer fo.fs.fslog.Op_end()
 
@@ -568,6 +590,12 @@ func (fo *fsfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) 
 }
 
 func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.count <= 0 {
+		return -common.EBADF
+	}
+
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", fo.priv, st)
 	}
@@ -584,14 +612,35 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
 func (fo *fsfops_t) Close() common.Err_t {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.count <= 0 {
+		return -common.EBADF
+	}
+	fo.count--
+	if fo.count <= 0 && fs_debug {
+		fmt.Printf("Close: %d cnt %d\n", fo.priv, fo.count)
+
+	}
 	return fo.fs.Fs_close(fo.priv)
 }
 
 func (fo *fsfops_t) Pathi() common.Inum_t {
+	// fo.Lock()
+	// defer fo.Unlock()
+	// if fo.count <= 0 {
+	// 	return -common.EBADF
+	// }
 	return fo.priv
 }
 
 func (fo *fsfops_t) Reopen() common.Err_t {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.count <= 0 {
+		return -common.EBADF
+	}
+
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "reopen")
 	if err != 0 {
 		return err
@@ -599,6 +648,7 @@ func (fo *fsfops_t) Reopen() common.Err_t {
 	istats.nreopen++
 	fo.fs.icache.Refup(idm, "reopen") // close will decrease it
 	idm.iunlock_refdown("reopen")
+	fo.count++
 	return 0
 }
 
@@ -606,6 +656,9 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 	// prevent races on fo.offset
 	fo.Lock()
 	defer fo.Unlock()
+	if fo.count <= 0 {
+		return 0, -common.EBADF
+	}
 
 	istats.nlseek++
 
@@ -630,6 +683,12 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
 func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
+	fo.Lock()
+	defer fo.Unlock()
+	if fo.count <= 0 {
+		return nil, -common.EBADF
+	}
+
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	if err != 0 {
 		return nil, err
@@ -1204,7 +1263,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 		}
 	} else {
 		apnd := flags&common.O_APPEND != 0
-		ret.Fops = &fsfops_t{priv: priv, fs: fs, append: apnd}
+		ret.Fops = &fsfops_t{priv: priv, fs: fs, append: apnd, count: 1}
 	}
 	return ret, 0
 }

@@ -73,6 +73,9 @@ func (log *log_t) Op_begin(s string) {
 	if memfs {
 		return
 	}
+	if log_debug {
+		fmt.Printf("op_begin: admit? %v\n", s)
+	}
 	<-log.admission
 	if log_debug {
 		fmt.Printf("op_begin: go %v\n", s)
@@ -277,7 +280,9 @@ func (log *log_t) addlog(buf buf_t) {
 			next = e.Next()
 			b := e.Value.(*common.Bdev_block_t)
 			if b.Block == buf.block.Block {
-				fmt.Printf("remove %v from ordered\n")
+				if log_debug {
+					fmt.Printf("remove %v from ordered\n", b.Block)
+				}
 				log.ordered.Remove(e)
 			}
 		}
@@ -520,6 +525,7 @@ func log_daemon(l *log_t) {
 				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
 				//	l.memhead)
 				if adm == nil { // is an op waiting for admission?
+					// fmt.Printf("don't admit %d %v\n", nops, l.full(nops+1))
 					if waiters > 0 || l.full(nops+1) {
 						// No more log space or forced to commit
 						if nops == 0 {
@@ -537,6 +543,7 @@ func log_daemon(l *log_t) {
 				//fmt.Printf("adm: next wait? %v %v %v %v\n", nops, l.full(nops+1),
 				//	l.loglen, l.memhead)
 				if l.full(nops + 1) { // next one wait?
+					// fmt.Printf("don't admit %d\n", nops)
 					adm = nil
 				}
 			case <-l.force:
