@@ -248,7 +248,6 @@ func mkData(v uint8) *common.Fakeubuf_t {
 	}
 	ub := &common.Fakeubuf_t{}
 	ub.Fake_init(hdata)
-	fmt.Printf("sz = %v\n", ub.Totalsz())
 	return ub
 }
 
@@ -412,48 +411,57 @@ func (tfs *testfs_t) doLs(p string) (map[string]*common.Stat_t, common.Err_t) {
 // A simple test
 //
 
-func (tfs *testfs_t) doTestSimple(t *testing.T) {
-	ub := mkData(1)
-	e := tfs.mkFile("f1", ub)
+func (tfs *testfs_t) doTestSimple(d string) string {
+	fmt.Printf("doTestSimple %v\n", d)
+
+	e := tfs.mkDir(d)
 	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f1")
+		return fmt.Sprintf("mkDir %v failed", d)
+	}
+
+	ub := mkData(1)
+	e = tfs.mkFile(d+"f1", ub)
+	if e != 0 {
+		return fmt.Sprintf("mkFile %v failed", "f1")
 	}
 
 	ub = mkData(2)
-	e = tfs.mkFile("f2", ub)
+	e = tfs.mkFile(d+"f2", ub)
 	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f2")
+		return fmt.Sprintf("mkFile %v failed", "f2")
 	}
 
-	e = tfs.mkDir("d0")
+	e = tfs.mkDir(d + "d0")
 	if e != 0 {
-		t.Fatalf("Mkdir %v failed", "d0")
+		return fmt.Sprintf("Mkdir %v failed", "d0")
 	}
 
-	e = tfs.mkDir("d0/d1")
+	e = tfs.mkDir(d + "d0/d1")
 	if e != 0 {
-		t.Fatalf("Mkdir %v failed", "d1")
+		return fmt.Sprintf("Mkdir %v failed", "d1")
 	}
 
-	e = tfs.doRename("d0/d1", "e0")
+	e = tfs.doRename(d+"d0/d1", d+"e0")
 	if e != 0 {
-		t.Fatalf("Rename failed")
+		return fmt.Sprintf("Rename failed")
 	}
 
 	ub = mkData(3)
-	e = tfs.doAppend("f1", ub)
+	e = tfs.doAppend(d+"f1", ub)
 	if e != 0 {
-		t.Fatalf("Append failed")
+		return fmt.Sprintf("Append failed")
 	}
 
-	e = tfs.doUnlink("f2")
+	e = tfs.doUnlink(d + "f2")
 	if e != 0 {
-		t.Fatalf("Unlink failed")
+		return fmt.Sprintf("Unlink failed")
 	}
+	return ""
 }
 
-func (tfs *testfs_t) doCheckSimple(t *testing.T) {
-	res, e := tfs.doLs("/")
+func (tfs *testfs_t) doCheckSimple(d string, t *testing.T) {
+	fmt.Printf("doCheckSimple %v\n", d)
+	res, e := tfs.doLs(d)
 	if e != 0 {
 		t.Fatalf("doLs failed")
 	}
@@ -477,7 +485,7 @@ func (tfs *testfs_t) doCheckSimple(t *testing.T) {
 	if !ok {
 		t.Fatalf("e0 not present")
 	}
-	res, e = tfs.doLs("/d0")
+	res, e = tfs.doLs(d + "/d0")
 	if e != 0 {
 		t.Fatalf("doLs d0 failed")
 	}
@@ -590,7 +598,7 @@ func shutdownFS(tfs *testfs_t) {
 // Simple test
 //
 
-func TestFS(t *testing.T) {
+func TestFSSimple(t *testing.T) {
 	dst := "tmp.img"
 	err := copyDisk(diskimg, dst)
 	if err != nil {
@@ -600,11 +608,59 @@ func TestFS(t *testing.T) {
 	fmt.Printf("testFS %v ...\n", dst)
 
 	tfs := bootFS(dst)
-	tfs.doTestSimple(t)
+	s := tfs.doTestSimple("d/")
+	if s != "" {
+		t.Fatalf("doTestSimple failed %s\n", s)
+	}
+	tfs.doCheckSimple("d/", t)
 	shutdownFS(tfs)
 
 	tfs = bootFS(dst)
-	tfs.doCheckSimple(t)
+	tfs.doCheckSimple("d/", t)
+	shutdownFS(tfs)
+}
+
+//
+// Simple concurrent test
+//
+
+func uniqdir(id int) string {
+	return "d" + strconv.Itoa(id) + "/"
+}
+
+func TestFSConcur(t *testing.T) {
+	n := 2
+	dst := "tmp.img"
+	err := copyDisk(diskimg, dst)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("testFSConcur %v ...\n", dst)
+
+	c := make(chan string)
+	tfs := bootFS(dst)
+	for i := 0; i < n; i++ {
+		go func(id int) {
+			d := uniqdir(id)
+			s := tfs.doTestSimple(d)
+			c <- s
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		s := <-c
+		d := uniqdir(i)
+		if s != "" {
+			t.Fatalf("doTestSimple %v failed %s\n", d, s)
+		}
+	}
+
+	shutdownFS(tfs)
+	tfs = bootFS(dst)
+	for i := 0; i < n; i++ {
+		d := uniqdir(i)
+		tfs.doCheckSimple(d, t)
+	}
 	shutdownFS(tfs)
 }
 
