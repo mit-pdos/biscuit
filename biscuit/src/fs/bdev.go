@@ -292,7 +292,7 @@ func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	if blkno < 0 {
 		panic("bfree")
 	}
-	if blkno >= balloc.blen {
+	if blkno >= balloc.blen*common.BSIZE*8 {
 		panic("bfree too large")
 	}
 	return balloc.alloc.Free(blkno)
@@ -310,7 +310,7 @@ func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
 	if err != 0 {
 		return 0, err
 	}
-	if blkn >= balloc.blen {
+	if blkn >= balloc.blen*common.BSIZE*8 {
 		fmt.Printf("balloc1: blkn %v len %v\n", blkn, balloc.blen)
 		panic("balloc1: too large blkn\n")
 	}

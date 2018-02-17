@@ -1177,7 +1177,7 @@ func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 	}
 	// we may have more bits in inode bitmap blocks than inodes on disk
 	if n >= ialloc.maxinode {
-		return 0, -common.ENOMEM
+		panic("Ialloc; higher inodes should have been marked in use")
 	}
 	inum := common.Inum_t(n)
 	return inum, 0

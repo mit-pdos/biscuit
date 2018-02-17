@@ -1437,61 +1437,76 @@ func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_
 	return alloc.fs.fslog.Get_fill(blockno, "fbread", true)
 }
 
+// 0 is free, 1 is allocated
+func (alloc *allocater_t) search() (*common.Bdev_block_t, int, int, uint, common.Err_t) {
+	var blk *common.Bdev_block_t
+	var err common.Err_t
+	for b := 0; b < alloc.freelen; b++ {
+		if blk != nil {
+			blk.Unlock()
+			alloc.fs.bcache.Relse(blk, "alloc search")
+		}
+		blk, err = alloc.Fbread(alloc.freestart + b)
+		if err != 0 {
+			return nil, 0, 0, 0, err
+		}
+		for idx := 0; idx < len(blk.Data); idx++ {
+			c := blk.Data[idx]
+			if c != 0xff {
+				alloc.lastblk = b
+				alloc.lastbyte = idx
+				bit := freebit(c)
+				return blk, b, idx, bit, 0
+			}
+		}
+	}
+	return nil, 0, 0, 0, -common.ENOMEM
+}
+
+func (alloc *allocater_t) quickcheck() (*common.Bdev_block_t, int, int, uint, common.Err_t) {
+	blk, err := alloc.Fbread(alloc.freestart + alloc.lastblk)
+	if err != 0 {
+		return nil, 0, 0, 0, err
+	}
+	c := blk.Data[alloc.lastbyte]
+	if c != 0xff {
+		bit := freebit(c)
+		blkn := alloc.lastblk
+		byte := alloc.lastbyte
+		if c == 0x7f {
+			alloc.lastbyte = (alloc.lastbyte + 1) % common.BSIZE
+			if alloc.lastbyte == 0 {
+				alloc.lastblk = (alloc.lastblk + 1) % alloc.freelen
+
+			}
+		}
+		return blk, blkn, byte, bit, 0
+	}
+	blk.Unlock()
+	alloc.fs.bcache.Relse(blk, "alloc quickcheck")
+	return nil, 0, 0, 0, -common.ENOMEM
+}
+
 func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	alloc.Lock()
 	defer alloc.Unlock()
 
-	found := false
-	hit := true
-	var bit uint
-	var blk *common.Bdev_block_t
-	var blkn int
-	var oct int
-	var err common.Err_t
-
-	// 0 is free, 1 is allocated
-	for b := 0; b < alloc.freelen && !found; b++ {
-		i := (alloc.lastblk + b) % alloc.freelen
-		if blk != nil {
-			blk.Unlock()
-			alloc.fs.bcache.Relse(blk, "alloc")
-		}
-		blk, err = alloc.Fbread(alloc.freestart + i)
+	blk, blkn, oct, bit, err := alloc.quickcheck()
+	if err == 0 {
+		alloc.nhit++
+	} else {
+		blk, blkn, oct, bit, err = alloc.search()
 		if err != 0 {
 			return 0, err
 		}
-		start := 0
-		if b == 0 {
-			start = alloc.lastbyte
-		}
-		for idx := start; idx < len(blk.Data); idx++ {
-			c := blk.Data[idx]
-			if c != 0xff {
-				alloc.lastblk = i
-				alloc.lastbyte = idx
-				bit = freebit(c)
-				blkn = i
-				oct = idx
-				found = true
-				break
-			} else {
-				hit = false
-			}
-		}
-	}
-	if !found {
-		panic("no free entries")
 	}
 	alloc.nalloc++
-	if hit {
-		alloc.nhit++
-	}
 
 	// mark as allocated
 	blk.Data[oct] |= 1 << bit
 	blk.Unlock()
 	alloc.fs.fslog.Write(blk)
-	alloc.fs.bcache.Relse(blk, "balloc1")
+	alloc.fs.bcache.Relse(blk, "Alloc")
 
 	bitsperblk := common.BSIZE * 8
 	blkn = blkn*bitsperblk + oct*8 + int(bit)

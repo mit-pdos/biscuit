@@ -255,13 +255,15 @@ func (tfs *testfs_t) mkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := tfs.fs.Fs_open(p, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
 		fmt.Printf("tfs.fs.Fs_open %v failed %v\n", p, err)
-	}
-	n, err := fd.Fops.Write(nil, ub)
-	if err != 0 || ub.Remain() != 0 {
-		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
-
+	if ub != nil {
+		n, err := fd.Fops.Write(nil, ub)
+		if err != 0 || ub.Remain() != 0 {
+			fmt.Printf("Write %s failed %v %d\n", p, err, n)
+			return err
+		}
+	}
 	err = fd.Fops.Close()
 	if err != 0 {
 		fmt.Printf("Close %s failed %v\n", p, err)
@@ -496,7 +498,27 @@ func (tfs *testfs_t) doCheckSimple(d string, t *testing.T) {
 }
 
 //
-// Test block reuse
+// For testing inode reuse
+//
+
+func (tfs *testfs_t) doTestInodeReuse(n int, t *testing.T) {
+	for i := 0; i < n; i++ {
+		e := tfs.mkFile(uniqfile(i), nil)
+		if e != 0 {
+			t.Fatalf("mkFile %v failed", i)
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		e := tfs.doUnlink(uniqfile(i))
+		if e != 0 {
+			t.Fatalf("Unlink %v failed", i)
+		}
+	}
+}
+
+//
+// For testing block reuse and crash safety
 //
 
 func (tfs *testfs_t) doTestReuse(t *testing.T) {
@@ -545,6 +567,14 @@ func (tfs *testfs_t) doCheckReuse() (string, bool) {
 //
 // Util
 //
+
+func uniqdir(id int) string {
+	return "d" + strconv.Itoa(id) + "/"
+}
+
+func uniqfile(id int) string {
+	return "f" + strconv.Itoa(id)
+}
 
 func copyDisk(src, dst string) (err error) {
 	in, err := os.Open(src)
@@ -621,12 +651,30 @@ func TestFSSimple(t *testing.T) {
 }
 
 //
-// Simple concurrent test
+// Test that inode are reused after freeing
 //
 
-func uniqdir(id int) string {
-	return "d" + strconv.Itoa(id) + "/"
+func TestFSInodeReuse(t *testing.T) {
+	dst := "tmp.img"
+	err := copyDisk(diskimg, dst)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("testFSInodeReuce %v ...\n", dst)
+
+	tfs := bootFS(dst)
+	m := tfs.fs.ialloc.inodelen * common.BSIZE / ISIZE
+	fmt.Printf("max inode %v\n", m)
+	for i := 0; i < m; i += 100 {
+		tfs.doTestInodeReuse(100, t)
+	}
+	shutdownFS(tfs)
 }
+
+//
+// Simple concurrent test
+//
 
 func TestFSConcur(t *testing.T) {
 	n := 2

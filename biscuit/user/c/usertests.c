@@ -2993,7 +2993,7 @@ void *threadfd(void *arg)
 	err(pthreadsharedfd, "fstests: cannot open sharedfd for writing");
       int n = write(pthreadsharedfd, "aaaaaaaaaa", 10);
       if(n != 10 || n == EBADF) {
-	printf("error: write should have returned 10 or error %d\n", n);
+	printf("error: write should have returned 10 or error EBADF %d\n", n);
       }
     } else {
       unlink("sharedfdf");

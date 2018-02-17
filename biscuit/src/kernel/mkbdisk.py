@@ -13,7 +13,7 @@ blocksz = 4096         # block size
 inodesz = 128          # size of inodes in bytes
 hdsize = 50000         # size of disk in blocks
 loglen = 256           # number of log blocks
-inodelen = 50          # number of inode map blocks
+inodelen = 50          # number of inode blocks
 loginodeblk = 5        # log of number of inodes per block
 iaddrs = 9             # number of inode direct addresses
 indaddrs = (blocksz/8) # number of inode indirect addresses
@@ -367,7 +367,7 @@ def le8(num):
   l = [chr((num >> i*8) & 0xff) for i in range(8)]
   return ''.join(l)
 
-def dofreemap(of, nallocated, freeblock, freeblocklen):
+def dofreemap(of, nallocated, freeblock, freeblocklen, unusedbits):
   assert freeblock == of.tell()/blocksz
 
   for i in range(nallocated/8):
@@ -382,15 +382,29 @@ def dofreemap(of, nallocated, freeblock, freeblocklen):
   if val != 0:
     of.write(chr(val))
     bmbytes += 1
-  # pad out to a block
-  rem = roundup(bmbytes, blocksz) - bmbytes
-  of.write('\0'*rem)
 
   bmblocks = roundup(bmbytes, blocksz)/blocksz
   remaining = freeblocklen - bmblocks
   assert remaining >= 0
-  for i in range(remaining):
-    of.write('\0'*blocksz)
+
+  unusedb = (unusedbits/8)+1
+  assert unusedb < blocksz
+  if remaining > 0:
+    # pad out to a block
+    rem = roundup(bmbytes, blocksz) - bmbytes
+    of.write('\0'*rem)
+    #remaining blocks - 1
+    for i in range(remaining-1):
+      of.write('\0'*blocksz)
+    # last block
+    rem = blocksz - unusedb
+    of.write('\0'*rem)
+    of.write(chr(0xff)*unusedb)
+  else:
+    # last block, pad - unused bytes
+    rem = roundup(bmbytes, blocksz) - bmbytes - unusedb
+    of.write('\0'*rem)
+    of.write(chr(0xff)*unusedb)
     
   assert freeblock+freeblocklen == of.tell()/blocksz
     
@@ -402,12 +416,13 @@ def dofs(of, used, skeldir, dozero):
   used += loglen
 
   imapstart = used
-  imapsz = (inodelen*inodesz) / blocksz + 1
+  imapsz = (inodelen*blocksz) / inodesz
+  imapsz = imapsz / (blocksz*8) + 1
   used += imapsz
 
   bmapstart = used
   bmapsz = hdsize - used - inodelen
-  bmapsz = bmapsz / blocksz + 1
+  bmapsz = bmapsz / (blocksz*8) + 1
   used += bmapsz
 
   used += inodelen
@@ -415,7 +430,7 @@ def dofs(of, used, skeldir, dozero):
   ba = Balloc(used)
   bi = Ialloc()
 
-  remaining = hdsize - used 
+  remaining = hdsize - used
   if remaining < 0:
     raise ValueError('hard disk too small')
 
@@ -424,7 +439,8 @@ def dofs(of, used, skeldir, dozero):
   print "\tloglen", loglen
   print "\timapstart", imapstart, "imapsz", imapsz
   print "\tbmapstart", bmapstart, "bmapsz", bmapsz
-  print "\tinodelen", inodelen
+  print "\t#inode blocks", inodelen
+  print "\t#data blocks", remaining
   print "\thdsize", hdsize
 
   of.write(le8(loglen))
@@ -444,11 +460,15 @@ def dofs(of, used, skeldir, dozero):
 
   assert imapstart == of.tell()/blocksz
   # write free inode bitmap
-  dofreemap(of, bi.cinode, imapstart, imapsz)
+  unused = imapsz * blocksz * 8 - (inodelen*blocksz/inodesz)
+  print "unused bits in last imap block", unused
+  dofreemap(of, bi.cinode, imapstart, imapsz, unused)
   assert imapstart+imapsz == of.tell()/blocksz
 
   assert bmapstart == of.tell()/blocksz
-  dofreemap(of, ba.cblock, bmapstart, bmapsz)
+  unused = bmapsz * blocksz * 8 - hdsize
+  print "unused bits in last data map block", unused
+  dofreemap(of, ba.cblock, bmapstart, bmapsz, unused)
   assert bmapstart+bmapsz == of.tell()/blocksz
 
   # finally, write fs
