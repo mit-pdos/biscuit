@@ -5,80 +5,50 @@ import "sync"
 import "unsafe"
 import "sort"
 import "strconv"
+import "reflect"
+import "sync/atomic"
+
 import "common"
 
-var istats inode_stats_t
+type counter_t int64
 
 type inode_stats_t struct {
-	nopen     int
-	nnamei    int
-	nifill    int
-	niupdate  int
-	nistat    int
-	niread    int
-	niwrite   int
-	ndo_write int
-	nfillhole int
-	ngrow     int
-	nitrunc   int
-	nimmap    int
-	nifree    int
-	nicreate  int
-	nilink    int
-	nunlink   int
-	nrename   int
-	nlseek    int
-	nmkdir    int
-	nclose    int
-	nsync     int
-	nreopen   int
+	nopen     counter_t
+	nnamei    counter_t
+	nifill    counter_t
+	niupdate  counter_t
+	nistat    counter_t
+	niread    counter_t
+	niwrite   counter_t
+	ndo_write counter_t
+	nfillhole counter_t
+	ngrow     counter_t
+	nitrunc   counter_t
+	nimmap    counter_t
+	nifree    counter_t
+	nicreate  counter_t
+	nilink    counter_t
+	nunlink   counter_t
+	nrename   counter_t
+	nlseek    counter_t
+	nmkdir    counter_t
+	nclose    counter_t
+	nsync     counter_t
+	nreopen   counter_t
 }
 
-func inode_stats() string {
-	s := "inode"
-	s += "\n\t#nopen: "
-	s += strconv.Itoa(istats.nopen)
-	s += " \n\t#namei: "
-	s += strconv.Itoa(istats.nnamei)
-	s += " \n\t#ifill: "
-	s += strconv.Itoa(istats.nifill)
-	s += " \n\t#iupdate: "
-	s += strconv.Itoa(istats.niupdate)
-	s += " \n\t#istat: "
-	s += strconv.Itoa(istats.nistat)
-	s += " \n\t#iread: "
-	s += strconv.Itoa(istats.niread)
-	s += " \n\t#do_write: "
-	s += strconv.Itoa(istats.ndo_write)
-	s += " \n\t#iwrite: "
-	s += strconv.Itoa(istats.niwrite)
-	s += " \n\t#grow: "
-	s += strconv.Itoa(istats.ngrow)
-	s += " \n\t#fillhole: "
-	s += strconv.Itoa(istats.nfillhole)
-	s += " \n\t#trunc: "
-	s += strconv.Itoa(istats.nitrunc)
-	s += " \n\t#mmap: "
-	s += strconv.Itoa(istats.nimmap)
-	s += " \n\t#ifree: "
-	s += strconv.Itoa(istats.nifree)
-	s += " \n\t#icreate: "
-	s += strconv.Itoa(istats.nicreate)
-	s += " \n\t#link: "
-	s += strconv.Itoa(istats.nilink)
-	s += " \n\t#unlink: "
-	s += strconv.Itoa(istats.nunlink)
-	s += " \n\t#rename: "
-	s += strconv.Itoa(istats.nrename)
-	s += " \n\t#lseek: "
-	s += strconv.Itoa(istats.nlseek)
-	s += " \n\t#mkdir: "
-	s += strconv.Itoa(istats.nmkdir)
-	s += " \n\t#close: "
-	s += strconv.Itoa(istats.nclose)
-	s += " \n\t#reopen: "
-	s += strconv.Itoa(istats.nreopen)
-	s += "\n"
+func (c *counter_t) inc() {
+	n := (*int64)(unsafe.Pointer(c))
+	atomic.AddInt64(n, 1)
+}
+
+func (is *inode_stats_t) stats() string {
+	v := reflect.ValueOf(is)
+	s := "inode:"
+	for i := 0; i < v.NumField(); i++ {
+		n := v.Field(i).Interface().(int64)
+		s += "\n\t#" + v.Type().Field(i).Name + strconv.FormatInt(n, 10)
+	}
 	return s
 }
 
@@ -279,7 +249,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	istats.nifill++
+	idm.fs.istats.nifill++
 	idm.fill(blk, inum)
 	blk.Unlock()
 	idm.fs.bcache.Relse(blk, "idm_init")
@@ -296,7 +266,7 @@ func (idm *imemnode_t) refdown(s string) {
 }
 
 func (idm *imemnode_t) _iupdate() common.Err_t {
-	istats.niupdate++
+	idm.fs.istats.niupdate++
 	iblk, err := idm.idibread()
 	if err != 0 {
 		return err
@@ -345,7 +315,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 		fmt.Printf("dowrite: %v %v %v\n", idm.inum, offset, sz)
 	}
 
-	istats.ndo_write++
+	idm.fs.istats.ndo_write.inc()
 	for i < sz {
 		n := sz - i
 		if n > max {
@@ -368,7 +338,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 }
 
 func (idm *imemnode_t) do_stat(st *common.Stat_t) common.Err_t {
-	istats.nistat++
+	idm.fs.istats.nistat++
 	st.Wdev(0)
 	st.Wino(uint(idm.inum))
 	st.Wmode(idm.mkmode())
@@ -663,9 +633,9 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, c
 	if whichblk >= lastblk { // a hole?
 		// allocate the missing blocks
 		if whichblk > lastblk && writing {
-			istats.nfillhole++
+			idm.fs.istats.nfillhole++
 		} else if writing {
-			istats.ngrow++
+			idm.fs.istats.ngrow++
 		}
 		for b := lastblk; b <= whichblk; b++ {
 			// XXX we could remember where the last slot was
@@ -727,7 +697,7 @@ func min(a, b int) int {
 }
 
 func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	istats.niread++
+	idm.fs.istats.niread++
 	isz := idm.size
 	c := 0
 	for offset < isz && dst.Remain() != 0 {
@@ -758,7 +728,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 }
 
 func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, common.Err_t) {
-	istats.niwrite++
+	idm.fs.istats.niwrite++
 	sz := min(src.Totalsz(), n)
 	newsz := offset + sz
 	c := 0
@@ -804,7 +774,7 @@ func (idm *imemnode_t) itrunc(newlen uint) common.Err_t {
 		}
 
 	}
-	istats.nitrunc++
+	idm.fs.istats.nitrunc++
 	// inode is flushed by do_itrunc
 	idm.size = int(newlen)
 	return 0
@@ -849,7 +819,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		return de.inum, -common.EEXIST
 	}
 
-	istats.nicreate++
+	idm.fs.istats.nicreate.inc()
 
 	// allocate new inode
 	newinum, err := idm.fs.ialloc.Ialloc()
@@ -909,7 +879,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 		len = isz - offset
 	}
 
-	istats.nimmap++
+	idm.fs.istats.nimmap.inc()
 	o := common.Rounddown(offset, common.PGSIZE)
 	len = common.Roundup(offset+len, common.PGSIZE) - o
 	pgc := len / common.PGSIZE
@@ -944,7 +914,7 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 
 // frees all blocks occupied by idm
 func (idm *imemnode_t) ifree() common.Err_t {
-	istats.nifree++
+	idm.fs.istats.nifree.inc()
 	if fs_debug {
 		fmt.Printf("ifree: %d\n", idm.inum)
 	}
