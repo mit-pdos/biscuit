@@ -25,6 +25,9 @@ func copydata(src string, fs *ufs.Ufs_t, dst string) {
 		buf := ufs.MkBuf(b)
 		fs.Append(dst, buf)
 	}
+	if err := s.Close(); err != nil {
+		panic(err)
+	}
 }
 
 func addfiles(fs *ufs.Ufs_t, skeldir string) {
@@ -65,12 +68,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	//boot := os.Args[1]
-	//kernel := os.Args[2]
+	boot := os.Args[1]
+	kernel := os.Args[2]
 	image := os.Args[3]
 	skeldir := os.Args[4]
 
-	ufs.MkDisk(image)
+	ufs.MkDisk(image, boot, kernel)
 
 	fs := ufs.BootFS(image)
 	_, err := fs.Stat("/")

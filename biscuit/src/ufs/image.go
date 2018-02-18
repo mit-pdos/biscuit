@@ -31,7 +31,7 @@ func bytepg2byte(d *common.Bytepg_t) []byte {
 	return b
 }
 
-func tell(f *os.File) int {
+func Tell(f *os.File) int {
 	o, err := f.Seek(0, 1)
 	if err != nil {
 		panic(err)
@@ -50,6 +50,9 @@ func writeBootBlock(f *os.File, superb int) {
 }
 
 func writeSuperBlock(f *os.File, start int) *fs.Superblock_t {
+	if Tell(f) != start {
+		panic("superblock in wrong location")
+	}
 	d := &common.Bytepg_t{}
 	sb := fs.Superblock_t{d}
 	sb.SetLoglen(nlogblks)
@@ -133,7 +136,7 @@ func writeInodes(f *os.File, sb *fs.Superblock_t) {
 	root.W_addr(0, firstdata)
 	block := bytepg2byte(b.Data)
 
-	if tell(f) != sb.Freeblock()+sb.Freeblocklen() {
+	if Tell(f) != sb.Freeblock()+sb.Freeblocklen() {
 		panic("inodes don't line up")
 	}
 
@@ -154,7 +157,7 @@ func writeDataBlocks(f *os.File, sb *fs.Superblock_t) {
 	ddata.W_inodenext(1, 0)
 	d := bytepg2byte(data)
 
-	if tell(f) != sb.Freeblock()+sb.Freeblocklen()+sb.Inodelen() {
+	if Tell(f) != sb.Freeblock()+sb.Freeblocklen()+sb.Inodelen() {
 		panic("inodes don't line up")
 	}
 
@@ -165,16 +168,80 @@ func writeDataBlocks(f *os.File, sb *fs.Superblock_t) {
 	}
 }
 
+func addimg(img string, f *os.File) {
+	s, err := os.Open(img)
+	if err != nil {
+		panic(err)
+	}
+	b := make([]byte, common.BSIZE)
+	for {
+		n, err := s.Read(b)
+		if err != nil {
+			return
+		}
+		if n == 0 {
+			return
+		}
+		_, err = f.Write(b)
+		if err != nil {
+			panic(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		panic(err)
+	}
+}
+
+func pad(f *os.File) {
+	o, err := f.Seek(0, 1)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("block boundary? %v\n", o%common.BSIZE)
+	n := common.Roundup(int(o), common.BSIZE)
+	n = n - int(o)
+	fmt.Printf("pad %d\n", n)
+	b := make([]byte, common.BSIZE)
+	_, err = f.Write(b)
+	if err != nil {
+		panic(err)
+	}
+}
+
 // A disk with an empty file system (i.e., only root directory)
-func MkDisk(image string) {
+func MkDisk(image, boot, kernel string) {
 	fmt.Printf("Make FS image %s\n", image)
 	f, err := os.Create(image)
 	if err != nil {
 		panic(err)
 	}
 
-	start := 1
+	// skip boot block
+	_, err = f.Seek(common.BSIZE, 0)
+	if err != nil {
+		panic(err)
+	}
+
+	addimg(boot, f)
+	addimg(kernel, f)
+	pad(f)
+
+	start := Tell(f)
+
+	fmt.Printf("superblock at block %d\n", start)
+
+	// back to boot block
+	_, err = f.Seek(0, 0)
+	if err != nil {
+		panic(err)
+	}
 	writeBootBlock(f, start)
+
+	_, err = f.Seek(int64(start*common.BSIZE), 0)
+	if err != nil {
+		panic(err)
+	}
+
 	sb := writeSuperBlock(f, start)
 	writeLog(f)
 	writeInodeMap(f, sb)
