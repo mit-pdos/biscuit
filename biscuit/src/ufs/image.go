@@ -7,8 +7,11 @@ import "common"
 import "fs"
 
 // Disk image layout:
-// bootblock (records address of superblock)
-// bootimg
+// optional:
+//   boot img (records address of superblock)
+//   kernel img
+// if no optional imgs
+//   bootblock (records address of superblock)
 // superblock
 // log blocks
 // inode map
@@ -173,8 +176,8 @@ func addimg(img string, f *os.File) {
 	if err != nil {
 		panic(err)
 	}
-	b := make([]byte, common.BSIZE)
 	for {
+		b := make([]byte, common.BSIZE)
 		n, err := s.Read(b)
 		if err != nil {
 			return
@@ -182,7 +185,7 @@ func addimg(img string, f *os.File) {
 		if n == 0 {
 			return
 		}
-		_, err = f.Write(b)
+		_, err = f.Write(b[0:n])
 		if err != nil {
 			panic(err)
 		}
@@ -198,10 +201,8 @@ func pad(f *os.File) {
 		panic(err)
 	}
 
-	fmt.Printf("block boundary? %v\n", o%common.BSIZE)
 	n := common.Roundup(int(o), common.BSIZE)
 	n = n - int(o)
-	fmt.Printf("pad %d\n", n)
 	b := make([]byte, common.BSIZE)
 	_, err = f.Write(b)
 	if err != nil {
@@ -226,6 +227,7 @@ func pokeboot(f *os.File, start int) {
 
 	common.Writen(b[:], 4, fs.FSOFF, start)
 
+	// Replace boot block with b
 	_, err = f.Seek(0, 0)
 	if err != nil {
 		panic(err)
@@ -247,23 +249,27 @@ func pokeboot(f *os.File, start int) {
 	}
 }
 
-// A disk with an empty file system (i.e., only root directory)
-func MkDisk(image, boot, kernel string) {
-	fmt.Printf("Make FS image %s\n", image)
-	f, err := os.Create(image)
+func MkDisk(disk string, images []string) {
+	fmt.Printf("Make FS disk %s\n", disk)
+	f, err := os.Create(disk)
 	if err != nil {
 		panic(err)
 	}
 
-	addimg(boot, f)
-	addimg(kernel, f)
-	pad(f)
+	start := 1
+	if len(images) > 0 {
+		for _, i := range images {
+			addimg(i, f)
+		}
+		pad(f)
 
-	start := Tell(f)
-	pokeboot(f, start)
+		start = Tell(f)
+		pokeboot(f, start)
+	} else {
+		writeBootBlock(f, start)
+	}
 
 	fmt.Printf("superblock at block %d\n", start)
-
 	sb := writeSuperBlock(f, start)
 	writeLog(f)
 	writeInodeMap(f, sb)

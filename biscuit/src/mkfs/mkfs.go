@@ -68,12 +68,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	boot := os.Args[1]
-	kernel := os.Args[2]
 	image := os.Args[3]
-	skeldir := os.Args[4]
 
-	ufs.MkDisk(image, boot, kernel)
+	imgs := []string{os.Args[1], os.Args[2]}
+
+	ufs.MkDisk(image, imgs)
 
 	fs := ufs.BootFS(image)
 	_, err := fs.Stat("/")
@@ -83,7 +82,7 @@ func main() {
 	}
 	// fmt.Printf("root inode %v\n", st)
 
-	addfiles(fs, skeldir)
+	addfiles(fs, os.Args[4])
 
 	// dir, err := fs.Ls("/")
 	// if err != 0 {

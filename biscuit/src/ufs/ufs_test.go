@@ -227,7 +227,7 @@ func copyDisk(src, dst string) (err error) {
 
 func TestFSSimple(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst)
+	MkDisk(dst, nil)
 
 	fmt.Printf("testFS %v ...\n", dst)
 
@@ -251,7 +251,7 @@ func TestFSSimple(t *testing.T) {
 
 func TestFSInodeReuse(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst)
+	MkDisk(dst, nil)
 
 	fmt.Printf("testFSInodeReuce %v ...\n", dst)
 
@@ -270,7 +270,7 @@ func TestFSInodeReuse(t *testing.T) {
 
 func TestFSBlockReuse(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst)
+	MkDisk(dst, nil)
 
 	fmt.Printf("testFSBlockReuce %v ...\n", dst)
 
@@ -291,7 +291,7 @@ func TestFSBlockReuse(t *testing.T) {
 func TestFSConcur(t *testing.T) {
 	n := 2
 	dst := "tmp.img"
-	MkDisk(dst)
+	MkDisk(dst, nil)
 
 	fmt.Printf("testFSConcur %v ...\n", dst)
 
@@ -353,7 +353,7 @@ func genOrders(blks []int) orders_t {
 }
 
 func genDisk(trace trace_t, dst string) {
-	MkDisk(dst)
+	MkDisk(dst, nil)
 
 	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
 	if err != nil {
@@ -427,7 +427,7 @@ func genTraces(trace trace_t, index int, t *testing.T, apply bool) int {
 
 func produceTrace(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst)
+	MkDisk(dst, nil)
 
 	ahci := OpenDisk(dst, true)
 	fmt.Printf("produceTrace %v ...\n", dst)
