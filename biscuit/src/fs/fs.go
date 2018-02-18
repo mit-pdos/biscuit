@@ -88,7 +88,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 }
 
 func (fs *Fs_t) StopFS() {
-	fs.fslog.stopLog()
+	fs.Fs_sync()
 }
 
 func (fs *Fs_t) Fs_statistics() string {

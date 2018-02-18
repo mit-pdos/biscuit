@@ -37,6 +37,15 @@ func MkBuf(b []byte) *common.Fakeubuf_t {
 	return ub
 }
 
+func (ufs *Ufs_t) Sync() common.Err_t {
+	err := ufs.fs.Fs_sync()
+	if err != 0 {
+		fmt.Printf("Sync failed %v\n", err)
+		return err
+	}
+	return err
+}
+
 func (ufs *Ufs_t) MkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
@@ -55,12 +64,6 @@ func (ufs *Ufs_t) MkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
 		fmt.Printf("Close %s failed %v\n", p, err)
 		return err
 	}
-
-	err = ufs.fs.Fs_sync()
-	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
-		return err
-	}
 	return err
 }
 
@@ -70,11 +73,6 @@ func (ufs *Ufs_t) MkDir(p string) common.Err_t {
 		fmt.Printf("mkDir %v failed %v\n", p, err)
 		return err
 	}
-	err = ufs.fs.Fs_sync()
-	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
-		return err
-	}
 	return err
 }
 
@@ -82,10 +80,6 @@ func (ufs *Ufs_t) Rename(oldp, newp string) common.Err_t {
 	err := ufs.fs.Fs_rename(oldp, newp, 0)
 	if err != 0 {
 		fmt.Printf("doRename %v %v failed %v\n", oldp, newp, err)
-	}
-	err = ufs.fs.Fs_sync()
-	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
 	}
 	return err
 }
@@ -113,11 +107,6 @@ func (ufs *Ufs_t) Append(p string, ub *common.Fakeubuf_t) common.Err_t {
 		fmt.Printf("Close %s failed %v\n", p, err)
 		return err
 	}
-	err = ufs.fs.Fs_sync()
-	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
-		return err
-	}
 	return err
 }
 
@@ -125,11 +114,6 @@ func (ufs *Ufs_t) Unlink(p string) common.Err_t {
 	err := ufs.fs.Fs_unlink(p, 0, false)
 	if err != 0 {
 		fmt.Printf("doUnlink %v failed %v\n", p, err)
-		return err
-	}
-	err = ufs.fs.Fs_sync()
-	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
 		return err
 	}
 	return err
@@ -195,23 +179,20 @@ func (ufs *Ufs_t) Ls(p string) (map[string]*common.Stat_t, common.Err_t) {
 	return res, 0
 }
 
-func OpenDisk(d string, doTrace bool) *ahci_disk_t {
+func openDisk(d string) *ahci_disk_t {
 	a := &ahci_disk_t{}
 	f, uerr := os.OpenFile(d, os.O_RDWR, 0755)
 	if uerr != nil {
 		panic(uerr)
 	}
 	a.f = f
-	if doTrace {
-		a.t = mkTrace()
-	}
 	return a
 }
 
 func BootFS(dst string) *Ufs_t {
 	log.Printf("reboot and check %v ...\n", dst)
 	ufs := &Ufs_t{}
-	ufs.ahci = OpenDisk(dst, false)
+	ufs.ahci = openDisk(dst)
 	_, ufs.fs = fs.StartFS(blockmem, ufs.ahci, c)
 	return ufs
 }

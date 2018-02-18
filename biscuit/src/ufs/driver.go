@@ -13,6 +13,10 @@ type ahci_disk_t struct {
 	t *tracef_t
 }
 
+func (ahci *ahci_disk_t) StartTrace() {
+	ahci.t = mkTrace()
+}
+
 func (ahci *ahci_disk_t) Seek(o int) {
 	_, err := ahci.f.Seek(int64(o), 0)
 	if err != nil {

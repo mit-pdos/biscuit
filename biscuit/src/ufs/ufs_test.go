@@ -4,6 +4,7 @@ import "testing"
 import "fmt"
 import "os"
 import "strconv"
+import "sync"
 
 import "common"
 import "fs"
@@ -260,8 +261,62 @@ func TestFSConcur(t *testing.T) {
 // Check traces for crash safety
 //
 
-func doTestReuse(tfs *Ufs_t, t *testing.T) {
-	ub := mkData(1, SMALL)
+const ndatablksordered = 10
+const nblksordered = ndatablksordered/2 + 1
+const natomicblks = 2
+
+func doAtomicInit(tfs *Ufs_t) {
+	ub := mkData(1, common.BSIZE*2)
+	e := tfs.MkFile("f", ub)
+	if e != 0 {
+		panic("mkFile f failed")
+	}
+	tfs.Sync()
+}
+
+func doTestAtomic(tfs *Ufs_t, t *testing.T) {
+	ub := mkData(2, common.BSIZE*2)
+	e := tfs.MkFile("tmp", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "tmp")
+	}
+	tfs.Sync()
+	e = tfs.Rename("tmp", "f")
+	if e != 0 {
+		t.Fatalf("Rename failed")
+	}
+	tfs.Sync()
+}
+
+func doCheckAtomic(tfs *Ufs_t) (string, bool) {
+	res, e := tfs.Ls("/")
+	if e != 0 {
+		return "doLs failed", false
+	}
+	_, ok := res["f"]
+	if !ok {
+		return "f not present", false
+	}
+	if ok {
+		d, e := tfs.Read("f")
+		if e != 0 || len(d) != common.BSIZE*2 {
+			return "Read f failed", false
+		}
+		v := d[0]
+		for i := range d {
+			if uint8(d[i]) != v {
+				return fmt.Sprintf("Mixed data in f %v %v", v, d[i]), false
+			}
+		}
+	}
+	return "", true
+}
+
+// check that f2 doesn't contain f2's data XXX it may be possible to fail this
+// with current FS impl; probably must be overwrites (which we don't have in ufs
+// interface)
+func doTestOrdered(tfs *Ufs_t, t *testing.T) {
+	ub := mkData(1, common.BSIZE*natomicblks)
 	e := tfs.MkFile("f1", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
@@ -270,16 +325,14 @@ func doTestReuse(tfs *Ufs_t, t *testing.T) {
 	if e != 0 {
 		t.Fatalf("Unlink failed")
 	}
-	ub = mkData(2, SMALL)
+	ub = mkData(2, common.BSIZE*natomicblks)
 	e = tfs.MkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
 }
 
-// check that f2 doesn't contain f2's data
-// XXX it must be possible to fail this with current FS impl
-func doCheckReuse(tfs *Ufs_t) (string, bool) {
+func doCheckOrdered(tfs *Ufs_t) (string, bool) {
 	res, e := tfs.Ls("/")
 	if e != 0 {
 		return "doLs failed", false
@@ -290,8 +343,8 @@ func doCheckReuse(tfs *Ufs_t) (string, bool) {
 		return "f1 and f2 present", false
 	}
 	if ok2 {
-		if st2.Size() != 0 || st2.Size() != 512 {
-			return "f2 wrong size", false
+		if !(st2.Size() == 0 || st2.Size() == common.BSIZE*natomicblks) {
+			return fmt.Sprintf("Wrong size for f2 %v", st2.Size()), false
 		}
 		if st2.Size() > 0 {
 			d, e := tfs.Read("f2")
@@ -299,7 +352,7 @@ func doCheckReuse(tfs *Ufs_t) (string, bool) {
 				return "Read f2 failed", false
 			}
 			if uint8(d[0]) != 2 {
-				return "Wrong data in f2", false
+				return fmt.Sprintf("Wrong data in f2 %v", d[0]), false
 			}
 		}
 	}
@@ -334,6 +387,12 @@ func genOrders(blks []int) orders_t {
 func genDisk(trace trace_t, crash int, dst string) {
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
+	// create initial state before tracing
+	tfs := BootFS(dst)
+	doAtomicInit(tfs)
+	ShutdownFS(tfs)
+
+	// apply trace
 	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
 	if err != nil {
 		panic(err)
@@ -361,34 +420,39 @@ func genDisk(trace trace_t, crash int, dst string) {
 }
 
 func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, apply bool) int {
-	trace.printTrace(0, len(trace))
-
+	// trace.printTrace(0, len(trace))
 	for i := start; i <= end; i++ {
 		dst := "tmp" + strconv.Itoa(cnt) + ".img"
 		cnt++
-		fmt.Printf("gen disk for running till entry %d\n", i)
+		// fmt.Printf("gen disk for running till entry %d\n", i)
 		if apply {
 			genDisk(trace, i, dst)
-			go func(d string) {
+			wg.Add(1)
+			go func(d string, trace trace_t) {
+				defer wg.Done()
 				tfs := BootFS(d)
-				s, ok := doCheckReuse(tfs)
+				s, ok := doCheckAtomic(tfs)
 				ShutdownFS(tfs)
 				os.Remove(d)
 				if !ok {
+					fmt.Printf("failed on disk %s\n", dst)
+					trace.printTrace(0, len(trace))
 					panic(s)
 				}
-			}(dst)
+			}(dst, trace.copyTrace(0, i))
 		}
 	}
 	return cnt
 }
+
+var wg sync.WaitGroup
 
 func genTraces(trace trace_t, t *testing.T, apply bool) int {
 	cnt := 0
 	index := 0
 	for index < len(trace) {
 		n := trace.findSync(index)
-		fmt.Printf("traces starting from %d till %d\n", index, n)
+		// fmt.Printf("traces starting from %d till %d\n", index, n)
 		so := make([]int, n-index)
 		for i := 0; i < len(so); i++ {
 			so[i] = i
@@ -401,20 +465,26 @@ func genTraces(trace trace_t, t *testing.T, apply bool) int {
 		}
 		index = n + 1
 	}
+	wg.Wait()
 	return cnt
 }
 
 func produceTrace(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
-
-	ahci := OpenDisk(dst, true)
 	fmt.Printf("produceTrace %v ...\n", dst)
-	tfs := &Ufs_t{}
-	_, tfs.fs = fs.StartFS(blockmem, ahci, c)
-	doTestReuse(tfs, t)
+
+	// Creat a disk with an inial file system state
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+	tfs := BootFS(dst)
+	doAtomicInit(tfs)
+	ShutdownFS(tfs)
+
+	// Now start tracing
+	tfs = BootFS(dst)
+	tfs.ahci.StartTrace()
+	doTestAtomic(tfs, t)
 	tfs.fs.StopFS()
-	ahci.close()
+
 	os.Remove(dst)
 }
 
