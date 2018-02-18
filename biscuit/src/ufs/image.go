@@ -197,6 +197,7 @@ func pad(f *os.File) {
 	if err != nil {
 		panic(err)
 	}
+
 	fmt.Printf("block boundary? %v\n", o%common.BSIZE)
 	n := common.Roundup(int(o), common.BSIZE)
 	n = n - int(o)
@@ -208,16 +209,48 @@ func pad(f *os.File) {
 	}
 }
 
-// A disk with an empty file system (i.e., only root directory)
-func MkDisk(image, boot, kernel string) {
-	fmt.Printf("Make FS image %s\n", image)
-	f, err := os.Create(image)
+func pokeboot(f *os.File, start int) {
+	// seek to boot block
+	_, err := f.Seek(0, 0)
+	if err != nil {
+		panic(err)
+	}
+	b := make([]byte, common.BSIZE)
+	n, err := f.Read(b)
+	if err != nil {
+		panic(err)
+	}
+	if n != common.BSIZE {
+		panic("short read")
+	}
+
+	common.Writen(b[:], 4, fs.FSOFF, start)
+
+	_, err = f.Seek(0, 0)
 	if err != nil {
 		panic(err)
 	}
 
-	// skip boot block
-	_, err = f.Seek(common.BSIZE, 0)
+	f.Write(b)
+	if err != nil {
+		panic(err)
+	}
+
+	// seek back
+	_, err = f.Seek(int64(start*common.BSIZE), 0)
+	if err != nil {
+		panic(err)
+	}
+	s := Tell(f)
+	if s != start {
+		panic("wrong position")
+	}
+}
+
+// A disk with an empty file system (i.e., only root directory)
+func MkDisk(image, boot, kernel string) {
+	fmt.Printf("Make FS image %s\n", image)
+	f, err := os.Create(image)
 	if err != nil {
 		panic(err)
 	}
@@ -227,20 +260,9 @@ func MkDisk(image, boot, kernel string) {
 	pad(f)
 
 	start := Tell(f)
+	pokeboot(f, start)
 
 	fmt.Printf("superblock at block %d\n", start)
-
-	// back to boot block
-	_, err = f.Seek(0, 0)
-	if err != nil {
-		panic(err)
-	}
-	writeBootBlock(f, start)
-
-	_, err = f.Seek(int64(start*common.BSIZE), 0)
-	if err != nil {
-		panic(err)
-	}
 
 	sb := writeSuperBlock(f, start)
 	writeLog(f)
