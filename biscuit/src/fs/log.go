@@ -517,6 +517,7 @@ func log_daemon(l *log_t) {
 					panic("no admit")
 				}
 				if l.memhead >= l.loglen {
+					fmt.Printf("memhead %v loglen %v\n", l.memhead, l.loglen)
 					panic("full")
 				}
 				l.addlog(nb)

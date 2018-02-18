@@ -79,8 +79,8 @@ func crname(path string, nilpatherr common.Err_t) (common.Err_t, bool) {
 // 0-13,  file name characters
 // 14-21, inode block/offset
 // ...repeated, totaling 23 times
-type dirdata_t struct {
-	data []uint8
+type Dirdata_t struct {
+	Data []uint8
 }
 
 const (
@@ -96,9 +96,9 @@ func doffset(didx int, off int) int {
 	return NDBYTES*didx + off
 }
 
-func (dir *dirdata_t) filename(didx int) string {
+func (dir *Dirdata_t) Filename(didx int) string {
 	st := doffset(didx, 0)
-	sl := dir.data[st : st+DNAMELEN]
+	sl := dir.Data[st : st+DNAMELEN]
 	ret := make([]byte, 0, 14)
 	for _, c := range sl {
 		if c == 0 {
@@ -109,15 +109,15 @@ func (dir *dirdata_t) filename(didx int) string {
 	return string(ret)
 }
 
-func (dir *dirdata_t) inodenext(didx int) common.Inum_t {
+func (dir *Dirdata_t) inodenext(didx int) common.Inum_t {
 	st := doffset(didx, 14)
-	v := common.Readn(dir.data[:], 8, st)
+	v := common.Readn(dir.Data[:], 8, st)
 	return common.Inum_t(v)
 }
 
-func (dir *dirdata_t) w_filename(didx int, fn string) {
+func (dir *Dirdata_t) W_filename(didx int, fn string) {
 	st := doffset(didx, 0)
-	sl := dir.data[st : st+DNAMELEN]
+	sl := dir.Data[st : st+DNAMELEN]
 	l := len(fn)
 	for i := range sl {
 		if i >= l {
@@ -128,9 +128,9 @@ func (dir *dirdata_t) w_filename(didx int, fn string) {
 	}
 }
 
-func (dir *dirdata_t) w_inodenext(didx int, inum common.Inum_t) {
+func (dir *Dirdata_t) W_inodenext(didx int, inum common.Inum_t) {
 	st := doffset(didx, 14)
-	common.Writen(dir.data[:], 8, st, int(inum))
+	common.Writen(dir.Data[:], 8, st, int(inum))
 }
 
 type fdent_t struct {
@@ -234,10 +234,10 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	ddata := dirdata_t{b.Data[noff%common.PGSIZE:]}
+	ddata := Dirdata_t{b.Data[noff%common.PGSIZE:]}
 
-	ddata.w_filename(0, name)
-	ddata.w_inodenext(0, inum)
+	ddata.W_filename(0, name)
+	ddata.W_inodenext(0, inum)
 
 	b.Unlock()
 	idm.fs.fslog.Write(b)
@@ -261,9 +261,9 @@ func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, commo
 		if err != 0 {
 			return false, err
 		}
-		dd := dirdata_t{b.Data[:]}
+		dd := Dirdata_t{b.Data[:]}
 		for j := 0; j < NDIRENTS; j++ {
-			tfn := dd.filename(j)
+			tfn := dd.Filename(j)
 			tpriv := dd.inodenext(j)
 			tde := icdent_t{i + j*NDBYTES, tpriv}
 			if f(tfn, tde) {
@@ -328,9 +328,9 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, common.Err_t) {
 	if err != 0 {
 		return zi, err
 	}
-	dirdata := dirdata_t{b.Data[de.offset%common.PGSIZE:]}
-	dirdata.w_filename(0, "")
-	dirdata.w_inodenext(0, common.Inum_t(0))
+	dirdata := Dirdata_t{b.Data[de.offset%common.PGSIZE:]}
+	dirdata.W_filename(0, "")
+	dirdata.W_inodenext(0, common.Inum_t(0))
 	b.Unlock()
 	idm.fs.fslog.Write(b)
 	idm.fs.bcache.Relse(b, "_deremove")

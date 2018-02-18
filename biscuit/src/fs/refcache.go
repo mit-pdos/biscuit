@@ -73,7 +73,7 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 	if len(irc.refs) >= irc.maxsize {
 		victim = irc._replace()
 		if victim == nil {
-			// fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
+			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
 			irc.Unlock()
 			return nil, -common.ENOMEM
 		}
@@ -176,6 +176,7 @@ func (irc *refcache_t) _delete(ir *ref_t) {
 
 func (irc *refcache_t) _replace() obj_t {
 	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
+		// fmt.Printf("%v %v %s\n", ir.key, ir.refcnt, ir.s)
 		if ir.refcnt == 0 {
 			if refcache_debug {
 				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)

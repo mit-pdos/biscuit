@@ -82,10 +82,9 @@ func inode_stats() string {
 	return s
 }
 
-// inode format (see mkbfs.py)
-type inode_t struct {
-	iblk *common.Bdev_block_t
-	ioff int
+type Inode_t struct {
+	Iblk *common.Bdev_block_t
+	Ioff int
 }
 
 // inode file types
@@ -114,85 +113,85 @@ func ifield(iidx int, fieldn int) int {
 }
 
 // iidx is the inode index; necessary since there are four inodes in one block
-func (ind *inode_t) itype() int {
-	it := fieldr(ind.iblk.Data, ifield(ind.ioff, 0))
+func (ind *Inode_t) itype() int {
+	it := fieldr(ind.Iblk.Data, ifield(ind.Ioff, 0))
 	if it < I_FIRST || it > I_LAST {
 		panic(fmt.Sprintf("weird inode type %d", it))
 	}
 	return it
 }
 
-func (ind *inode_t) linkcount() int {
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, 1))
+func (ind *Inode_t) linkcount() int {
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, 1))
 }
 
-func (ind *inode_t) size() int {
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, 2))
+func (ind *Inode_t) size() int {
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, 2))
 }
 
-func (ind *inode_t) major() int {
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, 3))
+func (ind *Inode_t) major() int {
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, 3))
 }
 
-func (ind *inode_t) minor() int {
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, 4))
+func (ind *Inode_t) minor() int {
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, 4))
 }
 
-func (ind *inode_t) indirect() int {
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, 5))
+func (ind *Inode_t) indirect() int {
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, 5))
 }
 
-func (ind *inode_t) dindirect() int {
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, 6))
+func (ind *Inode_t) dindirect() int {
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, 6))
 }
 
-func (ind *inode_t) addr(i int) int {
+func (ind *Inode_t) addr(i int) int {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
 	addroff := 7
-	return fieldr(ind.iblk.Data, ifield(ind.ioff, addroff+i))
+	return fieldr(ind.Iblk.Data, ifield(ind.Ioff, addroff+i))
 }
 
-func (ind *inode_t) w_itype(n int) {
+func (ind *Inode_t) W_itype(n int) {
 	if n < I_FIRST || n > I_LAST {
 		panic("weird inode type")
 	}
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 0), n)
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 0), n)
 }
 
-func (ind *inode_t) w_linkcount(n int) {
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 1), n)
+func (ind *Inode_t) W_linkcount(n int) {
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 1), n)
 }
 
-func (ind *inode_t) w_size(n int) {
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 2), n)
+func (ind *Inode_t) W_size(n int) {
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 2), n)
 }
 
-func (ind *inode_t) w_major(n int) {
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 3), n)
+func (ind *Inode_t) w_major(n int) {
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 3), n)
 }
 
-func (ind *inode_t) w_minor(n int) {
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 4), n)
-}
-
-// blk is the block number and iidx in the index of the inode on block blk.
-func (ind *inode_t) w_indirect(blk int) {
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 5), blk)
+func (ind *Inode_t) w_minor(n int) {
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 4), n)
 }
 
 // blk is the block number and iidx in the index of the inode on block blk.
-func (ind *inode_t) w_dindirect(blk int) {
-	fieldw(ind.iblk.Data, ifield(ind.ioff, 6), blk)
+func (ind *Inode_t) w_indirect(blk int) {
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 5), blk)
 }
 
-func (ind *inode_t) w_addr(i int, blk int) {
+// blk is the block number and iidx in the index of the inode on block blk.
+func (ind *Inode_t) w_dindirect(blk int) {
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, 6), blk)
+}
+
+func (ind *Inode_t) W_addr(i int, blk int) {
 	if i < 0 || i > NIADDRS {
 		panic("bad inode block index")
 	}
 	addroff := 7
-	fieldw(ind.iblk.Data, ifield(ind.ioff, addroff+i), blk)
+	fieldw(ind.Iblk.Data, ifield(ind.Ioff, addroff+i), blk)
 }
 
 // In-memory representation of an inode.
@@ -338,7 +337,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call.
-	max := maxblkspersys * common.BSIZE
+	max := (maxblkspersys - 1) * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 
@@ -518,7 +517,7 @@ func (ic *imemnode_t) mbread(blockn int) (*common.Bdev_block_t, common.Err_t) {
 }
 
 func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
-	inode := inode_t{blk, ioffset(inum)}
+	inode := Inode_t{blk, ioffset(inum)}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
 		fmt.Printf("itype: %v for %v\n", ic.itype, inum)
@@ -537,7 +536,7 @@ func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
 func (ic *imemnode_t) flushto(blk *common.Bdev_block_t, inum common.Inum_t) bool {
-	inode := inode_t{blk, ioffset(inum)}
+	inode := Inode_t{blk, ioffset(inum)}
 	j := inode
 	k := ic
 	ret := false
@@ -551,15 +550,15 @@ func (ic *imemnode_t) flushto(blk *common.Bdev_block_t, inum common.Inum_t) bool
 			ret = true
 		}
 	}
-	inode.w_itype(ic.itype)
-	inode.w_linkcount(ic.links)
-	inode.w_size(ic.size)
+	inode.W_itype(ic.itype)
+	inode.W_linkcount(ic.links)
+	inode.W_size(ic.size)
 	inode.w_major(ic.major)
 	inode.w_minor(ic.minor)
 	inode.w_indirect(ic.indir)
 	inode.w_dindirect(ic.dindir)
 	for i := 0; i < NIADDRS; i++ {
-		inode.w_addr(i, ic.addrs[i])
+		inode.W_addr(i, ic.addrs[i])
 	}
 	return ret
 }
@@ -693,7 +692,7 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, common.Err_t) {
 	if err != 0 {
 		return blkn, err
 	}
-	if blkn <= 0 || blkn >= idm.fs.superb.lastblock() {
+	if blkn <= 0 || blkn >= idm.fs.superb.Lastblock() {
 		panic("offsetblk: bad data blocks")
 	}
 	return blkn, 0
@@ -825,8 +824,8 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 	if err != 0 {
 		return err
 	}
-	ni := &inode_t{ib, ioffset(childi)}
-	ni.w_itype(I_DEAD)
+	ni := &Inode_t{ib, ioffset(childi)}
+	ni.W_itype(I_DEAD)
 	ib.Unlock()
 	idm.fs.bcache.Relse(ib, "create_undo")
 	idm.fs.ialloc.Ifree(childi)
@@ -868,16 +867,16 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		fmt.Printf("ialloc: %v %v %v\n", newbn, newioff, newinum)
 	}
 
-	newinode := &inode_t{newiblk, newioff}
-	newinode.w_itype(nitype)
-	newinode.w_linkcount(1)
-	newinode.w_size(0)
+	newinode := &Inode_t{newiblk, newioff}
+	newinode.W_itype(nitype)
+	newinode.W_linkcount(1)
+	newinode.W_size(0)
 	newinode.w_major(major)
 	newinode.w_minor(minor)
 	newinode.w_indirect(0)
 	newinode.w_dindirect(0)
 	for i := 0; i < NIADDRS; i++ {
-		newinode.w_addr(i, 0)
+		newinode.W_addr(i, 0)
 	}
 
 	// deinsert will call write_log and we don't want to hold newiblk's lock
@@ -890,7 +889,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 	// write new directory entry referencing newinode
 	err = idm._deinsert(name, newinum)
 	if err != 0 {
-		newinode.w_itype(I_DEAD)
+		newinode.W_itype(I_DEAD)
 		idm.fs.ialloc.Ifree(newinum)
 	}
 	idm.fs.fslog.Write(newiblk)
@@ -1039,7 +1038,6 @@ func (idm *imemnode_t) mkmode() uint {
 	}
 }
 
-// XXX: remove
 func fieldr(p *common.Bytepg_t, field int) int {
 	return common.Readn(p[:], 8, field*8)
 }

@@ -8,13 +8,14 @@ import "common"
 const memfs = false // in-memory file system?
 const fs_debug = false
 const iroot = 0
+const FSOFF = 506
 
 var cons common.Cons_i
 
 type Fs_t struct {
 	ahci         common.Disk_i
 	superb_start int
-	superb       superblock_t
+	superb       Superblock_t
 	bcache       *bcache_t
 	icache       *icache_t
 	fslog        *log_t
@@ -42,7 +43,6 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	if err != 0 {
 		panic("fs_init")
 	}
-	FSOFF := 506
 	fs.superb_start = common.Readn(b.Data[:], 4, FSOFF)
 	fmt.Printf("fs.superb_start %v\n", fs.superb_start)
 	if fs.superb_start <= 0 {
@@ -55,10 +55,10 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	if err != 0 {
 		panic("fs_init")
 	}
-	fs.superb = superblock_t{b.Data}
+	fs.superb = Superblock_t{b.Data}
 
 	logstart := fs.superb_start + 1
-	loglen := fs.superb.loglen()
+	loglen := fs.superb.Loglen()
 	if loglen <= 0 || loglen > 256 {
 		panic("bad log len")
 	}
@@ -68,19 +68,19 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 		panic("Startlog failed")
 	}
 
-	imapstart := fs.superb.imapblock()
-	imaplen := fs.superb.imaplen()
+	imapstart := fs.superb.Imapblock()
+	imaplen := fs.superb.Imaplen()
 	fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
 
-	bmapstart := fs.superb.freeblock()
-	bmaplen := fs.superb.freeblocklen()
+	bmapstart := fs.superb.Freeblock()
+	bmaplen := fs.superb.Freeblocklen()
 	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
 
-	inodelen := fs.superb.inodelen()
+	inodelen := fs.superb.Inodelen()
 	fmt.Printf("inodestart %v inodelen %v\n", bmapstart+bmaplen, inodelen)
 
 	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen, inodelen)
-	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen, bmaplen*common.BSIZE)
+	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
@@ -1362,39 +1362,6 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 	}
 	idm.ilock(s + "/fs_namei_locked")
 	return idm, 0
-}
-
-// superblock format (see mkbdisk.py)
-type superblock_t struct {
-	data *common.Bytepg_t
-}
-
-func (sb *superblock_t) loglen() int {
-	return fieldr(sb.data, 0)
-}
-
-func (sb *superblock_t) imapblock() int {
-	return fieldr(sb.data, 1)
-}
-
-func (sb *superblock_t) imaplen() int {
-	return fieldr(sb.data, 2)
-}
-
-func (sb *superblock_t) freeblock() int {
-	return fieldr(sb.data, 3)
-}
-
-func (sb *superblock_t) freeblocklen() int {
-	return fieldr(sb.data, 4)
-}
-
-func (sb *superblock_t) inodelen() int {
-	return fieldr(sb.data, 5)
-}
-
-func (sb *superblock_t) lastblock() int {
-	return fieldr(sb.data, 6)
 }
 
 // Bitmap allocater. Used for inodes and blocks

@@ -1,0 +1,65 @@
+package fs
+
+import "common"
+
+type Superblock_t struct {
+	Data *common.Bytepg_t
+}
+
+func (sb *Superblock_t) Loglen() int {
+	return fieldr(sb.Data, 0)
+}
+
+func (sb *Superblock_t) Imapblock() int {
+	return fieldr(sb.Data, 1)
+}
+
+func (sb *Superblock_t) Imaplen() int {
+	return fieldr(sb.Data, 2)
+}
+
+func (sb *Superblock_t) Freeblock() int {
+	return fieldr(sb.Data, 3)
+}
+
+func (sb *Superblock_t) Freeblocklen() int {
+	return fieldr(sb.Data, 4)
+}
+
+func (sb *Superblock_t) Inodelen() int {
+	return fieldr(sb.Data, 5)
+}
+
+func (sb *Superblock_t) Lastblock() int {
+	return fieldr(sb.Data, 6)
+}
+
+// writing
+
+func (sb *Superblock_t) SetLoglen(ll int) {
+	fieldw(sb.Data, 0, ll)
+}
+
+func (sb *Superblock_t) SetImapblock(n int) {
+	fieldw(sb.Data, 1, n)
+}
+
+func (sb *Superblock_t) SetImaplen(n int) {
+	fieldw(sb.Data, 2, n)
+}
+
+func (sb *Superblock_t) SetFreeblock(n int) {
+	fieldw(sb.Data, 3, n)
+}
+
+func (sb *Superblock_t) SetFreeblocklen(n int) {
+	fieldw(sb.Data, 4, n)
+}
+
+func (sb *Superblock_t) SetInodelen(n int) {
+	fieldw(sb.Data, 5, n)
+}
+
+func (sb *Superblock_t) SetLastblock(n int) {
+	fieldw(sb.Data, 6, n)
+}

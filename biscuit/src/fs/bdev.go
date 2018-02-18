@@ -241,17 +241,15 @@ type ballocater_t struct {
 	start int
 	len   int
 	first int
-	blen  int
 }
 
-func mkBallocater(fs *Fs_t, start, len, first, blen int) *ballocater_t {
+func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
 	balloc := &ballocater_t{}
 	balloc.alloc = mkAllocater(fs, start, len)
-	fmt.Printf("bmap start %v bmaplen %v first datablock %v blen %v\n", start, len, first, blen)
+	fmt.Printf("bmap start %v bmaplen %v first datablock %v\n", start, len, first)
 	balloc.first = first
 	balloc.start = start
 	balloc.len = len
-	balloc.blen = blen
 	balloc.fs = fs
 	return balloc
 }
@@ -264,8 +262,8 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 	if ret < 0 {
 		panic("balloc: bad blkn")
 	}
-	if ret >= balloc.fs.superb.lastblock() {
-		fmt.Printf("blkn %v last %v\n", ret, balloc.fs.superb.lastblock())
+	if ret >= balloc.fs.superb.Lastblock() {
+		fmt.Printf("blkn %v last %v\n", ret, balloc.fs.superb.Lastblock())
 		return 0, -common.ENOMEM
 	}
 	blk, err := balloc.fs.bcache.Get_zero(ret, "balloc", true)
@@ -285,14 +283,14 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 }
 
 func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
+	blkno -= balloc.first
 	if bdev_debug {
 		fmt.Printf("bfree: %v\n", blkno)
 	}
-	blkno -= balloc.first
 	if blkno < 0 {
 		panic("bfree")
 	}
-	if blkno >= balloc.blen*common.BSIZE*8 {
+	if blkno >= balloc.len*common.BSIZE*8 {
 		panic("bfree too large")
 	}
 	return balloc.alloc.Free(blkno)
@@ -308,11 +306,15 @@ func (balloc *ballocater_t) Stats() string {
 func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
 	blkn, err := balloc.alloc.Alloc()
 	if err != 0 {
+		fmt.Printf("balloc1: %v\n", err)
 		return 0, err
 	}
-	if blkn >= balloc.blen*common.BSIZE*8 {
-		fmt.Printf("balloc1: blkn %v len %v\n", blkn, balloc.blen)
+	if blkn >= balloc.len*common.BSIZE*8 {
+		fmt.Printf("balloc1: blkn %v len %v\n", blkn, balloc.len)
 		panic("balloc1: too large blkn\n")
+	}
+	if bdev_debug {
+		fmt.Printf("balloc1: %v\n", blkn)
 	}
 	return blkn + balloc.first, err
 }
