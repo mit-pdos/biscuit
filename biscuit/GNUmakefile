@@ -83,7 +83,7 @@ $(K)/bootmain.o: $(K)/bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-mkfs: src/mkfs/mkfs.go
+mkfs: src/mkfs/mkfs.go src/ufs/*.go
 	$(GOBIN) build src/mkfs/mkfs.go
 
 go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
