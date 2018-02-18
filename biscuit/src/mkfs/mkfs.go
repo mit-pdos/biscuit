@@ -8,6 +8,12 @@ import "path/filepath"
 import "common"
 import "ufs"
 
+const (
+	nlogblks   = 256
+	ninodeblks = 50
+	ndatablks  = 40000
+)
+
 func copydata(src string, fs *ufs.Ufs_t, dst string) {
 	s, err := os.Open(src)
 	if err != nil {
@@ -72,7 +78,7 @@ func main() {
 
 	imgs := []string{os.Args[1], os.Args[2]}
 
-	ufs.MkDisk(image, imgs)
+	ufs.MkDisk(image, imgs, nlogblks, ninodeblks, ndatablks)
 
 	fs := ufs.BootFS(image)
 	_, err := fs.Stat("/")

@@ -20,9 +20,6 @@ import "fs"
 // data blocks
 
 const (
-	nlogblks      = 256
-	ninodeblks    = 50
-	ndatablks     = 40000
 	nbitsperblock = common.BSIZE * 8
 )
 
@@ -52,7 +49,7 @@ func writeBootBlock(f *os.File, superb int) {
 	f.Write(bytepg2byte(d))
 }
 
-func writeSuperBlock(f *os.File, start int) *fs.Superblock_t {
+func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int) *fs.Superblock_t {
 	if Tell(f) != start {
 		panic("superblock in wrong location")
 	}
@@ -80,14 +77,14 @@ func markAllocated(d []byte, startbit int) {
 	}
 }
 
-func writeLog(f *os.File) {
+func writeLog(f *os.File, nlogblks int) {
 	zeroblock := mkBlock()
 	for i := 0; i < nlogblks; i++ {
 		f.Write(zeroblock)
 	}
 }
 
-func writeInodeMap(f *os.File, sb *fs.Superblock_t) {
+func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
 	oneblock := mkBlock()
 	oneblock[0] |= 1 << 0 // mark root inode as allocated
@@ -106,7 +103,7 @@ func writeInodeMap(f *os.File, sb *fs.Superblock_t) {
 	}
 }
 
-func writeBlockMap(f *os.File, sb *fs.Superblock_t) {
+func writeBlockMap(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 	if sb.Freeblocklen() == 1 {
 		block := mkBlock()
 		block[0] |= 1 << 0 // mark root dir block as allocated
@@ -150,7 +147,7 @@ func writeInodes(f *os.File, sb *fs.Superblock_t) {
 	}
 }
 
-func writeDataBlocks(f *os.File, sb *fs.Superblock_t) {
+func writeDataBlocks(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 	// Root directory data
 	data := &common.Bytepg_t{}
 	ddata := fs.Dirdata_t{data[:]}
@@ -249,7 +246,7 @@ func pokeboot(f *os.File, start int) {
 	}
 }
 
-func MkDisk(disk string, images []string) {
+func MkDisk(disk string, images []string, nlogblks, ninodeblks, ndatablks int) {
 	fmt.Printf("Make FS disk %s\n", disk)
 	f, err := os.Create(disk)
 	if err != nil {
@@ -270,12 +267,12 @@ func MkDisk(disk string, images []string) {
 	}
 
 	fmt.Printf("superblock at block %d\n", start)
-	sb := writeSuperBlock(f, start)
-	writeLog(f)
-	writeInodeMap(f, sb)
-	writeBlockMap(f, sb)
+	sb := writeSuperBlock(f, start, nlogblks, ninodeblks, ndatablks)
+	writeLog(f, nlogblks)
+	writeInodeMap(f, sb, ninodeblks)
+	writeBlockMap(f, sb, ndatablks)
 	writeInodes(f, sb)
-	writeDataBlocks(f, sb)
+	writeDataBlocks(f, sb, ndatablks)
 
 	f.Sync()
 	f.Close()

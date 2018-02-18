@@ -3,16 +3,19 @@ package ufs
 import "testing"
 import "fmt"
 import "os"
-import "io"
 import "strconv"
-import "log"
 
 import "common"
 import "fs"
 
 const (
 	SMALL = 512
-	BIG   = common.BSIZE * 100
+)
+
+const (
+	nlogblks   = 32
+	ninodeblks = 1
+	ndatablks  = 10
 )
 
 func doTestSimple(tfs *Ufs_t, d string) string {
@@ -125,7 +128,7 @@ func doTestInodeReuse(tfs *Ufs_t, n int, t *testing.T) {
 
 func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
 	for i := 0; i < n; i++ {
-		ub := mkData(uint8(i), BIG)
+		ub := mkData(uint8(i), SMALL)
 		e := tfs.MkFile(uniqfile(i), ub)
 		if e != 0 {
 			t.Fatalf("mkFile %v failed", i)
@@ -141,53 +144,6 @@ func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
 }
 
 //
-// For testing block reuse and crash safety
-//
-
-func doTestReuse(tfs *Ufs_t, t *testing.T) {
-	ub := mkData(1, SMALL)
-	e := tfs.MkFile("f1", ub)
-	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f1")
-	}
-	e = tfs.Unlink("f1")
-	if e != 0 {
-		t.Fatalf("Unlink failed")
-	}
-	ub = mkData(2, SMALL)
-	e = tfs.MkFile("f2", ub)
-	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f2")
-	}
-}
-
-func doCheckReuse(tfs *Ufs_t) (string, bool) {
-	res, e := tfs.Ls("/")
-	if e != 0 {
-		return "doLs failed", false
-	}
-	st, ok := res["f1"]
-	if ok {
-		return "f1 present", false
-	}
-	st, ok = res["f2"]
-	if !ok {
-		return "f2 not present", false
-	}
-	if st.Size() != 512 {
-		return "f2 wrong size", false
-	}
-	d, e := tfs.Read("f2")
-	if e != 0 || len(d) != int(st.Size()) {
-		return "Read f2 failed", false
-	}
-	if uint8(d[0]) != 2 {
-		return "Wrong data in f2", false
-	}
-	return "", true
-}
-
-//
 // Util
 //
 
@@ -199,35 +155,13 @@ func uniqfile(id int) string {
 	return "f" + strconv.Itoa(id)
 }
 
-func copyDisk(src, dst string) (err error) {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	if err != nil {
-		return err
-	}
-	//err = out.Sync()
-	//if err != nil {
-	//	return err
-	//}
-	return err
-}
-
 //
 // Simple test
 //
 
 func TestFSSimple(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst, nil)
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("testFS %v ...\n", dst)
 
@@ -251,33 +185,34 @@ func TestFSSimple(t *testing.T) {
 
 func TestFSInodeReuse(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst, nil)
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("testFSInodeReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	n := ninodeblks * (common.BSIZE / fs.ISIZE)
 	fmt.Printf("max inode %v\n", n)
-	for i := 0; i < n; i += 100 {
-		doTestInodeReuse(tfs, 100, t)
+	for i := 0; i < n; i++ {
+		doTestInodeReuse(tfs, 10, t)
 	}
 	ShutdownFS(tfs)
 	os.Remove(dst)
 }
 
+//
 // Test that inode are reused after freeing
 //
 
 func TestFSBlockReuse(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst, nil)
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("testFSBlockReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	n := ndatablks
 	fmt.Printf("max #blks %v\n", n)
-	for i := 0; i < n*2; i += 5 * 100 {
+	for i := 0; i < n*2; i++ {
 		doTestBlockReuse(tfs, 5, t)
 	}
 	ShutdownFS(tfs)
@@ -285,13 +220,13 @@ func TestFSBlockReuse(t *testing.T) {
 }
 
 //
-// Simple concurrent test
+// Simple concurrent test (for race detector)
 //
 
 func TestFSConcur(t *testing.T) {
 	n := 2
 	dst := "tmp.img"
-	MkDisk(dst, nil)
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("testFSConcur %v ...\n", dst)
 
@@ -322,10 +257,54 @@ func TestFSConcur(t *testing.T) {
 }
 
 //
-// Check traces
+// Check traces for crash safety
 //
 
-var cnt int
+func doTestReuse(tfs *Ufs_t, t *testing.T) {
+	ub := mkData(1, SMALL)
+	e := tfs.MkFile("f1", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f1")
+	}
+	e = tfs.Unlink("f1")
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
+	ub = mkData(2, SMALL)
+	e = tfs.MkFile("f2", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f2")
+	}
+}
+
+// check that f2 doesn't contain f2's data
+// XXX it must be possible to fail this with current FS impl
+func doCheckReuse(tfs *Ufs_t) (string, bool) {
+	res, e := tfs.Ls("/")
+	if e != 0 {
+		return "doLs failed", false
+	}
+	_, ok1 := res["f1"]
+	st2, ok2 := res["f2"]
+	if ok1 && ok2 {
+		return "f1 and f2 present", false
+	}
+	if ok2 {
+		if st2.Size() != 0 || st2.Size() != 512 {
+			return "f2 wrong size", false
+		}
+		if st2.Size() > 0 {
+			d, e := tfs.Read("f2")
+			if e != 0 || len(d) != int(st2.Size()) {
+				return "Read f2 failed", false
+			}
+			if uint8(d[0]) != 2 {
+				return "Wrong data in f2", false
+			}
+		}
+	}
+	return "", true
+}
 
 func genOrder(blks []int, o order_t, r orders_t) orders_t {
 	if len(blks) == 0 {
@@ -352,15 +331,16 @@ func genOrders(blks []int) orders_t {
 	return r
 }
 
-func genDisk(trace trace_t, dst string) {
-	MkDisk(dst, nil)
+func genDisk(trace trace_t, crash int, dst string) {
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
 	if err != nil {
 		panic(err)
 	}
 
-	for _, r := range trace {
+	for i := 0; i < crash; i++ {
+		r := trace[i]
 		if r.Cmd == "write" {
 			// log.Printf("update block %v\n", r.BlkNo)
 			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
@@ -374,60 +354,59 @@ func genDisk(trace trace_t, dst string) {
 			}
 		}
 	}
-	//err = f.Sync()
-	//if err != nil {
-	//	panic(err)
-	//}
 	err = f.Close()
 	if err != nil {
 		panic(err)
 	}
 }
 
-func applyTrace(trace trace_t, t *testing.T) {
+func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, apply bool) int {
 	trace.printTrace(0, len(trace))
-	log.Printf("applyTrace")
-	dst := "tmp" + strconv.Itoa(cnt) + ".img"
-	cnt++
-	genDisk(trace, dst)
-	go func() {
-		tfs := BootFS(dst)
-		s, ok := doCheckReuse(tfs)
-		ShutdownFS(tfs)
-		os.Remove(dst)
-		if !ok {
-			panic(s)
+
+	for i := start; i <= end; i++ {
+		dst := "tmp" + strconv.Itoa(cnt) + ".img"
+		cnt++
+		fmt.Printf("gen disk for running till entry %d\n", i)
+		if apply {
+			genDisk(trace, i, dst)
+			go func(d string) {
+				tfs := BootFS(d)
+				s, ok := doCheckReuse(tfs)
+				ShutdownFS(tfs)
+				os.Remove(d)
+				if !ok {
+					panic(s)
+				}
+			}(dst)
 		}
-	}()
+	}
+	return cnt
 }
 
-// Recursively generate all possible traces, for any order of writes between two
-// syncs.
-func genTraces(trace trace_t, index int, t *testing.T, apply bool) int {
-	if index >= len(trace) {
-		if apply {
-			applyTrace(trace, t)
-		}
-		return 1
-	}
+func genTraces(trace trace_t, t *testing.T, apply bool) int {
 	cnt := 0
-	n := trace.findSync(index)
-	so := make([]int, n-index)
-	for i := 0; i < len(so); i++ {
-		so[i] = i
-	}
-	orders := genOrders(so)
-	subtrace := trace.copyTrace(index, n)
-	for _, o := range orders {
-		trace.permTrace(subtrace, index, o)
-		cnt += genTraces(trace, n+1, t, apply)
+	index := 0
+	for index < len(trace) {
+		n := trace.findSync(index)
+		fmt.Printf("traces starting from %d till %d\n", index, n)
+		so := make([]int, n-index)
+		for i := 0; i < len(so); i++ {
+			so[i] = i
+		}
+		orders := genOrders(so)
+		subtrace := trace.copyTrace(index, n)
+		for _, o := range orders {
+			trace.permTrace(subtrace, index, o)
+			cnt = applyTrace(trace, index, n, cnt, t, apply)
+		}
+		index = n + 1
 	}
 	return cnt
 }
 
 func produceTrace(t *testing.T) {
 	dst := "tmp.img"
-	MkDisk(dst, nil)
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	ahci := OpenDisk(dst, true)
 	fmt.Printf("produceTrace %v ...\n", dst)
@@ -436,13 +415,13 @@ func produceTrace(t *testing.T) {
 	doTestReuse(tfs, t)
 	tfs.fs.StopFS()
 	ahci.close()
+	os.Remove(dst)
 }
 
 func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
 	produceTrace(t)
 	trace := readTrace("trace.json")
-	// trace.printTrace(0, len(trace))
-	cnt := genTraces(trace, 0, t, true)
+	cnt := genTraces(trace, t, true)
 	fmt.Printf("#traces = %v\n", cnt)
 }

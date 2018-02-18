@@ -36,7 +36,7 @@ func mkTrace() *tracef_t {
 	return t
 }
 
-func readTrace(p string) []record_t {
+func readTrace(p string) trace_t {
 	res := make([]record_t, 0)
 	f, uerr := os.Open("trace.json")
 	if uerr != nil {
