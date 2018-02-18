@@ -11,6 +11,7 @@
 /bins.go
 /src/kernel/boot.elf
 /chentry
+/mkfs
 /go.img
 /net.img
 /src/kernel/main.gobin

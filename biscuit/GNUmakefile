@@ -83,12 +83,14 @@ $(K)/bootmain.o: $(K)/bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) $(K)/mkbdisk.py
-	$(PYTHON) $(K)/mkbdisk.py $(K)/boot $(K)/main.gobin $@ $(SKEL) || { rm -f $@; false; }
+mkfs: src/mkfs/mkfs.go
+	$(GOBIN) build src/mkfs/mkfs.go
 
-net.img: $(K)/boot $(K)/main.gobin $(SKELDEPS) $(FSPROGS) $(K)/mkbdisk.py
-	$(PYTHON) $(K)/mkbdisk.py -n $(K)/boot $(K)/main.gobin $@ $(SKEL) || \
-	    { rm -f $@; false; }
+go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
+	./mkfs $(K)/boot $(K)/main.gobin $@ $(SKEL) || { rm -f $@; false; }
+
+net.img: $(K)/boot $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
+	./mkfs $(K)/boot $(K)/main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
 BHW := bhw.pdos.csail.mit.edu
 
