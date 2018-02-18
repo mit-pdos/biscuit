@@ -15,7 +15,7 @@ const (
 	BIG   = common.BSIZE * 100
 )
 
-func doTestSimple(tfs *ufs_t, d string) string {
+func doTestSimple(tfs *Ufs_t, d string) string {
 	fmt.Printf("doTestSimple %v\n", d)
 
 	e := tfs.MkDir(d)
@@ -63,7 +63,7 @@ func doTestSimple(tfs *ufs_t, d string) string {
 	return ""
 }
 
-func doCheckSimple(tfs *ufs_t, d string, t *testing.T) {
+func doCheckSimple(tfs *Ufs_t, d string, t *testing.T) {
 	fmt.Printf("doCheckSimple %v\n", d)
 	res, e := tfs.Ls(d)
 	if e != 0 {
@@ -103,7 +103,7 @@ func doCheckSimple(tfs *ufs_t, d string, t *testing.T) {
 // For testing inode reuse
 //
 
-func doTestInodeReuse(tfs *ufs_t, n int, t *testing.T) {
+func doTestInodeReuse(tfs *Ufs_t, n int, t *testing.T) {
 	for i := 0; i < n; i++ {
 		e := tfs.MkFile(uniqfile(i), nil)
 		if e != 0 {
@@ -123,7 +123,7 @@ func doTestInodeReuse(tfs *ufs_t, n int, t *testing.T) {
 // For testing block reuse
 //
 
-func doTestBlockReuse(tfs *ufs_t, n int, t *testing.T) {
+func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
 	for i := 0; i < n; i++ {
 		ub := mkData(uint8(i), BIG)
 		e := tfs.MkFile(uniqfile(i), ub)
@@ -144,7 +144,7 @@ func doTestBlockReuse(tfs *ufs_t, n int, t *testing.T) {
 // For testing block reuse and crash safety
 //
 
-func doTestReuse(tfs *ufs_t, t *testing.T) {
+func doTestReuse(tfs *Ufs_t, t *testing.T) {
 	ub := mkData(1, SMALL)
 	e := tfs.MkFile("f1", ub)
 	if e != 0 {
@@ -161,7 +161,7 @@ func doTestReuse(tfs *ufs_t, t *testing.T) {
 	}
 }
 
-func doCheckReuse(tfs *ufs_t) (string, bool) {
+func doCheckReuse(tfs *Ufs_t) (string, bool) {
 	res, e := tfs.Ls("/")
 	if e != 0 {
 		return "doLs failed", false
@@ -431,7 +431,7 @@ func produceTrace(t *testing.T) {
 
 	ahci := OpenDisk(dst, true)
 	fmt.Printf("produceTrace %v ...\n", dst)
-	tfs := &ufs_t{}
+	tfs := &Ufs_t{}
 	_, tfs.fs = fs.StartFS(blockmem, ahci, c)
 	doTestReuse(tfs, t)
 	tfs.fs.StopFS()
