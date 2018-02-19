@@ -8,7 +8,7 @@
 /main
 /src/kernel/boot
 /d.img
-/bins.go
+/src/kernel/bins.go
 /src/kernel/boot.elf
 /chentry
 /mkfs
