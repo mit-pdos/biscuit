@@ -263,7 +263,7 @@ func TestFSConcur(t *testing.T) {
 //
 
 const ndatablksordered = 10
-const nblksordered = ndatablksordered/2 + 1
+const norderedblks = ndatablksordered/2 + 1
 const natomicblks = 2
 
 func copyDisk(src, dst string) (err error) {
@@ -289,7 +289,7 @@ func copyDisk(src, dst string) (err error) {
 }
 
 func doAtomicInit(tfs *Ufs_t) {
-	ub := mkData(1, common.BSIZE*2)
+	ub := mkData(1, common.BSIZE*natomicblks)
 	e := tfs.MkFile("f", ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -298,7 +298,7 @@ func doAtomicInit(tfs *Ufs_t) {
 }
 
 func doTestAtomic(tfs *Ufs_t, t *testing.T) {
-	ub := mkData(2, common.BSIZE*2)
+	ub := mkData(2, common.BSIZE*natomicblks)
 	e := tfs.MkFile("tmp", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "tmp")
@@ -322,7 +322,7 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 	}
 	if ok {
 		d, e := tfs.Read("f")
-		if e != 0 || len(d) != common.BSIZE*2 {
+		if e != 0 || len(d) != common.BSIZE*natomicblks {
 			return "Read f failed", false
 		}
 		v := d[0]
@@ -335,11 +335,12 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 	return "", true
 }
 
-// check that f2 doesn't contain f2's data XXX it may be possible to fail this
-// with current FS impl; probably must be overwrites (which we don't have in ufs
-// interface)
+// check that f1 doesn't contain f2's data after recovery.  this could happen
+// for ordered writes to f2, if f2's ordered list is written before the commit
+// of the unlink of f1.  but ordered write for f2 is turned into a logged since
+// its first write (zero-ing) is a logged write.)
 func doTestOrdered(tfs *Ufs_t, t *testing.T) {
-	ub := mkData(1, common.BSIZE*natomicblks)
+	ub := mkData(1, common.BSIZE*norderedblks)
 	e := tfs.MkFile("f1", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
@@ -348,7 +349,8 @@ func doTestOrdered(tfs *Ufs_t, t *testing.T) {
 	if e != 0 {
 		t.Fatalf("Unlink failed")
 	}
-	ub = mkData(2, common.BSIZE*natomicblks)
+	// XXX reuse block and flush ordered write to f2 before commit of unlink
+	ub = mkData(2, common.BSIZE*norderedblks)
 	e = tfs.MkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
@@ -360,22 +362,24 @@ func doCheckOrdered(tfs *Ufs_t) (string, bool) {
 	if e != 0 {
 		return "doLs failed", false
 	}
-	_, ok1 := res["f1"]
+	st1, ok1 := res["f1"]
 	st2, ok2 := res["f2"]
 	if ok1 && ok2 {
 		return "f1 and f2 present", false
 	}
 	if ok2 {
-		if !(st2.Size() == 0 || st2.Size() == common.BSIZE*natomicblks) {
+		if !(st2.Size() == 0 || st2.Size() == common.BSIZE*norderedblks) {
 			return fmt.Sprintf("Wrong size for f2 %v", st2.Size()), false
 		}
-		if st2.Size() > 0 {
-			d, e := tfs.Read("f2")
-			if e != 0 || len(d) != int(st2.Size()) {
-				return "Read f2 failed", false
+	}
+	if ok1 {
+		if st1.Size() > 0 {
+			d, e := tfs.Read("f1")
+			if e != 0 || len(d) != int(st1.Size()) {
+				return "Read f1 failed", false
 			}
-			if uint8(d[0]) != 2 {
-				return fmt.Sprintf("Wrong data in f2 %v", d[0]), false
+			if uint8(d[0]) != 1 {
+				return fmt.Sprintf("Wrong data in f1 %v", d[0]), false
 			}
 		}
 	}
@@ -444,6 +448,7 @@ func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk s
 			copyDisk(disk, dst)
 			genDisk(trace, i, dst)
 			wg.Add(1)
+			// goroutine, but easier to read output file wo. goroutine
 			func(d string, trace trace_t) {
 				defer wg.Done()
 				tfs := BootFS(d)
@@ -468,7 +473,7 @@ func genTraces(trace trace_t, t *testing.T, disk string, apply bool) int {
 	index := 0
 	for index < len(trace) {
 		n := trace.findSync(index)
-		// fmt.Printf("traces starting from %d till %d\n", index, n)
+		fmt.Printf("traces starting from %d till %d\n", index, n)
 		so := make([]int, n-index)
 		for i := 0; i < len(so); i++ {
 			so[i] = i
