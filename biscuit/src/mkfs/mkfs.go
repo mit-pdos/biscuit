@@ -28,6 +28,7 @@ func copydata(src string, fs *ufs.Ufs_t, dst string) {
 		if n == 0 {
 			return
 		}
+		b = b[:n]
 		buf := ufs.MkBuf(b)
 		fs.Append(dst, buf)
 	}
