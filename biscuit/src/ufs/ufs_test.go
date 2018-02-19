@@ -262,7 +262,7 @@ func TestFSConcur(t *testing.T) {
 // Check traces for crash safety
 //
 
-const ndatablksordered = 10
+const ndatablksordered = 10 // small, to cause block reuse
 const norderedblks = ndatablksordered/2 + 1
 const natomicblks = 2
 
@@ -505,8 +505,6 @@ func genTraces(trace trace_t, t *testing.T, disk string, apply bool, check func(
 func produceTrace(disk string, t *testing.T, init func(*Ufs_t), run func(*Ufs_t, *testing.T)) {
 	fmt.Printf("produceTrace %v ...\n", disk)
 
-	// Creat a disk with an inial file system state
-	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	tfs := BootFS(disk)
 	init(tfs)
 	ShutdownFS(tfs)
@@ -530,15 +528,18 @@ func produceTrace(disk string, t *testing.T, init func(*Ufs_t), run func(*Ufs_t,
 func TestTracesAtomic(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
 	disk := "disk.img"
+	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	produceTrace(disk, t, doAtomicInit, doTestAtomic)
 	trace := readTrace("trace.json")
 	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
 	fmt.Printf("#traces = %v\n", cnt)
 }
 
+// XXX times out after 10min, checking 65K traces.  -timeout 0 doesn't work (apparently bug in go)
 func TestTracesOrdered(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
 	disk := "disk.img"
+	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablksordered)
 	produceTrace(disk, t, doOrderedInit, doTestOrdered)
 	trace := readTrace("trace.json")
 	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
