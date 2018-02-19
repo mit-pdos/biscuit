@@ -84,6 +84,26 @@ func (ufs *Ufs_t) Rename(oldp, newp string) common.Err_t {
 	return err
 }
 
+// update (XXX check that ub < len(file)?)
+func (ufs *Ufs_t) Update(p string, ub *common.Fakeubuf_t) common.Err_t {
+	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, common.Inum_t(0), 0, 0)
+	if err != 0 {
+		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
+	}
+	n, err := fd.Fops.Write(nil, ub)
+	if err != 0 || ub.Remain() != 0 {
+		fmt.Printf("Write %s failed %v %d\n", p, err, n)
+		return err
+	}
+
+	err = fd.Fops.Close()
+	if err != 0 {
+		fmt.Printf("Close %s failed %v\n", p, err)
+		return err
+	}
+	return err
+}
+
 func (ufs *Ufs_t) Append(p string, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {

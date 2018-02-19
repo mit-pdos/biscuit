@@ -338,7 +338,12 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 // check that f1 doesn't contain f2's data after recovery.  this could happen
 // for ordered writes to f2, if f2's ordered list is written before the commit
 // of the unlink of f1.  but ordered write for f2 is turned into a logged since
-// its first write (zero-ing) is a logged write.)
+// its first write (zero-ing) is a logged write.
+
+// No initial state
+func doOrderedInit(tfs *Ufs_t) {
+}
+
 func doTestOrdered(tfs *Ufs_t, t *testing.T) {
 	ub := mkData(1, common.BSIZE*norderedblks)
 	e := tfs.MkFile("f1", ub)
@@ -354,6 +359,12 @@ func doTestOrdered(tfs *Ufs_t, t *testing.T) {
 	e = tfs.MkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
+	}
+
+	ub = mkData(3, common.BSIZE*norderedblks)
+	e = tfs.Update("f2", ub)
+	if e != 0 {
+		t.Fatalf("Update %v failed", "f2")
 	}
 }
 
@@ -439,7 +450,8 @@ func genDisk(trace trace_t, crash int, dst string) {
 	}
 }
 
-func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk string, apply bool) int {
+func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk string,
+	apply bool, check func(*Ufs_t) (string, bool)) int {
 	for i := start; i <= end; i++ {
 		dst := "tmp" + strconv.Itoa(cnt) + ".img"
 		cnt++
@@ -452,7 +464,7 @@ func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk s
 			func(d string, trace trace_t) {
 				defer wg.Done()
 				tfs := BootFS(d)
-				s, ok := doCheckAtomic(tfs)
+				s, ok := check(tfs)
 				ShutdownFS(tfs)
 				os.Remove(d)
 				if !ok {
@@ -468,7 +480,7 @@ func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk s
 
 var wg sync.WaitGroup
 
-func genTraces(trace trace_t, t *testing.T, disk string, apply bool) int {
+func genTraces(trace trace_t, t *testing.T, disk string, apply bool, check func(*Ufs_t) (string, bool)) int {
 	cnt := 0
 	index := 0
 	for index < len(trace) {
@@ -482,7 +494,7 @@ func genTraces(trace trace_t, t *testing.T, disk string, apply bool) int {
 		subtrace := trace.copyTrace(index, n)
 		for _, o := range orders {
 			trace.permTrace(subtrace, index, o)
-			cnt = applyTrace(trace, index, n, cnt, t, disk, apply)
+			cnt = applyTrace(trace, index, n, cnt, t, disk, apply, check)
 		}
 		index = n + 1
 	}
@@ -490,13 +502,13 @@ func genTraces(trace trace_t, t *testing.T, disk string, apply bool) int {
 	return cnt
 }
 
-func produceTrace(disk string, t *testing.T) {
+func produceTrace(disk string, t *testing.T, init func(*Ufs_t), run func(*Ufs_t, *testing.T)) {
 	fmt.Printf("produceTrace %v ...\n", disk)
 
 	// Creat a disk with an inial file system state
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	tfs := BootFS(disk)
-	doAtomicInit(tfs)
+	init(tfs)
 	ShutdownFS(tfs)
 
 	// apply log
@@ -509,17 +521,26 @@ func produceTrace(disk string, t *testing.T) {
 	// Now start tracing
 	tfs = BootFS("tmp.img")
 	tfs.ahci.StartTrace()
-	doTestAtomic(tfs, t)
+	run(tfs, t)
 	tfs.fs.StopFS()
 
 	os.Remove("tmp.img")
 }
 
-func TestTraces(t *testing.T) {
+func TestTracesAtomic(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
 	disk := "disk.img"
-	produceTrace(disk, t)
+	produceTrace(disk, t, doAtomicInit, doTestAtomic)
 	trace := readTrace("trace.json")
-	cnt := genTraces(trace, t, disk, true)
+	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
+	fmt.Printf("#traces = %v\n", cnt)
+}
+
+func TestTracesOrdered(t *testing.T) {
+	fmt.Printf("testTraces ...\n")
+	disk := "disk.img"
+	produceTrace(disk, t, doOrderedInit, doTestOrdered)
+	trace := readTrace("trace.json")
+	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
 	fmt.Printf("#traces = %v\n", cnt)
 }
