@@ -190,7 +190,7 @@ func openDisk(d string) *ahci_disk_t {
 }
 
 func BootFS(dst string) *Ufs_t {
-	log.Printf("reboot and check %v ...\n", dst)
+	log.Printf("reboot %v ...\n", dst)
 	ufs := &Ufs_t{}
 	ufs.ahci = openDisk(dst)
 	_, ufs.fs = fs.StartFS(blockmem, ufs.ahci, c)

@@ -5,6 +5,7 @@ import "fmt"
 import "os"
 import "strconv"
 import "sync"
+import "io"
 
 import "common"
 import "fs"
@@ -265,6 +266,28 @@ const ndatablksordered = 10
 const nblksordered = ndatablksordered/2 + 1
 const natomicblks = 2
 
+func copyDisk(src, dst string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	if err != nil {
+		return err
+	}
+	//err = out.Sync()
+	//if err != nil {
+	//      return err
+	//}
+	return err
+}
+
 func doAtomicInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*2)
 	e := tfs.MkFile("f", ub)
@@ -385,23 +408,16 @@ func genOrders(blks []int) orders_t {
 }
 
 func genDisk(trace trace_t, crash int, dst string) {
-	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
-
-	// create initial state before tracing
-	tfs := BootFS(dst)
-	doAtomicInit(tfs)
-	ShutdownFS(tfs)
-
 	// apply trace
 	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
 	if err != nil {
 		panic(err)
 	}
-
+	trace.printTrace(0, crash)
 	for i := 0; i < crash; i++ {
 		r := trace[i]
 		if r.Cmd == "write" {
-			// log.Printf("update block %v\n", r.BlkNo)
+			fmt.Printf("update block %v\n", r.BlkNo)
 			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
 			buf := make([]byte, common.BSIZE)
 			for i, _ := range buf {
@@ -419,16 +435,16 @@ func genDisk(trace trace_t, crash int, dst string) {
 	}
 }
 
-func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, apply bool) int {
-	// trace.printTrace(0, len(trace))
+func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk string, apply bool) int {
 	for i := start; i <= end; i++ {
 		dst := "tmp" + strconv.Itoa(cnt) + ".img"
 		cnt++
 		// fmt.Printf("gen disk for running till entry %d\n", i)
 		if apply {
+			copyDisk(disk, dst)
 			genDisk(trace, i, dst)
 			wg.Add(1)
-			go func(d string, trace trace_t) {
+			func(d string, trace trace_t) {
 				defer wg.Done()
 				tfs := BootFS(d)
 				s, ok := doCheckAtomic(tfs)
@@ -447,7 +463,7 @@ func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, apply 
 
 var wg sync.WaitGroup
 
-func genTraces(trace trace_t, t *testing.T, apply bool) int {
+func genTraces(trace trace_t, t *testing.T, disk string, apply bool) int {
 	cnt := 0
 	index := 0
 	for index < len(trace) {
@@ -461,7 +477,7 @@ func genTraces(trace trace_t, t *testing.T, apply bool) int {
 		subtrace := trace.copyTrace(index, n)
 		for _, o := range orders {
 			trace.permTrace(subtrace, index, o)
-			cnt = applyTrace(trace, index, n, cnt, t, apply)
+			cnt = applyTrace(trace, index, n, cnt, t, disk, apply)
 		}
 		index = n + 1
 	}
@@ -469,29 +485,36 @@ func genTraces(trace trace_t, t *testing.T, apply bool) int {
 	return cnt
 }
 
-func produceTrace(t *testing.T) {
-	dst := "tmp.img"
-	fmt.Printf("produceTrace %v ...\n", dst)
+func produceTrace(disk string, t *testing.T) {
+	fmt.Printf("produceTrace %v ...\n", disk)
 
 	// Creat a disk with an inial file system state
-	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
-	tfs := BootFS(dst)
+	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
+	tfs := BootFS(disk)
 	doAtomicInit(tfs)
 	ShutdownFS(tfs)
 
+	// apply log
+	tfs = BootFS(disk)
+	ShutdownFS(tfs)
+
+	// now copy disk
+	copyDisk(disk, "tmp.img")
+
 	// Now start tracing
-	tfs = BootFS(dst)
+	tfs = BootFS("tmp.img")
 	tfs.ahci.StartTrace()
 	doTestAtomic(tfs, t)
 	tfs.fs.StopFS()
 
-	os.Remove(dst)
+	os.Remove("tmp.img")
 }
 
 func TestTraces(t *testing.T) {
 	fmt.Printf("testTraces ...\n")
-	produceTrace(t)
+	disk := "disk.img"
+	produceTrace(disk, t)
 	trace := readTrace("trace.json")
-	cnt := genTraces(trace, t, true)
+	cnt := genTraces(trace, t, disk, true)
 	fmt.Printf("#traces = %v\n", cnt)
 }
