@@ -397,42 +397,43 @@ func doCheckOrdered(tfs *Ufs_t) (string, bool) {
 	return "", true
 }
 
-func genOrder(blks []int, o order_t, r orders_t) orders_t {
+func genExt(blks []int, o order_t, r orders_t) orders_t {
 	if len(blks) == 0 {
-		// fmt.Printf("find order: %v\n", o)
-		r = append(r, o)
 		return r
 	}
-	// fmt.Printf("genOrder %v %v %v\n", blks, o, r)
+	//fmt.Printf("genExt %v %v %v\n", blks, o, r)
 	for i, v := range blks {
 		t := make([]int, len(blks))
 		copy(t, blks)
 		t = append(t[0:i], t[i+1:]...)
 		o1 := append(o, v)
-		r = genOrder(t, o1, r)
+		o2 := make([]int, len(o1))
+		copy(o2, o1)
+		r = append(r, o2)
+		r = genExt(t, o1, r)
 	}
 	return r
 }
 
-func genOrders(blks []int) orders_t {
+func genExtensions(blks []int) orders_t {
 	r := make(orders_t, 0)
 	o := make(order_t, 0)
-	r = genOrder(blks, o, r)
-	// fmt.Printf("r=%v\n", r)
+	r = append(r, []int{})
+	r = genExt(blks, o, r)
+	fmt.Printf("#extensions: %d\n", len(r))
 	return r
 }
 
-func genDisk(trace trace_t, crash int, dst string) {
+func genDisk(trace trace_t, dst string) {
 	// apply trace
 	f, err := os.OpenFile(dst, os.O_RDWR, 0755)
 	if err != nil {
 		panic(err)
 	}
-	trace.printTrace(0, crash)
-	for i := 0; i < crash; i++ {
+	for i := 0; i < len(trace); i++ {
 		r := trace[i]
 		if r.Cmd == "write" {
-			fmt.Printf("update block %v\n", r.BlkNo)
+			// fmt.Printf("update block %v\n", r.BlkNo)
 			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
 			buf := make([]byte, common.BSIZE)
 			for i, _ := range buf {
@@ -450,32 +451,23 @@ func genDisk(trace trace_t, crash int, dst string) {
 	}
 }
 
-func applyTrace(trace trace_t, start int, end int, cnt int, t *testing.T, disk string,
-	apply bool, check func(*Ufs_t) (string, bool)) int {
-	for i := start; i <= end; i++ {
-		dst := "tmp" + strconv.Itoa(cnt) + ".img"
-		cnt++
-		// fmt.Printf("gen disk for running till entry %d\n", i)
-		if apply {
-			copyDisk(disk, dst)
-			genDisk(trace, i, dst)
-			wg.Add(1)
-			// goroutine, but easier to read output file wo. goroutine
-			func(d string, trace trace_t) {
-				defer wg.Done()
-				tfs := BootFS(d)
-				s, ok := check(tfs)
-				ShutdownFS(tfs)
-				os.Remove(d)
-				if !ok {
-					fmt.Printf("failed on disk %s\n", dst)
-					trace.printTrace(0, len(trace))
-					panic(s)
-				}
-			}(dst, trace.copyTrace(0, i))
+func applyTrace(trace trace_t, cnt int, t *testing.T, disk string, check func(*Ufs_t) (string, bool)) {
+	dst := "tmp" + strconv.Itoa(cnt) + ".img"
+	copyDisk(disk, dst)
+	genDisk(trace, dst)
+	wg.Add(1)
+	go func(d string, trace trace_t) {
+		defer wg.Done()
+		tfs := BootFS(d)
+		s, ok := check(tfs)
+		ShutdownFS(tfs)
+		os.Remove(d)
+		if !ok {
+			fmt.Printf("failed on disk %s\n", dst)
+			trace.printTrace(0, len(trace))
+			panic(s)
 		}
-	}
-	return cnt
+	}(dst, trace)
 }
 
 var wg sync.WaitGroup
@@ -485,16 +477,26 @@ func genTraces(trace trace_t, t *testing.T, disk string, apply bool, check func(
 	index := 0
 	for index < len(trace) {
 		n := trace.findSync(index)
-		fmt.Printf("traces starting from %d till %d\n", index, n)
+		fmt.Printf("Extensions starting from %d till %d\n", index, n)
 		so := make([]int, n-index)
 		for i := 0; i < len(so); i++ {
 			so[i] = i
 		}
-		orders := genOrders(so)
-		subtrace := trace.copyTrace(index, n)
-		for _, o := range orders {
-			trace.permTrace(subtrace, index, o)
-			cnt = applyTrace(trace, index, n, cnt, t, disk, apply, check)
+		extensions := genExtensions(so)
+		ngo := 0
+		for _, e := range extensions {
+			// fmt.Printf("Ext: %v\n", e)
+			tc := trace.permTrace(index, e)
+			// tc.printTrace(0, len(tc))
+			if apply {
+				applyTrace(tc, cnt, t, disk, check)
+				ngo++
+				if ngo%100 == 0 { // don't get more than 100 disks ahead
+					wg.Wait()
+					ngo -= 100
+				}
+			}
+			cnt++
 		}
 		index = n + 1
 	}

@@ -90,11 +90,13 @@ func (trace trace_t) copyTrace(start int, end int) trace_t {
 	return sub
 }
 
-func (trace trace_t) permTrace(sub trace_t, index int, o order_t) {
+func (trace trace_t) permTrace(index int, o order_t) trace_t {
+	new := trace.copyTrace(0, index+len(o))
 	for i, j := range o {
-		trace[index+i] = sub[j]
+		new[index+i] = trace[index+j]
 
 	}
+	return new
 }
 
 func (t *tracef_t) write(n int, v *common.Bytepg_t) {
