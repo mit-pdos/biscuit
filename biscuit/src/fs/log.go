@@ -401,7 +401,7 @@ func (log *log_t) commit() {
 	}
 
 	lh := logheader_t{headblk.Data}
-	blks := make([]*common.Bdev_block_t, newblks)
+	blks := list.New()
 
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
@@ -415,14 +415,15 @@ func (log *log_t) commit() {
 		}
 		copy(b.Data[:], l.Data[:])
 		b.Unlock()
-		blks[i-log.diskhead] = b
+		blks.PushBack(b)
 	}
 
 	lh.w_recovernum(log.memhead)
 
 	// write blocks to log in batch
 	log.bcache.Write_async_blks(blks)
-	for _, b := range blks {
+	for e := blks.Front(); e != nil; e = e.Next() {
+		b := e.Value.(*common.Bdev_block_t)
 		log.bcache.Relse(b, "writelog")
 	}
 
@@ -436,7 +437,7 @@ func (log *log_t) commit() {
 
 	log.nblkcommitted += newblks
 
-	if newblks != len(blks) {
+	if newblks != blks.Len() {
 		panic("xxx")
 	}
 

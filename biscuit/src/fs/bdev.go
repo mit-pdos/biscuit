@@ -2,6 +2,7 @@ package fs
 
 import "fmt"
 import "strconv"
+import "container/list"
 
 import "common"
 
@@ -117,17 +118,20 @@ func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
 }
 
 // blks must be contiguous on disk
-func (bcache *bcache_t) Write_async_blks(blks []*common.Bdev_block_t) {
+func (bcache *bcache_t) Write_async_blks(blks *list.List) {
 	if bdev_debug {
-		fmt.Printf("bcache_write_async_blks %v\n", len(blks))
+		fmt.Printf("bcache_write_async_blks %v\n", blks.Len())
 	}
-	if len(blks) == 0 {
+	if blks.Len() == 0 {
 		panic("bcache_write_async_blks\n")
 	}
-	n := blks[0].Block - 1
-	for _, b := range blks {
+	fb := blks.Front().Value.(*common.Bdev_block_t)
+	n := fb.Block
+	for e := blks.Front(); e != nil; e = e.Next() {
 		// sanity check
-		if b.Block != n+1 {
+		b := e.Value.(*common.Bdev_block_t)
+		if b.Block != n {
+			fmt.Printf("%d %d\n", b.Block, n)
 			panic("not contiguous\n")
 		}
 		n++
@@ -135,7 +139,7 @@ func (bcache *bcache_t) Write_async_blks(blks []*common.Bdev_block_t) {
 	}
 	// one request for all blks
 	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
-	blks[0].Disk.Start(ider)
+	fb.Disk.Start(ider)
 }
 
 func (bcache *bcache_t) Refup(b *common.Bdev_block_t, s string) {

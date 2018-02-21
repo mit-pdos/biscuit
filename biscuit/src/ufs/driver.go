@@ -27,21 +27,23 @@ func (ahci *ahci_disk_t) Seek(o int) {
 func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 	switch req.Cmd {
 	case common.BDEV_READ:
-		if len(req.Blks) != 1 {
+		if req.Blks.Len() != 1 {
 			panic("read: too many blocks")
 		}
-		ahci.Seek(req.Blks[0].Block * common.BSIZE)
+		blk := req.Blks.Front().Value.(*common.Bdev_block_t)
+		ahci.Seek(blk.Block * common.BSIZE)
 		b := make([]byte, common.BSIZE)
 		n, err := ahci.f.Read(b)
 		if n != common.BSIZE || err != nil {
 			panic(err)
 		}
-		req.Blks[0].Data = &common.Bytepg_t{}
+		blk.Data = &common.Bytepg_t{}
 		for i, _ := range b {
-			req.Blks[0].Data[i] = uint8(b[i])
+			blk.Data[i] = uint8(b[i])
 		}
 	case common.BDEV_WRITE:
-		for _, b := range req.Blks {
+		for e := req.Blks.Front(); e != nil; e = e.Next() {
+			b := e.Value.(*common.Bdev_block_t)
 			ahci.Seek(b.Block * common.BSIZE)
 			buf := make([]byte, common.BSIZE)
 			for i, _ := range buf {

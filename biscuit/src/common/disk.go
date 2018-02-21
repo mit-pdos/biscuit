@@ -2,6 +2,7 @@ package common
 
 import "sync"
 import "fmt"
+import "container/list"
 
 const bdev_debug = false
 
@@ -39,12 +40,12 @@ const (
 
 type Bdev_req_t struct {
 	Cmd   Bdevcmd_t
-	Blks  []*Bdev_block_t
+	Blks  *list.List
 	AckCh chan bool
 	Sync  bool
 }
 
-func MkRequest(blks []*Bdev_block_t, cmd Bdevcmd_t, sync bool) *Bdev_req_t {
+func MkRequest(blks *list.List, cmd Bdevcmd_t, sync bool) *Bdev_req_t {
 	ret := &Bdev_req_t{}
 	ret.Blks = blks
 	ret.AckCh = make(chan bool)
@@ -86,7 +87,9 @@ func (b *Bdev_block_t) Write() {
 	if b.Data[0] == 0xc && b.Data[1] == 0xc { // XXX check
 		panic("write\n")
 	}
-	req := MkRequest([]*Bdev_block_t{b}, BDEV_WRITE, true)
+	l := list.New()
+	l.PushBack(b)
+	req := MkRequest(l, BDEV_WRITE, true)
 	if b.Disk.Start(req) {
 		<-req.AckCh
 	}
@@ -99,12 +102,16 @@ func (b *Bdev_block_t) Write_async() {
 	// if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 	//	panic("write_async\n")
 	//}
-	ider := MkRequest([]*Bdev_block_t{b}, BDEV_WRITE, false)
+	l := list.New()
+	l.PushBack(b)
+	ider := MkRequest(l, BDEV_WRITE, false)
 	b.Disk.Start(ider)
 }
 
 func (b *Bdev_block_t) Read() {
-	ider := MkRequest([]*Bdev_block_t{b}, BDEV_READ, true)
+	l := list.New()
+	l.PushBack(b)
+	ider := MkRequest(l, BDEV_READ, true)
 	if b.Disk.Start(ider) {
 		<-ider.AckCh
 	}
