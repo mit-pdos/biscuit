@@ -78,6 +78,17 @@ func (bl *BlkList_t) BackBlock() *Bdev_block_t {
 	}
 }
 
+func (bl *BlkList_t) RemoveBlock(block int) {
+	var next *list.Element
+	for e := bl.l.Front(); e != nil; e = next {
+		next = e.Next()
+		b := e.Value.(*Bdev_block_t)
+		if b.Block == block {
+			bl.l.Remove(e)
+		}
+	}
+}
+
 func (bl *BlkList_t) NextBlock() *Bdev_block_t {
 	if bl.e == nil {
 		return nil
@@ -104,6 +115,14 @@ func (bl *BlkList_t) Print() {
 func (bl *BlkList_t) Append(l *BlkList_t) {
 	for b := l.FrontBlock(); b != nil; b = l.NextBlock() {
 		bl.PushBack(b)
+	}
+}
+
+func (bl *BlkList_t) Delete() {
+	var next *list.Element
+	for e := bl.l.Front(); e != nil; e = next {
+		next = e.Next()
+		bl.l.Remove(e)
 	}
 }
 

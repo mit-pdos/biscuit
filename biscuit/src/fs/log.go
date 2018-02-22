@@ -2,7 +2,6 @@ package fs
 
 import "fmt"
 import "strconv"
-import "container/list"
 
 import "common"
 
@@ -32,7 +31,7 @@ type log_t struct {
 	log            []*common.Bdev_block_t       // in-memory log
 	logpresent     map[int]bool                 // enable quick check to see if block is in log
 	absorb         map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
-	ordered        *list.List                   // list of ordered blocks
+	ordered        *common.BlkList_t            // list of ordered blocks
 	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
 	memhead        int                          // head of the log in memory
 	diskhead       int                          // head of the log on disk
@@ -226,7 +225,7 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
 	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen) // XXX bounded by len ordered list?
-	log.ordered = list.New()                                    // XXX bounded by cache size?
+	log.ordered = common.MkBlkList()                            // XXX bounded by cache size?
 	log.orderedpresent = make(map[int]bool)                     // XXX bounded by len ordered list
 	log.incoming = make(chan buf_t)
 	log.admission = make(chan bool)
@@ -273,19 +272,8 @@ func (log *log_t) addlog(buf buf_t) {
 
 	_, presentordered := log.orderedpresent[buf.block.Block]
 	if !buf.ordered && presentordered {
-		// XXX maybe orderedpresent should keep track of index in log.ordered
-		// XXX test case: alloc b for f, write b, unlink f, grow dir with b, and write b
-		var next *list.Element
-		for e := log.ordered.Front(); e != nil; e = next {
-			next = e.Next()
-			b := e.Value.(*common.Bdev_block_t)
-			if b.Block == buf.block.Block {
-				if log_debug {
-					fmt.Printf("remove %v from ordered\n", b.Block)
-				}
-				log.ordered.Remove(e)
-			}
-		}
+		// XXX maybe orderedpresent should keep track of list element
+		log.ordered.RemoveBlock(buf.block.Block)
 		delete(log.orderedpresent, buf.block.Block)
 		delete(log.absorb, buf.block.Block)
 	}
@@ -360,15 +348,11 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 
 func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
-
-	var next *list.Element
-	for e := log.ordered.Front(); e != nil; e = next {
-		next = e.Next()
-		b := e.Value.(*common.Bdev_block_t)
+	for b := log.ordered.FrontBlock(); b != nil; b = log.ordered.NextBlock() {
 		log.bcache.Write_async(b)
 		log.bcache.Relse(b, "writeordered")
-		log.ordered.Remove(e)
 	}
+	log.ordered.Delete()
 	log.orderedpresent = make(map[int]bool)
 }
 
