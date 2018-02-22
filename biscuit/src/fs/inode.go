@@ -211,13 +211,6 @@ func (idm *imemnode_t) Evict() {
 	}
 }
 
-func (idm *imemnode_t) Evictnow() bool {
-	idm.Lock()
-	r := idm.links == 0
-	idm.Unlock()
-	return r
-}
-
 func (idm *imemnode_t) ilock(s string) {
 	// if idm._amlocked {
 	//	fmt.Printf("ilocked: warning %v %v\n", idm.inum, s)
@@ -1021,15 +1014,43 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	refcache *refcache_t
-	fs       *Fs_t
+	refcache     *refcache_t
+	fs           *Fs_t
+	idaemon_chan chan (bool)
 }
 
 func mkIcache(fs *Fs_t) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
+	icache.idaemon_chan = make(chan bool)
+	go icache.idaemon()
 	return icache
+}
+
+func (icache *icache_t) idaemon() {
+	for {
+		flush := <-icache.idaemon_chan
+		if !flush {
+			return
+		}
+		icache.refcache.Flush()
+	}
+}
+
+func (icache *icache_t) stop() {
+	icache.idaemon_chan <- false
+}
+
+func (icache *icache_t) flush() {
+	icache.idaemon_chan <- true
+}
+
+func (icache *icache_t) flushcheck() {
+	// any system need more than 4 inodes?
+	if icache.refcache.Unused() < 4 {
+		icache.flush()
+	}
 }
 
 func (icache *icache_t) Stats() string {

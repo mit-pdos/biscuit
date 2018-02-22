@@ -3,18 +3,18 @@ package fs
 import "fmt"
 import "sync"
 import "common"
+import "container/list"
 
 // Fixed-size cache of objects. Main invariant: an object is in memory once so
 // that threads see each other's updates.  An object can be evicted only when no
 // thread has a reference to the object.
 
 const refcache_debug = false
-const always_eager = false
+const always_eager = false // for testing
 
 // Objects in the cache must support the following interface:
 type obj_t interface {
 	Evict()
-	Evictnow() bool
 	Key() int
 }
 
@@ -35,7 +35,7 @@ type refcache_t struct {
 	maxsize     int
 	refs        map[int]*ref_t // XXX use fsrb.go instead?
 	reflru      reflru_t
-	evict_async bool
+	evict_async bool // the caller needs to call Flush or evict on Lookup
 
 	// stats
 	nevict int
@@ -70,8 +70,8 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 	}
 
 	var victim obj_t
-	if len(irc.refs) >= irc.maxsize {
-		victim = irc._replace()
+	if !irc.evict_async && len(irc.refs) >= irc.maxsize {
+		victim = irc.replace()
 		if victim == nil {
 			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
 			irc.Unlock()
@@ -97,10 +97,14 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, common.Err_t) {
 
 	// release cache lock, now free victim
 	if victim != nil {
-		irc.doevict(victim)
+		victim.Evict()
 	}
 
 	return ref, 0
+}
+
+func (irc *refcache_t) Unused() int {
+	return irc.maxsize - len(irc.refs)
 }
 
 func (irc *refcache_t) Refup(o obj_t, s string) {
@@ -141,7 +145,7 @@ func (irc *refcache_t) Refdown(o obj_t, s string) {
 
 	var victim obj_t
 	if ref.refcnt == 0 {
-		if ref.obj.Evictnow() || always_eager {
+		if !irc.evict_async && always_eager {
 			irc._delete(ref)
 			victim = ref.obj
 		}
@@ -150,7 +154,33 @@ func (irc *refcache_t) Refdown(o obj_t, s string) {
 	defer irc.Unlock()
 
 	if victim != nil {
-		irc.doevict(victim)
+		victim.Evict()
+	}
+}
+
+// flush object with refcnt 0
+func (irc *refcache_t) Flush() {
+	rl := list.New()
+
+	irc.Lock()
+	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
+		// fmt.Printf("%v %v %s\n", ir.key, ir.refcnt, ir.s)
+		if ir.refcnt == 0 {
+			if refcache_debug {
+				fmt.Printf("_replace: victim %v %v\n", ir.key, ir.s)
+			}
+			irc._delete(ir)
+			rl.PushBack(ir)
+		}
+	}
+	irc.Lock()
+
+	// Now evict them
+	for e := rl.Front(); e != nil; e = e.Next() {
+		r := e.Value.(*ref_t)
+		rl.Remove(e)
+		r.obj.Evict()
+
 	}
 }
 
@@ -174,7 +204,7 @@ func (irc *refcache_t) _delete(ir *ref_t) {
 	irc.nevict++
 }
 
-func (irc *refcache_t) _replace() obj_t {
+func (irc *refcache_t) replace() obj_t {
 	for ir := irc.reflru.tail; ir != nil; ir = ir.refprev {
 		// fmt.Printf("%v %v %s\n", ir.key, ir.refcnt, ir.s)
 		if ir.refcnt == 0 {
@@ -186,14 +216,6 @@ func (irc *refcache_t) _replace() obj_t {
 		}
 	}
 	return nil
-}
-
-func (irc *refcache_t) doevict(victim obj_t) {
-	if irc.evict_async {
-		go victim.Evict()
-	} else {
-		victim.Evict()
-	}
 }
 
 // LRU list of references
