@@ -30,7 +30,7 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 		if req.Blks.Len() != 1 {
 			panic("read: too many blocks")
 		}
-		blk := req.Blks.Front().Value.(*common.Bdev_block_t)
+		blk := req.Blks.FrontBlock()
 		ahci.Seek(blk.Block * common.BSIZE)
 		b := make([]byte, common.BSIZE)
 		n, err := ahci.f.Read(b)
@@ -42,8 +42,7 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 			blk.Data[i] = uint8(b[i])
 		}
 	case common.BDEV_WRITE:
-		for e := req.Blks.Front(); e != nil; e = e.Next() {
-			b := e.Value.(*common.Bdev_block_t)
+		for b := req.Blks.FrontBlock(); b != nil; b = req.Blks.NextBlock() {
 			ahci.Seek(b.Block * common.BSIZE)
 			buf := make([]byte, common.BSIZE)
 			for i, _ := range buf {

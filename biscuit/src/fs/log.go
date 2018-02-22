@@ -401,7 +401,7 @@ func (log *log_t) commit() {
 	}
 
 	lh := logheader_t{headblk.Data}
-	blks := list.New()
+	blks := common.MkBlkList()
 
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
@@ -422,8 +422,7 @@ func (log *log_t) commit() {
 
 	// write blocks to log in batch
 	log.bcache.Write_async_blks(blks)
-	for e := blks.Front(); e != nil; e = e.Next() {
-		b := e.Value.(*common.Bdev_block_t)
+	for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
 		log.bcache.Relse(b, "writelog")
 	}
 

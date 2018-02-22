@@ -38,14 +38,83 @@ const (
 	BDEV_FLUSH           = 3
 )
 
+// A wrapper around List for blocks
+type BlkList_t struct {
+	l *list.List
+	e *list.Element // iterator
+}
+
+func PrintBlkList() {
+}
+
+func MkBlkList() *BlkList_t {
+	bl := &BlkList_t{}
+	bl.l = list.New()
+	return bl
+}
+
+func (bl *BlkList_t) Len() int {
+	return bl.l.Len()
+}
+
+func (bl *BlkList_t) PushBack(b *Bdev_block_t) {
+	bl.l.PushBack(b)
+}
+
+func (bl *BlkList_t) FrontBlock() *Bdev_block_t {
+	if bl.l.Front() == nil {
+		return nil
+	} else {
+		bl.e = bl.l.Front()
+		return bl.e.Value.(*Bdev_block_t)
+	}
+}
+
+func (bl *BlkList_t) BackBlock() *Bdev_block_t {
+	if bl.l.Back() == nil {
+		panic("bl.Front")
+	} else {
+		return bl.l.Back().Value.(*Bdev_block_t)
+	}
+}
+
+func (bl *BlkList_t) NextBlock() *Bdev_block_t {
+	if bl.e == nil {
+		return nil
+	} else {
+		bl.e = bl.e.Next()
+		if bl.e == nil {
+			return nil
+		}
+		return bl.e.Value.(*Bdev_block_t)
+	}
+}
+
+func (bl *BlkList_t) Apply(f func(*Bdev_block_t)) {
+	for b := bl.FrontBlock(); b != nil; b = bl.NextBlock() {
+		f(b)
+	}
+}
+func (bl *BlkList_t) Print() {
+	bl.Apply(func(b *Bdev_block_t) {
+		fmt.Printf("b %v\n", b)
+	})
+}
+
+func (bl *BlkList_t) Append(l *BlkList_t) {
+	for b := l.FrontBlock(); b != nil; b = l.NextBlock() {
+		bl.PushBack(b)
+	}
+}
+
 type Bdev_req_t struct {
 	Cmd   Bdevcmd_t
-	Blks  *list.List
+	Blks  *BlkList_t
 	AckCh chan bool
 	Sync  bool
 }
 
-func MkRequest(blks *list.List, cmd Bdevcmd_t, sync bool) *Bdev_req_t {
+func MkRequest(blks *BlkList_t, cmd Bdevcmd_t, sync bool) *Bdev_req_t {
 	ret := &Bdev_req_t{}
 	ret.Blks = blks
 	ret.AckCh = make(chan bool)
@@ -87,7 +156,7 @@ func (b *Bdev_block_t) Write() {
 	if b.Data[0] == 0xc && b.Data[1] == 0xc { // XXX check
 		panic("write\n")
 	}
-	l := list.New()
+	l := MkBlkList()
 	l.PushBack(b)
 	req := MkRequest(l, BDEV_WRITE, true)
 	if b.Disk.Start(req) {
@@ -102,14 +171,14 @@ func (b *Bdev_block_t) Write_async() {
 	// if b.data[0] == 0xc && b.data[1] == 0xc {  // XXX check
 	//	panic("write_async\n")
 	//}
-	l := list.New()
+	l := MkBlkList()
 	l.PushBack(b)
 	ider := MkRequest(l, BDEV_WRITE, false)
 	b.Disk.Start(ider)
 }
 
 func (b *Bdev_block_t) Read() {
-	l := list.New()
+	l := MkBlkList()
 	l.PushBack(b)
 	ider := MkRequest(l, BDEV_READ, true)
 	if b.Disk.Start(ider) {

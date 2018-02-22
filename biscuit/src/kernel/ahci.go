@@ -7,7 +7,6 @@ import "sync/atomic"
 import "unsafe"
 import "strconv"
 import "container/list"
-import "reflect"
 
 import "common"
 
@@ -696,12 +695,11 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
-func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *list.List) uint64 {
+func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *common.BlkList_t) uint64 {
 	nbytes := uint64(0)
 	cmd := &p.cmdt[cmdslot]
 	slot := 0
-	for e := blks.Front(); e != nil; e = e.Next() {
-		blk := e.Value.(*common.Bdev_block_t)
+	for blk := blks.FrontBlock(); blk != nil; blk = blks.NextBlock() {
 		ST64(&cmd.prdt[slot].dba, uint64(blk.Pa))
 		l := len(blk.Data)
 		if l != BSIZE {
@@ -717,11 +715,11 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *list.List) uint64 {
 }
 
 func (p *ahci_port_t) fill_prd(cmdslot int, b *common.Bdev_block_t) {
-	l := list.New()
+	bl := common.MkBlkList()
 	if b != nil {
-		l.PushBack(b)
+		bl.PushBack(b)
 	}
-	p.fill_prd_v(cmdslot, l)
+	p.fill_prd_v(cmdslot, bl)
 }
 
 func (p *ahci_port_t) find_slot() (int, bool) {
@@ -769,27 +767,19 @@ func (p *ahci_port_t) queuemgr() {
 func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 	ok := false
 	for e := p.queued.Front(); e != nil; e = e.Next() {
-		xx := &common.Bdev_req_t{}
-		if reflect.TypeOf(e.Value) != reflect.TypeOf(xx) {
-			fmt.Printf("v %v\n", reflect.TypeOf(e.Value))
-		}
 		r := e.Value.(*common.Bdev_req_t)
 		if r.Blks.Len() == 0 {
 			continue
 		}
-		elast := r.Blks.Back()
-		last := elast.Value.(*common.Bdev_block_t)
+		last := r.Blks.BackBlock()
 		if req.Blks != nil {
-			efirst := req.Blks.Front()
-			first := efirst.Value.(*common.Bdev_block_t)
+			first := req.Blks.FrontBlock()
 			if first.Block == last.Block+1 {
 				if ahci_debug {
 					fmt.Printf("collapse %d %d %d\n", first.Block, last.Block, r.Blks.Len())
 				}
 				p.ncoalesce++
-				for f := req.Blks.Front(); f != nil; f = f.Next() {
-					r.Blks.PushBack(f.Value)
-				}
+				r.Blks.Append(req.Blks)
 				ok = true
 				break
 			}
@@ -860,7 +850,7 @@ func (p *ahci_port_t) startslot(req *common.Bdev_req_t, s int) {
 }
 
 // blks must be contiguous on disk (but not necessarily in memory)
-func (p *ahci_port_t) issue(s int, blks *list.List, cmd uint8) {
+func (p *ahci_port_t) issue(s int, blks *common.BlkList_t, cmd uint8) {
 	fis := &sata_fis_reg_h2d{}
 	fis.fis_type = SATA_FIS_TYPE_REG_H2D
 	fis.cflag = SATA_FIS_REG_CFLAG
@@ -889,9 +879,7 @@ func (p *ahci_port_t) issue(s int, blks *list.List, cmd uint8) {
 	if blks == nil {
 		bn = uint64(0)
 	} else {
-		e := blks.Front()
-		blk := e.Value.(*common.Bdev_block_t)
-		bn = uint64(blk.Block)
+		bn = uint64(blks.FrontBlock().Block)
 	}
 	sector_offset := bn * uint64(BSIZE/512)
 	fis.lba_0 = uint8((sector_offset >> 0) & 0xff)
@@ -997,10 +985,9 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 			if p.inflight[s].Cmd == common.BDEV_WRITE {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
-				for e := p.inflight[s].Blks.Front(); e != nil; e = e.Next() {
-					blk := e.Value.(*common.Bdev_block_t)
-					blk.Done("interrupt")
-				}
+				p.inflight[s].Blks.Apply(func(b *common.Bdev_block_t) {
+					b.Done("interrupt")
+				})
 			}
 			if p.inflight[s].Sync {
 				if ahci_debug {

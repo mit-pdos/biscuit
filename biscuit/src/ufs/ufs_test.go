@@ -17,7 +17,7 @@ const (
 const (
 	nlogblks   = 32
 	ninodeblks = 1
-	ndatablks  = 10
+	ndatablks  = 20
 )
 
 func doTestSimple(tfs *Ufs_t, d string) string {
