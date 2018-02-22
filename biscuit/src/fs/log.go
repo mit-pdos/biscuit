@@ -348,10 +348,10 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 
 func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
-	for b := log.ordered.FrontBlock(); b != nil; b = log.ordered.NextBlock() {
+	log.ordered.Apply(func(b *common.Bdev_block_t) {
 		log.bcache.Write_async(b)
 		log.bcache.Relse(b, "writeordered")
-	}
+	})
 	log.ordered.Delete()
 	log.orderedpresent = make(map[int]bool)
 }
@@ -406,9 +406,9 @@ func (log *log_t) commit() {
 
 	// write blocks to log in batch
 	log.bcache.Write_async_blks(blks)
-	for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
+	blks.Apply(func(b *common.Bdev_block_t) {
 		log.bcache.Relse(b, "writelog")
-	}
+	})
 
 	log.write_ordered()
 
