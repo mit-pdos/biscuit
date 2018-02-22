@@ -476,6 +476,70 @@ func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
 	return talive
 }
 
+// returns true if the memory reservation succeeded. returns false if this
+// process has been killed and should terminate using the reserved exit memory.
+func (p *Proc_t) Resbegin(c int) bool {
+	return p._reswait(c, false)
+}
+
+func (p *Proc_t) Resadd(c int) bool {
+	return p._reswait(c, true)
+}
+
+func (p *Proc_t) _reswait(c int, incremental bool) bool {
+	f := runtime.Memreserve
+	if incremental {
+		f = runtime.Memresadd
+	}
+	for !f(c) {
+		if p.Doomed() {
+			// XXX exit heap memory/block cache pages reservation
+			fmt.Printf("Slain!\n")
+			return false
+		}
+		fmt.Printf("%v: Wait for memory hog to die...\n", p.Name)
+		time.Sleep(1)
+	}
+	return true
+}
+
+func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) bool {
+	fastret := false
+	switch intno {
+	case SYSCALL:
+		// fast return doesn't restore the registers used to
+		// specify the arguments for libc _entry(), so do a
+		// slow return when returning from sys_execv().
+		sysno := tf[TF_RAX]
+		if sysno != SYS_EXECV {
+			fastret = true
+		}
+		tf[TF_RAX] = uintptr(p.syscall.Syscall(p, tid, tf))
+	case TIMER:
+		//fmt.Printf(".")
+		runtime.Gosched()
+	case PGFAULT:
+		faultaddr := uintptr(aux)
+		if !p.pgfault(tid, faultaddr, tf[TF_ERROR]) {
+			fmt.Printf("*** fault *** %v: addr %x, "+
+				"rip %x. killing...\n", p.Name, faultaddr,
+				tf[TF_RIP])
+			p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(11))
+		}
+	case DIVZERO, GPFAULT, UD:
+		fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.Name, intno,
+			tf[TF_RIP])
+		p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(4))
+	case TLBSHOOT, PERFMASK, INT_KBD, INT_COM1, INT_MSI0,
+		INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6,
+		INT_MSI7:
+		// XXX: shouldn't interrupt user program execution...
+	default:
+		panic(fmt.Sprintf("weird trap: %d", intno))
+	}
+	return fastret
+}
+
 func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 	p.Threadi.Lock()
 	mynote, ok := p.Threadi.Notes[tid]
@@ -486,56 +550,36 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		panic("note must exist")
 	}
 
+	var fxbuf *[64]uintptr
+	const runonly = 14 << 10
+	if p.Resbegin(runonly) {
+		// could allocate fxbuf lazily
+		fxbuf = p.mkfxbuf()
+	}
+
 	fastret := false
-	// could allocate fxbuf lazily
-	fxbuf := p.mkfxbuf()
 	for p.resched(tid, mynote) {
 		// for fast syscalls, we restore little state. thus we must
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
 		refp, _ := _refaddr(p.P_pmap)
+		runtime.Memunres()
+
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 			uintptr(p.P_pmap), fastret, refp)
-		fastret = false
-		switch intno {
-		case SYSCALL:
-			// fast return doesn't restore the registers used to
-			// specify the arguments for libc _entry(), so do a
-			// slow return when returning from sys_execv().
-			sysno := tf[TF_RAX]
-			if sysno != SYS_EXECV {
-				fastret = true
-			}
-			tf[TF_RAX] = uintptr(p.syscall.Syscall(p, tid, tf))
-		case TIMER:
-			//fmt.Printf(".")
-			runtime.Gosched()
-		case PGFAULT:
-			faultaddr := uintptr(aux)
-			if !p.pgfault(tid, faultaddr, tf[TF_ERROR]) {
-				fmt.Printf("*** fault *** %v: addr %x, "+
-					"rip %x. killing...\n", p.Name, faultaddr,
-					tf[TF_RIP])
-				p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(11))
-			}
-		case DIVZERO, GPFAULT, UD:
-			fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.Name, intno,
-				tf[TF_RIP])
-			p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(4))
-		case TLBSHOOT, PERFMASK, INT_KBD, INT_COM1, INT_MSI0,
-			INT_MSI1, INT_MSI2, INT_MSI3, INT_MSI4, INT_MSI5, INT_MSI6,
-			INT_MSI7:
-			// XXX: shouldn't interrupt user program execution...
-		default:
-			panic(fmt.Sprintf("weird trap: %d", intno))
+
+		if p.Resbegin(runonly) {
+			fastret = p.trap_proc(tf, tid, intno, aux)
 		}
+
 		// did we switch pmaps? if so, the old pmap may need to be
 		// freed.
 		if odec {
 			Physmem.Dec_pmap(Pa_t(op_pmap))
 		}
 	}
+	runtime.Memunres()
 	Tid_del()
 }
 

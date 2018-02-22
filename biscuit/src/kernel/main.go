@@ -837,7 +837,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
-
+			runtime.Printres = !runtime.Printres
 		} else if c == '%' {
 			//loping()
 			//netdump()

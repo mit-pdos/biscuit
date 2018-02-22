@@ -13,6 +13,70 @@ import "unsafe"
 import "common"
 import "fs"
 
+var _sysbounds = map[int]int{
+	common.SYS_READ:       common.Bounds(common.B_SYS_READ),
+	common.SYS_WRITE:      common.Bounds(common.B_SYS_WRITE),
+	common.SYS_OPEN:       common.Bounds(common.B_SYS_OPEN),
+	common.SYS_CLOSE:      common.Bounds(common.B_SYSCALL_T_SYS_CLOSE),
+	common.SYS_STAT:       common.Bounds(common.B_SYS_STAT),
+	common.SYS_FSTAT:      common.Bounds(common.B_SYS_FSTAT),
+	common.SYS_POLL:       common.Bounds(common.B_SYS_POLL),
+	common.SYS_LSEEK:      common.Bounds(common.B_SYS_LSEEK),
+	common.SYS_MMAP:       common.Bounds(common.B_SYS_MMAP),
+	common.SYS_MUNMAP:     common.Bounds(common.B_SYS_MUNMAP),
+	common.SYS_SIGACT:     common.Bounds(common.B_SYS_SIGACTION),
+	common.SYS_READV:      common.Bounds(common.B_SYS_READV),
+	common.SYS_WRITEV:     common.Bounds(common.B_SYS_WRITEV),
+	common.SYS_ACCESS:     common.Bounds(common.B_SYS_ACCESS),
+	common.SYS_DUP2:       common.Bounds(common.B_SYS_DUP2),
+	common.SYS_PAUSE:      common.Bounds(common.B_SYS_PAUSE),
+	common.SYS_GETPID:     common.Bounds(common.B_SYS_GETPID),
+	common.SYS_GETPPID:    common.Bounds(common.B_SYS_GETPPID),
+	common.SYS_SOCKET:     common.Bounds(common.B_SYS_SOCKET),
+	common.SYS_CONNECT:    common.Bounds(common.B_SYS_CONNECT),
+	common.SYS_ACCEPT:     common.Bounds(common.B_SYS_ACCEPT),
+	common.SYS_SENDTO:     common.Bounds(common.B_SYS_SENDTO),
+	common.SYS_RECVFROM:   common.Bounds(common.B_SYS_RECVFROM),
+	common.SYS_SOCKPAIR:   common.Bounds(common.B_SYS_SOCKETPAIR),
+	common.SYS_SHUTDOWN:   common.Bounds(common.B_SYS_SHUTDOWN),
+	common.SYS_BIND:       common.Bounds(common.B_SYS_BIND),
+	common.SYS_LISTEN:     common.Bounds(common.B_SYS_LISTEN),
+	common.SYS_RECVMSG:    common.Bounds(common.B_SYS_RECVMSG),
+	common.SYS_SENDMSG:    common.Bounds(common.B_SYS_SENDMSG),
+	common.SYS_GETSOCKOPT: common.Bounds(common.B_SYS_GETSOCKOPT),
+	common.SYS_SETSOCKOPT: common.Bounds(common.B_SYS_SETSOCKOPT),
+	common.SYS_FORK:       common.Bounds(common.B_SYS_FORK),
+	common.SYS_EXECV:      common.Bounds(common.B_SYS_EXECV),
+	common.SYS_EXIT:       common.Bounds(common.B_SYSCALL_T_SYS_EXIT),
+	common.SYS_WAIT4:      common.Bounds(common.B_SYS_WAIT4),
+	common.SYS_KILL:       common.Bounds(common.B_SYS_KILL),
+	common.SYS_FCNTL:      common.Bounds(common.B_SYS_FCNTL),
+	common.SYS_TRUNC:      common.Bounds(common.B_SYS_TRUNCATE),
+	common.SYS_FTRUNC:     common.Bounds(common.B_SYS_FTRUNCATE),
+	common.SYS_GETCWD:     common.Bounds(common.B_SYS_GETCWD),
+	common.SYS_CHDIR:      common.Bounds(common.B_SYS_CHDIR),
+	common.SYS_RENAME:     common.Bounds(common.B_SYS_RENAME),
+	common.SYS_MKDIR:      common.Bounds(common.B_SYS_MKDIR),
+	common.SYS_LINK:       common.Bounds(common.B_SYS_LINK),
+	common.SYS_UNLINK:     common.Bounds(common.B_SYS_UNLINK),
+	common.SYS_GETTOD:     common.Bounds(common.B_SYS_GETTIMEOFDAY),
+	common.SYS_GETRLMT:    common.Bounds(common.B_SYS_GETRLIMIT),
+	common.SYS_GETRUSG:    common.Bounds(common.B_SYS_GETRUSAGE),
+	common.SYS_MKNOD:      common.Bounds(common.B_SYS_MKNOD),
+	common.SYS_SETRLMT:    common.Bounds(common.B_SYS_SETRLIMIT),
+	common.SYS_SYNC:       common.Bounds(common.B_SYS_SYNC),
+	common.SYS_REBOOT:     common.Bounds(common.B_SYS_REBOOT),
+	common.SYS_NANOSLEEP:  common.Bounds(common.B_SYS_NANOSLEEP),
+	common.SYS_PIPE2:      common.Bounds(common.B_SYS_PIPE2),
+	common.SYS_PROF:       common.Bounds(common.B_SYS_PROF),
+	common.SYS_THREXIT:    common.Bounds(common.B_SYS_THREXIT),
+	common.SYS_INFO:       common.Bounds(common.B_SYS_INFO),
+	common.SYS_PREAD:      common.Bounds(common.B_SYS_PREAD),
+	common.SYS_PWRITE:     common.Bounds(common.B_SYS_PWRITE),
+	common.SYS_FUTEX:      common.Bounds(common.B_SYS_FUTEX),
+	common.SYS_GETTID:     common.Bounds(common.B_SYS_GETTID),
+}
+
 // Implements Syscall_i
 type syscall_t struct {
 }
@@ -28,6 +92,16 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 	}
 
 	sysno := int(tf[common.TF_RAX])
+
+	lim, ok := _sysbounds[sysno]
+	if !ok {
+		panic("bad limit")
+	}
+	if !p.Resadd(lim) {
+		fmt.Printf("X")
+		return int(-common.ENOMEM)
+	}
+
 	a1 := int(tf[common.TF_RDI])
 	a2 := int(tf[common.TF_RSI])
 	a3 := int(tf[common.TF_RDX])
