@@ -69,7 +69,6 @@ func doTestSimple(tfs *Ufs_t, d string) string {
 }
 
 func doCheckSimple(tfs *Ufs_t, d string, t *testing.T) {
-	fmt.Printf("doCheckSimple %v\n", d)
 	res, e := tfs.Ls(d)
 	if e != 0 {
 		t.Fatalf("doLs failed")
@@ -146,6 +145,37 @@ func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
 }
 
 //
+// Orphan inodes.  Inodes (and its blocks) should be freed on recovery
+//
+
+func doTestOrphans(tfs *Ufs_t, t *testing.T) {
+	fd, err := tfs.fs.Fs_open("f1", common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+	if err != 0 {
+		t.Fatalf("ufs.fs.Fs_open f1 failed %v\n", err)
+	}
+	ub := mkData(uint8(1), SMALL)
+	n, err := fd.Fops.Write(nil, ub)
+	if err != 0 || ub.Remain() != 0 {
+		t.Fatalf("Write f1 failed %v %d\n", err, n)
+	}
+	err = tfs.fs.Fs_unlink("f1", 0, false)
+	if err != 0 {
+		t.Fatalf("doUnlink f1 failed %v\n", err)
+	}
+}
+
+func doCheckOrphans(tfs *Ufs_t, t *testing.T) {
+	res, e := tfs.Ls("/")
+	if e != 0 {
+		t.Fatalf("doLs failed")
+	}
+	_, ok := res["f1"]
+	if ok {
+		t.Fatalf("f1 present")
+	}
+}
+
+//
 // Util
 //
 
@@ -217,6 +247,32 @@ func TestFSBlockReuse(t *testing.T) {
 	for i := 0; i < n*2; i++ {
 		doTestBlockReuse(tfs, 5, t)
 	}
+	ShutdownFS(tfs)
+	os.Remove(dst)
+}
+
+//
+// Orphan test
+//
+
+func TestFSOrphans(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+
+	fmt.Printf("Test FSOrphans %v ...\n", dst)
+
+	tfs := BootFS(dst)
+	ninode, nblock := tfs.fs.Fs_size()
+	doTestOrphans(tfs, t)
+	ShutdownFS(tfs)
+
+	tfs = BootFS(dst)
+	ninode1, nblock1 := tfs.fs.Fs_size()
+	if ninode1 != ninode || nblock1 != nblock {
+		t.Fatalf("inode/blocks not freed: before %d %d after %d %d\n",
+			ninode, nblock, ninode1, nblock1)
+	}
+	doCheckOrphans(tfs, t)
 	ShutdownFS(tfs)
 	os.Remove(dst)
 }

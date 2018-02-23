@@ -547,6 +547,8 @@ func log_daemon(l *log_t) {
 			}
 		}
 
+		// XXX get orphaned inodes, no transaction in flight, write inode # somewhere
+		// XXX on recovery free them and mark them freed
 		l.commit()
 
 		if waiters > 0 {
