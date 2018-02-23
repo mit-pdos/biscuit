@@ -147,7 +147,10 @@ func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	if bdev_debug {
 		fmt.Printf("bcache_relse: %v %v\n", b.Block, s)
 	}
-	bcache.refcache.Refdown(b, s)
+	evicted := bcache.refcache.Refdown(b, s)
+	if evicted {
+		b.Evict()
+	}
 }
 
 func (bcache *bcache_t) Stats() string {
@@ -167,10 +170,13 @@ func (bcache *bcache_t) Stats() string {
 
 // returns the reference to a locked buffer
 func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, common.Err_t) {
-	ref, err := bcache.refcache.Lookup(blk, s)
+	ref, victim, err := bcache.refcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
+	}
+	if victim != nil {
+		victim.Evict()
 	}
 	defer ref.Unlock()
 

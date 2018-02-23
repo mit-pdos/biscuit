@@ -13,6 +13,7 @@ const BSIZE = 4096
 type Blockmem_i interface {
 	Alloc() (Pa_t, *Bytepg_t, bool)
 	Free(Pa_t)
+	Refup(Pa_t)
 }
 
 type Block_cb_i interface {

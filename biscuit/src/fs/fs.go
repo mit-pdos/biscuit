@@ -107,12 +107,11 @@ func (fs *Fs_t) Fs_statistics() string {
 }
 
 func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
-	// XXX need to do this inside an op for admission control, but flusher
-	// needs its own op for deleting an inode
-	// fs.icache.flushcheck()
-
 	fs.fslog.Op_begin("Fs_link")
-	defer fs.fslog.Op_end()
+	defer func() {
+		fs.fslog.Op_end()
+		fs.icache.flushcheck()
+	}()
 
 	if fs_debug {
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)

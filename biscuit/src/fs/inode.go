@@ -211,6 +211,13 @@ func (idm *imemnode_t) Evict() {
 	}
 }
 
+func (idm *imemnode_t) Evictnow() bool {
+	idm.Lock()
+	r := idm.links == 0
+	idm.Unlock()
+	return r
+}
+
 func (idm *imemnode_t) ilock(s string) {
 	// if idm._amlocked {
 	//	fmt.Printf("ilocked: warning %v %v\n", idm.inum, s)
@@ -896,6 +903,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 		// release buffer. the VM system will increase the page count.
 		// XXX race? vm system may not do this for a while. maybe we
 		// should increase page count here.
+		// buf.Mem.Refup(buf.Pa)
 		idm.fs.bcache.Relse(buf, "immapinfo")
 	}
 	return ret, 0
@@ -1034,7 +1042,7 @@ func (icache *icache_t) idaemon() {
 		if !flush {
 			return
 		}
-		icache.refcache.Flush()
+		// XXX Flush linkcount == 0 first?
 	}
 }
 
@@ -1047,10 +1055,6 @@ func (icache *icache_t) flush() {
 }
 
 func (icache *icache_t) flushcheck() {
-	// any system need more than 4 inodes?
-	if icache.refcache.Unused() < 4 {
-		icache.flush()
-	}
 }
 
 func (icache *icache_t) Stats() string {
@@ -1066,11 +1070,15 @@ func (icache *icache_t) Stats() string {
 
 // obtain the reference for an inode
 func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
-	ref, err := icache.refcache.Lookup(int(inum), s)
+	ref, victim, err := icache.refcache.Lookup(int(inum), s)
 	if err != 0 {
 		return nil, err
 	}
 	defer ref.Unlock()
+
+	if victim != nil {
+		victim.Evict()
+	}
 
 	if !ref.valid {
 		if fs_debug {
@@ -1104,7 +1112,10 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 }
 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
-	icache.refcache.Refdown(imem, "fs_rename_opar")
+	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
+	if evicted {
+		imem.Evict()
+	}
 }
 
 func (icache *icache_t) Refup(imem *imemnode_t, s string) {

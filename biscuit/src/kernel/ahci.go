@@ -44,6 +44,10 @@ func (bm *blockmem_t) Free(pa common.Pa_t) {
 	physmem.Refdown(pa)
 }
 
+func (bm *blockmem_t) Refup(pa common.Pa_t) {
+	physmem.Refup(pa)
+}
+
 // returns true if start is asynchronous
 func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 	ahci.port.start(req)

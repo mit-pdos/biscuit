@@ -461,7 +461,7 @@ func (log *log_t) recover() common.Err_t {
 		log.bcache.Relse(b, "fs_recover_logstart")
 		return 0
 	}
-	fmt.Printf("starting FS recovery...")
+	fmt.Printf("starting FS recovery...\n")
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
