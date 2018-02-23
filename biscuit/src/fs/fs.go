@@ -574,6 +574,7 @@ func (fo *fsfops_t) Fullpath() (string, common.Err_t) {
 	return fp, err
 }
 
+// XXX doesn't free blocks when shrinking file
 func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
 	fo.Lock()
 	defer fo.Unlock()
