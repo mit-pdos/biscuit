@@ -21,7 +21,7 @@ const (
 )
 
 func doTestSimple(tfs *Ufs_t, d string) string {
-	fmt.Printf("doTestSimple %v\n", d)
+	//fmt.Printf("doTestSimple %v\n", d)
 
 	e := tfs.MkDir(d)
 	if e != 0 {
@@ -165,7 +165,7 @@ func TestFSSimple(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFS %v ...\n", dst)
+	fmt.Printf("Test FSSimple %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	s := doTestSimple(tfs, "d/")
@@ -189,7 +189,7 @@ func TestFSInodeReuse(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFSInodeReuce %v ...\n", dst)
+	fmt.Printf("Test FSInodeReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	n := ninodeblks * (common.BSIZE / fs.ISIZE)
@@ -209,7 +209,7 @@ func TestFSBlockReuse(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFSBlockReuce %v ...\n", dst)
+	fmt.Printf("Test FSBlockReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	n := ndatablks
@@ -230,7 +230,7 @@ func TestFSConcur(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFSConcur %v ...\n", dst)
+	fmt.Printf("Test FSConcur %v ...\n", dst)
 
 	c := make(chan string)
 	tfs := BootFS(dst)
@@ -529,7 +529,7 @@ func produceTrace(disk string, t *testing.T, init func(*Ufs_t), run func(*Ufs_t,
 }
 
 func TestTracesAtomic(t *testing.T) {
-	fmt.Printf("testTraces ...\n")
+	fmt.Printf("Test TracesAtomic ...\n")
 	disk := "disk.img"
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	produceTrace(disk, t, doAtomicInit, doTestAtomic)
@@ -538,9 +538,8 @@ func TestTracesAtomic(t *testing.T) {
 	fmt.Printf("#traces = %v\n", cnt)
 }
 
-// XXX times out after 10min, checking 65K traces.  -timeout 0 doesn't work (apparently bug in go)
 func TestTracesOrdered(t *testing.T) {
-	fmt.Printf("testTraces ...\n")
+	fmt.Printf("Test TracesOrdered ...\n")
 	disk := "disk.img"
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablksordered)
 	produceTrace(disk, t, doOrderedInit, doTestOrdered)
