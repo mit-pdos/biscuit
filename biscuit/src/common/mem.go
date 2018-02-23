@@ -94,7 +94,7 @@ func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
 	if err != 0 {
 		return nil, 0, err
 	}
-	return mmapi[0].Pg, Pa_t(mmapi[0].Phys), 0
+	return mmapi[0].Pg, mmapi[0].Phys, 0
 }
 
 func (vmi *Vminfo_t) ptefor(pmap *Pmap_t, va uintptr) (*Pa_t, bool) {
@@ -134,6 +134,9 @@ func (m *Vmregion_t) _canmerge(a, b *Vminfo_t) bool {
 		return false
 	}
 	if a.mtype == VFILE {
+		if a.file.shared != b.file.shared {
+			return false
+		}
 		if a.file.mfile.mfops.Pathi() != b.file.mfile.mfops.Pathi() {
 			return false
 		}
