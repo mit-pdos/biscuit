@@ -176,7 +176,8 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 		return nil, false, err
 	}
 	if victim != nil {
-		victim.Evict()
+		b := victim.(*common.Bdev_block_t)
+		b.Evict()
 	}
 	defer ref.Unlock()
 

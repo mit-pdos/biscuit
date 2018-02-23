@@ -37,7 +37,6 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	}
 
 	fs.bcache = mkBcache(mem, disk)
-	fs.icache = mkIcache(fs)
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
@@ -84,6 +83,8 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen, inodelen)
 	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
 
+	fs.icache = mkIcache(fs)
+
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
 
@@ -108,10 +109,7 @@ func (fs *Fs_t) Fs_statistics() string {
 
 func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_link")
-	defer func() {
-		fs.fslog.Op_end()
-		fs.icache.flushcheck()
-	}()
+	defer fs.fslog.Op_end()
 
 	if fs_debug {
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)

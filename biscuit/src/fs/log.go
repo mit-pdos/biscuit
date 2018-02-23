@@ -253,6 +253,10 @@ func (l *log_t) full(nops int) bool {
 	return reserved+l.memhead >= l.loglen
 }
 
+func (log *log_t) maxops() int {
+	return log.loglen / maxblkspersys
+}
+
 func (log *log_t) addlog(buf buf_t) {
 
 	// If a write for buf.block is present in the in-memory log (i.e.,

@@ -14,7 +14,6 @@ const always_eager = false // for testing
 // Objects in the cache must support the following interface:
 type obj_t interface {
 	Evictnow() bool
-	Evict()
 	Key() int
 }
 

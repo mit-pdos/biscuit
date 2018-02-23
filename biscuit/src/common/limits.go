@@ -40,11 +40,11 @@ var Syslimit = Syslimit_t{
 	Routes:   32,
 	Tcpsegs:  16,
 	Socks:    1e5,
-	Vnodes:   10000, // 1e6,
+	Vnodes:   300, // 10000, // 1e6,
 	Dirents:  1 << 20,
 	Pipes:    1e4,
 	// 8GB of block pages
-	Blocks: 20000, // 100000, // 1 << 21,
+	Blocks: 4000, // 100000, // 1 << 21,
 }
 
 func (s *Sysatomic_t) _aptr() *int64 {

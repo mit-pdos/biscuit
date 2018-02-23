@@ -198,16 +198,21 @@ func (idm *imemnode_t) Key() int {
 	return int(idm.inum)
 }
 
-// No other thread should have a reference to this inode.
+// No other thread should have a reference to this inode, because its refcnt = 0
+// and it was removed from refcache.  Same for Flush()
 func (idm *imemnode_t) Evict() {
 	idm._derelease()
 	if fs_debug {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
+}
+
+func (idm *imemnode_t) Flush() {
+	idm.Evict()
 	if idm.links == 0 {
-		//idm.fs.fslog.Op_begin("evict")
+		idm.fs.fslog.Op_begin("ifree")
 		idm.ifree()
-		//idm.fs.fslog.Op_end()
+		idm.fs.fslog.Op_end()
 	}
 }
 
@@ -941,7 +946,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 			nblkno := common.Readn(data, 8, off)
 			add(nblkno)
 		}
-		idm.fs.bcache.Relse(blk, "ifree1")
+		idm.fs.bcache.Relse(blk, "ifree indirect")
 		return 0
 	}
 
@@ -984,7 +989,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	idm.flushto(iblk, idm.inum)
 	iblk.Unlock()
 	idm.fs.fslog.Write(iblk)
-	idm.fs.bcache.Relse(iblk, "ifree2")
+	idm.fs.bcache.Relse(iblk, "ifree inode")
 
 	idm.fs.ialloc.Ifree(idm.inum)
 
@@ -1022,39 +1027,42 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	refcache     *refcache_t
-	fs           *Fs_t
-	idaemon_chan chan (bool)
+	refcache    *refcache_t
+	fs          *Fs_t
+	idaemonChan chan *imemnode_t
 }
+
+const maxinodepersys = 4
 
 func mkIcache(fs *Fs_t) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
-	icache.idaemon_chan = make(chan bool)
+	// Channel is big enough that all syscall ops that release inodes can
+	// write their inodes in the channel.  We don't want to block any writes
+	// on the channel because we want them to finish their ops. If they
+	// could block, and idaemon runs but it's ifree isn't admitted into the
+	// log, then they we could have a deadlock.
+	icache.idaemonChan = make(chan *imemnode_t, maxinodepersys*fs.fslog.maxops())
 	go icache.idaemon()
 	return icache
 }
 
 func (icache *icache_t) idaemon() {
 	for {
-		flush := <-icache.idaemon_chan
-		if !flush {
+		imem := <-icache.idaemonChan
+		if imem == nil {
 			return
 		}
-		// XXX Flush linkcount == 0 first?
+		if fs_debug {
+			fmt.Printf("idaemon: flush %v inode\n", imem)
+		}
+		imem.Flush()
 	}
 }
 
 func (icache *icache_t) stop() {
-	icache.idaemon_chan <- false
-}
-
-func (icache *icache_t) flush() {
-	icache.idaemon_chan <- true
-}
-
-func (icache *icache_t) flushcheck() {
+	icache.idaemonChan <- nil
 }
 
 func (icache *icache_t) Stats() string {
@@ -1077,7 +1085,11 @@ func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.
 	defer ref.Unlock()
 
 	if victim != nil {
-		victim.Evict()
+		imem := victim.(*imemnode_t)
+		if imem.links == 0 {
+			panic("linkcount of zero on Lookup!")
+		}
+		imem.Evict()
 	}
 
 	if !ref.valid {
@@ -1114,7 +1126,7 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
 	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
 	if evicted {
-		imem.Evict()
+		icache.idaemonChan <- imem
 	}
 }
 
