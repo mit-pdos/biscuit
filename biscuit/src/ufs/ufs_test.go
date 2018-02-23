@@ -397,6 +397,7 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 const ndatablksordered = 8 // small, to cause block reuse
 const norderedblks = 2     // this causes reuse
 
+// XXX add mkfile f2 also to setup
 func doOrderedInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*norderedblks)
 	e := tfs.MkFile("f1", ub)
