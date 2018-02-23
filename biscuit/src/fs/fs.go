@@ -106,6 +106,10 @@ func (fs *Fs_t) Fs_statistics() string {
 	return s
 }
 
+func (fs *Fs_t) Fs_size() (uint, uint) {
+	return fs.ialloc.alloc.nfreebits, fs.balloc.alloc.nfreebits
+}
+
 func (fs *Fs_t) op_end_and_flush() {
 	fs.fslog.Op_end()
 	fs.icache.flush()
@@ -1382,6 +1386,7 @@ type allocater_t struct {
 	freelen   int
 	lastblk   int
 	lastbyte  int
+	nfreebits uint
 
 	// stats
 	nalloc int
@@ -1394,6 +1399,7 @@ func mkAllocater(fs *Fs_t, start, len int) *allocater_t {
 	a.fs = fs
 	a.freestart = start
 	a.freelen = len
+	_, _, _, a.nfreebits, _ = a.search(true)
 	return a
 }
 
@@ -1406,6 +1412,16 @@ func freebit(b uint8) uint {
 	panic("no 0 bit?")
 }
 
+func countFreeBit(b uint8) uint {
+	c := uint(0)
+	for m := uint(0); m < 8; m++ {
+		if (1<<m)&b == 0 {
+			c++
+		}
+	}
+	return c
+}
+
 func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
 	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
 		panic("naughty blockno")
@@ -1414,9 +1430,10 @@ func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_
 }
 
 // 0 is free, 1 is allocated
-func (alloc *allocater_t) search() (*common.Bdev_block_t, int, int, uint, common.Err_t) {
+func (alloc *allocater_t) search(cnt bool) (*common.Bdev_block_t, int, int, uint, common.Err_t) {
 	var blk *common.Bdev_block_t
 	var err common.Err_t
+	nfree := uint(0)
 	for b := 0; b < alloc.freelen; b++ {
 		if blk != nil {
 			blk.Unlock()
@@ -1429,14 +1446,24 @@ func (alloc *allocater_t) search() (*common.Bdev_block_t, int, int, uint, common
 		for idx := 0; idx < len(blk.Data); idx++ {
 			c := blk.Data[idx]
 			if c != 0xff {
-				alloc.lastblk = b
-				alloc.lastbyte = idx
-				bit := freebit(c)
-				return blk, b, idx, bit, 0
+				if cnt {
+					nfree += countFreeBit(c)
+				} else {
+					alloc.lastblk = b
+					alloc.lastbyte = idx
+					bit := freebit(c)
+					return blk, b, idx, bit, 0
+				}
 			}
 		}
 	}
-	return nil, 0, 0, 0, -common.ENOMEM
+	if cnt {
+		blk.Unlock()
+		alloc.fs.bcache.Relse(blk, "alloc cnt search")
+		return nil, 0, 0, nfree, 0
+	} else {
+		return nil, 0, 0, 0, -common.ENOMEM
+	}
 }
 
 func (alloc *allocater_t) quickcheck() (*common.Bdev_block_t, int, int, uint, common.Err_t) {
@@ -1471,12 +1498,13 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	if err == 0 {
 		alloc.nhit++
 	} else {
-		blk, blkn, oct, bit, err = alloc.search()
+		blk, blkn, oct, bit, err = alloc.search(false)
 		if err != 0 {
 			return 0, err
 		}
 	}
 	alloc.nalloc++
+	alloc.nfreebits--
 
 	// mark as allocated
 	blk.Data[oct] |= 1 << bit
@@ -1519,6 +1547,7 @@ func (alloc *allocater_t) Free(blkno int) common.Err_t {
 	alloc.fs.fslog.Write(fblk)
 	alloc.fs.bcache.Relse(fblk, "free")
 	alloc.nfree++
+	alloc.nfreebits++
 	return 0
 }
 

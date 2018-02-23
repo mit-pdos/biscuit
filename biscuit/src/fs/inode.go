@@ -1057,7 +1057,7 @@ func (icache *icache_t) addflush(imem *imemnode_t) {
 	icache.flushlist = append(icache.flushlist, imem)
 }
 
-// XXX locks inode cache during flushing ...
+// XXX closes from different threads are not contending for icache.flushlist...
 func (icache *icache_t) flush() {
 	icache.Lock()
 	defer icache.Unlock()
@@ -1065,8 +1065,12 @@ func (icache *icache_t) flush() {
 	if fs_debug {
 		fmt.Printf("flush: flush %v inodes\n", len(icache.flushlist))
 	}
-	for _, imem := range icache.flushlist {
+	for len(icache.flushlist) > 0 {
+		imem := icache.flushlist[0]
+		icache.flushlist = icache.flushlist[1:]
+		icache.Unlock()
 		imem.Flush()
+		icache.Lock()
 	}
 	icache.flushlist = make([]*imemnode_t, 0)
 }
