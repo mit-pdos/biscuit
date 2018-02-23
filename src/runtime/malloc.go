@@ -538,6 +538,7 @@ func (c *mcache) nextFree(sizeclass uint8) (v gclinkptr, s *mspan, shouldhelpgc 
 	return
 }
 
+//func _takecredit(n int64, pcbuf []uintptr) {
 func _takecredit(n int64) {
 	if hackmode == 0 {
 		return
@@ -548,6 +549,13 @@ func _takecredit(n int64) {
 	if g.res.credit < 0 {
 		atomic.Xadd64(&nocreds, 1)
 		g.res.credit = 0
+		//if dumrand(0, 3000) == 0 {
+		//	print("dump:\n")
+		//	for _, rip := range pcbuf {
+		//		print("\t", hex(rip), "\n")
+		//	}
+		//	print("\n")
+		//}
 	}
 }
 
@@ -555,6 +563,9 @@ func _takecredit(n int64) {
 // Small objects are allocated from the per-P cache's free lists.
 // Large objects (> 32 kB) are allocated straight from the heap.
 func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
+	//pcbuf := make([]uintptr, 10)
+	//got := callers(1, pcbuf)
+	//pcbuf = pcbuf[:got]
 	if gcphase == _GCmarktermination {
 		throw("mallocgc called with gcphase == _GCmarktermination")
 	}
@@ -568,6 +579,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		if typ != nil {
 			align = uintptr(typ.align)
 		}
+		//_takecredit(int64(size), pcbuf)
 		_takecredit(int64(size))
 		return persistentalloc(size, align, &memstats.other_sys)
 	}
@@ -655,6 +667,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 				c.local_tinyallocs++
 				mp.mallocing = 0
 				releasem(mp)
+				//_takecredit(int64(size), pcbuf)
 				_takecredit(int64(size))
 				return x
 			}
@@ -704,6 +717,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		size = s.elemsize
 	}
 
+	//_takecredit(int64(size), pcbuf)
 	_takecredit(int64(size))
 
 	var scanSize uintptr
