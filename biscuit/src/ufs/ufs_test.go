@@ -262,8 +262,6 @@ func TestFSConcur(t *testing.T) {
 // Check traces for crash safety
 //
 
-const ndatablksordered = 10 // small, to cause block reuse
-const norderedblks = ndatablksordered/2 + 1
 const natomicblks = 2
 
 func copyDisk(src, dst string) (err error) {
@@ -340,22 +338,25 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 // of the unlink of f1.  but ordered write for f2 is turned into a logged since
 // its first write (zero-ing) is a logged write.
 
-// No initial state
-func doOrderedInit(tfs *Ufs_t) {
-}
+const ndatablksordered = 8 // small, to cause block reuse
+const norderedblks = 2     // this causes reuse
 
-func doTestOrdered(tfs *Ufs_t, t *testing.T) {
+func doOrderedInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*norderedblks)
 	e := tfs.MkFile("f1", ub)
 	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f1")
+		panic("mkFile f1 failed")
 	}
-	e = tfs.Unlink("f1")
+	fmt.Printf("Init done\n")
+}
+
+func doTestOrdered(tfs *Ufs_t, t *testing.T) {
+	e := tfs.Unlink("f1")
 	if e != 0 {
 		t.Fatalf("Unlink failed")
 	}
-	// XXX reuse block and flush ordered write to f2 before commit of unlink
-	ub = mkData(2, common.BSIZE*norderedblks)
+	// reuse block and flush ordered write to f2 before commit of unlink
+	ub := mkData(2, common.BSIZE*norderedblks)
 	e = tfs.MkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
@@ -544,6 +545,7 @@ func TestTracesOrdered(t *testing.T) {
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablksordered)
 	produceTrace(disk, t, doOrderedInit, doTestOrdered)
 	trace := readTrace("trace.json")
+	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
 	fmt.Printf("#traces = %v\n", cnt)
 }

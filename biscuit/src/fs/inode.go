@@ -1027,9 +1027,10 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	refcache    *refcache_t
-	fs          *Fs_t
-	idaemonChan chan *imemnode_t
+	refcache *refcache_t
+	fs       *Fs_t
+	sync.Mutex
+	flushlist []*imemnode_t
 }
 
 const maxinodepersys = 4
@@ -1038,31 +1039,36 @@ func mkIcache(fs *Fs_t) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
-	// Channel is big enough that all syscall ops that release inodes can
-	// write their inodes in the channel.  We don't want to block any writes
-	// on the channel because we want them to finish their ops. If they
-	// could block, and idaemon runs but it's ifree isn't admitted into the
-	// log, then they we could have a deadlock.
-	icache.idaemonChan = make(chan *imemnode_t, maxinodepersys*fs.fslog.maxops())
-	go icache.idaemon()
+	// List for inodes to be flushed at the end of a syscall.  We don't call
+	// flush immediately during an op, because we want to run ifree as its
+	// own op. We don't use a channel and a seperate daemon because want to
+	// free the inode and its blocks at the end of the syscall so that the
+	// next sys call can use the freed resources.
+	icache.flushlist = make([]*imemnode_t, 0) // list is bounded (see addflush)
 	return icache
 }
 
-func (icache *icache_t) idaemon() {
-	for {
-		imem := <-icache.idaemonChan
-		if imem == nil {
-			return
-		}
-		if fs_debug {
-			fmt.Printf("idaemon: flush %v inode\n", imem)
-		}
-		imem.Flush()
+func (icache *icache_t) addflush(imem *imemnode_t) {
+	icache.Lock()
+	defer icache.Unlock()
+	if len(icache.flushlist) > maxinodepersys*icache.fs.fslog.maxops() {
+		panic("addflush")
 	}
+	icache.flushlist = append(icache.flushlist, imem)
 }
 
-func (icache *icache_t) stop() {
-	icache.idaemonChan <- nil
+// XXX locks inode cache during flushing ...
+func (icache *icache_t) flush() {
+	icache.Lock()
+	defer icache.Unlock()
+
+	if fs_debug {
+		fmt.Printf("flush: flush %v inodes\n", len(icache.flushlist))
+	}
+	for _, imem := range icache.flushlist {
+		imem.Flush()
+	}
+	icache.flushlist = make([]*imemnode_t, 0)
 }
 
 func (icache *icache_t) Stats() string {
@@ -1126,7 +1132,7 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
 	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
 	if evicted {
-		icache.idaemonChan <- imem
+		icache.addflush(imem)
 	}
 }
 

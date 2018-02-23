@@ -90,7 +90,6 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 func (fs *Fs_t) StopFS() {
 	fs.Fs_sync()
-	fs.icache.stop()
 	fs.fslog.stopLog()
 }
 
@@ -107,9 +106,14 @@ func (fs *Fs_t) Fs_statistics() string {
 	return s
 }
 
+func (fs *Fs_t) op_end_and_flush() {
+	fs.fslog.Op_end()
+	fs.icache.flush()
+}
+
 func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_link")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_flush()
 
 	if fs_debug {
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)
@@ -152,7 +156,7 @@ undo:
 
 func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 	fs.fslog.Op_begin("fs_unlink")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_flush()
 
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
@@ -234,7 +238,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	}
 
 	fs.fslog.Op_begin("fs_rename")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_flush()
 
 	fs.istats.Nrename.inc()
 
@@ -1280,7 +1284,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 
 func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_close")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_flush()
 
 	fs.istats.Nclose.inc()
 
