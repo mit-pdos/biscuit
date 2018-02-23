@@ -312,7 +312,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call.
-	max := (maxblkspersys - 1) * common.BSIZE
+	max := (MaxBlkPerOp - 1) * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 

@@ -42,8 +42,6 @@ type log_t struct {
 	done           chan bool
 	force          chan bool
 	commitwait     chan bool
-	forceordered   chan bool
-	orderedwait    chan bool
 	stop           chan bool
 	stopwait       chan bool
 
@@ -224,16 +222,14 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	log.loglen = ll - 1
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
-	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen) // XXX bounded by len ordered list?
-	log.ordered = common.MkBlkList()                            // XXX bounded by cache size?
-	log.orderedpresent = make(map[int]bool)                     // XXX bounded by len ordered list
+	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
+	log.ordered = common.MkBlkList() // bounded by MaxOrdered
+	log.orderedpresent = make(map[int]bool)
 	log.incoming = make(chan buf_t)
 	log.admission = make(chan bool)
 	log.done = make(chan bool)
 	log.force = make(chan bool)
 	log.commitwait = make(chan bool)
-	log.forceordered = make(chan bool)
-	log.orderedwait = make(chan bool)
 	log.stop = make(chan bool)
 	log.stopwait = make(chan bool)
 	log.disk = disk
@@ -246,15 +242,18 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 // an upperbound on the number of blocks written per system call. this is
 // necessary in order to guarantee that the log is long enough for the allowed
 // number of concurrent fs syscalls.
-const maxblkspersys = 10
+const MaxBlkPerOp = 10
+const MaxOrdered = 1000
 
 func (l *log_t) full(nops int) bool {
-	reserved := maxblkspersys * nops
-	return reserved+l.memhead >= l.loglen
+	reserved := MaxBlkPerOp * nops
+	logfull := reserved+l.memhead >= l.loglen
+	orderedfull := l.ordered.Len() >= MaxOrdered
+	return logfull || orderedfull
 }
 
 func (log *log_t) maxops() int {
-	return log.loglen / maxblkspersys
+	return log.loglen / MaxBlkPerOp
 }
 
 func (log *log_t) addlog(buf buf_t) {
@@ -352,6 +351,7 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 
 func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
+	log.nforceordered++
 	log.ordered.Apply(func(b *common.Bdev_block_t) {
 		log.bcache.Write_async(b)
 		log.bcache.Relse(b, "writeordered")
@@ -541,14 +541,6 @@ func log_daemon(l *log_t) {
 				if nops == 0 {
 					done = true
 				}
-			case <-l.forceordered:
-				if log_debug {
-					fmt.Printf("Force ordered %v\n", l.ordered.Len())
-				}
-				l.nforceordered++
-				l.write_ordered()
-				l.flush()
-				l.orderedwait <- true
 			case <-l.stop:
 				l.stopwait <- true
 				return
@@ -570,23 +562,11 @@ func log_daemon(l *log_t) {
 	}
 }
 
-func (log *log_t) force_ordered() {
-	if log_debug {
-		fmt.Printf("log_force_ordered\n")
-	}
-	log.forceordered <- true
-	<-log.orderedwait
-}
-
 // If cache has no space, ask logdaemon to create some space
 func (log *log_t) read(readfn func() (*common.Bdev_block_t, common.Err_t)) (*common.Bdev_block_t, common.Err_t) {
 	b, err := readfn()
 	if err == -common.ENOMEM {
-		log.force_ordered()
-		b, err = readfn()
-		if err == -common.ENOMEM {
-			panic("still no mem")
-		}
+		panic("still no mem")
 	}
 	return b, err
 }
