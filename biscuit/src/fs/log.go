@@ -22,6 +22,8 @@ const log_debug = false
 
 var loglen = 0 // for marshalling/unmarshalling
 
+const LogOffset = 2 // log block 0 is used for head, and 1 for orphan inodes
+
 type buf_t struct {
 	block   *common.Bdev_block_t
 	ordered bool
@@ -45,8 +47,8 @@ type log_t struct {
 	stop           chan bool
 	stopwait       chan bool
 
-	disk   common.Disk_i
-	bcache *bcache_t
+	disk common.Disk_i
+	fs   *Fs_t
 
 	// some stats
 	maxblks_per_op  int
@@ -103,7 +105,7 @@ func (log *log_t) Write(b *common.Bdev_block_t) {
 	if log_debug {
 		fmt.Printf("log_write %v\n", b.Block)
 	}
-	log.bcache.Refup(b, "log_write")
+	log.fs.bcache.Refup(b, "log_write")
 	log.incoming <- buf_t{b, false}
 }
 
@@ -114,22 +116,22 @@ func (log *log_t) Write_ordered(b *common.Bdev_block_t) {
 	if log_debug {
 		fmt.Printf("log_write_ordered %v\n", b.Block)
 	}
-	log.bcache.Refup(b, "log_write_ordered")
+	log.fs.bcache.Refup(b, "log_write_ordered")
 	log.incoming <- buf_t{b, true}
 }
 
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.bcache.Get_fill, blkn, s, lock))
+	return log.read(mkread(log.fs.bcache.Get_fill, blkn, s, lock))
 }
 
 func (log *log_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.bcache.Get_zero, blkn, s, lock))
+	return log.read(mkread(log.fs.bcache.Get_zero, blkn, s, lock))
 }
 
 func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.bcache.Get_nofill, blkn, s, lock))
+	return log.read(mkread(log.fs.bcache.Get_nofill, blkn, s, lock))
 }
 
 func (log *log_t) Stats() string {
@@ -160,19 +162,19 @@ func (log *log_t) Stats() string {
 	return s
 }
 
-func StartLog(logstart, loglen int, disk common.Disk_i, bcache *bcache_t) *log_t {
+func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) (*log_t, []common.Inum_t) {
 	if memfs {
-		return nil
+		return nil, nil
 	}
 	fslog := &log_t{}
-	fslog.bcache = bcache
+	fslog.fs = fs
 	fslog.init(logstart, loglen, disk)
-	err := fslog.recover()
+	err, orphans := fslog.recover()
 	if err != 0 {
-		return nil
+		return nil, orphans
 	}
 	go log_daemon(fslog)
-	return fslog
+	return fslog, orphans
 }
 
 func (log *log_t) stopLog() {
@@ -215,11 +217,12 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 }
 
 func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
-	loglen = ll - 1
+	// loglen is global
+	loglen = ll - LogOffset // leave space for head and orphan inodes
 	log.memhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
-	log.loglen = ll - 1
+	log.loglen = loglen
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	log.logpresent = make(map[int]bool, log.loglen)
 	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
@@ -292,7 +295,7 @@ func (log *log_t) addlog(buf buf_t) {
 		// that modified this block earlier, because the op was
 		// admitted.
 		log.nabsorption++
-		log.bcache.Relse(buf.block, "absorption")
+		log.fs.bcache.Relse(buf.block, "absorption")
 		return
 	}
 	log.absorb[buf.block.Block] = buf.block
@@ -325,12 +328,12 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
-	for i := log.memhead - 1; i >= 0; i-- {
+	for i := log.memhead - 1; i >= 0; i-- { // don't install header and orphan inodes
 		l := log.log[i]
 		log.nblkapply++
 		if _, ok := done[l.Block]; !ok {
-			log.bcache.Write_async(l)
-			log.bcache.Relse(l, "apply")
+			log.fs.bcache.Write_async(l)
+			log.fs.bcache.Relse(l, "apply")
 			done[l.Block] = true
 		} else {
 			log.nabsorbapply++
@@ -342,7 +345,7 @@ func (log *log_t) apply(headblk *common.Bdev_block_t) {
 	// success; clear flag indicating to recover from log
 	lh := logheader_t{headblk.Data}
 	lh.w_recovernum(0)
-	log.bcache.Write(headblk)
+	log.fs.bcache.Write(headblk)
 
 	log.flush() // flush cleared commit
 
@@ -353,14 +356,31 @@ func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
 	log.nforceordered++
 	log.ordered.Apply(func(b *common.Bdev_block_t) {
-		log.bcache.Write_async(b)
-		log.bcache.Relse(b, "writeordered")
+		log.fs.bcache.Write_async(b)
+		log.fs.bcache.Relse(b, "writeordered")
 	})
 	log.ordered.Delete()
 	log.orderedpresent = make(map[int]bool)
 }
 
-func (log *log_t) commit() {
+func (log *log_t) write_orphanblk(orphans []common.Inum_t) {
+	if log_debug {
+		fmt.Printf("write orphanblk %d %v\n", len(orphans), orphans)
+	}
+	orphanblk, err := log.fs.bcache.Get_nofill(log.logstart+1, "commit", false)
+	if err != 0 {
+		panic("cannot read orphan block\n")
+	}
+	ob := logheader_t{orphanblk.Data}
+	for i, inum := range orphans {
+		ob.w_logdest(i, int(inum))
+	}
+	ob.w_logdest(len(orphans), 0) // mark end of list
+	log.fs.bcache.Write_async(orphanblk)
+	log.fs.bcache.Relse(orphanblk, "writelog")
+}
+
+func (log *log_t) commit(orphans []common.Inum_t) {
 	if log.memhead == log.diskhead {
 		// nothing to commit, but maybe some file blocks to sync
 		if log_debug {
@@ -372,7 +392,7 @@ func (log *log_t) commit() {
 	}
 
 	if log_debug {
-		fmt.Printf("commit %v %v\n", log.memhead, log.diskhead)
+		fmt.Printf("commit %v %v orphans %v\n", log.memhead, log.diskhead, len(orphans))
 	}
 
 	log.ncommit++
@@ -383,21 +403,22 @@ func (log *log_t) commit() {
 
 	// read the log header from disk; it may contain commit blocks from
 	// current transactions, if we haven't applied yet.
-	headblk, err := log.bcache.Get_fill(log.logstart, "commit", false)
+	headblk, err := log.fs.bcache.Get_fill(log.logstart, "commit", false)
 	if err != 0 {
 		panic("cannot read commit block\n")
 	}
-
 	lh := logheader_t{headblk.Data}
-	blks := common.MkBlkList()
 
+	log.write_orphanblk(orphans)
+
+	blks := common.MkBlkList()
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]
-		// install log destination in the first log block
+		// install log destination in the header block
 		lh.w_logdest(i, l.Block)
 
-		// fill in log blocks
-		b, err := log.bcache.Get_nofill(log.logstart+i+1, "log", true)
+		// fill in log block
+		b, err := log.fs.bcache.Get_nofill(log.logstart+i+LogOffset, "log", true)
 		if err != 0 {
 			panic("cannot get log block\n")
 		}
@@ -409,16 +430,16 @@ func (log *log_t) commit() {
 	lh.w_recovernum(log.memhead)
 
 	// write blocks to log in batch
-	log.bcache.Write_async_blks(blks)
+	log.fs.bcache.Write_async_blks(blks)
 	blks.Apply(func(b *common.Bdev_block_t) {
-		log.bcache.Relse(b, "writelog")
+		log.fs.bcache.Relse(b, "writelog")
 	})
 
 	log.write_ordered()
 
 	log.flush() // flush outstanding writes
 
-	log.bcache.Write(headblk) // write log header
+	log.fs.bcache.Write(headblk) // write log header
 
 	log.flush() // commit log header
 
@@ -443,7 +464,7 @@ func (log *log_t) commit() {
 	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
 
 	// done with log header
-	log.bcache.Relse(headblk, "commit done")
+	log.fs.bcache.Relse(headblk, "commit done")
 }
 
 func (log *log_t) flush() {
@@ -453,42 +474,57 @@ func (log *log_t) flush() {
 	}
 }
 
-func (log *log_t) recover() common.Err_t {
-	b, err := log.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
+func (log *log_t) recover() (common.Err_t, []common.Inum_t) {
+	b, err := log.fs.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 {
-		return err
+		return err, nil
 	}
 	lh := logheader_t{b.Data}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
-		log.bcache.Relse(b, "fs_recover_logstart")
-		return 0
+		log.fs.bcache.Relse(b, "fs_recover_logstart")
+		return 0, nil
 	}
 	fmt.Printf("starting FS recovery...\n")
 
+	orphans := make([]common.Inum_t, 0)
+	orphanblk, err := log.fs.bcache.Get_fill(log.logstart+1, "fs_recover_logstart", false)
+	if err != 0 {
+		return err, nil
+	}
+	ob := logheader_t{orphanblk.Data}
+	for i := 0; i < common.BSIZE/8; i++ {
+		inum := ob.logdest(i)
+		if inum == 0 {
+			break
+		}
+		fmt.Printf("orphan inum %d\n", inum)
+		orphans = append(orphans, common.Inum_t(inum))
+	}
+
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
-		lb, err := log.bcache.Get_fill(log.logstart+1+i, "i", false)
+		lb, err := log.fs.bcache.Get_fill(log.logstart+LogOffset+i, "i", false)
 		if err != 0 {
-			return err
+			return err, nil
 		}
-		fb, err := log.bcache.Get_fill(bdest, "bdest", false)
+		fb, err := log.fs.bcache.Get_fill(bdest, "bdest", false)
 		if err != 0 {
-			return err
+			return err, nil
 		}
 		copy(fb.Data[:], lb.Data[:])
-		log.bcache.Write(fb)
-		log.bcache.Relse(lb, "fs_recover1")
-		log.bcache.Relse(fb, "fs_recover2")
+		log.fs.bcache.Write(fb)
+		log.fs.bcache.Relse(lb, "fs_recover1")
+		log.fs.bcache.Relse(fb, "fs_recover2")
 	}
 
 	// clear recovery flag
 	lh.w_recovernum(0)
-	log.bcache.Write(b)
-	log.bcache.Relse(b, "fs_recover_logstart")
+	log.fs.bcache.Write(b)
+	log.fs.bcache.Relse(b, "fs_recover_logstart")
 	fmt.Printf("restored %v blocks\n", rlen)
-	return 0
+	return 0, orphans
 }
 
 func log_daemon(l *log_t) {
@@ -512,7 +548,7 @@ func log_daemon(l *log_t) {
 			case <-l.done:
 				nops--
 				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
-				//	l.memhead)
+				// l.memhead)
 				if adm == nil { // is an op waiting for admission?
 					// fmt.Printf("don't admit %d %v\n", nops, l.full(nops+1))
 					if waiters > 0 || l.full(nops+1) {
@@ -547,9 +583,9 @@ func log_daemon(l *log_t) {
 			}
 		}
 
-		// XXX get orphaned inodes, no transaction in flight, write inode # somewhere
-		// XXX on recovery free them and mark them freed
-		l.commit()
+		inums := l.fs.icache.getOrphans()
+
+		l.commit(inums)
 
 		if waiters > 0 {
 			if log_debug {

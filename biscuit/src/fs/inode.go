@@ -199,7 +199,7 @@ func (idm *imemnode_t) Key() int {
 }
 
 // No other thread should have a reference to this inode, because its refcnt = 0
-// and it was removed from refcache.  Same for Flush()
+// and it was removed from refcache.  Same for Free()
 func (idm *imemnode_t) Evict() {
 	idm._derelease()
 	if fs_debug {
@@ -207,7 +207,7 @@ func (idm *imemnode_t) Evict() {
 	}
 }
 
-func (idm *imemnode_t) Flush() {
+func (idm *imemnode_t) Free() {
 	idm.Evict()
 	if idm.links == 0 {
 		idm.fs.fslog.Op_begin("ifree")
@@ -474,8 +474,12 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 	return acc, 0
 }
 
+// caller holds lock on idm
 func (idm *imemnode_t) _linkdown() {
 	idm.links--
+	if idm.links <= 0 {
+		idm.fs.icache.addOrphan(idm)
+	}
 	idm._iupdate()
 }
 
@@ -918,7 +922,7 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 	return idm.fs.fslog.Get_fill(idm.fs.ialloc.Iblock(idm.inum), "idibread", true)
 }
 
-// frees all blocks occupied by idm
+// free an orphaned inode
 func (idm *imemnode_t) ifree() common.Err_t {
 	idm.fs.istats.Nifree.inc()
 	if fs_debug {
@@ -1029,8 +1033,21 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 type icache_t struct {
 	refcache *refcache_t
 	fs       *Fs_t
+
+	// List of dead (an inode that doesn't show up in any directory anymore
+	// and isn't in any fd). They must be free at the end of a syscall.  We
+	// don't call ifree() immediately during an op, because we want to run
+	// ifree() as its own op. We don't use a channel and a seperate daemon
+	// because want to free the inode and its blocks at the end of the
+	// syscall so that the next sys call can use the freed resources.
 	sync.Mutex
-	flushlist []*imemnode_t
+	dead []*imemnode_t
+	// Map of orphan inodes (an inode that doesn't show up in any
+	// directory).  These inodes need to be freed on the last close of an fd
+	// that points to this inode.  However, on recovery, we need to free
+	// them explicitly.  So, the logging system will put them in the orphan
+	// list when the transaction that orphaned them commits.
+	orphans map[common.Inum_t]bool
 }
 
 const maxinodepersys = 4
@@ -1039,40 +1056,80 @@ func mkIcache(fs *Fs_t) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
-	// List for inodes to be flushed at the end of a syscall.  We don't call
-	// flush immediately during an op, because we want to run ifree as its
-	// own op. We don't use a channel and a seperate daemon because want to
-	// free the inode and its blocks at the end of the syscall so that the
-	// next sys call can use the freed resources.
-	icache.flushlist = make([]*imemnode_t, 0) // list is bounded (see addflush)
+	icache.orphans = make(map[common.Inum_t]bool, 0) // map is bounded (see addOrphan)
+	icache.dead = make([]*imemnode_t, 0)             // list is bounded (see addDead)
 	return icache
 }
 
-func (icache *icache_t) addflush(imem *imemnode_t) {
+func (icache *icache_t) addOrphan(imem *imemnode_t) {
 	icache.Lock()
 	defer icache.Unlock()
-	if len(icache.flushlist) > maxinodepersys*icache.fs.fslog.maxops() {
-		panic("addflush")
+	if len(icache.orphans) > icache.fs.fslog.loglen {
+		panic("addOrphan")
 	}
-	icache.flushlist = append(icache.flushlist, imem)
+	icache.orphans[imem.inum] = true
 }
 
-// XXX closes from different threads are not contending for icache.flushlist...
-func (icache *icache_t) flush() {
+func (icache *icache_t) addDead(imem *imemnode_t) {
+	icache.Lock()
+	defer icache.Unlock()
+	if len(icache.dead) > maxinodepersys*icache.fs.fslog.maxops() {
+		panic("addDead")
+	}
+	icache.dead = append(icache.dead, imem)
+}
+
+func (icache *icache_t) _removeOrphan(inum common.Inum_t) {
+	delete(icache.orphans, inum)
+}
+
+// free orphan inodes on recovery
+func (icache *icache_t) freeOrphans(inums []common.Inum_t) {
+	fmt.Printf("freeOrphans: %v\n", inums)
+	for _, inum := range inums {
+		imem, err := icache.Iref(inum, "freeOrphans")
+		if err != 0 {
+			panic("freeOrphans")
+		}
+		evicted := icache.refcache.Refdown(imem, "freeOrphans")
+		if !evicted {
+			panic("link count isn't zero?")
+		}
+		imem.Free()
+	}
+}
+
+func (icache *icache_t) getOrphans() []common.Inum_t {
+	icache.Lock()
+	defer icache.Unlock()
+
+	inums := make([]common.Inum_t, len(icache.orphans))
+	i := 0
+	for inum, _ := range icache.orphans {
+		inums[i] = inum
+		i++
+	}
+	icache.orphans = make(map[common.Inum_t]bool, 0)
+	return inums
+}
+
+// XXX Fs_close() from different threads are contending for icache.dead...
+func (icache *icache_t) freeDead() {
 	icache.Lock()
 	defer icache.Unlock()
 
 	if fs_debug {
-		fmt.Printf("flush: flush %v inodes\n", len(icache.flushlist))
+		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
 	}
-	for len(icache.flushlist) > 0 {
-		imem := icache.flushlist[0]
-		icache.flushlist = icache.flushlist[1:]
+	for len(icache.dead) > 0 {
+		imem := icache.dead[0]
+		icache.dead = icache.dead[1:]
 		icache.Unlock()
-		imem.Flush()
+		imem.Free()
 		icache.Lock()
+		icache._removeOrphan(imem.inum)
 	}
-	icache.flushlist = make([]*imemnode_t, 0)
+	icache.dead = make([]*imemnode_t, 0)
 }
 
 func (icache *icache_t) Stats() string {
@@ -1114,7 +1171,6 @@ func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.
 		err := imem.idm_init(inum)
 		if err != 0 {
 			panic("idm_init")
-			// delete(refcache.refs, inum)
 			return nil, err
 		}
 		ref.valid = true
@@ -1136,7 +1192,7 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
 	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
 	if evicted {
-		icache.addflush(imem)
+		icache.addDead(imem) // link and refcount are 0
 	}
 }
 
