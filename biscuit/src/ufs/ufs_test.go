@@ -216,30 +216,36 @@ func TestFSBlockReuse(t *testing.T) {
 // Orphan inodes.  Inodes (and its blocks) should be freed on recovery
 //
 
-func doTestOrphans(tfs *Ufs_t, t *testing.T) {
-	fd, err := tfs.fs.Fs_open("f1", common.O_CREAT, 0, common.Inum_t(0), 0, 0)
-	if err != 0 {
-		t.Fatalf("ufs.fs.Fs_open f1 failed %v\n", err)
-	}
-	ub := mkData(uint8(1), SMALL)
-	n, err := fd.Fops.Write(nil, ub)
-	if err != 0 || ub.Remain() != 0 {
-		t.Fatalf("Write f1 failed %v %d\n", err, n)
-	}
-	err = tfs.fs.Fs_unlink("f1", 0, false)
-	if err != 0 {
-		t.Fatalf("doUnlink f1 failed %v\n", err)
+func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
+	for i := 0; i < nfile; i++ {
+		fn := uniqfile(i)
+		fd, err := tfs.fs.Fs_open(fn, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+		if err != 0 {
+			t.Fatalf("ufs.fs.Fs_open %v failed %v\n", fn, err)
+		}
+		ub := mkData(uint8(1), SMALL)
+		n, err := fd.Fops.Write(nil, ub)
+		if err != 0 || ub.Remain() != 0 {
+			t.Fatalf("Write %v failed %v %d\n", fn, err, n)
+		}
+		err = tfs.fs.Fs_unlink(fn, 0, false)
+		if err != 0 {
+			t.Fatalf("doUnlink %v failed %v\n", fn, err)
+		}
 	}
 }
 
-func doCheckOrphans(tfs *Ufs_t, t *testing.T) {
+func doCheckOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 	res, e := tfs.Ls("/")
 	if e != 0 {
 		t.Fatalf("doLs failed")
 	}
-	_, ok := res["f1"]
-	if ok {
-		t.Fatalf("f1 present")
+	for i := 0; i < nfile; i++ {
+		fn := uniqfile(i)
+		_, ok := res[fn]
+		if ok {
+			t.Fatalf("%v present", fn)
+		}
 	}
 }
 
@@ -251,7 +257,7 @@ func TestFSOrphans(t *testing.T) {
 
 	tfs := BootFS(dst)
 	ninode, nblock := tfs.fs.Fs_size()
-	doTestOrphans(tfs, t)
+	doTestOrphans(tfs, t, 1)
 	ShutdownFS(tfs) // causes the unlink to be committed
 
 	tfs = BootFS(dst)
@@ -260,7 +266,34 @@ func TestFSOrphans(t *testing.T) {
 		t.Fatalf("inode/blocks not freed: before %d %d after %d %d\n",
 			ninode, nblock, ninode1, nblock1)
 	}
-	doCheckOrphans(tfs, t)
+	doCheckOrphans(tfs, t, 1)
+	ShutdownFS(tfs)
+	os.Remove(dst)
+}
+
+const OrphanFiles = 1000
+const ManyInodeBlks = 2000
+const ManyDataBlks = 4000
+const ManyLogBlks = 256
+
+func TestFSOrphansMany(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, ManyLogBlks, ManyInodeBlks, ManyDataBlks)
+
+	fmt.Printf("Test FSOrphans %v ...\n", dst)
+
+	tfs := BootFS(dst)
+	ninode, nblock := tfs.fs.Fs_size()
+	doTestOrphans(tfs, t, OrphanFiles)
+	ShutdownFS(tfs) // causes the unlink to be committed
+
+	tfs = BootFS(dst)
+	ninode1, nblock1 := tfs.fs.Fs_size()
+	if ninode1 != ninode || nblock1 != nblock {
+		t.Fatalf("inode/blocks not freed: before %d %d after %d %d\n",
+			ninode, nblock, ninode1, nblock1)
+	}
+	doCheckOrphans(tfs, t, OrphanFiles)
 	ShutdownFS(tfs)
 	os.Remove(dst)
 }
