@@ -256,7 +256,7 @@ func TestFSOrphans(t *testing.T) {
 
 	tfs = BootFS(dst)
 	ninode1, nblock1 := tfs.fs.Fs_size()
-	if ninode1 != ninode || nblock1+1 != nblock { // +1 for root directory?
+	if ninode1 != ninode || nblock1 != nblock {
 		t.Fatalf("inode/blocks not freed: before %d %d after %d %d\n",
 			ninode, nblock, ninode1, nblock1)
 	}
