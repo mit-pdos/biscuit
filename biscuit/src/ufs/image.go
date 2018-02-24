@@ -155,6 +155,10 @@ func writeDataBlocks(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 	ddata.W_inodenext(0, 0)
 	ddata.W_filename(1, "..")
 	ddata.W_inodenext(1, 0)
+	for i := 2; i < fs.NDIRENTS; i++ {
+		ddata.W_filename(i, "")
+		ddata.W_inodenext(i, 0)
+	}
 	d := bytepg2byte(data)
 
 	if Tell(f) != sb.Freeblock()+sb.Freeblocklen()+sb.Inodelen() {
