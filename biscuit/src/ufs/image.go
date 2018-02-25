@@ -14,6 +14,7 @@ import "fs"
 //   bootblock (records address of superblock)
 // superblock
 // log blocks
+// orphan map
 // inode map
 // block map
 // inode blocks
@@ -56,15 +57,16 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 	d := &common.Bytepg_t{}
 	sb := fs.Superblock_t{d}
 	sb.SetLoglen(nlogblks)
-	sb.SetImapblock(start + 1 + nlogblks)
 	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
 	ni := ninode/nbitsperblock + 1
+	sb.SetIorphanblock(start + 1 + nlogblks)
+	sb.SetIorphanlen(ni)
 	sb.SetImaplen(ni)
-	sb.SetFreeblock(start + 1 + nlogblks + ni)
+	sb.SetFreeblock(start + 1 + nlogblks + 2*ni)
 	bblock := ndatablks/nbitsperblock + 1
 	sb.SetFreeblocklen(bblock)
 	sb.SetInodelen(ninodeblks)
-	sb.SetLastblock(start + 1 + nlogblks + ni + bblock + ninodeblks + ndatablks)
+	sb.SetLastblock(start + 1 + nlogblks + 2*ni + bblock + ninodeblks + ndatablks)
 	f.Write(bytepg2byte(sb.Data))
 	return &sb
 }
@@ -99,6 +101,13 @@ func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 		}
 		start := nbitsperblock - ninode%nbitsperblock
 		markAllocated(block, start)
+		f.Write(block)
+	}
+}
+
+func writeOrphanMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
+	block := mkBlock()
+	for i := 0; i < sb.Imaplen(); i++ {
 		f.Write(block)
 	}
 }
@@ -273,6 +282,7 @@ func MkDisk(disk string, images []string, nlogblks, ninodeblks, ndatablks int) {
 	fmt.Printf("superblock at block %d\n", start)
 	sb := writeSuperBlock(f, start, nlogblks, ninodeblks, ndatablks)
 	writeLog(f, nlogblks)
+	writeOrphanMap(f, sb, ninodeblks)
 	writeInodeMap(f, sb, ninodeblks)
 	writeBlockMap(f, sb, ndatablks)
 	writeInodes(f, sb)

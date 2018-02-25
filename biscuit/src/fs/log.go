@@ -22,7 +22,7 @@ const log_debug = false
 
 var loglen = 0 // for marshalling/unmarshalling
 
-const LogOffset = 2 // log block 0 is used for head, and 1 for orphan inodes
+const LogOffset = 1 // log block 0 is used for head
 
 type buf_t struct {
 	block   *common.Bdev_block_t
@@ -162,19 +162,19 @@ func (log *log_t) Stats() string {
 	return s
 }
 
-func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) (*log_t, []common.Inum_t) {
+func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 	if memfs {
-		return nil, nil
+		return nil
 	}
 	fslog := &log_t{}
 	fslog.fs = fs
 	fslog.init(logstart, loglen, disk)
-	err, orphans := fslog.recover()
+	err := fslog.recover()
 	if err != 0 {
-		return nil, orphans
+		return nil
 	}
 	go log_daemon(fslog)
-	return fslog, orphans
+	return fslog
 }
 
 func (log *log_t) stopLog() {
@@ -363,24 +363,7 @@ func (log *log_t) write_ordered() {
 	log.orderedpresent = make(map[int]bool)
 }
 
-func (log *log_t) write_orphanblk(orphans []common.Inum_t) {
-	if log_debug {
-		fmt.Printf("write orphanblk %d %v\n", len(orphans), orphans)
-	}
-	orphanblk, err := log.fs.bcache.Get_nofill(log.logstart+1, "commit", false)
-	if err != 0 {
-		panic("cannot read orphan block\n")
-	}
-	ob := logheader_t{orphanblk.Data}
-	for i, inum := range orphans {
-		ob.w_logdest(i, int(inum))
-	}
-	ob.w_logdest(len(orphans), 0) // mark end of list
-	log.fs.bcache.Write_async(orphanblk)
-	log.fs.bcache.Relse(orphanblk, "writelog")
-}
-
-func (log *log_t) commit(orphans []common.Inum_t) {
+func (log *log_t) commit() {
 	if log.memhead == log.diskhead {
 		// nothing to commit, but maybe some file blocks to sync
 		if log_debug {
@@ -392,7 +375,7 @@ func (log *log_t) commit(orphans []common.Inum_t) {
 	}
 
 	if log_debug {
-		fmt.Printf("commit %v %v orphans %v\n", log.memhead, log.diskhead, len(orphans))
+		fmt.Printf("commit %v %v\n", log.memhead, log.diskhead)
 	}
 
 	log.ncommit++
@@ -409,7 +392,7 @@ func (log *log_t) commit(orphans []common.Inum_t) {
 	}
 	lh := logheader_t{headblk.Data}
 
-	log.write_orphanblk(orphans)
+	log.fs.icache.writeOrphanMap()
 
 	blks := common.MkBlkList()
 	for i := log.diskhead; i < log.memhead; i++ {
@@ -474,44 +457,29 @@ func (log *log_t) flush() {
 	}
 }
 
-func (log *log_t) recover() (common.Err_t, []common.Inum_t) {
+func (log *log_t) recover() common.Err_t {
 	b, err := log.fs.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 {
-		return err, nil
+		return err
 	}
 	lh := logheader_t{b.Data}
 	rlen := lh.recovernum()
 	if rlen == 0 {
 		fmt.Printf("no FS recovery needed\n")
 		log.fs.bcache.Relse(b, "fs_recover_logstart")
-		return 0, nil
+		return 0
 	}
 	fmt.Printf("starting FS recovery...\n")
-
-	orphans := make([]common.Inum_t, 0)
-	orphanblk, err := log.fs.bcache.Get_fill(log.logstart+1, "fs_recover_logstart", false)
-	if err != 0 {
-		return err, nil
-	}
-	ob := logheader_t{orphanblk.Data}
-	for i := 0; i < common.BSIZE/8; i++ {
-		inum := ob.logdest(i)
-		if inum == 0 {
-			break
-		}
-		fmt.Printf("orphan inum %d\n", inum)
-		orphans = append(orphans, common.Inum_t(inum))
-	}
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
 		lb, err := log.fs.bcache.Get_fill(log.logstart+LogOffset+i, "i", false)
 		if err != 0 {
-			return err, nil
+			return err
 		}
 		fb, err := log.fs.bcache.Get_fill(bdest, "bdest", false)
 		if err != 0 {
-			return err, nil
+			return err
 		}
 		copy(fb.Data[:], lb.Data[:])
 		log.fs.bcache.Write(fb)
@@ -524,7 +492,7 @@ func (log *log_t) recover() (common.Err_t, []common.Inum_t) {
 	log.fs.bcache.Write(b)
 	log.fs.bcache.Relse(b, "fs_recover_logstart")
 	fmt.Printf("restored %v blocks\n", rlen)
-	return 0, orphans
+	return 0
 }
 
 func log_daemon(l *log_t) {
@@ -583,9 +551,7 @@ func log_daemon(l *log_t) {
 			}
 		}
 
-		inums := l.fs.icache.getOrphans()
-
-		l.commit(inums)
+		l.commit()
 
 		if waiters > 0 {
 			if log_debug {

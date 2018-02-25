@@ -1031,34 +1031,64 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	refcache *refcache_t
-	fs       *Fs_t
+	refcache     *refcache_t
+	fs           *Fs_t
+	orphanbitmap *allocater_t
 
-	// List of dead (an inode that doesn't show up in any directory anymore
-	// and isn't in any fd). They must be free at the end of a syscall.  We
-	// don't call ifree() immediately during an op, because we want to run
-	// ifree() as its own op. We don't use a channel and a seperate daemon
-	// because want to free the inode and its blocks at the end of the
-	// syscall so that the next sys call can use the freed resources.
 	sync.Mutex
+	// The following two datastructures are used to update the orphanbitmap
+	// on disk when log commits().  Map of orphan inodes (an inode that
+	// doesn't show up in any directory).  These inodes need to be freed on
+	// the last close of an fd that points to this inode.  However, on
+	// recovery, we need to free them explicitly (the crash is the "last"
+	// close).  So, the cache will put them in the orphan bitmap when the
+	// transaction that orphaned them commits (e.g., unlink). Orphan inodes
+	// turn into free and reclaimed-orphan inodes when ifree commits.
+	orphans map[common.Inum_t]bool // This is a map for quick removal in ifree()
+	// List of inodes that has freed since last commit
+	reclaimed []common.Inum_t
+
+	// An in-memory list of dead (an inode that doesn't show up in any
+	// directory anymore and isn't in any fd). They must be free at the end
+	// of a syscall.  We don't call ifree() immediately during an op,
+	// because we want to run ifree() as its own op. We don't use a channel
+	// and a seperate daemon because want to free the inode and its blocks
+	// at the end of the syscall so that the next sys call can use the freed
+	// resources.
 	dead []*imemnode_t
-	// Map of orphan inodes (an inode that doesn't show up in any
-	// directory).  These inodes need to be freed on the last close of an fd
-	// that points to this inode.  However, on recovery, we need to free
-	// them explicitly.  So, the logging system will put them in the orphan
-	// list when the transaction that orphaned them commits.
-	orphans map[common.Inum_t]bool
 }
 
 const maxinodepersys = 4
 
-func mkIcache(fs *Fs_t) *icache_t {
+func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
-	icache.orphans = make(map[common.Inum_t]bool, 0) // map is bounded (see addOrphan)
-	icache.dead = make([]*imemnode_t, 0)             // list is bounded (see addDead)
+	icache.orphans = make(map[common.Inum_t]bool, 0) // map is bounded by #unlinks between 2 commits
+	icache.reclaimed = make([]common.Inum_t, 0)      // list is bounded by #ifree between 2 commits
+	// dead is bounded the number of inodes refdowned in system call
+	icache.dead = make([]*imemnode_t, 0)
+	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache.Write, fs.bcache.Get_fill, fs.bcache.Relse)
 	return icache
+}
+
+func (icache *icache_t) writeOrphanMap() {
+	icache.Lock()
+	defer icache.Unlock()
+
+	if fs_debug {
+		fmt.Printf("write orphan map %d %v %d %v\n", len(icache.orphans), icache.orphans,
+			len(icache.reclaimed), icache.reclaimed)
+	}
+	for inum, _ := range icache.orphans {
+		icache.orphanbitmap.Mark(int(inum))
+	}
+	for _, inum := range icache.reclaimed {
+		// if already free don't write
+		icache.orphanbitmap.Free(int(inum))
+	}
+	icache.orphans = make(map[common.Inum_t]bool, 0)
+	icache.reclaimed = make([]common.Inum_t, 0)
 }
 
 func (icache *icache_t) addOrphan(imem *imemnode_t) {
@@ -1083,34 +1113,33 @@ func (icache *icache_t) _removeOrphan(inum common.Inum_t) {
 	delete(icache.orphans, inum)
 }
 
-// free orphan inodes on recovery
-func (icache *icache_t) freeOrphans(inums []common.Inum_t) {
-	fmt.Printf("freeOrphans: %v\n", inums)
-	for _, inum := range inums {
-		imem, err := icache.Iref(inum, "freeOrphans")
-		if err != 0 {
-			panic("freeOrphans")
-		}
-		evicted := icache.refcache.Refdown(imem, "freeOrphans")
-		if !evicted {
-			panic("link count isn't zero?")
-		}
-		imem.Free()
-	}
+func (icache *icache_t) _addReclaimed(inum common.Inum_t) {
+	icache.reclaimed = append(icache.reclaimed, inum)
 }
 
-func (icache *icache_t) getOrphans() []common.Inum_t {
-	icache.Lock()
-	defer icache.Unlock()
-
-	inums := make([]common.Inum_t, len(icache.orphans))
-	i := 0
-	for inum, _ := range icache.orphans {
-		inums[i] = inum
-		i++
+// XXX test idempotence
+func (icache *icache_t) freeOrphans(inum common.Inum_t) {
+	if fs_debug {
+		fmt.Printf("freeOrphans: %v\n", inum)
 	}
-	icache.orphans = make(map[common.Inum_t]bool, 0)
-	return inums
+	imem, err := icache.Iref(inum, "freeOrphans")
+	if err != 0 {
+		panic("freeOrphans")
+	}
+	evicted := icache.refcache.Refdown(imem, "freeOrphans")
+	if !evicted {
+		panic("link count isn't zero?")
+	}
+	imem.Free()
+}
+
+func (icache *icache_t) RecoverOrphans() {
+	icache.orphanbitmap.apply(func(b, v int) bool {
+		if v != 0 {
+			icache.freeOrphans(common.Inum_t(b))
+		}
+		return true
+	})
 }
 
 // XXX Fs_close() from different threads are contending for icache.dead...
@@ -1128,6 +1157,7 @@ func (icache *icache_t) freeDead() {
 		imem.Free()
 		icache.Lock()
 		icache._removeOrphan(imem.inum)
+		icache._addReclaimed(imem.inum)
 	}
 	icache.dead = make([]*imemnode_t, 0)
 }
@@ -1234,7 +1264,8 @@ type iallocater_t struct {
 
 func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 	ialloc := &iallocater_t{}
-	ialloc.alloc = mkAllocater(fs, start, len)
+	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog.Write, fs.fslog.Get_fill,
+		fs.bcache.Relse)
 	ialloc.start = start
 	ialloc.len = len
 	ialloc.first = first
@@ -1251,7 +1282,7 @@ func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 		return 0, err
 	}
 	if fs_debug {
-		fmt.Printf("ialloc %d\n", n)
+		fmt.Printf("ialloc %d freebits %d\n", n, ialloc.alloc.nfreebits)
 	}
 	// we may have more bits in inode bitmap blocks than inodes on disk
 	if n >= ialloc.maxinode {
@@ -1263,7 +1294,7 @@ func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 
 func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
-		fmt.Printf("ifree: mark free %d\n", inum)
+		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
 	return ialloc.alloc.Free(int(inum))
 }

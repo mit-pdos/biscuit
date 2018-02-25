@@ -17,8 +17,15 @@ SRCS := $(ASMS) $(CS)
 # kernel sources
 
 K := src/kernel
+F := src/fs
+C := src/common
 KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
+FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go refcache.go super.go
+FSRC := $(addprefix $(F)/,$(FSRC))
+CSRC := accnt.go defs.go disk.go fd.go limits.go mem.go physmem.go pmap.go proc.go rb.go stat.go syscall.go \
+	userbuf.go util.go wait.go
+CSRC := $(addprefix $(C)/,$(CSRC))
 
 OBJS := $(addprefix $(K)/, $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS))))
 
@@ -83,7 +90,7 @@ $(K)/bootmain.o: $(K)/bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-mkfs: src/mkfs/mkfs.go src/ufs/*.go
+mkfs: src/mkfs/mkfs.go  $(CSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build src/mkfs/mkfs.go
 
 go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
@@ -112,7 +119,7 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) src/common/*.go src/fs/*.go
+$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) $(FSRC) $(CSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
 	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \

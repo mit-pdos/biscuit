@@ -249,7 +249,7 @@ func doCheckOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 	}
 }
 
-func TestFSOrphans(t *testing.T) {
+func TestFSOrphanOne(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
@@ -259,11 +259,11 @@ func TestFSOrphans(t *testing.T) {
 	ninode, nblock := tfs.fs.Fs_size()
 	doTestOrphans(tfs, t, 1)
 	ShutdownFS(tfs) // causes the unlink to be committed
-
+	fmt.Printf("ninode %v nblock %v\n", ninode, nblock)
 	tfs = BootFS(dst)
 	ninode1, nblock1 := tfs.fs.Fs_size()
 	if ninode1 != ninode || nblock1 != nblock {
-		t.Fatalf("inode/blocks not freed: before %d %d after %d %d\n",
+		t.Fatalf("inode/blocks not freed: free before %d %d free after %d %d\n",
 			ninode, nblock, ninode1, nblock1)
 	}
 	doCheckOrphans(tfs, t, 1)

@@ -253,7 +253,7 @@ type ballocater_t struct {
 
 func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
 	balloc := &ballocater_t{}
-	balloc.alloc = mkAllocater(fs, start, len)
+	balloc.alloc = mkAllocater(fs, start, len, fs.fslog.Write, fs.fslog.Get_fill, fs.bcache.Relse)
 	fmt.Printf("bmap start %v bmaplen %v first datablock %v\n", start, len, first)
 	balloc.first = first
 	balloc.start = start
@@ -279,7 +279,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 		return 0, err
 	}
 	if bdev_debug {
-		fmt.Printf("balloc: %v\n", ret)
+		fmt.Printf("balloc: %v free %d\n", ret, balloc.alloc.nfreebits)
 	}
 
 	var zdata [common.BSIZE]uint8
@@ -293,7 +293,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	blkno -= balloc.first
 	if bdev_debug {
-		fmt.Printf("bfree: %v\n", blkno)
+		fmt.Printf("bfree: %v free before %d\n", blkno, balloc.alloc.nfreebits)
 	}
 	if blkno < 0 {
 		panic("bfree")
