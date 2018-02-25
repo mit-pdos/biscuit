@@ -11,6 +11,12 @@ import "common"
 
 const bitsperblk = common.BSIZE * 8
 
+type storage_i interface {
+	Write(*common.Bdev_block_t)
+	Get_fill(int, string, bool) (*common.Bdev_block_t, common.Err_t)
+	Relse(*common.Bdev_block_t, string)
+}
+
 type allocater_t struct {
 	sync.Mutex
 
@@ -19,11 +25,7 @@ type allocater_t struct {
 	freelen   int
 	lastbit   int
 	nfreebits uint
-
-	// XXX maybe interface
-	Write    func(*common.Bdev_block_t)
-	Get_fill func(int, string, bool) (*common.Bdev_block_t, common.Err_t)
-	Relse    func(*common.Bdev_block_t, string)
+	storage   storage_i
 
 	// stats
 	nalloc int
@@ -31,16 +33,12 @@ type allocater_t struct {
 	nhit   int
 }
 
-func mkAllocater(fs *Fs_t, start, len int, Write func(*common.Bdev_block_t),
-	Get_fill func(int, string, bool) (*common.Bdev_block_t, common.Err_t), Relse func(*common.Bdev_block_t, string)) *allocater_t {
+func mkAllocater(fs *Fs_t, start, len int, s storage_i) *allocater_t {
 	a := &allocater_t{}
 	a.fs = fs
 	a.freestart = start
 	a.freelen = len
-	a.Write = Write
-	a.Get_fill = Get_fill
-	a.Relse = Relse
-	a.nfreebits = 0
+	a.storage = s
 	err := a.apply(func(b, v int) bool {
 		if v == 0 {
 			a.nfreebits++
@@ -73,7 +71,7 @@ func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_
 	if blockno < 0 || blockno >= alloc.freelen {
 		panic("naughty blockno")
 	}
-	return alloc.Get_fill(alloc.freestart+blockno, "fbread", true)
+	return alloc.storage.Get_fill(alloc.freestart+blockno, "fbread", true)
 }
 
 // apply f to every bit until f is false
@@ -83,7 +81,7 @@ func (alloc *allocater_t) apply(f func(b, v int) bool) common.Err_t {
 	for bn := 0; bn < alloc.freelen; bn++ {
 		if blk != nil {
 			blk.Unlock()
-			alloc.Relse(blk, "alloc apply")
+			alloc.storage.Relse(blk, "alloc apply")
 		}
 		blk, err = alloc.Fbread(bn)
 		if err != 0 {
@@ -96,14 +94,14 @@ func (alloc *allocater_t) apply(f func(b, v int) bool) common.Err_t {
 				v := byte & (1 << uint(m))
 				if !f(b, int(v)) {
 					blk.Unlock()
-					alloc.Relse(blk, "alloc apply")
+					alloc.storage.Relse(blk, "alloc apply")
 					return 0
 				}
 			}
 		}
 	}
 	blk.Unlock()
-	alloc.Relse(blk, "alloc apply")
+	alloc.storage.Relse(blk, "alloc apply")
 	return 0
 }
 
@@ -121,12 +119,12 @@ func (alloc *allocater_t) CheckAndMark() (int, common.Err_t) {
 		alloc.lastbit++
 		blk.Data[byte] |= (1 << uint(bit))
 		blk.Unlock()
-		alloc.Write(blk)
-		alloc.Relse(blk, "CheckAndMark")
+		alloc.storage.Write(blk)
+		alloc.storage.Relse(blk, "CheckAndMark")
 		return bitno, 0
 	}
 	blk.Unlock()
-	alloc.Relse(blk, "alloc CheckAndMark")
+	alloc.storage.Relse(blk, "alloc CheckAndMark")
 	return 0, -common.ENOMEM
 }
 
@@ -179,8 +177,8 @@ func (alloc *allocater_t) Unmark(bit int) common.Err_t {
 	}
 	fblk.Data[fbyteoff] &= ^(1 << uint(fbitoff))
 	fblk.Unlock()
-	alloc.Write(fblk)
-	alloc.Relse(fblk, "Unmark")
+	alloc.storage.Write(fblk)
+	alloc.storage.Relse(fblk, "Unmark")
 	alloc.nfree++
 	alloc.nfreebits++
 	return 0
@@ -207,8 +205,8 @@ func (alloc *allocater_t) Mark(bit int) common.Err_t {
 	}
 	fblk.Data[fbyteoff] |= 1 << uint(fbitoff)
 	fblk.Unlock()
-	alloc.Write(fblk)
-	alloc.Relse(fblk, "Mark")
+	alloc.storage.Write(fblk)
+	alloc.storage.Relse(fblk, "Mark")
 	return 0
 }
 
@@ -264,8 +262,8 @@ func (alloc *allocater_t) MarkUnmark(mark, unmark []int) common.Err_t {
 		// done with this block
 		if blk != nil && blk.Block != fblkno {
 			blk.Unlock()
-			alloc.Write(blk)
-			alloc.Relse(blk, "MarkUnmark")
+			alloc.storage.Write(blk)
+			alloc.storage.Relse(blk, "MarkUnmark")
 			blk = nil
 		}
 		if blk == nil {
@@ -284,8 +282,8 @@ func (alloc *allocater_t) MarkUnmark(mark, unmark []int) common.Err_t {
 	}
 	if blk != nil {
 		blk.Unlock()
-		alloc.Write(blk)
-		alloc.Relse(blk, "MarkUnmark")
+		alloc.storage.Write(blk)
+		alloc.storage.Relse(blk, "MarkUnmark")
 	}
 	return 0
 }

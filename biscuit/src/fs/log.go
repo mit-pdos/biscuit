@@ -134,6 +134,10 @@ func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_
 	return log.read(mkread(log.fs.bcache.Get_nofill, blkn, s, lock))
 }
 
+func (log *log_t) Relse(blk *common.Bdev_block_t, s string) {
+	log.fs.bcache.Relse(blk, s)
+}
+
 func (log *log_t) Stats() string {
 	s := "log:"
 	s += "\n\tnlogwrite "

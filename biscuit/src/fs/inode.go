@@ -1067,7 +1067,7 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache.reclaimed = make([]common.Inum_t, 0)      // list is bounded by #ifree between 2 commits
 	// dead is bounded the number of inodes refdowned in system call
 	icache.dead = make([]*imemnode_t, 0)
-	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache.Write, fs.bcache.Get_fill, fs.bcache.Relse)
+	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache)
 	return icache
 }
 
@@ -1268,8 +1268,7 @@ type iallocater_t struct {
 
 func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 	ialloc := &iallocater_t{}
-	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog.Write, fs.fslog.Get_fill,
-		fs.bcache.Relse)
+	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	ialloc.start = start
 	ialloc.len = len
 	ialloc.first = first

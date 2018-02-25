@@ -253,7 +253,7 @@ type ballocater_t struct {
 
 func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
 	balloc := &ballocater_t{}
-	balloc.alloc = mkAllocater(fs, start, len, fs.fslog.Write, fs.fslog.Get_fill, fs.bcache.Relse)
+	balloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	fmt.Printf("bmap start %v bmaplen %v first datablock %v\n", start, len, first)
 	balloc.first = first
 	balloc.start = start
