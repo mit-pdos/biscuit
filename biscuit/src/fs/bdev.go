@@ -243,16 +243,16 @@ func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
 // Block allocator interface
 //
 
-type ballocater_t struct {
+type bbitmap_t struct {
 	fs    *Fs_t
-	alloc *allocater_t
+	alloc *bitmap_t
 	start int
 	len   int
 	first int
 }
 
-func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
-	balloc := &ballocater_t{}
+func mkBallocater(fs *Fs_t, start, len, first int) *bbitmap_t {
+	balloc := &bbitmap_t{}
 	balloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	fmt.Printf("bmap start %v bmaplen %v first datablock %v\n", start, len, first)
 	balloc.first = first
@@ -262,7 +262,7 @@ func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
 	return balloc
 }
 
-func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
+func (balloc *bbitmap_t) Balloc() (int, common.Err_t) {
 	ret, err := balloc.balloc1()
 	if err != 0 {
 		return 0, err
@@ -290,7 +290,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 	return ret, 0
 }
 
-func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
+func (balloc *bbitmap_t) Bfree(blkno int) common.Err_t {
 	blkno -= balloc.first
 	if bdev_debug {
 		fmt.Printf("bfree: %v free before %d\n", blkno, balloc.alloc.nfreebits)
@@ -304,14 +304,14 @@ func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	return balloc.alloc.Unmark(blkno)
 }
 
-func (balloc *ballocater_t) Stats() string {
+func (balloc *bbitmap_t) Stats() string {
 	return "balloc " + balloc.alloc.Stats()
 }
 
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
+func (balloc *bbitmap_t) balloc1() (int, common.Err_t) {
 	blkn, err := balloc.alloc.FindAndMark()
 	if err != 0 {
 		fmt.Printf("balloc1: %v\n", err)

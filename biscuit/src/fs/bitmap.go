@@ -17,7 +17,7 @@ type storage_i interface {
 	Relse(*common.Bdev_block_t, string)
 }
 
-type allocater_t struct {
+type bitmap_t struct {
 	sync.Mutex
 
 	fs        *Fs_t
@@ -33,8 +33,8 @@ type allocater_t struct {
 	nhit   int
 }
 
-func mkAllocater(fs *Fs_t, start, len int, s storage_i) *allocater_t {
-	a := &allocater_t{}
+func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
+	a := &bitmap_t{}
 	a.fs = fs
 	a.freestart = start
 	a.freelen = len
@@ -67,7 +67,7 @@ func byteoffset(bit int) int {
 	return blkoffset(bit) % 8
 }
 
-func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
+func (alloc *bitmap_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
 	if blockno < 0 || blockno >= alloc.freelen {
 		panic("naughty blockno")
 	}
@@ -75,7 +75,7 @@ func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_
 }
 
 // apply f to every bit until f is false
-func (alloc *allocater_t) apply(f func(b, v int) bool) common.Err_t {
+func (alloc *bitmap_t) apply(f func(b, v int) bool) common.Err_t {
 	var blk *common.Bdev_block_t
 	var err common.Err_t
 	for bn := 0; bn < alloc.freelen; bn++ {
@@ -105,7 +105,7 @@ func (alloc *allocater_t) apply(f func(b, v int) bool) common.Err_t {
 	return 0
 }
 
-func (alloc *allocater_t) CheckAndMark() (int, common.Err_t) {
+func (alloc *bitmap_t) CheckAndMark() (int, common.Err_t) {
 	bitno := alloc.lastbit
 	blkno := blkno(alloc.lastbit)
 	byte := byteno(alloc.lastbit)
@@ -128,7 +128,7 @@ func (alloc *allocater_t) CheckAndMark() (int, common.Err_t) {
 	return 0, -common.ENOMEM
 }
 
-func (alloc *allocater_t) FindAndMark() (int, common.Err_t) {
+func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -156,7 +156,7 @@ func (alloc *allocater_t) FindAndMark() (int, common.Err_t) {
 	return bit, 0
 }
 
-func (alloc *allocater_t) Unmark(bit int) common.Err_t {
+func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -184,7 +184,7 @@ func (alloc *allocater_t) Unmark(bit int) common.Err_t {
 	return 0
 }
 
-func (alloc *allocater_t) Mark(bit int) common.Err_t {
+func (alloc *bitmap_t) Mark(bit int) common.Err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -237,7 +237,7 @@ func smallest(mark, unmark []int) (int, mark_t) {
 }
 
 // mark and umark bits in a single shot.
-func (alloc *allocater_t) MarkUnmark(mark, unmark []int) common.Err_t {
+func (alloc *bitmap_t) MarkUnmark(mark, unmark []int) common.Err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -288,7 +288,7 @@ func (alloc *allocater_t) MarkUnmark(mark, unmark []int) common.Err_t {
 	return 0
 }
 
-func (alloc *allocater_t) Stats() string {
+func (alloc *bitmap_t) Stats() string {
 	s := "allocater: #Marked "
 	s += strconv.Itoa(alloc.nalloc)
 	s += " #Unmarked "

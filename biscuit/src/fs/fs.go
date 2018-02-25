@@ -19,8 +19,8 @@ type Fs_t struct {
 	bcache       *bcache_t
 	icache       *icache_t
 	fslog        *log_t
-	ialloc       *iallocater_t
-	balloc       *ballocater_t
+	ialloc       *ibitmap_t
+	balloc       *bbitmap_t
 	istats       *inode_stats_t
 }
 

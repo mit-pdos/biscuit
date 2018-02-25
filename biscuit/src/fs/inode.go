@@ -1032,7 +1032,7 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 type icache_t struct {
 	refcache     *refcache_t
 	fs           *Fs_t
-	orphanbitmap *allocater_t
+	orphanbitmap *bitmap_t
 
 	sync.Mutex
 	// The following two datastructures are used to update the orphanbitmap
@@ -1257,8 +1257,8 @@ func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 // Inode allocator
 //
 
-type iallocater_t struct {
-	alloc    *allocater_t
+type ibitmap_t struct {
+	alloc    *bitmap_t
 	start    int
 	len      int
 	first    int
@@ -1266,8 +1266,8 @@ type iallocater_t struct {
 	maxinode int
 }
 
-func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
-	ialloc := &iallocater_t{}
+func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
+	ialloc := &ibitmap_t{}
 	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	ialloc.start = start
 	ialloc.len = len
@@ -1279,7 +1279,7 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 	return ialloc
 }
 
-func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
+func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
 	n, err := ialloc.alloc.FindAndMark()
 	if err != 0 {
 		return 0, err
@@ -1295,14 +1295,14 @@ func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 	return inum, 0
 }
 
-func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
+func (ialloc *ibitmap_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
 	return ialloc.alloc.Unmark(int(inum))
 }
 
-func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
+func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
 	b := int(inum) / (common.BSIZE / ISIZE)
 	b += ialloc.first
 	if b < ialloc.first || b >= ialloc.first+ialloc.inodelen {
@@ -1317,6 +1317,6 @@ func ioffset(inum common.Inum_t) int {
 	return o
 }
 
-func (ialloc *iallocater_t) Stats() string {
+func (ialloc *ibitmap_t) Stats() string {
 	return "inode " + ialloc.alloc.Stats()
 }
