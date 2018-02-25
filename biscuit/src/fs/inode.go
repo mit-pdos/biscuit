@@ -257,7 +257,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	idm.fs.istats.Nifill.inc()
 	idm.fill(blk, inum)
 	blk.Unlock()
-	idm.fs.bcache.Relse(blk, "idm_init")
+	idm.fs.fslog.Relse(blk, "idm_init")
 	return 0
 }
 
@@ -282,7 +282,7 @@ func (idm *imemnode_t) _iupdate() common.Err_t {
 	} else {
 		iblk.Unlock()
 	}
-	idm.fs.bcache.Relse(iblk, "_iupdate")
+	idm.fs.fslog.Relse(iblk, "_iupdate")
 	return 0
 }
 
@@ -597,7 +597,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn, writing)
-			idm.fs.bcache.Relse(indblk, "indblk")
+			idm.fs.fslog.Relse(indblk, "indblk")
 			return blkn, err
 		} else if fbn < INDADDR*INDADDR {
 			fbn -= INDADDR
@@ -616,14 +616,14 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 			}
 
 			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
-			idm.fs.bcache.Relse(dindblk, "dindblk")
+			idm.fs.fslog.Relse(dindblk, "dindblk")
 
 			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn%INDADDR, writing)
-			idm.fs.bcache.Relse(indblk, "indblk2")
+			idm.fs.fslog.Relse(indblk, "indblk2")
 			return blkn, err
 		} else {
 			panic("too big fbn")
@@ -727,7 +727,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 		c += wrote
 		offset += wrote
 		b.Unlock()
-		idm.fs.bcache.Relse(b, "_iread")
+		idm.fs.fslog.Relse(b, "_iread")
 		if err != 0 {
 			return c, err
 		}
@@ -758,7 +758,7 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		read, err := src.Uioread(dst)
 		b.Unlock()
 		idm.fs.fslog.Write_ordered(b)
-		idm.fs.bcache.Relse(b, "iwrite")
+		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
 		}
@@ -805,7 +805,7 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 	ni := &Inode_t{ib, ioffset(childi)}
 	ni.W_itype(I_DEAD)
 	ib.Unlock()
-	idm.fs.bcache.Relse(ib, "create_undo")
+	idm.fs.fslog.Relse(ib, "create_undo")
 	idm.fs.ialloc.Ifree(childi)
 	return 0
 }
@@ -871,7 +871,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		idm.fs.ialloc.Ifree(newinum)
 	}
 	idm.fs.fslog.Write(newiblk)
-	idm.fs.bcache.Relse(newiblk, "icreate")
+	idm.fs.fslog.Relse(newiblk, "icreate")
 	return newinum, err
 }
 
@@ -912,7 +912,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 		// XXX race? vm system may not do this for a while. maybe we
 		// should increase page count here.
 		// buf.Mem.Refup(buf.Pa)
-		idm.fs.bcache.Relse(buf, "immapinfo")
+		idm.fs.fslog.Relse(buf, "immapinfo")
 	}
 	return ret, 0
 }
@@ -949,7 +949,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 			nblkno := common.Readn(data, 8, off)
 			add(nblkno)
 		}
-		idm.fs.bcache.Relse(blk, "ifree indirect")
+		idm.fs.fslog.Relse(blk, "ifree indirect")
 		return 0
 	}
 
@@ -978,7 +978,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 				}
 			}
 		}
-		idm.fs.bcache.Relse(blk, "dindno")
+		idm.fs.fslog.Relse(blk, "dindno")
 	}
 
 	iblk, err := idm.idibread()
@@ -992,7 +992,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	idm.flushto(iblk, idm.inum)
 	iblk.Unlock()
 	idm.fs.fslog.Write(iblk)
-	idm.fs.bcache.Relse(iblk, "ifree inode")
+	idm.fs.fslog.Relse(iblk, "ifree inode")
 
 	idm.fs.ialloc.Ifree(idm.inum)
 
