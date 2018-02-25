@@ -307,7 +307,7 @@ func (log *log_t) addlog(buf buf_t) {
 	// No need to copy data of buf because later ops who reads the modified
 	// block will commmit with this transaction (or crash, but then nop will
 	// commit).  We never commit while an operation is still on-going.
-	if buf.ordered && !present {
+	if buf.ordered && !present { // kill !present and don't absorb above, then Ordered test fails)
 		log.ordered.PushBack(buf.block)
 		log.orderedpresent[buf.block.Block] = true
 	} else {
@@ -360,6 +360,7 @@ func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
 	log.nforceordered++
 	log.ordered.Apply(func(b *common.Bdev_block_t) {
+		fmt.Printf("write ordered %d\n", b.Block)
 		log.fs.bcache.Write_async(b)
 		log.fs.bcache.Relse(b, "writeordered")
 	})
@@ -424,7 +425,7 @@ func (log *log_t) commit() {
 
 	log.write_ordered()
 
-	log.flush() // flush outstanding writes
+	log.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
 
 	log.fs.bcache.Write(headblk) // write log header
 

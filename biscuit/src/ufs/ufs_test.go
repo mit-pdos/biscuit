@@ -436,7 +436,6 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 const ndatablksordered = 8 // small, to cause block reuse
 const norderedblks = 2     // this causes reuse
 
-// XXX add mkfile f2 also to setup
 func doOrderedInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*norderedblks)
 	e := tfs.MkFile("f1", ub)
@@ -456,12 +455,6 @@ func doTestOrdered(tfs *Ufs_t, t *testing.T) {
 	e = tfs.MkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
-	}
-
-	ub = mkData(3, common.BSIZE*norderedblks)
-	e = tfs.Update("f2", ub)
-	if e != 0 {
-		t.Fatalf("Update %v failed", "f2")
 	}
 }
 
@@ -636,6 +629,7 @@ func TestTracesAtomic(t *testing.T) {
 	trace := readTrace("trace.json")
 	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
 	fmt.Printf("#traces = %v\n", cnt)
+	os.Remove(disk)
 }
 
 func TestTracesOrdered(t *testing.T) {
@@ -647,4 +641,5 @@ func TestTracesOrdered(t *testing.T) {
 	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
 	fmt.Printf("#traces = %v\n", cnt)
+	os.Remove(disk)
 }
