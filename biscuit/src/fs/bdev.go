@@ -2,6 +2,7 @@ package fs
 
 import "fmt"
 import "strconv"
+import "sync"
 
 import "common"
 
@@ -35,6 +36,8 @@ type bcache_t struct {
 	refcache *refcache_t
 	mem      common.Blockmem_i
 	disk     common.Disk_i
+	sync.Mutex
+	pins map[common.Pa_t]*common.Bdev_block_t
 }
 
 func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
@@ -42,6 +45,7 @@ func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
 	bcache.mem = mem
 	bcache.disk = disk
 	bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
+	bcache.pins = make(map[common.Pa_t]*common.Bdev_block_t)
 	return bcache
 }
 
@@ -149,6 +153,10 @@ func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	}
 	evicted := bcache.refcache.Refdown(b, s)
 	if evicted {
+		bcache.Lock()
+		delete(bcache.pins, b.Pa)
+		bcache.Unlock()
+
 		b.Evict()
 	}
 }
@@ -195,6 +203,28 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 	b.Lock()
 	b.Name = s
 	return b, created, err
+}
+
+func (bcache *bcache_t) pin(b *common.Bdev_block_t) {
+	bcache.refcache.Refup(b, "pin")
+
+	bcache.Lock()
+	if old, ok := bcache.pins[b.Pa]; ok && old != b {
+		panic("uh oh")
+	}
+	bcache.pins[b.Pa] = b
+	bcache.Unlock()
+}
+
+func (bcache *bcache_t) unpin(pa common.Pa_t) {
+	bcache.Lock()
+	defer bcache.Unlock()
+	b, ok := bcache.pins[pa]
+
+	if !ok {
+		panic("block no pinned")
+	}
+	bcache.Relse(b, "unpin")
 }
 
 func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {

@@ -876,7 +876,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 	return newinum, err
 }
 
-func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
+func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmapinfo_t, common.Err_t) {
 	isz := idm.size
 	if (len != -1 && len < 0) || offset < 0 {
 		panic("bad off/len")
@@ -899,20 +899,21 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 			return nil, err
 		}
 		buf.Unlock()
-		if inc { // the VM system is going to use the page
-			// XXX don't release buffer (i.e., pin in cache)
-			// so that writes make it to the file. modify vm
-			// system to call Bcache.Relse.
-			// mem.Refup(buf.Pa)
+
+		// the VM system is going to use the page
+		buf.Mem.Refup(buf.Pa)
+
+		// the VM system will map this block writable; make sure the
+		// block isn't evicted to ensure that future read(2)s can
+		// observe writes through the mapping.
+		if mapshared {
+			idm.fs.bcache.pin(buf)
 		}
+
 		pgn := i / common.PGSIZE
 		wpg := (*common.Pg_t)(unsafe.Pointer(buf.Data))
 		ret[pgn].Pg = wpg
 		ret[pgn].Phys = buf.Pa
-		// release buffer. the VM system will increase the page count.
-		// XXX race? vm system may not do this for a while. maybe we
-		// should increase page count here.
-		// buf.Mem.Refup(buf.Pa)
 		idm.fs.bcache.Relse(buf, "immapinfo")
 	}
 	return ret, 0

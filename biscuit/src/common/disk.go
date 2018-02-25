@@ -164,9 +164,10 @@ func (blk *Bdev_block_t) Evictnow() bool {
 }
 
 func (blk *Bdev_block_t) Done(s string) {
-	if blk.Cb != nil {
-		blk.Cb.Relse(blk, s)
+	if blk.Cb == nil {
+		panic("wtf")
 	}
+	blk.Cb.Relse(blk, s)
 }
 
 func (b *Bdev_block_t) Write() {

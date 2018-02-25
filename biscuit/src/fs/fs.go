@@ -121,6 +121,10 @@ func (fs *Fs_t) op_end_and_free() {
 	fs.icache.freeDead()
 }
 
+func (fs *Fs_t) Unpin(pa common.Pa_t) {
+	fs.bcache.unpin(pa)
+}
+
 func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_link")
 	defer fs.op_end_and_free()

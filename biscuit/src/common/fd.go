@@ -89,6 +89,10 @@ type Fdops_i interface {
 	Shutdown(rdone, wdone bool) Err_t
 }
 
+type Unpin_i interface {
+	Unpin(Pa_t)
+}
+
 type Pollmsg_t struct {
 	notif  chan bool
 	Events Ready_t

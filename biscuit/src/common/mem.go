@@ -53,6 +53,7 @@ const (
 
 type Mfile_t struct {
 	mfops Fdops_i
+	unpin Unpin_i
 	// once mapcount is 0, close mfops
 	mapcount int
 }
@@ -84,13 +85,14 @@ type Vmregion_t struct {
 	}
 }
 
+// if err == 0, the FS increased the reference count on the page.
 func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
 	if vmi.mtype != VFILE {
 		panic("must be file mapping")
 	}
 	voff := int(va - (vmi.pgn << PGSHIFT))
 	foff := vmi.file.foff + voff
-	mmapi, err := vmi.file.mfile.mfops.Mmapi(foff, 1, true)
+	mmapi, err := vmi.file.mfile.mfops.Mmapi(foff, 1, vmi.file.shared)
 	if err != 0 {
 		return nil, 0, err
 	}
@@ -504,6 +506,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 	}
 
 	var p_pg Pa_t
+	isblockpage := false
 	perms := PTE_U | PTE_P
 	isempty := true
 
@@ -515,6 +518,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		if err != 0 {
 			return false
 		}
+		isblockpage = true
 		if vmi.perms&uint(PTE_W) != 0 {
 			perms |= PTE_W
 		}
@@ -524,6 +528,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 			panic("bad state")
 		}
 		var pgsrc *Pg_t
+		var p_bpg Pa_t
 		// the copy-on-write page may be specified in the pte or it may
 		// not have been mapped at all yet.
 		cow := *pte&PTE_COW != 0
@@ -553,10 +558,11 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 				pgsrc = Zeropg
 			case VFILE:
 				var err Err_t
-				pgsrc, _, err = vmi.Filepage(faultaddr)
+				pgsrc, p_bpg, err = vmi.Filepage(faultaddr)
 				if err != 0 {
 					return false
 				}
+				defer Physmem.Refdown(p_bpg)
 			default:
 				panic("wut")
 			}
@@ -584,6 +590,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 			if err != 0 {
 				return false
 			}
+			isblockpage = true
 		default:
 			panic("wut")
 		}
@@ -592,7 +599,13 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		}
 	}
 
-	tshoot, ok := proc.Page_insert(int(faultaddr), p_pg, perms, isempty)
+	var tshoot bool
+	if isblockpage {
+		tshoot, ok = proc.Blockpage_insert(int(faultaddr), p_pg, perms,
+			isempty)
+	} else {
+		tshoot, ok = proc.Page_insert(int(faultaddr), p_pg, perms, isempty)
+	}
 	if !ok {
 		Physmem.Refdown(p_pg)
 		return false
