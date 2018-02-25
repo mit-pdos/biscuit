@@ -257,7 +257,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	idm.fs.istats.Nifill.inc()
 	idm.fill(blk, inum)
 	blk.Unlock()
-	idm.fs.bcache.Relse(blk, "idm_init")
+	idm.fs.fslog.Relse(blk, "idm_init")
 	return 0
 }
 
@@ -282,7 +282,7 @@ func (idm *imemnode_t) _iupdate() common.Err_t {
 	} else {
 		iblk.Unlock()
 	}
-	idm.fs.bcache.Relse(iblk, "_iupdate")
+	idm.fs.fslog.Relse(iblk, "_iupdate")
 	return 0
 }
 
@@ -500,7 +500,6 @@ func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
 		fmt.Printf("itype: %v for %v\n", ic.itype, inum)
-		panic("bad itype in fill")
 	}
 	ic.links = inode.linkcount()
 	ic.size = inode.size()
@@ -598,7 +597,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn, writing)
-			idm.fs.bcache.Relse(indblk, "indblk")
+			idm.fs.fslog.Relse(indblk, "indblk")
 			return blkn, err
 		} else if fbn < INDADDR*INDADDR {
 			fbn -= INDADDR
@@ -617,14 +616,14 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 			}
 
 			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
-			idm.fs.bcache.Relse(dindblk, "dindblk")
+			idm.fs.fslog.Relse(dindblk, "dindblk")
 
 			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn%INDADDR, writing)
-			idm.fs.bcache.Relse(indblk, "indblk2")
+			idm.fs.fslog.Relse(indblk, "indblk2")
 			return blkn, err
 		} else {
 			panic("too big fbn")
@@ -728,7 +727,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 		c += wrote
 		offset += wrote
 		b.Unlock()
-		idm.fs.bcache.Relse(b, "_iread")
+		idm.fs.fslog.Relse(b, "_iread")
 		if err != 0 {
 			return c, err
 		}
@@ -759,7 +758,7 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		read, err := src.Uioread(dst)
 		b.Unlock()
 		idm.fs.fslog.Write_ordered(b)
-		idm.fs.bcache.Relse(b, "iwrite")
+		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
 		}
@@ -806,7 +805,7 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 	ni := &Inode_t{ib, ioffset(childi)}
 	ni.W_itype(I_DEAD)
 	ib.Unlock()
-	idm.fs.bcache.Relse(ib, "create_undo")
+	idm.fs.fslog.Relse(ib, "create_undo")
 	idm.fs.ialloc.Ifree(childi)
 	return 0
 }
@@ -872,7 +871,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		idm.fs.ialloc.Ifree(newinum)
 	}
 	idm.fs.fslog.Write(newiblk)
-	idm.fs.bcache.Relse(newiblk, "icreate")
+	idm.fs.fslog.Relse(newiblk, "icreate")
 	return newinum, err
 }
 
@@ -914,7 +913,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmap
 		wpg := (*common.Pg_t)(unsafe.Pointer(buf.Data))
 		ret[pgn].Pg = wpg
 		ret[pgn].Phys = buf.Pa
-		idm.fs.bcache.Relse(buf, "immapinfo")
+		idm.fs.fslog.Relse(buf, "immapinfo")
 	}
 	return ret, 0
 }
@@ -951,7 +950,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 			nblkno := common.Readn(data, 8, off)
 			add(nblkno)
 		}
-		idm.fs.bcache.Relse(blk, "ifree indirect")
+		idm.fs.fslog.Relse(blk, "ifree indirect")
 		return 0
 	}
 
@@ -980,7 +979,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 				}
 			}
 		}
-		idm.fs.bcache.Relse(blk, "dindno")
+		idm.fs.fslog.Relse(blk, "dindno")
 	}
 
 	iblk, err := idm.idibread()
@@ -994,7 +993,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	idm.flushto(iblk, idm.inum)
 	iblk.Unlock()
 	idm.fs.fslog.Write(iblk)
-	idm.fs.bcache.Relse(iblk, "ifree inode")
+	idm.fs.fslog.Relse(iblk, "ifree inode")
 
 	idm.fs.ialloc.Ifree(idm.inum)
 
@@ -1034,7 +1033,7 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 type icache_t struct {
 	refcache     *refcache_t
 	fs           *Fs_t
-	orphanbitmap *allocater_t
+	orphanbitmap *bitmap_t
 
 	sync.Mutex
 	// The following two datastructures are used to update the orphanbitmap
@@ -1069,7 +1068,7 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache.reclaimed = make([]common.Inum_t, 0)      // list is bounded by #ifree between 2 commits
 	// dead is bounded the number of inodes refdowned in system call
 	icache.dead = make([]*imemnode_t, 0)
-	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache.Write, fs.bcache.Get_fill, fs.bcache.Relse)
+	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache)
 	return icache
 }
 
@@ -1077,19 +1076,19 @@ func (icache *icache_t) writeOrphanMap() {
 	icache.Lock()
 	defer icache.Unlock()
 
-	if fs_debug {
-		fmt.Printf("write orphan map %d %v %d %v\n", len(icache.orphans), icache.orphans,
-			len(icache.reclaimed), icache.reclaimed)
-	}
+	orphans := make([]int, 0, len(icache.orphans))
 	for inum, _ := range icache.orphans {
-		icache.orphanbitmap.Mark(int(inum))
+		orphans = append(orphans, int(inum))
 	}
+	reclaimed := make([]int, 0, len(icache.reclaimed))
 	for _, inum := range icache.reclaimed {
-		// if already free don't write
-		icache.orphanbitmap.Free(int(inum))
+		reclaimed = append(reclaimed, int(inum))
 	}
+	icache.orphanbitmap.MarkUnmark(orphans, reclaimed)
+
 	icache.orphans = make(map[common.Inum_t]bool, 0)
 	icache.reclaimed = make([]common.Inum_t, 0)
+
 }
 
 func (icache *icache_t) addOrphan(imem *imemnode_t) {
@@ -1118,7 +1117,6 @@ func (icache *icache_t) _addReclaimed(inum common.Inum_t) {
 	icache.reclaimed = append(icache.reclaimed, inum)
 }
 
-// XXX test idempotence
 func (icache *icache_t) freeOrphans(inum common.Inum_t) {
 	if fs_debug {
 		fmt.Printf("freeOrphans: %v\n", inum)
@@ -1131,13 +1129,19 @@ func (icache *icache_t) freeOrphans(inum common.Inum_t) {
 	if !evicted {
 		panic("link count isn't zero?")
 	}
-	imem.Free()
+	// we might have crashed during RecoverOrphans and already have
+	// reclaimed this inode.
+	if imem.itype != I_DEAD {
+		imem.Free()
+	}
 }
 
 func (icache *icache_t) RecoverOrphans() {
 	icache.orphanbitmap.apply(func(b, v int) bool {
 		if v != 0 {
-			icache.freeOrphans(common.Inum_t(b))
+			inum := common.Inum_t(b)
+			icache.freeOrphans(inum)
+			icache._addReclaimed(inum)
 		}
 		return true
 	})
@@ -1254,8 +1258,8 @@ func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 // Inode allocator
 //
 
-type iallocater_t struct {
-	alloc    *allocater_t
+type ibitmap_t struct {
+	alloc    *bitmap_t
 	start    int
 	len      int
 	first    int
@@ -1263,10 +1267,9 @@ type iallocater_t struct {
 	maxinode int
 }
 
-func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
-	ialloc := &iallocater_t{}
-	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog.Write, fs.fslog.Get_fill,
-		fs.bcache.Relse)
+func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
+	ialloc := &ibitmap_t{}
+	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	ialloc.start = start
 	ialloc.len = len
 	ialloc.first = first
@@ -1277,8 +1280,8 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 	return ialloc
 }
 
-func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
-	n, err := ialloc.alloc.Alloc()
+func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
+	n, err := ialloc.alloc.FindAndMark()
 	if err != 0 {
 		return 0, err
 	}
@@ -1293,14 +1296,14 @@ func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 	return inum, 0
 }
 
-func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
+func (ialloc *ibitmap_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
-	return ialloc.alloc.Free(int(inum))
+	return ialloc.alloc.Unmark(int(inum))
 }
 
-func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
+func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
 	b := int(inum) / (common.BSIZE / ISIZE)
 	b += ialloc.first
 	if b < ialloc.first || b >= ialloc.first+ialloc.inodelen {
@@ -1315,6 +1318,6 @@ func ioffset(inum common.Inum_t) int {
 	return o
 }
 
-func (ialloc *iallocater_t) Stats() string {
+func (ialloc *ibitmap_t) Stats() string {
 	return "inode " + ialloc.alloc.Stats()
 }

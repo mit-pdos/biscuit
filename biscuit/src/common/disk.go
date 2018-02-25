@@ -45,9 +45,6 @@ type BlkList_t struct {
 	e *list.Element // iterator
 }
 
-func PrintBlkList() {
-}
-
 func MkBlkList() *BlkList_t {
 	bl := &BlkList_t{}
 	bl.l = list.New()

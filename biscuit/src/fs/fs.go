@@ -19,8 +19,8 @@ type Fs_t struct {
 	bcache       *bcache_t
 	icache       *icache_t
 	fslog        *log_t
-	ialloc       *iallocater_t
-	balloc       *ballocater_t
+	ialloc       *ibitmap_t
+	balloc       *bbitmap_t
 	istats       *inode_stats_t
 }
 
@@ -90,6 +90,8 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 	fs.icache = mkIcache(fs, iorphanstart, iorphanlen)
 	fs.icache.RecoverOrphans()
+
+	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
@@ -400,13 +402,13 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	defer fs.bcache.Relse(b1, "probe_insert")
+	defer fs.fslog.Relse(b1, "probe_insert")
 
 	b2, err := opar.probe_unlink(ofn)
 	if err != 0 {
 		return err
 	}
-	defer fs.bcache.Relse(b2, "probe_unlink_opar")
+	defer fs.fslog.Relse(b2, "probe_unlink_opar")
 
 	odir := ochild.itype == I_DIR
 	if odir {
@@ -414,7 +416,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		if err != 0 {
 			return err
 		}
-		defer fs.bcache.Relse(b3, "probe_unlink_ochild")
+		defer fs.fslog.Relse(b3, "probe_unlink_ochild")
 	}
 
 	if newexists {
@@ -949,12 +951,12 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 		boff := raw.offset % common.BSIZE
 		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {
-			raw.fs.bcache.Relse(b, "read")
+			raw.fs.fslog.Relse(b, "read")
 			return 0, err
 		}
 		raw.offset += c
 		did += c
-		raw.fs.bcache.Relse(b, "read")
+		raw.fs.fslog.Relse(b, "read")
 	}
 	return did, 0
 }
@@ -976,13 +978,13 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		}
 		c, err := src.Uioread(buf.Data[boff:])
 		if err != 0 {
-			raw.fs.bcache.Relse(buf, "write")
+			raw.fs.fslog.Relse(buf, "write")
 			return 0, err
 		}
 		raw.fs.bcache.Write(buf)
 		raw.offset += c
 		did += c
-		raw.fs.bcache.Relse(buf, "write")
+		raw.fs.fslog.Relse(buf, "write")
 	}
 	return did, 0
 }
