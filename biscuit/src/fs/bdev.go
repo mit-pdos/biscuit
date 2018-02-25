@@ -301,7 +301,7 @@ func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	if blkno >= balloc.len*common.BSIZE*8 {
 		panic("bfree too large")
 	}
-	return balloc.alloc.Free(blkno)
+	return balloc.alloc.Unmark(blkno)
 }
 
 func (balloc *ballocater_t) Stats() string {
@@ -312,7 +312,7 @@ func (balloc *ballocater_t) Stats() string {
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
 func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
-	blkn, err := balloc.alloc.Alloc()
+	blkn, err := balloc.alloc.FindAndMark()
 	if err != 0 {
 		fmt.Printf("balloc1: %v\n", err)
 		return 0, err

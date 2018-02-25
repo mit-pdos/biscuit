@@ -3,6 +3,7 @@ package fs
 import "fmt"
 import "sync"
 import "strconv"
+import "sort"
 
 import "common"
 
@@ -69,7 +70,6 @@ func byteoffset(bit int) int {
 }
 
 func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
-	// fmt.Printf("read %d\n", alloc.freestart+blockno)
 	if blockno < 0 || blockno >= alloc.freelen {
 		panic("naughty blockno")
 	}
@@ -107,7 +107,7 @@ func (alloc *allocater_t) apply(f func(b, v int) bool) common.Err_t {
 	return 0
 }
 
-func (alloc *allocater_t) quickalloc() (int, common.Err_t) {
+func (alloc *allocater_t) CheckAndMark() (int, common.Err_t) {
 	bitno := alloc.lastbit
 	blkno := blkno(alloc.lastbit)
 	byte := byteno(alloc.lastbit)
@@ -122,19 +122,19 @@ func (alloc *allocater_t) quickalloc() (int, common.Err_t) {
 		blk.Data[byte] |= (1 << uint(bit))
 		blk.Unlock()
 		alloc.Write(blk)
-		alloc.Relse(blk, "alloc quickcheck")
+		alloc.Relse(blk, "CheckAndMark")
 		return bitno, 0
 	}
 	blk.Unlock()
-	alloc.Relse(blk, "alloc quickcheck")
+	alloc.Relse(blk, "alloc CheckAndMark")
 	return 0, -common.ENOMEM
 }
 
-func (alloc *allocater_t) Alloc() (int, common.Err_t) {
+func (alloc *allocater_t) FindAndMark() (int, common.Err_t) {
 	alloc.Lock()
 	defer alloc.Unlock()
 
-	bit, err := alloc.quickalloc()
+	bit, err := alloc.CheckAndMark()
 	if err == 0 {
 		alloc.nhit++
 	} else {
@@ -148,9 +148,9 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 		if err != 0 {
 			return 0, err
 		}
-		bit, err = alloc.quickalloc()
+		bit, err = alloc.CheckAndMark()
 		if err != 0 {
-			panic("quickmark")
+			panic("FindAndMark")
 		}
 	}
 	alloc.nalloc++
@@ -158,16 +158,16 @@ func (alloc *allocater_t) Alloc() (int, common.Err_t) {
 	return bit, 0
 }
 
-func (alloc *allocater_t) Free(bit int) common.Err_t {
+func (alloc *allocater_t) Unmark(bit int) common.Err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
 	if fs_debug {
-		fmt.Printf("Free: %v\n", bit)
+		fmt.Printf("Unmark: %v\n", bit)
 	}
 
 	if bit < 0 {
-		panic("free bad bit")
+		panic("Unmark bad bit")
 	}
 
 	fblkno := blkno(bit)
@@ -180,7 +180,7 @@ func (alloc *allocater_t) Free(bit int) common.Err_t {
 	fblk.Data[fbyteoff] &= ^(1 << uint(fbitoff))
 	fblk.Unlock()
 	alloc.Write(fblk)
-	alloc.Relse(fblk, "free")
+	alloc.Relse(fblk, "Unmark")
 	alloc.nfree++
 	alloc.nfreebits++
 	return 0
@@ -208,14 +208,92 @@ func (alloc *allocater_t) Mark(bit int) common.Err_t {
 	fblk.Data[fbyteoff] |= 1 << uint(fbitoff)
 	fblk.Unlock()
 	alloc.Write(fblk)
-	alloc.Relse(fblk, "free")
+	alloc.Relse(fblk, "Mark")
+	return 0
+}
+
+type mark_t int
+
+const (
+	MARK   mark_t = 1
+	UNMARK mark_t = 2
+)
+
+func smallest(mark, unmark []int) (int, mark_t) {
+	var n int
+	var m mark_t
+	if len(mark) > 0 {
+		n = mark[0]
+		m = MARK
+		if len(unmark) > 0 {
+			if unmark[0] < n {
+				n = unmark[0]
+				m = UNMARK
+			}
+		}
+	} else {
+		n = unmark[0]
+		m = UNMARK
+	}
+	return n, m
+}
+
+// mark and umark bits in a single shot.
+func (alloc *allocater_t) MarkUnmark(mark, unmark []int) common.Err_t {
+	alloc.Lock()
+	defer alloc.Unlock()
+
+	sort.Ints(mark)
+	sort.Ints(unmark)
+
+	if fs_debug {
+		fmt.Printf("Mark: %v Unmark %v\n", mark, unmark)
+	}
+
+	var blk *common.Bdev_block_t
+	var err common.Err_t
+	for len(mark) > 0 || len(unmark) > 0 {
+		bit, op := smallest(mark, unmark)
+		if bit < 0 {
+			panic("MarkUnmark bad bit")
+		}
+		fblkno := blkno(bit)
+		fbyteoff := byteno(bit)
+		fbitoff := byteoffset(bit)
+
+		// done with this block
+		if blk != nil && blk.Block != fblkno {
+			blk.Unlock()
+			alloc.Write(blk)
+			alloc.Relse(blk, "MarkUnmark")
+			blk = nil
+		}
+		if blk == nil {
+			blk, err = alloc.Fbread(fblkno)
+			if err != 0 {
+				return err
+			}
+		}
+		if op == MARK {
+			blk.Data[fbyteoff] |= 1 << uint(fbitoff)
+			mark = mark[1:]
+		} else {
+			blk.Data[fbyteoff] &= ^(1 << uint(fbitoff))
+			unmark = unmark[1:]
+		}
+	}
+	if blk != nil {
+		blk.Unlock()
+		alloc.Write(blk)
+		alloc.Relse(blk, "MarkUnmark")
+	}
 	return 0
 }
 
 func (alloc *allocater_t) Stats() string {
-	s := "allocater: #alloc "
+	s := "allocater: #Marked "
 	s += strconv.Itoa(alloc.nalloc)
-	s += " #free "
+	s += " #Unmarked "
 	s += strconv.Itoa(alloc.nfree)
 	s += " #hit "
 	s += strconv.Itoa(alloc.nhit)

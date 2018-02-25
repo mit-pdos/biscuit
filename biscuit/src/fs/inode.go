@@ -1075,19 +1075,19 @@ func (icache *icache_t) writeOrphanMap() {
 	icache.Lock()
 	defer icache.Unlock()
 
-	if fs_debug {
-		fmt.Printf("write orphan map %d %v %d %v\n", len(icache.orphans), icache.orphans,
-			len(icache.reclaimed), icache.reclaimed)
-	}
+	orphans := make([]int, 0, len(icache.orphans))
 	for inum, _ := range icache.orphans {
-		icache.orphanbitmap.Mark(int(inum))
+		orphans = append(orphans, int(inum))
 	}
+	reclaimed := make([]int, 0, len(icache.reclaimed))
 	for _, inum := range icache.reclaimed {
-		// if already free don't write
-		icache.orphanbitmap.Free(int(inum))
+		reclaimed = append(reclaimed, int(inum))
 	}
+	icache.orphanbitmap.MarkUnmark(orphans, reclaimed)
+
 	icache.orphans = make(map[common.Inum_t]bool, 0)
 	icache.reclaimed = make([]common.Inum_t, 0)
+
 }
 
 func (icache *icache_t) addOrphan(imem *imemnode_t) {
@@ -1117,7 +1117,7 @@ func (icache *icache_t) _addReclaimed(inum common.Inum_t) {
 }
 
 func (icache *icache_t) freeOrphans(inum common.Inum_t) {
-	if true {
+	if fs_debug {
 		fmt.Printf("freeOrphans: %v\n", inum)
 	}
 	imem, err := icache.Iref(inum, "freeOrphans")
@@ -1281,7 +1281,7 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 }
 
 func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
-	n, err := ialloc.alloc.Alloc()
+	n, err := ialloc.alloc.FindAndMark()
 	if err != 0 {
 		return 0, err
 	}
@@ -1300,7 +1300,7 @@ func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
-	return ialloc.alloc.Free(int(inum))
+	return ialloc.alloc.Unmark(int(inum))
 }
 
 func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
