@@ -500,7 +500,6 @@ func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
 		fmt.Printf("itype: %v for %v\n", ic.itype, inum)
-		panic("bad itype in fill")
 	}
 	ic.links = inode.linkcount()
 	ic.size = inode.size()
@@ -1117,9 +1116,8 @@ func (icache *icache_t) _addReclaimed(inum common.Inum_t) {
 	icache.reclaimed = append(icache.reclaimed, inum)
 }
 
-// XXX test idempotence
 func (icache *icache_t) freeOrphans(inum common.Inum_t) {
-	if fs_debug {
+	if true {
 		fmt.Printf("freeOrphans: %v\n", inum)
 	}
 	imem, err := icache.Iref(inum, "freeOrphans")
@@ -1130,13 +1128,19 @@ func (icache *icache_t) freeOrphans(inum common.Inum_t) {
 	if !evicted {
 		panic("link count isn't zero?")
 	}
-	imem.Free()
+	// we might have crashed during RecoverOrphans and already have
+	// reclaimed this inode.
+	if imem.itype != I_DEAD {
+		imem.Free()
+	}
 }
 
 func (icache *icache_t) RecoverOrphans() {
 	icache.orphanbitmap.apply(func(b, v int) bool {
 		if v != 0 {
-			icache.freeOrphans(common.Inum_t(b))
+			inum := common.Inum_t(b)
+			icache.freeOrphans(inum)
+			icache._addReclaimed(inum)
 		}
 		return true
 	})

@@ -217,14 +217,16 @@ func TestFSBlockReuse(t *testing.T) {
 //
 
 func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
+	fds := make([]*common.Fd_t, nfile)
 	for i := 0; i < nfile; i++ {
 		fn := uniqfile(i)
-		fd, err := tfs.fs.Fs_open(fn, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+		var err common.Err_t
+		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
 		if err != 0 {
 			t.Fatalf("ufs.fs.Fs_open %v failed %v\n", fn, err)
 		}
 		ub := mkData(uint8(1), SMALL)
-		n, err := fd.Fops.Write(nil, ub)
+		n, err := fds[i].Fops.Write(nil, ub)
 		if err != 0 || ub.Remain() != 0 {
 			t.Fatalf("Write %v failed %v %d\n", fn, err, n)
 		}
@@ -232,6 +234,11 @@ func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 		if err != 0 {
 			t.Fatalf("doUnlink %v failed %v\n", fn, err)
 		}
+	}
+	if nfile > 1 {
+		// ifree() one
+		fds[0].Fops.Close()
+
 	}
 }
 
@@ -268,6 +275,13 @@ func TestFSOrphanOne(t *testing.T) {
 	}
 	doCheckOrphans(tfs, t, 1)
 	ShutdownFS(tfs)
+
+	fmt.Printf("one more check\n")
+
+	tfs = BootFS(dst) // check that we don't free again
+	doCheckOrphans(tfs, t, 1)
+	ShutdownFS(tfs)
+
 	os.Remove(dst)
 }
 
