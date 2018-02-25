@@ -296,6 +296,7 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, common.Err_t) {
 	var de icdent_t
 	_, err := idm._descan(func(tfn string, tde icdent_t) bool {
 		if tfn == "" {
+			haveall = false
 			return false
 		}
 		if tfn == fn {
