@@ -250,7 +250,7 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 // necessary in order to guarantee that the log is long enough for the allowed
 // number of concurrent fs syscalls.
 const MaxBlkPerOp = 10
-const MaxOrdered = 1000
+const MaxOrdered = 5000
 
 func (l *log_t) full(nops int) bool {
 	reserved := MaxBlkPerOp * nops
