@@ -1228,8 +1228,8 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
 	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
-	if evicted {
-		icache.addDead(imem) // link and refcount are 0
+	if evicted && imem.links == 0 { // when running always_eager links may not be 0
+		icache.addDead(imem)
 	}
 }
 
