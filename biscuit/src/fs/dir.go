@@ -180,7 +180,7 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 	}
 
 	// see if we have an empty slot before expanding the directory
-	if !idm.dentc.haveall {
+	if !idm.dentc.scanned {
 		var de icdent_t
 		found, err := idm._descan(func(fn string, tde icdent_t) bool {
 			if fn == "" {
@@ -196,6 +196,10 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 			return de.offset, 0
 		}
 	}
+	// there are no free directory entries. there is no need to scan the
+	// blocks even again since we can allocate all free directory entries
+	// from the free list.
+	idm.dentc.scanned = true
 
 	// current dir blocks are full -- allocate new dirdata block
 	newsz := idm.size + common.BSIZE
@@ -296,7 +300,6 @@ func (idm *imemnode_t) _delookup(fn string) (icdent_t, common.Err_t) {
 	var de icdent_t
 	_, err := idm._descan(func(tfn string, tde icdent_t) bool {
 		if tfn == "" {
-			haveall = false
 			return false
 		}
 		if tfn == fn {

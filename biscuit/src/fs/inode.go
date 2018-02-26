@@ -183,9 +183,11 @@ type imemnode_t struct {
 	addrs  [NIADDRS]int
 	// inode specific metadata blocks
 	dentc struct {
-		// true iff all directory entries are cached, thus there is no
-		// need to check the disk
+		// true iff all non-empty directory entries are cached, thus
+		// there is no need to check the disk to lookup a name
 		haveall bool
+		// true iff all free directory entries are on the free list.
+		scanned bool
 		// maximum number of cached dents this icache is allowed to
 		// have
 		max   int
