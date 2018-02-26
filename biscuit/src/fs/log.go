@@ -360,7 +360,7 @@ func (log *log_t) write_ordered() {
 	// update the ordered blocks in place
 	log.nforceordered++
 	log.ordered.Apply(func(b *common.Bdev_block_t) {
-		fmt.Printf("write ordered %d\n", b.Block)
+		// fmt.Printf("write ordered %d\n", b.Block)
 		log.fs.bcache.Write_async(b)
 		log.fs.bcache.Relse(b, "writeordered")
 	})
