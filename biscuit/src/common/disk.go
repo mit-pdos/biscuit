@@ -13,6 +13,7 @@ const BSIZE = 4096
 type Blockmem_i interface {
 	Alloc() (Pa_t, *Bytepg_t, bool)
 	Free(Pa_t)
+	Refup(Pa_t)
 }
 
 type Block_cb_i interface {
@@ -42,9 +43,6 @@ const (
 type BlkList_t struct {
 	l *list.List
 	e *list.Element // iterator
-}
-
-func PrintBlkList() {
 }
 
 func MkBlkList() *BlkList_t {
@@ -163,9 +161,10 @@ func (blk *Bdev_block_t) Evictnow() bool {
 }
 
 func (blk *Bdev_block_t) Done(s string) {
-	if blk.Cb != nil {
-		blk.Cb.Relse(blk, s)
+	if blk.Cb == nil {
+		panic("wtf")
 	}
+	blk.Cb.Relse(blk, s)
 }
 
 func (b *Bdev_block_t) Write() {

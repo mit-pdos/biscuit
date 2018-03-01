@@ -2,6 +2,7 @@ package fs
 
 import "fmt"
 import "strconv"
+import "sync"
 
 import "common"
 
@@ -35,6 +36,8 @@ type bcache_t struct {
 	refcache *refcache_t
 	mem      common.Blockmem_i
 	disk     common.Disk_i
+	sync.Mutex
+	pins map[common.Pa_t]*common.Bdev_block_t
 }
 
 func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
@@ -42,6 +45,7 @@ func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
 	bcache.mem = mem
 	bcache.disk = disk
 	bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
+	bcache.pins = make(map[common.Pa_t]*common.Bdev_block_t)
 	return bcache
 }
 
@@ -147,7 +151,14 @@ func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	if bdev_debug {
 		fmt.Printf("bcache_relse: %v %v\n", b.Block, s)
 	}
-	bcache.refcache.Refdown(b, s)
+	evicted := bcache.refcache.Refdown(b, s)
+	if evicted {
+		bcache.Lock()
+		delete(bcache.pins, b.Pa)
+		bcache.Unlock()
+
+		b.Evict()
+	}
 }
 
 func (bcache *bcache_t) Stats() string {
@@ -167,10 +178,14 @@ func (bcache *bcache_t) Stats() string {
 
 // returns the reference to a locked buffer
 func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, common.Err_t) {
-	ref, err := bcache.refcache.Lookup(blk, s)
+	ref, victim, err := bcache.refcache.Lookup(blk, s)
 	if err != 0 {
 		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
+	}
+	if victim != nil {
+		b := victim.(*common.Bdev_block_t)
+		b.Evict()
 	}
 	defer ref.Unlock()
 
@@ -188,6 +203,28 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 	b.Lock()
 	b.Name = s
 	return b, created, err
+}
+
+func (bcache *bcache_t) pin(b *common.Bdev_block_t) {
+	bcache.refcache.Refup(b, "pin")
+
+	bcache.Lock()
+	if old, ok := bcache.pins[b.Pa]; ok && old != b {
+		panic("uh oh")
+	}
+	bcache.pins[b.Pa] = b
+	bcache.Unlock()
+}
+
+func (bcache *bcache_t) unpin(pa common.Pa_t) {
+	bcache.Lock()
+	defer bcache.Unlock()
+	b, ok := bcache.pins[pa]
+
+	if !ok {
+		panic("block no pinned")
+	}
+	bcache.Relse(b, "unpin")
 }
 
 func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
@@ -236,17 +273,17 @@ func bdev_test(mem common.Blockmem_i, disk common.Disk_i, bcache *bcache_t) {
 // Block allocator interface
 //
 
-type ballocater_t struct {
+type bbitmap_t struct {
 	fs    *Fs_t
-	alloc *allocater_t
+	alloc *bitmap_t
 	start int
 	len   int
 	first int
 }
 
-func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
-	balloc := &ballocater_t{}
-	balloc.alloc = mkAllocater(fs, start, len)
+func mkBallocater(fs *Fs_t, start, len, first int) *bbitmap_t {
+	balloc := &bbitmap_t{}
+	balloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	fmt.Printf("bmap start %v bmaplen %v first datablock %v\n", start, len, first)
 	balloc.first = first
 	balloc.start = start
@@ -255,7 +292,7 @@ func mkBallocater(fs *Fs_t, start, len, first int) *ballocater_t {
 	return balloc
 }
 
-func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
+func (balloc *bbitmap_t) Balloc() (int, common.Err_t) {
 	ret, err := balloc.balloc1()
 	if err != 0 {
 		return 0, err
@@ -272,7 +309,7 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 		return 0, err
 	}
 	if bdev_debug {
-		fmt.Printf("balloc: %v\n", ret)
+		fmt.Printf("balloc: %v free %d\n", ret, balloc.alloc.nfreebits)
 	}
 
 	var zdata [common.BSIZE]uint8
@@ -283,10 +320,10 @@ func (balloc *ballocater_t) Balloc() (int, common.Err_t) {
 	return ret, 0
 }
 
-func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
+func (balloc *bbitmap_t) Bfree(blkno int) common.Err_t {
 	blkno -= balloc.first
 	if bdev_debug {
-		fmt.Printf("bfree: %v\n", blkno)
+		fmt.Printf("bfree: %v free before %d\n", blkno, balloc.alloc.nfreebits)
 	}
 	if blkno < 0 {
 		panic("bfree")
@@ -294,18 +331,18 @@ func (balloc *ballocater_t) Bfree(blkno int) common.Err_t {
 	if blkno >= balloc.len*common.BSIZE*8 {
 		panic("bfree too large")
 	}
-	return balloc.alloc.Free(blkno)
+	return balloc.alloc.Unmark(blkno)
 }
 
-func (balloc *ballocater_t) Stats() string {
+func (balloc *bbitmap_t) Stats() string {
 	return "balloc " + balloc.alloc.Stats()
 }
 
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func (balloc *ballocater_t) balloc1() (int, common.Err_t) {
-	blkn, err := balloc.alloc.Alloc()
+func (balloc *bbitmap_t) balloc1() (int, common.Err_t) {
+	blkn, err := balloc.alloc.FindAndMark()
 	if err != 0 {
 		fmt.Printf("balloc1: %v\n", err)
 		return 0, err

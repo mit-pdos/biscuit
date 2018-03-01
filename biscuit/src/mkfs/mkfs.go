@@ -97,8 +97,8 @@ func main() {
 	// 	os.Exit(1)
 	// }
 	// for k, v := range dir {
-	//	fmt.Printf("%v %v\n", k, v)
-	//}
+	// 	fmt.Printf("%v %v\n", k, v)
+	// }
 
 	ufs.ShutdownFS(fs)
 }

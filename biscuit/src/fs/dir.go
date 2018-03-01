@@ -180,7 +180,7 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 	}
 
 	// see if we have an empty slot before expanding the directory
-	if !idm.dentc.haveall {
+	if !idm.dentc.scanned {
 		var de icdent_t
 		found, err := idm._descan(func(fn string, tde icdent_t) bool {
 			if fn == "" {
@@ -196,6 +196,10 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 			return de.offset, 0
 		}
 	}
+	// there are no free directory entries. there is no need to scan the
+	// blocks even again since we can allocate all free directory entries
+	// from the free list.
+	idm.dentc.scanned = true
 
 	// current dir blocks are full -- allocate new dirdata block
 	newsz := idm.size + common.BSIZE
@@ -212,7 +216,7 @@ func (idm *imemnode_t) _denextempty() (int, common.Err_t) {
 
 	b.Unlock()
 	idm.fs.fslog.Write(b) // log empty dir block, later writes absorpt it hopefully
-	idm.fs.bcache.Relse(b, "_denextempty")
+	idm.fs.fslog.Relse(b, "_denextempty")
 
 	idm.size = newsz
 	return newoff, 0
@@ -241,7 +245,7 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 
 	b.Unlock()
 	idm.fs.fslog.Write(b)
-	idm.fs.bcache.Relse(b, "_deinsert")
+	idm.fs.fslog.Relse(b, "_deinsert")
 
 	icd := icdent_t{noff, inum}
 	ok := idm._dceadd(name, icd)
@@ -272,7 +276,7 @@ func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, commo
 			}
 		}
 		b.Unlock()
-		idm.fs.bcache.Relse(b, "_descan")
+		idm.fs.fslog.Relse(b, "_descan")
 	}
 	return found, 0
 }
@@ -333,7 +337,7 @@ func (idm *imemnode_t) _deremove(fn string) (icdent_t, common.Err_t) {
 	dirdata.W_inodenext(0, common.Inum_t(0))
 	b.Unlock()
 	idm.fs.fslog.Write(b)
-	idm.fs.bcache.Relse(b, "_deremove")
+	idm.fs.fslog.Relse(b, "_deremove")
 	// add back to free dents
 	idm.dentc.dents.remove(fn)
 	idm._deaddempty(de.offset)

@@ -17,6 +17,10 @@ func Pg2bytes(pg *Pg_t) *Bytepg_t {
 	return (*Bytepg_t)(unsafe.Pointer(pg))
 }
 
+func Bytepg2pg(pg *Bytepg_t) *Pg_t {
+	return (*Pg_t)(unsafe.Pointer(pg))
+}
+
 func pg2pmap(pg *Pg_t) *Pmap_t {
 	return (*Pmap_t)(unsafe.Pointer(pg))
 }
@@ -126,7 +130,7 @@ func Pmap_lookup(pml4 *Pmap_t, v int) *Pa_t {
 	return _pmap_walk(pml4, v, false, 0)
 }
 
-func pmfree(pml4 *Pmap_t, start, end uintptr) {
+func pmfree(pml4 *Pmap_t, start, end uintptr, fops Unpin_i) {
 	for i := start; i < end; {
 		pg, slot := pmap_pgtbl(pml4, int(i), false, 0)
 		if pg == nil {
@@ -146,7 +150,11 @@ func pmfree(pml4 *Pmap_t, start, end uintptr) {
 				if p_pg&PTE_U == 0 {
 					panic("kernel pages in vminfo?")
 				}
-				Physmem.Refdown(p_pg & PTE_ADDR)
+				pa := p_pg & PTE_ADDR
+				if fops != nil {
+					fops.Unpin(pa)
+				}
+				Physmem.Refdown(pa)
 				tofree[idx] = 0
 			}
 		}

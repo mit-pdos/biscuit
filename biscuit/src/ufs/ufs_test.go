@@ -21,7 +21,7 @@ const (
 )
 
 func doTestSimple(tfs *Ufs_t, d string) string {
-	fmt.Printf("doTestSimple %v\n", d)
+	//fmt.Printf("doTestSimple %v\n", d)
 
 	e := tfs.MkDir(d)
 	if e != 0 {
@@ -69,7 +69,6 @@ func doTestSimple(tfs *Ufs_t, d string) string {
 }
 
 func doCheckSimple(tfs *Ufs_t, d string, t *testing.T) {
-	fmt.Printf("doCheckSimple %v\n", d)
 	res, e := tfs.Ls(d)
 	if e != 0 {
 		t.Fatalf("doLs failed")
@@ -105,47 +104,6 @@ func doCheckSimple(tfs *Ufs_t, d string, t *testing.T) {
 }
 
 //
-// For testing inode reuse
-//
-
-func doTestInodeReuse(tfs *Ufs_t, n int, t *testing.T) {
-	for i := 0; i < n; i++ {
-		e := tfs.MkFile(uniqfile(i), nil)
-		if e != 0 {
-			t.Fatalf("mkFile %v failed", i)
-		}
-	}
-
-	for i := 0; i < n; i++ {
-		e := tfs.Unlink(uniqfile(i))
-		if e != 0 {
-			t.Fatalf("Unlink %v failed", i)
-		}
-	}
-}
-
-//
-// For testing block reuse
-//
-
-func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
-	for i := 0; i < n; i++ {
-		ub := mkData(uint8(i), SMALL)
-		e := tfs.MkFile(uniqfile(i), ub)
-		if e != 0 {
-			t.Fatalf("mkFile %v failed", i)
-		}
-	}
-
-	for i := 0; i < n; i++ {
-		e := tfs.Unlink(uniqfile(i))
-		if e != 0 {
-			t.Fatalf("Unlink %v failed", i)
-		}
-	}
-}
-
-//
 // Util
 //
 
@@ -165,7 +123,7 @@ func TestFSSimple(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFS %v ...\n", dst)
+	fmt.Printf("Test FSSimple %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	s := doTestSimple(tfs, "d/")
@@ -185,11 +143,27 @@ func TestFSSimple(t *testing.T) {
 // Test that inode are reused after freeing
 //
 
+func doTestInodeReuse(tfs *Ufs_t, n int, t *testing.T) {
+	for i := 0; i < n; i++ {
+		e := tfs.MkFile(uniqfile(i), nil)
+		if e != 0 {
+			t.Fatalf("mkFile %v failed", i)
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		e := tfs.Unlink(uniqfile(i))
+		if e != 0 {
+			t.Fatalf("Unlink %v failed", i)
+		}
+	}
+}
+
 func TestFSInodeReuse(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFSInodeReuce %v ...\n", dst)
+	fmt.Printf("Test FSInodeReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	n := ninodeblks * (common.BSIZE / fs.ISIZE)
@@ -205,11 +179,28 @@ func TestFSInodeReuse(t *testing.T) {
 // Test that inode are reused after freeing
 //
 
+func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
+	for i := 0; i < n; i++ {
+		ub := mkData(uint8(i), SMALL)
+		e := tfs.MkFile(uniqfile(i), ub)
+		if e != 0 {
+			t.Fatalf("mkFile %v failed", i)
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		e := tfs.Unlink(uniqfile(i))
+		if e != 0 {
+			t.Fatalf("Unlink %v failed", i)
+		}
+	}
+}
+
 func TestFSBlockReuse(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFSBlockReuce %v ...\n", dst)
+	fmt.Printf("Test FSBlockReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
 	n := ndatablks
@@ -217,6 +208,106 @@ func TestFSBlockReuse(t *testing.T) {
 	for i := 0; i < n*2; i++ {
 		doTestBlockReuse(tfs, 5, t)
 	}
+	ShutdownFS(tfs)
+	os.Remove(dst)
+}
+
+//
+// Orphan inodes.  Inodes (and its blocks) should be freed on recovery
+//
+
+func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
+	fds := make([]*common.Fd_t, nfile)
+	for i := 0; i < nfile; i++ {
+		fn := uniqfile(i)
+		var err common.Err_t
+		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+		if err != 0 {
+			t.Fatalf("ufs.fs.Fs_open %v failed %v\n", fn, err)
+		}
+		ub := mkData(uint8(1), SMALL)
+		n, err := fds[i].Fops.Write(nil, ub)
+		if err != 0 || ub.Remain() != 0 {
+			t.Fatalf("Write %v failed %v %d\n", fn, err, n)
+		}
+		err = tfs.fs.Fs_unlink(fn, 0, false)
+		if err != 0 {
+			t.Fatalf("doUnlink %v failed %v\n", fn, err)
+		}
+	}
+	if nfile > 1 {
+		// ifree() one
+		fds[0].Fops.Close()
+
+	}
+}
+
+func doCheckOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
+	res, e := tfs.Ls("/")
+	if e != 0 {
+		t.Fatalf("doLs failed")
+	}
+	for i := 0; i < nfile; i++ {
+		fn := uniqfile(i)
+		_, ok := res[fn]
+		if ok {
+			t.Fatalf("%v present", fn)
+		}
+	}
+}
+
+func TestFSOrphanOne(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+
+	fmt.Printf("Test FSOrphans %v ...\n", dst)
+
+	tfs := BootFS(dst)
+	ninode, nblock := tfs.fs.Fs_size()
+	doTestOrphans(tfs, t, 1)
+	ShutdownFS(tfs) // causes the unlink to be committed
+	fmt.Printf("ninode %v nblock %v\n", ninode, nblock)
+	tfs = BootFS(dst)
+	ninode1, nblock1 := tfs.fs.Fs_size()
+	if ninode1 != ninode || nblock1 != nblock {
+		t.Fatalf("inode/blocks not freed: free before %d %d free after %d %d\n",
+			ninode, nblock, ninode1, nblock1)
+	}
+	doCheckOrphans(tfs, t, 1)
+	ShutdownFS(tfs)
+
+	fmt.Printf("one more check\n")
+
+	tfs = BootFS(dst) // check that we don't free again
+	doCheckOrphans(tfs, t, 1)
+	ShutdownFS(tfs)
+
+	os.Remove(dst)
+}
+
+const OrphanFiles = 1000
+const ManyInodeBlks = 2000
+const ManyDataBlks = 4000
+const ManyLogBlks = 256
+
+func TestFSOrphansMany(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, ManyLogBlks, ManyInodeBlks, ManyDataBlks)
+
+	fmt.Printf("Test FSOrphans %v ...\n", dst)
+
+	tfs := BootFS(dst)
+	ninode, nblock := tfs.fs.Fs_size()
+	doTestOrphans(tfs, t, OrphanFiles)
+	ShutdownFS(tfs) // causes the unlink to be committed
+
+	tfs = BootFS(dst)
+	ninode1, nblock1 := tfs.fs.Fs_size()
+	if ninode1 != ninode || nblock1 != nblock {
+		t.Fatalf("inode/blocks not freed: before %d %d after %d %d\n",
+			ninode, nblock, ninode1, nblock1)
+	}
+	doCheckOrphans(tfs, t, OrphanFiles)
 	ShutdownFS(tfs)
 	os.Remove(dst)
 }
@@ -230,7 +321,7 @@ func TestFSConcur(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("testFSConcur %v ...\n", dst)
+	fmt.Printf("Test FSConcur %v ...\n", dst)
 
 	c := make(chan string)
 	tfs := BootFS(dst)
@@ -262,8 +353,6 @@ func TestFSConcur(t *testing.T) {
 // Check traces for crash safety
 //
 
-const ndatablksordered = 10 // small, to cause block reuse
-const norderedblks = ndatablksordered/2 + 1
 const natomicblks = 2
 
 func copyDisk(src, dst string) (err error) {
@@ -287,6 +376,10 @@ func copyDisk(src, dst string) (err error) {
 	//}
 	return err
 }
+
+//
+// Test: atomic file copy
+//
 
 func doAtomicInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*natomicblks)
@@ -340,31 +433,28 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 // of the unlink of f1.  but ordered write for f2 is turned into a logged since
 // its first write (zero-ing) is a logged write.
 
-// No initial state
-func doOrderedInit(tfs *Ufs_t) {
-}
+const ndatablksordered = 8 // small, to cause block reuse
+const norderedblks = 2     // this causes reuse
 
-func doTestOrdered(tfs *Ufs_t, t *testing.T) {
+func doOrderedInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*norderedblks)
 	e := tfs.MkFile("f1", ub)
 	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f1")
+		panic("mkFile f1 failed")
 	}
-	e = tfs.Unlink("f1")
+	fmt.Printf("Init done\n")
+}
+
+func doTestOrdered(tfs *Ufs_t, t *testing.T) {
+	e := tfs.Unlink("f1")
 	if e != 0 {
 		t.Fatalf("Unlink failed")
 	}
-	// XXX reuse block and flush ordered write to f2 before commit of unlink
-	ub = mkData(2, common.BSIZE*norderedblks)
+	// reuse block and flush ordered write to f2 before commit of unlink
+	ub := mkData(2, common.BSIZE*norderedblks)
 	e = tfs.MkFile("f2", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
-	}
-
-	ub = mkData(3, common.BSIZE*norderedblks)
-	e = tfs.Update("f2", ub)
-	if e != 0 {
-		t.Fatalf("Update %v failed", "f2")
 	}
 }
 
@@ -396,6 +486,10 @@ func doCheckOrdered(tfs *Ufs_t) (string, bool) {
 	}
 	return "", true
 }
+
+//
+// Trace generation and checking
+//
 
 func genExt(blks []int, o order_t, r orders_t) orders_t {
 	if len(blks) == 0 {
@@ -528,22 +622,24 @@ func produceTrace(disk string, t *testing.T, init func(*Ufs_t), run func(*Ufs_t,
 }
 
 func TestTracesAtomic(t *testing.T) {
-	fmt.Printf("testTraces ...\n")
+	fmt.Printf("Test TracesAtomic ...\n")
 	disk := "disk.img"
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	produceTrace(disk, t, doAtomicInit, doTestAtomic)
 	trace := readTrace("trace.json")
 	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
 	fmt.Printf("#traces = %v\n", cnt)
+	os.Remove(disk)
 }
 
-// XXX times out after 10min, checking 65K traces.  -timeout 0 doesn't work (apparently bug in go)
 func TestTracesOrdered(t *testing.T) {
-	fmt.Printf("testTraces ...\n")
+	fmt.Printf("Test TracesOrdered ...\n")
 	disk := "disk.img"
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablksordered)
 	produceTrace(disk, t, doOrderedInit, doTestOrdered)
 	trace := readTrace("trace.json")
+	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
 	fmt.Printf("#traces = %v\n", cnt)
+	os.Remove(disk)
 }

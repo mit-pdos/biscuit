@@ -479,7 +479,8 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 		fops := fd.Fops
 		// vmadd_*file will increase the open count on the file
 		if shared {
-			proc.Vmadd_sharefile(addr, lenn, perms, fops, offset)
+			proc.Vmadd_sharefile(addr, lenn, perms, fops, offset,
+				thefs)
 		} else {
 			proc.Vmadd_file(addr, lenn, perms, fops, offset)
 		}
@@ -4516,7 +4517,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 			panic("must succeed")
 		}
 		for i := 0; i < tlscopylen; {
-			_src, _, err := tlsvmi.Filepage(uintptr(tlsaddr + i))
+			_src, p_pg, err := tlsvmi.Filepage(uintptr(tlsaddr + i))
 			if err != 0 {
 				return 0, 0, 0, false
 			}
@@ -4524,6 +4525,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 			src := common.Pg2bytes(_src)[off:]
 			bpg, ok := proc.Userdmap8_inner(freshtls+i, true)
 			if !ok {
+				physmem.Refdown(p_pg)
 				return 0, 0, 0, false
 			}
 			left := tlscopylen - i
@@ -4532,6 +4534,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 			}
 			copy(bpg, src)
 			i += len(src)
+			physmem.Refdown(p_pg)
 		}
 
 		// amd64 sys 5 abi specifies that the tls pointer references to

@@ -2,7 +2,6 @@ package fs
 
 import "fmt"
 import "sync"
-import "strconv"
 
 import "common"
 
@@ -20,8 +19,8 @@ type Fs_t struct {
 	bcache       *bcache_t
 	icache       *icache_t
 	fslog        *log_t
-	ialloc       *iallocater_t
-	balloc       *ballocater_t
+	ialloc       *ibitmap_t
+	balloc       *bbitmap_t
 	istats       *inode_stats_t
 }
 
@@ -37,7 +36,6 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	}
 
 	fs.bcache = mkBcache(mem, disk)
-	fs.icache = mkIcache(fs)
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
@@ -65,14 +63,20 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 		panic("bad log len")
 	}
 	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
-	fs.fslog = StartLog(logstart, loglen, disk, fs.bcache)
+	fs.fslog = StartLog(logstart, loglen, fs, disk)
 	if fs.fslog == nil {
 		panic("Startlog failed")
 	}
 
-	imapstart := fs.superb.Imapblock()
+	iorphanstart := fs.superb.Iorphanblock()
+	iorphanlen := fs.superb.Iorphanlen()
+	imapstart := iorphanstart + iorphanlen
 	imaplen := fs.superb.Imaplen()
+	fmt.Printf("orphanstart %v orphan len %v\n", iorphanstart, iorphanlen)
 	fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
+	if iorphanlen != imaplen {
+		panic("number of iorphan map blocks != inode map block")
+	}
 
 	bmapstart := fs.superb.Freeblock()
 	bmaplen := fs.superb.Freeblocklen()
@@ -83,6 +87,11 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen, inodelen)
 	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
+
+	fs.icache = mkIcache(fs, iorphanstart, iorphanlen)
+	fs.icache.RecoverOrphans()
+
+	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
@@ -105,9 +114,22 @@ func (fs *Fs_t) Fs_statistics() string {
 	return s
 }
 
+func (fs *Fs_t) Fs_size() (uint, uint) {
+	return fs.ialloc.alloc.nfreebits, fs.balloc.alloc.nfreebits
+}
+
+func (fs *Fs_t) op_end_and_free() {
+	fs.fslog.Op_end()
+	fs.icache.freeDead()
+}
+
+func (fs *Fs_t) Unpin(pa common.Pa_t) {
+	fs.bcache.unpin(pa)
+}
+
 func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_link")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_free()
 
 	if fs_debug {
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)
@@ -150,7 +172,7 @@ undo:
 
 func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
 	fs.fslog.Op_begin("fs_unlink")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_free()
 
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
@@ -232,7 +254,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	}
 
 	fs.fslog.Op_begin("fs_rename")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_free()
 
 	fs.istats.Nrename.inc()
 
@@ -380,13 +402,13 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	defer fs.bcache.Relse(b1, "probe_insert")
+	defer fs.fslog.Relse(b1, "probe_insert")
 
 	b2, err := opar.probe_unlink(ofn)
 	if err != 0 {
 		return err
 	}
-	defer fs.bcache.Relse(b2, "probe_unlink_opar")
+	defer fs.fslog.Relse(b2, "probe_unlink_opar")
 
 	odir := ochild.itype == I_DIR
 	if odir {
@@ -394,7 +416,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		if err != 0 {
 			return err
 		}
-		defer fs.bcache.Relse(b3, "probe_unlink_ochild")
+		defer fs.fslog.Relse(b3, "probe_unlink_ochild")
 	}
 
 	if newexists {
@@ -564,6 +586,7 @@ func (fo *fsfops_t) Fullpath() (string, common.Err_t) {
 	return fp, err
 }
 
+// XXX doesn't free blocks when shrinking file
 func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
 	fo.Lock()
 	defer fo.Unlock()
@@ -928,12 +951,12 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 		boff := raw.offset % common.BSIZE
 		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {
-			raw.fs.bcache.Relse(b, "read")
+			raw.fs.fslog.Relse(b, "read")
 			return 0, err
 		}
 		raw.offset += c
 		did += c
-		raw.fs.bcache.Relse(b, "read")
+		raw.fs.fslog.Relse(b, "read")
 	}
 	return did, 0
 }
@@ -955,13 +978,13 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		}
 		c, err := src.Uioread(buf.Data[boff:])
 		if err != 0 {
-			raw.fs.bcache.Relse(buf, "write")
+			raw.fs.fslog.Relse(buf, "write")
 			return 0, err
 		}
 		raw.fs.bcache.Write(buf)
 		raw.offset += c
 		did += c
-		raw.fs.bcache.Relse(buf, "write")
+		raw.fs.fslog.Relse(buf, "write")
 	}
 	return did, 0
 }
@@ -1278,7 +1301,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 
 func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_close")
-	defer fs.fslog.Op_end()
+	defer fs.op_end_and_free()
 
 	fs.istats.Nclose.inc()
 
@@ -1365,164 +1388,4 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 	}
 	idm.ilock(s + "/fs_namei_locked")
 	return idm, 0
-}
-
-// Bitmap allocater. Used for inodes and blocks
-type allocater_t struct {
-	sync.Mutex
-
-	fs        *Fs_t
-	freestart int
-	freelen   int
-	lastblk   int
-	lastbyte  int
-
-	// stats
-	nalloc int
-	nfree  int
-	nhit   int
-}
-
-func mkAllocater(fs *Fs_t, start, len int) *allocater_t {
-	a := &allocater_t{}
-	a.fs = fs
-	a.freestart = start
-	a.freelen = len
-	return a
-}
-
-func freebit(b uint8) uint {
-	for m := uint(0); m < 8; m++ {
-		if (1<<m)&b == 0 {
-			return m
-		}
-	}
-	panic("no 0 bit?")
-}
-
-func (alloc *allocater_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
-	if blockno < alloc.freestart || blockno >= alloc.freestart+alloc.freelen {
-		panic("naughty blockno")
-	}
-	return alloc.fs.fslog.Get_fill(blockno, "fbread", true)
-}
-
-// 0 is free, 1 is allocated
-func (alloc *allocater_t) search() (*common.Bdev_block_t, int, int, uint, common.Err_t) {
-	var blk *common.Bdev_block_t
-	var err common.Err_t
-	for b := 0; b < alloc.freelen; b++ {
-		if blk != nil {
-			blk.Unlock()
-			alloc.fs.bcache.Relse(blk, "alloc search")
-		}
-		blk, err = alloc.Fbread(alloc.freestart + b)
-		if err != 0 {
-			return nil, 0, 0, 0, err
-		}
-		for idx := 0; idx < len(blk.Data); idx++ {
-			c := blk.Data[idx]
-			if c != 0xff {
-				alloc.lastblk = b
-				alloc.lastbyte = idx
-				bit := freebit(c)
-				return blk, b, idx, bit, 0
-			}
-		}
-	}
-	return nil, 0, 0, 0, -common.ENOMEM
-}
-
-func (alloc *allocater_t) quickcheck() (*common.Bdev_block_t, int, int, uint, common.Err_t) {
-	blk, err := alloc.Fbread(alloc.freestart + alloc.lastblk)
-	if err != 0 {
-		return nil, 0, 0, 0, err
-	}
-	c := blk.Data[alloc.lastbyte]
-	if c != 0xff {
-		bit := freebit(c)
-		blkn := alloc.lastblk
-		byte := alloc.lastbyte
-		if c == 0x7f {
-			alloc.lastbyte = (alloc.lastbyte + 1) % common.BSIZE
-			if alloc.lastbyte == 0 {
-				alloc.lastblk = (alloc.lastblk + 1) % alloc.freelen
-
-			}
-		}
-		return blk, blkn, byte, bit, 0
-	}
-	blk.Unlock()
-	alloc.fs.bcache.Relse(blk, "alloc quickcheck")
-	return nil, 0, 0, 0, -common.ENOMEM
-}
-
-func (alloc *allocater_t) Alloc() (int, common.Err_t) {
-	alloc.Lock()
-	defer alloc.Unlock()
-
-	blk, blkn, oct, bit, err := alloc.quickcheck()
-	if err == 0 {
-		alloc.nhit++
-	} else {
-		blk, blkn, oct, bit, err = alloc.search()
-		if err != 0 {
-			return 0, err
-		}
-	}
-	alloc.nalloc++
-
-	// mark as allocated
-	blk.Data[oct] |= 1 << bit
-	blk.Unlock()
-	alloc.fs.fslog.Write(blk)
-	alloc.fs.bcache.Relse(blk, "Alloc")
-
-	bitsperblk := common.BSIZE * 8
-	blkn = blkn*bitsperblk + oct*8 + int(bit)
-	return blkn, 0
-}
-
-func (alloc *allocater_t) Free(blkno int) common.Err_t {
-	alloc.Lock()
-	defer alloc.Unlock()
-
-	if fs_debug {
-		fmt.Printf("bfree: %v\n", blkno)
-	}
-
-	if blkno < 0 {
-		panic("free bad blockno")
-	}
-
-	bit := blkno
-	bitsperblk := common.BSIZE * 8
-	fblkno := alloc.freestart + bit/bitsperblk
-	fbit := bit % bitsperblk
-	fbyteoff := fbit / 8
-	fbitoff := uint(fbit % 8)
-	if fblkno >= alloc.freestart+alloc.freelen {
-		panic("free: bad blockno")
-	}
-	fblk, err := alloc.Fbread(fblkno)
-	if err != 0 {
-		return err
-	}
-	fblk.Data[fbyteoff] &= ^(1 << fbitoff)
-	fblk.Unlock()
-	alloc.fs.fslog.Write(fblk)
-	alloc.fs.bcache.Relse(fblk, "free")
-	alloc.nfree++
-	return 0
-}
-
-func (alloc *allocater_t) Stats() string {
-	s := "allocater: #alloc "
-	s += strconv.Itoa(alloc.nalloc)
-	s += " #free "
-	s += strconv.Itoa(alloc.nfree)
-	s += " #hit "
-	s += strconv.Itoa(alloc.nhit)
-	s += "\n"
-	return s
 }

@@ -183,9 +183,11 @@ type imemnode_t struct {
 	addrs  [NIADDRS]int
 	// inode specific metadata blocks
 	dentc struct {
-		// true iff all directory entries are cached, thus there is no
-		// need to check the disk
+		// true iff all non-empty directory entries are cached, thus
+		// there is no need to check the disk to lookup a name
 		haveall bool
+		// true iff all free directory entries are on the free list.
+		scanned bool
 		// maximum number of cached dents this icache is allowed to
 		// have
 		max   int
@@ -198,16 +200,21 @@ func (idm *imemnode_t) Key() int {
 	return int(idm.inum)
 }
 
-// No other thread should have a reference to this inode.
+// No other thread should have a reference to this inode, because its refcnt = 0
+// and it was removed from refcache.  Same for Free()
 func (idm *imemnode_t) Evict() {
 	idm._derelease()
 	if fs_debug {
 		fmt.Printf("evict: %v\n", idm.inum)
 	}
+}
+
+func (idm *imemnode_t) Free() {
+	idm.Evict()
 	if idm.links == 0 {
-		//idm.fs.fslog.Op_begin("evict")
+		idm.fs.fslog.Op_begin("ifree")
 		idm.ifree()
-		//idm.fs.fslog.Op_end()
+		idm.fs.fslog.Op_end()
 	}
 }
 
@@ -252,7 +259,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	idm.fs.istats.Nifill.inc()
 	idm.fill(blk, inum)
 	blk.Unlock()
-	idm.fs.bcache.Relse(blk, "idm_init")
+	idm.fs.fslog.Relse(blk, "idm_init")
 	return 0
 }
 
@@ -277,7 +284,7 @@ func (idm *imemnode_t) _iupdate() common.Err_t {
 	} else {
 		iblk.Unlock()
 	}
-	idm.fs.bcache.Relse(iblk, "_iupdate")
+	idm.fs.fslog.Relse(iblk, "_iupdate")
 	return 0
 }
 
@@ -307,7 +314,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call.
-	max := (maxblkspersys - 1) * common.BSIZE
+	max := (MaxBlkPerOp - 1) * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 
@@ -469,8 +476,12 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 	return acc, 0
 }
 
+// caller holds lock on idm
 func (idm *imemnode_t) _linkdown() {
 	idm.links--
+	if idm.links <= 0 {
+		idm.fs.icache.addOrphan(idm)
+	}
 	idm._iupdate()
 }
 
@@ -491,7 +502,6 @@ func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
 		fmt.Printf("itype: %v for %v\n", ic.itype, inum)
-		panic("bad itype in fill")
 	}
 	ic.links = inode.linkcount()
 	ic.size = inode.size()
@@ -589,7 +599,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn, writing)
-			idm.fs.bcache.Relse(indblk, "indblk")
+			idm.fs.fslog.Relse(indblk, "indblk")
 			return blkn, err
 		} else if fbn < INDADDR*INDADDR {
 			fbn -= INDADDR
@@ -608,14 +618,14 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 			}
 
 			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
-			idm.fs.bcache.Relse(dindblk, "dindblk")
+			idm.fs.fslog.Relse(dindblk, "dindblk")
 
 			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
 			blkn, err := idm.ensureind(indblk, fbn%INDADDR, writing)
-			idm.fs.bcache.Relse(indblk, "indblk2")
+			idm.fs.fslog.Relse(indblk, "indblk2")
 			return blkn, err
 		} else {
 			panic("too big fbn")
@@ -719,7 +729,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 		c += wrote
 		offset += wrote
 		b.Unlock()
-		idm.fs.bcache.Relse(b, "_iread")
+		idm.fs.fslog.Relse(b, "_iread")
 		if err != 0 {
 			return c, err
 		}
@@ -750,7 +760,7 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		read, err := src.Uioread(dst)
 		b.Unlock()
 		idm.fs.fslog.Write_ordered(b)
-		idm.fs.bcache.Relse(b, "iwrite")
+		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
 		}
@@ -797,7 +807,7 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 	ni := &Inode_t{ib, ioffset(childi)}
 	ni.W_itype(I_DEAD)
 	ib.Unlock()
-	idm.fs.bcache.Relse(ib, "create_undo")
+	idm.fs.fslog.Relse(ib, "create_undo")
 	idm.fs.ialloc.Ifree(childi)
 	return 0
 }
@@ -863,11 +873,11 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		idm.fs.ialloc.Ifree(newinum)
 	}
 	idm.fs.fslog.Write(newiblk)
-	idm.fs.bcache.Relse(newiblk, "icreate")
+	idm.fs.fslog.Relse(newiblk, "icreate")
 	return newinum, err
 }
 
-func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
+func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmapinfo_t, common.Err_t) {
 	isz := idm.size
 	if (len != -1 && len < 0) || offset < 0 {
 		panic("bad off/len")
@@ -890,20 +900,22 @@ func (idm *imemnode_t) immapinfo(offset, len int, inc bool) ([]common.Mmapinfo_t
 			return nil, err
 		}
 		buf.Unlock()
-		if inc { // the VM system is going to use the page
-			// XXX don't release buffer (i.e., pin in cache)
-			// so that writes make it to the file. modify vm
-			// system to call Bcache.Relse.
-			// mem.Refup(buf.Pa)
+
+		// the VM system is going to use the page
+		buf.Mem.Refup(buf.Pa)
+
+		// the VM system will map this block writable; make sure the
+		// block isn't evicted to ensure that future read(2)s can
+		// observe writes through the mapping.
+		if mapshared {
+			idm.fs.bcache.pin(buf)
 		}
+
 		pgn := i / common.PGSIZE
 		wpg := (*common.Pg_t)(unsafe.Pointer(buf.Data))
 		ret[pgn].Pg = wpg
 		ret[pgn].Phys = buf.Pa
-		// release buffer. the VM system will increase the page count.
-		// XXX race? vm system may not do this for a while. maybe we
-		// should increase page count here.
-		idm.fs.bcache.Relse(buf, "immapinfo")
+		idm.fs.fslog.Relse(buf, "immapinfo")
 	}
 	return ret, 0
 }
@@ -912,7 +924,7 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 	return idm.fs.fslog.Get_fill(idm.fs.ialloc.Iblock(idm.inum), "idibread", true)
 }
 
-// frees all blocks occupied by idm
+// free an orphaned inode
 func (idm *imemnode_t) ifree() common.Err_t {
 	idm.fs.istats.Nifree.inc()
 	if fs_debug {
@@ -940,7 +952,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 			nblkno := common.Readn(data, 8, off)
 			add(nblkno)
 		}
-		idm.fs.bcache.Relse(blk, "ifree1")
+		idm.fs.fslog.Relse(blk, "ifree indirect")
 		return 0
 	}
 
@@ -969,7 +981,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 				}
 			}
 		}
-		idm.fs.bcache.Relse(blk, "dindno")
+		idm.fs.fslog.Relse(blk, "dindno")
 	}
 
 	iblk, err := idm.idibread()
@@ -983,7 +995,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	idm.flushto(iblk, idm.inum)
 	iblk.Unlock()
 	idm.fs.fslog.Write(iblk)
-	idm.fs.bcache.Relse(iblk, "ifree2")
+	idm.fs.fslog.Relse(iblk, "ifree inode")
 
 	idm.fs.ialloc.Ifree(idm.inum)
 
@@ -1021,15 +1033,140 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	refcache *refcache_t
-	fs       *Fs_t
+	refcache     *refcache_t
+	fs           *Fs_t
+	orphanbitmap *bitmap_t
+
+	sync.Mutex
+	// The following two datastructures are used to update the orphanbitmap
+	// on disk when log commits().  Map of orphan inodes (an inode that
+	// doesn't show up in any directory).  These inodes need to be freed on
+	// the last close of an fd that points to this inode.  However, on
+	// recovery, we need to free them explicitly (the crash is the "last"
+	// close).  So, the cache will put them in the orphan bitmap when the
+	// transaction that orphaned them commits (e.g., unlink). Orphan inodes
+	// turn into free and reclaimed-orphan inodes when ifree commits.
+	orphans map[common.Inum_t]bool // This is a map for quick removal in ifree()
+	// List of inodes that has freed since last commit
+	reclaimed []common.Inum_t
+
+	// An in-memory list of dead (an inode that doesn't show up in any
+	// directory anymore and isn't in any fd). They must be free at the end
+	// of a syscall.  We don't call ifree() immediately during an op,
+	// because we want to run ifree() as its own op. We don't use a channel
+	// and a seperate daemon because want to free the inode and its blocks
+	// at the end of the syscall so that the next sys call can use the freed
+	// resources.
+	dead []*imemnode_t
 }
 
-func mkIcache(fs *Fs_t) *icache_t {
+const maxinodepersys = 4
+
+func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
+	icache.orphans = make(map[common.Inum_t]bool, 0) // map is bounded by #unlinks between 2 commits
+	icache.reclaimed = make([]common.Inum_t, 0)      // list is bounded by #ifree between 2 commits
+	// dead is bounded the number of inodes refdowned in system call
+	icache.dead = make([]*imemnode_t, 0)
+	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache)
 	return icache
+}
+
+func (icache *icache_t) writeOrphanMap() {
+	icache.Lock()
+	defer icache.Unlock()
+
+	orphans := make([]int, 0, len(icache.orphans))
+	for inum, _ := range icache.orphans {
+		orphans = append(orphans, int(inum))
+	}
+	reclaimed := make([]int, 0, len(icache.reclaimed))
+	for _, inum := range icache.reclaimed {
+		reclaimed = append(reclaimed, int(inum))
+	}
+	icache.orphanbitmap.MarkUnmark(orphans, reclaimed)
+
+	icache.orphans = make(map[common.Inum_t]bool, 0)
+	icache.reclaimed = make([]common.Inum_t, 0)
+
+}
+
+func (icache *icache_t) addOrphan(imem *imemnode_t) {
+	icache.Lock()
+	defer icache.Unlock()
+	if len(icache.orphans) > icache.fs.fslog.loglen {
+		panic("addOrphan")
+	}
+	icache.orphans[imem.inum] = true
+}
+
+func (icache *icache_t) addDead(imem *imemnode_t) {
+	icache.Lock()
+	defer icache.Unlock()
+	if len(icache.dead) > maxinodepersys*icache.fs.fslog.maxops() {
+		panic("addDead")
+	}
+	icache.dead = append(icache.dead, imem)
+}
+
+func (icache *icache_t) _removeOrphan(inum common.Inum_t) {
+	delete(icache.orphans, inum)
+}
+
+func (icache *icache_t) _addReclaimed(inum common.Inum_t) {
+	icache.reclaimed = append(icache.reclaimed, inum)
+}
+
+func (icache *icache_t) freeOrphans(inum common.Inum_t) {
+	if fs_debug {
+		fmt.Printf("freeOrphans: %v\n", inum)
+	}
+	imem, err := icache.Iref(inum, "freeOrphans")
+	if err != 0 {
+		panic("freeOrphans")
+	}
+	evicted := icache.refcache.Refdown(imem, "freeOrphans")
+	if !evicted {
+		panic("link count isn't zero?")
+	}
+	// we might have crashed during RecoverOrphans and already have
+	// reclaimed this inode.
+	if imem.itype != I_DEAD {
+		imem.Free()
+	}
+}
+
+func (icache *icache_t) RecoverOrphans() {
+	icache.orphanbitmap.apply(func(b, v int) bool {
+		if v != 0 {
+			inum := common.Inum_t(b)
+			icache.freeOrphans(inum)
+			icache._addReclaimed(inum)
+		}
+		return true
+	})
+}
+
+// XXX Fs_close() from different threads are contending for icache.dead...
+func (icache *icache_t) freeDead() {
+	icache.Lock()
+	defer icache.Unlock()
+
+	if fs_debug {
+		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
+	}
+	for len(icache.dead) > 0 {
+		imem := icache.dead[0]
+		icache.dead = icache.dead[1:]
+		icache.Unlock()
+		imem.Free()
+		icache.Lock()
+		icache._removeOrphan(imem.inum)
+		icache._addReclaimed(imem.inum)
+	}
+	icache.dead = make([]*imemnode_t, 0)
 }
 
 func (icache *icache_t) Stats() string {
@@ -1045,11 +1182,19 @@ func (icache *icache_t) Stats() string {
 
 // obtain the reference for an inode
 func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
-	ref, err := icache.refcache.Lookup(int(inum), s)
+	ref, victim, err := icache.refcache.Lookup(int(inum), s)
 	if err != 0 {
 		return nil, err
 	}
 	defer ref.Unlock()
+
+	if victim != nil {
+		imem := victim.(*imemnode_t)
+		if imem.links == 0 {
+			panic("linkcount of zero on Lookup!")
+		}
+		imem.Evict()
+	}
 
 	if !ref.valid {
 		if fs_debug {
@@ -1063,7 +1208,6 @@ func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.
 		err := imem.idm_init(inum)
 		if err != 0 {
 			panic("idm_init")
-			// delete(refcache.refs, inum)
 			return nil, err
 		}
 		ref.valid = true
@@ -1083,7 +1227,10 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 }
 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
-	icache.refcache.Refdown(imem, "fs_rename_opar")
+	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
+	if evicted {
+		icache.addDead(imem) // link and refcount are 0
+	}
 }
 
 func (icache *icache_t) Refup(imem *imemnode_t, s string) {
@@ -1113,8 +1260,8 @@ func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 // Inode allocator
 //
 
-type iallocater_t struct {
-	alloc    *allocater_t
+type ibitmap_t struct {
+	alloc    *bitmap_t
 	start    int
 	len      int
 	first    int
@@ -1122,9 +1269,9 @@ type iallocater_t struct {
 	maxinode int
 }
 
-func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
-	ialloc := &iallocater_t{}
-	ialloc.alloc = mkAllocater(fs, start, len)
+func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
+	ialloc := &ibitmap_t{}
+	ialloc.alloc = mkAllocater(fs, start, len, fs.fslog)
 	ialloc.start = start
 	ialloc.len = len
 	ialloc.first = first
@@ -1135,13 +1282,13 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *iallocater_t {
 	return ialloc
 }
 
-func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
-	n, err := ialloc.alloc.Alloc()
+func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
+	n, err := ialloc.alloc.FindAndMark()
 	if err != 0 {
 		return 0, err
 	}
 	if fs_debug {
-		fmt.Printf("ialloc %d\n", n)
+		fmt.Printf("ialloc %d freebits %d\n", n, ialloc.alloc.nfreebits)
 	}
 	// we may have more bits in inode bitmap blocks than inodes on disk
 	if n >= ialloc.maxinode {
@@ -1151,14 +1298,14 @@ func (ialloc *iallocater_t) Ialloc() (common.Inum_t, common.Err_t) {
 	return inum, 0
 }
 
-func (ialloc *iallocater_t) Ifree(inum common.Inum_t) common.Err_t {
+func (ialloc *ibitmap_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
-		fmt.Printf("ifree: mark free %d\n", inum)
+		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
-	return ialloc.alloc.Free(int(inum))
+	return ialloc.alloc.Unmark(int(inum))
 }
 
-func (ialloc *iallocater_t) Iblock(inum common.Inum_t) int {
+func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
 	b := int(inum) / (common.BSIZE / ISIZE)
 	b += ialloc.first
 	if b < ialloc.first || b >= ialloc.first+ialloc.inodelen {
@@ -1173,6 +1320,6 @@ func ioffset(inum common.Inum_t) int {
 	return o
 }
 
-func (ialloc *iallocater_t) Stats() string {
+func (ialloc *ibitmap_t) Stats() string {
 	return "inode " + ialloc.alloc.Stats()
 }

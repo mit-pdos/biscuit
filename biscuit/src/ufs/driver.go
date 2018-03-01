@@ -98,6 +98,9 @@ func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
 func (bm *blockmem_t) Free(pa common.Pa_t) {
 }
 
+func (bm *blockmem_t) Refup(pa common.Pa_t) {
+}
+
 type console_t struct {
 }
 

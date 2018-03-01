@@ -309,7 +309,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 // only use PTE_U/PTE_W; the page fault handler will install the correct COW
 // flags. perms == 0 means that no mapping can go here (like for guard pages).
 func (p *Proc_t) _mkvmi(mt mtype_t, start, len int, perms Pa_t, foff int,
-	fops Fdops_i, shared bool) *Vminfo_t {
+	fops Fdops_i, unpin Unpin_i) *Vminfo_t {
 	if len <= 0 {
 		panic("bad vmi len")
 	}
@@ -332,31 +332,32 @@ func (p *Proc_t) _mkvmi(mt mtype_t, start, len int, perms Pa_t, foff int,
 		ret.file.foff = foff
 		ret.file.mfile = &Mfile_t{}
 		ret.file.mfile.mfops = fops
+		ret.file.mfile.unpin = unpin
 		ret.file.mfile.mapcount = pglen
-		ret.file.shared = shared
+		ret.file.shared = unpin != nil
 	}
 	return ret
 }
 
 func (p *Proc_t) Vmadd_anon(start, len int, perms Pa_t) {
-	vmi := p._mkvmi(VANON, start, len, perms, 0, nil, false)
+	vmi := p._mkvmi(VANON, start, len, perms, 0, nil, nil)
 	p.Vmregion.insert(vmi)
 }
 
 func (p *Proc_t) Vmadd_file(start, len int, perms Pa_t, fops Fdops_i,
 	foff int) {
-	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, false)
+	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, nil)
 	p.Vmregion.insert(vmi)
 }
 
 func (p *Proc_t) Vmadd_shareanon(start, len int, perms Pa_t) {
-	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil, false)
+	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil, nil)
 	p.Vmregion.insert(vmi)
 }
 
 func (p *Proc_t) Vmadd_sharefile(start, len int, perms Pa_t, fops Fdops_i,
-	foff int) {
-	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, true)
+	foff int, unpin Unpin_i) {
+	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, unpin)
 	p.Vmregion.insert(vmi)
 }
 
@@ -390,8 +391,24 @@ func (p *Proc_t) mkfxbuf() *[64]uintptr {
 // simply Physmem.Refdown()
 func (p *Proc_t) Page_insert(va int, p_pg Pa_t, perms Pa_t,
 	vempty bool) (bool, bool) {
+	return p._page_insert(va, p_pg, perms, vempty, true)
+}
+
+// the first return value is true if a present mapping was modified (i.e. need
+// to flush TLB). the second return value is false if the page insertion failed
+// due to lack of user pages. p_pg's ref count is increased so the caller can
+// simply Physmem.Refdown()
+func (p *Proc_t) Blockpage_insert(va int, p_pg Pa_t, perms Pa_t,
+	vempty bool) (bool, bool) {
+	return p._page_insert(va, p_pg, perms, vempty, false)
+}
+
+func (p *Proc_t) _page_insert(va int, p_pg Pa_t, perms Pa_t,
+	vempty, refup bool) (bool, bool) {
 	p.Lockassert_pmap()
-	Physmem.Refup(p_pg)
+	if refup {
+		Physmem.Refup(p_pg)
+	}
 	pte, err := pmap_walk(p.Pmap, va, PTE_U|PTE_W)
 	if err != 0 {
 		return false, false
@@ -970,7 +987,11 @@ func Uvmfree_inner(pmg *Pmap_t, p_pmap Pa_t, vmr *Vmregion_t) {
 	vmr.iter(func(vmi *Vminfo_t) {
 		start := uintptr(vmi.pgn << PGSHIFT)
 		end := start + uintptr(vmi.pglen<<PGSHIFT)
-		pmfree(pmg, start, end)
+		var unpin Unpin_i
+		if vmi.mtype == VFILE {
+			unpin = vmi.file.mfile.unpin
+		}
+		pmfree(pmg, start, end, unpin)
 	})
 }
 
