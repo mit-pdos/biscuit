@@ -397,8 +397,6 @@ func (log *log_t) commit() {
 	}
 	lh := logheader_t{headblk.Data}
 
-	log.fs.icache.writeOrphanMap()
-
 	blks := common.MkBlkList()
 	for i := log.diskhead; i < log.memhead; i++ {
 		l := log.log[i]

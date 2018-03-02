@@ -39,7 +39,7 @@ func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
 	a.freestart = start
 	a.freelen = len
 	a.storage = s
-	err := a.apply(func(b, v int) bool {
+	_, err := a.apply(0, func(b, v int) bool {
 		if v == 0 {
 			a.nfreebits++
 		}
@@ -74,35 +74,41 @@ func (alloc *bitmap_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) 
 	return alloc.storage.Get_fill(alloc.freestart+blockno, "fbread", true)
 }
 
-// apply f to every bit until f is false
-func (alloc *bitmap_t) apply(f func(b, v int) bool) common.Err_t {
+// apply f to every bit starting from start, until f is false.  return true if
+// make a complete pass.
+func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err_t) {
 	var blk *common.Bdev_block_t
 	var err common.Err_t
-	for bn := 0; bn < alloc.freelen; bn++ {
-		if blk != nil {
-			blk.Unlock()
-			alloc.storage.Relse(blk, "alloc apply")
-		}
-		blk, err = alloc.Fbread(bn)
-		if err != 0 {
-			return err
-		}
-		for idx := 0; idx < len(blk.Data); idx++ {
-			for m := 0; m < 8; m++ {
-				b := bn*bitsperblk + idx*8 + m
-				byte := blk.Data[idx]
-				v := byte & (1 << uint(m))
-				if !f(b, int(v)) {
-					blk.Unlock()
-					alloc.storage.Relse(blk, "alloc apply")
-					return 0
-				}
+	var lastbn = -1
+	for bit := start; bit < alloc.freelen*bitsperblk; bit++ {
+		bn := blkno(bit)
+		if bn != lastbn {
+			if blk != nil {
+				blk.Unlock()
+				alloc.storage.Relse(blk, "alloc apply")
+			}
+			blk, err = alloc.Fbread(bn)
+			if err != 0 {
+				return false, err
 			}
 		}
+		byteoff := byteno(bit)
+		bitoff := byteoffset(bit)
+		byte := blk.Data[byteoff]
+		v := byte & (1 << uint(bitoff))
+		if !f(bit, int(v)) {
+			blk.Unlock()
+			alloc.storage.Relse(blk, "alloc apply")
+			return false, 0
+		}
+		lastbn = bn
+
 	}
-	blk.Unlock()
-	alloc.storage.Relse(blk, "alloc apply")
-	return 0
+	if blk != nil {
+		blk.Unlock()
+		alloc.storage.Relse(blk, "alloc apply")
+	}
+	return true, 0
 }
 
 func (alloc *bitmap_t) CheckAndMark() (int, common.Err_t) {
@@ -136,7 +142,7 @@ func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 	if err == 0 {
 		alloc.nhit++
 	} else {
-		err = alloc.apply(func(b, v int) bool {
+		_, err = alloc.apply(0, func(b, v int) bool {
 			if v == 0 {
 				alloc.lastbit = b
 				return false

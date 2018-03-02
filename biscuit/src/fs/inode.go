@@ -214,6 +214,7 @@ func (idm *imemnode_t) Free() {
 	if idm.links == 0 {
 		idm.fs.fslog.Op_begin("ifree")
 		idm.ifree()
+		idm.fs.icache.clearOrphan(idm.inum)
 		idm.fs.fslog.Op_end()
 	}
 }
@@ -480,7 +481,7 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 func (idm *imemnode_t) _linkdown() {
 	idm.links--
 	if idm.links <= 0 {
-		idm.fs.icache.addOrphan(idm)
+		idm.fs.icache.markOrphan(idm.inum)
 	}
 	idm._iupdate()
 }
@@ -1038,18 +1039,6 @@ type icache_t struct {
 	orphanbitmap *bitmap_t
 
 	sync.Mutex
-	// The following two datastructures are used to update the orphanbitmap
-	// on disk when log commits().  Map of orphan inodes (an inode that
-	// doesn't show up in any directory).  These inodes need to be freed on
-	// the last close of an fd that points to this inode.  However, on
-	// recovery, we need to free them explicitly (the crash is the "last"
-	// close).  So, the cache will put them in the orphan bitmap when the
-	// transaction that orphaned them commits (e.g., unlink). Orphan inodes
-	// turn into free and reclaimed-orphan inodes when ifree commits.
-	orphans map[common.Inum_t]bool // This is a map for quick removal in ifree()
-	// List of inodes that has freed since last commit
-	reclaimed []common.Inum_t
-
 	// An in-memory list of dead (an inode that doesn't show up in any
 	// directory anymore and isn't in any fd). They must be free at the end
 	// of a syscall.  We don't call ifree() immediately during an op,
@@ -1066,68 +1055,37 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache := &icache_t{}
 	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
 	icache.fs = fs
-	icache.orphans = make(map[common.Inum_t]bool, 0) // map is bounded by #unlinks between 2 commits
-	icache.reclaimed = make([]common.Inum_t, 0)      // list is bounded by #ifree between 2 commits
-	// dead is bounded the number of inodes refdowned in system call
+	icache.orphanbitmap = mkAllocater(fs, start, len, fs.fslog)
+	// dead is bounded the number of inodes refdowned in system call, and
+	// the system calls admitted to log.
 	icache.dead = make([]*imemnode_t, 0)
-	icache.orphanbitmap = mkAllocater(fs, start, len, fs.bcache)
 	return icache
 }
 
-func (icache *icache_t) writeOrphanMap() {
-	icache.Lock()
-	defer icache.Unlock()
+// The following are used are used to update the orphanbitmap on disk as part of
+// iunlink and ifree. An orphan is an inode that doesn't show up in any
+// directory.  These inodes need to be freed on the last close of an fd that
+// points to this inode.  However, on recovery, we need to free them explicitly
+// (the crash is the "last" close). When links reaches zero the fs marks the
+// inode as an orphan and when calling ifree the fs clears the orphan bit.
 
-	orphans := make([]int, 0, len(icache.orphans))
-	for inum, _ := range icache.orphans {
-		orphans = append(orphans, int(inum))
-	}
-	reclaimed := make([]int, 0, len(icache.reclaimed))
-	for _, inum := range icache.reclaimed {
-		reclaimed = append(reclaimed, int(inum))
-	}
-	icache.orphanbitmap.MarkUnmark(orphans, reclaimed)
-
-	icache.orphans = make(map[common.Inum_t]bool, 0)
-	icache.reclaimed = make([]common.Inum_t, 0)
-
+func (icache *icache_t) markOrphan(inum common.Inum_t) {
+	icache.orphanbitmap.Mark(int(inum))
 }
 
-func (icache *icache_t) addOrphan(imem *imemnode_t) {
-	icache.Lock()
-	defer icache.Unlock()
-	if len(icache.orphans) > icache.fs.fslog.loglen {
-		panic("addOrphan")
-	}
-	icache.orphans[imem.inum] = true
+func (icache *icache_t) clearOrphan(inum common.Inum_t) {
+	icache.orphanbitmap.Unmark(int(inum))
 }
 
-func (icache *icache_t) addDead(imem *imemnode_t) {
-	icache.Lock()
-	defer icache.Unlock()
-	if len(icache.dead) > maxinodepersys*icache.fs.fslog.maxops() {
-		panic("addDead")
-	}
-	icache.dead = append(icache.dead, imem)
-}
-
-func (icache *icache_t) _removeOrphan(inum common.Inum_t) {
-	delete(icache.orphans, inum)
-}
-
-func (icache *icache_t) _addReclaimed(inum common.Inum_t) {
-	icache.reclaimed = append(icache.reclaimed, inum)
-}
-
-func (icache *icache_t) freeOrphans(inum common.Inum_t) {
+func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if fs_debug {
-		fmt.Printf("freeOrphans: %v\n", inum)
+		fmt.Printf("freeOrphan: %v\n", inum)
 	}
-	imem, err := icache.Iref(inum, "freeOrphans")
+	imem, err := icache.Iref(inum, "freeOrphan")
 	if err != 0 {
-		panic("freeOrphans")
+		panic("freeOrphan")
 	}
-	evicted := icache.refcache.Refdown(imem, "freeOrphans")
+	evicted := icache.refcache.Refdown(imem, "freeOrphan")
 	if !evicted {
 		panic("link count isn't zero?")
 	}
@@ -1139,14 +1097,40 @@ func (icache *icache_t) freeOrphans(inum common.Inum_t) {
 }
 
 func (icache *icache_t) RecoverOrphans() {
-	icache.orphanbitmap.apply(func(b, v int) bool {
-		if v != 0 {
-			inum := common.Inum_t(b)
-			icache.freeOrphans(inum)
-			icache._addReclaimed(inum)
+	last := common.Inum_t(0)
+	done := false
+	var err common.Err_t
+	for !done {
+		inum := common.Inum_t(0)
+		done, err = icache.orphanbitmap.apply(int(last), func(b, v int) bool {
+			if v != 0 {
+				inum = common.Inum_t(b)
+				return false
+			}
+			return true
+		})
+		if err != 0 {
+			panic("RecoverOrphans")
 		}
-		return true
-	})
+		if inum != 0 {
+			// don't free inode inside of apply(), because apply
+			// holds the lock on the bitmap block free need to mark
+			// clear orphan status.
+			icache.freeOrphan(inum)
+			last = inum
+		}
+	}
+}
+
+// Refdown() will mark an inode dead, which freeDead() frees in an ifree
+// operation.
+func (icache *icache_t) addDead(imem *imemnode_t) {
+	icache.Lock()
+	defer icache.Unlock()
+	if len(icache.dead) > icache.fs.fslog.loglen {
+		panic("addDead")
+	}
+	icache.dead = append(icache.dead, imem)
 }
 
 // XXX Fs_close() from different threads are contending for icache.dead...
@@ -1163,8 +1147,6 @@ func (icache *icache_t) freeDead() {
 		icache.Unlock()
 		imem.Free()
 		icache.Lock()
-		icache._removeOrphan(imem.inum)
-		icache._addReclaimed(imem.inum)
 	}
 	icache.dead = make([]*imemnode_t, 0)
 }
