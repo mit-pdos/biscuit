@@ -772,11 +772,14 @@ func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 	ok := false
 	for e := p.queued.Front(); e != nil; e = e.Next() {
 		r := e.Value.(*common.Bdev_req_t)
-		if r.Blks.Len() == 0 {
-			continue
+		if r.Cmd == common.BDEV_FLUSH || req.Cmd == common.BDEV_FLUSH {
+			break
 		}
-		last := r.Blks.BackBlock()
-		if req.Blks != nil {
+		if r.Blks.Len() == 0 {
+			panic("queue_coalesce")
+		}
+		if r.Cmd == req.Cmd { // combine reads with reads, and writes with writes
+			last := r.Blks.BackBlock()
 			first := req.Blks.FrontBlock()
 			if first.Block == last.Block+1 {
 				if ahci_debug {
@@ -789,6 +792,7 @@ func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 			}
 		}
 	}
+
 	if !ok {
 		p.queued.PushBack(req)
 	}
