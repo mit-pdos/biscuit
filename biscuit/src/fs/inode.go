@@ -212,10 +212,7 @@ func (idm *imemnode_t) Evict() {
 func (idm *imemnode_t) Free() {
 	idm.Evict()
 	if idm.links == 0 {
-		idm.fs.fslog.Op_begin("ifree")
 		idm.ifree()
-		idm.fs.icache.clearOrphan(idm.inum)
-		idm.fs.fslog.Op_end()
 	}
 }
 
@@ -570,6 +567,7 @@ func (idm *imemnode_t) ensureind(blk *common.Bdev_block_t, slot int, writing boo
 }
 
 // Assumes that every block until b exits
+// XXX change to wrap blockiter_t instead
 func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 	if fbn < NIADDRS {
 		if idm.addrs[fbn] != 0 {
@@ -919,6 +917,195 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 	return idm.fs.fslog.Get_fill(idm.fs.ialloc.Iblock(idm.inum), "idibread", true)
 }
 
+// a type to iterate over the data and indirect blocks of an imemnode_t without
+// re-reading and re-locking indirect blocks. it may simultaneously hold
+// references to at most two blocks until blockiter_t.release() is called.
+type blockiter_t struct {
+	idm   *imemnode_t
+	which int
+	dub   *common.Bdev_block_t
+	lasti *common.Bdev_block_t
+}
+
+func (bl *blockiter_t) bi_init(idm *imemnode_t) {
+	var zbl blockiter_t
+	*bl = zbl
+	bl.idm = idm
+}
+
+// if this imemnode_t has a double-indirect block, _isdub loads it and caches
+// it and returns true.
+func (bl *blockiter_t) _isdub() (*common.Bdev_block_t, bool) {
+	if bl.dub != nil {
+		return bl.dub, true
+	}
+	blkno := bl.idm.dindir
+	if blkno == 0 {
+		return nil, false
+	}
+	var err common.Err_t
+	bl.dub, err = bl.idm.mbread(blkno)
+	if err != 0 {
+		panic("must reserve")
+	}
+	return bl.dub, true
+}
+
+// returns the indirect block or block number from the given slot in the
+// indirect block
+func (bl *blockiter_t) _isdubind(dubslot int, fetch bool) (*common.Bdev_block_t, int, bool) {
+	dub, ok := bl._isdub()
+	if !ok {
+		return nil, 0, false
+	}
+
+	blkno := common.Readn(dub.Data[:], 8, dubslot*8)
+	var ret *common.Bdev_block_t
+	ok = blkno != 0
+	if fetch {
+		ret, ok = bl._isind(blkno)
+	}
+	return ret, blkno, ok
+}
+
+func (bl *blockiter_t) _isind(blkno int) (*common.Bdev_block_t, bool) {
+	if blkno == 0 {
+		return nil, false
+	}
+	if bl.lasti != nil {
+		if bl.lasti.Block == blkno {
+			return bl.lasti, true
+		}
+		bl.idm.fs.fslog.Relse(bl.lasti, "release")
+	}
+	var err common.Err_t
+	bl.lasti, err = bl.idm.mbread(blkno)
+	if err != 0 {
+		panic("must reserve")
+	}
+	return bl.lasti, true
+}
+
+func (bl *blockiter_t) release() {
+	if bl.dub != nil {
+		bl.idm.fs.fslog.Relse(bl.dub, "release")
+		bl.dub = nil
+	}
+	if bl.lasti != nil {
+		bl.idm.fs.fslog.Relse(bl.lasti, "release")
+		bl.lasti = nil
+	}
+}
+
+// returns block number, the next slot to check, and whether ther may be
+// another block allocated after the requested block
+func (bl *blockiter_t) next1(which int) (int, int, bool) {
+	const DBLOCKS = NIADDRS + INDADDR + INDADDR*INDADDR
+	const INDBLOCKS = DBLOCKS + INDADDR
+	const IMD1 = INDBLOCKS
+	const IMD2 = INDBLOCKS + 1
+	const ALL = INDBLOCKS + 2
+
+	if which >= ALL {
+		panic("none left")
+	}
+
+	ret := -1
+	w := which
+	if w < DBLOCKS {
+		if w < NIADDRS {
+			blkno := bl.idm.addrs[w]
+			if blkno == 0 {
+				return -1, DBLOCKS, true
+			}
+			ret = blkno
+		} else if w < NIADDRS+INDADDR {
+			w -= NIADDRS
+			blkno := 0
+			single, ok := bl._isind(bl.idm.indir)
+			if ok {
+				blkno = common.Readn(single.Data[:], 8, w*8)
+			}
+			if !ok || blkno == 0 {
+				return -1, DBLOCKS, true
+			}
+			ret = blkno
+		} else {
+			w -= NIADDRS + INDADDR
+			dslot := w / INDADDR
+			islot := w % INDADDR
+			blkno := 0
+			single, _, ok := bl._isdubind(dslot, true)
+			if ok {
+				blkno = common.Readn(single.Data[:], 8, islot*8)
+			}
+			if !ok || blkno == 0 {
+				return -1, DBLOCKS, true
+			}
+			ret = blkno
+		}
+	} else if w < INDBLOCKS {
+		w -= DBLOCKS
+		dslot := w / INDADDR
+		_, sblkno, ok := bl._isdubind(dslot, false)
+		if !ok || sblkno == 0 {
+			return -1, IMD1, true
+		}
+		ret = sblkno
+	} else if w < ALL {
+		switch w {
+		default:
+			panic("huh?")
+		case IMD1:
+			if bl.idm.indir == 0 {
+				return -1, IMD2, true
+			}
+			ret = bl.idm.indir
+		case IMD2:
+			if bl.idm.dindir == 0 {
+				return -1, ALL, false
+			}
+			ret = bl.idm.dindir
+		}
+	} else {
+		panic("bad which")
+	}
+	which++
+	return ret, which, which != ALL
+}
+
+// returns the next block to free, whether the block is valid, the next slot to
+// check, and whether any more blocks remain (so the caller can avoid acquiring
+// log admission spuriously).
+func (bl *blockiter_t) next(which int) (int, bool, int, bool) {
+	var ret int
+	var mayremain bool
+	for {
+		ret, which, mayremain = bl.next1(which)
+		if ret != -1 || !mayremain {
+			break
+		}
+	}
+	remains := false
+	if mayremain {
+		if ret == -1 {
+			panic("no")
+		}
+		// check whether there is at least one more block. avoid
+		// re-searching.
+		next := which
+		for {
+			var dur int
+			dur, next, remains = bl.next1(next)
+			if dur != -1 || !remains {
+				break
+			}
+			which = next
+		}
+	}
+	return ret, ret != -1, which, remains
+}
+
 // free an orphaned inode
 func (idm *imemnode_t) ifree() common.Err_t {
 	idm.fs.istats.Nifree.inc()
@@ -926,78 +1113,64 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		fmt.Printf("ifree: %d\n", idm.inum)
 	}
 
-	allb := make([]int, 0, 10)
-	add := func(blkno int) {
-		if blkno != 0 {
-			allb = append(allb, blkno)
-		}
-	}
-	freeind := func(indno int) common.Err_t {
-		if indno == 0 {
-			return 0
-		}
-		add(indno)
-		blk, err := idm.mbread(indno)
-		if err != 0 {
-			return err
-		}
-		data := blk.Data[:]
-		for i := 0; i < INDADDR; i++ {
-			off := i * 8
-			nblkno := common.Readn(data, 8, off)
-			add(nblkno)
-		}
-		idm.fs.fslog.Relse(blk, "ifree indirect")
-		return 0
-	}
+	// the imemnode_t.major field has a different meaning once a file's
+	// link count reaches 0: it becomes a logical index of which (data and
+	// indirect) blocks of a file have been freed. specifically, blocks in
+	// the range [0, major) have been freed. major refers to a data block
+	// when:
+	// 	major < DBLOCKS
+	// where DBLOCKS is NIADDRS+INDADDR+INDADDR*INDADDR, the indirect
+	// blocks referred to by the double-indirect block when
+	// 	DBLOCKS <= major < DBLOCKS + INDADDR, and the
+	// indirect/double-indirect itself when:
+	//	DBLOCKS+INADDR <= major DBLOCKS+INADDR+2
 
-	for i := 0; i < NIADDRS; i++ {
-		add(idm.addrs[i])
-	}
-	err := freeind(idm.indir)
-	if err != 0 {
-		panic("freeind")
-	}
-	dindno := idm.dindir
-	if dindno != 0 {
-		add(dindno)
-		blk, err := idm.mbread(dindno)
-		if err != 0 {
-			return err
-		}
-		data := blk.Data[:]
-		for i := 0; i < INDADDR; i++ {
-			off := i * 8
-			nblkno := common.Readn(data, 8, off)
-			if nblkno != 0 {
-				err := freeind(nblkno)
-				if err != 0 {
-					panic("freeind")
-				}
+	remains := true
+	for remains {
+		idm.fs.fslog.Op_begin("ifree")
+
+		// set of blocks that will be written by this transaction;
+		// include an entry for the inode block (to update major) and a
+		// fake entry for the orphan block conservatively.
+		distinct := map[int]bool{idm.fs.ialloc.Iblock(idm.inum): true,
+			-1: true}
+
+		which := idm.major
+
+		bliter := &blockiter_t{}
+		bliter.bi_init(idm)
+
+		for len(distinct) < MaxBlkPerOp && remains {
+			blkno := -1
+			var ok bool
+			blkno, ok, which, remains = bliter.next(which)
+			if ok {
+				idm.fs.balloc.Bfree(blkno)
+				freeblk := idm.fs.balloc.alloc.bitmapblkno(blkno)
+				distinct[freeblk] = true
 			}
 		}
-		idm.fs.fslog.Relse(blk, "dindno")
+		bliter.release()
+
+		// must lock the inode block before marking it free, to prevent
+		// clobbering a newly, concurrently allocated/created inode
+		iblk, _ := idm.idibread()
+
+		idm.major = which
+		if !remains {
+			// all the blocks have been freed
+			idm.itype = I_DEAD
+			idm.fs.icache.clearOrphan(idm.inum)
+			idm.fs.ialloc.Ifree(idm.inum)
+		}
+
+		idm.flushto(iblk, idm.inum)
+		iblk.Unlock()
+		idm.fs.fslog.Write(iblk)
+		idm.fs.fslog.Relse(iblk, "ifree")
+		idm.fs.fslog.Op_end()
 	}
 
-	iblk, err := idm.idibread()
-	if err != 0 {
-		return err
-	}
-	if iblk == nil {
-		panic("ifree")
-	}
-	idm.itype = I_DEAD
-	idm.flushto(iblk, idm.inum)
-	iblk.Unlock()
-	idm.fs.fslog.Write(iblk)
-	idm.fs.fslog.Relse(iblk, "ifree inode")
-
-	idm.fs.ialloc.Ifree(idm.inum)
-
-	// could batch free
-	for _, blkno := range allb {
-		idm.fs.balloc.Bfree(blkno)
-	}
 	return 0
 }
 
@@ -1108,8 +1281,8 @@ func (icache *icache_t) RecoverOrphans() {
 		}
 		if inum != 0 {
 			// don't free inode inside of apply(), because apply
-			// holds the lock on the bitmap block free need to mark
-			// clear orphan status.
+			// holds the lock on the bitmap block, but free needs
+			// to mark clear orphan status.
 			icache.freeOrphan(inum)
 			last = inum
 		}
@@ -1274,7 +1447,7 @@ func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
 	return inum, 0
 }
 
-// once Ifree() returns, inum can be reallocate by a concurrent operation.
+// once Ifree() returns, inum can be reallocated by a concurrent operation.
 // therefore, the caller must either have the block for inum locked or must not
 // further modify the block for inum after calling Ifree.
 func (ialloc *ibitmap_t) Ifree(inum common.Inum_t) common.Err_t {

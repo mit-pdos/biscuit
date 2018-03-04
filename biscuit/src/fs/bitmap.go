@@ -67,6 +67,10 @@ func byteoffset(bit int) int {
 	return blkoffset(bit) % 8
 }
 
+func (alloc *bitmap_t) bitmapblkno(bit int) int {
+	return alloc.freestart + blkno(bit)
+}
+
 func (alloc *bitmap_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
 	if blockno < 0 || blockno >= alloc.freelen {
 		panic("naughty blockno")
