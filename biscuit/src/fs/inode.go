@@ -1046,7 +1046,7 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 		}
 	} else if w < INDBLOCKS {
 		w -= DBLOCKS
-		dslot := w / INDADDR
+		dslot := w % INDADDR
 		_, sblkno, ok := bl._isdubind(dslot, false)
 		if !ok || sblkno == 0 {
 			return -1, IMD1, true
