@@ -860,19 +860,13 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		newinode.W_addr(i, 0)
 	}
 
-	// deinsert will call write_log and we don't want to hold newiblk's lock
-	// while sending on the channel to the daemon.  The daemon might want to
-	// lock this block (e.g., to pin) when adding it to the log, but it
-	// would block and not read from the channel again.  it is safe to
-	// unlock because we are done creating a legit inode in the block.
-	newiblk.Unlock()
-
 	// write new directory entry referencing newinode
 	err = idm._deinsert(name, newinum)
 	if err != 0 {
 		newinode.W_itype(I_DEAD)
 		idm.fs.ialloc.Ifree(newinum)
 	}
+	newiblk.Unlock()
 	idm.fs.fslog.Write(newiblk)
 	idm.fs.fslog.Relse(newiblk, "icreate")
 	return newinum, err
@@ -1280,6 +1274,9 @@ func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
 	return inum, 0
 }
 
+// once Ifree() returns, inum can be reallocate by a concurrent operation.
+// therefore, the caller must either have the block for inum locked or must not
+// further modify the block for inum after calling Ifree.
 func (ialloc *ibitmap_t) Ifree(inum common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
