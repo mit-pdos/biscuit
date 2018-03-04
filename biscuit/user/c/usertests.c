@@ -2491,7 +2491,7 @@ void preadwrite(void)
 	char *tfile = "/tmp/prdwrfile";
 	int fd = open(tfile, O_WRONLY | O_CREAT | O_TRUNC);
 	if (fd < 0)
-		err(-1, "open");
+		err(-1, "open trunc");
 
 	const size_t fsz = 1024;
 	char fbuf[fsz];
@@ -2504,7 +2504,7 @@ void preadwrite(void)
 	close(fd);
 
 	if ((fd = open(tfile, O_RDONLY)) < 0)
-		err(-1, "open");
+		err(-1, "open read");
 	char pbuf[fsz];
 	char *f = &fbuf[0];
 	char *fend = f + sizeof(fbuf);
