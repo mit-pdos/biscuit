@@ -997,9 +997,8 @@ func (bl *blockiter_t) release() {
 	}
 }
 
-// returns block number, the next slot to check, and whether ther may be
-// another block allocated after the requested block
-func (bl *blockiter_t) next1(which int) (int, int, bool) {
+// returns block number and the next slot to check for the given slot.
+func (bl *blockiter_t) next1(which int) (int, int) {
 	const DBLOCKS = NIADDRS + INDADDR + INDADDR*INDADDR
 	const INDBLOCKS = DBLOCKS + INDADDR
 	const IMD1 = INDBLOCKS
@@ -1016,7 +1015,7 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 		if w < NIADDRS {
 			blkno := bl.idm.addrs[w]
 			if blkno == 0 {
-				return -1, DBLOCKS, true
+				return -1, DBLOCKS
 			}
 			ret = blkno
 		} else if w < NIADDRS+INDADDR {
@@ -1027,7 +1026,7 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 				blkno = common.Readn(single.Data[:], 8, w*8)
 			}
 			if !ok || blkno == 0 {
-				return -1, DBLOCKS, true
+				return -1, DBLOCKS
 			}
 			ret = blkno
 		} else {
@@ -1040,7 +1039,7 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 				blkno = common.Readn(single.Data[:], 8, islot*8)
 			}
 			if !ok || blkno == 0 {
-				return -1, DBLOCKS, true
+				return -1, DBLOCKS
 			}
 			ret = blkno
 		}
@@ -1049,7 +1048,7 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 		dslot := w % INDADDR
 		_, sblkno, ok := bl._isdubind(dslot, false)
 		if !ok || sblkno == 0 {
-			return -1, IMD1, true
+			return -1, IMD1
 		}
 		ret = sblkno
 	} else if w < ALL {
@@ -1058,12 +1057,12 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 			panic("huh?")
 		case IMD1:
 			if bl.idm.indir == 0 {
-				return -1, IMD2, true
+				return -1, IMD2
 			}
 			ret = bl.idm.indir
 		case IMD2:
 			if bl.idm.dindir == 0 {
-				return -1, ALL, false
+				return -1, ALL
 			}
 			ret = bl.idm.dindir
 		}
@@ -1071,39 +1070,34 @@ func (bl *blockiter_t) next1(which int) (int, int, bool) {
 		panic("bad which")
 	}
 	which++
-	return ret, which, which != ALL
+	return ret, which
 }
 
 // returns the next block to free, whether the block is valid, the next slot to
 // check, and whether any more blocks remain (so the caller can avoid acquiring
 // log admission spuriously).
 func (bl *blockiter_t) next(which int) (int, bool, int, bool) {
-	var ret int
-	var mayremain bool
-	for {
-		ret, which, mayremain = bl.next1(which)
-		if ret != -1 || !mayremain {
+	const DBLOCKS = NIADDRS + INDADDR + INDADDR*INDADDR
+	const INDBLOCKS = DBLOCKS + INDADDR
+	const ALL = INDBLOCKS + 2
+
+	ret := -1
+	for ret == -1 && which != ALL {
+		ret, which = bl.next1(which)
+	}
+	ok := ret != -1
+	remains := false
+	for ok && which != ALL {
+		d, next := bl.next1(which)
+		if d != -1 {
+			remains = true
+			break
+		} else if next == ALL {
 			break
 		}
+		which = next
 	}
-	remains := false
-	if mayremain {
-		if ret == -1 {
-			panic("no")
-		}
-		// check whether there is at least one more block. avoid
-		// re-searching.
-		next := which
-		for {
-			var dur int
-			dur, next, remains = bl.next1(next)
-			if dur != -1 || !remains {
-				break
-			}
-			which = next
-		}
-	}
-	return ret, ret != -1, which, remains
+	return ret, ok, which, remains
 }
 
 // free an orphaned inode
