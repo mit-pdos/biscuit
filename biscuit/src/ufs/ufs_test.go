@@ -649,7 +649,7 @@ func TestTracesOrdered(t *testing.T) {
 }
 
 //
-// Test: large frees
+// Test: big ifree (i.e., several ops, spanning several transactions)
 //
 
 const (
@@ -691,7 +691,7 @@ func doTestFree(tfs *Ufs_t, t *testing.T) {
 	_, nblock1 := tfs.fs.Fs_size()
 
 	if nblock != nblock1 {
-		fmt.Printf("nblock %d nblock %d\n", nblock, nblock1)
+		t.Fatalf("nblock %d doesn't match nblock %d\n", nblock, nblock1)
 	}
 }
 
@@ -701,14 +701,14 @@ func doCheckFree(tfs *Ufs_t) (string, bool) {
 		return "doLs failed", false
 	}
 	_, ok := res["f"]
-	if ok {
-		return "f present", false
+	if ok { // nothing to test, f still exists
+		return "", true
 	}
-
 	_, nblock1 := tfs.fs.Fs_size()
+	if nblock != nblock1 {
+		return fmt.Sprintf("nblock %d doesn't match nblock %d\n", nblock, nblock1), false
 
-	fmt.Printf("nblock %d nblock %d\n", nblock, nblock1)
-
+	}
 	return "", true
 }
 
@@ -767,6 +767,24 @@ func FillDisk(disk string) {
 	f.Close()
 }
 
+func genSyncTraces(trace trace_t, t *testing.T, disk string, apply bool, check func(*Ufs_t) (string, bool)) int {
+	cnt := 0
+	index := 0
+	for index < len(trace) {
+		n := trace.findSync(index)
+		fmt.Printf("Trace starting from %d till %d\n", 0, n)
+		tc := trace.copyTrace(0, n)
+		// tc.printTrace(0, len(tc))
+		if apply {
+			applyTrace(tc, cnt, t, disk, check)
+		}
+		cnt++
+		index = n + 1
+	}
+	wg.Wait()
+	return cnt
+}
+
 func TestBigFree(t *testing.T) {
 	fmt.Printf("Test BigFree ...\n")
 	disk := "disk.img"
@@ -775,7 +793,7 @@ func TestBigFree(t *testing.T) {
 	produceTrace(disk, t, doFreeInit, doTestFree)
 	trace := readTrace("trace.json")
 	trace.printTrace(0, len(trace))
-	// cnt := genTraces(trace, t, disk, true, doCheckOrdered)
-	// fmt.Printf("#traces = %v\n", cnt)
+	cnt := genSyncTraces(trace, t, disk, true, doCheckFree)
+	fmt.Printf("#traces = %v\n", cnt)
 	os.Remove(disk)
 }
