@@ -46,7 +46,7 @@ CXXPROGS := $(addprefix user/cxx/,$(CXXBINS))
 
 FSPROGS := $(FSCPROGS) $(FSCXXPROGS)
 
-BGOS := mpentry.bin.bgo
+BGOS := $(K)/mpentry.bin.bgo
 
 RFS  := $(patsubst %.c,%.d,$(CS))
 RFS  += $(addsuffix .d,$(CPROGS))
@@ -169,9 +169,9 @@ $(LINS) : user/cxx/linux/% : user/cxx/%.cc
 
 linux: $(LINS)
 
-mpentry.bin: $(K)/mpentry.S
-	$(CC) -o mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
-	objcopy -O binary -j.text mpentry.elf $@
+$(K)/mpentry.bin: $(K)/mpentry.S
+	$(CC) -c -o $(K)/mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
+	objcopy -O binary -j.text $(K)/mpentry.elf $@
 
 $(BGOS): %.bgo : %
 	./$(K)/bin2go.sh $< > $@
