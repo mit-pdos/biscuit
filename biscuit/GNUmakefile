@@ -190,7 +190,7 @@ clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) $(K)/boot.elf $(K)/d.img $(K)/main $(K)/boot $(K)/main.gobin \
 	    $(K)/go.img $(K)/chentry $(K)/mpentry.elf $(K)/mpentry.bin $(K)/_bins.go $(K)/bins.go \
 	    user/c/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
-	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) $(K)/_main.gobin
+	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) $(K)/_main.gobin mkfs
 	rm -rf user/cxx/sysroot
 
 qemu: gqemu
