@@ -285,10 +285,12 @@ func TestFSOrphanOne(t *testing.T) {
 	os.Remove(dst)
 }
 
-const OrphanFiles = 1000
-const ManyInodeBlks = 2000
-const ManyDataBlks = 4000
-const ManyLogBlks = 256
+const (
+	OrphanFiles   = 1000
+	ManyInodeBlks = 2000
+	ManyDataBlks  = 4000
+	ManyLogBlks   = 256
+)
 
 func TestFSOrphansMany(t *testing.T) {
 	dst := "tmp.img"
@@ -433,8 +435,10 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 // of the unlink of f1.  but ordered write for f2 is turned into a logged since
 // its first write (zero-ing) is a logged write.
 
-const ndatablksordered = 8 // small, to cause block reuse
-const norderedblks = 2     // this causes reuse
+const (
+	ndatablksordered = 8 // small, to cause block reuse
+	norderedblks     = 2 // this causes reuse
+)
 
 func doOrderedInit(tfs *Ufs_t) {
 	ub := mkData(1, common.BSIZE*norderedblks)
@@ -641,5 +645,70 @@ func TestTracesOrdered(t *testing.T) {
 	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
 	fmt.Printf("#traces = %v\n", cnt)
+	os.Remove(disk)
+}
+
+//
+// Test: large frees
+//
+
+const (
+	ManyManyDataBlks = 300000
+	FileSizeBlks     = 250000
+)
+
+var nblock uint
+
+func doFreeInit(tfs *Ufs_t) {
+	_, nblock = tfs.fs.Fs_size()
+	ub := mkData(1, common.BSIZE*FileSizeBlks)
+	e := tfs.MkFile("f", ub)
+	if e != 0 {
+		panic("mkFile f failed")
+	}
+	tfs.Sync()
+}
+
+func doTestFree(tfs *Ufs_t, t *testing.T) {
+	e := tfs.Unlink("f")
+	if e != 0 {
+		t.Fatalf("unlink failed")
+	}
+	tfs.Sync()
+
+	_, nblock1 := tfs.fs.Fs_size()
+
+	if nblock != nblock1 {
+		t.Fatalf("nblock %d nblock %d\n", nblock, nblock1)
+	}
+
+}
+
+func doCheckFree(tfs *Ufs_t) (string, bool) {
+	res, e := tfs.Ls("/")
+	if e != 0 {
+		return "doLs failed", false
+	}
+	_, ok := res["f"]
+	if ok {
+		return "f present", false
+	}
+
+	_, nblock1 := tfs.fs.Fs_size()
+
+	fmt.Printf("nblock %d nblock %d\n", nblock, nblock1)
+
+	return "", true
+}
+
+func TestTracesFree(t *testing.T) {
+	fmt.Printf("Test TracesFree ...\n")
+	disk := "disk.img"
+	MkDisk(disk, nil, ManyLogBlks, ninodeblks, ManyManyDataBlks)
+	produceTrace(disk, t, doFreeInit, doTestFree)
+	trace := readTrace("trace.json")
+	trace.printTrace(0, len(trace))
+	// cnt := genTraces(trace, t, disk, true, doCheckOrdered)
+	// fmt.Printf("#traces = %v\n", cnt)
 	os.Remove(disk)
 }

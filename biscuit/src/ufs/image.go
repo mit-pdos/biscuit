@@ -113,6 +113,10 @@ func writeOrphanMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 }
 
 func writeBlockMap(f *os.File, sb *fs.Superblock_t, ndatablks int) {
+	if Tell(f) != sb.Freeblock() {
+		panic("incorrect free block map start\n")
+	}
+
 	if sb.Freeblocklen() == 1 {
 		block := mkBlock()
 		block[0] |= 1 << 0 // mark root dir block as allocated
@@ -122,15 +126,21 @@ func writeBlockMap(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 		block := mkBlock()
 		block[0] |= 1 << 0 // mark root dir block as allocated
 		f.Write(block)
+
 		block = mkBlock()
-		for i := 1; i < sb.Freeblocklen()-2; i++ {
+		for i := 1; i < sb.Freeblocklen()-1; i++ {
 			f.Write(block)
 		}
+
 		// write last block
 		o := ndatablks % nbitsperblock
 		markAllocated(block, o)
 		f.Write(block)
 	}
+	if Tell(f) != sb.Freeblock()+sb.Freeblocklen() {
+		panic("incorrect free block map\n")
+	}
+
 }
 
 func writeInodes(f *os.File, sb *fs.Superblock_t) {
@@ -146,6 +156,7 @@ func writeInodes(f *os.File, sb *fs.Superblock_t) {
 	block := bytepg2byte(b.Data)
 
 	if Tell(f) != sb.Freeblock()+sb.Freeblocklen() {
+		fmt.Printf("%v %v\n", Tell(f), sb.Freeblock()+sb.Freeblocklen())
 		panic("inodes don't line up")
 	}
 

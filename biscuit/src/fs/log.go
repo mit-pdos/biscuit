@@ -250,7 +250,7 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 // necessary in order to guarantee that the log is long enough for the allowed
 // number of concurrent fs syscalls.
 const MaxBlkPerOp = 10
-const MaxOrdered = 1000
+const MaxOrdered = 5000
 
 func (l *log_t) full(nops int) bool {
 	reserved := MaxBlkPerOp * nops
@@ -396,8 +396,6 @@ func (log *log_t) commit() {
 		panic("cannot read commit block\n")
 	}
 	lh := logheader_t{headblk.Data}
-
-	log.fs.icache.writeOrphanMap()
 
 	blks := common.MkBlkList()
 	for i := log.diskhead; i < log.memhead; i++ {

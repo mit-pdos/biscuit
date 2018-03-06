@@ -1174,36 +1174,35 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 			return ret, -common.ENAMETOOLONG
 		}
 
-		var exists bool
 		// with O_CREAT, the file may exist. use itrylock and
 		// unlock/retry to avoid deadlock.
-		for {
-			par, err := fs.fs_namei_locked(dirs, cwd, "Fs_open_inner")
-			if err != 0 {
-				return ret, err
-			}
-			defer par.iunlock_refdown("Fs_open_inner_par")
-
-			var childi common.Inum_t
-			if isdev {
-				childi, err = par.do_createnod(fn, major, minor)
-			} else {
-				childi, err = par.do_createfile(fn)
-			}
-			if err != 0 && err != -common.EEXIST {
-				return ret, err
-			}
-			exists = err == -common.EEXIST
-			if childi <= 0 {
-				panic("non-positive childi\n")
-			}
-			idm, err = fs.icache.Iref_locked(childi, "Fs_open_inner_child")
-			if err != 0 {
-				par.create_undo(childi, fn)
-				return ret, err
-			}
-			break
+		par, err := fs.fs_namei_locked(dirs, cwd, "Fs_open_inner")
+		if err != 0 {
+			return ret, err
 		}
+		var childi common.Inum_t
+		if isdev {
+			childi, err = par.do_createnod(fn, major, minor)
+		} else {
+			childi, err = par.do_createfile(fn)
+		}
+		if err != 0 && err != -common.EEXIST {
+			par.iunlock_refdown("Fs_open_inner_par")
+			return ret, err
+		}
+		exists := err == -common.EEXIST
+		if childi <= 0 {
+			panic("non-positive childi\n")
+		}
+		idm, err = fs.icache.Iref(childi, "Fs_open_inner_child")
+		if err != 0 {
+			par.create_undo(childi, fn)
+			par.iunlock_refdown("Fs_open_inner_par")
+			return ret, err
+		}
+		par.iunlock_refdown("Fs_open_inner_par")
+		idm.ilock("child")
+
 		oexcl := flags&common.O_EXCL != 0
 		if exists {
 			if oexcl || isdev {
