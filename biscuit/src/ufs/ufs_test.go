@@ -653,14 +653,15 @@ func TestTracesOrdered(t *testing.T) {
 //
 
 const (
-	ManyManyDataBlks = 300000
-	FileSizeBlks     = 250000
+	ManyManyDataBlks = 1000000
+	FileSizeBlks     = 200
 )
 
 var nblock uint
 
 func doFreeInit(tfs *Ufs_t) {
 	_, nblock = tfs.fs.Fs_size()
+
 	ub := mkData(1, common.BSIZE*FileSizeBlks)
 	e := tfs.MkFile("f", ub)
 	if e != 0 {
@@ -670,7 +671,18 @@ func doFreeInit(tfs *Ufs_t) {
 }
 
 func doTestFree(tfs *Ufs_t, t *testing.T) {
-	e := tfs.Unlink("f")
+	res, e := tfs.Ls("/")
+	if e != 0 {
+
+		t.Fatalf("ls failed")
+	}
+	_, ok := res["f"]
+	if !ok {
+
+		t.Fatalf("f not present")
+	}
+
+	e = tfs.Unlink("f")
 	if e != 0 {
 		t.Fatalf("unlink failed")
 	}
@@ -679,9 +691,8 @@ func doTestFree(tfs *Ufs_t, t *testing.T) {
 	_, nblock1 := tfs.fs.Fs_size()
 
 	if nblock != nblock1 {
-		t.Fatalf("nblock %d nblock %d\n", nblock, nblock1)
+		fmt.Printf("nblock %d nblock %d\n", nblock, nblock1)
 	}
-
 }
 
 func doCheckFree(tfs *Ufs_t) (string, bool) {
@@ -701,10 +712,66 @@ func doCheckFree(tfs *Ufs_t) (string, bool) {
 	return "", true
 }
 
-func TestTracesFree(t *testing.T) {
-	fmt.Printf("Test TracesFree ...\n")
+func blk2bytepg(d []byte) *common.Bytepg_t {
+	b := &common.Bytepg_t{}
+	for i := 0; i < len(d); i++ {
+		b[i] = d[i]
+	}
+	return b
+}
+
+// mark many blocks as allocated so that creating a file will have to mark many
+// bit map blocks, which then ifree will update in several ops, spanning
+// several transactions.
+func FillDisk(disk string) {
+	f, err := os.OpenFile(disk, os.O_RDWR, 0755)
+	if err != nil {
+		panic(err)
+	}
+	_, err = f.Seek(common.BSIZE, 0)
+	if err != nil {
+		panic(err)
+	}
+
+	super := mkBlock()
+	_, err = f.Read(super)
+	if err != nil {
+		panic(err)
+	}
+	blk := blk2bytepg(super)
+	sb := fs.Superblock_t{blk}
+	_, err = f.Seek(int64(common.BSIZE*sb.Freeblock()), 0)
+	if err != nil {
+		panic(err)
+	}
+	for i := 0; i < sb.Freeblocklen(); i++ {
+		b := mkBlock()
+		_, err = f.Read(b)
+		if err != nil {
+			panic(err)
+		}
+		for j := 1; j < common.BSIZE; j++ {
+			b[j] = 0xFF // mark as allocated
+		}
+		_, err = f.Seek(int64(-common.BSIZE), 1)
+		if err != nil {
+			panic(err)
+		}
+
+		_, err = f.Write(b)
+		if err != nil {
+			panic(err)
+		}
+	}
+	f.Sync()
+	f.Close()
+}
+
+func TestBigFree(t *testing.T) {
+	fmt.Printf("Test BigFree ...\n")
 	disk := "disk.img"
-	MkDisk(disk, nil, ManyLogBlks, ninodeblks, ManyManyDataBlks)
+	MkDisk(disk, nil, nlogblks, ninodeblks, ManyManyDataBlks)
+	FillDisk(disk)
 	produceTrace(disk, t, doFreeInit, doTestFree)
 	trace := readTrace("trace.json")
 	trace.printTrace(0, len(trace))

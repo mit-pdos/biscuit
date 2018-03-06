@@ -476,6 +476,9 @@ func (log *log_t) recover() common.Err_t {
 
 	for i := 0; i < rlen; i++ {
 		bdest := lh.logdest(i)
+		if log_debug {
+			fmt.Printf("write log %d to %d\n", log.logstart+LogOffset+i, bdest)
+		}
 		lb, err := log.fs.bcache.Get_fill(log.logstart+LogOffset+i, "i", false)
 		if err != 0 {
 			return err
