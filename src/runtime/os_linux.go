@@ -3167,6 +3167,12 @@ func Setmaxheap(n int) {
 }
 
 func Memreserve(_n int) bool {
+	// the FS running in user-mode can call memory reservation
+	// functions
+	if hackmode == 0 {
+		return true
+	}
+
 	want := int64(_n)
 	g := getg()
 	if g.res.credit != 0 {
@@ -3176,6 +3182,12 @@ func Memreserve(_n int) bool {
 }
 
 func Memresadd(_n int) bool {
+	// the FS running in user-mode can call memory reservation
+	// functions
+	if hackmode == 0 {
+		return true
+	}
+
 	want := int64(_n)
 	g := getg()
 	if g.res.credit <= 0 {
@@ -3205,7 +3217,13 @@ func _restake(want int64) bool {
 	}
 }
 
-func Memunres() {
+func Memunres() int {
+	// the FS running in user-mode can call memory reservation
+	// functions
+	if hackmode == 0 {
+		return 0
+	}
+
 	g := getg()
 	if g.res.credit == 0 {
 		pmsg("No credit?\n")
@@ -3214,15 +3232,17 @@ func Memunres() {
 	//if Printres && left != g.res.got {
 	//	print("used ", g.res.got - left)
 	//}
+	used := g.res.got - left
 	g.res.credit = 0
 	g.res.got = 0
 	if left < 0 {
 		pmsg("Give negative\n")
-		return
+		return -1
 	}
 	if left > 0 {
 		atomic.Xadd64((*uint64)(unsafe.Pointer(&rescredit)), left)
 	}
+	return int(used)
 }
 
 //go:nosplit

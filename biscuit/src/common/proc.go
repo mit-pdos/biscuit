@@ -515,6 +515,7 @@ func (p *Proc_t) _reswait(c int, incremental bool) bool {
 			return false
 		}
 		fmt.Printf("%v: Wait for memory hog to die...\n", p.Name)
+		// XXX
 		time.Sleep(1)
 	}
 	return true
@@ -1231,4 +1232,24 @@ func Tid_del() {
 	}
 	nthreads--
 	Proclock.Unlock()
+}
+
+func Kreswait(c int, name string) {
+	for !runtime.Memreserve(c) {
+		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
+		// XXX
+		time.Sleep(1)
+	}
+}
+
+func Kunres() int {
+	return runtime.Memunres()
+}
+
+func Kresdebug(c int, name string) {
+	Kreswait(c, name)
+}
+
+func Kunresdebug() int {
+	return Kunres()
 }
