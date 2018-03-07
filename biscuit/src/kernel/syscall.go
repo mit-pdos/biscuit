@@ -97,7 +97,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 	if !ok {
 		panic("bad limit")
 	}
-	if !p.Resadd(lim) {
+	if !common.Resadd(lim) {
 		fmt.Printf("X")
 		return int(-common.ENOMEM)
 	}
@@ -1022,6 +1022,7 @@ func (o *pipe_t) op_fdadd(nfd *common.Fd_t) common.Err_t {
 	o.Lock()
 	defer o.Unlock()
 
+	// KILL HERE
 	for !o.passfds.add(nfd) {
 		o.wcond.Wait()
 	}
@@ -1094,6 +1095,9 @@ func (of *pipefops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.
 	noblk := of.options&common.O_NONBLOCK != 0
 	c := 0
 	for c != src.Totalsz() {
+		if !common.Resadd(common.Bounds(common.B_PIPEFOPS_T_WRITE)) {
+			return c, -common.ENOMEM
+		}
 		ret, err := of.pipe.op_write(src, noblk)
 		if noblk || err != 0 {
 			return ret, err

@@ -2182,8 +2182,12 @@ func (x *ixgbe_t) rx_consume() {
 
 func (x *ixgbe_t) int_handler(vector msivec_t) {
 	rantest := false
+	res := 30 << 20
+	common.Kreswait(res, "ixgbe int handler")
 	for {
+		common.Kunres()
 		runtime.IRQsched(uint(vector))
+		common.Kreswait(res, "ixgbe int handler")
 
 		// interrupt status register clears on read
 		st := x.rl(EICR)
@@ -2249,6 +2253,8 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 				//go x.tx_test2()
 				go func() {
 					for {
+						common.Kreswait(1<<20,
+							"stat printer")
 						time.Sleep(10 * time.Second)
 						v := x.rl(QPRDC(0))
 						if v != 0 {
@@ -2259,6 +2265,7 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 							fmt.Printf("drop ints: %v\n", dropints)
 							dropints = 0
 						}
+						common.Kunres()
 					}
 				}()
 			}

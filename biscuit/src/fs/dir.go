@@ -261,6 +261,9 @@ func (idm *imemnode_t) _deinsert(name string, inum common.Inum_t) common.Err_t {
 func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, common.Err_t) {
 	found := false
 	for i := 0; i < idm.size; i += common.BSIZE {
+		if !common.Resadd_noblock(common.Bounds(common.B_IMEMNODE_T__DESCAN)) {
+			return false, -common.ENOMEM
+		}
 		b, err := idm.off2buf(i, common.BSIZE, false, true, "_descan")
 		if err != 0 {
 			return false, err

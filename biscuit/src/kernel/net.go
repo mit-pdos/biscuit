@@ -1763,6 +1763,8 @@ func (tt *tcptimers_t) _tcptimers_start() {
 
 func (tt *tcptimers_t) _tcptimers_daemon() {
 	var curtoc <-chan time.Time
+	const res = 1 << 20
+	common.Kreswait(res, "tcp timers thread")
 	for {
 		dotos := false
 		select {
@@ -1770,6 +1772,9 @@ func (tt *tcptimers_t) _tcptimers_daemon() {
 			dotos = true
 		case <-tt.kicker:
 		}
+
+		common.Kunres()
+		common.Kreswait(res, "tcp timers thread")
 
 		var acklists []*tcptcb_t
 		var txlists []*tcptcb_t

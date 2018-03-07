@@ -142,6 +142,9 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
 	ub := &Userbuf_t{}
 	did := 0
 	for len(buf) > 0 && len(iov.iovs) > 0 {
+		if !Resadd_noblock(Bounds(B_USERIOVEC_T__TX)) {
+			return did, -ENOMEM
+		}
 		ciov := &iov.iovs[0]
 		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)
 		var c int

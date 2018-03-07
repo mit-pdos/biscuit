@@ -495,23 +495,32 @@ func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
 
 // returns true if the memory reservation succeeded. returns false if this
 // process has been killed and should terminate using the reserved exit memory.
-func (p *Proc_t) Resbegin(c int) bool {
-	return p._reswait(c, false)
+func Resbegin(c int) bool {
+	return _reswait(c, false, true)
 }
 
-func (p *Proc_t) Resadd(c int) bool {
-	return p._reswait(c, true)
+func Resadd(c int) bool {
+	return _reswait(c, true, true)
 }
 
-func (p *Proc_t) _reswait(c int, incremental bool) bool {
+// for reservations when locks may be held; the caller should abort and retry.
+func Resadd_noblock(c int) bool {
+	return _reswait(c, true, false)
+}
+
+func _reswait(c int, incremental, block bool) bool {
 	f := runtime.Memreserve
 	if incremental {
 		f = runtime.Memresadd
 	}
 	for !f(c) {
+		p := Current()
 		if p.Doomed() {
 			// XXX exit heap memory/block cache pages reservation
 			fmt.Printf("Slain!\n")
+			return false
+		}
+		if !block {
 			return false
 		}
 		fmt.Printf("%v: Wait for memory hog to die...\n", p.Name)
@@ -572,7 +581,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 
 	var fxbuf *[64]uintptr
 	const runonly = 14 << 10
-	if p.Resbegin(runonly) {
+	if Resbegin(runonly) {
 		// could allocate fxbuf lazily
 		fxbuf = p.mkfxbuf()
 	}
@@ -589,7 +598,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 			uintptr(p.P_pmap), fastret, refp)
 
-		if p.Resbegin(runonly) {
+		if Resbegin(runonly) {
 			fastret = p.trap_proc(tf, tid, intno, aux)
 		}
 
@@ -892,6 +901,9 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 	done := false
 	curaddr := make([]uint8, 0, 8)
 	for !done {
+		if !Resadd(Bounds(B_PROC_T_USERARGS)) {
+			return nil, false
+		}
 		ptrs, ok := p.Userdmap8r(uva + uoff)
 		if !ok {
 			return nil, false

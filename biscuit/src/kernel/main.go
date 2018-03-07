@@ -855,7 +855,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	}
 	var reqc chan int
 	pollers := &common.Pollers_t{}
+	common.Kreswait(1<<20, "kbd daemon")
 	for {
+		common.Kunres()
+		common.Kreswait(1<<20, "kbd daemon")
 		select {
 		case <-cons.kbd_int:
 			for _kready() {
