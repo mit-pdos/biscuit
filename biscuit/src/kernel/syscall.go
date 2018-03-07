@@ -655,11 +655,7 @@ func sys_stat(proc *common.Proc_t, pathn, statn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	ok = proc.K2user(buf.Bytes(), statn)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	return 0
+	return int(proc.K2user(buf.Bytes(), statn))
 }
 
 func sys_fstat(proc *common.Proc_t, fdn int, statn int) int {
@@ -673,11 +669,7 @@ func sys_fstat(proc *common.Proc_t, fdn int, statn int) int {
 		return int(err)
 	}
 
-	ok = proc.K2user(buf.Bytes(), statn)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	return 0
+	return int(proc.K2user(buf.Bytes(), statn))
 }
 
 // converts internal states to poll states
@@ -794,8 +786,10 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 		if err != 0 {
 			return int(err)
 		}
-		if writeback && !proc.K2user(buf, fdsn) {
-			return int(-common.EFAULT)
+		if writeback {
+			if err := proc.K2user(buf, fdsn); err != 0 {
+				return int(err)
+			}
 		}
 
 		// if we found a ready fd, we are done
@@ -1264,8 +1258,8 @@ func sys_gettimeofday(proc *common.Proc_t, timevaln int) int {
 	us := int(now.UnixNano() / 1000)
 	writen(buf, 8, 0, us/1e6)
 	writen(buf, 8, 8, us%1e6)
-	if !proc.K2user(buf, timevaln) {
-		return int(-common.EFAULT)
+	if err := proc.K2user(buf, timevaln); err != 0 {
+		return int(err)
 	}
 	return 0
 }
@@ -1334,8 +1328,8 @@ func sys_getrusage(proc *common.Proc_t, who, rusagep int) int {
 	} else {
 		return int(-common.EINVAL)
 	}
-	if !proc.K2user(ru, rusagep) {
-		return int(-common.EFAULT)
+	if err := proc.K2user(ru, rusagep); err != 0 {
+		return int(err)
 	}
 	return int(-common.ENOSYS)
 }
@@ -3359,7 +3353,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	writen(buf, 8, 24, int(runtime.Pspercycle))
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
-	if !proc.K2user_inner(buf, bufdest) {
+	if err := proc.K2user_inner(buf, bufdest); err != 0 {
 		panic("must succeed")
 	}
 
@@ -3405,7 +3399,7 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, bool) {
 		argptrs[i] = uva + cnt
 		// add null terminators
 		arg = append(arg, 0)
-		if !proc.K2user_inner(arg, uva+cnt) {
+		if err := proc.K2user_inner(arg, uva+cnt); err != 0 {
 			// args take up more than a page? the user is on their
 			// own.
 			return 0, 0, false
@@ -3471,20 +3465,19 @@ func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, ru
 			}
 		}
 	} else {
-		ok := true
 		if statusp != 0 {
-			ok = proc.Userwriten(statusp, 4, resp.Status)
+			if !proc.Userwriten(statusp, 4, resp.Status) {
+				err = -common.EFAULT
+			}
 		}
 		// update total child rusage
 		proc.Catime.Add(&resp.Atime)
 		if rusagep != 0 {
 			ru := resp.Atime.To_rusage()
-			if !proc.K2user(ru, rusagep) {
-				ok = false
-			}
+			err = proc.K2user(ru, rusagep)
 		}
-		if !ok {
-			return int(-common.EFAULT)
+		if err != 0 {
+			return int(err)
 		}
 	}
 	return resp.Pid
