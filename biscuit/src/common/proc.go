@@ -870,21 +870,22 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 
 // copies src to the user virtual address uva. may copy part of src if uva +
 // len(src) is not mapped
-func (p *Proc_t) K2user(src []uint8, uva int) bool {
+func (p *Proc_t) K2user(src []uint8, uva int) Err_t {
 	p.Lock_pmap()
 	ret := p.K2user_inner(src, uva)
 	p.Unlock_pmap()
 	return ret
 }
 
-func (p *Proc_t) K2user_inner(src []uint8, uva int) bool {
+func (p *Proc_t) K2user_inner(src []uint8, uva int) Err_t {
 	p.Lockassert_pmap()
 	cnt := 0
 	l := len(src)
 	for cnt != l {
 		dst, ok := p.Userdmap8_inner(uva+cnt, true)
 		if !ok {
-			return false
+			// XXX: could be -ENOMEM; teach userdmap error codes
+			return -EFAULT
 		}
 		ub := len(src)
 		if ub > len(dst) {
@@ -894,7 +895,7 @@ func (p *Proc_t) K2user_inner(src []uint8, uva int) bool {
 		src = src[ub:]
 		cnt += ub
 	}
-	return true
+	return 0
 }
 
 // copies len(dst) bytes from userspace address uva to dst
