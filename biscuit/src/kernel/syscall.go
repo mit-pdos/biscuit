@@ -4345,8 +4345,9 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 		if !ok {
 			panic("just mapped?")
 		}
-		if !common.Sys_pgfault(proc, vmi, ent, uintptr(common.PTE_U)) {
-			return -common.ENOMEM
+		err := common.Sys_pgfault(proc, vmi, ent, uintptr(common.PTE_U))
+		if err != 0 {
+			return err
 		}
 	}
 	if hdr.filesz == hdr.memsz {

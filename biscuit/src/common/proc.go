@@ -287,7 +287,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 	// sys_pgfault expects pmap to be locked
 	child.Lock_pmap()
 	perms := uintptr(PTE_U | PTE_W)
-	if !Sys_pgfault(child, vmi, rsp, perms) {
+	if Sys_pgfault(child, vmi, rsp, perms) != 0 {
 		return doflush, false
 	}
 	child.Unlock_pmap()
@@ -448,6 +448,7 @@ func (p *Proc_t) Page_remove(va int) bool {
 	return remmed
 }
 
+// returns true if the pagefault was handled successfully
 func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
@@ -455,7 +456,7 @@ func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) bool {
 	if !ok {
 		return false
 	}
-	ret := Sys_pgfault(p, vmi, fa, ecode)
+	ret := Sys_pgfault(p, vmi, fa, ecode) == 0
 	return ret
 }
 
@@ -683,7 +684,7 @@ func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	}
 
 	if needfault {
-		if !Sys_pgfault(p, vmi, uva, ecode) {
+		if Sys_pgfault(p, vmi, uva, ecode) != 0 {
 			return nil, false
 		}
 	}
