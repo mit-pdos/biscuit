@@ -170,7 +170,7 @@ $(LINS) : user/cxx/linux/% : user/cxx/%.cc
 linux: $(LINS)
 
 $(K)/mpentry.bin: $(K)/mpentry.S
-	$(CC) -c -o $(K)/mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
+	$(CC) -static -o $(K)/mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
 	objcopy -O binary -j.text $(K)/mpentry.elf $@
 
 $(BGOS): %.bgo : %

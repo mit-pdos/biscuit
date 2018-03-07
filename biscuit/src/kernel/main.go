@@ -474,7 +474,7 @@ func cpus_start(ncpu, aplim int) {
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
 	mpaddr := common.Pa_t(0x8000)
-	mpcode := allbins["mpentry.bin"].data
+	mpcode := allbins["src/kernel/mpentry.bin"].data
 	c := common.Pa_t(0)
 	mpl := common.Pa_t(len(mpcode))
 	for c < mpl {
