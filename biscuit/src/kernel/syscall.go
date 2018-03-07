@@ -704,8 +704,8 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 		return int(-common.EINVAL)
 	}
 	buf := make([]uint8, sz)
-	if !proc.User2k(buf, fdsn) {
-		return int(-common.EFAULT)
+	if err := proc.User2k(buf, fdsn); err != 0 {
+		return int(err)
 	}
 
 	// first we tell the underlying device to notify us if their fd is
