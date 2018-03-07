@@ -563,11 +563,9 @@ func log_daemon(l *log_t) {
 			if log_debug {
 				fmt.Printf("wakeup waiters/syncers %v\n", waiters)
 			}
-			go func() {
-				for i := 0; i < waiters; i++ {
-					l.commitwait <- true
-				}
-			}()
+			for i := 0; i < waiters; i++ {
+				l.commitwait <- true
+			}
 		}
 	}
 }
