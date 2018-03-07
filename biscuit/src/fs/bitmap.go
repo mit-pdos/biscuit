@@ -84,6 +84,8 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 	var blk *common.Bdev_block_t
 	var err common.Err_t
 	var lastbn = -1
+	// XXX cache reservation
+	common.Resadd_noblock(1 << 10)
 	for bit := start; bit < alloc.freelen*bitsperblk; bit++ {
 		bn := blkno(bit)
 		if bn != lastbn {

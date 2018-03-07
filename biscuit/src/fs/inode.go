@@ -322,6 +322,12 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 
 	idm.fs.istats.Ndo_write.inc()
 	for i < sz {
+		gimme := common.Bounds(common.B_IMEMNODE_T_DO_WRITE))
+		if !common.Resadd_noblock(gimme) {
+			XXX
+			return i, -common.ENOHEAP
+		}
+
 		n := sz - i
 		if n > max {
 			n = max
@@ -442,6 +448,11 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 	last := c.inum
 	acc := ""
 	for c.inum != iroot {
+		gimme := common.Bounds(common.B_FS_T__FULLPATH))
+		if !common.Resadd_noblock(gimme) {
+			c.iunlock("do_fullpath_c")
+			return "", -common.ENOHEAP
+		}
 		pari, err := c.ilookup("..")
 		if err != 0 {
 			panic(".. must exist")
@@ -647,6 +658,10 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, c
 			idm.fs.istats.Ngrow.inc()
 		}
 		for b := lastblk; b <= whichblk; b++ {
+			gimme := common.Bounds(common.B_IMEMNODE_T_BMAPFILL))
+			if !common.Resadd_noblock(gimme) {
+				return 0, -common.ENOHEAP
+			}
 			// XXX we could remember where the last slot was
 			blkn, err = idm.fbn2block(b, writing)
 			if err != 0 {
@@ -709,7 +724,12 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 	idm.fs.istats.Niread.inc()
 	isz := idm.size
 	c := 0
+	gimme := common.Bounds(common.B_IMEMNODE_T_IREAD))
 	for offset < isz && dst.Remain() != 0 {
+		if !common.Resadd_noblock(gimme) {
+			XXX
+			return c, -common.ENOHEAP
+		}
 		m := min(common.BSIZE-offset%common.BSIZE, dst.Remain())
 		m = min(isz-offset, m)
 		b, err := idm.off2buf(offset, m, false, true, "iread")
@@ -745,6 +765,12 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		m := min(common.BSIZE-offset%common.BSIZE, sz-c)
 		fill := m != common.BSIZE
 		b, err := idm.off2buf(offset, m, true, fill, "iwrite")
+		gimme := common.Bounds(common.B_IMEMNODE_T_IWRITE))
+		if !common.Resadd_noblock(gimme) {
+			// restarting must be handled by ancestor caller
+			// (probably fsfops_t.Write)
+			err = -common.ENOHEAP
+		}
 		if err != 0 {
 			return c, err
 		}
@@ -888,6 +914,10 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmap
 	pgc := len / common.PGSIZE
 	ret := make([]common.Mmapinfo_t, pgc)
 	for i := 0; i < len; i += common.PGSIZE {
+		gimme := common.Bounds(common.B_IMEMNODE_T_IMMAPINFO))
+		if !common.Resadd_noblock(gimme) {
+			return nil, -common.ENOHEAP
+		}
 		buf, err := idm.off2buf(o+i, common.PGSIZE, false, true, "immapinfo")
 		if err != 0 {
 			return nil, err
@@ -1302,6 +1332,8 @@ func (icache *icache_t) freeDead() {
 	if fs_debug {
 		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
 	}
+	// XXX cache reservation
+	common.Resadd_noblock(1 << 20)
 	for len(icache.dead) > 0 {
 		imem := icache.dead[0]
 		icache.dead = icache.dead[1:]

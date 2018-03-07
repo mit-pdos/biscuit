@@ -44,6 +44,7 @@ const (
 	ETIMEDOUT     Err_t = 110
 	ECONNREFUSED  Err_t = 111
 	EINPROGRESS   Err_t = 115
+	ENOHEAP       Err_t = 511
 )
 
 type Err_t int

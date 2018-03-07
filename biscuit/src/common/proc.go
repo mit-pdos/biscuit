@@ -599,6 +599,11 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 			uintptr(p.P_pmap), fastret, refp)
 
+		// XXX debug
+		if Current() != p {
+			panic("oh wtf")
+		}
+
 		if Resbegin(runonly) {
 			fastret = p.trap_proc(tf, tid, intno, aux)
 		}
@@ -941,6 +946,10 @@ func (p *Proc_t) K2user_inner(src []uint8, uva int) Err_t {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
+		gimme := Bounds(B_PROC_T_K2USER_INNER)
+		if !Resadd_noblock(gimme) {
+			return -ENOHEAP
+		}
 		dst, ok := p.Userdmap8_inner(uva+cnt, true)
 		if !ok {
 			// XXX: could be -ENOMEM; teach userdmap error codes
@@ -969,6 +978,10 @@ func (p *Proc_t) User2k_inner(dst []uint8, uva int) Err_t {
 	p.Lockassert_pmap()
 	cnt := 0
 	for len(dst) != 0 {
+		gimme := Bounds(B_PROC_T_USER2K_INNER)
+		if !Resadd_noblock(gimme) {
+			return -ENOHEAP
+		}
 		src, ok := p.Userdmap8_inner(uva+cnt, false)
 		if !ok {
 			// XXX: could be -ENOMEM; teach userdmap error codes

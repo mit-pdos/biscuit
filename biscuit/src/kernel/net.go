@@ -1763,7 +1763,7 @@ func (tt *tcptimers_t) _tcptimers_start() {
 
 func (tt *tcptimers_t) _tcptimers_daemon() {
 	var curtoc <-chan time.Time
-	const res = 1 << 20
+	res := common.Bounds(common.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
 	common.Kreswait(res, "tcp timers thread")
 	for {
 		dotos := false
@@ -3381,6 +3381,11 @@ func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Er
 	var read int
 	var err common.Err_t
 	for {
+		gimme := common.Bounds(common.B_TCPFOPS_T_READ))
+		if !common.Resadd_noblock(gimme) {
+			err = -common.ENOHEAP
+			break
+		}
 		read, err = tf.tcb.uread(dst)
 		if err != 0 {
 			break
@@ -3416,6 +3421,11 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.E
 	var wrote int
 	var err common.Err_t
 	for {
+		gimme := common.Bounds(common.B_TCPFOPS_T_WRITE))
+		if !common.Resadd_noblock(gimme) {
+			err = -common.ENOHEAP
+			break
+		}
 		if tf.tcb.txdone {
 			err = -common.EPIPE
 			break

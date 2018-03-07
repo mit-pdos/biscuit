@@ -99,7 +99,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 	}
 	if !common.Resadd(lim) {
 		fmt.Printf("X")
-		return int(-common.ENOMEM)
+		return int(-common.ENOHEAP
 	}
 
 	a1 := int(tf[common.TF_RDI])
@@ -1090,7 +1090,8 @@ func (of *pipefops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.
 	c := 0
 	for c != src.Totalsz() {
 		if !common.Resadd(common.Bounds(common.B_PIPEFOPS_T_WRITE)) {
-			return c, -common.ENOMEM
+			XXX
+			return c, -common.ENOHEAP
 		}
 		ret, err := of.pipe.op_write(src, noblk)
 		if noblk || err != 0 {
@@ -3287,10 +3288,10 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 
 	// elf_load() will create two copies of TLS section: one for the fresh
 	// copy and one for thread 0
-	freshtls, t0tls, tlssz, ok := elfhdr.elf_load(proc, file)
-	if !ok {
+	freshtls, t0tls, tlssz, err := elfhdr.elf_load(proc, file)
+	if err != 0 {
 		restore()
-		return int(-common.ENOMEM)
+		return int(err)
 	}
 
 	// map new stack
@@ -4450,7 +4451,7 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 
 // returns user address of read-only TLS, thread 0's TLS image, TLS size, and
 // success. caller must hold proc's pagemap lock.
-func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bool) {
+func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, common.Err_t) {
 	PT_LOAD := 1
 	PT_TLS := 7
 	istls := false
@@ -4458,10 +4459,14 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 	var tlsaddr int
 	var tlscopylen int
 
+	gimme := common.Bounds(common.B_ELF_T_ELF_LOAD))
 	entry := e.entry()
 	// load each elf segment directly into process memory
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
+		if !common.Resadd_noblock(gimme) {
+			return 0, 0, 0, -common.ENOHEAP
+		}
 		if hdr.etype == PT_TLS {
 			istls = true
 			tlsaddr = hdr.vaddr
@@ -4470,7 +4475,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= common.USERMIN {
 			err := segload(proc, entry, &hdr, f.Fops)
 			if err != 0 {
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 		}
 	}
@@ -4493,20 +4498,20 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 			// initialized.
 			_, p_pg, ok := physmem.Refpg_new()
 			if !ok {
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 			_, ok = proc.Page_insert(freshtls+i, p_pg, perms,
 				true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 			// map fresh TLS for thread 0
 			nperms := perms | common.PTE_COW
 			_, ok = proc.Page_insert(t0tls+i, p_pg, nperms, true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 		}
 		// copy TLS data to freshtls
@@ -4515,16 +4520,20 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 			panic("must succeed")
 		}
 		for i := 0; i < tlscopylen; {
+			if !common.Resadd_noblock(gimme) {
+				return 0, 0, 0, -common.ENOHEAP
+			}
+
 			_src, p_pg, err := tlsvmi.Filepage(uintptr(tlsaddr + i))
 			if err != 0 {
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 			off := (tlsaddr + i) & int(common.PGOFFSET)
 			src := common.Pg2bytes(_src)[off:]
 			bpg, ok := proc.Userdmap8_inner(freshtls+i, true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 			left := tlscopylen - i
 			if len(src) > left {
@@ -4539,5 +4548,5 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 		// the first invalid word past the end of the tls
 		t0tls += tlssize
 	}
-	return freshtls, t0tls, tlssize, true
+	return freshtls, t0tls, tlssize, 0
 }

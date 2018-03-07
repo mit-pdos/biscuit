@@ -262,7 +262,7 @@ func (idm *imemnode_t) _descan(f func(fn string, de icdent_t) bool) (bool, commo
 	found := false
 	for i := 0; i < idm.size; i += common.BSIZE {
 		if !common.Resadd_noblock(common.Bounds(common.B_IMEMNODE_T__DESCAN)) {
-			return false, -common.ENOMEM
+			return false, -common.ENOHEAP
 		}
 		b, err := idm.off2buf(i, common.BSIZE, false, true, "_descan")
 		if err != 0 {

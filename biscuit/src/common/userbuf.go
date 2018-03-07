@@ -62,10 +62,14 @@ func (ub *Userbuf_t) Uiowrite(src []uint8) (int, Err_t) {
 }
 
 // copies the min of either the provided buffer or ub.len. returns number of
-// bytes copied and error.
+// bytes copied and error. if an error occurs in the middle of a read or write,
+// the userbuf's state is updated such that the operation can be restarted.
 func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
+		if !common.Resadd_noblock(common.Bounds(common.B_USERBUF_T__TX))) {
+			return ret, -common.ENOHEAP
+		}
 		va := ub.userva + ub.off
 		ubuf, ok := ub.proc.Userdmap8_inner(va, write)
 		if !ok {
@@ -112,6 +116,10 @@ func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
 	for i := range iov.iovs {
+		gimme := common.Bounds(common.B_USERIOVEC_T_IOV_INIT))
+		if !common.Resadd_noblock(gimme) {
+			return -ENOHEAP
+		}
 		elmsz := uint(16)
 		va := iovarn + uint(i)*elmsz
 		dstva, ok1 := proc.userreadn_inner(int(va), 8)
@@ -143,7 +151,8 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
 	did := 0
 	for len(buf) > 0 && len(iov.iovs) > 0 {
 		if !Resadd_noblock(Bounds(B_USERIOVEC_T__TX)) {
-			return did, -ENOMEM
+			XXX
+			return did, -ENOHEAP
 		}
 		ciov := &iov.iovs[0]
 		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)

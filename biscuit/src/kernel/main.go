@@ -1465,16 +1465,16 @@ func main() {
 		fmt.Printf("[It is now safe to benchmark...]\n")
 	}()
 
-	go func() {
-		for {
-			<-time.After(1 * time.Second)
-			got := lhits
-			lhits = 0
-			if got != 0 {
-				fmt.Printf("*** limit hits: %v\n", got)
-			}
-		}
-	}()
+	//go func() {
+	//	for {
+	//		<-time.After(1 * time.Second)
+	//		got := lhits
+	//		lhits = 0
+	//		if got != 0 {
+	//			fmt.Printf("*** limit hits: %v\n", got)
+	//		}
+	//	}
+	//}()
 
 	fmt.Printf("              BiscuitOS\n")
 	fmt.Printf("          go version: %v\n", runtime.Version())

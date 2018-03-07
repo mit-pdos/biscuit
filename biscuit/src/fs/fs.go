@@ -312,6 +312,12 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	newexists := false
 	// lookup newchild and try to lock all inodes involved
 	for {
+		gimme := common.Bounds(common.B_FS_T_FS_RENAME))
+		if !common.Resadd_noblock(gimme) {
+			fs.icache.Refdown(opar, "fs_name_opar")
+			fs.icache.Refdown(ochild, "fs_name_ochild")
+			return -common.ENOHEAP
+		}
 		npar.Lock()
 		nchildinum, err := npar.ilookup(nfn)
 		if err != 0 && err != -common.ENOENT {
@@ -463,7 +469,11 @@ func (fs *Fs_t) _isancestor(anc, start *imemnode_t) common.Err_t {
 	if err != 0 {
 		panic("_isancestor: start must exist")
 	}
+	gimme := common.Bounds(common.B_FS_T__ISANCESTOR)
 	for here.inum != iroot {
+		if !common.Resadd_noblock(gimme) {
+			return -common.ENOHEAP
+		}
 		if anc == here {
 			fs.icache.Refdown(here, "_isancestor_here")
 			return -common.EINVAL
@@ -1362,6 +1372,9 @@ func (fs *Fs_t) fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.E
 	for cp, ok := pp.next(); ok; cp, ok = pp.next() {
 		idm.ilock("fs_namei")
 		n, err := idm.ilookup(cp)
+		if !common.Resadd_noblockcommon.Bounds(common.FS_T_FS_NAMEI))) {
+			err = -common.ENOHEAP
+		}
 		if err != 0 {
 			idm.iunlock_refdown("fs_namei_ilookup")
 			return nil, err
