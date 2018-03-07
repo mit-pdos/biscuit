@@ -559,6 +559,8 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) bool 
 }
 
 func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
+	SetCurrent(p)
+
 	p.Threadi.Lock()
 	mynote, ok := p.Threadi.Notes[tid]
 	p.Threadi.Unlock()
@@ -1252,4 +1254,24 @@ func Kresdebug(c int, name string) {
 
 func Kunresdebug() int {
 	return Kunres()
+}
+
+func Current() *Proc_t {
+	_p := runtime.Gptr()
+	if _p == nil {
+		panic("nuts")
+	}
+	ret := (*Proc_t)(_p)
+	return ret
+}
+
+func SetCurrent(p *Proc_t) {
+	if p == nil {
+		panic("nuts")
+	}
+	if runtime.Gptr() != nil {
+		panic("nuts")
+	}
+	_p := (unsafe.Pointer)(p)
+	runtime.Setgptr(_p)
 }

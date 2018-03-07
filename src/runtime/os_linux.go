@@ -3245,6 +3245,16 @@ func Memunres() int {
 	return int(used)
 }
 
+func Gptr() unsafe.Pointer {
+	gp := getg()
+	return gp.current
+}
+
+func Setgptr(p unsafe.Pointer) {
+	gp := getg()
+	gp.current = p
+}
+
 //go:nosplit
 //go:nowritebarrierrec
 func setsig(i uint32, fn uintptr) {

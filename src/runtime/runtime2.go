@@ -402,6 +402,7 @@ type g struct {
 		credit		int64
 		got		int64
 	}
+	current		unsafe.Pointer
 }
 
 type m struct {

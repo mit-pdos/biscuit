@@ -2311,6 +2311,7 @@ func goexit0(gp *g) {
 	if isSystemGoroutine(gp) {
 		atomic.Xadd(&sched.ngsys, -1)
 	}
+	gp.current = nil
 	gp.m = nil
 	gp.lockedm = nil
 	_g_.m.lockedg = nil
