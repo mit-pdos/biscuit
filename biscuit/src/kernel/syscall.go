@@ -3647,6 +3647,8 @@ func (f *futex_t) futex_start() {
 	pack := make(chan int)
 	opencount := 1
 	for opencount > 0 {
+		common.Kunresdebug()
+		common.Kresdebug(1<<10, "futex daemon")
 		tochan, towho := f.tonext()
 		select {
 		case <-tochan:
@@ -3732,6 +3734,7 @@ func (f *futex_t) futex_start() {
 			}
 		}
 	}
+	common.Kunresdebug()
 }
 
 type allfutex_t struct {

@@ -685,6 +685,8 @@ var _rstchan chan rstmsg_t
 
 func rst_daemon() {
 	for rmsg := range _rstchan {
+		common.Kunresdebug()
+		common.Kresdebug(1<<10, "icmp daemon")
 		localip, routeip, err := routetbl.lookup(rmsg.k.rip)
 		if err != 0 {
 			continue
@@ -718,6 +720,8 @@ var icmp_echos = make(chan []uint8, 30)
 func icmp_daemon() {
 	for {
 		buf := <-icmp_echos
+		common.Kunresdebug()
+		common.Kresdebug(1<<10, "icmp daemon")
 		buf = buf[ETHERLEN:]
 
 		fromip := sl2ip(buf[12:])
@@ -4323,6 +4327,8 @@ func (l *lo_t) lo_start() {
 
 func (l *lo_t) _daemon() {
 	for {
+		common.Kunresdebug()
+		common.Kresdebug(1<<10, "lo daemon")
 		lm := <-l.txc
 		if lm.tso {
 			l._tso(lm.buf, lm.tcphlen, lm.mss)

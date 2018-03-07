@@ -503,6 +503,9 @@ func (log *log_t) recover() common.Err_t {
 
 func log_daemon(l *log_t) {
 	for {
+		common.Kunresdebug()
+		common.Kresdebug(100<<20, "log daemon")
+
 		adm := l.admission
 		done := false
 		nops := 0
