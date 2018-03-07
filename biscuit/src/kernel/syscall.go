@@ -778,8 +778,8 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 		return int(-common.EINVAL)
 	}
 	buf := make([]uint8, sz)
-	if !proc.User2k(buf, fdsn) {
-		return int(-common.EFAULT)
+	if err := proc.User2k(buf, fdsn); err != 0 {
+		return int(err)
 	}
 
 	// first we tell the underlying device to notify us if their fd is
@@ -4423,8 +4423,9 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 		if !ok {
 			panic("just mapped?")
 		}
-		if !common.Sys_pgfault(proc, vmi, ent, uintptr(common.PTE_U)) {
-			return -common.ENOMEM
+		err := common.Sys_pgfault(proc, vmi, ent, uintptr(common.PTE_U))
+		if err != 0 {
+			return err
 		}
 	}
 	if hdr.filesz == hdr.memsz {

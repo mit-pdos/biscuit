@@ -1420,8 +1420,9 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
 	ialloc.first = first
 	ialloc.inodelen = inodelen
 	ialloc.maxinode = inodelen * (common.BSIZE / ISIZE)
-	fmt.Printf("ialloc: mapstart %v maplen %v inode start %v inode len %v max inode# %v\n", ialloc.start,
-		ialloc.len, ialloc.first, ialloc.inodelen, ialloc.maxinode)
+	fmt.Printf("ialloc: mapstart %v maplen %v inode start %v inode len %v max inode# %v nfree %d\n",
+		ialloc.start, ialloc.len, ialloc.first, ialloc.inodelen, ialloc.maxinode,
+		ialloc.alloc.nfreebits)
 	return ialloc
 }
 

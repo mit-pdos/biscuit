@@ -478,12 +478,12 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
 }
 
 // returns true if the fault was handled successfully
-func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
+func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) Err_t {
 	isguard := vmi.perms == 0
 	iswrite := ecode&uintptr(PTE_W) != 0
 	writeok := vmi.perms&uint(PTE_W) != 0
 	if isguard || (iswrite && !writeok) {
-		return false
+		return -EFAULT
 	}
 	// pmap is Lock'ed in Proc_t.pgfault...
 	if ecode&uintptr(PTE_U) == 0 {
@@ -497,12 +497,12 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 
 	pte, ok := vmi.ptefor(proc.Pmap, faultaddr)
 	if !ok {
-		return false
+		return -ENOMEM
 	}
 	if (iswrite && *pte&PTE_WASCOW != 0) ||
 		(!iswrite && *pte&PTE_P != 0) {
 		// two threads simultaneously faulted on same page
-		return true
+		return 0
 	}
 
 	var p_pg Pa_t
@@ -516,7 +516,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		var err Err_t
 		_, p_pg, err = vmi.Filepage(faultaddr)
 		if err != 0 {
-			return false
+			return err
 		}
 		isblockpage = true
 		if vmi.perms&uint(PTE_W) != 0 {
@@ -544,7 +544,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 				tmp |= PTE_W | PTE_WASCOW
 				*pte = tmp
 				proc.Tlbshoot(faultaddr, 1)
-				return true
+				return 0
 			}
 			pgsrc = Physmem.Dmap(phys)
 			isempty = false
@@ -560,7 +560,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 				var err Err_t
 				pgsrc, p_bpg, err = vmi.Filepage(faultaddr)
 				if err != 0 {
-					return false
+					return err
 				}
 				defer Physmem.Refdown(p_bpg)
 			default:
@@ -572,7 +572,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 		// don't zero new page
 		pg, p_pg, ok = Physmem.Refpg_new_nozero()
 		if !ok {
-			return false
+			return -ENOMEM
 		}
 		*pg = *pgsrc
 		perms |= PTE_WASCOW
@@ -588,7 +588,7 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 			var err Err_t
 			_, p_pg, err = vmi.Filepage(faultaddr)
 			if err != 0 {
-				return false
+				return err
 			}
 			isblockpage = true
 		default:
@@ -608,10 +608,10 @@ func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) bool {
 	}
 	if !ok {
 		Physmem.Refdown(p_pg)
-		return false
+		return -ENOMEM
 	}
 	if tshoot {
 		proc.Tlbshoot(faultaddr, 1)
 	}
-	return true
+	return 0
 }

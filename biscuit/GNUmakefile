@@ -170,7 +170,7 @@ $(LINS) : user/cxx/linux/% : user/cxx/%.cc
 linux: $(LINS)
 
 $(K)/mpentry.bin: $(K)/mpentry.S
-	$(CC) -c -o $(K)/mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
+	$(CC) -static -o $(K)/mpentry.elf -Ttext 0x8000 -Wl,-n -nostdlib $^
 	objcopy -O binary -j.text $(K)/mpentry.elf $@
 
 $(BGOS): %.bgo : %
@@ -190,7 +190,7 @@ clean:
 	rm -f $(BGOS) $(OBJS) $(RFS) $(K)/boot.elf $(K)/d.img $(K)/main $(K)/boot $(K)/main.gobin \
 	    $(K)/go.img $(K)/chentry $(K)/mpentry.elf $(K)/mpentry.bin $(K)/_bins.go $(K)/bins.go \
 	    user/c/litc.o $(FSPROGS) $(CPROGS) $(CXXPROGS) btest btest.elf \
-	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) $(K)/_main.gobin
+	    $(CXXBEGIN) $(CXXEND) $(CXXLOBJS) $(LINS) $(K)/_main.gobin mkfs
 	rm -rf user/cxx/sysroot
 
 qemu: gqemu

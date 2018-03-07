@@ -287,7 +287,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 	// sys_pgfault expects pmap to be locked
 	child.Lock_pmap()
 	perms := uintptr(PTE_U | PTE_W)
-	if !Sys_pgfault(child, vmi, rsp, perms) {
+	if Sys_pgfault(child, vmi, rsp, perms) != 0 {
 		return doflush, false
 	}
 	child.Unlock_pmap()
@@ -448,6 +448,7 @@ func (p *Proc_t) Page_remove(va int) bool {
 	return remmed
 }
 
+// returns true if the pagefault was handled successfully
 func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) bool {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
@@ -455,7 +456,7 @@ func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) bool {
 	if !ok {
 		return false
 	}
-	ret := Sys_pgfault(p, vmi, fa, ecode)
+	ret := Sys_pgfault(p, vmi, fa, ecode) == 0
 	return ret
 }
 
@@ -739,7 +740,7 @@ func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	}
 
 	if needfault {
-		if !Sys_pgfault(p, vmi, uva, ecode) {
+		if Sys_pgfault(p, vmi, uva, ecode) != 0 {
 			return nil, false
 		}
 	}
@@ -956,26 +957,27 @@ func (p *Proc_t) K2user_inner(src []uint8, uva int) bool {
 }
 
 // copies len(dst) bytes from userspace address uva to dst
-func (p *Proc_t) User2k(dst []uint8, uva int) bool {
+func (p *Proc_t) User2k(dst []uint8, uva int) Err_t {
 	p.Lock_pmap()
 	ret := p.User2k_inner(dst, uva)
 	p.Unlock_pmap()
 	return ret
 }
 
-func (p *Proc_t) User2k_inner(dst []uint8, uva int) bool {
+func (p *Proc_t) User2k_inner(dst []uint8, uva int) Err_t {
 	p.Lockassert_pmap()
 	cnt := 0
 	for len(dst) != 0 {
 		src, ok := p.Userdmap8_inner(uva+cnt, false)
 		if !ok {
-			return false
+			// XXX: could be -ENOMEM; teach userdmap error codes
+			return -EFAULT
 		}
 		did := copy(dst, src)
 		dst = dst[did:]
 		cnt += did
 	}
-	return true
+	return 0
 }
 
 func (p *Proc_t) Unusedva_inner(startva, len int) int {

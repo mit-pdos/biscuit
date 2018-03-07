@@ -16,8 +16,8 @@
 /net.img
 /src/kernel/main.gobin
 /src/kernel/main.gobin_
-/mpentry.elf
-/mpentry.bin
+/src/kernel/mpentry.elf
+/src/kernel/mpentry.bin
 /user/c/hello
 /user/c/fault
 /user/c/fork

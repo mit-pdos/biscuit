@@ -3003,7 +3003,7 @@ void *threadfd(void *arg)
   return NULL;
 }
 
-void pthreadfd(void) {
+void _pthreadfd(void) {
   const int nthreads = 2;
 
   printf("pthread shared fd\n");
@@ -3020,6 +3020,22 @@ void pthreadfd(void) {
   }
   unlink("sharedfdf");
   printf("pthread shared fd ok\n");
+  exit(0);
+}
+
+void pthreadfd(void) {
+	pid_t c;
+	switch ((c = fork())) {
+	case -1:
+		err(-1, "fork");
+	case 0:
+		_pthreadfd();
+	}
+	int status;
+	if (wait(&status) != c)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "pthreadfd failed");
 }
 
 void futextest(void)
