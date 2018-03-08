@@ -746,11 +746,13 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 }
 
 func (p *ahci_port_t) queuemgr() {
-	gimme := common.Bounds(B_AHCI_PORT_T_QUEUEMGR)
+	gimme := common.Bounds(common.B_AHCI_PORT_T_QUEUEMGR)
 	common.Kresdebug(gimme, "queuemgr")
 	defer p.Unlock()
 	p.Lock()
 	for {
+		common.Kunres()
+		common.Kresdebug(gimme, "queuemgr")
 		ok := false
 		if p.queued.Len() > 0 {
 			s, ok := p.find_slot()
@@ -1051,7 +1053,7 @@ func (ahci *ahci_disk_t) intr() {
 // Go routing for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 	fmt.Printf("AHCI: interrupt handler running\n")
-	gimme := common.Bounds(B_AHCI_DISK_T_INT_HANDLER)
+	gimme := common.Bounds(common.B_AHCI_DISK_T_INT_HANDLER)
 	for {
 		common.Kunresdebug()
 		runtime.IRQsched(uint(vec))

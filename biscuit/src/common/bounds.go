@@ -96,6 +96,8 @@ const (
 	B_BITMAP_T_APPLY
 	B_ICACHE_T_FREEDEAD
 	B_IXGBE_T_INT_HANDLER
+	B_AHCI_PORT_T_QUEUEMGR
+	B_AHCI_DISK_T_INT_HANDLER
 )
 
 func Bounds(k Boundkey_t) int {
@@ -199,6 +201,10 @@ var bounds = map[Boundkey_t]int{
 	B_IXGBE_T_INT_HANDLER:           2*4120 + 1*16384 + 256*32 + 514*8 + 256*8216 + 257*48 + 1*16,
 	B_PROC_T_K2USER_INNER:           (39)*40 + 1*40 + 1*20 + 1*208 + 2*8 + 16*96 + 13*24 + 1*4096 + 2*64 + 17*80 + 17*32 + 15*48 + 13*16,
 	B_USERIOVEC_T_IOV_INIT:          (156)*40 + 64*96 + 1*40 + 1*4096 + 2*64 + 54*48 + 1*184 + 59*32 + 52*16 + 5*8 + 52*24 + 68*80 + 1*20 + 4*208,
+
+	// debug reservations
+	B_AHCI_PORT_T_QUEUEMGR: 1 * 20 + 1 * 48 + 1 * 32 + 1 * 64,
+	B_AHCI_DISK_T_INT_HANDLER: 96 * 16 + 1 * 32 + 1 * 48,
 
 	// cache/forced eviction allocations
 	B_ICACHE_T_FREEDEAD: (39)*40 + 16*16 + 13*96 + 1*90 + 13*80 + 15*48 + 13*24 + 16*32 + 2*64 + 1*20,
