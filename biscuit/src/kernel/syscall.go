@@ -3637,6 +3637,7 @@ const (
 )
 
 func (f *futex_t) futex_start() {
+	common.Kresdebug(1<<10, "futex daemon")
 	maxwait := 10
 	f._cnds = make([]chan int, 0, maxwait)
 	f.cnds = f._cnds
