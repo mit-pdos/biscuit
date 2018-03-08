@@ -67,8 +67,8 @@ func (ub *Userbuf_t) Uiowrite(src []uint8) (int, Err_t) {
 func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
-		if !common.Resadd_noblock(common.Bounds(common.B_USERBUF_T__TX))) {
-			return ret, -common.ENOHEAP
+		if !Resadd_noblock(Bounds(B_USERBUF_T__TX)) {
+			return ret, -ENOHEAP
 		}
 		va := ub.userva + ub.off
 		ubuf, ok := ub.proc.Userdmap8_inner(va, write)
@@ -116,8 +116,8 @@ func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
 	proc.Lock_pmap()
 	defer proc.Unlock_pmap()
 	for i := range iov.iovs {
-		gimme := common.Bounds(common.B_USERIOVEC_T_IOV_INIT))
-		if !common.Resadd_noblock(gimme) {
+		gimme := Bounds(B_USERIOVEC_T_IOV_INIT)
+		if !Resadd_noblock(gimme) {
 			return -ENOHEAP
 		}
 		elmsz := uint(16)
@@ -151,7 +151,6 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
 	did := 0
 	for len(buf) > 0 && len(iov.iovs) > 0 {
 		if !Resadd_noblock(Bounds(B_USERIOVEC_T__TX)) {
-			XXX
 			return did, -ENOHEAP
 		}
 		ciov := &iov.iovs[0]

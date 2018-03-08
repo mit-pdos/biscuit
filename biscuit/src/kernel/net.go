@@ -3385,7 +3385,7 @@ func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Er
 	var read int
 	var err common.Err_t
 	for {
-		gimme := common.Bounds(common.B_TCPFOPS_T_READ))
+		gimme := common.Bounds(common.B_TCPFOPS_T_READ)
 		if !common.Resadd_noblock(gimme) {
 			err = -common.ENOHEAP
 			break
@@ -3425,7 +3425,7 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.E
 	var wrote int
 	var err common.Err_t
 	for {
-		gimme := common.Bounds(common.B_TCPFOPS_T_WRITE))
+		gimme := common.Bounds(common.B_TCPFOPS_T_WRITE)
 		if !common.Resadd_noblock(gimme) {
 			err = -common.ENOHEAP
 			break

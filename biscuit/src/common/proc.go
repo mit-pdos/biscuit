@@ -494,12 +494,14 @@ func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
 	return talive
 }
 
-// returns true if the memory reservation succeeded. returns false if this
-// process has been killed and should terminate using the reserved exit memory.
+// blocks until memory is available or returns false if this process has been
+// killed and should terminate.
 func Resbegin(c int) bool {
 	return _reswait(c, false, true)
 }
 
+// blocks until memory is available or returns false if this process has been
+// killed and should terminate.
 func Resadd(c int) bool {
 	return _reswait(c, true, true)
 }

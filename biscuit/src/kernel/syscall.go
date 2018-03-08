@@ -99,7 +99,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 	}
 	if !common.Resadd(lim) {
 		fmt.Printf("X")
-		return int(-common.ENOHEAP
+		return int(-common.ENOHEAP)
 	}
 
 	a1 := int(tf[common.TF_RDI])
@@ -1090,7 +1090,6 @@ func (of *pipefops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.
 	c := 0
 	for c != src.Totalsz() {
 		if !common.Resadd(common.Bounds(common.B_PIPEFOPS_T_WRITE)) {
-			XXX
 			return c, -common.ENOHEAP
 		}
 		ret, err := of.pipe.op_write(src, noblk)
@@ -4462,7 +4461,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, co
 	var tlsaddr int
 	var tlscopylen int
 
-	gimme := common.Bounds(common.B_ELF_T_ELF_LOAD))
+	gimme := common.Bounds(common.B_ELF_T_ELF_LOAD)
 	entry := e.entry()
 	// load each elf segment directly into process memory
 	for _, hdr := range e.headers() {

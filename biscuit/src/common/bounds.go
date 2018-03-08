@@ -1,20 +1,5 @@
 package common
 
-import "fmt"
-import "runtime"
-import "time"
-
-func KMemres(c int, n string) {
-	for !runtime.Memreserve(c) {
-		fmt.Printf("%v: wait for memory...\n", n)
-		time.Sleep(1)
-	}
-}
-
-func KMemunres() {
-	runtime.Memunres()
-}
-
 type Boundkey_t int
 
 const (
