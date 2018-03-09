@@ -15,6 +15,7 @@ const always_eager = false // for testing
 type obj_t interface {
 	Evictnow() bool
 	Key() int
+	Evict()
 }
 
 // The cache contains refcounted references to obj
@@ -180,6 +181,32 @@ func (irc *refcache_t) replace() obj_t {
 		}
 	}
 	return nil
+}
+
+// evicts up-to half of the objects in the cache
+func (irc *refcache_t) Evict_half() int {
+	irc.Lock()
+	defer irc.Unlock()
+
+	upto := len(irc.refs)
+	did := 0
+	var back *ref_t
+	for p := irc.reflru.tail; p != nil && did < upto; p = back {
+		back = p.refprev
+		if p.refcnt != 0 {
+			continue
+		}
+		// imemnode with refcount of 0 must have non-zero links and
+		// thus cannot be freed.
+		irc._delete(p)
+		// imemnode eviction acquires no locks and block eviction
+		// acquires only a leaf lock (physmem lock). furthermore,
+		// neither eviction blocks on IO, thus it is safe to evict here
+		// with locks held.
+		p.obj.Evict()
+		did++
+	}
+	return len(irc.refs)
 }
 
 // LRU list of references
