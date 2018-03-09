@@ -1355,24 +1355,13 @@ func (ip *intelprof_t) stopnmi() []uintptr {
 	return buf
 }
 
-var failalloc bool = false
-
-var failsites = make(map[uintptr]bool)
+const failalloc bool = false
 
 // white-listed functions; don't fail these allocations. terminate() is for
 // init resurrection.
-var oksites = map[string]bool{"main.main": true, "main.(*common.Proc_t).terminate": true}
-
-func _pchash(pcs []uintptr) uintptr {
-	if len(pcs) == 0 {
-		panic("d'oh")
-	}
-	var ret uintptr
-	for _, pc := range pcs {
-		pc = pc*1103515245 + 12345
-		ret ^= pc
-	}
-	return ret
+var _physfail = common.Distinct_caller_t {
+	Whitel: map[string]bool{"main.main": true,
+	    "main.(*common.Proc_t).terminate": true},
 }
 
 // returns true if the allocation should fail
@@ -1380,41 +1369,8 @@ func _fakefail() bool {
 	if !failalloc {
 		return false
 	}
-	//return rand.Intn(10000) < 10
-	var pcs []uintptr
-	for sz, got := 30, 30; got >= sz; sz *= 2 {
-		if sz != 30 {
-			fmt.Printf("!")
-		}
-		pcs = make([]uintptr, 30)
-		// get caller of _refpg_new
-		got = runtime.Callers(4, pcs)
-		if got == 0 {
-			panic("no")
-		}
-	}
-	h := _pchash(pcs)
-	if ok := failsites[h]; !ok {
-		failsites[h] = true
-		frames := runtime.CallersFrames(pcs)
-		fs := ""
-		// check for white-listed caller
-		for {
-			fr, more := frames.Next()
-			if ok := oksites[fr.Function]; ok {
-				return false
-			}
-			if fs == "" {
-				fs = fmt.Sprintf("%v (%v:%v)->", fr.Function,
-					fr.File, fr.Line)
-			} else {
-				fs += fr.Function + "->"
-			}
-			if !more || fr.Function == "runtime.goexit" {
-				break
-			}
-		}
-		fmt.Printf("failing: %v\n", fs)
+	if ok, path := _physfail.Distinct(); ok {
+		fmt.Printf("fail %v", path)
 		return true
 	}
 	return false
