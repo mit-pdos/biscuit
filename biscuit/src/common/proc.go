@@ -564,8 +564,11 @@ func _reswait(c int, incremental, block bool) bool {
 	return true
 }
 
-func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) bool {
+// returns true if the kernel may safely use a "fast" resume and whether the
+// system call should be restarted.
+func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool, bool) {
 	fastret := false
+	restart := false
 	switch intno {
 	case SYSCALL:
 		// fast return doesn't restore the registers used to
@@ -575,7 +578,12 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) bool 
 		if sysno != SYS_EXECV {
 			fastret = true
 		}
-		tf[TF_RAX] = uintptr(p.syscall.Syscall(p, tid, tf))
+		ret := p.syscall.Syscall(p, tid, tf)
+		restart = ret == int(-ENOHEAP)
+		if !restart {
+			tf[TF_RAX] = uintptr(ret)
+		}
+
 	case TIMER:
 		//fmt.Printf(".")
 		runtime.Gosched()
@@ -598,7 +606,7 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) bool 
 	default:
 		panic(fmt.Sprintf("weird trap: %d", intno))
 	}
-	return fastret
+	return fastret, restart
 }
 
 func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
@@ -637,8 +645,15 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 			panic("oh wtf")
 		}
 
+again:
+		var restart bool
 		if Resbegin(runonly) {
-			fastret = p.trap_proc(tf, tid, intno, aux)
+			fastret, restart = p.trap_proc(tf, tid, intno, aux)
+		}
+		if restart {
+			fmt.Printf("restart! ")
+			Resend()
+			goto again
 		}
 
 		// did we switch pmaps? if so, the old pmap may need to be
