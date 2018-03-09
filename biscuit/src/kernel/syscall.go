@@ -4478,7 +4478,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, co
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= common.USERMIN {
 			err := segload(proc, entry, &hdr, f.Fops)
 			if err != 0 {
-				return 0, 0, 0, -common.ENOMEM
+				return 0, 0, 0, err
 			}
 		}
 	}
@@ -4529,7 +4529,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, co
 
 			_src, p_pg, err := tlsvmi.Filepage(uintptr(tlsaddr + i))
 			if err != 0 {
-				return 0, 0, 0, -common.ENOMEM
+				return 0, 0, 0, err
 			}
 			off := (tlsaddr + i) & int(common.PGOFFSET)
 			src := common.Pg2bytes(_src)[off:]
