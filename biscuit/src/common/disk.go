@@ -23,6 +23,7 @@ type Block_cb_i interface {
 type Bdev_block_t struct {
 	sync.Mutex
 	Block int
+	_try_evict bool
 	Pa    Pa_t
 	Data  *Bytepg_t
 	Name  string
@@ -156,8 +157,12 @@ func (blk *Bdev_block_t) Evict() {
 	blk.Mem.Free(blk.Pa)
 }
 
+func (blk *Bdev_block_t) Tryevict() {
+	blk._try_evict = true
+}
+
 func (blk *Bdev_block_t) Evictnow() bool {
-	return false
+	return blk._try_evict
 }
 
 func (blk *Bdev_block_t) Done(s string) {

@@ -545,6 +545,8 @@ func _takecredit(n int64) {
 	}
 
 	g := getg()
+	// XXX
+	g.res.cacheallocs += n
 	g.res.credit -= n
 	if g.res.credit < 0 {
 		g.res.credit = 0

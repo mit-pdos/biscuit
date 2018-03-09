@@ -3178,13 +3178,15 @@ func Cacheres(_res int, init bool) bool {
 	gp := getg()
 	used := gp.res.cacheallocs
 	gp.res.cacheallocs = 0
-	if init {
-		used = res
-	}
-	if used < res {
+	if !init && used < res {
 		res = used
 	}
 	return _restake(res, true)
+}
+
+func Getgot() int {
+	gp := getg()
+	return int(gp.res.got)
 }
 
 func Memreserve(_n int, rec bool) bool {

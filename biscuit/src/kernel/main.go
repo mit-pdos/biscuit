@@ -7,7 +7,6 @@ import "runtime"
 import "runtime/debug"
 import "sync/atomic"
 import "sync"
-import "strings"
 import "time"
 import "unsafe"
 
@@ -1421,28 +1420,6 @@ func _fakefail() bool {
 	return false
 }
 
-func callerdump() {
-	i := 3
-	s := ""
-	for {
-		_, f, l, ok := runtime.Caller(i)
-		if !ok {
-			break
-		}
-		i++
-		li := strings.LastIndex(f, "/")
-		if li != -1 {
-			f = f[li+1:]
-		}
-		if s == "" {
-			s = fmt.Sprintf("%s:%d", f, l)
-		} else {
-			s += fmt.Sprintf("<-%s:%d", f, l)
-		}
-	}
-	fmt.Printf("%s\n", s)
-}
-
 func structchk() {
 	if unsafe.Sizeof(common.Stat_t{}) != 9*8 {
 		panic("bad stat_t size")
@@ -1522,6 +1499,7 @@ func main() {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
 		p.Sched_add(&tf, p.Tid0())
+		common.Resend()
 	}
 
 	//exec("bin/lsh", nil)

@@ -1,7 +1,6 @@
 package fs
 
 import "fmt"
-import "runtime"
 import "sync"
 import "strconv"
 import "sort"
@@ -82,14 +81,14 @@ func (alloc *bitmap_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) 
 // apply f to every bit starting from start, until f is false.  return true if
 // make a complete pass.
 func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err_t) {
+	var ca common.Cacheallocs_t
 	gimme := common.Bounds(common.B_BITMAP_T_APPLY)
+
 	var blk *common.Bdev_block_t
 	var err common.Err_t
 	var lastbn = -1
 	for bit := start; bit < alloc.freelen*bitsperblk; bit++ {
-		if !runtime.Cacheres(gimme, bit == start) {
-			alloc.fs.evict()
-		}
+		tryevict := ca.Shouldevict(gimme)
 		bn := blkno(bit)
 		if bn != lastbn {
 			if blk != nil {
@@ -99,6 +98,9 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 			blk, err = alloc.Fbread(bn)
 			if err != 0 {
 				return false, err
+			}
+			if tryevict {
+				blk.Tryevict()
 			}
 		}
 		byteoff := byteno(bit)

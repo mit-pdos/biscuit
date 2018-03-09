@@ -1,5 +1,6 @@
 package common
 
+import "strings"
 import "sync"
 import "fmt"
 import "time"
@@ -511,6 +512,10 @@ func Resadd_noblock(c int) bool {
 	return _reswait(c, true, false)
 }
 
+func Resend() {
+	runtime.Memunres()
+}
+
 func _reswait(c int, incremental, block bool) bool {
 	f := runtime.Memreserve
 	if incremental {
@@ -596,7 +601,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
 		refp, _ := _refaddr(p.P_pmap)
-		runtime.Memunres()
+		Resend()
 
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 			uintptr(p.P_pmap), fastret, refp)
@@ -616,7 +621,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 			Physmem.Dec_pmap(Pa_t(op_pmap))
 		}
 	}
-	runtime.Memunres()
+	Resend()
 	Tid_del()
 }
 
@@ -1266,6 +1271,19 @@ func Tid_del() {
 	Proclock.Unlock()
 }
 
+// a type to make it easier for code that allocates cached objects to determine
+// when we must try to evict them.
+type Cacheallocs_t struct {
+	initted	bool
+}
+
+// returns true if the caller must try to evict their recent cache allocations.
+func (ca *Cacheallocs_t) Shouldevict(res int) bool {
+	init := !ca.initted
+	ca.initted = true
+	return !runtime.Cacheres(res, init)
+}
+
 func Kreswait(c int, name string) {
 	for !runtime.Memreserve(c, false) {
 		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
@@ -1305,4 +1323,26 @@ func SetCurrent(p *Proc_t) {
 	}
 	_p := (unsafe.Pointer)(p)
 	runtime.Setgptr(_p)
+}
+
+func Callerdump() {
+	i := 3
+	s := ""
+	for {
+		_, f, l, ok := runtime.Caller(i)
+		if !ok {
+			break
+		}
+		i++
+		li := strings.LastIndex(f, "/")
+		if li != -1 {
+			f = f[li+1:]
+		}
+		if s == "" {
+			s = fmt.Sprintf("%s:%d", f, l)
+		} else {
+			s += fmt.Sprintf("<-%s:%d", f, l)
+		}
+	}
+	fmt.Printf("%s\n", s)
 }

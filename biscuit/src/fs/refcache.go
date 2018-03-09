@@ -183,7 +183,8 @@ func (irc *refcache_t) replace() obj_t {
 	return nil
 }
 
-// evicts up-to half of the objects in the cache
+// evicts up-to half of the objects in the cache. returns the number of cache
+// entries remaining.
 func (irc *refcache_t) Evict_half() int {
 	irc.Lock()
 	defer irc.Unlock()

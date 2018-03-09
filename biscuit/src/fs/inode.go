@@ -6,7 +6,6 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
-import "runtime"
 import "sync/atomic"
 
 import "common"
@@ -953,14 +952,16 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 type blockiter_t struct {
 	idm   *imemnode_t
 	which int
+	tryevict bool
 	dub   *common.Bdev_block_t
 	lasti *common.Bdev_block_t
 }
 
-func (bl *blockiter_t) bi_init(idm *imemnode_t) {
+func (bl *blockiter_t) bi_init(idm *imemnode_t, tryevict bool) {
 	var zbl blockiter_t
 	*bl = zbl
 	bl.idm = idm
+	bl.tryevict = tryevict
 }
 
 // if this imemnode_t has a double-indirect block, _isdub loads it and caches
@@ -1012,6 +1013,9 @@ func (bl *blockiter_t) _isind(blkno int) (*common.Bdev_block_t, bool) {
 	bl.lasti, err = bl.idm.mbread(blkno)
 	if err != 0 {
 		panic("must reserve")
+	}
+	if bl.tryevict {
+		bl.lasti.Tryevict()
 	}
 	return bl.lasti, true
 }
@@ -1149,14 +1153,11 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	// indirect/double-indirect itself when:
 	//	DBLOCKS+INADDR <= major DBLOCKS+INADDR+2
 
+	var ca common.Cacheallocs_t
 	gimme := common.Bounds(common.B_IMEMNODE_T_IFREE)
-	first := true
 	remains := true
 	for remains {
-		if !runtime.Cacheres(gimme, first) {
-			idm.fs.evict()
-		}
-		first = false
+		tryevict := ca.Shouldevict(gimme)
 		idm.fs.fslog.Op_begin("ifree")
 
 		// set of blocks that will be written by this transaction;
@@ -1168,7 +1169,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		which := idm.major
 
 		bliter := &blockiter_t{}
-		bliter.bi_init(idm)
+		bliter.bi_init(idm, tryevict)
 
 		for len(distinct) < MaxBlkPerOp && remains {
 			blkno := -1
@@ -1317,6 +1318,9 @@ func (icache *icache_t) RecoverOrphans() {
 			last = inum
 		}
 	}
+	// XXX remove once reservation counting is fixed s.t. credit cannot be
+	// leaked
+	common.Resend()
 }
 
 // Refdown() will mark an inode dead, which freeDead() frees in an ifree
