@@ -258,12 +258,9 @@ func sys_write(proc *common.Proc_t, fdn int, bufp int, sz int) int {
 }
 
 func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
 	flags := common.Fdopt_t(_flags)
 	temp := flags & (common.O_RDONLY | common.O_WRONLY | common.O_RDWR)
@@ -284,7 +281,7 @@ func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
 	default:
 		fdperms = common.FD_READ
 	}
-	err := badpath(path)
+	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
@@ -525,12 +522,9 @@ func sys_sigaction(proc *common.Proc_t, sig, actn, oactn int) int {
 }
 
 func sys_access(proc *common.Proc_t, pathn, mode int) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
 	if mode == 0 {
 		return int(-common.EINVAL)
@@ -569,15 +563,12 @@ func sys_dup2(proc *common.Proc_t, oldn, newn int) int {
 }
 
 func sys_stat(proc *common.Proc_t, pathn, statn int) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
 	buf := &common.Stat_t{}
-	err := thefs.Fs_stat(path, buf, proc.Cwd().Fops.Pathi())
+	err = thefs.Fs_stat(path, buf, proc.Cwd().Fops.Pathi())
 	if err != 0 {
 		return int(err)
 	}
@@ -782,17 +773,23 @@ func sys_pipe2(proc *common.Proc_t, pipen, _flags int) int {
 		return int(-common.EMFILE)
 	}
 
-	ok1 := proc.Userwriten(pipen, 4, rfd)
-	ok2 := proc.Userwriten(pipen+4, 4, wfd)
-	if !ok1 || !ok2 {
-		err1 := sys.Sys_close(proc, rfd)
-		err2 := sys.Sys_close(proc, wfd)
-		if err1 != 0 || err2 != 0 {
-			panic("must succeed")
-		}
-		return int(-common.EFAULT)
+	err := proc.Userwriten(pipen, 4, rfd)
+	if err != 0 {
+		goto bail
+	}
+	err = proc.Userwriten(pipen+4, 4, wfd)
+	if err != 0 {
+		goto bail
 	}
 	return 0
+
+bail:
+	err1 := sys.Sys_close(proc, rfd)
+	err2 := sys.Sys_close(proc, wfd)
+	if err1 != 0 || err2 != 0 {
+		panic("must succeed")
+	}
+	return int(err)
 }
 
 type pipe_t struct {
@@ -1099,16 +1096,16 @@ func (of *pipefops_t) Shutdown(read, write bool) common.Err_t {
 }
 
 func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
-	old, ok1, toolong1 := proc.Userstr(oldn, fs.NAME_MAX)
-	new, ok2, toolong2 := proc.Userstr(newn, fs.NAME_MAX)
-	if !ok1 || !ok2 {
-		return int(-common.EFAULT)
+	old, err1 := proc.Userstr(oldn, fs.NAME_MAX)
+	new, err2 := proc.Userstr(newn, fs.NAME_MAX)
+	if err1 != 0 {
+		return int(err1)
 	}
-	if toolong1 || toolong2 {
-		return int(-common.ENAMETOOLONG)
+	if err2 != 0 {
+		return int(err2)
 	}
-	err1 := badpath(old)
-	err2 := badpath(new)
+	err1 = badpath(old)
+	err2 = badpath(new)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1120,14 +1117,11 @@ func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
 }
 
 func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
-	}
-	err := badpath(path)
+	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
@@ -1136,16 +1130,16 @@ func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
 }
 
 func sys_link(proc *common.Proc_t, oldn int, newn int) int {
-	old, ok1, toolong1 := proc.Userstr(oldn, fs.NAME_MAX)
-	new, ok2, toolong2 := proc.Userstr(newn, fs.NAME_MAX)
-	if !ok1 || !ok2 {
-		return int(-common.EFAULT)
+	old, err1 := proc.Userstr(oldn, fs.NAME_MAX)
+	new, err2 := proc.Userstr(newn, fs.NAME_MAX)
+	if err1 != 0 {
+		return int(err1)
 	}
-	if toolong1 || toolong2 {
-		return int(-common.ENAMETOOLONG)
+	if err2 != 0 {
+		return int(err2)
 	}
-	err1 := badpath(old)
-	err2 := badpath(new)
+	err1 = badpath(old)
+	err2 = badpath(new)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1157,14 +1151,11 @@ func sys_link(proc *common.Proc_t, oldn int, newn int) int {
 }
 
 func sys_unlink(proc *common.Proc_t, pathn, isdiri int) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
-	}
-	err := badpath(path)
+	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
@@ -1197,19 +1188,22 @@ func sys_getrlimit(proc *common.Proc_t, resn, rlpn int) int {
 		return int(-common.EINVAL)
 	}
 	max := _rlimits[resn]
-	ok1 := proc.Userwriten(rlpn, 8, int(cur))
-	ok2 := proc.Userwriten(rlpn+8, 8, int(max))
-	if !ok1 || !ok2 {
-		return int(-common.EFAULT)
+	err1 := proc.Userwriten(rlpn, 8, int(cur))
+	err2 := proc.Userwriten(rlpn+8, 8, int(max))
+	if err1 != 0 {
+		return int(err1)
+	}
+	if err2 != 0 {
+		return int(err2)
 	}
 	return 0
 }
 
 func sys_setrlimit(proc *common.Proc_t, resn, rlpn int) int {
 	// XXX root can raise max
-	_ncur, ok := proc.Userreadn(rlpn, 8)
-	if !ok {
-		return int(-common.EFAULT)
+	_ncur, err := proc.Userreadn(rlpn, 8)
+	if err != 0 {
+		return int(err)
 	}
 	ncur := uint(_ncur)
 	if ncur > _rlimits[resn] {
@@ -1271,15 +1265,12 @@ func unmkdev(d uint) (int, int) {
 }
 
 func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
 
-	err := badpath(path)
+	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
@@ -1387,9 +1378,9 @@ func sys_accept(proc *common.Proc_t, fdn, sockaddrn, socklenn int) int {
 	}
 	var sl int
 	if socklenn != 0 {
-		l, ok := proc.Userreadn(socklenn, 8)
-		if !ok {
-			return int(-common.EFAULT)
+		l, err := proc.Userreadn(socklenn, 8)
+		if err != 0 {
+			return int(err)
 		}
 		if l < 0 {
 			return int(-common.EFAULT)
@@ -1403,8 +1394,8 @@ func sys_accept(proc *common.Proc_t, fdn, sockaddrn, socklenn int) int {
 		return int(err)
 	}
 	if fromlen != 0 {
-		if !proc.Userwriten(socklenn, 8, fromlen) {
-			return int(-common.EFAULT)
+		if err := proc.Userwriten(socklenn, 8, fromlen); err != 0 {
+			return int(err)
 		}
 	}
 	newfd := &common.Fd_t{Fops: newfops}
@@ -1482,9 +1473,9 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 	// is the from address requested?
 	var salen int
 	if socklenn != 0 {
-		l, ok := proc.Userreadn(socklenn, 8)
-		if !ok {
-			return int(-common.EFAULT)
+		l, err := proc.Userreadn(socklenn, 8)
+		if err != 0 {
+			return int(err)
 		}
 		salen = l
 		if salen < 0 {
@@ -1500,8 +1491,8 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 	}
 	// write new socket size to user space
 	if addrlen > 0 {
-		if !proc.Userwriten(socklenn, 8, addrlen) {
-			return int(-common.EFAULT)
+		if err := proc.Userwriten(socklenn, 8, addrlen); err != 0 {
+			return int(err)
 		}
 	}
 	return ret
@@ -1517,20 +1508,29 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	}
 	// maybe copy the msghdr to kernel space?
 	msgn := uint(_msgn)
-	iovn, ok1 := proc.Userreadn(int(msgn+2*8), 8)
-	niov, ok2 := proc.Userreadn(int(msgn+3*8), 4)
-	cmsgl, ok3 := proc.Userreadn(int(msgn+5*8), 8)
-	salen, ok4 := proc.Userreadn(int(msgn+1*8), 8)
-	if !ok1 || !ok2 || !ok3 || !ok4 {
-		return int(-common.EFAULT)
+	iovn, err1 := proc.Userreadn(int(msgn+2*8), 8)
+	niov, err2 := proc.Userreadn(int(msgn+3*8), 4)
+	cmsgl, err3 := proc.Userreadn(int(msgn+5*8), 8)
+	salen, err4 := proc.Userreadn(int(msgn+1*8), 8)
+	if err1 != 0 {
+		return int(err1)
+	}
+	if err2 != 0 {
+		return int(err2)
+	}
+	if err3 != 0 {
+		return int(err3)
+	}
+	if err4 != 0 {
+		return int(err4)
 	}
 
 	var saddr common.Userio_i
 	saddr = zeroubuf
 	if salen > 0 {
-		saddrn, ok := proc.Userreadn(int(msgn+0*8), 8)
-		if !ok {
-			return int(-common.EFAULT)
+		saddrn, err := proc.Userreadn(int(msgn+0*8), 8)
+		if err != 0 {
+			return int(err)
 		}
 		ub := proc.Mkuserbuf(saddrn, salen)
 		saddr = ub
@@ -1538,9 +1538,9 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	var cmsg common.Userio_i
 	cmsg = zeroubuf
 	if cmsgl > 0 {
-		cmsgn, ok := proc.Userreadn(int(msgn+4*8), 8)
-		if !ok {
-			return int(-common.EFAULT)
+		cmsgn, err := proc.Userreadn(int(msgn+4*8), 8)
+		if err != 0 {
+			return int(err)
 		}
 		ub := proc.Mkuserbuf(cmsgn, cmsgl)
 		cmsg = ub
@@ -1559,17 +1559,17 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	}
 	// write size of socket address, ancillary data, and msg flags back to
 	// user space
-	if !proc.Userwriten(int(msgn+28), 4, int(msgfl)) {
-		return int(-common.EFAULT)
+	if err := proc.Userwriten(int(msgn+28), 4, int(msgfl)); err != 0 {
+		return int(err)
 	}
 	if saddr.Totalsz() != 0 {
-		if !proc.Userwriten(int(msgn+1*8), 8, sawr) {
-			return int(-common.EFAULT)
+		if err := proc.Userwriten(int(msgn+1*8), 8, sawr); err != 0 {
+			return int(err)
 		}
 	}
 	if cmsg.Totalsz() != 0 {
-		if !proc.Userwriten(int(msgn+5*8), 8, cmwr) {
-			return int(-common.EFAULT)
+		if err := proc.Userwriten(int(msgn+5*8), 8, cmwr); err != 0 {
+			return int(err)
 		}
 	}
 	return ret
@@ -1585,22 +1585,32 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	}
 	// maybe copy the msghdr to kernel space?
 	msgn := uint(_msgn)
-	iovn, ok1 := proc.Userreadn(int(msgn+2*8), 8)
-	niov, ok2 := proc.Userreadn(int(msgn+3*8), 8)
-	cmsgl, ok3 := proc.Userreadn(int(msgn+5*8), 8)
-	salen, ok4 := proc.Userreadn(int(msgn+1*8), 8)
-	if !ok1 || !ok2 || !ok3 || !ok4 {
-		return int(-common.EFAULT)
+	iovn, err1 := proc.Userreadn(int(msgn+2*8), 8)
+	niov, err2 := proc.Userreadn(int(msgn+3*8), 8)
+	cmsgl, err3 := proc.Userreadn(int(msgn+5*8), 8)
+	salen, err4 := proc.Userreadn(int(msgn+1*8), 8)
+	if err1 != 0 {
+		return int(err1)
 	}
+	if err2 != 0 {
+		return int(err2)
+	}
+	if err3 != 0 {
+		return int(err3)
+	}
+	if err4 != 0 {
+		return int(err4)
+	}
+
 	// copy to address and ancillary data to kernel space
 	var saddr []uint8
 	if salen > 0 {
 		if salen > 64 {
 			return int(-common.EINVAL)
 		}
-		saddrva, ok := proc.Userreadn(int(msgn+0*8), 8)
-		if !ok {
-			return int(-common.EFAULT)
+		saddrva, err := proc.Userreadn(int(msgn+0*8), 8)
+		if err != 0 {
+			return int(err)
 		}
 		saddr = make([]uint8, salen)
 		ub := proc.Mkuserbuf(saddrva, salen)
@@ -1617,9 +1627,9 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 		if cmsgl > 256 {
 			return int(-common.EINVAL)
 		}
-		cmsgva, ok := proc.Userreadn(int(msgn+4*8), 8)
-		if !ok {
-			return int(-common.EFAULT)
+		cmsgva, err := proc.Userreadn(int(msgn+4*8), 8)
+		if err != 0 {
+			return int(err)
 		}
 		cmsg = make([]uint8, cmsgl)
 		ub := proc.Mkuserbuf(cmsgva, cmsgl)
@@ -1687,12 +1697,14 @@ func sys_socketpair(proc *common.Proc_t, domain, typ, proto int, sockn int) int 
 		common.Close_panic(fd2)
 		return int(-common.EMFILE)
 	}
-	if !proc.Userwriten(sockn, 4, fdn1) ||
-		!proc.Userwriten(sockn+4, 4, fdn2) {
+	if err1, err2 := proc.Userwriten(sockn, 4, fdn1), proc.Userwriten(sockn+4, 4, fdn2); err1 != 0 || err2 != 0 {
 		if sys.Sys_close(proc, fdn1) != 0 || sys.Sys_close(proc, fdn2) != 0 {
 			panic("must succeed")
 		}
-		return int(-common.EFAULT)
+		if err1 == 0 {
+			err1 = err2
+		}
+		return int(err1)
 	}
 	return 0
 }
@@ -2949,9 +2961,9 @@ func sys_getsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 	}
 	var olen int
 	if optlenn != 0 {
-		l, ok := proc.Userreadn(optlenn, 8)
-		if !ok {
-			return int(-common.EFAULT)
+		l, err := proc.Userreadn(optlenn, 8)
+		if err != 0 {
+			return int(err)
 		}
 		if l < 0 {
 			return int(-common.EFAULT)
@@ -2970,8 +2982,8 @@ func sys_getsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 		return int(err)
 	}
 	if optlenn != 0 {
-		if !proc.Userwriten(optlenn, 8, optwrote) {
-			return int(-common.EFAULT)
+		if err := proc.Userwriten(optlenn, 8, optwrote); err != 0 {
+			return int(err)
 		}
 	}
 	return 0
@@ -2983,10 +2995,10 @@ func sys_setsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 	}
 	var intarg int
 	if optlenn >= 4 {
-		var ok bool
-		intarg, ok = proc.Userreadn(optvaln, 4)
-		if !ok {
-			return int(-common.EFAULT)
+		var err common.Err_t
+		intarg, err = proc.Userreadn(optvaln, 4)
+		if err != 0 {
+			return int(err)
 		}
 	}
 	bufarg := proc.Mkuserbuf(optvaln, optlenn)
@@ -3070,11 +3082,17 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		ret = child.Pid
 	} else {
 		// validate tfork struct
-		tcb, ok1 := parent.Userreadn(tforkp+0, 8)
-		tidaddrn, ok2 := parent.Userreadn(tforkp+8, 8)
-		stack, ok3 := parent.Userreadn(tforkp+16, 8)
-		if !ok1 || !ok2 || !ok3 {
-			return int(-common.EFAULT)
+		tcb, err1 := parent.Userreadn(tforkp+0, 8)
+		tidaddrn, err2 := parent.Userreadn(tforkp+8, 8)
+		stack, err3 := parent.Userreadn(tforkp+16, 8)
+		if err1 != 0 {
+			return int(err1)
+		}
+		if err2 != 0 {
+			return int(err2)
+		}
+		if err3 != 0 {
+			return int(err3)
 		}
 		writetid := tidaddrn != 0
 		if tcb != 0 {
@@ -3119,18 +3137,15 @@ outproc:
 }
 
 func sys_execv(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, pathn int, argn int) int {
-	args, ok := proc.Userargs(argn)
-	if !ok {
-		return int(-common.EFAULT)
+	args, err := proc.Userargs(argn)
+	if err != 0 {
+		return int(err)
 	}
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
-	}
-	err := badpath(path)
+	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
@@ -3209,10 +3224,10 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 
 	// elf_load() will create two copies of TLS section: one for the fresh
 	// copy and one for thread 0
-	freshtls, t0tls, tlssz, ok := elfhdr.elf_load(proc, file)
-	if !ok {
+	freshtls, t0tls, tlssz, err := elfhdr.elf_load(proc, file)
+	if err != 0 {
 		restore()
-		return int(-common.ENOMEM)
+		return int(err)
 	}
 
 	// map new stack
@@ -3240,10 +3255,10 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	}
 
 	// XXX make insertargs not fail by using more than a page...
-	argc, argv, ok := insertargs(proc, args)
-	if !ok {
+	argc, argv, err := insertargs(proc, args)
+	if err != 0 {
 		restore()
-		return int(-common.EINVAL)
+		return int(err)
 	}
 
 	// the exec must succeed now; free old pmap/mapped files
@@ -3297,18 +3312,18 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	return 0
 }
 
-func insertargs(proc *common.Proc_t, sargs []string) (int, int, bool) {
+func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 	// find free page
 	uva := proc.Unusedva_inner(0, common.PGSIZE)
 	proc.Vmadd_anon(uva, common.PGSIZE, common.PTE_U)
 	_, p_pg, ok := physmem.Refpg_new()
 	if !ok {
-		return 0, 0, false
+		return 0, 0, -common.ENOMEM
 	}
 	_, ok = proc.Page_insert(uva, p_pg, common.PTE_U, true)
 	if !ok {
 		physmem.Refdown(p_pg)
-		return 0, 0, false
+		return 0, 0, -common.ENOMEM
 	}
 	var args [][]uint8
 	for _, str := range sargs {
@@ -3324,22 +3339,23 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, bool) {
 		if err := proc.K2user_inner(arg, uva+cnt); err != 0 {
 			// args take up more than a page? the user is on their
 			// own.
-			return 0, 0, false
+			return 0, 0, -common.EFAULT
 		}
 		cnt += len(arg)
 	}
 	argptrs[len(argptrs)-1] = 0
 	// now put the array of strings
 	argstart := uva + cnt
-	vdata, ok := proc.Userdmap8_inner(argstart, true)
-	if !ok || len(vdata) < len(argptrs)*8 {
+	vdata, err := proc.Userdmap8_inner(argstart, true)
+	if err != 0 || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
-		return 0, 0, false
+		// XXX
+		return 0, 0, -common.ENOSPC
 	}
 	for i, ptr := range argptrs {
 		writen(vdata, 8, i*8, ptr)
 	}
-	return len(args), argstart, true
+	return len(args), argstart, 0
 }
 
 func (s *syscall_t) Sys_exit(proc *common.Proc_t, tid common.Tid_t, status int) {
@@ -3382,14 +3398,16 @@ func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, ru
 	}
 	if isthread {
 		if statusp != 0 {
-			if !proc.Userwriten(statusp, 8, resp.Status) {
-				return int(-common.EFAULT)
+			err := proc.Userwriten(statusp, 8, resp.Status)
+			if err != 0 {
+				return int(err)
 			}
 		}
 	} else {
 		if statusp != 0 {
-			if !proc.Userwriten(statusp, 4, resp.Status) {
-				err = -common.EFAULT
+			err := proc.Userwriten(statusp, 4, resp.Status)
+			if err != 0 {
+				return int(err)
 			}
 		}
 		// update total child rusage
@@ -3802,12 +3820,9 @@ func sys_fcntl(proc *common.Proc_t, fdn, cmd, opt int) int {
 }
 
 func sys_truncate(proc *common.Proc_t, pathn int, newlen uint) int {
-	path, ok, toolong := proc.Userstr(pathn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
-	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
+	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
 	if err := badpath(path); err != 0 {
 		return int(err)
@@ -3847,14 +3862,11 @@ func sys_getcwd(proc *common.Proc_t, bufn, sz int) int {
 }
 
 func sys_chdir(proc *common.Proc_t, dirn int) int {
-	path, ok, toolong := proc.Userstr(dirn, fs.NAME_MAX)
-	if !ok {
-		return int(-common.EFAULT)
+	path, err := proc.Userstr(dirn, fs.NAME_MAX)
+	if err != 0 {
+		return int(err)
 	}
-	if toolong {
-		return int(-common.ENAMETOOLONG)
-	}
-	err := badpath(path)
+	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
@@ -4312,9 +4324,9 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	if _, ok := proc.Vmregion.Lookup(uintptr(hdr.vaddr)); ok {
 		panic("htf")
 		va := hdr.vaddr
-		pg, ok := proc.Userdmap8_inner(va, true)
-		if !ok {
-			panic("must be mapped")
+		pg, err := proc.Userdmap8_inner(va, true)
+		if err != 0 {
+			return err
 		}
 		mmapi, err := fops.Mmapi(hdr.fileoff, 1, false)
 		if err != 0 {
@@ -4352,9 +4364,9 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	bssva := hdr.vaddr + hdr.filesz
 	bsslen := hdr.memsz - hdr.filesz
 	if bssva&int(common.PGOFFSET) != 0 {
-		bpg, ok := proc.Userdmap8_inner(bssva, true)
-		if !ok {
-			return -common.ENOMEM
+		bpg, err := proc.Userdmap8_inner(bssva, true)
+		if err != 0 {
+			return err
 		}
 		if bsslen < len(bpg) {
 			bpg = bpg[:bsslen]
@@ -4372,7 +4384,7 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 
 // returns user address of read-only TLS, thread 0's TLS image, TLS size, and
 // success. caller must hold proc's pagemap lock.
-func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bool) {
+func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, common.Err_t) {
 	PT_LOAD := 1
 	PT_TLS := 7
 	istls := false
@@ -4392,7 +4404,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 		} else if hdr.etype == PT_LOAD && hdr.vaddr >= common.USERMIN {
 			err := segload(proc, entry, &hdr, f.Fops)
 			if err != 0 {
-				return 0, 0, 0, false
+				return 0, 0, 0, err
 			}
 		}
 	}
@@ -4415,20 +4427,20 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 			// initialized.
 			_, p_pg, ok := physmem.Refpg_new()
 			if !ok {
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 			_, ok = proc.Page_insert(freshtls+i, p_pg, perms,
 				true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 			// map fresh TLS for thread 0
 			nperms := perms | common.PTE_COW
 			_, ok = proc.Page_insert(t0tls+i, p_pg, nperms, true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, false
+				return 0, 0, 0, -common.ENOMEM
 			}
 		}
 		// copy TLS data to freshtls
@@ -4439,14 +4451,14 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 		for i := 0; i < tlscopylen; {
 			_src, p_pg, err := tlsvmi.Filepage(uintptr(tlsaddr + i))
 			if err != 0 {
-				return 0, 0, 0, false
+				return 0, 0, 0, err
 			}
 			off := (tlsaddr + i) & int(common.PGOFFSET)
 			src := common.Pg2bytes(_src)[off:]
-			bpg, ok := proc.Userdmap8_inner(freshtls+i, true)
-			if !ok {
+			bpg, err := proc.Userdmap8_inner(freshtls+i, true)
+			if err != 0 {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, false
+				return 0, 0, 0, err
 			}
 			left := tlscopylen - i
 			if len(src) > left {
@@ -4461,5 +4473,5 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, bo
 		// the first invalid word past the end of the tls
 		t0tls += tlssize
 	}
-	return freshtls, t0tls, tlssize, true
+	return freshtls, t0tls, tlssize, 0
 }

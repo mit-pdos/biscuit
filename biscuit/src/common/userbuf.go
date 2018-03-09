@@ -67,9 +67,9 @@ func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
 		va := ub.userva + ub.off
-		ubuf, ok := ub.proc.Userdmap8_inner(va, write)
-		if !ok {
-			return ret, -EFAULT
+		ubuf, err := ub.proc.Userdmap8_inner(va, write)
+		if err != 0 {
+			return ret, err
 		}
 		end := ub.off + len(ubuf)
 		if end > ub.len {
@@ -114,10 +114,13 @@ func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
 	for i := range iov.iovs {
 		elmsz := uint(16)
 		va := iovarn + uint(i)*elmsz
-		dstva, ok1 := proc.userreadn_inner(int(va), 8)
-		sz, ok2 := proc.userreadn_inner(int(va)+8, 8)
-		if !ok1 || !ok2 {
-			return -EFAULT
+		dstva, err := proc.userreadn_inner(int(va), 8)
+		if err != 0 {
+			return err
+		}
+		sz, err := proc.userreadn_inner(int(va)+8, 8)
+		if err != 0 {
+			return err
 		}
 		iov.iovs[i].uva = uint(dstva)
 		iov.iovs[i].sz = sz
