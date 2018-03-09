@@ -143,7 +143,7 @@ func (irc *refcache_t) Refdown(o obj_t, s string) bool {
 		}
 	}
 
-	defer irc.Unlock()
+	irc.Unlock()
 
 	return evicted
 }
