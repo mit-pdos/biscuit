@@ -455,7 +455,8 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 		}
 		pari, err := c.ilookup("..")
 		if err != 0 {
-			panic(".. must exist")
+			c.iunlock("do_fullpath_c")
+			return "", err
 		}
 		par, err := fs.icache.Iref(pari, "do_fullpath_par")
 		c.iunlock("do_fullpath_c")

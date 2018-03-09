@@ -252,9 +252,9 @@ func (c *console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t
 	kdata := kbd_get(sz)
 	ret, err := ub.Uiowrite(kdata)
 	if err != 0 || ret != len(kdata) {
-		panic("dropped keys")
+		fmt.Printf("dropped keys!\n")
 	}
-	return ret, 0
+	return ret, err
 }
 
 func (c *console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) {
@@ -2259,9 +2259,6 @@ func (bud *bud_t) bud_in(src common.Userio_i, from string, cmsg []uint8) (int, c
 	did, err := bud.dbuf.copyin(src, from)
 	bud._rready()
 	bud.Unlock()
-	if err != 0 && did != need {
-		panic("wut")
-	}
 	return did, err
 }
 

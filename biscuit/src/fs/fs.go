@@ -481,7 +481,8 @@ func (fs *Fs_t) _isancestor(anc, start *imemnode_t) common.Err_t {
 		here.ilock("_isancestor")
 		nexti, err := here.ilookup("..")
 		if err != 0 {
-			panic(".. must exist")
+			here.iunlock("_isancestor")
+			return err
 		}
 		if nexti == here.inum {
 			here.iunlock("_isancestor")
