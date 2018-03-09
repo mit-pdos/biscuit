@@ -837,9 +837,14 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			panic("yahoo")
 		} else if c == '@' {
 			runtime.Printres = !runtime.Printres
+		} else if c == '%' {
 			fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
 			runtime.Maxgot = 0
-		} else if c == '%' {
+			fmt.Printf("distinct simulated failures: %v\n",
+			    common.Resfail.Len())
+			common.Resfail.Enabled = !common.Resfail.Enabled
+			fmt.Printf("fail enabled: %v\n", common.Resfail.Enabled)
+
 			//loping()
 			//netdump()
 
@@ -1387,6 +1392,8 @@ var physmem *common.Physmem_t
 var thefs *fs.Fs_t
 
 func main() {
+	common.Kernel = true
+
 	// magic loop
 	//if rand.Int() != 0 {
 	//	for {

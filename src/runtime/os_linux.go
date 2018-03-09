@@ -3169,11 +3169,6 @@ func Setmaxheap(n int) {
 // returns true if the caller must evict their previous allocations (if any).
 // will use previous iterations reservation credit, if available.
 func Cacheres(_res int, init bool) bool {
-	// the FS running in user-mode can call memory reservation
-	// functions
-	if hackmode == 0 {
-		return true
-	}
 	res := int64(_res)
 	gp := getg()
 	used := gp.res.cacheallocs
@@ -3190,12 +3185,6 @@ func Getgot() int {
 }
 
 func Memreserve(_n int, rec bool) bool {
-	// the FS running in user-mode can call memory reservation
-	// functions
-	if hackmode == 0 {
-		return true
-	}
-
 	want := int64(_n)
 	g := getg()
 	if g.res.credit != 0 {
@@ -3211,12 +3200,6 @@ func Memreserve(_n int, rec bool) bool {
 }
 
 func Memresadd(_n int, rec bool) bool {
-	// the FS running in user-mode can call memory reservation
-	// functions
-	if hackmode == 0 {
-		return true
-	}
-
 	want := int64(_n)
 	g := getg()
 	if g.res.got <= 0 {
@@ -3259,12 +3242,6 @@ func _restake(want int64, rec bool) bool {
 }
 
 func Memunres() int {
-	// the FS running in user-mode can call memory reservation
-	// functions
-	if hackmode == 0 {
-		return 0
-	}
-
 	g := getg()
 	left := g.res.credit
 	used := g.res.got - left

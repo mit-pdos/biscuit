@@ -498,21 +498,47 @@ func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
 func Resbegin(c int) bool {
+	if !Kernel {
+		return true
+	}
 	return _reswait(c, false, true)
 }
+
+var Kernel bool
+
+var Resfail = Distinct_caller_t{Enabled: true}
+
+const resfail = true
 
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
 func Resadd(c int) bool {
+	if !Kernel {
+		return true
+	}
+	if ok, path := Resfail.Distinct(); resfail && ok {
+		fmt.Printf("failing: %s\n", path)
+		return false
+	}
 	return _reswait(c, true, true)
 }
 
 // for reservations when locks may be held; the caller should abort and retry.
 func Resadd_noblock(c int) bool {
+	if !Kernel {
+		return true
+	}
+	if ok, path := Resfail.Distinct(); resfail && ok {
+		fmt.Printf("failing: %s\n", path)
+		return false
+	}
 	return _reswait(c, true, false)
 }
 
 func Resend() {
+	if !Kernel {
+		return
+	}
 	runtime.Memunres()
 }
 
@@ -1279,12 +1305,18 @@ type Cacheallocs_t struct {
 
 // returns true if the caller must try to evict their recent cache allocations.
 func (ca *Cacheallocs_t) Shouldevict(res int) bool {
+	if !Kernel {
+		return false
+	}
 	init := !ca.initted
 	ca.initted = true
 	return !runtime.Cacheres(res, init)
 }
 
 func Kreswait(c int, name string) {
+	if !Kernel {
+		return
+	}
 	for !runtime.Memreserve(c, false) {
 		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
 		// XXX
@@ -1293,6 +1325,9 @@ func Kreswait(c int, name string) {
 }
 
 func Kunres() int {
+	if !Kernel {
+		return 0
+	}
 	return runtime.Memunres()
 }
 
@@ -1351,6 +1386,7 @@ func Callerdump() {
 // callers.
 type Distinct_caller_t struct {
 	sync.Mutex
+	Enabled	bool
 	did	map[uintptr]bool
 	Whitel	map[string]bool
 }
@@ -1368,11 +1404,21 @@ func (dc *Distinct_caller_t) _pchash(pcs []uintptr) uintptr {
 	return ret
 }
 
+func (dc *Distinct_caller_t) Len() int {
+	dc.Lock()
+	ret := len(dc.did)
+	dc.Unlock()
+	return ret
+}
+
 // returns true if the caller path is unique and is not white-listed and the
 // caller path as a string.
 func (dc *Distinct_caller_t) Distinct() (bool, string) {
 	dc.Lock()
 	defer dc.Unlock()
+	if !dc.Enabled {
+		return false, ""
+	}
 
 	if dc.did == nil {
 		dc.did = make(map[uintptr]bool)
@@ -1381,7 +1427,7 @@ func (dc *Distinct_caller_t) Distinct() (bool, string) {
 	var pcs []uintptr
 	for sz, got := 30, 30; got >= sz; sz *= 2 {
 		pcs = make([]uintptr, 30)
-		got = runtime.Callers(2, pcs)
+		got = runtime.Callers(3, pcs)
 		if got == 0 {
 			panic("no")
 		}
@@ -1398,10 +1444,11 @@ func (dc *Distinct_caller_t) Distinct() (bool, string) {
 				return false, ""
 			}
 			if fs == "" {
-				fs = fmt.Sprintf("%v (%v:%v)->\n", fr.Function,
+				fs = fmt.Sprintf("%v (%v:%v)\n", fr.Function,
 					fr.File, fr.Line)
 			} else {
-				fs += "\t" + fr.Function + "->\n"
+				fs += fmt.Sprintf("\t%v (%v:%v)\n", fr.Function,
+				    fr.File, fr.Line)
 			}
 			if !more || fr.Function == "runtime.goexit" {
 				break
