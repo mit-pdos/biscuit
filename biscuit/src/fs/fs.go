@@ -1401,3 +1401,7 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 	idm.ilock(s + "/fs_namei_locked")
 	return idm, 0
 }
+
+func (fs *Fs_t) evict() {
+	panic("yay")
+}

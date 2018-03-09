@@ -3166,7 +3166,28 @@ func Setmaxheap(n int) {
 	maxheap = int64(n)
 }
 
-func Memreserve(_n int) bool {
+// returns true if the caller must evict their previous allocations (if any).
+// will use previous iterations reservation credit, if available.
+func Cacheres(_res int, init bool) bool {
+	// the FS running in user-mode can call memory reservation
+	// functions
+	if hackmode == 0 {
+		return true
+	}
+	res := int64(_res)
+	gp := getg()
+	used := gp.res.cacheallocs
+	gp.res.cacheallocs = 0
+	if init {
+		used = res
+	}
+	if used < res {
+		res = used
+	}
+	return _restake(res, true)
+}
+
+func Memreserve(_n int, rec bool) bool {
 	// the FS running in user-mode can call memory reservation
 	// functions
 	if hackmode == 0 {
@@ -3176,12 +3197,18 @@ func Memreserve(_n int) bool {
 	want := int64(_n)
 	g := getg()
 	if g.res.credit != 0 {
-		pmsg("inconsistent state\n")
+		print("inconsistent state?\n")
+		pcbuf := make([]uintptr, 15)
+		got := callers(1, pcbuf)
+		pcbuf = pcbuf[:got]
+		for _, rip := range pcbuf {
+			print("\t", hex(rip), "\n")
+		}
 	}
-	return _restake(want)
+	return _restake(want, rec)
 }
 
-func Memresadd(_n int) bool {
+func Memresadd(_n int, rec bool) bool {
 	// the FS running in user-mode can call memory reservation
 	// functions
 	if hackmode == 0 {
@@ -3190,28 +3217,40 @@ func Memresadd(_n int) bool {
 
 	want := int64(_n)
 	g := getg()
-	if g.res.credit <= 0 {
-		pmsg("no res?\n")
+	if g.res.got <= 0 {
+		pcbuf := make([]uintptr, 15)
+		got := callers(1, pcbuf)
+		pcbuf = pcbuf[:got]
+		print("no res?\n")
+		for _, rip := range pcbuf {
+			print("\t", hex(rip), "\n")
+		}
 	}
-	return _restake(want)
+	return _restake(want, rec)
 }
 
-func _restake(want int64) bool {
+var Maxgot uintptr
+
+func _restake(want int64, rec bool) bool {
 	g := getg()
 	for {
 		v := atomic.Loadint64(&rescredit)
 		if want > v {
-			//if Printres {
-			//	print("failed to res ", want)
-			//}
 			return false
 		}
 		if atomic.Cas64((*uint64)(unsafe.Pointer(&rescredit)), uint64(v), uint64(v - want)) {
 			g.res.credit += want
 			g.res.got += want
-			//if Printres {
-			//	print("took ", want)
-			//}
+			dur := uintptr(g.res.got)
+			for rec {
+				v := atomic.Loaduintptr(&Maxgot)
+				if dur <= v {
+					break
+				}
+				if atomic.Casuintptr(&Maxgot, v, dur) {
+					break
+				}
+			}
 			return true
 		}
 	}
@@ -3225,20 +3264,10 @@ func Memunres() int {
 	}
 
 	g := getg()
-	if g.res.credit == 0 {
-		pmsg("No credit?\n")
-	}
 	left := g.res.credit
-	//if Printres && left != g.res.got {
-	//	print("used ", g.res.got - left)
-	//}
 	used := g.res.got - left
 	g.res.credit = 0
 	g.res.got = 0
-	if left < 0 {
-		pmsg("Give negative\n")
-		return -1
-	}
 	if left > 0 {
 		atomic.Xadd64((*uint64)(unsafe.Pointer(&rescredit)), left)
 	}

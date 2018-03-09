@@ -838,6 +838,8 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			panic("yahoo")
 		} else if c == '@' {
 			runtime.Printres = !runtime.Printres
+			fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
+			runtime.Maxgot = 0
 		} else if c == '%' {
 			//loping()
 			//netdump()
@@ -1505,6 +1507,7 @@ func main() {
 	thefs = fs
 
 	exec := func(cmd string, args []string) {
+		common.Resbegin(1 << 20)
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)

@@ -6,6 +6,7 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
+import "runtime"
 import "sync/atomic"
 
 import "common"
@@ -1147,8 +1148,14 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	// indirect/double-indirect itself when:
 	//	DBLOCKS+INADDR <= major DBLOCKS+INADDR+2
 
+	gimme := common.Bounds(common.B_IMEMNODE_T_IFREE)
+	first := true
 	remains := true
 	for remains {
+		if !runtime.Cacheres(gimme, first) {
+			idm.fs.evict()
+		}
+		first = false
 		idm.fs.fslog.Op_begin("ifree")
 
 		// set of blocks that will be written by this transaction;
@@ -1331,7 +1338,6 @@ func (icache *icache_t) freeDead() {
 		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
 	}
 	// XXX cache reservation
-	common.Resadd_noblock(1 << 20)
 	for len(icache.dead) > 0 {
 		imem := icache.dead[0]
 		icache.dead = icache.dead[1:]

@@ -401,6 +401,7 @@ type g struct {
 	res struct {
 		credit		int64
 		got		int64
+		cacheallocs	int64
 	}
 	current		unsafe.Pointer
 }

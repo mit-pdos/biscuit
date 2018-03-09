@@ -516,7 +516,7 @@ func _reswait(c int, incremental, block bool) bool {
 	if incremental {
 		f = runtime.Memresadd
 	}
-	for !f(c) {
+	for !f(c, true) {
 		p := Current()
 		if p.Doomed() {
 			// XXX exit heap memory/block cache pages reservation
@@ -1267,7 +1267,7 @@ func Tid_del() {
 }
 
 func Kreswait(c int, name string) {
-	for !runtime.Memreserve(c) {
+	for !runtime.Memreserve(c, false) {
 		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
 		// XXX
 		time.Sleep(1)
@@ -1279,11 +1279,12 @@ func Kunres() int {
 }
 
 func Kresdebug(c int, name string) {
-	Kreswait(c, name)
+	//Kreswait(c, name)
 }
 
 func Kunresdebug() int {
-	return Kunres()
+	//return Kunres()
+	return 0
 }
 
 func Current() *Proc_t {
