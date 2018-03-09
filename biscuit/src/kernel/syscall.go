@@ -3339,7 +3339,7 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 		if err := proc.K2user_inner(arg, uva+cnt); err != 0 {
 			// args take up more than a page? the user is on their
 			// own.
-			return 0, 0, -common.EFAULT
+			return 0, 0, err
 		}
 		cnt += len(arg)
 	}
