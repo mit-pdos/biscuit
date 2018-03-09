@@ -450,15 +450,14 @@ func (p *Proc_t) Page_remove(va int) bool {
 }
 
 // returns true if the pagefault was handled successfully
-func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) bool {
+func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) Err_t {
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
 	vmi, ok := p.Vmregion.Lookup(fa)
 	if !ok {
-		return false
+		return -EFAULT
 	}
-	ret := Sys_pgfault(p, vmi, fa, ecode) == 0
-	return ret
+	return Sys_pgfault(p, vmi, fa, ecode)
 }
 
 // flush TLB on all CPUs that may have this processes' pmap loaded
@@ -589,7 +588,9 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool
 		runtime.Gosched()
 	case PGFAULT:
 		faultaddr := uintptr(aux)
-		if !p.pgfault(tid, faultaddr, tf[TF_ERROR]) {
+		err := p.pgfault(tid, faultaddr, tf[TF_ERROR])
+		restart = err == -ENOHEAP
+		if err != 0 && !restart {
 			fmt.Printf("*** fault *** %v: addr %x, "+
 				"rip %x. killing...\n", p.Name, faultaddr,
 				tf[TF_RIP])
@@ -957,7 +958,7 @@ func (p *Proc_t) Userargs(uva int) ([]string, Err_t) {
 	curaddr := make([]uint8, 0, 8)
 	for !done {
 		if !Resadd(Bounds(B_PROC_T_USERARGS)) {
-			return nil, false
+			return nil, -ENOHEAP
 		}
 		ptrs, err := p.Userdmap8r(uva + uoff)
 		if err != 0 {
