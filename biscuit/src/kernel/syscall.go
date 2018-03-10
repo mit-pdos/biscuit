@@ -2174,10 +2174,6 @@ func (db *dgrambuf_t) copyout(dst, fromsa, cmsg common.Userio_i) (int, int, comm
 	if sz == 0 {
 		panic("huh?")
 	}
-	did, err := db.cbuf.copyout_n(dst, sz)
-	if err != 0 {
-		return 0, 0, err
-	}
 	var fdid int
 	if fromsa.Totalsz() != 0 {
 		fsaddr := _sockaddr_un(slot.from)
@@ -2186,6 +2182,10 @@ func (db *dgrambuf_t) copyout(dst, fromsa, cmsg common.Userio_i) (int, int, comm
 		if err != 0 {
 			return 0, 0, err
 		}
+	}
+	did, err := db.cbuf.copyout_n(dst, sz)
+	if err != 0 {
+		return 0, 0, err
 	}
 	// commit tail
 	db.tail++
