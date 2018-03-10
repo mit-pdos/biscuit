@@ -3345,6 +3345,22 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 		return int(err)
 	}
 
+	// put special struct on stack: fresh tls start, tls len, and tls0
+	// pointer
+	words := 4
+	buf := make([]uint8, words*8)
+	writen(buf, 8, 0, freshtls)
+	writen(buf, 8, 8, tlssz)
+	writen(buf, 8, 16, t0tls)
+	writen(buf, 8, 24, int(runtime.Pspercycle))
+	bufdest := stackva - words*8
+	tls0addr := bufdest + 2*8
+
+	if err := proc.K2user_inner(buf, bufdest); err != 0 {
+		restore()
+		return int(err)
+	}
+
 	// the exec must succeed now; free old pmap/mapped files
 	if op_pmap != 0 {
 		common.Uvmfree_inner(opmap, op_pmap, &ovmreg)
@@ -3362,20 +3378,6 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 				panic("close")
 			}
 		}
-	}
-
-	// put special struct on stack: fresh tls start, tls len, and tls0
-	// pointer
-	words := 4
-	buf := make([]uint8, words*8)
-	writen(buf, 8, 0, freshtls)
-	writen(buf, 8, 8, tlssz)
-	writen(buf, 8, 16, t0tls)
-	writen(buf, 8, 24, int(runtime.Pspercycle))
-	bufdest := stackva - words*8
-	tls0addr := bufdest + 2*8
-	if err := proc.K2user_inner(buf, bufdest); err != 0 {
-		panic("must succeed")
 	}
 
 	// commit new image state
