@@ -761,16 +761,14 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 	sz := min(src.Totalsz(), n)
 	newsz := offset + sz
 	c := 0
+	gimme := common.Bounds(common.B_IMEMNODE_T_IWRITE)
 	for c < sz {
+		if !common.Resadd_noblock(gimme) {
+			return c, -common.ENOHEAP
+		}
 		m := min(common.BSIZE-offset%common.BSIZE, sz-c)
 		fill := m != common.BSIZE
 		b, err := idm.off2buf(offset, m, true, fill, "iwrite")
-		gimme := common.Bounds(common.B_IMEMNODE_T_IWRITE)
-		if !common.Resadd_noblock(gimme) {
-			// restarting must be handled by ancestor caller
-			// (probably fsfops_t.Write)
-			err = -common.ENOHEAP
-		}
 		if err != 0 {
 			return c, err
 		}
