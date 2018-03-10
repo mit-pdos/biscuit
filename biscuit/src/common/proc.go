@@ -758,18 +758,18 @@ func (p *Proc_t) Lockassert_pmap() {
 	}
 }
 
-func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
+func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, Err_t) {
 	p.Lockassert_pmap()
 
 	voff := va & int(PGOFFSET)
 	uva := uintptr(va)
 	vmi, ok := p.Vmregion.Lookup(uva)
 	if !ok {
-		return nil, false
+		return nil, -EFAULT
 	}
 	pte, ok := vmi.ptefor(p.Pmap, uva)
 	if !ok {
-		return nil, false
+		return nil, -ENOMEM
 	}
 	ecode := uintptr(PTE_U)
 	needfault := true
@@ -793,26 +793,26 @@ func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, bool) {
 	}
 
 	if needfault {
-		if Sys_pgfault(p, vmi, uva, ecode) != 0 {
-			return nil, false
+		if err := Sys_pgfault(p, vmi, uva, ecode); err != 0 {
+			return nil, err
 		}
 	}
 
 	pg := Physmem.Dmap(*pte & PTE_ADDR)
 	bpg := Pg2bytes(pg)
-	return bpg[voff:], true
+	return bpg[voff:], 0
 }
 
 // _userdmap8 and userdmap8r functions must only be used if concurrent
 // modifications to the Proc_t's address space is impossible.
-func (p *Proc_t) _userdmap8(va int, k2u bool) ([]uint8, bool) {
+func (p *Proc_t) _userdmap8(va int, k2u bool) ([]uint8, Err_t) {
 	p.Lock_pmap()
-	ret, ok := p.Userdmap8_inner(va, k2u)
+	ret, err := p.Userdmap8_inner(va, k2u)
 	p.Unlock_pmap()
-	return ret, ok
+	return ret, err
 }
 
-func (p *Proc_t) Userdmap8r(va int) ([]uint8, bool) {
+func (p *Proc_t) Userdmap8r(va int) ([]uint8, Err_t) {
 	return p._userdmap8(va, false)
 }
 
@@ -824,25 +824,25 @@ func (p *Proc_t) usermapped(va, n int) bool {
 	return ok
 }
 
-func (p *Proc_t) Userreadn(va, n int) (int, bool) {
+func (p *Proc_t) Userreadn(va, n int) (int, Err_t) {
 	p.Lock_pmap()
 	a, b := p.userreadn_inner(va, n)
 	p.Unlock_pmap()
 	return a, b
 }
 
-func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
+func (p *Proc_t) userreadn_inner(va, n int) (int, Err_t) {
 	p.Lockassert_pmap()
 	if n > 8 {
 		panic("large n")
 	}
 	var ret int
 	var src []uint8
-	var ok bool
+	var err Err_t
 	for i := 0; i < n; i += len(src) {
-		src, ok = p.Userdmap8_inner(va+i, false)
-		if !ok {
-			return 0, false
+		src, err = p.Userdmap8_inner(va+i, false)
+		if err != 0 {
+			return 0, err
 		}
 		l := n - i
 		if len(src) < l {
@@ -851,10 +851,10 @@ func (p *Proc_t) userreadn_inner(va, n int) (int, bool) {
 		v := Readn(src, l, 0)
 		ret |= v << (8 * uint(i))
 	}
-	return ret, true
+	return ret, 0
 }
 
-func (p *Proc_t) Userwriten(va, n, val int) bool {
+func (p *Proc_t) Userwriten(va, n, val int) Err_t {
 	if n > 8 {
 		panic("large n")
 	}
@@ -863,52 +863,53 @@ func (p *Proc_t) Userwriten(va, n, val int) bool {
 	var dst []uint8
 	for i := 0; i < n; i += len(dst) {
 		v := val >> (8 * uint(i))
-		t, ok := p.Userdmap8_inner(va+i, true)
+		t, err := p.Userdmap8_inner(va+i, true)
 		dst = t
-		if !ok {
-			return false
+		if err != 0 {
+			return err
 		}
 		Writen(dst, n-i, 0, v)
 	}
-	return true
+	return 0
 }
 
-// first ret value is the string from user space
-// second ret value is whether or not the string is mapped
-// third ret value is whether the string length is less than lenmax
-func (p *Proc_t) Userstr(uva int, lenmax int) (string, bool, bool) {
+// first ret value is the string from user space second is error
+func (p *Proc_t) Userstr(uva int, lenmax int) (string, Err_t) {
 	if lenmax < 0 {
-		return "", false, false
+		return "", 0
 	}
 	p.Lock_pmap()
 	defer p.Unlock_pmap()
 	i := 0
 	var s string
 	for {
-		str, ok := p.Userdmap8_inner(uva+i, false)
-		if !ok {
-			return "", false, false
+		str, err := p.Userdmap8_inner(uva+i, false)
+		if err != 0 {
+			return "", err
 		}
 		for j, c := range str {
 			if c == 0 {
 				s = s + string(str[:j])
-				return s, true, false
+				return s, 0
 			}
 		}
 		s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
-			return "", true, true
+			return "", -ENAMETOOLONG
 		}
 	}
 }
 
 func (p *Proc_t) Usertimespec(va int) (time.Duration, time.Time, Err_t) {
-	secs, ok1 := p.Userreadn(va, 8)
-	nsecs, ok2 := p.Userreadn(va+8, 8)
 	var zt time.Time
-	if !ok1 || !ok2 {
-		return 0, zt, -EFAULT
+	secs, err := p.Userreadn(va, 8)
+	if err != 0 {
+		return 0, zt, err
+	}
+	nsecs, err := p.Userreadn(va+8, 8)
+	if err != 0 {
+		return 0, zt, err
 	}
 	if secs < 0 || nsecs < 0 {
 		return 0, zt, -EINVAL
@@ -919,9 +920,9 @@ func (p *Proc_t) Usertimespec(va int) (time.Duration, time.Time, Err_t) {
 	return tot, t, 0
 }
 
-func (p *Proc_t) Userargs(uva int) ([]string, bool) {
+func (p *Proc_t) Userargs(uva int) ([]string, Err_t) {
 	if uva == 0 {
-		return nil, true
+		return nil, 0
 	}
 	isnull := func(cptr []uint8) bool {
 		for _, b := range cptr {
@@ -933,9 +934,9 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 	}
 	ret := make([]string, 0)
 	argmax := 64
-	addarg := func(cptr []uint8) bool {
+	addarg := func(cptr []uint8) Err_t {
 		if len(ret) > argmax {
-			return false
+			return -ENAMETOOLONG
 		}
 		var uva int
 		// cptr is little-endian
@@ -943,12 +944,12 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 			uva = uva | int(uint(b))<<uint(i*8)
 		}
 		lenmax := 128
-		str, ok, long := p.Userstr(uva, lenmax)
-		if !ok || long {
-			return false
+		str, err := p.Userstr(uva, lenmax)
+		if err != 0 {
+			return err
 		}
 		ret = append(ret, str)
-		return true
+		return 0
 	}
 	uoff := 0
 	psz := 8
@@ -958,9 +959,9 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 		if !Resadd(Bounds(B_PROC_T_USERARGS)) {
 			return nil, false
 		}
-		ptrs, ok := p.Userdmap8r(uva + uoff)
-		if !ok {
-			return nil, false
+		ptrs, err := p.Userdmap8r(uva + uoff)
+		if err != 0 {
+			return nil, err
 		}
 		for _, ab := range ptrs {
 			curaddr = append(curaddr, ab)
@@ -969,15 +970,15 @@ func (p *Proc_t) Userargs(uva int) ([]string, bool) {
 					done = true
 					break
 				}
-				if !addarg(curaddr) {
-					return nil, false
+				if err := addarg(curaddr); err != 0 {
+					return nil, err
 				}
 				curaddr = curaddr[0:0]
 			}
 		}
 		uoff += len(ptrs)
 	}
-	return ret, true
+	return ret, 0
 }
 
 // copies src to the user virtual address uva. may copy part of src if uva +
@@ -998,10 +999,9 @@ func (p *Proc_t) K2user_inner(src []uint8, uva int) Err_t {
 		if !Resadd_noblock(gimme) {
 			return -ENOHEAP
 		}
-		dst, ok := p.Userdmap8_inner(uva+cnt, true)
-		if !ok {
-			// XXX: could be -ENOMEM; teach userdmap error codes
-			return -EFAULT
+		dst, err := p.Userdmap8_inner(uva+cnt, true)
+		if err != 0 {
+			return err
 		}
 		ub := len(src)
 		if ub > len(dst) {
@@ -1030,10 +1030,9 @@ func (p *Proc_t) User2k_inner(dst []uint8, uva int) Err_t {
 		if !Resadd_noblock(gimme) {
 			return -ENOHEAP
 		}
-		src, ok := p.Userdmap8_inner(uva+cnt, false)
-		if !ok {
-			// XXX: could be -ENOMEM; teach userdmap error codes
-			return -EFAULT
+		src, err := p.Userdmap8_inner(uva+cnt, false)
+		if err != 0 {
+			return err
 		}
 		did := copy(dst, src)
 		dst = dst[did:]
