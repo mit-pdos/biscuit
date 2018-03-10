@@ -328,8 +328,7 @@ pipe1(void)
       for(i = 0; i < 1033; i++)
         buf[i] = seq++;
       if(write(fds[1], buf, 1033) != 1033){
-        printf("pipe1 oops 1\n");
-        exit(0);
+        errx(-1, "pipe1 oops 1\n");
       }
     }
     exit(0);
@@ -340,8 +339,7 @@ pipe1(void)
     while((n = read(fds[0], buf, cc)) > 0){
       for(i = 0; i < n; i++){
         if((buf[i] & 0xff) != (seq++ & 0xff)){
-          printf("pipe1 oops 2\n");
-          return;
+          errx(-1, "pipe1 oops 2\n");
         }
       }
       total += n;
@@ -356,8 +354,7 @@ pipe1(void)
     close(fds[0]);
     wait(NULL);
   } else {
-    printf("fork() failed\n");
-    exit(0);
+    err(-1, "fork() failed\n");
   }
   printf("pipe1 ok\n");
 }
