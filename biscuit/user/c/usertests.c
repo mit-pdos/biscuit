@@ -312,6 +312,8 @@ exectest(void)
 void
 pipe1(void)
 {
+  if (1033 > PIPE_BUF)
+    errx(-1, "need to write 1033 bytes atomically");
   int fds[2], pid;
   int seq, i, n, cc, total;
   printf("pipe1 test\n");

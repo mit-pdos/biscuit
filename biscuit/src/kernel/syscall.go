@@ -890,6 +890,15 @@ func (o *pipe_t) pipe_start() {
 }
 
 func (o *pipe_t) op_write(src common.Userio_i, noblock bool) (int, common.Err_t) {
+	const pipe_buf = 4096
+	need := src.Remain()
+	if need > pipe_buf {
+		if noblock {
+			need = 1
+		} else {
+			need = pipe_buf
+		}
+	}
 	o.Lock()
 	for {
 		if o.closed {
@@ -900,7 +909,7 @@ func (o *pipe_t) op_write(src common.Userio_i, noblock bool) (int, common.Err_t)
 			o.Unlock()
 			return 0, -common.EPIPE
 		}
-		if !o.cbuf.full() {
+		if o.cbuf.left() >= need {
 			break
 		}
 		if noblock {

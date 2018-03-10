@@ -81,6 +81,7 @@ extern "C" {
 #define		FORK_THREAD	0x2
 
 #define		MAXBUF		4096
+#define		PIPE_BUF	4096
 
 #define		MAJOR(x)	((long)((ulong)x >> 40))
 #define		MINOR(x)	((long)(((ulong)x >> 32) & 0xff))
