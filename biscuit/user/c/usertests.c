@@ -3623,6 +3623,139 @@ logtest()
   printf("log test OK\n");
 }
 
+enum {
+	KREAD,
+	KWRITE,
+	KACCEPT,
+	KFUTEX,
+	KWAIT,
+	KPOLL,
+};
+
+static void guineapig(int fd, int op)
+{
+	char buf[4096*2];
+	struct sockaddr_in saddr;
+	socklen_t slen = sizeof(saddr);
+	pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
+	pid_t par;
+
+	switch (op) {
+	case KREAD:
+		read(fd, buf, sizeof buf);
+		break;
+	case KWRITE:
+		write(fd, buf, sizeof buf);
+		break;
+	case KACCEPT:
+		accept(fd, (struct sockaddr *)&saddr, &slen);
+		break;
+	case KFUTEX:
+		pthread_mutex_lock(&mut);
+		pthread_mutex_lock(&mut);
+		break;
+	case KWAIT:
+		par = getpid();
+		switch (fork()) {
+		case -1:
+			err(-1, "fork");
+		case 0:
+			sleep(1);
+			if (kill(par) == -1)
+				err(-1, "kill");
+			sleep(5);
+			exit(0);
+		}
+		wait(NULL);
+		break;
+	case KPOLL:
+		if (poll(NULL, 0, -1) == -1)
+			err(-1, "poll");
+		break;
+	default:
+		errx(-1, "no op");
+	}
+
+	errx(-1, "child op returned %d", op);
+}
+
+static void kill1(int fd, int op)
+{
+	pid_t kc = fork();
+	switch (kc) {
+	case -1:
+		err(-1, "fork");
+	case 0:
+		guineapig(fd, op);
+	default:
+		{
+		// wait for child to hopefully block in syscall
+		usleep(500000);
+		if (op != KWAIT)
+			kill(kc);
+
+		int died = 0;
+		for (int i = 0; i < 3000/10; i++) {
+			int status;
+			pid_t r = waitpid(kc, &status, WNOHANG);
+			if (r == -1)
+				err(-1, "waitpid");
+			if (r == kc) {
+				if (WIFEXITED(status))
+					errx(-1, "exited?");
+				died = 1;
+				break;
+			}
+			usleep(10000);
+		}
+		if (!died)
+			errx(-1, "killed child still lives!");
+		}
+	}
+}
+
+void killtest(void)
+{
+	printf("kill test\n");
+
+	int pip[2];
+	if (pipe(pip) == -1)
+		err(-1, "pipe");
+
+	kill1(pip[0], KREAD);
+	kill1(pip[1], KWRITE);
+	close(pip[0]);
+	close(pip[1]);
+
+	int sp[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == -1)
+		err(-1, "socketpair");
+
+	kill1(sp[0], KREAD);
+	kill1(sp[1], KWRITE);
+	close(sp[0]);
+	close(sp[1]);
+
+	int s = socket(AF_INET, SOCK_STREAM, 0);
+	if (s == -1)
+		err(-1, "socket");
+	struct sockaddr_in saddr = {};
+	saddr.sin_family = AF_INET;
+	saddr.sin_addr.s_addr = INADDR_ANY;
+	saddr.sin_port = htons(8080);
+	if (bind(s, (struct sockaddr *)&saddr, sizeof saddr) == -1)
+		err(-1, "bind");
+	if (listen(s, 10) == -1)
+		err(-1, "listen");
+
+	kill1(s, KACCEPT);
+	close(s);
+
+	kill1(-1, KFUTEX);
+	kill1(-1, KWAIT);
+
+	printf("kill test passed\n");
+}
 
 int
 main(int argc, char *argv[])
@@ -3708,6 +3841,8 @@ main(int argc, char *argv[])
   mkstemptest();
   getppidtest();
   mmaptest();
+
+  killtest();
 
   exectest();
 
