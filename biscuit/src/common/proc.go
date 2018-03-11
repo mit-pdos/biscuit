@@ -9,7 +9,17 @@ import "runtime"
 import "math/rand"
 
 type Tnote_t struct {
+	// XXX "alive" should be "terminated"
 	alive bool
+	killed bool
+	// protects killed, Killnaps.Cond and Kerr, and is a leaf lock
+	sync.Mutex
+	proc	*Proc_t
+	Killnaps struct {
+		Killch	chan bool
+		Cond	*sync.Cond
+		Kerr	Err_t
+	}
 }
 
 type Threadinfo_t struct {
@@ -554,7 +564,7 @@ func _reswait(c int, incremental, block bool) bool {
 		f = runtime.Memresadd
 	}
 	for !f(c, true) {
-		p := Current()
+		p := Current().proc
 		if p.Doomed() {
 			// XXX exit heap memory/block cache pages reservation
 			fmt.Printf("Slain!\n")
@@ -568,6 +578,29 @@ func _reswait(c int, incremental, block bool) bool {
 		time.Sleep(1)
 	}
 	return true
+}
+
+// returns non-zero if this calling process has been killed and the caller
+// should finish the system call.
+func KillableWait(cond *sync.Cond) Err_t {
+	mynote := Current()
+
+	// ensure the sleep is atomic w.r.t. killed flag and kn.Cond writes
+	// from killer
+	mynote.Lock()
+	if mynote.killed {
+		ret := mynote.Killnaps.Kerr
+		mynote.Unlock()
+		if ret == 0 {
+			panic("must be non-zero")
+		}
+		return ret
+	}
+
+	mynote.Killnaps.Cond = cond
+	// WaitWith() unlocks mynote after adding us to sleep queue. neat huh?
+	cond.WaitWith(mynote)
+	return mynote.Killnaps.Kerr
 }
 
 // returns true if the kernel may safely use a "fast" resume and whether the
@@ -618,7 +651,6 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool
 }
 
 func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
-	SetCurrent(p)
 
 	p.Threadi.Lock()
 	mynote, ok := p.Threadi.Notes[tid]
@@ -628,6 +660,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 	if !ok {
 		panic("note must exist")
 	}
+	SetCurrent(mynote)
 
 	var fxbuf *[64]uintptr
 	const runonly = 14 << 10
@@ -649,7 +682,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 			uintptr(p.P_pmap), fastret, refp)
 
 		// XXX debug
-		if Current() != p {
+		if Current() != mynote {
 			panic("oh wtf")
 		}
 
@@ -680,7 +713,9 @@ func (p *Proc_t) Sched_add(tf *[TFSIZE]uintptr, tid Tid_t) {
 
 func (p *Proc_t) _thread_new(t Tid_t) {
 	p.Threadi.Lock()
-	p.Threadi.Notes[t] = &Tnote_t{alive: true}
+	tnote := &Tnote_t{alive: true, proc: p}
+	tnote.Killnaps.Killch = make(chan bool, 1)
+	p.Threadi.Notes[t] = tnote
 	p.Threadi.Unlock()
 }
 
@@ -711,6 +746,7 @@ func (p *Proc_t) Thread_count() int {
 
 // terminate a single thread
 func (p *Proc_t) Thread_dead(tid Tid_t, status int, usestatus bool) {
+	ClearCurrent()
 	// XXX exit process if thread is thread0, even if other threads exist
 	p.Threadi.Lock()
 	ti := &p.Threadi
@@ -743,7 +779,30 @@ func (p *Proc_t) Thread_dead(tid Tid_t, status int, usestatus bool) {
 }
 
 func (p *Proc_t) Doomall() {
+
 	p.doomed = true
+
+	// XXX skip if this process has one thread
+	p.Threadi.Lock()
+	for _, tnote := range p.Threadi.Notes {
+		tnote.Lock()
+
+		tnote.killed = true
+		kn := &tnote.Killnaps
+		if kn.Kerr == 0 {
+			kn.Kerr = -EINTR
+		}
+		select {
+		case kn.Killch <- false:
+		default:
+		}
+		if tmp := kn.Cond; tmp != nil {
+			tmp.Broadcast()
+		}
+
+		tnote.Unlock()
+	}
+	p.Threadi.Unlock()
 }
 
 func (p *Proc_t) Lock_pmap() {
@@ -1362,16 +1421,16 @@ func Kunresdebug() int {
 	return 0
 }
 
-func Current() *Proc_t {
+func Current() *Tnote_t {
 	_p := runtime.Gptr()
 	if _p == nil {
 		panic("nuts")
 	}
-	ret := (*Proc_t)(_p)
+	ret := (*Tnote_t)(_p)
 	return ret
 }
 
-func SetCurrent(p *Proc_t) {
+func SetCurrent(p *Tnote_t) {
 	if p == nil {
 		panic("nuts")
 	}
@@ -1380,6 +1439,13 @@ func SetCurrent(p *Proc_t) {
 	}
 	_p := (unsafe.Pointer)(p)
 	runtime.Setgptr(_p)
+}
+
+func ClearCurrent() {
+	if runtime.Gptr() == nil {
+		panic("nuts")
+	}
+	runtime.Setgptr(nil)
 }
 
 func Callerdump() {

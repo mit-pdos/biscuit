@@ -117,11 +117,18 @@ func (pm *Pollmsg_t) Pm_wait(to int) (bool, Err_t) {
 	if to != -1 {
 		tochan = time.After(time.Duration(to) * time.Millisecond)
 	}
+	kn := &Current().Killnaps
+
 	var timeout bool
 	select {
 	case <-pm.notif:
 	case <-tochan:
 		timeout = true
+	case <-kn.Killch:
+		if kn.Kerr == 0 {
+			panic("eh?")
+		}
+		return false, kn.Kerr
 	}
 	return timeout, 0
 }

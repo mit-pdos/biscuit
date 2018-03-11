@@ -249,7 +249,10 @@ var console = &console_t{}
 
 func (c *console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
 	sz := ub.Remain()
-	kdata := kbd_get(sz)
+	kdata, err := kbd_get(sz)
+	if err != 0 {
+		return 0, err
+	}
 	ret, err := ub.Uiowrite(kdata)
 	if err != 0 || ret != len(kdata) {
 		fmt.Printf("dropped keys!\n")
@@ -796,7 +799,7 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 		// otherwise, wait for a notification
 		timedout, err := pm.Pm_wait(timeout)
 		if err != 0 {
-			panic("must succeed")
+			return int(err)
 		}
 		if timedout {
 			return 0
@@ -921,7 +924,10 @@ func (o *pipe_t) op_write(src common.Userio_i, noblock bool) (int, common.Err_t)
 			o.Unlock()
 			return 0, -common.EWOULDBLOCK
 		}
-		o.wcond.Wait()
+		if err := common.KillableWait(o.wcond); err != 0 {
+			o.Unlock()
+			return 0, err
+		}
 	}
 	ret, err := o.cbuf.copyin(src)
 	if err != 0 {
@@ -949,7 +955,10 @@ func (o *pipe_t) op_read(dst common.Userio_i, noblock bool) (int, common.Err_t) 
 			o.Unlock()
 			return 0, -common.EWOULDBLOCK
 		}
-		o.rcond.Wait()
+		if err := common.KillableWait(o.rcond); err != 0 {
+			o.Unlock()
+			return 0, err
+		}
 	}
 	ret, err := o.cbuf.copyout(dst)
 	if err != 0 {
@@ -1027,9 +1036,10 @@ func (o *pipe_t) op_fdadd(nfd *common.Fd_t) common.Err_t {
 	o.Lock()
 	defer o.Unlock()
 
-	// KILL HERE
 	for !o.passfds.add(nfd) {
-		o.wcond.Wait()
+		if err := common.KillableWait(o.wcond); err != 0 {
+			return err
+		}
 	}
 	return 0
 }
@@ -1394,9 +1404,17 @@ func sys_nanosleep(proc *common.Proc_t, sleeptsn, remaintsn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	<-time.After(tot)
-
-	return 0
+	tochan := time.After(tot)
+	kn := &common.Current().Killnaps
+	select {
+	case <-tochan:
+		return 0
+	case <-kn.Killch:
+		if kn.Kerr == 0 {
+			panic("no")
+		}
+		return int(kn.Kerr)
+	}
 }
 
 func sys_getpid(proc *common.Proc_t, tid common.Tid_t) int {
@@ -2268,7 +2286,10 @@ func (bud *bud_t) bud_in(src common.Userio_i, from string, cmsg []uint8) (int, c
 		if bud.dbuf._canhold(need) || bud.closed {
 			break
 		}
-		bud.cond.Wait()
+		if err := common.KillableWait(bud.cond); err != 0 {
+			bud.Unlock()
+			return 0, err
+		}
 	}
 	did, err := bud.dbuf.copyin(src, from)
 	bud._rready()
@@ -2292,7 +2313,10 @@ func (bud *bud_t) bud_out(dst, fromsa, cmsg common.Userio_i) (int, int, int,
 		if bud.dbuf._havedgram() {
 			break
 		}
-		bud.cond.Wait()
+		if err := common.KillableWait(bud.cond); err != 0 {
+			bud.Unlock()
+			return 0, 0, 0, 0, err
+		}
 	}
 	ddid, fdid, err := bud.dbuf.copyout(dst, fromsa, cmsg)
 	bud._wready()
@@ -2808,8 +2832,10 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 	if getacceptor {
 		susl.readyconnectors++
 	}
-	b.cond.Wait()
-	err := b.err
+	err := common.KillableWait(b.cond)
+	if err == 0 {
+		err = b.err
+	}
 	if getacceptor {
 		theirs = b.acc
 	} else {
@@ -3450,7 +3476,7 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 }
 
 func (s *syscall_t) Sys_exit(proc *common.Proc_t, tid common.Tid_t, status int) {
-	// set doomed to all other threads die
+	// set doomed so all other threads die
 	proc.Doomall()
 	proc.Thread_dead(tid, status, true)
 }
@@ -3888,9 +3914,17 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 		}
 	}
 
+	kn := &common.Current().Killnaps
 	fut.cmd <- fm
-	ret := <-fm.ack
-	return ret
+	select {
+	case ret := <-fm.ack:
+		return ret
+	case <- kn.Killch:
+		if kn.Kerr == 0 {
+			panic("no")
+		}
+		return int(kn.Kerr)
+	}
 }
 
 func sys_gettid(proc *common.Proc_t, tid common.Tid_t) int {

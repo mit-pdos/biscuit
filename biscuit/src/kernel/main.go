@@ -919,14 +919,22 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	}
 }
 
-// reads keyboard data, blocking for at least 1 byte. returns at most cnt
-// bytes.
-func kbd_get(cnt int) []byte {
+// reads keyboard data, blocking for at least 1 byte or until killed. returns
+// at most cnt bytes.
+func kbd_get(cnt int) ([]byte, common.Err_t) {
 	if cnt < 0 {
 		panic("negative cnt")
 	}
-	cons.reqc <- cnt
-	return <-cons.reader
+	kn := &common.Current().Killnaps
+	select {
+	case cons.reqc <- cnt:
+	case <- kn.Killch:
+		if kn.Kerr == 0 {
+			panic("must be non-zero")
+		}
+		return nil, kn.Kerr
+	}
+	return <-cons.reader, 0
 }
 
 func attach_devs() int {

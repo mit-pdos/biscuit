@@ -183,6 +183,8 @@ func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
 			return zw, 0
 		}
 		// wait for someone to exit
-		w.cond.Wait()
+		if err := KillableWait(w.cond); err != 0 {
+			return zw, err
+		}
 	}
 }

@@ -2039,14 +2039,16 @@ func (tc *tcptcb_t) tcb_unlock() {
 }
 
 // waits on the receive buffer conditional variable
-func (tc *tcptcb_t) rbufwait() {
-	tc.rxbuf.cond.Wait()
+func (tc *tcptcb_t) rbufwait() common.Err_t {
+	ret := common.KillableWait(tc.rxbuf.cond)
 	tc.locked = true
+	return ret
 }
 
-func (tc *tcptcb_t) tbufwait() {
-	tc.txbuf.cond.Wait()
+func (tc *tcptcb_t) tbufwait() common.Err_t {
+	ret := common.KillableWait(tc.txbuf.cond)
 	tc.locked = true
+	return ret
 }
 
 func (tc *tcptcb_t) _sanity() {
@@ -3401,7 +3403,9 @@ func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Er
 			err = -common.EAGAIN
 			break
 		}
-		tf.tcb.rbufwait()
+		if err = tf.tcb.rbufwait(); err != 0 {
+			break
+		}
 	}
 	tf.tcb.tcb_unlock()
 	return read, err
@@ -3446,7 +3450,9 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.E
 			}
 			break
 		}
-		tf.tcb.tbufwait()
+		if err = tf.tcb.tbufwait(); err != 0 {
+			break
+		}
 	}
 	tf.tcb.tcb_unlock()
 	return wrote, err
@@ -3542,7 +3548,9 @@ func (tf *tcpfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	var ret common.Err_t
 	if blk {
 		for tcb.state == SYNSENT || tcb.state == SYNRCVD {
-			tcb.rbufwait()
+			if err := tcb.rbufwait(); err != 0 {
+				return err
+			}
 		}
 		if tcb.state != ESTAB && tcb.state != CLOSED {
 			panic("unexpected state")
@@ -3859,7 +3867,9 @@ func (tl *tcplfops_t) Accept(proc *common.Proc_t, saddr common.Userio_i) (common
 		if noblk {
 			return nil, 0, -common.EAGAIN
 		}
-		tl.tcl.rcons.cond.Wait()
+		if err := common.KillableWait(tl.tcl.rcons.cond); err != 0 {
+			return nil, 0, err
+		}
 	}
 
 	fops := &tcpfops_t{tcb: tcb, options: tl.options}

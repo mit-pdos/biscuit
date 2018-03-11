@@ -58,6 +58,15 @@ func (c *Cond) Wait() {
 	c.L.Lock()
 }
 
+func (c *Cond) WaitWith(l2 Locker) {
+	c.checker.check()
+	t := runtime_notifyListAdd(&c.notify)
+	c.L.Unlock()
+	l2.Unlock()
+	runtime_notifyListWait(&c.notify, t)
+	c.L.Lock()
+}
+
 // Signal wakes one goroutine waiting on c, if there is any.
 //
 // It is allowed but not required for the caller to hold c.L
