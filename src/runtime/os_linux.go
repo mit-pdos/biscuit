@@ -2435,6 +2435,10 @@ func irqsched_m(gp *g) {
 		throw("bad irq " + string(irq))
 	}
 
+	// dropg() before taking spinlock since it can split the stack
+	pp := gp.m.p.ptr()
+	dropg()
+
 	fl := Pushcli()
 	Splock(&_irqv.slock)
 
@@ -2464,18 +2468,18 @@ func irqsched_m(gp *g) {
 	}
 
 	_irqv.handlers[irq].started = start
+
 	// _Gscan shouldn't be set since gp's status is running
 	casgstatus(gp, _Grunning, nstatus)
-	pp := gp.m.p.ptr()
-	dropg()
+	Spunlock(&_irqv.slock)
+	Popcli(fl)
 
+	// call runqput() only after re-enabling interrupts since runqput() can
+	// split the stack
 	if !sleeping {
 		// casgstatus must happen before runqput
 		runqput(pp, gp, true)
 	}
-
-	Spunlock(&_irqv.slock)
-	Popcli(fl)
 
 	schedule()
 }
