@@ -3662,6 +3662,13 @@ const (
 	_FUTEX_CNDTAKE = 4
 )
 
+func (f *futex_t) _resume(ack chan int, err common.Err_t) {
+	select {
+	case ack <- int(err):
+	default:
+	}
+}
+
 func (f *futex_t) futex_start() {
 	common.Kresdebug(1<<10, "futex daemon")
 	maxwait := 10
@@ -3670,7 +3677,7 @@ func (f *futex_t) futex_start() {
 	f._tos = make([]_futto_t, 0, maxwait)
 	f.tos = f._tos
 
-	pack := make(chan int)
+	pack := make(chan int, 1)
 	opencount := 1
 	for opencount > 0 {
 		common.Kunresdebug()
@@ -3686,17 +3693,17 @@ func (f *futex_t) futex_start() {
 			case common.FUTEX_SLEEP:
 				val, err := fm.fumem.futload()
 				if err != 0 {
-					fm.ack <- int(err)
+					f._resume(fm.ack, err)
 					break
 				}
 				if val != fm.aux {
 					// owner just unlocked and it's this
 					// thread's turn; don't sleep
-					fm.ack <- 0
+					f._resume(fm.ack, 0)
 				} else {
 					if (fm.useto && len(f.tos) >= maxwait) ||
 						len(f.cnds) >= maxwait {
-						fm.ack <- int(-common.ENOMEM)
+						f._resume(fm.ack, -common.ENOMEM)
 						break
 					}
 					if fm.useto {
@@ -3714,7 +3721,7 @@ func (f *futex_t) futex_start() {
 					panic("weird wake n")
 				}
 				f.cndwake(v)
-				fm.ack <- 0
+				f._resume(fm.ack, 0)
 			case common.FUTEX_CNDGIVE:
 				// as an optimization to avoid thundering herd
 				// after pthread_cond_broadcast(3), move
@@ -3722,7 +3729,7 @@ func (f *futex_t) futex_start() {
 				// the mutex of the thread we wakeup here.
 				l := len(f.cnds)
 				if l == 0 {
-					fm.ack <- 0
+					f._resume(fm.ack, 0)
 					break
 				}
 				here := make([]chan int, l)
@@ -3741,7 +3748,7 @@ func (f *futex_t) futex_start() {
 					f.cnds = f._cnds
 					f.tos = f._tos
 				}
-				fm.ack <- err
+				f._resume(fm.ack, common.Err_t(err))
 			case _FUTEX_CNDTAKE:
 				// add new waiters to our queue; get them
 				// tickets
@@ -3749,12 +3756,12 @@ func (f *futex_t) futex_start() {
 				tohere := fm.totake
 				if len(f.cnds)+len(here) >= maxwait ||
 					len(f.tos)+len(tohere) >= maxwait {
-					fm.ack <- int(-common.ENOMEM)
+					f._resume(fm.ack, -common.ENOMEM)
 					break
 				}
 				f.cnds = append(f.cnds, here...)
 				f.tos = append(f.tos, tohere...)
-				fm.ack <- 0
+				f._resume(fm.ack, 0)
 			default:
 				panic("bad futex op")
 			}
@@ -3853,7 +3860,7 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 
 	var fm futexmsg_t
 	// could lazily allocate one futex channel per thread
-	fm.fmsg_init(op, uint32(aux), make(chan int))
+	fm.fmsg_init(op, uint32(aux), make(chan int, 1))
 	fm.fumem = futumem_t{proc, futn}
 
 	if timespecn != 0 {
