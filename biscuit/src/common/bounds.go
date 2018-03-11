@@ -101,13 +101,10 @@ const (
 )
 
 func Bounds(k Boundkey_t) int {
-	if b, ok := bounds[k]; ok {
-		return b
-	}
-	panic("bad bound")
+	return bounds[k]
 }
 
-var bounds = map[Boundkey_t]int{
+var bounds = []int{
 	B_SYS_PAUSE:           0,
 	B_SYS_PREAD:           96*24 + 1*4096 + 1*20 + 97*16 + 100*32 + 289*40 + 105*96 + 3*208 + 98*48 + 1*112 + 2*64 + 108*80,
 	B_SYS_POLL:            (1024)*240 + (512)*32 + 66*32 + 1*4096 + 70*96 + 67*48 + 1*4120 + 193*40 + 72*80 + 2*208 + 2*64 + 65*24 + 65*16 + 1*20,
