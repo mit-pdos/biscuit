@@ -505,7 +505,14 @@ func Resbegin(c int) bool {
 
 var Kernel bool
 
-var Resfail = Distinct_caller_t{Enabled: true}
+var Resfail = Distinct_caller_t{
+	Enabled: false,
+	Whitel: map[string]bool{
+		// XXX these need to be fixed to handle ENOHEAP
+		"fs.(*Fs_t).Fs_rename": true,
+		"main.(*susfops_t)._fdrecv": true,
+		},
+}
 
 const resfail = true
 
