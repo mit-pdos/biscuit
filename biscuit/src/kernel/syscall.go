@@ -769,8 +769,13 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 	// ready. if a device is immediately ready, we don't bother to register
 	// notifiers with the rest of the devices -- we just ask their status
 	// too.
+	gimme := common.Bounds(common.B_SYS_POLL)
 	pm := common.Pollmsg_t{}
 	for {
+		// its ok to block for memory here since no locks are held
+		if !common.Resadd(gimme) {
+			return int(-common.ENOHEAP)
+		}
 		wait := timeout != 0
 		rfds, writeback, err := _checkfds(proc, tid, &pm, wait, buf,
 			nfds)
