@@ -167,7 +167,6 @@ func TestFSInodeReuse(t *testing.T) {
 
 	tfs := BootFS(dst)
 	n := ninodeblks * (common.BSIZE / fs.ISIZE)
-	fmt.Printf("max inode %v\n", n)
 	for i := 0; i < n; i++ {
 		doTestInodeReuse(tfs, 10, t)
 	}
