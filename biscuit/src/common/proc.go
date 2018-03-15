@@ -516,7 +516,7 @@ func Resbegin(c int) bool {
 var Kernel bool
 
 var Resfail = Distinct_caller_t{
-	Enabled: false,
+	Enabled: true,
 	Whitel: map[string]bool{
 		// XXX these need to be fixed to handle ENOHEAP
 		"fs.(*Fs_t).Fs_rename": true,
@@ -524,7 +524,7 @@ var Resfail = Distinct_caller_t{
 		},
 }
 
-const resfail = true
+const resfail = false
 
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
@@ -532,9 +532,11 @@ func Resadd(c int) bool {
 	if !Kernel {
 		return true
 	}
-	if ok, path := Resfail.Distinct(); resfail && ok {
-		fmt.Printf("failing: %s\n", path)
-		return false
+	if resfail {
+		if ok, path := Resfail.Distinct(); ok {
+			fmt.Printf("failing: %s\n", path)
+			return false
+		}
 	}
 	return _reswait(c, true, true)
 }
@@ -544,9 +546,11 @@ func Resadd_noblock(c int) bool {
 	if !Kernel {
 		return true
 	}
-	if ok, path := Resfail.Distinct(); resfail && ok {
-		fmt.Printf("failing: %s\n", path)
-		return false
+	if resfail {
+		if ok, path := Resfail.Distinct(); ok {
+			fmt.Printf("failing: %s\n", path)
+			return false
+		}
 	}
 	return _reswait(c, true, false)
 }
