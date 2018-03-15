@@ -838,12 +838,14 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		} else if c == '@' {
 			runtime.Printres = !runtime.Printres
 		} else if c == '%' {
-			fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
-			runtime.Maxgot = 0
-			fmt.Printf("distinct simulated failures: %v\n",
-			    common.Resfail.Len())
-			common.Resfail.Enabled = !common.Resfail.Enabled
-			fmt.Printf("fail enabled: %v\n", common.Resfail.Enabled)
+			//fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
+			fmt.Printf("Max reservation: %v\n", common.Human(int(common.Maxgot)))
+			common.Maxgot = 0
+			//runtime.Maxgot = 0
+			//fmt.Printf("distinct simulated failures: %v\n",
+			//    common.Resfail.Len())
+			//common.Resfail.Enabled = !common.Resfail.Enabled
+			//fmt.Printf("fail enabled: %v\n", common.Resfail.Enabled)
 
 			//loping()
 			//netdump()

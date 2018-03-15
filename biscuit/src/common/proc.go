@@ -1,6 +1,6 @@
 package common
 
-import "strings"
+//import "sync/atomic"
 import "sync"
 import "fmt"
 import "time"
@@ -562,10 +562,42 @@ func Resend() {
 	runtime.Memunres()
 }
 
+func Human(_bytes int) string {
+	bytes := float64(_bytes)
+	div := float64(1)
+	order := 0
+	for bytes / div > 1024 {
+		div *= 1024
+		order++
+	}
+	sufs := map[int]string{0: "B", 1: "kB", 2: "MB", 3: "GB", 4: "TB",
+	    5: "PB"}
+	return fmt.Sprintf("%.2f%s", float64(bytes) / div, sufs[order])
+}
+
+var Maxgot int64
+
+func MemresaddX(c int, rec bool) bool {
+	a, _ := runtime.Memresadd(c, rec)
+	//a, got := runtime.Memresadd(c, rec)
+	//for {
+	//	v := atomic.LoadInt64(&Maxgot)
+	//	if got <= v {
+	//		break
+	//	}
+	//	if atomic.CompareAndSwapInt64(&Maxgot, v, got) {
+	//		fmt.Printf("NOW: %v\n", Human(int(got)))
+	//		Callerdump(3)
+	//		break
+	//	}
+	//}
+	return a
+}
+
 func _reswait(c int, incremental, block bool) bool {
 	f := runtime.Memreserve
 	if incremental {
-		f = runtime.Memresadd
+		f = MemresaddX
 	}
 	for !f(c, true) {
 		p := Current().proc
@@ -1452,8 +1484,8 @@ func ClearCurrent() {
 	runtime.Setgptr(nil)
 }
 
-func Callerdump() {
-	i := 3
+func Callerdump(start int) {
+	i := start
 	s := ""
 	for {
 		_, f, l, ok := runtime.Caller(i)
@@ -1461,17 +1493,17 @@ func Callerdump() {
 			break
 		}
 		i++
-		li := strings.LastIndex(f, "/")
-		if li != -1 {
-			f = f[li+1:]
-		}
+		//li := strings.LastIndex(f, "/")
+		//if li != -1 {
+		//	f = f[li+1:]
+		//}
 		if s == "" {
-			s = fmt.Sprintf("%s:%d", f, l)
+			s = fmt.Sprintf("%s:%d\n", f, l)
 		} else {
-			s += fmt.Sprintf("<-%s:%d", f, l)
+			s += fmt.Sprintf("\t<-%s:%d\n", f, l)
 		}
 	}
-	fmt.Printf("%s\n", s)
+	fmt.Printf("%s", s)
 }
 
 // a type for detecting the first call from each distinct path of ancestor

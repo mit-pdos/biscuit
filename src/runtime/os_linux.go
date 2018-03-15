@@ -3203,7 +3203,7 @@ func Memreserve(_n int, rec bool) bool {
 	return _restake(want, rec)
 }
 
-func Memresadd(_n int, rec bool) bool {
+func Memresadd(_n int, rec bool) (bool, int64) {
 	want := int64(_n)
 	g := getg()
 	if g.res.got <= 0 {
@@ -3215,7 +3215,8 @@ func Memresadd(_n int, rec bool) bool {
 			print("\t", hex(rip), "\n")
 		}
 	}
-	return _restake(want, rec)
+	got := _restake(want, rec)
+	return got, g.res.got
 }
 
 var Maxgot uintptr
