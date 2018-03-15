@@ -87,6 +87,9 @@ func writeLog(f *os.File, nlogblks int) {
 }
 
 func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
+	if Tell(f) != sb.Iorphanblock()+sb.Iorphanlen() {
+		panic("incorrect inode map start\n")
+	}
 	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
 	oneblock := mkBlock()
 	oneblock[0] |= 1 << 0 // mark root inode as allocated
@@ -96,7 +99,7 @@ func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 	} else {
 		f.Write(oneblock)
 		block := mkBlock()
-		for i := 1; i < sb.Imaplen()-2; i++ {
+		for i := 1; i < sb.Imaplen()-1; i++ {
 			f.Write(block)
 		}
 		start := nbitsperblock - ninode%nbitsperblock
@@ -106,8 +109,11 @@ func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 }
 
 func writeOrphanMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
+	if Tell(f) != sb.Iorphanblock() {
+		panic("incorrect iorphan start\n")
+	}
 	block := mkBlock()
-	for i := 0; i < sb.Imaplen(); i++ {
+	for i := 0; i < sb.Iorphanlen(); i++ {
 		f.Write(block)
 	}
 }
