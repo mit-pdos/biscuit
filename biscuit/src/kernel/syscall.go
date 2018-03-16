@@ -98,7 +98,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 		panic("bad limit")
 	}
 	if !common.Resadd(lim) {
-		fmt.Printf("X")
+		fmt.Printf("syscall res failed\n")
 		return int(-common.ENOHEAP)
 	}
 

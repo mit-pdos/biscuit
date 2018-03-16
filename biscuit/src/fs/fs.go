@@ -1403,6 +1403,8 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 	return idm, 0
 }
 
-func (fs *Fs_t) evict() {
-	panic("yay")
+func (fs *Fs_t) Fs_evict() {
+	fmt.Printf("FS EVICT\n")
+	fs.bcache.refcache.Evict_half()
+	fs.icache.refcache.Evict_half()
 }

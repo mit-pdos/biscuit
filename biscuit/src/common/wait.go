@@ -87,6 +87,20 @@ func (wh *whead_t) wremove(prev, h *wlist_t) {
 	wh.count--
 }
 
+// returns the number of nodes in the linked list
+func (w *Wait_t) Len() int {
+	w.Lock()
+	defer w.Unlock()
+	ret := 0
+	for p := w.pwait.head; p != nil; p = p.next {
+		ret++
+	}
+	for p := w.twait.head; p != nil; p = p.next {
+		ret++
+	}
+	return ret
+}
+
 // if there are more unreaped child statuses (procs or threads) than noproc,
 // _start() returns false and id is not added to the status map.
 func (w *Wait_t) _start(id int, isproc bool, noproc uint) bool {

@@ -787,8 +787,9 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			runtime.Printres = !runtime.Printres
 		} else if c == '%' {
 			//fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
-			fmt.Printf("Max reservation: %v\n", common.Human(int(common.Maxgot)))
-			common.Maxgot = 0
+			//fmt.Printf("Max reservation: %v\n", common.Human(int(common.Maxgot)))
+			//common.Maxgot = 0
+
 			//runtime.Maxgot = 0
 			//fmt.Printf("distinct simulated failures: %v\n",
 			//    common.Resfail.Len())
@@ -1350,6 +1351,7 @@ var physmem *common.Physmem_t
 var thefs *fs.Fs_t
 
 func main() {
+	//runtime.GCDebug()
 	common.Kernel = true
 
 	// magic loop
@@ -1403,6 +1405,8 @@ func main() {
 
 	rf, fs := fs.StartFS(blockmem, ahci, console)
 	thefs = fs
+
+	common.Oom_init(thefs.Fs_evict)
 
 	exec := func(cmd string, args []string) {
 		common.Resbegin(1 << 20)

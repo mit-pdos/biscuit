@@ -91,8 +91,9 @@ type Proc_t struct {
 	// total child rusage
 	Catime Accnt_t
 
-	//
 	syscall Syscall_i
+	// no thread can read/write Oomlink except the OOM killer
+	Oomlink	*Proc_t
 }
 
 var Allprocs = make(map[int]*Proc_t, Syslimit.Sysprocs)
@@ -510,7 +511,11 @@ func Resbegin(c int) bool {
 	if !Kernel {
 		return true
 	}
-	return _reswait(c, false, true)
+	r := _reswait(c, false, true)
+	if !r {
+		fmt.Printf("Slain!\n")
+	}
+	return r
 }
 
 var Kernel bool
@@ -538,7 +543,11 @@ func Resadd(c int) bool {
 			return false
 		}
 	}
-	return _reswait(c, true, true)
+	r := _reswait(c, true, true)
+	if !r {
+		fmt.Printf("Slain!\n")
+	}
+	return r
 }
 
 // for reservations when locks may be held; the caller should abort and retry.
@@ -602,16 +611,25 @@ func _reswait(c int, incremental, block bool) bool {
 	for !f(c, true) {
 		p := Current().proc
 		if p.Doomed() {
-			// XXX exit heap memory/block cache pages reservation
-			fmt.Printf("Slain!\n")
 			return false
 		}
 		if !block {
 			return false
 		}
-		fmt.Printf("%v: Wait for memory hog to die...\n", p.Name)
-		// XXX
-		time.Sleep(1)
+		//fmt.Printf("%v: Wait for memory hog to die...\n", p.Name)
+		var omsg oommsg_t
+		omsg.need = 2 << 20
+		omsg.resume = make(chan bool, 1)
+		select {
+		case Oom.halp <- omsg:
+		case <-Current().Killnaps.Killch:
+			return false
+		}
+		select {
+		case <-omsg.resume:
+		case <-Current().Killnaps.Killch:
+			return false
+		}
 	}
 	return true
 }
@@ -668,8 +686,8 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool
 		restart = err == -ENOHEAP
 		if err != 0 && !restart {
 			fmt.Printf("*** fault *** %v: addr %x, "+
-				"rip %x. killing...\n", p.Name, faultaddr,
-				tf[TF_RIP])
+				"rip %x, err %v. killing...\n", p.Name, faultaddr,
+				tf[TF_RIP], err)
 			p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(11))
 		}
 	case DIVZERO, GPFAULT, UD:
@@ -727,7 +745,7 @@ again:
 		if Resbegin(runonly) {
 			fastret, restart = p.trap_proc(tf, tid, intno, aux)
 		}
-		if restart {
+		if restart && !p.doomed {
 			fmt.Printf("restart! ")
 			Resend()
 			goto again
@@ -1211,7 +1229,6 @@ func (p *Proc_t) terminate() {
 	Close_panic(p.cwd)
 
 	p.Mywait.Pid = 1
-	Proc_del(p.Pid)
 
 	// free all user pages in the pmap. the last CPU to call Dec_pmap on
 	// the proc's pmap will free the pmap itself. freeing the user pages is
@@ -1238,6 +1255,9 @@ func (p *Proc_t) terminate() {
 	// remove pointer to parent to prevent deep fork trees from consuming
 	// unbounded memory.
 	p.Pwait = nil
+	// OOM killer assumes a process has terminated once its pid is no
+	// longer in the pid table.
+	Proc_del(p.Pid)
 }
 
 // returns false if the number of running threads or unreaped child statuses is
@@ -1581,4 +1601,134 @@ func (dc *Distinct_caller_t) Distinct() (bool, string) {
 		return true, fs
 	}
 	return false, ""
+}
+
+type oommsg_t struct {
+	need	int
+	resume	chan bool
+}
+
+type oom_t struct {
+	halp	chan oommsg_t
+	evict	func()
+}
+
+var Oom *oom_t
+
+func Oom_init(evict func()) {
+	Oom = &oom_t{}
+	Oom.halp = make(chan oommsg_t)
+	Oom.evict = evict
+	go Oom.reign()
+}
+
+func (o *oom_t) reign() {
+outter:
+	for msg := range o.halp {
+		if msg.need < runtime.Memremain() {
+			// there is apparently enough reservation available for
+			// them now
+			msg.resume <- true
+			continue
+		}
+
+		// XXX make sure msg.need is a satisfiable reservation size
+
+		// XXX expand kernel heap with free pages; page if none
+		// available
+
+		for {
+			const tryevicts = 3
+			for i := 0; i < tryevicts; i++ {
+				o.evict()
+				// XXX remove one GCX if credit does not depend
+				// on sweep
+				runtime.GCX()
+				runtime.GCX()
+
+				if msg.need < runtime.Memremain() {
+					msg.resume <- true
+					continue outter
+				}
+			}
+			// someone must die
+			o.dispatch_peasant()
+		}
+	}
+}
+
+func (o *oom_t) dispatch_peasant() {
+	// the oom killer's memory use should have a small bound
+	var head *Proc_t
+	Proclock.Lock()
+	for _, p := range Allprocs {
+		p.Oomlink = head
+		head = p
+	}
+	Proclock.Unlock()
+
+	var memmax int
+	var vic *Proc_t
+	for p := head; p != nil; p = p.Oomlink {
+		mem := o.judge_peasant(p)
+		if mem > memmax {
+			memmax = mem
+			vic = p
+		}
+	}
+
+	// destroy the list so the Proc_ts and reachable objects become dead
+	var next *Proc_t
+	for p := head; p != nil; p = next {
+		next = p.Oomlink
+		p.Oomlink = nil
+	}
+
+	if vic == nil {
+		panic("nothing to kill?")
+	}
+
+	fmt.Printf("Killing PID %d \"%v\"...\n", vic.Pid, vic.Name)
+	vic.Doomall()
+	st := time.Now()
+	dl := st.Add(time.Second)
+	// wait for the victim to die
+	for {
+		if _, ok := Proc_check(vic.Pid); !ok {
+			break
+		}
+		now := time.Now()
+		if now.After(dl) {
+			dl = dl.Add(time.Second)
+			fmt.Printf("oom killer: waiting for hog for %v...\n",
+			    now.Sub(st))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// acquires p's pmap and fd locks (separately)
+func (o *oom_t) judge_peasant(p *Proc_t) int {
+	// init(1) must never perish
+	if p.Pid == 1 {
+		return 0
+	}
+
+	p.Lock_pmap()
+	novma := int(p.Vmregion.Novma)
+	p.Unlock_pmap()
+
+	var nofd int
+	p.Fdl.Lock()
+	for _, fd := range p.Fds {
+		if fd != nil {
+			nofd++
+		}
+	}
+	p.Fdl.Unlock()
+
+	// count per-thread and per-child process wait objects
+	chalds := p.Mywait.Len()
+
+	return novma + nofd + chalds
 }

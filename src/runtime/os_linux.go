@@ -3183,6 +3183,10 @@ func Cacheres(_res int, init bool) bool {
 	return _restake(res, true)
 }
 
+func GCDebug() {
+	debug.gctrace = 1
+}
+
 func Getgot() int {
 	gp := getg()
 	return int(gp.res.got)

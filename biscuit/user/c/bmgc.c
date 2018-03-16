@@ -340,6 +340,8 @@ int main(int argc, char **argv)
 			break;
 		case 'l':
 			leak = strtol(optarg, NULL, 0);
+			if (leak == 0)
+				errx(-1, "must be non-zero");
 			break;
 		default:
 			usage();
