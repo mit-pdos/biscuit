@@ -923,6 +923,12 @@ func GC() {
 	gcStart(gcForceBlockMode, false)
 }
 
+// unlike GC, GCX synchronizes with other threads to ensure that only one GC
+// is started.
+func GCX() {
+	_gcStart(gcForceBlockMode, false, true)
+}
+
 // gcMode indicates how concurrent a GC cycle should be.
 type gcMode int
 
@@ -950,6 +956,10 @@ func gcShouldStart(forceTrigger bool) bool {
 // This may return without performing this transition in some cases,
 // such as when called on a system stack or with locks held.
 func gcStart(mode gcMode, forceTrigger bool) {
+	_gcStart(mode, forceTrigger, false)
+}
+
+func _gcStart(mode gcMode, forceTrigger, syncy bool) {
 	// Since this is called from malloc and malloc is called in
 	// the guts of a number of libraries that might be holding
 	// locks, don't attempt to start GC in non-preemptible or
@@ -983,7 +993,8 @@ func gcStart(mode gcMode, forceTrigger bool) {
 	// or re-check the transition condition because we
 	// specifically *don't* want to share the transition with
 	// another thread.
-	useStartSema := mode == gcBackgroundMode
+	useStartSema := mode == gcBackgroundMode || syncy
+	forceTrigger = forceTrigger || syncy
 	if useStartSema {
 		semacquire(&work.startSema, 0)
 		// Re-check transition condition under transition lock.
