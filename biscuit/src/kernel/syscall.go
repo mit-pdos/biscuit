@@ -382,7 +382,10 @@ func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
 func sys_pause(proc *common.Proc_t) int {
 	// no signals yet!
 	var c chan bool
-	<-c
+	select {
+	case <-c:
+	case <-common.Current().Killnaps.Killch:
+	}
 	return -1
 }
 
