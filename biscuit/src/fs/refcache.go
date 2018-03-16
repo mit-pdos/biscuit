@@ -10,6 +10,7 @@ import "common"
 
 const refcache_debug = false
 const always_eager = false // for testing
+const evict_on_lookup = false
 
 // Objects in the cache must support the following interface:
 type obj_t interface {
@@ -70,7 +71,7 @@ func (irc *refcache_t) Lookup(key int, s string) (*ref_t, obj_t, common.Err_t) {
 	}
 
 	var victim obj_t
-	if len(irc.refs) >= irc.maxsize {
+	if evict_on_lookup && len(irc.refs) >= irc.maxsize {
 		victim = irc.replace()
 		if victim == nil {
 			fmt.Printf("refs in use %v limited %v\n", len(irc.refs), irc.maxsize)
