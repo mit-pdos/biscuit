@@ -3188,6 +3188,21 @@ func Getgot() int {
 	return int(gp.res.got)
 }
 
+func Memremain() int {
+	return int(atomic.Loadint64(&rescredit))
+}
+
+func Memleak(_n int) bool {
+	n := int64(_n)
+	r := _restake(n, true)
+	if r {
+		g := getg()
+		g.res.credit -= n
+		g.res.got -= n
+	}
+	return r
+}
+
 func Memreserve(_n int, rec bool) bool {
 	want := int64(_n)
 	g := getg()

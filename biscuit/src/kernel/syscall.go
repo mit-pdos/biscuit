@@ -4240,6 +4240,14 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		} else {
 			fmt.Printf("have %v fds\n", proc.Countino())
 		}
+	case ptype&common.PROF_HACK5 != 0:
+		n := _events
+		if n < 0 {
+			return int(-common.EINVAL)
+		}
+		runtime.Memleak(n)
+		fmt.Printf("remaining res: %v\n",
+		    common.Human(runtime.Memremain()))
 	default:
 		return int(-common.EINVAL)
 	}

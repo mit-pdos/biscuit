@@ -282,8 +282,8 @@ __attribute__((noreturn))
 void usage(void)
 {
 	printf("usage:\n");
-	printf("%s [-mvSg] [-h <int>] [-s <int>] [-w <int>] [-n <int>]\n",
-	    __progname);
+	printf("%s [-mvSg] [-h <int>] [-s <int>] [-w <int>] [-n <int>] "
+	    "[-l <int>]\n", __progname);
 	printf("where:\n");
 	printf("-S		sleep forever instead of exiting\n");
 	printf("-m		use mmap busy work instead of readfile\n");
@@ -293,19 +293,20 @@ void usage(void)
 	printf("-s <int>	set scale factor to int\n");
 	printf("-w <int>	set work factor to int\n");
 	printf("-n <int>	set number of worker threads int\n");
-	printf("-h <int>	set kernel heap minimum to int MB\n\n");
-	printf("-H <int>	kernel heap growth factor as int\n\n");
+	printf("-h <int>	set kernel heap minimum to int MB\n");
+	printf("-H <int>	kernel heap growth factor as int\n");
+	printf("-l <int>	leak int MB of reservation\n\n");
 	exit(-1);
 }
 
 int main(int argc, char **argv)
 {
-	long sf = 1, wf = 1, nthreads = 1, kheap = 0, growperc = 0;
+	long sf = 1, wf = 1, nthreads = 1, kheap = 0, growperc = 0, leak = 0;
 	int dosleep = 0, dogc = 0;
 	enum work_t wtype = W_READF;
 
 	int c;
-	while ((c = getopt(argc, argv, "dH:h:vn:gms:Sw:")) != -1) {
+	while ((c = getopt(argc, argv, "dH:h:vn:gms:Sw:l:")) != -1) {
 		switch (c) {
 		case 'd':
 			newthing = 4;
@@ -337,6 +338,9 @@ int main(int argc, char **argv)
 		case 'w':
 			wf = strtol(optarg, NULL, 0);
 			break;
+		case 'l':
+			leak = strtol(optarg, NULL, 0);
+			break;
 		default:
 			usage();
 			break;
@@ -362,6 +366,14 @@ int main(int argc, char **argv)
 	if (growperc) {
 		const long hack2 = 1ul << 5;
 		if (sys_prof(hack2, growperc, 0, 0) == -1)
+			err(-1, "sys prof");
+		return 0;
+	}
+
+	if (leak) {
+		leak <<= 20;
+		const long prof_hack5 = 1ul << 8;
+		if (sys_prof(prof_hack5, leak, 0, 0) == -1)
 			err(-1, "sys prof");
 		return 0;
 	}
