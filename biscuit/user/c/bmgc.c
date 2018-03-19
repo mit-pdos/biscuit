@@ -295,13 +295,13 @@ void usage(void)
 	printf("-n <int>	set number of worker threads int\n");
 	printf("-h <int>	set kernel heap minimum to int MB\n");
 	printf("-H <int>	kernel heap growth factor as int\n");
-	printf("-l <int>	leak int MB of reservation\n\n");
+	printf("-l <int>	set kernel max heap to int MB\n\n");
 	exit(-1);
 }
 
 int main(int argc, char **argv)
 {
-	long sf = 1, wf = 1, nthreads = 1, kheap = 0, growperc = 0, leak = 0;
+	long sf = 1, wf = 1, nthreads = 1, kheap = 0, growperc = 0, hmax = 0;
 	int dosleep = 0, dogc = 0;
 	enum work_t wtype = W_READF;
 
@@ -339,8 +339,8 @@ int main(int argc, char **argv)
 			wf = strtol(optarg, NULL, 0);
 			break;
 		case 'l':
-			leak = strtol(optarg, NULL, 0);
-			if (leak == 0)
+			hmax = strtol(optarg, NULL, 0);
+			if (hmax == 0)
 				errx(-1, "must be non-zero");
 			break;
 		default:
@@ -372,10 +372,10 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
-	if (leak) {
-		leak <<= 20;
+	if (hmax) {
+		hmax <<= 20;
 		const long prof_hack5 = 1ul << 8;
-		if (sys_prof(prof_hack5, leak, 0, 0) == -1)
+		if (sys_prof(prof_hack5, hmax, 0, 0) == -1)
 			err(-1, "sys prof");
 		return 0;
 	}
