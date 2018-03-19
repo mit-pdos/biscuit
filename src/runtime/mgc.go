@@ -1381,40 +1381,47 @@ func gcMarkTermination() {
 	// worldsema another cycle could start and smash the stats
 	// we're trying to print.
 	if debug.gctrace > 0 {
-		util := int(memstats.gc_cpu_fraction * 100)
-
-		var sbuf [24]byte
 		printlock()
-		print("gc ", memstats.numgc,
-			" @", string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ",
-			util, "%: ")
-		prev := work.tSweepTerm
-		for i, ns := range []int64{work.tMark, work.tMarkTerm, work.tEnd} {
-			if i != 0 {
-				print("+")
-			}
-			print(string(fmtNSAsMS(sbuf[:], uint64(ns-prev))))
-			prev = ns
-		}
-		print(" ms clock, ")
-		for i, ns := range []int64{sweepTermCpu, gcController.assistTime, gcController.dedicatedMarkTime + gcController.fractionalMarkTime, gcController.idleMarkTime, markTermCpu} {
-			if i == 2 || i == 3 {
-				// Separate mark time components with /.
-				print("/")
-			} else if i != 0 {
-				print("+")
-			}
-			print(string(fmtNSAsMS(sbuf[:], uint64(ns))))
-		}
-		print(" ms cpu, ",
-			work.heap0>>20, "->", work.heap1>>20, "->", work.heap2>>20, " MB, ",
-			work.heapGoal>>20, " MB goal, ",
-			work.maxprocs, " P")
-		if work.mode != gcBackgroundMode {
-			print(" (forced)")
-		}
-		print("\n")
+		var sbuf [24]byte
+		print("GC ", memstats.numgc, " @",
+		    string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ",
+		    work.heap2>>20, "MB, ",
+		    " [ ", memstats.heap_sys >> 20, "MB ]\n")
 		printunlock()
+		//util := int(memstats.gc_cpu_fraction * 100)
+
+		//printlock()
+		//print("gc ", memstats.numgc,
+		//	" @", string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ",
+		//	util, "%: ")
+		//prev := work.tSweepTerm
+		//for i, ns := range []int64{work.tMark, work.tMarkTerm, work.tEnd} {
+		//	if i != 0 {
+		//		print("+")
+		//	}
+		//	print(string(fmtNSAsMS(sbuf[:], uint64(ns-prev))))
+		//	prev = ns
+		//}
+		//print(" ms clock, ")
+		//for i, ns := range []int64{sweepTermCpu, gcController.assistTime, gcController.dedicatedMarkTime + gcController.fractionalMarkTime, gcController.idleMarkTime, markTermCpu} {
+		//	if i == 2 || i == 3 {
+		//		// Separate mark time components with /.
+		//		print("/")
+		//	} else if i != 0 {
+		//		print("+")
+		//	}
+		//	print(string(fmtNSAsMS(sbuf[:], uint64(ns))))
+		//}
+		//print(" ms cpu, ",
+		//	work.heap0>>20, "->", work.heap1>>20, "->", work.heap2>>20, " MB, ",
+		//	work.heapGoal>>20, " MB goal, ",
+		//	work.maxprocs, " P")
+		//if work.mode != gcBackgroundMode {
+		//	print(" (forced)")
+		//}
+		//print(" [ ", memstats.heap_sys >> 20, "MB ] ")
+		//print("\n")
+		//printunlock()
 	}
 
 	semrelease(&worldsema)
