@@ -540,25 +540,9 @@ func (c *mcache) nextFree(sizeclass uint8) (v gclinkptr, s *mspan, shouldhelpgc 
 
 //func _takecredit(n int64, pcbuf []uintptr) {
 func _takecredit(n int64) {
-	if hackmode == 0 {
-		return
-	}
-
 	g := getg()
-	// XXX
-	g.res.cacheallocs += n
-	g.res.credit -= n
-	if g.res.credit < 0 {
-		g.res.credit = 0
-		//atomic.Xadd64(&nocreds, 1)
-		//if dumrand(0, 100) == 0 {
-		//	print("dump:\n")
-		//	for _, rip := range pcbuf {
-		//		print("\t", hex(rip), "\n")
-		//	}
-		//	print("\n")
-		//}
-	}
+	g.res.allocs += n
+	//g.res.cacheallocs += n
 }
 
 // Allocate an object of size bytes.

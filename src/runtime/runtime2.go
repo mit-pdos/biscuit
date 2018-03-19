@@ -399,9 +399,9 @@ type g struct {
 	// determines how this corresponds to scan work debt.
 	gcAssistBytes int64
 	res struct {
-		credit		int64
-		got		int64
-		cacheallocs	int64
+		took		int64
+		allocs		int64
+		//cacheallocs	int64
 	}
 	current		unsafe.Pointer
 }
