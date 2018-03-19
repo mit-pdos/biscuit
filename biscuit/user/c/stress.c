@@ -1,5 +1,24 @@
 #include <stdio.h>
 
+void generate(void)
+{
+	int up = 1;
+	for (;;) {
+		for (; up != 0; up--) {
+			switch (fork()) {
+			case -1:
+				err(-1, "fork");
+				break;
+			case 0:
+				return;
+			}
+		}
+		while (waitpid(WAIT_ANY, NULL, WNOHANG) > 0)
+			up++;
+		sleep(1);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	srand(time(NULL));
@@ -11,18 +30,7 @@ int main(int argc, char **argv)
 	//	err(-1, "fork");
 	//}
 
-	int done = 0;
-	for (int i = 0; i < 10 && !done; i++) {
-		switch (fork()) {
-		case -1:
-			err(-1, "fork");
-			break;
-		case 0:
-			done = 1;
-			break;
-		}
-	}
-
+	generate();
 
 	int afd, bfd;
 	if ((afd = open("/", O_RDONLY | O_DIRECTORY)) == -1)
@@ -30,14 +38,14 @@ int main(int argc, char **argv)
 	if ((bfd = open("/", O_RDONLY | O_DIRECTORY)) == -1)
 		err(-1, "open");
 
-	char buf[512];
-	sprintf(buf, "%ld", getpid());
-	for (;;) {
-		if (open(buf, O_CREAT | O_RDWR, 0600) == -1)
-			break;
-		if (unlink(buf) == -1)
-			err(-1, "unlink");
-	}
+	//char buf[512];
+	//sprintf(buf, "%ld", getpid());
+	//for (;;) {
+	//	if (open(buf, O_CREAT | O_RDWR, 0600) == -1)
+	//		break;
+	//	if (unlink(buf) == -1)
+	//		err(-1, "unlink");
+	//}
 
 	for (;;) {
 		void *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
