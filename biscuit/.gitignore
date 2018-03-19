@@ -79,6 +79,7 @@
 /user/c/largefile
 /user/c/cksum
 /user/c/head
+/user/c/goodcit
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -152,3 +153,4 @@
 /fsdir/bin/fweb
 /fsdir/bin/fcgi
 /fsdir/bin/stress
+/fsdir/bin/goodcit
