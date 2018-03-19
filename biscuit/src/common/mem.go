@@ -351,6 +351,21 @@ func (m *Vmregion_t) dump() {
 	})
 }
 
+func (m *Vmregion_t) _iterX(n *Rbn_t, f func(*Vminfo_t)) {
+	if n == nil {
+		return
+	}
+	m._iterX(n.l, f)
+	m._iterX(n.r, f)
+	f(&n.vmi)
+	n.p, n.r, n.l = nil, nil, nil
+	n.vmi = Vminfo_t{}
+}
+
+func (m *Vmregion_t) iterX(f func(*Vminfo_t)) {
+	m._iterX(m.rb.root, f)
+}
+
 func (m *Vmregion_t) _iter1(n *Rbn_t, f func(*Vminfo_t)) {
 	if n == nil {
 		return

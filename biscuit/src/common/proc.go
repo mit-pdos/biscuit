@@ -1724,6 +1724,7 @@ func (o *oom_t) dispatch_peasant(need int) {
 			dl = dl.Add(time.Second)
 			fmt.Printf("oom killer: waiting for hog for %v...\n",
 			    now.Sub(st))
+			o.gc()
 		}
 		time.Sleep(sleept)
 		sleept *= 2
