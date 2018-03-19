@@ -4,6 +4,8 @@ import "fmt"
 import "strconv"
 import "sync"
 
+import "runtime"
+
 import "common"
 
 const bdev_debug = false
@@ -53,6 +55,9 @@ func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
 // bdev_relse when done with buf.
 func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	b, created, err := bcache.bref(blkn, s)
+	if b.Evictnow() {
+		runtime.Cacheaccount()
+	}
 
 	if bdev_debug {
 		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)

@@ -784,7 +784,8 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
-			runtime.Printres = !runtime.Printres
+			v := runtime.Memremain()
+			fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
 		} else if c == '%' {
 			//fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
 			//fmt.Printf("Max reservation: %v\n", common.Human(int(common.Maxgot)))
@@ -798,6 +799,11 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 
 			//loping()
 			//netdump()
+
+			a, b := thefs.Sizes()
+			fmt.Printf("FS SIZE: %v, %v\n", a, b)
+			fmt.Printf("KWAITS: %v\n", common.Kwaits)
+			fmt.Printf("GWAITS: %v\n", common.Gwaits)
 
 			//bp := &bprof_t{}
 			//err := pprof.WriteHeapProfile(bp)

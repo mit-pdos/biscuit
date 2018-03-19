@@ -98,7 +98,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 		panic("bad limit")
 	}
 	if !common.Resadd(lim) {
-		fmt.Printf("syscall res failed\n")
+		//fmt.Printf("syscall res failed\n")
 		return int(-common.ENOHEAP)
 	}
 
@@ -4245,8 +4245,8 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		if n < 0 {
 			return int(-common.EINVAL)
 		}
-		runtime.Memleak(n)
-		fmt.Printf("remaining res: %v\n",
+		runtime.SetMaxheap(n)
+		fmt.Printf("remaining mem: %v\n",
 		    common.Human(runtime.Memremain()))
 	default:
 		return int(-common.EINVAL)

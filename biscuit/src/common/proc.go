@@ -2,6 +2,7 @@ package common
 
 //import "sync/atomic"
 import "sync"
+import "strings"
 import "fmt"
 import "time"
 import "unsafe"
@@ -512,9 +513,9 @@ func Resbegin(c int) bool {
 		return true
 	}
 	r := _reswait(c, false, true)
-	if !r {
-		fmt.Printf("Slain!\n")
-	}
+	//if !r {
+	//	fmt.Printf("Slain!\n")
+	//}
 	return r
 }
 
@@ -531,6 +532,16 @@ var Resfail = Distinct_caller_t{
 
 const resfail = false
 
+func Resremain() int {
+	ret := runtime.Memremain()
+	if ret < 0 {
+		// not an error; outstanding res may increase pass max if our
+		// read raced with a relase, but live should never surpass max
+		ret = 0
+	}
+	return ret
+}
+
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
 func Resadd(c int) bool {
@@ -544,9 +555,9 @@ func Resadd(c int) bool {
 		}
 	}
 	r := _reswait(c, true, true)
-	if !r {
-		fmt.Printf("Slain!\n")
-	}
+	//if !r {
+	//	fmt.Printf("Slain!\n")
+	//}
 	return r
 }
 
@@ -585,33 +596,20 @@ func Human(_bytes int) string {
 }
 
 var Maxgot int64
-
-func MemresaddX(c int, rec bool) bool {
-	a, _ := runtime.Memresadd(c, rec)
-	//a, got := runtime.Memresadd(c, rec)
-	//for {
-	//	v := atomic.LoadInt64(&Maxgot)
-	//	if got <= v {
-	//		break
-	//	}
-	//	if atomic.CompareAndSwapInt64(&Maxgot, v, got) {
-	//		fmt.Printf("NOW: %v\n", Human(int(got)))
-	//		Callerdump(3)
-	//		break
-	//	}
-	//}
-	return a
-}
+var Gwaits int
 
 func _reswait(c int, incremental, block bool) bool {
 	f := runtime.Memreserve
 	if incremental {
-		f = MemresaddX
+		f = runtime.Memresadd
 	}
-	for !f(c, true) {
+	for !f(c) {
 		p := Current().proc
 		if p.Doomed() {
 			return false
+		}
+		if strings.Contains(p.Name, "cmail") {
+			Gwaits++
 		}
 		if !block {
 			return false
@@ -746,7 +744,7 @@ again:
 			fastret, restart = p.trap_proc(tf, tid, intno, aux)
 		}
 		if restart && !p.doomed {
-			fmt.Printf("restart! ")
+			//fmt.Printf("restart! ")
 			Resend()
 			goto again
 		}
@@ -1450,14 +1448,21 @@ func (ca *Cacheallocs_t) Shouldevict(res int) bool {
 	return !runtime.Cacheres(res, init)
 }
 
+var Kwaits int
+
 func Kreswait(c int, name string) {
 	if !Kernel {
 		return
 	}
-	for !runtime.Memreserve(c, false) {
-		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
-		// XXX
-		time.Sleep(1)
+	for !runtime.Memreserve(c) {
+		//fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
+
+		Kwaits++
+		var omsg oommsg_t
+		omsg.need = 100 << 20
+		omsg.resume = make(chan bool, 1)
+		Oom.halp <- omsg
+		<-omsg.resume
 	}
 }
 
@@ -1610,21 +1615,33 @@ type oommsg_t struct {
 
 type oom_t struct {
 	halp	chan oommsg_t
-	evict	func()
+	evict	func() (int, int)
+	lastpr	time.Time
 }
 
 var Oom *oom_t
 
-func Oom_init(evict func()) {
+func Oom_init(evict func() (int, int)) {
 	Oom = &oom_t{}
 	Oom.halp = make(chan oommsg_t)
 	Oom.evict = evict
 	go Oom.reign()
 }
 
+func (o *oom_t) gc() {
+	now := time.Now()
+	if now.Sub(o.lastpr) > time.Second {
+		o.lastpr = now.Add(time.Second)
+		runtime.GCDebug(1)
+	}
+	runtime.GCX()
+	//runtime.GCDebug(0)
+}
+
 func (o *oom_t) reign() {
 outter:
 	for msg := range o.halp {
+		//o.gc()
 		if msg.need < runtime.Memremain() {
 			// there is apparently enough reservation available for
 			// them now
@@ -1638,26 +1655,29 @@ outter:
 		// available
 
 		for {
-			const tryevicts = 3
-			for i := 0; i < tryevicts; i++ {
-				o.evict()
-				// XXX remove one GCX if credit does not depend
-				// on sweep
-				runtime.GCX()
-				runtime.GCX()
-
-				if msg.need < runtime.Memremain() {
-					msg.resume <- true
-					continue outter
-				}
+			a, b := o.evict()
+			if a + b < 1000 {
+				break
 			}
+		}
+		o.gc()
+		if msg.need < runtime.Memremain() {
+			msg.resume <- true
+			continue outter
+		}
+		for {
 			// someone must die
-			o.dispatch_peasant()
+			o.dispatch_peasant(msg.need)
+			o.gc()
+			if msg.need < runtime.Memremain() {
+				msg.resume <- true
+				continue outter
+			}
 		}
 	}
 }
 
-func (o *oom_t) dispatch_peasant() {
+func (o *oom_t) dispatch_peasant(need int) {
 	// the oom killer's memory use should have a small bound
 	var head *Proc_t
 	Proclock.Lock()
@@ -1688,11 +1708,13 @@ func (o *oom_t) dispatch_peasant() {
 		panic("nothing to kill?")
 	}
 
-	fmt.Printf("Killing PID %d \"%v\"...\n", vic.Pid, vic.Name)
+	fmt.Printf("Killing PID %d \"%v\" for (%v %v)...\n", vic.Pid, vic.Name,
+	    Human(need), vic.Vmregion.Novma)
 	vic.Doomall()
 	st := time.Now()
 	dl := st.Add(time.Second)
 	// wait for the victim to die
+	sleept := 10*time.Microsecond
 	for {
 		if _, ok := Proc_check(vic.Pid); !ok {
 			break
@@ -1703,7 +1725,12 @@ func (o *oom_t) dispatch_peasant() {
 			fmt.Printf("oom killer: waiting for hog for %v...\n",
 			    now.Sub(st))
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(sleept)
+		sleept *= 2
+		const maxs = 10*time.Millisecond
+		if sleept > maxs {
+			sleept = maxs
+		}
 	}
 }
 

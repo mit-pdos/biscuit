@@ -96,6 +96,10 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
 
+func (fs *Fs_t) Sizes() (int, int) {
+	return fs.icache.refcache.Len(), fs.bcache.refcache.Len()
+}
+
 func (fs *Fs_t) StopFS() {
 	fs.Fs_sync()
 	fs.fslog.stopLog()
@@ -1403,8 +1407,9 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 	return idm, 0
 }
 
-func (fs *Fs_t) Fs_evict() {
-	fmt.Printf("FS EVICT\n")
+func (fs *Fs_t) Fs_evict() (int, int) {
+	//fmt.Printf("FS EVICT\n")
 	fs.bcache.refcache.Evict_half()
 	fs.icache.refcache.Evict_half()
+	return fs.Sizes()
 }

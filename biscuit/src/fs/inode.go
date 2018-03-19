@@ -1155,8 +1155,9 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	var ca common.Cacheallocs_t
 	gimme := common.Bounds(common.B_IMEMNODE_T_IFREE)
 	remains := true
+	var tryevict bool
 	for remains {
-		tryevict := ca.Shouldevict(gimme)
+		tryevict = tryevict || ca.Shouldevict(gimme)
 		idm.fs.fslog.Op_begin("ifree")
 
 		// set of blocks that will be written by this transaction;
@@ -1185,6 +1186,9 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		// must lock the inode block before marking it free, to prevent
 		// clobbering a newly, concurrently allocated/created inode
 		iblk, _ := idm.idibread()
+		if tryevict {
+			iblk.Tryevict()
+		}
 
 		idm.major = which
 		if !remains {

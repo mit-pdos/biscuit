@@ -54,6 +54,13 @@ func mkRefcache(size int, async bool) *refcache_t {
 	return ic
 }
 
+func (irc *refcache_t) Len() int {
+	irc.Lock()
+	ret := len(irc.refs)
+	irc.Unlock()
+	return ret
+}
+
 // returns a locked ref
 func (irc *refcache_t) Lookup(key int, s string) (*ref_t, obj_t, common.Err_t) {
 	irc.Lock()
