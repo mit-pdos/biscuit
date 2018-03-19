@@ -154,6 +154,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	for i := 0; i < 32; i++ {
 		if LD(&d.ahci.pi)&(1<<uint32(i)) != 0x0 {
 			d.probe_port(i)
+			break
 		}
 	}
 
