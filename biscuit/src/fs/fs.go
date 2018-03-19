@@ -922,8 +922,8 @@ func (df *Devfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t)
 	// case common.D_CONSOLE:
 	// 	cons.pollc <- pm
 	// 	return <- cons.pollret, 0
-	// case common.D_DEVNULL:
-	// 	return pm.events & (common.R_READ | common.R_WRITE), 0
+	case common.D_DEVNULL:
+		return pm.Events & (common.R_READ | common.R_WRITE), 0
 	default:
 		panic("which dev")
 	}
