@@ -210,6 +210,19 @@ func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, com
 	return b, created, err
 }
 
+type _nop_relse_t struct {
+}
+
+func (n *_nop_relse_t) Relse(*common.Bdev_block_t, string) {
+}
+
+var _nop_relse = _nop_relse_t{}
+
+func (bcache *bcache_t) raw(blkno int) (*common.Bdev_block_t, common.Err_t) {
+	ret := common.MkBlock_newpage(blkno, "raw", bcache.mem, bcache.disk, &_nop_relse)
+	return ret, 0
+}
+
 func (bcache *bcache_t) pin(b *common.Bdev_block_t) {
 	bcache.refcache.Refup(b, "pin")
 

@@ -983,23 +983,22 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 	for src.Remain() != 0 {
 		blkno := raw.offset / common.BSIZE
 		boff := raw.offset % common.BSIZE
-		// if boff != 0 || src.remain() < 512 {
-		//	buf := bdev_read_block(blkno)
-		//}
-		// XXX don't always have to read block in from disk
-		buf, err := raw.fs.fslog.Get_fill(blkno, "write", false)
+		buf, err := raw.fs.bcache.raw(blkno)
 		if err != 0 {
 			return 0, err
+		}
+		if boff != 0 || src.Remain() < common.BSIZE {
+			buf.Read()
 		}
 		c, err := src.Uioread(buf.Data[boff:])
 		if err != 0 {
-			raw.fs.fslog.Relse(buf, "write")
+			buf.Evict()
 			return 0, err
 		}
-		raw.fs.bcache.Write(buf)
+		buf.Write()
 		raw.offset += c
 		did += c
-		raw.fs.fslog.Relse(buf, "write")
+		buf.Evict()
 	}
 	return did, 0
 }
