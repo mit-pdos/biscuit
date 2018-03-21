@@ -176,9 +176,9 @@ func (b *Bdev_block_t) Write() {
 	if bdev_debug {
 		fmt.Printf("bdev_write %v %v\n", b.Block, b.Name)
 	}
-	if b.Data[0] == 0xc && b.Data[1] == 0xc { // XXX check
-		panic("write\n")
-	}
+	//if b.Data[0] == 0xc && b.Data[1] == 0xc { // XXX check
+	//	panic("write\n")
+	//}
 	l := MkBlkList()
 	l.PushBack(b)
 	req := MkRequest(l, BDEV_WRITE, true)
