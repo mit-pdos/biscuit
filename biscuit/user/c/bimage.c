@@ -32,19 +32,39 @@ static int lstn(uint16_t lport)
 
 int main(int argc, char **argv)
 {
-	// try to make sure the instructions to call reboot(2) are in the page
-	// cache before clobbering the entire disk
-	asm volatile(
-		"orq	$0, (%0)\n"
-		:
-		: "r"(reboot)
-		: "memory", "cc");
+	// bring all file metadaa and binary text/data into the page cache in
+	// hopes that the kernel won't mix blocks from the new image with
+	// blocks from the old.
+	int status;
+	switch (fork()) {
+	case 0:
+	{
+		int fd = open("/dev/null", O_WRONLY);
+		if (fd == -1)
+			err(-1, "open");
+		if (dup2(fd, 1) == -1)
+			err(-1, "dup2");
+		close(fd);
+		char * const args[] = {"/bin/cat", "/bin/bimage", NULL};
+		execv(args[0], args);
+		err(-1, "execv");
+	}
+	case -1:
+		err(-1, "fork");
+	default:
+		if (wait(&status) == -1)
+			err(-1, "wait");
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			errx(-1, "child failed");
+	}
 
 	int fd;
 	if ((fd = open("/dev/rsd0c", O_WRONLY)) == -1)
 		err(-1, "open");
 
 	int s = lstn(31338);
+
+	sync();
 
 	const int blksz = 4096;
 	char buf[blksz];
