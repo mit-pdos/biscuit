@@ -3177,11 +3177,12 @@ func gcrescycle() {
 	var rl int64
 	for {
 		rl = atomic.Loadint64(&res.fin)
+		atomic.Xaddint64(&res.gclive, rl)
 		if atomic.Cas64(p, uint64(rl), 0) {
 			break
 		}
+		atomic.Xaddint64(&res.gclive, -rl)
 	}
-	atomic.Xaddint64(&res.gclive, rl)
 }
 
 // returns true if the caller must evict their previous allocations (if any).
