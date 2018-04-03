@@ -112,32 +112,37 @@ void *mapper(void *n)
 	return (void *)c;
 }
 
-void *crmessage(void *idp)
+#define SYSCALL_CLOBBERS "cc", "memory", "r9", "r10", "r11", "r12", "r13", \
+			 "r14", "r15"
+pid_t
+_getppid(void)
+{
+	pid_t ret;
+	asm volatile(
+		"movq	%%rsp, %%r10\n"
+		"leaq	2(%%rip), %%r11\n"
+		"sysenter\n"
+		: "=a"(ret)
+		: "0"(40ul)
+		: "cc", "memory", "r9", "r10", "r11", "edi", "esi", "edx", "ecx", "r8");
+	return ret;
+}
+
+
+void *igetpids(void *idp)
 {
 	pthread_barrier_wait(&bar);
 
-	long id = (long)idp;
-
-	char msg[1660];
-	memset(msg, 'X', sizeof(msg));
 	long total = 0;
-	int pid = getpid();
 	while (!cease) {
-		char o[32];
-		snprintf(o, sizeof(o), "f%d-%ld.%ld", pid, id, total);
-
-		int fd = open(o, O_CREAT | O_WRONLY | O_EXCL, 0600);
-		if (fd < 0)
-			err(-1, "open");
-		int ret = write(fd, msg, sizeof(msg));
-		if (ret < 0)
-			err(-1, "write");
-		else if (ret != sizeof(msg))
-			errx(-1, "short write");
-		close(fd);
-		if (unlink(o) < 0)
-			err(-1, "unlink");
-
+		asm volatile(
+			"movl	$40, %%eax\n"
+			"movq	%%rsp, %%r10\n"
+			"leaq	2(%%rip), %%r11\n"
+			"sysenter\n"
+			:
+			:
+			: SYSCALL_CLOBBERS, "eax", "edi", "esi", "edx", "ecx", "r8");
 		total++;
 	}
 	return (void *)total;
@@ -149,7 +154,7 @@ void *getpids(void *idp)
 
 	long total = 0;
 	while (!cease) {
-		getpid();
+		_getppid();
 		total++;
 	}
 	return (void *)total;
@@ -703,9 +708,9 @@ struct {
 	void (*end)(void);
 } bms[] = {
 	{"renames", 'r', crrename, NULL, NULL},
-	{"create/write/unlink", 'c', crmessage, NULL, NULL},
+	{"getpids", 'c', getpids, NULL, NULL},
 	{"unix socket", 'u', sunsend, sunspawn, sunkill},
-	{"getpids", 'p', getpids, NULL, NULL},
+	{"inline getpids", 'p', igetpids, NULL, NULL},
 	{"forkonly", 'k', forkonly, NULL, NULL},
 	{"forkexec", 'e', forkexec, NULL, NULL},
 	{"seqcreate", 's', seqcreate, NULL, NULL},
