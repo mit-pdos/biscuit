@@ -949,6 +949,8 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 	JMP	alltraps(SB)
 
 #define TFREGS		17
+#define TF_R15		(8*2)
+#define TF_R14		(8*3)
 #define TF_R13		(8*4)
 #define TF_R12		(8*5)
 #define TF_R8		(8*9)
@@ -962,26 +964,100 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 #define TF_RIP		(8*(TFREGS + 2))
 #define TF_RSP		(8*(TFREGS + 5))
 
-// if you change the number of arguments, you must adjust the stack offsets in
-// _sysentry and ·_userint.
-// func _Userrun(tf *[24]int, fastret bool) (int, int)
-TEXT ·_Userrun(SB), NOSPLIT, $8-16
-	MOVQ	tf+0(FP), R9
+#define ARG1(x)		0x8(x)
+#define ARG2(x)		0x10(x)
+#define ARG3(x)		0x18(x)
+#define RET1(x)		0x20(x)
+#define RET2(x)		0x28(x)
+
+//func Userrun_slow(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
+//    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
+TEXT ·Userrun(SB), $0-0
+	CLI
 
 	SWAPGS
-	MOVQ	0(GS), AX
+	MOVQ	0(GS), R9
 	SWAPGS
+	//LEAQ	·cpus(SB), R9
+
+	MOVQ	0x18(SP), AX
+	CMPQ	0x28(R9), AX
+	JNE	out
+
+	MOVQ	0x8(SP), AX
+	MOVQ	0x8(AX), AX
+	CMPQ	0x30(R9), AX
+	JNE	out
+
+	MOVQ	0x8(SP), AX
+	CMPQ	0x38(R9), AX
+	JNE	out
+
+	MOVB	0x20(SP), AX
+	TESTB	AX, AX
+	JZ	out
+
+	MOVQ	ARG1(SP), BX
+	SUBQ	$5*8, SP
+	MOVQ	R9, 0x10(SP)
+	MOVB	AX, 0x8(SP)
+	MOVQ	BX, 0x0(SP)
+	CALL	·_Userrun(SB)
+	MOVQ	0x18(SP), AX
+	MOVQ	0x20(SP), BX
+
+	ADDQ	$5*8, SP
+	MOVQ	AX, 0x30(SP)
+	MOVQ	BX, 0x38(SP)
+	MOVQ	$0, 0x40(SP)
+	MOVQ	$0, 0x48(SP)
+	STI
+	RET
+out:
+	JMP	runtime·Userrun_slow(SB)
+
+// if you change the number of arguments, you must adjust the stack offsets in
+// _sysentry and ·_userint.
+// func _Userrun(tf *[24]int, fastret bool, cpu *cpu_t) (int, int)
+TEXT ·_Userrun(SB), NOSPLIT, $0-0
+dur:
+	MOVQ	ARG1(SP), R9
+	MOVQ	ARG3(SP), AX
+
 	MOVQ	SP, 0x20(AX)
 
 	// fastret or iret?
-	MOVB	fastret+8(FP), AX
+	// ax = fastret
+	MOVB	ARG2(SP), AX
 	CMPB	AX, $0
-	// swap for better branch prediction?
-	JNE	syscallreturn
+	JE	slowret
+syscallreturn:
+	MOVQ	TF_RAX(R9), AX
+	MOVQ	TF_RSP(R9), CX
+	MOVQ	TF_RIP(R9), DX
+	MOVQ	TF_RBP(R9), BP
+	MOVQ	TF_RBX(R9), BX
+
+	//MOVQ	TF_R15(R9), R15
+	//MOVQ	TF_R14(R9), R14
+	//MOVQ	TF_R13(R9), R13
+	//MOVQ	TF_R12(R9), R12
+
+	// rcx contains rsp
+	// rdx contains rip
+	STI
+	// rex64 sysexit
+	BYTE	$0x48
+	BYTE	$0x0f
+	BYTE	$0x35
+	INT	$3
+slowret:
 	// do full state restore
 	PUSHQ	R9
-	CALL	·_userret(SB)
-	INT	$3
+	//CALL	·_userret(SB)
+	PUSHQ	$0
+	JMP	·_userret(SB)
+
 	MOVL	$0x5cc, DX
 	TESTL	AX, AX
 	MOVL	DX, CX
@@ -994,23 +1070,6 @@ TEXT ·_Userrun(SB), NOSPLIT, $8-16
 	MOVL	DI, 8(SP)
 	MOVB	$1, 3(DX)
 
-syscallreturn:
-	MOVQ	TF_RAX(R9), AX
-	MOVQ	TF_RSP(R9), CX
-	MOVQ	TF_RIP(R9), DX
-	MOVQ	TF_RBP(R9), BP
-	MOVQ	TF_RBX(R9), BX
-	// rcx contains rsp
-	// rdx contains rip
-	STI
-	// rex64 sysexit
-	BYTE	$0x48
-	BYTE	$0x0f
-	BYTE	$0x35
-	// not reached; just to trick dead code analysis
-	CALL	·_sysentry(SB)
-	CALL	·_userint(SB)
-
 // this should be a label since it is the bottom half of the Userrun_ function,
 // but i can't figure out how to get the plan9 assembler to let me use lea on a
 // label. thus the function epilogue and offset to get the tf arg from Userrun_
@@ -1020,10 +1079,12 @@ TEXT ·_sysentry(SB), NOSPLIT, $0-0
 	SWAPGS
 	MOVQ	0(GS), SP
 	SWAPGS
+	//LEAQ	·cpus(SB), SP
+
 	MOVQ	0x20(SP), SP
 
 	// save user state in fake trapframe
-	MOVQ	0x18(SP), R9
+	MOVQ	ARG1(SP), R9
 	MOVQ	R10, TF_RSP(R9)
 	MOVQ	R11, TF_RIP(R9)
 	// syscall args
@@ -1036,11 +1097,57 @@ TEXT ·_sysentry(SB), NOSPLIT, $0-0
 	// kernel preserves rbp and rbx
 	MOVQ	BP,  TF_RBP(R9)
 	MOVQ	BX,  TF_RBX(R9)
+
+	//MOVQ	R15, TF_R15(R9)
+	//MOVQ	R14, TF_R14(R9)
+	//MOVQ	R13, TF_R13(R9)
+	//MOVQ	R12, TF_R12(R9)
+
 	// return val 1
-	MOVQ	TRAP_SYSCALL, 0x28(SP)
+	MOVQ	TRAP_SYSCALL, RET1(SP)
 	// return val 2
-	MOVQ	$0, 0x30(SP)
-	ADDQ	$0x10, SP
+	MOVQ	$0, RET2(SP)
+
+// return direct to userspace testing
+//	MOVQ	TF_RAX(R9), CX
+//	CMPQ	CX, $40
+//	JNE	slowsys
+//
+//	STI
+//	SUBQ	$3*8, SP
+//	get_tls(AX)
+//	MOVQ	g(AX), AX
+//	MOVQ	g_current(AX), AX
+//	MOVQ	(AX), AX
+//	MOVQ	AX, (SP)
+//	MOVQ	·DUR(SB), AX
+//	CALL	AX
+//	MOVQ	0x10(SP), BX
+//	MOVQ	(3*8 + 0x8)(SP), AX
+//	MOVQ	BX, TF_RAX(AX)
+//	ADDQ	$3*8, SP
+//	CLI
+//
+//	MOVQ	ARG1(SP), R9
+//	MOVQ	TF_RAX(R9), AX
+//	MOVQ	TF_RSP(R9), CX
+//	MOVQ	TF_RIP(R9), DX
+//	MOVQ	TF_RBP(R9), BP
+//	MOVQ	TF_RBX(R9), BX
+//
+//	MOVQ	TF_R15(R9), R15
+//	MOVQ	TF_R14(R9), R14
+//	MOVQ	TF_R13(R9), R13
+//	MOVQ	TF_R12(R9), R12
+//	// rcx contains rsp
+//	// rdx contains rip
+//	STI
+//	// rex64 sysexit
+//	BYTE	$0x48
+//	BYTE	$0x0f
+//	BYTE	$0x35
+//
+//slowsys:
 	RET
 
 // this is the bottom half of _userrun() that is executed if a timer int or CPU
@@ -1049,9 +1156,9 @@ TEXT ·_userint(SB), NOSPLIT, $0-0
 	CLI
 	// user state is already saved by trap handler.
 	// AX holds the interrupt number, BX holds aux (cr2 for page fault)
-	MOVQ	AX, 0x28(SP)
-	MOVQ	BX, 0x30(SP)
-	ADDQ	$0x10, SP
+	MOVQ	AX, RET1(SP)
+	MOVQ	BX, RET2(SP)
+	//ADDQ	$0x10, SP
 	RET
 
 TEXT ·gs_null(SB), NOSPLIT, $8-0

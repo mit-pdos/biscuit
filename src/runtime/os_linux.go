@@ -426,7 +426,9 @@ func _trapret(*[TFSIZE]uintptr)
 func trapret(*[TFSIZE]uintptr, uintptr)
 func _userint()
 func _userret()
-func _Userrun(*[TFSIZE]uintptr, bool) (int, int)
+func _Userrun(*[TFSIZE]uintptr, bool, *cpu_t) (int, int)
+func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
+    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
 func Wrmsr(int, int)
 
 // we have to carefully write go code that may be executed early (during boot)
@@ -484,6 +486,8 @@ type thread_t struct {
 	_pad2		int
 }
 
+//var DUR uintptr
+
 // XXX fix these misleading names
 const(
   TFSIZE       = 24
@@ -525,15 +529,19 @@ func CPUHint() int {
 	return ret
 }
 
+//var Slows int
+
 //go:nowritebarrierrec
-func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
+//go:nosplit
+func Userrun_slow(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
 	// while other cpus execute user programs.
 	//entersyscall(0)
-	Cli()
+	//Cli()
+	//Slows++
 	cpu := _Gscpu()
 
 	var opmap uintptr
@@ -572,7 +580,7 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 	if !fastret {
 		fxrstor(fxbuf)
 	}
-	intno, aux := _Userrun(tf, fastret)
+	intno, aux := _Userrun(tf, fastret, cpu)
 
 	Sti()
 	//exitsyscall(0)
@@ -589,7 +597,7 @@ type nmiprof_t struct {
 	gctrl		int
 }
 
-var _nmibuf [4096]uintptr
+var _nmibuf [4096*10]uintptr
 var nmiprof = nmiprof_t{buf: _nmibuf[:]}
 
 func SetNMI(mask bool, evtsel int, min, max uint) {

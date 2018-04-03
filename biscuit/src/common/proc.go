@@ -11,11 +11,11 @@ import "math/rand"
 
 type Tnote_t struct {
 	// XXX "alive" should be "terminated"
+	proc	*Proc_t
 	alive bool
 	killed bool
 	// protects killed, Killnaps.Cond and Kerr, and is a leaf lock
 	sync.Mutex
-	proc	*Proc_t
 	Killnaps struct {
 		Killch	chan bool
 		Cond	*sync.Cond
