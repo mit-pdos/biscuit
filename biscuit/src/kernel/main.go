@@ -26,6 +26,7 @@ func lap_id() int {
 	return int(lapaddr[0x20/4] >> 24)
 }
 
+var nirqs [100]int
 var irqs int
 
 // trapstub() cannot do anything that may have side-effects on the runtime
@@ -44,6 +45,7 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 		}
 	}
 
+	nirqs[trapno]++
 	irqs++
 	switch trapno {
 	case common.INT_KBD, common.INT_COM1:
