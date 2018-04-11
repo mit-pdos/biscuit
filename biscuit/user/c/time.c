@@ -41,6 +41,7 @@ void usage(char *pre)
 		 "       \"llcmiss\" - LLC misses\n"
 		 "       \"dtlbmiss\" - dTLB misses\n"
 		 "       \"itlbmiss\" - iTLB misses\n"
+		 "       \"ins\" - instructions retired\n"
 		 "-i int sample after int PMU events. only used with -s.\n"
 		 "\n"
 		 , __progname);
@@ -71,6 +72,7 @@ long evtadd(char *evt)
 		{"llcref", PROF_EV_LLC_REFS},
 		{"dtlbmiss", PROF_EV_DTLB_LOAD_MISS_ANY},
 		{"itlbmiss", PROF_EV_ITLB_LOAD_MISS_ANY},
+		{"ins", PROF_EV_INSTR_RETIRED},
 	};
 	const int nevs = sizeof(evs)/sizeof(evs[0]);
 	int i;
