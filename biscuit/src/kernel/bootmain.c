@@ -208,7 +208,7 @@ alloc_phys(uint64_t *pgdir, uint64_t va, int lpg)
 	} else {
 		uint64_t *pte = pgdir_walk(pgdir, va, 1);
 		ma = ensure_pg(pte, 1);
-		*pte |= glob;
+		*pte |= PTE_G;
 		pgoffm = PGOFFMASK;
 	}
 
