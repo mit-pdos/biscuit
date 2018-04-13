@@ -1664,6 +1664,10 @@ func get_pg() uintptr {
 	return ret
 }
 
+func FuncPC(f interface{}) uintptr {
+	return funcPC(f)
+}
+
 //go:nosplit
 func alloc_map(va uintptr, perms uintptr, fempty bool) {
 	pte := pgdir_walk(va, true)
@@ -1674,7 +1678,7 @@ func alloc_map(va uintptr, perms uintptr, fempty bool) {
 	p_pg := get_pg()
 	zero_phys(p_pg)
 	// XXX goodbye, memory
-	*pte = p_pg | perms | PTE_P
+	*pte = p_pg | perms | PTE_P | PTE_G
 	if old & PTE_P != 0 {
 		invlpg(va)
 	}

@@ -1395,6 +1395,13 @@ func sys_sync(proc *common.Proc_t) int {
 }
 
 func sys_reboot(proc *common.Proc_t) int {
+	// mov'ing to cr3 does not flush global pages. if, before loading the
+	// zero page into cr3 below, there are just enough TLB entries to
+	// dispatch a fault, but not enough to complete the fault handler, the
+	// fault handler will recursively fault forever since it uses an IST
+	// stack. therefore, flush the global pages too.
+	pge := uintptr(1 << 7)
+	runtime.Lcr4(runtime.Rcr4() &^ pge)
 	// who needs ACPI?
 	runtime.Lcr3(uintptr(common.P_zeropg))
 	// poof

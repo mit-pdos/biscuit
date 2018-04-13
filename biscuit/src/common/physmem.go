@@ -327,6 +327,15 @@ func Dmap_init() {
 	_, _, _, edx := runtime.Cpuid(0x80000001, 0)
 	gbpages := edx&(1<<26) != 0
 
+	_, _, _, edx = runtime.Cpuid(0x1, 0)
+	gse := edx & (1 << 13) != 0
+	if !gse {
+		panic("no global pages")
+	}
+	if runtime.Rcr4() & (1 << 7) == 0 {
+		panic("global disabled")
+	}
+
 	_dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
 	dpte := (*Pa_t)(unsafe.Pointer(_dpte))
 	if *dpte&PTE_P != 0 {

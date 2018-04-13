@@ -167,6 +167,7 @@ bootmain(void)
 
 	// enter long mode
 	enable_pae();
+	enable_global();
 	lcr3(pgdir);
 	uint64_t efer = rdmsr(IA32_EFER);
 	wrmsr(IA32_EFER, efer | IA32_EFER_LME);
@@ -201,12 +202,13 @@ alloc_phys(uint64_t *pgdir, uint64_t va, int lpg)
 		uint64_t *pde = _pgdir_walk(pgdir, va, 1, 1);
 		pgoffm = (1ul << 21) - 1;
 		if ((*pde & PTE_P) == 0) {
-			*pde = getlpg() | PTE_P | PTE_W | PTE_PS;
+			*pde = getlpg() | PTE_P | PTE_W | PTE_PS | PTE_G;
 		}
 		ma = *pde & (~pgoffm);
 	} else {
 		uint64_t *pte = pgdir_walk(pgdir, va, 1);
 		ma = ensure_pg(pte, 1);
+		*pte |= glob;
 		pgoffm = PGOFFMASK;
 	}
 
