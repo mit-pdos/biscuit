@@ -274,8 +274,12 @@ var wbenabledtime int64
 var _wbstart int64
 var _wbshadow bool
 
+// for counting executed write barrier checks
+//var Fleabag *bool
+
 //go:nosplit
 func setGCPhase(x uint32) {
+	//Fleabag = &writeBarrier.enabled
 	atomic.Store(&gcphase, x)
 	writeBarrier.needed = gcphase == _GCmark || gcphase == _GCmarktermination
 	writeBarrier.enabled = writeBarrier.needed || writeBarrier.cgo

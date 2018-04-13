@@ -1205,6 +1205,10 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		EV_DTLB_LOAD_MISS_ANY:  {0x08, 0x1},
 		EV_DTLB_LOAD_MISS_STLB: {0x08, 0x2},
 		EV_STORE_DTLB_MISS:     {0x0c, 0x1},
+		// XXX following counts misses in "all levels of the iTLB which
+		// cause a page walk"; probably better to use (0xc8, 0x20)
+		// (event, umask) instead which counts instructions retired
+		// which "missed in the iTLB when the instruction was fetched"
 		EV_ITLB_LOAD_MISS_ANY:  {0x85, 0x1},
 		//EV_WTF1:
 		//    {0x49, 0x1},
