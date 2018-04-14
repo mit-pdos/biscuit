@@ -89,8 +89,10 @@ func poll_runtime_pollServerInit() {
 }
 
 func netpollinited() bool {
-	//return atomic.Load(&netpollInited) != 0
-	return false
+	if hackmode != 0 {
+		return false
+	}
+	return atomic.Load(&netpollInited) != 0
 }
 
 //go:linkname poll_runtime_pollServerDescriptor internal/poll.runtime_pollServerDescriptor
