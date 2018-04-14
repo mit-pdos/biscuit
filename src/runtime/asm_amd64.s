@@ -305,26 +305,20 @@ done:
 // i do it this strange way because if i declare fakeargv in C i get 'missing
 // golang type information'. need two 0 entries because go checks for
 // environment variables too.
-DATA	fakeargv+0(SB)/8,$·gostr(SB)
-DATA	fakeargv+8(SB)/8,$0
-DATA	fakeargv+16(SB)/8,$0
-GLOBL	fakeargv(SB),RODATA,$24
+//DATA	fakeargv+0(SB)/8,$·gostr(SB)
+//DATA	fakeargv+8(SB)/8,$0
+//DATA	fakeargv+16(SB)/8,$0
+//GLOBL	fakeargv(SB),RODATA,$24
 
 TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	MOVL	DI, ·P_kpmap(SB)
 	MOVL	SI, ·pgfirst(SB)
 	MOVQ	$1, runtime·hackmode(SB)
-	CALL	runtime·sc_setup(SB)
 
-	// copy arguments forward on an even stack
-	//MOVQ	DI, AX		// argc
-	//MOVQ	SI, BX		// argv
-	MOVQ	$0, AX		// argc
-	MOVQ	$0, BX		// argv
 	SUBQ	$(4*8+7), SP		// 2args 2auto
 	ANDQ	$~15, SP
-	MOVQ	AX, 16(SP)
-	MOVQ	BX, 24(SP)
+
+	CALL	runtime·sc_setup(SB)
 
 	// create istack out of the given (operating system) stack.
 	// _cgo_init may update stackguard.
@@ -336,9 +330,10 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	MOVQ	SP, (g_stack+stack_hi)(DI)
 
 	// find out information about the processor we're on
-	MOVQ	$0, AX
+	MOVL	$0, AX
 	CPUID
-	CMPQ	AX, $0
+	MOVL	AX, SI
+	CMPL	AX, $0
 	JE	nocpuinfo
 
 	// Figure out how to serialize RDTSC.
@@ -350,49 +345,85 @@ TEXT runtime·rt0_go_hack(SB),NOSPLIT,$0
 	JNE	notintel
 	CMPL	CX, $0x6C65746E  // "ntel"
 	JNE	notintel
+	MOVB	$1, runtime·isIntel(SB)
 	MOVB	$1, runtime·lfenceBeforeRdtsc(SB)
 notintel:
-	// Do nothing.
 
-	MOVQ	$1, AX
+	// Load EAX=1 cpuid flags
+	MOVL	$1, AX
 	CPUID
-	MOVL	CX, runtime·cpuid_ecx(SB)
-	MOVL	DX, runtime·cpuid_edx(SB)
-	// Detect AVX and AVX2 as per 14.7.1  Detection of AVX2 chapter of [1]
-	// [1] 64-ia-32-architectures-software-developer-manual-325462.pdf
-	// http://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-manual-325462.pdf
-	ANDL    $0x18000000, CX // check for OSXSAVE and AVX bits
-	CMPL    CX, $0x18000000
-	JNE     noavx
-	MOVL    $0, CX
+	MOVL	AX, runtime·processorVersionInfo(SB)
+
+	TESTL	$(1<<26), DX // SSE2
+	SETNE	runtime·support_sse2(SB)
+
+	TESTL	$(1<<9), CX // SSSE3
+	SETNE	runtime·support_ssse3(SB)
+
+	TESTL	$(1<<19), CX // SSE4.1
+	SETNE	runtime·support_sse41(SB)
+
+	TESTL	$(1<<20), CX // SSE4.2
+	SETNE	runtime·support_sse42(SB)
+
+	TESTL	$(1<<23), CX // POPCNT
+	SETNE	runtime·support_popcnt(SB)
+
+	TESTL	$(1<<25), CX // AES
+	SETNE	runtime·support_aes(SB)
+
+	TESTL	$(1<<27), CX // OSXSAVE
+	SETNE	runtime·support_osxsave(SB)
+
+	// If OS support for XMM and YMM is not present
+	// support_avx will be set back to false later.
+	TESTL	$(1<<28), CX // AVX
+	SETNE	runtime·support_avx(SB)
+
+eax7:
+	// Load EAX=7/ECX=0 cpuid flags
+	CMPL	SI, $7
+	JLT	osavx
+	MOVL	$7, AX
+	MOVL	$0, CX
+	CPUID
+
+	TESTL	$(1<<3), BX // BMI1
+	SETNE	runtime·support_bmi1(SB)
+
+	// If OS support for XMM and YMM is not present
+	// support_avx2 will be set back to false later.
+	TESTL	$(1<<5), BX
+	SETNE	runtime·support_avx2(SB)
+
+	TESTL	$(1<<8), BX // BMI2
+	SETNE	runtime·support_bmi2(SB)
+
+	TESTL	$(1<<9), BX // ERMS
+	SETNE	runtime·support_erms(SB)
+
+osavx:
+	CMPB	runtime·support_osxsave(SB), $1
+	JNE	noavx
+	MOVL	$0, CX
 	// For XGETBV, OSXSAVE bit is required and sufficient
 	XGETBV
-	ANDL    $6, AX
-	CMPL    AX, $6 // Check for OS support of YMM registers
-	JNE     noavx
-	MOVB    $1, runtime·support_avx(SB)
-	MOVL    $7, AX
-	MOVL    $0, CX
-	CPUID
-	ANDL    $0x20, BX // check for AVX2 bit
-	CMPL    BX, $0x20
-	JNE     noavx2
-	MOVB    $1, runtime·support_avx2(SB)
-	JMP     nocpuinfo
+	ANDL	$6, AX
+	CMPL	AX, $6 // Check for OS support of XMM and YMM registers.
+	JE nocpuinfo
 noavx:
-	MOVB    $0, runtime·support_avx(SB)
-noavx2:
-	MOVB    $0, runtime·support_avx2(SB)
-nocpuinfo:
+	MOVB $0, runtime·support_avx(SB)
+	MOVB $0, runtime·support_avx2(SB)
 
+nocpuinfo:
 	// if there is an _cgo_init, call it.
-	//MOVQ	_cgo_init(SB), AX
-	//TESTQ	AX, AX
-	//JZ	needtls
-	//// g0 already in DI
-	//MOVQ	DI, CX	// Win64 uses CX for first parameter
-	//MOVQ	$setg_gcc<>(SB), SI
-	//CALL	AX
+	MOVQ	_cgo_init(SB), AX
+	TESTQ	AX, AX
+	JZ	needtls
+	// g0 already in DI
+	MOVQ	DI, CX	// Win64 uses CX for first parameter
+	MOVQ	$setg_gcc<>(SB), SI
+	CALL	AX
 
 	// update stackguard after _cgo_init
 	MOVQ	$runtime·g0(SB), CX
@@ -401,19 +432,18 @@ nocpuinfo:
 	MOVQ	AX, g_stackguard0(CX)
 	MOVQ	AX, g_stackguard1(CX)
 
-//#ifndef GOOS_windows
-//	JMP ok
-//#endif
+#ifndef GOOS_windows
+	JMP ok
+#endif
 needtls:
-//#ifdef GOOS_plan9
-//	// skip TLS setup on Plan 9
-//	JMP ok
-//#endif
-//#ifdef GOOS_solaris
-//	// skip TLS setup on Solaris
-//	JMP ok
-//#endif
-
+#ifdef GOOS_plan9
+	// skip TLS setup on Plan 9
+	JMP ok
+#endif
+#ifdef GOOS_solaris
+	// skip TLS setup on Solaris
+	JMP ok
+#endif
 	//LEAQ	runtime·m0+m_tls(SB), DI
 	//CALL	runtime·settls(SB)
 
@@ -430,13 +460,14 @@ needtls:
 	MOVQ	$0x123, g(BX)
 	MOVQ	runtime·m0+m_tls(SB), AX
 	CMPQ	AX, $0x123
-	JMP	ok
+	JEQ	ok
 	MOVQ	$0x42, (SP)
 	CALL	runtime·putch(SB)
 	MOVQ	$0x46, (SP)
 	CALL	runtime·putch(SB)
 	BYTE	$0xeb;
 	BYTE	$0xfe;
+	CALL	runtime·abort(SB)
 ok:
 	// set the per-goroutine and per-mach "registers"
 	get_tls(BX)
@@ -457,11 +488,9 @@ ok:
 	CALL	runtime·check(SB)
 
 	//MOVL	16(SP), AX		// copy argc
-	MOVL	$1, AX		// copy argc
-	MOVL	AX, 0(SP)
+	//MOVL	AX, 0(SP)
 	//MOVQ	24(SP), AX		// copy argv
-	MOVQ	$fakeargv(SB), AX
-	MOVQ	AX, 8(SP)
+	//MOVQ	AX, 8(SP)
 	//CALL	runtime·args(SB)
 	CALL	runtime·osinit(SB)
 	CALL	runtime·schedinit(SB)
@@ -477,7 +506,7 @@ ok:
 	// start this M
 	CALL	runtime·mstart(SB)
 
-	MOVL	$0xf1, 0xf1  // crash
+	CALL	runtime·abort(SB)	// mstart should never return
 	RET
 
 TEXT runtime·Cpuid(SB), NOSPLIT, $0-24

@@ -1190,7 +1190,7 @@ func GC() {
 // unlike GC, GCX synchronizes with other threads to ensure that only one GC
 // is started.
 func GCX() {
-	_gcStart(gcForceBlockMode, false, true)
+	GC()
 }
 
 // gcMode indicates how concurrent a GC cycle should be.
@@ -1273,11 +1273,7 @@ func (t gcTrigger) test() bool {
 //
 // This may return without performing this transition in some cases,
 // such as when called on a system stack or with locks held.
-func gcStart(mode gcMode, forceTrigger bool) {
-	_gcStart(mode, forceTrigger, false)
-}
-
-func _gcStart(mode gcMode, forceTrigger, syncy bool) {
+func gcStart(mode gcMode, trigger gcTrigger) {
 	// Since this is called from malloc and malloc is called in
 	// the guts of a number of libraries that might be holding
 	// locks, don't attempt to start GC in non-preemptible or
@@ -1724,6 +1720,7 @@ func gcMarkTermination(nextTriggerRatio float64) {
 		//    string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ",
 		//    work.heap2>>20, "MB, ",
 		//    " [ ", memstats.heap_sys >> 20, "MB ]\n")
+		util := int(memstats.gc_cpu_fraction * 100)
 		print("gc ", memstats.numgc,
 			" @", string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ",
 			util, "%: ")
