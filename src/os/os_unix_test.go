@@ -36,11 +36,6 @@ func checkUidGid(t *testing.T, path string, uid, gid int) {
 }
 
 func TestChown(t *testing.T) {
-	// Chown is not supported under windows or Plan 9.
-	// Plan9 provides a native ChownPlan9 version instead.
-	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
-		t.Skipf("%s does not support syscall.Chown", runtime.GOOS)
-	}
 	// Use TempDir() to make sure we're on a local file system,
 	// so that the group ids returned by Getgroups will be allowed
 	// on the file. On NFS, the Getgroups groups are
@@ -84,10 +79,6 @@ func TestChown(t *testing.T) {
 }
 
 func TestFileChown(t *testing.T) {
-	// Fchown is not supported under windows or Plan 9.
-	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
-		t.Skipf("%s does not support syscall.Fchown", runtime.GOOS)
-	}
 	// Use TempDir() to make sure we're on a local file system,
 	// so that the group ids returned by Getgroups will be allowed
 	// on the file. On NFS, the Getgroups groups are
@@ -131,10 +122,6 @@ func TestFileChown(t *testing.T) {
 }
 
 func TestLchown(t *testing.T) {
-	// Lchown is not supported under windows or Plan 9.
-	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
-		t.Skipf("%s does not support syscall.Lchown", runtime.GOOS)
-	}
 	// Use TempDir() to make sure we're on a local file system,
 	// so that the group ids returned by Getgroups will be allowed
 	// on the file. On NFS, the Getgroups groups are
@@ -215,5 +202,25 @@ func TestReaddirRemoveRace(t *testing.T) {
 			t.Errorf("  entry[%d]: %q, %v", i, fi.Name(), fi.Mode())
 		}
 		t.FailNow()
+	}
+}
+
+// Issue 23120: respect umask when doing Mkdir with the sticky bit
+func TestMkdirStickyUmask(t *testing.T) {
+	const umask = 0077
+	dir := newDir("TestMkdirStickyUmask", t)
+	defer RemoveAll(dir)
+	oldUmask := syscall.Umask(umask)
+	defer syscall.Umask(oldUmask)
+	p := filepath.Join(dir, "dir1")
+	if err := Mkdir(p, ModeSticky|0755); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := fi.Mode(); (mode&umask) != 0 || (mode&^ModePerm) != (ModeDir|ModeSticky) {
+		t.Errorf("unexpected mode %s", mode)
 	}
 }

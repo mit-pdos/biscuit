@@ -38,6 +38,16 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	if sig < uint32(len(sigtable)) {
 		flags = sigtable[sig].flags
 	}
+	if flags&_SigPanic != 0 && gp.throwsplit {
+		// We can't safely sigpanic because it may grow the
+		// stack. Abort in the signal handler instead.
+		flags = (flags &^ _SigPanic) | _SigThrow
+	}
+	if isAbortPC(c.sigpc()) {
+		// On many architectures, the abort function just
+		// causes a memory fault. Don't turn that into a panic.
+		flags = _SigThrow
+	}
 	if c.sigcode() != _SI_USER && flags&_SigPanic != 0 {
 		// The signal is going to cause a panic.
 		// Arrange the stack so that it looks like the point
@@ -78,7 +88,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	_g_.m.caughtsig.set(gp)
 
 	if crashing == 0 {
-		startpanic()
+		startpanic_m()
 	}
 
 	if sig < uint32(len(sigtable)) {
@@ -88,9 +98,9 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	}
 
 	print("PC=", hex(c.sigpc()), " m=", _g_.m.id, " sigcode=", c.sigcode(), "\n")
-	if _g_.m.lockedg != nil && _g_.m.ncgo > 0 && gp == _g_.m.g0 {
+	if _g_.m.lockedg != 0 && _g_.m.ncgo > 0 && gp == _g_.m.g0 {
 		print("signal arrived during cgo execution\n")
-		gp = _g_.m.lockedg
+		gp = _g_.m.lockedg.ptr()
 	}
 	print("\n")
 
@@ -101,7 +111,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		if crashing > 0 && gp != _g_.m.curg && _g_.m.curg != nil && readgstatus(_g_.m.curg)&^_Gscan == _Grunning {
 			// tracebackothers on original m skipped this one; trace it now.
 			goroutineheader(_g_.m.curg)
-			traceback(^uintptr(0), ^uintptr(0), 0, gp)
+			traceback(^uintptr(0), ^uintptr(0), 0, _g_.m.curg)
 		} else if crashing == 0 {
 			tracebackothers(gp)
 			print("\n")
@@ -111,7 +121,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 
 	if docrash {
 		crashing++
-		if crashing < sched.mcount {
+		if crashing < mcount()-int32(extraMCount) {
 			// There are other m's that need to dump their stacks.
 			// Relay SIGQUIT to the next m by sending it to the current process.
 			// All m's that have already received SIGQUIT have signal masks blocking

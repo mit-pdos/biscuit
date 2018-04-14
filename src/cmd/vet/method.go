@@ -48,7 +48,6 @@ var canonicalMethods = map[string]MethodSig{
 	"GobEncode":     {[]string{}, []string{"[]byte", "error"}},                         // gob.GobEncoder
 	"MarshalJSON":   {[]string{}, []string{"[]byte", "error"}},                         // json.Marshaler
 	"MarshalXML":    {[]string{"*xml.Encoder", "xml.StartElement"}, []string{"error"}}, // xml.Marshaler
-	"Peek":          {[]string{"=int"}, []string{"[]byte", "error"}},                   // image.reader (matching bufio.Reader)
 	"ReadByte":      {[]string{}, []string{"byte", "error"}},                           // io.ByteReader
 	"ReadFrom":      {[]string{"=io.Reader"}, []string{"int64", "error"}},              // io.ReaderFrom
 	"ReadRune":      {[]string{}, []string{"rune", "int", "error"}},                    // io.RuneReader
@@ -139,7 +138,7 @@ func typeFlatten(l []*ast.Field) []ast.Expr {
 			t = append(t, f.Type)
 			continue
 		}
-		for _ = range f.Names {
+		for range f.Names {
 			t = append(t, f.Type)
 		}
 	}

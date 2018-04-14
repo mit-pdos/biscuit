@@ -479,6 +479,15 @@ as when hosting an untrusted program, the implementation could interlock
 map access.
 </p>
 
+<p>
+Map access is unsafe only when updates are occurring.
+As long as all goroutines are only reading—looking up elements in the map,
+including iterating through it using a
+<code>for</code> <code>range</code> loop—and not changing the map
+by assigning to elements or doing deletions,
+it is safe for them to access the map concurrently without synchronization.
+</p>
+
 <h3 id="language_changes">
 Will you accept my language change?</h3>
 
@@ -1140,12 +1149,19 @@ program is one tool to help automate this process.
 </p>
 
 <p>
-The Go 1.5 release includes an experimental facility to the
+The Go 1.5 release added a facility to the
 <a href="https://golang.org/cmd/go">go</a> command
 that makes it easier to manage external dependencies by "vendoring"
 them into a special directory near the package that depends upon them.
 See the <a href="https://golang.org/s/go15vendor">design
 document</a> for details.
+</p>
+
+<p>
+Work is underway on an experimental package management tool,
+<a href="https://github.com/golang/dep"><code>dep</code></a>, to learn
+more about how tooling can help package management. More information can be found in
+<a href="https://github.com/golang/dep/blob/master/docs/FAQ.md">the <code>dep</code> FAQ</a>.
 </p>
 
 <h2 id="Pointers">Pointers and Allocation</h2>
@@ -1469,6 +1485,53 @@ For more detail on this topic see the talk entitled,
 <a href="//blog.golang.org/2013/01/concurrency-is-not-parallelism.html">Concurrency
 is not Parallelism</a>.
 
+<h3 id="no_goroutine_id">
+Why is there no goroutine ID?</h3>
+
+<p>
+Goroutines do not have names; they are just anonymous workers.
+They expose no unique identifier, name, or data structure to the programmer.
+Some people are surprised by this, expecting the <code>go</code>
+statement to return some item that can be used to access and control
+the goroutine later.
+</p>
+
+<p>
+The fundamental reason goroutines are anonymous is so that
+the full Go language is available when programming concurrent code.
+By contrast, the usage patterns that develop when threads and goroutines are
+named can restrict what a library using them can do.
+</p>
+
+<p>
+Here is an illustration of the difficulties.
+Once one names a goroutine and constructs a model around
+it, it becomes special, and one is tempted to associate all computation
+with that goroutine, ignoring the possibility
+of using multiple, possibly shared goroutines for the processing.
+If the <code>net/http</code> package associated per-request
+state with a goroutine,
+clients would be unable to use more goroutines
+when serving a request.
+</p>
+
+<p>
+Moreover, experience with libraries such as those for graphics systems
+that require all processing to occur on the "main thread"
+has shown how awkward and limiting the approach can be when
+deployed in a concurrent language.
+The very existence of a special thread or goroutine forces
+the programmer to distort the program to avoid crashes
+and other problems caused by inadvertently operating
+on the wrong thread.
+</p>
+
+<p>
+For those cases where a particular goroutine is truly special,
+the language provides features such as channels that can be
+used in flexible ways to interact with it.
+</p>
+
 <h2 id="Functions_methods">Functions and Methods</h2>
 
 <h3 id="different_method_sets">
@@ -1788,7 +1851,7 @@ supported by recent modifications to the gold linker.
 Why is my trivial program such a large binary?</h3>
 
 <p>
-The linker in the <code>gc</code> tool chain
+The linker in the <code>gc</code> toolchain
 creates statically-linked binaries by default.  All Go binaries therefore include the Go
 run-time, along with the run-time type information necessary to support dynamic
 type checks, reflection, and even panic-time stack traces.
@@ -1866,6 +1929,26 @@ Nowadays, most Go programmers use a tool,
 which automatically rewrites a Go source file to have the correct imports,
 eliminating the unused imports issue in practice.
 This program is easily connected to most editors to run automatically when a Go source file is written.
+</p>
+
+<h3 id="virus">
+Why does my virus-scanning software think my Go distribution or compiled binary is infected?</h3>
+
+<p>
+This is a common occurrence, especially on Windows machines, and is almost always a false positive.
+Commercial virus scanning programs are often confused by the structure of Go binaries, which
+they don't see as often as those compiled from other languages.
+</p>
+
+<p>
+If you've just installed the Go distribution and the system reports it is infected, that's certainly a mistake.
+To be really thorough, you can verify the download by comparing the checksum with those on the
+<a href="https://golang.org/dl/">downloads page</a>.
+</p>
+
+<p>
+In any case, if you believe the report is in error, please report a bug to the supplier of your virus scanner.
+Maybe in time virus scanners can learn to understand Go programs.
 </p>
 
 <h2 id="Performance">Performance</h2>

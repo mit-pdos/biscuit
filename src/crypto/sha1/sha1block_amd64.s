@@ -13,7 +13,7 @@
 
 #include "textflag.h"
 
-// SHA1 block routine. See sha1block.go for Go equivalent.
+// SHA-1 block routine. See sha1block.go for Go equivalent.
 //
 // There are 80 rounds of 4 types:
 //   - rounds 0-15 are type 1 and load data (ROUND1 macro).
@@ -225,7 +225,7 @@ end:
 	RET
 
 
-// This is the implementation using AVX2. It is based on:
+// This is the implementation using AVX2, BMI1 and BMI2. It is based on:
 // "SHA-1 implementation with Intel(R) AVX2 instruction set extensions"
 // From http://software.intel.com/en-us/articles
 // (look for improving-the-performance-of-the-secure-hash-algorithm-1)
@@ -1451,24 +1451,9 @@ TEXT ·blockAVX2(SB),$1408-32
 	CMPQ	R13, R11
 	CMOVQCC	R8, R13
 
-	MOVQ    $BSWAP_SHUFB_CTL<>(SB), R8
-	VMOVDQU (R8), Y10
-	MOVQ	$K_XMM_AR<>(SB), R8 //restore R8
+	VMOVDQU	BSWAP_SHUFB_CTL<>(SB), Y10
 
 	CALC // RET is inside macros
-
-
-// func checkAVX2() bool
-// returns whether AVX2 is supported
-TEXT ·checkAVX2(SB),NOSPLIT,$0
-	CMPB runtime·support_avx2(SB), $1
-	JE   has
-        MOVB    $0, ret+0(FP)
-	RET
-has:
-        MOVB    $1, ret+0(FP)
-	RET
-
 
 DATA K_XMM_AR<>+0x00(SB)/4,$0x5a827999
 DATA K_XMM_AR<>+0x04(SB)/4,$0x5a827999

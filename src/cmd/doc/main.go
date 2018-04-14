@@ -10,18 +10,18 @@
 //
 // One argument:
 //	go doc <pkg>
-//	go doc <sym>[.<method>]
-//	go doc [<pkg>.]<sym>[.<method>]
-//	go doc [<pkg>.][<sym>.]<method>
+//	go doc <sym>[.<methodOrField>]
+//	go doc [<pkg>.]<sym>[.<methodOrField>]
+//	go doc [<pkg>.][<sym>.]<methodOrField>
 // The first item in this list that succeeds is the one whose documentation
 // is printed. If there is a symbol but no package, the package in the current
 // directory is chosen. However, if the argument begins with a capital
 // letter it is always assumed to be a symbol in the current directory.
 //
 // Two arguments:
-//	go doc <pkg> <sym>[.<method>]
+//	go doc <pkg> <sym>[.<methodOrField>]
 //
-// Show the documentation for the package, symbol, and method. The
+// Show the documentation for the package, symbol, and method or field. The
 // first argument must be a full package path. This is similar to the
 // command-line usage for the godoc command.
 //
@@ -93,6 +93,9 @@ func do(writer io.Writer, flagSet *flag.FlagSet, args []string) (err error) {
 		if i > 0 && !more { // Ignore the "more" bit on the first iteration.
 			return failMessage(paths, symbol, method)
 		}
+		if buildPackage == nil {
+			return fmt.Errorf("no such package: %s", userPath)
+		}
 		symbol, method = parseSymbol(sym)
 		pkg := parsePackage(writer, buildPackage, userPath)
 		paths = append(paths, pkg.prettyPath())
@@ -129,6 +132,9 @@ func do(writer io.Writer, flagSet *flag.FlagSet, args []string) (err error) {
 			if pkg.methodDoc(symbol, method) {
 				return
 			}
+			if pkg.fieldDoc(symbol, method) {
+				return
+			}
 		}
 	}
 }
@@ -149,7 +155,7 @@ func failMessage(paths []string, symbol, method string) error {
 	if method == "" {
 		return fmt.Errorf("no symbol %s in package%s", symbol, &b)
 	}
-	return fmt.Errorf("no method %s.%s in package%s", symbol, method, &b)
+	return fmt.Errorf("no method or field %s.%s in package%s", symbol, method, &b)
 }
 
 // parseArgs analyzes the arguments (if any) and returns the package
@@ -164,24 +170,31 @@ func failMessage(paths []string, symbol, method string) error {
 // is rand.Float64, we must scan both crypto/rand and math/rand
 // to find the symbol, and the first call will return crypto/rand, true.
 func parseArgs(args []string) (pkg *build.Package, path, symbol string, more bool) {
+	if len(args) == 0 {
+		// Easy: current directory.
+		return importDir(pwd()), "", "", false
+	}
+	arg := args[0]
+	// We have an argument. If it is a directory name beginning with . or ..,
+	// use the absolute path name. This discriminates "./errors" from "errors"
+	// if the current directory contains a non-standard errors package.
+	if isDotSlash(arg) {
+		arg = filepath.Join(pwd(), arg)
+	}
 	switch len(args) {
 	default:
 		usage()
-	case 0:
-		// Easy: current directory.
-		return importDir(pwd()), "", "", false
 	case 1:
 		// Done below.
 	case 2:
-		// Package must be importable.
-		pkg, err := build.Import(args[0], "", build.ImportComment)
-		if err != nil {
-			log.Fatalf("%s", err)
+		// Package must be findable and importable.
+		packagePath, ok := findPackage(arg)
+		if !ok {
+			return nil, args[0], args[1], false
 		}
-		return pkg, args[0], args[1], false
+		return importDir(packagePath), arg, args[1], true
 	}
 	// Usual case: one argument.
-	arg := args[0]
 	// If it contains slashes, it begins with a package path.
 	// First, is it a complete package path as it is? If so, we are done.
 	// This avoids confusion over package paths that have other
@@ -227,7 +240,6 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 		}
 		// See if we have the basename or tail of a package, as in json for encoding/json
 		// or ivy/value for robpike.io/ivy/value.
-		// Launch findPackage as a goroutine so it can return multiple paths if required.
 		path, ok := findPackage(arg[0:period])
 		if ok {
 			return importDir(path), arg[0:period], symbol, true
@@ -240,6 +252,31 @@ func parseArgs(args []string) (pkg *build.Package, path, symbol string, more boo
 	}
 	// Guess it's a symbol in the current directory.
 	return importDir(pwd()), "", arg, false
+}
+
+// dotPaths lists all the dotted paths legal on Unix-like and
+// Windows-like file systems. We check them all, as the chance
+// of error is minute and even on Windows people will use ./
+// sometimes.
+var dotPaths = []string{
+	`./`,
+	`../`,
+	`.\`,
+	`..\`,
+}
+
+// isDotSlash reports whether the path begins with a reference
+// to the local . or .. directory.
+func isDotSlash(arg string) bool {
+	if arg == "." || arg == ".." {
+		return true
+	}
+	for _, dotPath := range dotPaths {
+		if strings.HasPrefix(arg, dotPath) {
+			return true
+		}
+	}
+	return false
 }
 
 // importDir is just an error-catching wrapper for build.ImportDir.

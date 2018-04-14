@@ -6,6 +6,7 @@ package runtime_test
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,20 @@ func BenchmarkConcatStringAndBytes(b *testing.B) {
 	}
 }
 
+var escapeString string
+
+func BenchmarkSliceByteToString(b *testing.B) {
+	buf := []byte{'!'}
+	for n := 0; n < 8; n++ {
+		b.Run(strconv.Itoa(len(buf)), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				escapeString = string(buf)
+			}
+		})
+		buf = append(buf, buf...)
+	}
+}
+
 var stringdata = []struct{ name, data string }{
 	{"ASCII", "01234567890"},
 	{"Japanese", "日本語日本語日本語"},
@@ -110,7 +125,7 @@ func BenchmarkRuneIterate(b *testing.B) {
 		for _, sd := range stringdata {
 			b.Run(sd.name, func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
-					for _ = range sd.data {
+					for range sd.data {
 					}
 				}
 			})
@@ -120,7 +135,7 @@ func BenchmarkRuneIterate(b *testing.B) {
 		for _, sd := range stringdata {
 			b.Run(sd.name, func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
-					for _, _ = range sd.data {
+					for range sd.data {
 					}
 				}
 			})

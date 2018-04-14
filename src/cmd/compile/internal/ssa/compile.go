@@ -5,6 +5,8 @@
 package ssa
 
 import (
+	"cmd/internal/objabi"
+	"cmd/internal/src"
 	"fmt"
 	"log"
 	"os"
@@ -41,7 +43,7 @@ func Compile(f *Func) {
 
 	// Run all the passes
 	printFunc(f)
-	f.Config.HTML.WriteFunc("start", f)
+	f.HTMLWriter.WriteFunc("start", f)
 	if BuildDump != "" && BuildDump == f.Name {
 		f.dumpFile("build")
 	}
@@ -69,7 +71,7 @@ func Compile(f *Func) {
 		tEnd := time.Now()
 
 		// Need something less crude than "Log the whole intermediate result".
-		if f.Log() || f.Config.HTML != nil {
+		if f.Log() || f.HTMLWriter != nil {
 			time := tEnd.Sub(tStart).Nanoseconds()
 			var stats string
 			if logMemStats {
@@ -84,7 +86,7 @@ func Compile(f *Func) {
 
 			f.Logf("  pass %s end %s\n", p.name, stats)
 			printFunc(f)
-			f.Config.HTML.WriteFunc(fmt.Sprintf("after %s <span class=\"stats\">%s</span>", phaseName, stats), f)
+			f.HTMLWriter.WriteFunc(fmt.Sprintf("after %s <span class=\"stats\">%s</span>", phaseName, stats), f)
 		}
 		if p.time || p.mem {
 			// Surround timing information w/ enough context to allow comparisons.
@@ -121,14 +123,14 @@ var dumpFileSeq int
 // output.
 func (f *Func) dumpFile(phaseName string) {
 	dumpFileSeq++
-	fname := fmt.Sprintf("%s__%s_%d.dump", phaseName, f.Name, dumpFileSeq)
+	fname := fmt.Sprintf("%s_%02d__%s.dump", f.Name, dumpFileSeq, phaseName)
 	fname = strings.Replace(fname, " ", "_", -1)
 	fname = strings.Replace(fname, "/", "_", -1)
 	fname = strings.Replace(fname, ":", "_", -1)
 
 	fi, err := os.Create(fname)
 	if err != nil {
-		f.Config.Warnl(0, "Unable to create after-phase dump file %s", fname)
+		f.Warnl(src.NoXPos, "Unable to create after-phase dump file %s", fname)
 		return
 	}
 
@@ -202,7 +204,7 @@ func PhaseOption(phase, flag string, val int, valString string) string {
 			}
 		}
 		return "" +
-			`GcFlag -d=ssa/<phase>/<flag>[=<value>]|[:<function_name>]
+			`GcFlag -d=ssa/<phase>/<flag>[=<value>|<function_name>]
 <phase> is one of:
 ` + phasenames + `
 <flag> is one of on, off, debug, mem, time, test, stats, dump
@@ -342,20 +344,24 @@ var passes = [...]pass{
 	{name: "prove", fn: prove},
 	{name: "loopbce", fn: loopbce},
 	{name: "decompose builtin", fn: decomposeBuiltIn, required: true},
-	{name: "dec", fn: dec, required: true},
+	{name: "softfloat", fn: softfloat, required: true},
 	{name: "late opt", fn: opt, required: true}, // TODO: split required rules and optimizing rules
 	{name: "generic deadcode", fn: deadcode},
 	{name: "check bce", fn: checkbce},
-	{name: "writebarrier", fn: writebarrier, required: true}, // expand write barrier ops
+	{name: "branchelim", fn: branchelim},
 	{name: "fuse", fn: fuse},
 	{name: "dse", fn: dse},
-	{name: "tighten", fn: tighten}, // move values closer to their uses
+	{name: "writebarrier", fn: writebarrier, required: true}, // expand write barrier ops
+	{name: "insert resched checks", fn: insertLoopReschedChecks,
+		disabled: objabi.Preemptibleloops_enabled == 0}, // insert resched checks in loops.
 	{name: "lower", fn: lower, required: true},
 	{name: "lowered cse", fn: cse},
+	{name: "elim unread autos", fn: elimUnreadAutos},
 	{name: "lowered deadcode", fn: deadcode, required: true},
 	{name: "checkLower", fn: checkLower, required: true},
 	{name: "late phielim", fn: phielim},
 	{name: "late copyelim", fn: copyelim},
+	{name: "tighten", fn: tighten}, // move values closer to their uses
 	{name: "phi tighten", fn: phiTighten},
 	{name: "late deadcode", fn: deadcode},
 	{name: "critical", fn: critical, required: true}, // remove critical edges
@@ -365,6 +371,7 @@ var passes = [...]pass{
 	{name: "late nilcheck", fn: nilcheckelim2},
 	{name: "flagalloc", fn: flagalloc, required: true}, // allocate flags register
 	{name: "regalloc", fn: regalloc, required: true},   // allocate int & float registers + stack slots
+	{name: "loop rotate", fn: loopRotate},
 	{name: "stackframe", fn: stackframe, required: true},
 	{name: "trim", fn: trim}, // remove empty blocks
 }
@@ -378,7 +385,13 @@ type constraint struct {
 }
 
 var passOrder = [...]constraint{
-	// prove reliese on common-subexpression elimination for maximum benefits.
+	// "insert resched checks" uses mem, better to clean out stores first.
+	{"dse", "insert resched checks"},
+	// insert resched checks adds new blocks containing generic instructions
+	{"insert resched checks", "lower"},
+	{"insert resched checks", "tighten"},
+
+	// prove relies on common-subexpression elimination for maximum benefits.
 	{"generic cse", "prove"},
 	// deadcode after prove to eliminate all new dead blocks.
 	{"prove", "generic deadcode"},
@@ -393,8 +406,6 @@ var passOrder = [...]constraint{
 	{"nilcheckelim", "fuse"},
 	// nilcheckelim relies on opt to rewrite user nil checks
 	{"opt", "nilcheckelim"},
-	// tighten should happen before lowering to avoid splitting naturally paired instructions such as CMP/SET
-	{"tighten", "lower"},
 	// tighten will be most effective when as many values have been removed as possible
 	{"generic deadcode", "tighten"},
 	{"generic cse", "tighten"},
@@ -402,6 +413,8 @@ var passOrder = [...]constraint{
 	{"generic deadcode", "check bce"},
 	// don't run optimization pass until we've decomposed builtin objects
 	{"decompose builtin", "late opt"},
+	// decompose builtin is the last pass that may introduce new float ops, so run softfloat after it
+	{"decompose builtin", "softfloat"},
 	// don't layout blocks until critical edges have been removed
 	{"critical", "layout"},
 	// regalloc requires the removal of all critical edges
@@ -417,6 +430,8 @@ var passOrder = [...]constraint{
 	{"schedule", "flagalloc"},
 	// regalloc needs flags to be allocated first.
 	{"flagalloc", "regalloc"},
+	// loopRotate will confuse regalloc.
+	{"regalloc", "loop rotate"},
 	// stackframe needs to know about spilled registers.
 	{"regalloc", "stackframe"},
 	// trim needs regalloc to be done first.

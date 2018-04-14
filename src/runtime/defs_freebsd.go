@@ -28,8 +28,19 @@ package runtime
 #include <sys/thr.h>
 #include <sys/_sigset.h>
 #include <sys/unistd.h>
+#include <sys/sysctl.h>
+#include <sys/cpuset.h>
+#include <sys/param.h>
 */
 import "C"
+
+// Local consts.
+const (
+	_NBBY            = C.NBBY            // Number of bits in a byte.
+	_CTL_MAXNAME     = C.CTL_MAXNAME     // Largest number of components supported.
+	_CPU_LEVEL_WHICH = C.CPU_LEVEL_WHICH // Actual mask/id for which.
+	_CPU_WHICH_PID   = C.CPU_WHICH_PID   // Specifies a process id.
+)
 
 const (
 	EINTR  = C.EINTR
@@ -114,6 +125,7 @@ const (
 	EV_CLEAR     = C.EV_CLEAR
 	EV_RECEIPT   = C.EV_RECEIPT
 	EV_ERROR     = C.EV_ERROR
+	EV_EOF       = C.EV_EOF
 	EVFILT_READ  = C.EVFILT_READ
 	EVFILT_WRITE = C.EVFILT_WRITE
 )

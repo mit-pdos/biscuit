@@ -29,12 +29,13 @@ const minPhysPageSize = 4096
 //go:notinheap
 type mheap struct {
 	lock      mutex
-	free      [_MaxMHeapList]mSpanList // free lists of given length
-	freelarge mSpanList                // free lists length >= _MaxMHeapList
-	busy      [_MaxMHeapList]mSpanList // busy lists of large objects of given length
-	busylarge mSpanList                // busy lists of large objects length >= _MaxMHeapList
+	free      [_MaxMHeapList]mSpanList // free lists of given length up to _MaxMHeapList
+	freelarge mTreap                   // free treap of length >= _MaxMHeapList
+	busy      [_MaxMHeapList]mSpanList // busy lists of large spans of given length
+	busylarge mSpanList                // busy lists of large spans length >= _MaxMHeapList
 	sweepgen  uint32                   // sweep generation, see comment in mspan
 	sweepdone uint32                   // all spans are swept
+	sweepers  uint32                   // number of active sweepone calls
 
 	// allspans is a slice of all mspans ever created. Each mspan
 	// appears exactly once.
@@ -49,17 +50,6 @@ type mheap struct {
 	// access (since that may free the backing store).
 	allspans []*mspan // all spans out there
 
-	// spans is a lookup table to map virtual address page IDs to *mspan.
-	// For allocated spans, their pages map to the span itself.
-	// For free spans, only the lowest and highest pages map to the span itself.
-	// Internal pages map to an arbitrary span.
-	// For pages that have never been allocated, spans entries are nil.
-	//
-	// This is backed by a reserved region of the address space so
-	// it can grow without moving. The memory up to len(spans) is
-	// mapped. cap(spans) indicates the total reserved memory.
-	spans []*mspan
-
 	// sweepSpans contains two mspan stacks: one of swept in-use
 	// spans, and one of unswept in-use spans. These two trade
 	// roles on each GC cycle. Since the sweepgen increases by 2
@@ -71,53 +61,147 @@ type mheap struct {
 	// on the swept stack.
 	sweepSpans [2]gcSweepBuf
 
-	_ uint32 // align uint64 fields on 32-bit for atomics
+	//_ uint32 // align uint64 fields on 32-bit for atomics
 
 	// Proportional sweep
-	pagesInUse        uint64  // pages of spans in stats _MSpanInUse; R/W with mheap.lock
-	spanBytesAlloc    uint64  // bytes of spans allocated this cycle; updated atomically
-	pagesSwept        uint64  // pages swept this cycle; updated atomically
-	sweepPagesPerByte float64 // proportional sweep ratio; written with lock, read without
+	//
+	// These parameters represent a linear function from heap_live
+	// to page sweep count. The proportional sweep system works to
+	// stay in the black by keeping the current page sweep count
+	// above this line at the current heap_live.
+	//
+	// The line has slope sweepPagesPerByte and passes through a
+	// basis point at (sweepHeapLiveBasis, pagesSweptBasis). At
+	// any given time, the system is at (memstats.heap_live,
+	// pagesSwept) in this space.
+	//
+	// It's important that the line pass through a point we
+	// control rather than simply starting at a (0,0) origin
+	// because that lets us adjust sweep pacing at any time while
+	// accounting for current progress. If we could only adjust
+	// the slope, it would create a discontinuity in debt if any
+	// progress has already been made.
+	pagesInUse         uint64  // pages of spans in stats _MSpanInUse; R/W with mheap.lock
+	pagesSwept         uint64  // pages swept this cycle; updated atomically
+	pagesSweptBasis    uint64  // pagesSwept to use as the origin of the sweep ratio; updated atomically
+	sweepHeapLiveBasis uint64  // value of heap_live to use as the origin of sweep ratio; written with lock, read without
+	sweepPagesPerByte  float64 // proportional sweep ratio; written with lock, read without
 	// TODO(austin): pagesInUse should be a uintptr, but the 386
 	// compiler can't 8-byte align fields.
 
 	// Malloc stats.
-	largefree  uint64                  // bytes freed for large objects (>maxsmallsize)
-	nlargefree uint64                  // number of frees for large objects (>maxsmallsize)
-	nsmallfree [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
+	largealloc  uint64                  // bytes allocated for large objects
+	nlargealloc uint64                  // number of large object allocations
+	largefree   uint64                  // bytes freed for large objects (>maxsmallsize)
+	nlargefree  uint64                  // number of frees for large objects (>maxsmallsize)
+	nsmallfree  [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
 
-	// range of addresses we might see in the heap
-	bitmap         uintptr // Points to one byte past the end of the bitmap
-	bitmap_mapped  uintptr
-	arena_start    uintptr
-	arena_used     uintptr // always mHeap_Map{Bits,Spans} before updating
-	arena_end      uintptr
-	arena_reserved bool
+	// arenas is the heap arena map. It points to the metadata for
+	// the heap for every arena frame of the entire usable virtual
+	// address space.
+	//
+	// Use arenaIndex to compute indexes into this array.
+	//
+	// For regions of the address space that are not backed by the
+	// Go heap, the arena map contains nil.
+	//
+	// Modifications are protected by mheap_.lock. Reads can be
+	// performed without locking; however, a given entry can
+	// transition from nil to non-nil at any time when the lock
+	// isn't held. (Entries never transitions back to nil.)
+	//
+	// In general, this is a two-level mapping consisting of an L1
+	// map and possibly many L2 maps. This saves space when there
+	// are a huge number of arena frames. However, on many
+	// platforms (even 64-bit), arenaL1Bits is 0, making this
+	// effectively a single-level map. In this case, arenas[0]
+	// will never be nil.
+	arenas [1 << arenaL1Bits]*[1 << arenaL2Bits]*heapArena
+
+	// heapArenaAlloc is pre-reserved space for allocating heapArena
+	// objects. This is only used on 32-bit, where we pre-reserve
+	// this space to avoid interleaving it with the heap itself.
+	heapArenaAlloc linearAlloc
+
+	// arenaHints is a list of addresses at which to attempt to
+	// add more heap arenas. This is initially populated with a
+	// set of general hint addresses, and grown with the bounds of
+	// actual heap arena ranges.
+	arenaHints *arenaHint
+
+	// arena is a pre-reserved space for allocating heap arenas
+	// (the actual arenas). This is only used on 32-bit.
+	arena linearAlloc
+
+	//_ uint32 // ensure 64-bit alignment of central
 
 	// central free lists for small size classes.
 	// the padding makes sure that the MCentrals are
 	// spaced CacheLineSize bytes apart, so that each MCentral.lock
 	// gets its own cache line.
-	central [_NumSizeClasses]struct {
+	// central is indexed by spanClass.
+	central [numSpanClasses]struct {
 		mcentral mcentral
-		pad      [sys.CacheLineSize]byte
+		pad      [sys.CacheLineSize - unsafe.Sizeof(mcentral{})%sys.CacheLineSize]byte
 	}
 
 	spanalloc             fixalloc // allocator for span*
 	cachealloc            fixalloc // allocator for mcache*
+	treapalloc            fixalloc // allocator for treapNodes* used by large objects
 	specialfinalizeralloc fixalloc // allocator for specialfinalizer*
 	specialprofilealloc   fixalloc // allocator for specialprofile*
 	speciallock           mutex    // lock for special record allocators.
+	arenaHintAlloc        fixalloc // allocator for arenaHints
+
+	unused *specialfinalizer // never set, just here to force the specialfinalizer type into DWARF
 }
 
 var mheap_ mheap
+
+// A heapArena stores metadata for a heap arena. heapArenas are stored
+// outside of the Go heap and accessed via the mheap_.arenas index.
+//
+// This gets allocated directly from the OS, so ideally it should be a
+// multiple of the system page size. For example, avoid adding small
+// fields.
+//
+//go:notinheap
+type heapArena struct {
+	// bitmap stores the pointer/scalar bitmap for the words in
+	// this arena. See mbitmap.go for a description. Use the
+	// heapBits type to access this.
+	bitmap [heapArenaBitmapBytes]byte
+
+	// spans maps from virtual address page ID within this arena to *mspan.
+	// For allocated spans, their pages map to the span itself.
+	// For free spans, only the lowest and highest pages map to the span itself.
+	// Internal pages map to an arbitrary span.
+	// For pages that have never been allocated, spans entries are nil.
+	//
+	// Modifications are protected by mheap.lock. Reads can be
+	// performed without locking, but ONLY from indexes that are
+	// known to contain in-use or stack spans. This means there
+	// must not be a safe-point between establishing that an
+	// address is live and looking it up in the spans array.
+	spans [pagesPerArena]*mspan
+}
+
+// arenaHint is a hint for where to grow the heap arenas. See
+// mheap_.arenaHints.
+//
+//go:notinheap
+type arenaHint struct {
+	addr uintptr
+	down bool
+	next *arenaHint
+}
 
 // An MSpan is a run of pages.
 //
 // When a MSpan is in the heap free list, state == MSpanFree
 // and heapmap(s->start) == span, heapmap(s->start+s->npages-1) == span.
 //
-// When a MSpan is allocated, state == MSpanInUse or MSpanStack
+// When a MSpan is allocated, state == MSpanInUse or MSpanManual
 // and heapmap(i) == span for all s->start <= i < s->start+s->npages.
 
 // Every MSpan is in one doubly-linked list,
@@ -125,25 +209,25 @@ var mheap_ mheap
 // MCentral's span lists.
 
 // An MSpan representing actual memory has state _MSpanInUse,
-// _MSpanStack, or _MSpanFree. Transitions between these states are
+// _MSpanManual, or _MSpanFree. Transitions between these states are
 // constrained as follows:
 //
-// * A span may transition from free to in-use or stack during any GC
+// * A span may transition from free to in-use or manual during any GC
 //   phase.
 //
 // * During sweeping (gcphase == _GCoff), a span may transition from
-//   in-use to free (as a result of sweeping) or stack to free (as a
+//   in-use to free (as a result of sweeping) or manual to free (as a
 //   result of stacks being freed).
 //
 // * During GC (gcphase != _GCoff), a span *must not* transition from
-//   stack or in-use to free. Because concurrent GC may read a pointer
+//   manual or in-use to free. Because concurrent GC may read a pointer
 //   and then look up its span, the span state must be monotonic.
 type mSpanState uint8
 
 const (
-	_MSpanDead  mSpanState = iota
-	_MSpanInUse            // allocated for garbage collected heap
-	_MSpanStack            // allocated for use by stack allocator
+	_MSpanDead   mSpanState = iota
+	_MSpanInUse             // allocated for garbage collected heap
+	_MSpanManual            // allocated for manual management (e.g., stack allocator)
 	_MSpanFree
 )
 
@@ -152,7 +236,7 @@ const (
 var mSpanStateNames = []string{
 	"_MSpanDead",
 	"_MSpanInUse",
-	"_MSpanStack",
+	"_MSpanManual",
 	"_MSpanFree",
 }
 
@@ -170,15 +254,16 @@ type mspan struct {
 	prev *mspan     // previous span in list, or nil if none
 	list *mSpanList // For debugging. TODO: Remove.
 
-	startAddr     uintptr   // address of first byte of span aka s.base()
-	npages        uintptr   // number of pages in span
-	stackfreelist gclinkptr // list of free stacks, avoids overloading freelist
+	startAddr uintptr // address of first byte of span aka s.base()
+	npages    uintptr // number of pages in span
+
+	manualFreeList gclinkptr // list of free objects in _MSpanManual spans
 
 	// freeindex is the slot index between 0 and nelems at which to begin scanning
 	// for the next free object in this span.
 	// Each allocation scans allocBits starting at freeindex until it encounters a 0
 	// indicating a free object. freeindex is then adjusted so that subsequent scans begin
-	// just past the the newly discovered free object.
+	// just past the newly discovered free object.
 	//
 	// If freeindex == nelem, this span has no free objects.
 	//
@@ -224,8 +309,8 @@ type mspan struct {
 	// The sweep will free the old allocBits and set allocBits to the
 	// gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
 	// out memory.
-	allocBits  *uint8
-	gcmarkBits *uint8
+	allocBits  *gcBits
+	gcmarkBits *gcBits
 
 	// sweep generation:
 	// if sweepgen == h->sweepgen - 2, the span needs sweeping
@@ -236,8 +321,8 @@ type mspan struct {
 	sweepgen    uint32
 	divMul      uint16     // for divide by elemsize - divMagic.mul
 	baseMask    uint16     // if non-0, elemsize is a power of 2, & this will get object allocation base
-	allocCount  uint16     // capacity - number of objects in freelist
-	sizeclass   uint8      // size class
+	allocCount  uint16     // number of allocated objects
+	spanclass   spanClass  // size class and noscan (uint8)
 	incache     bool       // being used by an mcache
 	state       mSpanState // mspaninuse etc
 	needzero    uint8      // needs to be zeroed before allocation
@@ -264,6 +349,17 @@ func (s *mspan) layout() (size, n, total uintptr) {
 	return
 }
 
+// recordspan adds a newly allocated span to h.allspans.
+//
+// This only happens the first time a span is allocated from
+// mheap.spanalloc (it is not called when a span is reused).
+//
+// Write barriers are disallowed here because it can be called from
+// gcWork when allocating new workbufs. However, because it's an
+// indirect call from the fixalloc initializer, the compiler can't see
+// this.
+//
+//go:nowritebarrierrec
 func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {
 	h := (*mheap)(vh)
 	s := (*mspan)(p)
@@ -284,127 +380,184 @@ func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {
 			copy(new, h.allspans)
 		}
 		oldAllspans := h.allspans
-		h.allspans = new
+		*(*notInHeapSlice)(unsafe.Pointer(&h.allspans)) = *(*notInHeapSlice)(unsafe.Pointer(&new))
 		if len(oldAllspans) != 0 {
 			sysFree(unsafe.Pointer(&oldAllspans[0]), uintptr(cap(oldAllspans))*unsafe.Sizeof(oldAllspans[0]), &memstats.other_sys)
 		}
 	}
-	h.allspans = append(h.allspans, s)
+	h.allspans = h.allspans[:len(h.allspans)+1]
+	h.allspans[len(h.allspans)-1] = s
+}
+
+// A spanClass represents the size class and noscan-ness of a span.
+//
+// Each size class has a noscan spanClass and a scan spanClass. The
+// noscan spanClass contains only noscan objects, which do not contain
+// pointers and thus do not need to be scanned by the garbage
+// collector.
+type spanClass uint8
+
+const (
+	numSpanClasses = _NumSizeClasses << 1
+	tinySpanClass  = spanClass(tinySizeClass<<1 | 1)
+)
+
+func makeSpanClass(sizeclass uint8, noscan bool) spanClass {
+	return spanClass(sizeclass<<1) | spanClass(bool2int(noscan))
+}
+
+func (sc spanClass) sizeclass() int8 {
+	return int8(sc >> 1)
+}
+
+func (sc spanClass) noscan() bool {
+	return sc&1 != 0
+}
+
+// arenaIndex returns the index into mheap_.arenas of the arena
+// containing metadata for p. This index combines of an index into the
+// L1 map and an index into the L2 map and should be used as
+// mheap_.arenas[ai.l1()][ai.l2()].
+//
+// If p is outside the range of valid heap addresses, either l1() or
+// l2() will be out of bounds.
+//
+// It is nosplit because it's called by spanOf and several other
+// nosplit functions.
+//
+//go:nosplit
+func arenaIndex(p uintptr) arenaIdx {
+	return arenaIdx((p + arenaBaseOffset) / heapArenaBytes)
+}
+
+// arenaBase returns the low address of the region covered by heap
+// arena i.
+func arenaBase(i arenaIdx) uintptr {
+	return uintptr(i)*heapArenaBytes - arenaBaseOffset
+}
+
+type arenaIdx uint
+
+func (i arenaIdx) l1() uint {
+	if arenaL1Bits == 0 {
+		// Let the compiler optimize this away if there's no
+		// L1 map.
+		return 0
+	} else {
+		return uint(i) >> arenaL1Shift
+	}
+}
+
+func (i arenaIdx) l2() uint {
+	if arenaL1Bits == 0 {
+		return uint(i)
+	} else {
+		return uint(i) & (1<<arenaL2Bits - 1)
+	}
 }
 
 // inheap reports whether b is a pointer into a (potentially dead) heap object.
-// It returns false for pointers into stack spans.
+// It returns false for pointers into _MSpanManual spans.
 // Non-preemptible because it is used by write barriers.
 //go:nowritebarrier
 //go:nosplit
 func inheap(b uintptr) bool {
-	if b == 0 || b < mheap_.arena_start || b >= mheap_.arena_used {
-		return false
-	}
-	// Not a beginning of a block, consult span table to find the block beginning.
-	s := mheap_.spans[(b-mheap_.arena_start)>>_PageShift]
-	if s == nil || b < s.base() || b >= s.limit || s.state != mSpanInUse {
-		return false
-	}
-	return true
+	return spanOfHeap(b) != nil
 }
 
-// inHeapOrStack is a variant of inheap that returns true for pointers into stack spans.
+// inHeapOrStack is a variant of inheap that returns true for pointers
+// into any allocated heap span.
+//
 //go:nowritebarrier
 //go:nosplit
 func inHeapOrStack(b uintptr) bool {
-	if b == 0 || b < mheap_.arena_start || b >= mheap_.arena_used {
-		return false
-	}
-	// Not a beginning of a block, consult span table to find the block beginning.
-	s := mheap_.spans[(b-mheap_.arena_start)>>_PageShift]
+	s := spanOf(b)
 	if s == nil || b < s.base() {
 		return false
 	}
 	switch s.state {
-	case mSpanInUse:
+	case mSpanInUse, _MSpanManual:
 		return b < s.limit
-	case _MSpanStack:
-		return b < s.base()+s.npages<<_PageShift
 	default:
 		return false
 	}
 }
 
-// TODO: spanOf and spanOfUnchecked are open-coded in a lot of places.
-// Use the functions instead.
-
-// spanOf returns the span of p. If p does not point into the heap or
-// no span contains p, spanOf returns nil.
+// spanOf returns the span of p. If p does not point into the heap
+// arena or no span has ever contained p, spanOf returns nil.
+//
+// If p does not point to allocated memory, this may return a non-nil
+// span that does *not* contain p. If this is a possibility, the
+// caller should either call spanOfHeap or check the span bounds
+// explicitly.
+//
+// Must be nosplit because it has callers that are nosplit.
+//
+//go:nosplit
 func spanOf(p uintptr) *mspan {
-	if p == 0 || p < mheap_.arena_start || p >= mheap_.arena_used {
+	// This function looks big, but we use a lot of constant
+	// folding around arenaL1Bits to get it under the inlining
+	// budget. Also, many of the checks here are safety checks
+	// that Go needs to do anyway, so the generated code is quite
+	// short.
+	ri := arenaIndex(p)
+	if arenaL1Bits == 0 {
+		// If there's no L1, then ri.l1() can't be out of bounds but ri.l2() can.
+		if ri.l2() >= uint(len(mheap_.arenas[0])) {
+			return nil
+		}
+	} else {
+		// If there's an L1, then ri.l1() can be out of bounds but ri.l2() can't.
+		if ri.l1() >= uint(len(mheap_.arenas)) {
+			return nil
+		}
+	}
+	l2 := mheap_.arenas[ri.l1()]
+	if arenaL1Bits != 0 && l2 == nil { // Should never happen if there's no L1.
 		return nil
 	}
-	return spanOfUnchecked(p)
+	ha := l2[ri.l2()]
+	if ha == nil {
+		return nil
+	}
+	return ha.spans[(p/pageSize)%pagesPerArena]
 }
 
 // spanOfUnchecked is equivalent to spanOf, but the caller must ensure
-// that p points into the heap (that is, mheap_.arena_start <= p <
-// mheap_.arena_used).
+// that p points into an allocated heap arena.
+//
+// Must be nosplit because it has callers that are nosplit.
+//
+//go:nosplit
 func spanOfUnchecked(p uintptr) *mspan {
-	return mheap_.spans[(p-mheap_.arena_start)>>_PageShift]
+	ai := arenaIndex(p)
+	return mheap_.arenas[ai.l1()][ai.l2()].spans[(p/pageSize)%pagesPerArena]
 }
 
-func mlookup(v uintptr, base *uintptr, size *uintptr, sp **mspan) int32 {
-	_g_ := getg()
-
-	_g_.m.mcache.local_nlookup++
-	if sys.PtrSize == 4 && _g_.m.mcache.local_nlookup >= 1<<30 {
-		// purge cache stats to prevent overflow
-		lock(&mheap_.lock)
-		purgecachedstats(_g_.m.mcache)
-		unlock(&mheap_.lock)
+// spanOfHeap is like spanOf, but returns nil if p does not point to a
+// heap object.
+//
+// Must be nosplit because it has callers that are nosplit.
+//
+//go:nosplit
+func spanOfHeap(p uintptr) *mspan {
+	s := spanOf(p)
+	// If p is not allocated, it may point to a stale span, so we
+	// have to check the span's bounds and state.
+	if s == nil || p < s.base() || p >= s.limit || s.state != mSpanInUse {
+		return nil
 	}
-
-	s := mheap_.lookupMaybe(unsafe.Pointer(v))
-	if sp != nil {
-		*sp = s
-	}
-	if s == nil {
-		if base != nil {
-			*base = 0
-		}
-		if size != nil {
-			*size = 0
-		}
-		return 0
-	}
-
-	p := s.base()
-	if s.sizeclass == 0 {
-		// Large object.
-		if base != nil {
-			*base = p
-		}
-		if size != nil {
-			*size = s.npages << _PageShift
-		}
-		return 1
-	}
-
-	n := s.elemsize
-	if base != nil {
-		i := (v - p) / n
-		*base = p + i*n
-	}
-	if size != nil {
-		*size = n
-	}
-
-	return 1
+	return s
 }
 
 // Initialize the heap.
-func (h *mheap) init(spansStart, spansBytes uintptr) {
+func (h *mheap) init() {
+	h.treapalloc.init(unsafe.Sizeof(treapNode{}), nil, nil, &memstats.other_sys)
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
 	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
 	h.specialfinalizeralloc.init(unsafe.Sizeof(specialfinalizer{}), nil, nil, &memstats.other_sys)
 	h.specialprofilealloc.init(unsafe.Sizeof(specialprofile{}), nil, nil, &memstats.other_sys)
+	h.arenaHintAlloc.init(unsafe.Sizeof(arenaHint{}), nil, nil, &memstats.other_sys)
 
 	// Don't zero mspan allocations. Background sweeping can
 	// inspect a span concurrently with allocating it, so it's
@@ -421,39 +574,10 @@ func (h *mheap) init(spansStart, spansBytes uintptr) {
 		h.busy[i].init()
 	}
 
-	h.freelarge.init()
 	h.busylarge.init()
 	for i := range h.central {
-		h.central[i].mcentral.init(int32(i))
+		h.central[i].mcentral.init(spanClass(i))
 	}
-
-	sp := (*slice)(unsafe.Pointer(&h.spans))
-	sp.array = unsafe.Pointer(spansStart)
-	sp.len = 0
-	sp.cap = int(spansBytes / sys.PtrSize)
-}
-
-// mHeap_MapSpans makes sure that the spans are mapped
-// up to the new value of arena_used.
-//
-// It must be called with the expected new value of arena_used,
-// *before* h.arena_used has been updated.
-// Waiting to update arena_used until after the memory has been mapped
-// avoids faults when other threads try access the bitmap immediately
-// after observing the change to arena_used.
-func (h *mheap) mapSpans(arena_used uintptr) {
-	// Map spans array, PageSize at a time.
-	n := arena_used
-	n -= h.arena_start
-	n = n / _PageSize * sys.PtrSize
-	n = round(n, physPageSize)
-	need := n / unsafe.Sizeof(h.spans[0])
-	have := uintptr(len(h.spans))
-	if have >= need {
-		return
-	}
-	h.spans = h.spans[:need]
-	sysMap(unsafe.Pointer(&h.spans[have]), (need-have)*unsafe.Sizeof(h.spans[0]), h.arena_reserved, &memstats.other_sys)
 }
 
 // Sweeps spans in list until reclaims at least npages into heap.
@@ -466,7 +590,7 @@ retry:
 		if s.sweepgen == sg-2 && atomic.Cas(&s.sweepgen, sg-2, sg-1) {
 			list.remove(s)
 			// swept spans are at the end of the list
-			list.insertBack(s)
+			list.insertBack(s) // Puts it back on a busy list. s is not in the treap at this point.
 			unlock(&h.lock)
 			snpages := s.npages
 			if s.sweep(false) {
@@ -480,7 +604,7 @@ retry:
 			goto retry
 		}
 		if s.sweepgen == sg-1 {
-			// the span is being sweept by background sweeper, skip
+			// the span is being swept by background sweeper, skip
 			continue
 		}
 		// already swept empty span,
@@ -533,7 +657,7 @@ func (h *mheap) reclaim(npage uintptr) {
 
 // Allocate a new span of npage pages from the heap for GC'd memory
 // and record its size class in the HeapMap and HeapMapCache.
-func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
+func (h *mheap) alloc_m(npage uintptr, spanclass spanClass, large bool) *mspan {
 	_g_ := getg()
 	if _g_ != _g_.m.g0 {
 		throw("_mheap_alloc not on g0 stack")
@@ -550,7 +674,13 @@ func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
 		// If GC kept a bit for whether there were any marks
 		// in a span, we could release these free spans
 		// at the end of GC and eliminate this entirely.
+		if trace.enabled {
+			traceGCSweepStart()
+		}
 		h.reclaim(npage)
+		if trace.enabled {
+			traceGCSweepDone()
+		}
 	}
 
 	// transfer stats from cache to global
@@ -559,7 +689,7 @@ func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
 	memstats.tinyallocs += uint64(_g_.m.mcache.local_tinyallocs)
 	_g_.m.mcache.local_tinyallocs = 0
 
-	s := h.allocSpanLocked(npage)
+	s := h.allocSpanLocked(npage, &memstats.heap_inuse)
 	if s != nil {
 		// Record span info, because gc needs to be
 		// able to map interior pointer to containing span.
@@ -567,8 +697,8 @@ func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
 		h.sweepSpans[h.sweepgen/2%2].push(s) // Add to swept in-use list.
 		s.state = _MSpanInUse
 		s.allocCount = 0
-		s.sizeclass = uint8(sizeclass)
-		if sizeclass == 0 {
+		s.spanclass = spanclass
+		if sizeclass := spanclass.sizeclass(); sizeclass == 0 {
 			s.elemsize = s.npages << _PageShift
 			s.divShift = 0
 			s.divMul = 0
@@ -587,9 +717,11 @@ func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
 		h.pagesInUse += uint64(npage)
 		if large {
 			memstats.heap_objects++
+			mheap_.largealloc += uint64(s.elemsize)
+			mheap_.nlargealloc++
 			atomic.Xadd64(&memstats.heap_live, int64(npage<<_PageShift))
 			// Swept spans are at the end of lists.
-			if s.npages < uintptr(len(h.free)) {
+			if s.npages < uintptr(len(h.busy)) {
 				h.busy[s.npages].insertBack(s)
 			} else {
 				h.busylarge.insertBack(s)
@@ -618,13 +750,13 @@ func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
 	return s
 }
 
-func (h *mheap) alloc(npage uintptr, sizeclass int32, large bool, needzero bool) *mspan {
+func (h *mheap) alloc(npage uintptr, spanclass spanClass, large bool, needzero bool) *mspan {
 	// Don't do any operations that lock the heap on the G stack.
 	// It might trigger stack growth, and the stack growth code needs
 	// to be able to allocate heap.
 	var s *mspan
 	systemstack(func() {
-		s = h.alloc_m(npage, sizeclass, large)
+		s = h.alloc_m(npage, spanclass, large)
 	})
 
 	if s != nil {
@@ -636,29 +768,68 @@ func (h *mheap) alloc(npage uintptr, sizeclass int32, large bool, needzero bool)
 	return s
 }
 
-func (h *mheap) allocStack(npage uintptr) *mspan {
-	_g_ := getg()
-	if _g_ != _g_.m.g0 {
-		throw("mheap_allocstack not on g0 stack")
-	}
+// allocManual allocates a manually-managed span of npage pages.
+// allocManual returns nil if allocation fails.
+//
+// allocManual adds the bytes used to *stat, which should be a
+// memstats in-use field. Unlike allocations in the GC'd heap, the
+// allocation does *not* count toward heap_inuse or heap_sys.
+//
+// The memory backing the returned span may not be zeroed if
+// span.needzero is set.
+//
+// allocManual must be called on the system stack to prevent stack
+// growth. Since this is used by the stack allocator, stack growth
+// during allocManual would self-deadlock.
+//
+//go:systemstack
+func (h *mheap) allocManual(npage uintptr, stat *uint64) *mspan {
 	lock(&h.lock)
-	s := h.allocSpanLocked(npage)
+	s := h.allocSpanLocked(npage, stat)
 	if s != nil {
-		s.state = _MSpanStack
-		s.stackfreelist = 0
+		s.state = _MSpanManual
+		s.manualFreeList = 0
 		s.allocCount = 0
-		memstats.stacks_inuse += uint64(s.npages << _PageShift)
+		s.spanclass = 0
+		s.nelems = 0
+		s.elemsize = 0
+		s.limit = s.base() + s.npages<<_PageShift
+		// Manually managed memory doesn't count toward heap_sys.
+		memstats.heap_sys -= uint64(s.npages << _PageShift)
 	}
 
-	// This unlock acts as a release barrier. See mHeap_Alloc_m.
+	// This unlock acts as a release barrier. See mheap.alloc_m.
 	unlock(&h.lock)
+
 	return s
+}
+
+// setSpan modifies the span map so spanOf(base) is s.
+func (h *mheap) setSpan(base uintptr, s *mspan) {
+	ai := arenaIndex(base)
+	h.arenas[ai.l1()][ai.l2()].spans[(base/pageSize)%pagesPerArena] = s
+}
+
+// setSpans modifies the span map so [spanOf(base), spanOf(base+npage*pageSize))
+// is s.
+func (h *mheap) setSpans(base, npage uintptr, s *mspan) {
+	p := base / pageSize
+	ai := arenaIndex(base)
+	ha := h.arenas[ai.l1()][ai.l2()]
+	for n := uintptr(0); n < npage; n++ {
+		i := (p + n) % pagesPerArena
+		if i == 0 {
+			ai = arenaIndex(base + n*pageSize)
+			ha = h.arenas[ai.l1()][ai.l2()]
+		}
+		ha.spans[i] = s
+	}
 }
 
 // Allocates a span of the given size.  h must be locked.
 // The returned span has been removed from the
 // free list, but its state is still MSpanFree.
-func (h *mheap) allocSpanLocked(npage uintptr) *mspan {
+func (h *mheap) allocSpanLocked(npage uintptr, stat *uint64) *mspan {
 	var list *mSpanList
 	var s *mspan
 
@@ -667,13 +838,12 @@ func (h *mheap) allocSpanLocked(npage uintptr) *mspan {
 		list = &h.free[i]
 		if !list.isEmpty() {
 			s = list.first
+			list.remove(s)
 			goto HaveSpan
 		}
 	}
-
 	// Best fit in list of large spans.
-	list = &h.freelarge
-	s = h.allocLarge(npage)
+	s = h.allocLarge(npage) // allocLarge removed s from h.freelarge for us
 	if s == nil {
 		if !h.grow(npage) {
 			return nil
@@ -692,10 +862,6 @@ HaveSpan:
 	if s.npages < npage {
 		throw("MHeap_AllocLocked - bad npages")
 	}
-	list.remove(s)
-	if s.inList() {
-		throw("still in list")
-	}
 	if s.npreleased > 0 {
 		sysUsed(unsafe.Pointer(s.base()), s.npages<<_PageShift)
 		memstats.heap_released -= uint64(s.npreleased << _PageShift)
@@ -707,26 +873,20 @@ HaveSpan:
 		t := (*mspan)(h.spanalloc.alloc())
 		t.init(s.base()+npage<<_PageShift, s.npages-npage)
 		s.npages = npage
-		p := (t.base() - h.arena_start) >> _PageShift
-		if p > 0 {
-			h.spans[p-1] = s
-		}
-		h.spans[p] = t
-		h.spans[p+t.npages-1] = t
+		h.setSpan(t.base()-1, s)
+		h.setSpan(t.base(), t)
+		h.setSpan(t.base()+t.npages*pageSize-1, t)
 		t.needzero = s.needzero
-		s.state = _MSpanStack // prevent coalescing with s
-		t.state = _MSpanStack
+		s.state = _MSpanManual // prevent coalescing with s
+		t.state = _MSpanManual
 		h.freeSpanLocked(t, false, false, s.unusedsince)
 		s.state = _MSpanFree
 	}
 	s.unusedsince = 0
 
-	p := (s.base() - h.arena_start) >> _PageShift
-	for n := uintptr(0); n < npage; n++ {
-		h.spans[p+n] = s
-	}
+	h.setSpans(s.base(), npage, s)
 
-	memstats.heap_inuse += uint64(npage << _PageShift)
+	*stat += uint64(npage << _PageShift)
 	memstats.heap_idle -= uint64(npage << _PageShift)
 
 	//println("spanalloc", hex(s.start<<_PageShift))
@@ -736,24 +896,19 @@ HaveSpan:
 	return s
 }
 
-// Allocate a span of exactly npage pages from the list of large spans.
-func (h *mheap) allocLarge(npage uintptr) *mspan {
-	return bestFit(&h.freelarge, npage, nil)
+// Large spans have a minimum size of 1MByte. The maximum number of large spans to support
+// 1TBytes is 1 million, experimentation using random sizes indicates that the depth of
+// the tree is less that 2x that of a perfectly balanced tree. For 1TByte can be referenced
+// by a perfectly balanced tree with a depth of 20. Twice that is an acceptable 40.
+func (h *mheap) isLargeSpan(npages uintptr) bool {
+	return npages >= uintptr(len(h.free))
 }
 
-// Search list for smallest span with >= npage pages.
-// If there are multiple smallest spans, take the one
-// with the earliest starting address.
-func bestFit(list *mSpanList, npage uintptr, best *mspan) *mspan {
-	for s := list.first; s != nil; s = s.next {
-		if s.npages < npage {
-			continue
-		}
-		if best == nil || s.npages < best.npages || (s.npages == best.npages && s.base() < best.base()) {
-			best = s
-		}
-	}
-	return best
+// allocLarge allocates a span of at least npage pages from the treap of large spans.
+// Returns nil if no such span currently exists.
+func (h *mheap) allocLarge(npage uintptr) *mspan {
+	// Search treap for smallest span with >= npage pages.
+	return h.freelarge.remove(npage)
 }
 
 // Try to add at least npage pages of memory to the heap,
@@ -761,68 +916,23 @@ func bestFit(list *mSpanList, npage uintptr, best *mspan) *mspan {
 //
 // h must be locked.
 func (h *mheap) grow(npage uintptr) bool {
-	// Ask for a big chunk, to reduce the number of mappings
-	// the operating system needs to track; also amortizes
-	// the overhead of an operating system mapping.
-	// Allocate a multiple of 64kB.
-	npage = round(npage, (64<<10)/_PageSize)
 	ask := npage << _PageShift
-	if ask < _HeapAllocChunk {
-		ask = _HeapAllocChunk
-	}
-
-	v := h.sysAlloc(ask)
+	v, size := h.sysAlloc(ask)
 	if v == nil {
-		if ask > npage<<_PageShift {
-			ask = npage << _PageShift
-			v = h.sysAlloc(ask)
-		}
-		if v == nil {
-			print("runtime: out of memory: cannot allocate ", ask, "-byte block (", memstats.heap_sys, " in use)\n")
-			return false
-		}
+		print("runtime: out of memory: cannot allocate ", ask, "-byte block (", memstats.heap_sys, " in use)\n")
+		return false
 	}
 
 	// Create a fake "in use" span and free it, so that the
 	// right coalescing happens.
 	s := (*mspan)(h.spanalloc.alloc())
-	s.init(uintptr(v), ask>>_PageShift)
-	p := (s.base() - h.arena_start) >> _PageShift
-	for i := p; i < p+s.npages; i++ {
-		h.spans[i] = s
-	}
+	s.init(uintptr(v), size/pageSize)
+	h.setSpans(s.base(), s.npages, s)
 	atomic.Store(&s.sweepgen, h.sweepgen)
 	s.state = _MSpanInUse
 	h.pagesInUse += uint64(s.npages)
 	h.freeSpanLocked(s, false, true, 0)
 	return true
-}
-
-// Look up the span at the given address.
-// Address is guaranteed to be in map
-// and is guaranteed to be start or end of span.
-func (h *mheap) lookup(v unsafe.Pointer) *mspan {
-	p := uintptr(v)
-	p -= h.arena_start
-	return h.spans[p>>_PageShift]
-}
-
-// Look up the span at the given address.
-// Address is *not* guaranteed to be in map
-// and may be anywhere in the span.
-// Map entries for the middle of a span are only
-// valid for allocated spans. Free spans may have
-// other garbage in their middles, so we have to
-// check for that.
-func (h *mheap) lookupMaybe(v unsafe.Pointer) *mspan {
-	if uintptr(v) < h.arena_start || uintptr(v) >= h.arena_used {
-		return nil
-	}
-	s := h.spans[(uintptr(v)-h.arena_start)>>_PageShift]
-	if s == nil || uintptr(v) < s.base() || uintptr(v) >= uintptr(unsafe.Pointer(s.limit)) || s.state != _MSpanInUse {
-		return nil
-	}
-	return s
 }
 
 // Free the span back into the heap.
@@ -852,22 +962,30 @@ func (h *mheap) freeSpan(s *mspan, acct int32) {
 	})
 }
 
-func (h *mheap) freeStack(s *mspan) {
-	_g_ := getg()
-	if _g_ != _g_.m.g0 {
-		throw("mheap_freestack not on g0 stack")
-	}
+// freeManual frees a manually-managed span returned by allocManual.
+// stat must be the same as the stat passed to the allocManual that
+// allocated s.
+//
+// This must only be called when gcphase == _GCoff. See mSpanState for
+// an explanation.
+//
+// freeManual must be called on the system stack to prevent stack
+// growth, just like allocManual.
+//
+//go:systemstack
+func (h *mheap) freeManual(s *mspan, stat *uint64) {
 	s.needzero = 1
 	lock(&h.lock)
-	memstats.stacks_inuse -= uint64(s.npages << _PageShift)
-	h.freeSpanLocked(s, true, true, 0)
+	*stat -= uint64(s.npages << _PageShift)
+	memstats.heap_sys += uint64(s.npages << _PageShift)
+	h.freeSpanLocked(s, false, true, 0)
 	unlock(&h.lock)
 }
 
 // s must be on a busy list (h.busy or h.busylarge) or unlinked.
 func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool, unusedsince int64) {
 	switch s.state {
-	case _MSpanStack:
+	case _MSpanManual:
 		if s.allocCount != 0 {
 			throw("MHeap_FreeSpanLocked - invalid stack free")
 		}
@@ -901,50 +1019,90 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool, unusedsince i
 	s.npreleased = 0
 
 	// Coalesce with earlier, later spans.
-	p := (s.base() - h.arena_start) >> _PageShift
-	if p > 0 {
-		t := h.spans[p-1]
-		if t != nil && t.state == _MSpanFree {
-			s.startAddr = t.startAddr
-			s.npages += t.npages
-			s.npreleased = t.npreleased // absorb released pages
-			s.needzero |= t.needzero
-			p -= t.npages
-			h.spans[p] = s
-			h.freeList(t.npages).remove(t)
-			t.state = _MSpanDead
-			h.spanalloc.free(unsafe.Pointer(t))
+	if before := spanOf(s.base() - 1); before != nil && before.state == _MSpanFree {
+		// Now adjust s.
+		s.startAddr = before.startAddr
+		s.npages += before.npages
+		s.npreleased = before.npreleased // absorb released pages
+		s.needzero |= before.needzero
+		h.setSpan(before.base(), s)
+		// The size is potentially changing so the treap needs to delete adjacent nodes and
+		// insert back as a combined node.
+		if h.isLargeSpan(before.npages) {
+			// We have a t, it is large so it has to be in the treap so we can remove it.
+			h.freelarge.removeSpan(before)
+		} else {
+			h.freeList(before.npages).remove(before)
 		}
-	}
-	if (p + s.npages) < uintptr(len(h.spans)) {
-		t := h.spans[p+s.npages]
-		if t != nil && t.state == _MSpanFree {
-			s.npages += t.npages
-			s.npreleased += t.npreleased
-			s.needzero |= t.needzero
-			h.spans[p+s.npages-1] = s
-			h.freeList(t.npages).remove(t)
-			t.state = _MSpanDead
-			h.spanalloc.free(unsafe.Pointer(t))
-		}
+		before.state = _MSpanDead
+		h.spanalloc.free(unsafe.Pointer(before))
 	}
 
-	// Insert s into appropriate list.
-	h.freeList(s.npages).insert(s)
+	// Now check to see if next (greater addresses) span is free and can be coalesced.
+	if after := spanOf(s.base() + s.npages*pageSize); after != nil && after.state == _MSpanFree {
+		s.npages += after.npages
+		s.npreleased += after.npreleased
+		s.needzero |= after.needzero
+		h.setSpan(s.base()+s.npages*pageSize-1, s)
+		if h.isLargeSpan(after.npages) {
+			h.freelarge.removeSpan(after)
+		} else {
+			h.freeList(after.npages).remove(after)
+		}
+		after.state = _MSpanDead
+		h.spanalloc.free(unsafe.Pointer(after))
+	}
+
+	// Insert s into appropriate list or treap.
+	if h.isLargeSpan(s.npages) {
+		h.freelarge.insert(s)
+	} else {
+		h.freeList(s.npages).insert(s)
+	}
 }
 
 func (h *mheap) freeList(npages uintptr) *mSpanList {
-	if npages < uintptr(len(h.free)) {
-		return &h.free[npages]
-	}
-	return &h.freelarge
+	return &h.free[npages]
 }
 
 func (h *mheap) busyList(npages uintptr) *mSpanList {
-	if npages < uintptr(len(h.free)) {
+	if npages < uintptr(len(h.busy)) {
 		return &h.busy[npages]
 	}
 	return &h.busylarge
+}
+
+func scavengeTreapNode(t *treapNode, now, limit uint64) uintptr {
+	s := t.spanKey
+	var sumreleased uintptr
+	if (now-uint64(s.unusedsince)) > limit && s.npreleased != s.npages {
+		start := s.base()
+		end := start + s.npages<<_PageShift
+		if physPageSize > _PageSize {
+			// We can only release pages in
+			// physPageSize blocks, so round start
+			// and end in. (Otherwise, madvise
+			// will round them *out* and release
+			// more memory than we want.)
+			start = (start + physPageSize - 1) &^ (physPageSize - 1)
+			end &^= physPageSize - 1
+			if end <= start {
+				// start and end don't span a
+				// whole physical page.
+				return sumreleased
+			}
+		}
+		len := end - start
+		released := len - (s.npreleased << _PageShift)
+		if physPageSize > _PageSize && released == 0 {
+			return sumreleased
+		}
+		memstats.heap_released += uint64(released)
+		sumreleased += released
+		s.npreleased = len >> _PageShift
+		sysUnused(unsafe.Pointer(start), len)
+	}
+	return sumreleased
 }
 
 func scavengelist(list *mSpanList, now, limit uint64) uintptr {
@@ -954,60 +1112,65 @@ func scavengelist(list *mSpanList, now, limit uint64) uintptr {
 
 	var sumreleased uintptr
 	for s := list.first; s != nil; s = s.next {
-		if (now-uint64(s.unusedsince)) > limit && s.npreleased != s.npages {
-			start := s.base()
-			end := start + s.npages<<_PageShift
-			if physPageSize > _PageSize {
-				// We can only release pages in
-				// physPageSize blocks, so round start
-				// and end in. (Otherwise, madvise
-				// will round them *out* and release
-				// more memory than we want.)
-				start = (start + physPageSize - 1) &^ (physPageSize - 1)
-				end &^= physPageSize - 1
-				if end <= start {
-					// start and end don't span a
-					// whole physical page.
-					continue
-				}
-			}
-			len := end - start
-
-			released := len - (s.npreleased << _PageShift)
-			if physPageSize > _PageSize && released == 0 {
+		if (now-uint64(s.unusedsince)) <= limit || s.npreleased == s.npages {
+			continue
+		}
+		start := s.base()
+		end := start + s.npages<<_PageShift
+		if physPageSize > _PageSize {
+			// We can only release pages in
+			// physPageSize blocks, so round start
+			// and end in. (Otherwise, madvise
+			// will round them *out* and release
+			// more memory than we want.)
+			start = (start + physPageSize - 1) &^ (physPageSize - 1)
+			end &^= physPageSize - 1
+			if end <= start {
+				// start and end don't span a
+				// whole physical page.
 				continue
 			}
-			memstats.heap_released += uint64(released)
-			sumreleased += released
-			s.npreleased = len >> _PageShift
-			sysUnused(unsafe.Pointer(start), len)
 		}
+		len := end - start
+
+		released := len - (s.npreleased << _PageShift)
+		if physPageSize > _PageSize && released == 0 {
+			continue
+		}
+		memstats.heap_released += uint64(released)
+		sumreleased += released
+		s.npreleased = len >> _PageShift
+		sysUnused(unsafe.Pointer(start), len)
 	}
 	return sumreleased
 }
 
 func (h *mheap) scavenge(k int32, now, limit uint64) {
+	// Disallow malloc or panic while holding the heap lock. We do
+	// this here because this is an non-mallocgc entry-point to
+	// the mheap API.
+	gp := getg()
+	gp.m.mallocing++
 	lock(&h.lock)
 	var sumreleased uintptr
 	for i := 0; i < len(h.free); i++ {
 		sumreleased += scavengelist(&h.free[i], now, limit)
 	}
-	sumreleased += scavengelist(&h.freelarge, now, limit)
+	sumreleased += scavengetreap(h.freelarge.treap, now, limit)
 	unlock(&h.lock)
+	gp.m.mallocing--
 
 	if debug.gctrace > 0 {
 		if sumreleased > 0 {
 			print("scvg", k, ": ", sumreleased>>20, " MB released\n")
 		}
-		// TODO(dvyukov): these stats are incorrect as we don't subtract stack usage from heap.
-		// But we can't call ReadMemStats on g0 holding locks.
 		print("scvg", k, ": inuse: ", memstats.heap_inuse>>20, ", idle: ", memstats.heap_idle>>20, ", sys: ", memstats.heap_sys>>20, ", released: ", memstats.heap_released>>20, ", consumed: ", (memstats.heap_sys-memstats.heap_released)>>20, " (MB)\n")
 	}
 }
 
 //go:linkname runtime_debug_freeOSMemory runtime/debug.freeOSMemory
 func runtime_debug_freeOSMemory() {
-	gcStart(gcForceBlockMode, false)
+	GC()
 	systemstack(func() { mheap_.scavenge(-1, ^uint64(0), 0) })
 }
 
@@ -1020,7 +1183,7 @@ func (span *mspan) init(base uintptr, npages uintptr) {
 	span.startAddr = base
 	span.npages = npages
 	span.allocCount = 0
-	span.sizeclass = 0
+	span.spanclass = 0
 	span.incache = false
 	span.elemsize = 0
 	span.state = _MSpanDead
@@ -1046,7 +1209,8 @@ func (list *mSpanList) init() {
 
 func (list *mSpanList) remove(span *mspan) {
 	if span.list != list {
-		println("runtime: failed MSpanList_Remove", span, span.prev, span.list, list)
+		print("runtime: failed MSpanList_Remove span.npages=", span.npages,
+			" span=", span, " prev=", span.prev, " span.list=", span.list, " list=", list, "\n")
 		throw("MSpanList_Remove")
 	}
 	if list.first == span {
@@ -1088,7 +1252,7 @@ func (list *mSpanList) insert(span *mspan) {
 
 func (list *mSpanList) insertBack(span *mspan) {
 	if span.next != nil || span.prev != nil || span.list != nil {
-		println("failed MSpanList_InsertBack", span, span.next, span.prev, span.list)
+		println("runtime: failed MSpanList_InsertBack", span, span.next, span.prev, span.list)
 		throw("MSpanList_InsertBack")
 	}
 	span.prev = list.last
@@ -1101,6 +1265,31 @@ func (list *mSpanList) insertBack(span *mspan) {
 	}
 	list.last = span
 	span.list = list
+}
+
+// takeAll removes all spans from other and inserts them at the front
+// of list.
+func (list *mSpanList) takeAll(other *mSpanList) {
+	if other.isEmpty() {
+		return
+	}
+
+	// Reparent everything in other to list.
+	for s := other.first; s != nil; s = s.next {
+		s.list = list
+	}
+
+	// Concatenate the lists.
+	if list.isEmpty() {
+		*list = *other
+	} else {
+		// Neither list is empty. Put other before list.
+		other.last.next = list.first
+		list.first.prev = other.last
+		list.first = other.first
+	}
+
+	other.first, other.last = nil, nil
 }
 
 const (
@@ -1126,7 +1315,7 @@ type special struct {
 // (The add will fail only if a record with the same p and s->kind
 //  already exists.)
 func addspecial(p unsafe.Pointer, s *special) bool {
-	span := mheap_.lookupMaybe(p)
+	span := spanOfHeap(uintptr(p))
 	if span == nil {
 		throw("addspecial on invalid pointer")
 	}
@@ -1174,7 +1363,7 @@ func addspecial(p unsafe.Pointer, s *special) bool {
 // Returns the record if the record existed, nil otherwise.
 // The caller must FixAlloc_Free the result.
 func removespecial(p unsafe.Pointer, kind uint8) *special {
-	span := mheap_.lookupMaybe(p)
+	span := spanOfHeap(uintptr(p))
 	if span == nil {
 		throw("removespecial on invalid pointer")
 	}
@@ -1239,12 +1428,12 @@ func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *p
 		// situation where it's possible that markrootSpans
 		// has already run but mark termination hasn't yet.
 		if gcphase != _GCoff {
-			_, base, _ := findObject(p)
+			base, _, _ := findObject(uintptr(p), 0, 0)
 			mp := acquirem()
 			gcw := &mp.p.ptr().gcw
 			// Mark everything reachable from the object
 			// so it's retained for the finalizer.
-			scanobject(uintptr(base), gcw)
+			scanobject(base, gcw)
 			// Mark the finalizer itself, since the
 			// special isn't part of the GC'd heap.
 			scanblock(uintptr(unsafe.Pointer(&s.fn)), sys.PtrSize, &oneptrmask[0], gcw)
@@ -1316,6 +1505,22 @@ func freespecial(s *special, p unsafe.Pointer, size uintptr) {
 	}
 }
 
+// gcBits is an alloc/mark bitmap. This is always used as *gcBits.
+//
+//go:notinheap
+type gcBits uint8
+
+// bytep returns a pointer to the n'th byte of b.
+func (b *gcBits) bytep(n uintptr) *uint8 {
+	return addb((*uint8)(b), n)
+}
+
+// bitp returns a pointer to the byte containing bit n and a mask for
+// selecting that bit from *bytep.
+func (b *gcBits) bitp(n uintptr) (bytep *uint8, mask uint8) {
+	return b.bytep(n / 8), 1 << (n % 8)
+}
+
 const gcBitsChunkBytes = uintptr(64 << 10)
 const gcBitsHeaderBytes = unsafe.Sizeof(gcBitsHeader{})
 
@@ -1325,51 +1530,96 @@ type gcBitsHeader struct {
 }
 
 //go:notinheap
-type gcBits struct {
+type gcBitsArena struct {
 	// gcBitsHeader // side step recursive type bug (issue 14620) by including fields by hand.
-	free uintptr // free is the index into bits of the next free byte.
-	next *gcBits
-	bits [gcBitsChunkBytes - gcBitsHeaderBytes]uint8
+	free uintptr // free is the index into bits of the next free byte; read/write atomically
+	next *gcBitsArena
+	bits [gcBitsChunkBytes - gcBitsHeaderBytes]gcBits
 }
 
 var gcBitsArenas struct {
 	lock     mutex
-	free     *gcBits
-	next     *gcBits
-	current  *gcBits
-	previous *gcBits
+	free     *gcBitsArena
+	next     *gcBitsArena // Read atomically. Write atomically under lock.
+	current  *gcBitsArena
+	previous *gcBitsArena
+}
+
+// tryAlloc allocates from b or returns nil if b does not have enough room.
+// This is safe to call concurrently.
+func (b *gcBitsArena) tryAlloc(bytes uintptr) *gcBits {
+	if b == nil || atomic.Loaduintptr(&b.free)+bytes > uintptr(len(b.bits)) {
+		return nil
+	}
+	// Try to allocate from this block.
+	end := atomic.Xadduintptr(&b.free, bytes)
+	if end > uintptr(len(b.bits)) {
+		return nil
+	}
+	// There was enough room.
+	start := end - bytes
+	return &b.bits[start]
 }
 
 // newMarkBits returns a pointer to 8 byte aligned bytes
 // to be used for a span's mark bits.
-func newMarkBits(nelems uintptr) *uint8 {
-	lock(&gcBitsArenas.lock)
+func newMarkBits(nelems uintptr) *gcBits {
 	blocksNeeded := uintptr((nelems + 63) / 64)
 	bytesNeeded := blocksNeeded * 8
-	if gcBitsArenas.next == nil ||
-		gcBitsArenas.next.free+bytesNeeded > uintptr(len(gcBits{}.bits)) {
-		// Allocate a new arena.
-		fresh := newArena()
-		fresh.next = gcBitsArenas.next
-		gcBitsArenas.next = fresh
+
+	// Try directly allocating from the current head arena.
+	head := (*gcBitsArena)(atomic.Loadp(unsafe.Pointer(&gcBitsArenas.next)))
+	if p := head.tryAlloc(bytesNeeded); p != nil {
+		return p
 	}
-	if gcBitsArenas.next.free >= gcBitsChunkBytes {
-		println("runtime: gcBitsArenas.next.free=", gcBitsArenas.next.free, gcBitsChunkBytes)
+
+	// There's not enough room in the head arena. We may need to
+	// allocate a new arena.
+	lock(&gcBitsArenas.lock)
+	// Try the head arena again, since it may have changed. Now
+	// that we hold the lock, the list head can't change, but its
+	// free position still can.
+	if p := gcBitsArenas.next.tryAlloc(bytesNeeded); p != nil {
+		unlock(&gcBitsArenas.lock)
+		return p
+	}
+
+	// Allocate a new arena. This may temporarily drop the lock.
+	fresh := newArenaMayUnlock()
+	// If newArenaMayUnlock dropped the lock, another thread may
+	// have put a fresh arena on the "next" list. Try allocating
+	// from next again.
+	if p := gcBitsArenas.next.tryAlloc(bytesNeeded); p != nil {
+		// Put fresh back on the free list.
+		// TODO: Mark it "already zeroed"
+		fresh.next = gcBitsArenas.free
+		gcBitsArenas.free = fresh
+		unlock(&gcBitsArenas.lock)
+		return p
+	}
+
+	// Allocate from the fresh arena. We haven't linked it in yet, so
+	// this cannot race and is guaranteed to succeed.
+	p := fresh.tryAlloc(bytesNeeded)
+	if p == nil {
 		throw("markBits overflow")
 	}
-	result := &gcBitsArenas.next.bits[gcBitsArenas.next.free]
-	gcBitsArenas.next.free += bytesNeeded
+
+	// Add the fresh arena to the "next" list.
+	fresh.next = gcBitsArenas.next
+	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), unsafe.Pointer(fresh))
+
 	unlock(&gcBitsArenas.lock)
-	return result
+	return p
 }
 
 // newAllocBits returns a pointer to 8 byte aligned bytes
 // to be used for this span's alloc bits.
 // newAllocBits is used to provide newly initialized spans
 // allocation bits. For spans not being initialized the
-// the mark bits are repurposed as allocation bits when
+// mark bits are repurposed as allocation bits when
 // the span is swept.
-func newAllocBits(nelems uintptr) *uint8 {
+func newAllocBits(nelems uintptr) *gcBits {
 	return newMarkBits(nelems)
 }
 
@@ -1403,18 +1653,21 @@ func nextMarkBitArenaEpoch() {
 	}
 	gcBitsArenas.previous = gcBitsArenas.current
 	gcBitsArenas.current = gcBitsArenas.next
-	gcBitsArenas.next = nil // newMarkBits calls newArena when needed
+	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), nil) // newMarkBits calls newArena when needed
 	unlock(&gcBitsArenas.lock)
 }
 
-// newArena allocates and zeroes a gcBits arena.
-func newArena() *gcBits {
-	var result *gcBits
+// newArenaMayUnlock allocates and zeroes a gcBits arena.
+// The caller must hold gcBitsArena.lock. This may temporarily release it.
+func newArenaMayUnlock() *gcBitsArena {
+	var result *gcBitsArena
 	if gcBitsArenas.free == nil {
-		result = (*gcBits)(sysAlloc(gcBitsChunkBytes, &memstats.gc_sys))
+		unlock(&gcBitsArenas.lock)
+		result = (*gcBitsArena)(sysAlloc(gcBitsChunkBytes, &memstats.gc_sys))
 		if result == nil {
 			throw("runtime: cannot allocate memory")
 		}
+		lock(&gcBitsArenas.lock)
 	} else {
 		result = gcBitsArenas.free
 		gcBitsArenas.free = gcBitsArenas.free.next
@@ -1423,7 +1676,7 @@ func newArena() *gcBits {
 	result.next = nil
 	// If result.bits is not 8 byte aligned adjust index so
 	// that &result.bits[result.free] is 8 byte aligned.
-	if uintptr(unsafe.Offsetof(gcBits{}.bits))&7 == 0 {
+	if uintptr(unsafe.Offsetof(gcBitsArena{}.bits))&7 == 0 {
 		result.free = 0
 	} else {
 		result.free = 8 - (uintptr(unsafe.Pointer(&result.bits[0])) & 7)

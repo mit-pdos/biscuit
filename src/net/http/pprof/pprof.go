@@ -37,6 +37,11 @@
 //
 //	wget http://localhost:6060/debug/pprof/trace?seconds=5
 //
+// Or to look at the holders of contended mutexes, after calling
+// runtime.SetMutexProfileFraction in your program:
+//
+//	go tool pprof http://localhost:6060/debug/pprof/mutex
+//
 // To view all available profiles, open http://localhost:6060/debug/pprof/
 // in your browser.
 //
@@ -64,11 +69,11 @@ import (
 )
 
 func init() {
-	http.Handle("/debug/pprof/", http.HandlerFunc(Index))
-	http.Handle("/debug/pprof/cmdline", http.HandlerFunc(Cmdline))
-	http.Handle("/debug/pprof/profile", http.HandlerFunc(Profile))
-	http.Handle("/debug/pprof/symbol", http.HandlerFunc(Symbol))
-	http.Handle("/debug/pprof/trace", http.HandlerFunc(Trace))
+	http.HandleFunc("/debug/pprof/", Index)
+	http.HandleFunc("/debug/pprof/cmdline", Cmdline)
+	http.HandleFunc("/debug/pprof/profile", Profile)
+	http.HandleFunc("/debug/pprof/symbol", Symbol)
+	http.HandleFunc("/debug/pprof/trace", Trace)
 }
 
 // Cmdline responds with the running program's
@@ -90,12 +95,25 @@ func sleep(w http.ResponseWriter, d time.Duration) {
 	}
 }
 
+func durationExceedsWriteTimeout(r *http.Request, seconds float64) bool {
+	srv, ok := r.Context().Value(http.ServerContextKey).(*http.Server)
+	return ok && srv.WriteTimeout != 0 && seconds >= srv.WriteTimeout.Seconds()
+}
+
 // Profile responds with the pprof-formatted cpu profile.
 // The package initialization registers it as /debug/pprof/profile.
 func Profile(w http.ResponseWriter, r *http.Request) {
 	sec, _ := strconv.ParseInt(r.FormValue("seconds"), 10, 64)
 	if sec == 0 {
 		sec = 30
+	}
+
+	if durationExceedsWriteTimeout(r, float64(sec)) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Go-Pprof", "1")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "profile duration exceeds server's WriteTimeout")
+		return
 	}
 
 	// Set Content Type assuming StartCPUProfile will work,
@@ -106,6 +124,7 @@ func Profile(w http.ResponseWriter, r *http.Request) {
 		// Can change header back to text content
 		// and send error code.
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Go-Pprof", "1")
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Could not enable CPU profiling: %s\n", err)
 		return
@@ -123,6 +142,14 @@ func Trace(w http.ResponseWriter, r *http.Request) {
 		sec = 1
 	}
 
+	if durationExceedsWriteTimeout(r, sec) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Go-Pprof", "1")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintln(w, "profile duration exceeds server's WriteTimeout")
+		return
+	}
+
 	// Set Content Type assuming trace.Start will work,
 	// because if it does it starts writing.
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -130,6 +157,7 @@ func Trace(w http.ResponseWriter, r *http.Request) {
 		// trace.Start failed, so no writes yet.
 		// Can change header back to text content and send error code.
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Go-Pprof", "1")
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "Could not enable tracing: %s\n", err)
 		return
@@ -207,7 +235,6 @@ func (name handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		runtime.GC()
 	}
 	p.WriteTo(w, debug)
-	return
 }
 
 // Index responds with the pprof-formatted profile named by the request.

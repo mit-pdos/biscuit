@@ -173,6 +173,11 @@ func msigsave(mp *m) {
 func msigrestore(sigmask sigset) {
 }
 
+//go:nosplit
+//go:nowritebarrierrec
+func clearSignalHandlers() {
+}
+
 func sigblock() {
 }
 
@@ -388,7 +393,7 @@ func postnote(pid uint64, msg []byte) int {
 }
 
 //go:nosplit
-func exit(e int) {
+func exit(e int32) {
 	var status []byte
 	if e == 0 {
 		status = emptystatus
@@ -414,6 +419,12 @@ func newosproc(mp *m, stk unsafe.Pointer) {
 	if pid == 0 {
 		tstart_plan9(mp)
 	}
+}
+
+func exitThread(wait *uint32) {
+	// We should never reach exitThread on Plan 9 because we let
+	// the OS clean up threads.
+	throw("exitThread")
 }
 
 //go:nosplit
@@ -453,10 +464,6 @@ func read(fd int32, buf unsafe.Pointer, n int32) int32 {
 //go:nosplit
 func write(fd uintptr, buf unsafe.Pointer, n int32) int64 {
 	return int64(pwrite(int32(fd), buf, n, -1))
-}
-
-func memlimit() uint64 {
-	return 0
 }
 
 var _badsignal = []byte("runtime: signal received on thread not created by Go.\n")

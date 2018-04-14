@@ -11,7 +11,6 @@ import "unsafe"
 
 const (
 	_SYS_dup       = SYS_DUP2
-	_SYS_getdents  = SYS_GETDENTS64
 	_SYS_setgroups = SYS_SETGROUPS
 )
 
@@ -72,7 +71,6 @@ func Syscall9(trap, a1, a2, a3, a4, a5, a6, a7, a8, a9 uintptr) (r1, r2 uintptr,
 
 func Fstatfs(fd int, buf *Statfs_t) (err error) {
 	_, _, e := Syscall(SYS_FSTATFS64, uintptr(fd), unsafe.Sizeof(*buf), uintptr(unsafe.Pointer(buf)))
-	use(unsafe.Pointer(buf))
 	if e != 0 {
 		err = errnoErr(e)
 	}
@@ -85,7 +83,6 @@ func Statfs(path string, buf *Statfs_t) (err error) {
 		return err
 	}
 	_, _, e := Syscall(SYS_STATFS64, uintptr(unsafe.Pointer(p)), unsafe.Sizeof(*buf), uintptr(unsafe.Pointer(buf)))
-	use(unsafe.Pointer(p))
 	if e != 0 {
 		err = errnoErr(e)
 	}
@@ -219,4 +216,8 @@ func (msghdr *Msghdr) SetControllen(length int) {
 
 func (cmsg *Cmsghdr) SetLen(length int) {
 	cmsg.Len = uint32(length)
+}
+
+func rawVforkSyscall(trap, a1 uintptr) (r1 uintptr, err Errno) {
+	panic("not implemented")
 }

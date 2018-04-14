@@ -12,23 +12,7 @@ import (
 	"go/types"
 )
 
-var (
-	httpResponseType types.Type
-	httpClientType   types.Type
-)
-
 func init() {
-	if typ := importType("net/http", "Response"); typ != nil {
-		httpResponseType = typ
-	}
-	if typ := importType("net/http", "Client"); typ != nil {
-		httpClientType = typ
-	}
-	// if http.Response or http.Client are not defined don't register this check.
-	if httpResponseType == nil || httpClientType == nil {
-		return
-	}
-
 	register("httpresponse",
 		"check errors are checked before using an http Response",
 		checkHTTPResponse, callExpr)
@@ -84,7 +68,7 @@ func isHTTPFuncOrMethodOnClient(f *File, expr *ast.CallExpr) bool {
 	if res.Len() != 2 {
 		return false // the function called does not return two values.
 	}
-	if ptr, ok := res.At(0).Type().(*types.Pointer); !ok || !types.Identical(ptr.Elem(), httpResponseType) {
+	if ptr, ok := res.At(0).Type().(*types.Pointer); !ok || !isNamedType(ptr.Elem(), "net/http", "Response") {
 		return false // the first return type is not *http.Response.
 	}
 	if !types.Identical(res.At(1).Type().Underlying(), errorType) {
@@ -97,11 +81,11 @@ func isHTTPFuncOrMethodOnClient(f *File, expr *ast.CallExpr) bool {
 		return ok && id.Name == "http" // function in net/http package.
 	}
 
-	if types.Identical(typ, httpClientType) {
+	if isNamedType(typ, "net/http", "Client") {
 		return true // method on http.Client.
 	}
 	ptr, ok := typ.(*types.Pointer)
-	return ok && types.Identical(ptr.Elem(), httpClientType) // method on *http.Client.
+	return ok && isNamedType(ptr.Elem(), "net/http", "Client") // method on *http.Client.
 }
 
 // blockStmtFinder is an ast.Visitor that given any ast node can find the

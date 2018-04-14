@@ -29,7 +29,7 @@ Instead, the compiler operates on a kind of semi-abstract instruction set,
 and instruction selection occurs partly after code generation.
 The assembler works on the semi-abstract form, so
 when you see an instruction like <code>MOV</code>
-what the tool chain actually generates for that operation might
+what the toolchain actually generates for that operation might
 not be a move instruction at all, perhaps a clear or load.
 Or it might correspond exactly to the machine instruction with that name.
 In general, machine-specific operations tend to appear as themselves, while more general concepts like
@@ -139,7 +139,7 @@ The exact set depends on the architecture.
 <p>
 There are four predeclared symbols that refer to pseudo-registers.
 These are not real registers, but rather virtual registers maintained by
-the tool chain, such as a frame pointer.
+the toolchain, such as a frame pointer.
 The set of pseudo-registers is the same for all architectures:
 </p>
 
@@ -837,6 +837,50 @@ It is a scaled mode as on the x86, but the only scale allowed is <code>1</code>.
 </li>
 
 </ul>
+
+<h3 id="mips">MIPS, MIPS64</h3>
+
+<p>
+General purpose registers are named <code>R0</code> through <code>R31</code>,
+floating point registers are <code>F0</code> through <code>F31</code>.
+</p>
+
+<p>
+<code>R30</code> is reserved to point to <code>g</code>.
+<code>R23</code> is used as a temporary register.
+</p>
+
+<p>
+In a <code>TEXT</code> directive, the frame size <code>$-4</code> for MIPS or
+<code>$-8</code> for MIPS64 instructs the linker not to save <code>LR</code>.
+</p>
+
+<p>
+<code>SP</code> refers to the virtual stack pointer.
+For the hardware register, use <code>R29</code>.
+</p>
+
+<p>
+Addressing modes:
+</p>
+
+<ul>
+
+<li>
+<code>16(R1)</code>: The location at <code>R1</code> plus 16.
+</li>
+
+<li>
+<code>(R1)</code>: Alias for <code>0(R1)</code>.
+</li>
+
+</ul>
+
+<p>
+The value of <code>GOMIPS</code> environment variable (<code>hardfloat</code> or
+<code>softfloat</code>) is made available to assembly code by predefining either
+<code>GOMIPS_hardfloat</code> or <code>GOMIPS_softfloat</code>.
+</p>
 
 <h3 id="unsupported_opcodes">Unsupported opcodes</h3>
 

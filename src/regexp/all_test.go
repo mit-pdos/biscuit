@@ -9,6 +9,7 @@ import (
 	"regexp/syntax"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 var goodRe = []string{
@@ -354,6 +355,7 @@ type MetaTest struct {
 var metaTests = []MetaTest{
 	{``, ``, ``, true},
 	{`foo`, `foo`, `foo`, true},
+	{`日本語+`, `日本語\+`, `日本語`, false},
 	{`foo\.\$`, `foo\\\.\\\$`, `foo.$`, true}, // has meta but no operator
 	{`foo.\$`, `foo\.\\\$`, `foo`, false},     // has escaped operators and real operators
 	{`!@#$%^&*()_+-=[{]}\|,<.>/?~`, `!@#\$%\^&\*\(\)_\+-=\[\{\]\}\\\|,<\.>/\?~`, `!@#`, false},
@@ -575,6 +577,19 @@ func BenchmarkFind(b *testing.B) {
 		subs := re.Find(s)
 		if string(subs) != wantSubs {
 			b.Fatalf("Find(%q) = %q; want %q", s, subs, wantSubs)
+		}
+	}
+}
+
+func BenchmarkFindAllNoMatches(b *testing.B) {
+	re := MustCompile("a+b+")
+	s := []byte("acddee")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		all := re.FindAll(s, -1)
+		if all != nil {
+			b.Fatalf("FindAll(%q) = %q; want nil", s, all)
 		}
 	}
 }
@@ -822,7 +837,13 @@ func BenchmarkMatchParallelCopied(b *testing.B) {
 var sink string
 
 func BenchmarkQuoteMetaAll(b *testing.B) {
-	s := string(specialBytes)
+	specials := make([]byte, 0)
+	for i := byte(0); i < utf8.RuneSelf; i++ {
+		if special(i) {
+			specials = append(specials, i)
+		}
+	}
+	s := string(specials)
 	b.SetBytes(int64(len(s)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

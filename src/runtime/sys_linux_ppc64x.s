@@ -21,9 +21,8 @@
 #define SYS_close		  6
 #define SYS_getpid		 20
 #define SYS_kill		 37
+#define SYS_brk			 45
 #define SYS_fcntl		 55
-#define SYS_gettimeofday	 78
-#define SYS_select		 82	// always return -ENOSYS
 #define SYS_mmap		 90
 #define SYS_munmap		 91
 #define SYS_setitimer		104
@@ -34,7 +33,6 @@
 #define SYS_rt_sigaction	173
 #define SYS_rt_sigprocmask	174
 #define SYS_sigaltstack		185
-#define SYS_ugetrlimit		190
 #define SYS_madvise		205
 #define SYS_mincore		206
 #define SYS_gettid		207
@@ -53,10 +51,16 @@ TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0-4
 	SYSCALL	$SYS_exit_group
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT|NOFRAME,$0-4
-	MOVW	code+0(FP), R3
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT|NOFRAME,$0-8
+	MOVD	wait+0(FP), R1
+	// We're done using the stack.
+	MOVW	$0, R2
+	SYNC
+	MOVW	R2, (R1)
+	MOVW	$0, R3	// exit code
 	SYSCALL	$SYS_exit
-	RET
+	JMP	0(PC)
 
 TEXT runtime·open(SB),NOSPLIT|NOFRAME,$0-20
 	MOVD	name+0(FP), R3
@@ -94,13 +98,6 @@ TEXT runtime·read(SB),NOSPLIT|NOFRAME,$0-28
 	BVC	2(PC)
 	MOVW	$-1, R3
 	MOVW	R3, ret+24(FP)
-	RET
-
-TEXT runtime·getrlimit(SB),NOSPLIT|NOFRAME,$0-20
-	MOVW	kind+0(FP), R3
-	MOVD	limit+8(FP), R4
-	SYSCALL	$SYS_ugetrlimit
-	MOVW	R3, ret+16(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$16-4
@@ -157,8 +154,8 @@ TEXT runtime·mincore(SB),NOSPLIT|NOFRAME,$0-28
 	MOVW	R3, ret+24(FP)
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB),NOSPLIT,$16
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB),NOSPLIT,$16
 	MOVD	$0, R3 // CLOCK_REALTIME
 	MOVD	$0(R1), R4
 	SYSCALL	$SYS_clock_gettime
@@ -189,7 +186,7 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT|NOFRAME,$0-28
 	MOVW	size+24(FP), R6
 	SYSCALL	$SYS_rt_sigprocmask
 	BVC	2(PC)
-	MOVD	R0, 0xf1(R0)	// crash
+	MOVD	R0, 0xf0(R0)	// crash
 	RET
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT|NOFRAME,$0-36
@@ -243,7 +240,96 @@ TEXT runtime·_sigtramp(SB),NOSPLIT,$64
 
 #ifdef GOARCH_ppc64le
 // ppc64le doesn't need function descriptors
-TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
+TEXT runtime·cgoSigtramp(SB),NOSPLIT|NOFRAME,$0
+	// The stack unwinder, presumably written in C, may not be able to
+	// handle Go frame correctly. So, this function is NOFRAME, and we
+	// we save/restore LR manually.
+	MOVD	LR, R10
+
+	// We're coming from C code, initialize essential registers.
+	CALL	runtime·reginit(SB)
+
+	// If no traceback function, do usual sigtramp.
+	MOVD	runtime·cgoTraceback(SB), R6
+	CMP	$0, R6
+	BEQ	sigtramp
+
+	// If no traceback support function, which means that
+	// runtime/cgo was not linked in, do usual sigtramp.
+	MOVD	_cgo_callers(SB), R6
+	CMP	$0, R6
+	BEQ	sigtramp
+
+	// Set up g register.
+	CALL	runtime·load_g(SB)
+
+	// Figure out if we are currently in a cgo call.
+	// If not, just do usual sigtramp.
+	CMP	$0, g
+	BEQ	sigtrampnog // g == nil
+	MOVD	g_m(g), R6
+	CMP	$0, R6
+	BEQ	sigtramp    // g.m == nil
+	MOVW	m_ncgo(R6), R7
+	CMPW	$0, R7
+	BEQ	sigtramp    // g.m.ncgo = 0
+	MOVD	m_curg(R6), R7
+	CMP	$0, R7
+	BEQ	sigtramp    // g.m.curg == nil
+	MOVD	g_syscallsp(R7), R7
+	CMP	$0, R7
+	BEQ	sigtramp    // g.m.curg.syscallsp == 0
+	MOVD	m_cgoCallers(R6), R7 // R7 is the fifth arg in C calling convention.
+	CMP	$0, R7
+	BEQ	sigtramp    // g.m.cgoCallers == nil
+	MOVW	m_cgoCallersUse(R6), R8
+	CMPW	$0, R8
+	BNE	sigtramp    // g.m.cgoCallersUse != 0
+
+	// Jump to a function in runtime/cgo.
+	// That function, written in C, will call the user's traceback
+	// function with proper unwind info, and will then call back here.
+	// The first three arguments, and the fifth, are already in registers.
+	// Set the two remaining arguments now.
+	MOVD	runtime·cgoTraceback(SB), R6
+	MOVD	$runtime·sigtramp(SB), R8
+	MOVD	_cgo_callers(SB), R12
+	MOVD	R12, CTR
+	MOVD	R10, LR // restore LR
+	JMP	(CTR)
+
+sigtramp:
+	MOVD	R10, LR // restore LR
+	JMP	runtime·sigtramp(SB)
+
+sigtrampnog:
+	// Signal arrived on a non-Go thread. If this is SIGPROF, get a
+	// stack trace.
+	CMPW	R3, $27 // 27 == SIGPROF
+	BNE	sigtramp
+
+	// Lock sigprofCallersUse (cas from 0 to 1).
+	MOVW	$1, R7
+	MOVD	$runtime·sigprofCallersUse(SB), R8
+	SYNC
+	LWAR    (R8), R6
+	CMPW    $0, R6
+	BNE     sigtramp
+	STWCCC  R7, (R8)
+	BNE     -4(PC)
+	ISYNC
+
+	// Jump to the traceback function in runtime/cgo.
+	// It will call back to sigprofNonGo, which will ignore the
+	// arguments passed in registers.
+	// First three arguments to traceback function are in registers already.
+	MOVD	runtime·cgoTraceback(SB), R6
+	MOVD	$runtime·sigprofCallers(SB), R7
+	MOVD	$runtime·sigprofNonGoWrapper<>(SB), R8
+	MOVD	_cgo_callers(SB), R12
+	MOVD	R12, CTR
+	MOVD	R10, LR // restore LR
+	JMP	(CTR)
 #else
 // function descriptor for the real sigtramp
 TEXT runtime·cgoSigtramp(SB),NOSPLIT|NOFRAME,$0
@@ -251,10 +337,14 @@ TEXT runtime·cgoSigtramp(SB),NOSPLIT|NOFRAME,$0
 	DWORD	$0
 	DWORD	$0
 TEXT runtime·_cgoSigtramp(SB),NOSPLIT,$0
+	JMP	runtime·sigtramp(SB)
 #endif
-	MOVD	$runtime·sigtramp(SB), R12
-	MOVD	R12, CTR
-	JMP	(CTR)
+
+TEXT runtime·sigprofNonGoWrapper<>(SB),NOSPLIT,$0
+	// We're coming from C code, set up essential register, then call sigprofNonGo.
+	CALL	runtime·reginit(SB)
+	CALL	runtime·sigprofNonGo(SB)
+	RET
 
 TEXT runtime·mmap(SB),NOSPLIT|NOFRAME,$0
 	MOVD	addr+0(FP), R3
@@ -265,7 +355,13 @@ TEXT runtime·mmap(SB),NOSPLIT|NOFRAME,$0
 	MOVW	off+28(FP), R8
 
 	SYSCALL	$SYS_mmap
-	MOVD	R3, ret+32(FP)
+	BVC	ok
+	MOVD	$0, p+32(FP)
+	MOVD	R3, err+40(FP)
+	RET
+ok:
+	MOVD	R3, p+32(FP)
+	MOVD	$0, err+40(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT|NOFRAME,$0
@@ -273,7 +369,7 @@ TEXT runtime·munmap(SB),NOSPLIT|NOFRAME,$0
 	MOVD	n+8(FP), R4
 	SYSCALL	$SYS_munmap
 	BVC	2(PC)
-	MOVD	R0, 0xf3(R0)
+	MOVD	R0, 0xf0(R0)
 	RET
 
 TEXT runtime·madvise(SB),NOSPLIT|NOFRAME,$0
@@ -366,7 +462,7 @@ TEXT runtime·sigaltstack(SB),NOSPLIT|NOFRAME,$0
 	MOVD	old+8(FP), R4
 	SYSCALL	$SYS_sigaltstack
 	BVC	2(PC)
-	MOVD	R0, 0xf1(R0)  // crash
+	MOVD	R0, 0xf0(R0)  // crash
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT|NOFRAME,$0
@@ -421,4 +517,12 @@ TEXT runtime·closeonexec(SB),NOSPLIT|NOFRAME,$0
 	MOVD    $2, R4  // F_SETFD
 	MOVD    $1, R5  // FD_CLOEXEC
 	SYSCALL	$SYS_fcntl
+	RET
+
+// func sbrk0() uintptr
+TEXT runtime·sbrk0(SB),NOSPLIT|NOFRAME,$0
+	// Implemented as brk(NULL).
+	MOVD	$0, R3
+	SYSCALL	$SYS_brk
+	MOVD	R3, ret+0(FP)
 	RET

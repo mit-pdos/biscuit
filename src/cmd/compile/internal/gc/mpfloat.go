@@ -37,8 +37,15 @@ func newMpflt() *Mpflt {
 	return &a
 }
 
+func newMpcmplx() *Mpcplx {
+	var a Mpcplx
+	a.Real = *newMpflt()
+	a.Imag = *newMpflt()
+	return &a
+}
+
 func (a *Mpflt) SetInt(b *Mpint) {
-	if b.Ovf {
+	if b.checkOverflow(0) {
 		// sign doesn't really matter but copy anyway
 		a.Val.SetInf(b.Val.Sign() < 0)
 		return
@@ -128,7 +135,7 @@ func (a *Mpflt) Float64() float64 {
 
 	// check for overflow
 	if math.IsInf(x, 0) && nsavederrors+nerrors == 0 {
-		yyerror("ovf in Mpflt Float64")
+		Fatalf("ovf in Mpflt Float64")
 	}
 
 	return x + 0 // avoid -0 (should not be needed, but be conservative)
@@ -140,7 +147,7 @@ func (a *Mpflt) Float32() float64 {
 
 	// check for overflow
 	if math.IsInf(x, 0) && nsavederrors+nerrors == 0 {
-		yyerror("ovf in Mpflt Float32")
+		Fatalf("ovf in Mpflt Float32")
 	}
 
 	return x + 0 // avoid -0 (should not be needed, but be conservative)
@@ -169,25 +176,14 @@ func (a *Mpflt) Neg() {
 	}
 }
 
-//
-// floating point input
-// required syntax is [+-]d*[.]d*[e[+-]d*] or [+-]0xH*[e[+-]d*]
-//
 func (a *Mpflt) SetString(as string) {
 	for len(as) > 0 && (as[0] == ' ' || as[0] == '\t') {
 		as = as[1:]
 	}
 
-	f, ok := a.Val.SetString(as)
-	if !ok {
-		// At the moment we lose precise error cause;
-		// the old code additionally distinguished between:
-		// - malformed hex constant
-		// - decimal point in hex constant
-		// - constant exponent out of range
-		// - decimal point and binary point in constant
-		// TODO(gri) use different conversion function or check separately
-		yyerror("malformed constant: %s", as)
+	f, _, err := a.Val.Parse(as, 10)
+	if err != nil {
+		yyerror("malformed constant: %s (%v)", as, err)
 		a.Val.SetFloat64(0)
 		return
 	}
