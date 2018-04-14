@@ -294,8 +294,8 @@ const (
 )
 
 var wbenabledtime int64
-var _wbstart int64
-var _wbshadow bool
+//var _wbstart int64
+//var _wbshadow bool
 
 // for counting executed write barrier checks
 //var Fleabag *bool
@@ -306,27 +306,27 @@ func setGCPhase(x uint32) {
 	atomic.Store(&gcphase, x)
 	writeBarrier.needed = gcphase == _GCmark || gcphase == _GCmarktermination
 	writeBarrier.enabled = writeBarrier.needed || writeBarrier.cgo
-	if hackmode != 0 {
-		if writeBarrier.cgo {
-			throw("wut? why?")
-		}
-		if _wbshadow != writeBarrier.needed {
-			_wbshadow = writeBarrier.needed
-			if writeBarrier.needed {
-				if _wbstart != 0 {
-					throw("shat upon")
-				}
-				_wbstart = nanotime()
-			} else {
-				if _wbstart == 0 {
-					throw("shat upon")
-				}
-				n := nanotime()
-				atomic.Xaddint64(&wbenabledtime, n - _wbstart)
-				_wbstart = 0
-			}
-		}
-	}
+	//if hackmode != 0 {
+	//	if writeBarrier.cgo {
+	//		throw("wut? why?")
+	//	}
+	//	if _wbshadow != writeBarrier.needed {
+	//		_wbshadow = writeBarrier.needed
+	//		if writeBarrier.needed {
+	//			if _wbstart != 0 {
+	//				throw("shat upon")
+	//			}
+	//			_wbstart = nanotime()
+	//		} else {
+	//			if _wbstart == 0 {
+	//				throw("shat upon")
+	//			}
+	//			n := nanotime()
+	//			atomic.Xaddint64(&wbenabledtime, n - _wbstart)
+	//			_wbstart = 0
+	//		}
+	//	}
+	//}
 }
 
 // gcMarkWorkerMode represents the mode that a concurrent mark worker
@@ -1355,7 +1355,7 @@ func _gcStart(mode gcMode, forceTrigger, syncy bool) {
 
 	// stop counting bgsweeper time since any sweeping done until mark
 	// termination will be included in mark time.
-	bgtrack = false
+	//bgtrack = false
 
 	now := nanotime()
 	work.tSweepTerm = now
@@ -1563,7 +1563,7 @@ top:
 
 // when bgtrack is enabled, the bgsweeper counts time spent sweeping. need this
 // variable to avoid double counting sweep time.
-var bgtrack bool
+//var bgtrack bool
 
 func gcMarkTermination(nextTriggerRatio float64) {
 	// World is stopped.
@@ -1636,7 +1636,7 @@ func gcMarkTermination(nextTriggerRatio float64) {
 	res.gclive = int64(work.bytesMarked)
 
 	// start counting bgsweeper time again
-	bgtrack = true
+	//bgtrack = true
 
 	_g_.m.traceback = 0
 	casgstatus(gp, _Gwaiting, _Grunning)
