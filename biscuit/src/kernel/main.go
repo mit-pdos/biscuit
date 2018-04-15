@@ -572,9 +572,7 @@ func cpus_start(ncpu, aplim int) {
 	sapcnt := 8
 	sstacks := 9
 	sproceed := 10
-	var _dur func(uint)
-	_dur = ap_entry
-	ss[sap_entry] = **(**uintptr)(unsafe.Pointer(&_dur))
+	ss[sap_entry] = runtime.FuncPC(ap_entry)
 	// sgdt and sidt save 10 bytes
 	runtime.Sgdt(&ss[sgdt])
 	runtime.Sidt(&ss[sidt])
