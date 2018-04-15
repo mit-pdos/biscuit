@@ -474,7 +474,8 @@ func (p *noder) funcDecl(fun *syntax.FuncDecl) *Node {
 			yyerrorl(f.Pos, "can only use //go:noescape with external func implementations")
 		}
 	} else {
-		if pure_go || strings.HasPrefix(f.funcname(), "init.") {
+		//if pure_go || strings.HasPrefix(f.funcname(), "init.") {
+		if strings.HasPrefix(f.funcname(), "init.") {
 			yyerrorl(f.Pos, "missing function body")
 		}
 	}
