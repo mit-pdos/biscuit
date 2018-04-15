@@ -2772,8 +2772,58 @@ func Pml4freeze() {
 	_nopml4 = true
 }
 
+// this function is dead-code; its purpose is to ensure that the compiler
+// generates an error if the arguments/return values of the runtime functions
+// do not match the hack hooks...
+func test_func_consist() {
+	if r1, r2 := hack_mmap(0, 0, 0, 0, 0, 0); r1 == 0 || r2 != 0 {
+	}
+	if r1, r2 := sysMmap(nil, 0, 0, 0, 0, 0); r1 == nil || r2 != 0 {
+	}
+
+	hack_munmap(0, 0)
+	sysMunmap(nil, 0)
+
+	hack_exit(0)
+	exit(0)
+
+	{
+		if r := write(0, nil, 0); r == 0 {
+		}
+		if r := hack_write(0, 0, 0); r == 0 {
+		}
+		usleep(0)
+		hack_usleep(0)
+	}
+	if r1 := nanotime(); r1 == 0 {
+	}
+	if r1 := hack_nanotime(); r1 == 0 {
+	}
+
+	if r1 := futex(nil, 0, 0, nil, nil, 0); r1 != 0 {
+	}
+	if r1 := hack_futex(nil, 0, 0, nil, nil, 0); r1 != 0 {
+	}
+
+	if r1 := clone(0, nil, nil, nil, nil); r1 != 0 {
+	}
+	if r1 := hack_clone(0, 0, nil, nil, 0); r1 != 0 {
+	}
+
+	sigaltstack(nil, nil)
+	hack_sigaltstack(nil, nil)
+
+	// importing syscall causes build to fail?
+	//if a, b, c := syscall.Syscall(0, 0, 0, 0); a == b || c == 0 {
+	//}
+	if a, b, c := hack_syscall(0, 0, 0, 0); a == b || c == 0 {
+	}
+}
+
+//var didsz uintptr
+
 func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
-    fd int32, offset int32) uintptr {
+    fd int32, offset int32) (uintptr, int) {
 	fl := Pushcli()
 	Splock(maplock)
 
@@ -2787,19 +2837,27 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 	var vaend uintptr
 	var perms uintptr
 	var ret uintptr
+	var err int
 	var t uintptr
 	pgleft := pglast - pgfirst
 	sz := pgroundup(_sz)
 	if sz > pgleft {
 		ret = ^uintptr(0)
+		err = -12 // ENOMEM
 		goto out
 	}
 	sz = pgroundup(va + _sz)
 	sz -= pgrounddown(va)
 	if va == 0 {
+		//_pmsg("ZERO\n")
 		va = find_empty(sz)
 	}
 	vaend = caddr(VUEND, 0, 0, 0, 0)
+	//_pmsg("--"); _pnum(didsz); _pmsg("--\n")
+	//_pnum(va); _pmsg("\n")
+	//_pnum(sz); _pmsg("\n")
+	//_pnum(va + sz); _pmsg("\n")
+	//_pnum(vaend); _pmsg("\n")
 	if va >= vaend || va + sz >= vaend {
 		pancake("va space exhausted", va)
 	}
@@ -2810,6 +2868,7 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 	}
 	perms = PTE_P
 	if prot == PROT_NONE {
+		//_pmsg("PROT_NONE\n")
 		prot_none(va, sz)
 		ret = va
 		goto out
@@ -2834,10 +2893,11 @@ func hack_mmap(va, _sz uintptr, _prot uint32, _flags uint32,
 		alloc_map(va + i, perms, true)
 	}
 	ret = va
+	//didsz += sz
 out:
 	Spunlock(maplock)
 	Popcli(fl)
-	return ret
+	return ret, err
 }
 
 func hack_munmap(v, _sz uintptr) {
@@ -2880,14 +2940,14 @@ func clone_wrap(rip uintptr) {
 	pancake("clone_wrap returned", 0)
 }
 
-func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
-	CLONE_VM := 0x100
-	CLONE_FS := 0x200
-	CLONE_FILES := 0x400
-	CLONE_SIGHAND := 0x800
-	CLONE_THREAD := 0x10000
-	chk := uint32(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND |
-	    CLONE_THREAD)
+var _cloneid int32
+
+//go:nowritebarrier
+func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) int32 {
+	// _CLONE_SYSVSEM is specified only for strict qemu-arm64 checks; the
+	// runtime doesn't use sysv sems, fortunately
+	chk := uint32(_CLONE_VM | _CLONE_FS | _CLONE_FILES | _CLONE_SIGHAND |
+	    _CLONE_THREAD | _CLONE_SYSVSEM)
 	if flags != chk {
 		pancake("unexpected clone args", uintptr(flags))
 	}
@@ -2895,6 +2955,8 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 
 	fl := Pushcli()
 	Splock(threadlock)
+	_cloneid++
+	ret := _cloneid
 
 	ti := thread_avail()
 	// provide fn as arg to clone_wrap
@@ -2915,7 +2977,8 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 	// avoid write barrier for mp here since we have interrupts clear. Ms
 	// are always reachable from allm anyway. see comments in runtime2.go
 	//gp.m = mp
-	*(*uintptr)(unsafe.Pointer(&gp.m)) = uintptr(unsafe.Pointer(mp))
+	setMNoWB(&gp.m, mp)
+	//*(*uintptr)(unsafe.Pointer(&gp.m)) = uintptr(unsafe.Pointer(mp))
 	mp.tls[0] = uintptr(unsafe.Pointer(gp))
 	mp.procid = uint64(ti)
 	mt.status = ST_RUNNABLE
@@ -2925,8 +2988,11 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) {
 
 	Spunlock(threadlock)
 	Popcli(fl)
+
+	return ret
 }
 
+// XXX remove goprof stuff
 func hack_setitimer(timer uint32, new, old *itimerval) {
 	TIMER_PROF := uint32(2)
 	if timer != TIMER_PROF {
@@ -3030,8 +3096,8 @@ var futexlock = &Spinlock_t{}
 func hack_futex(uaddr *int32, op, val int32, to *timespec, uaddr2 *int32,
     val2 int32) int64 {
 	stackcheck()
-	FUTEX_WAIT := int32(0)
-	FUTEX_WAKE := int32(1)
+	FUTEX_WAIT := int32(0) | _FUTEX_PRIVATE_FLAG
+	FUTEX_WAKE := int32(1) | _FUTEX_PRIVATE_FLAG
 	uaddrn := uintptr(unsafe.Pointer(uaddr))
 	ret := 0
 	switch op {
@@ -3093,7 +3159,7 @@ func hack_usleep(delay int64) {
 	ts.tv_sec = delay/1000000
 	ts.tv_nsec = (delay%1000000)*1000
 	dummy := int32(0)
-	FUTEX_WAIT := int32(0)
+	FUTEX_WAIT := int32(0) | _FUTEX_PRIVATE_FLAG
 	hack_futex(&dummy, FUTEX_WAIT, 0, &ts, nil, 0)
 }
 
