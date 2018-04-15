@@ -454,6 +454,14 @@ type cpu_t struct {
 	_clpad		[56]uint8
 }
 
+func (c *cpu_t) _init(p *cpu_t) {
+	*(*uintptr)(unsafe.Pointer(&c.this)) = (uintptr)(unsafe.Pointer(p))
+}
+
+func (c *cpu_t) setthread(t *thread_t) {
+	*(*uintptr)(unsafe.Pointer(&c.mythread)) = (uintptr)(unsafe.Pointer(t))
+}
+
 var Cpumhz uint
 var Pspercycle uint
 
@@ -1652,6 +1660,7 @@ func Tcount() (int, int) {
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func get_pg() uintptr {
 	if pglast == 0 {
 		phys_init()
@@ -1670,6 +1679,7 @@ func FuncPC(f interface{}) uintptr {
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func alloc_map(va uintptr, perms uintptr, fempty bool) {
 	pte := pgdir_walk(va, true)
 	old := *pte
@@ -1689,6 +1699,7 @@ var Fxinit [FXREGS]uintptr
 
 // nosplit because APs call this function before FS is setup
 //go:nosplit
+//go:nowritebarrierrec
 func fpuinit(amfirst bool) {
 	finit()
 	cr0 := Rcr0()
@@ -1815,6 +1826,7 @@ func pit_disable() {
 
 // wait until 8254 resets the counter
 //go:nosplit
+//go:nowritebarrierrec
 func pit_phasewait() {
 	// 8254 timers are 16 bits, thus always smaller than last;
 	last := uint(1 << 16)
@@ -1830,6 +1842,7 @@ func pit_phasewait() {
 var _lapic_quantum uint32
 
 //go:nosplit
+//go:nowritebarrierrec
 func lapic_setup(calibrate bool) {
 	la := uintptr(0xfee00000)
 
@@ -1933,6 +1946,7 @@ func lapic_setup(calibrate bool) {
 	}
 }
 
+//go:nowritebarrierrec
 func proc_setup() {
 	_userintaddr = funcPC(_userint)
 	_sigsimaddr = funcPC(sigsim)
@@ -1944,7 +1958,7 @@ func proc_setup() {
 
 	// initialize GS pointers
 	for i := range cpus {
-		cpus[i].this = &cpus[i]
+		cpus[i]._init(&cpus[i])
 	}
 
 	lapic_setup(true)
@@ -1960,7 +1974,7 @@ func proc_setup() {
 	sysc_setup(myrsp)
 	gs_set(&cpus[0])
 	Gscpu().num = 0
-	Gscpu().mythread = &threads[0]
+	Gscpu().setthread(&threads[0])
 }
 
 // XXX to prevent CPUs from calling zero_phys concurrently when allocating pmap
@@ -1968,6 +1982,7 @@ func proc_setup() {
 var joinlock = &Spinlock_t{}
 
 //go:nosplit
+//go:nowritebarrierrec
 func Ap_setup(cpunum uint) {
 	// interrupts are probably already cleared
 	fl := Pushcli()
@@ -1994,7 +2009,9 @@ func Ap_setup(cpunum uint) {
 	gs_null()
 	gs_set(mycpu)
 	Gscpu().num = cpunum
-	Gscpu().mythread = nil
+	// avoid write barrier before FS is set to TLS (via the "OS"
+	// scheduler).
+	Gscpu().setthread(nil)
 
 	Spunlock(joinlock)
 	Popcli(fl)
@@ -2016,6 +2033,7 @@ func sysc_setup(myrsp uintptr) {
 	Wrmsr(sysenter_esp, 0)
 }
 
+//go:nowritebarrierrec
 func Condflush(_refp *int32, p_pmap, va uintptr, pgcount int) bool {
 	var refp *uint32
 	var refc uint32
@@ -2059,6 +2077,7 @@ var Tlbshoot struct {
 
 // must be nosplit since called at interrupt time
 //go:nosplit
+//go:nowritebarrierrec
 func tlb_shootdown() {
 	ct := Gscpu().mythread
 	if ct != nil && Rcr3() == Tlbshoot.P_pmap {
@@ -2121,6 +2140,7 @@ func Install_traphandler(newtrap func(*[TFSIZE]uintptr)) {
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func stack_dump(rsp uintptr) {
 	pte := pgdir_walk(rsp, false)
 	_pmsg("STACK DUMP\n")
@@ -2146,6 +2166,7 @@ func stack_dump(rsp uintptr) {
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func kernel_fault(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
 	_pmsg("trap frame at")
@@ -2292,11 +2313,13 @@ func trap(tf *[TFSIZE]uintptr) {
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func is_cpuex(trapno uintptr) bool {
 	return trapno < 32
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func _tchk() {
 	if rflags() & TF_FL_IF != 0 {
 		pancake("must not be interruptible", 0)
@@ -2307,6 +2330,7 @@ func _tchk() {
 }
 
 //go:nosplit
+//go:nowritebarrierrec
 func sched_halt() {
 	if rflags() & TF_FL_IF != 0 {
 		pancake("must not be interruptible", 0)
@@ -2335,6 +2359,7 @@ func sched_halt() {
 	}
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func sched_run(t *thread_t) {
 	if t.tf[TF_RFLAGS] & TF_FL_IF == 0 {
@@ -2343,8 +2368,7 @@ func sched_run(t *thread_t) {
 	// mythread never references a heap allocated object. avoid
 	// writebarrier since sched_run can be executed at any time, even when
 	// GC invariants do not hold (like when g.m.p == nil).
-	//Gscpu().mythread = t
-	*(*uintptr)(unsafe.Pointer(&Gscpu().mythread)) = uintptr(unsafe.Pointer(t))
+	Gscpu().setthread(t)
 	fxrstor(&t.fx)
 	// flush the TLB, otherwise the cpu may use a TLB entry for a page that
 	// has since been unmapped
@@ -2352,6 +2376,7 @@ func sched_run(t *thread_t) {
 	_trapret(&t.tf)
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func sched_resume(ct *thread_t) {
 	if ct != nil {
@@ -2361,6 +2386,7 @@ func sched_resume(ct *thread_t) {
 	}
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func wakeup() {
 	_tchk()
@@ -2377,18 +2403,21 @@ func wakeup() {
 	}
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func _waketimeout(now int, t *thread_t) bool {
 	sf := t.sleepfor
 	return t.status == ST_SLEEPING && sf != -1 && sf < now
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func yieldy() {
 	_yieldy()
 	sched_halt()
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func _yieldy() {
 	_tchk()
@@ -2437,9 +2466,11 @@ var _irqv struct {
 func IRQsched(irq uint) {
 	gp := getg()
 	gp.m.irqn = irq
+	gp.waitreason = "waiting for trap"
 	mcall(irqsched_m)
 }
 
+//go:nowritebarrierrec
 func irqsched_m(gp *g) {
 	// have new IRQs arrived?
 	irq := gp.m.irqn
@@ -2466,11 +2497,10 @@ func irqsched_m(gp *g) {
 	sleeping := _irqv.irqs & bit == 0
 	if sleeping {
 		nstatus = _Gwaiting
-		gp.waitreason = "waiting for trap"
 		if _irqv.handlers[irq].igp != nil {
 			pancake("igp exists", uintptr(irq))
 		}
-		_irqv.handlers[irq].igp = gp
+		setGNoWB(&_irqv.handlers[irq].igp, gp)
 		start = false
 	} else {
 		nstatus = _Grunnable
@@ -2549,8 +2579,7 @@ func IRQcheck(pp *p) {
 			if gst &^ _Gscan != _Gwaiting {
 				pancake("bad igp status", uintptr(gst))
 			}
-			*(*uintptr)(unsafe.Pointer(&_irqv.handlers[i].igp)) =
-			    uintptr(unsafe.Pointer(nil))
+			setGNoWB(&_irqv.handlers[i].igp, nil)
 			_irqv.handlers[i].started = true
 			// we cannot set gstatus or put to run queue before we
 			// release the spinlock since either operation may
@@ -2942,7 +2971,7 @@ func clone_wrap(rip uintptr) {
 
 var _cloneid int32
 
-//go:nowritebarrier
+//go:nowritebarrierrec
 func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) int32 {
 	// _CLONE_SYSVSEM is specified only for strict qemu-arm64 checks; the
 	// runtime doesn't use sysv sems, fortunately
@@ -2978,7 +3007,6 @@ func hack_clone(flags uint32, rsp uintptr, mp *m, gp *g, fn uintptr) int32 {
 	// are always reachable from allm anyway. see comments in runtime2.go
 	//gp.m = mp
 	setMNoWB(&gp.m, mp)
-	//*(*uintptr)(unsafe.Pointer(&gp.m)) = uintptr(unsafe.Pointer(mp))
 	mp.tls[0] = uintptr(unsafe.Pointer(gp))
 	mp.procid = uint64(ti)
 	mt.status = ST_RUNNABLE
