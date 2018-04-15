@@ -1150,6 +1150,7 @@ TEXT ·Userrun(SB), $0-0
 	STI
 	RET
 out:
+	ADDQ	$8, SP
 	JMP	runtime·Userrun_slow(SB)
 
 // if you change the number of arguments, you must adjust the stack offsets in
