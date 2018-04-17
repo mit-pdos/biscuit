@@ -167,9 +167,9 @@ func (log *log_t) Stats() string {
 }
 
 func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
-	if memfs {
-		return nil
-	}
+	//if memfs {
+	//	return nil
+	//}
 	fslog := &log_t{}
 	fslog.fs = fs
 	fslog.init(logstart, loglen, disk)

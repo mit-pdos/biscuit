@@ -5,7 +5,7 @@ import "sync"
 
 import "common"
 
-const memfs = false // in-memory file system?
+var memfs = false // in-memory file system?
 const fs_debug = false
 const iroot = 0
 const FSOFF = 506
