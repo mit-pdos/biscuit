@@ -2869,7 +2869,8 @@ func (tc *tcptcb_t) lwingrow(dlen int) {
 	mss := int(tc.rcv.mss)
 	oldwin := int(tc.rcv.win)
 
-	if left-oldwin >= mss {
+	//if left-oldwin >= mss {
+	if left >= mss {
 		tc.rcv.win = uint16(left)
 		tc.sched_ack()
 		tc.ack_maybe()
