@@ -87,10 +87,13 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 	var blk *common.Bdev_block_t
 	var err common.Err_t
 	var lastbn = -1
+	var tryevict bool
 	for bit := start; bit < alloc.freelen*bitsperblk; bit++ {
-		tryevict := ca.Shouldevict(gimme)
 		bn := blkno(bit)
 		if bn != lastbn {
+			if tryevict && !memfs {
+				blk.Tryevict()
+			}
 			if blk != nil {
 				blk.Unlock()
 				alloc.storage.Relse(blk, "alloc apply")
@@ -99,9 +102,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 			if err != 0 {
 				return false, err
 			}
-			if tryevict {
-				blk.Tryevict()
-			}
+			tryevict = ca.Shouldevict(gimme)
 		}
 		byteoff := byteno(bit)
 		bitoff := byteoffset(bit)

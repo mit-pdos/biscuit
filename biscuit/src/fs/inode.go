@@ -1013,7 +1013,7 @@ func (bl *blockiter_t) _isind(blkno int) (*common.Bdev_block_t, bool) {
 	if err != 0 {
 		panic("must reserve")
 	}
-	if bl.tryevict {
+	if bl.tryevict && !memfs {
 		bl.lasti.Tryevict()
 	}
 	return bl.lasti, true
@@ -1186,7 +1186,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		// must lock the inode block before marking it free, to prevent
 		// clobbering a newly, concurrently allocated/created inode
 		iblk, _ := idm.idibread()
-		if tryevict {
+		if tryevict && !memfs {
 			iblk.Tryevict()
 		}
 
