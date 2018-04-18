@@ -463,7 +463,7 @@ func (log *log_t) flush() {
 func (log *log_t) recover() common.Err_t {
 	b, err := log.fs.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 {
-		return err
+		panic("must succeed")
 	}
 	lh := logheader_t{b.Data}
 	rlen := lh.recovernum()
@@ -481,11 +481,11 @@ func (log *log_t) recover() common.Err_t {
 		}
 		lb, err := log.fs.bcache.Get_fill(log.logstart+LogOffset+i, "i", false)
 		if err != 0 {
-			return err
+			panic("must succeed")
 		}
 		fb, err := log.fs.bcache.Get_fill(bdest, "bdest", false)
 		if err != 0 {
-			return err
+			panic("must succeed")
 		}
 		copy(fb.Data[:], lb.Data[:])
 		log.fs.bcache.Write(fb)
