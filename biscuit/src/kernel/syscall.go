@@ -4053,36 +4053,6 @@ func buftodests(buf []uint8, dsts [][]uint8) int {
 	return ret
 }
 
-type perfrips_t struct {
-	rips  []uintptr
-	times []int
-}
-
-func (pr *perfrips_t) init(m map[uintptr]int) {
-	l := len(m)
-	pr.rips = make([]uintptr, l)
-	pr.times = make([]int, l)
-	idx := 0
-	for k, v := range m {
-		pr.rips[idx] = k
-		pr.times[idx] = v
-		idx++
-	}
-}
-
-func (pr *perfrips_t) Len() int {
-	return len(pr.rips)
-}
-
-func (pr *perfrips_t) Less(i, j int) bool {
-	return pr.times[i] < pr.times[j]
-}
-
-func (pr *perfrips_t) Swap(i, j int) {
-	pr.rips[i], pr.rips[j] = pr.rips[j], pr.rips[i]
-	pr.times[i], pr.times[j] = pr.times[j], pr.times[i]
-}
-
 func _prof_go(en bool) {
 	if en {
 		prof.init()
@@ -4137,27 +4107,21 @@ func _prof_nmi(en bool, pmev pmev_t, intperiod int, bt bool) {
 			for _, v := range rips {
 				m[v] = m[v] + 1
 			}
-			prips := perfrips_t{}
-			prips.init(m)
+			prips := fs.Perfrips_t{}
+			prips.Init(m)
 			sort.Sort(sort.Reverse(&prips))
-			for i := 0; i < prips.Len(); i++ {
-				r := prips.rips[i]
-				t := prips.times[i]
-				fmt.Printf("%0.16x -- %10v\n", r, t)
-			}
+
+			pd := &fs.Profdev
+			pd.Lock()
+			pd.Prips = prips
+			pd.Bts = nil
+			pd.Unlock()
 		} else {
-			c := 0
-			for _, rip := range rips {
-				if rip == 0xdeadbeefdeadbeef {
-					c++
-					if c > 100 {
-						break
-					}
-					fmt.Printf("%v --------\n", c)
-				} else {
-					fmt.Printf("%0.16x\n", rip)
-				}
-			}
+			pd := &fs.Profdev
+			pd.Lock()
+			pd.Prips.Reset()
+			pd.Bts = rips
+			pd.Unlock()
 		}
 	}
 }

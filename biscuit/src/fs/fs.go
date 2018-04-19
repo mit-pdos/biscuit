@@ -798,7 +798,8 @@ func (df *Devfops_t) _sane() {
 	// make sure this maj/min pair is handled by Devfops_t. to handle more
 	// devices, we can either do dispatch in Devfops_t or we can return
 	// device-specific common.Fdops_i in fs_open()
-	if df.Maj != common.D_CONSOLE && df.Maj != common.D_DEVNULL && df.Maj != common.D_STAT {
+	if df.Maj != common.D_CONSOLE && df.Maj != common.D_DEVNULL &&
+	   df.Maj != common.D_STAT && df.Maj != common.D_PROF {
 		panic("bad dev")
 	}
 }
@@ -822,12 +823,97 @@ func stat_read(ub common.Userio_i, offset int) (int, common.Err_t) {
 	return ret, 0
 }
 
+type Perfrips_t struct {
+	Rips  []uintptr
+	Times []int
+}
+
+func (pr *Perfrips_t) Init(m map[uintptr]int) {
+	l := len(m)
+	pr.Rips = make([]uintptr, l)
+	pr.Times = make([]int, l)
+	idx := 0
+	for k, v := range m {
+		pr.Rips[idx] = k
+		pr.Times[idx] = v
+		idx++
+	}
+}
+
+func (pr *Perfrips_t) Reset() {
+	pr.Rips, pr.Times = nil, nil
+}
+
+func (pr *Perfrips_t) Len() int {
+	return len(pr.Rips)
+}
+
+func (pr *Perfrips_t) Less(i, j int) bool {
+	return pr.Times[i] < pr.Times[j]
+}
+
+func (pr *Perfrips_t) Swap(i, j int) {
+	pr.Rips[i], pr.Rips[j] = pr.Rips[j], pr.Rips[i]
+	pr.Times[i], pr.Times[j] = pr.Times[j], pr.Times[i]
+}
+
+var Profdev struct {
+	sync.Mutex
+	Bts	[]uintptr
+	Prips	Perfrips_t
+	rem	[]uint8
+}
+
+func _prof_read(dst common.Userio_i, offset int) (int, common.Err_t) {
+	Profdev.Lock()
+	defer Profdev.Unlock()
+
+	did := 0
+	prips := &Profdev.Prips
+	for {
+		for len(Profdev.rem) > 0 && dst.Remain() > 0 {
+			c, err := dst.Uiowrite(Profdev.rem)
+			did += c
+			Profdev.rem = Profdev.rem[c:]
+			if err != 0 {
+				return did, err
+			}
+		}
+		if dst.Remain() == 0 ||
+		   (prips.Len() == 0 && len(Profdev.Bts) == 0) {
+			return did, 0
+		}
+		if prips.Len() > 0 {
+			r := prips.Rips[0]
+			t := prips.Times[0]
+			prips.Rips = prips.Rips[1:]
+			prips.Times = prips.Times[1:]
+			d := fmt.Sprintf("%0.16x -- %10v\n", r, t)
+			Profdev.rem = ([]uint8)(d)
+		} else if len(Profdev.Bts) > 0 {
+			rip := Profdev.Bts[0]
+			Profdev.Bts = Profdev.Bts[1:]
+			var d string
+			if rip == 0xdeadbeefdeadbeef {
+				d = fmt.Sprintf("--------\n")
+			} else {
+				d = fmt.Sprintf("%0.16x\n", rip)
+			}
+			Profdev.rem = ([]uint8)(d)
+		} else {
+			return did, 0
+		}
+	}
+}
+
 func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
 	df._sane()
 	if df.Maj == common.D_CONSOLE {
 		return cons.Cons_read(dst, 0)
 	} else if df.Maj == common.D_STAT {
 		return stat_read(dst, 0)
+	} else if df.Maj == common.D_PROF {
+		return _prof_read(dst, 0)
 	} else {
 		return 0, 0
 	}
@@ -1295,7 +1381,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 			panic("must succeed")
 		}
 		switch maj {
-		case common.D_CONSOLE, common.D_DEVNULL, common.D_STAT:
+		case common.D_CONSOLE, common.D_DEVNULL, common.D_STAT, common.D_PROF:
 			if maj == common.D_STAT {
 				stats_string = fs.Fs_statistics()
 			}
