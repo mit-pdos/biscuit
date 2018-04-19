@@ -761,7 +761,9 @@ func _addone(rip uintptr) {
 }
 
 // runs on gsignal stack so that we can use gentraceback(). 0xdeadbeefdeadbeef
-// and 0xfeedfacefeedface are sentinel values to indicate new backtraces.
+// and 0xfeedfacefeedface are sentinel values to indicate distinct backtraces.
+// 0xfeedfacefeedface and 0xdeadbeefdeadbeef indicate that a backtrace failed
+// (and thus only the RIP was recorded) or succeeded, respectively.
 //go:nowritebarrierrec
 func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	pc := tf[TF_RIP]
