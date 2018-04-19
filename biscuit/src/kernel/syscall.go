@@ -4079,7 +4079,7 @@ func _prof_go(en bool) {
 	}
 }
 
-func _prof_nmi(en bool, pmev pmev_t, intperiod int, bt bool) {
+func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
 	if en {
 		min := uint(intperiod)
 		// default unhalted cycles sampling rate
@@ -4090,19 +4090,25 @@ func _prof_nmi(en bool, pmev pmev_t, intperiod int, bt bool) {
 			min = cyc / samples
 		}
 		max := uint(float64(min) * 1.2)
-		if !profhw.startnmi(pmev.evid, pmev.pflags, min, max, bt) {
+		if !profhw.startnmi(pmev.evid, pmev.pflags, min, max) {
 			fmt.Printf("Failed to start NMI profiling\n")
 		}
 	} else {
 		// stop profiling
-		rips := profhw.stopnmi()
+		rips, isbt := profhw.stopnmi()
 		if len(rips) == 0 {
 			fmt.Printf("No samples!\n")
 			return
 		}
 		fmt.Printf("%v samples\n", len(rips))
 
-		if !bt {
+		if isbt {
+			pd := &fs.Profdev
+			pd.Lock()
+			pd.Prips.Reset()
+			pd.Bts = rips
+			pd.Unlock()
+		} else {
 			m := make(map[uintptr]int)
 			for _, v := range rips {
 				m[v] = m[v] + 1
@@ -4115,12 +4121,6 @@ func _prof_nmi(en bool, pmev pmev_t, intperiod int, bt bool) {
 			pd.Lock()
 			pd.Prips = prips
 			pd.Bts = nil
-			pd.Unlock()
-		} else {
-			pd := &fs.Profdev
-			pd.Lock()
-			pd.Prips.Reset()
-			pd.Bts = rips
 			pd.Unlock()
 		}
 	}
@@ -4181,22 +4181,25 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 	if ptype&common.PROF_DISABLE != 0 {
 		en = false
 	}
+	pmflags := pmflag_t(_pmflags)
 	switch {
 	case ptype&common.PROF_GOLANG != 0:
 		_prof_go(en)
 	case ptype&common.PROF_SAMPLE != 0:
 		ev := pmev_t{evid: pmevid_t(_events),
-			pflags: pmflag_t(_pmflags)}
-		backtrace := true
-		_prof_nmi(en, ev, intperiod, backtrace)
+			pflags: pmflags}
+		_prof_nmi(en, ev, intperiod)
 	case ptype&common.PROF_COUNT != 0:
+		if pmflags & EVF_BACKTRACE != 0 {
+			return int(-common.EINVAL)
+		}
 		evs := make([]pmev_t, 0, 4)
 		for i := uint(0); i < 64; i++ {
 			b := 1 << i
 			if _events&b != 0 {
 				n := pmev_t{}
 				n.evid = pmevid_t(b)
-				n.pflags = pmflag_t(_pmflags)
+				n.pflags = pmflags
 				evs = append(evs, n)
 			}
 		}

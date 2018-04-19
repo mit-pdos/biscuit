@@ -893,13 +893,8 @@ func _prof_read(dst common.Userio_i, offset int) (int, common.Err_t) {
 		} else if len(Profdev.Bts) > 0 {
 			rip := Profdev.Bts[0]
 			Profdev.Bts = Profdev.Bts[1:]
-			var d string
-			if rip == 0xdeadbeefdeadbeef {
-				d = fmt.Sprintf("--------\n")
-			} else {
-				d = fmt.Sprintf("%0.16x\n", rip)
-			}
-			Profdev.rem = ([]uint8)(d)
+			d := fmt.Sprintf("%0.16x\n", rip)
+			Profdev.rem = []uint8(d)
 		} else {
 			return did, 0
 		}
@@ -1008,6 +1003,9 @@ func (df *Devfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t)
 	// case common.D_CONSOLE:
 	// 	cons.pollc <- pm
 	// 	return <- cons.pollret, 0
+	case common.D_PROF:
+		// XXX
+		return pm.Events & common.R_READ, 0
 	case common.D_DEVNULL:
 		return pm.Events & (common.R_READ | common.R_WRITE), 0
 	default:

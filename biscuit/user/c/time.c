@@ -16,9 +16,10 @@ void usage(char *pre)
 {
 	if (pre)
 		fprintf(stderr, "%s\n\n", pre);
-	errx(-1, "usage: %s [-rg] [-sc pmf] [-e evt] [-i int] <command> "
+	errx(-1, "usage: %s [-bgr] [-sc pmf] [-e evt] [-i int] <command> "
 	    "<arg1> ...\n"
 	         "\n"
+		 "-b     record backtrace; only used with -s\n"
 		 "-r     goprofile command\n"
 		 "-g     report GC statistics for command\n"
 		 "-s     sample via PMU. must provide \"pmf\" (see below)\n"
@@ -86,11 +87,14 @@ long evtadd(char *evt)
 
 int main(int argc, char **argv)
 {
-	int goprof = 0, gcstat = 0, nevts = 0;
+	int goprof = 0, gcstat = 0, nevts = 0, bt = 0;
 	long pmuc = 0, pmus = 0, evt = 0, intperiod=1000000;
 	int ch;
-	while ((ch = getopt(argc, argv, "i:s:c:e:gr")) != -1) {
+	while ((ch = getopt(argc, argv, "bi:s:c:e:gr")) != -1) {
 		switch (ch) {
+		case 'b':
+			bt = 1;
+			break;
 		case 'c':
 			pmuc = ppmf(optarg);
 			break;
@@ -127,10 +131,14 @@ int main(int argc, char **argv)
 		usage("must specify -e at least once");
 	if (pmus && nevts != 1)
 		usage("must specify -e exactly once for sampling");
+	if (bt && !pmus)
+		usage("-b can only be used with sampling");
 
 	ulong start = now();
 
 	// start profiling
+	if (bt)
+		pmus |= PROF_EVF_BACKTRACE;
 	if (goprof && sys_prof(PROF_GOLANG, 0, 0, 0) == -1)
 		errx(-1, "prof start");
 	if (pmuc && sys_prof(PROF_COUNT, evt, pmuc, 0) == -1)

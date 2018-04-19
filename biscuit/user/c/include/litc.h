@@ -496,8 +496,9 @@ long sys_prof(long, long, long, long);
 #define		PROF_EV_ITLB_LOAD_MISS_ANY		(1ul << 10)
 
 // PMU event flags
-#define		PROF_EVF_OS	(1ul << 0)
-#define		PROF_EVF_USR	(1ul << 1)
+#define		PROF_EVF_OS		(1ul << 0)
+#define		PROF_EVF_USR		(1ul << 1)
+#define		PROF_EVF_BACKTRACE	(1ul << 2)
 
 long sys_info(long);
 #define		SINFO_GCCOUNT				0

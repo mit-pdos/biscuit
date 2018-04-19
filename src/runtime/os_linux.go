@@ -740,13 +740,28 @@ func _lbrreset(en bool) {
 
 func backtracetramp(uintptr, *[TFSIZE]uintptr, *g)
 
-var Lost1 uint
-var Lost2 uint
+var Lost struct {
+	Go uint
+	Full uint
+	Gs uint
+	User uint
+}
 var All uint
 
 var Tots int
 
-// runs on gsignal stack so that we can use gentraceback()
+//go:nosplit
+//go:nowritebarrierrec
+func _addone(rip uintptr) {
+	idx := atomic.Xadd64(&nmiprof.bufidx, 2) - 2
+	if idx + 2 < uint64(len(nmiprof.buf)) {
+		nmiprof.buf[idx] = 0xfeedfacefeedface
+		nmiprof.buf[idx+1] = rip
+	}
+}
+
+// runs on gsignal stack so that we can use gentraceback(). 0xdeadbeefdeadbeef
+// and 0xfeedfacefeedface are sentinel values to indicate new backtraces.
 //go:nowritebarrierrec
 func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	pc := tf[TF_RIP]
@@ -756,7 +771,8 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	buf := nmiprof.percpu[cpu.num].scratch[:]
 	// similar to sigprof()
 	if gp == nil || sp < gp.stack.lo || gp.stack.hi < sp || setsSP(pc) {
-		Lost1++
+		_addone(tf[TF_RIP])
+		Lost.Go++
 		return
 	}
 
@@ -780,11 +796,12 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 			dst = dst[1:]
 			copy(dst, buf)
 		} else {
-			Lost2++
+			Lost.Full++
 		}
 
 	} else {
-		Lost1++
+		_addone(tf[TF_RIP])
+		Lost.Go++
 	}
 	if stklock != nil {
 		gcUnlockStackBarriers(stklock)
@@ -800,19 +817,22 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 	}
 
 	if (tf[TF_CS] & 3) != 0 {
-		Lost1++
+		_addone(tf[TF_RIP])
+		Lost.User++
 		return
 	}
 	// if the nmi occurred between swapgs pair, getg() will return garbage.
 	// detect this case by making sure gs does not point to the cpu_t
 	cpu := NMI_Gscpu()
 	if Gscpu() != cpu {
-		Lost1++
+		_addone(tf[TF_RIP])
+		Lost.Gs++
 		return
 	}
 	og := getg()
-	if og == nil || og.m == nil || og.m.gsignal == nil {
-		Lost1++
+	if og.m == nil || og.m.gsignal == nil {
+		_addone(tf[TF_RIP])
+		Lost.Go++
 		return
 	}
 	if og == og.m.gsignal {
@@ -827,12 +847,12 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 	og.m.mallocing--
 }
 
+//go:nowritebarrierrec
 //go:nosplit
 func perfgather(tf *[TFSIZE]uintptr) {
 	idx := atomic.Xadd64(&nmiprof.bufidx, 1) - 1
 	if idx < uint64(len(nmiprof.buf)) {
-		v := tf[TF_RIP]
-		nmiprof.buf[idx] = v
+		nmiprof.buf[idx] = tf[TF_RIP]
 	}
 	//_consumelbr()
 }

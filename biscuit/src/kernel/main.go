@@ -1037,6 +1037,7 @@ type pmflag_t uint
 const (
 	EVF_OS  pmflag_t = 1 << iota
 	EVF_USR pmflag_t = 1 << iota
+	EVF_BACKTRACE pmflag_t = 1 << iota
 )
 
 type pmev_t struct {
@@ -1065,8 +1066,8 @@ type profhw_i interface {
 	prof_init(uint)
 	startpmc([]pmev_t) ([]int, bool)
 	stoppmc([]int) []uint
-	startnmi(pmevid_t, pmflag_t, uint, uint, bool) bool
-	stopnmi() []uintptr
+	startnmi(pmevid_t, pmflag_t, uint, uint) bool
+	stopnmi() ([]uintptr, bool)
 }
 
 var profhw profhw_i
@@ -1085,12 +1086,12 @@ func (n *nilprof_t) stoppmc([]int) []uint {
 	return nil
 }
 
-func (n *nilprof_t) startnmi(pmevid_t, pmflag_t, uint, uint, bool) bool {
+func (n *nilprof_t) startnmi(pmevid_t, pmflag_t, uint, uint) bool {
 	return false
 }
 
-func (n *nilprof_t) stopnmi() []uintptr {
-	return nil
+func (n *nilprof_t) stopnmi() ([]uintptr, bool) {
+	return nil, false
 }
 
 type intelprof_t struct {
@@ -1150,7 +1151,7 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	if pf&EVF_USR != 0 {
 		v |= usr
 	}
-	if pf == 0 {
+	if pf & (EVF_OS | EVF_USR) == 0 {
 		v |= os | usr
 	}
 	return v
@@ -1247,6 +1248,9 @@ func (ip *intelprof_t) startpmc(evs []pmev_t) ([]int, bool) {
 
 	// are the event ids supported?
 	for _, ev := range evs {
+		if ev.pflags & EVF_BACKTRACE != 0 {
+			panic("no bt on counting")
+		}
 		if _, ok := ip.events[ev.evid]; !ok {
 			return nil, false
 		}
@@ -1303,7 +1307,7 @@ func (ip *intelprof_t) stoppmc(idxs []int) []uint {
 }
 
 func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
-	max uint, backtrace bool) bool {
+	max uint) bool {
 	ip.l.Lock()
 	defer ip.l.Unlock()
 	if ip.pmcs[0].alloced {
@@ -1321,14 +1325,15 @@ func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
 	inte := 1 << 20
 	v |= inte
 
+	bt := pf & EVF_BACKTRACE != 0
+	ip.backtrace = bt
 	mask := false
-	runtime.SetNMI(mask, v, min, max, backtrace)
-	ip.backtrace = backtrace
+	runtime.SetNMI(mask, v, min, max, bt)
 	ip._enableall()
 	return true
 }
 
-func (ip *intelprof_t) stopnmi() []uintptr {
+func (ip *intelprof_t) stopnmi() ([]uintptr, bool) {
 	ip.l.Lock()
 	defer ip.l.Unlock()
 
@@ -1341,8 +1346,9 @@ func (ip *intelprof_t) stopnmi() []uintptr {
 	}
 
 	ip.pmcs[0].alloced = false
+	isbt := ip.backtrace
 
-	return buf
+	return buf, isbt
 }
 
 const failalloc bool = false
