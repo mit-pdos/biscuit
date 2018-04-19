@@ -1,179 +1,194 @@
 #!/usr/bin/env python2
+# vim: expandtab ts=4 sw=4
 
 import getopt
 import subprocess
 import sys
 
 def usage():
-	print >> sys.stderr
-	print >> sys.stderr, 'usage: %s <PMU profile> <kernel binary> <user binary>' % (sys.argv[0])
-	print >> sys.stderr
-	sys.exit(-1)
+    print >> sys.stderr
+    print >> sys.stderr, 'usage: %s [-d] <PMU profile> <kernel binary> <user binary>' % (sys.argv[0])
+    print >> sys.stderr
+    sys.exit(-1)
 
 def openrips(fn):
-	f = open(fn)
-	rips = []
-	for l in f.readlines():
-		l = l.strip()
-		if l == '':
-			continue
-		l = l.split()
-		rip = l[0]
-		times = int(l[2])
-		for i in range(times):
-			rips.append(rip)
-	f.close()
-	return rips
+    f = open(fn)
+    lines = f.readlines()
+    lines = filter(None, [x.strip() for x in lines])
+
+    isbt = False
+    btsents = ['deadbeefdeadbeef', 'feedfacefeedface']
+    for l in lines:
+        if l in btsents:
+            isbt = True
+            break
+    rips = []
+    bts = []
+    newbt = []
+    for l in lines:
+        if isbt:
+            if l in btsents:
+                if len(newbt) > 0:
+                    bts.append(newbt)
+                newbt = []
+            else:
+                newbt.append(l)
+        else:
+            l = l.split()
+            rip = l[0]
+            times = int(l[2])
+            for i in range(times):
+                rips.append(rip)
+    f.close()
+    return rips, bts
 
 def divrips(rips):
-	ur = []
-	kr = []
-	for r in rips:
-		if r.startswith('00002c8'):
-			ur.append(r)
-		else:
-			kr.append(r)
-	return ur, kr
+    ur = []
+    kr = []
+    for r in rips:
+        if r.startswith('00002c8'):
+            ur.append(r)
+        else:
+            kr.append(r)
+    return ur, kr
 
 def getsmap(fn):
-	cmd = ['nm', '-C', fn]
-	nm = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-	scmd = ['sort']
-	sort = subprocess.Popen(scmd, stdin=nm.stdout,
-	    stdout=subprocess.PIPE)
-	nm.stdout.close()
-	out, _ = sort.communicate()
+    cmd = ['nm', '-C', fn]
+    nm = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    scmd = ['sort']
+    sort = subprocess.Popen(scmd, stdin=nm.stdout,
+            stdout=subprocess.PIPE)
+    nm.stdout.close()
+    out, _ = sort.communicate()
 
-	ret = []
-	for l in out.split('\n'):
-		l = l.strip()
-		if l == '':
-			continue
-		l = l.split()
-		if len(l) != 3:
-			continue
-		ret.append(l)
-	return ret
+    ret = []
+    for l in out.split('\n'):
+        l = l.strip()
+        if l == '':
+            continue
+        l = l.split()
+        if len(l) != 3:
+            continue
+        ret.append(l)
+    return ret
 
 # list where each element is tuple of (symbol, start, end)
 def getsmap2(binfn):
-	smap = getsmap(binfn)
-	ret = []
-	for i, s in enumerate(smap):
-		r1 = s[2]
-		r2 = int(s[0], 16)
-		r3 = 0x7fffffffffffffff
-		if i != len(smap) - 1:
-			r3 = int(smap[i+1][0], 16)
-		ret.append((r1,r2,r3))
-	return ret
+    smap = getsmap(binfn)
+    ret = []
+    for i, s in enumerate(smap):
+        r1 = s[2]
+        r2 = int(s[0], 16)
+        r3 = 0x7fffffffffffffff
+        if i != len(smap) - 1:
+            r3 = int(smap[i+1][0], 16)
+        ret.append((r1,r2,r3))
+    return ret
 
-def rip2func(rips, binfn, smap):
-	ipbyname = {}
+def rip2func(rips, smap):
+    ipbyname = {}
 
-	si = 0
-	for _kr in rips:
-		kr = int(_kr, 16)
-		found = False
-		while True:
-			s = smap[si]
-			n = s[0]
-			low = s[1]
-			hi = s[2]
-			if kr >= low and kr < hi:
-				if n not in ipbyname:
-					ipbyname[n] = []
-				ipbyname[n].append(kr)
-				found = True
-				break
-			si += 1
-		if not found:
-			raise ValueError("didn't find rip %s" % (_kr))
-	fin = []
-	for f in ipbyname:
-		fin.append((len(ipbyname[f]), f))
-	fin.sort()
-	fin.reverse()
-	return fin, ipbyname
+    si = 0
+    for _kr in rips:
+        kr = int(_kr, 16)
+        found = False
+        while True:
+            s = smap[si]
+            n = s[0]
+            low = s[1]
+            hi = s[2]
+            if kr >= low and kr < hi:
+                if n not in ipbyname:
+                    ipbyname[n] = []
+                ipbyname[n].append(kr)
+                found = True
+                break
+            si += 1
+        if not found:
+            raise ValueError("didn't find rip %s" % (_kr))
+    fin = []
+    for f in ipbyname:
+        fin.append((len(ipbyname[f]), f))
+    fin.sort()
+    fin.reverse()
+    return fin, ipbyname
 
 def disass(fname, rips, smap, binfn):
-	found = False
-	start = 0
-	end = 0
-	for s in smap:
-		if s[0] == fname:
-			found = True
-			start = s[1]
-			end = s[2]
-			break
-	if not found:
-		raise ValueError("didn't find func")
+    found = False
+    start = 0
+    end = 0
+    for s in smap:
+        if s[0] == fname:
+            found = True
+            start = s[1]
+            end = s[2]
+            break
+    if not found:
+        raise ValueError("didn't find func")
 
-	odcmd = ['objdump', '-d', '--start-address=%#x' % (start),
-	    '--stop-address=%#x' % (end), '--no-show-raw-insn', binfn]
-	od = subprocess.Popen(odcmd, stdout=subprocess.PIPE)
-	text, _ = od.communicate()
-	ret = []
-	for l in text.split('\n'):
-		l = l.strip()
-		if l == '':
-			continue
-		if l.find('file format') != -1:
-			continue
-		if l.find('Disassembly of') != -1:
-			continue
-		# don't try to parse ip of first line (name of function)
-		if l[0] == '0':
-			print l
-			continue
+    odcmd = ['objdump', '-d', '--start-address=%#x' % (start),
+            '--stop-address=%#x' % (end), '--no-show-raw-insn', binfn]
+    od = subprocess.Popen(odcmd, stdout=subprocess.PIPE)
+    text, _ = od.communicate()
+    ret = []
+    for l in text.split('\n'):
+        l = l.strip()
+        if l == '':
+            continue
+        if l.find('file format') != -1:
+            continue
+        if l.find('Disassembly of') != -1:
+            continue
+        # don't try to parse ip of first line (name of function)
+        if l[0] == '0':
+            print l
+            continue
 
-		thisip = l.split()[0]
-		thisip = int(thisip[:thisip.find(':')], 16)
-		c = rips.count(thisip)
-		print '%6d %s' % (c, l)
+        thisip = l.split()[0]
+        thisip = int(thisip[:thisip.find(':')], 16)
+        c = rips.count(thisip)
+        print '%6d %s' % (c, l)
 
 def dumpsec(secname, rips, binfn, nsamp):
-	rips.sort()
+    rips.sort()
 
-	smap = getsmap2(binfn)
-	fin, ipbn = rip2func(rips, binfn, smap)
-	print '==== %s ====' % (secname)
-	cum = 0.0
-	tot = 0
-	for f in fin:
-		n = f[1].strip()
-		c = f[0]
-		s = float(c)
-		tot += c
-		cs = '(%d)' % (c)
-		frac = s/nsamp
-		cum += s
-		print '%-35s %6.4f %6s (%6.4f)' % (n, frac, cs, cum/nsamp)
-		fname = f[1]
-		if dumpips:
-			disass(fname, ipbn[fname], smap, binfn)
-	print '---------'
-	print 'total %6.2f' % (float(tot)/nsamp)
+    smap = getsmap2(binfn)
+    fin, ipbn = rip2func(rips, smap)
+    print '==== %s ====' % (secname)
+    cum = 0.0
+    tot = 0
+    for f in fin:
+        n = f[1].strip()
+        c = f[0]
+        s = float(c)
+        tot += c
+        cs = '(%d)' % (c)
+        frac = s/nsamp
+        cum += s
+        print '%-35s %6.4f %6s (%6.4f)' % (n, frac, cs, cum/nsamp)
+        fname = f[1]
+        if dumpips:
+            disass(fname, ipbn[fname], smap, binfn)
+    print '---------'
+    print 'total %6.2f' % (float(tot)/nsamp)
 
 def dump(kbin, ubin, rips, dumpips=False):
-	samples = len(rips)
-	urips, krips = divrips(rips)
-	dumpsec('KERNEL TIME', krips, kbin, samples)
-	dumpsec('USER   TIME', urips, ubin, samples)
+    samples = len(rips)
+    urips, krips = divrips(rips)
+    dumpsec('KERNEL TIME', krips, kbin, samples)
+    dumpsec('USER     TIME', urips, ubin, samples)
 
 opts, args = getopt.getopt(sys.argv[1:], 'd')
 if len(args) != 3:
-	usage()
+    usage()
 
 dumpips = False
 for o in opts:
-	if o[0] == '-d':
-		dumpips = True
+    if o[0] == '-d':
+        dumpips = True
 prof = args[0]
 kbin = args[1]
 ubin = args[2]
-rips = openrips(prof)
-
-#manual(rips)
+rips, bts = openrips(prof)
 
 dump(kbin, ubin, rips, dumpips)
