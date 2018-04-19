@@ -450,7 +450,11 @@ type cpu_t struct {
 	shadowfs	uintptr
 	tf	*[TFSIZE]uintptr
 	fxbuf	*[FXREGS]uintptr
-	_clpad		[56]uint8
+	// APIC id is nice because it is a reliable CPU identifier, even during
+	// NMI interrupts (which may occur during a swapgs pair, making Gscpu()
+	// return garbage during the NMI handler).
+	apicid		uint32
+	_		[56]uint8
 }
 
 var Cpumhz uint
@@ -518,6 +522,21 @@ func Gscpu() *cpu_t {
 		pancake("must not be interruptible", 0)
 	}
 	return _Gscpu()
+}
+
+//go:nosplit
+func NMI_Gscpu() *cpu_t {
+	if rflags() & TF_FL_IF != 0 {
+		pancake("must not be interruptible", 0)
+	}
+	me := lap_id()
+	for i := range cpus {
+		if cpus[i].apicid == me {
+			return &cpus[i]
+		}
+	}
+	pancake("apicid not found", 0)
+	return nil
 }
 
 // returns the logical CPU identifier on which the calling thread was executing
@@ -595,16 +614,23 @@ type nmiprof_t struct {
 	evtmin		uint
 	evtmax		uint
 	gctrl		int
+	backtracing	bool
+	percpu [MAXCPUS]struct {
+		scratch	[64]uintptr
+		tfx	[FXREGS]uintptr
+		_	[64]uint8
+	}
 }
 
 var _nmibuf [4096*10]uintptr
 var nmiprof = nmiprof_t{buf: _nmibuf[:]}
 
-func SetNMI(mask bool, evtsel int, min, max uint) {
+func SetNMI(mask bool, evtsel int, min, max uint, backtrace bool) {
 	nmiprof.LVTmask = mask
 	nmiprof.evtsel = evtsel
 	nmiprof.evtmin = min
 	nmiprof.evtmax = max
+	nmiprof.backtracing = backtrace
 	// create value for ia32_perf_global_ctrl, to easily enable pmcs. does
 	// not enable fixed function counters.
 	ax, _, _, _ := Cpuid(0xa, 0)
@@ -712,13 +738,101 @@ func _lbrreset(en bool) {
 	Wrmsr(ia32_debugctl, dv)
 }
 
+func backtracetramp(uintptr, *[TFSIZE]uintptr, *g)
+
+var Lost1 uint
+var Lost2 uint
+var All uint
+
+var Tots int
+
+// runs on gsignal stack so that we can use gentraceback()
+//go:nowritebarrierrec
+func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
+	pc := tf[TF_RIP]
+	sp := tf[TF_RSP]
+
+	cpu := NMI_Gscpu()
+	buf := nmiprof.percpu[cpu.num].scratch[:]
+	// similar to sigprof()
+	if gp == nil || sp < gp.stack.lo || gp.stack.hi < sp || setsSP(pc) {
+		Lost1++
+		return
+	}
+
+	var stklock *g
+	flags := uint(_TraceTrap)
+	if gp.m.curg != nil && gcTryLockStackBarriers(gp.m.curg) {
+		stklock = gp.m.curg
+		flags |= _TraceJumpStack
+	}
+	did := 0
+	if gp != gp.m.curg || stklock != nil {
+		did := gentraceback(pc, sp, 0, gp, 0, &buf[0], len(buf), nil,
+		    nil, flags)
+		Tots += did
+		buf = buf[:did]
+		need := uint64(len(buf) + 1)
+		last := atomic.Xadd64(&nmiprof.bufidx, int64(need))
+		idx := last - need
+		if last < uint64(len(nmiprof.buf)) {
+			dst := nmiprof.buf[idx:]
+			dst[0] = 0xdeadbeefdeadbeef
+			dst = dst[1:]
+			copy(dst, buf)
+		} else {
+			Lost2++
+		}
+
+	} else {
+		Lost1++
+	}
+	if stklock != nil {
+		gcUnlockStackBarriers(stklock)
+	}
+	Tots += did
+}
+
+//go:nosplit
+//go:nowritebarrierrec
+func nmibacktrace(tf *[TFSIZE]uintptr) {
+	All++
+	if tf[TF_GSBASE] == 0 {
+		_pmsg("!")
+	}
+
+	if (tf[TF_CS] & 3) != 0 {
+		Lost1++
+		return
+	}
+	// if the nmi occurred between swapgs pair, getg() will return garbage.
+	// detect this case by making sure gs does not point to the cpu_t
+	cpu := NMI_Gscpu()
+	if Gscpu() != cpu {
+		Lost1++
+		return
+	}
+	og := getg()
+	if og == nil || og.m == nil || og.m.gsignal == nil {
+		Lost1++
+		return
+	}
+	if og == og.m.gsignal {
+		pancake("recursive NMIs?", 0)
+	}
+	// make sure we aren't preempted by GC
+	og.m.mallocing++
+	setg(og.m.gsignal)
+	// indirectly call nmibacktrace1()...
+	backtracetramp(og.m.gsignal.stack.hi, tf, og)
+	setg(og)
+	og.m.mallocing--
+}
+
 //go:nosplit
 func perfgather(tf *[TFSIZE]uintptr) {
 	idx := atomic.Xadd64(&nmiprof.bufidx, 1) - 1
 	if idx < uint64(len(nmiprof.buf)) {
-		//nmiprof.buf[idx] = tf[TF_RIP]
-		//pid := Gscpu().pid
-		//v := tf[TF_RIP] | (pid << 56)
 		v := tf[TF_RIP]
 		nmiprof.buf[idx] = v
 	}
@@ -1710,6 +1824,9 @@ func fpuinit(amfirst bool) {
 		for i := range threads {
 			chkalign(unsafe.Pointer(&threads[i].fx), 16)
 		}
+		for i := range nmiprof.percpu {
+			chkalign(unsafe.Pointer(&nmiprof.percpu[i].tfx), 16)
+		}
 	}
 }
 
@@ -1958,6 +2075,7 @@ func proc_setup() {
 	myrsp := tss_init(0)
 	sysc_setup(myrsp)
 	gs_set(&cpus[0])
+	cpus[0].apicid = lap_id()
 	Gscpu().num = 0
 	Gscpu().mythread = &threads[0]
 }
@@ -1989,6 +2107,14 @@ func Ap_setup(cpunum uint) {
 	if mycpu.num != 0 {
 		pancake("cpu id conflict", uintptr(mycpu.num))
 	}
+	me := lap_id()
+	// sanity
+	for i := range cpus {
+		if cpus[i].apicid == me {
+			pancake("dup apic id?", uintptr(me))
+		}
+	}
+	mycpu.apicid = me
 	fs_null()
 	gs_null()
 	gs_set(mycpu)
@@ -2173,13 +2299,25 @@ func trap(tf *[TFSIZE]uintptr) {
 	trapno := tf[TF_TRAPNO]
 
 	if trapno == TRAP_NMI {
-		// prevent SSE corruption: set TS in cr0 to make sure SSE
-		// instructions generate a fault
-		ts := uintptr(1 << 3)
-		Lcr0(Rcr0() | ts)
-		perfgather(tf)
-		perfmask()
-		Lcr0(Rcr0() &^ ts)
+		if nmiprof.backtracing {
+			// go's gentraceback() uses SSE instructions (to zero
+			// large stack variables), so save and restore SSE regs
+			// explicitly
+			cpu := NMI_Gscpu()
+			fxbuf := &nmiprof.percpu[cpu.num].tfx
+			fxsave(fxbuf)
+			nmibacktrace(tf)
+			perfmask()
+			fxrstor(fxbuf)
+		} else {
+			// prevent SSE corruption: set TS in cr0 to make sure
+			// SSE instructions generate a fault
+			ts := uintptr(1 << 3)
+			Lcr0(Rcr0() | ts)
+			perfgather(tf)
+			perfmask()
+			Lcr0(Rcr0() &^ ts)
+		}
 		_trapret(tf)
 	}
 
@@ -2203,8 +2341,8 @@ func trap(tf *[TFSIZE]uintptr) {
 
 	// don't add code before SSE context saving unless you've thought very
 	// carefully! it is easy to accidentally and silently corrupt SSE state
-	// (ie calling memmove indirectly by assignment of large datatypes)
-	// before it is saved below.
+	// (ie calling memmove indirectly by assignment or declaration of large
+	// datatypes) before it is saved below.
 
 	// save SSE state immediately before we clobber it
 	if ct != nil {

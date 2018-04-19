@@ -1065,7 +1065,7 @@ type profhw_i interface {
 	prof_init(uint)
 	startpmc([]pmev_t) ([]int, bool)
 	stoppmc([]int) []uint
-	startnmi(pmevid_t, pmflag_t, uint, uint) bool
+	startnmi(pmevid_t, pmflag_t, uint, uint, bool) bool
 	stopnmi() []uintptr
 }
 
@@ -1085,7 +1085,7 @@ func (n *nilprof_t) stoppmc([]int) []uint {
 	return nil
 }
 
-func (n *nilprof_t) startnmi(pmevid_t, pmflag_t, uint, uint) bool {
+func (n *nilprof_t) startnmi(pmevid_t, pmflag_t, uint, uint, bool) bool {
 	return false
 }
 
@@ -1097,6 +1097,7 @@ type intelprof_t struct {
 	l      sync.Mutex
 	pmcs   []intelpmc_t
 	events map[pmevid_t]pmevent_t
+	backtrace bool
 }
 
 type intelpmc_t struct {
@@ -1224,6 +1225,18 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 			ip.events[k] = v
 		}
 	}
+	_, _, ecx, _ := runtime.Cpuid(0x1, 0)
+	g1 := ecx & (1 << 15) != 0
+	eax, _, _, _ := runtime.Cpuid(0xa, 0)
+	archperfmonid := (eax & 0xff)
+	if archperfmonid >= 4 {
+		panic("PMC code supports legacy freeze only")
+	}
+	g2 := archperfmonid > 1
+	if !g1 || !g2 {
+		panic("PMC freeze unsupported")
+	}
+
 }
 
 // starts a performance counter for each event in evs. if all the counters
@@ -1290,7 +1303,7 @@ func (ip *intelprof_t) stoppmc(idxs []int) []uint {
 }
 
 func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
-	max uint) bool {
+	max uint, backtrace bool) bool {
 	ip.l.Lock()
 	defer ip.l.Unlock()
 	if ip.pmcs[0].alloced {
@@ -1309,7 +1322,8 @@ func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
 	v |= inte
 
 	mask := false
-	runtime.SetNMI(mask, v, min, max)
+	runtime.SetNMI(mask, v, min, max, backtrace)
+	ip.backtrace = backtrace
 	ip._enableall()
 	return true
 }
@@ -1319,7 +1333,7 @@ func (ip *intelprof_t) stopnmi() []uintptr {
 	defer ip.l.Unlock()
 
 	mask := true
-	runtime.SetNMI(mask, 0, 0, 0)
+	runtime.SetNMI(mask, 0, 0, 0, false)
 	ip._disableall()
 	buf, full := runtime.TakeNMIBuf()
 	if full {

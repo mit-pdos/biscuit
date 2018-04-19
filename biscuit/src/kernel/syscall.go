@@ -4109,7 +4109,7 @@ func _prof_go(en bool) {
 	}
 }
 
-func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
+func _prof_nmi(en bool, pmev pmev_t, intperiod int, bt bool) {
 	if en {
 		min := uint(intperiod)
 		// default unhalted cycles sampling rate
@@ -4120,7 +4120,7 @@ func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
 			min = cyc / samples
 		}
 		max := uint(float64(min) * 1.2)
-		if !profhw.startnmi(pmev.evid, pmev.pflags, min, max) {
+		if !profhw.startnmi(pmev.evid, pmev.pflags, min, max, bt) {
 			fmt.Printf("Failed to start NMI profiling\n")
 		}
 	} else {
@@ -4132,17 +4132,32 @@ func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
 		}
 		fmt.Printf("%v samples\n", len(rips))
 
-		m := make(map[uintptr]int)
-		for _, v := range rips {
-			m[v] = m[v] + 1
-		}
-		prips := perfrips_t{}
-		prips.init(m)
-		sort.Sort(sort.Reverse(&prips))
-		for i := 0; i < prips.Len(); i++ {
-			r := prips.rips[i]
-			t := prips.times[i]
-			fmt.Printf("%0.16x -- %10v\n", r, t)
+		if !bt {
+			m := make(map[uintptr]int)
+			for _, v := range rips {
+				m[v] = m[v] + 1
+			}
+			prips := perfrips_t{}
+			prips.init(m)
+			sort.Sort(sort.Reverse(&prips))
+			for i := 0; i < prips.Len(); i++ {
+				r := prips.rips[i]
+				t := prips.times[i]
+				fmt.Printf("%0.16x -- %10v\n", r, t)
+			}
+		} else {
+			c := 0
+			for _, rip := range rips {
+				if rip == 0xdeadbeefdeadbeef {
+					c++
+					if c > 100 {
+						break
+					}
+					fmt.Printf("%v --------\n", c)
+				} else {
+					fmt.Printf("%0.16x\n", rip)
+				}
+			}
 		}
 	}
 }
@@ -4208,7 +4223,8 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 	case ptype&common.PROF_SAMPLE != 0:
 		ev := pmev_t{evid: pmevid_t(_events),
 			pflags: pmflag_t(_pmflags)}
-		_prof_nmi(en, ev, intperiod)
+		backtrace := true
+		_prof_nmi(en, ev, intperiod, backtrace)
 	case ptype&common.PROF_COUNT != 0:
 		evs := make([]pmev_t, 0, 4)
 		for i := uint(0); i < 64; i++ {

@@ -1192,6 +1192,21 @@ TEXT ·_Gscpu(SB), NOSPLIT, $0-8
 	SWAPGS
 	RET
 
+// void backtracetramp(uintptr newsp, uintptr *tf, g *gp)
+TEXT ·backtracetramp(SB), NOSPLIT, $0-0x18
+	MOVQ	SP, AX
+	MOVQ	tf+0x8(FP), DX
+	MOVQ	gp+0x10(FP), CX
+	MOVQ	newsp+0(FP), SP
+	PUSHQ	AX
+	PUSHQ	CX
+	PUSHQ	DX
+	CALL	·nmibacktrace1(SB)
+	POPQ	DX
+	POPQ	DX
+	POPQ	SP
+	RET
+
 /*
  *  go-routine
  */
