@@ -766,7 +766,6 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 		stklock = gp.m.curg
 		flags |= _TraceJumpStack
 	}
-	did := 0
 	if gp != gp.m.curg || stklock != nil {
 		did := gentraceback(pc, sp, 0, gp, 0, &buf[0], len(buf), nil,
 		    nil, flags)
@@ -790,7 +789,6 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	if stklock != nil {
 		gcUnlockStackBarriers(stklock)
 	}
-	Tots += did
 }
 
 //go:nosplit
