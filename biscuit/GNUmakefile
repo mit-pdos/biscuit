@@ -90,7 +90,7 @@ $(K)/bootmain.o: $(K)/bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-mkfs: src/mkfs/mkfs.go  $(CSRC)
+mkfs: src/mkfs/mkfs.go  $(CSRC) $(FSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build src/mkfs/mkfs.go
 
 go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
