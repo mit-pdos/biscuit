@@ -123,15 +123,15 @@ func (log *log_t) Write_ordered(b *common.Bdev_block_t) {
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.fs.bcache.Get_fill, blkn, s, lock))
+	return log.fs.bcache.Get_fill(blkn, s, lock)
 }
 
 func (log *log_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.fs.bcache.Get_zero, blkn, s, lock))
+	return log.fs.bcache.Get_zero(blkn, s, lock)
 }
 
 func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.fs.bcache.Get_nofill, blkn, s, lock))
+	return log.fs.bcache.Get_nofill(blkn, s, lock)
 }
 
 func (log *log_t) Relse(blk *common.Bdev_block_t, s string) {
