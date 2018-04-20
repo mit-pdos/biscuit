@@ -322,7 +322,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 			fs.icache.Refdown(ochild, "fs_name_ochild")
 			return -common.ENOHEAP
 		}
-		npar.Lock()
+		npar.ilock("")
 		nchildinum, err := npar.ilookup(nfn)
 		if err != 0 && err != -common.ENOENT {
 			fs.icache.Refdown(opar, "fs_name_opar")
@@ -338,7 +338,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
-		npar.Unlock()
+		npar.iunlock("")
 
 		var inodes []*imemnode_t
 		var locked []*imemnode_t
