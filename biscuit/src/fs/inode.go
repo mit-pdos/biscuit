@@ -333,10 +333,8 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 			n = max
 		}
 		idm.fs.fslog.Op_begin("dowrite")
-		idm.ilock("iwrite")
 		wrote, err := idm.iwrite(src, offset+i, n)
 		idm._iupdate()
-		idm.iunlock("iwrite")
 		idm.fs.fslog.Op_end()
 
 		if err != 0 {
