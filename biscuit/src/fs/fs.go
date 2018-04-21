@@ -1504,6 +1504,9 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 }
 
 func (fs *Fs_t) Fs_evict() (int, int) {
+	if memfs {
+		panic("no evict")
+	}
 	//fmt.Printf("FS EVICT\n")
 	fs.bcache.refcache.Evict_half()
 	fs.icache.refcache.Evict_half()
