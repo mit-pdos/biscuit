@@ -787,35 +787,20 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 		return
 	}
 
-	var stklock *g
-	flags := uint(_TraceTrap)
-	if gp.m.curg != nil && gcTryLockStackBarriers(gp.m.curg) {
-		stklock = gp.m.curg
-		flags |= _TraceJumpStack
-	}
-	if gp != gp.m.curg || stklock != nil {
-		did := gentraceback(pc, sp, 0, gp, 0, &buf[0], len(buf), nil,
-		    nil, flags)
-		Tots += did
-		buf = buf[:did]
-		need := uint64(len(buf) + 1)
-		last := atomic.Xadd64(&nmiprof.bufidx, int64(need))
-		idx := last - need
-		if last < uint64(len(nmiprof.buf)) {
-			dst := nmiprof.buf[idx:]
-			dst[0] = 0xdeadbeefdeadbeef
-			dst = dst[1:]
-			copy(dst, buf)
-		} else {
-			Lost.Full++
-		}
-
+	did := gentraceback(pc, sp, 0, gp, 0, &buf[0], len(buf), nil,
+	    nil, _TraceTrap|_TraceJumpStack)
+	Tots += did
+	buf = buf[:did]
+	need := uint64(len(buf) + 1)
+	last := atomic.Xadd64(&nmiprof.bufidx, int64(need))
+	idx := last - need
+	if last < uint64(len(nmiprof.buf)) {
+		dst := nmiprof.buf[idx:]
+		dst[0] = 0xdeadbeefdeadbeef
+		dst = dst[1:]
+		copy(dst, buf)
 	} else {
-		_addone(tf[TF_RIP])
-		Lost.Go++
-	}
-	if stklock != nil {
-		gcUnlockStackBarriers(stklock)
+		Lost.Full++
 	}
 }
 
