@@ -123,15 +123,15 @@ func (log *log_t) Write_ordered(b *common.Bdev_block_t) {
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.fs.bcache.Get_fill, blkn, s, lock))
+	return log.fs.bcache.Get_fill(blkn, s, lock)
 }
 
 func (log *log_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.fs.bcache.Get_zero, blkn, s, lock))
+	return log.fs.bcache.Get_zero(blkn, s, lock)
 }
 
 func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.read(mkread(log.fs.bcache.Get_nofill, blkn, s, lock))
+	return log.fs.bcache.Get_nofill(blkn, s, lock)
 }
 
 func (log *log_t) Relse(blk *common.Bdev_block_t, s string) {
@@ -167,9 +167,9 @@ func (log *log_t) Stats() string {
 }
 
 func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
-	if memfs {
-		return nil
-	}
+	//if memfs {
+	//	return nil
+	//}
 	fslog := &log_t{}
 	fslog.fs = fs
 	fslog.init(logstart, loglen, disk)
@@ -463,7 +463,7 @@ func (log *log_t) flush() {
 func (log *log_t) recover() common.Err_t {
 	b, err := log.fs.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 {
-		return err
+		panic("must succeed")
 	}
 	lh := logheader_t{b.Data}
 	rlen := lh.recovernum()
@@ -481,11 +481,11 @@ func (log *log_t) recover() common.Err_t {
 		}
 		lb, err := log.fs.bcache.Get_fill(log.logstart+LogOffset+i, "i", false)
 		if err != 0 {
-			return err
+			panic("must succeed")
 		}
 		fb, err := log.fs.bcache.Get_fill(bdest, "bdest", false)
 		if err != 0 {
-			return err
+			panic("must succeed")
 		}
 		copy(fb.Data[:], lb.Data[:])
 		log.fs.bcache.Write(fb)

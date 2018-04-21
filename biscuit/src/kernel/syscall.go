@@ -4053,36 +4053,6 @@ func buftodests(buf []uint8, dsts [][]uint8) int {
 	return ret
 }
 
-type perfrips_t struct {
-	rips  []uintptr
-	times []int
-}
-
-func (pr *perfrips_t) init(m map[uintptr]int) {
-	l := len(m)
-	pr.rips = make([]uintptr, l)
-	pr.times = make([]int, l)
-	idx := 0
-	for k, v := range m {
-		pr.rips[idx] = k
-		pr.times[idx] = v
-		idx++
-	}
-}
-
-func (pr *perfrips_t) Len() int {
-	return len(pr.rips)
-}
-
-func (pr *perfrips_t) Less(i, j int) bool {
-	return pr.times[i] < pr.times[j]
-}
-
-func (pr *perfrips_t) Swap(i, j int) {
-	pr.rips[i], pr.rips[j] = pr.rips[j], pr.rips[i]
-	pr.times[i], pr.times[j] = pr.times[j], pr.times[i]
-}
-
 func _prof_go(en bool) {
 	if en {
 		prof.init()
@@ -4125,24 +4095,33 @@ func _prof_nmi(en bool, pmev pmev_t, intperiod int) {
 		}
 	} else {
 		// stop profiling
-		rips := profhw.stopnmi()
+		rips, isbt := profhw.stopnmi()
 		if len(rips) == 0 {
 			fmt.Printf("No samples!\n")
 			return
 		}
 		fmt.Printf("%v samples\n", len(rips))
 
-		m := make(map[uintptr]int)
-		for _, v := range rips {
-			m[v] = m[v] + 1
-		}
-		prips := perfrips_t{}
-		prips.init(m)
-		sort.Sort(sort.Reverse(&prips))
-		for i := 0; i < prips.Len(); i++ {
-			r := prips.rips[i]
-			t := prips.times[i]
-			fmt.Printf("%0.16x -- %10v\n", r, t)
+		if isbt {
+			pd := &fs.Profdev
+			pd.Lock()
+			pd.Prips.Reset()
+			pd.Bts = rips
+			pd.Unlock()
+		} else {
+			m := make(map[uintptr]int)
+			for _, v := range rips {
+				m[v] = m[v] + 1
+			}
+			prips := fs.Perfrips_t{}
+			prips.Init(m)
+			sort.Sort(sort.Reverse(&prips))
+
+			pd := &fs.Profdev
+			pd.Lock()
+			pd.Prips = prips
+			pd.Bts = nil
+			pd.Unlock()
 		}
 	}
 }
@@ -4202,21 +4181,25 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 	if ptype&common.PROF_DISABLE != 0 {
 		en = false
 	}
+	pmflags := pmflag_t(_pmflags)
 	switch {
 	case ptype&common.PROF_GOLANG != 0:
 		_prof_go(en)
 	case ptype&common.PROF_SAMPLE != 0:
 		ev := pmev_t{evid: pmevid_t(_events),
-			pflags: pmflag_t(_pmflags)}
+			pflags: pmflags}
 		_prof_nmi(en, ev, intperiod)
 	case ptype&common.PROF_COUNT != 0:
+		if pmflags & EVF_BACKTRACE != 0 {
+			return int(-common.EINVAL)
+		}
 		evs := make([]pmev_t, 0, 4)
 		for i := uint(0); i < 64; i++ {
 			b := 1 << i
 			if _events&b != 0 {
 				n := pmev_t{}
 				n.evid = pmevid_t(b)
-				n.pflags = pmflag_t(_pmflags)
+				n.pflags = pmflags
 				evs = append(evs, n)
 			}
 		}

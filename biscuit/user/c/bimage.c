@@ -30,6 +30,35 @@ static int lstn(uint16_t lport)
 	return ret;
 }
 
+// latency debugging code
+//ulong allw[100];
+//
+//void dump(ulong *worst)
+//{
+//	for (int i = 0; i < 100; i++)
+//		printf("%d: %lu\n", i, worst[i]);
+//	printf("\n");
+//}
+//
+//void insert(ulong *worst, ulong n)
+//{
+//	if (n < worst[0])
+//		return;
+//	if (n > worst[99]) {
+//		int i = 99;
+//		memmove(worst, worst + 1, i*sizeof(worst[0]));
+//		worst[i] = n;
+//		return;
+//	}
+//	for (int i = 0; i < 99; i++) {
+//		if (n > worst[i] && n <= worst[i+1]) {
+//			memmove(worst, worst + 1, i*sizeof(worst[0]));
+//			worst[i] = n;
+//			return;
+//		}
+//	}
+//}
+
 int main(int argc, char **argv)
 {
 	// bring all file metadaa and binary text/data into the page cache in

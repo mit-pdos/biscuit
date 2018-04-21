@@ -166,7 +166,7 @@ func (ind *Inode_t) W_addr(i int, blk int) {
 
 // In-memory representation of an inode.
 type imemnode_t struct {
-	sync.Mutex
+	_l	sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
 
@@ -218,9 +218,9 @@ func (idm *imemnode_t) Free() {
 }
 
 func (idm *imemnode_t) Evictnow() bool {
-	idm.Lock()
+	idm.ilock("")
 	r := idm.links == 0
-	idm.Unlock()
+	idm.iunlock("")
 	return r
 }
 
@@ -228,7 +228,7 @@ func (idm *imemnode_t) ilock(s string) {
 	// if idm._amlocked {
 	//	fmt.Printf("ilocked: warning %v %v\n", idm.inum, s)
 	// }
-	idm.Lock()
+	idm._l.Lock()
 	if idm.inum < 0 {
 		panic("negative inum")
 	}
@@ -242,7 +242,7 @@ func (idm *imemnode_t) iunlock(s string) {
 		panic("iunlock:" + s)
 	}
 	idm._amlocked = false
-	idm.Unlock()
+	idm._l.Unlock()
 }
 
 // Fill in inode
@@ -333,10 +333,8 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 			n = max
 		}
 		idm.fs.fslog.Op_begin("dowrite")
-		idm.ilock("iwrite")
 		wrote, err := idm.iwrite(src, offset+i, n)
 		idm._iupdate()
-		idm.iunlock("iwrite")
 		idm.fs.fslog.Op_end()
 
 		if err != 0 {
@@ -1013,7 +1011,7 @@ func (bl *blockiter_t) _isind(blkno int) (*common.Bdev_block_t, bool) {
 	if err != 0 {
 		panic("must reserve")
 	}
-	if bl.tryevict {
+	if bl.tryevict && !memfs {
 		bl.lasti.Tryevict()
 	}
 	return bl.lasti, true
@@ -1186,7 +1184,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		// must lock the inode block before marking it free, to prevent
 		// clobbering a newly, concurrently allocated/created inode
 		iblk, _ := idm.idibread()
-		if tryevict {
+		if tryevict && !memfs {
 			iblk.Tryevict()
 		}
 

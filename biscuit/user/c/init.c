@@ -19,6 +19,9 @@ int main(int argc, char **argv)
 	ret = mknod("/dev/stats", 0, MKDEV(6, 0));
 	if (ret != 0 && errno != EEXIST)
 		err(-1, "mknod");
+	ret = mknod("/dev/prof", 0, MKDEV(7, 0));
+	if (ret != 0 && errno != EEXIST)
+		err(-1, "mknod");
 
 	for (;;) {
 		int pid = fork();

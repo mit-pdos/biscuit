@@ -2041,12 +2041,14 @@ func (tc *tcptcb_t) tcb_unlock() {
 // waits on the receive buffer conditional variable
 func (tc *tcptcb_t) rbufwait() common.Err_t {
 	ret := common.KillableWait(tc.rxbuf.cond)
+	// XXX close on kill
 	tc.locked = true
 	return ret
 }
 
 func (tc *tcptcb_t) tbufwait() common.Err_t {
 	ret := common.KillableWait(tc.txbuf.cond)
+	// XXX close on kill
 	tc.locked = true
 	return ret
 }
@@ -2869,7 +2871,8 @@ func (tc *tcptcb_t) lwingrow(dlen int) {
 	mss := int(tc.rcv.mss)
 	oldwin := int(tc.rcv.win)
 
-	if left-oldwin >= mss {
+	//if left-oldwin >= mss {
+	if left >= mss {
 		tc.rcv.win = uint16(left)
 		tc.sched_ack()
 		tc.ack_maybe()
