@@ -116,12 +116,12 @@ func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_
 }
 
 func (bcache *bcache_t) Write(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b, "bcache_write")
+	bcache.refcache.Refup(b.Ref)
 	b.Write()
 }
 
 func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b, "bcache_write_async")
+	bcache.refcache.Refup(b.Ref)
 	b.Write_async()
 }
 
@@ -141,7 +141,7 @@ func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 			panic("not contiguous\n")
 		}
 		n++
-		bcache.refcache.Refup(b, "bcache_write_async_blks")
+		bcache.refcache.Refup(b.Ref)
 	}
 	// one request for all blks
 	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
@@ -149,14 +149,14 @@ func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 }
 
 func (bcache *bcache_t) Refup(b *common.Bdev_block_t, s string) {
-	bcache.refcache.Refup(b, s)
+	bcache.refcache.Refup(b.Ref)
 }
 
 func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	if bdev_debug {
 		fmt.Printf("bcache_relse: %v %v\n", b.Block, s)
 	}
-	evicted := bcache.refcache.Refdown(b, s)
+	evicted := bcache.refcache.Refdown(b.Ref, false)
 	if evicted {
 		bcache.Lock()
 		delete(bcache.pins, b.Pa)
@@ -183,30 +183,20 @@ func (bcache *bcache_t) Stats() string {
 
 // returns the reference to a locked buffer
 func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, common.Err_t) {
-	ref, victim, err := bcache.refcache.Lookup(blk, s)
+	ref, created, err := bcache.refcache.Lookup(blk, func(_ int, ref *common.Ref_t) common.Obj_t {
+		ret := common.MkBlock(blk, s, bcache.mem, bcache.disk, bcache)
+		ret.Ref = ref
+		ret.Lock()
+		return ret
+	})
 	if err != 0 {
-		// fmt.Printf("bref error %v\n", err)
 		return nil, false, err
 	}
-	if victim != nil {
-		b := victim.(*common.Bdev_block_t)
-		b.Evict()
-	}
-	defer ref.Unlock()
 
-	created := false
-	if !ref.valid {
-		if bdev_debug {
-			fmt.Printf("bref fill %v %v\n", blk, s)
-		}
-		buf := common.MkBlock(blk, s, bcache.mem, bcache.disk, bcache)
-		ref.obj = buf
-		ref.valid = true
-		created = true
+	b := ref.Obj.(*common.Bdev_block_t)
+	if !created {
+		b.Lock()
 	}
-	b := ref.obj.(*common.Bdev_block_t)
-	b.Lock()
-	b.Name = s
 	return b, created, err
 }
 
@@ -224,7 +214,7 @@ func (bcache *bcache_t) raw(blkno int) (*common.Bdev_block_t, common.Err_t) {
 }
 
 func (bcache *bcache_t) pin(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b, "pin")
+	bcache.refcache.Refup(b.Ref)
 
 	bcache.Lock()
 	if old, ok := bcache.pins[b.Pa]; ok && old != b {
