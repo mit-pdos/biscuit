@@ -1310,7 +1310,8 @@ func gcMarkTermination() {
 		}
 	})
 
-	res.gclive = int64(work.bytesMarked)
+	p := (*uint64)(unsafe.Pointer(&res.gclive))
+	atomic.Store64(p, uint64(work.bytesMarked))
 
 	// start counting bgsweeper time again
 	bgtrack = true

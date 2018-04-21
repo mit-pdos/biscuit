@@ -3370,7 +3370,9 @@ func Cacheres(_res int, init bool) bool {
 
 func Cacheaccount() {
 	gp := getg()
-	gp.res.allocs = gp.res.took
+	if gp.res.allocs < gp.res.took {
+		gp.res.allocs = gp.res.took
+	}
 }
 
 func GCDebug(n int) {
