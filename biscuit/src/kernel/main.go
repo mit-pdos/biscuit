@@ -786,14 +786,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			debug.SetTraceback("all")
 			panic("yahoo")
 		} else if c == '@' {
-			v := runtime.Memremain()
-			fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
+			//common.Lims = !common.Lims
+			//fmt.Printf("Lims: %v\n", common.Lims)
+			//thefs.Dumpy()
 		} else if c == '%' {
-			//fmt.Printf("Max reservation: %v\n", runtime.Maxgot)
-			//fmt.Printf("Max reservation: %v\n", common.Human(int(common.Maxgot)))
-			//common.Maxgot = 0
-
-			//runtime.Maxgot = 0
 			//fmt.Printf("distinct simulated failures: %v\n",
 			//    common.Resfail.Len())
 			//common.Resfail.Enabled = !common.Resfail.Enabled
@@ -802,10 +798,25 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			//loping()
 			//netdump()
 
-			a, b := thefs.Sizes()
-			fmt.Printf("FS SIZE: %v, %v\n", a, b)
-			fmt.Printf("KWAITS: %v\n", common.Kwaits)
-			fmt.Printf("GWAITS: %v\n", common.Gwaits)
+			v := runtime.Memremain()
+			fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
+
+			//common.Trap = true
+			//pr := false
+			//for i, n := range nirqs {
+			//	if n != 0 {
+			//		if !pr {
+			//			pr = true
+			//			fmt.Printf("Nirqs:\n")
+			//		}
+			//		fmt.Printf("\t%3v: %10v\n", i, n)
+			//	}
+			//}
+
+			//a, b := thefs.Sizes()
+			//fmt.Printf("FS SIZE: %v, %v\n", a, b)
+			//fmt.Printf("KWAITS: %v\n", common.Kwaits)
+			//fmt.Printf("GWAITS: %v\n", common.Gwaits)
 
 			//bp := &bprof_t{}
 			//err := pprof.WriteHeapProfile(bp)

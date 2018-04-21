@@ -746,9 +746,6 @@ var Lost struct {
 	Gs uint
 	User uint
 }
-var All uint
-
-var Tots int
 
 //go:nosplit
 //go:nowritebarrierrec
@@ -787,7 +784,6 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	if gp != gp.m.curg || stklock != nil {
 		did := gentraceback(pc, sp, 0, gp, 0, &buf[0], len(buf), nil,
 		    nil, flags)
-		Tots += did
 		buf = buf[:did]
 		need := uint64(len(buf) + 1)
 		last := atomic.Xadd64(&nmiprof.bufidx, int64(need))
@@ -813,7 +809,6 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 //go:nosplit
 //go:nowritebarrierrec
 func nmibacktrace(tf *[TFSIZE]uintptr) {
-	All++
 	if tf[TF_GSBASE] == 0 {
 		_pmsg("!")
 	}
