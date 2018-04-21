@@ -518,9 +518,10 @@ type fsfops_t struct {
 func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 
 	if fo.count <= 0 {
+		fo.Unlock()
 		return 0, -common.EBADF
 	}
 
@@ -535,6 +536,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 	}
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_read")
 	if err != 0 {
+		fo.Unlock()
 		return 0, err
 	}
 	did, err := idm.do_read(dst, offset)
@@ -542,6 +544,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		fo.offset += did
 	}
 	idm.iunlock_refdown("_read")
+	fo.Unlock()
 	return did, err
 }
 
@@ -657,8 +660,9 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 // reclaimed.
 func (fo *fsfops_t) Close() common.Err_t {
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 	if fo.count <= 0 {
+		fo.Unlock()
 		return -common.EBADF
 	}
 	fo.count--
@@ -666,6 +670,7 @@ func (fo *fsfops_t) Close() common.Err_t {
 		fmt.Printf("Close: %d cnt %d\n", fo.priv, fo.count)
 
 	}
+	fo.Unlock()
 	return fo.fs.Fs_close(fo.priv)
 }
 
@@ -680,19 +685,22 @@ func (fo *fsfops_t) Pathi() common.Inum_t {
 
 func (fo *fsfops_t) Reopen() common.Err_t {
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 	if fo.count <= 0 {
+		fo.Unlock()
 		return -common.EBADF
 	}
 
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "reopen")
 	if err != 0 {
+		fo.Unlock()
 		return err
 	}
 	fo.fs.istats.Nreopen.inc()
 	fo.fs.icache.Refup(idm, "reopen") // close will decrease it
 	idm.iunlock_refdown("reopen")
 	fo.count++
+	fo.Unlock()
 	return 0
 }
 
@@ -728,17 +736,20 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 // populated if necessary.
 func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 	if fo.count <= 0 {
+		fo.Unlock()
 		return nil, -common.EBADF
 	}
 
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	if err != 0 {
+		fo.Unlock()
 		return nil, err
 	}
 	mmi, err := idm.do_mmapi(offset, len, inc)
 	idm.iunlock_refdown("mmapi")
+	fo.Unlock()
 	return mmi, err
 }
 
@@ -1398,7 +1409,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 
 func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_close")
-	defer fs.op_end_and_free()
+	//defer fs.op_end_and_free()
 
 	fs.istats.Nclose.inc()
 
@@ -1408,10 +1419,12 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 
 	idm, err := fs.icache.Iref_locked(priv, "Fs_close")
 	if err != 0 {
+		fs.op_end_and_free()
 		return err
 	}
 	fs.icache.Refdown(idm, "Fs_close")
 	idm.iunlock_refdown("Fs_close")
+	fs.op_end_and_free()
 	return 0
 }
 

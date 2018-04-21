@@ -148,7 +148,7 @@ func (alloc *bitmap_t) CheckAndMark() (int, common.Err_t) {
 
 func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 	alloc.Lock()
-	defer alloc.Unlock()
+	//defer alloc.Unlock()
 
 	bit, err := alloc.CheckAndMark()
 	if err == 0 {
@@ -162,6 +162,7 @@ func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 			return true
 		})
 		if err != 0 {
+			alloc.Unlock()
 			return 0, err
 		}
 		bit, err = alloc.CheckAndMark()
@@ -171,12 +172,13 @@ func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 	}
 	alloc.nalloc++
 	alloc.nfreebits--
+	alloc.Unlock()
 	return bit, 0
 }
 
 func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
 	alloc.Lock()
-	defer alloc.Unlock()
+	//defer alloc.Unlock()
 
 	if fs_debug {
 		fmt.Printf("Unmark: %v\n", bit)
@@ -191,6 +193,7 @@ func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
 	fbitoff := byteoffset(bit)
 	fblk, err := alloc.Fbread(fblkno)
 	if err != 0 {
+		alloc.Unlock()
 		return err
 	}
 	fblk.Data[fbyteoff] &= ^(1 << uint(fbitoff))
@@ -199,6 +202,7 @@ func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
 	alloc.storage.Relse(fblk, "Unmark")
 	alloc.nfree++
 	alloc.nfreebits++
+	alloc.Unlock()
 	return 0
 }
 

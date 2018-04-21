@@ -464,12 +464,14 @@ func (p *Proc_t) Page_remove(va int) bool {
 // returns true if the pagefault was handled successfully
 func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) Err_t {
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
 	vmi, ok := p.Vmregion.Lookup(fa)
 	if !ok {
+		p.Unlock_pmap()
 		return -EFAULT
 	}
-	return Sys_pgfault(p, vmi, fa, ecode)
+	ret := Sys_pgfault(p, vmi, fa, ecode)
+	p.Unlock_pmap()
+	return ret
 }
 
 // flush TLB on all CPUs that may have this processes' pmap loaded
@@ -998,23 +1000,26 @@ func (p *Proc_t) Userstr(uva int, lenmax int) (string, Err_t) {
 		return "", 0
 	}
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
+	//defer p.Unlock_pmap()
 	i := 0
 	var s string
 	for {
 		str, err := p.Userdmap8_inner(uva+i, false)
 		if err != 0 {
+			p.Unlock_pmap()
 			return "", err
 		}
 		for j, c := range str {
 			if c == 0 {
 				s = s + string(str[:j])
+				p.Unlock_pmap()
 				return s, 0
 			}
 		}
 		s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
+			p.Unlock_pmap()
 			return "", -ENAMETOOLONG
 		}
 	}
@@ -1051,7 +1056,7 @@ func (p *Proc_t) Userargs(uva int) ([]string, Err_t) {
 		}
 		return true
 	}
-	ret := make([]string, 0)
+	ret := make([]string, 0, 12)
 	argmax := 64
 	addarg := func(cptr []uint8) Err_t {
 		if len(ret) > argmax {

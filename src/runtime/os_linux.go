@@ -774,7 +774,7 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	// similar to sigprof()
 	if gp == nil || sp < gp.stack.lo || gp.stack.hi < sp || setsSP(pc) {
 		_addone(tf[TF_RIP])
-		Lost.Go++
+		//Lost.Go++
 		return
 	}
 
@@ -798,12 +798,12 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 			dst = dst[1:]
 			copy(dst, buf)
 		} else {
-			Lost.Full++
+			//Lost.Full++
 		}
 
 	} else {
 		_addone(tf[TF_RIP])
-		Lost.Go++
+		//Lost.Go++
 	}
 	if stklock != nil {
 		gcUnlockStackBarriers(stklock)
@@ -820,7 +820,7 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 
 	if (tf[TF_CS] & 3) != 0 {
 		_addone(tf[TF_RIP])
-		Lost.User++
+		//Lost.User++
 		return
 	}
 	// if the nmi occurred between swapgs pair, getg() will return garbage.
@@ -828,13 +828,13 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 	cpu := NMI_Gscpu()
 	if Gscpu() != cpu {
 		_addone(tf[TF_RIP])
-		Lost.Gs++
+		//Lost.Gs++
 		return
 	}
 	og := getg()
 	if og.m == nil || og.m.gsignal == nil {
 		_addone(tf[TF_RIP])
-		Lost.Go++
+		//Lost.Go++
 		return
 	}
 	if og == og.m.gsignal {

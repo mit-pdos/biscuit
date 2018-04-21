@@ -1338,7 +1338,7 @@ func (icache *icache_t) addDead(imem *imemnode_t) {
 // XXX Fs_close() from different threads are contending for icache.dead...
 func (icache *icache_t) freeDead() {
 	icache.Lock()
-	defer icache.Unlock()
+	//defer icache.Unlock()
 
 	if fs_debug {
 		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
@@ -1352,6 +1352,7 @@ func (icache *icache_t) freeDead() {
 		icache.Lock()
 	}
 	icache.dead = make([]*imemnode_t, 0)
+	icache.Unlock()
 }
 
 func (icache *icache_t) Stats() string {

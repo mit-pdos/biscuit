@@ -3323,9 +3323,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 		restore()
 		return int(err)
 	}
-	defer func() {
-		common.Close_panic(file)
-	}()
+	defer common.Close_panic(file)
 
 	hdata := make([]uint8, 512)
 	ub := &common.Fakeubuf_t{}
@@ -3452,7 +3450,8 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 		physmem.Refdown(p_pg)
 		return 0, 0, -common.ENOMEM
 	}
-	var args [][]uint8
+	//var args [][]uint8
+	args := make([][]uint8, 0, 12)
 	for _, str := range sargs {
 		args = append(args, []uint8(str))
 	}
