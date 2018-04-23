@@ -13,7 +13,8 @@ import "unsafe"
 import "common"
 import "fs"
 
-var _sysbounds = map[int]int{
+var _sysbounds = []int {
+//var _sysbounds = map[int]int {
 	common.SYS_READ:       common.Bounds(common.B_SYS_READ),
 	common.SYS_WRITE:      common.Bounds(common.B_SYS_WRITE),
 	common.SYS_OPEN:       common.Bounds(common.B_SYS_OPEN),
@@ -93,10 +94,14 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 
 	sysno := int(tf[common.TF_RAX])
 
-	lim, ok := _sysbounds[sysno]
-	if !ok {
-		panic("bad limit")
-	}
+	//lim, ok := _sysbounds[sysno]
+	//if !ok {
+	//	panic("bad limit")
+	//}
+	lim := _sysbounds[sysno]
+	//if lim == 0 {
+	//	panic("bad limit")
+	//}
 	if !common.Resadd(lim) {
 		//fmt.Printf("syscall res failed\n")
 		return int(-common.ENOHEAP)
