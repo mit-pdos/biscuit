@@ -16,8 +16,19 @@ def openrips(fn):
     lines = f.readlines()
     lines = filter(None, [x.strip() for x in lines])
 
-    isbt = False
     btsents = ['deadbeefdeadbeef', 'feedfacefeedface']
+    #remnext = False
+    #newl = []
+    #for l in lines:
+    #    if l == btsents[1]:
+    #        remnext = True
+    #    elif remnext:
+    #        remnext = False
+    #    else:
+    #        newl.append(l)
+    #lines = newl
+
+    isbt = False
     btfailed = 0
     for l in lines:
         if l in btsents:
@@ -48,8 +59,8 @@ def openrips(fn):
                 rips.append(rip)
     f.close()
     if isbt and btfailed != 0:
-        fp = float(btfailed) / len(bts)
-        print 'backtrace failed for %.2f%% (%d / %d)\n' % (fp, btfailed, len(bts))
+        fp = float(btfailed) / len(bts) * 100
+        print 'backtrace failed for %d%% (%d / %d)\n' % (fp, btfailed, len(bts))
     return rips, bts
 
 def isuser(r):
