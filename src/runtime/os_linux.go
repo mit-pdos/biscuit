@@ -821,11 +821,6 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 		_pmsg("!")
 	}
 
-	if (tf[TF_CS] & 3) != 0 {
-		_addone(tf[TF_RIP])
-		//Lost.User++
-		return
-	}
 	// if the nmi occurred between swapgs pair, getg() will return garbage.
 	// detect this case by making sure gs does not point to the cpu_t
 	cpu := NMI_Gscpu()
@@ -834,6 +829,15 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 		//Lost.Gs++
 		return
 	}
+
+	// XXX
+	if (tf[TF_CS] & 3) != 0 || tf[TF_RFLAGS] & TF_FL_IF == 0 ||
+	    cpu.mythread == nil {
+		_addone(tf[TF_RIP])
+		//Lost.User++
+		return
+	}
+
 	og := getg()
 	if og.m == nil || og.m.gsignal == nil {
 		_addone(tf[TF_RIP])
@@ -843,13 +847,21 @@ func nmibacktrace(tf *[TFSIZE]uintptr) {
 	if og == og.m.gsignal {
 		pancake("recursive NMIs?", 0)
 	}
-	// make sure we aren't preempted by GC
-	og.m.mallocing++
+	if og.m != og.m.gsignal.m {
+		pancake("oh shite", 0)
+	}
 	setg(og.m.gsignal)
 	// indirectly call nmibacktrace1()...
 	backtracetramp(og.m.gsignal.stack.hi, tf, og)
 	setg(og)
-	og.m.mallocing--
+}
+
+func checky() {
+	if hackmode != 0 {
+		if rflags() & TF_FL_IF == 0 {
+			pancake("must be interruptible", 0)
+		}
+	}
 }
 
 //go:nowritebarrierrec
