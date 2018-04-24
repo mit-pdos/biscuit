@@ -44,7 +44,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 		panic("fs_init")
 	}
 	fs.superb_start = common.Readn(b.Data[:], 4, FSOFF)
-	fmt.Printf("fs.superb_start %v\n", fs.superb_start)
+	//fmt.Printf("fs.superb_start %v\n", fs.superb_start)
 	if fs.superb_start <= 0 {
 		panic("bad superblock start")
 	}
@@ -62,7 +62,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	if loglen <= 0 || loglen > 256 {
 		panic("bad log len")
 	}
-	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
+	//fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
 	fs.fslog = StartLog(logstart, loglen, fs, disk)
 	if fs.fslog == nil {
 		panic("Startlog failed")
@@ -72,18 +72,18 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	iorphanlen := fs.superb.Iorphanlen()
 	imapstart := iorphanstart + iorphanlen
 	imaplen := fs.superb.Imaplen()
-	fmt.Printf("orphanstart %v orphan len %v\n", iorphanstart, iorphanlen)
-	fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
+	//fmt.Printf("orphanstart %v orphan len %v\n", iorphanstart, iorphanlen)
+	//fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
 	if iorphanlen != imaplen {
 		panic("number of iorphan map blocks != inode map block")
 	}
 
 	bmapstart := fs.superb.Freeblock()
 	bmaplen := fs.superb.Freeblocklen()
-	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
+	//fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
 
 	inodelen := fs.superb.Inodelen()
-	fmt.Printf("inodestart %v inodelen %v\n", bmapstart+bmaplen, inodelen)
+	//fmt.Printf("inodestart %v inodelen %v\n", bmapstart+bmaplen, inodelen)
 
 	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen, inodelen)
 	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
