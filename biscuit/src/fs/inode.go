@@ -6,7 +6,7 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
-import "sync/atomic"
+//import "sync/atomic"
 
 import "common"
 
@@ -38,8 +38,8 @@ type inode_stats_t struct {
 }
 
 func (c *counter_t) inc() {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, 1)
+	//n := (*int64)(unsafe.Pointer(c))
+	//atomic.AddInt64(n, 1)
 }
 
 func (is *inode_stats_t) stats() string {
