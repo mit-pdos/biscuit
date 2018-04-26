@@ -80,6 +80,7 @@ class Params(object):
         self._initsym(fn, 'panicindex')
         self._initsym(fn, 'panicslice')
         self._initsym(fn, 'panicdivide')
+        self._initsym(fn, 'panicdottype')
 
         self._stksyms = ['badmorestackg0', 'badmorestackgsignal',
         'morestackc', 'morestack', 'morestack_noctxt']
@@ -286,16 +287,6 @@ class Params(object):
                     n = p.next(n)
         return [x.address for x in wb]
 
-    # this only finds type assertion instructions; not type switch code
-    def typechecks(self):
-        raise 'borked'
-        ret = []
-        for x in p._ilist:
-            if not p.istc(x):
-                continue
-            ret.append(x.address)
-        return ret
-
     def isnilchk(self, ins):
         '''
         finds all nil pointer checks of the form:
@@ -436,6 +427,13 @@ class Params(object):
         for ins in self.bbins(baddr):
             if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
                 if self._syms['panicdivide'].within(ins.operands[0].imm):
+                    return True
+        return False
+
+    def istypepanic(self, baddr):
+        for ins in self.bbins(baddr):
+            if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
+                if self._syms['panicdottype'].within(ins.operands[0].imm):
                     return True
         return False
 
@@ -616,6 +614,45 @@ class Params(object):
             uniq[b] = True
         return uniq.keys()
 
+    # this only finds type assertion checks, not type switches
+    def typechecks(self):
+        bbs = self.bbs()
+        binst = []
+        for baddr in bbs:
+            if not self.istypepanic(baddr):
+                continue
+            binst += self._bb[baddr].addrs
+
+            cjmps = self.prevcjmps(baddr)
+            for cj in cjmps:
+                self.ensure(self._iaddr[cj], self._condjmps)
+                binst.append(cj)
+            cmps = []
+            for cj in cjmps:
+                a, b = self.prevcmps(cj)
+                cmps += a
+                binst += cmps
+                binst += b
+        # no need to backtrack to find the load of the type since all such
+        # loads load from a known symbol that we can easily find. go1.8
+        # compiler always uses lea with %rip. this will return more
+        # instructions than are actually used by the type checks (for instance,
+        # the leas in type information for map operations, but probably not
+        # enough to matter.
+        for ins in self._ilist:
+            if ins.id not in [X86_INS_LEA]:
+                continue
+            op = ins.operands[0]
+            if op.type != X86_OP_MEM or op.mem.base != X86_REG_RIP:
+                continue
+            addr = op.mem.disp + ins.address + ins.size
+            if self._syms['type\.\*'].within(addr):
+                binst.append(ins.address)
+        uniq = {}
+        for b in binst:
+            uniq[b] = True
+        return uniq.keys()
+
     def _withinstksyms(self, addr):
         for sn in self._stksyms:
             sym = self._syms[sn]
@@ -670,8 +707,11 @@ print 'made all map: %d' % (len(p._ilist))
 #bc = p.boundschecks()
 #writerips(bc, 'bounds.rips')
 
-div = p.dividechecks()
-writefake(div, 'fake.txt')
+#div = p.dividechecks()
+#writerips(div, 'div.rips')
+
+tp = p.typechecks()
+writerips(tp, 'types.rips')
 
 #ss = p.splits();
 #writerips(ss, 'splits.rips')
