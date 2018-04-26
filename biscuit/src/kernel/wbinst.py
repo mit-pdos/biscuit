@@ -434,16 +434,22 @@ class Params(object):
 
     # returns list of addresses for all compares immediately prior to address
     # jaddr
-    def _prevcmps(self, jaddr, visited):
-        #print 'VISIT', hex(jaddr)
+    def _prev(self, jaddr, whichf, visited, mustexist, dyump=False):
         bb = self._bb[jaddr]
+        if dyump:
+            #print 'VISIT', hex(jaddr)
+            self.prbb(bb)
         if bb.firstaddr in visited:
             return [], []
         visited[bb.firstaddr] = True
         ins = self.bbins(jaddr)
+        if jaddr == bb.firstaddr:
+            jaddr = ins[-1].address
         ret = []
         for i in range(len(ins) - 1, -1, -1):
-            if ins[i].id in self._cmps:
+            if ins[i].address >= jaddr:
+                continue
+            if whichf(ins[i]):
                 ret.append(ins[i].address)
                 break
         morejumps = []
@@ -451,7 +457,9 @@ class Params(object):
         if len(ret) == 0:
             # no cmp yet found, keep looking in predecessors
             if len(bb.preds) == 0:
-                raise 'no cmp'
+                if mustexist:
+                    raise 'never found'
+                return [], []
         else:
             if ins[-1].id in self._condjmps:
                 morejumps = [ins[-1].address]
@@ -466,7 +474,7 @@ class Params(object):
                         # jump inside the block
                         preds.append(pa)
         for pa in preds:
-            a, b = self._prevcmps(pa, visited)
+            a, b = self._prev(pa, whichf, visited, mustexist, dyump)
             ret += a
             morejumps += b
         return ret, morejumps
@@ -474,6 +482,34 @@ class Params(object):
     def prevcondjmps(self, baddr):
         cjaddr = self._pcjmp(baddr)
         return cjaddr
+
+    def prevcmps(self, baddr):
+        return self._prev(baddr, lambda x: x.id in self._cmps, {}, True)
+
+    def _regboth(self, ins, reg):
+        d = {
+            X86_REG_EAX: X86_REG_RAX,
+            X86_REG_EBP: X86_REG_RBP,
+            X86_REG_EBX: X86_REG_RBX,
+            X86_REG_ECX: X86_REG_RCX,
+            X86_REG_EDI: X86_REG_RDI,
+            X86_REG_EDX: X86_REG_RDX,
+            X86_REG_ESI: X86_REG_RSI,
+            X86_REG_ESP: X86_REG_RSP,
+            X86_REG_RAX: X86_REG_EAX,
+            X86_REG_RBP: X86_REG_EBP,
+            X86_REG_RBX: X86_REG_EBX,
+            X86_REG_RCX: X86_REG_ECX,
+            X86_REG_RDI: X86_REG_EDI,
+            X86_REG_RDX: X86_REG_EDX,
+            X86_REG_RIP: X86_REG_EIP,
+            X86_REG_RSI: X86_REG_ESI,
+            X86_REG_RSP: X86_REG_ESP,
+            }
+        if reg not in d:
+            #print 'NO', ins.reg_name(reg)
+            return [reg]
+        return [reg, d[reg]]
 
     def boundschecks(self):
         bbs = self.bbs()
@@ -484,19 +520,34 @@ class Params(object):
                 continue
             binst += self._bb[baddr].addrs
 
-            # XXX add loads of bound too
             cjmps = self.prevcondjmps(baddr)
             for cj in cjmps:
                 self.ensure(self._iaddr[cj], self._condjmps)
                 binst.append(cj)
             cmps = []
             for cj in cjmps:
-                a, b = self._prevcmps(cj, {})
+                a, b = self.prevcmps(cj)
                 cmps += a
                 binst += b
             for cm in cmps:
-                self.ensure(self._iaddr[cm], [X86_INS_CMP, X86_INS_TEST])
+                ins = self._iaddr[cm]
+                self.ensure(ins, [X86_INS_CMP, X86_INS_TEST])
                 binst.append(cm)
+                if ins.operands[0].type != X86_OP_REG:
+                    continue
+                boundregs = self._regboth(ins, ins.operands[0].reg)
+                def which(ti):
+                    ok = [X86_INS_MOV, X86_INS_MOVZX, X86_INS_MOVABS,
+                    X86_INS_LEA, X86_INS_XOR]
+                    if ti.id not in ok or ti.operands[1].type != X86_OP_REG:
+                        return False
+                    return ti.operands[1].reg in boundregs
+                loads, _ = self._prev(cm, which, {}, True)
+                #if len(loads) == 0:
+                #    print 'FAILED START', hex(cm), boundregs
+                #    loads = self._prev(cm, which, {}, False, True)
+                #    print 'DONE'
+                binst += loads
         uniq = {}
         for b in binst:
             uniq[b] = True
@@ -508,6 +559,12 @@ def writerips(rips, fn):
         for w in rips:
             print >> f, '%x' % (w)
 
+def writefake(rips, fn):
+    print 'writing fake prof "%s"...' % (fn)
+    with open(fn, 'w') as f:
+        for w in rips:
+            print >> f, '%x -- 1' % (w)
+
 p = Params('main.gobin')
 print 'made all map: %d' % (len(p._ilist))
 
@@ -516,13 +573,9 @@ print 'made all map: %d' % (len(p._ilist))
 found = p.boundschecks()
 
 writerips(found, 'bounds.rips')
+writefake(found, 'fake.txt')
+
 #for bi in found:
 #    print '%x' % (bi)
 
 #wb = p.writebarrierins()
-
-#print 'wb list:', len(wb)
-#mp = {}
-#for w in wb:
-#    mp[w.address] = True
-#print 'wb map:', len(mp)
