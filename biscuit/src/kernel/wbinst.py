@@ -73,10 +73,17 @@ class Basicblock(object):
 
 class Params(object):
     def __init__(self, fn):
+        self._bbsdone, self._bbret = False, None
         self._syms = {}
         self._initsym(fn, 'writeBarrier')
         self._initsym(fn, 'type\.\*')
         self._initsym(fn, 'panicindex')
+
+        self._stksyms = ['badmorestackg0', 'badmorestackgsignal',
+        'morestackc', 'morestack', 'morestack_noctxt']
+
+        for sym in self._stksyms:
+            self._initsym(fn, sym)
 
         d = readelfgrep(fn, ['-S'], ['\.text.*PROGBIT'])[0].split()
         foff = int(d[5], 16)
@@ -227,7 +234,7 @@ class Params(object):
             print '%d != %s (%s %s)' % (ins.id, xids, ins.mnemonic, ins.op_str)
             raise 'mismatch'
 
-    def writebarrierins(self):
+    def writebarriers(self):
         '''
         finds write barrier checks of the form:
         mov     writebarrierflag, REG
@@ -355,6 +362,8 @@ class Params(object):
 
     # returns map of first instruction of basic block to basic block
     def bbs(self):
+        if self._bbsdone:
+            return self._bbret
         allbs = []
         # map of all instruction addresses to basic blocks
         in2b = {}
@@ -401,7 +410,8 @@ class Params(object):
                 p.prbb(b)
                 raise 'no'
         self._bb = in2b
-        return [x.firstaddr for x in allbs]
+        self._bbret = [x.firstaddr for x in allbs]
+        return self._bbret
 
     # returns list of instructions for the basic block containing baddr
     def bbins(self, baddr):
@@ -431,6 +441,10 @@ class Params(object):
             else:
                 ret += self._pcjmp(pa)
         return ret
+
+    def prevcjmps(self, baddr):
+        cjaddr = self._pcjmp(baddr)
+        return cjaddr
 
     # returns list of addresses for all compares immediately prior to address
     # jaddr
@@ -479,10 +493,6 @@ class Params(object):
             morejumps += b
         return ret, morejumps
 
-    def prevcondjmps(self, baddr):
-        cjaddr = self._pcjmp(baddr)
-        return cjaddr
-
     def prevcmps(self, baddr):
         return self._prev(baddr, lambda x: x.id in self._cmps, {}, True)
 
@@ -520,7 +530,7 @@ class Params(object):
                 continue
             binst += self._bb[baddr].addrs
 
-            cjmps = self.prevcondjmps(baddr)
+            cjmps = self.prevcjmps(baddr)
             for cj in cjmps:
                 self.ensure(self._iaddr[cj], self._condjmps)
                 binst.append(cj)
@@ -553,6 +563,36 @@ class Params(object):
             uniq[b] = True
         return uniq.keys()
 
+    def _withinstksyms(self, addr):
+        for sn in self._stksyms:
+            sym = self._syms[sn]
+            if sym.within(addr):
+                return True
+        return False
+
+    def issplitcall(self, baddr):
+        for ins in self.bbins(baddr):
+            if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
+                return self._withinstksyms(ins.operands[0].imm)
+        return False
+
+    def splits(self):
+        bbs = self.bbs()
+        binst = []
+        for baddr in bbs:
+            if not self.issplitcall(baddr):
+                continue
+            binst += self._bb[baddr].addrs
+            # the stack checks are the immediate predeccesor of the stack split
+            # call
+            bb = self._bb[baddr]
+            for pred in bb.preds:
+                pins = self.bbins(pred)
+                # paranoia
+                c = self.findnext(pins[0], [X86_INS_CMP], len(pins))
+                binst += [x.address for x in pins]
+        return binst
+
 def writerips(rips, fn):
     print 'writing "%s"...' % (fn)
     with open(fn, 'w') as f:
@@ -568,14 +608,19 @@ def writefake(rips, fn):
 p = Params('main.gobin')
 print 'made all map: %d' % (len(p._ilist))
 
-#found = p.typechecks()
-#found = p.ptrchecks()
-found = p.boundschecks()
+#wb = p.writebarriers()
+#writerips(wb, 'wbars.rips')
+#
+#ptr = p.ptrchecks()
+#writerips(ptr, 'nilptrs.rips')
+#
+#bc = p.boundschecks()
+#writerips(bc, 'bounds.rips')
 
-writerips(found, 'bounds.rips')
-writefake(found, 'fake.txt')
+ss = p.splits();
+writerips(ss, 'splits.rips')
+
+#writefake(ss, 'fake.txt')
 
 #for bi in found:
 #    print '%x' % (bi)
-
-#wb = p.writebarrierins()
