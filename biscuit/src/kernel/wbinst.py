@@ -64,6 +64,8 @@ def readelfgrep(fn, rf, gre):
 
 class Basicblock(object):
     def __init__(self, firstaddr, addrs, succs):
+        # succs and preds are lists of the first addresses of the succesor
+        # and predecessor blocks
         self.firstaddr, self.addrs, self.succs = firstaddr, addrs, succs
         self.preds = {}
         if self.firstaddr != self.addrs[0]:
@@ -119,6 +121,12 @@ class Params(object):
         X86_INS_JLE, X86_INS_JL, X86_INS_JMP, X86_INS_JNE, X86_INS_JNO,
         X86_INS_JNP, X86_INS_JNS, X86_INS_JO, X86_INS_JP, X86_INS_JRCXZ,
         X86_INS_JS ]
+
+        self._cmps = [ X86_INS_CMP, X86_INS_CMPPD, X86_INS_CMPPS,
+        X86_INS_CMPSB, X86_INS_CMPSD, X86_INS_CMPSQ, X86_INS_CMPSS,
+        X86_INS_CMPSW, X86_INS_TEST]
+
+        self._condjmps = list(set(self._jmps).difference(set([X86_INS_JMP])))
 
     def _initsym(self, fn, sym):
         s = symlookup(fn, sym)
@@ -198,10 +206,7 @@ class Params(object):
 
     def findnext(self, ins, xids, bound):
         i = 0
-        pr = ins.address == 0x54e491
         while bound == -1 or i < bound:
-            #if pr:
-            #    print 'AT', ins.mnemonic, ins.op_str
             i += 1
             ins = self.next(ins)
             if ins.id in xids:
@@ -270,7 +275,7 @@ class Params(object):
                 while n.address <= jmp.address:
                     wb.append(n)
                     n = p.next(n)
-        return wb
+        return [x.address for x in wb]
 
     def typechecks(self):
         raise 'broken'
@@ -322,157 +327,202 @@ class Params(object):
         print 'SUCS', ' '.join(['%x' % (x) for x in bb.succs])
         #print '--------------------'
 
+    def sucsfor(self, end, bstops):
+        # only a few special runtime functions (like gogo for scheduling) have
+        # jumps that are not immediates and can be safely ignored since they
+        # are not involved in safety checks.
+        sucs = []
+        if end.id == X86_INS_JMP:
+            # block has one successor
+            if end.operands[0].type == X86_OP_IMM:
+                sucs = [end.operands[0].imm]
+            else:
+                # ignore special reg dest
+                sucs = []
+        elif end.id in bstops:
+            # block has no successors
+            sucs = []
+        else:
+            # must be conditional jump; block has two successors
+            p.ensure(end, p._condjmps)
+            sucs = [end.operands[0].imm]
+            tmp = end.address + end.size
+            # avoid duplicate successors if the conditional branch target
+            # is also the following instruction
+            if tmp in p._iaddr and tmp != sucs[0]:
+                sucs.append(tmp)
+        return sucs
+
     # returns map of first instruction of basic block to basic block
     def bbs(self):
+        allbs = []
+        # map of all instruction addresses to basic blocks
         in2b = {}
-        # map of first instruction of basic block to basic block
-        bb = {}
         # the go compiler uses ud2 and int3 for padding instructions that
         # shouldn't be reached; use them as a basic block boundary too.
-        bstops = [X86_INS_UD2, X86_INS_INT3]
+        bstops = [X86_INS_UD2, X86_INS_INT3, X86_INS_RET]
         bends = self._jmps + [X86_INS_RET] + bstops
         caddr = self._ilist[0].address
         while caddr in p._iaddr:
-            #print 'VISIT', hex(caddr)
             ins = p._iaddr[caddr]
-            end = self.findnext(ins, bends, -1)
-            # only a few special runtime functions have jumps that are not
-            # immediates and can be safely ignored since their destinations
-            # will be visited anyway.
-            sucs = []
-            if end.id == X86_INS_JMP:
-                # block has one successor
-                if end.operands[0].type == X86_OP_IMM:
-                    sucs = [end.operands[0].imm]
-                else:
-                    # ignore special reg dest
-                    sucs = []
-            elif end.id == X86_INS_RET:
-                # block has no successors
-                sucs = []
-            elif end.id in bstops:
-                # this instruction shouldn't be reached, but it may be helpful
-                # to know what code follows
-                sucs = [end.address + end.size]
-            else:
-                # must be conditional jump; block has two successors
-                conds = list(set(p._jmps).difference(set([X86_INS_JMP])))
-                p.ensure(end, conds)
-                sucs = [end.operands[0].imm]
-                tmp = end.address + end.size
-                # avoid duplicate successors if the conditional branch target
-                # is also the following instruction
-                if tmp in p._iaddr and tmp != sucs[0]:
-                    sucs.append(tmp)
+            # end = ins for single instruction blocks
+            end = ins
+            if end.id not in bends:
+                end = self.findnext(ins, bends, -1)
+            #print 'VISIT', hex(caddr), hex(ins.address)
+            sucs = self.sucsfor(end, bstops)
             baddrs = []
             while ins is not None and ins.address <= end.address:
                 baddrs.append(ins.address)
                 ins = p.next(ins)
             newb = Basicblock(baddrs[0], baddrs, sucs)
-            bb[newb.firstaddr] = newb
             for addr in baddrs:
                 in2b[addr] = newb
+            allbs.append(newb)
 
             caddr = end.address + end.size
 
-        for b in bb.values():
-            if b.firstaddr not in bb:
-                raise 'wtf'
-
-        # split blocks
-        changed = True
-        while changed:
-            changed = False
-            addblocks = {}
-            for b in bb.values():
-                for s in b.succs:
-                    if s in bb or s in addblocks:
-                        continue
-                    # the in2b map ensures that we lookup the most recently
-                    # split block for every jump into the middle of a block
-                    oldb = in2b[s]
-                    for oa in oldb.addrs:
-                        del in2b[oa]
-                    old = filter(None, [x if x < s else None for x in oldb.addrs])
-                    new = filter(None, [x if x >= s else None for x in oldb.addrs])
-                    newfirst = new[0]
-                    oldb.addrs = old
-                    newsuccs = oldb.succs
-                    oldb.succs = [newfirst]
-                    newb = Basicblock(newfirst, new, newsuccs)
-                    if newfirst in addblocks:
-                        raise 'no'
-                    addblocks[newfirst] = newb
-                    for oa in old:
-                        in2b[oa] = oldb
-                    for oa in new:
-                        in2b[oa] = newb
-                    #print 'SPLIT %x -> %x %x' % (s, oldb.firstaddr, newb.firstaddr)
-
-            for ab in addblocks:
-                changed = True
-                if ab in bb:
-                    raise 'double add'
-                bb[ab] = addblocks[ab]
+        allbs = sorted(allbs, key=lambda x:x.firstaddr)
+        for b in allbs:
+            if len(b.addrs) == 0:
+                raise 'no'
+            #p.prbb(b)
 
         # pass two creates predecessor lists
-        for b in bb.values():
+        for b in allbs:
             for s in b.succs:
-                if s not in bb:
-                    print 'NOT FOUND %x' % (s)
-                    if s not in addblocks:
-                        print 'NO ADD %x' % (s)
-                    durb = in2b[s]
-                    p.prbb(durb)
-                    raise 'crud'
-                tb = bb[s]
+                tb = in2b[s]
                 tb.preds[b.firstaddr] = True
         # sanity
-        for b in bb.values():
+        for b in allbs:
             if len(b.succs) > 2:
                 raise 'no'
             if len(b.succs) == 2 and b.succs[0] == b.succs[1]:
                 p.prbb(b)
                 raise 'no'
-        self._bb = bb
-        return bb
+        self._bb = in2b
+        return [x.firstaddr for x in allbs]
 
-    # returns list of instructions for basic block beginning at address baddr
+    # returns list of instructions for the basic block containing baddr
     def bbins(self, baddr):
         return [self._iaddr[x] for x in p._bb[baddr].addrs]
 
-    def isboundblk(self, baddr):
-        for ins in p.bbins(bb):
+    def iscndjmp(self, ins):
+        return ins in self._condjmps
+
+    def ispanicblk(self, baddr):
+        for ins in self.bbins(baddr):
             if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
+                panicsym = p._syms['panicindex']
                 if panicsym.within(ins.operands[0].imm):
                     return True
         return False
+
+    # returns the list of all conditional jumps that may reach baddr
+    def _pcjmp(self, baddr):
+        bb = self._bb[baddr]
+        if len(bb.preds) == 0:
+            raise 'no cjmp'
+        ret = []
+        for pa in bb.preds:
+            ins = self.bbins(pa)
+            if ins[-1].id in self._condjmps:
+                ret.append(ins[-1].address)
+            else:
+                ret += self._pcjmp(pa)
+        return ret
+
+    # returns list of addresses for all compares immediately prior to address
+    # jaddr
+    def _prevcmps(self, jaddr, visited):
+        #print 'VISIT', hex(jaddr)
+        bb = self._bb[jaddr]
+        if bb.firstaddr in visited:
+            return [], []
+        visited[bb.firstaddr] = True
+        ins = self.bbins(jaddr)
+        ret = []
+        for i in range(len(ins) - 1, -1, -1):
+            if ins[i].id in self._cmps:
+                ret.append(ins[i].address)
+                break
+        morejumps = []
+        preds = bb.preds
+        if len(ret) == 0:
+            # no cmp yet found, keep looking in predecessors
+            if len(bb.preds) == 0:
+                raise 'no cmp'
+        else:
+            if ins[-1].id in self._condjmps:
+                morejumps = [ins[-1].address]
+            # we found a compare, but a predecessor's compare may be
+            # immediately prior to jaddr if it is followed by a jump after the
+            # found compare (to an address other than the start address)
+            preds = []
+            for pa in bb.preds:
+                pbb = self._bb[pa]
+                for sa in pbb.succs:
+                    if self._bb[sa] == bb and sa > ret[0]:
+                        # jump inside the block
+                        preds.append(pa)
+        for pa in preds:
+            a, b = self._prevcmps(pa, visited)
+            ret += a
+            morejumps += b
+        return ret, morejumps
+
+    def prevcondjmps(self, baddr):
+        cjaddr = self._pcjmp(baddr)
+        return cjaddr
+
+    def boundschecks(self):
+        bbs = self.bbs()
+        binst = []
+        for baddr in bbs:
+            #self.prbb(baddr)
+            if not self.ispanicblk(baddr):
+                continue
+            binst += self._bb[baddr].addrs
+
+            # XXX add loads of bound too
+            cjmps = self.prevcondjmps(baddr)
+            for cj in cjmps:
+                self.ensure(self._iaddr[cj], self._condjmps)
+                binst.append(cj)
+            cmps = []
+            for cj in cjmps:
+                a, b = self._prevcmps(cj, {})
+                cmps += a
+                binst += b
+            for cm in cmps:
+                self.ensure(self._iaddr[cm], [X86_INS_CMP, X86_INS_TEST])
+                binst.append(cm)
+        uniq = {}
+        for b in binst:
+            uniq[b] = True
+        return uniq.keys()
+
+def writerips(rips, fn):
+    print 'writing "%s"...' % (fn)
+    with open(fn, 'w') as f:
+        for w in rips:
+            print >> f, '%x' % (w)
 
 p = Params('main.gobin')
 print 'made all map: %d' % (len(p._ilist))
 
 #found = p.typechecks()
 #found = p.ptrchecks()
-#found = p.boundschecks()
-found = p.bbs()
+found = p.boundschecks()
 
-print 'found', len(found), 'blocks'
-panicsym = p._syms['panicindex']
-for baddr in sorted(found):
-    #p.prbb(baddr)
-    if p.isboundblk(baddr):
-            #p.prbb(found[baddr])
-            paddrs = [x for x in found[baddr].preds]
+writerips(found, 'bounds.rips')
+#for bi in found:
+#    print '%x' % (bi)
 
 #wb = p.writebarrierins()
-#
-#with open('wb.txt', 'w') as f:
-#    for w in wb:
-#        print >> f, '%x' % (w.address)
 
 #print 'wb list:', len(wb)
 #mp = {}
 #for w in wb:
 #    mp[w.address] = True
 #print 'wb map:', len(mp)
-
