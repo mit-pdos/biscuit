@@ -78,6 +78,8 @@ class Params(object):
         self._initsym(fn, 'writeBarrier')
         self._initsym(fn, 'type\.\*')
         self._initsym(fn, 'panicindex')
+        self._initsym(fn, 'panicslice')
+        self._initsym(fn, 'panicdivide')
 
         self._stksyms = ['badmorestackg0', 'badmorestackgsignal',
         'morestackc', 'morestack', 'morestack_noctxt']
@@ -231,7 +233,7 @@ class Params(object):
 
     def ensure(self, ins, xids):
         if ins.id not in xids:
-            print '%d != %s (%s %s)' % (ins.id, xids, ins.mnemonic, ins.op_str)
+            print '%x %s (%s %s)' % (ins.address, xids, ins.mnemonic, ins.op_str)
             raise 'mismatch'
 
     def writebarriers(self):
@@ -284,8 +286,9 @@ class Params(object):
                     n = p.next(n)
         return [x.address for x in wb]
 
+    # this only finds type assertion instructions; not type switch code
     def typechecks(self):
-        raise 'broken'
+        raise 'borked'
         ret = []
         for x in p._ilist:
             if not p.istc(x):
@@ -420,11 +423,19 @@ class Params(object):
     def iscndjmp(self, ins):
         return ins in self._condjmps
 
-    def ispanicblk(self, baddr):
+    def isboundpanic(self, baddr):
         for ins in self.bbins(baddr):
             if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
-                panicsym = p._syms['panicindex']
-                if panicsym.within(ins.operands[0].imm):
+                for sn in ['panicindex', 'panicslice']:
+                    sym = p._syms[sn]
+                    if sym.within(ins.operands[0].imm):
+                        return True
+        return False
+
+    def isdividepanic(self, baddr):
+        for ins in self.bbins(baddr):
+            if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
+                if self._syms['panicdivide'].within(ins.operands[0].imm):
                     return True
         return False
 
@@ -515,7 +526,24 @@ class Params(object):
             X86_REG_RIP: X86_REG_EIP,
             X86_REG_RSI: X86_REG_ESI,
             X86_REG_RSP: X86_REG_ESP,
+            X86_REG_R8: X86_REG_R8D,
+            X86_REG_R9: X86_REG_R9D,
+            X86_REG_R10: X86_REG_R10D,
+            X86_REG_R11: X86_REG_R11D,
+            X86_REG_R12: X86_REG_R12D,
+            X86_REG_R13: X86_REG_R13D,
+            X86_REG_R14: X86_REG_R14D,
+            X86_REG_R15: X86_REG_R15D,
+            X86_REG_R8D: X86_REG_R8,
+            X86_REG_R9D: X86_REG_R9,
+            X86_REG_R10D: X86_REG_R10,
+            X86_REG_R11D: X86_REG_R11,
+            X86_REG_R12D: X86_REG_R12,
+            X86_REG_R13D: X86_REG_R13,
+            X86_REG_R14D: X86_REG_R14,
+            X86_REG_R15D: X86_REG_R15,
             }
+
         if reg not in d:
             #print 'NO', ins.reg_name(reg)
             return [reg]
@@ -526,7 +554,7 @@ class Params(object):
         binst = []
         for baddr in bbs:
             #self.prbb(baddr)
-            if not self.ispanicblk(baddr):
+            if not self.isboundpanic(baddr):
                 continue
             binst += self._bb[baddr].addrs
 
@@ -558,6 +586,31 @@ class Params(object):
                 #    loads = self._prev(cm, which, {}, False, True)
                 #    print 'DONE'
                 binst += loads
+        uniq = {}
+        for b in binst:
+            uniq[b] = True
+        return uniq.keys()
+
+    def dividechecks(self):
+        bbs = self.bbs()
+        binst = []
+        for baddr in bbs:
+            if not self.isdividepanic(baddr):
+                continue
+            binst += self._bb[baddr].addrs
+
+            cjmps = self.prevcjmps(baddr)
+            for cj in cjmps:
+                self.ensure(self._iaddr[cj], self._condjmps)
+                binst.append(cj)
+            cmps = []
+            for cj in cjmps:
+                a, b = self.prevcmps(cj)
+                cmps += a
+                binst += cmps
+                binst += b
+                for c in cmps:
+                    self.ensure(self._iaddr[c], [X86_INS_TEST, X86_INS_CMP])
         uniq = {}
         for b in binst:
             uniq[b] = True
@@ -617,10 +670,13 @@ print 'made all map: %d' % (len(p._ilist))
 #bc = p.boundschecks()
 #writerips(bc, 'bounds.rips')
 
-ss = p.splits();
-writerips(ss, 'splits.rips')
+div = p.dividechecks()
+writefake(div, 'fake.txt')
 
-#writefake(ss, 'fake.txt')
+#ss = p.splits();
+#writerips(ss, 'splits.rips')
+
+#writefake(bc, 'fake.txt')
 
 #for bi in found:
 #    print '%x' % (bi)
