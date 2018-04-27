@@ -40,6 +40,8 @@ def symlookup(fn, sym):
     c3 = ['grep', '-A10', '-w', sym]
     out, _ = piper.piper([c1, c2, c3])
     lines = filter(None, [l.strip() for l in out.split('\n')])
+    if len(lines) == 0:
+        raise 'bah'
     start = int(lines[0].split()[0], 16)
     end = 0
     found = False
@@ -81,6 +83,8 @@ class Params(object):
         self._initsym(fn, 'panicslice')
         self._initsym(fn, 'panicdivide')
         self._initsym(fn, 'panicdottype')
+        #self._initsym(fn, 'panicdottypeE')
+        #self._initsym(fn, 'panicdottypeI')
 
         self._stksyms = ['badmorestackg0', 'badmorestackgsignal',
         'morestackc', 'morestack', 'morestack_noctxt']
@@ -435,6 +439,12 @@ class Params(object):
             if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
                 if self._syms['panicdottype'].within(ins.operands[0].imm):
                     return True
+                #panics = ['panicdottypeE', 'panicdottypeI']
+                panics = ['panicdottype']
+                for p in panics:
+                    sym = self._syms[p]
+                    if sym.within(ins.operands[0].imm):
+                        return True
         return False
 
     # returns the list of all conditional jumps that may reach baddr
@@ -698,23 +708,23 @@ def writefake(rips, fn):
 p = Params('main.gobin')
 print 'made all map: %d' % (len(p._ilist))
 
-#wb = p.writebarriers()
-#writerips(wb, 'wbars.rips')
-#
-#ptr = p.ptrchecks()
-#writerips(ptr, 'nilptrs.rips')
-#
-#bc = p.boundschecks()
-#writerips(bc, 'bounds.rips')
+wb = p.writebarriers()
+writerips(wb, 'wbars.rips')
 
-#div = p.dividechecks()
-#writerips(div, 'div.rips')
+ptr = p.ptrchecks()
+writerips(ptr, 'nilptrs.rips')
+
+bc = p.boundschecks()
+writerips(bc, 'bounds.rips')
+
+div = p.dividechecks()
+writerips(div, 'div.rips')
 
 tp = p.typechecks()
 writerips(tp, 'types.rips')
 
-#ss = p.splits();
-#writerips(ss, 'splits.rips')
+ss = p.splits();
+writerips(ss, 'splits.rips')
 
 #writefake(bc, 'fake.txt')
 
