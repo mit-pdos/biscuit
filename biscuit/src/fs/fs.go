@@ -513,6 +513,7 @@ type fsfops_t struct {
 	offset int
 	append bool
 	count  int
+	//hack	*imemnode_t
 }
 
 func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
@@ -1359,6 +1360,21 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 	ret.Major = idm.major
 	ret.Minor = idm.minor
 	return ret, 0
+}
+
+func (fs *Fs_t) Makefake() *common.Fd_t {
+	return nil
+	//ret := &common.Fd_t{}
+	//priv := common.Inum_t(iroot)
+	//fake := &fsfops_t{priv: iroot, fs: fs, count: 1}
+	//fake.hack = &imemnode_t{}
+	//fake.hack.inum = priv
+	//fake.hack.fs = fs
+	//if fake.hack.idm_init(priv) != 0 {
+	//	panic("no")
+	//}
+	//ret.Fops = fake
+	//return ret
 }
 
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)

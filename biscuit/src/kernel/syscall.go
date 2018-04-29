@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+import "math/rand"
 import "runtime"
 import "runtime/debug"
 import "runtime/pprof"
@@ -4229,11 +4230,7 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		//fakeptr = proc
 		//}
 	case ptype&common.PROF_HACK4 != 0:
-		if _events == 0 {
-			proc.Closehalf()
-		} else {
-			fmt.Printf("have %v fds\n", proc.Countino())
-		}
+		makefake(proc)
 	case ptype&common.PROF_HACK5 != 0:
 		n := _events
 		if n < 0 {
@@ -4245,6 +4242,45 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 	default:
 		return int(-common.EINVAL)
 	}
+	return 0
+}
+
+func makefake(p *common.Proc_t) common.Err_t {
+	p.Fdl.Lock()
+	defer p.Fdl.Unlock()
+
+	made := 0
+	const want = 1e6
+	newfds := make([]*common.Fd_t, want)
+
+	for times := 0; times < 4; times++ {
+		fmt.Printf("close half...\n")
+		for i := 0; i < len(newfds)/2; i++ {
+			newfds[i] = nil
+		}
+		// sattolos
+		for i := len(newfds) - 1; i >= 0; i-- {
+			si := rand.Intn(i + 1)
+			t := newfds[i]
+			newfds[i] = newfds[si]
+			newfds[si] = t
+		}
+		for i := range newfds {
+			if newfds[i] == nil {
+				newfds[i] = thefs.Makefake()
+			}
+		}
+	}
+
+	for i := range newfds {
+		if i < len(p.Fds) && p.Fds[i] != nil {
+			newfds[i] = p.Fds[i]
+		} else {
+			made++
+		}
+	}
+	p.Fds = newfds
+	fmt.Printf("bloat finished %v\n", made)
 	return 0
 }
 

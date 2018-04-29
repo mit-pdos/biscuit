@@ -7,7 +7,6 @@ import "fmt"
 import "time"
 import "unsafe"
 import "runtime"
-import "math/rand"
 
 type Tnote_t struct {
 	// XXX "alive" should be "terminated"
@@ -1279,47 +1278,6 @@ func (p *Proc_t) Start_proc(pid int) bool {
 // larger than noproc.
 func (p *Proc_t) Start_thread(t Tid_t) bool {
 	return p.Mywait._start(int(t), false, p.Ulim.Noproc)
-}
-
-func (p *Proc_t) Closehalf() {
-	fmt.Printf("close half\n")
-	p.Fdl.Lock()
-	l := make([]int, 0, len(p.Fds))
-	for i, fdp := range p.Fds {
-		if i > 2 && fdp != nil {
-			l = append(l, i)
-		}
-	}
-	p.Fdl.Unlock()
-
-	// sattolos
-	for i := len(l) - 1; i >= 0; i-- {
-		si := rand.Intn(i + 1)
-		t := l[i]
-		l[i] = l[si]
-		l[si] = t
-	}
-
-	c := 0
-	for _, fdn := range l {
-		p.syscall.Sys_close(p, fdn)
-		c++
-		if c >= len(l)/2 {
-			break
-		}
-	}
-}
-
-func (p *Proc_t) Countino() int {
-	c := 0
-	p.Fdl.Lock()
-	for i, fdp := range p.Fds {
-		if i > 2 && fdp != nil {
-			c++
-		}
-	}
-	p.Fdl.Unlock()
-	return c
 }
 
 var Proclock = sync.Mutex{}
