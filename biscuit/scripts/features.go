@@ -14,6 +14,7 @@ type info_t struct {
 
 var gostmt []string
 var deferstmt []string
+var appendstmt []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
@@ -46,14 +47,37 @@ func doname(names []*ast.Ident) string {
 		return ""
 	}
 }
-	
+
+func is_slice_expr(exprs []ast.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	return true
+}
+
+func is_append_call(exprs []ast.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	switch x := exprs[0].(type) {
+	case *ast.CallExpr:
+		switch y := x.Fun.(type) {
+		case *ast.Ident:
+			if y.Name == "append" {
+				fmt.Printf("append call")
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func donode(node ast.Node, fset *token.FileSet) bool {
 	switch x := node.(type) {
 	// case *ast.Ident:
 	case *ast.Field:
 		pos := fset.Position(node.Pos()).String()
 		dotype(x.Type, doname(x.Names), pos)
-		// ast.Print(fset, x)
 	case *ast.MapType:
 		// pos := fset.Position(node.Pos()).String()
 		nmaptypes++
@@ -75,6 +99,14 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 		gostmt = append(gostmt, fset.Position(node.Pos()).String())
 	case *ast.DeferStmt:
 		deferstmt = append(deferstmt, fset.Position(node.Pos()).String())
+	case *ast.AssignStmt:
+		pos := fset.Position(node.Pos()).String()
+		if is_slice_expr(x.Lhs) {
+			if is_append_call(x.Rhs) {
+				appendstmt = append(appendstmt, pos)
+			}
+		}
+		// ast.Print(fset, x)
 	}
 	return true
 }
@@ -112,6 +144,7 @@ func main() {
 	print("arrays", slices)
 	print("channels", channels)
 	print("strings", strings)
+	fmt.Printf("slice appends: %d %v\n", len(appendstmt), appendstmt)
 	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
 	fmt.Printf("go stmts: %d %v\n", len(gostmt), gostmt)
 }
