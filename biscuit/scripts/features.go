@@ -17,10 +17,11 @@ var deferstmt []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
+var strings []info_t
 var nmaptypes int
 
 func dotype(node ast.Expr, name string, pos string) {
-	switch node.(type) {
+	switch x := node.(type) {
 	case *ast.MapType:
 		i := info_t{name, pos}
 		maps = append(maps, i)
@@ -30,6 +31,11 @@ func dotype(node ast.Expr, name string, pos string) {
 	case *ast.ChanType:
 		i := info_t{name, pos}
 		channels = append(channels, i)
+	case *ast.Ident:
+		if x.Name == "string" {
+			i := info_t{name, pos}
+			strings = append(strings, i)
+		}
 	}
 }
 
@@ -46,15 +52,14 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 	// case *ast.Ident:
 	case *ast.Field:
 		pos := fset.Position(node.Pos()).String()
-		// fmt.Printf("field: %s %s\n", pos, x.Names)
 		dotype(x.Type, doname(x.Names), pos)
+		// ast.Print(fset, x)
 	case *ast.MapType:
 		// pos := fset.Position(node.Pos()).String()
 		nmaptypes++
 	case *ast.GenDecl:
 		pos := fset.Position(node.Pos()).String()
 		for _, spec := range x.Specs {
-			// ast.Print(fset, spec)
 			switch y := spec.(type) {
 			case *ast.ValueSpec:
 				name := doname(y.Names)
@@ -106,6 +111,7 @@ func main() {
 	print("maps", maps)
 	print("arrays", slices)
 	print("channels", channels)
+	print("strings", strings)
 	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
 	fmt.Printf("go stmts: %d %v\n", len(gostmt), gostmt)
 }
