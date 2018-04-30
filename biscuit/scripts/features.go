@@ -169,7 +169,7 @@ func print(n string, x []string) {
 func printm(n string, m map[string][]string) {
 	fmt.Printf("%s: %d:\n", n, len(m))
 	for k, v := range(m) {
-		fmt.Printf("\t%s: %v\n", k, v)
+		fmt.Printf("\t%s (%d): %v\n", k, len(v), v)
 	}
 }
 
