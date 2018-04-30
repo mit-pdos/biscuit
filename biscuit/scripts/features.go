@@ -17,6 +17,7 @@ var deferstmt []string
 var appendstmt []string
 var closures []string
 var interfaces []string
+var typeasserts []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
@@ -114,6 +115,9 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 	case *ast.InterfaceType:
 		pos := fset.Position(node.Pos()).String()
 		interfaces = append(interfaces, pos)
+	case *ast.TypeAssertExpr:
+		pos := fset.Position(node.Pos()).String()
+		typeasserts = append(typeasserts, pos)
 	}
 	return true
 }
@@ -135,25 +139,33 @@ func dodir(name string) {
 	}
 }
 
-func print(n string, x []info_t) {
+func printi(n string, x []info_t) {
 	fmt.Printf("%s: %d:\n", n, len(x))
 	for _, i := range x {
 		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
 	}
 }
 
+func print(n string, x []string) {
+	fmt.Printf("%s: %d:\n", n, len(x))
+	for _, i := range x {
+		fmt.Printf("\t%s\n", i)
+	}
+}
+
+
 func main() {
 	dodir("../src/fs")
 	dodir("../src/common")
 	dodir("../src/kernel")
 	dodir("../src/ufs")
-	print("maps", maps)
-	print("arrays", slices)
-	print("channels", channels)
-	print("strings", strings)
-	fmt.Printf("slice appends: %d %v\n", len(appendstmt), appendstmt)
-	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
-	fmt.Printf("go stmts: %d %v\n", len(gostmt), gostmt)
-	fmt.Printf("closures: %d %v\n", len(closures), closures)
-	fmt.Printf("interfaces: %d %v\n", len(interfaces), interfaces)
+	printi("maps", maps)
+	printi("arrays", slices)
+	printi("channels", channels)
+	printi("strings", strings)
+	print("defer stmts", deferstmt)
+	print("go stmts", gostmt)
+	print("closures", closures)
+	print("interfaces", interfaces)
+	print("type asserts", typeasserts)
 }
