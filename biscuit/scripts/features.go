@@ -16,6 +16,7 @@ var gostmt []string
 var deferstmt []string
 var appendstmt []string
 var closures []string
+var interfaces []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
@@ -110,6 +111,9 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 		pos := fset.Position(node.Pos()).String()
 		closures = append(closures, pos)
 		// ast.Print(fset, x)
+	case *ast.InterfaceType:
+		pos := fset.Position(node.Pos()).String()
+		interfaces = append(interfaces, pos)
 	}
 	return true
 }
@@ -151,4 +155,5 @@ func main() {
 	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
 	fmt.Printf("go stmts: %d %v\n", len(gostmt), gostmt)
 	fmt.Printf("closures: %d %v\n", len(closures), closures)
+	fmt.Printf("interfaces: %d %v\n", len(interfaces), interfaces)
 }
