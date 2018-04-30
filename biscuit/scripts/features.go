@@ -15,6 +15,7 @@ type info_t struct {
 var gostmt []string
 var deferstmt []string
 var appendstmt []string
+var closures []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
@@ -64,7 +65,6 @@ func is_append_call(exprs []ast.Expr) bool {
 		switch y := x.Fun.(type) {
 		case *ast.Ident:
 			if y.Name == "append" {
-				fmt.Printf("append call")
 				return true
 			}
 		}
@@ -106,6 +106,9 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 				appendstmt = append(appendstmt, pos)
 			}
 		}
+	case *ast.FuncLit:
+		pos := fset.Position(node.Pos()).String()
+		closures = append(closures, pos)
 		// ast.Print(fset, x)
 	}
 	return true
@@ -147,4 +150,5 @@ func main() {
 	fmt.Printf("slice appends: %d %v\n", len(appendstmt), appendstmt)
 	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
 	fmt.Printf("go stmts: %d %v\n", len(gostmt), gostmt)
+	fmt.Printf("closures: %d %v\n", len(closures), closures)
 }
