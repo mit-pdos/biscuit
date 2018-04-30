@@ -91,6 +91,9 @@ func (log *log_t) Op_end() {
 // ensure any fs ops in the journal preceding this sync call are flushed to disk
 // by waiting for log commit.
 func (log *log_t) Force() {
+	if memfs {
+		panic("memfs")
+	}
 	log.force <- true
 	<-log.commitwait
 }
@@ -369,6 +372,9 @@ func (log *log_t) write_ordered() {
 }
 
 func (log *log_t) commit() {
+	if memfs {
+		panic("no commit")
+	}
 	if log.memhead == log.diskhead {
 		// nothing to commit, but maybe some file blocks to sync
 		if log_debug {

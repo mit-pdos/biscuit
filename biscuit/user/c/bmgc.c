@@ -244,8 +244,6 @@ static void work(enum work_t wn, long wf, const long nt)
 	printf("kernel heap use:   %ld Mb\n", gcheapuse()/(1 << 20));
 }
 
-static int newthing;
-
 int _vnodes(long sf)
 {
 	size_t nf = 1000*sf;
@@ -259,21 +257,12 @@ int _vnodes(long sf)
 			err(-1, "open");
 		if (unlink("dummy"))
 			err(-1, "unlink");
-		if (newthing && n == nf - 1) {
-			const long hack4 = 1 << 7;
-			if (sys_prof(hack4, 0, 0, 0) == -1)
-				err(-1, "reset gc param");
-			n -= nf/2;
-			newthing--;
-		}
 		size_t cp = n/tenpct;
 		if (cp >= next) {
 			printf("%zu%%\n", cp*10);
 			next = cp + 1;
 		}
 	}
-	const long hack4 = 1 << 7;
-	sys_prof(hack4, 1, 0, 0);
 
 	return 0;
 }
@@ -302,14 +291,14 @@ void usage(void)
 int main(int argc, char **argv)
 {
 	long sf = 1, wf = 1, nthreads = 1, kheap = 0, growperc = 0, hmax = 0;
-	int dosleep = 0, dogc = 0;
+	int dosleep = 0, dogc = 0, newthing = 0;
 	enum work_t wtype = W_READF;
 
 	int c;
 	while ((c = getopt(argc, argv, "dH:h:vn:gms:Sw:l:")) != -1) {
 		switch (c) {
 		case 'd':
-			newthing = 4;
+			newthing = 1;
 			break;
 		case 'g':
 			dogc = 1;
@@ -347,6 +336,14 @@ int main(int argc, char **argv)
 			usage();
 			break;
 		}
+	}
+	if (newthing) {
+		printf("doing even newer thing...\n");
+		const long hack4 = 1 << 7;
+		if (sys_prof(hack4, 0, 0, 0) == -1)
+			err(-1, "hack4");
+		pause();
+		return 0;
 	}
 
 	if (optind != argc)

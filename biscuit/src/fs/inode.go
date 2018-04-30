@@ -6,7 +6,7 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
-import "sync/atomic"
+//import "sync/atomic"
 
 import "common"
 
@@ -38,8 +38,8 @@ type inode_stats_t struct {
 }
 
 func (c *counter_t) inc() {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, 1)
+	//n := (*int64)(unsafe.Pointer(c))
+	//atomic.AddInt64(n, 1)
 }
 
 func (is *inode_stats_t) stats() string {
@@ -166,9 +166,12 @@ func (ind *Inode_t) W_addr(i int, blk int) {
 
 // In-memory representation of an inode.
 type imemnode_t struct {
+	// _l protects all fields except for inum (which is the key for lookup
+	// and thus already known).
 	_l	sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
+	ref	*common.Ref_t
 
 	// XXXPANIC for sanity
 	_amlocked bool
@@ -1284,7 +1287,7 @@ func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if err != 0 {
 		panic("freeOrphan")
 	}
-	evicted := icache.refcache.Refdown(imem, "freeOrphan")
+	evicted := icache.refcache.Refdown(imem.ref, true)
 	if !evicted {
 		panic("link count isn't zero?")
 	}
@@ -1338,7 +1341,7 @@ func (icache *icache_t) addDead(imem *imemnode_t) {
 // XXX Fs_close() from different threads are contending for icache.dead...
 func (icache *icache_t) freeDead() {
 	icache.Lock()
-	defer icache.Unlock()
+	//defer icache.Unlock()
 
 	if fs_debug {
 		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
@@ -1352,6 +1355,7 @@ func (icache *icache_t) freeDead() {
 		icache.Lock()
 	}
 	icache.dead = make([]*imemnode_t, 0)
+	icache.Unlock()
 }
 
 func (icache *icache_t) Stats() string {
@@ -1365,66 +1369,65 @@ func (icache *icache_t) Stats() string {
 	return s
 }
 
-// obtain the reference for an inode
 func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
-	ref, victim, err := icache.refcache.Lookup(int(inum), s)
+	return icache._iref(inum, false)
+}
+
+func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
+	return icache._iref(inum, true)
+}
+
+func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, common.Err_t) {
+	ref, created, err := icache.refcache.Lookup(int(inum),
+	    func(in int, ref *common.Ref_t) common.Obj_t {
+		ret := &imemnode_t{}
+		// inum can be read without ilock, and therefore must be
+		// initialized before the refcache unlocks.
+		ret.inum = common.Inum_t(in)
+		ret.ref = ref
+		ret.ilock("")
+		return ret
+	})
 	if err != 0 {
 		return nil, err
 	}
-	defer ref.Unlock()
 
-	if victim != nil {
-		imem := victim.(*imemnode_t)
-		if imem.links == 0 {
-			panic("linkcount of zero on Lookup!")
-		}
-		imem.Evict()
-	}
-
-	if !ref.valid {
-		if fs_debug {
-			fmt.Printf("iref load %v %v\n", inum, s)
-		}
-
-		imem := &imemnode_t{}
-		imem.fs = icache.fs
-		imem.inum = inum
-		ref.obj = imem
-		err := imem.idm_init(inum)
+	ret := ref.Obj.(*imemnode_t)
+	if created {
+		// ret is locked
+		ret.fs = icache.fs
+		err := ret.idm_init(inum)
 		if err != 0 {
 			panic("idm_init")
 			return nil, err
 		}
-		ref.valid = true
 	}
-
-	return ref.obj.(*imemnode_t), err
-}
-
-// Obtain the reference for an inode with the inode locked
-func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
-	idm, err := icache.Iref(inum, s)
-	if err != 0 {
-		return nil, err
+	locked := created
+	if locked != lock {
+		if lock {
+			ret.ilock("")
+		} else {
+			ret.iunlock("")
+		}
 	}
-	idm.ilock(s)
-	return idm, err
+	return ret, 0
 }
 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
-	evicted := icache.refcache.Refdown(imem, "fs_rename_opar")
+	evicted := icache.refcache.Refdown(imem.ref, true)
 	if evicted && imem.links == 0 { // when running always_eager links may not be 0
 		icache.addDead(imem)
 	}
 }
 
 func (icache *icache_t) Refup(imem *imemnode_t, s string) {
-	icache.refcache.Refup(imem, "_fs_open")
+	icache.refcache.Refup(imem.ref)
 }
 
 // Grab locks on inodes references in imems.  handles duplicates.
 func iref_lockall(imems []*imemnode_t) []*imemnode_t {
-	var locked []*imemnode_t
+	//var locked []*imemnode_t
+	locked := make([]*imemnode_t, 0, 4)
 	sort.Slice(imems, func(i, j int) bool { return imems[i].Key() < imems[j].Key() })
 	for _, imem := range imems {
 		dup := false
@@ -1462,9 +1465,9 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
 	ialloc.first = first
 	ialloc.inodelen = inodelen
 	ialloc.maxinode = inodelen * (common.BSIZE / ISIZE)
-	fmt.Printf("ialloc: mapstart %v maplen %v inode start %v inode len %v max inode# %v nfree %d\n",
-		ialloc.start, ialloc.len, ialloc.first, ialloc.inodelen, ialloc.maxinode,
-		ialloc.alloc.nfreebits)
+	//fmt.Printf("ialloc: mapstart %v maplen %v inode start %v inode len %v max inode# %v nfree %d\n",
+	//	ialloc.start, ialloc.len, ialloc.first, ialloc.inodelen, ialloc.maxinode,
+	//	ialloc.alloc.nfreebits)
 	return ialloc
 }
 

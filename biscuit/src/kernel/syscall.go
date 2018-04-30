@@ -1,6 +1,7 @@
 package main
 
 import "fmt"
+import "math/rand"
 import "runtime"
 import "runtime/debug"
 import "runtime/pprof"
@@ -13,7 +14,8 @@ import "unsafe"
 import "common"
 import "fs"
 
-var _sysbounds = map[int]int{
+var _sysbounds = []int {
+//var _sysbounds = map[int]int {
 	common.SYS_READ:       common.Bounds(common.B_SYS_READ),
 	common.SYS_WRITE:      common.Bounds(common.B_SYS_WRITE),
 	common.SYS_OPEN:       common.Bounds(common.B_SYS_OPEN),
@@ -93,10 +95,14 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 
 	sysno := int(tf[common.TF_RAX])
 
-	lim, ok := _sysbounds[sysno]
-	if !ok {
-		panic("bad limit")
-	}
+	//lim, ok := _sysbounds[sysno]
+	//if !ok {
+	//	panic("bad limit")
+	//}
+	lim := _sysbounds[sysno]
+	//if lim == 0 {
+	//	panic("bad limit")
+	//}
 	if !common.Resadd(lim) {
 		//fmt.Printf("syscall res failed\n")
 		return int(-common.ENOHEAP)
@@ -3323,9 +3329,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 		restore()
 		return int(err)
 	}
-	defer func() {
-		common.Close_panic(file)
-	}()
+	defer common.Close_panic(file)
 
 	hdata := make([]uint8, 512)
 	ub := &common.Fakeubuf_t{}
@@ -3452,7 +3456,8 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 		physmem.Refdown(p_pg)
 		return 0, 0, -common.ENOMEM
 	}
-	var args [][]uint8
+	//var args [][]uint8
+	args := make([][]uint8, 0, 12)
 	for _, str := range sargs {
 		args = append(args, []uint8(str))
 	}
@@ -4225,11 +4230,7 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		//fakeptr = proc
 		//}
 	case ptype&common.PROF_HACK4 != 0:
-		if _events == 0 {
-			proc.Closehalf()
-		} else {
-			fmt.Printf("have %v fds\n", proc.Countino())
-		}
+		makefake(proc)
 	case ptype&common.PROF_HACK5 != 0:
 		n := _events
 		if n < 0 {
@@ -4241,6 +4242,45 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 	default:
 		return int(-common.EINVAL)
 	}
+	return 0
+}
+
+func makefake(p *common.Proc_t) common.Err_t {
+	p.Fdl.Lock()
+	defer p.Fdl.Unlock()
+
+	made := 0
+	const want = 1e6
+	newfds := make([]*common.Fd_t, want)
+
+	for times := 0; times < 4; times++ {
+		fmt.Printf("close half...\n")
+		for i := 0; i < len(newfds)/2; i++ {
+			newfds[i] = nil
+		}
+		// sattolos
+		for i := len(newfds) - 1; i >= 0; i-- {
+			si := rand.Intn(i + 1)
+			t := newfds[i]
+			newfds[i] = newfds[si]
+			newfds[si] = t
+		}
+		for i := range newfds {
+			if newfds[i] == nil {
+				newfds[i] = thefs.Makefake()
+			}
+		}
+	}
+
+	for i := range newfds {
+		if i < len(p.Fds) && p.Fds[i] != nil {
+			newfds[i] = p.Fds[i]
+		} else {
+			made++
+		}
+	}
+	p.Fds = newfds
+	fmt.Printf("bloat finished %v\n", made)
 	return 0
 }
 

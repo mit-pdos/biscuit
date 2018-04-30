@@ -20,12 +20,27 @@ type Block_cb_i interface {
 	Relse(*Bdev_block_t, string)
 }
 
+type Obj_t interface {
+	Evictnow() bool
+	Key() int
+	Evict()
+}
+
+type Ref_t struct {
+	Obj        Obj_t
+	Refcnt     int64
+	Key        int
+	Refnext    *Ref_t
+	Refprev    *Ref_t
+}
+
 type Bdev_block_t struct {
 	sync.Mutex
 	Block int
 	_try_evict bool
 	Pa    Pa_t
 	Data  *Bytepg_t
+	Ref	*Ref_t
 	Name  string
 	Mem   Blockmem_i
 	Disk  Disk_i
@@ -238,7 +253,7 @@ func MkBlock(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev
 	b.Block = block
 	b.Pa = Pa_t(0)
 	b.Data = nil
-	b.Name = s
+	//b.Name = s
 	b.Mem = mem
 	b.Disk = d
 	b.Cb = cb

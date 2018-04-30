@@ -755,9 +755,6 @@ var Lost struct {
 	Gs uint
 	User uint
 }
-var All uint
-
-var Tots int
 
 //go:nosplit
 //go:nowritebarrierrec
@@ -783,13 +780,12 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	// similar to sigprof()
 	if gp == nil || sp < gp.stack.lo || gp.stack.hi < sp || setsSP(pc) {
 		_addone(tf[TF_RIP])
-		Lost.Go++
+		//Lost.Go++
 		return
 	}
 
 	did := gentraceback(pc, sp, 0, gp, 0, &buf[0], len(buf), nil,
 	    nil, _TraceTrap|_TraceJumpStack)
-	Tots += did
 	buf = buf[:did]
 	need := uint64(len(buf) + 1)
 	last := atomic.Xadd64(&nmiprof.bufidx, int64(need))
@@ -807,40 +803,51 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 //go:nosplit
 //go:nowritebarrierrec
 func nmibacktrace(tf *[TFSIZE]uintptr) {
-	All++
 	if tf[TF_GSBASE] == 0 {
 		_pmsg("!")
 	}
 
-	if (tf[TF_CS] & 3) != 0 {
-		_addone(tf[TF_RIP])
-		Lost.User++
-		return
-	}
 	// if the nmi occurred between swapgs pair, getg() will return garbage.
 	// detect this case by making sure gs does not point to the cpu_t
 	cpu := NMI_Gscpu()
 	if Gscpu() != cpu {
 		_addone(tf[TF_RIP])
-		Lost.Gs++
+		//Lost.Gs++
 		return
 	}
+
+	// XXX
+	if (tf[TF_CS] & 3) != 0 || tf[TF_RFLAGS] & TF_FL_IF == 0 ||
+	    cpu.mythread == nil {
+		_addone(tf[TF_RIP])
+		//Lost.User++
+		return
+	}
+
 	og := getg()
 	if og.m == nil || og.m.gsignal == nil {
 		_addone(tf[TF_RIP])
-		Lost.Go++
+		//Lost.Go++
 		return
 	}
 	if og == og.m.gsignal {
 		pancake("recursive NMIs?", 0)
 	}
-	// make sure we aren't preempted by GC
-	og.m.mallocing++
+	if og.m != og.m.gsignal.m {
+		pancake("oh shite", 0)
+	}
 	setg(og.m.gsignal)
 	// indirectly call nmibacktrace1()...
 	backtracetramp(og.m.gsignal.stack.hi, tf, og)
 	setg(og)
-	og.m.mallocing--
+}
+
+func checky() {
+	if hackmode != 0 {
+		if rflags() & TF_FL_IF == 0 {
+			pancake("must be interruptible", 0)
+		}
+	}
 }
 
 //go:nowritebarrierrec
@@ -3450,7 +3457,9 @@ func Cacheres(_res int, init bool) bool {
 
 func Cacheaccount() {
 	gp := getg()
-	gp.res.allocs = gp.res.took
+	if gp.res.allocs < gp.res.took {
+		gp.res.allocs = gp.res.took
+	}
 }
 
 func GCDebug(n int) {

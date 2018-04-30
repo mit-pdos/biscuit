@@ -2,12 +2,11 @@ package common
 
 //import "sync/atomic"
 import "sync"
-import "strings"
+//import "strings"
 import "fmt"
 import "time"
 import "unsafe"
 import "runtime"
-import "math/rand"
 
 type Tnote_t struct {
 	// XXX "alive" should be "terminated"
@@ -464,12 +463,14 @@ func (p *Proc_t) Page_remove(va int) bool {
 // returns true if the pagefault was handled successfully
 func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) Err_t {
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
 	vmi, ok := p.Vmregion.Lookup(fa)
 	if !ok {
+		p.Unlock_pmap()
 		return -EFAULT
 	}
-	return Sys_pgfault(p, vmi, fa, ecode)
+	ret := Sys_pgfault(p, vmi, fa, ecode)
+	p.Unlock_pmap()
+	return ret
 }
 
 // flush TLB on all CPUs that may have this processes' pmap loaded
@@ -579,6 +580,9 @@ func Resend() {
 	if !Kernel {
 		return
 	}
+	//if !Lims {
+	//	return
+	//}
 	runtime.Memunres()
 }
 
@@ -595,21 +599,24 @@ func Human(_bytes int) string {
 	return fmt.Sprintf("%.2f%s", float64(bytes) / div, sufs[order])
 }
 
-var Maxgot int64
-var Gwaits int
+//var lastp time.Time
 
 func _reswait(c int, incremental, block bool) bool {
+	//if !Lims {
+	//	return true
+	//}
 	f := runtime.Memreserve
 	if incremental {
 		f = runtime.Memresadd
 	}
 	for !f(c) {
+		//if time.Since(lastp) > time.Second {
+		//	fmt.Printf("RES failed %v\n", c)
+		//	Callerdump(2)
+		//}
 		p := Current().proc
 		if p.Doomed() {
 			return false
-		}
-		if strings.Contains(p.Name, "cmail") {
-			Gwaits++
 		}
 		if !block {
 			return false
@@ -998,23 +1005,26 @@ func (p *Proc_t) Userstr(uva int, lenmax int) (string, Err_t) {
 		return "", 0
 	}
 	p.Lock_pmap()
-	defer p.Unlock_pmap()
+	//defer p.Unlock_pmap()
 	i := 0
 	var s string
 	for {
 		str, err := p.Userdmap8_inner(uva+i, false)
 		if err != 0 {
+			p.Unlock_pmap()
 			return "", err
 		}
 		for j, c := range str {
 			if c == 0 {
 				s = s + string(str[:j])
+				p.Unlock_pmap()
 				return s, 0
 			}
 		}
 		s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
+			p.Unlock_pmap()
 			return "", -ENAMETOOLONG
 		}
 	}
@@ -1051,7 +1061,7 @@ func (p *Proc_t) Userargs(uva int) ([]string, Err_t) {
 		}
 		return true
 	}
-	ret := make([]string, 0)
+	ret := make([]string, 0, 12)
 	argmax := 64
 	addarg := func(cptr []uint8) Err_t {
 		if len(ret) > argmax {
@@ -1270,47 +1280,6 @@ func (p *Proc_t) Start_thread(t Tid_t) bool {
 	return p.Mywait._start(int(t), false, p.Ulim.Noproc)
 }
 
-func (p *Proc_t) Closehalf() {
-	fmt.Printf("close half\n")
-	p.Fdl.Lock()
-	l := make([]int, 0, len(p.Fds))
-	for i, fdp := range p.Fds {
-		if i > 2 && fdp != nil {
-			l = append(l, i)
-		}
-	}
-	p.Fdl.Unlock()
-
-	// sattolos
-	for i := len(l) - 1; i >= 0; i-- {
-		si := rand.Intn(i + 1)
-		t := l[i]
-		l[i] = l[si]
-		l[si] = t
-	}
-
-	c := 0
-	for _, fdn := range l {
-		p.syscall.Sys_close(p, fdn)
-		c++
-		if c >= len(l)/2 {
-			break
-		}
-	}
-}
-
-func (p *Proc_t) Countino() int {
-	c := 0
-	p.Fdl.Lock()
-	for i, fdp := range p.Fds {
-		if i > 2 && fdp != nil {
-			c++
-		}
-	}
-	p.Fdl.Unlock()
-	return c
-}
-
 var Proclock = sync.Mutex{}
 
 func Proc_check(pid int) (*Proc_t, bool) {
@@ -1443,6 +1412,9 @@ func (ca *Cacheallocs_t) Shouldevict(res int) bool {
 	if !Kernel {
 		return false
 	}
+	//if !Lims {
+	//	return false
+	//}
 	init := !ca.initted
 	ca.initted = true
 	return !runtime.Cacheres(res, init)
@@ -1450,10 +1422,15 @@ func (ca *Cacheallocs_t) Shouldevict(res int) bool {
 
 var Kwaits int
 
+//var Lims = true
+
 func Kreswait(c int, name string) {
 	if !Kernel {
 		return
 	}
+	//if !Lims {
+	//	return
+	//}
 	for !runtime.Memreserve(c) {
 		//fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
 
@@ -1470,6 +1447,9 @@ func Kunres() int {
 	if !Kernel {
 		return 0
 	}
+	//if !Lims {
+	//	return 0
+	//}
 	return runtime.Memunres()
 }
 
@@ -1641,7 +1621,10 @@ func (o *oom_t) gc() {
 func (o *oom_t) reign() {
 outter:
 	for msg := range o.halp {
-		//o.gc()
+		//fmt.Printf("A need %v, rem %v\n", msg.need, runtime.Memremain())
+		o.gc()
+		//fmt.Printf("B need %v, rem %v\n", msg.need, runtime.Memremain())
+		//panic("OOM KILL\n")
 		if msg.need < runtime.Memremain() {
 			// there is apparently enough reservation available for
 			// them now

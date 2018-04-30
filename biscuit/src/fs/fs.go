@@ -44,7 +44,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 		panic("fs_init")
 	}
 	fs.superb_start = common.Readn(b.Data[:], 4, FSOFF)
-	fmt.Printf("fs.superb_start %v\n", fs.superb_start)
+	//fmt.Printf("fs.superb_start %v\n", fs.superb_start)
 	if fs.superb_start <= 0 {
 		panic("bad superblock start")
 	}
@@ -62,7 +62,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	if loglen <= 0 || loglen > 256 {
 		panic("bad log len")
 	}
-	fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
+	//fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
 	fs.fslog = StartLog(logstart, loglen, fs, disk)
 	if fs.fslog == nil {
 		panic("Startlog failed")
@@ -72,18 +72,18 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	iorphanlen := fs.superb.Iorphanlen()
 	imapstart := iorphanstart + iorphanlen
 	imaplen := fs.superb.Imaplen()
-	fmt.Printf("orphanstart %v orphan len %v\n", iorphanstart, iorphanlen)
-	fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
+	//fmt.Printf("orphanstart %v orphan len %v\n", iorphanstart, iorphanlen)
+	//fmt.Printf("imapstart %v imaplen %v\n", imapstart, imaplen)
 	if iorphanlen != imaplen {
 		panic("number of iorphan map blocks != inode map block")
 	}
 
 	bmapstart := fs.superb.Freeblock()
 	bmaplen := fs.superb.Freeblocklen()
-	fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
+	//fmt.Printf("bmapstart %v bmaplen %v\n", bmapstart, bmaplen)
 
 	inodelen := fs.superb.Inodelen()
-	fmt.Printf("inodestart %v inodelen %v\n", bmapstart+bmaplen, inodelen)
+	//fmt.Printf("inodestart %v inodelen %v\n", bmapstart+bmaplen, inodelen)
 
 	fs.ialloc = mkIalloc(fs, imapstart, imaplen, bmapstart+bmaplen, inodelen)
 	fs.balloc = mkBallocater(fs, bmapstart, bmaplen, bmapstart+bmaplen+inodelen)
@@ -513,14 +513,16 @@ type fsfops_t struct {
 	offset int
 	append bool
 	count  int
+	//hack	*imemnode_t
 }
 
 func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 
 	if fo.count <= 0 {
+		fo.Unlock()
 		return 0, -common.EBADF
 	}
 
@@ -535,6 +537,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 	}
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_read")
 	if err != 0 {
+		fo.Unlock()
 		return 0, err
 	}
 	did, err := idm.do_read(dst, offset)
@@ -542,6 +545,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		fo.offset += did
 	}
 	idm.iunlock_refdown("_read")
+	fo.Unlock()
 	return did, err
 }
 
@@ -657,8 +661,9 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 // reclaimed.
 func (fo *fsfops_t) Close() common.Err_t {
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 	if fo.count <= 0 {
+		fo.Unlock()
 		return -common.EBADF
 	}
 	fo.count--
@@ -666,6 +671,7 @@ func (fo *fsfops_t) Close() common.Err_t {
 		fmt.Printf("Close: %d cnt %d\n", fo.priv, fo.count)
 
 	}
+	fo.Unlock()
 	return fo.fs.Fs_close(fo.priv)
 }
 
@@ -680,19 +686,22 @@ func (fo *fsfops_t) Pathi() common.Inum_t {
 
 func (fo *fsfops_t) Reopen() common.Err_t {
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 	if fo.count <= 0 {
+		fo.Unlock()
 		return -common.EBADF
 	}
 
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "reopen")
 	if err != 0 {
+		fo.Unlock()
 		return err
 	}
 	fo.fs.istats.Nreopen.inc()
 	fo.fs.icache.Refup(idm, "reopen") // close will decrease it
 	idm.iunlock_refdown("reopen")
 	fo.count++
+	fo.Unlock()
 	return 0
 }
 
@@ -728,17 +737,20 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 // populated if necessary.
 func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
 	fo.Lock()
-	defer fo.Unlock()
+	//defer fo.Unlock()
 	if fo.count <= 0 {
+		fo.Unlock()
 		return nil, -common.EBADF
 	}
 
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	if err != 0 {
+		fo.Unlock()
 		return nil, err
 	}
 	mmi, err := idm.do_mmapi(offset, len, inc)
 	idm.iunlock_refdown("mmapi")
+	fo.Unlock()
 	return mmi, err
 }
 
@@ -1350,6 +1362,21 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 	return ret, 0
 }
 
+func (fs *Fs_t) Makefake() *common.Fd_t {
+	return nil
+	//ret := &common.Fd_t{}
+	//priv := common.Inum_t(iroot)
+	//fake := &fsfops_t{priv: iroot, fs: fs, count: 1}
+	//fake.hack = &imemnode_t{}
+	//fake.hack.inum = priv
+	//fake.hack.fs = fs
+	//if fake.hack.idm_init(priv) != 0 {
+	//	panic("no")
+	//}
+	//ret.Fops = fake
+	//return ret
+}
+
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{common.D_SUD: true, common.D_SUS: true}
 
@@ -1398,7 +1425,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 
 func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 	fs.fslog.Op_begin("Fs_close")
-	defer fs.op_end_and_free()
+	//defer fs.op_end_and_free()
 
 	fs.istats.Nclose.inc()
 
@@ -1408,10 +1435,12 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 
 	idm, err := fs.icache.Iref_locked(priv, "Fs_close")
 	if err != 0 {
+		fs.op_end_and_free()
 		return err
 	}
 	fs.icache.Refdown(idm, "Fs_close")
 	idm.iunlock_refdown("Fs_close")
+	fs.op_end_and_free()
 	return 0
 }
 
@@ -1491,6 +1520,9 @@ func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*ime
 }
 
 func (fs *Fs_t) Fs_evict() (int, int) {
+	if memfs {
+		panic("no evict")
+	}
 	//fmt.Printf("FS EVICT\n")
 	fs.bcache.refcache.Evict_half()
 	fs.icache.refcache.Evict_half()
