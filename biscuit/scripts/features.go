@@ -23,6 +23,7 @@ var slices []info_t
 var channels []info_t
 var strings []info_t
 var nmaptypes int
+var imports map[string][]string
 
 func dotype(node ast.Expr, name string, pos string) {
 	switch x := node.(type) {
@@ -121,6 +122,15 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 	}
 	return true
 }
+
+func addimport(f string, imp string) {
+	s, ok := imports[imp]
+	if ok {
+		imports[imp] = append(s, f)
+	} else {
+		imports[imp] = []string{f}
+	}
+}
 	
 func dodir(name string) {
 	fset := token.NewFileSet()
@@ -132,6 +142,9 @@ func dodir(name string) {
 
 	for _, pkg := range asts {
 		for _, f  := range pkg.Files {
+			for _, s := range f.Imports {
+				addimport(fset.Position(f.Package).String(), s.Path.Value)
+			}
 			ast.Inspect(f, func (node ast.Node) bool {
 				return donode(node, fset)
 			})
@@ -153,8 +166,15 @@ func print(n string, x []string) {
 	}
 }
 
+func printm(n string, m map[string][]string) {
+	fmt.Printf("%s: %d:\n", n, len(m))
+	for k, v := range(m) {
+		fmt.Printf("\t%s: %v\n", k, v)
+	}
+}
 
 func main() {
+	imports = make(map[string][]string)
 	dodir("../src/fs")
 	dodir("../src/common")
 	dodir("../src/kernel")
@@ -168,4 +188,5 @@ func main() {
 	print("closures", closures)
 	print("interfaces", interfaces)
 	print("type asserts", typeasserts)
+	printm("imports", imports)
 }
