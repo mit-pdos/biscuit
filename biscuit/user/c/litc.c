@@ -1918,7 +1918,8 @@ gcfracend(struct gcfrac_t *of, long *marke, long *sweepe,
 		*sweepe = nf.details.bgsweepms - of->details.bgsweepms;
 	if (wbe)
 		*wbe = nf.details.wbms - of->details.wbms;
-	return (double)(nf.gcworkms - of->gcworkms)/(nf.startms - of->startms);
+	//return (double)(nf.gcworkms - of->gcworkms)/(nf.startms - of->startms);
+	return NAN;
 }
 
 char *optarg;
