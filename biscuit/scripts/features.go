@@ -14,14 +14,18 @@ type info_t struct {
 
 var gostmt []string
 var deferstmt []string
-var mapfield []info_t
+var maps []info_t
+var slices []info_t
 var nmaptypes int
 
 func dotype(node ast.Expr, name string, pos string) {
 	switch node.(type) {
 	case *ast.MapType:
 		i := info_t{name, pos}
-		mapfield = append(mapfield, i)
+		maps = append(maps, i)
+	case *ast.ArrayType:
+		i := info_t{name, pos}
+		slices = append(slices, i)
 	}
 }
 
@@ -88,8 +92,12 @@ func main() {
 	dodir("../src/common")
 	dodir("../src/kernel")
 	dodir("../src/ufs")
-	fmt.Printf("map fields: %d (%d):\n", len(mapfield), nmaptypes)
-	for _, i := range mapfield {
+	fmt.Printf("maps: %d (%d):\n", len(maps), nmaptypes)
+	for _, i := range maps {
+		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
+	}
+	fmt.Printf("arrays: %d:\n", len(slices))
+	for _, i := range slices {
 		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
 	}
 	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
