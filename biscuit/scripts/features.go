@@ -16,6 +16,7 @@ var gostmt []string
 var deferstmt []string
 var maps []info_t
 var slices []info_t
+var channels []info_t
 var nmaptypes int
 
 func dotype(node ast.Expr, name string, pos string) {
@@ -26,6 +27,9 @@ func dotype(node ast.Expr, name string, pos string) {
 	case *ast.ArrayType:
 		i := info_t{name, pos}
 		slices = append(slices, i)
+	case *ast.ChanType:
+		i := info_t{name, pos}
+		channels = append(channels, i)
 	}
 }
 
@@ -87,19 +91,21 @@ func dodir(name string) {
 	}
 }
 
+func print(n string, x []info_t) {
+	fmt.Printf("%s: %d:\n", n, len(x))
+	for _, i := range x {
+		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
+	}
+}
+
 func main() {
 	dodir("../src/fs")
 	dodir("../src/common")
 	dodir("../src/kernel")
 	dodir("../src/ufs")
-	fmt.Printf("maps: %d (%d):\n", len(maps), nmaptypes)
-	for _, i := range maps {
-		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
-	}
-	fmt.Printf("arrays: %d:\n", len(slices))
-	for _, i := range slices {
-		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
-	}
+	print("maps", maps)
+	print("arrays", slices)
+	print("channels", channels)
 	fmt.Printf("defer stmts: %d %v\n", len(deferstmt), deferstmt)
 	fmt.Printf("go stmts: %d %v\n", len(gostmt), gostmt)
 }
