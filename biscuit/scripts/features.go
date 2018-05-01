@@ -18,6 +18,7 @@ var appendstmt []string
 var closures []string
 var interfaces []string
 var typeasserts []string
+var multiret []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
@@ -52,13 +53,6 @@ func doname(names []*ast.Ident) string {
 	}
 }
 
-func is_slice_expr(exprs []ast.Expr) bool {
-	if len(exprs) == 0 {
-		return false
-	}
-	return true
-}
-
 func is_append_call(exprs []ast.Expr) bool {
 	if len(exprs) == 0 {
 		return false
@@ -77,7 +71,6 @@ func is_append_call(exprs []ast.Expr) bool {
 
 func donode(node ast.Node, fset *token.FileSet) bool {
 	switch x := node.(type) {
-	// case *ast.Ident:
 	case *ast.Field:
 		pos := fset.Position(node.Pos()).String()
 		dotype(x.Type, doname(x.Names), pos)
@@ -104,10 +97,8 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 		deferstmt = append(deferstmt, fset.Position(node.Pos()).String())
 	case *ast.AssignStmt:
 		pos := fset.Position(node.Pos()).String()
-		if is_slice_expr(x.Lhs) {
-			if is_append_call(x.Rhs) {
-				appendstmt = append(appendstmt, pos)
-			}
+		if is_append_call(x.Rhs) {
+			appendstmt = append(appendstmt, pos)
 		}
 	case *ast.FuncLit:
 		pos := fset.Position(node.Pos()).String()
@@ -119,6 +110,13 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 	case *ast.TypeAssertExpr:
 		pos := fset.Position(node.Pos()).String()
 		typeasserts = append(typeasserts, pos)
+	case *ast.FuncDecl:
+		pos := fset.Position(node.Pos()).String()
+		// ast.Print(fset, x)
+		t := x.Type
+		if t.Results != nil && len(t.Results.List) > 1 {
+			multiret = append(multiret, pos)
+		}
 	}
 	return true
 }
@@ -179,14 +177,18 @@ func main() {
 	dodir("../src/common")
 	dodir("../src/kernel")
 	dodir("../src/ufs")
+	
 	printi("maps", maps)
 	printi("arrays", slices)
 	printi("channels", channels)
 	printi("strings", strings)
+	
 	print("defer stmts", deferstmt)
 	print("go stmts", gostmt)
 	print("closures", closures)
 	print("interfaces", interfaces)
 	print("type asserts", typeasserts)
+	print("multivalue returns", multiret)
+	
 	printm("imports", imports)
 }
