@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
  	"fmt"
+	"log"
 	"go/ast"
  	"go/parser"
  	"go/token"
+	"io"
+	"path/filepath"
+	"strings"
+	"os"
 )
 
 type info_t struct {
@@ -22,9 +28,12 @@ var multiret []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
-var strings []info_t
+var stringuse []info_t
 var nmaptypes int
 var imports map[string][]string
+var lcount int
+
+var verbose = false
 
 func dotype(node ast.Expr, name string, pos string) {
 	switch x := node.(type) {
@@ -40,7 +49,7 @@ func dotype(node ast.Expr, name string, pos string) {
 	case *ast.Ident:
 		if x.Name == "string" {
 			i := info_t{name, pos}
-			strings = append(strings, i)
+			stringuse = append(stringuse, i)
 		}
 	}
 }
@@ -121,6 +130,7 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 	return true
 }
 
+
 func addimport(f string, imp string) {
 	s, ok := imports[imp]
 	if ok {
@@ -129,66 +139,116 @@ func addimport(f string, imp string) {
 		imports[imp] = []string{f}
 	}
 }
-	
-func dodir(name string) {
+
+func lineCounter(r io.Reader) (int, error) {
+    buf := make([]byte, 32*1024)
+    count := 0
+    lineSep := []byte{'\n'}
+
+    for {
+        c, err := r.Read(buf)
+        count += bytes.Count(buf[:c], lineSep)
+
+        switch {
+        case err == io.EOF:
+            return count, nil
+
+        case err != nil:
+            return count, err
+        }
+    }
+}
+
+func dofile(path string) {
 	fset := token.NewFileSet()
-	asts, err := parser.ParseDir(fset, name, nil, 0)
+	f, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
-	for _, pkg := range asts {
-		for _, f  := range pkg.Files {
-			for _, s := range f.Imports {
-				addimport(fset.Position(f.Package).String(), s.Path.Value)
-			}
-			ast.Inspect(f, func (node ast.Node) bool {
-				return donode(node, fset)
-			})
+	for _, s := range f.Imports {
+		addimport(fset.Position(f.Package).String(), s.Path.Value)
+	}
+	ast.Inspect(f, func (node ast.Node) bool {
+		return donode(node, fset)
+	})
+
+	file, err := os.Open(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	l, err := lineCounter(file)
+	if err != nil {
+		log.Fatal(err)
+	}
+	lcount += l
+}
+
+func frac(x int) float64 {
+	return (float64(x)/float64(lcount))*1000
+}
+
+func printi(n string, x []info_t) {
+	fmt.Printf("%s & %d & %.2f \\\\ \n", n, len(x), frac(len(x)))
+	if verbose {
+		for _, i := range x {
+			fmt.Printf("\t%s (%s)\n", i.name, i.pos)
 		}
 	}
 }
 
-func printi(n string, x []info_t) {
-	fmt.Printf("%s: %d:\n", n, len(x))
-	for _, i := range x {
-		fmt.Printf("\t%s (%s)\n", i.name, i.pos)
-	}
-}
-
 func print(n string, x []string) {
-	fmt.Printf("%s: %d:\n", n, len(x))
-	for _, i := range x {
-		fmt.Printf("\t%s\n", i)
+	fmt.Printf("%s & %d & %.2f \\\\ \n", n, len(x), frac(len(x)))
+	if verbose {
+		for _, i := range x {
+			fmt.Printf("\t%s\n", i)
+		}
 	}
 }
 
 func printm(n string, m map[string][]string) {
-	fmt.Printf("%s: %d:\n", n, len(m))
-	for k, v := range(m) {
-		fmt.Printf("\t%s (%d): %v\n", k, len(v), v)
+	fmt.Printf("%s & %d & %.2f \\\\ \n", n, len(m), frac(len(m)))
+	if verbose {
+		for k, v := range(m) {
+			fmt.Printf("\t%s (%d): %v\n", k, len(v), v)
+		}
 	}
 }
 
+
 func main() {
+	if len(os.Args) != 2 {
+		fmt.Println("features.go <path>")
+		return
+	}
 	imports = make(map[string][]string)
-	dodir("../src/fs")
-	dodir("../src/common")
-	dodir("../src/kernel")
-	dodir("../src/ufs")
+	dir := os.Args[1]
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && filepath.Ext(strings.TrimSpace(path)) == ".go"  {
+			dofile(path)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("error %v\n", err)
+		
+	}
+
+	fmt.Printf("Line count %d\n", lcount)
 	
-	printi("maps", maps)
-	printi("arrays", slices)
-	printi("channels", channels)
-	printi("strings", strings)
-	
-	print("defer stmts", deferstmt)
-	print("go stmts", gostmt)
-	print("closures", closures)
-	print("interfaces", interfaces)
-	print("type asserts", typeasserts)
-	print("multivalue returns", multiret)
-	
-	printm("imports", imports)
+	printi("Maps   ", maps)
+	printi("Slices ", slices)
+	printi("Channels", channels)
+	printi("Strings", stringuse)
+	print("Multi-value return", multiret)
+	print("Closures", closures)
+	print("Defer stmts", deferstmt)
+	print("Go stmts", gostmt)
+	print("Interfaces", interfaces)
+	print("Type asserts", typeasserts)
+	printm("Imports", imports)
 }
