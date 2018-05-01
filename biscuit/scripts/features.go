@@ -25,6 +25,7 @@ var closures []string
 var interfaces []string
 var typeasserts []string
 var multiret []string
+var finalizers []string
 var maps []info_t
 var slices []info_t
 var channels []info_t
@@ -78,7 +79,18 @@ func is_append_call(exprs []ast.Expr) bool {
 	return false
 }
 
+func is_set_finalizer(c *ast.CallExpr) bool {
+	switch x := c.Fun.(type) {
+	case *ast.SelectorExpr:
+		if x.Sel.Name == "SetFinalizer" {
+			return true
+		}
+	}
+	return false
+}
+
 func donode(node ast.Node, fset *token.FileSet) bool {
+	// ast.Print(fset,node)
 	switch x := node.(type) {
 	case *ast.Field:
 		pos := fset.Position(node.Pos()).String()
@@ -125,6 +137,15 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 		t := x.Type
 		if t.Results != nil && len(t.Results.List) > 1 {
 			multiret = append(multiret, pos)
+		}
+	case *ast.ExprStmt:
+		pos := fset.Position(node.Pos()).String()
+		switch y := x.X.(type) {
+	        case *ast.CallExpr:
+			// ast.Print(fset, x)
+			if is_set_finalizer(y) {
+				finalizers = append(finalizers, pos)
+			}
 		}
 	}
 	return true
@@ -190,7 +211,7 @@ func frac(x int) float64 {
 }
 
 func printi(n string, x []info_t) {
-	fmt.Printf("%s & %d & %.2f \\\\ \n", n, len(x), frac(len(x)))
+	fmt.Printf("%s & %.2f \\\\ \n", n, frac(len(x)))
 	if verbose {
 		for _, i := range x {
 			fmt.Printf("\t%s (%s)\n", i.name, i.pos)
@@ -199,7 +220,7 @@ func printi(n string, x []info_t) {
 }
 
 func print(n string, x []string) {
-	fmt.Printf("%s & %d & %.2f \\\\ \n", n, len(x), frac(len(x)))
+	fmt.Printf("%s & %.2f \\\\ \n", n, frac(len(x)))
 	if verbose {
 		for _, i := range x {
 			fmt.Printf("\t%s\n", i)
@@ -208,7 +229,7 @@ func print(n string, x []string) {
 }
 
 func printm(n string, m map[string][]string) {
-	fmt.Printf("%s & %d & %.2f \\\\ \n", n, len(m), frac(len(m)))
+	fmt.Printf("%s & %.2f \\\\ \n", n, frac(len(m)))
 	if verbose {
 		for k, v := range(m) {
 			fmt.Printf("\t%s (%d): %v\n", k, len(v), v)
@@ -240,12 +261,13 @@ func main() {
 
 	fmt.Printf("Line count %d\n", lcount)
 	
-	printi("Maps   ", maps)
-	printi("Slices ", slices)
+	printi("Maps", maps)
+	printi("Slices", slices)
 	printi("Channels", channels)
 	printi("Strings", stringuse)
 	print("Multi-value return", multiret)
 	print("Closures", closures)
+	print("Finalizers", finalizers)
 	print("Defer stmts", deferstmt)
 	print("Go stmts", gostmt)
 	print("Interfaces", interfaces)
