@@ -18,6 +18,7 @@ type info_t struct {
 	pos string
 }
 
+var allocs []string
 var gostmt []string
 var deferstmt []string
 var appendstmt []string
@@ -79,6 +80,54 @@ func is_append_call(exprs []ast.Expr) bool {
 	return false
 }
 
+func is_make_call(exprs []ast.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	switch x := exprs[0].(type) {
+	case *ast.CallExpr:
+		switch y := x.Fun.(type) {
+		case *ast.Ident:
+			if y.Name == "make" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func is_new_call(exprs []ast.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	switch x := exprs[0].(type) {
+	case *ast.CallExpr:
+		switch y := x.Fun.(type) {
+		case *ast.Ident:
+			if y.Name == "new" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func is_alloc_call(exprs []ast.Expr) bool {
+	if len(exprs) == 0 {
+		return false
+	}
+	switch x := exprs[0].(type) {
+	case *ast.UnaryExpr:
+		if x.Op == token.AND {
+			switch x.X.(type) {
+			case *ast.CompositeLit:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func is_set_finalizer(c *ast.CallExpr) bool {
 	switch x := c.Fun.(type) {
 	case *ast.SelectorExpr:
@@ -121,10 +170,21 @@ func donode(node ast.Node, fset *token.FileSet) bool {
 		if is_append_call(x.Rhs) {
 			appendstmt = append(appendstmt, pos)
 		}
+		if is_make_call(x.Rhs) {
+			allocs = append(allocs, pos)
+		}
+		if is_new_call(x.Rhs) {
+			allocs = append(allocs, pos)
+		}
+		if is_alloc_call(x.Rhs) {
+			// ast.Print(fset, x)
+			// fmt.Printf("pos %s\n", pos)
+			allocs = append(allocs, pos)
+		}
+		
 	case *ast.FuncLit:
 		pos := fset.Position(node.Pos()).String()
 		closures = append(closures, pos)
-		// ast.Print(fset, x)
 	case *ast.InterfaceType:
 		pos := fset.Position(node.Pos()).String()
 		interfaces = append(interfaces, pos)
@@ -260,17 +320,19 @@ func main() {
 	}
 
 	fmt.Printf("Line count %d\n", lcount)
-	
-	printi("Maps", maps)
-	printi("Slices", slices)
-	printi("Channels", channels)
-	printi("Strings", stringuse)
-	print("Multi-value return", multiret)
-	print("Closures", closures)
-	print("Finalizers", finalizers)
-	print("Defer stmts", deferstmt)
-	print("Go stmts", gostmt)
-	print("Interfaces", interfaces)
-	print("Type asserts", typeasserts)
-	printm("Imports", imports)
+
+	// printi("Maps", maps)
+	// printi("Slices", slices)
+	// printi("Channels", channels)
+	// printi("Strings", stringuse)
+	// print("Multi-value return", multiret)
+	// print("Closures", closures)
+	// print("Finalizers", finalizers)
+	// print("Defer stmts", deferstmt)
+	// print("Go stmts", gostmt)
+	// print("Interfaces", interfaces)
+	// print("Type asserts", typeasserts)
+	// printm("Imports", imports)
+	print("Allocs", allocs)
+
 }
