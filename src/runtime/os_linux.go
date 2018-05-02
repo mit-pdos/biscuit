@@ -869,7 +869,10 @@ func checky() {
 func perfgather(tf *[TFSIZE]uintptr) {
 	idx := atomic.Xadd64(&nmiprof.bufidx, 1) - 1
 	if idx < uint64(len(nmiprof.buf)) {
-		nmiprof.buf[idx] = tf[TF_RIP]
+		v := tf[TF_RIP]
+		id := uintptr(NMI_Gscpu().num)
+		v |= id << 56
+		nmiprof.buf[idx] = v
 	}
 	//_consumelbr()
 }

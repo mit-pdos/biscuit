@@ -35,6 +35,9 @@ def openrips(fn):
             isbt = True
         if l == btsents[1]:
             btfailed += 1
+    cpurips = {}
+    for i in range(10):
+        cpurips[i] = []
     rips = []
     bts = []
     newbt = []
@@ -55,13 +58,21 @@ def openrips(fn):
             l = l.split()
             rip = l[0]
             times = int(l[2])
+            cpuid = int(rip, 16) >> 56
+            rip = int(rip, 16) & 0x00ffffffffffffff
+            rip = '%x' % (rip)
+            while len(rip) != 16:
+                rip = '0' + rip
+            crips = cpurips[cpuid]
             for i in range(times):
-                rips.append(rip)
+                #rips.append(rip)
+                crips.append(rip)
     f.close()
     if isbt and btfailed != 0:
         fp = float(btfailed) / len(bts) * 100
         print 'backtrace failed for %d%% (%d / %d)\n' % (fp, btfailed, len(bts))
-    return rips, bts
+    #return rips, bts
+    return cpurips, bts
 
 def isuser(r):
     return r.startswith('00002c8')
@@ -198,7 +209,10 @@ def dumpsec(secname, rips, binfn, nsamp):
         if dumpips:
             disass(fname, ipbn[fname], smap, binfn)
     print '---------'
-    print 'total %6.2f' % (float(tot)/nsamp)
+    if nsamp == 0:
+        print 'total 0%'
+    else:
+        print 'total %6.2f' % (float(tot)/nsamp)
 
 def dump(kbin, ubin, rips, dumpips=False):
     samples = len(rips)
@@ -329,9 +343,16 @@ for o in opts:
 prof = args[0]
 kbin = args[1]
 ubin = args[2]
-rips, bts = openrips(prof)
+#rips, bts = openrips(prof)
+crips, bts = openrips(prof)
 
 if len(bts) > 0:
     callers(kbin, bts, buildg)
 
-dump(kbin, ubin, rips, dumpips)
+for cpuid, rips in crips.items():
+    if len(rips) == 0:
+        continue
+    print
+    print '===== CPUID %d =======' % (cpuid)
+    print
+    dump(kbin, ubin, rips, dumpips)
