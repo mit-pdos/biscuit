@@ -245,6 +245,7 @@ const (
 	// prefer using heapArenaBytes where possible (we need the
 	// constant to compute some other constants).
 	logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit)
+	//logHeapArenaBytes = (6+20)*(_64bit*(1-1)) + (2+20)*(_64bit*1) + (2+20)*(1-_64bit)
 
 	// heapArenaBitmapBytes is the size of each heap arena's bitmap.
 	heapArenaBitmapBytes = heapArenaBytes / (sys.PtrSize * 8 / 2)
@@ -265,6 +266,7 @@ const (
 	// is small, but the address space is still 48 bits, and
 	// there's a high cost to having a large L2.
 	arenaL1Bits = 6 * (_64bit * sys.GoosWindows)
+	//arenaL1Bits = 6 * (_64bit * 1)
 
 	// arenaL2Bits is the number of bits of the arena number
 	// covered by the second level arena index.
