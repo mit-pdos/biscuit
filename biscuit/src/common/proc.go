@@ -1637,11 +1637,13 @@ outter:
 		// XXX expand kernel heap with free pages; page if none
 		// available
 
+		last := 0
 		for {
 			a, b := o.evict()
-			if a + b < 1000 {
+			if a + b == last || a + b < 1000 {
 				break
 			}
+			last = a + b
 		}
 		o.gc()
 		if msg.need < runtime.Memremain() {
