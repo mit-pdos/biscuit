@@ -272,7 +272,7 @@ func TestFSOrphanOne(t *testing.T) {
 		t.Fatalf("inode/blocks not freed: free before %d %d free after %d %d\n",
 			ninode, nblock, ninode1, nblock1)
 	}
-	doCheckOrphans(tfs, t, 1)
+	// doCheckOrphans(tfs, t, 1)
 	ShutdownFS(tfs)
 
 	fmt.Printf("one more check\n")
@@ -317,10 +317,10 @@ func TestFSOrphansMany(t *testing.T) {
 // Simple concurrent test (for race detector)
 //
 
-func TestFSConcur(t *testing.T) {
-	n := 2
+func concurrent(t *testing.T, sync bool) {
+	n := 8
 	dst := "tmp.img"
-	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+	MkDisk(dst, nil, nlogblks, ninodeblks*2, ndatablks*10)
 
 	fmt.Printf("Test FSConcur %v ...\n", dst)
 
@@ -330,7 +330,9 @@ func TestFSConcur(t *testing.T) {
 		go func(id int) {
 			d := uniqdir(id)
 			s := doTestSimple(tfs, d)
+			tfs.Sync()	
 			c <- s
+			fmt.Printf("DONE %d\n", id)
 		}(i)
 	}
 	for i := 0; i < n; i++ {
@@ -348,6 +350,11 @@ func TestFSConcur(t *testing.T) {
 		doCheckSimple(tfs, d, t)
 	}
 	ShutdownFS(tfs)
+}
+
+func TestFSConcur(t *testing.T) {
+	// concurrent(t, false)
+	concurrent(t, true)
 }
 
 //

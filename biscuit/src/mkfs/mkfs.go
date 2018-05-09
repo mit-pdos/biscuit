@@ -87,7 +87,6 @@ func main() {
 		fmt.Printf("not a valid fs: no root inode\n")
 		os.Exit(1)
 	}
-	// fmt.Printf("root inode %v\n", st)
 
 	addfiles(fs, os.Args[4])
 

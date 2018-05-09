@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = false
+const log_debug = true
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -24,24 +24,174 @@ var loglen = 0 // for marshalling/unmarshalling
 
 const LogOffset = 1 // log block 0 is used for head
 
+// an upperbound on the number of blocks written per system call. this is
+// necessary in order to guarantee that the log is long enough for the allowed
+// number of concurrent fs syscalls.
+const MaxBlkPerOp = 10
+const MaxOrdered = 5000
+
+type opid_t int
+
 type buf_t struct {
+	opid    opid_t
 	block   *common.Bdev_block_t
 	ordered bool
 }
 
-type log_t struct {
-	log            []*common.Bdev_block_t       // in-memory log
-	logpresent     map[int]bool                 // enable quick check to see if block is in log
-	absorb         map[int]*common.Bdev_block_t // map from block number to block to absorb in current transaction
+type op_t struct {
+	done           bool
+}
+
+type trans_t struct {
+	logindex       int                          // index where this trans starts in on-disk log
+	head           int                          // index into in-memory log
+	ops            map[opid_t]*op_t             // list of ops in progress this transaction
+	log            []*common.Bdev_block_t       // in-memory log, MaxBlkPerOp per op_t
 	ordered        *common.BlkList_t            // list of ordered blocks
+	logpresent     map[int]bool                 // enable quick check to see if block is in log
 	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
-	memhead        int                          // head of the log in memory
-	diskhead       int                          // head of the log on disk
+	// absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
+}
+
+func mk_op() *op_t {
+	o := &op_t{}
+	return o
+}
+
+func (op *op_t) iscommittable() bool {
+	return op.done == true
+}
+
+func mk_trans(logindex, loglen int) *trans_t {
+	t := &trans_t{logindex: logindex, head: 0}
+	t.ops = make(map[opid_t]*op_t)
+	t.log = make([]*common.Bdev_block_t, loglen)
+	t.ordered = common.MkBlkList() // bounded by MaxOrdered
+	t.logpresent = make(map[int]bool, loglen)
+	t.orderedpresent = make(map[int]bool)
+	// t.absorb = make(map[int]*common.Bdev_block_t, loglen)
+	return t
+}
+
+func (trans *trans_t) add_op(opid opid_t) {
+	trans.ops[opid] = mk_op()
+}
+
+func (trans *trans_t) mark_done(opid opid_t) {
+	delete(trans.ops, opid)
+}
+
+func (trans *trans_t) add_write(log *log_t, buf buf_t) {
+	if log_debug {
+		fmt.Printf("trans.add_write: opid %d head %d len %d %d(%v)\n", buf.opid, trans.head,
+			len(trans.log), buf.block.Block, buf.ordered)
+	}
+	_, presentordered := trans.orderedpresent[buf.block.Block]
+	if !buf.ordered && presentordered {
+		// XXX maybe orderedpresent should keep track of list element
+		trans.ordered.RemoveBlock(buf.block.Block)
+		delete(trans.orderedpresent, buf.block.Block)
+	}
+
+	// if block is in block, then stays in log
+	_, present := trans.logpresent[buf.block.Block]
+	if buf.ordered && present {
+		buf.ordered = false
+	}
+
+	if buf.ordered {
+		log.norderedwrite++
+		trans.ordered.PushBack(buf.block)
+		if trans.ordered.Len() >= MaxBlkPerOp {
+			panic("add_write")
+		}
+		trans.orderedpresent[buf.block.Block] = true
+	} else {
+		log.nlogwrite++
+		trans.log[trans.head] = buf.block
+		trans.head++
+		trans.logpresent[buf.block.Block] = true
+	}
+}
+
+func (trans *trans_t) iscommittable() bool {
+	return len(trans.ops) == 0
+}
+
+func (trans *trans_t) isfull(loglen int, onemore bool) bool {
+	n := trans.logindex + trans.head + len(trans.ops)*MaxBlkPerOp
+	if onemore {
+		n += MaxBlkPerOp
+	}
+	full := n >= loglen
+	if log_debug {
+		fmt.Printf("trans.isfull(%v): %v nops %d head %d index %d len %d\n", onemore,
+			full, len(trans.ops), trans.head, trans.logindex, loglen)
+	}
+	return full
+}
+
+func (trans *trans_t) write_ordered(log *log_t) {
+	// update the ordered blocks in place
+	log.nforceordered++
+	trans.ordered.Apply(func(b *common.Bdev_block_t) {
+		// fmt.Printf("write ordered %d\n", b.Block)
+		log.fs.bcache.Write_async(b)
+		log.fs.bcache.Relse(b, "writeordered")
+	})
+}
+
+func (trans *trans_t) commit(log *log_t) {
+	if log_debug {
+		fmt.Printf("commit: trans logindex %d transhead %d\n", trans.logindex, trans.head)
+	}
+	// read the log header from disk; it may contain commit blocks from
+	// current transactions, if we haven't applied yet.
+	lh, headblk := log.readhead()
+	blks := common.MkBlkList()
+
+	for i := 0; i < trans.head; i++ {
+		// install log destination in the header block
+		lh.w_logdest(trans.logindex+i-LogOffset, trans.log[i].Block)
+		// fill in log block
+		blog, err := log.fs.bcache.Get_nofill(log.logstart+trans.logindex+i, "log", true)
+		if err != 0 {
+			panic("cannot get log block\n")
+		}
+		copy(blog.Data[:], trans.log[i].Data[:])
+		blog.Unlock()
+		blks.PushBack(blog)
+	}
+
+        lh.w_recovernum(trans.logindex+trans.head-LogOffset)
+
+	// write blocks to log in batch
+	log.fs.bcache.Write_async_blks(blks)
+	blks.Apply(func(b *common.Bdev_block_t) {
+		log.fs.bcache.Relse(b, "writelog")
+	})
+
+	trans.write_ordered(log)
+
+	log.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
+
+	log.fs.bcache.Write(headblk) // write log header
+
+	log.flush() // commit log header
+
+	log.nblkcommitted += blks.Len()
+
+	log.fs.bcache.Relse(headblk, "commit done")
+}
+
+
+type log_t struct {
+	transactions   []*trans_t
 	logstart       int
 	loglen         int
 	incoming       chan buf_t
-	admission      chan bool
-	done           chan bool
+	admission      chan opid_t
+	done           chan opid_t
 	force          chan bool
 	commitwait     chan bool
 	stop           chan bool
@@ -68,24 +218,25 @@ type log_t struct {
 // The public interface to the logging layer
 //
 
-func (log *log_t) Op_begin(s string) {
+func (log *log_t) Op_begin(s string) opid_t {
 	if memfs {
-		return
+		return 0
 	}
-	if log_debug {
+	if true {
 		fmt.Printf("op_begin: admit? %v\n", s)
 	}
-	<-log.admission
+	tid := <-log.admission
 	if log_debug {
-		fmt.Printf("op_begin: go %v\n", s)
+		fmt.Printf("op_begin: go %d %v\n", tid, s)
 	}
+	return tid
 }
 
-func (log *log_t) Op_end() {
+func (log *log_t) Op_end(opid opid_t) {
 	if memfs {
 		return
 	}
-	log.done <- true
+	log.done <- opid
 }
 
 // ensure any fs ops in the journal preceding this sync call are flushed to disk
@@ -94,6 +245,9 @@ func (log *log_t) Force() {
 	if memfs {
 		panic("memfs")
 	}
+	if log_debug {
+		fmt.Printf("log force\n")
+	}
 	log.force <- true
 	<-log.commitwait
 }
@@ -101,7 +255,7 @@ func (log *log_t) Force() {
 // Write increments ref so that the log has always a valid ref to the buf's page
 // the logging layer refdowns when it it is done with the page.  the caller of
 // log_write shouldn't hold buf's lock.
-func (log *log_t) Write(b *common.Bdev_block_t) {
+func (log *log_t) Write(opid opid_t, b *common.Bdev_block_t) {
 	if memfs {
 		return
 	}
@@ -109,10 +263,10 @@ func (log *log_t) Write(b *common.Bdev_block_t) {
 		fmt.Printf("log_write %v\n", b.Block)
 	}
 	log.fs.bcache.Refup(b, "log_write")
-	log.incoming <- buf_t{b, false}
+	log.incoming <- buf_t{opid, b, false}
 }
 
-func (log *log_t) Write_ordered(b *common.Bdev_block_t) {
+func (log *log_t) Write_ordered(opid opid_t, b *common.Bdev_block_t) {
 	if memfs {
 		return
 	}
@@ -120,7 +274,7 @@ func (log *log_t) Write_ordered(b *common.Bdev_block_t) {
 		fmt.Printf("log_write_ordered %v\n", b.Block)
 	}
 	log.fs.bcache.Refup(b, "log_write_ordered")
-	log.incoming <- buf_t{b, true}
+	log.incoming <- buf_t{opid, b, true}
 }
 
 // All layers above log read blocks through the log layer, which are mostly
@@ -226,18 +380,13 @@ func (lh *logheader_t) w_logdest(p int, n int) {
 func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	// loglen is global
 	loglen = ll - LogOffset // leave space for head and orphan inodes
-	log.memhead = 0
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
 	log.loglen = loglen
-	log.log = make([]*common.Bdev_block_t, log.loglen)
-	log.logpresent = make(map[int]bool, log.loglen)
-	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
-	log.ordered = common.MkBlkList() // bounded by MaxOrdered
-	log.orderedpresent = make(map[int]bool)
+	log.transactions = make([]*trans_t, 0)
 	log.incoming = make(chan buf_t)
-	log.admission = make(chan bool)
-	log.done = make(chan bool)
+	log.admission = make(chan opid_t)
+	log.done = make(chan opid_t)
 	log.force = make(chan bool)
 	log.commitwait = make(chan bool)
 	log.stop = make(chan bool)
@@ -249,214 +398,192 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	}
 }
 
-// an upperbound on the number of blocks written per system call. this is
-// necessary in order to guarantee that the log is long enough for the allowed
-// number of concurrent fs syscalls.
-const MaxBlkPerOp = 10
-const MaxOrdered = 5000
-
-func (l *log_t) full(nops int) bool {
-	reserved := MaxBlkPerOp * nops
-	logfull := reserved+l.memhead >= l.loglen
-	orderedfull := l.ordered.Len() >= MaxOrdered
-	return logfull || orderedfull
+func (log *log_t) last_trans() *trans_t {
+	if len(log.transactions) <= 0 {
+		panic("no transaction")
+	}
+	return log.transactions[len(log.transactions)-1]
 }
 
-func (log *log_t) maxops() int {
-	return log.loglen / MaxBlkPerOp
+func (log *log_t) add_op(opid opid_t) bool {
+	if len(log.transactions) == 0 {
+		t := mk_trans(LogOffset, log.loglen)
+		log.transactions = append(log.transactions, t)
+	}
+	t := log.last_trans()
+	t.add_op(opid)
+	return log.istoofull()
 }
 
-func (log *log_t) addlog(buf buf_t) {
-
-	// If a write for buf.block is present in the in-memory log (i.e.,
-	// either in memory or in the unapplied disk log), then we put new
-	// ordered writes to that block in the log too. Otherwise, we run the
-	// risk that apply will overwrite the value of a more recent ordered
-	// write.
-	_, present := log.logpresent[buf.block.Block]
-	if buf.ordered && !present {
-		log.norderedwrite++
-	} else {
-		log.nlogwrite++
-		if buf.ordered {
-			log.norder2logwrite++
-		}
-	}
-
-	_, presentordered := log.orderedpresent[buf.block.Block]
-	if !buf.ordered && presentordered {
-		// XXX maybe orderedpresent should keep track of list element
-		log.ordered.RemoveBlock(buf.block.Block)
-		delete(log.orderedpresent, buf.block.Block)
-		delete(log.absorb, buf.block.Block)
-	}
-
-	// log absorption.
-	if _, ok := log.absorb[buf.block.Block]; ok {
-		// Buffer is already in log or in ordered, but not on disk
-		// yet. We wrote it (since there is only one common.Bdev_block_t for
-		// each blockno), so it has already been absorbed.
-		//
-		// If the write of this block is in a later file
-		// system op, we know this later op will commit with the one
-		// that modified this block earlier, because the op was
-		// admitted.
-		log.nabsorption++
-		log.fs.bcache.Relse(buf.block, "absorption")
-		return
-	}
-	log.absorb[buf.block.Block] = buf.block
-
-	// No need to copy data of buf because later ops who reads the modified
-	// block will commmit with this transaction (or crash, but then nop will
-	// commit).  We never commit while an operation is still on-going.
-	if buf.ordered && !present { // kill !present and don't absorb above, then Ordered test fails)
-		log.ordered.PushBack(buf.block)
-		log.orderedpresent[buf.block.Block] = true
-	} else {
-		memhead := log.memhead
-		if memhead >= len(log.log) {
-			panic("log overflow")
-		}
-		log.log[memhead] = buf.block
-		log.memhead++
-		log.logpresent[buf.block.Block] = true
-	}
+func (log *log_t) add_write(buf buf_t) {
+	t := log.last_trans()
+	t.add_write(log, buf)
 }
+
+func (log *log_t) mark_done(opid opid_t) {
+	t := log.last_trans()
+	t.mark_done(opid)
+}
+
+func (log *log_t) iscommittable() bool {
+	if len(log.transactions) == 0 {
+		return true
+	}
+	t := log.last_trans()
+	return t.iscommittable()
+}
+
+func (log *log_t) isorderedfull(onemore bool) bool {
+	n := 0
+	for _, t := range log.transactions {
+		n += t.ordered.Len()
+	}
+	if onemore {
+		n += MaxBlkPerOp
+	}
+	return n >= MaxOrdered
+}
+
+func (log *log_t) isfull() bool {
+	t := log.last_trans()
+	return t.isfull(log.loglen, false) || log.isorderedfull(false)
+}
+
+func (log *log_t) istoofull() bool {
+	t := log.last_trans()
+	return t.isfull(log.loglen, true) || log.isorderedfull(true)
+}
+
+func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
+	headblk, err := log.fs.bcache.Get_fill(log.logstart, "commit", false)
+	if err != 0 {
+		panic("cannot read commit block\n")
+	}
+	return &logheader_t{headblk.Data}, headblk
+}
+
+
+// func (log *log_t) addlog(buf buf_t) {
+
+// 	// If a write for buf.block is present in the in-memory log (i.e.,
+// 	// either in memory or in the unapplied disk log), then we put new
+// 	// ordered writes to that block in the log too. Otherwise, we run the
+// 	// risk that apply will overwrite the value of a more recent ordered
+// 	// write.
+// 	_, present := log.logpresent[buf.block.Block]
+// 	if buf.ordered && !present {
+// 		log.norderedwrite++
+// 	} else {
+// 		log.nlogwrite++
+// 		if buf.ordered {
+// 			log.norder2logwrite++
+// 		}
+// 	}
+
+// 	_, presentordered := log.orderedpresent[buf.block.Block]
+// 	if !buf.ordered && presentordered {
+// 		// XXX maybe orderedpresent should keep track of list element
+// 		log.ordered.RemoveBlock(buf.block.Block)
+// 		delete(log.orderedpresent, buf.block.Block)
+// 		delete(log.absorb, buf.block.Block)
+// 	}
+
+// 	// log absorption.
+// 	if _, ok := log.absorb[buf.block.Block]; ok {
+// 		// Buffer is already in log or in ordered, but not on disk
+// 		// yet. We wrote it (since there is only one common.Bdev_block_t for
+// 		// each blockno), so it has already been absorbed.
+// 		//
+// 		// If the write of this block is in a later file
+// 		// system op, we know this later op will commit with the one
+// 		// that modified this block earlier, because the op was
+// 		// admitted.
+// 		log.nabsorption++
+// 		log.fs.bcache.Relse(buf.block, "absorption")
+// 		return
+// 	}
+// 	log.absorb[buf.block.Block] = buf.block
+
+// 	// No need to copy data of buf because later ops who reads the modified
+// 	// block will commmit with this transaction (or crash, but then nop will
+// 	// commit).  We never commit while an operation is still on-going.
+// 	if buf.ordered && !present { // kill !present and don't absorb above, then Ordered test fails)
+// 		log.ordered.PushBack(buf.block)
+// 		log.orderedpresent[buf.block.Block] = true
+// 	} else {
+// 		memhead := log.memhead
+// 		if memhead >= len(log.log) {
+// 			panic("log overflow")
+// 		}
+// 		log.log[memhead] = buf.block
+// 		log.memhead++
+// 		log.logpresent[buf.block.Block] = true
+// 	}
+// }
 
 // headblk is in cache
-func (log *log_t) apply(headblk *common.Bdev_block_t) {
+func (log *log_t) apply() {
+	log.napply++
+
 	done := make(map[int]bool, log.loglen)
 
 	if log_debug {
-		fmt.Printf("apply log: %v %v %v\n", log.memhead, log.diskhead, log.loglen)
+		fmt.Printf("apply log: #trans %v\n", len(log.transactions))
 	}
 
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
-	for i := log.memhead - 1; i >= 0; i-- { // don't install header and orphan inodes
-		l := log.log[i]
-		log.nblkapply++
-		if _, ok := done[l.Block]; !ok {
-			log.fs.bcache.Write_async(l)
-			log.fs.bcache.Relse(l, "apply")
-			done[l.Block] = true
-		} else {
-			log.nabsorbapply++
+	for t := len(log.transactions)-1; t >= 0; t-- {
+		trans := log.transactions[t]
+		for i := trans.head - 1; i >= 0; i-- {
+			l := trans.log[i]
+			log.nblkapply++
+			if _, ok := done[l.Block]; !ok {
+				log.fs.bcache.Write_async(l)
+				log.fs.bcache.Relse(l, "apply")
+				done[l.Block] = true
+			} else {
+				log.nabsorbapply++
+			}
 		}
 	}
-
 	log.flush() // flush apply
 
 	// success; clear flag indicating to recover from log
-	lh := logheader_t{headblk.Data}
+	lh, headblk := log.readhead()
 	lh.w_recovernum(0)
 	log.fs.bcache.Write(headblk)
 
 	log.flush() // flush cleared commit
 
-	log.logpresent = make(map[int]bool, log.loglen)
-}
-
-func (log *log_t) write_ordered() {
-	// update the ordered blocks in place
-	log.nforceordered++
-	log.ordered.Apply(func(b *common.Bdev_block_t) {
-		// fmt.Printf("write ordered %d\n", b.Block)
-		log.fs.bcache.Write_async(b)
-		log.fs.bcache.Relse(b, "writeordered")
-	})
-	log.ordered.Delete()
-	log.orderedpresent = make(map[int]bool)
+	log.fs.bcache.Relse(headblk, "commit done")
+	
+	log.transactions = make([]*trans_t, 0)
 }
 
 func (log *log_t) commit() {
 	if memfs {
 		panic("no commit")
 	}
-	if log.memhead == log.diskhead {
-		// nothing to commit, but maybe some file blocks to sync
+	
+	if len(log.transactions) == 0 {
 		if log_debug {
-			fmt.Printf("commit: flush ordered blks %d\n", log.ordered.Len())
+			fmt.Printf("commit: no transactions\n")
 		}
-		log.write_ordered()
-		log.flush()
 		return
 	}
-
-	if log_debug {
-		fmt.Printf("commit %v %v\n", log.memhead, log.diskhead)
-	}
-
+	
+	t := log.last_trans()
 	log.ncommit++
-	newblks := log.memhead - log.diskhead
-	if newblks > log.maxblks_per_op {
-		log.maxblks_per_op = newblks
-	}
-
-	// read the log header from disk; it may contain commit blocks from
-	// current transactions, if we haven't applied yet.
-	headblk, err := log.fs.bcache.Get_fill(log.logstart, "commit", false)
-	if err != 0 {
-		panic("cannot read commit block\n")
-	}
-	lh := logheader_t{headblk.Data}
-
-	blks := common.MkBlkList()
-	for i := log.diskhead; i < log.memhead; i++ {
-		l := log.log[i]
-		// install log destination in the header block
-		lh.w_logdest(i, l.Block)
-
-		// fill in log block
-		b, err := log.fs.bcache.Get_nofill(log.logstart+i+LogOffset, "log", true)
-		if err != 0 {
-			panic("cannot get log block\n")
-		}
-		copy(b.Data[:], l.Data[:])
-		b.Unlock()
-		blks.PushBack(b)
-	}
-
-	lh.w_recovernum(log.memhead)
-
-	// write blocks to log in batch
-	log.fs.bcache.Write_async_blks(blks)
-	blks.Apply(func(b *common.Bdev_block_t) {
-		log.fs.bcache.Relse(b, "writelog")
-	})
-
-	log.write_ordered()
-
-	log.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
-
-	log.fs.bcache.Write(headblk) // write log header
-
-	log.flush() // commit log header
-
-	log.nblkcommitted += newblks
-
-	if newblks != blks.Len() {
-		panic("xxx")
-	}
-
+	t.commit(log)
+	
 	// apply log only when there is no room for another op. this avoids
 	// applies when there room in the log (e.g., a sync forced the log)
-	if log.full(1) {
-		log.napply++
-		log.apply(headblk)
-		log.memhead = 0
-		log.diskhead = 0
+	if log.istoofull() {
+		log.apply()
 	}
-	// data till log.memhead has been written to log
-	log.diskhead = log.memhead
 
-	// reset absorption map and ordered list
-	log.absorb = make(map[int]*common.Bdev_block_t, log.loglen)
-
-	// done with log header
-	log.fs.bcache.Relse(headblk, "commit done")
 }
 
 func (log *log_t) flush() {
@@ -508,56 +635,49 @@ func (log *log_t) recover() common.Err_t {
 }
 
 func log_daemon(l *log_t) {
+	nextop := opid_t(0)
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
 
-		adm := l.admission
 		done := false
-		nops := 0
 		waiters := 0
-
+		adm := l.admission
 		for !done {
 			select {
 			case nb := <-l.incoming:
-				if nops <= 0 {
-					panic("no admit")
-				}
-				if l.memhead >= l.loglen {
-					fmt.Printf("memhead %v loglen %v\n", l.memhead, l.loglen)
-					panic("full")
-				}
-				l.addlog(nb)
-			case <-l.done:
-				nops--
-				//fmt.Printf("done: nops %v adm %v full? %v %v\n", nops, adm, l.full(nops+1),
-				// l.memhead)
+				l.add_write(nb)
+			case opid := <-l.done:
+				l.mark_done(opid)
 				if adm == nil { // is an op waiting for admission?
-					// fmt.Printf("don't admit %d %v\n", nops, l.full(nops+1))
-					if waiters > 0 || l.full(nops+1) {
-						// No more log space or forced to commit
-						if nops == 0 {
+					if waiters > 0 || l.istoofull() {
+						// No more log space for another op or forced to commit
+						if l.iscommittable() {
 							done = true
 						}
 					} else {
+						if log_debug {
+							fmt.Printf("log_daemon: can admit op %d\n", nextop)
+						}
 						// admit another op. this may op
 						// did not use all the space
 						// that it reserved.
 						adm = l.admission
 					}
 				}
-			case adm <- true:
-				nops++
-				//fmt.Printf("adm: next wait? %v %v %v %v\n", nops, l.full(nops+1),
-				//	l.loglen, l.memhead)
-				if l.full(nops + 1) { // next one wait?
-					// fmt.Printf("don't admit %d\n", nops)
+			case adm <- nextop:
+				if log_debug {
+					fmt.Printf("log_daemon: admit %d\n", nextop)
+				}
+				full := l.add_op(nextop)
+				nextop++
+				if full {
 					adm = nil
 				}
 			case <-l.force:
 				waiters++
 				adm = nil
-				if nops == 0 {
+				if l.iscommittable() {
 					done = true
 				}
 			case <-l.stop:
@@ -565,6 +685,8 @@ func log_daemon(l *log_t) {
 				return
 			}
 		}
+
+		fmt.Printf("commit\n")
 
 		l.commit()
 
@@ -576,6 +698,8 @@ func log_daemon(l *log_t) {
 				l.commitwait <- true
 			}
 		}
+
+		fmt.Printf("commit done\n")
 	}
 }
 

@@ -122,9 +122,9 @@ func (fs *Fs_t) Fs_size() (uint, uint) {
 	return fs.ialloc.alloc.nfreebits, fs.balloc.alloc.nfreebits
 }
 
-func (fs *Fs_t) op_end_and_free() {
-	fs.fslog.Op_end()
-	fs.icache.freeDead()
+func (fs *Fs_t) op_end_and_free(opid opid_t) {
+	fs.fslog.Op_end(opid)
+	fs.icache.freeDead(opid)
 }
 
 func (fs *Fs_t) Unpin(pa common.Pa_t) {
@@ -132,8 +132,8 @@ func (fs *Fs_t) Unpin(pa common.Pa_t) {
 }
 
 func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t {
-	fs.fslog.Op_begin("Fs_link")
-	defer fs.op_end_and_free()
+	opid := fs.fslog.Op_begin("Fs_link")
+	defer fs.op_end_and_free(opid)
 
 	if fs_debug {
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)
@@ -141,7 +141,7 @@ func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t 
 
 	fs.istats.Nilink.inc()
 
-	orig, err := fs.fs_namei_locked(old, cwd, "Fs_link_org")
+	orig, err := fs.fs_namei_locked(opid, old, cwd, "Fs_link_org")
 	if err != 0 {
 		return err
 	}
@@ -150,15 +150,15 @@ func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t 
 		return -common.EINVAL
 	}
 	inum := orig.inum
-	orig._linkup()
+	orig._linkup(opid)
 	orig.iunlock_refdown("fs_link_orig")
 
 	dirs, fn := sdirname(new)
-	newd, err := fs.fs_namei_locked(dirs, cwd, "fs_link_newd")
+	newd, err := fs.fs_namei_locked(opid, dirs, cwd, "fs_link_newd")
 	if err != 0 {
 		goto undo
 	}
-	err = newd.do_insert(fn, inum)
+	err = newd.do_insert(opid, fn, inum)
 	newd.iunlock_refdown("fs_link_newd")
 	if err != 0 {
 		goto undo
@@ -169,14 +169,14 @@ undo:
 	if err1 != 0 {
 		panic("bizare")
 	}
-	orig._linkdown()
+	orig._linkdown(opid)
 	orig.iunlock_refdown("fs_link_undo")
 	return err
 }
 
 func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.Err_t {
-	fs.fslog.Op_begin("fs_unlink")
-	defer fs.op_end_and_free()
+	opid := fs.fslog.Op_begin("fs_unlink")
+	defer fs.op_end_and_free(opid)
 
 	dirs, fn := sdirname(paths)
 	if fn == "." || fn == ".." {
@@ -194,11 +194,11 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.
 	var err common.Err_t
 	var childi common.Inum_t
 
-	par, err = fs.fs_namei_locked(dirs, cwd, "fs_unlink_par")
+	par, err = fs.fs_namei_locked(opid, dirs, cwd, "fs_unlink_par")
 	if err != 0 {
 		return err
 	}
-	childi, err = par.ilookup(fn)
+	childi, err = par.ilookup(opid, fn)
 	if err != 0 {
 		par.iunlock_refdown("fs_unlink_par")
 		return err
@@ -219,7 +219,7 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.
 	// recheck if child still exists (same name, same inum), since some
 	// other thread may have modifed par but par and child won't disappear
 	// because we have references to them.
-	inum, err := par.ilookup(fn)
+	inum, err := par.ilookup(opid, fn)
 	if err != 0 {
 		return err
 	}
@@ -228,17 +228,17 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.
 		return -common.ENOENT
 	}
 
-	err = child.do_dirchk(wantdir)
+	err = child.do_dirchk(opid, wantdir)
 	if err != 0 {
 		return err
 	}
 
 	// finally, remove directory entry
-	err = par.do_unlink(fn)
+	err = par.do_unlink(opid, fn)
 	if err != 0 {
 		return err
 	}
-	child._linkdown()
+	child._linkdown(opid)
 
 	return 0
 }
@@ -257,8 +257,8 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 		return err
 	}
 
-	fs.fslog.Op_begin("fs_rename")
-	defer fs.op_end_and_free()
+	opid := fs.fslog.Op_begin("fs_rename")
+	defer fs.op_end_and_free(opid)
 
 	fs.istats.Nrename.inc()
 
@@ -273,12 +273,12 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	// lookup all inode references, but we will release locks and lock them
 	// together when we know all references.  the references to the inodes
 	// cannot disppear, however.
-	opar, err := fs.fs_namei_locked(odirs, cwd, "fs_rename_opar")
+	opar, err := fs.fs_namei_locked(opid, odirs, cwd, "fs_rename_opar")
 	if err != 0 {
 		return err
 	}
 
-	childi, err := opar.ilookup(ofn)
+	childi, err := opar.ilookup(opid, ofn)
 	if err != 0 {
 		opar.iunlock_refdown("fs_rename_opar")
 		return err
@@ -291,7 +291,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
 
-	npar, err := fs.fs_namei(ndirs, cwd)
+	npar, err := fs.fs_namei(opid, ndirs, cwd)
 	if err != 0 {
 		fs.icache.Refdown(opar, "fs_rename_opar")
 		fs.icache.Refdown(ochild, "fs_rename_ochild")
@@ -304,7 +304,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	// removing a directory because the directories aren't empty.  it could
 	// delete npar and an ancestor, but rename has already a reference to to
 	// npar.
-	if err = fs._isancestor(ochild, npar); err != 0 {
+	if err = fs._isancestor(opid, ochild, npar); err != 0 {
 		fs.icache.Refdown(opar, "fs_rename_opar")
 		fs.icache.Refdown(ochild, "fs_rename_ochild")
 		fs.icache.Refdown(npar, "fs_rename_npar")
@@ -323,7 +323,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 			return -common.ENOHEAP
 		}
 		npar.ilock("")
-		nchildinum, err := npar.ilookup(nfn)
+		nchildinum, err := npar.ilookup(opid, nfn)
 		if err != 0 && err != -common.ENOENT {
 			fs.icache.Refdown(opar, "fs_name_opar")
 			fs.icache.Refdown(ochild, "fs_name_ochild")
@@ -361,7 +361,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 
 		// check if the tree is still the same. an unlink or link may
 		// have modified the tree.
-		childi, err := opar.ilookup(ofn)
+		childi, err := opar.ilookup(opid, ofn)
 		if err != 0 {
 			return err
 		}
@@ -370,7 +370,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 			return -common.ENOENT
 		}
 
-		childi, err = npar.ilookup(nfn)
+		childi, err = npar.ilookup(opid, nfn)
 		// it existed before and still exists
 		if newexists && err == 0 && childi == nchild.inum {
 			break
@@ -408,13 +408,13 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 
 	// guarantee that any page allocations will succeed before starting the
 	// operation, which will be messy to piece-wise undo.
-	b1, err := npar.probe_insert()
+	b1, err := npar.probe_insert(opid)
 	if err != 0 {
 		return err
 	}
 	defer fs.fslog.Relse(b1, "probe_insert")
 
-	b2, err := opar.probe_unlink(ofn)
+	b2, err := opar.probe_unlink(opid, ofn)
 	if err != 0 {
 		return err
 	}
@@ -422,7 +422,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 
 	odir := ochild.itype == I_DIR
 	if odir {
-		b3, err := ochild.probe_unlink("..")
+		b3, err := ochild.probe_unlink(opid, "..")
 		if err != 0 {
 			return err
 		}
@@ -432,31 +432,31 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	if newexists {
 		// make sure old and new are either both files or both
 		// directories
-		if err := nchild.do_dirchk(odir); err != 0 {
+		if err := nchild.do_dirchk(opid, odir); err != 0 {
 			return err
 		}
 
 		// remove pre-existing new
-		if err = npar.do_unlink(nfn); err != 0 {
+		if err = npar.do_unlink(opid, nfn); err != 0 {
 			return err
 		}
-		nchild._linkdown()
+		nchild._linkdown(opid)
 	}
 
 	// finally, do the move
-	if opar.do_unlink(ofn) != 0 {
+	if opar.do_unlink(opid, ofn) != 0 {
 		panic("probed")
 	}
-	if npar.do_insert(nfn, ochild.inum) != 0 {
+	if npar.do_insert(opid, nfn, ochild.inum) != 0 {
 		panic("probed")
 	}
 
 	// update '..'
 	if odir {
-		if ochild.do_unlink("..") != 0 {
+		if ochild.do_unlink(opid, "..") != 0 {
 			panic("probed")
 		}
-		if ochild.do_insert("..", npar.inum) != 0 {
+		if ochild.do_insert(opid, "..", npar.inum) != 0 {
 			panic("insert after unlink must succeed")
 		}
 	}
@@ -464,7 +464,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 }
 
 // anc and start are in memory
-func (fs *Fs_t) _isancestor(anc, start *imemnode_t) common.Err_t {
+func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 	if anc.inum == iroot {
 		panic("root is always ancestor")
 	}
@@ -483,7 +483,7 @@ func (fs *Fs_t) _isancestor(anc, start *imemnode_t) common.Err_t {
 			return -common.EINVAL
 		}
 		here.ilock("_isancestor")
-		nexti, err := here.ilookup("..")
+		nexti, err := here.ilookup(opid, "..")
 		if err != 0 {
 			here.iunlock("_isancestor")
 			return err
@@ -601,7 +601,10 @@ func (fo *fsfops_t) Fullpath() (string, common.Err_t) {
 		return "", -common.EBADF
 	}
 
-	fp, err := fo.fs._fullpath(fo.priv)
+	opid := fo.fs.fslog.Op_begin("Fullpath")
+	defer fo.fs.fslog.Op_end(opid)
+
+	fp, err := fo.fs._fullpath(opid, fo.priv)
 	return fp, err
 }
 
@@ -613,8 +616,8 @@ func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
 		return -common.EBADF
 	}
 
-	fo.fs.fslog.Op_begin("truncate")
-	defer fo.fs.fslog.Op_end()
+	opid := fo.fs.fslog.Op_begin("truncate")
+	defer fo.fs.fslog.Op_end(opid)
 
 	if fs_debug {
 		fmt.Printf("truncate: %v %v\n", fo.priv, newlen)
@@ -624,7 +627,7 @@ func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	err = idm.do_trunc(newlen)
+	err = idm.do_trunc(opid, newlen)
 	idm.iunlock_refdown("truncate")
 	return err
 }
@@ -1205,8 +1208,8 @@ func (raw *rawdfops_t) Shutdown(read, write bool) common.Err_t {
 }
 
 func (fs *Fs_t) Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t {
-	fs.fslog.Op_begin("fs_mkdir")
-	defer fs.fslog.Op_end()
+	opid := fs.fslog.Op_begin("fs_mkdir")
+	defer fs.fslog.Op_end(opid)
 
 	fs.istats.Nmkdir.inc()
 
@@ -1222,26 +1225,26 @@ func (fs *Fs_t) Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t
 		return -common.ENAMETOOLONG
 	}
 
-	par, err := fs.fs_namei_locked(dirs, cwd, "mkdir")
+	par, err := fs.fs_namei_locked(opid, dirs, cwd, "mkdir")
 	if err != 0 {
 		return err
 	}
 	defer par.iunlock_refdown("fs_mkdir_par")
 
 	var childi common.Inum_t
-	childi, err = par.do_createdir(fn)
+	childi, err = par.do_createdir(opid, fn)
 	if err != 0 {
 		return err
 	}
 
 	child, err := fs.icache.Iref(childi, "fs_mkdir_child")
 	if err != 0 {
-		par.create_undo(childi, fn)
+		par.create_undo(opid, childi, fn)
 		return err
 	}
 
-	child.do_insert(".", childi)
-	child.do_insert("..", par.inum)
+	child.do_insert(opid, ".", childi)
+	child.do_insert(opid, "..", par.inum)
 	fs.icache.Refdown(child, "fs_mkdir3")
 	return 0
 }
@@ -1263,9 +1266,10 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 	}
 
 	// open with O_TRUNC is not read-only
+	var opid opid_t
 	if trunc || creat {
-		fs.fslog.Op_begin("fs_open")
-		defer fs.fslog.Op_end()
+		opid = fs.fslog.Op_begin("fs_open")
+		defer fs.fslog.Op_end(opid)
 	}
 	var ret Fsfile_t
 	var idm *imemnode_t
@@ -1286,15 +1290,15 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 
 		// with O_CREAT, the file may exist. use itrylock and
 		// unlock/retry to avoid deadlock.
-		par, err := fs.fs_namei_locked(dirs, cwd, "Fs_open_inner")
+		par, err := fs.fs_namei_locked(opid, dirs, cwd, "Fs_open_inner")
 		if err != 0 {
 			return ret, err
 		}
 		var childi common.Inum_t
 		if isdev {
-			childi, err = par.do_createnod(fn, major, minor)
+			childi, err = par.do_createnod(opid, fn, major, minor)
 		} else {
-			childi, err = par.do_createfile(fn)
+			childi, err = par.do_createfile(opid, fn)
 		}
 		if err != 0 && err != -common.EEXIST {
 			par.iunlock_refdown("Fs_open_inner_par")
@@ -1306,7 +1310,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 		}
 		idm, err = fs.icache.Iref(childi, "Fs_open_inner_child")
 		if err != 0 {
-			par.create_undo(childi, fn)
+			par.create_undo(opid, childi, fn)
 			par.iunlock_refdown("Fs_open_inner_par")
 			return ret, err
 		}
@@ -1323,7 +1327,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 	} else {
 		// open existing file
 		var err common.Err_t
-		idm, err = fs.fs_namei_locked(paths, cwd, "Fs_open_inner_existing")
+		idm, err = fs.fs_namei_locked(opid, paths, cwd, "Fs_open_inner_existing")
 		if err != 0 {
 			return ret, err
 		}
@@ -1351,7 +1355,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 	}
 
 	if nodir && trunc {
-		idm.do_trunc(0)
+		idm.do_trunc(opid, 0)
 	}
 
 	fs.icache.Refup(idm, "Fs_open_inner")
@@ -1424,7 +1428,7 @@ func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common
 }
 
 func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
-	fs.fslog.Op_begin("Fs_close")
+	opid := fs.fslog.Op_begin("Fs_close")
 	//defer fs.op_end_and_free()
 
 	fs.istats.Nclose.inc()
@@ -1435,25 +1439,29 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 
 	idm, err := fs.icache.Iref_locked(priv, "Fs_close")
 	if err != 0 {
-		fs.op_end_and_free()
+		fs.op_end_and_free(opid)
 		return err
 	}
 	fs.icache.Refdown(idm, "Fs_close")
 	idm.iunlock_refdown("Fs_close")
-	fs.op_end_and_free()
+	fs.op_end_and_free(opid)
 	return 0
 }
 
 func (fs *Fs_t) Fs_stat(path string, st *common.Stat_t, cwd common.Inum_t) common.Err_t {
+	opid := fs.fslog.Op_begin("Fs_stat")
+	
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", path, cwd)
 	}
-	idm, err := fs.fs_namei_locked(path, cwd, "Fs_stat")
+	idm, err := fs.fs_namei_locked(opid, path, cwd, "Fs_stat")
 	if err != 0 {
+		fs.op_end_and_free(opid)
 		return err
 	}
 	err = idm.do_stat(st)
 	idm.iunlock_refdown("Fs_stat")
+	fs.op_end_and_free(opid)
 	return err
 }
 
@@ -1468,7 +1476,7 @@ func (fs *Fs_t) Fs_sync() common.Err_t {
 
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
-func (fs *Fs_t) fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
 	var err common.Err_t
 	fs.istats.Nnamei.inc()
@@ -1488,7 +1496,7 @@ func (fs *Fs_t) fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.E
 	pp.pp_init(paths)
 	for cp, ok := pp.next(); ok; cp, ok = pp.next() {
 		idm.ilock("fs_namei")
-		n, err := idm.ilookup(cp)
+		n, err := idm.ilookup(opid, cp)
 		if !common.Resadd_noblock(common.Bounds(common.B_FS_T_FS_NAMEI)) {
 			err = -common.ENOHEAP
 		}
@@ -1510,8 +1518,8 @@ func (fs *Fs_t) fs_namei(paths string, cwd common.Inum_t) (*imemnode_t, common.E
 	return idm, 0
 }
 
-func (fs *Fs_t) fs_namei_locked(paths string, cwd common.Inum_t, s string) (*imemnode_t, common.Err_t) {
-	idm, err := fs.fs_namei(paths, cwd)
+func (fs *Fs_t) fs_namei_locked(opid opid_t, paths string, cwd common.Inum_t, s string) (*imemnode_t, common.Err_t) {
+	idm, err := fs.fs_namei(opid, paths, cwd)
 	if err != 0 {
 		return nil, err
 	}
