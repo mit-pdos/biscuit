@@ -314,7 +314,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 		panic("write to dir")
 	}
 	offset := _offset
-	if append {
+	if append { // XXX maybe move to inside lock below?
 		offset = idm.size
 	}
 
@@ -340,7 +340,9 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 			n = max
 		}
 		opid := idm.fs.fslog.Op_begin("dowrite")
+		idm.ilock("dowrite")
 		wrote, err := idm.iwrite(opid, src, offset+i, n)
+		idm.iunlock("dowrite")
 		idm._iupdate(opid)
 		idm.fs.fslog.Op_end(opid)
 
