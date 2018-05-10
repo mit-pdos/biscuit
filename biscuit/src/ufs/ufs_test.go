@@ -332,7 +332,6 @@ func concurrent(t *testing.T, sync bool) {
 			s := doTestSimple(tfs, d)
 			tfs.Sync()	
 			c <- s
-			fmt.Printf("DONE %d\n", id)
 		}(i)
 	}
 	for i := 0; i < n; i++ {

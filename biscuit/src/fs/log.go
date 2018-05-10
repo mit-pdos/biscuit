@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = true
+const log_debug = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -83,8 +83,8 @@ func (trans *trans_t) mark_done(opid opid_t) {
 
 func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	if log_debug {
-		fmt.Printf("trans.add_write: opid %d head %d len %d %d(%v)\n", buf.opid, trans.head,
-			len(trans.log), buf.block.Block, buf.ordered)
+		fmt.Printf("trans.add_write: opid %d index %d head %d len %d %d(%v)\n", buf.opid,
+			trans.logindex, trans.head, len(trans.log), buf.block.Block, buf.ordered)
 	}
 	_, presentordered := trans.orderedpresent[buf.block.Block]
 	if !buf.ordered && presentordered {
@@ -181,6 +181,10 @@ func (trans *trans_t) commit(log *log_t) {
 
 	log.nblkcommitted += blks.Len()
 
+	if log_debug {
+		fmt.Printf("commit: committed %d blks\n", blks.Len())
+	}
+
 	log.fs.bcache.Relse(headblk, "commit done")
 }
 
@@ -196,6 +200,10 @@ type log_t struct {
 	commitwait     chan bool
 	stop           chan bool
 	stopwait       chan bool
+
+	committingc    chan bool
+	committing     bool
+	cwaiting       bool
 
 	disk common.Disk_i
 	fs   *Fs_t
@@ -222,7 +230,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 	if memfs {
 		return 0
 	}
-	if true {
+	if log_debug {
 		fmt.Printf("op_begin: admit? %v\n", s)
 	}
 	tid := <-log.admission
@@ -389,6 +397,7 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	log.done = make(chan opid_t)
 	log.force = make(chan bool)
 	log.commitwait = make(chan bool)
+	log.committingc = make(chan bool)
 	log.stop = make(chan bool)
 	log.stopwait = make(chan bool)
 	log.disk = disk
@@ -406,10 +415,10 @@ func (log *log_t) last_trans() *trans_t {
 }
 
 func (log *log_t) add_op(opid opid_t) bool {
-	if len(log.transactions) == 0 {
-		t := mk_trans(LogOffset, log.loglen)
-		log.transactions = append(log.transactions, t)
-	}
+	// if len(log.transactions) == 0 {
+	// 	t := mk_trans(LogOffset, log.loglen)
+	// 	log.transactions = append(log.transactions, t)
+	// }
 	t := log.last_trans()
 	t.add_op(opid)
 	return log.istoofull()
@@ -586,6 +595,17 @@ func (log *log_t) commit() {
 
 }
 
+func (log *log_t) unblock_waiters(n int) {
+	if n > 0 {
+		if log_debug {
+			fmt.Printf("wakeup waiters/syncers %v\n", n)
+		}
+		for i := 0; i < n; i++ {
+			log.commitwait <- true
+		}
+	}
+}
+
 func (log *log_t) flush() {
 	ider := common.MkRequest(nil, common.BDEV_FLUSH, true)
 	if log.disk.Start(ider) {
@@ -640,16 +660,27 @@ func log_daemon(l *log_t) {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
 
+		// start a new transactions, start in the log where
+		// the last one left off
+		start := LogOffset
+		if len(l.transactions) > 0 {
+			t := l.last_trans()
+			start = t.logindex + t.head
+		}
+		t := mk_trans(start, l.loglen)
+		l.transactions = append(l.transactions, t)
+
 		done := false
 		waiters := 0
 		adm := l.admission
+		force := l.force
 		for !done {
 			select {
 			case nb := <-l.incoming:
 				l.add_write(nb)
 			case opid := <-l.done:
 				l.mark_done(opid)
-				if adm == nil { // is an op waiting for admission?
+				if adm == nil { // admit ops again?
 					if waiters > 0 || l.istoofull() {
 						// No more log space for another op or forced to commit
 						if l.iscommittable() {
@@ -674,9 +705,10 @@ func log_daemon(l *log_t) {
 				if full {
 					adm = nil
 				}
-			case <-l.force:
+			case <- force:
 				waiters++
 				adm = nil
+				force = nil
 				if l.iscommittable() {
 					done = true
 				}
@@ -686,20 +718,31 @@ func log_daemon(l *log_t) {
 			}
 		}
 
-		fmt.Printf("commit\n")
+		if l.committing {
+			l.cwaiting = true
+			<- l.committingc
+			l.cwaiting = false
+		}
+		l.committing = true
+		
 
-		l.commit()
-
-		if waiters > 0 {
-			if log_debug {
-				fmt.Printf("wakeup waiters/syncers %v\n", waiters)
-			}
-			for i := 0; i < waiters; i++ {
-				l.commitwait <- true
-			}
+		if waiters > 0 &&  len(l.transactions) > 0 && !l.istoofull() {   // forced commit?
+			t := l.last_trans()
+			go func(t *trans_t) {
+				t.commit(l)
+				l.unblock_waiters(waiters)
+				l.committing = false
+				if l.cwaiting {
+					l.committingc <- true
+				}
+			}(t)
+		} else {
+			l.commit()
+			l.unblock_waiters(waiters)
+			l.committing = false
 		}
 
-		fmt.Printf("commit done\n")
+
 	}
 }
 
