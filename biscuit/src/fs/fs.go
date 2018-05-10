@@ -124,7 +124,7 @@ func (fs *Fs_t) Fs_size() (uint, uint) {
 
 func (fs *Fs_t) op_end_and_free(opid opid_t) {
 	fs.fslog.Op_end(opid)
-	fs.icache.freeDead(opid)
+	fs.icache.freeDead()
 }
 
 func (fs *Fs_t) Unpin(pa common.Pa_t) {

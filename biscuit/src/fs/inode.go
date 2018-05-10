@@ -212,11 +212,11 @@ func (idm *imemnode_t) Evict() {
 	}
 }
 
-func (idm *imemnode_t) Free(opid opid_t) {
+func (idm *imemnode_t) Free() {
 	// no need to lock...
 	idm.Evict()
 	if idm.links == 0 {
-		idm.ifree(opid)
+		idm.ifree()
 	}
 }
 
@@ -790,7 +790,8 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 		dst := b.Data[s : s+m]
 		read, err := src.Uioread(dst)
 		b.Unlock()
-		idm.fs.fslog.Write_ordered(opid, b)
+		// idm.fs.fslog.Write_ordered(opid, b)
+		idm.fs.fslog.Write(opid, b)  // XXX everything through log for now
 		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
@@ -1142,7 +1143,7 @@ func (bl *blockiter_t) next(which int) (int, bool, int, bool) {
 }
 
 // free an orphaned inode
-func (idm *imemnode_t) ifree(opid opid_t) common.Err_t {
+func (idm *imemnode_t) ifree() common.Err_t {
 	idm.fs.istats.Nifree.inc()
 	if fs_debug {
 		fmt.Printf("ifree: %d\n", idm.inum)
@@ -1286,7 +1287,7 @@ func (icache *icache_t) clearOrphan(opid opid_t, inum common.Inum_t) {
 	icache.orphanbitmap.Unmark(opid, int(inum))
 }
 
-func (icache *icache_t) freeOrphan(opid opid_t, inum common.Inum_t) {
+func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if fs_debug {
 		fmt.Printf("freeOrphan: %v\n", inum)
 	}
@@ -1301,7 +1302,7 @@ func (icache *icache_t) freeOrphan(opid opid_t, inum common.Inum_t) {
 	// we might have crashed during RecoverOrphans and already have
 	// reclaimed this inode.
 	if imem.itype != I_DEAD {
-		imem.Free(opid)
+		imem.Free()
 	}
 }
 
@@ -1325,9 +1326,7 @@ func (icache *icache_t) RecoverOrphans() {
 			// don't free inode inside of apply(), because apply
 			// holds the lock on the bitmap block, but free needs
 			// to mark clear orphan status.
-			opid := icache.fs.fslog.Op_begin("dowrite")
-			icache.freeOrphan(opid, inum)
-			icache.fs.fslog.Op_end(opid)
+			icache.freeOrphan(inum)
 			last = inum
 		}
 	}
@@ -1348,7 +1347,7 @@ func (icache *icache_t) addDead(imem *imemnode_t) {
 }
 
 // XXX Fs_close() from different threads are contending for icache.dead...
-func (icache *icache_t) freeDead(opid opid_t) {
+func (icache *icache_t) freeDead() {
 	icache.Lock()
 	//defer icache.Unlock()
 
@@ -1360,7 +1359,7 @@ func (icache *icache_t) freeDead(opid opid_t) {
 		imem := icache.dead[0]
 		icache.dead = icache.dead[1:]
 		icache.Unlock()
-		imem.Free(opid)
+		imem.Free()
 		icache.Lock()
 	}
 	icache.dead = make([]*imemnode_t, 0)
