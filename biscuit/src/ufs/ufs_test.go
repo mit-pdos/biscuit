@@ -12,6 +12,7 @@ import "fs"
 
 const (
 	SMALL = 512
+	LARGE = 8 * 4096
 )
 
 const (
@@ -354,6 +355,47 @@ func concurrent(t *testing.T, sync bool) {
 func TestFSConcur(t *testing.T) {
 	concurrent(t, false)
 	concurrent(t, true)
+}
+
+
+//
+// Test concurrent commit of blocks with a new transaction updating same blocks
+//
+
+func TestFSConcurSame(t *testing.T) {
+	n := 8
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks*4, ninodeblks*2, ndatablks*10)
+	c := make(chan string)
+
+	tfs := BootFS(dst)
+	ub := mkData(1, SMALL)
+	e := tfs.MkFile("f1", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f1")
+	}
+
+	for i := 0; i < n; i++ {
+		go func(id int) {
+			ub := mkData(uint8(id), LARGE)
+			e := tfs.Update("f1", ub)
+			tfs.Sync()
+			s := ""
+			if e != 0 {
+				s = fmt.Sprintf("Update f1 failed")
+			}
+			c <- s
+		}(i)
+	}
+
+	for i := 0; i < n; i++ {
+		s := <-c
+		if s != "" {
+			t.Fatalf("Update failed %s\n", s)
+		}
+	}
+
+	ShutdownFS(tfs)
 }
 
 //

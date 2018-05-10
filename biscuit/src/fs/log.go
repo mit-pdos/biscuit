@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = false
+const log_debug = true
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -39,17 +39,17 @@ type buf_t struct {
 }
 
 type op_t struct {
-	done           bool
+	done bool
 }
 
 type trans_t struct {
-	logindex       int                          // index where this trans starts in on-disk log
-	head           int                          // index into in-memory log
-	ops            map[opid_t]*op_t             // list of ops in progress this transaction
-	log            []*common.Bdev_block_t       // in-memory log, MaxBlkPerOp per op_t
-	ordered        *common.BlkList_t            // list of ordered blocks
-	logpresent     map[int]bool                 // enable quick check to see if block is in log
-	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
+	logindex       int                    // index where this trans starts in on-disk log
+	head           int                    // index into in-memory log
+	ops            map[opid_t]*op_t       // list of ops in progress this transaction
+	log            []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op_t
+	ordered        *common.BlkList_t      // list of ordered blocks
+	logpresent     map[int]bool           // enable quick check to see if block is in log
+	orderedpresent map[int]bool           // enable quick check so see if block is in ordered
 	// absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 }
 
@@ -141,7 +141,7 @@ func (trans *trans_t) write_ordered(log *log_t) {
 	})
 }
 
-func (trans *trans_t) commit(log *log_t) {
+func (trans *trans_t) commit(log *log_t, concurrent bool) {
 	if log_debug {
 		fmt.Printf("commit: trans logindex %d transhead %d\n", trans.logindex, trans.head)
 	}
@@ -152,6 +152,7 @@ func (trans *trans_t) commit(log *log_t) {
 
 	for i := 0; i < trans.head; i++ {
 		// install log destination in the header block
+		fmt.Printf("commit: log block %d concurrent %v\n", trans.log[i].Block, concurrent)
 		lh.w_logdest(trans.logindex+i-LogOffset, trans.log[i].Block)
 		// fill in log block
 		blog, err := log.fs.bcache.Get_nofill(log.logstart+trans.logindex+i, "log", true)
@@ -163,7 +164,7 @@ func (trans *trans_t) commit(log *log_t) {
 		blks.PushBack(blog)
 	}
 
-        lh.w_recovernum(trans.logindex+trans.head-LogOffset)
+	lh.w_recovernum(trans.logindex + trans.head - LogOffset)
 
 	// write blocks to log in batch
 	log.fs.bcache.Write_async_blks(blks)
@@ -182,28 +183,24 @@ func (trans *trans_t) commit(log *log_t) {
 	log.nblkcommitted += blks.Len()
 
 	if log_debug {
-		fmt.Printf("commit: committed %d blks\n", blks.Len())
+		fmt.Printf("commit: committed %d blks concurrent %v\n", blks.Len(), concurrent)
 	}
 
 	log.fs.bcache.Relse(headblk, "commit done")
 }
 
-
 type log_t struct {
-	transactions   []*trans_t
-	logstart       int
-	loglen         int
-	incoming       chan buf_t
-	admission      chan opid_t
-	done           chan opid_t
-	force          chan bool
-	commitwait     chan bool
-	stop           chan bool
-	stopwait       chan bool
+	transactions []*trans_t
+	logstart     int
+	loglen       int
+	incoming     chan buf_t
+	admission    chan opid_t
+	done         chan opid_t
+	force        chan bool
+	commitwait   chan bool
+	stop         chan bool
 
-	committingc    chan bool
-	committing     bool
-	cwaiting       bool
+	commitc chan int
 
 	disk common.Disk_i
 	fs   *Fs_t
@@ -268,7 +265,7 @@ func (log *log_t) Write(opid opid_t, b *common.Bdev_block_t) {
 		return
 	}
 	if log_debug {
-		fmt.Printf("log_write %v\n", b.Block)
+		fmt.Printf("log_write blk %v\n", b.Block)
 	}
 	log.fs.bcache.Refup(b, "log_write")
 	log.incoming <- buf_t{opid, b, false}
@@ -343,12 +340,15 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 		return nil
 	}
 	go log_daemon(fslog)
+	go log_commit(fslog)
 	return fslog
 }
 
 func (log *log_t) stopLog() {
 	log.stop <- true
-	<-log.stopwait
+	<-log.stop
+	log.commitc <- -1
+	<-log.commitc
 }
 
 //
@@ -397,9 +397,8 @@ func (log *log_t) init(ls int, ll int, disk common.Disk_i) {
 	log.done = make(chan opid_t)
 	log.force = make(chan bool)
 	log.commitwait = make(chan bool)
-	log.committingc = make(chan bool)
+	log.commitc = make(chan int)
 	log.stop = make(chan bool)
-	log.stopwait = make(chan bool)
 	log.disk = disk
 
 	if log.loglen >= common.BSIZE/4 {
@@ -471,6 +470,9 @@ func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
 	return &logheader_t{headblk.Data}, headblk
 }
 
+func (log *log_t) check_update_uncommitted(buf buf_t) {
+
+}
 
 // func (log *log_t) addlog(buf buf_t) {
 
@@ -543,7 +545,7 @@ func (log *log_t) apply() {
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
-	for t := len(log.transactions)-1; t >= 0; t-- {
+	for t := len(log.transactions) - 1; t >= 0; t-- {
 		trans := log.transactions[t]
 		for i := trans.head - 1; i >= 0; i-- {
 			l := trans.log[i]
@@ -567,7 +569,7 @@ func (log *log_t) apply() {
 	log.flush() // flush cleared commit
 
 	log.fs.bcache.Relse(headblk, "commit done")
-	
+
 	log.transactions = make([]*trans_t, 0)
 }
 
@@ -575,18 +577,18 @@ func (log *log_t) commit() {
 	if memfs {
 		panic("no commit")
 	}
-	
+
 	if len(log.transactions) == 0 {
 		if log_debug {
 			fmt.Printf("commit: no transactions\n")
 		}
 		return
 	}
-	
+
 	t := log.last_trans()
 	log.ncommit++
-	t.commit(log)
-	
+	t.commit(log, false)
+
 	// apply log only when there is no room for another op. this avoids
 	// applies when there room in the log (e.g., a sync forced the log)
 	if log.istoofull() {
@@ -654,6 +656,28 @@ func (log *log_t) recover() common.Err_t {
 	return 0
 }
 
+func log_commit(l *log_t) {
+	for {
+		select {
+		case waiters := <-l.commitc:
+			if waiters < 0 {
+				l.commitc <- -1
+				return
+			}
+			if waiters > 0 && len(l.transactions) > 0 && !l.istoofull() { // forced commit?
+				t := l.last_trans()
+				l.commitc <- 0
+				t.commit(l, true)
+				l.unblock_waiters(waiters)
+			} else {
+				l.commit()
+				l.unblock_waiters(waiters)
+				l.commitc <- 0
+			}
+		}
+	}
+}
+
 func log_daemon(l *log_t) {
 	nextop := opid_t(0)
 	for {
@@ -678,6 +702,7 @@ func log_daemon(l *log_t) {
 			select {
 			case nb := <-l.incoming:
 				l.add_write(nb)
+				l.check_update_uncommitted(nb)
 			case opid := <-l.done:
 				l.mark_done(opid)
 				if adm == nil { // admit ops again?
@@ -705,7 +730,7 @@ func log_daemon(l *log_t) {
 				if full {
 					adm = nil
 				}
-			case <- force:
+			case <-force:
 				waiters++
 				adm = nil
 				force = nil
@@ -713,36 +738,15 @@ func log_daemon(l *log_t) {
 					done = true
 				}
 			case <-l.stop:
-				l.stopwait <- true
+				fmt.Printf("stop\n")
+				l.stop <- true
 				return
 			}
 		}
 
-		if l.committing {
-			l.cwaiting = true
-			<- l.committingc
-			l.cwaiting = false
-		}
-		l.committing = true
-		
-
-		if waiters > 0 &&  len(l.transactions) > 0 && !l.istoofull() {   // forced commit?
-			t := l.last_trans()
-			go func(t *trans_t) {
-				t.commit(l)
-				l.unblock_waiters(waiters)
-				l.committing = false
-				if l.cwaiting {
-					l.committingc <- true
-				}
-			}(t)
-		} else {
-			l.commit()
-			l.unblock_waiters(waiters)
-			l.committing = false
-		}
-
-
+		l.commitc <- waiters
+		// wait until commit thread tells us to go ahead with next trans
+		<-l.commitc
 	}
 }
 
