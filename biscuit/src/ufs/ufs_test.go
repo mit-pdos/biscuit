@@ -352,7 +352,7 @@ func concurrent(t *testing.T, sync bool) {
 }
 
 func TestFSConcur(t *testing.T) {
-	// concurrent(t, false)
+	concurrent(t, false)
 	concurrent(t, true)
 }
 
