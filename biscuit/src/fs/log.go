@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = false
+const log_debug = true
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -118,8 +118,6 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nlogwrite)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
-	s += "\n\tnordered2logwrite "
-	s += strconv.Itoa(log.norder2logwrite)
 	s += "\n\tnabsorb "
 	s += strconv.Itoa(log.nabsorption)
 	s += "\n\tnblkcommited "
@@ -364,7 +362,10 @@ func (trans *trans_t) commit(log *log_t) {
 	log.flush() // commit log header
 
 	log.nblkcommitted += blks.Len()
-
+	if blks.Len() > log.maxblks_per_op {
+		log.maxblks_per_op = blks.Len()
+	}
+	log.ncommit++
 	if log_debug {
 		fmt.Printf("commit: committed %d blks\n", blks.Len())
 	}
@@ -390,17 +391,16 @@ type log_t struct {
 	fs   *Fs_t
 
 	// some stats
-	maxblks_per_op  int
-	nblkcommitted   int
-	ncommit         int
-	napply          int
-	nabsorption     int
-	nlogwrite       int
-	norderedwrite   int
-	norder2logwrite int
-	nblkapply       int
-	nabsorbapply    int
-	nforceordered   int
+	maxblks_per_op int
+	nblkcommitted  int
+	ncommit        int
+	napply         int
+	nabsorption    int
+	nlogwrite      int
+	norderedwrite  int
+	nblkapply      int
+	nabsorbapply   int
+	nforceordered  int
 }
 
 // first log header block format
@@ -643,7 +643,6 @@ func log_commit(l *log_t) {
 				l.commitc <- 0
 			}
 			l.unblock_waiters(waiters)
-			l.ncommit++
 		}
 	}
 }
