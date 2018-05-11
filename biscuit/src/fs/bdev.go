@@ -125,6 +125,10 @@ func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
 	b.Write_async()
 }
 
+func (bcache *bcache_t) Write_async_through(b *common.Bdev_block_t) {
+	b.Write_async()
+}
+
 // blks must be contiguous on disk
 func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 	if bdev_debug {
@@ -142,6 +146,29 @@ func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 		}
 		n++
 		bcache.refcache.Refup(b.Ref)
+	}
+	// one request for all blks
+	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
+	blks.FrontBlock().Disk.Start(ider)
+}
+
+func (bcache *bcache_t) Write_async_blks_through(blks *common.BlkList_t) {
+	if bdev_debug {
+		fmt.Printf("bcache_write_async_blk_through s %v\n", blks.Len())
+	}
+	if blks.Len() == 0 {
+		return
+	}
+	if bdev_debug {
+		n := blks.FrontBlock().Block
+		for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
+			// sanity check
+			if b.Block != n {
+				fmt.Printf("%d %d\n", b.Block, n)
+				panic("not contiguous\n")
+			}
+			n++
+		}
 	}
 	// one request for all blks
 	ider := common.MkRequest(blks, common.BDEV_WRITE, false)

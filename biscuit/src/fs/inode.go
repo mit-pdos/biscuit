@@ -6,6 +6,7 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
+
 //import "sync/atomic"
 
 import "common"
@@ -168,10 +169,10 @@ func (ind *Inode_t) W_addr(i int, blk int) {
 type imemnode_t struct {
 	// _l protects all fields except for inum (which is the key for lookup
 	// and thus already known).
-	_l	sync.Mutex
+	_l   sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
-	ref	*common.Ref_t
+	ref  *common.Ref_t
 
 	// XXXPANIC for sanity
 	_amlocked bool
@@ -302,8 +303,8 @@ func (idm *imemnode_t) do_trunc(opid opid_t, truncto uint) common.Err_t {
 }
 
 func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err_t) {
-	
-	opid := idm.fs.fslog.Op_begin("do_read")  // read may fill holes in the file
+
+	opid := idm.fs.fslog.Op_begin("do_read") // read may fill holes in the file
 	defer idm.fs.fslog.Op_end(opid)
 
 	return idm.iread(opid, dst, offset)
@@ -366,7 +367,7 @@ func (idm *imemnode_t) do_stat(st *common.Stat_t) common.Err_t {
 }
 
 func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
-	opid := idm.fs.fslog.Op_begin("do_mmapi")  // read may fill holes in the file
+	opid := idm.fs.fslog.Op_begin("do_mmapi") // read may fill holes in the file
 	defer idm.fs.fslog.Op_end(opid)
 
 	if idm.itype != I_FILE && idm.itype != I_DIR {
@@ -418,7 +419,7 @@ func (idm *imemnode_t) do_createnod(opid opid_t, fn string, maj, min int) (commo
 
 	itype := I_DEV
 	cnext, err := idm.icreate(opid, fn, itype, maj, min)
-	idm._iupdate(opid, )
+	idm._iupdate(opid)
 	return cnext, err
 }
 
@@ -573,7 +574,7 @@ func (idm *imemnode_t) ensureb(opid opid_t, blkno int, writing bool) (int, bool,
 }
 
 // ensure entry in indirect block exists
-func (idm *imemnode_t) ensureind(opid opid_t, blk *common.Bdev_block_t, slot int,	writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) ensureind(opid opid_t, blk *common.Bdev_block_t, slot int, writing bool) (int, common.Err_t) {
 	off := slot * 8
 	s := blk.Data[:]
 	blkn := common.Readn(s, 8, off)
@@ -792,8 +793,8 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 		dst := b.Data[s : s+m]
 		read, err := src.Uioread(dst)
 		b.Unlock()
-		// idm.fs.fslog.Write_ordered(opid, b)
-		idm.fs.fslog.Write(opid, b)  // XXX everything through log for now
+		idm.fs.fslog.Write_ordered(opid, b)
+		// idm.fs.fslog.Write(opid, b)  // XXX everything through log for now
 		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
@@ -960,11 +961,11 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 // re-reading and re-locking indirect blocks. it may simultaneously hold
 // references to at most two blocks until blockiter_t.release() is called.
 type blockiter_t struct {
-	idm   *imemnode_t
-	which int
+	idm      *imemnode_t
+	which    int
 	tryevict bool
-	dub   *common.Bdev_block_t
-	lasti *common.Bdev_block_t
+	dub      *common.Bdev_block_t
+	lasti    *common.Bdev_block_t
 }
 
 func (bl *blockiter_t) bi_init(idm *imemnode_t, tryevict bool) {
@@ -1389,15 +1390,15 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 
 func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, common.Err_t) {
 	ref, created, err := icache.refcache.Lookup(int(inum),
-	    func(in int, ref *common.Ref_t) common.Obj_t {
-		ret := &imemnode_t{}
-		// inum can be read without ilock, and therefore must be
-		// initialized before the refcache unlocks.
-		ret.inum = common.Inum_t(in)
-		ret.ref = ref
-		ret.ilock("")
-		return ret
-	})
+		func(in int, ref *common.Ref_t) common.Obj_t {
+			ret := &imemnode_t{}
+			// inum can be read without ilock, and therefore must be
+			// initialized before the refcache unlocks.
+			ret.inum = common.Inum_t(in)
+			ret.ref = ref
+			ret.ilock("")
+			return ret
+		})
 	if err != 0 {
 		return nil, err
 	}

@@ -102,7 +102,7 @@ func (fs *Fs_t) Sizes() (int, int) {
 
 func (fs *Fs_t) StopFS() {
 	fs.Fs_sync()
-	fs.fslog.stopLog()
+	fs.fslog.StopLog()
 }
 
 func (fs *Fs_t) Fs_statistics() string {
@@ -814,7 +814,7 @@ func (df *Devfops_t) _sane() {
 	// devices, we can either do dispatch in Devfops_t or we can return
 	// device-specific common.Fdops_i in fs_open()
 	if df.Maj != common.D_CONSOLE && df.Maj != common.D_DEVNULL &&
-	   df.Maj != common.D_STAT && df.Maj != common.D_PROF {
+		df.Maj != common.D_STAT && df.Maj != common.D_PROF {
 		panic("bad dev")
 	}
 }
@@ -874,9 +874,9 @@ func (pr *Perfrips_t) Swap(i, j int) {
 
 var Profdev struct {
 	sync.Mutex
-	Bts	[]uintptr
-	Prips	Perfrips_t
-	rem	[]uint8
+	Bts   []uintptr
+	Prips Perfrips_t
+	rem   []uint8
 }
 
 func _prof_read(dst common.Userio_i, offset int) (int, common.Err_t) {
@@ -895,7 +895,7 @@ func _prof_read(dst common.Userio_i, offset int) (int, common.Err_t) {
 			}
 		}
 		if dst.Remain() == 0 ||
-		   (prips.Len() == 0 && len(Profdev.Bts) == 0) {
+			(prips.Len() == 0 && len(Profdev.Bts) == 0) {
 			return did, 0
 		}
 		if prips.Len() > 0 {
@@ -1450,7 +1450,7 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 
 func (fs *Fs_t) Fs_stat(path string, st *common.Stat_t, cwd common.Inum_t) common.Err_t {
 	opid := fs.fslog.Op_begin("Fs_stat")
-	
+
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", path, cwd)
 	}
