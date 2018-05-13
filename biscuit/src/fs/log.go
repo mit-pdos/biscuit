@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = true
+const log_debug = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -42,16 +42,19 @@ func (log *log_t) Op_begin(s string) opid_t {
 	if log_debug {
 		fmt.Printf("op_begin: admit? %v\n", s)
 	}
-	tid := <-log.admission
+	opid := <-log.admission
 	if log_debug {
-		fmt.Printf("op_begin: go %d %v\n", tid, s)
+		fmt.Printf("op_begin: go %d %v\n", opid, s)
 	}
-	return tid
+	return opid
 }
 
 func (log *log_t) Op_end(opid opid_t) {
 	if memfs {
 		return
+	}
+	if log_debug {
+		fmt.Printf("op_end: done %d\n", opid)
 	}
 	log.done <- opid
 }
@@ -253,6 +256,9 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 }
 
 func (trans *trans_t) iscommittable() bool {
+	if log_debug {
+		fmt.Printf("iscommittable: %d %v\n", len(trans.ops), trans.ops)
+	}
 	return len(trans.ops) == 0
 }
 

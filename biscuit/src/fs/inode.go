@@ -302,11 +302,7 @@ func (idm *imemnode_t) do_trunc(opid opid_t, truncto uint) common.Err_t {
 	return err
 }
 
-func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err_t) {
-
-	opid := idm.fs.fslog.Op_begin("do_read") // read may fill holes in the file
-	defer idm.fs.fslog.Op_end(opid)
-
+func (idm *imemnode_t) do_read(opid opid_t, dst common.Userio_i, offset int) (int, common.Err_t) {
 	return idm.iread(opid, dst, offset)
 }
 
@@ -366,10 +362,7 @@ func (idm *imemnode_t) do_stat(st *common.Stat_t) common.Err_t {
 	return 0
 }
 
-func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
-	opid := idm.fs.fslog.Op_begin("do_mmapi") // read may fill holes in the file
-	defer idm.fs.fslog.Op_end(opid)
-
+func (idm *imemnode_t) do_mmapi(opid opid_t, off, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
 	if idm.itype != I_FILE && idm.itype != I_DIR {
 		panic("bad mmapinfo")
 	}

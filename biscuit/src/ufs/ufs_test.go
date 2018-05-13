@@ -331,7 +331,7 @@ func concurrent(t *testing.T, sync bool) {
 		go func(id int) {
 			d := uniqdir(id)
 			s := doTestSimple(tfs, d)
-			tfs.Sync()	
+			tfs.Sync()
 			c <- s
 		}(i)
 	}
@@ -356,7 +356,6 @@ func TestFSConcur(t *testing.T) {
 	concurrent(t, false)
 	concurrent(t, true)
 }
-
 
 //
 // Test concurrent commit of blocks with a new transaction updating same blocks
@@ -392,6 +391,54 @@ func TestFSConcurSame(t *testing.T) {
 		s := <-c
 		if s != "" {
 			t.Fatalf("Update failed %s\n", s)
+		}
+	}
+
+	ShutdownFS(tfs)
+}
+
+func TestFSConcurUnlink(t *testing.T) {
+	n := 8
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks*4, ninodeblks*2, ndatablks*10)
+	c := make(chan string)
+	tfs := BootFS(dst)
+	d := "d"
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+	for i := 0; i < n; i++ {
+		go func(id int) {
+			s := ""
+			fn := uniqfile(id)
+			for j := 0; j < 100 && s == ""; j++ {
+				s = func() string {
+					p := d + "/" + fn
+					ub := mkData(uint8(id), SMALL)
+					e = tfs.MkFile(p, ub)
+					if e != 0 {
+						s = fmt.Sprintf("MkFile failed")
+						return s
+					}
+					tfs.Sync()
+					e = tfs.Unlink(p)
+					if e != 0 {
+						s = fmt.Sprintf("Unlink failed")
+						return s
+					}
+					tfs.Sync()
+					return s
+				}()
+			}
+			c <- s
+		}(i)
+	}
+
+	for i := 0; i < n; i++ {
+		s := <-c
+		if s != "" {
+			t.Fatalf("Func failed %s\n", s)
 		}
 	}
 
