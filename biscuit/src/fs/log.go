@@ -150,8 +150,8 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 		return nil
 	}
 	if !memfs {
-		go log_daemon(fslog)
-		go log_commit(fslog)
+		go fslog.log_daemon()
+		go fslog.log_commit()
 	}
 	return fslog
 }
@@ -174,15 +174,14 @@ type buf_t struct {
 }
 
 type trans_t struct {
-	logindex       int               // index where this trans starts in on-disk log
-	head           int               // index into in-memory log
-	ops            map[opid_t]bool   // ops in progress this transaction
-	logged         *common.BlkList_t // list of to-be-logged blocks
-	ordered        *common.BlkList_t // list of ordered blocks
-	orderedcopy    *common.BlkList_t // list of ordered blocks
-	logpresent     map[int]bool      // enable quick check to see if block is in log
-	orderedpresent map[int]bool      // enable quick check so see if block is in ordered
-	committed      bool
+	logindex       int                          // index where this trans starts in on-disk log
+	head           int                          // index into in-memory log
+	ops            map[opid_t]bool              // ops in progress this transaction
+	logged         *common.BlkList_t            // list of to-be-logged blocks
+	ordered        *common.BlkList_t            // list of ordered blocks
+	orderedcopy    *common.BlkList_t            // list of ordered blocks
+	logpresent     map[int]bool                 // enable quick check to see if block is in log
+	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 }
 
@@ -347,8 +346,9 @@ func (trans *trans_t) commit(log *log_t) {
 		l := log.log[i]
 		lh.w_logdest(i-LogOffset, l.Block)
 		b := common.MkBlock(log.logstart+i, "commit", log.fs.bcache.mem, log.fs.bcache.disk, &_nop_relse)
-		// it is safe the underlying physical page; this page will not be freed, and no thread
-		// will update its content until this transaction has been committed and applied.
+		// it is safe to reuse the underlying physical page; this page
+		// will not be freed, and no thread will update its content
+		// until this transaction has been committed and applied.
 		b.Data = l.Data
 		b.Pa = l.Pa
 		blks.PushBack(b)
@@ -622,7 +622,20 @@ func (log *log_t) recover() common.Err_t {
 	return 0
 }
 
-func log_commit(l *log_t) {
+func (l *log_t) do_commit(waiters int) {
+	t := l.last_trans()
+	t.copyintolog(l)
+	t.copyordered(l)
+	t.commit(l)
+	// apply log only when there is no room for another op. this avoids
+	// applies when there room in the log (e.g., a sync forced the log)
+	if l.istoofull() {
+		l.apply()
+	}
+	l.unblock_waiters(waiters)
+}
+
+func (l *log_t) log_commit() {
 	for {
 		select {
 		case waiters := <-l.commitc:
@@ -636,10 +649,8 @@ func log_commit(l *log_t) {
 			if waiters > 0 && !l.istoofull() { // forced commit?
 				l.commitc <- 0 // start next trans
 				t.commit(l)
-				t.committed = true
 			} else {
 				t.commit(l)
-				t.committed = true
 				// apply log only when there is no room for another op. this avoids
 				// applies when there room in the log (e.g., a sync forced the log)
 				if l.istoofull() {
@@ -653,7 +664,7 @@ func log_commit(l *log_t) {
 	}
 }
 
-func log_daemon(l *log_t) {
+func (l *log_t) log_daemon() {
 	nextop := opid_t(0)
 	for {
 		common.Kunresdebug()
@@ -672,7 +683,6 @@ func log_daemon(l *log_t) {
 		done := false
 		waiters := 0
 		adm := l.admission
-		force := l.force
 		for !done {
 			select {
 			case nb := <-l.incoming:
@@ -704,10 +714,9 @@ func log_daemon(l *log_t) {
 				if full {
 					adm = nil
 				}
-			case <-force:
+			case <-l.force:
 				waiters++
 				adm = nil
-				force = nil
 				if l.iscommittable() {
 					done = true
 				}
@@ -718,8 +727,10 @@ func log_daemon(l *log_t) {
 		}
 
 		if len(l.transactions) > 0 {
+			// l.do_commit(waiters)
 			l.commitc <- waiters
-			// wait until commit thread tells us to go ahead with next trans
+			// wait until commit thread tells us to go ahead with
+			// next trans
 			<-l.commitc
 		}
 	}
