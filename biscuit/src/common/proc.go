@@ -381,12 +381,6 @@ func (p *Proc_t) Mkuserbuf(userva, len int) *Userbuf_t {
 
 var Ubpool = sync.Pool{New: func() interface{} { return new(Userbuf_t) }}
 
-func (p *Proc_t) Mkuserbuf_pool(userva, len int) *Userbuf_t {
-	ret := Ubpool.Get().(*Userbuf_t)
-	ret.ub_init(p, userva, len)
-	return ret
-}
-
 func (p *Proc_t) mkfxbuf() *[64]uintptr {
 	ret := new([64]uintptr)
 	n := uintptr(unsafe.Pointer(ret))
@@ -1612,10 +1606,8 @@ func (o *oom_t) gc() {
 	now := time.Now()
 	if now.Sub(o.lastpr) > time.Second {
 		o.lastpr = now.Add(time.Second)
-		runtime.GCDebug(1)
 	}
 	runtime.GCX()
-	//runtime.GCDebug(0)
 }
 
 func (o *oom_t) reign() {

@@ -312,13 +312,13 @@ func sys_read(proc *common.Proc_t, fdn int, bufp int, sz int) int {
 	if err != 0 {
 		return int(err)
 	}
-	userbuf := proc.Mkuserbuf_pool(bufp, sz)
+	userbuf := proc.Mkuserbuf(bufp, sz)
 
 	ret, err := fd.Fops.Read(proc, userbuf)
 	if err != 0 {
 		return int(err)
 	}
-	common.Ubpool.Put(userbuf)
+	//common.Ubpool.Put(userbuf)
 	return ret
 }
 
@@ -330,13 +330,13 @@ func sys_write(proc *common.Proc_t, fdn int, bufp int, sz int) int {
 	if err != 0 {
 		return int(err)
 	}
-	userbuf := proc.Mkuserbuf_pool(bufp, sz)
+	userbuf := proc.Mkuserbuf(bufp, sz)
 
 	ret, err := fd.Fops.Write(proc, userbuf)
 	if err != 0 {
 		return int(err)
 	}
-	common.Ubpool.Put(userbuf)
+	//common.Ubpool.Put(userbuf)
 	return ret
 }
 
@@ -1513,9 +1513,9 @@ func sys_accept(proc *common.Proc_t, fdn, sockaddrn, socklenn int) int {
 		}
 		sl = l
 	}
-	fromsa := proc.Mkuserbuf_pool(sockaddrn, sl)
+	fromsa := proc.Mkuserbuf(sockaddrn, sl)
 	newfops, fromlen, err := fd.Fops.Accept(proc, fromsa)
-	common.Ubpool.Put(fromsa)
+	//common.Ubpool.Put(fromsa)
 	if err != 0 {
 		return int(err)
 	}
@@ -1544,10 +1544,10 @@ func copysockaddr(proc *common.Proc_t, san, sl int) ([]uint8, common.Err_t) {
 	if sl >= maxsl {
 		return nil, -common.ENOTSOCK
 	}
-	ub := proc.Mkuserbuf_pool(san, sl)
+	ub := proc.Mkuserbuf(san, sl)
 	sabuf := make([]uint8, sl)
 	_, err := ub.Uioread(sabuf)
-	common.Ubpool.Put(ub)
+	//common.Ubpool.Put(ub)
 	if err != 0 {
 		return nil, err
 	}
@@ -1574,9 +1574,9 @@ func sys_sendto(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn, socklen int)
 		return int(err)
 	}
 
-	buf := proc.Mkuserbuf_pool(bufn, buflen)
+	buf := proc.Mkuserbuf(bufn, buflen)
 	ret, err := fd.Fops.Sendmsg(proc, buf, sabuf, nil, flags)
-	common.Ubpool.Put(buf)
+	//common.Ubpool.Put(buf)
 	if err != 0 {
 		return int(err)
 	}
@@ -1594,7 +1594,7 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	buf := proc.Mkuserbuf_pool(bufn, buflen)
+	buf := proc.Mkuserbuf(bufn, buflen)
 
 	// is the from address requested?
 	var salen int
@@ -1608,10 +1608,10 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 			return int(-common.EFAULT)
 		}
 	}
-	fromsa := proc.Mkuserbuf_pool(sockaddrn, salen)
+	fromsa := proc.Mkuserbuf(sockaddrn, salen)
 	ret, addrlen, _, _, err := fd.Fops.Recvmsg(proc, buf, fromsa, zeroubuf, 0)
-	common.Ubpool.Put(buf)
-	common.Ubpool.Put(fromsa)
+	//common.Ubpool.Put(buf)
+	//common.Ubpool.Put(fromsa)
 	if err != 0 {
 		return int(err)
 	}
