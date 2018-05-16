@@ -545,6 +545,22 @@ func _takecredit(n int64) {
 	//g.res.cacheallocs += n
 }
 
+//var Dist struct {
+//	Next	uint64
+//	// us
+//	Buf	[]int
+//	Lost	uint64
+//}
+//
+//func distadd(ns uint64) {
+//	idx := atomic.Xadd64(&Dist.Next, 1) - 1
+//	if idx < uint64(len(Dist.Buf)) {
+//		Dist.Buf[idx] = int(ns)
+//	} else {
+//		Dist.Lost++
+//	}
+//}
+
 // Allocate an object of size bytes.
 // Small objects are allocated from the per-P cache's free lists.
 // Large objects (> 32 kB) are allocated straight from the heap.

@@ -13,6 +13,8 @@ import "unsafe"
 import "common"
 import "fs"
 
+//import "sort"
+
 const (
 	IRQ_LAST = common.INT_MSI7
 )
@@ -766,6 +768,27 @@ func loping() {
 	sgbuf := [][]uint8{pkt.hdrbytes(), data}
 	nic.tx_ipv4(sgbuf)
 }
+
+//func _ptile(buf []int, p float64) {
+//	if len(buf) == 0 {
+//		fmt.Printf("no %.2f-ile\n", p * 100)
+//		return
+//	}
+//	_idx := float64(len(buf)) * p
+//	idx := int(_idx)
+//	if float64(idx) / float64(len(buf)) < p && idx + 1 < len(buf) {
+//		idx++
+//	}
+//	fmt.Printf("    %.2f percentile: %v (idx %v)\n", p * 100, buf[idx], idx)
+//}
+//
+//func print9999(buf []int) {
+//	sort.Ints(buf)
+//	_ptile(buf, 0.9999)
+//	_ptile(buf, 0.999)
+//	_ptile(buf, 0.99)
+//	_ptile(buf, 0.50)
+//}
 
 var _nflip int
 
