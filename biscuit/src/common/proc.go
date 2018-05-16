@@ -1691,21 +1691,21 @@ func (o *oom_t) dispatch_peasant(need int) {
 	st := time.Now()
 	dl := st.Add(time.Second)
 	// wait for the victim to die
-	sleept := 10*time.Microsecond
+	sleept := 1*time.Millisecond
 	for {
 		if _, ok := Proc_check(vic.Pid); !ok {
 			break
 		}
 		now := time.Now()
 		if now.After(dl) {
-			dl = dl.Add(time.Second)
 			fmt.Printf("oom killer: waiting for hog for %v...\n",
 			    now.Sub(st))
 			o.gc()
+			dl = dl.Add(1*time.Second)
 		}
 		time.Sleep(sleept)
 		sleept *= 2
-		const maxs = 10*time.Millisecond
+		const maxs = 3*time.Second
 		if sleept > maxs {
 			sleept = maxs
 		}
