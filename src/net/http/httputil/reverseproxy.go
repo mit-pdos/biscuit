@@ -30,6 +30,8 @@ type ReverseProxy struct {
 	// the request into a new request to be sent
 	// using Transport. Its response is then copied
 	// back to the original client unmodified.
+	// Director must not access the provided Request
+	// after returning.
 	Director func(*http.Request)
 
 	// The transport used to perform proxy requests.
@@ -112,8 +114,21 @@ func copyHeader(dst, src http.Header) {
 	}
 }
 
+func cloneHeader(h http.Header) http.Header {
+	h2 := make(http.Header, len(h))
+	for k, vv := range h {
+		vv2 := make([]string, len(vv))
+		copy(vv2, vv)
+		h2[k] = vv2
+	}
+	return h2
+}
+
 // Hop-by-hop headers. These are removed when sent to the backend.
-// http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html
+// As of RFC 7230, hop-by-hop headers are required to appear in the
+// Connection header field. These are the headers defined by the
+// obsoleted RFC 2616 (section 13.5.1) and are used for backward
+// compatibility.
 var hopHeaders = []string{
 	"Connection",
 	"Proxy-Connection", // non-standard but still sent by libcurl and rejected by e.g. google
@@ -147,45 +162,23 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}()
 	}
 
-	outreq := new(http.Request)
-	*outreq = *req // includes shallow copies of maps, but okay
+	outreq := req.WithContext(ctx) // includes shallow copies of maps, but okay
 	if req.ContentLength == 0 {
 		outreq.Body = nil // Issue 16036: nil Body for http.Transport retries
 	}
-	outreq = outreq.WithContext(ctx)
+
+	outreq.Header = cloneHeader(req.Header)
 
 	p.Director(outreq)
 	outreq.Close = false
 
-	// We are modifying the same underlying map from req (shallow
-	// copied above) so we only copy it if necessary.
-	copiedHeaders := false
-
-	// Remove hop-by-hop headers listed in the "Connection" header.
-	// See RFC 2616, section 14.10.
-	if c := outreq.Header.Get("Connection"); c != "" {
-		for _, f := range strings.Split(c, ",") {
-			if f = strings.TrimSpace(f); f != "" {
-				if !copiedHeaders {
-					outreq.Header = make(http.Header)
-					copyHeader(outreq.Header, req.Header)
-					copiedHeaders = true
-				}
-				outreq.Header.Del(f)
-			}
-		}
-	}
+	removeConnectionHeaders(outreq.Header)
 
 	// Remove hop-by-hop headers to the backend. Especially
 	// important is "Connection" because we want a persistent
 	// connection, regardless of what the client sent to us.
 	for _, h := range hopHeaders {
 		if outreq.Header.Get(h) != "" {
-			if !copiedHeaders {
-				outreq.Header = make(http.Header)
-				copyHeader(outreq.Header, req.Header)
-				copiedHeaders = true
-			}
 			outreq.Header.Del(h)
 		}
 	}
@@ -207,15 +200,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Remove hop-by-hop headers listed in the
-	// "Connection" header of the response.
-	if c := res.Header.Get("Connection"); c != "" {
-		for _, f := range strings.Split(c, ",") {
-			if f = strings.TrimSpace(f); f != "" {
-				res.Header.Del(f)
-			}
-		}
-	}
+	removeConnectionHeaders(res.Header)
 
 	for _, h := range hopHeaders {
 		res.Header.Del(h)
@@ -225,6 +210,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		if err := p.ModifyResponse(res); err != nil {
 			p.logf("http: proxy error: %v", err)
 			rw.WriteHeader(http.StatusBadGateway)
+			res.Body.Close()
 			return
 		}
 	}
@@ -233,7 +219,8 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	// The "Trailer" header isn't included in the Transport's response,
 	// at least for *http.Transport. Build it up from Trailer.
-	if len(res.Trailer) > 0 {
+	announcedTrailers := len(res.Trailer)
+	if announcedTrailers > 0 {
 		trailerKeys := make([]string, 0, len(res.Trailer))
 		for k := range res.Trailer {
 			trailerKeys = append(trailerKeys, k)
@@ -252,7 +239,30 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	p.copyResponse(rw, res.Body)
 	res.Body.Close() // close now, instead of defer, to populate res.Trailer
-	copyHeader(rw.Header(), res.Trailer)
+
+	if len(res.Trailer) == announcedTrailers {
+		copyHeader(rw.Header(), res.Trailer)
+		return
+	}
+
+	for k, vv := range res.Trailer {
+		k = http.TrailerPrefix + k
+		for _, v := range vv {
+			rw.Header().Add(k, v)
+		}
+	}
+}
+
+// removeConnectionHeaders removes hop-by-hop headers listed in the "Connection" header of h.
+// See RFC 7230, section 6.1
+func removeConnectionHeaders(h http.Header) {
+	if c := h.Get("Connection"); c != "" {
+		for _, f := range strings.Split(c, ",") {
+			if f = strings.TrimSpace(f); f != "" {
+				h.Del(f)
+			}
+		}
+	}
 }
 
 func (p *ReverseProxy) copyResponse(dst io.Writer, src io.Reader) {
@@ -286,7 +296,7 @@ func (p *ReverseProxy) copyBuffer(dst io.Writer, src io.Reader, buf []byte) (int
 	var written int64
 	for {
 		nr, rerr := src.Read(buf)
-		if rerr != nil && rerr != io.EOF {
+		if rerr != nil && rerr != io.EOF && rerr != context.Canceled {
 			p.logf("httputil: ReverseProxy read error during body copy: %v", rerr)
 		}
 		if nr > 0 {

@@ -46,6 +46,11 @@ func isgoexception(info *exceptionrecord, r *context) bool {
 		return false
 	}
 
+	if isAbortPC(r.ip()) {
+		// Never turn abort into a panic.
+		return false
+	}
+
 	// Go will only handle some exceptions.
 	switch info.exceptioncode {
 	default:
@@ -68,6 +73,12 @@ func isgoexception(info *exceptionrecord, r *context) bool {
 // or should be made available to other handlers in the chain (EXCEPTION_CONTINUE_SEARCH).
 func exceptionhandler(info *exceptionrecord, r *context, gp *g) int32 {
 	if !isgoexception(info, r) {
+		return _EXCEPTION_CONTINUE_SEARCH
+	}
+
+	if gp.throwsplit {
+		// We can't safely sigpanic because it may grow the
+		// stack. Let it fall through.
 		return _EXCEPTION_CONTINUE_SEARCH
 	}
 
@@ -126,11 +137,11 @@ func lastcontinuehandler(info *exceptionrecord, r *context, gp *g) int32 {
 	print("Exception ", hex(info.exceptioncode), " ", hex(info.exceptioninformation[0]), " ", hex(info.exceptioninformation[1]), " ", hex(r.ip()), "\n")
 
 	print("PC=", hex(r.ip()), "\n")
-	if _g_.m.lockedg != nil && _g_.m.ncgo > 0 && gp == _g_.m.g0 {
+	if _g_.m.lockedg != 0 && _g_.m.ncgo > 0 && gp == _g_.m.g0 {
 		if iscgo {
 			print("signal arrived during external code execution\n")
 		}
-		gp = _g_.m.lockedg
+		gp = _g_.m.lockedg.ptr()
 	}
 	print("\n")
 
@@ -223,3 +234,6 @@ func crash() {
 	// It's okay to leave this empty for now: if crash returns
 	// the ordinary exit-after-panic happens.
 }
+
+// gsignalStack is unused on Windows.
+type gsignalStack struct{}

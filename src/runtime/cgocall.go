@@ -8,9 +8,9 @@
 // runtime.cgocall(_cgo_Cfunc_f, frame), where _cgo_Cfunc_f is a
 // gcc-compiled function written by cgo.
 //
-// runtime.cgocall (below) locks g to m, calls entersyscall
-// so as not to block other goroutines or the garbage collector,
-// and then calls runtime.asmcgocall(_cgo_Cfunc_f, frame).
+// runtime.cgocall (below) calls entersyscall so as not to block
+// other goroutines or the garbage collector, and then calls
+// runtime.asmcgocall(_cgo_Cfunc_f, frame).
 //
 // runtime.asmcgocall (in asm_$GOARCH.s) switches to the m->g0 stack
 // (assumed to be an operating system-allocated stack, so safe to run
@@ -104,9 +104,6 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 		racereleasemerge(unsafe.Pointer(&racecgosync))
 	}
 
-	// Lock g to m to ensure we stay on the same stack if we do a
-	// cgo callback. In case of panic, unwindm calls endcgo.
-	lockOSThread()
 	mp := getg().m
 	mp.ncgocall++
 	mp.ncgo++
@@ -129,7 +126,14 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// and then re-enter the "system call" reusing the PC and SP
 	// saved by entersyscall here.
 	entersyscall(0)
+
+	mp.incgo = true
 	errno := asmcgocall(fn, arg)
+
+	// Call endcgo before exitsyscall because exitsyscall may
+	// reschedule us on to a different M.
+	endcgo(mp)
+
 	exitsyscall(0)
 
 	// From the garbage collector's perspective, time can move
@@ -144,20 +148,19 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// GC by forcing them to stay live across this time warp.
 	KeepAlive(fn)
 	KeepAlive(arg)
+	KeepAlive(mp)
 
-	endcgo(mp)
 	return errno
 }
 
 //go:nosplit
 func endcgo(mp *m) {
+	mp.incgo = false
 	mp.ncgo--
 
 	if raceenabled {
 		raceacquire(unsafe.Pointer(&racecgosync))
 	}
-
-	unlockOSThread() // invalidates mp
 }
 
 // Call from C back to Go.
@@ -168,6 +171,12 @@ func cgocallbackg(ctxt uintptr) {
 		println("runtime: bad g in cgocallback")
 		exit(2)
 	}
+
+	// The call from C is on gp.m's g0 stack, so we must ensure
+	// that we stay on that M. We have to do this before calling
+	// exitsyscall, since it would otherwise be free to move us to
+	// a different M. The call to unlockOSThread is in unwindm.
+	lockOSThread()
 
 	// Save current syscall parameters, so m.syscall can be
 	// used again if callback decide to make syscall.
@@ -180,9 +189,15 @@ func cgocallbackg(ctxt uintptr) {
 	savedsp := unsafe.Pointer(gp.syscallsp)
 	savedpc := gp.syscallpc
 	exitsyscall(0) // coming out of cgo call
+	gp.m.incgo = false
 
 	cgocallbackg1(ctxt)
 
+	// At this point unlockOSThread has been called.
+	// The following code must not change to a different m.
+	// This is enforced by checking incgo in the schedule function.
+
+	gp.m.incgo = true
 	// going back to cgo call
 	reentersyscall(savedpc, uintptr(savedsp))
 
@@ -286,6 +301,10 @@ func cgocallbackg1(ctxt uintptr) {
 		// On mips64x, stack frame is two words and there's a saved LR between
 		// SP and the stack frame and between the stack frame and the arguments.
 		cb = (*args)(unsafe.Pointer(sp + 4*sys.PtrSize))
+	case "mips", "mipsle":
+		// On mipsx, stack frame is two words and there's a saved LR between
+		// SP and the stack frame and between the stack frame and the arguments.
+		cb = (*args)(unsafe.Pointer(sp + 4*sys.PtrSize))
 	}
 
 	// Invoke callback.
@@ -313,32 +332,35 @@ func cgocallbackg1(ctxt uintptr) {
 }
 
 func unwindm(restore *bool) {
-	if !*restore {
-		return
-	}
-	// Restore sp saved by cgocallback during
-	// unwind of g's stack (see comment at top of file).
-	mp := acquirem()
-	sched := &mp.g0.sched
-	switch GOARCH {
-	default:
-		throw("unwindm not implemented")
-	case "386", "amd64", "arm", "ppc64", "ppc64le", "mips64", "mips64le", "s390x":
-		sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + sys.MinFrameSize))
-	case "arm64":
-		sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + 16))
+	if *restore {
+		// Restore sp saved by cgocallback during
+		// unwind of g's stack (see comment at top of file).
+		mp := acquirem()
+		sched := &mp.g0.sched
+		switch GOARCH {
+		default:
+			throw("unwindm not implemented")
+		case "386", "amd64", "arm", "ppc64", "ppc64le", "mips64", "mips64le", "s390x", "mips", "mipsle":
+			sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + sys.MinFrameSize))
+		case "arm64":
+			sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + 16))
+		}
+
+		// Call endcgo to do the accounting that cgocall will not have a
+		// chance to do during an unwind.
+		//
+		// In the case where a Go call originates from C, ncgo is 0
+		// and there is no matching cgocall to end.
+		if mp.ncgo > 0 {
+			endcgo(mp)
+		}
+
+		releasem(mp)
 	}
 
-	// Call endcgo to do the accounting that cgocall will not have a
-	// chance to do during an unwind.
-	//
-	// In the case where a a Go call originates from C, ncgo is 0
-	// and there is no matching cgocall to end.
-	if mp.ncgo > 0 {
-		endcgo(mp)
-	}
-
-	releasem(mp)
+	// Undo the call to lockOSThread in cgocallbackg.
+	// We must still stay on the same m.
+	unlockOSThread()
 }
 
 // called from assembly
@@ -527,7 +549,7 @@ func cgoCheckArg(t *_type, p unsafe.Pointer, indir, top bool, msg string) {
 			return
 		}
 		for _, f := range st.fields {
-			cgoCheckArg(f.typ, add(p, f.offset), true, top, msg)
+			cgoCheckArg(f.typ, add(p, f.offset()), true, top, msg)
 		}
 	case kindPtr, kindUnsafePointer:
 		if indir {
@@ -550,32 +572,21 @@ func cgoCheckArg(t *_type, p unsafe.Pointer, indir, top bool, msg string) {
 // pointer into Go memory. If it does, we panic.
 // The return values are unused but useful to see in panic tracebacks.
 func cgoCheckUnknownPointer(p unsafe.Pointer, msg string) (base, i uintptr) {
-	if cgoInRange(p, mheap_.arena_start, mheap_.arena_used) {
-		if !inheap(uintptr(p)) {
-			// On 32-bit systems it is possible for C's allocated memory
-			// to have addresses between arena_start and arena_used.
-			// Either this pointer is a stack or an unused span or it's
-			// a C allocation. Escape analysis should prevent the first,
-			// garbage collection should prevent the second,
-			// and the third is completely OK.
-			return
-		}
-
-		b, hbits, span, _ := heapBitsForObject(uintptr(p), 0, 0)
+	if inheap(uintptr(p)) {
+		b, span, _ := findObject(uintptr(p), 0, 0)
 		base = b
 		if base == 0 {
 			return
 		}
+		hbits := heapBitsForAddr(base)
 		n := span.elemsize
 		for i = uintptr(0); i < n; i += sys.PtrSize {
 			if i != 1*sys.PtrSize && !hbits.morePointers() {
 				// No more possible pointers.
 				break
 			}
-			if hbits.isPointer() {
-				if cgoIsGoPointer(*(*unsafe.Pointer)(unsafe.Pointer(base + i))) {
-					panic(errorString(msg))
-				}
+			if hbits.isPointer() && cgoIsGoPointer(*(*unsafe.Pointer)(unsafe.Pointer(base + i))) {
+				panic(errorString(msg))
 			}
 			hbits = hbits.next()
 		}

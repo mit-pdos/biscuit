@@ -32,38 +32,41 @@
 package ld
 
 import (
-	"cmd/internal/obj"
+	"cmd/internal/objabi"
 	"cmd/internal/sys"
+	"cmd/link/internal/sym"
 	"log"
 )
 
 func linknew(arch *sys.Arch) *Link {
 	ctxt := &Link{
-		Syms: &Symbols{
-			hash: []map[string]*Symbol{
-				// preallocate about 2mb for hash of
-				// non static symbols
-				make(map[string]*Symbol, 100000),
-			},
-			Allsym: make([]*Symbol, 0, 100000),
-		},
-		Arch: arch,
+		Syms:         sym.NewSymbols(),
+		Out:          &OutBuf{arch: arch},
+		Arch:         arch,
+		LibraryByPkg: make(map[string]*sym.Library),
 	}
 
-	if obj.GOARCH != arch.Name {
-		log.Fatalf("invalid obj.GOARCH %s (want %s)", obj.GOARCH, arch.Name)
+	if objabi.GOARCH != arch.Name {
+		log.Fatalf("invalid objabi.GOARCH %s (want %s)", objabi.GOARCH, arch.Name)
 	}
+
+	AtExit(func() {
+		if nerrors > 0 && ctxt.Out.f != nil {
+			ctxt.Out.f.Close()
+			mayberemoveoutfile()
+		}
+	})
 
 	return ctxt
 }
 
 // computeTLSOffset records the thread-local storage offset.
 func (ctxt *Link) computeTLSOffset() {
-	switch Headtype {
+	switch ctxt.HeadType {
 	default:
-		log.Fatalf("unknown thread-local storage offset for %v", Headtype)
+		log.Fatalf("unknown thread-local storage offset for %v", ctxt.HeadType)
 
-	case obj.Hplan9, obj.Hwindows, obj.Hwindowsgui:
+	case objabi.Hplan9, objabi.Hwindows:
 		break
 
 		/*
@@ -71,13 +74,13 @@ func (ctxt *Link) computeTLSOffset() {
 		 * Translate 0(FS) and 8(FS) into -16(FS) and -8(FS).
 		 * Known to low-level assembly in package runtime and runtime/cgo.
 		 */
-	case obj.Hlinux,
-		obj.Hfreebsd,
-		obj.Hnetbsd,
-		obj.Hopenbsd,
-		obj.Hdragonfly,
-		obj.Hsolaris:
-		if obj.GOOS == "android" {
+	case objabi.Hlinux,
+		objabi.Hfreebsd,
+		objabi.Hnetbsd,
+		objabi.Hopenbsd,
+		objabi.Hdragonfly,
+		objabi.Hsolaris:
+		if objabi.GOOS == "android" {
 			switch ctxt.Arch.Family {
 			case sys.AMD64:
 				// Android/amd64 constant - offset from 0(FS) to our TLS slot.
@@ -93,7 +96,7 @@ func (ctxt *Link) computeTLSOffset() {
 			ctxt.Tlsoffset = -1 * ctxt.Arch.PtrSize
 		}
 
-	case obj.Hnacl:
+	case objabi.Hnacl:
 		switch ctxt.Arch.Family {
 		default:
 			log.Fatalf("unknown thread-local storage offset for nacl/%s", ctxt.Arch.Name)
@@ -112,7 +115,7 @@ func (ctxt *Link) computeTLSOffset() {
 		 * OS X system constants - offset from 0(GS) to our TLS.
 		 * Explained in src/runtime/cgo/gcc_darwin_*.c.
 		 */
-	case obj.Hdarwin:
+	case objabi.Hdarwin:
 		switch ctxt.Arch.Family {
 		default:
 			log.Fatalf("unknown thread-local storage offset for darwin/%s", ctxt.Arch.Name)

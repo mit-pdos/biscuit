@@ -126,7 +126,7 @@ var reqTests = []reqTest{
 		noError,
 	},
 
-	// Tests a bogus abs_path on the Request-Line (RFC 2616 section 5.1.2)
+	// Tests a bogus absolute-path on the Request-Line (RFC 7230 section 5.3.1)
 	{
 		"GET ../../../../etc/passwd HTTP/1.1\r\n" +
 			"Host: test\r\n\r\n",
@@ -453,6 +453,14 @@ Content-Length: 4
 abc`)},
 	{"smuggle_content_len_head", reqBytes(`HEAD / HTTP/1.1
 Host: foo
+Content-Length: 5`)},
+
+	// golang.org/issue/22464
+	{"leading_space_in_header", reqBytes(`HEAD / HTTP/1.1
+ Host: foo
+Content-Length: 5`)},
+	{"leading_tab_in_header", reqBytes(`HEAD / HTTP/1.1
+\tHost: foo
 Content-Length: 5`)},
 }
 

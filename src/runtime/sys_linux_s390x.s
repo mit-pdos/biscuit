@@ -16,8 +16,8 @@
 #define SYS_close                 6
 #define SYS_getpid               20
 #define SYS_kill                 37
+#define SYS_brk			 45
 #define SYS_fcntl                55
-#define SYS_gettimeofday         78
 #define SYS_mmap                 90
 #define SYS_munmap               91
 #define SYS_setitimer           104
@@ -28,7 +28,6 @@
 #define SYS_rt_sigaction        174
 #define SYS_rt_sigprocmask      175
 #define SYS_sigaltstack         186
-#define SYS_ugetrlimit          191
 #define SYS_madvise             219
 #define SYS_mincore             218
 #define SYS_gettid              236
@@ -48,11 +47,16 @@ TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0-4
 	SYSCALL
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT|NOFRAME,$0-4
-	MOVW	code+0(FP), R2
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT|NOFRAME,$0-8
+	MOVD	wait+0(FP), R1
+	// We're done using the stack.
+	MOVW	$0, R2
+	MOVW	R2, (R1)
+	MOVW	$0, R2	// exit code
 	MOVW	$SYS_exit, R1
 	SYSCALL
-	RET
+	JMP	0(PC)
 
 TEXT runtime·open(SB),NOSPLIT|NOFRAME,$0-20
 	MOVD	name+0(FP), R2
@@ -98,14 +102,6 @@ TEXT runtime·read(SB),NOSPLIT|NOFRAME,$0-28
 	CMPUBLT	R2, R3, 2(PC)
 	MOVW	$-1, R2
 	MOVW	R2, ret+24(FP)
-	RET
-
-TEXT runtime·getrlimit(SB),NOSPLIT|NOFRAME,$0-20
-	MOVW	kind+0(FP), R2
-	MOVD	limit+8(FP), R3
-	MOVW	$SYS_ugetrlimit, R1
-	SYSCALL
-	MOVW	R2, ret+16(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$16-4
@@ -169,8 +165,8 @@ TEXT runtime·mincore(SB),NOSPLIT|NOFRAME,$0-28
 	MOVW	R2, ret+24(FP)
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB),NOSPLIT,$16
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB),NOSPLIT,$16
 	MOVW	$0, R2 // CLOCK_REALTIME
 	MOVD	$tp-16(SP), R3
 	MOVW	$SYS_clock_gettime, R1
@@ -245,7 +241,7 @@ TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
 	BR	runtime·sigtramp(SB)
 
 // func mmap(addr unsafe.Pointer, n uintptr, prot, flags, fd int32, off uint32) unsafe.Pointer
-TEXT runtime·mmap(SB),NOSPLIT,$48-40
+TEXT runtime·mmap(SB),NOSPLIT,$48-48
 	MOVD	addr+0(FP), R2
 	MOVD	n+8(FP), R3
 	MOVW	prot+16(FP), R4
@@ -266,9 +262,14 @@ TEXT runtime·mmap(SB),NOSPLIT,$48-40
 	MOVW	$SYS_mmap, R1
 	SYSCALL
 	MOVD	$-4095, R3
-	CMPUBLT	R2, R3, 2(PC)
+	CMPUBLT	R2, R3, ok
 	NEG	R2
-	MOVD	R2, ret+32(FP)
+	MOVD	$0, p+32(FP)
+	MOVD	R2, err+40(FP)
+	RET
+ok:
+	MOVD	R2, p+32(FP)
+	MOVD	$0, err+40(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT|NOFRAME,$0
@@ -433,4 +434,13 @@ TEXT runtime·closeonexec(SB),NOSPLIT|NOFRAME,$0
 	MOVD    $1, R4  // FD_CLOEXEC
 	MOVW	$SYS_fcntl, R1
 	SYSCALL
+	RET
+
+// func sbrk0() uintptr
+TEXT runtime·sbrk0(SB),NOSPLIT|NOFRAME,$0-8
+	// Implemented as brk(NULL).
+	MOVD	$0, R2
+	MOVW	$SYS_brk, R1
+	SYSCALL
+	MOVD	R2, ret+0(FP)
 	RET

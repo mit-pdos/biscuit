@@ -17,32 +17,11 @@ import (
 
 var realdwarf, linkseg *macho.Segment
 var dwarfstart, linkstart int64
+var dwarfaddr int64
 var linkoffset uint32
 
 const (
-	LC_ID_DYLIB             = 0xd
-	LC_LOAD_DYLINKER        = 0xe
-	LC_PREBOUND_DYLIB       = 0x10
-	LC_LOAD_WEAK_DYLIB      = 0x18
-	LC_UUID                 = 0x1b
-	LC_RPATH                = 0x8000001c
-	LC_CODE_SIGNATURE       = 0x1d
-	LC_SEGMENT_SPLIT_INFO   = 0x1e
-	LC_REEXPORT_DYLIB       = 0x8000001f
-	LC_ENCRYPTION_INFO      = 0x21
-	LC_DYLD_INFO            = 0x22
-	LC_DYLD_INFO_ONLY       = 0x80000022
-	LC_VERSION_MIN_MACOSX   = 0x24
-	LC_VERSION_MIN_IPHONEOS = 0x25
-	LC_FUNCTION_STARTS      = 0x26
-	LC_MAIN                 = 0x80000028
-	LC_DATA_IN_CODE         = 0x29
-	LC_SOURCE_VERSION       = 0x2A
-	LC_DYLIB_CODE_SIGN_DRS  = 0x2B
-	LC_ENCRYPTION_INFO_64   = 0x2C
-
-	dwarfMinAlign = 6  // 64 = 1 << 6
-	pageAlign     = 12 // 4096 = 1 << 12
+	pageAlign = 12 // 4096 = 1 << 12
 )
 
 type loadCmd struct {
@@ -112,7 +91,7 @@ func (r loadCmdReader) WriteAt(offset int64, data interface{}) error {
 // header to add the DWARF sections. (Use ld's -headerpad option)
 // dsym is the path to the macho file containing DWARF from dsymutil.
 // outexe is the path where the combined executable should be saved.
-func machoCombineDwarf(inexe, dsym, outexe string) error {
+func machoCombineDwarf(inexe, dsym, outexe string, buildmode BuildMode) error {
 	exef, err := os.Open(inexe)
 	if err != nil {
 		return err
@@ -157,16 +136,13 @@ func machoCombineDwarf(inexe, dsym, outexe string) error {
 	}
 
 	// Now copy the dwarf data into the output.
-	maxalign := uint32(dwarfMinAlign) //
-	for _, sect := range dwarfm.Sections {
-		if sect.Align > maxalign {
-			maxalign = sect.Align
-		}
-	}
-	dwarfstart = machoCalcStart(realdwarf.Offset, linkseg.Offset, maxalign)
+	// Kernel requires all loaded segments to be page-aligned in the file,
+	// even though we mark this one as being 0 bytes of virtual address space.
+	dwarfstart = machoCalcStart(realdwarf.Offset, linkseg.Offset, pageAlign)
 	if _, err = outf.Seek(dwarfstart, 0); err != nil {
 		return err
 	}
+	dwarfaddr = int64((linkseg.Addr + linkseg.Memsz + 1<<pageAlign - 1) &^ (1<<pageAlign - 1))
 
 	if _, err = dwarff.Seek(int64(realdwarf.Offset), 0); err != nil {
 		return err
@@ -254,7 +230,7 @@ func machoCombineDwarf(inexe, dsym, outexe string) error {
 			return err
 		}
 	}
-	return machoUpdateDwarfHeader(&reader)
+	return machoUpdateDwarfHeader(&reader, buildmode)
 }
 
 // machoUpdateSegment updates the load command for a moved segment.
@@ -277,10 +253,10 @@ func machoUpdateSegment(r loadCmdReader, seg, sect interface{}) error {
 		return err
 	}
 	// There shouldn't be any sections, but just to make sure...
-	return machoUpdateSections(r, segValue, reflect.ValueOf(sect), uint64(linkoffset))
+	return machoUpdateSections(r, segValue, reflect.ValueOf(sect), uint64(linkoffset), 0)
 }
 
-func machoUpdateSections(r loadCmdReader, seg, sect reflect.Value, delta uint64) error {
+func machoUpdateSections(r loadCmdReader, seg, sect reflect.Value, deltaOffset, deltaAddr uint64) error {
 	iseg := reflect.Indirect(seg)
 	nsect := iseg.FieldByName("Nsect").Uint()
 	if nsect == 0 {
@@ -291,16 +267,20 @@ func machoUpdateSections(r loadCmdReader, seg, sect reflect.Value, delta uint64)
 	isect := reflect.Indirect(sect)
 	offsetField := isect.FieldByName("Offset")
 	reloffField := isect.FieldByName("Reloff")
+	addrField := isect.FieldByName("Addr")
 	sectSize := int64(isect.Type().Size())
 	for i := uint64(0); i < nsect; i++ {
 		if err := r.ReadAt(sectOffset, sect.Interface()); err != nil {
 			return err
 		}
 		if offsetField.Uint() != 0 {
-			offsetField.SetUint(offsetField.Uint() + delta)
+			offsetField.SetUint(offsetField.Uint() + deltaOffset)
 		}
 		if reloffField.Uint() != 0 {
-			reloffField.SetUint(reloffField.Uint() + delta)
+			reloffField.SetUint(reloffField.Uint() + deltaOffset)
+		}
+		if addrField.Uint() != 0 {
+			addrField.SetUint(addrField.Uint() + deltaAddr)
 		}
 		if err := r.WriteAt(sectOffset, sect.Interface()); err != nil {
 			return err
@@ -311,7 +291,7 @@ func machoUpdateSections(r loadCmdReader, seg, sect reflect.Value, delta uint64)
 }
 
 // machoUpdateDwarfHeader updates the DWARF segment load command.
-func machoUpdateDwarfHeader(r *loadCmdReader) error {
+func machoUpdateDwarfHeader(r *loadCmdReader, buildmode BuildMode) error {
 	var seg, sect interface{}
 	cmd, err := r.Next()
 	if err != nil {
@@ -327,15 +307,30 @@ func machoUpdateDwarfHeader(r *loadCmdReader) error {
 	if err := r.ReadAt(0, seg); err != nil {
 		return err
 	}
-	segValue := reflect.ValueOf(seg)
-	offset := reflect.Indirect(segValue).FieldByName("Offset")
+	segv := reflect.ValueOf(seg).Elem()
 
-	delta := uint64(dwarfstart) - realdwarf.Offset
-	offset.SetUint(offset.Uint() + delta)
+	segv.FieldByName("Offset").SetUint(uint64(dwarfstart))
+	segv.FieldByName("Addr").SetUint(uint64(dwarfaddr))
+
+	deltaOffset := uint64(dwarfstart) - realdwarf.Offset
+	deltaAddr := uint64(dwarfaddr) - realdwarf.Addr
+
+	// If we set Memsz to 0 (and might as well set Addr too),
+	// then the xnu kernel will bail out halfway through load_segment
+	// and not apply further sanity checks that we might fail in the future.
+	// We don't need the DWARF information actually available in memory.
+	// But if we do this for buildmode=c-shared then the user-space
+	// dynamic loader complains about memsz < filesz. Sigh.
+	if buildmode != BuildModeCShared {
+		segv.FieldByName("Addr").SetUint(0)
+		segv.FieldByName("Memsz").SetUint(0)
+		deltaAddr = 0
+	}
+
 	if err := r.WriteAt(0, seg); err != nil {
 		return err
 	}
-	return machoUpdateSections(*r, segValue, reflect.ValueOf(sect), delta)
+	return machoUpdateSections(*r, segv, reflect.ValueOf(sect), deltaOffset, deltaAddr)
 }
 
 func machoUpdateLoadCommand(r loadCmdReader, cmd interface{}, fields ...string) error {

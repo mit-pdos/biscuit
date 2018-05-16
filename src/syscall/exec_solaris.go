@@ -23,6 +23,7 @@ type SysProcAttr struct {
 // Implemented in runtime package.
 func runtime_BeforeFork()
 func runtime_AfterFork()
+func runtime_AfterForkInChild()
 
 func chdir(path uintptr) (err Errno)
 func chroot1(path uintptr) (err Errno)
@@ -39,6 +40,11 @@ func setsid() (pid uintptr, err Errno)
 func setuid(uid uintptr) (err Errno)
 func setpgid(pid uintptr, pgid uintptr) (err Errno)
 func write1(fd uintptr, buf uintptr, nbyte uintptr) (n uintptr, err Errno)
+
+// syscall defines this global on our behalf to avoid a build dependency on other platforms
+func init() {
+	execveSolaris = execve
+}
 
 // Fork, dup fd onto 0..len(fd), and exec(argv0, argvv, envv) in child.
 // If a dup or exec fails, write the errno error to pipe.
@@ -93,6 +99,8 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 
 	// Fork succeeded, now in child.
 
+	runtime_AfterForkInChild()
+
 	// Session ID
 	if sys.Setsid {
 		_, err1 = setsid()
@@ -143,9 +151,11 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		if ngroups > 0 {
 			groups = uintptr(unsafe.Pointer(&cred.Groups[0]))
 		}
-		err1 = setgroups1(ngroups, groups)
-		if err1 != 0 {
-			goto childerror
+		if !cred.NoSetGroups {
+			err1 = setgroups1(ngroups, groups)
+			if err1 != 0 {
+				goto childerror
+			}
 		}
 		err1 = setgid(uintptr(cred.Gid))
 		if err1 != 0 {
@@ -250,18 +260,4 @@ childerror:
 	for {
 		exit(253)
 	}
-}
-
-// Try to open a pipe with O_CLOEXEC set on both file descriptors.
-func forkExecPipe(p []int) error {
-	err := Pipe(p)
-	if err != nil {
-		return err
-	}
-	_, err = fcntl(p[0], F_SETFD, FD_CLOEXEC)
-	if err != nil {
-		return err
-	}
-	_, err = fcntl(p[1], F_SETFD, FD_CLOEXEC)
-	return err
 }

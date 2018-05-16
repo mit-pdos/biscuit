@@ -47,26 +47,25 @@ type typeAlg struct {
 func memhash0(p unsafe.Pointer, h uintptr) uintptr {
 	return h
 }
+
 func memhash8(p unsafe.Pointer, h uintptr) uintptr {
 	return memhash(p, h, 1)
 }
+
 func memhash16(p unsafe.Pointer, h uintptr) uintptr {
 	return memhash(p, h, 2)
 }
-func memhash32(p unsafe.Pointer, h uintptr) uintptr {
-	return memhash(p, h, 4)
-}
-func memhash64(p unsafe.Pointer, h uintptr) uintptr {
-	return memhash(p, h, 8)
-}
+
 func memhash128(p unsafe.Pointer, h uintptr) uintptr {
 	return memhash(p, h, 16)
 }
 
-// memhash_varlen is defined in assembly because it needs access
-// to the closure. It appears here to provide an argument
-// signature for the assembly routine.
-func memhash_varlen(p unsafe.Pointer, h uintptr) uintptr
+//go:nosplit
+func memhash_varlen(p unsafe.Pointer, h uintptr) uintptr {
+	ptr := getclosureptr()
+	size := *(*uintptr)(unsafe.Pointer(ptr + unsafe.Sizeof(h)))
+	return memhash(p, h, size)
+}
 
 var algarray = [alg_max]typeAlg{
 	alg_NOEQ:     {nil, nil},
@@ -206,16 +205,16 @@ func strequal(p, q unsafe.Pointer) bool {
 	return *(*string)(p) == *(*string)(q)
 }
 func interequal(p, q unsafe.Pointer) bool {
-	return ifaceeq(*(*iface)(p), *(*iface)(q))
+	x := *(*iface)(p)
+	y := *(*iface)(q)
+	return x.tab == y.tab && ifaceeq(x.tab, x.data, y.data)
 }
 func nilinterequal(p, q unsafe.Pointer) bool {
-	return efaceeq(*(*eface)(p), *(*eface)(q))
+	x := *(*eface)(p)
+	y := *(*eface)(q)
+	return x._type == y._type && efaceeq(x._type, x.data, y.data)
 }
-func efaceeq(x, y eface) bool {
-	t := x._type
-	if t != y._type {
-		return false
-	}
+func efaceeq(t *_type, x, y unsafe.Pointer) bool {
 	if t == nil {
 		return true
 	}
@@ -224,27 +223,23 @@ func efaceeq(x, y eface) bool {
 		panic(errorString("comparing uncomparable type " + t.string()))
 	}
 	if isDirectIface(t) {
-		return eq(noescape(unsafe.Pointer(&x.data)), noescape(unsafe.Pointer(&y.data)))
+		return eq(noescape(unsafe.Pointer(&x)), noescape(unsafe.Pointer(&y)))
 	}
-	return eq(x.data, y.data)
+	return eq(x, y)
 }
-func ifaceeq(x, y iface) bool {
-	xtab := x.tab
-	if xtab != y.tab {
-		return false
-	}
-	if xtab == nil {
+func ifaceeq(tab *itab, x, y unsafe.Pointer) bool {
+	if tab == nil {
 		return true
 	}
-	t := xtab._type
+	t := tab._type
 	eq := t.alg.equal
 	if eq == nil {
 		panic(errorString("comparing uncomparable type " + t.string()))
 	}
 	if isDirectIface(t) {
-		return eq(noescape(unsafe.Pointer(&x.data)), noescape(unsafe.Pointer(&y.data)))
+		return eq(noescape(unsafe.Pointer(&x)), noescape(unsafe.Pointer(&y)))
 	}
-	return eq(x.data, y.data)
+	return eq(x, y)
 }
 
 // Testing adapters for hash quality tests (see hash_test.go)
@@ -287,9 +282,9 @@ func alginit() {
 	// Install aes hash algorithm if we have the instructions we need
 	if (GOARCH == "386" || GOARCH == "amd64") &&
 		GOOS != "nacl" &&
-		cpuid_ecx&(1<<25) != 0 && // aes (aesenc)
-		cpuid_ecx&(1<<9) != 0 && // sse3 (pshufb)
-		cpuid_ecx&(1<<19) != 0 { // sse4.1 (pinsr{d,q})
+		support_aes && // AESENC
+		support_ssse3 && // PSHUFB
+		support_sse41 { // PINSR{D,Q}
 		useAeshash = true
 		algarray[alg_MEM32].hash = aeshash32
 		algarray[alg_MEM64].hash = aeshash64

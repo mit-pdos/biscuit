@@ -52,12 +52,23 @@ TEXT runtime·exit(SB),NOSPLIT,$-4
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT,$-4
-	MOVL	$431, AX
+GLOBL exitStack<>(SB),RODATA,$8
+DATA exitStack<>+0x00(SB)/4, $0
+DATA exitStack<>+0x04(SB)/4, $0
+
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT,$0-4
+	MOVL	wait+0(FP), AX
+	// We're done using the stack.
+	MOVL	$0, (AX)
+	// thr_exit takes a single pointer argument, which it expects
+	// on the stack. We want to pass 0, so switch over to a fake
+	// stack of 0s. It won't write to the stack.
+	MOVL	$exitStack<>(SB), SP
+	MOVL	$431, AX	// thr_exit
 	INT	$0x80
-	JAE	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
-	RET
+	JMP	0(PC)
 
 TEXT runtime·open(SB),NOSPLIT,$-4
 	MOVL	$5, AX
@@ -89,12 +100,6 @@ TEXT runtime·write(SB),NOSPLIT,$-4
 	JAE	2(PC)
 	MOVL	$-1, AX
 	MOVL	AX, ret+12(FP)
-	RET
-
-TEXT runtime·getrlimit(SB),NOSPLIT,$-4
-	MOVL	$194, AX
-	INT	$0x80
-	MOVL	AX, ret+8(FP)
 	RET
 
 TEXT runtime·raise(SB),NOSPLIT,$16
@@ -138,7 +143,13 @@ TEXT runtime·mmap(SB),NOSPLIT,$32
 	STOSL
 	MOVL	$477, AX
 	INT	$0x80
-	MOVL	AX, ret+24(FP)
+	JAE	ok
+	MOVL	$0, p+24(FP)
+	MOVL	AX, err+28(FP)
+	RET
+ok:
+	MOVL	AX, p+24(FP)
+	MOVL	$0, err+28(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT,$-4
@@ -159,8 +170,8 @@ TEXT runtime·setitimer(SB), NOSPLIT, $-4
 	INT	$0x80
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB), NOSPLIT, $32
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB), NOSPLIT, $32
 	MOVL	$232, AX // clock_gettime
 	LEAL	12(SP), BX
 	MOVL	$0, 4(SP)	// CLOCK_REALTIME
@@ -170,8 +181,8 @@ TEXT time·now(SB), NOSPLIT, $32
 	MOVL	16(SP), BX	// nsec
 
 	// sec is in AX, nsec in BX
-	MOVL	AX, sec+0(FP)
-	MOVL	$0, sec+4(FP)
+	MOVL	AX, sec_lo+0(FP)
+	MOVL	$0, sec_hi+4(FP)
 	MOVL	BX, nsec+8(FP)
 	RET
 
@@ -396,6 +407,15 @@ TEXT runtime·closeonexec(SB),NOSPLIT,$32
 	INT	$0x80
 	JAE	2(PC)
 	NEGL	AX
+	RET
+
+// func cpuset_getaffinity(level int, which int, id int64, size int, mask *byte) int32
+TEXT runtime·cpuset_getaffinity(SB), NOSPLIT, $0-28
+	MOVL	$487, AX
+	INT	$0x80
+	JAE	2(PC)
+	NEGL	AX
+	MOVL	AX, ret+24(FP)
 	RET
 
 GLOBL runtime·tlsoffset(SB),NOPTR,$4

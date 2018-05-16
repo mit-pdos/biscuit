@@ -57,7 +57,7 @@ func UTF16ToString(s []uint16) string {
 
 // StringToUTF16Ptr returns pointer to the UTF-16 encoding of
 // the UTF-8 string s, with a terminating NUL added. If s
-// If s contains a NUL byte this function panics instead of
+// contains a NUL byte this function panics instead of
 // returning an error.
 //
 // Deprecated: Use UTF16PtrFromString instead.
@@ -110,7 +110,7 @@ func (e Errno) Error() string {
 }
 
 func (e Errno) Temporary() bool {
-	return e == EINTR || e == EMFILE || e.Timeout()
+	return e == EINTR || e == EMFILE || e == WSAECONNABORTED || e == WSAECONNRESET || e.Timeout()
 }
 
 func (e Errno) Timeout() bool {
@@ -169,6 +169,7 @@ func NewCallbackCDecl(fn interface{}) uintptr {
 //sys	CancelIo(s Handle) (err error)
 //sys	CancelIoEx(s Handle, o *Overlapped) (err error)
 //sys	CreateProcess(appName *uint16, commandLine *uint16, procSecurity *SecurityAttributes, threadSecurity *SecurityAttributes, inheritHandles bool, creationFlags uint32, env *uint16, currentDir *uint16, startupInfo *StartupInfo, outProcInfo *ProcessInformation) (err error) = CreateProcessW
+//sys	CreateProcessAsUser(token Token, appName *uint16, commandLine *uint16, procSecurity *SecurityAttributes, threadSecurity *SecurityAttributes, inheritHandles bool, creationFlags uint32, env *uint16, currentDir *uint16, startupInfo *StartupInfo, outProcInfo *ProcessInformation) (err error) = advapi32.CreateProcessAsUserW
 //sys	OpenProcess(da uint32, inheritHandle bool, pid uint32) (handle Handle, err error)
 //sys	TerminateProcess(handle Handle, exitcode uint32) (err error)
 //sys	GetExitCodeProcess(handle Handle, exitcode *uint32) (err error)
@@ -235,8 +236,6 @@ func NewCallbackCDecl(fn interface{}) uintptr {
 //sys	CreateHardLink(filename *uint16, existingfilename *uint16, reserved uintptr) (err error) [failretval&0xff==0] = CreateHardLinkW
 
 // syscall interface implementation for other packages
-
-func Exit(code int) { ExitProcess(uint32(code)) }
 
 func makeInheritSa() *SecurityAttributes {
 	var sa SecurityAttributes
@@ -333,6 +332,27 @@ func Write(fd Handle, p []byte) (n int, err error) {
 
 var ioSync int64
 
+var procSetFilePointerEx = modkernel32.NewProc("SetFilePointerEx")
+
+const ptrSize = unsafe.Sizeof(uintptr(0))
+
+// setFilePointerEx calls SetFilePointerEx.
+// See https://msdn.microsoft.com/en-us/library/windows/desktop/aa365542(v=vs.85).aspx
+func setFilePointerEx(handle Handle, distToMove int64, newFilePointer *int64, whence uint32) error {
+	var e1 Errno
+	if ptrSize == 8 {
+		_, _, e1 = Syscall6(procSetFilePointerEx.Addr(), 4, uintptr(handle), uintptr(distToMove), uintptr(unsafe.Pointer(newFilePointer)), uintptr(whence), 0, 0)
+	} else {
+		// distToMove is a LARGE_INTEGER:
+		// https://msdn.microsoft.com/en-us/library/windows/desktop/aa383713(v=vs.85).aspx
+		_, _, e1 = Syscall6(procSetFilePointerEx.Addr(), 5, uintptr(handle), uintptr(distToMove), uintptr(distToMove>>32), uintptr(unsafe.Pointer(newFilePointer)), uintptr(whence), 0)
+	}
+	if e1 != 0 {
+		return errnoErr(e1)
+	}
+	return nil
+}
+
 func Seek(fd Handle, offset int64, whence int) (newoffset int64, err error) {
 	var w uint32
 	switch whence {
@@ -343,18 +363,13 @@ func Seek(fd Handle, offset int64, whence int) (newoffset int64, err error) {
 	case 2:
 		w = FILE_END
 	}
-	hi := int32(offset >> 32)
-	lo := int32(offset)
 	// use GetFileType to check pipe, pipe can't do seek
 	ft, _ := GetFileType(fd)
 	if ft == FILE_TYPE_PIPE {
-		return 0, EPIPE
+		return 0, ESPIPE
 	}
-	rlo, e := SetFilePointer(fd, lo, &hi, w)
-	if e != nil {
-		return 0, e
-	}
-	return int64(hi)<<32 + int64(rlo), nil
+	err = setFilePointerEx(fd, offset, &newoffset, w)
+	return
 }
 
 func Close(fd Handle) (err error) {

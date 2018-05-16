@@ -13,6 +13,7 @@ import (
 )
 
 func TestGoLookupIP(t *testing.T) {
+	defer dnsWaitGroup.Wait()
 	host := "localhost"
 	ctx := context.Background()
 	_, err, ok := cgoLookupIP(ctx, host)
@@ -22,7 +23,7 @@ func TestGoLookupIP(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	if _, err := goLookupIP(ctx, host); err != nil {
+	if _, err := DefaultResolver.goLookupIP(ctx, host); err != nil {
 		t.Error(err)
 	}
 }

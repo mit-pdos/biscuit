@@ -172,6 +172,9 @@ func InterfaceByName(name string) (*Interface, error) {
 // An ipv6ZoneCache represents a cache holding partial network
 // interface information. It is used for reducing the cost of IPv6
 // addressing scope zone resolution.
+//
+// Multiple names sharing the index are managed by first-come
+// first-served basis for consistency.
 type ipv6ZoneCache struct {
 	sync.RWMutex                // guard the following
 	lastFetched  time.Time      // last time routing information was fetched
@@ -202,34 +205,36 @@ func (zc *ipv6ZoneCache) update(ift []Interface) {
 	zc.toName = make(map[int]string, len(ift))
 	for _, ifi := range ift {
 		zc.toIndex[ifi.Name] = ifi.Index
-		zc.toName[ifi.Index] = ifi.Name
+		if _, ok := zc.toName[ifi.Index]; !ok {
+			zc.toName[ifi.Index] = ifi.Name
+		}
 	}
 }
 
-func zoneToString(zone int) string {
-	if zone == 0 {
+func (zc *ipv6ZoneCache) name(index int) string {
+	if index == 0 {
 		return ""
 	}
 	zoneCache.update(nil)
 	zoneCache.RLock()
 	defer zoneCache.RUnlock()
-	name, ok := zoneCache.toName[zone]
+	name, ok := zoneCache.toName[index]
 	if !ok {
-		name = uitoa(uint(zone))
+		name = uitoa(uint(index))
 	}
 	return name
 }
 
-func zoneToInt(zone string) int {
-	if zone == "" {
+func (zc *ipv6ZoneCache) index(name string) int {
+	if name == "" {
 		return 0
 	}
 	zoneCache.update(nil)
 	zoneCache.RLock()
 	defer zoneCache.RUnlock()
-	index, ok := zoneCache.toIndex[zone]
+	index, ok := zoneCache.toIndex[name]
 	if !ok {
-		index, _, _ = dtoi(zone)
+		index, _, _ = dtoi(name)
 	}
 	return index
 }

@@ -19,14 +19,21 @@ TEXT runtime·exit(SB),NOSPLIT,$-4
 	MOVL	$0xf1, 0xf1		// crash
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT,$8
-	MOVL	$0, 0(SP)
-	MOVL	$0, 4(SP)		// arg 1 - notdead
+GLOBL exitStack<>(SB),RODATA,$8
+DATA exitStack<>+0x00(SB)/4, $0
+DATA exitStack<>+0x04(SB)/4, $0
+
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT,$0-4
+	MOVL	wait+0(FP), AX
+	// We're done using the stack.
+	MOVL	$0, (AX)
+	// sys__lwp_exit takes 1 argument, which it expects on the stack.
+	MOVL	$exitStack<>(SB), SP
 	MOVL	$302, AX		// sys___threxit
 	INT	$0x80
-	JAE	2(PC)
 	MOVL	$0xf1, 0xf1		// crash
-	RET
+	JMP	0(PC)
 
 TEXT runtime·open(SB),NOSPLIT,$-4
 	MOVL	$5, AX
@@ -79,14 +86,15 @@ TEXT runtime·usleep(SB),NOSPLIT,$24
 	INT	$0x80
 	RET
 
-TEXT runtime·raise(SB),NOSPLIT,$12
+TEXT runtime·raise(SB),NOSPLIT,$16
 	MOVL	$299, AX		// sys_getthrid
 	INT	$0x80
 	MOVL	$0, 0(SP)
-	MOVL	AX, 4(SP)		// arg 1 - pid
+	MOVL	AX, 4(SP)		// arg 1 - tid
 	MOVL	sig+0(FP), AX
 	MOVL	AX, 8(SP)		// arg 2 - signum
-	MOVL	$37, AX			// sys_kill
+	MOVL	$0, 12(SP)		// arg 3 - tcb
+	MOVL	$119, AX		// sys_thrkill
 	INT	$0x80
 	RET
 
@@ -97,7 +105,7 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$12
 	MOVL	AX, 4(SP)		// arg 1 - pid
 	MOVL	sig+0(FP), AX
 	MOVL	AX, 8(SP)		// arg 2 - signum
-	MOVL	$37, AX			// sys_kill
+	MOVL	$122, AX		// sys_kill
 	INT	$0x80
 	RET
 
@@ -117,7 +125,13 @@ TEXT runtime·mmap(SB),NOSPLIT,$36
 	STOSL
 	MOVL	$197, AX		// sys_mmap
 	INT	$0x80
-	MOVL	AX, ret+24(FP)
+	JAE	ok
+	MOVL	$0, p+24(FP)
+	MOVL	AX, err+28(FP)
+	RET
+ok:
+	MOVL	AX, p+24(FP)
+	MOVL	$0, err+28(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT,$-4
@@ -139,8 +153,8 @@ TEXT runtime·setitimer(SB),NOSPLIT,$-4
 	INT	$0x80
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB), NOSPLIT, $32
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB), NOSPLIT, $32
 	LEAL	12(SP), BX
 	MOVL	$0, 4(SP)		// arg 1 - clock_id
 	MOVL	BX, 8(SP)		// arg 2 - tp
@@ -148,9 +162,9 @@ TEXT time·now(SB), NOSPLIT, $32
 	INT	$0x80
 
 	MOVL	12(SP), AX		// sec - l32
-	MOVL	AX, sec+0(FP)
+	MOVL	AX, sec_lo+0(FP)
 	MOVL	16(SP), AX		// sec - h32
-	MOVL	AX, sec+4(FP)
+	MOVL	AX, sec_hi+4(FP)
 
 	MOVL	20(SP), BX		// nsec
 	MOVL	BX, nsec+8(FP)
@@ -212,7 +226,15 @@ TEXT runtime·sigfwd(SB),NOSPLIT,$12-16
 	MOVL	AX, SP
 	RET
 
-TEXT runtime·sigtramp(SB),NOSPLIT,$12
+TEXT runtime·sigtramp(SB),NOSPLIT,$28
+	// Save callee-saved C registers, since the caller may be a C signal handler.
+	MOVL	BX, bx-4(SP)
+	MOVL	BP, bp-8(SP)
+	MOVL	SI, si-12(SP)
+	MOVL	DI, di-16(SP)
+	// We don't save mxcsr or the x87 control word because sigtrampgo doesn't
+	// modify them.
+
 	MOVL	signo+0(FP), BX
 	MOVL	BX, 0(SP)
 	MOVL	info+4(FP), BX
@@ -220,6 +242,11 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$12
 	MOVL	context+8(FP), BX
 	MOVL	BX, 8(SP)
 	CALL	runtime·sigtrampgo(SB)
+
+	MOVL	di-16(SP), DI
+	MOVL	si-12(SP), SI
+	MOVL	bp-8(SP),  BP
+	MOVL	bx-4(SP),  BX
 	RET
 
 // int32 tfork(void *param, uintptr psize, M *mp, G *gp, void (*fn)(void));
@@ -294,7 +321,7 @@ TEXT runtime·tfork(SB),NOSPLIT,$12
 	// Call fn.
 	CALL	SI
 
-	CALL	runtime·exit1(SB)
+	// fn should never return.
 	MOVL	$0x1234, 0x1005
 	RET
 

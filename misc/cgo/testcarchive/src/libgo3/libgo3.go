@@ -40,7 +40,7 @@ func SawSIGIO() C.int {
 	}
 }
 
-// ProvokeSIGPIPE provokes a kernel-initiated SIGPIPE
+// ProvokeSIGPIPE provokes a kernel-initiated SIGPIPE.
 //export ProvokeSIGPIPE
 func ProvokeSIGPIPE() {
 	r, w, err := os.Pipe()

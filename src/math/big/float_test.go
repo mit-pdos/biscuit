@@ -1325,6 +1325,34 @@ func TestFloatAdd64(t *testing.T) {
 	}
 }
 
+func TestIssue20490(t *testing.T) {
+	var tests = []struct {
+		a, b float64
+	}{
+		{4, 1},
+		{-4, 1},
+		{4, -1},
+		{-4, -1},
+	}
+
+	for _, test := range tests {
+		a, b := NewFloat(test.a), NewFloat(test.b)
+		diff := new(Float).Sub(a, b)
+		b.Sub(a, b)
+		if b.Cmp(diff) != 0 {
+			t.Errorf("got %g - %g = %g; want %g\n", a, NewFloat(test.b), b, diff)
+		}
+
+		b = NewFloat(test.b)
+		sum := new(Float).Add(a, b)
+		b.Add(a, b)
+		if b.Cmp(sum) != 0 {
+			t.Errorf("got %g + %g = %g; want %g\n", a, NewFloat(test.b), b, sum)
+		}
+
+	}
+}
+
 // TestFloatMul tests Float.Mul/Quo by comparing the result of a "manual"
 // multiplication/division of arguments represented by Bits values with the
 // respective Float multiplication/division for a variety of precisions
@@ -1344,7 +1372,7 @@ func TestFloatMul(t *testing.T) {
 					got.Mul(x, y)
 					want := zbits.round(prec, mode)
 					if got.Cmp(want) != 0 {
-						t.Errorf("i = %d, prec = %d, %s:\n\t     %s %v\n\t*    %s %v\n\t=    %s\n\twant %s",
+						t.Errorf("i = %d, prec = %d, %s:\n\t     %v %v\n\t*    %v %v\n\t=    %v\n\twant %v",
 							i, prec, mode, x, xbits, y, ybits, got, want)
 					}
 
@@ -1354,7 +1382,7 @@ func TestFloatMul(t *testing.T) {
 					got.Quo(z, x)
 					want = ybits.round(prec, mode)
 					if got.Cmp(want) != 0 {
-						t.Errorf("i = %d, prec = %d, %s:\n\t     %s %v\n\t/    %s %v\n\t=    %s\n\twant %s",
+						t.Errorf("i = %d, prec = %d, %s:\n\t     %v %v\n\t/    %v %v\n\t=    %v\n\twant %v",
 							i, prec, mode, z, zbits, x, xbits, got, want)
 					}
 				}
@@ -1437,13 +1465,13 @@ func TestIssue6866(t *testing.T) {
 		z2.Sub(two, p)
 
 		if z1.Cmp(z2) != 0 {
-			t.Fatalf("prec %d: got z1 = %s != z2 = %s; want z1 == z2\n", prec, z1, z2)
+			t.Fatalf("prec %d: got z1 = %v != z2 = %v; want z1 == z2\n", prec, z1, z2)
 		}
 		if z1.Sign() != 0 {
-			t.Errorf("prec %d: got z1 = %s; want 0", prec, z1)
+			t.Errorf("prec %d: got z1 = %v; want 0", prec, z1)
 		}
 		if z2.Sign() != 0 {
-			t.Errorf("prec %d: got z2 = %s; want 0", prec, z2)
+			t.Errorf("prec %d: got z2 = %v; want 0", prec, z2)
 		}
 	}
 }

@@ -12,11 +12,8 @@ import "unsafe"
 
 //go:cgo_import_dynamic libc____errno ___errno "libc.so"
 //go:cgo_import_dynamic libc_clock_gettime clock_gettime "libc.so"
-//go:cgo_import_dynamic libc_close close "libc.so"
 //go:cgo_import_dynamic libc_exit exit "libc.so"
-//go:cgo_import_dynamic libc_fstat fstat "libc.so"
 //go:cgo_import_dynamic libc_getcontext getcontext "libc.so"
-//go:cgo_import_dynamic libc_getrlimit getrlimit "libc.so"
 //go:cgo_import_dynamic libc_kill kill "libc.so"
 //go:cgo_import_dynamic libc_madvise madvise "libc.so"
 //go:cgo_import_dynamic libc_malloc malloc "libc.so"
@@ -47,11 +44,8 @@ import "unsafe"
 
 //go:linkname libc____errno libc____errno
 //go:linkname libc_clock_gettime libc_clock_gettime
-//go:linkname libc_close libc_close
 //go:linkname libc_exit libc_exit
-//go:linkname libc_fstat libc_fstat
 //go:linkname libc_getcontext libc_getcontext
-//go:linkname libc_getrlimit libc_getrlimit
 //go:linkname libc_kill libc_kill
 //go:linkname libc_madvise libc_madvise
 //go:linkname libc_malloc libc_malloc
@@ -83,11 +77,8 @@ import "unsafe"
 var (
 	libc____errno,
 	libc_clock_gettime,
-	libc_close,
 	libc_exit,
-	libc_fstat,
 	libc_getcontext,
-	libc_getrlimit,
 	libc_kill,
 	libc_madvise,
 	libc_malloc,
@@ -181,6 +172,12 @@ func newosproc(mp *m, _ unsafe.Pointer) {
 	}
 }
 
+func exitThread(wait *uint32) {
+	// We should never reach exitThread on Solaris because we let
+	// libc clean up threads.
+	throw("exitThread")
+}
+
 var urandom_dev = []byte("/dev/urandom\x00")
 
 //go:nosplit
@@ -215,37 +212,6 @@ func minit() {
 // Called from dropm to undo the effect of an minit.
 func unminit() {
 	unminitSignals()
-}
-
-func memlimit() uintptr {
-	/*
-		TODO: Convert to Go when something actually uses the result.
-		Rlimit rl;
-		extern byte runtime·text[], runtime·end[];
-		uintptr used;
-
-		if(runtime·getrlimit(RLIMIT_AS, &rl) != 0)
-			return 0;
-		if(rl.rlim_cur >= 0x7fffffff)
-			return 0;
-
-		// Estimate our VM footprint excluding the heap.
-		// Not an exact science: use size of binary plus
-		// some room for thread stacks.
-		used = runtime·end - runtime·text + (64<<20);
-		if(used >= rl.rlim_cur)
-			return 0;
-
-		// If there's not at least 16 MB left, we're probably
-		// not going to be able to do much. Treat as no limit.
-		rl.rlim_cur -= used;
-		if(rl.rlim_cur < (16<<20))
-			return 0;
-
-		return rl.rlim_cur - used;
-	*/
-
-	return 0
 }
 
 func sigtramp()
@@ -396,12 +362,12 @@ func madvise(addr unsafe.Pointer, n uintptr, flags int32) {
 }
 
 //go:nosplit
-func mmap(addr unsafe.Pointer, n uintptr, prot, flags, fd int32, off uint32) unsafe.Pointer {
+func mmap(addr unsafe.Pointer, n uintptr, prot, flags, fd int32, off uint32) (unsafe.Pointer, int) {
 	p, err := doMmap(uintptr(addr), n, uintptr(prot), uintptr(flags), uintptr(fd), uintptr(off))
 	if p == ^uintptr(0) {
-		return unsafe.Pointer(err)
+		return nil, int(err)
 	}
-	return unsafe.Pointer(p)
+	return unsafe.Pointer(p), 0
 }
 
 //go:nosplit

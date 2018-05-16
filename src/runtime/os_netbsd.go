@@ -21,6 +21,9 @@ const (
 	_UC_SIGMASK = 0x01
 	_UC_CPU     = 0x04
 
+	// From <sys/lwp.h>
+	_LWP_DETACHED = 0x00000040
+
 	_EAGAIN = 35
 )
 
@@ -55,7 +58,7 @@ func getcontext(ctxt unsafe.Pointer)
 func lwp_create(ctxt unsafe.Pointer, flags uintptr, lwpid unsafe.Pointer) int32
 
 //go:noescape
-func lwp_park(abstime *timespec, unpark int32, hint, unparkhint unsafe.Pointer) int32
+func lwp_park(clockid, flags int32, ts *timespec, unpark int32, hint, unparkhint unsafe.Pointer) int32
 
 //go:noescape
 func lwp_unpark(lwp int32, hint unsafe.Pointer) int32
@@ -73,6 +76,9 @@ const (
 	_CLOCK_VIRTUAL   = 1
 	_CLOCK_PROF      = 2
 	_CLOCK_MONOTONIC = 3
+
+	_TIMER_RELTIME = 0
+	_TIMER_ABSTIME = 1
 )
 
 var sigset_all = sigset{[4]uint32{^uint32(0), ^uint32(0), ^uint32(0), ^uint32(0)}}
@@ -116,10 +122,9 @@ func semasleep(ns int64) int32 {
 
 	// Compute sleep deadline.
 	var tsp *timespec
+	var ts timespec
 	if ns >= 0 {
-		var ts timespec
 		var nsec int32
-		ns += nanotime()
 		ts.set_sec(timediv(ns, 1000000000, &nsec))
 		ts.set_nsec(nsec)
 		tsp = &ts
@@ -135,9 +140,18 @@ func semasleep(ns int64) int32 {
 		}
 
 		// Sleep until unparked by semawakeup or timeout.
-		ret := lwp_park(tsp, 0, unsafe.Pointer(&_g_.m.waitsemacount), nil)
+		ret := lwp_park(_CLOCK_MONOTONIC, _TIMER_RELTIME, tsp, 0, unsafe.Pointer(&_g_.m.waitsemacount), nil)
 		if ret == _ETIMEDOUT {
 			return -1
+		} else if ret == _EINTR && ns >= 0 {
+			// Avoid sleeping forever if we keep getting
+			// interrupted (for example by the profiling
+			// timer). It would be if tsp upon return had the
+			// remaining time to sleep, but this is good enough.
+			var nsec int32
+			ns /= 2
+			ts.set_sec(timediv(ns, 1000000000, &nsec))
+			ts.set_nsec(nsec)
 		}
 	}
 }
@@ -167,13 +181,23 @@ func newosproc(mp *m, stk unsafe.Pointer) {
 	var uc ucontextt
 	getcontext(unsafe.Pointer(&uc))
 
+	// _UC_SIGMASK does not seem to work here.
+	// It would be nice if _UC_SIGMASK and _UC_STACK
+	// worked so that we could do all the work setting
+	// the sigmask and the stack here, instead of setting
+	// the mask here and the stack in netbsdMstart.
+	// For now do the blocking manually.
 	uc.uc_flags = _UC_SIGMASK | _UC_CPU
 	uc.uc_link = nil
 	uc.uc_sigmask = sigset_all
 
+	var oset sigset
+	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
+
 	lwp_mcontext_init(&uc.uc_mcontext, stk, mp, mp.g0, funcPC(netbsdMstart))
 
-	ret := lwp_create(unsafe.Pointer(&uc), 0, unsafe.Pointer(&mp.procid))
+	ret := lwp_create(unsafe.Pointer(&uc), _LWP_DETACHED, unsafe.Pointer(&mp.procid))
+	sigprocmask(_SIG_SETMASK, &oset, nil)
 	if ret < 0 {
 		print("runtime: failed to create new OS thread (have ", mcount()-1, " already; errno=", -ret, ")\n")
 		if ret == -_EAGAIN {
@@ -246,10 +270,6 @@ func minit() {
 //go:nosplit
 func unminit() {
 	unminitSignals()
-}
-
-func memlimit() uintptr {
-	return 0
 }
 
 func sigtramp()

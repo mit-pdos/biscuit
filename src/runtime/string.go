@@ -4,7 +4,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/bytealg"
+	"unsafe"
+)
 
 // The constant is known to the compiler.
 // There is no fundamental theory behind this number.
@@ -69,7 +72,7 @@ func concatstring5(buf *tmpBuf, a [5]string) string {
 
 // Buf is a fixed-size buffer for the result,
 // it is not nil if the result does not escape.
-func slicebytetostring(buf *tmpBuf, b []byte) string {
+func slicebytetostring(buf *tmpBuf, b []byte) (str string) {
 	l := len(b)
 	if l == 0 {
 		// Turns out to be a relatively common case.
@@ -77,18 +80,31 @@ func slicebytetostring(buf *tmpBuf, b []byte) string {
 		// you find the indices and convert the subslice to string.
 		return ""
 	}
-	if raceenabled && l > 0 {
+	if raceenabled {
 		racereadrangepc(unsafe.Pointer(&b[0]),
 			uintptr(l),
-			getcallerpc(unsafe.Pointer(&buf)),
+			getcallerpc(),
 			funcPC(slicebytetostring))
 	}
-	if msanenabled && l > 0 {
+	if msanenabled {
 		msanread(unsafe.Pointer(&b[0]), uintptr(l))
 	}
-	s, c := rawstringtmp(buf, l)
-	copy(c, b)
-	return s
+	if l == 1 {
+		stringStructOf(&str).str = unsafe.Pointer(&staticbytes[b[0]])
+		stringStructOf(&str).len = 1
+		return
+	}
+
+	var p unsafe.Pointer
+	if buf != nil && len(b) <= len(buf) {
+		p = unsafe.Pointer(buf)
+	} else {
+		p = mallocgc(uintptr(len(b)), nil, false)
+	}
+	stringStructOf(&str).str = p
+	stringStructOf(&str).len = len(b)
+	memmove(p, (*(*slice)(unsafe.Pointer(&b))).array, uintptr(len(b)))
+	return
 }
 
 // stringDataOnStack reports whether the string's data is
@@ -126,7 +142,7 @@ func slicebytetostringtmp(b []byte) string {
 	if raceenabled && len(b) > 0 {
 		racereadrangepc(unsafe.Pointer(&b[0]),
 			uintptr(len(b)),
-			getcallerpc(unsafe.Pointer(&b)),
+			getcallerpc(),
 			funcPC(slicebytetostringtmp))
 	}
 	if msanenabled && len(b) > 0 {
@@ -175,7 +191,7 @@ func slicerunetostring(buf *tmpBuf, a []rune) string {
 	if raceenabled && len(a) > 0 {
 		racereadrangepc(unsafe.Pointer(&a[0]),
 			uintptr(len(a))*unsafe.Sizeof(a[0]),
-			getcallerpc(unsafe.Pointer(&buf)),
+			getcallerpc(),
 			funcPC(slicerunetostring))
 	}
 	if msanenabled && len(a) > 0 {
@@ -258,7 +274,7 @@ func rawbyteslice(size int) (b []byte) {
 
 // rawruneslice allocates a new rune slice. The rune slice is not zeroed.
 func rawruneslice(size int) (b []rune) {
-	if uintptr(size) > _MaxMem/4 {
+	if uintptr(size) > maxAlloc/4 {
 		throw("out of memory")
 	}
 	mem := roundupsize(uintptr(size) * 4)
@@ -272,13 +288,20 @@ func rawruneslice(size int) (b []rune) {
 }
 
 // used by cmd/cgo
-func gobytes(p *byte, n int) []byte {
+func gobytes(p *byte, n int) (b []byte) {
 	if n == 0 {
 		return make([]byte, 0)
 	}
-	x := make([]byte, n)
-	memmove(unsafe.Pointer(&x[0]), unsafe.Pointer(p), uintptr(n))
-	return x
+
+	if n < 0 || uintptr(n) > maxAlloc {
+		panic(errorString("gobytes: length out of range"))
+	}
+
+	bp := mallocgc(uintptr(n), nil, false)
+	memmove(bp, unsafe.Pointer(p), uintptr(n))
+
+	*(*slice)(unsafe.Pointer(&b)) = slice{bp, n, n}
+	return
 }
 
 func gostring(p *byte) string {
@@ -387,19 +410,50 @@ func findnull(s *byte) int {
 	if s == nil {
 		return 0
 	}
-	p := (*[_MaxMem/2 - 1]byte)(unsafe.Pointer(s))
-	l := 0
-	for p[l] != 0 {
-		l++
+
+	// Avoid IndexByteString on Plan 9 because it uses SSE instructions
+	// on x86 machines, and those are classified as floating point instructions,
+	// which are illegal in a note handler.
+	if GOOS == "plan9" {
+		p := (*[maxAlloc/2 - 1]byte)(unsafe.Pointer(s))
+		l := 0
+		for p[l] != 0 {
+			l++
+		}
+		return l
 	}
-	return l
+
+	// pageSize is the unit we scan at a time looking for NULL.
+	// It must be the minimum page size for any architecture Go
+	// runs on. It's okay (just a minor performance loss) if the
+	// actual system page size is larger than this value.
+	const pageSize = 4096
+
+	offset := 0
+	ptr := unsafe.Pointer(s)
+	// IndexByteString uses wide reads, so we need to be careful
+	// with page boundaries. Call IndexByteString on
+	// [ptr, endOfPage) interval.
+	safeLen := int(pageSize - uintptr(ptr)%pageSize)
+
+	for {
+		t := *(*string)(unsafe.Pointer(&stringStruct{ptr, safeLen}))
+		// Check one page at a time.
+		if i := bytealg.IndexByteString(t, 0); i != -1 {
+			return offset + i
+		}
+		// Move to next page
+		ptr = unsafe.Pointer(uintptr(ptr) + uintptr(safeLen))
+		offset += safeLen
+		safeLen = pageSize
+	}
 }
 
 func findnullw(s *uint16) int {
 	if s == nil {
 		return 0
 	}
-	p := (*[_MaxMem/2/2 - 1]uint16)(unsafe.Pointer(s))
+	p := (*[maxAlloc/2/2 - 1]uint16)(unsafe.Pointer(s))
 	l := 0
 	for p[l] != 0 {
 		l++
@@ -416,7 +470,7 @@ func gostringnocopy(str *byte) string {
 
 func gostringw(strw *uint16) string {
 	var buf [8]byte
-	str := (*[_MaxMem/2/2 - 1]uint16)(unsafe.Pointer(strw))
+	str := (*[maxAlloc/2/2 - 1]uint16)(unsafe.Pointer(strw))
 	n1 := 0
 	for i := 0; str[i] != 0; i++ {
 		n1 += encoderune(buf[:], rune(str[i]))

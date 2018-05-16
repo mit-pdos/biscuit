@@ -13,15 +13,15 @@
 #include "go_tls.h"
 #include "textflag.h"
 
+#define AT_FDCWD -100
+
 #define SYS_exit		5058
 #define SYS_read		5000
 #define SYS_write		5001
-#define SYS_open		5002
 #define SYS_close		5003
 #define SYS_getpid		5038
 #define SYS_kill		5060
 #define SYS_fcntl		5080
-#define SYS_gettimeofday	5094
 #define SYS_mmap		5009
 #define SYS_munmap		5011
 #define SYS_setitimer		5036
@@ -32,7 +32,6 @@
 #define SYS_rt_sigaction	5013
 #define SYS_rt_sigprocmask	5014
 #define SYS_sigaltstack		5129
-#define SYS_getrlimit		5095
 #define SYS_madvise		5027
 #define SYS_mincore		5026
 #define SYS_gettid		5178
@@ -42,34 +41,45 @@
 #define SYS_exit_group		5205
 #define SYS_epoll_create	5207
 #define SYS_epoll_ctl		5208
-#define SYS_epoll_wait		5209
+#define SYS_openat		5247
+#define SYS_epoll_pwait		5272
 #define SYS_clock_gettime	5222
 #define SYS_epoll_create1	5285
+#define SYS_brk			5012
 
-TEXT runtime·exit(SB),NOSPLIT,$-8-4
+TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0-4
 	MOVW	code+0(FP), R4
 	MOVV	$SYS_exit_group, R2
 	SYSCALL
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT,$-8-4
-	MOVW	code+0(FP), R4
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT|NOFRAME,$0-8
+	MOVV	wait+0(FP), R1
+	// We're done using the stack.
+	MOVW	$0, R2
+	SYNC
+	MOVW	R2, (R1)
+	SYNC
+	MOVW	$0, R4	// exit code
 	MOVV	$SYS_exit, R2
 	SYSCALL
-	RET
+	JMP	0(PC)
 
-TEXT runtime·open(SB),NOSPLIT,$-8-20
-	MOVV	name+0(FP), R4
-	MOVW	mode+8(FP), R5
-	MOVW	perm+12(FP), R6
-	MOVV	$SYS_open, R2
+TEXT runtime·open(SB),NOSPLIT|NOFRAME,$0-20
+	// This uses openat instead of open, because Android O blocks open.
+	MOVW	$AT_FDCWD, R4 // AT_FDCWD, so this acts like open
+	MOVV	name+0(FP), R5
+	MOVW	mode+8(FP), R6
+	MOVW	perm+12(FP), R7
+	MOVV	$SYS_openat, R2
 	SYSCALL
 	BEQ	R7, 2(PC)
 	MOVW	$-1, R2
 	MOVW	R2, ret+16(FP)
 	RET
 
-TEXT runtime·closefd(SB),NOSPLIT,$-8-12
+TEXT runtime·closefd(SB),NOSPLIT|NOFRAME,$0-12
 	MOVW	fd+0(FP), R4
 	MOVV	$SYS_close, R2
 	SYSCALL
@@ -78,7 +88,7 @@ TEXT runtime·closefd(SB),NOSPLIT,$-8-12
 	MOVW	R2, ret+8(FP)
 	RET
 
-TEXT runtime·write(SB),NOSPLIT,$-8-28
+TEXT runtime·write(SB),NOSPLIT|NOFRAME,$0-28
 	MOVV	fd+0(FP), R4
 	MOVV	p+8(FP), R5
 	MOVW	n+16(FP), R6
@@ -89,7 +99,7 @@ TEXT runtime·write(SB),NOSPLIT,$-8-28
 	MOVW	R2, ret+24(FP)
 	RET
 
-TEXT runtime·read(SB),NOSPLIT,$-8-28
+TEXT runtime·read(SB),NOSPLIT|NOFRAME,$0-28
 	MOVW	fd+0(FP), R4
 	MOVV	p+8(FP), R5
 	MOVW	n+16(FP), R6
@@ -98,14 +108,6 @@ TEXT runtime·read(SB),NOSPLIT,$-8-28
 	BEQ	R7, 2(PC)
 	MOVW	$-1, R2
 	MOVW	R2, ret+24(FP)
-	RET
-
-TEXT runtime·getrlimit(SB),NOSPLIT,$-8-20
-	MOVW	kind+0(FP), R4	// _RLIMIT_AS = 6 on linux/mips
-	MOVV	limit+8(FP), R5
-	MOVV	$SYS_getrlimit, R2
-	SYSCALL
-	MOVW	R2, ret+16(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$16-4
@@ -136,7 +138,7 @@ TEXT runtime·gettid(SB),NOSPLIT,$0-4
 	MOVW	R2, ret+0(FP)
 	RET
 
-TEXT runtime·raise(SB),NOSPLIT,$-8
+TEXT runtime·raise(SB),NOSPLIT|NOFRAME,$0
 	MOVV	$SYS_gettid, R2
 	SYSCALL
 	MOVW	R2, R4	// arg 1 tid
@@ -145,7 +147,7 @@ TEXT runtime·raise(SB),NOSPLIT,$-8
 	SYSCALL
 	RET
 
-TEXT runtime·raiseproc(SB),NOSPLIT,$-8
+TEXT runtime·raiseproc(SB),NOSPLIT|NOFRAME,$0
 	MOVV	$SYS_getpid, R2
 	SYSCALL
 	MOVW	R2, R4	// arg 1 pid
@@ -154,7 +156,7 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$-8
 	SYSCALL
 	RET
 
-TEXT runtime·setitimer(SB),NOSPLIT,$-8-24
+TEXT runtime·setitimer(SB),NOSPLIT|NOFRAME,$0-24
 	MOVW	mode+0(FP), R4
 	MOVV	new+8(FP), R5
 	MOVV	old+16(FP), R6
@@ -162,7 +164,7 @@ TEXT runtime·setitimer(SB),NOSPLIT,$-8-24
 	SYSCALL
 	RET
 
-TEXT runtime·mincore(SB),NOSPLIT,$-8-28
+TEXT runtime·mincore(SB),NOSPLIT|NOFRAME,$0-28
 	MOVV	addr+0(FP), R4
 	MOVV	n+8(FP), R5
 	MOVV	dst+16(FP), R6
@@ -172,8 +174,8 @@ TEXT runtime·mincore(SB),NOSPLIT,$-8-28
 	MOVW	R2, ret+24(FP)
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB),NOSPLIT,$16
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB),NOSPLIT,$16
 	MOVW	$0, R4 // CLOCK_REALTIME
 	MOVV	$0(R29), R5
 	MOVV	$SYS_clock_gettime, R2
@@ -200,7 +202,7 @@ TEXT runtime·nanotime(SB),NOSPLIT,$16
 	MOVV	R3, ret+0(FP)
 	RET
 
-TEXT runtime·rtsigprocmask(SB),NOSPLIT,$-8-28
+TEXT runtime·rtsigprocmask(SB),NOSPLIT|NOFRAME,$0-28
 	MOVW	how+0(FP), R4
 	MOVV	new+8(FP), R5
 	MOVV	old+16(FP), R6
@@ -211,7 +213,7 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$-8-28
 	MOVV	R0, 0xf1(R0)	// crash
 	RET
 
-TEXT runtime·rt_sigaction(SB),NOSPLIT,$-8-36
+TEXT runtime·rt_sigaction(SB),NOSPLIT|NOFRAME,$0-36
 	MOVV	sig+0(FP), R4
 	MOVV	new+8(FP), R5
 	MOVV	old+16(FP), R6
@@ -251,7 +253,7 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$64
 TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
 	JMP	runtime·sigtramp(SB)
 
-TEXT runtime·mmap(SB),NOSPLIT,$-8
+TEXT runtime·mmap(SB),NOSPLIT|NOFRAME,$0
 	MOVV	addr+0(FP), R4
 	MOVV	n+8(FP), R5
 	MOVW	prot+16(FP), R6
@@ -261,10 +263,16 @@ TEXT runtime·mmap(SB),NOSPLIT,$-8
 
 	MOVV	$SYS_mmap, R2
 	SYSCALL
-	MOVV	R2, ret+32(FP)
+	BEQ	R7, ok
+	MOVV	$0, p+32(FP)
+	MOVV	R2, err+40(FP)
+	RET
+ok:
+	MOVV	R2, p+32(FP)
+	MOVV	$0, err+40(FP)
 	RET
 
-TEXT runtime·munmap(SB),NOSPLIT,$-8
+TEXT runtime·munmap(SB),NOSPLIT|NOFRAME,$0
 	MOVV	addr+0(FP), R4
 	MOVV	n+8(FP), R5
 	MOVV	$SYS_munmap, R2
@@ -273,7 +281,7 @@ TEXT runtime·munmap(SB),NOSPLIT,$-8
 	MOVV	R0, 0xf3(R0)	// crash
 	RET
 
-TEXT runtime·madvise(SB),NOSPLIT,$-8
+TEXT runtime·madvise(SB),NOSPLIT|NOFRAME,$0
 	MOVV	addr+0(FP), R4
 	MOVV	n+8(FP), R5
 	MOVW	flags+16(FP), R6
@@ -284,7 +292,7 @@ TEXT runtime·madvise(SB),NOSPLIT,$-8
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
-TEXT runtime·futex(SB),NOSPLIT,$-8
+TEXT runtime·futex(SB),NOSPLIT|NOFRAME,$0
 	MOVV	addr+0(FP), R4
 	MOVW	op+8(FP), R5
 	MOVW	val+12(FP), R6
@@ -297,7 +305,7 @@ TEXT runtime·futex(SB),NOSPLIT,$-8
 	RET
 
 // int64 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
-TEXT runtime·clone(SB),NOSPLIT,$-8
+TEXT runtime·clone(SB),NOSPLIT|NOFRAME,$0
 	MOVW	flags+0(FP), R4
 	MOVV	stk+8(FP), R5
 
@@ -357,7 +365,7 @@ nog:
 	SYSCALL
 	JMP	-3(PC)	// keep exiting
 
-TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
+TEXT runtime·sigaltstack(SB),NOSPLIT|NOFRAME,$0
 	MOVV	new+0(FP), R4
 	MOVV	old+8(FP), R5
 	MOVV	$SYS_sigaltstack, R2
@@ -366,12 +374,12 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	MOVV	R0, 0xf1(R0)	// crash
 	RET
 
-TEXT runtime·osyield(SB),NOSPLIT,$-8
+TEXT runtime·osyield(SB),NOSPLIT|NOFRAME,$0
 	MOVV	$SYS_sched_yield, R2
 	SYSCALL
 	RET
 
-TEXT runtime·sched_getaffinity(SB),NOSPLIT,$-8
+TEXT runtime·sched_getaffinity(SB),NOSPLIT|NOFRAME,$0
 	MOVV	pid+0(FP), R4
 	MOVV	len+8(FP), R5
 	MOVV	buf+16(FP), R6
@@ -381,7 +389,7 @@ TEXT runtime·sched_getaffinity(SB),NOSPLIT,$-8
 	RET
 
 // int32 runtime·epollcreate(int32 size);
-TEXT runtime·epollcreate(SB),NOSPLIT,$-8
+TEXT runtime·epollcreate(SB),NOSPLIT|NOFRAME,$0
 	MOVW    size+0(FP), R4
 	MOVV	$SYS_epoll_create, R2
 	SYSCALL
@@ -389,7 +397,7 @@ TEXT runtime·epollcreate(SB),NOSPLIT,$-8
 	RET
 
 // int32 runtime·epollcreate1(int32 flags);
-TEXT runtime·epollcreate1(SB),NOSPLIT,$-8
+TEXT runtime·epollcreate1(SB),NOSPLIT|NOFRAME,$0
 	MOVW	flags+0(FP), R4
 	MOVV	$SYS_epoll_create1, R2
 	SYSCALL
@@ -397,7 +405,7 @@ TEXT runtime·epollcreate1(SB),NOSPLIT,$-8
 	RET
 
 // func epollctl(epfd, op, fd int32, ev *epollEvent) int
-TEXT runtime·epollctl(SB),NOSPLIT,$-8
+TEXT runtime·epollctl(SB),NOSPLIT|NOFRAME,$0
 	MOVW	epfd+0(FP), R4
 	MOVW	op+4(FP), R5
 	MOVW	fd+8(FP), R6
@@ -408,21 +416,32 @@ TEXT runtime·epollctl(SB),NOSPLIT,$-8
 	RET
 
 // int32 runtime·epollwait(int32 epfd, EpollEvent *ev, int32 nev, int32 timeout);
-TEXT runtime·epollwait(SB),NOSPLIT,$-8
+TEXT runtime·epollwait(SB),NOSPLIT|NOFRAME,$0
+	// This uses pwait instead of wait, because Android O blocks wait.
 	MOVW	epfd+0(FP), R4
 	MOVV	ev+8(FP), R5
 	MOVW	nev+16(FP), R6
 	MOVW	timeout+20(FP), R7
-	MOVV	$SYS_epoll_wait, R2
+	MOVV	$0, R8
+	MOVV	$SYS_epoll_pwait, R2
 	SYSCALL
 	MOVW	R2, ret+24(FP)
 	RET
 
 // void runtime·closeonexec(int32 fd);
-TEXT runtime·closeonexec(SB),NOSPLIT,$-8
+TEXT runtime·closeonexec(SB),NOSPLIT|NOFRAME,$0
 	MOVW    fd+0(FP), R4  // fd
 	MOVV    $2, R5  // F_SETFD
 	MOVV    $1, R6  // FD_CLOEXEC
 	MOVV	$SYS_fcntl, R2
 	SYSCALL
+	RET
+
+// func sbrk0() uintptr
+TEXT runtime·sbrk0(SB),NOSPLIT|NOFRAME,$0-8
+	// Implemented as brk(NULL).
+	MOVV	$0, R4
+	MOVV	$SYS_brk, R2
+	SYSCALL
+	MOVV	R2, ret+0(FP)
 	RET

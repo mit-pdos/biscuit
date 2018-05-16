@@ -39,27 +39,45 @@ func nilcheckelim(f *Func) {
 
 	// make an initial pass identifying any non-nil values
 	for _, b := range f.Blocks {
-		// a value resulting from taking the address of a
-		// value, or a value constructed from an offset of a
-		// non-nil ptr (OpAddPtr) implies it is non-nil
 		for _, v := range b.Values {
+			// a value resulting from taking the address of a
+			// value, or a value constructed from an offset of a
+			// non-nil ptr (OpAddPtr) implies it is non-nil
 			if v.Op == OpAddr || v.Op == OpAddPtr {
 				nonNilValues[v.ID] = true
-			} else if v.Op == OpPhi {
+			}
+		}
+	}
+
+	for changed := true; changed; {
+		changed = false
+		for _, b := range f.Blocks {
+			for _, v := range b.Values {
 				// phis whose arguments are all non-nil
 				// are non-nil
-				argsNonNil := true
-				for _, a := range v.Args {
-					if !nonNilValues[a.ID] {
-						argsNonNil = false
+				if v.Op == OpPhi {
+					argsNonNil := true
+					for _, a := range v.Args {
+						if !nonNilValues[a.ID] {
+							argsNonNil = false
+							break
+						}
 					}
-				}
-				if argsNonNil {
-					nonNilValues[v.ID] = true
+					if argsNonNil {
+						if !nonNilValues[v.ID] {
+							changed = true
+						}
+						nonNilValues[v.ID] = true
+					}
 				}
 			}
 		}
 	}
+
+	// allocate auxiliary date structures for computing store order
+	sset := f.newSparseSet(f.NumValues())
+	defer f.retSparseSet(sset)
+	storeNumber := make([]int32, f.NumValues())
 
 	// perform a depth first walk of the dominee tree
 	for len(work) > 0 {
@@ -82,6 +100,9 @@ func nilcheckelim(f *Func) {
 				}
 			}
 
+			// Next, order values in the current block w.r.t. stores.
+			b.Values = storeOrder(b.Values, sset, storeNumber)
+
 			// Next, process values in the block.
 			i := 0
 			for _, v := range b.Values {
@@ -101,10 +122,11 @@ func nilcheckelim(f *Func) {
 						// This is a redundant implicit nil check.
 						// Logging in the style of the former compiler -- and omit line 1,
 						// which is usually in generated code.
-						if f.Config.Debug_checknil() && v.Line > 1 {
-							f.Config.Warnl(v.Line, "removed nil check")
+						if f.fe.Debug_checknil() && v.Pos.Line() > 1 {
+							f.Warnl(v.Pos, "removed nil check")
 						}
 						v.reset(OpUnknown)
+						f.freeValue(v)
 						i--
 						continue
 					}
@@ -132,6 +154,8 @@ func nilcheckelim(f *Func) {
 }
 
 // All platforms are guaranteed to fault if we load/store to anything smaller than this address.
+//
+// This should agree with minLegalPointer in the runtime.
 const minZeroPage = 4096
 
 // nilcheckelim2 eliminates unnecessary nil checks.
@@ -144,13 +168,16 @@ func nilcheckelim2(f *Func) {
 		// input pointer is nil. Remove nil checks on those pointers, as the
 		// faulting instruction effectively does the nil check for free.
 		unnecessary.clear()
+		// Optimization: keep track of removed nilcheck with smallest index
+		firstToRemove := len(b.Values)
 		for i := len(b.Values) - 1; i >= 0; i-- {
 			v := b.Values[i]
 			if opcodeTable[v.Op].nilCheck && unnecessary.contains(v.Args[0].ID) {
-				if f.Config.Debug_checknil() && int(v.Line) > 1 {
-					f.Config.Warnl(v.Line, "removed nil check")
+				if f.fe.Debug_checknil() && v.Pos.Line() > 1 {
+					f.Warnl(v.Pos, "removed nil check")
 				}
 				v.reset(OpUnknown)
+				firstToRemove = i
 				continue
 			}
 			if v.Type.IsMemory() || v.Type.IsTuple() && v.Type.FieldType(1).IsMemory() {
@@ -200,8 +227,9 @@ func nilcheckelim2(f *Func) {
 			}
 		}
 		// Remove values we've clobbered with OpUnknown.
-		i := 0
-		for _, v := range b.Values {
+		i := firstToRemove
+		for j := i; j < len(b.Values); j++ {
+			v := b.Values[j]
 			if v.Op != OpUnknown {
 				b.Values[i] = v
 				i++

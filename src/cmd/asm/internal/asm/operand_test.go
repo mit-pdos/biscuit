@@ -10,13 +10,14 @@ import (
 	"cmd/asm/internal/arch"
 	"cmd/asm/internal/lex"
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 )
 
 // A simple in-out test: Do we print what we parse?
 
 func setArch(goarch string) (*arch.Arch, *obj.Link) {
-	obj.GOOS = "linux" // obj can handle this OS for all architectures.
-	obj.GOARCH = goarch
+	objabi.GOOS = "linux" // obj can handle this OS for all architectures.
+	objabi.GOARCH = goarch
 	architecture := arch.Set(goarch)
 	if architecture == nil {
 		panic("asm: unrecognized architecture " + goarch)
@@ -625,7 +626,7 @@ var mips64OperandTests = []operandTest{
 	{"LO", "LO"},
 	{"a(FP)", "a(FP)"},
 	{"g", "g"},
-	{"RSB", "RSB"},
+	{"RSB", "R28"},
 	{"ret+8(FP)", "ret+8(FP)"},
 	{"runtime·abort(SB)", "runtime.abort(SB)"},
 	{"·AddUint32(SB)", "\"\".AddUint32(SB)"},
@@ -696,6 +697,7 @@ var mipsOperandTests = []operandTest{
 	{"R25", "R25"},
 	{"R26", "R26"},
 	{"R27", "R27"},
+	{"R28", "R28"},
 	{"R29", "R29"},
 	{"R3", "R3"},
 	{"R31", "R31"},

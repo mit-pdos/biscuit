@@ -6,17 +6,19 @@ package gc
 
 import (
 	"cmd/compile/internal/syntax"
-	"cmd/internal/obj"
+	"cmd/internal/objabi"
+	"cmd/internal/src"
 	"fmt"
 	"strings"
 )
 
-// lexlineno is the line number _after_ the most recently read rune.
-// In particular, it's advanced (or rewound) as newlines are read (or unread).
-var lexlineno int32
+// lineno is the source position at the start of the most recently lexed token.
+// TODO(gri) rename and eventually remove
+var lineno src.XPos
 
-// lineno is the line number at the start of the most recently lexed token.
-var lineno int32
+func makePos(base *src.PosBase, line, col uint) src.XPos {
+	return Ctxt.PosTable.XPos(src.MakePos(base, line, col))
+}
 
 func isSpace(c rune) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
@@ -38,17 +40,15 @@ func plan9quote(s string) string {
 	return s
 }
 
-type Pragma syntax.Pragma
-
 const (
 	// Func pragmas.
-	Nointerface    Pragma = 1 << iota
-	Noescape              // func parameters don't escape
-	Norace                // func must not have race detector annotations
-	Nosplit               // func should not execute on separate stack
-	Noinline              // func should not be inlined
-	CgoUnsafeArgs         // treat a pointer to one arg as a pointer to them all
-	UintptrEscapes        // pointers converted to uintptr escape
+	Nointerface    syntax.Pragma = 1 << iota
+	Noescape                     // func parameters don't escape
+	Norace                       // func must not have race detector annotations
+	Nosplit                      // func should not execute on separate stack
+	Noinline                     // func should not be inlined
+	CgoUnsafeArgs                // treat a pointer to one arg as a pointer to them all
+	UintptrEscapes               // pointers converted to uintptr escape
 
 	// Runtime-only func pragmas.
 	// See ../../../../runtime/README.md for detailed descriptions.
@@ -61,10 +61,10 @@ const (
 	NotInHeap // values of this type must not be heap allocated
 )
 
-func pragmaValue(verb string) Pragma {
+func pragmaValue(verb string) syntax.Pragma {
 	switch verb {
 	case "go:nointerface":
-		if obj.Fieldtrack_enabled != 0 {
+		if objabi.Fieldtrack_enabled != 0 {
 			return Nointerface
 		}
 	case "go:noescape":
@@ -76,24 +76,12 @@ func pragmaValue(verb string) Pragma {
 	case "go:noinline":
 		return Noinline
 	case "go:systemstack":
-		if !compiling_runtime {
-			yyerror("//go:systemstack only allowed in runtime")
-		}
 		return Systemstack
 	case "go:nowritebarrier":
-		if !compiling_runtime {
-			yyerror("//go:nowritebarrier only allowed in runtime")
-		}
 		return Nowritebarrier
 	case "go:nowritebarrierrec":
-		if !compiling_runtime {
-			yyerror("//go:nowritebarrierrec only allowed in runtime")
-		}
 		return Nowritebarrierrec | Nowritebarrier // implies Nowritebarrier
 	case "go:yeswritebarrierrec":
-		if !compiling_runtime {
-			yyerror("//go:yeswritebarrierrec only allowed in runtime")
-		}
 		return Yeswritebarrierrec
 	case "go:cgo_unsafe_args":
 		return CgoUnsafeArgs
@@ -116,18 +104,8 @@ func pragmaValue(verb string) Pragma {
 	return 0
 }
 
-var internedStrings = map[string]string{}
-
-func internString(b []byte) string {
-	s, ok := internedStrings[string(b)] // string(b) here doesn't allocate
-	if !ok {
-		s = string(b)
-		internedStrings[s] = s
-	}
-	return s
-}
-
-func pragcgo(text string) string {
+// pragcgo is called concurrently if files are parsed concurrently.
+func (p *noder) pragcgo(pos syntax.Pos, text string) string {
 	f := pragmaFields(text)
 
 	verb := f[0][3:] // skip "go:"
@@ -144,7 +122,7 @@ func pragcgo(text string) string {
 			return fmt.Sprintln(verb, local, remote)
 
 		default:
-			yyerror(`usage: //go:%s local [remote]`, verb)
+			p.error(syntax.Error{Pos: pos, Msg: fmt.Sprintf(`usage: //go:%s local [remote]`, verb)})
 		}
 	case "cgo_import_dynamic":
 		switch {
@@ -164,7 +142,7 @@ func pragcgo(text string) string {
 			return fmt.Sprintln(verb, local, remote, library)
 
 		default:
-			yyerror(`usage: //go:cgo_import_dynamic local [remote ["library"]]`)
+			p.error(syntax.Error{Pos: pos, Msg: `usage: //go:cgo_import_dynamic local [remote ["library"]]`})
 		}
 	case "cgo_import_static":
 		switch {
@@ -173,7 +151,7 @@ func pragcgo(text string) string {
 			return fmt.Sprintln(verb, local)
 
 		default:
-			yyerror(`usage: //go:cgo_import_static local`)
+			p.error(syntax.Error{Pos: pos, Msg: `usage: //go:cgo_import_static local`})
 		}
 	case "cgo_dynamic_linker":
 		switch {
@@ -182,7 +160,7 @@ func pragcgo(text string) string {
 			return fmt.Sprintln(verb, path)
 
 		default:
-			yyerror(`usage: //go:cgo_dynamic_linker "path"`)
+			p.error(syntax.Error{Pos: pos, Msg: `usage: //go:cgo_dynamic_linker "path"`})
 		}
 	case "cgo_ldflag":
 		switch {
@@ -191,7 +169,7 @@ func pragcgo(text string) string {
 			return fmt.Sprintln(verb, arg)
 
 		default:
-			yyerror(`usage: //go:cgo_ldflag "arg"`)
+			p.error(syntax.Error{Pos: pos, Msg: `usage: //go:cgo_ldflag "arg"`})
 		}
 	}
 	return ""

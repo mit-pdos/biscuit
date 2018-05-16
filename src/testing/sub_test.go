@@ -6,12 +6,19 @@ package testing
 
 import (
 	"bytes"
-	"context"
+	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
+
+func init() {
+	// Make benchmark tests run 10* faster.
+	*benchTime = 100 * time.Millisecond
+}
 
 func TestTestContext(t *T) {
 	const (
@@ -278,33 +285,28 @@ func TestTRun(t *T) {
 		ok:     true,
 		maxPar: 4,
 		f: func(t *T) {
-			// t.Parallel doesn't work in the pseudo-T we start with:
-			// it leaks a goroutine.
-			// Call t.Run to get a real one.
-			t.Run("X", func(t *T) {
-				t.Parallel()
-				for i := 0; i < 12; i++ {
-					t.Run("a", func(t *T) {
-						t.Parallel()
-						time.Sleep(time.Nanosecond)
-						for i := 0; i < 12; i++ {
-							t.Run("b", func(t *T) {
-								time.Sleep(time.Nanosecond)
-								for i := 0; i < 12; i++ {
-									t.Run("c", func(t *T) {
-										t.Parallel()
-										time.Sleep(time.Nanosecond)
-										t.Run("d1", func(t *T) {})
-										t.Run("d2", func(t *T) {})
-										t.Run("d3", func(t *T) {})
-										t.Run("d4", func(t *T) {})
-									})
-								}
-							})
-						}
-					})
-				}
-			})
+			t.Parallel()
+			for i := 0; i < 12; i++ {
+				t.Run("a", func(t *T) {
+					t.Parallel()
+					time.Sleep(time.Nanosecond)
+					for i := 0; i < 12; i++ {
+						t.Run("b", func(t *T) {
+							time.Sleep(time.Nanosecond)
+							for i := 0; i < 12; i++ {
+								t.Run("c", func(t *T) {
+									t.Parallel()
+									time.Sleep(time.Nanosecond)
+									t.Run("d1", func(t *T) {})
+									t.Run("d2", func(t *T) {})
+									t.Run("d3", func(t *T) {})
+									t.Run("d4", func(t *T) {})
+								})
+							}
+						})
+					}
+				})
+			}
 		},
 	}, {
 		desc:   "skip output",
@@ -312,6 +314,81 @@ func TestTRun(t *T) {
 		maxPar: 4,
 		f: func(t *T) {
 			t.Skip()
+		},
+	}, {
+		desc: "subtest calls error on parent",
+		ok:   false,
+		output: `
+--- FAIL: subtest calls error on parent (N.NNs)
+	sub_test.go:NNN: first this
+	sub_test.go:NNN: and now this!
+	sub_test.go:NNN: oh, and this too`,
+		maxPar: 1,
+		f: func(t *T) {
+			t.Errorf("first this")
+			outer := t
+			t.Run("", func(t *T) {
+				outer.Errorf("and now this!")
+			})
+			t.Errorf("oh, and this too")
+		},
+	}, {
+		desc: "subtest calls fatal on parent",
+		ok:   false,
+		output: `
+--- FAIL: subtest calls fatal on parent (N.NNs)
+	sub_test.go:NNN: first this
+	sub_test.go:NNN: and now this!
+    --- FAIL: subtest calls fatal on parent/#00 (N.NNs)
+    	testing.go:NNN: test executed panic(nil) or runtime.Goexit: subtest may have called FailNow on a parent test`,
+		maxPar: 1,
+		f: func(t *T) {
+			outer := t
+			t.Errorf("first this")
+			t.Run("", func(t *T) {
+				outer.Fatalf("and now this!")
+			})
+			t.Errorf("Should not reach here.")
+		},
+	}, {
+		desc: "subtest calls error on ancestor",
+		ok:   false,
+		output: `
+--- FAIL: subtest calls error on ancestor (N.NNs)
+	sub_test.go:NNN: Report to ancestor
+    --- FAIL: subtest calls error on ancestor/#00 (N.NNs)
+    	sub_test.go:NNN: Still do this
+	sub_test.go:NNN: Also do this`,
+		maxPar: 1,
+		f: func(t *T) {
+			outer := t
+			t.Run("", func(t *T) {
+				t.Run("", func(t *T) {
+					outer.Errorf("Report to ancestor")
+				})
+				t.Errorf("Still do this")
+			})
+			t.Errorf("Also do this")
+		},
+	}, {
+		desc: "subtest calls fatal on ancestor",
+		ok:   false,
+		output: `
+--- FAIL: subtest calls fatal on ancestor (N.NNs)
+	sub_test.go:NNN: Nope`,
+		maxPar: 1,
+		f: func(t *T) {
+			outer := t
+			t.Run("", func(t *T) {
+				for i := 0; i < 4; i++ {
+					t.Run("", func(t *T) {
+						outer.Fatalf("Nope")
+					})
+					t.Errorf("Don't do this")
+				}
+				t.Errorf("And neither do this")
+			})
+			t.Errorf("Nor this")
 		},
 	}, {
 		desc:   "panic on goroutine fail after test exit",
@@ -347,7 +424,6 @@ func TestTRun(t *T) {
 			},
 			context: ctx,
 		}
-		root.ctx, root.cancel = context.WithCancel(context.Background())
 		ok := root.Run(tc.desc, tc.f)
 		ctx.release()
 
@@ -364,7 +440,7 @@ func TestTRun(t *T) {
 		want := strings.TrimSpace(tc.output)
 		re := makeRegexp(want)
 		if ok, err := regexp.MatchString(re, got); !ok || err != nil {
-			t.Errorf("%s:ouput:\ngot:\n%s\nwant:\n%s", tc.desc, got, want)
+			t.Errorf("%s:output:\ngot:\n%s\nwant:\n%s", tc.desc, got, want)
 		}
 	}
 }
@@ -461,8 +537,14 @@ func TestBRun(t *T) {
 					_ = append([]byte(nil), buf[:]...)
 				}
 			}
-			b.Run("", func(b *B) { alloc(b) })
-			b.Run("", func(b *B) { alloc(b) })
+			b.Run("", func(b *B) {
+				alloc(b)
+				b.ReportAllocs()
+			})
+			b.Run("", func(b *B) {
+				alloc(b)
+				b.ReportAllocs()
+			})
 			// runtime.MemStats sometimes reports more allocations than the
 			// benchmark is responsible for. Luckily the point of this test is
 			// to ensure that the results are not underreported, so we can
@@ -505,14 +587,15 @@ func TestBRun(t *T) {
 		want := strings.TrimSpace(tc.output)
 		re := makeRegexp(want)
 		if ok, err := regexp.MatchString(re, got); !ok || err != nil {
-			t.Errorf("%s:ouput:\ngot:\n%s\nwant:\n%s", tc.desc, got, want)
+			t.Errorf("%s:output:\ngot:\n%s\nwant:\n%s", tc.desc, got, want)
 		}
 	}
 }
 
 func makeRegexp(s string) string {
+	s = regexp.QuoteMeta(s)
 	s = strings.Replace(s, ":NNN:", `:\d\d\d:`, -1)
-	s = strings.Replace(s, "(N.NNs)", `\(\d*\.\d*s\)`, -1)
+	s = strings.Replace(s, "N\\.NNs", `\d*\.\d*s`, -1)
 	return s
 }
 
@@ -521,4 +604,96 @@ func TestBenchmarkOutput(t *T) {
 	// normal case.
 	Benchmark(func(b *B) { b.Error("do not print this output") })
 	Benchmark(func(b *B) {})
+}
+
+func TestBenchmarkStartsFrom1(t *T) {
+	var first = true
+	Benchmark(func(b *B) {
+		if first && b.N != 1 {
+			panic(fmt.Sprintf("Benchmark() first N=%v; want 1", b.N))
+		}
+		first = false
+	})
+}
+
+func TestBenchmarkReadMemStatsBeforeFirstRun(t *T) {
+	var first = true
+	Benchmark(func(b *B) {
+		if first && (b.startAllocs == 0 || b.startBytes == 0) {
+			panic(fmt.Sprintf("ReadMemStats not called before first run"))
+		}
+		first = false
+	})
+}
+
+func TestParallelSub(t *T) {
+	c := make(chan int)
+	block := make(chan int)
+	for i := 0; i < 10; i++ {
+		go func(i int) {
+			<-block
+			t.Run(fmt.Sprint(i), func(t *T) {})
+			c <- 1
+		}(i)
+	}
+	close(block)
+	for i := 0; i < 10; i++ {
+		<-c
+	}
+}
+
+type funcWriter func([]byte) (int, error)
+
+func (fw funcWriter) Write(b []byte) (int, error) { return fw(b) }
+
+func TestRacyOutput(t *T) {
+	var runs int32  // The number of running Writes
+	var races int32 // Incremented for each race detected
+	raceDetector := func(b []byte) (int, error) {
+		// Check if some other goroutine is concurrently calling Write.
+		if atomic.LoadInt32(&runs) > 0 {
+			atomic.AddInt32(&races, 1) // Race detected!
+		}
+		atomic.AddInt32(&runs, 1)
+		defer atomic.AddInt32(&runs, -1)
+		runtime.Gosched() // Increase probability of a race
+		return len(b), nil
+	}
+
+	var wg sync.WaitGroup
+	root := &T{
+		common:  common{w: funcWriter(raceDetector), chatty: true},
+		context: newTestContext(1, newMatcher(regexp.MatchString, "", "")),
+	}
+	root.Run("", func(t *T) {
+		for i := 0; i < 100; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				t.Run(fmt.Sprint(i), func(t *T) {
+					t.Logf("testing run %d", i)
+				})
+			}(i)
+		}
+	})
+	wg.Wait()
+
+	if races > 0 {
+		t.Errorf("detected %d racy Writes", races)
+	}
+}
+
+func TestBenchmark(t *T) {
+	res := Benchmark(func(b *B) {
+		for i := 0; i < 5; i++ {
+			b.Run("", func(b *B) {
+				for i := 0; i < b.N; i++ {
+					time.Sleep(time.Millisecond)
+				}
+			})
+		}
+	})
+	if res.NsPerOp() < 4000000 {
+		t.Errorf("want >5ms; got %v", time.Duration(res.NsPerOp()))
+	}
 }

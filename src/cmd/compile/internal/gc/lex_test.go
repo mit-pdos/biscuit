@@ -4,7 +4,10 @@
 
 package gc
 
-import "testing"
+import (
+	"cmd/compile/internal/syntax"
+	"testing"
+)
 
 func eq(a, b []string) bool {
 	if len(a) != len(b) {
@@ -19,7 +22,6 @@ func eq(a, b []string) bool {
 }
 
 func TestPragmaFields(t *testing.T) {
-
 	var tests = []struct {
 		in   string
 		want []string
@@ -46,7 +48,6 @@ func TestPragmaFields(t *testing.T) {
 }
 
 func TestPragcgo(t *testing.T) {
-
 	var tests = []struct {
 		in   string
 		want string
@@ -69,8 +70,10 @@ func TestPragcgo(t *testing.T) {
 		{`go:cgo_ldflag "a rg"`, "cgo_ldflag 'a rg'\n"},
 	}
 
+	var p noder
+	var nopos syntax.Pos
 	for _, tt := range tests {
-		got := pragcgo(tt.in)
+		got := p.pragcgo(nopos, tt.in)
 		if got != tt.want {
 			t.Errorf("pragcgo(%q) = %q; want %q", tt.in, got, tt.want)
 			continue

@@ -8,14 +8,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/importer"
 	"go/parser"
 	"go/printer"
 	"go/token"
 	"go/types"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -23,10 +26,16 @@ import (
 	"strings"
 )
 
+// Important! If you add flags here, make sure to update cmd/go/internal/vet/vetflag.go.
+
 var (
 	verbose = flag.Bool("v", false, "verbose")
+	source  = flag.Bool("source", false, "import from source instead of compiled object files")
 	tags    = flag.String("tags", "", "space-separated list of build tags to apply when parsing")
 	tagList = []string{} // exploded version of tags flag; set in main
+
+	vcfg          vetConfig
+	mustTypecheck bool
 )
 
 var exitCode = 0
@@ -133,6 +142,7 @@ var (
 	callExpr      *ast.CallExpr
 	compositeLit  *ast.CompositeLit
 	exprStmt      *ast.ExprStmt
+	forStmt       *ast.ForStmt
 	funcDecl      *ast.FuncDecl
 	funcLit       *ast.FuncLit
 	genDecl       *ast.GenDecl
@@ -185,12 +195,17 @@ type File struct {
 	// Parsed package "foo" when checking package "foo_test"
 	basePkg *Package
 
-	// The objects that are receivers of a "String() string" method.
+	// The keys are the objects that are receivers of a "String()
+	// string" method. The value reports whether the method has a
+	// pointer receiver.
 	// This is used by the recursiveStringer method in print.go.
-	stringers map[*ast.Object]bool
+	stringerPtrs map[*ast.Object]bool
 
 	// Registered checkers to run.
 	checkers map[ast.Node][]func(*File, ast.Node)
+
+	// Unreachable nodes; can be ignored in shift check.
+	dead map[ast.Node]bool
 }
 
 func main() {
@@ -219,6 +234,18 @@ func main() {
 	if flag.NArg() == 0 {
 		Usage()
 	}
+
+	// Special case for "go vet" passing an explicit configuration:
+	// single argument ending in vet.cfg.
+	// Once we have a more general mechanism for obtaining this
+	// information from build tools like the go command,
+	// vet should be changed to use it. This vet.cfg hack is an
+	// experiment to learn about what form that information should take.
+	if flag.NArg() == 1 && strings.HasSuffix(flag.Arg(0), "vet.cfg") {
+		doPackageCfg(flag.Arg(0))
+		os.Exit(exitCode)
+	}
+
 	for _, name := range flag.Args() {
 		// Is it a directory?
 		fi, err := os.Stat(name)
@@ -244,7 +271,7 @@ func main() {
 		}
 		os.Exit(exitCode)
 	}
-	if doPackage(".", flag.Args(), nil) == nil {
+	if doPackage(flag.Args(), nil) == nil {
 		warnf("no files checked")
 	}
 	os.Exit(exitCode)
@@ -257,6 +284,67 @@ func prefixDirectory(directory string, names []string) {
 			names[i] = filepath.Join(directory, name)
 		}
 	}
+}
+
+// vetConfig is the JSON config struct prepared by the Go command.
+type vetConfig struct {
+	Compiler    string
+	Dir         string
+	ImportPath  string
+	GoFiles     []string
+	ImportMap   map[string]string
+	PackageFile map[string]string
+
+	SucceedOnTypecheckFailure bool
+
+	imp types.Importer
+}
+
+func (v *vetConfig) Import(path string) (*types.Package, error) {
+	if v.imp == nil {
+		v.imp = importer.For(v.Compiler, v.openPackageFile)
+	}
+	if path == "unsafe" {
+		return v.imp.Import("unsafe")
+	}
+	p := v.ImportMap[path]
+	if p == "" {
+		return nil, fmt.Errorf("unknown import path %q", path)
+	}
+	if v.PackageFile[p] == "" {
+		return nil, fmt.Errorf("unknown package file for import %q", path)
+	}
+	return v.imp.Import(p)
+}
+
+func (v *vetConfig) openPackageFile(path string) (io.ReadCloser, error) {
+	file := v.PackageFile[path]
+	if file == "" {
+		// Note that path here has been translated via v.ImportMap,
+		// unlike in the error in Import above. We prefer the error in
+		// Import, but it's worth diagnosing this one too, just in case.
+		return nil, fmt.Errorf("unknown package file for %q", path)
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// doPackageCfg analyzes a single package described in a config file.
+func doPackageCfg(cfgFile string) {
+	js, err := ioutil.ReadFile(cfgFile)
+	if err != nil {
+		errorf("%v", err)
+	}
+	if err := json.Unmarshal(js, &vcfg); err != nil {
+		errorf("parsing vet config %s: %v", cfgFile, err)
+	}
+	stdImporter = &vcfg
+	inittypes()
+	mustTypecheck = true
+	doPackage(vcfg.GoFiles, nil)
 }
 
 // doPackageDir analyzes the single package found in the directory, if there is one,
@@ -284,12 +372,12 @@ func doPackageDir(directory string) {
 	names = append(names, pkg.TestGoFiles...) // These are also in the "foo" package.
 	names = append(names, pkg.SFiles...)
 	prefixDirectory(directory, names)
-	basePkg := doPackage(directory, names, nil)
+	basePkg := doPackage(names, nil)
 	// Is there also a "foo_test" package? If so, do that one as well.
 	if len(pkg.XTestGoFiles) > 0 {
 		names = pkg.XTestGoFiles
 		prefixDirectory(directory, names)
-		doPackage(directory, names, basePkg)
+		doPackage(names, basePkg)
 	}
 }
 
@@ -306,7 +394,7 @@ type Package struct {
 
 // doPackage analyzes the single package constructed from the named files.
 // It returns the parsed Package or nil if none of the files have been checked.
-func doPackage(directory string, names []string, basePkg *Package) *Package {
+func doPackage(names []string, basePkg *Package) *Package {
 	var files []*File
 	var astFiles []*ast.File
 	fs := token.NewFileSet()
@@ -327,7 +415,13 @@ func doPackage(directory string, names []string, basePkg *Package) *Package {
 			}
 			astFiles = append(astFiles, parsedFile)
 		}
-		files = append(files, &File{fset: fs, content: data, name: name, file: parsedFile})
+		files = append(files, &File{
+			fset:    fs,
+			content: data,
+			name:    name,
+			file:    parsedFile,
+			dead:    make(map[ast.Node]bool),
+		})
 	}
 	if len(astFiles) == 0 {
 		return nil
@@ -336,9 +430,23 @@ func doPackage(directory string, names []string, basePkg *Package) *Package {
 	pkg.path = astFiles[0].Name.Name
 	pkg.files = files
 	// Type check the package.
-	err := pkg.check(fs, astFiles)
-	if err != nil && *verbose {
-		warnf("%s", err)
+	errs := pkg.check(fs, astFiles)
+	if errs != nil {
+		if vcfg.SucceedOnTypecheckFailure {
+			os.Exit(0)
+		}
+		if *verbose || mustTypecheck {
+			for _, err := range errs {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+			}
+			if mustTypecheck {
+				// This message could be silenced, and we could just exit,
+				// but it might be helpful at least at first to make clear that the
+				// above errors are coming from vet and not the compiler
+				// (they often look like compiler errors, such as "declared but not used").
+				errorf("typecheck failures")
+			}
+		}
 	}
 
 	// Check.
@@ -469,6 +577,7 @@ func (f *File) walkFile(name string, file *ast.File) {
 
 // Visit implements the ast.Visitor interface.
 func (f *File) Visit(node ast.Node) ast.Visitor {
+	f.updateDead(node)
 	var key ast.Node
 	switch node.(type) {
 	case *ast.AssignStmt:
@@ -481,6 +590,8 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 		key = compositeLit
 	case *ast.ExprStmt:
 		key = exprStmt
+	case *ast.ForStmt:
+		key = forStmt
 	case *ast.FuncDecl:
 		key = funcDecl
 	case *ast.FuncLit:

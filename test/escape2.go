@@ -1204,7 +1204,7 @@ func foo126() {
 		// loopdepth 1
 		var i int // ERROR "moved to heap: i$"
 		func() {  // ERROR "foo126 func literal does not escape$"
-			px = &i // ERROR "&i escapes to heap$"  "leaking closure reference i"
+			px = &i // ERROR "&i escapes to heap$" "leaking closure reference i"
 		}()
 	}
 	_ = px
@@ -1823,4 +1823,19 @@ func issue11387(x int) func() int {
 	slice2 := make([]func() int, 1) // ERROR "make\(.*\) does not escape"
 	copy(slice2, slice1)
 	return slice2[0]
+}
+
+func issue12397(x, y int) { // ERROR "moved to heap: y$"
+	// x does not escape below, because all relevant code is dead.
+	if false {
+		gxx = &x
+	} else {
+		gxx = &y // ERROR "&y escapes to heap$"
+	}
+
+	if true {
+		gxx = &y // ERROR "&y escapes to heap$"
+	} else {
+		gxx = &x
+	}
 }

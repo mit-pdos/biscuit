@@ -55,11 +55,43 @@ var strcond = [16]string{
 }
 
 func init() {
-	obj.RegisterRegister(obj.RBaseARM64, REG_SPECIAL+1024, Rconv)
+	obj.RegisterRegister(obj.RBaseARM64, REG_SPECIAL+1024, rconv)
 	obj.RegisterOpcode(obj.ABaseARM64, Anames)
+	obj.RegisterRegisterList(obj.RegListARM64Lo, obj.RegListARM64Hi, rlconv)
 }
 
-func Rconv(r int) string {
+func arrange(a int) string {
+	switch a {
+	case ARNG_8B:
+		return "B8"
+	case ARNG_16B:
+		return "B16"
+	case ARNG_4H:
+		return "H4"
+	case ARNG_8H:
+		return "H8"
+	case ARNG_2S:
+		return "S2"
+	case ARNG_4S:
+		return "S4"
+	case ARNG_1D:
+		return "D1"
+	case ARNG_2D:
+		return "D2"
+	case ARNG_B:
+		return "B"
+	case ARNG_H:
+		return "H"
+	case ARNG_S:
+		return "S"
+	case ARNG_D:
+		return "D"
+	default:
+		return ""
+	}
+}
+
+func rconv(r int) string {
 	if r == REGG {
 		return "g"
 	}
@@ -102,6 +134,96 @@ func Rconv(r int) string {
 		return "DAIFSet"
 	case r == REG_DAIFClr:
 		return "DAIFClr"
+	case r == REG_DCZID_EL0:
+		return "DCZID_EL0"
+	case r == REG_PLDL1KEEP:
+		return "PLDL1KEEP"
+	case r == REG_PLDL1STRM:
+		return "PLDL1STRM"
+	case r == REG_PLDL2KEEP:
+		return "PLDL2KEEP"
+	case r == REG_PLDL2STRM:
+		return "PLDL2STRM"
+	case r == REG_PLDL3KEEP:
+		return "PLDL3KEEP"
+	case r == REG_PLDL3STRM:
+		return "PLDL3STRM"
+	case r == REG_PLIL1KEEP:
+		return "PLIL1KEEP"
+	case r == REG_PLIL1STRM:
+		return "PLIL1STRM"
+	case r == REG_PLIL2KEEP:
+		return "PLIL2KEEP"
+	case r == REG_PLIL2STRM:
+		return "PLIL2STRM"
+	case r == REG_PLIL3KEEP:
+		return "PLIL3KEEP"
+	case r == REG_PLIL3STRM:
+		return "PLIL3STRM"
+	case r == REG_PSTL1KEEP:
+		return "PSTL1KEEP"
+	case r == REG_PSTL1STRM:
+		return "PSTL1STRM"
+	case r == REG_PSTL2KEEP:
+		return "PSTL2KEEP"
+	case r == REG_PSTL2STRM:
+		return "PSTL2STRM"
+	case r == REG_PSTL3KEEP:
+		return "PSTL3KEEP"
+	case r == REG_PSTL3STRM:
+		return "PSTL3STRM"
+	case REG_UXTB <= r && r < REG_UXTH:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.UXTB<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.UXTB", r&31)
+		}
+	case REG_UXTH <= r && r < REG_UXTW:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.UXTH<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.UXTH", r&31)
+		}
+	case REG_UXTW <= r && r < REG_UXTX:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.UXTW<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.UXTW", r&31)
+		}
+	case REG_UXTX <= r && r < REG_SXTB:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.UXTX<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.UXTX", r&31)
+		}
+	case REG_SXTB <= r && r < REG_SXTH:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.SXTB<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.SXTB", r&31)
+		}
+	case REG_SXTH <= r && r < REG_SXTW:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.SXTH<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.SXTH", r&31)
+		}
+	case REG_SXTW <= r && r < REG_SXTX:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.SXTW<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.SXTW", r&31)
+		}
+	case REG_SXTX <= r && r < REG_SPECIAL:
+		if (r>>5)&7 != 0 {
+			return fmt.Sprintf("R%d.SXTX<<%d", r&31, (r>>5)&7)
+		} else {
+			return fmt.Sprintf("R%d.SXTX", r&31)
+		}
+	case REG_ARNG <= r && r < REG_ELEM:
+		return fmt.Sprintf("V%d.%s", r&31, arrange((r>>5)&15))
+	case REG_ELEM <= r && r < REG_ELEM_END:
+		return fmt.Sprintf("V%d.%s", r&31, arrange((r>>5)&15))
 	}
 	return fmt.Sprintf("badreg(%d)", r)
 }
@@ -111,4 +233,61 @@ func DRconv(a int) string {
 		return cnames7[a]
 	}
 	return "C_??"
+}
+
+func rlconv(list int64) string {
+	str := ""
+
+	// ARM64 register list follows ARM64 instruction decode schema
+	// | 31 | 30 | ... | 15 - 12 | 11 - 10 | ... |
+	// +----+----+-----+---------+---------+-----+
+	// |    | Q  | ... | opcode  |   size  | ... |
+
+	firstReg := int(list & 31)
+	opcode := (list >> 12) & 15
+	var regCnt int
+	var t string
+	switch opcode {
+	case 0x7:
+		regCnt = 1
+	case 0xa:
+		regCnt = 2
+	case 0x6:
+		regCnt = 3
+	case 0x2:
+		regCnt = 4
+	default:
+		regCnt = -1
+	}
+	// Q:size
+	arng := ((list>>30)&1)<<2 | (list>>10)&3
+	switch arng {
+	case 0:
+		t = "B8"
+	case 4:
+		t = "B16"
+	case 1:
+		t = "H4"
+	case 5:
+		t = "H8"
+	case 2:
+		t = "S2"
+	case 6:
+		t = "S4"
+	case 3:
+		t = "D1"
+	case 7:
+		t = "D2"
+	}
+	for i := 0; i < regCnt; i++ {
+		if str == "" {
+			str += "["
+		} else {
+			str += ","
+		}
+		str += fmt.Sprintf("V%d.", (firstReg+i)&31)
+		str += t
+	}
+	str += "]"
+	return str
 }

@@ -11,6 +11,8 @@ type mOS struct {
 	waitsema uint32 // semaphore for parking on locks
 }
 
+var darwinVersion int
+
 func bsdthread_create(stk, arg unsafe.Pointer, fn uintptr) int32
 func bsdthread_register() int32
 
@@ -50,15 +52,34 @@ func osinit() {
 	// can look at the environment first.
 
 	ncpu = getncpu()
-
 	physPageSize = getPageSize()
+	darwinVersion = getDarwinVersion()
 }
 
 const (
-	_CTL_HW      = 6
-	_HW_NCPU     = 3
-	_HW_PAGESIZE = 7
+	_CTL_KERN       = 1
+	_CTL_HW         = 6
+	_KERN_OSRELEASE = 2
+	_HW_NCPU        = 3
+	_HW_PAGESIZE    = 7
 )
+
+func getDarwinVersion() int {
+	// Use sysctl to fetch kern.osrelease
+	mib := [2]uint32{_CTL_KERN, _KERN_OSRELEASE}
+	var out [32]byte
+	nout := unsafe.Sizeof(out)
+	ret := sysctl(&mib[0], 2, (*byte)(unsafe.Pointer(&out)), &nout, nil, 0)
+	if ret >= 0 {
+		ver := 0
+		for i := 0; i < int(nout) && out[i] >= '0' && out[i] <= '9'; i++ {
+			ver *= 10
+			ver += int(out[i] - '0')
+		}
+		return ver
+	}
+	return 17 // should not happen: default to a newish version
+}
 
 func getncpu() int32 {
 	// Use sysctl to fetch hw.ncpu.
@@ -135,7 +156,7 @@ func newosproc(mp *m, stk unsafe.Pointer) {
 // not safe to use after initialization as it does not pass an M as fnarg.
 //
 //go:nosplit
-func newosproc0(stacksize uintptr, fn unsafe.Pointer, fnarg uintptr) {
+func newosproc0(stacksize uintptr, fn uintptr) {
 	stack := sysAlloc(stacksize, &memstats.stacks_sys)
 	if stack == nil {
 		write(2, unsafe.Pointer(&failallocatestack[0]), int32(len(failallocatestack)))
@@ -145,7 +166,7 @@ func newosproc0(stacksize uintptr, fn unsafe.Pointer, fnarg uintptr) {
 
 	var oset sigset
 	sigprocmask(_SIG_SETMASK, &sigset_all, &oset)
-	errno := bsdthread_create(stk, fn, fnarg)
+	errno := bsdthread_create(stk, nil, fn)
 	sigprocmask(_SIG_SETMASK, &oset, nil)
 
 	if errno < 0 {
@@ -188,7 +209,11 @@ func minit() {
 // Called from dropm to undo the effect of an minit.
 //go:nosplit
 func unminit() {
-	unminitSignals()
+	// The alternate signal stack is buggy on arm and arm64.
+	// See minit.
+	if GOARCH != "arm" && GOARCH != "arm64" {
+		unminitSignals()
+	}
 }
 
 // Mach IPC, to get at semaphores
@@ -456,14 +481,6 @@ func mach_semrelease(sem uint32) {
 //go:nosplit
 func osyield() {
 	usleep(1)
-}
-
-func memlimit() uintptr {
-	// NOTE(rsc): Could use getrlimit here,
-	// like on FreeBSD or Linux, but Darwin doesn't enforce
-	// ulimit -v, so it's unclear why we'd try to stay within
-	// the limit.
-	return 0
 }
 
 const (
