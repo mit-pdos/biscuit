@@ -3418,6 +3418,14 @@ func GCDebug(n int) {
 	debug.gctrace = int32(n)
 }
 
+func GCDebugToggle() {
+	if debug.gctrace != 0 {
+		debug.gctrace = 0
+	} else {
+		debug.gctrace = 1
+	}
+}
+
 func Memremain() int {
 	a := atomic.Loadint64(&res.ostanding)
 	b := atomic.Loadint64(&res.fin)
@@ -3430,6 +3438,11 @@ func Memleak(_n int) bool {
 	n := int64(_n)
 	r := _restake(n)
 	return r
+}
+
+func Memstat() (int64, int64) {
+	g := getg()
+	return g.res.took, g.res.allocs
 }
 
 func Memreserve(_n int) bool {

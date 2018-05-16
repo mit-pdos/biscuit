@@ -809,7 +809,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		} else if c == '@' {
 			//common.Lims = !common.Lims
 			//fmt.Printf("Lims: %v\n", common.Lims)
-			//thefs.Dumpy()
+
+			fmt.Printf("toggle\n")
+			runtime.GCDebugToggle()
+
 		} else if c == '%' {
 			//fmt.Printf("distinct simulated failures: %v\n",
 			//    common.Resfail.Len())
@@ -1415,7 +1418,6 @@ var physmem *common.Physmem_t
 var thefs *fs.Fs_t
 
 func main() {
-	//runtime.GCDebug()
 	common.Kernel = true
 
 	// magic loop
