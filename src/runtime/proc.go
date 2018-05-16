@@ -1968,7 +1968,7 @@ stop:
 	}
 
 	if hackmode != 0 {
-		mktrap(TRAP_YIELD)
+		//mktrap(TRAP_YIELD)
 		goto top
 	}
 
