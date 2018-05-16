@@ -578,7 +578,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 		offset = toff
 		append = false
 	}
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_write")
+	idm, err := fo.fs.icache.Iref(fo.priv, "_write")
 	if err != 0 {
 		return 0, err
 	}
@@ -586,7 +586,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 	if !useoffset && err == 0 {
 		fo.offset += did
 	}
-	idm.iunlock_refdown("_write")
+	idm.refdown("_write")
 	return did, err
 }
 
