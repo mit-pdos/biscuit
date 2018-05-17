@@ -221,6 +221,7 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	// if block is in logged, then it stays in log
 	_, present := trans.logpresent[buf.block.Block]
 	if buf.ordered && present {
+		log.norder2logwrite++
 		buf.ordered = false
 	}
 
@@ -262,7 +263,7 @@ func (trans *trans_t) iscommittable() bool {
 }
 
 func (trans *trans_t) isfull(loglen int, onemore bool) bool {
-	n := trans.logindex + trans.head + len(trans.ops)*MaxBlkPerOp
+	n := trans.head + len(trans.ops)*MaxBlkPerOp
 	if onemore {
 		n += MaxBlkPerOp
 	}
@@ -397,16 +398,17 @@ type log_t struct {
 	fs   *Fs_t
 
 	// some stats
-	maxblks_per_op int
-	nblkcommitted  int
-	ncommit        int
-	napply         int
-	nabsorption    int
-	nlogwrite      int
-	norderedwrite  int
-	nblkapply      int
-	nabsorbapply   int
-	nforceordered  int
+	maxblks_per_op  int
+	nblkcommitted   int
+	ncommit         int
+	napply          int
+	nabsorption     int
+	nlogwrite       int
+	norderedwrite   int
+	nblkapply       int
+	nabsorbapply    int
+	nforceordered   int
+	norder2logwrite int
 }
 
 // first log header block format
@@ -530,14 +532,15 @@ func (log *log_t) apply() {
 
 	done := make(map[int]bool, log.loglen)
 
-	if log_debug {
-		fmt.Printf("apply log: #trans %v\n", len(log.transactions))
-	}
-
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
 	trans := log.transactions[len(log.transactions)-1]
+
+	if log_debug {
+		fmt.Printf("apply log: #trans %v #blks %v\n", len(log.transactions), trans.head)
+	}
+
 	for i := trans.head - 1; i >= LogOffset; i-- {
 		l := log.log[i]
 		log.nblkapply++
