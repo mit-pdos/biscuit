@@ -54,12 +54,16 @@ TEXT runtime·exit(SB),NOSPLIT,$-8
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT,$-8
-	MOVL	code+0(FP), DI		// arg 1 exit status
-	MOVL	$431, AX
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT,$0-8
+	MOVQ	wait+0(FP), AX
+	// We're done using the stack.
+	MOVL	$0, (AX)
+	MOVL	$0, DI		// arg 1 long *state
+	MOVL	$431, AX	// thr_exit
 	SYSCALL
 	MOVL	$0xf1, 0xf1  // crash
-	RET
+	JMP	0(PC)
 
 TEXT runtime·open(SB),NOSPLIT,$-8
 	MOVQ	name+0(FP), DI		// arg 1 pathname
@@ -103,14 +107,6 @@ TEXT runtime·write(SB),NOSPLIT,$-8
 	MOVL	AX, ret+24(FP)
 	RET
 
-TEXT runtime·getrlimit(SB),NOSPLIT,$-8
-	MOVL	kind+0(FP), DI
-	MOVQ	limit+8(FP), SI
-	MOVL	$194, AX
-	SYSCALL
-	MOVL	AX, ret+16(FP)
-	RET
-
 TEXT runtime·raise(SB),NOSPLIT,$16
 	// thr_self(&8(SP))
 	LEAQ	8(SP), DI	// arg 1 &8(SP)
@@ -142,8 +138,8 @@ TEXT runtime·setitimer(SB), NOSPLIT, $-8
 	SYSCALL
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB), NOSPLIT, $32
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB), NOSPLIT, $32
 	MOVL	$232, AX // clock_gettime
 	MOVQ	$0, DI		// CLOCK_REALTIME
 	LEAQ	8(SP), SI
@@ -196,11 +192,28 @@ TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 	POPQ	BP
 	RET
 
-TEXT runtime·sigtramp(SB),NOSPLIT,$24
-	MOVQ	DI, 0(SP)
-	MOVQ	SI, 8(SP)
-	MOVQ	DX, 16(SP)
+TEXT runtime·sigtramp(SB),NOSPLIT,$72
+	// Save callee-saved C registers, since the caller may be a C signal handler.
+	MOVQ	BX, bx-8(SP)
+	MOVQ	BP, bp-16(SP)  // save in case GOEXPERIMENT=noframepointer is set
+	MOVQ	R12, r12-24(SP)
+	MOVQ	R13, r13-32(SP)
+	MOVQ	R14, r14-40(SP)
+	MOVQ	R15, r15-48(SP)
+	// We don't save mxcsr or the x87 control word because sigtrampgo doesn't
+	// modify them.
+
+	MOVQ	DX, ctx-56(SP)
+	MOVQ	SI, info-64(SP)
+	MOVQ	DI, signum-72(SP)
 	CALL	runtime·sigtrampgo(SB)
+
+	MOVQ	r15-48(SP), R15
+	MOVQ	r14-40(SP), R14
+	MOVQ	r13-32(SP), R13
+	MOVQ	r12-24(SP), R12
+	MOVQ	bp-16(SP),  BP
+	MOVQ	bx-8(SP),   BX
 	RET
 
 TEXT runtime·mmap(SB),NOSPLIT,$0
@@ -212,7 +225,13 @@ TEXT runtime·mmap(SB),NOSPLIT,$0
 	MOVL	off+28(FP), R9		// arg 6 offset
 	MOVL	$477, AX
 	SYSCALL
-	MOVQ	AX, ret+32(FP)
+	JCC	ok
+	MOVQ	$0, p+32(FP)
+	MOVQ	AX, err+40(FP)
+	RET
+ok:
+	MOVQ	AX, p+32(FP)
+	MOVQ	$0, err+40(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT,$0
@@ -336,4 +355,18 @@ TEXT runtime·closeonexec(SB),NOSPLIT,$0
 	MOVQ	$1, DX		// FD_CLOEXEC
 	MOVL	$92, AX		// fcntl
 	SYSCALL
+	RET
+
+// func cpuset_getaffinity(level int, which int, id int64, size int, mask *byte) int32
+TEXT runtime·cpuset_getaffinity(SB), NOSPLIT, $0-44
+	MOVQ	level+0(FP), DI
+	MOVQ	which+8(FP), SI
+	MOVQ	id+16(FP), DX
+	MOVQ	size+24(FP), R10
+	MOVQ	mask+32(FP), R8
+	MOVL	$487, AX
+	SYSCALL
+	JCC	2(PC)
+	NEGQ	AX
+	MOVL	AX, ret+40(FP)
 	RET

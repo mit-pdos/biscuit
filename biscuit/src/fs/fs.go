@@ -26,6 +26,7 @@ type Fs_t struct {
 
 func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
+	//memfs = common.Kernel
 	cons = console
 
 	fs := &Fs_t{}

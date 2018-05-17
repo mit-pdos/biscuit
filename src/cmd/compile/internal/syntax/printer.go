@@ -341,7 +341,13 @@ func (p *printer) printNode(n Node) {
 
 func (p *printer) printRawNode(n Node) {
 	switch n := n.(type) {
+	case nil:
+		// we should not reach here but don't crash
+
 	// expressions and types
+	case *BadExpr:
+		p.print(_Name, "<bad expr>")
+
 	case *Name:
 		p.print(_Name, n.Value) // _Name requires actual value following immediately
 
@@ -349,8 +355,7 @@ func (p *printer) printRawNode(n Node) {
 		p.print(_Name, n.Value) // _Name requires actual value following immediately
 
 	case *FuncLit:
-		p.print(n.Type, blank)
-		p.printBody(n.Body)
+		p.print(n.Type, blank, n.Body)
 
 	case *CompositeLit:
 		if n.Type != nil {
@@ -524,15 +529,20 @@ func (p *printer) printRawNode(n Node) {
 		}
 
 	case *BlockStmt:
-		p.printBody(n.Body)
+		p.print(_Lbrace)
+		if len(n.List) > 0 {
+			p.print(newline, indent)
+			p.printStmtList(n.List, true)
+			p.print(outdent, newline)
+		}
+		p.print(_Rbrace)
 
 	case *IfStmt:
 		p.print(_If, blank)
 		if n.Init != nil {
 			p.print(n.Init, _Semi, blank)
 		}
-		p.print(n.Cond, blank)
-		p.printBody(n.Then)
+		p.print(n.Cond, blank, n.Then)
 		if n.Else != nil {
 			p.print(blank, _Else, blank, n.Else)
 		}
@@ -578,8 +588,7 @@ func (p *printer) printRawNode(n Node) {
 				p.print(n.Init)
 				// TODO(gri) clean this up
 				if _, ok := n.Init.(*RangeClause); ok {
-					p.print(blank)
-					p.printBody(n.Body)
+					p.print(blank, n.Body)
 					break
 				}
 			}
@@ -592,7 +601,7 @@ func (p *printer) printRawNode(n Node) {
 				p.print(n.Post, blank)
 			}
 		}
-		p.printBody(n.Body)
+		p.print(n.Body)
 
 	case *ImportDecl:
 		if n.Group == nil {
@@ -619,7 +628,11 @@ func (p *printer) printRawNode(n Node) {
 		if n.Group == nil {
 			p.print(_Type, blank)
 		}
-		p.print(n.Name, blank, n.Type)
+		p.print(n.Name, blank)
+		if n.Alias {
+			p.print(_Assign, blank)
+		}
+		p.print(n.Type)
 
 	case *VarDecl:
 		if n.Group == nil {
@@ -646,8 +659,7 @@ func (p *printer) printRawNode(n Node) {
 		p.print(n.Name)
 		p.printSignature(n.Type)
 		if n.Body != nil {
-			p.print(blank)
-			p.printBody(n.Body)
+			p.print(blank, n.Body)
 		}
 
 	case *printGroup:
@@ -876,16 +888,6 @@ func (p *printer) printStmtList(list []Stmt, braces bool) {
 			}
 		}
 	}
-}
-
-func (p *printer) printBody(list []Stmt) {
-	p.print(_Lbrace)
-	if len(list) > 0 {
-		p.print(newline, indent)
-		p.printStmtList(list, true)
-		p.print(outdent, newline)
-	}
-	p.print(_Rbrace)
 }
 
 func (p *printer) printSwitchBody(list []*CaseClause) {

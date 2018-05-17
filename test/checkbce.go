@@ -1,6 +1,13 @@
 // +build amd64
 // errorcheck -0 -d=ssa/check_bce/debug=3
 
+// Copyright 2016 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Test that the compiler does bounds check elimination as expected.
+// This avoids accidental regressions.
+
 package main
 
 func f0(a []int) {
@@ -13,10 +20,14 @@ func f0(a []int) {
 }
 
 func f1(a [256]int, i int) {
-	useInt(a[i])     // ERROR "Found IsInBounds$"
-	useInt(a[i%256]) // ERROR "Found IsInBounds$"
-	useInt(a[i&255])
-	useInt(a[i&17])
+	var j int
+	useInt(a[i]) // ERROR "Found IsInBounds$"
+	j = i % 256
+	useInt(a[j]) // ERROR "Found IsInBounds$"
+	j = i & 255
+	useInt(a[j])
+	j = i & 17
+	useInt(a[j])
 
 	if 4 <= i && i < len(a) {
 		useInt(a[i])
@@ -29,9 +40,36 @@ func f1(a [256]int, i int) {
 
 func f2(a [256]int, i uint) {
 	useInt(a[i]) // ERROR "Found IsInBounds$"
-	useInt(a[i%256])
-	useInt(a[i&255])
-	useInt(a[i&17])
+	j := i % 256
+	useInt(a[j])
+	j = i & 255
+	useInt(a[j])
+	j = i & 17
+	useInt(a[j])
+}
+
+func f2a(a [35]int, i uint8) {
+	useInt(a[i]) // ERROR "Found IsInBounds$"
+	j := i & 34
+	useInt(a[j])
+	j = i & 17
+	useInt(a[j])
+}
+
+func f2b(a [35]int, i uint16) {
+	useInt(a[i]) // ERROR "Found IsInBounds$"
+	j := i & 34
+	useInt(a[j])
+	j = i & 17
+	useInt(a[j])
+}
+
+func f2c(a [35]int, i uint32) {
+	useInt(a[i]) // ERROR "Found IsInBounds$"
+	j := i & 34
+	useInt(a[j])
+	j = i & 17
+	useInt(a[j])
 }
 
 func f3(a [256]int, i uint8) {
@@ -50,7 +88,7 @@ func f5(a []int) {
 	if len(a) > 5 {
 		useInt(a[5])
 		useSlice(a[6:])
-		useSlice(a[:6]) // ERROR "Found IsSliceInBounds$"
+		useSlice(a[:6])
 	}
 }
 

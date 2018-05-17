@@ -13,38 +13,37 @@
 #include "go_tls.h"
 #include "textflag.h"
 
-#define SYS_exit		        4001
-#define SYS_read		        4003
-#define SYS_write		        4004
-#define SYS_open		        4005
-#define SYS_close		        4006
-#define SYS_getpid		        4020
-#define SYS_kill		        4037
-#define SYS_fcntl		        4055
-#define SYS_gettimeofday	    4078
-#define SYS_mmap		        4090
-#define SYS_munmap		        4091
-#define SYS_setitimer		    4104
-#define SYS_clone		        4120
-#define SYS_newselect		    4142
-#define SYS_sched_yield		    4162
-#define SYS_rt_sigreturn	    4193
-#define SYS_rt_sigaction	    4194
-#define SYS_rt_sigprocmask		4195
-#define SYS_sigaltstack		    4206
-#define SYS_getrlimit		    4076
-#define SYS_madvise		        4218
-#define SYS_mincore		        4217
-#define SYS_gettid		        4222
-#define SYS_tkill		        4236
-#define SYS_futex		        4238
+#define SYS_exit		4001
+#define SYS_read		4003
+#define SYS_write		4004
+#define SYS_open		4005
+#define SYS_close		4006
+#define SYS_getpid		4020
+#define SYS_kill		4037
+#define SYS_brk			4045
+#define SYS_fcntl		4055
+#define SYS_mmap		4090
+#define SYS_munmap		4091
+#define SYS_setitimer		4104
+#define SYS_clone		4120
+#define SYS_newselect		4142
+#define SYS_sched_yield		4162
+#define SYS_rt_sigreturn	4193
+#define SYS_rt_sigaction	4194
+#define SYS_rt_sigprocmask	4195
+#define SYS_sigaltstack		4206
+#define SYS_madvise		4218
+#define SYS_mincore		4217
+#define SYS_gettid		4222
+#define SYS_tkill		4236
+#define SYS_futex		4238
 #define SYS_sched_getaffinity	4240
-#define SYS_exit_group		    4246
-#define SYS_epoll_create	    4248
-#define SYS_epoll_ctl		    4249
-#define SYS_epoll_wait		    4250
-#define SYS_clock_gettime	    4263
-#define SYS_epoll_create1	    4326
+#define SYS_exit_group		4246
+#define SYS_epoll_create	4248
+#define SYS_epoll_ctl		4249
+#define SYS_epoll_wait		4250
+#define SYS_clock_gettime	4263
+#define SYS_epoll_create1	4326
 
 TEXT runtime·exit(SB),NOSPLIT,$0-4
 	MOVW	code+0(FP), R4
@@ -53,12 +52,19 @@ TEXT runtime·exit(SB),NOSPLIT,$0-4
 	UNDEF
 	RET
 
-TEXT runtime·exit1(SB),NOSPLIT,$0-4
-	MOVW	code+0(FP), R4
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT,$0-4
+	MOVW	wait+0(FP), R1
+	// We're done using the stack.
+	MOVW	$0, R2
+	SYNC
+	MOVW	R2, (R1)
+	SYNC
+	MOVW	$0, R4	// exit code
 	MOVW	$SYS_exit, R2
 	SYSCALL
 	UNDEF
-	RET
+	JMP	0(PC)
 
 TEXT runtime·open(SB),NOSPLIT,$0-16
 	MOVW	name+0(FP), R4
@@ -100,14 +106,6 @@ TEXT runtime·read(SB),NOSPLIT,$0-16
 	BEQ	R7, 2(PC)
 	MOVW	$-1, R2
 	MOVW	R2, ret+12(FP)
-	RET
-
-TEXT runtime·getrlimit(SB),NOSPLIT,$0-12
-	MOVW	kind+0(FP), R4
-	MOVW	limit+4(FP), R5
-	MOVW	$SYS_getrlimit, R2
-	SYSCALL
-	MOVW	R2, ret+8(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$28-4
@@ -175,8 +173,8 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-16
 	MOVW	R2, ret+12(FP)
 	RET
 
-// func now() (sec int64, nsec int32)
-TEXT time·now(SB),NOSPLIT,$8-12
+// func walltime() (sec int64, nsec int32)
+TEXT runtime·walltime(SB),NOSPLIT,$8-12
 	MOVW	$0, R4	// CLOCK_REALTIME
 	MOVW	$4(R29), R5
 	MOVW	$SYS_clock_gettime, R2
@@ -249,7 +247,7 @@ TEXT runtime·sigfwd(SB),NOSPLIT,$0-16
 	MOVW	fn+0(FP), R25
 	MOVW	R29, R22
 	SUBU	$16, R29
-	AND	$0x7, R29	// shadow space for 4 args aligned to 8 bytes as per O32 ABI
+	AND	$~7, R29	// shadow space for 4 args aligned to 8 bytes as per O32 ABI
 	JAL	(R25)
 	MOVW	R22, R29
 	RET
@@ -271,7 +269,7 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$12
 TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
 	JMP	runtime·sigtramp(SB)
 
-TEXT runtime·mmap(SB),NOSPLIT,$20-28
+TEXT runtime·mmap(SB),NOSPLIT,$20-32
 	MOVW	addr+0(FP), R4
 	MOVW	n+4(FP), R5
 	MOVW	prot+8(FP), R6
@@ -283,7 +281,13 @@ TEXT runtime·mmap(SB),NOSPLIT,$20-28
 
 	MOVW	$SYS_mmap, R2
 	SYSCALL
-	MOVW	R2, ret+24(FP)
+	BEQ	R7, ok
+	MOVW	$0, p+24(FP)
+	MOVW	R2, err+28(FP)
+	RET
+ok:
+	MOVW	R2, p+24(FP)
+	MOVW	$0, err+28(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT,$0-8
@@ -323,8 +327,8 @@ TEXT runtime·futex(SB),NOSPLIT,$20-28
 	RET
 
 
-// int32 clone(int32 flags, void *stk, M *mm, G *gg, void (*fn)(void));
-TEXT runtime·clone(SB),NOSPLIT,$-4-24
+// int32 clone(int32 flags, void *stk, M *mp, G *gp, void (*fn)(void));
+TEXT runtime·clone(SB),NOSPLIT|NOFRAME,$0-24
 	MOVW	flags+0(FP), R4
 	MOVW	stk+4(FP), R5
 	MOVW	R0, R6	// ptid
@@ -335,9 +339,9 @@ TEXT runtime·clone(SB),NOSPLIT,$-4-24
 	// stack so that any syscall invoked immediately in the new thread won't fail.
 	ADD	$-32, R5
 
-	// Copy mm, gg, fn off parent stack for use by child.
-	MOVW	mm+8(FP), R16
-	MOVW	gg+12(FP), R17
+	// Copy mp, gp, fn off parent stack for use by child.
+	MOVW	mp+8(FP), R16
+	MOVW	gp+12(FP), R17
 	MOVW	fn+16(FP), R18
 
 	MOVW	$1234, R1
@@ -464,4 +468,13 @@ TEXT runtime·closeonexec(SB),NOSPLIT,$0-4
 	MOVW	$1, R6	// FD_CLOEXEC
 	MOVW	$SYS_fcntl, R2
 	SYSCALL
+	RET
+
+// func sbrk0() uintptr
+TEXT runtime·sbrk0(SB),NOSPLIT,$0-4
+	// Implemented as brk(NULL).
+	MOVW	$0, R4
+	MOVW	$SYS_brk, R2
+	SYSCALL
+	MOVW	R2, ret+0(FP)
 	RET

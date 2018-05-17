@@ -382,12 +382,6 @@ func (p *Proc_t) Mkuserbuf(userva, len int) *Userbuf_t {
 
 var Ubpool = sync.Pool{New: func() interface{} { return new(Userbuf_t) }}
 
-func (p *Proc_t) Mkuserbuf_pool(userva, len int) *Userbuf_t {
-	ret := Ubpool.Get().(*Userbuf_t)
-	ret.ub_init(p, userva, len)
-	return ret
-}
-
 func (p *Proc_t) mkfxbuf() *[64]uintptr {
 	ret := new([64]uintptr)
 	n := uintptr(unsafe.Pointer(ret))
@@ -1613,10 +1607,8 @@ func (o *oom_t) gc() {
 	now := time.Now()
 	if now.Sub(o.lastpr) > time.Second {
 		o.lastpr = now.Add(time.Second)
-		runtime.GCDebug(1)
 	}
 	runtime.GCX()
-	//runtime.GCDebug(0)
 }
 
 func (o *oom_t) reign() {
@@ -1700,21 +1692,21 @@ func (o *oom_t) dispatch_peasant(need int) {
 	st := time.Now()
 	dl := st.Add(time.Second)
 	// wait for the victim to die
-	sleept := 10*time.Microsecond
+	sleept := 1*time.Millisecond
 	for {
 		if _, ok := Proc_check(vic.Pid); !ok {
 			break
 		}
 		now := time.Now()
 		if now.After(dl) {
-			dl = dl.Add(time.Second)
 			fmt.Printf("oom killer: waiting for hog for %v...\n",
 			    now.Sub(st))
 			o.gc()
+			dl = dl.Add(1*time.Second)
 		}
 		time.Sleep(sleept)
 		sleept *= 2
-		const maxs = 10*time.Millisecond
+		const maxs = 3*time.Second
 		if sleept > maxs {
 			sleept = maxs
 		}

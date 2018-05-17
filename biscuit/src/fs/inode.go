@@ -306,15 +306,7 @@ func (idm *imemnode_t) do_read(opid opid_t, dst common.Userio_i, offset int) (in
 	return idm.iread(opid, dst, offset)
 }
 
-func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (int, common.Err_t) {
-	if idm.itype == I_DIR {
-		panic("write to dir")
-	}
-	offset := _offset
-	if append { // XXX maybe move to inside lock below?
-		offset = idm.size
-	}
-
+func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int, common.Err_t) {
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call.
 	max := (MaxBlkPerOp - 1) * common.BSIZE
@@ -337,12 +329,18 @@ func (idm *imemnode_t) do_write(src common.Userio_i, _offset int, append bool) (
 			n = max
 		}
 		opid := idm.fs.fslog.Op_begin("dowrite")
-		idm.ilock("dowrite")
-		wrote, err := idm.iwrite(opid, src, offset+i, n)
-		idm.iunlock("dowrite")
+		idm.ilock("")
+		if idm.itype == I_DIR {
+			panic("write to dir")
+		}
+		off := offset + i
+		if app {
+			off = idm.size
+		}
+		wrote, err := idm.iwrite(opid, src, off, n)
 		idm._iupdate(opid)
+		idm.iunlock("")
 		idm.fs.fslog.Op_end(opid)
-
 		if err != 0 {
 			return i, err
 		}

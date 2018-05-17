@@ -4,6 +4,11 @@
 
 package ssa
 
+import (
+	"cmd/compile/internal/types"
+	"cmd/internal/src"
+)
+
 // dse does dead-store elimination on the Function.
 // Dead stores are those which are unconditionally followed by
 // another store to the same location, with no intervening load.
@@ -14,7 +19,8 @@ func dse(f *Func) {
 	defer f.retSparseSet(loadUse)
 	storeUse := f.newSparseSet(f.NumValues())
 	defer f.retSparseSet(storeUse)
-	shadowed := newSparseMap(f.NumValues()) // TODO: cache
+	shadowed := f.newSparseMap(f.NumValues())
+	defer f.retSparseMap(shadowed)
 	for _, b := range f.Blocks {
 		// Find all the stores in this block. Categorize their uses:
 		//  loadUse contains stores which are used by a subsequent load.
@@ -29,10 +35,6 @@ func dse(f *Func) {
 			}
 			if v.Type.IsMemory() {
 				stores = append(stores, v)
-				if v.Op == OpSelect1 {
-					// Use the args of the tuple-generating op.
-					v = v.Args[0]
-				}
 				for _, a := range v.Args {
 					if a.Block == b && a.Type.IsMemory() {
 						storeUse.add(a.ID)
@@ -62,7 +64,7 @@ func dse(f *Func) {
 				continue
 			}
 			if last != nil {
-				b.Fatalf("two final stores - simultaneous live stores %s %s", last, v)
+				b.Fatalf("two final stores - simultaneous live stores %s %s", last.LongString(), v.LongString())
 			}
 			last = v
 		}
@@ -86,9 +88,9 @@ func dse(f *Func) {
 		if v.Op == OpStore || v.Op == OpZero {
 			var sz int64
 			if v.Op == OpStore {
-				sz = v.AuxInt
+				sz = v.Aux.(*types.Type).Size()
 			} else { // OpZero
-				sz = SizeAndAlign(v.AuxInt).Size()
+				sz = v.AuxInt
 			}
 			if shadowedSize := int64(shadowed.get(v.Args[0].ID)); shadowedSize != -1 && shadowedSize >= sz {
 				// Modify store into a copy
@@ -111,12 +113,16 @@ func dse(f *Func) {
 				if sz > 0x7fffffff { // work around sparseMap's int32 value type
 					sz = 0x7fffffff
 				}
-				shadowed.set(v.Args[0].ID, int32(sz), 0)
+				shadowed.set(v.Args[0].ID, int32(sz), src.NoXPos)
 			}
 		}
 		// walk to previous store
 		if v.Op == OpPhi {
-			continue // At start of block.  Move on to next block.
+			// At start of block.  Move on to next block.
+			// The memory phi, if it exists, is always
+			// the first logical store in the block.
+			// (Even if it isn't the first in the current b.Values order.)
+			continue
 		}
 		for _, a := range v.Args {
 			if a.Block == b && a.Type.IsMemory() {
@@ -124,5 +130,60 @@ func dse(f *Func) {
 				goto walkloop
 			}
 		}
+	}
+}
+
+// elimUnreadAutos deletes stores (and associated bookkeeping ops VarDef and VarKill)
+// to autos that are never read from.
+func elimUnreadAutos(f *Func) {
+	// Loop over all ops that affect autos taking note of which
+	// autos we need and also stores that we might be able to
+	// eliminate.
+	seen := make(map[GCNode]bool)
+	var stores []*Value
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			n, ok := v.Aux.(GCNode)
+			if !ok {
+				continue
+			}
+			if n.StorageClass() != ClassAuto {
+				continue
+			}
+
+			effect := v.Op.SymEffect()
+			switch effect {
+			case SymNone, SymWrite:
+				// If we haven't seen the auto yet
+				// then this might be a store we can
+				// eliminate.
+				if !seen[n] {
+					stores = append(stores, v)
+				}
+			default:
+				// Assume the auto is needed (loaded,
+				// has its address taken, etc.).
+				// Note we have to check the uses
+				// because dead loads haven't been
+				// eliminated yet.
+				if v.Uses > 0 {
+					seen[n] = true
+				}
+			}
+		}
+	}
+
+	// Eliminate stores to unread autos.
+	for _, store := range stores {
+		n, _ := store.Aux.(GCNode)
+		if seen[n] {
+			continue
+		}
+
+		// replace store with OpCopy
+		store.SetArgs1(store.MemoryArg())
+		store.Aux = nil
+		store.AuxInt = 0
+		store.Op = OpCopy
 	}
 }

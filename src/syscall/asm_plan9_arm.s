@@ -10,7 +10,7 @@
 // System call support for plan9 on arm
 
 TEXT	sysresult<>(SB),NOSPLIT,$12
-	MOVW	$runtime·emptystring+0(SB), R2
+	MOVW	$·emptystring+0(SB), R2
 	CMP		$-1, R0
 	B.NE	ok
 	MOVW	R1, save-4(SP)
@@ -27,7 +27,7 @@ TEXT	·Syscall(SB),NOSPLIT,$0-32
 	BL		runtime·entersyscall(SB)
 	MOVW	trap+0(FP), R0	// syscall num
 	MOVM.IA.W	(R13),[R1-R2]	// pop LR and caller's LR
-	SWI		0
+	SWI		$0
 	MOVM.DB.W	[R1-R2],(R13)	// push LR and caller's LR
 	MOVW	$0, R2
 	MOVW	$r1+16(FP), R1
@@ -42,7 +42,7 @@ TEXT	·Syscall6(SB),NOSPLIT,$0-44
 	BL		runtime·entersyscall(SB)
 	MOVW	trap+0(FP), R0	// syscall num
 	MOVM.IA.W	(R13),[R1-R2]	// pop LR and caller's LR
-	SWI		0
+	SWI		$0
 	MOVM.DB.W	[R1-R2],(R13)	// push LR and caller's LR
 	MOVW	$0, R1
 	MOVW	$r1+28(FP), R1
@@ -55,7 +55,7 @@ TEXT	·Syscall6(SB),NOSPLIT,$0-44
 TEXT ·RawSyscall(SB),NOSPLIT,$0-28
 	MOVW	trap+0(FP), R0	// syscall num
 	MOVM.IA.W	(R13),[R1]		// pop caller's LR
-	SWI		0
+	SWI		$0
 	MOVM.DB.W	[R1],(R13)		// push caller's LR
 	MOVW	R0, r1+16(FP)
 	MOVW	R0, r2+20(FP)
@@ -67,7 +67,7 @@ TEXT ·RawSyscall(SB),NOSPLIT,$0-28
 TEXT	·RawSyscall6(SB),NOSPLIT,$0-40
 	MOVW	trap+0(FP), R0	// syscall num
 	MOVM.IA.W	(R13),[R1]		// pop caller's LR
-	SWI		0
+	SWI		$0
 	MOVM.DB.W	[R1],(R13)		// push caller's LR
 	MOVW	R0, r1+28(FP)
 	MOVW	R0, r2+32(FP)
@@ -80,20 +80,11 @@ TEXT ·seek(SB),NOSPLIT,$0-36
 	MOVW	R5, placeholder+0(FP)	//placeholder = dest for return value
 	MOVW	$SYS_SEEK, R0		// syscall num
 	MOVM.IA.W	(R13),[R1]		// pop LR
-	SWI		0
+	SWI		$0
 	MOVM.DB.W	[R1],(R13)		// push LR
 	CMP		$-1, R0
 	MOVW.EQ	R0, 0(R5)
 	MOVW.EQ	R0, 4(R5)
 	MOVW	$err+28(FP), R1
 	BL		sysresult<>(SB)
-	RET
-
-//func exit(code int)
-// Import runtime·exit for cleanly exiting.
-TEXT ·exit(SB),NOSPLIT,$4-4
-	NO_LOCAL_POINTERS
-	MOVW	code+0(FP), R0
-	MOVW	R0, e-4(SP)
-	BL		runtime·exit(SB)
 	RET

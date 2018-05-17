@@ -7,6 +7,7 @@ package http_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -90,8 +91,8 @@ type parseContentTypeTest struct {
 
 var parseContentTypeTests = []parseContentTypeTest{
 	{false, stringMap{"Content-Type": {"text/plain"}}},
-	// Empty content type is legal - should be treated as
-	// application/octet-stream (RFC 2616, section 7.2.1)
+	// Empty content type is legal - may be treated as
+	// application/octet-stream (RFC 7231, section 3.1.1.5)
 	{false, stringMap{}},
 	{true, stringMap{"Content-Type": {"text/plain; boundary="}}},
 	{false, stringMap{"Content-Type": {"application/unknown"}}},
@@ -138,6 +139,16 @@ func TestMultipartReader(t *testing.T) {
 		Body:   ioutil.NopCloser(new(bytes.Buffer)),
 	}
 	multipart, err := req.MultipartReader()
+	if multipart == nil {
+		t.Errorf("expected multipart; error: %v", err)
+	}
+
+	req = &Request{
+		Method: "POST",
+		Header: Header{"Content-Type": {`multipart/mixed; boundary="foo123"`}},
+		Body:   ioutil.NopCloser(new(bytes.Buffer)),
+	}
+	multipart, err = req.MultipartReader()
 	if multipart == nil {
 		t.Errorf("expected multipart; error: %v", err)
 	}
@@ -498,10 +509,14 @@ func TestNewRequestContentLength(t *testing.T) {
 		{bytes.NewBuffer([]byte("1234")), 4},
 		{strings.NewReader("12345"), 5},
 		{strings.NewReader(""), 0},
-		// Not detected:
-		{struct{ io.Reader }{strings.NewReader("xyz")}, -1},
-		{io.NewSectionReader(strings.NewReader("x"), 0, 6), -1},
-		{readByte(io.NewSectionReader(strings.NewReader("xy"), 0, 6)), -1},
+		{NoBody, 0},
+
+		// Not detected. During Go 1.8 we tried to make these set to -1, but
+		// due to Issue 18117, we keep these returning 0, even though they're
+		// unknown.
+		{struct{ io.Reader }{strings.NewReader("xyz")}, 0},
+		{io.NewSectionReader(strings.NewReader("x"), 0, 6), 0},
+		{readByte(io.NewSectionReader(strings.NewReader("xy"), 0, 6)), 0},
 	}
 	for i, tt := range tests {
 		req, err := NewRequest("POST", "http://localhost/", tt.r)
@@ -510,9 +525,6 @@ func TestNewRequestContentLength(t *testing.T) {
 		}
 		if req.ContentLength != tt.want {
 			t.Errorf("test[%d]: ContentLength(%T) = %d; want %d", i, tt.r, req.ContentLength, tt.want)
-		}
-		if (req.ContentLength == 0) != (req.Body == NoBody) {
-			t.Errorf("test[%d]: ContentLength = %d but Body non-nil is %v", i, req.ContentLength, req.Body != nil)
 		}
 	}
 }
@@ -781,6 +793,28 @@ func TestMaxBytesReaderStickyError(t *testing.T) {
 		if err := isSticky(rc); err != nil {
 			t.Errorf("%d. error: %v", i, err)
 		}
+	}
+}
+
+func TestWithContextDeepCopiesURL(t *testing.T) {
+	req, err := NewRequest("POST", "https://golang.org/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqCopy := req.WithContext(context.Background())
+	reqCopy.URL.Scheme = "http"
+
+	firstURL, secondURL := req.URL.String(), reqCopy.URL.String()
+	if firstURL == secondURL {
+		t.Errorf("unexpected change to original request's URL")
+	}
+
+	// And also check we don't crash on nil (Issue 20601)
+	req.URL = nil
+	reqCopy = req.WithContext(context.Background())
+	if reqCopy.URL != nil {
+		t.Error("expected nil URL in cloned request")
 	}
 }
 

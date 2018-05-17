@@ -226,6 +226,14 @@ func (p *parser) parseField(pkg *types.Package) (field *types.Var, tag string) {
 // Param = Name ["..."] Type .
 func (p *parser) parseParam(pkg *types.Package) (param *types.Var, isVariadic bool) {
 	name := p.parseName()
+	if p.tok == '<' && p.scanner.Peek() == 'e' {
+		// EscInfo = "<esc:" int ">" . (optional and ignored)
+		p.next()
+		p.expectKeyword("esc")
+		p.expect(':')
+		p.expect(scanner.Int)
+		p.expect('>')
+	}
 	if p.tok == '.' {
 		p.next()
 		p.expect('.')
@@ -370,27 +378,41 @@ func (p *parser) parseConst(pkg *types.Package) *types.Const {
 	return types.NewConst(token.NoPos, pkg, name, typ, val)
 }
 
-// TypeName = ExportedName .
-func (p *parser) parseTypeName() *types.TypeName {
-	pkg, name := p.parseExportedName()
-	scope := pkg.Scope()
-	if obj := scope.Lookup(name); obj != nil {
-		return obj.(*types.TypeName)
-	}
-	obj := types.NewTypeName(token.NoPos, pkg, name, nil)
-	// a named type may be referred to before the underlying type
-	// is known - set it up
-	types.NewNamed(obj, nil, nil)
-	scope.Insert(obj)
-	return obj
-}
-
-// NamedType = TypeName Type { Method } .
+// NamedType = TypeName [ "=" ] Type { Method } .
+// TypeName  = ExportedName .
 // Method    = "func" "(" Param ")" Name ParamList ResultList ";" .
 func (p *parser) parseNamedType(n int) types.Type {
-	obj := p.parseTypeName()
+	pkg, name := p.parseExportedName()
+	scope := pkg.Scope()
 
-	pkg := obj.Pkg()
+	if p.tok == '=' {
+		// type alias
+		p.next()
+		typ := p.parseType(pkg)
+		if obj := scope.Lookup(name); obj != nil {
+			typ = obj.Type() // use previously imported type
+			if typ == nil {
+				p.errorf("%v (type alias) used in cycle", obj)
+			}
+		} else {
+			obj = types.NewTypeName(token.NoPos, pkg, name, typ)
+			scope.Insert(obj)
+		}
+		p.typeMap[n] = typ
+		return typ
+	}
+
+	// named type
+	obj := scope.Lookup(name)
+	if obj == nil {
+		// a named type may be referred to before the underlying type
+		// is known - set it up
+		tname := types.NewTypeName(token.NoPos, pkg, name, nil)
+		types.NewNamed(tname, nil, nil)
+		scope.Insert(tname)
+		obj = tname
+	}
+
 	typ := obj.Type()
 	p.typeMap[n] = typ
 
@@ -409,8 +431,8 @@ func (p *parser) parseNamedType(n int) types.Type {
 		nt.SetUnderlying(underlying.Underlying())
 	}
 
+	// collect associated methods
 	for p.tok == scanner.Ident {
-		// collect associated methods
 		p.expectKeyword("func")
 		p.expect('(')
 		receiver, _ := p.parseParam(pkg)
@@ -711,7 +733,10 @@ func (p *parser) parseType(pkg *types.Package) (t types.Type) {
 func (p *parser) parsePackageInit() PackageInit {
 	name := p.parseUnquotedString()
 	initfunc := p.parseUnquotedString()
-	priority := int(p.parseInt())
+	priority := -1
+	if p.version == "v1" {
+		priority = int(p.parseInt())
+	}
 	return PackageInit{Name: name, InitFunc: initfunc, Priority: priority}
 }
 
@@ -722,7 +747,7 @@ func (p *parser) discardDirectiveWhileParsingTypes(pkg *types.Package) {
 		case ';':
 			return
 		case '<':
-			p.parseType(p.pkg)
+			p.parseType(pkg)
 		case scanner.EOF:
 			p.error("unexpected EOF")
 		default:
@@ -766,6 +791,15 @@ func (p *parser) parseInitDataDirective() {
 		}
 		p.expect(';')
 
+	case "init_graph":
+		p.next()
+		// The graph data is thrown away for now.
+		for p.tok != ';' && p.tok != scanner.EOF {
+			p.parseInt()
+			p.parseInt()
+		}
+		p.expect(';')
+
 	case "checksum":
 		// Don't let the scanner try to parse the checksum as a number.
 		defer func(mode uint) {
@@ -797,7 +831,7 @@ func (p *parser) parseDirective() {
 	}
 
 	switch p.lit {
-	case "v1", "v2", "priority", "init", "checksum":
+	case "v1", "v2", "priority", "init", "init_graph", "checksum":
 		p.parseInitDataDirective()
 
 	case "package":

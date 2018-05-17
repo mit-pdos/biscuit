@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -105,15 +106,38 @@ func TestVet(t *testing.T) {
 	}
 	batch := make([][]string, wide)
 	for i, file := range gos {
+		// TODO: Remove print.go exception once we require type checking for everything,
+		// and then delete TestVetPrint.
+		if strings.HasSuffix(file, "print.go") {
+			continue
+		}
 		batch[i%wide] = append(batch[i%wide], file)
 	}
 	for i, files := range batch {
+		if len(files) == 0 {
+			continue
+		}
 		files := files
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			t.Parallel()
 			t.Logf("files: %q", files)
 			Vet(t, files)
 		})
+	}
+}
+
+func TestVetPrint(t *testing.T) {
+	Build(t)
+	errchk := filepath.Join(runtime.GOROOT(), "test", "errchk")
+	cmd := exec.Command(
+		errchk,
+		"go", "vet", "-vettool=./"+binary,
+		"-printf",
+		"-printfuncs=Warn:1,Warnf:1",
+		"testdata/print.go",
+	)
+	if !run(cmd, t) {
+		t.Fatal("vet command failed")
 	}
 }
 
@@ -143,6 +167,7 @@ func TestVetDirs(t *testing.T) {
 		"divergent",
 		"buildtag",
 		"incomplete", // incomplete examples
+		"cgo",
 	} {
 		dir := dir
 		t.Run(dir, func(t *testing.T) {
@@ -202,5 +227,17 @@ func TestTags(t *testing.T) {
 				t.Error("file2 was included, should be excluded")
 			}
 		})
+	}
+}
+
+// Issue #21188.
+func TestVetVerbose(t *testing.T) {
+	t.Parallel()
+	Build(t)
+	cmd := exec.Command("./"+binary, "-v", "-all", "testdata/cgo/cgo3.go")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("%s", out)
+		t.Error(err)
 	}
 }

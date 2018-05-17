@@ -13,6 +13,8 @@ import "unsafe"
 import "common"
 import "fs"
 
+//import "sort"
+
 const (
 	IRQ_LAST = common.INT_MSI7
 )
@@ -767,6 +769,27 @@ func loping() {
 	nic.tx_ipv4(sgbuf)
 }
 
+//func _ptile(buf []int, p float64) {
+//	if len(buf) == 0 {
+//		fmt.Printf("no %.2f-ile\n", p * 100)
+//		return
+//	}
+//	_idx := float64(len(buf)) * p
+//	idx := int(_idx)
+//	if float64(idx) / float64(len(buf)) < p && idx + 1 < len(buf) {
+//		idx++
+//	}
+//	fmt.Printf("    %.2f percentile: %v (idx %v)\n", p * 100, buf[idx], idx)
+//}
+//
+//func print9999(buf []int) {
+//	sort.Ints(buf)
+//	_ptile(buf, 0.9999)
+//	_ptile(buf, 0.999)
+//	_ptile(buf, 0.99)
+//	_ptile(buf, 0.50)
+//}
+
 var _nflip int
 
 func kbd_daemon(cons *cons_t, km map[int]byte) {
@@ -786,7 +809,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		} else if c == '@' {
 			//common.Lims = !common.Lims
 			//fmt.Printf("Lims: %v\n", common.Lims)
-			//thefs.Dumpy()
+
+			fmt.Printf("toggle\n")
+			runtime.GCDebugToggle()
+
 		} else if c == '%' {
 			//fmt.Printf("distinct simulated failures: %v\n",
 			//    common.Resfail.Len())
@@ -1392,7 +1418,6 @@ var physmem *common.Physmem_t
 var thefs *fs.Fs_t
 
 func main() {
-	//runtime.GCDebug()
 	common.Kernel = true
 
 	// magic loop

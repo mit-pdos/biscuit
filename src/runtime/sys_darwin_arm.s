@@ -19,7 +19,6 @@
 #define	SYS_mmap           197
 #define	SYS_munmap         73
 #define	SYS_madvise        75
-#define	SYS_mincore        78
 #define	SYS_gettimeofday   116
 #define	SYS_kill           37
 #define	SYS_getpid         20
@@ -80,7 +79,7 @@ TEXT runtime·read(SB),NOSPLIT,$0
 	MOVW	R0, ret+12(FP)
 	RET
 
-TEXT runtime·exit(SB),NOSPLIT,$-4
+TEXT runtime·exit(SB),NOSPLIT|NOFRAME,$0
 	MOVW	code+0(FP), R0
 	MOVW	$SYS_exit, R12
 	SWI	$0x80
@@ -90,12 +89,31 @@ TEXT runtime·exit(SB),NOSPLIT,$-4
 
 // Exit this OS thread (like pthread_exit, which eventually
 // calls __bsdthread_terminate).
-TEXT runtime·exit1(SB),NOSPLIT,$0
+TEXT exit1<>(SB),NOSPLIT,$0
+	// Because of exitThread below, this must not use the stack.
+	// __bsdthread_terminate takes 4 word-size arguments.
+	// Set them all to 0. (None are an exit status.)
+	MOVW	$0, R0
+	MOVW	$0, R1
+	MOVW	$0, R2
+	MOVW	$0, R3
 	MOVW	$SYS_bsdthread_terminate, R12
 	SWI	$0x80
 	MOVW	$1234, R0
 	MOVW	$1003, R1
 	MOVW	R0, (R1)	// fail hard
+
+// func exitThread(wait *uint32)
+TEXT runtime·exitThread(SB),NOSPLIT,$0-4
+	MOVW	wait+0(FP), R0
+	// We're done using the stack.
+	MOVW	$0, R2
+storeloop:
+	LDREX	(R0), R4          // loads R4
+	STREX	R2, (R0), R1      // stores R2
+	CMP	$0, R1
+	BNE	storeloop
+	JMP	exit1<>(SB)
 
 TEXT runtime·raise(SB),NOSPLIT,$0
 	// Ideally we'd send the signal to the current thread,
@@ -122,7 +140,14 @@ TEXT runtime·mmap(SB),NOSPLIT,$0
 	MOVW	$0, R6 // off_t is uint64_t
 	MOVW	$SYS_mmap, R12
 	SWI	$0x80
-	MOVW	R0, ret+24(FP)
+	MOVW	$0, R1
+	BCC     ok
+	MOVW	R1, p+24(FP)
+	MOVW	R0, err+28(FP)
+	RET
+ok:
+	MOVW	R0, p+24(FP)
+	MOVW	R1, err+28(FP)
 	RET
 
 TEXT runtime·munmap(SB),NOSPLIT,$0
@@ -150,16 +175,7 @@ TEXT runtime·setitimer(SB),NOSPLIT,$0
 	SWI	$0x80
 	RET
 
-TEXT runtime·mincore(SB),NOSPLIT,$0
-	MOVW	addr+0(FP), R0
-	MOVW	n+4(FP), R1
-	MOVW	dst+8(FP), R2
-	MOVW	$SYS_mincore, R12
-	SWI	$0x80
-	MOVW	R0, ret+12(FP)
-	RET
-
-TEXT time·now(SB), 7, $32
+TEXT runtime·walltime(SB), 7, $32
 	MOVW	$8(R13), R0  // timeval
 	MOVW	$0, R1  // zone
 	MOVW	$0, R2	// see issue 16570
@@ -171,9 +187,9 @@ TEXT time·now(SB), 7, $32
 	MOVW	12(R13), R1
 inreg:
 	MOVW    R1, R2  // usec
-	MOVW	R0, sec+0(FP)
+	MOVW	R0, sec_lo+0(FP)
 	MOVW	$0, R1
-	MOVW	R1, loc+4(FP)
+	MOVW	R1, sec_hi+4(FP)
 	MOVW	$1000, R3
 	MUL	R3, R2
 	MOVW	R2, nsec+8(FP)
@@ -318,7 +334,7 @@ TEXT runtime·usleep(SB),NOSPLIT,$12
 	SWI	$0x80
 	RET
 
-TEXT ·publicationBarrier(SB),NOSPLIT,$-4-0
+TEXT ·publicationBarrier(SB),NOSPLIT|NOFRAME,$0-0
 	B	runtime·armPublicationBarrier(SB)
 
 TEXT runtime·sysctl(SB),NOSPLIT,$0
@@ -380,7 +396,7 @@ TEXT runtime·bsdthread_start(SB),NOSPLIT,$0
 	EOR     R12, R12
 	WORD    $0xeee1ca10 // fmxr	fpscr, ip
 	BL      (R2) // fn
-	BL      runtime·exit1(SB)
+	BL      exit1<>(SB)
 	RET
 
 // int32 bsdthread_register(void)

@@ -6,6 +6,13 @@ package runtime
 import "unsafe"
 
 const (
+	_NBBY            = 0x8
+	_CTL_MAXNAME     = 0x18
+	_CPU_LEVEL_WHICH = 0x3
+	_CPU_WHICH_PID   = 0x2
+)
+
+const (
 	_EINTR  = 0x4
 	_EFAULT = 0xe
 
@@ -88,6 +95,7 @@ const (
 	_EV_CLEAR     = 0x20
 	_EV_RECEIPT   = 0x40
 	_EV_ERROR     = 0x4000
+	_EV_EOF       = 0x8000
 	_EVFILT_READ  = -0x1
 	_EVFILT_WRITE = -0x2
 )

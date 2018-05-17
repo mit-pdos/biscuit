@@ -41,7 +41,7 @@ type Writer struct {
 // NewWriter returns a new Writer.
 // Writes to the returned writer are compressed and written to w.
 //
-// It is the caller's responsibility to call Close on the WriteCloser when done.
+// It is the caller's responsibility to call Close on the Writer when done.
 // Writes may be buffered and not flushed until Close.
 //
 // Callers that wish to set the fields in Writer.Header must do so before
@@ -222,8 +222,9 @@ func (z *Writer) Flush() error {
 	return z.err
 }
 
-// Close closes the Writer, flushing any unwritten data to the underlying
-// io.Writer, but does not close the underlying io.Writer.
+// Close closes the Writer by flushing any unwritten data to the underlying
+// io.Writer and writing the GZIP footer.
+// It does not close the underlying io.Writer.
 func (z *Writer) Close() error {
 	if z.err != nil {
 		return z.err

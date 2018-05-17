@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -537,6 +538,17 @@ func TestWERDialogue(t *testing.T) {
 	cmd.CombinedOutput()
 }
 
+func TestWindowsStackMemory(t *testing.T) {
+	o := runTestProg(t, "testprog", "StackMemory")
+	stackUsage, err := strconv.Atoi(o)
+	if err != nil {
+		t.Fatalf("Failed to read stack usage: %v", err)
+	}
+	if expected, got := 100<<10, stackUsage; got > expected {
+		t.Fatalf("expected < %d bytes of memory per thread, got %d", expected, got)
+	}
+}
+
 var used byte
 
 func use(buf []byte) {
@@ -1037,13 +1049,13 @@ func BenchmarkRunningGoProgram(b *testing.B) {
 	defer os.RemoveAll(tmpdir)
 
 	src := filepath.Join(tmpdir, "main.go")
-	err = ioutil.WriteFile(src, []byte(benchmarkRunnigGoProgram), 0666)
+	err = ioutil.WriteFile(src, []byte(benchmarkRunningGoProgram), 0666)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	exe := filepath.Join(tmpdir, "main.exe")
-	cmd := exec.Command("go", "build", "-o", exe, src)
+	cmd := exec.Command(testenv.GoToolPath(b), "build", "-o", exe, src)
 	cmd.Dir = tmpdir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1055,13 +1067,15 @@ func BenchmarkRunningGoProgram(b *testing.B) {
 		cmd := exec.Command(exe)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			b.Fatalf("runing main.exe failed: %v\n%s", err, out)
+			b.Fatalf("running main.exe failed: %v\n%s", err, out)
 		}
 	}
 }
 
-const benchmarkRunnigGoProgram = `
+const benchmarkRunningGoProgram = `
 package main
+
+import _ "os" // average Go program will use "os" package, do the same here
 
 func main() {
 }

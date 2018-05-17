@@ -37,8 +37,7 @@ align_2:
 	BTQ $1, BX
 	JNC align_4
 
-	// CRC32W (SI), AX
-	BYTE $0x66; BYTE $0xf2; BYTE $0x0f; BYTE $0x38; BYTE $0xf1; BYTE $0x06
+	CRC32W (SI), AX
 
 	SUBQ $2, CX
 	ADDQ $2, SI
@@ -47,8 +46,7 @@ align_4:
 	BTQ $2, BX
 	JNC aligned
 
-	// CRC32L (SI), AX
-	BYTE $0xf2; BYTE $0x0f; BYTE $0x38; BYTE $0xf1; BYTE $0x06
+	CRC32L (SI), AX
 
 	SUBQ $4, CX
 	ADDQ $4, SI
@@ -68,16 +66,14 @@ less_than_8:
 	BTQ $2, CX
 	JNC less_than_4
 
-	// CRC32L (SI), AX
-	BYTE $0xf2; BYTE $0x0f; BYTE $0x38; BYTE $0xf1; BYTE $0x06
+	CRC32L (SI), AX
 	ADDQ $4, SI
 
 less_than_4:
 	BTQ $1, CX
 	JNC less_than_2
 
-	// CRC32W (SI), AX
-	BYTE $0x66; BYTE $0xf2; BYTE $0x0f; BYTE $0x38; BYTE $0xf1; BYTE $0x06
+	CRC32W (SI), AX
 	ADDQ $2, SI
 
 less_than_2:
@@ -132,36 +128,6 @@ loop:
 	MOVL AX, retA+96(FP)
 	MOVL CX, retB+100(FP)
 	MOVL DX, retC+104(FP)
-	RET
-
-// func haveSSE42() bool
-TEXT ·haveSSE42(SB),NOSPLIT,$0
-	XORQ AX, AX
-	INCL AX
-	CPUID
-	SHRQ $20, CX
-	ANDQ $1, CX
-	MOVB CX, ret+0(FP)
-	RET
-
-// func haveCLMUL() bool
-TEXT ·haveCLMUL(SB),NOSPLIT,$0
-	XORQ AX, AX
-	INCL AX
-	CPUID
-	SHRQ $1, CX
-	ANDQ $1, CX
-	MOVB CX, ret+0(FP)
-	RET
-
-// func haveSSE41() bool
-TEXT ·haveSSE41(SB),NOSPLIT,$0
-	XORQ AX, AX
-	INCL AX
-	CPUID
-	SHRQ $19, CX
-	ANDQ $1, CX
-	MOVB CX, ret+0(FP)
 	RET
 
 // CRC32 polynomial data

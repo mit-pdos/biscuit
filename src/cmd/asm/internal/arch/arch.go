@@ -236,15 +236,15 @@ func archArm64() *Arch {
 	register := make(map[string]int16)
 	// Create maps for easy lookup of instruction names etc.
 	// Note that there is no list of names as there is for 386 and amd64.
-	register[arm64.Rconv(arm64.REGSP)] = int16(arm64.REGSP)
+	register[obj.Rconv(arm64.REGSP)] = int16(arm64.REGSP)
 	for i := arm64.REG_R0; i <= arm64.REG_R31; i++ {
-		register[arm64.Rconv(i)] = int16(i)
+		register[obj.Rconv(i)] = int16(i)
 	}
 	for i := arm64.REG_F0; i <= arm64.REG_F31; i++ {
-		register[arm64.Rconv(i)] = int16(i)
+		register[obj.Rconv(i)] = int16(i)
 	}
 	for i := arm64.REG_V0; i <= arm64.REG_V31; i++ {
-		register[arm64.Rconv(i)] = int16(i)
+		register[obj.Rconv(i)] = int16(i)
 	}
 	register["LR"] = arm64.REGLINK
 	register["DAIF"] = arm64.REG_DAIF
@@ -260,6 +260,26 @@ func archArm64() *Arch {
 	register["SPSel"] = arm64.REG_SPSel
 	register["DAIFSet"] = arm64.REG_DAIFSet
 	register["DAIFClr"] = arm64.REG_DAIFClr
+	register["DCZID_EL0"] = arm64.REG_DCZID_EL0
+	register["PLDL1KEEP"] = arm64.REG_PLDL1KEEP
+	register["PLDL1STRM"] = arm64.REG_PLDL1STRM
+	register["PLDL2KEEP"] = arm64.REG_PLDL2KEEP
+	register["PLDL2STRM"] = arm64.REG_PLDL2STRM
+	register["PLDL3KEEP"] = arm64.REG_PLDL3KEEP
+	register["PLDL3STRM"] = arm64.REG_PLDL3STRM
+	register["PLIL1KEEP"] = arm64.REG_PLIL1KEEP
+	register["PLIL1STRM"] = arm64.REG_PLIL1STRM
+	register["PLIL2KEEP"] = arm64.REG_PLIL2KEEP
+	register["PLIL2STRM"] = arm64.REG_PLIL2STRM
+	register["PLIL3KEEP"] = arm64.REG_PLIL3KEEP
+	register["PLIL3STRM"] = arm64.REG_PLIL3STRM
+	register["PSTL1KEEP"] = arm64.REG_PSTL1KEEP
+	register["PSTL1STRM"] = arm64.REG_PSTL1STRM
+	register["PSTL2KEEP"] = arm64.REG_PSTL2KEEP
+	register["PSTL2STRM"] = arm64.REG_PSTL2STRM
+	register["PSTL3KEEP"] = arm64.REG_PSTL3KEEP
+	register["PSTL3STRM"] = arm64.REG_PSTL3STRM
+
 	// Conditional operators, like EQ, NE, etc.
 	register["EQ"] = arm64.COND_EQ
 	register["NE"] = arm64.COND_NE

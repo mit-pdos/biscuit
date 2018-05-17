@@ -32,10 +32,17 @@ package x86
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
+	"cmd/internal/sys"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"strings"
+)
+
+var (
+	plan9privates *obj.LSym
+	deferreturn   *obj.LSym
 )
 
 // Instruction layout.
@@ -56,7 +63,6 @@ const (
 	//
 	LoopAlign  = 16
 	MaxLoopPad = 0
-	funcAlign  = 16
 )
 
 type Optab struct {
@@ -64,14 +70,6 @@ type Optab struct {
 	ytab   []ytab
 	prefix uint8
 	op     [23]uint8
-}
-
-type ytab struct {
-	from    uint8
-	from3   uint8
-	to      uint8
-	zcase   uint8
-	zoffset uint8
 }
 
 type Movtab struct {
@@ -88,6 +86,7 @@ const (
 	Ynone
 	Yi0 // $0
 	Yi1 // $1
+	Yu2 // $x, x fits in uint2
 	Yi8 // $x, x fits in int8
 	Yu8 // $x, x fits in uint8
 	Yu7 // $x, x in 0..127 (fits in both int8 and uint8)
@@ -147,10 +146,13 @@ const (
 	Ytr7
 	Ymr
 	Ymm
+	Yxr0 // X0 only. "<XMM0>" notation in Intel manual.
 	Yxr
 	Yxm
+	Yxvm // VSIB vector array; vm32x/vm64x
 	Yyr
 	Yym
+	Yyvm // VSIB vector array; vm32y/vm64y
 	Ytls
 	Ytextsize
 	Yindir
@@ -161,6 +163,8 @@ const (
 	Zxxx = iota
 	Zlit
 	Zlitm_r
+	Zlitr_m
+	Zlit_m_r
 	Z_rp
 	Zbr
 	Zcall
@@ -182,6 +186,7 @@ const (
 	Zo_iw
 	Zm_o
 	Zm_r
+	Z_m_r
 	Zm2_r
 	Zm_r_xm
 	Zm_r_i_xm
@@ -203,14 +208,19 @@ const (
 	Zm_ilo
 	Zib_rr
 	Zil_rr
-	Zclr
 	Zbyte
 	Zvex_rm_v_r
+	Zvex_rm_v_ro
 	Zvex_r_v_rm
 	Zvex_v_rm_r
 	Zvex_i_rm_r
 	Zvex_i_r_v
 	Zvex_i_rm_v_r
+	Zvex
+	Zvex_rm_r_vo
+	Zvex_i_r_rm
+	Zvex_hr_rm_v_r
+
 	Zmax
 )
 
@@ -227,6 +237,9 @@ const (
 	Pef3 = 0xf5 /* xmm escape 2 with 16-bit prefix: 66 f3 0f */
 	Pq3  = 0x67 /* xmm escape 3: 66 48 0f */
 	Pq4  = 0x68 /* xmm escape 4: 66 0F 38 */
+	Pq4w = 0x69 /* Pq4 with Rex.w 66 0F 38 */
+	Pq5  = 0x6a /* xmm escape 5: F3 0F 38 */
+	Pq5w = 0x6b /* Pq5 with Rex.w F3 0F 38 */
 	Pfw  = 0xf4 /* Pf3 with Rex.w: f3 48 0f */
 	Pw   = 0x48 /* Rex.w */
 	Pw8  = 0x90 // symbolic; exact value doesn't matter
@@ -246,6 +259,11 @@ const (
 	// The P, L, and W fields are chosen to match
 	// their eventual locations in the VEX prefix bytes.
 
+	// V field - 4 bits; ignored by encoder
+	vexNOVSR = 0 // No VEX-SPECIFIED-REGISTER
+	vexNDS   = 0
+	vexNDD   = 0
+	vexDDS   = 0
 	// P field - 2 bits
 	vex66 = 1 << 0
 	vexF3 = 2 << 0
@@ -265,49 +283,38 @@ const (
 	vex0F3A = 3 << 3
 
 	// Combinations used in the manual.
-	VEX_128_0F_WIG      = vex128 | vex0F | vexWIG
-	VEX_128_66_0F_W0    = vex128 | vex66 | vex0F | vexW0
-	VEX_128_66_0F_W1    = vex128 | vex66 | vex0F | vexW1
-	VEX_128_66_0F_WIG   = vex128 | vex66 | vex0F | vexWIG
-	VEX_128_66_0F38_W0  = vex128 | vex66 | vex0F38 | vexW0
-	VEX_128_66_0F38_W1  = vex128 | vex66 | vex0F38 | vexW1
-	VEX_128_66_0F38_WIG = vex128 | vex66 | vex0F38 | vexWIG
-	VEX_128_66_0F3A_W0  = vex128 | vex66 | vex0F3A | vexW0
-	VEX_128_66_0F3A_W1  = vex128 | vex66 | vex0F3A | vexW1
-	VEX_128_66_0F3A_WIG = vex128 | vex66 | vex0F3A | vexWIG
-	VEX_128_F2_0F_WIG   = vex128 | vexF2 | vex0F | vexWIG
-	VEX_128_F3_0F_WIG   = vex128 | vexF3 | vex0F | vexWIG
-	VEX_256_66_0F_WIG   = vex256 | vex66 | vex0F | vexWIG
-	VEX_256_66_0F38_W0  = vex256 | vex66 | vex0F38 | vexW0
-	VEX_256_66_0F38_W1  = vex256 | vex66 | vex0F38 | vexW1
-	VEX_256_66_0F38_WIG = vex256 | vex66 | vex0F38 | vexWIG
-	VEX_256_66_0F3A_W0  = vex256 | vex66 | vex0F3A | vexW0
-	VEX_256_66_0F3A_W1  = vex256 | vex66 | vex0F3A | vexW1
-	VEX_256_66_0F3A_WIG = vex256 | vex66 | vex0F3A | vexWIG
-	VEX_256_F2_0F_WIG   = vex256 | vexF2 | vex0F | vexWIG
-	VEX_256_F3_0F_WIG   = vex256 | vexF3 | vex0F | vexWIG
-	VEX_LIG_0F_WIG      = vexLIG | vex0F | vexWIG
-	VEX_LIG_66_0F_WIG   = vexLIG | vex66 | vex0F | vexWIG
-	VEX_LIG_66_0F38_W0  = vexLIG | vex66 | vex0F38 | vexW0
-	VEX_LIG_66_0F38_W1  = vexLIG | vex66 | vex0F38 | vexW1
-	VEX_LIG_66_0F3A_WIG = vexLIG | vex66 | vex0F3A | vexWIG
-	VEX_LIG_F2_0F_W0    = vexLIG | vexF2 | vex0F | vexW0
-	VEX_LIG_F2_0F_W1    = vexLIG | vexF2 | vex0F | vexW1
-	VEX_LIG_F2_0F_WIG   = vexLIG | vexF2 | vex0F | vexWIG
-	VEX_LIG_F3_0F_W0    = vexLIG | vexF3 | vex0F | vexW0
-	VEX_LIG_F3_0F_W1    = vexLIG | vexF3 | vex0F | vexW1
-	VEX_LIG_F3_0F_WIG   = vexLIG | vexF3 | vex0F | vexWIG
-	VEX_LZ_0F_WIG       = vexLZ | vex0F | vexWIG
-	VEX_LZ_0F38_W0      = vexLZ | vex0F38 | vexW0
-	VEX_LZ_0F38_W1      = vexLZ | vex0F38 | vexW1
-	VEX_LZ_66_0F38_W0   = vexLZ | vex66 | vex0F38 | vexW0
-	VEX_LZ_66_0F38_W1   = vexLZ | vex66 | vex0F38 | vexW1
-	VEX_LZ_F2_0F38_W0   = vexLZ | vexF2 | vex0F38 | vexW0
-	VEX_LZ_F2_0F38_W1   = vexLZ | vexF2 | vex0F38 | vexW1
-	VEX_LZ_F2_0F3A_W0   = vexLZ | vexF2 | vex0F3A | vexW0
-	VEX_LZ_F2_0F3A_W1   = vexLZ | vexF2 | vex0F3A | vexW1
-	VEX_LZ_F3_0F38_W0   = vexLZ | vexF3 | vex0F38 | vexW0
-	VEX_LZ_F3_0F38_W1   = vexLZ | vexF3 | vex0F38 | vexW1
+	VEX_DDS_LIG_66_0F38_W1    = vexDDS | vexLIG | vex66 | vex0F38 | vexW1
+	VEX_NDD_128_66_0F_WIG     = vexNDD | vex128 | vex66 | vex0F | vexWIG
+	VEX_NDD_256_66_0F_WIG     = vexNDD | vex256 | vex66 | vex0F | vexWIG
+	VEX_NDD_LZ_F2_0F38_W0     = vexNDD | vexLZ | vexF2 | vex0F38 | vexW0
+	VEX_NDD_LZ_F2_0F38_W1     = vexNDD | vexLZ | vexF2 | vex0F38 | vexW1
+	VEX_NDS_128_66_0F_WIG     = vexNDS | vex128 | vex66 | vex0F | vexWIG
+	VEX_NDS_128_66_0F38_WIG   = vexNDS | vex128 | vex66 | vex0F38 | vexWIG
+	VEX_NDS_128_F2_0F_WIG     = vexNDS | vex128 | vexF2 | vex0F | vexWIG
+	VEX_NDS_256_66_0F_WIG     = vexNDS | vex256 | vex66 | vex0F | vexWIG
+	VEX_NDS_256_66_0F38_WIG   = vexNDS | vex256 | vex66 | vex0F38 | vexWIG
+	VEX_NDS_256_66_0F3A_W0    = vexNDS | vex256 | vex66 | vex0F3A | vexW0
+	VEX_NDS_256_66_0F3A_WIG   = vexNDS | vex256 | vex66 | vex0F3A | vexWIG
+	VEX_NDS_LZ_0F38_W0        = vexNDS | vexLZ | vex0F38 | vexW0
+	VEX_NDS_LZ_0F38_W1        = vexNDS | vexLZ | vex0F38 | vexW1
+	VEX_NDS_LZ_66_0F38_W0     = vexNDS | vexLZ | vex66 | vex0F38 | vexW0
+	VEX_NDS_LZ_66_0F38_W1     = vexNDS | vexLZ | vex66 | vex0F38 | vexW1
+	VEX_NDS_LZ_F2_0F38_W0     = vexNDS | vexLZ | vexF2 | vex0F38 | vexW0
+	VEX_NDS_LZ_F2_0F38_W1     = vexNDS | vexLZ | vexF2 | vex0F38 | vexW1
+	VEX_NDS_LZ_F3_0F38_W0     = vexNDS | vexLZ | vexF3 | vex0F38 | vexW0
+	VEX_NDS_LZ_F3_0F38_W1     = vexNDS | vexLZ | vexF3 | vex0F38 | vexW1
+	VEX_NOVSR_128_66_0F_WIG   = vexNOVSR | vex128 | vex66 | vex0F | vexWIG
+	VEX_NOVSR_128_66_0F38_W0  = vexNOVSR | vex128 | vex66 | vex0F38 | vexW0
+	VEX_NOVSR_128_66_0F38_WIG = vexNOVSR | vex128 | vex66 | vex0F38 | vexWIG
+	VEX_NOVSR_128_F2_0F_WIG   = vexNOVSR | vex128 | vexF2 | vex0F | vexWIG
+	VEX_NOVSR_128_F3_0F_WIG   = vexNOVSR | vex128 | vexF3 | vex0F | vexWIG
+	VEX_NOVSR_256_66_0F_WIG   = vexNOVSR | vex256 | vex66 | vex0F | vexWIG
+	VEX_NOVSR_256_66_0F38_W0  = vexNOVSR | vex256 | vex66 | vex0F38 | vexW0
+	VEX_NOVSR_256_66_0F38_WIG = vexNOVSR | vex256 | vex66 | vex0F38 | vexWIG
+	VEX_NOVSR_256_F2_0F_WIG   = vexNOVSR | vex256 | vexF2 | vex0F | vexWIG
+	VEX_NOVSR_256_F3_0F_WIG   = vexNOVSR | vex256 | vexF3 | vex0F | vexWIG
+	VEX_NOVSR_LZ_F2_0F3A_W0   = vexNOVSR | vexLZ | vexF2 | vex0F3A | vexW0
+	VEX_NOVSR_LZ_F2_0F3A_W1   = vexNOVSR | vexLZ | vexF2 | vex0F3A | vexW1
 )
 
 var ycover [Ymax * Ymax]uint8
@@ -317,463 +324,504 @@ var reg [MAXREG]int
 var regrex [MAXREG + 1]int
 
 var ynone = []ytab{
-	{Ynone, Ynone, Ynone, Zlit, 1},
+	{Zlit, 1, argList{}},
 }
 
 var ytext = []ytab{
-	{Ymb, Ynone, Ytextsize, Zpseudo, 0},
-	{Ymb, Yi32, Ytextsize, Zpseudo, 1},
+	{Zpseudo, 0, argList{Ymb, Ytextsize}},
+	{Zpseudo, 1, argList{Ymb, Yi32, Ytextsize}},
 }
 
 var ynop = []ytab{
-	{Ynone, Ynone, Ynone, Zpseudo, 0},
-	{Ynone, Ynone, Yiauto, Zpseudo, 0},
-	{Ynone, Ynone, Yml, Zpseudo, 0},
-	{Ynone, Ynone, Yrf, Zpseudo, 0},
-	{Ynone, Ynone, Yxr, Zpseudo, 0},
-	{Yiauto, Ynone, Ynone, Zpseudo, 0},
-	{Yml, Ynone, Ynone, Zpseudo, 0},
-	{Yrf, Ynone, Ynone, Zpseudo, 0},
-	{Yxr, Ynone, Ynone, Zpseudo, 1},
+	{Zpseudo, 0, argList{}},
+	{Zpseudo, 0, argList{Yiauto}},
+	{Zpseudo, 0, argList{Yml}},
+	{Zpseudo, 0, argList{Yrf}},
+	{Zpseudo, 0, argList{Yxr}},
+	{Zpseudo, 0, argList{Yiauto}},
+	{Zpseudo, 0, argList{Yml}},
+	{Zpseudo, 0, argList{Yrf}},
+	{Zpseudo, 1, argList{Yxr}},
 }
 
 var yfuncdata = []ytab{
-	{Yi32, Ynone, Ym, Zpseudo, 0},
+	{Zpseudo, 0, argList{Yi32, Ym}},
 }
 
 var ypcdata = []ytab{
-	{Yi32, Ynone, Yi32, Zpseudo, 0},
+	{Zpseudo, 0, argList{Yi32, Yi32}},
 }
 
 var yxorb = []ytab{
-	{Yi32, Ynone, Yal, Zib_, 1},
-	{Yi32, Ynone, Ymb, Zibo_m, 2},
-	{Yrb, Ynone, Ymb, Zr_m, 1},
-	{Ymb, Ynone, Yrb, Zm_r, 1},
+	{Zib_, 1, argList{Yi32, Yal}},
+	{Zibo_m, 2, argList{Yi32, Ymb}},
+	{Zr_m, 1, argList{Yrb, Ymb}},
+	{Zm_r, 1, argList{Ymb, Yrb}},
 }
 
 var yaddl = []ytab{
-	{Yi8, Ynone, Yml, Zibo_m, 2},
-	{Yi32, Ynone, Yax, Zil_, 1},
-	{Yi32, Ynone, Yml, Zilo_m, 2},
-	{Yrl, Ynone, Yml, Zr_m, 1},
-	{Yml, Ynone, Yrl, Zm_r, 1},
+	{Zibo_m, 2, argList{Yi8, Yml}},
+	{Zil_, 1, argList{Yi32, Yax}},
+	{Zilo_m, 2, argList{Yi32, Yml}},
+	{Zr_m, 1, argList{Yrl, Yml}},
+	{Zm_r, 1, argList{Yml, Yrl}},
 }
 
 var yincl = []ytab{
-	{Ynone, Ynone, Yrl, Z_rp, 1},
-	{Ynone, Ynone, Yml, Zo_m, 2},
+	{Z_rp, 1, argList{Yrl}},
+	{Zo_m, 2, argList{Yml}},
 }
 
 var yincq = []ytab{
-	{Ynone, Ynone, Yml, Zo_m, 2},
+	{Zo_m, 2, argList{Yml}},
 }
 
 var ycmpb = []ytab{
-	{Yal, Ynone, Yi32, Z_ib, 1},
-	{Ymb, Ynone, Yi32, Zm_ibo, 2},
-	{Ymb, Ynone, Yrb, Zm_r, 1},
-	{Yrb, Ynone, Ymb, Zr_m, 1},
+	{Z_ib, 1, argList{Yal, Yi32}},
+	{Zm_ibo, 2, argList{Ymb, Yi32}},
+	{Zm_r, 1, argList{Ymb, Yrb}},
+	{Zr_m, 1, argList{Yrb, Ymb}},
 }
 
 var ycmpl = []ytab{
-	{Yml, Ynone, Yi8, Zm_ibo, 2},
-	{Yax, Ynone, Yi32, Z_il, 1},
-	{Yml, Ynone, Yi32, Zm_ilo, 2},
-	{Yml, Ynone, Yrl, Zm_r, 1},
-	{Yrl, Ynone, Yml, Zr_m, 1},
+	{Zm_ibo, 2, argList{Yml, Yi8}},
+	{Z_il, 1, argList{Yax, Yi32}},
+	{Zm_ilo, 2, argList{Yml, Yi32}},
+	{Zm_r, 1, argList{Yml, Yrl}},
+	{Zr_m, 1, argList{Yrl, Yml}},
 }
 
 var yshb = []ytab{
-	{Yi1, Ynone, Ymb, Zo_m, 2},
-	{Yi32, Ynone, Ymb, Zibo_m, 2},
-	{Ycx, Ynone, Ymb, Zo_m, 2},
+	{Zo_m, 2, argList{Yi1, Ymb}},
+	{Zibo_m, 2, argList{Yu8, Ymb}},
+	{Zo_m, 2, argList{Ycx, Ymb}},
 }
 
 var yshl = []ytab{
-	{Yi1, Ynone, Yml, Zo_m, 2},
-	{Yi32, Ynone, Yml, Zibo_m, 2},
-	{Ycl, Ynone, Yml, Zo_m, 2},
-	{Ycx, Ynone, Yml, Zo_m, 2},
+	{Zo_m, 2, argList{Yi1, Yml}},
+	{Zibo_m, 2, argList{Yu8, Yml}},
+	{Zo_m, 2, argList{Ycl, Yml}},
+	{Zo_m, 2, argList{Ycx, Yml}},
 }
 
 var ytestl = []ytab{
-	{Yi32, Ynone, Yax, Zil_, 1},
-	{Yi32, Ynone, Yml, Zilo_m, 2},
-	{Yrl, Ynone, Yml, Zr_m, 1},
-	{Yml, Ynone, Yrl, Zm_r, 1},
+	{Zil_, 1, argList{Yi32, Yax}},
+	{Zilo_m, 2, argList{Yi32, Yml}},
+	{Zr_m, 1, argList{Yrl, Yml}},
+	{Zm_r, 1, argList{Yml, Yrl}},
 }
 
 var ymovb = []ytab{
-	{Yrb, Ynone, Ymb, Zr_m, 1},
-	{Ymb, Ynone, Yrb, Zm_r, 1},
-	{Yi32, Ynone, Yrb, Zib_rp, 1},
-	{Yi32, Ynone, Ymb, Zibo_m, 2},
+	{Zr_m, 1, argList{Yrb, Ymb}},
+	{Zm_r, 1, argList{Ymb, Yrb}},
+	{Zib_rp, 1, argList{Yi32, Yrb}},
+	{Zibo_m, 2, argList{Yi32, Ymb}},
 }
 
 var ybtl = []ytab{
-	{Yi8, Ynone, Yml, Zibo_m, 2},
-	{Yrl, Ynone, Yml, Zr_m, 1},
+	{Zibo_m, 2, argList{Yi8, Yml}},
+	{Zr_m, 1, argList{Yrl, Yml}},
 }
 
 var ymovw = []ytab{
-	{Yrl, Ynone, Yml, Zr_m, 1},
-	{Yml, Ynone, Yrl, Zm_r, 1},
-	{Yi0, Ynone, Yrl, Zclr, 1},
-	{Yi32, Ynone, Yrl, Zil_rp, 1},
-	{Yi32, Ynone, Yml, Zilo_m, 2},
-	{Yiauto, Ynone, Yrl, Zaut_r, 2},
+	{Zr_m, 1, argList{Yrl, Yml}},
+	{Zm_r, 1, argList{Yml, Yrl}},
+	{Zil_rp, 1, argList{Yi32, Yrl}},
+	{Zilo_m, 2, argList{Yi32, Yml}},
+	{Zaut_r, 2, argList{Yiauto, Yrl}},
 }
 
 var ymovl = []ytab{
-	{Yrl, Ynone, Yml, Zr_m, 1},
-	{Yml, Ynone, Yrl, Zm_r, 1},
-	{Yi0, Ynone, Yrl, Zclr, 1},
-	{Yi32, Ynone, Yrl, Zil_rp, 1},
-	{Yi32, Ynone, Yml, Zilo_m, 2},
-	{Yml, Ynone, Ymr, Zm_r_xm, 1}, // MMX MOVD
-	{Ymr, Ynone, Yml, Zr_m_xm, 1}, // MMX MOVD
-	{Yml, Ynone, Yxr, Zm_r_xm, 2}, // XMM MOVD (32 bit)
-	{Yxr, Ynone, Yml, Zr_m_xm, 2}, // XMM MOVD (32 bit)
-	{Yiauto, Ynone, Yrl, Zaut_r, 2},
+	{Zr_m, 1, argList{Yrl, Yml}},
+	{Zm_r, 1, argList{Yml, Yrl}},
+	{Zil_rp, 1, argList{Yi32, Yrl}},
+	{Zilo_m, 2, argList{Yi32, Yml}},
+	{Zm_r_xm, 1, argList{Yml, Ymr}}, // MMX MOVD
+	{Zr_m_xm, 1, argList{Ymr, Yml}}, // MMX MOVD
+	{Zm_r_xm, 2, argList{Yml, Yxr}}, // XMM MOVD (32 bit)
+	{Zr_m_xm, 2, argList{Yxr, Yml}}, // XMM MOVD (32 bit)
+	{Zaut_r, 2, argList{Yiauto, Yrl}},
 }
 
 var yret = []ytab{
-	{Ynone, Ynone, Ynone, Zo_iw, 1},
-	{Yi32, Ynone, Ynone, Zo_iw, 1},
+	{Zo_iw, 1, argList{}},
+	{Zo_iw, 1, argList{Yi32}},
 }
 
 var ymovq = []ytab{
 	// valid in 32-bit mode
-	{Ym, Ynone, Ymr, Zm_r_xm_nr, 1},  // 0x6f MMX MOVQ (shorter encoding)
-	{Ymr, Ynone, Ym, Zr_m_xm_nr, 1},  // 0x7f MMX MOVQ
-	{Yxr, Ynone, Ymr, Zm_r_xm_nr, 2}, // Pf2, 0xd6 MOVDQ2Q
-	{Yxm, Ynone, Yxr, Zm_r_xm_nr, 2}, // Pf3, 0x7e MOVQ xmm1/m64 -> xmm2
-	{Yxr, Ynone, Yxm, Zr_m_xm_nr, 2}, // Pe, 0xd6 MOVQ xmm1 -> xmm2/m64
+	{Zm_r_xm_nr, 1, argList{Ym, Ymr}},  // 0x6f MMX MOVQ (shorter encoding)
+	{Zr_m_xm_nr, 1, argList{Ymr, Ym}},  // 0x7f MMX MOVQ
+	{Zm_r_xm_nr, 2, argList{Yxr, Ymr}}, // Pf2, 0xd6 MOVDQ2Q
+	{Zm_r_xm_nr, 2, argList{Yxm, Yxr}}, // Pf3, 0x7e MOVQ xmm1/m64 -> xmm2
+	{Zr_m_xm_nr, 2, argList{Yxr, Yxm}}, // Pe, 0xd6 MOVQ xmm1 -> xmm2/m64
 
 	// valid only in 64-bit mode, usually with 64-bit prefix
-	{Yrl, Ynone, Yml, Zr_m, 1},      // 0x89
-	{Yml, Ynone, Yrl, Zm_r, 1},      // 0x8b
-	{Yi0, Ynone, Yrl, Zclr, 1},      // 0x31
-	{Ys32, Ynone, Yrl, Zilo_m, 2},   // 32 bit signed 0xc7,(0)
-	{Yi64, Ynone, Yrl, Ziq_rp, 1},   // 0xb8 -- 32/64 bit immediate
-	{Yi32, Ynone, Yml, Zilo_m, 2},   // 0xc7,(0)
-	{Ymm, Ynone, Ymr, Zm_r_xm, 1},   // 0x6e MMX MOVD
-	{Ymr, Ynone, Ymm, Zr_m_xm, 1},   // 0x7e MMX MOVD
-	{Yml, Ynone, Yxr, Zm_r_xm, 2},   // Pe, 0x6e MOVD xmm load
-	{Yxr, Ynone, Yml, Zr_m_xm, 2},   // Pe, 0x7e MOVD xmm store
-	{Yiauto, Ynone, Yrl, Zaut_r, 1}, // 0 built-in LEAQ
+	{Zr_m, 1, argList{Yrl, Yml}},      // 0x89
+	{Zm_r, 1, argList{Yml, Yrl}},      // 0x8b
+	{Zilo_m, 2, argList{Ys32, Yrl}},   // 32 bit signed 0xc7,(0)
+	{Ziq_rp, 1, argList{Yi64, Yrl}},   // 0xb8 -- 32/64 bit immediate
+	{Zilo_m, 2, argList{Yi32, Yml}},   // 0xc7,(0)
+	{Zm_r_xm, 1, argList{Ymm, Ymr}},   // 0x6e MMX MOVD
+	{Zr_m_xm, 1, argList{Ymr, Ymm}},   // 0x7e MMX MOVD
+	{Zm_r_xm, 2, argList{Yml, Yxr}},   // Pe, 0x6e MOVD xmm load
+	{Zr_m_xm, 2, argList{Yxr, Yml}},   // Pe, 0x7e MOVD xmm store
+	{Zaut_r, 1, argList{Yiauto, Yrl}}, // 0 built-in LEAQ
+}
+
+var ymovbe = []ytab{
+	{Zlitm_r, 3, argList{Ym, Yrl}},
+	{Zlitr_m, 3, argList{Yrl, Ym}},
 }
 
 var ym_rl = []ytab{
-	{Ym, Ynone, Yrl, Zm_r, 1},
+	{Zm_r, 1, argList{Ym, Yrl}},
 }
 
 var yrl_m = []ytab{
-	{Yrl, Ynone, Ym, Zr_m, 1},
+	{Zr_m, 1, argList{Yrl, Ym}},
 }
 
 var ymb_rl = []ytab{
-	{Ymb, Ynone, Yrl, Zmb_r, 1},
+	{Zmb_r, 1, argList{Ymb, Yrl}},
 }
 
 var yml_rl = []ytab{
-	{Yml, Ynone, Yrl, Zm_r, 1},
+	{Zm_r, 1, argList{Yml, Yrl}},
 }
 
 var yrl_ml = []ytab{
-	{Yrl, Ynone, Yml, Zr_m, 1},
+	{Zr_m, 1, argList{Yrl, Yml}},
 }
 
 var yml_mb = []ytab{
-	{Yrb, Ynone, Ymb, Zr_m, 1},
-	{Ymb, Ynone, Yrb, Zm_r, 1},
+	{Zr_m, 1, argList{Yrb, Ymb}},
+	{Zm_r, 1, argList{Ymb, Yrb}},
 }
 
 var yrb_mb = []ytab{
-	{Yrb, Ynone, Ymb, Zr_m, 1},
+	{Zr_m, 1, argList{Yrb, Ymb}},
 }
 
 var yxchg = []ytab{
-	{Yax, Ynone, Yrl, Z_rp, 1},
-	{Yrl, Ynone, Yax, Zrp_, 1},
-	{Yrl, Ynone, Yml, Zr_m, 1},
-	{Yml, Ynone, Yrl, Zm_r, 1},
+	{Z_rp, 1, argList{Yax, Yrl}},
+	{Zrp_, 1, argList{Yrl, Yax}},
+	{Zr_m, 1, argList{Yrl, Yml}},
+	{Zm_r, 1, argList{Yml, Yrl}},
 }
 
 var ydivl = []ytab{
-	{Yml, Ynone, Ynone, Zm_o, 2},
+	{Zm_o, 2, argList{Yml}},
 }
 
 var ydivb = []ytab{
-	{Ymb, Ynone, Ynone, Zm_o, 2},
+	{Zm_o, 2, argList{Ymb}},
 }
 
 var yimul = []ytab{
-	{Yml, Ynone, Ynone, Zm_o, 2},
-	{Yi8, Ynone, Yrl, Zib_rr, 1},
-	{Yi32, Ynone, Yrl, Zil_rr, 1},
-	{Yml, Ynone, Yrl, Zm_r, 2},
+	{Zm_o, 2, argList{Yml}},
+	{Zib_rr, 1, argList{Yi8, Yrl}},
+	{Zil_rr, 1, argList{Yi32, Yrl}},
+	{Zm_r, 2, argList{Yml, Yrl}},
 }
 
 var yimul3 = []ytab{
-	{Yi8, Yml, Yrl, Zibm_r, 2},
+	{Zibm_r, 2, argList{Yi8, Yml, Yrl}},
+	{Zibm_r, 2, argList{Yi32, Yml, Yrl}},
 }
 
 var ybyte = []ytab{
-	{Yi64, Ynone, Ynone, Zbyte, 1},
+	{Zbyte, 1, argList{Yi64}},
 }
 
 var yin = []ytab{
-	{Yi32, Ynone, Ynone, Zib_, 1},
-	{Ynone, Ynone, Ynone, Zlit, 1},
+	{Zib_, 1, argList{Yi32}},
+	{Zlit, 1, argList{}},
 }
 
 var yint = []ytab{
-	{Yi32, Ynone, Ynone, Zib_, 1},
+	{Zib_, 1, argList{Yi32}},
 }
 
 var ypushl = []ytab{
-	{Yrl, Ynone, Ynone, Zrp_, 1},
-	{Ym, Ynone, Ynone, Zm_o, 2},
-	{Yi8, Ynone, Ynone, Zib_, 1},
-	{Yi32, Ynone, Ynone, Zil_, 1},
+	{Zrp_, 1, argList{Yrl}},
+	{Zm_o, 2, argList{Ym}},
+	{Zib_, 1, argList{Yi8}},
+	{Zil_, 1, argList{Yi32}},
 }
 
 var ypopl = []ytab{
-	{Ynone, Ynone, Yrl, Z_rp, 1},
-	{Ynone, Ynone, Ym, Zo_m, 2},
+	{Z_rp, 1, argList{Yrl}},
+	{Zo_m, 2, argList{Ym}},
+}
+
+var ywrfsbase = []ytab{
+	{Zm_o, 2, argList{Yrl}},
+}
+
+var yrdrand = []ytab{
+	{Zo_m, 2, argList{Yrl}},
+}
+
+var yclflush = []ytab{
+	{Zo_m, 2, argList{Ym}},
 }
 
 var ybswap = []ytab{
-	{Ynone, Ynone, Yrl, Z_rp, 2},
+	{Z_rp, 2, argList{Yrl}},
 }
 
 var yscond = []ytab{
-	{Ynone, Ynone, Ymb, Zo_m, 2},
+	{Zo_m, 2, argList{Ymb}},
 }
 
 var yjcond = []ytab{
-	{Ynone, Ynone, Ybr, Zbr, 0},
-	{Yi0, Ynone, Ybr, Zbr, 0},
-	{Yi1, Ynone, Ybr, Zbr, 1},
+	{Zbr, 0, argList{Ybr}},
+	{Zbr, 0, argList{Yi0, Ybr}},
+	{Zbr, 1, argList{Yi1, Ybr}},
 }
 
 var yloop = []ytab{
-	{Ynone, Ynone, Ybr, Zloop, 1},
+	{Zloop, 1, argList{Ybr}},
 }
 
 var ycall = []ytab{
-	{Ynone, Ynone, Yml, Zcallindreg, 0},
-	{Yrx, Ynone, Yrx, Zcallindreg, 2},
-	{Ynone, Ynone, Yindir, Zcallind, 2},
-	{Ynone, Ynone, Ybr, Zcall, 0},
-	{Ynone, Ynone, Yi32, Zcallcon, 1},
+	{Zcallindreg, 0, argList{Yml}},
+	{Zcallindreg, 2, argList{Yrx, Yrx}},
+	{Zcallind, 2, argList{Yindir}},
+	{Zcall, 0, argList{Ybr}},
+	{Zcallcon, 1, argList{Yi32}},
 }
 
 var yduff = []ytab{
-	{Ynone, Ynone, Yi32, Zcallduff, 1},
+	{Zcallduff, 1, argList{Yi32}},
 }
 
 var yjmp = []ytab{
-	{Ynone, Ynone, Yml, Zo_m64, 2},
-	{Ynone, Ynone, Ybr, Zjmp, 0},
-	{Ynone, Ynone, Yi32, Zjmpcon, 1},
+	{Zo_m64, 2, argList{Yml}},
+	{Zjmp, 0, argList{Ybr}},
+	{Zjmpcon, 1, argList{Yi32}},
 }
 
 var yfmvd = []ytab{
-	{Ym, Ynone, Yf0, Zm_o, 2},
-	{Yf0, Ynone, Ym, Zo_m, 2},
-	{Yrf, Ynone, Yf0, Zm_o, 2},
-	{Yf0, Ynone, Yrf, Zo_m, 2},
+	{Zm_o, 2, argList{Ym, Yf0}},
+	{Zo_m, 2, argList{Yf0, Ym}},
+	{Zm_o, 2, argList{Yrf, Yf0}},
+	{Zo_m, 2, argList{Yf0, Yrf}},
 }
 
 var yfmvdp = []ytab{
-	{Yf0, Ynone, Ym, Zo_m, 2},
-	{Yf0, Ynone, Yrf, Zo_m, 2},
+	{Zo_m, 2, argList{Yf0, Ym}},
+	{Zo_m, 2, argList{Yf0, Yrf}},
 }
 
 var yfmvf = []ytab{
-	{Ym, Ynone, Yf0, Zm_o, 2},
-	{Yf0, Ynone, Ym, Zo_m, 2},
+	{Zm_o, 2, argList{Ym, Yf0}},
+	{Zo_m, 2, argList{Yf0, Ym}},
 }
 
 var yfmvx = []ytab{
-	{Ym, Ynone, Yf0, Zm_o, 2},
+	{Zm_o, 2, argList{Ym, Yf0}},
 }
 
 var yfmvp = []ytab{
-	{Yf0, Ynone, Ym, Zo_m, 2},
+	{Zo_m, 2, argList{Yf0, Ym}},
 }
 
 var yfcmv = []ytab{
-	{Yrf, Ynone, Yf0, Zm_o, 2},
+	{Zm_o, 2, argList{Yrf, Yf0}},
 }
 
 var yfadd = []ytab{
-	{Ym, Ynone, Yf0, Zm_o, 2},
-	{Yrf, Ynone, Yf0, Zm_o, 2},
-	{Yf0, Ynone, Yrf, Zo_m, 2},
+	{Zm_o, 2, argList{Ym, Yf0}},
+	{Zm_o, 2, argList{Yrf, Yf0}},
+	{Zo_m, 2, argList{Yf0, Yrf}},
 }
 
 var yfxch = []ytab{
-	{Yf0, Ynone, Yrf, Zo_m, 2},
-	{Yrf, Ynone, Yf0, Zm_o, 2},
+	{Zo_m, 2, argList{Yf0, Yrf}},
+	{Zm_o, 2, argList{Yrf, Yf0}},
 }
 
 var ycompp = []ytab{
-	{Yf0, Ynone, Yrf, Zo_m, 2}, /* botch is really f0,f1 */
+	{Zo_m, 2, argList{Yf0, Yrf}}, /* botch is really f0,f1 */
 }
 
 var ystsw = []ytab{
-	{Ynone, Ynone, Ym, Zo_m, 2},
-	{Ynone, Ynone, Yax, Zlit, 1},
+	{Zo_m, 2, argList{Ym}},
+	{Zlit, 1, argList{Yax}},
 }
 
-var ysvrs = []ytab{
-	{Ynone, Ynone, Ym, Zo_m, 2},
-	{Ym, Ynone, Ynone, Zm_o, 2},
+var ysvrs_mo = []ytab{
+	{Zm_o, 2, argList{Ym}},
+}
+
+// unaryDst version of "ysvrs_mo".
+var ysvrs_om = []ytab{
+	{Zo_m, 2, argList{Ym}},
 }
 
 var ymm = []ytab{
-	{Ymm, Ynone, Ymr, Zm_r_xm, 1},
-	{Yxm, Ynone, Yxr, Zm_r_xm, 2},
+	{Zm_r_xm, 1, argList{Ymm, Ymr}},
+	{Zm_r_xm, 2, argList{Yxm, Yxr}},
 }
 
 var yxm = []ytab{
-	{Yxm, Ynone, Yxr, Zm_r_xm, 1},
+	{Zm_r_xm, 1, argList{Yxm, Yxr}},
 }
 
 var yxm_q4 = []ytab{
-	{Yxm, Ynone, Yxr, Zm_r, 1},
+	{Zm_r, 1, argList{Yxm, Yxr}},
 }
 
 var yxcvm1 = []ytab{
-	{Yxm, Ynone, Yxr, Zm_r_xm, 2},
-	{Yxm, Ynone, Ymr, Zm_r_xm, 2},
+	{Zm_r_xm, 2, argList{Yxm, Yxr}},
+	{Zm_r_xm, 2, argList{Yxm, Ymr}},
 }
 
 var yxcvm2 = []ytab{
-	{Yxm, Ynone, Yxr, Zm_r_xm, 2},
-	{Ymm, Ynone, Yxr, Zm_r_xm, 2},
+	{Zm_r_xm, 2, argList{Yxm, Yxr}},
+	{Zm_r_xm, 2, argList{Ymm, Yxr}},
 }
 
 var yxr = []ytab{
-	{Yxr, Ynone, Yxr, Zm_r_xm, 1},
+	{Zm_r_xm, 1, argList{Yxr, Yxr}},
 }
 
 var yxr_ml = []ytab{
-	{Yxr, Ynone, Yml, Zr_m_xm, 1},
+	{Zr_m_xm, 1, argList{Yxr, Yml}},
 }
 
 var ymr = []ytab{
-	{Ymr, Ynone, Ymr, Zm_r, 1},
+	{Zm_r, 1, argList{Ymr, Ymr}},
 }
 
 var ymr_ml = []ytab{
-	{Ymr, Ynone, Yml, Zr_m_xm, 1},
+	{Zr_m_xm, 1, argList{Ymr, Yml}},
 }
 
 var yxcmpi = []ytab{
-	{Yxm, Yxr, Yi8, Zm_r_i_xm, 2},
+	{Zm_r_i_xm, 2, argList{Yxm, Yxr, Yi8}},
 }
 
 var yxmov = []ytab{
-	{Yxm, Ynone, Yxr, Zm_r_xm, 1},
-	{Yxr, Ynone, Yxm, Zr_m_xm, 1},
+	{Zm_r_xm, 1, argList{Yxm, Yxr}},
+	{Zr_m_xm, 1, argList{Yxr, Yxm}},
 }
 
 var yxcvfl = []ytab{
-	{Yxm, Ynone, Yrl, Zm_r_xm, 1},
+	{Zm_r_xm, 1, argList{Yxm, Yrl}},
 }
 
 var yxcvlf = []ytab{
-	{Yml, Ynone, Yxr, Zm_r_xm, 1},
+	{Zm_r_xm, 1, argList{Yml, Yxr}},
 }
 
 var yxcvfq = []ytab{
-	{Yxm, Ynone, Yrl, Zm_r_xm, 2},
+	{Zm_r_xm, 2, argList{Yxm, Yrl}},
 }
 
 var yxcvqf = []ytab{
-	{Yml, Ynone, Yxr, Zm_r_xm, 2},
+	{Zm_r_xm, 2, argList{Yml, Yxr}},
 }
 
 var yps = []ytab{
-	{Ymm, Ynone, Ymr, Zm_r_xm, 1},
-	{Yi8, Ynone, Ymr, Zibo_m_xm, 2},
-	{Yxm, Ynone, Yxr, Zm_r_xm, 2},
-	{Yi8, Ynone, Yxr, Zibo_m_xm, 3},
+	{Zm_r_xm, 1, argList{Ymm, Ymr}},
+	{Zibo_m_xm, 2, argList{Yi8, Ymr}},
+	{Zm_r_xm, 2, argList{Yxm, Yxr}},
+	{Zibo_m_xm, 3, argList{Yi8, Yxr}},
 }
 
 var yxrrl = []ytab{
-	{Yxr, Ynone, Yrl, Zm_r, 1},
+	{Zm_r, 1, argList{Yxr, Yrl}},
 }
 
 var ymrxr = []ytab{
-	{Ymr, Ynone, Yxr, Zm_r, 1},
-	{Yxm, Ynone, Yxr, Zm_r_xm, 1},
+	{Zm_r, 1, argList{Ymr, Yxr}},
+	{Zm_r_xm, 1, argList{Yxm, Yxr}},
 }
 
 var ymshuf = []ytab{
-	{Yi8, Ymm, Ymr, Zibm_r, 2},
+	{Zibm_r, 2, argList{Yi8, Ymm, Ymr}},
 }
 
 var ymshufb = []ytab{
-	{Yxm, Ynone, Yxr, Zm2_r, 2},
+	{Zm2_r, 2, argList{Yxm, Yxr}},
 }
 
+// It should never have more than 1 entry,
+// because some optab entries you opcode secuences that
+// are longer than 2 bytes (zoffset=2 here),
+// ROUNDPD and ROUNDPS and recently added BLENDPD,
+// to name a few.
 var yxshuf = []ytab{
-	{Yu8, Yxm, Yxr, Zibm_r, 2},
+	{Zibm_r, 2, argList{Yu8, Yxm, Yxr}},
 }
 
 var yextrw = []ytab{
-	{Yu8, Yxr, Yrl, Zibm_r, 2},
+	{Zibm_r, 2, argList{Yu8, Yxr, Yrl}},
+	{Zibr_m, 2, argList{Yu8, Yxr, Yml}},
 }
 
 var yextr = []ytab{
-	{Yu8, Yxr, Ymm, Zibr_m, 3},
+	{Zibr_m, 3, argList{Yu8, Yxr, Ymm}},
 }
 
 var yinsrw = []ytab{
-	{Yu8, Yml, Yxr, Zibm_r, 2},
+	{Zibm_r, 2, argList{Yu8, Yml, Yxr}},
 }
 
 var yinsr = []ytab{
-	{Yu8, Ymm, Yxr, Zibm_r, 3},
+	{Zibm_r, 3, argList{Yu8, Ymm, Yxr}},
 }
 
 var ypsdq = []ytab{
-	{Yi8, Ynone, Yxr, Zibo_m, 2},
+	{Zibo_m, 2, argList{Yi8, Yxr}},
 }
 
 var ymskb = []ytab{
-	{Yxr, Ynone, Yrl, Zm_r_xm, 2},
-	{Ymr, Ynone, Yrl, Zm_r_xm, 1},
+	{Zm_r_xm, 2, argList{Yxr, Yrl}},
+	{Zm_r_xm, 1, argList{Ymr, Yrl}},
 }
 
 var ycrc32l = []ytab{
-	{Yml, Ynone, Yrl, Zlitm_r, 0},
+	{Zlitm_r, 0, argList{Yml, Yrl}},
+}
+
+var ycrc32b = []ytab{
+	{Zlitm_r, 0, argList{Ymb, Yrl}},
 }
 
 var yprefetch = []ytab{
-	{Ym, Ynone, Ynone, Zm_o, 2},
+	{Zm_o, 2, argList{Ym}},
 }
 
 var yaes = []ytab{
-	{Yxm, Ynone, Yxr, Zlitm_r, 2},
+	{Zlitm_r, 2, argList{Yxm, Yxr}},
 }
 
 var yxbegin = []ytab{
-	{Ynone, Ynone, Ybr, Zjmp, 1},
+	{Zjmp, 1, argList{Ybr}},
 }
 
 var yxabort = []ytab{
-	{Yu8, Ynone, Ynone, Zib_, 1},
+	{Zib_, 1, argList{Yu8}},
 }
 
 var ylddqu = []ytab{
-	{Ym, Ynone, Yxr, Zm_r, 1},
+	{Zm_r, 1, argList{Ym, Yxr}},
+}
+
+var ypalignr = []ytab{
+	{Zibm_r, 2, argList{Yu8, Yxm, Yxr}},
+}
+
+var ysha256rnds2 = []ytab{
+	{Zlit_m_r, 0, argList{Yxr0, Yxm, Yxr}},
+}
+
+var yblendvpd = []ytab{
+	{Z_m_r, 1, argList{Yxr0, Yxm, Yxr}},
 }
 
 // VEX instructions that come in two forms:
@@ -790,105 +838,280 @@ var ylddqu = []ytab{
 //	VPXOR ymm2/m256, ymmV, ymm1
 //	VEX.NDS.256.66.0F.WIG EF /r
 //
-// The NDS/NDD/DDS part can be dropped, producing this
-// Optab entry:
+// Produce this Optab entry:
 //
-//	{AVPXOR, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xEF, VEX_256_66_0F_WIG, 0xEF}}
+//	{AVPXOR, yvex_xy3, Pvex, [23]uint8{VEX_NDS_128_66_0F_WIG, 0xEF, VEX_NDS_256_66_0F_WIG, 0xEF}}
 //
 var yvex_xy3 = []ytab{
-	{Yxm, Yxr, Yxr, Zvex_rm_v_r, 2},
-	{Yym, Yyr, Yyr, Zvex_rm_v_r, 2},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yym, Yyr, Yyr}},
+}
+
+var yvex_x3 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr, Yxr}},
 }
 
 var yvex_ri3 = []ytab{
-	{Yi8, Ymb, Yrl, Zvex_i_rm_r, 2},
+	{Zvex_i_rm_r, 2, argList{Yi8, Ymb, Yrl}},
 }
 
 var yvex_xyi3 = []ytab{
-	{Yu8, Yxm, Yxr, Zvex_i_rm_r, 2},
-	{Yu8, Yym, Yyr, Zvex_i_rm_r, 2},
-	{Yi8, Yxm, Yxr, Zvex_i_rm_r, 2},
-	{Yi8, Yym, Yyr, Zvex_i_rm_r, 2},
+	{Zvex_i_rm_r, 2, argList{Yu8, Yxm, Yxr}},
+	{Zvex_i_rm_r, 2, argList{Yu8, Yym, Yyr}},
+	{Zvex_i_rm_r, 2, argList{Yi8, Yxm, Yxr}},
+	{Zvex_i_rm_r, 2, argList{Yi8, Yym, Yyr}},
 }
 
-var yvex_yyi4 = []ytab{ //TODO don't hide 4 op, some version have xmm version
-	{Yym, Yyr, Yyr, Zvex_i_rm_v_r, 2},
+var yvex_yyi4 = []ytab{
+	{Zvex_i_rm_v_r, 2, argList{Yu8, Yym, Yyr, Yyr}},
 }
 
 var yvex_xyi4 = []ytab{
-	{Yxm, Yyr, Yyr, Zvex_i_rm_v_r, 2},
+	{Zvex_i_rm_v_r, 2, argList{Yu8, Yxm, Yyr, Yyr}},
 }
 
 var yvex_shift = []ytab{
-	{Yi8, Yxr, Yxr, Zvex_i_r_v, 3},
-	{Yi8, Yyr, Yyr, Zvex_i_r_v, 3},
-	{Yxm, Yxr, Yxr, Zvex_rm_v_r, 2},
-	{Yxm, Yyr, Yyr, Zvex_rm_v_r, 2},
+	{Zvex_i_r_v, 3, argList{Yi8, Yxr, Yxr}},
+	{Zvex_i_r_v, 3, argList{Yi8, Yyr, Yyr}},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yyr, Yyr}},
 }
 
 var yvex_shift_dq = []ytab{
-	{Yi8, Yxr, Yxr, Zvex_i_r_v, 3},
-	{Yi8, Yyr, Yyr, Zvex_i_r_v, 3},
+	{Zvex_i_r_v, 3, argList{Yi8, Yxr, Yxr}},
+	{Zvex_i_r_v, 3, argList{Yi8, Yyr, Yyr}},
 }
 
 var yvex_r3 = []ytab{
-	{Yml, Yrl, Yrl, Zvex_rm_v_r, 2},
+	{Zvex_rm_v_r, 2, argList{Yml, Yrl, Yrl}},
 }
 
 var yvex_vmr3 = []ytab{
-	{Yrl, Yml, Yrl, Zvex_v_rm_r, 2},
+	{Zvex_v_rm_r, 2, argList{Yrl, Yml, Yrl}},
 }
 
 var yvex_xy2 = []ytab{
-	{Yxm, Ynone, Yxr, Zvex_rm_v_r, 2},
-	{Yym, Ynone, Yyr, Zvex_rm_v_r, 2},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yym, Yyr}},
 }
 
 var yvex_xyr2 = []ytab{
-	{Yxr, Ynone, Yrl, Zvex_rm_v_r, 2},
-	{Yyr, Ynone, Yrl, Zvex_rm_v_r, 2},
+	{Zvex_rm_v_r, 2, argList{Yxr, Yrl}},
+	{Zvex_rm_v_r, 2, argList{Yyr, Yrl}},
 }
 
 var yvex_vmovdqa = []ytab{
-	{Yxm, Ynone, Yxr, Zvex_rm_v_r, 2},
-	{Yxr, Ynone, Yxm, Zvex_r_v_rm, 2},
-	{Yym, Ynone, Yyr, Zvex_rm_v_r, 2},
-	{Yyr, Ynone, Yym, Zvex_r_v_rm, 2},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr}},
+	{Zvex_r_v_rm, 2, argList{Yxr, Yxm}},
+	{Zvex_rm_v_r, 2, argList{Yym, Yyr}},
+	{Zvex_r_v_rm, 2, argList{Yyr, Yym}},
 }
 
 var yvex_vmovntdq = []ytab{
-	{Yxr, Ynone, Ym, Zvex_r_v_rm, 2},
-	{Yyr, Ynone, Ym, Zvex_r_v_rm, 2},
+	{Zvex_r_v_rm, 2, argList{Yxr, Ym}},
+	{Zvex_r_v_rm, 2, argList{Yyr, Ym}},
 }
 
 var yvex_vpbroadcast = []ytab{
-	{Yxm, Ynone, Yxr, Zvex_rm_v_r, 2},
-	{Yxm, Ynone, Yyr, Zvex_rm_v_r, 2},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yyr}},
 }
 
 var yvex_vpbroadcast_sd = []ytab{
-	{Yxm, Ynone, Yyr, Zvex_rm_v_r, 2},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yyr}},
+}
+
+var yvex_vpextrw = []ytab{
+	{Zvex_i_rm_r, 2, argList{Yi8, Yxr, Yrl}},
+	{Zvex_i_r_rm, 2, argList{Yi8, Yxr, Yml}},
+}
+
+var yvex_m = []ytab{
+	{Zvex_rm_v_ro, 3, argList{Ym}},
+}
+
+var yvex_xx3 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yxr, Yxr, Yxr}},
+}
+
+var yvex_yi3 = []ytab{
+	{Zvex_i_r_rm, 2, argList{Yi8, Yyr, Yxm}},
+}
+
+var yvex_mxy = []ytab{
+	{Zvex_rm_v_r, 2, argList{Ym, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yyr}},
+}
+
+var yvex_yy3 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yym, Yyr, Yyr}},
+}
+
+var yvex_xi3 = []ytab{
+	{Zvex_i_rm_r, 2, argList{Yi8, Yxm, Yxr}},
+}
+
+var yvex_vpermpd = []ytab{
+	{Zvex_i_rm_r, 2, argList{Yu8, Yym, Yyr}},
+	// Allow int8 for backwards compatibility with negative values
+	// like $-1.
+	{Zvex_i_rm_r, 2, argList{Yi8, Yym, Yyr}},
+}
+
+var yvex_vpermilp = []ytab{
+	{Zvex_i_rm_r, 2, argList{Yi8, Yxm, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr, Yxr}},
+	{Zvex_i_rm_r, 2, argList{Yi8, Yym, Yyr}},
+	{Zvex_rm_v_r, 2, argList{Yym, Yyr, Yyr}},
+}
+
+var yvex_vcvtps2ph = []ytab{
+	{Zvex_i_r_rm, 2, argList{Yi8, Yyr, Yxm}},
+	{Zvex_i_r_rm, 2, argList{Yi8, Yxr, Yxm}},
+}
+
+var yvex_vbroadcastf = []ytab{
+	{Zvex_rm_v_r, 2, argList{Ym, Yyr}},
+}
+
+var yvex_vmovd = []ytab{
+	{Zvex_r_v_rm, 2, argList{Yxr, Yml}},
+	{Zvex_rm_v_r, 2, argList{Yml, Yxr}},
+}
+
+var yvex_x2 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr}},
+}
+
+var yvex_y2 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yym, Yxr}},
+}
+
+var yvex = []ytab{
+	{Zvex, 2, argList{}},
+}
+
+var yvex_xx2 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yxr, Yxr}},
+}
+
+var yvex_vpalignr = []ytab{
+	{Zvex_i_rm_v_r, 2, argList{Yu8, Yxm, Yxr, Yxr}},
+	{Zvex_i_rm_v_r, 2, argList{Yu8, Yym, Yyr, Yyr}},
+}
+
+var yvex_rxi4 = []ytab{
+	{Zvex_i_rm_v_r, 2, argList{Yu8, Yml, Yxr, Yxr}},
+}
+
+var yvex_xxi4 = []ytab{
+	{Zvex_i_rm_v_r, 2, argList{Yu8, Yxm, Yxr, Yxr}},
+}
+
+var yvex_xy4 = []ytab{
+	{Zvex_hr_rm_v_r, 2, argList{Yxr, Yxm, Yxr, Yxr}},
+	{Zvex_hr_rm_v_r, 2, argList{Yyr, Yym, Yyr, Yyr}},
+}
+
+var yvex_vpbroadcast_ss = []ytab{
+	{Zvex_rm_v_r, 2, argList{Ym, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxr, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yyr}},
+	{Zvex_rm_v_r, 2, argList{Yxr, Yyr}},
+}
+
+var yvex_vblendvpd = []ytab{
+	{Zvex_r_v_rm, 2, argList{Yxr, Yxr, Yml}},
+	{Zvex_r_v_rm, 2, argList{Yyr, Yyr, Yml}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yxr, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yyr, Yyr}},
+}
+
+var yvex_vmov = []ytab{
+	{Zvex_r_v_rm, 2, argList{Yxr, Ym}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxr, Yxr, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxr, Yxr, Yxr}},
+}
+
+var yvex_vps = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yxm, Yxr, Yxr}},
+	{Zvex_i_r_v, 3, argList{Yi8, Yxr, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxm, Yyr, Yyr}},
+	{Zvex_i_r_v, 3, argList{Yi8, Yyr, Yyr}},
+}
+
+var yvex_r2 = []ytab{
+	{Zvex_rm_r_vo, 3, argList{Yml, Yrl}},
+}
+
+var yvex_vpextr = []ytab{
+	{Zvex_i_r_rm, 2, argList{Yi8, Yxr, Yml}},
+}
+
+var yvex_rx3 = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yml, Yxr, Yxr}},
+}
+
+var yvex_vcvtsd2si = []ytab{
+	{Zvex_rm_v_r, 2, argList{Yxm, Yrl}},
+}
+
+var yvex_vmovhpd = []ytab{
+	{Zvex_r_v_rm, 2, argList{Yxr, Ym}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yxr, Yxr}},
+}
+
+var yvex_vmovq = []ytab{
+	{Zvex_r_v_rm, 2, argList{Yxr, Yml}},
+	{Zvex_rm_v_r, 2, argList{Ym, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yml, Yxr}},
+	{Zvex_rm_v_r, 2, argList{Yxr, Yxr}},
+	{Zvex_r_v_rm, 2, argList{Yxr, Yxm}},
+}
+
+var yvpgatherdq = []ytab{
+	{Zvex_v_rm_r, 2, argList{Yxr, Yxvm, Yxr}},
+	{Zvex_v_rm_r, 2, argList{Yyr, Yxvm, Yyr}},
+}
+
+var yvpgatherqq = []ytab{
+	{Zvex_v_rm_r, 2, argList{Yxr, Yxvm, Yxr}},
+	{Zvex_v_rm_r, 2, argList{Yyr, Yyvm, Yyr}},
+}
+
+var yvgatherqps = []ytab{
+	{Zvex_v_rm_r, 2, argList{Yxr, Yxvm, Yxr}},
+	{Zvex_v_rm_r, 2, argList{Yxr, Yyvm, Yxr}},
 }
 
 var ymmxmm0f38 = []ytab{
-	{Ymm, Ynone, Ymr, Zlitm_r, 3},
-	{Yxm, Ynone, Yxr, Zlitm_r, 5},
+	{Zlitm_r, 3, argList{Ymm, Ymr}},
+	{Zlitm_r, 5, argList{Yxm, Yxr}},
+}
+
+var yextractps = []ytab{
+	{Zibr_m, 2, argList{Yu2, Yxr, Yml}},
+}
+
+var ysha1rnds4 = []ytab{
+	{Zibm_r, 2, argList{Yu2, Yxm, Yxr}},
 }
 
 /*
- * You are doasm, holding in your hand a Prog* with p->as set to, say, ACRC32,
- * and p->from and p->to as operands (Addr*).  The linker scans optab to find
- * the entry with the given p->as and then looks through the ytable for that
- * instruction (the second field in the optab struct) for a line whose first
- * two values match the Ytypes of the p->from and p->to operands.  The function
- * oclass in span.c computes the specific Ytype of an operand and then the set
+ * You are doasm, holding in your hand a *obj.Prog with p.As set to, say,
+ * ACRC32, and p.From and p.To as operands (obj.Addr).  The linker scans optab
+ * to find the entry with the given p.As and then looks through the ytable for
+ * that instruction (the second field in the optab struct) for a line whose
+ * first two values match the Ytypes of the p.From and p.To operands.  The
+ * function oclass computes the specific Ytype of an operand and then the set
  * of more general Ytypes that it satisfies is implied by the ycover table, set
  * up in instinit.  For example, oclass distinguishes the constants 0 and 1
  * from the more general 8-bit constants, but instinit says
  *
- *        ycover[Yi0*Ymax + Ys32] = 1;
- *        ycover[Yi1*Ymax + Ys32] = 1;
- *        ycover[Yi8*Ymax + Ys32] = 1;
+ *        ycover[Yi0*Ymax+Ys32] = 1
+ *        ycover[Yi1*Ymax+Ys32] = 1
+ *        ycover[Yi8*Ymax+Ys32] = 1
  *
  * which means that Yi0, Yi1, and Yi8 all count as Ys32 (signed 32)
  * if that's what an instruction can handle.
@@ -902,22 +1125,20 @@ var ymmxmm0f38 = []ytab{
  * is, the Ztype) and the z bytes.
  *
  * For example, let's look at AADDL.  The optab line says:
- *        { AADDL,        yaddl,  Px, 0x83,(00),0x05,0x81,(00),0x01,0x03 },
+ *        {AADDL, yaddl, Px, [23]uint8{0x83, 00, 0x05, 0x81, 00, 0x01, 0x03}},
  *
  * and yaddl says
- *        uchar   yaddl[] =
- *        {
- *                Yi8,    Yml,    Zibo_m, 2,
- *                Yi32,   Yax,    Zil_,   1,
- *                Yi32,   Yml,    Zilo_m, 2,
- *                Yrl,    Yml,    Zr_m,   1,
- *                Yml,    Yrl,    Zm_r,   1,
- *                0
- *        };
+ *        var yaddl = []ytab{
+ *                {Yi8, Ynone, Yml, Zibo_m, 2},
+ *                {Yi32, Ynone, Yax, Zil_, 1},
+ *                {Yi32, Ynone, Yml, Zilo_m, 2},
+ *                {Yrl, Ynone, Yml, Zr_m, 1},
+ *                {Yml, Ynone, Yrl, Zm_r, 1},
+ *        }
  *
  * so there are 5 possible types of ADDL instruction that can be laid down, and
  * possible states used to lay them down (Ztype and z pointer, assuming z
- * points at {0x83,(00),0x05,0x81,(00),0x01,0x03}) are:
+ * points at [23]uint8{0x83, 00, 0x05,0x81, 00, 0x01, 0x03}) are:
  *
  *        Yi8, Yml -> Zibo_m, z (0x83, 00)
  *        Yi32, Yax -> Zil_, z+2 (0x05)
@@ -928,23 +1149,25 @@ var ymmxmm0f38 = []ytab{
  * The Pconstant in the optab line controls the prefix bytes to emit.  That's
  * relatively straightforward as this program goes.
  *
- * The switch on t[2] in doasm implements the various Z cases.  Zibo_m, for
+ * The switch on yt.zcase in doasm implements the various Z cases.  Zibo_m, for
  * example, is an opcode byte (z[0]) then an asmando (which is some kind of
  * encoded addressing mode for the Yml arg), and then a single immediate byte.
  * Zilo_m is the same but a long (32-bit) immediate.
  */
 var optab =
 /*	as, ytab, andproto, opcode */
-[]Optab{
+[...]Optab{
 	{obj.AXXX, nil, 0, [23]uint8{}},
 	{AAAA, ynone, P32, [23]uint8{0x37}},
 	{AAAD, ynone, P32, [23]uint8{0xd5, 0x0a}},
 	{AAAM, ynone, P32, [23]uint8{0xd4, 0x0a}},
 	{AAAS, ynone, P32, [23]uint8{0x3f}},
-	{AADCB, yxorb, Pb, [23]uint8{0x14, 0x80, 02, 0x10, 0x10}},
+	{AADCB, yxorb, Pb, [23]uint8{0x14, 0x80, 02, 0x10, 0x12}},
 	{AADCL, yaddl, Px, [23]uint8{0x83, 02, 0x15, 0x81, 02, 0x11, 0x13}},
 	{AADCQ, yaddl, Pw, [23]uint8{0x83, 02, 0x15, 0x81, 02, 0x11, 0x13}},
 	{AADCW, yaddl, Pe, [23]uint8{0x83, 02, 0x15, 0x81, 02, 0x11, 0x13}},
+	{AADCXL, yml_rl, Pq4, [23]uint8{0xf6}},
+	{AADCXQ, yml_rl, Pq4w, [23]uint8{0xf6}},
 	{AADDB, yxorb, Pb, [23]uint8{0x04, 0x80, 00, 0x00, 0x02}},
 	{AADDL, yaddl, Px, [23]uint8{0x83, 00, 0x05, 0x81, 00, 0x01, 0x03}},
 	{AADDPD, yxm, Pq, [23]uint8{0x58}},
@@ -952,14 +1175,18 @@ var optab =
 	{AADDQ, yaddl, Pw, [23]uint8{0x83, 00, 0x05, 0x81, 00, 0x01, 0x03}},
 	{AADDSD, yxm, Pf2, [23]uint8{0x58}},
 	{AADDSS, yxm, Pf3, [23]uint8{0x58}},
+	{AADDSUBPD, yxm, Pq, [23]uint8{0xd0}},
+	{AADDSUBPS, yxm, Pf2, [23]uint8{0xd0}},
 	{AADDW, yaddl, Pe, [23]uint8{0x83, 00, 0x05, 0x81, 00, 0x01, 0x03}},
+	{AADOXL, yml_rl, Pq5, [23]uint8{0xf6}},
+	{AADOXQ, yml_rl, Pq5w, [23]uint8{0xf6}},
 	{AADJSP, nil, 0, [23]uint8{}},
 	{AANDB, yxorb, Pb, [23]uint8{0x24, 0x80, 04, 0x20, 0x22}},
 	{AANDL, yaddl, Px, [23]uint8{0x83, 04, 0x25, 0x81, 04, 0x21, 0x23}},
 	{AANDNPD, yxm, Pq, [23]uint8{0x55}},
 	{AANDNPS, yxm, Pm, [23]uint8{0x55}},
 	{AANDPD, yxm, Pq, [23]uint8{0x54}},
-	{AANDPS, yxm, Pq, [23]uint8{0x54}},
+	{AANDPS, yxm, Pm, [23]uint8{0x54}},
 	{AANDQ, yaddl, Pw, [23]uint8{0x83, 04, 0x25, 0x81, 04, 0x21, 0x23}},
 	{AANDW, yaddl, Pe, [23]uint8{0x83, 04, 0x25, 0x81, 04, 0x21, 0x23}},
 	{AARPL, yrl_ml, P32, [23]uint8{0x63}},
@@ -971,6 +1198,7 @@ var optab =
 	{ABSRL, yml_rl, Pm, [23]uint8{0xbd}},
 	{ABSRQ, yml_rl, Pw, [23]uint8{0x0f, 0xbd}},
 	{ABSRW, yml_rl, Pq, [23]uint8{0xbd}},
+	{ABSWAPW, ybswap, Pe, [23]uint8{0x0f, 0xc8}},
 	{ABSWAPL, ybswap, Px, [23]uint8{0x0f, 0xc8}},
 	{ABSWAPQ, ybswap, Pw, [23]uint8{0x0f, 0xc8}},
 	{ABTCL, ybtl, Pm, [23]uint8{0xba, 07, 0xbb}},
@@ -987,9 +1215,14 @@ var optab =
 	{ABTW, ybtl, Pq, [23]uint8{0xba, 04, 0xa3}},
 	{ABYTE, ybyte, Px, [23]uint8{1}},
 	{obj.ACALL, ycall, Px, [23]uint8{0xff, 02, 0xff, 0x15, 0xe8}},
+	{ACBW, ynone, Pe, [23]uint8{0x98}},
 	{ACDQ, ynone, Px, [23]uint8{0x99}},
+	{ACDQE, ynone, Pw, [23]uint8{0x98}},
+	{ACLAC, ynone, Pm, [23]uint8{01, 0xca}},
 	{ACLC, ynone, Px, [23]uint8{0xf8}},
 	{ACLD, ynone, Px, [23]uint8{0xfc}},
+	{ACLFLUSH, yclflush, Pm, [23]uint8{0xae, 07}},
+	{ACLFLUSHOPT, yclflush, Pq, [23]uint8{0xae, 07}},
 	{ACLI, ynone, Px, [23]uint8{0xfa}},
 	{ACLTS, ynone, Pm, [23]uint8{0x06}},
 	{ACMC, ynone, Px, [23]uint8{0xf5}},
@@ -1079,6 +1312,7 @@ var optab =
 	{ACVTTSS2SL, yxcvfl, Pf3, [23]uint8{0x2c}},
 	{ACVTTSS2SQ, yxcvfq, Pw, [23]uint8{Pf3, 0x2c}},
 	{ACWD, ynone, Pe, [23]uint8{0x99}},
+	{ACWDE, ynone, Px, [23]uint8{0x98}},
 	{ACQO, ynone, Pw, [23]uint8{0x99}},
 	{ADAA, ynone, P32, [23]uint8{0x27}},
 	{ADAS, ynone, P32, [23]uint8{0x2f}},
@@ -1094,12 +1328,15 @@ var optab =
 	{ADIVSD, yxm, Pf2, [23]uint8{0x5e}},
 	{ADIVSS, yxm, Pf3, [23]uint8{0x5e}},
 	{ADIVW, ydivl, Pe, [23]uint8{0xf7, 06}},
+	{ADPPD, yxshuf, Pq, [23]uint8{0x3a, 0x41, 0}},
+	{ADPPS, yxshuf, Pq, [23]uint8{0x3a, 0x40, 0}},
 	{AEMMS, ynone, Pm, [23]uint8{0x77}},
+	{AEXTRACTPS, yextractps, Pq, [23]uint8{0x3a, 0x17, 0}},
 	{AENTER, nil, 0, [23]uint8{}}, /* botch */
-	{AFXRSTOR, ysvrs, Pm, [23]uint8{0xae, 01, 0xae, 01}},
-	{AFXSAVE, ysvrs, Pm, [23]uint8{0xae, 00, 0xae, 00}},
-	{AFXRSTOR64, ysvrs, Pw, [23]uint8{0x0f, 0xae, 01, 0x0f, 0xae, 01}},
-	{AFXSAVE64, ysvrs, Pw, [23]uint8{0x0f, 0xae, 00, 0x0f, 0xae, 00}},
+	{AFXRSTOR, ysvrs_mo, Pm, [23]uint8{0xae, 01, 0xae, 01}},
+	{AFXSAVE, ysvrs_om, Pm, [23]uint8{0xae, 00, 0xae, 00}},
+	{AFXRSTOR64, ysvrs_mo, Pw, [23]uint8{0x0f, 0xae, 01, 0x0f, 0xae, 01}},
+	{AFXSAVE64, ysvrs_om, Pw, [23]uint8{0x0f, 0xae, 00, 0x0f, 0xae, 00}},
 	{AHLT, ynone, Px, [23]uint8{0xf4}},
 	{AIDIVB, ydivb, Pb, [23]uint8{0xf6, 07}},
 	{AIDIVL, ydivl, Px, [23]uint8{0xf7, 07}},
@@ -1109,19 +1346,23 @@ var optab =
 	{AIMULL, yimul, Px, [23]uint8{0xf7, 05, 0x6b, 0x69, Pm, 0xaf}},
 	{AIMULQ, yimul, Pw, [23]uint8{0xf7, 05, 0x6b, 0x69, Pm, 0xaf}},
 	{AIMULW, yimul, Pe, [23]uint8{0xf7, 05, 0x6b, 0x69, Pm, 0xaf}},
-	{AIMUL3Q, yimul3, Pw, [23]uint8{0x6b, 00}},
+	{AIMUL3W, yimul3, Pe, [23]uint8{0x6b, 00, 0x69, 00}},
+	{AIMUL3L, yimul3, Px, [23]uint8{0x6b, 00, 0x69, 00}},
+	{AIMUL3Q, yimul3, Pw, [23]uint8{0x6b, 00, 0x69, 00}},
 	{AINB, yin, Pb, [23]uint8{0xe4, 0xec}},
+	{AINW, yin, Pe, [23]uint8{0xe5, 0xed}},
+	{AINL, yin, Px, [23]uint8{0xe5, 0xed}},
 	{AINCB, yscond, Pb, [23]uint8{0xfe, 00}},
 	{AINCL, yincl, Px1, [23]uint8{0x40, 0xff, 00}},
 	{AINCQ, yincq, Pw, [23]uint8{0xff, 00}},
 	{AINCW, yincq, Pe, [23]uint8{0xff, 00}},
-	{AINL, yin, Px, [23]uint8{0xe5, 0xed}},
 	{AINSB, ynone, Pb, [23]uint8{0x6c}},
 	{AINSL, ynone, Px, [23]uint8{0x6d}},
+	{AINSERTPS, yxshuf, Pq, [23]uint8{0x3a, 0x21, 0}},
 	{AINSW, ynone, Pe, [23]uint8{0x6d}},
+	{AICEBP, ynone, Px, [23]uint8{0xf1}},
 	{AINT, yint, Px, [23]uint8{0xcd}},
 	{AINTO, ynone, P32, [23]uint8{0xce}},
-	{AINW, yin, Pe, [23]uint8{0xe5, 0xed}},
 	{AIRETL, ynone, Px, [23]uint8{0xcf}},
 	{AIRETQ, ynone, Pw, [23]uint8{0xcf}},
 	{AIRETW, ynone, Pe, [23]uint8{0xcf}},
@@ -1151,9 +1392,10 @@ var optab =
 	{AHSUBPS, yxm, Pf2, [23]uint8{0x7d}},
 	{ALAHF, ynone, Px, [23]uint8{0x9f}},
 	{ALARL, yml_rl, Pm, [23]uint8{0x02}},
+	{ALARQ, yml_rl, Pw, [23]uint8{0x0f, 0x02}},
 	{ALARW, yml_rl, Pq, [23]uint8{0x02}},
 	{ALDDQU, ylddqu, Pf2, [23]uint8{0xf0}},
-	{ALDMXCSR, ysvrs, Pm, [23]uint8{0xae, 02, 0xae, 02}},
+	{ALDMXCSR, ysvrs_mo, Pm, [23]uint8{0xae, 02, 0xae, 02}},
 	{ALEAL, ym_rl, Px, [23]uint8{0x8d}},
 	{ALEAQ, ym_rl, Pw, [23]uint8{0x8d}},
 	{ALEAVEL, ynone, P32, [23]uint8{0xc9}},
@@ -1169,8 +1411,13 @@ var optab =
 	{ALOOP, yloop, Px, [23]uint8{0xe2}},
 	{ALOOPEQ, yloop, Px, [23]uint8{0xe1}},
 	{ALOOPNE, yloop, Px, [23]uint8{0xe0}},
+	{ALTR, ydivl, Pm, [23]uint8{0x00, 03}},
+	{ALZCNTL, yml_rl, Pf3, [23]uint8{0xbd}},
+	{ALZCNTQ, yml_rl, Pfw, [23]uint8{0xbd}},
+	{ALZCNTW, yml_rl, Pef3, [23]uint8{0xbd}},
 	{ALSLL, yml_rl, Pm, [23]uint8{0x03}},
 	{ALSLW, yml_rl, Pq, [23]uint8{0x03}},
+	{ALSLQ, yml_rl, Pw, [23]uint8{0x0f, 0x03}},
 	{AMASKMOVOU, yxr, Pe, [23]uint8{0xf7}},
 	{AMASKMOVQ, ymr, Pm, [23]uint8{0xf7}},
 	{AMAXPD, yxm, Pe, [23]uint8{0x5f}},
@@ -1181,21 +1428,25 @@ var optab =
 	{AMINPS, yxm, Pm, [23]uint8{0x5d}},
 	{AMINSD, yxm, Pf2, [23]uint8{0x5d}},
 	{AMINSS, yxm, Pf3, [23]uint8{0x5d}},
+	{AMONITOR, ynone, Px, [23]uint8{0x0f, 0x01, 0xc8, 0}},
+	{AMWAIT, ynone, Px, [23]uint8{0x0f, 0x01, 0xc9, 0}},
 	{AMOVAPD, yxmov, Pe, [23]uint8{0x28, 0x29}},
 	{AMOVAPS, yxmov, Pm, [23]uint8{0x28, 0x29}},
 	{AMOVB, ymovb, Pb, [23]uint8{0x88, 0x8a, 0xb0, 0xc6, 00}},
 	{AMOVBLSX, ymb_rl, Pm, [23]uint8{0xbe}},
 	{AMOVBLZX, ymb_rl, Pm, [23]uint8{0xb6}},
 	{AMOVBQSX, ymb_rl, Pw, [23]uint8{0x0f, 0xbe}},
-	{AMOVBQZX, ymb_rl, Pm, [23]uint8{0xb6}},
+	{AMOVBQZX, ymb_rl, Pw, [23]uint8{0x0f, 0xb6}},
 	{AMOVBWSX, ymb_rl, Pq, [23]uint8{0xbe}},
+	{AMOVSWW, ymb_rl, Pe, [23]uint8{0x0f, 0xbf}},
 	{AMOVBWZX, ymb_rl, Pq, [23]uint8{0xb6}},
+	{AMOVZWW, ymb_rl, Pe, [23]uint8{0x0f, 0xb7}},
 	{AMOVO, yxmov, Pe, [23]uint8{0x6f, 0x7f}},
 	{AMOVOU, yxmov, Pf3, [23]uint8{0x6f, 0x7f}},
 	{AMOVHLPS, yxr, Pm, [23]uint8{0x12}},
 	{AMOVHPD, yxmov, Pe, [23]uint8{0x16, 0x17}},
 	{AMOVHPS, yxmov, Pm, [23]uint8{0x16, 0x17}},
-	{AMOVL, ymovl, Px, [23]uint8{0x89, 0x8b, 0x31, 0xb8, 0xc7, 00, 0x6e, 0x7e, Pe, 0x6e, Pe, 0x7e, 0}},
+	{AMOVL, ymovl, Px, [23]uint8{0x89, 0x8b, 0xb8, 0xc7, 00, 0x6e, 0x7e, Pe, 0x6e, Pe, 0x7e, 0}},
 	{AMOVLHPS, yxr, Pm, [23]uint8{0x16}},
 	{AMOVLPD, yxmov, Pe, [23]uint8{0x12, 0x13}},
 	{AMOVLPS, yxmov, Pm, [23]uint8{0x12, 0x13}},
@@ -1204,10 +1455,11 @@ var optab =
 	{AMOVMSKPD, yxrrl, Pq, [23]uint8{0x50}},
 	{AMOVMSKPS, yxrrl, Pm, [23]uint8{0x50}},
 	{AMOVNTO, yxr_ml, Pe, [23]uint8{0xe7}},
+	{AMOVNTDQA, ylddqu, Pq4, [23]uint8{0x2a}},
 	{AMOVNTPD, yxr_ml, Pe, [23]uint8{0x2b}},
 	{AMOVNTPS, yxr_ml, Pm, [23]uint8{0x2b}},
 	{AMOVNTQ, ymr_ml, Pm, [23]uint8{0xe7}},
-	{AMOVQ, ymovq, Pw8, [23]uint8{0x6f, 0x7f, Pf2, 0xd6, Pf3, 0x7e, Pe, 0xd6, 0x89, 0x8b, 0x31, 0xc7, 00, 0xb8, 0xc7, 00, 0x6e, 0x7e, Pe, 0x6e, Pe, 0x7e, 0}},
+	{AMOVQ, ymovq, Pw8, [23]uint8{0x6f, 0x7f, Pf2, 0xd6, Pf3, 0x7e, Pe, 0xd6, 0x89, 0x8b, 0xc7, 00, 0xb8, 0xc7, 00, 0x6e, 0x7e, Pe, 0x6e, Pe, 0x7e, 0}},
 	{AMOVQOZX, ymrxr, Pf3, [23]uint8{0xd6, 0x7e}},
 	{AMOVSB, ynone, Pb, [23]uint8{0xa4}},
 	{AMOVSD, yxmov, Pf2, [23]uint8{0x10, 0x11}},
@@ -1217,11 +1469,12 @@ var optab =
 	{AMOVSW, ynone, Pe, [23]uint8{0xa5}},
 	{AMOVUPD, yxmov, Pe, [23]uint8{0x10, 0x11}},
 	{AMOVUPS, yxmov, Pm, [23]uint8{0x10, 0x11}},
-	{AMOVW, ymovw, Pe, [23]uint8{0x89, 0x8b, 0x31, 0xb8, 0xc7, 00, 0}},
+	{AMOVW, ymovw, Pe, [23]uint8{0x89, 0x8b, 0xb8, 0xc7, 00, 0}},
 	{AMOVWLSX, yml_rl, Pm, [23]uint8{0xbf}},
 	{AMOVWLZX, yml_rl, Pm, [23]uint8{0xb7}},
 	{AMOVWQSX, yml_rl, Pw, [23]uint8{0x0f, 0xbf}},
 	{AMOVWQZX, yml_rl, Pw, [23]uint8{0x0f, 0xb7}},
+	{AMPSADBW, yxshuf, Pq, [23]uint8{0x3a, 0x42, 0}},
 	{AMULB, ydivb, Pb, [23]uint8{0xf6, 04}},
 	{AMULL, ydivl, Px, [23]uint8{0xf7, 04}},
 	{AMULPD, yxm, Pe, [23]uint8{0x59}},
@@ -1247,12 +1500,16 @@ var optab =
 	{AORW, yaddl, Pe, [23]uint8{0x83, 01, 0x0d, 0x81, 01, 0x09, 0x0b}},
 	{AOUTB, yin, Pb, [23]uint8{0xe6, 0xee}},
 	{AOUTL, yin, Px, [23]uint8{0xe7, 0xef}},
+	{AOUTW, yin, Pe, [23]uint8{0xe7, 0xef}},
 	{AOUTSB, ynone, Pb, [23]uint8{0x6e}},
 	{AOUTSL, ynone, Px, [23]uint8{0x6f}},
 	{AOUTSW, ynone, Pe, [23]uint8{0x6f}},
-	{AOUTW, yin, Pe, [23]uint8{0xe7, 0xef}},
+	{APABSB, yxm_q4, Pq4, [23]uint8{0x1c}},
+	{APABSD, yxm_q4, Pq4, [23]uint8{0x1e}},
+	{APABSW, yxm_q4, Pq4, [23]uint8{0x1d}},
 	{APACKSSLW, ymm, Py1, [23]uint8{0x6b, Pe, 0x6b}},
 	{APACKSSWB, ymm, Py1, [23]uint8{0x63, Pe, 0x63}},
+	{APACKUSDW, yxm_q4, Pq4, [23]uint8{0x2b}},
 	{APACKUSWB, ymm, Py1, [23]uint8{0x67, Pe, 0x67}},
 	{APADDB, ymm, Py1, [23]uint8{0xfc, Pe, 0xfc}},
 	{APADDL, ymm, Py1, [23]uint8{0xfe, Pe, 0xfe}},
@@ -1262,18 +1519,24 @@ var optab =
 	{APADDUSB, ymm, Py1, [23]uint8{0xdc, Pe, 0xdc}},
 	{APADDUSW, ymm, Py1, [23]uint8{0xdd, Pe, 0xdd}},
 	{APADDW, ymm, Py1, [23]uint8{0xfd, Pe, 0xfd}},
+	{APALIGNR, ypalignr, Pq, [23]uint8{0x3a, 0x0f}},
 	{APAND, ymm, Py1, [23]uint8{0xdb, Pe, 0xdb}},
 	{APANDN, ymm, Py1, [23]uint8{0xdf, Pe, 0xdf}},
 	{APAUSE, ynone, Px, [23]uint8{0xf3, 0x90}},
 	{APAVGB, ymm, Py1, [23]uint8{0xe0, Pe, 0xe0}},
 	{APAVGW, ymm, Py1, [23]uint8{0xe3, Pe, 0xe3}},
+	{APBLENDW, yxshuf, Pq, [23]uint8{0x3a, 0x0e, 0}},
 	{APCMPEQB, ymm, Py1, [23]uint8{0x74, Pe, 0x74}},
 	{APCMPEQL, ymm, Py1, [23]uint8{0x76, Pe, 0x76}},
+	{APCMPEQQ, yxm_q4, Pq4, [23]uint8{0x29}},
 	{APCMPEQW, ymm, Py1, [23]uint8{0x75, Pe, 0x75}},
 	{APCMPGTB, ymm, Py1, [23]uint8{0x64, Pe, 0x64}},
 	{APCMPGTL, ymm, Py1, [23]uint8{0x66, Pe, 0x66}},
+	{APCMPGTQ, yxm_q4, Pq4, [23]uint8{0x37}},
 	{APCMPGTW, ymm, Py1, [23]uint8{0x65, Pe, 0x65}},
-	{APEXTRW, yextrw, Pq, [23]uint8{0xc5, 00}},
+	{APCMPISTRI, yxshuf, Pq, [23]uint8{0x3a, 0x63, 0}},
+	{APCMPISTRM, yxshuf, Pq, [23]uint8{0x3a, 0x62, 0}},
+	{APEXTRW, yextrw, Pq, [23]uint8{0xc5, 0, 0x3a, 0x15, 0}},
 	{APEXTRB, yextr, Pq, [23]uint8{0x3a, 0x14, 00}},
 	{APEXTRD, yextr, Pq, [23]uint8{0x3a, 0x16, 00}},
 	{APEXTRQ, yextr, Pq3, [23]uint8{0x3a, 0x16, 00}},
@@ -1288,11 +1551,20 @@ var optab =
 	{APINSRB, yinsr, Pq, [23]uint8{0x3a, 0x20, 00}},
 	{APINSRD, yinsr, Pq, [23]uint8{0x3a, 0x22, 00}},
 	{APINSRQ, yinsr, Pq3, [23]uint8{0x3a, 0x22, 00}},
+	{APMADDUBSW, yxm_q4, Pq4, [23]uint8{0x04}},
 	{APMADDWL, ymm, Py1, [23]uint8{0xf5, Pe, 0xf5}},
+	{APMAXSB, yxm_q4, Pq4, [23]uint8{0x3c}},
+	{APMAXSD, yxm_q4, Pq4, [23]uint8{0x3d}},
 	{APMAXSW, yxm, Pe, [23]uint8{0xee}},
 	{APMAXUB, yxm, Pe, [23]uint8{0xde}},
+	{APMAXUD, yxm_q4, Pq4, [23]uint8{0x3f}},
+	{APMAXUW, yxm_q4, Pq4, [23]uint8{0x3e}},
+	{APMINSB, yxm_q4, Pq4, [23]uint8{0x38}},
+	{APMINSD, yxm_q4, Pq4, [23]uint8{0x39}},
 	{APMINSW, yxm, Pe, [23]uint8{0xea}},
 	{APMINUB, yxm, Pe, [23]uint8{0xda}},
+	{APMINUD, yxm_q4, Pq4, [23]uint8{0x3b}},
+	{APMINUW, yxm_q4, Pq4, [23]uint8{0x3a}},
 	{APMOVMSKB, ymskb, Px, [23]uint8{Pe, 0xd7, 0xd7}},
 	{APMOVSXBD, yxm_q4, Pq4, [23]uint8{0x21}},
 	{APMOVSXBQ, yxm_q4, Pq4, [23]uint8{0x22}},
@@ -1307,6 +1579,7 @@ var optab =
 	{APMOVZXWD, yxm_q4, Pq4, [23]uint8{0x33}},
 	{APMOVZXWQ, yxm_q4, Pq4, [23]uint8{0x34}},
 	{APMULDQ, yxm_q4, Pq4, [23]uint8{0x28}},
+	{APMULHRSW, yxm_q4, Pq4, [23]uint8{0x0b}},
 	{APMULHUW, ymm, Py1, [23]uint8{0xe4, Pe, 0xe4}},
 	{APMULHW, ymm, Py1, [23]uint8{0xe5, Pe, 0xe5}},
 	{APMULLD, yxm_q4, Pq4, [23]uint8{0x40}},
@@ -1330,6 +1603,9 @@ var optab =
 	{APSHUFLW, yxshuf, Pf2, [23]uint8{0x70, 00}},
 	{APSHUFW, ymshuf, Pm, [23]uint8{0x70, 00}},
 	{APSHUFB, ymshufb, Pq, [23]uint8{0x38, 0x00}},
+	{APSIGNB, yxm_q4, Pq4, [23]uint8{0x08}},
+	{APSIGND, yxm_q4, Pq4, [23]uint8{0x0a}},
+	{APSIGNW, yxm_q4, Pq4, [23]uint8{0x09}},
 	{APSLLO, ypsdq, Pq, [23]uint8{0x73, 07}},
 	{APSLLL, yps, Py3, [23]uint8{0xf2, 0x72, 06, Pe, 0xf2, Pe, 0x72, 06}},
 	{APSLLQ, yps, Py3, [23]uint8{0xf3, 0x73, 06, Pe, 0xf3, Pe, 0x73, 06}},
@@ -1348,6 +1624,7 @@ var optab =
 	{APSUBUSB, yxm, Pe, [23]uint8{0xd8}},
 	{APSUBUSW, yxm, Pe, [23]uint8{0xd9}},
 	{APSUBW, yxm, Pe, [23]uint8{0xf9}},
+	{APTEST, yxm_q4, Pq4, [23]uint8{0x17}},
 	{APUNPCKHBW, ymm, Py1, [23]uint8{0x68, Pe, 0x68}},
 	{APUNPCKHLQ, ymm, Py1, [23]uint8{0x6a, Pe, 0x6a}},
 	{APUNPCKHQDQ, yxm, Pe, [23]uint8{0x6d}},
@@ -1392,7 +1669,7 @@ var optab =
 	{ARORW, yshl, Pe, [23]uint8{0xd1, 01, 0xc1, 01, 0xd3, 01, 0xd3, 01}},
 	{ARSQRTPS, yxm, Pm, [23]uint8{0x52}},
 	{ARSQRTSS, yxm, Pf3, [23]uint8{0x52}},
-	{ASAHF, ynone, Px1, [23]uint8{0x9e, 00, 0x86, 0xe0, 0x50, 0x9d}}, /* XCHGB AH,AL; PUSH AX; POPFL */
+	{ASAHF, ynone, Px, [23]uint8{0x9e, 00, 0x86, 0xe0, 0x50, 0x9d}}, /* XCHGB AH,AL; PUSH AX; POPFL */
 	{ASALB, yshb, Pb, [23]uint8{0xd0, 04, 0xc0, 04, 0xd2, 04}},
 	{ASALL, yshl, Px, [23]uint8{0xd1, 04, 0xc1, 04, 0xd3, 04, 0xd3, 04}},
 	{ASALQ, yshl, Pw, [23]uint8{0xd1, 04, 0xc1, 04, 0xd3, 04, 0xd3, 04}},
@@ -1442,7 +1719,7 @@ var optab =
 	{ASTC, ynone, Px, [23]uint8{0xf9}},
 	{ASTD, ynone, Px, [23]uint8{0xfd}},
 	{ASTI, ynone, Px, [23]uint8{0xfb}},
-	{ASTMXCSR, ysvrs, Pm, [23]uint8{0xae, 03, 0xae, 03}},
+	{ASTMXCSR, ysvrs_om, Pm, [23]uint8{0xae, 03, 0xae, 03}},
 	{ASTOSB, ynone, Pb, [23]uint8{0xaa}},
 	{ASTOSL, ynone, Px, [23]uint8{0xab}},
 	{ASTOSQ, ynone, Pw, [23]uint8{0xab}},
@@ -1502,16 +1779,22 @@ var optab =
 	{AFCMOVEQ, yfcmv, Px, [23]uint8{0xda, 01}},
 	{AFCMOVHI, yfcmv, Px, [23]uint8{0xdb, 02}},
 	{AFCMOVLS, yfcmv, Px, [23]uint8{0xda, 02}},
+	{AFCMOVB, yfcmv, Px, [23]uint8{0xda, 00}},
+	{AFCMOVBE, yfcmv, Px, [23]uint8{0xda, 02}},
+	{AFCMOVNB, yfcmv, Px, [23]uint8{0xdb, 00}},
+	{AFCMOVNBE, yfcmv, Px, [23]uint8{0xdb, 02}},
+	{AFCMOVE, yfcmv, Px, [23]uint8{0xda, 01}},
 	{AFCMOVNE, yfcmv, Px, [23]uint8{0xdb, 01}},
 	{AFCMOVNU, yfcmv, Px, [23]uint8{0xdb, 03}},
+	{AFCMOVU, yfcmv, Px, [23]uint8{0xda, 03}},
 	{AFCMOVUN, yfcmv, Px, [23]uint8{0xda, 03}},
 	{AFCOMD, yfadd, Px, [23]uint8{0xdc, 02, 0xd8, 02, 0xdc, 02}},  /* botch */
 	{AFCOMDP, yfadd, Px, [23]uint8{0xdc, 03, 0xd8, 03, 0xdc, 03}}, /* botch */
 	{AFCOMDPP, ycompp, Px, [23]uint8{0xde, 03}},
 	{AFCOMF, yfmvx, Px, [23]uint8{0xd8, 02}},
 	{AFCOMFP, yfmvx, Px, [23]uint8{0xd8, 03}},
-	{AFCOMI, yfmvx, Px, [23]uint8{0xdb, 06}},
-	{AFCOMIP, yfmvx, Px, [23]uint8{0xdf, 06}},
+	{AFCOMI, yfcmv, Px, [23]uint8{0xdb, 06}},
+	{AFCOMIP, yfcmv, Px, [23]uint8{0xdf, 06}},
 	{AFCOML, yfmvx, Px, [23]uint8{0xda, 02}},
 	{AFCOMLP, yfmvx, Px, [23]uint8{0xda, 03}},
 	{AFCOMW, yfmvx, Px, [23]uint8{0xde, 02}},
@@ -1553,15 +1836,17 @@ var optab =
 	{AFDIVRD, yfadd, Px, [23]uint8{0xdc, 07, 0xd8, 07, 0xdc, 06}},
 	{AFXCHD, yfxch, Px, [23]uint8{0xd9, 01, 0xd9, 01}},
 	{AFFREE, nil, 0, [23]uint8{}},
-	{AFLDCW, ysvrs, Px, [23]uint8{0xd9, 05, 0xd9, 05}},
-	{AFLDENV, ysvrs, Px, [23]uint8{0xd9, 04, 0xd9, 04}},
-	{AFRSTOR, ysvrs, Px, [23]uint8{0xdd, 04, 0xdd, 04}},
-	{AFSAVE, ysvrs, Px, [23]uint8{0xdd, 06, 0xdd, 06}},
-	{AFSTCW, ysvrs, Px, [23]uint8{0xd9, 07, 0xd9, 07}},
-	{AFSTENV, ysvrs, Px, [23]uint8{0xd9, 06, 0xd9, 06}},
+	{AFLDCW, ysvrs_mo, Px, [23]uint8{0xd9, 05, 0xd9, 05}},
+	{AFLDENV, ysvrs_mo, Px, [23]uint8{0xd9, 04, 0xd9, 04}},
+	{AFRSTOR, ysvrs_mo, Px, [23]uint8{0xdd, 04, 0xdd, 04}},
+	{AFSAVE, ysvrs_om, Px, [23]uint8{0xdd, 06, 0xdd, 06}},
+	{AFSTCW, ysvrs_om, Px, [23]uint8{0xd9, 07, 0xd9, 07}},
+	{AFSTENV, ysvrs_om, Px, [23]uint8{0xd9, 06, 0xd9, 06}},
 	{AFSTSW, ystsw, Px, [23]uint8{0xdd, 07, 0xdf, 0xe0}},
 	{AF2XM1, ynone, Px, [23]uint8{0xd9, 0xf0}},
 	{AFABS, ynone, Px, [23]uint8{0xd9, 0xe1}},
+	{AFBLD, ysvrs_mo, Px, [23]uint8{0xdf, 04}},
+	{AFBSTP, yclflush, Px, [23]uint8{0xdf, 06}},
 	{AFCHS, ynone, Px, [23]uint8{0xd9, 0xe0}},
 	{AFCLEX, ynone, Px, [23]uint8{0xdb, 0xe2}},
 	{AFCOS, ynone, Px, [23]uint8{0xd9, 0xff}},
@@ -1595,12 +1880,15 @@ var optab =
 	{ACMPXCHGW, yrl_ml, Pe, [23]uint8{0x0f, 0xb1}},
 	{ACMPXCHGQ, yrl_ml, Pw, [23]uint8{0x0f, 0xb1}},
 	{ACMPXCHG8B, yscond, Pm, [23]uint8{0xc7, 01}},
+	{ACMPXCHG16B, yscond, Pw, [23]uint8{0x0f, 0xc7, 01}},
 	{AINVD, ynone, Pm, [23]uint8{0x08}},
 	{AINVLPG, ydivb, Pm, [23]uint8{0x01, 07}},
+	{AINVPCID, ycrc32l, Pe, [23]uint8{0x0f, 0x38, 0x82, 0}},
 	{ALFENCE, ynone, Pm, [23]uint8{0xae, 0xe8}},
 	{AMFENCE, ynone, Pm, [23]uint8{0xae, 0xf0}},
 	{AMOVNTIL, yrl_ml, Pm, [23]uint8{0xc3}},
 	{AMOVNTIQ, yrl_ml, Pw, [23]uint8{0x0f, 0xc3}},
+	{ARDPKRU, ynone, Pm, [23]uint8{0x01, 0xee, 0}},
 	{ARDMSR, ynone, Pm, [23]uint8{0x32}},
 	{ARDPMC, ynone, Pm, [23]uint8{0x33}},
 	{ARDTSC, ynone, Pm, [23]uint8{0x31}},
@@ -1609,12 +1897,15 @@ var optab =
 	{ASYSRET, ynone, Pm, [23]uint8{0x07}},
 	{AWBINVD, ynone, Pm, [23]uint8{0x09}},
 	{AWRMSR, ynone, Pm, [23]uint8{0x30}},
+	{AWRPKRU, ynone, Pm, [23]uint8{0x01, 0xef, 0}},
 	{AXADDB, yrb_mb, Pb, [23]uint8{0x0f, 0xc0}},
 	{AXADDL, yrl_ml, Px, [23]uint8{0x0f, 0xc1}},
 	{AXADDQ, yrl_ml, Pw, [23]uint8{0x0f, 0xc1}},
 	{AXADDW, yrl_ml, Pe, [23]uint8{0x0f, 0xc1}},
-	{ACRC32B, ycrc32l, Px, [23]uint8{0xf2, 0x0f, 0x38, 0xf0, 0}},
+	{ACRC32B, ycrc32b, Px, [23]uint8{0xf2, 0x0f, 0x38, 0xf0, 0}},
+	{ACRC32L, ycrc32l, Px, [23]uint8{0xf2, 0x0f, 0x38, 0xf1, 0}},
 	{ACRC32Q, ycrc32l, Pw, [23]uint8{0xf2, 0x0f, 0x38, 0xf1, 0}},
+	{ACRC32W, ycrc32l, Pe, [23]uint8{0xf2, 0x0f, 0x38, 0xf1, 0}},
 	{APREFETCHT0, yprefetch, Pm, [23]uint8{0x18, 01}},
 	{APREFETCHT1, yprefetch, Pm, [23]uint8{0x18, 02}},
 	{APREFETCHT2, yprefetch, Pm, [23]uint8{0x18, 03}},
@@ -1634,63 +1925,91 @@ var optab =
 	{APSHUFD, yxshuf, Pq, [23]uint8{0x70, 0}},
 	{APCLMULQDQ, yxshuf, Pq, [23]uint8{0x3a, 0x44, 0}},
 	{APCMPESTRI, yxshuf, Pq, [23]uint8{0x3a, 0x61, 0}},
+	{APCMPESTRM, yxshuf, Pq, [23]uint8{0x3a, 0x60, 0}},
 	{AMOVDDUP, yxm, Pf2, [23]uint8{0x12}},
 	{AMOVSHDUP, yxm, Pf3, [23]uint8{0x16}},
 	{AMOVSLDUP, yxm, Pf3, [23]uint8{0x12}},
 
-	{AANDNL, yvex_r3, Pvex, [23]uint8{VEX_LZ_0F38_W0, 0xF2}},
-	{AANDNQ, yvex_r3, Pvex, [23]uint8{VEX_LZ_0F38_W1, 0xF2}},
-	{ABEXTRL, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_0F38_W0, 0xF7}},
-	{ABEXTRQ, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_0F38_W1, 0xF7}},
-	{ABZHIL, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_0F38_W0, 0xF5}},
-	{ABZHIQ, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_0F38_W1, 0xF5}},
-	{AMULXL, yvex_r3, Pvex, [23]uint8{VEX_LZ_F2_0F38_W0, 0xF6}},
-	{AMULXQ, yvex_r3, Pvex, [23]uint8{VEX_LZ_F2_0F38_W1, 0xF6}},
-	{APDEPL, yvex_r3, Pvex, [23]uint8{VEX_LZ_F2_0F38_W0, 0xF5}},
-	{APDEPQ, yvex_r3, Pvex, [23]uint8{VEX_LZ_F2_0F38_W1, 0xF5}},
-	{APEXTL, yvex_r3, Pvex, [23]uint8{VEX_LZ_F3_0F38_W0, 0xF5}},
-	{APEXTQ, yvex_r3, Pvex, [23]uint8{VEX_LZ_F3_0F38_W1, 0xF5}},
-	{ASARXL, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_F3_0F38_W0, 0xF7}},
-	{ASARXQ, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_F3_0F38_W1, 0xF7}},
-	{ASHLXL, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_66_0F38_W0, 0xF7}},
-	{ASHLXQ, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_66_0F38_W1, 0xF7}},
-	{ASHRXL, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_F2_0F38_W0, 0xF7}},
-	{ASHRXQ, yvex_vmr3, Pvex, [23]uint8{VEX_LZ_F2_0F38_W1, 0xF7}},
+	{ARDTSCP, ynone, Pm, [23]uint8{0x01, 0xf9, 0}},
+	{ASTAC, ynone, Pm, [23]uint8{0x01, 0xcb, 0}},
+	{AUD1, ynone, Pm, [23]uint8{0xb9, 0}},
+	{AUD2, ynone, Pm, [23]uint8{0x0b, 0}},
+	{ASYSENTER, ynone, Px, [23]uint8{0x0f, 0x34, 0}},
+	{ASYSENTER64, ynone, Pw, [23]uint8{0x0f, 0x34, 0}},
+	{ASYSEXIT, ynone, Px, [23]uint8{0x0f, 0x35, 0}},
+	{ASYSEXIT64, ynone, Pw, [23]uint8{0x0f, 0x35, 0}},
+	{ALMSW, ydivl, Pm, [23]uint8{0x01, 06}},
+	{ALLDT, ydivl, Pm, [23]uint8{0x00, 02}},
+	{ALIDT, ysvrs_mo, Pm, [23]uint8{0x01, 03}},
+	{ALGDT, ysvrs_mo, Pm, [23]uint8{0x01, 02}},
+	{ATZCNTW, ycrc32l, Pe, [23]uint8{0xf3, 0x0f, 0xbc, 0}},
+	{ATZCNTL, ycrc32l, Px, [23]uint8{0xf3, 0x0f, 0xbc, 0}},
+	{ATZCNTQ, ycrc32l, Pw, [23]uint8{0xf3, 0x0f, 0xbc, 0}},
+	{AXRSTOR, ydivl, Px, [23]uint8{0x0f, 0xae, 05}},
+	{AXRSTOR64, ydivl, Pw, [23]uint8{0x0f, 0xae, 05}},
+	{AXRSTORS, ydivl, Px, [23]uint8{0x0f, 0xc7, 03}},
+	{AXRSTORS64, ydivl, Pw, [23]uint8{0x0f, 0xc7, 03}},
+	{AXSAVE, yclflush, Px, [23]uint8{0x0f, 0xae, 04}},
+	{AXSAVE64, yclflush, Pw, [23]uint8{0x0f, 0xae, 04}},
+	{AXSAVEOPT, yclflush, Px, [23]uint8{0x0f, 0xae, 06}},
+	{AXSAVEOPT64, yclflush, Pw, [23]uint8{0x0f, 0xae, 06}},
+	{AXSAVEC, yclflush, Px, [23]uint8{0x0f, 0xc7, 04}},
+	{AXSAVEC64, yclflush, Pw, [23]uint8{0x0f, 0xc7, 04}},
+	{AXSAVES, yclflush, Px, [23]uint8{0x0f, 0xc7, 05}},
+	{AXSAVES64, yclflush, Pw, [23]uint8{0x0f, 0xc7, 05}},
+	{ASGDT, yclflush, Pm, [23]uint8{0x01, 00}},
+	{ASIDT, yclflush, Pm, [23]uint8{0x01, 01}},
+	{ARDRANDW, yrdrand, Pe, [23]uint8{0x0f, 0xc7, 06}},
+	{ARDRANDL, yrdrand, Px, [23]uint8{0x0f, 0xc7, 06}},
+	{ARDRANDQ, yrdrand, Pw, [23]uint8{0x0f, 0xc7, 06}},
+	{ARDSEEDW, yrdrand, Pe, [23]uint8{0x0f, 0xc7, 07}},
+	{ARDSEEDL, yrdrand, Px, [23]uint8{0x0f, 0xc7, 07}},
+	{ARDSEEDQ, yrdrand, Pw, [23]uint8{0x0f, 0xc7, 07}},
+	{ASTRW, yincq, Pe, [23]uint8{0x0f, 0x00, 01}},
+	{ASTRL, yincq, Px, [23]uint8{0x0f, 0x00, 01}},
+	{ASTRQ, yincq, Pw, [23]uint8{0x0f, 0x00, 01}},
+	{AXSETBV, ynone, Pm, [23]uint8{0x01, 0xd1, 0}},
+	{AMOVBEWW, ymovbe, Pq, [23]uint8{0x38, 0xf0, 0, 0x38, 0xf1, 0}},
+	{AMOVBELL, ymovbe, Pm, [23]uint8{0x38, 0xf0, 0, 0x38, 0xf1, 0}},
+	{AMOVBEQQ, ymovbe, Pw, [23]uint8{0x0f, 0x38, 0xf0, 0, 0x0f, 0x38, 0xf1, 0}},
+	{ANOPW, ydivl, Pe, [23]uint8{0x0f, 0x1f, 00}},
+	{ANOPL, ydivl, Px, [23]uint8{0x0f, 0x1f, 00}},
+	{ASLDTW, yincq, Pe, [23]uint8{0x0f, 0x00, 00}},
+	{ASLDTL, yincq, Px, [23]uint8{0x0f, 0x00, 00}},
+	{ASLDTQ, yincq, Pw, [23]uint8{0x0f, 0x00, 00}},
+	{ASMSWW, yincq, Pe, [23]uint8{0x0f, 0x01, 04}},
+	{ASMSWL, yincq, Px, [23]uint8{0x0f, 0x01, 04}},
+	{ASMSWQ, yincq, Pw, [23]uint8{0x0f, 0x01, 04}},
+	{ABLENDVPS, yblendvpd, Pq4, [23]uint8{0x14}},
+	{ABLENDVPD, yblendvpd, Pq4, [23]uint8{0x15}},
+	{APBLENDVB, yblendvpd, Pq4, [23]uint8{0x10}},
+	{ASHA1MSG1, yaes, Px, [23]uint8{0x0f, 0x38, 0xc9, 0}},
+	{ASHA1MSG2, yaes, Px, [23]uint8{0x0f, 0x38, 0xca, 0}},
+	{ASHA1NEXTE, yaes, Px, [23]uint8{0x0f, 0x38, 0xc8, 0}},
+	{ASHA256MSG1, yaes, Px, [23]uint8{0x0f, 0x38, 0xcc, 0}},
+	{ASHA256MSG2, yaes, Px, [23]uint8{0x0f, 0x38, 0xcd, 0}},
+	{ASHA1RNDS4, ysha1rnds4, Pm, [23]uint8{0x3a, 0xcc, 0}},
+	{ASHA256RNDS2, ysha256rnds2, Px, [23]uint8{0x0f, 0x38, 0xcb, 0}},
+	{ARDFSBASEL, yrdrand, Pf3, [23]uint8{0xae, 00}},
+	{ARDFSBASEQ, yrdrand, Pfw, [23]uint8{0xae, 00}},
+	{ARDGSBASEL, yrdrand, Pf3, [23]uint8{0xae, 01}},
+	{ARDGSBASEQ, yrdrand, Pfw, [23]uint8{0xae, 01}},
+	{AWRFSBASEL, ywrfsbase, Pf3, [23]uint8{0xae, 02}},
+	{AWRFSBASEQ, ywrfsbase, Pfw, [23]uint8{0xae, 02}},
+	{AWRGSBASEL, ywrfsbase, Pf3, [23]uint8{0xae, 03}},
+	{AWRGSBASEQ, ywrfsbase, Pfw, [23]uint8{0xae, 03}},
+	{ALFSW, ym_rl, Pe, [23]uint8{0x0f, 0xb4}},
+	{ALFSL, ym_rl, Px, [23]uint8{0x0f, 0xb4}},
+	{ALFSQ, ym_rl, Pw, [23]uint8{0x0f, 0xb4}},
+	{ALGSW, ym_rl, Pe, [23]uint8{0x0f, 0xb5}},
+	{ALGSL, ym_rl, Px, [23]uint8{0x0f, 0xb5}},
+	{ALGSQ, ym_rl, Pw, [23]uint8{0x0f, 0xb5}},
+	{ALSSW, ym_rl, Pe, [23]uint8{0x0f, 0xb2}},
+	{ALSSL, ym_rl, Px, [23]uint8{0x0f, 0xb2}},
+	{ALSSQ, ym_rl, Pw, [23]uint8{0x0f, 0xb2}},
 
-	{AVZEROUPPER, ynone, Px, [23]uint8{0xc5, 0xf8, 0x77}},
-	{AVMOVDQU, yvex_vmovdqa, Pvex, [23]uint8{VEX_128_F3_0F_WIG, 0x6F, VEX_128_F3_0F_WIG, 0x7F, VEX_256_F3_0F_WIG, 0x6F, VEX_256_F3_0F_WIG, 0x7F}},
-	{AVMOVDQA, yvex_vmovdqa, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x6F, VEX_128_66_0F_WIG, 0x7F, VEX_256_66_0F_WIG, 0x6F, VEX_256_66_0F_WIG, 0x7F}},
-	{AVMOVNTDQ, yvex_vmovntdq, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xE7, VEX_256_66_0F_WIG, 0xE7}},
-	{AVPCMPEQB, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x74, VEX_256_66_0F_WIG, 0x74}},
-	{AVPXOR, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xEF, VEX_256_66_0F_WIG, 0xEF}},
-	{AVPMOVMSKB, yvex_xyr2, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xD7, VEX_256_66_0F_WIG, 0xD7}},
-	{AVPAND, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xDB, VEX_256_66_0F_WIG, 0xDB}},
-	{AVPBROADCASTB, yvex_vpbroadcast, Pvex, [23]uint8{VEX_128_66_0F38_W0, 0x78, VEX_256_66_0F38_W0, 0x78}},
-	{AVPTEST, yvex_xy2, Pvex, [23]uint8{VEX_128_66_0F38_WIG, 0x17, VEX_256_66_0F38_WIG, 0x17}},
-	{AVPSHUFB, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F38_WIG, 0x00, VEX_256_66_0F38_WIG, 0x00}},
-	{AVPSHUFD, yvex_xyi3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x70, VEX_256_66_0F_WIG, 0x70, VEX_128_66_0F_WIG, 0x70, VEX_256_66_0F_WIG, 0x70}},
-	{AVPOR, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xeb, VEX_256_66_0F_WIG, 0xeb}},
-	{AVPADDQ, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xd4, VEX_256_66_0F_WIG, 0xd4}},
-	{AVPADDD, yvex_xy3, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0xfe, VEX_256_66_0F_WIG, 0xfe}},
-	{AVPSLLD, yvex_shift, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x72, 0xf0, VEX_256_66_0F_WIG, 0x72, 0xf0, VEX_128_66_0F_WIG, 0xf2, VEX_256_66_0F_WIG, 0xf2}},
-	{AVPSLLQ, yvex_shift, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x73, 0xf0, VEX_256_66_0F_WIG, 0x73, 0xf0, VEX_128_66_0F_WIG, 0xf3, VEX_256_66_0F_WIG, 0xf3}},
-	{AVPSRLD, yvex_shift, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x72, 0xd0, VEX_256_66_0F_WIG, 0x72, 0xd0, VEX_128_66_0F_WIG, 0xd2, VEX_256_66_0F_WIG, 0xd2}},
-	{AVPSRLQ, yvex_shift, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x73, 0xd0, VEX_256_66_0F_WIG, 0x73, 0xd0, VEX_128_66_0F_WIG, 0xd3, VEX_256_66_0F_WIG, 0xd3}},
-	{AVPSRLDQ, yvex_shift_dq, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x73, 0xd8, VEX_256_66_0F_WIG, 0x73, 0xd8}},
-	{AVPSLLDQ, yvex_shift_dq, Pvex, [23]uint8{VEX_128_66_0F_WIG, 0x73, 0xf8, VEX_256_66_0F_WIG, 0x73, 0xf8}},
-	{AVPERM2F128, yvex_yyi4, Pvex, [23]uint8{VEX_256_66_0F3A_W0, 0x06}},
-	{AVPALIGNR, yvex_yyi4, Pvex, [23]uint8{VEX_256_66_0F3A_WIG, 0x0f}},
-	{AVPBLENDD, yvex_yyi4, Pvex, [23]uint8{VEX_256_66_0F3A_WIG, 0x02}},
-	{AVINSERTI128, yvex_xyi4, Pvex, [23]uint8{VEX_256_66_0F3A_WIG, 0x38}},
-	{AVPERM2I128, yvex_yyi4, Pvex, [23]uint8{VEX_256_66_0F3A_WIG, 0x46}},
-	{ARORXL, yvex_ri3, Pvex, [23]uint8{VEX_LZ_F2_0F3A_W0, 0xf0}},
-	{ARORXQ, yvex_ri3, Pvex, [23]uint8{VEX_LZ_F2_0F3A_W1, 0xf0}},
-	{AVBROADCASTSD, yvex_vpbroadcast_sd, Pvex, [23]uint8{VEX_256_66_0F38_W0, 0x19}},
-	{AVBROADCASTSS, yvex_vpbroadcast, Pvex, [23]uint8{VEX_128_66_0F38_W0, 0x18, VEX_256_66_0F38_W0, 0x18}},
-	{AVMOVDDUP, yvex_xy2, Pvex, [23]uint8{VEX_128_F2_0F_WIG, 0x12, VEX_256_F2_0F_WIG, 0x12}},
-	{AVMOVSHDUP, yvex_xy2, Pvex, [23]uint8{VEX_128_F3_0F_WIG, 0x16, VEX_256_F3_0F_WIG, 0x16}},
-	{AVMOVSLDUP, yvex_xy2, Pvex, [23]uint8{VEX_128_F3_0F_WIG, 0x12, VEX_256_F3_0F_WIG, 0x12}},
-
+	{ABLENDPD, yxshuf, Pq, [23]uint8{0x3a, 0x0d, 0}},
+	{ABLENDPS, yxshuf, Pq, [23]uint8{0x3a, 0x0c, 0}},
 	{AXACQUIRE, ynone, Px, [23]uint8{0xf2}},
 	{AXRELEASE, ynone, Px, [23]uint8{0xf3}},
 	{AXBEGIN, yxbegin, Px, [23]uint8{0xc7, 0xf8}},
@@ -1698,28 +2017,65 @@ var optab =
 	{AXEND, ynone, Px, [23]uint8{0x0f, 01, 0xd5}},
 	{AXTEST, ynone, Px, [23]uint8{0x0f, 01, 0xd6}},
 	{AXGETBV, ynone, Pm, [23]uint8{01, 0xd0}},
-	{obj.AUSEFIELD, ynop, Px, [23]uint8{0, 0}},
-	{obj.ATYPE, nil, 0, [23]uint8{}},
 	{obj.AFUNCDATA, yfuncdata, Px, [23]uint8{0, 0}},
 	{obj.APCDATA, ypcdata, Px, [23]uint8{0, 0}},
-	{obj.AVARDEF, nil, 0, [23]uint8{}},
-	{obj.AVARKILL, nil, 0, [23]uint8{}},
 	{obj.ADUFFCOPY, yduff, Px, [23]uint8{0xe8}},
 	{obj.ADUFFZERO, yduff, Px, [23]uint8{0xe8}},
+
+	// AVX2 gather instructions.
+	// Added as a part of VSIB support implementation,
+	// when x86avxgen will output these, they will be moved to
+	// vex_optabs.go where they belong.
+	{AVGATHERDPD, yvpgatherdq, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW1, 0x92,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW1, 0x92,
+	}},
+	{AVGATHERQPD, yvpgatherqq, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW1, 0x93,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW1, 0x93,
+	}},
+	{AVGATHERDPS, yvpgatherqq, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW0, 0x92,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW0, 0x92,
+	}},
+	{AVGATHERQPS, yvgatherqps, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW0, 0x93,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW0, 0x93,
+	}},
+	{AVPGATHERDD, yvpgatherqq, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW0, 0x90,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW0, 0x90,
+	}},
+	{AVPGATHERQD, yvgatherqps, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW0, 0x91,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW0, 0x91,
+	}},
+	{AVPGATHERDQ, yvpgatherdq, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW1, 0x90,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW1, 0x90,
+	}},
+	{AVPGATHERQQ, yvpgatherqq, Pvex, [23]uint8{
+		vexDDS | vex128 | vex66 | vex0F38 | vexW1, 0x91,
+		vexDDS | vex256 | vex66 | vex0F38 | vexW1, 0x91,
+	}},
+
 	{obj.AEND, nil, 0, [23]uint8{}},
 	{0, nil, 0, [23]uint8{}},
 }
 
 var opindex [(ALAST + 1) & obj.AMask]*Optab
 
-// isextern reports whether s describes an external symbol that must avoid pc-relative addressing.
+// useAbs reports whether s describes a symbol that must avoid pc-relative addressing.
 // This happens on systems like Solaris that call .so functions instead of system calls.
 // It does not seem to be necessary for any other systems. This is probably working
 // around a Solaris-specific bug that should be fixed differently, but we don't know
 // what that bug is. And this does fix it.
-func isextern(s *obj.LSym) bool {
-	// All the Solaris dynamic imports from libc.so begin with "libc_".
-	return strings.HasPrefix(s.Name, "libc_")
+func useAbs(ctxt *obj.Link, s *obj.LSym) bool {
+	if ctxt.Headtype == objabi.Hsolaris {
+		// All the Solaris dynamic imports from libc.so begin with "libc_".
+		return strings.HasPrefix(s.Name, "libc_")
+	}
+	return ctxt.Arch.Family == sys.I386 && !ctxt.Flag_shared
 }
 
 // single-instruction no-ops of various lengths.
@@ -1760,24 +2116,24 @@ func naclpad(ctxt *obj.Link, s *obj.LSym, c int32, pad int32) int32 {
 }
 
 func spadjop(ctxt *obj.Link, p *obj.Prog, l, q obj.As) obj.As {
-	if p.Mode != 64 || ctxt.Arch.PtrSize == 4 {
+	if ctxt.Arch.Family != sys.AMD64 || ctxt.Arch.PtrSize == 4 {
 		return l
 	}
 	return q
 }
 
-func span6(ctxt *obj.Link, s *obj.LSym) {
-	ctxt.Cursym = s
-
+func span6(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	if s.P != nil {
 		return
 	}
 
 	if ycover[0] == 0 {
-		instinit()
+		ctxt.Diag("x86 tables not initialized, call x86.instinit first")
 	}
 
-	for p := ctxt.Cursym.Text; p != nil; p = p.Link {
+	var asmbuf AsmBuf
+
+	for p := s.Func.Text; p != nil; p = p.Link {
 		if p.To.Type == obj.TYPE_BRANCH {
 			if p.Pcond == nil {
 				p.Pcond = p
@@ -1803,7 +2159,7 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 
 	var q *obj.Prog
 	var count int64 // rough count of number of instructions
-	for p := s.Text; p != nil; p = p.Link {
+	for p := s.Func.Text; p != nil; p = p.Link {
 		count++
 		p.Back = 2 // use short branches first time through
 		q = p.Pcond
@@ -1834,10 +2190,6 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 	n := 0
 	var c int32
 	errors := ctxt.Errors
-	var deferreturn *obj.LSym
-	if ctxt.Headtype == obj.Hnacl {
-		deferreturn = obj.Linklookup(ctxt, "runtime.deferreturn", 0)
-	}
 	for {
 		loop := int32(0)
 		for i := range s.R {
@@ -1846,9 +2198,8 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 		s.R = s.R[:0]
 		s.P = s.P[:0]
 		c = 0
-		for p := s.Text; p != nil; p = p.Link {
-			if ctxt.Headtype == obj.Hnacl && p.Isize > 0 {
-
+		for p := s.Func.Text; p != nil; p = p.Link {
+			if ctxt.Headtype == objabi.Hnacl && p.Isize > 0 {
 				// pad everything to avoid crossing 32-byte boundary
 				if c>>5 != (c+int32(p.Isize)-1)>>5 {
 					c = naclpad(ctxt, s, c, -c&31)
@@ -1917,15 +2268,15 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 			p.Rel = nil
 
 			p.Pc = int64(c)
-			asmins(ctxt, p)
-			m := ctxt.AsmBuf.Len()
+			asmbuf.asmins(ctxt, s, p)
+			m := asmbuf.Len()
 			if int(p.Isize) != m {
 				p.Isize = uint8(m)
 				loop++
 			}
 
 			s.Grow(p.Pc + int64(m))
-			copy(s.P[p.Pc:], ctxt.AsmBuf.Bytes())
+			copy(s.P[p.Pc:], asmbuf.Bytes())
 			c += int32(m)
 		}
 
@@ -1942,7 +2293,7 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 		}
 	}
 
-	if ctxt.Headtype == obj.Hnacl {
+	if ctxt.Headtype == objabi.Hnacl {
 		c = naclpad(ctxt, s, c, -c&31)
 	}
 
@@ -1969,11 +2320,32 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 	}
 }
 
-func instinit() {
+func instinit(ctxt *obj.Link) {
+	if ycover[0] != 0 {
+		// Already initialized; stop now.
+		// This happens in the cmd/asm tests,
+		// each of which re-initializes the arch.
+		return
+	}
+
+	switch ctxt.Headtype {
+	case objabi.Hplan9:
+		plan9privates = ctxt.Lookup("_privates")
+	case objabi.Hnacl:
+		deferreturn = ctxt.Lookup("runtime.deferreturn")
+	}
+
+	for i := range vexOptab {
+		c := vexOptab[i].as
+		if opindex[c&obj.AMask] != nil {
+			ctxt.Diag("phase error in vexOptab: %d (%v)", i, c)
+		}
+		opindex[c&obj.AMask] = &vexOptab[i]
+	}
 	for i := 1; optab[i].as != 0; i++ {
 		c := optab[i].as
 		if opindex[c&obj.AMask] != nil {
-			log.Fatalf("phase error in optab: %d (%v)", i, c)
+			ctxt.Diag("phase error in optab: %d (%v)", i, c)
 		}
 		opindex[c&obj.AMask] = &optab[i]
 	}
@@ -1982,25 +2354,33 @@ func instinit() {
 		ycover[i*Ymax+i] = 1
 	}
 
+	ycover[Yi0*Ymax+Yu2] = 1
+	ycover[Yi1*Ymax+Yu2] = 1
+
 	ycover[Yi0*Ymax+Yi8] = 1
 	ycover[Yi1*Ymax+Yi8] = 1
+	ycover[Yu2*Ymax+Yi8] = 1
 	ycover[Yu7*Ymax+Yi8] = 1
 
 	ycover[Yi0*Ymax+Yu7] = 1
 	ycover[Yi1*Ymax+Yu7] = 1
+	ycover[Yu2*Ymax+Yu7] = 1
 
 	ycover[Yi0*Ymax+Yu8] = 1
 	ycover[Yi1*Ymax+Yu8] = 1
+	ycover[Yu2*Ymax+Yu8] = 1
 	ycover[Yu7*Ymax+Yu8] = 1
 
 	ycover[Yi0*Ymax+Ys32] = 1
 	ycover[Yi1*Ymax+Ys32] = 1
+	ycover[Yu2*Ymax+Ys32] = 1
 	ycover[Yu7*Ymax+Ys32] = 1
 	ycover[Yu8*Ymax+Ys32] = 1
 	ycover[Yi8*Ymax+Ys32] = 1
 
 	ycover[Yi0*Ymax+Yi32] = 1
 	ycover[Yi1*Ymax+Yi32] = 1
+	ycover[Yu2*Ymax+Yi32] = 1
 	ycover[Yu7*Ymax+Yi32] = 1
 	ycover[Yu8*Ymax+Yi32] = 1
 	ycover[Yi8*Ymax+Yi32] = 1
@@ -2009,6 +2389,7 @@ func instinit() {
 	ycover[Yi0*Ymax+Yi64] = 1
 	ycover[Yi1*Ymax+Yi64] = 1
 	ycover[Yu7*Ymax+Yi64] = 1
+	ycover[Yu2*Ymax+Yi64] = 1
 	ycover[Yu8*Ymax+Yi64] = 1
 	ycover[Yi8*Ymax+Yi64] = 1
 	ycover[Ys32*Ymax+Yi64] = 1
@@ -2057,7 +2438,10 @@ func instinit() {
 	ycover[Ym*Ymax+Ymm] = 1
 	ycover[Ymr*Ymax+Ymm] = 1
 
+	ycover[Yxr0*Ymax+Yxr] = 1
+
 	ycover[Ym*Ymax+Yxm] = 1
+	ycover[Yxr0*Ymax+Yxm] = 1
 	ycover[Yxr*Ymax+Yxm] = 1
 
 	ycover[Ym*Ymax+Yym] = 1
@@ -2110,7 +2494,7 @@ func instinit() {
 	}
 }
 
-var isAndroid = (obj.GOOS == "android")
+var isAndroid = (objabi.GOOS == "android")
 
 func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 	if a.Reg < REG_CS && a.Index < REG_CS { // fast path
@@ -2140,7 +2524,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 			// the initial-exec model, where you load the TLS base into
 			// a register and then index from that register, do not reach
 			// this code and should not be listed.
-			if p.Mode == 32 {
+			if ctxt.Arch.Family == sys.I386 {
 				switch ctxt.Headtype {
 				default:
 					if isAndroid {
@@ -2148,11 +2532,11 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 					}
 					log.Fatalf("unknown TLS base register for %v", ctxt.Headtype)
 
-				case obj.Hdarwin,
-					obj.Hdragonfly,
-					obj.Hfreebsd,
-					obj.Hnetbsd,
-					obj.Hopenbsd:
+				case objabi.Hdarwin,
+					objabi.Hdragonfly,
+					objabi.Hfreebsd,
+					objabi.Hnetbsd,
+					objabi.Hopenbsd:
 					return 0x65 // GS
 				}
 			}
@@ -2161,7 +2545,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 			default:
 				log.Fatalf("unknown TLS base register for %v", ctxt.Headtype)
 
-			case obj.Hlinux:
+			case objabi.Hlinux:
 				if isAndroid {
 					return 0x64 // FS
 				}
@@ -2172,20 +2556,20 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 					return 0x64 // FS
 				}
 
-			case obj.Hdragonfly,
-				obj.Hfreebsd,
-				obj.Hnetbsd,
-				obj.Hopenbsd,
-				obj.Hsolaris:
+			case objabi.Hdragonfly,
+				objabi.Hfreebsd,
+				objabi.Hnetbsd,
+				objabi.Hopenbsd,
+				objabi.Hsolaris:
 				return 0x64 // FS
 
-			case obj.Hdarwin:
+			case objabi.Hdarwin:
 				return 0x65 // GS
 			}
 		}
 	}
 
-	if p.Mode == 32 {
+	if ctxt.Arch.Family == sys.I386 {
 		if a.Index == REG_TLS && ctxt.Flag_shared {
 			// When building for inclusion into a shared library, an instruction of the form
 			//     MOVL 0(CX)(TLS*1), AX
@@ -2215,7 +2599,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		return 0x26
 
 	case REG_TLS:
-		if ctxt.Flag_shared {
+		if ctxt.Flag_shared && ctxt.Headtype != objabi.Hwindows {
 			// When building for inclusion into a shared library, an instruction of the form
 			//     MOV 0(CX)(TLS*1), AX
 			// becomes
@@ -2258,7 +2642,26 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 			// Can't use SP as the index register
 			return Yxxx
 		}
-		if ctxt.Asmode == 64 {
+		if a.Index >= REG_X0 && a.Index <= REG_X15 {
+			if ctxt.Arch.Family == sys.I386 && a.Index > REG_X7 {
+				return Yxxx
+			}
+			return Yxvm
+		}
+		if a.Index >= REG_Y0 && a.Index <= REG_Y15 {
+			if ctxt.Arch.Family == sys.I386 && a.Index > REG_Y7 {
+				return Yxxx
+			}
+			return Yyvm
+		}
+		if ctxt.Arch.Family == sys.AMD64 {
+			// Offset must fit in a 32-bit signed field (or fit in a 32-bit unsigned field
+			// where the sign extension doesn't matter).
+			// Note: The latter happens only in assembly, for example crypto/sha1/sha1block_amd64.s.
+			if !(a.Offset == int64(int32(a.Offset)) ||
+				a.Offset == int64(uint32(a.Offset)) && p.As == ALEAL) {
+				return Yxxx
+			}
 			switch a.Name {
 			case obj.NAME_EXTERN, obj.NAME_STATIC, obj.NAME_GOTREF:
 				// Global variables can't use index registers and their
@@ -2289,7 +2692,7 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 
 		case obj.NAME_EXTERN,
 			obj.NAME_STATIC:
-			if a.Sym != nil && isextern(a.Sym) || (p.Mode == 32 && !ctxt.Flag_shared) {
+			if a.Sym != nil && useAbs(ctxt, a.Sym) {
 				return Yi32
 			}
 			return Yiauto // use pc-relative addressing
@@ -2319,18 +2722,17 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		}
 
 		v := a.Offset
-		if p.Mode == 32 {
+		if ctxt.Arch.Family == sys.I386 {
 			v = int64(int32(v))
 		}
 		if v == 0 {
-			if p.Mark&PRESERVEFLAGS != 0 {
-				// If PRESERVEFLAGS is set, avoid MOV $0, AX turning into XOR AX, AX.
-				return Yu7
-			}
 			return Yi0
 		}
 		if v == 1 {
 			return Yi1
+		}
+		if v >= 0 && v <= 3 {
+			return Yu2
 		}
 		if v >= 0 && v <= 127 {
 			return Yu7
@@ -2341,7 +2743,7 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		if v >= -128 && v <= 127 {
 			return Yi8
 		}
-		if p.Mode == 32 {
+		if ctxt.Arch.Family == sys.I386 {
 			return Yi32
 		}
 		l := int32(v)
@@ -2383,7 +2785,7 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		REG_R13B,
 		REG_R14B,
 		REG_R15B:
-		if ctxt.Asmode != 64 {
+		if ctxt.Arch.Family == sys.I386 {
 			return Yxxx
 		}
 		fallthrough
@@ -2413,13 +2815,13 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		REG_R13,
 		REG_R14,
 		REG_R15:
-		if ctxt.Asmode != 64 {
+		if ctxt.Arch.Family == sys.I386 {
 			return Yxxx
 		}
 		fallthrough
 
 	case REG_SP, REG_BP, REG_SI, REG_DI:
-		if p.Mode == 32 {
+		if ctxt.Arch.Family == sys.I386 {
 			return Yrl32
 		}
 		return Yrl
@@ -2446,8 +2848,10 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 		REG_M0 + 7:
 		return Ymr
 
-	case REG_X0 + 0,
-		REG_X0 + 1,
+	case REG_X0:
+		return Yxr0
+
+	case REG_X0 + 1,
 		REG_X0 + 2,
 		REG_X0 + 3,
 		REG_X0 + 4,
@@ -2565,9 +2969,123 @@ func oclass(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 	return Yxxx
 }
 
-func asmidx(ctxt *obj.Link, scale int, index int, base int) {
+// AsmBuf is a simple buffer to assemble variable-length x86 instructions into
+// and hold assembly state.
+type AsmBuf struct {
+	buf     [100]byte
+	off     int
+	rexflag int
+	vexflag bool
+	rep     bool
+	repn    bool
+	lock    bool
+}
+
+// Put1 appends one byte to the end of the buffer.
+func (a *AsmBuf) Put1(x byte) {
+	a.buf[a.off] = x
+	a.off++
+}
+
+// Put2 appends two bytes to the end of the buffer.
+func (a *AsmBuf) Put2(x, y byte) {
+	a.buf[a.off+0] = x
+	a.buf[a.off+1] = y
+	a.off += 2
+}
+
+// Put3 appends three bytes to the end of the buffer.
+func (a *AsmBuf) Put3(x, y, z byte) {
+	a.buf[a.off+0] = x
+	a.buf[a.off+1] = y
+	a.buf[a.off+2] = z
+	a.off += 3
+}
+
+// Put4 appends four bytes to the end of the buffer.
+func (a *AsmBuf) Put4(x, y, z, w byte) {
+	a.buf[a.off+0] = x
+	a.buf[a.off+1] = y
+	a.buf[a.off+2] = z
+	a.buf[a.off+3] = w
+	a.off += 4
+}
+
+// PutInt16 writes v into the buffer using little-endian encoding.
+func (a *AsmBuf) PutInt16(v int16) {
+	a.buf[a.off+0] = byte(v)
+	a.buf[a.off+1] = byte(v >> 8)
+	a.off += 2
+}
+
+// PutInt32 writes v into the buffer using little-endian encoding.
+func (a *AsmBuf) PutInt32(v int32) {
+	a.buf[a.off+0] = byte(v)
+	a.buf[a.off+1] = byte(v >> 8)
+	a.buf[a.off+2] = byte(v >> 16)
+	a.buf[a.off+3] = byte(v >> 24)
+	a.off += 4
+}
+
+// PutInt64 writes v into the buffer using little-endian encoding.
+func (a *AsmBuf) PutInt64(v int64) {
+	a.buf[a.off+0] = byte(v)
+	a.buf[a.off+1] = byte(v >> 8)
+	a.buf[a.off+2] = byte(v >> 16)
+	a.buf[a.off+3] = byte(v >> 24)
+	a.buf[a.off+4] = byte(v >> 32)
+	a.buf[a.off+5] = byte(v >> 40)
+	a.buf[a.off+6] = byte(v >> 48)
+	a.buf[a.off+7] = byte(v >> 56)
+	a.off += 8
+}
+
+// Put copies b into the buffer.
+func (a *AsmBuf) Put(b []byte) {
+	copy(a.buf[a.off:], b)
+	a.off += len(b)
+}
+
+// PutOpBytesLit writes zero terminated sequence of bytes from op,
+// starting at specified offsed (e.g. z counter value).
+// Trailing 0 is not written.
+//
+// Intended to be used for literal Z cases.
+// Literal Z cases usually have "Zlit" in their name (Zlit, Zlitr_m, Zlitm_r).
+func (asmbuf *AsmBuf) PutOpBytesLit(offset int, op *[23]uint8) {
+	for int(op[offset]) != 0 {
+		asmbuf.Put1(byte(op[offset]))
+		offset++
+	}
+}
+
+// Insert inserts b at offset i.
+func (a *AsmBuf) Insert(i int, b byte) {
+	a.off++
+	copy(a.buf[i+1:a.off], a.buf[i:a.off-1])
+	a.buf[i] = b
+}
+
+// Last returns the byte at the end of the buffer.
+func (a *AsmBuf) Last() byte { return a.buf[a.off-1] }
+
+// Len returns the length of the buffer.
+func (a *AsmBuf) Len() int { return a.off }
+
+// Bytes returns the contents of the buffer.
+func (a *AsmBuf) Bytes() []byte { return a.buf[:a.off] }
+
+// Reset empties the buffer.
+func (a *AsmBuf) Reset() { a.off = 0 }
+
+// At returns the byte at offset i.
+func (a *AsmBuf) At(i int) byte { return a.buf[i] }
+
+// asmidx emits SIB byte.
+func (asmbuf *AsmBuf) asmidx(ctxt *obj.Link, scale int, index int, base int) {
 	var i int
 
+	// X/Y index register is used in VSIB.
 	switch index {
 	default:
 		goto bad
@@ -2583,8 +3101,24 @@ func asmidx(ctxt *obj.Link, scale int, index int, base int) {
 		REG_R12,
 		REG_R13,
 		REG_R14,
-		REG_R15:
-		if ctxt.Asmode != 64 {
+		REG_R15,
+		REG_X8,
+		REG_X9,
+		REG_X10,
+		REG_X11,
+		REG_X12,
+		REG_X13,
+		REG_X14,
+		REG_X15,
+		REG_Y8,
+		REG_Y9,
+		REG_Y10,
+		REG_Y11,
+		REG_Y12,
+		REG_Y13,
+		REG_Y14,
+		REG_Y15:
+		if ctxt.Arch.Family == sys.I386 {
 			goto bad
 		}
 		fallthrough
@@ -2595,7 +3129,23 @@ func asmidx(ctxt *obj.Link, scale int, index int, base int) {
 		REG_BX,
 		REG_BP,
 		REG_SI,
-		REG_DI:
+		REG_DI,
+		REG_X0,
+		REG_X1,
+		REG_X2,
+		REG_X3,
+		REG_X4,
+		REG_X5,
+		REG_X6,
+		REG_X7,
+		REG_Y0,
+		REG_Y1,
+		REG_Y2,
+		REG_Y3,
+		REG_Y4,
+		REG_Y5,
+		REG_Y6,
+		REG_Y7:
 		i = reg[index] << 3
 	}
 
@@ -2632,7 +3182,7 @@ bas:
 		REG_R13,
 		REG_R14,
 		REG_R15:
-		if ctxt.Asmode != 64 {
+		if ctxt.Arch.Family == sys.I386 {
 			goto bad
 		}
 		fallthrough
@@ -2648,16 +3198,16 @@ bas:
 		i |= reg[base]
 	}
 
-	ctxt.AsmBuf.Put1(byte(i))
+	asmbuf.Put1(byte(i))
 	return
 
 bad:
 	ctxt.Diag("asmidx: bad address %d/%d/%d", scale, index, base)
-	ctxt.AsmBuf.Put1(0)
+	asmbuf.Put1(0)
 	return
 }
 
-func relput4(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) {
+func (asmbuf *AsmBuf) relput4(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, a *obj.Addr) {
 	var rel obj.Reloc
 
 	v := vaddr(ctxt, p, a, &rel)
@@ -2665,31 +3215,14 @@ func relput4(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) {
 		if rel.Siz != 4 {
 			ctxt.Diag("bad reloc")
 		}
-		r := obj.Addrel(ctxt.Cursym)
+		r := obj.Addrel(cursym)
 		*r = rel
-		r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
+		r.Off = int32(p.Pc + int64(asmbuf.Len()))
 	}
 
-	ctxt.AsmBuf.PutInt32(int32(v))
+	asmbuf.PutInt32(int32(v))
 }
 
-/*
-static void
-relput8(Prog *p, Addr *a)
-{
-	vlong v;
-	Reloc rel, *r;
-
-	v = vaddr(ctxt, p, a, &rel);
-	if(rel.siz != 0) {
-		r = addrel(ctxt->cursym);
-		*r = rel;
-		r->siz = 8;
-		r->off = p->pc + ctxt->andptr - ctxt->and;
-	}
-	put8(ctxt, v);
-}
-*/
 func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 	if r != nil {
 		*r = obj.Reloc{}
@@ -2707,13 +3240,13 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 
 		if a.Name == obj.NAME_GOTREF {
 			r.Siz = 4
-			r.Type = obj.R_GOTPCREL
-		} else if isextern(s) || (p.Mode != 64 && !ctxt.Flag_shared) {
+			r.Type = objabi.R_GOTPCREL
+		} else if useAbs(ctxt, s) {
 			r.Siz = 4
-			r.Type = obj.R_ADDR
+			r.Type = objabi.R_ADDR
 		} else {
 			r.Siz = 4
-			r.Type = obj.R_PCREL
+			r.Type = objabi.R_PCREL
 		}
 
 		r.Off = -1 // caller must fill in
@@ -2729,8 +3262,8 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 			log.Fatalf("reloc")
 		}
 
-		if !ctxt.Flag_shared || isAndroid || ctxt.Headtype == obj.Hdarwin {
-			r.Type = obj.R_TLS_LE
+		if !ctxt.Flag_shared || isAndroid || ctxt.Headtype == objabi.Hdarwin {
+			r.Type = objabi.R_TLS_LE
 			r.Siz = 4
 			r.Off = -1 // caller must fill in
 			r.Add = a.Offset
@@ -2741,7 +3274,7 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 	return a.Offset
 }
 
-func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int) {
+func (asmbuf *AsmBuf) asmandsz(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int) {
 	var base int
 	var rel obj.Reloc
 
@@ -2749,7 +3282,7 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 	switch {
 	case int64(int32(a.Offset)) == a.Offset:
 		// Offset fits in sign-extended 32 bits.
-	case int64(uint32(a.Offset)) == a.Offset && ctxt.Rexflag&Rxw == 0:
+	case int64(uint32(a.Offset)) == a.Offset && asmbuf.rexflag&Rxw == 0:
 		// Offset fits in zero-extended 32 bits in a 32-bit instruction.
 		// This is allowed for assembly that wants to use 32-bit hex
 		// constants, e.g. LEAL 0x99999999(AX), AX.
@@ -2776,8 +3309,8 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 		if v != 0 {
 			goto bad
 		}
-		ctxt.AsmBuf.Put1(byte(3<<6 | reg[a.Reg]<<0 | r<<3))
-		ctxt.Rexflag |= regrex[a.Reg]&(0x40|Rxb) | rex
+		asmbuf.Put1(byte(3<<6 | reg[a.Reg]<<0 | r<<3))
+		asmbuf.rexflag |= regrex[a.Reg]&(0x40|Rxb) | rex
 		return
 	}
 
@@ -2791,10 +3324,10 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 		case obj.NAME_EXTERN,
 			obj.NAME_GOTREF,
 			obj.NAME_STATIC:
-			if !isextern(a.Sym) && p.Mode == 64 {
+			if !useAbs(ctxt, a.Sym) && ctxt.Arch.Family == sys.AMD64 {
 				goto bad
 			}
-			if p.Mode == 32 && ctxt.Flag_shared {
+			if ctxt.Arch.Family == sys.I386 && ctxt.Flag_shared {
 				// The base register has already been set. It holds the PC
 				// of this instruction returned by a PC-reading thunk.
 				// See obj6.go:rewriteToPcrel.
@@ -2808,28 +3341,28 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 			base = REG_SP
 		}
 
-		ctxt.Rexflag |= regrex[int(a.Index)]&Rxx | regrex[base]&Rxb | rex
+		asmbuf.rexflag |= regrex[int(a.Index)]&Rxx | regrex[base]&Rxb | rex
 		if base == REG_NONE {
-			ctxt.AsmBuf.Put1(byte(0<<6 | 4<<0 | r<<3))
-			asmidx(ctxt, int(a.Scale), int(a.Index), base)
+			asmbuf.Put1(byte(0<<6 | 4<<0 | r<<3))
+			asmbuf.asmidx(ctxt, int(a.Scale), int(a.Index), base)
 			goto putrelv
 		}
 
 		if v == 0 && rel.Siz == 0 && base != REG_BP && base != REG_R13 {
-			ctxt.AsmBuf.Put1(byte(0<<6 | 4<<0 | r<<3))
-			asmidx(ctxt, int(a.Scale), int(a.Index), base)
+			asmbuf.Put1(byte(0<<6 | 4<<0 | r<<3))
+			asmbuf.asmidx(ctxt, int(a.Scale), int(a.Index), base)
 			return
 		}
 
 		if v >= -128 && v < 128 && rel.Siz == 0 {
-			ctxt.AsmBuf.Put1(byte(1<<6 | 4<<0 | r<<3))
-			asmidx(ctxt, int(a.Scale), int(a.Index), base)
-			ctxt.AsmBuf.Put1(byte(v))
+			asmbuf.Put1(byte(1<<6 | 4<<0 | r<<3))
+			asmbuf.asmidx(ctxt, int(a.Scale), int(a.Index), base)
+			asmbuf.Put1(byte(v))
 			return
 		}
 
-		ctxt.AsmBuf.Put1(byte(2<<6 | 4<<0 | r<<3))
-		asmidx(ctxt, int(a.Scale), int(a.Index), base)
+		asmbuf.Put1(byte(2<<6 | 4<<0 | r<<3))
+		asmbuf.asmidx(ctxt, int(a.Scale), int(a.Index), base)
 		goto putrelv
 	}
 
@@ -2841,7 +3374,7 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 		if a.Sym == nil {
 			ctxt.Diag("bad addr: %v", p)
 		}
-		if p.Mode == 32 && ctxt.Flag_shared {
+		if ctxt.Arch.Family == sys.I386 && ctxt.Flag_shared {
 			// The base register has already been set. It holds the PC
 			// of this instruction returned by a PC-reading thunk.
 			// See obj6.go:rewriteToPcrel.
@@ -2859,18 +3392,18 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 		v = int32(vaddr(ctxt, p, a, &rel))
 	}
 
-	ctxt.Rexflag |= regrex[base]&Rxb | rex
+	asmbuf.rexflag |= regrex[base]&Rxb | rex
 	if base == REG_NONE || (REG_CS <= base && base <= REG_GS) || base == REG_TLS {
-		if (a.Sym == nil || !isextern(a.Sym)) && base == REG_NONE && (a.Name == obj.NAME_STATIC || a.Name == obj.NAME_EXTERN || a.Name == obj.NAME_GOTREF) || p.Mode != 64 {
+		if (a.Sym == nil || !useAbs(ctxt, a.Sym)) && base == REG_NONE && (a.Name == obj.NAME_STATIC || a.Name == obj.NAME_EXTERN || a.Name == obj.NAME_GOTREF) || ctxt.Arch.Family != sys.AMD64 {
 			if a.Name == obj.NAME_GOTREF && (a.Offset != 0 || a.Index != 0 || a.Scale != 0) {
 				ctxt.Diag("%v has offset against gotref", p)
 			}
-			ctxt.AsmBuf.Put1(byte(0<<6 | 5<<0 | r<<3))
+			asmbuf.Put1(byte(0<<6 | 5<<0 | r<<3))
 			goto putrelv
 		}
 
 		// temporary
-		ctxt.AsmBuf.Put2(
+		asmbuf.Put2(
 			byte(0<<6|4<<0|r<<3), // sib present
 			0<<6|4<<3|5<<0,       // DS:d32
 		)
@@ -2879,27 +3412,27 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 
 	if base == REG_SP || base == REG_R12 {
 		if v == 0 {
-			ctxt.AsmBuf.Put1(byte(0<<6 | reg[base]<<0 | r<<3))
-			asmidx(ctxt, int(a.Scale), REG_NONE, base)
+			asmbuf.Put1(byte(0<<6 | reg[base]<<0 | r<<3))
+			asmbuf.asmidx(ctxt, int(a.Scale), REG_NONE, base)
 			return
 		}
 
 		if v >= -128 && v < 128 {
-			ctxt.AsmBuf.Put1(byte(1<<6 | reg[base]<<0 | r<<3))
-			asmidx(ctxt, int(a.Scale), REG_NONE, base)
-			ctxt.AsmBuf.Put1(byte(v))
+			asmbuf.Put1(byte(1<<6 | reg[base]<<0 | r<<3))
+			asmbuf.asmidx(ctxt, int(a.Scale), REG_NONE, base)
+			asmbuf.Put1(byte(v))
 			return
 		}
 
-		ctxt.AsmBuf.Put1(byte(2<<6 | reg[base]<<0 | r<<3))
-		asmidx(ctxt, int(a.Scale), REG_NONE, base)
+		asmbuf.Put1(byte(2<<6 | reg[base]<<0 | r<<3))
+		asmbuf.asmidx(ctxt, int(a.Scale), REG_NONE, base)
 		goto putrelv
 	}
 
 	if REG_AX <= base && base <= REG_R15 {
 		if a.Index == REG_TLS && !ctxt.Flag_shared {
 			rel = obj.Reloc{}
-			rel.Type = obj.R_TLS_LE
+			rel.Type = objabi.R_TLS_LE
 			rel.Siz = 4
 			rel.Sym = nil
 			rel.Add = int64(v)
@@ -2907,16 +3440,16 @@ func asmandsz(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r int, rex int, m64 int)
 		}
 
 		if v == 0 && rel.Siz == 0 && base != REG_BP && base != REG_R13 {
-			ctxt.AsmBuf.Put1(byte(0<<6 | reg[base]<<0 | r<<3))
+			asmbuf.Put1(byte(0<<6 | reg[base]<<0 | r<<3))
 			return
 		}
 
 		if v >= -128 && v < 128 && rel.Siz == 0 {
-			ctxt.AsmBuf.Put2(byte(1<<6|reg[base]<<0|r<<3), byte(v))
+			asmbuf.Put2(byte(1<<6|reg[base]<<0|r<<3), byte(v))
 			return
 		}
 
-		ctxt.AsmBuf.Put1(byte(2<<6 | reg[base]<<0 | r<<3))
+		asmbuf.Put1(byte(2<<6 | reg[base]<<0 | r<<3))
 		goto putrelv
 	}
 
@@ -2929,12 +3462,12 @@ putrelv:
 			goto bad
 		}
 
-		r := obj.Addrel(ctxt.Cursym)
+		r := obj.Addrel(cursym)
 		*r = rel
-		r.Off = int32(ctxt.Curp.Pc + int64(ctxt.AsmBuf.Len()))
+		r.Off = int32(p.Pc + int64(asmbuf.Len()))
 	}
 
-	ctxt.AsmBuf.PutInt32(v)
+	asmbuf.PutInt32(v)
 	return
 
 bad:
@@ -2942,12 +3475,12 @@ bad:
 	return
 }
 
-func asmand(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, ra *obj.Addr) {
-	asmandsz(ctxt, p, a, reg[ra.Reg], regrex[ra.Reg], 0)
+func (asmbuf *AsmBuf) asmand(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, a *obj.Addr, ra *obj.Addr) {
+	asmbuf.asmandsz(ctxt, cursym, p, a, reg[ra.Reg], regrex[ra.Reg], 0)
 }
 
-func asmando(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, o int) {
-	asmandsz(ctxt, p, a, o, 0, 0)
+func (asmbuf *AsmBuf) asmando(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, a *obj.Addr, o int) {
+	asmbuf.asmandsz(ctxt, cursym, p, a, o, 0, 0)
 }
 
 func bytereg(a *obj.Addr, t *uint8) {
@@ -3040,12 +3573,16 @@ var ymovtab = []Movtab{
 	{AMOVL, Ydr6, Ynone, Yml, 3, [4]uint8{0x0f, 0x21, 6, 0}},
 	{AMOVL, Ydr7, Ynone, Yml, 3, [4]uint8{0x0f, 0x21, 7, 0}},
 	{AMOVQ, Ydr0, Ynone, Yml, 3, [4]uint8{0x0f, 0x21, 0, 0}},
+	{AMOVQ, Ydr2, Ynone, Yrl, 3, [4]uint8{0x0f, 0x21, 2, 0}},
+	{AMOVQ, Ydr3, Ynone, Yrl, 3, [4]uint8{0x0f, 0x21, 3, 0}},
 	{AMOVQ, Ydr6, Ynone, Yml, 3, [4]uint8{0x0f, 0x21, 6, 0}},
 	{AMOVQ, Ydr7, Ynone, Yml, 3, [4]uint8{0x0f, 0x21, 7, 0}},
 	{AMOVL, Yml, Ynone, Ydr0, 4, [4]uint8{0x0f, 0x23, 0, 0}},
 	{AMOVL, Yml, Ynone, Ydr6, 4, [4]uint8{0x0f, 0x23, 6, 0}},
 	{AMOVL, Yml, Ynone, Ydr7, 4, [4]uint8{0x0f, 0x23, 7, 0}},
 	{AMOVQ, Yml, Ynone, Ydr0, 4, [4]uint8{0x0f, 0x23, 0, 0}},
+	{AMOVQ, Yml, Ynone, Ydr2, 4, [4]uint8{0x0f, 0x23, 2, 0}},
+	{AMOVQ, Yml, Ynone, Ydr3, 4, [4]uint8{0x0f, 0x23, 3, 0}},
 	{AMOVQ, Yml, Ynone, Ydr6, 4, [4]uint8{0x0f, 0x23, 6, 0}},
 	{AMOVQ, Yml, Ynone, Ydr7, 4, [4]uint8{0x0f, 0x23, 7, 0}},
 
@@ -3122,7 +3659,7 @@ func isax(a *obj.Addr) bool {
 
 func subreg(p *obj.Prog, from int, to int) {
 	if false { /* debug['Q'] */
-		fmt.Printf("\n%v\ts/%v/%v/\n", p, Rconv(from), Rconv(to))
+		fmt.Printf("\n%v\ts/%v/%v/\n", p, rconv(from), rconv(to))
 	}
 
 	if int(p.From.Reg) == from {
@@ -3150,14 +3687,14 @@ func subreg(p *obj.Prog, from int, to int) {
 	}
 }
 
-func mediaop(ctxt *obj.Link, o *Optab, op int, osize int, z int) int {
+func (asmbuf *AsmBuf) mediaop(ctxt *obj.Link, o *Optab, op int, osize int, z int) int {
 	switch op {
 	case Pm, Pe, Pf2, Pf3:
 		if osize != 1 {
 			if op != Pm {
-				ctxt.AsmBuf.Put1(byte(op))
+				asmbuf.Put1(byte(op))
 			}
-			ctxt.AsmBuf.Put1(Pm)
+			asmbuf.Put1(Pm)
 			z++
 			op = int(o.op[z])
 			break
@@ -3165,12 +3702,12 @@ func mediaop(ctxt *obj.Link, o *Optab, op int, osize int, z int) int {
 		fallthrough
 
 	default:
-		if ctxt.AsmBuf.Len() == 0 || ctxt.AsmBuf.Last() != Pm {
-			ctxt.AsmBuf.Put1(Pm)
+		if asmbuf.Len() == 0 || asmbuf.Last() != Pm {
+			asmbuf.Put1(Pm)
 		}
 	}
 
-	ctxt.AsmBuf.Put1(byte(op))
+	asmbuf.Put1(byte(op))
 	return z
 }
 
@@ -3191,8 +3728,8 @@ var bpduff2 = []byte{
 // and the opcode byte.
 // For details about vex prefix see:
 // https://en.wikipedia.org/wiki/VEX_prefix#Technical_description
-func asmvex(ctxt *obj.Link, rm, v, r *obj.Addr, vex, opcode uint8) {
-	ctxt.Vexflag = 1
+func (asmbuf *AsmBuf) asmvex(ctxt *obj.Link, rm, v, r *obj.Addr, vex, opcode uint8) {
+	asmbuf.vexflag = true
 	rexR := 0
 	if r != nil {
 		rexR = regrex[r.Reg] & Rxr
@@ -3212,20 +3749,47 @@ func asmvex(ctxt *obj.Link, rm, v, r *obj.Addr, vex, opcode uint8) {
 	vexV ^= 0xF
 	if vexM == 1 && (rexX|rexB) == 0 && vex&vexW1 == 0 {
 		// Can use 2-byte encoding.
-		ctxt.AsmBuf.Put2(0xc5, byte(rexR<<5)^0x80|vexV<<3|vexWLP)
+		asmbuf.Put2(0xc5, byte(rexR<<5)^0x80|vexV<<3|vexWLP)
 	} else {
 		// Must use 3-byte encoding.
-		ctxt.AsmBuf.Put3(0xc4,
+		asmbuf.Put3(0xc4,
 			(byte(rexR|rexX|rexB)<<5)^0xE0|vexM,
 			vexV<<3|vexWLP,
 		)
 	}
-	ctxt.AsmBuf.Put1(opcode)
+	asmbuf.Put1(opcode)
 }
 
-func doasm(ctxt *obj.Link, p *obj.Prog) {
-	ctxt.Curp = p // TODO
+// regIndex returns register index that fits in 4 bits.
+//
+// Examples:
+//   REG_X15 => 15
+//   REG_R9  => 9
+//   REG_AX  => 0
+//
+func regIndex(r int16) int {
+	lower3bits := reg[r]
+	high4bit := regrex[r] & Rxr << 1
+	return lower3bits | high4bit
+}
 
+// avx2gatherValid returns true if p satisfies AVX2 gather constraints.
+// Reports errors via ctxt.
+func avx2gatherValid(ctxt *obj.Link, p *obj.Prog) bool {
+	// If any pair of the index, mask, or destination registers
+	// are the same, this instruction results a #UD fault.
+	index := regIndex(p.GetFrom3().Index)
+	mask := regIndex(p.From.Reg)
+	dest := regIndex(p.To.Reg)
+	if dest == mask || dest == index || mask == index {
+		ctxt.Diag("mask, index, and destination registers should be distinct: %v", p)
+		return false
+	}
+
+	return true
+}
+
+func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 	o := opindex[p.As&obj.AMask]
 
 	if o == nil {
@@ -3235,11 +3799,11 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 
 	pre := prefixof(ctxt, p, &p.From)
 	if pre != 0 {
-		ctxt.AsmBuf.Put1(byte(pre))
+		asmbuf.Put1(byte(pre))
 	}
 	pre = prefixof(ctxt, p, &p.To)
 	if pre != 0 {
-		ctxt.AsmBuf.Put1(byte(pre))
+		asmbuf.Put1(byte(pre))
 	}
 
 	// TODO(rsc): This special case is for SHRQ $3, AX:DX,
@@ -3247,9 +3811,10 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 	// Similarly SHRQ CX, AX:DX is really SHRQ CX(DX*0), AX.
 	// Change encoding generated by assemblers and compilers and remove.
 	if (p.From.Type == obj.TYPE_CONST || p.From.Type == obj.TYPE_REG) && p.From.Index != REG_NONE && p.From.Scale == 0 {
-		p.From3 = new(obj.Addr)
-		p.From3.Type = obj.TYPE_REG
-		p.From3.Reg = p.From.Index
+		p.SetFrom3(obj.Addr{
+			Type: obj.TYPE_REG,
+			Reg:  p.From.Index,
+		})
 		p.From.Index = 0
 	}
 
@@ -3258,8 +3823,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 	switch p.As {
 	case AIMUL3Q, APEXTRW, APINSRW, APINSRD, APINSRQ, APSHUFHW, APSHUFL, APSHUFW, ASHUFPD, ASHUFPS, AAESKEYGENASSIST, APSHUFD, APCLMULQDQ:
 		if p.From3Type() == obj.TYPE_NONE {
-			p.From3 = new(obj.Addr)
-			*p.From3 = p.From
+			p.SetFrom3(p.From)
 			p.From = obj.Addr{}
 			p.From.Type = obj.TYPE_CONST
 			p.From.Offset = p.To.Offset
@@ -3267,12 +3831,23 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 		}
 	case ACMPSD, ACMPSS, ACMPPS, ACMPPD:
 		if p.From3Type() == obj.TYPE_NONE {
-			p.From3 = new(obj.Addr)
-			*p.From3 = p.To
+			p.SetFrom3(p.To)
 			p.To = obj.Addr{}
 			p.To.Type = obj.TYPE_CONST
-			p.To.Offset = p.From3.Offset
-			p.From3.Offset = 0
+			p.To.Offset = p.GetFrom3().Offset
+			p.GetFrom3().Offset = 0
+		}
+
+	case AVGATHERDPD,
+		AVGATHERQPD,
+		AVGATHERDPS,
+		AVGATHERQPS,
+		AVPGATHERDD,
+		AVPGATHERQD,
+		AVPGATHERDQ,
+		AVPGATHERQQ:
+		if !avx2gatherValid(ctxt, p) {
+			return
 		}
 	}
 
@@ -3284,10 +3859,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 	}
 
 	ft := int(p.Ft) * Ymax
-	f3t := Ynone * Ymax
-	if p.From3 != nil {
-		f3t = oclass(ctxt, p, p.From3) * Ymax
-	}
+	var f3t int
 	tt := int(p.Tt) * Ymax
 
 	xo := obj.Bool2int(o.op[0] == 0x0f)
@@ -3299,58 +3871,82 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 	var r *obj.Reloc
 	var rel obj.Reloc
 	var v int64
-	for i := range o.ytab {
-		yt := &o.ytab[i]
-		if ycover[ft+int(yt.from)] != 0 && ycover[f3t+int(yt.from3)] != 0 && ycover[tt+int(yt.to)] != 0 {
+
+	args := make([]int, 0, 6)
+	if ft != Ynone*Ymax {
+		args = append(args, ft)
+	}
+	for i := range p.RestArgs {
+		args = append(args, oclass(ctxt, p, &p.RestArgs[i])*Ymax)
+	}
+	if tt != Ynone*Ymax {
+		args = append(args, tt)
+	}
+
+	for _, yt := range o.ytab {
+		if !yt.match(args) {
+			z += int(yt.zoffset) + xo
+		} else {
 			switch o.prefix {
 			case Px1: /* first option valid only in 32-bit mode */
-				if ctxt.Mode == 64 && z == 0 {
+				if ctxt.Arch.Family == sys.AMD64 && z == 0 {
 					z += int(yt.zoffset) + xo
 					continue
 				}
 			case Pq: /* 16 bit escape and opcode escape */
-				ctxt.AsmBuf.Put2(Pe, Pm)
+				asmbuf.Put2(Pe, Pm)
 
 			case Pq3: /* 16 bit escape and opcode escape + REX.W */
-				ctxt.Rexflag |= Pw
-				ctxt.AsmBuf.Put2(Pe, Pm)
+				asmbuf.rexflag |= Pw
+				asmbuf.Put2(Pe, Pm)
 
 			case Pq4: /*  66 0F 38 */
-				ctxt.AsmBuf.Put3(0x66, 0x0F, 0x38)
+				asmbuf.Put3(0x66, 0x0F, 0x38)
+
+			case Pq4w: /*  66 0F 38 + REX.W */
+				asmbuf.rexflag |= Pw
+				asmbuf.Put3(0x66, 0x0F, 0x38)
+
+			case Pq5: /*  F3 0F 38 */
+				asmbuf.Put3(0xF3, 0x0F, 0x38)
+
+			case Pq5w: /*  F3 0F 38 + REX.W */
+				asmbuf.rexflag |= Pw
+				asmbuf.Put3(0xF3, 0x0F, 0x38)
 
 			case Pf2, /* xmm opcode escape */
 				Pf3:
-				ctxt.AsmBuf.Put2(o.prefix, Pm)
+				asmbuf.Put2(o.prefix, Pm)
 
 			case Pef3:
-				ctxt.AsmBuf.Put3(Pe, Pf3, Pm)
+				asmbuf.Put3(Pe, Pf3, Pm)
 
 			case Pfw: /* xmm opcode escape + REX.W */
-				ctxt.Rexflag |= Pw
-				ctxt.AsmBuf.Put2(Pf3, Pm)
+				asmbuf.rexflag |= Pw
+				asmbuf.Put2(Pf3, Pm)
 
 			case Pm: /* opcode escape */
-				ctxt.AsmBuf.Put1(Pm)
+				asmbuf.Put1(Pm)
 
 			case Pe: /* 16 bit escape */
-				ctxt.AsmBuf.Put1(Pe)
+				asmbuf.Put1(Pe)
 
 			case Pw: /* 64-bit escape */
-				if p.Mode != 64 {
+				if ctxt.Arch.Family != sys.AMD64 {
 					ctxt.Diag("asmins: illegal 64: %v", p)
 				}
-				ctxt.Rexflag |= Pw
+				asmbuf.rexflag |= Pw
 
 			case Pw8: /* 64-bit escape if z >= 8 */
 				if z >= 8 {
-					if p.Mode != 64 {
+					if ctxt.Arch.Family != sys.AMD64 {
 						ctxt.Diag("asmins: illegal 64: %v", p)
 					}
-					ctxt.Rexflag |= Pw
+					asmbuf.rexflag |= Pw
 				}
 
 			case Pb: /* botch */
-				if p.Mode != 64 && (isbadbyte(&p.From) || isbadbyte(&p.To)) {
+				if ctxt.Arch.Family != sys.AMD64 && (isbadbyte(&p.From) || isbadbyte(&p.To)) {
 					goto bad
 				}
 				// NOTE(rsc): This is probably safe to do always,
@@ -3361,29 +3957,29 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				// in the original obj/i386, and it would encode
 				// (using a valid, shorter form) as 3c 00 if we enabled
 				// the call to bytereg here.
-				if p.Mode == 64 {
+				if ctxt.Arch.Family == sys.AMD64 {
 					bytereg(&p.From, &p.Ft)
 					bytereg(&p.To, &p.Tt)
 				}
 
 			case P32: /* 32 bit but illegal if 64-bit mode */
-				if p.Mode == 64 {
+				if ctxt.Arch.Family == sys.AMD64 {
 					ctxt.Diag("asmins: illegal in 64-bit mode: %v", p)
 				}
 
 			case Py: /* 64-bit only, no prefix */
-				if p.Mode != 64 {
-					ctxt.Diag("asmins: illegal in %d-bit mode: %v", p.Mode, p)
+				if ctxt.Arch.Family != sys.AMD64 {
+					ctxt.Diag("asmins: illegal in %d-bit mode: %v", ctxt.Arch.RegSize*8, p)
 				}
 
 			case Py1: /* 64-bit only if z < 1, no prefix */
-				if z < 1 && p.Mode != 64 {
-					ctxt.Diag("asmins: illegal in %d-bit mode: %v", p.Mode, p)
+				if z < 1 && ctxt.Arch.Family != sys.AMD64 {
+					ctxt.Diag("asmins: illegal in %d-bit mode: %v", ctxt.Arch.RegSize*8, p)
 				}
 
 			case Py3: /* 64-bit only if z < 3, no prefix */
-				if z < 3 && p.Mode != 64 {
-					ctxt.Diag("asmins: illegal in %d-bit mode: %v", p.Mode, p)
+				if z < 3 && ctxt.Arch.Family != sys.AMD64 {
+					ctxt.Diag("asmins: illegal in %d-bit mode: %v", ctxt.Arch.RegSize*8, p)
 				}
 			}
 
@@ -3393,7 +3989,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 			op = int(o.op[z])
 			// In vex case 0x0f is actually VEX_256_F2_0F_WIG
 			if op == 0x0f && o.prefix != Pvex {
-				ctxt.AsmBuf.Put1(byte(op))
+				asmbuf.Put1(byte(op))
 				z++
 				op = int(o.op[z])
 			}
@@ -3412,44 +4008,50 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					if op == 0 {
 						break
 					}
-					ctxt.AsmBuf.Put1(byte(op))
+					asmbuf.Put1(byte(op))
 				}
 
+			case Zlitr_m:
+				asmbuf.PutOpBytesLit(z, &o.op)
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.From)
+
 			case Zlitm_r:
-				for ; ; z++ {
-					op = int(o.op[z])
-					if op == 0 {
-						break
-					}
-					ctxt.AsmBuf.Put1(byte(op))
-				}
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.PutOpBytesLit(z, &o.op)
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
+
+			case Zlit_m_r:
+				asmbuf.PutOpBytesLit(z, &o.op)
+				asmbuf.asmand(ctxt, cursym, p, p.GetFrom3(), &p.To)
 
 			case Zmb_r:
 				bytereg(&p.From, &p.Ft)
 				fallthrough
 
 			case Zm_r:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.Put1(byte(op))
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
+
+			case Z_m_r:
+				asmbuf.Put1(byte(op))
+				asmbuf.asmand(ctxt, cursym, p, p.GetFrom3(), &p.To)
 
 			case Zm2_r:
-				ctxt.AsmBuf.Put2(byte(op), o.op[z+1])
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.Put2(byte(op), o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
 
 			case Zm_r_xm:
-				mediaop(ctxt, o, op, int(yt.zoffset), z)
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.mediaop(ctxt, o, op, int(yt.zoffset), z)
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
 
 			case Zm_r_xm_nr:
-				ctxt.Rexflag = 0
-				mediaop(ctxt, o, op, int(yt.zoffset), z)
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.rexflag = 0
+				asmbuf.mediaop(ctxt, o, op, int(yt.zoffset), z)
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
 
 			case Zm_r_i_xm:
-				mediaop(ctxt, o, op, int(yt.zoffset), z)
-				asmand(ctxt, p, &p.From, p.From3)
-				ctxt.AsmBuf.Put1(byte(p.To.Offset))
+				asmbuf.mediaop(ctxt, o, op, int(yt.zoffset), z)
+				asmbuf.asmand(ctxt, cursym, p, &p.From, p.GetFrom3())
+				asmbuf.Put1(byte(p.To.Offset))
 
 			case Zibm_r, Zibr_m:
 				for {
@@ -3459,103 +4061,133 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					if op == 0 {
 						break
 					}
-					ctxt.AsmBuf.Put1(byte(op))
+					asmbuf.Put1(byte(op))
 				}
 				if yt.zcase == Zibr_m {
-					asmand(ctxt, p, &p.To, p.From3)
+					asmbuf.asmand(ctxt, cursym, p, &p.To, p.GetFrom3())
 				} else {
-					asmand(ctxt, p, p.From3, &p.To)
+					asmbuf.asmand(ctxt, cursym, p, p.GetFrom3(), &p.To)
 				}
-				ctxt.AsmBuf.Put1(byte(p.From.Offset))
+				switch {
+				default:
+					asmbuf.Put1(byte(p.From.Offset))
+				case yt.args[0] == Yi32 && o.prefix == Pe:
+					asmbuf.PutInt16(int16(p.From.Offset))
+				case yt.args[0] == Yi32:
+					asmbuf.PutInt32(int32(p.From.Offset))
+				}
 
 			case Zaut_r:
-				ctxt.AsmBuf.Put1(0x8d) // leal
+				asmbuf.Put1(0x8d) // leal
 				if p.From.Type != obj.TYPE_ADDR {
 					ctxt.Diag("asmins: Zaut sb type ADDR")
 				}
 				p.From.Type = obj.TYPE_MEM
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
 				p.From.Type = obj.TYPE_ADDR
 
 			case Zm_o:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmando(ctxt, p, &p.From, int(o.op[z+1]))
+				asmbuf.Put1(byte(op))
+				asmbuf.asmando(ctxt, cursym, p, &p.From, int(o.op[z+1]))
 
 			case Zr_m:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmand(ctxt, p, &p.To, &p.From)
+				asmbuf.Put1(byte(op))
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.From)
+
+			case Zvex:
+				asmbuf.asmvex(ctxt, &p.From, p.GetFrom3(), &p.To, o.op[z], o.op[z+1])
 
 			case Zvex_rm_v_r:
-				asmvex(ctxt, &p.From, p.From3, &p.To, o.op[z], o.op[z+1])
-				asmand(ctxt, p, &p.From, &p.To)
+				asmbuf.asmvex(ctxt, &p.From, p.GetFrom3(), &p.To, o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
+
+			case Zvex_rm_v_ro:
+				asmbuf.asmvex(ctxt, &p.From, p.GetFrom3(), &p.To, o.op[z], o.op[z+1])
+				asmbuf.asmando(ctxt, cursym, p, &p.From, int(o.op[z+2]))
 
 			case Zvex_i_r_v:
-				asmvex(ctxt, p.From3, &p.To, nil, o.op[z], o.op[z+1])
+				asmbuf.asmvex(ctxt, p.GetFrom3(), &p.To, nil, o.op[z], o.op[z+1])
 				regnum := byte(0x7)
-				if p.From3.Reg >= REG_X0 && p.From3.Reg <= REG_X15 {
-					regnum &= byte(p.From3.Reg - REG_X0)
+				if p.GetFrom3().Reg >= REG_X0 && p.GetFrom3().Reg <= REG_X15 {
+					regnum &= byte(p.GetFrom3().Reg - REG_X0)
 				} else {
-					regnum &= byte(p.From3.Reg - REG_Y0)
+					regnum &= byte(p.GetFrom3().Reg - REG_Y0)
 				}
-				ctxt.AsmBuf.Put1(byte(o.op[z+2]) | regnum)
-				ctxt.AsmBuf.Put1(byte(p.From.Offset))
+				asmbuf.Put1(o.op[z+2] | regnum)
+				asmbuf.Put1(byte(p.From.Offset))
 
 			case Zvex_i_rm_v_r:
-				asmvex(ctxt, &p.From, p.From3, &p.To, o.op[z], o.op[z+1])
-				asmand(ctxt, p, &p.From, &p.To)
-				ctxt.AsmBuf.Put1(byte(p.From3.Offset))
+				imm, from, from3, to := unpackOps4(p)
+				asmbuf.asmvex(ctxt, from, from3, to, o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, from, to)
+				asmbuf.Put1(byte(imm.Offset))
 
 			case Zvex_i_rm_r:
-				asmvex(ctxt, p.From3, nil, &p.To, o.op[z], o.op[z+1])
-				asmand(ctxt, p, p.From3, &p.To)
-				ctxt.AsmBuf.Put1(byte(p.From.Offset))
+				asmbuf.asmvex(ctxt, p.GetFrom3(), nil, &p.To, o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, p.GetFrom3(), &p.To)
+				asmbuf.Put1(byte(p.From.Offset))
 
 			case Zvex_v_rm_r:
-				asmvex(ctxt, p.From3, &p.From, &p.To, o.op[z], o.op[z+1])
-				asmand(ctxt, p, p.From3, &p.To)
+				asmbuf.asmvex(ctxt, p.GetFrom3(), &p.From, &p.To, o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, p.GetFrom3(), &p.To)
 
 			case Zvex_r_v_rm:
-				asmvex(ctxt, &p.To, p.From3, &p.From, o.op[z], o.op[z+1])
-				asmand(ctxt, p, &p.To, &p.From)
+				asmbuf.asmvex(ctxt, &p.To, p.GetFrom3(), &p.From, o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.From)
+
+			case Zvex_rm_r_vo:
+				asmbuf.asmvex(ctxt, &p.From, &p.To, p.GetFrom3(), o.op[z], o.op[z+1])
+				asmbuf.asmando(ctxt, cursym, p, &p.From, int(o.op[z+2]))
+
+			case Zvex_i_r_rm:
+				asmbuf.asmvex(ctxt, &p.To, nil, p.GetFrom3(), o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, &p.To, p.GetFrom3())
+				asmbuf.Put1(byte(p.From.Offset))
+
+			case Zvex_hr_rm_v_r:
+				hr, from, from3, to := unpackOps4(p)
+				asmbuf.asmvex(ctxt, from, from3, to, o.op[z], o.op[z+1])
+				asmbuf.asmand(ctxt, cursym, p, from, to)
+				asmbuf.Put1(byte(regIndex(hr.Reg) << 4))
 
 			case Zr_m_xm:
-				mediaop(ctxt, o, op, int(yt.zoffset), z)
-				asmand(ctxt, p, &p.To, &p.From)
+				asmbuf.mediaop(ctxt, o, op, int(yt.zoffset), z)
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.From)
 
 			case Zr_m_xm_nr:
-				ctxt.Rexflag = 0
-				mediaop(ctxt, o, op, int(yt.zoffset), z)
-				asmand(ctxt, p, &p.To, &p.From)
+				asmbuf.rexflag = 0
+				asmbuf.mediaop(ctxt, o, op, int(yt.zoffset), z)
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.From)
 
 			case Zo_m:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmando(ctxt, p, &p.To, int(o.op[z+1]))
+				asmbuf.Put1(byte(op))
+				asmbuf.asmando(ctxt, cursym, p, &p.To, int(o.op[z+1]))
 
 			case Zcallindreg:
-				r = obj.Addrel(ctxt.Cursym)
+				r = obj.Addrel(cursym)
 				r.Off = int32(p.Pc)
-				r.Type = obj.R_CALLIND
+				r.Type = objabi.R_CALLIND
 				r.Siz = 0
 				fallthrough
 
 			case Zo_m64:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmandsz(ctxt, p, &p.To, int(o.op[z+1]), 0, 1)
+				asmbuf.Put1(byte(op))
+				asmbuf.asmandsz(ctxt, cursym, p, &p.To, int(o.op[z+1]), 0, 1)
 
 			case Zm_ibo:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmando(ctxt, p, &p.From, int(o.op[z+1]))
-				ctxt.AsmBuf.Put1(byte(vaddr(ctxt, p, &p.To, nil)))
+				asmbuf.Put1(byte(op))
+				asmbuf.asmando(ctxt, cursym, p, &p.From, int(o.op[z+1]))
+				asmbuf.Put1(byte(vaddr(ctxt, p, &p.To, nil)))
 
 			case Zibo_m:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmando(ctxt, p, &p.To, int(o.op[z+1]))
-				ctxt.AsmBuf.Put1(byte(vaddr(ctxt, p, &p.From, nil)))
+				asmbuf.Put1(byte(op))
+				asmbuf.asmando(ctxt, cursym, p, &p.To, int(o.op[z+1]))
+				asmbuf.Put1(byte(vaddr(ctxt, p, &p.From, nil)))
 
 			case Zibo_m_xm:
-				z = mediaop(ctxt, o, op, int(yt.zoffset), z)
-				asmando(ctxt, p, &p.To, int(o.op[z+1]))
-				ctxt.AsmBuf.Put1(byte(vaddr(ctxt, p, &p.From, nil)))
+				z = asmbuf.mediaop(ctxt, o, op, int(yt.zoffset), z)
+				asmbuf.asmando(ctxt, cursym, p, &p.To, int(o.op[z+1]))
+				asmbuf.Put1(byte(vaddr(ctxt, p, &p.From, nil)))
 
 			case Z_ib, Zib_:
 				if yt.zcase == Zib_ {
@@ -3563,31 +4195,31 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				} else {
 					a = &p.To
 				}
-				ctxt.AsmBuf.Put1(byte(op))
+				asmbuf.Put1(byte(op))
 				if p.As == AXABORT {
-					ctxt.AsmBuf.Put1(o.op[z+1])
+					asmbuf.Put1(o.op[z+1])
 				}
-				ctxt.AsmBuf.Put1(byte(vaddr(ctxt, p, a, nil)))
+				asmbuf.Put1(byte(vaddr(ctxt, p, a, nil)))
 
 			case Zib_rp:
-				ctxt.Rexflag |= regrex[p.To.Reg] & (Rxb | 0x40)
-				ctxt.AsmBuf.Put2(byte(op+reg[p.To.Reg]), byte(vaddr(ctxt, p, &p.From, nil)))
+				asmbuf.rexflag |= regrex[p.To.Reg] & (Rxb | 0x40)
+				asmbuf.Put2(byte(op+reg[p.To.Reg]), byte(vaddr(ctxt, p, &p.From, nil)))
 
 			case Zil_rp:
-				ctxt.Rexflag |= regrex[p.To.Reg] & Rxb
-				ctxt.AsmBuf.Put1(byte(op + reg[p.To.Reg]))
+				asmbuf.rexflag |= regrex[p.To.Reg] & Rxb
+				asmbuf.Put1(byte(op + reg[p.To.Reg]))
 				if o.prefix == Pe {
 					v = vaddr(ctxt, p, &p.From, nil)
-					ctxt.AsmBuf.PutInt16(int16(v))
+					asmbuf.PutInt16(int16(v))
 				} else {
-					relput4(ctxt, p, &p.From)
+					asmbuf.relput4(ctxt, cursym, p, &p.From)
 				}
 
 			case Zo_iw:
-				ctxt.AsmBuf.Put1(byte(op))
+				asmbuf.Put1(byte(op))
 				if p.From.Type != obj.TYPE_NONE {
 					v = vaddr(ctxt, p, &p.From, nil)
-					ctxt.AsmBuf.PutInt16(int16(v))
+					asmbuf.PutInt16(int16(v))
 				}
 
 			case Ziq_rp:
@@ -3596,42 +4228,42 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				if l == 0 && rel.Siz != 8 {
 					//p->mark |= 0100;
 					//print("zero: %llux %v\n", v, p);
-					ctxt.Rexflag &^= (0x40 | Rxw)
+					asmbuf.rexflag &^= (0x40 | Rxw)
 
-					ctxt.Rexflag |= regrex[p.To.Reg] & Rxb
-					ctxt.AsmBuf.Put1(byte(0xb8 + reg[p.To.Reg]))
+					asmbuf.rexflag |= regrex[p.To.Reg] & Rxb
+					asmbuf.Put1(byte(0xb8 + reg[p.To.Reg]))
 					if rel.Type != 0 {
-						r = obj.Addrel(ctxt.Cursym)
+						r = obj.Addrel(cursym)
 						*r = rel
-						r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
+						r.Off = int32(p.Pc + int64(asmbuf.Len()))
 					}
 
-					ctxt.AsmBuf.PutInt32(int32(v))
+					asmbuf.PutInt32(int32(v))
 				} else if l == -1 && uint64(v)&(uint64(1)<<31) != 0 { /* sign extend */
 
 					//p->mark |= 0100;
 					//print("sign: %llux %v\n", v, p);
-					ctxt.AsmBuf.Put1(0xc7)
-					asmando(ctxt, p, &p.To, 0)
+					asmbuf.Put1(0xc7)
+					asmbuf.asmando(ctxt, cursym, p, &p.To, 0)
 
-					ctxt.AsmBuf.PutInt32(int32(v)) // need all 8
+					asmbuf.PutInt32(int32(v)) // need all 8
 				} else {
 					//print("all: %llux %v\n", v, p);
-					ctxt.Rexflag |= regrex[p.To.Reg] & Rxb
-					ctxt.AsmBuf.Put1(byte(op + reg[p.To.Reg]))
+					asmbuf.rexflag |= regrex[p.To.Reg] & Rxb
+					asmbuf.Put1(byte(op + reg[p.To.Reg]))
 					if rel.Type != 0 {
-						r = obj.Addrel(ctxt.Cursym)
+						r = obj.Addrel(cursym)
 						*r = rel
-						r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
+						r.Off = int32(p.Pc + int64(asmbuf.Len()))
 					}
 
-					ctxt.AsmBuf.PutInt64(v)
+					asmbuf.PutInt64(v)
 				}
 
 			case Zib_rr:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmand(ctxt, p, &p.To, &p.To)
-				ctxt.AsmBuf.Put1(byte(vaddr(ctxt, p, &p.From, nil)))
+				asmbuf.Put1(byte(op))
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.To)
+				asmbuf.Put1(byte(vaddr(ctxt, p, &p.From, nil)))
 
 			case Z_il, Zil_:
 				if yt.zcase == Zil_ {
@@ -3639,84 +4271,80 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				} else {
 					a = &p.To
 				}
-				ctxt.AsmBuf.Put1(byte(op))
+				asmbuf.Put1(byte(op))
 				if o.prefix == Pe {
 					v = vaddr(ctxt, p, a, nil)
-					ctxt.AsmBuf.PutInt16(int16(v))
+					asmbuf.PutInt16(int16(v))
 				} else {
-					relput4(ctxt, p, a)
+					asmbuf.relput4(ctxt, cursym, p, a)
 				}
 
 			case Zm_ilo, Zilo_m:
-				ctxt.AsmBuf.Put1(byte(op))
+				asmbuf.Put1(byte(op))
 				if yt.zcase == Zilo_m {
 					a = &p.From
-					asmando(ctxt, p, &p.To, int(o.op[z+1]))
+					asmbuf.asmando(ctxt, cursym, p, &p.To, int(o.op[z+1]))
 				} else {
 					a = &p.To
-					asmando(ctxt, p, &p.From, int(o.op[z+1]))
+					asmbuf.asmando(ctxt, cursym, p, &p.From, int(o.op[z+1]))
 				}
 
 				if o.prefix == Pe {
 					v = vaddr(ctxt, p, a, nil)
-					ctxt.AsmBuf.PutInt16(int16(v))
+					asmbuf.PutInt16(int16(v))
 				} else {
-					relput4(ctxt, p, a)
+					asmbuf.relput4(ctxt, cursym, p, a)
 				}
 
 			case Zil_rr:
-				ctxt.AsmBuf.Put1(byte(op))
-				asmand(ctxt, p, &p.To, &p.To)
+				asmbuf.Put1(byte(op))
+				asmbuf.asmand(ctxt, cursym, p, &p.To, &p.To)
 				if o.prefix == Pe {
 					v = vaddr(ctxt, p, &p.From, nil)
-					ctxt.AsmBuf.PutInt16(int16(v))
+					asmbuf.PutInt16(int16(v))
 				} else {
-					relput4(ctxt, p, &p.From)
+					asmbuf.relput4(ctxt, cursym, p, &p.From)
 				}
 
 			case Z_rp:
-				ctxt.Rexflag |= regrex[p.To.Reg] & (Rxb | 0x40)
-				ctxt.AsmBuf.Put1(byte(op + reg[p.To.Reg]))
+				asmbuf.rexflag |= regrex[p.To.Reg] & (Rxb | 0x40)
+				asmbuf.Put1(byte(op + reg[p.To.Reg]))
 
 			case Zrp_:
-				ctxt.Rexflag |= regrex[p.From.Reg] & (Rxb | 0x40)
-				ctxt.AsmBuf.Put1(byte(op + reg[p.From.Reg]))
-
-			case Zclr:
-				ctxt.Rexflag &^= Pw
-				ctxt.AsmBuf.Put1(byte(op))
-				asmand(ctxt, p, &p.To, &p.To)
+				asmbuf.rexflag |= regrex[p.From.Reg] & (Rxb | 0x40)
+				asmbuf.Put1(byte(op + reg[p.From.Reg]))
 
 			case Zcallcon, Zjmpcon:
 				if yt.zcase == Zcallcon {
-					ctxt.AsmBuf.Put1(byte(op))
+					asmbuf.Put1(byte(op))
 				} else {
-					ctxt.AsmBuf.Put1(o.op[z+1])
+					asmbuf.Put1(o.op[z+1])
 				}
-				r = obj.Addrel(ctxt.Cursym)
-				r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
-				r.Type = obj.R_PCREL
+				r = obj.Addrel(cursym)
+				r.Off = int32(p.Pc + int64(asmbuf.Len()))
+				r.Type = objabi.R_PCREL
 				r.Siz = 4
 				r.Add = p.To.Offset
-				ctxt.AsmBuf.PutInt32(0)
+				asmbuf.PutInt32(0)
 
 			case Zcallind:
-				ctxt.AsmBuf.Put2(byte(op), o.op[z+1])
-				r = obj.Addrel(ctxt.Cursym)
-				r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
-				if p.Mode == 64 {
-					r.Type = obj.R_PCREL
+				asmbuf.Put2(byte(op), o.op[z+1])
+				r = obj.Addrel(cursym)
+				r.Off = int32(p.Pc + int64(asmbuf.Len()))
+				if ctxt.Arch.Family == sys.AMD64 {
+					r.Type = objabi.R_PCREL
 				} else {
-					r.Type = obj.R_ADDR
+					r.Type = objabi.R_ADDR
 				}
 				r.Siz = 4
 				r.Add = p.To.Offset
 				r.Sym = p.To.Sym
-				ctxt.AsmBuf.PutInt32(0)
+				asmbuf.PutInt32(0)
 
 			case Zcall, Zcallduff:
 				if p.To.Sym == nil {
 					ctxt.Diag("call without target")
+					ctxt.DiagFlush()
 					log.Fatalf("bad code")
 				}
 
@@ -3724,7 +4352,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					ctxt.Diag("directly calling duff when dynamically linking Go")
 				}
 
-				if ctxt.Framepointer_enabled && yt.zcase == Zcallduff && p.Mode == 64 {
+				if ctxt.Framepointer_enabled && yt.zcase == Zcallduff && ctxt.Arch.Family == sys.AMD64 {
 					// Maintain BP around call, since duffcopy/duffzero can't do it
 					// (the call jumps into the middle of the function).
 					// This makes it possible to see call sites for duffcopy/duffzero in
@@ -3732,41 +4360,42 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					// whole point of obj.Framepointer_enabled).
 					// MOVQ BP, -16(SP)
 					// LEAQ -16(SP), BP
-					ctxt.AsmBuf.Put(bpduff1)
+					asmbuf.Put(bpduff1)
 				}
-				ctxt.AsmBuf.Put1(byte(op))
-				r = obj.Addrel(ctxt.Cursym)
-				r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
+				asmbuf.Put1(byte(op))
+				r = obj.Addrel(cursym)
+				r.Off = int32(p.Pc + int64(asmbuf.Len()))
 				r.Sym = p.To.Sym
 				r.Add = p.To.Offset
-				r.Type = obj.R_CALL
+				r.Type = objabi.R_CALL
 				r.Siz = 4
-				ctxt.AsmBuf.PutInt32(0)
+				asmbuf.PutInt32(0)
 
-				if ctxt.Framepointer_enabled && yt.zcase == Zcallduff && p.Mode == 64 {
+				if ctxt.Framepointer_enabled && yt.zcase == Zcallduff && ctxt.Arch.Family == sys.AMD64 {
 					// Pop BP pushed above.
 					// MOVQ 0(BP), BP
-					ctxt.AsmBuf.Put(bpduff2)
+					asmbuf.Put(bpduff2)
 				}
 
 			// TODO: jump across functions needs reloc
 			case Zbr, Zjmp, Zloop:
 				if p.As == AXBEGIN {
-					ctxt.AsmBuf.Put1(byte(op))
+					asmbuf.Put1(byte(op))
 				}
 				if p.To.Sym != nil {
 					if yt.zcase != Zjmp {
 						ctxt.Diag("branch to ATEXT")
+						ctxt.DiagFlush()
 						log.Fatalf("bad code")
 					}
 
-					ctxt.AsmBuf.Put1(o.op[z+1])
-					r = obj.Addrel(ctxt.Cursym)
-					r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
+					asmbuf.Put1(o.op[z+1])
+					r = obj.Addrel(cursym)
+					r.Off = int32(p.Pc + int64(asmbuf.Len()))
 					r.Sym = p.To.Sym
-					r.Type = obj.R_PCREL
+					r.Type = objabi.R_PCREL
 					r.Siz = 4
-					ctxt.AsmBuf.PutInt32(0)
+					asmbuf.PutInt32(0)
 					break
 				}
 
@@ -3778,6 +4407,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 
 				if q == nil {
 					ctxt.Diag("jmp/branch/loop without target")
+					ctxt.DiagFlush()
 					log.Fatalf("bad code")
 				}
 
@@ -3785,9 +4415,9 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					v = q.Pc - (p.Pc + 2)
 					if v >= -128 && p.As != AXBEGIN {
 						if p.As == AJCXZL {
-							ctxt.AsmBuf.Put1(0x67)
+							asmbuf.Put1(0x67)
 						}
-						ctxt.AsmBuf.Put2(byte(op), byte(v))
+						asmbuf.Put2(byte(op), byte(v))
 					} else if yt.zcase == Zloop {
 						ctxt.Diag("loop too far: %v", p)
 					} else {
@@ -3796,12 +4426,12 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 							v--
 						}
 						if yt.zcase == Zbr {
-							ctxt.AsmBuf.Put1(0x0f)
+							asmbuf.Put1(0x0f)
 							v--
 						}
 
-						ctxt.AsmBuf.Put1(o.op[z+1])
-						ctxt.AsmBuf.PutInt32(int32(v))
+						asmbuf.Put1(o.op[z+1])
+						asmbuf.PutInt32(int32(v))
 					}
 
 					break
@@ -3813,17 +4443,17 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				q.Rel = p
 				if p.Back&2 != 0 && p.As != AXBEGIN { // short
 					if p.As == AJCXZL {
-						ctxt.AsmBuf.Put1(0x67)
+						asmbuf.Put1(0x67)
 					}
-					ctxt.AsmBuf.Put2(byte(op), 0)
+					asmbuf.Put2(byte(op), 0)
 				} else if yt.zcase == Zloop {
 					ctxt.Diag("loop too far: %v", p)
 				} else {
 					if yt.zcase == Zbr {
-						ctxt.AsmBuf.Put1(0x0f)
+						asmbuf.Put1(0x0f)
 					}
-					ctxt.AsmBuf.Put1(o.op[z+1])
-					ctxt.AsmBuf.PutInt32(0)
+					asmbuf.Put1(o.op[z+1])
+					asmbuf.PutInt32(0)
 				}
 
 				break
@@ -3851,18 +4481,18 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				v = vaddr(ctxt, p, &p.From, &rel)
 				if rel.Siz != 0 {
 					rel.Siz = uint8(op)
-					r = obj.Addrel(ctxt.Cursym)
+					r = obj.Addrel(cursym)
 					*r = rel
-					r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
+					r.Off = int32(p.Pc + int64(asmbuf.Len()))
 				}
 
-				ctxt.AsmBuf.Put1(byte(v))
+				asmbuf.Put1(byte(v))
 				if op > 1 {
-					ctxt.AsmBuf.Put1(byte(v >> 8))
+					asmbuf.Put1(byte(v >> 8))
 					if op > 2 {
-						ctxt.AsmBuf.PutInt16(int16(v >> 16))
+						asmbuf.PutInt16(int16(v >> 16))
 						if op > 4 {
-							ctxt.AsmBuf.PutInt32(int32(v >> 32))
+							asmbuf.PutInt32(int32(v >> 32))
 						}
 					}
 				}
@@ -3870,7 +4500,10 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 
 			return
 		}
-		z += int(yt.zoffset) + xo
+	}
+	f3t = Ynone * Ymax
+	if p.GetFrom3() != nil {
+		f3t = oclass(ctxt, p, p.GetFrom3()) * Ymax
 	}
 	for mo := ymovtab; mo[0].as != 0; mo = mo[1:] {
 		var pp obj.Prog
@@ -3884,62 +4517,62 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 
 				case 0: /* lit */
 					for z = 0; t[z] != E; z++ {
-						ctxt.AsmBuf.Put1(t[z])
+						asmbuf.Put1(t[z])
 					}
 
 				case 1: /* r,m */
-					ctxt.AsmBuf.Put1(t[0])
-					asmando(ctxt, p, &p.To, int(t[1]))
+					asmbuf.Put1(t[0])
+					asmbuf.asmando(ctxt, cursym, p, &p.To, int(t[1]))
 
 				case 2: /* m,r */
-					ctxt.AsmBuf.Put1(t[0])
-					asmando(ctxt, p, &p.From, int(t[1]))
+					asmbuf.Put1(t[0])
+					asmbuf.asmando(ctxt, cursym, p, &p.From, int(t[1]))
 
 				case 3: /* r,m - 2op */
-					ctxt.AsmBuf.Put2(t[0], t[1])
-					asmando(ctxt, p, &p.To, int(t[2]))
-					ctxt.Rexflag |= regrex[p.From.Reg] & (Rxr | 0x40)
+					asmbuf.Put2(t[0], t[1])
+					asmbuf.asmando(ctxt, cursym, p, &p.To, int(t[2]))
+					asmbuf.rexflag |= regrex[p.From.Reg] & (Rxr | 0x40)
 
 				case 4: /* m,r - 2op */
-					ctxt.AsmBuf.Put2(t[0], t[1])
-					asmando(ctxt, p, &p.From, int(t[2]))
-					ctxt.Rexflag |= regrex[p.To.Reg] & (Rxr | 0x40)
+					asmbuf.Put2(t[0], t[1])
+					asmbuf.asmando(ctxt, cursym, p, &p.From, int(t[2]))
+					asmbuf.rexflag |= regrex[p.To.Reg] & (Rxr | 0x40)
 
 				case 5: /* load full pointer, trash heap */
 					if t[0] != 0 {
-						ctxt.AsmBuf.Put1(t[0])
+						asmbuf.Put1(t[0])
 					}
 					switch p.To.Index {
 					default:
 						goto bad
 
 					case REG_DS:
-						ctxt.AsmBuf.Put1(0xc5)
+						asmbuf.Put1(0xc5)
 
 					case REG_SS:
-						ctxt.AsmBuf.Put2(0x0f, 0xb2)
+						asmbuf.Put2(0x0f, 0xb2)
 
 					case REG_ES:
-						ctxt.AsmBuf.Put1(0xc4)
+						asmbuf.Put1(0xc4)
 
 					case REG_FS:
-						ctxt.AsmBuf.Put2(0x0f, 0xb4)
+						asmbuf.Put2(0x0f, 0xb4)
 
 					case REG_GS:
-						ctxt.AsmBuf.Put2(0x0f, 0xb5)
+						asmbuf.Put2(0x0f, 0xb5)
 					}
 
-					asmand(ctxt, p, &p.From, &p.To)
+					asmbuf.asmand(ctxt, cursym, p, &p.From, &p.To)
 
 				case 6: /* double shift */
 					if t[0] == Pw {
-						if p.Mode != 64 {
+						if ctxt.Arch.Family != sys.AMD64 {
 							ctxt.Diag("asmins: illegal 64: %v", p)
 						}
-						ctxt.Rexflag |= Pw
+						asmbuf.rexflag |= Pw
 						t = t[1:]
 					} else if t[0] == Pe {
-						ctxt.AsmBuf.Put1(Pe)
+						asmbuf.Put1(Pe)
 						t = t[1:]
 					}
 
@@ -3948,9 +4581,9 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						goto bad
 
 					case obj.TYPE_CONST:
-						ctxt.AsmBuf.Put2(0x0f, t[0])
-						asmandsz(ctxt, p, &p.To, reg[p.From3.Reg], regrex[p.From3.Reg], 0)
-						ctxt.AsmBuf.Put1(byte(p.From.Offset))
+						asmbuf.Put2(0x0f, t[0])
+						asmbuf.asmandsz(ctxt, cursym, p, &p.To, reg[p.GetFrom3().Reg], regrex[p.GetFrom3().Reg], 0)
+						asmbuf.Put1(byte(p.From.Offset))
 
 					case obj.TYPE_REG:
 						switch p.From.Reg {
@@ -3958,8 +4591,8 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 							goto bad
 
 						case REG_CL, REG_CX:
-							ctxt.AsmBuf.Put2(0x0f, t[1])
-							asmandsz(ctxt, p, &p.To, reg[p.From3.Reg], regrex[p.From3.Reg], 0)
+							asmbuf.Put2(0x0f, t[1])
+							asmbuf.asmandsz(ctxt, cursym, p, &p.To, reg[p.GetFrom3().Reg], regrex[p.GetFrom3().Reg], 0)
 						}
 					}
 
@@ -3968,11 +4601,11 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 				// register to access the actual TLS variables. Systems that allow direct TLS access
 				// are handled in prefixof above and should not be listed here.
 				case 7: /* mov tls, r */
-					if p.Mode == 64 && p.As != AMOVQ || p.Mode == 32 && p.As != AMOVL {
+					if ctxt.Arch.Family == sys.AMD64 && p.As != AMOVQ || ctxt.Arch.Family == sys.I386 && p.As != AMOVL {
 						ctxt.Diag("invalid load of TLS: %v", p)
 					}
 
-					if p.Mode == 32 {
+					if ctxt.Arch.Family == sys.I386 {
 						// NOTE: The systems listed here are the ones that use the "TLS initial exec" model,
 						// where you load the TLS base register into a register and then index off that
 						// register to access the actual TLS variables. Systems that allow direct TLS access
@@ -3981,8 +4614,8 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						default:
 							log.Fatalf("unknown TLS base location for %v", ctxt.Headtype)
 
-						case obj.Hlinux,
-							obj.Hnacl:
+						case objabi.Hlinux,
+							objabi.Hnacl:
 							if ctxt.Flag_shared {
 								// Note that this is not generating the same insns as the other cases.
 								//     MOV TLS, dst
@@ -3996,21 +4629,21 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 								// is g, which we can't check here, but will when we assemble the second
 								// instruction.
 								dst := p.To.Reg
-								ctxt.AsmBuf.Put1(0xe8)
-								r = obj.Addrel(ctxt.Cursym)
-								r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
-								r.Type = obj.R_CALL
+								asmbuf.Put1(0xe8)
+								r = obj.Addrel(cursym)
+								r.Off = int32(p.Pc + int64(asmbuf.Len()))
+								r.Type = objabi.R_CALL
 								r.Siz = 4
-								r.Sym = obj.Linklookup(ctxt, "__x86.get_pc_thunk."+strings.ToLower(Rconv(int(dst))), 0)
-								ctxt.AsmBuf.PutInt32(0)
+								r.Sym = ctxt.Lookup("__x86.get_pc_thunk." + strings.ToLower(rconv(int(dst))))
+								asmbuf.PutInt32(0)
 
-								ctxt.AsmBuf.Put2(0x8B, byte(2<<6|reg[dst]|(reg[dst]<<3)))
-								r = obj.Addrel(ctxt.Cursym)
-								r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
-								r.Type = obj.R_TLS_IE
+								asmbuf.Put2(0x8B, byte(2<<6|reg[dst]|(reg[dst]<<3)))
+								r = obj.Addrel(cursym)
+								r.Off = int32(p.Pc + int64(asmbuf.Len()))
+								r.Type = objabi.R_TLS_IE
 								r.Siz = 4
 								r.Add = 2
-								ctxt.AsmBuf.PutInt32(0)
+								asmbuf.PutInt32(0)
 							} else {
 								// ELF TLS base is 0(GS).
 								pp.From = p.From
@@ -4020,24 +4653,21 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 								pp.From.Offset = 0
 								pp.From.Index = REG_NONE
 								pp.From.Scale = 0
-								ctxt.AsmBuf.Put2(0x65, // GS
+								asmbuf.Put2(0x65, // GS
 									0x8B)
-								asmand(ctxt, p, &pp.From, &p.To)
+								asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 							}
-						case obj.Hplan9:
-							if ctxt.Plan9privates == nil {
-								ctxt.Plan9privates = obj.Linklookup(ctxt, "_privates", 0)
-							}
+						case objabi.Hplan9:
 							pp.From = obj.Addr{}
 							pp.From.Type = obj.TYPE_MEM
 							pp.From.Name = obj.NAME_EXTERN
-							pp.From.Sym = ctxt.Plan9privates
+							pp.From.Sym = plan9privates
 							pp.From.Offset = 0
 							pp.From.Index = REG_NONE
-							ctxt.AsmBuf.Put1(0x8B)
-							asmand(ctxt, p, &pp.From, &p.To)
+							asmbuf.Put1(0x8B)
+							asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 
-						case obj.Hwindows, obj.Hwindowsgui:
+						case objabi.Hwindows:
 							// Windows TLS base is always 0x14(FS).
 							pp.From = p.From
 
@@ -4046,9 +4676,9 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 							pp.From.Offset = 0x14
 							pp.From.Index = REG_NONE
 							pp.From.Scale = 0
-							ctxt.AsmBuf.Put2(0x64, // FS
+							asmbuf.Put2(0x64, // FS
 								0x8B)
-							asmand(ctxt, p, &pp.From, &p.To)
+							asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 						}
 						break
 					}
@@ -4057,7 +4687,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 					default:
 						log.Fatalf("unknown TLS base location for %v", ctxt.Headtype)
 
-					case obj.Hlinux:
+					case objabi.Hlinux:
 						if !ctxt.Flag_shared {
 							log.Fatalf("unknown TLS base location for linux without -shared")
 						}
@@ -4070,31 +4700,28 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						// and a R_TLS_IE reloc. This all assumes the only tls variable we access
 						// is g, which we can't check here, but will when we assemble the second
 						// instruction.
-						ctxt.Rexflag = Pw | (regrex[p.To.Reg] & Rxr)
+						asmbuf.rexflag = Pw | (regrex[p.To.Reg] & Rxr)
 
-						ctxt.AsmBuf.Put2(0x8B, byte(0x05|(reg[p.To.Reg]<<3)))
-						r = obj.Addrel(ctxt.Cursym)
-						r.Off = int32(p.Pc + int64(ctxt.AsmBuf.Len()))
-						r.Type = obj.R_TLS_IE
+						asmbuf.Put2(0x8B, byte(0x05|(reg[p.To.Reg]<<3)))
+						r = obj.Addrel(cursym)
+						r.Off = int32(p.Pc + int64(asmbuf.Len()))
+						r.Type = objabi.R_TLS_IE
 						r.Siz = 4
 						r.Add = -4
-						ctxt.AsmBuf.PutInt32(0)
+						asmbuf.PutInt32(0)
 
-					case obj.Hplan9:
-						if ctxt.Plan9privates == nil {
-							ctxt.Plan9privates = obj.Linklookup(ctxt, "_privates", 0)
-						}
+					case objabi.Hplan9:
 						pp.From = obj.Addr{}
 						pp.From.Type = obj.TYPE_MEM
 						pp.From.Name = obj.NAME_EXTERN
-						pp.From.Sym = ctxt.Plan9privates
+						pp.From.Sym = plan9privates
 						pp.From.Offset = 0
 						pp.From.Index = REG_NONE
-						ctxt.Rexflag |= Pw
-						ctxt.AsmBuf.Put1(0x8B)
-						asmand(ctxt, p, &pp.From, &p.To)
+						asmbuf.rexflag |= Pw
+						asmbuf.Put1(0x8B)
+						asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 
-					case obj.Hsolaris: // TODO(rsc): Delete Hsolaris from list. Should not use this code. See progedit in obj6.c.
+					case objabi.Hsolaris: // TODO(rsc): Delete Hsolaris from list. Should not use this code. See progedit in obj6.c.
 						// TLS base is 0(FS).
 						pp.From = p.From
 
@@ -4104,12 +4731,12 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						pp.From.Offset = 0
 						pp.From.Index = REG_NONE
 						pp.From.Scale = 0
-						ctxt.Rexflag |= Pw
-						ctxt.AsmBuf.Put2(0x64, // FS
+						asmbuf.rexflag |= Pw
+						asmbuf.Put2(0x64, // FS
 							0x8B)
-						asmand(ctxt, p, &pp.From, &p.To)
+						asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 
-					case obj.Hwindows, obj.Hwindowsgui:
+					case objabi.Hwindows:
 						// Windows TLS base is always 0x28(GS).
 						pp.From = p.From
 
@@ -4119,10 +4746,10 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 						pp.From.Offset = 0x28
 						pp.From.Index = REG_NONE
 						pp.From.Scale = 0
-						ctxt.Rexflag |= Pw
-						ctxt.AsmBuf.Put2(0x65, // GS
+						asmbuf.rexflag |= Pw
+						asmbuf.Put2(0x65, // GS
 							0x8B)
-						asmand(ctxt, p, &pp.From, &p.To)
+						asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 					}
 				}
 				return
@@ -4132,7 +4759,7 @@ func doasm(ctxt *obj.Link, p *obj.Prog) {
 	goto bad
 
 bad:
-	if p.Mode != 64 {
+	if ctxt.Arch.Family != sys.AMD64 {
 		/*
 		 * here, the assembly has failed.
 		 * if its a byte instruction that has
@@ -4149,20 +4776,20 @@ bad:
 		if p.From.Type == obj.TYPE_REG && z >= REG_BP && z <= REG_DI {
 			// TODO(rsc): Use this code for x86-64 too. It has bug fixes not present in the amd64 code base.
 			// For now, different to keep bit-for-bit compatibility.
-			if p.Mode == 32 {
+			if ctxt.Arch.Family == sys.I386 {
 				breg := byteswapreg(ctxt, &p.To)
 				if breg != REG_AX {
-					ctxt.AsmBuf.Put1(0x87) // xchg lhs,bx
-					asmando(ctxt, p, &p.From, reg[breg])
+					asmbuf.Put1(0x87) // xchg lhs,bx
+					asmbuf.asmando(ctxt, cursym, p, &p.From, reg[breg])
 					subreg(&pp, z, breg)
-					doasm(ctxt, &pp)
-					ctxt.AsmBuf.Put1(0x87) // xchg lhs,bx
-					asmando(ctxt, p, &p.From, reg[breg])
+					asmbuf.doasm(ctxt, cursym, &pp)
+					asmbuf.Put1(0x87) // xchg lhs,bx
+					asmbuf.asmando(ctxt, cursym, p, &p.From, reg[breg])
 				} else {
-					ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
+					asmbuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
 					subreg(&pp, z, REG_AX)
-					doasm(ctxt, &pp)
-					ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
+					asmbuf.doasm(ctxt, cursym, &pp)
+					asmbuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
 				}
 				return
 			}
@@ -4170,17 +4797,17 @@ bad:
 			if isax(&p.To) || p.To.Type == obj.TYPE_NONE {
 				// We certainly don't want to exchange
 				// with AX if the op is MUL or DIV.
-				ctxt.AsmBuf.Put1(0x87) // xchg lhs,bx
-				asmando(ctxt, p, &p.From, reg[REG_BX])
+				asmbuf.Put1(0x87) // xchg lhs,bx
+				asmbuf.asmando(ctxt, cursym, p, &p.From, reg[REG_BX])
 				subreg(&pp, z, REG_BX)
-				doasm(ctxt, &pp)
-				ctxt.AsmBuf.Put1(0x87) // xchg lhs,bx
-				asmando(ctxt, p, &p.From, reg[REG_BX])
+				asmbuf.doasm(ctxt, cursym, &pp)
+				asmbuf.Put1(0x87) // xchg lhs,bx
+				asmbuf.asmando(ctxt, cursym, p, &p.From, reg[REG_BX])
 			} else {
-				ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
+				asmbuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
 				subreg(&pp, z, REG_AX)
-				doasm(ctxt, &pp)
-				ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
+				asmbuf.doasm(ctxt, cursym, &pp)
+				asmbuf.Put1(byte(0x90 + reg[z])) // xchg lsh,ax
 			}
 			return
 		}
@@ -4189,36 +4816,36 @@ bad:
 		if p.To.Type == obj.TYPE_REG && z >= REG_BP && z <= REG_DI {
 			// TODO(rsc): Use this code for x86-64 too. It has bug fixes not present in the amd64 code base.
 			// For now, different to keep bit-for-bit compatibility.
-			if p.Mode == 32 {
+			if ctxt.Arch.Family == sys.I386 {
 				breg := byteswapreg(ctxt, &p.From)
 				if breg != REG_AX {
-					ctxt.AsmBuf.Put1(0x87) //xchg rhs,bx
-					asmando(ctxt, p, &p.To, reg[breg])
+					asmbuf.Put1(0x87) //xchg rhs,bx
+					asmbuf.asmando(ctxt, cursym, p, &p.To, reg[breg])
 					subreg(&pp, z, breg)
-					doasm(ctxt, &pp)
-					ctxt.AsmBuf.Put1(0x87) // xchg rhs,bx
-					asmando(ctxt, p, &p.To, reg[breg])
+					asmbuf.doasm(ctxt, cursym, &pp)
+					asmbuf.Put1(0x87) // xchg rhs,bx
+					asmbuf.asmando(ctxt, cursym, p, &p.To, reg[breg])
 				} else {
-					ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
+					asmbuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
 					subreg(&pp, z, REG_AX)
-					doasm(ctxt, &pp)
-					ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
+					asmbuf.doasm(ctxt, cursym, &pp)
+					asmbuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
 				}
 				return
 			}
 
 			if isax(&p.From) {
-				ctxt.AsmBuf.Put1(0x87) // xchg rhs,bx
-				asmando(ctxt, p, &p.To, reg[REG_BX])
+				asmbuf.Put1(0x87) // xchg rhs,bx
+				asmbuf.asmando(ctxt, cursym, p, &p.To, reg[REG_BX])
 				subreg(&pp, z, REG_BX)
-				doasm(ctxt, &pp)
-				ctxt.AsmBuf.Put1(0x87) // xchg rhs,bx
-				asmando(ctxt, p, &p.To, reg[REG_BX])
+				asmbuf.doasm(ctxt, cursym, &pp)
+				asmbuf.Put1(0x87) // xchg rhs,bx
+				asmbuf.asmando(ctxt, cursym, p, &p.To, reg[REG_BX])
 			} else {
-				ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
+				asmbuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
 				subreg(&pp, z, REG_AX)
-				doasm(ctxt, &pp)
-				ctxt.AsmBuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
+				asmbuf.doasm(ctxt, cursym, &pp)
+				asmbuf.Put1(byte(0x90 + reg[z])) // xchg rsh,ax
 			}
 			return
 		}
@@ -4234,68 +4861,54 @@ bad:
 // If a is empty, it returns BX to account for MULB-like instructions
 // that might use DX and AX.
 func byteswapreg(ctxt *obj.Link, a *obj.Addr) int {
-	cand := 1
-	canc := cand
-	canb := canc
-	cana := canb
-
+	cana, canb, canc, cand := true, true, true, true
 	if a.Type == obj.TYPE_NONE {
-		cand = 0
-		cana = cand
+		cana, cand = false, false
 	}
 
 	if a.Type == obj.TYPE_REG || ((a.Type == obj.TYPE_MEM || a.Type == obj.TYPE_ADDR) && a.Name == obj.NAME_NONE) {
 		switch a.Reg {
 		case REG_NONE:
-			cand = 0
-			cana = cand
-
+			cana, cand = false, false
 		case REG_AX, REG_AL, REG_AH:
-			cana = 0
-
+			cana = false
 		case REG_BX, REG_BL, REG_BH:
-			canb = 0
-
+			canb = false
 		case REG_CX, REG_CL, REG_CH:
-			canc = 0
-
+			canc = false
 		case REG_DX, REG_DL, REG_DH:
-			cand = 0
+			cand = false
 		}
 	}
 
 	if a.Type == obj.TYPE_MEM || a.Type == obj.TYPE_ADDR {
 		switch a.Index {
 		case REG_AX:
-			cana = 0
-
+			cana = false
 		case REG_BX:
-			canb = 0
-
+			canb = false
 		case REG_CX:
-			canc = 0
-
+			canc = false
 		case REG_DX:
-			cand = 0
+			cand = false
 		}
 	}
 
-	if cana != 0 {
+	switch {
+	case cana:
 		return REG_AX
-	}
-	if canb != 0 {
+	case canb:
 		return REG_BX
-	}
-	if canc != 0 {
+	case canc:
 		return REG_CX
-	}
-	if cand != 0 {
+	case cand:
 		return REG_DX
+	default:
+		ctxt.Diag("impossible byte register")
+		ctxt.DiagFlush()
+		log.Fatalf("bad code")
+		return 0
 	}
-
-	ctxt.Diag("impossible byte register")
-	log.Fatalf("bad code")
-	return 0
 }
 
 func isbadbyte(a *obj.Addr) bool {
@@ -4353,84 +4966,83 @@ var naclstos = []uint8{
 	0x3f, // LEAQ (R15)(DI*1), DI
 }
 
-func nacltrunc(ctxt *obj.Link, reg int) {
+func (asmbuf *AsmBuf) nacltrunc(ctxt *obj.Link, reg int) {
 	if reg >= REG_R8 {
-		ctxt.AsmBuf.Put1(0x45)
+		asmbuf.Put1(0x45)
 	}
 	reg = (reg - REG_AX) & 7
-	ctxt.AsmBuf.Put2(0x89, byte(3<<6|reg<<3|reg))
+	asmbuf.Put2(0x89, byte(3<<6|reg<<3|reg))
 }
 
-func asmins(ctxt *obj.Link, p *obj.Prog) {
-	ctxt.AsmBuf.Reset()
-	ctxt.Asmode = int(p.Mode)
+func (asmbuf *AsmBuf) asmins(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
+	asmbuf.Reset()
 
-	if ctxt.Headtype == obj.Hnacl && p.Mode == 32 {
+	if ctxt.Headtype == objabi.Hnacl && ctxt.Arch.Family == sys.I386 {
 		switch p.As {
 		case obj.ARET:
-			ctxt.AsmBuf.Put(naclret8)
+			asmbuf.Put(naclret8)
 			return
 
 		case obj.ACALL,
 			obj.AJMP:
 			if p.To.Type == obj.TYPE_REG && REG_AX <= p.To.Reg && p.To.Reg <= REG_DI {
-				ctxt.AsmBuf.Put3(0x83, byte(0xe0|(p.To.Reg-REG_AX)), 0xe0)
+				asmbuf.Put3(0x83, byte(0xe0|(p.To.Reg-REG_AX)), 0xe0)
 			}
 
 		case AINT:
-			ctxt.AsmBuf.Put1(0xf4)
+			asmbuf.Put1(0xf4)
 			return
 		}
 	}
 
-	if ctxt.Headtype == obj.Hnacl && p.Mode == 64 {
+	if ctxt.Headtype == objabi.Hnacl && ctxt.Arch.Family == sys.AMD64 {
 		if p.As == AREP {
-			ctxt.Rep++
+			asmbuf.rep = true
 			return
 		}
 
 		if p.As == AREPN {
-			ctxt.Repn++
+			asmbuf.repn = true
 			return
 		}
 
 		if p.As == ALOCK {
-			ctxt.Lock++
+			asmbuf.lock = true
 			return
 		}
 
 		if p.As != ALEAQ && p.As != ALEAL {
 			if p.From.Index != REG_NONE && p.From.Scale > 0 {
-				nacltrunc(ctxt, int(p.From.Index))
+				asmbuf.nacltrunc(ctxt, int(p.From.Index))
 			}
 			if p.To.Index != REG_NONE && p.To.Scale > 0 {
-				nacltrunc(ctxt, int(p.To.Index))
+				asmbuf.nacltrunc(ctxt, int(p.To.Index))
 			}
 		}
 
 		switch p.As {
 		case obj.ARET:
-			ctxt.AsmBuf.Put(naclret)
+			asmbuf.Put(naclret)
 			return
 
 		case obj.ACALL,
 			obj.AJMP:
 			if p.To.Type == obj.TYPE_REG && REG_AX <= p.To.Reg && p.To.Reg <= REG_DI {
 				// ANDL $~31, reg
-				ctxt.AsmBuf.Put3(0x83, byte(0xe0|(p.To.Reg-REG_AX)), 0xe0)
+				asmbuf.Put3(0x83, byte(0xe0|(p.To.Reg-REG_AX)), 0xe0)
 				// ADDQ R15, reg
-				ctxt.AsmBuf.Put3(0x4c, 0x01, byte(0xf8|(p.To.Reg-REG_AX)))
+				asmbuf.Put3(0x4c, 0x01, byte(0xf8|(p.To.Reg-REG_AX)))
 			}
 
 			if p.To.Type == obj.TYPE_REG && REG_R8 <= p.To.Reg && p.To.Reg <= REG_R15 {
 				// ANDL $~31, reg
-				ctxt.AsmBuf.Put4(0x41, 0x83, byte(0xe0|(p.To.Reg-REG_R8)), 0xe0)
+				asmbuf.Put4(0x41, 0x83, byte(0xe0|(p.To.Reg-REG_R8)), 0xe0)
 				// ADDQ R15, reg
-				ctxt.AsmBuf.Put3(0x4d, 0x01, byte(0xf8|(p.To.Reg-REG_R8)))
+				asmbuf.Put3(0x4d, 0x01, byte(0xf8|(p.To.Reg-REG_R8)))
 			}
 
 		case AINT:
-			ctxt.AsmBuf.Put1(0xf4)
+			asmbuf.Put1(0xf4)
 			return
 
 		case ASCASB,
@@ -4441,34 +5053,33 @@ func asmins(ctxt *obj.Link, p *obj.Prog) {
 			ASTOSW,
 			ASTOSL,
 			ASTOSQ:
-			ctxt.AsmBuf.Put(naclstos)
+			asmbuf.Put(naclstos)
 
 		case AMOVSB, AMOVSW, AMOVSL, AMOVSQ:
-			ctxt.AsmBuf.Put(naclmovs)
+			asmbuf.Put(naclmovs)
 		}
 
-		if ctxt.Rep != 0 {
-			ctxt.AsmBuf.Put1(0xf3)
-			ctxt.Rep = 0
+		if asmbuf.rep {
+			asmbuf.Put1(0xf3)
+			asmbuf.rep = false
 		}
 
-		if ctxt.Repn != 0 {
-			ctxt.AsmBuf.Put1(0xf2)
-			ctxt.Repn = 0
+		if asmbuf.repn {
+			asmbuf.Put1(0xf2)
+			asmbuf.repn = false
 		}
 
-		if ctxt.Lock != 0 {
-			ctxt.AsmBuf.Put1(0xf0)
-			ctxt.Lock = 0
+		if asmbuf.lock {
+			asmbuf.Put1(0xf0)
+			asmbuf.lock = false
 		}
 	}
 
-	ctxt.Rexflag = 0
-	ctxt.Vexflag = 0
-	mark := ctxt.AsmBuf.Len()
-	ctxt.Asmode = int(p.Mode)
-	doasm(ctxt, p)
-	if ctxt.Rexflag != 0 && ctxt.Vexflag == 0 {
+	asmbuf.rexflag = 0
+	asmbuf.vexflag = false
+	mark := asmbuf.Len()
+	asmbuf.doasm(ctxt, cursym, p)
+	if asmbuf.rexflag != 0 && !asmbuf.vexflag {
 		/*
 		 * as befits the whole approach of the architecture,
 		 * the rex prefix must appear before the first opcode byte
@@ -4476,31 +5087,31 @@ func asmins(ctxt *obj.Link, p *obj.Prog) {
 		 * before the 0f opcode escape!), or it might be ignored.
 		 * note that the handbook often misleadingly shows 66/f2/f3 in `opcode'.
 		 */
-		if p.Mode != 64 {
-			ctxt.Diag("asmins: illegal in mode %d: %v (%d %d)", p.Mode, p, p.Ft, p.Tt)
+		if ctxt.Arch.Family != sys.AMD64 {
+			ctxt.Diag("asmins: illegal in mode %d: %v (%d %d)", ctxt.Arch.RegSize*8, p, p.Ft, p.Tt)
 		}
-		n := ctxt.AsmBuf.Len()
+		n := asmbuf.Len()
 		var np int
 		for np = mark; np < n; np++ {
-			c := ctxt.AsmBuf.Peek(np)
+			c := asmbuf.At(np)
 			if c != 0xf2 && c != 0xf3 && (c < 0x64 || c > 0x67) && c != 0x2e && c != 0x3e && c != 0x26 {
 				break
 			}
 		}
-		ctxt.AsmBuf.Insert(np, byte(0x40|ctxt.Rexflag))
+		asmbuf.Insert(np, byte(0x40|asmbuf.rexflag))
 	}
 
-	n := ctxt.AsmBuf.Len()
-	for i := len(ctxt.Cursym.R) - 1; i >= 0; i-- {
-		r := &ctxt.Cursym.R[i]
+	n := asmbuf.Len()
+	for i := len(cursym.R) - 1; i >= 0; i-- {
+		r := &cursym.R[i]
 		if int64(r.Off) < p.Pc {
 			break
 		}
-		if ctxt.Rexflag != 0 {
+		if asmbuf.rexflag != 0 && !asmbuf.vexflag {
 			r.Off++
 		}
-		if r.Type == obj.R_PCREL {
-			if p.Mode == 64 || p.As == obj.AJMP || p.As == obj.ACALL {
+		if r.Type == objabi.R_PCREL {
+			if ctxt.Arch.Family == sys.AMD64 || p.As == obj.AJMP || p.As == obj.ACALL {
 				// PC-relative addressing is relative to the end of the instruction,
 				// but the relocations applied by the linker are relative to the end
 				// of the relocation. Because immediate instruction
@@ -4509,7 +5120,7 @@ func asmins(ctxt *obj.Link, p *obj.Prog) {
 				// adjust addend so that linker can keep relocating relative to the
 				// end of the relocation.
 				r.Add -= p.Pc + int64(n) - (int64(r.Off) + int64(r.Siz))
-			} else if p.Mode == 32 {
+			} else if ctxt.Arch.Family == sys.I386 {
 				// On 386 PC-relative addressing (for non-call/jmp instructions)
 				// assumes that the previous instruction loaded the PC of the end
 				// of that instruction into CX, so the adjustment is relative to
@@ -4517,19 +5128,24 @@ func asmins(ctxt *obj.Link, p *obj.Prog) {
 				r.Add += int64(r.Off) - p.Pc + int64(r.Siz)
 			}
 		}
-		if r.Type == obj.R_GOTPCREL && p.Mode == 32 {
+		if r.Type == objabi.R_GOTPCREL && ctxt.Arch.Family == sys.I386 {
 			// On 386, R_GOTPCREL makes the same assumptions as R_PCREL.
 			r.Add += int64(r.Off) - p.Pc + int64(r.Siz)
 		}
 
 	}
 
-	if p.Mode == 64 && ctxt.Headtype == obj.Hnacl && p.As != ACMPL && p.As != ACMPQ && p.To.Type == obj.TYPE_REG {
+	if ctxt.Arch.Family == sys.AMD64 && ctxt.Headtype == objabi.Hnacl && p.As != ACMPL && p.As != ACMPQ && p.To.Type == obj.TYPE_REG {
 		switch p.To.Reg {
 		case REG_SP:
-			ctxt.AsmBuf.Put(naclspfix)
+			asmbuf.Put(naclspfix)
 		case REG_BP:
-			ctxt.AsmBuf.Put(naclbpfix)
+			asmbuf.Put(naclbpfix)
 		}
 	}
+}
+
+// Extract 4 operands from p.
+func unpackOps4(p *obj.Prog) (*obj.Addr, *obj.Addr, *obj.Addr, *obj.Addr) {
+	return &p.From, &p.RestArgs[0], &p.RestArgs[1], &p.To
 }

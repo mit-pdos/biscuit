@@ -33,7 +33,7 @@ func nacl_thread_create(fn uintptr, stk, tls, xx unsafe.Pointer) int32
 //go:noescape
 func nacl_nanosleep(ts, extra *timespec) int32
 func nanotime() int64
-func mmap(addr unsafe.Pointer, n uintptr, prot, flags, fd int32, off uint32) unsafe.Pointer
+func mmap(addr unsafe.Pointer, n uintptr, prot, flags, fd int32, off uint32) (p unsafe.Pointer, err int)
 func exit(code int32)
 func osyield()
 
@@ -85,6 +85,11 @@ func msigsave(mp *m) {
 
 //go:nosplit
 func msigrestore(sigmask sigset) {
+}
+
+//go:nosplit
+//go:nowritebarrierrec
+func clearSignalHandlers() {
 }
 
 //go:nosplit
@@ -163,6 +168,9 @@ func newosproc(mp *m, stk unsafe.Pointer) {
 	}
 }
 
+//go:noescape
+func exitThread(wait *uint32)
+
 //go:nosplit
 func semacreate(mp *m) {
 	if mp.waitsema != 0 {
@@ -238,10 +246,6 @@ func semawakeup(mp *m) {
 	})
 }
 
-func memlimit() uintptr {
-	return 0
-}
-
 // This runs on a foreign stack, without an m or a g. No stack split.
 //go:nosplit
 //go:norace
@@ -273,11 +277,15 @@ func raisebadsignal(sig uint32) {
 
 func madvise(addr unsafe.Pointer, n uintptr, flags int32) {}
 func munmap(addr unsafe.Pointer, n uintptr)               {}
-func resetcpuprofiler(hz int32)                           {}
+func setProcessCPUProfiler(hz int32)                      {}
+func setThreadCPUProfiler(hz int32)                       {}
 func sigdisable(uint32)                                   {}
 func sigenable(uint32)                                    {}
 func sigignore(uint32)                                    {}
 func closeonexec(int32)                                   {}
+
+// gsignalStack is unused on nacl.
+type gsignalStack struct{}
 
 var writelock uint32 // test-and-set spin lock for write
 

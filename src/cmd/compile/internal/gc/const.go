@@ -4,10 +4,15 @@
 
 package gc
 
-import "strings"
+import (
+	"cmd/compile/internal/types"
+	"cmd/internal/src"
+	"math/big"
+	"strings"
+)
 
 // Ctype describes the constant kind of an "ideal" (untyped) constant.
-type Ctype int8
+type Ctype uint8
 
 const (
 	CTxxx Ctype = iota
@@ -112,38 +117,79 @@ type NilVal struct{}
 // n must be an integer or rune constant.
 func (n *Node) Int64() int64 {
 	if !Isconst(n, CTINT) {
-		Fatalf("Int(%v)", n)
+		Fatalf("Int64(%v)", n)
 	}
 	return n.Val().U.(*Mpint).Int64()
 }
 
+// Bool returns n as a bool.
+// n must be a boolean constant.
+func (n *Node) Bool() bool {
+	if !Isconst(n, CTBOOL) {
+		Fatalf("Bool(%v)", n)
+	}
+	return n.Val().U.(bool)
+}
+
 // truncate float literal fv to 32-bit or 64-bit precision
 // according to type; return truncated value.
-func truncfltlit(oldv *Mpflt, t *Type) *Mpflt {
+func truncfltlit(oldv *Mpflt, t *types.Type) *Mpflt {
 	if t == nil {
 		return oldv
 	}
 
-	var v Val
-	v.U = oldv
-	overflow(v, t)
+	if overflow(Val{oldv}, t) {
+		// If there was overflow, simply continuing would set the
+		// value to Inf which in turn would lead to spurious follow-on
+		// errors. Avoid this by returning the existing value.
+		return oldv
+	}
 
 	fv := newMpflt()
-	fv.Set(oldv)
 
 	// convert large precision literal floating
 	// into limited precision (float64 or float32)
 	switch t.Etype {
-	case TFLOAT64:
-		d := fv.Float64()
-		fv.SetFloat64(d)
-
-	case TFLOAT32:
-		d := fv.Float32()
-		fv.SetFloat64(d)
+	case types.TFLOAT32:
+		fv.SetFloat64(oldv.Float32())
+	case types.TFLOAT64:
+		fv.SetFloat64(oldv.Float64())
+	default:
+		Fatalf("truncfltlit: unexpected Etype %v", t.Etype)
 	}
 
 	return fv
+}
+
+// truncate Real and Imag parts of Mpcplx to 32-bit or 64-bit
+// precision, according to type; return truncated value. In case of
+// overflow, calls yyerror but does not truncate the input value.
+func trunccmplxlit(oldv *Mpcplx, t *types.Type) *Mpcplx {
+	if t == nil {
+		return oldv
+	}
+
+	if overflow(Val{oldv}, t) {
+		// If there was overflow, simply continuing would set the
+		// value to Inf which in turn would lead to spurious follow-on
+		// errors. Avoid this by returning the existing value.
+		return oldv
+	}
+
+	cv := newMpcmplx()
+
+	switch t.Etype {
+	case types.TCOMPLEX64:
+		cv.Real.SetFloat64(oldv.Real.Float32())
+		cv.Imag.SetFloat64(oldv.Imag.Float32())
+	case types.TCOMPLEX128:
+		cv.Real.SetFloat64(oldv.Real.Float64())
+		cv.Imag.SetFloat64(oldv.Imag.Float64())
+	default:
+		Fatalf("trunccplxlit: unexpected Etype %v", t.Etype)
+	}
+
+	return cv
 }
 
 // canReuseNode indicates whether it is known to be safe
@@ -159,7 +205,7 @@ const (
 // implicit conversion.
 // The result of convlit MUST be assigned back to n, e.g.
 // 	n.Left = convlit(n.Left, t)
-func convlit(n *Node, t *Type) *Node {
+func convlit(n *Node, t *types.Type) *Node {
 	return convlit1(n, t, false, noReuse)
 }
 
@@ -167,7 +213,7 @@ func convlit(n *Node, t *Type) *Node {
 // It returns a new node if necessary.
 // The result of convlit1 MUST be assigned back to n, e.g.
 // 	n.Left = convlit1(n.Left, t, explicit, reuse)
-func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
+func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 	if n == nil || t == nil || n.Type == nil || t.IsUntyped() || n.Type == t {
 		return n
 	}
@@ -185,12 +231,18 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 
 	switch n.Op {
 	default:
-		if n.Type == idealbool {
-			if t.IsBoolean() {
-				n.Type = t
-			} else {
-				n.Type = Types[TBOOL]
+		if n.Type == types.Idealbool {
+			if !t.IsBoolean() {
+				t = types.Types[TBOOL]
 			}
+			switch n.Op {
+			case ONOT:
+				n.Left = convlit(n.Left, t)
+			case OANDAND, OOROR:
+				n.Left = convlit(n.Left, t)
+				n.Right = convlit(n.Right, t)
+			}
+			n.Type = t
 		}
 
 		if n.Type.Etype == TIDEAL {
@@ -201,7 +253,7 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 
 		return n
 
-		// target is invalid type for a constant?  leave alone.
+		// target is invalid type for a constant? leave alone.
 	case OLITERAL:
 		if !okforconst[t.Etype] && n.Type.Etype != TNIL {
 			return defaultlitreuse(n, nil, reuse)
@@ -227,17 +279,17 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 			default:
 				// If trying to convert to non-complex type,
 				// leave as complex128 and let typechecker complain.
-				t = Types[TCOMPLEX128]
+				t = types.Types[TCOMPLEX128]
 				fallthrough
-			case TCOMPLEX128:
+			case types.TCOMPLEX128:
 				n.Type = t
-				n.Left = convlit(n.Left, Types[TFLOAT64])
-				n.Right = convlit(n.Right, Types[TFLOAT64])
+				n.Left = convlit(n.Left, types.Types[TFLOAT64])
+				n.Right = convlit(n.Right, types.Types[TFLOAT64])
 
 			case TCOMPLEX64:
 				n.Type = t
-				n.Left = convlit(n.Left, Types[TFLOAT32])
-				n.Right = convlit(n.Right, Types[TFLOAT32])
+				n.Left = convlit(n.Left, types.Types[TFLOAT32])
+				n.Right = convlit(n.Right, types.Types[TFLOAT32])
 			}
 		}
 
@@ -250,14 +302,14 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 	}
 
 	ct := consttype(n)
-	var et EType
-	if ct < 0 {
+	var et types.EType
+	if ct == 0 {
 		goto bad
 	}
 
 	et = t.Etype
 	if et == TINTER {
-		if ct == CTNIL && n.Type == Types[TNIL] {
+		if ct == CTNIL && n.Type == types.Types[TNIL] {
 			n.Type = t
 			return n
 		}
@@ -295,8 +347,9 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 		// if it is an unsafe.Pointer
 		case TUINTPTR:
 			if n.Type.Etype == TUNSAFEPTR {
-				n.SetVal(Val{new(Mpint)})
-				n.Val().U.(*Mpint).SetInt64(0)
+				i := new(Mpint)
+				i.SetInt64(0)
+				n.SetVal(Val{i})
 			} else {
 				goto bad
 			}
@@ -346,9 +399,9 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 				fallthrough
 
 			case CTCPLX:
-				overflow(n.Val(), t)
+				n.SetVal(Val{trunccmplxlit(n.Val().U.(*Mpcplx), t)})
 			}
-		} else if et == TSTRING && (ct == CTINT || ct == CTRUNE) && explicit {
+		} else if et == types.TSTRING && (ct == CTINT || ct == CTRUNE) && explicit {
 			n.SetVal(tostr(n.Val()))
 		} else {
 			goto bad
@@ -359,11 +412,11 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 	return n
 
 bad:
-	if !n.Diag {
-		if !t.Broke {
-			yyerror("cannot convert %v to type %v", n, t)
+	if !n.Diag() {
+		if !t.Broke() {
+			yyerror("cannot convert %L to type %v", n, t)
 		}
-		n.Diag = true
+		n.SetDiag(true)
 	}
 
 	if n.Type.IsUntyped() {
@@ -443,31 +496,43 @@ func toint(v Val) Val {
 
 	case *Mpflt:
 		i := new(Mpint)
-		if i.SetFloat(u) < 0 {
-			msg := "constant %v truncated to integer"
-			// provide better error message if SetFloat failed because f was too large
-			if u.Val.IsInt() {
-				msg = "constant %v overflows integer"
+		if !i.SetFloat(u) {
+			if i.checkOverflow(0) {
+				yyerror("integer too large")
+			} else {
+				// The value of u cannot be represented as an integer;
+				// so we need to print an error message.
+				// Unfortunately some float values cannot be
+				// reasonably formatted for inclusion in an error
+				// message (example: 1 + 1e-100), so first we try to
+				// format the float; if the truncation resulted in
+				// something that looks like an integer we omit the
+				// value from the error message.
+				// (See issue #11371).
+				var t big.Float
+				t.Parse(fconv(u, FmtSharp), 10)
+				if t.IsInt() {
+					yyerror("constant truncated to integer")
+				} else {
+					yyerror("constant %v truncated to integer", fconv(u, FmtSharp))
+				}
 			}
-			yyerror(msg, fconv(u, FmtSharp))
 		}
 		v.U = i
 
 	case *Mpcplx:
 		i := new(Mpint)
-		if i.SetFloat(&u.Real) < 0 {
+		if !i.SetFloat(&u.Real) || u.Imag.CmpFloat64(0) != 0 {
 			yyerror("constant %v%vi truncated to integer", fconv(&u.Real, FmtSharp), fconv(&u.Imag, FmtSharp|FmtSign))
 		}
-		if u.Imag.CmpFloat64(0) != 0 {
-			yyerror("constant %v%vi truncated to real", fconv(&u.Real, FmtSharp), fconv(&u.Imag, FmtSharp|FmtSign))
-		}
+
 		v.U = i
 	}
 
 	return v
 }
 
-func doesoverflow(v Val, t *Type) bool {
+func doesoverflow(v Val, t *types.Type) bool {
 	switch u := v.U.(type) {
 	case *Mpint:
 		if !t.IsInteger() {
@@ -492,21 +557,25 @@ func doesoverflow(v Val, t *Type) bool {
 	return false
 }
 
-func overflow(v Val, t *Type) {
+func overflow(v Val, t *types.Type) bool {
 	// v has already been converted
 	// to appropriate form for t.
 	if t == nil || t.Etype == TIDEAL {
-		return
+		return false
 	}
 
 	// Only uintptrs may be converted to unsafe.Pointer, which cannot overflow.
 	if t.Etype == TUNSAFEPTR {
-		return
+		return false
 	}
 
 	if doesoverflow(v, t) {
 		yyerror("constant %v overflows %v", v, t)
+		return true
 	}
+
+	return false
+
 }
 
 func tostr(v Val) Val {
@@ -528,7 +597,7 @@ func tostr(v Val) Val {
 
 func consttype(n *Node) Ctype {
 	if n == nil || n.Op != OLITERAL {
-		return -1
+		return 0
 	}
 	return n.Val().Ctype()
 }
@@ -630,7 +699,7 @@ func evconst(n *Node) {
 	if nl == nil || nl.Type == nil {
 		return
 	}
-	if consttype(nl) < 0 {
+	if consttype(nl) == 0 {
 		return
 	}
 	wl := nl.Type.Etype
@@ -676,8 +745,9 @@ func evconst(n *Node) {
 
 	nr := n.Right
 	var rv Val
-	var lno int32
-	var wr EType
+	var lno src.XPos
+	var wr types.EType
+	var ctype uint32
 	var v Val
 	var norig *Node
 	var nn *Node
@@ -690,11 +760,17 @@ func evconst(n *Node) {
 			v = copyval(v)
 		}
 
-		switch uint32(n.Op)<<16 | uint32(v.Ctype()) {
+		// rune values are int values for the purpose of constant folding.
+		ctype = uint32(v.Ctype())
+		if ctype == CTRUNE_ {
+			ctype = CTINT_
+		}
+
+		switch uint32(n.Op)<<16 | ctype {
 		default:
-			if !n.Diag {
+			if !n.Diag() {
 				yyerror("illegal constant expression %v %v", n.Op, nl.Type)
-				n.Diag = true
+				n.SetDiag(true)
 			}
 			return
 
@@ -707,24 +783,21 @@ func evconst(n *Node) {
 			}
 			fallthrough
 		case OCONV_ | CTINT_,
-			OCONV_ | CTRUNE_,
 			OCONV_ | CTFLT_,
+			OCONV_ | CTCPLX_,
 			OCONV_ | CTSTR_,
 			OCONV_ | CTBOOL_:
 			nl = convlit1(nl, n.Type, true, false)
 			v = nl.Val()
 
-		case OPLUS_ | CTINT_,
-			OPLUS_ | CTRUNE_:
+		case OPLUS_ | CTINT_:
 			break
 
-		case OMINUS_ | CTINT_,
-			OMINUS_ | CTRUNE_:
+		case OMINUS_ | CTINT_:
 			v.U.(*Mpint).Neg()
 
-		case OCOM_ | CTINT_,
-			OCOM_ | CTRUNE_:
-			var et EType = Txxx
+		case OCOM_ | CTINT_:
+			var et types.EType = Txxx
 			if nl.Type != nil {
 				et = nl.Type.Etype
 			}
@@ -773,7 +846,7 @@ func evconst(n *Node) {
 	if nr.Type == nil {
 		return
 	}
-	if consttype(nr) < 0 {
+	if consttype(nr) == 0 {
 		return
 	}
 	wr = nr.Type.Etype
@@ -784,6 +857,9 @@ func evconst(n *Node) {
 	// check for compatible general types (numeric, string, etc)
 	if wl != wr {
 		if wl == TINTER || wr == TINTER {
+			if n.Op == ONE {
+				goto settrue
+			}
 			goto setfalse
 		}
 		goto illegal
@@ -810,7 +886,7 @@ func evconst(n *Node) {
 	// right must be unsigned.
 	// left can be ideal.
 	case OLSH, ORSH:
-		nr = defaultlit(nr, Types[TUINT])
+		nr = defaultlit(nr, types.Types[TUINT])
 
 		n.Right = nr
 		if nr.Type != nil && (nr.Type.IsSigned() || !nr.Type.IsInteger()) {
@@ -871,25 +947,27 @@ func evconst(n *Node) {
 		Fatalf("constant type mismatch %v(%d) %v(%d)", nl.Type, v.Ctype(), nr.Type, rv.Ctype())
 	}
 
+	// rune values are int values for the purpose of constant folding.
+	ctype = uint32(v.Ctype())
+	if ctype == CTRUNE_ {
+		ctype = CTINT_
+	}
+
 	// run op
-	switch uint32(n.Op)<<16 | uint32(v.Ctype()) {
+	switch uint32(n.Op)<<16 | ctype {
 	default:
 		goto illegal
 
-	case OADD_ | CTINT_,
-		OADD_ | CTRUNE_:
+	case OADD_ | CTINT_:
 		v.U.(*Mpint).Add(rv.U.(*Mpint))
 
-	case OSUB_ | CTINT_,
-		OSUB_ | CTRUNE_:
+	case OSUB_ | CTINT_:
 		v.U.(*Mpint).Sub(rv.U.(*Mpint))
 
-	case OMUL_ | CTINT_,
-		OMUL_ | CTRUNE_:
+	case OMUL_ | CTINT_:
 		v.U.(*Mpint).Mul(rv.U.(*Mpint))
 
-	case ODIV_ | CTINT_,
-		ODIV_ | CTRUNE_:
+	case ODIV_ | CTINT_:
 		if rv.U.(*Mpint).CmpInt64(0) == 0 {
 			yyerror("division by zero")
 			v.U.(*Mpint).SetOverflow()
@@ -898,8 +976,7 @@ func evconst(n *Node) {
 
 		v.U.(*Mpint).Quo(rv.U.(*Mpint))
 
-	case OMOD_ | CTINT_,
-		OMOD_ | CTRUNE_:
+	case OMOD_ | CTINT_:
 		if rv.U.(*Mpint).CmpInt64(0) == 0 {
 			yyerror("division by zero")
 			v.U.(*Mpint).SetOverflow()
@@ -908,28 +985,22 @@ func evconst(n *Node) {
 
 		v.U.(*Mpint).Rem(rv.U.(*Mpint))
 
-	case OLSH_ | CTINT_,
-		OLSH_ | CTRUNE_:
+	case OLSH_ | CTINT_:
 		v.U.(*Mpint).Lsh(rv.U.(*Mpint))
 
-	case ORSH_ | CTINT_,
-		ORSH_ | CTRUNE_:
+	case ORSH_ | CTINT_:
 		v.U.(*Mpint).Rsh(rv.U.(*Mpint))
 
-	case OOR_ | CTINT_,
-		OOR_ | CTRUNE_:
+	case OOR_ | CTINT_:
 		v.U.(*Mpint).Or(rv.U.(*Mpint))
 
-	case OAND_ | CTINT_,
-		OAND_ | CTRUNE_:
+	case OAND_ | CTINT_:
 		v.U.(*Mpint).And(rv.U.(*Mpint))
 
-	case OANDNOT_ | CTINT_,
-		OANDNOT_ | CTRUNE_:
+	case OANDNOT_ | CTINT_:
 		v.U.(*Mpint).AndNot(rv.U.(*Mpint))
 
-	case OXOR_ | CTINT_,
-		OXOR_ | CTRUNE_:
+	case OXOR_ | CTINT_:
 		v.U.(*Mpint).Xor(rv.U.(*Mpint))
 
 	case OADD_ | CTFLT_:
@@ -953,9 +1024,9 @@ func evconst(n *Node) {
 	// The default case above would print 'ideal % ideal',
 	// which is not quite an ideal error.
 	case OMOD_ | CTFLT_:
-		if !n.Diag {
+		if !n.Diag() {
 			yyerror("illegal constant expression: floating-point %% operation")
-			n.Diag = true
+			n.SetDiag(true)
 		}
 
 		return
@@ -972,14 +1043,12 @@ func evconst(n *Node) {
 		cmplxmpy(v.U.(*Mpcplx), rv.U.(*Mpcplx))
 
 	case ODIV_ | CTCPLX_:
-		if rv.U.(*Mpcplx).Real.CmpFloat64(0) == 0 && rv.U.(*Mpcplx).Imag.CmpFloat64(0) == 0 {
+		if !cmplxdiv(v.U.(*Mpcplx), rv.U.(*Mpcplx)) {
 			yyerror("complex division by zero")
 			rv.U.(*Mpcplx).Real.SetFloat64(1.0)
 			rv.U.(*Mpcplx).Imag.SetFloat64(0.0)
 			break
 		}
-
-		cmplxdiv(v.U.(*Mpcplx), rv.U.(*Mpcplx))
 
 	case OEQ_ | CTNIL_:
 		goto settrue
@@ -987,43 +1056,37 @@ func evconst(n *Node) {
 	case ONE_ | CTNIL_:
 		goto setfalse
 
-	case OEQ_ | CTINT_,
-		OEQ_ | CTRUNE_:
+	case OEQ_ | CTINT_:
 		if v.U.(*Mpint).Cmp(rv.U.(*Mpint)) == 0 {
 			goto settrue
 		}
 		goto setfalse
 
-	case ONE_ | CTINT_,
-		ONE_ | CTRUNE_:
+	case ONE_ | CTINT_:
 		if v.U.(*Mpint).Cmp(rv.U.(*Mpint)) != 0 {
 			goto settrue
 		}
 		goto setfalse
 
-	case OLT_ | CTINT_,
-		OLT_ | CTRUNE_:
+	case OLT_ | CTINT_:
 		if v.U.(*Mpint).Cmp(rv.U.(*Mpint)) < 0 {
 			goto settrue
 		}
 		goto setfalse
 
-	case OLE_ | CTINT_,
-		OLE_ | CTRUNE_:
+	case OLE_ | CTINT_:
 		if v.U.(*Mpint).Cmp(rv.U.(*Mpint)) <= 0 {
 			goto settrue
 		}
 		goto setfalse
 
-	case OGE_ | CTINT_,
-		OGE_ | CTRUNE_:
+	case OGE_ | CTINT_:
 		if v.U.(*Mpint).Cmp(rv.U.(*Mpint)) >= 0 {
 			goto settrue
 		}
 		goto setfalse
 
-	case OGT_ | CTINT_,
-		OGT_ | CTRUNE_:
+	case OGT_ | CTINT_:
 		if v.U.(*Mpint).Cmp(rv.U.(*Mpint)) > 0 {
 			goto settrue
 		}
@@ -1138,8 +1201,6 @@ func evconst(n *Node) {
 		goto setfalse
 	}
 
-	goto ret
-
 ret:
 	norig = saveorig(n)
 	*n = *nl
@@ -1179,9 +1240,9 @@ setfalse:
 	return
 
 illegal:
-	if !n.Diag {
+	if !n.Diag() {
 		yyerror("illegal constant expression: %v %v %v", nl.Type, n.Op, nr.Type)
-		n.Diag = true
+		n.SetDiag(true)
 	}
 }
 
@@ -1193,16 +1254,16 @@ func nodlit(v Val) *Node {
 		Fatalf("nodlit ctype %d", v.Ctype())
 
 	case CTSTR:
-		n.Type = idealstring
+		n.Type = types.Idealstring
 
 	case CTBOOL:
-		n.Type = idealbool
+		n.Type = types.Idealbool
 
 	case CTINT, CTRUNE, CTFLT, CTCPLX:
-		n.Type = Types[TIDEAL]
+		n.Type = types.Types[TIDEAL]
 
 	case CTNIL:
-		n.Type = Types[TNIL]
+		n.Type = types.Types[TNIL]
 	}
 
 	return n
@@ -1214,7 +1275,7 @@ func nodcplxlit(r Val, i Val) *Node {
 
 	c := new(Mpcplx)
 	n := nod(OLITERAL, nil, nil)
-	n.Type = Types[TIDEAL]
+	n.Type = types.Types[TIDEAL]
 	n.SetVal(Val{c})
 
 	if r.Ctype() != CTFLT || i.Ctype() != CTFLT {
@@ -1292,13 +1353,13 @@ func idealkind(n *Node) Ctype {
 
 // The result of defaultlit MUST be assigned back to n, e.g.
 // 	n.Left = defaultlit(n.Left, t)
-func defaultlit(n *Node, t *Type) *Node {
+func defaultlit(n *Node, t *types.Type) *Node {
 	return defaultlitreuse(n, t, noReuse)
 }
 
 // The result of defaultlitreuse MUST be assigned back to n, e.g.
 // 	n.Left = defaultlitreuse(n.Left, t, reuse)
-func defaultlitreuse(n *Node, t *Type, reuse canReuseNode) *Node {
+func defaultlitreuse(n *Node, t *types.Type, reuse canReuseNode) *Node {
 	if n == nil || !n.Type.IsUntyped() {
 		return n
 	}
@@ -1311,56 +1372,53 @@ func defaultlitreuse(n *Node, t *Type, reuse canReuseNode) *Node {
 
 	lno := setlineno(n)
 	ctype := idealkind(n)
-	var t1 *Type
+	var t1 *types.Type
 	switch ctype {
 	default:
 		if t != nil {
 			return convlit(n, t)
 		}
 
-		if n.Val().Ctype() == CTNIL {
+		switch n.Val().Ctype() {
+		case CTNIL:
 			lineno = lno
-			if !n.Diag {
+			if !n.Diag() {
 				yyerror("use of untyped nil")
-				n.Diag = true
+				n.SetDiag(true)
 			}
 
 			n.Type = nil
-			break
-		}
-
-		if n.Val().Ctype() == CTSTR {
-			t1 := Types[TSTRING]
+		case CTSTR:
+			t1 := types.Types[TSTRING]
 			n = convlit1(n, t1, false, reuse)
-			break
+		default:
+			yyerror("defaultlit: unknown literal: %v", n)
 		}
-
-		yyerror("defaultlit: unknown literal: %v", n)
 
 	case CTxxx:
 		Fatalf("defaultlit: idealkind is CTxxx: %+v", n)
 
 	case CTBOOL:
-		t1 := Types[TBOOL]
+		t1 := types.Types[TBOOL]
 		if t != nil && t.IsBoolean() {
 			t1 = t
 		}
 		n = convlit1(n, t1, false, reuse)
 
 	case CTINT:
-		t1 = Types[TINT]
+		t1 = types.Types[TINT]
 		goto num
 
 	case CTRUNE:
-		t1 = runetype
+		t1 = types.Runetype
 		goto num
 
 	case CTFLT:
-		t1 = Types[TFLOAT64]
+		t1 = types.Types[TFLOAT64]
 		goto num
 
 	case CTCPLX:
-		t1 = Types[TCOMPLEX128]
+		t1 = types.Types[TCOMPLEX128]
 		goto num
 	}
 
@@ -1420,32 +1478,32 @@ func defaultlit2(l *Node, r *Node, force bool) (*Node, *Node) {
 	}
 
 	if l.Type.IsBoolean() {
-		l = convlit(l, Types[TBOOL])
-		r = convlit(r, Types[TBOOL])
+		l = convlit(l, types.Types[TBOOL])
+		r = convlit(r, types.Types[TBOOL])
 	}
 
 	lkind := idealkind(l)
 	rkind := idealkind(r)
 	if lkind == CTCPLX || rkind == CTCPLX {
-		l = convlit(l, Types[TCOMPLEX128])
-		r = convlit(r, Types[TCOMPLEX128])
+		l = convlit(l, types.Types[TCOMPLEX128])
+		r = convlit(r, types.Types[TCOMPLEX128])
 		return l, r
 	}
 
 	if lkind == CTFLT || rkind == CTFLT {
-		l = convlit(l, Types[TFLOAT64])
-		r = convlit(r, Types[TFLOAT64])
+		l = convlit(l, types.Types[TFLOAT64])
+		r = convlit(r, types.Types[TFLOAT64])
 		return l, r
 	}
 
 	if lkind == CTRUNE || rkind == CTRUNE {
-		l = convlit(l, runetype)
-		r = convlit(r, runetype)
+		l = convlit(l, types.Runetype)
+		r = convlit(r, types.Runetype)
 		return l, r
 	}
 
-	l = convlit(l, Types[TINT])
-	r = convlit(r, Types[TINT])
+	l = convlit(l, types.Types[TINT])
+	r = convlit(r, types.Types[TINT])
 
 	return l, r
 }
@@ -1491,7 +1549,7 @@ func nonnegintconst(n *Node) int64 {
 	// Mpint, so we still have to guard the conversion.
 	v := toint(n.Val())
 	vi, ok := v.U.(*Mpint)
-	if !ok || vi.Val.Sign() < 0 || vi.Cmp(maxintval[TINT32]) > 0 {
+	if !ok || vi.CmpInt64(0) < 0 || vi.Cmp(maxintval[TINT32]) > 0 {
 		return -1
 	}
 
@@ -1532,7 +1590,11 @@ func cmplxmpy(v *Mpcplx, rv *Mpcplx) {
 
 // complex divide v /= rv
 //	(a, b) / (c, d) = ((a*c + b*d), (b*c - a*d))/(c*c + d*d)
-func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
+func cmplxdiv(v *Mpcplx, rv *Mpcplx) bool {
+	if rv.Real.CmpFloat64(0) == 0 && rv.Imag.CmpFloat64(0) == 0 {
+		return false
+	}
+
 	var ac Mpflt
 	var bd Mpflt
 	var bc Mpflt
@@ -1540,6 +1602,7 @@ func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
 	var cc_plus_dd Mpflt
 
 	cc_plus_dd.Set(&rv.Real)
+
 	cc_plus_dd.Mul(&rv.Real) // cc
 
 	ac.Set(&rv.Imag)
@@ -1547,6 +1610,14 @@ func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
 	ac.Mul(&rv.Imag) // dd
 
 	cc_plus_dd.Add(&ac) // cc+dd
+
+	// We already checked that c and d are not both zero, but we can't
+	// assume that c²+d² != 0 follows, because for tiny values of c
+	// and/or d c²+d² can underflow to zero.  Check that c²+d² is
+	// nonzero,return if it's not.
+	if cc_plus_dd.CmpFloat64(0) == 0 {
+		return false
+	}
 
 	ac.Set(&v.Real)
 
@@ -1573,6 +1644,8 @@ func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
 
 	v.Imag.Sub(&ad)         // bc-ad
 	v.Imag.Quo(&cc_plus_dd) // (bc+ad)/(cc+dd)
+
+	return true
 }
 
 // Is n a Go language constant (as opposed to a compile-time constant)?
@@ -1647,13 +1720,13 @@ func isgoconst(n *Node) bool {
 		}
 
 	case ONAME:
-		l := n.Sym.Def
+		l := asNode(n.Sym.Def)
 		if l != nil && l.Op == OLITERAL && n.Val().Ctype() != CTNIL {
 			return true
 		}
 
 	case ONONAME:
-		if n.Sym.Def != nil && n.Sym.Def.Op == OIOTA {
+		if asNode(n.Sym.Def) != nil && asNode(n.Sym.Def).Op == OIOTA {
 			return true
 		}
 

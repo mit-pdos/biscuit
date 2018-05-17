@@ -6,14 +6,14 @@
 // in Go binaries. It is included by assembly sources, so it must
 // be written using #defines.
 //
-// The Go compiler also #includes this file, for now.
-//
-// symtab.go also contains a copy of these constants.
+// These must agree with symtab.go and ../cmd/internal/obj/funcdata.go.
 
 #define PCDATA_StackMapIndex 0
+#define PCDATA_InlTreeIndex 1
 
 #define FUNCDATA_ArgsPointerMaps 0 /* garbage collector blocks */
 #define FUNCDATA_LocalsPointerMaps 1
+#define FUNCDATA_InlTree 2
 
 // Pseudo-assembly statements.
 

@@ -3,6 +3,9 @@ package testdata
 import (
 	"sync"
 	"sync/atomic"
+	"unsafe"
+	. "unsafe"
+	unsafe1 "unsafe"
 )
 
 func OkFunc() {
@@ -67,7 +70,7 @@ func BadFunc() {
 
 	// override 'new' keyword
 	new := func(interface{}) {}
-	new(t) // ERROR "function call copies lock value: testdata.Tlock contains sync.Once contains sync.Mutex"
+	new(t) // ERROR "call of new copies lock value: testdata.Tlock contains sync.Once contains sync.Mutex"
 
 	// copy of array of locks
 	var muA [5]sync.Mutex
@@ -86,6 +89,31 @@ func BadFunc() {
 	fmuB := fmuA        // OK
 	fmuA = fmuB         // OK
 	fmuSlice := fmuA[:] // OK
+}
+
+func LenAndCapOnLockArrays() {
+	var a [5]sync.Mutex
+	aLen := len(a) // OK
+	aCap := cap(a) // OK
+
+	// override 'len' and 'cap' keywords
+
+	len := func(interface{}) {}
+	len(a) // ERROR "call of len copies lock value: sync.Mutex"
+
+	cap := func(interface{}) {}
+	cap(a) // ERROR "call of cap copies lock value: sync.Mutex"
+}
+
+func SizeofMutex() {
+	var mu sync.Mutex
+	unsafe.Sizeof(mu)  // OK
+	unsafe1.Sizeof(mu) // OK
+	Sizeof(mu)         // OK
+	unsafe := struct{ Sizeof func(interface{}) }{}
+	unsafe.Sizeof(mu) // ERROR "call of unsafe.Sizeof copies lock value: sync.Mutex"
+	Sizeof := func(interface{}) {}
+	Sizeof(mu) // ERROR "call of Sizeof copies lock value: sync.Mutex"
 }
 
 // SyncTypesCheck checks copying of sync.* types except sync.Mutex
@@ -150,9 +178,11 @@ func AtomicTypesCheck() {
 	var vX atomic.Value
 	var vXX = atomic.Value{}
 	vX1 := new(atomic.Value)
-	vY := vX     // ERROR "assignment copies lock value to vY: sync/atomic.Value contains sync/atomic.noCopy"
-	vY = vX      // ERROR "assignment copies lock value to vY: sync/atomic.Value contains sync/atomic.noCopy"
-	var vYY = vX // ERROR "variable declaration copies lock value to vYY: sync/atomic.Value contains sync/atomic.noCopy"
+	// These are OK because the value has not been used yet.
+	// (And vet can't tell whether it has been used, so they're always OK.)
+	vY := vX
+	vY = vX
+	var vYY = vX
 	vP := &vX
 	vZ := &atomic.Value{}
 }

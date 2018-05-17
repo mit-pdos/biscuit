@@ -110,12 +110,14 @@ func hasNil(typ Type) bool {
 	return false
 }
 
-// Identical reports whether x and y are identical.
+// Identical reports whether x and y are identical types.
+// Receivers of Signature types are ignored.
 func Identical(x, y Type) bool {
 	return identical(x, y, true, nil)
 }
 
-// IdenticalIgnoreTags reports whether x and y are identical if tags are ignored.
+// IdenticalIgnoreTags reports whether x and y are identical types if tags are ignored.
+// Receivers of Signature types are ignored.
 func IdenticalIgnoreTags(x, y Type) bool {
 	return identical(x, y, false, nil)
 }
@@ -139,7 +141,7 @@ func identical(x, y Type, cmpTags bool, p *ifacePair) bool {
 	case *Basic:
 		// Basic types are singletons except for the rune and byte
 		// aliases, thus we cannot solely rely on the x == y check
-		// above.
+		// above. See also comment in TypeName.IsAlias.
 		if y, ok := y.(*Basic); ok {
 			return x.kind == y.kind
 		}
@@ -148,7 +150,9 @@ func identical(x, y Type, cmpTags bool, p *ifacePair) bool {
 		// Two array types are identical if they have identical element types
 		// and the same array length.
 		if y, ok := y.(*Array); ok {
-			return x.len == y.len && identical(x.elem, y.elem, cmpTags, p)
+			// If one or both array lengths are unknown (< 0) due to some error,
+			// assume they are the same to avoid spurious follow-on errors.
+			return (x.len < 0 || y.len < 0 || x.len == y.len) && identical(x.elem, y.elem, cmpTags, p)
 		}
 
 	case *Slice:

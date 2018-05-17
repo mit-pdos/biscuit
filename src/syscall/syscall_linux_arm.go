@@ -8,7 +8,6 @@ import "unsafe"
 
 const (
 	_SYS_dup       = SYS_DUP2
-	_SYS_getdents  = SYS_GETDENTS64
 	_SYS_setgroups = SYS_SETGROUPS32
 )
 
@@ -123,7 +122,6 @@ func Statfs(path string, buf *Statfs_t) (err error) {
 		return err
 	}
 	_, _, e := Syscall(SYS_STATFS64, uintptr(unsafe.Pointer(pathp)), unsafe.Sizeof(*buf), uintptr(unsafe.Pointer(buf)))
-	use(unsafe.Pointer(pathp))
 	if e != 0 {
 		err = e
 	}
@@ -215,4 +213,8 @@ func (msghdr *Msghdr) SetControllen(length int) {
 
 func (cmsg *Cmsghdr) SetLen(length int) {
 	cmsg.Len = uint32(length)
+}
+
+func rawVforkSyscall(trap, a1 uintptr) (r1 uintptr, err Errno) {
+	panic("not implemented")
 }

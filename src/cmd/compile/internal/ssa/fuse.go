@@ -8,7 +8,9 @@ package ssa
 func fuse(f *Func) {
 	for changed := true; changed; {
 		changed = false
-		for _, b := range f.Blocks {
+		// Fuse from end to beginning, to avoid quadratic behavior in fuseBlockPlain. See issue 13554.
+		for i := len(f.Blocks) - 1; i >= 0; i-- {
+			b := f.Blocks[i]
 			changed = fuseBlockIf(b) || changed
 			changed = fuseBlockPlain(b) || changed
 		}
@@ -90,6 +92,7 @@ func fuseBlockIf(b *Block) bool {
 		b.removeEdge(1)
 	}
 	b.Kind = BlockPlain
+	b.Likely = BranchUnknown
 	b.SetControl(nil)
 
 	// Trash the empty blocks s0 & s1.
@@ -121,7 +124,14 @@ func fuseBlockPlain(b *Block) bool {
 	// move all of b's values to c.
 	for _, v := range b.Values {
 		v.Block = c
-		c.Values = append(c.Values, v)
+	}
+	// Use whichever value slice is larger, in the hopes of avoiding growth.
+	// However, take care to avoid c.Values pointing to b.valstorage.
+	// See golang.org/issue/18602.
+	if cap(c.Values) >= cap(b.Values) || len(b.Values) <= len(b.valstorage) {
+		c.Values = append(c.Values, b.Values...)
+	} else {
+		c.Values = append(b.Values, c.Values...)
 	}
 
 	// replace b->c edge with preds(b) -> c

@@ -32,7 +32,7 @@ func appendQuotedWith(buf []byte, s string, quote byte, ASCIIonly, graphicOnly b
 			buf = append(buf, lowerhex[s[0]&0xF])
 			continue
 		}
-		buf = appendEscapedRune(buf, r, width, quote, ASCIIonly, graphicOnly)
+		buf = appendEscapedRune(buf, r, quote, ASCIIonly, graphicOnly)
 	}
 	buf = append(buf, quote)
 	return buf
@@ -43,12 +43,12 @@ func appendQuotedRuneWith(buf []byte, r rune, quote byte, ASCIIonly, graphicOnly
 	if !utf8.ValidRune(r) {
 		r = utf8.RuneError
 	}
-	buf = appendEscapedRune(buf, r, utf8.RuneLen(r), quote, ASCIIonly, graphicOnly)
+	buf = appendEscapedRune(buf, r, quote, ASCIIonly, graphicOnly)
 	buf = append(buf, quote)
 	return buf
 }
 
-func appendEscapedRune(buf []byte, r rune, width int, quote byte, ASCIIonly, graphicOnly bool) []byte {
+func appendEscapedRune(buf []byte, r rune, quote byte, ASCIIonly, graphicOnly bool) []byte {
 	var runeTmp [utf8.UTFMax]byte
 	if r == rune(quote) || r == '\\' { // always backslashed
 		buf = append(buf, '\\')
@@ -381,11 +381,13 @@ func Unquote(s string) (string, error) {
 		return "", ErrSyntax
 	}
 
-	// Is it trivial?  Avoid allocation.
+	// Is it trivial? Avoid allocation.
 	if !contains(s, '\\') && !contains(s, quote) {
 		switch quote {
 		case '"':
-			return s, nil
+			if utf8.ValidString(s) {
+				return s, nil
+			}
 		case '\'':
 			r, size := utf8.DecodeRuneInString(s)
 			if size == len(s) && (r != utf8.RuneError || size != 1) {
