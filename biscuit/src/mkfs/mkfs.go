@@ -10,7 +10,7 @@ import "ufs"
 
 const (
 	nlogblks   = 256
-	ninodeblks = 100*50
+	ninodeblks = 100 * 50
 	ndatablks  = 40000
 )
 
