@@ -21,7 +21,7 @@ const log_debug = false
 
 var loglen = 0 // for marshalling/unmarshalling
 
-const LogOffset = 1 // log block 0 is used for head
+const LOGOFFSET = 1 // log block 0 is used for head
 
 // an upperbound on the number of blocks written per system call. this is
 // necessary in order to guarantee that the log is long enough for the allowed
@@ -97,6 +97,10 @@ func (log *log_t) Write_ordered(opid opid_t, b *common.Bdev_block_t) {
 	log.incoming <- buf_t{opid, b, true}
 }
 
+func (log *log_t) Loglen() int {
+	return loglen
+}
+
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
@@ -139,6 +143,8 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nabsorbapply)
 	s += "\n\tnforceordered "
 	s += strconv.Itoa(log.nforceordered)
+	s += "\n\tncflush "
+	s += strconv.Itoa(log.ncflush)
 	s += "\n"
 	return s
 }
@@ -147,13 +153,10 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 	fslog := &log_t{}
 	fslog.fs = fs
 	fslog.mk_log(logstart, loglen, disk)
-	err := fslog.recover()
-	if err != 0 {
-		return nil
-	}
+	fslog.applystart = fslog.recover()
 	if !memfs {
 		go fslog.log_daemon()
-		go fslog.log_commit()
+		go fslog.commit_daemon()
 	}
 	return fslog
 }
@@ -168,6 +171,26 @@ func (log *log_t) StopLog() {
 //
 // Log implementation
 //
+
+func loginc(i int) int {
+	return (i + 1) % loglen
+}
+
+func logdec(i int) int {
+	i = i - 1
+	if i < 0 {
+		i += loglen
+	}
+	return i
+}
+
+func logsize(s, e int) int {
+	n := e - s
+	if n < 0 {
+		n += loglen
+	}
+	return n
+}
 
 type buf_t struct {
 	opid    opid_t
@@ -187,7 +210,7 @@ type trans_t struct {
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 }
 
-func mk_trans(logindex, loglen int) *trans_t {
+func mk_trans(logindex int) *trans_t {
 	t := &trans_t{logindex: logindex, head: logindex}
 	t.ops = make(map[opid_t]bool)
 	t.logged = common.MkBlkList()      // bounded by MaxOrdered
@@ -209,8 +232,11 @@ func (trans *trans_t) mark_done(opid opid_t) {
 
 func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	if log_debug {
-		fmt.Printf("trans.add_write: opid %d index %d head %d %d(%v)\n", buf.opid,
-			trans.logindex, trans.head, buf.block.Block, buf.ordered)
+		fmt.Printf("trans.add_write: opid %d start %d head %d %d(%v) applystart %d\n", buf.opid,
+			trans.logindex, trans.head, buf.block.Block, buf.ordered, log.applystart)
+		if loginc(trans.head) == log.applystart {
+			panic("add_write: run into start")
+		}
 	}
 
 	// if block ordered, and now logged, then logged
@@ -253,7 +279,7 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 		log.nlogwrite++
 		trans.logged.PushBack(buf.block)
 		trans.logpresent[buf.block.Block] = true
-		trans.head++
+		trans.head = loginc(trans.head)
 	}
 }
 
@@ -264,15 +290,16 @@ func (trans *trans_t) iscommittable() bool {
 	return len(trans.ops) == 0
 }
 
-func (trans *trans_t) isfull(loglen int, onemore bool) bool {
-	n := trans.head + len(trans.ops)*MaxBlkPerOp
+func (trans *trans_t) isfull(applystart int, onemore bool) bool {
+	n := logsize(applystart, trans.head)
+	n += len(trans.ops) * MaxBlkPerOp
 	if onemore {
 		n += MaxBlkPerOp
 	}
-	full := n >= loglen
+	full := n >= loglen/2 // kick commit_daemon() to apply?
 	if log_debug {
-		fmt.Printf("trans.isfull(%v): %v nops %d head %d index %d len %d\n", onemore,
-			full, len(trans.ops), trans.head, trans.logindex, loglen)
+		fmt.Printf("trans.isfull(%v): %v nops %d start %d head %d applystart %d len %d\n", onemore,
+			full, len(trans.ops), trans.logindex, trans.head, applystart, loglen)
 	}
 	return full
 }
@@ -288,7 +315,7 @@ func (trans *trans_t) copyintolog(log *log_t) {
 		l := log.log[i]
 		l.Block = b.Block
 		copy(l.Data[:], b.Data[:])
-		i++
+		i = loginc(i)
 		log.fs.bcache.Relse(b, "writelog")
 	})
 	if i != trans.head {
@@ -337,30 +364,44 @@ func (trans *trans_t) write_ordered(log *log_t) {
 
 func (trans *trans_t) commit(log *log_t) {
 	if log_debug {
-		fmt.Printf("commit: trans logindex %d transhead %d\n", trans.logindex, trans.head)
+		fmt.Printf("commit: trans logindex %d transhead %d applystart %d\n", trans.logindex,
+			trans.head, log.applystart)
 	}
 	// read the log header from disk; it may contain commit blocks from
 	// current transactions, if we haven't applied yet.
 	lh, headblk := log.readhead()
-	blks := common.MkBlkList()
+	if lh.r_start() != log.applystart {
+		panic("commit: start inconsistent")
+	}
+	blks1 := common.MkBlkList()
+	blks2 := common.MkBlkList()
 
-	for i := trans.logindex; i < trans.head; i++ {
+	blks := blks1
+	for i := trans.logindex; i != trans.head; i = loginc(i) {
+		if loginc(i) == log.applystart {
+			panic("commit runs into log start")
+		}
 		// install log destination in the header block
 		l := log.log[i]
-		lh.w_logdest(i-LogOffset, l.Block)
-		b := common.MkBlock(log.logstart+i, "commit", log.fs.bcache.mem, log.fs.bcache.disk, &_nop_relse)
+		lh.w_logdest(i, l.Block)
+		b := common.MkBlock(log.logstart+LOGOFFSET+i, "commit", log.fs.bcache.mem, log.fs.bcache.disk, &_nop_relse)
 		// it is safe to reuse the underlying physical page; this page
 		// will not be freed, and no thread will update its content
 		// until this transaction has been committed and applied.
 		b.Data = l.Data
 		b.Pa = l.Pa
 		blks.PushBack(b)
+		if loginc(i) == 0 {
+			blks = blks2
+		}
 	}
-
-	lh.w_recovernum(trans.head - LogOffset)
+	lh.w_end(trans.head)
 
 	// write blocks to log in batch; no need to release
-	log.fs.bcache.Write_async_blks_through(blks)
+	log.fs.bcache.Write_async_blks_through(blks1)
+	if blks2.Len() > 0 {
+		log.fs.bcache.Write_async_blks_through(blks2)
+	}
 
 	trans.write_ordered(log)
 
@@ -370,13 +411,14 @@ func (trans *trans_t) commit(log *log_t) {
 
 	log.flush() // commit log header
 
-	log.nblkcommitted += blks.Len()
-	if blks.Len() > log.maxblks_per_op {
-		log.maxblks_per_op = blks.Len()
+	n := blks1.Len() + blks2.Len()
+	log.nblkcommitted += n
+	if n > log.maxblks_per_op {
+		log.maxblks_per_op = n
 	}
 	log.ncommit++
 	if log_debug {
-		fmt.Printf("commit: committed %d blks\n", blks.Len())
+		fmt.Printf("commit: committed %d blks\n", n)
 	}
 
 	log.fs.bcache.Relse(headblk, "commit done")
@@ -384,8 +426,8 @@ func (trans *trans_t) commit(log *log_t) {
 
 type log_t struct {
 	transactions []*trans_t
-	logstart     int // disk block where log starts on disk
-	loglen       int
+	logstart     int                    // disk block where log starts on disk
+	applystart   int                    // index in log where apply() will start
 	log          []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
 	incoming     chan buf_t
 	admission    chan opid_t
@@ -410,45 +452,60 @@ type log_t struct {
 	nblkapply       int
 	nabsorbapply    int
 	nforceordered   int
+	ncflush         int
 	norder2logwrite int
 }
 
 // first log header block format
 // bytes, meaning
-// 0-7,   valid log blocks
-// 8-511, log destination (63)
+// 0-7, start log
+// 8-15, end log
+// 16-4095, table with destination
+const (
+	START = 0
+	END   = 8
+	TABLE = 16
+)
+
 type logheader_t struct {
 	data *common.Bytepg_t
 }
 
-func (lh *logheader_t) recovernum() int {
-	return fieldr(lh.data, 0)
+func (lh *logheader_t) r_start() int {
+	return fieldr(lh.data, START)
 }
 
-func (lh *logheader_t) w_recovernum(n int) {
-	fieldw(lh.data, 0, n)
+func (lh *logheader_t) w_start(n int) {
+	fieldw(lh.data, START, n)
 }
 
-func (lh *logheader_t) logdest(p int) int {
+func (lh *logheader_t) r_end() int {
+	return fieldr(lh.data, END)
+}
+
+func (lh *logheader_t) w_end(n int) {
+	fieldw(lh.data, END, n)
+}
+
+func (lh *logheader_t) r_logdest(p int) int {
 	if p < 0 || p > loglen {
 		panic("bad dnum")
 	}
-	return fieldr(lh.data, 8+p)
+	return fieldr(lh.data, TABLE+p)
 }
 
 func (lh *logheader_t) w_logdest(p int, n int) {
 	if p < 0 || p > loglen {
 		panic("bad dnum")
 	}
-	fieldw(lh.data, 8+p, n)
+	fieldw(lh.data, TABLE+p, n)
 }
 
 func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 	// loglen is global
-	loglen = ll - LogOffset // leave space for head and orphan inodes
+	loglen = ll - LOGOFFSET
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
-	log.loglen = loglen
 	log.transactions = make([]*trans_t, 0)
 	log.log = make([]*common.Bdev_block_t, loglen)
 	for i := 0; i < len(log.log); i++ {
@@ -464,7 +521,7 @@ func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 	log.stop = make(chan bool)
 	log.disk = disk
 
-	if log.loglen >= common.BSIZE/4 {
+	if loglen >= common.BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
 	}
 }
@@ -513,12 +570,12 @@ func (log *log_t) isorderedfull(onemore bool) bool {
 
 func (log *log_t) isfull() bool {
 	t := log.last_trans()
-	return t.isfull(log.loglen, false) || log.isorderedfull(false)
+	return t.isfull(log.applystart, false) || log.isorderedfull(false)
 }
 
 func (log *log_t) istoofull() bool {
 	t := log.last_trans()
-	return t.isfull(log.loglen, true) || log.isorderedfull(true)
+	return t.isfull(log.applystart, true) || log.isorderedfull(true)
 }
 
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
@@ -532,18 +589,25 @@ func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
 func (log *log_t) apply() {
 	log.napply++
 
-	done := make(map[int]bool, log.loglen)
+	done := make(map[int]bool, loglen)
 
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
 	trans := log.transactions[len(log.transactions)-1]
 
-	if log_debug {
-		fmt.Printf("apply log: #trans %v #blks %v\n", len(log.transactions), trans.head)
+	lh, headblk := log.readhead()
+	start := lh.r_start()
+	if start != log.applystart {
+		panic("apply: start inconsistent")
 	}
 
-	for i := trans.head - 1; i >= LogOffset; i-- {
+	if log_debug {
+		fmt.Printf("apply log: blks from %d till %d\n", start, trans.head)
+	}
+
+	i := logdec(trans.head)
+	for {
 		l := log.log[i]
 		log.nblkapply++
 		if _, ok := done[l.Block]; !ok {
@@ -552,20 +616,22 @@ func (log *log_t) apply() {
 		} else {
 			log.nabsorbapply++
 		}
-
+		if i == start {
+			break
+		}
+		i = logdec(i)
 	}
 	log.flush() // flush apply
 
-	// success; clear flag indicating to recover from log
-	lh, headblk := log.readhead()
-	lh.w_recovernum(0)
+	lh.w_start(trans.head)
 	log.fs.bcache.Write(headblk)
 
 	log.flush() // flush cleared commit
 
-	log.fs.bcache.Relse(headblk, "commit done")
+	log.fs.bcache.Relse(headblk, "apply done")
+	log.applystart = trans.head
 
-	log.transactions = make([]*trans_t, 0)
+	// log.transactions = make([]*trans_t, 0)
 }
 
 func (log *log_t) unblock_waiters(n int) {
@@ -586,26 +652,27 @@ func (log *log_t) flush() {
 	}
 }
 
-func (log *log_t) recover() common.Err_t {
+func (log *log_t) recover() int {
 	b, err := log.fs.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
 	if err != 0 {
 		panic("must succeed")
 	}
 	lh := logheader_t{b.Data}
-	rlen := lh.recovernum()
-	if rlen == 0 {
+	start := lh.r_start()
+	end := lh.r_end()
+	if start == end {
 		fmt.Printf("no FS recovery needed\n")
 		log.fs.bcache.Relse(b, "fs_recover_logstart")
-		return 0
+		return start
 	}
 	fmt.Printf("starting FS recovery...\n")
 
-	for i := 0; i < rlen; i++ {
-		bdest := lh.logdest(i)
+	for i := start; i < end; i = loginc(i) {
+		bdest := lh.r_logdest(i)
 		if log_debug {
-			fmt.Printf("write log %d to %d\n", log.logstart+LogOffset+i, bdest)
+			fmt.Printf("write log %d to %d\n", log.logstart+LOGOFFSET+i, bdest)
 		}
-		lb, err := log.fs.bcache.Get_fill(log.logstart+LogOffset+i, "i", false)
+		lb, err := log.fs.bcache.Get_fill(log.logstart+LOGOFFSET+i, "i", false)
 		if err != 0 {
 			panic("must succeed")
 		}
@@ -619,32 +686,18 @@ func (log *log_t) recover() common.Err_t {
 		log.fs.bcache.Relse(fb, "fs_recover2")
 	}
 
-	// clear recovery flag
-	lh.w_recovernum(0)
+	lh.w_start(end) // mark that everything until end has been applied
 	log.fs.bcache.Write(b)
 	log.fs.bcache.Relse(b, "fs_recover_logstart")
-	fmt.Printf("restored %v blocks\n", rlen)
-	return 0
+	fmt.Printf("restored blocks from %d till %d\n", start, end)
+	return end
 }
 
-func (l *log_t) do_commit(waiters int) {
-	t := l.last_trans()
-	t.copyintolog(l)
-	t.copyordered(l)
-	t.commit(l)
-	// apply log only when there is no room for another op. this avoids
-	// applies when there room in the log (e.g., a sync forced the log)
-	if l.istoofull() {
-		l.apply()
-	}
-	l.unblock_waiters(waiters)
-}
-
-func (l *log_t) log_commit() {
+func (l *log_t) commit_daemon() {
 	for {
 		select {
 		case waiters := <-l.commitc:
-			if waiters < 0 {
+			if waiters < 0 { // stop commit daemon?
 				l.commitc <- -1
 				return
 			}
@@ -652,6 +705,7 @@ func (l *log_t) log_commit() {
 			t.copyintolog(l)
 			t.copyordered(l)
 			if waiters > 0 && !l.istoofull() { // forced commit?
+				l.ncflush++
 				l.commitc <- 0 // start next trans
 				t.commit(l)
 			} else {
@@ -677,12 +731,12 @@ func (l *log_t) log_daemon() {
 
 		// start a new transactions, start in the log where
 		// the last one left off
-		start := LogOffset
+		start := l.applystart
 		if len(l.transactions) > 0 {
 			t := l.last_trans()
 			start = t.head
 		}
-		t := mk_trans(start, l.loglen)
+		t := mk_trans(start)
 		l.transactions = append(l.transactions, t)
 
 		done := false
@@ -732,7 +786,6 @@ func (l *log_t) log_daemon() {
 		}
 
 		if len(l.transactions) > 0 {
-			// l.do_commit(waiters)
 			l.commitc <- waiters
 			// wait until commit thread tells us to go ahead with
 			// next trans

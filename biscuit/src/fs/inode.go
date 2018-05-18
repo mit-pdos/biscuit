@@ -1334,7 +1334,7 @@ func (icache *icache_t) RecoverOrphans() {
 func (icache *icache_t) addDead(imem *imemnode_t) {
 	icache.Lock()
 	defer icache.Unlock()
-	if len(icache.dead) > icache.fs.fslog.loglen {
+	if len(icache.dead) > icache.fs.fslog.Loglen() {
 		panic("addDead")
 	}
 	icache.dead = append(icache.dead, imem)
