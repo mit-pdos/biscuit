@@ -121,6 +121,8 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nlogwrite)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
+	s += "\n\tnorder2logwrite "
+	s += strconv.Itoa(log.norder2logwrite)
 	s += "\n\tnabsorb "
 	s += strconv.Itoa(log.nabsorption)
 	s += "\n\tnblkcommited "
