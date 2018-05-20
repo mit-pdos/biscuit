@@ -371,6 +371,7 @@ func (trans *trans_t) commit(log *log_t) {
 	// current transactions, if we haven't applied yet.
 	lh, headblk := log.readhead()
 	if lh.r_start() != log.applystart {
+		fmt.Printf("commit: r_start() = %d\n", lh.r_start())
 		panic("commit: start inconsistent")
 	}
 	blks1 := common.MkBlkList()
@@ -586,7 +587,7 @@ func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
 	return &logheader_t{headblk.Data}, headblk
 }
 
-func (log *log_t) apply() {
+func (log *log_t) apply(head int) {
 	log.napply++
 
 	done := make(map[int]bool, loglen)
@@ -594,7 +595,6 @@ func (log *log_t) apply() {
 	// The log is committed. If we crash while installing the blocks to
 	// their destinations, we should be able to recover.  Install backwards,
 	// writing the last version of a block (and not earlier versions).
-	trans := log.transactions[len(log.transactions)-1]
 
 	lh, headblk := log.readhead()
 	start := lh.r_start()
@@ -603,10 +603,10 @@ func (log *log_t) apply() {
 	}
 
 	if log_debug {
-		fmt.Printf("apply log: blks from %d till %d\n", start, trans.head)
+		fmt.Printf("apply log: blks from %d till %d\n", start, head)
 	}
 
-	i := logdec(trans.head)
+	i := logdec(head)
 	for {
 		l := log.log[i]
 		log.nblkapply++
@@ -623,14 +623,16 @@ func (log *log_t) apply() {
 	}
 	log.flush() // flush apply
 
-	lh.w_start(trans.head)
+	lh.w_start(head)
 	log.fs.bcache.Write(headblk)
 
 	log.flush() // flush cleared commit
 
 	log.fs.bcache.Relse(headblk, "apply done")
-	log.applystart = trans.head
 
+	log.applystart = head
+
+	// XXX remove old trans from transactions?
 	// log.transactions = make([]*trans_t, 0)
 }
 
@@ -704,20 +706,13 @@ func (l *log_t) commit_daemon() {
 			t := l.last_trans()
 			t.copyintolog(l)
 			t.copyordered(l)
-			if waiters > 0 && !l.istoofull() { // forced commit?
-				l.ncflush++
-				l.commitc <- 0 // start next trans
-				t.commit(l)
-			} else {
-				t.commit(l)
-				// apply log only when there is no room for another op. this avoids
-				// applies when there room in the log (e.g., a sync forced the log)
-				if l.istoofull() {
-					l.apply()
-				}
-
-				l.commitc <- 0
+			l.commitc <- 0
+			t.commit(l)
+			if l.istoofull() {
+				l.apply(t.head)
 			}
+
+			// XXX might unblock waiters of the next trans
 			l.unblock_waiters(waiters)
 		}
 	}
