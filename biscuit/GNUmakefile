@@ -85,7 +85,7 @@ $(K)/bootmain.o: $(K)/bootmain.c
 	@# isn't first. htf do i force ld to put a specific function first in
 	@# the section?
 	@#$(CC) -c $(CFLAGS) -Os $<
-	$(CC) -m32 -c $(CFLAGS) $<
+	$(CC) -m32 -mno-sse -c $(CFLAGS) $<
 
 d.img: main boot
 	cat boot main > $@
