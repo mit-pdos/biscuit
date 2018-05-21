@@ -154,3 +154,7 @@
 /fsdir/bin/fcgi
 /fsdir/bin/stress
 /fsdir/bin/goodcit
+/fsdir/bin/cksum
+/fsdir/bin/head
+/fsdir/bin/largefile
+/fsdir/bin/smallfile
