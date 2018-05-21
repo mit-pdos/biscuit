@@ -405,7 +405,7 @@ int mbforever()
 	}
 }
 
-const char const *_websock = ".websock";
+const char * const _websock = ".websock";
 
 static void *webclient(void *p)
 {
