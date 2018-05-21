@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = false
+const log_debug = true
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -290,7 +290,7 @@ func (trans *trans_t) iscommittable() bool {
 	return len(trans.ops) == 0
 }
 
-func (trans *trans_t) isfull(applystart int, onemore bool) bool {
+func (trans *trans_t) startcommit(applystart int, onemore bool) bool {
 	n := logsize(applystart, trans.head)
 	n += len(trans.ops) * MaxBlkPerOp
 	if onemore {
@@ -298,10 +298,14 @@ func (trans *trans_t) isfull(applystart int, onemore bool) bool {
 	}
 	full := n >= loglen/2 // kick commit_daemon() to apply?
 	if log_debug {
-		fmt.Printf("trans.isfull(%v): %v nops %d start %d head %d applystart %d len %d\n", onemore,
+		fmt.Printf("trans.startcommit(%v): %v nops %d start %d head %d applystart %d len %d\n", onemore,
 			full, len(trans.ops), trans.logindex, trans.head, applystart, loglen)
 	}
 	return full
+}
+
+func (trans *trans_t) doapply(applystart int) bool {
+	return trans.startcommit(applystart, false)
 }
 
 func (trans *trans_t) copyintolog(log *log_t) {
@@ -534,30 +538,6 @@ func (log *log_t) last_trans() *trans_t {
 	return log.transactions[len(log.transactions)-1]
 }
 
-func (log *log_t) add_op(opid opid_t) bool {
-	t := log.last_trans()
-	t.add_op(opid)
-	return log.istoofull()
-}
-
-func (log *log_t) add_write(buf buf_t) {
-	t := log.last_trans()
-	t.add_write(log, buf)
-}
-
-func (log *log_t) mark_done(opid opid_t) {
-	t := log.last_trans()
-	t.mark_done(opid)
-}
-
-func (log *log_t) iscommittable() bool {
-	if len(log.transactions) == 0 {
-		return true
-	}
-	t := log.last_trans()
-	return t.iscommittable()
-}
-
 func (log *log_t) isorderedfull(onemore bool) bool {
 	n := 0
 	for _, t := range log.transactions {
@@ -569,14 +549,9 @@ func (log *log_t) isorderedfull(onemore bool) bool {
 	return n >= MaxOrdered
 }
 
-func (log *log_t) isfull() bool {
+func (log *log_t) startcommit(onemore bool) bool {
 	t := log.last_trans()
-	return t.isfull(log.applystart, false) || log.isorderedfull(false)
-}
-
-func (log *log_t) istoofull() bool {
-	t := log.last_trans()
-	return t.isfull(log.applystart, true) || log.isorderedfull(true)
+	return t.startcommit(log.applystart, onemore) || log.isorderedfull(onemore)
 }
 
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
@@ -699,6 +674,9 @@ func (l *log_t) commit_daemon() {
 	for {
 		select {
 		case waiters := <-l.commitc:
+			if log_debug {
+				fmt.Printf("commit_daemon: start %d\n", waiters)
+			}
 			if waiters < 0 { // stop commit daemon?
 				l.commitc <- -1
 				return
@@ -708,29 +686,26 @@ func (l *log_t) commit_daemon() {
 			t.copyordered(l)
 			l.commitc <- 0
 			t.commit(l)
-			if l.istoofull() {
+			if t.doapply(l.applystart) {
 				l.apply(t.head)
 			}
 
 			// XXX might unblock waiters of the next trans
 			l.unblock_waiters(waiters)
+			if log_debug {
+				fmt.Printf("commit_daemon: done\n")
+			}
 		}
 	}
 }
 
 func (l *log_t) log_daemon() {
 	nextop := opid_t(0)
+	start := l.applystart
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
 
-		// start a new transactions, start in the log where
-		// the last one left off
-		start := l.applystart
-		if len(l.transactions) > 0 {
-			t := l.last_trans()
-			start = t.head
-		}
 		t := mk_trans(start)
 		l.transactions = append(l.transactions, t)
 
@@ -740,13 +715,13 @@ func (l *log_t) log_daemon() {
 		for !done {
 			select {
 			case nb := <-l.incoming:
-				l.add_write(nb)
+				t.add_write(l, nb)
 			case opid := <-l.done:
-				l.mark_done(opid)
+				t.mark_done(opid)
 				if adm == nil { // admit ops again?
-					if waiters > 0 || l.istoofull() {
+					if waiters > 0 || l.startcommit(true) {
 						// No more log space for another op or forced to commit
-						if l.iscommittable() {
+						if t.iscommittable() {
 							done = true
 						}
 					} else {
@@ -763,15 +738,19 @@ func (l *log_t) log_daemon() {
 				if log_debug {
 					fmt.Printf("log_daemon: admit %d\n", nextop)
 				}
-				full := l.add_op(nextop)
+				t.add_op(nextop)
 				nextop++
-				if full {
+				if l.startcommit(true) {
 					adm = nil
 				}
 			case <-l.force:
+				if log_debug {
+					fmt.Printf("log_daemon: force %d\n", waiters)
+				}
+
 				waiters++
 				adm = nil
-				if l.iscommittable() {
+				if t.iscommittable() {
 					done = true
 				}
 			case <-l.stop:
@@ -780,12 +759,12 @@ func (l *log_t) log_daemon() {
 			}
 		}
 
-		if len(l.transactions) > 0 {
-			l.commitc <- waiters
-			// wait until commit thread tells us to go ahead with
-			// next trans
-			<-l.commitc
-		}
+		start = t.head
+
+		l.commitc <- waiters
+		// wait until commit thread tells us to go ahead with
+		// next trans
+		<-l.commitc
 	}
 }
 
