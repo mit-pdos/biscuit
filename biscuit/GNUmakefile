@@ -6,7 +6,7 @@ TOP := .
 BASEFLAGS := -Wall -Werror -MMD -MP -O -g
 ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP)
 CFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -nostdinc -fno-builtin \
-	-mno-red-zone
+	-mno-red-zone -fno-stack-protector
 CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-builtin -mno-red-zone
 GOPATH ?= $(shell pwd)
 # bootloader sources
