@@ -761,7 +761,8 @@ var Lost struct {
 func _addone(rip uintptr) {
 	idx := atomic.Xadd64(&nmiprof.bufidx, 2) - 2
 	if idx + 2 < uint64(len(nmiprof.buf)) {
-		nmiprof.buf[idx] = 0xfeedfacefeedface
+		cid := uintptr(NMI_Gscpu().num)
+		nmiprof.buf[idx] = 0xfeedfacefeed0000 | cid
 		nmiprof.buf[idx+1] = rip
 	}
 }
@@ -792,7 +793,8 @@ func nmibacktrace1(tf *[TFSIZE]uintptr, gp *g) {
 	idx := last - need
 	if last < uint64(len(nmiprof.buf)) {
 		dst := nmiprof.buf[idx:]
-		dst[0] = 0xdeadbeefdeadbeef
+		cid := uintptr(NMI_Gscpu().num)
+		dst[0] = 0xdeadbeefdead0000 | cid
 		dst = dst[1:]
 		copy(dst, buf)
 	} else {

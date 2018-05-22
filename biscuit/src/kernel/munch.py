@@ -11,12 +11,26 @@ def usage():
     print >> sys.stderr
     sys.exit(-1)
 
+# returns whether line is a backtrace sentinel value, the ID of the CPU
+# which took the sample (only valid if first return is true), and whether the
+# stack unwind failed.
+def isbtsent(line):
+    btsents = [0xdeadbeefdead0000, 0xfeedfacefeed0000]
+    sm = 0xffffffffffff0000
+    cpuidm = ~sm
+    v = int(line.split()[0], 16)
+    t = v & sm
+    if t in btsents:
+        cpuid = v & cpuidm
+        unwfailed = t == btsents[1]
+        return True, cpuid, unwfailed
+    return False, 0, True
+
 def openrips(fn):
     f = open(fn)
     lines = f.readlines()
     lines = filter(None, [x.strip() for x in lines])
 
-    btsents = ['deadbeefdeadbeef', 'feedfacefeedface']
     #remnext = False
     #newl = []
     #for l in lines:
@@ -28,32 +42,41 @@ def openrips(fn):
     #        newl.append(l)
     #lines = newl
 
-    isbt = False
+    backtrace = False
     btfailed = 0
     for l in lines:
-        if l in btsents:
-            isbt = True
-        if l == btsents[1]:
-            btfailed += 1
+        btsent, _, unwindfailed = isbtsent(l)
+        if btsent:
+            backtrace = True
+            if unwindfailed:
+                btfailed += 1
+    # map of CPU ID -> lists of sample IPs (without the return address IPs in a
+    # backtrace)
     cpurips = {}
+    # map of CPU ID -> list of lists of sample IP with return addresses
+    cpubts = {}
     for i in range(10):
         cpurips[i] = []
-    rips = []
-    bts = []
+        cpubts[i] = []
     newbt = []
     ripnext = False
+    cpunext = -1
     for l in lines:
-        if isbt:
-            if l in btsents:
+        if backtrace:
+            btsent, cpuid, _ = isbtsent(l)
+            if btsent:
                 if len(newbt) > 0:
+                    bts = cpubts[cpunext]
                     bts.append(newbt)
                 ripnext = True
+                cpunext = cpuid
                 newbt = []
             else:
                 newbt.append(l)
                 if ripnext:
                     ripnext = False
-                    rips.append(l)
+                    crips = cpurips[cpuid]
+                    crips.append(l)
         else:
             l = l.split()
             rip = l[0]
@@ -65,14 +88,13 @@ def openrips(fn):
                 rip = '0' + rip
             crips = cpurips[cpuid]
             for i in range(times):
-                #rips.append(rip)
                 crips.append(rip)
     f.close()
-    if isbt and btfailed != 0:
-        fp = float(btfailed) / len(bts) * 100
-        print 'backtrace failed for %d%% (%d / %d)\n' % (fp, btfailed, len(bts))
-    #return rips, bts
-    return cpurips, bts
+    allbts = sum([sum([len(x) for x in y]) for y in cpubts.values()])
+    if backtrace and btfailed != 0:
+        fp = float(btfailed) / allbts * 100
+        print 'backtrace failed for %d%% (%d / %d)\n' % (fp, btfailed, allbts)
+    return cpurips, cpubts
 
 def isuser(r):
     return r.startswith('00002c8')
@@ -310,7 +332,7 @@ def callers(binfn, bts, builddot):
 
     topc = sorted(g.nodes(), key = lambda x:x.samps, reverse=True)
     topc = filter(lambda x: x.frac > 0.01, topc)
-    print '==== TOP CALERS ===='
+    print '==== TOP CALLERS ===='
     for x in topc:
         n = x.name
         frac = float(x.samps)/samps
@@ -343,16 +365,20 @@ for o in opts:
 prof = args[0]
 kbin = args[1]
 ubin = args[2]
-#rips, bts = openrips(prof)
-crips, bts = openrips(prof)
+crips, cbts = openrips(prof)
 
-if len(bts) > 0:
+for cpuid, bts in cbts.items():
+    if len(bts) == 0:
+        continue
+    print
+    print '===== CPU %d BACKTRACE =======' % (cpuid)
+    print
     callers(kbin, bts, buildg)
 
 for cpuid, rips in crips.items():
     if len(rips) == 0:
         continue
     print
-    print '===== CPUID %d =======' % (cpuid)
+    print '===== CPU %d =======' % (cpuid)
     print
     dump(kbin, ubin, rips, dumpips)

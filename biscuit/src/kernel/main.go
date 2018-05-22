@@ -464,6 +464,9 @@ func cpus_stack_init(apcnt int, stackstart uintptr) {
 }
 
 func cpus_start(ncpu, aplim int) {
+	if aplim + 1 >= 1 << 8 {
+		fmt.Printf("Logical CPU IDs overflow 8 bits for PMC profiling\n")
+	}
 	runtime.GOMAXPROCS(1 + aplim)
 	apcnt := ncpu - 1
 
