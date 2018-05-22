@@ -5,7 +5,7 @@ import "strconv"
 
 import "common"
 
-const log_debug = true
+const log_debug = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -141,10 +141,14 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nblkapply)
 	s += "\n\tnabsorbapply "
 	s += strconv.Itoa(log.nabsorbapply)
-	s += "\n\tnforceordered "
-	s += strconv.Itoa(log.nforceordered)
+	s += "\n\tnforce "
+	s += strconv.Itoa(log.nforce)
+	s += "\n\tnwriteordered "
+	s += strconv.Itoa(log.nwriteordered)
 	s += "\n\tncflush "
 	s += strconv.Itoa(log.ncflush)
+	s += "\n\tncapply "
+	s += strconv.Itoa(log.ncapply)
 	s += "\n"
 	return s
 }
@@ -154,6 +158,7 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 	fslog.fs = fs
 	fslog.mk_log(logstart, loglen, disk)
 	fslog.applystart = fslog.recover()
+	fslog.nextapplystart = fslog.applystart
 	if !memfs {
 		go fslog.log_daemon()
 		go fslog.commit_daemon()
@@ -199,7 +204,7 @@ type buf_t struct {
 }
 
 type trans_t struct {
-	logindex       int                          // index where this trans starts in on-disk log
+	start          int                          // index where this trans starts in on-disk log
 	head           int                          // index into in-memory log
 	ops            map[opid_t]bool              // ops in progress this transaction
 	logged         *common.BlkList_t            // list of to-be-logged blocks
@@ -210,8 +215,8 @@ type trans_t struct {
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 }
 
-func mk_trans(logindex int) *trans_t {
-	t := &trans_t{logindex: logindex, head: logindex}
+func mk_trans(start int) *trans_t {
+	t := &trans_t{start: start, head: start}
 	t.ops = make(map[opid_t]bool)
 	t.logged = common.MkBlkList()      // bounded by MaxOrdered
 	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
@@ -232,9 +237,9 @@ func (trans *trans_t) mark_done(opid opid_t) {
 
 func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	if log_debug {
-		fmt.Printf("trans.add_write: opid %d start %d head %d %d(%v) applystart %d\n", buf.opid,
-			trans.logindex, trans.head, buf.block.Block, buf.ordered, log.applystart)
-		if loginc(trans.head) == log.applystart {
+		fmt.Printf("trans.add_write: opid %d start %d head %d %d(%v) nextapplystart %d\n", buf.opid,
+			trans.start, trans.head, buf.block.Block, buf.ordered, log.nextapplystart)
+		if loginc(trans.head) == log.nextapplystart {
 			panic("add_write: run into start")
 		}
 	}
@@ -290,29 +295,37 @@ func (trans *trans_t) iscommittable() bool {
 	return len(trans.ops) == 0
 }
 
-func (trans *trans_t) startcommit(applystart int, onemore bool) bool {
-	n := logsize(applystart, trans.head)
+func (trans *trans_t) halffull(start int, onemore bool) bool {
+	n := logsize(start, trans.head)
 	n += len(trans.ops) * MaxBlkPerOp
 	if onemore {
 		n += MaxBlkPerOp
 	}
-	full := n >= loglen/2 // kick commit_daemon() to apply?
+	full := n >= loglen/2
 	if log_debug {
-		fmt.Printf("trans.startcommit(%v): %v nops %d start %d head %d applystart %d len %d\n", onemore,
-			full, len(trans.ops), trans.logindex, trans.head, applystart, loglen)
+		fmt.Printf("halffull(%v, %v): %v nops %d start %d head %d len %d\n",
+			start, onemore, full, len(trans.ops), trans.start, trans.head, loglen)
 	}
 	return full
 }
 
-func (trans *trans_t) doapply(applystart int) bool {
-	return trans.startcommit(applystart, false)
+func (trans *trans_t) isorderedfull(onemore bool) bool {
+	n := trans.ordered.Len()
+	if onemore {
+		n += MaxBlkPerOp
+	}
+	return n >= MaxOrdered
+}
+
+func (trans *trans_t) startcommit(start int, onemore bool) bool {
+	return trans.halffull(start, onemore) || trans.isorderedfull(onemore)
 }
 
 func (trans *trans_t) copyintolog(log *log_t) {
 	if log_debug {
 		fmt.Printf("copyintolog: transhead %d\n", trans.head)
 	}
-	i := trans.logindex
+	i := trans.start
 	trans.logged.Apply(func(b *common.Bdev_block_t) {
 		// Make a "private" copy of b that isn't visible to FS or cache
 		// XXX Use COW
@@ -359,7 +372,7 @@ func (trans *trans_t) write_ordered(log *log_t) {
 	if log_debug {
 		fmt.Printf("write_ordered: %d\n", trans.orderedcopy.Len())
 	}
-	log.nforceordered++
+	log.nwriteordered++
 	trans.orderedcopy.Apply(func(b *common.Bdev_block_t) {
 		log.fs.bcache.Write_async_through(b)
 	})
@@ -368,8 +381,8 @@ func (trans *trans_t) write_ordered(log *log_t) {
 
 func (trans *trans_t) commit(log *log_t) {
 	if log_debug {
-		fmt.Printf("commit: trans logindex %d transhead %d applystart %d\n", trans.logindex,
-			trans.head, log.applystart)
+		fmt.Printf("commit: trans logindex %d transhead %d applystart %d\n",
+			trans.start, trans.head, log.applystart)
 	}
 	// read the log header from disk; it may contain commit blocks from
 	// current transactions, if we haven't applied yet.
@@ -382,7 +395,7 @@ func (trans *trans_t) commit(log *log_t) {
 	blks2 := common.MkBlkList()
 
 	blks := blks1
-	for i := trans.logindex; i != trans.head; i = loginc(i) {
+	for i := trans.start; i != trans.head; i = loginc(i) {
 		if loginc(i) == log.applystart {
 			panic("commit runs into log start")
 		}
@@ -427,19 +440,23 @@ func (trans *trans_t) commit(log *log_t) {
 	}
 
 	log.fs.bcache.Relse(headblk, "commit done")
+
+	// XXX remove this trans from transactions?
+	// log.transactions = make([]*trans_t, 0)
 }
 
 type log_t struct {
-	transactions []*trans_t
-	logstart     int                    // disk block where log starts on disk
-	applystart   int                    // index in log where apply() will start
-	log          []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
-	incoming     chan buf_t
-	admission    chan opid_t
-	done         chan opid_t
-	force        chan bool
-	commitwait   chan bool
-	stop         chan bool
+	transactions   []*trans_t
+	logstart       int                    // disk block where log starts on disk
+	applystart     int                    // index in log where apply() will start
+	nextapplystart int                    // index in log where next apply will start
+	log            []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
+	incoming       chan buf_t
+	admission      chan opid_t
+	done           chan opid_t
+	force          chan bool
+	commitwait     chan bool
+	stop           chan bool
 
 	commitc chan int
 
@@ -456,8 +473,10 @@ type log_t struct {
 	norderedwrite   int
 	nblkapply       int
 	nabsorbapply    int
-	nforceordered   int
+	nforce          int
+	nwriteordered   int
 	ncflush         int
+	ncapply         int
 	norder2logwrite int
 }
 
@@ -538,22 +557,6 @@ func (log *log_t) last_trans() *trans_t {
 	return log.transactions[len(log.transactions)-1]
 }
 
-func (log *log_t) isorderedfull(onemore bool) bool {
-	n := 0
-	for _, t := range log.transactions {
-		n += t.ordered.Len()
-	}
-	if onemore {
-		n += MaxBlkPerOp
-	}
-	return n >= MaxOrdered
-}
-
-func (log *log_t) startcommit(onemore bool) bool {
-	t := log.last_trans()
-	return t.startcommit(log.applystart, onemore) || log.isorderedfull(onemore)
-}
-
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
 	headblk, err := log.fs.bcache.Get_fill(log.logstart, "commit", false)
 	if err != 0 {
@@ -601,14 +604,14 @@ func (log *log_t) apply(head int) {
 	lh.w_start(head)
 	log.fs.bcache.Write(headblk)
 
-	log.flush() // flush cleared commit
+	log.flush() // flush head
 
 	log.fs.bcache.Relse(headblk, "apply done")
 
 	log.applystart = head
-
-	// XXX remove old trans from transactions?
-	// log.transactions = make([]*trans_t, 0)
+	if log.applystart != log.nextapplystart {
+		panic("apply: inconsistent starts")
+	}
 }
 
 func (log *log_t) unblock_waiters(n int) {
@@ -684,10 +687,40 @@ func (l *log_t) commit_daemon() {
 			t := l.last_trans()
 			t.copyintolog(l)
 			t.copyordered(l)
-			l.commitc <- 0
+
+			// if log isn't completely full, then allow log_daemon
+			// to accept new ops.
+			start := true
+			if !t.halffull(l.nextapplystart, false) {
+				if log_debug {
+					fmt.Printf("commit_daemon: start next trans early\n")
+				}
+				l.nextapplystart = t.head
+				l.ncflush++
+				l.commitc <- 0
+			} else {
+				start = false
+			}
+
 			t.commit(l)
-			if t.doapply(l.applystart) {
+
+			//  if log is half full, apply log to free up space in log.
+			if t.halffull(l.applystart, false) {
+				if log_debug {
+					fmt.Printf("commit_daemon: apply\n")
+				}
 				l.apply(t.head)
+				l.nextapplystart = t.head
+				if start {
+					l.ncapply++
+				}
+			}
+
+			if !start {
+				if log_debug {
+					fmt.Printf("commit_daemon: start next trans\n")
+				}
+				l.commitc <- 0
 			}
 
 			// XXX might unblock waiters of the next trans
@@ -701,7 +734,7 @@ func (l *log_t) commit_daemon() {
 
 func (l *log_t) log_daemon() {
 	nextop := opid_t(0)
-	start := l.applystart
+	start := l.nextapplystart
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
@@ -719,7 +752,7 @@ func (l *log_t) log_daemon() {
 			case opid := <-l.done:
 				t.mark_done(opid)
 				if adm == nil { // admit ops again?
-					if waiters > 0 || l.startcommit(true) {
+					if waiters > 0 || t.startcommit(l.nextapplystart, true) {
 						// No more log space for another op or forced to commit
 						if t.iscommittable() {
 							done = true
@@ -740,14 +773,14 @@ func (l *log_t) log_daemon() {
 				}
 				t.add_op(nextop)
 				nextop++
-				if l.startcommit(true) {
+				if t.startcommit(l.nextapplystart, true) {
 					adm = nil
 				}
 			case <-l.force:
 				if log_debug {
 					fmt.Printf("log_daemon: force %d\n", waiters)
 				}
-
+				l.nforce++
 				waiters++
 				adm = nil
 				if t.iscommittable() {
