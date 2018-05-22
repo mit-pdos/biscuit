@@ -69,7 +69,8 @@ func (log *log_t) Force() {
 		fmt.Printf("log force\n")
 	}
 	log.force <- true
-	<-log.commitwait
+	c := <-log.forcewait
+	<-c
 }
 
 // Write increments ref so that the log has always a valid ref to the buf's page
@@ -169,7 +170,7 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 func (log *log_t) StopLog() {
 	log.stop <- true
 	<-log.stop
-	log.commitc <- -1
+	log.commitc <- nil
 	<-log.commitc
 }
 
@@ -213,6 +214,8 @@ type trans_t struct {
 	logpresent     map[int]bool                 // enable quick check to see if block is in log
 	orderedpresent map[int]bool                 // enable quick check so see if block is in ordered
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
+	waiters        int                          // number of processes wait for this trans to commit
+	waitc          chan bool                    // channel on which waiters are waiting
 }
 
 func mk_trans(start int) *trans_t {
@@ -224,6 +227,7 @@ func mk_trans(start int) *trans_t {
 	t.logpresent = make(map[int]bool, loglen)
 	t.orderedpresent = make(map[int]bool)
 	t.absorb = make(map[int]*common.Bdev_block_t, MaxOrdered)
+	t.waitc = make(chan bool)
 	return t
 }
 
@@ -319,6 +323,15 @@ func (trans *trans_t) isorderedfull(onemore bool) bool {
 
 func (trans *trans_t) startcommit(start int, onemore bool) bool {
 	return trans.halffull(start, onemore) || trans.isorderedfull(onemore)
+}
+
+func (trans *trans_t) unblock_waiters() {
+	if log_debug {
+		fmt.Printf("wakeup waiters for Force %v %v\n", trans.waiters, trans.waitc)
+	}
+	for i := 0; i < trans.waiters; i++ {
+		trans.waitc <- true
+	}
 }
 
 func (trans *trans_t) copyintolog(log *log_t) {
@@ -440,13 +453,9 @@ func (trans *trans_t) commit(log *log_t) {
 	}
 
 	log.fs.bcache.Relse(headblk, "commit done")
-
-	// XXX remove this trans from transactions?
-	// log.transactions = make([]*trans_t, 0)
 }
 
 type log_t struct {
-	transactions   []*trans_t
 	logstart       int                    // disk block where log starts on disk
 	applystart     int                    // index in log where apply() will start
 	nextapplystart int                    // index in log where next apply will start
@@ -455,10 +464,10 @@ type log_t struct {
 	admission      chan opid_t
 	done           chan opid_t
 	force          chan bool
-	commitwait     chan bool
+	forcewait      chan (chan bool)
 	stop           chan bool
 
-	commitc chan int
+	commitc chan *trans_t
 
 	disk common.Disk_i
 	fs   *Fs_t
@@ -530,7 +539,6 @@ func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 	loglen = ll - LOGOFFSET
 	log.logstart = ls
 	// first block of the log is an array of log block destinations
-	log.transactions = make([]*trans_t, 0)
 	log.log = make([]*common.Bdev_block_t, loglen)
 	for i := 0; i < len(log.log); i++ {
 		log.log[i] = common.MkBlock_newpage(0, "log", log.fs.bcache.mem,
@@ -540,21 +548,14 @@ func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 	log.admission = make(chan opid_t)
 	log.done = make(chan opid_t)
 	log.force = make(chan bool)
-	log.commitwait = make(chan bool)
-	log.commitc = make(chan int)
+	log.forcewait = make(chan (chan bool))
+	log.commitc = make(chan *trans_t)
 	log.stop = make(chan bool)
 	log.disk = disk
 
 	if loglen >= common.BSIZE/4 {
 		panic("log_t.init: log will not fill in one header block\n")
 	}
-}
-
-func (log *log_t) last_trans() *trans_t {
-	if len(log.transactions) <= 0 {
-		panic("no transaction")
-	}
-	return log.transactions[len(log.transactions)-1]
 }
 
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
@@ -614,17 +615,6 @@ func (log *log_t) apply(head int) {
 	}
 }
 
-func (log *log_t) unblock_waiters(n int) {
-	if n > 0 {
-		if log_debug {
-			fmt.Printf("wakeup waiters/syncers %v\n", n)
-		}
-		for i := 0; i < n; i++ {
-			log.commitwait <- true
-		}
-	}
-}
-
 func (log *log_t) flush() {
 	ider := common.MkRequest(nil, common.BDEV_FLUSH, true)
 	if log.disk.Start(ider) {
@@ -676,15 +666,14 @@ func (log *log_t) recover() int {
 func (l *log_t) commit_daemon() {
 	for {
 		select {
-		case waiters := <-l.commitc:
-			if log_debug {
-				fmt.Printf("commit_daemon: start %d\n", waiters)
-			}
-			if waiters < 0 { // stop commit daemon?
-				l.commitc <- -1
+		case t := <-l.commitc:
+			if t == nil { // stop commit daemon?
+				l.commitc <- nil
 				return
 			}
-			t := l.last_trans()
+			if log_debug {
+				fmt.Printf("commit_daemon: start %d\n", t.waiters)
+			}
 			t.copyintolog(l)
 			t.copyordered(l)
 
@@ -697,7 +686,7 @@ func (l *log_t) commit_daemon() {
 				}
 				l.nextapplystart = t.head
 				l.ncflush++
-				l.commitc <- 0
+				l.commitc <- nil
 			} else {
 				start = false
 			}
@@ -720,11 +709,10 @@ func (l *log_t) commit_daemon() {
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans\n")
 				}
-				l.commitc <- 0
+				l.commitc <- nil
 			}
 
-			// XXX might unblock waiters of the next trans
-			l.unblock_waiters(waiters)
+			t.unblock_waiters()
 			if log_debug {
 				fmt.Printf("commit_daemon: done\n")
 			}
@@ -740,10 +728,8 @@ func (l *log_t) log_daemon() {
 		common.Kresdebug(100<<20, "log daemon")
 
 		t := mk_trans(start)
-		l.transactions = append(l.transactions, t)
 
 		done := false
-		waiters := 0
 		adm := l.admission
 		for !done {
 			select {
@@ -752,7 +738,7 @@ func (l *log_t) log_daemon() {
 			case opid := <-l.done:
 				t.mark_done(opid)
 				if adm == nil { // admit ops again?
-					if waiters > 0 || t.startcommit(l.nextapplystart, true) {
+					if t.waiters > 0 || t.startcommit(l.nextapplystart, true) {
 						// No more log space for another op or forced to commit
 						if t.iscommittable() {
 							done = true
@@ -777,11 +763,12 @@ func (l *log_t) log_daemon() {
 					adm = nil
 				}
 			case <-l.force:
-				if log_debug {
-					fmt.Printf("log_daemon: force %d\n", waiters)
-				}
 				l.nforce++
-				waiters++
+				t.waiters++
+				if log_debug {
+					fmt.Printf("log_daemon: force %d\n", t.waiters)
+				}
+				l.forcewait <- t.waitc
 				adm = nil
 				if t.iscommittable() {
 					done = true
@@ -794,7 +781,7 @@ func (l *log_t) log_daemon() {
 
 		start = t.head
 
-		l.commitc <- waiters
+		l.commitc <- t
 		// wait until commit thread tells us to go ahead with
 		// next trans
 		<-l.commitc
