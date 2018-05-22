@@ -985,15 +985,22 @@ func hexdump(buf []uint8) {
 var prof = bprof_t{}
 
 func cpuidfamily() (uint, uint) {
-	ax, _, _, _ := runtime.Cpuid(1, 0)
+	_ax, _, _, _ := runtime.Cpuid(1, 0)
+	ax := uint(_ax)
 	model := (ax >> 4) & 0xf
 	family := (ax >> 8) & 0xf
 	emodel := (ax >> 16) & 0xf
 	efamily := (ax >> 20) & 0xff
 
-	dispmodel := emodel<<4 + model
-	dispfamily := efamily + family
-	return uint(dispmodel), uint(dispfamily)
+	dispfamily := family
+	if family == 0xf {
+		dispfamily += efamily
+	}
+	dispmodel := model
+	if family == 0xf || family == 0x6 {
+		dispmodel += emodel << 4
+	}
+	return dispmodel, dispfamily
 }
 
 func cpuchk() {
