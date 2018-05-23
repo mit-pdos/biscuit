@@ -154,7 +154,7 @@ func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 
 func (bcache *bcache_t) Write_async_blks_through(blks *common.BlkList_t) {
 	if bdev_debug {
-		fmt.Printf("bcache_write_async_blk_through s %v\n", blks.Len())
+		fmt.Printf("bcache_write_async_blk_through %v\n", blks.Len())
 	}
 	if blks.Len() == 0 {
 		return

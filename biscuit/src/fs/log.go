@@ -19,7 +19,7 @@ const log_debug = false
 // guarantee that it performs no more than maxblkspersys logged writes in an
 // operation, to ensure that its operation will fit in the log.
 
-var loglen = 0 // for marshalling/unmarshalling
+var loglen = 0 // for marshalling/unmarshalling  (XXX not anymore)
 
 const LOGOFFSET = 1 // log block 0 is used for head
 
@@ -28,6 +28,7 @@ const LOGOFFSET = 1 // log block 0 is used for head
 // number of concurrent fs syscalls.
 const MaxBlkPerOp = 10
 const MaxOrdered = 5000
+const MaxDescriptor = common.BSIZE / 8
 
 type opid_t int
 
@@ -178,6 +179,10 @@ func (log *log_t) StopLog() {
 // Log implementation
 //
 
+func logindex(j int) int {
+	return j % loglen
+}
+
 func loginc(i int) int {
 	return (i + 1) % loglen
 }
@@ -219,7 +224,7 @@ type trans_t struct {
 }
 
 func mk_trans(start int) *trans_t {
-	t := &trans_t{start: start, head: start}
+	t := &trans_t{start: start, head: loginc(start)} // reserve first block for descriptor
 	t.ops = make(map[opid_t]bool)
 	t.logged = common.MkBlkList()      // bounded by MaxOrdered
 	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
@@ -338,7 +343,7 @@ func (trans *trans_t) copyintolog(log *log_t) {
 	if log_debug {
 		fmt.Printf("copyintolog: transhead %d\n", trans.head)
 	}
-	i := trans.start
+	i := loginc(trans.start) // skip descriptor
 	trans.logged.Apply(func(b *common.Bdev_block_t) {
 		// Make a "private" copy of b that isn't visible to FS or cache
 		// XXX Use COW
@@ -404,18 +409,23 @@ func (trans *trans_t) commit(log *log_t) {
 		fmt.Printf("commit: r_start() = %d\n", lh.r_start())
 		panic("commit: start inconsistent")
 	}
+
 	blks1 := common.MkBlkList()
 	blks2 := common.MkBlkList()
-
 	blks := blks1
+
+	db := log.mkdescriptor(log.log[trans.start])
+	j := 0
 	for i := trans.start; i != trans.head; i = loginc(i) {
 		if loginc(i) == log.applystart {
 			panic("commit runs into log start")
 		}
-		// install log destination in the header block
+		// install log destination in the descriptor block
 		l := log.log[i]
-		lh.w_logdest(i, l.Block)
-		b := common.MkBlock(log.logstart+LOGOFFSET+i, "commit", log.fs.bcache.mem, log.fs.bcache.disk, &_nop_relse)
+		db.w_logdest(j, l.Block)
+		j++
+		b := common.MkBlock(log.logstart+LOGOFFSET+i, "commit", log.fs.bcache.mem,
+			log.fs.bcache.disk, &_nop_relse)
 		// it is safe to reuse the underlying physical page; this page
 		// will not be freed, and no thread will update its content
 		// until this transaction has been committed and applied.
@@ -426,6 +436,7 @@ func (trans *trans_t) commit(log *log_t) {
 			blks = blks2
 		}
 	}
+	db.w_logdest(j, 0) // marker
 	lh.w_end(trans.head)
 
 	// write blocks to log in batch; no need to release
@@ -442,6 +453,8 @@ func (trans *trans_t) commit(log *log_t) {
 
 	log.flush() // commit log header
 
+	log.log[trans.start].Block = 0 // now safe to mark descriptor block
+
 	n := blks1.Len() + blks2.Len()
 	log.nblkcommitted += n
 	if n > log.maxblks_per_op {
@@ -451,8 +464,8 @@ func (trans *trans_t) commit(log *log_t) {
 	if log_debug {
 		fmt.Printf("commit: committed %d blks\n", n)
 	}
-
 	log.fs.bcache.Relse(headblk, "commit done")
+
 }
 
 type log_t struct {
@@ -497,7 +510,6 @@ type log_t struct {
 const (
 	START = 0
 	END   = 8
-	TABLE = 16
 )
 
 type logheader_t struct {
@@ -520,18 +532,22 @@ func (lh *logheader_t) w_end(n int) {
 	fieldw(lh.data, END, n)
 }
 
-func (lh *logheader_t) r_logdest(p int) int {
-	if p < 0 || p > loglen {
-		panic("bad dnum")
-	}
-	return fieldr(lh.data, TABLE+p)
+type logdescriptor_t struct {
+	data *common.Bytepg_t
 }
 
-func (lh *logheader_t) w_logdest(p int, n int) {
-	if p < 0 || p > loglen {
+func (ld *logdescriptor_t) r_logdest(p int) int {
+	if p < 0 || p >= MaxDescriptor {
 		panic("bad dnum")
 	}
-	fieldw(lh.data, TABLE+p, n)
+	return fieldr(ld.data, p)
+}
+
+func (ld *logdescriptor_t) w_logdest(p int, n int) {
+	if p < 0 || p >= MaxDescriptor {
+		panic("bad dnum")
+	}
+	fieldw(ld.data, p, n)
 }
 
 func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
@@ -559,11 +575,23 @@ func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 }
 
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
-	headblk, err := log.fs.bcache.Get_fill(log.logstart, "commit", false)
+	headblk, err := log.fs.bcache.Get_fill(log.logstart, "readhead", false)
 	if err != 0 {
-		panic("cannot read commit block\n")
+		panic("cannot read head/commit block\n")
 	}
 	return &logheader_t{headblk.Data}, headblk
+}
+
+func (log *log_t) mkdescriptor(blk *common.Bdev_block_t) *logdescriptor_t {
+	return &logdescriptor_t{blk.Data}
+}
+
+func (log *log_t) readdescriptor(logblk int) (*logdescriptor_t, *common.Bdev_block_t) {
+	dblk, err := log.fs.bcache.Get_fill(log.logstart+logblk+LOGOFFSET, "readdescriptor", false)
+	if err != 0 {
+		panic("cannot read descriptor block\n")
+	}
+	return log.mkdescriptor(dblk), dblk
 }
 
 func (log *log_t) apply(head int) {
@@ -588,12 +616,16 @@ func (log *log_t) apply(head int) {
 	i := logdec(head)
 	for {
 		l := log.log[i]
-		log.nblkapply++
-		if _, ok := done[l.Block]; !ok {
-			log.fs.bcache.Write_async_through(l)
-			done[l.Block] = true
+		if l.Block == 0 {
+			// nothing to do for descriptor block
 		} else {
-			log.nabsorbapply++
+			log.nblkapply++
+			if _, ok := done[l.Block]; !ok {
+				log.fs.bcache.Write_async_through(l)
+				done[l.Block] = true
+			} else {
+				log.nabsorbapply++
+			}
 		}
 		if i == start {
 			break
@@ -622,43 +654,55 @@ func (log *log_t) flush() {
 	}
 }
 
-func (log *log_t) recover() int {
-	b, err := log.fs.bcache.Get_fill(log.logstart, "fs_recover_logstart", false)
-	if err != 0 {
-		panic("must succeed")
+func (log *log_t) install(start, end int) {
+	for i := start; i < end; {
+		db, dblk := log.readdescriptor(i)
+		i = loginc(i)
+		for j := 1; ; j++ {
+			bdest := db.r_logdest(j)
+			if bdest == 0 {
+				break
+			}
+			if log_debug {
+				fmt.Printf("write log %d to %d\n", i, bdest)
+			}
+			lb, err := log.fs.bcache.Get_fill(log.logstart+LOGOFFSET+i, "i", false)
+			if err != 0 {
+				panic("must succeed")
+			}
+			fb, err := log.fs.bcache.Get_fill(bdest, "bdest", false)
+			if err != 0 {
+				panic("must succeed")
+			}
+			copy(fb.Data[:], lb.Data[:])
+			log.fs.bcache.Write(fb)
+			log.fs.bcache.Relse(lb, "install lb")
+			log.fs.bcache.Relse(fb, "install fb")
+			i = loginc(i)
+		}
+		log.fs.bcache.Relse(dblk, "install db")
 	}
-	lh := logheader_t{b.Data}
+}
+
+func (log *log_t) recover() int {
+	lh, headblk := log.readhead()
 	start := lh.r_start()
 	end := lh.r_end()
 	if start == end {
 		fmt.Printf("no FS recovery needed\n")
-		log.fs.bcache.Relse(b, "fs_recover_logstart")
+		log.fs.bcache.Relse(headblk, "fs_recover_logstart")
 		return start
 	}
 	fmt.Printf("starting FS recovery...\n")
 
-	for i := start; i < end; i = loginc(i) {
-		bdest := lh.r_logdest(i)
-		if log_debug {
-			fmt.Printf("write log %d to %d\n", log.logstart+LOGOFFSET+i, bdest)
-		}
-		lb, err := log.fs.bcache.Get_fill(log.logstart+LOGOFFSET+i, "i", false)
-		if err != 0 {
-			panic("must succeed")
-		}
-		fb, err := log.fs.bcache.Get_fill(bdest, "bdest", false)
-		if err != 0 {
-			panic("must succeed")
-		}
-		copy(fb.Data[:], lb.Data[:])
-		log.fs.bcache.Write(fb)
-		log.fs.bcache.Relse(lb, "fs_recover1")
-		log.fs.bcache.Relse(fb, "fs_recover2")
-	}
+	log.install(start, end)
 
 	lh.w_start(end) // mark that everything until end has been applied
-	log.fs.bcache.Write(b)
-	log.fs.bcache.Relse(b, "fs_recover_logstart")
+	log.fs.bcache.Write(headblk)
+	log.flush() // flush head
+
+	log.fs.bcache.Relse(headblk, "fs_recover_logstart")
+
 	fmt.Printf("restored blocks from %d till %d\n", start, end)
 	return end
 }
@@ -674,6 +718,7 @@ func (l *log_t) commit_daemon() {
 			if log_debug {
 				fmt.Printf("commit_daemon: start %d\n", t.waiters)
 			}
+
 			t.copyintolog(l)
 			t.copyordered(l)
 
@@ -763,15 +808,21 @@ func (l *log_t) log_daemon() {
 					adm = nil
 				}
 			case <-l.force:
-				l.nforce++
-				t.waiters++
-				if log_debug {
-					fmt.Printf("log_daemon: force %d\n", t.waiters)
-				}
-				l.forcewait <- t.waitc
-				adm = nil
-				if t.iscommittable() {
-					done = true
+				if loginc(t.start) == t.head { // nothing to commit?
+					l.forcewait <- t.waitc
+					t.waitc <- true
+
+				} else {
+					l.nforce++
+					t.waiters++
+					if log_debug {
+						fmt.Printf("log_daemon: force %d\n", t.waiters)
+					}
+					l.forcewait <- t.waitc
+					adm = nil
+					if t.iscommittable() {
+						done = true
+					}
 				}
 			case <-l.stop:
 				l.stop <- true
