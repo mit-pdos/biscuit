@@ -562,7 +562,7 @@ func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 }
 
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
-	headblk, err := log.fs.bcache.Get_fill(log.logstart, "readhead", false)
+	headblk, err := log.fs.bcache.Get_fill(log.logstart, "readhead", true)
 	if err != 0 {
 		panic("cannot read head/commit block\n")
 	}
@@ -601,36 +601,30 @@ func (log *log_t) almosthalffull() bool {
 	return full
 }
 
-// XXX in different blocks so that apply and commit daemon can write concurrently
-// or lock?
 func (log *log_t) commit_head(head int) {
-	// read the log header from disk; it may contain commit blocks from
-	// current transactions, if we haven't applied yet.
 	lh, headblk := log.readhead()
 	lh.w_end(head)
+	headblk.Unlock()
 	log.fs.bcache.Write(headblk) // write log header
 	log.flush()                  // commit log header
 	log.fs.bcache.Relse(headblk, "commit_done")
 }
 
 func (log *log_t) commit_start(start int) {
-	// read the log header from disk; it may contain commit blocks from
-	// current transactions, if we haven't applied yet.
 	lh, headblk := log.readhead()
 	if lh.r_start() != log.applystart {
 		fmt.Printf("commit_start: r_start() = %d\n", lh.r_start())
 		panic("commit_start: start inconsistent")
 	}
 	lh.w_start(start)
+	headblk.Unlock()
 	log.fs.bcache.Write(headblk) // write log header
 	log.flush()                  // commit log header
 	log.fs.bcache.Relse(headblk, "commit_start")
 }
 
-func (log *log_t) apply() {
+func (log *log_t) apply(end int) {
 	log.napply++
-
-	end := log.applyend // commit daemon updates this, so read it here
 
 	done := make(map[int]bool, log.loglen)
 
@@ -681,7 +675,7 @@ func (l *log_t) apply_daemon() {
 				l.applyc <- true
 				return
 			}
-			l.apply()
+			l.apply(l.applyend) // XXX send over channel?
 			// l.applyc <- true
 		}
 	}
@@ -853,6 +847,7 @@ func (log *log_t) recover() {
 	lh, headblk := log.readhead()
 	start := lh.r_start()
 	end := lh.r_end()
+	headblk.Unlock()
 
 	log.applystart = start
 	log.applyend = start
