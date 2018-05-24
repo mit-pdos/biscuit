@@ -28,6 +28,8 @@ func (ahci *ahci_disk_t) Seek(o int) {
 
 func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 	ahci.Lock() // lock to ensure that seek folllowed by read/write is atomic
+	defer ahci.Unlock()
+
 	switch req.Cmd {
 	case common.BDEV_READ:
 		if req.Blks.Len() != 1 {
@@ -66,7 +68,6 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 			ahci.t.sync()
 		}
 	}
-	ahci.Unlock()
 	return false
 }
 
