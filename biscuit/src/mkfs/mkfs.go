@@ -9,7 +9,7 @@ import "common"
 import "ufs"
 
 const (
-	nlogblks   = 256
+	nlogblks   = 1024
 	ninodeblks = 100 * 50
 	ndatablks  = 40000
 )
