@@ -52,9 +52,9 @@ class Params(object):
         self._initsym(fn, 'panicindex')
         self._initsym(fn, 'panicslice')
         self._initsym(fn, 'panicdivide')
-        self._initsym(fn, 'panicdottype')
-        #self._initsym(fn, 'panicdottypeE')
-        #self._initsym(fn, 'panicdottypeI')
+        #self._initsym(fn, 'panicdottype')
+        self._initsym(fn, 'panicdottypeE')
+        self._initsym(fn, 'panicdottypeI')
 
         self._stksyms = ['badmorestackg0', 'badmorestackgsignal',
         'morestackc', 'morestack', 'morestack_noctxt']
@@ -120,7 +120,7 @@ class Params(object):
         print 'SYM %s %#x %#x' % (s.name, s.start, s.end)
 
     # returns true if ins is the first instruction of a write barrier check
-    def iswb(self, ins):
+    def isoldwb(self, ins):
         if ins.id != X86_INS_MOV:
             return False
         if len(ins.operands) != 2:
@@ -131,7 +131,7 @@ class Params(object):
             if src.mem.base != X86_REG_RIP:
                 return False
             addr = src.value.mem.disp + ins.address + ins.size
-            wbsym = p._syms['writeBarrier']
+            wbsym = self._syms['writeBarrier']
             if wbsym.within(addr):
                 return True
         return False
@@ -149,7 +149,7 @@ class Params(object):
         if src.mem.base != X86_REG_RIP:
             return False
         addr = src.value.mem.disp + ins.address + ins.size
-        typesym = p._syms['type.*']
+        typesym = self._syms['type.*']
         if not typesym.within(addr):
             return False
         reg = self.regops(ins, 1)[0]
@@ -213,7 +213,28 @@ class Params(object):
             print '%x %s (%s %s)' % (ins.address, xids, ins.mnemonic, ins.op_str)
             raise 'mismatch'
 
-    def writebarriers(self):
+    def iswb(self, ins):
+        return self._iswb1(ins) or self._iswb2(ins)
+
+    def _iswb2(self, ins):
+        if not ins.id == X86_INS_LEA:
+            return False
+        mem, reg = ins.operands[0], ins.operands[1]
+        if mem.type != X86_OP_MEM or reg.type != X86_OP_REG:
+            return False
+        addr = mem.mem.disp + ins.address + ins.size
+        return self._syms['writeBarrier'].within(addr)
+
+    def _iswb1(self, ins):
+        if not self.isimmcmp(ins) or ins.operands[0].imm != 0:
+            return False
+        op = ins.operands[1]
+        if op.type != X86_OP_MEM or op.mem.base != X86_REG_RIP:
+            return False
+        addr = op.mem.disp + ins.address + ins.size
+        return self._syms['writeBarrier'].within(addr)
+
+    def writebarriers(self, oldstyle=False):
         '''
         finds write barrier checks of the form:
         mov     writebarrierflag, REG
@@ -231,36 +252,69 @@ class Params(object):
         except for the "..." between the 2 and 1 labels are included in the
         returned set
         '''
+        self.bbs()
         wb = []
-        for x in p._ilist:
-            if p.iswb(x):
+        for x in self._ilist:
+            if not oldstyle and self.iswb(x):
+                # go1.10 write barriers don't load the flag to a register, but
+                # compare the flag directly and the jne is always the next
+                # instruction. there are also a few places in the runtime where
+                # the write barrier flag is explicitly checked; those places
+                # uses lea;cmp;cjmp.
+                if x.id == X86_INS_CMP:
+                    n = self.next(x)
+                    self.ensure(n, [X86_INS_JNE])
+                    wb.append(x)
+                    wb.append(n)
+                    baddr = n.operands[0].imm
+                else:
+                    n = self.next(x)
+                    j = self.next(n)
+                    self.ensure(x, [X86_INS_LEA])
+                    if not self.isimmcmp(n) or n.operands[0].imm != 0:
+                        raise 'unexpected cmp'
+                    self.ensure(j, [X86_INS_JE, X86_INS_JNE])
+                    wb.append(x)
+                    wb.append(n)
+                    wb.append(j)
+                    if j.id == X86_INS_JE:
+                        # writebarrier == 0, branch not taken
+                        baddr = self.next(j).address
+                    else:
+                        baddr = j.operands[0].imm
+                wblk = self.bbins(baddr)
+                if len(wblk) == 0:
+                    raise 'bad block'
+                for ins in wblk:
+                    wb.append(ins)
+            elif self.isoldwb(x):
                 wb.append(x)
-                reg = p.regops(x, 1)
+                reg = self.regops(x, 1)
                 reg = reg[0]
                 # find next instruction which uses the register into which the flag was
                 # loaded. it should be a test.
-                n = p.findnextreg(x, reg, 20)
-                p.ensure(n, [X86_INS_TEST])
+                n = self.findnextreg(x, reg, 20)
+                self.ensure(n, [X86_INS_TEST])
                 wb.append(n)
-                n = p.findnextjmp(n, 20)
-                p.ensure(n, [X86_INS_JNE])
+                n = self.findnextjmp(n, 20)
+                self.ensure(n, [X86_INS_JNE])
                 wb.append(n)
                 if len(n.operands) != 1:
                     raise 'no'
                 # add the block executed when write barrier is enabled
                 addr = n.operands[0].imm
-                n = p._iaddr[addr]
+                n = self._iaddr[addr]
 
-                call = p.findnextcall(n, 10)
-                jmp = p.findnextjmp(n, 20)
-                p.ensure(jmp, [X86_INS_JMP])
+                call = self.findnextcall(n, 10)
+                jmp = self.findnextjmp(n, 20)
+                self.ensure(jmp, [X86_INS_JMP])
                 # make sure the jump comes after the call
                 if jmp.address - call.address < 0:
                     raise 'call must come first'
 
                 while n.address <= jmp.address:
                     wb.append(n)
-                    n = p.next(n)
+                    n = self.next(n)
         return [x.address for x in wb]
 
     def isnilchk(self, ins):
@@ -305,7 +359,7 @@ class Params(object):
         #print '--------------------'
 
     def sucsfor(self, end, bstops):
-        # only a few special runtime functions (like gogo for scheduling) have
+        # only a few special runtime functions (gogo, cgo, and reflection) have
         # jumps that are not immediates and can be safely ignored since they
         # are not involved in safety checks.
         sucs = []
@@ -314,6 +368,7 @@ class Params(object):
             if end.operands[0].type == X86_OP_IMM:
                 sucs = [end.operands[0].imm]
             else:
+                #print 'IND at %#x' % (end.address)
                 # ignore special reg dest
                 sucs = []
         elif end.id in bstops:
@@ -344,7 +399,7 @@ class Params(object):
         caddr = self._ilist[0].address
         while caddr in p._iaddr:
             ins = p._iaddr[caddr]
-            # end = ins for single instruction blocks
+            # end == ins for single instruction blocks
             end = ins
             if end.id not in bends:
                 end = self.findnext(ins, bends, -1)
@@ -381,6 +436,7 @@ class Params(object):
                 raise 'no'
         self._bb = in2b
         self._bbret = [x.firstaddr for x in allbs]
+        self._bbsdone = True
         return self._bbret
 
     # returns list of instructions for the basic block containing baddr
@@ -681,22 +737,23 @@ p = Params('main.gobin')
 print 'made all map: %d' % (len(p._ilist))
 
 wb = p.writebarriers()
+print 'found', len(wb)
 writerips(wb, 'wbars.rips')
 
-ptr = p.ptrchecks()
-writerips(ptr, 'nilptrs.rips')
-
-bc = p.boundschecks()
-writerips(bc, 'bounds.rips')
-
-div = p.dividechecks()
-writerips(div, 'div.rips')
-
-tp = p.typechecks()
-writerips(tp, 'types.rips')
-
-ss = p.splits();
-writerips(ss, 'splits.rips')
+#ptr = p.ptrchecks()
+#writerips(ptr, 'nilptrs.rips')
+#
+#bc = p.boundschecks()
+#writerips(bc, 'bounds.rips')
+#
+#div = p.dividechecks()
+#writerips(div, 'div.rips')
+#
+#tp = p.typechecks()
+#writerips(tp, 'types.rips')
+#
+#ss = p.splits();
+#writerips(ss, 'splits.rips')
 
 #writefake(bc, 'fake.txt')
 
