@@ -361,10 +361,14 @@ func TestFSConcurNotSame(t *testing.T) {
 // Test concurrent commit of blocks with a new transaction updating same blocks
 //
 
+const (
+	MoreLogBlks = nlogblks * 4
+)
+
 func TestFSConcurSame(t *testing.T) {
 	n := 8
 	dst := "tmp.img"
-	MkDisk(dst, nil, nlogblks*4, ninodeblks*2, ndatablks*10)
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks*2, ndatablks*10)
 	c := make(chan string)
 
 	tfs := BootFS(dst)
@@ -400,7 +404,7 @@ func TestFSConcurSame(t *testing.T) {
 func TestFSConcurUnlink(t *testing.T) {
 	n := 8
 	dst := "tmp.img"
-	MkDisk(dst, nil, nlogblks*4, ninodeblks*2, ndatablks*10)
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks*2, ndatablks*10)
 	c := make(chan string)
 	tfs := BootFS(dst)
 	d := "d"
