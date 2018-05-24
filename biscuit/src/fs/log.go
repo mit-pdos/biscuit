@@ -152,9 +152,6 @@ func (log *log_t) Stats() string {
 }
 
 func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
-	if loglen < 2*MaxDescriptor {
-		panic("StartLog: loglen must be able to hold two transactions")
-	}
 	fslog := &log_t{}
 	fslog.fs = fs
 	fslog.mk_log(logstart, loglen, disk)
@@ -172,7 +169,7 @@ func (log *log_t) StopLog() {
 	<-log.stop
 	log.commitc <- nil
 	<-log.commitc
-	log.applyc <- false
+	log.applyc <- -1
 	<-log.applyc
 }
 
@@ -211,9 +208,10 @@ type buf_t struct {
 }
 
 type trans_t struct {
-	start          int                          // index where this trans starts in on-disk log
-	head           int                          // index into in-memory log
-	loglen         int                          // length of log (should be >= 2 * MaxDescriptor)
+	start          int // index where this trans starts in on-disk log
+	head           int // index into in-memory log
+	loglen         int // length of log (should be >= 2 * maxtrans)
+	maxtrans       int
 	ops            map[opid_t]bool              // ops in progress this transaction
 	logged         *common.BlkList_t            // list of to-be-logged blocks
 	ordered        *common.BlkList_t            // list of ordered blocks
@@ -225,7 +223,7 @@ type trans_t struct {
 	waitc          chan bool                    // channel on which waiters are waiting
 }
 
-func mk_trans(start, loglen int) *trans_t {
+func mk_trans(start, loglen, maxtrans int) *trans_t {
 	t := &trans_t{start: start, head: loginc(start, loglen)} // reserve first block for descriptor
 	t.ops = make(map[opid_t]bool)
 	t.logged = common.MkBlkList()      // bounded by MaxOrdered
@@ -236,6 +234,7 @@ func mk_trans(start, loglen int) *trans_t {
 	t.absorb = make(map[int]*common.Bdev_block_t, MaxOrdered)
 	t.waitc = make(chan bool)
 	t.loglen = loglen
+	t.maxtrans = maxtrans
 	return t
 }
 
@@ -317,7 +316,7 @@ func (trans *trans_t) isdescriptorfull() bool {
 	n := logsize(trans.start, trans.head, trans.loglen)
 	n += len(trans.ops) * MaxBlkPerOp
 	n += MaxBlkPerOp
-	return n >= MaxDescriptor
+	return n >= trans.maxtrans
 }
 
 func (trans *trans_t) startcommit() bool {
@@ -457,6 +456,7 @@ func (trans *trans_t) commit(log *log_t) {
 
 type log_t struct {
 	loglen     int                    // log len
+	maxtrans   int                    // max number of blocks in transaction
 	logstart   int                    // disk block where log starts on disk
 	applystart int                    // index in log where apply() will start
 	applyend   int                    // index in log where next apply will start
@@ -469,7 +469,7 @@ type log_t struct {
 	stop       chan bool
 
 	commitc chan *trans_t
-	applyc  chan bool
+	applyc  chan int
 
 	disk common.Disk_i
 	fs   *Fs_t
@@ -522,24 +522,32 @@ func (lh *logheader_t) w_end(n int) {
 
 type logdescriptor_t struct {
 	data *common.Bytepg_t
+	max  int
 }
 
 func (ld *logdescriptor_t) r_logdest(p int) int {
-	if p < 0 || p >= MaxDescriptor {
+	if p < 0 || p >= ld.max {
+		fmt.Printf("max %d\n", ld.max)
 		panic("bad dnum")
 	}
 	return fieldr(ld.data, p)
 }
 
 func (ld *logdescriptor_t) w_logdest(p int, n int) {
-	if p < 0 || p >= MaxDescriptor {
+	if p < 0 || p >= ld.max {
+		fmt.Printf("w max %d\n", ld.max)
 		panic("bad dnum")
 	}
 	fieldw(ld.data, p, n)
 }
 
-func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
+func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	log.loglen = ll - LogOffset // first block of the log is commit block
+	log.maxtrans = ll / 2
+	if log.maxtrans > MaxDescriptor {
+		panic("max trans too large")
+	}
+	fmt.Printf("ll = %d maxtrans = %d\n", ll, log.maxtrans)
 	log.logstart = ls
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	for i := 0; i < len(log.log); i++ {
@@ -552,7 +560,7 @@ func (log *log_t) mk_log(ls int, ll int, disk common.Disk_i) {
 	log.force = make(chan bool)
 	log.forcewait = make(chan (chan bool))
 	log.commitc = make(chan *trans_t)
-	log.applyc = make(chan bool)
+	log.applyc = make(chan int)
 	log.stop = make(chan bool)
 	log.disk = disk
 
@@ -570,7 +578,7 @@ func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
 }
 
 func (log *log_t) mkdescriptor(blk *common.Bdev_block_t) *logdescriptor_t {
-	return &logdescriptor_t{blk.Data}
+	return &logdescriptor_t{blk.Data, log.maxtrans}
 }
 
 func (log *log_t) readdescriptor(logblk int) (*logdescriptor_t, *common.Bdev_block_t) {
@@ -590,7 +598,7 @@ func (log *log_t) flush() {
 
 func (log *log_t) space() bool {
 	n := logsize(log.applyend, log.applystart, log.loglen)
-	space := n >= MaxDescriptor
+	space := n >= log.maxtrans
 	return space
 }
 
@@ -670,12 +678,14 @@ func (log *log_t) apply(end int) {
 func (l *log_t) apply_daemon() {
 	for {
 		select {
-		case v := <-l.applyc:
-			if !v { // stop apply daemon
-				l.applyc <- true
+		case end := <-l.applyc:
+			if end < 0 { // stop apply daemon
+				l.applyc <- 0
 				return
 			}
-			l.apply(l.applyend) // XXX send over channel?
+			if l.applystart != end {
+				l.apply(end) // XXX send over channel?
+			}
 			// l.applyc <- true
 		}
 	}
@@ -716,7 +726,7 @@ func (l *log_t) commit_daemon() {
 				if log_debug {
 					fmt.Printf("commit_daemon: kick apply\n")
 				}
-				l.applyc <- true
+				l.applyc <- l.applyend
 				// <-l.applyc // XXX serialize for now
 			}
 
@@ -743,7 +753,7 @@ func (l *log_t) log_daemon() {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
 
-		t := mk_trans(start, l.loglen)
+		t := mk_trans(start, l.loglen, l.maxtrans)
 
 		done := false
 		adm := l.admission
