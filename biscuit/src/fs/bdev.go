@@ -319,7 +319,10 @@ type bbitmap_t struct {
 func mkBallocater(fs *Fs_t, start, len, first int) *bbitmap_t {
 	balloc := &bbitmap_t{}
 	balloc.alloc = mkAllocater(fs, start, len, fs.fslog)
-	fmt.Printf("bmap start %v bmaplen %v first datablock %v free %d\n", start, len, first, balloc.alloc.nfreebits)
+	if bdev_debug {
+		fmt.Printf("bmap start %v bmaplen %v first datablock %v free %d\n", start, len, first,
+			balloc.alloc.nfreebits)
+	}
 	balloc.first = first
 	balloc.start = start
 	balloc.len = len
