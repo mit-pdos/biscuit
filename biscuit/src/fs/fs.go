@@ -60,10 +60,6 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 	logstart := fs.superb_start + 1
 	loglen := fs.superb.Loglen()
-	if loglen <= 0 || loglen > 256 {
-		panic("bad log len")
-	}
-	//fmt.Printf("logstart %v loglen %v\n", logstart, loglen)
 	fs.fslog = StartLog(logstart, loglen, fs, disk)
 	if fs.fslog == nil {
 		panic("Startlog failed")
@@ -530,8 +526,9 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		return 0, -common.EBADF
 	}
 
-	opid := fo.fs.fslog.Op_begin("do_read") // read may fill holes in the file
-	defer fo.fs.fslog.Op_end(opid)
+	// opid := fo.fs.fslog.Op_begin("do_read") // read may fill holes in the file
+	opid := opid_t(0)
+	// defer fo.fs.fslog.Op_end(opid)
 
 	useoffset := toff != -1
 	offset := fo.offset
@@ -753,8 +750,8 @@ func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, commo
 		return nil, -common.EBADF
 	}
 
-	opid := fo.fs.fslog.Op_begin("do_mmapi") // read may fill holes in the file
-
+	// opid := fo.fs.fslog.Op_begin("do_mmapi") // read may fill holes in the file
+	opid := opid_t(0)
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	if err != 0 {
 		fo.Unlock()
@@ -763,7 +760,7 @@ func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, commo
 	mmi, err := idm.do_mmapi(opid, offset, len, inc)
 	idm.iunlock_refdown("mmapi")
 
-	idm.fs.fslog.Op_end(opid)
+	// idm.fs.fslog.Op_end(opid)
 
 	fo.Unlock()
 	return mmi, err
