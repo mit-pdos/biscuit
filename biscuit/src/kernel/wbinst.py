@@ -26,36 +26,6 @@ def opdump(x, op, c):
         if op.mem.disp != 0:
             print("\t\t\toperands[%u].mem.disp: 0x%s" % (c, op.mem.disp))
 
-class Sym(object):
-    def __init__(self, name, s, e):
-        self.name, self.start, self.end = name, s, e
-
-    # returns true if v lies within the symbol's addresses
-    def within(self, v):
-        return not (v < self.start or v >= self.end)
-
-def symlookup(fn, sym):
-    c1 = ['nm', '-C', fn]
-    c2 = ['sort']
-    c3 = ['grep', '-A10', '-w', sym]
-    out, _ = piper.piper([c1, c2, c3])
-    lines = filter(None, [l.strip() for l in out.split('\n')])
-    if len(lines) == 0:
-        raise 'bah'
-    start = int(lines[0].split()[0], 16)
-    end = 0
-    found = False
-    #for x in lines:
-    #    print x
-    for l in lines[1:]:
-        end = int(l.split()[0], 16)
-        if end > start:
-            found = True
-            break
-    if not found:
-        raise 'no end?'
-    return Sym(sym, start, end)
-
 # returns a list of output lines
 def readelfgrep(fn, rf, gre):
     c1 = ['readelf'] + rf + [fn]
@@ -78,7 +48,7 @@ class Params(object):
         self._bbsdone, self._bbret = False, None
         self._syms = {}
         self._initsym(fn, 'writeBarrier')
-        self._initsym(fn, 'type\.\*')
+        self._initsym(fn, 'type.*')
         self._initsym(fn, 'panicindex')
         self._initsym(fn, 'panicslice')
         self._initsym(fn, 'panicdivide')
@@ -107,7 +77,7 @@ class Params(object):
         print '.text endva:', hex(self._endva)
         print '.text VA:', hex(textva), ('(seg %d)' % (textseg))
 
-        with open('main.gobin', 'rb') as f:
+        with open(fn, 'rb') as f:
             d = f.read()
         d = d[foff:]
         d = d[:textsz]
@@ -119,6 +89,8 @@ class Params(object):
         md.syntax = CS_OPT_SYNTAX_ATT
 
         ilist = [x for x in md.disasm(data, textva)]
+        if sum([len(x.bytes) for x in ilist]) != textsz:
+            raise 'disass failed'
         ilist = sorted(ilist, key=lambda x: x.address)
         #ilist = filter(None, [x if x.address < self._endva else None for x in ilist])
         for i, x in enumerate(ilist):
@@ -143,7 +115,7 @@ class Params(object):
         self._condjmps = list(set(self._jmps).difference(set([X86_INS_JMP])))
 
     def _initsym(self, fn, sym):
-        s = symlookup(fn, sym)
+        s = piper.symlookup(fn, sym)
         self._syms[sym] = s
         print 'SYM %s %#x %#x' % (s.name, s.start, s.end)
 
@@ -177,7 +149,7 @@ class Params(object):
         if src.mem.base != X86_REG_RIP:
             return False
         addr = src.value.mem.disp + ins.address + ins.size
-        typesym = p._syms['type\.\*']
+        typesym = p._syms['type.*']
         if not typesym.within(addr):
             return False
         reg = self.regops(ins, 1)[0]
@@ -656,7 +628,7 @@ class Params(object):
             if op.type != X86_OP_MEM or op.mem.base != X86_REG_RIP:
                 continue
             addr = op.mem.disp + ins.address + ins.size
-            if self._syms['type\.\*'].within(addr):
+            if self._syms['type.*'].within(addr):
                 binst.append(ins.address)
         uniq = {}
         for b in binst:
