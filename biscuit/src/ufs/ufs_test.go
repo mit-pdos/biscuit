@@ -76,7 +76,7 @@ func doCheckSimple(tfs *Ufs_t, d string, t *testing.T) {
 	}
 	st, ok := res["f1"]
 	if !ok {
-		t.Fatalf("f1 not present")
+		t.Fatalf("%s/f1 not present", d)
 	}
 	if st.Size() != 1024 {
 		t.Fatalf("f1 wrong size")
@@ -318,12 +318,12 @@ func TestFSOrphansMany(t *testing.T) {
 // Simple concurrent test (for race detector)
 //
 
-func concurrent(t *testing.T, sync bool) {
+func concurrent(t *testing.T) {
 	n := 8
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks*2, ndatablks*10)
 
-	fmt.Printf("Test FSConcur %v ...\n", dst)
+	fmt.Printf("Test FSConcur %v\n", dst)
 
 	c := make(chan string)
 	tfs := BootFS(dst)
@@ -331,6 +331,7 @@ func concurrent(t *testing.T, sync bool) {
 		go func(id int) {
 			d := uniqdir(id)
 			s := doTestSimple(tfs, d)
+			doCheckSimple(tfs, d, t)
 			tfs.Sync()
 			c <- s
 		}(i)
@@ -352,9 +353,8 @@ func concurrent(t *testing.T, sync bool) {
 	ShutdownFS(tfs)
 }
 
-func TestFSConcur(t *testing.T) {
-	concurrent(t, false)
-	concurrent(t, true)
+func TestFSConcurNotSame(t *testing.T) {
+	concurrent(t)
 }
 
 //
