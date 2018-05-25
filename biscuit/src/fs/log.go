@@ -543,7 +543,8 @@ func (ld *logdescriptor_t) w_logdest(p int, n int) {
 
 func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	log.loglen = ll - LogOffset // first block of the log is commit block
-	log.maxtrans = ll / 2
+	log.maxtrans = common.Min(ll/2, MaxDescriptor)
+	fmt.Printf("ll %d maxtrans %d\n", ll, log.maxtrans)
 	if log.maxtrans > MaxDescriptor {
 		panic("max trans too large")
 	}
@@ -562,10 +563,6 @@ func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	log.applyc = make(chan int)
 	log.stop = make(chan bool)
 	log.disk = disk
-
-	if log.loglen >= common.BSIZE/4 {
-		panic("log_t.init: log will not fill in one header block\n")
-	}
 }
 
 func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
