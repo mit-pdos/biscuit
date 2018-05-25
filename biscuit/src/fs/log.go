@@ -547,7 +547,6 @@ func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	if log.maxtrans > MaxDescriptor {
 		panic("max trans too large")
 	}
-	fmt.Printf("ll = %d maxtrans = %d\n", ll, log.maxtrans)
 	log.logstart = ls
 	log.log = make([]*common.Bdev_block_t, log.loglen)
 	for i := 0; i < len(log.log); i++ {
@@ -684,7 +683,7 @@ func (l *log_t) apply_daemon() {
 				return
 			}
 			if l.applystart != end {
-				l.apply(end) // XXX send over channel?
+				l.apply(end)
 			}
 			// l.applyc <- true
 		}
