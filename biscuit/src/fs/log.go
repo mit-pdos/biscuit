@@ -643,6 +643,10 @@ func (log *log_t) apply(end int) {
 		fmt.Printf("apply log: blks from %d till %d\n", log.applystart, end)
 	}
 
+	if log.applystart == end {
+		return
+	}
+
 	i := logdec(end, log.loglen)
 	for {
 		l := log.log[i]
@@ -682,9 +686,7 @@ func (l *log_t) apply_daemon() {
 				l.applyc <- 0
 				return
 			}
-			if l.applystart != end {
-				l.apply(end)
-			}
+			l.apply(end)
 			// l.applyc <- true
 		}
 	}
@@ -713,7 +715,7 @@ func (l *log_t) commit_daemon() {
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans early\n")
 				}
-				l.ncommit++
+				l.nccommit++
 				l.commitc <- nil
 			} else {
 				start = false
