@@ -4,6 +4,7 @@ import "fmt"
 import "strconv"
 
 import "common"
+import "sync/atomic"
 
 const log_debug = false
 
@@ -152,16 +153,17 @@ func (log *log_t) Stats() string {
 }
 
 func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
-	fslog := &log_t{}
-	fslog.fs = fs
-	fslog.mk_log(logstart, loglen, disk)
-	fslog.recover()
+	log := &log_t{}
+	log.fs = fs
+	log.mk_log(logstart, loglen, disk)
+	head := log.recover()
+	log.applytail = int32(head)
 	if !memfs {
-		go fslog.log_daemon()
-		go fslog.commit_daemon()
-		go fslog.apply_daemon()
+		go log.log_daemon(head)
+		go log.commit_daemon(head)
+		go log.apply_daemon(head)
 	}
-	return fslog
+	return log
 }
 
 func (log *log_t) StopLog() {
@@ -250,9 +252,6 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	if log_debug {
 		fmt.Printf("trans.add_write: opid %d start %d head %d %d(%v)\n", buf.opid,
 			trans.start, trans.head, buf.block.Block, buf.ordered)
-		if loginc(trans.head, log.loglen) == log.applystart {
-			panic("add_write: run into start")
-		}
 	}
 
 	// if block ordered, and now logged, then logged
@@ -390,7 +389,7 @@ func (trans *trans_t) write_ordered(log *log_t) {
 	trans.orderedcopy.Delete()
 }
 
-func (trans *trans_t) commit(log *log_t) {
+func (trans *trans_t) commit(tail int, log *log_t) {
 	if log_debug {
 		fmt.Printf("commit: start %d head %d\n", trans.start, trans.head)
 	}
@@ -401,7 +400,7 @@ func (trans *trans_t) commit(log *log_t) {
 	db := log.mkdescriptor(log.log[trans.start])
 	j := 0
 	for i := trans.start; i != trans.head; i = loginc(i, log.loglen) {
-		if loginc(i, log.loglen) == log.applystart {
+		if loginc(i, log.loglen) == tail {
 			panic("commit runs into log start")
 		}
 		// install log destination in the descriptor block
@@ -455,18 +454,17 @@ func (trans *trans_t) commit(log *log_t) {
 }
 
 type log_t struct {
-	loglen     int                    // log len
-	maxtrans   int                    // max number of blocks in transaction
-	logstart   int                    // disk block where log starts on disk
-	applystart int                    // index in log where apply() will start
-	applyend   int                    // index in log where next apply will start
-	log        []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
-	incoming   chan buf_t
-	admission  chan opid_t
-	done       chan opid_t
-	force      chan bool
-	forcewait  chan (chan bool)
-	stop       chan bool
+	loglen    int                    // log len
+	maxtrans  int                    // max number of blocks in transaction
+	logstart  int                    // disk block where log starts on disk
+	applytail int32                  // shared index in log where apply() will start
+	log       []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
+	incoming  chan buf_t
+	admission chan opid_t
+	done      chan opid_t
+	force     chan bool
+	forcewait chan (chan bool)
+	stop      chan bool
 
 	commitc chan *trans_t
 	applyc  chan int
@@ -504,19 +502,19 @@ type logheader_t struct {
 	data *common.Bytepg_t
 }
 
-func (lh *logheader_t) r_start() int {
+func (lh *logheader_t) r_tail() int {
 	return fieldr(lh.data, START)
 }
 
-func (lh *logheader_t) w_start(n int) {
+func (lh *logheader_t) w_tail(n int) {
 	fieldw(lh.data, START, n)
 }
 
-func (lh *logheader_t) r_end() int {
+func (lh *logheader_t) r_head() int {
 	return fieldr(lh.data, END)
 }
 
-func (lh *logheader_t) w_end(n int) {
+func (lh *logheader_t) w_head(n int) {
 	fieldw(lh.data, END, n)
 }
 
@@ -565,8 +563,8 @@ func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	log.disk = disk
 }
 
-func (log *log_t) readhead() (*logheader_t, *common.Bdev_block_t) {
-	headblk, err := log.fs.bcache.Get_fill(log.logstart, "readhead", true)
+func (log *log_t) readhdr() (*logheader_t, *common.Bdev_block_t) {
+	headblk, err := log.fs.bcache.Get_fill(log.logstart, "readhdr", true)
 	if err != 0 {
 		panic("cannot read head/commit block\n")
 	}
@@ -592,42 +590,38 @@ func (log *log_t) flush() {
 	}
 }
 
-func (log *log_t) space() bool {
-	n := logsize(log.applyend, log.applystart, log.loglen)
+func (log *log_t) space(tail, head int) bool {
+	n := logsize(head, tail, log.loglen)
 	space := n >= log.maxtrans
 	return space
 }
 
-func (log *log_t) almosthalffull() bool {
-	n := logsize(log.applystart, log.applyend, log.loglen)
+func (log *log_t) almosthalffull(tail, head int) bool {
+	n := logsize(tail, head, log.loglen)
 	n += MaxBlkPerOp // a transaction is likely not to fill one op of blocks
 	full := n >= log.loglen/2
 	return full
 }
 
 func (log *log_t) commit_head(head int) {
-	lh, headblk := log.readhead()
-	lh.w_end(head)
+	lh, headblk := log.readhdr()
+	lh.w_head(head)
 	headblk.Unlock()
 	log.fs.bcache.Write(headblk) // write log header
 	log.flush()                  // commit log header
 	log.fs.bcache.Relse(headblk, "commit_done")
 }
 
-func (log *log_t) commit_start(start int) {
-	lh, headblk := log.readhead()
-	if lh.r_start() != log.applystart {
-		fmt.Printf("commit_start: r_start() = %d\n", lh.r_start())
-		panic("commit_start: start inconsistent")
-	}
-	lh.w_start(start)
+func (log *log_t) commit_tail(tail int) {
+	lh, headblk := log.readhdr()
+	lh.w_tail(tail)
 	headblk.Unlock()
 	log.fs.bcache.Write(headblk) // write log header
 	log.flush()                  // commit log header
-	log.fs.bcache.Relse(headblk, "commit_start")
+	log.fs.bcache.Relse(headblk, "commit_tail")
 }
 
-func (log *log_t) apply(end int) {
+func (log *log_t) apply(tail, head int) int {
 	log.napply++
 
 	done := make(map[int]bool, log.loglen)
@@ -637,14 +631,14 @@ func (log *log_t) apply(end int) {
 	// writing the last version of a block (and not earlier versions).
 
 	if log_debug {
-		fmt.Printf("apply log: blks from %d till %d\n", log.applystart, end)
+		fmt.Printf("apply log: blks from %d till %d\n", tail, head)
 	}
 
-	if log.applystart == end {
-		return
+	if tail == head {
+		return head
 	}
 
-	i := logdec(end, log.loglen)
+	i := logdec(head, log.loglen)
 	for {
 		l := log.log[i]
 		if l.Block == 0 {
@@ -658,38 +652,41 @@ func (log *log_t) apply(end int) {
 				log.nabsorbapply++
 			}
 		}
-		if i == log.applystart {
+		if i == tail {
 			break
 		}
 		i = logdec(i, log.loglen)
 	}
 	log.flush() // flush apply
 
-	log.commit_start(end)
-
-	log.applystart = end
+	log.commit_tail(head)
 
 	if log_debug {
-		fmt.Printf("apply log: updated applystart %d\n", log.applystart)
+		fmt.Printf("apply log: updated tail %d\n", tail)
 	}
 
+	return head
 }
 
-func (l *log_t) apply_daemon() {
+func (l *log_t) apply_daemon(t int) {
+	tail := t
 	for {
 		select {
-		case end := <-l.applyc:
-			if end < 0 { // stop apply daemon
+		case head := <-l.applyc:
+			if head < 0 { // stop apply daemon
 				l.applyc <- 0
 				return
 			}
-			l.apply(end)
+			tail = l.apply(tail, head)
+			atomic.StoreInt32(&l.applytail, int32(tail))
 			// l.applyc <- true
 		}
 	}
 }
 
-func (l *log_t) commit_daemon() {
+func (l *log_t) commit_daemon(h int) {
+	tail := h
+	head := h
 	for {
 		select {
 		case t := <-l.commitc:
@@ -698,17 +695,18 @@ func (l *log_t) commit_daemon() {
 				return
 			}
 			if log_debug {
-				fmt.Printf("commit_daemon: start waiters %d applystart %d applyend %d\n",
-					t.waiters, l.applystart, l.applyend)
+				fmt.Printf("commit_daemon: start waiters %d tail %d head %d\n",
+					t.waiters, tail, head)
 			}
 
 			t.copyintolog(l)
 			t.copyordered(l)
 
-			l.applyend = t.head
+			head = t.head
+			tail = int(atomic.LoadInt32(&l.applytail))
 
 			start := true
-			if l.space() { // space for another transaction?
+			if l.space(head, tail) { // space for another transaction?
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans early\n")
 				}
@@ -718,13 +716,13 @@ func (l *log_t) commit_daemon() {
 				start = false
 			}
 
-			t.commit(l)
+			t.commit(tail, l)
 
-			if l.almosthalffull() {
+			if l.almosthalffull(tail, head) {
 				if log_debug {
 					fmt.Printf("commit_daemon: kick apply\n")
 				}
-				l.applyc <- l.applyend
+				l.applyc <- head
 				// <-l.applyc // XXX serialize for now
 			}
 
@@ -737,21 +735,20 @@ func (l *log_t) commit_daemon() {
 
 			t.unblock_waiters()
 			if log_debug {
-				fmt.Printf("commit_daemon: done applystart %v applyend %v\n",
-					l.applystart, l.applyend)
+				fmt.Printf("commit_daemon: done tail %v head %v\n", tail, head)
 			}
 		}
 	}
 }
 
-func (l *log_t) log_daemon() {
+func (l *log_t) log_daemon(h int) {
 	nextop := opid_t(0)
-	start := l.applyend
+	head := h
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
 
-		t := mk_trans(start, l.loglen, l.maxtrans)
+		t := mk_trans(head, l.loglen, l.maxtrans)
 
 		done := false
 		adm := l.admission
@@ -809,7 +806,7 @@ func (l *log_t) log_daemon() {
 			}
 		}
 
-		start = t.head
+		head = t.head
 
 		l.commitc <- t
 		// wait until commit thread tells us to go ahead with
@@ -818,8 +815,8 @@ func (l *log_t) log_daemon() {
 	}
 }
 
-func (log *log_t) install(start, end int) {
-	for i := start; i != end; {
+func (log *log_t) install(tail, head int) {
+	for i := tail; i != head; {
 		db, dblk := log.readdescriptor(i)
 		i = loginc(i, log.loglen)
 		for j := 1; ; j++ {
@@ -851,25 +848,23 @@ func (log *log_t) install(start, end int) {
 	}
 }
 
-func (log *log_t) recover() {
-	lh, headblk := log.readhead()
-	start := lh.r_start()
-	end := lh.r_end()
+func (log *log_t) recover() int {
+	lh, headblk := log.readhdr()
+	tail := lh.r_tail()
+	head := lh.r_head()
 	headblk.Unlock()
 
-	log.applystart = start
-	log.applyend = start
 	log.fs.bcache.Relse(headblk, "recover")
-	if start == end {
+	if tail == head {
 		fmt.Printf("no FS recovery needed\n")
+		return head
 	}
-	fmt.Printf("starting FS recovery start %d end %d\n", start, end)
-	log.install(start, end)
-	log.commit_start(end)
+	fmt.Printf("starting FS recovery start %d end %d\n", tail, head)
+	log.install(tail, head)
+	log.commit_tail(head)
 
-	log.applystart = end
-	log.applyend = end
-	fmt.Printf("restored blocks from %d till %d\n", start, end)
+	fmt.Printf("restored blocks from %d till %d\n", tail, head)
+	return head
 }
 
 // If cache has no space, ask logdaemon to create some space
