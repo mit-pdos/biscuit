@@ -145,8 +145,10 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nabsorbapply)
 	s += "\n\tnforce "
 	s += strconv.Itoa(log.nforce)
-	s += "\n\tnoverlapforce "
-	s += strconv.Itoa(log.noverlapforce)
+	s += "\n\tnbatchforce "
+	s += strconv.Itoa(log.nbatchforce)
+	s += "\n\tndelayforce "
+	s += strconv.Itoa(log.ndelayforce)
 	s += "\n\t force cycles "
 	s += strconv.FormatUint(log.forcecycles, 10)
 	s += "\n\t force first wait cycles "
@@ -501,8 +503,9 @@ type log_t struct {
 	forcewait chan (chan bool)
 	stop      chan bool
 
-	commitc chan *trans_t
-	applyc  chan int
+	commitc     chan *trans_t
+	commitdonec chan bool
+	applyc      chan int
 
 	disk common.Disk_i
 	fs   *Fs_t
@@ -518,7 +521,8 @@ type log_t struct {
 	nblkapply            int
 	nabsorbapply         int
 	nforce               int
-	noverlapforce        int
+	nbatchforce          int
+	ndelayforce          int
 	forcecycles          uint64
 	forcewaitcycles      uint64
 	forcefirstwaitcycles uint64
@@ -607,6 +611,7 @@ func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	log.force = make(chan bool)
 	log.forcewait = make(chan (chan bool))
 	log.commitc = make(chan *trans_t)
+	log.commitdonec = make(chan bool)
 	log.applyc = make(chan int)
 	log.stop = make(chan bool)
 	log.disk = disk
@@ -762,6 +767,8 @@ func (l *log_t) commit_daemon(h int) {
 					t.waiters, tail, head)
 			}
 
+			// atomic.StoreInt32(&l.commitbusy, int32(1))
+
 			ts := runtime.Rdtsc()
 			l.commitwaitcycles += (ts - t.startcommitts)
 
@@ -771,15 +778,15 @@ func (l *log_t) commit_daemon(h int) {
 			head = t.head
 			tail = int(atomic.LoadInt32(&l.applytail))
 
-			start := true
+			// start := true
 			if l.space(head, tail) { // space for another transaction?
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans early\n")
 				}
 				l.nccommit++
-				l.commitc <- nil
+				l.commitdonec <- false
 			} else {
-				start = false
+				// start = false
 			}
 
 			t.commit(tail, l)
@@ -797,21 +804,27 @@ func (l *log_t) commit_daemon(h int) {
 				// <-l.applyc // XXX serialize for now
 			}
 
-			if !start {
-				if log_debug {
-					fmt.Printf("commit_daemon: start next trans\n")
-				}
-				l.nbcommit++
-				l.commitc <- nil
-			}
 			t.unblock_waiters()
 
 			ts = runtime.Rdtsc()
 			l.forcecycles += (ts - t.startcommitts)
 
+			// atomic.StoreInt32(&l.commitbusy, int32(0))
+
+			// if !start {
+			// 	if log_debug {
+			// 		fmt.Printf("commit_daemon: start next trans\n")
+			// 	}
+			// 	l.nbcommit++
+			// 	l.commitdonec <- true
+			// }
+
+			l.commitdonec <- true
+
 			if log_debug {
 				fmt.Printf("commit_daemon: done tail %v head %v\n", tail, head)
 			}
+
 		}
 	}
 }
@@ -819,6 +832,7 @@ func (l *log_t) commit_daemon(h int) {
 func (l *log_t) log_daemon(h int) {
 	nextop := opid_t(0)
 	head := h
+	commitbusy := false
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
@@ -826,6 +840,7 @@ func (l *log_t) log_daemon(h int) {
 		t := mk_trans(head, l.loglen, l.maxtrans)
 
 		done := false
+		doforce := false
 		adm := l.admission
 		for !done {
 			select {
@@ -849,6 +864,9 @@ func (l *log_t) log_daemon(h int) {
 						adm = l.admission
 					}
 				}
+				if doforce && !commitbusy && t.iscommittable() {
+					done = true
+				}
 			case adm <- nextop:
 				if log_debug {
 					fmt.Printf("log_daemon: admit %d\n", nextop)
@@ -869,18 +887,26 @@ func (l *log_t) log_daemon(h int) {
 						t.startcommitts = runtime.Rdtsc()
 					} else {
 						t.startcommitts = runtime.Rdtsc()
-						l.noverlapforce++
+						l.nbatchforce++
 					}
 					t.waiters++
 					if log_debug {
 						fmt.Printf("log_daemon: force %d\n", t.waiters)
 					}
 					l.forcewait <- t.waitc
-					adm = nil
-					if t.iscommittable() {
+					doforce = true
+					if !commitbusy && t.iscommittable() {
 						done = true
 					}
+					if commitbusy {
+						l.ndelayforce++
+					}
 				}
+			case b := <-l.commitdonec:
+				if !b {
+					fmt.Printf("commitdonec: returned %v!\n", b)
+				}
+				commitbusy = false
 			case <-l.stop:
 				l.stop <- true
 				return
@@ -896,7 +922,12 @@ func (l *log_t) log_daemon(h int) {
 		l.commitc <- t
 		// wait until commit thread tells us to go ahead with
 		// next trans
-		<-l.commitc
+		commitdone := <-l.commitdonec
+		if !commitdone {
+			commitbusy = true
+		} else {
+			commitbusy = false
+		}
 	}
 }
 
