@@ -5,6 +5,7 @@ import "strconv"
 
 import "common"
 import "sync/atomic"
+import "runtime"
 
 const log_debug = false
 
@@ -12,13 +13,13 @@ const log_debug = false
 // Op_begin and Op_end(); the log makes sure that these operations happen
 // atomically with respect to crashes.  Operations are grouped in
 // transactions. A transaction is committed to the on-disk log on sync() or when
-// the log is close to full.  Transactions in the log are applied to the file
-// system when the on-disk log close to full.  All writes go through the log,
-// but ordered writes are not appended to the on-disk log, but overwrite their
-// home location.  The file system should use logged writes for all its data
-// structures, and use ordered writes only for file data.  The file system must
-// guarantee that it performs no more than maxblkspersys logged writes in an
-// operation, to ensure that its operation will fit in the log.
+// the descriptor block of transaction is full.  Transactions in the log are
+// applied to the file system when the on-disk log close to full.  All writes go
+// through the log, but ordered writes are not appended to the on-disk log, but
+// overwrite their home location.  The file system should use logged writes for
+// all its data structures, and use ordered writes only for file data.  The file
+// system must guarantee that it performs no more than maxblkspersys logged
+// writes in an operation, to ensure that its operation will fit in the log.
 
 const LogOffset = 1 // log block 0 is used for head
 
@@ -73,9 +74,9 @@ func (log *log_t) Force() {
 	<-c
 }
 
-// Write increments ref so that the log has always a valid ref to the buf's page
-// the logging layer refdowns when it it is done with the page.  the caller of
-// log_write shouldn't hold buf's lock.
+// Write increments ref so that the log has always a valid ref to the buf's
+// page.  The logging layer refdowns when it it is done with the page.  The
+// caller of log_write shouldn't hold buf's lock.
 func (log *log_t) Write(opid opid_t, b *common.Bdev_block_t) {
 	if memfs {
 		return
@@ -144,10 +145,38 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nabsorbapply)
 	s += "\n\tnforce "
 	s += strconv.Itoa(log.nforce)
+	s += "\n\tnoverlapforce "
+	s += strconv.Itoa(log.noverlapforce)
+	s += "\n\t force cycles "
+	s += strconv.FormatUint(log.forcecycles, 10)
+	s += "\n\t force first wait cycles "
+	s += strconv.FormatUint(log.forcefirstwaitcycles, 10)
+	s += "\n\t force wait cycles "
+	s += strconv.FormatUint(log.forcewaitcycles, 10)
+	s += "\n\t force commit wait cycles "
+	s += strconv.FormatUint(log.commitwaitcycles, 10)
 	s += "\n\tnwriteordered "
 	s += strconv.Itoa(log.nwriteordered)
 	s += "\n\tnccommit "
 	s += strconv.Itoa(log.nccommit)
+	s += "\n\tnbcommit "
+	s += strconv.Itoa(log.nbcommit)
+	s += "\n\tnkickapply "
+	s += strconv.Itoa(log.nkickapply)
+	s += "\n\tnbapply "
+	s += strconv.Itoa(log.nbapply)
+	s += "\n\tncommithead "
+	s += strconv.Itoa(log.ncommithead)
+	s += "\n\t flush head cycles "
+	s += strconv.FormatUint(log.headcycles, 10)
+	s += "\n\t flush data cycles "
+	s += strconv.FormatUint(log.flushdatacycles, 10)
+	s += "\n\tncommittail "
+	s += strconv.Itoa(log.ncommittail)
+	s += "\n\t flush tail cycles\t"
+	s += strconv.FormatUint(log.tailcycles, 10)
+	s += "\n\t flush log data cycles\t"
+	s += strconv.FormatUint(log.flushlogdatacycles, 10)
 	s += "\n"
 	return s
 }
@@ -223,6 +252,8 @@ type trans_t struct {
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 	waiters        int                          // number of processes wait for this trans to commit
 	waitc          chan bool                    // channel on which waiters are waiting
+	startcommittsi uint64
+	startcommitts  uint64
 }
 
 func mk_trans(start, loglen, maxtrans int) *trans_t {
@@ -436,7 +467,10 @@ func (trans *trans_t) commit(tail int, log *log_t) {
 
 	trans.write_ordered(log)
 
+	s := runtime.Rdtsc()
 	log.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
+	t := runtime.Rdtsc()
+	log.flushdatacycles += (t - s)
 
 	log.commit_head(trans.head)
 
@@ -458,6 +492,7 @@ type log_t struct {
 	maxtrans  int                    // max number of blocks in transaction
 	logstart  int                    // disk block where log starts on disk
 	applytail int32                  // shared index in log where apply() will start
+	applybusy int32                  // shared busy bit
 	log       []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
 	incoming  chan buf_t
 	admission chan opid_t
@@ -473,19 +508,33 @@ type log_t struct {
 	fs   *Fs_t
 
 	// some stats
-	maxblks_per_op  int
-	nblkcommitted   int
-	ncommit         int
-	napply          int
-	nabsorption     int
-	nlogwrite       int
-	norderedwrite   int
-	nblkapply       int
-	nabsorbapply    int
-	nforce          int
-	nwriteordered   int
-	nccommit        int
-	norder2logwrite int
+	maxblks_per_op       int
+	nblkcommitted        int
+	ncommit              int
+	napply               int
+	nabsorption          int
+	nlogwrite            int
+	norderedwrite        int
+	nblkapply            int
+	nabsorbapply         int
+	nforce               int
+	noverlapforce        int
+	forcecycles          uint64
+	forcewaitcycles      uint64
+	forcefirstwaitcycles uint64
+	commitwaitcycles     uint64
+	nwriteordered        int
+	nccommit             int
+	nbcommit             int
+	nkickapply           int
+	nbapply              int
+	ncommithead          int
+	headcycles           uint64
+	flushdatacycles      uint64
+	ncommittail          int
+	tailcycles           uint64
+	flushlogdatacycles   uint64
+	norder2logwrite      int
 }
 
 // first log header block format
@@ -604,20 +653,28 @@ func (log *log_t) almosthalffull(tail, head int) bool {
 }
 
 func (log *log_t) commit_head(head int) {
+	log.ncommithead++
 	lh, headblk := log.readhdr()
 	lh.w_head(head)
 	headblk.Unlock()
 	log.fs.bcache.Write(headblk) // write log header
-	log.flush()                  // commit log header
+	s := runtime.Rdtsc()
+	log.flush() // commit log header
+	t := runtime.Rdtsc()
+	log.headcycles += (t - s)
 	log.fs.bcache.Relse(headblk, "commit_done")
 }
 
 func (log *log_t) commit_tail(tail int) {
+	log.ncommittail++
 	lh, headblk := log.readhdr()
 	lh.w_tail(tail)
 	headblk.Unlock()
 	log.fs.bcache.Write(headblk) // write log header
-	log.flush()                  // commit log header
+	s := runtime.Rdtsc()
+	log.flush() // commit log header
+	t := runtime.Rdtsc()
+	log.tailcycles += (t - s)
 	log.fs.bcache.Relse(headblk, "commit_tail")
 }
 
@@ -657,7 +714,11 @@ func (log *log_t) apply(tail, head int) int {
 		}
 		i = logdec(i, log.loglen)
 	}
+
+	s := runtime.Rdtsc()
 	log.flush() // flush apply
+	t := runtime.Rdtsc()
+	log.flushlogdatacycles += (t - s)
 
 	log.commit_tail(head)
 
@@ -677,8 +738,10 @@ func (l *log_t) apply_daemon(t int) {
 				l.applyc <- 0
 				return
 			}
+			atomic.StoreInt32(&l.applybusy, int32(1))
 			tail = l.apply(tail, head)
 			atomic.StoreInt32(&l.applytail, int32(tail))
+			atomic.StoreInt32(&l.applybusy, int32(0))
 			// l.applyc <- true
 		}
 	}
@@ -698,6 +761,9 @@ func (l *log_t) commit_daemon(h int) {
 				fmt.Printf("commit_daemon: start waiters %d tail %d head %d\n",
 					t.waiters, tail, head)
 			}
+
+			ts := runtime.Rdtsc()
+			l.commitwaitcycles += (ts - t.startcommitts)
 
 			t.copyintolog(l)
 			t.copyordered(l)
@@ -719,8 +785,13 @@ func (l *log_t) commit_daemon(h int) {
 			t.commit(tail, l)
 
 			if l.almosthalffull(tail, head) {
+				l.nkickapply++
 				if log_debug {
 					fmt.Printf("commit_daemon: kick apply\n")
+				}
+				busy := int(atomic.LoadInt32(&l.applybusy))
+				if busy == 1 {
+					l.nbapply++
 				}
 				l.applyc <- head
 				// <-l.applyc // XXX serialize for now
@@ -730,10 +801,14 @@ func (l *log_t) commit_daemon(h int) {
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans\n")
 				}
+				l.nbcommit++
 				l.commitc <- nil
 			}
-
 			t.unblock_waiters()
+
+			ts = runtime.Rdtsc()
+			l.forcecycles += (ts - t.startcommitts)
+
 			if log_debug {
 				fmt.Printf("commit_daemon: done tail %v head %v\n", tail, head)
 			}
@@ -787,9 +862,15 @@ func (l *log_t) log_daemon(h int) {
 				if loginc(t.start, l.loglen) == t.head { // nothing to commit?
 					l.forcewait <- t.waitc
 					t.waitc <- true
-
 				} else {
 					l.nforce++
+					if t.startcommittsi == uint64(0) {
+						t.startcommittsi = runtime.Rdtsc()
+						t.startcommitts = runtime.Rdtsc()
+					} else {
+						t.startcommitts = runtime.Rdtsc()
+						l.noverlapforce++
+					}
 					t.waiters++
 					if log_debug {
 						fmt.Printf("log_daemon: force %d\n", t.waiters)
@@ -807,6 +888,10 @@ func (l *log_t) log_daemon(h int) {
 		}
 
 		head = t.head
+
+		ts := runtime.Rdtsc()
+		l.forcefirstwaitcycles += (ts - t.startcommittsi)
+		l.forcewaitcycles += (ts - t.startcommitts)
 
 		l.commitc <- t
 		// wait until commit thread tells us to go ahead with
