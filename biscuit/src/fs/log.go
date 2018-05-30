@@ -767,8 +767,6 @@ func (l *log_t) commit_daemon(h int) {
 					t.waiters, tail, head)
 			}
 
-			// atomic.StoreInt32(&l.commitbusy, int32(1))
-
 			ts := runtime.Rdtsc()
 			l.commitwaitcycles += (ts - t.startcommitts)
 
@@ -778,15 +776,12 @@ func (l *log_t) commit_daemon(h int) {
 			head = t.head
 			tail = int(atomic.LoadInt32(&l.applytail))
 
-			// start := true
 			if l.space(head, tail) { // space for another transaction?
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans early\n")
 				}
 				l.nccommit++
 				l.commitdonec <- false
-			} else {
-				// start = false
 			}
 
 			t.commit(tail, l)
@@ -808,16 +803,6 @@ func (l *log_t) commit_daemon(h int) {
 
 			ts = runtime.Rdtsc()
 			l.forcecycles += (ts - t.startcommitts)
-
-			// atomic.StoreInt32(&l.commitbusy, int32(0))
-
-			// if !start {
-			// 	if log_debug {
-			// 		fmt.Printf("commit_daemon: start next trans\n")
-			// 	}
-			// 	l.nbcommit++
-			// 	l.commitdonec <- true
-			// }
 
 			l.commitdonec <- true
 
@@ -842,6 +827,8 @@ func (l *log_t) log_daemon(h int) {
 		done := false
 		doforce := false
 		adm := l.admission
+
+		// condition to fall out:  !commitbusy and done
 		for !done {
 			select {
 			case nb := <-l.incoming:
@@ -851,7 +838,7 @@ func (l *log_t) log_daemon(h int) {
 				if adm == nil { // admit ops again?
 					if t.waiters > 0 || t.startcommit() {
 						// No more log space for another op or forced to commit
-						if t.iscommittable() {
+						if !commitbusy && t.iscommittable() {
 							done = true
 						}
 					} else {
@@ -904,13 +891,20 @@ func (l *log_t) log_daemon(h int) {
 				}
 			case b := <-l.commitdonec:
 				if !b {
-					fmt.Printf("commitdonec: returned %v!\n", b)
+					panic("commit_daemon: sent false?")
 				}
 				commitbusy = false
+				if t.iscommittable() {
+					done = true
+				}
 			case <-l.stop:
 				l.stop <- true
 				return
 			}
+		}
+
+		if commitbusy {
+			panic("fall out of loop before receiving response from commit daemon")
 		}
 
 		head = t.head
