@@ -151,12 +151,6 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.ndelayforce)
 	s += "\n\t force cycles "
 	s += strconv.FormatUint(log.forcecycles, 10)
-	s += "\n\t force first wait cycles "
-	s += strconv.FormatUint(log.forcefirstwaitcycles, 10)
-	s += "\n\t force wait cycles "
-	s += strconv.FormatUint(log.forcewaitcycles, 10)
-	s += "\n\t force commit wait cycles "
-	s += strconv.FormatUint(log.commitwaitcycles, 10)
 	s += "\n\tnwriteordered "
 	s += strconv.Itoa(log.nwriteordered)
 	s += "\n\tnccommit "
@@ -254,7 +248,6 @@ type trans_t struct {
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 	waiters        int                          // number of processes wait for this trans to commit
 	waitc          chan bool                    // channel on which waiters are waiting
-	startcommittsi uint64
 	startcommitts  uint64
 }
 
@@ -511,34 +504,31 @@ type log_t struct {
 	fs   *Fs_t
 
 	// some stats
-	maxblks_per_op       int
-	nblkcommitted        int
-	ncommit              int
-	napply               int
-	nabsorption          int
-	nlogwrite            int
-	norderedwrite        int
-	nblkapply            int
-	nabsorbapply         int
-	nforce               int
-	nbatchforce          int
-	ndelayforce          int
-	forcecycles          uint64
-	forcewaitcycles      uint64
-	forcefirstwaitcycles uint64
-	commitwaitcycles     uint64
-	nwriteordered        int
-	nccommit             int
-	nbcommit             int
-	nkickapply           int
-	nbapply              int
-	ncommithead          int
-	headcycles           uint64
-	flushdatacycles      uint64
-	ncommittail          int
-	tailcycles           uint64
-	flushlogdatacycles   uint64
-	norder2logwrite      int
+	maxblks_per_op     int
+	nblkcommitted      int
+	ncommit            int
+	napply             int
+	nabsorption        int
+	nlogwrite          int
+	norderedwrite      int
+	nblkapply          int
+	nabsorbapply       int
+	nforce             int
+	nbatchforce        int
+	ndelayforce        int
+	forcecycles        uint64
+	nwriteordered      int
+	nccommit           int
+	nbcommit           int
+	nkickapply         int
+	nbapply            int
+	ncommithead        int
+	headcycles         uint64
+	flushdatacycles    uint64
+	ncommittail        int
+	tailcycles         uint64
+	flushlogdatacycles uint64
+	norder2logwrite    int
 }
 
 // first log header block format
@@ -765,9 +755,6 @@ func (l *log_t) commit_daemon(h int) {
 					t.waiters, tail, head)
 			}
 
-			ts := runtime.Rdtsc()
-			l.commitwaitcycles += (ts - t.startcommitts)
-
 			t.copyintolog(l)
 			t.copyordered(l)
 
@@ -798,7 +785,7 @@ func (l *log_t) commit_daemon(h int) {
 
 			t.unblock_waiters()
 
-			ts = runtime.Rdtsc()
+			ts := runtime.Rdtsc()
 			l.forcecycles += (ts - t.startcommitts)
 
 			l.commitdonec <- true
@@ -889,6 +876,7 @@ func (l *log_t) log_daemon(h int) {
 		// commit transaction, and (hopefully) in parallel with
 		// committing start new transaction.
 
+		t.startcommitts = runtime.Rdtsc()
 		head = t.head
 
 		l.commitc <- t
