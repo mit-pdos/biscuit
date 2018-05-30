@@ -135,6 +135,8 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nblkcommitted)
 	s += "\n\tncommit "
 	s += strconv.Itoa(log.ncommit)
+	s += "\n\t commit cycles "
+	s += strconv.FormatUint(log.commitcycles, 10)
 	s += "\n\tmaxblks_per_commit "
 	s += strconv.Itoa(log.maxblks_per_op)
 	s += "\n\tnapply "
@@ -149,8 +151,6 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nbatchforce)
 	s += "\n\tndelayforce "
 	s += strconv.Itoa(log.ndelayforce)
-	s += "\n\t force cycles "
-	s += strconv.FormatUint(log.forcecycles, 10)
 	s += "\n\tnwriteordered "
 	s += strconv.Itoa(log.nwriteordered)
 	s += "\n\tnccommit "
@@ -248,7 +248,6 @@ type trans_t struct {
 	absorb         map[int]*common.Bdev_block_t // absorb writes to same block number
 	waiters        int                          // number of processes wait for this trans to commit
 	waitc          chan bool                    // channel on which waiters are waiting
-	startcommitts  uint64
 }
 
 func mk_trans(start, loglen, maxtrans int) *trans_t {
@@ -464,8 +463,7 @@ func (trans *trans_t) commit(tail int, log *log_t) {
 
 	s := runtime.Rdtsc()
 	log.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
-	t := runtime.Rdtsc()
-	log.flushdatacycles += (t - s)
+	log.flushdatacycles += (runtime.Rdtsc() - s)
 
 	log.commit_head(trans.head)
 
@@ -516,7 +514,7 @@ type log_t struct {
 	nforce             int
 	nbatchforce        int
 	ndelayforce        int
-	forcecycles        uint64
+	commitcycles       uint64
 	nwriteordered      int
 	nccommit           int
 	nbcommit           int
@@ -653,8 +651,7 @@ func (log *log_t) commit_head(head int) {
 	log.fs.bcache.Write(headblk)
 	s := runtime.Rdtsc()
 	log.flush() // commit log header
-	t := runtime.Rdtsc()
-	log.headcycles += (t - s)
+	log.headcycles += (runtime.Rdtsc() - s)
 	log.fs.bcache.Relse(headblk, "commit_done")
 }
 
@@ -785,9 +782,6 @@ func (l *log_t) commit_daemon(h int) {
 
 			t.unblock_waiters()
 
-			ts := runtime.Rdtsc()
-			l.forcecycles += (ts - t.startcommitts)
-
 			l.commitdonec <- true
 
 			if log_debug {
@@ -802,6 +796,7 @@ func (l *log_t) log_daemon(h int) {
 	nextop := opid_t(0)
 	head := h
 	commitready := true
+	var ts1 uint64
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
@@ -866,6 +861,7 @@ func (l *log_t) log_daemon(h int) {
 				if !b {
 					panic("commit_daemon: sent false?")
 				}
+				l.commitcycles += (runtime.Rdtsc() - ts1)
 				commitready = true
 			case <-l.stop:
 				l.stop <- true
@@ -876,7 +872,7 @@ func (l *log_t) log_daemon(h int) {
 		// commit transaction, and (hopefully) in parallel with
 		// committing start new transaction.
 
-		t.startcommitts = runtime.Rdtsc()
+		ts1 = runtime.Rdtsc()
 		head = t.head
 
 		l.commitc <- t
@@ -886,6 +882,7 @@ func (l *log_t) log_daemon(h int) {
 		if !commitdone {
 			commitready = false
 		} else {
+			l.commitcycles += (runtime.Rdtsc() - ts1)
 			commitready = true
 		}
 	}
