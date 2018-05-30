@@ -814,30 +814,29 @@ func (l *log_t) commit_daemon(h int) {
 func (l *log_t) log_daemon(h int) {
 	nextop := opid_t(0)
 	head := h
-	commitbusy := false
+	commitready := true
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "log daemon")
 
 		t := mk_trans(head, l.loglen, l.maxtrans)
 
-		done := false
-		doforce := false
-		adm := l.admission
+		adm := l.admission // set adm to nil when transaction is full
 
-		// condition to fall out:  !commitbusy and done
-		for !done {
+		// Fall out of when the loop when transaction must be committed:
+		// transaction is full or a process forces the transaction. We
+		// delay the commit until the commit of previous transaction has
+		// finished and all ops of this transactions have completed.
+		commit := false
+		for !(commit && commitready && t.iscommittable()) {
 			select {
 			case nb := <-l.incoming:
 				t.add_write(l, nb)
 			case opid := <-l.done:
 				t.mark_done(opid)
 				if adm == nil { // admit ops again?
-					if t.waiters > 0 || t.startcommit() {
-						// No more log space for another op or forced to commit
-						if !commitbusy && t.iscommittable() {
-							done = true
-						}
+					if t.startcommit() { // nope, full and commit
+						commit = true
 					} else {
 						if log_debug {
 							fmt.Printf("log_daemon: can admit op %d\n", nextop)
@@ -847,9 +846,6 @@ func (l *log_t) log_daemon(h int) {
 						// that it reserved.
 						adm = l.admission
 					}
-				}
-				if doforce && !commitbusy && t.iscommittable() {
-					done = true
 				}
 			case adm <- nextop:
 				if log_debug {
@@ -866,11 +862,7 @@ func (l *log_t) log_daemon(h int) {
 					t.waitc <- true
 				} else {
 					l.nforce++
-					if t.startcommittsi == uint64(0) {
-						t.startcommittsi = runtime.Rdtsc()
-						t.startcommitts = runtime.Rdtsc()
-					} else {
-						t.startcommitts = runtime.Rdtsc()
+					if t.waiters > 0 {
 						l.nbatchforce++
 					}
 					t.waiters++
@@ -878,11 +870,8 @@ func (l *log_t) log_daemon(h int) {
 						fmt.Printf("log_daemon: force %d\n", t.waiters)
 					}
 					l.forcewait <- t.waitc
-					doforce = true
-					if !commitbusy && t.iscommittable() {
-						done = true
-					}
-					if commitbusy {
+					commit = true
+					if !commitready {
 						l.ndelayforce++
 					}
 				}
@@ -890,34 +879,26 @@ func (l *log_t) log_daemon(h int) {
 				if !b {
 					panic("commit_daemon: sent false?")
 				}
-				commitbusy = false
-				if t.iscommittable() {
-					done = true
-				}
+				commitready = true
 			case <-l.stop:
 				l.stop <- true
 				return
 			}
 		}
 
-		if commitbusy {
-			panic("fall out of loop before receiving response from commit daemon")
-		}
+		// commit transaction, and (hopefully) in parallel with
+		// committing start new transaction.
 
 		head = t.head
-
-		ts := runtime.Rdtsc()
-		l.forcefirstwaitcycles += (ts - t.startcommittsi)
-		l.forcewaitcycles += (ts - t.startcommitts)
 
 		l.commitc <- t
 		// wait until commit thread tells us to go ahead with
 		// next trans
 		commitdone := <-l.commitdonec
 		if !commitdone {
-			commitbusy = true
+			commitready = false
 		} else {
-			commitbusy = false
+			commitready = true
 		}
 	}
 }
