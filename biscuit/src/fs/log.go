@@ -436,7 +436,7 @@ func (trans *trans_t) commit(tail int, log *log_t) {
 		if loginc(i, log.loglen) == tail {
 			panic("commit runs into log start")
 		}
-		// install log destination in the descriptor block
+		// write log destination in the descriptor block
 		l := log.log[i]
 		db.w_logdest(j, l.Block)
 		j++
@@ -476,7 +476,7 @@ func (trans *trans_t) commit(tail int, log *log_t) {
 
 	log.commit_head(trans.head)
 
-	log.log[trans.start].Block = 0 // now safe to mark descriptor block
+	log.log[trans.start].Block = 0 // now safe to mark block as a descriptor block
 
 	n := blks1.Len() + blks2.Len()
 	log.nblkcommitted += n
@@ -578,7 +578,6 @@ type logdescriptor_t struct {
 
 func (ld *logdescriptor_t) r_logdest(p int) int {
 	if p < 0 || p >= ld.max {
-		fmt.Printf("max %d\n", ld.max)
 		panic("bad dnum")
 	}
 	return fieldr(ld.data, p)
@@ -586,7 +585,6 @@ func (ld *logdescriptor_t) r_logdest(p int) int {
 
 func (ld *logdescriptor_t) w_logdest(p int, n int) {
 	if p < 0 || p >= ld.max {
-		fmt.Printf("w max %d\n", ld.max)
 		panic("bad dnum")
 	}
 	fieldw(ld.data, p, n)
@@ -652,7 +650,7 @@ func (log *log_t) space(tail, head int) bool {
 
 func (log *log_t) almosthalffull(tail, head int) bool {
 	n := logsize(tail, head, log.loglen)
-	n += MaxBlkPerOp // a transaction is likely not to fill one op of blocks
+	n += MaxBlkPerOp
 	full := n >= log.loglen/2
 	return full
 }
@@ -662,7 +660,7 @@ func (log *log_t) commit_head(head int) {
 	lh, headblk := log.readhdr()
 	lh.w_head(head)
 	headblk.Unlock()
-	log.fs.bcache.Write(headblk) // write log header
+	log.fs.bcache.Write(headblk)
 	s := runtime.Rdtsc()
 	log.flush() // commit log header
 	t := runtime.Rdtsc()
@@ -675,7 +673,7 @@ func (log *log_t) commit_tail(tail int) {
 	lh, headblk := log.readhdr()
 	lh.w_tail(tail)
 	headblk.Unlock()
-	log.fs.bcache.Write(headblk) // write log header
+	log.fs.bcache.Write(headblk)
 	s := runtime.Rdtsc()
 	log.flush() // commit log header
 	t := runtime.Rdtsc()
@@ -689,8 +687,8 @@ func (log *log_t) apply(tail, head int) int {
 	done := make(map[int]bool, log.loglen)
 
 	// The log is committed. If we crash while installing the blocks to
-	// their destinations, we should be able to recover.  Install backwards,
-	// writing the last version of a block (and not earlier versions).
+	// their destinations, we can install again.  Install backwards, writing
+	// the last version of a block (and not earlier versions).
 
 	if log_debug {
 		fmt.Printf("apply log: blks from %d till %d\n", tail, head)
@@ -796,7 +794,6 @@ func (l *log_t) commit_daemon(h int) {
 					l.nbapply++
 				}
 				l.applyc <- head
-				// <-l.applyc // XXX serialize for now
 			}
 
 			t.unblock_waiters()
