@@ -233,7 +233,7 @@ type trans_t struct {
 	head           int // index into in-memory log
 	loglen         int // length of log (should be >= 2 * maxtrans)
 	maxtrans       int
-	ops            map[opid_t]bool              // ops in progress this transaction
+	inprogress     int                          // ops in progress this transaction
 	logged         *common.BlkList_t            // list of to-be-logged blocks
 	ordered        *common.BlkList_t            // list of ordered blocks
 	orderedcopy    *common.BlkList_t            // list of ordered blocks
@@ -246,10 +246,9 @@ type trans_t struct {
 
 func mk_trans(start, loglen, maxtrans int) *trans_t {
 	t := &trans_t{start: start, head: loginc(start, loglen)} // reserve first block for descriptor
-	t.ops = make(map[opid_t]bool)
-	t.logged = common.MkBlkList()      // bounded by MaxDescriptor
-	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
-	t.orderedcopy = common.MkBlkList() // bounded by MaxOrdered
+	t.logged = common.MkBlkList()                            // bounded by MaxDescriptor
+	t.ordered = common.MkBlkList()                           // bounded by MaxOrdered
+	t.orderedcopy = common.MkBlkList()                       // bounded by MaxOrdered
 	t.logpresent = make(map[int]bool, loglen)
 	t.orderedpresent = make(map[int]bool)
 	t.absorb = make(map[int]*common.Bdev_block_t, MaxOrdered)
@@ -260,11 +259,11 @@ func mk_trans(start, loglen, maxtrans int) *trans_t {
 }
 
 func (trans *trans_t) add_op(opid opid_t) {
-	trans.ops[opid] = true
+	trans.inprogress++
 }
 
 func (trans *trans_t) mark_done(opid opid_t) {
-	delete(trans.ops, opid)
+	trans.inprogress--
 }
 
 func (trans *trans_t) add_write(log *log_t, buf buf_t) {
@@ -318,10 +317,7 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 }
 
 func (trans *trans_t) iscommittable() bool {
-	if log_debug {
-		fmt.Printf("iscommittable: %d %v\n", len(trans.ops), trans.ops)
-	}
-	return len(trans.ops) == 0
+	return trans.inprogress == 0
 }
 
 func (trans *trans_t) isorderedfull() bool {
@@ -332,7 +328,7 @@ func (trans *trans_t) isorderedfull() bool {
 
 func (trans *trans_t) isdescriptorfull() bool {
 	n := logsize(trans.start, trans.head, trans.loglen)
-	n += len(trans.ops) * MaxBlkPerOp
+	n += trans.inprogress * MaxBlkPerOp
 	n += MaxBlkPerOp
 	return n >= trans.maxtrans
 }
