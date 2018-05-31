@@ -497,6 +497,7 @@ func doTestAtomic(tfs *Ufs_t, t *testing.T) {
 		t.Fatalf("mkFile %v failed", "tmp")
 	}
 	tfs.Sync()
+	fmt.Printf("rename\n")
 	e = tfs.Rename("tmp", "f")
 	if e != 0 {
 		t.Fatalf("Rename failed")
@@ -729,6 +730,7 @@ func TestTracesAtomic(t *testing.T) {
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	produceTrace(disk, t, doAtomicInit, doTestAtomic)
 	trace := readTrace("trace.json")
+	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
 	fmt.Printf("#traces = %v\n", cnt)
 	os.Remove(disk)

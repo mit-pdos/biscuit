@@ -4,7 +4,6 @@ import "fmt"
 import "strconv"
 
 import "common"
-import "sync/atomic"
 import "runtime"
 
 const log_debug = false
@@ -135,12 +134,16 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nblkcommitted)
 	s += "\n\tncommit "
 	s += strconv.Itoa(log.ncommit)
+	s += "\n\tnccommit "
+	s += strconv.Itoa(log.nccommit)
 	s += "\n\t commit cycles "
 	s += strconv.FormatUint(log.commitcycles, 10)
 	s += "\n\tmaxblks_per_commit "
 	s += strconv.Itoa(log.maxblks_per_op)
 	s += "\n\tnapply "
 	s += strconv.Itoa(log.napply)
+	s += "\n\tnbapply "
+	s += strconv.Itoa(log.nbapply)
 	s += "\n\tnblkapply "
 	s += strconv.Itoa(log.nblkapply)
 	s += "\n\tnabsorbapply "
@@ -153,14 +156,6 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.ndelayforce)
 	s += "\n\tnwriteordered "
 	s += strconv.Itoa(log.nwriteordered)
-	s += "\n\tnccommit "
-	s += strconv.Itoa(log.nccommit)
-	s += "\n\tnbcommit "
-	s += strconv.Itoa(log.nbcommit)
-	s += "\n\tnkickapply "
-	s += strconv.Itoa(log.nkickapply)
-	s += "\n\tnbapply "
-	s += strconv.Itoa(log.nbapply)
 	s += "\n\tncommithead "
 	s += strconv.Itoa(log.ncommithead)
 	s += "\n\t flush head cycles "
@@ -182,7 +177,6 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 	log.fs = fs
 	log.mk_log(logstart, loglen, disk)
 	head := log.recover()
-	log.applytail = int32(head)
 	if !memfs {
 		go log.log_daemon(head)
 		go log.commit_daemon(head)
@@ -192,12 +186,12 @@ func StartLog(logstart, loglen int, fs *Fs_t, disk common.Disk_i) *log_t {
 }
 
 func (log *log_t) StopLog() {
-	log.stop <- true
-	<-log.stop
-	log.commitc <- nil
-	<-log.commitc
-	log.applyc <- -1
-	<-log.applyc
+	log.logstop <- true
+	<-log.logstop
+	log.commitstop <- true
+	<-log.commitstop
+	log.applystop <- true
+	<-log.applystop
 }
 
 //
@@ -484,15 +478,16 @@ type log_t struct {
 	loglen    int                    // log len
 	maxtrans  int                    // max number of blocks in transaction
 	logstart  int                    // disk block where log starts on disk
-	applytail int32                  // shared index in log where apply() will start
-	applybusy int32                  // shared busy bit
 	log       []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
 	incoming  chan buf_t
 	admission chan opid_t
 	done      chan opid_t
 	force     chan bool
 	forcewait chan (chan bool)
-	stop      chan bool
+
+	logstop    chan bool
+	commitstop chan bool
+	applystop  chan bool
 
 	commitc     chan *trans_t
 	commitdonec chan bool
@@ -517,8 +512,6 @@ type log_t struct {
 	commitcycles       uint64
 	nwriteordered      int
 	nccommit           int
-	nbcommit           int
-	nkickapply         int
 	nbapply            int
 	ncommithead        int
 	headcycles         uint64
@@ -599,7 +592,9 @@ func (log *log_t) mk_log(ls, ll int, disk common.Disk_i) {
 	log.commitc = make(chan *trans_t)
 	log.commitdonec = make(chan bool)
 	log.applyc = make(chan int)
-	log.stop = make(chan bool)
+	log.logstop = make(chan bool)
+	log.commitstop = make(chan bool)
+	log.applystop = make(chan bool)
 	log.disk = disk
 }
 
@@ -630,7 +625,7 @@ func (log *log_t) flush() {
 	}
 }
 
-func (log *log_t) space(tail, head int) bool {
+func (log *log_t) space(head, tail int) bool {
 	n := logsize(head, tail, log.loglen)
 	space := n >= log.maxtrans
 	return space
@@ -719,34 +714,65 @@ func (log *log_t) apply(tail, head int) int {
 	return head
 }
 
+// the apply daemon owns the tail of the log
 func (l *log_t) apply_daemon(t int) {
 	tail := t
+	inprogress := false
+	waiting := false
+	stopping := false
+	c := make(chan int)
 	for {
 		select {
-		case head := <-l.applyc:
-			if head < 0 { // stop apply daemon
-				l.applyc <- 0
+		case stopping = <-l.applystop:
+			if !(waiting || inprogress) {
+				l.applystop <- true
 				return
 			}
-			atomic.StoreInt32(&l.applybusy, int32(1))
-			tail = l.apply(tail, head)
-			atomic.StoreInt32(&l.applytail, int32(tail))
-			atomic.StoreInt32(&l.applybusy, int32(0))
-			// l.applyc <- true
+		case head := <-l.applyc:
+			if log_debug {
+				fmt.Printf("apply_daemon: tail %d head %d\n", tail, head)
+			}
+			if l.space(head, tail) { // space for another transaction?
+				l.applyc <- tail
+			} else {
+				// make commit daemon wait
+				l.nbapply++
+				waiting = true
+			}
+			if l.almosthalffull(tail, head) && !inprogress {
+				// start applying so that by the next commit log
+				// has space for another transaction
+				inprogress = true
+				go func() {
+					t := l.apply(tail, head)
+					c <- t
+				}()
+			}
+		case tail = <-c:
+			inprogress = false
+			if waiting {
+				waiting = false
+				l.applyc <- tail
+
+			}
+			if stopping {
+				l.applystop <- true
+				return
+			}
 		}
 	}
 }
 
+// the commit daemon owns the head of the log
 func (l *log_t) commit_daemon(h int) {
 	tail := h
 	head := h
 	for {
 		select {
+		case <-l.commitstop:
+			l.commitstop <- true
+			return
 		case t := <-l.commitc:
-			if t == nil { // stop commit daemon?
-				l.commitc <- nil
-				return
-			}
 			if log_debug {
 				fmt.Printf("commit_daemon: start waiters %d tail %d head %d\n",
 					t.waiters, tail, head)
@@ -755,10 +781,7 @@ func (l *log_t) commit_daemon(h int) {
 			t.copyintolog(l)
 			t.copyordered(l)
 
-			head = t.head
-			tail = int(atomic.LoadInt32(&l.applytail))
-
-			if l.space(head, tail) { // space for another transaction?
+			if l.space(t.head, tail) { // space for another transaction?
 				if log_debug {
 					fmt.Printf("commit_daemon: start next trans early\n")
 				}
@@ -768,17 +791,10 @@ func (l *log_t) commit_daemon(h int) {
 
 			t.commit(tail, l)
 
-			if l.almosthalffull(tail, head) {
-				l.nkickapply++
-				if log_debug {
-					fmt.Printf("commit_daemon: kick apply\n")
-				}
-				busy := int(atomic.LoadInt32(&l.applybusy))
-				if busy == 1 {
-					l.nbapply++
-				}
-				l.applyc <- head
-			}
+			head = t.head
+
+			l.applyc <- head
+			tail = <-l.applyc
 
 			t.unblock_waiters()
 
@@ -796,6 +812,7 @@ func (l *log_t) log_daemon(h int) {
 	nextop := opid_t(0)
 	head := h
 	commitready := true
+	stopping := false
 	var ts1 uint64
 	for {
 		common.Kunresdebug()
@@ -863,9 +880,15 @@ func (l *log_t) log_daemon(h int) {
 				}
 				l.commitcycles += (runtime.Rdtsc() - ts1)
 				commitready = true
-			case <-l.stop:
-				l.stop <- true
-				return
+				if stopping {
+					l.logstop <- true
+					return
+				}
+			case stopping = <-l.logstop:
+				if commitready {
+					l.logstop <- true
+					return
+				}
 			}
 		}
 
