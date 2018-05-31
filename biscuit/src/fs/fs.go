@@ -526,10 +526,6 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		return 0, -common.EBADF
 	}
 
-	// opid := fo.fs.fslog.Op_begin("do_read") // read may fill holes in the file
-	opid := opid_t(0)
-	// defer fo.fs.fslog.Op_end(opid)
-
 	useoffset := toff != -1
 	offset := fo.offset
 	if useoffset {
@@ -544,7 +540,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		fo.Unlock()
 		return 0, err
 	}
-	did, err := idm.do_read(opid, dst, offset)
+	did, err := idm.do_read(dst, offset)
 	if !useoffset && err == 0 {
 		fo.offset += did
 	}
@@ -750,17 +746,13 @@ func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, commo
 		return nil, -common.EBADF
 	}
 
-	// opid := fo.fs.fslog.Op_begin("do_mmapi") // read may fill holes in the file
-	opid := opid_t(0)
 	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	if err != 0 {
 		fo.Unlock()
 		return nil, err
 	}
-	mmi, err := idm.do_mmapi(opid, offset, len, inc)
+	mmi, err := idm.do_mmapi(offset, len, inc)
 	idm.iunlock_refdown("mmapi")
-
-	// idm.fs.fslog.Op_end(opid)
 
 	fo.Unlock()
 	return mmi, err

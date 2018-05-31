@@ -302,8 +302,8 @@ func (idm *imemnode_t) do_trunc(opid opid_t, truncto uint) common.Err_t {
 	return err
 }
 
-func (idm *imemnode_t) do_read(opid opid_t, dst common.Userio_i, offset int) (int, common.Err_t) {
-	return idm.iread(opid, dst, offset)
+func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err_t) {
+	return idm.iread(dst, offset)
 }
 
 func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int, common.Err_t) {
@@ -360,11 +360,11 @@ func (idm *imemnode_t) do_stat(st *common.Stat_t) common.Err_t {
 	return 0
 }
 
-func (idm *imemnode_t) do_mmapi(opid opid_t, off, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
+func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
 	if idm.itype != I_FILE && idm.itype != I_DIR {
 		panic("bad mmapinfo")
 	}
-	return idm.immapinfo(opid, off, len, inc)
+	return idm.immapinfo(off, len, inc)
 }
 
 func (idm *imemnode_t) do_dirchk(opid opid_t, wantdir bool) common.Err_t {
@@ -683,6 +683,9 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, common.Err_t) {
+	if writing && opid == 0 {
+		panic("offsetblk: writing but no opid\n")
+	}
 	whichblk := offset / common.BSIZE
 	lastblk := idm.size / common.BSIZE
 	blkn, err := idm.bmapfill(opid, lastblk, whichblk, writing)
@@ -723,7 +726,7 @@ func min(a, b int) int {
 	return b
 }
 
-func (idm *imemnode_t) iread(opid opid_t, dst common.Userio_i, offset int) (int, common.Err_t) {
+func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t) {
 	idm.fs.istats.Niread.inc()
 	isz := idm.size
 	c := 0
@@ -734,7 +737,7 @@ func (idm *imemnode_t) iread(opid opid_t, dst common.Userio_i, offset int) (int,
 		}
 		m := min(common.BSIZE-offset%common.BSIZE, dst.Remain())
 		m = min(isz-offset, m)
-		b, err := idm.off2buf(opid, offset, m, false, true, "iread")
+		b, err := idm.off2buf(opid_t(0), offset, m, false, true, "iread")
 		if err != 0 {
 			return c, err
 		}
@@ -897,7 +900,7 @@ func (idm *imemnode_t) icreate(opid opid_t, name string, nitype, major, minor in
 	return newinum, err
 }
 
-func (idm *imemnode_t) immapinfo(opid opid_t, offset, len int, mapshared bool) ([]common.Mmapinfo_t, common.Err_t) {
+func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmapinfo_t, common.Err_t) {
 	isz := idm.size
 	if (len != -1 && len < 0) || offset < 0 {
 		panic("bad off/len")
@@ -919,7 +922,7 @@ func (idm *imemnode_t) immapinfo(opid opid_t, offset, len int, mapshared bool) (
 		if !common.Resadd_noblock(gimme) {
 			return nil, -common.ENOHEAP
 		}
-		buf, err := idm.off2buf(opid, o+i, common.PGSIZE, false, true, "immapinfo")
+		buf, err := idm.off2buf(opid_t(0), o+i, common.PGSIZE, false, true, "immapinfo")
 		if err != 0 {
 			return nil, err
 		}

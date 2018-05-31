@@ -247,7 +247,7 @@ type trans_t struct {
 func mk_trans(start, loglen, maxtrans int) *trans_t {
 	t := &trans_t{start: start, head: loginc(start, loglen)} // reserve first block for descriptor
 	t.ops = make(map[opid_t]bool)
-	t.logged = common.MkBlkList()      // bounded by MaxOrdered
+	t.logged = common.MkBlkList()      // bounded by MaxDescriptor
 	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
 	t.orderedcopy = common.MkBlkList() // bounded by MaxOrdered
 	t.logpresent = make(map[int]bool, loglen)
@@ -803,13 +803,12 @@ func (l *log_t) commit_daemon(h int) {
 			if log_debug {
 				fmt.Printf("commit_daemon: done tail %v head %v\n", tail, head)
 			}
-
 		}
 	}
 }
 
 func (l *log_t) log_daemon(h int) {
-	nextop := opid_t(0)
+	nextop := opid_t(1) // reserve 0 for no opid
 	head := h
 	commitready := true
 	stopping := false
