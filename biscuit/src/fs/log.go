@@ -155,8 +155,6 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nbatchforce)
 	s += "\n\tndelayforce "
 	s += strconv.Itoa(log.ndelayforce)
-	s += "\n\tnwriteordered "
-	s += strconv.Itoa(log.ml.nwriteordered)
 	s += "\n\tncommithead "
 	s += strconv.Itoa(log.ml.ncommithead)
 	s += "\n\t flush head cycles "
@@ -500,7 +498,6 @@ func (trans *trans_t) write_ordered(ml *memlog_t) {
 	if log_debug {
 		fmt.Printf("write_ordered: %d\n", trans.orderedcopy.Len())
 	}
-	ml.nwriteordered++
 	trans.orderedcopy.Apply(func(b *common.Bdev_block_t) {
 		ml.bcache.Write_async_through(b)
 	})
