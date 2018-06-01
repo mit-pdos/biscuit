@@ -60,7 +60,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 	logstart := fs.superb_start + 1
 	loglen := fs.superb.Loglen()
-	fs.fslog = StartLog(logstart, loglen, fs, disk)
+	fs.fslog = StartLog(logstart, loglen, fs.bcache)
 	if fs.fslog == nil {
 		panic("Startlog failed")
 	}
