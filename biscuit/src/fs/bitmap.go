@@ -12,7 +12,7 @@ import "common"
 const bitsperblk = common.BSIZE * 8
 
 type storage_i interface {
-	Write(*common.Bdev_block_t)
+	Write(opid_t, *common.Bdev_block_t)
 	Get_fill(int, string, bool) (*common.Bdev_block_t, common.Err_t)
 	Relse(*common.Bdev_block_t, string)
 }
@@ -123,7 +123,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 	return true, 0
 }
 
-func (alloc *bitmap_t) CheckAndMark() (int, common.Err_t) {
+func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, common.Err_t) {
 	bitno := alloc.lastbit
 	blkno := blkno(alloc.lastbit)
 	byte := byteno(alloc.lastbit)
@@ -137,7 +137,7 @@ func (alloc *bitmap_t) CheckAndMark() (int, common.Err_t) {
 		alloc.lastbit++
 		blk.Data[byte] |= (1 << uint(bit))
 		blk.Unlock()
-		alloc.storage.Write(blk)
+		alloc.storage.Write(opid, blk)
 		alloc.storage.Relse(blk, "CheckAndMark")
 		return bitno, 0
 	}
@@ -146,11 +146,11 @@ func (alloc *bitmap_t) CheckAndMark() (int, common.Err_t) {
 	return 0, -common.ENOMEM
 }
 
-func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
+func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 	alloc.Lock()
 	//defer alloc.Unlock()
 
-	bit, err := alloc.CheckAndMark()
+	bit, err := alloc.CheckAndMark(opid)
 	if err == 0 {
 		alloc.nhit++
 	} else {
@@ -165,7 +165,7 @@ func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 			alloc.Unlock()
 			return 0, err
 		}
-		bit, err = alloc.CheckAndMark()
+		bit, err = alloc.CheckAndMark(opid)
 		if err != 0 {
 			panic("FindAndMark")
 		}
@@ -176,7 +176,7 @@ func (alloc *bitmap_t) FindAndMark() (int, common.Err_t) {
 	return bit, 0
 }
 
-func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
+func (alloc *bitmap_t) Unmark(opid opid_t, bit int) common.Err_t {
 	alloc.Lock()
 	//defer alloc.Unlock()
 
@@ -198,7 +198,7 @@ func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
 	}
 	fblk.Data[fbyteoff] &= ^(1 << uint(fbitoff))
 	fblk.Unlock()
-	alloc.storage.Write(fblk)
+	alloc.storage.Write(opid, fblk)
 	alloc.storage.Relse(fblk, "Unmark")
 	alloc.nfree++
 	alloc.nfreebits++
@@ -206,7 +206,7 @@ func (alloc *bitmap_t) Unmark(bit int) common.Err_t {
 	return 0
 }
 
-func (alloc *bitmap_t) Mark(bit int) common.Err_t {
+func (alloc *bitmap_t) Mark(opid opid_t, bit int) common.Err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -227,7 +227,7 @@ func (alloc *bitmap_t) Mark(bit int) common.Err_t {
 	}
 	fblk.Data[fbyteoff] |= 1 << uint(fbitoff)
 	fblk.Unlock()
-	alloc.storage.Write(fblk)
+	alloc.storage.Write(opid, fblk)
 	alloc.storage.Relse(fblk, "Mark")
 	return 0
 }
@@ -259,7 +259,7 @@ func smallest(mark, unmark []int) (int, mark_t) {
 }
 
 // mark and umark bits in a single shot.
-func (alloc *bitmap_t) MarkUnmark(mark, unmark []int) common.Err_t {
+func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -284,7 +284,7 @@ func (alloc *bitmap_t) MarkUnmark(mark, unmark []int) common.Err_t {
 		// done with this block
 		if blk != nil && blk.Block != fblkno {
 			blk.Unlock()
-			alloc.storage.Write(blk)
+			alloc.storage.Write(opid, blk)
 			alloc.storage.Relse(blk, "MarkUnmark")
 			blk = nil
 		}
@@ -304,7 +304,7 @@ func (alloc *bitmap_t) MarkUnmark(mark, unmark []int) common.Err_t {
 	}
 	if blk != nil {
 		blk.Unlock()
-		alloc.storage.Write(blk)
+		alloc.storage.Write(opid, blk)
 		alloc.storage.Relse(blk, "MarkUnmark")
 	}
 	return 0

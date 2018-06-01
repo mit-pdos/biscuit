@@ -12,6 +12,7 @@ import "fs"
 
 const (
 	SMALL = 512
+	LARGE = 8 * 4096
 )
 
 const (
@@ -75,7 +76,7 @@ func doCheckSimple(tfs *Ufs_t, d string, t *testing.T) {
 	}
 	st, ok := res["f1"]
 	if !ok {
-		t.Fatalf("f1 not present")
+		t.Fatalf("%s/f1 not present", d)
 	}
 	if st.Size() != 1024 {
 		t.Fatalf("f1 wrong size")
@@ -272,7 +273,7 @@ func TestFSOrphanOne(t *testing.T) {
 		t.Fatalf("inode/blocks not freed: free before %d %d free after %d %d\n",
 			ninode, nblock, ninode1, nblock1)
 	}
-	doCheckOrphans(tfs, t, 1)
+	// doCheckOrphans(tfs, t, 1)
 	ShutdownFS(tfs)
 
 	fmt.Printf("one more check\n")
@@ -317,12 +318,12 @@ func TestFSOrphansMany(t *testing.T) {
 // Simple concurrent test (for race detector)
 //
 
-func TestFSConcur(t *testing.T) {
-	n := 2
+func concurrent(t *testing.T) {
+	n := 8
 	dst := "tmp.img"
-	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+	MkDisk(dst, nil, nlogblks, ninodeblks*2, ndatablks*10)
 
-	fmt.Printf("Test FSConcur %v ...\n", dst)
+	fmt.Printf("Test FSConcur %v\n", dst)
 
 	c := make(chan string)
 	tfs := BootFS(dst)
@@ -330,6 +331,8 @@ func TestFSConcur(t *testing.T) {
 		go func(id int) {
 			d := uniqdir(id)
 			s := doTestSimple(tfs, d)
+			doCheckSimple(tfs, d, t)
+			tfs.Sync()
 			c <- s
 		}(i)
 	}
@@ -347,6 +350,102 @@ func TestFSConcur(t *testing.T) {
 		d := uniqdir(i)
 		doCheckSimple(tfs, d, t)
 	}
+	ShutdownFS(tfs)
+}
+
+func TestFSConcurNotSame(t *testing.T) {
+	concurrent(t)
+}
+
+//
+// Test concurrent commit of blocks with a new transaction updating same blocks
+//
+
+const (
+	MoreLogBlks = nlogblks * 4
+)
+
+func TestFSConcurSame(t *testing.T) {
+	n := 8
+	dst := "tmp.img"
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks*2, ndatablks*10)
+	c := make(chan string)
+
+	tfs := BootFS(dst)
+	ub := mkData(1, SMALL)
+	e := tfs.MkFile("f1", ub)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f1")
+	}
+
+	for i := 0; i < n; i++ {
+		go func(id int) {
+			ub := mkData(uint8(id), LARGE)
+			e := tfs.Update("f1", ub)
+			tfs.Sync()
+			s := ""
+			if e != 0 {
+				s = fmt.Sprintf("Update f1 failed")
+			}
+			c <- s
+		}(i)
+	}
+
+	for i := 0; i < n; i++ {
+		s := <-c
+		if s != "" {
+			t.Fatalf("Update failed %s\n", s)
+		}
+	}
+
+	ShutdownFS(tfs)
+}
+
+func TestFSConcurUnlink(t *testing.T) {
+	n := 8
+	dst := "tmp.img"
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks*2, ndatablks*10)
+	c := make(chan string)
+	tfs := BootFS(dst)
+	d := "d"
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+	for i := 0; i < n; i++ {
+		go func(id int) {
+			s := ""
+			fn := uniqfile(id)
+			for j := 0; j < 100 && s == ""; j++ {
+				s = func() string {
+					p := d + "/" + fn
+					ub := mkData(uint8(id), SMALL)
+					e = tfs.MkFile(p, ub)
+					if e != 0 {
+						s = fmt.Sprintf("MkFile failed")
+						return s
+					}
+					tfs.Sync()
+					e = tfs.Unlink(p)
+					if e != 0 {
+						s = fmt.Sprintf("Unlink failed")
+						return s
+					}
+					tfs.Sync()
+					return s
+				}()
+			}
+			c <- s
+		}(i)
+	}
+
+	for i := 0; i < n; i++ {
+		s := <-c
+		if s != "" {
+			t.Fatalf("Func failed %s\n", s)
+		}
+	}
+
 	ShutdownFS(tfs)
 }
 
@@ -398,6 +497,7 @@ func doTestAtomic(tfs *Ufs_t, t *testing.T) {
 		t.Fatalf("mkFile %v failed", "tmp")
 	}
 	tfs.Sync()
+	fmt.Printf("rename\n")
 	e = tfs.Rename("tmp", "f")
 	if e != 0 {
 		t.Fatalf("Rename failed")
@@ -630,6 +730,7 @@ func TestTracesAtomic(t *testing.T) {
 	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablks)
 	produceTrace(disk, t, doAtomicInit, doTestAtomic)
 	trace := readTrace("trace.json")
+	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
 	fmt.Printf("#traces = %v\n", cnt)
 	os.Remove(disk)

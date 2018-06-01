@@ -6,7 +6,8 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
-//import "sync/atomic"
+
+import "sync/atomic"
 
 import "common"
 
@@ -38,8 +39,8 @@ type inode_stats_t struct {
 }
 
 func (c *counter_t) inc() {
-	//n := (*int64)(unsafe.Pointer(c))
-	//atomic.AddInt64(n, 1)
+	n := (*int64)(unsafe.Pointer(c))
+	atomic.AddInt64(n, 1)
 }
 
 func (is *inode_stats_t) stats() string {
@@ -168,10 +169,10 @@ func (ind *Inode_t) W_addr(i int, blk int) {
 type imemnode_t struct {
 	// _l protects all fields except for inum (which is the key for lookup
 	// and thus already known).
-	_l	sync.Mutex
+	_l   sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
-	ref	*common.Ref_t
+	ref  *common.Ref_t
 
 	// XXXPANIC for sanity
 	_amlocked bool
@@ -274,7 +275,7 @@ func (idm *imemnode_t) refdown(s string) {
 	idm.fs.icache.Refdown(idm, s)
 }
 
-func (idm *imemnode_t) _iupdate() common.Err_t {
+func (idm *imemnode_t) _iupdate(opid opid_t) common.Err_t {
 	idm.fs.istats.Niupdate.inc()
 	iblk, err := idm.idibread()
 	if err != 0 {
@@ -282,7 +283,7 @@ func (idm *imemnode_t) _iupdate() common.Err_t {
 	}
 	if idm.flushto(iblk, idm.inum) {
 		iblk.Unlock()
-		idm.fs.fslog.Write(iblk)
+		idm.fs.fslog.Write(opid, iblk)
 	} else {
 		iblk.Unlock()
 	}
@@ -290,13 +291,13 @@ func (idm *imemnode_t) _iupdate() common.Err_t {
 	return 0
 }
 
-func (idm *imemnode_t) do_trunc(truncto uint) common.Err_t {
+func (idm *imemnode_t) do_trunc(opid opid_t, truncto uint) common.Err_t {
 	if idm.itype != I_FILE && idm.itype != I_DEV {
 		panic("bad truncate")
 	}
-	err := idm.itrunc(truncto)
+	err := idm.itrunc(opid, truncto)
 	if err == 0 {
-		idm._iupdate()
+		idm._iupdate(opid)
 	}
 	return err
 }
@@ -327,7 +328,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if n > max {
 			n = max
 		}
-		idm.fs.fslog.Op_begin("dowrite")
+		opid := idm.fs.fslog.Op_begin("dowrite")
 		idm.ilock("")
 		if idm.itype == I_DIR {
 			panic("write to dir")
@@ -336,11 +337,10 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if app {
 			off = idm.size
 		}
-		wrote, err := idm.iwrite(src, off, n)
-		idm._iupdate()
+		wrote, err := idm.iwrite(opid, src, off, n)
+		idm._iupdate(opid)
 		idm.iunlock("")
-		idm.fs.fslog.Op_end()
-
+		idm.fs.fslog.Op_end(opid)
 		if err != 0 {
 			return i, err
 		}
@@ -367,14 +367,14 @@ func (idm *imemnode_t) do_mmapi(off, len int, inc bool) ([]common.Mmapinfo_t, co
 	return idm.immapinfo(off, len, inc)
 }
 
-func (idm *imemnode_t) do_dirchk(wantdir bool) common.Err_t {
+func (idm *imemnode_t) do_dirchk(opid opid_t, wantdir bool) common.Err_t {
 	amdir := idm.itype == I_DIR
 	if wantdir && !amdir {
 		return -common.ENOTDIR
 	} else if !wantdir && amdir {
 		return -common.EISDIR
 	} else if amdir {
-		amempty, err := idm.idirempty()
+		amempty, err := idm.idirempty(opid)
 		if err != 0 {
 			return err
 		}
@@ -386,57 +386,57 @@ func (idm *imemnode_t) do_dirchk(wantdir bool) common.Err_t {
 }
 
 // unlink cannot encounter OOM since directory page caches are eagerly loaded.
-func (idm *imemnode_t) do_unlink(name string) common.Err_t {
-	_, err := idm.iunlink(name)
+func (idm *imemnode_t) do_unlink(opid opid_t, name string) common.Err_t {
+	_, err := idm.iunlink(opid, name)
 	if err == 0 {
-		idm._iupdate()
+		idm._iupdate(opid)
 	}
 	return err
 }
 
 // create new dir ent with given inode number
-func (idm *imemnode_t) do_insert(fn string, n common.Inum_t) common.Err_t {
-	err := idm.iinsert(fn, n)
+func (idm *imemnode_t) do_insert(opid opid_t, fn string, n common.Inum_t) common.Err_t {
+	err := idm.iinsert(opid, fn, n)
 	if err == 0 {
-		idm._iupdate()
+		idm._iupdate(opid)
 	}
 	return err
 }
 
-func (idm *imemnode_t) do_createnod(fn string, maj, min int) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) do_createnod(opid opid_t, fn string, maj, min int) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		return 0, -common.ENOTDIR
 	}
 
 	itype := I_DEV
-	cnext, err := idm.icreate(fn, itype, maj, min)
-	idm._iupdate()
+	cnext, err := idm.icreate(opid, fn, itype, maj, min)
+	idm._iupdate(opid)
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_createfile(fn string) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) do_createfile(opid opid_t, fn string) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		return 0, -common.ENOTDIR
 	}
 
 	itype := I_FILE
-	cnext, err := idm.icreate(fn, itype, 0, 0)
-	idm._iupdate()
+	cnext, err := idm.icreate(opid, fn, itype, 0, 0)
+	idm._iupdate(opid)
 	return cnext, err
 }
 
-func (idm *imemnode_t) do_createdir(fn string) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) do_createdir(opid opid_t, fn string) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		return 0, -common.ENOTDIR
 	}
 
 	itype := I_DIR
-	cnext, err := idm.icreate(fn, itype, 0, 0)
-	idm._iupdate()
+	cnext, err := idm.icreate(opid, fn, itype, 0, 0)
+	idm._iupdate(opid)
 	return cnext, err
 }
 
-func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
+func (fs *Fs_t) _fullpath(opid opid_t, inum common.Inum_t) (string, common.Err_t) {
 	c, err := fs.icache.Iref_locked(inum, "_fullpath")
 	if err != 0 {
 		return "", err
@@ -455,7 +455,7 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 			c.iunlock("do_fullpath_c")
 			return "", -common.ENOHEAP
 		}
-		pari, err := c.ilookup("..")
+		pari, err := c.ilookup(opid, "..")
 		if err != 0 {
 			c.iunlock("do_fullpath_c")
 			return "", err
@@ -466,7 +466,7 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 			return "", err
 		}
 		par.ilock("do_fullpath_par")
-		name, err := par._denamefor(last)
+		name, err := par._denamefor(opid, last)
 		if err != 0 {
 			if err == -common.ENOENT {
 				panic("child must exist")
@@ -489,17 +489,17 @@ func (fs *Fs_t) _fullpath(inum common.Inum_t) (string, common.Err_t) {
 }
 
 // caller holds lock on idm
-func (idm *imemnode_t) _linkdown() {
+func (idm *imemnode_t) _linkdown(opid opid_t) {
 	idm.links--
 	if idm.links <= 0 {
-		idm.fs.icache.markOrphan(idm.inum)
+		idm.fs.icache.markOrphan(opid, idm.inum)
 	}
-	idm._iupdate()
+	idm._iupdate(opid)
 }
 
-func (idm *imemnode_t) _linkup() {
+func (idm *imemnode_t) _linkup(opid opid_t) {
 	idm.links++
-	idm._iupdate()
+	idm._iupdate(opid)
 }
 
 // metadata block interface; only one inode touches these blocks at a time,
@@ -556,38 +556,38 @@ func (ic *imemnode_t) flushto(blk *common.Bdev_block_t, inum common.Inum_t) bool
 }
 
 // ensure block exists
-func (idm *imemnode_t) ensureb(blkno int, writing bool) (int, bool, common.Err_t) {
+func (idm *imemnode_t) ensureb(opid opid_t, blkno int, writing bool) (int, bool, common.Err_t) {
 	if !writing || blkno != 0 {
 		return blkno, false, 0
 	}
-	nblkno, err := idm.fs.balloc.Balloc()
+	nblkno, err := idm.fs.balloc.Balloc(opid)
 	return nblkno, true, err
 }
 
 // ensure entry in indirect block exists
-func (idm *imemnode_t) ensureind(blk *common.Bdev_block_t, slot int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) ensureind(opid opid_t, blk *common.Bdev_block_t, slot int, writing bool) (int, common.Err_t) {
 	off := slot * 8
 	s := blk.Data[:]
 	blkn := common.Readn(s, 8, off)
-	blkn, isnew, err := idm.ensureb(blkn, writing)
+	blkn, isnew, err := idm.ensureb(opid, blkn, writing)
 	if err != 0 {
 		return 0, err
 	}
 	if isnew {
 		common.Writen(s, 8, off, blkn)
-		idm.fs.fslog.Write(blk)
+		idm.fs.fslog.Write(opid, blk)
 	}
 	return blkn, 0
 }
 
 // Assumes that every block until b exits
 // XXX change to wrap blockiter_t instead
-func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) fbn2block(opid opid_t, fbn int, writing bool) (int, common.Err_t) {
 	if fbn < NIADDRS {
 		if idm.addrs[fbn] != 0 {
 			return idm.addrs[fbn], 0
 		}
-		blkn, err := idm.fs.balloc.Balloc()
+		blkn, err := idm.fs.balloc.Balloc(opid)
 		if err != 0 {
 			return 0, err
 		}
@@ -599,7 +599,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 		fbn -= NIADDRS
 		if fbn < INDADDR {
 			indno := idm.indir
-			indno, isnew, err := idm.ensureb(indno, writing)
+			indno, isnew, err := idm.ensureb(opid, indno, writing)
 			if err != 0 {
 				return 0, err
 			}
@@ -611,13 +611,13 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 			if err != 0 {
 				return 0, err
 			}
-			blkn, err := idm.ensureind(indblk, fbn, writing)
+			blkn, err := idm.ensureind(opid, indblk, fbn, writing)
 			idm.fs.fslog.Relse(indblk, "indblk")
 			return blkn, err
 		} else if fbn < INDADDR*INDADDR {
 			fbn -= INDADDR
 			dindno := idm.dindir
-			dindno, isnew, err := idm.ensureb(dindno, writing)
+			dindno, isnew, err := idm.ensureb(opid, dindno, writing)
 			if err != 0 {
 				return 0, err
 			}
@@ -630,14 +630,14 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 				return 0, err
 			}
 
-			indno, err := idm.ensureind(dindblk, fbn/INDADDR, writing)
+			indno, err := idm.ensureind(opid, dindblk, fbn/INDADDR, writing)
 			idm.fs.fslog.Relse(dindblk, "dindblk")
 
 			indblk, err := idm.mbread(indno)
 			if err != 0 {
 				return 0, err
 			}
-			blkn, err := idm.ensureind(indblk, fbn%INDADDR, writing)
+			blkn, err := idm.ensureind(opid, indblk, fbn%INDADDR, writing)
 			idm.fs.fslog.Relse(indblk, "indblk2")
 			return blkn, err
 		} else {
@@ -649,7 +649,7 @@ func (idm *imemnode_t) fbn2block(fbn int, writing bool) (int, common.Err_t) {
 }
 
 // Allocates blocks from startblock through endblock. Returns blkn of endblock.
-func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing bool) (int, common.Err_t) {
 	blkn := 0
 	var err common.Err_t
 
@@ -666,13 +666,13 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, c
 				return 0, -common.ENOHEAP
 			}
 			// XXX we could remember where the last slot was
-			blkn, err = idm.fbn2block(b, writing)
+			blkn, err = idm.fbn2block(opid, b, writing)
 			if err != 0 {
 				return blkn, err
 			}
 		}
 	} else {
-		blkn, err = idm.fbn2block(whichblk, writing)
+		blkn, err = idm.fbn2block(opid, whichblk, writing)
 		if err != 0 {
 			return blkn, err
 		}
@@ -682,10 +682,13 @@ func (idm *imemnode_t) bmapfill(lastblk int, whichblk int, writing bool) (int, c
 
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
-func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, common.Err_t) {
+	if writing && opid == 0 {
+		panic("offsetblk: writing but no opid\n")
+	}
 	whichblk := offset / common.BSIZE
 	lastblk := idm.size / common.BSIZE
-	blkn, err := idm.bmapfill(lastblk, whichblk, writing)
+	blkn, err := idm.bmapfill(opid, lastblk, whichblk, writing)
 	if err != 0 {
 		return blkn, err
 	}
@@ -696,11 +699,11 @@ func (idm *imemnode_t) offsetblk(offset int, writing bool) (int, common.Err_t) {
 }
 
 // Return locked buffer for offset
-func (idm *imemnode_t) off2buf(offset int, len int, fillhole bool, fill bool, s string) (*common.Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) off2buf(opid opid_t, offset int, len int, fillhole bool, fill bool, s string) (*common.Bdev_block_t, common.Err_t) {
 	if offset%common.PGSIZE+len > common.PGSIZE {
 		panic("off2buf")
 	}
-	blkno, err := idm.offsetblk(offset, fillhole)
+	blkno, err := idm.offsetblk(opid, offset, fillhole)
 	if err != 0 {
 		return nil, err
 	}
@@ -734,7 +737,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 		}
 		m := min(common.BSIZE-offset%common.BSIZE, dst.Remain())
 		m = min(isz-offset, m)
-		b, err := idm.off2buf(offset, m, false, true, "iread")
+		b, err := idm.off2buf(opid_t(0), offset, m, false, true, "iread")
 		if err != 0 {
 			return c, err
 		}
@@ -758,7 +761,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 	return c, 0
 }
 
-func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, common.Err_t) {
+func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n int) (int, common.Err_t) {
 	idm.fs.istats.Niwrite.inc()
 	sz := min(src.Totalsz(), n)
 	newsz := offset + sz
@@ -770,7 +773,7 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		}
 		m := min(common.BSIZE-offset%common.BSIZE, sz-c)
 		fill := m != common.BSIZE
-		b, err := idm.off2buf(offset, m, true, fill, "iwrite")
+		b, err := idm.off2buf(opid, offset, m, true, fill, "iwrite")
 		if err != 0 {
 			return c, err
 		}
@@ -784,7 +787,8 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 		dst := b.Data[s : s+m]
 		read, err := src.Uioread(dst)
 		b.Unlock()
-		idm.fs.fslog.Write_ordered(b)
+		idm.fs.fslog.Write_ordered(opid, b)
+		// idm.fs.fslog.Write(opid, b)  // XXX everything through log for now
 		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
@@ -799,11 +803,11 @@ func (idm *imemnode_t) iwrite(src common.Userio_i, offset int, n int) (int, comm
 	return wrote, 0
 }
 
-func (idm *imemnode_t) itrunc(newlen uint) common.Err_t {
+func (idm *imemnode_t) itrunc(opid opid_t, newlen uint) common.Err_t {
 	if newlen > uint(idm.size) {
 		// this will cause the hole to filled in with zero blocks which
 		// are logged to disk
-		_, err := idm.offsetblk(int(newlen), true)
+		_, err := idm.offsetblk(opid, int(newlen), true)
 		if err != 0 {
 			return err
 		}
@@ -817,8 +821,8 @@ func (idm *imemnode_t) itrunc(newlen uint) common.Err_t {
 
 // reverts icreate(). called after failure to allocate that prevents an FS
 // operation from continuing.
-func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.Err_t {
-	ci, err := idm.iunlink(childn)
+func (idm *imemnode_t) create_undo(opid opid_t, childi common.Inum_t, childn string) common.Err_t {
+	ci, err := idm.iunlink(opid, childn)
 	if err != 0 {
 		panic("but insert just succeeded")
 	}
@@ -833,11 +837,11 @@ func (idm *imemnode_t) create_undo(childi common.Inum_t, childn string) common.E
 	ni.W_itype(I_DEAD)
 	ib.Unlock()
 	idm.fs.fslog.Relse(ib, "create_undo")
-	idm.fs.ialloc.Ifree(childi)
+	idm.fs.ialloc.Ifree(opid, childi)
 	return 0
 }
 
-func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) icreate(opid opid_t, name string, nitype, major, minor int) (common.Inum_t, common.Err_t) {
 
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")
@@ -849,7 +853,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 		panic("inconsistent args")
 	}
 	// make sure file does not already exist
-	de, err := idm._delookup(name)
+	de, err := idm._delookup(opid, name)
 	if err == 0 {
 		return de.inum, -common.EEXIST
 	}
@@ -857,7 +861,7 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 	idm.fs.istats.Nicreate.inc()
 
 	// allocate new inode
-	newinum, err := idm.fs.ialloc.Ialloc()
+	newinum, err := idm.fs.ialloc.Ialloc(opid)
 	newbn := idm.fs.ialloc.Iblock(newinum)
 	newioff := ioffset(newinum)
 	if err != 0 {
@@ -885,13 +889,13 @@ func (idm *imemnode_t) icreate(name string, nitype, major, minor int) (common.In
 	}
 
 	// write new directory entry referencing newinode
-	err = idm._deinsert(name, newinum)
+	err = idm._deinsert(opid, name, newinum)
 	if err != 0 {
 		newinode.W_itype(I_DEAD)
-		idm.fs.ialloc.Ifree(newinum)
+		idm.fs.ialloc.Ifree(opid, newinum)
 	}
 	newiblk.Unlock()
-	idm.fs.fslog.Write(newiblk)
+	idm.fs.fslog.Write(opid, newiblk)
 	idm.fs.fslog.Relse(newiblk, "icreate")
 	return newinum, err
 }
@@ -918,7 +922,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmap
 		if !common.Resadd_noblock(gimme) {
 			return nil, -common.ENOHEAP
 		}
-		buf, err := idm.off2buf(o+i, common.PGSIZE, false, true, "immapinfo")
+		buf, err := idm.off2buf(opid_t(0), o+i, common.PGSIZE, false, true, "immapinfo")
 		if err != 0 {
 			return nil, err
 		}
@@ -951,11 +955,11 @@ func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
 // re-reading and re-locking indirect blocks. it may simultaneously hold
 // references to at most two blocks until blockiter_t.release() is called.
 type blockiter_t struct {
-	idm   *imemnode_t
-	which int
+	idm      *imemnode_t
+	which    int
 	tryevict bool
-	dub   *common.Bdev_block_t
-	lasti *common.Bdev_block_t
+	dub      *common.Bdev_block_t
+	lasti    *common.Bdev_block_t
 }
 
 func (bl *blockiter_t) bi_init(idm *imemnode_t, tryevict bool) {
@@ -1160,7 +1164,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 	var tryevict bool
 	for remains {
 		tryevict = tryevict || ca.Shouldevict(gimme)
-		idm.fs.fslog.Op_begin("ifree")
+		opid := idm.fs.fslog.Op_begin("ifree")
 
 		// set of blocks that will be written by this transaction;
 		// include an entry for the inode block (to update major) and a
@@ -1178,7 +1182,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 			var ok bool
 			blkno, ok, which, remains = bliter.next(which)
 			if ok {
-				idm.fs.balloc.Bfree(blkno)
+				idm.fs.balloc.Bfree(opid, blkno)
 				freeblk := idm.fs.balloc.alloc.bitmapblkno(blkno)
 				distinct[freeblk] = true
 			}
@@ -1196,15 +1200,15 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		if !remains {
 			// all the blocks have been freed
 			idm.itype = I_DEAD
-			idm.fs.icache.clearOrphan(idm.inum)
-			idm.fs.ialloc.Ifree(idm.inum)
+			idm.fs.icache.clearOrphan(opid, idm.inum)
+			idm.fs.ialloc.Ifree(opid, idm.inum)
 		}
 
 		idm.flushto(iblk, idm.inum)
 		iblk.Unlock()
-		idm.fs.fslog.Write(iblk)
+		idm.fs.fslog.Write(opid, iblk)
 		idm.fs.fslog.Relse(iblk, "ifree")
-		idm.fs.fslog.Op_end()
+		idm.fs.fslog.Op_end(opid)
 	}
 
 	return 0
@@ -1272,12 +1276,12 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 // (the crash is the "last" close). When links reaches zero the fs marks the
 // inode as an orphan and when calling ifree the fs clears the orphan bit.
 
-func (icache *icache_t) markOrphan(inum common.Inum_t) {
-	icache.orphanbitmap.Mark(int(inum))
+func (icache *icache_t) markOrphan(opid opid_t, inum common.Inum_t) {
+	icache.orphanbitmap.Mark(opid, int(inum))
 }
 
-func (icache *icache_t) clearOrphan(inum common.Inum_t) {
-	icache.orphanbitmap.Unmark(int(inum))
+func (icache *icache_t) clearOrphan(opid opid_t, inum common.Inum_t) {
+	icache.orphanbitmap.Unmark(opid, int(inum))
 }
 
 func (icache *icache_t) freeOrphan(inum common.Inum_t) {
@@ -1333,7 +1337,7 @@ func (icache *icache_t) RecoverOrphans() {
 func (icache *icache_t) addDead(imem *imemnode_t) {
 	icache.Lock()
 	defer icache.Unlock()
-	if len(icache.dead) > icache.fs.fslog.loglen {
+	if len(icache.dead) > icache.fs.fslog.Loglen() {
 		panic("addDead")
 	}
 	icache.dead = append(icache.dead, imem)
@@ -1380,15 +1384,15 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 
 func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, common.Err_t) {
 	ref, created, err := icache.refcache.Lookup(int(inum),
-	    func(in int, ref *common.Ref_t) common.Obj_t {
-		ret := &imemnode_t{}
-		// inum can be read without ilock, and therefore must be
-		// initialized before the refcache unlocks.
-		ret.inum = common.Inum_t(in)
-		ret.ref = ref
-		ret.ilock("")
-		return ret
-	})
+		func(in int, ref *common.Ref_t) common.Obj_t {
+			ret := &imemnode_t{}
+			// inum can be read without ilock, and therefore must be
+			// initialized before the refcache unlocks.
+			ret.inum = common.Inum_t(in)
+			ret.ref = ref
+			ret.ilock("")
+			return ret
+		})
 	if err != 0 {
 		return nil, err
 	}
@@ -1472,8 +1476,8 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
 	return ialloc
 }
 
-func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
-	n, err := ialloc.alloc.FindAndMark()
+func (ialloc *ibitmap_t) Ialloc(opid opid_t) (common.Inum_t, common.Err_t) {
+	n, err := ialloc.alloc.FindAndMark(opid)
 	if err != 0 {
 		return 0, err
 	}
@@ -1491,11 +1495,11 @@ func (ialloc *ibitmap_t) Ialloc() (common.Inum_t, common.Err_t) {
 // once Ifree() returns, inum can be reallocated by a concurrent operation.
 // therefore, the caller must either have the block for inum locked or must not
 // further modify the block for inum after calling Ifree.
-func (ialloc *ibitmap_t) Ifree(inum common.Inum_t) common.Err_t {
+func (ialloc *ibitmap_t) Ifree(opid opid_t, inum common.Inum_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
-	return ialloc.alloc.Unmark(int(inum))
+	return ialloc.alloc.Unmark(opid, int(inum))
 }
 
 func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {

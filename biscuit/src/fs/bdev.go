@@ -125,13 +125,17 @@ func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
 	b.Write_async()
 }
 
+func (bcache *bcache_t) Write_async_through(b *common.Bdev_block_t) {
+	b.Write_async()
+}
+
 // blks must be contiguous on disk
 func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 	if bdev_debug {
 		fmt.Printf("bcache_write_async_blks %v\n", blks.Len())
 	}
 	if blks.Len() == 0 {
-		panic("bcache_write_async_blks\n")
+		return
 	}
 	n := blks.FrontBlock().Block
 	for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
@@ -142,6 +146,29 @@ func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
 		}
 		n++
 		bcache.refcache.Refup(b.Ref)
+	}
+	// one request for all blks
+	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
+	blks.FrontBlock().Disk.Start(ider)
+}
+
+func (bcache *bcache_t) Write_async_blks_through(blks *common.BlkList_t) {
+	if bdev_debug {
+		fmt.Printf("bcache_write_async_blk_through %v\n", blks.Len())
+	}
+	if blks.Len() == 0 {
+		return
+	}
+	if bdev_debug {
+		n := blks.FrontBlock().Block
+		for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
+			// sanity check
+			if b.Block != n {
+				fmt.Printf("%d %d\n", b.Block, n)
+				panic("not contiguous\n")
+			}
+			n++
+		}
 	}
 	// one request for all blks
 	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
@@ -292,7 +319,10 @@ type bbitmap_t struct {
 func mkBallocater(fs *Fs_t, start, len, first int) *bbitmap_t {
 	balloc := &bbitmap_t{}
 	balloc.alloc = mkAllocater(fs, start, len, fs.fslog)
-	fmt.Printf("bmap start %v bmaplen %v first datablock %v free %d\n", start, len, first, balloc.alloc.nfreebits)
+	if bdev_debug {
+		fmt.Printf("bmap start %v bmaplen %v first datablock %v free %d\n", start, len, first,
+			balloc.alloc.nfreebits)
+	}
 	balloc.first = first
 	balloc.start = start
 	balloc.len = len
@@ -300,8 +330,8 @@ func mkBallocater(fs *Fs_t, start, len, first int) *bbitmap_t {
 	return balloc
 }
 
-func (balloc *bbitmap_t) Balloc() (int, common.Err_t) {
-	ret, err := balloc.balloc1()
+func (balloc *bbitmap_t) Balloc(opid opid_t) (int, common.Err_t) {
+	ret, err := balloc.balloc1(opid)
 	if err != 0 {
 		return 0, err
 	}
@@ -323,12 +353,12 @@ func (balloc *bbitmap_t) Balloc() (int, common.Err_t) {
 	var zdata [common.BSIZE]uint8
 	copy(blk.Data[:], zdata[:])
 	blk.Unlock()
-	balloc.fs.fslog.Write(blk)
+	balloc.fs.fslog.Write(opid, blk)
 	balloc.fs.bcache.Relse(blk, "balloc")
 	return ret, 0
 }
 
-func (balloc *bbitmap_t) Bfree(blkno int) common.Err_t {
+func (balloc *bbitmap_t) Bfree(opid opid_t, blkno int) common.Err_t {
 	blkno -= balloc.first
 	if bdev_debug {
 		fmt.Printf("bfree: %v free before %d\n", blkno, balloc.alloc.nfreebits)
@@ -339,7 +369,7 @@ func (balloc *bbitmap_t) Bfree(blkno int) common.Err_t {
 	if blkno >= balloc.len*common.BSIZE*8 {
 		panic("bfree too large")
 	}
-	return balloc.alloc.Unmark(blkno)
+	return balloc.alloc.Unmark(opid, blkno)
 }
 
 func (balloc *bbitmap_t) Stats() string {
@@ -349,8 +379,8 @@ func (balloc *bbitmap_t) Stats() string {
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func (balloc *bbitmap_t) balloc1() (int, common.Err_t) {
-	blkn, err := balloc.alloc.FindAndMark()
+func (balloc *bbitmap_t) balloc1(opid opid_t) (int, common.Err_t) {
+	blkn, err := balloc.alloc.FindAndMark(opid)
 	if err != 0 {
 		fmt.Printf("balloc1: %v\n", err)
 		return 0, err

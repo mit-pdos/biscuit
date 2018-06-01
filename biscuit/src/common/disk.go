@@ -27,24 +27,24 @@ type Obj_t interface {
 }
 
 type Ref_t struct {
-	Obj        Obj_t
-	Refcnt     int64
-	Key        int
-	Refnext    *Ref_t
-	Refprev    *Ref_t
+	Obj     Obj_t
+	Refcnt  int64
+	Key     int
+	Refnext *Ref_t
+	Refprev *Ref_t
 }
 
 type Bdev_block_t struct {
 	sync.Mutex
-	Block int
+	Block      int
 	_try_evict bool
-	Pa    Pa_t
-	Data  *Bytepg_t
-	Ref	*Ref_t
-	Name  string
-	Mem   Blockmem_i
-	Disk  Disk_i
-	Cb    Block_cb_i
+	Pa         Pa_t
+	Data       *Bytepg_t
+	Ref        *Ref_t
+	Name       string
+	Mem        Blockmem_i
+	Disk       Disk_i
+	Cb         Block_cb_i
 }
 
 type Bdevcmd_t uint
@@ -260,6 +260,6 @@ func MkBlock(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev
 	return b
 }
 
-func (blk *Bdev_block_t) free_page() {
+func (blk *Bdev_block_t) Free_page() {
 	blk.Mem.Free(blk.Pa)
 }

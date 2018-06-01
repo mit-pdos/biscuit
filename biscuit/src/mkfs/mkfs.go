@@ -9,8 +9,8 @@ import "common"
 import "ufs"
 
 const (
-	nlogblks   = 256
-	ninodeblks = 100*50
+	nlogblks   = 1024 // 2048
+	ninodeblks = 100 * 50
 	ndatablks  = 40000
 )
 
@@ -87,7 +87,6 @@ func main() {
 		fmt.Printf("not a valid fs: no root inode\n")
 		os.Exit(1)
 	}
-	// fmt.Printf("root inode %v\n", st)
 
 	addfiles(fs, os.Args[4])
 

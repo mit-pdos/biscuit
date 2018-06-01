@@ -2,6 +2,13 @@ package common
 
 import "unsafe"
 
+func Min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func Rounddown(v int, b int) int {
 	return v - (v % b)
 }
