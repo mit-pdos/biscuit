@@ -852,7 +852,7 @@ func (l *log_t) logger(h index_t) {
 					adm = nil
 				}
 			case <-l.force:
-				if t.start == t.head { // nothing to commit?
+				if t.start+1 == t.head { // nothing to commit?
 					l.forcewait <- t.waitc
 					t.waitc <- true
 				} else {
@@ -948,7 +948,7 @@ func (log *log_t) recover() index_t {
 
 	log.ml.bcache.Relse(headblk, "recover")
 	if tail == head {
-		fmt.Printf("no FS recovery needed\n")
+		fmt.Printf("no FS recovery needed: head %d\n", head)
 		return head
 	}
 	fmt.Printf("starting FS recovery start %d end %d\n", tail, head)
