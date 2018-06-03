@@ -470,10 +470,6 @@ func copyDisk(src, dst string) (err error) {
 	if err != nil {
 		return err
 	}
-	//err = out.Sync()
-	//if err != nil {
-	//      return err
-	//}
 	return err
 }
 
@@ -497,7 +493,6 @@ func doTestAtomic(tfs *Ufs_t, t *testing.T) {
 		t.Fatalf("mkFile %v failed", "tmp")
 	}
 	tfs.Sync()
-	fmt.Printf("rename\n")
 	e = tfs.Rename("tmp", "f")
 	if e != 0 {
 		t.Fatalf("Rename failed")
@@ -559,6 +554,7 @@ func doTestOrdered(tfs *Ufs_t, t *testing.T) {
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
+	tfs.Sync()
 }
 
 func doCheckOrdered(tfs *Ufs_t) (string, bool) {
@@ -718,6 +714,7 @@ func produceTrace(disk string, t *testing.T, init func(*Ufs_t), run func(*Ufs_t,
 	// Now start tracing
 	tfs = BootFS("tmp.img")
 	tfs.ahci.StartTrace()
+
 	run(tfs, t)
 	tfs.fs.StopFS()
 

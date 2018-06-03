@@ -33,18 +33,22 @@ type Syslimit_t struct {
 	Blocks int
 }
 
-var Syslimit = Syslimit_t{
-	Sysprocs: 1e4,
-	Futexes:  1024,
-	Arpents:  1024,
-	Routes:   32,
-	Tcpsegs:  16,
-	Socks:    1e5,
-	Vnodes:   10000, // 1e6,
-	Dirents:  1 << 20,
-	Pipes:    1e4,
-	// 8GB of block pages
-	Blocks: 100000, // 1 << 21,
+var Syslimit *Syslimit_t = MkSysLimit()
+
+func MkSysLimit() *Syslimit_t {
+	return &Syslimit_t{
+		Sysprocs: 1e4,
+		Futexes:  1024,
+		Arpents:  1024,
+		Routes:   32,
+		Tcpsegs:  16,
+		Socks:    1e5,
+		Vnodes:   10000, // 1e6,
+		Dirents:  1 << 20,
+		Pipes:    1e4,
+		// 8GB of block pages
+		Blocks: 100000, // 1 << 21,
+	}
 }
 
 func (s *Sysatomic_t) _aptr() *int64 {
