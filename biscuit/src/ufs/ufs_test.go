@@ -453,11 +453,11 @@ func TestFSConcurUnlink(t *testing.T) {
 // Check ordered
 
 const (
-	ndatablksordered = 8 // small, to cause block reuse
-	norderedblks     = 2 // this causes reuse
+	ndatablksordered = 8 // small, to cause block reuse, but at least for 1 byte in free map
+	norderedblks     = 7 // this causes reuse
 )
 
-func TestOrdered(t *testing.T) {
+func TestOrderedFile(t *testing.T) {
 	dst := "tmp.img"
 
 	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
@@ -482,8 +482,49 @@ func TestOrdered(t *testing.T) {
 	tfs = BootFS(dst) // causes an apply
 
 	d, e := tfs.Read("f")
-	if uint8(d[0]) != 3 {
-		t.Fatalf("Wrong data in g %v", d[0])
+	for i := 0; i < 7*common.BSIZE; i++ {
+		if uint8(d[i]) != 2 {
+			t.Fatalf("Wrong data in f %v at %v", d[0], i)
+		}
+	}
+}
+
+func TestOrderedDir(t *testing.T) {
+	dst := "tmp.img"
+	d := "d"
+
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
+	tfs := BootFS(dst)
+
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+
+	tfs.Sync()
+
+	e = tfs.UnlinkDir(d)
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
+
+	tfs.Sync()
+
+	ub := mkData(3, common.BSIZE*7)
+	e = tfs.MkFile("f", ub)
+	if e != 0 {
+		panic("mkFile f failed")
+	}
+	tfs.Sync()
+
+	ShutdownFS(tfs)
+	tfs = BootFS(dst) // causes an apply
+
+	data, e := tfs.Read("f")
+	for i := 0; i < 7*common.BSIZE; i++ {
+		if uint8(data[i]) != 3 {
+			t.Fatalf("Wrong data in f %v at %v", data[i], i)
+		}
 	}
 }
 
