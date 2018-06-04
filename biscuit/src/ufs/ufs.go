@@ -139,6 +139,15 @@ func (ufs *Ufs_t) Unlink(p string) common.Err_t {
 	return err
 }
 
+func (ufs *Ufs_t) UnlinkDir(p string) common.Err_t {
+	err := ufs.fs.Fs_unlink(p, 0, true)
+	if err != 0 {
+		fmt.Printf("doUnlink %v failed %v\n", p, err)
+		return err
+	}
+	return err
+}
+
 func (ufs *Ufs_t) Stat(p string) (*common.Stat_t, common.Err_t) {
 	s := &common.Stat_t{}
 	err := ufs.fs.Fs_stat(p, s, 0)
