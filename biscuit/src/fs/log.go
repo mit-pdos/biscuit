@@ -78,6 +78,18 @@ func (log *log_t) Force() {
 	<-c
 }
 
+// For testing
+func (log *log_t) ForceApply() {
+	if memfs {
+		panic("memfs")
+	}
+	if log_debug {
+		fmt.Printf("log force apply\n")
+	}
+	log.applyforce <- true
+	<-log.applyforce
+}
+
 // Write increments ref so that the log has always a valid ref to the buf's
 // page.  The logging layer refdowns when it it is done with the page.  The
 // caller of log_write shouldn't hold buf's lock.
@@ -595,6 +607,7 @@ type log_t struct {
 	commitc     chan *trans_t
 	commitdonec chan bool
 	applyc      chan index_t
+	applyforce  chan bool
 
 	// some stats
 	napply          int
@@ -671,6 +684,7 @@ func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.commitc = make(chan *trans_t)
 	log.commitdonec = make(chan bool)
 	log.applyc = make(chan index_t)
+	log.applyforce = make(chan bool)
 	log.logstop = make(chan bool)
 	log.commitstop = make(chan bool)
 	log.applystop = make(chan bool)
@@ -716,7 +730,7 @@ func (log *log_t) apply(tail, head index_t) index_t {
 	log.ml.commit_tail(head)
 
 	if log_debug {
-		fmt.Printf("apply log: updated tail %d\n", tail)
+		fmt.Printf("apply log: updated tail %d\n", head)
 	}
 
 	return head
@@ -725,6 +739,7 @@ func (log *log_t) apply(tail, head index_t) index_t {
 // the apply daemon owns the tail of the log
 func (l *log_t) applier(t index_t) {
 	tail := t
+	head := t
 	inprogress := false
 	waiting := false
 	stopping := false
@@ -736,7 +751,7 @@ func (l *log_t) applier(t index_t) {
 				l.applystop <- true
 				return
 			}
-		case head := <-l.applyc:
+		case head = <-l.applyc:
 			if log_debug {
 				fmt.Printf("applier: tail %d head %d\n", tail, head)
 			}
@@ -756,6 +771,9 @@ func (l *log_t) applier(t index_t) {
 					c <- t
 				}()
 			}
+		case <-l.applyforce:
+			tail = l.apply(tail, head)
+			l.applyforce <- true
 		case tail = <-c:
 			inprogress = false
 			if waiting {

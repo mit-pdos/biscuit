@@ -489,7 +489,7 @@ func TestOrderedFile(t *testing.T) {
 	}
 }
 
-func TestOrderedDir(t *testing.T) {
+func doOrderedDir(t *testing.T, force bool) {
 	dst := "tmp.img"
 	d := "d"
 
@@ -515,10 +515,15 @@ func TestOrderedDir(t *testing.T) {
 	if e != 0 {
 		panic("mkFile f failed")
 	}
-	tfs.Sync()
+
+	if force {
+		tfs.SyncApply() // better not overwrite f's blocks
+	} else {
+		tfs.Sync()
+	}
 
 	ShutdownFS(tfs)
-	tfs = BootFS(dst) // causes an apply
+	tfs = BootFS(dst) // better not overwrite f's blocks
 
 	data, e := tfs.Read("f")
 	for i := 0; i < 7*common.BSIZE; i++ {
@@ -526,6 +531,14 @@ func TestOrderedDir(t *testing.T) {
 			t.Fatalf("Wrong data in f %v at %v", data[i], i)
 		}
 	}
+}
+
+func TestOrderderDirRecover(t *testing.T) {
+	doOrderedDir(t, false)
+}
+
+func TestOrderedDirApply(t *testing.T) {
+	doOrderedDir(t, true)
 }
 
 //

@@ -46,6 +46,15 @@ func (ufs *Ufs_t) Sync() common.Err_t {
 	return err
 }
 
+func (ufs *Ufs_t) SyncApply() common.Err_t {
+	err := ufs.fs.Fs_syncapply()
+	if err != 0 {
+		fmt.Printf("Sync failed %v\n", err)
+		return err
+	}
+	return err
+}
+
 func (ufs *Ufs_t) MkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
 	if err != 0 {
