@@ -683,7 +683,7 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, common.Err_t) {
-	if writing && opid == 0 {
+	if writing && opid == 0 && !memfs {
 		panic("offsetblk: writing but no opid\n")
 	}
 	whichblk := offset / common.BSIZE
