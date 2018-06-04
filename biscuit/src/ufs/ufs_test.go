@@ -450,6 +450,44 @@ func TestFSConcurUnlink(t *testing.T) {
 }
 
 //
+// Check ordered
+
+const (
+	ndatablksordered = 8 // small, to cause block reuse
+	norderedblks     = 2 // this causes reuse
+)
+
+func TestOrdered(t *testing.T) {
+	dst := "tmp.img"
+
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
+	tfs := BootFS(dst)
+
+	ub := mkData(1, common.BSIZE*norderedblks)
+	e := tfs.MkFile("f", ub)
+	if e != 0 {
+		panic("mkFile f failed")
+	}
+	tfs.Sync()
+
+	ub = mkData(2, common.BSIZE*norderedblks)
+	e = tfs.Update("f", ub)
+	if e != 0 {
+		t.Fatalf("Update %v failed", "g")
+	}
+
+	tfs.Sync()
+
+	ShutdownFS(tfs)
+	tfs = BootFS(dst) // causes an apply
+
+	d, e := tfs.Read("f")
+	if uint8(d[0]) != 3 {
+		t.Fatalf("Wrong data in g %v", d[0])
+	}
+}
+
+//
 // Check traces for crash safety
 //
 
@@ -518,68 +556,6 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 		for i := range d {
 			if uint8(d[i]) != v {
 				return fmt.Sprintf("Mixed data in f %v %v", v, d[i]), false
-			}
-		}
-	}
-	return "", true
-}
-
-// check that f1 doesn't contain f2's data after recovery.  this could happen
-// for ordered writes to f2, if f2's ordered list is written before the commit
-// of the unlink of f1.  but ordered write for f2 is turned into a logged since
-// its first write (zero-ing) is a logged write.
-
-const (
-	ndatablksordered = 8 // small, to cause block reuse
-	norderedblks     = 2 // this causes reuse
-)
-
-func doOrderedInit(tfs *Ufs_t) {
-	ub := mkData(1, common.BSIZE*norderedblks)
-	e := tfs.MkFile("f1", ub)
-	if e != 0 {
-		panic("mkFile f1 failed")
-	}
-	fmt.Printf("Init done\n")
-}
-
-func doTestOrdered(tfs *Ufs_t, t *testing.T) {
-	e := tfs.Unlink("f1")
-	if e != 0 {
-		t.Fatalf("Unlink failed")
-	}
-	// reuse block and flush ordered write to f2 before commit of unlink
-	ub := mkData(2, common.BSIZE*norderedblks)
-	e = tfs.MkFile("f2", ub)
-	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f2")
-	}
-	tfs.Sync()
-}
-
-func doCheckOrdered(tfs *Ufs_t) (string, bool) {
-	res, e := tfs.Ls("/")
-	if e != 0 {
-		return "doLs failed", false
-	}
-	st1, ok1 := res["f1"]
-	st2, ok2 := res["f2"]
-	if ok1 && ok2 {
-		return "f1 and f2 present", false
-	}
-	if ok2 {
-		if !(st2.Size() == 0 || st2.Size() == common.BSIZE*norderedblks) {
-			return fmt.Sprintf("Wrong size for f2 %v", st2.Size()), false
-		}
-	}
-	if ok1 {
-		if st1.Size() > 0 {
-			d, e := tfs.Read("f1")
-			if e != 0 || len(d) != int(st1.Size()) {
-				return "Read f1 failed", false
-			}
-			if uint8(d[0]) != 1 {
-				return fmt.Sprintf("Wrong data in f1 %v", d[0]), false
 			}
 		}
 	}
@@ -686,7 +662,6 @@ func genTraces(trace trace_t, t *testing.T, disk string, apply bool, check func(
 				ngo++
 				if ngo%100 == 0 { // don't get more than 100 disks ahead
 					wg.Wait()
-					ngo -= 100
 				}
 			}
 			cnt++
@@ -729,18 +704,6 @@ func TestTracesAtomic(t *testing.T) {
 	trace := readTrace("trace.json")
 	trace.printTrace(0, len(trace))
 	cnt := genTraces(trace, t, disk, true, doCheckAtomic)
-	fmt.Printf("#traces = %v\n", cnt)
-	os.Remove(disk)
-}
-
-func TestTracesOrdered(t *testing.T) {
-	fmt.Printf("Test TracesOrdered ...\n")
-	disk := "disk.img"
-	MkDisk(disk, nil, nlogblks, ninodeblks, ndatablksordered)
-	produceTrace(disk, t, doOrderedInit, doTestOrdered)
-	trace := readTrace("trace.json")
-	trace.printTrace(0, len(trace))
-	cnt := genTraces(trace, t, disk, true, doCheckOrdered)
 	fmt.Printf("#traces = %v\n", cnt)
 	os.Remove(disk)
 }
