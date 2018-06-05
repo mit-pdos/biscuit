@@ -144,6 +144,8 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nlogwrite)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
+	s += "\n\tnorder2logwrite "
+	s += strconv.Itoa(log.norder2logwrite)
 	s += "\n\tnlogwrite2order "
 	s += strconv.Itoa(log.nlogwrite2order)
 	s += "\n\tnabsorb "
@@ -390,15 +392,23 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	}
 
 	// if block is in log and now ordered, remove from log
-	_, present := trans.logpresent[buf.block.Block]
-	if buf.ordered && present {
+	_, lp := trans.logpresent[buf.block.Block]
+	if buf.ordered && lp {
 		log.nlogwrite2order++
 		trans.logged.RemoveBlock(buf.block.Block)
 		delete(trans.logpresent, buf.block.Block)
 	}
 
-	_, lp := trans.logpresent[buf.block.Block]
+	// if block is in ordered list and now logged, remove from ordered
 	_, op := trans.orderedpresent[buf.block.Block]
+	if !buf.ordered && op {
+		log.norder2logwrite++
+		trans.ordered.RemoveBlock(buf.block.Block)
+		delete(trans.orderedpresent, buf.block.Block)
+	}
+
+	_, lp = trans.logpresent[buf.block.Block]
+	_, op = trans.orderedpresent[buf.block.Block]
 
 	if lp || op {
 		// Buffer is already in logged or in ordered.  We wrote it
@@ -630,6 +640,7 @@ type log_t struct {
 	nccommit        int
 	nbapply         int
 	nlogwrite2order int
+	norder2logwrite int
 }
 
 // first log header block format

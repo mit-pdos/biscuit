@@ -541,6 +541,49 @@ func TestOrderedDirApply(t *testing.T) {
 	doOrderedDir(t, true)
 }
 
+// Test ordered to logged writes.  XXX Hard to get out without testing all possible traces
+func TestOrderedFileDir(t *testing.T) {
+	dst := "tmp.img"
+	d := "d"
+
+	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
+	tfs := BootFS(dst)
+
+	ub := mkData(3, common.BSIZE*7)
+	e := tfs.MkFile("f", ub)
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
+
+	// tfs.Sync()
+
+	e = tfs.Unlink("f")
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
+
+	// tfs.Sync()
+
+	e = tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+
+	// tfs.Sync()
+
+	ShutdownFS(tfs)
+	tfs = BootFS(dst) // better not overwrite dir's blocks
+
+	res, e := tfs.Ls(d)
+	if e != 0 {
+		t.Fatalf("Ls failed\n")
+	}
+	_, ok := res["."]
+	if !ok {
+		t.Fatalf(". not present")
+	}
+}
+
 //
 // Check traces for crash safety
 //
