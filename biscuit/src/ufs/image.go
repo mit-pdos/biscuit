@@ -72,11 +72,15 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 }
 
 func markAllocated(d []byte, startbit int) {
-	// mark a few extra as allocated
-	// fmt.Printf("mark allocated from %d\n", startbit)
-	for i := startbit / 8; i < common.BSIZE; i++ {
+	fmt.Printf("mark allocated from %d\n", startbit)
+	for i := (startbit / 8) + 1; i < common.BSIZE; i++ {
 		d[i] = byte(0xff)
 	}
+	rem := startbit % 8
+	for i := rem; i < 8; i++ {
+		d[startbit/8] |= 1 << uint(i)
+	}
+	fmt.Printf("first byte 0x%x\n", d[startbit/8])
 }
 
 func writeLog(f *os.File, nlogblks int) {

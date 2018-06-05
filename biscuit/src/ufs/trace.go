@@ -60,6 +60,10 @@ func (trace trace_t) printTrace(start int, end int) {
 	for i, r := range trace {
 		if i >= start && i < end {
 			fmt.Printf("  %d: %v %v\n", i, r.Cmd, r.BlkNo)
+			//for _, b := range r.BlkData {
+			//	fmt.Printf("0x%x", b)
+			//}
+			//fmt.Printf("\n")
 		}
 	}
 }
