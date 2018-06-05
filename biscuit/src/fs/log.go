@@ -28,10 +28,11 @@ const LogOffset = 1 // log block 0 is used for head
 const MaxBlkPerOp = 10
 const MaxDescriptor = common.BSIZE / 8
 const MaxOrdered = common.BSIZE / 8 // limited by size of revoke block
-const DescriptorBlk = 0
 const EndDescriptor = 0
+const DescriptorBlk = 0
 const RevokeBlk = -1
 const NDescriptorBlks = 2
+const Canceled = -2
 
 type opid_t int
 type index_t uint64
@@ -76,6 +77,18 @@ func (log *log_t) Force() {
 	log.force <- true
 	c := <-log.forcewait
 	<-c
+}
+
+// For testing
+func (log *log_t) ForceApply() {
+	if memfs {
+		panic("memfs")
+	}
+	if log_debug {
+		fmt.Printf("log force apply\n")
+	}
+	log.applyforce <- true
+	<-log.applyforce
 }
 
 // Write increments ref so that the log has always a valid ref to the buf's
@@ -131,8 +144,8 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nlogwrite)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
-	s += "\n\tnorder2logwrite "
-	s += strconv.Itoa(log.norder2logwrite)
+	s += "\n\tnlogwrite2order "
+	s += strconv.Itoa(log.nlogwrite2order)
 	s += "\n\tnabsorb "
 	s += strconv.Itoa(log.nabsorption)
 	s += "\n\tnblkcommited "
@@ -372,14 +385,14 @@ func (trans *trans_t) mark_done(opid opid_t) {
 
 func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 	if log_debug {
-		fmt.Printf("trans.add_write: opid %d start %d #logged %d #ordered %d b %d(%v)\n", buf.opid,
+		fmt.Printf("add_write: opid %d start %d #logged %d #ordered %d b %d(%v)\n", buf.opid,
 			trans.start, trans.logged.Len(), trans.ordered.Len(), buf.block.Block, buf.ordered)
 	}
 
 	// if block is in log and now ordered, remove from log
 	_, present := trans.logpresent[buf.block.Block]
 	if buf.ordered && present {
-		log.norder2logwrite++
+		log.nlogwrite2order++
 		trans.logged.RemoveBlock(buf.block.Block)
 		delete(trans.logpresent, buf.block.Block)
 	}
@@ -580,6 +593,11 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 	}
 }
 
+type applyreq_t struct {
+	head index_t
+	rl   []int
+}
+
 type log_t struct {
 	ml        *memlog_t
 	incoming  chan buf_t
@@ -594,7 +612,9 @@ type log_t struct {
 
 	commitc     chan *trans_t
 	commitdonec chan bool
-	applyc      chan index_t
+	applyreqc   chan applyreq_t
+	applyrepc   chan index_t
+	applyforce  chan bool
 
 	// some stats
 	napply          int
@@ -609,7 +629,7 @@ type log_t struct {
 	commitcycles    uint64
 	nccommit        int
 	nbapply         int
-	norder2logwrite int
+	nlogwrite2order int
 }
 
 // first log header block format
@@ -670,7 +690,9 @@ func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.forcewait = make(chan (chan bool))
 	log.commitc = make(chan *trans_t)
 	log.commitdonec = make(chan bool)
-	log.applyc = make(chan index_t)
+	log.applyreqc = make(chan applyreq_t)
+	log.applyrepc = make(chan index_t)
+	log.applyforce = make(chan bool)
 	log.logstop = make(chan bool)
 	log.commitstop = make(chan bool)
 	log.applystop = make(chan bool)
@@ -695,7 +717,7 @@ func (log *log_t) apply(tail, head index_t) index_t {
 
 	for i := head - 1; i > tail; i-- {
 		l := log.ml.getmemlog(i)
-		if l.Block == DescriptorBlk || l.Block == RevokeBlk {
+		if l.Block == DescriptorBlk || l.Block == RevokeBlk || l.Block == Canceled {
 			// nothing to do for descriptor blocks
 		} else {
 			log.nblkapply++
@@ -716,15 +738,30 @@ func (log *log_t) apply(tail, head index_t) index_t {
 	log.ml.commit_tail(head)
 
 	if log_debug {
-		fmt.Printf("apply log: updated tail %d\n", tail)
+		fmt.Printf("apply log: updated tail %d\n", head)
 	}
 
 	return head
 }
 
-// the apply daemon owns the tail of the log
+// XXX cancel() and apply() may race; maybe don't use go routine to run apply()
+// XXX rl a map?
+func (log *log_t) cancel(tail, head index_t, rl []int) {
+	for _, r := range rl {
+		for i := tail; i != head; i++ {
+			l := log.ml.getmemlog(i)
+			if l.Block == r {
+				l.Block = Canceled
+			}
+
+		}
+	}
+}
+
+// the applier owns the tail of the log
 func (l *log_t) applier(t index_t) {
 	tail := t
+	head := t
 	inprogress := false
 	waiting := false
 	stopping := false
@@ -736,14 +773,16 @@ func (l *log_t) applier(t index_t) {
 				l.applystop <- true
 				return
 			}
-		case head := <-l.applyc:
+		case req := <-l.applyreqc:
+			head = req.head
 			if log_debug {
-				fmt.Printf("applier: tail %d head %d\n", tail, head)
+				fmt.Printf("applier: tail %d head %d rl %v\n", tail, head, req.rl)
 			}
+			l.cancel(tail, head, req.rl)
 			if l.ml.freespace(head, tail) {
-				l.applyc <- tail
+				l.applyrepc <- tail
 			} else {
-				// make commit daemon wait
+				// make committer wait
 				l.nbapply++
 				waiting = true
 			}
@@ -756,11 +795,14 @@ func (l *log_t) applier(t index_t) {
 					c <- t
 				}()
 			}
+		case <-l.applyforce:
+			tail = l.apply(tail, head)
+			l.applyforce <- true
 		case tail = <-c:
 			inprogress = false
 			if waiting {
 				waiting = false
-				l.applyc <- tail
+				l.applyrepc <- tail
 
 			}
 			if stopping {
@@ -817,7 +859,7 @@ func (tl *translog_t) revokeLog(trans *trans_t) []int {
 	return r
 }
 
-// the commit daemon owns the head of the log
+// the committer owns the head of the log
 func (l *log_t) committer(h index_t) {
 	tail := h
 	head := h
@@ -833,11 +875,11 @@ func (l *log_t) committer(h index_t) {
 					t.waiters, tail, head)
 			}
 
-			r := tl.revokeLog(t)
+			rl := tl.revokeLog(t)
 
 			tl.add(t)
 
-			t.fillRevoke(l.ml, r)
+			t.fillRevoke(l.ml, rl)
 			t.copyintolog(l.ml)
 			t.copyordered(l.ml)
 
@@ -853,8 +895,8 @@ func (l *log_t) committer(h index_t) {
 
 			head = t.head
 
-			l.applyc <- head
-			tail = <-l.applyc
+			l.applyreqc <- applyreq_t{head, rl}
+			tail = <-l.applyrepc
 
 			tl.remove(tail)
 			t.unblock_waiters()
@@ -874,9 +916,10 @@ func (l *log_t) logger(h index_t) {
 	commitready := true
 	stopping := false
 	var ts1 uint64
+	n := 0
 	for {
 		common.Kunresdebug()
-		common.Kresdebug(100<<20, "log daemon")
+		common.Kresdebug(100<<20, "logger")
 
 		t := mk_trans(head, l.ml)
 
@@ -890,6 +933,9 @@ func (l *log_t) logger(h index_t) {
 		for !(commit && commitready && t.iscommittable()) {
 			select {
 			case nb := <-l.incoming:
+				if l.nlogwrite-n > MaxBlkPerOp { // XXX concurrent ops
+					fmt.Printf("too many blks per op? %d\n", l.nlogwrite-n)
+				}
 				t.add_write(l, nb)
 			case opid := <-l.done:
 				t.mark_done(opid)
@@ -910,6 +956,7 @@ func (l *log_t) logger(h index_t) {
 				if log_debug {
 					fmt.Printf("logger: admit %d\n", nextop)
 				}
+				n = l.nlogwrite
 				t.add_op(nextop)
 				nextop++
 				if t.startcommit() {

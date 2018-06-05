@@ -1484,6 +1484,15 @@ func (fs *Fs_t) Fs_sync() common.Err_t {
 	return 0
 }
 
+func (fs *Fs_t) Fs_syncapply() common.Err_t {
+	if memfs {
+		return 0
+	}
+	fs.fslog.Force()
+	fs.fslog.ForceApply()
+	return 0
+}
+
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
 func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {

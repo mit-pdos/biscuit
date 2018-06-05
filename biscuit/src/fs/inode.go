@@ -308,8 +308,8 @@ func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err
 
 func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int, common.Err_t) {
 	// break write system calls into one or more calls with no more than
-	// maxblkpersys blocks per call.
-	max := (MaxBlkPerOp - 1) * common.BSIZE
+	// maxblkpersys blocks per call. account for indirect blocks.
+	max := (MaxBlkPerOp - 2) * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 
