@@ -3757,6 +3757,23 @@ void killtest(void)
 	printf("kill test passed\n");
 }
 
+void lstats(void)
+{
+	printf("lstat test\n");
+	char temp[] = "/tmp/wtfXXXXXX";
+	int fd = mkstemp(temp);
+	if (fd == -1)
+		err(-1, "mkstemp");
+	struct stat st1 = {0}, st2 = {0};
+	if (fstat(fd, &st1) == -1)
+		err(-1, "fstat");
+	if (lstat(temp, &st2) == -1)
+		err(-1, "fstat");
+	if (memcmp(&st1, &st2, sizeof st1) != 0)
+		errx(-1, "not equal");
+	printf("lstat test passed\n");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -3843,6 +3860,7 @@ main(int argc, char *argv[])
   mmaptest();
 
   killtest();
+  lstats();
 
   exectest();
 

@@ -3745,9 +3745,17 @@ realpath(const char *a, char *b)
 }
 
 int
-lstat(const char *a, struct stat * b)
+lstat(const char *a, struct stat *b)
 {
-	FAIL;
+	// will some applications break because they expect lstat to be a
+	// system call?
+	int fd = open(a, O_RDONLY);
+	if (fd == -1)
+		return -1;
+	int ret = fstat(fd, b);
+	if (close(fd) == -1)
+		fprintf(stderr, "lstat close failed\n");
+	return ret;
 }
 
 /* LMBENCH STUFF */
