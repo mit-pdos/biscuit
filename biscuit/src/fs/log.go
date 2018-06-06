@@ -372,7 +372,7 @@ func mk_trans(start index_t, ml *memlog_t) *trans_t {
 	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
 	t.orderedcopy = common.MkBlkList() // bounded by MaxOrdered
 	t.logpresent = make(map[int]bool, ml.loglen)
-	t.orderedpresent = make(map[int]bool)
+	t.orderedpresent = make(map[int]bool, MaxOrdered)
 	t.waitc = make(chan bool)
 	return t
 }
@@ -755,7 +755,7 @@ func (log *log_t) apply(tail, head index_t) index_t {
 	return head
 }
 
-func (log *log_t) cancel(tail, head index_t, rl []int) {
+func (log *log_t) revokeList(tail, head index_t, rl []int) {
 	for _, r := range rl {
 		for i := tail; i != head; i++ {
 			l := log.ml.getmemlog(i)
@@ -785,7 +785,7 @@ func (l *log_t) applier(t index_t) {
 			if log_debug {
 				fmt.Printf("applier: tail %d head %d rl %v\n", tail, head, req.rl)
 			}
-			l.cancel(tail, head, req.rl)
+			l.revokeList(tail, head, req.rl)
 			if l.ml.freespace(head, tail) {
 				l.applyrepc <- tail
 			} else {
@@ -1022,7 +1022,7 @@ func (log *log_t) revoke(im []int, tail, until index_t, r int) {
 	for i := tail; i != until; i++ {
 		li := log.ml.logindex(i)
 		if im[li] == r {
-			im[li] = -1
+			im[li] = Canceled
 		}
 	}
 }
@@ -1033,8 +1033,8 @@ func (log *log_t) installmap(tail, head index_t) []int {
 		ti := i
 		db, dblk := log.ml.readdescriptor(i)
 		rb, rblk := log.ml.readdescriptor(i + 1)
-		im[log.ml.logindex(i)] = -1
-		im[log.ml.logindex(i+1)] = -1
+		im[log.ml.logindex(i)] = Canceled
+		im[log.ml.logindex(i+1)] = Canceled
 		i += NDescriptorBlks
 		for j := 1; ; j++ {
 			r := rb.r_logdest(j)
@@ -1065,7 +1065,7 @@ func (log *log_t) install(tail, head index_t) {
 	for i := tail; i != head; i++ {
 		li := log.ml.logindex(i)
 		dst := im[li]
-		if dst != -1 {
+		if dst != Canceled {
 			if log_debug {
 				fmt.Printf("install: write log %d to %d\n", i, dst)
 			}
