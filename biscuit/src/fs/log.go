@@ -755,8 +755,6 @@ func (log *log_t) apply(tail, head index_t) index_t {
 	return head
 }
 
-// XXX cancel() and apply() may race; maybe don't use go routine to run apply()
-// XXX rl a map?
 func (log *log_t) cancel(tail, head index_t, rl []int) {
 	for _, r := range rl {
 		for i := tail; i != head; i++ {
@@ -773,14 +771,12 @@ func (log *log_t) cancel(tail, head index_t, rl []int) {
 func (l *log_t) applier(t index_t) {
 	tail := t
 	head := t
-	inprogress := false
 	waiting := false
 	stopping := false
-	c := make(chan index_t)
 	for {
 		select {
 		case stopping = <-l.applystop:
-			if !(waiting || inprogress) {
+			if !waiting {
 				l.applystop <- true
 				return
 			}
@@ -797,29 +793,22 @@ func (l *log_t) applier(t index_t) {
 				l.nbapply++
 				waiting = true
 			}
-			if l.ml.almosthalffull(tail, head) && !inprogress {
+			if l.ml.almosthalffull(tail, head) {
 				// start applying so that by the next commit log
 				// has space for another transaction
-				inprogress = true
-				go func() {
-					t := l.apply(tail, head)
-					c <- t
-				}()
+				tail = l.apply(tail, head)
 			}
-		case <-l.applyforce:
-			tail = l.apply(tail, head)
-			l.applyforce <- true
-		case tail = <-c:
-			inprogress = false
 			if waiting {
 				waiting = false
 				l.applyrepc <- tail
-
 			}
 			if stopping {
 				l.applystop <- true
 				return
 			}
+		case <-l.applyforce:
+			tail = l.apply(tail, head)
+			l.applyforce <- true
 		}
 	}
 }
@@ -882,8 +871,8 @@ func (l *log_t) committer(h index_t) {
 			return
 		case t := <-l.commitc:
 			if log_debug {
-				fmt.Printf("committer: start waiters %d tail %d head %d\n",
-					t.waiters, tail, head)
+				fmt.Printf("committer: start waiters %d tail %d head %d #ordered %d\n",
+					t.waiters, tail, head, t.ordered.Len())
 			}
 
 			rl := tl.revokeLog(t)
