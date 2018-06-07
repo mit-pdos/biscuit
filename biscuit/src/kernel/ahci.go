@@ -320,6 +320,7 @@ type ahci_port_t struct {
 	// stats
 	nbarrier  int
 	nwrite    int
+	niwrite   int
 	nvwrite   int
 	nread     int
 	nnoslot   int
@@ -576,6 +577,8 @@ func (p *ahci_port_t) stat() string {
 	s += strconv.Itoa(p.nread)
 	s += " #write "
 	s += strconv.Itoa(p.nwrite)
+	s += " #iwrite "
+	s += strconv.Itoa(p.niwrite)
 	s += " #vwrite "
 	s += strconv.Itoa(p.nvwrite)
 	s += " #noslot "
@@ -824,6 +827,10 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 		}
 	}
 
+	if req.Cmd == common.BDEV_WRITE {
+		p.nwrite++
+	}
+
 	if p.queued.Len() > 0 {
 		p.queue_coalesce(req)
 		p.nnoslot++
@@ -846,7 +853,11 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 func (p *ahci_port_t) startslot(req *common.Bdev_req_t, s int) {
 	switch req.Cmd {
 	case common.BDEV_WRITE:
-		p.nwrite++
+		if req.Blks.Len() > 1 {
+			p.nvwrite++
+		} else {
+			p.niwrite++
+		}
 		p.issue(s, req.Blks, IDE_CMD_WRITE_DMA_EXT)
 	case common.BDEV_READ:
 		p.nread++
@@ -871,9 +882,6 @@ func (p *ahci_port_t) issue(s int, blks *common.BlkList_t, cmd uint8) {
 
 	len := uint64(0)
 	if blks != nil {
-		if blks.Len() > 1 {
-			p.nvwrite++
-		}
 		len = p.fill_prd_v(s, blks)
 	}
 
@@ -1051,7 +1059,7 @@ func (ahci *ahci_disk_t) intr() {
 	}
 }
 
-// Go routing for handling interrupts
+// Go routine for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 	fmt.Printf("AHCI: interrupt handler running\n")
 	gimme := common.Bounds(common.B_AHCI_DISK_T_INT_HANDLER)
