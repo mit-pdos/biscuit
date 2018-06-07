@@ -13,7 +13,7 @@ import "unsafe"
 import "common"
 import "fs"
 
-//import "sort"
+import "sort"
 
 const (
 	IRQ_LAST = common.INT_MSI7
@@ -772,28 +772,49 @@ func loping() {
 	nic.tx_ipv4(sgbuf)
 }
 
-//func _ptile(buf []int, p float64) {
-//	if len(buf) == 0 {
-//		fmt.Printf("no %.2f-ile\n", p * 100)
-//		return
-//	}
-//	_idx := float64(len(buf)) * p
-//	idx := int(_idx)
-//	if float64(idx) / float64(len(buf)) < p && idx + 1 < len(buf) {
-//		idx++
-//	}
-//	fmt.Printf("    %.2f percentile: %v (idx %v)\n", p * 100, buf[idx], idx)
-//}
-//
-//func print9999(buf []int) {
-//	sort.Ints(buf)
-//	_ptile(buf, 0.9999)
-//	_ptile(buf, 0.999)
-//	_ptile(buf, 0.99)
-//	_ptile(buf, 0.50)
-//}
+func _ptile(buf []runtime.Crud_t, p float64) {
+	if len(buf) == 0 {
+		fmt.Printf("no %.4f-ile\n", p * 100)
+		return
+	}
+	_idx := float64(len(buf)) * p
+	idx := int(_idx)
+	if float64(idx) / float64(len(buf)) < p && idx + 1 < len(buf) {
+		idx++
+	}
+	fmt.Printf("    %.4f percentile: %v ns (idx %v)\n", p * 100, buf[idx].Ns, idx)
+}
+
+type tygo_t struct {
+	buf	[]runtime.Crud_t
+}
+
+func (ns *tygo_t) Len() int {
+	return len(ns.buf)
+}
+
+func (ns *tygo_t) Less(i, j int) bool {
+	return ns.buf[i].Ns < ns.buf[j].Ns
+}
+
+func (ns *tygo_t) Swap(i, j int) {
+	ns.buf[i], ns.buf[j] = ns.buf[j], ns.buf[i]
+}
+
+func print9999(buf []runtime.Crud_t) {
+	tygo := &tygo_t{buf}
+	sort.Sort(tygo)
+	_ptile(buf, 0.999999)
+	_ptile(buf, 0.99999)
+	_ptile(buf, 0.9999)
+	_ptile(buf, 0.999)
+	_ptile(buf, 0.99)
+	_ptile(buf, 0.50)
+}
 
 var _nflip int
+
+var tog bool
 
 func kbd_daemon(cons *cons_t, km map[int]byte) {
 	inb := runtime.Inb
@@ -808,13 +829,28 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		data = append(data, c)
 		if c == '\\' {
 			debug.SetTraceback("all")
-			panic("yahoo")
+			panic("yahoo,")
 		} else if c == '@' {
 			//common.Lims = !common.Lims
 			//fmt.Printf("Lims: %v\n", common.Lims)
 
-			fmt.Printf("toggle\n")
-			runtime.GCDebugToggle()
+			tog = !tog
+			//fmt.Printf("toggle: %v\n", tog)
+			//runtime.GCDebugToggle()
+			//if tog {
+			//	err := runtime.StartTrace()
+			//	if err != nil {
+			//		fmt.Printf("crud: %v\n", err)
+			//		tog = false
+			//	}
+			//} else {
+			//	runtime.StopTrace()
+			//	//for buf := runtime.ReadTrace(); buf != nil; buf = runtime.ReadTrace() {
+			//	//	hexdump(buf)
+			//	//}
+			//}
+
+			fmt.Printf("GCing: %v\n", runtime.GCing())
 
 		} else if c == '%' {
 			//fmt.Printf("distinct simulated failures: %v\n",
@@ -822,11 +858,39 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			//common.Resfail.Enabled = !common.Resfail.Enabled
 			//fmt.Printf("fail enabled: %v\n", common.Resfail.Enabled)
 
+			//fmt.Printf("toggle\n")
+			//runtime.GCDebugToggle()
+
 			//loping()
 			//netdump()
 
-			v := runtime.Memremain()
-			fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
+			buf := runtime.Dist.Buf
+			max := int(runtime.Dist.Next)
+			runtime.Dist.Next = 0
+			if max < len(buf) {
+				buf = buf[:max]
+			}
+			runtime.Dist.Buf = make([]runtime.Crud_t, 10000000)
+			fmt.Printf("N %v, Lost %v\n", len(buf), runtime.Dist.Lost)
+			runtime.Dist.Lost = 0
+			print9999(buf)
+
+			for i := 0; i < 100 && i < len(buf); i++ {
+				idx := len(buf) - i - 1
+				bb := &buf[idx]
+				ns := bb.Ns / 1000
+				r := bb.Roots
+				nr := bb.Nonroots
+				debt := bb.Debt
+				if ns == 0 {
+					fmt.Printf("%10v rest are 0us...\n", idx)
+					break
+				}
+				fmt.Printf("%10v: %12v %4v %4v dbytes %v\n", idx, ns, r, nr, debt)
+			}
+
+			//v := runtime.Memremain()
+			//fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
 
 			//common.Trap = true
 			//pr := false
@@ -1475,7 +1539,7 @@ func main() {
 	kbd_init()
 
 	// control CPUs
-	aplim := 7
+	aplim := 3
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 

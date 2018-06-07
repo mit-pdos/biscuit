@@ -271,6 +271,7 @@ func StartTrace() error {
 // StopTrace stops tracing, if it was previously enabled.
 // StopTrace only returns after all the reads for the trace have completed.
 func StopTrace() {
+	print("mark-2\n")
 	// Stop the world so that we can collect the trace buffers from all p's below,
 	// and also to avoid races with traceEvent.
 	stopTheWorld("stop tracing")
@@ -283,8 +284,10 @@ func StopTrace() {
 		startTheWorld()
 		return
 	}
+	print("mark-1\n")
 
 	traceGoSched()
+	print("mark-0.5\n")
 
 	// Loop over all allocated Ps because dead Ps may still have
 	// trace buffers.
@@ -302,6 +305,7 @@ func StopTrace() {
 			traceFullQueue(buf)
 		}
 	}
+	print("mark0\n")
 
 	for {
 		trace.ticksEnd = cputicks()
@@ -312,23 +316,28 @@ func StopTrace() {
 		}
 		osyield()
 	}
+	print("mark1\n")
 
 	trace.enabled = false
 	trace.shutdown = true
 	unlock(&trace.bufLock)
 
 	startTheWorld()
+	print("mark1.1\n")
 
 	// The world is started but we've set trace.shutdown, so new tracing can't start.
 	// Wait for the trace reader to flush pending buffers and stop.
 	semacquire(&trace.shutdownSema)
+	print("mark1.11\n")
 	if raceenabled {
 		raceacquire(unsafe.Pointer(&trace.shutdownSema))
 	}
 
+	print("mark1.2\n")
 	// The lock protects us from races with StartTrace/StopTrace because they do stop-the-world.
 	lock(&trace.lock)
 	for _, p := range allp[:cap(allp)] {
+	print("mark1.3\n")
 		if p.tracebuf != 0 {
 			throw("trace: non-empty trace buffer in proc")
 		}
@@ -342,6 +351,7 @@ func StopTrace() {
 	if trace.reading != 0 || trace.reader != 0 {
 		throw("trace: reading after shutdown")
 	}
+	print("mark2\n")
 	for trace.empty != 0 {
 		buf := trace.empty
 		trace.empty = buf.ptr().link
@@ -350,6 +360,7 @@ func StopTrace() {
 	trace.strings = nil
 	trace.shutdown = false
 	unlock(&trace.lock)
+	print("mark3\n")
 }
 
 // ReadTrace returns the next chunk of binary tracing data, blocking until data

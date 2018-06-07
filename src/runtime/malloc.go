@@ -758,21 +758,45 @@ func _takecredit(n int64) {
 	//g.res.cacheallocs += n
 }
 
-//var Dist struct {
-//	Next	uint64
-//	// us
-//	Buf	[]int
-//	Lost	uint64
-//}
-//
-//func distadd(ns uint64) {
-//	idx := atomic.Xadd64(&Dist.Next, 1) - 1
-//	if idx < uint64(len(Dist.Buf)) {
-//		Dist.Buf[idx] = int(ns)
-//	} else {
-//		Dist.Lost++
+type Crud_t struct {
+	Roots	int
+	Nonroots	int
+	Debt	int
+	Ns	int
+}
+
+func (c *Crud_t) Add(nc Crud_t) {
+	c.Roots += nc.Roots
+	c.Nonroots += nc.Nonroots
+}
+
+type dist_t struct {
+	Next	uint64
+	// ns
+	Buf	[]Crud_t
+	Lost	uint64
+}
+
+func (di *dist_t) distadd(crud Crud_t) {
+	idx := atomic.Xadd64(&di.Next, 1) - 1
+	if idx < uint64(len(di.Buf)) {
+		di.Buf[idx] = crud
+	} else {
+		di.Lost++
+	}
+}
+
+var Dist dist_t
+
+//var Dists struct {
+//	Us struct {
+//		one	int
 //	}
 //}
+
+func GCing() bool {
+	return gcphase != _GCoff
+}
 
 // Allocate an object of size bytes.
 // Small objects are allocated from the per-P cache's free lists.
@@ -812,6 +836,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	// GC is not currently active.
 	var assistG *g
 	if gcBlackenEnabled != 0 {
+		st := nanotime()
 		// Charge the current user G for this allocation.
 		assistG = getg()
 		if assistG.m.curg != nil {
@@ -821,11 +846,18 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		// for internal fragmentation at the end of mallocgc.
 		assistG.gcAssistBytes -= int64(size)
 
+		var crud Crud_t
+		blocked := false
 		if assistG.gcAssistBytes < 0 {
 			// This G is in debt. Assist the GC to correct
 			// this before allocating. This must happen
 			// before disabling preemption.
-			gcAssistAlloc(assistG)
+			blocked, crud = gcAssistAlloc(assistG)
+		}
+		if !blocked {
+			elap := nanotime() - st
+			crud.Ns = int(elap)
+			Dist.distadd(crud)
 		}
 	}
 
