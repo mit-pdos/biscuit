@@ -48,7 +48,20 @@ func (log *log_t) Op_begin(s string) opid_t {
 	if log_debug {
 		fmt.Printf("op_begin: admit? %v\n", s)
 	}
-	opid := <-log.admission
+
+	t := runtime.Rdtsc()
+
+	opid := <-log.op_startc
+
+	//opid := log.nextop
+	//if log.curtrans.startcommit() {
+	//	opid = <-log.op_startc
+	//} else {
+	//	log.nextop++
+	//	log.curtrans.add_op(opid)
+	//}
+
+	log.opbegincycles += (runtime.Rdtsc() - t)
 	if log_debug {
 		fmt.Printf("op_begin: go %d %v\n", opid, s)
 	}
@@ -62,7 +75,16 @@ func (log *log_t) Op_end(opid opid_t) {
 	if log_debug {
 		fmt.Printf("op_end: done %d\n", opid)
 	}
-	log.done <- opid
+	s := runtime.Rdtsc()
+
+	log.op_endc <- opid
+
+	//if log.curtrans.startcommit() {
+	//	log.op_endc <- opid
+	//} else {
+	//	log.curtrans.mark_done(opid)
+	//}
+	log.opendcycles += (runtime.Rdtsc() - s)
 }
 
 // ensure any fs ops in the journal preceding this sync call are flushed to disk
@@ -74,9 +96,13 @@ func (log *log_t) Force() {
 	if log_debug {
 		fmt.Printf("log force\n")
 	}
-	log.force <- true
-	c := <-log.forcewait
+
+	s := runtime.Rdtsc()
+
+	log.forcec <- true
+	c := <-log.forcewaitc
 	<-c
+	log.forcecycles += (runtime.Rdtsc() - s)
 }
 
 // For testing
@@ -87,8 +113,8 @@ func (log *log_t) ForceApply() {
 	if log_debug {
 		fmt.Printf("log force apply\n")
 	}
-	log.applyforce <- true
-	<-log.applyforce
+	log.applyforcec <- true
+	<-log.applyforcec
 }
 
 // Write increments ref so that the log has always a valid ref to the buf's
@@ -102,7 +128,10 @@ func (log *log_t) Write(opid opid_t, b *common.Bdev_block_t) {
 		fmt.Printf("log_write logged %d blk %v\n", opid, b.Block)
 	}
 	log.ml.bcache.Refup(b, "log_write")
-	log.incoming <- buf_t{opid, b, false}
+	s := runtime.Rdtsc()
+	log.writec <- buf_t{opid, b, false}
+	// log.curtrans.add_write(log, nb)
+	log.sndwritecycles += (runtime.Rdtsc() - s)
 }
 
 func (log *log_t) Write_ordered(opid opid_t, b *common.Bdev_block_t) {
@@ -113,7 +142,10 @@ func (log *log_t) Write_ordered(opid opid_t, b *common.Bdev_block_t) {
 		fmt.Printf("log_write_ordered %d %v\n", opid, b.Block)
 	}
 	log.ml.bcache.Refup(b, "log_write_ordered")
-	log.incoming <- buf_t{opid, b, true}
+	s := runtime.Rdtsc()
+	log.writec <- buf_t{opid, b, true}
+	// log.curtrans.add_write(log, nb)
+	log.sndwritecycles += (runtime.Rdtsc() - s)
 }
 
 func (log *log_t) Loglen() int {
@@ -123,7 +155,10 @@ func (log *log_t) Loglen() int {
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	return log.ml.bcache.Get_fill(blkn, s, lock)
+	t := runtime.Rdtsc()
+	r, e := log.ml.bcache.Get_fill(blkn, s, lock)
+	log.readcycles += (runtime.Rdtsc() - t)
+	return r, e
 }
 
 func (log *log_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
@@ -140,8 +175,28 @@ func (log *log_t) Relse(blk *common.Bdev_block_t, s string) {
 
 func (log *log_t) Stats() string {
 	s := "log:"
+	s += "\n\tnop "
+	s += strconv.Itoa(log.nop)
+	s += "\n\t begin cycles "
+	s += strconv.FormatUint(log.opbegincycles, 10)
+	s += "\n\t end cycles "
+	s += strconv.FormatUint(log.opendcycles, 10)
 	s += "\n\tnlogwrite "
 	s += strconv.Itoa(log.nlogwrite)
+	s += "\n\t log write cycles "
+	s += strconv.FormatUint(log.writecycles, 10)
+	s += "\n\t log begin cycles "
+	s += strconv.FormatUint(log.logbegincycles, 10)
+	s += "\n\t log end cycles "
+	s += strconv.FormatUint(log.logendcycles, 10)
+	s += "\n\t commit done cycles "
+	s += strconv.FormatUint(log.logcommitdcycles, 10)
+	s += "\n\t log force cycles "
+	s += strconv.FormatUint(log.logforcecycles, 10)
+	s += "\n\t logger commit cycles "
+	s += strconv.FormatUint(log.commitcycles, 10)
+	s += "\n\t snd write cycles "
+	s += strconv.FormatUint(log.sndwritecycles, 10)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
 	s += "\n\tnorder2logwrite "
@@ -156,8 +211,6 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.ml.ncommit)
 	s += "\n\tnccommit "
 	s += strconv.Itoa(log.nccommit)
-	s += "\n\t commit cycles "
-	s += strconv.FormatUint(log.commitcycles, 10)
 	s += "\n\tmaxblks_per_commit "
 	s += strconv.Itoa(log.ml.maxblks_per_op)
 	s += "\n\tnapply "
@@ -170,6 +223,8 @@ func (log *log_t) Stats() string {
 	s += strconv.Itoa(log.nabsorbapply)
 	s += "\n\tnforce "
 	s += strconv.Itoa(log.nforce)
+	s += "\n\t force cycles "
+	s += strconv.FormatUint(log.forcecycles, 10)
 	s += "\n\tnbatchforce "
 	s += strconv.Itoa(log.nbatchforce)
 	s += "\n\tndelayforce "
@@ -186,6 +241,8 @@ func (log *log_t) Stats() string {
 	s += strconv.FormatUint(log.ml.tailcycles, 10)
 	s += "\n\t flush log data cycles\t"
 	s += strconv.FormatUint(log.ml.flushlogdatacycles, 10)
+	s += "\n\tread cycles "
+	s += strconv.FormatUint(log.readcycles, 10)
 	s += "\n"
 	return s
 }
@@ -204,18 +261,17 @@ func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 
 func (log *log_t) StopLog() {
 	log.Force()
-	log.logstop <- true
-	<-log.logstop
-	log.commitstop <- true
-	<-log.commitstop
-	log.applystop <- true
-	<-log.applystop
+	log.logstopc <- true
+	<-log.logstopc
+	log.commitstopc <- true
+	<-log.commitstopc
+	log.applystopc <- true
+	<-log.applystopc
 }
 
 //
 // Log implementation
 //
-
 type memlog_t struct {
 	log      []*common.Bdev_block_t // in-memory log, MaxBlkPerOp per op
 	loglen   int                    // length of log (should be >= 2 * maxtrans)
@@ -522,9 +578,7 @@ func (trans *trans_t) write_ordered(ml *memlog_t) {
 	if log_debug {
 		fmt.Printf("write_ordered: %d\n", trans.orderedcopy.Len())
 	}
-	trans.orderedcopy.Apply(func(b *common.Bdev_block_t) {
-		ml.bcache.Write_async_through(b)
-	})
+	ml.bcache.Write_async_through_coalesce(trans.orderedcopy)
 	trans.orderedcopy.Delete()
 }
 
@@ -609,38 +663,52 @@ type applyreq_t struct {
 }
 
 type log_t struct {
-	ml        *memlog_t
-	incoming  chan buf_t
-	admission chan opid_t
-	done      chan opid_t
-	force     chan bool
-	forcewait chan (chan bool)
+	ml         *memlog_t
+	writec     chan buf_t
+	curtrans   *trans_t
+	op_startc  chan opid_t
+	op_endc    chan opid_t
+	forcec     chan bool
+	forcewaitc chan (chan bool)
 
-	logstop    chan bool
-	commitstop chan bool
-	applystop  chan bool
+	logstopc    chan bool
+	commitstopc chan bool
+	applystopc  chan bool
 
 	commitc     chan *trans_t
 	commitdonec chan bool
 	applyreqc   chan applyreq_t
 	applyrepc   chan index_t
-	applyforce  chan bool
+	applyforcec chan bool
+
+	nextop opid_t
 
 	// some stats
-	napply          int
-	nabsorption     int
-	nlogwrite       int
-	norderedwrite   int
-	nblkapply       int
-	nabsorbapply    int
-	nforce          int
-	nbatchforce     int
-	ndelayforce     int
-	commitcycles    uint64
-	nccommit        int
-	nbapply         int
-	nlogwrite2order int
-	norder2logwrite int
+	nop              int
+	opbegincycles    uint64
+	opendcycles      uint64
+	napply           int
+	nabsorption      int
+	nlogwrite        int
+	writecycles      uint64
+	logendcycles     uint64
+	logbegincycles   uint64
+	logcommitdcycles uint64
+	logforcecycles   uint64
+	sndwritecycles   uint64
+	norderedwrite    int
+	nblkapply        int
+	nabsorbapply     int
+	nforce           int
+	nbatchforce      int
+	forcecycles      uint64
+	ndelayforce      int
+	commitcycles     uint64
+	nccommit         int
+	nbapply          int
+	nlogwrite2order  int
+	norder2logwrite  int
+	readcycles       uint64
 }
 
 // first log header block format
@@ -694,19 +762,19 @@ func (ld *logdescriptor_t) w_logdest(p int, n int) {
 
 func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.ml = mk_memlog(ls, ll, bcache)
-	log.incoming = make(chan buf_t)
-	log.admission = make(chan opid_t)
-	log.done = make(chan opid_t)
-	log.force = make(chan bool)
-	log.forcewait = make(chan (chan bool))
+	log.writec = make(chan buf_t)
+	log.op_startc = make(chan opid_t)
+	log.op_endc = make(chan opid_t)
+	log.forcec = make(chan bool)
+	log.forcewaitc = make(chan (chan bool))
 	log.commitc = make(chan *trans_t)
 	log.commitdonec = make(chan bool)
 	log.applyreqc = make(chan applyreq_t)
 	log.applyrepc = make(chan index_t)
-	log.applyforce = make(chan bool)
-	log.logstop = make(chan bool)
-	log.commitstop = make(chan bool)
-	log.applystop = make(chan bool)
+	log.applyforcec = make(chan bool)
+	log.logstopc = make(chan bool)
+	log.commitstopc = make(chan bool)
+	log.applystopc = make(chan bool)
 }
 
 func (log *log_t) apply(tail, head index_t) index_t {
@@ -775,9 +843,9 @@ func (l *log_t) applier(t index_t) {
 	stopping := false
 	for {
 		select {
-		case stopping = <-l.applystop:
+		case stopping = <-l.applystopc:
 			if !waiting {
-				l.applystop <- true
+				l.applystopc <- true
 				return
 			}
 		case req := <-l.applyreqc:
@@ -803,12 +871,12 @@ func (l *log_t) applier(t index_t) {
 				l.applyrepc <- tail
 			}
 			if stopping {
-				l.applystop <- true
+				l.applystopc <- true
 				return
 			}
-		case <-l.applyforce:
+		case <-l.applyforcec:
 			tail = l.apply(tail, head)
-			l.applyforce <- true
+			l.applyforcec <- true
 		}
 	}
 }
@@ -866,8 +934,8 @@ func (l *log_t) committer(h index_t) {
 	tl := mkTransLog()
 	for {
 		select {
-		case <-l.commitstop:
-			l.commitstop <- true
+		case <-l.commitstopc:
+			l.commitstopc <- true
 			return
 		case t := <-l.commitc:
 			if log_debug {
@@ -911,7 +979,7 @@ func (l *log_t) committer(h index_t) {
 }
 
 func (l *log_t) logger(h index_t) {
-	nextop := opid_t(1) // reserve 0 for no opid
+	l.nextop = opid_t(1) // reserve 0 for no opid
 	head := h
 	commitready := true
 	stopping := false
@@ -922,8 +990,9 @@ func (l *log_t) logger(h index_t) {
 		common.Kresdebug(100<<20, "logger")
 
 		t := mk_trans(head, l.ml)
+		l.curtrans = t
 
-		adm := l.admission // set adm to nil when transaction is full
+		admissionc := l.op_startc // set admissionc to nil when transaction is full
 
 		// Fall out of when the loop when transaction must be committed:
 		// transaction is full or a process forces the transaction. We
@@ -932,37 +1001,46 @@ func (l *log_t) logger(h index_t) {
 		commit := false
 		for !(commit && commitready && t.iscommittable()) {
 			select {
-			case nb := <-l.incoming:
+			case nb := <-l.writec:
+				s := runtime.Rdtsc()
 				if l.nlogwrite-n > MaxBlkPerOp { // XXX concurrent ops
 					fmt.Printf("too many blks per op? %d\n", l.nlogwrite-n)
 				}
+
 				t.add_write(l, nb)
-			case opid := <-l.done:
+				l.writecycles += (runtime.Rdtsc() - s)
+			case opid := <-l.op_endc:
+				l.nop++
+				s := runtime.Rdtsc()
 				t.mark_done(opid)
-				if adm == nil { // admit ops again?
+				if admissionc == nil { // admit ops again?
 					if t.startcommit() { // nope, full and commit
 						commit = true
 					} else {
 						if log_debug {
-							fmt.Printf("logger: can admit op %d\n", nextop)
+							fmt.Printf("logger: can admit op %d\n", l.nextop)
 						}
 						// admit another op. this may op
 						// did not use all the space
 						// that it reserved.
-						adm = l.admission
+						admissionc = l.op_startc
 					}
 				}
-			case adm <- nextop:
+				l.logendcycles += (runtime.Rdtsc() - s)
+			case admissionc <- l.nextop:
+				s := runtime.Rdtsc()
 				if log_debug {
-					fmt.Printf("logger: admit %d\n", nextop)
+					fmt.Printf("logger: admit %d\n", l.nextop)
 				}
 				n = l.nlogwrite
-				t.add_op(nextop)
-				nextop++
+				t.add_op(l.nextop)
+				l.nextop++
 				if t.startcommit() {
-					adm = nil
+					admissionc = nil
 				}
-			case <-l.force:
+				l.logbegincycles += (runtime.Rdtsc() - s)
+			case <-l.forcec:
+				s := runtime.Rdtsc()
 				l.nforce++
 				if t.waiters > 0 {
 					l.nbatchforce++
@@ -971,24 +1049,26 @@ func (l *log_t) logger(h index_t) {
 				if log_debug {
 					fmt.Printf("logger: force %d\n", t.waiters)
 				}
-				l.forcewait <- t.waitc
+				l.forcewaitc <- t.waitc
 				commit = true
 				if !commitready {
 					l.ndelayforce++
 				}
+				l.logforcecycles += (runtime.Rdtsc() - s)
 			case b := <-l.commitdonec:
+				s := runtime.Rdtsc()
 				if !b {
 					panic("committer: sent false?")
 				}
-				l.commitcycles += (runtime.Rdtsc() - ts1)
 				commitready = true
 				if stopping {
-					l.logstop <- true
+					l.logstopc <- true
 					return
 				}
-			case stopping = <-l.logstop:
+				l.logcommitdcycles += (runtime.Rdtsc() - s)
+			case stopping = <-l.logstopc:
 				if commitready {
-					l.logstop <- true
+					l.logstopc <- true
 					return
 				}
 			}
@@ -1007,10 +1087,10 @@ func (l *log_t) logger(h index_t) {
 			// wait until commit thread tells us to go ahead with
 			// next trans
 			commitdone := <-l.commitdonec
+			l.commitcycles += (runtime.Rdtsc() - ts1)
 			if !commitdone {
 				commitready = false
 			} else {
-				l.commitcycles += (runtime.Rdtsc() - ts1)
 				commitready = true
 			}
 		}
@@ -1102,18 +1182,4 @@ func (log *log_t) recover() index_t {
 
 	fmt.Printf("restored blocks from %d till %d\n", tail, head)
 	return head
-}
-
-func (log *log_t) read(readfn func() (*common.Bdev_block_t, common.Err_t)) (*common.Bdev_block_t, common.Err_t) {
-	b, err := readfn()
-	if err == -common.ENOMEM {
-		panic("still no mem")
-	}
-	return b, err
-}
-
-func mkread(readfn func(int, string, bool) (*common.Bdev_block_t, common.Err_t), b int, s string, l bool) func() (*common.Bdev_block_t, common.Err_t) {
-	return func() (*common.Bdev_block_t, common.Err_t) {
-		return readfn(b, s, l)
-	}
 }
