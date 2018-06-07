@@ -130,28 +130,6 @@ func (bcache *bcache_t) Write_async_through(b *common.Bdev_block_t) {
 }
 
 // blks must be contiguous on disk
-func (bcache *bcache_t) Write_async_blks(blks *common.BlkList_t) {
-	if bdev_debug {
-		fmt.Printf("bcache_write_async_blks %v\n", blks.Len())
-	}
-	if blks.Len() == 0 {
-		return
-	}
-	n := blks.FrontBlock().Block
-	for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
-		// sanity check
-		if b.Block != n {
-			fmt.Printf("%d %d\n", b.Block, n)
-			panic("not contiguous\n")
-		}
-		n++
-		bcache.refcache.Refup(b.Ref)
-	}
-	// one request for all blks
-	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
-	blks.FrontBlock().Disk.Start(ider)
-}
-
 func (bcache *bcache_t) Write_async_blks_through(blks *common.BlkList_t) {
 	if bdev_debug {
 		fmt.Printf("bcache_write_async_blk_through %v\n", blks.Len())
@@ -173,6 +151,39 @@ func (bcache *bcache_t) Write_async_blks_through(blks *common.BlkList_t) {
 	// one request for all blks
 	ider := common.MkRequest(blks, common.BDEV_WRITE, false)
 	blks.FrontBlock().Disk.Start(ider)
+}
+
+func (bcache *bcache_t) Write_async_through_coalesce(blks *common.BlkList_t) {
+	if bdev_debug {
+		fmt.Printf("bcache_write_async_through_coalesce %v\n", blks.Len())
+	}
+	if blks.Len() == 0 {
+		return
+	}
+	nreq := 0
+	l := common.MkBlkList()
+	for b := blks.FrontBlock(); b != nil; b = blks.NextBlock() {
+		if l.Len() == 0 {
+			l.PushBack(b)
+			continue
+		}
+		last := l.BackBlock()
+		if last.Block+1 == b.Block {
+			l.PushBack(b)
+		} else {
+			bcache.Write_async_blks_through(l)
+			l = common.MkBlkList()
+			l.PushBack(b)
+			nreq++
+		}
+	}
+	if l.Len() > 0 {
+		bcache.Write_async_blks_through(l)
+		nreq++
+	}
+	if bdev_debug {
+		fmt.Printf("bcache_write_async_through_coalesce: nreq %d\n", nreq)
+	}
 }
 
 func (bcache *bcache_t) Refup(b *common.Bdev_block_t, s string) {
