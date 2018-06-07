@@ -3771,7 +3771,6 @@ void lstats(void)
 		err(-1, "fstat");
 	if (memcmp(&st1, &st2, sizeof st1) != 0)
 		errx(-1, "not equal");
-	close(fd);
 	printf("lstat test passed\n");
 }
 

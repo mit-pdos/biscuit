@@ -405,28 +405,23 @@ func markrootSpans(gcw *gcWork, shard int) {
 // gp must be the calling user gorountine.
 //
 // This must be called with preemption enabled.
-func gcAssistAlloc(gp *g) (bool, Crud_t) {
-	var cret Crud_t
+func gcAssistAlloc(gp *g) {
 	// Don't assist in non-preemptible contexts. These are
 	// generally fragile and won't allow the assist to block.
 	if getg() == gp.m.g0 {
-		return false, cret
+		return
 	}
 	if mp := getg().m; mp.locks > 0 || mp.preemptoff != "" {
-		return false, cret
+		return
 	}
 
 	traced := false
-	blocked := false
 retry:
 	// Compute the amount of scan work we need to do to make the
 	// balance positive. When the required amount of work is low,
 	// we over-assist to build up credit for future allocations
 	// and amortize the cost of assisting.
 	debtBytes := -gp.gcAssistBytes
-	if cret.Debt == 0 {
-		cret.Debt = int(debtBytes)
-	}
 	scanWork := int64(gcController.assistWorkPerByte * float64(debtBytes))
 	if scanWork < gcOverAssistWork {
 		scanWork = gcOverAssistWork
@@ -459,7 +454,7 @@ retry:
 			if traced {
 				traceGCMarkAssistDone()
 			}
-			return blocked, cret
+			return
 		}
 	}
 
@@ -470,7 +465,7 @@ retry:
 
 	// Perform assist work
 	systemstack(func() {
-		gcAssistAlloc1(gp, scanWork, &cret)
+		gcAssistAlloc1(gp, scanWork)
 		// The user stack may have moved, so this can't touch
 		// anything on it until it returns from systemstack.
 	})
@@ -482,7 +477,6 @@ retry:
 	}
 
 	if gp.gcAssistBytes < 0 {
-		blocked = true
 		// We were unable steal enough credit or perform
 		// enough work to pay off the assist debt. We need to
 		// do one of these before letting the mutator allocate
@@ -514,7 +508,6 @@ retry:
 	if traced {
 		traceGCMarkAssistDone()
 	}
-	return blocked, cret
 }
 
 // gcAssistAlloc1 is the part of gcAssistAlloc that runs on the system
@@ -527,7 +520,7 @@ retry:
 // the stack since it may move.
 //
 //go:systemstack
-func gcAssistAlloc1(gp *g, scanWork int64, crud *Crud_t) {
+func gcAssistAlloc1(gp *g, scanWork int64) {
 	// Clear the flag indicating that this assist completed the
 	// mark phase.
 	gp.param = nil
@@ -561,7 +554,7 @@ func gcAssistAlloc1(gp *g, scanWork int64, crud *Crud_t) {
 	// drain own cached work first in the hopes that it
 	// will be more cache friendly.
 	gcw := &getg().m.p.ptr().gcw
-	workDone := gcDrainN(gcw, scanWork, crud)
+	workDone := gcDrainN(gcw, scanWork)
 	// If we are near the end of the mark phase
 	// dispose of the gcw.
 	if gcBlackenPromptly {
@@ -1020,7 +1013,7 @@ done:
 //
 //go:nowritebarrier
 //go:systemstack
-func gcDrainN(gcw *gcWork, scanWork int64, crud *Crud_t) int64 {
+func gcDrainN(gcw *gcWork, scanWork int64) int64 {
 	if !writeBarrier.needed {
 		throw("gcDrainN phase incorrect")
 	}
@@ -1054,7 +1047,6 @@ func gcDrainN(gcw *gcWork, scanWork int64, crud *Crud_t) int64 {
 			if work.markrootNext < work.markrootJobs {
 				job := atomic.Xadd(&work.markrootNext, +1) - 1
 				if job < work.markrootJobs {
-					crud.Roots++
 					markroot(gcw, job)
 					continue
 				}
@@ -1063,7 +1055,6 @@ func gcDrainN(gcw *gcWork, scanWork int64, crud *Crud_t) int64 {
 			break
 		}
 		scanobject(b, gcw)
-		crud.Nonroots++
 
 		// Flush background scan work credit.
 		if gcw.scanWork >= gcCreditSlack {
