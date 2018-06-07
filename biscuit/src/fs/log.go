@@ -1,10 +1,11 @@
 package fs
 
 import "fmt"
+import "runtime"
 import "strconv"
+import "sync"
 
 import "common"
-import "runtime"
 
 const log_debug = false
 
@@ -124,28 +125,14 @@ func (log *log_t) Write(opid opid_t, b *common.Bdev_block_t) {
 	if memfs {
 		return
 	}
-	if log_debug {
-		fmt.Printf("log_write logged %d blk %v\n", opid, b.Block)
-	}
-	log.ml.bcache.Refup(b, "log_write")
-	s := runtime.Rdtsc()
-	log.writec <- buf_t{opid, b, false}
-	// log.curtrans.add_write(log, nb)
-	log.sndwritecycles += (runtime.Rdtsc() - s)
+	log.write(opid, b, false)
 }
 
 func (log *log_t) Write_ordered(opid opid_t, b *common.Bdev_block_t) {
 	if memfs {
 		return
 	}
-	if log_debug {
-		fmt.Printf("log_write_ordered %d %v\n", opid, b.Block)
-	}
-	log.ml.bcache.Refup(b, "log_write_ordered")
-	s := runtime.Rdtsc()
-	log.writec <- buf_t{opid, b, true}
-	// log.curtrans.add_write(log, nb)
-	log.sndwritecycles += (runtime.Rdtsc() - s)
+	log.write(opid, b, true)
 }
 
 func (log *log_t) Loglen() int {
@@ -183,8 +170,6 @@ func (log *log_t) Stats() string {
 	s += strconv.FormatUint(log.opendcycles, 10)
 	s += "\n\tnlogwrite "
 	s += strconv.Itoa(log.nlogwrite)
-	s += "\n\t log write cycles "
-	s += strconv.FormatUint(log.writecycles, 10)
 	s += "\n\t log begin cycles "
 	s += strconv.FormatUint(log.logbegincycles, 10)
 	s += "\n\t log end cycles "
@@ -195,8 +180,6 @@ func (log *log_t) Stats() string {
 	s += strconv.FormatUint(log.logforcecycles, 10)
 	s += "\n\t logger commit cycles "
 	s += strconv.FormatUint(log.commitcycles, 10)
-	s += "\n\t snd write cycles "
-	s += strconv.FormatUint(log.sndwritecycles, 10)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
 	s += "\n\tnorder2logwrite "
@@ -408,6 +391,7 @@ type buf_t struct {
 }
 
 type trans_t struct {
+	sync.Mutex
 	ml             *memlog_t
 	start          index_t
 	head           index_t
@@ -441,30 +425,33 @@ func (trans *trans_t) mark_done(opid opid_t) {
 	trans.inprogress--
 }
 
-func (trans *trans_t) add_write(log *log_t, buf buf_t) {
+func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_t, ordered bool) {
+	trans.Lock()
+	defer trans.Unlock()
+
 	if log_debug {
-		fmt.Printf("add_write: opid %d start %d #logged %d #ordered %d b %d(%v)\n", buf.opid,
-			trans.start, trans.logged.Len(), trans.ordered.Len(), buf.block.Block, buf.ordered)
+		fmt.Printf("add_write: opid %d start %d #logged %d #ordered %d b %d(%v)\n", opid,
+			trans.start, trans.logged.Len(), trans.ordered.Len(), blk.Block, ordered)
 	}
 
 	// if block is in log and now ordered, remove from log
-	_, lp := trans.logpresent[buf.block.Block]
-	if buf.ordered && lp {
+	_, lp := trans.logpresent[blk.Block]
+	if ordered && lp {
 		log.nlogwrite2order++
-		trans.logged.RemoveBlock(buf.block.Block)
-		delete(trans.logpresent, buf.block.Block)
+		trans.logged.RemoveBlock(blk.Block)
+		delete(trans.logpresent, blk.Block)
 	}
 
 	// if block is in ordered list and now logged, remove from ordered
-	_, op := trans.orderedpresent[buf.block.Block]
-	if !buf.ordered && op {
+	_, op := trans.orderedpresent[blk.Block]
+	if !ordered && op {
 		log.norder2logwrite++
-		trans.ordered.RemoveBlock(buf.block.Block)
-		delete(trans.orderedpresent, buf.block.Block)
+		trans.ordered.RemoveBlock(blk.Block)
+		delete(trans.orderedpresent, blk.Block)
 	}
 
-	_, lp = trans.logpresent[buf.block.Block]
-	_, op = trans.orderedpresent[buf.block.Block]
+	_, lp = trans.logpresent[blk.Block]
+	_, op = trans.orderedpresent[blk.Block]
 
 	if lp || op {
 		// Buffer is already in logged or in ordered.  We wrote it
@@ -475,21 +462,21 @@ func (trans *trans_t) add_write(log *log_t, buf buf_t) {
 		// later op will commit with the one that modified this block
 		// earlier, because the op was admitted.
 		log.nabsorption++
-		log.ml.bcache.Relse(buf.block, "absorption")
+		log.ml.bcache.Relse(blk, "absorption")
 		return
 	}
 
-	if buf.ordered {
+	if ordered {
 		log.norderedwrite++
-		trans.ordered.PushBack(buf.block)
+		trans.ordered.PushBack(blk)
 		if trans.ordered.Len() >= MaxOrdered {
 			panic("add_write")
 		}
-		trans.orderedpresent[buf.block.Block] = true
+		trans.orderedpresent[blk.Block] = true
 	} else {
 		log.nlogwrite++
-		trans.logged.PushBack(buf.block)
-		trans.logpresent[buf.block.Block] = true
+		trans.logged.PushBack(blk)
+		trans.logpresent[blk.Block] = true
 	}
 }
 
@@ -497,12 +484,14 @@ func (trans *trans_t) iscommittable() bool {
 	return trans.inprogress == 0
 }
 
+// Caller must hold lock
 func (trans *trans_t) isorderedfull() bool {
 	n := trans.ordered.Len()
 	n += MaxBlkPerOp
 	return n >= MaxOrdered
 }
 
+// Caller must hold lock
 func (trans *trans_t) isdescriptorfull() bool {
 	n := trans.logged.Len()
 	n += trans.inprogress * MaxBlkPerOp
@@ -511,10 +500,16 @@ func (trans *trans_t) isdescriptorfull() bool {
 }
 
 func (trans *trans_t) emptytrans() bool {
+	trans.Lock()
+	defer trans.Unlock()
+
 	return trans.logged.Len() == 0 && trans.ordered.Len() == 0
 }
 
 func (trans *trans_t) startcommit() bool {
+	trans.Lock()
+	defer trans.Unlock()
+
 	return trans.isdescriptorfull() || trans.isorderedfull()
 }
 
@@ -664,7 +659,6 @@ type applyreq_t struct {
 
 type log_t struct {
 	ml         *memlog_t
-	writec     chan buf_t
 	curtrans   *trans_t
 	op_startc  chan opid_t
 	op_endc    chan opid_t
@@ -690,12 +684,10 @@ type log_t struct {
 	napply           int
 	nabsorption      int
 	nlogwrite        int
-	writecycles      uint64
 	logendcycles     uint64
 	logbegincycles   uint64
 	logcommitdcycles uint64
 	logforcecycles   uint64
-	sndwritecycles   uint64
 	norderedwrite    int
 	nblkapply        int
 	nabsorbapply     int
@@ -762,7 +754,6 @@ func (ld *logdescriptor_t) w_logdest(p int, n int) {
 
 func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.ml = mk_memlog(ls, ll, bcache)
-	log.writec = make(chan buf_t)
 	log.op_startc = make(chan opid_t)
 	log.op_endc = make(chan opid_t)
 	log.forcec = make(chan bool)
@@ -775,6 +766,15 @@ func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.logstopc = make(chan bool)
 	log.commitstopc = make(chan bool)
 	log.applystopc = make(chan bool)
+}
+
+func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
+	if log_debug {
+		fmt.Printf("log_write %d %v ordered %v\n", opid, b.Block, ordered)
+	}
+	log.ml.bcache.Refup(b, "write")
+	// ok too lookup curtrans, since no concurrent read/mod
+	log.curtrans.add_write(opid, log, b, ordered)
 }
 
 func (log *log_t) apply(tail, head index_t) index_t {
@@ -984,7 +984,6 @@ func (l *log_t) logger(h index_t) {
 	commitready := true
 	stopping := false
 	var ts1 uint64
-	n := 0
 	for {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "logger")
@@ -1001,14 +1000,6 @@ func (l *log_t) logger(h index_t) {
 		commit := false
 		for !(commit && commitready && t.iscommittable()) {
 			select {
-			case nb := <-l.writec:
-				s := runtime.Rdtsc()
-				if l.nlogwrite-n > MaxBlkPerOp { // XXX concurrent ops
-					fmt.Printf("too many blks per op? %d\n", l.nlogwrite-n)
-				}
-
-				t.add_write(l, nb)
-				l.writecycles += (runtime.Rdtsc() - s)
 			case opid := <-l.op_endc:
 				l.nop++
 				s := runtime.Rdtsc()
@@ -1032,7 +1023,6 @@ func (l *log_t) logger(h index_t) {
 				if log_debug {
 					fmt.Printf("logger: admit %d\n", l.nextop)
 				}
-				n = l.nlogwrite
 				t.add_op(l.nextop)
 				l.nextop++
 				if t.startcommit() {
