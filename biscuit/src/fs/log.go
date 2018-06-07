@@ -46,23 +46,27 @@ func (log *log_t) Op_begin(s string) opid_t {
 	if memfs {
 		return 0
 	}
+
+	log.Lock()
+
 	if log_debug {
 		fmt.Printf("op_begin: admit? %v\n", s)
 	}
 
 	t := runtime.Rdtsc()
 
-	opid := <-log.op_startc
-
-	//opid := log.nextop
-	//if log.curtrans.startcommit() {
-	//	opid = <-log.op_startc
-	//} else {
-	//	log.nextop++
-	//	log.curtrans.add_op(opid)
-	//}
+	opid := log.nextop
+	if log.curtrans.startcommit() || log.curtrans.committing {
+		log.Unlock()
+		opid = <-log.op_startc
+	} else {
+		log.nextop++
+		log.curtrans.add_op(opid)
+		log.Unlock()
+	}
 
 	log.opbegincycles += (runtime.Rdtsc() - t)
+
 	if log_debug {
 		fmt.Printf("op_begin: go %d %v\n", opid, s)
 	}
@@ -403,6 +407,7 @@ type trans_t struct {
 	orderedpresent map[int]bool      // enable quick check so see if block is in ordered
 	waiters        int               // number of processes wait for this trans to commit
 	waitc          chan bool         // channel on which waiters are waiting
+	committing     bool
 }
 
 func mk_trans(start index_t, ml *memlog_t) *trans_t {
@@ -418,11 +423,20 @@ func mk_trans(start index_t, ml *memlog_t) *trans_t {
 }
 
 func (trans *trans_t) add_op(opid opid_t) {
-	trans.inprogress++
+	trans.Lock()
+	defer trans.Unlock()
+
+	trans.inprogress += 1
 }
 
 func (trans *trans_t) mark_done(opid opid_t) {
-	trans.inprogress--
+	trans.Lock()
+	defer trans.Unlock()
+
+	if trans.inprogress == 0 {
+		panic("mark done")
+	}
+	trans.inprogress -= 1
 }
 
 func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_t, ordered bool) {
@@ -658,6 +672,7 @@ type applyreq_t struct {
 }
 
 type log_t struct {
+	sync.Mutex
 	ml         *memlog_t
 	curtrans   *trans_t
 	op_startc  chan opid_t
@@ -988,8 +1003,7 @@ func (l *log_t) logger(h index_t) {
 		common.Kunresdebug()
 		common.Kresdebug(100<<20, "logger")
 
-		t := mk_trans(head, l.ml)
-		l.curtrans = t
+		l.curtrans = mk_trans(head, l.ml)
 
 		admissionc := l.op_startc // set admissionc to nil when transaction is full
 
@@ -997,16 +1011,15 @@ func (l *log_t) logger(h index_t) {
 		// transaction is full or a process forces the transaction. We
 		// delay the commit until the commit of previous transaction has
 		// finished and all ops of this transactions have completed.
-		commit := false
-		for !(commit && commitready && t.iscommittable()) {
+		for !(l.curtrans.committing && commitready && l.curtrans.iscommittable()) {
 			select {
 			case opid := <-l.op_endc:
 				l.nop++
 				s := runtime.Rdtsc()
-				t.mark_done(opid)
+				l.curtrans.mark_done(opid)
 				if admissionc == nil { // admit ops again?
-					if t.startcommit() { // nope, full and commit
-						commit = true
+					if l.curtrans.startcommit() { // nope, full and commit
+						l.curtrans.committing = true
 					} else {
 						if log_debug {
 							fmt.Printf("logger: can admit op %d\n", l.nextop)
@@ -1019,28 +1032,30 @@ func (l *log_t) logger(h index_t) {
 				}
 				l.logendcycles += (runtime.Rdtsc() - s)
 			case admissionc <- l.nextop:
+				l.Lock()
 				s := runtime.Rdtsc()
 				if log_debug {
 					fmt.Printf("logger: admit %d\n", l.nextop)
 				}
-				t.add_op(l.nextop)
+				l.curtrans.add_op(l.nextop)
 				l.nextop++
-				if t.startcommit() {
+				if l.curtrans.startcommit() {
 					admissionc = nil
 				}
 				l.logbegincycles += (runtime.Rdtsc() - s)
+				l.Unlock()
 			case <-l.forcec:
 				s := runtime.Rdtsc()
 				l.nforce++
-				if t.waiters > 0 {
+				if l.curtrans.waiters > 0 {
 					l.nbatchforce++
 				}
-				t.waiters++
+				l.curtrans.waiters++
 				if log_debug {
-					fmt.Printf("logger: force %d\n", t.waiters)
+					fmt.Printf("logger: force %d\n", l.curtrans.waiters)
 				}
-				l.forcewaitc <- t.waitc
-				commit = true
+				l.forcewaitc <- l.curtrans.waitc
+				l.curtrans.committing = true // XXX lock?
 				if !commitready {
 					l.ndelayforce++
 				}
@@ -1064,16 +1079,16 @@ func (l *log_t) logger(h index_t) {
 			}
 		}
 
-		if t.emptytrans() {
-			t.unblock_waiters()
+		if l.curtrans.emptytrans() {
+			l.curtrans.unblock_waiters()
 		} else {
 			// commit transaction, and (hopefully) in parallel with
 			// committing start new transaction.
 			ts1 = runtime.Rdtsc()
-			t.head = t.head + index_t(t.logged.Len())
-			head = t.head
+			l.curtrans.head = l.curtrans.head + index_t(l.curtrans.logged.Len())
+			head = l.curtrans.head
 
-			l.commitc <- t
+			l.commitc <- l.curtrans
 			// wait until commit thread tells us to go ahead with
 			// next trans
 			commitdone := <-l.commitdonec
