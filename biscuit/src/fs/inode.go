@@ -6,6 +6,8 @@ import "unsafe"
 import "sort"
 import "strconv"
 import "reflect"
+import "runtime"
+import "strings"
 
 import "sync/atomic"
 
@@ -36,6 +38,10 @@ type inode_stats_t struct {
 	Nclose    counter_t
 	Nsync     counter_t
 	Nreopen   counter_t
+	Cwrite    uint64
+	Ciwrite   uint64
+	Ciupdate  uint64
+	Csync     uint64
 }
 
 func (c *counter_t) inc() {
@@ -47,8 +53,15 @@ func (is *inode_stats_t) stats() string {
 	v := reflect.ValueOf(*is)
 	s := "inode:"
 	for i := 0; i < v.NumField(); i++ {
-		n := v.Field(i).Interface().(counter_t)
-		s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
+
+		if strings.HasPrefix(v.Type().Field(i).Name, "C") {
+			n := v.Field(i).Interface().(uint64)
+			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
+		} else {
+			n := v.Field(i).Interface().(counter_t)
+			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
+		}
+
 	}
 	return s + "\n"
 }
@@ -309,7 +322,7 @@ func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err
 func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int, common.Err_t) {
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call. account for indirect blocks.
-	max := (MaxBlkPerOp - 2) * common.BSIZE
+	max := (MaxBlkPerOp - 3) * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 
@@ -328,7 +341,11 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if n > max {
 			n = max
 		}
+
+		s := runtime.Rdtsc()
+
 		opid := idm.fs.fslog.Op_begin("dowrite")
+
 		idm.ilock("")
 		if idm.itype == I_DIR {
 			panic("write to dir")
@@ -337,10 +354,21 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if app {
 			off = idm.size
 		}
+		s1 := runtime.Rdtsc()
 		wrote, err := idm.iwrite(opid, src, off, n)
+		idm.fs.istats.Ciwrite += (runtime.Rdtsc() - s1)
+
+		s2 := runtime.Rdtsc()
 		idm._iupdate(opid)
+		idm.fs.istats.Ciupdate += (runtime.Rdtsc() - s2)
+
 		idm.iunlock("")
+
 		idm.fs.fslog.Op_end(opid)
+
+		t := runtime.Rdtsc()
+		idm.fs.istats.Cwrite += (t - s)
+
 		if err != 0 {
 			return i, err
 		}
