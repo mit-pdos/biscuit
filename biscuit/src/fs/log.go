@@ -4,6 +4,7 @@ import "fmt"
 import "runtime"
 import "strconv"
 import "sync"
+import "sync/atomic"
 
 import "common"
 
@@ -48,28 +49,34 @@ func (log *log_t) Op_begin(s string) opid_t {
 	}
 
 	log.Lock()
+	defer log.Unlock()
 
-	if log_debug {
-		fmt.Printf("op_begin: admit? %v\n", s)
-	}
-
-	t := runtime.Rdtsc()
-
+	ts := runtime.Rdtsc()
 	opid := log.nextop
-	if log.curtrans.startcommit() || log.curtrans.committing {
-		log.Unlock()
-		opid = <-log.op_startc
-	} else {
-		log.nextop++
-		log.curtrans.add_op(opid)
-		log.Unlock()
+	log.nextop += 1
+
+	t := log.curtrans
+	t.Lock()
+
+	for t.startcommit() || t.committing {
+		if log_debug {
+			fmt.Printf("op_begin: %d wait %s\n", opid, s)
+		}
+		t.Unlock()
+		log.admissioncond.Wait()
+		t = log.curtrans // maybe a different trans
+		t.Lock()
 	}
 
-	log.opbegincycles += (runtime.Rdtsc() - t)
+	// allow op to start
+	t.add_op(opid)
+
+	log.opbegincycles += (runtime.Rdtsc() - ts)
 
 	if log_debug {
 		fmt.Printf("op_begin: go %d %v\n", opid, s)
 	}
+	t.Unlock()
 	return opid
 }
 
@@ -77,50 +84,89 @@ func (log *log_t) Op_end(opid opid_t) {
 	if memfs {
 		return
 	}
+
+	log.Lock()
+	defer log.Unlock()
+
 	if log_debug {
 		fmt.Printf("op_end: done %d\n", opid)
 	}
 	s := runtime.Rdtsc()
 
-	log.op_endc <- opid
+	t := log.curtrans
 
-	//if log.curtrans.startcommit() {
-	//	log.op_endc <- opid
-	//} else {
-	//	log.curtrans.mark_done(opid)
-	//}
+	t.Lock()
+	t.mark_done(opid)
+
+	committing := false
+	if t.startcommit() && t.iscommittable() { // are we the last op of this trans?
+		committing = true
+		log.start_committer(t)
+	}
+	t.Unlock()
+
+	if !committing {
+		// maybe this trans didn't use all its reserved space
+		log.admissioncond.Broadcast()
+	}
+
 	log.opendcycles += (runtime.Rdtsc() - s)
 }
 
-// ensure any fs ops in the journal preceding this sync call are flushed to disk
+// Ensure any fs ops in the journal preceding this sync call are flushed to disk
 // by waiting for log commit.
 func (log *log_t) Force() {
 	if memfs {
 		panic("memfs")
 	}
+
+	t := log.getcurtrans()
+
+	t.Lock()
+	defer t.Unlock()
+
 	if log_debug {
 		fmt.Printf("log force\n")
 	}
 
 	s := runtime.Rdtsc()
 
-	log.forcec <- true
-	c := <-log.forcewaitc
-	<-c
+	log.nforce++
+	if t.isstartforce() {
+		log.nbatchforce++
+	} else {
+		t.setstartforce()
+	}
+	if t.iscommittable() { // no outstanding ops?
+		log.start_committer(t)
+	}
+
+	if log_debug {
+		fmt.Printf("Force: wait for commit trans %d\n", t.start)
+	}
+
+	for !t.forcedone {
+		t.forcecond.Wait()
+	}
+
 	log.forcecycles += (runtime.Rdtsc() - s)
+
+	if log_debug {
+		fmt.Printf("Force: done trans %d\n", t.start)
+	}
 }
 
-// For testing
-func (log *log_t) ForceApply() {
-	if memfs {
-		panic("memfs")
-	}
-	if log_debug {
-		fmt.Printf("log force apply\n")
-	}
-	log.applyforcec <- true
-	<-log.applyforcec
-}
+// // For testing
+// func (log *log_t) ForceApply() {
+// 	if memfs {
+// 		panic("memfs")
+// 	}
+// 	if log_debug {
+// 		fmt.Printf("log force apply\n")
+// 	}
+// 	log.applyforcec <- true
+// 	<-log.applyforcec
+// }
 
 // Write increments ref so that the log has always a valid ref to the buf's
 // page.  The logging layer refdowns when it it is done with the page.  The
@@ -238,22 +284,22 @@ func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 	log := &log_t{}
 	log.mk_log(logstart, loglen, bcache)
 	head := log.recover()
-	if !memfs {
-		go log.logger(head)
-		go log.committer(head)
-		go log.applier(head)
-	}
+	log.curtrans = mk_trans(head, log.ml)
 	return log
 }
 
 func (log *log_t) StopLog() {
 	log.Force()
-	log.logstopc <- true
-	<-log.logstopc
-	log.commitstopc <- true
-	<-log.commitstopc
-	log.applystopc <- true
-	<-log.applystopc
+
+	log.Lock()
+	defer log.Unlock()
+
+	for log.nactive > 0 {
+		if log_debug {
+			fmt.Printf("Wait for logging system to stop\n")
+		}
+		log.activecond.Wait()
+	}
 }
 
 //
@@ -396,6 +442,7 @@ type buf_t struct {
 
 type trans_t struct {
 	sync.Mutex
+	forcecond      *sync.Cond
 	ml             *memlog_t
 	start          index_t
 	head           index_t
@@ -405,34 +452,28 @@ type trans_t struct {
 	orderedcopy    *common.BlkList_t // list of ordered blocks
 	logpresent     map[int]bool      // enable quick check to see if block is in log
 	orderedpresent map[int]bool      // enable quick check so see if block is in ordered
-	waiters        int               // number of processes wait for this trans to commit
-	waitc          chan bool         // channel on which waiters are waiting
+	forcestart     bool
 	committing     bool
+	forcedone      bool
 }
 
 func mk_trans(start index_t, ml *memlog_t) *trans_t {
 	t := &trans_t{start: start, head: start + NDescriptorBlks}
 	t.ml = ml
+	t.forcecond = sync.NewCond(t)
 	t.logged = common.MkBlkList()      // bounded by MaxDescriptor
 	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
 	t.orderedcopy = common.MkBlkList() // bounded by MaxOrdered
 	t.logpresent = make(map[int]bool, ml.loglen)
 	t.orderedpresent = make(map[int]bool, MaxOrdered)
-	t.waitc = make(chan bool)
 	return t
 }
 
 func (trans *trans_t) add_op(opid opid_t) {
-	trans.Lock()
-	defer trans.Unlock()
-
 	trans.inprogress += 1
 }
 
 func (trans *trans_t) mark_done(opid opid_t) {
-	trans.Lock()
-	defer trans.Unlock()
-
 	if trans.inprogress == 0 {
 		panic("mark done")
 	}
@@ -440,9 +481,6 @@ func (trans *trans_t) mark_done(opid opid_t) {
 }
 
 func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_t, ordered bool) {
-	trans.Lock()
-	defer trans.Unlock()
-
 	if log_debug {
 		fmt.Printf("add_write: opid %d start %d #logged %d #ordered %d b %d(%v)\n", opid,
 			trans.start, trans.logged.Len(), trans.ordered.Len(), blk.Block, ordered)
@@ -498,14 +536,12 @@ func (trans *trans_t) iscommittable() bool {
 	return trans.inprogress == 0
 }
 
-// Caller must hold lock
 func (trans *trans_t) isorderedfull() bool {
 	n := trans.ordered.Len()
 	n += MaxBlkPerOp
 	return n >= MaxOrdered
 }
 
-// Caller must hold lock
 func (trans *trans_t) isdescriptorfull() bool {
 	n := trans.logged.Len()
 	n += trans.inprogress * MaxBlkPerOp
@@ -514,26 +550,19 @@ func (trans *trans_t) isdescriptorfull() bool {
 }
 
 func (trans *trans_t) emptytrans() bool {
-	trans.Lock()
-	defer trans.Unlock()
-
 	return trans.logged.Len() == 0 && trans.ordered.Len() == 0
 }
 
 func (trans *trans_t) startcommit() bool {
-	trans.Lock()
-	defer trans.Unlock()
-
-	return trans.isdescriptorfull() || trans.isorderedfull()
+	return trans.isdescriptorfull() || trans.isorderedfull() || trans.isstartforce()
 }
 
-func (trans *trans_t) unblock_waiters() {
-	if log_debug {
-		fmt.Printf("wakeup waiters %v\n", trans.waiters)
-	}
-	for i := 0; i < trans.waiters; i++ {
-		trans.waitc <- true
-	}
+func (trans *trans_t) isstartforce() bool {
+	return trans.forcestart
+}
+
+func (trans *trans_t) setstartforce() {
+	trans.forcestart = true
 }
 
 func (trans *trans_t) copyintolog(ml *memlog_t) {
@@ -673,22 +702,14 @@ type applyreq_t struct {
 
 type log_t struct {
 	sync.Mutex
-	ml         *memlog_t
-	curtrans   *trans_t
-	op_startc  chan opid_t
-	op_endc    chan opid_t
-	forcec     chan bool
-	forcewaitc chan (chan bool)
-
-	logstopc    chan bool
-	commitstopc chan bool
-	applystopc  chan bool
-
-	commitc     chan *trans_t
-	commitdonec chan bool
-	applyreqc   chan applyreq_t
-	applyrepc   chan index_t
-	applyforcec chan bool
+	admissioncond *sync.Cond
+	activecond    *sync.Cond
+	ml            *memlog_t
+	curtrans      *trans_t
+	head          index_t
+	tail          index_t
+	translog      *translog_t
+	nactive       int64
 
 	nextop opid_t
 
@@ -769,18 +790,16 @@ func (ld *logdescriptor_t) w_logdest(p int, n int) {
 
 func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.ml = mk_memlog(ls, ll, bcache)
-	log.op_startc = make(chan opid_t)
-	log.op_endc = make(chan opid_t)
-	log.forcec = make(chan bool)
-	log.forcewaitc = make(chan (chan bool))
-	log.commitc = make(chan *trans_t)
-	log.commitdonec = make(chan bool)
-	log.applyreqc = make(chan applyreq_t)
-	log.applyrepc = make(chan index_t)
-	log.applyforcec = make(chan bool)
-	log.logstopc = make(chan bool)
-	log.commitstopc = make(chan bool)
-	log.applystopc = make(chan bool)
+	log.admissioncond = sync.NewCond(log)
+	log.activecond = sync.NewCond(log)
+	log.translog = mkTransLog()
+	log.nextop = opid_t(1)
+}
+
+func (log *log_t) getcurtrans() *trans_t {
+	log.Lock()
+	defer log.Unlock()
+	return log.curtrans
 }
 
 func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
@@ -788,54 +807,11 @@ func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
 		fmt.Printf("log_write %d %v ordered %v\n", opid, b.Block, ordered)
 	}
 	log.ml.bcache.Refup(b, "write")
-	// ok too lookup curtrans, since no concurrent read/mod
-	log.curtrans.add_write(opid, log, b, ordered)
-}
 
-func (log *log_t) apply(tail, head index_t) index_t {
-	log.napply++
-
-	done := make(map[int]bool, log.ml.loglen)
-
-	// The log is committed. If we crash while installing the blocks to
-	// their destinations, we can install again.  Install backwards, writing
-	// the last version of a block (and not earlier versions).
-
-	if log_debug {
-		fmt.Printf("apply log: blks from %d till %d\n", tail, head)
-	}
-
-	if tail == head {
-		return head
-	}
-
-	for i := head - 1; i > tail; i-- {
-		l := log.ml.getmemlog(i)
-		if l.Block == DescriptorBlk || l.Block == RevokeBlk || l.Block == Canceled {
-			// nothing to do for descriptor blocks
-		} else {
-			log.nblkapply++
-			if _, ok := done[l.Block]; !ok {
-				log.ml.bcache.Write_async_through(l)
-				done[l.Block] = true
-			} else {
-				log.nabsorbapply++
-			}
-		}
-	}
-
-	s := runtime.Rdtsc()
-	log.ml.flush() // flush apply
-	t := runtime.Rdtsc()
-	log.ml.flushlogdatacycles += (t - s)
-
-	log.ml.commit_tail(head)
-
-	if log_debug {
-		fmt.Printf("apply log: updated tail %d\n", head)
-	}
-
-	return head
+	t := log.getcurtrans()
+	t.Lock()
+	defer t.Unlock()
+	t.add_write(opid, log, b, ordered)
 }
 
 func (log *log_t) revokeList(tail, head index_t, rl []int) {
@@ -846,52 +822,6 @@ func (log *log_t) revokeList(tail, head index_t, rl []int) {
 				l.Block = Canceled
 			}
 
-		}
-	}
-}
-
-// the applier owns the tail of the log
-func (l *log_t) applier(t index_t) {
-	tail := t
-	head := t
-	waiting := false
-	stopping := false
-	for {
-		select {
-		case stopping = <-l.applystopc:
-			if !waiting {
-				l.applystopc <- true
-				return
-			}
-		case req := <-l.applyreqc:
-			head = req.head
-			if log_debug {
-				fmt.Printf("applier: tail %d head %d rl %v\n", tail, head, req.rl)
-			}
-			l.revokeList(tail, head, req.rl)
-			if l.ml.freespace(head, tail) {
-				l.applyrepc <- tail
-			} else {
-				// make committer wait
-				l.nbapply++
-				waiting = true
-			}
-			if l.ml.almosthalffull(tail, head) {
-				// start applying so that by the next commit log
-				// has space for another transaction
-				tail = l.apply(tail, head)
-			}
-			if waiting {
-				waiting = false
-				l.applyrepc <- tail
-			}
-			if stopping {
-				l.applystopc <- true
-				return
-			}
-		case <-l.applyforcec:
-			tail = l.apply(tail, head)
-			l.applyforcec <- true
 		}
 	}
 }
@@ -942,164 +872,111 @@ func (tl *translog_t) revokeLog(trans *trans_t) []int {
 	return r
 }
 
-// the committer owns the head of the log
-func (l *log_t) committer(h index_t) {
-	tail := h
-	head := h
-	tl := mkTransLog()
-	for {
-		select {
-		case <-l.commitstopc:
-			l.commitstopc <- true
-			return
-		case t := <-l.commitc:
-			if log_debug {
-				fmt.Printf("committer: start waiters %d tail %d head %d #ordered %d\n",
-					t.waiters, tail, head, t.ordered.Len())
-			}
-
-			rl := tl.revokeLog(t)
-
-			tl.add(t)
-
-			t.fillRevoke(l.ml, rl)
-			t.copyintolog(l.ml)
-			t.copyordered(l.ml)
-
-			if l.ml.freespace(t.head, tail) {
-				if log_debug {
-					fmt.Printf("committer: start next trans early\n")
-				}
-				l.nccommit++
-				l.commitdonec <- false
-			}
-
-			t.commit(tail, l.ml)
-
-			head = t.head
-
-			l.applyreqc <- applyreq_t{head, rl}
-			tail = <-l.applyrepc
-
-			tl.remove(tail)
-			t.unblock_waiters()
-
-			l.commitdonec <- true
-
-			if log_debug {
-				fmt.Printf("committer: done tail %v head %v\n", tail, head)
-			}
-		}
+// caller must hold lock
+func (log *log_t) start_committer(t *trans_t) {
+	if !t.committing {
+		t.committing = true
+		atomic.AddInt64(&log.nactive, 1)
+		go log.committer(t)
 	}
+
 }
 
-func (l *log_t) logger(h index_t) {
-	l.nextop = opid_t(1) // reserve 0 for no opid
-	head := h
-	commitready := true
-	stopping := false
-	var ts1 uint64
-	for {
-		common.Kunresdebug()
-		common.Kresdebug(100<<20, "logger")
+// XXX commiter should be a trans method, and then followed by a log apply method?
+func (log *log_t) committer(t *trans_t) {
+	t.Lock()
 
-		l.curtrans = mk_trans(head, l.ml)
+	t.head = t.head + index_t(t.logged.Len())
+	head := t.head
 
-		admissionc := l.op_startc // set admissionc to nil when transaction is full
+	// commit
+	if log_debug {
+		fmt.Printf("committer: commit trans %d head %d #ordered %d\n", t.start, head, t.ordered.Len())
+	}
 
-		// Fall out of when the loop when transaction must be committed:
-		// transaction is full or a process forces the transaction. We
-		// delay the commit until the commit of previous transaction has
-		// finished and all ops of this transactions have completed.
-		for !(l.curtrans.committing && commitready && l.curtrans.iscommittable()) {
-			select {
-			case opid := <-l.op_endc:
-				l.nop++
-				s := runtime.Rdtsc()
-				l.curtrans.mark_done(opid)
-				if admissionc == nil { // admit ops again?
-					if l.curtrans.startcommit() { // nope, full and commit
-						l.curtrans.committing = true
-					} else {
-						if log_debug {
-							fmt.Printf("logger: can admit op %d\n", l.nextop)
-						}
-						// admit another op. this may op
-						// did not use all the space
-						// that it reserved.
-						admissionc = l.op_startc
-					}
-				}
-				l.logendcycles += (runtime.Rdtsc() - s)
-			case admissionc <- l.nextop:
-				l.Lock()
-				s := runtime.Rdtsc()
-				if log_debug {
-					fmt.Printf("logger: admit %d\n", l.nextop)
-				}
-				l.curtrans.add_op(l.nextop)
-				l.nextop++
-				if l.curtrans.startcommit() {
-					admissionc = nil
-				}
-				l.logbegincycles += (runtime.Rdtsc() - s)
-				l.Unlock()
-			case <-l.forcec:
-				s := runtime.Rdtsc()
-				l.nforce++
-				if l.curtrans.waiters > 0 {
-					l.nbatchforce++
-				}
-				l.curtrans.waiters++
-				if log_debug {
-					fmt.Printf("logger: force %d\n", l.curtrans.waiters)
-				}
-				l.forcewaitc <- l.curtrans.waitc
-				l.curtrans.committing = true // XXX lock?
-				if !commitready {
-					l.ndelayforce++
-				}
-				l.logforcecycles += (runtime.Rdtsc() - s)
-			case b := <-l.commitdonec:
-				s := runtime.Rdtsc()
-				if !b {
-					panic("committer: sent false?")
-				}
-				commitready = true
-				if stopping {
-					l.logstopc <- true
-					return
-				}
-				l.logcommitdcycles += (runtime.Rdtsc() - s)
-			case stopping = <-l.logstopc:
-				if commitready {
-					l.logstopc <- true
-					return
-				}
-			}
-		}
+	rl := log.translog.revokeLog(t)
+	log.translog.add(t)
+	t.fillRevoke(log.ml, rl)
+	t.copyintolog(log.ml)
+	t.copyordered(log.ml)
 
-		if l.curtrans.emptytrans() {
-			l.curtrans.unblock_waiters()
+	t.commit(log.tail, log.ml)
+
+	if log_debug {
+		fmt.Printf("committer: wakeup forcer for trans %d\n", t.start)
+	}
+
+	t.forcedone = true
+	t.forcecond.Broadcast()
+
+	t.Unlock()
+
+	log.Lock()
+
+	if log.ml.almosthalffull(log.tail, head) {
+		log.revokeList(log.tail, head, rl)
+		log.tail = log.apply(log.tail, head)
+		log.translog.remove(log.tail)
+	}
+
+	if log_debug {
+		fmt.Printf("committer: new trans %d\n", head)
+	}
+
+	// start new transaction
+	log.curtrans = mk_trans(head, log.ml)
+	log.admissioncond.Broadcast()
+
+	log.nactive--
+	log.activecond.Broadcast()
+
+	log.Unlock()
+}
+
+func (log *log_t) apply(tail, head index_t) index_t {
+	log.napply++
+
+	done := make(map[int]bool, log.ml.loglen)
+
+	// The log is committed. If we crash while installing the blocks to
+	// their destinations, we can install again.  Install backwards, writing
+	// the last version of a block (and not earlier versions).
+
+	if log_debug {
+		fmt.Printf("apply log: blks from %d till %d\n", tail, head)
+	}
+
+	if tail == head {
+		return head
+	}
+
+	for i := head - 1; i > tail; i-- {
+		l := log.ml.getmemlog(i)
+		if l.Block == DescriptorBlk || l.Block == RevokeBlk || l.Block == Canceled {
+			// nothing to do for descriptor blocks
 		} else {
-			// commit transaction, and (hopefully) in parallel with
-			// committing start new transaction.
-			ts1 = runtime.Rdtsc()
-			l.curtrans.head = l.curtrans.head + index_t(l.curtrans.logged.Len())
-			head = l.curtrans.head
-
-			l.commitc <- l.curtrans
-			// wait until commit thread tells us to go ahead with
-			// next trans
-			commitdone := <-l.commitdonec
-			l.commitcycles += (runtime.Rdtsc() - ts1)
-			if !commitdone {
-				commitready = false
+			log.nblkapply++
+			if _, ok := done[l.Block]; !ok {
+				log.ml.bcache.Write_async_through(l)
+				done[l.Block] = true
 			} else {
-				commitready = true
+				log.nabsorbapply++
 			}
 		}
 	}
+
+	s := runtime.Rdtsc()
+	log.ml.flush() // flush apply
+	t := runtime.Rdtsc()
+	log.ml.flushlogdatacycles += (t - s)
+
+	log.ml.commit_tail(head)
+
+	if log_debug {
+		fmt.Printf("apply log: updated tail %d\n", head)
+	}
+
+	return head
 }
 
 func (log *log_t) revoke(im []int, tail, until index_t, r int) {

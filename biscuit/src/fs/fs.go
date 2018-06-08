@@ -101,7 +101,6 @@ func (fs *Fs_t) Sizes() (int, int) {
 }
 
 func (fs *Fs_t) StopFS() {
-	fs.Fs_sync()
 	fs.fslog.StopLog()
 }
 
@@ -1489,7 +1488,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 		return 0
 	}
 	fs.fslog.Force()
-	fs.fslog.ForceApply()
+	// fs.fslog.ForceApply()
 	return 0
 }
 
