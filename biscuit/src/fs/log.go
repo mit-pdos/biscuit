@@ -52,8 +52,10 @@ func (log *log_t) Op_begin(s string) opid_t {
 	defer log.Unlock()
 
 	ts := runtime.Rdtsc()
+
 	opid := log.nextop
 	log.nextop += 1
+	log.nop += 1
 
 	t := log.curtrans
 	t.Lock()
@@ -218,18 +220,10 @@ func (log *log_t) Stats() string {
 	s += strconv.FormatUint(log.opbegincycles, 10)
 	s += "\n\t end cycles "
 	s += strconv.FormatUint(log.opendcycles, 10)
-	s += "\n\tnlogwrite "
+	s += "\n\tnwrite "
 	s += strconv.Itoa(log.nlogwrite)
-	s += "\n\t log begin cycles "
-	s += strconv.FormatUint(log.logbegincycles, 10)
-	s += "\n\t log end cycles "
-	s += strconv.FormatUint(log.logendcycles, 10)
-	s += "\n\t commit done cycles "
-	s += strconv.FormatUint(log.logcommitdcycles, 10)
-	s += "\n\t log force cycles "
-	s += strconv.FormatUint(log.logforcecycles, 10)
-	s += "\n\t logger commit cycles "
-	s += strconv.FormatUint(log.commitcycles, 10)
+	s += "\n\t write cycles "
+	s += strconv.FormatUint(log.writecycles, 10)
 	s += "\n\tnorderedwrite "
 	s += strconv.Itoa(log.norderedwrite)
 	s += "\n\tnorder2logwrite "
@@ -549,7 +543,7 @@ func (trans *trans_t) isdescriptorfull() bool {
 	return n >= trans.ml.maxtrans
 }
 
-func (trans *trans_t) emptytrans() bool {
+func (trans *trans_t) isempty() bool {
 	return trans.logged.Len() == 0 && trans.ordered.Len() == 0
 }
 
@@ -714,29 +708,27 @@ type log_t struct {
 	nextop opid_t
 
 	// some stats
-	nop              int
-	opbegincycles    uint64
-	opendcycles      uint64
-	napply           int
-	nabsorption      int
-	nlogwrite        int
-	logendcycles     uint64
-	logbegincycles   uint64
-	logcommitdcycles uint64
-	logforcecycles   uint64
-	norderedwrite    int
-	nblkapply        int
-	nabsorbapply     int
-	nforce           int
-	nbatchforce      int
-	forcecycles      uint64
-	ndelayforce      int
-	commitcycles     uint64
-	nccommit         int
-	nbapply          int
-	nlogwrite2order  int
-	norder2logwrite  int
-	readcycles       uint64
+	nop           int
+	opbegincycles uint64
+	opendcycles   uint64
+	napply        int
+	nabsorption   int
+	nlogwrite     int
+	writecycles   uint64
+
+	norderedwrite   int
+	nblkapply       int
+	nabsorbapply    int
+	nforce          int
+	nbatchforce     int
+	forcecycles     uint64
+	ndelayforce     int
+	commitcycles    uint64
+	nccommit        int
+	nbapply         int
+	nlogwrite2order int
+	norder2logwrite int
+	readcycles      uint64
 }
 
 // first log header block format
@@ -811,7 +803,9 @@ func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
 	t := log.getcurtrans()
 	t.Lock()
 	defer t.Unlock()
+	ts := runtime.Rdtsc()
 	t.add_write(opid, log, b, ordered)
+	log.writecycles += (runtime.Rdtsc() - ts)
 }
 
 func (log *log_t) revokeList(tail, head index_t, rl []int) {
@@ -899,7 +893,6 @@ func (log *log_t) committer(t *trans_t) {
 	t.fillRevoke(log.ml, rl)
 	t.copyintolog(log.ml)
 	t.copyordered(log.ml)
-
 	t.commit(log.tail, log.ml)
 
 	if log_debug {

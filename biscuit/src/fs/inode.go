@@ -41,7 +41,6 @@ type inode_stats_t struct {
 	Cwrite    uint64
 	Ciwrite   uint64
 	Ciupdate  uint64
-	Csync     uint64
 }
 
 func (c *counter_t) inc() {
