@@ -58,16 +58,13 @@ func (log *log_t) Op_begin(s string) opid_t {
 	log.nop += 1
 
 	t := log.curtrans
-	t.Lock()
 
 	for t.startcommit() || t.committing {
 		if log_debug {
 			fmt.Printf("op_begin: %d wait %s\n", opid, s)
 		}
-		t.Unlock()
 		log.admissioncond.Wait()
 		t = log.curtrans // maybe a different trans
-		t.Lock()
 	}
 
 	// allow op to start
@@ -78,15 +75,14 @@ func (log *log_t) Op_begin(s string) opid_t {
 	if log_debug {
 		fmt.Printf("op_begin: go %d %v\n", opid, s)
 	}
-	t.Unlock()
 	return opid
 }
 
+// XX doesn't hold log lock
 func (log *log_t) Op_end(opid opid_t) {
 	if memfs {
 		return
 	}
-
 	log.Lock()
 	defer log.Unlock()
 
@@ -97,7 +93,10 @@ func (log *log_t) Op_end(opid opid_t) {
 
 	t := log.curtrans
 
-	t.Lock()
+	if t.committing {
+		panic("op_end")
+	}
+
 	t.mark_done(opid)
 
 	committing := false
@@ -105,7 +104,6 @@ func (log *log_t) Op_end(opid opid_t) {
 		committing = true
 		log.start_committer(t)
 	}
-	t.Unlock()
 
 	if !committing {
 		// maybe this trans didn't use all its reserved space
@@ -122,10 +120,10 @@ func (log *log_t) Force() {
 		panic("memfs")
 	}
 
-	t := log.getcurtrans()
+	log.Lock()
+	defer log.Unlock()
 
-	t.Lock()
-	defer t.Unlock()
+	t := log.curtrans
 
 	if log_debug {
 		fmt.Printf("log force\n")
@@ -278,7 +276,7 @@ func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 	log := &log_t{}
 	log.mk_log(logstart, loglen, bcache)
 	head := log.recover()
-	log.curtrans = mk_trans(head, log.ml)
+	log.curtrans = log.mk_trans(head, log.ml)
 	return log
 }
 
@@ -435,7 +433,6 @@ type buf_t struct {
 }
 
 type trans_t struct {
-	sync.Mutex
 	forcecond      *sync.Cond
 	ml             *memlog_t
 	start          index_t
@@ -451,10 +448,10 @@ type trans_t struct {
 	forcedone      bool
 }
 
-func mk_trans(start index_t, ml *memlog_t) *trans_t {
+func (log *log_t) mk_trans(start index_t, ml *memlog_t) *trans_t {
 	t := &trans_t{start: start, head: start + NDescriptorBlks}
 	t.ml = ml
-	t.forcecond = sync.NewCond(t)
+	t.forcecond = sync.NewCond(log)
 	t.logged = common.MkBlkList()      // bounded by MaxDescriptor
 	t.ordered = common.MkBlkList()     // bounded by MaxOrdered
 	t.orderedcopy = common.MkBlkList() // bounded by MaxOrdered
@@ -788,21 +785,16 @@ func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.nextop = opid_t(1)
 }
 
-func (log *log_t) getcurtrans() *trans_t {
-	log.Lock()
-	defer log.Unlock()
-	return log.curtrans
-}
-
 func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
 	if log_debug {
 		fmt.Printf("log_write %d %v ordered %v\n", opid, b.Block, ordered)
 	}
 	log.ml.bcache.Refup(b, "write")
 
-	t := log.getcurtrans()
-	t.Lock()
-	defer t.Unlock()
+	log.Lock()
+	defer log.Unlock()
+
+	t := log.curtrans
 	ts := runtime.Rdtsc()
 	t.add_write(opid, log, b, ordered)
 	log.writecycles += (runtime.Rdtsc() - ts)
@@ -866,7 +858,7 @@ func (tl *translog_t) revokeLog(trans *trans_t) []int {
 	return r
 }
 
-// caller must hold lock
+// caller must hold t lock
 func (log *log_t) start_committer(t *trans_t) {
 	if !t.committing {
 		t.committing = true
@@ -878,7 +870,8 @@ func (log *log_t) start_committer(t *trans_t) {
 
 // XXX commiter should be a trans method, and then followed by a log apply method?
 func (log *log_t) committer(t *trans_t) {
-	t.Lock()
+	log.Lock()
+	defer log.Unlock()
 
 	t.head = t.head + index_t(t.logged.Len())
 	head := t.head
@@ -890,9 +883,11 @@ func (log *log_t) committer(t *trans_t) {
 
 	rl := log.translog.revokeLog(t)
 	log.translog.add(t)
+
 	t.fillRevoke(log.ml, rl)
 	t.copyintolog(log.ml)
 	t.copyordered(log.ml)
+
 	t.commit(log.tail, log.ml)
 
 	if log_debug {
@@ -901,10 +896,6 @@ func (log *log_t) committer(t *trans_t) {
 
 	t.forcedone = true
 	t.forcecond.Broadcast()
-
-	t.Unlock()
-
-	log.Lock()
 
 	if log.ml.almosthalffull(log.tail, head) {
 		log.revokeList(log.tail, head, rl)
@@ -917,13 +908,11 @@ func (log *log_t) committer(t *trans_t) {
 	}
 
 	// start new transaction
-	log.curtrans = mk_trans(head, log.ml)
+	log.curtrans = log.mk_trans(head, log.ml)
 	log.admissioncond.Broadcast()
 
 	log.nactive--
 	log.activecond.Broadcast()
-
-	log.Unlock()
 }
 
 func (log *log_t) apply(tail, head index_t) index_t {
