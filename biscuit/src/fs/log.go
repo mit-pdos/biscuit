@@ -58,7 +58,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 
 	t := log.curtrans
 
-	for t.startcommit() || t.committing {
+	for t.isfull() {
 		if log_debug {
 			fmt.Printf("op_begin: %d wait %s\n", opid, s)
 		}
@@ -77,7 +77,6 @@ func (log *log_t) Op_begin(s string) opid_t {
 	return opid
 }
 
-// XX doesn't hold log lock
 func (log *log_t) Op_end(opid opid_t) {
 	if memfs {
 		return
@@ -92,16 +91,16 @@ func (log *log_t) Op_end(opid opid_t) {
 
 	t := log.curtrans
 
-	if t.committing {
-		panic("op_end")
-	}
-
 	t.mark_done(opid)
 
 	committing := false
-	if t.startcommit() && t.iscommittable() { // are we the last op of this trans?
+
+	if (t.isfull() || t.force) && t.iscommittable() { // are we the last op of this trans?
 		committing = true
-		log.start_commit(t)
+		if log_debug {
+			fmt.Printf("Op_end: wakeup committer start %d\n", t.start)
+		}
+		log.commitcond.Signal()
 	}
 
 	if !committing {
@@ -124,27 +123,29 @@ func (log *log_t) Force() {
 
 	t := log.curtrans
 
-	if log_debug {
-		fmt.Printf("log force\n")
-	}
-
 	s := runtime.Rdtsc()
 
 	log.nforce++
 
-	if t.isempty() {
-		// someone else already committed and nothing left
+	if t.isempty() || t.forcedone {
+		if log_debug {
+			fmt.Printf("Force: nothing outstanding\n")
+		}
 		log.nbatchforce++
 		return
 	}
 
-	if t.isstartforce() {
+	if t.force {
 		log.nbatchforce++
 	} else {
-		t.setstartforce()
+		t.force = true
 	}
+
 	if t.iscommittable() { // no outstanding ops?
-		log.start_commit(t)
+		if log_debug {
+			fmt.Printf("Force: wakeup committer start %d\n", t.start)
+		}
+		log.commitcond.Signal()
 	}
 
 	if log_debug {
@@ -281,8 +282,8 @@ func (log *log_t) Stats() string {
 func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 	log := &log_t{}
 	log.mk_log(logstart, loglen, bcache)
-	head := log.recover()
-	log.curtrans = log.mk_trans(head, log.ml)
+	log.recover()
+	log.curtrans = log.mk_trans(log.head, log.ml)
 	go log.committer()
 	return log
 }
@@ -293,7 +294,7 @@ func (log *log_t) StopLog() {
 	log.Lock()
 
 	log.stop = true
-	log.consumercond.Signal()
+	log.commitcond.Signal()
 	if log_debug {
 		fmt.Printf("Wait for logging system to stop\n")
 	}
@@ -454,7 +455,7 @@ type trans_t struct {
 	orderedcopy    *common.BlkList_t // list of ordered blocks
 	logpresent     map[int]bool      // enable quick check to see if block is in log
 	orderedpresent map[int]bool      // enable quick check so see if block is in ordered
-	forcestart     bool
+	force          bool
 	committing     bool
 	forcedone      bool
 }
@@ -555,16 +556,8 @@ func (trans *trans_t) isempty() bool {
 	return trans.logged.Len() == 0 && trans.ordered.Len() == 0
 }
 
-func (trans *trans_t) startcommit() bool {
-	return trans.isdescriptorfull() || trans.isorderedfull() || trans.isstartforce()
-}
-
-func (trans *trans_t) isstartforce() bool {
-	return trans.forcestart
-}
-
-func (trans *trans_t) setstartforce() {
-	trans.forcestart = true
+func (trans *trans_t) isfull() bool {
+	return trans.isdescriptorfull() || trans.isorderedfull()
 }
 
 func (trans *trans_t) copyintolog(ml *memlog_t) {
@@ -705,11 +698,11 @@ type applyreq_t struct {
 type log_t struct {
 	sync.Mutex
 	admissioncond *sync.Cond
-	producercond  *sync.Cond
-	consumercond  *sync.Cond
+	commitcond    *sync.Cond
 	ml            *memlog_t
 	curtrans      *trans_t
 	tail          index_t
+	head          index_t
 	translog      *translog_t
 	stop          bool
 	stopc         chan (bool)
@@ -792,8 +785,7 @@ func (ld *logdescriptor_t) w_logdest(p int, n int) {
 func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 	log.ml = mk_memlog(ls, ll, bcache)
 	log.admissioncond = sync.NewCond(log)
-	log.producercond = sync.NewCond(log)
-	log.consumercond = sync.NewCond(log)
+	log.commitcond = sync.NewCond(log)
 	log.stopc = make(chan bool)
 	log.translog = mkTransLog()
 	log.nextop = opid_t(1)
@@ -864,7 +856,6 @@ func (tl *translog_t) last() *trans_t {
 	return tl.trans[len(tl.trans)-1]
 }
 
-// XXX upto trans
 func (tl *translog_t) revokeLog(trans *trans_t) []int {
 	r := make([]int, 0)
 	trans.ordered.Apply(func(b *common.Bdev_block_t) {
@@ -880,68 +871,52 @@ func (tl *translog_t) revokeLog(trans *trans_t) []int {
 func (log *log_t) start_commit(t *trans_t) {
 	if !t.committing {
 		t.committing = true
-		t.head = t.head + index_t(t.logged.Len())
-
-		if log_debug {
-			fmt.Printf("start_commit: start %d head %d #ordered %d\n", t.start, t.head,
-				t.ordered.Len())
-		}
-
-		t.copyintolog(log.ml)
-		t.copyordered(log.ml)
-		log.translog.add(t)
-
-		log.consumercond.Signal()
-
-		for !log.ml.freespace(t.head, log.tail) {
-			if log_debug {
-				fmt.Printf("start_commit: wait for log space head %d tail %d\n",
-					t.head, log.tail)
-			}
-			log.producercond.Wait()
-		}
-		if log_debug {
-			fmt.Printf("start_commit: start next trans %d\n", t.head)
-		}
-		log.curtrans = log.mk_trans(t.head, log.ml)
-		log.admissioncond.Broadcast()
 	}
 }
 
-// XXX commiter should be a trans method, and then followed by a log apply method?
 func (log *log_t) committer() {
 	log.Lock()
 	for !log.stop {
+		t := log.curtrans
+		if (t.force || t.isfull()) && t.iscommittable() {
+			t.head = t.head + index_t(t.logged.Len())
 
-		// during unlock translog may grow
-		for i := 0; i < len(log.translog.trans); i++ {
-			t := log.translog.trans[i]
-			if !t.forcedone {
-				if log_debug {
-					fmt.Printf("committer: commit trans %d head %d #ordered %d\n",
-						t.start, t.head, t.ordered.Len())
-				}
-
-				rl := log.translog.revokeLog(t)
-				t.fillRevoke(log.ml, rl)
-
-				log.Unlock()
-				t.commit(log.tail, log.ml)
-				log.Lock()
-
-				if log_debug {
-					fmt.Printf("committer: wakeup forcer for trans %d\n", t.start)
-				}
-
-				t.forcedone = true
-				t.forcecond.Broadcast()
-
+			if log_debug {
+				fmt.Printf("committer: tail %d start %d head %d #ordered %d\n", log.tail,
+					t.start, t.head, t.ordered.Len())
 			}
-		}
 
-		if len(log.translog.trans) > 0 {
-			t := log.translog.last()
 			rl := log.translog.revokeLog(t)
+			t.fillRevoke(log.ml, rl)
+			t.copyintolog(log.ml)
+			t.copyordered(log.ml)
+			log.translog.add(t)
+
+			early := false
+			if log.ml.freespace(t.head, log.tail) {
+				if log_debug {
+					fmt.Printf("start_commit: start next trans early %d\n", t.head)
+				}
+				early = true
+				log.curtrans = log.mk_trans(t.head, log.ml)
+				log.admissioncond.Broadcast()
+			}
+
+			if log_debug {
+				fmt.Printf("committer: commit trans %d head %d #ordered %d\n",
+					t.start, t.head, t.ordered.Len())
+			}
+
+			log.Unlock()
+			t.commit(log.tail, log.ml)
+			log.Lock()
+
+			if log_debug {
+				fmt.Printf("committer: wakeup forcer for trans %d\n", t.start)
+			}
+
+			t.forcedone = true
+			t.forcecond.Broadcast()
 
 			if log.ml.almosthalffull(log.tail, t.head) {
 				log.revokeList(log.tail, t.head, rl)
@@ -949,16 +924,18 @@ func (log *log_t) committer() {
 				log.translog.remove(log.tail)
 			}
 
-			if log.ml.freespace(t.head, log.tail) {
+			if !early {
 				if log_debug {
-					fmt.Printf("committer: wakeup producer tail %d head %d\n",
-						log.tail, t.head)
+					fmt.Printf("committer: admit tail %d head %d\n", log.tail, t.head)
 				}
-				log.producercond.Signal()
+				log.curtrans = log.mk_trans(t.head, log.ml)
+				log.admissioncond.Signal()
 			}
 		}
-		if !log.stop {
-			log.consumercond.Wait()
+		// the next trans maybe ready to commit
+		t = log.curtrans
+		if !log.stop && !((t.force || t.isfull()) && t.iscommittable()) {
+			log.commitcond.Wait()
 		}
 	}
 
@@ -1083,22 +1060,24 @@ func (log *log_t) install(tail, head index_t) {
 	}
 }
 
-func (log *log_t) recover() index_t {
+func (log *log_t) recover() {
 	lh, headblk := log.ml.readhdr()
 	tail := lh.r_tail()
 	head := lh.r_head()
 	headblk.Unlock()
 
+	log.tail = tail
+	log.head = head
+
 	log.ml.bcache.Relse(headblk, "recover")
 	if tail == head {
 		fmt.Printf("no FS recovery needed: head %d\n", head)
-		return head
+		return
 	}
 	fmt.Printf("starting FS recovery start %d end %d\n", tail, head)
 	log.install(tail, head)
 	log.ml.commit_tail(head)
+	log.tail = tail
 
 	fmt.Printf("restored blocks from %d till %d\n", tail, head)
-	log.tail = tail
-	return head
 }
