@@ -898,6 +898,7 @@ func (log *log_t) committer() {
 					fmt.Printf("start_commit: start next trans early %d\n", t.head)
 				}
 				early = true
+				log.nccommit++
 				log.curtrans = log.mk_trans(t.head, log.ml)
 				log.admissioncond.Broadcast()
 			}
