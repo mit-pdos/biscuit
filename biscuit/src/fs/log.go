@@ -592,7 +592,7 @@ func (trans *trans_t) copyordered(ml *memlog_t) {
 		// Make a "private" copy of b that isn't visible to FS or cache
 		// XXX Use COW
 		cp := common.MkBlock_newpage(b.Block, "copyordered", ml.bcache.mem,
-			ml.bcache.disk, &copy_relse_t{}) // XXX free page?
+			ml.bcache.disk, &copy_relse_t{})
 		copy(cp.Data[:], b.Data[:])
 		trans.orderedcopy.PushBack(cp)
 		ml.bcache.Relse(b, "copyordered")
