@@ -158,6 +158,6 @@ int main(int argc, char *argv[])
   tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
   printf("writefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
 
-  printstats(0);
+  // printstats(0);
   return 0;
 }

@@ -2,7 +2,6 @@ package fs
 
 import "fmt"
 import "sync"
-import "strconv"
 import "sort"
 
 import "common"
@@ -28,9 +27,9 @@ type bitmap_t struct {
 	storage   storage_i
 
 	// stats
-	nalloc int
-	nfree  int
-	nhit   int
+	Nalloc counter_t
+	Nfree  counter_t
+	Nhit   counter_t
 }
 
 func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
@@ -152,7 +151,7 @@ func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 
 	bit, err := alloc.CheckAndMark(opid)
 	if err == 0 {
-		alloc.nhit++
+		alloc.Nhit.inc()
 	} else {
 		_, err = alloc.apply(0, func(b, v int) bool {
 			if v == 0 {
@@ -170,7 +169,7 @@ func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 			panic("FindAndMark")
 		}
 	}
-	alloc.nalloc++
+	alloc.Nalloc.inc()
 	alloc.nfreebits--
 	alloc.Unlock()
 	return bit, 0
@@ -200,7 +199,7 @@ func (alloc *bitmap_t) Unmark(opid opid_t, bit int) common.Err_t {
 	fblk.Unlock()
 	alloc.storage.Write(opid, fblk)
 	alloc.storage.Relse(fblk, "Unmark")
-	alloc.nfree++
+	alloc.Nfree.inc()
 	alloc.nfreebits++
 	alloc.Unlock()
 	return 0
@@ -311,12 +310,5 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t 
 }
 
 func (alloc *bitmap_t) Stats() string {
-	s := "allocater: #Marked "
-	s += strconv.Itoa(alloc.nalloc)
-	s += " #Unmarked "
-	s += strconv.Itoa(alloc.nfree)
-	s += " #hit "
-	s += strconv.Itoa(alloc.nhit)
-	s += "\n"
-	return s
+	return "allocator " + dostats(*alloc)
 }

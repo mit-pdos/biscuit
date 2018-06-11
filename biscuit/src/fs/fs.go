@@ -1,7 +1,12 @@
 package fs
 
 import "fmt"
+import "reflect"
+import "strconv"
+import "strings"
 import "sync"
+import "sync/atomic"
+import "unsafe"
 
 import "common"
 
@@ -102,19 +107,6 @@ func (fs *Fs_t) Sizes() (int, int) {
 
 func (fs *Fs_t) StopFS() {
 	fs.fslog.StopLog()
-}
-
-func (fs *Fs_t) Fs_statistics() string {
-	s := fs.istats.stats()
-	if !memfs {
-		s += fs.fslog.Stats()
-	}
-	s += fs.ialloc.Stats()
-	s += fs.balloc.Stats()
-	s += fs.bcache.Stats()
-	s += fs.icache.Stats()
-	s += fs.ahci.Stats()
-	return s
 }
 
 func (fs *Fs_t) Fs_size() (uint, uint) {
@@ -1553,4 +1545,53 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	fs.bcache.refcache.Evict_half()
 	fs.icache.refcache.Evict_half()
 	return fs.Sizes()
+}
+
+type stat_t interface {
+	Stats(name string)
+}
+
+type counter_t int64
+type cycles_t int64
+
+func (c *counter_t) inc() {
+	n := (*int64)(unsafe.Pointer(c))
+	atomic.AddInt64(n, 1)
+}
+
+func (c *cycles_t) add(m uint64) {
+	n := (*int64)(unsafe.Pointer(c))
+	atomic.AddInt64(n, int64(m))
+}
+
+func dostats(st interface{}) string {
+	v := reflect.ValueOf(st)
+	s := ""
+	for i := 0; i < v.NumField(); i++ {
+		t := v.Field(i).Type().String()
+		fmt.Printf("field %s %s\n", v.Type().Field(i).Name, t)
+		if strings.HasSuffix(t, "fs.counter_t") {
+			n := v.Field(i).Interface().(counter_t)
+			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
+		}
+		if strings.HasSuffix(t, "cycles_t") {
+			n := v.Field(i).Interface().(cycles_t)
+			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
+		}
+
+	}
+	return s + "\n"
+}
+
+func (fs *Fs_t) Fs_statistics() string {
+	s := fs.istats.Stats()
+	if !memfs {
+		s += fs.fslog.Stats()
+	}
+	s += fs.ialloc.Stats()
+	s += fs.balloc.Stats()
+	s += fs.bcache.Stats()
+	s += fs.icache.Stats()
+	s += fs.ahci.Stats()
+	return s
 }

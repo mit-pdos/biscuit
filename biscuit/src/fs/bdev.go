@@ -1,7 +1,6 @@
 package fs
 
 import "fmt"
-import "strconv"
 import "sync"
 
 import "runtime"
@@ -205,14 +204,7 @@ func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 }
 
 func (bcache *bcache_t) Stats() string {
-	s := "bcache: size "
-	s += strconv.Itoa(len(bcache.refcache.refs))
-	s += " #evictions "
-	s += strconv.Itoa(bcache.refcache.nevict)
-	s += " #live "
-	s += strconv.Itoa(bcache.refcache.nlive())
-	s += "\n"
-	return s
+	return "bcache" + bcache.refcache.Stats()
 }
 
 //

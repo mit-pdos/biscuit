@@ -2,18 +2,11 @@ package fs
 
 import "fmt"
 import "sync"
-import "unsafe"
 import "sort"
-import "strconv"
-import "reflect"
 import "runtime"
-import "strings"
-
-import "sync/atomic"
+import "unsafe"
 
 import "common"
-
-type counter_t int64
 
 type inode_stats_t struct {
 	Nopen     counter_t
@@ -38,31 +31,13 @@ type inode_stats_t struct {
 	Nclose    counter_t
 	Nsync     counter_t
 	Nreopen   counter_t
-	Cwrite    uint64
-	Ciwrite   uint64
-	Ciupdate  uint64
+	Cwrite    cycles_t
+	Ciwrite   cycles_t
+	Ciupdate  cycles_t
 }
 
-func (c *counter_t) inc() {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, 1)
-}
-
-func (is *inode_stats_t) stats() string {
-	v := reflect.ValueOf(*is)
-	s := "inode:"
-	for i := 0; i < v.NumField(); i++ {
-
-		if strings.HasPrefix(v.Type().Field(i).Name, "C") {
-			n := v.Field(i).Interface().(uint64)
-			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
-		} else {
-			n := v.Field(i).Interface().(counter_t)
-			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
-		}
-
-	}
-	return s + "\n"
+func (is *inode_stats_t) Stats() string {
+	return "inode" + dostats(*is)
 }
 
 type Inode_t struct {
@@ -355,18 +330,18 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		}
 		s1 := runtime.Rdtsc()
 		wrote, err := idm.iwrite(opid, src, off, n)
-		idm.fs.istats.Ciwrite += (runtime.Rdtsc() - s1)
+		idm.fs.istats.Ciwrite.add(runtime.Rdtsc() - s1)
 
 		s2 := runtime.Rdtsc()
 		idm._iupdate(opid)
-		idm.fs.istats.Ciupdate += (runtime.Rdtsc() - s2)
+		idm.fs.istats.Ciupdate.add(runtime.Rdtsc() - s2)
 
 		idm.iunlock("")
 
 		idm.fs.fslog.Op_end(opid)
 
 		t := runtime.Rdtsc()
-		idm.fs.istats.Cwrite += (t - s)
+		idm.fs.istats.Cwrite.add(t - s)
 
 		if err != 0 {
 			return i, err
@@ -1391,14 +1366,7 @@ func (icache *icache_t) freeDead() {
 }
 
 func (icache *icache_t) Stats() string {
-	s := "icache: size "
-	s += strconv.Itoa(len(icache.refcache.refs))
-	s += " #evictions "
-	s += strconv.Itoa(icache.refcache.nevict)
-	s += " #live "
-	s += strconv.Itoa(icache.refcache.nlive())
-	s += "\n"
-	return s
+	return "icache " + icache.refcache.Stats()
 }
 
 func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {

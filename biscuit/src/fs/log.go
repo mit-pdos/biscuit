@@ -2,7 +2,6 @@ package fs
 
 import "fmt"
 import "runtime"
-import "strconv"
 import "sync"
 
 import "common"
@@ -54,7 +53,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 
 	opid := log.nextop
 	log.nextop += 1
-	log.nop += 1
+	log.Nop += 1
 
 	t := log.curtrans
 
@@ -69,7 +68,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 	// allow op to start
 	t.add_op(opid)
 
-	log.opbegincycles += (runtime.Rdtsc() - ts)
+	log.Opbegincycles.add(runtime.Rdtsc() - ts)
 
 	if log_debug {
 		fmt.Printf("op_begin: go %d %v\n", opid, s)
@@ -108,7 +107,7 @@ func (log *log_t) Op_end(opid opid_t) {
 		log.admissioncond.Broadcast()
 	}
 
-	log.opendcycles += (runtime.Rdtsc() - s)
+	log.Opendcycles.add(runtime.Rdtsc() - s)
 }
 
 // Ensure any fs ops in the journal preceding this sync call are flushed to disk
@@ -125,18 +124,18 @@ func (log *log_t) Force() {
 
 	s := runtime.Rdtsc()
 
-	log.nforce++
+	log.Nforce++
 
 	if t.isempty() || t.forcedone {
 		if log_debug {
 			fmt.Printf("Force: nothing outstanding\n")
 		}
-		log.nbatchforce++
+		log.Nbatchforce++
 		return
 	}
 
 	if t.force {
-		log.nbatchforce++
+		log.Nbatchforce++
 	} else {
 		t.force = true
 	}
@@ -156,7 +155,7 @@ func (log *log_t) Force() {
 		t.forcecond.Wait()
 	}
 
-	log.forcecycles += (runtime.Rdtsc() - s)
+	log.Forcecycles.add(runtime.Rdtsc() - s)
 
 	if log_debug {
 		fmt.Printf("Force: done trans %d\n", t.start)
@@ -201,7 +200,7 @@ func (log *log_t) Loglen() int {
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
 	t := runtime.Rdtsc()
 	r, e := log.ml.bcache.Get_fill(blkn, s, lock)
-	log.readcycles += (runtime.Rdtsc() - t)
+	log.Readcycles.add(runtime.Rdtsc() - t)
 	return r, e
 }
 
@@ -218,65 +217,9 @@ func (log *log_t) Relse(blk *common.Bdev_block_t, s string) {
 }
 
 func (log *log_t) Stats() string {
-	s := "log:"
-	s += "\n\tnop "
-	s += strconv.Itoa(log.nop)
-	s += "\n\t begin cycles "
-	s += strconv.FormatUint(log.opbegincycles, 10)
-	s += "\n\t end cycles "
-	s += strconv.FormatUint(log.opendcycles, 10)
-	s += "\n\tnwrite "
-	s += strconv.Itoa(log.nlogwrite)
-	s += "\n\t write cycles "
-	s += strconv.FormatUint(log.writecycles, 10)
-	s += "\n\tnorderedwrite "
-	s += strconv.Itoa(log.norderedwrite)
-	s += "\n\tnorder2logwrite "
-	s += strconv.Itoa(log.norder2logwrite)
-	s += "\n\tnlogwrite2order "
-	s += strconv.Itoa(log.nlogwrite2order)
-	s += "\n\tnabsorb "
-	s += strconv.Itoa(log.nabsorption)
-	s += "\n\tnblkcommited "
-	s += strconv.Itoa(log.ml.nblkcommitted)
-	s += "\n\tncommit "
-	s += strconv.Itoa(log.ml.ncommit)
-	s += "\n\tnccommit "
-	s += strconv.Itoa(log.nccommit)
-	s += "\n\tmaxblks_per_commit "
-	s += strconv.Itoa(log.ml.maxblks_per_op)
-	s += "\n\tnapply "
-	s += strconv.Itoa(log.napply)
-	s += "\n\tnbapply "
-	s += strconv.Itoa(log.nbapply)
-	s += "\n\tnblkapply "
-	s += strconv.Itoa(log.nblkapply)
-	s += "\n\tnabsorbapply "
-	s += strconv.Itoa(log.nabsorbapply)
-	s += "\n\tnforce "
-	s += strconv.Itoa(log.nforce)
-	s += "\n\t force cycles "
-	s += strconv.FormatUint(log.forcecycles, 10)
-	s += "\n\tnbatchforce "
-	s += strconv.Itoa(log.nbatchforce)
-	s += "\n\tndelayforce "
-	s += strconv.Itoa(log.ndelayforce)
-	s += "\n\tncommithead "
-	s += strconv.Itoa(log.ml.ncommithead)
-	s += "\n\t flush head cycles "
-	s += strconv.FormatUint(log.ml.headcycles, 10)
-	s += "\n\t flush data cycles "
-	s += strconv.FormatUint(log.ml.flushdatacycles, 10)
-	s += "\n\tncommittail "
-	s += strconv.Itoa(log.ml.ncommittail)
-	s += "\n\t flush tail cycles\t"
-	s += strconv.FormatUint(log.ml.tailcycles, 10)
-	s += "\n\t flush log data cycles\t"
-	s += strconv.FormatUint(log.ml.flushlogdatacycles, 10)
-	s += "\n\tread cycles "
-	s += strconv.FormatUint(log.readcycles, 10)
-	s += "\n"
-	return s
+	s1 := "log: " + dostats(*log)
+	s2 := "mlog: " + dostats(*log.ml)
+	return s1 + s2
 }
 
 func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
@@ -317,16 +260,16 @@ type memlog_t struct {
 	bcache   *bcache_t              // the backing store for memlog
 
 	// stats:
-	maxblks_per_op     int
-	nblkcommitted      int
-	ncommit            int
-	ncommithead        int
-	headcycles         uint64
-	flushdatacycles    uint64
-	ncommittail        int
-	tailcycles         uint64
-	flushlogdatacycles uint64
-	nwriteordered      int
+	Maxblks_per_op     counter_t
+	Nblkcommitted      counter_t
+	Ncommit            counter_t
+	Ncommithead        counter_t
+	Headcycles         cycles_t
+	Flushdatacycles    cycles_t
+	Ncommittail        counter_t
+	Tailcycles         cycles_t
+	Flushlogdatacycles cycles_t
+	Nwriteordered      counter_t
 }
 
 func mk_memlog(ls, ll int, bcache *bcache_t) *memlog_t {
@@ -398,19 +341,19 @@ func (ml *memlog_t) flush() {
 }
 
 func (ml *memlog_t) commit_head(head index_t) {
-	ml.ncommithead++
+	ml.Ncommithead++
 	lh, headblk := ml.readhdr()
 	lh.w_head(head)
 	headblk.Unlock()
 	ml.bcache.Write(headblk)
 	s := runtime.Rdtsc()
 	ml.flush() // commit log header
-	ml.headcycles += (runtime.Rdtsc() - s)
+	ml.Headcycles.add(runtime.Rdtsc() - s)
 	ml.bcache.Relse(headblk, "commit_done")
 }
 
 func (ml *memlog_t) commit_tail(tail index_t) {
-	ml.ncommittail++
+	ml.Ncommittail++
 	lh, headblk := ml.readhdr()
 	lh.w_tail(tail)
 	headblk.Unlock()
@@ -418,7 +361,7 @@ func (ml *memlog_t) commit_tail(tail index_t) {
 	s := runtime.Rdtsc()
 	ml.flush() // commit log header
 	t := runtime.Rdtsc()
-	ml.tailcycles += (t - s)
+	ml.Tailcycles.add(t - s)
 	ml.bcache.Relse(headblk, "commit_tail")
 }
 
@@ -492,7 +435,7 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_
 	// if block is in log and now ordered, remove from log
 	_, lp := trans.logpresent[blk.Block]
 	if ordered && lp {
-		log.nlogwrite2order++
+		log.Nlogwrite2order++
 		trans.logged.RemoveBlock(blk.Block)
 		delete(trans.logpresent, blk.Block)
 	}
@@ -500,7 +443,7 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_
 	// if block is in ordered list and now logged, remove from ordered
 	_, op := trans.orderedpresent[blk.Block]
 	if !ordered && op {
-		log.norder2logwrite++
+		log.Norder2logwrite++
 		trans.ordered.RemoveBlock(blk.Block)
 		delete(trans.orderedpresent, blk.Block)
 	}
@@ -516,20 +459,20 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_
 		// If the write of this block is in a later op, we know this
 		// later op will commit with the one that modified this block
 		// earlier, because the op was admitted.
-		log.nabsorption++
+		log.Nabsorption++
 		log.ml.bcache.Relse(blk, "absorption")
 		return
 	}
 
 	if ordered {
-		log.norderedwrite++
+		log.Norderedwrite++
 		trans.ordered.PushBack(blk)
 		if trans.ordered.Len() >= MaxOrdered {
 			panic("add_write")
 		}
 		trans.orderedpresent[blk.Block] = true
 	} else {
-		log.nlogwrite++
+		log.Nlogwrite++
 		trans.logged.PushBack(blk)
 		trans.logpresent[blk.Block] = true
 	}
@@ -672,19 +615,19 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 
 	s := runtime.Rdtsc()
 	ml.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
-	ml.flushdatacycles += (runtime.Rdtsc() - s)
+	ml.Flushdatacycles.add(runtime.Rdtsc() - s)
 
 	ml.commit_head(trans.head)
 
 	ml.getmemlog(trans.start).Block = DescriptorBlk // now safe to mark block as a descriptor block in mem
 	ml.getmemlog(trans.start + 1).Block = RevokeBlk
 
-	n := blks1.Len() + blks2.Len()
-	ml.nblkcommitted += n
-	if n > ml.maxblks_per_op {
-		ml.maxblks_per_op = n
+	n := counter_t(blks1.Len() + blks2.Len())
+	ml.Nblkcommitted += n
+	if n > ml.Maxblks_per_op {
+		ml.Maxblks_per_op = n
 	}
-	ml.ncommit++
+	ml.Ncommit++
 	if log_debug {
 		fmt.Printf("commit: committed %d blks\n", n)
 	}
@@ -710,27 +653,27 @@ type log_t struct {
 	nextop opid_t
 
 	// some stats
-	nop           int
-	opbegincycles uint64
-	opendcycles   uint64
-	napply        int
-	nabsorption   int
-	nlogwrite     int
-	writecycles   uint64
+	Nop           counter_t
+	Opbegincycles cycles_t
+	Opendcycles   cycles_t
+	Napply        counter_t
+	Nabsorption   counter_t
+	Nlogwrite     counter_t
+	Writecycles   cycles_t
 
-	norderedwrite   int
-	nblkapply       int
-	nabsorbapply    int
-	nforce          int
-	nbatchforce     int
-	forcecycles     uint64
-	ndelayforce     int
-	commitcycles    uint64
-	nccommit        int
-	nbapply         int
-	nlogwrite2order int
-	norder2logwrite int
-	readcycles      uint64
+	Norderedwrite    counter_t
+	Nblkapply        counter_t
+	Nabsorbapply     counter_t
+	Nforce           counter_t
+	Nbatchforce      counter_t
+	Forcecycles      cycles_t
+	Ndelayforce      counter_t
+	Commitprepcycles cycles_t
+	Nccommit         counter_t
+	Nbapply          counter_t
+	Nlogwrite2order  counter_t
+	Norder2logwrite  counter_t
+	Readcycles       cycles_t
 }
 
 // first log header block format
@@ -803,7 +746,7 @@ func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
 	t := log.curtrans
 	ts := runtime.Rdtsc()
 	t.add_write(opid, log, b, ordered)
-	log.writecycles += (runtime.Rdtsc() - ts)
+	log.Writecycles.add(runtime.Rdtsc() - ts)
 }
 
 func (log *log_t) revokeList(tail, head index_t, rl []int) {
@@ -886,11 +829,13 @@ func (log *log_t) committer() {
 					t.start, t.head, t.ordered.Len())
 			}
 
+			ts := runtime.Rdtsc()
 			rl := log.translog.revokeLog(t)
 			t.fillRevoke(log.ml, rl)
 			t.copyintolog(log.ml)
 			t.copyordered(log.ml)
 			log.translog.add(t)
+			log.Commitprepcycles.add(runtime.Rdtsc() - ts)
 
 			early := false
 			if log.ml.freespace(t.head, log.tail) {
@@ -898,7 +843,7 @@ func (log *log_t) committer() {
 					fmt.Printf("start_commit: start next trans early %d\n", t.head)
 				}
 				early = true
-				log.nccommit++
+				log.Nccommit++
 				log.curtrans = log.mk_trans(t.head, log.ml)
 				log.admissioncond.Broadcast()
 			}
@@ -948,7 +893,7 @@ func (log *log_t) committer() {
 }
 
 func (log *log_t) apply(tail, head index_t) index_t {
-	log.napply++
+	log.Napply++
 
 	done := make(map[int]bool, log.ml.loglen)
 
@@ -969,12 +914,12 @@ func (log *log_t) apply(tail, head index_t) index_t {
 		if l.Block == DescriptorBlk || l.Block == RevokeBlk || l.Block == Canceled {
 			// nothing to do for descriptor blocks
 		} else {
-			log.nblkapply++
+			log.Nblkapply++
 			if _, ok := done[l.Block]; !ok {
 				log.ml.bcache.Write_async_through(l)
 				done[l.Block] = true
 			} else {
-				log.nabsorbapply++
+				log.Nabsorbapply++
 			}
 		}
 	}
@@ -982,7 +927,7 @@ func (log *log_t) apply(tail, head index_t) index_t {
 	s := runtime.Rdtsc()
 	log.ml.flush() // flush apply
 	t := runtime.Rdtsc()
-	log.ml.flushlogdatacycles += (t - s)
+	log.ml.Flushlogdatacycles.add(t - s)
 
 	log.ml.commit_tail(head)
 
