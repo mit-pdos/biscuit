@@ -34,9 +34,18 @@ type Ref_t struct {
 	Refprev *Ref_t
 }
 
+type blktype_t int
+
+const (
+	DataBlk   blktype_t = 0
+	CommitBlk blktype_t = -1
+	RevokeBlk blktype_t = -2
+)
+
 type Bdev_block_t struct {
 	sync.Mutex
 	Block      int
+	Type       blktype_t
 	_try_evict bool
 	Pa         Pa_t
 	Data       *Bytepg_t
@@ -81,6 +90,14 @@ func (bl *BlkList_t) FrontBlock() *Bdev_block_t {
 	} else {
 		bl.e = bl.l.Front()
 		return bl.e.Value.(*Bdev_block_t)
+	}
+}
+
+func (bl *BlkList_t) Back() *Bdev_block_t {
+	if bl.l.Back() == nil {
+		return nil
+	} else {
+		return bl.l.Back().Value.(*Bdev_block_t)
 	}
 }
 

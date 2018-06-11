@@ -27,11 +27,9 @@ const LogOffset = 1 // log block 0 is used for head
 // number of concurrent fs syscalls.
 const MaxBlkPerOp = 10
 const MaxDescriptor = common.BSIZE / 8
-const MaxOrdered = common.BSIZE / 8 // limited by size of revoke block
+const MaxOrdered = 1024
 const EndDescriptor = 0
-const DescriptorBlk = 0
-const RevokeBlk = -1
-const NDescriptorBlks = 2
+const NCommitBlk = 1
 const Canceled = -2
 
 type opid_t int
@@ -270,6 +268,7 @@ type memlog_t struct {
 	Tailcycles         cycles_t
 	Flushlogdatacycles cycles_t
 	Nwriteordered      counter_t
+	Nrevokeblk         counter_t
 }
 
 func mk_memlog(ls, ll int, bcache *bcache_t) *memlog_t {
@@ -381,10 +380,42 @@ func (ml *memlog_t) almosthalffull(tail, head index_t) bool {
 	return full
 }
 
-type buf_t struct {
-	opid    opid_t
-	block   *common.Bdev_block_t
-	ordered bool
+type revokelist_t struct {
+	revoked *common.BlkList_t
+	index   int
+}
+
+func mkRevokeList() *revokelist_t {
+	rl := &revokelist_t{}
+	rl.revoked = common.MkBlkList()
+	return rl
+}
+
+func (rl *revokelist_t) len() int {
+	return rl.revoked.Len()
+}
+
+func (rl *revokelist_t) addRevokeRecord(blkno int, ml *memlog_t) {
+	var db *logdescriptor_t
+	blk := rl.revoked.Back()
+	if blk == nil || rl.index >= MaxDescriptor {
+		blk = common.MkBlock_newpage(blkno, "addRevokeRecord", ml.bcache.mem,
+			ml.bcache.disk, &copy_relse_t{})
+		blk.Type = common.RevokeBlk
+		rl.revoked.PushBack(blk)
+		db = ml.mkdescriptor(blk)
+		db.w_logdest(0, int(common.RevokeBlk))
+		rl.index = 1
+		ml.Nrevokeblk.inc()
+	} else {
+		db = ml.mkdescriptor(blk)
+	}
+	if log_debug {
+		fmt.Printf("add revoke record: %d\n", blkno)
+	}
+	db.w_logdest(rl.index, blkno)
+	db.w_logdest(rl.index+1, EndDescriptor)
+	rl.index++
 }
 
 type trans_t struct {
@@ -395,16 +426,17 @@ type trans_t struct {
 	inprogress     int               // ops in progress this transaction
 	logged         *common.BlkList_t // list of to-be-logged blocks
 	ordered        *common.BlkList_t // list of ordered blocks
-	orderedcopy    *common.BlkList_t // list of ordered blocks
-	logpresent     map[int]bool      // enable quick check to see if block is in log
-	orderedpresent map[int]bool      // enable quick check so see if block is in ordered
+	orderedcopy    *common.BlkList_t // list of copied ordered blocks
+	revokel        *revokelist_t
+	logpresent     map[int]bool // enable quick check to see if block is in log
+	orderedpresent map[int]bool // enable quick check so see if block is in ordered
 	force          bool
 	committing     bool
 	forcedone      bool
 }
 
 func (log *log_t) mk_trans(start index_t, ml *memlog_t) *trans_t {
-	t := &trans_t{start: start, head: start + NDescriptorBlks}
+	t := &trans_t{start: start, head: start + NCommitBlk}
 	t.ml = ml
 	t.forcecond = sync.NewCond(log)
 	t.logged = common.MkBlkList()      // bounded by MaxDescriptor
@@ -412,6 +444,7 @@ func (log *log_t) mk_trans(start index_t, ml *memlog_t) *trans_t {
 	t.orderedcopy = common.MkBlkList() // bounded by MaxOrdered
 	t.logpresent = make(map[int]bool, ml.loglen)
 	t.orderedpresent = make(map[int]bool, MaxOrdered)
+	t.revokel = mkRevokeList()
 	return t
 }
 
@@ -464,6 +497,11 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *common.Bdev_block_
 		return
 	}
 
+	// if ordered but logged in committed trans, add revoke record
+	if ordered && log.translog.islogged(blk.Block) {
+		trans.revokel.addRevokeRecord(blk.Block, log.ml)
+	}
+
 	if ordered {
 		log.Norderedwrite++
 		trans.ordered.PushBack(blk)
@@ -488,8 +526,8 @@ func (trans *trans_t) isorderedfull() bool {
 	return n >= MaxOrdered
 }
 
-func (trans *trans_t) isdescriptorfull() bool {
-	n := trans.logged.Len()
+func (trans *trans_t) iscommitdescriptorfull() bool {
+	n := trans.logged.Len() + trans.revokel.len()
 	n += trans.inprogress * MaxBlkPerOp
 	n += MaxBlkPerOp
 	return n >= trans.ml.maxtrans
@@ -500,25 +538,41 @@ func (trans *trans_t) isempty() bool {
 }
 
 func (trans *trans_t) isfull() bool {
-	return trans.isdescriptorfull() || trans.isorderedfull()
+	return trans.iscommitdescriptorfull() || trans.isorderedfull()
 }
 
-func (trans *trans_t) copyintolog(ml *memlog_t) {
+func (trans *trans_t) copyrevoked(ml *memlog_t) {
 	if log_debug {
-		fmt.Printf("copyintolog: transhead %d\n", trans.head)
+		fmt.Printf("copyrevoked: transhead %d len %d\n", trans.head, trans.revokel.len())
 	}
-	i := trans.start + NDescriptorBlks
+	i := trans.start + NCommitBlk
+	trans.revokel.revoked.Apply(func(b *common.Bdev_block_t) {
+		l := ml.getmemlog(i)
+		l.Type = b.Type
+		l.Block = b.Block
+		copy(l.Data[:], b.Data[:])
+		i += 1
+		b.Free_page()
+	})
+}
+
+func (trans *trans_t) copylogged(ml *memlog_t) {
+	if log_debug {
+		fmt.Printf("copylogged: transhead %d len %d\n", trans.head, trans.logged.Len())
+	}
+	i := trans.start + NCommitBlk + index_t(trans.revokel.len())
 	trans.logged.Apply(func(b *common.Bdev_block_t) {
 		// Make a "private" copy of b that isn't visible to FS or cache
 		// XXX Use COW
 		l := ml.getmemlog(i)
+		l.Type = b.Type
 		l.Block = b.Block
 		copy(l.Data[:], b.Data[:])
 		i += 1
-		ml.bcache.Relse(b, "writelog")
+		ml.bcache.Relse(b, "copylogged")
 	})
 	if i != trans.head {
-		panic("copyintolog")
+		panic("copylogged")
 	}
 	trans.logged.Delete()
 }
@@ -538,10 +592,10 @@ func (trans *trans_t) copyordered(ml *memlog_t) {
 		// Make a "private" copy of b that isn't visible to FS or cache
 		// XXX Use COW
 		cp := common.MkBlock_newpage(b.Block, "copyordered", ml.bcache.mem,
-			ml.bcache.disk, &copy_relse_t{})
+			ml.bcache.disk, &copy_relse_t{}) // XXX free page?
 		copy(cp.Data[:], b.Data[:])
 		trans.orderedcopy.PushBack(cp)
-		ml.bcache.Relse(b, "writelog")
+		ml.bcache.Relse(b, "copyordered")
 	})
 	if trans.ordered.Len() != trans.orderedcopy.Len() {
 		panic("copyordered")
@@ -558,15 +612,6 @@ func (trans *trans_t) write_ordered(ml *memlog_t) {
 	trans.orderedcopy.Delete()
 }
 
-func (trans *trans_t) fillRevoke(ml *memlog_t, rl []int) {
-	db := ml.getdescriptor(trans.start + 1)
-	db.w_logdest(0, RevokeBlk)
-	for i, r := range rl {
-		db.w_logdest(i+1, r)
-	}
-	db.w_logdest(len(rl)+1, EndDescriptor)
-}
-
 func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 	if log_debug {
 		fmt.Printf("commit: start %d head %d\n", trans.start, trans.head)
@@ -575,15 +620,20 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 	blks2 := common.MkBlkList()
 	blks := blks1
 
+	ml.getmemlog(trans.start).Type = common.CommitBlk
 	db := ml.getdescriptor(trans.start)
 	j := 0
 	for i := trans.start; i != trans.head; i++ {
 		if tail > i {
 			panic("commit runs into log start")
 		}
-		// write log destination in the descriptor block
+		// write log destination in the commit block
 		l := ml.getmemlog(i)
-		db.w_logdest(j, l.Block)
+		if l.Type == common.DataBlk {
+			db.w_logdest(j, l.Block)
+		} else {
+			db.w_logdest(j, int(l.Type))
+		}
 		j++
 		b := common.MkBlock(ml.diskindex(i), "commit", ml.bcache.mem, ml.bcache.disk, &_nop_relse)
 		// it is safe to reuse the underlying physical page; this page
@@ -599,7 +649,7 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 	db.w_logdest(j, EndDescriptor) // marker
 
 	if log_debug {
-		fmt.Printf("commit: descriptor block at %d:\n", trans.start)
+		fmt.Printf("commit: commit descriptor block at %d:\n", trans.start)
 		for k := 1; k < j; k++ {
 			fmt.Printf("\tdescriptor %d: %d\n", k, db.r_logdest(k))
 		}
@@ -618,9 +668,6 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 	ml.Flushdatacycles.add(runtime.Rdtsc() - s)
 
 	ml.commit_head(trans.head)
-
-	ml.getmemlog(trans.start).Block = DescriptorBlk // now safe to mark block as a descriptor block in mem
-	ml.getmemlog(trans.start + 1).Block = RevokeBlk
 
 	n := counter_t(blks1.Len() + blks2.Len())
 	ml.Nblkcommitted += n
@@ -668,7 +715,7 @@ type log_t struct {
 	Nbatchforce      counter_t
 	Forcecycles      cycles_t
 	Ndelayforce      counter_t
-	Commitprepcycles cycles_t
+	Commitcopycycles cycles_t
 	Nccommit         counter_t
 	Nbapply          counter_t
 	Nlogwrite2order  counter_t
@@ -749,16 +796,22 @@ func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
 	log.Writecycles.add(runtime.Rdtsc() - ts)
 }
 
-func (log *log_t) revokeList(tail, head index_t, rl []int) {
-	for _, r := range rl {
-		for i := tail; i != head; i++ {
-			l := log.ml.getmemlog(i)
-			if l.Block == r {
-				l.Block = Canceled
+func (log *log_t) cancel(tail, head index_t, rl *revokelist_t) {
+	rl.revoked.Apply(func(b *common.Bdev_block_t) {
+		rb := log.ml.mkdescriptor(b)
+		for k := 1; ; k++ {
+			r := rb.r_logdest(k)
+			if r == EndDescriptor {
+				break
 			}
-
+			for i := tail; i != head; i++ {
+				l := log.ml.getmemlog(i)
+				if l.Block == r {
+					l.Block = Canceled
+				}
+			}
 		}
-	}
+	})
 }
 
 // the transactions that are in the process of being applied
@@ -799,16 +852,13 @@ func (tl *translog_t) last() *trans_t {
 	return tl.trans[len(tl.trans)-1]
 }
 
-func (tl *translog_t) revokeLog(trans *trans_t) []int {
-	r := make([]int, 0)
-	trans.ordered.Apply(func(b *common.Bdev_block_t) {
-		for _, t := range tl.trans {
-			if _, ok := t.logpresent[b.Block]; ok {
-				r = append(r, b.Block)
-			}
+func (tl *translog_t) islogged(blkno int) bool {
+	for _, t := range tl.trans {
+		if _, ok := t.logpresent[blkno]; ok {
+			return true
 		}
-	})
-	return r
+	}
+	return false
 }
 
 func (log *log_t) start_commit(t *trans_t) {
@@ -822,7 +872,7 @@ func (log *log_t) committer() {
 	for !log.stop {
 		t := log.curtrans
 		if (t.force || t.isfull()) && t.iscommittable() {
-			t.head = t.head + index_t(t.logged.Len())
+			t.head = t.head + index_t(t.logged.Len()+t.revokel.len())
 
 			if log_debug {
 				fmt.Printf("committer: tail %d start %d head %d #ordered %d\n", log.tail,
@@ -830,12 +880,14 @@ func (log *log_t) committer() {
 			}
 
 			ts := runtime.Rdtsc()
-			rl := log.translog.revokeLog(t)
-			t.fillRevoke(log.ml, rl)
-			t.copyintolog(log.ml)
+
+			t.copyrevoked(log.ml)
+			t.copylogged(log.ml)
 			t.copyordered(log.ml)
 			log.translog.add(t)
-			log.Commitprepcycles.add(runtime.Rdtsc() - ts)
+			t.revokel.revoked.Delete()
+
+			log.Commitcopycycles.add(runtime.Rdtsc() - ts)
 
 			early := false
 			if log.ml.freespace(t.head, log.tail) {
@@ -865,7 +917,7 @@ func (log *log_t) committer() {
 			t.forcecond.Broadcast()
 
 			if log.ml.almosthalffull(log.tail, t.head) {
-				log.revokeList(log.tail, t.head, rl)
+				log.cancel(log.tail, t.head, t.revokel)
 				log.tail = log.apply(log.tail, t.head)
 				log.translog.remove(log.tail)
 			}
@@ -911,8 +963,8 @@ func (log *log_t) apply(tail, head index_t) index_t {
 
 	for i := head - 1; i > tail; i-- {
 		l := log.ml.getmemlog(i)
-		if l.Block == DescriptorBlk || l.Block == RevokeBlk || l.Block == Canceled {
-			// nothing to do for descriptor blocks
+		if l.Type == common.CommitBlk || l.Type == common.RevokeBlk || l.Type == Canceled {
+			// nothing to do for descriptor or canceled blocks
 		} else {
 			log.Nblkapply++
 			if _, ok := done[l.Block]; !ok {
@@ -953,19 +1005,33 @@ func (log *log_t) installmap(tail, head index_t) []int {
 	for i := tail; i != head; {
 		ti := i
 		db, dblk := log.ml.readdescriptor(i)
-		rb, rblk := log.ml.readdescriptor(i + 1)
 		im[log.ml.logindex(i)] = Canceled
-		im[log.ml.logindex(i+1)] = Canceled
-		i += NDescriptorBlks
-		for j := 1; ; j++ {
-			r := rb.r_logdest(j)
-			if r == EndDescriptor {
+		i += NCommitBlk
+		j := 1
+		for ; ; j++ {
+			r := db.r_logdest(j)
+			if r == int(common.RevokeBlk) {
+				index := ti + index_t(j)
+				if log_debug {
+					fmt.Printf("installmap: revoke descriptor block at i %d\n", i)
+				}
+				rb, rblk := log.ml.readdescriptor(i)
+				im[log.ml.logindex(index)] = Canceled
+				for k := 1; ; k++ {
+					r := rb.r_logdest(k)
+					if r == EndDescriptor {
+						break
+					}
+					log.revoke(im, tail, ti, r)
+				}
+				log.ml.bcache.Relse(rblk, "installmap")
+				i++
+			} else {
 				break
 			}
-			log.revoke(im, tail, ti, r)
 		}
-		for j := NDescriptorBlks; ; j++ {
-			bdest := db.r_logdest(j)
+		for ; ; j++ {
+			bdest := db.r_logdest(int(j))
 			if bdest == EndDescriptor {
 				if log_debug {
 					fmt.Printf("installmap: end descriptor block at i %d j %d\n", i, j)
@@ -975,8 +1041,7 @@ func (log *log_t) installmap(tail, head index_t) []int {
 			im[log.ml.logindex(i)] = bdest
 			i++
 		}
-		log.ml.bcache.Relse(dblk, "install db")
-		log.ml.bcache.Relse(rblk, "install db")
+		log.ml.bcache.Relse(dblk, "installmap")
 	}
 	return im
 }
