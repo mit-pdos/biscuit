@@ -115,7 +115,6 @@ func (irc *refcache_t) Stats() string {
 	s += "\n\t#live "
 	s += strconv.Itoa(irc.nlive())
 	s += dostats(*irc)
-	s += "\n"
 	return s
 }
 

@@ -1569,7 +1569,6 @@ func dostats(st interface{}) string {
 	s := ""
 	for i := 0; i < v.NumField(); i++ {
 		t := v.Field(i).Type().String()
-		fmt.Printf("field %s %s\n", v.Type().Field(i).Name, t)
 		if strings.HasSuffix(t, "fs.counter_t") {
 			n := v.Field(i).Interface().(counter_t)
 			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
