@@ -1088,7 +1088,7 @@ func (log *log_t) recover() {
 	fmt.Printf("starting FS recovery start %d end %d\n", tail, head)
 	log.install(tail, head)
 	log.ml.commit_tail(head)
-	log.tail = tail
+	log.tail = head
 
 	fmt.Printf("restored blocks from %d till %d\n", tail, head)
 }
