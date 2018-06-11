@@ -40,6 +40,12 @@ func (is *inode_stats_t) Stats() string {
 	return "inode" + dostats(*is)
 }
 
+func (is *inode_stats_t) Reset() {
+	is.Cwrite = cycles_t(0)
+	is.Ciwrite = cycles_t(0)
+	is.Ciupdate = cycles_t(0)
+}
+
 type Inode_t struct {
 	Iblk *common.Bdev_block_t
 	Ioff int

@@ -220,6 +220,42 @@ func (log *log_t) Stats() string {
 	return s1 + s2
 }
 
+func (log *log_t) Reset() {
+	log.Nop = counter_t(0)
+	log.Opbegincycles = cycles_t(0)
+	log.Opendcycles = cycles_t(0)
+	log.Napply = counter_t(0)
+	log.Nabsorption = counter_t(0)
+	log.Nlogwrite = counter_t(0)
+	log.Writecycles = cycles_t(0)
+
+	log.Norderedwrite = counter_t(0)
+	log.Nblkapply = counter_t(0)
+	log.Nabsorbapply = counter_t(0)
+	log.Nforce = counter_t(0)
+	log.Nbatchforce = counter_t(0)
+	log.Forcecycles = cycles_t(0)
+	log.Ndelayforce = counter_t(0)
+	log.Commitcopycycles = cycles_t(0)
+	log.Nccommit = counter_t(0)
+	log.Nbapply = counter_t(0)
+	log.Nlogwrite2order = counter_t(0)
+	log.Norder2logwrite = counter_t(0)
+	log.Readcycles = cycles_t(0)
+
+	log.ml.Maxblks_per_op = counter_t(0)
+	log.ml.Nblkcommitted = counter_t(0)
+	log.ml.Ncommit = counter_t(0)
+	log.ml.Ncommithead = counter_t(0)
+	log.ml.Headcycles = cycles_t(0)
+	log.ml.Flushdatacycles = cycles_t(0)
+	log.ml.Ncommittail = counter_t(0)
+	log.ml.Tailcycles = cycles_t(0)
+	log.ml.Flushlogdatacycles = cycles_t(0)
+	log.ml.Nwriteordered = counter_t(0)
+	log.ml.Nrevokeblk = counter_t(0)
+}
+
 func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 	log := &log_t{}
 	log.mk_log(logstart, loglen, bcache)
