@@ -325,6 +325,7 @@ type ahci_port_t struct {
 	nread     int
 	nnoslot   int
 	ncoalesce int
+	nintr     int
 }
 
 type identify_device struct {
@@ -585,6 +586,8 @@ func (p *ahci_port_t) stat() string {
 	s += strconv.Itoa(p.nnoslot)
 	s += " #ncoalesce "
 	s += strconv.Itoa(p.ncoalesce)
+	s += " #nintr "
+	s += strconv.Itoa(p.nintr)
 	s += "\n"
 	return s
 }
@@ -997,6 +1000,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 
 	ci := LD(&p.port.ci)
 	int := false
+	p.nintr++
 	for s := uint(0); s < 32; s++ {
 		if p.inflight[s] != nil && ci&(1<<s) == 0 {
 			int = true
