@@ -204,14 +204,9 @@ func (log *log_t) Relse(blk *common.Bdev_block_t, s string) {
 func (log *log_t) Stats() string {
 	s1 := "log: " + dostats(log.stats)
 	s2 := "mlog: " + dostats(log.ml.stats)
+	log.stats = logstat_t{}
+	log.ml.stats = memlogstat_t{}
 	return s1 + s2
-}
-
-func (log *log_t) ResetStats() {
-	x := logstat_t{}
-	log.stats = x
-	y := memlogstat_t{}
-	log.ml.stats = y
 }
 
 func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {

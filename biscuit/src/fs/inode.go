@@ -38,12 +38,9 @@ type inode_stats_t struct {
 }
 
 func (is *inode_stats_t) Stats() string {
-	return "inode" + dostats(*is)
-}
-
-func (is *inode_stats_t) ResetStats() {
-	x := inode_stats_t{}
-	*is = x
+	s := "inode" + dostats(*is)
+	*is = inode_stats_t{}
+	return s
 }
 
 type Inode_t struct {
@@ -1519,5 +1516,7 @@ func ioffset(inum common.Inum_t) int {
 }
 
 func (ialloc *ibitmap_t) Stats() string {
-	return "inode " + ialloc.alloc.Stats()
+	s := "inode " + ialloc.alloc.Stats()
+	ialloc.alloc.ResetStats()
+	return s
 }

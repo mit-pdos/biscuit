@@ -376,7 +376,9 @@ func (balloc *bbitmap_t) Bfree(opid opid_t, blkno int) common.Err_t {
 }
 
 func (balloc *bbitmap_t) Stats() string {
-	return "balloc " + balloc.alloc.Stats()
+	s := "balloc " + balloc.alloc.Stats()
+	balloc.alloc.ResetStats()
+	return s
 }
 
 // allocates a block, marking it used in the free block bitmap. free blocks and

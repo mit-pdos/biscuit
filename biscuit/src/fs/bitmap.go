@@ -16,6 +16,12 @@ type storage_i interface {
 	Relse(*common.Bdev_block_t, string)
 }
 
+type bitmapstats_t struct {
+	Nalloc counter_t
+	Nfree  counter_t
+	Nhit   counter_t
+}
+
 type bitmap_t struct {
 	sync.Mutex
 
@@ -25,11 +31,7 @@ type bitmap_t struct {
 	lastbit   int
 	nfreebits uint
 	storage   storage_i
-
-	// stats
-	Nalloc counter_t
-	Nfree  counter_t
-	Nhit   counter_t
+	stats     bitmapstats_t
 }
 
 func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
@@ -151,7 +153,7 @@ func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 
 	bit, err := alloc.CheckAndMark(opid)
 	if err == 0 {
-		alloc.Nhit.inc()
+		alloc.stats.Nhit.inc()
 	} else {
 		_, err = alloc.apply(0, func(b, v int) bool {
 			if v == 0 {
@@ -169,7 +171,7 @@ func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 			panic("FindAndMark")
 		}
 	}
-	alloc.Nalloc.inc()
+	alloc.stats.Nalloc.inc()
 	alloc.nfreebits--
 	alloc.Unlock()
 	return bit, 0
@@ -199,7 +201,7 @@ func (alloc *bitmap_t) Unmark(opid opid_t, bit int) common.Err_t {
 	fblk.Unlock()
 	alloc.storage.Write(opid, fblk)
 	alloc.storage.Relse(fblk, "Unmark")
-	alloc.Nfree.inc()
+	alloc.stats.Nfree.inc()
 	alloc.nfreebits++
 	alloc.Unlock()
 	return 0
@@ -310,5 +312,9 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t 
 }
 
 func (alloc *bitmap_t) Stats() string {
-	return "allocator " + dostats(*alloc)
+	return "allocator " + dostats(alloc.stats)
+}
+
+func (alloc *bitmap_t) ResetStats() {
+	alloc.stats = bitmapstats_t{}
 }

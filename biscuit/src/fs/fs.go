@@ -1588,10 +1588,8 @@ func dostats(st interface{}) string {
 
 func (fs *Fs_t) Fs_statistics() string {
 	s := fs.istats.Stats()
-	fs.istats.ResetStats()
 	if !memfs {
 		s += fs.fslog.Stats()
-		fs.fslog.ResetStats()
 	}
 	s += fs.ialloc.Stats()
 	s += fs.balloc.Stats()
