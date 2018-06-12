@@ -41,11 +41,9 @@ func (is *inode_stats_t) Stats() string {
 	return "inode" + dostats(*is)
 }
 
-func (is *inode_stats_t) Reset() {
-	is.CWrite = cycles_t(0)
-	is.Cwrite = cycles_t(0)
-	is.Ciwrite = cycles_t(0)
-	is.Ciupdate = cycles_t(0)
+func (is *inode_stats_t) ResetStats() {
+	x := inode_stats_t{}
+	*is = x
 }
 
 type Inode_t struct {
