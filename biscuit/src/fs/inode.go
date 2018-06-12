@@ -31,6 +31,7 @@ type inode_stats_t struct {
 	Nclose    counter_t
 	Nsync     counter_t
 	Nreopen   counter_t
+	CWrite    cycles_t
 	Cwrite    cycles_t
 	Ciwrite   cycles_t
 	Ciupdate  cycles_t
@@ -41,6 +42,7 @@ func (is *inode_stats_t) Stats() string {
 }
 
 func (is *inode_stats_t) Reset() {
+	is.CWrite = cycles_t(0)
 	is.Cwrite = cycles_t(0)
 	is.Ciwrite = cycles_t(0)
 	is.Ciupdate = cycles_t(0)

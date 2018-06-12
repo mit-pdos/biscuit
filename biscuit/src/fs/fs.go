@@ -2,6 +2,7 @@ package fs
 
 import "fmt"
 import "reflect"
+import "runtime"
 import "strconv"
 import "strings"
 import "sync"
@@ -584,7 +585,10 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 }
 
 func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
-	return fo._write(src, -1)
+	t := runtime.Rdtsc()
+	r, e := fo._write(src, -1)
+	fo.fs.istats.CWrite.add(runtime.Rdtsc() - t)
+	return r, e
 }
 
 func (fo *fsfops_t) Fullpath() (string, common.Err_t) {
@@ -1471,7 +1475,7 @@ func (fs *Fs_t) Fs_sync() common.Err_t {
 		return 0
 	}
 	fs.istats.Nsync.inc()
-	fs.fslog.Force()
+	fs.fslog.Force(false)
 	return 0
 }
 
@@ -1479,8 +1483,8 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 	if memfs {
 		return 0
 	}
-	fs.fslog.Force()
-	// fs.fslog.ForceApply()
+	fs.istats.Nsync.inc()
+	fs.fslog.Force(true)
 	return 0
 }
 
