@@ -347,7 +347,7 @@ func (ml *memlog_t) commit_head(head index_t) {
 	lh, headblk := ml.readhdr()
 	lh.w_head(head)
 	headblk.Unlock()
-	ml.bcache.Write(headblk)
+	ml.bcache.Write_async(headblk)
 	s := runtime.Rdtsc()
 	ml.flush() // commit log header
 	ml.stats.Headcycles.Add(runtime.Rdtsc() - s)
@@ -359,7 +359,7 @@ func (ml *memlog_t) commit_tail(tail index_t) {
 	lh, headblk := ml.readhdr()
 	lh.w_tail(tail)
 	headblk.Unlock()
-	ml.bcache.Write(headblk)
+	ml.bcache.Write_async(headblk)
 	s := runtime.Rdtsc()
 	ml.flush() // commit log header
 	t := runtime.Rdtsc()
