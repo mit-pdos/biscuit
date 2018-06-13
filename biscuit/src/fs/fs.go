@@ -1,7 +1,6 @@
 package fs
 
 import "fmt"
-import "runtime"
 import "sync"
 
 import "common"
@@ -580,9 +579,9 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 }
 
 func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
-	t := runtime.Rdtsc()
+	t := common.Rdtsc()
 	r, e := fo._write(src, -1)
-	fo.fs.istats.CWrite.Add(runtime.Rdtsc() - t)
+	fo.fs.istats.CWrite.Add(t)
 	return r, e
 }
 

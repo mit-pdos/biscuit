@@ -1,7 +1,6 @@
 package fs
 
 import "fmt"
-import "runtime"
 import "sync"
 
 import "common"
@@ -47,7 +46,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 	log.Lock()
 	defer log.Unlock()
 
-	ts := runtime.Rdtsc()
+	ts := common.Rdtsc()
 
 	opid := log.nextop
 	log.nextop += 1
@@ -65,7 +64,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 
 	t.add_op(opid)
 
-	log.stats.Opbegincycles.Add(runtime.Rdtsc() - ts)
+	log.stats.Opbegincycles.Add(ts)
 
 	if log_debug {
 		fmt.Printf("op_begin: go %d %v\n", opid, s)
@@ -83,7 +82,7 @@ func (log *log_t) Op_end(opid opid_t) {
 	if log_debug {
 		fmt.Printf("op_end: done %d\n", opid)
 	}
-	s := runtime.Rdtsc()
+	s := common.Rdtsc()
 
 	t := log.curtrans
 
@@ -104,7 +103,7 @@ func (log *log_t) Op_end(opid opid_t) {
 		log.admissioncond.Broadcast()
 	}
 
-	log.stats.Opendcycles.Add(runtime.Rdtsc() - s)
+	log.stats.Opendcycles.Add(s)
 }
 
 // Ensure any fs ops in the journal preceding this sync call are flushed to disk
@@ -119,7 +118,7 @@ func (log *log_t) Force(doapply bool) {
 
 	t := log.curtrans
 
-	s := runtime.Rdtsc()
+	s := common.Rdtsc()
 
 	log.stats.Nforce++
 
@@ -152,7 +151,7 @@ func (log *log_t) Force(doapply bool) {
 		t.forcecond.Wait()
 	}
 
-	log.stats.Forcecycles.Add(runtime.Rdtsc() - s)
+	log.stats.Forcecycles.Add(s)
 
 	if log_debug {
 		fmt.Printf("Force: done trans %d\n", t.start)
@@ -163,16 +162,10 @@ func (log *log_t) Force(doapply bool) {
 // page.  The logging layer refdowns when it it is done with the page.  The
 // caller of log_write shouldn't hold buf's lock.
 func (log *log_t) Write(opid opid_t, b *common.Bdev_block_t) {
-	if memfs {
-		return
-	}
 	log.write(opid, b, false)
 }
 
 func (log *log_t) Write_ordered(opid opid_t, b *common.Bdev_block_t) {
-	if memfs {
-		return
-	}
 	log.write(opid, b, true)
 }
 
@@ -183,9 +176,9 @@ func (log *log_t) Loglen() int {
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	t := runtime.Rdtsc()
+	t := common.Rdtsc()
 	r, e := log.ml.bcache.Get_fill(blkn, s, lock)
-	log.stats.Readcycles.Add(runtime.Rdtsc() - t)
+	log.stats.Readcycles.Add(t)
 	return r, e
 }
 
@@ -219,7 +212,6 @@ func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 }
 
 func (log *log_t) StopLog() {
-
 	log.Force(true)
 
 	log.Lock()
@@ -348,9 +340,9 @@ func (ml *memlog_t) commit_head(head index_t) {
 	lh.w_head(head)
 	headblk.Unlock()
 	ml.bcache.Write_async(headblk)
-	s := runtime.Rdtsc()
+	s := common.Rdtsc()
 	ml.flush() // commit log header
-	ml.stats.Headcycles.Add(runtime.Rdtsc() - s)
+	ml.stats.Headcycles.Add(s)
 	ml.bcache.Relse(headblk, "commit_done")
 }
 
@@ -360,10 +352,9 @@ func (ml *memlog_t) commit_tail(tail index_t) {
 	lh.w_tail(tail)
 	headblk.Unlock()
 	ml.bcache.Write_async(headblk)
-	s := runtime.Rdtsc()
+	s := common.Rdtsc()
 	ml.flush() // commit log header
-	t := runtime.Rdtsc()
-	ml.stats.Tailcycles.Add(t - s)
+	ml.stats.Tailcycles.Add(s)
 	ml.bcache.Relse(headblk, "commit_tail")
 }
 
@@ -612,6 +603,7 @@ func (trans *trans_t) write_ordered(ml *memlog_t) {
 	}
 	ml.bcache.Write_async_through_coalesce(trans.orderedcopy)
 	trans.orderedcopy.Delete()
+	trans.ordered.Delete()
 }
 
 func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
@@ -665,9 +657,9 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 
 	trans.write_ordered(ml)
 
-	s := runtime.Rdtsc()
+	s := common.Rdtsc()
 	ml.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
-	ml.stats.Flushdatacycles.Add(runtime.Rdtsc() - s)
+	ml.stats.Flushdatacycles.Add(s)
 
 	ml.commit_head(trans.head)
 
@@ -776,6 +768,10 @@ func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
 }
 
 func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
+	if memfs {
+		return
+	}
+
 	if log_debug {
 		fmt.Printf("log_write %d %v ordered %v\n", opid, b.Block, ordered)
 	}
@@ -785,9 +781,9 @@ func (log *log_t) write(opid opid_t, b *common.Bdev_block_t, ordered bool) {
 	defer log.Unlock()
 
 	t := log.curtrans
-	ts := runtime.Rdtsc()
+	ts := common.Rdtsc()
 	t.add_write(opid, log, b, ordered)
-	log.stats.Writecycles.Add(runtime.Rdtsc() - ts)
+	log.stats.Writecycles.Add(ts)
 }
 
 func (log *log_t) cancel(tail, head index_t, rl *revokelist_t) {
@@ -862,7 +858,7 @@ func (log *log_t) committer() {
 	log.Lock()
 	for !log.stop {
 		log.ml.stats.Ncommitter.Inc()
-		s := runtime.Rdtsc()
+		s := common.Rdtsc()
 		t := log.curtrans
 		if (t.force || t.isfull()) && t.iscommittable() {
 			t.head = t.head + index_t(t.logged.Len()+t.revokel.len())
@@ -872,14 +868,14 @@ func (log *log_t) committer() {
 					t.start, t.head, t.ordered.Len())
 			}
 
-			ts := runtime.Rdtsc()
+			ts := common.Rdtsc()
 
 			t.copyrevoked(log.ml)
 			t.copylogged(log.ml)
 			t.copyordered(log.ml)
 			log.translog.add(t)
 
-			log.ml.stats.Commitcopycycles.Add(runtime.Rdtsc() - ts)
+			log.ml.stats.Commitcopycycles.Add(ts)
 
 			early := false
 			if log.ml.freespace(t.head, log.tail) {
@@ -923,7 +919,7 @@ func (log *log_t) committer() {
 				log.admissioncond.Broadcast()
 			}
 		}
-		log.ml.stats.Committercycles.Add(runtime.Rdtsc() - s)
+		log.ml.stats.Committercycles.Add(s)
 
 		// the next trans maybe ready to commit
 		t = log.curtrans
@@ -971,10 +967,9 @@ func (log *log_t) apply(tail, head index_t) index_t {
 		}
 	}
 
-	s := runtime.Rdtsc()
+	s := common.Rdtsc()
 	log.ml.flush() // flush apply
-	t := runtime.Rdtsc()
-	log.ml.stats.Flushapplydatacycles.Add(t - s)
+	log.ml.stats.Flushapplydatacycles.Add(s)
 
 	log.ml.commit_tail(head)
 

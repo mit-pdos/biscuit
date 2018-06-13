@@ -1,25 +1,43 @@
 package common
 
 import "reflect"
+import "runtime"
 import "sync/atomic"
 import "strconv"
 import "strings"
 import "unsafe"
 
+const stats = true
+
+func Rdtsc() uint64 {
+	if stats {
+		return runtime.Rdtsc()
+	} else {
+		return 0
+	}
+}
+
 type Counter_t int64
 type Cycles_t int64
 
 func (c *Counter_t) Inc() {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, 1)
+	if stats {
+		n := (*int64)(unsafe.Pointer(c))
+		atomic.AddInt64(n, 1)
+	}
 }
 
 func (c *Cycles_t) Add(m uint64) {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, int64(m))
+	if stats {
+		n := (*int64)(unsafe.Pointer(c))
+		atomic.AddInt64(n, int64(Rdtsc()-m))
+	}
 }
 
 func Stats2String(st interface{}) string {
+	if !stats {
+		return ""
+	}
 	v := reflect.ValueOf(st)
 	s := ""
 	for i := 0; i < v.NumField(); i++ {

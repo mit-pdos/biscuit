@@ -3,38 +3,38 @@ package fs
 import "fmt"
 import "sync"
 import "sort"
-import "runtime"
 import "unsafe"
 
 import "common"
 
 type inode_stats_t struct {
-	Nopen     common.Counter_t
-	Nnamei    common.Counter_t
-	Nifill    common.Counter_t
-	Niupdate  common.Counter_t
-	Nistat    common.Counter_t
-	Niread    common.Counter_t
-	Niwrite   common.Counter_t
-	Ndo_write common.Counter_t
-	Nfillhole common.Counter_t
-	Ngrow     common.Counter_t
-	Nitrunc   common.Counter_t
-	Nimmap    common.Counter_t
-	Nifree    common.Counter_t
-	Nicreate  common.Counter_t
-	Nilink    common.Counter_t
-	Nunlink   common.Counter_t
-	Nrename   common.Counter_t
-	Nlseek    common.Counter_t
-	Nmkdir    common.Counter_t
-	Nclose    common.Counter_t
-	Nsync     common.Counter_t
-	Nreopen   common.Counter_t
-	CWrite    common.Cycles_t
-	Cwrite    common.Cycles_t
-	Ciwrite   common.Cycles_t
-	Ciupdate  common.Cycles_t
+	Nopen       common.Counter_t
+	Nnamei      common.Counter_t
+	Nifill      common.Counter_t
+	Niupdate    common.Counter_t
+	Nistat      common.Counter_t
+	Niread      common.Counter_t
+	Niwrite     common.Counter_t
+	Ndo_write   common.Counter_t
+	Nfillhole   common.Counter_t
+	Ngrow       common.Counter_t
+	Nitrunc     common.Counter_t
+	Nimmap      common.Counter_t
+	Nifree      common.Counter_t
+	Nicreate    common.Counter_t
+	Nilink      common.Counter_t
+	Nunlink     common.Counter_t
+	Nrename     common.Counter_t
+	Nlseek      common.Counter_t
+	Nmkdir      common.Counter_t
+	Nclose      common.Counter_t
+	Nsync       common.Counter_t
+	Nreopen     common.Counter_t
+	CWrite      common.Cycles_t
+	Cwrite      common.Cycles_t
+	Ciwrite     common.Cycles_t
+	Ciwritecopy common.Cycles_t
+	Ciupdate    common.Cycles_t
 }
 
 func (is *inode_stats_t) Stats() string {
@@ -319,7 +319,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 			n = max
 		}
 
-		s := runtime.Rdtsc()
+		s := common.Rdtsc()
 
 		opid := idm.fs.fslog.Op_begin("dowrite")
 
@@ -331,19 +331,19 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if app {
 			off = idm.size
 		}
-		s1 := runtime.Rdtsc()
+		s1 := common.Rdtsc()
 		wrote, err := idm.iwrite(opid, src, off, n)
-		idm.fs.istats.Ciwrite.Add(runtime.Rdtsc() - s1)
+		idm.fs.istats.Ciwrite.Add(s1)
 
-		s2 := runtime.Rdtsc()
+		s2 := common.Rdtsc()
 		idm._iupdate(opid)
-		idm.fs.istats.Ciupdate.Add(runtime.Rdtsc() - s2)
+		idm.fs.istats.Ciupdate.Add(s2)
 
 		idm.iunlock("")
 
 		idm.fs.fslog.Op_end(opid)
 
-		t := runtime.Rdtsc()
+		t := common.Rdtsc()
 		idm.fs.istats.Cwrite.Add(t - s)
 
 		if err != 0 {
@@ -790,10 +790,11 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 		}
 
 		dst := b.Data[s : s+m]
+		ts := common.Rdtsc()
 		read, err := src.Uioread(dst)
 		b.Unlock()
+		idm.fs.istats.Ciwritecopy.Add(ts)
 		idm.fs.fslog.Write_ordered(opid, b)
-		// idm.fs.fslog.Write(opid, b)  // XXX everything through log for now
 		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
