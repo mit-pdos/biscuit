@@ -6,6 +6,7 @@ import "sync"
 import "common"
 
 const log_debug = false
+const copyordered = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -601,9 +602,13 @@ func (trans *trans_t) write_ordered(ml *memlog_t) {
 	if log_debug {
 		fmt.Printf("write_ordered: %d\n", trans.orderedcopy.Len())
 	}
-	ml.bcache.Write_async_through_coalesce(trans.orderedcopy)
-	trans.orderedcopy.Delete()
-	trans.ordered.Delete()
+	if copyordered {
+		ml.bcache.Write_async_through_coalesce(trans.orderedcopy)
+		trans.orderedcopy.Delete()
+	} else {
+		ml.bcache.Write_async_through_coalesce(trans.ordered)
+		trans.ordered.Delete()
+	}
 }
 
 func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
@@ -872,7 +877,9 @@ func (log *log_t) committer() {
 
 			t.copyrevoked(log.ml)
 			t.copylogged(log.ml)
-			t.copyordered(log.ml)
+			if copyordered {
+				t.copyordered(log.ml)
+			}
 			log.translog.add(t)
 
 			log.ml.stats.Commitcopycycles.Add(ts)
