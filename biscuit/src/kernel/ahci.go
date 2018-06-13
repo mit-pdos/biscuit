@@ -717,7 +717,12 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *common.BlkList_t) uint64 {
 			panic("fill_prd_v")
 		}
 		ST(&cmd.prdt[slot].dbc, uint32(l-1))
-		SET(&cmd.prdt[slot].dbc, 1<<31)
+
+		// 4.2.3.3: Setting 1<<31 will generate an interrupt for when
+		// the data in slot slot has been transferred, which results in
+		// a large number of interrupts for big transfers.
+		// SET(&cmd.prdt[slot].dbc, 1<<31)
+
 		nbytes += uint64(l)
 		slot++
 	}
@@ -993,7 +998,6 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	}
 }
 
-// Called by int_handler(), which holds lock through intr()
 func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 	defer p.Unlock()
 	p.Lock()
@@ -1053,9 +1057,8 @@ func (ahci *ahci_disk_t) intr() {
 
 			// clear port interrupt. interrupts coming in while we are
 			// processing will be deliver after clear_is().
-			SET(&ahci.port.port.is, 0xFFFFFFFF)
+			SET(&ahci.port.port.is, 0x1<<i)
 			ahci.port.port_intr(ahci)
-			// ahci.clear_is()
 		}
 	}
 	if !int && ahci_debug {
