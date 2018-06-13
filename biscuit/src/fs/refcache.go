@@ -110,10 +110,13 @@ func (irc *refcache_t) nlive() int {
 }
 
 func (irc *refcache_t) Stats() string {
-	s := "\n\tsize "
-	s += strconv.Itoa(len(irc.refs))
-	s += "\n\t#live "
-	s += strconv.Itoa(irc.nlive())
+	s := ""
+	if common.Stats {
+		s := "\n\tsize "
+		s += strconv.Itoa(len(irc.refs))
+		s += "\n\t#live "
+		s += strconv.Itoa(irc.nlive())
+	}
 	s += common.Stats2String(*irc)
 	return s
 }
