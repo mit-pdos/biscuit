@@ -22,7 +22,7 @@ type refcache_t struct {
 	evict_async bool // the caller needs to call Flush or evict on Lookup
 
 	// stats
-	Nevict counter_t
+	Nevict common.Counter_t
 }
 
 func mkRefcache(size int, async bool) *refcache_t {
@@ -114,14 +114,14 @@ func (irc *refcache_t) Stats() string {
 	s += strconv.Itoa(len(irc.refs))
 	s += "\n\t#live "
 	s += strconv.Itoa(irc.nlive())
-	s += dostats(*irc)
+	s += common.Stats2String(*irc)
 	return s
 }
 
 func (irc *refcache_t) _delete(ir *common.Ref_t) {
 	delete(irc.refs, ir.Key)
 	irc.reflru.remove(ir)
-	irc.Nevict.inc()
+	irc.Nevict.Inc()
 }
 
 // evicts up-to half of the objects in the cache. returns the number of cache

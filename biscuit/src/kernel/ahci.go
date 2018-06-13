@@ -5,7 +5,6 @@ import "runtime"
 import "sync"
 import "sync/atomic"
 import "unsafe"
-import "strconv"
 import "container/list"
 
 import "common"
@@ -58,7 +57,7 @@ func (ahci *ahci_disk_t) Stats() string {
 	if ahci == nil {
 		panic("no adisk")
 	}
-	return ahci.port.stat()
+	return ahci.port.stat.stat()
 }
 
 func attach_ahci(vid, did int, t pcitag_t) {
@@ -294,6 +293,17 @@ type ahci_cmd_table struct {
 	prdt     [MAX_PRD_ENTRIES]ahci_prd
 }
 
+type ahci_port_stat_t struct {
+	Nbarrier  common.Counter_t
+	Nwrite    common.Counter_t
+	Niwrite   common.Counter_t
+	Nvwrite   common.Counter_t
+	Nread     common.Counter_t
+	Nnoslot   common.Counter_t
+	Ncoalesce common.Counter_t
+	Nintr     common.Counter_t
+}
+
 type ahci_port_t struct {
 	sync.Mutex
 	cond_flush  *sync.Cond
@@ -317,15 +327,7 @@ type ahci_port_t struct {
 	cmdt_pa uintptr
 	cmdt    *[32]ahci_cmd_table
 
-	// stats
-	nbarrier  int
-	nwrite    int
-	niwrite   int
-	nvwrite   int
-	nread     int
-	nnoslot   int
-	ncoalesce int
-	nintr     int
+	stat ahci_port_stat_t
 }
 
 type identify_device struct {
@@ -570,25 +572,9 @@ func (p *ahci_port_t) init() bool {
 	return true
 }
 
-func (p *ahci_port_t) stat() string {
-	s := "ahci:"
-	s += " #flush "
-	s += strconv.Itoa(p.nbarrier)
-	s += " #read "
-	s += strconv.Itoa(p.nread)
-	s += " #write "
-	s += strconv.Itoa(p.nwrite)
-	s += " #iwrite "
-	s += strconv.Itoa(p.niwrite)
-	s += " #vwrite "
-	s += strconv.Itoa(p.nvwrite)
-	s += " #noslot "
-	s += strconv.Itoa(p.nnoslot)
-	s += " #ncoalesce "
-	s += strconv.Itoa(p.ncoalesce)
-	s += " #nintr "
-	s += strconv.Itoa(p.nintr)
-	s += "\n"
+func (p *ahci_port_stat_t) stat() string {
+	s := "ahci:" + common.Stats2String(*p)
+	*p = ahci_port_stat_t{}
 	return s
 }
 
@@ -801,7 +787,7 @@ func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 				if ahci_debug {
 					fmt.Printf("collapse %d %d %d\n", first.Block, last.Block, r.Blks.Len())
 				}
-				p.ncoalesce++
+				p.stat.Ncoalesce++
 				r.Blks.Append(req.Blks)
 				ok = true
 				break
@@ -836,12 +822,12 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 	}
 
 	if req.Cmd == common.BDEV_WRITE {
-		p.nwrite++
+		p.stat.Nwrite++
 	}
 
 	if p.queued.Len() > 0 {
 		p.queue_coalesce(req)
-		p.nnoslot++
+		p.stat.Nnoslot++
 		return
 	}
 
@@ -852,7 +838,7 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 			fmt.Printf("AHCI start: queue for slot\n")
 		}
 		p.queued.PushBack(req)
-		p.nnoslot++
+		p.stat.Nnoslot++
 		return
 	}
 	p.startslot(req, s)
@@ -862,16 +848,16 @@ func (p *ahci_port_t) startslot(req *common.Bdev_req_t, s int) {
 	switch req.Cmd {
 	case common.BDEV_WRITE:
 		if req.Blks.Len() > 1 {
-			p.nvwrite++
+			p.stat.Nvwrite++
 		} else {
-			p.niwrite++
+			p.stat.Niwrite++
 		}
 		p.issue(s, req.Blks, IDE_CMD_WRITE_DMA_EXT)
 	case common.BDEV_READ:
-		p.nread++
+		p.stat.Nread++
 		p.issue(s, req.Blks, IDE_CMD_READ_DMA_EXT)
 	case common.BDEV_FLUSH:
-		p.nbarrier++
+		p.stat.Nbarrier++
 		p.issue(s, nil, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
@@ -1004,7 +990,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 
 	ci := LD(&p.port.ci)
 	int := false
-	p.nintr++
+	p.stat.Nintr++
 	for s := uint(0); s < 32; s++ {
 		if p.inflight[s] != nil && ci&(1<<s) == 0 {
 			int = true

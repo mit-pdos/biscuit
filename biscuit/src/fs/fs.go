@@ -1,13 +1,8 @@
 package fs
 
 import "fmt"
-import "reflect"
 import "runtime"
-import "strconv"
-import "strings"
 import "sync"
-import "sync/atomic"
-import "unsafe"
 
 import "common"
 
@@ -134,7 +129,7 @@ func (fs *Fs_t) Fs_link(old string, new string, cwd common.Inum_t) common.Err_t 
 		fmt.Printf("Fs_link: %v %v %v\n", old, new, cwd)
 	}
 
-	fs.istats.Nilink.inc()
+	fs.istats.Nilink.Inc()
 
 	orig, err := fs.fs_namei_locked(opid, old, cwd, "Fs_link_org")
 	if err != 0 {
@@ -178,7 +173,7 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd common.Inum_t, wantdir bool) common.
 		return -common.EPERM
 	}
 
-	fs.istats.Nunlink.inc()
+	fs.istats.Nunlink.Inc()
 
 	if fs_debug {
 		fmt.Printf("fs_unlink: %v cwd %v dir? %v\n", paths, cwd, wantdir)
@@ -255,7 +250,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd common.Inum_t) common.Err_t {
 	opid := fs.fslog.Op_begin("fs_rename")
 	defer fs.op_end_and_free(opid)
 
-	fs.istats.Nrename.inc()
+	fs.istats.Nrename.Inc()
 
 	if fs_debug {
 		fmt.Printf("fs_rename: src %v dst %v %v\n", oldp, newp, cwd)
@@ -587,7 +582,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
 	t := runtime.Rdtsc()
 	r, e := fo._write(src, -1)
-	fo.fs.istats.CWrite.add(runtime.Rdtsc() - t)
+	fo.fs.istats.CWrite.Add(runtime.Rdtsc() - t)
 	return r, e
 }
 
@@ -698,7 +693,7 @@ func (fo *fsfops_t) Reopen() common.Err_t {
 		fo.Unlock()
 		return err
 	}
-	fo.fs.istats.Nreopen.inc()
+	fo.fs.istats.Nreopen.Inc()
 	fo.fs.icache.Refup(idm, "reopen") // close will decrease it
 	idm.iunlock_refdown("reopen")
 	fo.count++
@@ -714,7 +709,7 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 		return 0, -common.EBADF
 	}
 
-	fo.fs.istats.Nlseek.inc()
+	fo.fs.istats.Nlseek.Inc()
 
 	switch whence {
 	case common.SEEK_SET:
@@ -1210,7 +1205,7 @@ func (fs *Fs_t) Fs_mkdir(paths string, mode int, cwd common.Inum_t) common.Err_t
 	opid := fs.fslog.Op_begin("fs_mkdir")
 	defer fs.fslog.Op_end(opid)
 
-	fs.istats.Nmkdir.inc()
+	fs.istats.Nmkdir.Inc()
 
 	if fs_debug {
 		fmt.Printf("mkdir: %v %v\n", paths, cwd)
@@ -1384,7 +1379,7 @@ func (fs *Fs_t) Makefake() *common.Fd_t {
 var _denyopen = map[int]bool{common.D_SUD: true, common.D_SUS: true}
 
 func (fs *Fs_t) Fs_open(paths string, flags common.Fdopt_t, mode int, cwd common.Inum_t, major, minor int) (*common.Fd_t, common.Err_t) {
-	fs.istats.Nopen.inc()
+	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
 		return nil, err
@@ -1430,7 +1425,7 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 	opid := fs.fslog.Op_begin("Fs_close")
 	//defer fs.op_end_and_free()
 
-	fs.istats.Nclose.inc()
+	fs.istats.Nclose.Inc()
 
 	if fs_debug {
 		fmt.Printf("Fs_close: %d %v\n", opid, priv)
@@ -1474,7 +1469,7 @@ func (fs *Fs_t) Fs_sync() common.Err_t {
 	if memfs {
 		return 0
 	}
-	fs.istats.Nsync.inc()
+	fs.istats.Nsync.Inc()
 	fs.fslog.Force(false)
 	return 0
 }
@@ -1483,7 +1478,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 	if memfs {
 		return 0
 	}
-	fs.istats.Nsync.inc()
+	fs.istats.Nsync.Inc()
 	fs.fslog.Force(true)
 	return 0
 }
@@ -1493,7 +1488,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd common.Inum_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
 	var err common.Err_t
-	fs.istats.Nnamei.inc()
+	fs.istats.Nnamei.Inc()
 	if len(paths) == 0 || paths[0] != '/' {
 		start, err = fs.icache.Iref(cwd, "fs_namei_cwd")
 		if err != 0 {
@@ -1549,41 +1544,6 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	fs.bcache.refcache.Evict_half()
 	fs.icache.refcache.Evict_half()
 	return fs.Sizes()
-}
-
-type stat_t interface {
-	Stats(name string)
-}
-
-type counter_t int64
-type cycles_t int64
-
-func (c *counter_t) inc() {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, 1)
-}
-
-func (c *cycles_t) add(m uint64) {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, int64(m))
-}
-
-func dostats(st interface{}) string {
-	v := reflect.ValueOf(st)
-	s := ""
-	for i := 0; i < v.NumField(); i++ {
-		t := v.Field(i).Type().String()
-		if strings.HasSuffix(t, "fs.counter_t") {
-			n := v.Field(i).Interface().(counter_t)
-			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
-		}
-		if strings.HasSuffix(t, "cycles_t") {
-			n := v.Field(i).Interface().(cycles_t)
-			s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
-		}
-
-	}
-	return s + "\n"
 }
 
 func (fs *Fs_t) Fs_statistics() string {
