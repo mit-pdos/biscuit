@@ -420,7 +420,7 @@ type trans_t struct {
 	head           index_t
 	inprogress     int               // ops in progress this transaction
 	logged         *common.BlkList_t // list of to-be-logged blocks
-	ordered        *common.BlkList_t // list of ordered blocks
+	ordered        *common.BlkList_t // list of ordered blocks  (XXX should be per inode for fsync()?)
 	orderedcopy    *common.BlkList_t // list of copied ordered blocks
 	revokel        *revokelist_t
 	logpresent     map[int]bool // enable quick check to see if block is in log
@@ -666,7 +666,9 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 	ml.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
 	ml.stats.Flushdatacycles.Add(s)
 
-	ml.commit_head(trans.head)
+	if trans.start != trans.head {
+		ml.commit_head(trans.head)
+	}
 
 	n := common.Counter_t(blks1.Len() + blks2.Len())
 	ml.stats.Nblkcommitted += n
@@ -881,6 +883,10 @@ func (log *log_t) committer() {
 				t.copyordered(log.ml)
 			}
 			log.translog.add(t)
+
+			if t.start+1 == t.head { // no blocks in log?
+				t.head = t.start // don't commit empty commit descriptor
+			}
 
 			log.ml.stats.Commitcopycycles.Add(ts)
 
