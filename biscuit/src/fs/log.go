@@ -328,6 +328,7 @@ func (ml *memlog_t) readdescriptor(i index_t) (*logdescriptor_t, *common.Bdev_bl
 	return ml.mkdescriptor(dblk), dblk
 }
 
+// Flush i
 func (ml *memlog_t) flush() {
 	ider := common.MkRequest(nil, common.BDEV_FLUSH, true)
 	if ml.bcache.disk.Start(ider) {
@@ -420,7 +421,7 @@ type trans_t struct {
 	head           index_t
 	inprogress     int               // ops in progress this transaction
 	logged         *common.BlkList_t // list of to-be-logged blocks
-	ordered        *common.BlkList_t // list of ordered blocks  (XXX should be per inode for fsync()?)
+	ordered        *common.BlkList_t // list of ordered blocks
 	orderedcopy    *common.BlkList_t // list of copied ordered blocks
 	revokel        *revokelist_t
 	logpresent     map[int]bool // enable quick check to see if block is in log

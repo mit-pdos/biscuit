@@ -804,8 +804,11 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 	defer p.Unlock()
 	p.Lock()
 
-	// Flush must wait until outstanding commands have finished
-	// XXX should support FUA in writes?
+	// Flush waits until outstanding commands have finished and then flushes
+	// the non-volatile cache of the storage device.  XXX It might be better
+	// to have a just a barrier operation (i.e., not flushing non-volatile
+	// cache), and tag writes with FUA for writes that need to persist
+	// immediately (instead of flusing the complete on-disk cache).
 	for req.Cmd == common.BDEV_FLUSH {
 		ci := LD(&p.port.ci)
 		sact := LD(&p.port.sact)

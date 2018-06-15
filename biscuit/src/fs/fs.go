@@ -1464,6 +1464,8 @@ func (fs *Fs_t) Fs_stat(path string, st *common.Stat_t, cwd common.Inum_t) commo
 	return err
 }
 
+// Sync the file system to disk. XXX If Biscuit supported fsync, we could be
+// smarter and flush only the dirty blocks of particular inode.
 func (fs *Fs_t) Fs_sync() common.Err_t {
 	if memfs {
 		return 0
