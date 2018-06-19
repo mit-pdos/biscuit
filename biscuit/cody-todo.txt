@@ -1,0 +1,9 @@
+- stories of how linux oom killer was invoked
+- finish fixing current (runtime.trap() on redis) latency spikes
+- memory reservation loose ends
+	- GC semaphore can allocate?
+	- GC work stacks allocated lazily/huge?
+- add cmailbench on FS eval to paper
+- why freeing vmas in mem res experiment takes longer than allocating
+- RCU for performance in biscuit
+- self hosting
