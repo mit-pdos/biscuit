@@ -111,7 +111,7 @@ func (log *log_t) Op_end(opid opid_t) {
 // by waiting for log commit.
 func (log *log_t) Force(doapply bool) {
 	if memfs {
-		panic("memfs")
+		return
 	}
 
 	log.Lock()
