@@ -237,6 +237,8 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 	if err != 0 {
 		return err
 	}
+	p := cwd.Canonicalpath(paths)
+	fs.dcache.remove(p)
 	child._linkdown(opid)
 
 	return 0
@@ -446,6 +448,8 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 	if opar.do_unlink(opid, ofn) != 0 {
 		panic("probed")
 	}
+	p := cwd.Canonicalpath(oldp)
+	fs.dcache.remove(p)
 	if npar.do_insert(opid, nfn, ochild.inum) != 0 {
 		panic("probed")
 	}
@@ -1525,16 +1529,14 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 		}
 		return idm, err
 	}
-	p := paths
-	if paths[0] != '/' {
-		p = cwd.Path + paths
-	}
+	p := cwd.Fullpath(paths)
+	p = common.Canonicalize(p)
 	if inum, ok := fs.dcache.lookup(p); ok {
 		idm, err = fs.icache.Iref(inum, "fs_namei_fast")
 	} else {
 		idm, err = fs.fs_namei_slow(opid, paths, cwd)
 		if err == 0 {
-			fs.dcache.add(paths, idm.inum)
+			fs.dcache.add(p, idm.inum)
 		}
 	}
 	return idm, err

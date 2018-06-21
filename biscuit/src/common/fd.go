@@ -49,6 +49,19 @@ type Cwd_t struct {
 	Path       string
 }
 
+func (cwd *Cwd_t) Fullpath(p string) string {
+	if IsAbsolute(p) {
+		return p
+	} else {
+		return cwd.Path + "/" + p
+	}
+}
+
+func (cwd *Cwd_t) Canonicalpath(p string) string {
+	p1 := cwd.Fullpath(p)
+	return Canonicalize(p1)
+}
+
 func MkRootCwd(fd *Fd_t) *Cwd_t {
 	c := &Cwd_t{}
 	c.Fd = fd

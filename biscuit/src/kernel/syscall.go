@@ -4001,7 +4001,6 @@ func sys_chdir(proc *common.Proc_t, dirn int) int {
 	proc.Cwd.Lock()
 	defer proc.Cwd.Unlock()
 
-	pn := proc.Cwd.Path
 	newfd, err := thefs.Fs_open(path, common.O_RDONLY|common.O_DIRECTORY, 0, proc.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
@@ -4011,7 +4010,7 @@ func sys_chdir(proc *common.Proc_t, dirn int) int {
 	if common.IsAbsolute(path) {
 		proc.Cwd.Path = common.Canonicalize(path)
 	} else {
-		proc.Cwd.Path = common.Canonicalize(pn + path)
+		proc.Cwd.Path = proc.Cwd.Canonicalpath(path)
 	}
 	return 0
 }

@@ -161,7 +161,6 @@ func (ufs *Ufs_t) Stat(p string) (*common.Stat_t, common.Err_t) {
 	s := &common.Stat_t{}
 	err := ufs.fs.Fs_stat(p, s, ufs.fs.MkRootCwd())
 	if err != 0 {
-		fmt.Printf("doStat %v failed %v\n", p, err)
 		return nil, err
 	}
 	return s, err

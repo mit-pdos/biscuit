@@ -31,6 +31,16 @@ func (dc *dcache_t) add(pn string, inum common.Inum_t) {
 	dc.dcache[pn] = &dcentry_t{inum: inum}
 }
 
+func (dc *dcache_t) remove(pn string) {
+	dc.Lock()
+	defer dc.Unlock()
+
+	if dcache_debug {
+		fmt.Printf("remove: %v\n", pn)
+	}
+	delete(dc.dcache, pn)
+}
+
 func (dc *dcache_t) lookup(pn string) (common.Inum_t, bool) {
 	dc.Lock()
 	defer dc.Unlock()

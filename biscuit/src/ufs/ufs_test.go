@@ -48,6 +48,59 @@ func TestCanonicalize(t *testing.T) {
 	}
 }
 
+func TestDcache(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+
+	fmt.Printf("Test Dcache %v ...\n", dst)
+	d := "d/"
+	tfs := BootFS(dst)
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+
+	e = tfs.MkFile(d+"f1", nil)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f2")
+	}
+	_, e = tfs.Stat(d + "f1")
+	if e != 0 {
+		t.Fatalf("Stat failed")
+	}
+	e = tfs.Unlink(d + "f1")
+	if e != 0 {
+		t.Fatalf("Unlink failed")
+	}
+	_, e = tfs.Stat(d + "f1")
+	if e == 0 {
+		t.Fatalf("Stat succeeded")
+	}
+
+	e = tfs.MkFile(d+"f1", nil)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f2")
+	}
+	_, e = tfs.Stat(d + "f1")
+	if e != 0 {
+		t.Fatalf("Stat failed")
+	}
+	e = tfs.Rename(d+"f1", d+"g1")
+	if e != 0 {
+		t.Fatalf("Rename failed")
+	}
+	_, e = tfs.Stat(d + "f1")
+	if e == 0 {
+		t.Fatalf("Stat succeeded")
+	}
+	_, e = tfs.Stat(d + "g1")
+	if e != 0 {
+		t.Fatalf("Stat failed")
+	}
+	ShutdownFS(tfs)
+	os.Remove(dst)
+}
+
 func doTestSimple(tfs *Ufs_t, d string) string {
 	//fmt.Printf("doTestSimple %v\n", d)
 
