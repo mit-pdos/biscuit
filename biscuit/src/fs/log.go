@@ -208,11 +208,17 @@ func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
 	log.mk_log(logstart, loglen, bcache)
 	log.recover()
 	log.curtrans = log.mk_trans(log.head, log.ml)
-	go log.committer()
+	if !memfs {
+		go log.committer()
+	}
 	return log
 }
 
 func (log *log_t) StopLog() {
+	if memfs {
+		return
+	}
+
 	log.Force(true)
 
 	log.Lock()
