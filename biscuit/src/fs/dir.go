@@ -1,70 +1,11 @@
 package fs
 
 import "fmt"
-import "strings"
 import "common"
 
 const NAME_MAX int = 512
 
 var lhits = 0
-
-// allocation-less pathparts
-type pathparts_t struct {
-	path string
-	loc  int
-}
-
-func (pp *pathparts_t) pp_init(path string) {
-	pp.path = path
-	pp.loc = 0
-}
-
-func (pp *pathparts_t) next() (string, bool) {
-	ret := ""
-	for ret == "" {
-		if pp.loc == len(pp.path) {
-			return "", false
-		}
-		ret = pp.path[pp.loc:]
-		nloc := strings.IndexByte(ret, '/')
-		if nloc != -1 {
-			ret = ret[:nloc]
-			pp.loc += nloc + 1
-		} else {
-			pp.loc += len(ret)
-		}
-	}
-	return ret, true
-}
-
-func sdirname(path string) (string, string) {
-	fn := path
-	l := len(fn)
-	// strip all trailing slashes
-	for i := l - 1; i >= 0; i-- {
-		if fn[i] != '/' {
-			break
-		}
-		fn = fn[:i]
-		l--
-	}
-	s := ""
-	for i := l - 1; i >= 0; i-- {
-		if fn[i] == '/' {
-			// remove the rightmost slash only if it is not the
-			// first char (the root).
-			if i == 0 {
-				s = fn[0:1]
-			} else {
-				s = fn[:i]
-			}
-			fn = fn[i+1:]
-			break
-		}
-	}
-
-	return s, fn
-}
 
 func crname(path string, nilpatherr common.Err_t) (common.Err_t, bool) {
 	if path == "" {

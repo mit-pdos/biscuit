@@ -21,6 +21,33 @@ const (
 	ndatablks  = 20
 )
 
+func TestCanonicalize(t *testing.T) {
+	if "/" != common.Canonicalize("//") {
+		t.Fatalf("//")
+	}
+	if "/" != common.Canonicalize("/////") {
+		t.Fatalf("/////")
+	}
+	if "/" != common.Canonicalize("/./") {
+		t.Fatalf("/./")
+	}
+	if "/a" != common.Canonicalize("/a/./") {
+		t.Fatalf("/a")
+	}
+	if "/a/b/c" != common.Canonicalize("/a/b/c/") {
+		t.Fatalf("/a/b/c")
+	}
+	if "/" != common.Canonicalize("/a/../") {
+		t.Fatalf("/")
+	}
+	if "/a" != common.Canonicalize("/a/b/..") {
+		t.Fatalf("/")
+	}
+	if "/" != common.Canonicalize("/..") {
+		t.Fatalf("/")
+	}
+}
+
 func doTestSimple(tfs *Ufs_t, d string) string {
 	//fmt.Printf("doTestSimple %v\n", d)
 
@@ -221,7 +248,7 @@ func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 	for i := 0; i < nfile; i++ {
 		fn := uniqfile(i)
 		var err common.Err_t
-		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, common.Inum_t(0), 0, 0)
+		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, tfs.fs.MkRootCwd(), 0, 0)
 		if err != 0 {
 			t.Fatalf("ufs.fs.Fs_open %v failed %v\n", fn, err)
 		}
@@ -230,7 +257,7 @@ func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 		if err != 0 || ub.Remain() != 0 {
 			t.Fatalf("Write %v failed %v %d\n", fn, err, n)
 		}
-		err = tfs.fs.Fs_unlink(fn, 0, false)
+		err = tfs.fs.Fs_unlink(fn, tfs.fs.MkRootCwd(), false)
 		if err != 0 {
 			t.Fatalf("doUnlink %v failed %v\n", fn, err)
 		}

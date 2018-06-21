@@ -3461,10 +3461,6 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.E
 	return wrote, err
 }
 
-func (tf *tcpfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
-}
-
 func (tf *tcpfops_t) Truncate(newlen uint) common.Err_t {
 	return -common.EINVAL
 }
@@ -3832,10 +3828,6 @@ func (tl *tcplfops_t) Reopen() common.Err_t {
 
 func (tl *tcplfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
 	return 0, -common.EPIPE
-}
-
-func (tl *tcplfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
 }
 
 func (tl *tcplfops_t) Truncate(newlen uint) common.Err_t {

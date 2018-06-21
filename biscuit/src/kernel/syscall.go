@@ -14,8 +14,8 @@ import "unsafe"
 import "common"
 import "fs"
 
-var _sysbounds = []int {
-//var _sysbounds = map[int]int {
+var _sysbounds = []int{
+	//var _sysbounds = map[int]int {
 	common.SYS_READ:       common.Bounds(common.B_SYS_READ),
 	common.SYS_WRITE:      common.Bounds(common.B_SYS_WRITE),
 	common.SYS_OPEN:       common.Bounds(common.B_SYS_OPEN),
@@ -368,8 +368,7 @@ func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
 	if err != 0 {
 		return int(err)
 	}
-	pi := proc.Cwd().Fops.Pathi()
-	file, err := thefs.Fs_open(path, flags, mode, pi, 0, 0)
+	file, err := thefs.Fs_open(path, flags, mode, proc.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -616,8 +615,7 @@ func sys_access(proc *common.Proc_t, pathn, mode int) int {
 		return int(-common.EINVAL)
 	}
 
-	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := thefs.Fs_open_inner(path, common.O_RDONLY, 0, pi, 0, 0)
+	fsf, err := thefs.Fs_open_inner(path, common.O_RDONLY, 0, proc.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -654,7 +652,7 @@ func sys_stat(proc *common.Proc_t, pathn, statn int) int {
 		return int(err)
 	}
 	buf := &common.Stat_t{}
-	err = thefs.Fs_stat(path, buf, proc.Cwd().Fops.Pathi())
+	err = thefs.Fs_stat(path, buf, proc.Cwd)
 	if err != 0 {
 		return int(err)
 	}
@@ -1131,10 +1129,6 @@ func (of *pipefops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.
 	return c, 0
 }
 
-func (of *pipefops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
-}
-
 func (of *pipefops_t) Truncate(uint) common.Err_t {
 	return -common.EINVAL
 }
@@ -1223,7 +1217,7 @@ func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return int(err2)
 	}
-	err := thefs.Fs_rename(old, new, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_rename(old, new, proc.Cwd)
 	return int(err)
 }
 
@@ -1236,7 +1230,7 @@ func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
 	if err != 0 {
 		return int(err)
 	}
-	err = thefs.Fs_mkdir(path, mode, proc.Cwd().Fops.Pathi())
+	err = thefs.Fs_mkdir(path, mode, proc.Cwd)
 	return int(err)
 }
 
@@ -1257,7 +1251,7 @@ func sys_link(proc *common.Proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return int(err2)
 	}
-	err := thefs.Fs_link(old, new, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_link(old, new, proc.Cwd)
 	return int(err)
 }
 
@@ -1271,7 +1265,7 @@ func sys_unlink(proc *common.Proc_t, pathn, isdiri int) int {
 		return int(err)
 	}
 	wantdir := isdiri != 0
-	err = thefs.Fs_unlink(path, proc.Cwd().Fops.Pathi(), wantdir)
+	err = thefs.Fs_unlink(path, proc.Cwd, wantdir)
 	return int(err)
 }
 
@@ -1386,7 +1380,7 @@ func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
 		return int(err)
 	}
 	maj, min := unmkdev(uint(devn))
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT, 0, proc.Cwd().Fops.Pathi(), maj, min)
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT, 0, proc.Cwd, maj, min)
 	if err != 0 {
 		return int(err)
 	}
@@ -1937,10 +1931,6 @@ func (sf *sudfops_t) Write(*common.Proc_t, common.Userio_i) (int, common.Err_t) 
 	return 0, -common.EBADF
 }
 
-func (sf *sudfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
-}
-
 func (sf *sudfops_t) Truncate(newlen uint) common.Err_t {
 	return -common.EINVAL
 }
@@ -1985,8 +1975,7 @@ func (sf *sudfops_t) Bind(proc *common.Proc_t, sa []uint8) common.Err_t {
 	path := slicetostr(sa[poff:])
 	// try to create the specified file as a special device
 	bid := allbuds.bud_id_new()
-	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, pi, common.D_SUD, int(bid))
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, proc.Cwd, common.D_SUD, int(bid))
 	if err != 0 {
 		return err
 	}
@@ -2019,7 +2008,7 @@ func (sf *sudfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, sa []uint
 	}
 	st := &common.Stat_t{}
 	path := slicetostr(sa[poff:])
-	err := thefs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_stat(path, st, proc.Cwd)
 	if err != 0 {
 		return 0, err
 	}
@@ -2447,10 +2436,6 @@ func (sus *susfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.
 	return wrote, err
 }
 
-func (sus *susfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
-}
-
 func (sus *susfops_t) Truncate(newlen uint) common.Err_t {
 	return -common.EINVAL
 }
@@ -2479,8 +2464,7 @@ func (sus *susfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	sid := susid_new()
 
 	// create special file
-	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, pi, common.D_SUS, sid)
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, proc.Cwd, common.D_SUS, sid)
 	if err != 0 {
 		return err
 	}
@@ -2505,7 +2489,7 @@ func (sus *susfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 
 	// lookup sid
 	st := &common.Stat_t{}
-	err := thefs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_stat(path, st, proc.Cwd)
 	if err != 0 {
 		return err
 	}
@@ -2976,10 +2960,6 @@ func (sf *suslfops_t) Write(*common.Proc_t, common.Userio_i) (int, common.Err_t)
 	return 0, -common.EPIPE
 }
 
-func (sf *suslfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
-}
-
 func (sf *suslfops_t) Truncate(newlen uint) common.Err_t {
 	return -common.EINVAL
 }
@@ -3168,7 +3148,8 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		var ok bool
 		// lock fd table for copying
 		parent.Fdl.Lock()
-		child, ok = common.Proc_new(parent.Name, parent.Cwd(), parent.Fds, sys)
+		cwd := *parent.Cwd
+		child, ok = common.Proc_new(parent.Name, &cwd, parent.Fds, sys)
 		parent.Fdl.Unlock()
 		if !ok {
 			lhits++
@@ -3324,7 +3305,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	}
 
 	// load binary image -- get first block of file
-	file, err := thefs.Fs_open(paths, common.O_RDONLY, 0, proc.Cwd().Fops.Pathi(), 0, 0)
+	file, err := thefs.Fs_open(paths, common.O_RDONLY, 0, proc.Cwd, 0, 0)
 	if err != 0 {
 		restore()
 		return int(err)
@@ -3934,7 +3915,7 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 	select {
 	case ret := <-fm.ack:
 		return ret
-	case <- kn.Killch:
+	case <-kn.Killch:
 		if kn.Kerr == 0 {
 			panic("no")
 		}
@@ -3978,8 +3959,7 @@ func sys_truncate(proc *common.Proc_t, pathn int, newlen uint) int {
 	if err := badpath(path); err != 0 {
 		return int(err)
 	}
-	pi := proc.Cwd().Fops.Pathi()
-	f, err := thefs.Fs_open(path, common.O_WRONLY, 0, pi, 0, 0)
+	f, err := thefs.Fs_open(path, common.O_WRONLY, 0, proc.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -3998,11 +3978,7 @@ func sys_ftruncate(proc *common.Proc_t, fdn int, newlen uint) int {
 
 func sys_getcwd(proc *common.Proc_t, bufn, sz int) int {
 	dst := proc.Mkuserbuf(bufn, sz)
-	pwd, err := proc.Cwd().Fops.Fullpath()
-	if err != 0 {
-		return int(err)
-	}
-	_, err = dst.Uiowrite([]uint8(pwd))
+	_, err := dst.Uiowrite([]uint8(proc.Cwd.Path))
 	if err != 0 {
 		return int(err)
 	}
@@ -4022,16 +3998,21 @@ func sys_chdir(proc *common.Proc_t, dirn int) int {
 		return int(err)
 	}
 
-	proc.Cwdl.Lock()
-	defer proc.Cwdl.Unlock()
+	proc.Cwd.Lock()
+	defer proc.Cwd.Unlock()
 
-	pi := proc.Cwd().Fops.Pathi()
-	newcwd, err := thefs.Fs_open(path, common.O_RDONLY|common.O_DIRECTORY, 0, pi, 0, 0)
+	pn := proc.Cwd.Path
+	newfd, err := thefs.Fs_open(path, common.O_RDONLY|common.O_DIRECTORY, 0, proc.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
-	common.Close_panic(proc.Cwd())
-	proc.Set_cwd(newcwd)
+	common.Close_panic(proc.Cwd.Fd)
+	proc.Cwd.Fd = newfd
+	if common.IsAbsolute(path) {
+		proc.Cwd.Path = common.Canonicalize(path)
+	} else {
+		proc.Cwd.Path = common.Canonicalize(pn + path)
+	}
 	return 0
 }
 
@@ -4195,7 +4176,7 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 			pflags: pmflags}
 		_prof_nmi(en, ev, intperiod)
 	case ptype&common.PROF_COUNT != 0:
-		if pmflags & EVF_BACKTRACE != 0 {
+		if pmflags&EVF_BACKTRACE != 0 {
 			return int(-common.EINVAL)
 		}
 		evs := make([]pmev_t, 0, 4)
@@ -4238,7 +4219,7 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		}
 		runtime.SetMaxheap(n)
 		fmt.Printf("remaining mem: %v\n",
-		    common.Human(runtime.Memremain()))
+			common.Human(runtime.Memremain()))
 	default:
 		return int(-common.EINVAL)
 	}

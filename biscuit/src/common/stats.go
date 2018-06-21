@@ -7,7 +7,7 @@ import "strconv"
 import "strings"
 import "unsafe"
 
-const Stats = false
+const Stats = true
 
 func Rdtsc() uint64 {
 	if Stats {

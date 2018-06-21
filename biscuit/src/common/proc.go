@@ -2,6 +2,7 @@ package common
 
 //import "sync/atomic"
 import "sync"
+
 //import "strings"
 import "fmt"
 import "time"
@@ -10,15 +11,15 @@ import "runtime"
 
 type Tnote_t struct {
 	// XXX "alive" should be "terminated"
-	proc	*Proc_t
-	alive bool
+	proc   *Proc_t
+	alive  bool
 	killed bool
 	// protects killed, Killnaps.Cond and Kerr, and is a leaf lock
 	sync.Mutex
 	Killnaps struct {
-		Killch	chan bool
-		Cond	*sync.Cond
-		Kerr	Err_t
+		Killch chan bool
+		Cond   *sync.Cond
+		Kerr   Err_t
 	}
 }
 
@@ -81,10 +82,8 @@ type Proc_t struct {
 	// number of valid file descriptors
 	nfds int
 
-	cwd *Fd_t
-	// to serialize chdirs
-	Cwdl sync.Mutex
-	
+	Cwd *Cwd_t
+
 	Ulim Ulimit_t
 
 	// this proc's rusage
@@ -94,7 +93,7 @@ type Proc_t struct {
 
 	syscall Syscall_i
 	// no thread can read/write Oomlink except the OOM killer
-	Oomlink	*Proc_t
+	Oomlink *Proc_t
 }
 
 var Allprocs = make(map[int]*Proc_t, Syslimit.Sysprocs)
@@ -105,14 +104,6 @@ func (p *Proc_t) Tid0() Tid_t {
 
 func (p *Proc_t) Doomed() bool {
 	return p.doomed
-}
-
-func (p *Proc_t) Cwd() *Fd_t {
-	return p.cwd
-}
-
-func (p *Proc_t) Set_cwd(cwd *Fd_t) {
-	p.cwd = cwd
 }
 
 // an fd table invariant: every fd must have its file field set. thus the
@@ -521,9 +512,9 @@ var Resfail = Distinct_caller_t{
 	Enabled: true,
 	Whitel: map[string]bool{
 		// XXX these need to be fixed to handle ENOHEAP
-		"fs.(*Fs_t).Fs_rename": true,
+		"fs.(*Fs_t).Fs_rename":      true,
 		"main.(*susfops_t)._fdrecv": true,
-		},
+	},
 }
 
 const resfail = false
@@ -585,13 +576,13 @@ func Human(_bytes int) string {
 	bytes := float64(_bytes)
 	div := float64(1)
 	order := 0
-	for bytes / div > 1024 {
+	for bytes/div > 1024 {
 		div *= 1024
 		order++
 	}
 	sufs := map[int]string{0: "B", 1: "kB", 2: "MB", 3: "GB", 4: "TB",
-	    5: "PB"}
-	return fmt.Sprintf("%.2f%s", float64(bytes) / div, sufs[order])
+		5: "PB"}
+	return fmt.Sprintf("%.2f%s", float64(bytes)/div, sufs[order])
 }
 
 //var lastp time.Time
@@ -740,7 +731,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 			panic("oh wtf")
 		}
 
-again:
+	again:
 		var restart bool
 		if Resbegin(runonly) {
 			fastret, restart = p.trap_proc(tf, tid, intno, aux)
@@ -1229,7 +1220,7 @@ func (p *Proc_t) terminate() {
 		Close_panic(p.Fds[i])
 	}
 	p.Fdl.Unlock()
-	Close_panic(p.cwd)
+	Close_panic(p.Cwd.Fd)
 
 	p.Mywait.Pid = 1
 
@@ -1305,7 +1296,7 @@ var _deflimits = Ulimit_t{
 
 // returns the new proc and success; can fail if the system-wide limit of
 // procs/threads has been reached. the parent's fdtable must be locked.
-func Proc_new(name string, cwd *Fd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool) {
+func Proc_new(name string, cwd *Cwd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool) {
 	Proclock.Lock()
 
 	if nthreads >= int64(Syslimit.Sysprocs) {
@@ -1342,8 +1333,8 @@ func Proc_new(name string, cwd *Fd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool
 		}
 		ret.nfds++
 	}
-	ret.cwd = cwd
-	if ret.cwd.Fops.Reopen() != 0 {
+	ret.Cwd = cwd
+	if ret.Cwd.Fd.Fops.Reopen() != 0 {
 		panic("must succeed")
 	}
 	ret.Mmapi = USERMIN
@@ -1399,7 +1390,7 @@ func Tid_del() {
 // a type to make it easier for code that allocates cached objects to determine
 // when we must try to evict them.
 type Cacheallocs_t struct {
-	initted	bool
+	initted bool
 }
 
 // returns true if the caller must try to evict their recent cache allocations.
@@ -1510,9 +1501,9 @@ func Callerdump(start int) {
 // callers.
 type Distinct_caller_t struct {
 	sync.Mutex
-	Enabled	bool
-	did	map[uintptr]bool
-	Whitel	map[string]bool
+	Enabled bool
+	did     map[uintptr]bool
+	Whitel  map[string]bool
 }
 
 // returns a poor-man's hash of the given RIP values, which is probably unique.
@@ -1572,7 +1563,7 @@ func (dc *Distinct_caller_t) Distinct() (bool, string) {
 					fr.File, fr.Line)
 			} else {
 				fs += fmt.Sprintf("\t%v (%v:%v)\n", fr.Function,
-				    fr.File, fr.Line)
+					fr.File, fr.Line)
 			}
 			if !more || fr.Function == "runtime.goexit" {
 				break
@@ -1584,14 +1575,14 @@ func (dc *Distinct_caller_t) Distinct() (bool, string) {
 }
 
 type oommsg_t struct {
-	need	int
-	resume	chan bool
+	need   int
+	resume chan bool
 }
 
 type oom_t struct {
-	halp	chan oommsg_t
-	evict	func() (int, int)
-	lastpr	time.Time
+	halp   chan oommsg_t
+	evict  func() (int, int)
+	lastpr time.Time
 }
 
 var Oom *oom_t
@@ -1633,7 +1624,7 @@ outter:
 		last := 0
 		for {
 			a, b := o.evict()
-			if a + b == last || a + b < 1000 {
+			if a+b == last || a+b < 1000 {
 				break
 			}
 			last = a + b
@@ -1687,12 +1678,12 @@ func (o *oom_t) dispatch_peasant(need int) {
 	}
 
 	fmt.Printf("Killing PID %d \"%v\" for (%v %v)...\n", vic.Pid, vic.Name,
-	    Human(need), vic.Vmregion.Novma)
+		Human(need), vic.Vmregion.Novma)
 	vic.Doomall()
 	st := time.Now()
 	dl := st.Add(time.Second)
 	// wait for the victim to die
-	sleept := 1*time.Millisecond
+	sleept := 1 * time.Millisecond
 	for {
 		if _, ok := Proc_check(vic.Pid); !ok {
 			break
@@ -1700,13 +1691,13 @@ func (o *oom_t) dispatch_peasant(need int) {
 		now := time.Now()
 		if now.After(dl) {
 			fmt.Printf("oom killer: waiting for hog for %v...\n",
-			    now.Sub(st))
+				now.Sub(st))
 			o.gc()
-			dl = dl.Add(1*time.Second)
+			dl = dl.Add(1 * time.Second)
 		}
 		time.Sleep(sleept)
 		sleept *= 2
-		const maxs = 3*time.Second
+		const maxs = 3 * time.Second
 		if sleept > maxs {
 			sleept = maxs
 		}

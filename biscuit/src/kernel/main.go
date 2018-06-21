@@ -464,7 +464,7 @@ func cpus_stack_init(apcnt int, stackstart uintptr) {
 }
 
 func cpus_start(ncpu, aplim int) {
-	if aplim + 1 >= 1 << 8 {
+	if aplim+1 >= 1<<8 {
 		fmt.Printf("Logical CPU IDs overflow 8 bits for PMC profiling\n")
 	}
 	runtime.GOMAXPROCS(1 + aplim)
@@ -826,7 +826,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			//netdump()
 
 			v := runtime.Memremain()
-			fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
+			fmt.Printf("RES: %vMB (%v)\n", v>>20, v)
 
 			//common.Trap = true
 			//pr := false
@@ -925,7 +925,7 @@ func kbd_get(cnt int) ([]byte, common.Err_t) {
 	kn := &common.Current().Killnaps
 	select {
 	case cons.reqc <- cnt:
-	case <- kn.Killch:
+	case <-kn.Killch:
 		if kn.Kerr == 0 {
 			panic("must be non-zero")
 		}
@@ -1080,8 +1080,8 @@ const (
 type pmflag_t uint
 
 const (
-	EVF_OS  pmflag_t = 1 << iota
-	EVF_USR pmflag_t = 1 << iota
+	EVF_OS        pmflag_t = 1 << iota
+	EVF_USR       pmflag_t = 1 << iota
 	EVF_BACKTRACE pmflag_t = 1 << iota
 )
 
@@ -1140,9 +1140,9 @@ func (n *nilprof_t) stopnmi() ([]uintptr, bool) {
 }
 
 type intelprof_t struct {
-	l      sync.Mutex
-	pmcs   []intelpmc_t
-	events map[pmevid_t]pmevent_t
+	l         sync.Mutex
+	pmcs      []intelpmc_t
+	events    map[pmevid_t]pmevent_t
 	backtrace bool
 }
 
@@ -1196,7 +1196,7 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	if pf&EVF_USR != 0 {
 		v |= usr
 	}
-	if pf & (EVF_OS | EVF_USR) == 0 {
+	if pf&(EVF_OS|EVF_USR) == 0 {
 		v |= os | usr
 	}
 	return v
@@ -1256,7 +1256,7 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		// cause a page walk"; probably better to use (0xc8, 0x20)
 		// (event, umask) instead which counts instructions retired
 		// which "missed in the iTLB when the instruction was fetched"
-		EV_ITLB_LOAD_MISS_ANY:  {0x85, 0x1},
+		EV_ITLB_LOAD_MISS_ANY: {0x85, 0x1},
 		//EV_WTF1:
 		//    {0x49, 0x1},
 		//EV_WTF2:
@@ -1272,7 +1272,7 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		}
 	}
 	_, _, ecx, _ := runtime.Cpuid(0x1, 0)
-	g1 := ecx & (1 << 15) != 0
+	g1 := ecx&(1<<15) != 0
 	eax, _, _, _ := runtime.Cpuid(0xa, 0)
 	archperfmonid := (eax & 0xff)
 	if archperfmonid >= 4 {
@@ -1293,7 +1293,7 @@ func (ip *intelprof_t) startpmc(evs []pmev_t) ([]int, bool) {
 
 	// are the event ids supported?
 	for _, ev := range evs {
-		if ev.pflags & EVF_BACKTRACE != 0 {
+		if ev.pflags&EVF_BACKTRACE != 0 {
 			panic("no bt on counting")
 		}
 		if _, ok := ip.events[ev.evid]; !ok {
@@ -1370,7 +1370,7 @@ func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
 	inte := 1 << 20
 	v |= inte
 
-	bt := pf & EVF_BACKTRACE != 0
+	bt := pf&EVF_BACKTRACE != 0
 	ip.backtrace = bt
 	mask := false
 	runtime.SetNMI(mask, v, min, max, bt)
@@ -1400,9 +1400,9 @@ const failalloc bool = false
 
 // white-listed functions; don't fail these allocations. terminate() is for
 // init resurrection.
-var _physfail = common.Distinct_caller_t {
+var _physfail = common.Distinct_caller_t{
 	Whitel: map[string]bool{"main.main": true,
-	    "main.(*common.Proc_t).terminate": true},
+		"main.(*common.Proc_t).terminate": true},
 }
 
 // returns true if the allocation should fail
@@ -1490,7 +1490,7 @@ func main() {
 		nargs := []string{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := common.Proc_new(cmd, rf, defaultfds, sys)
+		p, ok := common.Proc_new(cmd, common.MkRootCwd(rf), defaultfds, sys)
 		if !ok {
 			panic("silly sysprocs")
 		}

@@ -1,6 +1,7 @@
 package common
 
 import "time"
+import "sync"
 
 const (
 	FD_READ    = 0x1
@@ -42,6 +43,19 @@ const (
 	R_HUP   Ready_t = 1 << iota
 )
 
+type Cwd_t struct {
+	sync.Mutex // to serialize chdirs
+	Fd         *Fd_t
+	Path       string
+}
+
+func MkRootCwd(fd *Fd_t) *Cwd_t {
+	c := &Cwd_t{}
+	c.Fd = fd
+	c.Path = "/"
+	return c
+}
+
 type Fdops_i interface {
 	// fd ops
 	Close() Err_t
@@ -53,7 +67,6 @@ type Fdops_i interface {
 	// reopen() is called with Proc_t.fdl is held
 	Reopen() Err_t
 	Write(*Proc_t, Userio_i) (int, Err_t)
-	Fullpath() (string, Err_t)
 	Truncate(uint) Err_t
 
 	Pread(Userio_i, int) (int, Err_t)
