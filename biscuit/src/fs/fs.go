@@ -24,11 +24,12 @@ type Fs_t struct {
 	ialloc       *ibitmap_t
 	balloc       *bbitmap_t
 	istats       *inode_stats_t
+	Dcache       bool
 }
 
 func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
-	//memfs = common.Kernel
+	memfs = common.Kernel
 	cons = console
 
 	// reset taken
@@ -96,6 +97,8 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 	fs.dcache = mkDcache()
 
 	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
+
+	fs.Dcache = true
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
@@ -1531,13 +1534,17 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 	}
 	p := cwd.Fullpath(paths)
 	p = common.Canonicalize(p)
-	if inum, ok := fs.dcache.lookup(p); ok {
-		idm, err = fs.icache.Iref(inum, "fs_namei_fast")
+	if fs.Dcache {
+		if inum, ok := fs.dcache.lookup(p); ok {
+			idm, err = fs.icache.Iref(inum, "fs_namei_fast")
+		} else {
+			idm, err = fs.fs_namei_slow(opid, paths, cwd)
+			if err == 0 {
+				fs.dcache.add(p, idm.inum)
+			}
+		}
 	} else {
 		idm, err = fs.fs_namei_slow(opid, paths, cwd)
-		if err == 0 {
-			fs.dcache.add(p, idm.inum)
-		}
 	}
 	return idm, err
 }

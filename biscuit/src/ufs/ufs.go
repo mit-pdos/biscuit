@@ -220,6 +220,10 @@ func (ufs *Ufs_t) Statistics() string {
 	return ufs.fs.Fs_statistics()
 }
 
+func (ufs *Ufs_t) Dcache() {
+	ufs.fs.Dcache = true
+}
+
 func openDisk(d string) *ahci_disk_t {
 	a := &ahci_disk_t{}
 	f, uerr := os.OpenFile(d, os.O_RDWR, 0755)

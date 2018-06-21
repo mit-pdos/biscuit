@@ -2,10 +2,11 @@ package ufs
 
 import "testing"
 import "fmt"
+import "io"
 import "os"
 import "strconv"
 import "sync"
-import "io"
+import "time"
 
 import "common"
 import "fs"
@@ -98,6 +99,65 @@ func TestDcache(t *testing.T) {
 		t.Fatalf("Stat failed")
 	}
 	ShutdownFS(tfs)
+	os.Remove(dst)
+}
+
+const NSTAT = 1000000
+const NGO = 4
+
+func DcacheFunc(t *testing.T, tfs *Ufs_t, pn string) {
+	var wg sync.WaitGroup
+
+	start := time.Now()
+	for i := 0; i < NGO; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < NSTAT; i++ {
+				_, e := tfs.Stat(pn)
+				if e != 0 {
+					t.Fatalf("Stat succeeded")
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	stop := time.Now()
+	fmt.Printf("stats took %v\n", stop.Sub(start))
+}
+
+func TestDcachePerf(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+
+	fmt.Printf("Test DcachePerf %v ...\n", dst)
+	d := "d/"
+	d1 := "d1/"
+	tfs := BootFS(dst)
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+	e = tfs.MkDir(d + d1)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+
+	e = tfs.MkFile(d+d1+"f1", nil)
+	if e != 0 {
+		t.Fatalf("mkFile %v failed", "f2")
+	}
+
+	DcacheFunc(t, tfs, d+d1+"f1")
+
+	tfs.Dcache()
+
+	DcacheFunc(t, tfs, d+d1+"f1")
+
+	// fmt.Printf("stats: %v\n", tfs.Statistics())
+
+	ShutdownFS(tfs)
+
 	os.Remove(dst)
 }
 
