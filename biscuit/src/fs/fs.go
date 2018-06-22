@@ -1442,19 +1442,20 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 }
 
 func (fs *Fs_t) Fs_stat(path string, st *common.Stat_t, cwd *common.Cwd_t) common.Err_t {
-	opid := fs.fslog.Op_begin("Fs_stat")
+	opid := opid_t(0)
+	// opid := fs.fslog.Op_begin("Fs_stat")
 
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", path, cwd)
 	}
 	idm, err := fs.fs_namei_locked(opid, path, cwd, "Fs_stat")
 	if err != 0 {
-		fs.op_end_and_free(opid)
+		// fs.op_end_and_free(opid)
 		return err
 	}
 	err = idm.do_stat(st)
 	idm.iunlock_refdown("Fs_stat")
-	fs.op_end_and_free(opid)
+	// fs.op_end_and_free(opid)
 	return err
 }
 
