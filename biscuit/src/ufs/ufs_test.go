@@ -154,10 +154,6 @@ func TestDcachePerf(t *testing.T) {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
 
-	// DcacheFunc(t, tfs, d+d1+"f1")
-
-	tfs.Dcache()
-
 	DcacheFunc(t, tfs, d+d1+"f1")
 
 	// fmt.Printf("stats: %v\n", tfs.Statistics())

@@ -24,7 +24,6 @@ type Fs_t struct {
 	ialloc       *ibitmap_t
 	balloc       *bbitmap_t
 	istats       *inode_stats_t
-	Dcache       bool
 }
 
 func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
@@ -1534,18 +1533,15 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 		return idm, err
 	}
 	p := cwd.Canonicalpath(paths)
-	if fs.Dcache {
-		if inum, ok := fs.dcache.lookup(p); ok {
-			idm, err = fs.icache.Iref(inum, "fs_namei_fast")
-		} else {
-			idm, err = fs.fs_namei_slow(opid, paths, cwd)
-			if err == 0 {
-				fs.dcache.add(p, idm.inum)
-			}
-		}
+	if inum, ok := fs.dcache.lookup(p); ok {
+		idm, err = fs.icache.Iref(inum, "fs_namei_fast")
 	} else {
 		idm, err = fs.fs_namei_slow(opid, paths, cwd)
+		if err == 0 {
+			fs.dcache.add(p, idm.inum)
+		}
 	}
+
 	return idm, err
 }
 
