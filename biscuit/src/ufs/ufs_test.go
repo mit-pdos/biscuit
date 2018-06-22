@@ -32,17 +32,17 @@ func TestCanonicalize(t *testing.T) {
 	if "/" != common.Canonicalize("/./") {
 		t.Fatalf("/./")
 	}
-	if "/a/" != common.Canonicalize("/a/./") {
-		t.Fatalf("/a/")
+	if "/a" != common.Canonicalize("/a/./") {
+		t.Fatalf("/a")
 	}
-	if "/a/b/c/" != common.Canonicalize("/a/b/c/") {
-		t.Fatalf("/a/b/c/")
+	if "/a/b/c" != common.Canonicalize("/a/b/c/") {
+		t.Fatalf("/a/b/c")
 	}
 	if "/" != common.Canonicalize("/a/../") {
 		t.Fatalf("/")
 	}
-	if "/a/" != common.Canonicalize("/a/b/..") {
-		t.Fatalf("/")
+	if "/a" != common.Canonicalize("/a/b/..") {
+		t.Fatalf("/a")
 	}
 	if "/" != common.Canonicalize("/..") {
 		t.Fatalf("/")

@@ -1,6 +1,5 @@
 package common
 
-import "fmt"
 import "strings"
 
 // allocation-less pathparts
@@ -95,7 +94,7 @@ func CanonicalizeCopy(path string) string {
 	return p
 }
 
-const MaxSlash = 10
+const MaxSlash = 60
 
 type canonicalize_t struct {
 	path  []rune
@@ -135,8 +134,15 @@ func (canon *canonicalize_t) addslash() {
 	}
 }
 
+func (canon *canonicalize_t) deltrailingslash() {
+	if canon.index > 1 && canon.path[canon.index-1] == '/' {
+		canon.index--
+	}
+}
+
 // Assume utf encoding of characters
 func Canonicalize(path string) string {
+	// fmt.Printf("canon: %s\n", path)
 	canon := canonicalize_t{}
 	canon.slash = make([]int, MaxSlash)
 	canon.path = []rune(path)
@@ -156,7 +162,6 @@ func Canonicalize(path string) string {
 			lastisdotdot = false
 		} else if u == '.' {
 			if lastisdot {
-				fmt.Print("dotdot\n")
 				lastisdotdot = true
 				lastisdot = false
 			} else {
@@ -179,6 +184,7 @@ func Canonicalize(path string) string {
 	if lastisdotdot {
 		canon.reset(canon.d - 2)
 	}
+	canon.deltrailingslash()
 	path = string(canon.path[:canon.index])
 	// fmt.Printf("res: %s\n", path)
 	return path

@@ -24,7 +24,7 @@ KSRC := $(addprefix $(K)/,$(KSRC))
 FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go refcache.go super.go
 FSRC := $(addprefix $(F)/,$(FSRC))
 CSRC := accnt.go defs.go disk.go fd.go limits.go mem.go physmem.go pmap.go proc.go rb.go stat.go syscall.go \
-	userbuf.go util.go wait.go
+	userbuf.go util.go wait.go stats.go path.go
 CSRC := $(addprefix $(C)/,$(CSRC))
 
 OBJS := $(addprefix $(K)/, $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS))))
