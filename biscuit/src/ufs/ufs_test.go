@@ -32,20 +32,26 @@ func TestCanonicalize(t *testing.T) {
 	if "/" != common.Canonicalize("/./") {
 		t.Fatalf("/./")
 	}
-	if "/a" != common.Canonicalize("/a/./") {
-		t.Fatalf("/a")
+	if "/a/" != common.Canonicalize("/a/./") {
+		t.Fatalf("/a/")
 	}
-	if "/a/b/c" != common.Canonicalize("/a/b/c/") {
-		t.Fatalf("/a/b/c")
+	if "/a/b/c/" != common.Canonicalize("/a/b/c/") {
+		t.Fatalf("/a/b/c/")
 	}
 	if "/" != common.Canonicalize("/a/../") {
 		t.Fatalf("/")
 	}
-	if "/a" != common.Canonicalize("/a/b/..") {
+	if "/a/" != common.Canonicalize("/a/b/..") {
 		t.Fatalf("/")
 	}
 	if "/" != common.Canonicalize("/..") {
 		t.Fatalf("/")
+	}
+	if "/.a" != common.Canonicalize("/.a") {
+		t.Fatalf("/.a")
+	}
+	if "/..a" != common.Canonicalize("/..a") {
+		t.Fatalf("/..a")
 	}
 }
 
@@ -148,7 +154,7 @@ func TestDcachePerf(t *testing.T) {
 		t.Fatalf("mkFile %v failed", "f2")
 	}
 
-	DcacheFunc(t, tfs, d+d1+"f1")
+	// DcacheFunc(t, tfs, d+d1+"f1")
 
 	tfs.Dcache()
 

@@ -30,6 +30,7 @@ type Fs_t struct {
 func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
 	// memfs = common.Kernel
+	memfs = true
 	cons = console
 
 	// reset taken
@@ -1532,8 +1533,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 		}
 		return idm, err
 	}
-	p := cwd.Fullpath(paths)
-	p = common.Canonicalize(p)
+	p := cwd.Canonicalpath(paths)
 	if fs.Dcache {
 		if inum, ok := fs.dcache.lookup(p); ok {
 			idm, err = fs.icache.Iref(inum, "fs_namei_fast")

@@ -1,5 +1,6 @@
 package common
 
+import "fmt"
 import "strings"
 
 // allocation-less pathparts
@@ -65,13 +66,14 @@ func Sdirname(path string) (string, string) {
 }
 
 // Wouldn't work for POSIX symbolic links and "..", but Biscuit doesn't support symbolic links
-func Canonicalize(path string) string {
+func CanonicalizeCopy(path string) string {
 	pp := Pathparts_t{}
 	pp.Pp_init(path)
 	p := "."
 	if IsAbsolute(path) {
 		p = "/"
 	}
+
 	for cp, ok := pp.Next(); ok; cp, ok = pp.Next() {
 		if cp == "." {
 			continue
@@ -91,4 +93,93 @@ func Canonicalize(path string) string {
 		}
 	}
 	return p
+}
+
+const MaxSlash = 10
+
+type canonicalize_t struct {
+	path  []rune
+	slash []int
+	d     int
+	index int
+}
+
+func (canon *canonicalize_t) reset(d int) {
+	if d >= 0 {
+		canon.index = canon.slash[d] + 1
+		canon.d = d
+	} else {
+		if canon.path[0] == '/' {
+			canon.index = 1
+			canon.d = 1
+		} else {
+			canon.d = 0
+			canon.index = 0
+		}
+	}
+	// fmt.Printf("reset index to %d %d\n", d, canon.index)
+}
+
+func (canon *canonicalize_t) add(r rune) {
+	canon.path[canon.index] = r
+	canon.index++
+}
+
+func (canon *canonicalize_t) addslash() {
+	if canon.index > 0 && canon.path[canon.index-1] == '/' {
+		// skip /
+	} else {
+		canon.slash[canon.d] = canon.index
+		canon.d++
+		canon.add('/')
+	}
+}
+
+// Assume utf encoding of characters
+func Canonicalize(path string) string {
+	canon := canonicalize_t{}
+	canon.slash = make([]int, MaxSlash)
+	canon.path = []rune(path)
+	lastisdot := false
+	lastisdotdot := false
+	for _, u := range path {
+		// fmt.Printf("%d %#U d %d %v\n", i, u, canon.d, canon.slash)
+		if u == '/' {
+			if lastisdot {
+				canon.reset(canon.d - 1)
+			}
+			if lastisdotdot {
+				canon.reset(canon.d - 2)
+			}
+			canon.addslash()
+			lastisdot = false
+			lastisdotdot = false
+		} else if u == '.' {
+			if lastisdot {
+				fmt.Print("dotdot\n")
+				lastisdotdot = true
+				lastisdot = false
+			} else {
+				lastisdot = true
+			}
+			continue
+		} else {
+			if lastisdot {
+				canon.add('.')
+				lastisdot = false
+			}
+			if lastisdotdot {
+				canon.add('.')
+				canon.add('.')
+				lastisdotdot = false
+			}
+			canon.add(u)
+		}
+	}
+	if lastisdotdot {
+		canon.reset(canon.d - 2)
+	}
+	path = string(canon.path[:canon.index])
+	// fmt.Printf("res: %s\n", path)
+	return path
 }
