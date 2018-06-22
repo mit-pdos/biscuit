@@ -98,7 +98,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 
 	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
 
-	fs.Dcache = true
+	// fs.Dcache = true
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }

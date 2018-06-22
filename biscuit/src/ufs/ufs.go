@@ -15,6 +15,7 @@ import "fs"
 type Ufs_t struct {
 	ahci *ahci_disk_t
 	fs   *fs.Fs_t
+	cwd  *common.Cwd_t
 }
 
 func mkData(v uint8, n int) *common.Fakeubuf_t {
@@ -56,7 +57,7 @@ func (ufs *Ufs_t) SyncApply() common.Err_t {
 }
 
 func (ufs *Ufs_t) MkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
-	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, ufs.fs.MkRootCwd(), 0, 0)
+	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 		return err
@@ -77,7 +78,7 @@ func (ufs *Ufs_t) MkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
 }
 
 func (ufs *Ufs_t) MkDir(p string) common.Err_t {
-	err := ufs.fs.Fs_mkdir(p, 0755, ufs.fs.MkRootCwd())
+	err := ufs.fs.Fs_mkdir(p, 0755, ufs.cwd)
 	if err != 0 {
 		fmt.Printf("mkDir %v failed %v\n", p, err)
 		return err
@@ -86,7 +87,7 @@ func (ufs *Ufs_t) MkDir(p string) common.Err_t {
 }
 
 func (ufs *Ufs_t) Rename(oldp, newp string) common.Err_t {
-	err := ufs.fs.Fs_rename(oldp, newp, ufs.fs.MkRootCwd())
+	err := ufs.fs.Fs_rename(oldp, newp, ufs.cwd)
 	if err != 0 {
 		fmt.Printf("doRename %v %v failed %v\n", oldp, newp, err)
 	}
@@ -95,7 +96,7 @@ func (ufs *Ufs_t) Rename(oldp, newp string) common.Err_t {
 
 // update (XXX check that ub < len(file)?)
 func (ufs *Ufs_t) Update(p string, ub *common.Fakeubuf_t) common.Err_t {
-	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.fs.MkRootCwd(), 0, 0)
+	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 	}
@@ -114,7 +115,7 @@ func (ufs *Ufs_t) Update(p string, ub *common.Fakeubuf_t) common.Err_t {
 }
 
 func (ufs *Ufs_t) Append(p string, ub *common.Fakeubuf_t) common.Err_t {
-	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.fs.MkRootCwd(), 0, 0)
+	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 	}
@@ -140,7 +141,7 @@ func (ufs *Ufs_t) Append(p string, ub *common.Fakeubuf_t) common.Err_t {
 }
 
 func (ufs *Ufs_t) Unlink(p string) common.Err_t {
-	err := ufs.fs.Fs_unlink(p, ufs.fs.MkRootCwd(), false)
+	err := ufs.fs.Fs_unlink(p, ufs.cwd, false)
 	if err != 0 {
 		fmt.Printf("doUnlink %v failed %v\n", p, err)
 		return err
@@ -149,7 +150,7 @@ func (ufs *Ufs_t) Unlink(p string) common.Err_t {
 }
 
 func (ufs *Ufs_t) UnlinkDir(p string) common.Err_t {
-	err := ufs.fs.Fs_unlink(p, ufs.fs.MkRootCwd(), true)
+	err := ufs.fs.Fs_unlink(p, ufs.cwd, true)
 	if err != 0 {
 		fmt.Printf("doUnlink %v failed %v\n", p, err)
 		return err
@@ -159,7 +160,7 @@ func (ufs *Ufs_t) UnlinkDir(p string) common.Err_t {
 
 func (ufs *Ufs_t) Stat(p string) (*common.Stat_t, common.Err_t) {
 	s := &common.Stat_t{}
-	err := ufs.fs.Fs_stat(p, s, ufs.fs.MkRootCwd())
+	err := ufs.fs.Fs_stat(p, s, ufs.cwd)
 	if err != 0 {
 		return nil, err
 	}
@@ -172,7 +173,7 @@ func (ufs *Ufs_t) Read(p string) ([]byte, common.Err_t) {
 		fmt.Printf("doStat %v failed %v\n", p, err)
 		return nil, err
 	}
-	fd, err := ufs.fs.Fs_open(p, common.O_RDONLY, 0, ufs.fs.MkRootCwd(), 0, 0)
+	fd, err := ufs.fs.Fs_open(p, common.O_RDONLY, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 		return nil, err
@@ -238,6 +239,7 @@ func BootFS(dst string) *Ufs_t {
 	log.Printf("reboot %v ...\n", dst)
 	ufs := &Ufs_t{}
 	ufs.ahci = openDisk(dst)
+	ufs.cwd = ufs.fs.MkRootCwd()
 	_, ufs.fs = fs.StartFS(blockmem, ufs.ahci, c)
 	return ufs
 }
