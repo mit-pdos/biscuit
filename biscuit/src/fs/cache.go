@@ -13,6 +13,12 @@ import "common"
 // keep track of the references to an object, cache refcounts the references to
 // an object.  The client of cache, must call Lookup/Done to ensure a correct
 // refcount.
+//
+// It is a bummer that we refcnt, instead of relying on GC. n an alternate
+// world, we would use finalizers on an object, and the GC would inform
+// refcache_t that an object isn't in use anymore.  Refcache itself would use a
+// weak reference to an object, so that the GC could collect the object, if it
+// is low on memory.
 
 type objref_t struct {
 	key    int
@@ -76,49 +82,22 @@ func (c *cache_t) Lookup(key int, mkobj func(int) common.Obj_t) (*objref_t, bool
 	return e, true
 }
 
-// Return true if obj has been evicted
-func (c *cache_t) Evict(key int) bool {
+func (c *cache_t) Evict(key int) {
 	c.Lock()
-	evicted := false
 	if e, ok := c.cache[key]; ok {
 		if e.refcnt < 0 {
-			panic("Done: double done?")
+			panic("Evict: negative refcnt")
 		}
-		if e.refcnt == 0 && e.obj.Evictnow() {
+		if e.refcnt == 0 {
 			delete(c.cache, key)
-			evicted = true
 			c.stats.Nevict.Inc()
+		} else {
+			panic("Evict: refcnt > 0")
 		}
 	} else {
-		panic("Done: non existing")
+		panic("Evict: non existing")
 	}
 	c.Unlock()
-	return evicted
-}
-
-func (c *cache_t) DoneKey(key int) bool {
-	c.Lock()
-	var v int64
-	if r, ok := c.cache[key]; ok {
-		v = r.Down()
-	} else {
-		panic("Done: non existing key?")
-	}
-	c.Unlock()
-	evicted := false
-	if v == 0 {
-		evicted = c.Evict(key)
-	}
-	return evicted
-}
-
-func (c *cache_t) DoneRef(ref *objref_t) bool {
-	v := ref.Down()
-	evicted := false
-	if v == 0 {
-		evicted = c.Evict(ref.key)
-	}
-	return evicted
 }
 
 func (c *cache_t) Stats() string {

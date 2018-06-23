@@ -190,12 +190,31 @@ type imemnode_t struct {
 	}
 }
 
+// XXX maybe unnecessary?  Evict should be empty.
 func (idm *imemnode_t) Key() int {
 	return int(idm.inum)
 }
+func (idm *imemnode_t) Evictnow() bool {
+	idm.ilock("")
+	r := idm.links == 0
+	idm.iunlock("")
+	return r
+}
+
+func (imem *imemnode_t) Refup(s string) {
+	imem.ref.Up()
+}
+
+func (imem *imemnode_t) Refdown(s string) {
+	v := imem.ref.Down()
+	if v == 0 && imem.links == 0 { // eagerly remove unlinked inodes from cache
+		imem.fs.icache.cache.Evict(int(imem.inum))
+		imem.fs.icache.addDead(imem)
+	}
+}
 
 // No other thread should have a reference to this inode, because its refcnt = 0
-// and it was removed from refcache.  Same for Free()
+// and it was removed from cache.  Same for Free()
 func (idm *imemnode_t) Evict() {
 	idm._derelease()
 	if fs_debug {
@@ -209,13 +228,6 @@ func (idm *imemnode_t) Free() {
 	if idm.links == 0 {
 		idm.ifree()
 	}
-}
-
-func (idm *imemnode_t) Evictnow() bool {
-	idm.ilock("")
-	r := idm.links == 0
-	idm.iunlock("")
-	return r
 }
 
 func (idm *imemnode_t) ilock(s string) {
@@ -258,11 +270,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
 	idm.iunlock(s)
-	idm.fs.icache.Refdown(idm, s)
-}
-
-func (idm *imemnode_t) refdown(s string) {
-	idm.fs.icache.Refdown(idm, s)
+	idm.Refdown(s)
 }
 
 func (idm *imemnode_t) _iupdate(opid opid_t) common.Err_t {
@@ -1298,10 +1306,15 @@ func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if err != 0 {
 		panic("freeOrphan")
 	}
-	evicted := icache.cache.DoneKey(int(inum))
-	if !evicted {
-		panic("link count isn't zero?")
+	v := imem.ref.Down()
+	if v != 0 {
+		panic("freeOrphan")
 	}
+	icache.cache.Evict(int(imem.inum))
+	// evicted := icache.cache.DoneKey(int(inum))
+	// if !evicted {
+	//	panic("link count isn't zero?")
+	//}
 	// we might have crashed during RecoverOrphans and already have
 	// reclaimed this inode.
 	if imem.itype != I_DEAD {
@@ -1412,18 +1425,6 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, commo
 		}
 	}
 	return ret, 0
-}
-
-// XXX make these imem methods
-func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
-	evicted := icache.cache.DoneRef(imem.ref)
-	if evicted && imem.links == 0 { // when running always_eager links may not be 0
-		icache.addDead(imem)
-	}
-}
-
-func (icache *icache_t) Refup(imem *imemnode_t, s string) {
-	imem.ref.Up()
 }
 
 // Grab locks on inodes references in imems.  handles duplicates.

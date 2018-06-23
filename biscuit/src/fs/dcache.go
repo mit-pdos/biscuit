@@ -4,7 +4,7 @@ import "fmt"
 import "sync"
 import "common"
 
-// invariant: if in dcache, then in icache (i.e., refcnt on handle for idm.inum >= 1)
+// invariant: if in dcache, then in icache (i.e., refcnt on ref for idm >= 1)
 
 const dcache_debug = false
 
@@ -31,7 +31,7 @@ func (dc *dcache_t) add(pn string, idm *imemnode_t) {
 		fmt.Printf("add: %v %d\n", pn, idm.inum)
 	}
 	dc.dcache[pn] = &dcentry_t{idm: idm}
-	idm.fs.icache.Refup(idm, "dc.add")
+	idm.Refup("add")
 }
 
 func (dc *dcache_t) remove(pn string) {
@@ -43,7 +43,9 @@ func (dc *dcache_t) remove(pn string) {
 		if dcache_debug {
 			fmt.Printf("remove: %v\n", pn)
 		}
-		de.idm.fs.icache.Refdown(de.idm, "dc.remove")
+		// note implicit locking ordering: dcache, then icache/cache
+		// alternate design: caller invokes Refdown()
+		de.idm.Refdown("dc.remove")
 		delete(dc.dcache, pn)
 	}
 }

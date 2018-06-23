@@ -296,8 +296,8 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 
 	npar, err := fs.fs_namei(opid, ndirs, cwd)
 	if err != 0 {
-		fs.icache.Refdown(opar, "fs_rename_opar")
-		fs.icache.Refdown(ochild, "fs_rename_ochild")
+		opar.Refdown("fs_rename_opar")
+		ochild.Refdown("fs_rename_ochild")
 		return err
 	}
 
@@ -308,9 +308,9 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 	// delete npar and an ancestor, but rename has already a reference to to
 	// npar.
 	if err = fs._isancestor(opid, ochild, npar); err != 0 {
-		fs.icache.Refdown(opar, "fs_rename_opar")
-		fs.icache.Refdown(ochild, "fs_rename_ochild")
-		fs.icache.Refdown(npar, "fs_rename_npar")
+		opar.Refdown("fs_rename_opar")
+		ochild.Refdown("fs_rename_ochild")
+		npar.Refdown("fs_rename_npar")
 		return err
 	}
 
@@ -321,23 +321,23 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 	for {
 		gimme := common.Bounds(common.B_FS_T_FS_RENAME)
 		if !common.Resadd_noblock(gimme) {
-			fs.icache.Refdown(opar, "fs_name_opar")
-			fs.icache.Refdown(ochild, "fs_name_ochild")
+			opar.Refdown("fs_name_opar")
+			ochild.Refdown("fs_name_ochild")
 			return -common.ENOHEAP
 		}
 		npar.ilock("")
 		nchildinum, err := npar.ilookup(opid, nfn)
 		if err != 0 && err != -common.ENOENT {
-			fs.icache.Refdown(opar, "fs_name_opar")
-			fs.icache.Refdown(ochild, "fs_name_ochild")
+			opar.Refdown("fs_name_opar")
+			ochild.Refdown("fs_name_ochild")
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
 		var err1 common.Err_t
 		nchild, err1 = fs.icache.Iref(nchildinum, "fs_rename_ochild")
 		if err1 != 0 {
-			fs.icache.Refdown(opar, "fs_name_opar")
-			fs.icache.Refdown(ochild, "fs_name_ochild")
+			opar.Refdown("fs_name_opar")
+			ochild.Refdown("fs_name_ochild")
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
@@ -355,7 +355,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 		locked = iref_lockall(inodes)
 		// defers are run last-in-first-out
 		for _, v := range inodes {
-			defer fs.icache.Refdown(v, "rename")
+			defer v.Refdown("rename")
 		}
 
 		for _, v := range locked {
@@ -400,7 +400,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 			v.iunlock("fs_rename_opar")
 		}
 		if newexists {
-			fs.icache.Refdown(nchild, "fs_rename_nchild")
+			nchild.Refdown("fs_rename_nchild")
 		}
 	}
 
@@ -484,7 +484,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 			return -common.ENOHEAP
 		}
 		if anc == here {
-			fs.icache.Refdown(here, "_isancestor_here")
+			here.Refdown("_isancestor_here")
 			return -common.EINVAL
 		}
 		here.ilock("_isancestor")
@@ -506,7 +506,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 			here = next
 		}
 	}
-	fs.icache.Refdown(here, "_isancestor")
+	here.Refdown("_isancestor")
 	return 0
 }
 
@@ -590,7 +590,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 	if !useoffset && err == 0 {
 		fo.offset += did
 	}
-	idm.refdown("_write")
+	idm.Refdown("_write")
 	return did, err
 }
 
@@ -694,7 +694,7 @@ func (fo *fsfops_t) Reopen() common.Err_t {
 		return err
 	}
 	fo.fs.istats.Nreopen.Inc()
-	fo.fs.icache.Refup(idm, "reopen") // close will decrease it
+	idm.Refup("reopen") // close will decrease it
 	idm.iunlock_refdown("reopen")
 	fo.count++
 	fo.Unlock()
@@ -1231,7 +1231,7 @@ func (fs *Fs_t) Fs_mkdir(paths string, mode int, cwd *common.Cwd_t) common.Err_t
 
 	child.do_insert(opid, ".", childi)
 	child.do_insert(opid, "..", par.inum)
-	fs.icache.Refdown(child, "fs_mkdir3")
+	child.Refdown("fs_mkdir3")
 	return 0
 }
 
@@ -1344,7 +1344,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 		idm.do_trunc(opid, 0)
 	}
 
-	fs.icache.Refup(idm, "Fs_open_inner")
+	idm.Refup("Fs_open_inner")
 
 	ret.Inum = idm.inum
 	ret.Major = idm.major
@@ -1429,7 +1429,7 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 		return err
 	}
 
-	fs.icache.Refdown(idm, "Fs_close")
+	idm.Refdown("Fs_close")
 	idm.iunlock_refdown("Fs_close")
 
 	fs.op_end_and_free(opid)
@@ -1527,7 +1527,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 	p := cwd.Canonicalpath(paths)
 	idm, ok := fs.dcache.lookup(p)
 	if ok {
-		idm.fs.icache.Refup(idm, "fs_namei")
+		idm.Refup("fs_namei")
 	} else {
 		idm, err = fs.fs_namei_slow(opid, paths, cwd)
 		if err == 0 {
