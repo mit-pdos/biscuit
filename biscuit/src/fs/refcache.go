@@ -7,8 +7,16 @@ import "sync/atomic"
 import "common"
 
 // Fixed-size cache of objects. Main invariant: an object is in memory once so
-// that threads see each other's updates.  An object can be evicted only when no
-// thread has a reference to the object.
+// that threads see each other's updates.  The challenging case is that an
+// object can be evicted only when no thread has a reference to the object.  To
+// keep track of the references to an object, refcache refcounts the references
+// to an object.  The client of refcache, must call Refup/Refdown to ensure a
+// correct refcount.
+//
+// In an alternate world, we would use finalizers on an object, and the GC would
+// inform refcache_t that an object isn't in use anymore.  Refcache itself would
+// use a weak reference to an object, so that the GC could collect the object, if
+// it is low on memory.
 
 const refcache_debug = false
 const always_eager = false // for testing
