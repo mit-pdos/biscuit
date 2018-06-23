@@ -1414,6 +1414,7 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, commo
 	return ret, 0
 }
 
+// XXX make these imem methods
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
 	evicted := icache.cache.DoneRef(imem.ref)
 	if evicted && imem.links == 0 { // when running always_eager links may not be 0

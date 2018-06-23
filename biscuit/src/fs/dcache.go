@@ -4,10 +4,12 @@ import "fmt"
 import "sync"
 import "common"
 
+// invariant: if in dcache, then in icache (i.e., refcnt on handle for idm.inum >= 1)
+
 const dcache_debug = false
 
 type dcentry_t struct {
-	inum common.Inum_t
+	idm *imemnode_t
 }
 
 type dcache_stats_t struct {
@@ -21,41 +23,46 @@ type dcache_t struct {
 	stats  dcache_stats_t
 }
 
-func (dc *dcache_t) add(pn string, inum common.Inum_t) {
+func (dc *dcache_t) add(pn string, idm *imemnode_t) {
 	dc.Lock()
 	defer dc.Unlock()
 
 	if dcache_debug {
-		fmt.Printf("add: %v %d\n", pn, inum)
+		fmt.Printf("add: %v %d\n", pn, idm.inum)
 	}
-	dc.dcache[pn] = &dcentry_t{inum: inum}
+	dc.dcache[pn] = &dcentry_t{idm: idm}
+	idm.fs.icache.Refup(idm, "dc.add")
 }
 
 func (dc *dcache_t) remove(pn string) {
 	dc.Lock()
 	defer dc.Unlock()
 
-	if dcache_debug {
-		fmt.Printf("remove: %v\n", pn)
+	de, ok := dc.dcache[pn]
+	if ok {
+		if dcache_debug {
+			fmt.Printf("remove: %v\n", pn)
+		}
+		de.idm.fs.icache.Refdown(de.idm, "dc.remove")
+		delete(dc.dcache, pn)
 	}
-	delete(dc.dcache, pn)
 }
 
-func (dc *dcache_t) lookup(pn string) (common.Inum_t, bool) {
+func (dc *dcache_t) lookup(pn string) (*imemnode_t, bool) {
 	dc.Lock()
 	defer dc.Unlock()
-	inum := common.Inum_t(0)
+	var idm *imemnode_t
 	de, ok := dc.dcache[pn]
 	if ok {
 		dc.stats.Nhit.Inc()
-		inum = de.inum
+		idm = de.idm
 	} else {
 		dc.stats.Nmiss.Inc()
 	}
-	if dcache_debug {
-		fmt.Printf("lookup: %v inum %d ok %v\n", pn, inum, ok)
+	if dcache_debug && idm != nil {
+		fmt.Printf("lookup: %v inum %d ok %v\n", pn, idm.inum, ok)
 	}
-	return inum, ok
+	return idm, ok
 }
 
 func (dc *dcache_t) Stats() string {

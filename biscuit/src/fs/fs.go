@@ -1523,25 +1523,17 @@ func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*im
 }
 
 func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
-	var idm *imemnode_t
 	err := common.Err_t(0)
-	if len(paths) == 0 {
-		idm, err = fs.icache.Iref(cwd.Fd.Fops.Pathi(), "fs_namei_cwd")
-		if err != 0 {
-			panic("cannot load cwd")
-		}
-		return idm, err
-	}
 	p := cwd.Canonicalpath(paths)
-	if inum, ok := fs.dcache.lookup(p); ok {
-		idm, err = fs.icache.Iref(inum, "fs_namei_fast")
+	idm, ok := fs.dcache.lookup(p)
+	if ok {
+		idm.fs.icache.Refup(idm, "fs_namei")
 	} else {
 		idm, err = fs.fs_namei_slow(opid, paths, cwd)
 		if err == 0 {
-			fs.dcache.add(p, idm.inum)
+			fs.dcache.add(p, idm)
 		}
 	}
-
 	return idm, err
 }
 

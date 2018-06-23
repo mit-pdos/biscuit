@@ -55,7 +55,7 @@ func TestCanonicalize(t *testing.T) {
 	}
 }
 
-func TestDcache(t *testing.T) {
+func TestDcacheSimple(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
