@@ -162,7 +162,7 @@ type imemnode_t struct {
 	_l   sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
-	ref  *common.Ref_t
+	ref  *objref_t
 
 	// XXXPANIC for sanity
 	_amlocked bool
@@ -1247,7 +1247,7 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	refcache     *refcache_t
+	cache        *cache_t
 	fs           *Fs_t
 	orphanbitmap *bitmap_t
 
@@ -1266,7 +1266,7 @@ const maxinodepersys = 4
 
 func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache := &icache_t{}
-	icache.refcache = mkRefcache(common.Syslimit.Vnodes, false)
+	icache.cache = mkCache(common.Syslimit.Vnodes)
 	icache.fs = fs
 	icache.orphanbitmap = mkAllocater(fs, start, len, fs.fslog)
 	// dead is bounded the number of inodes refdowned in system call, and
@@ -1298,7 +1298,7 @@ func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if err != 0 {
 		panic("freeOrphan")
 	}
-	evicted := icache.refcache.Refdown(imem.ref, true)
+	evicted := icache.cache.DoneKey(int(inum))
 	if !evicted {
 		panic("link count isn't zero?")
 	}
@@ -1370,7 +1370,7 @@ func (icache *icache_t) freeDead() {
 }
 
 func (icache *icache_t) Stats() string {
-	return "icache " + icache.refcache.Stats()
+	return "icache " + icache.cache.Stats()
 }
 
 func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
@@ -1382,24 +1382,21 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 }
 
 func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, common.Err_t) {
-	ref, created, err := icache.refcache.Lookup(int(inum),
-		func(in int, ref *common.Ref_t) common.Obj_t {
+	ref, created := icache.cache.Lookup(int(inum),
+		func(in int) common.Obj_t {
 			ret := &imemnode_t{}
 			// inum can be read without ilock, and therefore must be
 			// initialized before the refcache unlocks.
 			ret.inum = common.Inum_t(in)
-			ret.ref = ref
 			ret.ilock("")
 			return ret
 		})
-	if err != 0 {
-		return nil, err
-	}
 
-	ret := ref.Obj.(*imemnode_t)
+	ret := ref.obj.(*imemnode_t)
 	if created {
 		// ret is locked
 		ret.fs = icache.fs
+		ret.ref = ref
 		err := ret.idm_init(inum)
 		if err != 0 {
 			panic("idm_init")
@@ -1418,14 +1415,14 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, commo
 }
 
 func (icache *icache_t) Refdown(imem *imemnode_t, s string) {
-	evicted := icache.refcache.Refdown(imem.ref, true)
+	evicted := icache.cache.DoneRef(imem.ref)
 	if evicted && imem.links == 0 { // when running always_eager links may not be 0
 		icache.addDead(imem)
 	}
 }
 
 func (icache *icache_t) Refup(imem *imemnode_t, s string) {
-	icache.refcache.Refup(imem.ref)
+	imem.ref.Up()
 }
 
 // Grab locks on inodes references in imems.  handles duplicates.

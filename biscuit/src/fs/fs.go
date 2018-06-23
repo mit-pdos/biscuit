@@ -103,7 +103,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 }
 
 func (fs *Fs_t) Sizes() (int, int) {
-	return fs.icache.refcache.Len(), fs.bcache.refcache.Len()
+	return fs.icache.cache.Len(), fs.bcache.refcache.Len()
 }
 
 func (fs *Fs_t) StopFS() {
@@ -1560,7 +1560,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	}
 	//fmt.Printf("FS EVICT\n")
 	fs.bcache.refcache.Evict_half()
-	fs.icache.refcache.Evict_half()
+	// fs.icache.refcache.Evict_half()
 	return fs.Sizes()
 }
 
