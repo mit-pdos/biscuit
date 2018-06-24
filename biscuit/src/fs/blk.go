@@ -6,8 +6,8 @@ import "container/list"
 
 import "common"
 
-// If you change this, you must change corresponding constants in mkbdisk.py,
-// fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
+// If you change this, you must change corresponding constants in litc.c
+// (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE = 4096
 
 type Blockmem_i interface {

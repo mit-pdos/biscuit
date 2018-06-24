@@ -107,15 +107,15 @@ func (c *cache_t) Remove(key int) {
 	if e, ok := c.cache[key]; ok {
 		cnt := e.Refcnt()
 		if cnt < 0 {
-			panic("Evict: negative refcnt")
+			panic("Remove: negative refcnt")
 		}
 		if cnt == 0 {
 			c.delete(e)
 		} else {
-			panic("Evict: refcnt > 0")
+			panic("Remove: refcnt > 0")
 		}
 	} else {
-		panic("Evict: non existing")
+		panic("Remove: non existing")
 	}
 	c.Unlock()
 }
