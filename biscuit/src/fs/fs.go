@@ -14,7 +14,7 @@ const iroot = common.Inum_t(0)
 var cons common.Cons_i
 
 type Fs_t struct {
-	ahci         common.Disk_i
+	ahci         Disk_i
 	superb_start int
 	superb       Superblock_t
 	bcache       *bcache_t
@@ -26,7 +26,7 @@ type Fs_t struct {
 	istats       *inode_stats_t
 }
 
-func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
+func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
 	// memfs = common.Kernel // use in-memory file system
 	cons = console
@@ -1047,12 +1047,12 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 	defer raw.Unlock()
 	var did int
 	for dst.Remain() != 0 {
-		blkno := raw.offset / common.BSIZE
+		blkno := raw.offset / BSIZE
 		b, err := raw.fs.fslog.Get_fill(blkno, "read", false)
 		if err != 0 {
 			return 0, err
 		}
-		boff := raw.offset % common.BSIZE
+		boff := raw.offset % BSIZE
 		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {
 			raw.fs.fslog.Relse(b, "read")
@@ -1070,13 +1070,13 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 	defer raw.Unlock()
 	var did int
 	for src.Remain() != 0 {
-		blkno := raw.offset / common.BSIZE
-		boff := raw.offset % common.BSIZE
+		blkno := raw.offset / BSIZE
+		boff := raw.offset % BSIZE
 		buf, err := raw.fs.bcache.raw(blkno)
 		if err != 0 {
 			return 0, err
 		}
-		if boff != 0 || src.Remain() < common.BSIZE {
+		if boff != 0 || src.Remain() < BSIZE {
 			buf.Read()
 		}
 		c, err := src.Uioread(buf.Data[boff:])

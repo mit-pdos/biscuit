@@ -7,6 +7,7 @@ import "sync/atomic"
 import "unsafe"
 import "container/list"
 
+import "fs"
 import "common"
 
 const ahci_debug = false
@@ -21,7 +22,7 @@ const ahci_debug = false
 // - CMD: http://www.t13.org/documents/uploadeddocuments/docs2007/d1699r4a-ata8-acs.pdf
 //
 
-var ahci common.Disk_i
+var ahci fs.Disk_i
 
 type blockmem_t struct {
 }
@@ -48,7 +49,7 @@ func (bm *blockmem_t) Refup(pa common.Pa_t) {
 }
 
 // returns true if start is asynchronous
-func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
+func (ahci *ahci_disk_t) Start(req *fs.Bdev_req_t) bool {
 	ahci.port.start(req)
 	return true
 }
@@ -312,7 +313,7 @@ type ahci_port_t struct {
 	port      *port_reg_t
 	nslot     uint32
 	next_slot uint32
-	inflight  []*common.Bdev_req_t
+	inflight  []*fs.Bdev_req_t
 	queued    *list.List
 	nwaiting  int
 	nflush    int
@@ -596,7 +597,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.sector_count = 1
 
 	// To receive the identity
-	b := common.MkBlock_newpage(-1, "identify", blockmem, ahci, nil)
+	b := fs.MkBlock_newpage(-1, "identify", blockmem, ahci, nil)
 	p.fill_prd(0, b)
 	p.fill_fis(0, fis)
 
@@ -692,7 +693,7 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 	// fmt.Printf("AHCI: fis %#x\n", fis)
 }
 
-func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *common.BlkList_t) uint64 {
+func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 	nbytes := uint64(0)
 	cmd := &p.cmdt[cmdslot]
 	slot := 0
@@ -716,8 +717,8 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *common.BlkList_t) uint64 {
 	return nbytes
 }
 
-func (p *ahci_port_t) fill_prd(cmdslot int, b *common.Bdev_block_t) {
-	bl := common.MkBlkList()
+func (p *ahci_port_t) fill_prd(cmdslot int, b *fs.Bdev_block_t) {
+	bl := fs.MkBlkList()
 	if b != nil {
 		bl.PushBack(b)
 	}
@@ -757,7 +758,7 @@ func (p *ahci_port_t) queuemgr() {
 			if ok {
 				e := p.queued.Front()
 				p.queued.Remove(e)
-				req := e.Value.(*common.Bdev_req_t)
+				req := e.Value.(*fs.Bdev_req_t)
 				p.startslot(req, s)
 			}
 		}
@@ -770,11 +771,11 @@ func (p *ahci_port_t) queuemgr() {
 	}
 }
 
-func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
+func (p *ahci_port_t) queue_coalesce(req *fs.Bdev_req_t) {
 	ok := false
 	for e := p.queued.Front(); e != nil; e = e.Next() {
-		r := e.Value.(*common.Bdev_req_t)
-		if r.Cmd == common.BDEV_FLUSH || req.Cmd == common.BDEV_FLUSH {
+		r := e.Value.(*fs.Bdev_req_t)
+		if r.Cmd == fs.BDEV_FLUSH || req.Cmd == fs.BDEV_FLUSH {
 			break
 		}
 		if r.Blks.Len() == 0 {
@@ -800,7 +801,7 @@ func (p *ahci_port_t) queue_coalesce(req *common.Bdev_req_t) {
 	}
 }
 
-func (p *ahci_port_t) start(req *common.Bdev_req_t) {
+func (p *ahci_port_t) start(req *fs.Bdev_req_t) {
 	defer p.Unlock()
 	p.Lock()
 
@@ -809,7 +810,7 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 	// to have a just a barrier operation (i.e., not flushing non-volatile
 	// cache), and tag writes with FUA for writes that need to persist
 	// immediately (instead of flusing the complete on-disk cache).
-	for req.Cmd == common.BDEV_FLUSH {
+	for req.Cmd == fs.BDEV_FLUSH {
 		ci := LD(&p.port.ci)
 		sact := LD(&p.port.sact)
 		if ci == 0 { // && sact == 0 {
@@ -824,7 +825,7 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 		}
 	}
 
-	if req.Cmd == common.BDEV_WRITE {
+	if req.Cmd == fs.BDEV_WRITE {
 		p.stat.Nwrite++
 	}
 
@@ -847,19 +848,19 @@ func (p *ahci_port_t) start(req *common.Bdev_req_t) {
 	p.startslot(req, s)
 }
 
-func (p *ahci_port_t) startslot(req *common.Bdev_req_t, s int) {
+func (p *ahci_port_t) startslot(req *fs.Bdev_req_t, s int) {
 	switch req.Cmd {
-	case common.BDEV_WRITE:
+	case fs.BDEV_WRITE:
 		if req.Blks.Len() > 1 {
 			p.stat.Nvwrite++
 		} else {
 			p.stat.Niwrite++
 		}
 		p.issue(s, req.Blks, IDE_CMD_WRITE_DMA_EXT)
-	case common.BDEV_READ:
+	case fs.BDEV_READ:
 		p.stat.Nread++
 		p.issue(s, req.Blks, IDE_CMD_READ_DMA_EXT)
-	case common.BDEV_FLUSH:
+	case fs.BDEV_FLUSH:
 		p.stat.Nbarrier++
 		p.issue(s, nil, IDE_CMD_FLUSH_CACHE_EXT)
 	}
@@ -871,7 +872,7 @@ func (p *ahci_port_t) startslot(req *common.Bdev_req_t, s int) {
 }
 
 // blks must be contiguous on disk (but not necessarily in memory)
-func (p *ahci_port_t) issue(s int, blks *common.BlkList_t, cmd uint8) {
+func (p *ahci_port_t) issue(s int, blks *fs.BlkList_t, cmd uint8) {
 	fis := &sata_fis_reg_h2d{}
 	fis.fis_type = SATA_FIS_TYPE_REG_H2D
 	fis.cflag = SATA_FIS_REG_CFLAG
@@ -971,7 +972,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
 					p.nslot, ahci.ncs)
 			}
-			p.inflight = make([]*common.Bdev_req_t, p.nslot)
+			p.inflight = make([]*fs.Bdev_req_t, p.nslot)
 			p.queued = list.New()
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
@@ -1000,10 +1001,10 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 			if ahci_debug {
 				fmt.Printf("port_intr: slot %v interrupt\n", s)
 			}
-			if p.inflight[s].Cmd == common.BDEV_WRITE {
+			if p.inflight[s].Cmd == fs.BDEV_WRITE {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
-				p.inflight[s].Blks.Apply(func(b *common.Bdev_block_t) {
+				p.inflight[s].Blks.Apply(func(b *fs.Bdev_block_t) {
 					b.Done("interrupt")
 				})
 			}

@@ -8,12 +8,12 @@ import "common"
 
 // Bitmap allocater/marker. Used for inodes, blocks, and orphan inodes.
 
-const bitsperblk = common.BSIZE * 8
+const bitsperblk = BSIZE * 8
 
 type storage_i interface {
-	Write(opid_t, *common.Bdev_block_t)
-	Get_fill(int, string, bool) (*common.Bdev_block_t, common.Err_t)
-	Relse(*common.Bdev_block_t, string)
+	Write(opid_t, *Bdev_block_t)
+	Get_fill(int, string, bool) (*Bdev_block_t, common.Err_t)
+	Relse(*Bdev_block_t, string)
 }
 
 type bitmapstats_t struct {
@@ -72,7 +72,7 @@ func (alloc *bitmap_t) bitmapblkno(bit int) int {
 	return alloc.freestart + blkno(bit)
 }
 
-func (alloc *bitmap_t) Fbread(blockno int) (*common.Bdev_block_t, common.Err_t) {
+func (alloc *bitmap_t) Fbread(blockno int) (*Bdev_block_t, common.Err_t) {
 	if blockno < 0 || blockno >= alloc.freelen {
 		panic("naughty blockno")
 	}
@@ -85,7 +85,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 	var ca common.Cacheallocs_t
 	gimme := common.Bounds(common.B_BITMAP_T_APPLY)
 
-	var blk *common.Bdev_block_t
+	var blk *Bdev_block_t
 	var err common.Err_t
 	var lastbn = -1
 	var tryevict bool
@@ -271,7 +271,7 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t 
 		fmt.Printf("Mark: %v Unmark %v\n", mark, unmark)
 	}
 
-	var blk *common.Bdev_block_t
+	var blk *Bdev_block_t
 	var err common.Err_t
 	for len(mark) > 0 || len(unmark) > 0 {
 		bit, op := smallest(mark, unmark)

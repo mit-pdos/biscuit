@@ -5,7 +5,7 @@ import "fmt"
 import "strings"
 import "path/filepath"
 
-import "common"
+import "fs"
 import "ufs"
 
 const (
@@ -14,12 +14,12 @@ const (
 	ndatablks  = 40000
 )
 
-func copydata(src string, fs *ufs.Ufs_t, dst string) {
+func copydata(src string, f *ufs.Ufs_t, dst string) {
 	s, err := os.Open(src)
 	if err != nil {
 		panic(err)
 	}
-	b := make([]byte, common.BSIZE)
+	b := make([]byte, fs.BSIZE)
 	for {
 		n, err := s.Read(b)
 		if err != nil {
@@ -30,7 +30,7 @@ func copydata(src string, fs *ufs.Ufs_t, dst string) {
 		}
 		b = b[:n]
 		buf := ufs.MkBuf(b)
-		fs.Append(dst, buf)
+		f.Append(dst, buf)
 	}
 	if err := s.Close(); err != nil {
 		panic(err)

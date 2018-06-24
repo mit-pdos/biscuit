@@ -309,7 +309,7 @@ func TestFSInodeReuse(t *testing.T) {
 	fmt.Printf("Test FSInodeReuce %v ...\n", dst)
 
 	tfs := BootFS(dst)
-	n := ninodeblks * (common.BSIZE / fs.ISIZE)
+	n := ninodeblks * (fs.BSIZE / fs.ISIZE)
 	for i := 0; i < n; i++ {
 		doTestInodeReuse(tfs, 10, t)
 	}
@@ -605,14 +605,14 @@ func TestOrderedFile(t *testing.T) {
 	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
 	tfs := BootFS(dst)
 
-	ub := mkData(1, common.BSIZE*norderedblks)
+	ub := mkData(1, fs.BSIZE*norderedblks)
 	e := tfs.MkFile("f", ub)
 	if e != 0 {
 		panic("mkFile f failed")
 	}
 	tfs.Sync()
 
-	ub = mkData(2, common.BSIZE*norderedblks)
+	ub = mkData(2, fs.BSIZE*norderedblks)
 	e = tfs.Update("f", ub)
 	if e != 0 {
 		t.Fatalf("Update %v failed", "g")
@@ -624,7 +624,7 @@ func TestOrderedFile(t *testing.T) {
 	tfs = BootFS(dst) // causes an apply
 
 	d, e := tfs.Read("f")
-	for i := 0; i < 7*common.BSIZE; i++ {
+	for i := 0; i < 7*fs.BSIZE; i++ {
 		if uint8(d[i]) != 2 {
 			t.Fatalf("Wrong data in f %v at %v", d[0], i)
 		}
@@ -652,7 +652,7 @@ func doOrderedDir(t *testing.T, force bool) {
 
 	tfs.Sync()
 
-	ub := mkData(3, common.BSIZE*7)
+	ub := mkData(3, fs.BSIZE*7)
 	e = tfs.MkFile("f", ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -668,7 +668,7 @@ func doOrderedDir(t *testing.T, force bool) {
 	tfs = BootFS(dst) // better not overwrite f's blocks
 
 	data, e := tfs.Read("f")
-	for i := 0; i < 7*common.BSIZE; i++ {
+	for i := 0; i < 7*fs.BSIZE; i++ {
 		if uint8(data[i]) != 3 {
 			t.Fatalf("Wrong data in f %v at %v", data[i], i)
 		}
@@ -691,7 +691,7 @@ func TestOrderedFileDir(t *testing.T) {
 	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
 	tfs := BootFS(dst)
 
-	ub := mkData(3, common.BSIZE*7)
+	ub := mkData(3, fs.BSIZE*7)
 	e := tfs.MkFile("f", ub)
 	if e != 0 {
 		t.Fatalf("Unlink failed")
@@ -755,7 +755,7 @@ func copyDisk(src, dst string) (err error) {
 //
 
 func doAtomicInit(tfs *Ufs_t) {
-	ub := mkData(1, common.BSIZE*natomicblks)
+	ub := mkData(1, fs.BSIZE*natomicblks)
 	e := tfs.MkFile("f", ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -764,7 +764,7 @@ func doAtomicInit(tfs *Ufs_t) {
 }
 
 func doTestAtomic(tfs *Ufs_t, t *testing.T) {
-	ub := mkData(2, common.BSIZE*natomicblks)
+	ub := mkData(2, fs.BSIZE*natomicblks)
 	e := tfs.MkFile("tmp", ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "tmp")
@@ -788,7 +788,7 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 	}
 	if ok {
 		d, e := tfs.Read("f")
-		if e != 0 || len(d) != common.BSIZE*natomicblks {
+		if e != 0 || len(d) != fs.BSIZE*natomicblks {
 			return "Read f failed", false
 		}
 		v := d[0]
@@ -842,13 +842,13 @@ func genDisk(trace trace_t, dst string) {
 		r := trace[i]
 		if r.Cmd == "write" {
 			// fmt.Printf("update block %v\n", r.BlkNo)
-			f.Seek(int64(r.BlkNo*common.BSIZE), 0)
-			buf := make([]byte, common.BSIZE)
+			f.Seek(int64(r.BlkNo*fs.BSIZE), 0)
+			buf := make([]byte, fs.BSIZE)
 			for i, _ := range buf {
 				buf[i] = byte(r.BlkData[i])
 			}
 			n, err := f.Write(buf)
-			if n != common.BSIZE || err != nil {
+			if n != fs.BSIZE || err != nil {
 				panic(err)
 			}
 		}
@@ -961,7 +961,7 @@ var nblock uint
 func doFreeInit(tfs *Ufs_t) {
 	_, nblock = tfs.fs.Fs_size()
 
-	ub := mkData(1, common.BSIZE*FileSizeBlks)
+	ub := mkData(1, fs.BSIZE*FileSizeBlks)
 	e := tfs.MkFile("f", ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -1027,7 +1027,7 @@ func FillDisk(disk string) {
 	if err != nil {
 		panic(err)
 	}
-	_, err = f.Seek(common.BSIZE, 0)
+	_, err = f.Seek(fs.BSIZE, 0)
 	if err != nil {
 		panic(err)
 	}
@@ -1039,7 +1039,7 @@ func FillDisk(disk string) {
 	}
 	blk := blk2bytepg(super)
 	sb := fs.Superblock_t{blk}
-	_, err = f.Seek(int64(common.BSIZE*sb.Freeblock()), 0)
+	_, err = f.Seek(int64(fs.BSIZE*sb.Freeblock()), 0)
 	if err != nil {
 		panic(err)
 	}
@@ -1049,10 +1049,10 @@ func FillDisk(disk string) {
 		if err != nil {
 			panic(err)
 		}
-		for j := 1; j < common.BSIZE; j++ {
+		for j := 1; j < fs.BSIZE; j++ {
 			b[j] = 0xFF // mark as allocated
 		}
-		_, err = f.Seek(int64(-common.BSIZE), 1)
+		_, err = f.Seek(int64(-fs.BSIZE), 1)
 		if err != nil {
 			panic(err)
 		}

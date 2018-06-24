@@ -27,7 +27,7 @@ type Dirdata_t struct {
 const (
 	DNAMELEN = 14
 	NDBYTES  = 22
-	NDIRENTS = common.BSIZE / NDBYTES
+	NDIRENTS = BSIZE / NDBYTES
 )
 
 func doffset(didx int, off int) int {
@@ -143,8 +143,8 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, common.Err_t) {
 	idm.dentc.scanned = true
 
 	// current dir blocks are full -- allocate new dirdata block
-	newsz := idm.size + common.BSIZE
-	b, err := idm.off2buf(opid, idm.size, common.BSIZE, true, true, "_denextempty")
+	newsz := idm.size + BSIZE
+	b, err := idm.off2buf(opid, idm.size, BSIZE, true, true, "_denextempty")
 	if err != 0 {
 		return 0, err
 	}
@@ -201,11 +201,11 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name string, inum common.Inum_t) c
 // returned true.
 func (idm *imemnode_t) _descan(opid opid_t, f func(fn string, de icdent_t) bool) (bool, common.Err_t) {
 	found := false
-	for i := 0; i < idm.size; i += common.BSIZE {
+	for i := 0; i < idm.size; i += BSIZE {
 		if !common.Resadd_noblock(common.Bounds(common.B_IMEMNODE_T__DESCAN)) {
 			return false, -common.ENOHEAP
 		}
-		b, err := idm.off2buf(opid, i, common.BSIZE, false, true, "_descan")
+		b, err := idm.off2buf(opid, i, BSIZE, false, true, "_descan")
 		if err != 0 {
 			return false, err
 		}
@@ -359,7 +359,7 @@ func (idm *imemnode_t) _derelease() int {
 // ensure that an insert/unlink cannot fail i.e. fail to allocate a page. if fn
 // == "", look for an empty dirent, otherwise make sure the page containing fn
 // is in the page cache.
-func (idm *imemnode_t) _deprobe(opid opid_t, fn string) (*common.Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) _deprobe(opid opid_t, fn string) (*Bdev_block_t, common.Err_t) {
 	if fn != "" {
 		de, err := idm._delookup(opid, fn)
 		if err != 0 {
@@ -421,7 +421,7 @@ func (idm *imemnode_t) _deaddempty(off int) {
 
 // guarantee that there is enough memory to insert at least one directory
 // entry.
-func (idm *imemnode_t) probe_insert(opid opid_t) (*common.Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) probe_insert(opid opid_t) (*Bdev_block_t, common.Err_t) {
 	// insert and remove a fake directory entry, forcing a page allocation
 	// if necessary.
 	b, err := idm._deprobe(opid, "")
@@ -433,7 +433,7 @@ func (idm *imemnode_t) probe_insert(opid opid_t) (*common.Bdev_block_t, common.E
 
 // guarantee that there is enough memory to unlink a dirent (which may require
 // allocating a page to load the dirents from disk).
-func (idm *imemnode_t) probe_unlink(opid opid_t, fn string) (*common.Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) probe_unlink(opid opid_t, fn string) (*Bdev_block_t, common.Err_t) {
 	b, err := idm._deprobe(opid, fn)
 	if err != 0 {
 		return nil, err

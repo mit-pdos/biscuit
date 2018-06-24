@@ -44,7 +44,7 @@ func (is *inode_stats_t) Stats() string {
 }
 
 type Inode_t struct {
-	Iblk *common.Bdev_block_t
+	Iblk *Bdev_block_t
 	Ioff int
 }
 
@@ -65,7 +65,7 @@ const (
 	// number of words in an inode
 	NIWORDS = 7 + NIADDRS
 	// number of address in indirect block
-	INDADDR = (common.BSIZE / 8)
+	INDADDR = (BSIZE / 8)
 	ISIZE   = 128
 )
 
@@ -162,7 +162,7 @@ type imemnode_t struct {
 	_l   sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
-	ref  *common.Objref_t
+	ref  *Objref_t
 
 	// XXXPANIC for sanity
 	_amlocked bool
@@ -307,7 +307,7 @@ func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err
 func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int, common.Err_t) {
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call. account for indirect blocks.
-	max := (MaxBlkPerOp - 3) * common.BSIZE
+	max := (MaxBlkPerOp - 3) * BSIZE
 	sz := src.Totalsz()
 	i := 0
 
@@ -517,12 +517,12 @@ func (idm *imemnode_t) _linkup(opid opid_t) {
 
 // metadata block interface; only one inode touches these blocks at a time,
 // thus no concurrency control
-func (ic *imemnode_t) mbread(blockn int) (*common.Bdev_block_t, common.Err_t) {
+func (ic *imemnode_t) mbread(blockn int) (*Bdev_block_t, common.Err_t) {
 	mb, err := ic.fs.fslog.Get_fill(blockn, "mbread", false)
 	return mb, err
 }
 
-func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
+func (ic *imemnode_t) fill(blk *Bdev_block_t, inum common.Inum_t) {
 	inode := Inode_t{blk, ioffset(inum)}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
@@ -540,7 +540,7 @@ func (ic *imemnode_t) fill(blk *common.Bdev_block_t, inum common.Inum_t) {
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *imemnode_t) flushto(blk *common.Bdev_block_t, inum common.Inum_t) bool {
+func (ic *imemnode_t) flushto(blk *Bdev_block_t, inum common.Inum_t) bool {
 	inode := Inode_t{blk, ioffset(inum)}
 	j := inode
 	k := ic
@@ -578,7 +578,7 @@ func (idm *imemnode_t) ensureb(opid opid_t, blkno int, writing bool) (int, bool,
 }
 
 // ensure entry in indirect block exists
-func (idm *imemnode_t) ensureind(opid opid_t, blk *common.Bdev_block_t, slot int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) ensureind(opid opid_t, blk *Bdev_block_t, slot int, writing bool) (int, common.Err_t) {
 	off := slot * 8
 	s := blk.Data[:]
 	blkn := common.Readn(s, 8, off)
@@ -699,8 +699,8 @@ func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, co
 	if writing && opid == 0 && !memfs {
 		panic("offsetblk: writing but no opid\n")
 	}
-	whichblk := offset / common.BSIZE
-	lastblk := idm.size / common.BSIZE
+	whichblk := offset / BSIZE
+	lastblk := idm.size / BSIZE
 	blkn, err := idm.bmapfill(opid, lastblk, whichblk, writing)
 	if err != 0 {
 		return blkn, err
@@ -712,7 +712,7 @@ func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, co
 }
 
 // Return locked buffer for offset
-func (idm *imemnode_t) off2buf(opid opid_t, offset int, len int, fillhole bool, fill bool, s string) (*common.Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) off2buf(opid opid_t, offset int, len int, fillhole bool, fill bool, s string) (*Bdev_block_t, common.Err_t) {
 	if offset%common.PGSIZE+len > common.PGSIZE {
 		panic("off2buf")
 	}
@@ -720,7 +720,7 @@ func (idm *imemnode_t) off2buf(opid opid_t, offset int, len int, fillhole bool, 
 	if err != 0 {
 		return nil, err
 	}
-	var b *common.Bdev_block_t
+	var b *Bdev_block_t
 	if fill {
 		b, err = idm.fs.fslog.Get_fill(blkno, s, true)
 	} else {
@@ -748,13 +748,13 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 		if !common.Resadd_noblock(gimme) {
 			return c, -common.ENOHEAP
 		}
-		m := min(common.BSIZE-offset%common.BSIZE, dst.Remain())
+		m := min(BSIZE-offset%BSIZE, dst.Remain())
 		m = min(isz-offset, m)
 		b, err := idm.off2buf(opid_t(0), offset, m, false, true, "iread")
 		if err != 0 {
 			return c, err
 		}
-		s := offset % common.BSIZE
+		s := offset % BSIZE
 		src := b.Data[s : s+m]
 
 		if fs_debug {
@@ -784,13 +784,13 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 		if !common.Resadd_noblock(gimme) {
 			return c, -common.ENOHEAP
 		}
-		m := min(common.BSIZE-offset%common.BSIZE, sz-c)
-		fill := m != common.BSIZE
+		m := min(BSIZE-offset%BSIZE, sz-c)
+		fill := m != BSIZE
 		b, err := idm.off2buf(opid, offset, m, true, fill, "iwrite")
 		if err != 0 {
 			return c, err
 		}
-		s := offset % common.BSIZE
+		s := offset % BSIZE
 
 		if fs_debug {
 			fmt.Printf("_iwrite c %v sz %v off %v m %v s %v s+m %v\n",
@@ -961,7 +961,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmap
 	return ret, 0
 }
 
-func (idm *imemnode_t) idibread() (*common.Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) idibread() (*Bdev_block_t, common.Err_t) {
 	return idm.fs.fslog.Get_fill(idm.fs.ialloc.Iblock(idm.inum), "idibread", true)
 }
 
@@ -972,8 +972,8 @@ type blockiter_t struct {
 	idm      *imemnode_t
 	which    int
 	tryevict bool
-	dub      *common.Bdev_block_t
-	lasti    *common.Bdev_block_t
+	dub      *Bdev_block_t
+	lasti    *Bdev_block_t
 }
 
 func (bl *blockiter_t) bi_init(idm *imemnode_t, tryevict bool) {
@@ -985,7 +985,7 @@ func (bl *blockiter_t) bi_init(idm *imemnode_t, tryevict bool) {
 
 // if this imemnode_t has a double-indirect block, _isdub loads it and caches
 // it and returns true.
-func (bl *blockiter_t) _isdub() (*common.Bdev_block_t, bool) {
+func (bl *blockiter_t) _isdub() (*Bdev_block_t, bool) {
 	if bl.dub != nil {
 		return bl.dub, true
 	}
@@ -1003,14 +1003,14 @@ func (bl *blockiter_t) _isdub() (*common.Bdev_block_t, bool) {
 
 // returns the indirect block or block number from the given slot in the
 // indirect block
-func (bl *blockiter_t) _isdubind(dubslot int, fetch bool) (*common.Bdev_block_t, int, bool) {
+func (bl *blockiter_t) _isdubind(dubslot int, fetch bool) (*Bdev_block_t, int, bool) {
 	dub, ok := bl._isdub()
 	if !ok {
 		return nil, 0, false
 	}
 
 	blkno := common.Readn(dub.Data[:], 8, dubslot*8)
-	var ret *common.Bdev_block_t
+	var ret *Bdev_block_t
 	ok = blkno != 0
 	if fetch {
 		ret, ok = bl._isind(blkno)
@@ -1018,7 +1018,7 @@ func (bl *blockiter_t) _isdubind(dubslot int, fetch bool) (*common.Bdev_block_t,
 	return ret, blkno, ok
 }
 
-func (bl *blockiter_t) _isind(blkno int) (*common.Bdev_block_t, bool) {
+func (bl *blockiter_t) _isind(blkno int) (*Bdev_block_t, bool) {
 	if blkno == 0 {
 		return nil, false
 	}
@@ -1396,7 +1396,7 @@ func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, 
 
 func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, common.Err_t) {
 	ref, created := icache.cache.Lookup(int(inum),
-		func(in int) common.Obj_t {
+		func(in int) Obj_t {
 			ret := &imemnode_t{}
 			// inum can be read without ilock, and therefore must be
 			// initialized before the refcache unlocks.
@@ -1467,7 +1467,7 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
 	ialloc.len = len
 	ialloc.first = first
 	ialloc.inodelen = inodelen
-	ialloc.maxinode = inodelen * (common.BSIZE / ISIZE)
+	ialloc.maxinode = inodelen * (BSIZE / ISIZE)
 	//fmt.Printf("ialloc: mapstart %v maplen %v inode start %v inode len %v max inode# %v nfree %d\n",
 	//	ialloc.start, ialloc.len, ialloc.first, ialloc.inodelen, ialloc.maxinode,
 	//	ialloc.alloc.nfreebits)
@@ -1501,7 +1501,7 @@ func (ialloc *ibitmap_t) Ifree(opid opid_t, inum common.Inum_t) common.Err_t {
 }
 
 func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
-	b := int(inum) / (common.BSIZE / ISIZE)
+	b := int(inum) / (BSIZE / ISIZE)
 	b += ialloc.first
 	if b < ialloc.first || b >= ialloc.first+ialloc.inodelen {
 		fmt.Printf("inum=%v b = %d\n", inum, b)
@@ -1511,7 +1511,7 @@ func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
 }
 
 func ioffset(inum common.Inum_t) int {
-	o := int(inum) % (common.BSIZE / ISIZE)
+	o := int(inum) % (BSIZE / ISIZE)
 	return o
 }
 

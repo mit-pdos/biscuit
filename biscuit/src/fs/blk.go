@@ -1,63 +1,23 @@
-package common
+package fs
 
 import "sync"
 import "fmt"
 import "container/list"
-import "sync/atomic"
 
-const bdev_debug = false
+import "common"
 
 // If you change this, you must change corresponding constants in mkbdisk.py,
 // fs.go, litc.c (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE = 4096
 
 type Blockmem_i interface {
-	Alloc() (Pa_t, *Bytepg_t, bool)
-	Free(Pa_t)
-	Refup(Pa_t)
+	Alloc() (common.Pa_t, *common.Bytepg_t, bool)
+	Free(common.Pa_t)
+	Refup(common.Pa_t)
 }
 
 type Block_cb_i interface {
 	Relse(*Bdev_block_t, string)
-}
-
-type Obj_t interface {
-	Evictnow() bool
-	Key() int
-	Evict()
-}
-
-type Objref_t struct {
-	Key     int
-	Obj     Obj_t
-	refcnt  int64
-	Refnext *Objref_t
-	Refprev *Objref_t
-}
-
-func MkObjref(obj Obj_t, key int) *Objref_t {
-	e := &Objref_t{}
-	e.Obj = obj
-	e.Key = key
-	e.refcnt = 1
-	return e
-}
-
-func (ref *Objref_t) Refcnt() int64 {
-	c := atomic.LoadInt64(&ref.refcnt)
-	return c
-}
-
-func (ref *Objref_t) Up() {
-	atomic.AddInt64(&ref.refcnt, 1)
-}
-
-func (ref *Objref_t) Down() int64 {
-	v := atomic.AddInt64(&ref.refcnt, -1)
-	if v < 0 {
-		panic("Down")
-	}
-	return v
 }
 
 type blktype_t int
@@ -73,8 +33,8 @@ type Bdev_block_t struct {
 	Block      int
 	Type       blktype_t
 	_try_evict bool
-	Pa         Pa_t
-	Data       *Bytepg_t
+	Pa         common.Pa_t
+	Data       *common.Bytepg_t
 	Ref        *Objref_t
 	Name       string
 	Mem        Blockmem_i
@@ -294,7 +254,7 @@ func MkBlock_newpage(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_
 func MkBlock(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev_block_t {
 	b := &Bdev_block_t{}
 	b.Block = block
-	b.Pa = Pa_t(0)
+	b.Pa = common.Pa_t(0)
 	b.Data = nil
 	//b.Name = s
 	b.Mem = mem

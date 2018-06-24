@@ -21,7 +21,7 @@ type frbn_t struct {
 	r   *frbn_t
 	l   *frbn_t
 	c   common.Rbc_t
-	pgi *common.Bdev_block_t
+	pgi *Bdev_block_t
 }
 
 func (h *frbh_t) _rol(nn *frbn_t) {
@@ -108,7 +108,7 @@ func (h *frbh_t) _balance(nn *frbn_t) {
 	h.root.c = BLACK
 }
 
-func (h *frbh_t) insert(pgi *common.Bdev_block_t) *frbn_t {
+func (h *frbh_t) insert(pgi *Bdev_block_t) *frbn_t {
 	nn := &frbn_t{pgi: pgi, c: RED}
 	if h.root == nil {
 		h.root = nn
@@ -155,7 +155,7 @@ func (h *frbh_t) _lookup(pgn int) *frbn_t {
 	return n
 }
 
-func (h *frbh_t) lookup(pgn int) (*common.Bdev_block_t, bool) {
+func (h *frbh_t) lookup(pgn int) (*Bdev_block_t, bool) {
 	r := h._lookup(pgn)
 	if r == nil {
 		return nil, false
@@ -313,7 +313,7 @@ func (h *frbh_t) remove(nn *frbn_t) *frbn_t {
 	return old
 }
 
-func (h *frbh_t) iter1(n *frbn_t, f func(*common.Bdev_block_t)) {
+func (h *frbh_t) iter1(n *frbn_t, f func(*Bdev_block_t)) {
 	if n == nil {
 		return
 	}
@@ -322,7 +322,7 @@ func (h *frbh_t) iter1(n *frbn_t, f func(*common.Bdev_block_t)) {
 	h.iter1(n.r, f)
 }
 
-func (h *frbh_t) iter(f func(*common.Bdev_block_t)) {
+func (h *frbh_t) iter(f func(*Bdev_block_t)) {
 	h.iter1(h.root, f)
 }
 

@@ -200,8 +200,8 @@ func (ufs *Ufs_t) Ls(p string) (map[string]*common.Stat_t, common.Err_t) {
 	if e != 0 {
 		return nil, e
 	}
-	for i := 0; i < len(d)/common.BSIZE; i++ {
-		dd := fs.Dirdata_t{d[i*common.BSIZE:]}
+	for i := 0; i < len(d)/fs.BSIZE; i++ {
+		dd := fs.Dirdata_t{d[i*fs.BSIZE:]}
 		for j := 0; j < fs.NDIRENTS; j++ {
 			tfn := dd.Filename(j)
 			if len(tfn) > 0 {

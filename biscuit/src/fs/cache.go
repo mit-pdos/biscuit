@@ -3,6 +3,7 @@ package fs
 //import "fmt"
 import "strconv"
 import "sync"
+import "sync/atomic"
 
 import "common"
 
@@ -23,10 +24,47 @@ type cstats_t struct {
 	Nevict common.Counter_t
 }
 
+type Obj_t interface {
+	Evict()
+}
+
+type Objref_t struct {
+	Key     int
+	Obj     Obj_t
+	refcnt  int64
+	Refnext *Objref_t
+	Refprev *Objref_t
+}
+
+func MkObjref(obj Obj_t, key int) *Objref_t {
+	e := &Objref_t{}
+	e.Obj = obj
+	e.Key = key
+	e.refcnt = 1
+	return e
+}
+
+func (ref *Objref_t) Refcnt() int64 {
+	c := atomic.LoadInt64(&ref.refcnt)
+	return c
+}
+
+func (ref *Objref_t) Up() {
+	atomic.AddInt64(&ref.refcnt, 1)
+}
+
+func (ref *Objref_t) Down() int64 {
+	v := atomic.AddInt64(&ref.refcnt, -1)
+	if v < 0 {
+		panic("Down")
+	}
+	return v
+}
+
 type cache_t struct {
 	sync.Mutex
 	maxsize   int
-	cache     map[int]*common.Objref_t
+	cache     map[int]*Objref_t
 	objreflru objreflru_t
 	stats     cstats_t
 }
@@ -34,7 +72,7 @@ type cache_t struct {
 func mkCache(size int) *cache_t {
 	c := &cache_t{}
 	c.maxsize = size
-	c.cache = make(map[int]*common.Objref_t, size)
+	c.cache = make(map[int]*Objref_t, size)
 	return c
 }
 
@@ -45,7 +83,7 @@ func (c *cache_t) Len() int {
 	return ret
 }
 
-func (c *cache_t) Lookup(key int, mkobj func(int) common.Obj_t) (*common.Objref_t, bool) {
+func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 	c.Lock()
 	e, ok := c.cache[key]
 	if ok {
@@ -56,7 +94,7 @@ func (c *cache_t) Lookup(key int, mkobj func(int) common.Obj_t) (*common.Objref_
 		c.Unlock()
 		return e, false
 	}
-	e = common.MkObjref(mkobj(key), key)
+	e = MkObjref(mkobj(key), key)
 	e.Obj = mkobj(key)
 	c.cache[key] = e
 	c.objreflru.mkhead(e)
@@ -102,7 +140,7 @@ func (c *cache_t) Evict_half() int {
 
 	upto := len(c.cache)
 	did := 0
-	var back *common.Objref_t
+	var back *Objref_t
 	for p := c.objreflru.tail; p != nil && did < upto; p = back {
 		back = p.Refprev
 		if p.Refcnt() != 0 {
@@ -131,7 +169,7 @@ func (c *cache_t) nlive() int {
 	return n
 }
 
-func (c *cache_t) delete(o *common.Objref_t) {
+func (c *cache_t) delete(o *Objref_t) {
 	delete(c.cache, o.Key)
 	c.objreflru.remove(o)
 	c.stats.Nevict.Inc()
@@ -139,18 +177,18 @@ func (c *cache_t) delete(o *common.Objref_t) {
 
 // LRU list of references
 type objreflru_t struct {
-	head *common.Objref_t
-	tail *common.Objref_t
+	head *Objref_t
+	tail *Objref_t
 }
 
-func (rl *objreflru_t) mkhead(ir *common.Objref_t) {
+func (rl *objreflru_t) mkhead(ir *Objref_t) {
 	if memfs {
 		return
 	}
 	rl._mkhead(ir)
 }
 
-func (rl *objreflru_t) _mkhead(ir *common.Objref_t) {
+func (rl *objreflru_t) _mkhead(ir *Objref_t) {
 	if rl.head == ir {
 		return
 	}
@@ -165,7 +203,7 @@ func (rl *objreflru_t) _mkhead(ir *common.Objref_t) {
 	}
 }
 
-func (rl *objreflru_t) _remove(ir *common.Objref_t) {
+func (rl *objreflru_t) _remove(ir *Objref_t) {
 	if rl.tail == ir {
 		rl.tail = ir.Refprev
 	}
@@ -181,7 +219,7 @@ func (rl *objreflru_t) _remove(ir *common.Objref_t) {
 	ir.Refprev, ir.Refnext = nil, nil
 }
 
-func (rl *objreflru_t) remove(ir *common.Objref_t) {
+func (rl *objreflru_t) remove(ir *Objref_t) {
 	if memfs {
 		return
 	}

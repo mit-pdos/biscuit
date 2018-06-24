@@ -4,6 +4,7 @@ import "os"
 import "sync"
 
 import "common"
+import "fs"
 
 //
 // The "driver"
@@ -26,35 +27,35 @@ func (ahci *ahci_disk_t) Seek(o int) {
 	}
 }
 
-func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
+func (ahci *ahci_disk_t) Start(req *fs.Bdev_req_t) bool {
 	ahci.Lock() // lock to ensure that seek folllowed by read/write is atomic
 	defer ahci.Unlock()
 
 	switch req.Cmd {
-	case common.BDEV_READ:
+	case fs.BDEV_READ:
 		if req.Blks.Len() != 1 {
 			panic("read: too many blocks")
 		}
 		blk := req.Blks.FrontBlock()
-		ahci.Seek(blk.Block * common.BSIZE)
-		b := make([]byte, common.BSIZE)
+		ahci.Seek(blk.Block * fs.BSIZE)
+		b := make([]byte, fs.BSIZE)
 		n, err := ahci.f.Read(b)
-		if n != common.BSIZE || err != nil {
+		if n != fs.BSIZE || err != nil {
 			panic(err)
 		}
 		blk.Data = &common.Bytepg_t{}
 		for i, _ := range b {
 			blk.Data[i] = uint8(b[i])
 		}
-	case common.BDEV_WRITE:
+	case fs.BDEV_WRITE:
 		for b := req.Blks.FrontBlock(); b != nil; b = req.Blks.NextBlock() {
-			ahci.Seek(b.Block * common.BSIZE)
-			buf := make([]byte, common.BSIZE)
+			ahci.Seek(b.Block * fs.BSIZE)
+			buf := make([]byte, fs.BSIZE)
 			for i, _ := range buf {
 				buf[i] = byte(b.Data[i])
 			}
 			n, err := ahci.f.Write(buf)
-			if n != common.BSIZE || err != nil {
+			if n != fs.BSIZE || err != nil {
 				panic(err)
 			}
 			if ahci.t != nil {
@@ -62,7 +63,7 @@ func (ahci *ahci_disk_t) Start(req *common.Bdev_req_t) bool {
 			}
 			b.Done("Start")
 		}
-	case common.BDEV_FLUSH:
+	case fs.BDEV_FLUSH:
 		ahci.f.Sync()
 		if ahci.t != nil {
 			ahci.t.sync()

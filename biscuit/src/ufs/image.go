@@ -21,7 +21,7 @@ import "fs"
 // data blocks
 
 const (
-	nbitsperblock = common.BSIZE * 8
+	nbitsperblock = fs.BSIZE * 8
 )
 
 func bytepg2byte(d *common.Bytepg_t) []byte {
@@ -37,11 +37,11 @@ func Tell(f *os.File) int {
 	if err != nil {
 		panic(err)
 	}
-	return int(o / common.BSIZE)
+	return int(o / fs.BSIZE)
 }
 
 func mkBlock() []byte {
-	return make([]byte, common.BSIZE)
+	return make([]byte, fs.BSIZE)
 }
 
 func writeBootBlock(f *os.File, superb int) {
@@ -57,7 +57,7 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 	d := &common.Bytepg_t{}
 	sb := fs.Superblock_t{d}
 	sb.SetLoglen(nlogblks)
-	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
+	ninode := ninodeblks * (fs.BSIZE / fs.ISIZE)
 	ni := ninode/nbitsperblock + 1
 	sb.SetIorphanblock(start + 1 + nlogblks)
 	sb.SetIorphanlen(ni)
@@ -72,7 +72,7 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 }
 
 func markAllocated(d []byte, startbit int) {
-	for i := (startbit / 8) + 1; i < common.BSIZE; i++ {
+	for i := (startbit / 8) + 1; i < fs.BSIZE; i++ {
 		d[i] = byte(0xff)
 	}
 	rem := startbit % 8
@@ -92,7 +92,7 @@ func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 	if Tell(f) != sb.Iorphanblock()+sb.Iorphanlen() {
 		panic("incorrect inode map start\n")
 	}
-	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
+	ninode := ninodeblks * (fs.BSIZE / fs.ISIZE)
 	oneblock := mkBlock()
 	oneblock[0] |= 1 << 0 // mark root inode as allocated
 	if sb.Imaplen() == 1 {
@@ -152,14 +152,14 @@ func writeBlockMap(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 }
 
 func writeInodes(f *os.File, sb *fs.Superblock_t) {
-	b := common.MkBlock(0, "", nil, nil, nil)
+	b := fs.MkBlock(0, "", nil, nil, nil)
 	b.Data = &common.Bytepg_t{}
 	root := fs.Inode_t{b, 0}
 
 	firstdata := sb.Freeblock() + sb.Freeblocklen() + sb.Inodelen()
 	root.W_itype(fs.I_DIR)
 	root.W_linkcount(1)
-	root.W_size(common.BSIZE)
+	root.W_size(fs.BSIZE)
 	root.W_addr(0, firstdata)
 	block := bytepg2byte(b.Data)
 
@@ -206,7 +206,7 @@ func addimg(img string, f *os.File) {
 		panic(err)
 	}
 	for {
-		b := make([]byte, common.BSIZE)
+		b := make([]byte, fs.BSIZE)
 		n, err := s.Read(b)
 		if err != nil {
 			return
@@ -230,9 +230,9 @@ func pad(f *os.File) {
 		panic(err)
 	}
 
-	n := common.Roundup(int(o), common.BSIZE)
+	n := common.Roundup(int(o), fs.BSIZE)
 	n = n - int(o)
-	b := make([]byte, common.BSIZE)
+	b := make([]byte, fs.BSIZE)
 	_, err = f.Write(b)
 	if err != nil {
 		panic(err)
@@ -245,12 +245,12 @@ func pokeboot(f *os.File, start int) {
 	if err != nil {
 		panic(err)
 	}
-	b := make([]byte, common.BSIZE)
+	b := make([]byte, fs.BSIZE)
 	n, err := f.Read(b)
 	if err != nil {
 		panic(err)
 	}
-	if n != common.BSIZE {
+	if n != fs.BSIZE {
 		panic("short read")
 	}
 
@@ -268,7 +268,7 @@ func pokeboot(f *os.File, start int) {
 	}
 
 	// seek back
-	_, err = f.Seek(int64(start*common.BSIZE), 0)
+	_, err = f.Seek(int64(start*fs.BSIZE), 0)
 	if err != nil {
 		panic(err)
 	}

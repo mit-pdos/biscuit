@@ -5,6 +5,7 @@ import "encoding/json"
 import "fmt"
 
 import "common"
+import "fs"
 
 //
 //  trace file of writes and syncs
@@ -107,7 +108,7 @@ func (t *tracef_t) write(n int, v *common.Bytepg_t) {
 	r := record_t{}
 	r.BlkNo = n
 	r.Cmd = "write"
-	r.BlkData = make([]byte, common.BSIZE)
+	r.BlkData = make([]byte, fs.BSIZE)
 	for i, _ := range v {
 		r.BlkData[i] = byte(v[i])
 	}
