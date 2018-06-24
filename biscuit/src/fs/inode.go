@@ -162,7 +162,7 @@ type imemnode_t struct {
 	_l   sync.Mutex
 	inum common.Inum_t
 	fs   *Fs_t
-	ref  *objref_t
+	ref  *common.Objref_t
 
 	// XXXPANIC for sanity
 	_amlocked bool
@@ -1405,7 +1405,7 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, commo
 			return ret
 		})
 
-	ret := ref.obj.(*imemnode_t)
+	ret := ref.Obj.(*imemnode_t)
 	if created {
 		// ret is locked
 		ret.fs = icache.fs

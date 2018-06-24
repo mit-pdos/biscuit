@@ -103,7 +103,7 @@ func StartFS(mem common.Blockmem_i, disk common.Disk_i, console common.Cons_i) (
 }
 
 func (fs *Fs_t) Sizes() (int, int) {
-	return fs.icache.cache.Len(), fs.bcache.refcache.Len()
+	return fs.icache.cache.Len(), fs.bcache.cache.Len()
 }
 
 func (fs *Fs_t) StopFS() {
@@ -1551,7 +1551,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 		panic("no evict")
 	}
 	//fmt.Printf("FS EVICT\n")
-	fs.bcache.refcache.Evict_half()
+	fs.bcache.cache.Evict_half()
 	fs.icache.cache.Evict_half() // doesn't do anything because inodes are evicted when unlinked
 	return fs.Sizes()
 }

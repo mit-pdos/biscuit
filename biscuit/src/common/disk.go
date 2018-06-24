@@ -3,6 +3,7 @@ package common
 import "sync"
 import "fmt"
 import "container/list"
+import "sync/atomic"
 
 const bdev_debug = false
 
@@ -24,6 +25,39 @@ type Obj_t interface {
 	Evictnow() bool
 	Key() int
 	Evict()
+}
+
+type Objref_t struct {
+	Key     int
+	Obj     Obj_t
+	refcnt  int64
+	Refnext *Objref_t
+	Refprev *Objref_t
+}
+
+func MkObjref(obj Obj_t, key int) *Objref_t {
+	e := &Objref_t{}
+	e.Obj = obj
+	e.Key = key
+	e.refcnt = 1
+	return e
+}
+
+func (ref *Objref_t) Refcnt() int64 {
+	c := atomic.LoadInt64(&ref.refcnt)
+	return c
+}
+
+func (ref *Objref_t) Up() {
+	atomic.AddInt64(&ref.refcnt, 1)
+}
+
+func (ref *Objref_t) Down() int64 {
+	v := atomic.AddInt64(&ref.refcnt, -1)
+	if v < 0 {
+		panic("Down")
+	}
+	return v
 }
 
 type Ref_t struct {
@@ -49,7 +83,7 @@ type Bdev_block_t struct {
 	_try_evict bool
 	Pa         Pa_t
 	Data       *Bytepg_t
-	Ref        *Ref_t
+	Ref        *Objref_t
 	Name       string
 	Mem        Blockmem_i
 	Disk       Disk_i

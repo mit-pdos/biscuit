@@ -9,10 +9,10 @@ import "common"
 
 const bdev_debug = false
 
-// A block has a lock, since, it may store an inode block, which has 4 inodes,
-// and we need to ensure that hat writes aren't lost due to concurrent inode
-// updates.  The inode code is careful about releasing lock.  Other types of
-// blocks not shared and the caller releases the lock immediately.
+// A block has a lock, since, it may store an inode block, which has several
+// inodes, and we need to ensure that hat writes aren't lost due to concurrent
+// inode updates.  The inode code is careful about releasing lock.  Other types
+// of blocks not shared and the caller releases the lock immediately.
 //
 // The data of a block is a page allocated from the page allocator.  The disk
 // DMAs to and from the physical address for the page.  data is the virtual
@@ -34,9 +34,9 @@ const bdev_debug = false
 //
 
 type bcache_t struct {
-	refcache *refcache_t
-	mem      common.Blockmem_i
-	disk     common.Disk_i
+	cache *cache_t
+	mem   common.Blockmem_i
+	disk  common.Disk_i
 	sync.Mutex
 	pins map[common.Pa_t]*common.Bdev_block_t
 }
@@ -45,7 +45,7 @@ func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
 	bcache := &bcache_t{}
 	bcache.mem = mem
 	bcache.disk = disk
-	bcache.refcache = mkRefcache(common.Syslimit.Blocks, false)
+	bcache.cache = mkCache(common.Syslimit.Blocks)
 	bcache.pins = make(map[common.Pa_t]*common.Bdev_block_t)
 	return bcache
 }
@@ -53,17 +53,13 @@ func mkBcache(mem common.Blockmem_i, disk common.Disk_i) *bcache_t {
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_relse when done with buf.
 func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	b, created, err := bcache.bref(blkn, s)
+	b, created := bcache.bref(blkn, s)
 	if b.Evictnow() {
 		runtime.Cacheaccount()
 	}
 
 	if bdev_debug {
-		fmt.Printf("bcache_get_fill: %v %v created? %v\n", blkn, s, created)
-	}
-
-	if err != 0 {
-		return nil, err
+		fmt.Printf("bcache_get_fill: %v %v created? %v refcnt %v\n", blkn, s, created, b.Ref.Refcnt())
 	}
 
 	if created {
@@ -79,12 +75,9 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*common.Bdev_bl
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
 func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	b, created, err := bcache.bref(blkn, s)
+	b, created := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
-	}
-	if err != 0 {
-		return nil, err
 	}
 	if created {
 		b.New_page() // zero
@@ -98,12 +91,9 @@ func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*common.Bdev_bl
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
 func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_block_t, common.Err_t) {
-	b, created, err := bcache.bref(blkn, s)
+	b, created := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
-	}
-	if err != 0 {
-		return nil, err
 	}
 	if created {
 		b.New_page() // XXX a non-zero page would be fine
@@ -115,12 +105,12 @@ func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*common.Bdev_
 }
 
 func (bcache *bcache_t) Write(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b.Ref)
+	bcache.Refup(b, "write")
 	b.Write()
 }
 
 func (bcache *bcache_t) Write_async(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b.Ref)
+	bcache.Refup(b, "write_async")
 	b.Write_async()
 }
 
@@ -185,26 +175,27 @@ func (bcache *bcache_t) Write_async_through_coalesce(blks *common.BlkList_t) {
 	}
 }
 
+// XXX b methods
 func (bcache *bcache_t) Refup(b *common.Bdev_block_t, s string) {
-	bcache.refcache.Refup(b.Ref)
+	b.Ref.Up()
 }
 
 func (bcache *bcache_t) Relse(b *common.Bdev_block_t, s string) {
 	if bdev_debug {
-		fmt.Printf("bcache_relse: %v %v\n", b.Block, s)
+		fmt.Printf("bcache_relse: %v %v %v\n", b.Block, s, b.Ref.Refcnt())
 	}
-	evicted := bcache.refcache.Refdown(b.Ref, false)
-	if evicted {
+	v := b.Ref.Down()
+	if v == 0 && b.Evictnow() {
 		bcache.Lock()
 		delete(bcache.pins, b.Pa)
 		bcache.Unlock()
-
+		bcache.cache.Remove(b.Block)
 		b.Evict()
 	}
 }
 
 func (bcache *bcache_t) Stats() string {
-	return "bcache" + bcache.refcache.Stats()
+	return "bcache" + bcache.cache.Stats()
 }
 
 //
@@ -212,22 +203,19 @@ func (bcache *bcache_t) Stats() string {
 //
 
 // returns the reference to a locked buffer
-func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool, common.Err_t) {
-	ref, created, err := bcache.refcache.Lookup(blk, func(_ int, ref *common.Ref_t) common.Obj_t {
+func (bcache *bcache_t) bref(blk int, s string) (*common.Bdev_block_t, bool) {
+	ref, created := bcache.cache.Lookup(blk, func(_ int) common.Obj_t {
 		ret := common.MkBlock(blk, s, bcache.mem, bcache.disk, bcache)
-		ret.Ref = ref
 		ret.Lock()
 		return ret
 	})
-	if err != 0 {
-		return nil, false, err
-	}
-
 	b := ref.Obj.(*common.Bdev_block_t)
-	if !created {
+	if created {
+		b.Ref = ref
+	} else {
 		b.Lock()
 	}
-	return b, created, err
+	return b, created
 }
 
 type _nop_relse_t struct {
@@ -244,7 +232,7 @@ func (bcache *bcache_t) raw(blkno int) (*common.Bdev_block_t, common.Err_t) {
 }
 
 func (bcache *bcache_t) pin(b *common.Bdev_block_t) {
-	bcache.refcache.Refup(b.Ref)
+	b.Ref.Up()
 
 	bcache.Lock()
 	if old, ok := bcache.pins[b.Pa]; ok && old != b {
