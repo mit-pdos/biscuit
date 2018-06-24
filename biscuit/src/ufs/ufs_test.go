@@ -111,21 +111,22 @@ func TestDcacheSimple(t *testing.T) {
 const NSTAT = 1000000
 const NGO = 4
 
-func DcacheFunc(t *testing.T, tfs *Ufs_t, pn string) {
+func DcacheFunc(t *testing.T, tfs *Ufs_t, dir string) {
 	var wg sync.WaitGroup
 
 	start := time.Now()
 	for i := 0; i < NGO; i++ {
 		wg.Add(1)
-		go func() {
+		go func(id int) {
 			defer wg.Done()
+			f := dir + uniqfile(id)
 			for i := 0; i < NSTAT; i++ {
-				_, e := tfs.Stat(pn)
+				_, e := tfs.Stat(f)
 				if e != 0 {
 					t.Fatalf("Stat succeeded")
 				}
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
 	stop := time.Now()
@@ -148,13 +149,14 @@ func TestDcachePerf(t *testing.T) {
 	if e != 0 {
 		t.Fatalf("mkDir %v failed", d)
 	}
-
-	e = tfs.MkFile(d+d1+"f1", nil)
-	if e != 0 {
-		t.Fatalf("mkFile %v failed", "f2")
+	for i := 0; i < NGO; i++ {
+		e = tfs.MkFile(d+d1+uniqfile(i), nil)
+		if e != 0 {
+			t.Fatalf("mkFile %v failed", i)
+		}
 	}
 
-	DcacheFunc(t, tfs, d+d1+"f1")
+	DcacheFunc(t, tfs, d+d1)
 
 	// fmt.Printf("stats: %v\n", tfs.Statistics())
 

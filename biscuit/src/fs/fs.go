@@ -19,7 +19,7 @@ type Fs_t struct {
 	superb       Superblock_t
 	bcache       *bcache_t
 	icache       *icache_t
-	dcache       *dcache_t
+	dcache       *shardtable_t
 	fslog        *log_t
 	ialloc       *ibitmap_t
 	balloc       *bbitmap_t
@@ -93,7 +93,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, 
 	fs.icache = mkIcache(fs, iorphanstart, iorphanlen)
 	fs.icache.RecoverOrphans()
 
-	fs.dcache = mkDcache()
+	fs.dcache = MkShardTable()
 
 	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
 
@@ -1551,6 +1551,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 		panic("no evict")
 	}
 	//fmt.Printf("FS EVICT\n")
+	// XXX blow away dcache first
 	fs.bcache.cache.Evict_half()
 	fs.icache.cache.Evict_half() // doesn't do anything because inodes are evicted when unlinked
 	return fs.Sizes()
@@ -1558,7 +1559,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 
 func (fs *Fs_t) Fs_statistics() string {
 	s := fs.istats.Stats()
-	s += fs.dcache.Stats()
+	// s += fs.dcache.Stats()
 	if !memfs {
 		s += fs.fslog.Stats()
 	}

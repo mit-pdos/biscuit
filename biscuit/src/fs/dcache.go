@@ -1,6 +1,7 @@
 package fs
 
 import "fmt"
+import "hash/fnv"
 import "sync"
 import "common"
 
@@ -77,4 +78,40 @@ func mkDcache() *dcache_t {
 	c := &dcache_t{}
 	c.dcache = make(map[string]*dcentry_t)
 	return c
+}
+
+const NSHARD = 100
+
+type shardtable_t struct {
+	shards []*dcache_t
+}
+
+func MkShardTable() *shardtable_t {
+	s := &shardtable_t{}
+	s.shards = make([]*dcache_t, NSHARD)
+	for i := 0; i < NSHARD; i++ {
+		s.shards[i] = mkDcache()
+	}
+	return s
+}
+
+func hash(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return h.Sum32()
+}
+
+func (st *shardtable_t) lookup(pn string) (*imemnode_t, bool) {
+	i := hash(pn)
+	return st.shards[i%NSHARD].lookup(pn)
+}
+
+func (st *shardtable_t) add(pn string, idm *imemnode_t) {
+	i := hash(pn)
+	st.shards[i%NSHARD].add(pn, idm)
+}
+
+func (st *shardtable_t) remove(pn string) {
+	i := hash(pn)
+	st.shards[i%NSHARD].remove(pn)
 }
