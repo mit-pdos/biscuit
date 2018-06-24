@@ -60,14 +60,6 @@ func (ref *Objref_t) Down() int64 {
 	return v
 }
 
-type Ref_t struct {
-	Obj     Obj_t
-	Refcnt  int64
-	Key     int
-	Refnext *Ref_t
-	Refprev *Ref_t
-}
-
 type blktype_t int
 
 const (
