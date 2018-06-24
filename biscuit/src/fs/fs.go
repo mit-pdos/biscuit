@@ -1552,7 +1552,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	}
 	//fmt.Printf("FS EVICT\n")
 	fs.bcache.refcache.Evict_half()
-	// fs.icache.refcache.Evict_half()
+	fs.icache.cache.Evict_half() // doesn't do anything because inodes are evicted when unlinked
 	return fs.Sizes()
 }
 

@@ -207,8 +207,8 @@ func (imem *imemnode_t) Refup(s string) {
 
 func (imem *imemnode_t) Refdown(s string) {
 	v := imem.ref.Down()
-	if v == 0 && imem.links == 0 { // eagerly remove unlinked inodes from cache
-		imem.fs.icache.cache.Evict(int(imem.inum))
+	if v == 0 && imem.links == 0 { // remove unlinked inodes from cache
+		imem.fs.icache.cache.Remove(int(imem.inum))
 		imem.fs.icache.addDead(imem)
 	}
 }
@@ -1310,7 +1310,7 @@ func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if v != 0 {
 		panic("freeOrphan")
 	}
-	icache.cache.Evict(int(imem.inum))
+	icache.cache.Remove(int(imem.inum))
 	// evicted := icache.cache.DoneKey(int(inum))
 	// if !evicted {
 	//	panic("link count isn't zero?")
