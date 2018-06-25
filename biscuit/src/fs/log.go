@@ -55,14 +55,13 @@ func (log *log_t) Op_begin(s string) opid_t {
 
 	t := log.curtrans
 
-	for t.isfull() {
+	for t.isfull() || t.committing {
 		if log_debug {
 			fmt.Printf("op_begin: %d wait %s\n", opid, s)
 		}
 		log.admissioncond.Wait()
 		t = log.curtrans // maybe a different trans
 	}
-
 	t.add_op(opid)
 
 	log.stats.Opbegincycles.Add(ts)
@@ -89,17 +88,15 @@ func (log *log_t) Op_end(opid opid_t) {
 
 	t.mark_done(opid)
 
-	committing := false
-
 	if (t.isfull() || t.force) && t.iscommittable() { // are we the last op of this trans?
-		committing = true
+		t.committing = true
 		if log_debug {
 			fmt.Printf("Op_end: wakeup committer start %d\n", t.start)
 		}
 		log.commitcond.Signal()
 	}
 
-	if !committing {
+	if !t.committing {
 		// maybe this trans didn't use all its reserved space
 		log.admissioncond.Broadcast()
 	}
@@ -141,6 +138,7 @@ func (log *log_t) Force(doapply bool) {
 		if log_debug {
 			fmt.Printf("Force: wakeup committer start %d\n", t.start)
 		}
+		t.committing = true
 		log.commitcond.Signal()
 	}
 
@@ -429,6 +427,7 @@ type trans_t struct {
 	force          bool
 	forceapply     bool
 	forcedone      bool
+	committing     bool
 }
 
 func (log *log_t) mk_trans(start index_t, ml *memlog_t) *trans_t {
@@ -459,6 +458,10 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *Bdev_block_t, orde
 	if log_debug {
 		fmt.Printf("add_write: opid %d start %d #logged %d #ordered %d b %d(%v)\n", opid,
 			trans.start, trans.logged.Len(), trans.ordered.Len(), blk.Block, ordered)
+	}
+
+	if opid == opid_t(0) {
+		panic("zero opid")
 	}
 
 	// if block is in log and now ordered, remove from log
@@ -868,7 +871,8 @@ func (log *log_t) committer() {
 		log.ml.stats.Ncommitter.Inc()
 		s := common.Rdtsc()
 		t := log.curtrans
-		if (t.force || t.isfull()) && t.iscommittable() {
+		if t.committing {
+
 			t.head = t.head + index_t(t.logged.Len()+t.revokel.len())
 
 			if log_debug {
