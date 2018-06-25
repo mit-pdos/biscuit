@@ -541,7 +541,7 @@ func TestOrderedDirApply(t *testing.T) {
 	doOrderedDir(t, true)
 }
 
-// Test ordered to logged writes.  XXX Hard to get out without testing all possible traces
+// Test ordered to logged writes.  XXX Hard to get at without testing all possible traces
 func TestOrderedFileDir(t *testing.T) {
 	dst := "tmp.img"
 	d := "d"

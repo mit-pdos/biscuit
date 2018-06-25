@@ -116,48 +116,81 @@ void writefile()
   close(fd);
 }
 
+void usage(char *name) {
+    printf("Usage: %s basedir\n", name);
+    exit(-1);
+}
+
 int main(int argc, char *argv[])
 {
   long time;
   struct timeval before;
   struct timeval after;
   float tput;
-
-  if (argc != 2) {
-    printf("Usage: %s basedir\n", argv[0]);
-    exit(-1);
-  }
+  int make = 1;
+  int write = 1;
+  int ch;
   
   prog = argv[0];
-  dir = argv[1];
-  sprintf(name, "%s/d", dir);
-  if (mkdir(name,  S_IRWXU) < 0) {
-    printf("%s: create %s failed %s\n", prog, name, strerror(errno));
-    exit(1);
+
+  while ((ch = getopt(argc, argv, "mw")) != -1) {
+    switch (ch) {
+    case 'm':
+      make = 0;
+      break;
+    case 'w':
+      write = 0;
+      break;
+    default:
+      printf("ch = %c\n", ch);
+      usage(argv[0]);
+      break;
+    }
   }
 
-  printstats(1);
+  int rem = argc - optind;
+  if (rem != 1) {
+    usage(argv[0]);
+  }
     
-  gettimeofday ( &before, NULL );  
-  makefile();
-  gettimeofday ( &after, NULL );
+  dir = argv[optind];
+  sprintf(name, "%s/d", dir);
 
-  time = (after.tv_sec - before.tv_sec) * 1000000 +
-	(after.tv_usec - before.tv_usec);
-  tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
-  printf("makefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
-
-  printstats(0);
     
-  gettimeofday ( &before, NULL );
-  writefile();
-  gettimeofday ( &after, NULL );
+  if (make) {
+    if (mkdir(name,  S_IRWXU) < 0) {
+      printf("%s: create %s failed %s\n", prog, name, strerror(errno));
+      exit(1);
+    }
+    
+    printstats(1);
+
+    gettimeofday ( &before, NULL );  
+    makefile();
+    gettimeofday ( &after, NULL );
+
+    time = (after.tv_sec - before.tv_sec) * 1000000 +
+      (after.tv_usec - before.tv_usec);
+    tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
+    printf("makefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
+
+    printstats(0);
+  }
+
+  if (write) {
+    printstats(1);
+    
+    gettimeofday ( &before, NULL );
+    writefile();
+    gettimeofday ( &after, NULL );
   
-  time = (after.tv_sec - before.tv_sec) * 1000000 +
-  	(after.tv_usec - before.tv_usec);
-  tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
-  printf("writefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
+    time = (after.tv_sec - before.tv_sec) * 1000000 +
+      (after.tv_usec - before.tv_usec);
+    tput = ((float) (FILESIZE/1024) /  (time / 1000000.0));
+    printf("writefile %d MB %ld usec throughput %f KB/s\n", FILESIZE/(1024*1024), time, tput);
 
-  printstats(0);
+    printstats(0);
+  }
+  
   return 0;
 }

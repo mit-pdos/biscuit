@@ -2,55 +2,45 @@ package fs
 
 import "fmt"
 import "sync"
-import "unsafe"
 import "sort"
-import "strconv"
-import "reflect"
-
-import "sync/atomic"
+import "unsafe"
 
 import "common"
 
-type counter_t int64
-
 type inode_stats_t struct {
-	Nopen     counter_t
-	Nnamei    counter_t
-	Nifill    counter_t
-	Niupdate  counter_t
-	Nistat    counter_t
-	Niread    counter_t
-	Niwrite   counter_t
-	Ndo_write counter_t
-	Nfillhole counter_t
-	Ngrow     counter_t
-	Nitrunc   counter_t
-	Nimmap    counter_t
-	Nifree    counter_t
-	Nicreate  counter_t
-	Nilink    counter_t
-	Nunlink   counter_t
-	Nrename   counter_t
-	Nlseek    counter_t
-	Nmkdir    counter_t
-	Nclose    counter_t
-	Nsync     counter_t
-	Nreopen   counter_t
+	Nopen       common.Counter_t
+	Nnamei      common.Counter_t
+	Nifill      common.Counter_t
+	Niupdate    common.Counter_t
+	Nistat      common.Counter_t
+	Niread      common.Counter_t
+	Niwrite     common.Counter_t
+	Ndo_write   common.Counter_t
+	Nfillhole   common.Counter_t
+	Ngrow       common.Counter_t
+	Nitrunc     common.Counter_t
+	Nimmap      common.Counter_t
+	Nifree      common.Counter_t
+	Nicreate    common.Counter_t
+	Nilink      common.Counter_t
+	Nunlink     common.Counter_t
+	Nrename     common.Counter_t
+	Nlseek      common.Counter_t
+	Nmkdir      common.Counter_t
+	Nclose      common.Counter_t
+	Nsync       common.Counter_t
+	Nreopen     common.Counter_t
+	CWrite      common.Cycles_t
+	Cwrite      common.Cycles_t
+	Ciwrite     common.Cycles_t
+	Ciwritecopy common.Cycles_t
+	Ciupdate    common.Cycles_t
 }
 
-func (c *counter_t) inc() {
-	n := (*int64)(unsafe.Pointer(c))
-	atomic.AddInt64(n, 1)
-}
-
-func (is *inode_stats_t) stats() string {
-	v := reflect.ValueOf(*is)
-	s := "inode:"
-	for i := 0; i < v.NumField(); i++ {
-		n := v.Field(i).Interface().(counter_t)
-		s += "\n\t#" + v.Type().Field(i).Name + ": " + strconv.FormatInt(int64(n), 10)
-	}
-	return s + "\n"
+func (is *inode_stats_t) Stats() string {
+	s := "inode" + common.Stats2String(*is)
+	*is = inode_stats_t{}
+	return s
 }
 
 type Inode_t struct {
@@ -259,7 +249,7 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	idm.fs.istats.Nifill.inc()
+	idm.fs.istats.Nifill.Inc()
 	idm.fill(blk, inum)
 	blk.Unlock()
 	idm.fs.fslog.Relse(blk, "idm_init")
@@ -276,7 +266,7 @@ func (idm *imemnode_t) refdown(s string) {
 }
 
 func (idm *imemnode_t) _iupdate(opid opid_t) common.Err_t {
-	idm.fs.istats.Niupdate.inc()
+	idm.fs.istats.Niupdate.Inc()
 	iblk, err := idm.idibread()
 	if err != 0 {
 		return err
@@ -309,7 +299,7 @@ func (idm *imemnode_t) do_read(dst common.Userio_i, offset int) (int, common.Err
 func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int, common.Err_t) {
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call. account for indirect blocks.
-	max := (MaxBlkPerOp - 2) * common.BSIZE
+	max := (MaxBlkPerOp - 3) * common.BSIZE
 	sz := src.Totalsz()
 	i := 0
 
@@ -317,7 +307,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		fmt.Printf("dowrite: %v %v %v\n", idm.inum, offset, sz)
 	}
 
-	idm.fs.istats.Ndo_write.inc()
+	idm.fs.istats.Ndo_write.Inc()
 	for i < sz {
 		gimme := common.Bounds(common.B_IMEMNODE_T_DO_WRITE)
 		if !common.Resadd_noblock(gimme) {
@@ -328,7 +318,11 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if n > max {
 			n = max
 		}
+
+		s := common.Rdtsc()
+
 		opid := idm.fs.fslog.Op_begin("dowrite")
+
 		idm.ilock("")
 		if idm.itype == I_DIR {
 			panic("write to dir")
@@ -337,10 +331,21 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 		if app {
 			off = idm.size
 		}
+		s1 := common.Rdtsc()
 		wrote, err := idm.iwrite(opid, src, off, n)
+		idm.fs.istats.Ciwrite.Add(s1)
+
+		s2 := common.Rdtsc()
 		idm._iupdate(opid)
+		idm.fs.istats.Ciupdate.Add(s2)
+
 		idm.iunlock("")
+
 		idm.fs.fslog.Op_end(opid)
+
+		t := common.Rdtsc()
+		idm.fs.istats.Cwrite.Add(t - s)
+
 		if err != 0 {
 			return i, err
 		}
@@ -351,7 +356,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 }
 
 func (idm *imemnode_t) do_stat(st *common.Stat_t) common.Err_t {
-	idm.fs.istats.Nistat.inc()
+	idm.fs.istats.Nistat.Inc()
 	st.Wdev(0)
 	st.Wino(uint(idm.inum))
 	st.Wmode(idm.mkmode())
@@ -656,9 +661,9 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 	if whichblk >= lastblk { // a hole?
 		// allocate the missing blocks
 		if whichblk > lastblk && writing {
-			idm.fs.istats.Nfillhole.inc()
+			idm.fs.istats.Nfillhole.Inc()
 		} else if writing {
-			idm.fs.istats.Ngrow.inc()
+			idm.fs.istats.Ngrow.Inc()
 		}
 		for b := lastblk; b <= whichblk; b++ {
 			gimme := common.Bounds(common.B_IMEMNODE_T_BMAPFILL)
@@ -727,7 +732,7 @@ func min(a, b int) int {
 }
 
 func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	idm.fs.istats.Niread.inc()
+	idm.fs.istats.Niread.Inc()
 	isz := idm.size
 	c := 0
 	gimme := common.Bounds(common.B_IMEMNODE_T_IREAD)
@@ -762,7 +767,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, common.Err_t
 }
 
 func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n int) (int, common.Err_t) {
-	idm.fs.istats.Niwrite.inc()
+	idm.fs.istats.Niwrite.Inc()
 	sz := min(src.Totalsz(), n)
 	newsz := offset + sz
 	c := 0
@@ -785,10 +790,11 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 		}
 
 		dst := b.Data[s : s+m]
+		ts := common.Rdtsc()
 		read, err := src.Uioread(dst)
 		b.Unlock()
+		idm.fs.istats.Ciwritecopy.Add(ts)
 		idm.fs.fslog.Write_ordered(opid, b)
-		// idm.fs.fslog.Write(opid, b)  // XXX everything through log for now
 		idm.fs.fslog.Relse(b, "iwrite")
 		if err != 0 {
 			return c, err
@@ -813,7 +819,7 @@ func (idm *imemnode_t) itrunc(opid opid_t, newlen uint) common.Err_t {
 		}
 
 	}
-	idm.fs.istats.Nitrunc.inc()
+	idm.fs.istats.Nitrunc.Inc()
 	// inode is flushed by do_itrunc
 	idm.size = int(newlen)
 	return 0
@@ -858,7 +864,7 @@ func (idm *imemnode_t) icreate(opid opid_t, name string, nitype, major, minor in
 		return de.inum, -common.EEXIST
 	}
 
-	idm.fs.istats.Nicreate.inc()
+	idm.fs.istats.Nicreate.Inc()
 
 	// allocate new inode
 	newinum, err := idm.fs.ialloc.Ialloc(opid)
@@ -912,7 +918,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmap
 		len = isz - offset
 	}
 
-	idm.fs.istats.Nimmap.inc()
+	idm.fs.istats.Nimmap.Inc()
 	o := common.Rounddown(offset, common.PGSIZE)
 	len = common.Roundup(offset+len, common.PGSIZE) - o
 	pgc := len / common.PGSIZE
@@ -1141,7 +1147,7 @@ func (bl *blockiter_t) next(which int) (int, bool, int, bool) {
 
 // free an orphaned inode
 func (idm *imemnode_t) ifree() common.Err_t {
-	idm.fs.istats.Nifree.inc()
+	idm.fs.istats.Nifree.Inc()
 	if fs_debug {
 		fmt.Printf("ifree: %d\n", idm.inum)
 	}
@@ -1364,14 +1370,7 @@ func (icache *icache_t) freeDead() {
 }
 
 func (icache *icache_t) Stats() string {
-	s := "icache: size "
-	s += strconv.Itoa(len(icache.refcache.refs))
-	s += " #evictions "
-	s += strconv.Itoa(icache.refcache.nevict)
-	s += " #live "
-	s += strconv.Itoa(icache.refcache.nlive())
-	s += "\n"
-	return s
+	return "icache " + icache.refcache.Stats()
 }
 
 func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
@@ -1518,5 +1517,7 @@ func ioffset(inum common.Inum_t) int {
 }
 
 func (ialloc *ibitmap_t) Stats() string {
-	return "inode " + ialloc.alloc.Stats()
+	s := "inode " + ialloc.alloc.Stats()
+	ialloc.alloc.ResetStats()
+	return s
 }
