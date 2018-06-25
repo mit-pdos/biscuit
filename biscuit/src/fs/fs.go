@@ -1303,6 +1303,8 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
+		fs.dcache.add(cwd.Canonicalpath(paths), idm)
+
 		oexcl := flags&common.O_EXCL != 0
 		if exists {
 			if oexcl || isdev {
