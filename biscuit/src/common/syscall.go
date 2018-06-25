@@ -154,6 +154,7 @@ const (
 	PROF_HACK3       = 1 << 6
 	PROF_HACK4       = 1 << 7
 	PROF_HACK5       = 1 << 8
+	PROF_HACK6       = 1 << 9
 	SYS_THREXIT      = 31338
 	SYS_INFO         = 31339
 	SINFO_GCCOUNT    = 0
@@ -165,6 +166,8 @@ const (
 	SINFO_GCSWEEPT   = 7
 	SINFO_GCWBARRT   = 8
 	SINFO_GCOBJS     = 9
+	SINFO_DOGC       = 10
+	SINFO_PROCLIST   = 11
 	SYS_PREAD        = 31340
 	SYS_PWRITE       = 31341
 	SYS_FUTEX        = 31342

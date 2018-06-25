@@ -612,9 +612,12 @@ func (c *gcControllerState) revise() {
 	// Compute the mutator assist ratio so by the time the mutator
 	// allocates the remaining heap bytes up to next_gc, it will
 	// have done (or stolen) the remaining amount of scan work.
-	c.assistWorkPerByte = float64(scanWorkRemaining) / float64(heapRemaining)
-	c.assistBytesPerWork = float64(heapRemaining) / float64(scanWorkRemaining)
+	//c.assistWorkPerByte = float64(scanWorkRemaining) / float64(heapRemaining)
+	c.assistWorkPerByte = Assistfactor
+	c.assistBytesPerWork = float64(1) / Assistfactor
 }
+
+var Assistfactor float64 = 8.0
 
 // endCycle computes the trigger ratio for the next cycle.
 func (c *gcControllerState) endCycle() float64 {

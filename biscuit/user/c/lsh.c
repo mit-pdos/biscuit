@@ -36,8 +36,7 @@ int builtins(char *args[], size_t n)
 			printf("chdir to %s failed\n", args[1]);
 		return 1;
 	} else if (strncmp(cmd, "ps", 3) == 0) {
-		const long pslist = 11;
-		if (sys_info(pslist) == -1)
+		if (sys_info(SINFO_PROCLIST) == -1)
 			err(-1, "sys_info");
 		return 1;
 	}

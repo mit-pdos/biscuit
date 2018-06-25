@@ -501,15 +501,17 @@ long sys_prof(long, long, long, long);
 #define		PROF_EVF_BACKTRACE	(1ul << 2)
 
 long sys_info(long);
-#define		SINFO_GCCOUNT				0
-#define		SINFO_GCPAUSENS				1
-#define		SINFO_GCHEAPSZ				2
-#define		SINFO_GCMS				4
-#define		SINFO_GCTOTALLOC			5
-#define		SINFO_GCMARKTIME			6
-#define		SINFO_GCSWEEPTIME			7
-#define		SINFO_GCWBARTIME			8
-#define		SINFO_GCOBJS				9
+#define		SINFO_GCCOUNT				0l
+#define		SINFO_GCPAUSENS				1l
+#define		SINFO_GCHEAPSZ				2l
+#define		SINFO_GCMS				4l
+#define		SINFO_GCTOTALLOC			5l
+#define		SINFO_GCMARKTIME			6l
+#define		SINFO_GCSWEEPTIME			7l
+#define		SINFO_GCWBARTIME			8l
+#define		SINFO_GCOBJS				9l
+#define		SINFO_DOGC				10l
+#define		SINFO_PROCLIST				11l
 
 int truncate(const char *, off_t);
 int unlink(const char *);

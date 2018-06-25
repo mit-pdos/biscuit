@@ -3479,6 +3479,14 @@ func GCDebugToggle() {
 	}
 }
 
+func GCPacerToggle() {
+	if debug.gcpacertrace != 0 {
+		debug.gcpacertrace = 0
+	} else {
+		debug.gcpacertrace = 1
+	}
+}
+
 func Memremain() int {
 	a := atomic.Loadint64(&res.ostanding)
 	b := atomic.Loadint64(&res.fin)
