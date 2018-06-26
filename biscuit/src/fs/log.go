@@ -176,17 +176,17 @@ func (log *log_t) Loglen() int {
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
 	t := common.Rdtsc()
-	r, e := log.ml.bcache.Get_fill(blkn, s, lock)
+	r := log.ml.bcache.Get_fill(blkn, s, lock)
 	log.stats.Readcycles.Add(t)
-	return r, e
+	return r, 0
 }
 
 func (log *log_t) Get_zero(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
-	return log.ml.bcache.Get_zero(blkn, s, lock)
+	return log.ml.bcache.Get_zero(blkn, s, lock), 0
 }
 
 func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
-	return log.ml.bcache.Get_nofill(blkn, s, lock)
+	return log.ml.bcache.Get_nofill(blkn, s, lock), 0
 }
 
 func (log *log_t) Relse(blk *Bdev_block_t, s string) {
@@ -302,10 +302,7 @@ func (ml *memlog_t) getmemlog(i index_t) *Bdev_block_t {
 }
 
 func (ml *memlog_t) readhdr() (*logheader_t, *Bdev_block_t) {
-	headblk, err := ml.bcache.Get_fill(ml.logstart, "readhdr", true)
-	if err != 0 {
-		panic("cannot read head/commit block\n")
-	}
+	headblk := ml.bcache.Get_fill(ml.logstart, "readhdr", true)
 	return &logheader_t{headblk.Data}, headblk
 }
 
@@ -319,10 +316,7 @@ func (ml *memlog_t) getdescriptor(i index_t) *logdescriptor_t {
 }
 
 func (ml *memlog_t) readdescriptor(i index_t) (*logdescriptor_t, *Bdev_block_t) {
-	dblk, err := ml.bcache.Get_fill(ml.diskindex(i), "readdescriptor", false)
-	if err != 0 {
-		panic("cannot read descriptor block\n")
-	}
+	dblk := ml.bcache.Get_fill(ml.diskindex(i), "readdescriptor", false)
 	return ml.mkdescriptor(dblk), dblk
 }
 
@@ -1063,14 +1057,8 @@ func (log *log_t) install(tail, head index_t) {
 			if log_debug {
 				fmt.Printf("install: write log %d to %d\n", i, dst)
 			}
-			lb, err := log.ml.bcache.Get_fill(log.ml.diskindex(i), "i", false)
-			if err != 0 {
-				panic("must succeed")
-			}
-			fb, err := log.ml.bcache.Get_fill(dst, "bdest", false)
-			if err != 0 {
-				panic("must succeed")
-			}
+			lb := log.ml.bcache.Get_fill(log.ml.diskindex(i), "i", false)
+			fb := log.ml.bcache.Get_fill(dst, "bdest", false)
 			copy(fb.Data[:], lb.Data[:])
 			log.ml.bcache.Write(fb)
 			log.ml.bcache.Relse(lb, "install lb")

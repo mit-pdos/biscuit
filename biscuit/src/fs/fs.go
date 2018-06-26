@@ -28,7 +28,7 @@ type Fs_t struct {
 
 func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
-	// memfs = common.Kernel // use in-memory file system
+	memfs = common.Kernel // use in-memory file system
 	cons = console
 
 	// reset taken
@@ -45,10 +45,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, 
 
 	// find the first fs block; the build system installs it in block 0 for
 	// us
-	b, err := fs.bcache.Get_fill(0, "fsoff", false)
-	if err != 0 {
-		panic("fs_init")
-	}
+	b := fs.bcache.Get_fill(0, "fsoff", false)
 	fs.superb_start = common.Readn(b.Data[:], 4, FSOFF)
 	//fmt.Printf("fs.superb_start %v\n", fs.superb_start)
 	if fs.superb_start <= 0 {
@@ -57,10 +54,8 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, 
 	fs.bcache.Relse(b, "fs_init")
 
 	// superblock is never changed, so reading before recovery is fine
-	b, err = fs.bcache.Get_fill(fs.superb_start, "super", false) // don't relse b, because superb is global
-	if err != 0 {
-		panic("fs_init")
-	}
+	b = fs.bcache.Get_fill(fs.superb_start, "super", false) // don't relse b, because superb is global
+
 	fs.superb = Superblock_t{b.Data}
 
 	logstart := fs.superb_start + 1

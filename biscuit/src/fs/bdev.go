@@ -52,7 +52,7 @@ func mkBcache(mem Blockmem_i, disk Disk_i) *bcache_t {
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bdev_relse when done with buf.
-func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) *Bdev_block_t {
 	b, created := bcache.bref(blkn, s)
 	if b.Evictnow() {
 		runtime.Cacheaccount()
@@ -69,12 +69,12 @@ func (bcache *bcache_t) Get_fill(blkn int, s string, lock bool) (*Bdev_block_t, 
 	if !lock {
 		b.Unlock()
 	}
-	return b, 0
+	return b
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) *Bdev_block_t {
 	b, created := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_zero: %v %v %v\n", blkn, s, created)
@@ -85,12 +85,12 @@ func (bcache *bcache_t) Get_zero(blkn int, s string, lock bool) (*Bdev_block_t, 
 	if !lock {
 		b.Unlock()
 	}
-	return b, 0
+	return b
 }
 
 // returns locked buf with refcnt on page bumped up by 1. caller must call
 // bcache_relse when done with buf
-func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) *Bdev_block_t {
 	b, created := bcache.bref(blkn, s)
 	if bdev_debug {
 		fmt.Printf("bcache_get_nofill1: %v %v %v\n", blkn, s, created)
@@ -101,7 +101,7 @@ func (bcache *bcache_t) Get_nofill(blkn int, s string, lock bool) (*Bdev_block_t
 	if !lock {
 		b.Unlock()
 	}
-	return b, 0
+	return b
 }
 
 func (bcache *bcache_t) Write(b *Bdev_block_t) {
@@ -280,10 +280,7 @@ func bdev_test(mem Blockmem_i, disk Disk_i, bcache *bcache_t) {
 			<-ider.AckCh
 		}
 		for b := 0; b < N; b++ {
-			rbuf, err := bcache.Get_fill(b, "read test", false)
-			if err != 0 {
-				panic("bdev_test\n")
-			}
+			rbuf := bcache.Get_fill(b, "read test", false)
 			for i, v := range rbuf.Data {
 				if v != uint8(b) {
 					fmt.Printf("buf %v i %v v %v\n", j, i, v)
@@ -333,10 +330,7 @@ func (balloc *bbitmap_t) Balloc(opid opid_t) (int, common.Err_t) {
 		fmt.Printf("blkn %v last %v\n", ret, balloc.fs.superb.Lastblock())
 		return 0, -common.ENOMEM
 	}
-	blk, err := balloc.fs.bcache.Get_zero(ret, "balloc", true)
-	if err != 0 {
-		return 0, err
-	}
+	blk := balloc.fs.bcache.Get_zero(ret, "balloc", true)
 	if bdev_debug {
 		fmt.Printf("balloc: %v free %d\n", ret, balloc.alloc.nfreebits)
 	}
