@@ -252,7 +252,7 @@ func (idm *imemnode_t) iunlock(s string) {
 }
 
 // Fill in inode
-func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
+func (idm *imemnode_t) idm_init(inum common.Inum_t) {
 	idm.inum = inum
 	if fs_debug {
 		fmt.Printf("idm_init: read inode %v\n", inum)
@@ -262,7 +262,6 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) common.Err_t {
 	idm.fill(blk, inum)
 	blk.Unlock()
 	idm.fs.fslog.Relse(blk, "idm_init")
-	return 0
 }
 
 func (idm *imemnode_t) iunlock_refdown(s string) {
@@ -444,10 +443,7 @@ func (idm *imemnode_t) do_createdir(opid opid_t, fn string) (common.Inum_t, comm
 }
 
 func (fs *Fs_t) _fullpath(opid opid_t, inum common.Inum_t) (string, common.Err_t) {
-	c, err := fs.icache.Iref_locked(inum, "_fullpath")
-	if err != 0 {
-		return "", err
-	}
+	c := fs.icache.Iref_locked(inum, "_fullpath")
 	if c.itype != I_DIR {
 		panic("fullpath on non-dir")
 	}
@@ -467,11 +463,8 @@ func (fs *Fs_t) _fullpath(opid opid_t, inum common.Inum_t) (string, common.Err_t
 			c.iunlock("do_fullpath_c")
 			return "", err
 		}
-		par, err := fs.icache.Iref(pari, "do_fullpath_par")
+		par := fs.icache.Iref(pari, "do_fullpath_par")
 		c.iunlock("do_fullpath_c")
-		if err != 0 {
-			return "", err
-		}
 		par.ilock("do_fullpath_par")
 		name, err := par._denamefor(opid, last)
 		if err != 0 {
@@ -1268,10 +1261,7 @@ func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 	if fs_debug {
 		fmt.Printf("freeOrphan: %v\n", inum)
 	}
-	imem, err := icache.Iref(inum, "freeOrphan")
-	if err != 0 {
-		panic("freeOrphan")
-	}
+	imem := icache.Iref(inum, "freeOrphan")
 	v := imem.ref.Down()
 	if v != 0 {
 		panic("freeOrphan")
@@ -1348,15 +1338,15 @@ func (icache *icache_t) Stats() string {
 	return "icache " + icache.cache.Stats()
 }
 
-func (icache *icache_t) Iref(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
+func (icache *icache_t) Iref(inum common.Inum_t, s string) *imemnode_t {
 	return icache._iref(inum, false)
 }
 
-func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) (*imemnode_t, common.Err_t) {
+func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) *imemnode_t {
 	return icache._iref(inum, true)
 }
 
-func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, common.Err_t) {
+func (icache *icache_t) _iref(inum common.Inum_t, lock bool) *imemnode_t {
 	ref, created := icache.cache.Lookup(int(inum),
 		func(in int) Obj_t {
 			ret := &imemnode_t{}
@@ -1372,11 +1362,7 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, commo
 		// ret is locked
 		ret.fs = icache.fs
 		ret.ref = ref
-		err := ret.idm_init(inum)
-		if err != 0 {
-			panic("idm_init")
-			return nil, err
-		}
+		ret.idm_init(inum)
 	}
 	locked := created
 	if locked != lock {
@@ -1386,7 +1372,7 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) (*imemnode_t, commo
 			ret.iunlock("")
 		}
 	}
-	return ret, 0
+	return ret
 }
 
 // Grab locks on inodes references in imems.  handles duplicates.

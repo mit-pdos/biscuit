@@ -58,6 +58,7 @@ func (dc *dshard_t) remove(pn string) {
 func (dc *dshard_t) lookup(pn string) (*imemnode_t, bool) {
 	dc.RLock()
 	defer dc.RUnlock()
+
 	var idm *imemnode_t
 	de, ok := dc.dcache[pn]
 	if ok {

@@ -161,10 +161,7 @@ func (fs *Fs_t) Fs_link(old string, new string, cwd *common.Cwd_t) common.Err_t 
 	}
 	return 0
 undo:
-	orig, err1 := fs.icache.Iref_locked(inum, "fs_link_undo")
-	if err1 != 0 {
-		panic("bizare")
-	}
+	orig = fs.icache.Iref_locked(inum, "fs_link_undo")
 	orig._linkdown(opid)
 	orig.iunlock_refdown("fs_link_undo")
 	return err
@@ -199,11 +196,8 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 		par.iunlock_refdown("fs_unlink_par")
 		return err
 	}
-	child, err = fs.icache.Iref(childi, "fs_unlink_child")
-	if err != 0 {
-		par.iunlock_refdown("fs_unlink_par")
-		return err
-	}
+	child = fs.icache.Iref(childi, "fs_unlink_child")
+
 	// unlock parent after we have a ref to child
 	par.iunlock("fs_unlink_par")
 
@@ -281,11 +275,8 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 		opar.iunlock_refdown("fs_rename_opar")
 		return err
 	}
-	ochild, err := fs.icache.Iref(childi, "fs_rename_ochild")
-	if err != 0 {
-		opar.iunlock_refdown("fs_rename_opar")
-		return err
-	}
+	ochild := fs.icache.Iref(childi, "fs_rename_ochild")
+
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
 
@@ -328,14 +319,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
-		var err1 common.Err_t
-		nchild, err1 = fs.icache.Iref(nchildinum, "fs_rename_ochild")
-		if err1 != 0 {
-			opar.Refdown("fs_name_opar")
-			ochild.Refdown("fs_name_ochild")
-			npar.iunlock_refdown("fs_name_npar")
-			return err
-		}
+		nchild = fs.icache.Iref(nchildinum, "fs_rename_ochild")
 		npar.iunlock("")
 
 		var inodes []*imemnode_t
@@ -471,10 +455,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 		panic("root is always ancestor")
 	}
 	// walk up to iroot
-	here, err := fs.icache.Iref(start.inum, "_isancestor")
-	if err != 0 {
-		panic("_isancestor: start must exist")
-	}
+	here := fs.icache.Iref(start.inum, "_isancestor")
 	gimme := common.Bounds(common.B_FS_T__ISANCESTOR)
 	for here.inum != iroot {
 		if !common.Resadd_noblock(gimme) {
@@ -495,11 +476,8 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 			panic("xxx")
 		} else {
 			var next *imemnode_t
-			next, err = fs.icache.Iref(nexti, "_isancestor_next")
+			next = fs.icache.Iref(nexti, "_isancestor_next")
 			here.iunlock_refdown("_isancestor")
-			if err != 0 {
-				return err
-			}
 			here = next
 		}
 	}
@@ -537,11 +515,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 		}
 		offset = toff
 	}
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "_read")
-	if err != 0 {
-		fo.Unlock()
-		return 0, err
-	}
+	idm := fo.fs.icache.Iref_locked(fo.priv, "_read")
 	did, err := idm.do_read(dst, offset)
 	if !useoffset && err == 0 {
 		fo.offset += did
@@ -579,10 +553,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 		offset = toff
 		append = false
 	}
-	idm, err := fo.fs.icache.Iref(fo.priv, "_write")
-	if err != 0 {
-		return 0, err
-	}
+	idm := fo.fs.icache.Iref(fo.priv, "_write")
 	did, err := idm.do_write(src, offset, append)
 	if !useoffset && err == 0 {
 		fo.offset += did
@@ -613,11 +584,8 @@ func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
 		fmt.Printf("truncate: %v %v\n", fo.priv, newlen)
 	}
 
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "truncate")
-	if err != 0 {
-		return err
-	}
-	err = idm.do_trunc(opid, newlen)
+	idm := fo.fs.icache.Iref_locked(fo.priv, "truncate")
+	err := idm.do_trunc(opid, newlen)
 	idm.iunlock_refdown("truncate")
 	return err
 }
@@ -631,11 +599,8 @@ func (fo *fsfops_t) fstat(st *common.Stat_t) common.Err_t {
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", fo.priv, st)
 	}
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "fstat")
-	if err != 0 {
-		return err
-	}
-	err = idm.do_stat(st)
+	idm := fo.fs.icache.Iref_locked(fo.priv, "fstat")
+	err := idm.do_stat(st)
 	idm.iunlock_refdown("fstat")
 	return err
 }
@@ -685,11 +650,7 @@ func (fo *fsfops_t) Reopen() common.Err_t {
 		return -common.EBADF
 	}
 
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "reopen")
-	if err != 0 {
-		fo.Unlock()
-		return err
-	}
+	idm := fo.fs.icache.Iref_locked(fo.priv, "reopen")
 	fo.fs.istats.Nreopen.Inc()
 	idm.Refup("reopen") // close will decrease it
 	idm.iunlock_refdown("reopen")
@@ -736,11 +697,7 @@ func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, commo
 		return nil, -common.EBADF
 	}
 
-	idm, err := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
-	if err != 0 {
-		fo.Unlock()
-		return nil, err
-	}
+	idm := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
 	mmi, err := idm.do_mmapi(offset, len, inc)
 	idm.iunlock_refdown("mmapi")
 
@@ -1217,12 +1174,7 @@ func (fs *Fs_t) Fs_mkdir(paths string, mode int, cwd *common.Cwd_t) common.Err_t
 		return err
 	}
 
-	child, err := fs.icache.Iref(childi, "fs_mkdir_child")
-	if err != 0 {
-		par.create_undo(opid, childi, fn)
-		return err
-	}
-
+	child := fs.icache.Iref(childi, "fs_mkdir_child")
 	child.do_insert(opid, ".", childi)
 	child.do_insert(opid, "..", par.inum)
 	child.Refdown("fs_mkdir3")
@@ -1288,12 +1240,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 		if childi <= 0 {
 			panic("non-positive childi\n")
 		}
-		idm, err = fs.icache.Iref(childi, "Fs_open_inner_child")
-		if err != 0 {
-			par.create_undo(opid, childi, fn)
-			par.iunlock_refdown("Fs_open_inner_par")
-			return ret, err
-		}
+		idm = fs.icache.Iref(childi, "Fs_open_inner_child")
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
@@ -1419,12 +1366,7 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 		fmt.Printf("Fs_close: %d %v\n", opid, priv)
 	}
 
-	idm, err := fs.icache.Iref_locked(priv, "Fs_close")
-	if err != 0 {
-		fs.op_end_and_free(opid)
-		return err
-	}
-
+	idm := fs.icache.Iref_locked(priv, "Fs_close")
 	idm.Refdown("Fs_close")
 	idm.iunlock_refdown("Fs_close")
 
@@ -1478,18 +1420,11 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 // locks no idaemon.
 func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
-	var err common.Err_t
 	fs.istats.Nnamei.Inc()
 	if len(paths) == 0 || paths[0] != '/' {
-		start, err = fs.icache.Iref(cwd.Fd.Fops.Pathi(), "fs_namei_cwd")
-		if err != 0 {
-			panic("cannot load cwd")
-		}
+		start = fs.icache.Iref(cwd.Fd.Fops.Pathi(), "fs_namei_cwd")
 	} else {
-		start, err = fs.icache.Iref(iroot, "fs_namei_root")
-		if err != 0 {
-			panic("cannot load iroot")
-		}
+		start = fs.icache.Iref(iroot, "fs_namei_root")
 	}
 	idm := start
 	pp := common.Pathparts_t{}
@@ -1505,11 +1440,8 @@ func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*im
 			return nil, err
 		}
 		if n != idm.inum {
-			next, err := fs.icache.Iref(n, "fs_namei_next")
+			next := fs.icache.Iref(n, "fs_namei_next")
 			idm.iunlock_refdown("fs_namei_idm")
-			if err != 0 {
-				return nil, err
-			}
 			idm = next
 		} else {
 			idm.iunlock("fs_namei_idm_next")
