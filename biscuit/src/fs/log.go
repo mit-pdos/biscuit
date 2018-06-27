@@ -174,19 +174,19 @@ func (log *log_t) Loglen() int {
 
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
-func (log *log_t) Get_fill(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
+func (log *log_t) Get_fill(blkn int, s string, lock bool) *Bdev_block_t {
 	t := common.Rdtsc()
 	r := log.ml.bcache.Get_fill(blkn, s, lock)
 	log.stats.Readcycles.Add(t)
-	return r, 0
+	return r
 }
 
-func (log *log_t) Get_zero(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
-	return log.ml.bcache.Get_zero(blkn, s, lock), 0
+func (log *log_t) Get_zero(blkn int, s string, lock bool) *Bdev_block_t {
+	return log.ml.bcache.Get_zero(blkn, s, lock)
 }
 
-func (log *log_t) Get_nofill(blkn int, s string, lock bool) (*Bdev_block_t, common.Err_t) {
-	return log.ml.bcache.Get_nofill(blkn, s, lock), 0
+func (log *log_t) Get_nofill(blkn int, s string, lock bool) *Bdev_block_t {
+	return log.ml.bcache.Get_nofill(blkn, s, lock)
 }
 
 func (log *log_t) Relse(blk *Bdev_block_t, s string) {

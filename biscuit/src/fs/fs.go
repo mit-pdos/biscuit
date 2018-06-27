@@ -1045,10 +1045,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 	var did int
 	for dst.Remain() != 0 {
 		blkno := raw.offset / BSIZE
-		b, err := raw.fs.fslog.Get_fill(blkno, "read", false)
-		if err != 0 {
-			return 0, err
-		}
+		b := raw.fs.fslog.Get_fill(blkno, "read", false)
 		boff := raw.offset % BSIZE
 		c, err := dst.Uiowrite(b.Data[boff:])
 		if err != 0 {

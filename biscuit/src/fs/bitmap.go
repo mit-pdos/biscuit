@@ -12,7 +12,7 @@ const bitsperblk = BSIZE * 8
 
 type storage_i interface {
 	Write(opid_t, *Bdev_block_t)
-	Get_fill(int, string, bool) (*Bdev_block_t, common.Err_t)
+	Get_fill(int, string, bool) *Bdev_block_t
 	Relse(*Bdev_block_t, string)
 }
 
@@ -40,15 +40,12 @@ func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
 	a.freestart = start
 	a.freelen = len
 	a.storage = s
-	_, err := a.apply(0, func(b, v int) bool {
+	a.apply(0, func(b, v int) bool {
 		if v == 0 {
 			a.nfreebits++
 		}
 		return true
 	})
-	if err != 0 {
-		panic("apply failed")
-	}
 	return a
 }
 
@@ -72,7 +69,7 @@ func (alloc *bitmap_t) bitmapblkno(bit int) int {
 	return alloc.freestart + blkno(bit)
 }
 
-func (alloc *bitmap_t) Fbread(blockno int) (*Bdev_block_t, common.Err_t) {
+func (alloc *bitmap_t) Fbread(blockno int) *Bdev_block_t {
 	if blockno < 0 || blockno >= alloc.freelen {
 		panic("naughty blockno")
 	}
@@ -81,12 +78,11 @@ func (alloc *bitmap_t) Fbread(blockno int) (*Bdev_block_t, common.Err_t) {
 
 // apply f to every bit starting from start, until f is false.  return true if
 // make a complete pass.
-func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err_t) {
+func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) bool {
 	var ca common.Cacheallocs_t
 	gimme := common.Bounds(common.B_BITMAP_T_APPLY)
 
 	var blk *Bdev_block_t
-	var err common.Err_t
 	var lastbn = -1
 	var tryevict bool
 	for bit := start; bit < alloc.freelen*bitsperblk; bit++ {
@@ -99,10 +95,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 				blk.Unlock()
 				alloc.storage.Relse(blk, "alloc apply")
 			}
-			blk, err = alloc.Fbread(bn)
-			if err != 0 {
-				return false, err
-			}
+			blk = alloc.Fbread(bn)
 			tryevict = ca.Shouldevict(gimme)
 		}
 		byteoff := byteno(bit)
@@ -112,7 +105,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 		if !f(bit, int(v)) {
 			blk.Unlock()
 			alloc.storage.Relse(blk, "alloc apply")
-			return false, 0
+			return false
 		}
 		lastbn = bn
 
@@ -121,7 +114,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) (bool, common.Err
 		blk.Unlock()
 		alloc.storage.Relse(blk, "alloc apply")
 	}
-	return true, 0
+	return true
 }
 
 func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, common.Err_t) {
@@ -130,10 +123,7 @@ func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, common.Err_t) {
 	byte := byteno(alloc.lastbit)
 	bit := byteoffset(alloc.lastbit)
 
-	blk, err := alloc.Fbread(blkno)
-	if err != 0 {
-		return 0, err
-	}
+	blk := alloc.Fbread(blkno)
 	if blk.Data[byte]&(1<<uint(bit)) == 0 {
 		alloc.lastbit++
 		blk.Data[byte] |= (1 << uint(bit))
@@ -155,17 +145,13 @@ func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 	if err == 0 {
 		alloc.stats.Nhit.Inc()
 	} else {
-		_, err = alloc.apply(0, func(b, v int) bool {
+		alloc.apply(0, func(b, v int) bool {
 			if v == 0 {
 				alloc.lastbit = b
 				return false
 			}
 			return true
 		})
-		if err != 0 {
-			alloc.Unlock()
-			return 0, err
-		}
 		bit, err = alloc.CheckAndMark(opid)
 		if err != 0 {
 			panic("FindAndMark")
@@ -177,7 +163,7 @@ func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 	return bit, 0
 }
 
-func (alloc *bitmap_t) Unmark(opid opid_t, bit int) common.Err_t {
+func (alloc *bitmap_t) Unmark(opid opid_t, bit int) {
 	alloc.Lock()
 	//defer alloc.Unlock()
 
@@ -192,11 +178,7 @@ func (alloc *bitmap_t) Unmark(opid opid_t, bit int) common.Err_t {
 	fblkno := blkno(bit)
 	fbyteoff := byteno(bit)
 	fbitoff := byteoffset(bit)
-	fblk, err := alloc.Fbread(fblkno)
-	if err != 0 {
-		alloc.Unlock()
-		return err
-	}
+	fblk := alloc.Fbread(fblkno)
 	fblk.Data[fbyteoff] &= ^(1 << uint(fbitoff))
 	fblk.Unlock()
 	alloc.storage.Write(opid, fblk)
@@ -204,10 +186,9 @@ func (alloc *bitmap_t) Unmark(opid opid_t, bit int) common.Err_t {
 	alloc.stats.Nfree.Inc()
 	alloc.nfreebits++
 	alloc.Unlock()
-	return 0
 }
 
-func (alloc *bitmap_t) Mark(opid opid_t, bit int) common.Err_t {
+func (alloc *bitmap_t) Mark(opid opid_t, bit int) {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -222,15 +203,11 @@ func (alloc *bitmap_t) Mark(opid opid_t, bit int) common.Err_t {
 	fblkno := blkno(bit)
 	fbyteoff := byteno(bit)
 	fbitoff := byteoffset(bit)
-	fblk, err := alloc.Fbread(fblkno)
-	if err != 0 {
-		return err
-	}
+	fblk := alloc.Fbread(fblkno)
 	fblk.Data[fbyteoff] |= 1 << uint(fbitoff)
 	fblk.Unlock()
 	alloc.storage.Write(opid, fblk)
 	alloc.storage.Relse(fblk, "Mark")
-	return 0
 }
 
 type mark_t int
@@ -260,7 +237,7 @@ func smallest(mark, unmark []int) (int, mark_t) {
 }
 
 // mark and umark bits in a single shot.
-func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t {
+func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) {
 	alloc.Lock()
 	defer alloc.Unlock()
 
@@ -272,7 +249,6 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t 
 	}
 
 	var blk *Bdev_block_t
-	var err common.Err_t
 	for len(mark) > 0 || len(unmark) > 0 {
 		bit, op := smallest(mark, unmark)
 		if bit < 0 {
@@ -290,10 +266,7 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t 
 			blk = nil
 		}
 		if blk == nil {
-			blk, err = alloc.Fbread(fblkno)
-			if err != 0 {
-				return err
-			}
+			blk = alloc.Fbread(fblkno)
 		}
 		if op == MARK {
 			blk.Data[fbyteoff] |= 1 << uint(fbitoff)
@@ -308,7 +281,6 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) common.Err_t 
 		alloc.storage.Write(opid, blk)
 		alloc.storage.Relse(blk, "MarkUnmark")
 	}
-	return 0
 }
 
 func (alloc *bitmap_t) Stats() string {

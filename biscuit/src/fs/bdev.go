@@ -343,7 +343,7 @@ func (balloc *bbitmap_t) Balloc(opid opid_t) (int, common.Err_t) {
 	return ret, 0
 }
 
-func (balloc *bbitmap_t) Bfree(opid opid_t, blkno int) common.Err_t {
+func (balloc *bbitmap_t) Bfree(opid opid_t, blkno int) {
 	blkno -= balloc.first
 	if bdev_debug {
 		fmt.Printf("bfree: %v free before %d\n", blkno, balloc.alloc.nfreebits)
@@ -354,7 +354,7 @@ func (balloc *bbitmap_t) Bfree(opid opid_t, blkno int) common.Err_t {
 	if blkno >= balloc.len*BSIZE*8 {
 		panic("bfree too large")
 	}
-	return balloc.alloc.Unmark(opid, blkno)
+	balloc.alloc.Unmark(opid, blkno)
 }
 
 func (balloc *bbitmap_t) Stats() string {
