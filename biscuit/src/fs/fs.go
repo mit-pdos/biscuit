@@ -1480,8 +1480,8 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	}
 	//fmt.Printf("FS EVICT\n")
 	// XXX blow away dcache first
-	fs.bcache.cache.Evict_half()
-	fs.icache.cache.Evict_half() // doesn't do anything because inodes are evicted when unlinked
+	//fs.bcache.cache.Evict_half()
+	//fs.icache.cache.Evict_half() // doesn't do anything because inodes are evicted when unlinked
 	return fs.Sizes()
 }
 

@@ -22,6 +22,8 @@ import "common"
 
 type cstats_t struct {
 	Nevict common.Counter_t
+	Nhit   common.Counter_t
+	Nadd   common.Counter_t
 }
 
 type Obj_t interface {
@@ -63,7 +65,6 @@ func (ref *Objref_t) Down() int64 {
 
 type cache_t struct {
 	sync.Mutex
-	maxsize   int
 	cache     map[int]*Objref_t
 	objreflru objreflru_t
 	stats     cstats_t
@@ -71,7 +72,6 @@ type cache_t struct {
 
 func mkCache(size int) *cache_t {
 	c := &cache_t{}
-	c.maxsize = size
 	c.cache = make(map[int]*Objref_t, size)
 	return c
 }
@@ -89,6 +89,7 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 	if ok {
 		// other threads may have a reference to this item and may
 		// Ref{up,down}; the increment must therefore be atomic
+		c.stats.Nhit.Inc()
 		e.Up()
 		c.objreflru.mkhead(e)
 		c.Unlock()
@@ -98,6 +99,7 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 	e.Obj = mkobj(key)
 	c.cache[key] = e
 	c.objreflru.mkhead(e)
+	c.stats.Nadd.Inc()
 	c.Unlock()
 	return e, true
 }
@@ -173,6 +175,48 @@ func (c *cache_t) delete(o *Objref_t) {
 	delete(c.cache, o.Key)
 	c.objreflru.remove(o)
 	c.stats.Nevict.Inc()
+}
+
+type ccache_t struct {
+	shards []*cache_t
+}
+
+func MkCcache(size int) *ccache_t {
+	cc := &ccache_t{}
+	cc.shards = make([]*cache_t, NSHARD)
+	for i := 0; i < NSHARD; i++ {
+		cc.shards[i] = mkCache(size)
+	}
+	return cc
+
+}
+
+func (cc *ccache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
+	i := key % NSHARD
+	return cc.shards[i].Lookup(key, mkobj)
+}
+
+func (cc *ccache_t) Remove(key int) {
+	i := key % NSHARD
+	cc.shards[i].Remove(key)
+}
+
+func (cc *ccache_t) Len() int {
+	l := 0
+	for _, s := range cc.shards {
+		l += s.Len()
+	}
+	return l
+}
+
+func (cc *ccache_t) Stats() string {
+	r := "ccache: "
+	for _, s := range cc.shards {
+		r += s.Stats()
+		r += " "
+	}
+	return r + "\n"
+
 }
 
 // LRU list of references

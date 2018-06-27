@@ -1214,7 +1214,7 @@ func fieldw(p *common.Bytepg_t, field int, val int) {
 //
 
 type icache_t struct {
-	cache        *cache_t
+	cache        *ccache_t
 	fs           *Fs_t
 	orphanbitmap *bitmap_t
 
@@ -1233,7 +1233,7 @@ const maxinodepersys = 4
 
 func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache := &icache_t{}
-	icache.cache = mkCache(common.Syslimit.Vnodes)
+	icache.cache = MkCcache(common.Syslimit.Vnodes)
 	icache.fs = fs
 	icache.orphanbitmap = mkAllocater(fs, start, len, fs.fslog)
 	// dead is bounded the number of inodes refdowned in system call, and
