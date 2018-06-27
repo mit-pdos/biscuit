@@ -756,6 +756,21 @@ var Lost struct {
 	User uint
 }
 
+var Freq uint = 4000
+
+func Bluh() {
+	if hackmode == 0 || dumrand(0, Freq) != 0 {
+		return
+	}
+	buf := make([]uintptr, 8)
+	got := callers(1, buf)
+	buf = buf[:got]
+	print("--\n")
+	for i := range buf {
+		print(hex(buf[i]), "\n")
+	}
+}
+
 //go:nosplit
 //go:nowritebarrierrec
 func _addone(rip uintptr) {

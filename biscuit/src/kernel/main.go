@@ -809,12 +809,17 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		if c == '\\' {
 			debug.SetTraceback("all")
 			panic("yahoo")
+		} else if c == '!' {
+			runtime.Freq /= 2
+			fmt.Printf("freq: %v\n", runtime.Freq)
 		} else if c == '@' {
+			runtime.Freq *= 2
+			fmt.Printf("freq: %v\n", runtime.Freq)
 			//common.Lims = !common.Lims
 			//fmt.Printf("Lims: %v\n", common.Lims)
 
-			fmt.Printf("toggle\n")
-			runtime.GCDebugToggle()
+			//fmt.Printf("toggle\n")
+			//runtime.GCDebugToggle()
 
 		} else if c == '%' {
 			//fmt.Printf("distinct simulated failures: %v\n",
