@@ -16,15 +16,17 @@ type dcentry_t struct {
 type dcache_stats_t struct {
 	Nhit  common.Counter_t
 	Nmiss common.Counter_t
+	Nadd  common.Counter_t
+	Ndel  common.Counter_t
 }
 
-type dcache_t struct {
-	sync.Mutex
+type dshard_t struct {
+	sync.RWMutex
 	dcache map[string]*dcentry_t
 	stats  dcache_stats_t
 }
 
-func (dc *dcache_t) add(pn string, idm *imemnode_t) {
+func (dc *dshard_t) add(pn string, idm *imemnode_t) {
 	dc.Lock()
 	defer dc.Unlock()
 
@@ -33,9 +35,10 @@ func (dc *dcache_t) add(pn string, idm *imemnode_t) {
 	}
 	dc.dcache[pn] = &dcentry_t{idm: idm}
 	idm.Refup("add")
+	dc.stats.Nadd.Inc()
 }
 
-func (dc *dcache_t) remove(pn string) {
+func (dc *dshard_t) remove(pn string) {
 	dc.Lock()
 	defer dc.Unlock()
 
@@ -48,12 +51,13 @@ func (dc *dcache_t) remove(pn string) {
 		// alternate design: caller invokes Refdown()
 		de.idm.Refdown("dc.remove")
 		delete(dc.dcache, pn)
+		dc.stats.Ndel.Inc()
 	}
 }
 
-func (dc *dcache_t) lookup(pn string) (*imemnode_t, bool) {
-	dc.Lock()
-	defer dc.Unlock()
+func (dc *dshard_t) lookup(pn string) (*imemnode_t, bool) {
+	dc.RLock()
+	defer dc.RUnlock()
 	var idm *imemnode_t
 	de, ok := dc.dcache[pn]
 	if ok {
@@ -68,29 +72,29 @@ func (dc *dcache_t) lookup(pn string) (*imemnode_t, bool) {
 	return idm, ok
 }
 
-func (dc *dcache_t) Stats() string {
-	s := "dcache" + common.Stats2String(dc.stats)
+func (dc *dshard_t) Stats() string {
+	s := common.Stats2String(dc.stats)
 	dc.stats = dcache_stats_t{}
 	return s
 }
 
-func mkDcache() *dcache_t {
-	c := &dcache_t{}
+func mkDshard() *dshard_t {
+	c := &dshard_t{}
 	c.dcache = make(map[string]*dcentry_t)
 	return c
 }
 
 const NSHARD = 100
 
-type shardtable_t struct {
-	shards []*dcache_t
+type dcache_t struct {
+	shards []*dshard_t
 }
 
-func MkShardTable() *shardtable_t {
-	s := &shardtable_t{}
-	s.shards = make([]*dcache_t, NSHARD)
+func MkShardTable() *dcache_t {
+	s := &dcache_t{}
+	s.shards = make([]*dshard_t, NSHARD)
 	for i := 0; i < NSHARD; i++ {
-		s.shards[i] = mkDcache()
+		s.shards[i] = mkDshard()
 	}
 	return s
 }
@@ -101,17 +105,27 @@ func hash(s string) uint32 {
 	return h.Sum32()
 }
 
-func (st *shardtable_t) lookup(pn string) (*imemnode_t, bool) {
+func (dc *dcache_t) Lookup(pn string) (*imemnode_t, bool) {
 	i := hash(pn)
-	return st.shards[i%NSHARD].lookup(pn)
+	return dc.shards[i%NSHARD].lookup(pn)
 }
 
-func (st *shardtable_t) add(pn string, idm *imemnode_t) {
+func (dc *dcache_t) Add(pn string, idm *imemnode_t) {
 	i := hash(pn)
-	st.shards[i%NSHARD].add(pn, idm)
+	dc.shards[i%NSHARD].add(pn, idm)
 }
 
-func (st *shardtable_t) remove(pn string) {
+func (dc *dcache_t) Remove(pn string) {
 	i := hash(pn)
-	st.shards[i%NSHARD].remove(pn)
+	dc.shards[i%NSHARD].remove(pn)
+}
+
+func (dc *dcache_t) Stats() string {
+	r := "dcache: "
+	for _, s := range dc.shards {
+		r += s.Stats()
+		r += " "
+	}
+	return r + "\n"
+
 }

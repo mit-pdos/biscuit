@@ -19,7 +19,7 @@ type Fs_t struct {
 	superb       Superblock_t
 	bcache       *bcache_t
 	icache       *icache_t
-	dcache       *shardtable_t
+	dcache       *dcache_t
 	fslog        *log_t
 	ialloc       *ibitmap_t
 	balloc       *bbitmap_t
@@ -235,7 +235,7 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 		return err
 	}
 	p := cwd.Canonicalpath(paths)
-	fs.dcache.remove(p)
+	fs.dcache.Remove(p)
 	child._linkdown(opid)
 
 	return 0
@@ -446,10 +446,12 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 		panic("probed")
 	}
 	p := cwd.Canonicalpath(oldp)
-	fs.dcache.remove(p)
+	fs.dcache.Remove(p)
 	if npar.do_insert(opid, nfn, ochild.inum) != 0 {
 		panic("probed")
 	}
+	p = cwd.Canonicalpath(newp)
+	fs.dcache.Add(p, nchild)
 
 	// update '..'
 	if odir {
@@ -1298,7 +1300,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
-		fs.dcache.add(cwd.Canonicalpath(paths), idm)
+		fs.dcache.Add(cwd.Canonicalpath(paths), idm)
 
 		oexcl := flags&common.O_EXCL != 0
 		if exists {
@@ -1522,13 +1524,13 @@ func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*im
 func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
 	err := common.Err_t(0)
 	p := cwd.Canonicalpath(paths)
-	idm, ok := fs.dcache.lookup(p)
+	idm, ok := fs.dcache.Lookup(p)
 	if ok {
 		idm.Refup("fs_namei")
 	} else {
 		idm, err = fs.fs_namei_slow(opid, paths, cwd)
 		if err == 0 {
-			fs.dcache.add(p, idm)
+			fs.dcache.Add(p, idm)
 		}
 	}
 	return idm, err
@@ -1556,7 +1558,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 
 func (fs *Fs_t) Fs_statistics() string {
 	s := fs.istats.Stats()
-	// s += fs.dcache.Stats()
+	s += fs.dcache.Stats()
 	if !memfs {
 		s += fs.fslog.Stats()
 	}
