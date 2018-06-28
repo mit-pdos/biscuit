@@ -4,6 +4,7 @@ import "fmt"
 import "math/rand"
 import "strconv"
 import "sync"
+import "sync/atomic"
 import "testing"
 import "time"
 
@@ -49,7 +50,7 @@ func TestSimple(t *testing.T) {
 }
 
 const NPROC = 4
-const NOP = 1000000
+const NSEC = 1
 
 func doop(t *testing.T, ht hashtable_i, k string, v int) {
 
@@ -68,25 +69,33 @@ func doop(t *testing.T, ht hashtable_i, k string, v int) {
 	}
 }
 
-func writer(t *testing.T, ht hashtable_i, id int) {
-	for i := 0; i < NOP; i++ {
+func writer(t *testing.T, ht hashtable_i, id int, done *int32) int {
+	n := 0
+	for atomic.LoadInt32(done) == 0 {
 		v := rand.Intn(SZ)
 		k := strconv.Itoa(v)
 		k = fmt.Sprintf("%d.%s", id, k)
 		doop(t, ht, k, v)
+		n++
 	}
+	return n
 }
 
-func reader(t *testing.T, ht hashtable_i) {
-	v := rand.Intn(SZ)
-	k := strconv.Itoa(v)
-	r, ok := ht.Get(k)
-	if !ok {
-		t.Fatalf("%v key", k)
+func reader(t *testing.T, ht hashtable_i, done *int32) int {
+	n := 0
+	for atomic.LoadInt32(done) == 0 {
+		v := rand.Intn(SZ)
+		k := strconv.Itoa(v)
+		r, ok := ht.Get(k)
+		if !ok {
+			t.Fatalf("%v key", k)
+		}
+		if v != r {
+			t.Fatalf("%v val", v)
+		}
+		n++
 	}
-	if v != r {
-		t.Fatalf("%v val", v)
-	}
+	return n
 }
 
 func TestManyWriter(t *testing.T) {
@@ -98,17 +107,21 @@ func TestManyWriter(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	start := time.Now()
+	total := 0
+	done := int32(0)
 	for p := 0; p < NPROC; p++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			writer(t, ht, id)
+			n := writer(t, ht, id, &done)
+			total += n
 		}(p)
 	}
+
+	time.Sleep(NSEC * time.Second)
+	atomic.StoreInt32(&done, 1)
 	wg.Wait()
-	stop := time.Now()
-	fmt.Printf("TestMany took %v\n", stop.Sub(start))
+	fmt.Printf("TestManyWriter: %d/s\n", total)
 }
 
 func TestManyReader(t *testing.T) {
@@ -119,18 +132,20 @@ func TestManyReader(t *testing.T) {
 	fill(t, ht, SZ)
 
 	var wg sync.WaitGroup
-
-	start := time.Now()
+	done := int32(0)
+	total := 0
 	for p := 0; p < NPROC; p++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			reader(t, ht)
+			n := reader(t, ht, &done)
+			total += n
 		}(p)
 	}
+	time.Sleep(NSEC * time.Second)
+	atomic.StoreInt32(&done, 1)
 	wg.Wait()
-	stop := time.Now()
-	fmt.Printf("TestManyReader took %v\n", stop.Sub(start))
+	fmt.Printf("TestManyReader:  %d/s\n", total)
 }
 
 func TestManyReaderOneWriter(t *testing.T) {
@@ -141,22 +156,24 @@ func TestManyReaderOneWriter(t *testing.T) {
 	fill(t, ht, SZ)
 
 	var wg sync.WaitGroup
-
-	start := time.Now()
+	done := int32(0)
+	nreads := 0
+	nwrites := 0
 	for p := 0; p < NPROC; p++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			if id == 0 {
-				writer(t, ht, id)
+				nwrites += writer(t, ht, id, &done)
 			} else {
-				reader(t, ht)
+				nreads += reader(t, ht, &done)
 			}
 		}(p)
 	}
+	time.Sleep(NSEC * time.Second)
+	atomic.StoreInt32(&done, 1)
 	wg.Wait()
-	stop := time.Now()
-	fmt.Printf("TestManyReaderOneWriter took %v\n", stop.Sub(start))
+	fmt.Printf("TestManyReaderOneWriter: reads %d/s writes %d/s\n", nreads, nwrites)
 }
 
 func TestManyReaderOneWriterStd(t *testing.T) {
@@ -167,20 +184,22 @@ func TestManyReaderOneWriterStd(t *testing.T) {
 	fill(t, ht, SZ)
 
 	var wg sync.WaitGroup
-
-	start := time.Now()
+	done := int32(0)
+	nreads := 0
+	nwrites := 0
 	for p := 0; p < NPROC; p++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			if id == 0 {
-				writer(t, ht, id)
+				nwrites += writer(t, ht, id, &done)
 			} else {
-				reader(t, ht)
+				nreads += reader(t, ht, &done)
 			}
 		}(p)
 	}
+	time.Sleep(NSEC * time.Second)
+	atomic.StoreInt32(&done, 1)
 	wg.Wait()
-	stop := time.Now()
-	fmt.Printf("TestManyReaderOneWriterStd took %v\n", stop.Sub(start))
+	fmt.Printf("TestManyReaderOneWriterStd: reads %d/s writes %d/s\n", nreads, nwrites)
 }
