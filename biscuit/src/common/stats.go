@@ -7,7 +7,8 @@ import "strconv"
 import "strings"
 import "unsafe"
 
-const Stats = true
+const Stats = false
+const Timing = false
 
 func Rdtsc() uint64 {
 	if Stats {
@@ -28,7 +29,7 @@ func (c *Counter_t) Inc() {
 }
 
 func (c *Cycles_t) Add(m uint64) {
-	if Stats {
+	if Timing {
 		n := (*int64)(unsafe.Pointer(c))
 		atomic.AddInt64(n, int64(Rdtsc()-m))
 	}

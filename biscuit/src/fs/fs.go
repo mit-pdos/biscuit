@@ -28,7 +28,7 @@ type Fs_t struct {
 
 func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
-	memfs = common.Kernel // use in-memory file system
+	// memfs = common.Kernel // use in-memory file system
 	cons = console
 
 	// reset taken
@@ -88,11 +88,9 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, 
 	fs.icache = mkIcache(fs, iorphanstart, iorphanlen)
 	fs.icache.RecoverOrphans()
 
-	fs.dcache = MkShardTable()
+	fs.dcache = mkDcache()
 
 	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
-
-	// fs.Dcache = true
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }

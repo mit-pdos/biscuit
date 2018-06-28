@@ -34,7 +34,7 @@ const bdev_debug = false
 //
 
 type bcache_t struct {
-	cache *ccache_t
+	cache *cache_t
 	mem   Blockmem_i
 	disk  Disk_i
 	sync.Mutex
@@ -45,7 +45,7 @@ func mkBcache(mem Blockmem_i, disk Disk_i) *bcache_t {
 	bcache := &bcache_t{}
 	bcache.mem = mem
 	bcache.disk = disk
-	bcache.cache = MkCcache(common.Syslimit.Blocks)
+	bcache.cache = mkCache(common.Syslimit.Blocks)
 	bcache.pins = make(map[common.Pa_t]*Bdev_block_t)
 	return bcache
 }

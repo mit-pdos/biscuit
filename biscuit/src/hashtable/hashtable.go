@@ -1,4 +1,4 @@
-package common
+package hashtable
 
 import "sync/atomic"
 import "fmt"
@@ -24,12 +24,12 @@ type bucket_t struct {
 	first *elem_t
 }
 
-type hashtable_t struct {
+type Hashtable_t struct {
 	table []*bucket_t
 }
 
-func MkHash(size int) *hashtable_t {
-	ht := &hashtable_t{}
+func MkHash(size int) *Hashtable_t {
+	ht := &Hashtable_t{}
 	ht.table = make([]*bucket_t, size)
 	for i, _ := range ht.table {
 		ht.table[i] = &bucket_t{}
@@ -37,7 +37,7 @@ func MkHash(size int) *hashtable_t {
 	return ht
 }
 
-func (ht *hashtable_t) String() string {
+func (ht *Hashtable_t) String() string {
 	s := ""
 	for i, b := range ht.table {
 		if b.first != nil {
@@ -51,7 +51,7 @@ func (ht *hashtable_t) String() string {
 	return s
 }
 
-func (ht *hashtable_t) Get(key interface{}) (interface{}, bool) {
+func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 
@@ -63,7 +63,7 @@ func (ht *hashtable_t) Get(key interface{}) (interface{}, bool) {
 	return nil, false
 }
 
-func (ht *hashtable_t) Put(key interface{}, value interface{}) {
+func (ht *Hashtable_t) Put(key interface{}, value interface{}) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	b.Lock()
@@ -96,7 +96,7 @@ func (ht *hashtable_t) Put(key interface{}, value interface{}) {
 	add(last, b)
 }
 
-func (ht *hashtable_t) Del(key interface{}) {
+func (ht *Hashtable_t) Del(key interface{}) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	b.Lock()
@@ -126,7 +126,7 @@ func (ht *hashtable_t) Del(key interface{}) {
 	panic("del of non-existing key")
 }
 
-func (ht *hashtable_t) hash(keyHash uint32) int {
+func (ht *Hashtable_t) hash(keyHash uint32) int {
 	return int(keyHash % uint32(len(ht.table)))
 }
 

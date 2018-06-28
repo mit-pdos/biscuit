@@ -1,11 +1,11 @@
 package fs
 
 //import "fmt"
-import "strconv"
 import "sync"
 import "sync/atomic"
 
 import "common"
+import "hashtable"
 
 // Fixed-size cache of objects. Main invariant: an object is in memory once so
 // that threads see each other's updates.  The challenging case is that an
@@ -65,28 +65,29 @@ func (ref *Objref_t) Down() int64 {
 
 type cache_t struct {
 	sync.Mutex
-	cache     map[int]*Objref_t
+	cache     *hashtable.Hashtable_t
 	objreflru objreflru_t
 	stats     cstats_t
 }
 
 func mkCache(size int) *cache_t {
 	c := &cache_t{}
-	c.cache = make(map[int]*Objref_t, size)
+	c.cache = hashtable.MkHash(size)
 	return c
 }
 
 func (c *cache_t) Len() int {
 	c.Lock()
-	ret := len(c.cache)
+	ret := 0 // len(c.cache)
 	c.Unlock()
 	return ret
 }
 
 func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 	c.Lock()
-	e, ok := c.cache[key]
+	v, ok := c.cache.Get(key)
 	if ok {
+		e := v.(*Objref_t)
 		// other threads may have a reference to this item and may
 		// Ref{up,down}; the increment must therefore be atomic
 		c.stats.Nhit.Inc()
@@ -95,9 +96,9 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 		c.Unlock()
 		return e, false
 	}
-	e = MkObjref(mkobj(key), key)
+	e := MkObjref(mkobj(key), key)
 	e.Obj = mkobj(key)
-	c.cache[key] = e
+	c.cache.Put(key, e)
 	c.objreflru.mkhead(e)
 	c.stats.Nadd.Inc()
 	c.Unlock()
@@ -106,7 +107,8 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 
 func (c *cache_t) Remove(key int) {
 	c.Lock()
-	if e, ok := c.cache[key]; ok {
+	if v, ok := c.cache.Get(key); ok {
+		e := v.(*Objref_t)
 		cnt := e.Refcnt()
 		if cnt < 0 {
 			panic("Remove: negative refcnt")
@@ -124,12 +126,6 @@ func (c *cache_t) Remove(key int) {
 
 func (c *cache_t) Stats() string {
 	s := ""
-	if common.Stats {
-		s := "\n\tsize "
-		s += strconv.Itoa(len(c.cache))
-		s += "\n\t#live "
-		s += strconv.Itoa(c.nlive())
-	}
 	s += common.Stats2String(c.stats)
 	return s
 }
@@ -140,7 +136,7 @@ func (c *cache_t) Evict_half() int {
 	c.Lock()
 	defer c.Unlock()
 
-	upto := len(c.cache)
+	upto := 0 // XXX len(c.cache)
 	did := 0
 	var back *Objref_t
 	for p := c.objreflru.tail; p != nil && did < upto; p = back {
@@ -158,65 +154,13 @@ func (c *cache_t) Evict_half() int {
 		p.Obj.Evict()
 		did++
 	}
-	return len(c.cache)
-}
-
-func (c *cache_t) nlive() int {
-	n := 0
-	for _, e := range c.cache {
-		if e.Refcnt() > 0 {
-			n++
-		}
-	}
-	return n
+	return 0 // XXX len(c.cache)
 }
 
 func (c *cache_t) delete(o *Objref_t) {
-	delete(c.cache, o.Key)
+	c.cache.Del(o.Key)
 	c.objreflru.remove(o)
 	c.stats.Nevict.Inc()
-}
-
-type ccache_t struct {
-	shards []*cache_t
-}
-
-func MkCcache(size int) *ccache_t {
-	cc := &ccache_t{}
-	cc.shards = make([]*cache_t, NSHARD)
-	for i := 0; i < NSHARD; i++ {
-		cc.shards[i] = mkCache(size)
-	}
-	return cc
-
-}
-
-func (cc *ccache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
-	i := key % NSHARD
-	return cc.shards[i].Lookup(key, mkobj)
-}
-
-func (cc *ccache_t) Remove(key int) {
-	i := key % NSHARD
-	cc.shards[i].Remove(key)
-}
-
-func (cc *ccache_t) Len() int {
-	l := 0
-	for _, s := range cc.shards {
-		l += s.Len()
-	}
-	return l
-}
-
-func (cc *ccache_t) Stats() string {
-	r := "ccache: "
-	for _, s := range cc.shards {
-		r += s.Stats()
-		r += " "
-	}
-	return r + "\n"
-
 }
 
 // LRU list of references

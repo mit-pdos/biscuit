@@ -1,4 +1,4 @@
-package common
+package hashtable
 
 import "fmt"
 import "math/rand"
