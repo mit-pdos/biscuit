@@ -1,8 +1,10 @@
 package common
 
+import "sync/atomic"
 import "fmt"
 import "hash/fnv"
 import "sync"
+import "unsafe"
 
 type elem_t struct {
 	key     interface{}
@@ -29,10 +31,6 @@ func MkHash(size int) *hashtable_t {
 	return ht
 }
 
-func (ht *hashtable_t) hash(keyHash uint32) int {
-	return int(keyHash % uint32(len(ht.table)))
-}
-
 func (ht *hashtable_t) String() string {
 	s := ""
 	for i, b := range ht.table {
@@ -51,7 +49,7 @@ func (ht *hashtable_t) Get(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 
-	for e := b.first; e != nil; e = e.next {
+	for e := b.first; e != nil; e = loadptr(&e.next) {
 		if e.keyHash == kh && e.key == key {
 			return e.value, true
 		}
@@ -68,10 +66,12 @@ func (ht *hashtable_t) Put(key interface{}, value interface{}) {
 	add := func(last *elem_t, b *bucket_t) {
 		if last == nil {
 			n := &elem_t{key: key, value: value, keyHash: kh, next: b.first}
-			b.first = n
+			storeptr(&b.first, n)
+			// b.first = n
 		} else {
 			n := &elem_t{key: key, value: value, keyHash: kh, next: last.next}
-			last.next = n
+			// last.next = n
+			storeptr(&last.next, n)
 		}
 	}
 
@@ -98,9 +98,11 @@ func (ht *hashtable_t) Del(key interface{}) {
 
 	rem := func(last *elem_t, b *bucket_t, n *elem_t) {
 		if last == nil {
-			b.first = n.next
+			// b.first = n.next
+			storeptr(&b.first, n.next)
 		} else {
-			last.next = n.next
+			// last.next = n.next
+			storeptr(&last.next, n.next)
 		}
 	}
 
@@ -116,6 +118,24 @@ func (ht *hashtable_t) Del(key interface{}) {
 		last = e
 	}
 	panic("del of non-existing key")
+}
+
+func (ht *hashtable_t) hash(keyHash uint32) int {
+	return int(keyHash % uint32(len(ht.table)))
+}
+
+func loadptr(e **elem_t) *elem_t {
+	ptr := (*unsafe.Pointer)(unsafe.Pointer(e))
+	p := atomic.LoadPointer(ptr)
+	n := (*elem_t)(unsafe.Pointer(p))
+	return n
+}
+
+func storeptr(p **elem_t, n *elem_t) {
+	ptr := (*unsafe.Pointer)(unsafe.Pointer(p))
+	v := (unsafe.Pointer)(n)
+	atomic.StorePointer(ptr, v)
+	// *p = n
 }
 
 func hashString(s string) uint32 {

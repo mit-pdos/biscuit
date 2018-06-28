@@ -144,6 +144,7 @@ func TestManyReaderOneWriter(t *testing.T) {
 
 	start := time.Now()
 	for p := 0; p < NPROC; p++ {
+		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 			if id == 0 {
