@@ -7,7 +7,7 @@ import "sync"
 import "testing"
 import "time"
 
-func fill(t *testing.T, ht *hashtable_t, n int) {
+func fill(t *testing.T, ht hashtable_i, n int) {
 	for i := 0; i < n; i++ {
 		k := strconv.Itoa(i)
 		ht.Put(k, i)
@@ -51,7 +51,7 @@ func TestSimple(t *testing.T) {
 const NPROC = 4
 const NOP = 1000000
 
-func doop(t *testing.T, ht *hashtable_t, k string, v int) {
+func doop(t *testing.T, ht hashtable_i, k string, v int) {
 
 	ht.Put(k, v)
 	r, ok := ht.Get(k)
@@ -68,7 +68,7 @@ func doop(t *testing.T, ht *hashtable_t, k string, v int) {
 	}
 }
 
-func writer(t *testing.T, ht *hashtable_t, id int) {
+func writer(t *testing.T, ht hashtable_i, id int) {
 	for i := 0; i < NOP; i++ {
 		v := rand.Intn(SZ)
 		k := strconv.Itoa(v)
@@ -77,7 +77,7 @@ func writer(t *testing.T, ht *hashtable_t, id int) {
 	}
 }
 
-func reader(t *testing.T, ht *hashtable_t) {
+func reader(t *testing.T, ht hashtable_i) {
 	v := rand.Intn(SZ)
 	k := strconv.Itoa(v)
 	r, ok := ht.Get(k)
@@ -157,4 +157,30 @@ func TestManyReaderOneWriter(t *testing.T) {
 	wg.Wait()
 	stop := time.Now()
 	fmt.Printf("TestManyReaderOneWriter took %v\n", stop.Sub(start))
+}
+
+func TestManyReaderOneWriterStd(t *testing.T) {
+	ht := MkHashString(SZ)
+
+	rand.Seed(SZ)
+
+	fill(t, ht, SZ)
+
+	var wg sync.WaitGroup
+
+	start := time.Now()
+	for p := 0; p < NPROC; p++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			if id == 0 {
+				writer(t, ht, id)
+			} else {
+				reader(t, ht)
+			}
+		}(p)
+	}
+	wg.Wait()
+	stop := time.Now()
+	fmt.Printf("TestManyReaderOneWriterStd took %v\n", stop.Sub(start))
 }

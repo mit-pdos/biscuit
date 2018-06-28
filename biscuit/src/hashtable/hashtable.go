@@ -6,6 +6,12 @@ import "hash/fnv"
 import "sync"
 import "unsafe"
 
+type hashtable_i interface {
+	Get(key interface{}) (interface{}, bool)
+	Put(key interface{}, val interface{})
+	Del(key interface{})
+}
+
 type elem_t struct {
 	key     interface{}
 	value   interface{}
@@ -159,4 +165,41 @@ func hash(key interface{}) uint32 {
 		return uint32(x)
 	}
 	panic(fmt.Errorf("unsupported key type %T", key))
+}
+
+type hashtablestring_t struct {
+	sync.Mutex
+	table map[string]int
+}
+
+func MkHashString(size int) *hashtablestring_t {
+	ht := &hashtablestring_t{}
+	ht.table = make(map[string]int, size)
+	return ht
+}
+
+func (ht *hashtablestring_t) Get(key interface{}) (interface{}, bool) {
+	ht.Lock()
+	defer ht.Unlock()
+
+	k := key.(string)
+	v, ok := ht.table[k]
+	return v, ok
+}
+
+func (ht *hashtablestring_t) Put(key interface{}, val interface{}) {
+	ht.Lock()
+	defer ht.Unlock()
+
+	k := key.(string)
+	v := val.(int)
+	ht.table[k] = v
+}
+
+func (ht *hashtablestring_t) Del(key interface{}) {
+	ht.Lock()
+	defer ht.Unlock()
+
+	k := key.(string)
+	delete(ht.table, k)
 }
