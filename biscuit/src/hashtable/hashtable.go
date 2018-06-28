@@ -24,12 +24,36 @@ type bucket_t struct {
 	first *elem_t
 }
 
+func (b *bucket_t) len() int {
+	b.Lock()
+	defer b.Unlock()
+
+	l := 0
+	for e := b.first; e != nil; e = e.next {
+		l++
+	}
+	return l
+}
+
+func (b *bucket_t) elems() []Pair_t {
+	b.Lock()
+	defer b.Unlock()
+
+	p := make([]Pair_t, 2)
+	for e := b.first; e != nil; e = e.next {
+		p = append(p, Pair_t{Key: e.key, Value: e.value})
+	}
+	return p
+}
+
 type Hashtable_t struct {
-	table []*bucket_t
+	table    []*bucket_t
+	capacity int
 }
 
 func MkHash(size int) *Hashtable_t {
 	ht := &Hashtable_t{}
+	ht.capacity = size
 	ht.table = make([]*bucket_t, size)
 	for i, _ := range ht.table {
 		ht.table[i] = &bucket_t{}
@@ -42,13 +66,34 @@ func (ht *Hashtable_t) String() string {
 	for i, b := range ht.table {
 		if b.first != nil {
 			s += fmt.Sprintf("b %d:\n", i)
-			for e := b.first; e != nil; e = e.next {
+			for e := b.first; e != nil; e = loadptr(&e.next) {
 				s += fmt.Sprintf("(%v, %v), ", e.keyHash, e.key)
 			}
 			s += fmt.Sprintf("\n")
 		}
 	}
 	return s
+}
+
+func (ht *Hashtable_t) Size() int {
+	n := 0
+	for _, b := range ht.table {
+		n += b.len()
+	}
+	return n
+}
+
+type Pair_t struct {
+	Key   interface{}
+	Value interface{}
+}
+
+func (ht *Hashtable_t) Elems() []Pair_t {
+	p := make([]Pair_t, ht.capacity)
+	for _, b := range ht.table {
+		p = append(p, b.elems()...)
+	}
+	return p
 }
 
 func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
@@ -63,7 +108,8 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	return nil, false
 }
 
-func (ht *Hashtable_t) Put(key interface{}, value interface{}) {
+// Set returns false if key already exists
+func (ht *Hashtable_t) Set(key interface{}, value interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	b.Lock()
@@ -84,16 +130,16 @@ func (ht *Hashtable_t) Put(key interface{}, value interface{}) {
 	var last *elem_t
 	for e := b.first; e != nil; e = e.next {
 		if e.keyHash == kh && e.key == key {
-			e.value = value
-			return
+			return e.value, false
 		}
 		if kh < e.keyHash {
 			add(last, b)
-			return
+			return value, true
 		}
 		last = e
 	}
 	add(last, b)
+	return value, true
 }
 
 func (ht *Hashtable_t) Del(key interface{}) {

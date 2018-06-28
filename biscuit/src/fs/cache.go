@@ -1,6 +1,8 @@
 package fs
 
 //import "fmt"
+import "runtime"
+import "sort"
 import "sync"
 import "sync/atomic"
 
@@ -31,11 +33,10 @@ type Obj_t interface {
 }
 
 type Objref_t struct {
-	Key     int
-	Obj     Obj_t
-	refcnt  int64
-	Refnext *Objref_t
-	Refprev *Objref_t
+	Key    int
+	Obj    Obj_t
+	refcnt int64
+	tstamp uint64
 }
 
 func MkObjref(obj Obj_t, key int) *Objref_t {
@@ -43,6 +44,7 @@ func MkObjref(obj Obj_t, key int) *Objref_t {
 	e.Obj = obj
 	e.Key = key
 	e.refcnt = 1
+	e.tstamp = runtime.Rdtsc()
 	return e
 }
 
@@ -65,9 +67,8 @@ func (ref *Objref_t) Down() int64 {
 
 type cache_t struct {
 	sync.Mutex
-	cache     *hashtable.Hashtable_t
-	objreflru objreflru_t
-	stats     cstats_t
+	cache *hashtable.Hashtable_t
+	stats cstats_t
 }
 
 func mkCache(size int) *cache_t {
@@ -84,7 +85,6 @@ func (c *cache_t) Len() int {
 }
 
 func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
-	c.Lock()
 	v, ok := c.cache.Get(key)
 	if ok {
 		e := v.(*Objref_t)
@@ -92,21 +92,25 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 		// Ref{up,down}; the increment must therefore be atomic
 		c.stats.Nhit.Inc()
 		e.Up()
-		c.objreflru.mkhead(e)
-		c.Unlock()
+		e.tstamp = runtime.Rdtsc()
 		return e, false
 	}
 	e := MkObjref(mkobj(key), key)
 	e.Obj = mkobj(key)
-	c.cache.Put(key, e)
-	c.objreflru.mkhead(e)
-	c.stats.Nadd.Inc()
-	c.Unlock()
-	return e, true
+	v, ok = c.cache.Set(key, e)
+	if !ok { // someone else created it
+		e := v.(*Objref_t)
+		c.stats.Nhit.Inc()
+		e.Up()
+		return e, false
+	} else {
+		c.stats.Nadd.Inc()
+		return e, true
+
+	}
 }
 
 func (c *cache_t) Remove(key int) {
-	c.Lock()
 	if v, ok := c.cache.Get(key); ok {
 		e := v.(*Objref_t)
 		cnt := e.Refcnt()
@@ -121,7 +125,6 @@ func (c *cache_t) Remove(key int) {
 	} else {
 		panic("Remove: non existing")
 	}
-	c.Unlock()
 }
 
 func (c *cache_t) Stats() string {
@@ -130,86 +133,45 @@ func (c *cache_t) Stats() string {
 	return s
 }
 
+type ByStamp []hashtable.Pair_t
+
+func (a ByStamp) Len() int      { return len(a) }
+func (a ByStamp) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a ByStamp) Less(i, j int) bool {
+	e1 := a[i].Value.(*Objref_t)
+	e2 := a[2].Value.(*Objref_t)
+	return e1.tstamp < e2.tstamp
+}
+
 // evicts up-to half of the objects in the cache. returns the number of cache
 // entries remaining.
 func (c *cache_t) Evict_half() int {
 	c.Lock()
 	defer c.Unlock()
 
-	upto := 0 // XXX len(c.cache)
+	upto := c.cache.Size()
 	did := 0
-	var back *Objref_t
-	for p := c.objreflru.tail; p != nil && did < upto; p = back {
-		back = p.Refprev
-		if p.Refcnt() != 0 {
+	elems := c.cache.Elems()
+	sort.Sort(ByStamp(elems))
+	for _, p := range elems {
+		e := p.Value.(*Objref_t)
+		if e.Refcnt() != 0 {
 			continue
 		}
 		// imemnode with refcount of 0 must have non-zero links and
 		// thus can be freed.  (in fact, they already have been freed)
-		c.delete(p)
+		c.delete(e)
 		// imemnode eviction acquires no locks and block eviction
 		// acquires only a leaf lock (physmem lock). furthermore,
 		// neither eviction blocks on IO, thus it is safe to evict here
 		// with locks held.
-		p.Obj.Evict()
+		e.Obj.Evict()
 		did++
 	}
-	return 0 // XXX len(c.cache)
+	return upto - did
 }
 
 func (c *cache_t) delete(o *Objref_t) {
 	c.cache.Del(o.Key)
-	c.objreflru.remove(o)
 	c.stats.Nevict.Inc()
-}
-
-// LRU list of references
-type objreflru_t struct {
-	head *Objref_t
-	tail *Objref_t
-}
-
-func (rl *objreflru_t) mkhead(ir *Objref_t) {
-	if memfs {
-		return
-	}
-	rl._mkhead(ir)
-}
-
-func (rl *objreflru_t) _mkhead(ir *Objref_t) {
-	if rl.head == ir {
-		return
-	}
-	rl._remove(ir)
-	if rl.head != nil {
-		rl.head.Refprev = ir
-	}
-	ir.Refnext = rl.head
-	rl.head = ir
-	if rl.tail == nil {
-		rl.tail = ir
-	}
-}
-
-func (rl *objreflru_t) _remove(ir *Objref_t) {
-	if rl.tail == ir {
-		rl.tail = ir.Refprev
-	}
-	if rl.head == ir {
-		rl.head = ir.Refnext
-	}
-	if ir.Refprev != nil {
-		ir.Refprev.Refnext = ir.Refnext
-	}
-	if ir.Refnext != nil {
-		ir.Refnext.Refprev = ir.Refprev
-	}
-	ir.Refprev, ir.Refnext = nil, nil
-}
-
-func (rl *objreflru_t) remove(ir *Objref_t) {
-	if memfs {
-		return
-	}
-	rl._remove(ir)
 }

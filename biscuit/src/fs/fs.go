@@ -28,7 +28,7 @@ type Fs_t struct {
 
 func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
-	// memfs = common.Kernel // use in-memory file system
+	memfs = common.Kernel // use in-memory file system
 	cons = console
 
 	// reset taken
@@ -1478,8 +1478,8 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	}
 	//fmt.Printf("FS EVICT\n")
 	// XXX blow away dcache first
-	//fs.bcache.cache.Evict_half()
-	//fs.icache.cache.Evict_half() // doesn't do anything because inodes are evicted when unlinked
+	fs.bcache.cache.Evict_half()
+	fs.icache.cache.Evict_half() // XXX doesn't do anything because inodes are evicted when unlinked
 	return fs.Sizes()
 }
 

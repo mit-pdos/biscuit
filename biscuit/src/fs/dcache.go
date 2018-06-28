@@ -26,7 +26,7 @@ func (dc *dcache_t) Add(pn string, idm *imemnode_t) {
 	if dcache_debug {
 		fmt.Printf("add: %v %d\n", pn, idm.inum)
 	}
-	dc.dcache.Put(pn, idm)
+	dc.dcache.Set(pn, idm)
 	idm.Refup("add")
 	dc.stats.Nadd.Inc()
 }
