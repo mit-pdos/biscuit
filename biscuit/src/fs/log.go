@@ -6,7 +6,6 @@ import "sync"
 import "common"
 
 const log_debug = false
-const copyordered = false
 
 // File system journal.  The file system brackets FS calls (e.g.,create) with
 // Op_begin and Op_end(); the log makes sure that these operations happen
@@ -383,6 +382,13 @@ func (rl *revokelist_t) len() int {
 	return rl.revoked.Len()
 }
 
+type copy_relse_t struct {
+}
+
+func (cp *copy_relse_t) Relse(blk *Bdev_block_t, s string) {
+	blk.Free_page()
+}
+
 func (rl *revokelist_t) addRevokeRecord(blkno int, ml *memlog_t) {
 	var db *logdescriptor_t
 	blk := rl.revoked.Back()
@@ -570,43 +576,12 @@ func (trans *trans_t) copylogged(ml *memlog_t) {
 	trans.logged.Delete()
 }
 
-type copy_relse_t struct {
-}
-
-func (cp *copy_relse_t) Relse(blk *Bdev_block_t, s string) {
-	blk.Free_page()
-}
-
-func (trans *trans_t) copyordered(ml *memlog_t) {
-	if log_debug {
-		fmt.Printf("copyordered: %d\n", trans.ordered.Len())
-	}
-	trans.ordered.Apply(func(b *Bdev_block_t) {
-		// Make a "private" copy of b that isn't visible to FS or cache
-		// XXX Use COW
-		cp := MkBlock_newpage(b.Block, "copyordered", ml.bcache.mem,
-			ml.bcache.disk, &copy_relse_t{})
-		copy(cp.Data[:], b.Data[:])
-		trans.orderedcopy.PushBack(cp)
-		ml.bcache.Relse(b, "copyordered")
-	})
-	if trans.ordered.Len() != trans.orderedcopy.Len() {
-		panic("copyordered")
-	}
-	trans.ordered.Delete()
-}
-
 func (trans *trans_t) write_ordered(ml *memlog_t) {
 	if log_debug {
 		fmt.Printf("write_ordered: %d\n", trans.orderedcopy.Len())
 	}
-	if copyordered {
-		ml.bcache.Write_async_through_coalesce(trans.orderedcopy)
-		trans.orderedcopy.Delete()
-	} else {
-		ml.bcache.Write_async_through_coalesce(trans.ordered)
-		trans.ordered.Delete()
-	}
+	ml.bcache.Write_async_through_coalesce(trans.ordered)
+	trans.ordered.Delete()
 }
 
 func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
@@ -878,9 +853,6 @@ func (log *log_t) committer() {
 
 			t.copyrevoked(log.ml)
 			t.copylogged(log.ml)
-			if copyordered {
-				t.copyordered(log.ml)
-			}
 			log.translog.add(t)
 
 			if t.start+1 == t.head { // no blocks in log?
