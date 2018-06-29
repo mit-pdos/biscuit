@@ -175,7 +175,7 @@ func (bcache *bcache_t) Write_async_through_coalesce(blks *BlkList_t) {
 	}
 }
 
-// XXX b methods
+// XXX b methods, but Relse needs to update pins
 func (bcache *bcache_t) Refup(b *Bdev_block_t, s string) {
 	b.Ref.Up()
 }
