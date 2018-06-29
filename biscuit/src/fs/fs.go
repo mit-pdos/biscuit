@@ -1425,7 +1425,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 
 // if the path resolves successfully, returns the idaemon locked. otherwise,
 // locks no idaemon.
-func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
 	if len(paths) == 0 || paths[0] != '/' {
@@ -1455,11 +1455,6 @@ func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*im
 		}
 	}
 	return idm, 0
-}
-
-func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
-	idm, err := fs.fs_namei_slow(opid, paths, cwd)
-	return idm, err
 }
 
 func (fs *Fs_t) fs_namei_locked(opid opid_t, paths string, cwd *common.Cwd_t, s string) (*imemnode_t, common.Err_t) {
