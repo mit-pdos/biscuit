@@ -78,10 +78,7 @@ func mkCache(size int) *cache_t {
 }
 
 func (c *cache_t) Len() int {
-	c.Lock()
-	ret := 0 // len(c.cache)
-	c.Unlock()
-	return ret
+	return c.cache.Size()
 }
 
 func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
