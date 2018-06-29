@@ -24,6 +24,7 @@ type Fs_t struct {
 	ialloc       *ibitmap_t
 	balloc       *bbitmap_t
 	istats       *inode_stats_t
+	root         *imemnode_t
 }
 
 func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
@@ -88,9 +89,11 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, 
 	fs.icache = mkIcache(fs, iorphanstart, iorphanlen)
 	fs.icache.RecoverOrphans()
 
-	fs.dcache = mkDcache()
+	// fs.dcache = mkDcache()
 
 	fs.Fs_sync() // commits ifrees() and clears orphan bitmap
+
+	fs.root = fs.icache.Iref(iroot, "fs_namei_root")
 
 	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
@@ -105,6 +108,12 @@ func (fs *Fs_t) StopFS() {
 
 func (fs *Fs_t) Fs_size() (uint, uint) {
 	return fs.ialloc.alloc.nfreebits, fs.balloc.alloc.nfreebits
+}
+
+func (fs *Fs_t) IrefRoot() *imemnode_t {
+	r := fs.root
+	r.Refup("IrefRoot")
+	return r
 }
 
 func (fs *Fs_t) op_end_and_free(opid opid_t) {
@@ -226,8 +235,8 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 	if err != 0 {
 		return err
 	}
-	p := cwd.Canonicalpath(paths)
-	fs.dcache.Remove(p)
+	// p := cwd.Canonicalpath(paths)
+	// fs.dcache.Remove(p)
 	child._linkdown(opid)
 
 	return 0
@@ -427,13 +436,13 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 	if opar.do_unlink(opid, ofn) != 0 {
 		panic("probed")
 	}
-	p := cwd.Canonicalpath(oldp)
-	fs.dcache.Remove(p)
+	// p := cwd.Canonicalpath(oldp)
+	// fs.dcache.Remove(p)
 	if npar.do_insert(opid, nfn, ochild.inum) != 0 {
 		panic("probed")
 	}
-	p = cwd.Canonicalpath(newp)
-	fs.dcache.Add(p, nchild)
+	// p = cwd.Canonicalpath(newp)
+	// fs.dcache.Add(p, nchild)
 
 	// update '..'
 	if odir {
@@ -1242,7 +1251,7 @@ func (fs *Fs_t) Fs_open_inner(paths string, flags common.Fdopt_t, mode int, cwd 
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
-		fs.dcache.Add(cwd.Canonicalpath(paths), idm)
+		// fs.dcache.Add(cwd.Canonicalpath(paths), idm)
 
 		oexcl := flags&common.O_EXCL != 0
 		if exists {
@@ -1422,7 +1431,7 @@ func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*im
 	if len(paths) == 0 || paths[0] != '/' {
 		start = fs.icache.Iref(cwd.Fd.Fops.Pathi(), "fs_namei_cwd")
 	} else {
-		start = fs.icache.Iref(iroot, "fs_namei_root")
+		start = fs.IrefRoot()
 	}
 	idm := start
 	pp := common.Pathparts_t{}
@@ -1449,17 +1458,7 @@ func (fs *Fs_t) fs_namei_slow(opid opid_t, paths string, cwd *common.Cwd_t) (*im
 }
 
 func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
-	err := common.Err_t(0)
-	p := cwd.Canonicalpath(paths)
-	idm, ok := fs.dcache.Lookup(p)
-	if ok {
-		idm.Refup("fs_namei")
-	} else {
-		idm, err = fs.fs_namei_slow(opid, paths, cwd)
-		if err == 0 {
-			fs.dcache.Add(p, idm)
-		}
-	}
+	idm, err := fs.fs_namei_slow(opid, paths, cwd)
 	return idm, err
 }
 
@@ -1485,7 +1484,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 
 func (fs *Fs_t) Fs_statistics() string {
 	s := fs.istats.Stats()
-	s += fs.dcache.Stats()
+	// s += fs.dcache.Stats()
 	if !memfs {
 		s += fs.fslog.Stats()
 	}
