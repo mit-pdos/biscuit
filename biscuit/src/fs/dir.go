@@ -110,6 +110,7 @@ func (il *fdelist_t) count() int {
 type icdent_t struct {
 	offset int
 	inum   common.Inum_t
+	idm    *imemnode_t
 }
 
 // returns the offset of an empty directory entry. returns error if failed to
@@ -188,7 +189,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name string, inum common.Inum_t) c
 	idm.fs.fslog.Write(opid, b)
 	idm.fs.fslog.Relse(b, "_deinsert")
 
-	icd := icdent_t{noff, inum}
+	icd := icdent_t{noff, inum, nil}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.dentc
 	dc.haveall = dc.haveall && ok
@@ -213,7 +214,7 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn string, de icdent_t) bool)
 		for j := 0; j < NDIRENTS; j++ {
 			tfn := dd.Filename(j)
 			tpriv := dd.inodenext(j)
-			tde := icdent_t{i + j*NDBYTES, tpriv}
+			tde := icdent_t{i + j*NDBYTES, tpriv, nil}
 			if f(tfn, tde) {
 				found = true
 				break
@@ -441,17 +442,19 @@ func (idm *imemnode_t) probe_unlink(opid opid_t, fn string) (*Bdev_block_t, comm
 	return b, 0
 }
 
-func (idm *imemnode_t) ilookup(opid opid_t, name string) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) ilookup(opid opid_t, name string) (*imemnode_t, common.Err_t) {
 	// did someone confuse a file with a directory?
 	if idm.itype != I_DIR {
-		return 0, -common.ENOTDIR
+		return nil, -common.ENOTDIR
 	}
 	de, err := idm._delookup(opid, name)
-
 	if err != 0 {
-		return 0, err
+		return nil, err
 	}
-	return de.inum, 0
+	if de.idm == nil {
+		de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
+	}
+	return de.idm, 0
 }
 
 // creates a new directory entry with name "name" and inode number priv
@@ -480,6 +483,9 @@ func (idm *imemnode_t) iunlink(opid opid_t, name string) (common.Inum_t, common.
 	de, err := idm._deremove(opid, name)
 	if err != 0 {
 		return 0, err
+	}
+	if de.idm != nil {
+		de.idm.Refdown("iunlink")
 	}
 	return de.inum, 0
 }

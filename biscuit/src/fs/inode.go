@@ -458,12 +458,12 @@ func (fs *Fs_t) _fullpath(opid opid_t, inum common.Inum_t) (string, common.Err_t
 			c.iunlock("do_fullpath_c")
 			return "", -common.ENOHEAP
 		}
-		pari, err := c.ilookup(opid, "..")
+		par, err := c.ilookup(opid, "..")
 		if err != 0 {
 			c.iunlock("do_fullpath_c")
 			return "", err
 		}
-		par := fs.icache.Iref(pari, "do_fullpath_par")
+		// par := fs.icache.Iref(pari, "do_fullpath_par")
 		c.iunlock("do_fullpath_c")
 		par.ilock("do_fullpath_par")
 		name, err := par._denamefor(opid, last)

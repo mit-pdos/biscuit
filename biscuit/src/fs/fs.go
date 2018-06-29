@@ -192,18 +192,17 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 	var child *imemnode_t
 	var par *imemnode_t
 	var err common.Err_t
-	var childi common.Inum_t
 
 	par, err = fs.fs_namei_locked(opid, dirs, cwd, "fs_unlink_par")
 	if err != 0 {
 		return err
 	}
-	childi, err = par.ilookup(opid, fn)
+	child, err = par.ilookup(opid, fn)
 	if err != 0 {
 		par.iunlock_refdown("fs_unlink_par")
 		return err
 	}
-	child = fs.icache.Iref(childi, "fs_unlink_child")
+	// child = fs.icache.Iref(childi, "fs_unlink_child")
 
 	// unlock parent after we have a ref to child
 	par.iunlock("fs_unlink_par")
@@ -216,12 +215,12 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 	// recheck if child still exists (same name, same inum), since some
 	// other thread may have modifed par but par and child won't disappear
 	// because we have references to them.
-	inum, err := par.ilookup(opid, fn)
+	idm, err := par.ilookup(opid, fn)
 	if err != 0 {
 		return err
 	}
 	// name was deleted and recreated?
-	if inum != childi {
+	if idm != child {
 		return -common.ENOENT
 	}
 
@@ -277,12 +276,12 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 		return err
 	}
 
-	childi, err := opar.ilookup(opid, ofn)
+	ochild, err := opar.ilookup(opid, ofn)
 	if err != 0 {
 		opar.iunlock_refdown("fs_rename_opar")
 		return err
 	}
-	ochild := fs.icache.Iref(childi, "fs_rename_ochild")
+	// ochild := fs.icache.Iref(childi, "fs_rename_ochild")
 
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
@@ -319,14 +318,14 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 			return -common.ENOHEAP
 		}
 		npar.ilock("")
-		nchildinum, err := npar.ilookup(opid, nfn)
+		nchild, err := npar.ilookup(opid, nfn)
 		if err != 0 && err != -common.ENOENT {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
 			npar.iunlock_refdown("fs_name_npar")
 			return err
 		}
-		nchild = fs.icache.Iref(nchildinum, "fs_rename_ochild")
+		// nchild = fs.icache.Iref(nchildinum, "fs_rename_ochild")
 		npar.iunlock("")
 
 		var inodes []*imemnode_t
@@ -355,13 +354,13 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 			return err
 		}
 		// has ofn been removed but a new file ofn has been created?
-		if childi != ochild.inum {
+		if childi != ochild {
 			return -common.ENOENT
 		}
 
 		childi, err = npar.ilookup(opid, nfn)
 		// it existed before and still exists
-		if newexists && err == 0 && childi == nchild.inum {
+		if newexists && err == 0 && childi == nchild {
 			break
 		}
 		// it didn't exist before and still doesn't exist
@@ -473,17 +472,17 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 			return -common.EINVAL
 		}
 		here.ilock("_isancestor")
-		nexti, err := here.ilookup(opid, "..")
+		next, err := here.ilookup(opid, "..")
 		if err != 0 {
 			here.iunlock("_isancestor")
 			return err
 		}
-		if nexti == here.inum {
+		if next == here {
 			here.iunlock("_isancestor")
 			panic("xxx")
 		} else {
 			var next *imemnode_t
-			next = fs.icache.Iref(nexti, "_isancestor_next")
+			// next = fs.icache.Iref(nexti, "_isancestor_next")
 			here.iunlock_refdown("_isancestor")
 			here = next
 		}
@@ -1446,10 +1445,10 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 			idm.iunlock_refdown("fs_namei_ilookup")
 			return nil, err
 		}
-		if n != idm.inum {
-			next := fs.icache.Iref(n, "fs_namei_next")
+		if n != idm {
+			// next := fs.icache.Iref(n, "fs_namei_next")
 			idm.iunlock_refdown("fs_namei_idm")
-			idm = next
+			idm = n
 		} else {
 			idm.iunlock("fs_namei_idm_next")
 		}
