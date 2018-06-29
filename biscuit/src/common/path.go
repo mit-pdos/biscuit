@@ -64,36 +64,6 @@ func Sdirname(path string) (string, string) {
 	return s, fn
 }
 
-// Wouldn't work for POSIX symbolic links and "..", but Biscuit doesn't support symbolic links
-func CanonicalizeCopy(path string) string {
-	pp := Pathparts_t{}
-	pp.Pp_init(path)
-	p := "."
-	if IsAbsolute(path) {
-		p = "/"
-	}
-
-	for cp, ok := pp.Next(); ok; cp, ok = pp.Next() {
-		if cp == "." {
-			continue
-		} else if cp == ".." {
-			l := strings.LastIndexAny(p, "/")
-			if l == -1 {
-			} else if l == 0 {
-				p = p[:1]
-			} else {
-				p = p[:l]
-			}
-		} else {
-			if p != "/" {
-				p += "/"
-			}
-			p += cp
-		}
-	}
-	return p
-}
-
 const MaxSlash = 60
 
 type canonicalize_t struct {
