@@ -158,3 +158,6 @@
 /fsdir/bin/head
 /fsdir/bin/largefile
 /fsdir/bin/smallfile
+/fsdir/bin/cmail*
+/fsdir/bin/parrun
+/fsdir/bin/mmapbomb

@@ -1,6 +1,5 @@
 package fs
 
-import "fmt"
 import "common"
 
 const NAME_MAX int = 512
@@ -123,8 +122,8 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, common.Err_t) {
 
 	// see if we have an empty slot before expanding the directory
 	if !idm.dentc.scanned {
-		var de icdent_t
-		found, err := idm._descan(opid, func(fn string, tde icdent_t) bool {
+		var de *icdent_t
+		found, err := idm._descan(opid, func(fn string, tde *icdent_t) bool {
 			if fn == "" {
 				de = tde
 				return true
@@ -189,7 +188,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name string, inum common.Inum_t) c
 	idm.fs.fslog.Write(opid, b)
 	idm.fs.fslog.Relse(b, "_deinsert")
 
-	icd := icdent_t{noff, inum, nil}
+	icd := &icdent_t{noff, inum, nil}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.dentc
 	dc.haveall = dc.haveall && ok
@@ -200,7 +199,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name string, inum common.Inum_t) c
 // calls f on each directory entry (including empty ones) until f returns true
 // or it has been called on all directory entries. _descan returns true if f
 // returned true.
-func (idm *imemnode_t) _descan(opid opid_t, f func(fn string, de icdent_t) bool) (bool, common.Err_t) {
+func (idm *imemnode_t) _descan(opid opid_t, f func(fn string, de *icdent_t) bool) (bool, common.Err_t) {
 	found := false
 	for i := 0; i < idm.size; i += BSIZE {
 		if !common.Resadd_noblock(common.Bounds(common.B_IMEMNODE_T__DESCAN)) {
@@ -214,7 +213,7 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn string, de icdent_t) bool)
 		for j := 0; j < NDIRENTS; j++ {
 			tfn := dd.Filename(j)
 			tpriv := dd.inodenext(j)
-			tde := icdent_t{i + j*NDBYTES, tpriv, nil}
+			tde := &icdent_t{i + j*NDBYTES, tpriv, nil}
 			if f(tfn, tde) {
 				found = true
 				break
@@ -226,14 +225,14 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn string, de icdent_t) bool)
 	return found, 0
 }
 
-func (idm *imemnode_t) _delookup(opid opid_t, fn string) (icdent_t, common.Err_t) {
+func (idm *imemnode_t) _delookup(opid opid_t, fn string) (*icdent_t, common.Err_t) {
 	if fn == "" {
 		panic("bad lookup")
 	}
 	if de, ok := idm.dentc.dents.lookup(fn); ok {
 		return de, 0
 	}
-	var zi icdent_t
+	var zi *icdent_t
 	if idm.dentc.haveall {
 		// cache negative entries?
 		return zi, -common.ENOENT
@@ -242,8 +241,8 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn string) (icdent_t, common.Err_t
 	// not in cached dirents
 	found := false
 	haveall := true
-	var de icdent_t
-	_, err := idm._descan(opid, func(tfn string, tde icdent_t) bool {
+	var de *icdent_t
+	_, err := idm._descan(opid, func(tfn string, tde *icdent_t) bool {
 		if tfn == "" {
 			return false
 		}
@@ -266,8 +265,8 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn string) (icdent_t, common.Err_t
 	return de, 0
 }
 
-func (idm *imemnode_t) _deremove(opid opid_t, fn string) (icdent_t, common.Err_t) {
-	var zi icdent_t
+func (idm *imemnode_t) _deremove(opid opid_t, fn string) (*icdent_t, common.Err_t) {
+	var zi *icdent_t
 	de, err := idm._delookup(opid, fn)
 	if err != 0 {
 		return zi, err
@@ -293,7 +292,7 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn string) (icdent_t, common.Err_t
 func (idm *imemnode_t) _denamefor(opid opid_t, tnum common.Inum_t) (string, common.Err_t) {
 	// check cache first
 	var fn string
-	found := idm.dentc.dents.iter(func(dn string, de icdent_t) bool {
+	found := idm.dentc.dents.iter(func(dn string, de *icdent_t) bool {
 		if de.inum == tnum {
 			fn = dn
 			return true
@@ -305,8 +304,8 @@ func (idm *imemnode_t) _denamefor(opid opid_t, tnum common.Inum_t) (string, comm
 	}
 
 	// not in cache; shucks!
-	var de icdent_t
-	found, err := idm._descan(opid, func(tfn string, tde icdent_t) bool {
+	var de *icdent_t
+	found, err := idm._descan(opid, func(tfn string, tde *icdent_t) bool {
 		if tde.inum == tnum {
 			fn = tfn
 			de = tde
@@ -328,7 +327,7 @@ func (idm *imemnode_t) _denamefor(opid opid_t, tnum common.Inum_t) (string, comm
 func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 	if idm.dentc.haveall {
 		dentc := &idm.dentc
-		hasfiles := dentc.dents.iter(func(dn string, de icdent_t) bool {
+		hasfiles := dentc.dents.iter(func(dn string, de *icdent_t) bool {
 			if dn != "." && dn != ".." {
 				return true
 			}
@@ -336,7 +335,7 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 		})
 		return !hasfiles, 0
 	}
-	notempty, err := idm._descan(opid, func(fn string, de icdent_t) bool {
+	notempty, err := idm._descan(opid, func(fn string, de *icdent_t) bool {
 		return fn != "" && fn != "." && fn != ".."
 	})
 	if err != 0 {
@@ -403,7 +402,7 @@ func (idm *imemnode_t) _demayadd() bool {
 }
 
 // caching is best-effort. returns true if fn was added to the cache
-func (idm *imemnode_t) _dceadd(fn string, de icdent_t) bool {
+func (idm *imemnode_t) _dceadd(fn string, de *icdent_t) bool {
 	dc := &idm.dentc
 	if !idm._demayadd() {
 		return false
@@ -452,8 +451,10 @@ func (idm *imemnode_t) ilookup(opid opid_t, name string) (*imemnode_t, common.Er
 		return nil, err
 	}
 	if de.idm == nil {
+		// Need to update pointer in tree
 		de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
 	}
+	de.idm.Refup("ilookup")
 	return de.idm, 0
 }
 
@@ -468,7 +469,6 @@ func (idm *imemnode_t) iinsert(opid opid_t, name string, inum common.Inum_t) com
 		return err
 	}
 	if inum < 0 {
-		fmt.Printf("insert: negative inum %v %v\n", name, inum)
 		panic("iinsert")
 	}
 	err := idm._deinsert(opid, name, inum)

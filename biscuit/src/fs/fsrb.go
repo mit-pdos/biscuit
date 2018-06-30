@@ -342,7 +342,7 @@ type dc_rbn_t struct {
 	l    *dc_rbn_t
 	c    common.Rbc_t
 	name string
-	icd  icdent_t
+	icd  *icdent_t
 }
 
 func (h *dc_rbh_t) _rol(nn *dc_rbn_t) {
@@ -429,7 +429,7 @@ func (h *dc_rbh_t) _balance(nn *dc_rbn_t) {
 	h.root.c = BLACK
 }
 
-func (h *dc_rbh_t) insert(name string, icd icdent_t) {
+func (h *dc_rbh_t) insert(name string, icd *icdent_t) {
 	nn := &dc_rbn_t{name: name, icd: icd, c: RED}
 	if h.root == nil {
 		h.root = nn
@@ -479,10 +479,10 @@ func (h *dc_rbh_t) _lookup(name string) *dc_rbn_t {
 	return n
 }
 
-func (h *dc_rbh_t) lookup(name string) (icdent_t, bool) {
+func (h *dc_rbh_t) lookup(name string) (*icdent_t, bool) {
 	r := h._lookup(name)
 	if r == nil {
-		var zi icdent_t
+		var zi *icdent_t
 		return zi, false
 	}
 	return r.icd, true
@@ -646,7 +646,7 @@ func (h *dc_rbh_t) _remove(nn *dc_rbn_t) *dc_rbn_t {
 	return old
 }
 
-func (h *dc_rbh_t) iter1(n *dc_rbn_t, f func(string, icdent_t) bool) bool {
+func (h *dc_rbh_t) iter1(n *dc_rbn_t, f func(string, *icdent_t) bool) bool {
 	if n == nil {
 		return false
 	}
@@ -658,7 +658,7 @@ func (h *dc_rbh_t) iter1(n *dc_rbn_t, f func(string, icdent_t) bool) bool {
 
 // returns true if at least one call to f returned true. stops iterating once f
 // returns true.
-func (h *dc_rbh_t) iter(f func(string, icdent_t) bool) bool {
+func (h *dc_rbh_t) iter(f func(string, *icdent_t) bool) bool {
 	return h.iter1(h.root, f)
 }
 

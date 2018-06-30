@@ -3785,7 +3785,7 @@ main(int argc, char *argv[])
     exit(0);
   }
   close(open("usertests.ran", O_CREATE));
-    
+
   logtest();
   createdelete();
   linkunlink();

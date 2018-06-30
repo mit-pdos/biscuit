@@ -55,7 +55,7 @@ func TestCanonicalize(t *testing.T) {
 	}
 }
 
-func TestDcacheSimple(t *testing.T) {
+func doTestDcacheSimple(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
@@ -314,6 +314,41 @@ func TestFSInodeReuse(t *testing.T) {
 	n := ninodeblks * (fs.BSIZE / fs.ISIZE)
 	for i := 0; i < n; i++ {
 		doTestInodeReuse(tfs, 10, t)
+	}
+	ShutdownFS(tfs)
+	os.Remove(dst)
+}
+
+func doTestInodeReuseRename(tfs *Ufs_t, n int, t *testing.T) {
+	for i := 0; i < n; i++ {
+		e := tfs.MkFile(uniqfile(i), nil)
+		if e != 0 {
+			t.Fatalf("mkFile %v failed", i)
+		}
+		e = tfs.Rename(uniqfile(i), "r"+uniqfile(i))
+		if e != 0 {
+			t.Fatalf("rename %v failed", i)
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		e := tfs.Unlink("r" + uniqfile(i))
+		if e != 0 {
+			t.Fatalf("Unlink %v failed", i)
+		}
+	}
+}
+
+func TestFSInodeReuseRename(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+
+	fmt.Printf("Test FSInodeReuseRename %v ...\n", dst)
+
+	tfs := BootFS(dst)
+	n := ninodeblks * (fs.BSIZE / fs.ISIZE)
+	for i := 0; i < n; i++ {
+		doTestInodeReuseRename(tfs, 10, t)
 	}
 	ShutdownFS(tfs)
 	os.Remove(dst)

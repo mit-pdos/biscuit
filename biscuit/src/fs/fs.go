@@ -29,7 +29,7 @@ type Fs_t struct {
 
 func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
 
-	memfs = common.Kernel // use in-memory file system
+	memfs = common.Kernel // use in-memory file system if in-kernel
 	cons = console
 
 	// reset taken
@@ -219,8 +219,10 @@ func (fs *Fs_t) Fs_unlink(paths string, cwd *common.Cwd_t, wantdir bool) common.
 	if err != 0 {
 		return err
 	}
+	defer idm.Refdown("fs_unlink")
+
 	// name was deleted and recreated?
-	if idm != child {
+	if idm.inum != child.inum {
 		return -common.ENOENT
 	}
 
@@ -260,17 +262,17 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 
 	fs.istats.Nrename.Inc()
 
-	if fs_debug {
-		fmt.Printf("fs_rename: src %v dst %v %v\n", oldp, newp, cwd)
-	}
-
 	// one rename at the time
 	_renamelock.Lock()
 	defer _renamelock.Unlock()
 
+	if fs_debug {
+		fmt.Printf("fs_rename: src %v dst %v %v\n", oldp, newp, cwd)
+	}
+
 	// lookup all inode references, but we will release locks and lock them
 	// together when we know all references.  the references to the inodes
-	// cannot disppear, however.
+	// cannot disppear, so unlocking temporarily is fine.
 	opar, err := fs.fs_namei_locked(opid, odirs, cwd, "fs_rename_opar")
 	if err != 0 {
 		return err
@@ -318,7 +320,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 			return -common.ENOHEAP
 		}
 		npar.ilock("")
-		nchild, err := npar.ilookup(opid, nfn)
+		nchild, err = npar.ilookup(opid, nfn)
 		if err != 0 && err != -common.ENOENT {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
@@ -353,14 +355,18 @@ func (fs *Fs_t) Fs_rename(oldp, newp string, cwd *common.Cwd_t) common.Err_t {
 		if err != 0 {
 			return err
 		}
+		childi.Refdown("rename") // childi is just used in next test
 		// has ofn been removed but a new file ofn has been created?
-		if childi != ochild {
+		if childi.inum != ochild.inum {
 			return -common.ENOENT
 		}
 
 		childi, err = npar.ilookup(opid, nfn)
+		if err == 0 {
+			childi.Refdown("rename") // childi is just used in next test
+		}
 		// it existed before and still exists
-		if newexists && err == 0 && childi == nchild {
+		if newexists && err == 0 && childi.inum == nchild.inum {
 			break
 		}
 		// it didn't exist before and still doesn't exist
@@ -461,13 +467,15 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 		panic("root is always ancestor")
 	}
 	// walk up to iroot
-	here := fs.icache.Iref(start.inum, "_isancestor")
+	// here := fs.icache.Iref(start.inum, "_isancestor")
+	here := start
+	here.Refup("_isancestor")
 	gimme := common.Bounds(common.B_FS_T__ISANCESTOR)
-	for here.inum != iroot {
+	for here != fs.root {
 		if !common.Resadd_noblock(gimme) {
 			return -common.ENOHEAP
 		}
-		if anc == here {
+		if anc.inum == here.inum {
 			here.Refdown("_isancestor_here")
 			return -common.EINVAL
 		}
@@ -477,11 +485,11 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 			here.iunlock("_isancestor")
 			return err
 		}
-		if next == here {
+		if next.inum == here.inum {
 			here.iunlock("_isancestor")
 			panic("xxx")
 		} else {
-			var next *imemnode_t
+			// var next *imemnode_t
 			// next = fs.icache.Iref(nexti, "_isancestor_next")
 			here.iunlock_refdown("_isancestor")
 			here = next

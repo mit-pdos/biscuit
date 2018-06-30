@@ -1480,7 +1480,7 @@ func main() {
 	kbd_init()
 
 	// control CPUs
-	aplim := 7
+	aplim := 3
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
