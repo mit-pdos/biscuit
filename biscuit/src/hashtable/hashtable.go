@@ -8,7 +8,7 @@ import "unsafe"
 
 type hashtable_i interface {
 	Get(key interface{}) (interface{}, bool)
-	Put(key interface{}, val interface{})
+	Set(key interface{}, val interface{}) (interface{}, bool)
 	Del(key interface{})
 }
 
@@ -128,10 +128,8 @@ func (ht *Hashtable_t) Set(key interface{}, value interface{}) (interface{}, boo
 		if last == nil {
 			n := &elem_t{key: key, value: value, keyHash: kh, next: b.first}
 			storeptr(&b.first, n)
-			// b.first = n
 		} else {
 			n := &elem_t{key: key, value: value, keyHash: kh, next: last.next}
-			// last.next = n
 			storeptr(&last.next, n)
 		}
 	}
@@ -232,6 +230,8 @@ func hash(key interface{}) uint32 {
 	panic(fmt.Errorf("unsupported key type %T", key))
 }
 
+// For performance comparisons
+
 type hashtablestring_t struct {
 	sync.Mutex
 	table map[string]int
@@ -252,13 +252,14 @@ func (ht *hashtablestring_t) Get(key interface{}) (interface{}, bool) {
 	return v, ok
 }
 
-func (ht *hashtablestring_t) Put(key interface{}, val interface{}) {
+func (ht *hashtablestring_t) Set(key interface{}, val interface{}) (interface{}, bool) {
 	ht.Lock()
 	defer ht.Unlock()
 
 	k := key.(string)
 	v := val.(int)
 	ht.table[k] = v
+	return v, false
 }
 
 func (ht *hashtablestring_t) Del(key interface{}) {

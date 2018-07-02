@@ -11,7 +11,7 @@ import "time"
 func fill(t *testing.T, ht hashtable_i, n int) {
 	for i := 0; i < n; i++ {
 		k := strconv.Itoa(i)
-		ht.Put(k, i)
+		ht.Set(k, i)
 		v, ok := ht.Get(k)
 		if !ok {
 			t.Fatalf("%v key", k)
@@ -54,7 +54,7 @@ const NSEC = 1
 
 func doop(t *testing.T, ht hashtable_i, k string, v int) {
 
-	ht.Put(k, v)
+	ht.Set(k, v)
 	r, ok := ht.Get(k)
 	if !ok {
 		t.Fatalf("%v key", k)
