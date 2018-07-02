@@ -2,6 +2,8 @@ package fs
 
 import "common"
 
+// import "hashtable"
+
 const NAME_MAX int = 512
 
 var lhits = 0
@@ -229,8 +231,8 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn string) (*icdent_t, common.Err_
 	if fn == "" {
 		panic("bad lookup")
 	}
-	if de, ok := idm.dentc.dents.lookup(fn); ok {
-		return de, 0
+	if de, ok := idm.dentc.dents.Get(fn); ok {
+		return de.(*icdent_t), 0
 	}
 	var zi *icdent_t
 	if idm.dentc.haveall {
@@ -283,51 +285,17 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn string) (*icdent_t, common.Err_
 	idm.fs.fslog.Write(opid, b)
 	idm.fs.fslog.Relse(b, "_deremove")
 	// add back to free dents
-	idm.dentc.dents.remove(fn)
+	idm.dentc.dents.Del(fn)
 	idm._deaddempty(de.offset)
 	return de, 0
-}
-
-// returns the filename mapping to tnum
-func (idm *imemnode_t) _denamefor(opid opid_t, tnum common.Inum_t) (string, common.Err_t) {
-	// check cache first
-	var fn string
-	found := idm.dentc.dents.iter(func(dn string, de *icdent_t) bool {
-		if de.inum == tnum {
-			fn = dn
-			return true
-		}
-		return false
-	})
-	if found {
-		return fn, 0
-	}
-
-	// not in cache; shucks!
-	var de *icdent_t
-	found, err := idm._descan(opid, func(tfn string, tde *icdent_t) bool {
-		if tde.inum == tnum {
-			fn = tfn
-			de = tde
-			return true
-		}
-		return false
-	})
-	if err != 0 {
-		return "", err
-	}
-	if !found {
-		return "", -common.ENOENT
-	}
-	idm._dceadd(fn, de)
-	return fn, 0
 }
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
 func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 	if idm.dentc.haveall {
 		dentc := &idm.dentc
-		hasfiles := dentc.dents.iter(func(dn string, de *icdent_t) bool {
+		hasfiles := dentc.dents.Iter(func(key interface{}, v interface{}) bool {
+			dn := key.(string)
 			if dn != "." && dn != ".." {
 				return true
 			}
@@ -348,7 +316,7 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 func (idm *imemnode_t) _derelease() int {
 	dc := &idm.dentc
 	dc.haveall = false
-	dc.dents.clear()
+	// dc.dents.clear()
 	dc.freel.head = nil
 	ret := dc.max
 	common.Syslimit.Dirents.Given(uint(ret))
@@ -387,7 +355,8 @@ func (idm *imemnode_t) _deprobe(opid opid_t, fn string) (*Bdev_block_t, common.E
 func (idm *imemnode_t) _demayadd() bool {
 	dc := &idm.dentc
 	//have := len(dc.dents) + len(dc.freem)
-	have := dc.dents.nodes + dc.freel.count()
+	// have := dc.dents.nodes + dc.freel.count()
+	have := dc.freel.count()
 	if have+1 < dc.max {
 		return true
 	}
@@ -407,7 +376,7 @@ func (idm *imemnode_t) _dceadd(fn string, de *icdent_t) bool {
 	if !idm._demayadd() {
 		return false
 	}
-	dc.dents.insert(fn, de)
+	dc.dents.Set(fn, de)
 	return true
 }
 
@@ -456,6 +425,20 @@ func (idm *imemnode_t) ilookup(opid opid_t, name string) (*imemnode_t, common.Er
 	}
 	de.idm.Refup("ilookup")
 	return de.idm, 0
+}
+
+func (idm *imemnode_t) ilookup_lockfree(name string) (*imemnode_t, bool) {
+	if e, ok := idm.dentc.dents.Get(name); ok {
+		de := e.(*icdent_t)
+		if de.idm == nil { // XXX maybe use atomic load?
+			de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
+		}
+		if de.idm != nil {
+			de.idm.Refup("ilookup")
+			return de.idm, true
+		}
+	}
+	return nil, false
 }
 
 // creates a new directory entry with name "name" and inode number priv

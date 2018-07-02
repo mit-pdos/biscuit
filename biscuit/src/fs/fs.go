@@ -19,7 +19,6 @@ type Fs_t struct {
 	superb       Superblock_t
 	bcache       *bcache_t
 	icache       *icache_t
-	dcache       *dcache_t
 	fslog        *log_t
 	ialloc       *ibitmap_t
 	balloc       *bbitmap_t
@@ -1441,24 +1440,28 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths string, cwd *common.Cwd_t) (*imemnod
 		start = fs.IrefRoot()
 	}
 	idm := start
+	err := common.Err_t(0)
 	pp := common.Pathparts_t{}
 	pp.Pp_init(paths)
 	for cp, ok := pp.Next(); ok; cp, ok = pp.Next() {
-		idm.ilock("fs_namei")
-		n, err := idm.ilookup(opid, cp)
-		if !common.Resadd_noblock(common.Bounds(common.B_FS_T_FS_NAMEI)) {
-			err = -common.ENOHEAP
-		}
-		if err != 0 {
-			idm.iunlock_refdown("fs_namei_ilookup")
-			return nil, err
+		n, found := idm.ilookup_lockfree(cp)
+		if !found {
+			fmt.Printf("lock free failed\n")
+			idm.ilock("fs_namei")
+			n, err = idm.ilookup(opid, cp)
+			if !common.Resadd_noblock(common.Bounds(common.B_FS_T_FS_NAMEI)) {
+				err = -common.ENOHEAP
+			}
+			if err != 0 {
+				idm.iunlock_refdown("fs_namei_ilookup")
+				return nil, err
+			}
+			idm.iunlock("fs_namei")
 		}
 		if n != idm {
 			// next := fs.icache.Iref(n, "fs_namei_next")
-			idm.iunlock_refdown("fs_namei_idm")
+			idm.Refdown("fs_namei_idm")
 			idm = n
-		} else {
-			idm.iunlock("fs_namei_idm_next")
 		}
 	}
 	return idm, 0

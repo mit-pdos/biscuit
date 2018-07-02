@@ -6,6 +6,7 @@ import "sort"
 import "unsafe"
 
 import "common"
+import "hashtable"
 
 type inode_stats_t struct {
 	Nopen       common.Counter_t
@@ -185,7 +186,8 @@ type imemnode_t struct {
 		// maximum number of cached dents this icache is allowed to
 		// have
 		max   int
-		dents dc_rbh_t
+		dents *hashtable.Hashtable_t
+		// dents dc_rbh_t
 		freel fdelist_t
 	}
 }
@@ -442,52 +444,6 @@ func (idm *imemnode_t) do_createdir(opid opid_t, fn string) (common.Inum_t, comm
 	return cnext, err
 }
 
-func (fs *Fs_t) _fullpath(opid opid_t, inum common.Inum_t) (string, common.Err_t) {
-	c := fs.icache.Iref_locked(inum, "_fullpath")
-	if c.itype != I_DIR {
-		panic("fullpath on non-dir")
-	}
-
-	// starting at the target file, walk up to the root prepending the name
-	// (which is stored in the parent's directory entry)
-	last := c.inum
-	acc := ""
-	for c.inum != iroot {
-		gimme := common.Bounds(common.B_FS_T__FULLPATH)
-		if !common.Resadd_noblock(gimme) {
-			c.iunlock("do_fullpath_c")
-			return "", -common.ENOHEAP
-		}
-		par, err := c.ilookup(opid, "..")
-		if err != 0 {
-			c.iunlock("do_fullpath_c")
-			return "", err
-		}
-		// par := fs.icache.Iref(pari, "do_fullpath_par")
-		c.iunlock("do_fullpath_c")
-		par.ilock("do_fullpath_par")
-		name, err := par._denamefor(opid, last)
-		if err != 0 {
-			if err == -common.ENOENT {
-				panic("child must exist")
-			}
-			par.iunlock_refdown("do_fullpath_par")
-			return "", err
-		}
-		// POSIX: "no unnecessary slashes"
-		if acc == "" {
-			acc = name
-		} else {
-			acc = name + "/" + acc
-		}
-		last = par.inum
-		c = par
-	}
-	c.iunlock_refdown("do_fullpath_c2")
-	acc = "/" + acc
-	return acc, 0
-}
-
 // caller holds lock on idm
 func (idm *imemnode_t) _linkdown(opid opid_t) {
 	idm.links--
@@ -524,6 +480,7 @@ func (ic *imemnode_t) fill(blk *Bdev_block_t, inum common.Inum_t) {
 	for i := 0; i < NIADDRS; i++ {
 		ic.addrs[i] = inode.addr(i)
 	}
+	ic.dentc.dents = hashtable.MkHash(1000)
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk

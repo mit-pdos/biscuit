@@ -46,6 +46,15 @@ func (b *bucket_t) elems() []Pair_t {
 	return p
 }
 
+func (b *bucket_t) iter(f func(interface{}, interface{}) bool) bool {
+	for e := b.first; e != nil; e = loadptr(&e.next) {
+		if f(e.key, e.value) {
+			return true
+		}
+	}
+	return false
+}
+
 type Hashtable_t struct {
 	table    []*bucket_t
 	capacity int
@@ -100,7 +109,7 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 
-	for e := b.first; e != nil; e = loadptr(&e.next) {
+	for e := loadptr(&b.first); e != nil; e = loadptr(&e.next) {
 		if e.keyHash == kh && e.key == key {
 			return e.value, true
 		}
@@ -172,6 +181,17 @@ func (ht *Hashtable_t) Del(key interface{}) {
 	panic("del of non-existing key")
 }
 
+// returns true if at least one call to f returned true. stops iterating once f
+// returns true.
+func (ht *Hashtable_t) Iter(f func(interface{}, interface{}) bool) bool {
+	for _, b := range ht.table {
+		if b.iter(f) {
+			return true
+		}
+	}
+	return false
+}
+
 func (ht *Hashtable_t) hash(keyHash uint32) int {
 	return int(keyHash % uint32(len(ht.table)))
 }
@@ -187,7 +207,6 @@ func storeptr(p **elem_t, n *elem_t) {
 	ptr := (*unsafe.Pointer)(unsafe.Pointer(p))
 	v := (unsafe.Pointer)(n)
 	atomic.StorePointer(ptr, v)
-	// *p = n
 }
 
 func hashString(s string) uint32 {
