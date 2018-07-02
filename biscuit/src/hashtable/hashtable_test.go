@@ -124,9 +124,7 @@ func TestManyWriter(t *testing.T) {
 	fmt.Printf("TestManyWriter: %d/s\n", total)
 }
 
-func TestManyReader(t *testing.T) {
-	ht := MkHash(SZ)
-
+func doTestManyReader(ht hashtable_i, t *testing.T) {
 	rand.Seed(SZ)
 
 	fill(t, ht, SZ)
@@ -148,33 +146,17 @@ func TestManyReader(t *testing.T) {
 	fmt.Printf("TestManyReader:  %d/s\n", total)
 }
 
-func TestManyReaderStd(t *testing.T) {
-	ht := MkHashString(SZ)
-
-	rand.Seed(SZ)
-
-	fill(t, ht, SZ)
-
-	var wg sync.WaitGroup
-	done := int32(0)
-	total := 0
-	for p := 0; p < NPROC; p++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			n := reader(t, ht, &done)
-			total += n
-		}(p)
-	}
-	time.Sleep(NSEC * time.Second)
-	atomic.StoreInt32(&done, 1)
-	wg.Wait()
-	fmt.Printf("TestManyReaderStd:  %d/s\n", total)
+func TestManyReader(t *testing.T) {
+	ht := MkHash(SZ)
+	doTestManyReader(ht, t)
 }
 
-func TestManyReaderOneWriter(t *testing.T) {
-	ht := MkHash(SZ)
+func TestManyReaderStd(t *testing.T) {
+	ht := MkHashString(SZ)
+	doTestManyReader(ht, t)
+}
 
+func doTestManyReaderOneWriter(ht hashtable_i, t *testing.T) {
 	rand.Seed(SZ)
 
 	fill(t, ht, SZ)
@@ -200,30 +182,52 @@ func TestManyReaderOneWriter(t *testing.T) {
 	fmt.Printf("TestManyReaderOneWriter: reads %d/s writes %d/s\n", nreads, nwrites)
 }
 
+func TestManyReaderOneWriter(t *testing.T) {
+	ht := MkHash(SZ)
+	doTestManyReaderOneWriter(ht, t)
+}
+
 func TestManyReaderOneWriterStd(t *testing.T) {
 	ht := MkHashString(SZ)
+	doTestManyReaderOneWriter(ht, t)
+}
 
-	rand.Seed(SZ)
+// For performance comparisons
 
-	fill(t, ht, SZ)
+type hashtablestring_t struct {
+	sync.Mutex
+	table map[string]int
+}
 
-	var wg sync.WaitGroup
-	done := int32(0)
-	nreads := 0
-	nwrites := 0
-	for p := 0; p < NPROC; p++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			if id == 0 {
-				nwrites += writer(t, ht, id, &done)
-			} else {
-				nreads += reader(t, ht, &done)
-			}
-		}(p)
-	}
-	time.Sleep(NSEC * time.Second)
-	atomic.StoreInt32(&done, 1)
-	wg.Wait()
-	fmt.Printf("TestManyReaderOneWriterStd: reads %d/s writes %d/s\n", nreads, nwrites)
+func MkHashString(size int) *hashtablestring_t {
+	ht := &hashtablestring_t{}
+	ht.table = make(map[string]int, size)
+	return ht
+}
+
+func (ht *hashtablestring_t) Get(key interface{}) (interface{}, bool) {
+	ht.Lock()
+	defer ht.Unlock()
+
+	k := key.(string)
+	v, ok := ht.table[k]
+	return v, ok
+}
+
+func (ht *hashtablestring_t) Set(key interface{}, val interface{}) (interface{}, bool) {
+	ht.Lock()
+	defer ht.Unlock()
+
+	k := key.(string)
+	v := val.(int)
+	ht.table[k] = v
+	return v, false
+}
+
+func (ht *hashtablestring_t) Del(key interface{}) {
+	ht.Lock()
+	defer ht.Unlock()
+
+	k := key.(string)
+	delete(ht.table, k)
 }
