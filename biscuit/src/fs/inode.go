@@ -1334,7 +1334,6 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) *imemnode_t {
 
 // Grab locks on inodes references in imems.  handles duplicates.
 func iref_lockall(imems []*imemnode_t) []*imemnode_t {
-	//var locked []*imemnode_t
 	locked := make([]*imemnode_t, 0, 4)
 	sort.Slice(imems, func(i, j int) bool { return imems[i].Key() < imems[j].Key() })
 	for _, imem := range imems {
