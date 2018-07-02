@@ -148,6 +148,30 @@ func TestManyReader(t *testing.T) {
 	fmt.Printf("TestManyReader:  %d/s\n", total)
 }
 
+func TestManyReaderStd(t *testing.T) {
+	ht := MkHashString(SZ)
+
+	rand.Seed(SZ)
+
+	fill(t, ht, SZ)
+
+	var wg sync.WaitGroup
+	done := int32(0)
+	total := 0
+	for p := 0; p < NPROC; p++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			n := reader(t, ht, &done)
+			total += n
+		}(p)
+	}
+	time.Sleep(NSEC * time.Second)
+	atomic.StoreInt32(&done, 1)
+	wg.Wait()
+	fmt.Printf("TestManyReaderStd:  %d/s\n", total)
+}
+
 func TestManyReaderOneWriter(t *testing.T) {
 	ht := MkHash(SZ)
 
