@@ -428,6 +428,9 @@ func (idm *imemnode_t) ilookup(opid opid_t, name string) (*imemnode_t, common.Er
 }
 
 func (idm *imemnode_t) ilookup_lockfree(name string) (*imemnode_t, bool) {
+	if idm.dentc.dents == nil {
+		return nil, false
+	}
 	if e, ok := idm.dentc.dents.Get(name); ok {
 		de := e.(*icdent_t)
 		if de.idm == nil { // XXX maybe use atomic load?
