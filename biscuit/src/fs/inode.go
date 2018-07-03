@@ -480,7 +480,9 @@ func (ic *imemnode_t) fill(blk *Bdev_block_t, inum common.Inum_t) {
 	for i := 0; i < NIADDRS; i++ {
 		ic.addrs[i] = inode.addr(i)
 	}
-	ic.dentc.dents = hashtable.MkHash(1000)
+	if ic.itype == I_DIR {
+		ic.dentc.dents = hashtable.MkHash(1000)
+	}
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
