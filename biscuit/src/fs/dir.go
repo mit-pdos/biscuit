@@ -316,7 +316,7 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 func (idm *imemnode_t) _derelease() int {
 	dc := &idm.dentc
 	dc.haveall = false
-	// dc.dents.clear()
+	dc.dents = nil
 	dc.freel.head = nil
 	ret := dc.max
 	common.Syslimit.Dirents.Given(uint(ret))

@@ -111,7 +111,7 @@ func doTestDcacheSimple(t *testing.T) {
 const NSTAT = 1000000
 const NGO = 4
 
-func DcacheFunc(t *testing.T, tfs *Ufs_t, dir string) {
+func DcacheFuncRead(t *testing.T, tfs *Ufs_t, dir string) {
 	var wg sync.WaitGroup
 
 	start := time.Now()
@@ -133,11 +133,11 @@ func DcacheFunc(t *testing.T, tfs *Ufs_t, dir string) {
 	fmt.Printf("stats took %v\n", stop.Sub(start))
 }
 
-func TestDcachePerf(t *testing.T) {
+func TestDcachePerfRead(t *testing.T) {
 	dst := "tmp.img"
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
-	fmt.Printf("Test DcachePerf %v ...\n", dst)
+	fmt.Printf("Test DcachePerfRead %v ...\n", dst)
 	d := "d/"
 	d1 := "d1/"
 	tfs := BootFS(dst)
@@ -156,7 +156,59 @@ func TestDcachePerf(t *testing.T) {
 		}
 	}
 
-	DcacheFunc(t, tfs, d+d1)
+	DcacheFuncRead(t, tfs, d+d1)
+
+	// fmt.Printf("stats: %v\n", tfs.Statistics())
+
+	ShutdownFS(tfs)
+
+	os.Remove(dst)
+}
+
+const NCREATE = 100000
+
+func DcacheFuncWrite(t *testing.T, tfs *Ufs_t, dir string) {
+	var wg sync.WaitGroup
+	start := time.Now()
+	for i := 0; i < NGO; i++ {
+		wg.Add(1)
+		d1 := uniqdir(i)
+		e := tfs.MkDir(dir + d1)
+		if e != 0 {
+			t.Fatalf("mkDir %v failed", d1)
+		}
+
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < NCREATE; i++ {
+				f := dir + d1 + uniqfile(i)
+				e = tfs.MkFile(f, nil)
+				if e != 0 {
+					t.Fatalf("mkFile %v failed", i)
+				}
+				e = tfs.Unlink(f)
+				if e != 0 {
+					t.Fatalf("unlink %v failed", i)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	stop := time.Now()
+	fmt.Printf("stats took %v\n", stop.Sub(start))
+}
+
+func TestDcachePerfWrite(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, ManyLogBlks, ManyInodeBlks, ManyDataBlks)
+	fmt.Printf("Test DcachePerfWrite %v ...\n", dst)
+	tfs := BootMemFS(dst)
+	d := "d/"
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+	DcacheFuncWrite(t, tfs, d)
 
 	// fmt.Printf("stats: %v\n", tfs.Statistics())
 

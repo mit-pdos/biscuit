@@ -632,7 +632,7 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
 func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, common.Err_t) {
-	if writing && opid == 0 && !memfs {
+	if writing && opid == 0 && idm.fs.diskfs {
 		panic("offsetblk: writing but no opid\n")
 	}
 	whichblk := offset / BSIZE
@@ -951,7 +951,7 @@ func (bl *blockiter_t) _isind(blkno int) (*Bdev_block_t, bool) {
 		bl.idm.fs.fslog.Relse(bl.lasti, "release")
 	}
 	bl.lasti = bl.idm.mbread(blkno)
-	if bl.tryevict && !memfs {
+	if bl.tryevict && bl.idm.fs.diskfs {
 		bl.lasti.Tryevict()
 	}
 	return bl.lasti, true
@@ -1124,7 +1124,7 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		// must lock the inode block before marking it free, to prevent
 		// clobbering a newly, concurrently allocated/created inode
 		iblk := idm.idibread()
-		if tryevict && !memfs {
+		if tryevict && idm.fs.diskfs {
 			iblk.Tryevict()
 		}
 

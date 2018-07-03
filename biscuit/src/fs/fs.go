@@ -5,10 +5,8 @@ import "sync"
 
 import "common"
 
-var memfs = false // in-memory file system?
 const fs_debug = false
 const FSOFF = 506
-
 const iroot = common.Inum_t(0)
 
 var cons common.Cons_i
@@ -24,20 +22,21 @@ type Fs_t struct {
 	balloc       *bbitmap_t
 	istats       *inode_stats_t
 	root         *imemnode_t
+	diskfs       bool // disk or in-mem file system?
 }
 
-func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, *Fs_t) {
+func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*common.Fd_t, *Fs_t) {
 
-	memfs = common.Kernel // use in-memory file system if in-kernel
 	cons = console
 
 	// reset taken
 	common.Syslimit = common.MkSysLimit()
 
 	fs := &Fs_t{}
+	fs.diskfs = diskfs
 	fs.ahci = disk
 	fs.istats = &inode_stats_t{}
-	if memfs {
+	if !fs.diskfs {
 		fmt.Printf("Using MEMORY FS\n")
 	}
 
@@ -60,7 +59,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i) (*common.Fd_t, 
 
 	logstart := fs.superb_start + 1
 	loglen := fs.superb.Loglen()
-	fs.fslog = StartLog(logstart, loglen, fs.bcache)
+	fs.fslog = StartLog(logstart, loglen, fs.bcache, fs.diskfs)
 	if fs.fslog == nil {
 		panic("Startlog failed")
 	}
@@ -1393,7 +1392,7 @@ func (fs *Fs_t) Fs_stat(path string, st *common.Stat_t, cwd *common.Cwd_t) commo
 // Sync the file system to disk. XXX If Biscuit supported fsync, we could be
 // smarter and flush only the dirty blocks of particular inode.
 func (fs *Fs_t) Fs_sync() common.Err_t {
-	if memfs {
+	if !fs.diskfs {
 		return 0
 	}
 	fs.istats.Nsync.Inc()
@@ -1402,7 +1401,7 @@ func (fs *Fs_t) Fs_sync() common.Err_t {
 }
 
 func (fs *Fs_t) Fs_syncapply() common.Err_t {
-	if memfs {
+	if !fs.diskfs {
 		return 0
 	}
 	fs.istats.Nsync.Inc()
@@ -1456,7 +1455,7 @@ func (fs *Fs_t) fs_namei_locked(opid opid_t, paths string, cwd *common.Cwd_t, s 
 }
 
 func (fs *Fs_t) Fs_evict() (int, int) {
-	if memfs {
+	if !fs.diskfs {
 		panic("no evict")
 	}
 	//fmt.Printf("FS EVICT\n")
@@ -1468,7 +1467,7 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 
 func (fs *Fs_t) Fs_statistics() string {
 	s := fs.istats.Stats()
-	if !memfs {
+	if fs.diskfs {
 		s += fs.fslog.Stats()
 	}
 	s += fs.ialloc.Stats()

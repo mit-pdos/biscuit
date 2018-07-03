@@ -88,7 +88,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) bool {
 	for bit := start; bit < alloc.freelen*bitsperblk; bit++ {
 		bn := blkno(bit)
 		if bn != lastbn {
-			if tryevict && !memfs {
+			if tryevict && alloc.fs.diskfs {
 				blk.Tryevict()
 			}
 			if blk != nil {

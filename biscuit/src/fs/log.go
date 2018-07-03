@@ -39,7 +39,7 @@ type index_t uint64
 //
 
 func (log *log_t) Op_begin(s string) opid_t {
-	if memfs {
+	if !log.logging {
 		return 0
 	}
 
@@ -72,7 +72,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 }
 
 func (log *log_t) Op_end(opid opid_t) {
-	if memfs {
+	if !log.logging {
 		return
 	}
 	log.Lock()
@@ -106,7 +106,7 @@ func (log *log_t) Op_end(opid opid_t) {
 // Ensure any fs ops in the journal preceding this sync call are flushed to disk
 // by waiting for log commit.
 func (log *log_t) Force(doapply bool) {
-	if memfs {
+	if !log.logging {
 		return
 	}
 
@@ -200,9 +200,9 @@ func (log *log_t) Stats() string {
 	return s1 + s2
 }
 
-func StartLog(logstart, loglen int, bcache *bcache_t) *log_t {
+func StartLog(logstart, loglen int, bcache *bcache_t, logging bool) *log_t {
 	log := &log_t{}
-	log.mk_log(logstart, loglen, bcache)
+	log.mk_log(logstart, loglen, bcache, logging)
 	log.recover()
 	log.curtrans = log.mk_trans(log.head, log.ml)
 	go log.committer()
@@ -685,8 +685,9 @@ type log_t struct {
 	stop          bool
 	stopc         chan (bool)
 
-	nextop opid_t
-	stats  logstat_t
+	logging bool
+	nextop  opid_t
+	stats   logstat_t
 }
 
 // first log header block format
@@ -738,17 +739,18 @@ func (ld *logdescriptor_t) w_logdest(p int, n int) {
 	fieldw(ld.data, p, n)
 }
 
-func (log *log_t) mk_log(ls, ll int, bcache *bcache_t) {
+func (log *log_t) mk_log(ls, ll int, bcache *bcache_t, logging bool) {
 	log.ml = mk_memlog(ls, ll, bcache)
 	log.admissioncond = sync.NewCond(log)
 	log.commitcond = sync.NewCond(log)
 	log.stopc = make(chan bool)
 	log.translog = mkTransLog()
 	log.nextop = opid_t(1)
+	log.logging = logging
 }
 
 func (log *log_t) write(opid opid_t, b *Bdev_block_t, ordered bool) {
-	if memfs {
+	if !log.logging {
 		return
 	}
 

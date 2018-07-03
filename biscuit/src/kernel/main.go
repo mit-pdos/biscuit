@@ -1484,7 +1484,7 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf, fs := fs.StartFS(blockmem, ahci, console)
+	rf, fs := fs.StartFS(blockmem, ahci, console, false)
 	thefs = fs
 
 	common.Oom_init(thefs.Fs_evict)
