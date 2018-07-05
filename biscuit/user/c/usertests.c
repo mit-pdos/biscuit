@@ -2349,8 +2349,9 @@ void polltest()
 	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", spath);
 
 	unlink(spath);
-	if (bind(sock, (struct sockaddr *)&sa, SUN_LEN(&sa)) < 0)
+	if (bind(sock, (struct sockaddr *)&sa, SUN_LEN(&sa)) < 0) {
 		err(-1, "bind");
+	}
 
 	_pchk(-1, tono, 4,
 		pp[0], rwfl, 0,

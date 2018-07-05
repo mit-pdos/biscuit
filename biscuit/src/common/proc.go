@@ -46,7 +46,7 @@ type Proc_t struct {
 	Pid int
 	// first thread id
 	tid0 Tid_t
-	Name string
+	Name Ustr
 
 	// waitinfo for my child processes
 	Mywait Wait_t
@@ -986,32 +986,34 @@ func (p *Proc_t) Userwriten(va, n, val int) Err_t {
 }
 
 // first ret value is the string from user space second is error
-func (p *Proc_t) Userstr(uva int, lenmax int) (string, Err_t) {
+func (p *Proc_t) Userstr(uva int, lenmax int) (Ustr, Err_t) {
 	if lenmax < 0 {
-		return "", 0
+		return nil, 0
 	}
 	p.Lock_pmap()
 	//defer p.Unlock_pmap()
 	i := 0
-	var s string
+	s := MkUstr()
 	for {
 		str, err := p.Userdmap8_inner(uva+i, false)
 		if err != 0 {
 			p.Unlock_pmap()
-			return "", err
+			return s, err
 		}
 		for j, c := range str {
 			if c == 0 {
-				s = s + string(str[:j])
+				s = append(s, str[:j]...)
+				// s = s + string(str[:j])
 				p.Unlock_pmap()
 				return s, 0
 			}
 		}
-		s = s + string(str)
+		s = append(s, str...)
+		// s = s + string(str)
 		i += len(str)
 		if len(s) >= lenmax {
 			p.Unlock_pmap()
-			return "", -ENAMETOOLONG
+			return nil, -ENAMETOOLONG
 		}
 	}
 }
@@ -1035,7 +1037,7 @@ func (p *Proc_t) Usertimespec(va int) (time.Duration, time.Time, Err_t) {
 	return tot, t, 0
 }
 
-func (p *Proc_t) Userargs(uva int) ([]string, Err_t) {
+func (p *Proc_t) Userargs(uva int) ([]Ustr, Err_t) {
 	if uva == 0 {
 		return nil, 0
 	}
@@ -1047,10 +1049,11 @@ func (p *Proc_t) Userargs(uva int) ([]string, Err_t) {
 		}
 		return true
 	}
-	ret := make([]string, 0, 12)
+	ret := make([]Ustr, 0, 12)
 	argmax := 64
 	addarg := func(cptr []uint8) Err_t {
 		if len(ret) > argmax {
+			fmt.Printf("too long\n")
 			return -ENAMETOOLONG
 		}
 		var uva int
@@ -1296,7 +1299,7 @@ var _deflimits = Ulimit_t{
 
 // returns the new proc and success; can fail if the system-wide limit of
 // procs/threads has been reached. the parent's fdtable must be locked.
-func Proc_new(name string, cwd *Cwd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool) {
+func Proc_new(name Ustr, cwd *Cwd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, bool) {
 	Proclock.Lock()
 
 	if nthreads >= int64(Syslimit.Sysprocs) {

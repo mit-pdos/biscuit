@@ -6,6 +6,8 @@ import "hash/fnv"
 import "sync"
 import "unsafe"
 
+import "common"
+
 type hashtable_i interface {
 	Get(key interface{}) (interface{}, bool)
 	Set(key interface{}, val interface{}) (interface{}, bool)
@@ -110,7 +112,7 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	b := ht.table[ht.hash(kh)]
 	n := 0
 	for e := loadptr(&b.first); e != nil; e = loadptr(&e.next) {
-		if e.keyHash == kh && e.key == key {
+		if e.keyHash == kh && equal(e.key, key) {
 			return e.value, true
 		}
 		n += 1
@@ -140,7 +142,7 @@ func (ht *Hashtable_t) Set(key interface{}, value interface{}) (interface{}, boo
 
 	var last *elem_t
 	for e := b.first; e != nil; e = e.next {
-		if e.keyHash == kh && e.key == key {
+		if e.keyHash == kh && equal(e.key, key) {
 			return e.value, false
 		}
 		if kh < e.keyHash {
@@ -172,7 +174,7 @@ func (ht *Hashtable_t) Del(key interface{}) {
 
 	var last *elem_t
 	for e := b.first; e != nil; e = e.next {
-		if e.keyHash == kh && e.key == key {
+		if e.keyHash == kh && equal(e.key, key) {
 			rem(last, b, e)
 			return
 		}
@@ -212,9 +214,9 @@ func storeptr(p **elem_t, n *elem_t) {
 	atomic.StorePointer(ptr, v)
 }
 
-func hashString(s string) uint32 {
+func hashString(s common.Ustr) uint32 {
 	h := fnv.New32a()
-	h.Write([]byte(s))
+	h.Write(s)
 	return h.Sum32()
 }
 
@@ -225,7 +227,7 @@ func khash(key interface{}) uint32 {
 
 func hash(key interface{}) uint32 {
 	switch x := key.(type) {
-	case string:
+	case common.Ustr:
 		return hashString(x)
 	case int:
 		return uint32(x)
@@ -233,4 +235,22 @@ func hash(key interface{}) uint32 {
 		return uint32(x)
 	}
 	panic(fmt.Errorf("unsupported key type %T", key))
+}
+
+func equal(key1 interface{}, key2 interface{}) bool {
+	switch x := key1.(type) {
+	case common.Ustr:
+		us1 := key1.(common.Ustr)
+		us2 := key2.(common.Ustr)
+		return us1.Eq(us2)
+	case int32:
+		n1 := uint32(x)
+		n2 := key2.(uint32)
+		return n1 == n2
+	case int:
+		n1 := int(x)
+		n2 := key2.(int)
+		return n1 == n2
+	}
+	panic(fmt.Errorf("unsupported key type %T", key1))
 }

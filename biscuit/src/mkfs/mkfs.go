@@ -5,6 +5,7 @@ import "fmt"
 import "strings"
 import "path/filepath"
 
+import "common"
 import "fs"
 import "ufs"
 
@@ -30,7 +31,7 @@ func copydata(src string, f *ufs.Ufs_t, dst string) {
 		}
 		b = b[:n]
 		buf := ufs.MkBuf(b)
-		f.Append(dst, buf)
+		f.Append(common.Ustr(dst), buf)
 	}
 	if err := s.Close(); err != nil {
 		panic(err)
@@ -48,13 +49,13 @@ func addfiles(fs *ufs.Ufs_t, skeldir string) {
 			return nil
 		}
 		if info.IsDir() {
-			e := fs.MkDir(p)
+			e := fs.MkDir(common.Ustr(p))
 			if e != 0 {
 				fmt.Printf("failed to create dir %v\n", p)
 			}
 
 		} else {
-			e := fs.MkFile(p, nil)
+			e := fs.MkFile(common.Ustr(p), nil)
 			if e != 0 {
 				fmt.Printf("failed to create file %v\n", p)
 			}
@@ -82,7 +83,7 @@ func main() {
 	ufs.MkDisk(image, imgs, nlogblks, ninodeblks, ndatablks)
 
 	fs := ufs.BootFS(image)
-	_, err := fs.Stat("/")
+	_, err := fs.Stat(common.MkUstrRoot())
 	if err != 0 {
 		fmt.Printf("not a valid fs: no root inode\n")
 		os.Exit(1)

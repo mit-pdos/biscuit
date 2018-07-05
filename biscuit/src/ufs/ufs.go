@@ -56,28 +56,28 @@ func (ufs *Ufs_t) SyncApply() common.Err_t {
 	return err
 }
 
-func (ufs *Ufs_t) MkFile(p string, ub *common.Fakeubuf_t) common.Err_t {
+func (ufs *Ufs_t) MkFile(p common.Ustr, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, ufs.cwd, 0, 0)
 	if err != 0 {
-		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
+		fmt.Printf("ufs.fs.Fs_open %s failed %v\n", string(p), err)
 		return err
 	}
 	if ub != nil {
 		n, err := fd.Fops.Write(nil, ub)
 		if err != 0 || ub.Remain() != 0 {
-			fmt.Printf("Write %s failed %v %d\n", p, err, n)
+			fmt.Printf("Write %s failed %v %d\n", string(p), err, n)
 			return err
 		}
 	}
 	err = fd.Fops.Close()
 	if err != 0 {
-		fmt.Printf("Close %s failed %v\n", p, err)
+		fmt.Printf("Close %s failed %v\n", string(p), err)
 		return err
 	}
 	return err
 }
 
-func (ufs *Ufs_t) MkDir(p string) common.Err_t {
+func (ufs *Ufs_t) MkDir(p common.Ustr) common.Err_t {
 	err := ufs.fs.Fs_mkdir(p, 0755, ufs.cwd)
 	if err != 0 {
 		fmt.Printf("mkDir %v failed %v\n", p, err)
@@ -86,7 +86,7 @@ func (ufs *Ufs_t) MkDir(p string) common.Err_t {
 	return err
 }
 
-func (ufs *Ufs_t) Rename(oldp, newp string) common.Err_t {
+func (ufs *Ufs_t) Rename(oldp, newp common.Ustr) common.Err_t {
 	err := ufs.fs.Fs_rename(oldp, newp, ufs.cwd)
 	if err != 0 {
 		fmt.Printf("doRename %v %v failed %v\n", oldp, newp, err)
@@ -95,7 +95,7 @@ func (ufs *Ufs_t) Rename(oldp, newp string) common.Err_t {
 }
 
 // update (XXX check that ub < len(file)?)
-func (ufs *Ufs_t) Update(p string, ub *common.Fakeubuf_t) common.Err_t {
+func (ufs *Ufs_t) Update(p common.Ustr, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
@@ -114,7 +114,7 @@ func (ufs *Ufs_t) Update(p string, ub *common.Fakeubuf_t) common.Err_t {
 	return err
 }
 
-func (ufs *Ufs_t) Append(p string, ub *common.Fakeubuf_t) common.Err_t {
+func (ufs *Ufs_t) Append(p common.Ustr, ub *common.Fakeubuf_t) common.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
@@ -140,25 +140,25 @@ func (ufs *Ufs_t) Append(p string, ub *common.Fakeubuf_t) common.Err_t {
 	return err
 }
 
-func (ufs *Ufs_t) Unlink(p string) common.Err_t {
+func (ufs *Ufs_t) Unlink(p common.Ustr) common.Err_t {
 	err := ufs.fs.Fs_unlink(p, ufs.cwd, false)
 	if err != 0 {
-		fmt.Printf("doUnlink %v failed %v\n", p, err)
+		fmt.Printf("doUnlink %s failed %v\n", string(p), err)
 		return err
 	}
 	return err
 }
 
-func (ufs *Ufs_t) UnlinkDir(p string) common.Err_t {
+func (ufs *Ufs_t) UnlinkDir(p common.Ustr) common.Err_t {
 	err := ufs.fs.Fs_unlink(p, ufs.cwd, true)
 	if err != 0 {
-		fmt.Printf("doUnlink %v failed %v\n", p, err)
+		fmt.Printf("doUnlink %s failed %v\n", string(p), err)
 		return err
 	}
 	return err
 }
 
-func (ufs *Ufs_t) Stat(p string) (*common.Stat_t, common.Err_t) {
+func (ufs *Ufs_t) Stat(p common.Ustr) (*common.Stat_t, common.Err_t) {
 	s := &common.Stat_t{}
 	err := ufs.fs.Fs_stat(p, s, ufs.cwd)
 	if err != 0 {
@@ -167,7 +167,7 @@ func (ufs *Ufs_t) Stat(p string) (*common.Stat_t, common.Err_t) {
 	return s, err
 }
 
-func (ufs *Ufs_t) Read(p string) ([]byte, common.Err_t) {
+func (ufs *Ufs_t) Read(p common.Ustr) ([]byte, common.Err_t) {
 	st, err := ufs.Stat(p)
 	if err != 0 {
 		fmt.Printf("doStat %v failed %v\n", p, err)
@@ -194,7 +194,7 @@ func (ufs *Ufs_t) Read(p string) ([]byte, common.Err_t) {
 	return v, err
 }
 
-func (ufs *Ufs_t) Ls(p string) (map[string]*common.Stat_t, common.Err_t) {
+func (ufs *Ufs_t) Ls(p common.Ustr) (map[string]*common.Stat_t, common.Err_t) {
 	res := make(map[string]*common.Stat_t, 100)
 	d, e := ufs.Read(p)
 	if e != 0 {
@@ -205,12 +205,12 @@ func (ufs *Ufs_t) Ls(p string) (map[string]*common.Stat_t, common.Err_t) {
 		for j := 0; j < fs.NDIRENTS; j++ {
 			tfn := dd.Filename(j)
 			if len(tfn) > 0 {
-				f := p + "/" + tfn
+				f := p.Extend(tfn)
 				st, e := ufs.Stat(f)
 				if e != 0 {
 					return nil, e
 				}
-				res[tfn] = st
+				res[string(tfn)] = st
 			}
 		}
 	}

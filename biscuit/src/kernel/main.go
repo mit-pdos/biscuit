@@ -1491,10 +1491,10 @@ func main() {
 
 	common.Oom_init(thefs.Fs_evict)
 
-	exec := func(cmd string, args []string) {
+	exec := func(cmd common.Ustr, args []common.Ustr) {
 		common.Resbegin(1 << 20)
 		fmt.Printf("start [%v %v]\n", cmd, args)
-		nargs := []string{cmd}
+		nargs := []common.Ustr{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
 		p, ok := common.Proc_new(cmd, common.MkRootCwd(rf), defaultfds, sys)
@@ -1511,7 +1511,7 @@ func main() {
 	}
 
 	//exec("bin/lsh", nil)
-	exec("bin/init", nil)
+	exec(common.Ustr("bin/init"), nil)
 	//exec("bin/rs", []string{"/redis.conf"})
 
 	//go func() {

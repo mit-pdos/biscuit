@@ -46,18 +46,19 @@ const (
 type Cwd_t struct {
 	sync.Mutex // to serialize chdirs
 	Fd         *Fd_t
-	Path       string
+	Path       Ustr
 }
 
-func (cwd *Cwd_t) Fullpath(p string) string {
-	if IsAbsolute(p) {
+func (cwd *Cwd_t) Fullpath(p Ustr) Ustr {
+	if p.IsAbsolute() {
 		return p
 	} else {
-		return cwd.Path + "/" + p
+		full := append(cwd.Path, '/')
+		return append(full, p...)
 	}
 }
 
-func (cwd *Cwd_t) Canonicalpath(p string) string {
+func (cwd *Cwd_t) Canonicalpath(p Ustr) Ustr {
 	p1 := cwd.Fullpath(p)
 	return Canonicalize(p1)
 }
@@ -65,7 +66,7 @@ func (cwd *Cwd_t) Canonicalpath(p string) string {
 func MkRootCwd(fd *Fd_t) *Cwd_t {
 	c := &Cwd_t{}
 	c.Fd = fd
-	c.Path = "/"
+	c.Path = MkUstrRoot()
 	return c
 }
 
