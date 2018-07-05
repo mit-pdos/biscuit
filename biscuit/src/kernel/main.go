@@ -1432,6 +1432,8 @@ var lhits int
 var physmem *common.Physmem_t
 var thefs *fs.Fs_t
 
+const diskfs = false
+
 func main() {
 	common.Kernel = true
 
@@ -1484,7 +1486,7 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf, fs := fs.StartFS(blockmem, ahci, console, false)
+	rf, fs := fs.StartFS(blockmem, ahci, console, diskfs)
 	thefs = fs
 
 	common.Oom_init(thefs.Fs_evict)

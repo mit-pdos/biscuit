@@ -108,10 +108,14 @@ func (ht *Hashtable_t) Elems() []Pair_t {
 func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
-
+	n := 0
 	for e := loadptr(&b.first); e != nil; e = loadptr(&e.next) {
 		if e.keyHash == kh && e.key == key {
 			return e.value, true
+		}
+		n += 1
+		if n >= 2 {
+			fmt.Printf(".")
 		}
 	}
 	return nil, false
@@ -163,6 +167,7 @@ func (ht *Hashtable_t) Del(key interface{}) {
 			// last.next = n.next
 			storeptr(&last.next, n.next)
 		}
+		storeptr(&n.next, nil)
 	}
 
 	var last *elem_t

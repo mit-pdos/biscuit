@@ -180,6 +180,7 @@ func DcacheFuncWrite(t *testing.T, tfs *Ufs_t, dir string) {
 
 		go func(id int) {
 			defer wg.Done()
+			// ub := mkData(1, SMALL)
 			for i := 0; i < NCREATE; i++ {
 				f := dir + d1 + uniqfile(i)
 				e = tfs.MkFile(f, nil)
@@ -195,7 +196,7 @@ func DcacheFuncWrite(t *testing.T, tfs *Ufs_t, dir string) {
 	}
 	wg.Wait()
 	stop := time.Now()
-	fmt.Printf("stats took %v\n", stop.Sub(start))
+	fmt.Printf("Perfwrite took %v\n", stop.Sub(start))
 }
 
 func TestDcachePerfWrite(t *testing.T) {

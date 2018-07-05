@@ -273,17 +273,18 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn string) (*icdent_t, common.Err_
 	if err != 0 {
 		return zi, err
 	}
-
-	b, err := idm.off2buf(opid, de.offset, NDBYTES, true, true, "_deremove")
-	if err != 0 {
-		return zi, err
+	if idm.fs.diskfs {
+		b, err := idm.off2buf(opid, de.offset, NDBYTES, true, true, "_deremove")
+		if err != 0 {
+			return zi, err
+		}
+		dirdata := Dirdata_t{b.Data[de.offset%common.PGSIZE:]}
+		dirdata.W_filename(0, "")
+		dirdata.W_inodenext(0, common.Inum_t(0))
+		b.Unlock()
+		idm.fs.fslog.Write(opid, b)
+		idm.fs.fslog.Relse(b, "_deremove")
 	}
-	dirdata := Dirdata_t{b.Data[de.offset%common.PGSIZE:]}
-	dirdata.W_filename(0, "")
-	dirdata.W_inodenext(0, common.Inum_t(0))
-	b.Unlock()
-	idm.fs.fslog.Write(opid, b)
-	idm.fs.fslog.Relse(b, "_deremove")
 	// add back to free dents
 	idm.dentc.dents.Del(fn)
 	idm._deaddempty(de.offset)

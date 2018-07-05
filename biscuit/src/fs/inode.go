@@ -255,7 +255,6 @@ func (idm *imemnode_t) iunlock(s string) {
 
 // Fill in inode
 func (idm *imemnode_t) idm_init(inum common.Inum_t) {
-	idm.inum = inum
 	if fs_debug {
 		fmt.Printf("idm_init: read inode %v\n", inum)
 	}
@@ -272,15 +271,18 @@ func (idm *imemnode_t) iunlock_refdown(s string) {
 }
 
 func (idm *imemnode_t) _iupdate(opid opid_t) common.Err_t {
-	idm.fs.istats.Niupdate.Inc()
-	iblk := idm.idibread()
-	if idm.flushto(iblk, idm.inum) {
-		iblk.Unlock()
-		idm.fs.fslog.Write(opid, iblk)
-	} else {
-		iblk.Unlock()
+	if idm.fs.diskfs {
+		idm.fs.istats.Niupdate.Inc()
+		iblk := idm.idibread()
+		if idm.flushto(iblk, idm.inum) {
+			iblk.Unlock()
+			idm.fs.fslog.Write(opid, iblk)
+		} else {
+			iblk.Unlock()
+		}
+		idm.fs.fslog.Relse(iblk, "_iupdate")
+
 	}
-	idm.fs.fslog.Relse(iblk, "_iupdate")
 	return 0
 }
 
@@ -806,37 +808,56 @@ func (idm *imemnode_t) icreate(opid opid_t, name string, nitype, major, minor in
 
 	// allocate new inode
 	newinum, err := idm.fs.ialloc.Ialloc(opid)
-	newbn := idm.fs.ialloc.Iblock(newinum)
-	newioff := ioffset(newinum)
-	if err != 0 {
-		return 0, err
-	}
-	newiblk := idm.fs.fslog.Get_fill(newbn, "icreate", true)
-	if fs_debug {
-		fmt.Printf("ialloc: %v %v %v\n", newbn, newioff, newinum)
-	}
+	var newidm *imemnode_t
+	var newinode *Inode_t
+	if idm.fs.diskfs {
+		newbn := idm.fs.ialloc.Iblock(newinum)
+		newioff := ioffset(newinum)
+		if err != 0 {
+			return 0, err
+		}
+		newiblk := idm.fs.fslog.Get_fill(newbn, "icreate", true)
+		if fs_debug {
+			fmt.Printf("ialloc: %v %v %v\n", newbn, newioff, newinum)
+		}
 
-	newinode := &Inode_t{newiblk, newioff}
-	newinode.W_itype(nitype)
-	newinode.W_linkcount(1)
-	newinode.W_size(0)
-	newinode.w_major(major)
-	newinode.w_minor(minor)
-	newinode.w_indirect(0)
-	newinode.w_dindirect(0)
-	for i := 0; i < NIADDRS; i++ {
-		newinode.W_addr(i, 0)
+		newinode = &Inode_t{newiblk, newioff}
+		newinode.W_itype(nitype)
+		newinode.W_linkcount(1)
+		newinode.W_size(0)
+		newinode.w_major(major)
+		newinode.w_minor(minor)
+		newinode.w_indirect(0)
+		newinode.w_dindirect(0)
+		for i := 0; i < NIADDRS; i++ {
+			newinode.W_addr(i, 0)
+		}
+		newiblk.Unlock()
+		idm.fs.fslog.Write(opid, newiblk)
+		idm.fs.fslog.Relse(newiblk, "icreate")
+	} else {
+		// insert in icache
+		newidm = idm.fs.icache.Iref_locked_nofill(newinum, "icreate")
+		newidm.itype = nitype
+		newidm.links = 1
+		newidm.major = major
+		newidm.minor = minor
+		if newidm.itype == I_DIR {
+			newidm.dentc.dents = hashtable.MkHash(1000)
+		}
+		newidm.iunlock_refdown("icreate")
 	}
-
 	// write new directory entry referencing newinode
 	err = idm._deinsert(opid, name, newinum)
 	if err != 0 {
-		newinode.W_itype(I_DEAD)
+		fmt.Printf("deinsert failed\n")
+		if idm.fs.diskfs {
+			newinode.W_itype(I_DEAD)
+		} else {
+			newidm.itype = I_DEAD
+		}
 		idm.fs.ialloc.Ifree(opid, newinum)
 	}
-	newiblk.Unlock()
-	idm.fs.fslog.Write(opid, newiblk)
-	idm.fs.fslog.Relse(newiblk, "icreate")
 	return newinum, err
 }
 
@@ -1121,25 +1142,26 @@ func (idm *imemnode_t) ifree() common.Err_t {
 		}
 		bliter.release()
 
-		// must lock the inode block before marking it free, to prevent
-		// clobbering a newly, concurrently allocated/created inode
-		iblk := idm.idibread()
-		if tryevict && idm.fs.diskfs {
-			iblk.Tryevict()
-		}
-
 		idm.major = which
 		if !remains {
 			// all the blocks have been freed
 			idm.itype = I_DEAD
-			idm.fs.icache.clearOrphan(opid, idm.inum)
 			idm.fs.ialloc.Ifree(opid, idm.inum)
+			idm.fs.icache.clearOrphan(opid, idm.inum)
 		}
 
-		idm.flushto(iblk, idm.inum)
-		iblk.Unlock()
-		idm.fs.fslog.Write(opid, iblk)
-		idm.fs.fslog.Relse(iblk, "ifree")
+		if idm.fs.diskfs {
+			// must lock the inode block before marking it free, to prevent
+			// clobbering a newly, concurrently allocated/created inode
+			iblk := idm.idibread()
+			if tryevict {
+				iblk.Tryevict()
+			}
+			idm.flushto(iblk, idm.inum)
+			iblk.Unlock()
+			idm.fs.fslog.Write(opid, iblk)
+			idm.fs.fslog.Relse(iblk, "ifree")
+		}
 		idm.fs.fslog.Op_end(opid)
 	}
 
@@ -1209,11 +1231,15 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 // inode as an orphan and when calling ifree the fs clears the orphan bit.
 
 func (icache *icache_t) markOrphan(opid opid_t, inum common.Inum_t) {
-	icache.orphanbitmap.Mark(opid, int(inum))
+	if icache.fs.diskfs {
+		icache.orphanbitmap.Mark(opid, int(inum))
+	}
 }
 
 func (icache *icache_t) clearOrphan(opid opid_t, inum common.Inum_t) {
-	icache.orphanbitmap.Unmark(opid, int(inum))
+	if icache.fs.diskfs {
+		icache.orphanbitmap.Unmark(opid, int(inum))
+	}
 }
 
 func (icache *icache_t) freeOrphan(inum common.Inum_t) {
@@ -1298,14 +1324,18 @@ func (icache *icache_t) Stats() string {
 }
 
 func (icache *icache_t) Iref(inum common.Inum_t, s string) *imemnode_t {
-	return icache._iref(inum, false)
+	return icache._iref(inum, true, false)
 }
 
 func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) *imemnode_t {
-	return icache._iref(inum, true)
+	return icache._iref(inum, true, true)
 }
 
-func (icache *icache_t) _iref(inum common.Inum_t, lock bool) *imemnode_t {
+func (icache *icache_t) Iref_locked_nofill(inum common.Inum_t, s string) *imemnode_t {
+	return icache._iref(inum, false, true)
+}
+
+func (icache *icache_t) _iref(inum common.Inum_t, fill bool, lock bool) *imemnode_t {
 	ref, created := icache.cache.Lookup(int(inum),
 		func(in int) Obj_t {
 			ret := &imemnode_t{}
@@ -1321,7 +1351,10 @@ func (icache *icache_t) _iref(inum common.Inum_t, lock bool) *imemnode_t {
 		// ret is locked
 		ret.fs = icache.fs
 		ret.ref = ref
-		ret.idm_init(inum)
+		ret.inum = inum
+		if fill {
+			ret.idm_init(inum)
+		}
 	}
 	locked := created
 	if locked != lock {
