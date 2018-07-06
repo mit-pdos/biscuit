@@ -3,7 +3,6 @@ package fs
 import "fmt"
 import "sync"
 import "sort"
-import "container/list"
 
 import "common"
 
@@ -32,8 +31,11 @@ type bitmap_t struct {
 	nfreebits uint
 	storage   storage_i
 	stats     bitmapstats_t
-	freelist  *list.List
+	freelist  []int
+	last      int
 }
+
+const NFREE = 1000
 
 func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
 	a := &bitmap_t{}
@@ -41,7 +43,6 @@ func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
 	a.freestart = start
 	a.freelen = len
 	a.storage = s
-	a.freelist = list.New()
 	a.apply(0, func(b, v int) bool {
 		if v == 0 {
 			a.nfreebits++
@@ -139,8 +140,6 @@ func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, common.Err_t) {
 	return 0, -common.ENOMEM
 }
 
-const NFREE = 100
-
 func (alloc *bitmap_t) populateFreeList() {
 	var blk *Bdev_block_t
 	for n := 0; n < NFREE; {
@@ -156,7 +155,10 @@ func (alloc *bitmap_t) populateFreeList() {
 			blk = alloc.Fbread(blkno)
 		}
 		if blk.Data[byte]&(1<<uint(bit)) == 0 {
-			alloc.freelist.PushBack(bitno)
+			if alloc.last == 0 {
+				alloc.last = bitno
+			}
+			alloc.freelist[bitno] = 1
 			blk.Data[byte] |= (1 << uint(bit))
 			n++
 		}
@@ -172,16 +174,30 @@ func (alloc *bitmap_t) FindAndMark1(opid opid_t) (int, common.Err_t) {
 	alloc.Lock()
 	//defer alloc.Unlock()
 
-	e := alloc.freelist.Front()
-	if e == nil {
+	if alloc.freelist == nil {
+		alloc.freelist = make([]int, 10000)
 		alloc.populateFreeList()
-		e = alloc.freelist.Front()
 	}
-	if e != nil {
-		n := e.Value.(int)
-		alloc.freelist.Remove(e)
-		alloc.Unlock()
-		return n, 0
+
+	once := false
+	for i := alloc.last; true; {
+		if alloc.freelist[i] == 1 {
+			alloc.last = i
+			alloc.freelist[i] = 0
+			alloc.Unlock()
+			return i, 0
+		}
+		if i+1 >= len(alloc.freelist) {
+			i = 0
+			if once {
+				fmt.Printf("freelist: %v\n", alloc.freelist)
+				panic("xx")
+			}
+			once = true
+		} else {
+			i++
+		}
+
 	}
 	panic("xxx")
 }
@@ -213,12 +229,11 @@ func (alloc *bitmap_t) FindAndMark2(opid opid_t) (int, common.Err_t) {
 }
 
 func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
-	return alloc.FindAndMark2(opid)
-	// if alloc.fs.diskfs {
-	// 	return 	alloc.FindAndMark2(opid)
-	// } else {
-	// 	return alloc.FindAndMark1(opid)
-	// }
+	if alloc.fs.diskfs {
+		return alloc.FindAndMark2(opid)
+	} else {
+		return alloc.FindAndMark1(opid)
+	}
 }
 
 func (alloc *bitmap_t) Unmark(opid opid_t, bit int) {
@@ -233,11 +248,11 @@ func (alloc *bitmap_t) Unmark(opid opid_t, bit int) {
 		panic("Unmark bad bit")
 	}
 
-	// if !alloc.fs.diskfs {
-	// 	alloc.freelist.PushBack(bit)
-	// 	alloc.Unlock()
-	// 	return
-	// }
+	if !alloc.fs.diskfs {
+		alloc.freelist[bit] = 1
+		alloc.Unlock()
+		return
+	}
 
 	fblkno := blkno(bit)
 	fbyteoff := byteno(bit)
