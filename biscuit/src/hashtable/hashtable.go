@@ -22,13 +22,13 @@ type elem_t struct {
 }
 
 type bucket_t struct {
-	sync.Mutex
+	sync.RWMutex
 	first *elem_t
 }
 
 func (b *bucket_t) len() int {
-	b.Lock()
-	defer b.Unlock()
+	b.RLock()
+	defer b.RUnlock()
 
 	l := 0
 	for e := b.first; e != nil; e = e.next {
@@ -38,8 +38,8 @@ func (b *bucket_t) len() int {
 }
 
 func (b *bucket_t) elems() []Pair_t {
-	b.Lock()
-	defer b.Unlock()
+	b.RLock()
+	defer b.RUnlock()
 
 	p := make([]Pair_t, 2)
 	for e := b.first; e != nil; e = e.next {
@@ -109,11 +109,34 @@ func (ht *Hashtable_t) Elems() []Pair_t {
 	return p
 }
 
-func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
+func (ht *Hashtable_t) GetLockFree(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	n := 0
 	for e := loadptr(&b.first); e != nil; e = loadptr(&e.next) {
+		if e.keyHash == kh && equal(e.key, key) {
+			return e.value, true
+		}
+		n += 1
+		if n > ht.maxchain {
+			ht.maxchain = n
+			if n >= 3 {
+				fmt.Printf("maxchain: %d\n", ht.maxchain)
+				fmt.Printf("key %s collides with %s\n", key, e.key)
+			}
+		}
+	}
+	return nil, false
+}
+
+func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
+	kh := khash(key)
+	b := ht.table[ht.hash(kh)]
+	b.RLock()
+	defer b.RUnlock()
+
+	n := 0
+	for e := b.first; e != nil; e = e.next {
 		if e.keyHash == kh && equal(e.key, key) {
 			return e.value, true
 		}
