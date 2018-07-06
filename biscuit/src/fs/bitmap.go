@@ -31,7 +31,7 @@ type bitmap_t struct {
 	nfreebits uint
 	storage   storage_i
 	stats     bitmapstats_t
-	freelist  []int
+	freemap   []uint8
 	last      int
 }
 
@@ -49,6 +49,10 @@ func mkAllocater(fs *Fs_t, start, len int, s storage_i) *bitmap_t {
 		}
 		return true
 	})
+	if !fs.diskfs {
+		a.freemap = make([]uint8, (a.freelen * BSIZE))
+		a.populateFreeMap()
+	}
 	return a
 }
 
@@ -140,58 +144,40 @@ func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, common.Err_t) {
 	return 0, -common.ENOMEM
 }
 
-func (alloc *bitmap_t) populateFreeList() {
-	var blk *Bdev_block_t
-	for n := 0; n < NFREE; {
-		bitno := alloc.lastbit
-		blkno := blkno(alloc.lastbit)
-		byte := byteno(alloc.lastbit)
-		bit := byteoffset(alloc.lastbit)
-		if blk == nil || blk.Block != blkno {
-			if blk != nil {
-				blk.Unlock()
-				alloc.storage.Relse(blk, "populateFreelist")
-			}
-			blk = alloc.Fbread(blkno)
+func (alloc *bitmap_t) populateFreeMap() {
+	for bn := 0; bn < alloc.freelen; bn++ {
+		blk := alloc.Fbread(bn)
+		for i := 0; i < len(blk.Data); i++ {
+			alloc.freemap[bn*4096+i] = blk.Data[i]
 		}
-		if blk.Data[byte]&(1<<uint(bit)) == 0 {
-			if alloc.last == 0 {
-				alloc.last = bitno
-			}
-			alloc.freelist[bitno] = 1
-			blk.Data[byte] |= (1 << uint(bit))
-			n++
-		}
-		alloc.lastbit++
+		blk.Unlock()
+		alloc.storage.Relse(blk, "alloc apply")
 	}
-	blk.Unlock()
-	alloc.storage.Relse(blk, "alloc CheckAndMark")
-	alloc.nfreebits -= NFREE
-	fmt.Printf("populate %d\n", NFREE)
+	fmt.Printf("freemap %d\n", len(alloc.freemap))
 }
 
-func (alloc *bitmap_t) FindAndMark1(opid opid_t) (int, common.Err_t) {
+func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, common.Err_t) {
 	alloc.Lock()
-	//defer alloc.Unlock()
-
-	if alloc.freelist == nil {
-		alloc.freelist = make([]int, 10000)
-		alloc.populateFreeList()
-	}
 
 	once := false
 	for i := alloc.last; true; {
-		if alloc.freelist[i] == 1 {
+		if alloc.freemap[i] != uint8(0xFF) {
 			alloc.last = i
-			alloc.freelist[i] = 0
-			alloc.Unlock()
-			return i, 0
+			for j := 0; j < 8; j++ {
+				v := alloc.freemap[i] & (1 << uint(j))
+				if v == 0 {
+					alloc.freemap[i] |= (1 << uint(j))
+					alloc.nfreebits--
+					alloc.Unlock()
+					return (i*8 + j), 0
+				}
+			}
+			panic("yy")
 		}
-		if i+1 >= len(alloc.freelist) {
+		if i+1 >= len(alloc.freemap) {
 			i = 0
 			if once {
-				fmt.Printf("freelist: %v\n", alloc.freelist)
-				panic("xx")
+				panic("memfs out of memory")
 			}
 			once = true
 		} else {
@@ -199,12 +185,11 @@ func (alloc *bitmap_t) FindAndMark1(opid opid_t) (int, common.Err_t) {
 		}
 
 	}
-	panic("xxx")
+	return 0, -common.ENOMEM
 }
 
-func (alloc *bitmap_t) FindAndMark2(opid opid_t) (int, common.Err_t) {
+func (alloc *bitmap_t) FindDiskMap(opid opid_t) (int, common.Err_t) {
 	alloc.Lock()
-	//defer alloc.Unlock()
 
 	bit, err := alloc.CheckAndMark(opid)
 	if err == 0 {
@@ -230,15 +215,14 @@ func (alloc *bitmap_t) FindAndMark2(opid opid_t) (int, common.Err_t) {
 
 func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
 	if alloc.fs.diskfs {
-		return alloc.FindAndMark2(opid)
+		return alloc.FindDiskMap(opid)
 	} else {
-		return alloc.FindAndMark1(opid)
+		return alloc.FindFreeMap(opid)
 	}
 }
 
 func (alloc *bitmap_t) Unmark(opid opid_t, bit int) {
 	alloc.Lock()
-	//defer alloc.Unlock()
 
 	if fs_debug {
 		fmt.Printf("Unmark: %v\n", bit)
@@ -249,7 +233,10 @@ func (alloc *bitmap_t) Unmark(opid opid_t, bit int) {
 	}
 
 	if !alloc.fs.diskfs {
-		alloc.freelist[bit] = 1
+		i := bit / 8
+		j := bit % 8
+		alloc.freemap[i] &= ^(1 << uint(j))
+		alloc.nfreebits++
 		alloc.Unlock()
 		return
 	}
