@@ -116,8 +116,8 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 			return e.value, true
 		}
 		n += 1
-		if n >= 2 {
-			fmt.Printf(".")
+		if n >= 3 {
+			fmt.Printf("key %s collides with %s\n", key, e.key)
 		}
 	}
 	return nil, false

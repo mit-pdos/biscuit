@@ -2,8 +2,6 @@ package fs
 
 import "common"
 
-// import "hashtable"
-
 const NAME_MAX int = 512
 
 var lhits = 0
@@ -167,11 +165,6 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, common.Err_t) {
 
 // if _deinsert fails to allocate a page, idm is left unchanged.
 func (idm *imemnode_t) _deinsert(opid opid_t, name common.Ustr, inum common.Inum_t) common.Err_t {
-	// XXXPANIC
-	//if _, err := idm._delookup(name); err == 0 {
-	//	panic("dirent already exists")
-	//}
-
 	noff, err := idm._denextempty(opid)
 	if err != 0 {
 		return err
@@ -421,7 +414,6 @@ func (idm *imemnode_t) ilookup(opid opid_t, name common.Ustr) (*imemnode_t, comm
 		return nil, err
 	}
 	if de.idm == nil {
-		// Need to update pointer in tree
 		de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
 	}
 	de.idm.Refup("ilookup")

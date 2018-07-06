@@ -207,12 +207,13 @@ func (imem *imemnode_t) Refup(s string) {
 	imem.ref.Up()
 }
 
-func (imem *imemnode_t) Refdown(s string) {
+func (imem *imemnode_t) Refdown(s string) bool {
 	v := imem.ref.Down()
 	if v == 0 && imem.links == 0 { // remove unlinked inodes from cache
 		imem.fs.icache.cache.Remove(int(imem.inum))
-		imem.fs.icache.addDead(imem)
+		return true
 	}
+	return false
 }
 
 // No other thread should have a reference to this inode, because its refcnt = 0
@@ -265,9 +266,9 @@ func (idm *imemnode_t) idm_init(inum common.Inum_t) {
 	idm.fs.fslog.Relse(blk, "idm_init")
 }
 
-func (idm *imemnode_t) iunlock_refdown(s string) {
+func (idm *imemnode_t) iunlock_refdown(s string) bool {
 	idm.iunlock(s)
-	idm.Refdown(s)
+	return idm.Refdown(s)
 }
 
 func (idm *imemnode_t) _iupdate(opid opid_t) common.Err_t {
@@ -413,37 +414,37 @@ func (idm *imemnode_t) do_insert(opid opid_t, fn common.Ustr, n common.Inum_t) c
 	return err
 }
 
-func (idm *imemnode_t) do_createnod(opid opid_t, fn common.Ustr, maj, min int) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) do_createnod(opid opid_t, fn common.Ustr, maj, min int) (*imemnode_t, common.Err_t) {
 	if idm.itype != I_DIR {
-		return 0, -common.ENOTDIR
+		return nil, -common.ENOTDIR
 	}
 
 	itype := I_DEV
-	cnext, err := idm.icreate(opid, fn, itype, maj, min)
+	child, err := idm.icreate(opid, fn, itype, maj, min)
 	idm._iupdate(opid)
-	return cnext, err
+	return child, err
 }
 
-func (idm *imemnode_t) do_createfile(opid opid_t, fn common.Ustr) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) do_createfile(opid opid_t, fn common.Ustr) (*imemnode_t, common.Err_t) {
 	if idm.itype != I_DIR {
-		return 0, -common.ENOTDIR
+		return nil, -common.ENOTDIR
 	}
 
 	itype := I_FILE
-	cnext, err := idm.icreate(opid, fn, itype, 0, 0)
+	child, err := idm.icreate(opid, fn, itype, 0, 0)
 	idm._iupdate(opid)
-	return cnext, err
+	return child, err
 }
 
-func (idm *imemnode_t) do_createdir(opid opid_t, fn common.Ustr) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) do_createdir(opid opid_t, fn common.Ustr) (*imemnode_t, common.Err_t) {
 	if idm.itype != I_DIR {
-		return 0, -common.ENOTDIR
+		return nil, -common.ENOTDIR
 	}
 
 	itype := I_DIR
-	cnext, err := idm.icreate(opid, fn, itype, 0, 0)
+	child, err := idm.icreate(opid, fn, itype, 0, 0)
 	idm._iupdate(opid)
-	return cnext, err
+	return child, err
 }
 
 // caller holds lock on idm
@@ -787,7 +788,7 @@ func (idm *imemnode_t) create_undo(opid opid_t, childi common.Inum_t, childn com
 	return 0
 }
 
-func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, minor int) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, minor int) (*imemnode_t, common.Err_t) {
 
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")
@@ -799,9 +800,9 @@ func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, min
 		panic("inconsistent args")
 	}
 	// make sure file does not already exist
-	de, err := idm._delookup(opid, name)
+	child, err := idm.ilookup(opid, name)
 	if err == 0 {
-		return de.inum, -common.EEXIST
+		return child, -common.EEXIST
 	}
 
 	idm.fs.istats.Nicreate.Inc()
@@ -814,7 +815,7 @@ func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, min
 		newbn := idm.fs.ialloc.Iblock(newinum)
 		newioff := ioffset(newinum)
 		if err != 0 {
-			return 0, err
+			return nil, err
 		}
 		newiblk := idm.fs.fslog.Get_fill(newbn, "icreate", true)
 		if fs_debug {
@@ -835,6 +836,7 @@ func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, min
 		newiblk.Unlock()
 		idm.fs.fslog.Write(opid, newiblk)
 		idm.fs.fslog.Relse(newiblk, "icreate")
+		newidm = idm.fs.icache.Iref(newinum, "icreate")
 	} else {
 		// insert in icache
 		newidm = idm.fs.icache.Iref_locked_nofill(newinum, "icreate")
@@ -845,7 +847,7 @@ func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, min
 		if newidm.itype == I_DIR {
 			newidm.dentc.dents = hashtable.MkHash(1000)
 		}
-		newidm.iunlock_refdown("icreate")
+		newidm.iunlock("icreate")
 	}
 	// write new directory entry referencing newinode
 	err = idm._deinsert(opid, name, newinum)
@@ -853,12 +855,11 @@ func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, min
 		fmt.Printf("deinsert failed\n")
 		if idm.fs.diskfs {
 			newinode.W_itype(I_DEAD)
-		} else {
-			newidm.itype = I_DEAD
 		}
+		newidm.itype = I_DEAD
 		idm.fs.ialloc.Ifree(opid, newinum)
 	}
-	return newinum, err
+	return newidm, err
 }
 
 func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]common.Mmapinfo_t, common.Err_t) {
@@ -1207,7 +1208,7 @@ type icache_t struct {
 	// and a seperate daemon because want to free the inode and its blocks
 	// at the end of the syscall so that the next sys call can use the freed
 	// resources.
-	dead []*imemnode_t
+	// dead []*imemnode_t
 }
 
 const maxinodepersys = 4
@@ -1217,9 +1218,6 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 	icache.cache = mkCache(common.Syslimit.Vnodes)
 	icache.fs = fs
 	icache.orphanbitmap = mkAllocater(fs, start, len, fs.fslog)
-	// dead is bounded the number of inodes refdowned in system call, and
-	// the system calls admitted to log.
-	icache.dead = make([]*imemnode_t, 0)
 	return icache
 }
 
@@ -1286,37 +1284,6 @@ func (icache *icache_t) RecoverOrphans() {
 	// XXX remove once reservation counting is fixed s.t. credit cannot be
 	// leaked
 	common.Resend()
-}
-
-// Refdown() will mark an inode dead, which freeDead() frees in an ifree
-// operation.
-func (icache *icache_t) addDead(imem *imemnode_t) {
-	icache.Lock()
-	defer icache.Unlock()
-	if len(icache.dead) > icache.fs.fslog.Loglen() {
-		panic("addDead")
-	}
-	icache.dead = append(icache.dead, imem)
-}
-
-// XXX Fs_close() from different threads are contending for icache.dead...
-func (icache *icache_t) freeDead() {
-	icache.Lock()
-	//defer icache.Unlock()
-
-	if fs_debug {
-		fmt.Printf("freeDead: %v dead inodes\n", len(icache.dead))
-	}
-	// XXX cache reservation
-	for len(icache.dead) > 0 {
-		imem := icache.dead[0]
-		icache.dead = icache.dead[1:]
-		icache.Unlock()
-		imem.Free()
-		icache.Lock()
-	}
-	icache.dead = make([]*imemnode_t, 0)
-	icache.Unlock()
 }
 
 func (icache *icache_t) Stats() string {
