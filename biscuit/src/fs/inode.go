@@ -544,26 +544,26 @@ func (idm *imemnode_t) ensureind(opid opid_t, blk *Bdev_block_t, slot int, writi
 
 // Assumes that every block until b exits
 // XXX change to wrap blockiter_t instead
-func (idm *imemnode_t) fbn2block(opid opid_t, fbn int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) fbn2block(opid opid_t, fbn int, writing bool) (int, bool, common.Err_t) {
 	if fbn < NIADDRS {
 		if idm.addrs[fbn] != 0 {
-			return idm.addrs[fbn], 0
+			return idm.addrs[fbn], false, 0
 		}
 		blkn, err := idm.fs.balloc.Balloc(opid)
 		if err != 0 {
-			return 0, err
+			return 0, false, err
 		}
 		// imemnode_t.iupdate() will make sure the
 		// icache is updated on disk
 		idm.addrs[fbn] = blkn
-		return blkn, 0
+		return blkn, true, 0
 	} else {
 		fbn -= NIADDRS
 		if fbn < INDADDR {
 			indno := idm.indir
 			indno, isnew, err := idm.ensureb(opid, indno, writing)
 			if err != 0 {
-				return 0, err
+				return 0, false, err
 			}
 			if isnew {
 				// new indirect block will be written to log by iupdate()
@@ -572,13 +572,13 @@ func (idm *imemnode_t) fbn2block(opid opid_t, fbn int, writing bool) (int, commo
 			indblk := idm.mbread(indno)
 			blkn, err := idm.ensureind(opid, indblk, fbn, writing)
 			idm.fs.fslog.Relse(indblk, "indblk")
-			return blkn, err
+			return blkn, false, err
 		} else if fbn < INDADDR*INDADDR {
 			fbn -= INDADDR
 			dindno := idm.dindir
 			dindno, isnew, err := idm.ensureb(opid, dindno, writing)
 			if err != 0 {
-				return 0, err
+				return 0, false, err
 			}
 			if isnew {
 				// new dindirect block will be written to log by iupdate()
@@ -591,18 +591,18 @@ func (idm *imemnode_t) fbn2block(opid opid_t, fbn int, writing bool) (int, commo
 			indblk := idm.mbread(indno)
 			blkn, err := idm.ensureind(opid, indblk, fbn%INDADDR, writing)
 			idm.fs.fslog.Relse(indblk, "indblk2")
-			return blkn, err
+			return blkn, false, err
 		} else {
 			panic("too big fbn")
-			return 0, 0
+			return 0, false, 0
 
 		}
 	}
 }
 
-// Allocates blocks from startblock through endblock. Returns blkn of endblock.
-func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing bool) (int, bool, common.Err_t) {
 	blkn := 0
+	new := false
 	var err common.Err_t
 
 	if whichblk >= lastblk { // a hole?
@@ -615,39 +615,39 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 		for b := lastblk; b <= whichblk; b++ {
 			gimme := common.Bounds(common.B_IMEMNODE_T_BMAPFILL)
 			if !common.Resadd_noblock(gimme) {
-				return 0, -common.ENOHEAP
+				return 0, false, -common.ENOHEAP
 			}
 			// XXX we could remember where the last slot was
-			blkn, err = idm.fbn2block(opid, b, writing)
+			blkn, new, err = idm.fbn2block(opid, b, writing)
 			if err != 0 {
-				return blkn, err
+				return blkn, new, err
 			}
 		}
 	} else {
-		blkn, err = idm.fbn2block(opid, whichblk, writing)
+		blkn, new, err = idm.fbn2block(opid, whichblk, writing)
 		if err != 0 {
-			return blkn, err
+			return blkn, new, err
 		}
 	}
-	return blkn, 0
+	return blkn, new, 0
 }
 
 // Takes as input the file offset and whether the operation is a write and
 // returns the block number of the block responsible for that offset.
-func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, common.Err_t) {
+func (idm *imemnode_t) offsetblk(opid opid_t, offset int, writing bool) (int, bool, common.Err_t) {
 	if writing && opid == 0 && idm.fs.diskfs {
 		panic("offsetblk: writing but no opid\n")
 	}
 	whichblk := offset / BSIZE
 	lastblk := idm.size / BSIZE
-	blkn, err := idm.bmapfill(opid, lastblk, whichblk, writing)
+	blkn, new, err := idm.bmapfill(opid, lastblk, whichblk, writing)
 	if err != 0 {
-		return blkn, err
+		return blkn, new, err
 	}
 	if blkn <= 0 || blkn >= idm.fs.superb.Lastblock() {
 		panic("offsetblk: bad data blocks")
 	}
-	return blkn, 0
+	return blkn, new, 0
 }
 
 // Return locked buffer for offset
@@ -655,12 +655,12 @@ func (idm *imemnode_t) off2buf(opid opid_t, offset int, len int, fillhole bool, 
 	if offset%common.PGSIZE+len > common.PGSIZE {
 		panic("off2buf")
 	}
-	blkno, err := idm.offsetblk(opid, offset, fillhole)
+	blkno, new, err := idm.offsetblk(opid, offset, fillhole)
 	if err != 0 {
 		return nil, err
 	}
 	var b *Bdev_block_t
-	if fill {
+	if fill && !new {
 		b = idm.fs.fslog.Get_fill(blkno, s, true)
 	} else {
 		b = idm.fs.fslog.Get_nofill(blkno, s, true)
@@ -757,7 +757,7 @@ func (idm *imemnode_t) itrunc(opid opid_t, newlen uint) common.Err_t {
 	if newlen > uint(idm.size) {
 		// this will cause the hole to filled in with zero blocks which
 		// are logged to disk
-		_, err := idm.offsetblk(opid, int(newlen), true)
+		_, _, err := idm.offsetblk(opid, int(newlen), true)
 		if err != 0 {
 			return err
 		}

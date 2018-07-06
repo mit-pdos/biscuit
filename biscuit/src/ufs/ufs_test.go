@@ -182,11 +182,11 @@ func DcacheFuncWrite(t *testing.T, tfs *Ufs_t, dir common.Ustr) {
 
 		go func(id int) {
 			defer wg.Done()
-			// ub := mkData(1, SMALL)
 			mydir := dir.ExtendStr(uniqdir(id))
 			for i := 0; i < NCREATE; i++ {
 				f := mydir.ExtendStr(uniqfile(i))
-				e = tfs.MkFile(f, nil)
+				ub := mkData(1, SMALL)
+				e = tfs.MkFile(f, ub)
 				if e != 0 {
 					t.Fatalf("%d: mkFile %v failed", id, f)
 				}

@@ -60,12 +60,14 @@ func (b *bucket_t) iter(f func(interface{}, interface{}) bool) bool {
 type Hashtable_t struct {
 	table    []*bucket_t
 	capacity int
+	maxchain int
 }
 
 func MkHash(size int) *Hashtable_t {
 	ht := &Hashtable_t{}
 	ht.capacity = size
 	ht.table = make([]*bucket_t, size)
+	ht.maxchain = 1
 	for i, _ := range ht.table {
 		ht.table[i] = &bucket_t{}
 	}
@@ -116,8 +118,12 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 			return e.value, true
 		}
 		n += 1
-		if n >= 3 {
-			fmt.Printf("key %s collides with %s\n", key, e.key)
+		if n > ht.maxchain {
+			ht.maxchain = n
+			if n >= 3 {
+				fmt.Printf("maxchain: %d\n", ht.maxchain)
+				fmt.Printf("key %s collides with %s\n", key, e.key)
+			}
 		}
 	}
 	return nil, false
