@@ -109,7 +109,7 @@ func (ht *Hashtable_t) Elems() []Pair_t {
 	return p
 }
 
-func (ht *Hashtable_t) GetLockFree(key interface{}) (interface{}, bool) {
+func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	n := 0
@@ -129,7 +129,7 @@ func (ht *Hashtable_t) GetLockFree(key interface{}) (interface{}, bool) {
 	return nil, false
 }
 
-func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
+func (ht *Hashtable_t) GetRLock(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	b.RLock()
