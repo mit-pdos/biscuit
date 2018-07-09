@@ -4,11 +4,12 @@ import "sync/atomic"
 import "fmt"
 import "hash/fnv"
 
-//import "runtime"
 import "sync"
 import "unsafe"
 
 import "common"
+
+// A hashtable with a lock-free Get()
 
 type hashtable_i interface {
 	Get(key interface{}) (interface{}, bool)
@@ -131,6 +132,7 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	return nil, false
 }
 
+// For performance comparisons
 func (ht *Hashtable_t) GetRLock(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
@@ -167,7 +169,6 @@ func (ht *Hashtable_t) Set(key interface{}, value interface{}) (interface{}, boo
 			storeptr(&b.first, n)
 		} else {
 			n := &elem_t{key: key, value: value, keyHash: kh, next: last.next}
-			// runtime.Fence()
 			storeptr(&last.next, n)
 		}
 	}
@@ -217,7 +218,7 @@ func (ht *Hashtable_t) Del(key interface{}) {
 	panic("del of non-existing key")
 }
 
-// returns true if at least one call to f returned true. stops iterating once f
+// Returns true if at least one call to f returned true. stops iterating once f
 // returns true.
 func (ht *Hashtable_t) Iter(f func(interface{}, interface{}) bool) bool {
 	for _, b := range ht.table {
@@ -232,6 +233,11 @@ func (ht *Hashtable_t) hash(keyHash uint32) int {
 	return int(keyHash % uint32(len(ht.table)))
 }
 
+// Without an explicit memory model, it is hard to know if this code is
+// correct. LoadPointer/StorePointer don't issue a memory fence, but for
+// traversing pointers in Get() and updating them in Set()/Del(), this might be
+// ok on x86. The Go compiler also hopefully doesn't reorder loads
+// wrt. LoadPointer.
 func loadptr(e *elem_t) *elem_t {
 	ptr := (*unsafe.Pointer)(unsafe.Pointer(&e))
 	p := atomic.LoadPointer(ptr)
