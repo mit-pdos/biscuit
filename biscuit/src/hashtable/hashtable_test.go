@@ -194,10 +194,15 @@ func TestManyReaderOneWriterStd(t *testing.T) {
 	doTestManyReaderOneWriter(ht, t)
 }
 
+func TestManyReaderOneWriterSyncMap(t *testing.T) {
+	ht := MkSyncMap(SZ)
+	doTestManyReaderOneWriter(ht, t)
+}
+
 // For performance comparisons
 
 type hashtablestring_t struct {
-	sync.Mutex
+	sync.RWMutex
 	table map[string]int
 }
 
@@ -208,8 +213,8 @@ func MkHashString(size int) *hashtablestring_t {
 }
 
 func (ht *hashtablestring_t) Get(key interface{}) (interface{}, bool) {
-	ht.Lock()
-	defer ht.Unlock()
+	ht.RLock()
+	defer ht.RUnlock()
 
 	k := key.(string)
 	v, ok := ht.table[k]
@@ -223,7 +228,7 @@ func (ht *hashtablestring_t) Set(key interface{}, val interface{}) (interface{},
 	k := key.(string)
 	v := val.(int)
 	ht.table[k] = v
-	return v, false
+	return v, true
 }
 
 func (ht *hashtablestring_t) Del(key interface{}) {
@@ -232,4 +237,27 @@ func (ht *hashtablestring_t) Del(key interface{}) {
 
 	k := key.(string)
 	delete(ht.table, k)
+}
+
+type SyncMap_t struct {
+	m sync.Map
+}
+
+func MkSyncMap(size int) *SyncMap_t {
+	ht := &SyncMap_t{}
+	return ht
+}
+
+func (ht *SyncMap_t) Get(key interface{}) (interface{}, bool) {
+	v, ok := ht.m.Load(key)
+	return v, ok
+}
+
+func (ht *SyncMap_t) Set(key interface{}, val interface{}) (interface{}, bool) {
+	ht.m.Store(key, val)
+	return val, true
+}
+
+func (ht *SyncMap_t) Del(key interface{}) {
+	ht.m.Delete(key)
 }
