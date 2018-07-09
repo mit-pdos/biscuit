@@ -1,5 +1,8 @@
 package fs
 
+import "sync/atomic"
+import "unsafe"
+
 import "common"
 
 const NAME_MAX int = 512
@@ -426,13 +429,16 @@ func (idm *imemnode_t) ilookup_lockfree(name common.Ustr) (*imemnode_t, bool) {
 	}
 	if e, ok := idm.dentc.dents.Get(name); ok {
 		de := e.(*icdent_t)
-		if de.idm == nil { // XXX maybe use atomic load?
-			de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
+		p := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)))
+		v := (*imemnode_t)(p)
+		if v == nil {
+			// two process may find v == nil, but they will write the same
+			// value into de.idm (there is only one *imemnode_t for de.inum)
+			v = idm.fs.icache.Iref(de.inum, "ilookup")
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)), (unsafe.Pointer)(v))
 		}
-		if de.idm != nil {
-			de.idm.Refup("ilookup")
-			return de.idm, true
-		}
+		v.Refup("ilookup")
+		return v, true
 	}
 	return nil, false
 }
