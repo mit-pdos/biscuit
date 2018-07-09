@@ -55,7 +55,7 @@ const NSEC = 1
 func doop(t *testing.T, ht hashtable_i, k string, v int) {
 	_, b := ht.Set(k, v)
 	if !b {
-		return
+		t.Fatalf("%v key already exists", k)
 	}
 	r, ok := ht.Get(k)
 	if !ok {
