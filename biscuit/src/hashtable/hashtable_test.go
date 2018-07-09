@@ -53,8 +53,10 @@ const NPROC = 4
 const NSEC = 1
 
 func doop(t *testing.T, ht hashtable_i, k string, v int) {
-
-	ht.Set(k, v)
+	_, b := ht.Set(k, v)
+	if !b {
+		return
+	}
 	r, ok := ht.Get(k)
 	if !ok {
 		t.Fatalf("%v key", k)

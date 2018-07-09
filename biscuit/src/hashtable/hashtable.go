@@ -3,6 +3,8 @@ package hashtable
 import "sync/atomic"
 import "fmt"
 import "hash/fnv"
+
+//import "runtime"
 import "sync"
 import "unsafe"
 
@@ -165,6 +167,7 @@ func (ht *Hashtable_t) Set(key interface{}, value interface{}) (interface{}, boo
 			storeptr(&b.first, n)
 		} else {
 			n := &elem_t{key: key, value: value, keyHash: kh, next: last.next}
+			// runtime.Fence()
 			storeptr(&last.next, n)
 		}
 	}
@@ -198,7 +201,6 @@ func (ht *Hashtable_t) Del(key interface{}) {
 			// last.next = n.next
 			storeptr(&last.next, n.next)
 		}
-		storeptr(&n.next, nil)
 	}
 
 	var last *elem_t
@@ -243,9 +245,15 @@ func storeptr(p **elem_t, n *elem_t) {
 	atomic.StorePointer(ptr, v)
 }
 
-func hashString(s common.Ustr) uint32 {
+func hashUstr(s common.Ustr) uint32 {
 	h := fnv.New32a()
 	h.Write(s)
+	return h.Sum32()
+}
+
+func hashString(s string) uint32 {
+	h := fnv.New32a()
+	h.Write([]byte(s))
 	return h.Sum32()
 }
 
@@ -257,11 +265,13 @@ func khash(key interface{}) uint32 {
 func hash(key interface{}) uint32 {
 	switch x := key.(type) {
 	case common.Ustr:
-		return hashString(x)
+		return hashUstr(x)
 	case int:
 		return uint32(x)
 	case int32:
 		return uint32(x)
+	case string:
+		return hashString(x)
 	}
 	panic(fmt.Errorf("unsupported key type %T", key))
 }
@@ -280,6 +290,10 @@ func equal(key1 interface{}, key2 interface{}) bool {
 		n1 := int(x)
 		n2 := key2.(int)
 		return n1 == n2
+	case string:
+		s1 := key1.(string)
+		s2 := key2.(string)
+		return s1 == s2
 	}
 	panic(fmt.Errorf("unsupported key type %T", key1))
 }
