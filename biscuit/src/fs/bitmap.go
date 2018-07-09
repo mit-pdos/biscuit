@@ -172,7 +172,7 @@ func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, common.Err_t) {
 					return (i*8 + j), 0
 				}
 			}
-			panic("yy")
+			panic("FindFreeMap")
 		}
 		if i+1 >= len(alloc.freemap) {
 			i = 0
