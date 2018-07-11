@@ -1329,6 +1329,18 @@ TEXT ·_Gscpu(SB), NOSPLIT, $0-8
 	SWAPGS
 	RET
 
+TEXT ·Lfence(SB), NOSPLIT, $0
+	LFENCE
+	RET
+
+TEXT ·Sfence(SB), NOSPLIT, $0
+	SFENCE
+	RET
+
+TEXT ·Mfence(SB), NOSPLIT, $0
+	MFENCE
+	RET
+
 // void backtracetramp(uintptr newsp, uintptr *tf, g *gp)
 TEXT ·backtracetramp(SB), NOSPLIT, $0-0x18
 	MOVQ	SP, AX

@@ -432,6 +432,10 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
 func Wrmsr(int, int)
 
+func Lfence()
+func Sfence()
+func Mfence()
+
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
 // that have the stack splitting prologue. the following is a list of go code
