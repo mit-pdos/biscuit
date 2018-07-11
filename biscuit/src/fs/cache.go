@@ -16,7 +16,7 @@ import "hashtable"
 // an object.  The client of cache, must call Lookup/Done to ensure a correct
 // refcount.
 //
-// It is a bummer that we refcnt, instead of relying on GC. n an alternate
+// It is a bummer that we refcnt, instead of relying on GC. In an alternate
 // world, we would use finalizers on an object, and the GC would inform
 // refcache_t that an object isn't in use anymore.  Refcache itself would use a
 // weak reference to an object, so that the GC could collect the object, if it
@@ -35,7 +35,7 @@ type Obj_t interface {
 type Objref_t struct {
 	Key    int
 	Obj    Obj_t
-	refcnt int64
+	refcnt uint32
 	tstamp uint64
 }
 
@@ -43,22 +43,22 @@ func MkObjref(obj Obj_t, key int) *Objref_t {
 	e := &Objref_t{}
 	e.Obj = obj
 	e.Key = key
-	e.refcnt = 1
+	e.refcnt = uint32(1)
 	e.tstamp = runtime.Rdtsc()
 	return e
 }
 
-func (ref *Objref_t) Refcnt() int64 {
-	c := atomic.LoadInt64(&ref.refcnt)
+func (ref *Objref_t) Refcnt() uint32 {
+	c := atomic.LoadUint32(&ref.refcnt)
 	return c
 }
 
 func (ref *Objref_t) Up() {
-	atomic.AddInt64(&ref.refcnt, 1)
+	atomic.AddUint32(&ref.refcnt, 1)
 }
 
-func (ref *Objref_t) Down() int64 {
-	v := atomic.AddInt64(&ref.refcnt, -1)
+func (ref *Objref_t) Down() uint32 {
+	v := atomic.AddUint32(&ref.refcnt, ^uint32(0))
 	if v < 0 {
 		panic("Down")
 	}
@@ -81,44 +81,59 @@ func (c *cache_t) Len() int {
 	return c.cache.Size()
 }
 
-func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
-	v, ok := c.cache.Get(key)
-	if ok {
-		e := v.(*Objref_t)
-		// other threads may have a reference to this item and may
-		// Ref{up,down}; the increment must therefore be atomic
-		c.stats.Nhit.Inc()
-		e.Up()
-		e.tstamp = runtime.Rdtsc()
-		return e, false
-	}
-	e := MkObjref(mkobj(key), key)
-	e.Obj = mkobj(key)
-	v, ok = c.cache.Set(key, e)
-	if !ok { // someone else created it
-		e := v.(*Objref_t)
-		c.stats.Nhit.Inc()
-		e.Up()
-		return e, false
-	} else {
-		c.stats.Nadd.Inc()
-		return e, true
+const REMOVE = uint32(0xF0000000)
 
+// Other threads may have a reference to this item and may Ref{up,down}; the
+// increment must therefore be atomic. Furthermore, the evictor maybe trying to
+// remove the key from the cache, and we need to arrange that lookup of a key
+// and incrementing a refcnt is atomic with respect to removing the key.  We
+// guarantee this by having Remove set the REMOVE flag in the refcnt and using
+// CAS to increment only when refcnt hasn't changed.
+func (c *cache_t) lookupinc(key int) (*Objref_t, bool) {
+	for {
+		v, ok := c.cache.Get(key)
+		if !ok {
+			return nil, ok
+		}
+		e := v.(*Objref_t)
+		refcnt := e.refcnt
+		new := refcnt + 1
+		if refcnt&REMOVE == 0 && atomic.CompareAndSwapUint32(&e.refcnt, refcnt, new) {
+			return e, ok
+		}
 	}
 }
 
-func (c *cache_t) Remove(key int) {
+func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
+	for {
+		e, ok := c.lookupinc(key)
+		if ok {
+			c.stats.Nhit.Inc()
+			e.tstamp = runtime.Rdtsc()
+			return e, false
+		}
+		e = MkObjref(mkobj(key), key)
+		e.Obj = mkobj(key)
+		_, ok = c.cache.Set(key, e)
+		if ok {
+			c.stats.Nadd.Inc()
+			return e, true
+		}
+		// someone else created it, try lookup again
+	}
+}
+
+// Note remove can fail, because a concurrent lookup resurrects the refcnt (or
+// the refcnt is already larger than 0).
+func (c *cache_t) Remove(key int) bool {
 	if v, ok := c.cache.Get(key); ok {
 		e := v.(*Objref_t)
 		cnt := e.Refcnt()
-		if cnt < 0 {
-			panic("Remove: negative refcnt")
-		}
-		if cnt == 0 {
+		if cnt == 0 && atomic.CompareAndSwapUint32(&e.refcnt, cnt, cnt|REMOVE) {
 			c.delete(e)
-		} else {
-			panic("Remove: refcnt > 0")
+			return true
 		}
+		return false
 	} else {
 		panic("Remove: non existing")
 	}
@@ -140,7 +155,7 @@ func (a ByStamp) Less(i, j int) bool {
 	return e1.tstamp < e2.tstamp
 }
 
-// evicts up-to half of the objects in the cache. returns the number of cache
+// Evicts up-to half of the objects in the cache. returns the number of cache
 // entries remaining.
 func (c *cache_t) Evict_half() int {
 	c.Lock()
@@ -150,20 +165,19 @@ func (c *cache_t) Evict_half() int {
 	did := 0
 	elems := c.cache.Elems()
 	sort.Sort(ByStamp(elems))
-	for _, p := range elems {
+	for _, p := range elems { // XXX only need the key
 		e := p.Value.(*Objref_t)
-		if e.Refcnt() != 0 {
-			continue
+		if c.Remove(e.Key) {
+			// imemnode with refcount of 0 must have non-zero links and thus
+			// can be freed.  (in fact, likely they already have been freed)
+			//
+			// imemnode eviction acquires no locks and block eviction
+			// acquires only a leaf lock (physmem lock). furthermore,
+			// neither eviction blocks on IO, thus it is safe to evict here
+			// with locks held.
+			e.Obj.Evict()
+			did++
 		}
-		// imemnode with refcount of 0 must have non-zero links and
-		// thus can be freed.  (in fact, they already have been freed)
-		c.delete(e)
-		// imemnode eviction acquires no locks and block eviction
-		// acquires only a leaf lock (physmem lock). furthermore,
-		// neither eviction blocks on IO, thus it is safe to evict here
-		// with locks held.
-		e.Obj.Evict()
-		did++
 	}
 	return upto - did
 }
