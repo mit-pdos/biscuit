@@ -52,7 +52,7 @@ func (b *bucket_t) elems() []Pair_t {
 }
 
 func (b *bucket_t) iter(f func(interface{}, interface{}) bool) bool {
-	for e := b.first; e != nil; e = loadptr(e.next) {
+	for e := b.first; e != nil; e = loadptr(&e.next) {
 		if f(e.key, e.value) {
 			return true
 		}
@@ -82,7 +82,7 @@ func (ht *Hashtable_t) String() string {
 	for i, b := range ht.table {
 		if b.first != nil {
 			s += fmt.Sprintf("b %d:\n", i)
-			for e := b.first; e != nil; e = loadptr(e.next) {
+			for e := b.first; e != nil; e = loadptr(&e.next) {
 				s += fmt.Sprintf("(%v, %v), ", e.keyHash, e.key)
 			}
 			s += fmt.Sprintf("\n")
@@ -116,7 +116,7 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]
 	n := 0
-	for e := loadptr(b.first); e != nil; e = loadptr(e.next) {
+	for e := loadptr(&b.first); e != nil; e = loadptr(&e.next) {
 		if e.keyHash == kh && equal(e.key, key) {
 			return e.value, true
 		}
@@ -238,10 +238,10 @@ func (ht *Hashtable_t) hash(keyHash uint32) int {
 // traversing pointers in Get() and updating them in Set()/Del(), this might be
 // ok on x86. The Go compiler also hopefully doesn't reorder loads
 // wrt. LoadPointer.
-func loadptr(e *elem_t) *elem_t {
-	ptr := (*unsafe.Pointer)(unsafe.Pointer(&e))
+func loadptr(e **elem_t) *elem_t {
+	ptr := (*unsafe.Pointer)(unsafe.Pointer(e))
 	p := atomic.LoadPointer(ptr)
-	n := (*elem_t)(p)
+	n := (*elem_t)(unsafe.Pointer(p))
 	return n
 }
 
