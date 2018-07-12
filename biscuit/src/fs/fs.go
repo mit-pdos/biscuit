@@ -1448,8 +1448,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 	return 0
 }
 
-// if the path resolves successfully, returns the idaemon locked. otherwise,
-// locks no idaemon.
+// if the path resolves successfully, returns target inode
 func (fs *Fs_t) fs_namei(opid opid_t, paths common.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
@@ -1462,9 +1461,17 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths common.Ustr, cwd *common.Cwd_t) (*im
 	err := common.Err_t(0)
 	pp := common.Pathparts_t{}
 	pp.Pp_init(paths)
-	for cp, ok := pp.Next(); ok; cp, ok = pp.Next() {
-		n, found := idm.ilookup_lockfree(cp)
+	var next common.Ustr
+	var nextok bool
+	for cp, ok := pp.Next(); ok; cp, ok = next, nextok {
+		next, nextok = pp.Next()
+		n, found := idm.ilookup_lockfree(cp, !nextok)
 		if !found {
+			// on failure do locked lookup
+			if start != idm {
+				// XXX check result of Refup and, on failure, start over again
+				idm.Refup("fs_namei")
+			}
 			idm.ilock("fs_namei")
 			n, err = idm.ilookup(opid, cp)
 			if !common.Resadd_noblock(common.Bounds(common.B_FS_T_FS_NAMEI)) {
@@ -1475,11 +1482,16 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths common.Ustr, cwd *common.Cwd_t) (*im
 				return nil, err
 			}
 			idm.iunlock("fs_namei")
+			if n != idm {
+				idm.Refdown("fs_namei_idm")
+			}
 		}
-		if n != idm {
-			idm.Refdown("fs_namei_idm")
-			idm = n
-		}
+		// n may have been deleted from dcache and icache, but namei()
+		// just reads value from this inode. The inode won't have been
+		// GC-ed so it has values. It is ok to read stale values,
+		// because namei() makes sure that it has a valid reference to
+		// the target inode.
+		idm = n
 	}
 	return idm, 0
 }

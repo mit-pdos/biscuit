@@ -22,6 +22,8 @@ import "hashtable"
 // weak reference to an object, so that the GC could collect the object, if it
 // is low on memory.
 
+const REMOVE = uint32(0xF0000000)
+
 type cstats_t struct {
 	Nevict common.Counter_t
 	Nhit   common.Counter_t
@@ -53,8 +55,23 @@ func (ref *Objref_t) Refcnt() uint32 {
 	return c
 }
 
-func (ref *Objref_t) Up() {
-	atomic.AddUint32(&ref.refcnt, 1)
+// Up returns whether Up increased refcnt and, if so, the old value of the
+// refcnt. Clients of cache can use this to implement other higher-level caches.
+// For example, lock-free lockup in the directory cache uses the return values
+// to decide if the lookup races with an unlink or evict.  Many clients of cache
+// don't use Up() directly, because they use Lookup(), or they ignore return
+// value of Up(), because they know that the refcnt > 0 (because the Up()
+// follows a Lookup()).
+func (ref *Objref_t) Up() (uint32, bool) {
+	for {
+		v := ref.refcnt
+		if REMOVE&v != 0 {
+			return 0, false
+		}
+		if atomic.CompareAndSwapUint32(&ref.refcnt, v, v+1) {
+			return v, true
+		}
+	}
 }
 
 func (ref *Objref_t) Down() uint32 {
@@ -80,8 +97,6 @@ func mkCache(size int) *cache_t {
 func (c *cache_t) Len() int {
 	return c.cache.Size()
 }
-
-const REMOVE = uint32(0xF0000000)
 
 // Other threads may have a reference to this item and may Ref{up,down}; the
 // increment must therefore be atomic. Furthermore, the evictor maybe trying to

@@ -203,8 +203,8 @@ func (idm *imemnode_t) Evictnow() bool {
 	return r
 }
 
-func (imem *imemnode_t) Refup(s string) {
-	imem.ref.Up()
+func (imem *imemnode_t) Refup(s string) (uint32, bool) {
+	return imem.ref.Up()
 }
 
 func (imem *imemnode_t) Refdown(s string) bool {

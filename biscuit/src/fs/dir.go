@@ -1,5 +1,6 @@
 package fs
 
+//import "fmt"
 import "sync/atomic"
 import "unsafe"
 
@@ -186,11 +187,10 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name common.Ustr, inum common.Inum
 	idm.fs.fslog.Write(opid, b)
 	idm.fs.fslog.Relse(b, "_deinsert")
 
-	icd := &icdent_t{noff, inum, nil}
+	icd := &icdent_t{offset: noff, inum: inum}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.dentc
 	dc.haveall = dc.haveall && ok
-
 	return 0
 }
 
@@ -211,7 +211,7 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn common.Ustr, de *icdent_t)
 		for j := 0; j < NDIRENTS; j++ {
 			tfn := dd.Filename(j)
 			tpriv := dd.inodenext(j)
-			tde := &icdent_t{i + j*NDBYTES, tpriv, nil}
+			tde := &icdent_t{offset: i + j*NDBYTES, inum: tpriv}
 			if f(tfn, tde) {
 				found = true
 				break
@@ -281,8 +281,8 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn common.Ustr) (*icdent_t, common
 		idm.fs.fslog.Write(opid, b)
 		idm.fs.fslog.Relse(b, "_deremove")
 	}
-	// add back to free dents
 	idm.dentc.dents.Del(fn)
+	// add back to free dents
 	idm._deaddempty(de.offset)
 	return de, 0
 }
@@ -423,7 +423,18 @@ func (idm *imemnode_t) ilookup(opid opid_t, name common.Ustr) (*imemnode_t, comm
 	return de.idm, 0
 }
 
-func (idm *imemnode_t) ilookup_lockfree(name common.Ustr) (*imemnode_t, bool) {
+// Lookup name in a directory's dcache without holding lock. If refup is false,
+// then lookup just returns the found inode. This inode may be stale (it may
+// have been deleted from the inode cache) and the caller must be prepared to
+// deal with stale inodes (and, in particular, never update it).  If refup is
+// true, then lookup will return an inode that is guaranteed to be fresh.  For
+// this case, there are two potential races to consider: 1) an unlink removes
+// the entry from dcache; 2) evict removes the inode from the inode cache.  An
+// unlink decreases the refence count of the inode in the icache, and
+// ilookup_lockfree will conservatively fail if it discovers the old refcount
+// was zero.  On eviction, the refcnt is marked as being deleted, and Refup will
+// return false and ilookup_lockfree will fail.
+func (idm *imemnode_t) ilookup_lockfree(name common.Ustr, refup bool) (*imemnode_t, bool) {
 	if idm.dentc.dents == nil {
 		return nil, false
 	}
@@ -432,12 +443,17 @@ func (idm *imemnode_t) ilookup_lockfree(name common.Ustr) (*imemnode_t, bool) {
 		p := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)))
 		v := (*imemnode_t)(p)
 		if v == nil {
-			// two process may find v == nil, but they will write the same
-			// value into de.idm (there is only one *imemnode_t for de.inum)
-			v = idm.fs.icache.Iref(de.inum, "ilookup")
-			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)), (unsafe.Pointer)(v))
+			return nil, false
 		}
-		v.Refup("ilookup")
+		if refup {
+			old, ok := v.Refup("ilookup_lockfree")
+			if !ok || old == 0 {
+				if ok {
+					v.Refdown("ilookup_lockfree")
+				}
+				return nil, false
+			}
+		}
 		return v, true
 	}
 	return nil, false
