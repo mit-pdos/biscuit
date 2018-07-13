@@ -1,6 +1,6 @@
 package fs
 
-//import "fmt"
+import "fmt"
 import "sync/atomic"
 import "unsafe"
 
@@ -114,6 +114,13 @@ type icdent_t struct {
 	offset int
 	inum   common.Inum_t
 	idm    *imemnode_t
+	name   common.Ustr
+}
+
+func (de *icdent_t) String() string {
+	s := ""
+	s += fmt.Sprintf("%d %s", de.inum, de.name)
+	return s
 }
 
 // returns the offset of an empty directory entry. returns error if failed to
@@ -187,7 +194,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name common.Ustr, inum common.Inum
 	idm.fs.fslog.Write(opid, b)
 	idm.fs.fslog.Relse(b, "_deinsert")
 
-	icd := &icdent_t{offset: noff, inum: inum}
+	icd := &icdent_t{offset: noff, inum: inum, name: name}
 	ok := idm._dceadd(name, icd)
 	dc := &idm.dentc
 	dc.haveall = dc.haveall && ok
@@ -211,7 +218,7 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn common.Ustr, de *icdent_t)
 		for j := 0; j < NDIRENTS; j++ {
 			tfn := dd.Filename(j)
 			tpriv := dd.inodenext(j)
-			tde := &icdent_t{offset: i + j*NDBYTES, inum: tpriv}
+			tde := &icdent_t{offset: i + j*NDBYTES, inum: tpriv, name: tfn}
 			if f(tfn, tde) {
 				found = true
 				break
@@ -313,6 +320,15 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 func (idm *imemnode_t) _derelease() int {
 	dc := &idm.dentc
 	dc.haveall = false
+	if dc.dents != nil {
+		elems := dc.dents.Elems()
+		for _, v := range elems {
+			de := v.Value.(*icdent_t)
+			if de.idm != nil {
+				de.idm.Refdown("_derelease")
+			}
+		}
+	}
 	dc.dents = nil
 	dc.freel.head = nil
 	ret := dc.max
@@ -417,7 +433,18 @@ func (idm *imemnode_t) ilookup(opid opid_t, name common.Ustr) (*imemnode_t, comm
 		return nil, err
 	}
 	if de.idm == nil {
-		de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
+		if name.Isdot() {
+			de.idm = idm
+			de.idm.add_dcachelist(idm, de)
+		} else if name.Isdotdot() {
+			// the caller has parent locked
+			de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
+			de.idm.add_dcachelist(idm, de)
+		} else {
+			de.idm = idm.fs.icache.Iref_locked(de.inum, "ilookup")
+			de.idm.add_dcachelist(idm, de)
+			de.idm.iunlock("ilookup")
+		}
 	}
 	de.idm.Refup("ilookup")
 	return de.idm, 0
@@ -486,6 +513,8 @@ func (idm *imemnode_t) iunlink(opid opid_t, name common.Ustr) (common.Inum_t, co
 		return 0, err
 	}
 	if de.idm != nil {
+		// caller must have child inode locked too
+		de.idm.del_dcachelist(idm.inum)
 		de.idm.Refdown("iunlink")
 	}
 	return de.inum, 0

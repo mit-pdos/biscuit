@@ -166,7 +166,7 @@ func (a ByStamp) Len() int      { return len(a) }
 func (a ByStamp) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a ByStamp) Less(i, j int) bool {
 	e1 := a[i].Value.(*Objref_t)
-	e2 := a[2].Value.(*Objref_t)
+	e2 := a[j].Value.(*Objref_t)
 	return e1.tstamp < e2.tstamp
 }
 
@@ -180,17 +180,10 @@ func (c *cache_t) Evict_half() int {
 	did := 0
 	elems := c.cache.Elems()
 	sort.Sort(ByStamp(elems))
-	for _, p := range elems { // XXX only need the key
+	for _, p := range elems { // XXX only need the keys, not complete elems
 		e := p.Value.(*Objref_t)
+		e.Obj.Evict()
 		if c.Remove(e.Key) {
-			// imemnode with refcount of 0 must have non-zero links and thus
-			// can be freed.  (in fact, likely they already have been freed)
-			//
-			// imemnode eviction acquires no locks and block eviction
-			// acquires only a leaf lock (physmem lock). furthermore,
-			// neither eviction blocks on IO, thus it is safe to evict here
-			// with locks held.
-			e.Obj.Evict()
 			did++
 		}
 	}

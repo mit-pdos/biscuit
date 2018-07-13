@@ -1509,10 +1509,9 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	if !fs.diskfs {
 		panic("no evict")
 	}
-	//fmt.Printf("FS EVICT\n")
-	// XXX blow away dcache first
+	fmt.Printf("FS EVICT\n")
 	fs.bcache.cache.Evict_half()
-	fs.icache.cache.Evict_half() // XXX doesn't do anything because inodes are evicted when unlinked
+	fs.icache.cache.Evict_half()
 	return fs.Sizes()
 }
 

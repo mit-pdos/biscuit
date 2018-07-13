@@ -1,5 +1,6 @@
 package fs
 
+import "container/list"
 import "fmt"
 import "sync"
 import "sort"
@@ -190,17 +191,19 @@ type imemnode_t struct {
 		// dents dc_rbh_t
 		freel fdelist_t
 	}
+	dcache_list *list.List
 }
 
-// XXX maybe unnecessary?  Evict should be empty.
-func (idm *imemnode_t) Key() int {
-	return int(idm.inum)
-}
-func (idm *imemnode_t) Evictnow() bool {
-	idm.ilock("")
-	r := idm.links == 0
-	idm.iunlock("")
-	return r
+func (idm *imemnode_t) String() string {
+	s := ""
+	s += fmt.Sprintf("[inum %d type %d (", idm.inum, idm.itype)
+	s += fmt.Sprintf("dcache_list: ")
+	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
+		dei := e.Value.(*de_inode_t)
+		s += fmt.Sprintf("%d %s", dei.parent.inum, dei.de)
+	}
+	s += fmt.Sprintf(")]")
+	return s
 }
 
 func (imem *imemnode_t) Refup(s string) (uint32, bool) {
@@ -216,18 +219,57 @@ func (imem *imemnode_t) Refdown(s string) bool {
 	return false
 }
 
-// No other thread should have a reference to this inode, because its refcnt = 0
-// and it was removed from cache.  Same for Free()
-func (idm *imemnode_t) Evict() {
-	idm._derelease()
-	if fs_debug {
-		fmt.Printf("evict: %v\n", idm.inum)
+// To find all inodes that have de.idm in their dcache
+type de_inode_t struct {
+	parent *imemnode_t
+	de     *icdent_t
+}
+
+func (idm *imemnode_t) add_dcachelist(parent *imemnode_t, de *icdent_t) {
+	dei := &de_inode_t{parent, de}
+	idm.dcache_list.PushBack(dei)
+}
+
+func (idm *imemnode_t) del_dcachelist(inum common.Inum_t) {
+	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
+		dei := e.Value.(*de_inode_t)
+		if dei.parent.inum == inum {
+			idm.dcache_list.Remove(e)
+		}
 	}
+}
+
+// Remove idm from other inode's cache and delete its dcache. This causes the
+// refcnt of this inode to maybe drop to 0, and it will be truly evicted (i.e.,
+// removed from icache).
+func (idm *imemnode_t) evictDcache() {
+	if fs_debug {
+		fmt.Printf("evictDcache: %v\n", idm)
+	}
+	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
+		dei := e.Value.(*de_inode_t)
+		par := dei.parent
+		if par.dentc.dents != nil {
+			// XXX lock parent?
+			par.dentc.dents.Del(dei.de.name)
+		}
+		par._deaddempty(dei.de.offset)
+	}
+	idm.dcache_list = list.New()
+	idm._derelease()
+}
+
+// The cache wants to evict this object because it isn't has been used recently,
+// but it is links maybe non-zero, so it could be in use.
+func (idm *imemnode_t) Evict() {
+	idm.ilock("Evict")
+	idm.evictDcache()
+	idm.iunlock("Evict")
 }
 
 func (idm *imemnode_t) Free() {
 	// no need to lock...
-	idm.Evict()
+	idm.evictDcache()
 	if idm.links == 0 {
 		idm.ifree()
 	}
@@ -1319,6 +1361,7 @@ func (icache *icache_t) _iref(inum common.Inum_t, fill bool, lock bool) *imemnod
 		ret.fs = icache.fs
 		ret.ref = ref
 		ret.inum = inum
+		ret.dcache_list = list.New()
 		if fill {
 			ret.idm_init(inum)
 		}
@@ -1337,7 +1380,7 @@ func (icache *icache_t) _iref(inum common.Inum_t, fill bool, lock bool) *imemnod
 // Grab locks on inodes references in imems.  handles duplicates.
 func iref_lockall(imems []*imemnode_t) []*imemnode_t {
 	locked := make([]*imemnode_t, 0, 4)
-	sort.Slice(imems, func(i, j int) bool { return imems[i].Key() < imems[j].Key() })
+	sort.Slice(imems, func(i, j int) bool { return imems[i].inum < imems[j].inum })
 	for _, imem := range imems {
 		dup := false
 		for _, l := range locked {

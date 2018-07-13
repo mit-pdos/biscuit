@@ -44,7 +44,7 @@ func (b *bucket_t) elems() []Pair_t {
 	b.RLock()
 	defer b.RUnlock()
 
-	p := make([]Pair_t, 2)
+	p := make([]Pair_t, 0)
 	for e := b.first; e != nil; e = e.next {
 		p = append(p, Pair_t{Key: e.key, Value: e.value})
 	}
@@ -105,9 +105,12 @@ type Pair_t struct {
 }
 
 func (ht *Hashtable_t) Elems() []Pair_t {
-	p := make([]Pair_t, ht.capacity)
+	p := make([]Pair_t, 0)
 	for _, b := range ht.table {
-		p = append(p, b.elems()...)
+		n := b.elems()
+		if n != nil {
+			p = append(p, n...)
+		}
 	}
 	return p
 }

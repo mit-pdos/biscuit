@@ -172,7 +172,7 @@ func (blk *Bdev_block_t) Evict() {
 	if bdev_debug {
 		fmt.Printf("evict: block %v %#x\n", blk.Block, blk.Pa)
 	}
-	blk.Mem.Free(blk.Pa)
+	blk.Mem.Free(blk.Pa) // XXX maybe this should be done after actual eviction?
 }
 
 func (blk *Bdev_block_t) Tryevict() {

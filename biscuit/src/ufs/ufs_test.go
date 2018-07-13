@@ -341,6 +341,33 @@ func TestFSSimple(t *testing.T) {
 }
 
 //
+// Test eviction
+
+func TestEvict(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
+
+	fmt.Printf("Test Evict %v ...\n", dst)
+	d := common.Ustr("d/")
+	tfs := BootFS(dst)
+	s := doTestSimple(tfs, d)
+	if s != "" {
+		t.Fatalf("doTestSimple failed %s\n", s)
+	}
+	ni, nb := tfs.Sizes()
+	tfs.Evict()
+	ni1, nb1 := tfs.Sizes()
+	if ni1 >= ni {
+		t.Fatalf("No inodes evicted %d %d\n", ni, ni1)
+	}
+	if nb1 >= nb {
+		t.Fatalf("No blocks evicted %d %d\n", nb, nb1)
+	}
+	fmt.Printf("inode %d %d\n", ni, ni1)
+	fmt.Printf("blks %d %d\n", nb, nb1)
+}
+
+//
 // Test that inode are reused after freeing
 //
 
