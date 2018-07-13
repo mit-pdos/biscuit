@@ -168,11 +168,15 @@ func (blk *Bdev_block_t) Key() int {
 	return blk.Block
 }
 
-func (blk *Bdev_block_t) Evict() {
+func (blk *Bdev_block_t) EvictFromCache() {
+	// nothing to be done right before being evicted
+}
+
+func (blk *Bdev_block_t) EvictDone() {
 	if bdev_debug {
-		fmt.Printf("evict: block %v %#x\n", blk.Block, blk.Pa)
+		fmt.Printf("Done: block %v %#x\n", blk.Block, blk.Pa)
 	}
-	blk.Mem.Free(blk.Pa) // XXX maybe this should be done after actual eviction?
+	blk.Mem.Free(blk.Pa)
 }
 
 func (blk *Bdev_block_t) Tryevict() {

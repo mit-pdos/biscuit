@@ -175,7 +175,7 @@ func (bcache *bcache_t) Write_async_through_coalesce(blks *BlkList_t) {
 	}
 }
 
-// XXX b methods, but Relse needs to update pins
+// XXX b methods, but Relse() needs to update pins
 func (bcache *bcache_t) Refup(b *Bdev_block_t, s string) {
 	b.Ref.Up()
 }
@@ -189,8 +189,9 @@ func (bcache *bcache_t) Relse(b *Bdev_block_t, s string) {
 		bcache.Lock()
 		delete(bcache.pins, b.Pa)
 		bcache.Unlock()
-		bcache.cache.Remove(b.Block)
-		b.Evict()
+		if bcache.cache.Remove(b.Block) {
+			b.EvictDone()
+		}
 	}
 }
 

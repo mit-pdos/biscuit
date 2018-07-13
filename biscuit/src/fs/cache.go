@@ -30,7 +30,8 @@ type cstats_t struct {
 }
 
 type Obj_t interface {
-	Evict()
+	EvictFromCache() // Cache will evict this object, if refcnt = 0 after calling Evict()
+	EvictDone()      // Cache has evicted the object, the refcnt was 0
 }
 
 type Objref_t struct {
@@ -181,8 +182,9 @@ func (c *cache_t) Evict_half() int {
 	sort.Sort(ByStamp(elems))
 	for _, p := range elems { // XXX only need the keys, not complete elems
 		e := p.Value.(*Objref_t)
-		e.Obj.Evict()
+		e.Obj.EvictFromCache()
 		if c.Remove(e.Key) {
+			e.Obj.EvictDone()
 			did++
 		}
 	}

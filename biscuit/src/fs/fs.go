@@ -1066,13 +1066,13 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 		}
 		c, err := src.Uioread(buf.Data[boff:])
 		if err != 0 {
-			buf.Evict()
+			buf.EvictDone()
 			return 0, err
 		}
 		buf.Write()
 		raw.offset += c
 		did += c
-		buf.Evict()
+		buf.EvictDone()
 	}
 	return did, 0
 }

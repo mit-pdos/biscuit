@@ -258,10 +258,14 @@ func (idm *imemnode_t) evictDcache() {
 
 // The cache wants to evict this inode because it hasn't been used recently, but
 // its links maybe non-zero, so it could be in use.
-func (idm *imemnode_t) Evict() {
+func (idm *imemnode_t) EvictFromCache() {
 	idm.ilock("Evict")
 	idm.evictDcache()
 	idm.iunlock("Evict")
+}
+
+func (idm *imemnode_t) EvictDone() {
+	// nothing to do anymore: Evict() already deleted idm's directory cache
 }
 
 func (idm *imemnode_t) Free() {
