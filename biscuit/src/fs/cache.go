@@ -9,12 +9,11 @@ import "sync/atomic"
 import "common"
 import "hashtable"
 
-// Fixed-size cache of objects. Main invariant: an object is in memory once so
-// that threads see each other's updates.  The challenging case is that an
-// object can be evicted only when no thread has a reference to the object.  To
-// keep track of the references to an object, cache refcounts the references to
-// an object.  The client of cache, must call Lookup/Done to ensure a correct
-// refcount.
+// Cache of objects. Main invariant: an object is in memory once so that threads
+// see each other's updates.  The challenging case is that an object can be
+// evicted only when no thread has a reference to the object.  To keep track of
+// the references to an object, cache refcounts the references to an object.
+// The client of cache, must call Lookup/Done to ensure a correct refcount.
 //
 // It is a bummer that we refcnt, instead of relying on GC. In an alternate
 // world, we would use finalizers on an object, and the GC would inform

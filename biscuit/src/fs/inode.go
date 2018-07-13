@@ -191,6 +191,7 @@ type imemnode_t struct {
 		// dents dc_rbh_t
 		freel fdelist_t
 	}
+	// list of dcaches this inode appears in
 	dcache_list *list.List
 }
 
@@ -259,8 +260,8 @@ func (idm *imemnode_t) evictDcache() {
 	idm._derelease()
 }
 
-// The cache wants to evict this object because it isn't has been used recently,
-// but it is links maybe non-zero, so it could be in use.
+// The cache wants to evict this inode because it hasn't been used recently, but
+// its links maybe non-zero, so it could be in use.
 func (idm *imemnode_t) Evict() {
 	idm.ilock("Evict")
 	idm.evictDcache()
