@@ -7,7 +7,7 @@ import "hash/fnv"
 import "sync"
 import "unsafe"
 
-import "common"
+import "ustr"
 
 // A hashtable with a lock-free Get()
 
@@ -254,7 +254,7 @@ func storeptr(p **elem_t, n *elem_t) {
 	atomic.StorePointer(ptr, v)
 }
 
-func hashUstr(s common.Ustr) uint32 {
+func hashUstr(s ustr.Ustr) uint32 {
 	h := fnv.New32a()
 	h.Write(s)
 	return h.Sum32()
@@ -273,7 +273,7 @@ func khash(key interface{}) uint32 {
 
 func hash(key interface{}) uint32 {
 	switch x := key.(type) {
-	case common.Ustr:
+	case ustr.Ustr:
 		return hashUstr(x)
 	case int:
 		return uint32(x)
@@ -287,9 +287,9 @@ func hash(key interface{}) uint32 {
 
 func equal(key1 interface{}, key2 interface{}) bool {
 	switch x := key1.(type) {
-	case common.Ustr:
-		us1 := key1.(common.Ustr)
-		us2 := key2.(common.Ustr)
+	case ustr.Ustr:
+		us1 := key1.(ustr.Ustr)
+		us2 := key2.(ustr.Ustr)
 		return us1.Eq(us2)
 	case int32:
 		n1 := uint32(x)

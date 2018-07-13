@@ -3,6 +3,9 @@ package common
 import "time"
 import "sync"
 
+import "bpath"
+import "ustr"
+
 const (
 	FD_READ    = 0x1
 	FD_WRITE   = 0x2
@@ -46,10 +49,10 @@ const (
 type Cwd_t struct {
 	sync.Mutex // to serialize chdirs
 	Fd         *Fd_t
-	Path       Ustr
+	Path       ustr.Ustr
 }
 
-func (cwd *Cwd_t) Fullpath(p Ustr) Ustr {
+func (cwd *Cwd_t) Fullpath(p ustr.Ustr) ustr.Ustr {
 	if p.IsAbsolute() {
 		return p
 	} else {
@@ -58,15 +61,15 @@ func (cwd *Cwd_t) Fullpath(p Ustr) Ustr {
 	}
 }
 
-func (cwd *Cwd_t) Canonicalpath(p Ustr) Ustr {
+func (cwd *Cwd_t) Canonicalpath(p ustr.Ustr) ustr.Ustr {
 	p1 := cwd.Fullpath(p)
-	return Canonicalize(p1)
+	return bpath.Canonicalize(p1)
 }
 
 func MkRootCwd(fd *Fd_t) *Cwd_t {
 	c := &Cwd_t{}
 	c.Fd = fd
-	c.Path = MkUstrRoot()
+	c.Path = ustr.MkUstrRoot()
 	return c
 }
 

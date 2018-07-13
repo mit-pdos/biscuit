@@ -8,6 +8,7 @@ import "unsafe"
 
 import "common"
 import "hashtable"
+import "ustr"
 
 type inode_stats_t struct {
 	Nopen       common.Counter_t
@@ -440,7 +441,7 @@ func (idm *imemnode_t) do_dirchk(opid opid_t, wantdir bool) common.Err_t {
 }
 
 // unlink cannot encounter OOM since directory page caches are eagerly loaded.
-func (idm *imemnode_t) do_unlink(opid opid_t, name common.Ustr) common.Err_t {
+func (idm *imemnode_t) do_unlink(opid opid_t, name ustr.Ustr) common.Err_t {
 	_, err := idm.iunlink(opid, name)
 	if err == 0 {
 		idm._iupdate(opid)
@@ -449,7 +450,7 @@ func (idm *imemnode_t) do_unlink(opid opid_t, name common.Ustr) common.Err_t {
 }
 
 // create new dir ent with given inode number
-func (idm *imemnode_t) do_insert(opid opid_t, fn common.Ustr, n common.Inum_t) common.Err_t {
+func (idm *imemnode_t) do_insert(opid opid_t, fn ustr.Ustr, n common.Inum_t) common.Err_t {
 	err := idm.iinsert(opid, fn, n)
 	if err == 0 {
 		idm._iupdate(opid)
@@ -457,7 +458,7 @@ func (idm *imemnode_t) do_insert(opid opid_t, fn common.Ustr, n common.Inum_t) c
 	return err
 }
 
-func (idm *imemnode_t) do_createnod(opid opid_t, fn common.Ustr, maj, min int) (*imemnode_t, common.Err_t) {
+func (idm *imemnode_t) do_createnod(opid opid_t, fn ustr.Ustr, maj, min int) (*imemnode_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		return nil, -common.ENOTDIR
 	}
@@ -468,7 +469,7 @@ func (idm *imemnode_t) do_createnod(opid opid_t, fn common.Ustr, maj, min int) (
 	return child, err
 }
 
-func (idm *imemnode_t) do_createfile(opid opid_t, fn common.Ustr) (*imemnode_t, common.Err_t) {
+func (idm *imemnode_t) do_createfile(opid opid_t, fn ustr.Ustr) (*imemnode_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		return nil, -common.ENOTDIR
 	}
@@ -479,7 +480,7 @@ func (idm *imemnode_t) do_createfile(opid opid_t, fn common.Ustr) (*imemnode_t, 
 	return child, err
 }
 
-func (idm *imemnode_t) do_createdir(opid opid_t, fn common.Ustr) (*imemnode_t, common.Err_t) {
+func (idm *imemnode_t) do_createdir(opid opid_t, fn ustr.Ustr) (*imemnode_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		return nil, -common.ENOTDIR
 	}
@@ -814,7 +815,7 @@ func (idm *imemnode_t) itrunc(opid opid_t, newlen uint) common.Err_t {
 
 // reverts icreate(). called after failure to allocate that prevents an FS
 // operation from continuing.
-func (idm *imemnode_t) create_undo(opid opid_t, childi common.Inum_t, childn common.Ustr) common.Err_t {
+func (idm *imemnode_t) create_undo(opid opid_t, childi common.Inum_t, childn ustr.Ustr) common.Err_t {
 	ci, err := idm.iunlink(opid, childn)
 	if err != 0 {
 		panic("but insert just succeeded")
@@ -831,7 +832,7 @@ func (idm *imemnode_t) create_undo(opid opid_t, childi common.Inum_t, childn com
 	return 0
 }
 
-func (idm *imemnode_t) icreate(opid opid_t, name common.Ustr, nitype, major, minor int) (*imemnode_t, common.Err_t) {
+func (idm *imemnode_t) icreate(opid opid_t, name ustr.Ustr, nitype, major, minor int) (*imemnode_t, common.Err_t) {
 
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")

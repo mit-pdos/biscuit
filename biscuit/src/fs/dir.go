@@ -4,13 +4,14 @@ import "fmt"
 import "sync/atomic"
 import "unsafe"
 
+import "ustr"
 import "common"
 
 const NAME_MAX int = 512
 
 var lhits = 0
 
-func crname(path common.Ustr, nilpatherr common.Err_t) (common.Err_t, bool) {
+func crname(path ustr.Ustr, nilpatherr common.Err_t) (common.Err_t, bool) {
 	if len(path) == 0 {
 		return nilpatherr, false
 	} else if path.Isdot() || path.Isdotdot() {
@@ -40,7 +41,7 @@ func doffset(didx int, off int) int {
 	return NDBYTES*didx + off
 }
 
-func (dir *Dirdata_t) Filename(didx int) common.Ustr {
+func (dir *Dirdata_t) Filename(didx int) ustr.Ustr {
 	st := doffset(didx, 0)
 	sl := dir.Data[st : st+DNAMELEN]
 	ret := make([]byte, 0, 14)
@@ -50,7 +51,7 @@ func (dir *Dirdata_t) Filename(didx int) common.Ustr {
 		}
 		ret = append(ret, c)
 	}
-	return common.Ustr(ret)
+	return ustr.Ustr(ret)
 }
 
 func (dir *Dirdata_t) inodenext(didx int) common.Inum_t {
@@ -59,7 +60,7 @@ func (dir *Dirdata_t) inodenext(didx int) common.Inum_t {
 	return common.Inum_t(v)
 }
 
-func (dir *Dirdata_t) W_filename(didx int, fn common.Ustr) {
+func (dir *Dirdata_t) W_filename(didx int, fn ustr.Ustr) {
 	st := doffset(didx, 0)
 	sl := dir.Data[st : st+DNAMELEN]
 	l := len(fn)
@@ -114,7 +115,7 @@ type icdent_t struct {
 	offset int
 	inum   common.Inum_t
 	idm    *imemnode_t
-	name   common.Ustr
+	name   ustr.Ustr
 }
 
 func (de *icdent_t) String() string {
@@ -134,7 +135,7 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, common.Err_t) {
 	// see if we have an empty slot before expanding the directory
 	if !idm.dentc.scanned {
 		var de *icdent_t
-		found, err := idm._descan(opid, func(fn common.Ustr, tde *icdent_t) bool {
+		found, err := idm._descan(opid, func(fn ustr.Ustr, tde *icdent_t) bool {
 			if len(fn) == 0 {
 				de = tde
 				return true
@@ -175,7 +176,7 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, common.Err_t) {
 }
 
 // if _deinsert fails to allocate a page, idm is left unchanged.
-func (idm *imemnode_t) _deinsert(opid opid_t, name common.Ustr, inum common.Inum_t) common.Err_t {
+func (idm *imemnode_t) _deinsert(opid opid_t, name ustr.Ustr, inum common.Inum_t) common.Err_t {
 	noff, err := idm._denextempty(opid)
 	if err != 0 {
 		return err
@@ -204,7 +205,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name common.Ustr, inum common.Inum
 // calls f on each directory entry (including empty ones) until f returns true
 // or it has been called on all directory entries. _descan returns true if f
 // returned true.
-func (idm *imemnode_t) _descan(opid opid_t, f func(fn common.Ustr, de *icdent_t) bool) (bool, common.Err_t) {
+func (idm *imemnode_t) _descan(opid opid_t, f func(fn ustr.Ustr, de *icdent_t) bool) (bool, common.Err_t) {
 	found := false
 	for i := 0; i < idm.size; i += BSIZE {
 		if !common.Resadd_noblock(common.Bounds(common.B_IMEMNODE_T__DESCAN)) {
@@ -230,7 +231,7 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn common.Ustr, de *icdent_t)
 	return found, 0
 }
 
-func (idm *imemnode_t) _delookup(opid opid_t, fn common.Ustr) (*icdent_t, common.Err_t) {
+func (idm *imemnode_t) _delookup(opid opid_t, fn ustr.Ustr) (*icdent_t, common.Err_t) {
 	if len(fn) == 0 {
 		panic("bad lookup")
 	}
@@ -247,7 +248,7 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn common.Ustr) (*icdent_t, common
 	found := false
 	haveall := true
 	var de *icdent_t
-	_, err := idm._descan(opid, func(tfn common.Ustr, tde *icdent_t) bool {
+	_, err := idm._descan(opid, func(tfn ustr.Ustr, tde *icdent_t) bool {
 		if len(tfn) == 0 {
 			return false
 		}
@@ -270,7 +271,7 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn common.Ustr) (*icdent_t, common
 	return de, 0
 }
 
-func (idm *imemnode_t) _deremove(opid opid_t, fn common.Ustr) (*icdent_t, common.Err_t) {
+func (idm *imemnode_t) _deremove(opid opid_t, fn ustr.Ustr) (*icdent_t, common.Err_t) {
 	var zi *icdent_t
 	de, err := idm._delookup(opid, fn)
 	if err != 0 {
@@ -282,7 +283,7 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn common.Ustr) (*icdent_t, common
 			return zi, err
 		}
 		dirdata := Dirdata_t{b.Data[de.offset%common.PGSIZE:]}
-		dirdata.W_filename(0, common.MkUstr())
+		dirdata.W_filename(0, ustr.MkUstr())
 		dirdata.W_inodenext(0, common.Inum_t(0))
 		b.Unlock()
 		idm.fs.fslog.Write(opid, b)
@@ -304,7 +305,7 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 	if idm.dentc.haveall {
 		dentc := &idm.dentc
 		hasfiles := dentc.dents.Iter(func(key interface{}, v interface{}) bool {
-			dn := key.(common.Ustr)
+			dn := key.(ustr.Ustr)
 			if !dn.Isdot() && !dn.Isdotdot() {
 				return true
 			}
@@ -312,7 +313,7 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, common.Err_t) {
 		})
 		return !hasfiles, 0
 	}
-	notempty, err := idm._descan(opid, func(fn common.Ustr, de *icdent_t) bool {
+	notempty, err := idm._descan(opid, func(fn ustr.Ustr, de *icdent_t) bool {
 		return len(fn) != 0 && !fn.Isdot() && fn.Isdotdot()
 	})
 	if err != 0 {
@@ -345,7 +346,7 @@ func (idm *imemnode_t) _derelease() int {
 // ensure that an insert/unlink cannot fail i.e. fail to allocate a page. if fn
 // == "", look for an empty dirent, otherwise make sure the page containing fn
 // is in the page cache.
-func (idm *imemnode_t) _deprobe(opid opid_t, fn common.Ustr) (*Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) _deprobe(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, common.Err_t) {
 	if len(fn) != 0 {
 		de, err := idm._delookup(opid, fn)
 		if err != 0 {
@@ -389,7 +390,7 @@ func (idm *imemnode_t) _demayadd() bool {
 }
 
 // caching is best-effort. returns true if fn was added to the cache
-func (idm *imemnode_t) _dceadd(fn common.Ustr, de *icdent_t) bool {
+func (idm *imemnode_t) _dceadd(fn ustr.Ustr, de *icdent_t) bool {
 	dc := &idm.dentc
 	if !idm._demayadd() {
 		return false
@@ -411,7 +412,7 @@ func (idm *imemnode_t) _deaddempty(off int) {
 func (idm *imemnode_t) probe_insert(opid opid_t) (*Bdev_block_t, common.Err_t) {
 	// insert and remove a fake directory entry, forcing a page allocation
 	// if necessary.
-	b, err := idm._deprobe(opid, common.MkUstr())
+	b, err := idm._deprobe(opid, ustr.MkUstr())
 	if err != 0 {
 		return nil, err
 	}
@@ -420,7 +421,7 @@ func (idm *imemnode_t) probe_insert(opid opid_t) (*Bdev_block_t, common.Err_t) {
 
 // guarantee that there is enough memory to unlink a dirent (which may require
 // allocating a page to load the dirents from disk).
-func (idm *imemnode_t) probe_unlink(opid opid_t, fn common.Ustr) (*Bdev_block_t, common.Err_t) {
+func (idm *imemnode_t) probe_unlink(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, common.Err_t) {
 	b, err := idm._deprobe(opid, fn)
 	if err != 0 {
 		return nil, err
@@ -428,7 +429,7 @@ func (idm *imemnode_t) probe_unlink(opid opid_t, fn common.Ustr) (*Bdev_block_t,
 	return b, 0
 }
 
-func (idm *imemnode_t) ilookup(opid opid_t, name common.Ustr) (*imemnode_t, common.Err_t) {
+func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, common.Err_t) {
 	// did someone confuse a file with a directory?
 	if idm.itype != I_DIR {
 		return nil, -common.ENOTDIR
@@ -456,7 +457,7 @@ func (idm *imemnode_t) ilookup(opid opid_t, name common.Ustr) (*imemnode_t, comm
 }
 
 // both idm and child are locked
-func (idm *imemnode_t) ilookup_validate(opid opid_t, name common.Ustr, child *imemnode_t) (bool, common.Err_t) {
+func (idm *imemnode_t) ilookup_validate(opid opid_t, name ustr.Ustr, child *imemnode_t) (bool, common.Err_t) {
 	de, err := idm._delookup(opid, name)
 	if err != 0 {
 		return false, err
@@ -482,7 +483,7 @@ func (idm *imemnode_t) ilookup_validate(opid opid_t, name common.Ustr, child *im
 // ilookup_lockfree will conservatively fail if it discovers the old refcount
 // was zero.  On eviction, the refcnt is marked as being deleted, and Refup will
 // return false and ilookup_lockfree will fail.
-func (idm *imemnode_t) ilookup_lockfree(name common.Ustr, refup bool) (*imemnode_t, bool) {
+func (idm *imemnode_t) ilookup_lockfree(name ustr.Ustr, refup bool) (*imemnode_t, bool) {
 	if idm.dentc.dents == nil {
 		return nil, false
 	}
@@ -508,7 +509,7 @@ func (idm *imemnode_t) ilookup_lockfree(name common.Ustr, refup bool) (*imemnode
 }
 
 // creates a new directory entry with name "name" and inode number priv
-func (idm *imemnode_t) iinsert(opid opid_t, name common.Ustr, inum common.Inum_t) common.Err_t {
+func (idm *imemnode_t) iinsert(opid opid_t, name ustr.Ustr, inum common.Inum_t) common.Err_t {
 	if idm.itype != I_DIR {
 		return -common.ENOTDIR
 	}
@@ -525,7 +526,7 @@ func (idm *imemnode_t) iinsert(opid opid_t, name common.Ustr, inum common.Inum_t
 }
 
 // returns inode number of unliked inode so caller can decrement its ref count
-func (idm *imemnode_t) iunlink(opid opid_t, name common.Ustr) (common.Inum_t, common.Err_t) {
+func (idm *imemnode_t) iunlink(opid opid_t, name ustr.Ustr) (common.Inum_t, common.Err_t) {
 	if idm.itype != I_DIR {
 		panic("unlink to non-dir")
 	}

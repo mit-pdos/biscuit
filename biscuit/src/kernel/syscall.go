@@ -11,8 +11,10 @@ import "sync/atomic"
 import "time"
 import "unsafe"
 
+import "bpath"
 import "common"
 import "fs"
+import "ustr"
 
 var _sysbounds = []int{
 	//var _sysbounds = map[int]int {
@@ -1972,7 +1974,7 @@ func (sf *sudfops_t) Bind(proc *common.Proc_t, sa []uint8) common.Err_t {
 	}
 
 	poff := 2
-	path := common.MkUstrSlice(sa[poff:])
+	path := ustr.MkUstrSlice(sa[poff:])
 	// try to create the specified file as a special device
 	bid := allbuds.bud_id_new()
 	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, proc.Cwd, common.D_SUD, int(bid))
@@ -2007,7 +2009,7 @@ func (sf *sudfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, sa []uint
 		return 0, -common.EINVAL
 	}
 	st := &common.Stat_t{}
-	path := common.MkUstrSlice(sa[poff:])
+	path := ustr.MkUstrSlice(sa[poff:])
 
 	err := thefs.Fs_stat(path, st, proc.Cwd)
 	if err != 0 {
@@ -2025,7 +2027,7 @@ func (sf *sudfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, sa []uint
 		return 0, -common.ECONNREFUSED
 	}
 
-	var bp common.Ustr
+	var bp ustr.Ustr
 	sf.Lock()
 	if sf.bound {
 		bp = sf.bud.bpath
@@ -2126,7 +2128,7 @@ func (ab *allbud_t) bud_id_new() budid_t {
 	return ret
 }
 
-func (ab *allbud_t) bud_new(bid budid_t, budpath common.Ustr, fpriv common.Inum_t) *bud_t {
+func (ab *allbud_t) bud_new(bid budid_t, budpath ustr.Ustr, fpriv common.Inum_t) *bud_t {
 	ret := &bud_t{}
 	ret.bud_init(bid, budpath, fpriv)
 
@@ -2151,7 +2153,7 @@ func (ab *allbud_t) bud_del(bid budid_t, fpriv common.Inum_t) {
 }
 
 type dgram_t struct {
-	from common.Ustr
+	from ustr.Ustr
 	sz   int
 }
 
@@ -2184,7 +2186,7 @@ func (db *dgrambuf_t) _havedgram() bool {
 	return db.head != db.tail
 }
 
-func (db *dgrambuf_t) copyin(src common.Userio_i, from common.Ustr) (int, common.Err_t) {
+func (db *dgrambuf_t) copyin(src common.Userio_i, from ustr.Ustr) (int, common.Err_t) {
 	// is there a free source address slot and buffer space?
 	if !db._canhold(src.Totalsz()) {
 		panic("should have blocked")
@@ -2235,7 +2237,7 @@ func (db *dgrambuf_t) dg_release() {
 }
 
 // convert bound socket path to struct sockaddr_un
-func _sockaddr_un(budpath common.Ustr) []uint8 {
+func _sockaddr_un(budpath ustr.Ustr) []uint8 {
 	ret := make([]uint8, 2, 16)
 	// len
 	writen(ret, 1, 0, len(budpath))
@@ -2256,10 +2258,10 @@ type bud_t struct {
 	pollers common.Pollers_t
 	cond    *sync.Cond
 	closed  bool
-	bpath   common.Ustr
+	bpath   ustr.Ustr
 }
 
-func (bud *bud_t) bud_init(bid budid_t, bpath common.Ustr, priv common.Inum_t) {
+func (bud *bud_t) bud_init(bid budid_t, bpath ustr.Ustr, priv common.Inum_t) {
 	bud.bid = bid
 	bud.fpriv = priv
 	bud.bpath = bpath
@@ -2278,7 +2280,7 @@ func (bud *bud_t) _wready() {
 }
 
 // returns number of bytes written and error
-func (bud *bud_t) bud_in(src common.Userio_i, from common.Ustr, cmsg []uint8) (int, common.Err_t) {
+func (bud *bud_t) bud_in(src common.Userio_i, from ustr.Ustr, cmsg []uint8) (int, common.Err_t) {
 	if len(cmsg) != 0 {
 		panic("no imp")
 	}
@@ -2372,7 +2374,7 @@ type susfops_t struct {
 	conn    bool
 	bound   bool
 	lstn    bool
-	myaddr  common.Ustr
+	myaddr  ustr.Ustr
 	mysid   int
 	options common.Fdopt_t
 }
@@ -2461,7 +2463,7 @@ func (sus *susfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 		return -common.EINVAL
 	}
 	poff := 2
-	path := common.MkUstrSlice(saddr[poff:])
+	path := ustr.MkUstrSlice(saddr[poff:])
 	sid := susid_new()
 
 	// create special file
@@ -2486,7 +2488,7 @@ func (sus *susfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 		return -common.EISCONN
 	}
 	poff := 2
-	path := common.MkUstrSlice(saddr[poff:])
+	path := ustr.MkUstrSlice(saddr[poff:])
 
 	// lookup sid
 	st := &common.Stat_t{}
@@ -2925,7 +2927,7 @@ func (susl *susl_t) susl_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t
 
 type suslfops_t struct {
 	susl    *susl_t
-	myaddr  common.Ustr
+	myaddr  ustr.Ustr
 	options common.Fdopt_t
 }
 
@@ -3267,8 +3269,8 @@ func sys_execv(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, pathn int, argn 
 
 var _zvmregion common.Vmregion_t
 
-func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths common.Ustr,
-	args []common.Ustr) int {
+func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths ustr.Ustr,
+	args []ustr.Ustr) int {
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
 	// that all threads should terminate before exec.
 	if proc.Thread_count() > 1 {
@@ -3425,7 +3427,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths common.Us
 	return 0
 }
 
-func insertargs(proc *common.Proc_t, sargs []common.Ustr) (int, int, common.Err_t) {
+func insertargs(proc *common.Proc_t, sargs []ustr.Ustr) (int, int, common.Err_t) {
 	// find free page
 	uva := proc.Unusedva_inner(0, common.PGSIZE)
 	proc.Vmadd_anon(uva, common.PGSIZE, common.PTE_U)
@@ -4009,14 +4011,14 @@ func sys_chdir(proc *common.Proc_t, dirn int) int {
 	common.Close_panic(proc.Cwd.Fd)
 	proc.Cwd.Fd = newfd
 	if path.IsAbsolute() {
-		proc.Cwd.Path = common.Canonicalize(path)
+		proc.Cwd.Path = bpath.Canonicalize(path)
 	} else {
 		proc.Cwd.Path = proc.Cwd.Canonicalpath(path)
 	}
 	return 0
 }
 
-func badpath(path common.Ustr) common.Err_t {
+func badpath(path ustr.Ustr) common.Err_t {
 	if len(path) == 0 {
 		return -common.ENOENT
 	}

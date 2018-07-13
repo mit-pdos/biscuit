@@ -8,8 +8,10 @@ import "strconv"
 import "sync"
 import "time"
 
+import "bpath"
 import "common"
 import "fs"
+import "ustr"
 
 const (
 	SMALL = 512
@@ -23,34 +25,34 @@ const (
 )
 
 func TestCanonicalize(t *testing.T) {
-	if !common.Ustr("/").Eq(common.Canonicalize(common.Ustr("//"))) {
+	if !ustr.Ustr("/").Eq(bpath.Canonicalize(ustr.Ustr("//"))) {
 		t.Fatalf("//")
 	}
-	if !common.Ustr("/").Eq(common.Canonicalize(common.Ustr("/////"))) {
+	if !ustr.Ustr("/").Eq(bpath.Canonicalize(ustr.Ustr("/////"))) {
 		t.Fatalf("/////")
 	}
-	if !common.Ustr("/").Eq(common.Canonicalize(common.Ustr("/./"))) {
+	if !ustr.Ustr("/").Eq(bpath.Canonicalize(ustr.Ustr("/./"))) {
 		t.Fatalf("/./")
 	}
-	if !common.Ustr("/a").Eq(common.Canonicalize(common.Ustr("/a/./"))) {
+	if !ustr.Ustr("/a").Eq(bpath.Canonicalize(ustr.Ustr("/a/./"))) {
 		t.Fatalf("/a")
 	}
-	if !common.Ustr("/a/b/c").Eq(common.Canonicalize(common.Ustr("/a/b/c/"))) {
+	if !ustr.Ustr("/a/b/c").Eq(bpath.Canonicalize(ustr.Ustr("/a/b/c/"))) {
 		t.Fatalf("/a/b/c")
 	}
-	if !common.Ustr("/").Eq(common.Canonicalize(common.Ustr("/a/../"))) {
+	if !ustr.Ustr("/").Eq(bpath.Canonicalize(ustr.Ustr("/a/../"))) {
 		t.Fatalf("/")
 	}
-	if !common.Ustr("/a").Eq(common.Canonicalize(common.Ustr("/a/b/.."))) {
+	if !ustr.Ustr("/a").Eq(bpath.Canonicalize(ustr.Ustr("/a/b/.."))) {
 		t.Fatalf("/a")
 	}
-	if !common.Ustr("/").Eq(common.Canonicalize(common.Ustr("/.."))) {
+	if !ustr.Ustr("/").Eq(bpath.Canonicalize(ustr.Ustr("/.."))) {
 		t.Fatalf("/")
 	}
-	if !common.Ustr("/.a").Eq(common.Canonicalize(common.Ustr("/.a"))) {
+	if !ustr.Ustr("/.a").Eq(bpath.Canonicalize(ustr.Ustr("/.a"))) {
 		t.Fatalf("/.a")
 	}
-	if !common.Ustr("/..a").Eq(common.Canonicalize(common.Ustr("/..a"))) {
+	if !ustr.Ustr("/..a").Eq(bpath.Canonicalize(ustr.Ustr("/..a"))) {
 		t.Fatalf("/..a")
 	}
 }
@@ -60,7 +62,7 @@ func doTestDcacheSimple(t *testing.T) {
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("Test Dcache %v ...\n", dst)
-	d := common.Ustr("d")
+	d := ustr.Ustr("d")
 	tfs := BootFS(dst)
 	e := tfs.MkDir(d)
 	if e != 0 {
@@ -113,7 +115,7 @@ func doTestDcacheSimple(t *testing.T) {
 const NSTAT = 1000000
 const NGO = 4
 
-func DcacheFuncRead(t *testing.T, tfs *Ufs_t, dir common.Ustr) {
+func DcacheFuncRead(t *testing.T, tfs *Ufs_t, dir ustr.Ustr) {
 	var wg sync.WaitGroup
 
 	start := time.Now()
@@ -140,7 +142,7 @@ func TestDcachePerfRead(t *testing.T) {
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("Test DcachePerfRead %v ...\n", dst)
-	d := common.Ustr("d")
+	d := ustr.Ustr("d")
 	d1 := d.ExtendStr("d1")
 	tfs := BootFS(dst)
 	e := tfs.MkDir(d)
@@ -169,7 +171,7 @@ func TestDcachePerfRead(t *testing.T) {
 
 const NCREATE = 100000
 
-func DcacheFuncWrite(t *testing.T, tfs *Ufs_t, dir common.Ustr) {
+func DcacheFuncWrite(t *testing.T, tfs *Ufs_t, dir ustr.Ustr) {
 	var wg sync.WaitGroup
 	start := time.Now()
 	for i := 0; i < NGO; i++ {
@@ -207,7 +209,7 @@ func TestDcachePerfWrite(t *testing.T) {
 	MkDisk(dst, nil, ManyLogBlks, ManyInodeBlks, ManyDataBlks)
 	fmt.Printf("Test DcachePerfWrite %v ...\n", dst)
 	tfs := BootMemFS(dst)
-	d := common.Ustr("d")
+	d := ustr.Ustr("d")
 	e := tfs.MkDir(d)
 	if e != 0 {
 		t.Fatalf("mkDir %v failed", d)
@@ -221,7 +223,7 @@ func TestDcachePerfWrite(t *testing.T) {
 	os.Remove(dst)
 }
 
-func doTestSimple(tfs *Ufs_t, d common.Ustr) string {
+func doTestSimple(tfs *Ufs_t, d ustr.Ustr) string {
 	//fmt.Printf("doTestSimple %v\n", d)
 
 	e := tfs.MkDir(d)
@@ -269,7 +271,7 @@ func doTestSimple(tfs *Ufs_t, d common.Ustr) string {
 	return ""
 }
 
-func doCheckSimple(tfs *Ufs_t, d common.Ustr, t *testing.T) {
+func doCheckSimple(tfs *Ufs_t, d ustr.Ustr, t *testing.T) {
 	res, e := tfs.Ls(d)
 	if e != 0 {
 		t.Fatalf("doLs failed")
@@ -325,7 +327,7 @@ func TestFSSimple(t *testing.T) {
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("Test FSSimple %v ...\n", dst)
-	d := common.Ustr("d/")
+	d := ustr.Ustr("d/")
 	tfs := BootFS(dst)
 	s := doTestSimple(tfs, d)
 	if s != "" {
@@ -348,7 +350,7 @@ func TestEvict(t *testing.T) {
 	MkDisk(dst, nil, nlogblks, ninodeblks, ndatablks)
 
 	fmt.Printf("Test Evict %v ...\n", dst)
-	d := common.Ustr("d/")
+	d := ustr.Ustr("d/")
 	tfs := BootFS(dst)
 	s := doTestSimple(tfs, d)
 	if s != "" {
@@ -373,14 +375,14 @@ func TestEvict(t *testing.T) {
 
 func doTestInodeReuse(tfs *Ufs_t, n int, t *testing.T) {
 	for i := 0; i < n; i++ {
-		e := tfs.MkFile(common.Ustr(uniqfile(i)), nil)
+		e := tfs.MkFile(ustr.Ustr(uniqfile(i)), nil)
 		if e != 0 {
 			t.Fatalf("mkFile %v failed", i)
 		}
 	}
 
 	for i := 0; i < n; i++ {
-		e := tfs.Unlink(common.Ustr(uniqfile(i)))
+		e := tfs.Unlink(ustr.Ustr(uniqfile(i)))
 		if e != 0 {
 			t.Fatalf("Unlink %v failed", i)
 		}
@@ -404,8 +406,8 @@ func TestFSInodeReuse(t *testing.T) {
 
 func doTestInodeReuseRename(tfs *Ufs_t, n int, t *testing.T) {
 	for i := 0; i < n; i++ {
-		f := common.Ustr(uniqfile(i))
-		g := common.Ustr("g" + uniqfile(i))
+		f := ustr.Ustr(uniqfile(i))
+		g := ustr.Ustr("g" + uniqfile(i))
 		e := tfs.MkFile(f, nil)
 		if e != 0 {
 			t.Fatalf("mkFile %v failed", i)
@@ -417,7 +419,7 @@ func doTestInodeReuseRename(tfs *Ufs_t, n int, t *testing.T) {
 	}
 
 	for i := 0; i < n; i++ {
-		g := common.Ustr("g" + uniqfile(i))
+		g := ustr.Ustr("g" + uniqfile(i))
 		e := tfs.Unlink(g)
 		if e != 0 {
 			t.Fatalf("Unlink %v failed", i)
@@ -447,7 +449,7 @@ func TestFSInodeReuseRename(t *testing.T) {
 func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
 	for i := 0; i < n; i++ {
 		ub := mkData(uint8(i), SMALL)
-		f := common.Ustr(uniqfile(i))
+		f := ustr.Ustr(uniqfile(i))
 		e := tfs.MkFile(f, ub)
 		if e != 0 {
 			t.Fatalf("mkFile %v failed", i)
@@ -455,7 +457,7 @@ func doTestBlockReuse(tfs *Ufs_t, n int, t *testing.T) {
 	}
 
 	for i := 0; i < n; i++ {
-		f := common.Ustr(uniqfile(i))
+		f := ustr.Ustr(uniqfile(i))
 		e := tfs.Unlink(f)
 		if e != 0 {
 			t.Fatalf("Unlink %v failed", i)
@@ -486,7 +488,7 @@ func TestFSBlockReuse(t *testing.T) {
 func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 	fds := make([]*common.Fd_t, nfile)
 	for i := 0; i < nfile; i++ {
-		fn := common.Ustr(uniqfile(i))
+		fn := ustr.Ustr(uniqfile(i))
 		var err common.Err_t
 		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, tfs.fs.MkRootCwd(), 0, 0)
 		if err != 0 {
@@ -510,7 +512,7 @@ func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 }
 
 func doCheckOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
-	res, e := tfs.Ls(common.MkUstrRoot())
+	res, e := tfs.Ls(ustr.MkUstrRoot())
 	if e != 0 {
 		t.Fatalf("doLs failed")
 	}
@@ -596,7 +598,7 @@ func concurrent(t *testing.T) {
 	tfs := BootFS(dst)
 	for i := 0; i < n; i++ {
 		go func(id int) {
-			d := common.Ustr(uniqdir(id))
+			d := ustr.Ustr(uniqdir(id))
 			s := doTestSimple(tfs, d)
 			doCheckSimple(tfs, d, t)
 			tfs.Sync()
@@ -614,7 +616,7 @@ func concurrent(t *testing.T) {
 	ShutdownFS(tfs)
 	tfs = BootFS(dst)
 	for i := 0; i < n; i++ {
-		d := common.Ustr(uniqdir(i))
+		d := ustr.Ustr(uniqdir(i))
 		doCheckSimple(tfs, d, t)
 	}
 	ShutdownFS(tfs)
@@ -640,7 +642,7 @@ func TestFSConcurSame(t *testing.T) {
 
 	tfs := BootFS(dst)
 	ub := mkData(1, SMALL)
-	f1 := common.Ustr("f1")
+	f1 := ustr.Ustr("f1")
 	e := tfs.MkFile(f1, ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "f1")
@@ -675,7 +677,7 @@ func TestFSConcurUnlink(t *testing.T) {
 	MkDisk(dst, nil, MoreLogBlks, ninodeblks*2, ndatablks*10)
 	c := make(chan string)
 	tfs := BootFS(dst)
-	d := common.Ustr("d")
+	d := ustr.Ustr("d")
 	e := tfs.MkDir(d)
 	if e != 0 {
 		t.Fatalf("mkDir %v failed", d)
@@ -732,7 +734,7 @@ func TestOrderedFile(t *testing.T) {
 	tfs := BootFS(dst)
 
 	ub := mkData(1, fs.BSIZE*norderedblks)
-	f := common.Ustr("f")
+	f := ustr.Ustr("f")
 	e := tfs.MkFile(f, ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -760,7 +762,7 @@ func TestOrderedFile(t *testing.T) {
 
 func doOrderedDir(t *testing.T, force bool) {
 	dst := "tmp.img"
-	d := common.Ustr("d")
+	d := ustr.Ustr("d")
 
 	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
 	tfs := BootFS(dst)
@@ -780,7 +782,7 @@ func doOrderedDir(t *testing.T, force bool) {
 	tfs.Sync()
 
 	ub := mkData(3, fs.BSIZE*7)
-	f := common.Ustr("f")
+	f := ustr.Ustr("f")
 	e = tfs.MkFile(f, ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -814,13 +816,13 @@ func TestOrderedDirApply(t *testing.T) {
 // Test ordered to logged writes.  XXX Hard to get at without testing all possible traces
 func TestOrderedFileDir(t *testing.T) {
 	dst := "tmp.img"
-	d := common.Ustr("d")
+	d := ustr.Ustr("d")
 
 	MkDisk(dst, nil, MoreLogBlks, ninodeblks, ndatablksordered)
 	tfs := BootFS(dst)
 
 	ub := mkData(3, fs.BSIZE*7)
-	f := common.Ustr("f")
+	f := ustr.Ustr("f")
 	e := tfs.MkFile(f, ub)
 	if e != 0 {
 		t.Fatalf("Unlink failed")
@@ -885,7 +887,7 @@ func copyDisk(src, dst string) (err error) {
 
 func doAtomicInit(tfs *Ufs_t) {
 	ub := mkData(1, fs.BSIZE*natomicblks)
-	f := common.Ustr("f")
+	f := ustr.Ustr("f")
 	e := tfs.MkFile(f, ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -895,8 +897,8 @@ func doAtomicInit(tfs *Ufs_t) {
 
 func doTestAtomic(tfs *Ufs_t, t *testing.T) {
 	ub := mkData(2, fs.BSIZE*natomicblks)
-	tmp := common.Ustr("tmp")
-	f := common.Ustr("f")
+	tmp := ustr.Ustr("tmp")
+	f := ustr.Ustr("f")
 	e := tfs.MkFile(tmp, ub)
 	if e != 0 {
 		t.Fatalf("mkFile %v failed", "tmp")
@@ -910,7 +912,7 @@ func doTestAtomic(tfs *Ufs_t, t *testing.T) {
 }
 
 func doCheckAtomic(tfs *Ufs_t) (string, bool) {
-	res, e := tfs.Ls(common.MkUstrRoot())
+	res, e := tfs.Ls(ustr.MkUstrRoot())
 	if e != 0 {
 		return "doLs failed", false
 	}
@@ -919,7 +921,7 @@ func doCheckAtomic(tfs *Ufs_t) (string, bool) {
 		return "f not present", false
 	}
 	if ok {
-		f := common.Ustr("f")
+		f := ustr.Ustr("f")
 		d, e := tfs.Read(f)
 		if e != 0 || len(d) != fs.BSIZE*natomicblks {
 			return "Read f failed", false
@@ -1095,7 +1097,7 @@ func doFreeInit(tfs *Ufs_t) {
 	_, nblock = tfs.fs.Fs_size()
 
 	ub := mkData(1, fs.BSIZE*FileSizeBlks)
-	f := common.Ustr("f")
+	f := ustr.Ustr("f")
 	e := tfs.MkFile(f, ub)
 	if e != 0 {
 		panic("mkFile f failed")
@@ -1104,7 +1106,7 @@ func doFreeInit(tfs *Ufs_t) {
 }
 
 func doTestFree(tfs *Ufs_t, t *testing.T) {
-	res, e := tfs.Ls(common.MkUstrRoot())
+	res, e := tfs.Ls(ustr.MkUstrRoot())
 	if e != 0 {
 
 		t.Fatalf("ls failed")
@@ -1114,7 +1116,7 @@ func doTestFree(tfs *Ufs_t, t *testing.T) {
 
 		t.Fatalf("f not present")
 	}
-	f := common.Ustr("f")
+	f := ustr.Ustr("f")
 	e = tfs.Unlink(f)
 	if e != 0 {
 		t.Fatalf("unlink failed")
@@ -1129,7 +1131,7 @@ func doTestFree(tfs *Ufs_t, t *testing.T) {
 }
 
 func doCheckFree(tfs *Ufs_t) (string, bool) {
-	res, e := tfs.Ls(common.MkUstrRoot())
+	res, e := tfs.Ls(ustr.MkUstrRoot())
 	if e != 0 {
 		return "doLs failed", false
 	}

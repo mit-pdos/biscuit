@@ -3,6 +3,8 @@ package fs
 import "fmt"
 import "sync"
 
+import "bpath"
+import "ustr"
 import "common"
 
 const fs_debug = false
@@ -122,7 +124,7 @@ func (fs *Fs_t) Unpin(pa common.Pa_t) {
 	fs.bcache.unpin(pa)
 }
 
-func (fs *Fs_t) Fs_op_link(old common.Ustr, new common.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
 	opid := fs.fslog.Op_begin("Fs_link")
 	defer fs.fslog.Op_end(opid)
 
@@ -145,7 +147,7 @@ func (fs *Fs_t) Fs_op_link(old common.Ustr, new common.Ustr, cwd *common.Cwd_t) 
 	orig._linkup(opid)
 	orig.iunlock("fs_link_orig")
 
-	dirs, fn := common.Sdirname(new)
+	dirs, fn := bpath.Sdirname(new)
 	newd, err := fs.fs_namei_locked(opid, dirs, cwd, "fs_link_newd")
 	if err != 0 {
 		goto undo
@@ -167,7 +169,7 @@ undo:
 	return dead, err
 }
 
-func (fs *Fs_t) Fs_link(old common.Ustr, new common.Ustr, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) common.Err_t {
 	dead, err := fs.Fs_op_link(old, new, cwd)
 	if dead != nil {
 		dead.Free()
@@ -175,11 +177,11 @@ func (fs *Fs_t) Fs_link(old common.Ustr, new common.Ustr, cwd *common.Cwd_t) com
 	return err
 }
 
-func (fs *Fs_t) Fs_op_unlink(paths common.Ustr, cwd *common.Cwd_t, wantdir bool) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) (*imemnode_t, common.Err_t) {
 	opid := fs.fslog.Op_begin("fs_unlink")
 	defer fs.fslog.Op_end(opid)
 
-	dirs, fn := common.Sdirname(paths)
+	dirs, fn := bpath.Sdirname(paths)
 	if fn.Isdot() || fn.Isdotdot() {
 		return nil, -common.EPERM
 	}
@@ -256,7 +258,7 @@ func (fs *Fs_t) Fs_op_unlink(paths common.Ustr, cwd *common.Cwd_t, wantdir bool)
 	return dead, 0
 }
 
-func (fs *Fs_t) Fs_unlink(paths common.Ustr, cwd *common.Cwd_t, wantdir bool) common.Err_t {
+func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) common.Err_t {
 	dead, err := fs.Fs_op_unlink(paths, cwd, wantdir)
 	if dead != nil {
 		dead.Free()
@@ -267,9 +269,9 @@ func (fs *Fs_t) Fs_unlink(paths common.Ustr, cwd *common.Cwd_t, wantdir bool) co
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imemnode_t, common.Err_t) {
-	odirs, ofn := common.Sdirname(oldp)
-	ndirs, nfn := common.Sdirname(newp)
+func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemnode_t, common.Err_t) {
+	odirs, ofn := bpath.Sdirname(oldp)
+	ndirs, nfn := bpath.Sdirname(newp)
 	var refs []*imemnode_t
 
 	if err, ok := crname(ofn, -common.EINVAL); !ok {
@@ -429,7 +431,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 
 	odir := ochild.itype == I_DIR
 	if odir {
-		b3, err := ochild.probe_unlink(opid, common.MkUstrDotDot())
+		b3, err := ochild.probe_unlink(opid, ustr.MkUstrDotDot())
 		if err != 0 {
 			return refs, err
 		}
@@ -461,7 +463,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 
 	// update '..'
 	if odir {
-		dotdot := common.MkUstrDotDot()
+		dotdot := ustr.MkUstrDotDot()
 		if ochild.do_unlink(opid, dotdot) != 0 {
 			panic("probed")
 		}
@@ -472,7 +474,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 	return refs, 0
 }
 
-func (fs *Fs_t) Fs_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) common.Err_t {
 	refs, err := fs.Fs_op_rename(oldp, newp, cwd)
 	for _, r := range refs {
 		del := r.Refdown("Fs_rename")
@@ -502,7 +504,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 			return -common.EINVAL
 		}
 		here.ilock("_isancestor")
-		next, err := here.ilookup(opid, common.MkUstrDotDot())
+		next, err := here.ilookup(opid, ustr.MkUstrDotDot())
 		if err != 0 {
 			here.iunlock("_isancestor")
 			return err
@@ -1178,7 +1180,7 @@ func (raw *rawdfops_t) Shutdown(read, write bool) common.Err_t {
 	return -common.ENOTSOCK
 }
 
-func (fs *Fs_t) Fs_mkdir(paths common.Ustr, mode int, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *common.Cwd_t) common.Err_t {
 	opid := fs.fslog.Op_begin("fs_mkdir")
 	defer fs.fslog.Op_end(opid)
 
@@ -1188,7 +1190,7 @@ func (fs *Fs_t) Fs_mkdir(paths common.Ustr, mode int, cwd *common.Cwd_t) common.
 		fmt.Printf("mkdir: %v %v\n", paths, cwd)
 	}
 
-	dirs, fn := common.Sdirname(paths)
+	dirs, fn := bpath.Sdirname(paths)
 	if err, ok := crname(fn, -common.EINVAL); !ok {
 		return err
 	}
@@ -1206,8 +1208,8 @@ func (fs *Fs_t) Fs_mkdir(paths common.Ustr, mode int, cwd *common.Cwd_t) common.
 	if err != 0 {
 		return err
 	}
-	child.do_insert(opid, common.MkUstrDot(), child.inum)
-	child.do_insert(opid, common.MkUstrDotDot(), par.inum)
+	child.do_insert(opid, ustr.MkUstrDot(), child.inum)
+	child.do_insert(opid, ustr.MkUstrDotDot(), par.inum)
 	child.Refdown("fs_mkdir")
 	return 0
 }
@@ -1219,7 +1221,7 @@ type Fsfile_t struct {
 	Minor int
 }
 
-func (fs *Fs_t) Fs_open_inner(paths common.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (Fsfile_t, common.Err_t) {
+func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (Fsfile_t, common.Err_t) {
 	trunc := flags&common.O_TRUNC != 0
 	creat := flags&common.O_CREAT != 0
 	nodir := false
@@ -1242,7 +1244,7 @@ func (fs *Fs_t) Fs_open_inner(paths common.Ustr, flags common.Fdopt_t, mode int,
 		isdev := major != 0 || minor != 0
 
 		// must specify at least one path component
-		dirs, fn := common.Sdirname(paths)
+		dirs, fn := bpath.Sdirname(paths)
 		if err, ok := crname(fn, -common.EEXIST); !ok {
 			return ret, err
 		}
@@ -1337,7 +1339,7 @@ func (fs *Fs_t) Makefake() *common.Fd_t {
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{common.D_SUD: true, common.D_SUS: true}
 
-func (fs *Fs_t) Fs_open(paths common.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (*common.Fd_t, common.Err_t) {
+func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (*common.Fd_t, common.Err_t) {
 	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
@@ -1402,7 +1404,7 @@ func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
 	return 0
 }
 
-func (fs *Fs_t) Fs_stat(path common.Ustr, st *common.Stat_t, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *common.Stat_t, cwd *common.Cwd_t) common.Err_t {
 	opid := opid_t(0)
 
 	if fs_debug {
@@ -1438,7 +1440,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 }
 
 // if the path resolves successfully, returns target inode
-func (fs *Fs_t) fs_namei(opid opid_t, paths common.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
 	if len(paths) == 0 || paths[0] != '/' {
@@ -1448,9 +1450,9 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths common.Ustr, cwd *common.Cwd_t) (*im
 	}
 	idm := start
 	err := common.Err_t(0)
-	pp := common.Pathparts_t{}
+	pp := bpath.Pathparts_t{}
 	pp.Pp_init(paths)
-	var next common.Ustr
+	var next ustr.Ustr
 	var nextok bool
 	for cp, ok := pp.Next(); ok; cp, ok = next, nextok {
 		next, nextok = pp.Next()
@@ -1485,7 +1487,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths common.Ustr, cwd *common.Cwd_t) (*im
 	return idm, 0
 }
 
-func (fs *Fs_t) fs_namei_locked(opid opid_t, paths common.Ustr, cwd *common.Cwd_t, s string) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t, s string) (*imemnode_t, common.Err_t) {
 	idm, err := fs.fs_namei(opid, paths, cwd)
 	if err != 0 {
 		return nil, err

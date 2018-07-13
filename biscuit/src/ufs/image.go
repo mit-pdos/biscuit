@@ -5,6 +5,7 @@ import "fmt"
 
 import "common"
 import "fs"
+import "ustr"
 
 // Disk image layout:
 // optional:
@@ -179,12 +180,12 @@ func writeDataBlocks(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 	// Root directory data
 	data := &common.Bytepg_t{}
 	ddata := fs.Dirdata_t{data[:]}
-	ddata.W_filename(0, common.Ustr("."))
+	ddata.W_filename(0, ustr.Ustr("."))
 	ddata.W_inodenext(0, 0)
-	ddata.W_filename(1, common.Ustr(".."))
+	ddata.W_filename(1, ustr.Ustr(".."))
 	ddata.W_inodenext(1, 0)
 	for i := 2; i < fs.NDIRENTS; i++ {
-		ddata.W_filename(i, common.MkUstr())
+		ddata.W_filename(i, ustr.MkUstr())
 		ddata.W_inodenext(i, 0)
 	}
 	d := bytepg2byte(data)

@@ -12,6 +12,7 @@ import "unsafe"
 
 import "common"
 import "fs"
+import "ustr"
 
 //import "sort"
 
@@ -1432,7 +1433,7 @@ var lhits int
 var physmem *common.Physmem_t
 var thefs *fs.Fs_t
 
-const diskfs = false
+const diskfs = true
 
 func main() {
 	common.Kernel = true
@@ -1491,10 +1492,10 @@ func main() {
 
 	common.Oom_init(thefs.Fs_evict)
 
-	exec := func(cmd common.Ustr, args []common.Ustr) {
+	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
 		common.Resbegin(1 << 20)
 		fmt.Printf("start [%v %v]\n", cmd, args)
-		nargs := []common.Ustr{cmd}
+		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
 		p, ok := common.Proc_new(cmd, common.MkRootCwd(rf), defaultfds, sys)
@@ -1511,7 +1512,7 @@ func main() {
 	}
 
 	//exec("bin/lsh", nil)
-	exec(common.Ustr("bin/init"), nil)
+	exec(ustr.Ustr("bin/init"), nil)
 	//exec("bin/rs", []string{"/redis.conf"})
 
 	//go func() {

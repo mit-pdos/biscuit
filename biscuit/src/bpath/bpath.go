@@ -1,106 +1,26 @@
-package common
+package bpath
 
-type Ustr []uint8
-
-func (us Ustr) Isdot() bool {
-	return len(us) == 1 && us[0] == '.'
-}
-
-func (us Ustr) Isdotdot() bool {
-	return len(us) == 2 && us[0] == '.' && us[1] == '.'
-}
-
-func (us Ustr) Eq(s Ustr) bool {
-	if len(us) != len(s) {
-		return false
-	}
-	for i, v := range us {
-		if v != s[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func MkUstr() Ustr {
-	us := Ustr{}
-	return us
-}
-
-func MkUstrDot() Ustr {
-	us := Ustr(".")
-	return us
-}
-
-func MkUstrRoot() Ustr {
-	us := Ustr("/")
-	return us
-}
-
-func MkUstrDotDot() Ustr {
-	us := Ustr{'.', '.'}
-	return us
-}
-
-func MkUstrSlice(buf []uint8) Ustr {
-	for i := 0; i < len(buf); i++ {
-		if buf[i] == uint8(0) {
-			return buf[:i]
-		}
-	}
-	return buf
-}
-
-func (us Ustr) Extend(p Ustr) Ustr {
-	tmp := make(Ustr, len(us))
-	copy(tmp, us)
-	r := append(tmp, '/')
-	return append(r, p...)
-}
-
-func (us Ustr) ExtendStr(p string) Ustr {
-	return us.Extend(Ustr(p))
-}
-
-func (us Ustr) IsAbsolute() bool {
-	if len(us) == 0 {
-		return false
-	}
-	return us[0] == '/'
-}
-
-func (us Ustr) IndexByte(b uint8) int {
-	for i, v := range us {
-		if v == b {
-			return i
-		}
-	}
-	return -1
-}
-
-func (us Ustr) String() string {
-	return string(us)
-}
+import "ustr"
 
 // allocation-less pathparts
 type Pathparts_t struct {
-	path Ustr
+	path ustr.Ustr
 	loc  int
 }
 
-func (pp *Pathparts_t) Pp_init(path Ustr) {
+func (pp *Pathparts_t) Pp_init(path ustr.Ustr) {
 	pp.path = path
 	pp.loc = 0
 }
 
-func (pp *Pathparts_t) Next() (Ustr, bool) {
-	ret := MkUstr()
+func (pp *Pathparts_t) Next() (ustr.Ustr, bool) {
+	ret := ustr.MkUstr()
 	for len(ret) == 0 {
 		if pp.loc == len(pp.path) {
-			return MkUstr(), false
+			return ustr.MkUstr(), false
 		}
 		ret = pp.path[pp.loc:]
-		nloc := Ustr.IndexByte(ret, '/')
+		nloc := ustr.Ustr.IndexByte(ret, '/')
 		if nloc != -1 {
 			ret = ret[:nloc]
 			pp.loc += nloc + 1
@@ -111,7 +31,7 @@ func (pp *Pathparts_t) Next() (Ustr, bool) {
 	return ret, true
 }
 
-func Sdirname(path Ustr) (Ustr, Ustr) {
+func Sdirname(path ustr.Ustr) (ustr.Ustr, ustr.Ustr) {
 	fn := path
 	l := len(fn)
 	// strip all trailing slashes
@@ -122,7 +42,7 @@ func Sdirname(path Ustr) (Ustr, Ustr) {
 		fn = fn[:i]
 		l--
 	}
-	var s Ustr
+	var s ustr.Ustr
 	for i := l - 1; i >= 0; i-- {
 		if fn[i] == '/' {
 			// remove the rightmost slash only if it is not the
@@ -143,7 +63,7 @@ func Sdirname(path Ustr) (Ustr, Ustr) {
 const MaxSlash = 60
 
 type canonicalize_t struct {
-	path  Ustr
+	path  ustr.Ustr
 	slash []int
 	d     int
 	index int
@@ -187,7 +107,7 @@ func (canon *canonicalize_t) deltrailingslash() {
 }
 
 // Assume utf encoding of characters
-func Canonicalize(path Ustr) Ustr {
+func Canonicalize(path ustr.Ustr) ustr.Ustr {
 	// fmt.Printf("canon: %s\n", path)
 	canon := canonicalize_t{}
 	canon.slash = make([]int, MaxSlash)
