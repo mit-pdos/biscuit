@@ -215,25 +215,19 @@ func (fs *Fs_t) Fs_op_unlink(paths common.Ustr, cwd *common.Cwd_t, wantdir bool)
 	// recheck if child still exists (same name, same inum), since some
 	// other thread may have modifed par but par and child won't disappear
 	// because we have references to them.
-	idm, err := par.ilookup(opid, fn)
-	if err != 0 {
+	ok, err := par.ilookup_validate(opid, fn, child)
+	if !ok || err != 0 {
 		del := child.iunlock_refdown("fs_unlink_child")
 		if del {
 			dead = child
 		}
-		return dead, err
-	}
+		if err != 0 {
+			return dead, err
+		} else {
+			return dead, -common.ENOENT
+		}
 
-	// name was deleted and recreated?
-	if idm.inum != child.inum {
-		idm.Refdown("fs_unlink")
-		del := child.iunlock_refdown("fs_unlink_child")
-		if del {
-			dead = child
-		}
-		return dead, -common.ENOENT
 	}
-	idm.Refdown("fs_unlink") // don't defer because del will never be true
 
 	err = child.do_dirchk(opid, wantdir)
 	if err != 0 {
@@ -337,7 +331,6 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 
 	var nchild *imemnode_t
 	cnt := 0
-	newexists := false
 	// lookup newchild and try to lock all inodes involved
 	for {
 		gimme := common.Bounds(common.B_FS_T_FS_RENAME)
@@ -359,53 +352,48 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 		var inodes []*imemnode_t
 		var locked []*imemnode_t
 		if err == 0 {
-			newexists = true
 			inodes = []*imemnode_t{opar, ochild, npar, nchild}
 		} else {
 			inodes = []*imemnode_t{opar, ochild, npar}
 		}
 
 		locked = iref_lockall(inodes)
-		// defers are run last-in-first-out
 		refs = inodes
-
 		for _, v := range locked {
 			defer v.iunlock("rename")
 		}
 
 		// check if the tree is still the same. an unlink or link may
 		// have modified the tree.
-		childi, err := opar.ilookup(opid, ofn)
+		ok, err := opar.ilookup_validate(opid, ofn, ochild)
 		if err != 0 {
 			return refs, err
 		}
-		childi.Refdown("rename") // childi is just used in next test
-		// has ofn been removed but a new file ofn has been created?
-		if childi.inum != ochild.inum {
+		if !ok {
 			return refs, -common.ENOENT
 		}
-
-		childi, err = npar.ilookup(opid, nfn)
-		if err == 0 {
-			childi.Refdown("rename") // childi is just used in next test
+		if nchild == nil {
+			childi, err := npar.ilookup(opid, nfn)
+			if err == 0 {
+				childi.Refdown("rename")
+			}
+			if err == -common.ENOENT {
+				// it didn't exist before and still doesn't exist
+				break
+			}
+		} else {
+			ok, err := npar.ilookup_validate(opid, nfn, nchild)
+			if err == 0 && ok {
+				// it existed before and still exists
+				break
+			}
+			if err == -common.ENOENT {
+				// it existed but now it doesn't.
+				break
+			}
 		}
-		// it existed before and still exists
-		if newexists && err == 0 && childi.inum == nchild.inum {
-			break
-		}
-		// it didn't exist before and still doesn't exist
-		if !newexists && err == -common.ENOENT {
-			break
-		}
-		// it existed but now it doesn't.
-		if newexists && err == -common.ENOENT {
-			newexists = false
-			nchild.iunlock_refdown("rename_child")
-			break
-		}
-
+		fmt.Printf("rename: retry; tree changed\n")
 		cnt++
-		fmt.Printf("rename: retry %v %v\n", newexists, err)
 		if cnt > 100 {
 			panic("rename: panic\n")
 		}
@@ -414,13 +402,14 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 		for _, v := range locked {
 			v.iunlock("fs_rename_opar")
 		}
-		if newexists {
+		if nchild != nil {
 			nchild.Refdown("fs_rename_nchild")
+			nchild = nil
 		}
 	}
 
 	// if src and dst are the same file, we are done
-	if newexists && ochild.inum == nchild.inum {
+	if nchild != nil && ochild.inum == nchild.inum {
 		return refs, 0
 	}
 
@@ -447,7 +436,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp common.Ustr, cwd *common.Cwd_t) ([]*imem
 		defer fs.fslog.Relse(b3, "probe_unlink_ochild")
 	}
 
-	if newexists {
+	if nchild != nil {
 		// make sure old and new are either both files or both
 		// directories
 		if err := nchild.do_dirchk(opid, odir); err != 0 {

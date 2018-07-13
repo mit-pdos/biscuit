@@ -249,12 +249,8 @@ func (idm *imemnode_t) evictDcache() {
 	}
 	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
 		dei := e.Value.(*de_inode_t)
-		par := dei.parent
-		if par.dentc.dents != nil {
-			// XXX lock parent?
-			par.dentc.dents.Del(dei.de.name)
-		}
-		par._deaddempty(dei.de.offset)
+		// XXX lock parent?
+		dei.parent._deremove_dents(dei.de)
 	}
 	idm.dcache_list = list.New()
 	idm._derelease()

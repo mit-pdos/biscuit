@@ -109,7 +109,7 @@ func (il *fdelist_t) count() int {
 	return il.n
 }
 
-// struct to hold the offset/priv of directory entry slots
+// struct to hold the offset, inum of directory entry slots
 type icdent_t struct {
 	offset int
 	inum   common.Inum_t
@@ -288,10 +288,15 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn common.Ustr) (*icdent_t, common
 		idm.fs.fslog.Write(opid, b)
 		idm.fs.fslog.Relse(b, "_deremove")
 	}
-	idm.dentc.dents.Del(fn)
-	// add back to free dents
-	idm._deaddempty(de.offset)
+	idm._deremove_dents(de)
 	return de, 0
+}
+
+func (idm *imemnode_t) _deremove_dents(de *icdent_t) {
+	if idm.dentc.dents != nil {
+		idm.dentc.dents.Del(de.name)
+	}
+	idm._deaddempty(de.offset)
 }
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
@@ -450,6 +455,22 @@ func (idm *imemnode_t) ilookup(opid opid_t, name common.Ustr) (*imemnode_t, comm
 	return de.idm, 0
 }
 
+// both idm and child are locked
+func (idm *imemnode_t) ilookup_validate(opid opid_t, name common.Ustr, child *imemnode_t) (bool, common.Err_t) {
+	de, err := idm._delookup(opid, name)
+	if err != 0 {
+		return false, err
+	}
+	if de.idm == nil {
+		if name.Isdot() {
+			de.idm = idm
+		} else {
+			de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
+		}
+	}
+	return de.idm.inum == child.inum, 0
+}
+
 // Lookup name in a directory's dcache without holding lock. If refup is false,
 // then lookup just returns the found inode. This inode may be stale (it may
 // have been deleted from the inode cache) and the caller must be prepared to
@@ -513,7 +534,7 @@ func (idm *imemnode_t) iunlink(opid opid_t, name common.Ustr) (common.Inum_t, co
 		return 0, err
 	}
 	if de.idm != nil {
-		// caller must have child inode locked too
+		// caller must have child inode locked
 		de.idm.del_dcachelist(idm.inum)
 		de.idm.Refdown("iunlink")
 	}
