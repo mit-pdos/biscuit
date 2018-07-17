@@ -8,6 +8,7 @@ import "sync/atomic"
 
 import "common"
 import "hashtable"
+import "stats"
 
 // Cache of objects. Main invariant: an object is in memory once so that threads
 // see each other's updates.  The challenging case is that an object can be
@@ -24,9 +25,9 @@ import "hashtable"
 const REMOVE = uint32(0xF0000000)
 
 type cstats_t struct {
-	Nevict common.Counter_t
-	Nhit   common.Counter_t
-	Nadd   common.Counter_t
+	Nevict stats.Counter_t
+	Nhit   stats.Counter_t
+	Nadd   stats.Counter_t
 }
 
 type Obj_t interface {

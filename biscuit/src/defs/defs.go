@@ -1,4 +1,4 @@
-package common
+package defs
 
 const (
 	EPERM         Err_t = 1
@@ -88,3 +88,5 @@ const (
 	INT_MSI6 = 62
 	INT_MSI7 = 63
 )
+
+type Inum_t int

@@ -3,7 +3,7 @@ package fs
 import "fmt"
 import "sync"
 
-import "common"
+import "stats"
 
 const log_debug = false
 
@@ -232,27 +232,27 @@ func (log *log_t) StopLog() {
 //
 
 type memlogstat_t struct {
-	Ncommit          common.Counter_t
-	Nccommit         common.Counter_t
-	Ncommithead      common.Counter_t
-	Headcycles       common.Cycles_t
-	Flushdatacycles  common.Cycles_t
-	Commitcopycycles common.Cycles_t
-	Ncommitter       common.Counter_t
-	Committercycles  common.Cycles_t
+	Ncommit          stats.Counter_t
+	Nccommit         stats.Counter_t
+	Ncommithead      stats.Counter_t
+	Headcycles       stats.Cycles_t
+	Flushdatacycles  stats.Cycles_t
+	Commitcopycycles stats.Cycles_t
+	Ncommitter       stats.Counter_t
+	Committercycles  stats.Cycles_t
 
-	Ncommittail          common.Counter_t
-	Tailcycles           common.Cycles_t
-	Flushapplydatacycles common.Cycles_t
+	Ncommittail          stats.Counter_t
+	Tailcycles           stats.Cycles_t
+	Flushapplydatacycles stats.Cycles_t
 
-	Nblkcommitted     common.Counter_t
-	Maxblks_per_trans common.Counter_t
-	Nwriteordered     common.Counter_t
-	Nrevokeblk        common.Counter_t
+	Nblkcommitted     stats.Counter_t
+	Maxblks_per_trans stats.Counter_t
+	Nwriteordered     stats.Counter_t
+	Nrevokeblk        stats.Counter_t
 
-	Napply       common.Counter_t
-	Nblkapply    common.Counter_t
-	Nabsorbapply common.Counter_t
+	Napply       stats.Counter_t
+	Nblkapply    stats.Counter_t
+	Nabsorbapply stats.Counter_t
 }
 
 type memlog_t struct {
@@ -643,7 +643,7 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 		ml.commit_head(trans.head)
 	}
 
-	n := common.Counter_t(blks1.Len() + blks2.Len())
+	n := stats.Counter_t(blks1.Len() + blks2.Len())
 	ml.stats.Nblkcommitted += n
 	if n > ml.stats.Maxblks_per_trans {
 		ml.stats.Maxblks_per_trans = n
@@ -655,22 +655,22 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 }
 
 type logstat_t struct {
-	Nop           common.Counter_t
-	Opbegincycles common.Cycles_t
-	Opendcycles   common.Cycles_t
+	Nop           stats.Counter_t
+	Opbegincycles stats.Cycles_t
+	Opendcycles   stats.Cycles_t
 
-	Nforce      common.Counter_t
-	Nbatchforce common.Counter_t
-	Forcecycles common.Cycles_t
+	Nforce      stats.Counter_t
+	Nbatchforce stats.Counter_t
+	Forcecycles stats.Cycles_t
 
-	Nlogwrite       common.Counter_t
-	Norderedwrite   common.Counter_t
-	Nabsorption     common.Counter_t
-	Nlogwrite2order common.Counter_t
-	Norder2logwrite common.Counter_t
-	Writecycles     common.Cycles_t
+	Nlogwrite       stats.Counter_t
+	Norderedwrite   stats.Counter_t
+	Nabsorption     stats.Counter_t
+	Nlogwrite2order stats.Counter_t
+	Norder2logwrite stats.Counter_t
+	Writecycles     stats.Cycles_t
 
-	Readcycles common.Cycles_t
+	Readcycles stats.Cycles_t
 }
 
 type log_t struct {

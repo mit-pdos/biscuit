@@ -18,16 +18,19 @@ SRCS := $(ASMS) $(CS)
 
 K := src/kernel
 F := src/fs
-C := src/common
 
 KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go super.go cache.go blk.go
 FSRC := $(addprefix $(F)/,$(FSRC))
-PSRC := src/hashtable/hashtable.go src/bpath/bpath.go src/ustr/ustr.go
-CSRC := accnt.go defs.go fd.go limits.go mem.go physmem.go pmap.go proc.go rb.go stat.go syscall.go \
-	userbuf.go util.go wait.go stats.go
-CSRC := $(addprefix $(C)/,$(CSRC))
+PSRC := src/hashtable/hashtable.go src/bpath/bpath.go src/ustr/ustr.go  src/fd/fd.go \
+	src/defs/defs.go src/stat/stat.go src/util/util.go src/userbuf/userbuf.go \
+	src/proc/proc.go src/proc/wait.go src/accnt/accnt.go \
+	src/vm/vm.go src/vm/physmem.go src/vm/pmap.go \
+	src/rb/rb.go \
+	src/syscall/syscall.go \
+ 	src/limits/limits.go \
+	src/stats/stats.go
 
 OBJS := $(addprefix $(K)/, $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS))))
 

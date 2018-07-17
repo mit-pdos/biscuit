@@ -1,9 +1,13 @@
-package common
+package fd
 
 import "time"
 import "sync"
 
 import "bpath"
+import "defs"
+import "mem"
+import "stat"
+import "userbuf"
 import "ustr"
 
 const (
@@ -34,8 +38,6 @@ func Close_panic(f *Fd_t) {
 		panic("must succeed")
 	}
 }
-
-type Inum_t int
 
 type Ready_t uint8
 
@@ -75,52 +77,48 @@ func MkRootCwd(fd *Fd_t) *Cwd_t {
 
 type Fdops_i interface {
 	// fd ops
-	Close() Err_t
-	Fstat(*Stat_t) Err_t
-	Lseek(int, int) (int, Err_t)
-	Mmapi(int, int, bool) ([]Mmapinfo_t, Err_t)
-	Pathi() Inum_t
-	Read(*Proc_t, Userio_i) (int, Err_t)
+	Close() defs.Err_t
+	Fstat(*stat.Stat_t) defs.Err_t
+	Lseek(int, int) (int, defs.Err_t)
+	Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t)
+	Pathi() defs.Inum_t
+	Read(*Proc_t, *userbuf.Userio_i) (int, defs.Err_t)
 	// reopen() is called with Proc_t.fdl is held
-	Reopen() Err_t
-	Write(*Proc_t, Userio_i) (int, Err_t)
-	Truncate(uint) Err_t
+	Reopen() defs.Err_t
+	Write(*Proc_t, userbuf.Userio_i) (int, defs.Err_t)
+	Truncate(uint) defs.Err_t
 
-	Pread(Userio_i, int) (int, Err_t)
-	Pwrite(Userio_i, int) (int, Err_t)
+	Pread(userbuf.Userio_i, int) (int, defs.Err_t)
+	Pwrite(userbuf.Userio_i, int) (int, defs.Err_t)
 
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
 	// space, and error
-	Accept(*Proc_t, Userio_i) (Fdops_i, int, Err_t)
-	Bind(*Proc_t, []uint8) Err_t
-	Connect(*Proc_t, []uint8) Err_t
+	Accept(*Proc_t, userbuf.Userio_i) (Fdops_i, int, defs.Err_t)
+	Bind(*Proc_t, []uint8) defs.Err_t
+	Connect(*Proc_t, []uint8) defs.Err_t
 	// listen changes the underlying socket type; thus is returns the new
 	// fops.
-	Listen(*Proc_t, int) (Fdops_i, Err_t)
-	Sendmsg(p *Proc_t, data Userio_i, saddr []uint8, cmsg []uint8,
-		flags int) (int, Err_t)
+	Listen(*Proc_t, int) (Fdops_i, defs.Err_t)
+	Sendmsg(p *Proc_t, data userbuf.Userio_i, saddr []uint8, cmsg []uint8,
+		flags int) (int, defs.Err_t)
 	// returns number of bytes read, size of from sock address written,
 	// size of ancillary data written, msghdr flags, and error. if no from
 	// address or ancillary data is requested, the userio objects have
 	// length 0.
-	Recvmsg(p *Proc_t, data Userio_i, saddr Userio_i,
-		cmsg Userio_i, flags int) (int, int, int, Msgfl_t, Err_t)
+	Recvmsg(p *Proc_t, data userbuf.Userio_i, saddr userbuf.Userio_i,
+		cmsg userbuf.Userio_i, flags int) (int, int, int, Msgfl_t, defs.Err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
 	// device to send a notification if none of the states being polled are
 	// currently true.
-	Pollone(Pollmsg_t) (Ready_t, Err_t)
+	Pollone(Pollmsg_t) (Ready_t, defs.Err_t)
 
 	Fcntl(*Proc_t, int, int) int
-	Getsockopt(*Proc_t, int, Userio_i, int) (int, Err_t)
-	Setsockopt(*Proc_t, int, int, Userio_i, int) Err_t
-	Shutdown(rdone, wdone bool) Err_t
-}
-
-type Unpin_i interface {
-	Unpin(Pa_t)
+	Getsockopt(*Proc_t, int, userbuf.Userio_i, int) (int, defs.Err_t)
+	Setsockopt(*Proc_t, int, int, userbuf.Userio_i, int) defs.Err_t
+	Shutdown(rdone, wdone bool) defs.Err_t
 }
 
 type Pollmsg_t struct {
@@ -142,7 +140,7 @@ func (pm *Pollmsg_t) Pm_set(tid Tid_t, events Ready_t, dowait bool) {
 }
 
 // returns whether we timed out, and error
-func (pm *Pollmsg_t) Pm_wait(to int) (bool, Err_t) {
+func (pm *Pollmsg_t) Pm_wait(to int) (bool, defs.Err_t) {
 	var tochan <-chan time.Time
 	if to != -1 {
 		tochan = time.After(time.Duration(to) * time.Millisecond)
@@ -190,7 +188,7 @@ func (p *Pollers_t) _findempty() *Pollmsg_t {
 
 var lhits int
 
-func (p *Pollers_t) Addpoller(pm *Pollmsg_t) Err_t {
+func (p *Pollers_t) Addpoller(pm *Pollmsg_t) defs.Err_t {
 	if p.waiters == nil {
 		p.waiters = make([]Pollmsg_t, 10)
 	}

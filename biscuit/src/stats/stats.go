@@ -1,4 +1,4 @@
-package common
+package stats
 
 import "reflect"
 import "runtime"

@@ -1,4 +1,4 @@
-package common
+package proc
 
 //import "sync/atomic"
 import "sync"
@@ -10,6 +10,7 @@ import "unsafe"
 import "runtime"
 
 import "ustr"
+import "vm"
 
 type Tnote_t struct {
 	// XXX "alive" should be "terminated"

@@ -1,8 +1,10 @@
-package common
+package accnt
 
 import "sync"
 import "sync/atomic"
 import "time"
+
+import "util"
 
 type Accnt_t struct {
 	// nanoseconds
@@ -63,15 +65,15 @@ func (a *Accnt_t) To_rusage() []uint8 {
 	off := 0
 	// user timeval
 	s, us := totv(a.Userns)
-	Writen(ret, 8, off, s)
+	util.Writen(ret, 8, off, s)
 	off += 8
-	Writen(ret, 8, off, us)
+	util.Writen(ret, 8, off, us)
 	off += 8
 	// sys timeval
 	s, us = totv(a.Sysns)
-	Writen(ret, 8, off, s)
+	util.Writen(ret, 8, off, s)
 	off += 8
-	Writen(ret, 8, off, us)
+	util.Writen(ret, 8, off, us)
 	off += 8
 	return ret
 }

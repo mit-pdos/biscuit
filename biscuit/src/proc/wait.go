@@ -1,6 +1,9 @@
-package common
+package proc
 
 import "sync"
+
+import "accnt"
+import "defs"
 
 // requirements for wait* syscalls (used for processes and threads):
 // - wait for a pid that is not my child must fail
@@ -10,7 +13,7 @@ import "sync"
 type Waitst_t struct {
 	Pid    int
 	Status int
-	Atime  Accnt_t
+	Atime  accnt.Accnt_t
 	// true iff the exit status is valid
 	Valid bool
 }
@@ -119,15 +122,15 @@ func (w *Wait_t) _start(id int, isproc bool, noproc uint) bool {
 	return true
 }
 
-func (w *Wait_t) putpid(pid, status int, atime *Accnt_t) {
+func (w *Wait_t) putpid(pid, status int, atime *accnt.Accnt_t) {
 	w._put(pid, status, true, atime)
 }
 
-func (w *Wait_t) puttid(tid, status int, atime *Accnt_t) {
+func (w *Wait_t) puttid(tid, status int, atime *accnt.Accnt_t) {
 	w._put(tid, status, false, atime)
 }
 
-func (w *Wait_t) _put(id, status int, isproc bool, atime *Accnt_t) {
+func (w *Wait_t) _put(id, status int, isproc bool, atime *accnt.Accnt_t) {
 	w.Lock()
 	defer w.Unlock()
 	var wh *whead_t
@@ -149,15 +152,15 @@ func (w *Wait_t) _put(id, status int, isproc bool, atime *Accnt_t) {
 	w.cond.Broadcast()
 }
 
-func (w *Wait_t) Reappid(pid int, noblk bool) (Waitst_t, Err_t) {
+func (w *Wait_t) Reappid(pid int, noblk bool) (Waitst_t, defs.Err_t) {
 	return w._reap(pid, true, noblk)
 }
 
-func (w *Wait_t) Reaptid(tid int, noblk bool) (Waitst_t, Err_t) {
+func (w *Wait_t) Reaptid(tid int, noblk bool) (Waitst_t, defs.Err_t) {
 	return w._reap(tid, false, noblk)
 }
 
-func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
+func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, defs.Err_t) {
 	if id == WAIT_MYPGRP {
 		panic("no imp")
 	}
@@ -178,7 +181,7 @@ func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
 				panic("neg childs")
 			}
 			if wh.count == 0 {
-				return zw, -ECHILD
+				return zw, -defs.ECHILD
 			}
 			if ret, ok := wh.wpopvalid(); ok {
 				return ret, 0
@@ -186,7 +189,7 @@ func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, Err_t) {
 		} else {
 			wp, wn, ok := wh.wfind(id)
 			if !ok {
-				return zw, -ECHILD
+				return zw, -defs.ECHILD
 			}
 			if wn.wst.Valid {
 				wh.wremove(wp, wn)

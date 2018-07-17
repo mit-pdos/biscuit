@@ -1,4 +1,6 @@
-package common
+package rb
+
+import "vm"
 
 type Rbc_t int
 
@@ -16,7 +18,7 @@ type Rbn_t struct {
 	r   *Rbn_t
 	l   *Rbn_t
 	c   Rbc_t
-	vmi Vminfo_t
+	vmi vm.Vminfo_t
 }
 
 func (h *Rbh_t) _rol(nn *Rbn_t) {

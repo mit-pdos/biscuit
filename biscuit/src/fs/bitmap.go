@@ -4,7 +4,8 @@ import "fmt"
 import "sync"
 import "sort"
 
-import "common"
+import "defs"
+import "stats"
 
 // Bitmap allocater/marker. Used for inodes, blocks, and orphan inodes.
 
@@ -17,9 +18,9 @@ type storage_i interface {
 }
 
 type bitmapstats_t struct {
-	Nalloc common.Counter_t
-	Nfree  common.Counter_t
-	Nhit   common.Counter_t
+	Nalloc stats.Counter_t
+	Nfree  stats.Counter_t
+	Nhit   stats.Counter_t
 }
 
 type bitmap_t struct {
@@ -124,7 +125,7 @@ func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) bool {
 	return true
 }
 
-func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, common.Err_t) {
+func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, defs.Err_t) {
 	bitno := alloc.lastbit
 	blkno := blkno(alloc.lastbit)
 	byte := byteno(alloc.lastbit)
@@ -156,7 +157,7 @@ func (alloc *bitmap_t) populateFreeMap() {
 	fmt.Printf("freemap %d\n", len(alloc.freemap))
 }
 
-func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, common.Err_t) {
+func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, defs.Err_t) {
 	alloc.Lock()
 
 	once := false
@@ -188,7 +189,7 @@ func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, common.Err_t) {
 	return 0, -common.ENOMEM
 }
 
-func (alloc *bitmap_t) FindDiskMap(opid opid_t) (int, common.Err_t) {
+func (alloc *bitmap_t) FindDiskMap(opid opid_t) (int, defs.Err_t) {
 	alloc.Lock()
 
 	bit, err := alloc.CheckAndMark(opid)
@@ -213,7 +214,7 @@ func (alloc *bitmap_t) FindDiskMap(opid opid_t) (int, common.Err_t) {
 	return bit, 0
 }
 
-func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, common.Err_t) {
+func (alloc *bitmap_t) FindAndMark(opid opid_t) (int, defs.Err_t) {
 	if alloc.fs.diskfs {
 		return alloc.FindDiskMap(opid)
 	} else {

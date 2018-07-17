@@ -4643,3 +4643,142 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, co
 	}
 	return freshtls, t0tls, tlssize, 0
 }
+
+// returns true if the fault was handled successfully
+func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) Err_t {
+	isguard := vmi.perms == 0
+	iswrite := ecode&uintptr(PTE_W) != 0
+	writeok := vmi.perms&uint(PTE_W) != 0
+	if isguard || (iswrite && !writeok) {
+		return -EFAULT
+	}
+	// pmap is Lock'ed in Proc_t.pgfault...
+	if ecode&uintptr(PTE_U) == 0 {
+		// kernel page faults should be noticed and crashed upon in
+		// runtime.trap(), but just in case
+		panic("kernel page fault")
+	}
+	if vmi.mtype == VSANON {
+		panic("shared anon pages should always be mapped")
+	}
+
+	pte, ok := vmi.ptefor(proc.Pmap, faultaddr)
+	if !ok {
+		return -ENOMEM
+	}
+	if (iswrite && *pte&PTE_WASCOW != 0) ||
+		(!iswrite && *pte&PTE_P != 0) {
+		// two threads simultaneously faulted on same page
+		return 0
+	}
+
+	var p_pg Pa_t
+	isblockpage := false
+	perms := PTE_U | PTE_P
+	isempty := true
+
+	// shared file mappings are handled the same way regardless of whether
+	// the fault is read or write
+	if vmi.mtype == VFILE && vmi.file.shared {
+		var err Err_t
+		_, p_pg, err = vmi.Filepage(faultaddr)
+		if err != 0 {
+			return err
+		}
+		isblockpage = true
+		if vmi.perms&uint(PTE_W) != 0 {
+			perms |= PTE_W
+		}
+	} else if iswrite {
+		// XXXPANIC
+		if *pte&PTE_W != 0 {
+			panic("bad state")
+		}
+		var pgsrc *Pg_t
+		var p_bpg Pa_t
+		// the copy-on-write page may be specified in the pte or it may
+		// not have been mapped at all yet.
+		cow := *pte&PTE_COW != 0
+		if cow {
+			// if this anonymous COW page is mapped exactly once
+			// (i.e.  only this mapping maps the page), we can
+			// claim the page, skip the copy, and mark it writable.
+			phys := *pte & PTE_ADDR
+			ref, _ := _refaddr(phys)
+			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
+				phys != P_zeropg {
+				tmp := *pte &^ PTE_COW
+				tmp |= PTE_W | PTE_WASCOW
+				*pte = tmp
+				proc.Tlbshoot(faultaddr, 1)
+				return 0
+			}
+			pgsrc = Physmem.Dmap(phys)
+			isempty = false
+		} else {
+			// XXXPANIC
+			if *pte != 0 {
+				panic("no")
+			}
+			switch vmi.mtype {
+			case VANON:
+				pgsrc = Zeropg
+			case VFILE:
+				var err Err_t
+				pgsrc, p_bpg, err = vmi.Filepage(faultaddr)
+				if err != 0 {
+					return err
+				}
+				defer Physmem.Refdown(p_bpg)
+			default:
+				panic("wut")
+			}
+		}
+		var pg *Pg_t
+		var ok bool
+		// don't zero new page
+		pg, p_pg, ok = Physmem.Refpg_new_nozero()
+		if !ok {
+			return -ENOMEM
+		}
+		*pg = *pgsrc
+		perms |= PTE_WASCOW
+		perms |= PTE_W
+	} else {
+		if *pte != 0 {
+			panic("must be 0")
+		}
+		switch vmi.mtype {
+		case VANON:
+			p_pg = P_zeropg
+		case VFILE:
+			var err Err_t
+			_, p_pg, err = vmi.Filepage(faultaddr)
+			if err != 0 {
+				return err
+			}
+			isblockpage = true
+		default:
+			panic("wut")
+		}
+		if vmi.perms&uint(PTE_W) != 0 {
+			perms |= PTE_COW
+		}
+	}
+
+	var tshoot bool
+	if isblockpage {
+		tshoot, ok = proc.Blockpage_insert(int(faultaddr), p_pg, perms,
+			isempty)
+	} else {
+		tshoot, ok = proc.Page_insert(int(faultaddr), p_pg, perms, isempty)
+	}
+	if !ok {
+		Physmem.Refdown(p_pg)
+		return -ENOMEM
+	}
+	if tshoot {
+		proc.Tlbshoot(faultaddr, 1)
+	}
+	return 0
+}

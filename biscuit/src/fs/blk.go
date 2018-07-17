@@ -4,16 +4,16 @@ import "sync"
 import "fmt"
 import "container/list"
 
-import "common"
+import "mem"
 
 // If you change this, you must change corresponding constants in litc.c
 // (fopendir, BSIZE), usertests.c (BSIZE).
 const BSIZE = 4096
 
 type Blockmem_i interface {
-	Alloc() (common.Pa_t, *common.Bytepg_t, bool)
-	Free(common.Pa_t)
-	Refup(common.Pa_t)
+	Alloc() (mem.Pa_t, *mem.Bytepg_t, bool)
+	Free(mem.Pa_t)
+	Refup(mem.Pa_t)
 }
 
 type Block_cb_i interface {
@@ -33,8 +33,8 @@ type Bdev_block_t struct {
 	Block      int
 	Type       blktype_t
 	_try_evict bool
-	Pa         common.Pa_t
-	Data       *common.Bytepg_t
+	Pa         mem.Pa_t
+	Data       *mem.Bytepg_t
 	Ref        *Objref_t
 	Name       string
 	Mem        Blockmem_i
@@ -258,7 +258,7 @@ func MkBlock_newpage(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_
 func MkBlock(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev_block_t {
 	b := &Bdev_block_t{}
 	b.Block = block
-	b.Pa = common.Pa_t(0)
+	b.Pa = mem.Pa_t(0)
 	b.Data = nil
 	//b.Name = s
 	b.Mem = mem

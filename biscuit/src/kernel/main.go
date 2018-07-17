@@ -10,7 +10,6 @@ import "sync"
 import "time"
 import "unsafe"
 
-import "common"
 import "fs"
 import "ustr"
 

@@ -1,4 +1,4 @@
-package common
+package stat
 
 import "unsafe"
 

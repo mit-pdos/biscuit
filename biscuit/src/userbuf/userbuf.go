@@ -1,14 +1,17 @@
-package common
+package userbuf
 
 import "fmt"
+
+import "defs"
+import "proc"
 
 // interface for reading/writing from user space memory either via a pointer
 // and length or an array of pointers and lengths (iovec)
 type Userio_i interface {
 	// copy src to user memory
-	Uiowrite(src []uint8) (int, Err_t)
+	Uiowrite(src []uint8) (int, defs.Err_t)
 	// copy user memory to dst
-	Uioread(dst []uint8) (int, Err_t)
+	Uioread(dst []uint8) (int, defs.Err_t)
 	// returns the number of unwritten/unread bytes remaining
 	Remain() int
 	// the total buffer size
@@ -47,14 +50,14 @@ func (ub *Userbuf_t) Remain() int {
 func (ub *Userbuf_t) Totalsz() int {
 	return ub.len
 }
-func (ub *Userbuf_t) Uioread(dst []uint8) (int, Err_t) {
+func (ub *Userbuf_t) Uioread(dst []uint8) (int, defs.Err_t) {
 	ub.proc.Lock_pmap()
 	a, b := ub._tx(dst, false)
 	ub.proc.Unlock_pmap()
 	return a, b
 }
 
-func (ub *Userbuf_t) Uiowrite(src []uint8) (int, Err_t) {
+func (ub *Userbuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 	ub.proc.Lock_pmap()
 	a, b := ub._tx(src, true)
 	ub.proc.Unlock_pmap()
@@ -64,7 +67,7 @@ func (ub *Userbuf_t) Uiowrite(src []uint8) (int, Err_t) {
 // copies the min of either the provided buffer or ub.len. returns number of
 // bytes copied and error. if an error occurs in the middle of a read or write,
 // the userbuf's state is updated such that the operation can be restarted.
-func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, Err_t) {
+func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, defs.Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
 		if !Resadd_noblock(Bounds(B_USERBUF_T__TX)) {
@@ -104,7 +107,7 @@ type Useriovec_t struct {
 	proc *Proc_t
 }
 
-func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) Err_t {
+func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) defs.Err_t {
 	if niovs > 10 {
 		fmt.Printf("many iovecs\n")
 		return -EINVAL
@@ -149,7 +152,7 @@ func (iov *Useriovec_t) Totalsz() int {
 	return iov.tsz
 }
 
-func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
+func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, defs.Err_t) {
 	ub := &Userbuf_t{}
 	did := 0
 	for len(buf) > 0 && len(iov.iovs) > 0 {
@@ -159,7 +162,7 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
 		ciov := &iov.iovs[0]
 		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)
 		var c int
-		var err Err_t
+		var err defs.Err_t
 		if touser {
 			c, err = ub._tx(buf, true)
 		} else {
@@ -179,14 +182,14 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, Err_t) {
 	return did, 0
 }
 
-func (iov *Useriovec_t) Uioread(dst []uint8) (int, Err_t) {
+func (iov *Useriovec_t) Uioread(dst []uint8) (int, defs.Err_t) {
 	iov.proc.Lock_pmap()
 	a, b := iov._tx(dst, false)
 	iov.proc.Unlock_pmap()
 	return a, b
 }
 
-func (iov *Useriovec_t) Uiowrite(src []uint8) (int, Err_t) {
+func (iov *Useriovec_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 	iov.proc.Lock_pmap()
 	a, b := iov._tx(src, true)
 	iov.proc.Unlock_pmap()
@@ -214,7 +217,7 @@ func (fb *Fakeubuf_t) Totalsz() int {
 	return fb.len
 }
 
-func (fb *Fakeubuf_t) _tx(buf []uint8, tofbuf bool) (int, Err_t) {
+func (fb *Fakeubuf_t) _tx(buf []uint8, tofbuf bool) (int, defs.Err_t) {
 	var c int
 	if tofbuf {
 		c = copy(fb.fbuf, buf)
@@ -225,10 +228,10 @@ func (fb *Fakeubuf_t) _tx(buf []uint8, tofbuf bool) (int, Err_t) {
 	return c, 0
 }
 
-func (fb *Fakeubuf_t) Uioread(dst []uint8) (int, Err_t) {
+func (fb *Fakeubuf_t) Uioread(dst []uint8) (int, defs.Err_t) {
 	return fb._tx(dst, false)
 }
 
-func (fb *Fakeubuf_t) Uiowrite(src []uint8) (int, Err_t) {
+func (fb *Fakeubuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 	return fb._tx(src, true)
 }

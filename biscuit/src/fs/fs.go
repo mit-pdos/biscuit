@@ -4,14 +4,16 @@ import "fmt"
 import "sync"
 
 import "bpath"
+import "defs"
+import "fd"
+import "syscall"
 import "ustr"
-import "common"
 
 const fs_debug = false
 const FSOFF = 506
-const iroot = common.Inum_t(0)
+const iroot = defs.Inum_t(0)
 
-var cons common.Cons_i
+var cons syscall.Cons_i
 
 type Fs_t struct {
 	ahci         Disk_i
@@ -27,7 +29,7 @@ type Fs_t struct {
 	diskfs       bool // disk or in-mem file system?
 }
 
-func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*common.Fd_t, *Fs_t) {
+func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*fd.Fd_t, *Fs_t) {
 
 	cons = console
 
@@ -93,7 +95,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*
 
 	fs.root = fs.icache.Iref(iroot, "fs_namei_root")
 
-	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
+	return &fd.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
 
 func (fs *Fs_t) Sizes() (int, int) {
@@ -115,7 +117,7 @@ func (fs *Fs_t) IrefRoot() *imemnode_t {
 }
 
 func (fs *Fs_t) MkRootCwd() *common.Cwd_t {
-	fd := &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 0}}
+	fd := &fd.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 0}}
 	cwd := common.MkRootCwd(fd)
 	return cwd
 }
@@ -522,7 +524,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 }
 
 type fsfops_t struct {
-	priv common.Inum_t
+	priv defs.Inum_t
 	fs   *Fs_t
 	// protects offset
 	sync.Mutex
@@ -669,7 +671,7 @@ func (fo *fsfops_t) Close() common.Err_t {
 	return fo.fs.Fs_close(fo.priv)
 }
 
-func (fo *fsfops_t) Pathi() common.Inum_t {
+func (fo *fsfops_t) Pathi() defs.Inum_t {
 	// fo.Lock()
 	// defer fo.Unlock()
 	// if fo.count <= 0 {
@@ -947,7 +949,7 @@ func (df *Devfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
 	return nil, -common.ENODEV
 }
 
-func (df *Devfops_t) Pathi() common.Inum_t {
+func (df *Devfops_t) Pathi() defs.Inum_t {
 	df._sane()
 	panic("bad cwd")
 }
@@ -1102,7 +1104,7 @@ func (raw *rawdfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t)
 	return nil, -common.ENODEV
 }
 
-func (raw *rawdfops_t) Pathi() common.Inum_t {
+func (raw *rawdfops_t) Pathi() defs.Inum_t {
 	panic("bad cwd")
 }
 
@@ -1216,7 +1218,7 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *common.Cwd_t) common.Er
 
 // a type to represent on-disk files
 type Fsfile_t struct {
-	Inum  common.Inum_t
+	Inum  defs.Inum_t
 	Major int
 	Minor int
 }
@@ -1321,10 +1323,10 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 	return ret, 0
 }
 
-func (fs *Fs_t) Makefake() *common.Fd_t {
+func (fs *Fs_t) Makefake() *fd.Fd_t {
 	return nil
-	//ret := &common.Fd_t{}
-	//priv := common.Inum_t(iroot)
+	//ret := &fd.Fd_t{}
+	//priv := defs.Inum_t(iroot)
 	//fake := &fsfops_t{priv: iroot, fs: fs, count: 1}
 	//fake.hack = &imemnode_t{}
 	//fake.hack.inum = priv
@@ -1339,7 +1341,7 @@ func (fs *Fs_t) Makefake() *common.Fd_t {
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{common.D_SUD: true, common.D_SUS: true}
 
-func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (*common.Fd_t, common.Err_t) {
+func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (*fd.Fd_t, common.Err_t) {
 	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
@@ -1358,7 +1360,7 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *co
 	priv := fsf.Inum
 	maj := fsf.Major
 	min := fsf.Minor
-	ret := &common.Fd_t{}
+	ret := &fd.Fd_t{}
 	if maj != 0 {
 		// don't need underlying file open
 		if fs.Fs_close(fsf.Inum) != 0 {
@@ -1382,7 +1384,7 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *co
 	return ret, 0
 }
 
-func (fs *Fs_t) Fs_close(priv common.Inum_t) common.Err_t {
+func (fs *Fs_t) Fs_close(priv defs.Inum_t) common.Err_t {
 	opid := fs.fslog.Op_begin("Fs_close")
 
 	fs.istats.Nclose.Inc()

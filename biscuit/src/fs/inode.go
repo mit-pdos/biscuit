@@ -6,38 +6,39 @@ import "sync"
 import "sort"
 import "unsafe"
 
-import "common"
+import "defs"
 import "hashtable"
+import "stats"
 import "ustr"
 
 type inode_stats_t struct {
-	Nopen       common.Counter_t
-	Nnamei      common.Counter_t
-	Nifill      common.Counter_t
-	Niupdate    common.Counter_t
-	Nistat      common.Counter_t
-	Niread      common.Counter_t
-	Niwrite     common.Counter_t
-	Ndo_write   common.Counter_t
-	Nfillhole   common.Counter_t
-	Ngrow       common.Counter_t
-	Nitrunc     common.Counter_t
-	Nimmap      common.Counter_t
-	Nifree      common.Counter_t
-	Nicreate    common.Counter_t
-	Nilink      common.Counter_t
-	Nunlink     common.Counter_t
-	Nrename     common.Counter_t
-	Nlseek      common.Counter_t
-	Nmkdir      common.Counter_t
-	Nclose      common.Counter_t
-	Nsync       common.Counter_t
-	Nreopen     common.Counter_t
-	CWrite      common.Cycles_t
-	Cwrite      common.Cycles_t
-	Ciwrite     common.Cycles_t
-	Ciwritecopy common.Cycles_t
-	Ciupdate    common.Cycles_t
+	Nopen       stats.Counter_t
+	Nnamei      stats.Counter_t
+	Nifill      stats.Counter_t
+	Niupdate    stats.Counter_t
+	Nistat      stats.Counter_t
+	Niread      stats.Counter_t
+	Niwrite     stats.Counter_t
+	Ndo_write   stats.Counter_t
+	Nfillhole   stats.Counter_t
+	Ngrow       stats.Counter_t
+	Nitrunc     stats.Counter_t
+	Nimmap      stats.Counter_t
+	Nifree      stats.Counter_t
+	Nicreate    stats.Counter_t
+	Nilink      stats.Counter_t
+	Nunlink     stats.Counter_t
+	Nrename     stats.Counter_t
+	Nlseek      stats.Counter_t
+	Nmkdir      stats.Counter_t
+	Nclose      stats.Counter_t
+	Nsync       stats.Counter_t
+	Nreopen     stats.Counter_t
+	CWrite      stats.Cycles_t
+	Cwrite      stats.Cycles_t
+	Ciwrite     stats.Cycles_t
+	Ciwritecopy stats.Cycles_t
+	Ciupdate    stats.Cycles_t
 }
 
 func (is *inode_stats_t) Stats() string {
@@ -163,7 +164,7 @@ type imemnode_t struct {
 	// _l protects all fields except for inum (which is the key for lookup
 	// and thus already known).
 	_l   sync.Mutex
-	inum common.Inum_t
+	inum defs.Inum_t
 	fs   *Fs_t
 	ref  *Objref_t
 
@@ -232,7 +233,7 @@ func (idm *imemnode_t) add_dcachelist(parent *imemnode_t, de *icdent_t) {
 	idm.dcache_list.PushBack(dei)
 }
 
-func (idm *imemnode_t) del_dcachelist(inum common.Inum_t) {
+func (idm *imemnode_t) del_dcachelist(inum defs.Inum_t) {
 	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
 		dei := e.Value.(*de_inode_t)
 		if dei.parent.inum == inum {
@@ -299,7 +300,7 @@ func (idm *imemnode_t) iunlock(s string) {
 }
 
 // Fill in inode
-func (idm *imemnode_t) idm_init(inum common.Inum_t) {
+func (idm *imemnode_t) idm_init(inum defs.Inum_t) {
 	if fs_debug {
 		fmt.Printf("idm_init: read inode %v\n", inum)
 	}
@@ -450,7 +451,7 @@ func (idm *imemnode_t) do_unlink(opid opid_t, name ustr.Ustr) common.Err_t {
 }
 
 // create new dir ent with given inode number
-func (idm *imemnode_t) do_insert(opid opid_t, fn ustr.Ustr, n common.Inum_t) common.Err_t {
+func (idm *imemnode_t) do_insert(opid opid_t, fn ustr.Ustr, n defs.Inum_t) common.Err_t {
 	err := idm.iinsert(opid, fn, n)
 	if err == 0 {
 		idm._iupdate(opid)
@@ -512,7 +513,7 @@ func (ic *imemnode_t) mbread(blockn int) *Bdev_block_t {
 	return mb
 }
 
-func (ic *imemnode_t) fill(blk *Bdev_block_t, inum common.Inum_t) {
+func (ic *imemnode_t) fill(blk *Bdev_block_t, inum defs.Inum_t) {
 	inode := Inode_t{blk, ioffset(inum)}
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
@@ -533,7 +534,7 @@ func (ic *imemnode_t) fill(blk *Bdev_block_t, inum common.Inum_t) {
 }
 
 // returns true if the inode data changed, and thus needs to be flushed to disk
-func (ic *imemnode_t) flushto(blk *Bdev_block_t, inum common.Inum_t) bool {
+func (ic *imemnode_t) flushto(blk *Bdev_block_t, inum defs.Inum_t) bool {
 	inode := Inode_t{blk, ioffset(inum)}
 	j := inode
 	k := ic
@@ -815,7 +816,7 @@ func (idm *imemnode_t) itrunc(opid opid_t, newlen uint) common.Err_t {
 
 // reverts icreate(). called after failure to allocate that prevents an FS
 // operation from continuing.
-func (idm *imemnode_t) create_undo(opid opid_t, childi common.Inum_t, childn ustr.Ustr) common.Err_t {
+func (idm *imemnode_t) create_undo(opid opid_t, childi defs.Inum_t, childn ustr.Ustr) common.Err_t {
 	ci, err := idm.iunlink(opid, childn)
 	if err != 0 {
 		panic("but insert just succeeded")
@@ -1272,19 +1273,19 @@ func mkIcache(fs *Fs_t, start, len int) *icache_t {
 // (the crash is the "last" close). When links reaches zero the fs marks the
 // inode as an orphan and when calling ifree the fs clears the orphan bit.
 
-func (icache *icache_t) markOrphan(opid opid_t, inum common.Inum_t) {
+func (icache *icache_t) markOrphan(opid opid_t, inum defs.Inum_t) {
 	if icache.fs.diskfs {
 		icache.orphanbitmap.Mark(opid, int(inum))
 	}
 }
 
-func (icache *icache_t) clearOrphan(opid opid_t, inum common.Inum_t) {
+func (icache *icache_t) clearOrphan(opid opid_t, inum defs.Inum_t) {
 	if icache.fs.diskfs {
 		icache.orphanbitmap.Unmark(opid, int(inum))
 	}
 }
 
-func (icache *icache_t) freeOrphan(inum common.Inum_t) {
+func (icache *icache_t) freeOrphan(inum defs.Inum_t) {
 	if fs_debug {
 		fmt.Printf("freeOrphan: %v\n", inum)
 	}
@@ -1306,13 +1307,13 @@ func (icache *icache_t) freeOrphan(inum common.Inum_t) {
 }
 
 func (icache *icache_t) RecoverOrphans() {
-	last := common.Inum_t(0)
+	last := defs.Inum_t(0)
 	done := false
 	for !done {
-		inum := common.Inum_t(0)
+		inum := defs.Inum_t(0)
 		done = icache.orphanbitmap.apply(int(last), func(b, v int) bool {
 			if v != 0 {
-				inum = common.Inum_t(b)
+				inum = defs.Inum_t(b)
 				return false
 			}
 			return true
@@ -1334,25 +1335,25 @@ func (icache *icache_t) Stats() string {
 	return "icache " + icache.cache.Stats()
 }
 
-func (icache *icache_t) Iref(inum common.Inum_t, s string) *imemnode_t {
+func (icache *icache_t) Iref(inum defs.Inum_t, s string) *imemnode_t {
 	return icache._iref(inum, true, false)
 }
 
-func (icache *icache_t) Iref_locked(inum common.Inum_t, s string) *imemnode_t {
+func (icache *icache_t) Iref_locked(inum defs.Inum_t, s string) *imemnode_t {
 	return icache._iref(inum, true, true)
 }
 
-func (icache *icache_t) Iref_locked_nofill(inum common.Inum_t, s string) *imemnode_t {
+func (icache *icache_t) Iref_locked_nofill(inum defs.Inum_t, s string) *imemnode_t {
 	return icache._iref(inum, false, true)
 }
 
-func (icache *icache_t) _iref(inum common.Inum_t, fill bool, lock bool) *imemnode_t {
+func (icache *icache_t) _iref(inum defs.Inum_t, fill bool, lock bool) *imemnode_t {
 	ref, created := icache.cache.Lookup(int(inum),
 		func(in int) Obj_t {
 			ret := &imemnode_t{}
 			// inum can be read without ilock, and therefore must be
 			// initialized before the refcache unlocks.
-			ret.inum = common.Inum_t(in)
+			ret.inum = defs.Inum_t(in)
 			ret.ilock("")
 			return ret
 		})
@@ -1425,7 +1426,7 @@ func mkIalloc(fs *Fs_t, start, len, first, inodelen int) *ibitmap_t {
 	return ialloc
 }
 
-func (ialloc *ibitmap_t) Ialloc(opid opid_t) (common.Inum_t, common.Err_t) {
+func (ialloc *ibitmap_t) Ialloc(opid opid_t) (defs.Inum_t, common.Err_t) {
 	n, err := ialloc.alloc.FindAndMark(opid)
 	if err != 0 {
 		return 0, err
@@ -1437,21 +1438,21 @@ func (ialloc *ibitmap_t) Ialloc(opid opid_t) (common.Inum_t, common.Err_t) {
 	if n >= ialloc.maxinode {
 		panic("Ialloc; higher inodes should have been marked in use")
 	}
-	inum := common.Inum_t(n)
+	inum := defs.Inum_t(n)
 	return inum, 0
 }
 
 // once Ifree() returns, inum can be reallocated by a concurrent operation.
 // therefore, the caller must either have the block for inum locked or must not
 // further modify the block for inum after calling Ifree.
-func (ialloc *ibitmap_t) Ifree(opid opid_t, inum common.Inum_t) {
+func (ialloc *ibitmap_t) Ifree(opid opid_t, inum defs.Inum_t) {
 	if fs_debug {
 		fmt.Printf("ifree: mark free %d free before %d\n", inum, ialloc.alloc.nfreebits)
 	}
 	ialloc.alloc.Unmark(opid, int(inum))
 }
 
-func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
+func (ialloc *ibitmap_t) Iblock(inum defs.Inum_t) int {
 	b := int(inum) / (BSIZE / ISIZE)
 	b += ialloc.first
 	if b < ialloc.first || b >= ialloc.first+ialloc.inodelen {
@@ -1461,7 +1462,7 @@ func (ialloc *ibitmap_t) Iblock(inum common.Inum_t) int {
 	return b
 }
 
-func ioffset(inum common.Inum_t) int {
+func ioffset(inum defs.Inum_t) int {
 	o := int(inum) % (BSIZE / ISIZE)
 	return o
 }

@@ -5,7 +5,8 @@ import "sync"
 
 import "runtime"
 
-import "common"
+import "defs"
+import "mem"
 
 const bdev_debug = false
 
@@ -38,15 +39,15 @@ type bcache_t struct {
 	mem   Blockmem_i
 	disk  Disk_i
 	sync.Mutex
-	pins map[common.Pa_t]*Bdev_block_t
+	pins map[mem.Pa_t]*Bdev_block_t
 }
 
 func mkBcache(mem Blockmem_i, disk Disk_i) *bcache_t {
 	bcache := &bcache_t{}
 	bcache.mem = mem
 	bcache.disk = disk
-	bcache.cache = mkCache(common.Syslimit.Blocks)
-	bcache.pins = make(map[common.Pa_t]*Bdev_block_t)
+	bcache.cache = mkCache(limits.Syslimit.Blocks)
+	bcache.pins = make(map[mem.Pa_t]*Bdev_block_t)
 	return bcache
 }
 
@@ -227,7 +228,7 @@ func (n *_nop_relse_t) Relse(*Bdev_block_t, string) {
 
 var _nop_relse = _nop_relse_t{}
 
-func (bcache *bcache_t) raw(blkno int) (*Bdev_block_t, common.Err_t) {
+func (bcache *bcache_t) raw(blkno int) (*Bdev_block_t, defs.Err_t) {
 	ret := MkBlock_newpage(blkno, "raw", bcache.mem, bcache.disk, &_nop_relse)
 	return ret, 0
 }
@@ -243,7 +244,7 @@ func (bcache *bcache_t) pin(b *Bdev_block_t) {
 	bcache.Unlock()
 }
 
-func (bcache *bcache_t) unpin(pa common.Pa_t) {
+func (bcache *bcache_t) unpin(pa mem.Pa_t) {
 	bcache.Lock()
 	defer bcache.Unlock()
 	b, ok := bcache.pins[pa]
@@ -319,7 +320,7 @@ func mkBallocater(fs *Fs_t, start, len, first int) *bbitmap_t {
 	return balloc
 }
 
-func (balloc *bbitmap_t) Balloc(opid opid_t) (int, common.Err_t) {
+func (balloc *bbitmap_t) Balloc(opid opid_t) (int, defs.Err_t) {
 	ret, err := balloc.balloc1(opid)
 	if err != 0 {
 		return 0, err
@@ -367,7 +368,7 @@ func (balloc *bbitmap_t) Stats() string {
 // allocates a block, marking it used in the free block bitmap. free blocks and
 // log blocks are not accounted for in the free bitmap; all others are. balloc
 // should only ever acquire fblock.
-func (balloc *bbitmap_t) balloc1(opid opid_t) (int, common.Err_t) {
+func (balloc *bbitmap_t) balloc1(opid opid_t) (int, defs.Err_t) {
 	blkn, err := balloc.alloc.FindAndMark(opid)
 	if err != 0 {
 		fmt.Printf("balloc1: %v\n", err)

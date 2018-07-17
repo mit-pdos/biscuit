@@ -1,4 +1,4 @@
-package common
+package vm
 
 import "unsafe"
 import "fmt"
@@ -6,37 +6,12 @@ import "sync"
 import "sync/atomic"
 import "runtime"
 
-const PGSIZE int = 1 << 12
-
-type Pa_t uintptr
-type Bytepg_t [PGSIZE]uint8
-type Pg_t [512]int
-type Pmap_t [512]Pa_t
-
-func Pg2bytes(pg *Pg_t) *Bytepg_t {
-	return (*Bytepg_t)(unsafe.Pointer(pg))
-}
-
-func Bytepg2pg(pg *Bytepg_t) *Pg_t {
-	return (*Pg_t)(unsafe.Pointer(pg))
-}
-
-func pg2pmap(pg *Pg_t) *Pmap_t {
-	return (*Pmap_t)(unsafe.Pointer(pg))
-}
-
-func _pg2pgn(p_pg Pa_t) uint32 {
-	return uint32(p_pg >> PGSHIFT)
-}
-
-func _refaddr(p_pg Pa_t) (*int32, uint32) {
-	idx := _pg2pgn(p_pg) - Physmem.startn
-	return &Physmem.pgs[idx].refcnt, idx
-}
+import "defs"
+import "mem"
 
 var _vdirect = uintptr(VDIRECT << 39)
 
-func _instpg(pg *Pmap_t, idx uint, perms Pa_t) (Pa_t, bool) {
+func _instpg(pg *mem.Pmap_t, idx uint, perms mem.Pa_t) (mem.Pa_t, bool) {
 	_, p_np, ok := Physmem.Refpg_new()
 	if !ok {
 		return 0, false
@@ -49,7 +24,7 @@ func _instpg(pg *Pmap_t, idx uint, perms Pa_t) (Pa_t, bool) {
 
 // returns nil if either 1) create was false and the mapping doesn't exist or
 // 2) create was true but we failed to allocate a page to create the mapping.
-func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
+func pmap_pgtbl(pml4 *mem.Pmap_t, v int, create bool, perms mem.Pa_t) (*mem.Pmap_t, int) {
 	vn := uint(uintptr(v))
 	l4b := (vn >> (12 + 9*3)) & 0x1ff
 	pdpb := (vn >> (12 + 9*2)) & 0x1ff
@@ -63,12 +38,12 @@ func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
 		panic("mapping page 0")
 	}
 
-	cpe := func(pe Pa_t) *Pmap_t {
+	cpe := func(pe mem.Pa_t) *mem.Pmap_t {
 		if pe&PTE_PS != 0 {
 			panic("insert mapping into PS page")
 		}
 		phys := uintptr(pe & PTE_ADDR)
-		return (*Pmap_t)(unsafe.Pointer(_vdirect + phys))
+		return (*mem.Pmap_t)(unsafe.Pointer(_vdirect + phys))
 	}
 
 	var ok bool
@@ -109,7 +84,7 @@ func pmap_pgtbl(pml4 *Pmap_t, v int, create bool, perms Pa_t) (*Pmap_t, int) {
 }
 
 // requires direct mapping
-func _pmap_walk(pml4 *Pmap_t, v int, create bool, perms Pa_t) *Pa_t {
+func _pmap_walk(pml4 *mem.Pmap_t, v int, create bool, perms mem.Pa_t) *mem.Pa_t {
 	pgtbl, slot := pmap_pgtbl(pml4, v, create, perms)
 	if pgtbl == nil {
 		return nil
@@ -117,7 +92,7 @@ func _pmap_walk(pml4 *Pmap_t, v int, create bool, perms Pa_t) *Pa_t {
 	return &pgtbl[slot]
 }
 
-func pmap_walk(pml4 *Pmap_t, v int, perms Pa_t) (*Pa_t, Err_t) {
+func pmap_walk(pml4 *mem.Pmap_t, v int, perms mem.Pa_t) (*mem.Pa_t, defs.Err_t) {
 	ret := _pmap_walk(pml4, v, true, perms)
 	if ret == nil {
 		// create was set; failed to allocate a page
@@ -126,11 +101,11 @@ func pmap_walk(pml4 *Pmap_t, v int, perms Pa_t) (*Pa_t, Err_t) {
 	return ret, 0
 }
 
-func Pmap_lookup(pml4 *Pmap_t, v int) *Pa_t {
+func Pmap_lookup(pml4 *mem.Pmap_t, v int) *mem.Pa_t {
 	return _pmap_walk(pml4, v, false, 0)
 }
 
-func pmfree(pml4 *Pmap_t, start, end uintptr, fops Unpin_i) {
+func pmfree(pml4 *mem.Pmap_t, start, end uintptr, fops mem.Unpin_i) {
 	for i := start; i < end; {
 		pg, slot := pmap_pgtbl(pml4, int(i), false, 0)
 		if pg == nil {
@@ -165,7 +140,7 @@ func pmfree(pml4 *Pmap_t, start, end uintptr, fops Unpin_i) {
 // forks the ptes only for the virtual address range specified. returns true if
 // the parent's TLB should be flushed because we added COW bits to PTEs and
 // whether the fork failed due to allocation failure
-func ptefork(cpmap, ppmap *Pmap_t, start, end int,
+func ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
 	shared bool) (bool, bool) {
 	doflush := false
 	mkcow := !shared

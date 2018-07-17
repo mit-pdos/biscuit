@@ -1,4 +1,4 @@
-package common
+package syscall
 
 type Msgfl_t uint
 type Fdopt_t uint

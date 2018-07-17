@@ -1,11 +1,13 @@
-package common
+package vm
 
 import "fmt"
-import "sync/atomic"
+
+import "mem"
+import "fd"
 
 type Kent_t struct {
 	Pml4slot int
-	Entry    Pa_t
+	Entry    mem.Pa_t
 }
 
 const VREC int = 0x42
@@ -13,32 +15,27 @@ const VDIRECT int = 0x44
 const VEND int = 0x50
 const VUSER int = 0x59
 
-const PTE_P Pa_t = 1 << 0
-const PTE_W Pa_t = 1 << 1
-const PTE_U Pa_t = 1 << 2
-const PTE_G Pa_t = 1 << 8
-const PTE_PCD Pa_t = 1 << 4
-const PTE_PS Pa_t = 1 << 7
+const PTE_P mem.Pa_t = 1 << 0
+const PTE_W mem.Pa_t = 1 << 1
+const PTE_U mem.Pa_t = 1 << 2
+const PTE_G mem.Pa_t = 1 << 8
+const PTE_PCD mem.Pa_t = 1 << 4
+const PTE_PS mem.Pa_t = 1 << 7
 
 // our flags; bits 9-11 are ignored for all page map entries in long mode
-const PTE_COW Pa_t = 1 << 9
-const PTE_WASCOW Pa_t = 1 << 10
+const PTE_COW mem.Pa_t = 1 << 9
+const PTE_WASCOW mem.Pa_t = 1 << 10
 
-const PGSIZEW uintptr = uintptr(PGSIZE)
+const PGSIZEW uintptr = uintptr(mem.PGSIZE)
 const PGSHIFT uint = 12
-const PGOFFSET Pa_t = 0xfff
-const PGMASK Pa_t = ^(PGOFFSET)
+const PGOFFSET mem.Pa_t = 0xfff
+const PGMASK mem.Pa_t = ^(PGOFFSET)
 const IPGMASK int = ^(int(PGOFFSET))
-const PTE_ADDR Pa_t = PGMASK
-const PTE_FLAGS Pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
+const PTE_ADDR mem.Pa_t = PGMASK
+const PTE_FLAGS mem.Pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
 	PTE_WASCOW)
 
-var P_zeropg Pa_t
-
-type Mmapinfo_t struct {
-	Pg   *Pg_t
-	Phys Pa_t
-}
+var P_zeropg mem.Pa_t
 
 type mtype_t uint
 
@@ -52,8 +49,8 @@ const (
 )
 
 type Mfile_t struct {
-	mfops Fdops_i
-	unpin Unpin_i
+	mfops fd.Fdops_i
+	unpin mem.Unpin_i
 	// once mapcount is 0, close mfops
 	mapcount int
 }
@@ -65,10 +62,10 @@ type Vminfo_t struct {
 	perms uint
 	file  struct {
 		foff   int
-		mfile  *Mfile_t
+		mfile  *mfile.Mfile_t
 		shared bool
 	}
-	pch []Pa_t
+	pch []mem.Pa_t
 }
 
 func (vmi *Vminfo_t) Pgn() uintptr {
@@ -86,7 +83,7 @@ type Vmregion_t struct {
 }
 
 // if err == 0, the FS increased the reference count on the page.
-func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
+func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, mem.Pa_t, Err_t) {
 	if vmi.mtype != VFILE {
 		panic("must be file mapping")
 	}
@@ -99,7 +96,7 @@ func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, Pa_t, Err_t) {
 	return mmapi[0].Pg, mmapi[0].Phys, 0
 }
 
-func (vmi *Vminfo_t) ptefor(pmap *Pmap_t, va uintptr) (*Pa_t, bool) {
+func (vmi *Vminfo_t) ptefor(pmap *Pmap_t, va uintptr) (*mem.Pa_t, bool) {
 	if vmi.pch == nil {
 		bva := int(vmi.pgn) << PGSHIFT
 		ptbl, slot := pmap_pgtbl(pmap, bva, true, PTE_U|PTE_W)
@@ -489,144 +486,5 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
 	}
 	m.rb._insert(avmi)
 	m.Novma++
-	return 0
-}
-
-// returns true if the fault was handled successfully
-func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) Err_t {
-	isguard := vmi.perms == 0
-	iswrite := ecode&uintptr(PTE_W) != 0
-	writeok := vmi.perms&uint(PTE_W) != 0
-	if isguard || (iswrite && !writeok) {
-		return -EFAULT
-	}
-	// pmap is Lock'ed in Proc_t.pgfault...
-	if ecode&uintptr(PTE_U) == 0 {
-		// kernel page faults should be noticed and crashed upon in
-		// runtime.trap(), but just in case
-		panic("kernel page fault")
-	}
-	if vmi.mtype == VSANON {
-		panic("shared anon pages should always be mapped")
-	}
-
-	pte, ok := vmi.ptefor(proc.Pmap, faultaddr)
-	if !ok {
-		return -ENOMEM
-	}
-	if (iswrite && *pte&PTE_WASCOW != 0) ||
-		(!iswrite && *pte&PTE_P != 0) {
-		// two threads simultaneously faulted on same page
-		return 0
-	}
-
-	var p_pg Pa_t
-	isblockpage := false
-	perms := PTE_U | PTE_P
-	isempty := true
-
-	// shared file mappings are handled the same way regardless of whether
-	// the fault is read or write
-	if vmi.mtype == VFILE && vmi.file.shared {
-		var err Err_t
-		_, p_pg, err = vmi.Filepage(faultaddr)
-		if err != 0 {
-			return err
-		}
-		isblockpage = true
-		if vmi.perms&uint(PTE_W) != 0 {
-			perms |= PTE_W
-		}
-	} else if iswrite {
-		// XXXPANIC
-		if *pte&PTE_W != 0 {
-			panic("bad state")
-		}
-		var pgsrc *Pg_t
-		var p_bpg Pa_t
-		// the copy-on-write page may be specified in the pte or it may
-		// not have been mapped at all yet.
-		cow := *pte&PTE_COW != 0
-		if cow {
-			// if this anonymous COW page is mapped exactly once
-			// (i.e.  only this mapping maps the page), we can
-			// claim the page, skip the copy, and mark it writable.
-			phys := *pte & PTE_ADDR
-			ref, _ := _refaddr(phys)
-			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
-				phys != P_zeropg {
-				tmp := *pte &^ PTE_COW
-				tmp |= PTE_W | PTE_WASCOW
-				*pte = tmp
-				proc.Tlbshoot(faultaddr, 1)
-				return 0
-			}
-			pgsrc = Physmem.Dmap(phys)
-			isempty = false
-		} else {
-			// XXXPANIC
-			if *pte != 0 {
-				panic("no")
-			}
-			switch vmi.mtype {
-			case VANON:
-				pgsrc = Zeropg
-			case VFILE:
-				var err Err_t
-				pgsrc, p_bpg, err = vmi.Filepage(faultaddr)
-				if err != 0 {
-					return err
-				}
-				defer Physmem.Refdown(p_bpg)
-			default:
-				panic("wut")
-			}
-		}
-		var pg *Pg_t
-		var ok bool
-		// don't zero new page
-		pg, p_pg, ok = Physmem.Refpg_new_nozero()
-		if !ok {
-			return -ENOMEM
-		}
-		*pg = *pgsrc
-		perms |= PTE_WASCOW
-		perms |= PTE_W
-	} else {
-		if *pte != 0 {
-			panic("must be 0")
-		}
-		switch vmi.mtype {
-		case VANON:
-			p_pg = P_zeropg
-		case VFILE:
-			var err Err_t
-			_, p_pg, err = vmi.Filepage(faultaddr)
-			if err != 0 {
-				return err
-			}
-			isblockpage = true
-		default:
-			panic("wut")
-		}
-		if vmi.perms&uint(PTE_W) != 0 {
-			perms |= PTE_COW
-		}
-	}
-
-	var tshoot bool
-	if isblockpage {
-		tshoot, ok = proc.Blockpage_insert(int(faultaddr), p_pg, perms,
-			isempty)
-	} else {
-		tshoot, ok = proc.Page_insert(int(faultaddr), p_pg, perms, isempty)
-	}
-	if !ok {
-		Physmem.Refdown(p_pg)
-		return -ENOMEM
-	}
-	if tshoot {
-		proc.Tlbshoot(faultaddr, 1)
-	}
 	return 0
 }
