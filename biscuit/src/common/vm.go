@@ -1,15 +1,14 @@
-package vm
+package common
 
 import "fmt"
 
+import "defs"
 import "mem"
+import "util"
 
-import "fd"
+// import "rb"
 
-type Kent_t struct {
-	Pml4slot int
-	Entry    mem.Pa_t
-}
+//import "fd"
 
 const PTE_P mem.Pa_t = 1 << 0
 const PTE_W mem.Pa_t = 1 << 1
@@ -31,8 +30,6 @@ const PTE_ADDR mem.Pa_t = PGMASK
 const PTE_FLAGS mem.Pa_t = (PTE_P | PTE_W | PTE_U | PTE_PCD | PTE_PS | PTE_COW |
 	PTE_WASCOW)
 
-var P_zeropg mem.Pa_t
-
 type mtype_t uint
 
 // types of mappings
@@ -45,7 +42,7 @@ const (
 )
 
 type Mfile_t struct {
-	mfops fd.Fdops_i
+	mfops Fdops_i
 	unpin mem.Unpin_i
 	// once mapcount is 0, close mfops
 	mapcount int
@@ -58,7 +55,7 @@ type Vminfo_t struct {
 	perms uint
 	file  struct {
 		foff   int
-		mfile  *mfile.Mfile_t
+		mfile  *Mfile_t
 		shared bool
 	}
 	pch []mem.Pa_t
@@ -79,7 +76,7 @@ type Vmregion_t struct {
 }
 
 // if err == 0, the FS increased the reference count on the page.
-func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, mem.Pa_t, Err_t) {
+func (vmi *Vminfo_t) Filepage(va uintptr) (*mem.Pg_t, mem.Pa_t, defs.Err_t) {
 	if vmi.mtype != VFILE {
 		panic("must be file mapping")
 	}
@@ -92,7 +89,7 @@ func (vmi *Vminfo_t) Filepage(va uintptr) (*Pg_t, mem.Pa_t, Err_t) {
 	return mmapi[0].Pg, mmapi[0].Phys, 0
 }
 
-func (vmi *Vminfo_t) ptefor(pmap *Pmap_t, va uintptr) (*mem.Pa_t, bool) {
+func (vmi *Vminfo_t) ptefor(pmap *mem.Pmap_t, va uintptr) (*mem.Pa_t, bool) {
 	if vmi.pch == nil {
 		bva := int(vmi.pgn) << PGSHIFT
 		ptbl, slot := pmap_pgtbl(pmap, bva, true, PTE_U|PTE_W)
@@ -409,7 +406,7 @@ func (m *Vmregion_t) _findhole(minpgn, minlen uintptr) (uintptr, uintptr) {
 
 func (m *Vmregion_t) empty(minva, len uintptr) (uintptr, uintptr) {
 	minn := minva >> PGSHIFT
-	pglen := uintptr(Roundup(int(len), PGSIZE) >> PGSHIFT)
+	pglen := uintptr(util.Roundup(int(len), mem.PGSIZE) >> PGSHIFT)
 	if minn >= m.hole.startn && pglen <= m.hole.pglen {
 		return m.hole.startn << PGSHIFT, m.hole.pglen << PGSHIFT
 	}
@@ -431,9 +428,9 @@ func (m *Vmregion_t) end() uintptr {
 	return last << PGSHIFT
 }
 
-func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
+func (m *Vmregion_t) Remove(start, len int, novma uint) defs.Err_t {
 	pgn := uintptr(start) >> PGSHIFT
-	pglen := Roundup(len, PGSIZE) >> PGSHIFT
+	pglen := util.Roundup(len, mem.PGSIZE) >> PGSHIFT
 	m._pglen -= pglen
 	n := m.rb.lookup(pgn)
 	if n == nil {
@@ -468,7 +465,7 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) Err_t {
 	}
 	// too many vma objects
 	if m.Novma >= novma {
-		return -ENOMEM
+		return -defs.ENOMEM
 	}
 	// removing middle of a mapping; must add a new node
 	avmi := &Vminfo_t{}

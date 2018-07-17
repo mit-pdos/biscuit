@@ -1,4 +1,4 @@
-package fd
+package common
 
 import "time"
 import "sync"
@@ -7,7 +7,8 @@ import "bpath"
 import "defs"
 import "mem"
 import "stat"
-import "userbuf"
+
+// import "userbuf"
 import "ustr"
 
 const (
@@ -23,7 +24,7 @@ type Fd_t struct {
 	Perms int
 }
 
-func Copyfd(fd *Fd_t) (*Fd_t, Err_t) {
+func Copyfd(fd *Fd_t) (*Fd_t, defs.Err_t) {
 	nfd := &Fd_t{}
 	*nfd = *fd
 	err := nfd.Fops.Reopen()
@@ -82,32 +83,32 @@ type Fdops_i interface {
 	Lseek(int, int) (int, defs.Err_t)
 	Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t)
 	Pathi() defs.Inum_t
-	Read(*Proc_t, *userbuf.Userio_i) (int, defs.Err_t)
+	Read(*Proc_t, Userio_i) (int, defs.Err_t)
 	// reopen() is called with Proc_t.fdl is held
 	Reopen() defs.Err_t
-	Write(*Proc_t, userbuf.Userio_i) (int, defs.Err_t)
+	Write(*Proc_t, Userio_i) (int, defs.Err_t)
 	Truncate(uint) defs.Err_t
 
-	Pread(userbuf.Userio_i, int) (int, defs.Err_t)
-	Pwrite(userbuf.Userio_i, int) (int, defs.Err_t)
+	Pread(Userio_i, int) (int, defs.Err_t)
+	Pwrite(Userio_i, int) (int, defs.Err_t)
 
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
 	// space, and error
-	Accept(*Proc_t, userbuf.Userio_i) (Fdops_i, int, defs.Err_t)
+	Accept(*Proc_t, Userio_i) (Fdops_i, int, defs.Err_t)
 	Bind(*Proc_t, []uint8) defs.Err_t
 	Connect(*Proc_t, []uint8) defs.Err_t
 	// listen changes the underlying socket type; thus is returns the new
 	// fops.
 	Listen(*Proc_t, int) (Fdops_i, defs.Err_t)
-	Sendmsg(p *Proc_t, data userbuf.Userio_i, saddr []uint8, cmsg []uint8,
+	Sendmsg(p *Proc_t, data Userio_i, saddr []uint8, cmsg []uint8,
 		flags int) (int, defs.Err_t)
 	// returns number of bytes read, size of from sock address written,
 	// size of ancillary data written, msghdr flags, and error. if no from
 	// address or ancillary data is requested, the userio objects have
 	// length 0.
-	Recvmsg(p *Proc_t, data userbuf.Userio_i, saddr userbuf.Userio_i,
-		cmsg userbuf.Userio_i, flags int) (int, int, int, Msgfl_t, defs.Err_t)
+	Recvmsg(p *Proc_t, data Userio_i, saddr Userio_i,
+		cmsg Userio_i, flags int) (int, int, int, Msgfl_t, defs.Err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
@@ -116,8 +117,8 @@ type Fdops_i interface {
 	Pollone(Pollmsg_t) (Ready_t, defs.Err_t)
 
 	Fcntl(*Proc_t, int, int) int
-	Getsockopt(*Proc_t, int, userbuf.Userio_i, int) (int, defs.Err_t)
-	Setsockopt(*Proc_t, int, int, userbuf.Userio_i, int) defs.Err_t
+	Getsockopt(*Proc_t, int, Userio_i, int) (int, defs.Err_t)
+	Setsockopt(*Proc_t, int, int, Userio_i, int) defs.Err_t
 	Shutdown(rdone, wdone bool) defs.Err_t
 }
 
@@ -200,7 +201,7 @@ func (p *Pollers_t) Addpoller(pm *Pollmsg_t) defs.Err_t {
 		*e = *pm
 	} else {
 		lhits++
-		return -ENOMEM
+		return -defs.ENOMEM
 	}
 	return 0
 }

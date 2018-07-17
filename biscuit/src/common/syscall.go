@@ -1,4 +1,6 @@
-package syscall
+package common
+
+import "defs"
 
 type Msgfl_t uint
 type Fdopt_t uint
@@ -10,8 +12,8 @@ type Syscall_i interface {
 }
 
 type Cons_i interface {
-	Cons_read(ub Userio_i, offset int) (int, Err_t)
-	Cons_write(src Userio_i, off int) (int, Err_t)
+	Cons_read(ub Userio_i, offset int) (int, defs.Err_t)
+	Cons_write(src Userio_i, off int) (int, defs.Err_t)
 }
 
 const (

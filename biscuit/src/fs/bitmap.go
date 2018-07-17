@@ -4,6 +4,7 @@ import "fmt"
 import "sync"
 import "sort"
 
+import "common"
 import "defs"
 import "stats"
 
@@ -142,7 +143,7 @@ func (alloc *bitmap_t) CheckAndMark(opid opid_t) (int, defs.Err_t) {
 	}
 	blk.Unlock()
 	alloc.storage.Relse(blk, "alloc CheckAndMark")
-	return 0, -common.ENOMEM
+	return 0, -defs.ENOMEM
 }
 
 func (alloc *bitmap_t) populateFreeMap() {
@@ -186,7 +187,7 @@ func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, defs.Err_t) {
 		}
 
 	}
-	return 0, -common.ENOMEM
+	return 0, -defs.ENOMEM
 }
 
 func (alloc *bitmap_t) FindDiskMap(opid opid_t) (int, defs.Err_t) {
@@ -351,7 +352,7 @@ func (alloc *bitmap_t) MarkUnmark(opid opid_t, mark, unmark []int) {
 }
 
 func (alloc *bitmap_t) Stats() string {
-	return "allocator " + common.Stats2String(alloc.stats)
+	return "allocator " + stats.Stats2String(alloc.stats)
 }
 
 func (alloc *bitmap_t) ResetStats() {

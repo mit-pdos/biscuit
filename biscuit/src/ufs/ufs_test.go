@@ -10,7 +10,9 @@ import "time"
 
 import "bpath"
 import "common"
+import "defs"
 import "fs"
+import "mem"
 import "ustr"
 
 const (
@@ -489,7 +491,7 @@ func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
 	fds := make([]*common.Fd_t, nfile)
 	for i := 0; i < nfile; i++ {
 		fn := ustr.Ustr(uniqfile(i))
-		var err common.Err_t
+		var err defs.Err_t
 		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, tfs.fs.MkRootCwd(), 0, 0)
 		if err != 0 {
 			t.Fatalf("ufs.fs.Fs_open %v failed %v\n", fn, err)
@@ -1147,8 +1149,8 @@ func doCheckFree(tfs *Ufs_t) (string, bool) {
 	return "", true
 }
 
-func blk2bytepg(d []byte) *common.Bytepg_t {
-	b := &common.Bytepg_t{}
+func blk2bytepg(d []byte) *mem.Bytepg_t {
+	b := &mem.Bytepg_t{}
 	for i := 0; i < len(d); i++ {
 		b[i] = d[i]
 	}

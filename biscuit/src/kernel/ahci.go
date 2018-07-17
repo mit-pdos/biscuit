@@ -7,8 +7,11 @@ import "sync/atomic"
 import "unsafe"
 import "container/list"
 
+import "defs"
 import "fs"
 import "common"
+import "mem"
+import "stats"
 
 const ahci_debug = false
 
@@ -29,10 +32,10 @@ type blockmem_t struct {
 
 var blockmem = &blockmem_t{}
 
-func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
+func (bm *blockmem_t) Alloc() (mem.Pa_t, *mem.Bytepg_t, bool) {
 	_, pa, ok := physmem.Refpg_new()
 	if ok {
-		d := (*common.Bytepg_t)(unsafe.Pointer(physmem.Dmap(pa)))
+		d := (*mem.Bytepg_t)(unsafe.Pointer(physmem.Dmap(pa)))
 		physmem.Refup(pa)
 		return pa, d, ok
 	} else {
@@ -40,11 +43,11 @@ func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
 	}
 }
 
-func (bm *blockmem_t) Free(pa common.Pa_t) {
+func (bm *blockmem_t) Free(pa mem.Pa_t) {
 	physmem.Refdown(pa)
 }
 
-func (bm *blockmem_t) Refup(pa common.Pa_t) {
+func (bm *blockmem_t) Refup(pa mem.Pa_t) {
 	physmem.Refup(pa)
 }
 
@@ -70,7 +73,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	d.tag = t
 	d.bara = pci_read(t, _BAR5, 4)
 	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
-	m := common.Dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
+	m := mem.Dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
 	vec := msivec_t(0)
@@ -79,7 +82,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	if cap_entry&0x1F != 0x5 {
 		fmt.Printf("AHCI: no MSI\n")
 		IRQ_DISK = 11 // XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
-		INT_DISK = common.IRQ_BASE + IRQ_DISK
+		INT_DISK = defs.IRQ_BASE + IRQ_DISK
 	} else { // enable MSI interrupts
 		vec = msi_alloc()
 
@@ -295,14 +298,14 @@ type ahci_cmd_table struct {
 }
 
 type ahci_port_stat_t struct {
-	Nbarrier  common.Counter_t
-	Nwrite    common.Counter_t
-	Niwrite   common.Counter_t
-	Nvwrite   common.Counter_t
-	Nread     common.Counter_t
-	Nnoslot   common.Counter_t
-	Ncoalesce common.Counter_t
-	Nintr     common.Counter_t
+	Nbarrier  stats.Counter_t
+	Nwrite    stats.Counter_t
+	Niwrite   stats.Counter_t
+	Nvwrite   stats.Counter_t
+	Nread     stats.Counter_t
+	Nnoslot   stats.Counter_t
+	Ncoalesce stats.Counter_t
+	Nintr     stats.Counter_t
 }
 
 type ahci_port_t struct {
@@ -458,7 +461,7 @@ func CLR(f *uint32, v uint32) {
 	runtime.Store32(f, n)
 }
 
-func (p *ahci_port_t) pg_new() (*common.Pg_t, common.Pa_t) {
+func (p *ahci_port_t) pg_new() (*mem.Pg_t, mem.Pa_t) {
 	a, b, ok := physmem.Refpg_new()
 	if !ok {
 		panic("oom during port pg_new")
@@ -467,7 +470,7 @@ func (p *ahci_port_t) pg_new() (*common.Pg_t, common.Pa_t) {
 	return a, b
 }
 
-func (p *ahci_port_t) pg_free(pa common.Pa_t) {
+func (p *ahci_port_t) pg_free(pa mem.Pa_t) {
 	physmem.Refdown(pa)
 }
 
@@ -505,14 +508,14 @@ func (p *ahci_port_t) init() bool {
 
 	// Allocate memory for rfis
 	_, pa := p.pg_new()
-	if int(unsafe.Sizeof(*p.rfis)) > common.PGSIZE {
+	if int(unsafe.Sizeof(*p.rfis)) > mem.PGSIZE {
 		panic("not enough mem for rfis")
 	}
 	p.rfis_pa = uintptr(pa)
 
 	// Allocate memory for cmdh
 	_, pa = p.pg_new()
-	if int(unsafe.Sizeof(*p.cmdh)) > common.PGSIZE {
+	if int(unsafe.Sizeof(*p.cmdh)) > mem.PGSIZE {
 		panic("not enough mem for cmdh")
 	}
 	p.cmdh_pa = uintptr(pa)
@@ -521,13 +524,13 @@ func (p *ahci_port_t) init() bool {
 	// Allocate memory for cmdt, which spans several physical pages that
 	// must be consecutive. pg_new() returns physical pages during boot
 	// consecutively (in increasing order).
-	n := int(unsafe.Sizeof(*p.cmdt))/common.PGSIZE + 1
+	n := int(unsafe.Sizeof(*p.cmdt))/mem.PGSIZE + 1
 	fmt.Printf("AHCI: size cmdt %v pages %v\n", unsafe.Sizeof(*p.cmdt), n)
 	_, pa = p.pg_new()
 	pa1 := pa
 	for i := 1; i < n; i++ {
 		_, pa1 = p.pg_new()
-		if int(pa1-pa) != common.PGSIZE*i {
+		if int(pa1-pa) != mem.PGSIZE*i {
 			panic("AHCI: port init phys page not in order")
 		}
 	}
@@ -537,7 +540,7 @@ func (p *ahci_port_t) init() bool {
 	// Initialize memory buffers
 	for cmdslot, _ := range p.cmdh {
 		v := &p.cmdt[cmdslot]
-		pa := common.Dmap_v2p((*common.Pg_t)(unsafe.Pointer(v)))
+		pa := mem.Physmem.Dmap_v2p((*mem.Pg_t)(unsafe.Pointer(v)))
 		p.cmdh[cmdslot].ctba = (uint64)(pa)
 	}
 
@@ -574,7 +577,7 @@ func (p *ahci_port_t) init() bool {
 }
 
 func (p *ahci_port_stat_t) stat() string {
-	s := "ahci:" + common.Stats2String(*p)
+	s := "ahci:" + stats.Stats2String(*p)
 	*p = ahci_port_stat_t{}
 	return s
 }
@@ -951,7 +954,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	p.cond_flush = sync.NewCond(p)
 	p.cond_queued = sync.NewCond(p)
 	a := ahci.bara + 0x100 + 0x80*pid
-	m := common.Dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
+	m := mem.Dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
 	if p.init() {
 		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)

@@ -1,4 +1,4 @@
-package vm
+package common
 
 import "unsafe"
 import "fmt"
@@ -9,14 +9,12 @@ import "runtime"
 import "defs"
 import "mem"
 
-var _vdirect = uintptr(VDIRECT << 39)
-
 func _instpg(pg *mem.Pmap_t, idx uint, perms mem.Pa_t) (mem.Pa_t, bool) {
-	_, p_np, ok := Physmem.Refpg_new()
+	_, p_np, ok := mem.Physmem.Refpg_new()
 	if !ok {
 		return 0, false
 	}
-	Physmem.Refup(p_np)
+	mem.Physmem.Refup(p_np)
 	npte := p_np | perms | PTE_P
 	pg[idx] = npte
 	return npte, true
@@ -30,7 +28,7 @@ func pmap_pgtbl(pml4 *mem.Pmap_t, v int, create bool, perms mem.Pa_t) (*mem.Pmap
 	pdpb := (vn >> (12 + 9*2)) & 0x1ff
 	pdb := (vn >> (12 + 9*1)) & 0x1ff
 	ptb := (vn >> (12 + 9*0)) & 0x1ff
-	if l4b >= uint(VREC) && l4b <= uint(VEND) {
+	if l4b >= uint(mem.VREC) && l4b <= uint(mem.VEND) {
 		panic(fmt.Sprintf("map in special slots: %#x", l4b))
 	}
 
@@ -43,7 +41,7 @@ func pmap_pgtbl(pml4 *mem.Pmap_t, v int, create bool, perms mem.Pa_t) (*mem.Pmap
 			panic("insert mapping into PS page")
 		}
 		phys := uintptr(pe & PTE_ADDR)
-		return (*mem.Pmap_t)(unsafe.Pointer(_vdirect + phys))
+		return (*mem.Pmap_t)(unsafe.Pointer(mem.Vdirect + phys))
 	}
 
 	var ok bool
@@ -96,7 +94,7 @@ func pmap_walk(pml4 *mem.Pmap_t, v int, perms mem.Pa_t) (*mem.Pa_t, defs.Err_t) 
 	ret := _pmap_walk(pml4, v, true, perms)
 	if ret == nil {
 		// create was set; failed to allocate a page
-		return nil, -ENOMEM
+		return nil, -defs.ENOMEM
 	}
 	return ret, 0
 }
@@ -129,7 +127,7 @@ func pmfree(pml4 *mem.Pmap_t, start, end uintptr, fops mem.Unpin_i) {
 				if fops != nil {
 					fops.Unpin(pa)
 				}
-				Physmem.Refdown(pa)
+				mem.Physmem.Refdown(pa)
 				tofree[idx] = 0
 			}
 		}
@@ -160,7 +158,7 @@ func ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
 		}
 		ps := pptb[slot:]
 		cs := cptb[slot:]
-		left := (end - i) / PGSIZE
+		left := (end - i) / mem.PGSIZE
 		if left < len(ps) {
 			ps = ps[:left]
 			cs = cs[:left]
@@ -183,9 +181,9 @@ func ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
 			if pte&PTE_U == 0 {
 				panic("huh?")
 			}
-			Physmem.Refup(phys)
+			mem.Physmem.Refup(phys)
 		}
-		i += len(ps) * PGSIZE
+		i += len(ps) * mem.PGSIZE
 
 	}
 	return doflush, true
@@ -206,7 +204,7 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	runtime.Tlbshoot.P_pmap = p_pmap
 
 	lapaddr := 0xfee00000
-	lap := (*[PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 	ipilow := func(ds int, deliv int, vec int) uint32 {
 		return uint32(ds<<18 | 1<<14 | deliv<<8 | vec)
 	}
@@ -232,5 +230,35 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	// shouldn't spin in this loop for very long. this loop does not
 	// contain a stack check and thus cannot be preempted by the runtime.
 	for atomic.LoadInt64(&runtime.Tlbshoot.Waitfor) != 0 {
+	}
+}
+
+var kplock = sync.Mutex{}
+
+// allocates a page tracked by kpages and maps it at va. only used during AP
+// bootup.
+// XXX remove this crap
+func Kmalloc(va uintptr, perms mem.Pa_t) {
+	kplock.Lock()
+	defer kplock.Unlock()
+	_, p_pg, ok := mem.Physmem.Refpg_new()
+	if !ok {
+		panic("oom in init?")
+	}
+	mem.Physmem.Refup(p_pg)
+	pte, err := pmap_walk(mem.Kpmap(), int(va), perms)
+	if err != 0 {
+		panic("oom during AP init")
+	}
+	if pte != nil && *pte&PTE_P != 0 {
+		panic(fmt.Sprintf("page already mapped %#x", va))
+	}
+	*pte = p_pg | PTE_P | perms
+}
+
+func Assert_no_va_map(pmap *mem.Pmap_t, va uintptr) {
+	pte := Pmap_lookup(pmap, int(va))
+	if pte != nil && *pte&PTE_P != 0 {
+		panic(fmt.Sprintf("va %#x is mapped", va))
 	}
 }

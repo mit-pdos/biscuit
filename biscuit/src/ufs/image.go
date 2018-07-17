@@ -3,9 +3,10 @@ package ufs
 import "os"
 import "fmt"
 
-import "common"
 import "fs"
+import "mem"
 import "ustr"
+import "util"
 
 // Disk image layout:
 // optional:
@@ -25,7 +26,7 @@ const (
 	nbitsperblock = fs.BSIZE * 8
 )
 
-func bytepg2byte(d *common.Bytepg_t) []byte {
+func bytepg2byte(d *mem.Bytepg_t) []byte {
 	b := make([]byte, len(d))
 	for i := 0; i < len(d); i++ {
 		b[i] = d[i]
@@ -46,8 +47,8 @@ func mkBlock() []byte {
 }
 
 func writeBootBlock(f *os.File, superb int) {
-	d := &common.Bytepg_t{}
-	common.Writen(d[:], 4, fs.FSOFF, superb)
+	d := &mem.Bytepg_t{}
+	util.Writen(d[:], 4, fs.FSOFF, superb)
 	f.Write(bytepg2byte(d))
 }
 
@@ -55,7 +56,7 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 	if Tell(f) != start {
 		panic("superblock in wrong location")
 	}
-	d := &common.Bytepg_t{}
+	d := &mem.Bytepg_t{}
 	sb := fs.Superblock_t{d}
 	sb.SetLoglen(nlogblks)
 	ninode := ninodeblks * (fs.BSIZE / fs.ISIZE)
@@ -154,7 +155,7 @@ func writeBlockMap(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 
 func writeInodes(f *os.File, sb *fs.Superblock_t) {
 	b := fs.MkBlock(0, "", nil, nil, nil)
-	b.Data = &common.Bytepg_t{}
+	b.Data = &mem.Bytepg_t{}
 	root := fs.Inode_t{b, 0}
 
 	firstdata := sb.Freeblock() + sb.Freeblocklen() + sb.Inodelen()
@@ -178,7 +179,7 @@ func writeInodes(f *os.File, sb *fs.Superblock_t) {
 
 func writeDataBlocks(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 	// Root directory data
-	data := &common.Bytepg_t{}
+	data := &mem.Bytepg_t{}
 	ddata := fs.Dirdata_t{data[:]}
 	ddata.W_filename(0, ustr.Ustr("."))
 	ddata.W_inodenext(0, 0)
@@ -231,7 +232,7 @@ func pad(f *os.File) {
 		panic(err)
 	}
 
-	n := common.Roundup(int(o), fs.BSIZE)
+	n := util.Roundup(int(o), fs.BSIZE)
 	n = n - int(o)
 	b := make([]byte, fs.BSIZE)
 	_, err = f.Write(b)
@@ -255,7 +256,7 @@ func pokeboot(f *os.File, start int) {
 		panic("short read")
 	}
 
-	common.Writen(b[:], 4, fs.FSOFF, start)
+	util.Writen(b[:], 4, fs.FSOFF, start)
 
 	// Replace boot block with b
 	_, err = f.Seek(0, 0)

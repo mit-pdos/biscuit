@@ -4,8 +4,8 @@ import "os"
 import "encoding/json"
 import "fmt"
 
-import "common"
 import "fs"
+import "mem"
 
 //
 //  trace file of writes and syncs
@@ -104,7 +104,7 @@ func (trace trace_t) permTrace(index int, o order_t) trace_t {
 	return new
 }
 
-func (t *tracef_t) write(n int, v *common.Bytepg_t) {
+func (t *tracef_t) write(n int, v *mem.Bytepg_t) {
 	r := record_t{}
 	r.BlkNo = n
 	r.Cmd = "write"

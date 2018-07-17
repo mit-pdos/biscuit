@@ -6,6 +6,7 @@ import "sync"
 import "runtime"
 
 import "defs"
+import "limits"
 import "mem"
 
 const bdev_debug = false
@@ -42,9 +43,9 @@ type bcache_t struct {
 	pins map[mem.Pa_t]*Bdev_block_t
 }
 
-func mkBcache(mem Blockmem_i, disk Disk_i) *bcache_t {
+func mkBcache(m Blockmem_i, disk Disk_i) *bcache_t {
 	bcache := &bcache_t{}
-	bcache.mem = mem
+	bcache.mem = m
 	bcache.disk = disk
 	bcache.cache = mkCache(limits.Syslimit.Blocks)
 	bcache.pins = make(map[mem.Pa_t]*Bdev_block_t)
@@ -330,7 +331,7 @@ func (balloc *bbitmap_t) Balloc(opid opid_t) (int, defs.Err_t) {
 	}
 	if ret >= balloc.fs.superb.Lastblock() {
 		fmt.Printf("blkn %v last %v\n", ret, balloc.fs.superb.Lastblock())
-		return 0, -common.ENOMEM
+		return 0, -defs.ENOMEM
 	}
 	blk := balloc.fs.bcache.Get_zero(ret, "balloc", true)
 	if bdev_debug {

@@ -1,9 +1,11 @@
-package userbuf
+package common
 
 import "fmt"
 
+//import "common"
 import "defs"
-import "proc"
+
+// import "proc"
 
 // interface for reading/writing from user space memory either via a pointer
 // and length or an array of pointers and lengths (iovec)
@@ -71,7 +73,7 @@ func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, defs.Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
 		if !Resadd_noblock(Bounds(B_USERBUF_T__TX)) {
-			return ret, -ENOHEAP
+			return ret, -defs.ENOHEAP
 		}
 		va := ub.userva + ub.off
 		ubuf, err := ub.proc.Userdmap8_inner(va, write)
@@ -110,7 +112,7 @@ type Useriovec_t struct {
 func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) defs.Err_t {
 	if niovs > 10 {
 		fmt.Printf("many iovecs\n")
-		return -EINVAL
+		return -defs.EINVAL
 	}
 	iov.tsz = 0
 	iov.iovs = make([]_iove_t, niovs)
@@ -121,7 +123,7 @@ func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) defs.Err_
 	for i := range iov.iovs {
 		gimme := Bounds(B_USERIOVEC_T_IOV_INIT)
 		if !Resadd_noblock(gimme) {
-			return -ENOHEAP
+			return -defs.ENOHEAP
 		}
 		elmsz := uint(16)
 		va := iovarn + uint(i)*elmsz
@@ -157,7 +159,7 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, defs.Err_t) {
 	did := 0
 	for len(buf) > 0 && len(iov.iovs) > 0 {
 		if !Resadd_noblock(Bounds(B_USERIOVEC_T__TX)) {
-			return did, -ENOHEAP
+			return did, -defs.ENOHEAP
 		}
 		ciov := &iov.iovs[0]
 		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)

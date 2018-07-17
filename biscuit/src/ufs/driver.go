@@ -4,7 +4,9 @@ import "os"
 import "sync"
 
 import "common"
+import "defs"
 import "fs"
+import "mem"
 
 //
 // The "driver"
@@ -43,7 +45,7 @@ func (ahci *ahci_disk_t) Start(req *fs.Bdev_req_t) bool {
 		if n != fs.BSIZE || err != nil {
 			panic(err)
 		}
-		blk.Data = &common.Bytepg_t{}
+		blk.Data = &mem.Bytepg_t{}
 		for i, _ := range b {
 			blk.Data[i] = uint8(b[i])
 		}
@@ -96,15 +98,15 @@ type blockmem_t struct {
 
 var blockmem = &blockmem_t{}
 
-func (bm *blockmem_t) Alloc() (common.Pa_t, *common.Bytepg_t, bool) {
-	d := &common.Bytepg_t{}
-	return common.Pa_t(0), d, true
+func (bm *blockmem_t) Alloc() (mem.Pa_t, *mem.Bytepg_t, bool) {
+	d := &mem.Bytepg_t{}
+	return mem.Pa_t(0), d, true
 }
 
-func (bm *blockmem_t) Free(pa common.Pa_t) {
+func (bm *blockmem_t) Free(pa mem.Pa_t) {
 }
 
-func (bm *blockmem_t) Refup(pa common.Pa_t) {
+func (bm *blockmem_t) Refup(pa mem.Pa_t) {
 }
 
 type console_t struct {
@@ -112,10 +114,10 @@ type console_t struct {
 
 var c console_t
 
-func (c console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
+func (c console_t) Cons_read(ub common.Userio_i, offset int) (int, defs.Err_t) {
 	return -1, 0
 }
 
-func (c console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) {
+func (c console_t) Cons_write(src common.Userio_i, off int) (int, defs.Err_t) {
 	return 0, 0
 }

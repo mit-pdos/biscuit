@@ -10,13 +10,17 @@ import "sync"
 import "time"
 import "unsafe"
 
+import "common"
+import "defs"
+import "mem"
 import "fs"
+import "stat"
 import "ustr"
 
 //import "sort"
 
 const (
-	IRQ_LAST = common.INT_MSI7
+	IRQ_LAST = defs.INT_MSI7
 )
 
 var bsp_apic_id int
@@ -41,7 +45,7 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 	trapno := tf[common.TF_TRAP]
 
 	// only IRQs come through here now
-	if trapno <= common.TIMER || trapno > IRQ_LAST {
+	if trapno <= defs.TIMER || trapno > IRQ_LAST {
 		runtime.Pnum(0x1001)
 		for {
 		}
@@ -50,7 +54,7 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 	nirqs[trapno]++
 	irqs++
 	switch trapno {
-	case common.INT_KBD, common.INT_COM1:
+	case defs.INT_KBD, defs.INT_COM1:
 		runtime.IRQwake(uint(trapno))
 		// we need to mask the interrupt on the IOAPIC since my
 		// hardware's LAPIC automatically send EOIs to IOAPICS when the
@@ -64,10 +68,10 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 		// EOI to the LAPIC (otherwise the CPU will probably receive
 		// another interrupt from the same IRQ). the LAPIC EOI happens
 		// in the runtime...
-		irqno := int(trapno - common.IRQ_BASE)
+		irqno := int(trapno - defs.IRQ_BASE)
 		apic.irq_mask(irqno)
-	case common.INT_MSI0, common.INT_MSI1, common.INT_MSI2, common.INT_MSI3,
-		common.INT_MSI4, common.INT_MSI5, common.INT_MSI6, common.INT_MSI7:
+	case defs.INT_MSI0, defs.INT_MSI1, defs.INT_MSI2, defs.INT_MSI3,
+		defs.INT_MSI4, defs.INT_MSI5, defs.INT_MSI6, defs.INT_MSI7:
 		// MSI dispatch doesn't use the IO APIC, thus no need for
 		// irq_mask
 		runtime.IRQwake(uint(trapno))
@@ -119,7 +123,7 @@ type dev_t struct {
 	minor int
 }
 
-var dummyfops = &fs.Devfops_t{Maj: common.D_CONSOLE, Min: 0}
+var dummyfops = &fs.Devfops_t{Maj: defs.D_CONSOLE, Min: 0}
 
 // special fds
 var fd_stdin = common.Fd_t{Fops: dummyfops, Perms: common.FD_READ}
@@ -131,11 +135,11 @@ var fd_stderr = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
 type _nilbuf_t struct {
 }
 
-func (nb *_nilbuf_t) Uiowrite(src []uint8) (int, common.Err_t) {
+func (nb *_nilbuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 	return 0, 0
 }
 
-func (nb *_nilbuf_t) Uioread(dst []uint8) (int, common.Err_t) {
+func (nb *_nilbuf_t) Uioread(dst []uint8) (int, defs.Err_t) {
 	return 0, 0
 }
 
@@ -157,13 +161,13 @@ type circbuf_t struct {
 	// XXX uint
 	head int
 	tail int
-	p_pg common.Pa_t
+	p_pg mem.Pa_t
 }
 
 // may fail to allocate a page for the buffer. when cb's life is over, someone
 // must free the buffer page by calling cb_release().
-func (cb *circbuf_t) cb_init(sz int) common.Err_t {
-	bufmax := int(common.PGSIZE)
+func (cb *circbuf_t) cb_init(sz int) defs.Err_t {
+	bufmax := int(mem.PGSIZE)
 	if sz <= 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
@@ -177,7 +181,7 @@ func (cb *circbuf_t) cb_init(sz int) common.Err_t {
 
 // provide the page for the buffer explicitly; useful for guaranteeing that
 // read/writes won't fail to allocate memory.
-func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg common.Pa_t) {
+func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg mem.Pa_t) {
 	physmem.Refup(p_pg)
 	cb.p_pg = p_pg
 	cb.buf = v
@@ -195,7 +199,7 @@ func (cb *circbuf_t) cb_release() {
 	cb.head, cb.tail = 0, 0
 }
 
-func (cb *circbuf_t) cb_ensure() common.Err_t {
+func (cb *circbuf_t) cb_ensure() defs.Err_t {
 	if cb.buf != nil {
 		return 0
 	}
@@ -204,9 +208,9 @@ func (cb *circbuf_t) cb_ensure() common.Err_t {
 	}
 	pg, p_pg, ok := physmem.Refpg_new_nozero()
 	if !ok {
-		return -common.ENOMEM
+		return -defs.ENOMEM
 	}
-	bpg := common.Pg2bytes(pg)[:]
+	bpg := mem.Pg2bytes(pg)[:]
 	bpg = bpg[:cb.bufsz]
 	cb.cb_init_phys(bpg, p_pg)
 	return 0
@@ -231,7 +235,7 @@ func (cb *circbuf_t) used() int {
 	return used
 }
 
-func (cb *circbuf_t) copyin(src common.Userio_i) (int, common.Err_t) {
+func (cb *circbuf_t) copyin(src common.Userio_i) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -269,11 +273,11 @@ func (cb *circbuf_t) copyin(src common.Userio_i) (int, common.Err_t) {
 	return c, 0
 }
 
-func (cb *circbuf_t) copyout(dst common.Userio_i) (int, common.Err_t) {
+func (cb *circbuf_t) copyout(dst common.Userio_i) (int, defs.Err_t) {
 	return cb.copyout_n(dst, 0)
 }
 
-func (cb *circbuf_t) copyout_n(dst common.Userio_i, max int) (int, common.Err_t) {
+func (cb *circbuf_t) copyout_n(dst common.Userio_i, max int) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -453,12 +457,12 @@ func cpus_stack_init(apcnt int, stackstart uintptr) {
 		// allocate/map interrupt stack
 		common.Kmalloc(stackstart, common.PTE_W)
 		stackstart += common.PGSIZEW
-		common.Assert_no_va_map(common.Kpmap(), stackstart)
+		common.Assert_no_va_map(mem.Kpmap(), stackstart)
 		stackstart += common.PGSIZEW
 		// allocate/map NMI stack
 		common.Kmalloc(stackstart, common.PTE_W)
 		stackstart += common.PGSIZEW
-		common.Assert_no_va_map(common.Kpmap(), stackstart)
+		common.Assert_no_va_map(mem.Kpmap(), stackstart)
 		stackstart += common.PGSIZEW
 	}
 }
@@ -479,15 +483,15 @@ func cpus_start(ncpu, aplim int) {
 
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
-	mpaddr := common.Pa_t(0x8000)
+	mpaddr := mem.Pa_t(0x8000)
 	mpcode := allbins["src/kernel/mpentry.bin"].data
-	c := common.Pa_t(0)
-	mpl := common.Pa_t(len(mpcode))
+	c := mem.Pa_t(0)
+	mpl := mem.Pa_t(len(mpcode))
 	for c < mpl {
 		mppg := physmem.Dmap8(mpaddr + c)
 		did := copy(mppg, mpcode)
 		mpcode = mpcode[did:]
-		c += common.Pa_t(did)
+		c += mem.Pa_t(did)
 	}
 
 	// skip mucking with CMOS reset code/warm reset vector (as per the the
@@ -499,11 +503,11 @@ func cpus_start(ncpu, aplim int) {
 	// appears someone already used a STARTUP IPI; probably the BIOS).
 
 	lapaddr := 0xfee00000
-	pte := common.Pmap_lookup(common.Kpmap(), lapaddr)
-	if pte == nil || *pte&common.PTE_P == 0 || *pte&common.PTE_PCD == 0 {
+	pte := common.Pmap_lookup(mem.Kpmap(), lapaddr)
+	if pte == nil || *pte&mem.PTE_P == 0 || *pte&mem.PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}
-	lap := (*[common.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 	icrh := 0x310 / 4
 	icrl := 0x300 / 4
 
@@ -588,8 +592,8 @@ func cpus_start(ncpu, aplim int) {
 	// 	NMI stack	[0xa100002000, 0xa100003000)
 	// 	guard page	[0xa100003000, 0xa100004000)
 	// for each AP:
-	// 	int stack	BSP's + apnum*4*common.PGSIZE + 0*common.PGSIZE
-	// 	NMI stack	BSP's + apnum*4*common.PGSIZE + 2*common.PGSIZE
+	// 	int stack	BSP's + apnum*4*mem.PGSIZE + 0*mem.PGSIZE
+	// 	NMI stack	BSP's + apnum*4*mem.PGSIZE + 2*mem.PGSIZE
 	stackstart := uintptr(0xa100004000)
 	// each ap grabs a unique stack
 	atomic.StoreUintptr(&ss[sstacks], stackstart)
@@ -683,8 +687,8 @@ func kbd_init() {
 	cons.pollc = make(chan common.Pollmsg_t)
 	cons.pollret = make(chan common.Ready_t)
 	go kbd_daemon(&cons, km)
-	irq_unmask(common.IRQ_KBD)
-	irq_unmask(common.IRQ_COM1)
+	irq_unmask(defs.IRQ_KBD)
+	irq_unmask(defs.IRQ_COM1)
 
 	// make sure kbd int and com1 int are clear
 	for _kready() {
@@ -694,8 +698,8 @@ func kbd_init() {
 		runtime.Inb(0x3f8)
 	}
 
-	go trap_cons(common.INT_KBD, cons.kbd_int)
-	go trap_cons(common.INT_COM1, cons.com_int)
+	go trap_cons(defs.INT_KBD, cons.kbd_int)
+	go trap_cons(defs.INT_COM1, cons.com_int)
 }
 
 type cons_t struct {
@@ -876,7 +880,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 					addprint(c)
 				}
 			}
-			irq_eoi(common.IRQ_KBD)
+			irq_eoi(defs.IRQ_KBD)
 		case <-cons.com_int:
 			for _comready() {
 				com1data := uint16(0x3f8 + 0)
@@ -890,7 +894,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				}
 				addprint(c)
 			}
-			irq_eoi(common.IRQ_COM1)
+			irq_eoi(defs.IRQ_COM1)
 		case l := <-reqc:
 			if l > len(data) {
 				l = len(data)
@@ -923,7 +927,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 
 // reads keyboard data, blocking for at least 1 byte or until killed. returns
 // at most cnt bytes.
-func kbd_get(cnt int) ([]byte, common.Err_t) {
+func kbd_get(cnt int) ([]byte, defs.Err_t) {
 	if cnt < 0 {
 		panic("negative cnt")
 	}
@@ -1171,7 +1175,7 @@ func (ip *intelprof_t) _enableall() {
 
 func (ip *intelprof_t) _perfmaskipi() {
 	lapaddr := 0xfee00000
-	lap := (*[common.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 
 	allandself := 2
 	trap_perfmask := 72
@@ -1423,16 +1427,16 @@ func _fakefail() bool {
 }
 
 func structchk() {
-	if unsafe.Sizeof(common.Stat_t{}) != 9*8 {
+	if unsafe.Sizeof(stat.Stat_t{}) != 9*8 {
 		panic("bad stat_t size")
 	}
 }
 
 var lhits int
-var physmem *common.Physmem_t
+var physmem *mem.Physmem_t
 var thefs *fs.Fs_t
 
-const diskfs = true
+const diskfs = false
 
 func main() {
 	common.Kernel = true
@@ -1443,7 +1447,7 @@ func main() {
 	//	}
 	//}
 	bsp_apic_id = lap_id()
-	physmem = common.Phys_init()
+	physmem = mem.Phys_init()
 
 	go func() {
 		<-time.After(10 * time.Second)
@@ -1470,7 +1474,7 @@ func main() {
 	cpuchk()
 	net_init()
 
-	common.Dmap_init()
+	mem.Dmap_init()
 	perfsetup()
 
 	// must come before any irq_unmask()s
@@ -1530,7 +1534,7 @@ func main() {
 }
 
 func findbm() {
-	common.Dmap_init()
+	mem.Dmap_init()
 	//n := incn()
 	//var aplim int
 	//if n == 0 {

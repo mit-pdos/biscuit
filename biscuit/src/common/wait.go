@@ -1,4 +1,4 @@
-package proc
+package common
 
 import "sync"
 

@@ -4,16 +4,20 @@ import "fmt"
 import "sync"
 
 import "bpath"
+import "common"
 import "defs"
-import "fd"
-import "syscall"
+import "limits"
+import "mem"
+import "stat"
+import "stats"
 import "ustr"
+import "util"
 
 const fs_debug = false
 const FSOFF = 506
 const iroot = defs.Inum_t(0)
 
-var cons syscall.Cons_i
+var cons common.Cons_i
 
 type Fs_t struct {
 	ahci         Disk_i
@@ -29,12 +33,12 @@ type Fs_t struct {
 	diskfs       bool // disk or in-mem file system?
 }
 
-func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*fd.Fd_t, *Fs_t) {
+func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*common.Fd_t, *Fs_t) {
 
 	cons = console
 
 	// reset taken
-	common.Syslimit = common.MkSysLimit()
+	limits.Syslimit = limits.MkSysLimit()
 
 	fs := &Fs_t{}
 	fs.diskfs = diskfs
@@ -49,7 +53,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*
 	// find the first fs block; the build system installs it in block 0 for
 	// us
 	b := fs.bcache.Get_fill(0, "fsoff", false)
-	fs.superb_start = common.Readn(b.Data[:], 4, FSOFF)
+	fs.superb_start = util.Readn(b.Data[:], 4, FSOFF)
 	//fmt.Printf("fs.superb_start %v\n", fs.superb_start)
 	if fs.superb_start <= 0 {
 		panic("bad superblock start")
@@ -95,7 +99,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*
 
 	fs.root = fs.icache.Iref(iroot, "fs_namei_root")
 
-	return &fd.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
+	return &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
 
 func (fs *Fs_t) Sizes() (int, int) {
@@ -117,16 +121,16 @@ func (fs *Fs_t) IrefRoot() *imemnode_t {
 }
 
 func (fs *Fs_t) MkRootCwd() *common.Cwd_t {
-	fd := &fd.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 0}}
+	fd := &common.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 0}}
 	cwd := common.MkRootCwd(fd)
 	return cwd
 }
 
-func (fs *Fs_t) Unpin(pa common.Pa_t) {
+func (fs *Fs_t) Unpin(pa mem.Pa_t) {
 	fs.bcache.unpin(pa)
 }
 
-func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) (*imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("Fs_link")
 	defer fs.fslog.Op_end(opid)
 
@@ -143,7 +147,7 @@ func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) (*im
 	}
 	if orig.itype != I_FILE {
 		orig.iunlock_refdown("fs_link")
-		return dead, -common.EINVAL
+		return dead, -defs.EINVAL
 	}
 	inum := orig.inum
 	orig._linkup(opid)
@@ -171,7 +175,7 @@ undo:
 	return dead, err
 }
 
-func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) defs.Err_t {
 	dead, err := fs.Fs_op_link(old, new, cwd)
 	if dead != nil {
 		dead.Free()
@@ -179,13 +183,13 @@ func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *common.Cwd_t) common.
 	return err
 }
 
-func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) (*imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("fs_unlink")
 	defer fs.fslog.Op_end(opid)
 
 	dirs, fn := bpath.Sdirname(paths)
 	if fn.Isdot() || fn.Isdotdot() {
-		return nil, -common.EPERM
+		return nil, -defs.EPERM
 	}
 
 	fs.istats.Nunlink.Inc()
@@ -197,7 +201,7 @@ func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) (
 	var dead *imemnode_t
 	var child *imemnode_t
 	var par *imemnode_t
-	var err common.Err_t
+	var err defs.Err_t
 
 	par, err = fs.fs_namei_locked(opid, dirs, cwd, "fs_unlink_par")
 	if err != 0 {
@@ -228,7 +232,7 @@ func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) (
 		if err != 0 {
 			return dead, err
 		} else {
-			return dead, -common.ENOENT
+			return dead, -defs.ENOENT
 		}
 
 	}
@@ -260,7 +264,7 @@ func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) (
 	return dead, 0
 }
 
-func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) common.Err_t {
+func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) defs.Err_t {
 	dead, err := fs.Fs_op_unlink(paths, cwd, wantdir)
 	if dead != nil {
 		dead.Free()
@@ -271,15 +275,15 @@ func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *common.Cwd_t, wantdir bool) comm
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemnode_t, common.Err_t) {
+func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemnode_t, defs.Err_t) {
 	odirs, ofn := bpath.Sdirname(oldp)
 	ndirs, nfn := bpath.Sdirname(newp)
 	var refs []*imemnode_t
 
-	if err, ok := crname(ofn, -common.EINVAL); !ok {
+	if err, ok := crname(ofn, -defs.EINVAL); !ok {
 		return refs, err
 	}
-	if err, ok := crname(nfn, -common.EINVAL); !ok {
+	if err, ok := crname(nfn, -defs.EINVAL); !ok {
 		return refs, err
 	}
 
@@ -341,11 +345,11 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemno
 		if !common.Resadd_noblock(gimme) {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
-			return refs, -common.ENOHEAP
+			return refs, -defs.ENOHEAP
 		}
 		npar.ilock("")
 		nchild, err = npar.ilookup(opid, nfn)
-		if err != 0 && err != -common.ENOENT {
+		if err != 0 && err != -defs.ENOENT {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
 			npar.iunlock_refdown("fs_name_npar")
@@ -374,14 +378,14 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemno
 			return refs, err
 		}
 		if !ok {
-			return refs, -common.ENOENT
+			return refs, -defs.ENOENT
 		}
 		if nchild == nil {
 			childi, err := npar.ilookup(opid, nfn)
 			if err == 0 {
 				childi.Refdown("rename")
 			}
-			if err == -common.ENOENT {
+			if err == -defs.ENOENT {
 				// it didn't exist before and still doesn't exist
 				break
 			}
@@ -391,7 +395,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemno
 				// it existed before and still exists
 				break
 			}
-			if err == -common.ENOENT {
+			if err == -defs.ENOENT {
 				// it existed but now it doesn't.
 				break
 			}
@@ -476,7 +480,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemno
 	return refs, 0
 }
 
-func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) defs.Err_t {
 	refs, err := fs.Fs_op_rename(oldp, newp, cwd)
 	for _, r := range refs {
 		del := r.Refdown("Fs_rename")
@@ -489,7 +493,7 @@ func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) common.Err_t 
 }
 
 // anc and start are in memory
-func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
+func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) defs.Err_t {
 	if anc.inum == iroot {
 		panic("root is always ancestor")
 	}
@@ -499,11 +503,11 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) common.Err_t {
 	gimme := common.Bounds(common.B_FS_T__ISANCESTOR)
 	for here != fs.root {
 		if !common.Resadd_noblock(gimme) {
-			return -common.ENOHEAP
+			return -defs.ENOHEAP
 		}
 		if anc.inum == here.inum {
 			here.Refdown("_isancestor_here")
-			return -common.EINVAL
+			return -defs.EINVAL
 		}
 		here.ilock("_isancestor")
 		next, err := here.ilookup(opid, ustr.MkUstrDotDot())
@@ -534,14 +538,14 @@ type fsfops_t struct {
 	//hack	*imemnode_t
 }
 
-func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
+func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, defs.Err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	//defer fo.Unlock()
 
 	if fo.count <= 0 {
 		fo.Unlock()
-		return 0, -common.EBADF
+		return 0, -defs.EBADF
 	}
 
 	useoffset := toff != -1
@@ -563,21 +567,21 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, common.Err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
+func (fo *fsfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
 	return fo._read(dst, -1)
 }
 
-func (fo *fsfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
+func (fo *fsfops_t) Pread(dst common.Userio_i, offset int) (int, defs.Err_t) {
 	return fo._read(dst, offset)
 }
 
-func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
+func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, defs.Err_t) {
 	// lock the file to prevent races on offset and closing
 	fo.Lock()
 	defer fo.Unlock()
 
 	if fo.count <= 0 {
-		return 0, -common.EBADF
+		return 0, -defs.EBADF
 	}
 
 	useoffset := toff != -1
@@ -600,19 +604,19 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, common.Err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
-	t := common.Rdtsc()
+func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
+	t := stats.Rdtsc()
 	r, e := fo._write(src, -1)
 	fo.fs.istats.CWrite.Add(t)
 	return r, e
 }
 
 // XXX doesn't free blocks when shrinking file
-func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
+func (fo *fsfops_t) Truncate(newlen uint) defs.Err_t {
 	fo.Lock()
 	defer fo.Unlock()
 	if fo.count <= 0 {
-		return -common.EBADF
+		return -defs.EBADF
 	}
 
 	opid := fo.fs.fslog.Op_begin("truncate")
@@ -628,12 +632,12 @@ func (fo *fsfops_t) Truncate(newlen uint) common.Err_t {
 	return err
 }
 
-func (fo *fsfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
+func (fo *fsfops_t) Pwrite(src common.Userio_i, offset int) (int, defs.Err_t) {
 	return fo._write(src, offset)
 }
 
 // caller holds fo lock
-func (fo *fsfops_t) fstat(st *common.Stat_t) common.Err_t {
+func (fo *fsfops_t) fstat(st *stat.Stat_t) defs.Err_t {
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", fo.priv, st)
 	}
@@ -643,11 +647,11 @@ func (fo *fsfops_t) fstat(st *common.Stat_t) common.Err_t {
 	return err
 }
 
-func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
+func (fo *fsfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	fo.Lock()
 	defer fo.Unlock()
 	if fo.count <= 0 {
-		return -common.EBADF
+		return -defs.EBADF
 	}
 	return fo.fstat(st)
 }
@@ -655,12 +659,12 @@ func (fo *fsfops_t) Fstat(st *common.Stat_t) common.Err_t {
 // XXX log those files that have no fs links but > 0 memory references to the
 // journal so that if we crash before freeing its blocks, the blocks can be
 // reclaimed.
-func (fo *fsfops_t) Close() common.Err_t {
+func (fo *fsfops_t) Close() defs.Err_t {
 	fo.Lock()
 	//defer fo.Unlock()
 	if fo.count <= 0 {
 		fo.Unlock()
-		return -common.EBADF
+		return -defs.EBADF
 	}
 	fo.count--
 	if fo.count <= 0 && fs_debug {
@@ -675,17 +679,17 @@ func (fo *fsfops_t) Pathi() defs.Inum_t {
 	// fo.Lock()
 	// defer fo.Unlock()
 	// if fo.count <= 0 {
-	// 	return -common.EBADF
+	// 	return -defs.EBADF
 	// }
 	return fo.priv
 }
 
-func (fo *fsfops_t) Reopen() common.Err_t {
+func (fo *fsfops_t) Reopen() defs.Err_t {
 	fo.Lock()
 	//defer fo.Unlock()
 	if fo.count <= 0 {
 		fo.Unlock()
-		return -common.EBADF
+		return -defs.EBADF
 	}
 
 	idm := fo.fs.icache.Iref_locked(fo.priv, "reopen")
@@ -697,12 +701,12 @@ func (fo *fsfops_t) Reopen() common.Err_t {
 	return 0
 }
 
-func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
+func (fo *fsfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	// prevent races on fo.offset
 	fo.Lock()
 	defer fo.Unlock()
 	if fo.count <= 0 {
-		return 0, -common.EBADF
+		return 0, -defs.EBADF
 	}
 
 	fo.fs.istats.Nlseek.Inc()
@@ -713,11 +717,11 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 	case common.SEEK_CUR:
 		fo.offset += off
 	case common.SEEK_END:
-		st := &common.Stat_t{}
+		st := &stat.Stat_t{}
 		fo.fstat(st)
 		fo.offset = int(st.Size()) + off
 	default:
-		return 0, -common.EINVAL
+		return 0, -defs.EINVAL
 	}
 	if fo.offset < 0 {
 		fo.offset = 0
@@ -727,12 +731,12 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, common.Err_t) {
 
 // returns the mmapinfo for the pages of the target file. the page cache is
 // populated if necessary.
-func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, common.Err_t) {
+func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]mem.Mmapinfo_t, defs.Err_t) {
 	fo.Lock()
 	//defer fo.Unlock()
 	if fo.count <= 0 {
 		fo.Unlock()
-		return nil, -common.EBADF
+		return nil, -defs.EBADF
 	}
 
 	idm := fo.fs.icache.Iref_locked(fo.priv, "mmapi")
@@ -743,51 +747,51 @@ func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]common.Mmapinfo_t, commo
 	return mmi, err
 }
 
-func (fo *fsfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
-	return nil, 0, -common.ENOTSOCK
+func (fo *fsfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+	return nil, 0, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Bind(*common.Proc_t, []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (fo *fsfops_t) Bind(*common.Proc_t, []uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Connect(proc *common.Proc_t, sabuf []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (fo *fsfops_t) Connect(proc *common.Proc_t, sabuf []uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, common.Err_t) {
-	return nil, -common.ENOTSOCK
+func (fo *fsfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, defs.Err_t) {
+	return nil, -defs.ENOTSOCK
 }
 
 func (fo *fsfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
-	int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+	int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
 func (fo *fsfops_t) Recvmsg(*common.Proc_t, common.Userio_i,
-	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, common.Err_t) {
-	return 0, 0, 0, 0, -common.ENOTSOCK
+	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (fo *fsfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) {
 	return pm.Events & (common.R_READ | common.R_WRITE), 0
 }
 
 func (fo *fsfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
-	return int(-common.ENOSYS)
+	return int(-defs.ENOSYS)
 }
 
 func (fo *fsfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+	intarg int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.ENOTSOCK
+func (fo *fsfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTSOCK
+func (fo *fsfops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
 type Devfops_t struct {
@@ -799,15 +803,15 @@ func (df *Devfops_t) _sane() {
 	// make sure this maj/min pair is handled by Devfops_t. to handle more
 	// devices, we can either do dispatch in Devfops_t or we can return
 	// device-specific common.Fdops_i in fs_open()
-	if df.Maj != common.D_CONSOLE && df.Maj != common.D_DEVNULL &&
-		df.Maj != common.D_STAT && df.Maj != common.D_PROF {
+	if df.Maj != defs.D_CONSOLE && df.Maj != defs.D_DEVNULL &&
+		df.Maj != defs.D_STAT && df.Maj != defs.D_PROF {
 		panic("bad dev")
 	}
 }
 
 var stats_string = ""
 
-func stat_read(ub common.Userio_i, offset int) (int, common.Err_t) {
+func stat_read(ub common.Userio_i, offset int) (int, defs.Err_t) {
 	sz := ub.Remain()
 	s := stats_string
 	if len(s) > sz {
@@ -865,7 +869,7 @@ var Profdev struct {
 	rem   []uint8
 }
 
-func _prof_read(dst common.Userio_i, offset int) (int, common.Err_t) {
+func _prof_read(dst common.Userio_i, offset int) (int, defs.Err_t) {
 	Profdev.Lock()
 	defer Profdev.Unlock()
 
@@ -902,51 +906,51 @@ func _prof_read(dst common.Userio_i, offset int) (int, common.Err_t) {
 	}
 }
 
-func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
+func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
 	df._sane()
-	if df.Maj == common.D_CONSOLE {
+	if df.Maj == defs.D_CONSOLE {
 		return cons.Cons_read(dst, 0)
-	} else if df.Maj == common.D_STAT {
+	} else if df.Maj == defs.D_STAT {
 		return stat_read(dst, 0)
-	} else if df.Maj == common.D_PROF {
+	} else if df.Maj == defs.D_PROF {
 		return _prof_read(dst, 0)
 	} else {
 		return 0, 0
 	}
 }
 
-func (df *Devfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
+func (df *Devfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
 	df._sane()
-	if df.Maj == common.D_CONSOLE {
+	if df.Maj == defs.D_CONSOLE {
 		return cons.Cons_write(src, 0)
 	} else {
 		return src.Totalsz(), 0
 	}
 }
 
-func (df *Devfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (df *Devfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (df *Devfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
+func (df *Devfops_t) Pread(dst common.Userio_i, offset int) (int, defs.Err_t) {
 	df._sane()
-	return 0, -common.ESPIPE
+	return 0, -defs.ESPIPE
 }
 
-func (df *Devfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
+func (df *Devfops_t) Pwrite(src common.Userio_i, offset int) (int, defs.Err_t) {
 	df._sane()
-	return 0, -common.ESPIPE
+	return 0, -defs.ESPIPE
 }
 
-func (df *Devfops_t) Fstat(st *common.Stat_t) common.Err_t {
+func (df *Devfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	df._sane()
-	st.Wmode(common.Mkdev(df.Maj, df.Min))
+	st.Wmode(util.Mkdev(df.Maj, df.Min))
 	return 0
 }
 
-func (df *Devfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
+func (df *Devfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
 	df._sane()
-	return nil, -common.ENODEV
+	return nil, -defs.ENODEV
 }
 
 func (df *Devfops_t) Pathi() defs.Inum_t {
@@ -954,56 +958,56 @@ func (df *Devfops_t) Pathi() defs.Inum_t {
 	panic("bad cwd")
 }
 
-func (df *Devfops_t) Close() common.Err_t {
+func (df *Devfops_t) Close() defs.Err_t {
 	df._sane()
 	return 0
 }
 
-func (df *Devfops_t) Reopen() common.Err_t {
+func (df *Devfops_t) Reopen() defs.Err_t {
 	df._sane()
 	return 0
 }
 
-func (df *Devfops_t) Lseek(int, int) (int, common.Err_t) {
+func (df *Devfops_t) Lseek(int, int) (int, defs.Err_t) {
 	df._sane()
-	return 0, -common.ESPIPE
+	return 0, -defs.ESPIPE
 }
 
-func (df *Devfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
-	return nil, 0, -common.ENOTSOCK
+func (df *Devfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+	return nil, 0, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Bind(*common.Proc_t, []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (df *Devfops_t) Bind(*common.Proc_t, []uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Connect(proc *common.Proc_t, sabuf []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (df *Devfops_t) Connect(proc *common.Proc_t, sabuf []uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, common.Err_t) {
-	return nil, -common.ENOTSOCK
+func (df *Devfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, defs.Err_t) {
+	return nil, -defs.ENOTSOCK
 }
 
 func (df *Devfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
-	int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+	int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
 func (df *Devfops_t) Recvmsg(*common.Proc_t, common.Userio_i,
-	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, common.Err_t) {
-	return 0, 0, 0, 0, -common.ENOTSOCK
+	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (df *Devfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) {
 	switch df.Maj {
-	// case common.D_CONSOLE:
+	// case defs.D_CONSOLE:
 	// 	cons.pollc <- pm
 	// 	return <- cons.pollret, 0
-	case common.D_PROF:
+	case defs.D_PROF:
 		// XXX
 		return pm.Events & common.R_READ, 0
-	case common.D_DEVNULL:
+	case defs.D_DEVNULL:
 		return pm.Events & (common.R_READ | common.R_WRITE), 0
 	default:
 		panic("which dev")
@@ -1011,20 +1015,20 @@ func (df *Devfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t)
 }
 
 func (df *Devfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
-	return int(-common.ENOSYS)
+	return int(-defs.ENOSYS)
 }
 
 func (df *Devfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+	intarg int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.ENOTSOCK
+func (df *Devfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTSOCK
+func (df *Devfops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
 type rawdfops_t struct {
@@ -1034,7 +1038,7 @@ type rawdfops_t struct {
 	fs     *Fs_t
 }
 
-func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
+func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
 	raw.Lock()
 	defer raw.Unlock()
 	var did int
@@ -1054,7 +1058,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.
 	return did, 0
 }
 
-func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
+func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
 	raw.Lock()
 	defer raw.Unlock()
 	var did int
@@ -1081,42 +1085,42 @@ func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common
 	return did, 0
 }
 
-func (raw *rawdfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (raw *rawdfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (raw *rawdfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (raw *rawdfops_t) Pread(dst common.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (raw *rawdfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (raw *rawdfops_t) Pwrite(src common.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (raw *rawdfops_t) Fstat(st *common.Stat_t) common.Err_t {
+func (raw *rawdfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	raw.Lock()
 	defer raw.Unlock()
-	st.Wmode(common.Mkdev(common.D_RAWDISK, raw.minor))
+	st.Wmode(util.Mkdev(defs.D_RAWDISK, raw.minor))
 	return 0
 }
 
-func (raw *rawdfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.ENODEV
+func (raw *rawdfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.ENODEV
 }
 
 func (raw *rawdfops_t) Pathi() defs.Inum_t {
 	panic("bad cwd")
 }
 
-func (raw *rawdfops_t) Close() common.Err_t {
+func (raw *rawdfops_t) Close() defs.Err_t {
 	return 0
 }
 
-func (raw *rawdfops_t) Reopen() common.Err_t {
+func (raw *rawdfops_t) Reopen() defs.Err_t {
 	return 0
 }
 
-func (raw *rawdfops_t) Lseek(off, whence int) (int, common.Err_t) {
+func (raw *rawdfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	raw.Lock()
 	defer raw.Unlock()
 
@@ -1127,7 +1131,7 @@ func (raw *rawdfops_t) Lseek(off, whence int) (int, common.Err_t) {
 		raw.offset += off
 	//case common.SEEK_END:
 	default:
-		return 0, -common.EINVAL
+		return 0, -defs.EINVAL
 	}
 	if raw.offset < 0 {
 		raw.offset = 0
@@ -1135,54 +1139,54 @@ func (raw *rawdfops_t) Lseek(off, whence int) (int, common.Err_t) {
 	return raw.offset, 0
 }
 
-func (raw *rawdfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
-	return nil, 0, -common.ENOTSOCK
+func (raw *rawdfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+	return nil, 0, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Bind(*common.Proc_t, []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (raw *rawdfops_t) Bind(*common.Proc_t, []uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Connect(proc *common.Proc_t, sabuf []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (raw *rawdfops_t) Connect(proc *common.Proc_t, sabuf []uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, common.Err_t) {
-	return nil, -common.ENOTSOCK
+func (raw *rawdfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, defs.Err_t) {
+	return nil, -defs.ENOTSOCK
 }
 
 func (raw *rawdfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
-	int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+	int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
 func (raw *rawdfops_t) Recvmsg(*common.Proc_t, common.Userio_i,
-	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, common.Err_t) {
-	return 0, 0, 0, 0, -common.ENOTSOCK
+	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (raw *rawdfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) {
 	return pm.Events & (common.R_READ | common.R_WRITE), 0
 }
 
 func (raw *rawdfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
-	return int(-common.ENOSYS)
+	return int(-defs.ENOSYS)
 }
 
 func (raw *rawdfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+	intarg int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.ENOTSOCK
+func (raw *rawdfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTSOCK
+func (raw *rawdfops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *common.Cwd_t) defs.Err_t {
 	opid := fs.fslog.Op_begin("fs_mkdir")
 	defer fs.fslog.Op_end(opid)
 
@@ -1193,11 +1197,11 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *common.Cwd_t) common.Er
 	}
 
 	dirs, fn := bpath.Sdirname(paths)
-	if err, ok := crname(fn, -common.EINVAL); !ok {
+	if err, ok := crname(fn, -defs.EINVAL); !ok {
 		return err
 	}
 	if len(fn) > DNAMELEN {
-		return -common.ENAMETOOLONG
+		return -defs.ENAMETOOLONG
 	}
 
 	par, err := fs.fs_namei_locked(opid, dirs, cwd, "mkdir")
@@ -1223,7 +1227,7 @@ type Fsfile_t struct {
 	Minor int
 }
 
-func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (Fsfile_t, common.Err_t) {
+func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
 	trunc := flags&common.O_TRUNC != 0
 	creat := flags&common.O_CREAT != 0
 	nodir := false
@@ -1247,12 +1251,12 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 
 		// must specify at least one path component
 		dirs, fn := bpath.Sdirname(paths)
-		if err, ok := crname(fn, -common.EEXIST); !ok {
+		if err, ok := crname(fn, -defs.EEXIST); !ok {
 			return ret, err
 		}
 
 		if len(fn) > DNAMELEN {
-			return ret, -common.ENAMETOOLONG
+			return ret, -defs.ENAMETOOLONG
 		}
 
 		// with O_CREAT, the file may exist. use itrylock and
@@ -1266,11 +1270,11 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 		} else {
 			idm, err = par.do_createfile(opid, fn)
 		}
-		if err != 0 && err != -common.EEXIST {
+		if err != 0 && err != -defs.EEXIST {
 			par.iunlock_refdown("Fs_open_inner_par")
 			return ret, err
 		}
-		exists := err == -common.EEXIST
+		exists := err == -defs.EEXIST
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
@@ -1278,12 +1282,12 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 		if exists {
 			if oexcl || isdev {
 				idm.iunlock_refdown("Fs_open_inner2")
-				return ret, -common.EEXIST
+				return ret, -defs.EEXIST
 			}
 		}
 	} else {
 		// open existing file
-		var err common.Err_t
+		var err defs.Err_t
 		idm, err = fs.fs_namei_locked(opid, paths, cwd, "Fs_open_inner_existing")
 		if err != 0 {
 			return ret, err
@@ -1304,10 +1308,10 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 	// be opened with O_DIRECTORY
 	if o_dir || nodir {
 		if o_dir && itype != I_DIR {
-			return ret, -common.ENOTDIR
+			return ret, -defs.ENOTDIR
 		}
 		if nodir && itype == I_DIR {
-			return ret, -common.EISDIR
+			return ret, -defs.EISDIR
 		}
 	}
 
@@ -1323,7 +1327,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 	return ret, 0
 }
 
-func (fs *Fs_t) Makefake() *fd.Fd_t {
+func (fs *Fs_t) Makefake() *common.Fd_t {
 	return nil
 	//ret := &fd.Fd_t{}
 	//priv := defs.Inum_t(iroot)
@@ -1339,9 +1343,9 @@ func (fs *Fs_t) Makefake() *fd.Fd_t {
 }
 
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
-var _denyopen = map[int]bool{common.D_SUD: true, common.D_SUS: true}
+var _denyopen = map[int]bool{defs.D_SUD: true, defs.D_SUS: true}
 
-func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (*fd.Fd_t, common.Err_t) {
+func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *common.Cwd_t, major, minor int) (*common.Fd_t, defs.Err_t) {
 	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
@@ -1353,26 +1357,26 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *co
 		if fs.Fs_close(fsf.Inum) != 0 {
 			panic("must succeed")
 		}
-		return nil, -common.EPERM
+		return nil, -defs.EPERM
 	}
 
 	// convert on-disk file to fd with fops
 	priv := fsf.Inum
 	maj := fsf.Major
 	min := fsf.Minor
-	ret := &fd.Fd_t{}
+	ret := &common.Fd_t{}
 	if maj != 0 {
 		// don't need underlying file open
 		if fs.Fs_close(fsf.Inum) != 0 {
 			panic("must succeed")
 		}
 		switch maj {
-		case common.D_CONSOLE, common.D_DEVNULL, common.D_STAT, common.D_PROF:
-			if maj == common.D_STAT {
+		case defs.D_CONSOLE, defs.D_DEVNULL, defs.D_STAT, defs.D_PROF:
+			if maj == defs.D_STAT {
 				stats_string = fs.Fs_statistics()
 			}
 			ret.Fops = &Devfops_t{Maj: maj, Min: min}
-		case common.D_RAWDISK:
+		case defs.D_RAWDISK:
 			ret.Fops = &rawdfops_t{minor: min, fs: fs}
 		default:
 			panic("bad dev")
@@ -1384,7 +1388,7 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *co
 	return ret, 0
 }
 
-func (fs *Fs_t) Fs_close(priv defs.Inum_t) common.Err_t {
+func (fs *Fs_t) Fs_close(priv defs.Inum_t) defs.Err_t {
 	opid := fs.fslog.Op_begin("Fs_close")
 
 	fs.istats.Nclose.Inc()
@@ -1406,7 +1410,7 @@ func (fs *Fs_t) Fs_close(priv defs.Inum_t) common.Err_t {
 	return 0
 }
 
-func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *common.Stat_t, cwd *common.Cwd_t) common.Err_t {
+func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *stat.Stat_t, cwd *common.Cwd_t) defs.Err_t {
 	opid := opid_t(0)
 
 	if fs_debug {
@@ -1423,7 +1427,7 @@ func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *common.Stat_t, cwd *common.Cwd_t) co
 
 // Sync the file system to disk. XXX If Biscuit supported fsync, we could be
 // smarter and flush only the dirty blocks of particular inode.
-func (fs *Fs_t) Fs_sync() common.Err_t {
+func (fs *Fs_t) Fs_sync() defs.Err_t {
 	if !fs.diskfs {
 		return 0
 	}
@@ -1432,7 +1436,7 @@ func (fs *Fs_t) Fs_sync() common.Err_t {
 	return 0
 }
 
-func (fs *Fs_t) Fs_syncapply() common.Err_t {
+func (fs *Fs_t) Fs_syncapply() defs.Err_t {
 	if !fs.diskfs {
 		return 0
 	}
@@ -1442,7 +1446,7 @@ func (fs *Fs_t) Fs_syncapply() common.Err_t {
 }
 
 // if the path resolves successfully, returns target inode
-func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imemnode_t, defs.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
 	if len(paths) == 0 || paths[0] != '/' {
@@ -1451,7 +1455,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imem
 		start = fs.IrefRoot()
 	}
 	idm := start
-	err := common.Err_t(0)
+	err := defs.Err_t(0)
 	pp := bpath.Pathparts_t{}
 	pp.Pp_init(paths)
 	var next ustr.Ustr
@@ -1468,7 +1472,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imem
 			idm.ilock("fs_namei")
 			n, err = idm.ilookup(opid, cp)
 			if !common.Resadd_noblock(common.Bounds(common.B_FS_T_FS_NAMEI)) {
-				err = -common.ENOHEAP
+				err = -defs.ENOHEAP
 			}
 			if err != 0 {
 				idm.iunlock_refdown("fs_namei_ilookup")
@@ -1489,7 +1493,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imem
 	return idm, 0
 }
 
-func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t, s string) (*imemnode_t, common.Err_t) {
+func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t, s string) (*imemnode_t, defs.Err_t) {
 	idm, err := fs.fs_namei(opid, paths, cwd)
 	if err != 0 {
 		return nil, err

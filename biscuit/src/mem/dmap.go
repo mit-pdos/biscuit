@@ -1,32 +1,26 @@
-package vm
-
-import "sync"
+package mem
 
 //import "sync/atomic"
 import "unsafe"
 import "runtime"
 import "fmt"
 
-import "mem"
-
 // lowest userspace address
+
+const VREC int = 0x42
+const VDIRECT int = 0x44
+const VEND int = 0x50
+const VUSER int = 0x59
+
 const USERMIN int = VUSER << 39
 const DMAPLEN int = 1 << 39
 
-var dmapinit bool
-
-type Page_i interface {
-	Refpg_new() (*mem.Pg_t, mem.Pa_t, bool)
-	Refcnt(mem.Pa_t) int
-	Dmap(mem.Pa_t) *mem.Pg_t
-	Refup(mem.Pa_t)
-	Refdown(mem.Pa_t) bool
-}
+var Vdirect = uintptr(VDIRECT << 39)
 
 // l is length of mapping in bytes
-func Dmaplen(p mem.Pa_t, l int) []uint8 {
-	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(_vdirect))
-	return _dmap[p : p+mem.Pa_t(l)]
+func Dmaplen(p Pa_t, l int) []uint8 {
+	_dmap := (*[DMAPLEN]uint8)(unsafe.Pointer(Vdirect))
+	return _dmap[p : p+Pa_t(l)]
 }
 
 // l is length of mapping in bytes. both p and l must be multiples of 4
@@ -34,51 +28,10 @@ func Dmaplen32(p uintptr, l int) []uint32 {
 	if p%4 != 0 || l%4 != 0 {
 		panic("not 32bit aligned")
 	}
-	_dmap := (*[DMAPLEN / 4]uint32)(unsafe.Pointer(_vdirect))
+	_dmap := (*[DMAPLEN / 4]uint32)(unsafe.Pointer(Vdirect))
 	p /= 4
 	l /= 4
 	return _dmap[p : p+uintptr(l)]
-}
-
-func Phys_init() *mem.Physmem_t {
-	// reserve 128MB of pages
-	//respgs := 1 << 15
-	respgs := 1 << 16
-	//respgs := 1 << (31 - 12)
-	// 7.5 GB
-	//respgs := 1835008
-	//respgs := 1 << 18 + (1 <<17)
-	phys := Physmem
-	phys.pgs = make([]Physpg_t, respgs)
-	for i := range phys.pgs {
-		phys.pgs[i].refcnt = -10
-	}
-	first := mem.Pa_t(runtime.Get_phys())
-	fpgn := _pg2pgn(first)
-	phys.startn = fpgn
-	phys.freei = 0
-	phys.pmaps = ^uint32(0)
-	phys.pgs[0].refcnt = 0
-	phys.pgs[0].nexti = ^uint32(0)
-	last := phys.freei
-	for i := 0; i < respgs-1; i++ {
-		p_pg := mem.Pa_t(runtime.Get_phys())
-		pgn := _pg2pgn(p_pg)
-		idx := pgn - phys.startn
-		// Get_phys() may skip regions.
-		if int(idx) >= len(phys.pgs) {
-			if respgs-i > int(float64(respgs)*0.01) {
-				panic("got many bad pages")
-			}
-			break
-		}
-		phys.pgs[idx].refcnt = 0
-		phys.pgs[last].nexti = idx
-		phys.pgs[idx].nexti = ^uint32(0)
-		last = idx
-	}
-	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs>>8)
-	return phys
 }
 
 func shl(c uint) uint {
@@ -118,7 +71,13 @@ func caddr(l4 int, ppd int, pd int, pt int, off int) *int {
 	return (*int)(unsafe.Pointer(uintptr(ret)))
 }
 
+type Kent_t struct {
+	Pml4slot int
+	Entry    Pa_t
+}
+
 var Zerobpg *Bytepg_t
+var P_zeropg Pa_t
 var Kents = make([]Kent_t, 0, 5)
 
 // installs a direct map for 512G of physical memory via the recursive mapping
@@ -140,13 +99,13 @@ func Dmap_init() {
 	}
 
 	_dpte := caddr(VREC, VREC, VREC, VREC, VDIRECT)
-	dpte := (*mem.Pa_t)(unsafe.Pointer(_dpte))
+	dpte := (*Pa_t)(unsafe.Pointer(_dpte))
 	if *dpte&PTE_P != 0 {
 		panic("dmap slot taken")
 	}
 
 	pdpt := new(Pmap_t)
-	ptn := mem.Pa_t(unsafe.Pointer(pdpt))
+	ptn := Pa_t(unsafe.Pointer(pdpt))
 	if ptn&PGOFFSET != 0 {
 		panic("page table not aligned")
 	}
@@ -156,23 +115,23 @@ func Dmap_init() {
 	}
 	kpgadd(pdpt)
 
-	*dpte = mem.Pa_t(p_pdpt) | PTE_P | PTE_W
+	*dpte = Pa_t(p_pdpt) | PTE_P | PTE_W
 
-	size := mem.Pa_t(1 << 30)
+	size := Pa_t(1 << 30)
 
 	// make qemu use 2MB pages, like my hardware, to help expose bugs that
 	// the hardware may encounter.
 	if gbpages {
 		fmt.Printf("dmap via 1GB pages\n")
 		for i := range pdpt {
-			pdpt[i] = mem.Pa_t(i)*size | PTE_P | PTE_W | PTE_PS
+			pdpt[i] = Pa_t(i)*size | PTE_P | PTE_W | PTE_PS
 		}
 		return
 	}
 	fmt.Printf("1GB pages not supported\n")
 
 	size = 1 << 21
-	pdptsz := mem.Pa_t(1 << 30)
+	pdptsz := Pa_t(1 << 30)
 	for i := range pdpt {
 		pd := new(Pmap_t)
 		p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
@@ -181,10 +140,10 @@ func Dmap_init() {
 		}
 		kpgadd(pd)
 		for j := range pd {
-			pd[j] = mem.Pa_t(i)*pdptsz +
-				mem.Pa_t(j)*size | PTE_P | PTE_W | PTE_PS
+			pd[j] = Pa_t(i)*pdptsz +
+				Pa_t(j)*size | PTE_P | PTE_W | PTE_PS
 		}
-		pdpt[i] = mem.Pa_t(p_pd) | PTE_P | PTE_W
+		pdpt[i] = Pa_t(p_pd) | PTE_P | PTE_W
 	}
 
 	// fill in kent, the list of kernel pml4 entries. make sure we will
@@ -196,9 +155,9 @@ func Dmap_init() {
 			Kents = append(Kents, ent)
 		}
 	}
-	dmapinit = true
+	Physmem.Dmapinit = true
 
-	// Physmem.Refpg_new() uses the Zeropg to zero the page
+	// PhysRefpg_new() uses the Zeropg to zero the page
 	Zeropg, P_zeropg, ok = Physmem._refpg_new()
 	if !ok {
 		panic("oom in dmap init")
@@ -210,9 +169,9 @@ func Dmap_init() {
 	Zerobpg = Pg2bytes(Zeropg)
 }
 
-var Kpmapp *mem.Pmap_t
+var Kpmapp *Pmap_t
 
-func Kpmap() *mem.Pmap_t {
+func Kpmap() *Pmap_t {
 	if Kpmapp == nil {
 		dur := caddr(VREC, VREC, VREC, VREC, 0)
 		Kpmapp = (*Pmap_t)(unsafe.Pointer(dur))
@@ -222,10 +181,9 @@ func Kpmap() *mem.Pmap_t {
 
 // tracks all pages allocated by go internally by the kernel such as pmap pages
 // allocated by the kernel (not the bootloader/runtime)
-var kplock = sync.Mutex{}
 var kpages = pgtracker_t{}
 
-func kpgadd(pg *mem.Pmap_t) {
+func kpgadd(pg *Pmap_t) {
 	va := uintptr(unsafe.Pointer(pg))
 	pgn := int(va >> 12)
 	if _, ok := kpages[pgn]; ok {
@@ -235,32 +193,4 @@ func kpgadd(pg *mem.Pmap_t) {
 }
 
 // tracks pages
-type pgtracker_t map[int]*mem.Pmap_t
-
-// allocates a page tracked by kpages and maps it at va. only used during AP
-// bootup.
-// XXX remove this crap
-func Kmalloc(va uintptr, perms mem.Pa_t) {
-	kplock.Lock()
-	defer kplock.Unlock()
-	_, p_pg, ok := Physmem.Refpg_new()
-	if !ok {
-		panic("oom in init?")
-	}
-	Physmem.Refup(p_pg)
-	pte, err := pmap_walk(Kpmap(), int(va), perms)
-	if err != 0 {
-		panic("oom during AP init")
-	}
-	if pte != nil && *pte&PTE_P != 0 {
-		panic(fmt.Sprintf("page already mapped %#x", va))
-	}
-	*pte = p_pg | PTE_P | perms
-}
-
-func Assert_no_va_map(pmap *mem.Pmap_t, va uintptr) {
-	pte := Pmap_lookup(pmap, int(va))
-	if pte != nil && *pte&PTE_P != 0 {
-		panic(fmt.Sprintf("va %#x is mapped", va))
-	}
-}
+type pgtracker_t map[int]*Pmap_t

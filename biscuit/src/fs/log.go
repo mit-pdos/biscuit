@@ -3,7 +3,9 @@ package fs
 import "fmt"
 import "sync"
 
+import "mem"
 import "stats"
+import "util"
 
 const log_debug = false
 
@@ -46,7 +48,7 @@ func (log *log_t) Op_begin(s string) opid_t {
 	log.Lock()
 	defer log.Unlock()
 
-	ts := common.Rdtsc()
+	ts := stats.Rdtsc()
 
 	opid := log.nextop
 	log.nextop += 1
@@ -81,7 +83,7 @@ func (log *log_t) Op_end(opid opid_t) {
 	if log_debug {
 		fmt.Printf("op_end: done %d\n", opid)
 	}
-	s := common.Rdtsc()
+	s := stats.Rdtsc()
 
 	t := log.curtrans
 
@@ -115,7 +117,7 @@ func (log *log_t) Force(doapply bool) {
 
 	t := log.curtrans
 
-	s := common.Rdtsc()
+	s := stats.Rdtsc()
 
 	log.stats.Nforce++
 
@@ -174,7 +176,7 @@ func (log *log_t) Loglen() int {
 // All layers above log read blocks through the log layer, which are mostly
 // wrappers for the the corresponding cache operations.
 func (log *log_t) Get_fill(blkn int, s string, lock bool) *Bdev_block_t {
-	t := common.Rdtsc()
+	t := stats.Rdtsc()
 	r := log.ml.bcache.Get_fill(blkn, s, lock)
 	log.stats.Readcycles.Add(t)
 	return r
@@ -193,8 +195,8 @@ func (log *log_t) Relse(blk *Bdev_block_t, s string) {
 }
 
 func (log *log_t) Stats() string {
-	s1 := "log: " + common.Stats2String(log.stats)
-	s2 := "mlog: " + common.Stats2String(log.ml.stats)
+	s1 := "log: " + stats.Stats2String(log.stats)
+	s2 := "mlog: " + stats.Stats2String(log.ml.stats)
 	log.stats = logstat_t{}
 	log.ml.stats = memlogstat_t{}
 	return s1 + s2
@@ -267,7 +269,7 @@ type memlog_t struct {
 func mk_memlog(ls, ll int, bcache *bcache_t) *memlog_t {
 	ml := &memlog_t{}
 	ml.loglen = ll - LogOffset // first block of the log is commit block
-	ml.maxtrans = common.Min(ll/2, MaxDescriptor)
+	ml.maxtrans = util.Min(ll/2, MaxDescriptor)
 	fmt.Printf("ll %d maxtrans %d\n", ll, ml.maxtrans)
 	if ml.maxtrans > MaxDescriptor {
 		panic("max trans too large")
@@ -333,7 +335,7 @@ func (ml *memlog_t) commit_head(head index_t) {
 	lh.w_head(head)
 	headblk.Unlock()
 	ml.bcache.Write_async(headblk)
-	s := common.Rdtsc()
+	s := stats.Rdtsc()
 	ml.flush() // commit log header
 	ml.stats.Headcycles.Add(s)
 	ml.bcache.Relse(headblk, "commit_done")
@@ -345,7 +347,7 @@ func (ml *memlog_t) commit_tail(tail index_t) {
 	lh.w_tail(tail)
 	headblk.Unlock()
 	ml.bcache.Write_async(headblk)
-	s := common.Rdtsc()
+	s := stats.Rdtsc()
 	ml.flush() // commit log header
 	ml.stats.Tailcycles.Add(s)
 	ml.bcache.Relse(headblk, "commit_tail")
@@ -635,7 +637,7 @@ func (trans *trans_t) commit(tail index_t, ml *memlog_t) {
 
 	trans.write_ordered(ml)
 
-	s := common.Rdtsc()
+	s := stats.Rdtsc()
 	ml.flush() // flush outstanding writes  (if you kill this line, then Atomic test fails)
 	ml.stats.Flushdatacycles.Add(s)
 
@@ -701,7 +703,7 @@ const (
 )
 
 type logheader_t struct {
-	data *common.Bytepg_t
+	data *mem.Bytepg_t
 }
 
 func (lh *logheader_t) r_tail() index_t {
@@ -721,7 +723,7 @@ func (lh *logheader_t) w_head(n index_t) {
 }
 
 type logdescriptor_t struct {
-	data *common.Bytepg_t
+	data *mem.Bytepg_t
 	max  int
 }
 
@@ -763,7 +765,7 @@ func (log *log_t) write(opid opid_t, b *Bdev_block_t, ordered bool) {
 	defer log.Unlock()
 
 	t := log.curtrans
-	ts := common.Rdtsc()
+	ts := stats.Rdtsc()
 	t.add_write(opid, log, b, ordered)
 	log.stats.Writecycles.Add(ts)
 }
@@ -840,7 +842,7 @@ func (log *log_t) committer() {
 	log.Lock()
 	for !log.stop {
 		log.ml.stats.Ncommitter.Inc()
-		s := common.Rdtsc()
+		s := stats.Rdtsc()
 		t := log.curtrans
 		if t.committing {
 
@@ -851,7 +853,7 @@ func (log *log_t) committer() {
 					t.start, t.head, t.ordered.Len())
 			}
 
-			ts := common.Rdtsc()
+			ts := stats.Rdtsc()
 
 			t.copyrevoked(log.ml)
 			t.copylogged(log.ml)
@@ -953,7 +955,7 @@ func (log *log_t) apply(tail, head index_t) index_t {
 		}
 	}
 
-	s := common.Rdtsc()
+	s := stats.Rdtsc()
 	log.ml.flush() // flush apply
 	log.ml.stats.Flushapplydatacycles.Add(s)
 

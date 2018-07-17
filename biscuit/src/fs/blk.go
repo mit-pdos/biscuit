@@ -255,13 +255,13 @@ func MkBlock_newpage(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_
 	return b
 }
 
-func MkBlock(block int, s string, mem Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev_block_t {
+func MkBlock(block int, s string, m Blockmem_i, d Disk_i, cb Block_cb_i) *Bdev_block_t {
 	b := &Bdev_block_t{}
 	b.Block = block
 	b.Pa = mem.Pa_t(0)
 	b.Data = nil
 	//b.Name = s
-	b.Mem = mem
+	b.Mem = m
 	b.Disk = d
 	b.Cb = cb
 	return b

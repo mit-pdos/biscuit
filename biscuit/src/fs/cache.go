@@ -6,7 +6,6 @@ import "sort"
 import "sync"
 import "sync/atomic"
 
-import "common"
 import "hashtable"
 import "stats"
 
@@ -157,7 +156,7 @@ func (c *cache_t) Remove(key int) bool {
 
 func (c *cache_t) Stats() string {
 	s := ""
-	s += common.Stats2String(c.stats)
+	s += stats.Stats2String(c.stats)
 	return s
 }
 

@@ -4,8 +4,12 @@ import "fmt"
 import "sync/atomic"
 import "unsafe"
 
+import "common"
 import "defs"
+import "limits"
+import "mem"
 import "ustr"
+import "util"
 
 const NAME_MAX int = 512
 
@@ -15,7 +19,7 @@ func crname(path ustr.Ustr, nilpatherr defs.Err_t) (defs.Err_t, bool) {
 	if len(path) == 0 {
 		return nilpatherr, false
 	} else if path.Isdot() || path.Isdotdot() {
-		return -common.EINVAL, false
+		return -defs.EINVAL, false
 	}
 	return 0, true
 }
@@ -56,7 +60,7 @@ func (dir *Dirdata_t) Filename(didx int) ustr.Ustr {
 
 func (dir *Dirdata_t) inodenext(didx int) defs.Inum_t {
 	st := doffset(didx, 14)
-	v := common.Readn(dir.Data[:], 8, st)
+	v := util.Readn(dir.Data[:], 8, st)
 	return defs.Inum_t(v)
 }
 
@@ -75,7 +79,7 @@ func (dir *Dirdata_t) W_filename(didx int, fn ustr.Ustr) {
 
 func (dir *Dirdata_t) W_inodenext(didx int, inum defs.Inum_t) {
 	st := doffset(didx, 14)
-	common.Writen(dir.Data[:], 8, st, int(inum))
+	util.Writen(dir.Data[:], 8, st, int(inum))
 }
 
 type fdent_t struct {
@@ -186,7 +190,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name ustr.Ustr, inum defs.Inum_t) 
 	if err != 0 {
 		return err
 	}
-	ddata := Dirdata_t{b.Data[noff%common.PGSIZE:]}
+	ddata := Dirdata_t{b.Data[noff%mem.PGSIZE:]}
 
 	ddata.W_filename(0, name)
 	ddata.W_inodenext(0, inum)
@@ -209,7 +213,7 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn ustr.Ustr, de *icdent_t) b
 	found := false
 	for i := 0; i < idm.size; i += BSIZE {
 		if !common.Resadd_noblock(common.Bounds(common.B_IMEMNODE_T__DESCAN)) {
-			return false, -common.ENOHEAP
+			return false, -defs.ENOHEAP
 		}
 		b, err := idm.off2buf(opid, i, BSIZE, false, true, "_descan")
 		if err != 0 {
@@ -241,7 +245,7 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 	var zi *icdent_t
 	if idm.dentc.haveall {
 		// cache negative entries?
-		return zi, -common.ENOENT
+		return zi, -defs.ENOENT
 	}
 
 	// not in cached dirents
@@ -266,7 +270,7 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 	}
 	idm.dentc.haveall = haveall
 	if !found {
-		return zi, -common.ENOENT
+		return zi, -defs.ENOENT
 	}
 	return de, 0
 }
@@ -282,7 +286,7 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 		if err != 0 {
 			return zi, err
 		}
-		dirdata := Dirdata_t{b.Data[de.offset%common.PGSIZE:]}
+		dirdata := Dirdata_t{b.Data[de.offset%mem.PGSIZE:]}
 		dirdata.W_filename(0, ustr.MkUstr())
 		dirdata.W_inodenext(0, defs.Inum_t(0))
 		b.Unlock()
@@ -338,7 +342,7 @@ func (idm *imemnode_t) _derelease() int {
 	dc.dents = nil
 	dc.freel.head = nil
 	ret := dc.max
-	common.Syslimit.Dirents.Given(uint(ret))
+	limits.Syslimit.Dirents.Given(uint(ret))
 	dc.max = 0
 	return ret
 }
@@ -381,7 +385,7 @@ func (idm *imemnode_t) _demayadd() bool {
 	}
 	// reserve more directory entries
 	take := 64
-	if common.Syslimit.Dirents.Taken(uint(take)) {
+	if limits.Syslimit.Dirents.Taken(uint(take)) {
 		dc.max += take
 		return true
 	}
@@ -432,7 +436,7 @@ func (idm *imemnode_t) probe_unlink(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, d
 func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, defs.Err_t) {
 	// did someone confuse a file with a directory?
 	if idm.itype != I_DIR {
-		return nil, -common.ENOTDIR
+		return nil, -defs.ENOTDIR
 	}
 	de, err := idm._delookup(opid, name)
 	if err != 0 {
@@ -511,11 +515,11 @@ func (idm *imemnode_t) ilookup_lockfree(name ustr.Ustr, refup bool) (*imemnode_t
 // creates a new directory entry with name "name" and inode number priv
 func (idm *imemnode_t) iinsert(opid opid_t, name ustr.Ustr, inum defs.Inum_t) defs.Err_t {
 	if idm.itype != I_DIR {
-		return -common.ENOTDIR
+		return -defs.ENOTDIR
 	}
 	if _, err := idm._delookup(opid, name); err == 0 {
-		return -common.EEXIST
-	} else if err != -common.ENOENT {
+		return -defs.EEXIST
+	} else if err != -defs.ENOENT {
 		return err
 	}
 	if inum < 0 {
