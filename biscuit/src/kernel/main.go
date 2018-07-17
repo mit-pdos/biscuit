@@ -799,6 +799,8 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	inb := runtime.Inb
 	start := make([]byte, 0, 10)
 	data := start
+	var lastpk time.Time
+	pkcount := 0
 	addprint := func(c byte) {
 		fmt.Printf("%c", c)
 		if len(data) > 1024 {
@@ -807,8 +809,15 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 		data = append(data, c)
 		if c == '\\' {
-			debug.SetTraceback("all")
-			panic("yahoo")
+			if time.Since(lastpk) > time.Second {
+				pkcount = 0
+				lastpk = time.Now()
+			}
+			pkcount++
+			if pkcount == 3 {
+				debug.SetTraceback("all")
+				panic("yahoo")
+			}
 		} else if c == '@' {
 			//common.Lims = !common.Lims
 			//fmt.Printf("Lims: %v\n", common.Lims)
