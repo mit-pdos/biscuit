@@ -42,8 +42,6 @@ PSRC := src/accnt/accnt.go \
 	src/ustr/ustr.go \
 	src/util/util.go
 
-
-
 OBJS := $(addprefix $(K)/, $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS))))
 
 CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
