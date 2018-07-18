@@ -161,7 +161,7 @@ func (w *Wait_t) Reaptid(tid int, noblk bool) (Waitst_t, defs.Err_t) {
 }
 
 func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, defs.Err_t) {
-	if id == WAIT_MYPGRP {
+	if id == defs.WAIT_MYPGRP {
 		panic("no imp")
 	}
 	var wh *whead_t
@@ -175,7 +175,7 @@ func (w *Wait_t) _reap(id int, isproc bool, noblk bool) (Waitst_t, defs.Err_t) {
 	defer w.Unlock()
 	var zw Waitst_t
 	for {
-		if id == WAIT_ANY {
+		if id == defs.WAIT_ANY {
 			// XXXPANIC
 			if wh.count < 0 {
 				panic("neg childs")

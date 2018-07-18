@@ -46,9 +46,9 @@ var irqs int
 // context and thus may run concurrently with code manipulating the same state.
 // since trapstub() runs on the per-cpu interrupt stack, it must be nosplit.
 //go:nosplit
-func trapstub(tf *[proc.TFSIZE]uintptr) {
+func trapstub(tf *[defs.TFSIZE]uintptr) {
 
-	trapno := tf[proc.TF_TRAP]
+	trapno := tf[defs.TF_TRAP]
 
 	// only IRQs come through here now
 	if trapno <= defs.TIMER || trapno > IRQ_LAST {
@@ -84,7 +84,7 @@ func trapstub(tf *[proc.TFSIZE]uintptr) {
 	default:
 		// unexpected IRQ
 		runtime.Pnum(int(trapno))
-		runtime.Pnum(int(tf[proc.TF_RIP]))
+		runtime.Pnum(int(tf[defs.TF_RIP]))
 		runtime.Pnum(0xbadbabe)
 		for {
 		}
@@ -113,15 +113,15 @@ func trap_cons(intn uint, ch chan bool) {
 	}
 }
 
-func tfdump(tf *[proc.TFSIZE]int) {
-	fmt.Printf("RIP: %#x\n", tf[proc.TF_RIP])
-	fmt.Printf("RAX: %#x\n", tf[proc.TF_RAX])
-	fmt.Printf("RDI: %#x\n", tf[proc.TF_RDI])
-	fmt.Printf("RSI: %#x\n", tf[proc.TF_RSI])
-	fmt.Printf("RBX: %#x\n", tf[proc.TF_RBX])
-	fmt.Printf("RCX: %#x\n", tf[proc.TF_RCX])
-	fmt.Printf("RDX: %#x\n", tf[proc.TF_RDX])
-	fmt.Printf("RSP: %#x\n", tf[proc.TF_RSP])
+func tfdump(tf *[defs.TFSIZE]int) {
+	fmt.Printf("RIP: %#x\n", tf[defs.TF_RIP])
+	fmt.Printf("RAX: %#x\n", tf[defs.TF_RAX])
+	fmt.Printf("RDI: %#x\n", tf[defs.TF_RDI])
+	fmt.Printf("RSI: %#x\n", tf[defs.TF_RSI])
+	fmt.Printf("RBX: %#x\n", tf[defs.TF_RBX])
+	fmt.Printf("RCX: %#x\n", tf[defs.TF_RCX])
+	fmt.Printf("RDX: %#x\n", tf[defs.TF_RDX])
+	fmt.Printf("RSP: %#x\n", tf[defs.TF_RSP])
 }
 
 type dev_t struct {
@@ -643,7 +643,7 @@ func ap_entry(myid uint) {
 
 	// ints are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()
-	fl |= proc.TF_FL_IF
+	fl |= defs.TF_FL_IF
 	runtime.Popcli(fl)
 	for {
 	}
@@ -1511,7 +1511,7 @@ func main() {
 		if !ok {
 			panic("silly sysprocs")
 		}
-		var tf [proc.TFSIZE]uintptr
+		var tf [defs.TFSIZE]uintptr
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))

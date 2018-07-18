@@ -29,67 +29,67 @@ import "vm"
 
 var _sysbounds = []int{
 	//var _sysbounds = map[int]int {
-	proc.SYS_READ:       bounds.Bounds(bounds.B_SYS_READ),
-	proc.SYS_WRITE:      bounds.Bounds(bounds.B_SYS_WRITE),
-	proc.SYS_OPEN:       bounds.Bounds(bounds.B_SYS_OPEN),
-	proc.SYS_CLOSE:      bounds.Bounds(bounds.B_SYSCALL_T_SYS_CLOSE),
-	proc.SYS_STAT:       bounds.Bounds(bounds.B_SYS_STAT),
-	proc.SYS_FSTAT:      bounds.Bounds(bounds.B_SYS_FSTAT),
-	proc.SYS_POLL:       bounds.Bounds(bounds.B_SYS_POLL),
-	proc.SYS_LSEEK:      bounds.Bounds(bounds.B_SYS_LSEEK),
-	proc.SYS_MMAP:       bounds.Bounds(bounds.B_SYS_MMAP),
-	proc.SYS_MUNMAP:     bounds.Bounds(bounds.B_SYS_MUNMAP),
-	proc.SYS_SIGACT:     bounds.Bounds(bounds.B_SYS_SIGACTION),
-	proc.SYS_READV:      bounds.Bounds(bounds.B_SYS_READV),
-	proc.SYS_WRITEV:     bounds.Bounds(bounds.B_SYS_WRITEV),
-	proc.SYS_ACCESS:     bounds.Bounds(bounds.B_SYS_ACCESS),
-	proc.SYS_DUP2:       bounds.Bounds(bounds.B_SYS_DUP2),
-	proc.SYS_PAUSE:      bounds.Bounds(bounds.B_SYS_PAUSE),
-	proc.SYS_GETPID:     bounds.Bounds(bounds.B_SYS_GETPID),
-	proc.SYS_GETPPID:    bounds.Bounds(bounds.B_SYS_GETPPID),
-	proc.SYS_SOCKET:     bounds.Bounds(bounds.B_SYS_SOCKET),
-	proc.SYS_CONNECT:    bounds.Bounds(bounds.B_SYS_CONNECT),
-	proc.SYS_ACCEPT:     bounds.Bounds(bounds.B_SYS_ACCEPT),
-	proc.SYS_SENDTO:     bounds.Bounds(bounds.B_SYS_SENDTO),
-	proc.SYS_RECVFROM:   bounds.Bounds(bounds.B_SYS_RECVFROM),
-	proc.SYS_SOCKPAIR:   bounds.Bounds(bounds.B_SYS_SOCKETPAIR),
-	proc.SYS_SHUTDOWN:   bounds.Bounds(bounds.B_SYS_SHUTDOWN),
-	proc.SYS_BIND:       bounds.Bounds(bounds.B_SYS_BIND),
-	proc.SYS_LISTEN:     bounds.Bounds(bounds.B_SYS_LISTEN),
-	proc.SYS_RECVMSG:    bounds.Bounds(bounds.B_SYS_RECVMSG),
-	proc.SYS_SENDMSG:    bounds.Bounds(bounds.B_SYS_SENDMSG),
-	proc.SYS_GETSOCKOPT: bounds.Bounds(bounds.B_SYS_GETSOCKOPT),
-	proc.SYS_SETSOCKOPT: bounds.Bounds(bounds.B_SYS_SETSOCKOPT),
-	proc.SYS_FORK:       bounds.Bounds(bounds.B_SYS_FORK),
-	proc.SYS_EXECV:      bounds.Bounds(bounds.B_SYS_EXECV),
-	proc.SYS_EXIT:       bounds.Bounds(bounds.B_SYSCALL_T_SYS_EXIT),
-	proc.SYS_WAIT4:      bounds.Bounds(bounds.B_SYS_WAIT4),
-	proc.SYS_KILL:       bounds.Bounds(bounds.B_SYS_KILL),
-	proc.SYS_FCNTL:      bounds.Bounds(bounds.B_SYS_FCNTL),
-	proc.SYS_TRUNC:      bounds.Bounds(bounds.B_SYS_TRUNCATE),
-	proc.SYS_FTRUNC:     bounds.Bounds(bounds.B_SYS_FTRUNCATE),
-	proc.SYS_GETCWD:     bounds.Bounds(bounds.B_SYS_GETCWD),
-	proc.SYS_CHDIR:      bounds.Bounds(bounds.B_SYS_CHDIR),
-	proc.SYS_RENAME:     bounds.Bounds(bounds.B_SYS_RENAME),
-	proc.SYS_MKDIR:      bounds.Bounds(bounds.B_SYS_MKDIR),
-	proc.SYS_LINK:       bounds.Bounds(bounds.B_SYS_LINK),
-	proc.SYS_UNLINK:     bounds.Bounds(bounds.B_SYS_UNLINK),
-	proc.SYS_GETTOD:     bounds.Bounds(bounds.B_SYS_GETTIMEOFDAY),
-	proc.SYS_GETRLMT:    bounds.Bounds(bounds.B_SYS_GETRLIMIT),
-	proc.SYS_GETRUSG:    bounds.Bounds(bounds.B_SYS_GETRUSAGE),
-	proc.SYS_MKNOD:      bounds.Bounds(bounds.B_SYS_MKNOD),
-	proc.SYS_SETRLMT:    bounds.Bounds(bounds.B_SYS_SETRLIMIT),
-	proc.SYS_SYNC:       bounds.Bounds(bounds.B_SYS_SYNC),
-	proc.SYS_REBOOT:     bounds.Bounds(bounds.B_SYS_REBOOT),
-	proc.SYS_NANOSLEEP:  bounds.Bounds(bounds.B_SYS_NANOSLEEP),
-	proc.SYS_PIPE2:      bounds.Bounds(bounds.B_SYS_PIPE2),
-	proc.SYS_PROF:       bounds.Bounds(bounds.B_SYS_PROF),
-	proc.SYS_THREXIT:    bounds.Bounds(bounds.B_SYS_THREXIT),
-	proc.SYS_INFO:       bounds.Bounds(bounds.B_SYS_INFO),
-	proc.SYS_PREAD:      bounds.Bounds(bounds.B_SYS_PREAD),
-	proc.SYS_PWRITE:     bounds.Bounds(bounds.B_SYS_PWRITE),
-	proc.SYS_FUTEX:      bounds.Bounds(bounds.B_SYS_FUTEX),
-	proc.SYS_GETTID:     bounds.Bounds(bounds.B_SYS_GETTID),
+	defs.SYS_READ:       bounds.Bounds(bounds.B_SYS_READ),
+	defs.SYS_WRITE:      bounds.Bounds(bounds.B_SYS_WRITE),
+	defs.SYS_OPEN:       bounds.Bounds(bounds.B_SYS_OPEN),
+	defs.SYS_CLOSE:      bounds.Bounds(bounds.B_SYSCALL_T_SYS_CLOSE),
+	defs.SYS_STAT:       bounds.Bounds(bounds.B_SYS_STAT),
+	defs.SYS_FSTAT:      bounds.Bounds(bounds.B_SYS_FSTAT),
+	defs.SYS_POLL:       bounds.Bounds(bounds.B_SYS_POLL),
+	defs.SYS_LSEEK:      bounds.Bounds(bounds.B_SYS_LSEEK),
+	defs.SYS_MMAP:       bounds.Bounds(bounds.B_SYS_MMAP),
+	defs.SYS_MUNMAP:     bounds.Bounds(bounds.B_SYS_MUNMAP),
+	defs.SYS_SIGACT:     bounds.Bounds(bounds.B_SYS_SIGACTION),
+	defs.SYS_READV:      bounds.Bounds(bounds.B_SYS_READV),
+	defs.SYS_WRITEV:     bounds.Bounds(bounds.B_SYS_WRITEV),
+	defs.SYS_ACCESS:     bounds.Bounds(bounds.B_SYS_ACCESS),
+	defs.SYS_DUP2:       bounds.Bounds(bounds.B_SYS_DUP2),
+	defs.SYS_PAUSE:      bounds.Bounds(bounds.B_SYS_PAUSE),
+	defs.SYS_GETPID:     bounds.Bounds(bounds.B_SYS_GETPID),
+	defs.SYS_GETPPID:    bounds.Bounds(bounds.B_SYS_GETPPID),
+	defs.SYS_SOCKET:     bounds.Bounds(bounds.B_SYS_SOCKET),
+	defs.SYS_CONNECT:    bounds.Bounds(bounds.B_SYS_CONNECT),
+	defs.SYS_ACCEPT:     bounds.Bounds(bounds.B_SYS_ACCEPT),
+	defs.SYS_SENDTO:     bounds.Bounds(bounds.B_SYS_SENDTO),
+	defs.SYS_RECVFROM:   bounds.Bounds(bounds.B_SYS_RECVFROM),
+	defs.SYS_SOCKPAIR:   bounds.Bounds(bounds.B_SYS_SOCKETPAIR),
+	defs.SYS_SHUTDOWN:   bounds.Bounds(bounds.B_SYS_SHUTDOWN),
+	defs.SYS_BIND:       bounds.Bounds(bounds.B_SYS_BIND),
+	defs.SYS_LISTEN:     bounds.Bounds(bounds.B_SYS_LISTEN),
+	defs.SYS_RECVMSG:    bounds.Bounds(bounds.B_SYS_RECVMSG),
+	defs.SYS_SENDMSG:    bounds.Bounds(bounds.B_SYS_SENDMSG),
+	defs.SYS_GETSOCKOPT: bounds.Bounds(bounds.B_SYS_GETSOCKOPT),
+	defs.SYS_SETSOCKOPT: bounds.Bounds(bounds.B_SYS_SETSOCKOPT),
+	defs.SYS_FORK:       bounds.Bounds(bounds.B_SYS_FORK),
+	defs.SYS_EXECV:      bounds.Bounds(bounds.B_SYS_EXECV),
+	defs.SYS_EXIT:       bounds.Bounds(bounds.B_SYSCALL_T_SYS_EXIT),
+	defs.SYS_WAIT4:      bounds.Bounds(bounds.B_SYS_WAIT4),
+	defs.SYS_KILL:       bounds.Bounds(bounds.B_SYS_KILL),
+	defs.SYS_FCNTL:      bounds.Bounds(bounds.B_SYS_FCNTL),
+	defs.SYS_TRUNC:      bounds.Bounds(bounds.B_SYS_TRUNCATE),
+	defs.SYS_FTRUNC:     bounds.Bounds(bounds.B_SYS_FTRUNCATE),
+	defs.SYS_GETCWD:     bounds.Bounds(bounds.B_SYS_GETCWD),
+	defs.SYS_CHDIR:      bounds.Bounds(bounds.B_SYS_CHDIR),
+	defs.SYS_RENAME:     bounds.Bounds(bounds.B_SYS_RENAME),
+	defs.SYS_MKDIR:      bounds.Bounds(bounds.B_SYS_MKDIR),
+	defs.SYS_LINK:       bounds.Bounds(bounds.B_SYS_LINK),
+	defs.SYS_UNLINK:     bounds.Bounds(bounds.B_SYS_UNLINK),
+	defs.SYS_GETTOD:     bounds.Bounds(bounds.B_SYS_GETTIMEOFDAY),
+	defs.SYS_GETRLMT:    bounds.Bounds(bounds.B_SYS_GETRLIMIT),
+	defs.SYS_GETRUSG:    bounds.Bounds(bounds.B_SYS_GETRUSAGE),
+	defs.SYS_MKNOD:      bounds.Bounds(bounds.B_SYS_MKNOD),
+	defs.SYS_SETRLMT:    bounds.Bounds(bounds.B_SYS_SETRLIMIT),
+	defs.SYS_SYNC:       bounds.Bounds(bounds.B_SYS_SYNC),
+	defs.SYS_REBOOT:     bounds.Bounds(bounds.B_SYS_REBOOT),
+	defs.SYS_NANOSLEEP:  bounds.Bounds(bounds.B_SYS_NANOSLEEP),
+	defs.SYS_PIPE2:      bounds.Bounds(bounds.B_SYS_PIPE2),
+	defs.SYS_PROF:       bounds.Bounds(bounds.B_SYS_PROF),
+	defs.SYS_THREXIT:    bounds.Bounds(bounds.B_SYS_THREXIT),
+	defs.SYS_INFO:       bounds.Bounds(bounds.B_SYS_INFO),
+	defs.SYS_PREAD:      bounds.Bounds(bounds.B_SYS_PREAD),
+	defs.SYS_PWRITE:     bounds.Bounds(bounds.B_SYS_PWRITE),
+	defs.SYS_FUTEX:      bounds.Bounds(bounds.B_SYS_FUTEX),
+	defs.SYS_GETTID:     bounds.Bounds(bounds.B_SYS_GETTID),
 }
 
 // Implements Syscall_i
@@ -98,7 +98,7 @@ type syscall_t struct {
 
 var sys = &syscall_t{}
 
-func (s *syscall_t) Syscall(p *proc.Proc_t, tid defs.Tid_t, tf *[proc.TFSIZE]uintptr) int {
+func (s *syscall_t) Syscall(p *proc.Proc_t, tid defs.Tid_t, tf *[defs.TFSIZE]uintptr) int {
 
 	if p.Doomed() {
 		// this process has been killed
@@ -106,7 +106,7 @@ func (s *syscall_t) Syscall(p *proc.Proc_t, tid defs.Tid_t, tf *[proc.TFSIZE]uin
 		return 0
 	}
 
-	sysno := int(tf[proc.TF_RAX])
+	sysno := int(tf[defs.TF_RAX])
 
 	//lim, ok := _sysbounds[sysno]
 	//if !ok {
@@ -121,141 +121,141 @@ func (s *syscall_t) Syscall(p *proc.Proc_t, tid defs.Tid_t, tf *[proc.TFSIZE]uin
 		return int(-defs.ENOHEAP)
 	}
 
-	a1 := int(tf[proc.TF_RDI])
-	a2 := int(tf[proc.TF_RSI])
-	a3 := int(tf[proc.TF_RDX])
-	a4 := int(tf[proc.TF_RCX])
-	a5 := int(tf[proc.TF_R8])
+	a1 := int(tf[defs.TF_RDI])
+	a2 := int(tf[defs.TF_RSI])
+	a3 := int(tf[defs.TF_RDX])
+	a4 := int(tf[defs.TF_RCX])
+	a5 := int(tf[defs.TF_R8])
 
 	var ret int
 	switch sysno {
-	case proc.SYS_READ:
+	case defs.SYS_READ:
 		ret = sys_read(p, a1, a2, a3)
-	case proc.SYS_WRITE:
+	case defs.SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
-	case proc.SYS_OPEN:
+	case defs.SYS_OPEN:
 		ret = sys_open(p, a1, a2, a3)
-	case proc.SYS_CLOSE:
+	case defs.SYS_CLOSE:
 		ret = s.Sys_close(p, a1)
-	case proc.SYS_STAT:
+	case defs.SYS_STAT:
 		ret = sys_stat(p, a1, a2)
-	case proc.SYS_FSTAT:
+	case defs.SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
-	case proc.SYS_POLL:
+	case defs.SYS_POLL:
 		ret = sys_poll(p, tid, a1, a2, a3)
-	case proc.SYS_LSEEK:
+	case defs.SYS_LSEEK:
 		ret = sys_lseek(p, a1, a2, a3)
-	case proc.SYS_MMAP:
+	case defs.SYS_MMAP:
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
-	case proc.SYS_MUNMAP:
+	case defs.SYS_MUNMAP:
 		ret = sys_munmap(p, a1, a2)
-	case proc.SYS_READV:
+	case defs.SYS_READV:
 		ret = sys_readv(p, a1, a2, a3)
-	case proc.SYS_WRITEV:
+	case defs.SYS_WRITEV:
 		ret = sys_writev(p, a1, a2, a3)
-	case proc.SYS_SIGACT:
+	case defs.SYS_SIGACT:
 		ret = sys_sigaction(p, a1, a2, a3)
-	case proc.SYS_ACCESS:
+	case defs.SYS_ACCESS:
 		ret = sys_access(p, a1, a2)
-	case proc.SYS_DUP2:
+	case defs.SYS_DUP2:
 		ret = sys_dup2(p, a1, a2)
-	case proc.SYS_PAUSE:
+	case defs.SYS_PAUSE:
 		ret = sys_pause(p)
-	case proc.SYS_GETPID:
+	case defs.SYS_GETPID:
 		ret = sys_getpid(p, tid)
-	case proc.SYS_GETPPID:
+	case defs.SYS_GETPPID:
 		ret = sys_getppid(p, tid)
-	case proc.SYS_SOCKET:
+	case defs.SYS_SOCKET:
 		ret = sys_socket(p, a1, a2, a3)
-	case proc.SYS_CONNECT:
+	case defs.SYS_CONNECT:
 		ret = sys_connect(p, a1, a2, a3)
-	case proc.SYS_ACCEPT:
+	case defs.SYS_ACCEPT:
 		ret = sys_accept(p, a1, a2, a3)
-	case proc.SYS_SENDTO:
+	case defs.SYS_SENDTO:
 		ret = sys_sendto(p, a1, a2, a3, a4, a5)
-	case proc.SYS_RECVFROM:
+	case defs.SYS_RECVFROM:
 		ret = sys_recvfrom(p, a1, a2, a3, a4, a5)
-	case proc.SYS_SOCKPAIR:
+	case defs.SYS_SOCKPAIR:
 		ret = sys_socketpair(p, a1, a2, a3, a4)
-	case proc.SYS_SHUTDOWN:
+	case defs.SYS_SHUTDOWN:
 		ret = sys_shutdown(p, a1, a2)
-	case proc.SYS_BIND:
+	case defs.SYS_BIND:
 		ret = sys_bind(p, a1, a2, a3)
-	case proc.SYS_LISTEN:
+	case defs.SYS_LISTEN:
 		ret = sys_listen(p, a1, a2)
-	case proc.SYS_RECVMSG:
+	case defs.SYS_RECVMSG:
 		ret = sys_recvmsg(p, a1, a2, a3)
-	case proc.SYS_SENDMSG:
+	case defs.SYS_SENDMSG:
 		ret = sys_sendmsg(p, a1, a2, a3)
-	case proc.SYS_GETSOCKOPT:
+	case defs.SYS_GETSOCKOPT:
 		ret = sys_getsockopt(p, a1, a2, a3, a4, a5)
-	case proc.SYS_SETSOCKOPT:
+	case defs.SYS_SETSOCKOPT:
 		ret = sys_setsockopt(p, a1, a2, a3, a4, a5)
-	case proc.SYS_FORK:
+	case defs.SYS_FORK:
 		ret = sys_fork(p, tf, a1, a2)
-	case proc.SYS_EXECV:
+	case defs.SYS_EXECV:
 		ret = sys_execv(p, tf, a1, a2)
-	case proc.SYS_EXIT:
+	case defs.SYS_EXIT:
 		status := a1 & 0xff
-		status |= proc.EXITED
+		status |= defs.EXITED
 		s.Sys_exit(p, tid, status)
-	case proc.SYS_WAIT4:
+	case defs.SYS_WAIT4:
 		ret = sys_wait4(p, tid, a1, a2, a3, a4, a5)
-	case proc.SYS_KILL:
+	case defs.SYS_KILL:
 		ret = sys_kill(p, a1, a2)
-	case proc.SYS_FCNTL:
+	case defs.SYS_FCNTL:
 		ret = sys_fcntl(p, a1, a2, a3)
-	case proc.SYS_TRUNC:
+	case defs.SYS_TRUNC:
 		ret = sys_truncate(p, a1, uint(a2))
-	case proc.SYS_FTRUNC:
+	case defs.SYS_FTRUNC:
 		ret = sys_ftruncate(p, a1, uint(a2))
-	case proc.SYS_GETCWD:
+	case defs.SYS_GETCWD:
 		ret = sys_getcwd(p, a1, a2)
-	case proc.SYS_CHDIR:
+	case defs.SYS_CHDIR:
 		ret = sys_chdir(p, a1)
-	case proc.SYS_RENAME:
+	case defs.SYS_RENAME:
 		ret = sys_rename(p, a1, a2)
-	case proc.SYS_MKDIR:
+	case defs.SYS_MKDIR:
 		ret = sys_mkdir(p, a1, a2)
-	case proc.SYS_LINK:
+	case defs.SYS_LINK:
 		ret = sys_link(p, a1, a2)
-	case proc.SYS_UNLINK:
+	case defs.SYS_UNLINK:
 		ret = sys_unlink(p, a1, a2)
-	case proc.SYS_GETTOD:
+	case defs.SYS_GETTOD:
 		ret = sys_gettimeofday(p, a1)
-	case proc.SYS_GETRLMT:
+	case defs.SYS_GETRLMT:
 		ret = sys_getrlimit(p, a1, a2)
-	case proc.SYS_GETRUSG:
+	case defs.SYS_GETRUSG:
 		ret = sys_getrusage(p, a1, a2)
-	case proc.SYS_MKNOD:
+	case defs.SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
-	case proc.SYS_SETRLMT:
+	case defs.SYS_SETRLMT:
 		ret = sys_setrlimit(p, a1, a2)
-	case proc.SYS_SYNC:
+	case defs.SYS_SYNC:
 		ret = sys_sync(p)
-	case proc.SYS_REBOOT:
+	case defs.SYS_REBOOT:
 		ret = sys_reboot(p)
-	case proc.SYS_NANOSLEEP:
+	case defs.SYS_NANOSLEEP:
 		ret = sys_nanosleep(p, a1, a2)
-	case proc.SYS_PIPE2:
+	case defs.SYS_PIPE2:
 		ret = sys_pipe2(p, a1, a2)
-	case proc.SYS_PROF:
+	case defs.SYS_PROF:
 		ret = sys_prof(p, a1, a2, a3, a4)
-	case proc.SYS_INFO:
+	case defs.SYS_INFO:
 		ret = sys_info(p, a1)
-	case proc.SYS_THREXIT:
+	case defs.SYS_THREXIT:
 		sys_threxit(p, tid, a1)
-	case proc.SYS_PREAD:
+	case defs.SYS_PREAD:
 		ret = sys_pread(p, a1, a2, a3, a4)
-	case proc.SYS_PWRITE:
+	case defs.SYS_PWRITE:
 		ret = sys_pwrite(p, a1, a2, a3, a4)
-	case proc.SYS_FUTEX:
+	case defs.SYS_FUTEX:
 		ret = sys_futex(p, a1, a2, a3, a4, a5)
-	case proc.SYS_GETTID:
+	case defs.SYS_GETTID:
 		ret = sys_gettid(p, tid)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
-		s.Sys_exit(p, tid, proc.SIGNALED|proc.Mkexitsig(31))
+		s.Sys_exit(p, tid, defs.SIGNALED|defs.Mkexitsig(31))
 	}
 	return ret
 }
@@ -358,21 +358,21 @@ func sys_open(p *proc.Proc_t, pathn int, _flags int, mode int) int {
 	if err != 0 {
 		return int(err)
 	}
-	flags := proc.Fdopt_t(_flags)
-	temp := flags & (proc.O_RDONLY | proc.O_WRONLY | proc.O_RDWR)
-	if temp != proc.O_RDONLY && temp != proc.O_WRONLY && temp != proc.O_RDWR {
+	flags := defs.Fdopt_t(_flags)
+	temp := flags & (defs.O_RDONLY | defs.O_WRONLY | defs.O_RDWR)
+	if temp != defs.O_RDONLY && temp != defs.O_WRONLY && temp != defs.O_RDWR {
 		return int(-defs.EINVAL)
 	}
-	if temp == proc.O_RDONLY && flags&proc.O_TRUNC != 0 {
+	if temp == defs.O_RDONLY && flags&defs.O_TRUNC != 0 {
 		return int(-defs.EINVAL)
 	}
 	fdperms := 0
 	switch temp {
-	case proc.O_RDONLY:
+	case defs.O_RDONLY:
 		fdperms = fd.FD_READ
-	case proc.O_WRONLY:
+	case defs.O_WRONLY:
 		fdperms = fd.FD_WRITE
-	case proc.O_RDWR:
+	case defs.O_RDWR:
 		fdperms = fd.FD_READ | fd.FD_WRITE
 	default:
 		fdperms = fd.FD_READ
@@ -385,7 +385,7 @@ func sys_open(p *proc.Proc_t, pathn int, _flags int, mode int) int {
 	if err != 0 {
 		return int(err)
 	}
-	if flags&proc.O_CLOEXEC != 0 {
+	if flags&defs.O_CLOEXEC != 0 {
 		fdperms |= fd.FD_CLOEXEC
 	}
 	fdn, ok := p.Fd_insert(file, fdperms)
@@ -423,17 +423,17 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	prot := uint(protflags) >> 32
 	flags := uint(uint32(protflags))
 
-	mask := proc.MAP_SHARED | proc.MAP_PRIVATE
+	mask := defs.MAP_SHARED | defs.MAP_PRIVATE
 	if flags&mask == 0 || flags&mask == mask {
 		return int(-defs.EINVAL)
 	}
-	shared := flags&proc.MAP_SHARED != 0
-	anon := flags&proc.MAP_ANON != 0
+	shared := flags&defs.MAP_SHARED != 0
+	anon := flags&defs.MAP_ANON != 0
 	fdmap := !anon
 	if (fdmap && fdn < 0) || (fdmap && offset < 0) || (anon && fdn >= 0) {
 		return int(-defs.EINVAL)
 	}
-	if flags&proc.MAP_FIXED != 0 {
+	if flags&defs.MAP_FIXED != 0 {
 		return int(-defs.EINVAL)
 	}
 	// OpenBSD allows mappings of only PROT_WRITE and read accesses that
@@ -442,10 +442,10 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	// apparently requires an implementation to support only proc.PROT_WRITE,
 	// but it seems better to disallow permission schemes that the CPU
 	// cannot enforce.
-	if prot&proc.PROT_READ == 0 {
+	if prot&defs.PROT_READ == 0 {
 		return int(-defs.EINVAL)
 	}
-	if prot == proc.PROT_NONE {
+	if prot == defs.PROT_NONE {
 		panic("no imp")
 		return p.Mmapi
 	}
@@ -458,7 +458,7 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 			return int(-defs.EBADF)
 		}
 		if f.Perms&fd.FD_READ == 0 ||
-			(shared && prot&proc.PROT_WRITE != 0 &&
+			(shared && prot&defs.PROT_WRITE != 0 &&
 				f.Perms&fd.FD_WRITE == 0) {
 			return int(-defs.EACCES)
 		}
@@ -467,7 +467,7 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	p.Aspace.Lock_pmap()
 
 	perms := vm.PTE_U
-	if prot&proc.PROT_WRITE != 0 {
+	if prot&defs.PROT_WRITE != 0 {
 		perms |= vm.PTE_W
 	}
 	lenn = util.Roundup(lenn, mem.PGSIZE)
@@ -622,7 +622,7 @@ func sys_access(p *proc.Proc_t, pathn, mode int) int {
 		return int(-defs.EINVAL)
 	}
 
-	fsf, err := thefs.Fs_open_inner(path, proc.O_RDONLY, 0, p.Cwd, 0, 0)
+	fsf, err := thefs.Fs_open_inner(path, defs.O_RDONLY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -684,8 +684,8 @@ func sys_fstat(p *proc.Proc_t, fdn int, statn int) int {
 // pokes poll status bits into user memory. since we only use one priority
 // internally, mask away any POLL bits the user didn't not request.
 func _ready2rev(orig int, r fdops.Ready_t) int {
-	inmask := proc.POLLIN | proc.POLLPRI
-	outmask := proc.POLLOUT | proc.POLLWRBAND
+	inmask := defs.POLLIN | defs.POLLPRI
+	outmask := defs.POLLOUT | defs.POLLWRBAND
 	pbits := 0
 	if r&fdops.R_READ != 0 {
 		pbits |= inmask
@@ -694,20 +694,20 @@ func _ready2rev(orig int, r fdops.Ready_t) int {
 		pbits |= outmask
 	}
 	if r&fdops.R_HUP != 0 {
-		pbits |= proc.POLLHUP
+		pbits |= defs.POLLHUP
 	}
 	if r&fdops.R_ERROR != 0 {
-		pbits |= proc.POLLERR
+		pbits |= defs.POLLERR
 	}
-	wantevents := ((orig >> 32) & 0xffff) | proc.POLLNVAL | proc.POLLERR | proc.POLLHUP
+	wantevents := ((orig >> 32) & 0xffff) | defs.POLLNVAL | defs.POLLERR | defs.POLLHUP
 	revents := wantevents & pbits
 	return orig | (revents << 48)
 }
 
 func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *fdops.Pollmsg_t, wait bool, buf []uint8,
 	nfds int) (int, bool, defs.Err_t) {
-	inmask := proc.POLLIN | proc.POLLPRI
-	outmask := proc.POLLOUT | proc.POLLWRBAND
+	inmask := defs.POLLIN | defs.POLLPRI
+	outmask := defs.POLLOUT | defs.POLLWRBAND
 	readyfds := 0
 	writeback := false
 	p.Fdl.Lock()
@@ -721,7 +721,7 @@ func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *fdops.Pollmsg_t, wait bool, b
 		}
 		fd, ok := p.Fd_get_inner(fdn)
 		if !ok {
-			uw |= proc.POLLNVAL
+			uw |= defs.POLLNVAL
 			writen(buf, 8, off, uw)
 			writeback = true
 			continue
@@ -735,7 +735,7 @@ func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *fdops.Pollmsg_t, wait bool, b
 		if events&outmask != 0 {
 			pev |= fdops.R_WRITE
 		}
-		if events&proc.POLLHUP != 0 {
+		if events&defs.POLLHUP != 0 {
 			pev |= fdops.R_HUP
 		}
 		// poll unconditionally reports ERR, HUP, and NVAL
@@ -838,13 +838,13 @@ func sys_pipe2(p *proc.Proc_t, pipen, _flags int) int {
 	rfp := fd.FD_READ
 	wfp := fd.FD_WRITE
 
-	flags := proc.Fdopt_t(_flags)
-	var opts proc.Fdopt_t
-	if flags&proc.O_NONBLOCK != 0 {
-		opts |= proc.O_NONBLOCK
+	flags := defs.Fdopt_t(_flags)
+	var opts defs.Fdopt_t
+	if flags&defs.O_NONBLOCK != 0 {
+		opts |= defs.O_NONBLOCK
 	}
 
-	if flags&proc.O_CLOEXEC != 0 {
+	if flags&defs.O_CLOEXEC != 0 {
 		rfp |= fd.FD_CLOEXEC
 		wfp |= fd.FD_CLOEXEC
 	}
@@ -1071,7 +1071,7 @@ func (o *pipe_t) op_fdtake() (*fd.Fd_t, bool) {
 
 type pipefops_t struct {
 	pipe    *pipe_t
-	options proc.Fdopt_t
+	options defs.Fdopt_t
 	writer  bool
 }
 
@@ -1106,7 +1106,7 @@ func (of *pipefops_t) Pathi() defs.Inum_t {
 }
 
 func (of *pipefops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
-	noblk := of.options&proc.O_NONBLOCK != 0
+	noblk := of.options&defs.O_NONBLOCK != 0
 	return of.pipe.op_read(dst, noblk)
 }
 
@@ -1121,7 +1121,7 @@ func (of *pipefops_t) Reopen() defs.Err_t {
 }
 
 func (of *pipefops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
-	noblk := of.options&proc.O_NONBLOCK != 0
+	noblk := of.options&defs.O_NONBLOCK != 0
 	c := 0
 	for c != src.Totalsz() {
 		if !res.Resadd(bounds.Bounds(bounds.B_PIPEFOPS_T_WRITE)) {
@@ -1185,10 +1185,10 @@ func (of *pipefops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 
 func (of *pipefops_t) Fcntl(cmd, opt int) int {
 	switch cmd {
-	case proc.F_GETFL:
+	case defs.F_GETFL:
 		return int(of.options)
-	case proc.F_SETFL:
-		of.options = proc.Fdopt_t(opt)
+	case defs.F_SETFL:
+		of.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
@@ -1289,12 +1289,12 @@ func sys_gettimeofday(p *proc.Proc_t, timevaln int) int {
 	return 0
 }
 
-var _rlimits = map[int]uint{proc.RLIMIT_NOFILE: proc.RLIM_INFINITY}
+var _rlimits = map[int]uint{defs.RLIMIT_NOFILE: defs.RLIM_INFINITY}
 
 func sys_getrlimit(p *proc.Proc_t, resn, rlpn int) int {
 	var cur uint
 	switch resn {
-	case proc.RLIMIT_NOFILE:
+	case defs.RLIMIT_NOFILE:
 		cur = p.Ulim.Nofile
 	default:
 		return int(-defs.EINVAL)
@@ -1322,7 +1322,7 @@ func sys_setrlimit(p *proc.Proc_t, resn, rlpn int) int {
 		return int(-defs.EINVAL)
 	}
 	switch resn {
-	case proc.RLIMIT_NOFILE:
+	case defs.RLIMIT_NOFILE:
 		p.Ulim.Nofile = ncur
 	default:
 		return int(-defs.EINVAL)
@@ -1332,7 +1332,7 @@ func sys_setrlimit(p *proc.Proc_t, resn, rlpn int) int {
 
 func sys_getrusage(p *proc.Proc_t, who, rusagep int) int {
 	var ru []uint8
-	if who == proc.RUSAGE_SELF {
+	if who == defs.RUSAGE_SELF {
 		// user time is gathered at thread termination... report user
 		// time as best as we can
 		tmp := p.Atime
@@ -1351,7 +1351,7 @@ func sys_getrusage(p *proc.Proc_t, who, rusagep int) int {
 		p.Threadi.Unlock()
 
 		ru = tmp.To_rusage()
-	} else if who == proc.RUSAGE_CHILDREN {
+	} else if who == defs.RUSAGE_CHILDREN {
 		ru = p.Catime.Fetch()
 	} else {
 		return int(-defs.EINVAL)
@@ -1387,7 +1387,7 @@ func sys_mknod(p *proc.Proc_t, pathn, moden, devn int) int {
 		return int(err)
 	}
 	maj, min := unmkdev(uint(devn))
-	fsf, err := thefs.Fs_open_inner(path, proc.O_CREAT, 0, p.Cwd, maj, min)
+	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT, 0, p.Cwd, maj, min)
 	if err != 0 {
 		return int(err)
 	}
@@ -1443,25 +1443,25 @@ func sys_getppid(p *proc.Proc_t, tid defs.Tid_t) int {
 }
 
 func sys_socket(p *proc.Proc_t, domain, typ, proto int) int {
-	var opts proc.Fdopt_t
-	if typ&proc.SOCK_NONBLOCK != 0 {
-		opts |= proc.O_NONBLOCK
+	var opts defs.Fdopt_t
+	if typ&defs.SOCK_NONBLOCK != 0 {
+		opts |= defs.O_NONBLOCK
 	}
 	var clop int
-	if typ&proc.SOCK_CLOEXEC != 0 {
+	if typ&defs.SOCK_CLOEXEC != 0 {
 		clop = fd.FD_CLOEXEC
 	}
 
 	var sfops fdops.Fdops_i
 	switch {
-	case domain == proc.AF_UNIX && typ&proc.SOCK_DGRAM != 0:
+	case domain == defs.AF_UNIX && typ&defs.SOCK_DGRAM != 0:
 		if opts != 0 {
 			panic("no imp")
 		}
 		sfops = &sudfops_t{open: 1}
-	case domain == proc.AF_UNIX && typ&proc.SOCK_STREAM != 0:
+	case domain == defs.AF_UNIX && typ&defs.SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
-	case domain == proc.AF_INET && typ&proc.SOCK_STREAM != 0:
+	case domain == defs.AF_INET && typ&defs.SOCK_STREAM != 0:
 		tfops := &tcpfops_t{tcb: &tcptcb_t{}, options: opts}
 		tfops.tcb.openc = 1
 		sfops = tfops
@@ -1781,16 +1781,16 @@ func sys_sendmsg(p *proc.Proc_t, fdn, _msgn, _flags int) int {
 }
 
 func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
-	var opts proc.Fdopt_t
-	if typ&proc.SOCK_NONBLOCK != 0 {
-		opts |= proc.O_NONBLOCK
+	var opts defs.Fdopt_t
+	if typ&defs.SOCK_NONBLOCK != 0 {
+		opts |= defs.O_NONBLOCK
 	}
 	var clop int
-	if typ&proc.SOCK_CLOEXEC != 0 {
+	if typ&defs.SOCK_CLOEXEC != 0 {
 		clop = fd.FD_CLOEXEC
 	}
 
-	mask := proc.SOCK_STREAM | proc.SOCK_DGRAM
+	mask := defs.SOCK_STREAM | defs.SOCK_DGRAM
 	if typ&mask == 0 || typ&mask == mask {
 		return int(-defs.EINVAL)
 	}
@@ -1802,7 +1802,7 @@ func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
 	var sfops1, sfops2 fdops.Fdops_i
 	var err defs.Err_t
 	switch {
-	case domain == proc.AF_UNIX && typ&proc.SOCK_STREAM != 0:
+	case domain == defs.AF_UNIX && typ&defs.SOCK_STREAM != 0:
 		sfops1, sfops2, err = _suspair(opts)
 	default:
 		panic("no imp")
@@ -1836,7 +1836,7 @@ func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
 	return 0
 }
 
-func _suspair(opts proc.Fdopt_t) (fdops.Fdops_i, fdops.Fdops_i, defs.Err_t) {
+func _suspair(opts defs.Fdopt_t) (fdops.Fdops_i, fdops.Fdops_i, defs.Err_t) {
 	pipe1 := &pipe_t{}
 	pipe2 := &pipe_t{}
 	pipe1.pipe_start()
@@ -1860,10 +1860,10 @@ func sys_shutdown(p *proc.Proc_t, fdn, how int) int {
 		return int(-defs.EBADF)
 	}
 	var rdone, wdone bool
-	if how&proc.SHUT_WR != 0 {
+	if how&defs.SHUT_WR != 0 {
 		wdone = true
 	}
-	if how&proc.SHUT_RD != 0 {
+	if how&defs.SHUT_RD != 0 {
 		rdone = true
 	}
 	return int(fd.Fops.Shutdown(rdone, wdone))
@@ -1982,7 +1982,7 @@ func (sf *sudfops_t) Bind(sa []uint8) defs.Err_t {
 	path := ustr.MkUstrSlice(sa[poff:])
 	// try to create the specified file as a special device
 	bid := allbuds.bud_id_new()
-	fsf, err := thefs.Fs_open_inner(path, proc.O_CREAT|proc.O_EXCL, 0, proc.CurrentProc().Cwd, defs.D_SUD, int(bid))
+	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT|defs.O_EXCL, 0, proc.CurrentProc().Cwd, defs.D_SUD, int(bid))
 	if err != 0 {
 		return err
 	}
@@ -2247,7 +2247,7 @@ func _sockaddr_un(budpath ustr.Ustr) []uint8 {
 	// len
 	writen(ret, 1, 0, len(budpath))
 	// family
-	writen(ret, 1, 1, proc.AF_UNIX)
+	writen(ret, 1, 1, defs.AF_UNIX)
 	// path
 	ret = append(ret, budpath...)
 	ret = append(ret, 0)
@@ -2381,7 +2381,7 @@ type susfops_t struct {
 	lstn    bool
 	myaddr  ustr.Ustr
 	mysid   int
-	options proc.Fdopt_t
+	options defs.Fdopt_t
 }
 
 func (sus *susfops_t) Close() defs.Err_t {
@@ -2472,7 +2472,7 @@ func (sus *susfops_t) Bind(saddr []uint8) defs.Err_t {
 	sid := susid_new()
 
 	// create special file
-	fsf, err := thefs.Fs_open_inner(path, proc.O_CREAT|proc.O_EXCL, 0, proc.CurrentProc().Cwd, defs.D_SUS, sid)
+	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT|defs.O_EXCL, 0, proc.CurrentProc().Cwd, defs.D_SUS, sid)
 	if err != 0 {
 		return err
 	}
@@ -2579,7 +2579,7 @@ func (sus *susfops_t) Sendmsg(src fdops.Userio_i, toaddr []uint8,
 		cmsg_type := readn(cmsg, 4, 12)
 		scm_rights := 1
 		if cmsg_len != scmsz || cmsg_level != scm_rights ||
-			cmsg_type != proc.SOL_SOCKET {
+			cmsg_type != defs.SOL_SOCKET {
 			return 0, -defs.EINVAL
 		}
 		chdrsz := 16
@@ -2618,7 +2618,7 @@ func (sus *susfops_t) _fdrecv(cmsg fdops.Userio_i,
 	}
 	buf := make([]uint8, scmsz)
 	writen(buf, 8, 0, scmsz)
-	writen(buf, 4, 8, proc.SOL_SOCKET)
+	writen(buf, 4, 8, defs.SOL_SOCKET)
 	scm_rights := 1
 	writen(buf, 4, 12, scm_rights)
 	writen(buf, 4, 16, nfdn)
@@ -2677,13 +2677,13 @@ func (sus *susfops_t) Fcntl(cmd, opt int) int {
 	defer sus.bl.Unlock()
 
 	switch cmd {
-	case proc.F_GETFL:
+	case defs.F_GETFL:
 		return int(sus.options)
-	case proc.F_SETFL:
-		sus.options = proc.Fdopt_t(opt)
+	case defs.F_SETFL:
+		sus.options = defs.Fdopt_t(opt)
 		if sus.conn {
-			sus.pipein.options = proc.Fdopt_t(opt)
-			sus.pipeout.options = proc.Fdopt_t(opt)
+			sus.pipein.options = defs.Fdopt_t(opt)
+			sus.pipeout.options = defs.Fdopt_t(opt)
 		}
 		return 0
 	default:
@@ -2694,7 +2694,7 @@ func (sus *susfops_t) Fcntl(cmd, opt int) int {
 func (sus *susfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	switch opt {
-	case proc.SO_ERROR:
+	case defs.SO_ERROR:
 		dur := [4]uint8{}
 		writen(dur[:], 4, 0, 0)
 		did, err := bufarg.Uiowrite(dur[:])
@@ -2933,7 +2933,7 @@ func (susl *susl_t) susl_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 type suslfops_t struct {
 	susl    *susl_t
 	myaddr  ustr.Ustr
-	options proc.Fdopt_t
+	options defs.Fdopt_t
 }
 
 func (sf *suslfops_t) Close() defs.Err_t {
@@ -2983,7 +2983,7 @@ func (sf *suslfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 func (sf *suslfops_t) Accept(fromsa fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	// the connector has already taken syslimit.Socks (1 sock reservation
 	// counts for a connected pair of UNIX stream sockets).
-	noblk := sf.options&proc.O_NONBLOCK != 0
+	noblk := sf.options&defs.O_NONBLOCK != 0
 	pipein := &pipe_t{}
 	pipein.pipe_start()
 	var pipeout *pipe_t
@@ -3031,10 +3031,10 @@ func (sf *suslfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 
 func (sf *suslfops_t) Fcntl(cmd, opt int) int {
 	switch cmd {
-	case proc.F_GETFL:
+	case defs.F_GETFL:
 		return int(sf.options)
-	case proc.F_SETFL:
-		sf.options = proc.Fdopt_t(opt)
+	case defs.F_SETFL:
+		sf.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
@@ -3074,7 +3074,7 @@ func sys_listen(p *proc.Proc_t, fdn, backlog int) int {
 }
 
 func sys_getsockopt(p *proc.Proc_t, fdn, level, opt, optvaln, optlenn int) int {
-	if level != proc.SOL_SOCKET {
+	if level != defs.SOL_SOCKET {
 		panic("no imp")
 	}
 	var olen int
@@ -3136,19 +3136,19 @@ func _closefds(fds []*fd.Fd_t) {
 	}
 }
 
-func sys_fork(parent *proc.Proc_t, ptf *[proc.TFSIZE]uintptr, tforkp int, flags int) int {
-	tmp := flags & (proc.FORK_THREAD | proc.FORK_PROCESS)
-	if tmp != proc.FORK_THREAD && tmp != proc.FORK_PROCESS {
+func sys_fork(parent *proc.Proc_t, ptf *[defs.TFSIZE]uintptr, tforkp int, flags int) int {
+	tmp := flags & (defs.FORK_THREAD | defs.FORK_PROCESS)
+	if tmp != defs.FORK_THREAD && tmp != defs.FORK_PROCESS {
 		return int(-defs.EINVAL)
 	}
 
-	mkproc := flags&proc.FORK_PROCESS != 0
+	mkproc := flags&defs.FORK_PROCESS != 0
 	var child *proc.Proc_t
 	var childtid defs.Tid_t
 	var ret int
 
 	// copy parents trap frame
-	chtf := &[proc.TFSIZE]uintptr{}
+	chtf := &[defs.TFSIZE]uintptr{}
 	*chtf = *ptf
 
 	if mkproc {
@@ -3178,7 +3178,7 @@ func sys_fork(parent *proc.Proc_t, ptf *[proc.TFSIZE]uintptr, tforkp int, flags 
 
 		// fork parent address space
 		parent.Aspace.Lock_pmap()
-		rsp := chtf[proc.TF_RSP]
+		rsp := chtf[defs.TF_RSP]
 		doflush, ok := parent.Vm_fork(child, rsp)
 		if ok && !doflush {
 			panic("no writable segs?")
@@ -3215,7 +3215,7 @@ func sys_fork(parent *proc.Proc_t, ptf *[proc.TFSIZE]uintptr, tforkp int, flags 
 		}
 		writetid := tidaddrn != 0
 		if tcb != 0 {
-			chtf[proc.TF_FSBASE] = uintptr(tcb)
+			chtf[defs.TF_FSBASE] = uintptr(tcb)
 		}
 
 		child = parent
@@ -3233,7 +3233,7 @@ func sys_fork(parent *proc.Proc_t, ptf *[proc.TFSIZE]uintptr, tforkp int, flags 
 		}
 
 		v := int(childtid)
-		chtf[proc.TF_RSP] = uintptr(stack)
+		chtf[defs.TF_RSP] = uintptr(stack)
 		ret = v
 		if writetid {
 			// it is not a fatal error if some thread unmapped the
@@ -3243,7 +3243,7 @@ func sys_fork(parent *proc.Proc_t, ptf *[proc.TFSIZE]uintptr, tforkp int, flags 
 		}
 	}
 
-	chtf[proc.TF_RAX] = 0
+	chtf[defs.TF_RAX] = 0
 	child.Sched_add(chtf, childtid)
 	return ret
 outmem:
@@ -3255,7 +3255,7 @@ outproc:
 	return int(-defs.ENOMEM)
 }
 
-func sys_execv(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, pathn int, argn int) int {
+func sys_execv(p *proc.Proc_t, tf *[defs.TFSIZE]uintptr, pathn int, argn int) int {
 	args, err := p.Userargs(argn)
 	if err != 0 {
 		return int(err)
@@ -3273,7 +3273,7 @@ func sys_execv(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, pathn int, argn int) in
 
 var _zvmregion vm.Vmregion_t
 
-func sys_execv1(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, paths ustr.Ustr,
+func sys_execv1(p *proc.Proc_t, tf *[defs.TFSIZE]uintptr, paths ustr.Ustr,
 	args []ustr.Ustr) int {
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
 	// that all threads should terminate before exec.
@@ -3312,7 +3312,7 @@ func sys_execv1(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, paths ustr.Ustr,
 	}
 
 	// load binary image -- get first block of file
-	file, err := thefs.Fs_open(paths, proc.O_RDONLY, 0, p.Cwd, 0, 0)
+	file, err := thefs.Fs_open(paths, defs.O_RDONLY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		restore()
 		return int(err)
@@ -3414,17 +3414,17 @@ func sys_execv1(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, paths ustr.Ustr,
 	}
 
 	// commit new image state
-	tf[proc.TF_RSP] = uintptr(bufdest)
-	tf[proc.TF_RIP] = uintptr(elfhdr.entry())
-	tf[proc.TF_RFLAGS] = uintptr(proc.TF_FL_IF)
+	tf[defs.TF_RSP] = uintptr(bufdest)
+	tf[defs.TF_RIP] = uintptr(elfhdr.entry())
+	tf[defs.TF_RFLAGS] = uintptr(defs.TF_FL_IF)
 	ucseg := uintptr(5)
 	udseg := uintptr(6)
-	tf[proc.TF_CS] = (ucseg << 3) | 3
-	tf[proc.TF_SS] = (udseg << 3) | 3
-	tf[proc.TF_RDI] = uintptr(argc)
-	tf[proc.TF_RSI] = uintptr(argv)
-	tf[proc.TF_RDX] = uintptr(bufdest)
-	tf[proc.TF_FSBASE] = uintptr(tls0addr)
+	tf[defs.TF_CS] = (ucseg << 3) | 3
+	tf[defs.TF_SS] = (udseg << 3) | 3
+	tf[defs.TF_RDI] = uintptr(argc)
+	tf[defs.TF_RSI] = uintptr(argv)
+	tf[defs.TF_RDX] = uintptr(bufdest)
+	tf[defs.TF_FSBASE] = uintptr(tls0addr)
 	p.Mmapi = mem.USERMIN
 	p.Name = paths
 
@@ -3490,8 +3490,8 @@ func sys_threxit(p *proc.Proc_t, tid defs.Tid_t, status int) {
 
 func sys_wait4(p *proc.Proc_t, tid defs.Tid_t, wpid, statusp, options, rusagep,
 	_isthread int) int {
-	if wpid == proc.WAIT_MYPGRP || options == proc.WCONTINUED ||
-		options == proc.WUNTRACED {
+	if wpid == defs.WAIT_MYPGRP || options == defs.WCONTINUED ||
+		options == defs.WUNTRACED {
 		panic("no imp")
 	}
 
@@ -3500,11 +3500,11 @@ func sys_wait4(p *proc.Proc_t, tid defs.Tid_t, wpid, statusp, options, rusagep,
 		return int(-defs.ECHILD)
 	}
 	isthread := _isthread != 0
-	if isthread && wpid == proc.WAIT_ANY {
+	if isthread && wpid == defs.WAIT_ANY {
 		return int(-defs.EINVAL)
 	}
 
-	noblk := options&proc.WNOHANG != 0
+	noblk := options&defs.WNOHANG != 0
 	var resp proc.Waitst_t
 	var err defs.Err_t
 	if isthread {
@@ -3544,7 +3544,7 @@ func sys_wait4(p *proc.Proc_t, tid defs.Tid_t, wpid, statusp, options, rusagep,
 }
 
 func sys_kill(p *proc.Proc_t, pid, sig int) int {
-	if sig != proc.SIGKILL {
+	if sig != defs.SIGKILL {
 		panic("no imp")
 	}
 	p, ok := proc.Proc_check(pid)
@@ -3691,7 +3691,7 @@ func (f *futex_t) towake(who chan int, v int) {
 }
 
 const (
-	_FUTEX_LAST = proc.FUTEX_CNDGIVE
+	_FUTEX_LAST = defs.FUTEX_CNDGIVE
 	// futex internal op
 	_FUTEX_CNDTAKE = 4
 )
@@ -3724,7 +3724,7 @@ func (f *futex_t) futex_start() {
 			opencount += d
 		case fm := <-f.cmd:
 			switch fm.op {
-			case proc.FUTEX_SLEEP:
+			case defs.FUTEX_SLEEP:
 				val, err := fm.fumem.futload()
 				if err != 0 {
 					f._resume(fm.ack, err)
@@ -3745,7 +3745,7 @@ func (f *futex_t) futex_start() {
 					}
 					f.cndsleep(fm.ack)
 				}
-			case proc.FUTEX_WAKE:
+			case defs.FUTEX_WAKE:
 				var v int
 				if fm.aux == 1 {
 					v = 0
@@ -3756,7 +3756,7 @@ func (f *futex_t) futex_start() {
 				}
 				f.cndwake(v)
 				f._resume(fm.ack, 0)
-			case proc.FUTEX_CNDGIVE:
+			case defs.FUTEX_CNDGIVE:
 				// as an optimization to avoid thundering herd
 				// after pthread_cond_broadcast(3), move
 				// conditional variable's queue of sleepers to
@@ -3910,7 +3910,7 @@ func sys_futex(p *proc.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int {
 		fm.useto = true
 	}
 
-	if op == proc.FUTEX_CNDGIVE {
+	if op == defs.FUTEX_CNDGIVE {
 		fm.othmut, err = va2fut(p, fut2n)
 		if err != 0 {
 			return int(err)
@@ -3941,9 +3941,9 @@ func sys_fcntl(p *proc.Proc_t, fdn, cmd, opt int) int {
 	}
 	switch cmd {
 	// general fcntl(2) ops
-	case proc.F_GETFD:
+	case defs.F_GETFD:
 		return f.Perms & fd.FD_CLOEXEC
-	case proc.F_SETFD:
+	case defs.F_SETFD:
 		if opt&fd.FD_CLOEXEC == 0 {
 			f.Perms &^= fd.FD_CLOEXEC
 		} else {
@@ -3951,7 +3951,7 @@ func sys_fcntl(p *proc.Proc_t, fdn, cmd, opt int) int {
 		}
 		return 0
 	// fd specific fcntl(2) ops
-	case proc.F_GETFL, proc.F_SETFL:
+	case defs.F_GETFL, defs.F_SETFL:
 		return f.Fops.Fcntl(cmd, opt)
 	default:
 		return int(-defs.EINVAL)
@@ -3966,7 +3966,7 @@ func sys_truncate(p *proc.Proc_t, pathn int, newlen uint) int {
 	if err := badpath(path); err != 0 {
 		return int(err)
 	}
-	f, err := thefs.Fs_open(path, proc.O_WRONLY, 0, p.Cwd, 0, 0)
+	f, err := thefs.Fs_open(path, defs.O_WRONLY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -4008,7 +4008,7 @@ func sys_chdir(p *proc.Proc_t, dirn int) int {
 	p.Cwd.Lock()
 	defer p.Cwd.Unlock()
 
-	newfd, err := thefs.Fs_open(path, proc.O_RDONLY|proc.O_DIRECTORY, 0, p.Cwd, 0, 0)
+	newfd, err := thefs.Fs_open(path, defs.O_RDONLY|defs.O_DIRECTORY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -4170,18 +4170,18 @@ var fakeptr *proc.Proc_t
 
 func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 	en := true
-	if ptype&proc.PROF_DISABLE != 0 {
+	if ptype&defs.PROF_DISABLE != 0 {
 		en = false
 	}
 	pmflags := pmflag_t(_pmflags)
 	switch {
-	case ptype&proc.PROF_GOLANG != 0:
+	case ptype&defs.PROF_GOLANG != 0:
 		_prof_go(en)
-	case ptype&proc.PROF_SAMPLE != 0:
+	case ptype&defs.PROF_SAMPLE != 0:
 		ev := pmev_t{evid: pmevid_t(_events),
 			pflags: pmflags}
 		_prof_nmi(en, ev, intperiod)
-	case ptype&proc.PROF_COUNT != 0:
+	case ptype&defs.PROF_COUNT != 0:
 		if pmflags&EVF_BACKTRACE != 0 {
 			return int(-defs.EINVAL)
 		}
@@ -4196,15 +4196,15 @@ func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 			}
 		}
 		_prof_pmc(en, evs)
-	case ptype&proc.PROF_HACK != 0:
+	case ptype&defs.PROF_HACK != 0:
 		runtime.Setheap(_events << 20)
-	case ptype&proc.PROF_HACK2 != 0:
+	case ptype&defs.PROF_HACK2 != 0:
 		if _events < 0 {
 			return int(-defs.EINVAL)
 		}
 		fmt.Printf("GOGC = %v\n", _events)
 		debug.SetGCPercent(_events)
-	case ptype&proc.PROF_HACK3 != 0:
+	case ptype&defs.PROF_HACK3 != 0:
 		if _events < 0 {
 			return int(-defs.EINVAL)
 		}
@@ -4216,9 +4216,9 @@ func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 		//for i := 0; i < _events/8; i++ {
 		//fakeptr = proc
 		//}
-	case ptype&proc.PROF_HACK4 != 0:
+	case ptype&defs.PROF_HACK4 != 0:
 		makefake(p)
-	case ptype&proc.PROF_HACK5 != 0:
+	case ptype&defs.PROF_HACK5 != 0:
 		n := _events
 		if n < 0 {
 			return int(-defs.EINVAL)
@@ -4277,26 +4277,26 @@ func sys_info(p *proc.Proc_t, n int) int {
 
 	ret := int(-defs.EINVAL)
 	switch n {
-	case proc.SINFO_GCCOUNT:
+	case defs.SINFO_GCCOUNT:
 		ret = int(ms.NumGC)
-	case proc.SINFO_GCPAUSENS:
+	case defs.SINFO_GCPAUSENS:
 		ret = int(ms.PauseTotalNs)
-	case proc.SINFO_GCHEAPSZ:
+	case defs.SINFO_GCHEAPSZ:
 		ret = int(ms.Alloc)
 		fmt.Printf("Total heap size: %v MB (%v MB)\n",
 			runtime.Heapsz()/(1<<20), ms.Alloc>>20)
-	case proc.SINFO_GCMS:
+	case defs.SINFO_GCMS:
 		tot := runtime.GCmarktime() + runtime.GCbgsweeptime()
 		ret = tot / 1000000
-	case proc.SINFO_GCTOTALLOC:
+	case defs.SINFO_GCTOTALLOC:
 		ret = int(ms.TotalAlloc)
-	case proc.SINFO_GCMARKT:
+	case defs.SINFO_GCMARKT:
 		ret = runtime.GCmarktime() / 1000000
-	case proc.SINFO_GCSWEEPT:
+	case defs.SINFO_GCSWEEPT:
 		ret = runtime.GCbgsweeptime() / 1000000
-	case proc.SINFO_GCWBARRT:
+	case defs.SINFO_GCWBARRT:
 		ret = runtime.GCwbenabledtime() / 1000000
-	case proc.SINFO_GCOBJS:
+	case defs.SINFO_GCOBJS:
 		ret = int(ms.HeapObjects)
 	case 10:
 		runtime.GC()

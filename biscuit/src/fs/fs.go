@@ -716,11 +716,11 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	fo.fs.istats.Nlseek.Inc()
 
 	switch whence {
-	case proc.SEEK_SET:
+	case defs.SEEK_SET:
 		fo.offset = off
-	case proc.SEEK_CUR:
+	case defs.SEEK_CUR:
 		fo.offset += off
-	case proc.SEEK_END:
+	case defs.SEEK_END:
 		st := &stat.Stat_t{}
 		fo.fstat(st)
 		fo.offset = int(st.Size()) + off
@@ -1129,11 +1129,11 @@ func (raw *rawdfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	defer raw.Unlock()
 
 	switch whence {
-	case proc.SEEK_SET:
+	case defs.SEEK_SET:
 		raw.offset = off
-	case proc.SEEK_CUR:
+	case defs.SEEK_CUR:
 		raw.offset += off
-	//case proc.SEEK_END:
+	//case defs.SEEK_END:
 	default:
 		return 0, -defs.EINVAL
 	}
@@ -1231,9 +1231,9 @@ type Fsfile_t struct {
 	Minor int
 }
 
-func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
-	trunc := flags&proc.O_TRUNC != 0
-	creat := flags&proc.O_CREAT != 0
+func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
+	trunc := flags&defs.O_TRUNC != 0
+	creat := flags&defs.O_CREAT != 0
 	nodir := false
 
 	if fs_debug {
@@ -1282,7 +1282,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
-		oexcl := flags&proc.O_EXCL != 0
+		oexcl := flags&defs.O_EXCL != 0
 		if exists {
 			if oexcl || isdev {
 				idm.iunlock_refdown("Fs_open_inner2")
@@ -1302,8 +1302,8 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd
 
 	itype := idm.itype
 
-	o_dir := flags&proc.O_DIRECTORY != 0
-	wantwrite := flags&(proc.O_WRONLY|proc.O_RDWR) != 0
+	o_dir := flags&defs.O_DIRECTORY != 0
+	wantwrite := flags&(defs.O_WRONLY|defs.O_RDWR) != 0
 	if wantwrite {
 		nodir = true
 	}
@@ -1349,7 +1349,7 @@ func (fs *Fs_t) Makefake() *fd.Fd_t {
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{defs.D_SUD: true, defs.D_SUS: true}
 
-func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (*fd.Fd_t, defs.Err_t) {
+func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (*fd.Fd_t, defs.Err_t) {
 	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
@@ -1386,7 +1386,7 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *fd.C
 			panic("bad dev")
 		}
 	} else {
-		apnd := flags&proc.O_APPEND != 0
+		apnd := flags&defs.O_APPEND != 0
 		ret.Fops = &fsfops_t{priv: priv, fs: fs, append: apnd, count: 1}
 	}
 	return ret, 0

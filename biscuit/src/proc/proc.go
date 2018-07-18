@@ -111,7 +111,7 @@ func (p *Proc_t) fd_insert_inner(f *fd.Fd_t, perms int) (int, bool) {
 		// double size of fd table
 		ol := len(p.Fds)
 		nl := 2 * ol
-		if p.Ulim.Nofile != RLIM_INFINITY && nl > int(p.Ulim.Nofile) {
+		if p.Ulim.Nofile != defs.RLIM_INFINITY && nl > int(p.Ulim.Nofile) {
 			nl = int(p.Ulim.Nofile)
 			if nl < ol {
 				panic("how")
@@ -326,7 +326,7 @@ func KillableWait(cond *sync.Cond) defs.Err_t {
 
 // returns true if the kernel may safely use a "fast" resume and whether the
 // system call should be restarted.
-func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid defs.Tid_t, intno, aux int) (bool, bool) {
+func (p *Proc_t) trap_proc(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t, intno, aux int) (bool, bool) {
 	fastret := false
 	restart := false
 	switch intno {
@@ -334,14 +334,14 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid defs.Tid_t, intno, aux int) 
 		// fast return doesn't restore the registers used to
 		// specify the arguments for libc _entry(), so do a
 		// slow return when returning from sys_execv().
-		sysno := tf[TF_RAX]
-		if sysno != SYS_EXECV {
+		sysno := tf[defs.TF_RAX]
+		if sysno != defs.SYS_EXECV {
 			fastret = true
 		}
 		ret := p.syscall.Syscall(p, tid, tf)
 		restart = ret == int(-defs.ENOHEAP)
 		if !restart {
-			tf[TF_RAX] = uintptr(ret)
+			tf[defs.TF_RAX] = uintptr(ret)
 		}
 
 	case defs.TIMER:
@@ -349,18 +349,18 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid defs.Tid_t, intno, aux int) 
 		runtime.Gosched()
 	case defs.PGFAULT:
 		faultaddr := uintptr(aux)
-		err := p.Aspace.Pgfault(tid, faultaddr, tf[TF_ERROR])
+		err := p.Aspace.Pgfault(tid, faultaddr, tf[defs.TF_ERROR])
 		restart = err == -defs.ENOHEAP
 		if err != 0 && !restart {
 			fmt.Printf("*** fault *** %v: addr %x, "+
 				"rip %x, err %v. killing...\n", p.Name, faultaddr,
-				tf[TF_RIP], err)
-			p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(11))
+				tf[defs.TF_RIP], err)
+			p.syscall.Sys_exit(p, tid, defs.SIGNALED|defs.Mkexitsig(11))
 		}
 	case defs.DIVZERO, defs.GPFAULT, defs.UD:
 		fmt.Printf("%s -- TRAP: %v, RIP: %x\n", p.Name, intno,
-			tf[TF_RIP])
-		p.syscall.Sys_exit(p, tid, SIGNALED|Mkexitsig(4))
+			tf[defs.TF_RIP])
+		p.syscall.Sys_exit(p, tid, defs.SIGNALED|defs.Mkexitsig(4))
 	case defs.TLBSHOOT, defs.PERFMASK, defs.INT_KBD, defs.INT_COM1, defs.INT_MSI0,
 		defs.INT_MSI1, defs.INT_MSI2, defs.INT_MSI3, defs.INT_MSI4, defs.INT_MSI5, defs.INT_MSI6,
 		defs.INT_MSI7:
@@ -371,7 +371,7 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid defs.Tid_t, intno, aux int) 
 	return fastret, restart
 }
 
-func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
+func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 
 	p.Threadi.Lock()
 	mynote, ok := p.Threadi.Notes[tid]
@@ -428,7 +428,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 	Tid_del()
 }
 
-func (p *Proc_t) Sched_add(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
+func (p *Proc_t) Sched_add(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 	go p.run(tf, tid)
 }
 
@@ -681,7 +681,7 @@ var _deflimits = Ulimit_t{
 	// mem limit = 128 MB
 	Pages: (1 << 27) / (1 << 12),
 	//nofile: 512,
-	Nofile: RLIM_INFINITY,
+	Nofile: defs.RLIM_INFINITY,
 	Novma:  (1 << 8),
 	Noproc: (1 << 10),
 }

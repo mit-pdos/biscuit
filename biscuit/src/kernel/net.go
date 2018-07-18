@@ -2098,10 +2098,10 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) defs.Err_t {
 
 	var wasany bool
 	if tc.bound {
-		if tc.lip != proc.INADDR_ANY && tc.lip != localip {
+		if tc.lip != defs.INADDR_ANY && tc.lip != localip {
 			return -defs.ENETUNREACH
 		}
-		if tc.lip == proc.INADDR_ANY {
+		if tc.lip == defs.INADDR_ANY {
 			wasany = true
 		}
 	} else {
@@ -2950,7 +2950,7 @@ var _nilmac mac_t
 
 func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
 	dmac *mac_t, sndnxt uint32, sv []uint8, sp mem.Pa_t, rv []uint8, rp mem.Pa_t) {
-	if lip == proc.INADDR_ANY || rip == proc.INADDR_ANY || lport == 0 || rport == 0 {
+	if lip == defs.INADDR_ANY || rip == defs.INADDR_ANY || lport == 0 || rport == 0 {
 		panic("all IPs/ports must be known")
 	}
 	tc.lip = lip
@@ -3030,7 +3030,7 @@ func (tc *tcpcons_t) reserve(lip ip4_t, lport uint16) bool {
 
 	k := tcplkey_t{lip: lip, lport: lport}
 	anyk := k
-	anyk.lip = proc.INADDR_ANY
+	anyk.lip = defs.INADDR_ANY
 	if tc.ports[k] != 0 || tc.ports[anyk] != 0 {
 		return false
 	}
@@ -3048,7 +3048,7 @@ func (tc *tcpcons_t) reserve_ephemeral(lip ip4_t) (uint16, bool) {
 		k.lport++
 	}
 	anyk := k
-	anyk.lip = proc.INADDR_ANY
+	anyk.lip = defs.INADDR_ANY
 	ok := tc.ports[k]|tc.ports[anyk] > 0
 	for i := 0; i <= int(^uint16(0)) && ok; i++ {
 		k.lport++
@@ -3078,7 +3078,7 @@ func (tc *tcpcons_t) unreserve(lip ip4_t, lport uint16) {
 }
 
 // inserts the TCB into the TCP connection table. wasany is true if the tcb
-// reserved a port on proc.INADDR_ANY.
+// reserved a port on defs.INADDR_ANY.
 func (tc *tcpcons_t) tcb_insert(tcb *tcptcb_t, wasany bool) {
 	tc.l.Lock()
 	tc._tcb_insert(tcb, wasany, false)
@@ -3098,9 +3098,9 @@ func (tc *tcpcons_t) _tcb_insert(tcb *tcptcb_t, wasany, fromlisten bool) {
 		panic("impossible args")
 	}
 	lk := tcplkey_t{lip: tcb.lip, lport: tcb.lport}
-	// if the tcb reserved on proc.INADDR_ANY, free up the used port on the
+	// if the tcb reserved on defs.INADDR_ANY, free up the used port on the
 	// other local IPs
-	anyk := tcplkey_t{lip: proc.INADDR_ANY, lport: tcb.lport}
+	anyk := tcplkey_t{lip: defs.INADDR_ANY, lport: tcb.lport}
 	if wasany {
 		// XXXPANIC
 		if tc.ports[anyk] == 0 {
@@ -3136,7 +3136,7 @@ func (tc *tcpcons_t) _tcb_insert(tcb *tcptcb_t, wasany, fromlisten bool) {
 // no such socket/connection.
 func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool,
 	*tcplisten_t, bool) {
-	if tk.lip == proc.INADDR_ANY {
+	if tk.lip == defs.INADDR_ANY {
 		panic("localip must be known")
 	}
 
@@ -3147,7 +3147,7 @@ func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool,
 	l, islist := tc.listns[lk]
 	if !islist {
 		// check for any IP listener
-		lk.lip = proc.INADDR_ANY
+		lk.lip = defs.INADDR_ANY
 		l, islist = tc.listns[lk]
 	}
 	tc.l.Unlock()
@@ -3172,7 +3172,7 @@ func (tc *tcpcons_t) tcb_del(tcb *tcptcb_t) {
 	if n == 0 {
 		// connection must be from listening
 		anyk := lk
-		anyk.lip = proc.INADDR_ANY
+		anyk.lip = defs.INADDR_ANY
 		ln := tc.ports[anyk]
 		if ln == 0 {
 			panic("lk doesn't exist")
@@ -3336,7 +3336,7 @@ func _port_closed(tcph *tcphdr_t, k tcpkey_t) {
 type tcpfops_t struct {
 	// tcb must always be non-nil
 	tcb     *tcptcb_t
-	options proc.Fdopt_t
+	options defs.Fdopt_t
 }
 
 // to prevent an operation racing with a close
@@ -3393,7 +3393,7 @@ func (tf *tcpfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 		tf.tcb.tcb_unlock()
 		return 0, err
 	}
-	noblk := tf.options&proc.O_NONBLOCK != 0
+	noblk := tf.options&defs.O_NONBLOCK != 0
 
 	var read int
 	var err defs.Err_t
@@ -3435,7 +3435,7 @@ func (tf *tcpfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
 		tf.tcb.tcb_unlock()
 		return 0, err
 	}
-	noblk := tf.options&proc.O_NONBLOCK != 0
+	noblk := tf.options&defs.O_NONBLOCK != 0
 
 	var wrote int
 	var err defs.Err_t
@@ -3490,12 +3490,12 @@ func (tf *tcpfops_t) Bind(saddr []uint8) defs.Err_t {
 	lport := ntohs(be16(readn(saddr, 2, 2)))
 	lip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
 
-	// why verify saddr.family is proc.AF_INET?
-	if fam != proc.AF_INET {
+	// why verify saddr.family is defs.AF_INET?
+	if fam != defs.AF_INET {
 		return -defs.EAFNOSUPPORT
 	}
 
-	if lip != proc.INADDR_ANY {
+	if lip != defs.INADDR_ANY {
 		if _, ok := nic_lookup(lip); !ok {
 			return -defs.EADDRNOTAVAIL
 		}
@@ -3542,7 +3542,7 @@ func (tf *tcpfops_t) Connect(saddr []uint8) defs.Err_t {
 	}
 
 	blk := true
-	if tf.options&proc.O_NONBLOCK != 0 {
+	if tf.options&defs.O_NONBLOCK != 0 {
 		blk = false
 	}
 	dip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
@@ -3578,11 +3578,11 @@ func (tf *tcpfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	}
 
 	if !tf.tcb.bound {
-		lport, ok := tcpcons.reserve_ephemeral(proc.INADDR_ANY)
+		lport, ok := tcpcons.reserve_ephemeral(defs.INADDR_ANY)
 		if !ok {
 			return nil, -defs.EADDRINUSE
 		}
-		tf.tcb.lip = proc.INADDR_ANY
+		tf.tcb.lip = defs.INADDR_ANY
 		tf.tcb.lport = lport
 		tf.tcb.bound = true
 	}
@@ -3653,10 +3653,10 @@ func (tf *tcpfops_t) Fcntl(cmd, opt int) int {
 	defer tf.tcb.tcb_unlock()
 
 	switch cmd {
-	case proc.F_GETFL:
+	case defs.F_GETFL:
 		return int(tf.options)
-	case proc.F_SETFL:
-		tf.options = proc.Fdopt_t(opt)
+	case defs.F_SETFL:
+		tf.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
@@ -3669,13 +3669,13 @@ func (tf *tcpfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	defer tf.tcb.tcb_unlock()
 
 	switch opt {
-	case proc.SO_NAME, proc.SO_PEER:
+	case defs.SO_NAME, defs.SO_PEER:
 		if !tf.tcb.bound {
 			return 0, -defs.EADDRNOTAVAIL
 		}
-		b := []uint8{8, proc.AF_INET, 0, 0, 0, 0, 0, 0}
+		b := []uint8{8, defs.AF_INET, 0, 0, 0, 0, 0, 0}
 		var port, ip int
-		if opt == proc.SO_NAME {
+		if opt == defs.SO_NAME {
 			port = int(tf.tcb.lport)
 			ip = int(tf.tcb.lip)
 		} else {
@@ -3696,12 +3696,12 @@ func (tf *tcpfops_t) Setsockopt(lev, opt int, src fdops.Userio_i,
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
-	if lev != proc.SOL_SOCKET {
+	if lev != defs.SOL_SOCKET {
 		return -defs.EOPNOTSUPP
 	}
 	ret := -defs.EOPNOTSUPP
 	switch opt {
-	case proc.SO_SNDBUF, proc.SO_RCVBUF:
+	case defs.SO_SNDBUF, defs.SO_RCVBUF:
 		panic("fixme")
 		n := uint(intarg)
 		// circbuf requires that the buffer size is power-of-2. my
@@ -3715,7 +3715,7 @@ func (tf *tcpfops_t) Setsockopt(lev, opt int, src fdops.Userio_i,
 		}
 		var cb *circbuf_t
 		var sp *int
-		if opt == proc.SO_SNDBUF {
+		if opt == defs.SO_SNDBUF {
 			cb = &tf.tcb.txbuf.cbuf
 			sp = &tf.tcb.sndsz
 		} else {
@@ -3756,7 +3756,7 @@ func (tf *tcpfops_t) Shutdown(read, write bool) defs.Err_t {
 // passive connect fops
 type tcplfops_t struct {
 	tcl     tcplisten_t
-	options proc.Fdopt_t
+	options defs.Fdopt_t
 }
 
 // to prevent an operation racing with a close
@@ -3856,7 +3856,7 @@ func (tl *tcplfops_t) Accept(saddr fdops.Userio_i) (fdops.Fdops_i,
 	defer tl.tcl.l.Unlock()
 
 	var tcb *tcptcb_t
-	noblk := tl.options&proc.O_NONBLOCK != 0
+	noblk := tl.options&defs.O_NONBLOCK != 0
 
 	for {
 		if tl.tcl.openc == 0 {
@@ -3882,7 +3882,7 @@ func (tl *tcplfops_t) Accept(saddr fdops.Userio_i) (fdops.Fdops_i,
 	sinsz := 8
 	buf := make([]uint8, sinsz)
 	writen(buf, 1, 0, sinsz)
-	writen(buf, 1, 1, proc.AF_INET)
+	writen(buf, 1, 1, defs.AF_INET)
 	writen(buf, 2, 2, int(htons(tcb.rport)))
 	writen(buf, 4, 4, int(htonl(uint32(tcb.rip))))
 	did, err := saddr.Uiowrite(buf)
@@ -3962,10 +3962,10 @@ func (tl *tcplfops_t) Fcntl(cmd, opt int) int {
 	defer tl.tcl.l.Unlock()
 
 	switch cmd {
-	case proc.F_GETFL:
+	case defs.F_GETFL:
 		return int(tl.options)
-	case proc.F_SETFL:
-		tl.options = proc.Fdopt_t(opt)
+	case defs.F_SETFL:
+		tl.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
@@ -3975,7 +3975,7 @@ func (tl *tcplfops_t) Fcntl(cmd, opt int) int {
 func (tl *tcplfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	switch opt {
-	case proc.SO_ERROR:
+	case defs.SO_ERROR:
 		dur := [4]uint8{}
 		writen(dur[:], 4, 0, 0)
 		did, err := bufarg.Uiowrite(dur[:])
@@ -3990,12 +3990,12 @@ func (tl *tcplfops_t) Setsockopt(lev, opt int, bufarg fdops.Userio_i,
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
-	if lev != proc.SOL_SOCKET {
+	if lev != defs.SOL_SOCKET {
 		return -defs.EOPNOTSUPP
 	}
 	ret := -defs.EOPNOTSUPP
 	switch opt {
-	case proc.SO_SNDBUF, proc.SO_RCVBUF:
+	case defs.SO_SNDBUF, defs.SO_RCVBUF:
 		n := uint(intarg)
 		mn := uint(1 << 11)
 		mx := uint(1 << 20)
@@ -4004,7 +4004,7 @@ func (tl *tcplfops_t) Setsockopt(lev, opt int, bufarg fdops.Userio_i,
 			break
 		}
 		var sp *int
-		if opt == proc.SO_SNDBUF {
+		if opt == defs.SO_SNDBUF {
 			sp = &tl.tcl.sndsz
 		} else {
 			sp = &tl.tcl.rcvsz
