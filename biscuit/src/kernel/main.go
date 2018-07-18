@@ -15,6 +15,7 @@ import "common"
 import "defs"
 import "mem"
 import "fs"
+import "res"
 import "stat"
 import "tinfo"
 import "ustr"
@@ -869,10 +870,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	}
 	var reqc chan int
 	pollers := &common.Pollers_t{}
-	common.Kreswait(1<<20, "kbd daemon")
+	res.Kreswait(1<<20, "kbd daemon")
 	for {
-		common.Kunres()
-		common.Kreswait(1<<20, "kbd daemon")
+		res.Kunres()
+		res.Kreswait(1<<20, "kbd daemon")
 		select {
 		case <-cons.kbd_int:
 			for _kready() {
@@ -1441,7 +1442,7 @@ var thefs *fs.Fs_t
 const diskfs = false
 
 func main() {
-	common.Kernel = true
+	res.Kernel = true
 
 	// magic loop
 	//if rand.Int() != 0 {
@@ -1498,7 +1499,7 @@ func main() {
 	common.Oom_init(thefs.Fs_evict)
 
 	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
-		common.Resbegin(1 << 20)
+		res.Resbegin(1 << 20)
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
@@ -1513,7 +1514,7 @@ func main() {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
 		p.Sched_add(&tf, p.Tid0())
-		common.Resend()
+		res.Resend()
 	}
 
 	//exec("bin/lsh", nil)

@@ -5,10 +5,10 @@ import "sync/atomic"
 import "unsafe"
 
 import "bounds"
-import "common"
 import "defs"
 import "limits"
 import "mem"
+import "res"
 import "ustr"
 import "util"
 
@@ -213,7 +213,7 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name ustr.Ustr, inum defs.Inum_t) 
 func (idm *imemnode_t) _descan(opid opid_t, f func(fn ustr.Ustr, de *icdent_t) bool) (bool, defs.Err_t) {
 	found := false
 	for i := 0; i < idm.size; i += BSIZE {
-		if !common.Resadd_noblock(bounds.Bounds(bounds.B_IMEMNODE_T__DESCAN)) {
+		if !res.Resadd_noblock(bounds.Bounds(bounds.B_IMEMNODE_T__DESCAN)) {
 			return false, -defs.ENOHEAP
 		}
 		b, err := idm.off2buf(opid, i, BSIZE, false, true, "_descan")

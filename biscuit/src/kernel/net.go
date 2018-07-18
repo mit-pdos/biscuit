@@ -13,6 +13,7 @@ import "common"
 import "defs"
 import "limits"
 import "mem"
+import "res"
 import "stat"
 
 type ip4_t uint32
@@ -690,8 +691,8 @@ var _rstchan chan rstmsg_t
 
 func rst_daemon() {
 	for rmsg := range _rstchan {
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "icmp daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "icmp daemon")
 		localip, routeip, err := routetbl.lookup(rmsg.k.rip)
 		if err != 0 {
 			continue
@@ -725,8 +726,8 @@ var icmp_echos = make(chan []uint8, 30)
 func icmp_daemon() {
 	for {
 		buf := <-icmp_echos
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "icmp daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "icmp daemon")
 		buf = buf[ETHERLEN:]
 
 		fromip := sl2ip(buf[12:])
@@ -1772,8 +1773,8 @@ func (tt *tcptimers_t) _tcptimers_start() {
 
 func (tt *tcptimers_t) _tcptimers_daemon() {
 	var curtoc <-chan time.Time
-	res := bounds.Bounds(bounds.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
-	common.Kreswait(res, "tcp timers thread")
+	r := bounds.Bounds(bounds.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
+	res.Kreswait(r, "tcp timers thread")
 	for {
 		dotos := false
 		select {
@@ -1782,8 +1783,8 @@ func (tt *tcptimers_t) _tcptimers_daemon() {
 		case <-tt.kicker:
 		}
 
-		common.Kunres()
-		common.Kreswait(res, "tcp timers thread")
+		res.Kunres()
+		res.Kreswait(r, "tcp timers thread")
 
 		var acklists []*tcptcb_t
 		var txlists []*tcptcb_t
@@ -3396,7 +3397,7 @@ func (tf *tcpfops_t) Read(dst common.Userio_i) (int, defs.Err_t) {
 	var err defs.Err_t
 	for {
 		gimme := bounds.Bounds(bounds.B_TCPFOPS_T_READ)
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			err = -defs.ENOHEAP
 			break
 		}
@@ -3438,7 +3439,7 @@ func (tf *tcpfops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	var err defs.Err_t
 	for {
 		gimme := bounds.Bounds(bounds.B_TCPFOPS_T_WRITE)
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			err = -defs.ENOHEAP
 			break
 		}
@@ -4337,8 +4338,8 @@ func (l *lo_t) lo_start() {
 
 func (l *lo_t) _daemon() {
 	for {
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "lo daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "lo daemon")
 		lm := <-l.txc
 		if lm.tso {
 			l._tso(lm.buf, lm.tcphlen, lm.mss)

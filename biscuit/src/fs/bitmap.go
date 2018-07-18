@@ -5,8 +5,8 @@ import "sync"
 import "sort"
 
 import "bounds"
-import "common"
 import "defs"
+import "res"
 import "stats"
 
 // Bitmap allocater/marker. Used for inodes, blocks, and orphan inodes.
@@ -89,7 +89,7 @@ func (alloc *bitmap_t) Fbread(blockno int) *Bdev_block_t {
 // apply f to every bit starting from start, until f is false.  return true if
 // make a complete pass.
 func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) bool {
-	var ca common.Cacheallocs_t
+	var ca res.Cacheallocs_t
 	gimme := bounds.Bounds(bounds.B_BITMAP_T_APPLY)
 
 	var blk *Bdev_block_t

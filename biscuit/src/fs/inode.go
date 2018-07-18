@@ -12,6 +12,7 @@ import "defs"
 import "hashtable"
 import "limits"
 import "mem"
+import "res"
 import "stat"
 import "stats"
 import "ustr"
@@ -367,7 +368,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 	idm.fs.istats.Ndo_write.Inc()
 	for i < sz {
 		gimme := bounds.Bounds(bounds.B_IMEMNODE_T_DO_WRITE)
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return i, -defs.ENOHEAP
 		}
 
@@ -665,7 +666,7 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 		}
 		for b := lastblk; b <= whichblk; b++ {
 			gimme := bounds.Bounds(bounds.B_IMEMNODE_T_BMAPFILL)
-			if !common.Resadd_noblock(gimme) {
+			if !res.Resadd_noblock(gimme) {
 				return 0, false, -defs.ENOHEAP
 			}
 			// XXX we could remember where the last slot was
@@ -732,7 +733,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, defs.Err_t) 
 	c := 0
 	gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IREAD)
 	for offset < isz && dst.Remain() != 0 {
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return c, -defs.ENOHEAP
 		}
 		m := min(BSIZE-offset%BSIZE, dst.Remain())
@@ -768,7 +769,7 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 	c := 0
 	gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IWRITE)
 	for c < sz {
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return c, -defs.ENOHEAP
 		}
 		m := min(BSIZE-offset%BSIZE, sz-c)
@@ -932,7 +933,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]mem.Mmapinf
 	ret := make([]mem.Mmapinfo_t, pgc)
 	for i := 0; i < len; i += mem.PGSIZE {
 		gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IMMAPINFO)
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return nil, -defs.ENOHEAP
 		}
 		buf, err := idm.off2buf(opid_t(0), o+i, mem.PGSIZE, false, true, "immapinfo")
@@ -1163,7 +1164,7 @@ func (idm *imemnode_t) ifree() defs.Err_t {
 	// indirect/double-indirect itself when:
 	//	DBLOCKS+INADDR <= major DBLOCKS+INADDR+2
 
-	var ca common.Cacheallocs_t
+	var ca res.Cacheallocs_t
 	gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IFREE)
 	remains := true
 	var tryevict bool
@@ -1334,7 +1335,7 @@ func (icache *icache_t) RecoverOrphans() {
 	}
 	// XXX remove once reservation counting is fixed s.t. credit cannot be
 	// leaked
-	common.Resend()
+	res.Resend()
 }
 
 func (icache *icache_t) Stats() string {

@@ -11,6 +11,7 @@ import "bounds"
 import "defs"
 import "limits"
 import "mem"
+import "res"
 import "tinfo"
 import "ustr"
 
@@ -385,7 +386,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 
 	var fxbuf *[64]uintptr
 	const runonly = 14 << 10
-	if Resbegin(runonly) {
+	if res.Resbegin(runonly) {
 		// could allocate fxbuf lazily
 		fxbuf = mkfxbuf()
 	}
@@ -397,7 +398,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
 		refp, _ := mem.Physmem.Refaddr(p.Aspace.P_pmap)
-		Resend()
+		res.Resend()
 
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
 			uintptr(p.Aspace.P_pmap), fastret, refp)
@@ -409,12 +410,12 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 
 	again:
 		var restart bool
-		if Resbegin(runonly) {
+		if res.Resbegin(runonly) {
 			fastret, restart = p.trap_proc(tf, tid, intno, aux)
 		}
 		if restart && !p.doomed {
 			//fmt.Printf("restart! ")
-			Resend()
+			res.Resend()
 			goto again
 		}
 
@@ -424,7 +425,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 			mem.Physmem.Dec_pmap(mem.Pa_t(op_pmap))
 		}
 	}
-	Resend()
+	res.Resend()
 	Tid_del()
 }
 
@@ -564,7 +565,7 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 	done := false
 	curaddr := make([]uint8, 0, 8)
 	for !done {
-		if !Resadd(bounds.Bounds(bounds.B_PROC_T_USERARGS)) {
+		if !res.Resadd(bounds.Bounds(bounds.B_PROC_T_USERARGS)) {
 			return nil, -defs.ENOHEAP
 		}
 		ptrs, err := p.Aspace.Userdmap8r(uva + uoff)

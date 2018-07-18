@@ -8,6 +8,7 @@ import "time"
 import "bounds"
 import "defs"
 import "mem"
+import "res"
 import "ustr"
 import "util"
 
@@ -226,7 +227,7 @@ func (as *Aspace_t) K2user_inner(src []uint8, uva int) defs.Err_t {
 	l := len(src)
 	for cnt != l {
 		gimme := bounds.Bounds(bounds.B_PROC_T_K2USER_INNER)
-		if !Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
 		}
 		dst, err := as.Userdmap8_inner(uva+cnt, true)
@@ -257,7 +258,7 @@ func (as *Aspace_t) User2k_inner(dst []uint8, uva int) defs.Err_t {
 	cnt := 0
 	for len(dst) != 0 {
 		gimme := bounds.Bounds(bounds.B_PROC_T_USER2K_INNER)
-		if !Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
 		}
 		src, err := as.Userdmap8_inner(uva+cnt, false)

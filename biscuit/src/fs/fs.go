@@ -9,6 +9,7 @@ import "common"
 import "defs"
 import "limits"
 import "mem"
+import "res"
 import "stat"
 import "stats"
 import "ustr"
@@ -343,7 +344,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemno
 	// lookup newchild and try to lock all inodes involved
 	for {
 		gimme := bounds.Bounds(bounds.B_FS_T_FS_RENAME)
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
 			return refs, -defs.ENOHEAP
@@ -503,7 +504,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) defs.Err_t {
 	here.Refup("_isancestor")
 	gimme := bounds.Bounds(bounds.B_FS_T__ISANCESTOR)
 	for here != fs.root {
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
 		}
 		if anc.inum == here.inum {
@@ -1472,7 +1473,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imem
 			}
 			idm.ilock("fs_namei")
 			n, err = idm.ilookup(opid, cp)
-			if !common.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
+			if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
 				err = -defs.ENOHEAP
 			}
 			if err != 0 {

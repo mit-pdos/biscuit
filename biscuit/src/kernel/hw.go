@@ -8,9 +8,9 @@ import "time"
 import "unsafe"
 
 import "bounds"
-import "common"
 import "defs"
 import "mem"
+import "res"
 
 const BSIZE = 4096
 
@@ -2185,12 +2185,12 @@ func (x *ixgbe_t) rx_consume() {
 
 func (x *ixgbe_t) int_handler(vector msivec_t) {
 	rantest := false
-	res := bounds.Bounds(bounds.B_IXGBE_T_INT_HANDLER)
-	common.Kreswait(res, "ixgbe int handler")
+	r := bounds.Bounds(bounds.B_IXGBE_T_INT_HANDLER)
+	res.Kreswait(r, "ixgbe int handler")
 	for {
-		common.Kunres()
+		res.Kunres()
 		runtime.IRQsched(uint(vector))
-		common.Kreswait(res, "ixgbe int handler")
+		res.Kreswait(r, "ixgbe int handler")
 
 		// interrupt status register clears on read
 		st := x.rl(EICR)
@@ -2256,7 +2256,7 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 				//go x.tx_test2()
 				go func() {
 					for {
-						common.Kreswait(1<<20,
+						res.Kreswait(1<<20,
 							"stat printer")
 						time.Sleep(10 * time.Second)
 						v := x.rl(QPRDC(0))
@@ -2268,7 +2268,7 @@ func (x *ixgbe_t) int_handler(vector msivec_t) {
 							fmt.Printf("drop ints: %v\n", dropints)
 							dropints = 0
 						}
-						common.Kunres()
+						res.Kunres()
 					}
 				}()
 			}

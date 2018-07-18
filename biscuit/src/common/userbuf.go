@@ -7,6 +7,7 @@ import "unsafe"
 
 import "bounds"
 import "defs"
+import "res"
 
 // interface for reading/writing from user space memory either via a pointer
 // and length or an array of pointers and lengths (iovec)
@@ -73,7 +74,7 @@ func (ub *Userbuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, defs.Err_t) {
 	ret := 0
 	for len(buf) != 0 && ub.off != ub.len {
-		if !Resadd_noblock(bounds.Bounds(bounds.B_USERBUF_T__TX)) {
+		if !res.Resadd_noblock(bounds.Bounds(bounds.B_USERBUF_T__TX)) {
 			return ret, -defs.ENOHEAP
 		}
 		va := ub.userva + ub.off
@@ -123,7 +124,7 @@ func (iov *Useriovec_t) Iov_init(as *Aspace_t, iovarn uint, niovs int) defs.Err_
 	defer as.Unlock_pmap()
 	for i := range iov.iovs {
 		gimme := bounds.Bounds(bounds.B_USERIOVEC_T_IOV_INIT)
-		if !Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
 		}
 		elmsz := uint(16)
@@ -159,7 +160,7 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, defs.Err_t) {
 	ub := &Userbuf_t{}
 	did := 0
 	for len(buf) > 0 && len(iov.iovs) > 0 {
-		if !Resadd_noblock(bounds.Bounds(bounds.B_USERIOVEC_T__TX)) {
+		if !res.Resadd_noblock(bounds.Bounds(bounds.B_USERIOVEC_T__TX)) {
 			return did, -defs.ENOHEAP
 		}
 		ciov := &iov.iovs[0]

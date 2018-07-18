@@ -18,6 +18,7 @@ import "defs"
 import "fs"
 import "limits"
 import "mem"
+import "res"
 import "stat"
 import "tinfo"
 import "ustr"
@@ -112,7 +113,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid defs.Tid_t, tf *[common.TFSIZE
 	//if lim == 0 {
 	//	panic("bad limit")
 	//}
-	if !common.Resadd(lim) {
+	if !res.Resadd(lim) {
 		//fmt.Printf("syscall res failed\n")
 		return int(-defs.ENOHEAP)
 	}
@@ -786,7 +787,7 @@ func sys_poll(proc *common.Proc_t, tid defs.Tid_t, fdsn, nfds, timeout int) int 
 	pm := common.Pollmsg_t{}
 	for {
 		// its ok to block for memory here since no locks are held
-		if !common.Resadd(gimme) {
+		if !res.Resadd(gimme) {
 			return int(-defs.ENOHEAP)
 		}
 		wait := timeout != 0
@@ -1120,7 +1121,7 @@ func (of *pipefops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	noblk := of.options&common.O_NONBLOCK != 0
 	c := 0
 	for c != src.Totalsz() {
-		if !common.Resadd(bounds.Bounds(bounds.B_PIPEFOPS_T_WRITE)) {
+		if !res.Resadd(bounds.Bounds(bounds.B_PIPEFOPS_T_WRITE)) {
 			return c, -defs.ENOHEAP
 		}
 		ret, err := of.pipe.op_write(src, noblk)
@@ -3700,7 +3701,7 @@ func (f *futex_t) _resume(ack chan int, err defs.Err_t) {
 }
 
 func (f *futex_t) futex_start() {
-	common.Kresdebug(1<<10, "futex daemon")
+	res.Kresdebug(1<<10, "futex daemon")
 	maxwait := 10
 	f._cnds = make([]chan int, 0, maxwait)
 	f.cnds = f._cnds
@@ -3710,8 +3711,8 @@ func (f *futex_t) futex_start() {
 	pack := make(chan int, 1)
 	opencount := 1
 	for opencount > 0 {
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "futex daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "futex daemon")
 		tochan, towho := f.tonext()
 		select {
 		case <-tochan:
@@ -3797,7 +3798,7 @@ func (f *futex_t) futex_start() {
 			}
 		}
 	}
-	common.Kunresdebug()
+	res.Kunresdebug()
 }
 
 type allfutex_t struct {
@@ -4221,7 +4222,7 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		}
 		runtime.SetMaxheap(n)
 		fmt.Printf("remaining mem: %v\n",
-			common.Human(runtime.Memremain()))
+			res.Human(runtime.Memremain()))
 	default:
 		return int(-defs.EINVAL)
 	}
@@ -4557,7 +4558,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, de
 	// load each elf segment directly into process memory
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
-		if !common.Resadd_noblock(gimme) {
+		if !res.Resadd_noblock(gimme) {
 			return 0, 0, 0, -defs.ENOHEAP
 		}
 		if hdr.etype == PT_TLS {
@@ -4613,7 +4614,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, de
 			panic("must succeed")
 		}
 		for i := 0; i < tlscopylen; {
-			if !common.Resadd_noblock(gimme) {
+			if !res.Resadd_noblock(gimme) {
 				return 0, 0, 0, -defs.ENOHEAP
 			}
 
