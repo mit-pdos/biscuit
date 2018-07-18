@@ -30,6 +30,7 @@ PSRC := src/accnt/accnt.go \
 	src/bounds/bounds.go \
 	src/caller/caller.go \
 	src/defs/defs.go \
+	src/fdops/fdops.go \
 	src/limits/limits.go \
 	src/mem/mem.go src/mem/dmap.go \
 	src/oommsg/oommsg.go \

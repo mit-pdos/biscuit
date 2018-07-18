@@ -3,6 +3,7 @@ package vm
 import "fmt"
 
 import "defs"
+import "fdops"
 import "mem"
 import "util"
 
@@ -40,7 +41,7 @@ const (
 )
 
 type Mfile_t struct {
-	mfops Fdops_i
+	mfops fdops.Fdops_i
 	unpin mem.Unpin_i
 	// once mapcount is 0, close mfops
 	mapcount int

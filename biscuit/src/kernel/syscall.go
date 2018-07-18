@@ -14,6 +14,7 @@ import "unsafe"
 import "bounds"
 import "bpath"
 import "defs"
+import "fdops"
 import "fs"
 import "limits"
 import "mem"
@@ -264,7 +265,7 @@ type console_t struct {
 
 var console = &console_t{}
 
-func (c *console_t) Cons_read(ub vm.Userio_i, offset int) (int, defs.Err_t) {
+func (c *console_t) Cons_read(ub fdops.Userio_i, offset int) (int, defs.Err_t) {
 	sz := ub.Remain()
 	kdata, err := kbd_get(sz)
 	if err != 0 {
@@ -277,7 +278,7 @@ func (c *console_t) Cons_read(ub vm.Userio_i, offset int) (int, defs.Err_t) {
 	return ret, err
 }
 
-func (c *console_t) Cons_write(src vm.Userio_i, off int) (int, defs.Err_t) {
+func (c *console_t) Cons_write(src fdops.Userio_i, off int) (int, defs.Err_t) {
 	// merge into one buffer to avoid taking the console lock many times.
 	// what a sweet optimization.
 	utext := int8(0x17)
@@ -681,20 +682,20 @@ func sys_fstat(p *proc.Proc_t, fdn int, statn int) int {
 // converts internal states to poll states
 // pokes poll status bits into user memory. since we only use one priority
 // internally, mask away any POLL bits the user didn't not request.
-func _ready2rev(orig int, r vm.Ready_t) int {
+func _ready2rev(orig int, r fdops.Ready_t) int {
 	inmask := proc.POLLIN | proc.POLLPRI
 	outmask := proc.POLLOUT | proc.POLLWRBAND
 	pbits := 0
-	if r&vm.R_READ != 0 {
+	if r&fdops.R_READ != 0 {
 		pbits |= inmask
 	}
-	if r&vm.R_WRITE != 0 {
+	if r&fdops.R_WRITE != 0 {
 		pbits |= outmask
 	}
-	if r&vm.R_HUP != 0 {
+	if r&fdops.R_HUP != 0 {
 		pbits |= proc.POLLHUP
 	}
-	if r&vm.R_ERROR != 0 {
+	if r&fdops.R_ERROR != 0 {
 		pbits |= proc.POLLERR
 	}
 	wantevents := ((orig >> 32) & 0xffff) | proc.POLLNVAL | proc.POLLERR | proc.POLLHUP
@@ -702,7 +703,7 @@ func _ready2rev(orig int, r vm.Ready_t) int {
 	return orig | (revents << 48)
 }
 
-func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *vm.Pollmsg_t, wait bool, buf []uint8,
+func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *fdops.Pollmsg_t, wait bool, buf []uint8,
 	nfds int) (int, bool, defs.Err_t) {
 	inmask := proc.POLLIN | proc.POLLPRI
 	outmask := proc.POLLOUT | proc.POLLWRBAND
@@ -724,20 +725,20 @@ func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *vm.Pollmsg_t, wait bool, buf 
 			writeback = true
 			continue
 		}
-		var pev vm.Ready_t
+		var pev fdops.Ready_t
 		events := int((uint(uw) >> 32) & 0xffff)
 		// one priority
 		if events&inmask != 0 {
-			pev |= vm.R_READ
+			pev |= fdops.R_READ
 		}
 		if events&outmask != 0 {
-			pev |= vm.R_WRITE
+			pev |= fdops.R_WRITE
 		}
 		if events&proc.POLLHUP != 0 {
-			pev |= vm.R_HUP
+			pev |= fdops.R_HUP
 		}
 		// poll unconditionally reports ERR, HUP, and NVAL
-		pev |= vm.R_ERROR | vm.R_HUP
+		pev |= fdops.R_ERROR | fdops.R_HUP
 		pm.Pm_set(tid, pev, wait)
 		devstatus, err := fd.Fops.Pollone(*pm)
 		if err != 0 {
@@ -785,7 +786,7 @@ func sys_poll(p *proc.Proc_t, tid defs.Tid_t, fdsn, nfds, timeout int) int {
 	// notifiers with the rest of the devices -- we just ask their status
 	// too.
 	gimme := bounds.Bounds(bounds.B_SYS_POLL)
-	pm := vm.Pollmsg_t{}
+	pm := fdops.Pollmsg_t{}
 	for {
 		// its ok to block for memory here since no locks are held
 		if !res.Resadd(gimme) {
@@ -894,7 +895,7 @@ type pipe_t struct {
 	readers int
 	writers int
 	closed  bool
-	pollers vm.Pollers_t
+	pollers fdops.Pollers_t
 	passfds passfd_t
 	// if true, this pipe was allocated against the pipe limit; raise it on
 	// termination.
@@ -909,7 +910,7 @@ func (o *pipe_t) pipe_start() {
 	o.wcond = sync.NewCond(o)
 }
 
-func (o *pipe_t) op_write(src vm.Userio_i, noblock bool) (int, defs.Err_t) {
+func (o *pipe_t) op_write(src fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 	const pipe_buf = 4096
 	need := src.Remain()
 	if need > pipe_buf {
@@ -947,13 +948,13 @@ func (o *pipe_t) op_write(src vm.Userio_i, noblock bool) (int, defs.Err_t) {
 		return 0, err
 	}
 	o.rcond.Signal()
-	o.pollers.Wakeready(vm.R_READ)
+	o.pollers.Wakeready(fdops.R_READ)
 	o.Unlock()
 
 	return ret, 0
 }
 
-func (o *pipe_t) op_read(dst vm.Userio_i, noblock bool) (int, defs.Err_t) {
+func (o *pipe_t) op_read(dst fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 	o.Lock()
 	for {
 		if o.closed {
@@ -978,13 +979,13 @@ func (o *pipe_t) op_read(dst vm.Userio_i, noblock bool) (int, defs.Err_t) {
 		return 0, err
 	}
 	o.wcond.Signal()
-	o.pollers.Wakeready(vm.R_WRITE)
+	o.pollers.Wakeready(fdops.R_WRITE)
 	o.Unlock()
 
 	return ret, 0
 }
 
-func (o *pipe_t) op_poll(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (o *pipe_t) op_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	o.Lock()
 
 	if o.closed {
@@ -992,7 +993,7 @@ func (o *pipe_t) op_poll(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
 		return 0, 0
 	}
 
-	var r vm.Ready_t
+	var r fdops.Ready_t
 	readable := false
 	if !o.cbuf.empty() || o.writers == 0 {
 		readable = true
@@ -1001,13 +1002,13 @@ func (o *pipe_t) op_poll(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
 	if !o.cbuf.full() || o.readers == 0 {
 		writeable = true
 	}
-	if pm.Events&vm.R_READ != 0 && readable {
-		r |= vm.R_READ
+	if pm.Events&fdops.R_READ != 0 && readable {
+		r |= fdops.R_READ
 	}
-	if pm.Events&vm.R_HUP != 0 && o.writers == 0 {
-		r |= vm.R_HUP
-	} else if pm.Events&vm.R_WRITE != 0 && writeable {
-		r |= vm.R_WRITE
+	if pm.Events&fdops.R_HUP != 0 && o.writers == 0 {
+		r |= fdops.R_HUP
+	} else if pm.Events&fdops.R_WRITE != 0 && writeable {
+		r |= fdops.R_WRITE
 	}
 	if r != 0 || !pm.Dowait {
 		o.Unlock()
@@ -1103,7 +1104,7 @@ func (of *pipefops_t) Pathi() defs.Inum_t {
 	panic("pipe cwd")
 }
 
-func (of *pipefops_t) Read(dst vm.Userio_i) (int, defs.Err_t) {
+func (of *pipefops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 	noblk := of.options&proc.O_NONBLOCK != 0
 	return of.pipe.op_read(dst, noblk)
 }
@@ -1118,7 +1119,7 @@ func (of *pipefops_t) Reopen() defs.Err_t {
 	return ret
 }
 
-func (of *pipefops_t) Write(src vm.Userio_i) (int, defs.Err_t) {
+func (of *pipefops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
 	noblk := of.options&proc.O_NONBLOCK != 0
 	c := 0
 	for c != src.Totalsz() {
@@ -1138,15 +1139,15 @@ func (of *pipefops_t) Truncate(uint) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (of *pipefops_t) Pread(vm.Userio_i, int) (int, defs.Err_t) {
+func (of *pipefops_t) Pread(fdops.Userio_i, int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (of *pipefops_t) Pwrite(vm.Userio_i, int) (int, defs.Err_t) {
+func (of *pipefops_t) Pwrite(fdops.Userio_i, int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (of *pipefops_t) Accept(vm.Userio_i) (vm.Fdops_i, int, defs.Err_t) {
+func (of *pipefops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	return nil, 0, -defs.ENOTSOCK
 }
 
@@ -1158,25 +1159,25 @@ func (of *pipefops_t) Connect([]uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Listen(int) (vm.Fdops_i, defs.Err_t) {
+func (of *pipefops_t) Listen(int) (fdops.Fdops_i, defs.Err_t) {
 	return nil, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Sendmsg(vm.Userio_i, []uint8, []uint8,
+func (of *pipefops_t) Sendmsg(fdops.Userio_i, []uint8, []uint8,
 	int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Recvmsg(vm.Userio_i, vm.Userio_i,
-	vm.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+func (of *pipefops_t) Recvmsg(fdops.Userio_i, fdops.Userio_i,
+	fdops.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (of *pipefops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	if of.writer {
-		pm.Events &^= vm.R_READ
+		pm.Events &^= fdops.R_READ
 	} else {
-		pm.Events &^= vm.R_WRITE
+		pm.Events &^= fdops.R_WRITE
 	}
 	return of.pipe.op_poll(pm)
 }
@@ -1193,11 +1194,11 @@ func (of *pipefops_t) Fcntl(cmd, opt int) int {
 	}
 }
 
-func (of *pipefops_t) Getsockopt(int, vm.Userio_i, int) (int, defs.Err_t) {
+func (of *pipefops_t) Getsockopt(int, fdops.Userio_i, int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Setsockopt(int, int, vm.Userio_i, int) defs.Err_t {
+func (of *pipefops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
@@ -1450,7 +1451,7 @@ func sys_socket(p *proc.Proc_t, domain, typ, proto int) int {
 		clop = vm.FD_CLOEXEC
 	}
 
-	var sfops vm.Fdops_i
+	var sfops fdops.Fdops_i
 	switch {
 	case domain == proc.AF_UNIX && typ&proc.SOCK_DGRAM != 0:
 		if opts != 0 {
@@ -1650,7 +1651,7 @@ func sys_recvmsg(p *proc.Proc_t, fdn, _msgn, _flags int) int {
 		return int(err4)
 	}
 
-	var saddr vm.Userio_i
+	var saddr fdops.Userio_i
 	saddr = zeroubuf
 	if salen > 0 {
 		saddrn, err := p.Aspace.Userreadn(int(msgn+0*8), 8)
@@ -1660,7 +1661,7 @@ func sys_recvmsg(p *proc.Proc_t, fdn, _msgn, _flags int) int {
 		ub := p.Aspace.Mkuserbuf(saddrn, salen)
 		saddr = ub
 	}
-	var cmsg vm.Userio_i
+	var cmsg fdops.Userio_i
 	cmsg = zeroubuf
 	if cmsgl > 0 {
 		cmsgn, err := p.Aspace.Userreadn(int(msgn+4*8), 8)
@@ -1797,7 +1798,7 @@ func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
 		return int(-defs.ENOMEM)
 	}
 
-	var sfops1, sfops2 vm.Fdops_i
+	var sfops1, sfops2 fdops.Fdops_i
 	var err defs.Err_t
 	switch {
 	case domain == proc.AF_UNIX && typ&proc.SOCK_STREAM != 0:
@@ -1834,7 +1835,7 @@ func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
 	return 0
 }
 
-func _suspair(opts proc.Fdopt_t) (vm.Fdops_i, vm.Fdops_i, defs.Err_t) {
+func _suspair(opts proc.Fdopt_t) (fdops.Fdops_i, fdops.Fdops_i, defs.Err_t) {
 	pipe1 := &pipe_t{}
 	pipe2 := &pipe_t{}
 	pipe1.pipe_start()
@@ -1921,7 +1922,7 @@ func (sf *sudfops_t) Pathi() defs.Inum_t {
 	panic("cwd socket?")
 }
 
-func (sf *sudfops_t) Read(dst vm.Userio_i) (int, defs.Err_t) {
+func (sf *sudfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.EBADF
 }
 
@@ -1932,7 +1933,7 @@ func (sf *sudfops_t) Reopen() defs.Err_t {
 	return 0
 }
 
-func (sf *sudfops_t) Write(vm.Userio_i) (int, defs.Err_t) {
+func (sf *sudfops_t) Write(fdops.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.EBADF
 }
 
@@ -1940,11 +1941,11 @@ func (sf *sudfops_t) Truncate(newlen uint) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (sf *sudfops_t) Pread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (sf *sudfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (sf *sudfops_t) Pwrite(src vm.Userio_i, offset int) (int, defs.Err_t) {
+func (sf *sudfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
@@ -1964,7 +1965,7 @@ func slicetostr(buf []uint8) string {
 	return string(buf[:end])
 }
 
-func (sf *sudfops_t) Accept(vm.Userio_i) (vm.Fdops_i, int, defs.Err_t) {
+func (sf *sudfops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	return nil, 0, -defs.EINVAL
 }
 
@@ -1998,11 +1999,11 @@ func (sf *sudfops_t) Connect(sabuf []uint8) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (sf *sudfops_t) Listen(backlog int) (vm.Fdops_i, defs.Err_t) {
+func (sf *sudfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	return nil, -defs.EINVAL
 }
 
-func (sf *sudfops_t) Sendmsg(src vm.Userio_i, sa []uint8,
+func (sf *sudfops_t) Sendmsg(src fdops.Userio_i, sa []uint8,
 	cmsg []uint8, flags int) (int, defs.Err_t) {
 	if len(cmsg) != 0 || flags != 0 {
 		panic("no imp")
@@ -2044,8 +2045,8 @@ func (sf *sudfops_t) Sendmsg(src vm.Userio_i, sa []uint8,
 	return did, 0
 }
 
-func (sf *sudfops_t) Recvmsg(dst vm.Userio_i,
-	fromsa vm.Userio_i, cmsg vm.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+func (sf *sudfops_t) Recvmsg(dst fdops.Userio_i,
+	fromsa fdops.Userio_i, cmsg fdops.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 || flags != 0 {
 		panic("no imp")
 	}
@@ -2067,12 +2068,12 @@ func (sf *sudfops_t) Recvmsg(dst vm.Userio_i,
 	return datadid, addrdid, ancdid, msgfl, 0
 }
 
-func (sf *sudfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (sf *sudfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	sf.Lock()
 	defer sf.Unlock()
 
 	if !sf.bound {
-		return pm.Events & vm.R_ERROR, 0
+		return pm.Events & fdops.R_ERROR, 0
 	}
 	r, err := sf.bud.bud_poll(pm)
 	return r, err
@@ -2082,12 +2083,12 @@ func (sf *sudfops_t) Fcntl(cmd, opt int) int {
 	return int(-defs.ENOSYS)
 }
 
-func (sf *sudfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
+func (sf *sudfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	return 0, -defs.EOPNOTSUPP
 }
 
-func (sf *sudfops_t) Setsockopt(int, int, vm.Userio_i, int) defs.Err_t {
+func (sf *sudfops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
 	return -defs.EOPNOTSUPP
 }
 
@@ -2189,7 +2190,7 @@ func (db *dgrambuf_t) _havedgram() bool {
 	return db.head != db.tail
 }
 
-func (db *dgrambuf_t) copyin(src vm.Userio_i, from ustr.Ustr) (int, defs.Err_t) {
+func (db *dgrambuf_t) copyin(src fdops.Userio_i, from ustr.Ustr) (int, defs.Err_t) {
 	// is there a free source address slot and buffer space?
 	if !db._canhold(src.Totalsz()) {
 		panic("should have blocked")
@@ -2205,7 +2206,7 @@ func (db *dgrambuf_t) copyin(src vm.Userio_i, from ustr.Ustr) (int, defs.Err_t) 
 	return did, 0
 }
 
-func (db *dgrambuf_t) copyout(dst, fromsa, cmsg vm.Userio_i) (int, int, defs.Err_t) {
+func (db *dgrambuf_t) copyout(dst, fromsa, cmsg fdops.Userio_i) (int, int, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
 	}
@@ -2258,7 +2259,7 @@ type bud_t struct {
 	bid     budid_t
 	fpriv   defs.Inum_t
 	dbuf    dgrambuf_t
-	pollers vm.Pollers_t
+	pollers fdops.Pollers_t
 	cond    *sync.Cond
 	closed  bool
 	bpath   ustr.Ustr
@@ -2274,16 +2275,16 @@ func (bud *bud_t) bud_init(bid budid_t, bpath ustr.Ustr, priv defs.Inum_t) {
 
 func (bud *bud_t) _rready() {
 	bud.cond.Broadcast()
-	bud.pollers.Wakeready(vm.R_READ)
+	bud.pollers.Wakeready(fdops.R_READ)
 }
 
 func (bud *bud_t) _wready() {
 	bud.cond.Broadcast()
-	bud.pollers.Wakeready(vm.R_WRITE)
+	bud.pollers.Wakeready(fdops.R_WRITE)
 }
 
 // returns number of bytes written and error
-func (bud *bud_t) bud_in(src vm.Userio_i, from ustr.Ustr, cmsg []uint8) (int, defs.Err_t) {
+func (bud *bud_t) bud_in(src fdops.Userio_i, from ustr.Ustr, cmsg []uint8) (int, defs.Err_t) {
 	if len(cmsg) != 0 {
 		panic("no imp")
 	}
@@ -2310,7 +2311,7 @@ func (bud *bud_t) bud_in(src vm.Userio_i, from ustr.Ustr, cmsg []uint8) (int, de
 
 // returns number of bytes written of data, socket address, ancillary data, and
 // ancillary message flags...
-func (bud *bud_t) bud_out(dst, fromsa, cmsg vm.Userio_i) (int, int, int,
+func (bud *bud_t) bud_out(dst, fromsa, cmsg fdops.Userio_i) (int, int, int,
 	defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
@@ -2335,18 +2336,18 @@ func (bud *bud_t) bud_out(dst, fromsa, cmsg vm.Userio_i) (int, int, int,
 	return ddid, fdid, 0, 0, err
 }
 
-func (bud *bud_t) bud_poll(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
-	var ret vm.Ready_t
+func (bud *bud_t) bud_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
+	var ret fdops.Ready_t
 	var err defs.Err_t
 	bud.Lock()
 	if bud.closed {
 		goto out
 	}
-	if pm.Events&vm.R_READ != 0 && bud.dbuf._havedgram() {
-		ret |= vm.R_READ
+	if pm.Events&fdops.R_READ != 0 && bud.dbuf._havedgram() {
+		ret |= fdops.R_READ
 	}
-	if pm.Events&vm.R_WRITE != 0 && bud.dbuf._canhold(32) {
-		ret |= vm.R_WRITE
+	if pm.Events&fdops.R_WRITE != 0 && bud.dbuf._canhold(32) {
+		ret |= fdops.R_WRITE
 	}
 	if ret == 0 && pm.Dowait {
 		err = bud.pollers.Addpoller(&pm)
@@ -2361,7 +2362,7 @@ func (bud *bud_t) bud_close() {
 	bud.Lock()
 	bud.closed = true
 	bud.cond.Broadcast()
-	bud.pollers.Wakeready(vm.R_READ | vm.R_WRITE | vm.R_ERROR)
+	bud.pollers.Wakeready(fdops.R_READ | fdops.R_WRITE | fdops.R_ERROR)
 	bid := bud.bid
 	fpriv := bud.fpriv
 	bud.dbuf.dg_release()
@@ -2417,7 +2418,7 @@ func (sus *susfops_t) Pathi() defs.Inum_t {
 	panic("unix stream cwd?")
 }
 
-func (sus *susfops_t) Read(dst vm.Userio_i) (int, defs.Err_t) {
+func (sus *susfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 	read, _, _, _, err := sus.Recvmsg(dst, zeroubuf, zeroubuf, 0)
 	return read, err
 }
@@ -2434,7 +2435,7 @@ func (sus *susfops_t) Reopen() defs.Err_t {
 	return err2
 }
 
-func (sus *susfops_t) Write(src vm.Userio_i) (int, defs.Err_t) {
+func (sus *susfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
 	wrote, err := sus.Sendmsg(src, nil, nil, 0)
 	if err == -defs.EPIPE {
 		err = -defs.ECONNRESET
@@ -2446,15 +2447,15 @@ func (sus *susfops_t) Truncate(newlen uint) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (sus *susfops_t) Pread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (sus *susfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (sus *susfops_t) Pwrite(src vm.Userio_i, offset int) (int, defs.Err_t) {
+func (sus *susfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (sus *susfops_t) Accept(vm.Userio_i) (vm.Fdops_i, int, defs.Err_t) {
+func (sus *susfops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	return nil, 0, -defs.EINVAL
 }
 
@@ -2526,7 +2527,7 @@ func (sus *susfops_t) Connect(saddr []uint8) defs.Err_t {
 	return 0
 }
 
-func (sus *susfops_t) Listen(backlog int) (vm.Fdops_i, defs.Err_t) {
+func (sus *susfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	sus.bl.Lock()
 	defer sus.bl.Unlock()
 
@@ -2557,7 +2558,7 @@ func (sus *susfops_t) Listen(backlog int) (vm.Fdops_i, defs.Err_t) {
 	return newsock, 0
 }
 
-func (sus *susfops_t) Sendmsg(src vm.Userio_i, toaddr []uint8,
+func (sus *susfops_t) Sendmsg(src fdops.Userio_i, toaddr []uint8,
 	cmsg []uint8, flags int) (int, defs.Err_t) {
 	if !sus.conn {
 		return 0, -defs.ENOTCONN
@@ -2599,7 +2600,7 @@ func (sus *susfops_t) Sendmsg(src vm.Userio_i, toaddr []uint8,
 	return sus.pipeout.Write(src)
 }
 
-func (sus *susfops_t) _fdrecv(cmsg vm.Userio_i,
+func (sus *susfops_t) _fdrecv(cmsg fdops.Userio_i,
 	fl defs.Msgfl_t) (int, defs.Msgfl_t, defs.Err_t) {
 	scmsz := 16 + 8
 	if cmsg.Totalsz() < scmsz {
@@ -2630,8 +2631,8 @@ func (sus *susfops_t) _fdrecv(cmsg vm.Userio_i,
 	return scmsz, fl, 0
 }
 
-func (sus *susfops_t) Recvmsg(dst vm.Userio_i, fromsa vm.Userio_i,
-	cmsg vm.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+func (sus *susfops_t) Recvmsg(dst fdops.Userio_i, fromsa fdops.Userio_i,
+	cmsg fdops.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if !sus.conn {
 		return 0, 0, 0, 0, -defs.ENOTCONN
 	}
@@ -2644,18 +2645,18 @@ func (sus *susfops_t) Recvmsg(dst vm.Userio_i, fromsa vm.Userio_i,
 	return ret, 0, cmsglen, msgfl, err
 }
 
-func (sus *susfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (sus *susfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	if !sus.conn {
-		return pm.Events & vm.R_ERROR, 0
+		return pm.Events & fdops.R_ERROR, 0
 	}
 
 	// pipefops_t.pollone() doesn't allow polling for reading on write-end
 	// of pipe and vice versa
-	var readyin vm.Ready_t
-	var readyout vm.Ready_t
-	both := pm.Events&(vm.R_READ|vm.R_WRITE) == 0
+	var readyin fdops.Ready_t
+	var readyout fdops.Ready_t
+	both := pm.Events&(fdops.R_READ|fdops.R_WRITE) == 0
 	var err defs.Err_t
-	if both || pm.Events&vm.R_READ != 0 {
+	if both || pm.Events&fdops.R_READ != 0 {
 		readyin, err = sus.pipein.Pollone(pm)
 	}
 	if err != 0 {
@@ -2664,7 +2665,7 @@ func (sus *susfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
 	if readyin != 0 {
 		return readyin, 0
 	}
-	if both || pm.Events&vm.R_WRITE != 0 {
+	if both || pm.Events&fdops.R_WRITE != 0 {
 		readyout, err = sus.pipeout.Pollone(pm)
 	}
 	return readyin | readyout, err
@@ -2689,7 +2690,7 @@ func (sus *susfops_t) Fcntl(cmd, opt int) int {
 	}
 }
 
-func (sus *susfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
+func (sus *susfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	switch opt {
 	case proc.SO_ERROR:
@@ -2702,7 +2703,7 @@ func (sus *susfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
 	}
 }
 
-func (sus *susfops_t) Setsockopt(int, int, vm.Userio_i, int) defs.Err_t {
+func (sus *susfops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
 	return -defs.EOPNOTSUPP
 }
 
@@ -2728,7 +2729,7 @@ var allsusl = allsusl_t{m: map[int]*susl_t{}}
 type susl_t struct {
 	sync.Mutex
 	waiters         []_suslblog_t
-	pollers         vm.Pollers_t
+	pollers         fdops.Pollers_t
 	opencount       int
 	mysid           int
 	readyconnectors int
@@ -2831,7 +2832,7 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 	}
 	if getacceptor {
 		b.conn = mypipe
-		susl.pollers.Wakeready(vm.R_READ)
+		susl.pollers.Wakeready(fdops.R_READ)
 	} else {
 		b.acc = mypipe
 	}
@@ -2896,7 +2897,7 @@ func (susl *susl_t) susl_reopen(delta int) defs.Err_t {
 			s.err = -defs.ECONNRESET
 			s.cond.Signal()
 		}
-		susl.pollers.Wakeready(vm.R_READ | vm.R_HUP | vm.R_ERROR)
+		susl.pollers.Wakeready(fdops.R_READ | fdops.R_HUP | fdops.R_ERROR)
 	}
 
 	susl.Unlock()
@@ -2908,16 +2909,16 @@ func (susl *susl_t) susl_reopen(delta int) defs.Err_t {
 	return ret
 }
 
-func (susl *susl_t) susl_poll(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (susl *susl_t) susl_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	susl.Lock()
 	if susl.opencount == 0 {
 		susl.Unlock()
 		return 0, 0
 	}
-	if pm.Events&vm.R_READ != 0 {
+	if pm.Events&fdops.R_READ != 0 {
 		if susl.readyconnectors > 0 {
 			susl.Unlock()
-			return vm.R_READ, 0
+			return fdops.R_READ, 0
 		}
 	}
 	var err defs.Err_t
@@ -2954,7 +2955,7 @@ func (sf *suslfops_t) Pathi() defs.Inum_t {
 	panic("unix stream listener cwd?")
 }
 
-func (sf *suslfops_t) Read(vm.Userio_i) (int, defs.Err_t) {
+func (sf *suslfops_t) Read(fdops.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.ENOTCONN
 }
 
@@ -2962,7 +2963,7 @@ func (sf *suslfops_t) Reopen() defs.Err_t {
 	return sf.susl.susl_reopen(1)
 }
 
-func (sf *suslfops_t) Write(vm.Userio_i) (int, defs.Err_t) {
+func (sf *suslfops_t) Write(fdops.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.EPIPE
 }
 
@@ -2970,15 +2971,15 @@ func (sf *suslfops_t) Truncate(newlen uint) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (sf *suslfops_t) Pread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (sf *suslfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (sf *suslfops_t) Pwrite(src vm.Userio_i, offset int) (int, defs.Err_t) {
+func (sf *suslfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (sf *suslfops_t) Accept(fromsa vm.Userio_i) (vm.Fdops_i, int, defs.Err_t) {
+func (sf *suslfops_t) Accept(fromsa fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	// the connector has already taken syslimit.Socks (1 sock reservation
 	// counts for a connected pair of UNIX stream sockets).
 	noblk := sf.options&proc.O_NONBLOCK != 0
@@ -3009,21 +3010,21 @@ func (sf *suslfops_t) Connect(sabuf []uint8) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (sf *suslfops_t) Listen(backlog int) (vm.Fdops_i, defs.Err_t) {
+func (sf *suslfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	return nil, -defs.EINVAL
 }
 
-func (sf *suslfops_t) Sendmsg(vm.Userio_i, []uint8, []uint8,
+func (sf *suslfops_t) Sendmsg(fdops.Userio_i, []uint8, []uint8,
 	int) (int, defs.Err_t) {
 	return 0, -defs.ENOTCONN
 }
 
-func (sf *suslfops_t) Recvmsg(vm.Userio_i, vm.Userio_i,
-	vm.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+func (sf *suslfops_t) Recvmsg(fdops.Userio_i, fdops.Userio_i,
+	fdops.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTCONN
 }
 
-func (sf *suslfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (sf *suslfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	return sf.susl.susl_poll(pm)
 }
 
@@ -3039,12 +3040,12 @@ func (sf *suslfops_t) Fcntl(cmd, opt int) int {
 	}
 }
 
-func (sf *suslfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
+func (sf *suslfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	return 0, -defs.EOPNOTSUPP
 }
 
-func (sf *suslfops_t) Setsockopt(int, int, vm.Userio_i, int) defs.Err_t {
+func (sf *suslfops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
 	return -defs.EOPNOTSUPP
 }
 
@@ -4467,7 +4468,7 @@ func (e *elf_t) entry() int {
 	return readn(e.data, ELF_ADDR, e_entry)
 }
 
-func segload(p *proc.Proc_t, entry int, hdr *elf_phdr, fops vm.Fdops_i) defs.Err_t {
+func segload(p *proc.Proc_t, entry int, hdr *elf_phdr, fops fdops.Fdops_i) defs.Err_t {
 	if hdr.vaddr%mem.PGSIZE != hdr.fileoff%mem.PGSIZE {
 		panic("requires copying")
 	}

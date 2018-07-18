@@ -1,7 +1,7 @@
 package proc
 
 import "defs"
-import "vm"
+import "fdops"
 
 type Fdopt_t uint
 
@@ -12,8 +12,8 @@ type Syscall_i interface {
 }
 
 type Cons_i interface {
-	Cons_read(ub vm.Userio_i, offset int) (int, defs.Err_t)
-	Cons_write(src vm.Userio_i, off int) (int, defs.Err_t)
+	Cons_read(ub fdops.Userio_i, offset int) (int, defs.Err_t)
+	Cons_write(src fdops.Userio_i, off int) (int, defs.Err_t)
 }
 
 const (

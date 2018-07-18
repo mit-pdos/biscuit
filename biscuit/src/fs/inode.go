@@ -8,6 +8,7 @@ import "unsafe"
 
 import "bounds"
 import "defs"
+import "fdops"
 import "hashtable"
 import "limits"
 import "mem"
@@ -16,7 +17,6 @@ import "stat"
 import "stats"
 import "ustr"
 import "util"
-import "vm"
 
 type inode_stats_t struct {
 	Nopen       stats.Counter_t
@@ -350,11 +350,11 @@ func (idm *imemnode_t) do_trunc(opid opid_t, truncto uint) defs.Err_t {
 	return err
 }
 
-func (idm *imemnode_t) do_read(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (idm *imemnode_t) do_read(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return idm.iread(dst, offset)
 }
 
-func (idm *imemnode_t) do_write(src vm.Userio_i, offset int, app bool) (int, defs.Err_t) {
+func (idm *imemnode_t) do_write(src fdops.Userio_i, offset int, app bool) (int, defs.Err_t) {
 	// break write system calls into one or more calls with no more than
 	// maxblkpersys blocks per call. account for indirect blocks.
 	max := (MaxBlkPerOp - 3) * BSIZE
@@ -727,7 +727,7 @@ func min(a, b int) int {
 	return b
 }
 
-func (idm *imemnode_t) iread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (idm *imemnode_t) iread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	idm.fs.istats.Niread.Inc()
 	isz := idm.size
 	c := 0
@@ -762,7 +762,7 @@ func (idm *imemnode_t) iread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
 	return c, 0
 }
 
-func (idm *imemnode_t) iwrite(opid opid_t, src vm.Userio_i, offset int, n int) (int, defs.Err_t) {
+func (idm *imemnode_t) iwrite(opid opid_t, src fdops.Userio_i, offset int, n int) (int, defs.Err_t) {
 	idm.fs.istats.Niwrite.Inc()
 	sz := min(src.Totalsz(), n)
 	newsz := offset + sz

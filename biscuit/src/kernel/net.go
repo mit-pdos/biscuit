@@ -10,6 +10,7 @@ import "unsafe"
 
 import "bounds"
 import "defs"
+import "fdops"
 import "limits"
 import "mem"
 import "proc"
@@ -834,7 +835,7 @@ type tcpbuf_t struct {
 	seq     uint32
 	didseq  bool
 	cond    *sync.Cond
-	pollers *vm.Pollers_t
+	pollers *fdops.Pollers_t
 }
 
 func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg mem.Pa_t, tcb *tcptcb_t) {
@@ -903,7 +904,7 @@ func (tb *tcpbuf_t) rcvup(upto uint32) {
 	tb.seq += uint32(did)
 	tb.cbuf._advhead(did)
 	tb.cond.Broadcast()
-	tb.pollers.Wakeready(vm.R_READ)
+	tb.pollers.Wakeready(fdops.R_READ)
 }
 
 // returns slices referencing the data written by the user (two when the
@@ -947,7 +948,7 @@ func (tb *tcpbuf_t) ackup(rack uint32) {
 	tb.cbuf._advtail(sz)
 	tb.seq += uint32(sz)
 	tb.cond.Broadcast()
-	tb.pollers.Wakeready(vm.R_WRITE)
+	tb.pollers.Wakeready(fdops.R_WRITE)
 }
 
 type tseg_t struct {
@@ -1444,7 +1445,7 @@ type tcplisten_t struct {
 		cond *sync.Cond
 	}
 	openc   int
-	pollers vm.Pollers_t
+	pollers fdops.Pollers_t
 	sndsz   int
 	rcvsz   int
 }
@@ -1493,7 +1494,7 @@ func (tcl *tcplisten_t) _conadd(tcb *tcptcb_t) {
 	rc.sl[rc.inum%l] = tcb
 	rc.inum++
 	rc.cond.Signal()
-	tcl.pollers.Wakeready(vm.R_READ)
+	tcl.pollers.Wakeready(fdops.R_READ)
 }
 
 func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
@@ -1957,7 +1958,7 @@ type tcptcb_t struct {
 	twdeath bool
 	bound   bool
 	openc   int
-	pollers vm.Pollers_t
+	pollers fdops.Pollers_t
 	rcv     struct {
 		nxt    uint32
 		win    uint16
@@ -2230,7 +2231,7 @@ func (tc *tcptcb_t) finchk(ip4 *ip4hdr_t, tcp *tcphdr_t, os, ns tcpstate_t) {
 			panic("have uncoalesced segs")
 		}
 		tc.rxbuf.cond.Broadcast()
-		tc.pollers.Wakeready(vm.R_READ)
+		tc.pollers.Wakeready(fdops.R_READ)
 		tc.sched_ack()
 	}
 }
@@ -2629,7 +2630,7 @@ func (tc *tcptcb_t) failwake() {
 	tc.rxdone = true
 	tc.rxbuf.cond.Broadcast()
 	tc.txbuf.cond.Broadcast()
-	tc.pollers.Wakeready(vm.R_READ | vm.R_HUP | vm.R_ERROR)
+	tc.pollers.Wakeready(fdops.R_READ | fdops.R_HUP | fdops.R_ERROR)
 }
 
 func (tc *tcptcb_t) synsent(tcp *tcphdr_t, mss uint16, ropt tcpopt_t,
@@ -2890,7 +2891,7 @@ func (tc *tcptcb_t) lwingrow(dlen int) {
 	}
 }
 
-func (tc *tcptcb_t) uread(dst vm.Userio_i) (int, defs.Err_t) {
+func (tc *tcptcb_t) uread(dst fdops.Userio_i) (int, defs.Err_t) {
 	tc._sanity()
 	wrote, err := tc.rxbuf.cbuf.copyout(dst)
 	// did the user consume enough data to reopen the window?
@@ -2898,7 +2899,7 @@ func (tc *tcptcb_t) uread(dst vm.Userio_i) (int, defs.Err_t) {
 	return wrote, err
 }
 
-func (tc *tcptcb_t) uwrite(src vm.Userio_i) (int, defs.Err_t) {
+func (tc *tcptcb_t) uwrite(src fdops.Userio_i) (int, defs.Err_t) {
 	tc._sanity()
 	wrote, err := tc.txbuf.cbuf.copyin(src)
 	if tc.state == ESTAB || tc.state == CLOSEWAIT {
@@ -3362,7 +3363,7 @@ func (tf *tcpfops_t) Close() defs.Err_t {
 	if tf.tcb.openc == 0 {
 		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
-		tf.tcb.pollers.Wakeready(vm.R_READ | vm.R_HUP)
+		tf.tcb.pollers.Wakeready(fdops.R_READ | fdops.R_HUP)
 	}
 
 	return 0
@@ -3386,7 +3387,7 @@ func (tf *tcpfops_t) Pathi() defs.Inum_t {
 	panic("tcp socket cwd")
 }
 
-func (tf *tcpfops_t) Read(dst vm.Userio_i) (int, defs.Err_t) {
+func (tf *tcpfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -3428,7 +3429,7 @@ func (tf *tcpfops_t) Reopen() defs.Err_t {
 	return 0
 }
 
-func (tf *tcpfops_t) Write(src vm.Userio_i) (int, defs.Err_t) {
+func (tf *tcpfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -3472,15 +3473,15 @@ func (tf *tcpfops_t) Truncate(newlen uint) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (tf *tcpfops_t) Pread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (tf *tcpfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (tf *tcpfops_t) Pwrite(src vm.Userio_i, offset int) (int, defs.Err_t) {
+func (tf *tcpfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (tf *tcpfops_t) Accept(vm.Userio_i) (vm.Fdops_i, int, defs.Err_t) {
+func (tf *tcpfops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	panic("no imp")
 }
 
@@ -3568,7 +3569,7 @@ func (tf *tcpfops_t) Connect(saddr []uint8) defs.Err_t {
 	return ret
 }
 
-func (tf *tcpfops_t) Listen(backlog int) (vm.Fdops_i, defs.Err_t) {
+func (tf *tcpfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3600,7 +3601,7 @@ func (tf *tcpfops_t) Listen(backlog int) (vm.Fdops_i, defs.Err_t) {
 }
 
 // XXX read/write should be wrapper around recvmsg/sendmsg
-func (tf *tcpfops_t) Sendmsg(src vm.Userio_i,
+func (tf *tcpfops_t) Sendmsg(src fdops.Userio_i,
 	toaddr []uint8, cmsg []uint8, flags int) (int, defs.Err_t) {
 	if len(cmsg) != 0 {
 		panic("no imp")
@@ -3608,8 +3609,8 @@ func (tf *tcpfops_t) Sendmsg(src vm.Userio_i,
 	return tf.Write(src)
 }
 
-func (tf *tcpfops_t) Recvmsg(dst vm.Userio_i,
-	fromsa vm.Userio_i, cmsg vm.Userio_i, flag int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+func (tf *tcpfops_t) Recvmsg(dst fdops.Userio_i,
+	fromsa fdops.Userio_i, cmsg fdops.Userio_i, flag int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
 	}
@@ -3617,7 +3618,7 @@ func (tf *tcpfops_t) Recvmsg(dst vm.Userio_i,
 	return wrote, 0, 0, 0, err
 }
 
-func (tf *tcpfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (tf *tcpfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3625,20 +3626,20 @@ func (tf *tcpfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
 		return 0, 0
 	}
 
-	var ret vm.Ready_t
+	var ret fdops.Ready_t
 	isdata := !tf.tcb.rxbuf.cbuf.empty()
-	if tf.tcb.dead && pm.Events&vm.R_ERROR != 0 {
-		ret |= vm.R_ERROR
+	if tf.tcb.dead && pm.Events&fdops.R_ERROR != 0 {
+		ret |= fdops.R_ERROR
 	}
-	if pm.Events&vm.R_READ != 0 && (isdata || tf.tcb.rxdone) {
-		ret |= vm.R_READ
+	if pm.Events&fdops.R_READ != 0 && (isdata || tf.tcb.rxdone) {
+		ret |= fdops.R_READ
 	}
 	if tf.tcb.txdone {
-		if pm.Events&vm.R_HUP != 0 {
-			ret |= vm.R_HUP
+		if pm.Events&fdops.R_HUP != 0 {
+			ret |= fdops.R_HUP
 		}
-	} else if pm.Events&vm.R_WRITE != 0 && !tf.tcb.txbuf.cbuf.full() {
-		ret |= vm.R_WRITE
+	} else if pm.Events&fdops.R_WRITE != 0 && !tf.tcb.txbuf.cbuf.full() {
+		ret |= fdops.R_WRITE
 	}
 	var err defs.Err_t
 	if ret == 0 && pm.Dowait {
@@ -3662,7 +3663,7 @@ func (tf *tcpfops_t) Fcntl(cmd, opt int) int {
 	}
 }
 
-func (tf *tcpfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
+func (tf *tcpfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
@@ -3690,7 +3691,7 @@ func (tf *tcpfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
 	}
 }
 
-func (tf *tcpfops_t) Setsockopt(lev, opt int, src vm.Userio_i,
+func (tf *tcpfops_t) Setsockopt(lev, opt int, src fdops.Userio_i,
 	intarg int) defs.Err_t {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
@@ -3822,7 +3823,7 @@ func (tl *tcplfops_t) Pathi() defs.Inum_t {
 	panic("tcp socket cwd")
 }
 
-func (tl *tcplfops_t) Read(dst vm.Userio_i) (int, defs.Err_t) {
+func (tl *tcplfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.ENOTCONN
 }
 
@@ -3833,7 +3834,7 @@ func (tl *tcplfops_t) Reopen() defs.Err_t {
 	return 0
 }
 
-func (tl *tcplfops_t) Write(src vm.Userio_i) (int, defs.Err_t) {
+func (tl *tcplfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.EPIPE
 }
 
@@ -3841,15 +3842,15 @@ func (tl *tcplfops_t) Truncate(newlen uint) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (tl *tcplfops_t) Pread(dst vm.Userio_i, offset int) (int, defs.Err_t) {
+func (tl *tcplfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (tl *tcplfops_t) Pwrite(src vm.Userio_i, offset int) (int, defs.Err_t) {
+func (tl *tcplfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (tl *tcplfops_t) Accept(saddr vm.Userio_i) (vm.Fdops_i,
+func (tl *tcplfops_t) Accept(saddr fdops.Userio_i) (fdops.Fdops_i,
 	int, defs.Err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
@@ -3896,7 +3897,7 @@ func (tl *tcplfops_t) Connect(saddr []uint8) defs.Err_t {
 	return -defs.EADDRINUSE
 }
 
-func (tl *tcplfops_t) Listen(_backlog int) (vm.Fdops_i, defs.Err_t) {
+func (tl *tcplfops_t) Listen(_backlog int) (fdops.Fdops_i, defs.Err_t) {
 	backlog := uint(_backlog)
 	if backlog > 512 {
 		return nil, -defs.EINVAL
@@ -3922,17 +3923,17 @@ func (tl *tcplfops_t) Listen(_backlog int) (vm.Fdops_i, defs.Err_t) {
 	return tl, 0
 }
 
-func (tl *tcplfops_t) Sendmsg(src vm.Userio_i,
+func (tl *tcplfops_t) Sendmsg(src fdops.Userio_i,
 	toaddr []uint8, cmsg []uint8, flags int) (int, defs.Err_t) {
 	return 0, -defs.ENOTCONN
 }
 
-func (tl *tcplfops_t) Recvmsg(dst vm.Userio_i,
-	fromsa vm.Userio_i, cmsg vm.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+func (tl *tcplfops_t) Recvmsg(dst fdops.Userio_i,
+	fromsa fdops.Userio_i, cmsg fdops.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTCONN
 }
 
-func (tl *tcplfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
+func (tl *tcplfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
@@ -3940,14 +3941,14 @@ func (tl *tcplfops_t) Pollone(pm vm.Pollmsg_t) (vm.Ready_t, defs.Err_t) {
 		return 0, 0
 	}
 	// why poll a listen socket for writing? don't allow it
-	pm.Events &^= vm.R_WRITE
+	pm.Events &^= fdops.R_WRITE
 	if pm.Events == 0 {
 		return 0, 0
 	}
-	var ret vm.Ready_t
+	var ret fdops.Ready_t
 	rc := &tl.tcl.rcons
-	if pm.Events&vm.R_READ != 0 && rc.inum != rc.cnum {
-		ret |= vm.R_READ
+	if pm.Events&fdops.R_READ != 0 && rc.inum != rc.cnum {
+		ret |= fdops.R_READ
 	}
 	var err defs.Err_t
 	if ret == 0 && pm.Dowait {
@@ -3971,7 +3972,7 @@ func (tl *tcplfops_t) Fcntl(cmd, opt int) int {
 	}
 }
 
-func (tl *tcplfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
+func (tl *tcplfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	switch opt {
 	case proc.SO_ERROR:
@@ -3984,7 +3985,7 @@ func (tl *tcplfops_t) Getsockopt(opt int, bufarg vm.Userio_i,
 	}
 }
 
-func (tl *tcplfops_t) Setsockopt(lev, opt int, bufarg vm.Userio_i,
+func (tl *tcplfops_t) Setsockopt(lev, opt int, bufarg fdops.Userio_i,
 	intarg int) defs.Err_t {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()

@@ -9,19 +9,6 @@ import "bounds"
 import "defs"
 import "res"
 
-// interface for reading/writing from user space memory either via a pointer
-// and length or an array of pointers and lengths (iovec)
-type Userio_i interface {
-	// copy src to user memory
-	Uiowrite(src []uint8) (int, defs.Err_t)
-	// copy user memory to dst
-	Uioread(dst []uint8) (int, defs.Err_t)
-	// returns the number of unwritten/unread bytes remaining
-	Remain() int
-	// the total buffer size
-	Totalsz() int
-}
-
 // a helper object for read/writing from userspace memory. virtual address
 // lookups and reads/writes to those addresses must be atomic with respect to
 // page faults.

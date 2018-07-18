@@ -7,6 +7,7 @@ import "time"
 
 import "bounds"
 import "defs"
+import "fdops"
 import "mem"
 import "res"
 import "ustr"
@@ -536,7 +537,7 @@ func (as *Aspace_t) Vmadd_anon(start, len int, perms mem.Pa_t) {
 	as.Vmregion.insert(vmi)
 }
 
-func (as *Aspace_t) Vmadd_file(start, len int, perms mem.Pa_t, fops Fdops_i,
+func (as *Aspace_t) Vmadd_file(start, len int, perms mem.Pa_t, fops fdops.Fdops_i,
 	foff int) {
 	vmi := as._mkvmi(VFILE, start, len, perms, foff, fops, nil)
 	as.Vmregion.insert(vmi)
@@ -547,7 +548,7 @@ func (as *Aspace_t) Vmadd_shareanon(start, len int, perms mem.Pa_t) {
 	as.Vmregion.insert(vmi)
 }
 
-func (as *Aspace_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops Fdops_i,
+func (as *Aspace_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops fdops.Fdops_i,
 	foff int, unpin mem.Unpin_i) {
 	vmi := as._mkvmi(VFILE, start, len, perms, foff, fops, unpin)
 	as.Vmregion.insert(vmi)
@@ -557,7 +558,7 @@ func (as *Aspace_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops Fdops_i
 // only use PTE_U/PTE_W; the page fault handler will install the correct COW
 // flags. perms == 0 means that no mapping can go here (like for guard pages).
 func (as *Aspace_t) _mkvmi(mt mtype_t, start, len int, perms mem.Pa_t, foff int,
-	fops Fdops_i, unpin mem.Unpin_i) *Vminfo_t {
+	fops fdops.Fdops_i, unpin mem.Unpin_i) *Vminfo_t {
 	if len <= 0 {
 		panic("bad vmi len")
 	}

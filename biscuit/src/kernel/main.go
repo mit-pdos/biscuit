@@ -12,8 +12,9 @@ import "unsafe"
 
 import "caller"
 import "defs"
-import "mem"
+import "fdops"
 import "fs"
+import "mem"
 import "proc"
 import "res"
 import "stat"
@@ -239,7 +240,7 @@ func (cb *circbuf_t) used() int {
 	return used
 }
 
-func (cb *circbuf_t) copyin(src vm.Userio_i) (int, defs.Err_t) {
+func (cb *circbuf_t) copyin(src fdops.Userio_i) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -277,11 +278,11 @@ func (cb *circbuf_t) copyin(src vm.Userio_i) (int, defs.Err_t) {
 	return c, 0
 }
 
-func (cb *circbuf_t) copyout(dst vm.Userio_i) (int, defs.Err_t) {
+func (cb *circbuf_t) copyout(dst fdops.Userio_i) (int, defs.Err_t) {
 	return cb.copyout_n(dst, 0)
 }
 
-func (cb *circbuf_t) copyout_n(dst vm.Userio_i, max int) (int, defs.Err_t) {
+func (cb *circbuf_t) copyout_n(dst fdops.Userio_i, max int) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -688,8 +689,8 @@ func kbd_init() {
 	cons.com_int = make(chan bool)
 	cons.reader = make(chan []byte)
 	cons.reqc = make(chan int)
-	cons.pollc = make(chan vm.Pollmsg_t)
-	cons.pollret = make(chan vm.Ready_t)
+	cons.pollc = make(chan fdops.Pollmsg_t)
+	cons.pollret = make(chan fdops.Ready_t)
 	go kbd_daemon(&cons, km)
 	irq_unmask(defs.IRQ_KBD)
 	irq_unmask(defs.IRQ_COM1)
@@ -711,8 +712,8 @@ type cons_t struct {
 	com_int chan bool
 	reader  chan []byte
 	reqc    chan int
-	pollc   chan vm.Pollmsg_t
-	pollret chan vm.Ready_t
+	pollc   chan fdops.Pollmsg_t
+	pollret chan fdops.Ready_t
 }
 
 var cons = cons_t{}
@@ -870,7 +871,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 	}
 	var reqc chan int
-	pollers := &vm.Pollers_t{}
+	pollers := &fdops.Pollers_t{}
 	res.Kreswait(1<<20, "kbd daemon")
 	for {
 		res.Kunres()
@@ -907,13 +908,13 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			cons.reader <- s
 			data = data[l:]
 		case pm := <-cons.pollc:
-			if pm.Events&vm.R_READ == 0 {
+			if pm.Events&fdops.R_READ == 0 {
 				cons.pollret <- 0
 				continue
 			}
-			var ret vm.Ready_t
+			var ret fdops.Ready_t
 			if len(data) > 0 {
-				ret |= vm.R_READ
+				ret |= fdops.R_READ
 			} else if pm.Dowait {
 				pollers.Addpoller(&pm)
 			}
@@ -924,7 +925,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			data = start
 		} else {
 			reqc = cons.reqc
-			pollers.Wakeready(vm.R_READ)
+			pollers.Wakeready(fdops.R_READ)
 		}
 	}
 }
