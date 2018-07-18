@@ -19,6 +19,7 @@ import "fs"
 import "limits"
 import "mem"
 import "stat"
+import "tinfo"
 import "ustr"
 import "util"
 
@@ -397,7 +398,7 @@ func sys_pause(proc *common.Proc_t) int {
 	var c chan bool
 	select {
 	case <-c:
-	case <-common.Current().Killnaps.Killch:
+	case <-tinfo.Current().Killnaps.Killch:
 	}
 	return -1
 }
@@ -1417,7 +1418,7 @@ func sys_nanosleep(proc *common.Proc_t, sleeptsn, remaintsn int) int {
 		return int(err)
 	}
 	tochan := time.After(tot)
-	kn := &common.Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 	select {
 	case <-tochan:
 		return 0
@@ -1977,7 +1978,7 @@ func (sf *sudfops_t) Bind(sa []uint8) defs.Err_t {
 	path := ustr.MkUstrSlice(sa[poff:])
 	// try to create the specified file as a special device
 	bid := allbuds.bud_id_new()
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, common.Current().Proc.Cwd, defs.D_SUD, int(bid))
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, common.CurrentProc().Cwd, defs.D_SUD, int(bid))
 	if err != 0 {
 		return err
 	}
@@ -2011,7 +2012,7 @@ func (sf *sudfops_t) Sendmsg(src common.Userio_i, sa []uint8,
 	st := &stat.Stat_t{}
 	path := ustr.MkUstrSlice(sa[poff:])
 
-	err := thefs.Fs_stat(path, st, common.Current().Proc.Cwd)
+	err := thefs.Fs_stat(path, st, common.CurrentProc().Cwd)
 	if err != 0 {
 		return 0, err
 	}
@@ -2467,7 +2468,7 @@ func (sus *susfops_t) Bind(saddr []uint8) defs.Err_t {
 	sid := susid_new()
 
 	// create special file
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, common.Current().Proc.Cwd, defs.D_SUS, sid)
+	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, common.CurrentProc().Cwd, defs.D_SUS, sid)
 	if err != 0 {
 		return err
 	}
@@ -2492,7 +2493,7 @@ func (sus *susfops_t) Connect(saddr []uint8) defs.Err_t {
 
 	// lookup sid
 	st := &stat.Stat_t{}
-	err := thefs.Fs_stat(path, st, common.Current().Proc.Cwd)
+	err := thefs.Fs_stat(path, st, common.CurrentProc().Cwd)
 	if err != 0 {
 		return err
 	}
@@ -2579,7 +2580,7 @@ func (sus *susfops_t) Sendmsg(src common.Userio_i, toaddr []uint8,
 		}
 		chdrsz := 16
 		fdn := readn(cmsg, 4, chdrsz)
-		ofd, ok := common.Current().Proc.Fd_get(fdn)
+		ofd, ok := common.CurrentProc().Fd_get(fdn)
 		if !ok {
 			return 0, -defs.EBADF
 		}
@@ -2606,7 +2607,7 @@ func (sus *susfops_t) _fdrecv(cmsg common.Userio_i,
 	if !ok {
 		return 0, fl, 0
 	}
-	nfdn, ok := common.Current().Proc.Fd_insert(nfd, nfd.Perms)
+	nfdn, ok := common.CurrentProc().Fd_insert(nfd, nfd.Perms)
 	if !ok {
 		common.Close_panic(nfd)
 		return 0, fl, -defs.EMFILE
@@ -3912,7 +3913,7 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 		}
 	}
 
-	kn := &common.Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 	fut.cmd <- fm
 	select {
 	case ret := <-fm.ack:

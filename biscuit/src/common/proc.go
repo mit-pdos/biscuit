@@ -4,8 +4,6 @@ import "sync"
 
 //import "strings"
 import "fmt"
-import "time"
-import "unsafe"
 import "runtime"
 
 import "accnt"
@@ -13,32 +11,10 @@ import "bounds"
 import "defs"
 import "limits"
 import "mem"
+import "tinfo"
 import "ustr"
 
 // import "vm"
-
-type Tnote_t struct {
-	// XXX "alive" should be "terminated"
-	Proc   *Proc_t
-	alive  bool
-	killed bool
-	// protects killed, Killnaps.Cond and Kerr, and is a leaf lock
-	sync.Mutex
-	Killnaps struct {
-		Killch chan bool
-		Cond   *sync.Cond
-		Kerr   defs.Err_t
-	}
-}
-
-type Threadinfo_t struct {
-	Notes map[defs.Tid_t]*Tnote_t
-	sync.Mutex
-}
-
-func (t *Threadinfo_t) init() {
-	t.Notes = make(map[defs.Tid_t]*Tnote_t)
-}
 
 // per-process limits
 type Ulimit_t struct {
@@ -60,7 +36,7 @@ type Proc_t struct {
 	Pwait *Wait_t
 
 	// thread tids of this process
-	Threadi Threadinfo_t
+	Threadi tinfo.Threadinfo_t
 
 	// Address space
 	Aspace Aspace_t
@@ -314,8 +290,8 @@ func (p *Proc_t) Tlbflush() {
 	p.Aspace.Tlbshoot(0, 2)
 }
 
-func (p *Proc_t) resched(tid defs.Tid_t, n *Tnote_t) bool {
-	talive := n.alive
+func (p *Proc_t) resched(tid defs.Tid_t, n *tinfo.Tnote_t) bool {
+	talive := n.Alive
 	if talive && p.doomed {
 		// although this thread is still alive, the process should
 		// terminate
@@ -325,147 +301,15 @@ func (p *Proc_t) resched(tid defs.Tid_t, n *Tnote_t) bool {
 	return talive
 }
 
-// blocks until memory is available or returns false if this process has been
-// killed and should terminate.
-func Resbegin(c int) bool {
-	if !Kernel {
-		return true
-	}
-	r := _reswait(c, false, true)
-	//if !r {
-	//	fmt.Printf("Slain!\n")
-	//}
-	return r
-}
-
-var Kernel bool
-
-var Resfail = Distinct_caller_t{
-	Enabled: true,
-	Whitel: map[string]bool{
-		// XXX these need to be fixed to handle ENOHEAP
-		"fs.(*Fs_t).Fs_rename":      true,
-		"main.(*susfops_t)._fdrecv": true,
-	},
-}
-
-const resfail = false
-
-func Resremain() int {
-	ret := runtime.Memremain()
-	if ret < 0 {
-		// not an error; outstanding res may increase pass max if our
-		// read raced with a relase, but live should never surpass max
-		ret = 0
-	}
-	return ret
-}
-
-// blocks until memory is available or returns false if this process has been
-// killed and should terminate.
-func Resadd(c int) bool {
-	if !Kernel {
-		return true
-	}
-	if resfail {
-		if ok, path := Resfail.Distinct(); ok {
-			fmt.Printf("failing: %s\n", path)
-			return false
-		}
-	}
-	r := _reswait(c, true, true)
-	//if !r {
-	//	fmt.Printf("Slain!\n")
-	//}
-	return r
-}
-
-// for reservations when locks may be held; the caller should abort and retry.
-func Resadd_noblock(c int) bool {
-	if !Kernel {
-		return true
-	}
-	if resfail {
-		if ok, path := Resfail.Distinct(); ok {
-			fmt.Printf("failing: %s\n", path)
-			return false
-		}
-	}
-	return _reswait(c, true, false)
-}
-
-func Resend() {
-	if !Kernel {
-		return
-	}
-	//if !Lims {
-	//	return
-	//}
-	runtime.Memunres()
-}
-
-func Human(_bytes int) string {
-	bytes := float64(_bytes)
-	div := float64(1)
-	order := 0
-	for bytes/div > 1024 {
-		div *= 1024
-		order++
-	}
-	sufs := map[int]string{0: "B", 1: "kB", 2: "MB", 3: "GB", 4: "TB",
-		5: "PB"}
-	return fmt.Sprintf("%.2f%s", float64(bytes)/div, sufs[order])
-}
-
-//var lastp time.Time
-
-func _reswait(c int, incremental, block bool) bool {
-	//if !Lims {
-	//	return true
-	//}
-	f := runtime.Memreserve
-	if incremental {
-		f = runtime.Memresadd
-	}
-	for !f(c) {
-		//if time.Since(lastp) > time.Second {
-		//	fmt.Printf("RES failed %v\n", c)
-		//	Callerdump(2)
-		//}
-		p := Current().Proc
-		if p.Doomed() {
-			return false
-		}
-		if !block {
-			return false
-		}
-		//fmt.Printf("%v: Wait for memory hog to die...\n", p.Name)
-		var omsg oommsg_t
-		omsg.need = 2 << 20
-		omsg.resume = make(chan bool, 1)
-		select {
-		case Oom.halp <- omsg:
-		case <-Current().Killnaps.Killch:
-			return false
-		}
-		select {
-		case <-omsg.resume:
-		case <-Current().Killnaps.Killch:
-			return false
-		}
-	}
-	return true
-}
-
 // returns non-zero if this calling process has been killed and the caller
 // should finish the system call.
 func KillableWait(cond *sync.Cond) defs.Err_t {
-	mynote := Current()
+	mynote := tinfo.Current()
 
 	// ensure the sleep is atomic w.r.t. killed flag and kn.Cond writes
 	// from killer
 	mynote.Lock()
-	if mynote.killed {
+	if mynote.Killed {
 		ret := mynote.Killnaps.Kerr
 		mynote.Unlock()
 		if ret == 0 {
@@ -537,7 +381,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 	if !ok {
 		panic("note must exist")
 	}
-	SetCurrent(mynote)
+	tinfo.SetCurrent(mynote)
 
 	var fxbuf *[64]uintptr
 	const runonly = 14 << 10
@@ -559,7 +403,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 			uintptr(p.Aspace.P_pmap), fastret, refp)
 
 		// XXX debug
-		if Current() != mynote {
+		if tinfo.Current() != mynote {
 			panic("oh wtf")
 		}
 
@@ -590,7 +434,7 @@ func (p *Proc_t) Sched_add(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 
 func (p *Proc_t) _thread_new(t defs.Tid_t) {
 	p.Threadi.Lock()
-	tnote := &Tnote_t{alive: true, Proc: p}
+	tnote := &tinfo.Tnote_t{Alive: true, State: p}
 	tnote.Killnaps.Killch = make(chan bool, 1)
 	p.Threadi.Notes[t] = tnote
 	p.Threadi.Unlock()
@@ -623,7 +467,7 @@ func (p *Proc_t) Thread_count() int {
 
 // terminate a single thread
 func (p *Proc_t) Thread_dead(tid defs.Tid_t, status int, usestatus bool) {
-	ClearCurrent()
+	tinfo.ClearCurrent()
 	// XXX exit process if thread is thread0, even if other threads exist
 	p.Threadi.Lock()
 	ti := &p.Threadi
@@ -631,7 +475,7 @@ func (p *Proc_t) Thread_dead(tid defs.Tid_t, status int, usestatus bool) {
 	if !ok {
 		panic("note must exist")
 	}
-	mynote.alive = false
+	mynote.Alive = false
 	delete(ti.Notes, tid)
 	destroy := len(ti.Notes) == 0
 
@@ -664,7 +508,8 @@ func (p *Proc_t) Doomall() {
 	for _, tnote := range p.Threadi.Notes {
 		tnote.Lock()
 
-		tnote.killed = true
+		tnote.Killed = true
+		tnote.Isdoomed = true
 		kn := &tnote.Killnaps
 		if kn.Kerr == 0 {
 			kn.Kerr = -defs.EINTR
@@ -887,7 +732,7 @@ func Proc_new(name ustr.Ustr, cwd *Cwd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, 
 	ret.Mmapi = mem.USERMIN
 	ret.Ulim = _deflimits
 
-	ret.Threadi.init()
+	ret.Threadi.Init()
 	ret.tid0 = tid0
 	ret._thread_new(tid0)
 
@@ -934,345 +779,8 @@ func Tid_del() {
 	Proclock.Unlock()
 }
 
-// a type to make it easier for code that allocates cached objects to determine
-// when we must try to evict them.
-type Cacheallocs_t struct {
-	initted bool
-}
-
-// returns true if the caller must try to evict their recent cache allocations.
-func (ca *Cacheallocs_t) Shouldevict(res int) bool {
-	if !Kernel {
-		return false
-	}
-	//if !Lims {
-	//	return false
-	//}
-	init := !ca.initted
-	ca.initted = true
-	return !runtime.Cacheres(res, init)
-}
-
-var Kwaits int
-
-//var Lims = true
-
-func Kreswait(c int, name string) {
-	if !Kernel {
-		return
-	}
-	//if !Lims {
-	//	return
-	//}
-	for !runtime.Memreserve(c) {
-		//fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
-
-		Kwaits++
-		var omsg oommsg_t
-		omsg.need = 100 << 20
-		omsg.resume = make(chan bool, 1)
-		Oom.halp <- omsg
-		<-omsg.resume
-	}
-}
-
-func Kunres() int {
-	if !Kernel {
-		return 0
-	}
-	//if !Lims {
-	//	return 0
-	//}
-	return runtime.Memunres()
-}
-
-func Kresdebug(c int, name string) {
-	//Kreswait(c, name)
-}
-
-func Kunresdebug() int {
-	//return Kunres()
-	return 0
-}
-
-func Current() *Tnote_t {
-	_p := runtime.Gptr()
-	if _p == nil {
-		panic("nuts")
-	}
-	ret := (*Tnote_t)(_p)
-	return ret
-}
-
-func SetCurrent(p *Tnote_t) {
-	if p == nil {
-		panic("nuts")
-	}
-	if runtime.Gptr() != nil {
-		panic("nuts")
-	}
-	_p := (unsafe.Pointer)(p)
-	runtime.Setgptr(_p)
-}
-
-func ClearCurrent() {
-	if runtime.Gptr() == nil {
-		panic("nuts")
-	}
-	runtime.Setgptr(nil)
-}
-
-func Callerdump(start int) {
-	i := start
-	s := ""
-	for {
-		_, f, l, ok := runtime.Caller(i)
-		if !ok {
-			break
-		}
-		i++
-		//li := strings.LastIndex(f, "/")
-		//if li != -1 {
-		//	f = f[li+1:]
-		//}
-		if s == "" {
-			s = fmt.Sprintf("%s:%d\n", f, l)
-		} else {
-			s += fmt.Sprintf("\t<-%s:%d\n", f, l)
-		}
-	}
-	fmt.Printf("%s", s)
-}
-
-// a type for detecting the first call from each distinct path of ancestor
-// callers.
-type Distinct_caller_t struct {
-	sync.Mutex
-	Enabled bool
-	did     map[uintptr]bool
-	Whitel  map[string]bool
-}
-
-// returns a poor-man's hash of the given RIP values, which is probably unique.
-func (dc *Distinct_caller_t) _pchash(pcs []uintptr) uintptr {
-	if len(pcs) == 0 {
-		panic("d'oh")
-	}
-	var ret uintptr
-	for _, pc := range pcs {
-		pc = pc*1103515245 + 12345
-		ret ^= pc
-	}
-	return ret
-}
-
-func (dc *Distinct_caller_t) Len() int {
-	dc.Lock()
-	ret := len(dc.did)
-	dc.Unlock()
-	return ret
-}
-
-// returns true if the caller path is unique and is not white-listed and the
-// caller path as a string.
-func (dc *Distinct_caller_t) Distinct() (bool, string) {
-	dc.Lock()
-	defer dc.Unlock()
-	if !dc.Enabled {
-		return false, ""
-	}
-
-	if dc.did == nil {
-		dc.did = make(map[uintptr]bool)
-	}
-
-	var pcs []uintptr
-	for sz, got := 30, 30; got >= sz; sz *= 2 {
-		pcs = make([]uintptr, 30)
-		got = runtime.Callers(3, pcs)
-		if got == 0 {
-			panic("no")
-		}
-	}
-	h := dc._pchash(pcs)
-	if ok := dc.did[h]; !ok {
-		dc.did[h] = true
-		frames := runtime.CallersFrames(pcs)
-		fs := ""
-		// check for white-listed caller
-		for {
-			fr, more := frames.Next()
-			if ok := dc.Whitel[fr.Function]; ok {
-				return false, ""
-			}
-			if fs == "" {
-				fs = fmt.Sprintf("%v (%v:%v)\n", fr.Function,
-					fr.File, fr.Line)
-			} else {
-				fs += fmt.Sprintf("\t%v (%v:%v)\n", fr.Function,
-					fr.File, fr.Line)
-			}
-			if !more || fr.Function == "runtime.goexit" {
-				break
-			}
-		}
-		return true, fs
-	}
-	return false, ""
-}
-
-type oommsg_t struct {
-	need   int
-	resume chan bool
-}
-
-type oom_t struct {
-	halp   chan oommsg_t
-	evict  func() (int, int)
-	lastpr time.Time
-}
-
-var Oom *oom_t
-
-func Oom_init(evict func() (int, int)) {
-	Oom = &oom_t{}
-	Oom.halp = make(chan oommsg_t)
-	Oom.evict = evict
-	go Oom.reign()
-}
-
-func (o *oom_t) gc() {
-	now := time.Now()
-	if now.Sub(o.lastpr) > time.Second {
-		o.lastpr = now.Add(time.Second)
-	}
-	runtime.GCX()
-}
-
-func (o *oom_t) reign() {
-outter:
-	for msg := range o.halp {
-		//fmt.Printf("A need %v, rem %v\n", msg.need, runtime.Memremain())
-		o.gc()
-		//fmt.Printf("B need %v, rem %v\n", msg.need, runtime.Memremain())
-		//panic("OOM KILL\n")
-		if msg.need < runtime.Memremain() {
-			// there is apparently enough reservation available for
-			// them now
-			msg.resume <- true
-			continue
-		}
-
-		// XXX make sure msg.need is a satisfiable reservation size
-
-		// XXX expand kernel heap with free pages; page if none
-		// available
-
-		last := 0
-		for {
-			a, b := o.evict()
-			if a+b == last || a+b < 1000 {
-				break
-			}
-			last = a + b
-		}
-		o.gc()
-		if msg.need < runtime.Memremain() {
-			msg.resume <- true
-			continue outter
-		}
-		for {
-			// someone must die
-			o.dispatch_peasant(msg.need)
-			o.gc()
-			if msg.need < runtime.Memremain() {
-				msg.resume <- true
-				continue outter
-			}
-		}
-	}
-}
-
-func (o *oom_t) dispatch_peasant(need int) {
-	// the oom killer's memory use should have a small bound
-	var head *Proc_t
-	Proclock.Lock()
-	for _, p := range Allprocs {
-		p.Oomlink = head
-		head = p
-	}
-	Proclock.Unlock()
-
-	var memmax int
-	var vic *Proc_t
-	for p := head; p != nil; p = p.Oomlink {
-		mem := o.judge_peasant(p)
-		if mem > memmax {
-			memmax = mem
-			vic = p
-		}
-	}
-
-	// destroy the list so the Proc_ts and reachable objects become dead
-	var next *Proc_t
-	for p := head; p != nil; p = next {
-		next = p.Oomlink
-		p.Oomlink = nil
-	}
-
-	if vic == nil {
-		panic("nothing to kill?")
-	}
-
-	fmt.Printf("Killing PID %d \"%v\" for (%v %v)...\n", vic.Pid, vic.Name,
-		Human(need), vic.Aspace.Vmregion.Novma)
-	vic.Doomall()
-	st := time.Now()
-	dl := st.Add(time.Second)
-	// wait for the victim to die
-	sleept := 1 * time.Millisecond
-	for {
-		if _, ok := Proc_check(vic.Pid); !ok {
-			break
-		}
-		now := time.Now()
-		if now.After(dl) {
-			fmt.Printf("oom killer: waiting for hog for %v...\n",
-				now.Sub(st))
-			o.gc()
-			dl = dl.Add(1 * time.Second)
-		}
-		time.Sleep(sleept)
-		sleept *= 2
-		const maxs = 3 * time.Second
-		if sleept > maxs {
-			sleept = maxs
-		}
-	}
-}
-
-// acquires p's pmap and fd locks (separately)
-func (o *oom_t) judge_peasant(p *Proc_t) int {
-	// init(1) must never perish
-	if p.Pid == 1 {
-		return 0
-	}
-
-	p.Aspace.Lock_pmap()
-	novma := int(p.Aspace.Vmregion.Novma)
-	p.Aspace.Unlock_pmap()
-
-	var nofd int
-	p.Fdl.Lock()
-	for _, fd := range p.Fds {
-		if fd != nil {
-			nofd++
-		}
-	}
-	p.Fdl.Unlock()
-
-	// count per-thread and per-child process wait objects
-	chalds := p.Mywait.Len()
-
-	return novma + nofd + chalds
+func CurrentProc() *Proc_t {
+	st := tinfo.Current().State
+	proc := st.(*Proc_t)
+	return proc
 }

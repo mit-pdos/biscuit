@@ -10,11 +10,13 @@ import "sync"
 import "time"
 import "unsafe"
 
+import "caller"
 import "common"
 import "defs"
 import "mem"
 import "fs"
 import "stat"
+import "tinfo"
 import "ustr"
 
 //import "sort"
@@ -931,7 +933,7 @@ func kbd_get(cnt int) ([]byte, defs.Err_t) {
 	if cnt < 0 {
 		panic("negative cnt")
 	}
-	kn := &common.Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 	select {
 	case cons.reqc <- cnt:
 	case <-kn.Killch:
@@ -1409,7 +1411,7 @@ const failalloc bool = false
 
 // white-listed functions; don't fail these allocations. terminate() is for
 // init resurrection.
-var _physfail = common.Distinct_caller_t{
+var _physfail = caller.Distinct_caller_t{
 	Whitel: map[string]bool{"main.main": true,
 		"main.(*common.Proc_t).terminate": true},
 }

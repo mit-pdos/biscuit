@@ -7,6 +7,7 @@ import "bpath"
 import "defs"
 import "mem"
 import "stat"
+import "tinfo"
 import "ustr"
 
 const (
@@ -144,7 +145,7 @@ func (pm *Pollmsg_t) Pm_wait(to int) (bool, defs.Err_t) {
 	if to != -1 {
 		tochan = time.After(time.Duration(to) * time.Millisecond)
 	}
-	kn := &Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 
 	var timeout bool
 	select {
