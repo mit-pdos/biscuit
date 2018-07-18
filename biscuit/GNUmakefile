@@ -30,13 +30,14 @@ PSRC := src/accnt/accnt.go \
 	src/bounds/bounds.go \
 	src/caller/caller.go \
 	src/defs/defs.go \
+	src/fd/fd.go \
 	src/fdops/fdops.go \
 	src/limits/limits.go \
 	src/mem/mem.go src/mem/dmap.go \
 	src/oommsg/oommsg.go \
 	src/res/res.go \
 	src/proc/proc.go src/proc/wait.go src/proc/syscall.go src/proc/oom.go \
-	src/vm/vm.go src/vm/pmap.go src/vm/as.go src/vm/rb.go src/vm/fd.go src/vm/userbuf.go \
+	src/vm/vm.go src/vm/pmap.go src/vm/as.go src/vm/rb.go src/vm/userbuf.go \
 	src/stat/stat.go \
 	src/stats/stats.go \
 	src/tinfo/tinfo.go \

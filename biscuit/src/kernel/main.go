@@ -12,6 +12,7 @@ import "unsafe"
 
 import "caller"
 import "defs"
+import "fd"
 import "fdops"
 import "fs"
 import "mem"
@@ -131,9 +132,9 @@ type dev_t struct {
 var dummyfops = &fs.Devfops_t{Maj: defs.D_CONSOLE, Min: 0}
 
 // special fds
-var fd_stdin = vm.Fd_t{Fops: dummyfops, Perms: vm.FD_READ}
-var fd_stdout = vm.Fd_t{Fops: dummyfops, Perms: vm.FD_WRITE}
-var fd_stderr = vm.Fd_t{Fops: dummyfops, Perms: vm.FD_WRITE}
+var fd_stdin = fd.Fd_t{Fops: dummyfops, Perms: fd.FD_READ}
+var fd_stdout = fd.Fd_t{Fops: dummyfops, Perms: fd.FD_WRITE}
+var fd_stderr = fd.Fd_t{Fops: dummyfops, Perms: fd.FD_WRITE}
 
 // a userio_i type that copies nothing. useful as an argument to {send,recv}msg
 // when no from/to address or ancillary data is requested.
@@ -419,14 +420,14 @@ func (cb *circbuf_t) _advtail(sz int) {
 }
 
 type passfd_t struct {
-	cb   []*vm.Fd_t
+	cb   []*fd.Fd_t
 	inum uint
 	cnum uint
 }
 
-func (pf *passfd_t) add(nfd *vm.Fd_t) bool {
+func (pf *passfd_t) add(nfd *fd.Fd_t) bool {
 	if pf.cb == nil {
-		pf.cb = make([]*vm.Fd_t, 10)
+		pf.cb = make([]*fd.Fd_t, 10)
 	}
 	l := uint(len(pf.cb))
 	if pf.inum-pf.cnum == l {
@@ -437,7 +438,7 @@ func (pf *passfd_t) add(nfd *vm.Fd_t) bool {
 	return true
 }
 
-func (pf *passfd_t) take() (*vm.Fd_t, bool) {
+func (pf *passfd_t) take() (*fd.Fd_t, bool) {
 	l := uint(len(pf.cb))
 	if pf.inum == pf.cnum {
 		return nil, false
@@ -1505,8 +1506,8 @@ func main() {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
-		defaultfds := []*vm.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := proc.Proc_new(cmd, vm.MkRootCwd(rf), defaultfds, sys)
+		defaultfds := []*fd.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
+		p, ok := proc.Proc_new(cmd, fd.MkRootCwd(rf), defaultfds, sys)
 		if !ok {
 			panic("silly sysprocs")
 		}

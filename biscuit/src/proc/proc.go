@@ -8,6 +8,7 @@ import "runtime"
 import "accnt"
 import "bounds"
 import "defs"
+import "fd"
 import "limits"
 import "mem"
 import "res"
@@ -48,7 +49,7 @@ type Proc_t struct {
 	doomed     bool
 	exitstatus int
 
-	Fds []*vm.Fd_t
+	Fds []*fd.Fd_t
 	// where to start scanning for free fds
 	fdstart int
 	// fds, fdstart, nfds protected by fdl
@@ -56,7 +57,7 @@ type Proc_t struct {
 	// number of valid file descriptors
 	nfds int
 
-	Cwd *vm.Cwd_t
+	Cwd *fd.Cwd_t
 
 	Ulim Ulimit_t
 
@@ -83,14 +84,14 @@ func (p *Proc_t) Doomed() bool {
 // an fd table invariant: every fd must have its file field set. thus the
 // caller cannot set an fd's file field without holding fdl. otherwise you will
 // race with a forking thread when it copies the fd table.
-func (p *Proc_t) Fd_insert(f *vm.Fd_t, perms int) (int, bool) {
+func (p *Proc_t) Fd_insert(f *fd.Fd_t, perms int) (int, bool) {
 	p.Fdl.Lock()
 	a, b := p.fd_insert_inner(f, perms)
 	p.Fdl.Unlock()
 	return a, b
 }
 
-func (p *Proc_t) fd_insert_inner(f *vm.Fd_t, perms int) (int, bool) {
+func (p *Proc_t) fd_insert_inner(f *fd.Fd_t, perms int) (int, bool) {
 
 	if uint(p.nfds) >= p.Ulim.Nofile {
 		return -1, false
@@ -116,7 +117,7 @@ func (p *Proc_t) fd_insert_inner(f *vm.Fd_t, perms int) (int, bool) {
 				panic("how")
 			}
 		}
-		nfdt := make([]*vm.Fd_t, nl, nl)
+		nfdt := make([]*fd.Fd_t, nl, nl)
 		copy(nfdt, p.Fds)
 		p.Fds = nfdt
 	}
@@ -135,8 +136,8 @@ func (p *Proc_t) fd_insert_inner(f *vm.Fd_t, perms int) (int, bool) {
 }
 
 // returns the fd numbers and success
-func (p *Proc_t) Fd_insert2(f1 *vm.Fd_t, perms1 int,
-	f2 *vm.Fd_t, perms2 int) (int, int, bool) {
+func (p *Proc_t) Fd_insert2(f1 *fd.Fd_t, perms1 int,
+	f2 *fd.Fd_t, perms2 int) (int, int, bool) {
 	p.Fdl.Lock()
 	defer p.Fdl.Unlock()
 	var fd2 int
@@ -156,7 +157,7 @@ out:
 }
 
 // fdn is not guaranteed to be a sane fd
-func (p *Proc_t) Fd_get_inner(fdn int) (*vm.Fd_t, bool) {
+func (p *Proc_t) Fd_get_inner(fdn int) (*fd.Fd_t, bool) {
 	if fdn < 0 || fdn >= len(p.Fds) {
 		return nil, false
 	}
@@ -165,7 +166,7 @@ func (p *Proc_t) Fd_get_inner(fdn int) (*vm.Fd_t, bool) {
 	return ret, ok
 }
 
-func (p *Proc_t) Fd_get(fdn int) (*vm.Fd_t, bool) {
+func (p *Proc_t) Fd_get(fdn int) (*fd.Fd_t, bool) {
 	p.Fdl.Lock()
 	ret, ok := p.Fd_get_inner(fdn)
 	p.Fdl.Unlock()
@@ -173,14 +174,14 @@ func (p *Proc_t) Fd_get(fdn int) (*vm.Fd_t, bool) {
 }
 
 // fdn is not guaranteed to be a sane fd
-func (p *Proc_t) Fd_del(fdn int) (*vm.Fd_t, bool) {
+func (p *Proc_t) Fd_del(fdn int) (*fd.Fd_t, bool) {
 	p.Fdl.Lock()
 	a, b := p.fd_del_inner(fdn)
 	p.Fdl.Unlock()
 	return a, b
 }
 
-func (p *Proc_t) fd_del_inner(fdn int) (*vm.Fd_t, bool) {
+func (p *Proc_t) fd_del_inner(fdn int) (*fd.Fd_t, bool) {
 	if fdn < 0 || fdn >= len(p.Fds) {
 		return nil, false
 	}
@@ -201,7 +202,7 @@ func (p *Proc_t) fd_del_inner(fdn int) (*vm.Fd_t, bool) {
 
 // fdn is not guaranteed to be a sane fd. returns the the fd replaced by ofdn
 // and whether it exists and needs to be closed, and success.
-func (p *Proc_t) Fd_dup(ofdn, nfdn int) (*vm.Fd_t, bool, defs.Err_t) {
+func (p *Proc_t) Fd_dup(ofdn, nfdn int) (*fd.Fd_t, bool, defs.Err_t) {
 	if ofdn == nfdn {
 		return nil, false, 0
 	}
@@ -213,11 +214,11 @@ func (p *Proc_t) Fd_dup(ofdn, nfdn int) (*vm.Fd_t, bool, defs.Err_t) {
 	if !ok {
 		return nil, false, -defs.EBADF
 	}
-	cpy, err := vm.Copyfd(ofd)
+	cpy, err := fd.Copyfd(ofd)
 	if err != 0 {
 		return nil, false, err
 	}
-	cpy.Perms &^= vm.FD_CLOEXEC
+	cpy.Perms &^= fd.FD_CLOEXEC
 	rfd, needclose := p.Fd_get_inner(nfdn)
 	p.Fds[nfdn] = cpy
 
@@ -608,10 +609,10 @@ func (p *Proc_t) terminate() {
 		if p.Fds[i] == nil {
 			continue
 		}
-		vm.Close_panic(p.Fds[i])
+		fd.Close_panic(p.Fds[i])
 	}
 	p.Fdl.Unlock()
-	vm.Close_panic(p.Cwd.Fd)
+	fd.Close_panic(p.Cwd.Fd)
 
 	p.Mywait.Pid = 1
 
@@ -687,7 +688,7 @@ var _deflimits = Ulimit_t{
 
 // returns the new proc and success; can fail if the system-wide limit of
 // procs/threads has been reached. the parent's fdtable must be locked.
-func Proc_new(name ustr.Ustr, cwd *vm.Cwd_t, fds []*vm.Fd_t, sys Syscall_i) (*Proc_t, bool) {
+func Proc_new(name ustr.Ustr, cwd *fd.Cwd_t, fds []*fd.Fd_t, sys Syscall_i) (*Proc_t, bool) {
 	Proclock.Lock()
 
 	if nthreads >= int64(limits.Syslimit.Sysprocs) {
@@ -710,13 +711,13 @@ func Proc_new(name ustr.Ustr, cwd *vm.Cwd_t, fds []*vm.Fd_t, sys Syscall_i) (*Pr
 
 	ret.Name = name
 	ret.Pid = np
-	ret.Fds = make([]*vm.Fd_t, len(fds))
+	ret.Fds = make([]*fd.Fd_t, len(fds))
 	ret.fdstart = 3
 	for i := range fds {
 		if fds[i] == nil {
 			continue
 		}
-		tfd, err := vm.Copyfd(fds[i])
+		tfd, err := fd.Copyfd(fds[i])
 		// copying an fd may fail if another thread closes the fd out
 		// from under us
 		if err == 0 {

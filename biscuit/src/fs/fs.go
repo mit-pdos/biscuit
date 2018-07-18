@@ -6,6 +6,7 @@ import "sync"
 import "bounds"
 import "bpath"
 import "defs"
+import "fd"
 import "fdops"
 import "limits"
 import "mem"
@@ -15,7 +16,6 @@ import "stat"
 import "stats"
 import "ustr"
 import "util"
-import "vm"
 
 const fs_debug = false
 const FSOFF = 506
@@ -37,7 +37,7 @@ type Fs_t struct {
 	diskfs       bool // disk or in-mem file system?
 }
 
-func StartFS(mem Blockmem_i, disk Disk_i, console proc.Cons_i, diskfs bool) (*vm.Fd_t, *Fs_t) {
+func StartFS(mem Blockmem_i, disk Disk_i, console proc.Cons_i, diskfs bool) (*fd.Fd_t, *Fs_t) {
 
 	cons = console
 
@@ -103,7 +103,7 @@ func StartFS(mem Blockmem_i, disk Disk_i, console proc.Cons_i, diskfs bool) (*vm
 
 	fs.root = fs.icache.Iref(iroot, "fs_namei_root")
 
-	return &vm.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
+	return &fd.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 1}}, fs
 }
 
 func (fs *Fs_t) Sizes() (int, int) {
@@ -124,9 +124,9 @@ func (fs *Fs_t) IrefRoot() *imemnode_t {
 	return r
 }
 
-func (fs *Fs_t) MkRootCwd() *vm.Cwd_t {
-	fd := &vm.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 0}}
-	cwd := vm.MkRootCwd(fd)
+func (fs *Fs_t) MkRootCwd() *fd.Cwd_t {
+	f := &fd.Fd_t{Fops: &fsfops_t{priv: iroot, fs: fs, count: 0}}
+	cwd := fd.MkRootCwd(f)
 	return cwd
 }
 
@@ -134,7 +134,7 @@ func (fs *Fs_t) Unpin(pa mem.Pa_t) {
 	fs.bcache.unpin(pa)
 }
 
-func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *vm.Cwd_t) (*imemnode_t, defs.Err_t) {
+func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("Fs_link")
 	defer fs.fslog.Op_end(opid)
 
@@ -179,7 +179,7 @@ undo:
 	return dead, err
 }
 
-func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *vm.Cwd_t) defs.Err_t {
+func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) defs.Err_t {
 	dead, err := fs.Fs_op_link(old, new, cwd)
 	if dead != nil {
 		dead.Free()
@@ -187,7 +187,7 @@ func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *vm.Cwd_t) defs.Err_t 
 	return err
 }
 
-func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *vm.Cwd_t, wantdir bool) (*imemnode_t, defs.Err_t) {
+func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *fd.Cwd_t, wantdir bool) (*imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("fs_unlink")
 	defer fs.fslog.Op_end(opid)
 
@@ -268,7 +268,7 @@ func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *vm.Cwd_t, wantdir bool) (*ime
 	return dead, 0
 }
 
-func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *vm.Cwd_t, wantdir bool) defs.Err_t {
+func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *fd.Cwd_t, wantdir bool) defs.Err_t {
 	dead, err := fs.Fs_op_unlink(paths, cwd, wantdir)
 	if dead != nil {
 		dead.Free()
@@ -279,7 +279,7 @@ func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *vm.Cwd_t, wantdir bool) defs.Err
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *vm.Cwd_t) ([]*imemnode_t, defs.Err_t) {
+func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t, defs.Err_t) {
 	odirs, ofn := bpath.Sdirname(oldp)
 	ndirs, nfn := bpath.Sdirname(newp)
 	var refs []*imemnode_t
@@ -484,7 +484,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *vm.Cwd_t) ([]*imemnode_t
 	return refs, 0
 }
 
-func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *vm.Cwd_t) defs.Err_t {
+func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) defs.Err_t {
 	refs, err := fs.Fs_op_rename(oldp, newp, cwd)
 	for _, r := range refs {
 		del := r.Refdown("Fs_rename")
@@ -1190,7 +1190,7 @@ func (raw *rawdfops_t) Shutdown(read, write bool) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *vm.Cwd_t) defs.Err_t {
+func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
 	opid := fs.fslog.Op_begin("fs_mkdir")
 	defer fs.fslog.Op_end(opid)
 
@@ -1231,7 +1231,7 @@ type Fsfile_t struct {
 	Minor int
 }
 
-func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *vm.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
+func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
 	trunc := flags&proc.O_TRUNC != 0
 	creat := flags&proc.O_CREAT != 0
 	nodir := false
@@ -1331,7 +1331,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd
 	return ret, 0
 }
 
-func (fs *Fs_t) Makefake() *vm.Fd_t {
+func (fs *Fs_t) Makefake() *fd.Fd_t {
 	return nil
 	//ret := &fd.Fd_t{}
 	//priv := defs.Inum_t(iroot)
@@ -1349,7 +1349,7 @@ func (fs *Fs_t) Makefake() *vm.Fd_t {
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{defs.D_SUD: true, defs.D_SUS: true}
 
-func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *vm.Cwd_t, major, minor int) (*vm.Fd_t, defs.Err_t) {
+func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (*fd.Fd_t, defs.Err_t) {
 	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
@@ -1368,7 +1368,7 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *vm.C
 	priv := fsf.Inum
 	maj := fsf.Major
 	min := fsf.Minor
-	ret := &vm.Fd_t{}
+	ret := &fd.Fd_t{}
 	if maj != 0 {
 		// don't need underlying file open
 		if fs.Fs_close(fsf.Inum) != 0 {
@@ -1414,7 +1414,7 @@ func (fs *Fs_t) Fs_close(priv defs.Inum_t) defs.Err_t {
 	return 0
 }
 
-func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *stat.Stat_t, cwd *vm.Cwd_t) defs.Err_t {
+func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *stat.Stat_t, cwd *fd.Cwd_t) defs.Err_t {
 	opid := opid_t(0)
 
 	if fs_debug {
@@ -1450,7 +1450,7 @@ func (fs *Fs_t) Fs_syncapply() defs.Err_t {
 }
 
 // if the path resolves successfully, returns target inode
-func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *vm.Cwd_t) (*imemnode_t, defs.Err_t) {
+func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
 	if len(paths) == 0 || paths[0] != '/' {
@@ -1497,7 +1497,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *vm.Cwd_t) (*imemnode
 	return idm, 0
 }
 
-func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *vm.Cwd_t, s string) (*imemnode_t, defs.Err_t) {
+func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, defs.Err_t) {
 	idm, err := fs.fs_namei(opid, paths, cwd)
 	if err != 0 {
 		return nil, err

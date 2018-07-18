@@ -6,6 +6,7 @@ import "os"
 import "log"
 
 import "defs"
+import "fd"
 import "fs"
 import "proc"
 import "stat"
@@ -19,7 +20,7 @@ import "vm"
 type Ufs_t struct {
 	ahci *ahci_disk_t
 	fs   *fs.Fs_t
-	cwd  *vm.Cwd_t
+	cwd  *fd.Cwd_t
 }
 
 func mkData(v uint8, n int) *vm.Fakeubuf_t {

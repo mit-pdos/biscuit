@@ -14,6 +14,7 @@ import "unsafe"
 import "bounds"
 import "bpath"
 import "defs"
+import "fd"
 import "fdops"
 import "fs"
 import "limits"
@@ -294,26 +295,26 @@ func (c *console_t) Cons_write(src fdops.Userio_i, off int) (int, defs.Err_t) {
 	return len(big), 0
 }
 
-func _fd_read(p *proc.Proc_t, fdn int) (*vm.Fd_t, defs.Err_t) {
-	fd, ok := p.Fd_get(fdn)
+func _fd_read(p *proc.Proc_t, fdn int) (*fd.Fd_t, defs.Err_t) {
+	f, ok := p.Fd_get(fdn)
 	if !ok {
 		return nil, -defs.EBADF
 	}
-	if fd.Perms&vm.FD_READ == 0 {
+	if f.Perms&fd.FD_READ == 0 {
 		return nil, -defs.EPERM
 	}
-	return fd, 0
+	return f, 0
 }
 
-func _fd_write(p *proc.Proc_t, fdn int) (*vm.Fd_t, defs.Err_t) {
-	fd, ok := p.Fd_get(fdn)
+func _fd_write(p *proc.Proc_t, fdn int) (*fd.Fd_t, defs.Err_t) {
+	f, ok := p.Fd_get(fdn)
 	if !ok {
 		return nil, -defs.EBADF
 	}
-	if fd.Perms&vm.FD_WRITE == 0 {
+	if f.Perms&fd.FD_WRITE == 0 {
 		return nil, -defs.EPERM
 	}
-	return fd, 0
+	return f, 0
 }
 
 func sys_read(p *proc.Proc_t, fdn int, bufp int, sz int) int {
@@ -368,13 +369,13 @@ func sys_open(p *proc.Proc_t, pathn int, _flags int, mode int) int {
 	fdperms := 0
 	switch temp {
 	case proc.O_RDONLY:
-		fdperms = vm.FD_READ
+		fdperms = fd.FD_READ
 	case proc.O_WRONLY:
-		fdperms = vm.FD_WRITE
+		fdperms = fd.FD_WRITE
 	case proc.O_RDWR:
-		fdperms = vm.FD_READ | vm.FD_WRITE
+		fdperms = fd.FD_READ | fd.FD_WRITE
 	default:
-		fdperms = vm.FD_READ
+		fdperms = fd.FD_READ
 	}
 	err = badpath(path)
 	if err != 0 {
@@ -385,12 +386,12 @@ func sys_open(p *proc.Proc_t, pathn int, _flags int, mode int) int {
 		return int(err)
 	}
 	if flags&proc.O_CLOEXEC != 0 {
-		fdperms |= vm.FD_CLOEXEC
+		fdperms |= fd.FD_CLOEXEC
 	}
 	fdn, ok := p.Fd_insert(file, fdperms)
 	if !ok {
 		lhits++
-		vm.Close_panic(file)
+		fd.Close_panic(file)
 		return int(-defs.EMFILE)
 	}
 	return fdn
@@ -449,16 +450,16 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 		return p.Mmapi
 	}
 
-	var fd *vm.Fd_t
+	var f *fd.Fd_t
 	if fdmap {
 		var ok bool
-		fd, ok = p.Fd_get(fdn)
+		f, ok = p.Fd_get(fdn)
 		if !ok {
 			return int(-defs.EBADF)
 		}
-		if fd.Perms&vm.FD_READ == 0 ||
+		if f.Perms&fd.FD_READ == 0 ||
 			(shared && prot&proc.PROT_WRITE != 0 &&
-				fd.Perms&vm.FD_WRITE == 0) {
+				f.Perms&fd.FD_WRITE == 0) {
 			return int(-defs.EACCES)
 		}
 	}
@@ -490,7 +491,7 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	case anon && !shared:
 		p.Aspace.Vmadd_anon(addr, lenn, perms)
 	case fdmap:
-		fops := fd.Fops
+		fops := f.Fops
 		// vmadd_*file will increase the open count on the file
 		if shared {
 			p.Aspace.Vmadd_sharefile(addr, lenn, perms, fops, offset,
@@ -647,7 +648,7 @@ func sys_dup2(p *proc.Proc_t, oldn, newn int) int {
 		return int(err)
 	}
 	if needclose {
-		vm.Close_panic(ofd)
+		fd.Close_panic(ofd)
 	}
 	return newn
 }
@@ -834,8 +835,8 @@ func sys_lseek(p *proc.Proc_t, fdn, off, whence int) int {
 }
 
 func sys_pipe2(p *proc.Proc_t, pipen, _flags int) int {
-	rfp := vm.FD_READ
-	wfp := vm.FD_WRITE
+	rfp := fd.FD_READ
+	wfp := fd.FD_WRITE
 
 	flags := proc.Fdopt_t(_flags)
 	var opts proc.Fdopt_t
@@ -844,8 +845,8 @@ func sys_pipe2(p *proc.Proc_t, pipen, _flags int) int {
 	}
 
 	if flags&proc.O_CLOEXEC != 0 {
-		rfp |= vm.FD_CLOEXEC
-		wfp |= vm.FD_CLOEXEC
+		rfp |= fd.FD_CLOEXEC
+		wfp |= fd.FD_CLOEXEC
 	}
 
 	// if there is an error, pipe_t.op_reopen() will release the pipe
@@ -859,12 +860,12 @@ func sys_pipe2(p *proc.Proc_t, pipen, _flags int) int {
 	pp.pipe_start()
 	rops := &pipefops_t{pipe: pp, writer: false, options: opts}
 	wops := &pipefops_t{pipe: pp, writer: true, options: opts}
-	rpipe := &vm.Fd_t{Fops: rops}
-	wpipe := &vm.Fd_t{Fops: wops}
+	rpipe := &fd.Fd_t{Fops: rops}
+	wpipe := &fd.Fd_t{Fops: wops}
 	rfd, wfd, ok := p.Fd_insert2(rpipe, rfp, wpipe, wfp)
 	if !ok {
-		vm.Close_panic(rpipe)
-		vm.Close_panic(wpipe)
+		fd.Close_panic(rpipe)
+		fd.Close_panic(wpipe)
 		return int(-defs.EMFILE)
 	}
 
@@ -1045,7 +1046,7 @@ func (o *pipe_t) op_reopen(rd, wd int) defs.Err_t {
 	return 0
 }
 
-func (o *pipe_t) op_fdadd(nfd *vm.Fd_t) defs.Err_t {
+func (o *pipe_t) op_fdadd(nfd *fd.Fd_t) defs.Err_t {
 	o.Lock()
 	defer o.Unlock()
 
@@ -1057,7 +1058,7 @@ func (o *pipe_t) op_fdadd(nfd *vm.Fd_t) defs.Err_t {
 	return 0
 }
 
-func (o *pipe_t) op_fdtake() (*vm.Fd_t, bool) {
+func (o *pipe_t) op_fdtake() (*fd.Fd_t, bool) {
 	o.Lock()
 	defer o.Unlock()
 	ret, ok := o.passfds.take()
@@ -1448,7 +1449,7 @@ func sys_socket(p *proc.Proc_t, domain, typ, proto int) int {
 	}
 	var clop int
 	if typ&proc.SOCK_CLOEXEC != 0 {
-		clop = vm.FD_CLOEXEC
+		clop = fd.FD_CLOEXEC
 	}
 
 	var sfops fdops.Fdops_i
@@ -1471,11 +1472,11 @@ func sys_socket(p *proc.Proc_t, domain, typ, proto int) int {
 		lhits++
 		return int(-defs.ENOMEM)
 	}
-	file := &vm.Fd_t{}
+	file := &fd.Fd_t{}
 	file.Fops = sfops
-	fdn, ok := p.Fd_insert(file, vm.FD_READ|vm.FD_WRITE|clop)
+	fdn, ok := p.Fd_insert(file, fd.FD_READ|fd.FD_WRITE|clop)
 	if !ok {
-		vm.Close_panic(file)
+		fd.Close_panic(file)
 		limits.Syslimit.Socks.Give()
 		return int(-defs.EMFILE)
 	}
@@ -1498,7 +1499,7 @@ func sys_connect(p *proc.Proc_t, fdn, sockaddrn, socklen int) int {
 }
 
 func sys_accept(p *proc.Proc_t, fdn, sockaddrn, socklenn int) int {
-	fd, ok := p.Fd_get(fdn)
+	f, ok := p.Fd_get(fdn)
 	if !ok {
 		return int(-defs.EBADF)
 	}
@@ -1514,7 +1515,7 @@ func sys_accept(p *proc.Proc_t, fdn, sockaddrn, socklenn int) int {
 		sl = l
 	}
 	fromsa := p.Aspace.Mkuserbuf(sockaddrn, sl)
-	newfops, fromlen, err := fd.Fops.Accept(fromsa)
+	newfops, fromlen, err := f.Fops.Accept(fromsa)
 	//proc.Ubpool.Put(fromsa)
 	if err != 0 {
 		return int(err)
@@ -1524,10 +1525,10 @@ func sys_accept(p *proc.Proc_t, fdn, sockaddrn, socklenn int) int {
 			return int(err)
 		}
 	}
-	newfd := &vm.Fd_t{Fops: newfops}
-	ret, ok := p.Fd_insert(newfd, vm.FD_READ|vm.FD_WRITE)
+	newfd := &fd.Fd_t{Fops: newfops}
+	ret, ok := p.Fd_insert(newfd, fd.FD_READ|fd.FD_WRITE)
 	if !ok {
-		vm.Close_panic(newfd)
+		fd.Close_panic(newfd)
 		return int(-defs.EMFILE)
 	}
 	return ret
@@ -1786,7 +1787,7 @@ func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
 	}
 	var clop int
 	if typ&proc.SOCK_CLOEXEC != 0 {
-		clop = vm.FD_CLOEXEC
+		clop = fd.FD_CLOEXEC
 	}
 
 	mask := proc.SOCK_STREAM | proc.SOCK_DGRAM
@@ -1812,15 +1813,15 @@ func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
 		return int(err)
 	}
 
-	fd1 := &vm.Fd_t{}
+	fd1 := &fd.Fd_t{}
 	fd1.Fops = sfops1
-	fd2 := &vm.Fd_t{}
+	fd2 := &fd.Fd_t{}
 	fd2.Fops = sfops2
-	perms := vm.FD_READ | vm.FD_WRITE | clop
+	perms := fd.FD_READ | fd.FD_WRITE | clop
 	fdn1, fdn2, ok := p.Fd_insert2(fd1, perms, fd2, perms)
 	if !ok {
-		vm.Close_panic(fd1)
-		vm.Close_panic(fd2)
+		fd.Close_panic(fd1)
+		fd.Close_panic(fd2)
 		return int(-defs.EMFILE)
 	}
 	if err1, err2 := p.Aspace.Userwriten(sockn, 4, fdn1), p.Aspace.Userwriten(sockn+4, 4, fdn2); err1 != 0 || err2 != 0 {
@@ -2587,7 +2588,7 @@ func (sus *susfops_t) Sendmsg(src fdops.Userio_i, toaddr []uint8,
 		if !ok {
 			return 0, -defs.EBADF
 		}
-		nfd, err := vm.Copyfd(ofd)
+		nfd, err := fd.Copyfd(ofd)
 		if err != 0 {
 			return 0, err
 		}
@@ -2612,7 +2613,7 @@ func (sus *susfops_t) _fdrecv(cmsg fdops.Userio_i,
 	}
 	nfdn, ok := proc.CurrentProc().Fd_insert(nfd, nfd.Perms)
 	if !ok {
-		vm.Close_panic(nfd)
+		fd.Close_panic(nfd)
 		return 0, fl, -defs.EMFILE
 	}
 	buf := make([]uint8, scmsz)
@@ -3127,10 +3128,10 @@ func sys_setsockopt(p *proc.Proc_t, fdn, level, opt, optvaln, optlenn int) int {
 	return int(err)
 }
 
-func _closefds(fds []*vm.Fd_t) {
-	for _, fd := range fds {
-		if fd != nil {
-			vm.Close_panic(fd)
+func _closefds(fds []*fd.Fd_t) {
+	for _, f := range fds {
+		if f != nil {
+			fd.Close_panic(f)
 		}
 	}
 }
@@ -3316,7 +3317,7 @@ func sys_execv1(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, paths ustr.Ustr,
 		restore()
 		return int(err)
 	}
-	defer vm.Close_panic(file)
+	defer fd.Close_panic(file)
 
 	hdata := make([]uint8, 512)
 	ub := &vm.Fakeubuf_t{}
@@ -3401,11 +3402,11 @@ func sys_execv1(p *proc.Proc_t, tf *[proc.TFSIZE]uintptr, paths ustr.Ustr,
 	ovmreg.Clear()
 
 	// close fds marked with CLOEXEC
-	for fdn, fd := range p.Fds {
-		if fd == nil {
+	for fdn, f := range p.Fds {
+		if f == nil {
 			continue
 		}
-		if fd.Perms&vm.FD_CLOEXEC != 0 {
+		if f.Perms&fd.FD_CLOEXEC != 0 {
 			if sys.Sys_close(p, fdn) != 0 {
 				panic("close")
 			}
@@ -3934,24 +3935,24 @@ func sys_gettid(p *proc.Proc_t, tid defs.Tid_t) int {
 }
 
 func sys_fcntl(p *proc.Proc_t, fdn, cmd, opt int) int {
-	fd, ok := p.Fd_get(fdn)
+	f, ok := p.Fd_get(fdn)
 	if !ok {
 		return int(-defs.EBADF)
 	}
 	switch cmd {
 	// general fcntl(2) ops
 	case proc.F_GETFD:
-		return fd.Perms & vm.FD_CLOEXEC
+		return f.Perms & fd.FD_CLOEXEC
 	case proc.F_SETFD:
-		if opt&vm.FD_CLOEXEC == 0 {
-			fd.Perms &^= vm.FD_CLOEXEC
+		if opt&fd.FD_CLOEXEC == 0 {
+			f.Perms &^= fd.FD_CLOEXEC
 		} else {
-			fd.Perms |= vm.FD_CLOEXEC
+			f.Perms |= fd.FD_CLOEXEC
 		}
 		return 0
 	// fd specific fcntl(2) ops
 	case proc.F_GETFL, proc.F_SETFL:
-		return fd.Fops.Fcntl(cmd, opt)
+		return f.Fops.Fcntl(cmd, opt)
 	default:
 		return int(-defs.EINVAL)
 	}
@@ -3970,7 +3971,7 @@ func sys_truncate(p *proc.Proc_t, pathn int, newlen uint) int {
 		return int(err)
 	}
 	err = f.Fops.Truncate(newlen)
-	vm.Close_panic(f)
+	fd.Close_panic(f)
 	return int(err)
 }
 
@@ -4011,7 +4012,7 @@ func sys_chdir(p *proc.Proc_t, dirn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	vm.Close_panic(p.Cwd.Fd)
+	fd.Close_panic(p.Cwd.Fd)
 	p.Cwd.Fd = newfd
 	if path.IsAbsolute() {
 		p.Cwd.Path = bpath.Canonicalize(path)
@@ -4237,7 +4238,7 @@ func makefake(p *proc.Proc_t) defs.Err_t {
 
 	made := 0
 	const want = 1e6
-	newfds := make([]*vm.Fd_t, want)
+	newfds := make([]*fd.Fd_t, want)
 
 	for times := 0; times < 4; times++ {
 		fmt.Printf("close half...\n")
@@ -4547,7 +4548,7 @@ func segload(p *proc.Proc_t, entry int, hdr *elf_phdr, fops fdops.Fdops_i) defs.
 
 // returns user address of read-only TLS, thread 0's TLS image, TLS size, and
 // success. caller must hold proc's pagemap lock.
-func (e *elf_t) elf_load(p *proc.Proc_t, f *vm.Fd_t) (int, int, int, defs.Err_t) {
+func (e *elf_t) elf_load(p *proc.Proc_t, f *fd.Fd_t) (int, int, int, defs.Err_t) {
 	PT_LOAD := 1
 	PT_TLS := 7
 	istls := false
