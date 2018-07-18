@@ -1,4 +1,4 @@
-package common
+package proc
 
 import "defs"
 import "vm"

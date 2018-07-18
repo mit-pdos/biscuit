@@ -5,10 +5,10 @@ import "sync"
 
 import "bounds"
 import "bpath"
-import "common"
 import "defs"
 import "limits"
 import "mem"
+import "proc"
 import "res"
 import "stat"
 import "stats"
@@ -20,7 +20,7 @@ const fs_debug = false
 const FSOFF = 506
 const iroot = defs.Inum_t(0)
 
-var cons common.Cons_i
+var cons proc.Cons_i
 
 type Fs_t struct {
 	ahci         Disk_i
@@ -36,7 +36,7 @@ type Fs_t struct {
 	diskfs       bool // disk or in-mem file system?
 }
 
-func StartFS(mem Blockmem_i, disk Disk_i, console common.Cons_i, diskfs bool) (*vm.Fd_t, *Fs_t) {
+func StartFS(mem Blockmem_i, disk Disk_i, console proc.Cons_i, diskfs bool) (*vm.Fd_t, *Fs_t) {
 
 	cons = console
 
@@ -715,11 +715,11 @@ func (fo *fsfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	fo.fs.istats.Nlseek.Inc()
 
 	switch whence {
-	case common.SEEK_SET:
+	case proc.SEEK_SET:
 		fo.offset = off
-	case common.SEEK_CUR:
+	case proc.SEEK_CUR:
 		fo.offset += off
-	case common.SEEK_END:
+	case proc.SEEK_END:
 		st := &stat.Stat_t{}
 		fo.fstat(st)
 		fo.offset = int(st.Size()) + off
@@ -1128,11 +1128,11 @@ func (raw *rawdfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	defer raw.Unlock()
 
 	switch whence {
-	case common.SEEK_SET:
+	case proc.SEEK_SET:
 		raw.offset = off
-	case common.SEEK_CUR:
+	case proc.SEEK_CUR:
 		raw.offset += off
-	//case common.SEEK_END:
+	//case proc.SEEK_END:
 	default:
 		return 0, -defs.EINVAL
 	}
@@ -1230,9 +1230,9 @@ type Fsfile_t struct {
 	Minor int
 }
 
-func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *vm.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
-	trunc := flags&common.O_TRUNC != 0
-	creat := flags&common.O_CREAT != 0
+func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *vm.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
+	trunc := flags&proc.O_TRUNC != 0
+	creat := flags&proc.O_CREAT != 0
 	nodir := false
 
 	if fs_debug {
@@ -1281,7 +1281,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 		par.iunlock_refdown("Fs_open_inner_par")
 		idm.ilock("child")
 
-		oexcl := flags&common.O_EXCL != 0
+		oexcl := flags&proc.O_EXCL != 0
 		if exists {
 			if oexcl || isdev {
 				idm.iunlock_refdown("Fs_open_inner2")
@@ -1301,8 +1301,8 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags common.Fdopt_t, mode int, c
 
 	itype := idm.itype
 
-	o_dir := flags&common.O_DIRECTORY != 0
-	wantwrite := flags&(common.O_WRONLY|common.O_RDWR) != 0
+	o_dir := flags&proc.O_DIRECTORY != 0
+	wantwrite := flags&(proc.O_WRONLY|proc.O_RDWR) != 0
 	if wantwrite {
 		nodir = true
 	}
@@ -1348,7 +1348,7 @@ func (fs *Fs_t) Makefake() *vm.Fd_t {
 // socket files cannot be open(2)'ed (must use connect(2)/sendto(2) etc.)
 var _denyopen = map[int]bool{defs.D_SUD: true, defs.D_SUS: true}
 
-func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *vm.Cwd_t, major, minor int) (*vm.Fd_t, defs.Err_t) {
+func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags proc.Fdopt_t, mode int, cwd *vm.Cwd_t, major, minor int) (*vm.Fd_t, defs.Err_t) {
 	fs.istats.Nopen.Inc()
 	fsf, err := fs.Fs_open_inner(paths, flags, mode, cwd, major, minor)
 	if err != 0 {
@@ -1385,7 +1385,7 @@ func (fs *Fs_t) Fs_open(paths ustr.Ustr, flags common.Fdopt_t, mode int, cwd *vm
 			panic("bad dev")
 		}
 	} else {
-		apnd := flags&common.O_APPEND != 0
+		apnd := flags&proc.O_APPEND != 0
 		ret.Fops = &fsfops_t{priv: priv, fs: fs, append: apnd, count: 1}
 	}
 	return ret, 0

@@ -11,10 +11,10 @@ import "time"
 import "unsafe"
 
 import "caller"
-import "common"
 import "defs"
 import "mem"
 import "fs"
+import "proc"
 import "res"
 import "stat"
 import "tinfo"
@@ -44,9 +44,9 @@ var irqs int
 // context and thus may run concurrently with code manipulating the same state.
 // since trapstub() runs on the per-cpu interrupt stack, it must be nosplit.
 //go:nosplit
-func trapstub(tf *[common.TFSIZE]uintptr) {
+func trapstub(tf *[proc.TFSIZE]uintptr) {
 
-	trapno := tf[common.TF_TRAP]
+	trapno := tf[proc.TF_TRAP]
 
 	// only IRQs come through here now
 	if trapno <= defs.TIMER || trapno > IRQ_LAST {
@@ -82,7 +82,7 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 	default:
 		// unexpected IRQ
 		runtime.Pnum(int(trapno))
-		runtime.Pnum(int(tf[common.TF_RIP]))
+		runtime.Pnum(int(tf[proc.TF_RIP]))
 		runtime.Pnum(0xbadbabe)
 		for {
 		}
@@ -111,15 +111,15 @@ func trap_cons(intn uint, ch chan bool) {
 	}
 }
 
-func tfdump(tf *[common.TFSIZE]int) {
-	fmt.Printf("RIP: %#x\n", tf[common.TF_RIP])
-	fmt.Printf("RAX: %#x\n", tf[common.TF_RAX])
-	fmt.Printf("RDI: %#x\n", tf[common.TF_RDI])
-	fmt.Printf("RSI: %#x\n", tf[common.TF_RSI])
-	fmt.Printf("RBX: %#x\n", tf[common.TF_RBX])
-	fmt.Printf("RCX: %#x\n", tf[common.TF_RCX])
-	fmt.Printf("RDX: %#x\n", tf[common.TF_RDX])
-	fmt.Printf("RSP: %#x\n", tf[common.TF_RSP])
+func tfdump(tf *[proc.TFSIZE]int) {
+	fmt.Printf("RIP: %#x\n", tf[proc.TF_RIP])
+	fmt.Printf("RAX: %#x\n", tf[proc.TF_RAX])
+	fmt.Printf("RDI: %#x\n", tf[proc.TF_RDI])
+	fmt.Printf("RSI: %#x\n", tf[proc.TF_RSI])
+	fmt.Printf("RBX: %#x\n", tf[proc.TF_RBX])
+	fmt.Printf("RCX: %#x\n", tf[proc.TF_RCX])
+	fmt.Printf("RDX: %#x\n", tf[proc.TF_RDX])
+	fmt.Printf("RSP: %#x\n", tf[proc.TF_RSP])
 }
 
 type dev_t struct {
@@ -641,7 +641,7 @@ func ap_entry(myid uint) {
 
 	// ints are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()
-	fl |= common.TF_FL_IF
+	fl |= proc.TF_FL_IF
 	runtime.Popcli(fl)
 	for {
 	}
@@ -823,17 +823,17 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		} else if c == '@' {
 			runtime.Freq *= 2
 			fmt.Printf("freq: %v\n", runtime.Freq)
-			//common.Lims = !common.Lims
-			//fmt.Printf("Lims: %v\n", common.Lims)
+			//proc.Lims = !proc.Lims
+			//fmt.Printf("Lims: %v\n", proc.Lims)
 
 			//fmt.Printf("toggle\n")
 			//runtime.GCDebugToggle()
 
 		} else if c == '%' {
 			//fmt.Printf("distinct simulated failures: %v\n",
-			//    common.Resfail.Len())
-			//common.Resfail.Enabled = !common.Resfail.Enabled
-			//fmt.Printf("fail enabled: %v\n", common.Resfail.Enabled)
+			//    proc.Resfail.Len())
+			//proc.Resfail.Enabled = !proc.Resfail.Enabled
+			//fmt.Printf("fail enabled: %v\n", proc.Resfail.Enabled)
 
 			//loping()
 			//netdump()
@@ -841,7 +841,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			v := runtime.Memremain()
 			fmt.Printf("RES: %vMB (%v)\n", v>>20, v)
 
-			//common.Trap = true
+			//proc.Trap = true
 			//pr := false
 			//for i, n := range nirqs {
 			//	if n != 0 {
@@ -855,8 +855,8 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 
 			//a, b := thefs.Sizes()
 			//fmt.Printf("FS SIZE: %v, %v\n", a, b)
-			//fmt.Printf("KWAITS: %v\n", common.Kwaits)
-			//fmt.Printf("GWAITS: %v\n", common.Gwaits)
+			//fmt.Printf("KWAITS: %v\n", proc.Kwaits)
+			//fmt.Printf("GWAITS: %v\n", proc.Gwaits)
 
 			//bp := &bprof_t{}
 			//err := pprof.WriteHeapProfile(bp)
@@ -1415,7 +1415,7 @@ const failalloc bool = false
 // init resurrection.
 var _physfail = caller.Distinct_caller_t{
 	Whitel: map[string]bool{"main.main": true,
-		"main.(*common.Proc_t).terminate": true},
+		"main.(*proc.Proc_t).terminate": true},
 }
 
 // returns true if the allocation should fail
@@ -1497,7 +1497,7 @@ func main() {
 	rf, fs := fs.StartFS(blockmem, ahci, console, diskfs)
 	thefs = fs
 
-	common.Oom_init(thefs.Fs_evict)
+	proc.Oom_init(thefs.Fs_evict)
 
 	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
 		res.Resbegin(1 << 20)
@@ -1505,11 +1505,11 @@ func main() {
 		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
 		defaultfds := []*vm.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := common.Proc_new(cmd, vm.MkRootCwd(rf), defaultfds, sys)
+		p, ok := proc.Proc_new(cmd, vm.MkRootCwd(rf), defaultfds, sys)
 		if !ok {
 			panic("silly sysprocs")
 		}
-		var tf [common.TFSIZE]uintptr
+		var tf [proc.TFSIZE]uintptr
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))

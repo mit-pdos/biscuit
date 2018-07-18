@@ -5,9 +5,9 @@ import "os"
 
 import "log"
 
-import "common"
 import "defs"
 import "fs"
+import "proc"
 import "stat"
 import "ustr"
 import "vm"
@@ -61,7 +61,7 @@ func (ufs *Ufs_t) SyncApply() defs.Err_t {
 }
 
 func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
-	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, ufs.cwd, 0, 0)
+	fd, err := ufs.fs.Fs_open(p, proc.O_CREAT, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %s failed %v\n", string(p), err)
 		return err
@@ -100,7 +100,7 @@ func (ufs *Ufs_t) Rename(oldp, newp ustr.Ustr) defs.Err_t {
 
 // update (XXX check that ub < len(file)?)
 func (ufs *Ufs_t) Update(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
-	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
+	fd, err := ufs.fs.Fs_open(p, proc.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 	}
@@ -119,12 +119,12 @@ func (ufs *Ufs_t) Update(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 }
 
 func (ufs *Ufs_t) Append(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
-	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
+	fd, err := ufs.fs.Fs_open(p, proc.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 	}
 
-	_, err = fd.Fops.Lseek(0, common.SEEK_END)
+	_, err = fd.Fops.Lseek(0, proc.SEEK_END)
 	if err != 0 {
 		fmt.Printf("Lseek %v failed %v\n", p, err)
 		return err
@@ -177,7 +177,7 @@ func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 		fmt.Printf("doStat %v failed %v\n", p, err)
 		return nil, err
 	}
-	fd, err := ufs.fs.Fs_open(p, common.O_RDONLY, 0, ufs.cwd, 0, 0)
+	fd, err := ufs.fs.Fs_open(p, proc.O_RDONLY, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 		return nil, err

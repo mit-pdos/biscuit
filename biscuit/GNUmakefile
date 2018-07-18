@@ -18,14 +18,11 @@ SRCS := $(ASMS) $(CS)
 
 K := src/kernel
 F := src/fs
-C := src/common
 
 KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go super.go cache.go blk.go
 FSRC := $(addprefix $(F)/,$(FSRC))
-CSRC := wait.go proc.go oom.go syscall.go # as.go vm.go pmap.go rb.go
-CSRC := $(addprefix $(C)/,$(CSRC))
 
 PSRC := src/accnt/accnt.go \
 	src/hashtable/hashtable.go \
@@ -39,7 +36,7 @@ PSRC := src/accnt/accnt.go \
 	src/res/res.go \
 	# src/fd/fd.go \
 	src/userbuf/userbuf.go \
-	# src/proc/proc.go src/proc/wait.go \
+	src/proc/proc.go src/proc/wait.go src/proc/syscall.go src/proc/oom.go \
 	src/vm/vm.go src/vm/physmem.go src/vm/pmap.go src/vm/as.go src/vm/userbuf.go src/vm/fd.go \
 	src/stat/stat.go \
 	src/stats/stats.go \

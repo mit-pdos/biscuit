@@ -1,4 +1,4 @@
-package common
+package proc
 
 import "fmt"
 import "runtime"
