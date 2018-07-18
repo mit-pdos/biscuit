@@ -262,3 +262,17 @@ func Assert_no_va_map(pmap *mem.Pmap_t, va uintptr) {
 		panic(fmt.Sprintf("va %#x is mapped", va))
 	}
 }
+
+// don't forget: there are two places where pmaps/memory are free'd:
+// Proc_t.terminate() and exec.
+func Uvmfree_inner(pmg *mem.Pmap_t, p_pmap mem.Pa_t, vmr *Vmregion_t) {
+	vmr.iter(func(vmi *Vminfo_t) {
+		start := uintptr(vmi.pgn << PGSHIFT)
+		end := start + uintptr(vmi.pglen<<PGSHIFT)
+		var unpin mem.Unpin_i
+		if vmi.mtype == VFILE {
+			unpin = vmi.file.mfile.unpin
+		}
+		pmfree(pmg, start, end, unpin)
+	})
+}

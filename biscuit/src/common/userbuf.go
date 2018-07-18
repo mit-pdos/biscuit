@@ -1,11 +1,11 @@
 package common
 
 import "fmt"
+import "runtime"
+import "sync"
+import "unsafe"
 
-//import "common"
 import "defs"
-
-// import "proc"
 
 // interface for reading/writing from user space memory either via a pointer
 // and length or an array of pointers and lengths (iovec)
@@ -27,11 +27,11 @@ type Userbuf_t struct {
 	userva int
 	len    int
 	// 0 <= off <= len
-	off  int
-	proc *Proc_t
+	off int
+	as  *Aspace_t
 }
 
-func (ub *Userbuf_t) ub_init(p *Proc_t, uva, len int) {
+func (ub *Userbuf_t) ub_init(as *Aspace_t, uva, len int) {
 	// XXX fix signedness
 	if len < 0 {
 		panic("negative length")
@@ -42,7 +42,7 @@ func (ub *Userbuf_t) ub_init(p *Proc_t, uva, len int) {
 	ub.userva = uva
 	ub.len = len
 	ub.off = 0
-	ub.proc = p
+	ub.as = as
 }
 
 func (ub *Userbuf_t) Remain() int {
@@ -53,16 +53,16 @@ func (ub *Userbuf_t) Totalsz() int {
 	return ub.len
 }
 func (ub *Userbuf_t) Uioread(dst []uint8) (int, defs.Err_t) {
-	ub.proc.Lock_pmap()
+	ub.as.Lock_pmap()
 	a, b := ub._tx(dst, false)
-	ub.proc.Unlock_pmap()
+	ub.as.Unlock_pmap()
 	return a, b
 }
 
 func (ub *Userbuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
-	ub.proc.Lock_pmap()
+	ub.as.Lock_pmap()
 	a, b := ub._tx(src, true)
-	ub.proc.Unlock_pmap()
+	ub.as.Unlock_pmap()
 	return a, b
 }
 
@@ -76,7 +76,7 @@ func (ub *Userbuf_t) _tx(buf []uint8, write bool) (int, defs.Err_t) {
 			return ret, -defs.ENOHEAP
 		}
 		va := ub.userva + ub.off
-		ubuf, err := ub.proc.Userdmap8_inner(va, write)
+		ubuf, err := ub.as.Userdmap8_inner(va, write)
 		if err != 0 {
 			return ret, err
 		}
@@ -106,20 +106,20 @@ type _iove_t struct {
 type Useriovec_t struct {
 	iovs []_iove_t
 	tsz  int
-	proc *Proc_t
+	as   *Aspace_t
 }
 
-func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) defs.Err_t {
+func (iov *Useriovec_t) Iov_init(as *Aspace_t, iovarn uint, niovs int) defs.Err_t {
 	if niovs > 10 {
 		fmt.Printf("many iovecs\n")
 		return -defs.EINVAL
 	}
 	iov.tsz = 0
 	iov.iovs = make([]_iove_t, niovs)
-	iov.proc = proc
+	iov.as = as
 
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+	as.Lock_pmap()
+	defer as.Unlock_pmap()
 	for i := range iov.iovs {
 		gimme := Bounds(B_USERIOVEC_T_IOV_INIT)
 		if !Resadd_noblock(gimme) {
@@ -127,11 +127,11 @@ func (iov *Useriovec_t) Iov_init(proc *Proc_t, iovarn uint, niovs int) defs.Err_
 		}
 		elmsz := uint(16)
 		va := iovarn + uint(i)*elmsz
-		dstva, err := proc.userreadn_inner(int(va), 8)
+		dstva, err := as.userreadn_inner(int(va), 8)
 		if err != 0 {
 			return err
 		}
-		sz, err := proc.userreadn_inner(int(va)+8, 8)
+		sz, err := as.userreadn_inner(int(va)+8, 8)
 		if err != 0 {
 			return err
 		}
@@ -162,7 +162,7 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, defs.Err_t) {
 			return did, -defs.ENOHEAP
 		}
 		ciov := &iov.iovs[0]
-		ub.ub_init(iov.proc, int(ciov.uva), ciov.sz)
+		ub.ub_init(iov.as, int(ciov.uva), ciov.sz)
 		var c int
 		var err defs.Err_t
 		if touser {
@@ -185,16 +185,16 @@ func (iov *Useriovec_t) _tx(buf []uint8, touser bool) (int, defs.Err_t) {
 }
 
 func (iov *Useriovec_t) Uioread(dst []uint8) (int, defs.Err_t) {
-	iov.proc.Lock_pmap()
+	iov.as.Lock_pmap()
 	a, b := iov._tx(dst, false)
-	iov.proc.Unlock_pmap()
+	iov.as.Unlock_pmap()
 	return a, b
 }
 
 func (iov *Useriovec_t) Uiowrite(src []uint8) (int, defs.Err_t) {
-	iov.proc.Lock_pmap()
+	iov.as.Lock_pmap()
 	a, b := iov._tx(src, true)
-	iov.proc.Unlock_pmap()
+	iov.as.Unlock_pmap()
 	return a, b
 }
 
@@ -236,4 +236,16 @@ func (fb *Fakeubuf_t) Uioread(dst []uint8) (int, defs.Err_t) {
 
 func (fb *Fakeubuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 	return fb._tx(src, true)
+}
+
+var Ubpool = sync.Pool{New: func() interface{} { return new(Userbuf_t) }}
+
+func mkfxbuf() *[64]uintptr {
+	ret := new([64]uintptr)
+	n := uintptr(unsafe.Pointer(ret))
+	if n&((1<<4)-1) != 0 {
+		panic("not 16 byte aligned")
+	}
+	*ret = runtime.Fxinit
+	return ret
 }

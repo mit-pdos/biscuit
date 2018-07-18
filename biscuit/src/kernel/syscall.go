@@ -319,7 +319,7 @@ func sys_read(proc *common.Proc_t, fdn int, bufp int, sz int) int {
 	if err != 0 {
 		return int(err)
 	}
-	userbuf := proc.Mkuserbuf(bufp, sz)
+	userbuf := proc.Aspace.Mkuserbuf(bufp, sz)
 
 	ret, err := fd.Fops.Read(proc, userbuf)
 	if err != 0 {
@@ -337,7 +337,7 @@ func sys_write(proc *common.Proc_t, fdn int, bufp int, sz int) int {
 	if err != 0 {
 		return int(err)
 	}
-	userbuf := proc.Mkuserbuf(bufp, sz)
+	userbuf := proc.Aspace.Mkuserbuf(bufp, sz)
 
 	ret, err := fd.Fops.Write(proc, userbuf)
 	if err != 0 {
@@ -348,7 +348,7 @@ func sys_write(proc *common.Proc_t, fdn int, bufp int, sz int) int {
 }
 
 func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -458,7 +458,7 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 		}
 	}
 
-	proc.Lock_pmap()
+	proc.Aspace.Lock_pmap()
 
 	perms := common.PTE_U
 	if prot&common.PROT_WRITE != 0 {
@@ -466,32 +466,32 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 	}
 	lenn = util.Roundup(lenn, mem.PGSIZE)
 	// limit checks
-	if lenn/int(mem.PGSIZE)+proc.Vmregion.Pglen() > proc.Ulim.Pages {
-		proc.Unlock_pmap()
+	if lenn/int(mem.PGSIZE)+proc.Aspace.Vmregion.Pglen() > proc.Ulim.Pages {
+		proc.Aspace.Unlock_pmap()
 		lhits++
 		return int(-defs.ENOMEM)
 	}
-	if proc.Vmregion.Novma >= proc.Ulim.Novma {
-		proc.Unlock_pmap()
+	if proc.Aspace.Vmregion.Novma >= proc.Ulim.Novma {
+		proc.Aspace.Unlock_pmap()
 		lhits++
 		return int(-defs.ENOMEM)
 	}
 
-	addr := proc.Unusedva_inner(proc.Mmapi, lenn)
+	addr := proc.Aspace.Unusedva_inner(proc.Mmapi, lenn)
 	proc.Mmapi = addr + lenn
 	switch {
 	case anon && shared:
-		proc.Vmadd_shareanon(addr, lenn, perms)
+		proc.Aspace.Vmadd_shareanon(addr, lenn, perms)
 	case anon && !shared:
-		proc.Vmadd_anon(addr, lenn, perms)
+		proc.Aspace.Vmadd_anon(addr, lenn, perms)
 	case fdmap:
 		fops := fd.Fops
 		// vmadd_*file will increase the open count on the file
 		if shared {
-			proc.Vmadd_sharefile(addr, lenn, perms, fops, offset,
+			proc.Aspace.Vmadd_sharefile(addr, lenn, perms, fops, offset,
 				thefs)
 		} else {
-			proc.Vmadd_file(addr, lenn, perms, fops, offset)
+			proc.Aspace.Vmadd_file(addr, lenn, perms, fops, offset)
 		}
 	}
 	tshoot := false
@@ -506,7 +506,7 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 				failed = true
 				break
 			}
-			ns, ok := proc.Page_insert(addr+i, p_pg, perms, true)
+			ns, ok := proc.Aspace.Page_insert(addr+i, p_pg, perms, true)
 			if !ok {
 				physmem.Refdown(p_pg)
 				failed = true
@@ -519,11 +519,11 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 	ret := addr
 	if failed {
 		for i := 0; i < ub; i += mem.PGSIZE {
-			proc.Page_remove(addr + i)
+			proc.Aspace.Page_remove(addr + i)
 		}
 		// removing this region cannot create any more vm objects than
 		// what this call to sys_mmap started with.
-		if proc.Vmregion.Remove(addr, lenn, proc.Ulim.Novma) != 0 {
+		if proc.Aspace.Vmregion.Remove(addr, lenn, proc.Ulim.Novma) != 0 {
 			panic("wut")
 		}
 		ret = int(-defs.ENOMEM)
@@ -531,9 +531,9 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 	// sys_mmap won't replace pages since it always finds unused VA space,
 	// so the following TLB shootdown is never used.
 	if tshoot {
-		proc.Tlbshoot(0, 1)
+		proc.Aspace.Tlbshoot(0, 1)
 	}
-	proc.Unlock_pmap()
+	proc.Aspace.Unlock_pmap()
 	return ret
 }
 
@@ -541,16 +541,16 @@ func sys_munmap(proc *common.Proc_t, addrn, len int) int {
 	if addrn&int(common.PGOFFSET) != 0 || addrn < mem.USERMIN {
 		return int(-defs.EINVAL)
 	}
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+	proc.Aspace.Lock_pmap()
+	defer proc.Aspace.Unlock_pmap()
 
-	vmi1, ok1 := proc.Vmregion.Lookup(uintptr(addrn))
-	vmi2, ok2 := proc.Vmregion.Lookup(uintptr(addrn+len) - 1)
+	vmi1, ok1 := proc.Aspace.Vmregion.Lookup(uintptr(addrn))
+	vmi2, ok2 := proc.Aspace.Vmregion.Lookup(uintptr(addrn+len) - 1)
 	if !ok1 || !ok2 || vmi1.Pgn() != vmi2.Pgn() {
 		return int(-defs.EINVAL)
 	}
 
-	err := proc.Vmregion.Remove(addrn, len, proc.Ulim.Novma)
+	err := proc.Aspace.Vmregion.Remove(addrn, len, proc.Ulim.Novma)
 	if err != 0 {
 		lhits++
 		return int(err)
@@ -562,10 +562,10 @@ func sys_munmap(proc *common.Proc_t, addrn, len int) int {
 		if p < mem.USERMIN {
 			panic("how")
 		}
-		proc.Page_remove(p)
+		proc.Aspace.Page_remove(p)
 	}
 	pgs := len >> common.PGSHIFT
-	proc.Tlbshoot(uintptr(addrn), pgs)
+	proc.Aspace.Tlbshoot(uintptr(addrn), pgs)
 	return 0
 }
 
@@ -576,7 +576,7 @@ func sys_readv(proc *common.Proc_t, fdn, _iovn, iovcnt int) int {
 	}
 	iovn := uint(_iovn)
 	iov := &common.Useriovec_t{}
-	if err := iov.Iov_init(proc, iovn, iovcnt); err != 0 {
+	if err := iov.Iov_init(&proc.Aspace, iovn, iovcnt); err != 0 {
 		return int(err)
 	}
 	ret, err := fd.Fops.Read(proc, iov)
@@ -593,7 +593,7 @@ func sys_writev(proc *common.Proc_t, fdn, _iovn, iovcnt int) int {
 	}
 	iovn := uint(_iovn)
 	iov := &common.Useriovec_t{}
-	if err := iov.Iov_init(proc, iovn, iovcnt); err != 0 {
+	if err := iov.Iov_init(&proc.Aspace, iovn, iovcnt); err != 0 {
 		return int(err)
 	}
 	ret, err := fd.Fops.Write(proc, iov)
@@ -608,7 +608,7 @@ func sys_sigaction(proc *common.Proc_t, sig, actn, oactn int) int {
 }
 
 func sys_access(proc *common.Proc_t, pathn, mode int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -648,7 +648,7 @@ func sys_dup2(proc *common.Proc_t, oldn, newn int) int {
 }
 
 func sys_stat(proc *common.Proc_t, pathn, statn int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -657,7 +657,7 @@ func sys_stat(proc *common.Proc_t, pathn, statn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	return int(proc.K2user(buf.Bytes(), statn))
+	return int(proc.Aspace.K2user(buf.Bytes(), statn))
 }
 
 func sys_fstat(proc *common.Proc_t, fdn int, statn int) int {
@@ -671,7 +671,7 @@ func sys_fstat(proc *common.Proc_t, fdn int, statn int) int {
 		return int(err)
 	}
 
-	return int(proc.K2user(buf.Bytes(), statn))
+	return int(proc.Aspace.K2user(buf.Bytes(), statn))
 }
 
 // converts internal states to poll states
@@ -772,7 +772,7 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 		return int(-defs.EINVAL)
 	}
 	buf := make([]uint8, sz)
-	if err := proc.User2k(buf, fdsn); err != 0 {
+	if err := proc.Aspace.User2k(buf, fdsn); err != 0 {
 		return int(err)
 	}
 
@@ -794,7 +794,7 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 			return int(err)
 		}
 		if writeback {
-			if err := proc.K2user(buf, fdsn); err != 0 {
+			if err := proc.Aspace.K2user(buf, fdsn); err != 0 {
 				return int(err)
 			}
 		}
@@ -863,11 +863,11 @@ func sys_pipe2(proc *common.Proc_t, pipen, _flags int) int {
 		return int(-defs.EMFILE)
 	}
 
-	err := proc.Userwriten(pipen, 4, rfd)
+	err := proc.Aspace.Userwriten(pipen, 4, rfd)
 	if err != 0 {
 		goto bail
 	}
-	err = proc.Userwriten(pipen+4, 4, wfd)
+	err = proc.Aspace.Userwriten(pipen+4, 4, wfd)
 	if err != 0 {
 		goto bail
 	}
@@ -1202,8 +1202,8 @@ func (of *pipefops_t) Shutdown(read, write bool) defs.Err_t {
 }
 
 func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
-	old, err1 := proc.Userstr(oldn, fs.NAME_MAX)
-	new, err2 := proc.Userstr(newn, fs.NAME_MAX)
+	old, err1 := proc.Aspace.Userstr(oldn, fs.NAME_MAX)
+	new, err2 := proc.Aspace.Userstr(newn, fs.NAME_MAX)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1223,7 +1223,7 @@ func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
 }
 
 func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -1236,8 +1236,8 @@ func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
 }
 
 func sys_link(proc *common.Proc_t, oldn int, newn int) int {
-	old, err1 := proc.Userstr(oldn, fs.NAME_MAX)
-	new, err2 := proc.Userstr(newn, fs.NAME_MAX)
+	old, err1 := proc.Aspace.Userstr(oldn, fs.NAME_MAX)
+	new, err2 := proc.Aspace.Userstr(newn, fs.NAME_MAX)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1257,7 +1257,7 @@ func sys_link(proc *common.Proc_t, oldn int, newn int) int {
 }
 
 func sys_unlink(proc *common.Proc_t, pathn, isdiri int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -1277,7 +1277,7 @@ func sys_gettimeofday(proc *common.Proc_t, timevaln int) int {
 	us := int(now.UnixNano() / 1000)
 	writen(buf, 8, 0, us/1e6)
 	writen(buf, 8, 8, us%1e6)
-	if err := proc.K2user(buf, timevaln); err != 0 {
+	if err := proc.Aspace.K2user(buf, timevaln); err != 0 {
 		return int(err)
 	}
 	return 0
@@ -1294,8 +1294,8 @@ func sys_getrlimit(proc *common.Proc_t, resn, rlpn int) int {
 		return int(-defs.EINVAL)
 	}
 	max := _rlimits[resn]
-	err1 := proc.Userwriten(rlpn, 8, int(cur))
-	err2 := proc.Userwriten(rlpn+8, 8, int(max))
+	err1 := proc.Aspace.Userwriten(rlpn, 8, int(cur))
+	err2 := proc.Aspace.Userwriten(rlpn+8, 8, int(max))
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1307,7 +1307,7 @@ func sys_getrlimit(proc *common.Proc_t, resn, rlpn int) int {
 
 func sys_setrlimit(proc *common.Proc_t, resn, rlpn int) int {
 	// XXX root can raise max
-	_ncur, err := proc.Userreadn(rlpn, 8)
+	_ncur, err := proc.Aspace.Userreadn(rlpn, 8)
 	if err != 0 {
 		return int(err)
 	}
@@ -1350,7 +1350,7 @@ func sys_getrusage(proc *common.Proc_t, who, rusagep int) int {
 	} else {
 		return int(-defs.EINVAL)
 	}
-	if err := proc.K2user(ru, rusagep); err != 0 {
+	if err := proc.Aspace.K2user(ru, rusagep); err != 0 {
 		return int(err)
 	}
 	return int(-defs.ENOSYS)
@@ -1371,7 +1371,7 @@ func unmkdev(d uint) (int, int) {
 }
 
 func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -1411,7 +1411,7 @@ func sys_reboot(proc *common.Proc_t) int {
 }
 
 func sys_nanosleep(proc *common.Proc_t, sleeptsn, remaintsn int) int {
-	tot, _, err := proc.Usertimespec(sleeptsn)
+	tot, _, err := proc.Aspace.Usertimespec(sleeptsn)
 	if err != 0 {
 		return int(err)
 	}
@@ -1499,7 +1499,7 @@ func sys_accept(proc *common.Proc_t, fdn, sockaddrn, socklenn int) int {
 	}
 	var sl int
 	if socklenn != 0 {
-		l, err := proc.Userreadn(socklenn, 8)
+		l, err := proc.Aspace.Userreadn(socklenn, 8)
 		if err != 0 {
 			return int(err)
 		}
@@ -1508,14 +1508,14 @@ func sys_accept(proc *common.Proc_t, fdn, sockaddrn, socklenn int) int {
 		}
 		sl = l
 	}
-	fromsa := proc.Mkuserbuf(sockaddrn, sl)
+	fromsa := proc.Aspace.Mkuserbuf(sockaddrn, sl)
 	newfops, fromlen, err := fd.Fops.Accept(proc, fromsa)
 	//common.Ubpool.Put(fromsa)
 	if err != 0 {
 		return int(err)
 	}
 	if fromlen != 0 {
-		if err := proc.Userwriten(socklenn, 8, fromlen); err != 0 {
+		if err := proc.Aspace.Userwriten(socklenn, 8, fromlen); err != 0 {
 			return int(err)
 		}
 	}
@@ -1539,7 +1539,7 @@ func copysockaddr(proc *common.Proc_t, san, sl int) ([]uint8, defs.Err_t) {
 	if sl >= maxsl {
 		return nil, -defs.ENOTSOCK
 	}
-	ub := proc.Mkuserbuf(san, sl)
+	ub := proc.Aspace.Mkuserbuf(san, sl)
 	sabuf := make([]uint8, sl)
 	_, err := ub.Uioread(sabuf)
 	//common.Ubpool.Put(ub)
@@ -1569,7 +1569,7 @@ func sys_sendto(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn, socklen int)
 		return int(err)
 	}
 
-	buf := proc.Mkuserbuf(bufn, buflen)
+	buf := proc.Aspace.Mkuserbuf(bufn, buflen)
 	ret, err := fd.Fops.Sendmsg(proc, buf, sabuf, nil, flags)
 	//common.Ubpool.Put(buf)
 	if err != 0 {
@@ -1589,12 +1589,12 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	buf := proc.Mkuserbuf(bufn, buflen)
+	buf := proc.Aspace.Mkuserbuf(bufn, buflen)
 
 	// is the from address requested?
 	var salen int
 	if socklenn != 0 {
-		l, err := proc.Userreadn(socklenn, 8)
+		l, err := proc.Aspace.Userreadn(socklenn, 8)
 		if err != 0 {
 			return int(err)
 		}
@@ -1603,7 +1603,7 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 			return int(-defs.EFAULT)
 		}
 	}
-	fromsa := proc.Mkuserbuf(sockaddrn, salen)
+	fromsa := proc.Aspace.Mkuserbuf(sockaddrn, salen)
 	ret, addrlen, _, _, err := fd.Fops.Recvmsg(proc, buf, fromsa, zeroubuf, 0)
 	//common.Ubpool.Put(buf)
 	//common.Ubpool.Put(fromsa)
@@ -1612,7 +1612,7 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 	}
 	// write new socket size to user space
 	if addrlen > 0 {
-		if err := proc.Userwriten(socklenn, 8, addrlen); err != 0 {
+		if err := proc.Aspace.Userwriten(socklenn, 8, addrlen); err != 0 {
 			return int(err)
 		}
 	}
@@ -1629,10 +1629,10 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	}
 	// maybe copy the msghdr to kernel space?
 	msgn := uint(_msgn)
-	iovn, err1 := proc.Userreadn(int(msgn+2*8), 8)
-	niov, err2 := proc.Userreadn(int(msgn+3*8), 4)
-	cmsgl, err3 := proc.Userreadn(int(msgn+5*8), 8)
-	salen, err4 := proc.Userreadn(int(msgn+1*8), 8)
+	iovn, err1 := proc.Aspace.Userreadn(int(msgn+2*8), 8)
+	niov, err2 := proc.Aspace.Userreadn(int(msgn+3*8), 4)
+	cmsgl, err3 := proc.Aspace.Userreadn(int(msgn+5*8), 8)
+	salen, err4 := proc.Aspace.Userreadn(int(msgn+1*8), 8)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1649,26 +1649,26 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	var saddr common.Userio_i
 	saddr = zeroubuf
 	if salen > 0 {
-		saddrn, err := proc.Userreadn(int(msgn+0*8), 8)
+		saddrn, err := proc.Aspace.Userreadn(int(msgn+0*8), 8)
 		if err != 0 {
 			return int(err)
 		}
-		ub := proc.Mkuserbuf(saddrn, salen)
+		ub := proc.Aspace.Mkuserbuf(saddrn, salen)
 		saddr = ub
 	}
 	var cmsg common.Userio_i
 	cmsg = zeroubuf
 	if cmsgl > 0 {
-		cmsgn, err := proc.Userreadn(int(msgn+4*8), 8)
+		cmsgn, err := proc.Aspace.Userreadn(int(msgn+4*8), 8)
 		if err != 0 {
 			return int(err)
 		}
-		ub := proc.Mkuserbuf(cmsgn, cmsgl)
+		ub := proc.Aspace.Mkuserbuf(cmsgn, cmsgl)
 		cmsg = ub
 	}
 
 	iov := &common.Useriovec_t{}
-	err = iov.Iov_init(proc, uint(iovn), niov)
+	err = iov.Iov_init(&proc.Aspace, uint(iovn), niov)
 	if err != 0 {
 		return int(err)
 	}
@@ -1680,16 +1680,16 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	}
 	// write size of socket address, ancillary data, and msg flags back to
 	// user space
-	if err := proc.Userwriten(int(msgn+28), 4, int(msgfl)); err != 0 {
+	if err := proc.Aspace.Userwriten(int(msgn+28), 4, int(msgfl)); err != 0 {
 		return int(err)
 	}
 	if saddr.Totalsz() != 0 {
-		if err := proc.Userwriten(int(msgn+1*8), 8, sawr); err != 0 {
+		if err := proc.Aspace.Userwriten(int(msgn+1*8), 8, sawr); err != 0 {
 			return int(err)
 		}
 	}
 	if cmsg.Totalsz() != 0 {
-		if err := proc.Userwriten(int(msgn+5*8), 8, cmwr); err != 0 {
+		if err := proc.Aspace.Userwriten(int(msgn+5*8), 8, cmwr); err != 0 {
 			return int(err)
 		}
 	}
@@ -1706,10 +1706,10 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	}
 	// maybe copy the msghdr to kernel space?
 	msgn := uint(_msgn)
-	iovn, err1 := proc.Userreadn(int(msgn+2*8), 8)
-	niov, err2 := proc.Userreadn(int(msgn+3*8), 8)
-	cmsgl, err3 := proc.Userreadn(int(msgn+5*8), 8)
-	salen, err4 := proc.Userreadn(int(msgn+1*8), 8)
+	iovn, err1 := proc.Aspace.Userreadn(int(msgn+2*8), 8)
+	niov, err2 := proc.Aspace.Userreadn(int(msgn+3*8), 8)
+	cmsgl, err3 := proc.Aspace.Userreadn(int(msgn+5*8), 8)
+	salen, err4 := proc.Aspace.Userreadn(int(msgn+1*8), 8)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1729,12 +1729,12 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 		if salen > 64 {
 			return int(-defs.EINVAL)
 		}
-		saddrva, err := proc.Userreadn(int(msgn+0*8), 8)
+		saddrva, err := proc.Aspace.Userreadn(int(msgn+0*8), 8)
 		if err != 0 {
 			return int(err)
 		}
 		saddr = make([]uint8, salen)
-		ub := proc.Mkuserbuf(saddrva, salen)
+		ub := proc.Aspace.Mkuserbuf(saddrva, salen)
 		did, err := ub.Uioread(saddr)
 		if err != 0 {
 			return int(err)
@@ -1748,12 +1748,12 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 		if cmsgl > 256 {
 			return int(-defs.EINVAL)
 		}
-		cmsgva, err := proc.Userreadn(int(msgn+4*8), 8)
+		cmsgva, err := proc.Aspace.Userreadn(int(msgn+4*8), 8)
 		if err != 0 {
 			return int(err)
 		}
 		cmsg = make([]uint8, cmsgl)
-		ub := proc.Mkuserbuf(cmsgva, cmsgl)
+		ub := proc.Aspace.Mkuserbuf(cmsgva, cmsgl)
 		did, err := ub.Uioread(cmsg)
 		if err != 0 {
 			return int(err)
@@ -1763,7 +1763,7 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 		}
 	}
 	iov := &common.Useriovec_t{}
-	err = iov.Iov_init(proc, uint(iovn), niov)
+	err = iov.Iov_init(&proc.Aspace, uint(iovn), niov)
 	if err != 0 {
 		return int(err)
 	}
@@ -1818,7 +1818,7 @@ func sys_socketpair(proc *common.Proc_t, domain, typ, proto int, sockn int) int 
 		common.Close_panic(fd2)
 		return int(-defs.EMFILE)
 	}
-	if err1, err2 := proc.Userwriten(sockn, 4, fdn1), proc.Userwriten(sockn+4, 4, fdn2); err1 != 0 || err2 != 0 {
+	if err1, err2 := proc.Aspace.Userwriten(sockn, 4, fdn1), proc.Aspace.Userwriten(sockn+4, 4, fdn2); err1 != 0 || err2 != 0 {
 		if sys.Sys_close(proc, fdn1) != 0 || sys.Sys_close(proc, fdn2) != 0 {
 			panic("must succeed")
 		}
@@ -3074,7 +3074,7 @@ func sys_getsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 	}
 	var olen int
 	if optlenn != 0 {
-		l, err := proc.Userreadn(optlenn, 8)
+		l, err := proc.Aspace.Userreadn(optlenn, 8)
 		if err != 0 {
 			return int(err)
 		}
@@ -3083,7 +3083,7 @@ func sys_getsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 		}
 		olen = l
 	}
-	bufarg := proc.Mkuserbuf(optvaln, olen)
+	bufarg := proc.Aspace.Mkuserbuf(optvaln, olen)
 	// XXX why intarg??
 	intarg := optvaln
 	fd, ok := proc.Fd_get(fdn)
@@ -3095,7 +3095,7 @@ func sys_getsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 		return int(err)
 	}
 	if optlenn != 0 {
-		if err := proc.Userwriten(optlenn, 8, optwrote); err != 0 {
+		if err := proc.Aspace.Userwriten(optlenn, 8, optwrote); err != 0 {
 			return int(err)
 		}
 	}
@@ -3109,12 +3109,12 @@ func sys_setsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) 
 	var intarg int
 	if optlenn >= 4 {
 		var err defs.Err_t
-		intarg, err = proc.Userreadn(optvaln, 4)
+		intarg, err = proc.Aspace.Userreadn(optvaln, 4)
 		if err != 0 {
 			return int(err)
 		}
 	}
-	bufarg := proc.Mkuserbuf(optvaln, optlenn)
+	bufarg := proc.Aspace.Mkuserbuf(optvaln, optlenn)
 	fd, ok := proc.Fd_get(fdn)
 	if !ok {
 		return int(-defs.EBADF)
@@ -3158,11 +3158,11 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 			return int(-defs.ENOMEM)
 		}
 
-		child.Pmap, child.P_pmap, ok = physmem.Pmap_new()
+		child.Aspace.Pmap, child.Aspace.P_pmap, ok = physmem.Pmap_new()
 		if !ok {
 			goto outproc
 		}
-		physmem.Refup(child.P_pmap)
+		physmem.Refup(child.Aspace.P_pmap)
 
 		child.Pwait = &parent.Mywait
 		ok = parent.Start_proc(child.Pid)
@@ -3172,7 +3172,7 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		}
 
 		// fork parent address space
-		parent.Lock_pmap()
+		parent.Aspace.Lock_pmap()
 		rsp := chtf[common.TF_RSP]
 		doflush, ok := parent.Vm_fork(child, rsp)
 		if ok && !doflush {
@@ -3182,7 +3182,7 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		if doflush {
 			parent.Tlbflush()
 		}
-		parent.Unlock_pmap()
+		parent.Aspace.Unlock_pmap()
 
 		if !ok {
 			// child page table allocation failed. call
@@ -3196,9 +3196,9 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		ret = child.Pid
 	} else {
 		// validate tfork struct
-		tcb, err1 := parent.Userreadn(tforkp+0, 8)
-		tidaddrn, err2 := parent.Userreadn(tforkp+8, 8)
-		stack, err3 := parent.Userreadn(tforkp+16, 8)
+		tcb, err1 := parent.Aspace.Userreadn(tforkp+0, 8)
+		tidaddrn, err2 := parent.Aspace.Userreadn(tforkp+8, 8)
+		stack, err3 := parent.Aspace.Userreadn(tforkp+16, 8)
 		if err1 != 0 {
 			return int(err1)
 		}
@@ -3234,7 +3234,7 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 			// it is not a fatal error if some thread unmapped the
 			// memory that was supposed to hold the new thread's
 			// tid out from under us.
-			parent.Userwriten(tidaddrn, 8, v)
+			parent.Aspace.Userwriten(tidaddrn, 8, v)
 		}
 	}
 
@@ -3242,7 +3242,7 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 	child.Sched_add(chtf, childtid)
 	return ret
 outmem:
-	physmem.Refdown(child.P_pmap)
+	physmem.Refdown(child.Aspace.P_pmap)
 outproc:
 	common.Tid_del()
 	common.Proc_del(child.Pid)
@@ -3255,7 +3255,7 @@ func sys_execv(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, pathn int, argn 
 	if err != 0 {
 		return int(err)
 	}
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -3276,34 +3276,34 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths ustr.Ustr
 		panic("fix exec with many threads")
 	}
 
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+	proc.Aspace.Lock_pmap()
+	defer proc.Aspace.Unlock_pmap()
 
 	// save page trackers in case the exec fails
-	ovmreg := proc.Vmregion
-	proc.Vmregion = _zvmregion
+	ovmreg := proc.Aspace.Vmregion
+	proc.Aspace.Vmregion = _zvmregion
 
 	// create kernel page table
-	opmap := proc.Pmap
-	op_pmap := proc.P_pmap
+	opmap := proc.Aspace.Pmap
+	op_pmap := proc.Aspace.P_pmap
 	var ok bool
-	proc.Pmap, proc.P_pmap, ok = physmem.Pmap_new()
+	proc.Aspace.Pmap, proc.Aspace.P_pmap, ok = physmem.Pmap_new()
 	if !ok {
-		proc.Pmap, proc.P_pmap = opmap, op_pmap
+		proc.Aspace.Pmap, proc.Aspace.P_pmap = opmap, op_pmap
 		return int(-defs.ENOMEM)
 	}
-	physmem.Refup(proc.P_pmap)
+	physmem.Refup(proc.Aspace.P_pmap)
 	for _, e := range mem.Kents {
-		proc.Pmap[e.Pml4slot] = e.Entry
+		proc.Aspace.Pmap[e.Pml4slot] = e.Entry
 	}
 
 	restore := func() {
-		common.Uvmfree_inner(proc.Pmap, proc.P_pmap, &proc.Vmregion)
-		physmem.Refdown(proc.P_pmap)
-		proc.Vmregion.Clear()
-		proc.Pmap = opmap
-		proc.P_pmap = op_pmap
-		proc.Vmregion = ovmreg
+		common.Uvmfree_inner(proc.Aspace.Pmap, proc.Aspace.P_pmap, &proc.Aspace.Vmregion)
+		physmem.Refdown(proc.Aspace.P_pmap)
+		proc.Aspace.Vmregion.Clear()
+		proc.Aspace.Pmap = opmap
+		proc.Aspace.P_pmap = op_pmap
+		proc.Aspace.Vmregion = ovmreg
 	}
 
 	// load binary image -- get first block of file
@@ -3346,9 +3346,9 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths ustr.Ustr
 	numstkpages := 6
 	// +1 for the guard page
 	stksz := (numstkpages + 1) * mem.PGSIZE
-	stackva := proc.Unusedva_inner(0x0ff<<39, stksz)
-	proc.Vmadd_anon(stackva, mem.PGSIZE, 0)
-	proc.Vmadd_anon(stackva+mem.PGSIZE, stksz-mem.PGSIZE, common.PTE_U|common.PTE_W)
+	stackva := proc.Aspace.Unusedva_inner(0x0ff<<39, stksz)
+	proc.Aspace.Vmadd_anon(stackva, mem.PGSIZE, 0)
+	proc.Aspace.Vmadd_anon(stackva+mem.PGSIZE, stksz-mem.PGSIZE, common.PTE_U|common.PTE_W)
 	stackva += stksz
 	// eagerly map first two pages for stack
 	stkeagermap := 2
@@ -3359,7 +3359,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths ustr.Ustr
 			restore()
 			return int(-defs.ENOMEM)
 		}
-		_, ok = proc.Page_insert(int(p), p_pg, common.PTE_W|common.PTE_U, true)
+		_, ok = proc.Aspace.Page_insert(int(p), p_pg, common.PTE_W|common.PTE_U, true)
 		if !ok {
 			restore()
 			return int(-defs.ENOMEM)
@@ -3384,7 +3384,7 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths ustr.Ustr
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
 
-	if err := proc.K2user_inner(buf, bufdest); err != 0 {
+	if err := proc.Aspace.K2user_inner(buf, bufdest); err != 0 {
 		restore()
 		return int(err)
 	}
@@ -3428,13 +3428,13 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths ustr.Ustr
 
 func insertargs(proc *common.Proc_t, sargs []ustr.Ustr) (int, int, defs.Err_t) {
 	// find free page
-	uva := proc.Unusedva_inner(0, mem.PGSIZE)
-	proc.Vmadd_anon(uva, mem.PGSIZE, common.PTE_U)
+	uva := proc.Aspace.Unusedva_inner(0, mem.PGSIZE)
+	proc.Aspace.Vmadd_anon(uva, mem.PGSIZE, common.PTE_U)
 	_, p_pg, ok := physmem.Refpg_new()
 	if !ok {
 		return 0, 0, -defs.ENOMEM
 	}
-	_, ok = proc.Page_insert(uva, p_pg, common.PTE_U, true)
+	_, ok = proc.Aspace.Page_insert(uva, p_pg, common.PTE_U, true)
 	if !ok {
 		physmem.Refdown(p_pg)
 		return 0, 0, -defs.ENOMEM
@@ -3451,7 +3451,7 @@ func insertargs(proc *common.Proc_t, sargs []ustr.Ustr) (int, int, defs.Err_t) {
 		argptrs[i] = uva + cnt
 		// add null terminators
 		arg = append(arg, 0)
-		if err := proc.K2user_inner(arg, uva+cnt); err != 0 {
+		if err := proc.Aspace.K2user_inner(arg, uva+cnt); err != 0 {
 			// args take up more than a page? the user is on their
 			// own.
 			return 0, 0, err
@@ -3461,7 +3461,7 @@ func insertargs(proc *common.Proc_t, sargs []ustr.Ustr) (int, int, defs.Err_t) {
 	argptrs[len(argptrs)-1] = 0
 	// now put the array of strings
 	argstart := uva + cnt
-	vdata, err := proc.Userdmap8_inner(argstart, true)
+	vdata, err := proc.Aspace.Userdmap8_inner(argstart, true)
 	if err != 0 || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
 		// XXX
@@ -3513,14 +3513,14 @@ func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, ru
 	}
 	if isthread {
 		if statusp != 0 {
-			err := proc.Userwriten(statusp, 8, resp.Status)
+			err := proc.Aspace.Userwriten(statusp, 8, resp.Status)
 			if err != 0 {
 				return int(err)
 			}
 		}
 	} else {
 		if statusp != 0 {
-			err := proc.Userwriten(statusp, 4, resp.Status)
+			err := proc.Aspace.Userwriten(statusp, 4, resp.Status)
 			if err != 0 {
 				return int(err)
 			}
@@ -3529,7 +3529,7 @@ func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, ru
 		proc.Catime.Add(&resp.Atime)
 		if rusagep != 0 {
 			ru := resp.Atime.To_rusage()
-			err = proc.K2user(ru, rusagep)
+			err = proc.Aspace.K2user(ru, rusagep)
 		}
 		if err != 0 {
 			return int(err)
@@ -3555,7 +3555,7 @@ func sys_pread(proc *common.Proc_t, fdn, bufn, lenn, offset int) int {
 	if err != 0 {
 		return int(err)
 	}
-	dst := proc.Mkuserbuf(bufn, lenn)
+	dst := proc.Aspace.Mkuserbuf(bufn, lenn)
 	ret, err := fd.Fops.Pread(dst, offset)
 	if err != 0 {
 		return int(err)
@@ -3568,7 +3568,7 @@ func sys_pwrite(proc *common.Proc_t, fdn, bufn, lenn, offset int) int {
 	if err != 0 {
 		return int(err)
 	}
-	src := proc.Mkuserbuf(bufn, lenn)
+	src := proc.Aspace.Mkuserbuf(bufn, lenn)
 	ret, err := fd.Fops.Pwrite(src, offset)
 	if err != 0 {
 		return int(err)
@@ -3827,9 +3827,9 @@ func futex_ensure(uniq uintptr) (futex_t, defs.Err_t) {
 // pmap must be locked. maps user va to kernel va. returns kva as uintptr and
 // *uint32
 func _uva2kva(proc *common.Proc_t, va uintptr) (uintptr, *uint32, defs.Err_t) {
-	proc.Lockassert_pmap()
+	proc.Aspace.Lockassert_pmap()
 
-	pte := common.Pmap_lookup(proc.Pmap, int(va))
+	pte := common.Pmap_lookup(proc.Aspace.Pmap, int(va))
 	if pte == nil || *pte&common.PTE_P == 0 || *pte&common.PTE_U == 0 {
 		return 0, nil, -defs.EFAULT
 	}
@@ -3840,8 +3840,8 @@ func _uva2kva(proc *common.Proc_t, va uintptr) (uintptr, *uint32, defs.Err_t) {
 }
 
 func va2fut(proc *common.Proc_t, va uintptr) (futex_t, defs.Err_t) {
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+	proc.Aspace.Lock_pmap()
+	defer proc.Aspace.Unlock_pmap()
 
 	var zf futex_t
 	uniq, _, err := _uva2kva(proc, va)
@@ -3859,8 +3859,8 @@ type futumem_t struct {
 }
 
 func (fu *futumem_t) futload() (uint32, defs.Err_t) {
-	fu.proc.Lock_pmap()
-	defer fu.proc.Unlock_pmap()
+	fu.proc.Aspace.Lock_pmap()
+	defer fu.proc.Aspace.Unlock_pmap()
 
 	_, ptr, err := _uva2kva(fu.proc, fu.umem)
 	if err != 0 {
@@ -3893,7 +3893,7 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 	fm.fumem = futumem_t{proc, futn}
 
 	if timespecn != 0 {
-		_, when, err := proc.Usertimespec(timespecn)
+		_, when, err := proc.Aspace.Usertimespec(timespecn)
 		if err != 0 {
 			return int(err)
 		}
@@ -3954,7 +3954,7 @@ func sys_fcntl(proc *common.Proc_t, fdn, cmd, opt int) int {
 }
 
 func sys_truncate(proc *common.Proc_t, pathn int, newlen uint) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -3979,7 +3979,7 @@ func sys_ftruncate(proc *common.Proc_t, fdn int, newlen uint) int {
 }
 
 func sys_getcwd(proc *common.Proc_t, bufn, sz int) int {
-	dst := proc.Mkuserbuf(bufn, sz)
+	dst := proc.Aspace.Mkuserbuf(bufn, sz)
 	_, err := dst.Uiowrite([]uint8(proc.Cwd.Path))
 	if err != 0 {
 		return int(err)
@@ -3991,7 +3991,7 @@ func sys_getcwd(proc *common.Proc_t, bufn, sz int) int {
 }
 
 func sys_chdir(proc *common.Proc_t, dirn int) int {
-	path, err := proc.Userstr(dirn, fs.NAME_MAX)
+	path, err := proc.Aspace.Userstr(dirn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -4299,7 +4299,7 @@ func sys_info(proc *common.Proc_t, n int) int {
 		p1, p2 := physmem.Pgcount()
 		fmt.Printf("pgcount: %v, %v\n", p1, p2)
 	case 11:
-		//proc.Vmregion.dump()
+		//proc.Aspace.Vmregion.dump()
 		fmt.Printf("proc dump:\n")
 		common.Proclock.Lock()
 		for i := range common.Allprocs {
@@ -4480,10 +4480,10 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	// previous segment. if that is the case, we may not be able to avoid
 	// copying.
 	// XXX this doesn't seem to happen anymore; why was it ever the case?
-	if _, ok := proc.Vmregion.Lookup(uintptr(hdr.vaddr)); ok {
+	if _, ok := proc.Aspace.Vmregion.Lookup(uintptr(hdr.vaddr)); ok {
 		panic("htf")
 		va := hdr.vaddr
-		pg, err := proc.Userdmap8_inner(va, true)
+		pg, err := proc.Aspace.Userdmap8_inner(va, true)
 		if err != 0 {
 			return err
 		}
@@ -4501,15 +4501,15 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	}
 	filesz := util.Roundup(hdr.vaddr+hdr.filesz-did, mem.PGSIZE)
 	filesz -= util.Rounddown(hdr.vaddr, mem.PGSIZE)
-	proc.Vmadd_file(hdr.vaddr+did, filesz, perms, fops, hdr.fileoff+did)
+	proc.Aspace.Vmadd_file(hdr.vaddr+did, filesz, perms, fops, hdr.fileoff+did)
 	// eagerly map the page at the entry address
 	if entry >= hdr.vaddr && entry < hdr.vaddr+hdr.memsz {
 		ent := uintptr(entry)
-		vmi, ok := proc.Vmregion.Lookup(ent)
+		vmi, ok := proc.Aspace.Vmregion.Lookup(ent)
 		if !ok {
 			panic("just mapped?")
 		}
-		err := common.Sys_pgfault(proc, vmi, ent, uintptr(common.PTE_U))
+		err := common.Sys_pgfault(&proc.Aspace, vmi, ent, uintptr(common.PTE_U))
 		if err != 0 {
 			return err
 		}
@@ -4523,7 +4523,7 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	bssva := hdr.vaddr + hdr.filesz
 	bsslen := hdr.memsz - hdr.filesz
 	if bssva&int(common.PGOFFSET) != 0 {
-		bpg, err := proc.Userdmap8_inner(bssva, true)
+		bpg, err := proc.Aspace.Userdmap8_inner(bssva, true)
 		if err != 0 {
 			return err
 		}
@@ -4536,7 +4536,7 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	}
 	// bss may have been completely contained in the copied page.
 	if bsslen > 0 {
-		proc.Vmadd_anon(bssva, util.Roundup(bsslen, mem.PGSIZE), perms)
+		proc.Aspace.Vmadd_anon(bssva, util.Roundup(bsslen, mem.PGSIZE), perms)
 	}
 	return 0
 }
@@ -4579,10 +4579,10 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, de
 		l := util.Roundup(tlsaddr+tlssize, mem.PGSIZE)
 		l -= util.Rounddown(tlsaddr, mem.PGSIZE)
 
-		freshtls = proc.Unusedva_inner(0, 2*l)
+		freshtls = proc.Aspace.Unusedva_inner(0, 2*l)
 		t0tls = freshtls + l
-		proc.Vmadd_anon(freshtls, l, common.PTE_U)
-		proc.Vmadd_anon(t0tls, l, common.PTE_U|common.PTE_W)
+		proc.Aspace.Vmadd_anon(freshtls, l, common.PTE_U)
+		proc.Aspace.Vmadd_anon(t0tls, l, common.PTE_U|common.PTE_W)
 		perms := common.PTE_U
 
 		for i := 0; i < l; i += mem.PGSIZE {
@@ -4592,7 +4592,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, de
 			if !ok {
 				return 0, 0, 0, -defs.ENOMEM
 			}
-			_, ok = proc.Page_insert(freshtls+i, p_pg, perms,
+			_, ok = proc.Aspace.Page_insert(freshtls+i, p_pg, perms,
 				true)
 			if !ok {
 				physmem.Refdown(p_pg)
@@ -4600,14 +4600,14 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, de
 			}
 			// map fresh TLS for thread 0
 			nperms := perms | common.PTE_COW
-			_, ok = proc.Page_insert(t0tls+i, p_pg, nperms, true)
+			_, ok = proc.Aspace.Page_insert(t0tls+i, p_pg, nperms, true)
 			if !ok {
 				physmem.Refdown(p_pg)
 				return 0, 0, 0, -defs.ENOMEM
 			}
 		}
 		// copy TLS data to freshtls
-		tlsvmi, ok := proc.Vmregion.Lookup(uintptr(tlsaddr))
+		tlsvmi, ok := proc.Aspace.Vmregion.Lookup(uintptr(tlsaddr))
 		if !ok {
 			panic("must succeed")
 		}
@@ -4622,7 +4622,7 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, de
 			}
 			off := (tlsaddr + i) & int(common.PGOFFSET)
 			src := mem.Pg2bytes(_src)[off:]
-			bpg, err := proc.Userdmap8_inner(freshtls+i, true)
+			bpg, err := proc.Aspace.Userdmap8_inner(freshtls+i, true)
 			if err != 0 {
 				physmem.Refdown(p_pg)
 				return 0, 0, 0, err

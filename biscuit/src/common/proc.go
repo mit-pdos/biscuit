@@ -1,6 +1,5 @@
 package common
 
-import "sync/atomic"
 import "sync"
 
 //import "strings"
@@ -14,7 +13,6 @@ import "defs"
 import "limits"
 import "mem"
 import "ustr"
-import "util"
 
 // import "vm"
 
@@ -65,21 +63,14 @@ type Proc_t struct {
 	// thread tids of this process
 	Threadi Threadinfo_t
 
-	// lock for vmregion, pmpages, pmap, and p_pmap
-	pgfl sync.Mutex
-
-	Vmregion Vmregion_t
-
-	// pmap pages
-	Pmap   *mem.Pmap_t
-	P_pmap mem.Pa_t
+	// Address space
+	Aspace Aspace_t
 
 	// mmap next virtual address hint
 	Mmapi int
 
 	// a process is marked doomed when it has been killed but may have
 	// threads currently running on another processor
-	pgfltaken  bool
 	doomed     bool
 	exitstatus int
 
@@ -262,22 +253,22 @@ func (p *Proc_t) Fd_dup(ofdn, nfdn int) (*Fd_t, bool, defs.Err_t) {
 // returns whether the parent's TLB should be flushed and whether the we
 // successfully copied the parent's address space.
 func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
-	parent.Lockassert_pmap()
+	parent.Aspace.Lockassert_pmap()
 	// first add kernel pml4 entries
 	for _, e := range mem.Kents {
-		child.Pmap[e.Pml4slot] = e.Entry
+		child.Aspace.Pmap[e.Pml4slot] = e.Entry
 	}
 	// recursive mapping
-	child.Pmap[mem.VREC] = child.P_pmap | PTE_P | PTE_W
+	child.Aspace.Pmap[mem.VREC] = child.Aspace.P_pmap | PTE_P | PTE_W
 
 	failed := false
 	doflush := false
-	child.Vmregion = parent.Vmregion.copy()
-	parent.Vmregion.iter(func(vmi *Vminfo_t) {
+	child.Aspace.Vmregion = parent.Aspace.Vmregion.copy()
+	parent.Aspace.Vmregion.iter(func(vmi *Vminfo_t) {
 		start := int(vmi.pgn << PGSHIFT)
 		end := start + int(vmi.pglen<<PGSHIFT)
 		ashared := vmi.mtype == VSANON
-		fl, ok := ptefork(child.Pmap, parent.Pmap, start, end, ashared)
+		fl, ok := ptefork(child.Aspace.Pmap, parent.Aspace.Pmap, start, end, ashared)
 		failed = failed || !ok
 		doflush = doflush || fl
 	})
@@ -288,27 +279,27 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 
 	// don't mark stack COW since the parent/child will fault their stacks
 	// immediately
-	vmi, ok := child.Vmregion.Lookup(rsp)
+	vmi, ok := child.Aspace.Vmregion.Lookup(rsp)
 	// give up if we can't find the stack
 	if !ok {
 		return doflush, true
 	}
-	pte, ok := vmi.ptefor(child.Pmap, rsp)
+	pte, ok := vmi.ptefor(child.Aspace.Pmap, rsp)
 	if !ok || *pte&PTE_P == 0 || *pte&PTE_U == 0 {
 		return doflush, true
 	}
 	// sys_pgfault expects pmap to be locked
-	child.Lock_pmap()
+	child.Aspace.Lock_pmap()
 	perms := uintptr(PTE_U | PTE_W)
-	if Sys_pgfault(child, vmi, rsp, perms) != 0 {
+	if Sys_pgfault(&child.Aspace, vmi, rsp, perms) != 0 {
 		return doflush, false
 	}
-	child.Unlock_pmap()
-	vmi, ok = parent.Vmregion.Lookup(rsp)
+	child.Aspace.Unlock_pmap()
+	vmi, ok = parent.Aspace.Vmregion.Lookup(rsp)
 	if !ok || *pte&PTE_P == 0 || *pte&PTE_U == 0 {
 		panic("child has stack but not parent")
 	}
-	pte, ok = vmi.ptefor(parent.Pmap, rsp)
+	pte, ok = vmi.ptefor(parent.Aspace.Pmap, rsp)
 	if !ok {
 		panic("must exist")
 	}
@@ -318,177 +309,10 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 	return true, true
 }
 
-// does not increase opencount on fops (vmregion_t.insert does). perms should
-// only use PTE_U/PTE_W; the page fault handler will install the correct COW
-// flags. perms == 0 means that no mapping can go here (like for guard pages).
-func (p *Proc_t) _mkvmi(mt mtype_t, start, len int, perms mem.Pa_t, foff int,
-	fops Fdops_i, unpin mem.Unpin_i) *Vminfo_t {
-	if len <= 0 {
-		panic("bad vmi len")
-	}
-	if mem.Pa_t(start|len)&PGOFFSET != 0 {
-		panic("start and len must be aligned")
-	}
-	// don't specify cow, present etc. -- page fault will handle all that
-	pm := PTE_W | PTE_COW | PTE_WASCOW | PTE_PS | PTE_PCD | PTE_P | PTE_U
-	if r := perms & pm; r != 0 && r != PTE_U && r != (PTE_W|PTE_U) {
-		panic("bad perms")
-	}
-	ret := &Vminfo_t{}
-	pgn := uintptr(start) >> PGSHIFT
-	pglen := util.Roundup(len, mem.PGSIZE) >> PGSHIFT
-	ret.mtype = mt
-	ret.pgn = pgn
-	ret.pglen = pglen
-	ret.perms = uint(perms)
-	if mt == VFILE {
-		ret.file.foff = foff
-		ret.file.mfile = &Mfile_t{}
-		ret.file.mfile.mfops = fops
-		ret.file.mfile.unpin = unpin
-		ret.file.mfile.mapcount = pglen
-		ret.file.shared = unpin != nil
-	}
-	return ret
-}
-
-func (p *Proc_t) Vmadd_anon(start, len int, perms mem.Pa_t) {
-	vmi := p._mkvmi(VANON, start, len, perms, 0, nil, nil)
-	p.Vmregion.insert(vmi)
-}
-
-func (p *Proc_t) Vmadd_file(start, len int, perms mem.Pa_t, fops Fdops_i,
-	foff int) {
-	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, nil)
-	p.Vmregion.insert(vmi)
-}
-
-func (p *Proc_t) Vmadd_shareanon(start, len int, perms mem.Pa_t) {
-	vmi := p._mkvmi(VSANON, start, len, perms, 0, nil, nil)
-	p.Vmregion.insert(vmi)
-}
-
-func (p *Proc_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops Fdops_i,
-	foff int, unpin mem.Unpin_i) {
-	vmi := p._mkvmi(VFILE, start, len, perms, foff, fops, unpin)
-	p.Vmregion.insert(vmi)
-}
-
-func (p *Proc_t) Mkuserbuf(userva, len int) *Userbuf_t {
-	ret := &Userbuf_t{}
-	ret.ub_init(p, userva, len)
-	return ret
-}
-
-var Ubpool = sync.Pool{New: func() interface{} { return new(Userbuf_t) }}
-
-func (p *Proc_t) mkfxbuf() *[64]uintptr {
-	ret := new([64]uintptr)
-	n := uintptr(unsafe.Pointer(ret))
-	if n&((1<<4)-1) != 0 {
-		panic("not 16 byte aligned")
-	}
-	*ret = runtime.Fxinit
-	return ret
-}
-
-// the first return value is true if a present mapping was modified (i.e. need
-// to flush TLB). the second return value is false if the page insertion failed
-// due to lack of user pages. p_pg's ref count is increased so the caller can
-// simply Physmem.Refdown()
-func (p *Proc_t) Page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
-	vempty bool) (bool, bool) {
-	return p._page_insert(va, p_pg, perms, vempty, true)
-}
-
-// the first return value is true if a present mapping was modified (i.e. need
-// to flush TLB). the second return value is false if the page insertion failed
-// due to lack of user pages. p_pg's ref count is increased so the caller can
-// simply Physmem.Refdown()
-func (p *Proc_t) Blockpage_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
-	vempty bool) (bool, bool) {
-	return p._page_insert(va, p_pg, perms, vempty, false)
-}
-
-func (p *Proc_t) _page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
-	vempty, refup bool) (bool, bool) {
-	p.Lockassert_pmap()
-	if refup {
-		mem.Physmem.Refup(p_pg)
-	}
-	pte, err := pmap_walk(p.Pmap, va, PTE_U|PTE_W)
-	if err != 0 {
-		return false, false
-	}
-	ninval := false
-	var p_old mem.Pa_t
-	if *pte&PTE_P != 0 {
-		if vempty {
-			panic("pte not empty")
-		}
-		if *pte&PTE_U == 0 {
-			panic("replacing kernel page")
-		}
-		ninval = true
-		p_old = mem.Pa_t(*pte & PTE_ADDR)
-	}
-	*pte = p_pg | perms | PTE_P
-	if ninval {
-		mem.Physmem.Refdown(p_old)
-	}
-	return ninval, true
-}
-
-func (p *Proc_t) Page_remove(va int) bool {
-	p.Lockassert_pmap()
-	remmed := false
-	pte := Pmap_lookup(p.Pmap, va)
-	if pte != nil && *pte&PTE_P != 0 {
-		if *pte&PTE_U == 0 {
-			panic("removing kernel page")
-		}
-		p_old := mem.Pa_t(*pte & PTE_ADDR)
-		mem.Physmem.Refdown(p_old)
-		*pte = 0
-		remmed = true
-	}
-	return remmed
-}
-
-// returns true if the pagefault was handled successfully
-func (p *Proc_t) pgfault(tid Tid_t, fa, ecode uintptr) defs.Err_t {
-	p.Lock_pmap()
-	vmi, ok := p.Vmregion.Lookup(fa)
-	if !ok {
-		p.Unlock_pmap()
-		return -defs.EFAULT
-	}
-	ret := Sys_pgfault(p, vmi, fa, ecode)
-	p.Unlock_pmap()
-	return ret
-}
-
 // flush TLB on all CPUs that may have this processes' pmap loaded
 func (p *Proc_t) Tlbflush() {
 	// this flushes the TLB for now
-	p.Tlbshoot(0, 2)
-}
-
-func (p *Proc_t) Tlbshoot(startva uintptr, pgcount int) {
-	if pgcount == 0 {
-		return
-	}
-	p.Lockassert_pmap()
-	// fast path: the pmap is loaded in exactly one CPU's cr3, and it
-	// happens to be this CPU. we detect that one CPU has the pmap loaded
-	// by a pmap ref count == 2 (1 for Proc_t ref, 1 for CPU).
-	p_pmap := p.P_pmap
-	refp, _ := mem.Physmem.Refaddr(p_pmap)
-	if runtime.Condflush(refp, uintptr(p_pmap), startva, pgcount) {
-		return
-	}
-	// slow path, must send TLB shootdowns
-	tlb_shootdown(uintptr(p.P_pmap), startva, pgcount)
+	p.Aspace.Tlbshoot(0, 2)
 }
 
 func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
@@ -682,7 +506,7 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool
 		runtime.Gosched()
 	case defs.PGFAULT:
 		faultaddr := uintptr(aux)
-		err := p.pgfault(tid, faultaddr, tf[TF_ERROR])
+		err := p.Aspace.pgfault(tid, faultaddr, tf[TF_ERROR])
 		restart = err == -defs.ENOHEAP
 		if err != 0 && !restart {
 			fmt.Printf("*** fault *** %v: addr %x, "+
@@ -720,7 +544,7 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 	const runonly = 14 << 10
 	if Resbegin(runonly) {
 		// could allocate fxbuf lazily
-		fxbuf = p.mkfxbuf()
+		fxbuf = mkfxbuf()
 	}
 
 	fastret := false
@@ -729,11 +553,11 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
-		refp, _ := mem.Physmem.Refaddr(p.P_pmap)
+		refp, _ := mem.Physmem.Refaddr(p.Aspace.P_pmap)
 		Resend()
 
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
-			uintptr(p.P_pmap), fastret, refp)
+			uintptr(p.Aspace.P_pmap), fastret, refp)
 
 		// XXX debug
 		if Current() != mynote {
@@ -859,193 +683,6 @@ func (p *Proc_t) Doomall() {
 	p.Threadi.Unlock()
 }
 
-func (p *Proc_t) Lock_pmap() {
-	// useful for finding deadlock bugs with one cpu
-	//if p.pgfltaken {
-	//	panic("double lock")
-	//}
-	p.pgfl.Lock()
-	p.pgfltaken = true
-}
-
-func (p *Proc_t) Unlock_pmap() {
-	p.pgfltaken = false
-	p.pgfl.Unlock()
-}
-
-func (p *Proc_t) Lockassert_pmap() {
-	if !p.pgfltaken {
-		panic("pgfl lock must be held")
-	}
-}
-
-func (p *Proc_t) Userdmap8_inner(va int, k2u bool) ([]uint8, defs.Err_t) {
-	p.Lockassert_pmap()
-
-	voff := va & int(PGOFFSET)
-	uva := uintptr(va)
-	vmi, ok := p.Vmregion.Lookup(uva)
-	if !ok {
-		return nil, -defs.EFAULT
-	}
-	pte, ok := vmi.ptefor(p.Pmap, uva)
-	if !ok {
-		return nil, -defs.ENOMEM
-	}
-	ecode := uintptr(PTE_U)
-	needfault := true
-	isp := *pte&PTE_P != 0
-	if k2u {
-		ecode |= uintptr(PTE_W)
-		// XXX how to distinguish between user asking kernel to write
-		// to read-only page and kernel writing a page mapped read-only
-		// to user? (exec args)
-
-		//isw := *pte & PTE_W != 0
-		//if isp && isw {
-		iscow := *pte&PTE_COW != 0
-		if isp && !iscow {
-			needfault = false
-		}
-	} else {
-		if isp {
-			needfault = false
-		}
-	}
-
-	if needfault {
-		if err := Sys_pgfault(p, vmi, uva, ecode); err != 0 {
-			return nil, err
-		}
-	}
-
-	pg := mem.Physmem.Dmap(*pte & PTE_ADDR)
-	bpg := mem.Pg2bytes(pg)
-	return bpg[voff:], 0
-}
-
-// _userdmap8 and userdmap8r functions must only be used if concurrent
-// modifications to the Proc_t's address space is impossible.
-func (p *Proc_t) _userdmap8(va int, k2u bool) ([]uint8, defs.Err_t) {
-	p.Lock_pmap()
-	ret, err := p.Userdmap8_inner(va, k2u)
-	p.Unlock_pmap()
-	return ret, err
-}
-
-func (p *Proc_t) Userdmap8r(va int) ([]uint8, defs.Err_t) {
-	return p._userdmap8(va, false)
-}
-
-func (p *Proc_t) usermapped(va, n int) bool {
-	p.Lock_pmap()
-	defer p.Unlock_pmap()
-
-	_, ok := p.Vmregion.Lookup(uintptr(va))
-	return ok
-}
-
-func (p *Proc_t) Userreadn(va, n int) (int, defs.Err_t) {
-	p.Lock_pmap()
-	a, b := p.userreadn_inner(va, n)
-	p.Unlock_pmap()
-	return a, b
-}
-
-func (p *Proc_t) userreadn_inner(va, n int) (int, defs.Err_t) {
-	p.Lockassert_pmap()
-	if n > 8 {
-		panic("large n")
-	}
-	var ret int
-	var src []uint8
-	var err defs.Err_t
-	for i := 0; i < n; i += len(src) {
-		src, err = p.Userdmap8_inner(va+i, false)
-		if err != 0 {
-			return 0, err
-		}
-		l := n - i
-		if len(src) < l {
-			l = len(src)
-		}
-		v := util.Readn(src, l, 0)
-		ret |= v << (8 * uint(i))
-	}
-	return ret, 0
-}
-
-func (p *Proc_t) Userwriten(va, n, val int) defs.Err_t {
-	if n > 8 {
-		panic("large n")
-	}
-	p.Lock_pmap()
-	defer p.Unlock_pmap()
-	var dst []uint8
-	for i := 0; i < n; i += len(dst) {
-		v := val >> (8 * uint(i))
-		t, err := p.Userdmap8_inner(va+i, true)
-		dst = t
-		if err != 0 {
-			return err
-		}
-		util.Writen(dst, n-i, 0, v)
-	}
-	return 0
-}
-
-// first ret value is the string from user space second is error
-func (p *Proc_t) Userstr(uva int, lenmax int) (ustr.Ustr, defs.Err_t) {
-	if lenmax < 0 {
-		return nil, 0
-	}
-	p.Lock_pmap()
-	//defer p.Unlock_pmap()
-	i := 0
-	s := ustr.MkUstr()
-	for {
-		str, err := p.Userdmap8_inner(uva+i, false)
-		if err != 0 {
-			p.Unlock_pmap()
-			return s, err
-		}
-		for j, c := range str {
-			if c == 0 {
-				s = append(s, str[:j]...)
-				// s = s + string(str[:j])
-				p.Unlock_pmap()
-				return s, 0
-			}
-		}
-		s = append(s, str...)
-		// s = s + string(str)
-		i += len(str)
-		if len(s) >= lenmax {
-			p.Unlock_pmap()
-			return nil, -defs.ENAMETOOLONG
-		}
-	}
-}
-
-func (p *Proc_t) Usertimespec(va int) (time.Duration, time.Time, defs.Err_t) {
-	var zt time.Time
-	secs, err := p.Userreadn(va, 8)
-	if err != 0 {
-		return 0, zt, err
-	}
-	nsecs, err := p.Userreadn(va+8, 8)
-	if err != 0 {
-		return 0, zt, err
-	}
-	if secs < 0 || nsecs < 0 {
-		return 0, zt, -defs.EINVAL
-	}
-	tot := time.Duration(secs) * time.Second
-	tot += time.Duration(nsecs) * time.Nanosecond
-	t := time.Unix(int64(secs), int64(nsecs))
-	return tot, t, 0
-}
-
 func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 	if uva == 0 {
 		return nil, 0
@@ -1071,7 +708,7 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 			uva = uva | int(uint(b))<<uint(i*8)
 		}
 		lenmax := 128
-		str, err := p.Userstr(uva, lenmax)
+		str, err := p.Aspace.Userstr(uva, lenmax)
 		if err != 0 {
 			return err
 		}
@@ -1086,7 +723,7 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 		if !Resadd(Bounds(B_PROC_T_USERARGS)) {
 			return nil, -defs.ENOHEAP
 		}
-		ptrs, err := p.Userdmap8r(uva + uoff)
+		ptrs, err := p.Aspace.Userdmap8r(uva + uoff)
 		if err != 0 {
 			return nil, err
 		}
@@ -1106,107 +743,6 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 		uoff += len(ptrs)
 	}
 	return ret, 0
-}
-
-// copies src to the user virtual address uva. may copy part of src if uva +
-// len(src) is not mapped
-func (p *Proc_t) K2user(src []uint8, uva int) defs.Err_t {
-	p.Lock_pmap()
-	ret := p.K2user_inner(src, uva)
-	p.Unlock_pmap()
-	return ret
-}
-
-func (p *Proc_t) K2user_inner(src []uint8, uva int) defs.Err_t {
-	p.Lockassert_pmap()
-	cnt := 0
-	l := len(src)
-	for cnt != l {
-		gimme := Bounds(B_PROC_T_K2USER_INNER)
-		if !Resadd_noblock(gimme) {
-			return -defs.ENOHEAP
-		}
-		dst, err := p.Userdmap8_inner(uva+cnt, true)
-		if err != 0 {
-			return err
-		}
-		ub := len(src)
-		if ub > len(dst) {
-			ub = len(dst)
-		}
-		copy(dst, src)
-		src = src[ub:]
-		cnt += ub
-	}
-	return 0
-}
-
-// copies len(dst) bytes from userspace address uva to dst
-func (p *Proc_t) User2k(dst []uint8, uva int) defs.Err_t {
-	p.Lock_pmap()
-	ret := p.User2k_inner(dst, uva)
-	p.Unlock_pmap()
-	return ret
-}
-
-func (p *Proc_t) User2k_inner(dst []uint8, uva int) defs.Err_t {
-	p.Lockassert_pmap()
-	cnt := 0
-	for len(dst) != 0 {
-		gimme := Bounds(B_PROC_T_USER2K_INNER)
-		if !Resadd_noblock(gimme) {
-			return -defs.ENOHEAP
-		}
-		src, err := p.Userdmap8_inner(uva+cnt, false)
-		if err != 0 {
-			return err
-		}
-		did := copy(dst, src)
-		dst = dst[did:]
-		cnt += did
-	}
-	return 0
-}
-
-func (p *Proc_t) Unusedva_inner(startva, len int) int {
-	p.Lockassert_pmap()
-	if len < 0 || len > 1<<48 {
-		panic("weird len")
-	}
-	startva = util.Rounddown(startva, mem.PGSIZE)
-	if startva < mem.USERMIN {
-		startva = mem.USERMIN
-	}
-	_ret, _l := p.Vmregion.empty(uintptr(startva), uintptr(len))
-	ret := int(_ret)
-	l := int(_l)
-	if startva > ret && startva < ret+l {
-		ret = startva
-	}
-	return ret
-}
-
-// don't forget: there are two places where pmaps/memory are free'd:
-// Proc_t.terminate() and exec.
-func Uvmfree_inner(pmg *mem.Pmap_t, p_pmap mem.Pa_t, vmr *Vmregion_t) {
-	vmr.iter(func(vmi *Vminfo_t) {
-		start := uintptr(vmi.pgn << PGSHIFT)
-		end := start + uintptr(vmi.pglen<<PGSHIFT)
-		var unpin mem.Unpin_i
-		if vmi.mtype == VFILE {
-			unpin = vmi.file.mfile.unpin
-		}
-		pmfree(pmg, start, end, unpin)
-	})
-}
-
-func (p *Proc_t) Uvmfree() {
-	Uvmfree_inner(p.Pmap, p.P_pmap, &p.Vmregion)
-	// Dec_pmap could free the pmap itself. thus it must come after
-	// Uvmfree.
-	mem.Physmem.Dec_pmap(p.P_pmap)
-	// close all open mmap'ed files
-	p.Vmregion.Clear()
 }
 
 // terminate a process. must only be called when the process has no more
@@ -1241,7 +777,7 @@ func (p *Proc_t) terminate() {
 	// safe since we know that all user threads are dead and thus no CPU
 	// will try to access user mappings. however, any CPU may access kernel
 	// mappings via this pmap.
-	p.Uvmfree()
+	p.Aspace.Uvmfree()
 
 	// send status to parent
 	if p.Pwait == nil {
@@ -1690,7 +1226,7 @@ func (o *oom_t) dispatch_peasant(need int) {
 	}
 
 	fmt.Printf("Killing PID %d \"%v\" for (%v %v)...\n", vic.Pid, vic.Name,
-		Human(need), vic.Vmregion.Novma)
+		Human(need), vic.Aspace.Vmregion.Novma)
 	vic.Doomall()
 	st := time.Now()
 	dl := st.Add(time.Second)
@@ -1723,9 +1259,9 @@ func (o *oom_t) judge_peasant(p *Proc_t) int {
 		return 0
 	}
 
-	p.Lock_pmap()
-	novma := int(p.Vmregion.Novma)
-	p.Unlock_pmap()
+	p.Aspace.Lock_pmap()
+	novma := int(p.Aspace.Vmregion.Novma)
+	p.Aspace.Unlock_pmap()
 
 	var nofd int
 	p.Fdl.Lock()
@@ -1740,143 +1276,4 @@ func (o *oom_t) judge_peasant(p *Proc_t) int {
 	chalds := p.Mywait.Len()
 
 	return novma + nofd + chalds
-}
-
-// returns true if the fault was handled successfully
-func Sys_pgfault(proc *Proc_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err_t {
-	isguard := vmi.perms == 0
-	iswrite := ecode&uintptr(PTE_W) != 0
-	writeok := vmi.perms&uint(PTE_W) != 0
-	if isguard || (iswrite && !writeok) {
-		return -defs.EFAULT
-	}
-	// pmap is Lock'ed in Proc_t.pgfault...
-	if ecode&uintptr(PTE_U) == 0 {
-		// kernel page faults should be noticed and crashed upon in
-		// runtime.trap(), but just in case
-		panic("kernel page fault")
-	}
-	if vmi.mtype == VSANON {
-		panic("shared anon pages should always be mapped")
-	}
-
-	pte, ok := vmi.ptefor(proc.Pmap, faultaddr)
-	if !ok {
-		return -defs.ENOMEM
-	}
-	if (iswrite && *pte&PTE_WASCOW != 0) ||
-		(!iswrite && *pte&PTE_P != 0) {
-		// two threads simultaneously faulted on same page
-		return 0
-	}
-
-	var p_pg mem.Pa_t
-	isblockpage := false
-	perms := PTE_U | PTE_P
-	isempty := true
-
-	// shared file mappings are handled the same way regardless of whether
-	// the fault is read or write
-	if vmi.mtype == VFILE && vmi.file.shared {
-		var err defs.Err_t
-		_, p_pg, err = vmi.Filepage(faultaddr)
-		if err != 0 {
-			return err
-		}
-		isblockpage = true
-		if vmi.perms&uint(PTE_W) != 0 {
-			perms |= PTE_W
-		}
-	} else if iswrite {
-		// XXXPANIC
-		if *pte&PTE_W != 0 {
-			panic("bad state")
-		}
-		var pgsrc *mem.Pg_t
-		var p_bpg mem.Pa_t
-		// the copy-on-write page may be specified in the pte or it may
-		// not have been mapped at all yet.
-		cow := *pte&PTE_COW != 0
-		if cow {
-			// if this anonymous COW page is mapped exactly once
-			// (i.e.  only this mapping maps the page), we can
-			// claim the page, skip the copy, and mark it writable.
-			phys := *pte & PTE_ADDR
-			ref, _ := mem.Physmem.Refaddr(phys)
-			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
-				phys != mem.P_zeropg {
-				tmp := *pte &^ PTE_COW
-				tmp |= PTE_W | PTE_WASCOW
-				*pte = tmp
-				proc.Tlbshoot(faultaddr, 1)
-				return 0
-			}
-			pgsrc = mem.Physmem.Dmap(phys)
-			isempty = false
-		} else {
-			// XXXPANIC
-			if *pte != 0 {
-				panic("no")
-			}
-			switch vmi.mtype {
-			case VANON:
-				pgsrc = mem.Zeropg
-			case VFILE:
-				var err defs.Err_t
-				pgsrc, p_bpg, err = vmi.Filepage(faultaddr)
-				if err != 0 {
-					return err
-				}
-				defer mem.Physmem.Refdown(p_bpg)
-			default:
-				panic("wut")
-			}
-		}
-		var pg *mem.Pg_t
-		var ok bool
-		// don't zero new page
-		pg, p_pg, ok = mem.Physmem.Refpg_new_nozero()
-		if !ok {
-			return -defs.ENOMEM
-		}
-		*pg = *pgsrc
-		perms |= PTE_WASCOW
-		perms |= PTE_W
-	} else {
-		if *pte != 0 {
-			panic("must be 0")
-		}
-		switch vmi.mtype {
-		case VANON:
-			p_pg = mem.P_zeropg
-		case VFILE:
-			var err defs.Err_t
-			_, p_pg, err = vmi.Filepage(faultaddr)
-			if err != 0 {
-				return err
-			}
-			isblockpage = true
-		default:
-			panic("wut")
-		}
-		if vmi.perms&uint(PTE_W) != 0 {
-			perms |= PTE_COW
-		}
-	}
-
-	var tshoot bool
-	if isblockpage {
-		tshoot, ok = proc.Blockpage_insert(int(faultaddr), p_pg, perms,
-			isempty)
-	} else {
-		tshoot, ok = proc.Page_insert(int(faultaddr), p_pg, perms, isempty)
-	}
-	if !ok {
-		mem.Physmem.Refdown(p_pg)
-		return -defs.ENOMEM
-	}
-	if tshoot {
-		proc.Tlbshoot(faultaddr, 1)
-	}
-	return 0
 }
