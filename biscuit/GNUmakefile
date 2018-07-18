@@ -34,13 +34,10 @@ PSRC := src/accnt/accnt.go \
 	src/mem/mem.go src/mem/dmap.go \
 	src/oommsg/oommsg.go \
 	src/res/res.go \
-	# src/fd/fd.go \
-	src/userbuf/userbuf.go \
 	src/proc/proc.go src/proc/wait.go src/proc/syscall.go src/proc/oom.go \
-	src/vm/vm.go src/vm/physmem.go src/vm/pmap.go src/vm/as.go src/vm/userbuf.go src/vm/fd.go \
+	src/vm/vm.go src/vm/pmap.go src/vm/as.go src/vm/rb.go src/vm/fd.go src/vm/userbuf.go \
 	src/stat/stat.go \
 	src/stats/stats.go \
-	src/syscall/syscall.go \
 	src/tinfo/tinfo.go \
 	src/ustr/ustr.go \
 	src/util/util.go
@@ -110,7 +107,7 @@ $(K)/bootmain.o: $(K)/bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-mkfs: src/mkfs/mkfs.go  $(CSRC) $(FSRC) $(PSRC)
+mkfs: src/mkfs/mkfs.go  $(FSRC) $(PSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build src/mkfs/mkfs.go
 
 go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
@@ -139,7 +136,7 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) $(FSRC) $(CSRC) $(PSRC)
+$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) $(FSRC) $(PSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
 	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \
