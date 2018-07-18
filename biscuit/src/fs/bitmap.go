@@ -4,6 +4,7 @@ import "fmt"
 import "sync"
 import "sort"
 
+import "bounds"
 import "common"
 import "defs"
 import "stats"
@@ -89,7 +90,7 @@ func (alloc *bitmap_t) Fbread(blockno int) *Bdev_block_t {
 // make a complete pass.
 func (alloc *bitmap_t) apply(start int, f func(b, v int) bool) bool {
 	var ca common.Cacheallocs_t
-	gimme := common.Bounds(common.B_BITMAP_T_APPLY)
+	gimme := bounds.Bounds(bounds.B_BITMAP_T_APPLY)
 
 	var blk *Bdev_block_t
 	var lastbn = -1

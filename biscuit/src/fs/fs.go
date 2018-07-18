@@ -3,6 +3,7 @@ package fs
 import "fmt"
 import "sync"
 
+import "bounds"
 import "bpath"
 import "common"
 import "defs"
@@ -341,7 +342,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *common.Cwd_t) ([]*imemno
 	cnt := 0
 	// lookup newchild and try to lock all inodes involved
 	for {
-		gimme := common.Bounds(common.B_FS_T_FS_RENAME)
+		gimme := bounds.Bounds(bounds.B_FS_T_FS_RENAME)
 		if !common.Resadd_noblock(gimme) {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
@@ -500,7 +501,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) defs.Err_t {
 	// walk up to iroot
 	here := start
 	here.Refup("_isancestor")
-	gimme := common.Bounds(common.B_FS_T__ISANCESTOR)
+	gimme := bounds.Bounds(bounds.B_FS_T__ISANCESTOR)
 	for here != fs.root {
 		if !common.Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
@@ -567,7 +568,7 @@ func (fo *fsfops_t) _read(dst common.Userio_i, toff int) (int, defs.Err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
+func (fo *fsfops_t) Read(dst common.Userio_i) (int, defs.Err_t) {
 	return fo._read(dst, -1)
 }
 
@@ -604,7 +605,7 @@ func (fo *fsfops_t) _write(src common.Userio_i, toff int) (int, defs.Err_t) {
 	return did, err
 }
 
-func (fo *fsfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
+func (fo *fsfops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	t := stats.Rdtsc()
 	r, e := fo._write(src, -1)
 	fo.fs.istats.CWrite.Add(t)
@@ -747,29 +748,29 @@ func (fo *fsfops_t) Mmapi(offset, len int, inc bool) ([]mem.Mmapinfo_t, defs.Err
 	return mmi, err
 }
 
-func (fo *fsfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+func (fo *fsfops_t) Accept(common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
 	return nil, 0, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Bind(*common.Proc_t, []uint8) defs.Err_t {
+func (fo *fsfops_t) Bind([]uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Connect(proc *common.Proc_t, sabuf []uint8) defs.Err_t {
+func (fo *fsfops_t) Connect(sabuf []uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, defs.Err_t) {
+func (fo *fsfops_t) Listen(int) (common.Fdops_i, defs.Err_t) {
 	return nil, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
+func (fo *fsfops_t) Sendmsg(common.Userio_i, []uint8, []uint8,
 	int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Recvmsg(*common.Proc_t, common.Userio_i,
-	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+func (fo *fsfops_t) Recvmsg(common.Userio_i,
+	common.Userio_i, common.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
@@ -777,16 +778,16 @@ func (fo *fsfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) {
 	return pm.Events & (common.R_READ | common.R_WRITE), 0
 }
 
-func (fo *fsfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (fo *fsfops_t) Fcntl(cmd, opt int) int {
 	return int(-defs.ENOSYS)
 }
 
-func (fo *fsfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
+func (fo *fsfops_t) Getsockopt(opt int, bufarg common.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (fo *fsfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) defs.Err_t {
+func (fo *fsfops_t) Setsockopt(int, int, common.Userio_i, int) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
@@ -906,7 +907,7 @@ func _prof_read(dst common.Userio_i, offset int) (int, defs.Err_t) {
 	}
 }
 
-func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
+func (df *Devfops_t) Read(dst common.Userio_i) (int, defs.Err_t) {
 	df._sane()
 	if df.Maj == defs.D_CONSOLE {
 		return cons.Cons_read(dst, 0)
@@ -919,7 +920,7 @@ func (df *Devfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_
 	}
 }
 
-func (df *Devfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
+func (df *Devfops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	df._sane()
 	if df.Maj == defs.D_CONSOLE {
 		return cons.Cons_write(src, 0)
@@ -973,29 +974,29 @@ func (df *Devfops_t) Lseek(int, int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (df *Devfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+func (df *Devfops_t) Accept(common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
 	return nil, 0, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Bind(*common.Proc_t, []uint8) defs.Err_t {
+func (df *Devfops_t) Bind([]uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Connect(proc *common.Proc_t, sabuf []uint8) defs.Err_t {
+func (df *Devfops_t) Connect(sabuf []uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, defs.Err_t) {
+func (df *Devfops_t) Listen(int) (common.Fdops_i, defs.Err_t) {
 	return nil, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
+func (df *Devfops_t) Sendmsg(common.Userio_i, []uint8, []uint8,
 	int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Recvmsg(*common.Proc_t, common.Userio_i,
-	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+func (df *Devfops_t) Recvmsg(common.Userio_i,
+	common.Userio_i, common.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
@@ -1014,16 +1015,16 @@ func (df *Devfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) {
 	}
 }
 
-func (df *Devfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (df *Devfops_t) Fcntl(cmd, opt int) int {
 	return int(-defs.ENOSYS)
 }
 
-func (df *Devfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
+func (df *Devfops_t) Getsockopt(opt int, bufarg common.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (df *Devfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) defs.Err_t {
+func (df *Devfops_t) Setsockopt(int, int, common.Userio_i, int) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
@@ -1038,7 +1039,7 @@ type rawdfops_t struct {
 	fs     *Fs_t
 }
 
-func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
+func (raw *rawdfops_t) Read(dst common.Userio_i) (int, defs.Err_t) {
 	raw.Lock()
 	defer raw.Unlock()
 	var did int
@@ -1058,7 +1059,7 @@ func (raw *rawdfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Er
 	return did, 0
 }
 
-func (raw *rawdfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
+func (raw *rawdfops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	raw.Lock()
 	defer raw.Unlock()
 	var did int
@@ -1139,29 +1140,29 @@ func (raw *rawdfops_t) Lseek(off, whence int) (int, defs.Err_t) {
 	return raw.offset, 0
 }
 
-func (raw *rawdfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+func (raw *rawdfops_t) Accept(common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
 	return nil, 0, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Bind(*common.Proc_t, []uint8) defs.Err_t {
+func (raw *rawdfops_t) Bind([]uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Connect(proc *common.Proc_t, sabuf []uint8) defs.Err_t {
+func (raw *rawdfops_t) Connect(sabuf []uint8) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Listen(*common.Proc_t, int) (common.Fdops_i, defs.Err_t) {
+func (raw *rawdfops_t) Listen(int) (common.Fdops_i, defs.Err_t) {
 	return nil, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
+func (raw *rawdfops_t) Sendmsg(common.Userio_i, []uint8, []uint8,
 	int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Recvmsg(*common.Proc_t, common.Userio_i,
-	common.Userio_i, common.Userio_i, int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+func (raw *rawdfops_t) Recvmsg(common.Userio_i,
+	common.Userio_i, common.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
@@ -1169,16 +1170,16 @@ func (raw *rawdfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t)
 	return pm.Events & (common.R_READ | common.R_WRITE), 0
 }
 
-func (raw *rawdfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (raw *rawdfops_t) Fcntl(cmd, opt int) int {
 	return int(-defs.ENOSYS)
 }
 
-func (raw *rawdfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
+func (raw *rawdfops_t) Getsockopt(opt int, bufarg common.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	return 0, -defs.ENOTSOCK
 }
 
-func (raw *rawdfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) defs.Err_t {
+func (raw *rawdfops_t) Setsockopt(int, int, common.Userio_i, int) defs.Err_t {
 	return -defs.ENOTSOCK
 }
 
@@ -1471,7 +1472,7 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *common.Cwd_t) (*imem
 			}
 			idm.ilock("fs_namei")
 			n, err = idm.ilookup(opid, cp)
-			if !common.Resadd_noblock(common.Bounds(common.B_FS_T_FS_NAMEI)) {
+			if !common.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
 				err = -defs.ENOHEAP
 			}
 			if err != 0 {

@@ -7,6 +7,7 @@ import "sync/atomic"
 import "unsafe"
 import "container/list"
 
+import "bounds"
 import "defs"
 import "fs"
 import "common"
@@ -748,7 +749,7 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 }
 
 func (p *ahci_port_t) queuemgr() {
-	gimme := common.Bounds(common.B_AHCI_PORT_T_QUEUEMGR)
+	gimme := bounds.Bounds(bounds.B_AHCI_PORT_T_QUEUEMGR)
 	common.Kresdebug(gimme, "queuemgr")
 	defer p.Unlock()
 	p.Lock()
@@ -1062,7 +1063,7 @@ func (ahci *ahci_disk_t) intr() {
 // Go routine for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 	fmt.Printf("AHCI: interrupt handler running\n")
-	gimme := common.Bounds(common.B_AHCI_DISK_T_INT_HANDLER)
+	gimme := bounds.Bounds(bounds.B_AHCI_DISK_T_INT_HANDLER)
 	for {
 		common.Kunresdebug()
 		runtime.IRQsched(uint(vec))

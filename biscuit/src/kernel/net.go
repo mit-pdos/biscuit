@@ -8,6 +8,7 @@ import "sort"
 import "time"
 import "unsafe"
 
+import "bounds"
 import "common"
 import "defs"
 import "limits"
@@ -1771,7 +1772,7 @@ func (tt *tcptimers_t) _tcptimers_start() {
 
 func (tt *tcptimers_t) _tcptimers_daemon() {
 	var curtoc <-chan time.Time
-	res := common.Bounds(common.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
+	res := bounds.Bounds(bounds.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
 	common.Kreswait(res, "tcp timers thread")
 	for {
 		dotos := false
@@ -3383,7 +3384,7 @@ func (tf *tcpfops_t) Pathi() defs.Inum_t {
 	panic("tcp socket cwd")
 }
 
-func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
+func (tf *tcpfops_t) Read(dst common.Userio_i) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -3394,7 +3395,7 @@ func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_
 	var read int
 	var err defs.Err_t
 	for {
-		gimme := common.Bounds(common.B_TCPFOPS_T_READ)
+		gimme := bounds.Bounds(bounds.B_TCPFOPS_T_READ)
 		if !common.Resadd_noblock(gimme) {
 			err = -defs.ENOHEAP
 			break
@@ -3425,7 +3426,7 @@ func (tf *tcpfops_t) Reopen() defs.Err_t {
 	return 0
 }
 
-func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
+func (tf *tcpfops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
@@ -3436,7 +3437,7 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err
 	var wrote int
 	var err defs.Err_t
 	for {
-		gimme := common.Bounds(common.B_TCPFOPS_T_WRITE)
+		gimme := bounds.Bounds(bounds.B_TCPFOPS_T_WRITE)
 		if !common.Resadd_noblock(gimme) {
 			err = -defs.ENOHEAP
 			break
@@ -3477,11 +3478,11 @@ func (tf *tcpfops_t) Pwrite(src common.Userio_i, offset int) (int, defs.Err_t) {
 	return 0, -defs.ESPIPE
 }
 
-func (tf *tcpfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
+func (tf *tcpfops_t) Accept(common.Userio_i) (common.Fdops_i, int, defs.Err_t) {
 	panic("no imp")
 }
 
-func (tf *tcpfops_t) Bind(proc *common.Proc_t, saddr []uint8) defs.Err_t {
+func (tf *tcpfops_t) Bind(saddr []uint8) defs.Err_t {
 	fam := readn(saddr, 1, 1)
 	lport := ntohs(be16(readn(saddr, 2, 2)))
 	lip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
@@ -3526,7 +3527,7 @@ func (tf *tcpfops_t) Bind(proc *common.Proc_t, saddr []uint8) defs.Err_t {
 	return ret
 }
 
-func (tf *tcpfops_t) Connect(proc *common.Proc_t, saddr []uint8) defs.Err_t {
+func (tf *tcpfops_t) Connect(saddr []uint8) defs.Err_t {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3565,7 +3566,7 @@ func (tf *tcpfops_t) Connect(proc *common.Proc_t, saddr []uint8) defs.Err_t {
 	return ret
 }
 
-func (tf *tcpfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, defs.Err_t) {
+func (tf *tcpfops_t) Listen(backlog int) (common.Fdops_i, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3597,20 +3598,20 @@ func (tf *tcpfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, d
 }
 
 // XXX read/write should be wrapper around recvmsg/sendmsg
-func (tf *tcpfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i,
+func (tf *tcpfops_t) Sendmsg(src common.Userio_i,
 	toaddr []uint8, cmsg []uint8, flags int) (int, defs.Err_t) {
 	if len(cmsg) != 0 {
 		panic("no imp")
 	}
-	return tf.Write(proc, src)
+	return tf.Write(src)
 }
 
-func (tf *tcpfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
-	fromsa common.Userio_i, cmsg common.Userio_i, flag int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+func (tf *tcpfops_t) Recvmsg(dst common.Userio_i,
+	fromsa common.Userio_i, cmsg common.Userio_i, flag int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
 	}
-	wrote, err := tf.Read(proc, dst)
+	wrote, err := tf.Read(dst)
 	return wrote, 0, 0, 0, err
 }
 
@@ -3644,7 +3645,7 @@ func (tf *tcpfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) {
 	return ret, err
 }
 
-func (tf *tcpfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (tf *tcpfops_t) Fcntl(cmd, opt int) int {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3659,7 +3660,7 @@ func (tf *tcpfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
 	}
 }
 
-func (tf *tcpfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
+func (tf *tcpfops_t) Getsockopt(opt int, bufarg common.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
@@ -3687,7 +3688,7 @@ func (tf *tcpfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.User
 	}
 }
 
-func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Userio_i,
+func (tf *tcpfops_t) Setsockopt(lev, opt int, src common.Userio_i,
 	intarg int) defs.Err_t {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
@@ -3819,7 +3820,7 @@ func (tl *tcplfops_t) Pathi() defs.Inum_t {
 	panic("tcp socket cwd")
 }
 
-func (tl *tcplfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, defs.Err_t) {
+func (tl *tcplfops_t) Read(dst common.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.ENOTCONN
 }
 
@@ -3830,7 +3831,7 @@ func (tl *tcplfops_t) Reopen() defs.Err_t {
 	return 0
 }
 
-func (tl *tcplfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, defs.Err_t) {
+func (tl *tcplfops_t) Write(src common.Userio_i) (int, defs.Err_t) {
 	return 0, -defs.EPIPE
 }
 
@@ -3846,7 +3847,7 @@ func (tl *tcplfops_t) Pwrite(src common.Userio_i, offset int) (int, defs.Err_t) 
 	return 0, -defs.ESPIPE
 }
 
-func (tl *tcplfops_t) Accept(proc *common.Proc_t, saddr common.Userio_i) (common.Fdops_i,
+func (tl *tcplfops_t) Accept(saddr common.Userio_i) (common.Fdops_i,
 	int, defs.Err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
@@ -3885,15 +3886,15 @@ func (tl *tcplfops_t) Accept(proc *common.Proc_t, saddr common.Userio_i) (common
 	return fops, did, err
 }
 
-func (tl *tcplfops_t) Bind(proc *common.Proc_t, saddr []uint8) defs.Err_t {
+func (tl *tcplfops_t) Bind(saddr []uint8) defs.Err_t {
 	return -defs.EINVAL
 }
 
-func (tl *tcplfops_t) Connect(proc *common.Proc_t, saddr []uint8) defs.Err_t {
+func (tl *tcplfops_t) Connect(saddr []uint8) defs.Err_t {
 	return -defs.EADDRINUSE
 }
 
-func (tl *tcplfops_t) Listen(proc *common.Proc_t, _backlog int) (common.Fdops_i, defs.Err_t) {
+func (tl *tcplfops_t) Listen(_backlog int) (common.Fdops_i, defs.Err_t) {
 	backlog := uint(_backlog)
 	if backlog > 512 {
 		return nil, -defs.EINVAL
@@ -3919,13 +3920,13 @@ func (tl *tcplfops_t) Listen(proc *common.Proc_t, _backlog int) (common.Fdops_i,
 	return tl, 0
 }
 
-func (tl *tcplfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i,
+func (tl *tcplfops_t) Sendmsg(src common.Userio_i,
 	toaddr []uint8, cmsg []uint8, flags int) (int, defs.Err_t) {
 	return 0, -defs.ENOTCONN
 }
 
-func (tl *tcplfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
-	fromsa common.Userio_i, cmsg common.Userio_i, flags int) (int, int, int, common.Msgfl_t, defs.Err_t) {
+func (tl *tcplfops_t) Recvmsg(dst common.Userio_i,
+	fromsa common.Userio_i, cmsg common.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	return 0, 0, 0, 0, -defs.ENOTCONN
 }
 
@@ -3953,7 +3954,7 @@ func (tl *tcplfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, defs.Err_t) 
 	return ret, err
 }
 
-func (tl *tcplfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (tl *tcplfops_t) Fcntl(cmd, opt int) int {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
@@ -3968,7 +3969,7 @@ func (tl *tcplfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
 	}
 }
 
-func (tl *tcplfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
+func (tl *tcplfops_t) Getsockopt(opt int, bufarg common.Userio_i,
 	intarg int) (int, defs.Err_t) {
 	switch opt {
 	case common.SO_ERROR:
@@ -3981,7 +3982,7 @@ func (tl *tcplfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Use
 	}
 }
 
-func (tl *tcplfops_t) Setsockopt(proc *common.Proc_t, lev, opt int, bufarg common.Userio_i,
+func (tl *tcplfops_t) Setsockopt(lev, opt int, bufarg common.Userio_i,
 	intarg int) defs.Err_t {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()

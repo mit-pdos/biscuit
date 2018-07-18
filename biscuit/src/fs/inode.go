@@ -6,6 +6,7 @@ import "sync"
 import "sort"
 import "unsafe"
 
+import "bounds"
 import "common"
 import "defs"
 import "hashtable"
@@ -365,7 +366,7 @@ func (idm *imemnode_t) do_write(src common.Userio_i, offset int, app bool) (int,
 
 	idm.fs.istats.Ndo_write.Inc()
 	for i < sz {
-		gimme := common.Bounds(common.B_IMEMNODE_T_DO_WRITE)
+		gimme := bounds.Bounds(bounds.B_IMEMNODE_T_DO_WRITE)
 		if !common.Resadd_noblock(gimme) {
 			return i, -defs.ENOHEAP
 		}
@@ -663,7 +664,7 @@ func (idm *imemnode_t) bmapfill(opid opid_t, lastblk int, whichblk int, writing 
 			idm.fs.istats.Ngrow.Inc()
 		}
 		for b := lastblk; b <= whichblk; b++ {
-			gimme := common.Bounds(common.B_IMEMNODE_T_BMAPFILL)
+			gimme := bounds.Bounds(bounds.B_IMEMNODE_T_BMAPFILL)
 			if !common.Resadd_noblock(gimme) {
 				return 0, false, -defs.ENOHEAP
 			}
@@ -729,7 +730,7 @@ func (idm *imemnode_t) iread(dst common.Userio_i, offset int) (int, defs.Err_t) 
 	idm.fs.istats.Niread.Inc()
 	isz := idm.size
 	c := 0
-	gimme := common.Bounds(common.B_IMEMNODE_T_IREAD)
+	gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IREAD)
 	for offset < isz && dst.Remain() != 0 {
 		if !common.Resadd_noblock(gimme) {
 			return c, -defs.ENOHEAP
@@ -765,7 +766,7 @@ func (idm *imemnode_t) iwrite(opid opid_t, src common.Userio_i, offset int, n in
 	sz := min(src.Totalsz(), n)
 	newsz := offset + sz
 	c := 0
-	gimme := common.Bounds(common.B_IMEMNODE_T_IWRITE)
+	gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IWRITE)
 	for c < sz {
 		if !common.Resadd_noblock(gimme) {
 			return c, -defs.ENOHEAP
@@ -930,7 +931,7 @@ func (idm *imemnode_t) immapinfo(offset, len int, mapshared bool) ([]mem.Mmapinf
 	pgc := len / mem.PGSIZE
 	ret := make([]mem.Mmapinfo_t, pgc)
 	for i := 0; i < len; i += mem.PGSIZE {
-		gimme := common.Bounds(common.B_IMEMNODE_T_IMMAPINFO)
+		gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IMMAPINFO)
 		if !common.Resadd_noblock(gimme) {
 			return nil, -defs.ENOHEAP
 		}
@@ -1163,7 +1164,7 @@ func (idm *imemnode_t) ifree() defs.Err_t {
 	//	DBLOCKS+INADDR <= major DBLOCKS+INADDR+2
 
 	var ca common.Cacheallocs_t
-	gimme := common.Bounds(common.B_IMEMNODE_T_IFREE)
+	gimme := bounds.Bounds(bounds.B_IMEMNODE_T_IFREE)
 	remains := true
 	var tryevict bool
 	for remains {

@@ -7,6 +7,7 @@ import "sync/atomic"
 import "time"
 import "unsafe"
 
+import "bounds"
 import "common"
 import "defs"
 import "mem"
@@ -2184,7 +2185,7 @@ func (x *ixgbe_t) rx_consume() {
 
 func (x *ixgbe_t) int_handler(vector msivec_t) {
 	rantest := false
-	res := common.Bounds(common.B_IXGBE_T_INT_HANDLER)
+	res := bounds.Bounds(bounds.B_IXGBE_T_INT_HANDLER)
 	common.Kreswait(res, "ixgbe int handler")
 	for {
 		common.Kunres()

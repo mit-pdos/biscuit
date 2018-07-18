@@ -9,6 +9,7 @@ import "unsafe"
 import "runtime"
 
 import "accnt"
+import "bounds"
 import "defs"
 import "limits"
 import "mem"
@@ -18,7 +19,7 @@ import "ustr"
 
 type Tnote_t struct {
 	// XXX "alive" should be "terminated"
-	proc   *Proc_t
+	Proc   *Proc_t
 	alive  bool
 	killed bool
 	// protects killed, Killnaps.Cond and Kerr, and is a leaf lock
@@ -31,12 +32,12 @@ type Tnote_t struct {
 }
 
 type Threadinfo_t struct {
-	Notes map[Tid_t]*Tnote_t
+	Notes map[defs.Tid_t]*Tnote_t
 	sync.Mutex
 }
 
 func (t *Threadinfo_t) init() {
-	t.Notes = make(map[Tid_t]*Tnote_t)
+	t.Notes = make(map[defs.Tid_t]*Tnote_t)
 }
 
 // per-process limits
@@ -47,12 +48,10 @@ type Ulimit_t struct {
 	Noproc uint
 }
 
-type Tid_t int
-
 type Proc_t struct {
 	Pid int
 	// first thread id
-	tid0 Tid_t
+	tid0 defs.Tid_t
 	Name ustr.Ustr
 
 	// waitinfo for my child processes
@@ -98,7 +97,7 @@ type Proc_t struct {
 
 var Allprocs = make(map[int]*Proc_t, limits.Syslimit.Sysprocs)
 
-func (p *Proc_t) Tid0() Tid_t {
+func (p *Proc_t) Tid0() defs.Tid_t {
 	return p.tid0
 }
 
@@ -315,7 +314,7 @@ func (p *Proc_t) Tlbflush() {
 	p.Aspace.Tlbshoot(0, 2)
 }
 
-func (p *Proc_t) resched(tid Tid_t, n *Tnote_t) bool {
+func (p *Proc_t) resched(tid defs.Tid_t, n *Tnote_t) bool {
 	talive := n.alive
 	if talive && p.doomed {
 		// although this thread is still alive, the process should
@@ -433,7 +432,7 @@ func _reswait(c int, incremental, block bool) bool {
 		//	fmt.Printf("RES failed %v\n", c)
 		//	Callerdump(2)
 		//}
-		p := Current().proc
+		p := Current().Proc
 		if p.Doomed() {
 			return false
 		}
@@ -483,7 +482,7 @@ func KillableWait(cond *sync.Cond) defs.Err_t {
 
 // returns true if the kernel may safely use a "fast" resume and whether the
 // system call should be restarted.
-func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool, bool) {
+func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid defs.Tid_t, intno, aux int) (bool, bool) {
 	fastret := false
 	restart := false
 	switch intno {
@@ -528,7 +527,7 @@ func (p *Proc_t) trap_proc(tf *[TFSIZE]uintptr, tid Tid_t, intno, aux int) (bool
 	return fastret, restart
 }
 
-func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
+func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 
 	p.Threadi.Lock()
 	mynote, ok := p.Threadi.Notes[tid]
@@ -585,19 +584,19 @@ func (p *Proc_t) run(tf *[TFSIZE]uintptr, tid Tid_t) {
 	Tid_del()
 }
 
-func (p *Proc_t) Sched_add(tf *[TFSIZE]uintptr, tid Tid_t) {
+func (p *Proc_t) Sched_add(tf *[TFSIZE]uintptr, tid defs.Tid_t) {
 	go p.run(tf, tid)
 }
 
-func (p *Proc_t) _thread_new(t Tid_t) {
+func (p *Proc_t) _thread_new(t defs.Tid_t) {
 	p.Threadi.Lock()
-	tnote := &Tnote_t{alive: true, proc: p}
+	tnote := &Tnote_t{alive: true, Proc: p}
 	tnote.Killnaps.Killch = make(chan bool, 1)
 	p.Threadi.Notes[t] = tnote
 	p.Threadi.Unlock()
 }
 
-func (p *Proc_t) Thread_new() (Tid_t, bool) {
+func (p *Proc_t) Thread_new() (defs.Tid_t, bool) {
 	ret, ok := tid_new()
 	if !ok {
 		return 0, false
@@ -607,7 +606,7 @@ func (p *Proc_t) Thread_new() (Tid_t, bool) {
 }
 
 // undo thread_new(); sched_add() must not have been called on t.
-func (p *Proc_t) Thread_undo(t Tid_t) {
+func (p *Proc_t) Thread_undo(t defs.Tid_t) {
 	Tid_del()
 
 	p.Threadi.Lock()
@@ -623,7 +622,7 @@ func (p *Proc_t) Thread_count() int {
 }
 
 // terminate a single thread
-func (p *Proc_t) Thread_dead(tid Tid_t, status int, usestatus bool) {
+func (p *Proc_t) Thread_dead(tid defs.Tid_t, status int, usestatus bool) {
 	ClearCurrent()
 	// XXX exit process if thread is thread0, even if other threads exist
 	p.Threadi.Lock()
@@ -720,7 +719,7 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 	done := false
 	curaddr := make([]uint8, 0, 8)
 	for !done {
-		if !Resadd(Bounds(B_PROC_T_USERARGS)) {
+		if !Resadd(bounds.Bounds(bounds.B_PROC_T_USERARGS)) {
 			return nil, -defs.ENOHEAP
 		}
 		ptrs, err := p.Aspace.Userdmap8r(uva + uoff)
@@ -810,7 +809,7 @@ func (p *Proc_t) Start_proc(pid int) bool {
 
 // returns false if the number of running threads or unreaped child statuses is
 // larger than noproc.
-func (p *Proc_t) Start_thread(t Tid_t) bool {
+func (p *Proc_t) Start_thread(t defs.Tid_t) bool {
 	return p.Mywait._start(int(t), false, p.Ulim.Noproc)
 }
 
@@ -857,7 +856,7 @@ func Proc_new(name ustr.Ustr, cwd *Cwd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, 
 	pid_cur++
 	np := pid_cur
 	pid_cur++
-	tid0 := Tid_t(pid_cur)
+	tid0 := defs.Tid_t(pid_cur)
 	if _, ok := Allprocs[np]; ok {
 		panic("pid exists")
 	}
@@ -901,7 +900,7 @@ func Proc_new(name ustr.Ustr, cwd *Cwd_t, fds []*Fd_t, sys Syscall_i) (*Proc_t, 
 	return ret, true
 }
 
-func (p *Proc_t) Reap_doomed(tid Tid_t) {
+func (p *Proc_t) Reap_doomed(tid defs.Tid_t) {
 	if !p.doomed {
 		panic("p not doomed")
 	}
@@ -913,7 +912,7 @@ var nthreads int64
 var pid_cur int
 
 // returns false if system-wide limit is hit.
-func tid_new() (Tid_t, bool) {
+func tid_new() (defs.Tid_t, bool) {
 	Proclock.Lock()
 	defer Proclock.Unlock()
 	if nthreads > int64(limits.Syslimit.Sysprocs) {
@@ -923,7 +922,7 @@ func tid_new() (Tid_t, bool) {
 	pid_cur++
 	ret := pid_cur
 
-	return Tid_t(ret), true
+	return defs.Tid_t(ret), true
 }
 
 func Tid_del() {

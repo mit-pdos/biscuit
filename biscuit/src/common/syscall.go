@@ -2,13 +2,12 @@ package common
 
 import "defs"
 
-type Msgfl_t uint
 type Fdopt_t uint
 
 type Syscall_i interface {
-	Syscall(p *Proc_t, tid Tid_t, tf *[TFSIZE]uintptr) int
+	Syscall(p *Proc_t, tid defs.Tid_t, tf *[TFSIZE]uintptr) int
 	Sys_close(proc *Proc_t, fdn int) int
-	Sys_exit(Proc *Proc_t, tid Tid_t, status int)
+	Sys_exit(Proc *Proc_t, tid defs.Tid_t, status int)
 }
 
 type Cons_i interface {
@@ -72,29 +71,29 @@ const (
 	AF_UNIX = 1
 	AF_INET = 2
 	// types
-	SOCK_STREAM            = 1 << 0
-	SOCK_DGRAM             = 1 << 1
-	SOCK_RAW               = 1 << 2
-	SOCK_SEQPACKET         = 1 << 3
-	SOCK_CLOEXEC           = 1 << 4
-	SOCK_NONBLOCK          = 1 << 5
-	SYS_CONNECT            = 42
-	SYS_ACCEPT             = 43
-	SYS_SENDTO             = 44
-	SYS_RECVFROM           = 45
-	SYS_SOCKPAIR           = 46
-	SYS_SHUTDOWN           = 48
-	SHUT_WR                = 1 << 0
-	SHUT_RD                = 1 << 1
-	SYS_BIND               = 49
-	INADDR_ANY             = 0
-	SYS_LISTEN             = 50
-	SYS_RECVMSG            = 51
-	MSG_TRUNC      Msgfl_t = 1 << 0
-	MSG_CTRUNC     Msgfl_t = 1 << 1
-	SYS_SENDMSG            = 52
-	SYS_GETSOCKOPT         = 55
-	SYS_SETSOCKOPT         = 56
+	SOCK_STREAM                 = 1 << 0
+	SOCK_DGRAM                  = 1 << 1
+	SOCK_RAW                    = 1 << 2
+	SOCK_SEQPACKET              = 1 << 3
+	SOCK_CLOEXEC                = 1 << 4
+	SOCK_NONBLOCK               = 1 << 5
+	SYS_CONNECT                 = 42
+	SYS_ACCEPT                  = 43
+	SYS_SENDTO                  = 44
+	SYS_RECVFROM                = 45
+	SYS_SOCKPAIR                = 46
+	SYS_SHUTDOWN                = 48
+	SHUT_WR                     = 1 << 0
+	SHUT_RD                     = 1 << 1
+	SYS_BIND                    = 49
+	INADDR_ANY                  = 0
+	SYS_LISTEN                  = 50
+	SYS_RECVMSG                 = 51
+	MSG_TRUNC      defs.Msgfl_t = 1 << 0
+	MSG_CTRUNC     defs.Msgfl_t = 1 << 1
+	SYS_SENDMSG                 = 52
+	SYS_GETSOCKOPT              = 55
+	SYS_SETSOCKOPT              = 56
 	// socket levels
 	SOL_SOCKET = 1
 	// socket options

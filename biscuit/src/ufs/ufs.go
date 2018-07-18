@@ -66,7 +66,7 @@ func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
 		return err
 	}
 	if ub != nil {
-		n, err := fd.Fops.Write(nil, ub)
+		n, err := fd.Fops.Write(ub)
 		if err != 0 || ub.Remain() != 0 {
 			fmt.Printf("Write %s failed %v %d\n", string(p), err, n)
 			return err
@@ -103,7 +103,7 @@ func (ufs *Ufs_t) Update(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 	}
-	n, err := fd.Fops.Write(nil, ub)
+	n, err := fd.Fops.Write(ub)
 	if err != 0 || ub.Remain() != 0 {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
@@ -129,7 +129,7 @@ func (ufs *Ufs_t) Append(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
 		return err
 	}
 
-	n, err := fd.Fops.Write(nil, ub)
+	n, err := fd.Fops.Write(ub)
 	if err != 0 || ub.Remain() != 0 {
 		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
@@ -185,7 +185,7 @@ func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 	ub := &common.Fakeubuf_t{}
 	ub.Fake_init(hdata)
 
-	n, err := fd.Fops.Read(nil, ub)
+	n, err := fd.Fops.Read(ub)
 	if err != 0 || n != len(hdata) {
 		fmt.Printf("Read %s failed %v %d\n", p, err, n)
 		return nil, err

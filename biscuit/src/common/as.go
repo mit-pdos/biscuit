@@ -5,6 +5,7 @@ import "sync"
 import "sync/atomic"
 import "time"
 
+import "bounds"
 import "defs"
 import "mem"
 import "ustr"
@@ -21,7 +22,6 @@ type Aspace_t struct {
 	P_pmap mem.Pa_t
 
 	pgfltaken bool
-	// proc      *Proc_t
 }
 
 func (as *Aspace_t) Lock_pmap() {
@@ -90,7 +90,7 @@ func (as *Aspace_t) Userdmap8_inner(va int, k2u bool) ([]uint8, defs.Err_t) {
 }
 
 // _userdmap8 and userdmap8r functions must only be used if concurrent
-// modifications to the Proc_t's address space is impossible.
+// modifications to the address space is impossible.
 func (as *Aspace_t) _userdmap8(va int, k2u bool) ([]uint8, defs.Err_t) {
 	as.Lock_pmap()
 	ret, err := as.Userdmap8_inner(va, k2u)
@@ -225,7 +225,7 @@ func (as *Aspace_t) K2user_inner(src []uint8, uva int) defs.Err_t {
 	cnt := 0
 	l := len(src)
 	for cnt != l {
-		gimme := Bounds(B_PROC_T_K2USER_INNER)
+		gimme := bounds.Bounds(bounds.B_PROC_T_K2USER_INNER)
 		if !Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
 		}
@@ -256,7 +256,7 @@ func (as *Aspace_t) User2k_inner(dst []uint8, uva int) defs.Err_t {
 	as.Lockassert_pmap()
 	cnt := 0
 	for len(dst) != 0 {
-		gimme := Bounds(B_PROC_T_USER2K_INNER)
+		gimme := bounds.Bounds(bounds.B_PROC_T_USER2K_INNER)
 		if !Resadd_noblock(gimme) {
 			return -defs.ENOHEAP
 		}
@@ -509,7 +509,7 @@ func (as *Aspace_t) Page_remove(va int) bool {
 }
 
 // returns true if the pagefault was handled successfully
-func (as *Aspace_t) pgfault(tid Tid_t, fa, ecode uintptr) defs.Err_t {
+func (as *Aspace_t) pgfault(tid defs.Tid_t, fa, ecode uintptr) defs.Err_t {
 	as.Lock_pmap()
 	vmi, ok := as.Vmregion.Lookup(fa)
 	if !ok {

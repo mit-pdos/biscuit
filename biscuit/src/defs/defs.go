@@ -90,3 +90,7 @@ const (
 )
 
 type Inum_t int
+
+type Tid_t int
+
+type Msgfl_t uint

@@ -7,8 +7,6 @@ import "bpath"
 import "defs"
 import "mem"
 import "stat"
-
-// import "userbuf"
 import "ustr"
 
 const (
@@ -83,10 +81,10 @@ type Fdops_i interface {
 	Lseek(int, int) (int, defs.Err_t)
 	Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t)
 	Pathi() defs.Inum_t
-	Read(*Proc_t, Userio_i) (int, defs.Err_t)
+	Read(Userio_i) (int, defs.Err_t)
 	// reopen() is called with Proc_t.fdl is held
 	Reopen() defs.Err_t
-	Write(*Proc_t, Userio_i) (int, defs.Err_t)
+	Write(Userio_i) (int, defs.Err_t)
 	Truncate(uint) defs.Err_t
 
 	Pread(Userio_i, int) (int, defs.Err_t)
@@ -95,20 +93,20 @@ type Fdops_i interface {
 	// socket ops
 	// returns fops of new fd, size of connector's address written to user
 	// space, and error
-	Accept(*Proc_t, Userio_i) (Fdops_i, int, defs.Err_t)
-	Bind(*Proc_t, []uint8) defs.Err_t
-	Connect(*Proc_t, []uint8) defs.Err_t
+	Accept(Userio_i) (Fdops_i, int, defs.Err_t)
+	Bind([]uint8) defs.Err_t
+	Connect([]uint8) defs.Err_t
 	// listen changes the underlying socket type; thus is returns the new
 	// fops.
-	Listen(*Proc_t, int) (Fdops_i, defs.Err_t)
-	Sendmsg(p *Proc_t, data Userio_i, saddr []uint8, cmsg []uint8,
+	Listen(int) (Fdops_i, defs.Err_t)
+	Sendmsg(data Userio_i, saddr []uint8, cmsg []uint8,
 		flags int) (int, defs.Err_t)
 	// returns number of bytes read, size of from sock address written,
 	// size of ancillary data written, msghdr flags, and error. if no from
 	// address or ancillary data is requested, the userio objects have
 	// length 0.
-	Recvmsg(p *Proc_t, data Userio_i, saddr Userio_i,
-		cmsg Userio_i, flags int) (int, int, int, Msgfl_t, defs.Err_t)
+	Recvmsg(data Userio_i, saddr Userio_i,
+		cmsg Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t)
 
 	// for poll/select
 	// returns the current ready flags. pollone() will only cause the
@@ -116,9 +114,9 @@ type Fdops_i interface {
 	// currently true.
 	Pollone(Pollmsg_t) (Ready_t, defs.Err_t)
 
-	Fcntl(*Proc_t, int, int) int
-	Getsockopt(*Proc_t, int, Userio_i, int) (int, defs.Err_t)
-	Setsockopt(*Proc_t, int, int, Userio_i, int) defs.Err_t
+	Fcntl(int, int) int
+	Getsockopt(int, Userio_i, int) (int, defs.Err_t)
+	Setsockopt(int, int, Userio_i, int) defs.Err_t
 	Shutdown(rdone, wdone bool) defs.Err_t
 }
 
@@ -126,10 +124,10 @@ type Pollmsg_t struct {
 	notif  chan bool
 	Events Ready_t
 	Dowait bool
-	tid    Tid_t
+	tid    defs.Tid_t
 }
 
-func (pm *Pollmsg_t) Pm_set(tid Tid_t, events Ready_t, dowait bool) {
+func (pm *Pollmsg_t) Pm_set(tid defs.Tid_t, events Ready_t, dowait bool) {
 	if pm.notif == nil {
 		// 1-element buffered channel; that way devices can send
 		// notifies on the channel asynchronously without blocking.
@@ -169,7 +167,7 @@ type Pollers_t struct {
 }
 
 // returns tid pollmsg and empty pollmsg
-func (p *Pollers_t) _find(tid Tid_t, empty bool) (*Pollmsg_t, *Pollmsg_t) {
+func (p *Pollers_t) _find(tid defs.Tid_t, empty bool) (*Pollmsg_t, *Pollmsg_t) {
 	var eret *Pollmsg_t
 	for i := range p.waiters {
 		if p.waiters[i].tid == tid {

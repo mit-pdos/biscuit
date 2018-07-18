@@ -6,8 +6,6 @@ import "defs"
 import "mem"
 import "util"
 
-// import "rb"
-
 //import "fd"
 
 const PTE_P mem.Pa_t = 1 << 0

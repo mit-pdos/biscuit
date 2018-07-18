@@ -24,11 +24,12 @@ KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go super.go cache.go blk.go
 FSRC := $(addprefix $(F)/,$(FSRC))
-CSRC := vm.go pmap.go fd.go wait.go proc.go as.go
+CSRC := wait.go proc.go as.go vm.go pmap.go rb.go
 CSRC := $(addprefix $(C)/,$(CSRC))
 
 PSRC := src/hashtable/hashtable.go \
 	src/bpath/bpath.go \
+	src/bounds/bounds.go \
 	src/ustr/ustr.go \
 	src/mem/mem.go src/mem/dmap.go \
 	# src/fd/fd.go \
@@ -37,7 +38,7 @@ PSRC := src/hashtable/hashtable.go \
 	src/userbuf/userbuf.go \
 	# src/proc/proc.go src/proc/wait.go \
 	src/accnt/accnt.go \
-	# src/vm/vm.go src/vm/physmem.go src/vm/pmap.go \
+	# src/vm/vm.go src/vm/physmem.go src/vm/pmap.go src/vm/as.go src/vm/userbuf.go src/vm/fd.go \
 	src/rb/rb.go \
 	src/syscall/syscall.go \
  	src/limits/limits.go \
