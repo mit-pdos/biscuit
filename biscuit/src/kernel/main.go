@@ -19,6 +19,7 @@ import "res"
 import "stat"
 import "tinfo"
 import "ustr"
+import "vm"
 
 //import "sort"
 
@@ -129,9 +130,9 @@ type dev_t struct {
 var dummyfops = &fs.Devfops_t{Maj: defs.D_CONSOLE, Min: 0}
 
 // special fds
-var fd_stdin = common.Fd_t{Fops: dummyfops, Perms: common.FD_READ}
-var fd_stdout = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
-var fd_stderr = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
+var fd_stdin = vm.Fd_t{Fops: dummyfops, Perms: vm.FD_READ}
+var fd_stdout = vm.Fd_t{Fops: dummyfops, Perms: vm.FD_WRITE}
+var fd_stderr = vm.Fd_t{Fops: dummyfops, Perms: vm.FD_WRITE}
 
 // a userio_i type that copies nothing. useful as an argument to {send,recv}msg
 // when no from/to address or ancillary data is requested.
@@ -238,7 +239,7 @@ func (cb *circbuf_t) used() int {
 	return used
 }
 
-func (cb *circbuf_t) copyin(src common.Userio_i) (int, defs.Err_t) {
+func (cb *circbuf_t) copyin(src vm.Userio_i) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -276,11 +277,11 @@ func (cb *circbuf_t) copyin(src common.Userio_i) (int, defs.Err_t) {
 	return c, 0
 }
 
-func (cb *circbuf_t) copyout(dst common.Userio_i) (int, defs.Err_t) {
+func (cb *circbuf_t) copyout(dst vm.Userio_i) (int, defs.Err_t) {
 	return cb.copyout_n(dst, 0)
 }
 
-func (cb *circbuf_t) copyout_n(dst common.Userio_i, max int) (int, defs.Err_t) {
+func (cb *circbuf_t) copyout_n(dst vm.Userio_i, max int) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -417,14 +418,14 @@ func (cb *circbuf_t) _advtail(sz int) {
 }
 
 type passfd_t struct {
-	cb   []*common.Fd_t
+	cb   []*vm.Fd_t
 	inum uint
 	cnum uint
 }
 
-func (pf *passfd_t) add(nfd *common.Fd_t) bool {
+func (pf *passfd_t) add(nfd *vm.Fd_t) bool {
 	if pf.cb == nil {
-		pf.cb = make([]*common.Fd_t, 10)
+		pf.cb = make([]*vm.Fd_t, 10)
 	}
 	l := uint(len(pf.cb))
 	if pf.inum-pf.cnum == l {
@@ -435,7 +436,7 @@ func (pf *passfd_t) add(nfd *common.Fd_t) bool {
 	return true
 }
 
-func (pf *passfd_t) take() (*common.Fd_t, bool) {
+func (pf *passfd_t) take() (*vm.Fd_t, bool) {
 	l := uint(len(pf.cb))
 	if pf.inum == pf.cnum {
 		return nil, false
@@ -458,15 +459,15 @@ func (pf *passfd_t) closeall() {
 func cpus_stack_init(apcnt int, stackstart uintptr) {
 	for i := 0; i < apcnt; i++ {
 		// allocate/map interrupt stack
-		common.Kmalloc(stackstart, common.PTE_W)
-		stackstart += common.PGSIZEW
-		common.Assert_no_va_map(mem.Kpmap(), stackstart)
-		stackstart += common.PGSIZEW
+		vm.Kmalloc(stackstart, vm.PTE_W)
+		stackstart += vm.PGSIZEW
+		vm.Assert_no_va_map(mem.Kpmap(), stackstart)
+		stackstart += vm.PGSIZEW
 		// allocate/map NMI stack
-		common.Kmalloc(stackstart, common.PTE_W)
-		stackstart += common.PGSIZEW
-		common.Assert_no_va_map(mem.Kpmap(), stackstart)
-		stackstart += common.PGSIZEW
+		vm.Kmalloc(stackstart, vm.PTE_W)
+		stackstart += vm.PGSIZEW
+		vm.Assert_no_va_map(mem.Kpmap(), stackstart)
+		stackstart += vm.PGSIZEW
 	}
 }
 
@@ -506,7 +507,7 @@ func cpus_start(ncpu, aplim int) {
 	// appears someone already used a STARTUP IPI; probably the BIOS).
 
 	lapaddr := 0xfee00000
-	pte := common.Pmap_lookup(mem.Kpmap(), lapaddr)
+	pte := vm.Pmap_lookup(mem.Kpmap(), lapaddr)
 	if pte == nil || *pte&mem.PTE_P == 0 || *pte&mem.PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}
@@ -647,7 +648,7 @@ func ap_entry(myid uint) {
 }
 
 func set_cpucount(n int) {
-	common.Numcpus = n
+	vm.Numcpus = n
 	runtime.Setncpu(int32(n))
 }
 
@@ -687,8 +688,8 @@ func kbd_init() {
 	cons.com_int = make(chan bool)
 	cons.reader = make(chan []byte)
 	cons.reqc = make(chan int)
-	cons.pollc = make(chan common.Pollmsg_t)
-	cons.pollret = make(chan common.Ready_t)
+	cons.pollc = make(chan vm.Pollmsg_t)
+	cons.pollret = make(chan vm.Ready_t)
 	go kbd_daemon(&cons, km)
 	irq_unmask(defs.IRQ_KBD)
 	irq_unmask(defs.IRQ_COM1)
@@ -710,8 +711,8 @@ type cons_t struct {
 	com_int chan bool
 	reader  chan []byte
 	reqc    chan int
-	pollc   chan common.Pollmsg_t
-	pollret chan common.Ready_t
+	pollc   chan vm.Pollmsg_t
+	pollret chan vm.Ready_t
 }
 
 var cons = cons_t{}
@@ -869,7 +870,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 	}
 	var reqc chan int
-	pollers := &common.Pollers_t{}
+	pollers := &vm.Pollers_t{}
 	res.Kreswait(1<<20, "kbd daemon")
 	for {
 		res.Kunres()
@@ -906,13 +907,13 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			cons.reader <- s
 			data = data[l:]
 		case pm := <-cons.pollc:
-			if pm.Events&common.R_READ == 0 {
+			if pm.Events&vm.R_READ == 0 {
 				cons.pollret <- 0
 				continue
 			}
-			var ret common.Ready_t
+			var ret vm.Ready_t
 			if len(data) > 0 {
-				ret |= common.R_READ
+				ret |= vm.R_READ
 			} else if pm.Dowait {
 				pollers.Addpoller(&pm)
 			}
@@ -923,7 +924,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			data = start
 		} else {
 			reqc = cons.reqc
-			pollers.Wakeready(common.R_READ)
+			pollers.Wakeready(vm.R_READ)
 		}
 	}
 }
@@ -1503,8 +1504,8 @@ func main() {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
-		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := common.Proc_new(cmd, common.MkRootCwd(rf), defaultfds, sys)
+		defaultfds := []*vm.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
+		p, ok := common.Proc_new(cmd, vm.MkRootCwd(rf), defaultfds, sys)
 		if !ok {
 			panic("silly sysprocs")
 		}

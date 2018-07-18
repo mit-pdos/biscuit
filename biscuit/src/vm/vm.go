@@ -1,4 +1,4 @@
-package common
+package vm
 
 import "fmt"
 
@@ -47,20 +47,16 @@ type Mfile_t struct {
 }
 
 type Vminfo_t struct {
-	mtype mtype_t
-	pgn   uintptr
-	pglen int
-	perms uint
+	Mtype mtype_t
+	Pgn   uintptr
+	Pglen int
+	Perms uint
 	file  struct {
 		foff   int
 		mfile  *Mfile_t
 		shared bool
 	}
 	pch []mem.Pa_t
-}
-
-func (vmi *Vminfo_t) Pgn() uintptr {
-	return vmi.pgn
 }
 
 type Vmregion_t struct {
@@ -75,10 +71,10 @@ type Vmregion_t struct {
 
 // if err == 0, the FS increased the reference count on the page.
 func (vmi *Vminfo_t) Filepage(va uintptr) (*mem.Pg_t, mem.Pa_t, defs.Err_t) {
-	if vmi.mtype != VFILE {
+	if vmi.Mtype != VFILE {
 		panic("must be file mapping")
 	}
-	voff := int(va - (vmi.pgn << PGSHIFT))
+	voff := int(va - (vmi.Pgn << PGSHIFT))
 	foff := vmi.file.foff + voff
 	mmapi, err := vmi.file.mfile.mfops.Mmapi(foff, 1, vmi.file.shared)
 	if err != 0 {
@@ -87,17 +83,17 @@ func (vmi *Vminfo_t) Filepage(va uintptr) (*mem.Pg_t, mem.Pa_t, defs.Err_t) {
 	return mmapi[0].Pg, mmapi[0].Phys, 0
 }
 
-func (vmi *Vminfo_t) ptefor(pmap *mem.Pmap_t, va uintptr) (*mem.Pa_t, bool) {
+func (vmi *Vminfo_t) Ptefor(pmap *mem.Pmap_t, va uintptr) (*mem.Pa_t, bool) {
 	if vmi.pch == nil {
-		bva := int(vmi.pgn) << PGSHIFT
+		bva := int(vmi.Pgn) << PGSHIFT
 		ptbl, slot := pmap_pgtbl(pmap, bva, true, PTE_U|PTE_W)
 		if ptbl == nil {
 			return nil, false
 		}
 		vmi.pch = ptbl[slot:]
 	}
-	vn := (va >> PGSHIFT) - vmi.pgn
-	if vn >= uintptr(vmi.pglen) {
+	vn := (va >> PGSHIFT) - vmi.Pgn
+	if vn >= uintptr(vmi.Pglen) {
 		panic("uh oh")
 	}
 	if vn < uintptr(len(vmi.pch)) {
@@ -112,26 +108,26 @@ func (vmi *Vminfo_t) ptefor(pmap *mem.Pmap_t, va uintptr) (*mem.Pa_t, bool) {
 }
 
 func (m *Vmregion_t) _canmerge(a, b *Vminfo_t) bool {
-	aend := a.pgn + uintptr(a.pglen)
-	bend := b.pgn + uintptr(b.pglen)
-	if a.pgn != bend && b.pgn != aend {
+	aend := a.Pgn + uintptr(a.Pglen)
+	bend := b.Pgn + uintptr(b.Pglen)
+	if a.Pgn != bend && b.Pgn != aend {
 		return false
 	}
-	if a.mtype != b.mtype {
+	if a.Mtype != b.Mtype {
 		return false
 	}
-	if a.perms != b.perms {
+	if a.Perms != b.Perms {
 		return false
 	}
-	if a.mtype == VFILE {
+	if a.Mtype == VFILE {
 		if a.file.shared != b.file.shared {
 			return false
 		}
 		if a.file.mfile.mfops.Pathi() != b.file.mfile.mfops.Pathi() {
 			return false
 		}
-		afend := a.file.foff + (a.pglen << PGSHIFT)
-		bfend := b.file.foff + (b.pglen << PGSHIFT)
+		afend := a.file.foff + (a.Pglen << PGSHIFT)
+		bfend := b.file.foff + (b.Pglen << PGSHIFT)
 		if a.file.foff != bfend && b.file.foff != afend {
 			return false
 		}
@@ -144,17 +140,17 @@ func (m *Vmregion_t) _merge(dst, src *Vminfo_t) {
 	if !m._canmerge(dst, src) {
 		panic("shat upon")
 	}
-	if src.pgn < dst.pgn {
-		dst.pgn = src.pgn
+	if src.Pgn < dst.Pgn {
+		dst.Pgn = src.Pgn
 		dst.pch = src.pch
 	}
-	if src.mtype == VFILE {
+	if src.Mtype == VFILE {
 		if src.file.foff < dst.file.foff {
 			dst.file.foff = src.file.foff
 		}
 		dst.file.mfile.mapcount += src.file.mfile.mapcount
 	}
-	dst.pglen += src.pglen
+	dst.Pglen += src.Pglen
 }
 
 // looks for an adjacent mapping of the same type which can be merged into nn.
@@ -191,32 +187,32 @@ func (m *Vmregion_t) _trymerge(nn *Rbn_t, larger bool) {
 // insert a new node.
 func (m *Vmregion_t) insert(vmi *Vminfo_t) {
 	// increase opencount for the file, if any
-	if vmi.mtype == VFILE {
+	if vmi.Mtype == VFILE {
 		// XXXPANIC
-		if vmi.file.mfile.mapcount != vmi.pglen {
+		if vmi.file.mfile.mapcount != vmi.Pglen {
 			panic("bad mapcount")
 		}
 		vmi.file.mfile.mfops.Reopen()
 	}
 	// adjust the cached hole
-	if vmi.pgn == m.hole.startn {
-		m.hole.startn += uintptr(vmi.pglen)
-		m.hole.pglen -= uintptr(vmi.pglen)
-	} else if vmi.pgn >= m.hole.startn &&
-		vmi.pgn < m.hole.startn+m.hole.pglen {
-		m.hole.pglen = vmi.pgn - m.hole.startn
+	if vmi.Pgn == m.hole.startn {
+		m.hole.startn += uintptr(vmi.Pglen)
+		m.hole.pglen -= uintptr(vmi.Pglen)
+	} else if vmi.Pgn >= m.hole.startn &&
+		vmi.Pgn < m.hole.startn+m.hole.pglen {
+		m.hole.pglen = vmi.Pgn - m.hole.startn
 	}
-	m._pglen += vmi.pglen
+	m._pglen += vmi.Pglen
 	var par *Rbn_t
 	for n := m.rb.root; n != nil; {
 		// XXXPANIC
-		if n.vmi.pgn == vmi.pgn {
+		if n.vmi.Pgn == vmi.Pgn {
 			panic("addr exists")
 		}
 		// is this an adjacent, merge-able mapping?
 		if m._canmerge(&n.vmi, vmi) {
 			m._merge(&n.vmi, vmi)
-			if n.vmi.pgn < vmi.pgn {
+			if n.vmi.Pgn < vmi.Pgn {
 				// found the lower piece, check for higher
 				m._trymerge(n, true)
 			} else {
@@ -226,7 +222,7 @@ func (m *Vmregion_t) insert(vmi *Vminfo_t) {
 			return
 		}
 		par = n
-		if vmi.pgn > n.vmi.pgn {
+		if vmi.Pgn > n.vmi.Pgn {
 			n = n.r
 		} else {
 			n = n.l
@@ -239,7 +235,7 @@ func (m *Vmregion_t) insert(vmi *Vminfo_t) {
 	if par == nil {
 		m.rb.root = nn
 	} else {
-		if par.vmi.pgn > vmi.pgn {
+		if par.vmi.Pgn > vmi.Pgn {
 			par.l = nn
 		} else {
 			par.r = nn
@@ -250,14 +246,14 @@ func (m *Vmregion_t) insert(vmi *Vminfo_t) {
 
 func (m *Vmregion_t) _clear(vmi *Vminfo_t, pglen int) {
 	// decrement mapcounts, close file if necessary
-	if vmi.mtype != VFILE {
+	if vmi.Mtype != VFILE {
 		return
 	}
 	//oc := vmi.file.mfile.mapcount
 	vmi.file.mfile.mapcount -= pglen
 	// XXXPANIC
 	if vmi.file.mfile.mapcount < 0 {
-		//fmt.Printf("%v %v (%v)\n", oc, pglen, vmi.pglen)
+		//fmt.Printf("%v %v (%v)\n", oc, pglen, vmi.Pglen)
 		panic("negative ref count")
 	}
 	if vmi.file.mfile.mapcount == 0 {
@@ -266,8 +262,8 @@ func (m *Vmregion_t) _clear(vmi *Vminfo_t, pglen int) {
 }
 
 func (m *Vmregion_t) Clear() {
-	m.iter(func(vmi *Vminfo_t) {
-		m._clear(vmi, vmi.pglen)
+	m.Iter(func(vmi *Vminfo_t) {
+		m._clear(vmi, vmi.Pglen)
 	})
 }
 
@@ -289,7 +285,7 @@ func (m *Vmregion_t) _copy1(par, src *Rbn_t) *Rbn_t {
 	ret.vmi.pch = nil
 	// create per-process mfile objects and increase opencount for file
 	// mappings
-	if ret.vmi.mtype == VFILE {
+	if ret.vmi.Mtype == VFILE {
 		nmf := &Mfile_t{}
 		*nmf = *src.vmi.file.mfile
 		ret.vmi.file.mfile = nmf
@@ -301,7 +297,7 @@ func (m *Vmregion_t) _copy1(par, src *Rbn_t) *Rbn_t {
 	return ret
 }
 
-func (m *Vmregion_t) copy() Vmregion_t {
+func (m *Vmregion_t) Copy() Vmregion_t {
 	var ret Vmregion_t
 	ret._pglen, ret.Novma = m._pglen, m.Novma
 	ret.rb.root = m._copy1(nil, m.rb.root)
@@ -310,10 +306,10 @@ func (m *Vmregion_t) copy() Vmregion_t {
 
 func (m *Vmregion_t) dump() {
 	fmt.Printf("novma: %v\n", m.Novma)
-	m.iter(func(vmi *Vminfo_t) {
-		end := (vmi.pgn + uintptr(vmi.pglen)) << PGSHIFT
+	m.Iter(func(vmi *Vminfo_t) {
+		end := (vmi.Pgn + uintptr(vmi.Pglen)) << PGSHIFT
 		var perms string
-		switch vmi.mtype {
+		switch vmi.Mtype {
 		case VANON:
 			perms = "A-"
 		case VFILE:
@@ -325,16 +321,16 @@ func (m *Vmregion_t) dump() {
 		case VSANON:
 			perms = "SA-"
 		}
-		if vmi.perms&uint(PTE_U) != 0 {
+		if vmi.Perms&uint(PTE_U) != 0 {
 			perms += "R"
 		}
-		if vmi.perms&uint(PTE_W) != 0 {
+		if vmi.Perms&uint(PTE_W) != 0 {
 			perms += ",W"
 		}
-		if vmi.perms&uint(PTE_U) != 0 {
+		if vmi.Perms&uint(PTE_U) != 0 {
 			perms += ",U"
 		}
-		fmt.Printf("[%x - %x) (%v)\n", vmi.pgn<<PGSHIFT, end,
+		fmt.Printf("[%x - %x) (%v)\n", vmi.Pgn<<PGSHIFT, end,
 			perms)
 	})
 }
@@ -363,7 +359,7 @@ func (m *Vmregion_t) _iter1(n *Rbn_t, f func(*Vminfo_t)) {
 	m._iter1(n.r, f)
 }
 
-func (m *Vmregion_t) iter(f func(*Vminfo_t)) {
+func (m *Vmregion_t) Iter(f func(*Vminfo_t)) {
 	m._iter1(m.rb.root, f)
 }
 
@@ -375,21 +371,21 @@ func (m *Vmregion_t) _findhole(minpgn, minlen uintptr) (uintptr, uintptr) {
 	var startn uintptr
 	var pglen uintptr
 	var done bool
-	m.iter(func(vmi *Vminfo_t) {
+	m.Iter(func(vmi *Vminfo_t) {
 		if done {
 			return
 		}
 		if startn == 0 {
-			t := vmi.pgn + uintptr(vmi.pglen)
+			t := vmi.Pgn + uintptr(vmi.Pglen)
 			if t >= minpgn {
 				startn = t
 			}
 		} else {
-			if vmi.pgn-startn >= minlen {
-				pglen = vmi.pgn - startn
+			if vmi.Pgn-startn >= minlen {
+				pglen = vmi.Pgn - startn
 				done = true
 			} else {
-				startn = vmi.pgn + uintptr(vmi.pglen)
+				startn = vmi.Pgn + uintptr(vmi.Pglen)
 			}
 		}
 	})
@@ -420,7 +416,7 @@ func (m *Vmregion_t) end() uintptr {
 	last := uintptr(0)
 	n := m.rb.root
 	for n != nil {
-		last = n.vmi.pgn + uintptr(n.vmi.pglen)
+		last = n.vmi.Pgn + uintptr(n.vmi.Pglen)
 		n = n.r
 	}
 	return last << PGSHIFT
@@ -438,7 +434,7 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) defs.Err_t {
 	m._clear(&n.vmi, pglen)
 	n.vmi.pch = nil
 	// remove the whole node?
-	if n.vmi.pgn == pgn && n.vmi.pglen == pglen {
+	if n.vmi.Pgn == pgn && n.vmi.Pglen == pglen {
 		m.rb.remove(n)
 		m.Novma--
 		if m.Novma < 0 {
@@ -448,16 +444,16 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) defs.Err_t {
 	}
 	// if we are removing the beginning or end of the mapping, we can
 	// simply adjust the node.
-	pgend := n.vmi.pgn + uintptr(n.vmi.pglen)
-	if pgn == n.vmi.pgn || pgn+uintptr(pglen) == pgend {
-		if pgn == n.vmi.pgn {
-			n.vmi.pgn += uintptr(pglen)
-			n.vmi.pglen -= pglen
-			if n.vmi.mtype == VFILE {
+	pgend := n.vmi.Pgn + uintptr(n.vmi.Pglen)
+	if pgn == n.vmi.Pgn || pgn+uintptr(pglen) == pgend {
+		if pgn == n.vmi.Pgn {
+			n.vmi.Pgn += uintptr(pglen)
+			n.vmi.Pglen -= pglen
+			if n.vmi.Mtype == VFILE {
 				n.vmi.file.foff += pglen << PGSHIFT
 			}
 		} else {
-			n.vmi.pglen -= pglen
+			n.vmi.Pglen -= pglen
 		}
 		return 0
 	}
@@ -469,11 +465,11 @@ func (m *Vmregion_t) Remove(start, len int, novma uint) defs.Err_t {
 	avmi := &Vminfo_t{}
 	*avmi = n.vmi
 
-	n.vmi.pglen = int(pgn - n.vmi.pgn)
-	avmi.pgn = pgn + uintptr(pglen)
-	avmi.pglen = int(pgend - avmi.pgn)
-	if avmi.mtype == VFILE {
-		avmi.file.foff += int((avmi.pgn - n.vmi.pgn) << PGSHIFT)
+	n.vmi.Pglen = int(pgn - n.vmi.Pgn)
+	avmi.Pgn = pgn + uintptr(pglen)
+	avmi.Pglen = int(pgend - avmi.Pgn)
+	if avmi.Mtype == VFILE {
+		avmi.file.foff += int((avmi.Pgn - n.vmi.Pgn) << PGSHIFT)
 	}
 	m.rb._insert(avmi)
 	m.Novma++

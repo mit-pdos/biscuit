@@ -1,4 +1,4 @@
-package common
+package vm
 
 import "runtime"
 import "sync"
@@ -54,7 +54,7 @@ func (as *Aspace_t) Userdmap8_inner(va int, k2u bool) ([]uint8, defs.Err_t) {
 	if !ok {
 		return nil, -defs.EFAULT
 	}
-	pte, ok := vmi.ptefor(as.Pmap, uva)
+	pte, ok := vmi.Ptefor(as.Pmap, uva)
 	if !ok {
 		return nil, -defs.ENOMEM
 	}
@@ -309,9 +309,9 @@ func (as *Aspace_t) Tlbshoot(startva uintptr, pgcount int) {
 
 // returns true if the fault was handled successfully
 func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err_t {
-	isguard := vmi.perms == 0
+	isguard := vmi.Perms == 0
 	iswrite := ecode&uintptr(PTE_W) != 0
-	writeok := vmi.perms&uint(PTE_W) != 0
+	writeok := vmi.Perms&uint(PTE_W) != 0
 	if isguard || (iswrite && !writeok) {
 		return -defs.EFAULT
 	}
@@ -321,11 +321,11 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 		// runtime.trap(), but just in case
 		panic("kernel page fault")
 	}
-	if vmi.mtype == VSANON {
+	if vmi.Mtype == VSANON {
 		panic("shared anon pages should always be mapped")
 	}
 
-	pte, ok := vmi.ptefor(as.Pmap, faultaddr)
+	pte, ok := vmi.Ptefor(as.Pmap, faultaddr)
 	if !ok {
 		return -defs.ENOMEM
 	}
@@ -342,14 +342,14 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 
 	// shared file mappings are handled the same way regardless of whether
 	// the fault is read or write
-	if vmi.mtype == VFILE && vmi.file.shared {
+	if vmi.Mtype == VFILE && vmi.file.shared {
 		var err defs.Err_t
 		_, p_pg, err = vmi.Filepage(faultaddr)
 		if err != 0 {
 			return err
 		}
 		isblockpage = true
-		if vmi.perms&uint(PTE_W) != 0 {
+		if vmi.Perms&uint(PTE_W) != 0 {
 			perms |= PTE_W
 		}
 	} else if iswrite {
@@ -368,7 +368,7 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 			// claim the page, skip the copy, and mark it writable.
 			phys := *pte & PTE_ADDR
 			ref, _ := mem.Physmem.Refaddr(phys)
-			if vmi.mtype == VANON && atomic.LoadInt32(ref) == 1 &&
+			if vmi.Mtype == VANON && atomic.LoadInt32(ref) == 1 &&
 				phys != mem.P_zeropg {
 				tmp := *pte &^ PTE_COW
 				tmp |= PTE_W | PTE_WASCOW
@@ -383,7 +383,7 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 			if *pte != 0 {
 				panic("no")
 			}
-			switch vmi.mtype {
+			switch vmi.Mtype {
 			case VANON:
 				pgsrc = mem.Zeropg
 			case VFILE:
@@ -411,7 +411,7 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 		if *pte != 0 {
 			panic("must be 0")
 		}
-		switch vmi.mtype {
+		switch vmi.Mtype {
 		case VANON:
 			p_pg = mem.P_zeropg
 		case VFILE:
@@ -424,7 +424,7 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 		default:
 			panic("wut")
 		}
-		if vmi.perms&uint(PTE_W) != 0 {
+		if vmi.Perms&uint(PTE_W) != 0 {
 			perms |= PTE_COW
 		}
 	}
@@ -510,7 +510,7 @@ func (as *Aspace_t) Page_remove(va int) bool {
 }
 
 // returns true if the pagefault was handled successfully
-func (as *Aspace_t) pgfault(tid defs.Tid_t, fa, ecode uintptr) defs.Err_t {
+func (as *Aspace_t) Pgfault(tid defs.Tid_t, fa, ecode uintptr) defs.Err_t {
 	as.Lock_pmap()
 	vmi, ok := as.Vmregion.Lookup(fa)
 	if !ok {
@@ -572,10 +572,10 @@ func (as *Aspace_t) _mkvmi(mt mtype_t, start, len int, perms mem.Pa_t, foff int,
 	ret := &Vminfo_t{}
 	pgn := uintptr(start) >> PGSHIFT
 	pglen := util.Roundup(len, mem.PGSIZE) >> PGSHIFT
-	ret.mtype = mt
-	ret.pgn = pgn
-	ret.pglen = pglen
-	ret.perms = uint(perms)
+	ret.Mtype = mt
+	ret.Pgn = pgn
+	ret.Pglen = pglen
+	ret.Perms = uint(perms)
 	if mt == VFILE {
 		ret.file.foff = foff
 		ret.file.mfile = &Mfile_t{}

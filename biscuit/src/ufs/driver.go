@@ -3,10 +3,10 @@ package ufs
 import "os"
 import "sync"
 
-import "common"
 import "defs"
 import "fs"
 import "mem"
+import "vm"
 
 //
 // The "driver"
@@ -114,10 +114,10 @@ type console_t struct {
 
 var c console_t
 
-func (c console_t) Cons_read(ub common.Userio_i, offset int) (int, defs.Err_t) {
+func (c console_t) Cons_read(ub vm.Userio_i, offset int) (int, defs.Err_t) {
 	return -1, 0
 }
 
-func (c console_t) Cons_write(src common.Userio_i, off int) (int, defs.Err_t) {
+func (c console_t) Cons_write(src vm.Userio_i, off int) (int, defs.Err_t) {
 	return 0, 0
 }

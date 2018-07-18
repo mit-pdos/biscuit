@@ -1,4 +1,4 @@
-package common
+package vm
 
 import "fmt"
 import "runtime"
@@ -242,7 +242,7 @@ func (fb *Fakeubuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 
 var Ubpool = sync.Pool{New: func() interface{} { return new(Userbuf_t) }}
 
-func mkfxbuf() *[64]uintptr {
+func Mkfxbuf() *[64]uintptr {
 	ret := new([64]uintptr)
 	n := uintptr(unsafe.Pointer(ret))
 	if n&((1<<4)-1) != 0 {

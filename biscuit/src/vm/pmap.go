@@ -1,4 +1,4 @@
-package common
+package vm
 
 import "unsafe"
 import "fmt"
@@ -138,7 +138,7 @@ func pmfree(pml4 *mem.Pmap_t, start, end uintptr, fops mem.Unpin_i) {
 // forks the ptes only for the virtual address range specified. returns true if
 // the parent's TLB should be flushed because we added COW bits to PTEs and
 // whether the fork failed due to allocation failure
-func ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
+func Ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
 	shared bool) (bool, bool) {
 	doflush := false
 	mkcow := !shared
@@ -266,11 +266,11 @@ func Assert_no_va_map(pmap *mem.Pmap_t, va uintptr) {
 // don't forget: there are two places where pmaps/memory are free'd:
 // Proc_t.terminate() and exec.
 func Uvmfree_inner(pmg *mem.Pmap_t, p_pmap mem.Pa_t, vmr *Vmregion_t) {
-	vmr.iter(func(vmi *Vminfo_t) {
-		start := uintptr(vmi.pgn << PGSHIFT)
-		end := start + uintptr(vmi.pglen<<PGSHIFT)
+	vmr.Iter(func(vmi *Vminfo_t) {
+		start := uintptr(vmi.Pgn << PGSHIFT)
+		end := start + uintptr(vmi.Pglen<<PGSHIFT)
 		var unpin mem.Unpin_i
-		if vmi.mtype == VFILE {
+		if vmi.Mtype == VFILE {
 			unpin = vmi.file.mfile.unpin
 		}
 		pmfree(pmg, start, end, unpin)

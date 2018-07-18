@@ -1,6 +1,4 @@
-package common
-
-// import "vm"
+package vm
 
 type Rbc_t int
 
@@ -115,21 +113,21 @@ func (h *Rbh_t) _insert(vmi *Vminfo_t) *Rbn_t {
 
 	n := h.root
 	for {
-		if vmi.pgn > n.vmi.pgn {
+		if vmi.Pgn > n.vmi.Pgn {
 			if n.r == nil {
 				n.r = nn
 				nn.p = n
 				break
 			}
 			n = n.r
-		} else if vmi.pgn < n.vmi.pgn {
+		} else if vmi.Pgn < n.vmi.Pgn {
 			if n.l == nil {
 				n.l = nn
 				nn.p = n
 				break
 			}
 			n = n.l
-		} else if n.vmi.pgn == vmi.pgn {
+		} else if n.vmi.Pgn == vmi.Pgn {
 			return n
 		}
 	}
@@ -140,10 +138,10 @@ func (h *Rbh_t) _insert(vmi *Vminfo_t) *Rbn_t {
 func (h *Rbh_t) lookup(pgn uintptr) *Rbn_t {
 	n := h.root
 	for n != nil {
-		pgend := n.vmi.pgn + uintptr(n.vmi.pglen)
-		if pgn >= n.vmi.pgn && pgn < pgend {
+		pgend := n.vmi.Pgn + uintptr(n.vmi.Pglen)
+		if pgn >= n.vmi.Pgn && pgn < pgend {
 			break
-		} else if n.vmi.pgn < pgn {
+		} else if n.vmi.Pgn < pgn {
 			n = n.r
 		} else {
 			n = n.l

@@ -10,6 +10,7 @@ import "defs"
 import "fs"
 import "stat"
 import "ustr"
+import "vm"
 
 //
 // FS
@@ -18,25 +19,25 @@ import "ustr"
 type Ufs_t struct {
 	ahci *ahci_disk_t
 	fs   *fs.Fs_t
-	cwd  *common.Cwd_t
+	cwd  *vm.Cwd_t
 }
 
-func mkData(v uint8, n int) *common.Fakeubuf_t {
+func mkData(v uint8, n int) *vm.Fakeubuf_t {
 	hdata := make([]uint8, n)
 	for i := range hdata {
 		hdata[i] = v
 	}
-	ub := &common.Fakeubuf_t{}
+	ub := &vm.Fakeubuf_t{}
 	ub.Fake_init(hdata)
 	return ub
 }
 
-func MkBuf(b []byte) *common.Fakeubuf_t {
+func MkBuf(b []byte) *vm.Fakeubuf_t {
 	hdata := make([]uint8, len(b))
 	for i := range hdata {
 		hdata[i] = uint8(b[i])
 	}
-	ub := &common.Fakeubuf_t{}
+	ub := &vm.Fakeubuf_t{}
 	ub.Fake_init(hdata)
 	return ub
 }
@@ -59,7 +60,7 @@ func (ufs *Ufs_t) SyncApply() defs.Err_t {
 	return err
 }
 
-func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
+func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_CREAT, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %s failed %v\n", string(p), err)
@@ -98,7 +99,7 @@ func (ufs *Ufs_t) Rename(oldp, newp ustr.Ustr) defs.Err_t {
 }
 
 // update (XXX check that ub < len(file)?)
-func (ufs *Ufs_t) Update(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
+func (ufs *Ufs_t) Update(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
@@ -117,7 +118,7 @@ func (ufs *Ufs_t) Update(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
 	return err
 }
 
-func (ufs *Ufs_t) Append(p ustr.Ustr, ub *common.Fakeubuf_t) defs.Err_t {
+func (ufs *Ufs_t) Append(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 	fd, err := ufs.fs.Fs_open(p, common.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
 		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
@@ -182,7 +183,7 @@ func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 		return nil, err
 	}
 	hdata := make([]uint8, st.Size())
-	ub := &common.Fakeubuf_t{}
+	ub := &vm.Fakeubuf_t{}
 	ub.Fake_init(hdata)
 
 	n, err := fd.Fops.Read(ub)

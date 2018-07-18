@@ -1,4 +1,4 @@
-package common
+package vm
 
 import "time"
 import "sync"
