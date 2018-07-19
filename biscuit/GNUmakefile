@@ -29,7 +29,7 @@ PSRC := src/accnt/accnt.go \
 	src/bpath/bpath.go \
 	src/bounds/bounds.go \
 	src/caller/caller.go \
-	src/defs/defs.go \
+	src/defs/defs.go src/defs/errno.go src/defs/syscall.go src/defs/device.go \
 	src/fd/fd.go \
 	src/fdops/fdops.go \
 	src/limits/limits.go \
