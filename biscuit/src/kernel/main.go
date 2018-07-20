@@ -10,13 +10,23 @@ import "sync"
 import "time"
 import "unsafe"
 
-import "common"
+import "caller"
+import "defs"
+import "fd"
+import "fdops"
 import "fs"
+import "mem"
+import "proc"
+import "res"
+import "stat"
+import "tinfo"
+import "ustr"
+import "vm"
 
 //import "sort"
 
 const (
-	IRQ_LAST = common.INT_MSI7
+	IRQ_LAST = defs.INT_MSI7
 )
 
 var bsp_apic_id int
@@ -36,12 +46,12 @@ var irqs int
 // context and thus may run concurrently with code manipulating the same state.
 // since trapstub() runs on the per-cpu interrupt stack, it must be nosplit.
 //go:nosplit
-func trapstub(tf *[common.TFSIZE]uintptr) {
+func trapstub(tf *[defs.TFSIZE]uintptr) {
 
-	trapno := tf[common.TF_TRAP]
+	trapno := tf[defs.TF_TRAP]
 
 	// only IRQs come through here now
-	if trapno <= common.TIMER || trapno > IRQ_LAST {
+	if trapno <= defs.TIMER || trapno > IRQ_LAST {
 		runtime.Pnum(0x1001)
 		for {
 		}
@@ -50,7 +60,7 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 	nirqs[trapno]++
 	irqs++
 	switch trapno {
-	case common.INT_KBD, common.INT_COM1:
+	case defs.INT_KBD, defs.INT_COM1:
 		runtime.IRQwake(uint(trapno))
 		// we need to mask the interrupt on the IOAPIC since my
 		// hardware's LAPIC automatically send EOIs to IOAPICS when the
@@ -64,17 +74,17 @@ func trapstub(tf *[common.TFSIZE]uintptr) {
 		// EOI to the LAPIC (otherwise the CPU will probably receive
 		// another interrupt from the same IRQ). the LAPIC EOI happens
 		// in the runtime...
-		irqno := int(trapno - common.IRQ_BASE)
+		irqno := int(trapno - defs.IRQ_BASE)
 		apic.irq_mask(irqno)
-	case common.INT_MSI0, common.INT_MSI1, common.INT_MSI2, common.INT_MSI3,
-		common.INT_MSI4, common.INT_MSI5, common.INT_MSI6, common.INT_MSI7:
+	case defs.INT_MSI0, defs.INT_MSI1, defs.INT_MSI2, defs.INT_MSI3,
+		defs.INT_MSI4, defs.INT_MSI5, defs.INT_MSI6, defs.INT_MSI7:
 		// MSI dispatch doesn't use the IO APIC, thus no need for
 		// irq_mask
 		runtime.IRQwake(uint(trapno))
 	default:
 		// unexpected IRQ
 		runtime.Pnum(int(trapno))
-		runtime.Pnum(int(tf[common.TF_RIP]))
+		runtime.Pnum(int(tf[defs.TF_RIP]))
 		runtime.Pnum(0xbadbabe)
 		for {
 		}
@@ -103,15 +113,15 @@ func trap_cons(intn uint, ch chan bool) {
 	}
 }
 
-func tfdump(tf *[common.TFSIZE]int) {
-	fmt.Printf("RIP: %#x\n", tf[common.TF_RIP])
-	fmt.Printf("RAX: %#x\n", tf[common.TF_RAX])
-	fmt.Printf("RDI: %#x\n", tf[common.TF_RDI])
-	fmt.Printf("RSI: %#x\n", tf[common.TF_RSI])
-	fmt.Printf("RBX: %#x\n", tf[common.TF_RBX])
-	fmt.Printf("RCX: %#x\n", tf[common.TF_RCX])
-	fmt.Printf("RDX: %#x\n", tf[common.TF_RDX])
-	fmt.Printf("RSP: %#x\n", tf[common.TF_RSP])
+func tfdump(tf *[defs.TFSIZE]int) {
+	fmt.Printf("RIP: %#x\n", tf[defs.TF_RIP])
+	fmt.Printf("RAX: %#x\n", tf[defs.TF_RAX])
+	fmt.Printf("RDI: %#x\n", tf[defs.TF_RDI])
+	fmt.Printf("RSI: %#x\n", tf[defs.TF_RSI])
+	fmt.Printf("RBX: %#x\n", tf[defs.TF_RBX])
+	fmt.Printf("RCX: %#x\n", tf[defs.TF_RCX])
+	fmt.Printf("RDX: %#x\n", tf[defs.TF_RDX])
+	fmt.Printf("RSP: %#x\n", tf[defs.TF_RSP])
 }
 
 type dev_t struct {
@@ -119,23 +129,23 @@ type dev_t struct {
 	minor int
 }
 
-var dummyfops = &fs.Devfops_t{Maj: common.D_CONSOLE, Min: 0}
+var dummyfops = &fs.Devfops_t{Maj: defs.D_CONSOLE, Min: 0}
 
 // special fds
-var fd_stdin = common.Fd_t{Fops: dummyfops, Perms: common.FD_READ}
-var fd_stdout = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
-var fd_stderr = common.Fd_t{Fops: dummyfops, Perms: common.FD_WRITE}
+var fd_stdin = fd.Fd_t{Fops: dummyfops, Perms: fd.FD_READ}
+var fd_stdout = fd.Fd_t{Fops: dummyfops, Perms: fd.FD_WRITE}
+var fd_stderr = fd.Fd_t{Fops: dummyfops, Perms: fd.FD_WRITE}
 
 // a userio_i type that copies nothing. useful as an argument to {send,recv}msg
 // when no from/to address or ancillary data is requested.
 type _nilbuf_t struct {
 }
 
-func (nb *_nilbuf_t) Uiowrite(src []uint8) (int, common.Err_t) {
+func (nb *_nilbuf_t) Uiowrite(src []uint8) (int, defs.Err_t) {
 	return 0, 0
 }
 
-func (nb *_nilbuf_t) Uioread(dst []uint8) (int, common.Err_t) {
+func (nb *_nilbuf_t) Uioread(dst []uint8) (int, defs.Err_t) {
 	return 0, 0
 }
 
@@ -157,13 +167,13 @@ type circbuf_t struct {
 	// XXX uint
 	head int
 	tail int
-	p_pg common.Pa_t
+	p_pg mem.Pa_t
 }
 
 // may fail to allocate a page for the buffer. when cb's life is over, someone
 // must free the buffer page by calling cb_release().
-func (cb *circbuf_t) cb_init(sz int) common.Err_t {
-	bufmax := int(common.PGSIZE)
+func (cb *circbuf_t) cb_init(sz int) defs.Err_t {
+	bufmax := int(mem.PGSIZE)
 	if sz <= 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
@@ -177,7 +187,7 @@ func (cb *circbuf_t) cb_init(sz int) common.Err_t {
 
 // provide the page for the buffer explicitly; useful for guaranteeing that
 // read/writes won't fail to allocate memory.
-func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg common.Pa_t) {
+func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg mem.Pa_t) {
 	physmem.Refup(p_pg)
 	cb.p_pg = p_pg
 	cb.buf = v
@@ -195,7 +205,7 @@ func (cb *circbuf_t) cb_release() {
 	cb.head, cb.tail = 0, 0
 }
 
-func (cb *circbuf_t) cb_ensure() common.Err_t {
+func (cb *circbuf_t) cb_ensure() defs.Err_t {
 	if cb.buf != nil {
 		return 0
 	}
@@ -204,9 +214,9 @@ func (cb *circbuf_t) cb_ensure() common.Err_t {
 	}
 	pg, p_pg, ok := physmem.Refpg_new_nozero()
 	if !ok {
-		return -common.ENOMEM
+		return -defs.ENOMEM
 	}
-	bpg := common.Pg2bytes(pg)[:]
+	bpg := mem.Pg2bytes(pg)[:]
 	bpg = bpg[:cb.bufsz]
 	cb.cb_init_phys(bpg, p_pg)
 	return 0
@@ -231,7 +241,7 @@ func (cb *circbuf_t) used() int {
 	return used
 }
 
-func (cb *circbuf_t) copyin(src common.Userio_i) (int, common.Err_t) {
+func (cb *circbuf_t) copyin(src fdops.Userio_i) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -269,11 +279,11 @@ func (cb *circbuf_t) copyin(src common.Userio_i) (int, common.Err_t) {
 	return c, 0
 }
 
-func (cb *circbuf_t) copyout(dst common.Userio_i) (int, common.Err_t) {
+func (cb *circbuf_t) copyout(dst fdops.Userio_i) (int, defs.Err_t) {
 	return cb.copyout_n(dst, 0)
 }
 
-func (cb *circbuf_t) copyout_n(dst common.Userio_i, max int) (int, common.Err_t) {
+func (cb *circbuf_t) copyout_n(dst fdops.Userio_i, max int) (int, defs.Err_t) {
 	if err := cb.cb_ensure(); err != 0 {
 		return 0, err
 	}
@@ -410,14 +420,14 @@ func (cb *circbuf_t) _advtail(sz int) {
 }
 
 type passfd_t struct {
-	cb   []*common.Fd_t
+	cb   []*fd.Fd_t
 	inum uint
 	cnum uint
 }
 
-func (pf *passfd_t) add(nfd *common.Fd_t) bool {
+func (pf *passfd_t) add(nfd *fd.Fd_t) bool {
 	if pf.cb == nil {
-		pf.cb = make([]*common.Fd_t, 10)
+		pf.cb = make([]*fd.Fd_t, 10)
 	}
 	l := uint(len(pf.cb))
 	if pf.inum-pf.cnum == l {
@@ -428,7 +438,7 @@ func (pf *passfd_t) add(nfd *common.Fd_t) bool {
 	return true
 }
 
-func (pf *passfd_t) take() (*common.Fd_t, bool) {
+func (pf *passfd_t) take() (*fd.Fd_t, bool) {
 	l := uint(len(pf.cb))
 	if pf.inum == pf.cnum {
 		return nil, false
@@ -451,20 +461,20 @@ func (pf *passfd_t) closeall() {
 func cpus_stack_init(apcnt int, stackstart uintptr) {
 	for i := 0; i < apcnt; i++ {
 		// allocate/map interrupt stack
-		common.Kmalloc(stackstart, common.PTE_W)
-		stackstart += common.PGSIZEW
-		common.Assert_no_va_map(common.Kpmap(), stackstart)
-		stackstart += common.PGSIZEW
+		vm.Kmalloc(stackstart, vm.PTE_W)
+		stackstart += vm.PGSIZEW
+		vm.Assert_no_va_map(mem.Kpmap(), stackstart)
+		stackstart += vm.PGSIZEW
 		// allocate/map NMI stack
-		common.Kmalloc(stackstart, common.PTE_W)
-		stackstart += common.PGSIZEW
-		common.Assert_no_va_map(common.Kpmap(), stackstart)
-		stackstart += common.PGSIZEW
+		vm.Kmalloc(stackstart, vm.PTE_W)
+		stackstart += vm.PGSIZEW
+		vm.Assert_no_va_map(mem.Kpmap(), stackstart)
+		stackstart += vm.PGSIZEW
 	}
 }
 
 func cpus_start(ncpu, aplim int) {
-	if aplim + 1 >= 1 << 8 {
+	if aplim+1 >= 1<<8 {
 		fmt.Printf("Logical CPU IDs overflow 8 bits for PMC profiling\n")
 	}
 	runtime.GOMAXPROCS(1 + aplim)
@@ -479,15 +489,15 @@ func cpus_start(ncpu, aplim int) {
 
 	// AP code must be between 0-1MB because the APs are in real mode. load
 	// code to 0x8000 (overwriting bootloader)
-	mpaddr := common.Pa_t(0x8000)
+	mpaddr := mem.Pa_t(0x8000)
 	mpcode := allbins["src/kernel/mpentry.bin"].data
-	c := common.Pa_t(0)
-	mpl := common.Pa_t(len(mpcode))
+	c := mem.Pa_t(0)
+	mpl := mem.Pa_t(len(mpcode))
 	for c < mpl {
 		mppg := physmem.Dmap8(mpaddr + c)
 		did := copy(mppg, mpcode)
 		mpcode = mpcode[did:]
-		c += common.Pa_t(did)
+		c += mem.Pa_t(did)
 	}
 
 	// skip mucking with CMOS reset code/warm reset vector (as per the the
@@ -499,11 +509,11 @@ func cpus_start(ncpu, aplim int) {
 	// appears someone already used a STARTUP IPI; probably the BIOS).
 
 	lapaddr := 0xfee00000
-	pte := common.Pmap_lookup(common.Kpmap(), lapaddr)
-	if pte == nil || *pte&common.PTE_P == 0 || *pte&common.PTE_PCD == 0 {
+	pte := vm.Pmap_lookup(mem.Kpmap(), lapaddr)
+	if pte == nil || *pte&mem.PTE_P == 0 || *pte&mem.PTE_PCD == 0 {
 		panic("lapaddr unmapped")
 	}
-	lap := (*[common.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 	icrh := 0x310 / 4
 	icrl := 0x300 / 4
 
@@ -588,8 +598,8 @@ func cpus_start(ncpu, aplim int) {
 	// 	NMI stack	[0xa100002000, 0xa100003000)
 	// 	guard page	[0xa100003000, 0xa100004000)
 	// for each AP:
-	// 	int stack	BSP's + apnum*4*common.PGSIZE + 0*common.PGSIZE
-	// 	NMI stack	BSP's + apnum*4*common.PGSIZE + 2*common.PGSIZE
+	// 	int stack	BSP's + apnum*4*mem.PGSIZE + 0*mem.PGSIZE
+	// 	NMI stack	BSP's + apnum*4*mem.PGSIZE + 2*mem.PGSIZE
 	stackstart := uintptr(0xa100004000)
 	// each ap grabs a unique stack
 	atomic.StoreUintptr(&ss[sstacks], stackstart)
@@ -633,14 +643,14 @@ func ap_entry(myid uint) {
 
 	// ints are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()
-	fl |= common.TF_FL_IF
+	fl |= defs.TF_FL_IF
 	runtime.Popcli(fl)
 	for {
 	}
 }
 
 func set_cpucount(n int) {
-	common.Numcpus = n
+	vm.Numcpus = n
 	runtime.Setncpu(int32(n))
 }
 
@@ -680,11 +690,11 @@ func kbd_init() {
 	cons.com_int = make(chan bool)
 	cons.reader = make(chan []byte)
 	cons.reqc = make(chan int)
-	cons.pollc = make(chan common.Pollmsg_t)
-	cons.pollret = make(chan common.Ready_t)
+	cons.pollc = make(chan fdops.Pollmsg_t)
+	cons.pollret = make(chan fdops.Ready_t)
 	go kbd_daemon(&cons, km)
-	irq_unmask(common.IRQ_KBD)
-	irq_unmask(common.IRQ_COM1)
+	irq_unmask(defs.IRQ_KBD)
+	irq_unmask(defs.IRQ_COM1)
 
 	// make sure kbd int and com1 int are clear
 	for _kready() {
@@ -694,8 +704,8 @@ func kbd_init() {
 		runtime.Inb(0x3f8)
 	}
 
-	go trap_cons(common.INT_KBD, cons.kbd_int)
-	go trap_cons(common.INT_COM1, cons.com_int)
+	go trap_cons(defs.INT_KBD, cons.kbd_int)
+	go trap_cons(defs.INT_COM1, cons.com_int)
 }
 
 type cons_t struct {
@@ -703,8 +713,8 @@ type cons_t struct {
 	com_int chan bool
 	reader  chan []byte
 	reqc    chan int
-	pollc   chan common.Pollmsg_t
-	pollret chan common.Ready_t
+	pollc   chan fdops.Pollmsg_t
+	pollret chan fdops.Ready_t
 }
 
 var cons = cons_t{}
@@ -819,25 +829,27 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				panic("yahoo")
 			}
 		} else if c == '@' {
-			//common.Lims = !common.Lims
-			//fmt.Printf("Lims: %v\n", common.Lims)
+			runtime.Freq *= 2
+			fmt.Printf("freq: %v\n", runtime.Freq)
+			//proc.Lims = !proc.Lims
+			//fmt.Printf("Lims: %v\n", proc.Lims)
 
-			fmt.Printf("toggle\n")
-			runtime.GCDebugToggle()
+			//fmt.Printf("toggle\n")
+			//runtime.GCDebugToggle()
 
 		} else if c == '%' {
 			//fmt.Printf("distinct simulated failures: %v\n",
-			//    common.Resfail.Len())
-			//common.Resfail.Enabled = !common.Resfail.Enabled
-			//fmt.Printf("fail enabled: %v\n", common.Resfail.Enabled)
+			//    proc.Resfail.Len())
+			//proc.Resfail.Enabled = !proc.Resfail.Enabled
+			//fmt.Printf("fail enabled: %v\n", proc.Resfail.Enabled)
 
 			//loping()
 			//netdump()
 
 			v := runtime.Memremain()
-			fmt.Printf("RES: %vMB (%v)\n", v >> 20, v)
+			fmt.Printf("RES: %vMB (%v)\n", v>>20, v)
 
-			//common.Trap = true
+			//proc.Trap = true
 			//pr := false
 			//for i, n := range nirqs {
 			//	if n != 0 {
@@ -851,8 +863,8 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 
 			//a, b := thefs.Sizes()
 			//fmt.Printf("FS SIZE: %v, %v\n", a, b)
-			//fmt.Printf("KWAITS: %v\n", common.Kwaits)
-			//fmt.Printf("GWAITS: %v\n", common.Gwaits)
+			//fmt.Printf("KWAITS: %v\n", proc.Kwaits)
+			//fmt.Printf("GWAITS: %v\n", proc.Gwaits)
 
 			//bp := &bprof_t{}
 			//err := pprof.WriteHeapProfile(bp)
@@ -866,11 +878,11 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 		}
 	}
 	var reqc chan int
-	pollers := &common.Pollers_t{}
-	common.Kreswait(1<<20, "kbd daemon")
+	pollers := &fdops.Pollers_t{}
+	res.Kreswait(1<<20, "kbd daemon")
 	for {
-		common.Kunres()
-		common.Kreswait(1<<20, "kbd daemon")
+		res.Kunres()
+		res.Kreswait(1<<20, "kbd daemon")
 		select {
 		case <-cons.kbd_int:
 			for _kready() {
@@ -880,7 +892,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 					addprint(c)
 				}
 			}
-			irq_eoi(common.IRQ_KBD)
+			irq_eoi(defs.IRQ_KBD)
 		case <-cons.com_int:
 			for _comready() {
 				com1data := uint16(0x3f8 + 0)
@@ -894,7 +906,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				}
 				addprint(c)
 			}
-			irq_eoi(common.IRQ_COM1)
+			irq_eoi(defs.IRQ_COM1)
 		case l := <-reqc:
 			if l > len(data) {
 				l = len(data)
@@ -903,13 +915,13 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			cons.reader <- s
 			data = data[l:]
 		case pm := <-cons.pollc:
-			if pm.Events&common.R_READ == 0 {
+			if pm.Events&fdops.R_READ == 0 {
 				cons.pollret <- 0
 				continue
 			}
-			var ret common.Ready_t
+			var ret fdops.Ready_t
 			if len(data) > 0 {
-				ret |= common.R_READ
+				ret |= fdops.R_READ
 			} else if pm.Dowait {
 				pollers.Addpoller(&pm)
 			}
@@ -920,21 +932,21 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			data = start
 		} else {
 			reqc = cons.reqc
-			pollers.Wakeready(common.R_READ)
+			pollers.Wakeready(fdops.R_READ)
 		}
 	}
 }
 
 // reads keyboard data, blocking for at least 1 byte or until killed. returns
 // at most cnt bytes.
-func kbd_get(cnt int) ([]byte, common.Err_t) {
+func kbd_get(cnt int) ([]byte, defs.Err_t) {
 	if cnt < 0 {
 		panic("negative cnt")
 	}
-	kn := &common.Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 	select {
 	case cons.reqc <- cnt:
-	case <- kn.Killch:
+	case <-kn.Killch:
 		if kn.Kerr == 0 {
 			panic("must be non-zero")
 		}
@@ -1089,8 +1101,8 @@ const (
 type pmflag_t uint
 
 const (
-	EVF_OS  pmflag_t = 1 << iota
-	EVF_USR pmflag_t = 1 << iota
+	EVF_OS        pmflag_t = 1 << iota
+	EVF_USR       pmflag_t = 1 << iota
 	EVF_BACKTRACE pmflag_t = 1 << iota
 )
 
@@ -1149,9 +1161,9 @@ func (n *nilprof_t) stopnmi() ([]uintptr, bool) {
 }
 
 type intelprof_t struct {
-	l      sync.Mutex
-	pmcs   []intelpmc_t
-	events map[pmevid_t]pmevent_t
+	l         sync.Mutex
+	pmcs      []intelpmc_t
+	events    map[pmevid_t]pmevent_t
 	backtrace bool
 }
 
@@ -1175,7 +1187,7 @@ func (ip *intelprof_t) _enableall() {
 
 func (ip *intelprof_t) _perfmaskipi() {
 	lapaddr := 0xfee00000
-	lap := (*[common.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
+	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
 
 	allandself := 2
 	trap_perfmask := 72
@@ -1205,7 +1217,7 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	if pf&EVF_USR != 0 {
 		v |= usr
 	}
-	if pf & (EVF_OS | EVF_USR) == 0 {
+	if pf&(EVF_OS|EVF_USR) == 0 {
 		v |= os | usr
 	}
 	return v
@@ -1265,7 +1277,7 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		// cause a page walk"; probably better to use (0xc8, 0x20)
 		// (event, umask) instead which counts instructions retired
 		// which "missed in the iTLB when the instruction was fetched"
-		EV_ITLB_LOAD_MISS_ANY:  {0x85, 0x1},
+		EV_ITLB_LOAD_MISS_ANY: {0x85, 0x1},
 		//EV_WTF1:
 		//    {0x49, 0x1},
 		//EV_WTF2:
@@ -1281,7 +1293,7 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 		}
 	}
 	_, _, ecx, _ := runtime.Cpuid(0x1, 0)
-	g1 := ecx & (1 << 15) != 0
+	g1 := ecx&(1<<15) != 0
 	eax, _, _, _ := runtime.Cpuid(0xa, 0)
 	archperfmonid := (eax & 0xff)
 	if archperfmonid >= 4 {
@@ -1302,7 +1314,7 @@ func (ip *intelprof_t) startpmc(evs []pmev_t) ([]int, bool) {
 
 	// are the event ids supported?
 	for _, ev := range evs {
-		if ev.pflags & EVF_BACKTRACE != 0 {
+		if ev.pflags&EVF_BACKTRACE != 0 {
 			panic("no bt on counting")
 		}
 		if _, ok := ip.events[ev.evid]; !ok {
@@ -1379,7 +1391,7 @@ func (ip *intelprof_t) startnmi(evid pmevid_t, pf pmflag_t, min,
 	inte := 1 << 20
 	v |= inte
 
-	bt := pf & EVF_BACKTRACE != 0
+	bt := pf&EVF_BACKTRACE != 0
 	ip.backtrace = bt
 	mask := false
 	runtime.SetNMI(mask, v, min, max, bt)
@@ -1409,9 +1421,9 @@ const failalloc bool = false
 
 // white-listed functions; don't fail these allocations. terminate() is for
 // init resurrection.
-var _physfail = common.Distinct_caller_t {
+var _physfail = caller.Distinct_caller_t{
 	Whitel: map[string]bool{"main.main": true,
-	    "main.(*common.Proc_t).terminate": true},
+		"main.(*proc.Proc_t).terminate": true},
 }
 
 // returns true if the allocation should fail
@@ -1427,17 +1439,19 @@ func _fakefail() bool {
 }
 
 func structchk() {
-	if unsafe.Sizeof(common.Stat_t{}) != 9*8 {
+	if unsafe.Sizeof(stat.Stat_t{}) != 9*8 {
 		panic("bad stat_t size")
 	}
 }
 
 var lhits int
-var physmem *common.Physmem_t
+var physmem *mem.Physmem_t
 var thefs *fs.Fs_t
 
+const diskfs = false
+
 func main() {
-	common.Kernel = true
+	res.Kernel = true
 
 	// magic loop
 	//if rand.Int() != 0 {
@@ -1445,7 +1459,7 @@ func main() {
 	//	}
 	//}
 	bsp_apic_id = lap_id()
-	physmem = common.Phys_init()
+	physmem = mem.Phys_init()
 
 	go func() {
 		<-time.After(10 * time.Second)
@@ -1472,7 +1486,7 @@ func main() {
 	cpuchk()
 	net_init()
 
-	common.Dmap_init()
+	mem.Dmap_init()
 	perfsetup()
 
 	// must come before any irq_unmask()s
@@ -1484,36 +1498,36 @@ func main() {
 	kbd_init()
 
 	// control CPUs
-	aplim := 7
+	aplim := 3
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf, fs := fs.StartFS(blockmem, ahci, console)
+	rf, fs := fs.StartFS(blockmem, ahci, console, diskfs)
 	thefs = fs
 
-	common.Oom_init(thefs.Fs_evict)
+	proc.Oom_init(thefs.Fs_evict)
 
-	exec := func(cmd string, args []string) {
-		common.Resbegin(1 << 20)
+	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
+		res.Resbegin(1 << 20)
 		fmt.Printf("start [%v %v]\n", cmd, args)
-		nargs := []string{cmd}
+		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
-		defaultfds := []*common.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
-		p, ok := common.Proc_new(cmd, rf, defaultfds, sys)
+		defaultfds := []*fd.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
+		p, ok := proc.Proc_new(cmd, fd.MkRootCwd(rf), defaultfds, sys)
 		if !ok {
 			panic("silly sysprocs")
 		}
-		var tf [common.TFSIZE]uintptr
+		var tf [defs.TFSIZE]uintptr
 		ret := sys_execv1(p, &tf, cmd, nargs)
 		if ret != 0 {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
 		p.Sched_add(&tf, p.Tid0())
-		common.Resend()
+		res.Resend()
 	}
 
 	//exec("bin/lsh", nil)
-	exec("bin/init", nil)
+	exec(ustr.Ustr("bin/init"), nil)
 	//exec("bin/rs", []string{"/redis.conf"})
 
 	//go func() {
@@ -1532,7 +1546,7 @@ func main() {
 }
 
 func findbm() {
-	common.Dmap_init()
+	mem.Dmap_init()
 	//n := incn()
 	//var aplim int
 	//if n == 0 {

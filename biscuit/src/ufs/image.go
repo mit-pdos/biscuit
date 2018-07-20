@@ -3,8 +3,10 @@ package ufs
 import "os"
 import "fmt"
 
-import "common"
 import "fs"
+import "mem"
+import "ustr"
+import "util"
 
 // Disk image layout:
 // optional:
@@ -21,10 +23,10 @@ import "fs"
 // data blocks
 
 const (
-	nbitsperblock = common.BSIZE * 8
+	nbitsperblock = fs.BSIZE * 8
 )
 
-func bytepg2byte(d *common.Bytepg_t) []byte {
+func bytepg2byte(d *mem.Bytepg_t) []byte {
 	b := make([]byte, len(d))
 	for i := 0; i < len(d); i++ {
 		b[i] = d[i]
@@ -37,16 +39,16 @@ func Tell(f *os.File) int {
 	if err != nil {
 		panic(err)
 	}
-	return int(o / common.BSIZE)
+	return int(o / fs.BSIZE)
 }
 
 func mkBlock() []byte {
-	return make([]byte, common.BSIZE)
+	return make([]byte, fs.BSIZE)
 }
 
 func writeBootBlock(f *os.File, superb int) {
-	d := &common.Bytepg_t{}
-	common.Writen(d[:], 4, fs.FSOFF, superb)
+	d := &mem.Bytepg_t{}
+	util.Writen(d[:], 4, fs.FSOFF, superb)
 	f.Write(bytepg2byte(d))
 }
 
@@ -54,10 +56,10 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 	if Tell(f) != start {
 		panic("superblock in wrong location")
 	}
-	d := &common.Bytepg_t{}
+	d := &mem.Bytepg_t{}
 	sb := fs.Superblock_t{d}
 	sb.SetLoglen(nlogblks)
-	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
+	ninode := ninodeblks * (fs.BSIZE / fs.ISIZE)
 	ni := ninode/nbitsperblock + 1
 	sb.SetIorphanblock(start + 1 + nlogblks)
 	sb.SetIorphanlen(ni)
@@ -72,7 +74,7 @@ func writeSuperBlock(f *os.File, start int, nlogblks, ninodeblks, ndatablks int)
 }
 
 func markAllocated(d []byte, startbit int) {
-	for i := (startbit / 8) + 1; i < common.BSIZE; i++ {
+	for i := (startbit / 8) + 1; i < fs.BSIZE; i++ {
 		d[i] = byte(0xff)
 	}
 	rem := startbit % 8
@@ -92,7 +94,7 @@ func writeInodeMap(f *os.File, sb *fs.Superblock_t, ninodeblks int) {
 	if Tell(f) != sb.Iorphanblock()+sb.Iorphanlen() {
 		panic("incorrect inode map start\n")
 	}
-	ninode := ninodeblks * (common.BSIZE / fs.ISIZE)
+	ninode := ninodeblks * (fs.BSIZE / fs.ISIZE)
 	oneblock := mkBlock()
 	oneblock[0] |= 1 << 0 // mark root inode as allocated
 	if sb.Imaplen() == 1 {
@@ -152,14 +154,14 @@ func writeBlockMap(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 }
 
 func writeInodes(f *os.File, sb *fs.Superblock_t) {
-	b := common.MkBlock(0, "", nil, nil, nil)
-	b.Data = &common.Bytepg_t{}
+	b := fs.MkBlock(0, "", nil, nil, nil)
+	b.Data = &mem.Bytepg_t{}
 	root := fs.Inode_t{b, 0}
 
 	firstdata := sb.Freeblock() + sb.Freeblocklen() + sb.Inodelen()
 	root.W_itype(fs.I_DIR)
 	root.W_linkcount(1)
-	root.W_size(common.BSIZE)
+	root.W_size(fs.BSIZE)
 	root.W_addr(0, firstdata)
 	block := bytepg2byte(b.Data)
 
@@ -177,14 +179,14 @@ func writeInodes(f *os.File, sb *fs.Superblock_t) {
 
 func writeDataBlocks(f *os.File, sb *fs.Superblock_t, ndatablks int) {
 	// Root directory data
-	data := &common.Bytepg_t{}
+	data := &mem.Bytepg_t{}
 	ddata := fs.Dirdata_t{data[:]}
-	ddata.W_filename(0, ".")
+	ddata.W_filename(0, ustr.Ustr("."))
 	ddata.W_inodenext(0, 0)
-	ddata.W_filename(1, "..")
+	ddata.W_filename(1, ustr.Ustr(".."))
 	ddata.W_inodenext(1, 0)
 	for i := 2; i < fs.NDIRENTS; i++ {
-		ddata.W_filename(i, "")
+		ddata.W_filename(i, ustr.MkUstr())
 		ddata.W_inodenext(i, 0)
 	}
 	d := bytepg2byte(data)
@@ -206,7 +208,7 @@ func addimg(img string, f *os.File) {
 		panic(err)
 	}
 	for {
-		b := make([]byte, common.BSIZE)
+		b := make([]byte, fs.BSIZE)
 		n, err := s.Read(b)
 		if err != nil {
 			return
@@ -230,9 +232,9 @@ func pad(f *os.File) {
 		panic(err)
 	}
 
-	n := common.Roundup(int(o), common.BSIZE)
+	n := util.Roundup(int(o), fs.BSIZE)
 	n = n - int(o)
-	b := make([]byte, common.BSIZE)
+	b := make([]byte, fs.BSIZE)
 	_, err = f.Write(b)
 	if err != nil {
 		panic(err)
@@ -245,16 +247,16 @@ func pokeboot(f *os.File, start int) {
 	if err != nil {
 		panic(err)
 	}
-	b := make([]byte, common.BSIZE)
+	b := make([]byte, fs.BSIZE)
 	n, err := f.Read(b)
 	if err != nil {
 		panic(err)
 	}
-	if n != common.BSIZE {
+	if n != fs.BSIZE {
 		panic("short read")
 	}
 
-	common.Writen(b[:], 4, fs.FSOFF, start)
+	util.Writen(b[:], 4, fs.FSOFF, start)
 
 	// Replace boot block with b
 	_, err = f.Seek(0, 0)
@@ -268,7 +270,7 @@ func pokeboot(f *os.File, start int) {
 	}
 
 	// seek back
-	_, err = f.Seek(int64(start*common.BSIZE), 0)
+	_, err = f.Seek(int64(start*fs.BSIZE), 0)
 	if err != nil {
 		panic(err)
 	}

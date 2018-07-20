@@ -18,14 +18,31 @@ SRCS := $(ASMS) $(CS)
 
 K := src/kernel
 F := src/fs
-C := src/common
+
 KSRC := main.go syscall.go hw.go net.go ahci.go
 KSRC := $(addprefix $(K)/,$(KSRC))
-FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go refcache.go super.go
+FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go super.go cache.go blk.go
 FSRC := $(addprefix $(F)/,$(FSRC))
-CSRC := accnt.go defs.go disk.go fd.go limits.go mem.go physmem.go pmap.go proc.go rb.go stat.go syscall.go \
-	userbuf.go util.go wait.go
-CSRC := $(addprefix $(C)/,$(CSRC))
+
+PSRC := src/accnt/accnt.go \
+	src/hashtable/hashtable.go \
+	src/bpath/bpath.go \
+	src/bounds/bounds.go \
+	src/caller/caller.go \
+	src/defs/defs.go src/defs/errno.go src/defs/syscall.go src/defs/device.go \
+	src/fd/fd.go \
+	src/fdops/fdops.go \
+	src/limits/limits.go \
+	src/mem/mem.go src/mem/dmap.go \
+	src/oommsg/oommsg.go \
+	src/res/res.go \
+	src/proc/proc.go src/proc/wait.go src/proc/oom.go src/proc/syscalli.go \
+	src/vm/vm.go src/vm/pmap.go src/vm/as.go src/vm/rb.go src/vm/userbuf.go \
+	src/stat/stat.go \
+	src/stats/stats.go \
+	src/tinfo/tinfo.go \
+	src/ustr/ustr.go \
+	src/util/util.go
 
 OBJS := $(addprefix $(K)/, $(patsubst %.S,%.o,$(patsubst %.c,%.o,$(SRCS))))
 
@@ -90,7 +107,7 @@ $(K)/bootmain.o: $(K)/bootmain.c
 d.img: main boot
 	cat boot main > $@
 
-mkfs: src/mkfs/mkfs.go  $(CSRC) $(FSRC)
+mkfs: src/mkfs/mkfs.go  $(FSRC) $(PSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build src/mkfs/mkfs.go
 
 go.img: $(K)/boot  $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
@@ -119,7 +136,7 @@ $(GOBIN):
 		echo; echo; echo; \
 		false
 
-$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) $(FSRC) $(CSRC)
+$(K)/main.gobin: chentry $(GOBIN) $(K)/bins.go $(KSRC) $(FSRC) $(PSRC)
 	GOPATH="$(GOPATH)" $(GOBIN) build -o $@_ $(K)/bins.go $(KSRC)
 	ADDR=0x`nm $@_ |grep _rt0_hack |cut -f1 -d' '`; \
 		if test "$$ADDR" = "0x"; then echo no _rt0_hack; false; \

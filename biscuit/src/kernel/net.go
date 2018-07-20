@@ -8,7 +8,15 @@ import "sort"
 import "time"
 import "unsafe"
 
-import "common"
+import "bounds"
+import "defs"
+import "fdops"
+import "limits"
+import "mem"
+import "proc"
+import "res"
+import "stat"
+import "vm"
 
 type ip4_t uint32
 
@@ -154,7 +162,7 @@ func arp_add(ip ip4_t, mac *mac_t) {
 			delete(arptbl.m, k)
 		}
 	}
-	if len(arptbl.m) >= common.Syslimit.Arpents {
+	if len(arptbl.m) >= limits.Syslimit.Arpents {
 		// first evict resolved arp entries.
 		evict := 0
 		for ip := range arptbl.m {
@@ -209,10 +217,10 @@ func _arp_lookup(ip ip4_t) (*arprec_t, bool) {
 }
 
 // returns destination mac and error
-func arp_resolve(sip, dip ip4_t) (*mac_t, common.Err_t) {
+func arp_resolve(sip, dip ip4_t) (*mac_t, defs.Err_t) {
 	nic, ok := nic_lookup(sip)
 	if !ok {
-		return nil, -common.ENETDOWN
+		return nil, -defs.ENETDOWN
 	}
 
 	if dip == lo.lip {
@@ -228,9 +236,9 @@ evictrace:
 		return &ar.mac, 0
 	}
 
-	if arptbl.waittot >= common.Syslimit.Arpents {
+	if arptbl.waittot >= limits.Syslimit.Arpents {
 		arptbl.Unlock()
-		return nil, -common.ENOMEM
+		return nil, -defs.ENOMEM
 	}
 
 	// buffered channel so that a wakeup racing with timeout doesn't
@@ -277,7 +285,7 @@ evictrace:
 			}
 		}
 		arptbl.Unlock()
-		return nil, -common.ETIMEDOUT
+		return nil, -defs.ETIMEDOUT
 	}
 
 	ar, ok = _arp_lookup(dip)
@@ -403,9 +411,9 @@ func (r *routes_t) _insert_local(myip, netip, netmask ip4_t) {
 }
 
 // caller must hold r's lock
-func (r *routes_t) copy() (*routes_t, common.Err_t) {
-	if len(r.routes) >= common.Syslimit.Routes {
-		return nil, -common.ENOMEM
+func (r *routes_t) copy() (*routes_t, defs.Err_t) {
+	if len(r.routes) >= limits.Syslimit.Routes {
+		return nil, -defs.ENOMEM
 	}
 	ret := &routes_t{}
 	ret.subnets = make([]int, len(r.subnets), cap(r.subnets))
@@ -445,7 +453,7 @@ func (r *routes_t) dump() {
 // returns the local IP assigned to the NIC where the destination is reachable,
 // the IP whose MAC address the packet to the destination IP should be sent,
 // and error
-func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, common.Err_t) {
+func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, defs.Err_t) {
 	for _, shift := range r.subnets {
 		s := uint(shift)
 		try := uint64(dip >> s)
@@ -459,7 +467,7 @@ func (r *routes_t) lookup(dip ip4_t) (ip4_t, ip4_t, common.Err_t) {
 		}
 	}
 	if !r.defgw.valid {
-		return 0, 0, -common.EHOSTUNREACH
+		return 0, 0, -defs.EHOSTUNREACH
 	}
 	return r.defgw.myip, r.defgw.ip, 0
 }
@@ -476,7 +484,7 @@ func (rt *routetbl_t) init() {
 	rt.routes.init()
 }
 
-func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) common.Err_t {
+func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) defs.Err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
@@ -489,7 +497,7 @@ func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip ip4_t) common.Er
 	return 0
 }
 
-func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) common.Err_t {
+func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) defs.Err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
@@ -502,7 +510,7 @@ func (rt *routetbl_t) insert_local(myip, netip, netmask ip4_t) common.Err_t {
 	return 0
 }
 
-func (rt *routetbl_t) defaultgw(myip, gwip ip4_t) common.Err_t {
+func (rt *routetbl_t) defaultgw(myip, gwip ip4_t) defs.Err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
@@ -525,7 +533,7 @@ func (rt *routetbl_t) commit(newroutes *routes_t) {
 
 // returns the local IP, the destination IP (gateway or destination host), and
 // error
-func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, common.Err_t) {
+func (rt *routetbl_t) lookup(dip ip4_t) (ip4_t, ip4_t, defs.Err_t) {
 	if dip == lo.lip {
 		return lo.lip, lo.lip, 0
 	}
@@ -685,8 +693,8 @@ var _rstchan chan rstmsg_t
 
 func rst_daemon() {
 	for rmsg := range _rstchan {
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "icmp daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "icmp daemon")
 		localip, routeip, err := routetbl.lookup(rmsg.k.rip)
 		if err != 0 {
 			continue
@@ -720,8 +728,8 @@ var icmp_echos = make(chan []uint8, 30)
 func icmp_daemon() {
 	for {
 		buf := <-icmp_echos
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "icmp daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "icmp daemon")
 		buf = buf[ETHERLEN:]
 
 		fromip := sl2ip(buf[12:])
@@ -807,7 +815,7 @@ func net_icmp(pkt [][]uint8, tlen int) {
 // allocates two pages for the send/receive buffers. returns false if it failed
 // to allocate pages. does not increase the reference count of the pages
 // (circbuf_t should do that).
-func tcppgs() ([]uint8, common.Pa_t, []uint8, common.Pa_t, bool) {
+func tcppgs() ([]uint8, mem.Pa_t, []uint8, mem.Pa_t, bool) {
 	spg, sp_pg, ok := physmem.Refpg_new_nozero()
 	if !ok {
 		return nil, 0, nil, 0, false
@@ -819,7 +827,7 @@ func tcppgs() ([]uint8, common.Pa_t, []uint8, common.Pa_t, bool) {
 		physmem.Refdown(sp_pg)
 		return nil, 0, nil, 0, false
 	}
-	return common.Pg2bytes(spg)[:], sp_pg, common.Pg2bytes(rpg)[:], rp_pg, true
+	return mem.Pg2bytes(spg)[:], sp_pg, mem.Pg2bytes(rpg)[:], rp_pg, true
 }
 
 type tcpbuf_t struct {
@@ -827,10 +835,10 @@ type tcpbuf_t struct {
 	seq     uint32
 	didseq  bool
 	cond    *sync.Cond
-	pollers *common.Pollers_t
+	pollers *fdops.Pollers_t
 }
 
-func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg common.Pa_t, tcb *tcptcb_t) {
+func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg mem.Pa_t, tcb *tcptcb_t) {
 	tb.cbuf.cb_init_phys(v, p_pg)
 	tb.didseq = false
 	tb.cond = sync.NewCond(&tcb.l)
@@ -896,7 +904,7 @@ func (tb *tcpbuf_t) rcvup(upto uint32) {
 	tb.seq += uint32(did)
 	tb.cbuf._advhead(did)
 	tb.cond.Broadcast()
-	tb.pollers.Wakeready(common.R_READ)
+	tb.pollers.Wakeready(fdops.R_READ)
 }
 
 // returns slices referencing the data written by the user (two when the
@@ -940,7 +948,7 @@ func (tb *tcpbuf_t) ackup(rack uint32) {
 	tb.cbuf._advtail(sz)
 	tb.seq += uint32(sz)
 	tb.cond.Broadcast()
-	tb.pollers.Wakeready(common.R_WRITE)
+	tb.pollers.Wakeready(fdops.R_WRITE)
 }
 
 type tseg_t struct {
@@ -987,7 +995,7 @@ func (ts *tcpsegs_t) _sanity() {
 // the segments are sorted in descending order of distance from the window end
 // (needed because sequence numbers may wrap).
 func (ts *tcpsegs_t) addnow(seq, l, winend uint32) {
-	if len(ts.segs) >= common.Syslimit.Tcpsegs {
+	if len(ts.segs) >= limits.Syslimit.Tcpsegs {
 		// to prevent allocating too many segments, collapse some
 		// segments together, thus we may retransmit some segments
 		// sooner than their actual timeout.
@@ -1181,8 +1189,8 @@ func (tr *tcprsegs_t) recvd(rcvnxt, winend, seq uint32, l int) uint32 {
 	// bounded -- forget that we received the non-coalesced segments that
 	// are farthest from rcv.nxt (in hopes that we can advance rcv.nxt as
 	// far as possible).
-	if len(tr.segs) > common.Syslimit.Tcpsegs {
-		tr.segs = tr.segs[:common.Syslimit.Tcpsegs]
+	if len(tr.segs) > limits.Syslimit.Tcpsegs {
+		tr.segs = tr.segs[:limits.Syslimit.Tcpsegs]
 	}
 	if rcvnxt == tr.segs[0].seq {
 		ret := rcvnxt + tr.segs[0].len
@@ -1437,7 +1445,7 @@ type tcplisten_t struct {
 		cond *sync.Cond
 	}
 	openc   int
-	pollers common.Pollers_t
+	pollers fdops.Pollers_t
 	sndsz   int
 	rcvsz   int
 }
@@ -1459,9 +1467,9 @@ type tcpinc_t struct {
 	opt  tcpopt_t
 	bufs struct {
 		sp    []uint8
-		sp_pg common.Pa_t
+		sp_pg mem.Pa_t
 		rp    []uint8
-		rp_pg common.Pa_t
+		rp_pg mem.Pa_t
 	}
 }
 
@@ -1486,7 +1494,7 @@ func (tcl *tcplisten_t) _conadd(tcb *tcptcb_t) {
 	rc.sl[rc.inum%l] = tcb
 	rc.inum++
 	rc.cond.Signal()
-	tcl.pollers.Wakeready(common.R_READ)
+	tcl.pollers.Wakeready(fdops.R_READ)
 }
 
 func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
@@ -1503,8 +1511,8 @@ func (tcl *tcplisten_t) _contake() (*tcptcb_t, bool) {
 
 // creates a TCB for tinc and adds it to the table of established connections
 func (tcl *tcplisten_t) tcbready(tinc tcpinc_t, rack uint32, rwin uint16,
-	ropt tcpopt_t, rest [][]uint8, sp []uint8, sp_pg common.Pa_t,
-	rp []uint8, rp_pg common.Pa_t) *tcptcb_t {
+	ropt tcpopt_t, rest [][]uint8, sp []uint8, sp_pg mem.Pa_t,
+	rp []uint8, rp_pg mem.Pa_t) *tcptcb_t {
 	tcb := &tcptcb_t{}
 	tcb.tcb_init(tinc.lip, tinc.rip, tinc.lport, tinc.rport, tinc.smac,
 		tinc.dmac, tinc.snd.nxt, sp, sp_pg, rp, rp_pg)
@@ -1578,7 +1586,7 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 		fmt.Printf("no listen ts!\n")
 	}
 
-	if !common.Syslimit.Socks.Take() {
+	if !limits.Syslimit.Socks.Take() {
 		lhits++
 		return
 	}
@@ -1586,7 +1594,7 @@ func (tcl *tcplisten_t) incoming(rmac []uint8, tk tcpkey_t, ip4 *ip4hdr_t,
 	sp, sp_pg, rp, rp_pg, ok := tcppgs()
 	if !ok {
 		lhits++
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 		return
 	}
 
@@ -1767,8 +1775,8 @@ func (tt *tcptimers_t) _tcptimers_start() {
 
 func (tt *tcptimers_t) _tcptimers_daemon() {
 	var curtoc <-chan time.Time
-	res := common.Bounds(common.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
-	common.Kreswait(res, "tcp timers thread")
+	r := bounds.Bounds(bounds.B_TCPTIMERS_T__TCPTIMERS_DAEMON)
+	res.Kreswait(r, "tcp timers thread")
 	for {
 		dotos := false
 		select {
@@ -1777,8 +1785,8 @@ func (tt *tcptimers_t) _tcptimers_daemon() {
 		case <-tt.kicker:
 		}
 
-		common.Kunres()
-		common.Kreswait(res, "tcp timers thread")
+		res.Kunres()
+		res.Kreswait(r, "tcp timers thread")
 
 		var acklists []*tcptcb_t
 		var txlists []*tcptcb_t
@@ -1950,7 +1958,7 @@ type tcptcb_t struct {
 	twdeath bool
 	bound   bool
 	openc   int
-	pollers common.Pollers_t
+	pollers fdops.Pollers_t
 	rcv     struct {
 		nxt    uint32
 		win    uint16
@@ -2039,15 +2047,15 @@ func (tc *tcptcb_t) tcb_unlock() {
 }
 
 // waits on the receive buffer conditional variable
-func (tc *tcptcb_t) rbufwait() common.Err_t {
-	ret := common.KillableWait(tc.rxbuf.cond)
+func (tc *tcptcb_t) rbufwait() defs.Err_t {
+	ret := proc.KillableWait(tc.rxbuf.cond)
 	// XXX close on kill
 	tc.locked = true
 	return ret
 }
 
-func (tc *tcptcb_t) tbufwait() common.Err_t {
-	ret := common.KillableWait(tc.txbuf.cond)
+func (tc *tcptcb_t) tbufwait() defs.Err_t {
+	ret := proc.KillableWait(tc.txbuf.cond)
 	// XXX close on kill
 	tc.locked = true
 	return ret
@@ -2072,7 +2080,7 @@ func (tc *tcptcb_t) _rst() {
 	fmt.Printf("tcb reset no imp")
 }
 
-func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) common.Err_t {
+func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) defs.Err_t {
 	tc._sanity()
 	localip, routeip, err := routetbl.lookup(dip)
 	if err != 0 {
@@ -2081,7 +2089,7 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) common.Err_t {
 
 	nic, ok := nic_lookup(localip)
 	if !ok {
-		return -common.EHOSTUNREACH
+		return -defs.EHOSTUNREACH
 	}
 	dmac, err := arp_resolve(localip, routeip)
 	if err != 0 {
@@ -2090,16 +2098,16 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) common.Err_t {
 
 	var wasany bool
 	if tc.bound {
-		if tc.lip != common.INADDR_ANY && tc.lip != localip {
-			return -common.ENETUNREACH
+		if tc.lip != defs.INADDR_ANY && tc.lip != localip {
+			return -defs.ENETUNREACH
 		}
-		if tc.lip == common.INADDR_ANY {
+		if tc.lip == defs.INADDR_ANY {
 			wasany = true
 		}
 	} else {
 		lport, ok := tcpcons.reserve_ephemeral(localip)
 		if !ok {
-			return -common.EADDRNOTAVAIL
+			return -defs.EADDRNOTAVAIL
 		}
 		tc.lip = localip
 		tc.lport = lport
@@ -2109,7 +2117,7 @@ func (tc *tcptcb_t) _tcp_connect(dip ip4_t, dport uint16) common.Err_t {
 	// do we have enough buffers?
 	sp, sp_pg, rp, rp_pg, ok := tcppgs()
 	if !ok {
-		return -common.ENOMEM
+		return -defs.ENOMEM
 	}
 
 	tc.tcb_init(localip, dip, tc.lport, dport, nic.lmac(), dmac,
@@ -2223,7 +2231,7 @@ func (tc *tcptcb_t) finchk(ip4 *ip4hdr_t, tcp *tcphdr_t, os, ns tcpstate_t) {
 			panic("have uncoalesced segs")
 		}
 		tc.rxbuf.cond.Broadcast()
-		tc.pollers.Wakeready(common.R_READ)
+		tc.pollers.Wakeready(fdops.R_READ)
 		tc.sched_ack()
 	}
 }
@@ -2266,7 +2274,7 @@ func (tc *tcptcb_t) kill() {
 	}
 	tc.dead = true
 	tc._bufrelease()
-	common.Syslimit.Socks.Give()
+	limits.Syslimit.Socks.Give()
 	tcpcons.tcb_del(tc)
 	bigtw.tocancel_all(tc)
 }
@@ -2622,7 +2630,7 @@ func (tc *tcptcb_t) failwake() {
 	tc.rxdone = true
 	tc.rxbuf.cond.Broadcast()
 	tc.txbuf.cond.Broadcast()
-	tc.pollers.Wakeready(common.R_READ | common.R_HUP | common.R_ERROR)
+	tc.pollers.Wakeready(fdops.R_READ | fdops.R_HUP | fdops.R_ERROR)
 }
 
 func (tc *tcptcb_t) synsent(tcp *tcphdr_t, mss uint16, ropt tcpopt_t,
@@ -2883,7 +2891,7 @@ func (tc *tcptcb_t) lwingrow(dlen int) {
 	}
 }
 
-func (tc *tcptcb_t) uread(dst common.Userio_i) (int, common.Err_t) {
+func (tc *tcptcb_t) uread(dst fdops.Userio_i) (int, defs.Err_t) {
 	tc._sanity()
 	wrote, err := tc.rxbuf.cbuf.copyout(dst)
 	// did the user consume enough data to reopen the window?
@@ -2891,7 +2899,7 @@ func (tc *tcptcb_t) uread(dst common.Userio_i) (int, common.Err_t) {
 	return wrote, err
 }
 
-func (tc *tcptcb_t) uwrite(src common.Userio_i) (int, common.Err_t) {
+func (tc *tcptcb_t) uwrite(src fdops.Userio_i) (int, defs.Err_t) {
 	tc._sanity()
 	wrote, err := tc.txbuf.cbuf.copyin(src)
 	if tc.state == ESTAB || tc.state == CLOSEWAIT {
@@ -2900,10 +2908,10 @@ func (tc *tcptcb_t) uwrite(src common.Userio_i) (int, common.Err_t) {
 	return wrote, err
 }
 
-func (tc *tcptcb_t) shutdown(read, write bool) common.Err_t {
+func (tc *tcptcb_t) shutdown(read, write bool) defs.Err_t {
 	tc._sanity()
 	if tc.dead {
-		return -common.EINVAL
+		return -defs.EINVAL
 	}
 	if tc.state == TCPNEW {
 		if tc.bound {
@@ -2911,13 +2919,13 @@ func (tc *tcptcb_t) shutdown(read, write bool) common.Err_t {
 		}
 		tc.dead = true
 		// this tcb cannot be in tcpcons
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 		return 0
 	} else if tc.state == SYNSENT || tc.state == SYNRCVD {
 		tc.kill()
 		return 0
 	} else if tc.state != ESTAB && tc.state != CLOSEWAIT {
-		return -common.EINVAL
+		return -defs.EINVAL
 	}
 
 	tc.txdone = true
@@ -2941,8 +2949,8 @@ func (tc *tcptcb_t) shutdown(read, write bool) common.Err_t {
 var _nilmac mac_t
 
 func (tc *tcptcb_t) tcb_init(lip, rip ip4_t, lport, rport uint16, smac,
-	dmac *mac_t, sndnxt uint32, sv []uint8, sp common.Pa_t, rv []uint8, rp common.Pa_t) {
-	if lip == common.INADDR_ANY || rip == common.INADDR_ANY || lport == 0 || rport == 0 {
+	dmac *mac_t, sndnxt uint32, sv []uint8, sp mem.Pa_t, rv []uint8, rp mem.Pa_t) {
+	if lip == defs.INADDR_ANY || rip == defs.INADDR_ANY || lport == 0 || rport == 0 {
 		panic("all IPs/ports must be known")
 	}
 	tc.lip = lip
@@ -3022,7 +3030,7 @@ func (tc *tcpcons_t) reserve(lip ip4_t, lport uint16) bool {
 
 	k := tcplkey_t{lip: lip, lport: lport}
 	anyk := k
-	anyk.lip = common.INADDR_ANY
+	anyk.lip = defs.INADDR_ANY
 	if tc.ports[k] != 0 || tc.ports[anyk] != 0 {
 		return false
 	}
@@ -3040,7 +3048,7 @@ func (tc *tcpcons_t) reserve_ephemeral(lip ip4_t) (uint16, bool) {
 		k.lport++
 	}
 	anyk := k
-	anyk.lip = common.INADDR_ANY
+	anyk.lip = defs.INADDR_ANY
 	ok := tc.ports[k]|tc.ports[anyk] > 0
 	for i := 0; i <= int(^uint16(0)) && ok; i++ {
 		k.lport++
@@ -3070,7 +3078,7 @@ func (tc *tcpcons_t) unreserve(lip ip4_t, lport uint16) {
 }
 
 // inserts the TCB into the TCP connection table. wasany is true if the tcb
-// reserved a port on common.INADDR_ANY.
+// reserved a port on defs.INADDR_ANY.
 func (tc *tcpcons_t) tcb_insert(tcb *tcptcb_t, wasany bool) {
 	tc.l.Lock()
 	tc._tcb_insert(tcb, wasany, false)
@@ -3090,9 +3098,9 @@ func (tc *tcpcons_t) _tcb_insert(tcb *tcptcb_t, wasany, fromlisten bool) {
 		panic("impossible args")
 	}
 	lk := tcplkey_t{lip: tcb.lip, lport: tcb.lport}
-	// if the tcb reserved on common.INADDR_ANY, free up the used port on the
+	// if the tcb reserved on defs.INADDR_ANY, free up the used port on the
 	// other local IPs
-	anyk := tcplkey_t{lip: common.INADDR_ANY, lport: tcb.lport}
+	anyk := tcplkey_t{lip: defs.INADDR_ANY, lport: tcb.lport}
 	if wasany {
 		// XXXPANIC
 		if tc.ports[anyk] == 0 {
@@ -3128,7 +3136,7 @@ func (tc *tcpcons_t) _tcb_insert(tcb *tcptcb_t, wasany, fromlisten bool) {
 // no such socket/connection.
 func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool,
 	*tcplisten_t, bool) {
-	if tk.lip == common.INADDR_ANY {
+	if tk.lip == defs.INADDR_ANY {
 		panic("localip must be known")
 	}
 
@@ -3139,7 +3147,7 @@ func (tc *tcpcons_t) tcb_lookup(tk tcpkey_t) (*tcptcb_t, bool,
 	l, islist := tc.listns[lk]
 	if !islist {
 		// check for any IP listener
-		lk.lip = common.INADDR_ANY
+		lk.lip = defs.INADDR_ANY
 		l, islist = tc.listns[lk]
 	}
 	tc.l.Unlock()
@@ -3164,7 +3172,7 @@ func (tc *tcpcons_t) tcb_del(tcb *tcptcb_t) {
 	if n == 0 {
 		// connection must be from listening
 		anyk := lk
-		anyk.lip = common.INADDR_ANY
+		anyk.lip = defs.INADDR_ANY
 		ln := tc.ports[anyk]
 		if ln == 0 {
 			panic("lk doesn't exist")
@@ -3328,18 +3336,18 @@ func _port_closed(tcph *tcphdr_t, k tcpkey_t) {
 type tcpfops_t struct {
 	// tcb must always be non-nil
 	tcb     *tcptcb_t
-	options common.Fdopt_t
+	options defs.Fdopt_t
 }
 
 // to prevent an operation racing with a close
-func (tf *tcpfops_t) _closed() (common.Err_t, bool) {
+func (tf *tcpfops_t) _closed() (defs.Err_t, bool) {
 	if tf.tcb.openc == 0 {
-		return -common.EBADF, false
+		return -defs.EBADF, false
 	}
 	return 0, true
 }
 
-func (tf *tcpfops_t) Close() common.Err_t {
+func (tf *tcpfops_t) Close() defs.Err_t {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3355,44 +3363,44 @@ func (tf *tcpfops_t) Close() common.Err_t {
 	if tf.tcb.openc == 0 {
 		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
-		tf.tcb.pollers.Wakeready(common.R_READ | common.R_HUP)
+		tf.tcb.pollers.Wakeready(fdops.R_READ | fdops.R_HUP)
 	}
 
 	return 0
 }
 
-func (tf *tcpfops_t) Fstat(st *common.Stat_t) common.Err_t {
+func (tf *tcpfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	sockmode := mkdev(2, 0)
 	st.Wmode(sockmode)
 	return 0
 }
 
-func (tf *tcpfops_t) Lseek(int, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (tf *tcpfops_t) Lseek(int, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (tf *tcpfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.EINVAL
+func (tf *tcpfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.EINVAL
 }
 
-func (tf *tcpfops_t) Pathi() common.Inum_t {
+func (tf *tcpfops_t) Pathi() defs.Inum_t {
 	panic("tcp socket cwd")
 }
 
-func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
+func (tf *tcpfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
 		return 0, err
 	}
-	noblk := tf.options&common.O_NONBLOCK != 0
+	noblk := tf.options&defs.O_NONBLOCK != 0
 
 	var read int
-	var err common.Err_t
+	var err defs.Err_t
 	for {
-		gimme := common.Bounds(common.B_TCPFOPS_T_READ)
-		if !common.Resadd_noblock(gimme) {
-			err = -common.ENOHEAP
+		gimme := bounds.Bounds(bounds.B_TCPFOPS_T_READ)
+		if !res.Resadd_noblock(gimme) {
+			err = -defs.ENOHEAP
 			break
 		}
 		read, err = tf.tcb.uread(dst)
@@ -3403,7 +3411,7 @@ func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Er
 			break
 		}
 		if noblk {
-			err = -common.EAGAIN
+			err = -defs.EAGAIN
 			break
 		}
 		if err = tf.tcb.rbufwait(); err != 0 {
@@ -3414,31 +3422,31 @@ func (tf *tcpfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Er
 	return read, err
 }
 
-func (tf *tcpfops_t) Reopen() common.Err_t {
+func (tf *tcpfops_t) Reopen() defs.Err_t {
 	tf.tcb.tcb_lock()
 	tf.tcb.openc++
 	tf.tcb.tcb_unlock()
 	return 0
 }
 
-func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
+func (tf *tcpfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	if err, ok := tf._closed(); !ok {
 		tf.tcb.tcb_unlock()
 		return 0, err
 	}
-	noblk := tf.options&common.O_NONBLOCK != 0
+	noblk := tf.options&defs.O_NONBLOCK != 0
 
 	var wrote int
-	var err common.Err_t
+	var err defs.Err_t
 	for {
-		gimme := common.Bounds(common.B_TCPFOPS_T_WRITE)
-		if !common.Resadd_noblock(gimme) {
-			err = -common.ENOHEAP
+		gimme := bounds.Bounds(bounds.B_TCPFOPS_T_WRITE)
+		if !res.Resadd_noblock(gimme) {
+			err = -defs.ENOHEAP
 			break
 		}
 		if tf.tcb.txdone {
-			err = -common.EPIPE
+			err = -defs.EPIPE
 			break
 		}
 		var did int
@@ -3449,7 +3457,7 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.E
 		}
 		if noblk {
 			if did == 0 {
-				err = -common.EAGAIN
+				err = -defs.EAGAIN
 			}
 			break
 		}
@@ -3461,39 +3469,35 @@ func (tf *tcpfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.E
 	return wrote, err
 }
 
-func (tf *tcpfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
+func (tf *tcpfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (tf *tcpfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (tf *tcpfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (tf *tcpfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (tf *tcpfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (tf *tcpfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
-}
-
-func (tf *tcpfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
+func (tf *tcpfops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	panic("no imp")
 }
 
-func (tf *tcpfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
+func (tf *tcpfops_t) Bind(saddr []uint8) defs.Err_t {
 	fam := readn(saddr, 1, 1)
 	lport := ntohs(be16(readn(saddr, 2, 2)))
 	lip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
 
-	// why verify saddr.family is common.AF_INET?
-	if fam != common.AF_INET {
-		return -common.EAFNOSUPPORT
+	// why verify saddr.family is defs.AF_INET?
+	if fam != defs.AF_INET {
+		return -defs.EAFNOSUPPORT
 	}
 
-	if lip != common.INADDR_ANY {
+	if lip != defs.INADDR_ANY {
 		if _, ok := nic_lookup(lip); !ok {
-			return -common.EADDRNOTAVAIL
+			return -defs.EADDRNOTAVAIL
 		}
 	}
 
@@ -3501,7 +3505,7 @@ func (tf *tcpfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	defer tf.tcb.tcb_unlock()
 
 	if tf.tcb.state != TCPNEW {
-		return -common.EINVAL
+		return -defs.EINVAL
 	}
 
 	if tf.tcb.bound {
@@ -3516,7 +3520,7 @@ func (tf *tcpfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	} else {
 		ok = tcpcons.reserve(lip, lport)
 	}
-	ret := -common.EADDRINUSE
+	ret := -defs.EADDRINUSE
 	if ok {
 		tf.tcb.lip = lip
 		tf.tcb.lport = lport
@@ -3526,19 +3530,19 @@ func (tf *tcpfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	return ret
 }
 
-func (tf *tcpfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
+func (tf *tcpfops_t) Connect(saddr []uint8) defs.Err_t {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
 	if tf.tcb.state != TCPNEW {
-		return -common.EISCONN
+		return -defs.EISCONN
 	}
 	if err, ok := tf._closed(); !ok {
 		return err
 	}
 
 	blk := true
-	if tf.options&common.O_NONBLOCK != 0 {
+	if tf.options&defs.O_NONBLOCK != 0 {
 		blk = false
 	}
 	dip := ip4_t(ntohl(be32(readn(saddr, 4, 4))))
@@ -3548,7 +3552,7 @@ func (tf *tcpfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	if err != 0 {
 		return err
 	}
-	var ret common.Err_t
+	var ret defs.Err_t
 	if blk {
 		for tcb.state == SYNSENT || tcb.state == SYNRCVD {
 			if err := tcb.rbufwait(); err != 0 {
@@ -3559,26 +3563,26 @@ func (tf *tcpfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 			panic("unexpected state")
 		}
 		if tcb.state == CLOSED {
-			ret = -common.ECONNRESET
+			ret = -defs.ECONNRESET
 		}
 	}
 	return ret
 }
 
-func (tf *tcpfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, common.Err_t) {
+func (tf *tcpfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
 	if tf.tcb.state != TCPNEW {
-		return nil, -common.EINVAL
+		return nil, -defs.EINVAL
 	}
 
 	if !tf.tcb.bound {
-		lport, ok := tcpcons.reserve_ephemeral(common.INADDR_ANY)
+		lport, ok := tcpcons.reserve_ephemeral(defs.INADDR_ANY)
 		if !ok {
-			return nil, -common.EADDRINUSE
+			return nil, -defs.EADDRINUSE
 		}
-		tf.tcb.lip = common.INADDR_ANY
+		tf.tcb.lip = defs.INADDR_ANY
 		tf.tcb.lport = lport
 		tf.tcb.bound = true
 	}
@@ -3597,24 +3601,24 @@ func (tf *tcpfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, c
 }
 
 // XXX read/write should be wrapper around recvmsg/sendmsg
-func (tf *tcpfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i,
-	toaddr []uint8, cmsg []uint8, flags int) (int, common.Err_t) {
+func (tf *tcpfops_t) Sendmsg(src fdops.Userio_i,
+	toaddr []uint8, cmsg []uint8, flags int) (int, defs.Err_t) {
 	if len(cmsg) != 0 {
 		panic("no imp")
 	}
-	return tf.Write(proc, src)
+	return tf.Write(src)
 }
 
-func (tf *tcpfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
-	fromsa common.Userio_i, cmsg common.Userio_i, flag int) (int, int, int, common.Msgfl_t, common.Err_t) {
+func (tf *tcpfops_t) Recvmsg(dst fdops.Userio_i,
+	fromsa fdops.Userio_i, cmsg fdops.Userio_i, flag int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
 	}
-	wrote, err := tf.Read(proc, dst)
+	wrote, err := tf.Read(dst)
 	return wrote, 0, 0, 0, err
 }
 
-func (tf *tcpfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (tf *tcpfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
@@ -3622,56 +3626,56 @@ func (tf *tcpfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t)
 		return 0, 0
 	}
 
-	var ret common.Ready_t
+	var ret fdops.Ready_t
 	isdata := !tf.tcb.rxbuf.cbuf.empty()
-	if tf.tcb.dead && pm.Events&common.R_ERROR != 0 {
-		ret |= common.R_ERROR
+	if tf.tcb.dead && pm.Events&fdops.R_ERROR != 0 {
+		ret |= fdops.R_ERROR
 	}
-	if pm.Events&common.R_READ != 0 && (isdata || tf.tcb.rxdone) {
-		ret |= common.R_READ
+	if pm.Events&fdops.R_READ != 0 && (isdata || tf.tcb.rxdone) {
+		ret |= fdops.R_READ
 	}
 	if tf.tcb.txdone {
-		if pm.Events&common.R_HUP != 0 {
-			ret |= common.R_HUP
+		if pm.Events&fdops.R_HUP != 0 {
+			ret |= fdops.R_HUP
 		}
-	} else if pm.Events&common.R_WRITE != 0 && !tf.tcb.txbuf.cbuf.full() {
-		ret |= common.R_WRITE
+	} else if pm.Events&fdops.R_WRITE != 0 && !tf.tcb.txbuf.cbuf.full() {
+		ret |= fdops.R_WRITE
 	}
-	var err common.Err_t
+	var err defs.Err_t
 	if ret == 0 && pm.Dowait {
 		err = tf.tcb.pollers.Addpoller(&pm)
 	}
 	return ret, err
 }
 
-func (tf *tcpfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (tf *tcpfops_t) Fcntl(cmd, opt int) int {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
 	switch cmd {
-	case common.F_GETFL:
+	case defs.F_GETFL:
 		return int(tf.options)
-	case common.F_SETFL:
-		tf.options = common.Fdopt_t(opt)
+	case defs.F_SETFL:
+		tf.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
 	}
 }
 
-func (tf *tcpfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
+func (tf *tcpfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
+	intarg int) (int, defs.Err_t) {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
 	switch opt {
-	case common.SO_NAME, common.SO_PEER:
+	case defs.SO_NAME, defs.SO_PEER:
 		if !tf.tcb.bound {
-			return 0, -common.EADDRNOTAVAIL
+			return 0, -defs.EADDRNOTAVAIL
 		}
-		b := []uint8{8, common.AF_INET, 0, 0, 0, 0, 0, 0}
+		b := []uint8{8, defs.AF_INET, 0, 0, 0, 0, 0, 0}
 		var port, ip int
-		if opt == common.SO_NAME {
+		if opt == defs.SO_NAME {
 			port = int(tf.tcb.lport)
 			ip = int(tf.tcb.lip)
 		} else {
@@ -3683,21 +3687,21 @@ func (tf *tcpfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.User
 		did, err := bufarg.Uiowrite(b)
 		return did, err
 	default:
-		return 0, -common.EOPNOTSUPP
+		return 0, -defs.EOPNOTSUPP
 	}
 }
 
-func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Userio_i,
-	intarg int) common.Err_t {
+func (tf *tcpfops_t) Setsockopt(lev, opt int, src fdops.Userio_i,
+	intarg int) defs.Err_t {
 	tf.tcb.tcb_lock()
 	defer tf.tcb.tcb_unlock()
 
-	if lev != common.SOL_SOCKET {
-		return -common.EOPNOTSUPP
+	if lev != defs.SOL_SOCKET {
+		return -defs.EOPNOTSUPP
 	}
-	ret := -common.EOPNOTSUPP
+	ret := -defs.EOPNOTSUPP
 	switch opt {
-	case common.SO_SNDBUF, common.SO_RCVBUF:
+	case defs.SO_SNDBUF, defs.SO_RCVBUF:
 		panic("fixme")
 		n := uint(intarg)
 		// circbuf requires that the buffer size is power-of-2. my
@@ -3706,12 +3710,12 @@ func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Useri
 		mn := uint(1 << 12)
 		mx := uint(1 << 12)
 		if n < mn || n > mx || n&(n-1) != 0 {
-			ret = -common.EINVAL
+			ret = -defs.EINVAL
 			break
 		}
 		var cb *circbuf_t
 		var sp *int
-		if opt == common.SO_SNDBUF {
+		if opt == defs.SO_SNDBUF {
 			cb = &tf.tcb.txbuf.cbuf
 			sp = &tf.tcb.sndsz
 		} else {
@@ -3719,7 +3723,7 @@ func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Useri
 			sp = &tf.tcb.rcvsz
 		}
 		if cb.used() > int(n) {
-			ret = -common.EINVAL
+			ret = -defs.EINVAL
 			break
 		}
 		*sp = int(n)
@@ -3728,7 +3732,7 @@ func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Useri
 			break
 		}
 		nb := make([]uint8, n)
-		fb := &common.Fakeubuf_t{}
+		fb := &vm.Fakeubuf_t{}
 		fb.Fake_init(nb)
 		did, err := cb.copyout(fb)
 		if err != 0 {
@@ -3742,7 +3746,7 @@ func (tf *tcpfops_t) Setsockopt(p *common.Proc_t, lev, opt int, src common.Useri
 	return ret
 }
 
-func (tf *tcpfops_t) Shutdown(read, write bool) common.Err_t {
+func (tf *tcpfops_t) Shutdown(read, write bool) defs.Err_t {
 	tf.tcb.tcb_lock()
 	ret := tf.tcb.shutdown(read, write)
 	tf.tcb.tcb_unlock()
@@ -3752,18 +3756,18 @@ func (tf *tcpfops_t) Shutdown(read, write bool) common.Err_t {
 // passive connect fops
 type tcplfops_t struct {
 	tcl     tcplisten_t
-	options common.Fdopt_t
+	options defs.Fdopt_t
 }
 
 // to prevent an operation racing with a close
-func (tl *tcplfops_t) _closed() (common.Err_t, bool) {
+func (tl *tcplfops_t) _closed() (defs.Err_t, bool) {
 	if tl.tcl.openc == 0 {
-		return -common.EBADF, false
+		return -defs.EBADF, false
 	}
 	return 0, true
 }
 
-func (tl *tcplfops_t) Close() common.Err_t {
+func (tl *tcplfops_t) Close() defs.Err_t {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
@@ -3776,7 +3780,7 @@ func (tl *tcplfops_t) Close() common.Err_t {
 		panic("neg ref")
 	}
 	if tl.tcl.openc == 0 {
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 		// close all unaccepted established connections
 		for {
 			tcb, ok := tl.tcl._contake()
@@ -3803,64 +3807,60 @@ func (tl *tcplfops_t) Close() common.Err_t {
 	return 0
 }
 
-func (tl *tcplfops_t) Fstat(*common.Stat_t) common.Err_t {
+func (tl *tcplfops_t) Fstat(*stat.Stat_t) defs.Err_t {
 	panic("no imp")
 }
 
-func (tl *tcplfops_t) Lseek(int, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (tl *tcplfops_t) Lseek(int, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (tl *tcplfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.EINVAL
+func (tl *tcplfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.EINVAL
 }
 
-func (tl *tcplfops_t) Pathi() common.Inum_t {
+func (tl *tcplfops_t) Pathi() defs.Inum_t {
 	panic("tcp socket cwd")
 }
 
-func (tl *tcplfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
-	return 0, -common.ENOTCONN
+func (tl *tcplfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
+	return 0, -defs.ENOTCONN
 }
 
-func (tl *tcplfops_t) Reopen() common.Err_t {
+func (tl *tcplfops_t) Reopen() defs.Err_t {
 	tl.tcl.l.Lock()
 	tl.tcl.openc++
 	tl.tcl.l.Unlock()
 	return 0
 }
 
-func (tl *tcplfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
-	return 0, -common.EPIPE
+func (tl *tcplfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
+	return 0, -defs.EPIPE
 }
 
-func (tl *tcplfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
+func (tl *tcplfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (tl *tcplfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (tl *tcplfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (tl *tcplfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (tl *tcplfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (tl *tcplfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
-}
-
-func (tl *tcplfops_t) Accept(proc *common.Proc_t, saddr common.Userio_i) (common.Fdops_i,
-	int, common.Err_t) {
+func (tl *tcplfops_t) Accept(saddr fdops.Userio_i) (fdops.Fdops_i,
+	int, defs.Err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
 	var tcb *tcptcb_t
-	noblk := tl.options&common.O_NONBLOCK != 0
+	noblk := tl.options&defs.O_NONBLOCK != 0
 
 	for {
 		if tl.tcl.openc == 0 {
-			return nil, 0, -common.EBADF
+			return nil, 0, -defs.EBADF
 		}
 		ltcb, ok := tl.tcl._contake()
 		if ok {
@@ -3868,9 +3868,9 @@ func (tl *tcplfops_t) Accept(proc *common.Proc_t, saddr common.Userio_i) (common
 			break
 		}
 		if noblk {
-			return nil, 0, -common.EAGAIN
+			return nil, 0, -defs.EAGAIN
 		}
-		if err := common.KillableWait(tl.tcl.rcons.cond); err != 0 {
+		if err := proc.KillableWait(tl.tcl.rcons.cond); err != 0 {
 			return nil, 0, err
 		}
 	}
@@ -3882,25 +3882,25 @@ func (tl *tcplfops_t) Accept(proc *common.Proc_t, saddr common.Userio_i) (common
 	sinsz := 8
 	buf := make([]uint8, sinsz)
 	writen(buf, 1, 0, sinsz)
-	writen(buf, 1, 1, common.AF_INET)
+	writen(buf, 1, 1, defs.AF_INET)
 	writen(buf, 2, 2, int(htons(tcb.rport)))
 	writen(buf, 4, 4, int(htonl(uint32(tcb.rip))))
 	did, err := saddr.Uiowrite(buf)
 	return fops, did, err
 }
 
-func (tl *tcplfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
-	return -common.EINVAL
+func (tl *tcplfops_t) Bind(saddr []uint8) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (tl *tcplfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
-	return -common.EADDRINUSE
+func (tl *tcplfops_t) Connect(saddr []uint8) defs.Err_t {
+	return -defs.EADDRINUSE
 }
 
-func (tl *tcplfops_t) Listen(proc *common.Proc_t, _backlog int) (common.Fdops_i, common.Err_t) {
+func (tl *tcplfops_t) Listen(_backlog int) (fdops.Fdops_i, defs.Err_t) {
 	backlog := uint(_backlog)
 	if backlog > 512 {
-		return nil, -common.EINVAL
+		return nil, -defs.EINVAL
 	}
 
 	tl.tcl.l.Lock()
@@ -3911,7 +3911,7 @@ func (tl *tcplfops_t) Listen(proc *common.Proc_t, _backlog int) (common.Fdops_i,
 	rc := &tl.tcl.rcons
 	nready := rc.inum - rc.cnum
 	if nready > uint(backlog) {
-		return nil, -common.EBUSY
+		return nil, -defs.EBUSY
 	}
 	nsl := make([]*tcptcb_t, backlog)
 	olen := uint(len(rc.sl))
@@ -3923,17 +3923,17 @@ func (tl *tcplfops_t) Listen(proc *common.Proc_t, _backlog int) (common.Fdops_i,
 	return tl, 0
 }
 
-func (tl *tcplfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i,
-	toaddr []uint8, cmsg []uint8, flags int) (int, common.Err_t) {
-	return 0, -common.ENOTCONN
+func (tl *tcplfops_t) Sendmsg(src fdops.Userio_i,
+	toaddr []uint8, cmsg []uint8, flags int) (int, defs.Err_t) {
+	return 0, -defs.ENOTCONN
 }
 
-func (tl *tcplfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
-	fromsa common.Userio_i, cmsg common.Userio_i, flags int) (int, int, int, common.Msgfl_t, common.Err_t) {
-	return 0, 0, 0, 0, -common.ENOTCONN
+func (tl *tcplfops_t) Recvmsg(dst fdops.Userio_i,
+	fromsa fdops.Userio_i, cmsg fdops.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+	return 0, 0, 0, 0, -defs.ENOTCONN
 }
 
-func (tl *tcplfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (tl *tcplfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
@@ -3941,70 +3941,70 @@ func (tl *tcplfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t
 		return 0, 0
 	}
 	// why poll a listen socket for writing? don't allow it
-	pm.Events &^= common.R_WRITE
+	pm.Events &^= fdops.R_WRITE
 	if pm.Events == 0 {
 		return 0, 0
 	}
-	var ret common.Ready_t
+	var ret fdops.Ready_t
 	rc := &tl.tcl.rcons
-	if pm.Events&common.R_READ != 0 && rc.inum != rc.cnum {
-		ret |= common.R_READ
+	if pm.Events&fdops.R_READ != 0 && rc.inum != rc.cnum {
+		ret |= fdops.R_READ
 	}
-	var err common.Err_t
+	var err defs.Err_t
 	if ret == 0 && pm.Dowait {
 		err = tl.tcl.pollers.Addpoller(&pm)
 	}
 	return ret, err
 }
 
-func (tl *tcplfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (tl *tcplfops_t) Fcntl(cmd, opt int) int {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
 	switch cmd {
-	case common.F_GETFL:
+	case defs.F_GETFL:
 		return int(tl.options)
-	case common.F_SETFL:
-		tl.options = common.Fdopt_t(opt)
+	case defs.F_SETFL:
+		tl.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
 	}
 }
 
-func (tl *tcplfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
+func (tl *tcplfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
+	intarg int) (int, defs.Err_t) {
 	switch opt {
-	case common.SO_ERROR:
+	case defs.SO_ERROR:
 		dur := [4]uint8{}
 		writen(dur[:], 4, 0, 0)
 		did, err := bufarg.Uiowrite(dur[:])
 		return did, err
 	default:
-		return 0, -common.EOPNOTSUPP
+		return 0, -defs.EOPNOTSUPP
 	}
 }
 
-func (tl *tcplfops_t) Setsockopt(proc *common.Proc_t, lev, opt int, bufarg common.Userio_i,
-	intarg int) common.Err_t {
+func (tl *tcplfops_t) Setsockopt(lev, opt int, bufarg fdops.Userio_i,
+	intarg int) defs.Err_t {
 	tl.tcl.l.Lock()
 	defer tl.tcl.l.Unlock()
 
-	if lev != common.SOL_SOCKET {
-		return -common.EOPNOTSUPP
+	if lev != defs.SOL_SOCKET {
+		return -defs.EOPNOTSUPP
 	}
-	ret := -common.EOPNOTSUPP
+	ret := -defs.EOPNOTSUPP
 	switch opt {
-	case common.SO_SNDBUF, common.SO_RCVBUF:
+	case defs.SO_SNDBUF, defs.SO_RCVBUF:
 		n := uint(intarg)
 		mn := uint(1 << 11)
 		mx := uint(1 << 20)
 		if n < mn || n > mx || n&(n-1) != 0 {
-			ret = -common.EINVAL
+			ret = -defs.EINVAL
 			break
 		}
 		var sp *int
-		if opt == common.SO_SNDBUF {
+		if opt == defs.SO_SNDBUF {
 			sp = &tl.tcl.sndsz
 		} else {
 			sp = &tl.tcl.rcvsz
@@ -4015,8 +4015,8 @@ func (tl *tcplfops_t) Setsockopt(proc *common.Proc_t, lev, opt int, bufarg commo
 	return ret
 }
 
-func (tl *tcplfops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTCONN
+func (tl *tcplfops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTCONN
 }
 
 type nic_i interface {
@@ -4340,8 +4340,8 @@ func (l *lo_t) lo_start() {
 
 func (l *lo_t) _daemon() {
 	for {
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "lo daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "lo daemon")
 		lm := <-l.txc
 		if lm.tso {
 			l._tso(lm.buf, lm.tcphlen, lm.mss)

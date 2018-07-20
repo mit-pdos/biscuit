@@ -432,6 +432,10 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
 func Wrmsr(int, int)
 
+func Lfence()
+func Sfence()
+func Mfence()
+
 // we have to carefully write go code that may be executed early (during boot)
 // or in interrupt context. such code cannot allocate or call functions that
 // that have the stack splitting prologue. the following is a list of go code
@@ -754,6 +758,21 @@ var Lost struct {
 	Full uint
 	Gs uint
 	User uint
+}
+
+var Freq uint = 4000
+
+func Bluh() {
+	if hackmode == 0 || dumrand(0, Freq) != 0 {
+		return
+	}
+	buf := make([]uintptr, 8)
+	got := callers(1, buf)
+	buf = buf[:got]
+	print("--\n")
+	for i := range buf {
+		print(hex(buf[i]), "\n")
+	}
 }
 
 //go:nosplit

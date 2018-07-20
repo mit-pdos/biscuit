@@ -11,72 +11,85 @@ import "sync/atomic"
 import "time"
 import "unsafe"
 
-import "common"
+import "bounds"
+import "bpath"
+import "defs"
+import "fd"
+import "fdops"
 import "fs"
+import "limits"
+import "mem"
+import "proc"
+import "res"
+import "stat"
+import "tinfo"
+import "ustr"
+import "util"
+import "vm"
 
-var _sysbounds = []int {
-//var _sysbounds = map[int]int {
-	common.SYS_READ:       common.Bounds(common.B_SYS_READ),
-	common.SYS_WRITE:      common.Bounds(common.B_SYS_WRITE),
-	common.SYS_OPEN:       common.Bounds(common.B_SYS_OPEN),
-	common.SYS_CLOSE:      common.Bounds(common.B_SYSCALL_T_SYS_CLOSE),
-	common.SYS_STAT:       common.Bounds(common.B_SYS_STAT),
-	common.SYS_FSTAT:      common.Bounds(common.B_SYS_FSTAT),
-	common.SYS_POLL:       common.Bounds(common.B_SYS_POLL),
-	common.SYS_LSEEK:      common.Bounds(common.B_SYS_LSEEK),
-	common.SYS_MMAP:       common.Bounds(common.B_SYS_MMAP),
-	common.SYS_MUNMAP:     common.Bounds(common.B_SYS_MUNMAP),
-	common.SYS_SIGACT:     common.Bounds(common.B_SYS_SIGACTION),
-	common.SYS_READV:      common.Bounds(common.B_SYS_READV),
-	common.SYS_WRITEV:     common.Bounds(common.B_SYS_WRITEV),
-	common.SYS_ACCESS:     common.Bounds(common.B_SYS_ACCESS),
-	common.SYS_DUP2:       common.Bounds(common.B_SYS_DUP2),
-	common.SYS_PAUSE:      common.Bounds(common.B_SYS_PAUSE),
-	common.SYS_GETPID:     common.Bounds(common.B_SYS_GETPID),
-	common.SYS_GETPPID:    common.Bounds(common.B_SYS_GETPPID),
-	common.SYS_SOCKET:     common.Bounds(common.B_SYS_SOCKET),
-	common.SYS_CONNECT:    common.Bounds(common.B_SYS_CONNECT),
-	common.SYS_ACCEPT:     common.Bounds(common.B_SYS_ACCEPT),
-	common.SYS_SENDTO:     common.Bounds(common.B_SYS_SENDTO),
-	common.SYS_RECVFROM:   common.Bounds(common.B_SYS_RECVFROM),
-	common.SYS_SOCKPAIR:   common.Bounds(common.B_SYS_SOCKETPAIR),
-	common.SYS_SHUTDOWN:   common.Bounds(common.B_SYS_SHUTDOWN),
-	common.SYS_BIND:       common.Bounds(common.B_SYS_BIND),
-	common.SYS_LISTEN:     common.Bounds(common.B_SYS_LISTEN),
-	common.SYS_RECVMSG:    common.Bounds(common.B_SYS_RECVMSG),
-	common.SYS_SENDMSG:    common.Bounds(common.B_SYS_SENDMSG),
-	common.SYS_GETSOCKOPT: common.Bounds(common.B_SYS_GETSOCKOPT),
-	common.SYS_SETSOCKOPT: common.Bounds(common.B_SYS_SETSOCKOPT),
-	common.SYS_FORK:       common.Bounds(common.B_SYS_FORK),
-	common.SYS_EXECV:      common.Bounds(common.B_SYS_EXECV),
-	common.SYS_EXIT:       common.Bounds(common.B_SYSCALL_T_SYS_EXIT),
-	common.SYS_WAIT4:      common.Bounds(common.B_SYS_WAIT4),
-	common.SYS_KILL:       common.Bounds(common.B_SYS_KILL),
-	common.SYS_FCNTL:      common.Bounds(common.B_SYS_FCNTL),
-	common.SYS_TRUNC:      common.Bounds(common.B_SYS_TRUNCATE),
-	common.SYS_FTRUNC:     common.Bounds(common.B_SYS_FTRUNCATE),
-	common.SYS_GETCWD:     common.Bounds(common.B_SYS_GETCWD),
-	common.SYS_CHDIR:      common.Bounds(common.B_SYS_CHDIR),
-	common.SYS_RENAME:     common.Bounds(common.B_SYS_RENAME),
-	common.SYS_MKDIR:      common.Bounds(common.B_SYS_MKDIR),
-	common.SYS_LINK:       common.Bounds(common.B_SYS_LINK),
-	common.SYS_UNLINK:     common.Bounds(common.B_SYS_UNLINK),
-	common.SYS_GETTOD:     common.Bounds(common.B_SYS_GETTIMEOFDAY),
-	common.SYS_GETRLMT:    common.Bounds(common.B_SYS_GETRLIMIT),
-	common.SYS_GETRUSG:    common.Bounds(common.B_SYS_GETRUSAGE),
-	common.SYS_MKNOD:      common.Bounds(common.B_SYS_MKNOD),
-	common.SYS_SETRLMT:    common.Bounds(common.B_SYS_SETRLIMIT),
-	common.SYS_SYNC:       common.Bounds(common.B_SYS_SYNC),
-	common.SYS_REBOOT:     common.Bounds(common.B_SYS_REBOOT),
-	common.SYS_NANOSLEEP:  common.Bounds(common.B_SYS_NANOSLEEP),
-	common.SYS_PIPE2:      common.Bounds(common.B_SYS_PIPE2),
-	common.SYS_PROF:       common.Bounds(common.B_SYS_PROF),
-	common.SYS_THREXIT:    common.Bounds(common.B_SYS_THREXIT),
-	common.SYS_INFO:       common.Bounds(common.B_SYS_INFO),
-	common.SYS_PREAD:      common.Bounds(common.B_SYS_PREAD),
-	common.SYS_PWRITE:     common.Bounds(common.B_SYS_PWRITE),
-	common.SYS_FUTEX:      common.Bounds(common.B_SYS_FUTEX),
-	common.SYS_GETTID:     common.Bounds(common.B_SYS_GETTID),
+var _sysbounds = []int{
+	//var _sysbounds = map[int]int {
+	defs.SYS_READ:       bounds.Bounds(bounds.B_SYS_READ),
+	defs.SYS_WRITE:      bounds.Bounds(bounds.B_SYS_WRITE),
+	defs.SYS_OPEN:       bounds.Bounds(bounds.B_SYS_OPEN),
+	defs.SYS_CLOSE:      bounds.Bounds(bounds.B_SYSCALL_T_SYS_CLOSE),
+	defs.SYS_STAT:       bounds.Bounds(bounds.B_SYS_STAT),
+	defs.SYS_FSTAT:      bounds.Bounds(bounds.B_SYS_FSTAT),
+	defs.SYS_POLL:       bounds.Bounds(bounds.B_SYS_POLL),
+	defs.SYS_LSEEK:      bounds.Bounds(bounds.B_SYS_LSEEK),
+	defs.SYS_MMAP:       bounds.Bounds(bounds.B_SYS_MMAP),
+	defs.SYS_MUNMAP:     bounds.Bounds(bounds.B_SYS_MUNMAP),
+	defs.SYS_SIGACT:     bounds.Bounds(bounds.B_SYS_SIGACTION),
+	defs.SYS_READV:      bounds.Bounds(bounds.B_SYS_READV),
+	defs.SYS_WRITEV:     bounds.Bounds(bounds.B_SYS_WRITEV),
+	defs.SYS_ACCESS:     bounds.Bounds(bounds.B_SYS_ACCESS),
+	defs.SYS_DUP2:       bounds.Bounds(bounds.B_SYS_DUP2),
+	defs.SYS_PAUSE:      bounds.Bounds(bounds.B_SYS_PAUSE),
+	defs.SYS_GETPID:     bounds.Bounds(bounds.B_SYS_GETPID),
+	defs.SYS_GETPPID:    bounds.Bounds(bounds.B_SYS_GETPPID),
+	defs.SYS_SOCKET:     bounds.Bounds(bounds.B_SYS_SOCKET),
+	defs.SYS_CONNECT:    bounds.Bounds(bounds.B_SYS_CONNECT),
+	defs.SYS_ACCEPT:     bounds.Bounds(bounds.B_SYS_ACCEPT),
+	defs.SYS_SENDTO:     bounds.Bounds(bounds.B_SYS_SENDTO),
+	defs.SYS_RECVFROM:   bounds.Bounds(bounds.B_SYS_RECVFROM),
+	defs.SYS_SOCKPAIR:   bounds.Bounds(bounds.B_SYS_SOCKETPAIR),
+	defs.SYS_SHUTDOWN:   bounds.Bounds(bounds.B_SYS_SHUTDOWN),
+	defs.SYS_BIND:       bounds.Bounds(bounds.B_SYS_BIND),
+	defs.SYS_LISTEN:     bounds.Bounds(bounds.B_SYS_LISTEN),
+	defs.SYS_RECVMSG:    bounds.Bounds(bounds.B_SYS_RECVMSG),
+	defs.SYS_SENDMSG:    bounds.Bounds(bounds.B_SYS_SENDMSG),
+	defs.SYS_GETSOCKOPT: bounds.Bounds(bounds.B_SYS_GETSOCKOPT),
+	defs.SYS_SETSOCKOPT: bounds.Bounds(bounds.B_SYS_SETSOCKOPT),
+	defs.SYS_FORK:       bounds.Bounds(bounds.B_SYS_FORK),
+	defs.SYS_EXECV:      bounds.Bounds(bounds.B_SYS_EXECV),
+	defs.SYS_EXIT:       bounds.Bounds(bounds.B_SYSCALL_T_SYS_EXIT),
+	defs.SYS_WAIT4:      bounds.Bounds(bounds.B_SYS_WAIT4),
+	defs.SYS_KILL:       bounds.Bounds(bounds.B_SYS_KILL),
+	defs.SYS_FCNTL:      bounds.Bounds(bounds.B_SYS_FCNTL),
+	defs.SYS_TRUNC:      bounds.Bounds(bounds.B_SYS_TRUNCATE),
+	defs.SYS_FTRUNC:     bounds.Bounds(bounds.B_SYS_FTRUNCATE),
+	defs.SYS_GETCWD:     bounds.Bounds(bounds.B_SYS_GETCWD),
+	defs.SYS_CHDIR:      bounds.Bounds(bounds.B_SYS_CHDIR),
+	defs.SYS_RENAME:     bounds.Bounds(bounds.B_SYS_RENAME),
+	defs.SYS_MKDIR:      bounds.Bounds(bounds.B_SYS_MKDIR),
+	defs.SYS_LINK:       bounds.Bounds(bounds.B_SYS_LINK),
+	defs.SYS_UNLINK:     bounds.Bounds(bounds.B_SYS_UNLINK),
+	defs.SYS_GETTOD:     bounds.Bounds(bounds.B_SYS_GETTIMEOFDAY),
+	defs.SYS_GETRLMT:    bounds.Bounds(bounds.B_SYS_GETRLIMIT),
+	defs.SYS_GETRUSG:    bounds.Bounds(bounds.B_SYS_GETRUSAGE),
+	defs.SYS_MKNOD:      bounds.Bounds(bounds.B_SYS_MKNOD),
+	defs.SYS_SETRLMT:    bounds.Bounds(bounds.B_SYS_SETRLIMIT),
+	defs.SYS_SYNC:       bounds.Bounds(bounds.B_SYS_SYNC),
+	defs.SYS_REBOOT:     bounds.Bounds(bounds.B_SYS_REBOOT),
+	defs.SYS_NANOSLEEP:  bounds.Bounds(bounds.B_SYS_NANOSLEEP),
+	defs.SYS_PIPE2:      bounds.Bounds(bounds.B_SYS_PIPE2),
+	defs.SYS_PROF:       bounds.Bounds(bounds.B_SYS_PROF),
+	defs.SYS_THREXIT:    bounds.Bounds(bounds.B_SYS_THREXIT),
+	defs.SYS_INFO:       bounds.Bounds(bounds.B_SYS_INFO),
+	defs.SYS_PREAD:      bounds.Bounds(bounds.B_SYS_PREAD),
+	defs.SYS_PWRITE:     bounds.Bounds(bounds.B_SYS_PWRITE),
+	defs.SYS_FUTEX:      bounds.Bounds(bounds.B_SYS_FUTEX),
+	defs.SYS_GETTID:     bounds.Bounds(bounds.B_SYS_GETTID),
 }
 
 // Implements Syscall_i
@@ -85,7 +98,7 @@ type syscall_t struct {
 
 var sys = &syscall_t{}
 
-func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSIZE]uintptr) int {
+func (s *syscall_t) Syscall(p *proc.Proc_t, tid defs.Tid_t, tf *[defs.TFSIZE]uintptr) int {
 
 	if p.Doomed() {
 		// this process has been killed
@@ -93,7 +106,7 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 		return 0
 	}
 
-	sysno := int(tf[common.TF_RAX])
+	sysno := int(tf[defs.TF_RAX])
 
 	//lim, ok := _sysbounds[sysno]
 	//if !ok {
@@ -103,146 +116,146 @@ func (s *syscall_t) Syscall(p *common.Proc_t, tid common.Tid_t, tf *[common.TFSI
 	//if lim == 0 {
 	//	panic("bad limit")
 	//}
-	if !common.Resadd(lim) {
+	if !res.Resadd(lim) {
 		//fmt.Printf("syscall res failed\n")
-		return int(-common.ENOHEAP)
+		return int(-defs.ENOHEAP)
 	}
 
-	a1 := int(tf[common.TF_RDI])
-	a2 := int(tf[common.TF_RSI])
-	a3 := int(tf[common.TF_RDX])
-	a4 := int(tf[common.TF_RCX])
-	a5 := int(tf[common.TF_R8])
+	a1 := int(tf[defs.TF_RDI])
+	a2 := int(tf[defs.TF_RSI])
+	a3 := int(tf[defs.TF_RDX])
+	a4 := int(tf[defs.TF_RCX])
+	a5 := int(tf[defs.TF_R8])
 
 	var ret int
 	switch sysno {
-	case common.SYS_READ:
+	case defs.SYS_READ:
 		ret = sys_read(p, a1, a2, a3)
-	case common.SYS_WRITE:
+	case defs.SYS_WRITE:
 		ret = sys_write(p, a1, a2, a3)
-	case common.SYS_OPEN:
+	case defs.SYS_OPEN:
 		ret = sys_open(p, a1, a2, a3)
-	case common.SYS_CLOSE:
+	case defs.SYS_CLOSE:
 		ret = s.Sys_close(p, a1)
-	case common.SYS_STAT:
+	case defs.SYS_STAT:
 		ret = sys_stat(p, a1, a2)
-	case common.SYS_FSTAT:
+	case defs.SYS_FSTAT:
 		ret = sys_fstat(p, a1, a2)
-	case common.SYS_POLL:
+	case defs.SYS_POLL:
 		ret = sys_poll(p, tid, a1, a2, a3)
-	case common.SYS_LSEEK:
+	case defs.SYS_LSEEK:
 		ret = sys_lseek(p, a1, a2, a3)
-	case common.SYS_MMAP:
+	case defs.SYS_MMAP:
 		ret = sys_mmap(p, a1, a2, a3, a4, a5)
-	case common.SYS_MUNMAP:
+	case defs.SYS_MUNMAP:
 		ret = sys_munmap(p, a1, a2)
-	case common.SYS_READV:
+	case defs.SYS_READV:
 		ret = sys_readv(p, a1, a2, a3)
-	case common.SYS_WRITEV:
+	case defs.SYS_WRITEV:
 		ret = sys_writev(p, a1, a2, a3)
-	case common.SYS_SIGACT:
+	case defs.SYS_SIGACT:
 		ret = sys_sigaction(p, a1, a2, a3)
-	case common.SYS_ACCESS:
+	case defs.SYS_ACCESS:
 		ret = sys_access(p, a1, a2)
-	case common.SYS_DUP2:
+	case defs.SYS_DUP2:
 		ret = sys_dup2(p, a1, a2)
-	case common.SYS_PAUSE:
+	case defs.SYS_PAUSE:
 		ret = sys_pause(p)
-	case common.SYS_GETPID:
+	case defs.SYS_GETPID:
 		ret = sys_getpid(p, tid)
-	case common.SYS_GETPPID:
+	case defs.SYS_GETPPID:
 		ret = sys_getppid(p, tid)
-	case common.SYS_SOCKET:
+	case defs.SYS_SOCKET:
 		ret = sys_socket(p, a1, a2, a3)
-	case common.SYS_CONNECT:
+	case defs.SYS_CONNECT:
 		ret = sys_connect(p, a1, a2, a3)
-	case common.SYS_ACCEPT:
+	case defs.SYS_ACCEPT:
 		ret = sys_accept(p, a1, a2, a3)
-	case common.SYS_SENDTO:
+	case defs.SYS_SENDTO:
 		ret = sys_sendto(p, a1, a2, a3, a4, a5)
-	case common.SYS_RECVFROM:
+	case defs.SYS_RECVFROM:
 		ret = sys_recvfrom(p, a1, a2, a3, a4, a5)
-	case common.SYS_SOCKPAIR:
+	case defs.SYS_SOCKPAIR:
 		ret = sys_socketpair(p, a1, a2, a3, a4)
-	case common.SYS_SHUTDOWN:
+	case defs.SYS_SHUTDOWN:
 		ret = sys_shutdown(p, a1, a2)
-	case common.SYS_BIND:
+	case defs.SYS_BIND:
 		ret = sys_bind(p, a1, a2, a3)
-	case common.SYS_LISTEN:
+	case defs.SYS_LISTEN:
 		ret = sys_listen(p, a1, a2)
-	case common.SYS_RECVMSG:
+	case defs.SYS_RECVMSG:
 		ret = sys_recvmsg(p, a1, a2, a3)
-	case common.SYS_SENDMSG:
+	case defs.SYS_SENDMSG:
 		ret = sys_sendmsg(p, a1, a2, a3)
-	case common.SYS_GETSOCKOPT:
+	case defs.SYS_GETSOCKOPT:
 		ret = sys_getsockopt(p, a1, a2, a3, a4, a5)
-	case common.SYS_SETSOCKOPT:
+	case defs.SYS_SETSOCKOPT:
 		ret = sys_setsockopt(p, a1, a2, a3, a4, a5)
-	case common.SYS_FORK:
+	case defs.SYS_FORK:
 		ret = sys_fork(p, tf, a1, a2)
-	case common.SYS_EXECV:
+	case defs.SYS_EXECV:
 		ret = sys_execv(p, tf, a1, a2)
-	case common.SYS_EXIT:
+	case defs.SYS_EXIT:
 		status := a1 & 0xff
-		status |= common.EXITED
+		status |= defs.EXITED
 		s.Sys_exit(p, tid, status)
-	case common.SYS_WAIT4:
+	case defs.SYS_WAIT4:
 		ret = sys_wait4(p, tid, a1, a2, a3, a4, a5)
-	case common.SYS_KILL:
+	case defs.SYS_KILL:
 		ret = sys_kill(p, a1, a2)
-	case common.SYS_FCNTL:
+	case defs.SYS_FCNTL:
 		ret = sys_fcntl(p, a1, a2, a3)
-	case common.SYS_TRUNC:
+	case defs.SYS_TRUNC:
 		ret = sys_truncate(p, a1, uint(a2))
-	case common.SYS_FTRUNC:
+	case defs.SYS_FTRUNC:
 		ret = sys_ftruncate(p, a1, uint(a2))
-	case common.SYS_GETCWD:
+	case defs.SYS_GETCWD:
 		ret = sys_getcwd(p, a1, a2)
-	case common.SYS_CHDIR:
+	case defs.SYS_CHDIR:
 		ret = sys_chdir(p, a1)
-	case common.SYS_RENAME:
+	case defs.SYS_RENAME:
 		ret = sys_rename(p, a1, a2)
-	case common.SYS_MKDIR:
+	case defs.SYS_MKDIR:
 		ret = sys_mkdir(p, a1, a2)
-	case common.SYS_LINK:
+	case defs.SYS_LINK:
 		ret = sys_link(p, a1, a2)
-	case common.SYS_UNLINK:
+	case defs.SYS_UNLINK:
 		ret = sys_unlink(p, a1, a2)
-	case common.SYS_GETTOD:
+	case defs.SYS_GETTOD:
 		ret = sys_gettimeofday(p, a1)
-	case common.SYS_GETRLMT:
+	case defs.SYS_GETRLMT:
 		ret = sys_getrlimit(p, a1, a2)
-	case common.SYS_GETRUSG:
+	case defs.SYS_GETRUSG:
 		ret = sys_getrusage(p, a1, a2)
-	case common.SYS_MKNOD:
+	case defs.SYS_MKNOD:
 		ret = sys_mknod(p, a1, a2, a3)
-	case common.SYS_SETRLMT:
+	case defs.SYS_SETRLMT:
 		ret = sys_setrlimit(p, a1, a2)
-	case common.SYS_SYNC:
+	case defs.SYS_SYNC:
 		ret = sys_sync(p)
-	case common.SYS_REBOOT:
+	case defs.SYS_REBOOT:
 		ret = sys_reboot(p)
-	case common.SYS_NANOSLEEP:
+	case defs.SYS_NANOSLEEP:
 		ret = sys_nanosleep(p, a1, a2)
-	case common.SYS_PIPE2:
+	case defs.SYS_PIPE2:
 		ret = sys_pipe2(p, a1, a2)
-	case common.SYS_PROF:
+	case defs.SYS_PROF:
 		ret = sys_prof(p, a1, a2, a3, a4)
-	case common.SYS_INFO:
+	case defs.SYS_INFO:
 		ret = sys_info(p, a1)
-	case common.SYS_THREXIT:
+	case defs.SYS_THREXIT:
 		sys_threxit(p, tid, a1)
-	case common.SYS_PREAD:
+	case defs.SYS_PREAD:
 		ret = sys_pread(p, a1, a2, a3, a4)
-	case common.SYS_PWRITE:
+	case defs.SYS_PWRITE:
 		ret = sys_pwrite(p, a1, a2, a3, a4)
-	case common.SYS_FUTEX:
+	case defs.SYS_FUTEX:
 		ret = sys_futex(p, a1, a2, a3, a4, a5)
-	case common.SYS_GETTID:
+	case defs.SYS_GETTID:
 		ret = sys_gettid(p, tid)
 	default:
 		fmt.Printf("unexpected syscall %v\n", sysno)
-		s.Sys_exit(p, tid, common.SIGNALED|common.Mkexitsig(31))
+		s.Sys_exit(p, tid, defs.SIGNALED|defs.Mkexitsig(31))
 	}
 	return ret
 }
@@ -253,7 +266,7 @@ type console_t struct {
 
 var console = &console_t{}
 
-func (c *console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t) {
+func (c *console_t) Cons_read(ub fdops.Userio_i, offset int) (int, defs.Err_t) {
 	sz := ub.Remain()
 	kdata, err := kbd_get(sz)
 	if err != 0 {
@@ -266,7 +279,7 @@ func (c *console_t) Cons_read(ub common.Userio_i, offset int) (int, common.Err_t
 	return ret, err
 }
 
-func (c *console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t) {
+func (c *console_t) Cons_write(src fdops.Userio_i, off int) (int, defs.Err_t) {
 	// merge into one buffer to avoid taking the console lock many times.
 	// what a sweet optimization.
 	utext := int8(0x17)
@@ -282,216 +295,209 @@ func (c *console_t) Cons_write(src common.Userio_i, off int) (int, common.Err_t)
 	return len(big), 0
 }
 
-func _fd_read(proc *common.Proc_t, fdn int) (*common.Fd_t, common.Err_t) {
-	fd, ok := proc.Fd_get(fdn)
+func _fd_read(p *proc.Proc_t, fdn int) (*fd.Fd_t, defs.Err_t) {
+	f, ok := p.Fd_get(fdn)
 	if !ok {
-		return nil, -common.EBADF
+		return nil, -defs.EBADF
 	}
-	if fd.Perms&common.FD_READ == 0 {
-		return nil, -common.EPERM
+	if f.Perms&fd.FD_READ == 0 {
+		return nil, -defs.EPERM
 	}
-	return fd, 0
+	return f, 0
 }
 
-func _fd_write(proc *common.Proc_t, fdn int) (*common.Fd_t, common.Err_t) {
-	fd, ok := proc.Fd_get(fdn)
+func _fd_write(p *proc.Proc_t, fdn int) (*fd.Fd_t, defs.Err_t) {
+	f, ok := p.Fd_get(fdn)
 	if !ok {
-		return nil, -common.EBADF
+		return nil, -defs.EBADF
 	}
-	if fd.Perms&common.FD_WRITE == 0 {
-		return nil, -common.EPERM
+	if f.Perms&fd.FD_WRITE == 0 {
+		return nil, -defs.EPERM
 	}
-	return fd, 0
+	return f, 0
 }
 
-func sys_read(proc *common.Proc_t, fdn int, bufp int, sz int) int {
+func sys_read(p *proc.Proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	fd, err := _fd_read(proc, fdn)
+	fd, err := _fd_read(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
-	userbuf := proc.Mkuserbuf(bufp, sz)
+	userbuf := p.Aspace.Mkuserbuf(bufp, sz)
 
-	ret, err := fd.Fops.Read(proc, userbuf)
+	ret, err := fd.Fops.Read(userbuf)
 	if err != 0 {
 		return int(err)
 	}
-	//common.Ubpool.Put(userbuf)
+	//proc.Ubpool.Put(userbuf)
 	return ret
 }
 
-func sys_write(proc *common.Proc_t, fdn int, bufp int, sz int) int {
+func sys_write(p *proc.Proc_t, fdn int, bufp int, sz int) int {
 	if sz == 0 {
 		return 0
 	}
-	fd, err := _fd_write(proc, fdn)
+	fd, err := _fd_write(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
-	userbuf := proc.Mkuserbuf(bufp, sz)
+	userbuf := p.Aspace.Mkuserbuf(bufp, sz)
 
-	ret, err := fd.Fops.Write(proc, userbuf)
+	ret, err := fd.Fops.Write(userbuf)
 	if err != 0 {
 		return int(err)
 	}
-	//common.Ubpool.Put(userbuf)
+	//proc.Ubpool.Put(userbuf)
 	return ret
 }
 
-func sys_open(proc *common.Proc_t, pathn int, _flags int, mode int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_open(p *proc.Proc_t, pathn int, _flags int, mode int) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
-	flags := common.Fdopt_t(_flags)
-	temp := flags & (common.O_RDONLY | common.O_WRONLY | common.O_RDWR)
-	if temp != common.O_RDONLY && temp != common.O_WRONLY && temp != common.O_RDWR {
-		return int(-common.EINVAL)
+	flags := defs.Fdopt_t(_flags)
+	temp := flags & (defs.O_RDONLY | defs.O_WRONLY | defs.O_RDWR)
+	if temp != defs.O_RDONLY && temp != defs.O_WRONLY && temp != defs.O_RDWR {
+		return int(-defs.EINVAL)
 	}
-	if temp == common.O_RDONLY && flags&common.O_TRUNC != 0 {
-		return int(-common.EINVAL)
+	if temp == defs.O_RDONLY && flags&defs.O_TRUNC != 0 {
+		return int(-defs.EINVAL)
 	}
 	fdperms := 0
 	switch temp {
-	case common.O_RDONLY:
-		fdperms = common.FD_READ
-	case common.O_WRONLY:
-		fdperms = common.FD_WRITE
-	case common.O_RDWR:
-		fdperms = common.FD_READ | common.FD_WRITE
+	case defs.O_RDONLY:
+		fdperms = fd.FD_READ
+	case defs.O_WRONLY:
+		fdperms = fd.FD_WRITE
+	case defs.O_RDWR:
+		fdperms = fd.FD_READ | fd.FD_WRITE
 	default:
-		fdperms = common.FD_READ
+		fdperms = fd.FD_READ
 	}
 	err = badpath(path)
 	if err != 0 {
 		return int(err)
 	}
-	pi := proc.Cwd().Fops.Pathi()
-	file, err := thefs.Fs_open(path, flags, mode, pi, 0, 0)
+	file, err := thefs.Fs_open(path, flags, mode, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
-	if flags&common.O_CLOEXEC != 0 {
-		fdperms |= common.FD_CLOEXEC
+	if flags&defs.O_CLOEXEC != 0 {
+		fdperms |= fd.FD_CLOEXEC
 	}
-	fdn, ok := proc.Fd_insert(file, fdperms)
+	fdn, ok := p.Fd_insert(file, fdperms)
 	if !ok {
 		lhits++
-		common.Close_panic(file)
-		return int(-common.EMFILE)
+		fd.Close_panic(file)
+		return int(-defs.EMFILE)
 	}
 	return fdn
 }
 
-func sys_pause(proc *common.Proc_t) int {
+func sys_pause(p *proc.Proc_t) int {
 	// no signals yet!
 	var c chan bool
 	select {
 	case <-c:
-	case <-common.Current().Killnaps.Killch:
+	case <-tinfo.Current().Killnaps.Killch:
 	}
 	return -1
 }
 
-func (s *syscall_t) Sys_close(proc *common.Proc_t, fdn int) int {
-	fd, ok := proc.Fd_del(fdn)
+func (s *syscall_t) Sys_close(p *proc.Proc_t, fdn int) int {
+	fd, ok := p.Fd_del(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 	ret := fd.Fops.Close()
 	return int(ret)
 }
 
-// a type to hold the virtual/physical addresses of memory mapped files
-type mmapinfo_t struct {
-	pg   *common.Pg_t
-	phys common.Pa_t
-}
-
-func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
+func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	if lenn == 0 {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	prot := uint(protflags) >> 32
 	flags := uint(uint32(protflags))
 
-	mask := common.MAP_SHARED | common.MAP_PRIVATE
+	mask := defs.MAP_SHARED | defs.MAP_PRIVATE
 	if flags&mask == 0 || flags&mask == mask {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
-	shared := flags&common.MAP_SHARED != 0
-	anon := flags&common.MAP_ANON != 0
+	shared := flags&defs.MAP_SHARED != 0
+	anon := flags&defs.MAP_ANON != 0
 	fdmap := !anon
 	if (fdmap && fdn < 0) || (fdmap && offset < 0) || (anon && fdn >= 0) {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
-	if flags&common.MAP_FIXED != 0 {
-		return int(-common.EINVAL)
+	if flags&defs.MAP_FIXED != 0 {
+		return int(-defs.EINVAL)
 	}
 	// OpenBSD allows mappings of only PROT_WRITE and read accesses that
 	// fault-in the page cause a segfault while writes do not. Reads
 	// following a write do not cause segfault (of course). POSIX
-	// apparently requires an implementation to support only common.PROT_WRITE,
+	// apparently requires an implementation to support only proc.PROT_WRITE,
 	// but it seems better to disallow permission schemes that the CPU
 	// cannot enforce.
-	if prot&common.PROT_READ == 0 {
-		return int(-common.EINVAL)
+	if prot&defs.PROT_READ == 0 {
+		return int(-defs.EINVAL)
 	}
-	if prot == common.PROT_NONE {
+	if prot == defs.PROT_NONE {
 		panic("no imp")
-		return proc.Mmapi
+		return p.Mmapi
 	}
 
-	var fd *common.Fd_t
+	var f *fd.Fd_t
 	if fdmap {
 		var ok bool
-		fd, ok = proc.Fd_get(fdn)
+		f, ok = p.Fd_get(fdn)
 		if !ok {
-			return int(-common.EBADF)
+			return int(-defs.EBADF)
 		}
-		if fd.Perms&common.FD_READ == 0 ||
-			(shared && prot&common.PROT_WRITE != 0 &&
-				fd.Perms&common.FD_WRITE == 0) {
-			return int(-common.EACCES)
+		if f.Perms&fd.FD_READ == 0 ||
+			(shared && prot&defs.PROT_WRITE != 0 &&
+				f.Perms&fd.FD_WRITE == 0) {
+			return int(-defs.EACCES)
 		}
 	}
 
-	proc.Lock_pmap()
+	p.Aspace.Lock_pmap()
 
-	perms := common.PTE_U
-	if prot&common.PROT_WRITE != 0 {
-		perms |= common.PTE_W
+	perms := vm.PTE_U
+	if prot&defs.PROT_WRITE != 0 {
+		perms |= vm.PTE_W
 	}
-	lenn = common.Roundup(lenn, common.PGSIZE)
+	lenn = util.Roundup(lenn, mem.PGSIZE)
 	// limit checks
-	if lenn/int(common.PGSIZE)+proc.Vmregion.Pglen() > proc.Ulim.Pages {
-		proc.Unlock_pmap()
+	if lenn/int(mem.PGSIZE)+p.Aspace.Vmregion.Pglen() > p.Ulim.Pages {
+		p.Aspace.Unlock_pmap()
 		lhits++
-		return int(-common.ENOMEM)
+		return int(-defs.ENOMEM)
 	}
-	if proc.Vmregion.Novma >= proc.Ulim.Novma {
-		proc.Unlock_pmap()
+	if p.Aspace.Vmregion.Novma >= p.Ulim.Novma {
+		p.Aspace.Unlock_pmap()
 		lhits++
-		return int(-common.ENOMEM)
+		return int(-defs.ENOMEM)
 	}
 
-	addr := proc.Unusedva_inner(proc.Mmapi, lenn)
-	proc.Mmapi = addr + lenn
+	addr := p.Aspace.Unusedva_inner(p.Mmapi, lenn)
+	p.Mmapi = addr + lenn
 	switch {
 	case anon && shared:
-		proc.Vmadd_shareanon(addr, lenn, perms)
+		p.Aspace.Vmadd_shareanon(addr, lenn, perms)
 	case anon && !shared:
-		proc.Vmadd_anon(addr, lenn, perms)
+		p.Aspace.Vmadd_anon(addr, lenn, perms)
 	case fdmap:
-		fops := fd.Fops
+		fops := f.Fops
 		// vmadd_*file will increase the open count on the file
 		if shared {
-			proc.Vmadd_sharefile(addr, lenn, perms, fops, offset,
+			p.Aspace.Vmadd_sharefile(addr, lenn, perms, fops, offset,
 				thefs)
 		} else {
-			proc.Vmadd_file(addr, lenn, perms, fops, offset)
+			p.Aspace.Vmadd_file(addr, lenn, perms, fops, offset)
 		}
 	}
 	tshoot := false
@@ -500,13 +506,13 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 	var ub int
 	failed := false
 	if anon {
-		for i := 0; i < lenn; i += int(common.PGSIZE) {
+		for i := 0; i < lenn; i += int(mem.PGSIZE) {
 			_, p_pg, ok := physmem.Refpg_new()
 			if !ok {
 				failed = true
 				break
 			}
-			ns, ok := proc.Page_insert(addr+i, p_pg, perms, true)
+			ns, ok := p.Aspace.Page_insert(addr+i, p_pg, perms, true)
 			if !ok {
 				physmem.Refdown(p_pg)
 				failed = true
@@ -518,106 +524,105 @@ func sys_mmap(proc *common.Proc_t, addrn, lenn, protflags, fdn, offset int) int 
 	}
 	ret := addr
 	if failed {
-		for i := 0; i < ub; i += common.PGSIZE {
-			proc.Page_remove(addr + i)
+		for i := 0; i < ub; i += mem.PGSIZE {
+			p.Aspace.Page_remove(addr + i)
 		}
 		// removing this region cannot create any more vm objects than
 		// what this call to sys_mmap started with.
-		if proc.Vmregion.Remove(addr, lenn, proc.Ulim.Novma) != 0 {
+		if p.Aspace.Vmregion.Remove(addr, lenn, p.Ulim.Novma) != 0 {
 			panic("wut")
 		}
-		ret = int(-common.ENOMEM)
+		ret = int(-defs.ENOMEM)
 	}
 	// sys_mmap won't replace pages since it always finds unused VA space,
 	// so the following TLB shootdown is never used.
 	if tshoot {
-		proc.Tlbshoot(0, 1)
+		p.Aspace.Tlbshoot(0, 1)
 	}
-	proc.Unlock_pmap()
+	p.Aspace.Unlock_pmap()
 	return ret
 }
 
-func sys_munmap(proc *common.Proc_t, addrn, len int) int {
-	if addrn&int(common.PGOFFSET) != 0 || addrn < common.USERMIN {
-		return int(-common.EINVAL)
+func sys_munmap(p *proc.Proc_t, addrn, len int) int {
+	if addrn&int(vm.PGOFFSET) != 0 || addrn < mem.USERMIN {
+		return int(-defs.EINVAL)
 	}
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+	p.Aspace.Lock_pmap()
+	defer p.Aspace.Unlock_pmap()
 
-	vmi1, ok1 := proc.Vmregion.Lookup(uintptr(addrn))
-	vmi2, ok2 := proc.Vmregion.Lookup(uintptr(addrn+len) - 1)
-	if !ok1 || !ok2 || vmi1.Pgn() != vmi2.Pgn() {
-		return int(-common.EINVAL)
+	vmi1, ok1 := p.Aspace.Vmregion.Lookup(uintptr(addrn))
+	vmi2, ok2 := p.Aspace.Vmregion.Lookup(uintptr(addrn+len) - 1)
+	if !ok1 || !ok2 || vmi1.Pgn != vmi2.Pgn {
+		return int(-defs.EINVAL)
 	}
 
-	err := proc.Vmregion.Remove(addrn, len, proc.Ulim.Novma)
+	err := p.Aspace.Vmregion.Remove(addrn, len, p.Ulim.Novma)
 	if err != 0 {
 		lhits++
 		return int(err)
 	}
 	// addrn must be page-aligned
-	len = common.Roundup(len, common.PGSIZE)
-	for i := 0; i < len; i += common.PGSIZE {
-		p := addrn + i
-		if p < common.USERMIN {
+	len = util.Roundup(len, mem.PGSIZE)
+	for i := 0; i < len; i += mem.PGSIZE {
+		a := addrn + i
+		if a < mem.USERMIN {
 			panic("how")
 		}
-		proc.Page_remove(p)
+		p.Aspace.Page_remove(a)
 	}
-	pgs := len >> common.PGSHIFT
-	proc.Tlbshoot(uintptr(addrn), pgs)
+	pgs := len >> vm.PGSHIFT
+	p.Aspace.Tlbshoot(uintptr(addrn), pgs)
 	return 0
 }
 
-func sys_readv(proc *common.Proc_t, fdn, _iovn, iovcnt int) int {
-	fd, err := _fd_read(proc, fdn)
+func sys_readv(p *proc.Proc_t, fdn, _iovn, iovcnt int) int {
+	fd, err := _fd_read(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
 	iovn := uint(_iovn)
-	iov := &common.Useriovec_t{}
-	if err := iov.Iov_init(proc, iovn, iovcnt); err != 0 {
+	iov := &vm.Useriovec_t{}
+	if err := iov.Iov_init(&p.Aspace, iovn, iovcnt); err != 0 {
 		return int(err)
 	}
-	ret, err := fd.Fops.Read(proc, iov)
+	ret, err := fd.Fops.Read(iov)
 	if err != 0 {
 		return int(err)
 	}
 	return ret
 }
 
-func sys_writev(proc *common.Proc_t, fdn, _iovn, iovcnt int) int {
-	fd, err := _fd_write(proc, fdn)
+func sys_writev(p *proc.Proc_t, fdn, _iovn, iovcnt int) int {
+	fd, err := _fd_write(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
 	iovn := uint(_iovn)
-	iov := &common.Useriovec_t{}
-	if err := iov.Iov_init(proc, iovn, iovcnt); err != 0 {
+	iov := &vm.Useriovec_t{}
+	if err := iov.Iov_init(&p.Aspace, iovn, iovcnt); err != 0 {
 		return int(err)
 	}
-	ret, err := fd.Fops.Write(proc, iov)
+	ret, err := fd.Fops.Write(iov)
 	if err != 0 {
 		return int(err)
 	}
 	return ret
 }
 
-func sys_sigaction(proc *common.Proc_t, sig, actn, oactn int) int {
+func sys_sigaction(p *proc.Proc_t, sig, actn, oactn int) int {
 	panic("no imp")
 }
 
-func sys_access(proc *common.Proc_t, pathn, mode int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_access(p *proc.Proc_t, pathn, mode int) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
 	if mode == 0 {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 
-	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := thefs.Fs_open_inner(path, common.O_RDONLY, 0, pi, 0, 0)
+	fsf, err := thefs.Fs_open_inner(path, defs.O_RDONLY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
@@ -634,78 +639,78 @@ func sys_access(proc *common.Proc_t, pathn, mode int) int {
 	return ret
 }
 
-func sys_dup2(proc *common.Proc_t, oldn, newn int) int {
+func sys_dup2(p *proc.Proc_t, oldn, newn int) int {
 	if oldn == newn {
 		return newn
 	}
-	ofd, needclose, err := proc.Fd_dup(oldn, newn)
+	ofd, needclose, err := p.Fd_dup(oldn, newn)
 	if err != 0 {
 		return int(err)
 	}
 	if needclose {
-		common.Close_panic(ofd)
+		fd.Close_panic(ofd)
 	}
 	return newn
 }
 
-func sys_stat(proc *common.Proc_t, pathn, statn int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_stat(p *proc.Proc_t, pathn, statn int) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
-	buf := &common.Stat_t{}
-	err = thefs.Fs_stat(path, buf, proc.Cwd().Fops.Pathi())
+	buf := &stat.Stat_t{}
+	err = thefs.Fs_stat(path, buf, p.Cwd)
 	if err != 0 {
 		return int(err)
 	}
-	return int(proc.K2user(buf.Bytes(), statn))
+	return int(p.Aspace.K2user(buf.Bytes(), statn))
 }
 
-func sys_fstat(proc *common.Proc_t, fdn int, statn int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_fstat(p *proc.Proc_t, fdn int, statn int) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
-	buf := &common.Stat_t{}
+	buf := &stat.Stat_t{}
 	err := fd.Fops.Fstat(buf)
 	if err != 0 {
 		return int(err)
 	}
 
-	return int(proc.K2user(buf.Bytes(), statn))
+	return int(p.Aspace.K2user(buf.Bytes(), statn))
 }
 
 // converts internal states to poll states
 // pokes poll status bits into user memory. since we only use one priority
 // internally, mask away any POLL bits the user didn't not request.
-func _ready2rev(orig int, r common.Ready_t) int {
-	inmask := common.POLLIN | common.POLLPRI
-	outmask := common.POLLOUT | common.POLLWRBAND
+func _ready2rev(orig int, r fdops.Ready_t) int {
+	inmask := defs.POLLIN | defs.POLLPRI
+	outmask := defs.POLLOUT | defs.POLLWRBAND
 	pbits := 0
-	if r&common.R_READ != 0 {
+	if r&fdops.R_READ != 0 {
 		pbits |= inmask
 	}
-	if r&common.R_WRITE != 0 {
+	if r&fdops.R_WRITE != 0 {
 		pbits |= outmask
 	}
-	if r&common.R_HUP != 0 {
-		pbits |= common.POLLHUP
+	if r&fdops.R_HUP != 0 {
+		pbits |= defs.POLLHUP
 	}
-	if r&common.R_ERROR != 0 {
-		pbits |= common.POLLERR
+	if r&fdops.R_ERROR != 0 {
+		pbits |= defs.POLLERR
 	}
-	wantevents := ((orig >> 32) & 0xffff) | common.POLLNVAL | common.POLLERR | common.POLLHUP
+	wantevents := ((orig >> 32) & 0xffff) | defs.POLLNVAL | defs.POLLERR | defs.POLLHUP
 	revents := wantevents & pbits
 	return orig | (revents << 48)
 }
 
-func _checkfds(proc *common.Proc_t, tid common.Tid_t, pm *common.Pollmsg_t, wait bool, buf []uint8,
-	nfds int) (int, bool, common.Err_t) {
-	inmask := common.POLLIN | common.POLLPRI
-	outmask := common.POLLOUT | common.POLLWRBAND
+func _checkfds(p *proc.Proc_t, tid defs.Tid_t, pm *fdops.Pollmsg_t, wait bool, buf []uint8,
+	nfds int) (int, bool, defs.Err_t) {
+	inmask := defs.POLLIN | defs.POLLPRI
+	outmask := defs.POLLOUT | defs.POLLWRBAND
 	readyfds := 0
 	writeback := false
-	proc.Fdl.Lock()
+	p.Fdl.Lock()
 	for i := 0; i < nfds; i++ {
 		off := i * 8
 		uw := readn(buf, 8, off)
@@ -714,31 +719,31 @@ func _checkfds(proc *common.Proc_t, tid common.Tid_t, pm *common.Pollmsg_t, wait
 		if fdn < 0 {
 			continue
 		}
-		fd, ok := proc.Fd_get_inner(fdn)
+		fd, ok := p.Fd_get_inner(fdn)
 		if !ok {
-			uw |= common.POLLNVAL
+			uw |= defs.POLLNVAL
 			writen(buf, 8, off, uw)
 			writeback = true
 			continue
 		}
-		var pev common.Ready_t
+		var pev fdops.Ready_t
 		events := int((uint(uw) >> 32) & 0xffff)
 		// one priority
 		if events&inmask != 0 {
-			pev |= common.R_READ
+			pev |= fdops.R_READ
 		}
 		if events&outmask != 0 {
-			pev |= common.R_WRITE
+			pev |= fdops.R_WRITE
 		}
-		if events&common.POLLHUP != 0 {
-			pev |= common.R_HUP
+		if events&defs.POLLHUP != 0 {
+			pev |= fdops.R_HUP
 		}
 		// poll unconditionally reports ERR, HUP, and NVAL
-		pev |= common.R_ERROR | common.R_HUP
+		pev |= fdops.R_ERROR | fdops.R_HUP
 		pm.Pm_set(tid, pev, wait)
 		devstatus, err := fd.Fops.Pollone(*pm)
 		if err != 0 {
-			proc.Fdl.Unlock()
+			p.Fdl.Unlock()
 			return 0, false, err
 		}
 		if devstatus != 0 {
@@ -751,13 +756,13 @@ func _checkfds(proc *common.Proc_t, tid common.Tid_t, pm *common.Pollmsg_t, wait
 			writeback = true
 		}
 	}
-	proc.Fdl.Unlock()
+	p.Fdl.Unlock()
 	return readyfds, writeback, 0
 }
 
-func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) int {
+func sys_poll(p *proc.Proc_t, tid defs.Tid_t, fdsn, nfds, timeout int) int {
 	if nfds < 0 || timeout < -1 {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 
 	// copy pollfds from userspace to avoid reading/writing overhead
@@ -770,10 +775,10 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 		// fall back to holding lock over user pmap if they want to
 		// poll so many fds.
 		fmt.Printf("poll limit hit\n")
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	buf := make([]uint8, sz)
-	if err := proc.User2k(buf, fdsn); err != 0 {
+	if err := p.Aspace.User2k(buf, fdsn); err != 0 {
 		return int(err)
 	}
 
@@ -781,21 +786,21 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 	// ready. if a device is immediately ready, we don't bother to register
 	// notifiers with the rest of the devices -- we just ask their status
 	// too.
-	gimme := common.Bounds(common.B_SYS_POLL)
-	pm := common.Pollmsg_t{}
+	gimme := bounds.Bounds(bounds.B_SYS_POLL)
+	pm := fdops.Pollmsg_t{}
 	for {
 		// its ok to block for memory here since no locks are held
-		if !common.Resadd(gimme) {
-			return int(-common.ENOHEAP)
+		if !res.Resadd(gimme) {
+			return int(-defs.ENOHEAP)
 		}
 		wait := timeout != 0
-		rfds, writeback, err := _checkfds(proc, tid, &pm, wait, buf,
+		rfds, writeback, err := _checkfds(p, tid, &pm, wait, buf,
 			nfds)
 		if err != 0 {
 			return int(err)
 		}
 		if writeback {
-			if err := proc.K2user(buf, fdsn); err != 0 {
+			if err := p.Aspace.K2user(buf, fdsn); err != 0 {
 				return int(err)
 			}
 		}
@@ -816,10 +821,10 @@ func sys_poll(proc *common.Proc_t, tid common.Tid_t, fdsn, nfds, timeout int) in
 	}
 }
 
-func sys_lseek(proc *common.Proc_t, fdn, off, whence int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_lseek(p *proc.Proc_t, fdn, off, whence int) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 
 	ret, err := fd.Fops.Lseek(off, whence)
@@ -829,54 +834,54 @@ func sys_lseek(proc *common.Proc_t, fdn, off, whence int) int {
 	return ret
 }
 
-func sys_pipe2(proc *common.Proc_t, pipen, _flags int) int {
-	rfp := common.FD_READ
-	wfp := common.FD_WRITE
+func sys_pipe2(p *proc.Proc_t, pipen, _flags int) int {
+	rfp := fd.FD_READ
+	wfp := fd.FD_WRITE
 
-	flags := common.Fdopt_t(_flags)
-	var opts common.Fdopt_t
-	if flags&common.O_NONBLOCK != 0 {
-		opts |= common.O_NONBLOCK
+	flags := defs.Fdopt_t(_flags)
+	var opts defs.Fdopt_t
+	if flags&defs.O_NONBLOCK != 0 {
+		opts |= defs.O_NONBLOCK
 	}
 
-	if flags&common.O_CLOEXEC != 0 {
-		rfp |= common.FD_CLOEXEC
-		wfp |= common.FD_CLOEXEC
+	if flags&defs.O_CLOEXEC != 0 {
+		rfp |= fd.FD_CLOEXEC
+		wfp |= fd.FD_CLOEXEC
 	}
 
 	// if there is an error, pipe_t.op_reopen() will release the pipe
 	// reservation.
-	if !common.Syslimit.Pipes.Take() {
+	if !limits.Syslimit.Pipes.Take() {
 		lhits++
-		return int(-common.ENOMEM)
+		return int(-defs.ENOMEM)
 	}
 
-	p := &pipe_t{lraise: true}
-	p.pipe_start()
-	rops := &pipefops_t{pipe: p, writer: false, options: opts}
-	wops := &pipefops_t{pipe: p, writer: true, options: opts}
-	rpipe := &common.Fd_t{Fops: rops}
-	wpipe := &common.Fd_t{Fops: wops}
-	rfd, wfd, ok := proc.Fd_insert2(rpipe, rfp, wpipe, wfp)
+	pp := &pipe_t{lraise: true}
+	pp.pipe_start()
+	rops := &pipefops_t{pipe: pp, writer: false, options: opts}
+	wops := &pipefops_t{pipe: pp, writer: true, options: opts}
+	rpipe := &fd.Fd_t{Fops: rops}
+	wpipe := &fd.Fd_t{Fops: wops}
+	rfd, wfd, ok := p.Fd_insert2(rpipe, rfp, wpipe, wfp)
 	if !ok {
-		common.Close_panic(rpipe)
-		common.Close_panic(wpipe)
-		return int(-common.EMFILE)
+		fd.Close_panic(rpipe)
+		fd.Close_panic(wpipe)
+		return int(-defs.EMFILE)
 	}
 
-	err := proc.Userwriten(pipen, 4, rfd)
+	err := p.Aspace.Userwriten(pipen, 4, rfd)
 	if err != 0 {
 		goto bail
 	}
-	err = proc.Userwriten(pipen+4, 4, wfd)
+	err = p.Aspace.Userwriten(pipen+4, 4, wfd)
 	if err != 0 {
 		goto bail
 	}
 	return 0
 
 bail:
-	err1 := sys.Sys_close(proc, rfd)
-	err2 := sys.Sys_close(proc, wfd)
+	err1 := sys.Sys_close(p, rfd)
+	err2 := sys.Sys_close(p, wfd)
 	if err1 != 0 || err2 != 0 {
 		panic("must succeed")
 	}
@@ -891,7 +896,7 @@ type pipe_t struct {
 	readers int
 	writers int
 	closed  bool
-	pollers common.Pollers_t
+	pollers fdops.Pollers_t
 	passfds passfd_t
 	// if true, this pipe was allocated against the pipe limit; raise it on
 	// termination.
@@ -899,14 +904,14 @@ type pipe_t struct {
 }
 
 func (o *pipe_t) pipe_start() {
-	pipesz := common.PGSIZE
+	pipesz := mem.PGSIZE
 	o.cbuf.cb_init(pipesz)
 	o.readers, o.writers = 1, 1
 	o.rcond = sync.NewCond(o)
 	o.wcond = sync.NewCond(o)
 }
 
-func (o *pipe_t) op_write(src common.Userio_i, noblock bool) (int, common.Err_t) {
+func (o *pipe_t) op_write(src fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 	const pipe_buf = 4096
 	need := src.Remain()
 	if need > pipe_buf {
@@ -920,20 +925,20 @@ func (o *pipe_t) op_write(src common.Userio_i, noblock bool) (int, common.Err_t)
 	for {
 		if o.closed {
 			o.Unlock()
-			return 0, -common.EBADF
+			return 0, -defs.EBADF
 		}
 		if o.readers == 0 {
 			o.Unlock()
-			return 0, -common.EPIPE
+			return 0, -defs.EPIPE
 		}
 		if o.cbuf.left() >= need {
 			break
 		}
 		if noblock {
 			o.Unlock()
-			return 0, -common.EWOULDBLOCK
+			return 0, -defs.EWOULDBLOCK
 		}
-		if err := common.KillableWait(o.wcond); err != 0 {
+		if err := proc.KillableWait(o.wcond); err != 0 {
 			o.Unlock()
 			return 0, err
 		}
@@ -944,27 +949,27 @@ func (o *pipe_t) op_write(src common.Userio_i, noblock bool) (int, common.Err_t)
 		return 0, err
 	}
 	o.rcond.Signal()
-	o.pollers.Wakeready(common.R_READ)
+	o.pollers.Wakeready(fdops.R_READ)
 	o.Unlock()
 
 	return ret, 0
 }
 
-func (o *pipe_t) op_read(dst common.Userio_i, noblock bool) (int, common.Err_t) {
+func (o *pipe_t) op_read(dst fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 	o.Lock()
 	for {
 		if o.closed {
 			o.Unlock()
-			return 0, -common.EBADF
+			return 0, -defs.EBADF
 		}
 		if o.writers == 0 || !o.cbuf.empty() {
 			break
 		}
 		if noblock {
 			o.Unlock()
-			return 0, -common.EWOULDBLOCK
+			return 0, -defs.EWOULDBLOCK
 		}
-		if err := common.KillableWait(o.rcond); err != 0 {
+		if err := proc.KillableWait(o.rcond); err != 0 {
 			o.Unlock()
 			return 0, err
 		}
@@ -975,13 +980,13 @@ func (o *pipe_t) op_read(dst common.Userio_i, noblock bool) (int, common.Err_t) 
 		return 0, err
 	}
 	o.wcond.Signal()
-	o.pollers.Wakeready(common.R_WRITE)
+	o.pollers.Wakeready(fdops.R_WRITE)
 	o.Unlock()
 
 	return ret, 0
 }
 
-func (o *pipe_t) op_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (o *pipe_t) op_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	o.Lock()
 
 	if o.closed {
@@ -989,7 +994,7 @@ func (o *pipe_t) op_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
 		return 0, 0
 	}
 
-	var r common.Ready_t
+	var r fdops.Ready_t
 	readable := false
 	if !o.cbuf.empty() || o.writers == 0 {
 		readable = true
@@ -998,13 +1003,13 @@ func (o *pipe_t) op_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
 	if !o.cbuf.full() || o.readers == 0 {
 		writeable = true
 	}
-	if pm.Events&common.R_READ != 0 && readable {
-		r |= common.R_READ
+	if pm.Events&fdops.R_READ != 0 && readable {
+		r |= fdops.R_READ
 	}
-	if pm.Events&common.R_HUP != 0 && o.writers == 0 {
-		r |= common.R_HUP
-	} else if pm.Events&common.R_WRITE != 0 && writeable {
-		r |= common.R_WRITE
+	if pm.Events&fdops.R_HUP != 0 && o.writers == 0 {
+		r |= fdops.R_HUP
+	} else if pm.Events&fdops.R_WRITE != 0 && writeable {
+		r |= fdops.R_WRITE
 	}
 	if r != 0 || !pm.Dowait {
 		o.Unlock()
@@ -1015,11 +1020,11 @@ func (o *pipe_t) op_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
 	return 0, err
 }
 
-func (o *pipe_t) op_reopen(rd, wd int) common.Err_t {
+func (o *pipe_t) op_reopen(rd, wd int) defs.Err_t {
 	o.Lock()
 	if o.closed {
 		o.Unlock()
-		return -common.EBADF
+		return -defs.EBADF
 	}
 	o.readers += rd
 	o.writers += wd
@@ -1034,26 +1039,26 @@ func (o *pipe_t) op_reopen(rd, wd int) common.Err_t {
 		o.cbuf.cb_release()
 		o.passfds.closeall()
 		if o.lraise {
-			common.Syslimit.Pipes.Give()
+			limits.Syslimit.Pipes.Give()
 		}
 	}
 	o.Unlock()
 	return 0
 }
 
-func (o *pipe_t) op_fdadd(nfd *common.Fd_t) common.Err_t {
+func (o *pipe_t) op_fdadd(nfd *fd.Fd_t) defs.Err_t {
 	o.Lock()
 	defer o.Unlock()
 
 	for !o.passfds.add(nfd) {
-		if err := common.KillableWait(o.wcond); err != 0 {
+		if err := proc.KillableWait(o.wcond); err != 0 {
 			return err
 		}
 	}
 	return 0
 }
 
-func (o *pipe_t) op_fdtake() (*common.Fd_t, bool) {
+func (o *pipe_t) op_fdtake() (*fd.Fd_t, bool) {
 	o.Lock()
 	defer o.Unlock()
 	ret, ok := o.passfds.take()
@@ -1066,12 +1071,12 @@ func (o *pipe_t) op_fdtake() (*common.Fd_t, bool) {
 
 type pipefops_t struct {
 	pipe    *pipe_t
-	options common.Fdopt_t
+	options defs.Fdopt_t
 	writer  bool
 }
 
-func (of *pipefops_t) Close() common.Err_t {
-	var ret common.Err_t
+func (of *pipefops_t) Close() defs.Err_t {
+	var ret defs.Err_t
 	if of.writer {
 		ret = of.pipe.op_reopen(0, -1)
 	} else {
@@ -1080,7 +1085,7 @@ func (of *pipefops_t) Close() common.Err_t {
 	return ret
 }
 
-func (of *pipefops_t) Fstat(st *common.Stat_t) common.Err_t {
+func (of *pipefops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	// linux and openbsd give same mode for all pipes
 	st.Wdev(0)
 	pipemode := uint(3 << 16)
@@ -1088,25 +1093,25 @@ func (of *pipefops_t) Fstat(st *common.Stat_t) common.Err_t {
 	return 0
 }
 
-func (of *pipefops_t) Lseek(int, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (of *pipefops_t) Lseek(int, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (of *pipefops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.EINVAL
+func (of *pipefops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.EINVAL
 }
 
-func (of *pipefops_t) Pathi() common.Inum_t {
+func (of *pipefops_t) Pathi() defs.Inum_t {
 	panic("pipe cwd")
 }
 
-func (of *pipefops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
-	noblk := of.options&common.O_NONBLOCK != 0
+func (of *pipefops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
+	noblk := of.options&defs.O_NONBLOCK != 0
 	return of.pipe.op_read(dst, noblk)
 }
 
-func (of *pipefops_t) Reopen() common.Err_t {
-	var ret common.Err_t
+func (of *pipefops_t) Reopen() defs.Err_t {
+	var ret defs.Err_t
 	if of.writer {
 		ret = of.pipe.op_reopen(0, 1)
 	} else {
@@ -1115,12 +1120,12 @@ func (of *pipefops_t) Reopen() common.Err_t {
 	return ret
 }
 
-func (of *pipefops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
-	noblk := of.options&common.O_NONBLOCK != 0
+func (of *pipefops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
+	noblk := of.options&defs.O_NONBLOCK != 0
 	c := 0
 	for c != src.Totalsz() {
-		if !common.Resadd(common.Bounds(common.B_PIPEFOPS_T_WRITE)) {
-			return c, -common.ENOHEAP
+		if !res.Resadd(bounds.Bounds(bounds.B_PIPEFOPS_T_WRITE)) {
+			return c, -defs.ENOHEAP
 		}
 		ret, err := of.pipe.op_write(src, noblk)
 		if noblk || err != 0 {
@@ -1131,84 +1136,80 @@ func (of *pipefops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.
 	return c, 0
 }
 
-func (of *pipefops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
+func (of *pipefops_t) Truncate(uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (of *pipefops_t) Truncate(uint) common.Err_t {
-	return -common.EINVAL
+func (of *pipefops_t) Pread(fdops.Userio_i, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (of *pipefops_t) Pread(common.Userio_i, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (of *pipefops_t) Pwrite(fdops.Userio_i, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (of *pipefops_t) Pwrite(common.Userio_i, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (of *pipefops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
+	return nil, 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
-	return nil, 0, -common.ENOTSOCK
+func (of *pipefops_t) Bind([]uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Bind(*common.Proc_t, []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (of *pipefops_t) Connect([]uint8) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Connect(*common.Proc_t, []uint8) common.Err_t {
-	return -common.ENOTSOCK
+func (of *pipefops_t) Listen(int) (fdops.Fdops_i, defs.Err_t) {
+	return nil, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Listen(*common.Proc_t, int) (common.Fdops_i, common.Err_t) {
-	return nil, -common.ENOTSOCK
+func (of *pipefops_t) Sendmsg(fdops.Userio_i, []uint8, []uint8,
+	int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
-	int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+func (of *pipefops_t) Recvmsg(fdops.Userio_i, fdops.Userio_i,
+	fdops.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+	return 0, 0, 0, 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Recvmsg(*common.Proc_t, common.Userio_i, common.Userio_i,
-	common.Userio_i, int) (int, int, int, common.Msgfl_t, common.Err_t) {
-	return 0, 0, 0, 0, -common.ENOTSOCK
-}
-
-func (of *pipefops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (of *pipefops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	if of.writer {
-		pm.Events &^= common.R_READ
+		pm.Events &^= fdops.R_READ
 	} else {
-		pm.Events &^= common.R_WRITE
+		pm.Events &^= fdops.R_WRITE
 	}
 	return of.pipe.op_poll(pm)
 }
 
-func (of *pipefops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (of *pipefops_t) Fcntl(cmd, opt int) int {
 	switch cmd {
-	case common.F_GETFL:
+	case defs.F_GETFL:
 		return int(of.options)
-	case common.F_SETFL:
-		of.options = common.Fdopt_t(opt)
+	case defs.F_SETFL:
+		of.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
 	}
 }
 
-func (of *pipefops_t) Getsockopt(*common.Proc_t, int, common.Userio_i, int) (int, common.Err_t) {
-	return 0, -common.ENOTSOCK
+func (of *pipefops_t) Getsockopt(int, fdops.Userio_i, int) (int, defs.Err_t) {
+	return 0, -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.ENOTSOCK
+func (of *pipefops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
-func (of *pipefops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTCONN
+func (of *pipefops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTCONN
 }
 
-func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
-	old, err1 := proc.Userstr(oldn, fs.NAME_MAX)
-	new, err2 := proc.Userstr(newn, fs.NAME_MAX)
+func sys_rename(p *proc.Proc_t, oldn int, newn int) int {
+	old, err1 := p.Aspace.Userstr(oldn, fs.NAME_MAX)
+	new, err2 := p.Aspace.Userstr(newn, fs.NAME_MAX)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1223,12 +1224,12 @@ func sys_rename(proc *common.Proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return int(err2)
 	}
-	err := thefs.Fs_rename(old, new, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_rename(old, new, p.Cwd)
 	return int(err)
 }
 
-func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_mkdir(p *proc.Proc_t, pathn int, mode int) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -1236,13 +1237,13 @@ func sys_mkdir(proc *common.Proc_t, pathn int, mode int) int {
 	if err != 0 {
 		return int(err)
 	}
-	err = thefs.Fs_mkdir(path, mode, proc.Cwd().Fops.Pathi())
+	err = thefs.Fs_mkdir(path, mode, p.Cwd)
 	return int(err)
 }
 
-func sys_link(proc *common.Proc_t, oldn int, newn int) int {
-	old, err1 := proc.Userstr(oldn, fs.NAME_MAX)
-	new, err2 := proc.Userstr(newn, fs.NAME_MAX)
+func sys_link(p *proc.Proc_t, oldn int, newn int) int {
+	old, err1 := p.Aspace.Userstr(oldn, fs.NAME_MAX)
+	new, err2 := p.Aspace.Userstr(newn, fs.NAME_MAX)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1257,12 +1258,12 @@ func sys_link(proc *common.Proc_t, oldn int, newn int) int {
 	if err2 != 0 {
 		return int(err2)
 	}
-	err := thefs.Fs_link(old, new, proc.Cwd().Fops.Pathi())
+	err := thefs.Fs_link(old, new, p.Cwd)
 	return int(err)
 }
 
-func sys_unlink(proc *common.Proc_t, pathn, isdiri int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_unlink(p *proc.Proc_t, pathn, isdiri int) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -1271,36 +1272,36 @@ func sys_unlink(proc *common.Proc_t, pathn, isdiri int) int {
 		return int(err)
 	}
 	wantdir := isdiri != 0
-	err = thefs.Fs_unlink(path, proc.Cwd().Fops.Pathi(), wantdir)
+	err = thefs.Fs_unlink(path, p.Cwd, wantdir)
 	return int(err)
 }
 
-func sys_gettimeofday(proc *common.Proc_t, timevaln int) int {
+func sys_gettimeofday(p *proc.Proc_t, timevaln int) int {
 	tvalsz := 16
 	now := time.Now()
 	buf := make([]uint8, tvalsz)
 	us := int(now.UnixNano() / 1000)
 	writen(buf, 8, 0, us/1e6)
 	writen(buf, 8, 8, us%1e6)
-	if err := proc.K2user(buf, timevaln); err != 0 {
+	if err := p.Aspace.K2user(buf, timevaln); err != 0 {
 		return int(err)
 	}
 	return 0
 }
 
-var _rlimits = map[int]uint{common.RLIMIT_NOFILE: common.RLIM_INFINITY}
+var _rlimits = map[int]uint{defs.RLIMIT_NOFILE: defs.RLIM_INFINITY}
 
-func sys_getrlimit(proc *common.Proc_t, resn, rlpn int) int {
+func sys_getrlimit(p *proc.Proc_t, resn, rlpn int) int {
 	var cur uint
 	switch resn {
-	case common.RLIMIT_NOFILE:
-		cur = proc.Ulim.Nofile
+	case defs.RLIMIT_NOFILE:
+		cur = p.Ulim.Nofile
 	default:
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	max := _rlimits[resn]
-	err1 := proc.Userwriten(rlpn, 8, int(cur))
-	err2 := proc.Userwriten(rlpn+8, 8, int(max))
+	err1 := p.Aspace.Userwriten(rlpn, 8, int(cur))
+	err2 := p.Aspace.Userwriten(rlpn+8, 8, int(max))
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1310,34 +1311,34 @@ func sys_getrlimit(proc *common.Proc_t, resn, rlpn int) int {
 	return 0
 }
 
-func sys_setrlimit(proc *common.Proc_t, resn, rlpn int) int {
+func sys_setrlimit(p *proc.Proc_t, resn, rlpn int) int {
 	// XXX root can raise max
-	_ncur, err := proc.Userreadn(rlpn, 8)
+	_ncur, err := p.Aspace.Userreadn(rlpn, 8)
 	if err != 0 {
 		return int(err)
 	}
 	ncur := uint(_ncur)
 	if ncur > _rlimits[resn] {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	switch resn {
-	case common.RLIMIT_NOFILE:
-		proc.Ulim.Nofile = ncur
+	case defs.RLIMIT_NOFILE:
+		p.Ulim.Nofile = ncur
 	default:
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	return 0
 }
 
-func sys_getrusage(proc *common.Proc_t, who, rusagep int) int {
+func sys_getrusage(p *proc.Proc_t, who, rusagep int) int {
 	var ru []uint8
-	if who == common.RUSAGE_SELF {
+	if who == defs.RUSAGE_SELF {
 		// user time is gathered at thread termination... report user
 		// time as best as we can
-		tmp := proc.Atime
+		tmp := p.Atime
 
-		proc.Threadi.Lock()
-		for tid := range proc.Threadi.Notes {
+		p.Threadi.Lock()
+		for tid := range p.Threadi.Notes {
 			if tid == 0 {
 			}
 			val := 42
@@ -1347,18 +1348,18 @@ func sys_getrusage(proc *common.Proc_t, who, rusagep int) int {
 				tmp.Userns += int64(val)
 			}
 		}
-		proc.Threadi.Unlock()
+		p.Threadi.Unlock()
 
 		ru = tmp.To_rusage()
-	} else if who == common.RUSAGE_CHILDREN {
-		ru = proc.Catime.Fetch()
+	} else if who == defs.RUSAGE_CHILDREN {
+		ru = p.Catime.Fetch()
 	} else {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
-	if err := proc.K2user(ru, rusagep); err != 0 {
+	if err := p.Aspace.K2user(ru, rusagep); err != 0 {
 		return int(err)
 	}
-	return int(-common.ENOSYS)
+	return int(-defs.ENOSYS)
 }
 
 func mkdev(_maj, _min int) uint {
@@ -1375,8 +1376,8 @@ func unmkdev(d uint) (int, int) {
 	return int(d >> 40), int(uint8(d >> 32))
 }
 
-func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_mknod(p *proc.Proc_t, pathn, moden, devn int) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -1386,7 +1387,7 @@ func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
 		return int(err)
 	}
 	maj, min := unmkdev(uint(devn))
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT, 0, proc.Cwd().Fops.Pathi(), maj, min)
+	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT, 0, p.Cwd, maj, min)
 	if err != 0 {
 		return int(err)
 	}
@@ -1396,11 +1397,11 @@ func sys_mknod(proc *common.Proc_t, pathn, moden, devn int) int {
 	return 0
 }
 
-func sys_sync(proc *common.Proc_t) int {
+func sys_sync(p *proc.Proc_t) int {
 	return int(thefs.Fs_sync())
 }
 
-func sys_reboot(proc *common.Proc_t) int {
+func sys_reboot(p *proc.Proc_t) int {
 	// mov'ing to cr3 does not flush global pages. if, before loading the
 	// zero page into cr3 below, there are just enough TLB entries to
 	// dispatch a fault, but not enough to complete the fault handler, the
@@ -1409,19 +1410,19 @@ func sys_reboot(proc *common.Proc_t) int {
 	pge := uintptr(1 << 7)
 	runtime.Lcr4(runtime.Rcr4() &^ pge)
 	// who needs ACPI?
-	runtime.Lcr3(uintptr(common.P_zeropg))
+	runtime.Lcr3(uintptr(mem.P_zeropg))
 	// poof
 	fmt.Printf("what?\n")
 	return 0
 }
 
-func sys_nanosleep(proc *common.Proc_t, sleeptsn, remaintsn int) int {
-	tot, _, err := proc.Usertimespec(sleeptsn)
+func sys_nanosleep(p *proc.Proc_t, sleeptsn, remaintsn int) int {
+	tot, _, err := p.Aspace.Usertimespec(sleeptsn)
 	if err != 0 {
 		return int(err)
 	}
 	tochan := time.After(tot)
-	kn := &common.Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 	select {
 	case <-tochan:
 		return 0
@@ -1433,129 +1434,129 @@ func sys_nanosleep(proc *common.Proc_t, sleeptsn, remaintsn int) int {
 	}
 }
 
-func sys_getpid(proc *common.Proc_t, tid common.Tid_t) int {
-	return proc.Pid
+func sys_getpid(p *proc.Proc_t, tid defs.Tid_t) int {
+	return p.Pid
 }
 
-func sys_getppid(proc *common.Proc_t, tid common.Tid_t) int {
-	return proc.Pwait.Pid
+func sys_getppid(p *proc.Proc_t, tid defs.Tid_t) int {
+	return p.Pwait.Pid
 }
 
-func sys_socket(proc *common.Proc_t, domain, typ, proto int) int {
-	var opts common.Fdopt_t
-	if typ&common.SOCK_NONBLOCK != 0 {
-		opts |= common.O_NONBLOCK
+func sys_socket(p *proc.Proc_t, domain, typ, proto int) int {
+	var opts defs.Fdopt_t
+	if typ&defs.SOCK_NONBLOCK != 0 {
+		opts |= defs.O_NONBLOCK
 	}
 	var clop int
-	if typ&common.SOCK_CLOEXEC != 0 {
-		clop = common.FD_CLOEXEC
+	if typ&defs.SOCK_CLOEXEC != 0 {
+		clop = fd.FD_CLOEXEC
 	}
 
-	var sfops common.Fdops_i
+	var sfops fdops.Fdops_i
 	switch {
-	case domain == common.AF_UNIX && typ&common.SOCK_DGRAM != 0:
+	case domain == defs.AF_UNIX && typ&defs.SOCK_DGRAM != 0:
 		if opts != 0 {
 			panic("no imp")
 		}
 		sfops = &sudfops_t{open: 1}
-	case domain == common.AF_UNIX && typ&common.SOCK_STREAM != 0:
+	case domain == defs.AF_UNIX && typ&defs.SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
-	case domain == common.AF_INET && typ&common.SOCK_STREAM != 0:
+	case domain == defs.AF_INET && typ&defs.SOCK_STREAM != 0:
 		tfops := &tcpfops_t{tcb: &tcptcb_t{}, options: opts}
 		tfops.tcb.openc = 1
 		sfops = tfops
 	default:
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
-	if !common.Syslimit.Socks.Take() {
+	if !limits.Syslimit.Socks.Take() {
 		lhits++
-		return int(-common.ENOMEM)
+		return int(-defs.ENOMEM)
 	}
-	file := &common.Fd_t{}
+	file := &fd.Fd_t{}
 	file.Fops = sfops
-	fdn, ok := proc.Fd_insert(file, common.FD_READ|common.FD_WRITE|clop)
+	fdn, ok := p.Fd_insert(file, fd.FD_READ|fd.FD_WRITE|clop)
 	if !ok {
-		common.Close_panic(file)
-		common.Syslimit.Socks.Give()
-		return int(-common.EMFILE)
+		fd.Close_panic(file)
+		limits.Syslimit.Socks.Give()
+		return int(-defs.EMFILE)
 	}
 	return fdn
 }
 
-func sys_connect(proc *common.Proc_t, fdn, sockaddrn, socklen int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_connect(p *proc.Proc_t, fdn, sockaddrn, socklen int) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 
 	// copy sockaddr to kernel space to avoid races
-	sabuf, err := copysockaddr(proc, sockaddrn, socklen)
+	sabuf, err := copysockaddr(p, sockaddrn, socklen)
 	if err != 0 {
 		return int(err)
 	}
-	err = fd.Fops.Connect(proc, sabuf)
+	err = fd.Fops.Connect(sabuf)
 	return int(err)
 }
 
-func sys_accept(proc *common.Proc_t, fdn, sockaddrn, socklenn int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_accept(p *proc.Proc_t, fdn, sockaddrn, socklenn int) int {
+	f, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 	var sl int
 	if socklenn != 0 {
-		l, err := proc.Userreadn(socklenn, 8)
+		l, err := p.Aspace.Userreadn(socklenn, 8)
 		if err != 0 {
 			return int(err)
 		}
 		if l < 0 {
-			return int(-common.EFAULT)
+			return int(-defs.EFAULT)
 		}
 		sl = l
 	}
-	fromsa := proc.Mkuserbuf(sockaddrn, sl)
-	newfops, fromlen, err := fd.Fops.Accept(proc, fromsa)
-	//common.Ubpool.Put(fromsa)
+	fromsa := p.Aspace.Mkuserbuf(sockaddrn, sl)
+	newfops, fromlen, err := f.Fops.Accept(fromsa)
+	//proc.Ubpool.Put(fromsa)
 	if err != 0 {
 		return int(err)
 	}
 	if fromlen != 0 {
-		if err := proc.Userwriten(socklenn, 8, fromlen); err != 0 {
+		if err := p.Aspace.Userwriten(socklenn, 8, fromlen); err != 0 {
 			return int(err)
 		}
 	}
-	newfd := &common.Fd_t{Fops: newfops}
-	ret, ok := proc.Fd_insert(newfd, common.FD_READ|common.FD_WRITE)
+	newfd := &fd.Fd_t{Fops: newfops}
+	ret, ok := p.Fd_insert(newfd, fd.FD_READ|fd.FD_WRITE)
 	if !ok {
-		common.Close_panic(newfd)
-		return int(-common.EMFILE)
+		fd.Close_panic(newfd)
+		return int(-defs.EMFILE)
 	}
 	return ret
 }
 
-func copysockaddr(proc *common.Proc_t, san, sl int) ([]uint8, common.Err_t) {
+func copysockaddr(p *proc.Proc_t, san, sl int) ([]uint8, defs.Err_t) {
 	if sl == 0 {
 		return nil, 0
 	}
 	if sl < 0 {
-		return nil, -common.EFAULT
+		return nil, -defs.EFAULT
 	}
 	maxsl := 256
 	if sl >= maxsl {
-		return nil, -common.ENOTSOCK
+		return nil, -defs.ENOTSOCK
 	}
-	ub := proc.Mkuserbuf(san, sl)
+	ub := p.Aspace.Mkuserbuf(san, sl)
 	sabuf := make([]uint8, sl)
 	_, err := ub.Uioread(sabuf)
-	//common.Ubpool.Put(ub)
+	//proc.Ubpool.Put(ub)
 	if err != 0 {
 		return nil, err
 	}
 	return sabuf, 0
 }
 
-func sys_sendto(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
-	fd, err := _fd_write(proc, fdn)
+func sys_sendto(p *proc.Proc_t, fdn, bufn, flaglen, sockaddrn, socklen int) int {
+	fd, err := _fd_write(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
@@ -1565,27 +1566,27 @@ func sys_sendto(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn, socklen int)
 	}
 	buflen := int(uint(flaglen) >> 32)
 	if buflen < 0 {
-		return int(-common.EFAULT)
+		return int(-defs.EFAULT)
 	}
 
 	// copy sockaddr to kernel space to avoid races
-	sabuf, err := copysockaddr(proc, sockaddrn, socklen)
+	sabuf, err := copysockaddr(p, sockaddrn, socklen)
 	if err != 0 {
 		return int(err)
 	}
 
-	buf := proc.Mkuserbuf(bufn, buflen)
-	ret, err := fd.Fops.Sendmsg(proc, buf, sabuf, nil, flags)
-	//common.Ubpool.Put(buf)
+	buf := p.Aspace.Mkuserbuf(bufn, buflen)
+	ret, err := fd.Fops.Sendmsg(buf, sabuf, nil, flags)
+	//proc.Ubpool.Put(buf)
 	if err != 0 {
 		return int(err)
 	}
 	return ret
 }
 
-func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
+func sys_recvfrom(p *proc.Proc_t, fdn, bufn, flaglen, sockaddrn,
 	socklenn int) int {
-	fd, err := _fd_read(proc, fdn)
+	fd, err := _fd_read(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
@@ -1594,50 +1595,50 @@ func sys_recvfrom(proc *common.Proc_t, fdn, bufn, flaglen, sockaddrn,
 		panic("no imp")
 	}
 	buflen := int(uint(flaglen) >> 32)
-	buf := proc.Mkuserbuf(bufn, buflen)
+	buf := p.Aspace.Mkuserbuf(bufn, buflen)
 
 	// is the from address requested?
 	var salen int
 	if socklenn != 0 {
-		l, err := proc.Userreadn(socklenn, 8)
+		l, err := p.Aspace.Userreadn(socklenn, 8)
 		if err != 0 {
 			return int(err)
 		}
 		salen = l
 		if salen < 0 {
-			return int(-common.EFAULT)
+			return int(-defs.EFAULT)
 		}
 	}
-	fromsa := proc.Mkuserbuf(sockaddrn, salen)
-	ret, addrlen, _, _, err := fd.Fops.Recvmsg(proc, buf, fromsa, zeroubuf, 0)
-	//common.Ubpool.Put(buf)
-	//common.Ubpool.Put(fromsa)
+	fromsa := p.Aspace.Mkuserbuf(sockaddrn, salen)
+	ret, addrlen, _, _, err := fd.Fops.Recvmsg(buf, fromsa, zeroubuf, 0)
+	//proc.Ubpool.Put(buf)
+	//proc.Ubpool.Put(fromsa)
 	if err != 0 {
 		return int(err)
 	}
 	// write new socket size to user space
 	if addrlen > 0 {
-		if err := proc.Userwriten(socklenn, 8, addrlen); err != 0 {
+		if err := p.Aspace.Userwriten(socklenn, 8, addrlen); err != 0 {
 			return int(err)
 		}
 	}
 	return ret
 }
 
-func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
+func sys_recvmsg(p *proc.Proc_t, fdn, _msgn, _flags int) int {
 	if _flags != 0 {
 		panic("no imp")
 	}
-	fd, err := _fd_read(proc, fdn)
+	fd, err := _fd_read(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
 	// maybe copy the msghdr to kernel space?
 	msgn := uint(_msgn)
-	iovn, err1 := proc.Userreadn(int(msgn+2*8), 8)
-	niov, err2 := proc.Userreadn(int(msgn+3*8), 4)
-	cmsgl, err3 := proc.Userreadn(int(msgn+5*8), 8)
-	salen, err4 := proc.Userreadn(int(msgn+1*8), 8)
+	iovn, err1 := p.Aspace.Userreadn(int(msgn+2*8), 8)
+	niov, err2 := p.Aspace.Userreadn(int(msgn+3*8), 4)
+	cmsgl, err3 := p.Aspace.Userreadn(int(msgn+5*8), 8)
+	salen, err4 := p.Aspace.Userreadn(int(msgn+1*8), 8)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1651,70 +1652,70 @@ func sys_recvmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 		return int(err4)
 	}
 
-	var saddr common.Userio_i
+	var saddr fdops.Userio_i
 	saddr = zeroubuf
 	if salen > 0 {
-		saddrn, err := proc.Userreadn(int(msgn+0*8), 8)
+		saddrn, err := p.Aspace.Userreadn(int(msgn+0*8), 8)
 		if err != 0 {
 			return int(err)
 		}
-		ub := proc.Mkuserbuf(saddrn, salen)
+		ub := p.Aspace.Mkuserbuf(saddrn, salen)
 		saddr = ub
 	}
-	var cmsg common.Userio_i
+	var cmsg fdops.Userio_i
 	cmsg = zeroubuf
 	if cmsgl > 0 {
-		cmsgn, err := proc.Userreadn(int(msgn+4*8), 8)
+		cmsgn, err := p.Aspace.Userreadn(int(msgn+4*8), 8)
 		if err != 0 {
 			return int(err)
 		}
-		ub := proc.Mkuserbuf(cmsgn, cmsgl)
+		ub := p.Aspace.Mkuserbuf(cmsgn, cmsgl)
 		cmsg = ub
 	}
 
-	iov := &common.Useriovec_t{}
-	err = iov.Iov_init(proc, uint(iovn), niov)
+	iov := &vm.Useriovec_t{}
+	err = iov.Iov_init(&p.Aspace, uint(iovn), niov)
 	if err != 0 {
 		return int(err)
 	}
 
-	ret, sawr, cmwr, msgfl, err := fd.Fops.Recvmsg(proc, iov, saddr,
+	ret, sawr, cmwr, msgfl, err := fd.Fops.Recvmsg(iov, saddr,
 		cmsg, 0)
 	if err != 0 {
 		return int(err)
 	}
 	// write size of socket address, ancillary data, and msg flags back to
 	// user space
-	if err := proc.Userwriten(int(msgn+28), 4, int(msgfl)); err != 0 {
+	if err := p.Aspace.Userwriten(int(msgn+28), 4, int(msgfl)); err != 0 {
 		return int(err)
 	}
 	if saddr.Totalsz() != 0 {
-		if err := proc.Userwriten(int(msgn+1*8), 8, sawr); err != 0 {
+		if err := p.Aspace.Userwriten(int(msgn+1*8), 8, sawr); err != 0 {
 			return int(err)
 		}
 	}
 	if cmsg.Totalsz() != 0 {
-		if err := proc.Userwriten(int(msgn+5*8), 8, cmwr); err != 0 {
+		if err := p.Aspace.Userwriten(int(msgn+5*8), 8, cmwr); err != 0 {
 			return int(err)
 		}
 	}
 	return ret
 }
 
-func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
+func sys_sendmsg(p *proc.Proc_t, fdn, _msgn, _flags int) int {
 	if _flags != 0 {
 		panic("no imp")
 	}
-	fd, err := _fd_write(proc, fdn)
+	fd, err := _fd_write(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
 	// maybe copy the msghdr to kernel space?
 	msgn := uint(_msgn)
-	iovn, err1 := proc.Userreadn(int(msgn+2*8), 8)
-	niov, err2 := proc.Userreadn(int(msgn+3*8), 8)
-	cmsgl, err3 := proc.Userreadn(int(msgn+5*8), 8)
-	salen, err4 := proc.Userreadn(int(msgn+1*8), 8)
+	iovn, err1 := p.Aspace.Userreadn(int(msgn+2*8), 8)
+	niov, err2 := p.Aspace.Userreadn(int(msgn+3*8), 8)
+	cmsgl, err3 := p.Aspace.Userreadn(int(msgn+5*8), 8)
+	salen, err4 := p.Aspace.Userreadn(int(msgn+1*8), 8)
 	if err1 != 0 {
 		return int(err1)
 	}
@@ -1732,14 +1733,14 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	var saddr []uint8
 	if salen > 0 {
 		if salen > 64 {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
-		saddrva, err := proc.Userreadn(int(msgn+0*8), 8)
+		saddrva, err := p.Aspace.Userreadn(int(msgn+0*8), 8)
 		if err != 0 {
 			return int(err)
 		}
 		saddr = make([]uint8, salen)
-		ub := proc.Mkuserbuf(saddrva, salen)
+		ub := p.Aspace.Mkuserbuf(saddrva, salen)
 		did, err := ub.Uioread(saddr)
 		if err != 0 {
 			return int(err)
@@ -1751,14 +1752,14 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 	var cmsg []uint8
 	if cmsgl > 0 {
 		if cmsgl > 256 {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
-		cmsgva, err := proc.Userreadn(int(msgn+4*8), 8)
+		cmsgva, err := p.Aspace.Userreadn(int(msgn+4*8), 8)
 		if err != 0 {
 			return int(err)
 		}
 		cmsg = make([]uint8, cmsgl)
-		ub := proc.Mkuserbuf(cmsgva, cmsgl)
+		ub := p.Aspace.Mkuserbuf(cmsgva, cmsgl)
 		did, err := ub.Uioread(cmsg)
 		if err != 0 {
 			return int(err)
@@ -1767,64 +1768,64 @@ func sys_sendmsg(proc *common.Proc_t, fdn, _msgn, _flags int) int {
 			panic("how")
 		}
 	}
-	iov := &common.Useriovec_t{}
-	err = iov.Iov_init(proc, uint(iovn), niov)
+	iov := &vm.Useriovec_t{}
+	err = iov.Iov_init(&p.Aspace, uint(iovn), niov)
 	if err != 0 {
 		return int(err)
 	}
-	ret, err := fd.Fops.Sendmsg(proc, iov, saddr, cmsg, 0)
+	ret, err := fd.Fops.Sendmsg(iov, saddr, cmsg, 0)
 	if err != 0 {
 		return int(err)
 	}
 	return ret
 }
 
-func sys_socketpair(proc *common.Proc_t, domain, typ, proto int, sockn int) int {
-	var opts common.Fdopt_t
-	if typ&common.SOCK_NONBLOCK != 0 {
-		opts |= common.O_NONBLOCK
+func sys_socketpair(p *proc.Proc_t, domain, typ, proto int, sockn int) int {
+	var opts defs.Fdopt_t
+	if typ&defs.SOCK_NONBLOCK != 0 {
+		opts |= defs.O_NONBLOCK
 	}
 	var clop int
-	if typ&common.SOCK_CLOEXEC != 0 {
-		clop = common.FD_CLOEXEC
+	if typ&defs.SOCK_CLOEXEC != 0 {
+		clop = fd.FD_CLOEXEC
 	}
 
-	mask := common.SOCK_STREAM | common.SOCK_DGRAM
+	mask := defs.SOCK_STREAM | defs.SOCK_DGRAM
 	if typ&mask == 0 || typ&mask == mask {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 
-	if !common.Syslimit.Socks.Take() {
-		return int(-common.ENOMEM)
+	if !limits.Syslimit.Socks.Take() {
+		return int(-defs.ENOMEM)
 	}
 
-	var sfops1, sfops2 common.Fdops_i
-	var err common.Err_t
+	var sfops1, sfops2 fdops.Fdops_i
+	var err defs.Err_t
 	switch {
-	case domain == common.AF_UNIX && typ&common.SOCK_STREAM != 0:
+	case domain == defs.AF_UNIX && typ&defs.SOCK_STREAM != 0:
 		sfops1, sfops2, err = _suspair(opts)
 	default:
 		panic("no imp")
 	}
 
 	if err != 0 {
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 		return int(err)
 	}
 
-	fd1 := &common.Fd_t{}
+	fd1 := &fd.Fd_t{}
 	fd1.Fops = sfops1
-	fd2 := &common.Fd_t{}
+	fd2 := &fd.Fd_t{}
 	fd2.Fops = sfops2
-	perms := common.FD_READ | common.FD_WRITE | clop
-	fdn1, fdn2, ok := proc.Fd_insert2(fd1, perms, fd2, perms)
+	perms := fd.FD_READ | fd.FD_WRITE | clop
+	fdn1, fdn2, ok := p.Fd_insert2(fd1, perms, fd2, perms)
 	if !ok {
-		common.Close_panic(fd1)
-		common.Close_panic(fd2)
-		return int(-common.EMFILE)
+		fd.Close_panic(fd1)
+		fd.Close_panic(fd2)
+		return int(-defs.EMFILE)
 	}
-	if err1, err2 := proc.Userwriten(sockn, 4, fdn1), proc.Userwriten(sockn+4, 4, fdn2); err1 != 0 || err2 != 0 {
-		if sys.Sys_close(proc, fdn1) != 0 || sys.Sys_close(proc, fdn2) != 0 {
+	if err1, err2 := p.Aspace.Userwriten(sockn, 4, fdn1), p.Aspace.Userwriten(sockn+4, 4, fdn2); err1 != 0 || err2 != 0 {
+		if sys.Sys_close(p, fdn1) != 0 || sys.Sys_close(p, fdn2) != 0 {
 			panic("must succeed")
 		}
 		if err1 == 0 {
@@ -1835,7 +1836,7 @@ func sys_socketpair(proc *common.Proc_t, domain, typ, proto int, sockn int) int 
 	return 0
 }
 
-func _suspair(opts common.Fdopt_t) (common.Fdops_i, common.Fdops_i, common.Err_t) {
+func _suspair(opts defs.Fdopt_t) (fdops.Fdops_i, fdops.Fdops_i, defs.Err_t) {
 	pipe1 := &pipe_t{}
 	pipe2 := &pipe_t{}
 	pipe1.pipe_start()
@@ -1853,33 +1854,33 @@ func _suspair(opts common.Fdopt_t) (common.Fdops_i, common.Fdops_i, common.Err_t
 	return sfops1, sfops2, 0
 }
 
-func sys_shutdown(proc *common.Proc_t, fdn, how int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_shutdown(p *proc.Proc_t, fdn, how int) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 	var rdone, wdone bool
-	if how&common.SHUT_WR != 0 {
+	if how&defs.SHUT_WR != 0 {
 		wdone = true
 	}
-	if how&common.SHUT_RD != 0 {
+	if how&defs.SHUT_RD != 0 {
 		rdone = true
 	}
 	return int(fd.Fops.Shutdown(rdone, wdone))
 }
 
-func sys_bind(proc *common.Proc_t, fdn, sockaddrn, socklen int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_bind(p *proc.Proc_t, fdn, sockaddrn, socklen int) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 
-	sabuf, err := copysockaddr(proc, sockaddrn, socklen)
+	sabuf, err := copysockaddr(p, sockaddrn, socklen)
 	if err != 0 {
 		return int(err)
 	}
-
-	return int(fd.Fops.Bind(proc, sabuf))
+	r := fd.Fops.Bind(sabuf)
+	return int(r)
 }
 
 type sudfops_t struct {
@@ -1890,7 +1891,7 @@ type sudfops_t struct {
 	bound bool
 }
 
-func (sf *sudfops_t) Close() common.Err_t {
+func (sf *sudfops_t) Close() defs.Err_t {
 	// XXX use new method
 	sf.Lock()
 	sf.open--
@@ -1904,57 +1905,53 @@ func (sf *sudfops_t) Close() common.Err_t {
 			sf.bound = false
 			sf.bud = nil
 		}
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 	}
 	sf.Unlock()
 	return 0
 }
 
-func (sf *sudfops_t) Fstat(s *common.Stat_t) common.Err_t {
+func (sf *sudfops_t) Fstat(s *stat.Stat_t) defs.Err_t {
 	panic("no imp")
 }
 
-func (sf *sudfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.EINVAL
+func (sf *sudfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.EINVAL
 }
 
-func (sf *sudfops_t) Pathi() common.Inum_t {
+func (sf *sudfops_t) Pathi() defs.Inum_t {
 	panic("cwd socket?")
 }
 
-func (sf *sudfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
-	return 0, -common.EBADF
+func (sf *sudfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
+	return 0, -defs.EBADF
 }
 
-func (sf *sudfops_t) Reopen() common.Err_t {
+func (sf *sudfops_t) Reopen() defs.Err_t {
 	sf.Lock()
 	sf.open++
 	sf.Unlock()
 	return 0
 }
 
-func (sf *sudfops_t) Write(*common.Proc_t, common.Userio_i) (int, common.Err_t) {
-	return 0, -common.EBADF
+func (sf *sudfops_t) Write(fdops.Userio_i) (int, defs.Err_t) {
+	return 0, -defs.EBADF
 }
 
-func (sf *sudfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
+func (sf *sudfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (sf *sudfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (sf *sudfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sf *sudfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sf *sudfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sf *sudfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
-}
-
-func (sf *sudfops_t) Lseek(int, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sf *sudfops_t) Lseek(int, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
 // trims trailing nulls from slice
@@ -1969,24 +1966,23 @@ func slicetostr(buf []uint8) string {
 	return string(buf[:end])
 }
 
-func (sf *sudfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
-	return nil, 0, -common.EINVAL
+func (sf *sudfops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
+	return nil, 0, -defs.EINVAL
 }
 
-func (sf *sudfops_t) Bind(proc *common.Proc_t, sa []uint8) common.Err_t {
+func (sf *sudfops_t) Bind(sa []uint8) defs.Err_t {
 	sf.Lock()
 	defer sf.Unlock()
 
 	if sf.bound {
-		return -common.EINVAL
+		return -defs.EINVAL
 	}
 
 	poff := 2
-	path := slicetostr(sa[poff:])
+	path := ustr.MkUstrSlice(sa[poff:])
 	// try to create the specified file as a special device
 	bid := allbuds.bud_id_new()
-	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, pi, common.D_SUD, int(bid))
+	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT|defs.O_EXCL, 0, proc.CurrentProc().Cwd, defs.D_SUD, int(bid))
 	if err != 0 {
 		return err
 	}
@@ -2000,42 +1996,43 @@ func (sf *sudfops_t) Bind(proc *common.Proc_t, sa []uint8) common.Err_t {
 	return 0
 }
 
-func (sf *sudfops_t) Connect(proc *common.Proc_t, sabuf []uint8) common.Err_t {
-	return -common.EINVAL
+func (sf *sudfops_t) Connect(sabuf []uint8) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (sf *sudfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, common.Err_t) {
-	return nil, -common.EINVAL
+func (sf *sudfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
+	return nil, -defs.EINVAL
 }
 
-func (sf *sudfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, sa []uint8,
-	cmsg []uint8, flags int) (int, common.Err_t) {
+func (sf *sudfops_t) Sendmsg(src fdops.Userio_i, sa []uint8,
+	cmsg []uint8, flags int) (int, defs.Err_t) {
 	if len(cmsg) != 0 || flags != 0 {
 		panic("no imp")
 	}
 	poff := 2
 	if len(sa) <= poff {
-		return 0, -common.EINVAL
+		return 0, -defs.EINVAL
 	}
-	st := &common.Stat_t{}
-	path := slicetostr(sa[poff:])
-	err := thefs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
+	st := &stat.Stat_t{}
+	path := ustr.MkUstrSlice(sa[poff:])
+
+	err := thefs.Fs_stat(path, st, proc.CurrentProc().Cwd)
 	if err != 0 {
 		return 0, err
 	}
 	maj, min := unmkdev(st.Rdev())
-	if maj != common.D_SUD {
-		return 0, -common.ECONNREFUSED
+	if maj != defs.D_SUD {
+		return 0, -defs.ECONNREFUSED
 	}
 	ino := st.Rino()
 
 	bid := budid_t(min)
-	bud, ok := allbuds.bud_lookup(bid, common.Inum_t(ino))
+	bud, ok := allbuds.bud_lookup(bid, defs.Inum_t(ino))
 	if !ok {
-		return 0, -common.ECONNREFUSED
+		return 0, -defs.ECONNREFUSED
 	}
 
-	var bp string
+	var bp ustr.Ustr
 	sf.Lock()
 	if sf.bound {
 		bp = sf.bud.bpath
@@ -2049,8 +2046,8 @@ func (sf *sudfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, sa []uint
 	return did, 0
 }
 
-func (sf *sudfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
-	fromsa common.Userio_i, cmsg common.Userio_i, flags int) (int, int, int, common.Msgfl_t, common.Err_t) {
+func (sf *sudfops_t) Recvmsg(dst fdops.Userio_i,
+	fromsa fdops.Userio_i, cmsg fdops.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 || flags != 0 {
 		panic("no imp")
 	}
@@ -2061,7 +2058,7 @@ func (sf *sudfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
 	// XXX what is recv'ing on an unbound unix datagram socket supposed to
 	// do? openbsd and linux seem to block forever.
 	if !sf.bound {
-		return 0, 0, 0, 0, -common.ECONNREFUSED
+		return 0, 0, 0, 0, -defs.ECONNREFUSED
 	}
 	bud := sf.bud
 
@@ -2072,32 +2069,32 @@ func (sf *sudfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i,
 	return datadid, addrdid, ancdid, msgfl, 0
 }
 
-func (sf *sudfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (sf *sudfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	sf.Lock()
 	defer sf.Unlock()
 
 	if !sf.bound {
-		return pm.Events & common.R_ERROR, 0
+		return pm.Events & fdops.R_ERROR, 0
 	}
 	r, err := sf.bud.bud_poll(pm)
 	return r, err
 }
 
-func (sf *sudfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
-	return int(-common.ENOSYS)
+func (sf *sudfops_t) Fcntl(cmd, opt int) int {
+	return int(-defs.ENOSYS)
 }
 
-func (sf *sudfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
-	return 0, -common.EOPNOTSUPP
+func (sf *sudfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
+	intarg int) (int, defs.Err_t) {
+	return 0, -defs.EOPNOTSUPP
 }
 
-func (sf *sudfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.EOPNOTSUPP
+func (sf *sudfops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
+	return -defs.EOPNOTSUPP
 }
 
-func (sf *sudfops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTSOCK
+func (sf *sudfops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTSOCK
 }
 
 type budid_t int
@@ -2108,7 +2105,7 @@ var allbuds = allbud_t{m: make(map[budkey_t]*bud_t)}
 // files that happen to have the same bid.
 type budkey_t struct {
 	bid  budid_t
-	priv common.Inum_t
+	priv defs.Inum_t
 }
 
 type allbud_t struct {
@@ -2118,7 +2115,7 @@ type allbud_t struct {
 	nextbid budid_t
 }
 
-func (ab *allbud_t) bud_lookup(bid budid_t, fpriv common.Inum_t) (*bud_t, bool) {
+func (ab *allbud_t) bud_lookup(bid budid_t, fpriv defs.Inum_t) (*bud_t, bool) {
 	key := budkey_t{bid, fpriv}
 
 	ab.Lock()
@@ -2136,7 +2133,7 @@ func (ab *allbud_t) bud_id_new() budid_t {
 	return ret
 }
 
-func (ab *allbud_t) bud_new(bid budid_t, budpath string, fpriv common.Inum_t) *bud_t {
+func (ab *allbud_t) bud_new(bid budid_t, budpath ustr.Ustr, fpriv defs.Inum_t) *bud_t {
 	ret := &bud_t{}
 	ret.bud_init(bid, budpath, fpriv)
 
@@ -2150,7 +2147,7 @@ func (ab *allbud_t) bud_new(bid budid_t, budpath string, fpriv common.Inum_t) *b
 	return ret
 }
 
-func (ab *allbud_t) bud_del(bid budid_t, fpriv common.Inum_t) {
+func (ab *allbud_t) bud_del(bid budid_t, fpriv defs.Inum_t) {
 	key := budkey_t{bid, fpriv}
 	ab.Lock()
 	if _, ok := ab.m[key]; !ok {
@@ -2161,7 +2158,7 @@ func (ab *allbud_t) bud_del(bid budid_t, fpriv common.Inum_t) {
 }
 
 type dgram_t struct {
-	from string
+	from ustr.Ustr
 	sz   int
 }
 
@@ -2194,7 +2191,7 @@ func (db *dgrambuf_t) _havedgram() bool {
 	return db.head != db.tail
 }
 
-func (db *dgrambuf_t) copyin(src common.Userio_i, from string) (int, common.Err_t) {
+func (db *dgrambuf_t) copyin(src fdops.Userio_i, from ustr.Ustr) (int, defs.Err_t) {
 	// is there a free source address slot and buffer space?
 	if !db._canhold(src.Totalsz()) {
 		panic("should have blocked")
@@ -2210,7 +2207,7 @@ func (db *dgrambuf_t) copyin(src common.Userio_i, from string) (int, common.Err_
 	return did, 0
 }
 
-func (db *dgrambuf_t) copyout(dst, fromsa, cmsg common.Userio_i) (int, int, common.Err_t) {
+func (db *dgrambuf_t) copyout(dst, fromsa, cmsg fdops.Userio_i) (int, int, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
 	}
@@ -2225,7 +2222,7 @@ func (db *dgrambuf_t) copyout(dst, fromsa, cmsg common.Userio_i) (int, int, comm
 	var fdid int
 	if fromsa.Totalsz() != 0 {
 		fsaddr := _sockaddr_un(slot.from)
-		var err common.Err_t
+		var err defs.Err_t
 		fdid, err = fromsa.Uiowrite(fsaddr)
 		if err != 0 {
 			return 0, 0, err
@@ -2245,12 +2242,12 @@ func (db *dgrambuf_t) dg_release() {
 }
 
 // convert bound socket path to struct sockaddr_un
-func _sockaddr_un(budpath string) []uint8 {
+func _sockaddr_un(budpath ustr.Ustr) []uint8 {
 	ret := make([]uint8, 2, 16)
 	// len
 	writen(ret, 1, 0, len(budpath))
 	// family
-	writen(ret, 1, 1, common.AF_UNIX)
+	writen(ret, 1, 1, defs.AF_UNIX)
 	// path
 	ret = append(ret, budpath...)
 	ret = append(ret, 0)
@@ -2261,15 +2258,15 @@ func _sockaddr_un(budpath string) []uint8 {
 type bud_t struct {
 	sync.Mutex
 	bid     budid_t
-	fpriv   common.Inum_t
+	fpriv   defs.Inum_t
 	dbuf    dgrambuf_t
-	pollers common.Pollers_t
+	pollers fdops.Pollers_t
 	cond    *sync.Cond
 	closed  bool
-	bpath   string
+	bpath   ustr.Ustr
 }
 
-func (bud *bud_t) bud_init(bid budid_t, bpath string, priv common.Inum_t) {
+func (bud *bud_t) bud_init(bid budid_t, bpath ustr.Ustr, priv defs.Inum_t) {
 	bud.bid = bid
 	bud.fpriv = priv
 	bud.bpath = bpath
@@ -2279,16 +2276,16 @@ func (bud *bud_t) bud_init(bid budid_t, bpath string, priv common.Inum_t) {
 
 func (bud *bud_t) _rready() {
 	bud.cond.Broadcast()
-	bud.pollers.Wakeready(common.R_READ)
+	bud.pollers.Wakeready(fdops.R_READ)
 }
 
 func (bud *bud_t) _wready() {
 	bud.cond.Broadcast()
-	bud.pollers.Wakeready(common.R_WRITE)
+	bud.pollers.Wakeready(fdops.R_WRITE)
 }
 
 // returns number of bytes written and error
-func (bud *bud_t) bud_in(src common.Userio_i, from string, cmsg []uint8) (int, common.Err_t) {
+func (bud *bud_t) bud_in(src fdops.Userio_i, from ustr.Ustr, cmsg []uint8) (int, defs.Err_t) {
 	if len(cmsg) != 0 {
 		panic("no imp")
 	}
@@ -2297,12 +2294,12 @@ func (bud *bud_t) bud_in(src common.Userio_i, from string, cmsg []uint8) (int, c
 	for {
 		if bud.closed {
 			bud.Unlock()
-			return 0, -common.EBADF
+			return 0, -defs.EBADF
 		}
 		if bud.dbuf._canhold(need) || bud.closed {
 			break
 		}
-		if err := common.KillableWait(bud.cond); err != 0 {
+		if err := proc.KillableWait(bud.cond); err != 0 {
 			bud.Unlock()
 			return 0, err
 		}
@@ -2315,8 +2312,8 @@ func (bud *bud_t) bud_in(src common.Userio_i, from string, cmsg []uint8) (int, c
 
 // returns number of bytes written of data, socket address, ancillary data, and
 // ancillary message flags...
-func (bud *bud_t) bud_out(dst, fromsa, cmsg common.Userio_i) (int, int, int,
-	common.Msgfl_t, common.Err_t) {
+func (bud *bud_t) bud_out(dst, fromsa, cmsg fdops.Userio_i) (int, int, int,
+	defs.Msgfl_t, defs.Err_t) {
 	if cmsg.Totalsz() != 0 {
 		panic("no imp")
 	}
@@ -2324,12 +2321,12 @@ func (bud *bud_t) bud_out(dst, fromsa, cmsg common.Userio_i) (int, int, int,
 	for {
 		if bud.closed {
 			bud.Unlock()
-			return 0, 0, 0, 0, -common.EBADF
+			return 0, 0, 0, 0, -defs.EBADF
 		}
 		if bud.dbuf._havedgram() {
 			break
 		}
-		if err := common.KillableWait(bud.cond); err != 0 {
+		if err := proc.KillableWait(bud.cond); err != 0 {
 			bud.Unlock()
 			return 0, 0, 0, 0, err
 		}
@@ -2340,18 +2337,18 @@ func (bud *bud_t) bud_out(dst, fromsa, cmsg common.Userio_i) (int, int, int,
 	return ddid, fdid, 0, 0, err
 }
 
-func (bud *bud_t) bud_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
-	var ret common.Ready_t
-	var err common.Err_t
+func (bud *bud_t) bud_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
+	var ret fdops.Ready_t
+	var err defs.Err_t
 	bud.Lock()
 	if bud.closed {
 		goto out
 	}
-	if pm.Events&common.R_READ != 0 && bud.dbuf._havedgram() {
-		ret |= common.R_READ
+	if pm.Events&fdops.R_READ != 0 && bud.dbuf._havedgram() {
+		ret |= fdops.R_READ
 	}
-	if pm.Events&common.R_WRITE != 0 && bud.dbuf._canhold(32) {
-		ret |= common.R_WRITE
+	if pm.Events&fdops.R_WRITE != 0 && bud.dbuf._canhold(32) {
+		ret |= fdops.R_WRITE
 	}
 	if ret == 0 && pm.Dowait {
 		err = bud.pollers.Addpoller(&pm)
@@ -2366,7 +2363,7 @@ func (bud *bud_t) bud_close() {
 	bud.Lock()
 	bud.closed = true
 	bud.cond.Broadcast()
-	bud.pollers.Wakeready(common.R_READ | common.R_WRITE | common.R_ERROR)
+	bud.pollers.Wakeready(fdops.R_READ | fdops.R_WRITE | fdops.R_ERROR)
 	bid := bud.bid
 	fpriv := bud.fpriv
 	bud.dbuf.dg_release()
@@ -2382,12 +2379,12 @@ type susfops_t struct {
 	conn    bool
 	bound   bool
 	lstn    bool
-	myaddr  string
+	myaddr  ustr.Ustr
 	mysid   int
-	options common.Fdopt_t
+	options defs.Fdopt_t
 }
 
-func (sus *susfops_t) Close() common.Err_t {
+func (sus *susfops_t) Close() defs.Err_t {
 	if !sus.conn {
 		return 0
 	}
@@ -2401,33 +2398,33 @@ func (sus *susfops_t) Close() common.Err_t {
 	term := sus.pipein.pipe.closed
 	sus.pipein.pipe.Unlock()
 	if term {
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 	}
 	return err2
 }
 
-func (sus *susfops_t) Fstat(*common.Stat_t) common.Err_t {
+func (sus *susfops_t) Fstat(*stat.Stat_t) defs.Err_t {
 	panic("no imp")
 }
 
-func (sus *susfops_t) Lseek(int, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sus *susfops_t) Lseek(int, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sus *susfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.ENODEV
+func (sus *susfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.ENODEV
 }
 
-func (sus *susfops_t) Pathi() common.Inum_t {
+func (sus *susfops_t) Pathi() defs.Inum_t {
 	panic("unix stream cwd?")
 }
 
-func (sus *susfops_t) Read(p *common.Proc_t, dst common.Userio_i) (int, common.Err_t) {
-	read, _, _, _, err := sus.Recvmsg(p, dst, zeroubuf, zeroubuf, 0)
+func (sus *susfops_t) Read(dst fdops.Userio_i) (int, defs.Err_t) {
+	read, _, _, _, err := sus.Recvmsg(dst, zeroubuf, zeroubuf, 0)
 	return read, err
 }
 
-func (sus *susfops_t) Reopen() common.Err_t {
+func (sus *susfops_t) Reopen() defs.Err_t {
 	if !sus.conn {
 		return 0
 	}
@@ -2439,48 +2436,43 @@ func (sus *susfops_t) Reopen() common.Err_t {
 	return err2
 }
 
-func (sus *susfops_t) Write(p *common.Proc_t, src common.Userio_i) (int, common.Err_t) {
-	wrote, err := sus.Sendmsg(p, src, nil, nil, 0)
-	if err == -common.EPIPE {
-		err = -common.ECONNRESET
+func (sus *susfops_t) Write(src fdops.Userio_i) (int, defs.Err_t) {
+	wrote, err := sus.Sendmsg(src, nil, nil, 0)
+	if err == -defs.EPIPE {
+		err = -defs.ECONNRESET
 	}
 	return wrote, err
 }
 
-func (sus *susfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
+func (sus *susfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (sus *susfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (sus *susfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sus *susfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sus *susfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sus *susfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sus *susfops_t) Accept(fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
+	return nil, 0, -defs.EINVAL
 }
 
-func (sus *susfops_t) Accept(*common.Proc_t, common.Userio_i) (common.Fdops_i, int, common.Err_t) {
-	return nil, 0, -common.EINVAL
-}
-
-func (sus *susfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
+func (sus *susfops_t) Bind(saddr []uint8) defs.Err_t {
 	sus.bl.Lock()
 	defer sus.bl.Unlock()
 
 	if sus.bound {
-		return -common.EINVAL
+		return -defs.EINVAL
 	}
 	poff := 2
-	path := slicetostr(saddr[poff:])
+	path := ustr.MkUstrSlice(saddr[poff:])
 	sid := susid_new()
 
 	// create special file
-	pi := proc.Cwd().Fops.Pathi()
-	fsf, err := thefs.Fs_open_inner(path, common.O_CREAT|common.O_EXCL, 0, pi, common.D_SUS, sid)
+	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT|defs.O_EXCL, 0, proc.CurrentProc().Cwd, defs.D_SUS, sid)
 	if err != 0 {
 		return err
 	}
@@ -2493,25 +2485,25 @@ func (sus *susfops_t) Bind(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	return 0
 }
 
-func (sus *susfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
+func (sus *susfops_t) Connect(saddr []uint8) defs.Err_t {
 	sus.bl.Lock()
 	defer sus.bl.Unlock()
 
 	if sus.conn {
-		return -common.EISCONN
+		return -defs.EISCONN
 	}
 	poff := 2
-	path := slicetostr(saddr[poff:])
+	path := ustr.MkUstrSlice(saddr[poff:])
 
 	// lookup sid
-	st := &common.Stat_t{}
-	err := thefs.Fs_stat(path, st, proc.Cwd().Fops.Pathi())
+	st := &stat.Stat_t{}
+	err := thefs.Fs_stat(path, st, proc.CurrentProc().Cwd)
 	if err != 0 {
 		return err
 	}
 	maj, min := unmkdev(st.Rdev())
-	if maj != common.D_SUS {
-		return -common.ECONNREFUSED
+	if maj != defs.D_SUS {
+		return -defs.ECONNREFUSED
 	}
 	sid := min
 
@@ -2519,7 +2511,7 @@ func (sus *susfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	susl, ok := allsusl.m[sid]
 	allsusl.Unlock()
 	if !ok {
-		return -common.ECONNREFUSED
+		return -defs.ECONNREFUSED
 	}
 
 	pipein := &pipe_t{}
@@ -2536,18 +2528,18 @@ func (sus *susfops_t) Connect(proc *common.Proc_t, saddr []uint8) common.Err_t {
 	return 0
 }
 
-func (sus *susfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, common.Err_t) {
+func (sus *susfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
 	sus.bl.Lock()
 	defer sus.bl.Unlock()
 
 	if sus.conn {
-		return nil, -common.EISCONN
+		return nil, -defs.EISCONN
 	}
 	if !sus.bound {
-		return nil, -common.EINVAL
+		return nil, -defs.EINVAL
 	}
 	if sus.lstn {
-		return nil, -common.EINVAL
+		return nil, -defs.EINVAL
 	}
 	sus.lstn = true
 
@@ -2567,19 +2559,19 @@ func (sus *susfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, 
 	return newsock, 0
 }
 
-func (sus *susfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, toaddr []uint8,
-	cmsg []uint8, flags int) (int, common.Err_t) {
+func (sus *susfops_t) Sendmsg(src fdops.Userio_i, toaddr []uint8,
+	cmsg []uint8, flags int) (int, defs.Err_t) {
 	if !sus.conn {
-		return 0, -common.ENOTCONN
+		return 0, -defs.ENOTCONN
 	}
 	if toaddr != nil {
-		return 0, -common.EISCONN
+		return 0, -defs.EISCONN
 	}
 
 	if len(cmsg) > 0 {
 		scmsz := 16 + 8
 		if len(cmsg) < scmsz {
-			return 0, -common.EINVAL
+			return 0, -defs.EINVAL
 		}
 		// allow fd sending
 		cmsg_len := readn(cmsg, 8, 0)
@@ -2587,16 +2579,16 @@ func (sus *susfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, toaddr [
 		cmsg_type := readn(cmsg, 4, 12)
 		scm_rights := 1
 		if cmsg_len != scmsz || cmsg_level != scm_rights ||
-			cmsg_type != common.SOL_SOCKET {
-			return 0, -common.EINVAL
+			cmsg_type != defs.SOL_SOCKET {
+			return 0, -defs.EINVAL
 		}
 		chdrsz := 16
 		fdn := readn(cmsg, 4, chdrsz)
-		ofd, ok := proc.Fd_get(fdn)
+		ofd, ok := proc.CurrentProc().Fd_get(fdn)
 		if !ok {
-			return 0, -common.EBADF
+			return 0, -defs.EBADF
 		}
-		nfd, err := common.Copyfd(ofd)
+		nfd, err := fd.Copyfd(ofd)
 		if err != 0 {
 			return 0, err
 		}
@@ -2606,11 +2598,11 @@ func (sus *susfops_t) Sendmsg(proc *common.Proc_t, src common.Userio_i, toaddr [
 		}
 	}
 
-	return sus.pipeout.Write(proc, src)
+	return sus.pipeout.Write(src)
 }
 
-func (sus *susfops_t) _fdrecv(proc *common.Proc_t, cmsg common.Userio_i,
-	fl common.Msgfl_t) (int, common.Msgfl_t, common.Err_t) {
+func (sus *susfops_t) _fdrecv(cmsg fdops.Userio_i,
+	fl defs.Msgfl_t) (int, defs.Msgfl_t, defs.Err_t) {
 	scmsz := 16 + 8
 	if cmsg.Totalsz() < scmsz {
 		return 0, fl, 0
@@ -2619,14 +2611,14 @@ func (sus *susfops_t) _fdrecv(proc *common.Proc_t, cmsg common.Userio_i,
 	if !ok {
 		return 0, fl, 0
 	}
-	nfdn, ok := proc.Fd_insert(nfd, nfd.Perms)
+	nfdn, ok := proc.CurrentProc().Fd_insert(nfd, nfd.Perms)
 	if !ok {
-		common.Close_panic(nfd)
-		return 0, fl, -common.EMFILE
+		fd.Close_panic(nfd)
+		return 0, fl, -defs.EMFILE
 	}
 	buf := make([]uint8, scmsz)
 	writen(buf, 8, 0, scmsz)
-	writen(buf, 4, 8, common.SOL_SOCKET)
+	writen(buf, 4, 8, defs.SOL_SOCKET)
 	scm_rights := 1
 	writen(buf, 4, 12, scm_rights)
 	writen(buf, 4, 16, nfdn)
@@ -2640,32 +2632,32 @@ func (sus *susfops_t) _fdrecv(proc *common.Proc_t, cmsg common.Userio_i,
 	return scmsz, fl, 0
 }
 
-func (sus *susfops_t) Recvmsg(proc *common.Proc_t, dst common.Userio_i, fromsa common.Userio_i,
-	cmsg common.Userio_i, flags int) (int, int, int, common.Msgfl_t, common.Err_t) {
+func (sus *susfops_t) Recvmsg(dst fdops.Userio_i, fromsa fdops.Userio_i,
+	cmsg fdops.Userio_i, flags int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
 	if !sus.conn {
-		return 0, 0, 0, 0, -common.ENOTCONN
+		return 0, 0, 0, 0, -defs.ENOTCONN
 	}
 
-	ret, err := sus.pipein.Read(proc, dst)
+	ret, err := sus.pipein.Read(dst)
 	if err != 0 {
 		return 0, 0, 0, 0, err
 	}
-	cmsglen, msgfl, err := sus._fdrecv(proc, cmsg, 0)
+	cmsglen, msgfl, err := sus._fdrecv(cmsg, 0)
 	return ret, 0, cmsglen, msgfl, err
 }
 
-func (sus *susfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (sus *susfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	if !sus.conn {
-		return pm.Events & common.R_ERROR, 0
+		return pm.Events & fdops.R_ERROR, 0
 	}
 
 	// pipefops_t.pollone() doesn't allow polling for reading on write-end
 	// of pipe and vice versa
-	var readyin common.Ready_t
-	var readyout common.Ready_t
-	both := pm.Events&(common.R_READ|common.R_WRITE) == 0
-	var err common.Err_t
-	if both || pm.Events&common.R_READ != 0 {
+	var readyin fdops.Ready_t
+	var readyout fdops.Ready_t
+	both := pm.Events&(fdops.R_READ|fdops.R_WRITE) == 0
+	var err defs.Err_t
+	if both || pm.Events&fdops.R_READ != 0 {
 		readyin, err = sus.pipein.Pollone(pm)
 	}
 	if err != 0 {
@@ -2674,24 +2666,24 @@ func (sus *susfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t
 	if readyin != 0 {
 		return readyin, 0
 	}
-	if both || pm.Events&common.R_WRITE != 0 {
+	if both || pm.Events&fdops.R_WRITE != 0 {
 		readyout, err = sus.pipeout.Pollone(pm)
 	}
 	return readyin | readyout, err
 }
 
-func (sus *susfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (sus *susfops_t) Fcntl(cmd, opt int) int {
 	sus.bl.Lock()
 	defer sus.bl.Unlock()
 
 	switch cmd {
-	case common.F_GETFL:
+	case defs.F_GETFL:
 		return int(sus.options)
-	case common.F_SETFL:
-		sus.options = common.Fdopt_t(opt)
+	case defs.F_SETFL:
+		sus.options = defs.Fdopt_t(opt)
 		if sus.conn {
-			sus.pipein.options = common.Fdopt_t(opt)
-			sus.pipeout.options = common.Fdopt_t(opt)
+			sus.pipein.options = defs.Fdopt_t(opt)
+			sus.pipeout.options = defs.Fdopt_t(opt)
 		}
 		return 0
 	default:
@@ -2699,24 +2691,24 @@ func (sus *susfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
 	}
 }
 
-func (sus *susfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
+func (sus *susfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
+	intarg int) (int, defs.Err_t) {
 	switch opt {
-	case common.SO_ERROR:
+	case defs.SO_ERROR:
 		dur := [4]uint8{}
 		writen(dur[:], 4, 0, 0)
 		did, err := bufarg.Uiowrite(dur[:])
 		return did, err
 	default:
-		return 0, -common.EOPNOTSUPP
+		return 0, -defs.EOPNOTSUPP
 	}
 }
 
-func (sus *susfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.EOPNOTSUPP
+func (sus *susfops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
+	return -defs.EOPNOTSUPP
 }
 
-func (sus *susfops_t) Shutdown(read, write bool) common.Err_t {
+func (sus *susfops_t) Shutdown(read, write bool) defs.Err_t {
 	panic("no imp")
 }
 
@@ -2738,7 +2730,7 @@ var allsusl = allsusl_t{m: map[int]*susl_t{}}
 type susl_t struct {
 	sync.Mutex
 	waiters         []_suslblog_t
-	pollers         common.Pollers_t
+	pollers         fdops.Pollers_t
 	opencount       int
 	mysid           int
 	readyconnectors int
@@ -2748,7 +2740,7 @@ type _suslblog_t struct {
 	conn *pipe_t
 	acc  *pipe_t
 	cond *sync.Cond
-	err  common.Err_t
+	err  defs.Err_t
 }
 
 func (susl *susl_t) susl_start(mysid, backlog int) {
@@ -2803,11 +2795,11 @@ func (susl *susl_t) _slotreset(slot *_suslblog_t) {
 }
 
 func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
-	noblk bool) (*pipe_t, common.Err_t) {
+	noblk bool) (*pipe_t, defs.Err_t) {
 	susl.Lock()
 	if susl.opencount == 0 {
 		susl.Unlock()
-		return nil, -common.EBADF
+		return nil, -defs.EBADF
 	}
 
 	var theirs *pipe_t
@@ -2827,7 +2819,7 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 	}
 	if noblk {
 		susl.Unlock()
-		return nil, -common.EWOULDBLOCK
+		return nil, -defs.EWOULDBLOCK
 	}
 	// darn. wait for a peer.
 	b, found := susl._findbed(getacceptor)
@@ -2837,18 +2829,18 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 		if !getacceptor {
 			panic("fixme: allow more accepts than backlog")
 		}
-		return nil, -common.ECONNREFUSED
+		return nil, -defs.ECONNREFUSED
 	}
 	if getacceptor {
 		b.conn = mypipe
-		susl.pollers.Wakeready(common.R_READ)
+		susl.pollers.Wakeready(fdops.R_READ)
 	} else {
 		b.acc = mypipe
 	}
 	if getacceptor {
 		susl.readyconnectors++
 	}
-	err := common.KillableWait(b.cond)
+	err := proc.KillableWait(b.cond)
 	if err == 0 {
 		err = b.err
 	}
@@ -2865,23 +2857,23 @@ func (susl *susl_t) _getpartner(mypipe *pipe_t, getacceptor,
 	return theirs, err
 }
 
-func (susl *susl_t) connectwait(mypipe *pipe_t) (*pipe_t, common.Err_t) {
+func (susl *susl_t) connectwait(mypipe *pipe_t) (*pipe_t, defs.Err_t) {
 	noblk := false
 	return susl._getpartner(mypipe, true, noblk)
 }
 
-func (susl *susl_t) acceptwait(mypipe *pipe_t) (*pipe_t, common.Err_t) {
+func (susl *susl_t) acceptwait(mypipe *pipe_t) (*pipe_t, defs.Err_t) {
 	noblk := false
 	return susl._getpartner(mypipe, false, noblk)
 }
 
-func (susl *susl_t) acceptnowait(mypipe *pipe_t) (*pipe_t, common.Err_t) {
+func (susl *susl_t) acceptnowait(mypipe *pipe_t) (*pipe_t, defs.Err_t) {
 	noblk := true
 	return susl._getpartner(mypipe, false, noblk)
 }
 
-func (susl *susl_t) susl_reopen(delta int) common.Err_t {
-	ret := common.Err_t(0)
+func (susl *susl_t) susl_reopen(delta int) defs.Err_t {
+	ret := defs.Err_t(0)
 	dorem := false
 	susl.Lock()
 	if susl.opencount != 0 {
@@ -2890,11 +2882,11 @@ func (susl *susl_t) susl_reopen(delta int) common.Err_t {
 			dorem = true
 		}
 	} else {
-		ret = -common.EBADF
+		ret = -defs.EBADF
 	}
 
 	if dorem {
-		common.Syslimit.Socks.Give()
+		limits.Syslimit.Socks.Give()
 		// wake up all blocked connectors/acceptors/pollers
 		for i := range susl.waiters {
 			s := &susl.waiters[i]
@@ -2903,10 +2895,10 @@ func (susl *susl_t) susl_reopen(delta int) common.Err_t {
 			if a == nil && b == nil {
 				continue
 			}
-			s.err = -common.ECONNRESET
+			s.err = -defs.ECONNRESET
 			s.cond.Signal()
 		}
-		susl.pollers.Wakeready(common.R_READ | common.R_HUP | common.R_ERROR)
+		susl.pollers.Wakeready(fdops.R_READ | fdops.R_HUP | fdops.R_ERROR)
 	}
 
 	susl.Unlock()
@@ -2918,19 +2910,19 @@ func (susl *susl_t) susl_reopen(delta int) common.Err_t {
 	return ret
 }
 
-func (susl *susl_t) susl_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (susl *susl_t) susl_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	susl.Lock()
 	if susl.opencount == 0 {
 		susl.Unlock()
 		return 0, 0
 	}
-	if pm.Events&common.R_READ != 0 {
+	if pm.Events&fdops.R_READ != 0 {
 		if susl.readyconnectors > 0 {
 			susl.Unlock()
-			return common.R_READ, 0
+			return fdops.R_READ, 0
 		}
 	}
-	var err common.Err_t
+	var err defs.Err_t
 	if pm.Dowait {
 		err = susl.pollers.Addpoller(&pm)
 	}
@@ -2940,67 +2932,62 @@ func (susl *susl_t) susl_poll(pm common.Pollmsg_t) (common.Ready_t, common.Err_t
 
 type suslfops_t struct {
 	susl    *susl_t
-	myaddr  string
-	options common.Fdopt_t
+	myaddr  ustr.Ustr
+	options defs.Fdopt_t
 }
 
-func (sf *suslfops_t) Close() common.Err_t {
+func (sf *suslfops_t) Close() defs.Err_t {
 	return sf.susl.susl_reopen(-1)
 }
 
-func (sf *suslfops_t) Fstat(*common.Stat_t) common.Err_t {
+func (sf *suslfops_t) Fstat(*stat.Stat_t) defs.Err_t {
 	panic("no imp")
 }
 
-func (sf *suslfops_t) Lseek(int, int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sf *suslfops_t) Lseek(int, int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sf *suslfops_t) Mmapi(int, int, bool) ([]common.Mmapinfo_t, common.Err_t) {
-	return nil, -common.ENODEV
+func (sf *suslfops_t) Mmapi(int, int, bool) ([]mem.Mmapinfo_t, defs.Err_t) {
+	return nil, -defs.ENODEV
 }
 
-func (sf *suslfops_t) Pathi() common.Inum_t {
+func (sf *suslfops_t) Pathi() defs.Inum_t {
 	panic("unix stream listener cwd?")
 }
 
-func (sf *suslfops_t) Read(*common.Proc_t, common.Userio_i) (int, common.Err_t) {
-	return 0, -common.ENOTCONN
+func (sf *suslfops_t) Read(fdops.Userio_i) (int, defs.Err_t) {
+	return 0, -defs.ENOTCONN
 }
 
-func (sf *suslfops_t) Reopen() common.Err_t {
+func (sf *suslfops_t) Reopen() defs.Err_t {
 	return sf.susl.susl_reopen(1)
 }
 
-func (sf *suslfops_t) Write(*common.Proc_t, common.Userio_i) (int, common.Err_t) {
-	return 0, -common.EPIPE
+func (sf *suslfops_t) Write(fdops.Userio_i) (int, defs.Err_t) {
+	return 0, -defs.EPIPE
 }
 
-func (sf *suslfops_t) Fullpath() (string, common.Err_t) {
-	panic("weird cwd")
+func (sf *suslfops_t) Truncate(newlen uint) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (sf *suslfops_t) Truncate(newlen uint) common.Err_t {
-	return -common.EINVAL
+func (sf *suslfops_t) Pread(dst fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sf *suslfops_t) Pread(dst common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
+func (sf *suslfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
+	return 0, -defs.ESPIPE
 }
 
-func (sf *suslfops_t) Pwrite(src common.Userio_i, offset int) (int, common.Err_t) {
-	return 0, -common.ESPIPE
-}
-
-func (sf *suslfops_t) Accept(proc *common.Proc_t,
-	fromsa common.Userio_i) (common.Fdops_i, int, common.Err_t) {
+func (sf *suslfops_t) Accept(fromsa fdops.Userio_i) (fdops.Fdops_i, int, defs.Err_t) {
 	// the connector has already taken syslimit.Socks (1 sock reservation
 	// counts for a connected pair of UNIX stream sockets).
-	noblk := sf.options&common.O_NONBLOCK != 0
+	noblk := sf.options&defs.O_NONBLOCK != 0
 	pipein := &pipe_t{}
 	pipein.pipe_start()
 	var pipeout *pipe_t
-	var err common.Err_t
+	var err defs.Err_t
 	if noblk {
 		pipeout, err = sf.susl.acceptnowait(pipein)
 	} else {
@@ -3016,170 +3003,171 @@ func (sf *suslfops_t) Accept(proc *common.Proc_t,
 	return ret, 0, 0
 }
 
-func (sf *suslfops_t) Bind(*common.Proc_t, []uint8) common.Err_t {
-	return -common.EINVAL
+func (sf *suslfops_t) Bind([]uint8) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (sf *suslfops_t) Connect(proc *common.Proc_t, sabuf []uint8) common.Err_t {
-	return -common.EINVAL
+func (sf *suslfops_t) Connect(sabuf []uint8) defs.Err_t {
+	return -defs.EINVAL
 }
 
-func (sf *suslfops_t) Listen(proc *common.Proc_t, backlog int) (common.Fdops_i, common.Err_t) {
-	return nil, -common.EINVAL
+func (sf *suslfops_t) Listen(backlog int) (fdops.Fdops_i, defs.Err_t) {
+	return nil, -defs.EINVAL
 }
 
-func (sf *suslfops_t) Sendmsg(*common.Proc_t, common.Userio_i, []uint8, []uint8,
-	int) (int, common.Err_t) {
-	return 0, -common.ENOTCONN
+func (sf *suslfops_t) Sendmsg(fdops.Userio_i, []uint8, []uint8,
+	int) (int, defs.Err_t) {
+	return 0, -defs.ENOTCONN
 }
 
-func (sf *suslfops_t) Recvmsg(*common.Proc_t, common.Userio_i, common.Userio_i,
-	common.Userio_i, int) (int, int, int, common.Msgfl_t, common.Err_t) {
-	return 0, 0, 0, 0, -common.ENOTCONN
+func (sf *suslfops_t) Recvmsg(fdops.Userio_i, fdops.Userio_i,
+	fdops.Userio_i, int) (int, int, int, defs.Msgfl_t, defs.Err_t) {
+	return 0, 0, 0, 0, -defs.ENOTCONN
 }
 
-func (sf *suslfops_t) Pollone(pm common.Pollmsg_t) (common.Ready_t, common.Err_t) {
+func (sf *suslfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	return sf.susl.susl_poll(pm)
 }
 
-func (sf *suslfops_t) Fcntl(proc *common.Proc_t, cmd, opt int) int {
+func (sf *suslfops_t) Fcntl(cmd, opt int) int {
 	switch cmd {
-	case common.F_GETFL:
+	case defs.F_GETFL:
 		return int(sf.options)
-	case common.F_SETFL:
-		sf.options = common.Fdopt_t(opt)
+	case defs.F_SETFL:
+		sf.options = defs.Fdopt_t(opt)
 		return 0
 	default:
 		panic("weird cmd")
 	}
 }
 
-func (sf *suslfops_t) Getsockopt(proc *common.Proc_t, opt int, bufarg common.Userio_i,
-	intarg int) (int, common.Err_t) {
-	return 0, -common.EOPNOTSUPP
+func (sf *suslfops_t) Getsockopt(opt int, bufarg fdops.Userio_i,
+	intarg int) (int, defs.Err_t) {
+	return 0, -defs.EOPNOTSUPP
 }
 
-func (sf *suslfops_t) Setsockopt(*common.Proc_t, int, int, common.Userio_i, int) common.Err_t {
-	return -common.EOPNOTSUPP
+func (sf *suslfops_t) Setsockopt(int, int, fdops.Userio_i, int) defs.Err_t {
+	return -defs.EOPNOTSUPP
 }
 
-func (sf *suslfops_t) Shutdown(read, write bool) common.Err_t {
-	return -common.ENOTCONN
+func (sf *suslfops_t) Shutdown(read, write bool) defs.Err_t {
+	return -defs.ENOTCONN
 }
 
-func sys_listen(proc *common.Proc_t, fdn, backlog int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_listen(p *proc.Proc_t, fdn, backlog int) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 	if backlog < 0 {
 		backlog = 0
 	}
-	newfops, err := fd.Fops.Listen(proc, backlog)
+	newfops, err := fd.Fops.Listen(backlog)
 	if err != 0 {
 		return int(err)
 	}
 	// replace old fops
-	proc.Fdl.Lock()
+	p.Fdl.Lock()
 	fd.Fops = newfops
-	proc.Fdl.Unlock()
+	p.Fdl.Unlock()
 	return 0
 }
 
-func sys_getsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) int {
-	if level != common.SOL_SOCKET {
+func sys_getsockopt(p *proc.Proc_t, fdn, level, opt, optvaln, optlenn int) int {
+	if level != defs.SOL_SOCKET {
 		panic("no imp")
 	}
 	var olen int
 	if optlenn != 0 {
-		l, err := proc.Userreadn(optlenn, 8)
+		l, err := p.Aspace.Userreadn(optlenn, 8)
 		if err != 0 {
 			return int(err)
 		}
 		if l < 0 {
-			return int(-common.EFAULT)
+			return int(-defs.EFAULT)
 		}
 		olen = l
 	}
-	bufarg := proc.Mkuserbuf(optvaln, olen)
+	bufarg := p.Aspace.Mkuserbuf(optvaln, olen)
 	// XXX why intarg??
 	intarg := optvaln
-	fd, ok := proc.Fd_get(fdn)
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
-	optwrote, err := fd.Fops.Getsockopt(proc, opt, bufarg, intarg)
+	optwrote, err := fd.Fops.Getsockopt(opt, bufarg, intarg)
 	if err != 0 {
 		return int(err)
 	}
 	if optlenn != 0 {
-		if err := proc.Userwriten(optlenn, 8, optwrote); err != 0 {
+		if err := p.Aspace.Userwriten(optlenn, 8, optwrote); err != 0 {
 			return int(err)
 		}
 	}
 	return 0
 }
 
-func sys_setsockopt(proc *common.Proc_t, fdn, level, opt, optvaln, optlenn int) int {
+func sys_setsockopt(p *proc.Proc_t, fdn, level, opt, optvaln, optlenn int) int {
 	if optlenn < 0 {
-		return int(-common.EFAULT)
+		return int(-defs.EFAULT)
 	}
 	var intarg int
 	if optlenn >= 4 {
-		var err common.Err_t
-		intarg, err = proc.Userreadn(optvaln, 4)
+		var err defs.Err_t
+		intarg, err = p.Aspace.Userreadn(optvaln, 4)
 		if err != 0 {
 			return int(err)
 		}
 	}
-	bufarg := proc.Mkuserbuf(optvaln, optlenn)
-	fd, ok := proc.Fd_get(fdn)
+	bufarg := p.Aspace.Mkuserbuf(optvaln, optlenn)
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
-	err := fd.Fops.Setsockopt(proc, level, opt, bufarg, intarg)
+	err := fd.Fops.Setsockopt(level, opt, bufarg, intarg)
 	return int(err)
 }
 
-func _closefds(fds []*common.Fd_t) {
-	for _, fd := range fds {
-		if fd != nil {
-			common.Close_panic(fd)
+func _closefds(fds []*fd.Fd_t) {
+	for _, f := range fds {
+		if f != nil {
+			fd.Close_panic(f)
 		}
 	}
 }
 
-func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, flags int) int {
-	tmp := flags & (common.FORK_THREAD | common.FORK_PROCESS)
-	if tmp != common.FORK_THREAD && tmp != common.FORK_PROCESS {
-		return int(-common.EINVAL)
+func sys_fork(parent *proc.Proc_t, ptf *[defs.TFSIZE]uintptr, tforkp int, flags int) int {
+	tmp := flags & (defs.FORK_THREAD | defs.FORK_PROCESS)
+	if tmp != defs.FORK_THREAD && tmp != defs.FORK_PROCESS {
+		return int(-defs.EINVAL)
 	}
 
-	mkproc := flags&common.FORK_PROCESS != 0
-	var child *common.Proc_t
-	var childtid common.Tid_t
+	mkproc := flags&defs.FORK_PROCESS != 0
+	var child *proc.Proc_t
+	var childtid defs.Tid_t
 	var ret int
 
 	// copy parents trap frame
-	chtf := &[common.TFSIZE]uintptr{}
+	chtf := &[defs.TFSIZE]uintptr{}
 	*chtf = *ptf
 
 	if mkproc {
 		var ok bool
 		// lock fd table for copying
 		parent.Fdl.Lock()
-		child, ok = common.Proc_new(parent.Name, parent.Cwd(), parent.Fds, sys)
+		cwd := *parent.Cwd
+		child, ok = proc.Proc_new(parent.Name, &cwd, parent.Fds, sys)
 		parent.Fdl.Unlock()
 		if !ok {
 			lhits++
-			return int(-common.ENOMEM)
+			return int(-defs.ENOMEM)
 		}
 
-		child.Pmap, child.P_pmap, ok = physmem.Pmap_new()
+		child.Aspace.Pmap, child.Aspace.P_pmap, ok = physmem.Pmap_new()
 		if !ok {
 			goto outproc
 		}
-		physmem.Refup(child.P_pmap)
+		physmem.Refup(child.Aspace.P_pmap)
 
 		child.Pwait = &parent.Mywait
 		ok = parent.Start_proc(child.Pid)
@@ -3189,8 +3177,8 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		}
 
 		// fork parent address space
-		parent.Lock_pmap()
-		rsp := chtf[common.TF_RSP]
+		parent.Aspace.Lock_pmap()
+		rsp := chtf[defs.TF_RSP]
 		doflush, ok := parent.Vm_fork(child, rsp)
 		if ok && !doflush {
 			panic("no writable segs?")
@@ -3199,23 +3187,23 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		if doflush {
 			parent.Tlbflush()
 		}
-		parent.Unlock_pmap()
+		parent.Aspace.Unlock_pmap()
 
 		if !ok {
 			// child page table allocation failed. call
-			// common.Proc_t.terminate which will clean everything up. the
+			// proc.Proc_t.terminate which will clean everything up. the
 			// parent will get th error code directly.
 			child.Thread_dead(child.Tid0(), 0, false)
-			return int(-common.ENOMEM)
+			return int(-defs.ENOMEM)
 		}
 
 		childtid = child.Tid0()
 		ret = child.Pid
 	} else {
 		// validate tfork struct
-		tcb, err1 := parent.Userreadn(tforkp+0, 8)
-		tidaddrn, err2 := parent.Userreadn(tforkp+8, 8)
-		stack, err3 := parent.Userreadn(tforkp+16, 8)
+		tcb, err1 := parent.Aspace.Userreadn(tforkp+0, 8)
+		tidaddrn, err2 := parent.Aspace.Userreadn(tforkp+8, 8)
+		stack, err3 := parent.Aspace.Userreadn(tforkp+16, 8)
 		if err1 != 0 {
 			return int(err1)
 		}
@@ -3227,7 +3215,7 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		}
 		writetid := tidaddrn != 0
 		if tcb != 0 {
-			chtf[common.TF_FSBASE] = uintptr(tcb)
+			chtf[defs.TF_FSBASE] = uintptr(tcb)
 		}
 
 		child = parent
@@ -3235,44 +3223,44 @@ func sys_fork(parent *common.Proc_t, ptf *[common.TFSIZE]uintptr, tforkp int, fl
 		childtid, ok = parent.Thread_new()
 		if !ok {
 			lhits++
-			return int(-common.ENOMEM)
+			return int(-defs.ENOMEM)
 		}
 		ok = parent.Start_thread(childtid)
 		if !ok {
 			lhits++
 			parent.Thread_undo(childtid)
-			return int(-common.ENOMEM)
+			return int(-defs.ENOMEM)
 		}
 
 		v := int(childtid)
-		chtf[common.TF_RSP] = uintptr(stack)
+		chtf[defs.TF_RSP] = uintptr(stack)
 		ret = v
 		if writetid {
 			// it is not a fatal error if some thread unmapped the
 			// memory that was supposed to hold the new thread's
 			// tid out from under us.
-			parent.Userwriten(tidaddrn, 8, v)
+			parent.Aspace.Userwriten(tidaddrn, 8, v)
 		}
 	}
 
-	chtf[common.TF_RAX] = 0
+	chtf[defs.TF_RAX] = 0
 	child.Sched_add(chtf, childtid)
 	return ret
 outmem:
-	physmem.Refdown(child.P_pmap)
+	physmem.Refdown(child.Aspace.P_pmap)
 outproc:
-	common.Tid_del()
-	common.Proc_del(child.Pid)
+	proc.Tid_del()
+	proc.Proc_del(child.Pid)
 	_closefds(child.Fds)
-	return int(-common.ENOMEM)
+	return int(-defs.ENOMEM)
 }
 
-func sys_execv(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, pathn int, argn int) int {
-	args, err := proc.Userargs(argn)
+func sys_execv(p *proc.Proc_t, tf *[defs.TFSIZE]uintptr, pathn int, argn int) int {
+	args, err := p.Userargs(argn)
 	if err != 0 {
 		return int(err)
 	}
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -3280,61 +3268,61 @@ func sys_execv(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, pathn int, argn 
 	if err != 0 {
 		return int(err)
 	}
-	return sys_execv1(proc, tf, path, args)
+	return sys_execv1(p, tf, path, args)
 }
 
-var _zvmregion common.Vmregion_t
+var _zvmregion vm.Vmregion_t
 
-func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
-	args []string) int {
+func sys_execv1(p *proc.Proc_t, tf *[defs.TFSIZE]uintptr, paths ustr.Ustr,
+	args []ustr.Ustr) int {
 	// XXX a multithreaded process that execs is broken; POSIX2008 says
 	// that all threads should terminate before exec.
-	if proc.Thread_count() > 1 {
+	if p.Thread_count() > 1 {
 		panic("fix exec with many threads")
 	}
 
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+	p.Aspace.Lock_pmap()
+	defer p.Aspace.Unlock_pmap()
 
 	// save page trackers in case the exec fails
-	ovmreg := proc.Vmregion
-	proc.Vmregion = _zvmregion
+	ovmreg := p.Aspace.Vmregion
+	p.Aspace.Vmregion = _zvmregion
 
 	// create kernel page table
-	opmap := proc.Pmap
-	op_pmap := proc.P_pmap
+	opmap := p.Aspace.Pmap
+	op_pmap := p.Aspace.P_pmap
 	var ok bool
-	proc.Pmap, proc.P_pmap, ok = physmem.Pmap_new()
+	p.Aspace.Pmap, p.Aspace.P_pmap, ok = physmem.Pmap_new()
 	if !ok {
-		proc.Pmap, proc.P_pmap = opmap, op_pmap
-		return int(-common.ENOMEM)
+		p.Aspace.Pmap, p.Aspace.P_pmap = opmap, op_pmap
+		return int(-defs.ENOMEM)
 	}
-	physmem.Refup(proc.P_pmap)
-	for _, e := range common.Kents {
-		proc.Pmap[e.Pml4slot] = e.Entry
+	physmem.Refup(p.Aspace.P_pmap)
+	for _, e := range mem.Kents {
+		p.Aspace.Pmap[e.Pml4slot] = e.Entry
 	}
 
 	restore := func() {
-		common.Uvmfree_inner(proc.Pmap, proc.P_pmap, &proc.Vmregion)
-		physmem.Refdown(proc.P_pmap)
-		proc.Vmregion.Clear()
-		proc.Pmap = opmap
-		proc.P_pmap = op_pmap
-		proc.Vmregion = ovmreg
+		vm.Uvmfree_inner(p.Aspace.Pmap, p.Aspace.P_pmap, &p.Aspace.Vmregion)
+		physmem.Refdown(p.Aspace.P_pmap)
+		p.Aspace.Vmregion.Clear()
+		p.Aspace.Pmap = opmap
+		p.Aspace.P_pmap = op_pmap
+		p.Aspace.Vmregion = ovmreg
 	}
 
 	// load binary image -- get first block of file
-	file, err := thefs.Fs_open(paths, common.O_RDONLY, 0, proc.Cwd().Fops.Pathi(), 0, 0)
+	file, err := thefs.Fs_open(paths, defs.O_RDONLY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		restore()
 		return int(err)
 	}
-	defer common.Close_panic(file)
+	defer fd.Close_panic(file)
 
 	hdata := make([]uint8, 512)
-	ub := &common.Fakeubuf_t{}
+	ub := &vm.Fakeubuf_t{}
 	ub.Fake_init(hdata)
-	ret, err := file.Fops.Read(proc, ub)
+	ret, err := file.Fops.Read(ub)
 	if err != 0 {
 		restore()
 		return int(err)
@@ -3348,12 +3336,12 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	ok = elfhdr.sanity()
 	if !ok {
 		restore()
-		return int(-common.EPERM)
+		return int(-defs.EPERM)
 	}
 
 	// elf_load() will create two copies of TLS section: one for the fresh
 	// copy and one for thread 0
-	freshtls, t0tls, tlssz, err := elfhdr.elf_load(proc, file)
+	freshtls, t0tls, tlssz, err := elfhdr.elf_load(p, file)
 	if err != 0 {
 		restore()
 		return int(err)
@@ -3362,29 +3350,29 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	// map new stack
 	numstkpages := 6
 	// +1 for the guard page
-	stksz := (numstkpages + 1) * common.PGSIZE
-	stackva := proc.Unusedva_inner(0x0ff<<39, stksz)
-	proc.Vmadd_anon(stackva, common.PGSIZE, 0)
-	proc.Vmadd_anon(stackva+common.PGSIZE, stksz-common.PGSIZE, common.PTE_U|common.PTE_W)
+	stksz := (numstkpages + 1) * mem.PGSIZE
+	stackva := p.Aspace.Unusedva_inner(0x0ff<<39, stksz)
+	p.Aspace.Vmadd_anon(stackva, mem.PGSIZE, 0)
+	p.Aspace.Vmadd_anon(stackva+mem.PGSIZE, stksz-mem.PGSIZE, vm.PTE_U|vm.PTE_W)
 	stackva += stksz
 	// eagerly map first two pages for stack
 	stkeagermap := 2
 	for i := 0; i < stkeagermap; i++ {
-		p := uintptr(stackva - (i+1)*common.PGSIZE)
+		ptr := uintptr(stackva - (i+1)*mem.PGSIZE)
 		_, p_pg, ok := physmem.Refpg_new()
 		if !ok {
 			restore()
-			return int(-common.ENOMEM)
+			return int(-defs.ENOMEM)
 		}
-		_, ok = proc.Page_insert(int(p), p_pg, common.PTE_W|common.PTE_U, true)
+		_, ok = p.Aspace.Page_insert(int(ptr), p_pg, vm.PTE_W|vm.PTE_U, true)
 		if !ok {
 			restore()
-			return int(-common.ENOMEM)
+			return int(-defs.ENOMEM)
 		}
 	}
 
 	// XXX make insertargs not fail by using more than a page...
-	argc, argv, err := insertargs(proc, args)
+	argc, argv, err := insertargs(p, args)
 	if err != 0 {
 		restore()
 		return int(err)
@@ -3401,60 +3389,60 @@ func sys_execv1(proc *common.Proc_t, tf *[common.TFSIZE]uintptr, paths string,
 	bufdest := stackva - words*8
 	tls0addr := bufdest + 2*8
 
-	if err := proc.K2user_inner(buf, bufdest); err != 0 {
+	if err := p.Aspace.K2user_inner(buf, bufdest); err != 0 {
 		restore()
 		return int(err)
 	}
 
 	// the exec must succeed now; free old pmap/mapped files
 	if op_pmap != 0 {
-		common.Uvmfree_inner(opmap, op_pmap, &ovmreg)
+		vm.Uvmfree_inner(opmap, op_pmap, &ovmreg)
 		physmem.Dec_pmap(op_pmap)
 	}
 	ovmreg.Clear()
 
 	// close fds marked with CLOEXEC
-	for fdn, fd := range proc.Fds {
-		if fd == nil {
+	for fdn, f := range p.Fds {
+		if f == nil {
 			continue
 		}
-		if fd.Perms&common.FD_CLOEXEC != 0 {
-			if sys.Sys_close(proc, fdn) != 0 {
+		if f.Perms&fd.FD_CLOEXEC != 0 {
+			if sys.Sys_close(p, fdn) != 0 {
 				panic("close")
 			}
 		}
 	}
 
 	// commit new image state
-	tf[common.TF_RSP] = uintptr(bufdest)
-	tf[common.TF_RIP] = uintptr(elfhdr.entry())
-	tf[common.TF_RFLAGS] = uintptr(common.TF_FL_IF)
+	tf[defs.TF_RSP] = uintptr(bufdest)
+	tf[defs.TF_RIP] = uintptr(elfhdr.entry())
+	tf[defs.TF_RFLAGS] = uintptr(defs.TF_FL_IF)
 	ucseg := uintptr(5)
 	udseg := uintptr(6)
-	tf[common.TF_CS] = (ucseg << 3) | 3
-	tf[common.TF_SS] = (udseg << 3) | 3
-	tf[common.TF_RDI] = uintptr(argc)
-	tf[common.TF_RSI] = uintptr(argv)
-	tf[common.TF_RDX] = uintptr(bufdest)
-	tf[common.TF_FSBASE] = uintptr(tls0addr)
-	proc.Mmapi = common.USERMIN
-	proc.Name = paths
+	tf[defs.TF_CS] = (ucseg << 3) | 3
+	tf[defs.TF_SS] = (udseg << 3) | 3
+	tf[defs.TF_RDI] = uintptr(argc)
+	tf[defs.TF_RSI] = uintptr(argv)
+	tf[defs.TF_RDX] = uintptr(bufdest)
+	tf[defs.TF_FSBASE] = uintptr(tls0addr)
+	p.Mmapi = mem.USERMIN
+	p.Name = paths
 
 	return 0
 }
 
-func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
+func insertargs(p *proc.Proc_t, sargs []ustr.Ustr) (int, int, defs.Err_t) {
 	// find free page
-	uva := proc.Unusedva_inner(0, common.PGSIZE)
-	proc.Vmadd_anon(uva, common.PGSIZE, common.PTE_U)
+	uva := p.Aspace.Unusedva_inner(0, mem.PGSIZE)
+	p.Aspace.Vmadd_anon(uva, mem.PGSIZE, vm.PTE_U)
 	_, p_pg, ok := physmem.Refpg_new()
 	if !ok {
-		return 0, 0, -common.ENOMEM
+		return 0, 0, -defs.ENOMEM
 	}
-	_, ok = proc.Page_insert(uva, p_pg, common.PTE_U, true)
+	_, ok = p.Aspace.Page_insert(uva, p_pg, vm.PTE_U, true)
 	if !ok {
 		physmem.Refdown(p_pg)
-		return 0, 0, -common.ENOMEM
+		return 0, 0, -defs.ENOMEM
 	}
 	//var args [][]uint8
 	args := make([][]uint8, 0, 12)
@@ -3468,7 +3456,7 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 		argptrs[i] = uva + cnt
 		// add null terminators
 		arg = append(arg, 0)
-		if err := proc.K2user_inner(arg, uva+cnt); err != 0 {
+		if err := p.Aspace.K2user_inner(arg, uva+cnt); err != 0 {
 			// args take up more than a page? the user is on their
 			// own.
 			return 0, 0, err
@@ -3478,11 +3466,11 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 	argptrs[len(argptrs)-1] = 0
 	// now put the array of strings
 	argstart := uva + cnt
-	vdata, err := proc.Userdmap8_inner(argstart, true)
+	vdata, err := p.Aspace.Userdmap8_inner(argstart, true)
 	if err != 0 || len(vdata) < len(argptrs)*8 {
 		fmt.Printf("no room for args")
 		// XXX
-		return 0, 0, -common.ENOSPC
+		return 0, 0, -defs.ENOSPC
 	}
 	for i, ptr := range argptrs {
 		writen(vdata, 8, i*8, ptr)
@@ -3490,39 +3478,39 @@ func insertargs(proc *common.Proc_t, sargs []string) (int, int, common.Err_t) {
 	return len(args), argstart, 0
 }
 
-func (s *syscall_t) Sys_exit(proc *common.Proc_t, tid common.Tid_t, status int) {
+func (s *syscall_t) Sys_exit(p *proc.Proc_t, tid defs.Tid_t, status int) {
 	// set doomed so all other threads die
-	proc.Doomall()
-	proc.Thread_dead(tid, status, true)
+	p.Doomall()
+	p.Thread_dead(tid, status, true)
 }
 
-func sys_threxit(proc *common.Proc_t, tid common.Tid_t, status int) {
-	proc.Thread_dead(tid, status, false)
+func sys_threxit(p *proc.Proc_t, tid defs.Tid_t, status int) {
+	p.Thread_dead(tid, status, false)
 }
 
-func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, rusagep,
+func sys_wait4(p *proc.Proc_t, tid defs.Tid_t, wpid, statusp, options, rusagep,
 	_isthread int) int {
-	if wpid == common.WAIT_MYPGRP || options == common.WCONTINUED ||
-		options == common.WUNTRACED {
+	if wpid == defs.WAIT_MYPGRP || options == defs.WCONTINUED ||
+		options == defs.WUNTRACED {
 		panic("no imp")
 	}
 
 	// no waiting for yourself!
-	if tid == common.Tid_t(wpid) {
-		return int(-common.ECHILD)
+	if tid == defs.Tid_t(wpid) {
+		return int(-defs.ECHILD)
 	}
 	isthread := _isthread != 0
-	if isthread && wpid == common.WAIT_ANY {
-		return int(-common.EINVAL)
+	if isthread && wpid == defs.WAIT_ANY {
+		return int(-defs.EINVAL)
 	}
 
-	noblk := options&common.WNOHANG != 0
-	var resp common.Waitst_t
-	var err common.Err_t
+	noblk := options&defs.WNOHANG != 0
+	var resp proc.Waitst_t
+	var err defs.Err_t
 	if isthread {
-		resp, err = proc.Mywait.Reaptid(wpid, noblk)
+		resp, err = p.Mywait.Reaptid(wpid, noblk)
 	} else {
-		resp, err = proc.Mywait.Reappid(wpid, noblk)
+		resp, err = p.Mywait.Reappid(wpid, noblk)
 	}
 
 	if err != 0 {
@@ -3530,23 +3518,23 @@ func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, ru
 	}
 	if isthread {
 		if statusp != 0 {
-			err := proc.Userwriten(statusp, 8, resp.Status)
+			err := p.Aspace.Userwriten(statusp, 8, resp.Status)
 			if err != 0 {
 				return int(err)
 			}
 		}
 	} else {
 		if statusp != 0 {
-			err := proc.Userwriten(statusp, 4, resp.Status)
+			err := p.Aspace.Userwriten(statusp, 4, resp.Status)
 			if err != 0 {
 				return int(err)
 			}
 		}
 		// update total child rusage
-		proc.Catime.Add(&resp.Atime)
+		p.Catime.Add(&resp.Atime)
 		if rusagep != 0 {
 			ru := resp.Atime.To_rusage()
-			err = proc.K2user(ru, rusagep)
+			err = p.Aspace.K2user(ru, rusagep)
 		}
 		if err != 0 {
 			return int(err)
@@ -3555,24 +3543,24 @@ func sys_wait4(proc *common.Proc_t, tid common.Tid_t, wpid, statusp, options, ru
 	return resp.Pid
 }
 
-func sys_kill(proc *common.Proc_t, pid, sig int) int {
-	if sig != common.SIGKILL {
+func sys_kill(p *proc.Proc_t, pid, sig int) int {
+	if sig != defs.SIGKILL {
 		panic("no imp")
 	}
-	p, ok := common.Proc_check(pid)
+	p, ok := proc.Proc_check(pid)
 	if !ok {
-		return int(-common.ESRCH)
+		return int(-defs.ESRCH)
 	}
 	p.Doomall()
 	return 0
 }
 
-func sys_pread(proc *common.Proc_t, fdn, bufn, lenn, offset int) int {
-	fd, err := _fd_read(proc, fdn)
+func sys_pread(p *proc.Proc_t, fdn, bufn, lenn, offset int) int {
+	fd, err := _fd_read(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
-	dst := proc.Mkuserbuf(bufn, lenn)
+	dst := p.Aspace.Mkuserbuf(bufn, lenn)
 	ret, err := fd.Fops.Pread(dst, offset)
 	if err != 0 {
 		return int(err)
@@ -3580,12 +3568,12 @@ func sys_pread(proc *common.Proc_t, fdn, bufn, lenn, offset int) int {
 	return ret
 }
 
-func sys_pwrite(proc *common.Proc_t, fdn, bufn, lenn, offset int) int {
-	fd, err := _fd_write(proc, fdn)
+func sys_pwrite(p *proc.Proc_t, fdn, bufn, lenn, offset int) int {
+	fd, err := _fd_write(p, fdn)
 	if err != 0 {
 		return int(err)
 	}
-	src := proc.Mkuserbuf(bufn, lenn)
+	src := p.Aspace.Mkuserbuf(bufn, lenn)
 	ret, err := fd.Fops.Pwrite(src, offset)
 	if err != 0 {
 		return int(err)
@@ -3703,12 +3691,12 @@ func (f *futex_t) towake(who chan int, v int) {
 }
 
 const (
-	_FUTEX_LAST = common.FUTEX_CNDGIVE
+	_FUTEX_LAST = defs.FUTEX_CNDGIVE
 	// futex internal op
 	_FUTEX_CNDTAKE = 4
 )
 
-func (f *futex_t) _resume(ack chan int, err common.Err_t) {
+func (f *futex_t) _resume(ack chan int, err defs.Err_t) {
 	select {
 	case ack <- int(err):
 	default:
@@ -3716,7 +3704,7 @@ func (f *futex_t) _resume(ack chan int, err common.Err_t) {
 }
 
 func (f *futex_t) futex_start() {
-	common.Kresdebug(1<<10, "futex daemon")
+	res.Kresdebug(1<<10, "futex daemon")
 	maxwait := 10
 	f._cnds = make([]chan int, 0, maxwait)
 	f.cnds = f._cnds
@@ -3726,8 +3714,8 @@ func (f *futex_t) futex_start() {
 	pack := make(chan int, 1)
 	opencount := 1
 	for opencount > 0 {
-		common.Kunresdebug()
-		common.Kresdebug(1<<10, "futex daemon")
+		res.Kunresdebug()
+		res.Kresdebug(1<<10, "futex daemon")
 		tochan, towho := f.tonext()
 		select {
 		case <-tochan:
@@ -3736,7 +3724,7 @@ func (f *futex_t) futex_start() {
 			opencount += d
 		case fm := <-f.cmd:
 			switch fm.op {
-			case common.FUTEX_SLEEP:
+			case defs.FUTEX_SLEEP:
 				val, err := fm.fumem.futload()
 				if err != 0 {
 					f._resume(fm.ack, err)
@@ -3749,7 +3737,7 @@ func (f *futex_t) futex_start() {
 				} else {
 					if (fm.useto && len(f.tos) >= maxwait) ||
 						len(f.cnds) >= maxwait {
-						f._resume(fm.ack, -common.ENOMEM)
+						f._resume(fm.ack, -defs.ENOMEM)
 						break
 					}
 					if fm.useto {
@@ -3757,7 +3745,7 @@ func (f *futex_t) futex_start() {
 					}
 					f.cndsleep(fm.ack)
 				}
-			case common.FUTEX_WAKE:
+			case defs.FUTEX_WAKE:
 				var v int
 				if fm.aux == 1 {
 					v = 0
@@ -3768,7 +3756,7 @@ func (f *futex_t) futex_start() {
 				}
 				f.cndwake(v)
 				f._resume(fm.ack, 0)
-			case common.FUTEX_CNDGIVE:
+			case defs.FUTEX_CNDGIVE:
 				// as an optimization to avoid thundering herd
 				// after pthread_cond_broadcast(3), move
 				// conditional variable's queue of sleepers to
@@ -3794,7 +3782,7 @@ func (f *futex_t) futex_start() {
 					f.cnds = f._cnds
 					f.tos = f._tos
 				}
-				f._resume(fm.ack, common.Err_t(err))
+				f._resume(fm.ack, defs.Err_t(err))
 			case _FUTEX_CNDTAKE:
 				// add new waiters to our queue; get them
 				// tickets
@@ -3802,7 +3790,7 @@ func (f *futex_t) futex_start() {
 				tohere := fm.totake
 				if len(f.cnds)+len(here) >= maxwait ||
 					len(f.tos)+len(tohere) >= maxwait {
-					f._resume(fm.ack, -common.ENOMEM)
+					f._resume(fm.ack, -defs.ENOMEM)
 					break
 				}
 				f.cnds = append(f.cnds, here...)
@@ -3813,7 +3801,7 @@ func (f *futex_t) futex_start() {
 			}
 		}
 	}
-	common.Kunresdebug()
+	res.Kunresdebug()
 }
 
 type allfutex_t struct {
@@ -3823,12 +3811,12 @@ type allfutex_t struct {
 
 var _allfutex = allfutex_t{m: map[uintptr]futex_t{}}
 
-func futex_ensure(uniq uintptr) (futex_t, common.Err_t) {
+func futex_ensure(uniq uintptr) (futex_t, defs.Err_t) {
 	_allfutex.Lock()
-	if len(_allfutex.m) > common.Syslimit.Futexes {
+	if len(_allfutex.m) > limits.Syslimit.Futexes {
 		_allfutex.Unlock()
 		var zf futex_t
-		return zf, -common.ENOMEM
+		return zf, -defs.ENOMEM
 	}
 	r, ok := _allfutex.m[uniq]
 	if !ok {
@@ -3843,25 +3831,25 @@ func futex_ensure(uniq uintptr) (futex_t, common.Err_t) {
 
 // pmap must be locked. maps user va to kernel va. returns kva as uintptr and
 // *uint32
-func _uva2kva(proc *common.Proc_t, va uintptr) (uintptr, *uint32, common.Err_t) {
-	proc.Lockassert_pmap()
+func _uva2kva(p *proc.Proc_t, va uintptr) (uintptr, *uint32, defs.Err_t) {
+	p.Aspace.Lockassert_pmap()
 
-	pte := common.Pmap_lookup(proc.Pmap, int(va))
-	if pte == nil || *pte&common.PTE_P == 0 || *pte&common.PTE_U == 0 {
-		return 0, nil, -common.EFAULT
+	pte := vm.Pmap_lookup(p.Aspace.Pmap, int(va))
+	if pte == nil || *pte&vm.PTE_P == 0 || *pte&vm.PTE_U == 0 {
+		return 0, nil, -defs.EFAULT
 	}
-	pgva := physmem.Dmap(*pte & common.PTE_ADDR)
-	pgoff := uintptr(va) & uintptr(common.PGOFFSET)
+	pgva := physmem.Dmap(*pte & vm.PTE_ADDR)
+	pgoff := uintptr(va) & uintptr(vm.PGOFFSET)
 	uniq := uintptr(unsafe.Pointer(pgva)) + pgoff
 	return uniq, (*uint32)(unsafe.Pointer(uniq)), 0
 }
 
-func va2fut(proc *common.Proc_t, va uintptr) (futex_t, common.Err_t) {
-	proc.Lock_pmap()
-	defer proc.Unlock_pmap()
+func va2fut(p *proc.Proc_t, va uintptr) (futex_t, defs.Err_t) {
+	p.Aspace.Lock_pmap()
+	defer p.Aspace.Unlock_pmap()
 
 	var zf futex_t
-	uniq, _, err := _uva2kva(proc, va)
+	uniq, _, err := _uva2kva(p, va)
 	if err != 0 {
 		return zf, err
 	}
@@ -3871,15 +3859,15 @@ func va2fut(proc *common.Proc_t, va uintptr) (futex_t, common.Err_t) {
 // an object for atomically looking-up and incrementing/loading from a user
 // address
 type futumem_t struct {
-	proc *common.Proc_t
+	p    *proc.Proc_t
 	umem uintptr
 }
 
-func (fu *futumem_t) futload() (uint32, common.Err_t) {
-	fu.proc.Lock_pmap()
-	defer fu.proc.Unlock_pmap()
+func (fu *futumem_t) futload() (uint32, defs.Err_t) {
+	fu.p.Aspace.Lock_pmap()
+	defer fu.p.Aspace.Unlock_pmap()
 
-	_, ptr, err := _uva2kva(fu.proc, fu.umem)
+	_, ptr, err := _uva2kva(fu.p, fu.umem)
 	if err != 0 {
 		return 0, err
 	}
@@ -3888,18 +3876,18 @@ func (fu *futumem_t) futload() (uint32, common.Err_t) {
 	return ret, 0
 }
 
-func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int {
+func sys_futex(p *proc.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int {
 	op := uint(_op)
 	if op > _FUTEX_LAST {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	futn := uintptr(_futn)
 	fut2n := uintptr(_fut2n)
 	// futn must be 4 byte aligned
 	if (futn|fut2n)&0x3 != 0 {
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
-	fut, err := va2fut(proc, futn)
+	fut, err := va2fut(p, futn)
 	if err != 0 {
 		return int(err)
 	}
@@ -3907,34 +3895,34 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 	var fm futexmsg_t
 	// could lazily allocate one futex channel per thread
 	fm.fmsg_init(op, uint32(aux), make(chan int, 1))
-	fm.fumem = futumem_t{proc, futn}
+	fm.fumem = futumem_t{p, futn}
 
 	if timespecn != 0 {
-		_, when, err := proc.Usertimespec(timespecn)
+		_, when, err := p.Aspace.Usertimespec(timespecn)
 		if err != 0 {
 			return int(err)
 		}
 		n := time.Now()
 		if when.Before(n) {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
 		fm.timeout = when
 		fm.useto = true
 	}
 
-	if op == common.FUTEX_CNDGIVE {
-		fm.othmut, err = va2fut(proc, fut2n)
+	if op == defs.FUTEX_CNDGIVE {
+		fm.othmut, err = va2fut(p, fut2n)
 		if err != 0 {
 			return int(err)
 		}
 	}
 
-	kn := &common.Current().Killnaps
+	kn := &tinfo.Current().Killnaps
 	fut.cmd <- fm
 	select {
 	case ret := <-fm.ack:
 		return ret
-	case <- kn.Killch:
+	case <-kn.Killch:
 		if kn.Kerr == 0 {
 			panic("no")
 		}
@@ -3942,67 +3930,62 @@ func sys_futex(proc *common.Proc_t, _op, _futn, _fut2n, aux, timespecn int) int 
 	}
 }
 
-func sys_gettid(proc *common.Proc_t, tid common.Tid_t) int {
+func sys_gettid(p *proc.Proc_t, tid defs.Tid_t) int {
 	return int(tid)
 }
 
-func sys_fcntl(proc *common.Proc_t, fdn, cmd, opt int) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_fcntl(p *proc.Proc_t, fdn, cmd, opt int) int {
+	f, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 	switch cmd {
 	// general fcntl(2) ops
-	case common.F_GETFD:
-		return fd.Perms & common.FD_CLOEXEC
-	case common.F_SETFD:
-		if opt&common.FD_CLOEXEC == 0 {
-			fd.Perms &^= common.FD_CLOEXEC
+	case defs.F_GETFD:
+		return f.Perms & fd.FD_CLOEXEC
+	case defs.F_SETFD:
+		if opt&fd.FD_CLOEXEC == 0 {
+			f.Perms &^= fd.FD_CLOEXEC
 		} else {
-			fd.Perms |= common.FD_CLOEXEC
+			f.Perms |= fd.FD_CLOEXEC
 		}
 		return 0
 	// fd specific fcntl(2) ops
-	case common.F_GETFL, common.F_SETFL:
-		return fd.Fops.Fcntl(proc, cmd, opt)
+	case defs.F_GETFL, defs.F_SETFL:
+		return f.Fops.Fcntl(cmd, opt)
 	default:
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 }
 
-func sys_truncate(proc *common.Proc_t, pathn int, newlen uint) int {
-	path, err := proc.Userstr(pathn, fs.NAME_MAX)
+func sys_truncate(p *proc.Proc_t, pathn int, newlen uint) int {
+	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
 	if err := badpath(path); err != 0 {
 		return int(err)
 	}
-	pi := proc.Cwd().Fops.Pathi()
-	f, err := thefs.Fs_open(path, common.O_WRONLY, 0, pi, 0, 0)
+	f, err := thefs.Fs_open(path, defs.O_WRONLY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
 	err = f.Fops.Truncate(newlen)
-	common.Close_panic(f)
+	fd.Close_panic(f)
 	return int(err)
 }
 
-func sys_ftruncate(proc *common.Proc_t, fdn int, newlen uint) int {
-	fd, ok := proc.Fd_get(fdn)
+func sys_ftruncate(p *proc.Proc_t, fdn int, newlen uint) int {
+	fd, ok := p.Fd_get(fdn)
 	if !ok {
-		return int(-common.EBADF)
+		return int(-defs.EBADF)
 	}
 	return int(fd.Fops.Truncate(newlen))
 }
 
-func sys_getcwd(proc *common.Proc_t, bufn, sz int) int {
-	dst := proc.Mkuserbuf(bufn, sz)
-	pwd, err := proc.Cwd().Fops.Fullpath()
-	if err != 0 {
-		return int(err)
-	}
-	_, err = dst.Uiowrite([]uint8(pwd))
+func sys_getcwd(p *proc.Proc_t, bufn, sz int) int {
+	dst := p.Aspace.Mkuserbuf(bufn, sz)
+	_, err := dst.Uiowrite([]uint8(p.Cwd.Path))
 	if err != 0 {
 		return int(err)
 	}
@@ -4012,8 +3995,8 @@ func sys_getcwd(proc *common.Proc_t, bufn, sz int) int {
 	return 0
 }
 
-func sys_chdir(proc *common.Proc_t, dirn int) int {
-	path, err := proc.Userstr(dirn, fs.NAME_MAX)
+func sys_chdir(p *proc.Proc_t, dirn int) int {
+	path, err := p.Aspace.Userstr(dirn, fs.NAME_MAX)
 	if err != 0 {
 		return int(err)
 	}
@@ -4022,22 +4005,26 @@ func sys_chdir(proc *common.Proc_t, dirn int) int {
 		return int(err)
 	}
 
-	proc.Cwdl.Lock()
-	defer proc.Cwdl.Unlock()
+	p.Cwd.Lock()
+	defer p.Cwd.Unlock()
 
-	pi := proc.Cwd().Fops.Pathi()
-	newcwd, err := thefs.Fs_open(path, common.O_RDONLY|common.O_DIRECTORY, 0, pi, 0, 0)
+	newfd, err := thefs.Fs_open(path, defs.O_RDONLY|defs.O_DIRECTORY, 0, p.Cwd, 0, 0)
 	if err != 0 {
 		return int(err)
 	}
-	common.Close_panic(proc.Cwd())
-	proc.Set_cwd(newcwd)
+	fd.Close_panic(p.Cwd.Fd)
+	p.Cwd.Fd = newfd
+	if path.IsAbsolute() {
+		p.Cwd.Path = bpath.Canonicalize(path)
+	} else {
+		p.Cwd.Path = p.Cwd.Canonicalpath(path)
+	}
 	return 0
 }
 
-func badpath(path string) common.Err_t {
+func badpath(path ustr.Ustr) defs.Err_t {
 	if len(path) == 0 {
-		return -common.ENOENT
+		return -defs.ENOENT
 	}
 	return 0
 }
@@ -4176,27 +4163,27 @@ func _prof_pmc(en bool, events []pmev_t) {
 	}
 }
 
-var fakeptr *common.Proc_t
+var fakeptr *proc.Proc_t
 
 //var fakedur = make([][]uint8, 256)
 //var duri int
 
-func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int {
+func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 	en := true
-	if ptype&common.PROF_DISABLE != 0 {
+	if ptype&defs.PROF_DISABLE != 0 {
 		en = false
 	}
 	pmflags := pmflag_t(_pmflags)
 	switch {
-	case ptype&common.PROF_GOLANG != 0:
+	case ptype&defs.PROF_GOLANG != 0:
 		_prof_go(en)
-	case ptype&common.PROF_SAMPLE != 0:
+	case ptype&defs.PROF_SAMPLE != 0:
 		ev := pmev_t{evid: pmevid_t(_events),
 			pflags: pmflags}
 		_prof_nmi(en, ev, intperiod)
-	case ptype&common.PROF_COUNT != 0:
-		if pmflags & EVF_BACKTRACE != 0 {
-			return int(-common.EINVAL)
+	case ptype&defs.PROF_COUNT != 0:
+		if pmflags&EVF_BACKTRACE != 0 {
+			return int(-defs.EINVAL)
 		}
 		evs := make([]pmev_t, 0, 4)
 		for i := uint(0); i < 64; i++ {
@@ -4209,17 +4196,17 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 			}
 		}
 		_prof_pmc(en, evs)
-	case ptype&common.PROF_HACK != 0:
+	case ptype&defs.PROF_HACK != 0:
 		runtime.Setheap(_events << 20)
-	case ptype&common.PROF_HACK2 != 0:
+	case ptype&defs.PROF_HACK2 != 0:
 		if _events < 0 {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
 		fmt.Printf("GOGC = %v\n", _events)
 		debug.SetGCPercent(_events)
-	case ptype&common.PROF_HACK3 != 0:
+	case ptype&defs.PROF_HACK3 != 0:
 		if _events < 0 {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
 		buf := make([]uint8, _events)
 		if buf == nil {
@@ -4229,12 +4216,12 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		//for i := 0; i < _events/8; i++ {
 		//fakeptr = proc
 		//}
-	case ptype&common.PROF_HACK4 != 0:
-		makefake(proc)
-	case ptype&common.PROF_HACK5 != 0:
+	case ptype&defs.PROF_HACK4 != 0:
+		makefake(p)
+	case ptype&defs.PROF_HACK5 != 0:
 		n := _events
 		if n < 0 {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
 		runtime.SetMaxheap(n)
 		fmt.Printf("remaining mem: %v\n",
@@ -4249,18 +4236,18 @@ func sys_prof(proc *common.Proc_t, ptype, _events, _pmflags, intperiod int) int 
 		runtime.Assistfactor = frac
 		fmt.Printf("assist factor = %v\n", frac)
 	default:
-		return int(-common.EINVAL)
+		return int(-defs.EINVAL)
 	}
 	return 0
 }
 
-func makefake(p *common.Proc_t) common.Err_t {
+func makefake(p *proc.Proc_t) defs.Err_t {
 	p.Fdl.Lock()
 	defer p.Fdl.Unlock()
 
 	made := 0
 	const want = 1e6
-	newfds := make([]*common.Fd_t, want)
+	newfds := make([]*fd.Fd_t, want)
 
 	for times := 0; times < 4; times++ {
 		fmt.Printf("close half...\n")
@@ -4293,32 +4280,32 @@ func makefake(p *common.Proc_t) common.Err_t {
 	return 0
 }
 
-func sys_info(proc *common.Proc_t, n int) int {
+func sys_info(p *proc.Proc_t, n int) int {
 	ms := &runtime.MemStats{}
 	runtime.ReadMemStats(ms)
 
-	ret := int(-common.EINVAL)
+	ret := int(-defs.EINVAL)
 	switch n {
-	case common.SINFO_GCCOUNT:
+	case defs.SINFO_GCCOUNT:
 		ret = int(ms.NumGC)
-	case common.SINFO_GCPAUSENS:
+	case defs.SINFO_GCPAUSENS:
 		ret = int(ms.PauseTotalNs)
-	case common.SINFO_GCHEAPSZ:
+	case defs.SINFO_GCHEAPSZ:
 		ret = int(ms.Alloc)
 		fmt.Printf("Total heap size: %v MB (%v MB)\n",
 			runtime.Heapsz()/(1<<20), ms.Alloc>>20)
-	case common.SINFO_GCMS:
+	case defs.SINFO_GCMS:
 		tot := runtime.GCmarktime() + runtime.GCbgsweeptime()
 		ret = tot / 1000000
-	case common.SINFO_GCTOTALLOC:
+	case defs.SINFO_GCTOTALLOC:
 		ret = int(ms.TotalAlloc)
-	case common.SINFO_GCMARKT:
+	case defs.SINFO_GCMARKT:
 		ret = runtime.GCmarktime() / 1000000
-	case common.SINFO_GCSWEEPT:
+	case defs.SINFO_GCSWEEPT:
 		ret = runtime.GCbgsweeptime() / 1000000
-	case common.SINFO_GCWBARRT:
+	case defs.SINFO_GCWBARRT:
 		ret = runtime.GCwbenabledtime() / 1000000
-	case common.SINFO_GCOBJS:
+	case defs.SINFO_GCOBJS:
 		ret = int(ms.HeapObjects)
 	case common.SINFO_DOGC:
 		runtime.GC()
@@ -4326,13 +4313,13 @@ func sys_info(proc *common.Proc_t, n int) int {
 		p1, p2 := physmem.Pgcount()
 		fmt.Printf("pgcount: %v, %v\n", p1, p2)
 	case common.SINFO_PROCLIST:
-		//proc.Vmregion.dump()
+		//p.Aspace.Vmregion.dump()
 		fmt.Printf("proc dump:\n")
-		common.Proclock.Lock()
-		for i := range common.Allprocs {
-			fmt.Printf("   %3v %v\n", common.Allprocs[i].Pid, common.Allprocs[i].Name)
+		proc.Proclock.Lock()
+		for i := range proc.Allprocs {
+			fmt.Printf("   %3v %v\n", proc.Allprocs[i].Pid, proc.Allprocs[i].Name)
 		}
-		common.Proclock.Unlock()
+		proc.Proclock.Unlock()
 		ret = 0
 	}
 
@@ -4491,15 +4478,15 @@ func (e *elf_t) entry() int {
 	return readn(e.data, ELF_ADDR, e_entry)
 }
 
-func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i) common.Err_t {
-	if hdr.vaddr%common.PGSIZE != hdr.fileoff%common.PGSIZE {
+func segload(p *proc.Proc_t, entry int, hdr *elf_phdr, fops fdops.Fdops_i) defs.Err_t {
+	if hdr.vaddr%mem.PGSIZE != hdr.fileoff%mem.PGSIZE {
 		panic("requires copying")
 	}
-	perms := common.PTE_U
+	perms := vm.PTE_U
 	//PF_X := 1
 	PF_W := 2
 	if hdr.flags&PF_W != 0 {
-		perms |= common.PTE_W
+		perms |= vm.PTE_W
 	}
 
 	var did int
@@ -4507,10 +4494,10 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	// previous segment. if that is the case, we may not be able to avoid
 	// copying.
 	// XXX this doesn't seem to happen anymore; why was it ever the case?
-	if _, ok := proc.Vmregion.Lookup(uintptr(hdr.vaddr)); ok {
+	if _, ok := p.Aspace.Vmregion.Lookup(uintptr(hdr.vaddr)); ok {
 		panic("htf")
 		va := hdr.vaddr
-		pg, err := proc.Userdmap8_inner(va, true)
+		pg, err := p.Aspace.Userdmap8_inner(va, true)
 		if err != 0 {
 			return err
 		}
@@ -4518,25 +4505,25 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 		if err != 0 {
 			return err
 		}
-		bsrc := common.Pg2bytes(mmapi[0].Pg)[:]
-		bsrc = bsrc[va&int(common.PGOFFSET):]
+		bsrc := mem.Pg2bytes(mmapi[0].Pg)[:]
+		bsrc = bsrc[va&int(vm.PGOFFSET):]
 		if len(pg) > hdr.filesz {
 			pg = pg[0:hdr.filesz]
 		}
 		copy(pg, bsrc)
 		did = len(pg)
 	}
-	filesz := common.Roundup(hdr.vaddr+hdr.filesz-did, common.PGSIZE)
-	filesz -= common.Rounddown(hdr.vaddr, common.PGSIZE)
-	proc.Vmadd_file(hdr.vaddr+did, filesz, perms, fops, hdr.fileoff+did)
+	filesz := util.Roundup(hdr.vaddr+hdr.filesz-did, mem.PGSIZE)
+	filesz -= util.Rounddown(hdr.vaddr, mem.PGSIZE)
+	p.Aspace.Vmadd_file(hdr.vaddr+did, filesz, perms, fops, hdr.fileoff+did)
 	// eagerly map the page at the entry address
 	if entry >= hdr.vaddr && entry < hdr.vaddr+hdr.memsz {
 		ent := uintptr(entry)
-		vmi, ok := proc.Vmregion.Lookup(ent)
+		vmi, ok := p.Aspace.Vmregion.Lookup(ent)
 		if !ok {
 			panic("just mapped?")
 		}
-		err := common.Sys_pgfault(proc, vmi, ent, uintptr(common.PTE_U))
+		err := vm.Sys_pgfault(&p.Aspace, vmi, ent, uintptr(vm.PTE_U))
 		if err != 0 {
 			return err
 		}
@@ -4549,28 +4536,28 @@ func segload(proc *common.Proc_t, entry int, hdr *elf_phdr, fops common.Fdops_i)
 	// per-process copy and zero the bss bytes in the copy.
 	bssva := hdr.vaddr + hdr.filesz
 	bsslen := hdr.memsz - hdr.filesz
-	if bssva&int(common.PGOFFSET) != 0 {
-		bpg, err := proc.Userdmap8_inner(bssva, true)
+	if bssva&int(vm.PGOFFSET) != 0 {
+		bpg, err := p.Aspace.Userdmap8_inner(bssva, true)
 		if err != 0 {
 			return err
 		}
 		if bsslen < len(bpg) {
 			bpg = bpg[:bsslen]
 		}
-		copy(bpg, common.Zerobpg[:])
+		copy(bpg, mem.Zerobpg[:])
 		bssva += len(bpg)
-		bsslen = common.Roundup(bsslen-len(bpg), common.PGSIZE)
+		bsslen = util.Roundup(bsslen-len(bpg), mem.PGSIZE)
 	}
 	// bss may have been completely contained in the copied page.
 	if bsslen > 0 {
-		proc.Vmadd_anon(bssva, common.Roundup(bsslen, common.PGSIZE), perms)
+		p.Aspace.Vmadd_anon(bssva, util.Roundup(bsslen, mem.PGSIZE), perms)
 	}
 	return 0
 }
 
 // returns user address of read-only TLS, thread 0's TLS image, TLS size, and
 // success. caller must hold proc's pagemap lock.
-func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, common.Err_t) {
+func (e *elf_t) elf_load(p *proc.Proc_t, f *fd.Fd_t) (int, int, int, defs.Err_t) {
 	PT_LOAD := 1
 	PT_TLS := 7
 	istls := false
@@ -4578,21 +4565,21 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, co
 	var tlsaddr int
 	var tlscopylen int
 
-	gimme := common.Bounds(common.B_ELF_T_ELF_LOAD)
+	gimme := bounds.Bounds(bounds.B_ELF_T_ELF_LOAD)
 	entry := e.entry()
 	// load each elf segment directly into process memory
 	for _, hdr := range e.headers() {
 		// XXX get rid of worthless user program segments
-		if !common.Resadd_noblock(gimme) {
-			return 0, 0, 0, -common.ENOHEAP
+		if !res.Resadd_noblock(gimme) {
+			return 0, 0, 0, -defs.ENOHEAP
 		}
 		if hdr.etype == PT_TLS {
 			istls = true
 			tlsaddr = hdr.vaddr
-			tlssize = common.Roundup(hdr.memsz, 8)
+			tlssize = util.Roundup(hdr.memsz, 8)
 			tlscopylen = hdr.filesz
-		} else if hdr.etype == PT_LOAD && hdr.vaddr >= common.USERMIN {
-			err := segload(proc, entry, &hdr, f.Fops)
+		} else if hdr.etype == PT_LOAD && hdr.vaddr >= mem.USERMIN {
+			err := segload(p, entry, &hdr, f.Fops)
 			if err != 0 {
 				return 0, 0, 0, err
 			}
@@ -4603,53 +4590,53 @@ func (e *elf_t) elf_load(proc *common.Proc_t, f *common.Fd_t) (int, int, int, co
 	t0tls := 0
 	if istls {
 		// create fresh TLS image and map it COW for thread 0
-		l := common.Roundup(tlsaddr+tlssize, common.PGSIZE)
-		l -= common.Rounddown(tlsaddr, common.PGSIZE)
+		l := util.Roundup(tlsaddr+tlssize, mem.PGSIZE)
+		l -= util.Rounddown(tlsaddr, mem.PGSIZE)
 
-		freshtls = proc.Unusedva_inner(0, 2*l)
+		freshtls = p.Aspace.Unusedva_inner(0, 2*l)
 		t0tls = freshtls + l
-		proc.Vmadd_anon(freshtls, l, common.PTE_U)
-		proc.Vmadd_anon(t0tls, l, common.PTE_U|common.PTE_W)
-		perms := common.PTE_U
+		p.Aspace.Vmadd_anon(freshtls, l, vm.PTE_U)
+		p.Aspace.Vmadd_anon(t0tls, l, vm.PTE_U|vm.PTE_W)
+		perms := vm.PTE_U
 
-		for i := 0; i < l; i += common.PGSIZE {
+		for i := 0; i < l; i += mem.PGSIZE {
 			// allocator zeros objects, so tbss is already
 			// initialized.
 			_, p_pg, ok := physmem.Refpg_new()
 			if !ok {
-				return 0, 0, 0, -common.ENOMEM
+				return 0, 0, 0, -defs.ENOMEM
 			}
-			_, ok = proc.Page_insert(freshtls+i, p_pg, perms,
+			_, ok = p.Aspace.Page_insert(freshtls+i, p_pg, perms,
 				true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, -common.ENOMEM
+				return 0, 0, 0, -defs.ENOMEM
 			}
 			// map fresh TLS for thread 0
-			nperms := perms | common.PTE_COW
-			_, ok = proc.Page_insert(t0tls+i, p_pg, nperms, true)
+			nperms := perms | vm.PTE_COW
+			_, ok = p.Aspace.Page_insert(t0tls+i, p_pg, nperms, true)
 			if !ok {
 				physmem.Refdown(p_pg)
-				return 0, 0, 0, -common.ENOMEM
+				return 0, 0, 0, -defs.ENOMEM
 			}
 		}
 		// copy TLS data to freshtls
-		tlsvmi, ok := proc.Vmregion.Lookup(uintptr(tlsaddr))
+		tlsvmi, ok := p.Aspace.Vmregion.Lookup(uintptr(tlsaddr))
 		if !ok {
 			panic("must succeed")
 		}
 		for i := 0; i < tlscopylen; {
-			if !common.Resadd_noblock(gimme) {
-				return 0, 0, 0, -common.ENOHEAP
+			if !res.Resadd_noblock(gimme) {
+				return 0, 0, 0, -defs.ENOHEAP
 			}
 
 			_src, p_pg, err := tlsvmi.Filepage(uintptr(tlsaddr + i))
 			if err != 0 {
 				return 0, 0, 0, err
 			}
-			off := (tlsaddr + i) & int(common.PGOFFSET)
-			src := common.Pg2bytes(_src)[off:]
-			bpg, err := proc.Userdmap8_inner(freshtls+i, true)
+			off := (tlsaddr + i) & int(vm.PGOFFSET)
+			src := mem.Pg2bytes(_src)[off:]
+			bpg, err := p.Aspace.Userdmap8_inner(freshtls+i, true)
 			if err != 0 {
 				physmem.Refdown(p_pg)
 				return 0, 0, 0, err

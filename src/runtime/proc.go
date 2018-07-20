@@ -275,6 +275,7 @@ func goschedguarded() {
 // unlockf must not access this G's stack, as it may be moved between
 // the call to gopark and the call to unlockf.
 func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason string, traceEv byte, traceskip int) {
+	// Bluh()
 	mp := acquirem()
 	gp := mp.curg
 	status := readgstatus(gp)

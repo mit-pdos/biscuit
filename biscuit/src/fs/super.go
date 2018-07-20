@@ -1,9 +1,9 @@
 package fs
 
-import "common"
+import "mem"
 
 type Superblock_t struct {
-	Data *common.Bytepg_t
+	Data *mem.Bytepg_t
 }
 
 func (sb *Superblock_t) Loglen() int {

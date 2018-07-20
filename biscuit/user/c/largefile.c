@@ -142,7 +142,6 @@ int main(int argc, char *argv[])
       write = 0;
       break;
     default:
-      printf("ch = %c\n", ch);
       usage(argv[0]);
       break;
     }
