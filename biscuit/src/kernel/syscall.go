@@ -4225,12 +4225,12 @@ func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 		}
 		runtime.SetMaxheap(n)
 		fmt.Printf("remaining mem: %v\n",
-		    common.Human(runtime.Memremain()))
-	case ptype&common.PROF_HACK6 != 0:
+		    res.Human(runtime.Memremain()))
+	case ptype&defs.PROF_HACK6 != 0:
 		anum := float64(_events)
 		adenom := float64(_pmflags)
 		if adenom <= 0 || anum <= 0 {
-			return int(-common.EINVAL)
+			return int(-defs.EINVAL)
 		}
 		frac := anum/adenom
 		runtime.Assistfactor = frac
@@ -4307,12 +4307,12 @@ func sys_info(p *proc.Proc_t, n int) int {
 		ret = runtime.GCwbenabledtime() / 1000000
 	case defs.SINFO_GCOBJS:
 		ret = int(ms.HeapObjects)
-	case common.SINFO_DOGC:
+	case defs.SINFO_DOGC:
 		runtime.GC()
 		ret = 0
 		p1, p2 := physmem.Pgcount()
 		fmt.Printf("pgcount: %v, %v\n", p1, p2)
-	case common.SINFO_PROCLIST:
+	case defs.SINFO_PROCLIST:
 		//p.Aspace.Vmregion.dump()
 		fmt.Printf("proc dump:\n")
 		proc.Proclock.Lock()
