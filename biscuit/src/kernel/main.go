@@ -10,12 +10,15 @@ import "sync"
 import "time"
 import "unsafe"
 
+import "ahci"
+import "apic"
 import "caller"
 import "defs"
 import "fd"
 import "fdops"
 import "fs"
 import "mem"
+import "pci"
 import "proc"
 import "res"
 import "stat"
@@ -28,15 +31,6 @@ import "vm"
 const (
 	IRQ_LAST = defs.INT_MSI7
 )
-
-var bsp_apic_id int
-
-// these functions can only be used when interrupts are cleared
-//go:nosplit
-func lap_id() int {
-	lapaddr := (*[1024]uint32)(unsafe.Pointer(uintptr(0xfee00000)))
-	return int(lapaddr[0x20/4] >> 24)
-}
 
 var nirqs [100]int
 var irqs int
@@ -75,7 +69,7 @@ func trapstub(tf *[defs.TFSIZE]uintptr) {
 		// another interrupt from the same IRQ). the LAPIC EOI happens
 		// in the runtime...
 		irqno := int(trapno - defs.IRQ_BASE)
-		apic.irq_mask(irqno)
+		apic.Apic.Irq_mask(irqno)
 	case defs.INT_MSI0, defs.INT_MSI1, defs.INT_MSI2, defs.INT_MSI3,
 		defs.INT_MSI4, defs.INT_MSI5, defs.INT_MSI6, defs.INT_MSI7:
 		// MSI dispatch doesn't use the IO APIC, thus no need for
@@ -98,7 +92,7 @@ func trap_disk(intn uint) {
 		runtime.IRQsched(intn)
 
 		// is this a disk int?
-		if !disk.intr() {
+		if !pci.Disk.Intr() {
 			fmt.Printf("spurious disk int\n")
 			return
 		}
@@ -655,12 +649,12 @@ func set_cpucount(n int) {
 }
 
 func irq_unmask(irq int) {
-	apic.irq_unmask(irq)
+	apic.Apic.Irq_unmask(irq)
 }
 
 func irq_eoi(irq int) {
 	//apic.eoi(irq)
-	apic.irq_unmask(irq)
+	apic.Apic.Irq_unmask(irq)
 }
 
 func kbd_init() {
@@ -950,8 +944,10 @@ func kbd_get(cnt int) ([]byte, defs.Err_t) {
 }
 
 func attach_devs() int {
-	ncpu := acpi_attach()
-	pcibus_attach()
+	Ixgbe_init()
+	ahci.Ahci_init()
+	ncpu := apic.Acpi_attach()
+	pci.Pcibus_attach()
 	return ncpu
 }
 
@@ -1452,7 +1448,8 @@ func main() {
 	//	for {
 	//	}
 	//}
-	bsp_apic_id = lap_id()
+
+	apic.Bsp_init()
 	physmem = mem.Phys_init()
 
 	go func() {
@@ -1496,7 +1493,7 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
-	rf, fs := fs.StartFS(blockmem, ahci, console, diskfs)
+	rf, fs := fs.StartFS(ahci.Blockmem, ahci.Ahci, console, diskfs)
 	thefs = fs
 
 	proc.Oom_init(thefs.Fs_evict)

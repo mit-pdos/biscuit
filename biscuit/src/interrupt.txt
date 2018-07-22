@@ -1,0 +1,95 @@
+/* x86 interrupts -- a truly horrifying nightmare
+ *
+ * braindumping here to remind myself later.
+ *
+ * TERMINOLOGY:
+ *
+ * Polarity: the electical state of the wire which the device causes when said
+ *     device wants an interrupt. active-high or active-low.
+ * Trigger mode/sense: how long a device will put the wire to the interrupt
+ *     polarity. edge-triggered or level-triggered. an interrupt controller
+ *     must be told how the devices use each interrupt line i.e. the polarity
+ *     and trigger mode of each line.
+ * PIC/8259: legacy interrupt controllers from the original PC-AT from 1984. an
+ *     8259 only has 8 input pins. thus, in order to handle all 16 of the
+ *     legacy interrupts, two 8259s were setup "cascaded" (the output of the
+ *     "slave" is connected to IRQ 2 of the "master"). thus both 8259s are
+ *     programmed independently.
+ * IRQ: interrupt line connected to an 8259 (not IOAPIC). on some modern
+ *     southbridges, IRQs are actually implemented by a single wire using
+ *     "serial IRQs". IRQs are edge-triggered, active-high. IRQs cannot be
+ *     shared with PCI interrupts because PCI interrupts are level-triggered
+ *     and active-low. however, some southbridges allow PCI interrupts to be
+ *     "steered" (converted) to IRQs and take care of converting the
+ *     polarity/trigger-mode of the wire.
+ * PIRQ: PCI interrupt line. level-triggered and active-low.
+ * PCI interrupt pins: each PCI device has four pins: INT[A-D]#. each pin can
+ *     be connected to a different IOAPIC input pin or PCI link device. thus
+ *     the OS must determine the mapping of the PCI interrupt pin used by a
+ *     device to the IOAPIC input pin. this is the main challenge of x86
+ *     interrupts.
+ * PCI link device: programmable interrupt router. it routes PCI interrupt pins
+ *     to different IOAPIC or 8259 input pins.
+ * PIC mode: one of the two legacy modes stipulated by MP specification. in
+ *     this mode, the 8259s are connected directly to the BSP, bypassing the
+ *     BSPs LAPIC.
+ * Virtual Wire mode: the other of the two legacy modes stipulated by the MP
+ *     specification. in this mode the 8259s are connected to LINT0 (an
+ *     interrupt pin) of the BSP (not bypassing the LAPIC as in PIC mode).
+ * Symmetric mode: a mode stipulated by the MP specification where IOAPICs are
+ *     used instead of 8259s which can deliver interrupts to any CPU, not just
+ *     the BSP.
+ * 8259 mode: ACPI's name for the mode that a PC starts in when booting (in MP
+ *     spec terminology, either PIC mode or Virtual Wire mode).
+ * APIC mode: ACPI's name for the mode where the PC uses IOAPICs instead of
+ *     8259s ("Symmetric mode" in MP spec terminology). the OS tells ACPI that
+ *     the system is switching to APIC mode by executing the _PIC method with
+ *     argument 1 (one).
+ * Global system interrupts: ACPI terminology for the distinct IDs assigned to
+ *     each interrupt. ACPI provides a table (MADT) that contains the number of
+ *     input pins and the global system interrupt start for each IOAPIC, thus
+ *     the OS can figure out the mapping of global system interrupts to IOAPIC
+ *     input pins.
+ * Interrupt source override: information contained in ACPI's MADT table that
+ *     instructs the OS how an IRQ maps to an IOAPIC input pin (the IOAPIC pin
+ *     number, polarity, and trigger mode).
+ *
+ * HOW THE OS MAPS PCI INTERRUPT PINS TO IOAPIC INPUT PINS
+ *
+ * 1. the system boots in PIC or virtual wire mode. the BIOS has arbitrarily
+ * routed interrupts from PCI devices to IRQs via PCI link devices. ACPI is
+ * thinks the system is in 8259 mode.
+ *
+ * 2. OS decides to use IOAPICs instead of 8259s. the OS disables 8259s via
+ * IMCR register (see MP spec).
+ *
+ * 3. OS executes ACPI _PIC method with argument value of "1" to ensure that
+ * ACPI methods return information concerning IOAPICs and not 8259s.
+ *
+ * 4. for each PCI device's chosen PCI interrupt pin, the OS iterates through
+ * the objects returned by the _PRT (PCI routing table) method on the
+ * corresponding bus node in the ACPI device tree looking for the entry for
+ * this (PCI dev number, PCI pin) pair. the resulting object describes either
+ * the IOAPIC pin or the PCI link device to which the PCI pin connects. if the
+ * former, the task is done.
+ *
+ * 5. the OS uses the ACPI _STA, _DIS, _CRS, and _SRS methods (status, disable,
+ * current resources setting, set resource setting) on the PCI link device to
+ * determine/configure the IOAPIC pin to which this PCI link device routes.
+ *
+ * steps 3-5 require an AML interpreter!
+ *
+ * luckily, my hardware exposes these PCI link devices through chipset PCI
+ * device registers and memory mapped IO (in fact the ACPI methods in step 5
+ * are implemented using these PCI device registers). thus i can avoid writing
+ * an AML interpreter.
+ *
+ * if possible, i would like to use message signaled interrupts (MSI) -- the
+ * documentation makes them seem much, much simpler. i think MSI avoids the
+ * need for PCI interrupt pin to IOAPIC pin mapping entirely. however, i'll
+ * need to upgrade my PIO disk driver to AHCI first since my SATA controller
+ * won't generate MSI intterupts in IDE mode. also, we will still need the
+ * IOAPIC to handle IRQs (COM1, keyboard, etc.).
+ */
+
+// XXX use uncachable mappings for MMIO?
