@@ -1,5 +1,7 @@
 /*
  * TODO
+ * - get rid of store analysis? (iterate over fields)
+ *
  * - assume anything written via atomic.Store* is a root?
  * - Verify that Make{Interface, Closure} do not cause more heap
  *   allocations besides the ssa.Allocs already present for them.
