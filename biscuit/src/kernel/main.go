@@ -19,7 +19,7 @@ import "fd"
 import "fdops"
 import "fs"
 
-// import "ixgbe"
+import "ixgbe"
 import "mem"
 import "pci"
 import "proc"
@@ -664,7 +664,7 @@ func kbd_get(cnt int) ([]byte, defs.Err_t) {
 }
 
 func attach_devs() int {
-	bnet.Ixgbe_init()
+	ixgbe.Ixgbe_init()
 	ahci.Ahci_init()
 	ncpu := apic.Acpi_attach()
 	pci.Pcibus_attach()

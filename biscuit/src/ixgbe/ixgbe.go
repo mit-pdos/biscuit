@@ -1,4 +1,4 @@
-package bnet
+package ixgbe
 
 import "fmt"
 import "runtime"
@@ -8,6 +8,7 @@ import "time"
 import "unsafe"
 
 import "apic"
+import "bnet"
 import "bounds"
 import . "inet"
 import "mem"
@@ -1118,7 +1119,7 @@ func (x *ixgbe_t) rx_consume() {
 		if !rd.eop() {
 			panic("pkt > mtu?")
 		}
-		net_start(pkt, len(buf))
+		bnet.Net_start(pkt, len(buf))
 		numpkts++
 		if tail == tailend {
 			break
@@ -1205,15 +1206,15 @@ func (x *ixgbe_t) int_handler(vector msi.Msivec_t) {
 				// 18.26.5.49 (bhw)
 				me := Ip4_t(0x121a0531)
 				x.ip = me
-				nic_insert(me, x)
+				bnet.Nic_insert(me, x)
 
 				netmask := Ip4_t(0xfffffe00)
 				// 18.26.5.1
 				gw := Ip4_t(0x121a0401)
-				Routetbl.defaultgw(me, gw)
+				bnet.Routetbl.Defaultgw(me, gw)
 				net := me & netmask
-				Routetbl.insert_local(me, net, netmask)
-				Routetbl.routes.dump()
+				bnet.Routetbl.Insert_local(me, net, netmask)
+				bnet.Routetbl.Dump()
 
 				rantest = true
 				//go x.tester1()

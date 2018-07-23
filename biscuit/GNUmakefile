@@ -28,7 +28,7 @@ PSRC := src/accnt/accnt.go \
 	src/ahci/ahci.go \
 	src/apic/apic.go \
 	src/hashtable/hashtable.go \
-	src/bnet/net.go src/bnet/ixgbe.go \
+	src/bnet/net.go \
 	src/bpath/bpath.go \
 	src/bounds/bounds.go \
 	src/caller/caller.go \
@@ -37,7 +37,7 @@ PSRC := src/accnt/accnt.go \
 	src/fd/fd.go \
 	src/fdops/fdops.go \
 	src/inet/inet.go \
-	# src/ixgbe/ixgbe.go \
+	src/ixgbe/ixgbe.go \
 	src/limits/limits.go \
 	src/mem/mem.go src/mem/dmap.go \
 	src/msi/msi.go \

@@ -369,6 +369,10 @@ func (rt *routetbl_t) init() {
 	rt.routes.init()
 }
 
+func (rt *routetbl_t) Dump() {
+	rt.routes.dump()
+}
+
 func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip Ip4_t) defs.Err_t {
 	rt.Lock()
 	defer rt.Unlock()
@@ -382,7 +386,7 @@ func (rt *routetbl_t) insert_gateway(myip, netip, netmask, gwip Ip4_t) defs.Err_
 	return 0
 }
 
-func (rt *routetbl_t) insert_local(myip, netip, netmask Ip4_t) defs.Err_t {
+func (rt *routetbl_t) Insert_local(myip, netip, netmask Ip4_t) defs.Err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
@@ -395,7 +399,7 @@ func (rt *routetbl_t) insert_local(myip, netip, netmask Ip4_t) defs.Err_t {
 	return 0
 }
 
-func (rt *routetbl_t) defaultgw(myip, gwip Ip4_t) defs.Err_t {
+func (rt *routetbl_t) Defaultgw(myip, gwip Ip4_t) defs.Err_t {
 	rt.Lock()
 	defer rt.Unlock()
 
@@ -3548,7 +3552,7 @@ var nics struct {
 	m *map[Ip4_t]nic_i
 }
 
-func nic_insert(ip Ip4_t, n nic_i) {
+func Nic_insert(ip Ip4_t, n nic_i) {
 	nics.l.Lock()
 	defer nics.l.Unlock()
 
@@ -3575,7 +3579,7 @@ func Nic_lookup(lip Ip4_t) (nic_i, bool) {
 
 // network stack processing begins here. pkt references DMA memory and will be
 // clobbered once net_start returns to the caller.
-func net_start(pkt [][]uint8, tlen int) {
+func Net_start(pkt [][]uint8, tlen int) {
 	// header should always be fully contained in the first slice
 	buf := pkt[0]
 	hlen := len(buf)
@@ -3661,7 +3665,7 @@ func Net_init() {
 	arptbl.restimeout = 5 * time.Second
 
 	lo.lo_start()
-	nic_insert(lo.lip, lo)
+	Nic_insert(lo.lip, lo)
 
 	Routetbl.init()
 
@@ -3684,11 +3688,11 @@ func net_test() {
 		netmask := Ip4_t(0xfffffe00)
 		// 18.26.5.1
 		gw := Ip4_t(0x121a0401)
-		if Routetbl.defaultgw(me, gw) != 0 {
+		if Routetbl.Defaultgw(me, gw) != 0 {
 			panic("no")
 		}
 		net := me & netmask
-		if Routetbl.insert_local(me, net, netmask) != 0 {
+		if Routetbl.Insert_local(me, net, netmask) != 0 {
 			panic("no")
 		}
 
@@ -3859,7 +3863,7 @@ func (l *lo_t) _daemon() {
 			l._tso(lm.buf, lm.tcphlen, lm.mss)
 		} else {
 			sg := [][]uint8{lm.buf}
-			net_start(sg, len(lm.buf))
+			Net_start(sg, len(lm.buf))
 		}
 	}
 }
@@ -3943,7 +3947,7 @@ func (l *lo_t) _tso(buf []uint8, tcphl, mss int) {
 		}
 		ip4.Tlen = Htons(uint16(iplen))
 		sgbuf[1] = s
-		net_start(sgbuf, len(sgbuf[0])+len(sgbuf[1]))
+		Net_start(sgbuf, len(sgbuf[0])+len(sgbuf[1]))
 		// only first packet gets syn
 		if tcph.Issyn() {
 			synf := uint8(1 << 1)
