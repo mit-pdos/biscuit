@@ -1,4 +1,4 @@
-package main
+package ahci
 
 import "fmt"
 import "runtime"
@@ -7,10 +7,14 @@ import "sync/atomic"
 import "unsafe"
 import "container/list"
 
+import "apic"
 import "bounds"
 import "defs"
+
 import "fs"
 import "mem"
+import "msi"
+import "pci"
 import "res"
 import "stats"
 
@@ -26,18 +30,18 @@ const ahci_debug = false
 // - CMD: http://www.t13.org/documents/uploadeddocuments/docs2007/d1699r4a-ata8-acs.pdf
 //
 
-var ahci fs.Disk_i
+var Ahci fs.Disk_i
 
 type blockmem_t struct {
 }
 
-var blockmem = &blockmem_t{}
+var Blockmem = &blockmem_t{}
 
 func (bm *blockmem_t) Alloc() (mem.Pa_t, *mem.Bytepg_t, bool) {
-	_, pa, ok := physmem.Refpg_new()
+	_, pa, ok := mem.Physmem.Refpg_new()
 	if ok {
-		d := (*mem.Bytepg_t)(unsafe.Pointer(physmem.Dmap(pa)))
-		physmem.Refup(pa)
+		d := (*mem.Bytepg_t)(unsafe.Pointer(mem.Physmem.Dmap(pa)))
+		mem.Physmem.Refup(pa)
 		return pa, d, ok
 	} else {
 		return pa, nil, ok
@@ -45,11 +49,11 @@ func (bm *blockmem_t) Alloc() (mem.Pa_t, *mem.Bytepg_t, bool) {
 }
 
 func (bm *blockmem_t) Free(pa mem.Pa_t) {
-	physmem.Refdown(pa)
+	mem.Physmem.Refdown(pa)
 }
 
 func (bm *blockmem_t) Refup(pa mem.Pa_t) {
-	physmem.Refup(pa)
+	mem.Physmem.Refup(pa)
 }
 
 // returns true if start is asynchronous
@@ -65,27 +69,27 @@ func (ahci *ahci_disk_t) Stats() string {
 	return ahci.port.stat.stat()
 }
 
-func attach_ahci(vid, did int, t pcitag_t) {
-	if disk != nil {
+func attach_ahci(vid, did int, t pci.Pcitag_t) {
+	if pci.Disk != nil {
 		panic("adding two disks")
 	}
 
 	d := &ahci_disk_t{}
 	d.tag = t
-	d.bara = pci_read(t, _BAR5, 4)
+	d.bara = pci.Pci_read(t, pci.BAR5, 4)
 	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
 	m := mem.Dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
 
-	vec := msivec_t(0)
+	vec := msi.Msivec_t(0)
 	msicap := 0x80
-	cap_entry := pci_read(d.tag, msicap, 4)
+	cap_entry := pci.Pci_read(d.tag, msicap, 4)
 	if cap_entry&0x1F != 0x5 {
 		fmt.Printf("AHCI: no MSI\n")
-		IRQ_DISK = 11 // XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
-		INT_DISK = defs.IRQ_BASE + IRQ_DISK
+		pci.IRQ_DISK = 11 // XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
+		pci.INT_DISK = defs.IRQ_BASE + pci.IRQ_DISK
 	} else { // enable MSI interrupts
-		vec = msi_alloc()
+		vec = msi.Msi_alloc()
 
 		fmt.Printf("AHCI: msicap %#x MSI to vec %#x\n", cap_entry, vec)
 
@@ -102,7 +106,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 			fmt.Printf("pci_map_msi_irq: requested messages %u, granted 1 message\n",
 				1<<log2_messages)
 			// Multiple Message Enable is bits 20-22.
-			pci_write(d.tag, msicap, cap_entry & ^(0x7<<20))
+			pci.Pci_write(d.tag, msicap, cap_entry & ^(0x7<<20))
 		}
 
 		// [PCI SA pg 253] Assign a dword-aligned memory address to the
@@ -111,16 +115,16 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		// 9.11.1 in the Vol. 3 of the Intel architecture manual.)
 
 		// Non-remapped ("compatibility format") interrupts
-		pci_write(d.tag, msicap+4*1,
+		pci.Pci_write(d.tag, msicap+4*1,
 			(0x0fee<<20)| // magic constant for northbridge
-				(bsp_apic_id<<12)| // destination ID
+				(apic.Bsp_apic_id<<12)| // destination ID
 				(1<<3)| // redirection hint
 				(0<<2)) // destination mode
 
 		if is_64bit {
 			// Zero out the most-significant 32-bits of the Message Address Register,
 			// which is at Dword 2 for 64-bit devices.
-			pci_write(d.tag, msicap+4*2, 0)
+			pci.Pci_write(d.tag, msicap+4*2, 0)
 		}
 
 		//  Write base message data pattern into the device's Message
@@ -133,7 +137,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 		if is_64bit {
 			offset = 3
 		}
-		pci_write(d.tag, msicap+4*offset,
+		pci.Pci_write(d.tag, msicap+4*offset,
 			(0<<15)| // trigger mode (edge)
 				//(0 << 14) |      // level for trigger mode (don't care)
 				(0<<8)| // delivery mode (fixed)
@@ -141,10 +145,10 @@ func attach_ahci(vid, did int, t pcitag_t) {
 
 		// Set the MSI enable bit in the device's Message control
 		// register.
-		pci_write(d.tag, msicap, cap_entry|(1<<16))
+		pci.Pci_write(d.tag, msicap, cap_entry|(1<<16))
 
 		msimask := 0x60
-		if pci_read(d.tag, msimask, 4)&1 != 0 {
+		if pci.Pci_read(d.tag, msimask, 4)&1 != 0 {
 			panic("msi pci masked")
 		}
 
@@ -163,7 +167,7 @@ func attach_ahci(vid, did int, t pcitag_t) {
 	}
 
 	go d.int_handler(vec)
-	ahci = d
+	Ahci = d
 }
 
 //
@@ -206,7 +210,7 @@ type ahci_disk_t struct {
 	bara     int
 	model    string
 	ahci     *ahci_reg_t
-	tag      pcitag_t
+	tag      pci.Pcitag_t
 	ncs      uint32
 	nsectors uint64
 	port     *ahci_port_t
@@ -463,16 +467,16 @@ func CLR(f *uint32, v uint32) {
 }
 
 func (p *ahci_port_t) pg_new() (*mem.Pg_t, mem.Pa_t) {
-	a, b, ok := physmem.Refpg_new()
+	a, b, ok := mem.Physmem.Refpg_new()
 	if !ok {
 		panic("oom during port pg_new")
 	}
-	physmem.Refup(b)
+	mem.Physmem.Refup(b)
 	return a, b
 }
 
 func (p *ahci_port_t) pg_free(pa mem.Pa_t) {
-	physmem.Refdown(pa)
+	mem.Physmem.Refdown(pa)
 }
 
 func (p *ahci_port_t) init() bool {
@@ -520,7 +524,7 @@ func (p *ahci_port_t) init() bool {
 		panic("not enough mem for cmdh")
 	}
 	p.cmdh_pa = uintptr(pa)
-	p.cmdh = (*[32]ahci_cmd_header)(unsafe.Pointer(physmem.Dmap(pa)))
+	p.cmdh = (*[32]ahci_cmd_header)(unsafe.Pointer(mem.Physmem.Dmap(pa)))
 
 	// Allocate memory for cmdt, which spans several physical pages that
 	// must be consecutive. pg_new() returns physical pages during boot
@@ -536,7 +540,7 @@ func (p *ahci_port_t) init() bool {
 		}
 	}
 	p.cmdt_pa = uintptr(pa)
-	p.cmdt = (*[32]ahci_cmd_table)(unsafe.Pointer(physmem.Dmap(pa)))
+	p.cmdt = (*[32]ahci_cmd_table)(unsafe.Pointer(mem.Physmem.Dmap(pa)))
 
 	// Initialize memory buffers
 	for cmdslot, _ := range p.cmdh {
@@ -571,7 +575,7 @@ func (p *ahci_port_t) init() bool {
 	for i, _ := range p.cmdh {
 		_, pa = p.pg_new()
 		p.block_pa[i] = uintptr(pa)
-		p.block[i] = (*[512]uint8)(unsafe.Pointer(physmem.Dmap(pa)))
+		p.block[i] = (*[512]uint8)(unsafe.Pointer(mem.Physmem.Dmap(pa)))
 	}
 
 	return true
@@ -601,7 +605,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 	fis.sector_count = 1
 
 	// To receive the identity
-	b := fs.MkBlock_newpage(-1, "identify", blockmem, ahci, nil)
+	b := fs.MkBlock_newpage(-1, "identify", Blockmem, Ahci, nil)
 	p.fill_prd(0, b)
 	p.fill_fis(0, fis)
 
@@ -612,7 +616,7 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 		return nil, nil, false
 	}
 
-	id := (*identify_device)(unsafe.Pointer(physmem.Dmap(b.Pa)))
+	id := (*identify_device)(unsafe.Pointer(mem.Physmem.Dmap(b.Pa)))
 	if LD16(&id.features86)&IDE_FEATURE86_LBA48 == 0 {
 		fmt.Printf("AHCI: disk too small, driver requires LBA48\n")
 		return nil, nil, false
@@ -704,7 +708,7 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 	for blk := blks.FrontBlock(); blk != nil; blk = blks.NextBlock() {
 		ST64(&cmd.prdt[slot].dba, uint64(blk.Pa))
 		l := len(blk.Data)
-		if l != BSIZE {
+		if l != fs.BSIZE {
 			panic("fill_prd_v")
 		}
 		ST(&cmd.prdt[slot].dbc, uint32(l-1))
@@ -904,7 +908,7 @@ func (p *ahci_port_t) issue(s int, blks *fs.BlkList_t, cmd uint8) {
 	} else {
 		bn = uint64(blks.FrontBlock().Block)
 	}
-	sector_offset := bn * uint64(BSIZE/512)
+	sector_offset := bn * uint64(fs.BSIZE/512)
 	fis.lba_0 = uint8((sector_offset >> 0) & 0xff)
 	fis.lba_1 = uint8((sector_offset >> 8) & 0xff)
 	fis.lba_2 = uint8((sector_offset >> 16) & 0xff)
@@ -1061,7 +1065,7 @@ func (ahci *ahci_disk_t) intr() {
 }
 
 // Go routine for handling interrupts
-func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
+func (ahci *ahci_disk_t) int_handler(vec msi.Msivec_t) {
 	fmt.Printf("AHCI: interrupt handler running\n")
 	gimme := bounds.Bounds(bounds.B_AHCI_DISK_T_INT_HANDLER)
 	for {
@@ -1070,4 +1074,9 @@ func (ahci *ahci_disk_t) int_handler(vec msivec_t) {
 		res.Kresdebug(gimme, "ahci int handler")
 		ahci.intr()
 	}
+}
+
+func Ahci_init() {
+	pci.Pci_register(pci.PCI_DEV_AHCI_BHW, attach_ahci)
+	pci.Pci_register(pci.PCI_DEV_AHCI_QEMU, attach_ahci)
 }

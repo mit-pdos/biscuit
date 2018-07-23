@@ -17,16 +17,6 @@ func Roundup(v int, b int) int {
 	return Rounddown(v+b-1, b)
 }
 
-func Mkdev(_maj, _min int) uint {
-	maj := uint(_maj)
-	min := uint(_min)
-	if min > 0xff {
-		panic("bad minor")
-	}
-	m := maj<<8 | min
-	return uint(m << 32)
-}
-
 func Readn(a []uint8, n int, off int) int {
 	p := unsafe.Pointer(&a[off])
 	var ret int

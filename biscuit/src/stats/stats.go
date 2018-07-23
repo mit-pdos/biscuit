@@ -10,6 +10,9 @@ import "unsafe"
 const Stats = false
 const Timing = false
 
+var Nirqs [100]int
+var Irqs int
+
 func Rdtsc() uint64 {
 	if Stats {
 		return runtime.Rdtsc()

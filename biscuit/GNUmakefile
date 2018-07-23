@@ -19,22 +19,29 @@ SRCS := $(ASMS) $(CS)
 K := src/kernel
 F := src/fs
 
-KSRC := main.go syscall.go hw.go net.go ahci.go
+KSRC := main.go syscall.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go super.go cache.go blk.go
 FSRC := $(addprefix $(F)/,$(FSRC))
 
 PSRC := src/accnt/accnt.go \
+	src/ahci/ahci.go \
+	src/apic/apic.go \
 	src/hashtable/hashtable.go \
+	src/bnet/net.go \
 	src/bpath/bpath.go \
 	src/bounds/bounds.go \
 	src/caller/caller.go \
 	src/defs/defs.go src/defs/errno.go src/defs/syscall.go src/defs/device.go \
 	src/fd/fd.go \
 	src/fdops/fdops.go \
+	src/inet/inet.go \
+	src/ixgbe/ixgbe.go \
 	src/limits/limits.go \
 	src/mem/mem.go src/mem/dmap.go \
+	src/msi/msi.go \
 	src/oommsg/oommsg.go \
+	src/pci/pci.go src/pci/legacydisk.go src/pci/pciide.go \
 	src/res/res.go \
 	src/proc/proc.go src/proc/wait.go src/proc/oom.go src/proc/syscalli.go \
 	src/vm/vm.go src/vm/pmap.go src/vm/as.go src/vm/rb.go src/vm/userbuf.go \
