@@ -1,5 +1,29 @@
 #include <litc.h>
 
+static void fexec(char * const args[])
+{
+	printf("init exec: ");
+	for (char * const * p = &args[0]; *p; p++)
+		printf("%s ", *p);
+	printf("\n");
+
+	switch (fork()) {
+	case -1:
+		err(-1, "fork (%s)", args[0]);
+	case 0:
+		execv(args[0], args);
+		err(-1, "exec (%s)", args[0]);
+	default:
+		{
+		int status;
+		if (wait(&status) == -1)
+			err(-1, "wait");
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			err(-1, "child failed (%s)", args[0]);
+		}
+	}
+}
+
 int main(int argc, char **argv)
 {
 	printf("init starting...\n");
@@ -22,6 +46,11 @@ int main(int argc, char **argv)
 	ret = mknod("/dev/prof", 0, MKDEV(7, 0));
 	if (ret != 0 && errno != EEXIST)
 		err(-1, "mknod");
+
+	char * const hargs [] = {"/bin/bmgc", "-h", "470", NULL};
+	fexec(hargs);
+	char * const largs [] = {"/bin/bmgc", "-l", "512", NULL};
+	fexec(largs);
 
 	for (;;) {
 		int pid = fork();
