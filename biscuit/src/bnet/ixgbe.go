@@ -1,4 +1,4 @@
-package main
+package bnet
 
 import "fmt"
 import "runtime"
@@ -9,10 +9,12 @@ import "unsafe"
 
 import "apic"
 import "bounds"
+import . "inet"
 import "mem"
 import "msi"
 import "pci"
 import "res"
+import "stats"
 
 type ixgbereg_t uint
 
@@ -623,8 +625,8 @@ type ixgbe_t struct {
 	pgs    int
 	linkup bool
 	// big-endian
-	mac mac_t
-	ip  ip4_t
+	mac Mac_t
+	ip  Ip4_t
 	mtu int
 }
 
@@ -899,25 +901,25 @@ func (x *ixgbe_t) pg_new() (*mem.Pg_t, mem.Pa_t) {
 	return a, b
 }
 
-func (x *ixgbe_t) lmac() *mac_t {
+func (x *ixgbe_t) Lmac() *Mac_t {
 	return &x.mac
 }
 
 // returns after buf is enqueued to be trasmitted. buf's contents are copied to
 // the DMA buffer, so buf's memory can be reused/freed
-func (x *ixgbe_t) tx_raw(buf [][]uint8) bool {
+func (x *ixgbe_t) Tx_raw(buf [][]uint8) bool {
 	return x._tx_nowait(buf, false, false, false, 0, 0)
 }
 
-func (x *ixgbe_t) tx_ipv4(buf [][]uint8) bool {
+func (x *ixgbe_t) Tx_ipv4(buf [][]uint8) bool {
 	return x._tx_nowait(buf, true, false, false, 0, 0)
 }
 
-func (x *ixgbe_t) tx_tcp(buf [][]uint8) bool {
+func (x *ixgbe_t) Tx_tcp(buf [][]uint8) bool {
 	return x._tx_nowait(buf, true, true, false, 0, 0)
 }
 
-func (x *ixgbe_t) tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
+func (x *ixgbe_t) Tx_tcp_tso(buf [][]uint8, tcphlen, mss int) bool {
 	return x._tx_nowait(buf, true, true, true, tcphlen, mss)
 }
 
@@ -1201,17 +1203,17 @@ func (x *ixgbe_t) int_handler(vector msi.Msivec_t) {
 			}
 			if up && !rantest {
 				// 18.26.5.49 (bhw)
-				me := ip4_t(0x121a0531)
+				me := Ip4_t(0x121a0531)
 				x.ip = me
 				nic_insert(me, x)
 
-				netmask := ip4_t(0xfffffe00)
+				netmask := Ip4_t(0xfffffe00)
 				// 18.26.5.1
-				gw := ip4_t(0x121a0401)
-				routetbl.defaultgw(me, gw)
+				gw := Ip4_t(0x121a0401)
+				Routetbl.defaultgw(me, gw)
 				net := me & netmask
-				routetbl.insert_local(me, net, netmask)
-				routetbl.routes.dump()
+				Routetbl.insert_local(me, net, netmask)
+				Routetbl.routes.dump()
 
 				rantest = true
 				//go x.tester1()
@@ -1250,11 +1252,11 @@ func (x *ixgbe_t) int_handler(vector msi.Msivec_t) {
 }
 
 func (x *ixgbe_t) tester1() {
-	stirqs := irqs
+	stirqs := stats.Irqs
 	st := time.Now()
 	for {
 		<-time.After(30 * time.Second)
-		nirqs := irqs - stirqs
+		nirqs := stats.Irqs - stirqs
 		drops := x.rl(QPRDC(0))
 		secs := time.Since(st).Seconds()
 		pps := float64(numpkts) / secs
@@ -1646,7 +1648,7 @@ func attach_ixgbe(vid, did int, t pci.Pcitag_t) {
 	for i := range x.txs {
 		ntx += x.txs[i].ndescs
 	}
-	macs := mac2str(x.mac[:])
+	macs := Mac2str(x.mac[:])
 	x.log("attached: MAC %s, rxq %v, txq %v, MSI %v, %vKB", macs,
 		x.rx.ndescs, ntx, vec, x.pgs<<2)
 }
@@ -1719,16 +1721,16 @@ func (x *ixgbe_t) tx_test() {
 	defer x.txs[0].Unlock()
 
 	fmt.Printf("test tx start\n")
-	pkt := &tcppkt_t{}
-	pkt.tcphdr.init_ack(8080, 8081, 31337, 31338)
-	pkt.tcphdr.win = 1 << 14
+	pkt := &Tcppkt_t{}
+	pkt.Tcphdr.Init_ack(8080, 8081, 31337, 31338)
+	pkt.Tcphdr.Win = 1 << 14
 	l4len := 0
-	pkt.iphdr.init_tcp(l4len, 0x01010101, 0x02020202)
+	pkt.Iphdr.Init_tcp(l4len, 0x01010101, 0x02020202)
 	bmac := []uint8{0x00, 0x13, 0x72, 0xb6, 0x7b, 0x42}
-	pkt.ether.init_ip4(x.mac[:], bmac)
-	pkt.crc(l4len, 0x01010101, 0x121a0530)
+	pkt.Ether.Init_ip4(x.mac[:], bmac)
+	pkt.Crc(l4len, 0x01010101, 0x121a0530)
 
-	eth, ip, thdr := pkt.hdrbytes()
+	eth, ip, thdr := pkt.Hdrbytes()
 	durdata := new([3 * 1460]uint8)
 	sgbuf := [][]uint8{eth, ip, thdr, durdata[:]}
 	tlen := 0

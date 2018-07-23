@@ -2,7 +2,6 @@ package main
 
 import "fmt"
 
-//import "math/rand"
 import "runtime"
 import "runtime/debug"
 import "sync/atomic"
@@ -12,28 +11,28 @@ import "unsafe"
 
 import "ahci"
 import "apic"
+import "bnet"
 import "caller"
 import "defs"
+import "inet"
 import "fd"
 import "fdops"
 import "fs"
+
+// import "ixgbe"
 import "mem"
 import "pci"
 import "proc"
 import "res"
 import "stat"
+import "stats"
 import "tinfo"
 import "ustr"
 import "vm"
 
-//import "sort"
-
 const (
 	IRQ_LAST = defs.INT_MSI7
 )
-
-var nirqs [100]int
-var irqs int
 
 // trapstub() cannot do anything that may have side-effects on the runtime
 // (like allocate, fmt.Print, or use panic) since trapstub() runs in interrupt
@@ -51,8 +50,8 @@ func trapstub(tf *[defs.TFSIZE]uintptr) {
 		}
 	}
 
-	nirqs[trapno]++
-	irqs++
+	stats.Nirqs[trapno]++
+	stats.Irqs++
 	switch trapno {
 	case defs.INT_KBD, defs.INT_COM1:
 		runtime.IRQwake(uint(trapno))
@@ -152,266 +151,6 @@ func (nb *_nilbuf_t) Totalsz() int {
 }
 
 var zeroubuf = &_nilbuf_t{}
-
-// a circular buffer that is read/written by userspace. not thread-safe -- it
-// is intended to be used by one daemon.
-type circbuf_t struct {
-	buf   []uint8
-	bufsz int
-	// XXX uint
-	head int
-	tail int
-	p_pg mem.Pa_t
-}
-
-// may fail to allocate a page for the buffer. when cb's life is over, someone
-// must free the buffer page by calling cb_release().
-func (cb *circbuf_t) cb_init(sz int) defs.Err_t {
-	bufmax := int(mem.PGSIZE)
-	if sz <= 0 || sz > bufmax {
-		panic("bad circbuf size")
-	}
-	cb.bufsz = sz
-	cb.head, cb.tail = 0, 0
-	// lazily allocated the buffers. it is easier to handle an error at the
-	// time of read or write instead of during the initialization of the
-	// object using a circbuf.
-	return 0
-}
-
-// provide the page for the buffer explicitly; useful for guaranteeing that
-// read/writes won't fail to allocate memory.
-func (cb *circbuf_t) cb_init_phys(v []uint8, p_pg mem.Pa_t) {
-	physmem.Refup(p_pg)
-	cb.p_pg = p_pg
-	cb.buf = v
-	cb.bufsz = len(cb.buf)
-	cb.head, cb.tail = 0, 0
-}
-
-func (cb *circbuf_t) cb_release() {
-	if cb.buf == nil {
-		return
-	}
-	physmem.Refdown(cb.p_pg)
-	cb.p_pg = 0
-	cb.buf = nil
-	cb.head, cb.tail = 0, 0
-}
-
-func (cb *circbuf_t) cb_ensure() defs.Err_t {
-	if cb.buf != nil {
-		return 0
-	}
-	if cb.bufsz == 0 {
-		panic("not initted")
-	}
-	pg, p_pg, ok := physmem.Refpg_new_nozero()
-	if !ok {
-		return -defs.ENOMEM
-	}
-	bpg := mem.Pg2bytes(pg)[:]
-	bpg = bpg[:cb.bufsz]
-	cb.cb_init_phys(bpg, p_pg)
-	return 0
-}
-
-func (cb *circbuf_t) full() bool {
-	return cb.head-cb.tail == cb.bufsz
-}
-
-func (cb *circbuf_t) empty() bool {
-	return cb.head == cb.tail
-}
-
-func (cb *circbuf_t) left() int {
-	used := cb.head - cb.tail
-	rem := cb.bufsz - used
-	return rem
-}
-
-func (cb *circbuf_t) used() int {
-	used := cb.head - cb.tail
-	return used
-}
-
-func (cb *circbuf_t) copyin(src fdops.Userio_i) (int, defs.Err_t) {
-	if err := cb.cb_ensure(); err != 0 {
-		return 0, err
-	}
-	if cb.full() {
-		return 0, 0
-	}
-	hi := cb.head % cb.bufsz
-	ti := cb.tail % cb.bufsz
-	c := 0
-	// wraparound?
-	if ti <= hi {
-		dst := cb.buf[hi:]
-		wrote, err := src.Uioread(dst)
-		if err != 0 {
-			return 0, err
-		}
-		if wrote != len(dst) {
-			cb.head += wrote
-			return wrote, 0
-		}
-		c += wrote
-		hi = (cb.head + wrote) % cb.bufsz
-	}
-	// XXXPANIC
-	if hi > ti {
-		panic("wut?")
-	}
-	dst := cb.buf[hi:ti]
-	wrote, err := src.Uioread(dst)
-	c += wrote
-	if err != 0 {
-		return c, err
-	}
-	cb.head += c
-	return c, 0
-}
-
-func (cb *circbuf_t) copyout(dst fdops.Userio_i) (int, defs.Err_t) {
-	return cb.copyout_n(dst, 0)
-}
-
-func (cb *circbuf_t) copyout_n(dst fdops.Userio_i, max int) (int, defs.Err_t) {
-	if err := cb.cb_ensure(); err != 0 {
-		return 0, err
-	}
-	if cb.empty() {
-		return 0, 0
-	}
-	hi := cb.head % cb.bufsz
-	ti := cb.tail % cb.bufsz
-	c := 0
-	// wraparound?
-	if hi <= ti {
-		src := cb.buf[ti:]
-		if max != 0 && max < len(src) {
-			src = src[:max]
-		}
-		wrote, err := dst.Uiowrite(src)
-		if err != 0 {
-			return 0, err
-		}
-		if wrote != len(src) || wrote == max {
-			cb.tail += wrote
-			return wrote, 0
-		}
-		c += wrote
-		if max != 0 {
-			max -= c
-		}
-		ti = (cb.tail + wrote) % cb.bufsz
-	}
-	// XXXPANIC
-	if ti > hi {
-		panic("wut?")
-	}
-	src := cb.buf[ti:hi]
-	if max != 0 && max < len(src) {
-		src = src[:max]
-	}
-	wrote, err := dst.Uiowrite(src)
-	if err != 0 {
-		return 0, err
-	}
-	c += wrote
-	cb.tail += c
-	return c, 0
-}
-
-// returns slices referencing the internal circular buffer [head+offset,
-// head+offset+sz) which must be outside [tail, head). returns two slices when
-// the returned buffer wraps.
-// XXX XXX XXX XXX XXX remove arg
-func (cb *circbuf_t) _rawwrite(offset, sz int) ([]uint8, []uint8) {
-	if cb.buf == nil {
-		panic("no lazy allocation for tcp")
-	}
-	if cb.left() < sz {
-		panic("bad size")
-	}
-	if sz == 0 {
-		return nil, nil
-	}
-	oi := (cb.head + offset) % cb.bufsz
-	oe := (cb.head + offset + sz) % cb.bufsz
-	hi := cb.head % cb.bufsz
-	ti := cb.tail % cb.bufsz
-	var r1 []uint8
-	var r2 []uint8
-	if ti <= hi {
-		if (oi >= ti && oi < hi) || (oe > ti && oe <= hi) {
-			panic("intersects with user data")
-		}
-		r1 = cb.buf[oi:]
-		if len(r1) > sz {
-			r1 = r1[:sz]
-		} else {
-			r2 = cb.buf[:oe]
-		}
-	} else {
-		// user data wraps
-		if !(oi >= hi && oi < ti && oe > hi && oe <= ti) {
-			panic("intersects with user data")
-		}
-		r1 = cb.buf[oi:oe]
-	}
-	return r1, r2
-}
-
-// advances head index sz bytes (allowing the bytes to be copied out)
-func (cb *circbuf_t) _advhead(sz int) {
-	if cb.full() || cb.left() < sz {
-		panic("advancing full cb")
-	}
-	cb.head += sz
-}
-
-// returns slices referencing the circular buffer [tail+offset, tail+offset+sz)
-// which must be inside [tail, head). returns two slices when the returned
-// buffer wraps.
-func (cb *circbuf_t) _rawread(offset int) ([]uint8, []uint8) {
-	if cb.buf == nil {
-		panic("no lazy allocation for tcp")
-	}
-	oi := (cb.tail + offset) % cb.bufsz
-	hi := cb.head % cb.bufsz
-	ti := cb.tail % cb.bufsz
-	var r1 []uint8
-	var r2 []uint8
-	if ti < hi {
-		if oi >= hi || oi < ti {
-			panic("outside user data")
-		}
-		r1 = cb.buf[oi:hi]
-	} else {
-		if oi >= hi && oi < ti {
-			panic("outside user data")
-		}
-		tlen := len(cb.buf[ti:])
-		if tlen > offset {
-			r1 = cb.buf[oi:]
-			r2 = cb.buf[:hi]
-		} else {
-			roff := offset - tlen
-			r1 = cb.buf[roff:hi]
-		}
-	}
-	return r1, r2
-}
-
-// advances head index sz bytes (allowing the bytes to be copied out)
-func (cb *circbuf_t) _advtail(sz int) {
-	if sz != 0 && (cb.empty() || cb.used() < sz) {
-		panic("advancing empty cb")
-	}
-	cb.tail += sz
-}
 
 type passfd_t struct {
 	cb   []*fd.Fd_t
@@ -732,48 +471,29 @@ func _kready() bool {
 	return true
 }
 
-func netdump() {
-	fmt.Printf("net dump\n")
-	tcpcons.l.Lock()
-	fmt.Printf("tcp table len: %v\n", len(tcpcons.econns))
-	//for _, tcb := range tcpcons.econns {
-	//	tcb.l.Lock()
-	//	//if tcb.state == TIMEWAIT {
-	//	//	tcb.l.Unlock()
-	//	//	continue
-	//	//}
-	//	fmt.Printf("%v:%v -> %v:%v: %s\n",
-	//	    ip2str(tcb.lip), tcb.lport,
-	//	    ip2str(tcb.rip), tcb.rport,
-	//	    statestr[tcb.state])
-	//	tcb.l.Unlock()
-	//}
-	tcpcons.l.Unlock()
-}
-
 func loping() {
 	fmt.Printf("POING\n")
-	sip, dip, err := routetbl.lookup(ip4_t(0x7f000001))
+	sip, dip, err := bnet.Routetbl.Lookup(inet.Ip4_t(0x7f000001))
 	if err != 0 {
 		panic("error")
 	}
-	dmac, err := arp_resolve(sip, dip)
+	dmac, err := bnet.Arp_resolve(sip, dip)
 	if err != 0 {
 		panic("error")
 	}
-	nic, ok := nic_lookup(sip)
+	nic, ok := bnet.Nic_lookup(sip)
 	if !ok {
 		panic("not ok")
 	}
-	pkt := &icmppkt_t{}
+	pkt := &inet.Icmppkt_t{}
 	data := make([]uint8, 8)
 	writen(data, 8, 0, int(time.Now().UnixNano()))
-	pkt.init(nic.lmac(), dmac, sip, dip, 8, data)
-	pkt.ident = 0
-	pkt.seq = 0
-	pkt.crc()
-	sgbuf := [][]uint8{pkt.hdrbytes(), data}
-	nic.tx_ipv4(sgbuf)
+	pkt.Init(nic.Lmac(), dmac, sip, dip, 8, data)
+	pkt.Ident = 0
+	pkt.Seq = 0
+	pkt.Crc()
+	sgbuf := [][]uint8{pkt.Hdrbytes(), data}
+	nic.Tx_ipv4(sgbuf)
 }
 
 //func _ptile(buf []int, p float64) {
@@ -944,7 +664,7 @@ func kbd_get(cnt int) ([]byte, defs.Err_t) {
 }
 
 func attach_devs() int {
-	Ixgbe_init()
+	bnet.Ixgbe_init()
 	ahci.Ahci_init()
 	ncpu := apic.Acpi_attach()
 	pci.Pcibus_attach()
@@ -1475,7 +1195,7 @@ func main() {
 
 	structchk()
 	cpuchk()
-	net_init()
+	bnet.Net_init()
 
 	mem.Dmap_init()
 	perfsetup()

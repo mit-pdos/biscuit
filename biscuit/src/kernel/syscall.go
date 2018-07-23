@@ -11,8 +11,10 @@ import "sync/atomic"
 import "time"
 import "unsafe"
 
+import "bnet"
 import "bounds"
 import "bpath"
+import "circbuf"
 import "defs"
 import "fd"
 import "fdops"
@@ -890,7 +892,7 @@ bail:
 
 type pipe_t struct {
 	sync.Mutex
-	cbuf    circbuf_t
+	cbuf    circbuf.Circbuf_t
 	rcond   *sync.Cond
 	wcond   *sync.Cond
 	readers int
@@ -905,7 +907,7 @@ type pipe_t struct {
 
 func (o *pipe_t) pipe_start() {
 	pipesz := mem.PGSIZE
-	o.cbuf.cb_init(pipesz)
+	o.cbuf.Cb_init(pipesz)
 	o.readers, o.writers = 1, 1
 	o.rcond = sync.NewCond(o)
 	o.wcond = sync.NewCond(o)
@@ -931,7 +933,7 @@ func (o *pipe_t) op_write(src fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 			o.Unlock()
 			return 0, -defs.EPIPE
 		}
-		if o.cbuf.left() >= need {
+		if o.cbuf.Left() >= need {
 			break
 		}
 		if noblock {
@@ -943,7 +945,7 @@ func (o *pipe_t) op_write(src fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 			return 0, err
 		}
 	}
-	ret, err := o.cbuf.copyin(src)
+	ret, err := o.cbuf.Copyin(src)
 	if err != 0 {
 		o.Unlock()
 		return 0, err
@@ -962,7 +964,7 @@ func (o *pipe_t) op_read(dst fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 			o.Unlock()
 			return 0, -defs.EBADF
 		}
-		if o.writers == 0 || !o.cbuf.empty() {
+		if o.writers == 0 || !o.cbuf.Empty() {
 			break
 		}
 		if noblock {
@@ -974,7 +976,7 @@ func (o *pipe_t) op_read(dst fdops.Userio_i, noblock bool) (int, defs.Err_t) {
 			return 0, err
 		}
 	}
-	ret, err := o.cbuf.copyout(dst)
+	ret, err := o.cbuf.Copyout(dst)
 	if err != 0 {
 		o.Unlock()
 		return 0, err
@@ -996,11 +998,11 @@ func (o *pipe_t) op_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 
 	var r fdops.Ready_t
 	readable := false
-	if !o.cbuf.empty() || o.writers == 0 {
+	if !o.cbuf.Empty() || o.writers == 0 {
 		readable = true
 	}
 	writeable := false
-	if !o.cbuf.full() || o.readers == 0 {
+	if !o.cbuf.Full() || o.readers == 0 {
 		writeable = true
 	}
 	if pm.Events&fdops.R_READ != 0 && readable {
@@ -1036,7 +1038,7 @@ func (o *pipe_t) op_reopen(rd, wd int) defs.Err_t {
 	}
 	if o.readers == 0 && o.writers == 0 {
 		o.closed = true
-		o.cbuf.cb_release()
+		o.cbuf.Cb_release()
 		o.passfds.closeall()
 		if o.lraise {
 			limits.Syslimit.Pipes.Give()
@@ -1362,20 +1364,6 @@ func sys_getrusage(p *proc.Proc_t, who, rusagep int) int {
 	return int(-defs.ENOSYS)
 }
 
-func mkdev(_maj, _min int) uint {
-	maj := uint(_maj)
-	min := uint(_min)
-	if min > 0xff {
-		panic("bad minor")
-	}
-	m := maj<<8 | min
-	return uint(m << 32)
-}
-
-func unmkdev(d uint) (int, int) {
-	return int(d >> 40), int(uint8(d >> 32))
-}
-
 func sys_mknod(p *proc.Proc_t, pathn, moden, devn int) int {
 	path, err := p.Aspace.Userstr(pathn, fs.NAME_MAX)
 	if err != 0 {
@@ -1386,7 +1374,7 @@ func sys_mknod(p *proc.Proc_t, pathn, moden, devn int) int {
 	if err != 0 {
 		return int(err)
 	}
-	maj, min := unmkdev(uint(devn))
+	maj, min := defs.Unmkdev(uint(devn))
 	fsf, err := thefs.Fs_open_inner(path, defs.O_CREAT, 0, p.Cwd, maj, min)
 	if err != 0 {
 		return int(err)
@@ -1462,8 +1450,8 @@ func sys_socket(p *proc.Proc_t, domain, typ, proto int) int {
 	case domain == defs.AF_UNIX && typ&defs.SOCK_STREAM != 0:
 		sfops = &susfops_t{options: opts}
 	case domain == defs.AF_INET && typ&defs.SOCK_STREAM != 0:
-		tfops := &tcpfops_t{tcb: &tcptcb_t{}, options: opts}
-		tfops.tcb.openc = 1
+		tfops := &bnet.Tcpfops_t{}
+		tfops.Set(&bnet.Tcptcb_t{}, opts)
 		sfops = tfops
 	default:
 		return int(-defs.EINVAL)
@@ -2020,7 +2008,7 @@ func (sf *sudfops_t) Sendmsg(src fdops.Userio_i, sa []uint8,
 	if err != 0 {
 		return 0, err
 	}
-	maj, min := unmkdev(st.Rdev())
+	maj, min := defs.Unmkdev(st.Rdev())
 	if maj != defs.D_SUD {
 		return 0, -defs.ECONNREFUSED
 	}
@@ -2164,7 +2152,7 @@ type dgram_t struct {
 
 // a circular buffer for datagrams and their source addresses
 type dgrambuf_t struct {
-	cbuf   circbuf_t
+	cbuf   circbuf.Circbuf_t
 	dgrams []dgram_t
 	// add dgrams at head, remove from tail
 	head uint
@@ -2172,7 +2160,7 @@ type dgrambuf_t struct {
 }
 
 func (db *dgrambuf_t) dg_init(sz int) {
-	db.cbuf.cb_init(sz)
+	db.cbuf.Cb_init(sz)
 	// assume that messages are at least 10 bytes
 	db.dgrams = make([]dgram_t, sz/10)
 	db.head, db.tail = 0, 0
@@ -2181,7 +2169,7 @@ func (db *dgrambuf_t) dg_init(sz int) {
 // returns true if there is enough buffers to hold a datagram of size sz
 func (db *dgrambuf_t) _canhold(sz int) bool {
 	if (db.head-db.tail) == uint(len(db.dgrams)) ||
-		db.cbuf.left() < sz {
+		db.cbuf.Left() < sz {
 		return false
 	}
 	return true
@@ -2196,7 +2184,7 @@ func (db *dgrambuf_t) copyin(src fdops.Userio_i, from ustr.Ustr) (int, defs.Err_
 	if !db._canhold(src.Totalsz()) {
 		panic("should have blocked")
 	}
-	did, err := db.cbuf.copyin(src)
+	did, err := db.cbuf.Copyin(src)
 	if err != 0 {
 		return 0, err
 	}
@@ -2228,7 +2216,7 @@ func (db *dgrambuf_t) copyout(dst, fromsa, cmsg fdops.Userio_i) (int, int, defs.
 			return 0, 0, err
 		}
 	}
-	did, err := db.cbuf.copyout_n(dst, sz)
+	did, err := db.cbuf.Copyout_n(dst, sz)
 	if err != 0 {
 		return 0, 0, err
 	}
@@ -2238,7 +2226,7 @@ func (db *dgrambuf_t) copyout(dst, fromsa, cmsg fdops.Userio_i) (int, int, defs.
 }
 
 func (db *dgrambuf_t) dg_release() {
-	db.cbuf.cb_release()
+	db.cbuf.Cb_release()
 }
 
 // convert bound socket path to struct sockaddr_un
@@ -2501,7 +2489,7 @@ func (sus *susfops_t) Connect(saddr []uint8) defs.Err_t {
 	if err != 0 {
 		return err
 	}
-	maj, min := unmkdev(st.Rdev())
+	maj, min := defs.Unmkdev(st.Rdev())
 	if maj != defs.D_SUS {
 		return -defs.ECONNREFUSED
 	}

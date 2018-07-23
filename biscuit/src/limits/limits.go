@@ -3,6 +3,8 @@ package limits
 import "unsafe"
 import "sync/atomic"
 
+var Lhits int
+
 type Sysatomic_t int64
 
 type Syslimit_t struct {

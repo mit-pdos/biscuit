@@ -12,3 +12,17 @@ const (
 	D_FIRST   = D_CONSOLE
 	D_LAST    = D_SUS
 )
+
+func Mkdev(_maj, _min int) uint {
+	maj := uint(_maj)
+	min := uint(_min)
+	if min > 0xff {
+		panic("bad minor")
+	}
+	m := maj<<8 | min
+	return uint(m << 32)
+}
+
+func Unmkdev(d uint) (int, int) {
+	return int(d >> 40), int(uint8(d >> 32))
+}
