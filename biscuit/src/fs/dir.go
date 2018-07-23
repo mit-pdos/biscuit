@@ -282,7 +282,11 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 	if err != 0 {
 		return zi, err
 	}
-	if idm.fs.diskfs {
+	// it's good for the memory FS performance to skip updating the data
+	// blocks, but our implementation of readdir(3) requires it (because it
+	// reads the directory's contents from the data blocks). therefore,
+	// make the data block update unconditional.
+	if true || idm.fs.diskfs {
 		b, err := idm.off2buf(opid, de.offset, NDBYTES, true, true, "_deremove")
 		if err != 0 {
 			return zi, err
