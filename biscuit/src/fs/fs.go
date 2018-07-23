@@ -948,7 +948,7 @@ func (df *Devfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) {
 
 func (df *Devfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	df._sane()
-	st.Wmode(util.Mkdev(df.Maj, df.Min))
+	st.Wmode(defs.Mkdev(df.Maj, df.Min))
 	return 0
 }
 
@@ -1104,7 +1104,7 @@ func (raw *rawdfops_t) Pwrite(src fdops.Userio_i, offset int) (int, defs.Err_t) 
 func (raw *rawdfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	raw.Lock()
 	defer raw.Unlock()
-	st.Wmode(util.Mkdev(defs.D_RAWDISK, raw.minor))
+	st.Wmode(defs.Mkdev(defs.D_RAWDISK, raw.minor))
 	return 0
 }
 

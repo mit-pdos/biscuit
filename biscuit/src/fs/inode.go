@@ -419,7 +419,7 @@ func (idm *imemnode_t) do_stat(st *stat.Stat_t) defs.Err_t {
 	st.Wino(uint(idm.inum))
 	st.Wmode(idm.mkmode())
 	st.Wsize(uint(idm.size))
-	st.Wrdev(util.Mkdev(idm.major, idm.minor))
+	st.Wrdev(defs.Mkdev(idm.major, idm.minor))
 	return 0
 }
 
@@ -1229,7 +1229,7 @@ func (idm *imemnode_t) mkmode() uint {
 		return uint(itype << 16)
 	case I_DEV:
 		// this can happen by fs-internal stats
-		return util.Mkdev(idm.major, idm.minor)
+		return defs.Mkdev(idm.major, idm.minor)
 	default:
 		panic("weird itype")
 	}
