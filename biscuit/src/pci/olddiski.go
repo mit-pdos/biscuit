@@ -1,4 +1,4 @@
-package diski
+package pci
 
 const BSIZE = 4096
 

@@ -5,7 +5,6 @@ import "runtime"
 import "unsafe"
 
 import "apic"
-import "diski"
 
 type legacy_disk_t struct {
 	rbase   uintptr
@@ -18,7 +17,7 @@ func (d *legacy_disk_t) init(base, allst uintptr) {
 	ide_init(d.rbase)
 }
 
-func (d *legacy_disk_t) Start(ibuf *diski.Idebuf_t, writing bool) {
+func (d *legacy_disk_t) Start(ibuf *Idebuf_t, writing bool) {
 	ide_start(d.rbase, d.allstat, ibuf, writing)
 }
 
@@ -108,7 +107,7 @@ func idedata_ready(base uintptr) {
 	}
 }
 
-func ide_start(rbase, allstatus uintptr, ibuf *diski.Idebuf_t, writing bool) {
+func ide_start(rbase, allstatus uintptr, ibuf *Idebuf_t, writing bool) {
 	ireg := func(n uintptr) uint16 {
 		return uint16(rbase + n)
 	}

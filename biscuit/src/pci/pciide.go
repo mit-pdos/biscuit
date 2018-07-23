@@ -5,7 +5,6 @@ import "runtime"
 
 import "apic"
 import "defs"
-import "diski"
 
 type pciide_disk_t struct {
 	rbase   uintptr
@@ -41,7 +40,7 @@ func (d *pciide_disk_t) init(base, allst, busmaster uintptr) {
 	ide_init(d.rbase)
 }
 
-func (d *pciide_disk_t) Start(ibuf *diski.Idebuf_t, writing bool) {
+func (d *pciide_disk_t) Start(ibuf *Idebuf_t, writing bool) {
 	ide_start(d.rbase, d.allstat, ibuf, writing)
 }
 

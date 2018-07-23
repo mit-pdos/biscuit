@@ -33,7 +33,6 @@ PSRC := src/accnt/accnt.go \
 	src/bounds/bounds.go \
 	src/caller/caller.go \
 	src/defs/defs.go src/defs/errno.go src/defs/syscall.go src/defs/device.go \
-	src/diski/diski.go \
 	src/fd/fd.go \
 	src/fdops/fdops.go \
 	src/inet/inet.go \

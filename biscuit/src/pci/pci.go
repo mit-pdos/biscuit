@@ -4,14 +4,13 @@ import "fmt"
 import "runtime"
 
 import "defs"
-import "diski"
 import "mem"
 
 var IRQ_DISK int = -1
 var INT_DISK int = -1
 
 // our actual disk
-var Disk diski.Disk_i
+var Disk Disk_i
 
 const (
 	VENDOR   int = 0x0

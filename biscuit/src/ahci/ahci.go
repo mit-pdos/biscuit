@@ -10,7 +10,7 @@ import "container/list"
 import "apic"
 import "bounds"
 import "defs"
-import "diski"
+
 import "fs"
 import "mem"
 import "msi"
@@ -708,7 +708,7 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 	for blk := blks.FrontBlock(); blk != nil; blk = blks.NextBlock() {
 		ST64(&cmd.prdt[slot].dba, uint64(blk.Pa))
 		l := len(blk.Data)
-		if l != diski.BSIZE {
+		if l != fs.BSIZE {
 			panic("fill_prd_v")
 		}
 		ST(&cmd.prdt[slot].dbc, uint32(l-1))
@@ -908,7 +908,7 @@ func (p *ahci_port_t) issue(s int, blks *fs.BlkList_t, cmd uint8) {
 	} else {
 		bn = uint64(blks.FrontBlock().Block)
 	}
-	sector_offset := bn * uint64(diski.BSIZE/512)
+	sector_offset := bn * uint64(fs.BSIZE/512)
 	fis.lba_0 = uint8((sector_offset >> 0) & 0xff)
 	fis.lba_1 = uint8((sector_offset >> 8) & 0xff)
 	fis.lba_2 = uint8((sector_offset >> 16) & 0xff)
