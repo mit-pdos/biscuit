@@ -1339,9 +1339,7 @@ func (fs *Fs_t) Makefake() *fd.Fd_t {
 	//fake.hack = &imemnode_t{}
 	//fake.hack.inum = priv
 	//fake.hack.fs = fs
-	//if fake.hack.idm_init(priv) != 0 {
-	//	panic("no")
-	//}
+	//fake.hack.idm_init(priv)
 	//ret.Fops = fake
 	//return ret
 }
