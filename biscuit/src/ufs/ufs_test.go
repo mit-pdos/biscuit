@@ -9,8 +9,8 @@ import "sync"
 import "time"
 
 import "bpath"
-import "common"
 import "defs"
+import "fd"
 import "fs"
 import "mem"
 import "ustr"
@@ -369,6 +369,11 @@ func TestEvict(t *testing.T) {
 	}
 	fmt.Printf("inode %d %d\n", ni, ni1)
 	fmt.Printf("blks %d %d\n", nb, nb1)
+
+	s = doTestSimple(tfs, d)
+	if s != "" {
+		t.Fatalf("doTestSimple failed %s\n", s)
+	}
 }
 
 //
@@ -488,16 +493,16 @@ func TestFSBlockReuse(t *testing.T) {
 //
 
 func doTestOrphans(tfs *Ufs_t, t *testing.T, nfile int) {
-	fds := make([]*common.Fd_t, nfile)
+	fds := make([]*fd.Fd_t, nfile)
 	for i := 0; i < nfile; i++ {
 		fn := ustr.Ustr(uniqfile(i))
 		var err defs.Err_t
-		fds[i], err = tfs.fs.Fs_open(fn, common.O_CREAT, 0, tfs.fs.MkRootCwd(), 0, 0)
+		fds[i], err = tfs.fs.Fs_open(fn, defs.O_CREAT, 0, tfs.fs.MkRootCwd(), 0, 0)
 		if err != 0 {
 			t.Fatalf("ufs.fs.Fs_open %v failed %v\n", fn, err)
 		}
 		ub := mkData(uint8(1), SMALL)
-		n, err := fds[i].Fops.Write(nil, ub)
+		n, err := fds[i].Fops.Write(ub)
 		if err != 0 || ub.Remain() != 0 {
 			t.Fatalf("Write %v failed %v %d\n", fn, err, n)
 		}
