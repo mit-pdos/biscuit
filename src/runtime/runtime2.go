@@ -402,6 +402,8 @@ type g struct {
 		allocs		int64
 		//cacheallocs	int64
 	}
+	res1	Res_t
+	used	Res_t
 	current		unsafe.Pointer
 }
 

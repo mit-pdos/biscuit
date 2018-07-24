@@ -1632,6 +1632,7 @@ func gcMarkTermination(nextTriggerRatio float64) {
 
 	// the world is stopped
 	gcrescycle(work.bytesMarked)
+	grescycle(nil, work.bytesMarked)
 
 	_g_.m.traceback = 0
 	casgstatus(gp, _Gwaiting, _Grunning)

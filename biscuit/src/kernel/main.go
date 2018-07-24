@@ -1168,6 +1168,7 @@ const diskfs = false
 
 func main() {
 	res.Kernel = true
+	res.Resinit()
 
 	// magic loop
 	//if rand.Int() != 0 {

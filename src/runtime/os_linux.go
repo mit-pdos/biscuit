@@ -3451,6 +3451,7 @@ var res = res_t{maxheap: _maxheap}
 
 func SetMaxheap(n int) {
 	res.maxheap = int64(n)
+	_res.maxheap = int64(n)
 }
 
 // must only be called when the world is stopped at the end of a GC
@@ -3560,6 +3561,59 @@ func Memunres() int {
 	atomic.Xaddint64(&res.fin, used)
 	atomic.Xaddint64(&res.ostanding, -r)
 	return -1
+}
+
+type Res_t struct {
+	Objs	[_NumSizeClasses]uint32
+}
+
+var _res = struct {
+	lastgc		*Res_t
+	finished	*Res_t
+	// XXX remove when maxlive supports sizeclasses
+	maxheap		int64
+}{
+	maxheap: _maxheap,
+}
+
+func HeapResInit(lastgc, finished *Res_t) {
+	_res.lastgc, _res.finished = lastgc, finished
+}
+
+// must only be called when the world is stopped at the end of a GC
+func grescycle(newlastgc *Res_t, livebytes uint64) {
+	if _res.lastgc == nil || _res.finished == nil {
+		return
+	}
+	// XXX
+	_res.lastgc.Objs[1] = uint32((_res.maxheap - int64(livebytes)) >> 10)
+	*_res.finished = Res_t{}
+}
+
+func Gresup(newres *Res_t) {
+	g := getg()
+	for i, r := range newres.Objs {
+		g.res1.Objs[i] += r
+	}
+}
+
+// caller must prevent concurrent reads/writes to heapr
+func Gresrelease(outstand *Res_t) {
+	g := getg()
+	res := g.res1.Objs
+	used := g.res1.Objs
+	out := outstand.Objs
+	for i := range res {
+		fin := res[i]
+		if used[i] < res[i] {
+			fin = used[i]
+		}
+		_res.finished.Objs[i] += fin
+		out[i] -= fin
+	}
+	// XXX make sure this just zeros
+	g.res1 = Res_t{}
+	g.used = Res_t{}
 }
 
 func Gptr() unsafe.Pointer {

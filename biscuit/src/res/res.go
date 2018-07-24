@@ -2,6 +2,7 @@ package res
 
 import "fmt"
 import "runtime"
+import "sync"
 
 import "caller"
 import "oommsg"
@@ -32,16 +33,6 @@ var Resfail = caller.Distinct_caller_t{
 }
 
 const resfail = false
-
-func Resremain() int {
-	ret := runtime.Memremain()
-	if ret < 0 {
-		// not an error; outstanding res may increase pass max if our
-		// read raced with a relase, but live should never surpass max
-		ret = 0
-	}
-	return ret
-}
 
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
@@ -198,4 +189,54 @@ func Kresdebug(c int, name string) {
 func Kunresdebug() int {
 	//return Kunres()
 	return 0
+}
+
+type Res_t = runtime.Res_t
+
+type Heapres_t struct {
+	sync.Mutex
+	// available objects since last GC
+	lastgc		Res_t
+	// objects allocated by finished system calls since the last GC
+	finished	Res_t
+	// outstanding object reservations of in-progress system calls
+	outstand	Res_t
+}
+
+func (hr *Heapres_t) hrestake(want *Res_t) bool {
+	hr.Lock()
+	defer hr.Unlock()
+
+	// first make sure we have enough free objects of each size-class
+	for i, want := range want.Objs {
+		if want == 0 {
+			continue
+		}
+		avail := hr.lastgc.Objs[i] - hr.finished.Objs[i] - hr.outstand.Objs[i]
+		if want > avail {
+			return false
+		}
+	}
+
+	for i, want := range want.Objs {
+		if want != 0 {
+			hr.outstand.Objs[i] += want
+		}
+	}
+
+	runtime.Gresup(want)
+	return true
+}
+
+func (hr *Heapres_t) hunreserve() {
+	hr.Lock()
+	defer hr.Unlock()
+
+	runtime.Gresrelease(&hr.outstand)
+}
+
+var heapres Heapres_t
+
+func Resinit() {
+	runtime.HeapResInit(&heapres.lastgc, &heapres.finished)
 }
