@@ -7,6 +7,7 @@ import "mem"
 // a circular buffer that is read/written by userspace. not thread-safe -- it
 // is intended to be used by one daemon.
 type Circbuf_t struct {
+	mem   mem.Page_i
 	Buf   []uint8
 	bufsz int
 	// XXX uint
@@ -19,7 +20,8 @@ func (cb *Circbuf_t) Bufsz() int {
 	return cb.bufsz
 }
 
-func (cb *Circbuf_t) Set(nb []uint8, did int) {
+func (cb *Circbuf_t) Set(nb []uint8, did int, m mem.Page_i) {
+	cb.mem = m
 	cb.Buf = nb
 	cb.bufsz = len(nb)
 	cb.head = did
@@ -43,8 +45,9 @@ func (cb *Circbuf_t) Cb_init(sz int) defs.Err_t {
 
 // provide the page for the buffer explicitly; useful for guaranteeing that
 // read/writes won't fail to allocate memory.
-func (cb *Circbuf_t) Cb_init_phys(v []uint8, p_pg mem.Pa_t) {
-	mem.Physmem.Refup(p_pg)
+func (cb *Circbuf_t) Cb_init_phys(v []uint8, p_pg mem.Pa_t, mem mem.Page_i) {
+	cb.mem = mem
+	cb.mem.Refup(p_pg)
 	cb.p_pg = p_pg
 	cb.Buf = v
 	cb.bufsz = len(cb.Buf)
@@ -55,7 +58,7 @@ func (cb *Circbuf_t) Cb_release() {
 	if cb.Buf == nil {
 		return
 	}
-	mem.Physmem.Refdown(cb.p_pg)
+	cb.mem.Refdown(cb.p_pg)
 	cb.p_pg = 0
 	cb.Buf = nil
 	cb.head, cb.tail = 0, 0
@@ -68,13 +71,13 @@ func (cb *Circbuf_t) Cb_ensure() defs.Err_t {
 	if cb.bufsz == 0 {
 		panic("not initted")
 	}
-	pg, p_pg, ok := mem.Physmem.Refpg_new_nozero()
+	pg, p_pg, ok := cb.mem.Refpg_new_nozero()
 	if !ok {
 		return -defs.ENOMEM
 	}
 	bpg := mem.Pg2bytes(pg)[:]
 	bpg = bpg[:cb.bufsz]
-	cb.Cb_init_phys(bpg, p_pg)
+	cb.Cb_init_phys(bpg, p_pg, cb.mem)
 	return 0
 }
 
