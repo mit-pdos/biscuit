@@ -1350,8 +1350,6 @@ func gcStart(mode gcMode, trigger gcTrigger) {
 	work.pauseNS = 0
 	work.mode = mode
 
-	gcrescycle()
-
 	// stop counting bgsweeper time since any sweeping done until mark
 	// termination will be included in mark time.
 	//bgtrack = false
@@ -1632,11 +1630,8 @@ func gcMarkTermination(nextTriggerRatio float64) {
 		}
 	})
 
-	p := (*uint64)(unsafe.Pointer(&res.gclive))
-	atomic.Store64(p, uint64(work.bytesMarked))
-
-	// start counting bgsweeper time again
-	//bgtrack = true
+	// the world is stopped
+	gcrescycle(work.bytesMarked)
 
 	_g_.m.traceback = 0
 	casgstatus(gp, _Gwaiting, _Grunning)

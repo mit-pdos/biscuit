@@ -3453,17 +3453,10 @@ func SetMaxheap(n int) {
 	res.maxheap = int64(n)
 }
 
-func gcrescycle() {
-	p := (*uint64)(unsafe.Pointer(&res.fin))
-	var rl int64
-	for {
-		rl = atomic.Loadint64(&res.fin)
-		atomic.Xaddint64(&res.gclive, rl)
-		if atomic.Cas64(p, uint64(rl), 0) {
-			break
-		}
-		atomic.Xaddint64(&res.gclive, -rl)
-	}
+// must only be called when the world is stopped at the end of a GC
+func gcrescycle(live uint64) {
+	res.gclive = int64(live)
+	res.fin = 0
 }
 
 // returns true if the caller must evict their previous allocations (if any).
