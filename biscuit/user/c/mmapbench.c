@@ -9,14 +9,17 @@ nowms(void)
   return tv.tv_sec*1000 + tv.tv_usec/1000;
 }
 
+#define SZ  (1 << 20)
+#define N  8192
+	    
 int main(int argc, char **argv)
 {
 
   printf("mmapbench\n");
   
-  const size_t sz = 1 << 20;
+  const size_t sz = SZ;
   long tot = 0;
-  for (int i = 0 ; i < 100; i++) {
+  for (int i = 0 ; i < N; i++) {
     char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE,
 		   MAP_ANON | MAP_PRIVATE, -1, 0);
     if (p == MAP_FAILED)
@@ -32,7 +35,7 @@ int main(int argc, char **argv)
     if (munmap(p, sz) != 0)
       errx(-1, "munmap failed");
   }
-  printf("mmapbench done %ld ms\n", tot);
+  printf("mmapbench %ld pgfaults in %ld ms\n", (long) SZ * N, tot);
 
   return 0;
 }
