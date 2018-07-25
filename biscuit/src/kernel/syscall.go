@@ -507,7 +507,7 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	// supports lazily-mapped private anonymous pages though.
 	var ub int
 	failed := false
-	if false { // anon
+	if anon {
 		for i := 0; i < lenn; i += int(mem.PGSIZE) {
 			_, p_pg, ok := physmem.Refpg_new()
 			if !ok {
