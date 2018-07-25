@@ -11,13 +11,12 @@ import "log"
 func doClnt(conn fdops.Fdops_i, t *testing.T) {
 	log.Printf("clnt: wait for accept\n")
 
-	ub := mkUbuf(8)
+	sa := make([]uint8, 8)
+	ub := mkUbuf(sa)
 	clnt, _, err := conn.Accept(ub)
 	if err != 0 {
 		t.Fatalf("accept")
 	}
-	sa := make([]uint8, 8)
-	_, err = ub.Uioread(sa)
 	if err != 0 {
 		t.Fatalf("accept sa")
 	}

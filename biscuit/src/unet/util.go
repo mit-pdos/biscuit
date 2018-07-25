@@ -42,8 +42,17 @@ func net_init() {
 	res.Kernel = false
 }
 
-func mkUbuf(sz int) *vm.Fakeubuf_t {
-	hdata := make([]uint8, sz)
+func mkUbuf(buf []uint8) *vm.Fakeubuf_t {
+	ub := &vm.Fakeubuf_t{}
+	ub.Fake_init(buf)
+	return ub
+}
+
+func mkData(v uint8, n int) *vm.Fakeubuf_t {
+	hdata := make([]uint8, n)
+	for i := range hdata {
+		hdata[i] = v
+	}
 	ub := &vm.Fakeubuf_t{}
 	ub.Fake_init(hdata)
 	return ub
