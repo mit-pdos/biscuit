@@ -27,7 +27,7 @@ int main(int argc, char **argv)
 
     long st = nowms();
     for (int j = 0; j < sz; j += 4096) {
-      p[i] = 0xcc;
+      p[j] = 0xcc;
     }
 
     tot += nowms() - st;
