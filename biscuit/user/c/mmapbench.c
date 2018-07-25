@@ -35,7 +35,7 @@ int main(int argc, char **argv)
     if (munmap(p, sz) != 0)
       errx(-1, "munmap failed");
   }
-  printf("mmapbench %ld pgfaults in %ld ms\n", (long) SZ * N, tot);
+  printf("mmapbench %ld pgfaults in %ld ms\n", (long) (SZ/4096) * N, tot);
 
   return 0;
 }
