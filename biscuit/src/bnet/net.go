@@ -2491,7 +2491,6 @@ var _nilmac Mac_t
 
 func (tc *Tcptcb_t) tcb_init(lip, rip Ip4_t, lport, rport uint16, smac,
 	dmac *Mac_t, sndnxt uint32, sv []uint8, sp mem.Pa_t, rv []uint8, rp mem.Pa_t) {
-	fmt.Printf("rip %d lip %d lport %d rport %d\n", lip, rip, lport, rport)
 	if lip == defs.INADDR_ANY || rip == defs.INADDR_ANY || lport == 0 || rport == 0 {
 		panic("all IPs/ports must be known")
 	}
