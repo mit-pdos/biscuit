@@ -30,11 +30,12 @@ func (cb *Circbuf_t) Set(nb []uint8, did int, m mem.Page_i) {
 
 // may fail to allocate a page for the buffer. when cb's life is over, someone
 // must free the buffer page by calling cb_release().
-func (cb *Circbuf_t) Cb_init(sz int) defs.Err_t {
+func (cb *Circbuf_t) Cb_init(sz int, m mem.Page_i) defs.Err_t {
 	bufmax := int(mem.PGSIZE)
 	if sz <= 0 || sz > bufmax {
 		panic("bad circbuf size")
 	}
+	cb.mem = m
 	cb.bufsz = sz
 	cb.head, cb.tail = 0, 0
 	// lazily allocated the buffers. it is easier to handle an error at the
@@ -45,8 +46,8 @@ func (cb *Circbuf_t) Cb_init(sz int) defs.Err_t {
 
 // provide the page for the buffer explicitly; useful for guaranteeing that
 // read/writes won't fail to allocate memory.
-func (cb *Circbuf_t) Cb_init_phys(v []uint8, p_pg mem.Pa_t, mem mem.Page_i) {
-	cb.mem = mem
+func (cb *Circbuf_t) Cb_init_phys(v []uint8, p_pg mem.Pa_t, m mem.Page_i) {
+	cb.mem = m
 	cb.mem.Refup(p_pg)
 	cb.p_pg = p_pg
 	cb.Buf = v
