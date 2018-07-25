@@ -1201,7 +1201,7 @@ func main() {
 
 	structchk()
 	cpuchk()
-	bnet.Net_init()
+	bnet.Net_init(mem.Physmem)
 
 	mem.Dmap_init()
 	perfsetup()

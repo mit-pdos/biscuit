@@ -304,24 +304,29 @@ func (p *Proc_t) resched(tid defs.Tid_t, n *tinfo.Tnote_t) bool {
 // returns non-zero if this calling process has been killed and the caller
 // should finish the system call.
 func KillableWait(cond *sync.Cond) defs.Err_t {
-	mynote := tinfo.Current()
+	if !res.Kernel {
+		cond.Wait()
+		return 0
+	} else {
+		mynote := tinfo.Current()
 
-	// ensure the sleep is atomic w.r.t. killed flag and kn.Cond writes
-	// from killer
-	mynote.Lock()
-	if mynote.Killed {
-		ret := mynote.Killnaps.Kerr
-		mynote.Unlock()
-		if ret == 0 {
-			panic("must be non-zero")
+		// ensure the sleep is atomic w.r.t. killed flag and kn.Cond writes
+		// from killer
+		mynote.Lock()
+		if mynote.Killed {
+			ret := mynote.Killnaps.Kerr
+			mynote.Unlock()
+			if ret == 0 {
+				panic("must be non-zero")
+			}
+			return ret
 		}
-		return ret
-	}
 
-	mynote.Killnaps.Cond = cond
-	// WaitWith() unlocks mynote after adding us to sleep queue. neat huh?
-	cond.WaitWith(mynote)
-	return mynote.Killnaps.Kerr
+		mynote.Killnaps.Cond = cond
+		// WaitWith() unlocks mynote after adding us to sleep queue. neat huh?
+		cond.WaitWith(mynote)
+		return mynote.Killnaps.Kerr
+	}
 }
 
 // returns true if the kernel may safely use a "fast" resume and whether the
