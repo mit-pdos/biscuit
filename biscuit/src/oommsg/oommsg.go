@@ -1,6 +1,6 @@
 package oommsg
 
-var OomCh chan Oommsg_t
+var OomCh chan Oommsg_t = make(chan Oommsg_t)
 
 type Oommsg_t struct {
 	Need   int

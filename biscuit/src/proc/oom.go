@@ -13,13 +13,10 @@ type oom_t struct {
 	lastpr time.Time
 }
 
-var Oom *oom_t
+var Oom *oom_t = &oom_t{halp: oommsg.OomCh}
 
 func Oom_init(evict func() (int, int)) {
-	Oom = &oom_t{}
-	Oom.halp = make(chan oommsg.Oommsg_t)
 	Oom.evict = evict
-	oommsg.OomCh = Oom.halp
 	go Oom.reign()
 }
 
