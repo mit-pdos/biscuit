@@ -780,6 +780,114 @@ func cpuchk() {
 	bmi1 := bx & 1 << 3 != 0
 	bmi2 := bx & 1 << 8 != 0
 	fmt.Printf("bmi1 %v, bmi2 %v\n", bmi1, bmi2)
+	objresttest()
+}
+
+type ro = runtime.Resobjs_t
+
+func sum(a *ro) uint32 {
+	var ret uint32
+	for _, v := range a {
+		ret += v
+	}
+	return ret
+}
+
+func objresttest() {
+	a := &ro{}
+	b := &ro{}
+	runtime.Objsadd(a, b)
+	if sum(b) != 0 { panic("oh shite") }
+	b[0] = 1
+	runtime.Objsadd(a, b)
+	if sum(b) != 1 { panic("oh shite") }
+	*a = ro{}; *b = ro{}
+	for i := range a {
+		b[i] = 1
+	}
+	runtime.Objsadd(a, b)
+	if sum(b) != uint32(len(a)) { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+	*a = ro{}; *b = ro{}
+	for i := range b {
+		a[i] = 1
+	}
+	runtime.Objsadd(a, b)
+	if sum(b) != uint32(len(b)) { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+	*a = ro{}; *b = ro{}
+	for i := range a {
+		if i % 2 == 0 {
+			a[i] = 1
+		} else {
+			b[i] = 1
+		}
+	}
+	runtime.Objsadd(a, b)
+	if sum(b) != uint32(len(a)) { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+	*a = ro{}; *b = ro{}
+	for i := range a {
+		a[i] = 50
+		b[i] = 31337
+	}
+	runtime.Objsadd(a, b)
+	if sum(b) != 50*24+31337*24 { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+
+	*a = ro{}; *b = ro{}
+	runtime.Objssub(a, b)
+	if sum(b) != 0 { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+
+	*a = ro{}; *b = ro{}
+	for i := range b {
+		b[i] = 1
+	}
+	runtime.Objssub(a, b)
+	if sum(b) != uint32(len(b)) { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+
+	*a = ro{}; *b = ro{}
+	for i := range b {
+		a[i] = 1
+		b[i] = 1
+	}
+	runtime.Objssub(a, b)
+	if sum(b) != 0 { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+
+	*a = ro{}; *b = ro{}
+	for i := range b {
+		a[i] = 1
+		b[i] = 2
+	}
+	runtime.Objssub(a, b)
+	if sum(b) != uint32(len(a)) { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+
+	*a = ro{}; *b = ro{}
+	for i := range b {
+		a[i] = 1
+	}
+	runtime.Objssub(a, b)
+	if sum(b) != (^uint32(len(a)))+1 { fmt.Printf("SUM %v\n", sum(b)); panic("oh shite") }
+
+	*a = ro{}; *b = ro{}
+	if ret := runtime.Objscmp(a, b); ret != 0 { fmt.Printf("ret %#x\n", ret); panic("crud") }
+
+	*a = ro{}; *b = ro{}
+	a[0] = 1
+	if ret := runtime.Objscmp(a, b); ret != 1 { fmt.Printf("ret %#x\n", ret); panic("crud") }
+
+	*a = ro{}; *b = ro{}
+	a[1] = 2
+	if ret := runtime.Objscmp(a, b); ret != 2 { fmt.Printf("ret %#x\n", ret); panic("crud") }
+
+	*a = ro{}; *b = ro{}
+	a[10] = 2
+	lasti := uint32(len(a) - 1)
+	a[lasti] = 9
+	if ret := runtime.Objscmp(a, b); ret != (1 << 10) | (1 << lasti) { fmt.Printf("ret %#x\n", ret); panic("crud") }
+
+	*a = ro{}; *b = ro{}
+	a[10] = 2
+	a[20] = 9
+	b[10] = 3
+	b[20] = 0x2000
+	if ret := runtime.Objscmp(a, b); ret != 0 { fmt.Printf("ret %#x\n", ret); panic("crud") }
 }
 
 func perfsetup() {
