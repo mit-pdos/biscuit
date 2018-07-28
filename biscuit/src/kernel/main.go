@@ -750,7 +750,7 @@ func cpuchk() {
 	rmodel, rfamily := cpuidfamily()
 	fmt.Printf("CPUID: family: %x, model: %x\n", rfamily, rmodel)
 
-	ax, _, _, dx := runtime.Cpuid(1, 0)
+	ax, _, cx, dx := runtime.Cpuid(1, 0)
 	stepping := ax & 0xf
 	oldp := rfamily == 6 && rmodel < 3 && stepping < 3
 	sep := uint32(1 << 11)
@@ -765,6 +765,21 @@ func cpuchk() {
 		//panic("invariant tsc not supported")
 		fmt.Printf("invariant TSC not supported\n")
 	}
+
+	avx := cx & (1 << 28) != 0
+	sse3 := cx & (1 << 0) != 0
+	ssse3 := cx & (1 << 9) != 0
+	sse41 := cx & (1 << 19) != 0
+	sse42 := cx & (1 << 20) != 0
+	fmt.Printf("sse3 %v, ssse3 %v, sse41 %v, sse42 %v, avx %v\n", sse3, ssse3, sse41, sse42, avx)
+	if !sse42 {
+		panic("no sse42")
+	}
+
+	_, bx, _, _ := runtime.Cpuid(0x7, 0)
+	bmi1 := bx & 1 << 3 != 0
+	bmi2 := bx & 1 << 8 != 0
+	fmt.Printf("bmi1 %v, bmi2 %v\n", bmi1, bmi2)
 }
 
 func perfsetup() {
