@@ -2671,6 +2671,10 @@ func goexit0(gp *g) {
 		atomic.Xadd(&sched.ngsys, -1)
 	}
 	gp.current = nil
+	gp.allused = false
+	if a := gp.res1.Objs[1]; hackmode != 0 && a != 0 {
+		print("leaked res! ", a, "\n")
+	}
 	gp.m = nil
 	locked := gp.lockedm != 0
 	gp.lockedm = 0
@@ -3265,6 +3269,10 @@ func newproc1(fn *funcval, argp *uint8, narg int32, callerpc uintptr) {
 		newg = malg(_StackMin)
 		casgstatus(newg, _Gidle, _Gdead)
 		allgadd(newg) // publishes with a g->status of Gdead so GC scanner doesn't look at uninitialized stack.
+	}
+	newg.used = Res_t{}
+	if newg.res1.Objs[1] != 0 || newg.used.Objs[1] != 0 {
+		throw("leaked?")
 	}
 	if newg.stack.hi == 0 {
 		throw("newproc1: newg missing stack")

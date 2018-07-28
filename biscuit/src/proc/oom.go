@@ -31,11 +31,17 @@ func (o *oom_t) gc() {
 func (o *oom_t) reign() {
 outter:
 	for msg := range o.halp {
-		//fmt.Printf("A need %v, rem %v\n", msg.need, runtime.Memremain())
+		fmt.Printf("A need %v, rem %v\n", msg.Need, runtime.Remain())
+		if msg.Need < runtime.Remain() {
+			// there is apparently enough reservation available for
+			// them now
+			msg.Resume <- true
+			continue
+		}
 		o.gc()
-		//fmt.Printf("B need %v, rem %v\n", msg.need, runtime.Memremain())
+		fmt.Printf("B need %v, rem %v\n", msg.Need, runtime.Remain())
 		//panic("OOM KILL\n")
-		if msg.Need < runtime.Memremain() {
+		if msg.Need < runtime.Remain() {
 			// there is apparently enough reservation available for
 			// them now
 			msg.Resume <- true
@@ -56,7 +62,7 @@ outter:
 			last = a + b
 		}
 		o.gc()
-		if msg.Need < runtime.Memremain() {
+		if msg.Need < runtime.Remain() {
 			msg.Resume <- true
 			continue outter
 		}
@@ -64,7 +70,7 @@ outter:
 			// someone must die
 			o.dispatch_peasant(msg.Need)
 			o.gc()
-			if msg.Need < runtime.Memremain() {
+			if msg.Need < runtime.Remain() {
 				msg.Resume <- true
 				continue outter
 			}

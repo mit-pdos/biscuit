@@ -593,10 +593,10 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 	}
 	var reqc chan int
 	pollers := &fdops.Pollers_t{}
-	res.Kreswait(1<<20, "kbd daemon")
+	res.Kreswait(res.Onemeg, "kbd daemon")
 	for {
 		res.Kunres()
-		res.Kreswait(1<<20, "kbd daemon")
+		res.Kreswait(res.Onemeg, "kbd daemon")
 		select {
 		case <-cons.kbd_int:
 			for _kready() {
@@ -1183,8 +1183,6 @@ const diskfs = false
 
 func main() {
 	res.Kernel = true
-	res.Resinit()
-
 	// magic loop
 	//if rand.Int() != 0 {
 	//	for {
@@ -1241,7 +1239,7 @@ func main() {
 	proc.Oom_init(thefs.Fs_evict)
 
 	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
-		res.Resbegin(1 << 20)
+		res.Resbegin(res.Onemeg)
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)

@@ -1,5 +1,9 @@
 package bounds
 
+import "runtime"
+
+import "res"
+
 type Boundkey_t int
 
 const (
@@ -100,8 +104,106 @@ const (
 	B_AHCI_DISK_T_INT_HANDLER
 )
 
-func Bounds(k Boundkey_t) int {
-	return bounds[k]
+func Bounds(k Boundkey_t) *res.Res_t {
+	return boundres[k]
+}
+
+var boundres = []*res.Res_t {
+	B_SYS_PAUSE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_PAUSE]))}},
+	B_SYS_PREAD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_PREAD]))}},
+	B_USERBUF_T__TX: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_USERBUF_T__TX]))}},
+	B_TCPFOPS_T_READ: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_TCPFOPS_T_READ]))}},
+	B_SYS_POLL: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_POLL]))}},
+	B_SYS_WRITEV: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_WRITEV]))}},
+	B_SYS_PROF: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_PROF]))}},
+	B_USERIOVEC_T__TX: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_USERIOVEC_T__TX]))}},
+	B_IMEMNODE_T__DESCAN: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T__DESCAN]))}},
+	B_SYS_TRUNCATE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_TRUNCATE]))}},
+	B_SYS_SOCKET: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SOCKET]))}},
+	B_SYS_BIND: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_BIND]))}},
+	B_SYS_CHDIR: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_CHDIR]))}},
+	B_PROC_T_K2USER_INNER: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_PROC_T_K2USER_INNER]))}},
+	B_RAWDFOPS_T_WRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_RAWDFOPS_T_WRITE]))}},
+	B_RAWDFOPS_T_READ: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_RAWDFOPS_T_READ]))}},
+	B_IMEMNODE_T_DO_WRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T_DO_WRITE]))}},
+	B_IMEMNODE_T_IWRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T_IWRITE]))}},
+	B_SYS_READV: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_READV]))}},
+	B_SYS_SENDTO: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SENDTO]))}},
+	B_SYS_RECVFROM: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_RECVFROM]))}},
+	B_SYS_SETRLIMIT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SETRLIMIT]))}},
+	B_INSERTARGS: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_INSERTARGS]))}},
+	B_SYS_WRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_WRITE]))}},
+	B_SYS_GETCWD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETCWD]))}},
+	B_TCPTIMERS_T__TCPTIMERS_DAEMON: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_TCPTIMERS_T__TCPTIMERS_DAEMON]))}},
+	B_SYS_SOCKETPAIR: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SOCKETPAIR]))}},
+	B_SYS_LINK: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_LINK]))}},
+	B_SYS_MKNOD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_MKNOD]))}},
+	B_SYS_GETTID: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETTID]))}},
+	B_PROC_T_USERARGS: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_PROC_T_USERARGS]))}},
+	B_SYS_UNLINK: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_UNLINK]))}},
+	B_SYS_REBOOT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_REBOOT]))}},
+	B_KBD_DAEMON: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_KBD_DAEMON]))}},
+	B_SYS_FSTAT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_FSTAT]))}},
+	B_SYS_MUNMAP: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_MUNMAP]))}},
+	B_SYS_RECVMSG: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_RECVMSG]))}},
+	B_SYS_FCNTL: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_FCNTL]))}},
+	B_SYS_RENAME: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_RENAME]))}},
+	B_ELF_T_ELF_LOAD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_ELF_T_ELF_LOAD]))}},
+	B_SYS_FTRUNCATE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_FTRUNCATE]))}},
+	B_SYS_NANOSLEEP: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_NANOSLEEP]))}},
+	B_SYS_PIPE2: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_PIPE2]))}},
+	B_SYS_STAT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_STAT]))}},
+	B_SYS_LSEEK: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_LSEEK]))}},
+	B_SYS_CONNECT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_CONNECT]))}},
+	B_SYS_SENDMSG: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SENDMSG]))}},
+	B_SYS_GETSOCKOPT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETSOCKOPT]))}},
+	B_SYS_INFO: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_INFO]))}},
+	B_PROC_T_USER2K_INNER: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_PROC_T_USER2K_INNER]))}},
+	B_TCPFOPS_T_WRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_TCPFOPS_T_WRITE]))}},
+	B_SYS_GETTIMEOFDAY: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETTIMEOFDAY]))}},
+	B_SYS_GETRUSAGE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETRUSAGE]))}},
+	B_SYS_PWRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_PWRITE]))}},
+	B_FS_T__FULLPATH: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_FS_T__FULLPATH]))}},
+	B_IMEMNODE_T_IREAD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T_IREAD]))}},
+	B_ARP_RESOLVE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_ARP_RESOLVE]))}},
+	B_IMEMNODE_T_IMMAPINFO: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T_IMMAPINFO]))}},
+	B_PIPE_T_OP_FDADD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_PIPE_T_OP_FDADD]))}},
+	B_SYS_ACCESS: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_ACCESS]))}},
+	B_SYS_LISTEN: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_LISTEN]))}},
+	B_SYS_EXECV: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_EXECV]))}},
+	B_SYS_GETRLIMIT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETRLIMIT]))}},
+	B_SYS_SYNC: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SYNC]))}},
+	B_FUTEX_T_FUTEX_START: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_FUTEX_T_FUTEX_START]))}},
+	B_SYS_MKDIR: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_MKDIR]))}},
+	B_SYS_KILL: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_KILL]))}},
+	B_SYS_FUTEX: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_FUTEX]))}},
+	B_USERIOVEC_T_IOV_INIT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_USERIOVEC_T_IOV_INIT]))}},
+	B_SYS_OPEN: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_OPEN]))}},
+	B_SYS_MMAP: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_MMAP]))}},
+	B_SYS_DUP2: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_DUP2]))}},
+	B_SYS_ACCEPT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_ACCEPT]))}},
+	B_SYS_SHUTDOWN: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SHUTDOWN]))}},
+	B_FS_T__ISANCESTOR: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_FS_T__ISANCESTOR]))}},
+	B_PIPEFOPS_T_WRITE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_PIPEFOPS_T_WRITE]))}},
+	B_SYS_GETPID: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETPID]))}},
+	B_SYS_READ: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_READ]))}},
+	B_SYS_THREXIT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_THREXIT]))}},
+	B_FS_T_FS_RENAME: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_FS_T_FS_RENAME]))}},
+	B_FS_T_FS_NAMEI: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_FS_T_FS_NAMEI]))}},
+	B_IMEMNODE_T_BMAPFILL: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T_BMAPFILL]))}},
+	B_SYS_SIGACTION: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SIGACTION]))}},
+	B_SYS_GETPPID: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_GETPPID]))}},
+	B_SYS_SETSOCKOPT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_SETSOCKOPT]))}},
+	B_SYS_FORK: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_FORK]))}},
+	B_SYS_WAIT4: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYS_WAIT4]))}},
+	B_SYSCALL_T_SYS_CLOSE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYSCALL_T_SYS_CLOSE]))}},
+	B_SYSCALL_T_SYS_EXIT: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_SYSCALL_T_SYS_EXIT]))}},
+	B_IMEMNODE_T_IFREE: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IMEMNODE_T_IFREE]))}},
+	B_BITMAP_T_APPLY: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_BITMAP_T_APPLY]))}},
+	B_ICACHE_T_FREEDEAD: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_ICACHE_T_FREEDEAD]))}},
+	B_IXGBE_T_INT_HANDLER: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_IXGBE_T_INT_HANDLER]))}},
+	B_AHCI_PORT_T_QUEUEMGR: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_AHCI_PORT_T_QUEUEMGR]))}},
+	B_AHCI_DISK_T_INT_HANDLER: &res.Res_t{Objs: runtime.Resobjs_t{1: uint32(uint(bounds[B_AHCI_DISK_T_INT_HANDLER]))}},
 }
 
 var bounds = []int{

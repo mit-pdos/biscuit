@@ -1341,6 +1341,90 @@ TEXT ·Mfence(SB), NOSPLIT, $0
 	MFENCE
 	RET
 
+// void Objsadd(Resobjs_t *src, Resobjs_t *dst)
+TEXT ·Objsadd(SB), NOSPLIT, $16-0
+	XORL	CX, CX
+	MOVQ	src+0(FP), SI
+	MOVQ	dst+8(FP), DI
+loop:
+	MOVOU	(DI), X0
+	MOVOU	(SI), X1
+	PADDL	X1, X0
+	MOVOU	X0, (DI)
+	ADDQ	$16, SI
+	ADDQ	$16, DI
+	INCL	CX
+	CMPL	CX, $6
+	JEQ	done
+	JMP	loop
+done:
+	RET
+
+// void Objssub(Resobjs_t *src, Resobjs_t *dst)
+TEXT ·Objssub(SB), NOSPLIT, $16-0
+	XORL	CX, CX
+	MOVQ	src+0(FP), SI
+	MOVQ	dst+8(FP), DI
+loop:
+	MOVOU	(DI), X0
+	MOVOU	(SI), X1
+	PSUBL	X1, X0
+	MOVOU	X0, (DI)
+	ADDQ	$16, SI
+	ADDQ	$16, DI
+	INCL	CX
+	CMPL	CX, $6
+	JEQ	done
+	JMP	loop
+done:
+	RET
+
+// uint Objscmp(Resobjs_t *a, Resobjs_t *b)
+TEXT ·Objscmp(SB), NOSPLIT, $0-0x18
+	XORL	R8, R8
+	XORL	AX, AX
+	XORL	DX, DX
+	MOVQ	src+0(FP), SI
+	MOVQ	dst+8(FP), DI
+loop:
+	MOVOU	(DI), X0
+	MOVOU	(SI), X1
+	PCMPGTL	X0, X1
+	PMOVMSKB X1, AX
+	TESTL	AX, AX
+	JNZ	fail
+cont:
+	ADDQ	$16, SI
+	ADDQ	$16, DI
+	INCL	R8
+	CMPL	R8, $6
+	JEQ	done
+	JMP	loop
+fail:
+	// convert to bitmask
+	PEXTRD	$0, X1, R9
+	ANDL	$1, R9
+
+	PEXTRD	$1, X1, BX
+	ANDL	$2, BX
+	ORQ	BX, R9
+
+	PEXTRD	$2, X1, BX
+	ANDL	$4, BX
+	ORQ	BX, R9
+
+	PEXTRD	$3, X1, BX
+	ANDL	$8, BX
+	ORQ	BX, R9
+
+	LEAQ	0(R8*4), CX
+	SHLQ	CX, R9
+	ORQ	R9, DX
+	JMP	cont
+done:
+	MOVQ	DX, ret+0x10(FP)
+	RET
+
 // void backtracetramp(uintptr newsp, uintptr *tf, g *gp)
 TEXT ·backtracetramp(SB), NOSPLIT, $0-0x18
 	MOVQ	SP, AX

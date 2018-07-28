@@ -448,7 +448,7 @@ var _rstchan chan rstmsg_t
 func rst_daemon() {
 	for rmsg := range _rstchan {
 		res.Kunresdebug()
-		res.Kresdebug(1<<10, "icmp daemon")
+		res.Kresdebug(res.Onek, "icmp daemon")
 		localip, routeip, err := Routetbl.Lookup(rmsg.k.rip)
 		if err != 0 {
 			continue
@@ -483,7 +483,7 @@ func icmp_daemon() {
 	for {
 		buf := <-icmp_echos
 		res.Kunresdebug()
-		res.Kresdebug(1<<10, "icmp daemon")
+		res.Kresdebug(res.Onek, "icmp daemon")
 		buf = buf[ETHERLEN:]
 
 		fromip := Sl2ip(buf[12:])
@@ -3857,7 +3857,7 @@ func (l *lo_t) lo_start() {
 func (l *lo_t) _daemon() {
 	for {
 		res.Kunresdebug()
-		res.Kresdebug(1<<10, "lo daemon")
+		res.Kresdebug(res.Onek, "lo daemon")
 		lm := <-l.txc
 		if lm.tso {
 			l._tso(lm.buf, lm.tcphlen, lm.mss)

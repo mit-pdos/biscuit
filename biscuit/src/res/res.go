@@ -2,19 +2,20 @@ package res
 
 import "fmt"
 import "runtime"
-import "sync"
 
 import "caller"
 import "oommsg"
 import "tinfo"
 
+// XXX argument should be Boundkey_t so caller doesn't have to
+
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
-func Resbegin(c int) bool {
+func Resbegin(want *Res_t) bool {
 	if !Kernel {
 		return true
 	}
-	r := _reswait(c, false, true)
+	r := _reswait(want, false, true)
 	//if !r {
 	//	fmt.Printf("Slain!\n")
 	//}
@@ -36,7 +37,7 @@ const resfail = false
 
 // blocks until memory is available or returns false if this process has been
 // killed and should terminate.
-func Resadd(c int) bool {
+func Resadd(want *Res_t) bool {
 	if !Kernel {
 		return true
 	}
@@ -46,7 +47,7 @@ func Resadd(c int) bool {
 			return false
 		}
 	}
-	r := _reswait(c, true, true)
+	r := _reswait(want, true, true)
 	//if !r {
 	//	fmt.Printf("Slain!\n")
 	//}
@@ -54,7 +55,7 @@ func Resadd(c int) bool {
 }
 
 // for reservations when locks may be held; the caller should abort and retry.
-func Resadd_noblock(c int) bool {
+func Resadd_noblock(want *Res_t) bool {
 	if !Kernel {
 		return true
 	}
@@ -64,7 +65,7 @@ func Resadd_noblock(c int) bool {
 			return false
 		}
 	}
-	return _reswait(c, true, false)
+	return _reswait(want, true, false)
 }
 
 func Resend() {
@@ -74,7 +75,7 @@ func Resend() {
 	//if !Lims {
 	//	return
 	//}
-	runtime.Memunres()
+	runtime.Gresrelease()
 }
 
 func Human(_bytes int) string {
@@ -92,15 +93,13 @@ func Human(_bytes int) string {
 
 //var lastp time.Time
 
-func _reswait(c int, incremental, block bool) bool {
+//func _reswait(c int, incremental, block bool) bool {
+func _reswait(want *Res_t, incremental, block bool) bool {
 	//if !Lims {
 	//	return true
 	//}
-	f := runtime.Memreserve
-	if incremental {
-		f = runtime.Memresadd
-	}
-	for !f(c) {
+	f := runtime.Greserve
+	for !f(want) {
 		//if time.Since(lastp) > time.Second {
 		//	fmt.Printf("RES failed %v\n", c)
 		//	Callerdump(2)
@@ -137,35 +136,36 @@ type Cacheallocs_t struct {
 }
 
 // returns true if the caller must try to evict their recent cache allocations.
-func (ca *Cacheallocs_t) Shouldevict(res int) bool {
+func (ca *Cacheallocs_t) Shouldevict(want *Res_t) bool {
 	if !Kernel {
 		return false
 	}
 	//if !Lims {
 	//	return false
 	//}
-	init := !ca.initted
-	ca.initted = true
-	return !runtime.Cacheres(res, init)
+	//init := !ca.initted
+	//ca.initted = true
+	//return !runtime.Cacheres(res, init)
+	return !runtime.Greserve(want)
 }
 
 var Kwaits int
 
-//var Lims = true
+var Lims = true
 
-func Kreswait(c int, name string) {
+func Kreswait(want *Res_t, name string) {
 	if !Kernel {
 		return
 	}
 	//if !Lims {
 	//	return
 	//}
-	for !runtime.Memreserve(c) {
-		//fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
-
+	for !runtime.Greserve(want) {
+		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
 		Kwaits++
 		var omsg oommsg.Oommsg_t
-		omsg.Need = 100 << 20
+		//omsg.Need = 100 << 20
+		omsg.Need = int(want.Objs[1])
 		omsg.Resume = make(chan bool, 1)
 		oommsg.OomCh <- omsg
 		<-omsg.Resume
@@ -179,10 +179,11 @@ func Kunres() int {
 	//if !Lims {
 	//	return 0
 	//}
-	return runtime.Memunres()
+	runtime.Gresrelease()
+	return 0
 }
 
-func Kresdebug(c int, name string) {
+func Kresdebug(want *Res_t, name string) {
 	//Kreswait(c, name)
 }
 
@@ -193,50 +194,5 @@ func Kunresdebug() int {
 
 type Res_t = runtime.Res_t
 
-type Heapres_t struct {
-	sync.Mutex
-	// available objects since last GC
-	lastgc		Res_t
-	// objects allocated by finished system calls since the last GC
-	finished	Res_t
-	// outstanding object reservations of in-progress system calls
-	outstand	Res_t
-}
-
-func (hr *Heapres_t) hrestake(want *Res_t) bool {
-	hr.Lock()
-	defer hr.Unlock()
-
-	// first make sure we have enough free objects of each size-class
-	for i, want := range want.Objs {
-		if want == 0 {
-			continue
-		}
-		avail := hr.lastgc.Objs[i] - hr.finished.Objs[i] - hr.outstand.Objs[i]
-		if want > avail {
-			return false
-		}
-	}
-
-	for i, want := range want.Objs {
-		if want != 0 {
-			hr.outstand.Objs[i] += want
-		}
-	}
-
-	runtime.Gresup(want)
-	return true
-}
-
-func (hr *Heapres_t) hunreserve() {
-	hr.Lock()
-	defer hr.Unlock()
-
-	runtime.Gresrelease(&hr.outstand)
-}
-
-var heapres Heapres_t
-
-func Resinit() {
-	runtime.HeapResInit(&heapres.lastgc, &heapres.finished)
-}
+var Onemeg = &Res_t{Objs: runtime.Resobjs_t{1: 1 << 20}}
+var Onek = &Res_t{Objs: runtime.Resobjs_t{1: 1 << 10}}

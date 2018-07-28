@@ -42,6 +42,11 @@ type mcache struct {
 	local_largefree  uintptr                  // bytes freed for large objects (>maxsmallsize)
 	local_nlargefree uintptr                  // number of frees for large objects (>maxsmallsize)
 	local_nsmallfree [_NumSizeClasses]uintptr // number of frees for small objects (<=maxsmallsize)
+	avail		Res_t
+	outstand	Res_t
+	//robs	uint
+	//robi	uint
+	//alls	uint
 }
 
 // A gclink is a node in a linked list of blocks, like mlink,

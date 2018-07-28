@@ -29,8 +29,7 @@ import "ustr"
 import "util"
 import "vm"
 
-var _sysbounds = []int{
-	//var _sysbounds = map[int]int {
+var _sysbounds = []*res.Res_t {
 	defs.SYS_READ:       bounds.Bounds(bounds.B_SYS_READ),
 	defs.SYS_WRITE:      bounds.Bounds(bounds.B_SYS_WRITE),
 	defs.SYS_OPEN:       bounds.Bounds(bounds.B_SYS_OPEN),
@@ -3692,7 +3691,7 @@ func (f *futex_t) _resume(ack chan int, err defs.Err_t) {
 }
 
 func (f *futex_t) futex_start() {
-	res.Kresdebug(1<<10, "futex daemon")
+	res.Kresdebug(res.Onek, "futex daemon")
 	maxwait := 10
 	f._cnds = make([]chan int, 0, maxwait)
 	f.cnds = f._cnds
@@ -3703,7 +3702,7 @@ func (f *futex_t) futex_start() {
 	opencount := 1
 	for opencount > 0 {
 		res.Kunresdebug()
-		res.Kresdebug(1<<10, "futex daemon")
+		res.Kresdebug(res.Onek, "futex daemon")
 		tochan, towho := f.tonext()
 		select {
 		case <-tochan:
@@ -4213,7 +4212,7 @@ func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 		}
 		runtime.SetMaxheap(n)
 		fmt.Printf("remaining mem: %v\n",
-		    res.Human(runtime.Memremain()))
+		    res.Human(runtime.Remain()))
 	case ptype&defs.PROF_HACK6 != 0:
 		anum := float64(_events)
 		adenom := float64(_pmflags)

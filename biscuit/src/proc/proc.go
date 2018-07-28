@@ -384,8 +384,7 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 	tinfo.SetCurrent(mynote)
 
 	var fxbuf *[64]uintptr
-	const runonly = 14 << 10
-	if res.Resbegin(runonly) {
+	if res.Resbegin(res.Onek) {
 		// could allocate fxbuf lazily
 		fxbuf = vm.Mkfxbuf()
 	}
@@ -409,7 +408,7 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 
 	again:
 		var restart bool
-		if res.Resbegin(runonly) {
+		if res.Resbegin(res.Onek) {
 			fastret, restart = p.trap_proc(tf, tid, intno, aux)
 		}
 		if restart && !p.doomed {

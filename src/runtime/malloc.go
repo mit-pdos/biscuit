@@ -751,11 +751,18 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 	return
 }
 
-//func _takecredit(n int64, pcbuf []uintptr) {
 func _takecredit(n int64) {
 	g := getg()
-	g.res.allocs += n
+	//g.res.allocs += n
 	//g.res.cacheallocs += n
+	// XXX when maxlive supports sizeclasses
+	//g.used.Objs[sizeclass]++
+	g.used.Objs[1] += uint32(n)
+}
+
+func _takebytes(n int64) {
+	g := getg()
+	g.used.Objs[1] += uint32(n)
 }
 
 //var Dist struct {
@@ -803,8 +810,6 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		if typ != nil {
 			align = uintptr(typ.align)
 		}
-		//_takecredit(int64(size), pcbuf)
-		_takecredit(int64(size))
 		return persistentalloc(size, align, &memstats.other_sys)
 	}
 
@@ -891,7 +896,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 				c.local_tinyallocs++
 				mp.mallocing = 0
 				releasem(mp)
-				//_takecredit(int64(size), pcbuf)
+				//_takecredit(tinySizeClass)
 				_takecredit(int64(size))
 				return x
 			}
@@ -929,6 +934,8 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			if needzero && span.needzero != 0 {
 				memclrNoHeapPointers(unsafe.Pointer(v), size)
 			}
+			//_takecredit(sizeclass)
+			_takecredit(int64(size))
 		}
 	} else {
 		var s *mspan
@@ -940,10 +947,8 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		s.allocCount = 1
 		x = unsafe.Pointer(s.base())
 		size = s.elemsize
+		_takebytes(int64(size))
 	}
-
-	//_takecredit(int64(size), pcbuf)
-	_takecredit(int64(size))
 
 	var scanSize uintptr
 	if !noscan {

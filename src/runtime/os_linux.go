@@ -432,6 +432,14 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
 func Wrmsr(int, int)
 
+// adds src to dst
+func Objsadd(src *Resobjs_t, dst *Resobjs_t)
+// subs src from dst
+func Objssub(src *Resobjs_t, dst *Resobjs_t)
+// returns a bit mask which is set when the corresponding element of a is
+// larger than b.
+func Objscmp(a *Resobjs_t, b *Resobjs_t) uint
+
 func Lfence()
 func Sfence()
 func Mfence()
@@ -3436,48 +3444,38 @@ func Setheap(n int) {
 }
 
 // the units of maxheap and totalres is bytes
-var _maxheap int64 = 1 << 30
+var _maxheap int64 = 20 << 20
 
-type res_t struct {
-	maxheap		int64
-	ostanding	int64
-	// reservations for ops that have finished; only finished ops must have
-	// their outstanding reservations reduced to actual live by GC
-	fin		int64
-	gclive		int64
-}
-
-var res = res_t{maxheap: _maxheap}
+//type res_t struct {
+//	maxheap		int64
+//	ostanding	int64
+//	// reservations for ops that have finished; only finished ops must have
+//	// their outstanding reservations reduced to actual live by GC
+//	fin		int64
+//	gclive		int64
+//}
+//
+//var res = res_t{maxheap: _maxheap}
 
 func SetMaxheap(n int) {
-	res.maxheap = int64(n)
-	_res.maxheap = int64(n)
+	//res.maxheap = int64(n)
+	_centralres.maxheap = int64(n)
+	GC()
 }
 
 // must only be called when the world is stopped at the end of a GC
-func gcrescycle(live uint64) {
-	res.gclive = int64(live)
-	res.fin = 0
-}
-
-// returns true if the caller must evict their previous allocations (if any).
-// will use previous iterations reservation credit, if available.
-func Cacheres(_res int, init bool) bool {
-	res := int64(_res)
-	//gp := getg()
-	//used := gp.res.cacheallocs
-	//gp.res.cacheallocs = 0
-	//if !init && used < res {
-	//	res = used
-	//}
-	return _restake(res)
-}
+//func gcrescycle(live uint64) {
+//	res.gclive = int64(live)
+//	res.fin = 0
+//}
 
 func Cacheaccount() {
+	//gp := getg()
+	//if gp.res.allocs < gp.res.took {
+	//	gp.res.allocs = gp.res.took
+	//}
 	gp := getg()
-	if gp.res.allocs < gp.res.took {
-		gp.res.allocs = gp.res.took
-	}
+	gp.allused = true
 }
 
 func GCDebug(n int) {
@@ -3500,120 +3498,143 @@ func GCPacerToggle() {
 	}
 }
 
-func Memremain() int {
-	a := atomic.Loadint64(&res.ostanding)
-	b := atomic.Loadint64(&res.fin)
-	c := atomic.Loadint64(&res.gclive)
-	rem := res.maxheap - a - b - c
-	return int(rem)
-}
-
-func Memleak(_n int) bool {
-	n := int64(_n)
-	r := _restake(n)
-	return r
-}
-
-func Memstat() (int64, int64) {
-	g := getg()
-	return g.res.took, g.res.allocs
-}
-
-func Memreserve(_n int) bool {
-	want := int64(_n)
-	return _restake(want)
-}
-
-func Memresadd(_n int) bool {
-	return Memreserve(_n)
-}
-
-func _restake(want int64) bool {
-	for {
-		o := atomic.Loadint64(&res.ostanding)
-		b := atomic.Loadint64(&res.fin)
-		c := atomic.Loadint64(&res.gclive)
-
-		if o + b + c + want > res.maxheap {
-			return false
-		}
-		p := (*uint64)(unsafe.Pointer(&res.ostanding))
-		if atomic.Cas64(p, uint64(o), uint64(o + want)) {
-			break
-		}
-	}
-	g := getg()
-	g.res.took += want
-	return true
-}
-
-func Memunres() int {
-	g := getg()
-	r := g.res.took
-	alloc := g.res.allocs
-	g.res.allocs, g.res.took = 0, 0
-
-	used := r
-	if alloc < used {
-		used = alloc
-	}
-
-	atomic.Xaddint64(&res.fin, used)
-	atomic.Xaddint64(&res.ostanding, -r)
-	return -1
-}
+//type Resobjs_t [_NumSizeClasses]uint32
+// the version of biscuit from the paper submission only allocates from 21 size
+// classes. Objsadd/Objssub assumes this is an array of 24 uint32s; fix Objsadd
+// if you change this type.
+type Resobjs_t [24]uint32 // NOTICE ABOVE!
 
 type Res_t struct {
-	Objs	[_NumSizeClasses]uint32
+	Objs	Resobjs_t
 }
 
-var _res = struct {
-	lastgc		*Res_t
-	finished	*Res_t
+var _centralres = struct {
+	avail		Res_t
+	tmp		Res_t
 	// XXX remove when maxlive supports sizeclasses
 	maxheap		int64
 }{
+	avail: Res_t{Resobjs_t{1: uint32(_maxheap)}},
 	maxheap: _maxheap,
-}
-
-func HeapResInit(lastgc, finished *Res_t) {
-	_res.lastgc, _res.finished = lastgc, finished
 }
 
 // must only be called when the world is stopped at the end of a GC
 func grescycle(newlastgc *Res_t, livebytes uint64) {
-	if _res.lastgc == nil || _res.finished == nil {
+	if hackmode == 0 {
 		return
 	}
+	_centralres.tmp = Res_t{}
+	for _, p := range allp {
+		mc := p.mcache
+		mc.avail = Res_t{}
+		Objsadd(&mc.outstand.Objs, &_centralres.tmp.Objs)
+	}
 	// XXX
-	_res.lastgc.Objs[1] = uint32((_res.maxheap - int64(livebytes)) >> 10)
-	*_res.finished = Res_t{}
-}
-
-func Gresup(newres *Res_t) {
-	g := getg()
-	for i, r := range newres.Objs {
-		g.res1.Objs[i] += r
+	left := uint32(_centralres.maxheap - int64(livebytes))
+	left -= _centralres.tmp.Objs[1]
+	if int32(left) < 0 {
+		left = 0
 	}
+	_centralres.avail.Objs[1] = left
 }
 
-// caller must prevent concurrent reads/writes to heapr
-func Gresrelease(outstand *Res_t) {
-	g := getg()
-	res := g.res1.Objs
-	used := g.res1.Objs
-	out := outstand.Objs
-	for i := range res {
-		fin := res[i]
-		if used[i] < res[i] {
-			fin = used[i]
+// may steal more credit than asked for
+func robcentral(scidx int, want uint32) uint32 {
+	p := &_centralres.avail.Objs[scidx]
+	for {
+		left := atomic.Load(p)
+		if want > left {
+			return 0
 		}
-		_res.finished.Objs[i] += fin
-		out[i] -= fin
+		took := want
+		if atomic.Cas(p, left, left - took) {
+			return took
+		}
 	}
-	// XXX make sure this just zeros
+}
+
+var Maxa	uint32
+var Byuf	[]uintptr
+
+func cas(ne uint32) {
+	for {
+		v := atomic.Load(&Maxa)
+		if ne <= v {
+			return
+		}
+		if atomic.Cas(&Maxa, v, ne) {
+			buf := make([]uintptr, 10)
+			got := callers(2, buf)
+			buf = buf[:got]
+			Byuf = buf
+			return
+		}
+	}
+}
+
+var Flushlim uint32 = 1 << 24
+
+func Greserve(want *Res_t) bool {
+	mp := acquirem()
+	g := getg()
+	mc := gomcache()
+
+	//mc.alls++
+	if m := Objscmp(&want.Objs, &mc.avail.Objs); m == 0 {
+		Objsadd(&want.Objs, &g.res1.Objs)
+		Objsadd(&want.Objs, &mc.outstand.Objs)
+		Objssub(&want.Objs, &mc.avail.Objs)
+	} else {
+		//mc.robs++
+		for i := 0; i < len(mc.avail.Objs); i++ {
+			if m & (1 << uint(i)) != 0 {
+				//mc.robi++
+				rob := robcentral(i, want.Objs[i])
+				if rob == 0 {
+					releasem(mp)
+					return false
+				}
+				mc.avail.Objs[i] += rob
+			}
+		}
+	}
+
+	releasem(mp)
+	return true
+}
+
+func Gresrelease() {
+	g := getg()
+	mc := gomcache()
+
+	Objssub(&g.res1.Objs, &mc.outstand.Objs)
+	// compute unused objects
+	if g.used.Objs[1] < g.res1.Objs[1] {
+		Objssub(&g.used.Objs, &g.res1.Objs)
+	} else {
+		// this block is possible due to implicitly reserved
+		// allocations (for the first process, one-process exit,
+		// logging daemon, etc.)
+		g.res1.Objs[1] = 0
+	}
+	// add unused objects back to credit
+	if g.allused {
+		g.allused = false
+	} else {
+		Objsadd(&g.res1.Objs, &mc.avail.Objs)
+		// XXX SSE max?
+		if mc.avail.Objs[1] > Flushlim {
+			mc.avail.Objs[1] -= Flushlim
+			atomic.Xadd(&_centralres.avail.Objs[1], int32(Flushlim))
+		}
+	}
+
 	g.res1 = Res_t{}
 	g.used = Res_t{}
+}
+
+func Remain() int {
+	return int(_centralres.avail.Objs[1])
 }
 
 func Gptr() unsafe.Pointer {
