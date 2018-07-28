@@ -370,10 +370,8 @@ func TestEvict(t *testing.T) {
 	fmt.Printf("inode %d %d\n", ni, ni1)
 	fmt.Printf("blks %d %d\n", nb, nb1)
 
-	s = doTestSimple(tfs, d)
-	if s != "" {
-		t.Fatalf("doTestSimple failed %s\n", s)
-	}
+	// make sure we can still read what we created after eviction
+	doCheckSimple(tfs, d, t)
 }
 
 //

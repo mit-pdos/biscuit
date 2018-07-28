@@ -37,6 +37,7 @@ type Mmapinfo_t struct {
 
 type Page_i interface {
 	Refpg_new() (*Pg_t, Pa_t, bool)
+	Refpg_new_nozero() (*Pg_t, Pa_t, bool)
 	Refcnt(Pa_t) int
 	Dmap(Pa_t) *Pg_t
 	Refup(Pa_t)

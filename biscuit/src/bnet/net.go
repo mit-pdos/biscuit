@@ -22,6 +22,8 @@ import "vm"
 
 import . "inet"
 
+var pagemem mem.Page_i
+
 var arptbl struct {
 	sync.Mutex
 	m          map[Ip4_t]*arprec_t
@@ -570,15 +572,15 @@ func net_icmp(pkt [][]uint8, tlen int) {
 // to allocate pages. does not increase the reference count of the pages
 // (circbuf_t should do that).
 func tcppgs() ([]uint8, mem.Pa_t, []uint8, mem.Pa_t, bool) {
-	spg, sp_pg, ok := mem.Physmem.Refpg_new_nozero()
+	spg, sp_pg, ok := pagemem.Refpg_new_nozero()
 	if !ok {
 		return nil, 0, nil, 0, false
 	}
-	rpg, rp_pg, ok := mem.Physmem.Refpg_new_nozero()
+	rpg, rp_pg, ok := pagemem.Refpg_new_nozero()
 	if !ok {
 		// ...
-		mem.Physmem.Refup(sp_pg)
-		mem.Physmem.Refdown(sp_pg)
+		pagemem.Refup(sp_pg)
+		pagemem.Refdown(sp_pg)
 		return nil, 0, nil, 0, false
 	}
 	return mem.Pg2bytes(spg)[:], sp_pg, mem.Pg2bytes(rpg)[:], rp_pg, true
@@ -593,7 +595,7 @@ type tcpbuf_t struct {
 }
 
 func (tb *tcpbuf_t) tbuf_init(v []uint8, p_pg mem.Pa_t, tcb *Tcptcb_t) {
-	tb.cbuf.Cb_init_phys(v, p_pg)
+	tb.cbuf.Cb_init_phys(v, p_pg, pagemem)
 	tb.didseq = false
 	tb.cond = sync.NewCond(&tcb.l)
 	tb.pollers = &tcb.pollers
@@ -3257,7 +3259,7 @@ func (tf *Tcpfops_t) Setsockopt(lev, opt int, src fdops.Userio_i,
 		if err != 0 {
 			panic("must succeed")
 		}
-		cb.Set(nb, did)
+		cb.Set(nb, did, pagemem)
 	}
 	return ret
 }
@@ -3312,10 +3314,10 @@ func (tl *tcplfops_t) Close() defs.Err_t {
 		// connections.
 		for _, inc := range tl.tcl.seqs {
 			// ...
-			mem.Physmem.Refup(inc.bufs.sp_pg)
-			mem.Physmem.Refdown(inc.bufs.sp_pg)
-			mem.Physmem.Refup(inc.bufs.rp_pg)
-			mem.Physmem.Refdown(inc.bufs.rp_pg)
+			pagemem.Refup(inc.bufs.sp_pg)
+			pagemem.Refdown(inc.bufs.sp_pg)
+			pagemem.Refup(inc.bufs.rp_pg)
+			pagemem.Refdown(inc.bufs.rp_pg)
 		}
 		tcpcons.listen_del(&tl.tcl)
 	}
@@ -3652,7 +3654,8 @@ func netchk() {
 	}
 }
 
-func Net_init() {
+func Net_init(pm mem.Page_i) {
+	pagemem = pm
 	netchk()
 
 	bigtw._tcptimers_start()

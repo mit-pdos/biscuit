@@ -906,7 +906,7 @@ type pipe_t struct {
 
 func (o *pipe_t) pipe_start() {
 	pipesz := mem.PGSIZE
-	o.cbuf.Cb_init(pipesz)
+	o.cbuf.Cb_init(pipesz, mem.Physmem)
 	o.readers, o.writers = 1, 1
 	o.rcond = sync.NewCond(o)
 	o.wcond = sync.NewCond(o)
@@ -2159,7 +2159,7 @@ type dgrambuf_t struct {
 }
 
 func (db *dgrambuf_t) dg_init(sz int) {
-	db.cbuf.Cb_init(sz)
+	db.cbuf.Cb_init(sz, mem.Physmem)
 	// assume that messages are at least 10 bytes
 	db.dgrams = make([]dgram_t, sz/10)
 	db.head, db.tail = 0, 0
@@ -4212,14 +4212,14 @@ func sys_prof(p *proc.Proc_t, ptype, _events, _pmflags, intperiod int) int {
 		}
 		runtime.SetMaxheap(n)
 		fmt.Printf("remaining mem: %v\n",
-		    res.Human(runtime.Remain()))
+			res.Human(runtime.Remain()))
 	case ptype&defs.PROF_HACK6 != 0:
 		anum := float64(_events)
 		adenom := float64(_pmflags)
 		if adenom <= 0 || anum <= 0 {
 			return int(-defs.EINVAL)
 		}
-		frac := anum/adenom
+		frac := anum / adenom
 		runtime.Assistfactor = frac
 		fmt.Printf("assist factor = %v\n", frac)
 	default:

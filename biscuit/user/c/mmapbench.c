@@ -4,32 +4,38 @@ static long
 nowms(void)
 {
   struct timeval tv;
-  if (gettimeofday(&tv, NULL)) {
-    perror("gettimeofday");
-    exit(-1);
-  }
+  if (gettimeofday(&tv, NULL))
+    errx(-1, "nowms");
   return tv.tv_sec*1000 + tv.tv_usec/1000;
 }
 
+#define SZ  (1 << 20)
+#define N  8192
+	    
 int main(int argc, char **argv)
 {
 
   printf("mmapbench\n");
   
-  const size_t sz = 1 << 24;
-  
-  char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE,
-		 MAP_ANON | MAP_PRIVATE, -1, 0);
-  if (p == MAP_FAILED) {
-    perror("map failed");
-    exit(-1);
+  const size_t sz = SZ;
+  long tot = 0;
+  for (int i = 0 ; i < N; i++) {
+    char *p = mmap(NULL, sz, PROT_READ | PROT_WRITE,
+		   MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (p == MAP_FAILED)
+      errx(-1, "mmap failed");
+
+    long st = nowms();
+    for (int j = 0; j < sz; j += 4096) {
+      p[j] = 0xcc;
+    }
+
+    tot += nowms() - st;
+
+    if (munmap(p, sz) != 0)
+      errx(-1, "munmap failed");
   }
-  long st = nowms();
-  for (int i = 0; i < sz; i += 4096) {
-    p[i] = 0xcc;
-  }
-  long tot = nowms() - st;
-  printf("mmapbench done %ld ms\n", tot);
+  printf("mmapbench %ld pgfaults in %ld ms\n", (long) SZ * N, tot);
 
   return 0;
 }
