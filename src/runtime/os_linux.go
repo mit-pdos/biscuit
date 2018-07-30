@@ -3556,7 +3556,7 @@ func robcentral(scidx int, want uint32) uint32 {
 var Maxa	uint32
 var Byuf	[]uintptr
 
-func cas(ne uint32) {
+func casbt(ne uint32) {
 	for {
 		v := atomic.Load(&Maxa)
 		if ne <= v {
