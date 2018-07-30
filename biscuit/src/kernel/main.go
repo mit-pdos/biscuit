@@ -560,7 +560,7 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 			//loping()
 			//netdump()
 
-			v := runtime.Memremain()
+			v := runtime.Remain()
 			fmt.Printf("RES: %vMB (%v)\n", v>>20, v)
 
 			//proc.Trap = true
