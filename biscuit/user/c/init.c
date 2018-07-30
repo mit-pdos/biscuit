@@ -47,10 +47,10 @@ int main(int argc, char **argv)
 	if (ret != 0 && errno != EEXIST)
 		err(-1, "mknod");
 
-	char * const hargs [] = {"/bin/bmgc", "-h", "470", NULL};
-	fexec(hargs);
 	char * const largs [] = {"/bin/bmgc", "-l", "512", NULL};
 	fexec(largs);
+	char * const hargs [] = {"/bin/bmgc", "-h", "470", NULL};
+	fexec(hargs);
 
 	for (;;) {
 		int pid = fork();
