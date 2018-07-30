@@ -683,10 +683,12 @@ func Proc_del(pid int) {
 
 var _deflimits = Ulimit_t{
 	// mem limit = 128 MB
-	Pages: (1 << 27) / (1 << 12),
+	//Pages: (1 << 27) / (1 << 12),
+	Pages: 0x7fffffffffffffff,
 	//nofile: 512,
 	Nofile: defs.RLIM_INFINITY,
-	Novma:  (1 << 8),
+	//Novma:  (1 << 8),
+	Novma:  defs.RLIM_INFINITY,
 	Noproc: (1 << 10),
 }
 
