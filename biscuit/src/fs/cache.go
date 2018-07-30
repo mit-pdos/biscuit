@@ -128,7 +128,6 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 			return e, false
 		}
 		e = MkObjref(mkobj(key), key)
-		e.Obj = mkobj(key)
 		_, ok = c.cache.Set(key, e)
 		if ok {
 			c.stats.Nadd.Inc()
