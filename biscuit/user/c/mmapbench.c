@@ -9,8 +9,8 @@ nowms(void)
   return tv.tv_sec*1000 + tv.tv_usec/1000;
 }
 
-#define SZ  (1 << 20)
-#define N  8192
+#define SZ  (1 << 22)
+#define N  1024
 	    
 int main(int argc, char **argv)
 {
@@ -35,7 +35,7 @@ int main(int argc, char **argv)
     if (munmap(p, sz) != 0)
       errx(-1, "munmap failed");
   }
-  printf("mmapbench %ld pgfaults in %ld ms\n", (long) SZ * N, tot);
+  printf("mmapbench %ld pgfaults in %ld ms\n", (long) (SZ/4096) * N, tot);
 
   return 0;
 }
