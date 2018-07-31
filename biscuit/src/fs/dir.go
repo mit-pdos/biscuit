@@ -310,7 +310,6 @@ func (idm *imemnode_t) _deremove_dents(de *icdent_t) {
 	if idm.dentc.dents != nil {
 		idm.dentc.dents.Del(de.name)
 	}
-	idm._deaddempty(de.offset)
 }
 
 // returns true if idm, a directory, is empty (excluding ".." and ".").
