@@ -564,10 +564,9 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 		return 0
 	}
 	uoff := 0
-	psz := 8
-	done := false
+	const psz = 8
 	curaddr := make([]uint8, 0, 8)
-	for !done {
+	for {
 		if !res.Resadd(bounds.Bounds(bounds.B_PROC_T_USERARGS)) {
 			return nil, -defs.ENOHEAP
 		}
@@ -576,19 +575,21 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 			return nil, err
 		}
 		for _, ab := range ptrs {
+			uoff++
 			curaddr = append(curaddr, ab)
 			if len(curaddr) == psz {
-				if isnull(curaddr) {
-					done = true
-					break
-				}
-				if err := addarg(curaddr); err != 0 {
-					return nil, err
-				}
-				curaddr = curaddr[0:0]
+				break
 			}
 		}
-		uoff += len(ptrs)
+		if len(curaddr) == psz {
+			if isnull(curaddr) {
+				break
+			}
+			if err := addarg(curaddr); err != 0 {
+				return nil, err
+			}
+			curaddr = curaddr[0:0]
+		}
 	}
 	return ret, 0
 }
