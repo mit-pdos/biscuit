@@ -1423,7 +1423,10 @@ func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *stat.Stat_t, cwd *fd.Cwd_t) defs.Err
 		return err
 	}
 	err = idm.do_stat(st)
-	idm.iunlock_refdown("Fs_stat")
+	del := idm.iunlock_refdown("Fs_stat")
+	if del {
+		idm.Free()
+	}
 	return err
 }
 
