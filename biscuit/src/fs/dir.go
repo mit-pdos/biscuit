@@ -302,12 +302,12 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 		idm.fs.fslog.Write(opid, b)
 		idm.fs.fslog.Relse(b, "_deremove")
 	}
-	idm._deremove_dents(de)
+	idm._deremove_dent(de)
 	idm._deaddempty(de.offset)
 	return de, 0
 }
 
-func (idm *imemnode_t) _deremove_dents(de *icdent_t) {
+func (idm *imemnode_t) _deremove_dent(de *icdent_t) {
 	if idm.dentc.dents != nil {
 		idm.dentc.dents.Del(de.name)
 	}

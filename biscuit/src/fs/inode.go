@@ -259,7 +259,7 @@ func (idm *imemnode_t) evictDcache() {
 	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
 		dei := e.Value.(*de_inode_t)
 		// XXX lock parent?
-		dei.parent._deremove_dents(dei.de)
+		dei.parent._deremove_dent(dei.de)
 	}
 	idm.dcache_list = list.New()
 	idm._derelease()
