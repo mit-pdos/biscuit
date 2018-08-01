@@ -303,6 +303,7 @@ func (idm *imemnode_t) _deremove(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 		idm.fs.fslog.Relse(b, "_deremove")
 	}
 	idm._deremove_dents(de)
+	idm._deaddempty(de.offset)
 	return de, 0
 }
 

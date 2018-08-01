@@ -279,7 +279,6 @@ func (idm *imemnode_t) EvictDone() {
 
 func (idm *imemnode_t) Free() {
 	// no need to lock...
-	idm.evictDcache()
 	if idm.links == 0 {
 		idm.ifree()
 	}
