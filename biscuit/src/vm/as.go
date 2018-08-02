@@ -1,6 +1,5 @@
 package vm
 
-// import "fmt"
 import "runtime"
 import "sync"
 import "sync/atomic"
@@ -478,7 +477,6 @@ func (as *Aspace_t) _page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 			return false, false
 		}
 	}
-	// fmt.Printf("pte %x\n", pte)
 	ninval := false
 	var p_old mem.Pa_t
 	if *pte&PTE_P != 0 {
