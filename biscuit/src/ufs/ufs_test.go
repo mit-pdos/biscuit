@@ -740,7 +740,7 @@ func TestConcurFree(t *testing.T) {
 	_, nblock := tfs.fs.Fs_size()
 	c := make(chan bool, 2)
 	stop := time.Now()
-	stop = stop.Add(1 * time.Second)
+	stop = stop.Add(10 * time.Second)
 	go func(t *testing.T) {
 		defer func() {
 			c <- true
@@ -765,7 +765,7 @@ func TestConcurFree(t *testing.T) {
 		for time.Now().Before(stop) {
 			p := d.ExtendStr("f")
 			d, e := tfs.Read(p)
-			if e == 0 && len(d) != SMALL {
+			if e == 0 && !(len(d) != SMALL || len(d) != 0) {
 				c <- false
 				t.Fatalf("Read f failed %d %d", e, len(d))
 			}
