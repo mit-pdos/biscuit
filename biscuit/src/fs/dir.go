@@ -242,7 +242,7 @@ func (idm *imemnode_t) _delookup(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err
 		panic("bad lookup")
 	}
 	if idm.dentc.dents == nil {
-		idm.dentc.dents = hashtable.MkHash(1000)
+		idm.dentc.dents = hashtable.MkHash(100)
 	}
 	if de, ok := idm.dentc.dents.Get(fn); ok {
 		return de.(*icdent_t), 0

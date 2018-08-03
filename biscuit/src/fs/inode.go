@@ -535,7 +535,7 @@ func (ic *imemnode_t) fill(blk *Bdev_block_t, inum defs.Inum_t) {
 		ic.addrs[i] = inode.addr(i)
 	}
 	if ic.itype == I_DIR {
-		ic.dentc.dents = hashtable.MkHash(1000)
+		ic.dentc.dents = hashtable.MkHash(100)
 	}
 }
 
@@ -896,7 +896,7 @@ func (idm *imemnode_t) icreate(opid opid_t, name ustr.Ustr, nitype, major, minor
 		newidm.major = major
 		newidm.minor = minor
 		if newidm.itype == I_DIR {
-			newidm.dentc.dents = hashtable.MkHash(1000)
+			newidm.dentc.dents = hashtable.MkHash(100)
 		}
 		newidm.iunlock("icreate")
 	}

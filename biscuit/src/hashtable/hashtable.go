@@ -126,10 +126,10 @@ func (ht *Hashtable_t) Get(key interface{}) (interface{}, bool) {
 		n += 1
 		if n > ht.maxchain {
 			ht.maxchain = n
-			if n >= 3 {
-				fmt.Printf("maxchain: %d\n", ht.maxchain)
-				fmt.Printf("key %s collides with %s\n", key, e.key)
-			}
+			//if n >= 3 {
+			//	fmt.Printf("maxchain: %d\n", ht.maxchain)
+			//	fmt.Printf("key %s collides with %s\n", key, e.key)
+			//}
 		}
 	}
 	return nil, false
@@ -150,10 +150,10 @@ func (ht *Hashtable_t) GetRLock(key interface{}) (interface{}, bool) {
 		n += 1
 		if n > ht.maxchain {
 			ht.maxchain = n
-			if n >= 3 {
-				fmt.Printf("maxchain: %d\n", ht.maxchain)
-				fmt.Printf("key %s collides with %s\n", key, e.key)
-			}
+			//if n >= 3 {
+			//	fmt.Printf("maxchain: %d\n", ht.maxchain)
+			//	fmt.Printf("key %s collides with %s\n", key, e.key)
+			//}
 		}
 	}
 	return nil, false
