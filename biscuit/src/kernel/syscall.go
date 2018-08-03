@@ -29,7 +29,7 @@ import "ustr"
 import "util"
 import "vm"
 
-var _sysbounds = []*res.Res_t {
+var _sysbounds = []*res.Res_t{
 	defs.SYS_READ:       bounds.Bounds(bounds.B_SYS_READ),
 	defs.SYS_WRITE:      bounds.Bounds(bounds.B_SYS_WRITE),
 	defs.SYS_OPEN:       bounds.Bounds(bounds.B_SYS_OPEN),
@@ -513,7 +513,7 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 				failed = true
 				break
 			}
-			ns, ok := p.Aspace.Page_insert(addr+i, p_pg, perms, true)
+			ns, ok := p.Aspace.Page_insert(addr+i, p_pg, perms, true, nil)
 			if !ok {
 				physmem.Refdown(p_pg)
 				failed = true
@@ -3351,7 +3351,7 @@ func sys_execv1(p *proc.Proc_t, tf *[defs.TFSIZE]uintptr, paths ustr.Ustr,
 			restore()
 			return int(-defs.ENOMEM)
 		}
-		_, ok = p.Aspace.Page_insert(int(ptr), p_pg, vm.PTE_W|vm.PTE_U, true)
+		_, ok = p.Aspace.Page_insert(int(ptr), p_pg, vm.PTE_W|vm.PTE_U, true, nil)
 		if !ok {
 			restore()
 			return int(-defs.ENOMEM)
@@ -3426,7 +3426,7 @@ func insertargs(p *proc.Proc_t, sargs []ustr.Ustr) (int, int, defs.Err_t) {
 	if !ok {
 		return 0, 0, -defs.ENOMEM
 	}
-	_, ok = p.Aspace.Page_insert(uva, p_pg, vm.PTE_U, true)
+	_, ok = p.Aspace.Page_insert(uva, p_pg, vm.PTE_U, true, nil)
 	if !ok {
 		physmem.Refdown(p_pg)
 		return 0, 0, -defs.ENOMEM
@@ -4594,14 +4594,14 @@ func (e *elf_t) elf_load(p *proc.Proc_t, f *fd.Fd_t) (int, int, int, defs.Err_t)
 				return 0, 0, 0, -defs.ENOMEM
 			}
 			_, ok = p.Aspace.Page_insert(freshtls+i, p_pg, perms,
-				true)
+				true, nil)
 			if !ok {
 				physmem.Refdown(p_pg)
 				return 0, 0, 0, -defs.ENOMEM
 			}
 			// map fresh TLS for thread 0
 			nperms := perms | vm.PTE_COW
-			_, ok = p.Aspace.Page_insert(t0tls+i, p_pg, nperms, true)
+			_, ok = p.Aspace.Page_insert(t0tls+i, p_pg, nperms, true, nil)
 			if !ok {
 				physmem.Refdown(p_pg)
 				return 0, 0, 0, -defs.ENOMEM

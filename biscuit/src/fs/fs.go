@@ -167,6 +167,7 @@ func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) (*imemno
 	if err != 0 {
 		goto undo
 	}
+	// XXX check for dead and return orig?
 	orig.Refdown("fs_link_orig")
 	return dead, 0
 undo:
@@ -323,6 +324,8 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 
 	npar, err := fs.fs_namei(opid, ndirs, cwd)
 	if err != 0 {
+		// XXX don't have to check dead because opar contains ochild and
+		// we have lock on opar
 		opar.Refdown("fs_rename_opar")
 		ochild.Refdown("fs_rename_ochild")
 		return refs, err
@@ -335,6 +338,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	// delete npar and an ancestor, but rename has already a reference to to
 	// npar.
 	if err = fs._isancestor(opid, ochild, npar); err != 0 {
+		// XXX no need to check dead?
 		opar.Refdown("fs_rename_opar")
 		ochild.Refdown("fs_rename_ochild")
 		npar.Refdown("fs_rename_npar")
@@ -1480,11 +1484,13 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode
 				err = -defs.ENOHEAP
 			}
 			if err != 0 {
+				// XXX check for dead
 				idm.iunlock_refdown("fs_namei_ilookup")
 				return nil, err
 			}
 			idm.iunlock("fs_namei")
 			if n != idm {
+				// XXX check for dead
 				idm.Refdown("fs_namei_idm")
 			}
 		}

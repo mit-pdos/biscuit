@@ -432,10 +432,9 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 
 	var tshoot bool
 	if isblockpage {
-		tshoot, ok = as.Blockpage_insert(int(faultaddr), p_pg, perms,
-			isempty)
+		tshoot, ok = as.Blockpage_insert(int(faultaddr), p_pg, perms, isempty, pte)
 	} else {
-		tshoot, ok = as.Page_insert(int(faultaddr), p_pg, perms, isempty)
+		tshoot, ok = as.Page_insert(int(faultaddr), p_pg, perms, isempty, pte)
 	}
 	if !ok {
 		mem.Physmem.Refdown(p_pg)
@@ -452,8 +451,8 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 // due to lack of user pages. p_pg's ref count is increased so the caller can
 // simply Physmem.Refdown()
 func (as *Aspace_t) Page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
-	vempty bool) (bool, bool) {
-	return as._page_insert(va, p_pg, perms, vempty, true)
+	vempty bool, pte *mem.Pa_t) (bool, bool) {
+	return as._page_insert(va, p_pg, perms, vempty, true, pte)
 }
 
 // the first return value is true if a present mapping was modified (i.e. need
@@ -461,19 +460,22 @@ func (as *Aspace_t) Page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 // due to lack of user pages. p_pg's ref count is increased so the caller can
 // simply Physmem.Refdown()
 func (as *Aspace_t) Blockpage_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
-	vempty bool) (bool, bool) {
-	return as._page_insert(va, p_pg, perms, vempty, false)
+	vempty bool, pte *mem.Pa_t) (bool, bool) {
+	return as._page_insert(va, p_pg, perms, vempty, false, pte)
 }
 
 func (as *Aspace_t) _page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
-	vempty, refup bool) (bool, bool) {
+	vempty, refup bool, pte *mem.Pa_t) (bool, bool) {
 	as.Lockassert_pmap()
 	if refup {
 		mem.Physmem.Refup(p_pg)
 	}
-	pte, err := pmap_walk(as.Pmap, va, PTE_U|PTE_W)
-	if err != 0 {
-		return false, false
+	if pte == nil {
+		var err defs.Err_t
+		pte, err = pmap_walk(as.Pmap, va, PTE_U|PTE_W)
+		if err != 0 {
+			return false, false
+		}
 	}
 	ninval := false
 	var p_old mem.Pa_t
