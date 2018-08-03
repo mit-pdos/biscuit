@@ -64,7 +64,7 @@ func (ref *Objref_t) Refcnt() uint32 {
 // follows a Lookup()).
 func (ref *Objref_t) Up() (uint32, bool) {
 	for {
-		v := ref.refcnt
+		v := atomic.LoadUint32(&ref.refcnt)
 		if REMOVE&v != 0 {
 			return 0, false
 		}
@@ -111,7 +111,7 @@ func (c *cache_t) lookupinc(key int) (*Objref_t, bool) {
 			return nil, ok
 		}
 		e := v.(*Objref_t)
-		refcnt := e.refcnt
+		refcnt := atomic.LoadUint32(&e.refcnt)
 		new := refcnt + 1
 		if refcnt&REMOVE == 0 && atomic.CompareAndSwapUint32(&e.refcnt, refcnt, new) {
 			return e, ok
@@ -124,7 +124,7 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 		e, ok := c.lookupinc(key)
 		if ok {
 			c.stats.Nhit.Inc()
-			e.tstamp = runtime.Rdtsc()
+			atomic.StoreUint64(&e.tstamp, runtime.Rdtsc())
 			return e, false
 		}
 		e = MkObjref(mkobj(key), key)
