@@ -1,6 +1,8 @@
 #!/bin/sh
 
-[ $# -ne 1 ] && { echo "usage: $0 <maxlive output file>"; exit 1; }
+BPATH="/home/ccutler/biscuit/biscuit"
+
+[ $# -ne 1 ] && { echo "usage: $0 <tool output file>"; exit 1; }
 F="$1"
 T=$(tty)
 
@@ -26,7 +28,7 @@ grep -e 'MAX [SM]' -e 'LOOP BOUND' -- $F |sort -u | while read ln; do
 	tmp=$(mktemp)
 	#echo $tmp
 	echo $ln > $tmp
-	vim +$lnum -c ":pedit $tmp" $fn < $T
+	vim +$lnum -c ":pedit $tmp" -c ":cd $BPATH" -c ":set path+=**" $fn < $T
 	rm -f $tmp
 done
 
@@ -51,7 +53,7 @@ grep 'INFINITE ALLOC' -- $F | while read ln; do
 	tmp=$(mktemp)
 	echo $tmp
 	echo $ln > $tmp
-	vim +$lnum -c ":pedit $tmp" $fn < $T
+	vim +$lnum -c ":pedit $tmp" -c ":cd $BPATH" -c ":set path+=**" $fn < $T
 	rm -f $tmp
 done
 

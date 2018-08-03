@@ -1,7 +1,5 @@
 /*
  * TODO
- * - get rid of store analysis? (iterate over fields)
- *
  * - assume anything written via atomic.Store* is a root?
  * - Verify that Make{Interface, Closure} do not cause more heap
  *   allocations besides the ssa.Allocs already present for them.
@@ -13,7 +11,7 @@
  * 	  analysis.
  * - recursive iteration loops
  *	- (replaced recursion with loops)
- * - don't forget that the tool ignores calls to package fmt.Printf & c.
+ * - don't forget that the tool ignores calls to package fmt.
  * - consider transient objects written to channels as permanent
  */
 
@@ -55,7 +53,7 @@ import "golang.org/x/tools/go/ssa"
 import "golang.org/x/tools/go/ssa/ssautil"
 
 // DUMPER
-var dumper = true
+var dumper = false
 
 type halp_t struct {
 	cg        *callgraph.Graph
@@ -100,6 +98,68 @@ func (h *halp_t) reset() {
 	h.usedbounds = map[*ssa.BasicBlock]bool{}
 }
 
+// size class code stolen from src/runtime/sizeclasses.go, which is
+// automatically generated during build (but was identical between go1.8 and
+// go1.10.1, so maybe the sizeclasses don't change)
+const (
+	_MaxSmallSize   = 32768
+	smallSizeDiv    = 8
+	smallSizeMax    = 1024
+	largeSizeDiv    = 128
+	_NumSizeClasses = 67
+	_PageShift      = 13
+)
+
+var size_to_class8 = [smallSizeMax/smallSizeDiv + 1]uint8{0, 1, 2, 3, 3, 4, 4,
+	5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 14,
+	15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 19, 19, 19, 19, 20, 20, 20, 20,
+	21, 21, 21, 21, 22, 22, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25,
+	25, 25, 26, 26, 26, 26, 26, 26, 26, 26, 27, 27, 27, 27, 27, 27, 27, 27,
+	28, 28, 28, 28, 28, 28, 28, 28, 29, 29, 29, 29, 29, 29, 29, 29, 30, 30,
+	30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 31, 31, 31, 31,
+	31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31}
+
+var size_to_class128 = [(_MaxSmallSize-smallSizeMax)/largeSizeDiv + 1]uint8{31,
+	32, 33, 34, 35, 36, 36, 37, 37, 38, 38, 39, 39, 39, 40, 40, 40, 41, 42,
+	42, 43, 43, 43, 43, 43, 44, 44, 44, 44, 44, 44, 45, 45, 45, 45, 46, 46,
+	46, 46, 46, 46, 47, 47, 47, 48, 48, 49, 50, 50, 50, 50, 50, 50, 50, 50,
+	50, 50, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 52, 52, 53, 53, 53, 53,
+	54, 54, 54, 54, 54, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 56, 56,
+	56, 56, 56, 56, 56, 56, 56, 56, 57, 57, 57, 57, 57, 57, 58, 58, 58, 58,
+	58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 59, 59, 59, 59, 59, 59,
+	59, 59, 59, 59, 59, 59, 59, 59, 59, 59, 60, 60, 60, 60, 60, 61, 61, 61,
+	61, 61, 61, 61, 61, 61, 61, 61, 62, 62, 62, 62, 62, 62, 62, 62, 62, 62,
+	63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63,
+	63, 63, 63, 63, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+	64, 64, 64, 64, 64, 64, 64, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65,
+	66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66,
+	66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66, 66}
+
+func _sizetoclass(sz int) int {
+	var sizeclass uint8
+	if sz <= smallSizeMax-8 {
+		sizeclass = size_to_class8[(sz+smallSizeDiv-1)/smallSizeDiv]
+	} else {
+		sizeclass = size_to_class128[(sz-smallSizeMax+largeSizeDiv-1)/largeSizeDiv]
+	}
+	return int(sizeclass)
+}
+
+var countsc struct {
+	counts	[_NumSizeClasses]int
+}
+
+func classadd(bytes int) {
+	countsc.counts[_sizetoclass(bytes)]++
+}
+
+func classdump() {
+	fmt.Printf("Size class counts over all traversed allocations\n")
+	for i, c := range countsc.counts {
+		fmt.Printf("%3v: %9v\n", i, c)
+	}
+}
+
 var _s = types.StdSizes{WordSize: 8, MaxAlign: 8}
 
 func array_align(t types.Type) int {
@@ -109,12 +169,19 @@ func array_align(t types.Type) int {
 		diff := align - (truesz % align)
 		truesz += diff
 	}
+	//classadd(int(truesz))
 	return int(truesz)
 }
 
 func slicesz(v ssa.Value, num int) int {
 	// the element type could be types.Named...
-	elmsz := array_align(v.Type().(*types.Slice).Elem())
+	var typ *types.Slice
+	if tt, ok := v.Type().(*types.Named); ok {
+		typ = tt.Underlying().(*types.Slice)
+	} else {
+		typ = v.Type().(*types.Slice)
+	}
+	elmsz := array_align(typ.Elem())
 	return num*elmsz + 3*8
 }
 
@@ -271,7 +338,7 @@ func (c *calls_t) addalloc(k ssa.Value, size int) {
 func (c *calls_t) loopmult(times int, name, sym string) {
 	isinf := times == INF
 	if isinf {
-		times = 10
+		times = 1000
 	}
 	if times < 0 {
 		panic("no")
@@ -452,7 +519,15 @@ outter:
 				if !permanent[k] && !myptrs[k] {
 					continue
 				}
-				in := k.(ssa.Instruction)
+				in, ok := k.(ssa.Instruction)
+				if !ok {
+					// dumping code doesn't handle
+					// *ssa.Function values created from
+					// *ssa.{Defer,Go} (no corresponding
+					// call instructions for defer? doesn't
+					// Go have one though?)
+					panic("fixme")
+				}
 				prdepth()
 				let := ""
 				if permanent[k] {
@@ -791,6 +866,9 @@ func (ha *halp_t) suminstructions(node *callgraph.Node, blk *ssa.BasicBlock,
 				case *ssa.Builtin:
 					str = tt.Name()
 					if strings.Contains(str, "append") {
+						if str != "append" {
+							panic("nein")
+						}
 						val := v.Value()
 						num := slicebound(val, cs)
 						sz := slicesz(val, num)
@@ -1386,7 +1464,7 @@ func kernelcode() map[string][]string {
 		}
 		return ret
 	}
-	wtf := []string{"ahci", "bins", "hw", "main", "net", "syscall"}
+	wtf := []string{"main", "bins", "syscall"}
 	ret["main"] = mk("kernel", wtf)
 
 	//wtf := []string{"flea"}
@@ -1483,6 +1561,19 @@ func main() {
 
 	kernpkgs := map[string]bool{
 		"package main": true, "package common": true, "package fs": true,
+		"package accnt": true, "package ahci": true, "package apic":
+		true, "package bnet": true, "package bounds": true,
+		"package bpath": true, "package caller": true, "package circbuf": true,
+		"package defs": true, "package fd": true, "package fdops":
+		true, "package hashtable": true,
+		"package inet": true, "package ixgbe": true,
+		"package kernel": true, "package limits": true,
+		"package mem": true, "package mkfs": true, "package msi": true,
+		"package oommsg": true, "package pci": true, "package proc": true,
+		"package res": true, "package stat": true, "package stats":
+		true, "package tinfo": true,
+		"package ustr": true, "package util": true,
+		"package vm": true,
 	}
 	var pkgs []*ssa.Package
 	for _, pkg := range prog.AllPackages() {
@@ -1493,36 +1584,41 @@ func main() {
 
 	// THINGY
 	syscalls := []string{
-		//"sys_read",
+		// testing
 		//"sys_fork",
-		//"sys_execv",
-		//"fake",
-
-		//"log_daemon",
-
-		//"sys_read", "sys_write", "sys_open", "sys_stat", "sys_fstat",
-		//"sys_poll", "sys_lseek", "sys_mmap", "sys_munmap", "sys_readv",
-		//"sys_writev", "sys_sigaction", "sys_access", "sys_dup2",
-		//"sys_pause", "sys_getpid", "sys_getppid", "sys_socket",
-		//"sys_connect", "sys_accept", "sys_sendto", "sys_recvfrom",
-		//"sys_socketpair", "sys_shutdown", "sys_bind", "sys_listen",
-		//"sys_recvmsg", "sys_sendmsg", "sys_getsockopt",
-		//"sys_setsockopt", "sys_fork", "sys_execv", "sys_wait4",
-		//"sys_kill", "sys_fcntl", "sys_truncate", "sys_ftruncate",
-		//"sys_getcwd", "sys_chdir",
+		//"sys_read",
+		//"sys_write",
 		//"sys_rename",
-		//"sys_mkdir",
-		//"sys_link", "sys_unlink", "sys_gettimeofday", "sys_getrlimit",
-		//"sys_getrusage", "sys_mknod", "sys_setrlimit", "sys_sync",
-		//"sys_reboot", "sys_nanosleep", "sys_pipe2", "sys_prof",
-		//"sys_info", "sys_threxit", "sys_pread", "sys_pwrite",
-		//"sys_futex", "sys_gettid",
+
+		// syscall with deep resevation
+		//"sys_poll",
+
+		// all syscalls
+		"sys_read", "sys_write", "sys_open", "sys_stat", "sys_fstat",
+		"sys_poll", "sys_lseek", "sys_mmap", "sys_munmap", "sys_readv",
+		"sys_writev", "sys_sigaction", "sys_access", "sys_dup2",
+		"sys_pause", "sys_getpid", "sys_getppid", "sys_socket",
+		"sys_connect", "sys_accept", "sys_sendto", "sys_recvfrom",
+		"sys_socketpair", "sys_shutdown", "sys_bind", "sys_listen",
+		"sys_recvmsg", "sys_sendmsg", "sys_getsockopt",
+		"sys_setsockopt", "sys_fork", "sys_execv", "sys_wait4",
+		"sys_kill", "sys_fcntl", "sys_truncate", "sys_ftruncate",
+		"sys_getcwd", "sys_chdir",
+		"sys_rename",
+		"sys_mkdir",
+		"sys_link", "sys_unlink", "sys_gettimeofday", "sys_getrlimit",
+		"sys_getrusage", "sys_mknod", "sys_setrlimit", "sys_sync",
+		"sys_reboot", "sys_nanosleep", "sys_pipe2", "sys_prof",
+		"sys_info", "sys_threxit", "sys_pread", "sys_pwrite",
+		"sys_futex", "sys_gettid",
 	}
 	if syscalls == nil {
 	}
 
 	unboundfunc := []string{
-		"insertargs", "kbd_daemon", "sys_poll", "arp_resolve",
+		// kernel thread
+		//"kbd_daemon",
+		//"arp_resolve",
 	}
 	if unboundfunc == nil {
 	}
@@ -1532,54 +1628,50 @@ func main() {
 		m string
 	}
 	unboundmeth := []tmp_t{
-		//tmp_t{"Proc_t", "run"},
-		tmp_t{"oom_t", "reign"},
+		//// for testing/manual analysis
+		////tmp_t{"oom_t", "reign"},
+		////tmp_t{"syscall_t", "Sys_close"},
 
-		//tmp_t{"syscall_t", "Sys_close"},
-		//tmp_t{"syscall_t", "Sys_exit"},
+		// syscalls
+		tmp_t{"syscall_t", "Sys_close"},
+		tmp_t{"syscall_t", "Sys_exit"},
 
-		//tmp_t{"Fs_t", "Fs_close"},
-		//tmp_t{"icache_t", "freeDead"},
-		//tmp_t{"bitmap_t", "apply"},
-		//tmp_t{"ahci_disk_t", "int_handler"},
-		//tmp_t{"ahci_port_t", "queuemgr"},
-		//tmp_t{"ixgbe_t", "int_handler"},
-		//tmp_t{"tcptimers_t", "_tcptimers_daemon"},
+		//// run-only
+		//tmp_t{"Proc_t", "run1"},
 
-		// manually reserve
-		//tmp_t{"imemnode_t", "ifree"},
-
+		//// deep reservations
 		//tmp_t{"Proc_t", "Userargs"},
-		//tmp_t{"Proc_t", "K2user_inner"},
-		//tmp_t{"Proc_t", "User2k_inner"},
+		//tmp_t{"Aspace_t", "K2user_inner"},
+		//tmp_t{"Aspace_t", "User2k_inner"},
 		//tmp_t{"Userbuf_t", "_tx"},
 		//tmp_t{"Useriovec_t", "Iov_init"},
 		//tmp_t{"Useriovec_t", "_tx"},
-		//tmp_t{"bitmap_t", "apply"},
 		//tmp_t{"imemnode_t", "_descan"},
-		//tmp_t{"Fs_t", "Fs_rename"},
+		//tmp_t{"Fs_t", "Fs_op_rename"},
 		//tmp_t{"Fs_t", "_isancestor"},
 		//tmp_t{"rawdfops_t", "Read"},
 		//tmp_t{"rawdfops_t", "Write"},
 		//tmp_t{"Fs_t", "fs_namei"},
 		//tmp_t{"imemnode_t", "do_write"},
-		//tmp_t{"Fs_t", "_fullpath"},
 		//tmp_t{"imemnode_t", "bmapfill"},
 		//tmp_t{"imemnode_t", "iread"},
 		//tmp_t{"imemnode_t", "iwrite"},
 		//tmp_t{"imemnode_t", "immapinfo"},
-		//tmp_t{"blockiter_t", "next"},
+		//tmp_t{"Tcpfops_t", "Read"},
+		//tmp_t{"Tcpfops_t", "Write"},
+		//tmp_t{"pipefops_t", "Write"},
+		//tmp_t{"elf_t", "elf_load"},
+		//tmp_t{"pipe_t", "op_fdadd"},
+
+		//// manually evicted cached allocations
 		//tmp_t{"imemnode_t", "ifree"},
-		//tmp_t{"icache_t", "freeDead"},
+		//tmp_t{"bitmap_t", "apply"},
+
+		//// kernel threads
 		//tmp_t{"ixgbe_t", "int_handler"},
 		//tmp_t{"tcptimers_t", "_tcptimers_daemon"},
-		//tmp_t{"tcpfops_t", "Read"},
-		//tmp_t{"tcpfops_t", "Write"},
-		//tmp_t{"pipe_t", "op_fdadd"},
-		//tmp_t{"pipefops_t", "Write"},
+		//tmp_t{"log_t", "committer"},
 		//tmp_t{"futex_t", "futex_start"},
-		//tmp_t{"elf_t", "elf_load"},
-
 	}
 	if unboundmeth == nil {
 	}
@@ -1596,14 +1688,14 @@ func main() {
 
 	var sysfuncs []*ssa.Function
 
-	//for _, str := range syscalls {
-	//	sf := _getfunc(str)
-	//	sysfuncs = append(sysfuncs, sf)
-	//}
-	//for _, str := range unboundfunc {
-	//	sf := _getfunc(str)
-	//	sysfuncs = append(sysfuncs, sf)
-	//}
+	for _, str := range syscalls {
+		sf := _getfunc(str)
+		sysfuncs = append(sysfuncs, sf)
+	}
+	for _, str := range unboundfunc {
+		sf := _getfunc(str)
+		sysfuncs = append(sysfuncs, sf)
+	}
 	for _, tmp := range unboundmeth {
 		sf := _getmeth(tmp.t, tmp.m)
 		sysfuncs = append(sysfuncs, sf)
@@ -1638,6 +1730,7 @@ func main() {
 		fmt.Printf("%v: %v,\n", tblname(kernpkgs, sys), leq)
 	}
 	fmt.Printf("}\n")
+	//classdump()
 }
 
 func tblname(kpkgs map[string]bool, n string) string {
@@ -2590,7 +2683,8 @@ func reachallocs(cg *callgraph.Graph, prog *ssa.Program, pkgs []*ssa.Package) {
 var symdb = map[string]int{
 	// the quotation marks are included in the argument values read out of
 	// the annotation calls
-	"\"fds\"":  1 << 10,
+	// raising fds to 1024 only increases fork's bound by ~200kB
+	"\"fds\"":  1 << 9,
 	"\"vmas\"": 1 << 10,
 
 	// these bounds changes depending on which reservation size we are
@@ -2599,8 +2693,8 @@ var symdb = map[string]int{
 	"\"amlogdaemon1\"": 1, // syscall
 	//"\"amlogdaemon1\"": 256, // log daemon
 
-	"\"amlogdaemon2\"": 1, // syscall
-	//"\"amlogdaemon2\"": 1000, // log daemon
+	//"\"amlogdaemon2\"": 1, // syscall
+	//"\"amlogdaemon2\"": 3000, // log daemon
 }
 
 // types to save maximum loop bounds and slice sizes.
