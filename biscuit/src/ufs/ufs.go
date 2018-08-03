@@ -1,6 +1,5 @@
 package ufs
 
-import "fmt"
 import "os"
 
 import "log"
@@ -45,7 +44,6 @@ func MkBuf(b []byte) *vm.Fakeubuf_t {
 func (ufs *Ufs_t) Sync() defs.Err_t {
 	err := ufs.fs.Fs_sync()
 	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
 		return err
 	}
 	return err
@@ -54,7 +52,6 @@ func (ufs *Ufs_t) Sync() defs.Err_t {
 func (ufs *Ufs_t) SyncApply() defs.Err_t {
 	err := ufs.fs.Fs_syncapply()
 	if err != 0 {
-		fmt.Printf("Sync failed %v\n", err)
 		return err
 	}
 	return err
@@ -63,20 +60,17 @@ func (ufs *Ufs_t) SyncApply() defs.Err_t {
 func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 	fd, err := ufs.fs.Fs_open(p, defs.O_CREAT, 0, ufs.cwd, 0, 0)
 	if err != 0 {
-		fmt.Printf("ufs.fs.Fs_open %s failed %v\n", string(p), err)
 		return err
 	}
 	if ub != nil {
-		n, err := fd.Fops.Write(ub)
+		_, err := fd.Fops.Write(ub)
 		if err != 0 || ub.Remain() != 0 {
-			fmt.Printf("Write %s failed %v %d\n", string(p), err, n)
 			fd.Fops.Close()
 			return err
 		}
 	}
 	err = fd.Fops.Close()
 	if err != 0 {
-		fmt.Printf("Close %s failed %v\n", string(p), err)
 		return err
 	}
 	return err
@@ -85,7 +79,6 @@ func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 func (ufs *Ufs_t) MkDir(p ustr.Ustr) defs.Err_t {
 	err := ufs.fs.Fs_mkdir(p, 0755, ufs.cwd)
 	if err != 0 {
-		fmt.Printf("mkDir %v failed %v\n", p, err)
 		return err
 	}
 	return err
@@ -93,9 +86,6 @@ func (ufs *Ufs_t) MkDir(p ustr.Ustr) defs.Err_t {
 
 func (ufs *Ufs_t) Rename(oldp, newp ustr.Ustr) defs.Err_t {
 	err := ufs.fs.Fs_rename(oldp, newp, ufs.cwd)
-	if err != 0 {
-		fmt.Printf("doRename %v %v failed %v\n", oldp, newp, err)
-	}
 	return err
 }
 
@@ -103,17 +93,15 @@ func (ufs *Ufs_t) Rename(oldp, newp ustr.Ustr) defs.Err_t {
 func (ufs *Ufs_t) Update(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 	fd, err := ufs.fs.Fs_open(p, defs.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
-		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
+		return err
 	}
-	n, err := fd.Fops.Write(ub)
+	_, err = fd.Fops.Write(ub)
 	if err != 0 || ub.Remain() != 0 {
-		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
 
 	err = fd.Fops.Close()
 	if err != 0 {
-		fmt.Printf("Close %s failed %v\n", p, err)
 		return err
 	}
 	return err
@@ -122,24 +110,21 @@ func (ufs *Ufs_t) Update(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 func (ufs *Ufs_t) Append(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 	fd, err := ufs.fs.Fs_open(p, defs.O_RDWR, 0, ufs.cwd, 0, 0)
 	if err != 0 {
-		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
+		return err
 	}
 
 	_, err = fd.Fops.Lseek(0, defs.SEEK_END)
 	if err != 0 {
-		fmt.Printf("Lseek %v failed %v\n", p, err)
 		return err
 	}
 
-	n, err := fd.Fops.Write(ub)
+	_, err = fd.Fops.Write(ub)
 	if err != 0 || ub.Remain() != 0 {
-		fmt.Printf("Write %s failed %v %d\n", p, err, n)
 		return err
 	}
 
 	err = fd.Fops.Close()
 	if err != 0 {
-		fmt.Printf("Close %s failed %v\n", p, err)
 		return err
 	}
 	return err
@@ -148,7 +133,6 @@ func (ufs *Ufs_t) Append(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 func (ufs *Ufs_t) Unlink(p ustr.Ustr) defs.Err_t {
 	err := ufs.fs.Fs_unlink(p, ufs.cwd, false)
 	if err != 0 {
-		fmt.Printf("doUnlink %s failed %v\n", string(p), err)
 		return err
 	}
 	return err
@@ -157,7 +141,6 @@ func (ufs *Ufs_t) Unlink(p ustr.Ustr) defs.Err_t {
 func (ufs *Ufs_t) UnlinkDir(p ustr.Ustr) defs.Err_t {
 	err := ufs.fs.Fs_unlink(p, ufs.cwd, true)
 	if err != 0 {
-		fmt.Printf("doUnlink %s failed %v\n", string(p), err)
 		return err
 	}
 	return err
@@ -175,12 +158,10 @@ func (ufs *Ufs_t) Stat(p ustr.Ustr) (*stat.Stat_t, defs.Err_t) {
 func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 	st, err := ufs.Stat(p)
 	if err != 0 {
-		fmt.Printf("doStat %v failed %v\n", p, err)
 		return nil, err
 	}
 	fd, err := ufs.fs.Fs_open(p, defs.O_RDONLY, 0, ufs.cwd, 0, 0)
 	if err != 0 {
-		fmt.Printf("ufs.fs.Fs_open %v failed %v\n", p, err)
 		return nil, err
 	}
 	hdata := make([]uint8, st.Size())
@@ -190,7 +171,6 @@ func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 	n, err := fd.Fops.Read(ub)
 	if err != 0 || n != len(hdata) {
 		fd.Fops.Close()
-		fmt.Printf("Read %s failed %v %d\n", p, err, n)
 		return nil, err
 	}
 	v := make([]byte, st.Size())
@@ -265,7 +245,6 @@ func BootMemFS(dst string) *Ufs_t {
 }
 
 func ShutdownFS(ufs *Ufs_t) {
-	// fmt.Printf("Shutdown: %s\n", ufs.Statistics())
 	ufs.fs.StopFS()
 	ufs.ahci.close()
 }
