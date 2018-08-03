@@ -495,7 +495,6 @@ func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) defs.Err_t {
 		if del {
 			r.Free()
 		}
-
 	}
 	return err
 }
@@ -1267,8 +1266,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 			return ret, -defs.ENAMETOOLONG
 		}
 
-		// with O_CREAT, the file may exist. use itrylock and
-		// unlock/retry to avoid deadlock.
+		// with O_CREAT, the file may exist.
 		par, err := fs.fs_namei_locked(opid, dirs, cwd, "Fs_open_inner")
 		if err != 0 {
 			return ret, err
@@ -1484,14 +1482,18 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode
 				err = -defs.ENOHEAP
 			}
 			if err != 0 {
-				// XXX check for dead
-				idm.iunlock_refdown("fs_namei_ilookup")
+				dead := idm.iunlock_refdown("fs_namei_ilookup")
+				if dead {
+					panic("dead")
+				}
 				return nil, err
 			}
 			idm.iunlock("fs_namei")
 			if n != idm {
-				// XXX check for dead
-				idm.Refdown("fs_namei_idm")
+				dead := idm.Refdown("fs_namei_idm")
+				if dead {
+					panic("dead")
+				}
 			}
 		}
 		// n may have been deleted from dcache and icache, but namei()
