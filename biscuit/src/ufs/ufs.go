@@ -70,6 +70,7 @@ func (ufs *Ufs_t) MkFile(p ustr.Ustr, ub *vm.Fakeubuf_t) defs.Err_t {
 		n, err := fd.Fops.Write(ub)
 		if err != 0 || ub.Remain() != 0 {
 			fmt.Printf("Write %s failed %v %d\n", string(p), err, n)
+			fd.Fops.Close()
 			return err
 		}
 	}
@@ -188,6 +189,7 @@ func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 
 	n, err := fd.Fops.Read(ub)
 	if err != 0 || n != len(hdata) {
+		fd.Fops.Close()
 		fmt.Printf("Read %s failed %v %d\n", p, err, n)
 		return nil, err
 	}
@@ -195,6 +197,7 @@ func (ufs *Ufs_t) Read(p ustr.Ustr) ([]byte, defs.Err_t) {
 	for i, _ := range hdata {
 		v[i] = byte(hdata[i])
 	}
+	fd.Fops.Close()
 	return v, err
 }
 
