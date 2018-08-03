@@ -1221,8 +1221,8 @@ func (x *ixgbe_t) int_handler(vector msi.Msivec_t) {
 				//go x.tx_test2()
 				go func() {
 					for {
-						res.Kreswait(res.Onemeg,
-							"stat printer")
+						//res.Kreswait(res.Onemeg,
+						//	"stat printer")
 						time.Sleep(10 * time.Second)
 						v := x.rl(QPRDC(0))
 						if v != 0 {

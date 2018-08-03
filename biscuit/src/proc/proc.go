@@ -394,6 +394,7 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 		fxbuf = vm.Mkfxbuf()
 	}
 
+	gimme := bounds.Bounds(bounds.B_PROC_T_RUN1)
 	fastret := false
 	for p.resched(tid, mynote) {
 		// for fast syscalls, we restore little state. thus we must
@@ -413,7 +414,7 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 
 	again:
 		var restart bool
-		if res.Resbegin(res.Onek) {
+		if res.Resbegin(gimme) {
 			fastret, restart = p.trap_proc(tf, tid, intno, aux)
 		}
 		if restart && !p.doomed {

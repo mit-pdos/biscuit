@@ -345,7 +345,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	cnt := 0
 	// lookup newchild and try to lock all inodes involved
 	for {
-		gimme := bounds.Bounds(bounds.B_FS_T_FS_RENAME)
+		gimme := bounds.Bounds(bounds.B_FS_T_FS_OP_RENAME)
 		if !res.Resadd_noblock(gimme) {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")

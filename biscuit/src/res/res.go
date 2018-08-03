@@ -196,3 +196,4 @@ type Res_t = runtime.Res_t
 
 var Onemeg = &Res_t{Objs: runtime.Resobjs_t{1: 1 << 20}}
 var Onek = &Res_t{Objs: runtime.Resobjs_t{1: 1 << 10}}
+var Afewk = &Res_t{Objs: runtime.Resobjs_t{1: 1 << 13}}

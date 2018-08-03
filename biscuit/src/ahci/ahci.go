@@ -8,14 +8,12 @@ import "unsafe"
 import "container/list"
 
 import "apic"
-import "bounds"
 import "defs"
 
 import "fs"
 import "mem"
 import "msi"
 import "pci"
-import "res"
 import "stats"
 
 const ahci_debug = false
@@ -753,13 +751,9 @@ func (p *ahci_port_t) find_slot() (int, bool) {
 }
 
 func (p *ahci_port_t) queuemgr() {
-	gimme := bounds.Bounds(bounds.B_AHCI_PORT_T_QUEUEMGR)
-	res.Kresdebug(gimme, "queuemgr")
 	defer p.Unlock()
 	p.Lock()
 	for {
-		res.Kunres()
-		res.Kresdebug(gimme, "queuemgr")
 		ok := false
 		if p.queued.Len() > 0 {
 			s, ok := p.find_slot()
@@ -1067,11 +1061,8 @@ func (ahci *ahci_disk_t) intr() {
 // Go routine for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msi.Msivec_t) {
 	fmt.Printf("AHCI: interrupt handler running\n")
-	gimme := bounds.Bounds(bounds.B_AHCI_DISK_T_INT_HANDLER)
 	for {
-		res.Kunresdebug()
 		runtime.IRQsched(uint(vec))
-		res.Kresdebug(gimme, "ahci int handler")
 		ahci.intr()
 	}
 }
