@@ -725,6 +725,62 @@ func TestFSConcurUnlink(t *testing.T) {
 }
 
 //
+// Test that the last holder of the inode ref frees blocks
+//
+
+func TestConcurFree(t *testing.T) {
+	dst := "tmp.img"
+	MkDisk(dst, nil, nlogblks, ninodeblks, 10*ndatablks)
+	tfs := BootFS(dst)
+	d := ustr.Ustr("d")
+	e := tfs.MkDir(d)
+	if e != 0 {
+		t.Fatalf("mkDir %v failed", d)
+	}
+	_, nblock := tfs.fs.Fs_size()
+	c := make(chan bool, 2)
+	stop := time.Now()
+	stop = stop.Add(1 * time.Second)
+	go func(t *testing.T) {
+		defer func() {
+			c <- true
+		}()
+		for time.Now().Before(stop) {
+			p := d.ExtendStr("f")
+			ub := mkData(uint8(1), SMALL)
+			e = tfs.MkFile(p, ub)
+			if e != 0 {
+				t.Fatalf("MkFile failed")
+			}
+			e = tfs.Unlink(p)
+			if e != 0 {
+				t.Fatalf("Unlink failed")
+			}
+		}
+	}(t)
+	go func(t *testing.T) {
+		defer func() {
+			c <- true
+		}()
+		for time.Now().Before(stop) {
+			p := d.ExtendStr("f")
+			d, e := tfs.Read(p)
+			if e == 0 && len(d) != SMALL {
+				c <- false
+				t.Fatalf("Read f failed %d %d", e, len(d))
+			}
+		}
+	}(t)
+	<-c
+	<-c
+	_, nblock1 := tfs.fs.Fs_size()
+	if nblock != nblock1 {
+		t.Fatalf("Leaked blocks %d %d\n", nblock, nblock1)
+	}
+	ShutdownFS(tfs)
+}
+
+//
 // Check ordered
 
 const (
