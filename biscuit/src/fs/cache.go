@@ -166,7 +166,9 @@ func (a ByStamp) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func (a ByStamp) Less(i, j int) bool {
 	e1 := a[i].Value.(*Objref_t)
 	e2 := a[j].Value.(*Objref_t)
-	return e1.tstamp < e2.tstamp
+	v1 := atomic.LoadUint64(&e1.tstamp)
+	v2 := atomic.LoadUint64(&e2.tstamp)
+	return v1 < v2
 }
 
 // Evicts up-to half of the objects in the cache. returns the number of cache
