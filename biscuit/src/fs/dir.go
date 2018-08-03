@@ -460,7 +460,8 @@ func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, defs.E
 			de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
 			de.idm.add_dcachelist(idm, de)
 		} else {
-			de.idm = idm.fs.icache.Iref_locked(de.inum, "ilookup")
+			i := idm.fs.icache.Iref_locked(de.inum, "ilookup")
+			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)), unsafe.Pointer(i))
 			de.idm.add_dcachelist(idm, de)
 			de.idm.iunlock("ilookup")
 		}
