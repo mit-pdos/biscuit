@@ -1,6 +1,7 @@
 package unet
 
 import "fmt"
+import "sync/atomic"
 import "testing"
 
 import "defs"
@@ -12,22 +13,11 @@ const NBYTES = 1024
 const VAL = 1
 const VAL1 = 2
 
-func doClnt(conn fdops.Fdops_i, t *testing.T) {
-	log.Printf("doClnt: wait for accept\n")
-
-	sa := make([]uint8, 8)
-	ub := mkUbuf(sa)
-	clnt, _, err := conn.Accept(ub)
-	if err != 0 {
-		t.Fatalf("accept")
-	}
-	if err != 0 {
-		t.Fatalf("accept sa")
-	}
+func doClnt(clnt fdops.Fdops_i, sa []uint8, t *testing.T) {
 	p, ip := unSaddr(sa)
 	log.Printf("accepted clnt (%s,%d)\n", Ip2str(ip), p)
 	data := make([]uint8, NBYTES)
-	ub = mkUbuf(data)
+	ub := mkUbuf(data)
 	n, err := clnt.Read(ub)
 	if err != 0 {
 		t.Fatalf("read")
@@ -65,9 +55,16 @@ func mkServerConn(port int, t *testing.T) fdops.Fdops_i {
 	return conn
 }
 
-func server(conn fdops.Fdops_i, t *testing.T, ch chan bool) {
-	doClnt(conn, t)
-	ch <- true
+func server(conn fdops.Fdops_i, t *testing.T, done *int32) {
+	for atomic.LoadInt32(done) != 1 {
+		sa := make([]uint8, 8)
+		ub := mkUbuf(sa)
+		clnt, _, err := conn.Accept(ub)
+		if err != 0 {
+			t.Fatalf("accept")
+		}
+		go doClnt(clnt, sa, t)
+	}
 }
 
 func client(port int, t *testing.T) {
@@ -117,13 +114,40 @@ func TestSimple(t *testing.T) {
 	fmt.Printf("TestConnect\n")
 
 	conn := mkServerConn(1090, t)
-	ch := make(chan bool)
-	go server(conn, t, ch)
+	done := int32(0)
+	go server(conn, t, &done)
 
 	client(1090, t)
 
-	// wait for server to be done
-	<-ch
+	atomic.StoreInt32(&done, 1)
 
 	fmt.Printf("TestConnect Done\n")
+}
+
+const NCLIENT = 5
+
+func TestClients(t *testing.T) {
+	net_init()
+
+	fmt.Printf("TestConnect\n")
+
+	conn := mkServerConn(1090, t)
+	ch := make(chan bool, NCLIENT)
+	done := int32(0)
+	go server(conn, t, &done)
+
+	for i := 0; i < NCLIENT; i++ {
+		go func(clnt int, t *testing.T) {
+			defer func() {
+				ch <- true
+			}()
+			client(1090, t)
+		}(i, t)
+	}
+	// wait for clients to be done
+	for i := 0; i < NCLIENT; i++ {
+		<-ch
+	}
+	atomic.StoreInt32(&done, 1)
+	fmt.Printf("TestClients Done\n")
 }
