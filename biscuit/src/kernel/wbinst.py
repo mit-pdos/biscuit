@@ -465,10 +465,10 @@ class Params(object):
     def istypepanic(self, baddr):
         for ins in self.bbins(baddr):
             if ins.id == X86_INS_CALL and ins.operands[0].type == X86_OP_IMM:
-                if self._syms['panicdottype'].within(ins.operands[0].imm):
-                    return True
-                #panics = ['panicdottypeE', 'panicdottypeI']
-                panics = ['panicdottype']
+                #if self._syms['panicdottype'].within(ins.operands[0].imm):
+                #    return True
+                panics = ['panicdottypeE', 'panicdottypeI']
+                #panics = ['panicdottype']
                 for p in panics:
                     sym = self._syms[p]
                     if sym.within(ins.operands[0].imm):
@@ -733,29 +733,32 @@ def writefake(rips, fn):
         for w in rips:
             print >> f, '%x -- 1' % (w)
 
-p = Params('main.gobin')
+#p = Params('main.gobin')
+p = Params('kernel.gobin')
 print 'made all map: %d' % (len(p._ilist))
 
 wb = p.writebarriers()
 print 'found', len(wb)
 writerips(wb, 'wbars.rips')
 
-#ptr = p.ptrchecks()
-#writerips(ptr, 'nilptrs.rips')
-#
-#bc = p.boundschecks()
-#writerips(bc, 'bounds.rips')
-#
-#div = p.dividechecks()
-#writerips(div, 'div.rips')
-#
-#tp = p.typechecks()
-#writerips(tp, 'types.rips')
-#
-#ss = p.splits();
-#writerips(ss, 'splits.rips')
+ptr = p.ptrchecks()
+writerips(ptr, 'nilptrs.rips')
+writefake(ptr, 'fake-nilptrs.txt')
 
-#writefake(bc, 'fake.txt')
+bc = p.boundschecks()
+writerips(bc, 'bounds.rips')
+writefake(bc, 'fake-bounds.txt')
+
+div = p.dividechecks()
+writerips(div, 'div.rips')
+writefake(div, 'fake-div.txt')
+
+tp = p.typechecks()
+writerips(tp, 'types.rips')
+writefake(tp, 'fake-types.txt')
+
+ss = p.splits()
+writerips(ss, 'splits.rips')
 
 #for bi in found:
 #    print '%x' % (bi)
