@@ -3499,9 +3499,9 @@ func GCPacerToggle() {
 }
 
 //type Resobjs_t [_NumSizeClasses]uint32
-// the version of biscuit from the paper submission only allocates from 21 size
-// classes. Objsadd/Objssub assumes this is an array of 24 uint32s; fix Objsadd
-// if you change this type.
+// at the time of writing, biscuit allocates from 24 size classes.
+// Objsadd/Objssub assumes this is an array of 24 uint32s; fix Objsadd if you
+// change this type.
 type Resobjs_t [24]uint32 // NOTICE ABOVE!
 
 type Res_t struct {
