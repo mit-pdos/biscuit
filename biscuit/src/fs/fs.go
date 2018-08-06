@@ -1511,7 +1511,7 @@ func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s s
 	if err != 0 {
 		return nil, err
 	}
-	idm.ilock(s + "/fs_namei_locked")
+	idm.ilock("/fs_namei_locked")
 	return idm, 0
 }
 
