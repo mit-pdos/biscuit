@@ -1475,6 +1475,9 @@ func (tt *tcptimers_t) _tocancel(tl *tcptlist_t, tw *timerwheel_t) {
 }
 
 type Tcptcb_t struct {
+	// l protects everything except for the following which can be read
+	// without the lock: dead, rxdone, txdone, and the head/tail indicies
+	// in rxbuf/txbuf.
 	l      sync.Mutex
 	locked bool
 	ackl   tcptlist_t
@@ -3139,34 +3142,37 @@ func (tf *Tcpfops_t) Recvmsg(dst fdops.Userio_i,
 	return wrote, 0, 0, 0, err
 }
 
-func (tf *Tcpfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
-	tf.tcb.tcb_lock()
-	defer tf.tcb.tcb_unlock()
-
-	if _, ok := tf._closed(); !ok {
-		return 0, 0
-	}
-
+func (tf *Tcpfops_t) _pollchk(ev fdops.Ready_t) fdops.Ready_t {
 	var ret fdops.Ready_t
 	isdata := !tf.tcb.rxbuf.cbuf.Empty()
-	if tf.tcb.dead && pm.Events&fdops.R_ERROR != 0 {
+	if tf.tcb.dead && ev&fdops.R_ERROR != 0 {
 		ret |= fdops.R_ERROR
 	}
-	if pm.Events&fdops.R_READ != 0 && (isdata || tf.tcb.rxdone) {
+	if ev&fdops.R_READ != 0 && (isdata || tf.tcb.rxdone) {
 		ret |= fdops.R_READ
 	}
 	if tf.tcb.txdone {
-		if pm.Events&fdops.R_HUP != 0 {
+		if ev&fdops.R_HUP != 0 {
 			ret |= fdops.R_HUP
 		}
-	} else if pm.Events&fdops.R_WRITE != 0 && !tf.tcb.txbuf.cbuf.Full() {
+	} else if ev&fdops.R_WRITE != 0 && !tf.tcb.txbuf.cbuf.Full() {
 		ret |= fdops.R_WRITE
 	}
+	return ret
+}
+
+func (tf *Tcpfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
+	ready := tf._pollchk(pm.Events)
 	var err defs.Err_t
-	if ret == 0 && pm.Dowait {
-		err = tf.tcb.pollers.Addpoller(&pm)
+	if ready == 0 && pm.Dowait {
+		tf.tcb.tcb_lock()
+		ready = tf._pollchk(pm.Events)
+		if ready == 0 {
+			err = tf.tcb.pollers.Addpoller(&pm)
+		}
+		tf.tcb.tcb_unlock()
 	}
-	return ret, err
+	return ready, err
 }
 
 func (tf *Tcpfops_t) Fcntl(cmd, opt int) int {
