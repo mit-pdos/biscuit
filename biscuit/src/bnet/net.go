@@ -1594,14 +1594,12 @@ func (tc *Tcptcb_t) tcb_unlock() {
 // waits on the receive buffer conditional variable
 func (tc *Tcptcb_t) rbufwait() defs.Err_t {
 	ret := proc.KillableWait(tc.rxbuf.cond)
-	// XXX close on kill
 	tc.locked = true
 	return ret
 }
 
 func (tc *Tcptcb_t) tbufwait() defs.Err_t {
 	ret := proc.KillableWait(tc.txbuf.cond)
-	// XXX close on kill
 	tc.locked = true
 	return ret
 }
@@ -1818,7 +1816,7 @@ func (tc *Tcptcb_t) kill() {
 		panic("uh oh")
 	}
 	tc.dead = true
-	tc._bufrelease()
+	//tc._bufrelease()
 	limits.Syslimit.Socks.Give()
 	tcpcons.tcb_del(tc)
 	bigtw.tocancel_all(tc)
@@ -1830,7 +1828,7 @@ func (tc *Tcptcb_t) timewaitdeath() {
 		return
 	}
 	tc.twdeath = true
-	tc._bufrelease()
+	//tc._bufrelease()
 
 	bigtw.tosched_twait(tc)
 }
@@ -2892,7 +2890,7 @@ func (tf *Tcpfops_t) Close() defs.Err_t {
 	if tf.tcb.openc == 0 {
 		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
-		tf.tcb.pollers.Wakeready(fdops.R_READ | fdops.R_HUP)
+		tf.tcb._bufrelease()
 	}
 
 	return 0
