@@ -63,11 +63,8 @@ int nc(int s)
 				if (i == 0) {
 					if (shutdown(s, SHUT_WR) == -1)
 						err(-1, "shutdown");
-					continue;
-				} else {
-					closed = 2;
-					break;
 				}
+				continue;
 			}
 			ssize_t w = write(i == 0 ? s : 1, buf, c);
 			if (w == -1)
