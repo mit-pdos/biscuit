@@ -304,13 +304,13 @@ func (t *Tcphdr_t) Bytes() []uint8 {
 	return (*[TCPLEN]uint8)(unsafe.Pointer(t))[:]
 }
 
-func (t *Tcphdr_t) Dump(sip, dip Ip4_t, opt Tcpopt_t) {
+func (t *Tcphdr_t) Dump(sip, dip Ip4_t, opt Tcpopt_t, dlen int) {
 	s := fmt.Sprintf("%s:%d -> %s:%d", Ip2str(sip), Ntohs(t.Sport),
 		Ip2str(dip), Ntohs(t.Dport))
 	if t.Issyn() {
 		s += fmt.Sprintf(", S")
 	}
-	s += fmt.Sprintf(" [%v]", Ntohl(t.Seq))
+	s += fmt.Sprintf(" [%v+%v]", Ntohl(t.Seq), dlen)
 	if ack, ok := t.Isack(); ok {
 		s += fmt.Sprintf(", A [%v]", ack)
 	}

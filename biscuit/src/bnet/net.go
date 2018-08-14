@@ -2282,7 +2282,7 @@ func (tc *Tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest [][]uint8,
 		tc.snd.una = rack
 		// distinguish between acks for data and the ack for our FIN
 		pack := rack
-		if pack > tc.txbuf.end_seq() {
+		if _seqdiff(swinend, pack) < _seqdiff(swinend, tc.txbuf.end_seq()) {
 			pack = tc.txbuf.end_seq()
 		}
 		tc.txbuf.ackup(pack)
@@ -2809,7 +2809,7 @@ func net_tcp(pkt [][]uint8, tlen int) {
 
 	sip := Sl2ip(ip4.Sip[:])
 	dip := Sl2ip(ip4.Dip[:])
-	//tcph.dump(sip, dip, opts)
+	//tcph.Dump(sip, dip, opts, len(rest))
 
 	pkt[0] = rest
 
