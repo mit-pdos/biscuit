@@ -341,10 +341,10 @@ func (t *Tcphdr_t) Dump(sip, dip Ip4_t, opt Tcpopt_t, dlen int) {
 
 type Tcpopt_t struct {
 	Wshift uint
-	Tsok   bool
 	Tsval  uint32
 	Tsecr  uint32
 	Mss    uint16
+	Tsok   bool
 	Sackok bool
 }
 

@@ -2383,7 +2383,8 @@ func _seqbetween(low, mid, hi uint32) bool {
 	return _seqdiff(hi, mid) <= _seqdiff(hi, low)
 }
 
-// returns difference of big - small with unsigned wrapping
+// returns the uint32 difference of big - small.
+// XXX make return type uint since the result is always positive
 func _seqdiff(big, small uint32) int {
 	return int(uint(big - small))
 }
@@ -2427,16 +2428,15 @@ func (tc *Tcptcb_t) lwingrow(dlen int) {
 	left := tc.rxbuf.cbuf.Left()
 	mss := int(tc.rcv.mss)
 	oldwin := int(tc.rcv.win)
-
-	//if left-oldwin >= mss {
-	if left >= mss {
+	// don't delay acks that reopen the window
+	if oldwin < mss && left >= mss {
+		tc.rcv.win = uint16(left)
+		tc.sched_ack()
+		tc.ack_now()
+	} else if left - oldwin >= mss {
 		tc.rcv.win = uint16(left)
 		tc.sched_ack()
 		tc.ack_maybe()
-	}
-	// don't delay acks that reopen the window
-	if oldwin < mss && int(tc.rcv.win) >= mss {
-		tc.ack_now()
 	}
 }
 
@@ -2527,7 +2527,8 @@ func (tc *Tcptcb_t) tcb_init(lip, rip Ip4_t, lport, rport uint16, smac,
 		panic("need window shift")
 	}
 	tc.rcv.win = uint16(tc.rxbuf.cbuf.Left())
-	tc.rcv.mss = 1460
+	// assume 12 bytes of TCP options (nop, nop, timestamp)
+	tc.rcv.mss = 1448
 	tc.snd.nxt = sndnxt
 	tc.snd.una = sndnxt
 	tc.ackl.linit(tc)
