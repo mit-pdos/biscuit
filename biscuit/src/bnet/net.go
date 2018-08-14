@@ -1946,7 +1946,7 @@ func (tc *Tcptcb_t) seg_maybe() {
 	if _seqbetween(tc.snd.una, tc.txbuf.end_seq(), upto) {
 		upto = tc.txbuf.end_seq()
 	}
-	isdata := tc.snd.nxt != tc.snd.finseq+1
+	isdata := !tc.txdone || tc.snd.nxt != tc.snd.finseq+1
 	sbegin := tc.snd.nxt
 	if isdata && _seqdiff(upto, sbegin) > 0 {
 		did := tc.seg_one(sbegin)
@@ -2279,13 +2279,13 @@ func (tc *Tcptcb_t) data_in(rseq, rack uint32, rwin uint16, rest [][]uint8,
 	}
 	// +1 in case our FIN's sequence number is just outside the send window
 	swinend := tc.snd.una + uint32(tc.snd.win) + 1
-	if _seqdiff(swinend, rack) < _seqdiff(swinend, tc.snd.una) {
+	if _seqbetween(tc.snd.una, rack, swinend) {
 		tc.snd.tsegs.ackupto(rack)
 		tc.snd.una = rack
 		// distinguish between acks for data and the ack for our FIN
 		pack := rack
-		if _seqdiff(swinend, pack) < _seqdiff(swinend, tc.txbuf.end_seq()) {
-			pack = tc.txbuf.end_seq()
+		if tc.txdone && pack == tc.snd.finseq+1 {
+			pack = tc.snd.finseq
 		}
 		tc.txbuf.ackup(pack)
 	}

@@ -151,7 +151,7 @@ func (ca *Cacheallocs_t) Shouldevict(want *Res_t) bool {
 
 var Kwaits int
 
-var Lims = true
+const Lims = true
 
 func Kreswait(want *Res_t, name string) {
 	if !Kernel {
