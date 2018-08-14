@@ -2,6 +2,7 @@ package bnet
 
 import "fmt"
 import "math/rand"
+import "runtime"
 import "sync"
 import "sync/atomic"
 import "sort"
@@ -710,7 +711,7 @@ func (tb *tcpbuf_t) ackup(rack uint32) {
 type tseg_t struct {
 	seq  uint32
 	len  uint32
-	when time.Time
+	when millis_t
 }
 
 type tcpsegs_t struct {
@@ -771,7 +772,7 @@ func (ts *tcpsegs_t) _addnoisect(seq, len, winend uint32) {
 		panic("0 length transmit seg?")
 	}
 	ns := tseg_t{seq: seq, len: len}
-	ns.when = time.Now()
+	ns.when = Fastmillis()
 	ts.segs = append(ts.segs, ns)
 	ts.winend = winend
 	sort.Sort(ts)
@@ -818,7 +819,7 @@ func (ts *tcpsegs_t) reset(seq, nlen uint32) {
 		panic("seq not found")
 	}
 	if nlen == ts.segs[start].len {
-		ts.segs[start].when = time.Now()
+		ts.segs[start].when = Fastmillis()
 		return
 	}
 	if nlen < ts.segs[start].len {
@@ -841,7 +842,7 @@ func (ts *tcpsegs_t) reset(seq, nlen uint32) {
 	rest := len(ts.segs) - prunefrom
 	ts.segs = ts.segs[:start+rest+1]
 	ts.segs[start].len = nlen
-	ts.segs[start].when = time.Now()
+	ts.segs[start].when = Fastmillis()
 }
 
 // prune unacknowledged sequences if the window has shrunk
@@ -865,12 +866,12 @@ func (ts *tcpsegs_t) prune(winend uint32) {
 
 // returns the timestamp of the oldest segment in the list or false if the list
 // is empty
-func (ts *tcpsegs_t) nextts() (time.Time, bool) {
-	var ret time.Time
+func (ts *tcpsegs_t) nextts() (millis_t, bool) {
+	var ret millis_t
 	if len(ts.segs) > 0 {
 		ret = ts.segs[0].when
 		for i := range ts.segs {
-			if ts.segs[i].when.Before(ret) {
+			if ts.segs[i].when < ret {
 				ret = ts.segs[i].when
 			}
 		}
@@ -1526,7 +1527,7 @@ type Tcptcb_t struct {
 	opt []uint8
 	// timer state
 	remack struct {
-		last time.Time
+		last millis_t
 		// number of segments received; we try to send 1 ACK per 2 data
 		// segments.
 		num        uint
@@ -1537,7 +1538,7 @@ type Tcptcb_t struct {
 	}
 	remseg struct {
 		tstart bool
-		target time.Time
+		target millis_t
 	}
 	// data to send over the TCP connection
 	txbuf tcpbuf_t
@@ -1866,9 +1867,8 @@ func (tc *Tcptcb_t) _acktime(sendnow bool) {
 	canwait := !sendnow && (segdelay || fdelay)
 	if canwait {
 		// delay at most 500ms
-		now := time.Now()
-		deadline := tc.remack.last.Add(500 * time.Millisecond)
-		if now.Before(deadline) {
+		now := Fastmillis()
+		if now < tc.remack.last + 500 {
 			if !tc.remack.tstart {
 				tc.remack.tstart = true
 				bigtw.tosched_ack(tc)
@@ -1889,7 +1889,16 @@ func (tc *Tcptcb_t) _acktime(sendnow bool) {
 	eth, ip, th := pkt.Hdrbytes()
 	sgbuf := [][]uint8{eth, ip, th, opt}
 	nic.Tx_tcp(sgbuf)
-	tc.remack.last = time.Now()
+	tc.remack.last = Fastmillis()
+}
+
+type millis_t uint
+
+const Secondms millis_t = 1000
+
+func Fastmillis() millis_t {
+	ns := millis_t(runtime.Nanotime())
+	return ns / 1000000
 }
 
 // transmit new segments and retransmits timed-out segments as the window
@@ -1906,11 +1915,9 @@ func (tc *Tcptcb_t) seg_maybe() {
 	tc.snd.tsegs.prune(winend)
 	// have retransmit timeouts expired?
 	segged := false
-	now := time.Now()
+	now := Fastmillis()
 	for i := 0; i < len(tc.snd.tsegs.segs); i++ {
-		to := time.Second
-		deadline := tc.snd.tsegs.segs[i].when.Add(to)
-		if now.Before(deadline) {
+		if now < tc.snd.tsegs.segs[i].when + Secondms {
 			continue
 		}
 		seq := tc.snd.tsegs.segs[i].seq
@@ -1952,7 +1959,7 @@ func (tc *Tcptcb_t) seg_maybe() {
 		tc.seg_one(tc.snd.finseq)
 		tc.snd.tsegs.addnow(tc.snd.finseq, 1, winend)
 	}
-	tc._txtimeout_start()
+	tc._txtimeout_start(now)
 }
 
 func (tc *Tcptcb_t) seg_one(seq uint32) int {
@@ -2004,7 +2011,7 @@ func (tc *Tcptcb_t) seg_one(seq uint32) int {
 	// we just queued an ack, so clear outstanding ack flag
 	tc.remack.outa = false
 	tc.remack.forcedelay = false
-	tc.remack.last = time.Now()
+	tc.remack.last = Fastmillis()
 
 	send := seq + uint32(dlen)
 	ndiff := _seqdiff(winend+1, seq+uint32(dlen))
@@ -2017,26 +2024,24 @@ func (tc *Tcptcb_t) seg_one(seq uint32) int {
 
 // is waiting until the oldest seg timesout a good strategy? maybe wait until
 // the middle timesout?
-func (tc *Tcptcb_t) _txtimeout_start() {
+func (tc *Tcptcb_t) _txtimeout_start(now millis_t) {
 	nts, ok := tc.snd.tsegs.nextts()
 	if !ok || tc.dead {
 		return
 	}
 	if tc.remseg.tstart {
 		// XXXPANIC
-		if nts.Before(tc.remseg.target) {
+		if nts < tc.remseg.target {
 			fmt.Printf("** timeout shrink! %v\n",
-				tc.remseg.target.Sub(nts))
+				tc.remseg.target - nts)
 		}
 		return
 	}
 	tc.remseg.tstart = true
 	tc.remseg.target = nts
 	// XXX rto calculation
-	rto := time.Second * 5
-	deadline := nts.Add(rto)
-	now := time.Now()
-	if now.After(deadline) {
+	deadline := nts + Secondms * 5
+	if now > deadline {
 		fmt.Printf("** timeouts are shat upon!\n")
 		return
 	}
