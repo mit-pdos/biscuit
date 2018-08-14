@@ -1806,8 +1806,10 @@ func (tc *Tcptcb_t) finacked() bool {
 
 func (tc *Tcptcb_t) _bufrelease() {
 	tc._sanity()
-	tc.txbuf.cbuf.Cb_release()
-	tc.rxbuf.cbuf.Cb_release()
+	if tc.openc == 0 {
+		tc.txbuf.cbuf.Cb_release()
+		tc.rxbuf.cbuf.Cb_release()
+	}
 }
 
 func (tc *Tcptcb_t) kill() {
@@ -1816,7 +1818,7 @@ func (tc *Tcptcb_t) kill() {
 		panic("uh oh")
 	}
 	tc.dead = true
-	//tc._bufrelease()
+	tc._bufrelease()
 	limits.Syslimit.Socks.Give()
 	tcpcons.tcb_del(tc)
 	bigtw.tocancel_all(tc)
@@ -1828,7 +1830,7 @@ func (tc *Tcptcb_t) timewaitdeath() {
 		return
 	}
 	tc.twdeath = true
-	//tc._bufrelease()
+	tc._bufrelease()
 
 	bigtw.tosched_twait(tc)
 }
@@ -2890,7 +2892,9 @@ func (tf *Tcpfops_t) Close() defs.Err_t {
 	if tf.tcb.openc == 0 {
 		// XXX when to RST?
 		tf.tcb.shutdown(true, true)
-		tf.tcb._bufrelease()
+		if tf.tcb.state == TIMEWAIT {
+			tf.tcb._bufrelease()
+		}
 	}
 
 	return 0
