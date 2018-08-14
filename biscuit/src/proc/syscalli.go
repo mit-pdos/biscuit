@@ -11,6 +11,7 @@ type Syscall_i interface {
 }
 
 type Cons_i interface {
+	Cons_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t)
 	Cons_read(ub fdops.Userio_i, offset int) (int, defs.Err_t)
 	Cons_write(src fdops.Userio_i, off int) (int, defs.Err_t)
 }

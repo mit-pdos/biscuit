@@ -267,6 +267,11 @@ type console_t struct {
 
 var console = &console_t{}
 
+func (c *console_t) Cons_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
+	cons.pollc <- pm
+	return <- cons.pollret, 0
+}
+
 func (c *console_t) Cons_read(ub fdops.Userio_i, offset int) (int, defs.Err_t) {
 	sz := ub.Remain()
 	kdata, err := kbd_get(sz)

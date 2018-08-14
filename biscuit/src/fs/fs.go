@@ -1008,9 +1008,8 @@ func (df *Devfops_t) Recvmsg(fdops.Userio_i,
 
 func (df *Devfops_t) Pollone(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
 	switch df.Maj {
-	// case defs.D_CONSOLE:
-	// 	cons.pollc <- pm
-	// 	return <- cons.pollret, 0
+	case defs.D_CONSOLE:
+		return cons.Cons_poll(pm)
 	case defs.D_PROF:
 		// XXX
 		return pm.Events & fdops.R_READ, 0

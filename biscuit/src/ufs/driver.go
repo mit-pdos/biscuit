@@ -114,6 +114,10 @@ type console_t struct {
 
 var c console_t
 
+func (c console_t) Cons_poll(pm fdops.Pollmsg_t) (fdops.Ready_t, defs.Err_t) {
+	return 0, 0
+}
+
 func (c console_t) Cons_read(ub fdops.Userio_i, offset int) (int, defs.Err_t) {
 	return -1, 0
 }
