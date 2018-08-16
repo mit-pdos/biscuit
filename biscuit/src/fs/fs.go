@@ -1335,12 +1335,17 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 func (fs *Fs_t) Makefake() *fd.Fd_t {
 	return nil
 	//ret := &fd.Fd_t{}
-	//priv := defs.Inum_t(iroot)
+	////priv := defs.Inum_t(iroot)
+	//// guess for a file inode...
+	//priv := defs.Inum_t(2)
 	//fake := &fsfops_t{priv: iroot, fs: fs, count: 1}
 	//fake.hack = &imemnode_t{}
 	//fake.hack.inum = priv
 	//fake.hack.fs = fs
 	//fake.hack.idm_init(priv)
+	//if fake.hack.itype == I_DIR {
+	//	panic("isdir!")
+	//}
 	//ret.Fops = fake
 	//return ret
 }
