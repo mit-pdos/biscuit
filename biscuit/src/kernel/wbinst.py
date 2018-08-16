@@ -62,6 +62,10 @@ class Params(object):
         for sym in self._stksyms:
             self._initsym(fn, sym)
 
+        self._wbfuncs = ['gcWriteBarrier', 'wbBufFlush.func1', 'wbBufFlush', 'wbBufFlush1']
+        for sym in self._wbfuncs:
+            self._initsym(fn, sym)
+
         d = readelfgrep(fn, ['-S'], ['\.text.*PROGBIT'])[0].split()
         foff = int(d[5], 16)
         textva = int(d[4], 16)
@@ -255,6 +259,15 @@ class Params(object):
         self.bbs()
         wb = []
         for x in self._ilist:
+            found = False
+            for wbfn in self._wbfuncs:
+                sym = self._syms[wbfn]
+                if sym.within(x.address):
+                    wb.append(x)
+                    found = True
+                    break
+            if found:
+                continue
             if not oldstyle and self.iswb(x):
                 # go1.10 write barriers don't load the flag to a register, but
                 # compare the flag directly and the jne is always the next
@@ -727,6 +740,9 @@ def writerips(rips, fn):
         for w in rips:
             print >> f, '%x' % (w)
 
+# writefake creates a fake profile (for munch.py) using the instructions in
+# rips; use "munch.py -d" to manually inspect the instructions identified as
+# HLL tax instructions in the kernel binary.
 def writefake(rips, fn):
     print 'writing fake prof "%s"...' % (fn)
     with open(fn, 'w') as f:
