@@ -2183,7 +2183,7 @@ fdopendir(int fd)
 		int i;
 		for (i = 0; i < nde; i++) {
 			struct _dirent_t *de = (struct _dirent_t *)buf + i;
-			if (de->inum != 0)
+			if (de->name[0] != '\0')
 				c++;
 		}
 	}
@@ -2206,7 +2206,7 @@ fdopendir(int fd)
 		int i;
 		for (i = 0; i < nde; i++) {
 			struct _dirent_t *de = (struct _dirent_t *)buf + i;
-			if (de->inum != 0) {
+			if (de->name[0] != '\0') {
 				p->d_ino = de->inum;
 				strncpy(p->d_name, de->name,
 				    sizeof(p->d_name));
