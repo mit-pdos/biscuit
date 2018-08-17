@@ -322,10 +322,12 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
 
+	// XXX must verify that npar links are non-zero?
 	npar, err := fs.fs_namei(opid, ndirs, cwd)
 	if err != 0 {
 		// XXX don't have to check dead because opar contains ochild and
 		// we have lock on opar
+		// XXX XXX must check dead here, above, and below
 		opar.Refdown("fs_rename_opar")
 		ochild.Refdown("fs_rename_ochild")
 		return refs, err
@@ -1214,6 +1216,7 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
 	if err != 0 {
 		return err
 	}
+	// XXX must check dead if create below fails
 	defer par.iunlock_refdown("fs_mkdir_par")
 
 	child, err := par.do_createdir(opid, fn)
@@ -1276,6 +1279,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 			idm, err = par.do_createfile(opid, fn)
 		}
 		if err != 0 && err != -defs.EEXIST {
+			// XXX must check dead
 			par.iunlock_refdown("Fs_open_inner_par")
 			return ret, err
 		}
@@ -1456,7 +1460,9 @@ func (fs *Fs_t) Fs_syncapply() defs.Err_t {
 	return 0
 }
 
-// if the path resolves successfully, returns target inode
+// if the path resolves successfully, returns target inode with incremented
+// refcount and unlocked. in most cases, the caller must be prepared to free
+// the returned imemnode after calling Refdown.
 func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
@@ -1471,33 +1477,54 @@ func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode
 	pp.Pp_init(paths)
 	var next ustr.Ustr
 	var nextok bool
-	for cp, ok := pp.Next(); ok; cp, ok = next, nextok {
+	first := true
+	for cp, ok := pp.Next(); ok; cp, ok, first = next, nextok, false {
+		// except for "start" on the first iteration, no imemnode's
+		// refcount is incremented at the beginning of this loop
+		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
+			if first && !start.Refdown("") {
+				panic("fixme cwd unlinked")
+			}
+			return nil, -defs.ENOHEAP
+		}
 		next, nextok = pp.Next()
-		n, found := idm.ilookup_lockfree(cp, !nextok)
+		lastc := !nextok
+		n, found := idm.ilookup_lockfree(cp, lastc)
+		if found && first {
+			if idm.Refdown("") {
+				panic("fixme")
+			}
+		}
+		//var n *imemnode_t
+		//found := false
 		if !found {
 			// on failure do locked lookup
-			if start != idm {
-				// XXX check result of Refup and, on failure, start over again
-				idm.Refup("fs_namei")
+			if !first {
+				// XXX check result of Refup and, on failure,
+				// start over again
+				if _, ok := idm.Refup("fs_namei"); !ok {
+					panic("fixme")
+				}
 			}
 			idm.ilock("fs_namei")
 			n, err = idm.ilookup(opid, cp)
-			if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
-				err = -defs.ENOHEAP
-			}
 			if err != 0 {
-				dead := idm.iunlock_refdown("fs_namei_ilookup")
-				if dead {
-					panic("dead")
+				if idm.iunlock_refdown("") {
+					panic("fixme")
 				}
 				return nil, err
 			}
-			idm.iunlock("fs_namei")
-			if n != idm {
-				dead := idm.Refdown("fs_namei_idm")
-				if dead {
-					panic("dead")
+			// ilookup incremented n's refcount which the fastpath
+			// above will not undo; undo it here
+			if !lastc {
+				if n.Refdown("") {
+					panic("cannot die")
 				}
+			}
+			idm.iunlock("fs_namei")
+			// ilookup always increments the refcnt, even on "."
+			if idm.Refdown("fs_namei_idm") {
+				panic("fixme")
 			}
 		}
 		// n may have been deleted from dcache and icache, but namei()

@@ -120,6 +120,7 @@ func (il *fdelist_t) count() int {
 type icdent_t struct {
 	offset int
 	inum   defs.Inum_t
+	// idm may be nil since it is lazily filled on ilookup
 	idm    *imemnode_t
 	name   ustr.Ustr
 }
@@ -160,7 +161,9 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, defs.Err_t) {
 	// from the free list.
 	idm.dentc.scanned = true
 
-	// current dir blocks are full -- allocate new dirdata block
+	// current dir blocks are full -- allocate new dirdata block. because
+	// the offset of the new block is larger than idm.size, off2buf will
+	// zero-fill the block.
 	newsz := idm.size + BSIZE
 	b, err := idm.off2buf(opid, idm.size, BSIZE, true, true, "_denextempty")
 	if err != 0 {
@@ -442,6 +445,9 @@ func (idm *imemnode_t) probe_unlink(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, d
 	return b, 0
 }
 
+// if ilookup succeeds, it increments the refcount of the target imemnode and
+// returns it unlocked, even for "." and ".." (but refcount for "." is not
+// increased when inserted into the dcache)
 func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, defs.Err_t) {
 	// did someone confuse a file with a directory?
 	if idm.itype != I_DIR {

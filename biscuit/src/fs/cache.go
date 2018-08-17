@@ -76,7 +76,8 @@ func (ref *Objref_t) Up() (uint32, bool) {
 
 func (ref *Objref_t) Down() uint32 {
 	v := atomic.AddUint32(&ref.refcnt, ^uint32(0))
-	if v < 0 {
+	if int(int32(v)) < 0 {
+		//fmt.Printf("%v %#x\n", v, v)
 		panic("Down")
 	}
 	return v
@@ -113,6 +114,10 @@ func (c *cache_t) lookupinc(key int) (*Objref_t, bool) {
 		e := v.(*Objref_t)
 		refcnt := atomic.LoadUint32(&e.refcnt)
 		new := refcnt + 1
+		if int(int32(refcnt)) < 0 {
+			//fmt.Printf("%v %#x\n", refcnt, refcnt)
+			panic("nuts")
+		}
 		if refcnt&REMOVE == 0 && atomic.CompareAndSwapUint32(&e.refcnt, refcnt, new) {
 			return e, ok
 		}
