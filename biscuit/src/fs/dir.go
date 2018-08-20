@@ -330,7 +330,7 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, defs.Err_t) {
 		return !hasfiles, 0
 	}
 	notempty, err := idm._descan(opid, func(fn ustr.Ustr, de *icdent_t) bool {
-		return len(fn) != 0 && !fn.Isdot() && fn.Isdotdot()
+		return len(fn) != 0 && !fn.Isdot() && !fn.Isdotdot()
 	})
 	if err != 0 {
 		return false, err
