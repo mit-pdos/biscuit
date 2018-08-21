@@ -493,17 +493,18 @@ func (idm *imemnode_t) ilookup_validate(opid opid_t, name ustr.Ustr, child *imem
 	return de.idm.inum == child.inum, 0
 }
 
-// Lookup name in a directory's dcache without holding lock. If refup is false,
+// Lookup name in a directory's dcache without holding lock. If verify is false,
 // then lookup just returns the found inode. This inode may be stale (it may
 // have been deleted from the inode cache) and the caller must be prepared to
-// deal with stale inodes (and, in particular, never update it).  If refup is
-// true, then lookup will return an inode that is guaranteed to be fresh.  For
-// this case, there are two potential races to consider: 1) an unlink removes
-// the entry from dcache; 2) evict removes the inode from the inode cache.  For
-// unlink, lock-free namei will check the link count after locking the inode
-// and fail if the file was unlinked. On eviction, the refcnt is marked as
-// being deleted, and Refup will return false and ilookup_lockfree will fail.
-func (idm *imemnode_t) ilookup_lockfree(name ustr.Ustr, refup bool) (*imemnode_t, bool) {
+// deal with stale inodes (and, in particular, never update it).  If verify is
+// true, then lookup will return an inode referenced and locked which is
+// guaranteed to be unlinked. For this case, there are two potential races to
+// consider: 1) an unlink removes the entry from dcache; 2) evict removes the
+// inode from the inode cache. For unlink, lock-free namei will check the link
+// count after locking the inode and fail if the file was unlinked. On
+// eviction, the refcnt is marked as being deleted, and Refup will return false
+// and ilookup_lockfree will fail.
+func (idm *imemnode_t) ilookup_lockfree(name ustr.Ustr, verify bool) (*imemnode_t, bool) {
 	yay := (*unsafe.Pointer)(unsafe.Pointer(&idm.dentc.dents))
 	dc := (*hashtable.Hashtable_t)(atomic.LoadPointer(yay))
 	if dc == nil {
@@ -516,11 +517,25 @@ func (idm *imemnode_t) ilookup_lockfree(name ustr.Ustr, refup bool) (*imemnode_t
 		if v == nil {
 			return nil, false
 		}
-		ok := true
-		if refup {
-			_, ok = v.Refup("")
+		if verify {
+			// lock inode before increasing the refcount, to
+			// guarantee that a concurrent unlink must observe the
+			// 0 linkcount and 0 refcount.
+			v.ilock("")
+			if v.links == 0 {
+				// this inode has been unlinked and the
+				// unlinking operation must observe this and
+				// free its blocks.
+				v.iunlock("")
+				return nil, false
+			}
+			// or it may have been evicted
+			if _, ok := v.Refup(""); !ok {
+				v.iunlock("")
+				return nil, false
+			}
 		}
-		return v, ok
+		return v, true
 	}
 	return nil, false
 }

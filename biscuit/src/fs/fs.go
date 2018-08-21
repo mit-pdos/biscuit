@@ -1524,24 +1524,9 @@ func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*
 		}
 		sps.Next()
 		idm = n
-		if !lastc {
-			continue
-		} else {
-			if start.Refdown("") {
-				panic("fixme")
-			}
-			idm.ilock("")
-			// ilookup_lockfree referenced idm without locking its
-			// parent, thus we may have increased the refcount of a
-			// concurrently-unlinked inode. make sure the inode
-			// hasn't been unlinked.
-			if idm.links != 0 {
-				return idm, 0
-			}
-			// may have been freed; fallback to slow path
-			if idm.iunlock_refdown("") {
-				panic("fixme")
-			}
+		if lastc {
+			// ilookup_lockfree already locked n
+			return n, 0
 		}
 	}
 	if idm != start {
