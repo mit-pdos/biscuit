@@ -134,7 +134,7 @@ func (fs *Fs_t) Unpin(pa mem.Pa_t) {
 	fs.bcache.unpin(pa)
 }
 
-func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
+func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("Fs_link")
 	defer fs.fslog.Op_end(opid)
 
@@ -144,22 +144,30 @@ func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) (*imemno
 
 	fs.istats.Nilink.Inc()
 
-	var dead *imemnode_t
-	orig, err := fs.fs_namei_locked(opid, old, cwd, "Fs_link_org")
+	var deads []*imemnode_t
+	orig, dead, err := fs.fs_namei_locked(opid, old, cwd, "Fs_link_org")
 	if err != 0 {
-		return dead, err
+		if dead != nil {
+			deads = append(deads, dead)
+		}
+		return deads, err
 	}
 	if orig.itype != I_FILE {
-		orig.iunlock_refdown("fs_link")
-		return dead, -defs.EINVAL
+		if orig.iunlock_refdown("fs_link") {
+			deads = append(deads, dead)
+		}
+		return deads, -defs.EINVAL
 	}
 	inum := orig.inum
 	orig._linkup(opid)
 	orig.iunlock("fs_link_orig")
 
 	dirs, fn := bpath.Sdirname(new)
-	newd, err := fs.fs_namei_locked(opid, dirs, cwd, "fs_link_newd")
+	newd, dead, err := fs.fs_namei_locked(opid, dirs, cwd, "fs_link_newd")
 	if err != 0 {
+		if dead != nil {
+			deads = append(deads, dead)
+		}
 		goto undo
 	}
 	err = newd.do_insert(opid, fn, inum)
@@ -169,20 +177,20 @@ func (fs *Fs_t) Fs_op_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) (*imemno
 	}
 	// XXX check for dead and return orig?
 	orig.Refdown("fs_link_orig")
-	return dead, 0
+	return deads, 0
 undo:
 	orig.ilock("fs_link_undo")
 	orig._linkdown(opid)
 	del := orig.iunlock_refdown("fs_link_undo")
 	if del {
-		dead = orig
+		deads = append(deads, orig)
 	}
-	return dead, err
+	return deads, err
 }
 
 func (fs *Fs_t) Fs_link(old ustr.Ustr, new ustr.Ustr, cwd *fd.Cwd_t) defs.Err_t {
-	dead, err := fs.Fs_op_link(old, new, cwd)
-	if dead != nil {
+	deads, err := fs.Fs_op_link(old, new, cwd)
+	for _, dead := range deads {
 		dead.Free()
 	}
 	return err
@@ -203,12 +211,11 @@ func (fs *Fs_t) Fs_op_unlink(paths ustr.Ustr, cwd *fd.Cwd_t, wantdir bool) (*ime
 		fmt.Printf("fs_unlink: %v cwd %v dir? %v\n", paths, cwd, wantdir)
 	}
 
-	var dead *imemnode_t
 	var child *imemnode_t
 	var par *imemnode_t
 	var err defs.Err_t
 
-	par, err = fs.fs_namei_locked(opid, dirs, cwd, "fs_unlink_par")
+	par, dead, err := fs.fs_namei_locked(opid, dirs, cwd, "fs_unlink_par")
 	if err != 0 {
 		return dead, err
 	}
@@ -280,16 +287,18 @@ func (fs *Fs_t) Fs_unlink(paths ustr.Ustr, cwd *fd.Cwd_t, wantdir bool) defs.Err
 // per-volume rename mutex. Linux does it so it must be OK!
 var _renamelock = sync.Mutex{}
 
-func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t, defs.Err_t) {
+// first return value is inodes to refdown, second return is inode which needs
+// to be freed...
+func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t, *imemnode_t, defs.Err_t) {
 	odirs, ofn := bpath.Sdirname(oldp)
 	ndirs, nfn := bpath.Sdirname(newp)
 	var refs []*imemnode_t
 
 	if err, ok := crname(ofn, -defs.EINVAL); !ok {
-		return refs, err
+		return refs, nil, err
 	}
 	if err, ok := crname(nfn, -defs.EINVAL); !ok {
-		return refs, err
+		return refs, nil, err
 	}
 
 	opid := fs.fslog.Op_begin("fs_rename")
@@ -308,28 +317,23 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	// lookup all inode references, but we will release locks and lock them
 	// together when we know all references.  the references to the inodes
 	// cannot disppear, so unlocking temporarily is fine.
-	opar, err := fs.fs_namei_locked(opid, odirs, cwd, "fs_rename_opar")
+	opar, dead, err := fs.fs_namei_locked(opid, odirs, cwd, "fs_rename_opar")
 	if err != 0 {
-		return refs, err
+		return refs, dead, err
 	}
 
 	ochild, err := opar.ilookup(opid, ofn)
 	if err != 0 {
 		opar.iunlock_refdown("fs_rename_opar")
-		return refs, err
+		return refs, nil, err
 	}
 
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
 
-	npar, err := fs.fs_namei_locked(opid, ndirs, cwd, "")
+	npar, dead, err := fs.fs_namei_locked(opid, ndirs, cwd, "")
 	if err != 0 {
-		// XXX don't have to check dead because opar contains ochild and
-		// we have lock on opar
-		// XXX XXX must check dead here, above, and below
-		opar.Refdown("fs_rename_opar")
-		ochild.Refdown("fs_rename_ochild")
-		return refs, err
+		return []*imemnode_t{opar, ochild}, dead, err
 	}
 
 	// _isancestor unlocks npar during the walk. verify that ochild is not
@@ -343,7 +347,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 		opar.Refdown("fs_rename_opar")
 		ochild.Refdown("fs_rename_ochild")
 		npar.Refdown("fs_rename_npar")
-		return refs, err
+		return refs, nil, err
 	}
 
 	var nchild *imemnode_t
@@ -354,7 +358,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 		if !res.Resadd_noblock(gimme) {
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
-			return refs, -defs.ENOHEAP
+			return refs, nil, -defs.ENOHEAP
 		}
 		npar.ilock("")
 		nchild, err = npar.ilookup(opid, nfn)
@@ -362,7 +366,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 			opar.Refdown("fs_name_opar")
 			ochild.Refdown("fs_name_ochild")
 			npar.iunlock_refdown("fs_name_npar")
-			return refs, err
+			return refs, nil, err
 		}
 		npar.iunlock("")
 
@@ -384,10 +388,10 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 		// have modified the tree.
 		ok, err := opar.ilookup_validate(opid, ofn, ochild)
 		if err != 0 {
-			return refs, err
+			return refs, nil, err
 		}
 		if !ok {
-			return refs, -defs.ENOENT
+			return refs, nil, -defs.ENOENT
 		}
 		if nchild == nil {
 			childi, err := npar.ilookup(opid, nfn)
@@ -427,20 +431,20 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 
 	// if src and dst are the same file, we are done
 	if nchild != nil && ochild.inum == nchild.inum {
-		return refs, 0
+		return refs, nil, 0
 	}
 
 	// guarantee that any page allocations will succeed before starting the
 	// operation, which will be messy to piece-wise undo.
 	b1, err := npar.probe_insert(opid)
 	if err != 0 {
-		return refs, err
+		return refs, nil, err
 	}
 	defer fs.fslog.Relse(b1, "probe_insert")
 
 	b2, err := opar.probe_unlink(opid, ofn)
 	if err != 0 {
-		return refs, err
+		return refs, nil, err
 	}
 	defer fs.fslog.Relse(b2, "probe_unlink_opar")
 
@@ -448,7 +452,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	if odir {
 		b3, err := ochild.probe_unlink(opid, ustr.DotDot)
 		if err != 0 {
-			return refs, err
+			return refs, nil, err
 		}
 		defer fs.fslog.Relse(b3, "probe_unlink_ochild")
 	}
@@ -457,12 +461,12 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 		// make sure old and new are either both files or both
 		// directories
 		if err := nchild.do_dirchk(opid, odir); err != 0 {
-			return refs, err
+			return refs, nil, err
 		}
 
 		// remove pre-existing new
 		if err = npar.do_unlink(opid, nfn); err != 0 {
-			return refs, err
+			return refs, nil, err
 		}
 		nchild._linkdown(opid)
 
@@ -486,16 +490,19 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 			panic("insert after unlink must succeed")
 		}
 	}
-	return refs, 0
+	return refs, nil, 0
 }
 
 func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) defs.Err_t {
-	refs, err := fs.Fs_op_rename(oldp, newp, cwd)
+	refs, dead, err := fs.Fs_op_rename(oldp, newp, cwd)
 	for _, r := range refs {
 		del := r.Refdown("Fs_rename")
 		if del {
 			r.Free()
 		}
+	}
+	if dead != nil {
+		dead.Free()
 	}
 	return err
 }
@@ -1213,6 +1220,15 @@ func (raw *rawdfops_t) Shutdown(read, write bool) defs.Err_t {
 }
 
 func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
+	dead, err := fs.Fs_op_mkdir(paths, mode, cwd)
+	if dead != nil {
+		dead.Free()
+	}
+	return err
+}
+
+// returns dead inode and error
+func (fs *Fs_t) Fs_op_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("fs_mkdir")
 	defer fs.fslog.Op_end(opid)
 
@@ -1224,23 +1240,25 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
 
 	dirs, fn := bpath.Sdirname(paths)
 	if err, ok := crname(fn, -defs.EINVAL); !ok {
-		return err
+		return nil, err
 	}
 	if len(fn) > DNAMELEN {
-		return -defs.ENAMETOOLONG
+		return nil, -defs.ENAMETOOLONG
 	}
 
-	par, err := fs.fs_namei_locked(opid, dirs, cwd, "mkdir")
+	par, dead, err := fs.fs_namei_locked(opid, dirs, cwd, "mkdir")
 	if err != 0 {
-		return err
+		return dead, err
 	}
-	// XXX must check dead if create below fails
-	defer par.iunlock_refdown("fs_mkdir_par")
 
 	child, err := par.do_createdir(opid, fn)
 	if err != 0 {
-		return err
+		if par.iunlock_refdown("fs_mkdir_par") {
+			dead = par
+		}
+		return dead, err
 	}
+	defer par.iunlock_refdown("fs_mkdir_par")
 	// cannot deadlock since par is locked and concurrent lookup must lock
 	// par to get a handle to child
 	child.ilock("")
@@ -1249,7 +1267,7 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
 	child.do_insert(opid, ustr.MkUstrDot(), child.inum)
 	child.do_insert(opid, ustr.DotDot, par.inum)
 	child.Refdown("fs_mkdir")
-	return 0
+	return nil, 0
 }
 
 // a type to represent on-disk files
@@ -1260,6 +1278,15 @@ type Fsfile_t struct {
 }
 
 func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (Fsfile_t, defs.Err_t) {
+	ret, dead, err := fs._fs_open_inner(paths, flags, mode, cwd, major, minor)
+	if dead != nil {
+		dead.Free()
+	}
+	return ret, err
+}
+
+// returns the file, a dead inode (non-nil only on error) and error
+func (fs *Fs_t) _fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd *fd.Cwd_t, major, minor int) (Fsfile_t, *imemnode_t, defs.Err_t) {
 	trunc := flags&defs.O_TRUNC != 0
 	creat := flags&defs.O_CREAT != 0
 	nodir := false
@@ -1284,18 +1311,17 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 		// must specify at least one path component
 		dirs, fn := bpath.Sdirname(paths)
 		if err, ok := crname(fn, -defs.EEXIST); !ok {
-			return ret, err
+			return ret, nil, err
 		}
 
 		if len(fn) > DNAMELEN {
-			return ret, -defs.ENAMETOOLONG
+			return ret, nil, -defs.ENAMETOOLONG
 		}
 
 		// with O_CREAT, the file may exist.
-		par, err := fs.fs_namei_locked(opid, dirs, cwd, "Fs_open_inner")
-		// XXX fail if par.links == 0
+		par, dead, err := fs.fs_namei_locked(opid, dirs, cwd, "Fs_open_inner")
 		if err != 0 {
-			return ret, err
+			return ret, dead, err
 		}
 		if isdev {
 			idm, err = par.do_createnod(opid, fn, major, minor)
@@ -1305,7 +1331,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 		if err != 0 && err != -defs.EEXIST {
 			// XXX must check dead
 			par.iunlock_refdown("Fs_open_inner_par")
-			return ret, err
+			return ret, nil, err
 		}
 		exists := err == -defs.EEXIST
 		par.iunlock_refdown("Fs_open_inner_par")
@@ -1315,15 +1341,16 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 		if exists {
 			if oexcl || isdev {
 				idm.iunlock_refdown("Fs_open_inner2")
-				return ret, -defs.EEXIST
+				return ret, nil, -defs.EEXIST
 			}
 		}
 	} else {
 		// open existing file
 		var err defs.Err_t
-		idm, err = fs.fs_namei_locked(opid, paths, cwd, "Fs_open_inner_existing")
+		var dead *imemnode_t
+		idm, dead, err = fs.fs_namei_locked(opid, paths, cwd, "Fs_open_inner_existing")
 		if err != 0 {
-			return ret, err
+			return ret, dead, err
 		}
 		// idm is locked
 	}
@@ -1341,10 +1368,10 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 	// be opened with O_DIRECTORY
 	if o_dir || nodir {
 		if o_dir && itype != I_DIR {
-			return ret, -defs.ENOTDIR
+			return ret, nil, -defs.ENOTDIR
 		}
 		if nodir && itype == I_DIR {
-			return ret, -defs.EISDIR
+			return ret, nil, -defs.EISDIR
 		}
 	}
 
@@ -1357,7 +1384,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 	ret.Inum = idm.inum
 	ret.Major = idm.major
 	ret.Minor = idm.minor
-	return ret, 0
+	return ret, nil, 0
 }
 
 func (fs *Fs_t) Makefake() *fd.Fd_t {
@@ -1452,8 +1479,11 @@ func (fs *Fs_t) Fs_stat(path ustr.Ustr, st *stat.Stat_t, cwd *fd.Cwd_t) defs.Err
 	if fs_debug {
 		fmt.Printf("fstat: %v %v\n", path, cwd)
 	}
-	idm, err := fs.fs_namei_locked(opid, path, cwd, "Fs_stat")
+	idm, dead, err := fs.fs_namei_locked(opid, path, cwd, "Fs_stat")
 	if err != 0 {
+		if dead != nil {
+			dead.Free()
+		}
 		return err
 	}
 	err = idm.do_stat(st)
@@ -1575,12 +1605,7 @@ func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*
 	return idm, nil, 0
 }
 
-func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, defs.Err_t) {
-	a, _, b := fs._fs_namei_locked(opid, paths, cwd)
-	return a, b
-}
-
-func (fs *Fs_t) fs_namei_locked_new(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, *imemnode_t, defs.Err_t) {
+func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, *imemnode_t, defs.Err_t) {
 	return fs._fs_namei_locked(opid, paths, cwd)
 }
 

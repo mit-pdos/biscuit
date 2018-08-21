@@ -820,6 +820,7 @@ func (idm *imemnode_t) create_undo(opid opid_t, childi defs.Inum_t, childn ustr.
 }
 
 func (idm *imemnode_t) icreate(opid opid_t, name ustr.Ustr, nitype, major, minor int) (*imemnode_t, defs.Err_t) {
+	// XXX XXX fail if links == 0
 	if !idm._amlocked {
 		panic("lsjdf")
 	}
