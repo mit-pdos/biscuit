@@ -665,9 +665,6 @@ func (fo *fsfops_t) Fstat(st *stat.Stat_t) defs.Err_t {
 	return fo.fstat(st)
 }
 
-// XXX log those files that have no fs links but > 0 memory references to the
-// journal so that if we crash before freeing its blocks, the blocks can be
-// reclaimed.
 func (fo *fsfops_t) Close() defs.Err_t {
 	fo.Lock()
 	//defer fo.Unlock()
@@ -1229,7 +1226,7 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
 	defer child.iunlock("")
 
 	child.do_insert(opid, ustr.MkUstrDot(), child.inum)
-	child.do_insert(opid, ustr.MkUstrDotDot(), par.inum)
+	child.do_insert(opid, ustr.DotDot, par.inum)
 	child.Refdown("fs_mkdir")
 	return 0
 }
@@ -1275,6 +1272,7 @@ func (fs *Fs_t) Fs_open_inner(paths ustr.Ustr, flags defs.Fdopt_t, mode int, cwd
 
 		// with O_CREAT, the file may exist.
 		par, err := fs.fs_namei_locked(opid, dirs, cwd, "Fs_open_inner")
+		// XXX fail if par.links == 0
 		if err != 0 {
 			return ret, err
 		}
@@ -1466,89 +1464,108 @@ func (fs *Fs_t) Fs_syncapply() defs.Err_t {
 }
 
 // if the path resolves successfully, returns target inode with incremented
-// refcount and unlocked. in most cases, the caller must be prepared to free
-// the returned imemnode after calling Refdown.
-func (fs *Fs_t) fs_namei(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
+// refcount and locked. the caller must always be prepared to free the returned
+// imemnode after calling Refdown. since the slow path acquires locks on
+// inodes, the caller must not have any other inode locked, otherwise namei may
+// deadlock.
+func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
+	// ref lookup directory
 	if len(paths) == 0 || paths[0] != '/' {
 		start = fs.icache.Iref(cwd.Fd.Fops.Pathi(), "fs_namei_cwd")
 	} else {
 		start = fs.IrefRoot()
 	}
 	idm := start
-	err := defs.Err_t(0)
-	pp := bpath.Pathparts_t{}
-	pp.Pp_init(paths)
+	var fps bpath.Pathparts_t
+	var sps bpath.Pathparts_t
+	fps.Pp_init(paths)
+	sps.Pp_init(paths)
 	var next ustr.Ustr
 	var nextok bool
-	first := true
-	for cp, ok := pp.Next(); ok; cp, ok, first = next, nextok, false {
-		// except for "start" on the first iteration, no imemnode's
-		// refcount is incremented at the beginning of this loop
+	// lock-free fast path
+	for cp, ok := fps.Next(); ok; cp, ok = next, nextok {
+		// "start" is the only imemnode whose refcount is incremented
 		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
-			if first && !start.Refdown("") {
+			if start.Refdown("") {
 				panic("fixme cwd unlinked")
 			}
 			return nil, -defs.ENOHEAP
 		}
-		next, nextok = pp.Next()
+		// make sure slow path continues on this component if the
+		// lock-free lookup fails
+		next, nextok = fps.Next()
 		lastc := !nextok
 		n, found := idm.ilookup_lockfree(cp, lastc)
-		if found && first {
+		if !found {
+			break
+		}
+		sps.Next()
+		idm = n
+		if !lastc {
+			continue
+		} else {
+			if start.Refdown("") {
+				panic("fixme")
+			}
+			idm.ilock("")
+			// ilookup_lockfree referenced idm without locking its
+			// parent, thus we may have increased the refcount of a
+			// concurrently-unlinked inode. make sure the inode
+			// hasn't been unlinked.
+			if idm.links != 0 {
+				return idm, 0
+			}
+			// may have been freed; fallback to slow path
+			if idm.iunlock_refdown("") {
+				panic("fixme")
+			}
+		}
+	}
+	if idm != start {
+		// continue from idm
+		if _, ok := idm.Refup(""); ok {
+			if start.Refdown("") {
+				panic("fixme")
+			}
+		} else {
+			// couldn't ref idm; restart completely
+			idm = start
+			sps.Pp_init(paths)
+		}
+	}
+
+	// lock-full slow path
+	for cp, ok := sps.Next(); ok; cp, ok = next, nextok {
+		next, nextok = sps.Next()
+
+		idm.ilock("fs_namei")
+		n, err := idm.ilookup(opid, cp)
+		if err != 0 {
+			if idm.iunlock_refdown("") {
+				panic("fixme")
+			}
+			return nil, err
+		}
+		// ilookup always increments the refcnt, even on "."
+		if idm.iunlock_refdown("fs_namei_idm") {
+			panic("fixme")
+		}
+		idm = n
+		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
 			if idm.Refdown("") {
 				panic("fixme")
 			}
+			return nil, -defs.ENOHEAP
 		}
-		//var n *imemnode_t
-		//found := false
-		if !found {
-			// on failure do locked lookup
-			if !first {
-				// XXX check result of Refup and, on failure,
-				// start over again
-				if _, ok := idm.Refup("fs_namei"); !ok {
-					panic("fixme")
-				}
-			}
-			idm.ilock("fs_namei")
-			n, err = idm.ilookup(opid, cp)
-			if err != 0 {
-				if idm.iunlock_refdown("") {
-					panic("fixme")
-				}
-				return nil, err
-			}
-			// ilookup incremented n's refcount which the fastpath
-			// above will not undo; undo it here
-			if !lastc {
-				if n.Refdown("") {
-					panic("cannot die")
-				}
-			}
-			idm.iunlock("fs_namei")
-			// ilookup always increments the refcnt, even on "."
-			if idm.Refdown("fs_namei_idm") {
-				panic("fixme")
-			}
-		}
-		// n may have been deleted from dcache and icache, but namei()
-		// just reads value from this inode. The inode won't have been
-		// GC-ed so it has values. It is ok to read stale values,
-		// because namei() makes sure that it has a valid reference to
-		// the target inode.
-		idm = n
 	}
+	idm.ilock("")
 	return idm, 0
 }
 
 func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, defs.Err_t) {
-	idm, err := fs.fs_namei(opid, paths, cwd)
-	if err != 0 {
-		return nil, err
-	}
-	idm.ilock("/fs_namei_locked")
-	return idm, 0
+	return fs._fs_namei_locked(opid, paths, cwd)
 }
 
 func (fs *Fs_t) Fs_evict() (int, int) {

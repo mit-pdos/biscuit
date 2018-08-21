@@ -1,6 +1,5 @@
 package fs
 
-import "container/list"
 import "fmt"
 import "sync"
 import "sort"
@@ -200,19 +199,11 @@ type imemnode_t struct {
 		// dents dc_rbh_t
 		freel fdelist_t
 	}
-	// list of dcaches this inode appears in
-	dcache_list *list.List
 }
 
 func (idm *imemnode_t) String() string {
 	s := ""
-	s += fmt.Sprintf("[inum %d type %d (", idm.inum, idm.itype)
-	s += fmt.Sprintf("dcache_list: ")
-	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
-		dei := e.Value.(*de_inode_t)
-		s += fmt.Sprintf("%d %s", dei.parent.inum, dei.de)
-	}
-	s += fmt.Sprintf(")]")
+	s += fmt.Sprintf("[inum %d type %d]\n", idm.inum, idm.itype)
 	return s
 }
 
@@ -235,20 +226,6 @@ type de_inode_t struct {
 	de     *icdent_t
 }
 
-func (idm *imemnode_t) add_dcachelist(parent *imemnode_t, de *icdent_t) {
-	dei := &de_inode_t{parent, de}
-	idm.dcache_list.PushBack(dei)
-}
-
-func (idm *imemnode_t) del_dcachelist(inum defs.Inum_t) {
-	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
-		dei := e.Value.(*de_inode_t)
-		if dei.parent.inum == inum {
-			idm.dcache_list.Remove(e)
-		}
-	}
-}
-
 // Remove idm from other inode's cache and delete its dcache. This causes the
 // refcnt of this inode to maybe drop to 0, and it will be truly evicted (i.e.,
 // removed from icache).
@@ -256,12 +233,7 @@ func (idm *imemnode_t) evictDcache() {
 	if fs_debug {
 		fmt.Printf("evictDcache: %v\n", idm)
 	}
-	for e := idm.dcache_list.Front(); e != nil; e = e.Next() {
-		dei := e.Value.(*de_inode_t)
-		// XXX lock parent?
-		dei.parent._deremove_dent(dei.de)
-	}
-	idm.dcache_list = list.New()
+	idm.dentc.haveall = false
 	idm._derelease()
 }
 
@@ -279,9 +251,10 @@ func (idm *imemnode_t) EvictDone() {
 
 func (idm *imemnode_t) Free() {
 	// no need to lock...
-	if idm.links == 0 {
-		idm.ifree()
+	if idm.links != 0 {
+		panic("non-zero links")
 	}
+	idm.ifree()
 }
 
 func (idm *imemnode_t) ilock(s string) {
@@ -1373,7 +1346,6 @@ func (icache *icache_t) _iref(inum defs.Inum_t, fill bool, lock bool) *imemnode_
 		ret.fs = icache.fs
 		ret.ref = ref
 		ret.inum = inum
-		ret.dcache_list = list.New()
 		if fill {
 			ret.idm_init(inum)
 		}

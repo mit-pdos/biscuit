@@ -351,15 +351,6 @@ func (idm *imemnode_t) _deempty(opid opid_t) (bool, defs.Err_t) {
 func (idm *imemnode_t) _derelease() int {
 	dc := &idm.dentc
 	dc.haveall = false
-	if dc.dents != nil {
-		elems := dc.dents.Elems()
-		for _, v := range elems {
-			de := v.Value.(*icdent_t)
-			if de.idm != nil {
-				de.idm.Refdown("_derelease")
-			}
-		}
-	}
 	dc.dents = nil
 	dc.freel.head = nil
 	ret := dc.max
@@ -466,21 +457,23 @@ func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, defs.E
 		return nil, err
 	}
 	if de.idm == nil {
+		var im *imemnode_t
 		if name.Isdot() {
-			de.idm = idm
-			de.idm.add_dcachelist(idm, de)
-		} else if name.Isdotdot() {
-			// the caller has parent locked
-			de.idm = idm.fs.icache.Iref(de.inum, "ilookup")
-			de.idm.add_dcachelist(idm, de)
+			im = idm
+			if _, ok := im.Refup(""); !ok {
+				panic("parent reffed, must be in icache")
+			}
 		} else {
-			i := idm.fs.icache.Iref_locked(de.inum, "ilookup")
+			im = idm.fs.icache.Iref(de.inum, "ilookup")
+		}
+		atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)), unsafe.Pointer(im))
+	} else {
+		if _, ok := de.idm.Refup("ilookup"); !ok {
+			// target imemnode was evicted
+			i := idm.fs.icache.Iref(de.inum, "ilookup")
 			atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)), unsafe.Pointer(i))
-			de.idm.add_dcachelist(idm, de)
-			de.idm.iunlock("ilookup")
 		}
 	}
-	de.idm.Refup("ilookup")
 	return de.idm, 0
 }
 
@@ -506,32 +499,28 @@ func (idm *imemnode_t) ilookup_validate(opid opid_t, name ustr.Ustr, child *imem
 // deal with stale inodes (and, in particular, never update it).  If refup is
 // true, then lookup will return an inode that is guaranteed to be fresh.  For
 // this case, there are two potential races to consider: 1) an unlink removes
-// the entry from dcache; 2) evict removes the inode from the inode cache.  An
-// unlink decreases the refence count of the inode in the icache, and
-// ilookup_lockfree will conservatively fail if it discovers the old refcount
-// was zero.  On eviction, the refcnt is marked as being deleted, and Refup will
-// return false and ilookup_lockfree will fail.
+// the entry from dcache; 2) evict removes the inode from the inode cache.  For
+// unlink, lock-free namei will check the link count after locking the inode
+// and fail if the file was unlinked. On eviction, the refcnt is marked as
+// being deleted, and Refup will return false and ilookup_lockfree will fail.
 func (idm *imemnode_t) ilookup_lockfree(name ustr.Ustr, refup bool) (*imemnode_t, bool) {
-	if idm.dentc.dents == nil {
+	yay := (*unsafe.Pointer)(unsafe.Pointer(&idm.dentc.dents))
+	dc := (*hashtable.Hashtable_t)(atomic.LoadPointer(yay))
+	if dc == nil {
 		return nil, false
 	}
-	if e, ok := idm.dentc.dents.Get(name); ok {
+	if e, ok := dc.Get(name); ok {
 		de := e.(*icdent_t)
 		p := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&de.idm)))
 		v := (*imemnode_t)(p)
 		if v == nil {
 			return nil, false
 		}
+		ok := true
 		if refup {
-			old, ok := v.Refup("ilookup_lockfree")
-			if !ok || old == 0 {
-				if ok {
-					v.Refdown("ilookup_lockfree")
-				}
-				return nil, false
-			}
+			_, ok = v.Refup("")
 		}
-		return v, true
+		return v, ok
 	}
 	return nil, false
 }
@@ -561,11 +550,6 @@ func (idm *imemnode_t) iunlink(opid opid_t, name ustr.Ustr) (defs.Inum_t, defs.E
 	de, err := idm._deremove(opid, name)
 	if err != 0 {
 		return 0, err
-	}
-	if de.idm != nil {
-		// caller must have child inode locked
-		de.idm.del_dcachelist(idm.inum)
-		de.idm.Refdown("iunlink")
 	}
 	return de.inum, 0
 }
