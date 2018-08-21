@@ -514,7 +514,7 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) defs.Err_t {
 	if anc.inum == iroot {
 		panic("root is always ancestor")
 	}
-	if start.inum == iroot {
+	if start == fs.root {
 		start.iunlock("")
 		return 0
 	}
@@ -530,6 +530,9 @@ func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) defs.Err_t {
 			// _isancestor returns at most one dead inode
 			if here.Refdown("") {
 				panic("fixme")
+			}
+			if here == start {
+				start.iunlock("")
 			}
 			return -defs.ENOHEAP
 		}

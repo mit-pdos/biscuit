@@ -233,7 +233,6 @@ func (idm *imemnode_t) evictDcache() {
 	if fs_debug {
 		fmt.Printf("evictDcache: %v\n", idm)
 	}
-	idm.dentc.haveall = false
 	idm._derelease()
 }
 
