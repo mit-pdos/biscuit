@@ -322,8 +322,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	// unlock par after we have ref to child
 	opar.iunlock("fs_rename_par")
 
-	// XXX must verify that npar links are non-zero?
-	npar, err := fs.fs_namei(opid, ndirs, cwd)
+	npar, err := fs.fs_namei_locked(opid, ndirs, cwd, "")
 	if err != 0 {
 		// XXX don't have to check dead because opar contains ochild and
 		// we have lock on opar
@@ -333,12 +332,12 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 		return refs, err
 	}
 
-	// verify that ochild is not an ancestor of npar, since we would
-	// disconnect ochild subtree from root.  it is safe to do without
-	// holding locks because unlink cannot modify the path to the root by
-	// removing a directory because the directories aren't empty.  it could
-	// delete npar and an ancestor, but rename has already a reference to to
-	// npar.
+	// _isancestor unlocks npar during the walk. verify that ochild is not
+	// an ancestor of npar, since we would disconnect ochild subtree from
+	// root.  it is safe to do without holding locks because unlink cannot
+	// modify the path to the root by removing a directory because the
+	// directories aren't empty.  it could delete npar and an ancestor, but
+	// rename has already a reference to to npar.
 	if err = fs._isancestor(opid, ochild, npar); err != 0 {
 		// XXX no need to check dead?
 		opar.Refdown("fs_rename_opar")
@@ -447,7 +446,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 
 	odir := ochild.itype == I_DIR
 	if odir {
-		b3, err := ochild.probe_unlink(opid, ustr.MkUstrDotDot())
+		b3, err := ochild.probe_unlink(opid, ustr.DotDot)
 		if err != 0 {
 			return refs, err
 		}
@@ -479,7 +478,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 
 	// update '..'
 	if odir {
-		dotdot := ustr.MkUstrDotDot()
+		dotdot := ustr.DotDot
 		if ochild.do_unlink(opid, dotdot) != 0 {
 			panic("probed")
 		}
@@ -501,38 +500,60 @@ func (fs *Fs_t) Fs_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) defs.Err_t {
 	return err
 }
 
-// anc and start are in memory
+// returns an error if anc is an ancestor directory of directory start. anc and
+// start are reffed, but only start is locked. _isancestor unlocks start before
+// returning.
 func (fs *Fs_t) _isancestor(opid opid_t, anc, start *imemnode_t) defs.Err_t {
 	if anc.inum == iroot {
 		panic("root is always ancestor")
 	}
+	if start.inum == iroot {
+		start.iunlock("")
+		return 0
+	}
+	if _, ok := start.Refup(""); !ok {
+		panic("start must have been reffed; cannot be removed")
+	}
 	// walk up to iroot
 	here := start
-	here.Refup("_isancestor")
 	gimme := bounds.Bounds(bounds.B_FS_T__ISANCESTOR)
 	for here != fs.root {
 		if !res.Resadd_noblock(gimme) {
+			// XXX on dead, return error and dead inode so that
+			// _isancestor returns at most one dead inode
+			if here.Refdown("") {
+				panic("fixme")
+			}
 			return -defs.ENOHEAP
 		}
 		if anc.inum == here.inum {
-			here.Refdown("_isancestor_here")
+			if here.Refdown("") {
+				panic("fixme")
+			}
 			return -defs.EINVAL
 		}
-		here.ilock("_isancestor")
-		next, err := here.ilookup(opid, ustr.MkUstrDotDot())
+		// start is already locked
+		if here != start {
+			here.ilock("_isancestor")
+		}
+		next, err := here.ilookup(opid, ustr.DotDot)
 		if err != 0 {
-			here.iunlock("_isancestor")
+			if here.iunlock_refdown("_isancestor") {
+				panic("fixme")
+			}
 			return err
 		}
 		if next.inum == here.inum {
-			here.iunlock("_isancestor")
-			panic("xxx")
-		} else {
-			here.iunlock_refdown("_isancestor")
-			here = next
+			panic(".. cannot ref self")
 		}
+		if here.iunlock_refdown("_isancestor") {
+			panic("fixme")
+		}
+		here = next
 	}
-	here.Refdown("_isancestor")
+	if here.Refdown("_isancestor") {
+		panic("root cannot be unlinked")
+	}
 	return 0
 }
 
