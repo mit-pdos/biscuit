@@ -471,6 +471,8 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *Bdev_block_t, orde
 	if ordered && lp {
 		log.stats.Nlogwrite2order++
 		trans.logged.RemoveBlock(blk.Block)
+		// this block is already referenced once, remove caller's refup
+		log.ml.bcache.Relse(blk, "")
 		delete(trans.logpresent, blk.Block)
 	}
 
@@ -479,6 +481,8 @@ func (trans *trans_t) add_write(opid opid_t, log *log_t, blk *Bdev_block_t, orde
 	if !ordered && op {
 		log.stats.Norder2logwrite++
 		trans.ordered.RemoveBlock(blk.Block)
+		// this block is already referenced once, remove caller's refup
+		log.ml.bcache.Relse(blk, "")
 		delete(trans.orderedpresent, blk.Block)
 	}
 
