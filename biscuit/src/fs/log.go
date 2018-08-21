@@ -574,12 +574,10 @@ func (trans *trans_t) copylogged(ml *memlog_t) {
 		l.Block = b.Block
 		copy(l.Data[:], b.Data[:])
 		i += 1
-		ml.bcache.Relse(b, "copylogged")
 	})
 	if i != trans.head {
 		panic("copylogged")
 	}
-	trans.logged.Delete()
 }
 
 func (trans *trans_t) write_ordered(ml *memlog_t) {
@@ -944,6 +942,8 @@ func (log *log_t) apply(tail, head index_t) index_t {
 		return head
 	}
 
+	 // no need to iterate over tail itself since it is a CommitBlk, which
+	 // doesn't need to be installed.
 	for i := head - 1; i > tail; i-- {
 		l := log.ml.getmemlog(i)
 		if l.Type == CommitBlk || l.Type == RevokeBlk || l.Type == Canceled {
@@ -962,6 +962,16 @@ func (log *log_t) apply(tail, head index_t) index_t {
 	s := stats.Rdtsc()
 	log.ml.flush() // flush apply
 	log.ml.stats.Flushapplydatacycles.Add(s)
+
+	for _, t := range log.translog.trans {
+		if t.head > head {
+			break
+		}
+		t.logged.Apply(func (blk *Bdev_block_t) {
+			log.ml.bcache.Relse(blk, "")
+		})
+		t.logged.Delete()
+	}
 
 	log.ml.commit_tail(head)
 
