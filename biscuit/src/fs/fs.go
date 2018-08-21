@@ -1223,6 +1223,11 @@ func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
 	if err != 0 {
 		return err
 	}
+	// cannot deadlock since par is locked and concurrent lookup must lock
+	// par to get a handle to child
+	child.ilock("")
+	defer child.iunlock("")
+
 	child.do_insert(opid, ustr.MkUstrDot(), child.inum)
 	child.do_insert(opid, ustr.MkUstrDotDot(), par.inum)
 	child.Refdown("fs_mkdir")

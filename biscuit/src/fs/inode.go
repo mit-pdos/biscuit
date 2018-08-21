@@ -840,6 +840,9 @@ func (idm *imemnode_t) create_undo(opid opid_t, childi defs.Inum_t, childn ustr.
 }
 
 func (idm *imemnode_t) icreate(opid opid_t, name ustr.Ustr, nitype, major, minor int) (*imemnode_t, defs.Err_t) {
+	if !idm._amlocked {
+		panic("lsjdf")
+	}
 
 	if nitype <= I_INVALID || nitype > I_VALID {
 		panic("bad itype!")

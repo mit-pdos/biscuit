@@ -186,6 +186,9 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, defs.Err_t) {
 
 // if _deinsert fails to allocate a page, idm is left unchanged.
 func (idm *imemnode_t) _deinsert(opid opid_t, name ustr.Ustr, inum defs.Inum_t) defs.Err_t {
+	if !idm._amlocked {
+		panic("laksdj")
+	}
 	noff, err := idm._denextempty(opid)
 	if err != 0 {
 		return err
@@ -215,6 +218,9 @@ func (idm *imemnode_t) _deinsert(opid opid_t, name ustr.Ustr, inum defs.Inum_t) 
 // or it has been called on all directory entries. _descan returns true if f
 // returned true.
 func (idm *imemnode_t) _descan(opid opid_t, f func(fn ustr.Ustr, de *icdent_t) bool) (bool, defs.Err_t) {
+	if !idm._amlocked {
+		panic("lsjdf")
+	}
 	found := false
 	for i := 0; i < idm.size; i += BSIZE {
 		if !res.Resadd_noblock(bounds.Bounds(bounds.B_IMEMNODE_T__DESCAN)) {
@@ -241,6 +247,9 @@ func (idm *imemnode_t) _descan(opid opid_t, f func(fn ustr.Ustr, de *icdent_t) b
 }
 
 func (idm *imemnode_t) _delookup(opid opid_t, fn ustr.Ustr) (*icdent_t, defs.Err_t) {
+	if !idm._amlocked {
+		panic("lsjdf")
+	}
 	if len(fn) == 0 {
 		panic("bad lookup")
 	}
@@ -445,9 +454,8 @@ func (idm *imemnode_t) probe_unlink(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, d
 	return b, 0
 }
 
-// if ilookup succeeds, it increments the refcount of the target imemnode and
-// returns it unlocked, even for "." and ".." (but refcount for "." is not
-// increased when inserted into the dcache)
+// idm must be locked. if ilookup succeeds, it increments the refcount of the
+// target imemnode and returns it unlocked (even for ".")
 func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, defs.Err_t) {
 	// did someone confuse a file with a directory?
 	if idm.itype != I_DIR {
