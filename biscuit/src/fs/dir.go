@@ -170,8 +170,8 @@ func (idm *imemnode_t) _denextempty(opid opid_t) (int, defs.Err_t) {
 		return 0, err
 	}
 	newoff := idm.size
-	// start from 1 since we return slot 0 directly
-	for i := 1; i < NDIRENTS; i++ {
+	// skip 0 since we will allocate it immediately
+	for i := NDIRENTS - 1; i > 0; i-- {
 		noff := newoff + NDBYTES*i
 		idm._deaddempty(noff)
 	}
