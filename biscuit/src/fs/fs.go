@@ -1555,9 +1555,9 @@ func (fs *Fs_t) Fs_evict() (int, int) {
 	if !fs.diskfs {
 		panic("no evict")
 	}
-	fmt.Printf("FS EVICT\n")
-	fs.bcache.cache.Evict_half()
-	fs.icache.cache.Evict_half()
+	_, a := fs.bcache.cache.Evict_half()
+	_, b := fs.icache.cache.Evict_half()
+	fmt.Printf("FS EVICT blk %v imem %v\n", a, b)
 	return fs.Sizes()
 }
 

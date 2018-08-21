@@ -191,6 +191,7 @@ func (ht *Hashtable_t) Set(key interface{}, value interface{}) (interface{}, boo
 	return value, true
 }
 
+// returns true if the key was removed
 func (ht *Hashtable_t) Del(key interface{}) {
 	kh := khash(key)
 	b := ht.table[ht.hash(kh)]

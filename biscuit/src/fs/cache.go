@@ -68,7 +68,14 @@ func (ref *Objref_t) Up() (uint32, bool) {
 		if REMOVE&v != 0 {
 			return 0, false
 		}
+		if int(int32(v)) < 0 {
+			//fmt.Printf("%v %#x\n", v, v)
+			panic("no")
+		}
 		if atomic.CompareAndSwapUint32(&ref.refcnt, v, v+1) {
+			//if res.Kernel && v != REMOVE && v+1 > 101 {
+			//	panic("wtlaskjfd")
+			//}
 			return v, true
 		}
 	}
@@ -145,6 +152,17 @@ func (c *cache_t) Lookup(key int, mkobj func(int) Obj_t) (*Objref_t, bool) {
 // Note remove can fail, because a concurrent lookup resurrects the refcnt (or
 // the refcnt is already larger than 0).
 func (c *cache_t) Remove(key int) bool {
+	return c._remove(key, true)
+}
+
+// Eviction may try to evict an entry that has since been deleted from the
+// cache. We could instead CAS to add REMOVE immediately and then delete on
+// success, but this is fine.
+func (c *cache_t) TryRemove(key int) bool {
+	return c._remove(key, false)
+}
+
+func (c *cache_t) _remove(key int, mustexist bool) bool {
 	if v, ok := c.cache.Get(key); ok {
 		e := v.(*Objref_t)
 		cnt := e.Refcnt()
@@ -154,7 +172,10 @@ func (c *cache_t) Remove(key int) bool {
 		}
 		return false
 	} else {
-		panic("Remove: non existing")
+		if mustexist {
+			panic("Remove: non existing")
+		}
+		return false
 	}
 }
 
@@ -177,8 +198,8 @@ func (a ByStamp) Less(i, j int) bool {
 }
 
 // Evicts up-to half of the objects in the cache. returns the number of cache
-// entries remaining.
-func (c *cache_t) Evict_half() int {
+// entries remaining and the number evicted.
+func (c *cache_t) Evict_half() (int, int) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -188,13 +209,17 @@ func (c *cache_t) Evict_half() int {
 	sort.Sort(ByStamp(elems))
 	for _, p := range elems { // XXX only need the keys, not complete elems
 		e := p.Value.(*Objref_t)
+		// evict each inode's dcache before setting REMOVE to ensure
+		// that a concurrent lock-free namei can't succeed on an
+		// evicted inode
 		e.Obj.EvictFromCache()
-		if c.Remove(e.Key) {
-			e.Obj.EvictDone()
-			did++
+		if !c.TryRemove(e.Key) {
+			continue
 		}
+		e.Obj.EvictDone()
+		did++
 	}
-	return upto - did
+	return upto - did, did
 }
 
 func (c *cache_t) delete(o *Objref_t) {
