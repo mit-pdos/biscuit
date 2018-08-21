@@ -3749,6 +3749,7 @@ lstat(const char *a, struct stat *b)
 {
 	// will some applications break because they expect lstat to be a
 	// system call?
+	// XXX yes, if it has maximum open fds already
 	int fd = open(a, O_RDONLY);
 	if (fd == -1)
 		return -1;
