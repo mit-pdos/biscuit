@@ -291,8 +291,13 @@ func (idm *imemnode_t) idm_init(inum defs.Inum_t) {
 }
 
 func (idm *imemnode_t) iunlock_refdown(s string) bool {
+	// Refdown before unlocking to guarantee that calling iunlock_refdown
+	// on a non-empty directory inode cannot require the caller to free the
+	// inode (otherwise a concurrent unlink could occur between the unlock
+	// and refdown).
+	ret := idm.Refdown(s)
 	idm.iunlock(s)
-	return idm.Refdown(s)
+	return ret
 }
 
 func (idm *imemnode_t) _iupdate(opid opid_t) defs.Err_t {
@@ -497,6 +502,8 @@ func (ic *imemnode_t) fill(blk *Bdev_block_t, inum defs.Inum_t) {
 	ic.itype = inode.itype()
 	if ic.itype <= I_FIRST || ic.itype > I_VALID {
 		fmt.Printf("itype: %v for %v\n", ic.itype, inum)
+		// we will soon panic
+		panic("no")
 	}
 	ic.links = inode.linkcount()
 	ic.size = inode.size()

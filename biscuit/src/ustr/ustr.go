@@ -37,10 +37,7 @@ func MkUstrRoot() Ustr {
 	return us
 }
 
-func MkUstrDotDot() Ustr {
-	us := Ustr{'.', '.'}
-	return us
-}
+var DotDot = Ustr{'.', '.'}
 
 func MkUstrSlice(buf []uint8) Ustr {
 	for i := 0; i < len(buf); i++ {
