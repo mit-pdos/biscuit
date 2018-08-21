@@ -271,9 +271,9 @@ func (idm *imemnode_t) ilock(s string) {
 
 func (idm *imemnode_t) iunlock(s string) {
 	//fmt.Printf("iunlock: release %v %v\n", idm.inum, s)
-	if !idm._amlocked {
-		panic("iunlock:" + s)
-	}
+	//if !idm._amlocked {
+	//	panic("iunlock:" + s)
+	//}
 	idm._amlocked = false
 	idm._l.Unlock()
 }

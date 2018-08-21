@@ -1486,10 +1486,11 @@ func (fs *Fs_t) Fs_syncapply() defs.Err_t {
 
 // if the path resolves successfully, returns target inode with incremented
 // refcount and locked. the caller must always be prepared to free the returned
-// imemnode after calling Refdown. since the slow path acquires locks on
-// inodes, the caller must not have any other inode locked, otherwise namei may
-// deadlock.
-func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
+// imemnode after calling Refdown. if the lookup fails, the second returned
+// inode may be non-nil and must be freed by the caller. since the slow path
+// acquires locks on inodes, the caller must not have any other inode locked,
+// otherwise namei may deadlock.
+func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*imemnode_t, *imemnode_t, defs.Err_t) {
 	var start *imemnode_t
 	fs.istats.Nnamei.Inc()
 	// ref lookup directory
@@ -1499,78 +1500,87 @@ func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*
 		start = fs.IrefRoot()
 	}
 	idm := start
-	var fps bpath.Pathparts_t
-	var sps bpath.Pathparts_t
-	fps.Pp_init(paths)
-	sps.Pp_init(paths)
+	var pp bpath.Pathparts_t
+	pp.Pp_init(paths)
 	var next ustr.Ustr
 	var nextok bool
 	// lock-free fast path
-	for cp, ok := fps.Next(); ok; cp, ok = next, nextok {
+	for cp, ok := pp.Next(); ok; cp, ok = next, nextok {
 		// "start" is the only imemnode whose refcount is incremented
 		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
+			err := -defs.ENOHEAP
 			if start.Refdown("") {
-				panic("fixme cwd unlinked")
+				return nil, start, err
 			}
-			return nil, -defs.ENOHEAP
+			return nil, nil, err
 		}
 		// make sure slow path continues on this component if the
 		// lock-free lookup fails
-		next, nextok = fps.Next()
+		next, nextok = pp.Next()
 		lastc := !nextok
 		n, found := idm.ilookup_lockfree(cp, lastc)
 		if !found {
 			break
 		}
-		sps.Next()
 		idm = n
 		if lastc {
 			// ilookup_lockfree already locked n
-			return n, 0
+			return n, nil, 0
 		}
 	}
-	if idm != start {
-		// continue from idm
-		if _, ok := idm.Refup(""); ok {
-			if start.Refdown("") {
-				panic("fixme")
-			}
-		} else {
-			// couldn't ref idm; restart completely
-			idm = start
-			sps.Pp_init(paths)
-		}
-	}
+	// couldn't ref idm; restart completely
+	idm = start
+	pp.Pp_init(paths)
 
 	// lock-full slow path
-	for cp, ok := sps.Next(); ok; cp, ok = next, nextok {
-		next, nextok = sps.Next()
+	for cp, ok := pp.Next(); ok; cp, ok = next, nextok {
+		next, nextok = pp.Next()
 
 		idm.ilock("fs_namei")
-		n, err := idm.ilookup(opid, cp)
-		if err != 0 {
-			if idm.iunlock_refdown("") {
-				panic("fixme")
-			}
-			return nil, err
+		// for simplicity, conservatively fail the lookup if links==0
+		// so that namei can return at most one dead inode.
+		var n *imemnode_t
+		var err defs.Err_t
+		if idm.links != 0 {
+			n, err = idm.ilookup(opid, cp)
+		} else {
+			err = -defs.ENOENT
 		}
+		var dead *imemnode_t
 		// ilookup always increments the refcnt, even on "."
-		if idm.iunlock_refdown("fs_namei_idm") {
-			panic("fixme")
+		if idm.iunlock_refdown("") {
+			// idm can only be unlinked if the lookup failed or if
+			// we looked up ".."
+			dead = idm
+			if err == 0 {
+				if !cp.Isdotdot() {
+					panic("how?")
+				}
+				err = -defs.ENOENT
+			}
+		}
+		if err != 0 {
+			return nil, dead, err
 		}
 		idm = n
 		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
+			err := -defs.ENOHEAP
 			if idm.Refdown("") {
-				panic("fixme")
+				return nil, idm, err
 			}
-			return nil, -defs.ENOHEAP
+			return nil, nil, err
 		}
 	}
 	idm.ilock("")
-	return idm, 0
+	return idm, nil, 0
 }
 
 func (fs *Fs_t) fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, defs.Err_t) {
+	a, _, b := fs._fs_namei_locked(opid, paths, cwd)
+	return a, b
+}
+
+func (fs *Fs_t) fs_namei_locked_new(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t, s string) (*imemnode_t, *imemnode_t, defs.Err_t) {
 	return fs._fs_namei_locked(opid, paths, cwd)
 }
 
