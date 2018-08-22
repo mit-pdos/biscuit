@@ -1341,13 +1341,15 @@ func main() {
 	cpus_start(ncpu, aplim)
 	//runtime.SCenable = false
 
+	tinfo.SetCurrent(&tinfo.Tnote_t{})
+	manymeg := &res.Res_t{Objs: runtime.Resobjs_t{1: 100 << 20}}
+	res.Resbegin(manymeg)
 	rf, fs := fs.StartFS(ahci.Blockmem, ahci.Ahci, console, diskfs)
 	thefs = fs
 
 	proc.Oom_init(thefs.Fs_evict)
 
 	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
-		res.Resbegin(res.Onemeg)
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []ustr.Ustr{cmd}
 		nargs = append(nargs, args...)
@@ -1362,12 +1364,14 @@ func main() {
 			panic(fmt.Sprintf("exec failed %v", ret))
 		}
 		p.Sched_add(&tf, p.Tid0())
-		res.Resend()
 	}
 
 	//exec("bin/lsh", nil)
 	exec(ustr.Ustr("bin/init"), nil)
 	//exec("bin/rs", []string{"/redis.conf"})
+
+	res.Resend()
+	tinfo.ClearCurrent()
 
 	//go func() {
 	//	d := time.Second

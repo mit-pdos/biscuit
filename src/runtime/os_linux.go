@@ -3443,8 +3443,9 @@ func Setheap(n int) {
 	heapminimum = uint64(n)
 }
 
-// the units of maxheap and totalres is bytes
-var _maxheap int64 = 20 << 20
+// initial res size is huge to not disturb boot; init(1) will set it to correct
+// value.
+var _maxheap int64 = 1 << 31
 
 //type res_t struct {
 //	maxheap		int64
