@@ -1193,7 +1193,47 @@ func GC() {
 // unlike GC, GCX synchronizes with other threads to ensure that only one GC
 // is started.
 func GCX() {
-	GC()
+	//GC()
+	gp := getg()
+
+	// Prevent the GC phase or cycle count from changing.
+	lock(&work.sweepWaiters.lock)
+	n := atomic.Load(&work.cycles)
+	if gcphase == _GCmark {
+		// Wait until sweep termination, mark, and mark
+		// termination of cycle N complete.
+		gp.schedlink = work.sweepWaiters.head
+		work.sweepWaiters.head.set(gp)
+		goparkunlock(&work.sweepWaiters.lock, "wait for GC cycle", traceEvGoBlock, 1)
+		return
+	} else {
+		// We're in sweep N already.
+		unlock(&work.sweepWaiters.lock)
+	}
+
+	// We're now in sweep N or later. Trigger GC cycle N+1, which
+	// will first finish sweep N if necessary and then enter sweep
+	// termination N+1.
+	gcStart(gcBackgroundMode, gcTrigger{kind: gcTriggerCycle, n: n + 1})
+
+	// Wait for mark termination N+1 to complete.
+	lock(&work.sweepWaiters.lock)
+	if gcphase == _GCmark && atomic.Load(&work.cycles) == n+1 {
+		gp.schedlink = work.sweepWaiters.head
+		work.sweepWaiters.head.set(gp)
+		goparkunlock(&work.sweepWaiters.lock, "wait for GC cycle", traceEvGoBlock, 1)
+	} else {
+		unlock(&work.sweepWaiters.lock)
+	}
+
+	// Finish sweep N+1 before returning. We do this both to
+	// complete the cycle and because runtime.GC() is often used
+	// as part of tests and benchmarks to get the system into a
+	// relatively stable and isolated state.
+	//for atomic.Load(&work.cycles) == n+1 && gosweepone() != ^uintptr(0) {
+	//	sweep.nbgsweep++
+	//	Gosched()
+	//}
 }
 
 // gcMode indicates how concurrent a GC cycle should be.
