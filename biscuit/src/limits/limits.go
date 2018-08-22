@@ -23,7 +23,6 @@ type Syslimit_t struct {
 	// socks includes pipes and all TCP connections in TIMEWAIT.
 	Socks Sysatomic_t
 	// total cached dirents
-	Dirents Sysatomic_t
 	// total pipes
 	Pipes Sysatomic_t
 	// additional memory filesystem per-page objects; each file gets one
@@ -46,7 +45,6 @@ func MkSysLimit() *Syslimit_t {
 		Tcpsegs:  16,
 		Socks:    1e5,
 		Vnodes:   20000, // 1e6,
-		Dirents:  1 << 20,
 		Pipes:    1e4,
 		// 8GB of block pages
 		Blocks: 100000, // 1 << 21,

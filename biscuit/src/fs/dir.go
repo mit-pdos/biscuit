@@ -7,7 +7,6 @@ import "unsafe"
 import "bounds"
 import "defs"
 import "hashtable"
-import "limits"
 import "mem"
 import "res"
 import "ustr"
@@ -354,7 +353,6 @@ func (idm *imemnode_t) _derelease() int {
 	dc.dents = nil
 	dc.freel.head = nil
 	ret := dc.max
-	limits.Syslimit.Dirents.Given(uint(ret))
 	dc.max = 0
 	return ret
 }
@@ -386,39 +384,14 @@ func (idm *imemnode_t) _deprobe(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, defs.
 	return b, 0
 }
 
-// returns true if this idm has enough free cache space for a single dentry
-func (idm *imemnode_t) _demayadd() bool {
-	dc := &idm.dentc
-	//have := len(dc.dents) + len(dc.freem)
-	// have := dc.dents.nodes + dc.freel.count()
-	have := dc.freel.count()
-	if have+1 < dc.max {
-		return true
-	}
-	// reserve more directory entries
-	take := 64
-	if limits.Syslimit.Dirents.Taken(uint(take)) {
-		dc.max += take
-		return true
-	}
-	lhits++
-	return false
-}
-
 // caching is best-effort. returns true if fn was added to the cache
 func (idm *imemnode_t) _dceadd(fn ustr.Ustr, de *icdent_t) bool {
 	dc := &idm.dentc
-	if !idm._demayadd() {
-		return false
-	}
 	dc.dents.Set(fn, de)
 	return true
 }
 
 func (idm *imemnode_t) _deaddempty(off int) {
-	if !idm._demayadd() {
-		return
-	}
 	dc := &idm.dentc
 	dc.freel.addhead(off)
 }
@@ -448,6 +421,9 @@ func (idm *imemnode_t) probe_unlink(opid opid_t, fn ustr.Ustr) (*Bdev_block_t, d
 // idm must be locked. if ilookup succeeds, it increments the refcount of the
 // target imemnode and returns it unlocked (even for ".")
 func (idm *imemnode_t) ilookup(opid opid_t, name ustr.Ustr) (*imemnode_t, defs.Err_t) {
+	if !idm._amlocked {
+		panic("laksdj")
+	}
 	// did someone confuse a file with a directory?
 	if idm.itype != I_DIR {
 		return nil, -defs.ENOTDIR
