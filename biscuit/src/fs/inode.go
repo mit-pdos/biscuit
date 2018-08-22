@@ -300,6 +300,9 @@ func (idm *imemnode_t) iunlock_refdown(s string) bool {
 }
 
 func (idm *imemnode_t) _iupdate(opid opid_t) defs.Err_t {
+	if !idm._amlocked {
+		panic("eh?")
+	}
 	if idm.fs.diskfs {
 		idm.fs.istats.Niupdate.Inc()
 		iblk := idm.idibread()

@@ -1223,15 +1223,20 @@ func (raw *rawdfops_t) Shutdown(read, write bool) defs.Err_t {
 }
 
 func (fs *Fs_t) Fs_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) defs.Err_t {
-	dead, err := fs.Fs_op_mkdir(paths, mode, cwd)
+	refs, dead, err := fs.Fs_op_mkdir(paths, mode, cwd)
+	for _, ref := range refs {
+		if ref.Refdown("") {
+			ref.Free()
+		}
+	}
 	if dead != nil {
 		dead.Free()
 	}
 	return err
 }
 
-// returns dead inode and error
-func (fs *Fs_t) Fs_op_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) (*imemnode_t, defs.Err_t) {
+// returns refs, dead, and error...
+func (fs *Fs_t) Fs_op_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) ([]*imemnode_t, *imemnode_t, defs.Err_t) {
 	opid := fs.fslog.Op_begin("fs_mkdir")
 	defer fs.fslog.Op_end(opid)
 
@@ -1243,34 +1248,44 @@ func (fs *Fs_t) Fs_op_mkdir(paths ustr.Ustr, mode int, cwd *fd.Cwd_t) (*imemnode
 
 	dirs, fn := bpath.Sdirname(paths)
 	if err, ok := crname(fn, -defs.EINVAL); !ok {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(fn) > DNAMELEN {
-		return nil, -defs.ENAMETOOLONG
+		return nil, nil, -defs.ENAMETOOLONG
 	}
 
 	par, dead, err := fs.fs_namei_locked(opid, dirs, cwd, "mkdir")
 	if err != 0 {
-		return dead, err
+		return nil, dead, err
 	}
 
 	child, err := par.do_createdir(opid, fn)
 	if err != 0 {
-		if par.iunlock_refdown("fs_mkdir_par") {
-			dead = par
-		}
-		return dead, err
+		par.iunlock("fs_mkdir_par")
+		return []*imemnode_t{par}, nil, err
 	}
-	defer par.iunlock_refdown("fs_mkdir_par")
+	defer par.iunlock("fs_mkdir_par")
 	// cannot deadlock since par is locked and concurrent lookup must lock
 	// par to get a handle to child
 	child.ilock("")
 	defer child.iunlock("")
 
-	child.do_insert(opid, ustr.MkUstrDot(), child.inum)
-	child.do_insert(opid, ustr.DotDot, par.inum)
-	child.Refdown("fs_mkdir")
-	return nil, 0
+	if err = child.do_insert(opid, ustr.MkUstrDot(), child.inum); err != 0 {
+		goto outunlink
+	}
+	if err = child.do_insert(opid, ustr.DotDot, par.inum); err != 0 {
+		goto outunlink
+	}
+	return []*imemnode_t{par, child}, nil, 0
+outunlink:
+	// could do insert last; this cannot fail since par's dirent page is
+	// reffed by the log transaction
+	_, nerr := par.iunlink(opid, fn)
+	if nerr != 0 {
+		panic("must succeed")
+	}
+	child._linkdown(opid)
+	return []*imemnode_t{par, child}, nil, err
 }
 
 // a type to represent on-disk files
