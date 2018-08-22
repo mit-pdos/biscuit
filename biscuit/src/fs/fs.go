@@ -1539,14 +1539,6 @@ func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*
 	var nextok bool
 	// lock-free fast path
 	for cp, ok := pp.Next(); ok; cp, ok = next, nextok {
-		// "start" is the only imemnode whose refcount is incremented
-		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
-			err := -defs.ENOHEAP
-			if start.Refdown("") {
-				return nil, start, err
-			}
-			return nil, nil, err
-		}
 		// make sure slow path continues on this component if the
 		// lock-free lookup fails
 		next, nextok = pp.Next()
@@ -1559,6 +1551,14 @@ func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*
 		if lastc {
 			// ilookup_lockfree already locked n
 			return n, nil, 0
+		}
+		// "start" is the only imemnode whose refcount is incremented
+		if !res.Resadd_noblock(bounds.Bounds(bounds.B_FS_T_FS_NAMEI)) {
+			err := -defs.ENOHEAP
+			if start.Refdown("") {
+				return nil, start, err
+			}
+			return nil, nil, err
 		}
 	}
 	// couldn't ref idm; restart completely
