@@ -402,6 +402,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 				// it didn't exist before and still doesn't exist
 				break
 			}
+			// XXX pass other errors ups?
 		} else {
 			ok, err := npar.ilookup_validate(opid, nfn, nchild)
 			if err == 0 && ok {
@@ -412,6 +413,7 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 				// it existed but now it doesn't.
 				break
 			}
+			// XXX pass other errors ups?
 		}
 		fmt.Printf("rename: retry; tree changed\n")
 		cnt++
