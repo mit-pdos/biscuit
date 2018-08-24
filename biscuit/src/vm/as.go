@@ -13,7 +13,7 @@ import "res"
 import "ustr"
 import "util"
 
-type Aspace_t struct {
+type Vm_t struct {
 	// lock for vmregion, pmpages, pmap, and p_pmap
 	sync.Mutex
 
@@ -26,7 +26,7 @@ type Aspace_t struct {
 	pgfltaken bool
 }
 
-func (as *Aspace_t) Lock_pmap() {
+func (as *Vm_t) Lock_pmap() {
 	// useful for finding deadlock bugs with one cpu
 	//if p.pgfltaken {
 	//	panic("double lock")
@@ -35,18 +35,18 @@ func (as *Aspace_t) Lock_pmap() {
 	as.pgfltaken = true
 }
 
-func (as *Aspace_t) Unlock_pmap() {
+func (as *Vm_t) Unlock_pmap() {
 	as.pgfltaken = false
 	as.Unlock()
 }
 
-func (as *Aspace_t) Lockassert_pmap() {
+func (as *Vm_t) Lockassert_pmap() {
 	if !as.pgfltaken {
 		panic("pgfl lock must be held")
 	}
 }
 
-func (as *Aspace_t) Userdmap8_inner(va int, k2u bool) ([]uint8, defs.Err_t) {
+func (as *Vm_t) Userdmap8_inner(va int, k2u bool) ([]uint8, defs.Err_t) {
 	as.Lockassert_pmap()
 
 	voff := va & int(PGOFFSET)
@@ -93,18 +93,18 @@ func (as *Aspace_t) Userdmap8_inner(va int, k2u bool) ([]uint8, defs.Err_t) {
 
 // _userdmap8 and userdmap8r functions must only be used if concurrent
 // modifications to the address space is impossible.
-func (as *Aspace_t) _userdmap8(va int, k2u bool) ([]uint8, defs.Err_t) {
+func (as *Vm_t) _userdmap8(va int, k2u bool) ([]uint8, defs.Err_t) {
 	as.Lock_pmap()
 	ret, err := as.Userdmap8_inner(va, k2u)
 	as.Unlock_pmap()
 	return ret, err
 }
 
-func (as *Aspace_t) Userdmap8r(va int) ([]uint8, defs.Err_t) {
+func (as *Vm_t) Userdmap8r(va int) ([]uint8, defs.Err_t) {
 	return as._userdmap8(va, false)
 }
 
-func (as *Aspace_t) usermapped(va, n int) bool {
+func (as *Vm_t) usermapped(va, n int) bool {
 	as.Lock_pmap()
 	defer as.Unlock_pmap()
 
@@ -112,14 +112,14 @@ func (as *Aspace_t) usermapped(va, n int) bool {
 	return ok
 }
 
-func (as *Aspace_t) Userreadn(va, n int) (int, defs.Err_t) {
+func (as *Vm_t) Userreadn(va, n int) (int, defs.Err_t) {
 	as.Lock_pmap()
 	a, b := as.userreadn_inner(va, n)
 	as.Unlock_pmap()
 	return a, b
 }
 
-func (as *Aspace_t) userreadn_inner(va, n int) (int, defs.Err_t) {
+func (as *Vm_t) userreadn_inner(va, n int) (int, defs.Err_t) {
 	as.Lockassert_pmap()
 	if n > 8 {
 		panic("large n")
@@ -142,7 +142,7 @@ func (as *Aspace_t) userreadn_inner(va, n int) (int, defs.Err_t) {
 	return ret, 0
 }
 
-func (as *Aspace_t) Userwriten(va, n, val int) defs.Err_t {
+func (as *Vm_t) Userwriten(va, n, val int) defs.Err_t {
 	if n > 8 {
 		panic("large n")
 	}
@@ -162,12 +162,12 @@ func (as *Aspace_t) Userwriten(va, n, val int) defs.Err_t {
 }
 
 // first ret value is the string from user space second is error
-func (as *Aspace_t) Userstr(uva int, lenmax int) (ustr.Ustr, defs.Err_t) {
+func (as *Vm_t) Userstr(uva int, lenmax int) (ustr.Ustr, defs.Err_t) {
 	if lenmax < 0 {
 		return nil, 0
 	}
 	as.Lock_pmap()
-	//defer p.Aspace.Unlock_pmap()
+	//defer p.Vm.Unlock_pmap()
 	i := 0
 	s := ustr.MkUstr()
 	for {
@@ -194,7 +194,7 @@ func (as *Aspace_t) Userstr(uva int, lenmax int) (ustr.Ustr, defs.Err_t) {
 	}
 }
 
-func (as *Aspace_t) Usertimespec(va int) (time.Duration, time.Time, defs.Err_t) {
+func (as *Vm_t) Usertimespec(va int) (time.Duration, time.Time, defs.Err_t) {
 	var zt time.Time
 	secs, err := as.Userreadn(va, 8)
 	if err != 0 {
@@ -215,14 +215,14 @@ func (as *Aspace_t) Usertimespec(va int) (time.Duration, time.Time, defs.Err_t) 
 
 // copies src to the user virtual address uva. may copy part of src if uva +
 // len(src) is not mapped
-func (as *Aspace_t) K2user(src []uint8, uva int) defs.Err_t {
+func (as *Vm_t) K2user(src []uint8, uva int) defs.Err_t {
 	as.Lock_pmap()
 	ret := as.K2user_inner(src, uva)
 	as.Unlock_pmap()
 	return ret
 }
 
-func (as *Aspace_t) K2user_inner(src []uint8, uva int) defs.Err_t {
+func (as *Vm_t) K2user_inner(src []uint8, uva int) defs.Err_t {
 	as.Lockassert_pmap()
 	cnt := 0
 	l := len(src)
@@ -247,14 +247,14 @@ func (as *Aspace_t) K2user_inner(src []uint8, uva int) defs.Err_t {
 }
 
 // copies len(dst) bytes from userspace address uva to dst
-func (as *Aspace_t) User2k(dst []uint8, uva int) defs.Err_t {
+func (as *Vm_t) User2k(dst []uint8, uva int) defs.Err_t {
 	as.Lock_pmap()
 	ret := as.User2k_inner(dst, uva)
 	as.Unlock_pmap()
 	return ret
 }
 
-func (as *Aspace_t) User2k_inner(dst []uint8, uva int) defs.Err_t {
+func (as *Vm_t) User2k_inner(dst []uint8, uva int) defs.Err_t {
 	as.Lockassert_pmap()
 	cnt := 0
 	for len(dst) != 0 {
@@ -273,7 +273,7 @@ func (as *Aspace_t) User2k_inner(dst []uint8, uva int) defs.Err_t {
 	return 0
 }
 
-func (as *Aspace_t) Unusedva_inner(startva, len int) int {
+func (as *Vm_t) Unusedva_inner(startva, len int) int {
 	as.Lockassert_pmap()
 	if len < 0 || len > 1<<48 {
 		panic("weird len")
@@ -291,7 +291,7 @@ func (as *Aspace_t) Unusedva_inner(startva, len int) int {
 	return ret
 }
 
-func (as *Aspace_t) Tlbshoot(startva uintptr, pgcount int) {
+func (as *Vm_t) Tlbshoot(startva uintptr, pgcount int) {
 	if pgcount == 0 {
 		return
 	}
@@ -309,7 +309,7 @@ func (as *Aspace_t) Tlbshoot(startva uintptr, pgcount int) {
 }
 
 // returns true if the fault was handled successfully
-func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err_t {
+func Sys_pgfault(as *Vm_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err_t {
 	isguard := vmi.Perms == 0
 	iswrite := ecode&uintptr(PTE_W) != 0
 	writeok := vmi.Perms&uint(PTE_W) != 0
@@ -450,7 +450,7 @@ func Sys_pgfault(as *Aspace_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err
 // to flush TLB). the second return value is false if the page insertion failed
 // due to lack of user pages. p_pg's ref count is increased so the caller can
 // simply Physmem.Refdown()
-func (as *Aspace_t) Page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
+func (as *Vm_t) Page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 	vempty bool, pte *mem.Pa_t) (bool, bool) {
 	return as._page_insert(va, p_pg, perms, vempty, true, pte)
 }
@@ -459,12 +459,12 @@ func (as *Aspace_t) Page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 // to flush TLB). the second return value is false if the page insertion failed
 // due to lack of user pages. p_pg's ref count is increased so the caller can
 // simply Physmem.Refdown()
-func (as *Aspace_t) Blockpage_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
+func (as *Vm_t) Blockpage_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 	vempty bool, pte *mem.Pa_t) (bool, bool) {
 	return as._page_insert(va, p_pg, perms, vempty, false, pte)
 }
 
-func (as *Aspace_t) _page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
+func (as *Vm_t) _page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 	vempty, refup bool, pte *mem.Pa_t) (bool, bool) {
 	as.Lockassert_pmap()
 	if refup {
@@ -496,7 +496,7 @@ func (as *Aspace_t) _page_insert(va int, p_pg mem.Pa_t, perms mem.Pa_t,
 	return ninval, true
 }
 
-func (as *Aspace_t) Page_remove(va int) bool {
+func (as *Vm_t) Page_remove(va int) bool {
 	as.Lockassert_pmap()
 	remmed := false
 	pte := Pmap_lookup(as.Pmap, va)
@@ -513,7 +513,7 @@ func (as *Aspace_t) Page_remove(va int) bool {
 }
 
 // returns true if the pagefault was handled successfully
-func (as *Aspace_t) Pgfault(tid defs.Tid_t, fa, ecode uintptr) defs.Err_t {
+func (as *Vm_t) Pgfault(tid defs.Tid_t, fa, ecode uintptr) defs.Err_t {
 	as.Lock_pmap()
 	vmi, ok := as.Vmregion.Lookup(fa)
 	if !ok {
@@ -525,7 +525,7 @@ func (as *Aspace_t) Pgfault(tid defs.Tid_t, fa, ecode uintptr) defs.Err_t {
 	return ret
 }
 
-func (as *Aspace_t) Uvmfree() {
+func (as *Vm_t) Uvmfree() {
 	Uvmfree_inner(as.Pmap, as.P_pmap, &as.Vmregion)
 	// Dec_pmap could free the pmap itself. thus it must come after
 	// Uvmfree.
@@ -534,23 +534,23 @@ func (as *Aspace_t) Uvmfree() {
 	as.Vmregion.Clear()
 }
 
-func (as *Aspace_t) Vmadd_anon(start, len int, perms mem.Pa_t) {
+func (as *Vm_t) Vmadd_anon(start, len int, perms mem.Pa_t) {
 	vmi := as._mkvmi(VANON, start, len, perms, 0, nil, nil)
 	as.Vmregion.insert(vmi)
 }
 
-func (as *Aspace_t) Vmadd_file(start, len int, perms mem.Pa_t, fops fdops.Fdops_i,
+func (as *Vm_t) Vmadd_file(start, len int, perms mem.Pa_t, fops fdops.Fdops_i,
 	foff int) {
 	vmi := as._mkvmi(VFILE, start, len, perms, foff, fops, nil)
 	as.Vmregion.insert(vmi)
 }
 
-func (as *Aspace_t) Vmadd_shareanon(start, len int, perms mem.Pa_t) {
+func (as *Vm_t) Vmadd_shareanon(start, len int, perms mem.Pa_t) {
 	vmi := as._mkvmi(VSANON, start, len, perms, 0, nil, nil)
 	as.Vmregion.insert(vmi)
 }
 
-func (as *Aspace_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops fdops.Fdops_i,
+func (as *Vm_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops fdops.Fdops_i,
 	foff int, unpin mem.Unpin_i) {
 	vmi := as._mkvmi(VFILE, start, len, perms, foff, fops, unpin)
 	as.Vmregion.insert(vmi)
@@ -559,7 +559,7 @@ func (as *Aspace_t) Vmadd_sharefile(start, len int, perms mem.Pa_t, fops fdops.F
 // does not increase opencount on fops (vmregion_t.insert does). perms should
 // only use PTE_U/PTE_W; the page fault handler will install the correct COW
 // flags. perms == 0 means that no mapping can go here (like for guard pages).
-func (as *Aspace_t) _mkvmi(mt mtype_t, start, len int, perms mem.Pa_t, foff int,
+func (as *Vm_t) _mkvmi(mt mtype_t, start, len int, perms mem.Pa_t, foff int,
 	fops fdops.Fdops_i, unpin mem.Unpin_i) *Vminfo_t {
 	if len <= 0 {
 		panic("bad vmi len")
@@ -590,7 +590,7 @@ func (as *Aspace_t) _mkvmi(mt mtype_t, start, len int, perms mem.Pa_t, foff int,
 	return ret
 }
 
-func (as *Aspace_t) Mkuserbuf(userva, len int) *Userbuf_t {
+func (as *Vm_t) Mkuserbuf(userva, len int) *Userbuf_t {
 	ret := &Userbuf_t{}
 	ret.ub_init(as, userva, len)
 	return ret

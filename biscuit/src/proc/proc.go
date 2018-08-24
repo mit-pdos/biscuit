@@ -39,7 +39,7 @@ type Proc_t struct {
 	Threadi tinfo.Threadinfo_t
 
 	// Address space
-	Aspace vm.Aspace_t
+	Vm vm.Vm_t
 
 	// mmap next virtual address hint
 	Mmapi int
@@ -228,22 +228,22 @@ func (p *Proc_t) Fd_dup(ofdn, nfdn int) (*fd.Fd_t, bool, defs.Err_t) {
 // returns whether the parent's TLB should be flushed and whether the we
 // successfully copied the parent's address space.
 func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
-	parent.Aspace.Lockassert_pmap()
+	parent.Vm.Lockassert_pmap()
 	// first add kernel pml4 entries
 	for _, e := range mem.Kents {
-		child.Aspace.Pmap[e.Pml4slot] = e.Entry
+		child.Vm.Pmap[e.Pml4slot] = e.Entry
 	}
 	// recursive mapping
-	child.Aspace.Pmap[mem.VREC] = child.Aspace.P_pmap | vm.PTE_P | vm.PTE_W
+	child.Vm.Pmap[mem.VREC] = child.Vm.P_pmap | vm.PTE_P | vm.PTE_W
 
 	failed := false
 	doflush := false
-	child.Aspace.Vmregion = parent.Aspace.Vmregion.Copy()
-	parent.Aspace.Vmregion.Iter(func(vmi *vm.Vminfo_t) {
+	child.Vm.Vmregion = parent.Vm.Vmregion.Copy()
+	parent.Vm.Vmregion.Iter(func(vmi *vm.Vminfo_t) {
 		start := int(vmi.Pgn << vm.PGSHIFT)
 		end := start + int(vmi.Pglen<<vm.PGSHIFT)
 		ashared := vmi.Mtype == vm.VSANON
-		fl, ok := vm.Ptefork(child.Aspace.Pmap, parent.Aspace.Pmap, start, end, ashared)
+		fl, ok := vm.Ptefork(child.Vm.Pmap, parent.Vm.Pmap, start, end, ashared)
 		failed = failed || !ok
 		doflush = doflush || fl
 	})
@@ -254,27 +254,27 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 
 	// don't mark stack COW since the parent/child will fault their stacks
 	// immediately
-	vmi, ok := child.Aspace.Vmregion.Lookup(rsp)
+	vmi, ok := child.Vm.Vmregion.Lookup(rsp)
 	// give up if we can't find the stack
 	if !ok {
 		return doflush, true
 	}
-	pte, ok := vmi.Ptefor(child.Aspace.Pmap, rsp)
+	pte, ok := vmi.Ptefor(child.Vm.Pmap, rsp)
 	if !ok || *pte&vm.PTE_P == 0 || *pte&vm.PTE_U == 0 {
 		return doflush, true
 	}
 	// sys_pgfault expects pmap to be locked
-	child.Aspace.Lock_pmap()
+	child.Vm.Lock_pmap()
 	perms := uintptr(vm.PTE_U | vm.PTE_W)
-	if vm.Sys_pgfault(&child.Aspace, vmi, rsp, perms) != 0 {
+	if vm.Sys_pgfault(&child.Vm, vmi, rsp, perms) != 0 {
 		return doflush, false
 	}
-	child.Aspace.Unlock_pmap()
-	vmi, ok = parent.Aspace.Vmregion.Lookup(rsp)
+	child.Vm.Unlock_pmap()
+	vmi, ok = parent.Vm.Vmregion.Lookup(rsp)
 	if !ok || *pte&vm.PTE_P == 0 || *pte&vm.PTE_U == 0 {
 		panic("child has stack but not parent")
 	}
-	pte, ok = vmi.Ptefor(parent.Aspace.Pmap, rsp)
+	pte, ok = vmi.Ptefor(parent.Vm.Pmap, rsp)
 	if !ok {
 		panic("must exist")
 	}
@@ -287,7 +287,7 @@ func (parent *Proc_t) Vm_fork(child *Proc_t, rsp uintptr) (bool, bool) {
 // flush TLB on all CPUs that may have this processes' pmap loaded
 func (p *Proc_t) Tlbflush() {
 	// this flushes the TLB for now
-	p.Aspace.Tlbshoot(0, 2)
+	p.Vm.Tlbshoot(0, 2)
 }
 
 func (p *Proc_t) resched(tid defs.Tid_t, n *tinfo.Tnote_t) bool {
@@ -354,7 +354,7 @@ func (p *Proc_t) trap_proc(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t, intno, aux 
 		runtime.Gosched()
 	case defs.PGFAULT:
 		faultaddr := uintptr(aux)
-		err := p.Aspace.Pgfault(tid, faultaddr, tf[defs.TF_ERROR])
+		err := p.Vm.Pgfault(tid, faultaddr, tf[defs.TF_ERROR])
 		restart = err == -defs.ENOHEAP
 		if err != 0 && !restart {
 			fmt.Printf("*** fault *** %v: addr %x, "+
@@ -401,11 +401,11 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 		// distinguish between returning to the user program after it
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
-		refp, _ := mem.Physmem.Refaddr(p.Aspace.P_pmap)
+		refp, _ := mem.Physmem.Refaddr(p.Vm.P_pmap)
 		res.Resend()
 
 		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
-			uintptr(p.Aspace.P_pmap), fastret, refp)
+			uintptr(p.Vm.P_pmap), fastret, refp)
 
 		// XXX debug
 		if tinfo.Current() != mynote {
@@ -557,7 +557,7 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 			uva = uva | int(uint(b))<<uint(i*8)
 		}
 		lenmax := 128
-		str, err := p.Aspace.Userstr(uva, lenmax)
+		str, err := p.Vm.Userstr(uva, lenmax)
 		if err != 0 {
 			return err
 		}
@@ -571,7 +571,7 @@ func (p *Proc_t) Userargs(uva int) ([]ustr.Ustr, defs.Err_t) {
 		if !res.Resadd(bounds.Bounds(bounds.B_PROC_T_USERARGS)) {
 			return nil, -defs.ENOHEAP
 		}
-		ptrs, err := p.Aspace.Userdmap8r(uva + uoff)
+		ptrs, err := p.Vm.Userdmap8r(uva + uoff)
 		if err != 0 {
 			return nil, err
 		}
@@ -627,7 +627,7 @@ func (p *Proc_t) terminate() {
 	// safe since we know that all user threads are dead and thus no CPU
 	// will try to access user mappings. however, any CPU may access kernel
 	// mappings via this pmap.
-	p.Aspace.Uvmfree()
+	p.Vm.Uvmfree()
 
 	// send status to parent
 	if p.Pwait == nil {

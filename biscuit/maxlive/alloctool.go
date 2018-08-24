@@ -1641,8 +1641,8 @@ func main() {
 
 		//// deep reservations
 		//tmp_t{"Proc_t", "Userargs"},
-		//tmp_t{"Aspace_t", "K2user_inner"},
-		//tmp_t{"Aspace_t", "User2k_inner"},
+		//tmp_t{"Vm_t", "K2user_inner"},
+		//tmp_t{"Vm_t", "User2k_inner"},
 		//tmp_t{"Userbuf_t", "_tx"},
 		//tmp_t{"Useriovec_t", "Iov_init"},
 		//tmp_t{"Useriovec_t", "_tx"},

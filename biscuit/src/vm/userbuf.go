@@ -17,10 +17,10 @@ type Userbuf_t struct {
 	len    int
 	// 0 <= off <= len
 	off int
-	as  *Aspace_t
+	as  *Vm_t
 }
 
-func (ub *Userbuf_t) ub_init(as *Aspace_t, uva, len int) {
+func (ub *Userbuf_t) ub_init(as *Vm_t, uva, len int) {
 	// XXX fix signedness
 	if len < 0 {
 		panic("negative length")
@@ -95,10 +95,10 @@ type _iove_t struct {
 type Useriovec_t struct {
 	iovs []_iove_t
 	tsz  int
-	as   *Aspace_t
+	as   *Vm_t
 }
 
-func (iov *Useriovec_t) Iov_init(as *Aspace_t, iovarn uint, niovs int) defs.Err_t {
+func (iov *Useriovec_t) Iov_init(as *Vm_t, iovarn uint, niovs int) defs.Err_t {
 	if niovs > 10 {
 		fmt.Printf("many iovecs\n")
 		return -defs.EINVAL

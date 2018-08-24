@@ -110,7 +110,7 @@ func (o *oom_t) dispatch_peasant(need int) {
 	}
 
 	fmt.Printf("Killing PID %d \"%v\" for (%v %v)...\n", vic.Pid, vic.Name,
-		res.Human(need), vic.Aspace.Vmregion.Novma)
+		res.Human(need), vic.Vm.Vmregion.Novma)
 	vic.Doomall()
 	st := time.Now()
 	dl := st.Add(time.Second)
@@ -143,9 +143,9 @@ func (o *oom_t) judge_peasant(p *Proc_t) int {
 		return 0
 	}
 
-	p.Aspace.Lock_pmap()
-	novma := int(p.Aspace.Vmregion.Novma)
-	p.Aspace.Unlock_pmap()
+	p.Vm.Lock_pmap()
+	novma := int(p.Vm.Vmregion.Novma)
+	p.Vm.Unlock_pmap()
 
 	var nofd int
 	p.Fdl.Lock()
