@@ -39,6 +39,9 @@ type Fs_t struct {
 
 func StartFS(mem Blockmem_i, disk Disk_i, console proc.Cons_i, diskfs bool) (*fd.Fd_t, *Fs_t) {
 
+	if mem == nil || disk == nil || console == nil {
+		panic("nil arg")
+	}
 	cons = console
 
 	// reset taken
