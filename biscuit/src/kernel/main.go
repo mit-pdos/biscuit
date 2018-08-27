@@ -1331,7 +1331,7 @@ func main() {
 	// must come before any irq_unmask()s
 	runtime.Install_traphandler(trapstub)
 
-	//pci_dump()
+	//pci.Pci_dump()
 	ncpu := attach_devs()
 
 	kbd_init()

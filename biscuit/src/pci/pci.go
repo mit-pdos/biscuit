@@ -107,7 +107,7 @@ func Pci_bar_mem(tag Pcitag_t, barn int) (uintptr, int) {
 	return uintptr((ret2 << 32) | ret&^0xf), int(blen)
 }
 
-func pci_dump() {
+func Pci_dump() {
 	pcipr := func(b, dev, f int, ind bool) (int, bool) {
 		t := mkpcitag(b, dev, f)
 		v := Pci_read(t, VENDOR, 2)
@@ -185,6 +185,7 @@ const (
 	PCI_DEV_X540T     = 0x1528
 	PCI_DEV_AHCI_QEMU = 0x2922
 	PCI_DEV_AHCI_BHW  = 0x3b22
+	PCI_DEV_AHCI_BHW2 = 0xa102
 )
 
 // map from vendor ids to a map of device ids to attach functions
@@ -242,7 +243,8 @@ func attach_piix3(vendorid, devid int, tag Pcitag_t) {
 	fmt.Printf("legacy disk attached\n")
 }
 
-// (FK) I don't understand this code; maybe it works on Cody's machine.
+// this code determines the mapping of a PCI interrupt pin to an IRQ number for
+// a specific type of Intel southbridge (the one in bhw).
 func pci_disk_interrupt_wiring(t Pcitag_t) int {
 	intline := 0x3d
 	pin := Pci_read(t, intline, 1)
