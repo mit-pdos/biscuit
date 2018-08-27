@@ -126,24 +126,24 @@ func Dmap_init() {
 		for i := range pdpt {
 			pdpt[i] = Pa_t(i)*size | PTE_P | PTE_W | PTE_PS
 		}
-		return
-	}
-	fmt.Printf("1GB pages not supported\n")
+	} else {
+		fmt.Printf("1GB pages not supported\n")
 
-	size = 1 << 21
-	pdptsz := Pa_t(1 << 30)
-	for i := range pdpt {
-		pd := new(Pmap_t)
-		p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
-		if !ok {
-			panic("must succeed")
+		size = 1 << 21
+		pdptsz := Pa_t(1 << 30)
+		for i := range pdpt {
+			pd := new(Pmap_t)
+			p_pd, ok := runtime.Vtop(unsafe.Pointer(pd))
+			if !ok {
+				panic("must succeed")
+			}
+			kpgadd(pd)
+			for j := range pd {
+				pd[j] = Pa_t(i)*pdptsz +
+					Pa_t(j)*size | PTE_P | PTE_W | PTE_PS
+			}
+			pdpt[i] = Pa_t(p_pd) | PTE_P | PTE_W
 		}
-		kpgadd(pd)
-		for j := range pd {
-			pd[j] = Pa_t(i)*pdptsz +
-				Pa_t(j)*size | PTE_P | PTE_W | PTE_PS
-		}
-		pdpt[i] = Pa_t(p_pd) | PTE_P | PTE_W
 	}
 
 	// fill in kent, the list of kernel pml4 entries. make sure we will
