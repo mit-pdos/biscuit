@@ -23,6 +23,7 @@ KSRC := main.go syscall.go
 KSRC := $(addprefix $(K)/,$(KSRC))
 FSRC := bdev.go bitmap.go dir.go fs.go inode.go log.go super.go cache.go blk.go
 FSRC := $(addprefix $(F)/,$(FSRC))
+CS   := $(addprefix $(K)/,$(CS))
 
 PSRC := src/accnt/accnt.go \
 	src/ahci/ahci.go \
