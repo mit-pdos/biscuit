@@ -40,7 +40,8 @@ void usage(char *pre)
 		 "       \"bmiss\"   - branch misses\n"
 		 "       \"llcref\" - LLC references\n"
 		 "       \"llcmiss\" - LLC misses\n"
-		 "       \"dtlbmiss\" - dTLB misses\n"
+		 "       \"dtlbmissl\" - dTLB load misses\n"
+		 "       \"dtlbmisss\" - dTLB store misses\n"
 		 "       \"itlbmiss\" - iTLB misses\n"
 		 "       \"ins\" - instructions retired\n"
 		 "-i int sample after int PMU events. only used with -s.\n"
@@ -71,7 +72,8 @@ long evtadd(char *evt)
 		{"bmiss", PROF_EV_BRANCH_MISS_RETIRED},
 		{"llcmiss", PROF_EV_LLC_MISSES},
 		{"llcref", PROF_EV_LLC_REFS},
-		{"dtlbmiss", PROF_EV_DTLB_LOAD_MISS_ANY},
+		{"dtlbmissl", PROF_EV_DTLB_LOAD_MISS_ANY},
+		{"dtlbmisss", PROF_EV_STORE_DTLB_MISS},
 		{"itlbmiss", PROF_EV_ITLB_LOAD_MISS_ANY},
 		{"ins", PROF_EV_INSTR_RETIRED},
 	};
