@@ -12,6 +12,8 @@ import "util"
 const PTE_P mem.Pa_t = 1 << 0
 const PTE_W mem.Pa_t = 1 << 1
 const PTE_U mem.Pa_t = 1 << 2
+const PTE_A mem.Pa_t = 1 << 5
+const PTE_D mem.Pa_t = 1 << 6
 const PTE_G mem.Pa_t = 1 << 8
 const PTE_PCD mem.Pa_t = 1 << 4
 const PTE_PS mem.Pa_t = 1 << 7

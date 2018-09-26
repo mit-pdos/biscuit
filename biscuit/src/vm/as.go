@@ -429,6 +429,10 @@ func Sys_pgfault(as *Vm_t, vmi *Vminfo_t, faultaddr, ecode uintptr) defs.Err_t {
 			perms |= PTE_COW
 		}
 	}
+	if perms & PTE_W != 0 {
+		perms |= PTE_D
+	}
+	perms |= PTE_A
 
 	var tshoot bool
 	if isblockpage {
