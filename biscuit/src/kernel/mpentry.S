@@ -2,7 +2,7 @@
 
 /*
  * this code needs to go somewhere within the first 1MB of mem (because APs
- * start in real mode and must also have an identity mapping in the kernel
+ * start in real mode) and must also have an identity mapping in the kernel
  * pmap. thus the old bootloader location is a good choice.
  */
 
