@@ -226,7 +226,7 @@ protseg:
 	// BIOS call and thus only has 1MB of addressable memory.
 	movl	$diskbounce, %esi
 	movl	12(%esp), %edi		// arg1
-	movl	$4096, %ecx
+	movl	$4096/4, %ecx
 	cld
 	repnz	movsl
 
