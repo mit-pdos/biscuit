@@ -24,7 +24,7 @@ all of Biscuit's code is in biscuit/.
 
 ## Install
 
-The root of the repository contains the Go 1.11.1 tools/runtime. Some of
+The root of the repository contains the Go 1.10.1 tools/runtime. Some of
 Biscuit's code is modifications to the runtime, mostly in
 src/runtime/os_linux.go.
 
