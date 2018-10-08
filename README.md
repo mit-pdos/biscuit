@@ -3,8 +3,8 @@
 Biscuit is a monolithic, POSIX-subset operating system kernel in Go for x86-64
 CPUs. It was written to study the performance trade-offs of using a high-level
 language with garbage collection to implement a kernel with a common style of
-architecture. You can find the research paper about Biscuit at the PDOS
-website: https://pdos.csail.mit.edu/publications/.
+architecture. You can find the research paper about Biscuit here:
+https://www.usenix.org/system/files/osdi18-cutler.pdf
 
 Biscuit has some important features for getting good application performance:
 - Multicore
@@ -39,4 +39,4 @@ then run Biscuit:
 ( cd biscuit/ && make qemu CPUS=2 )
 
 Biscuit should boot, then you can type a command:
-ls
+> ls
