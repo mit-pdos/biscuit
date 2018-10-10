@@ -8,7 +8,7 @@ ASFLAGS := $(BASEFLAGS) -nostdlib -nostdinc -I$(TOP)
 CFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -nostdinc -fno-builtin \
 	-mno-red-zone -fno-stack-protector
 CXXFLAGS := $(BASEFLAGS) -ffreestanding -nostdlib -fno-builtin -mno-red-zone
-GOPATH ?= $(shell pwd)
+GOPATH := $(shell pwd)
 # bootloader sources
 ASMS := boot.S
 CS   := bootmain.c main.c chentry.c
