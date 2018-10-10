@@ -31,12 +31,34 @@ src/runtime/os_linux.go.
 Biscuit used to build on Linux and OpenBSD, but probably only builds on Linux
 currently. You must build Biscuit's modified Go runtime before building
 Biscuit:
+```
+$ git clone https://github.com/NonerKao/biscuit.git
+$ cd biscuit/src
+$ ./make.bash
+```
 
-( cd src/ && ./make.bash )
-
-then run Biscuit:
-
-( cd biscuit/ && make qemu CPUS=2 )
+then go to Biscuit's main part and launch it:
+```
+$ cd ../biscuit
+$ make qemu CPUS=2
+```
 
 Biscuit should boot, then you can type a command:
-> ls
+```
+# ls
+```
+
+## Troubleshooting
+
+* You need `qemu-system-x86_64` and `python2` in your environment.  If your distribution does not name them that way, you have to fix the naming, path, etc.
+
+* If you encounter troubles during the make, such like:
+```
+src/ahci/ahci.go:8:8: cannot find package "container/list" in any of:
+...
+```
+
+You have to set the GOPATH environment explicitly (assume that your working directory is where the `GNUMakefile` is):
+```
+$ GOPATH=$(pwd) make qemu CPUS=2
+```
