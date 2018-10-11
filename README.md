@@ -32,7 +32,7 @@ Biscuit used to build on Linux and OpenBSD, but probably only builds on Linux
 currently. You must build Biscuit's modified Go runtime before building
 Biscuit:
 ```
-$ git clone https://github.com/NonerKao/biscuit.git
+$ git clone https://github.com/mit-pdos/biscuit.git
 $ cd biscuit/src
 $ ./make.bash
 ```
