@@ -52,13 +52,13 @@ Biscuit should boot, then you can type a command:
 
 * You need `qemu-system-x86_64` and `python2` in your environment.  If your distribution does not name them that way, you have to fix the naming, path, etc.
 
-* If you encounter troubles during the make, such like:
+* If the GOPATH environment variable doesn't contain biscuit/, the build will fail with something like:
 ```
 src/ahci/ahci.go:8:8: cannot find package "container/list" in any of:
 ...
 ```
 
-You have to set the GOPATH environment explicitly (assume that your working directory is where the `GNUMakefile` is):
+Either unset GOPATH or set it explicitly, for example (assuming that your working directory is where the `GNUMakefile` is):
 ```
 $ GOPATH=$(pwd) make qemu CPUS=2
 ```
