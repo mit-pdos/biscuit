@@ -7,6 +7,7 @@ architecture. You can find the research paper about Biscuit here:
 https://www.usenix.org/system/files/osdi18-cutler.pdf
 
 Biscuit has some important features for getting good application performance:
+
 - Multicore
 - Kernel-supported threads
 - Journaled FS with concurrent, deferred, and group commit
@@ -19,7 +20,7 @@ Biscuit also includes a bootloader, a partial libc ("litc"), and some user
 space programs, though we could have used GRUB or existing libc
 implementations, like musl.
 
-This repo is a fork of the Go repo (https://github.com/golang/go).  Nearly all
+This repo is a fork of the Go repo (https://github.com/golang/go). Nearly all
 of Biscuit's code is in biscuit/.
 
 ## Install
@@ -31,6 +32,7 @@ src/runtime/os_linux.go.
 Biscuit used to build on Linux and OpenBSD, but probably only builds on Linux
 currently. You must build Biscuit's modified Go runtime before building
 Biscuit:
+
 ```
 $ git clone https://github.com/mit-pdos/biscuit.git
 $ cd biscuit/src
@@ -38,27 +40,46 @@ $ ./make.bash
 ```
 
 then go to Biscuit's main part and launch it:
+
 ```
 $ cd ../biscuit
 $ make qemu CPUS=2
 ```
 
 Biscuit should boot, then you can type a command:
+
+```
+# ls
+```
+
+## Build with Docker
+
+Don't you have Linux installed on your computer? No worries, you can build the project and run it using docker. You only need to have Docker installed, and run the commands:
+
+```
+docker build -t biscuit .
+docker run -it biscuit
+```
+
+Biscuit should boot, then you can type a command:
+
 ```
 # ls
 ```
 
 ## Troubleshooting
 
-* You need `qemu-system-x86_64` and `python2` in your environment.  If your distribution does not name them that way, you have to fix the naming, path, etc.
+- You need `qemu-system-x86_64` and `python2` in your environment. If your distribution does not name them that way, you have to fix the naming, path, etc.
 
-* If the GOPATH environment variable doesn't contain biscuit/, the build will fail with something like:
+- If the GOPATH environment variable doesn't contain biscuit/, the build will fail with something like:
+
 ```
 src/ahci/ahci.go:8:8: cannot find package "container/list" in any of:
 ...
 ```
 
 Either unset GOPATH or set it explicitly, for example (assuming that your working directory is where the `GNUMakefile` is):
+
 ```
 $ GOPATH=$(pwd) make qemu CPUS=2
 ```
