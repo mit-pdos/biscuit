@@ -3383,6 +3383,10 @@ _malloc(size_t sz)
 		newhdr = 1;
 	}
 	if (newhdr) {
+		if (curh && curh->objs == 0) {
+			_free_header(curh);
+			curh = NULL;
+		}
 		const size_t pgsize = 1 << 12;
 		// Also account for the header that we embed within the
 		// allocated space.
