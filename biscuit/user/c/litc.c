@@ -3349,11 +3349,26 @@ struct header_t {
 	ulong objs;
 	size_t maxsz;
 	struct header_t *next;
+	struct header_t *prev;
 };
 
 static struct header_t *allh;
 static struct header_t *curh;
 static char *bump;
+
+static void
+_free_header(struct header_t *ch)
+{
+	if (ch->prev)
+		ch->prev->next = ch->next;
+	else
+		allh = ch->next;
+	if (ch->next)
+		ch->next->prev = ch->prev;
+	int ret;
+	if ((ret = munmap(ch->start, ch->end - ch->start)) < 0)
+		err(ret, "munmap");
+}
 
 static void *
 _malloc(size_t sz)
@@ -3387,6 +3402,9 @@ _malloc(size_t sz)
 		nh->end = nh->start + mmapsz;
 		nh->objs = 0;
 		nh->next = allh;
+		nh->prev = NULL;
+		if (nh->next)
+			nh->next->prev = nh;
 		nh->maxsz = 0;
 		allh = nh;
 
@@ -3434,16 +3452,13 @@ calloc(size_t n, size_t sz)
 }
 
 static struct header_t *
-_findseg(void *pp, struct header_t **pprev)
+_findseg(void *pp)
 {
 	char *p = (char *)pp;
 	struct header_t *ch;
-	struct header_t *prev = NULL;
-	for (ch = allh; ch; prev = ch, ch = ch->next)
+	for (ch = allh; ch; ch = ch->next)
 		if (ch->start <= p && ch->end > p)
 			break;
-	if (pprev)
-		*pprev = prev;
 	return ch;
 }
 
@@ -3452,25 +3467,14 @@ _free(void *pp)
 {
 	// find containing seg
 	struct header_t *ch;
-	struct header_t *prev;
-	ch = _findseg(pp, &prev);
+	ch = _findseg(pp);
 	if (!ch)
 		errx(-1, "free: bad pointer");
 	ch->objs--;
 	if (ch->objs == 0) {
 		if (ch == curh)
 			return;
-		if (prev)
-			prev->next = ch->next;
-		else
-			allh = ch->next;
-		if (curh == ch) {
-			bump = NULL;
-			curh = NULL;
-		}
-		int ret;
-		if ((ret = munmap(ch->start, ch->end - ch->start)) < 0)
-			err(ret, "munmap");
+		_free_header(ch);
 	}
 }
 
@@ -3492,7 +3496,7 @@ realloc(void *vold, size_t nsz)
 	acquire();
 
 	void *ret = old;
-	struct header_t *ch = _findseg(old, NULL);
+	struct header_t *ch = _findseg(old);
 	// we don't know the exact size of the object, but its size is bounded
 	// as follows
 	size_t oldsz = MIN(ch->maxsz, ch->end - old);
