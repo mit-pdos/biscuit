@@ -530,7 +530,7 @@ func sys_mmap(p *proc.Proc_t, addrn, lenn, protflags, fdn, offset int) int {
 	}
 	ret := addr
 	if failed {
-		for i := 0; i < ub; i += mem.PGSIZE {
+		for i := 0; i <= ub; i += mem.PGSIZE {
 			p.Vm.Page_remove(addr + i)
 		}
 		// removing this region cannot create any more vm objects than
