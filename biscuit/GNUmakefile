@@ -125,17 +125,12 @@ net.img: $(K)/boot $(K)/main.gobin $(SKELDEPS) $(FSPROGS) ./mkfs
 	./mkfs $(K)/boot $(K)/main.gobin $@ $(SKEL) || { rm -f $@; false; }
 
 BHW := bhw.pdos.csail.mit.edu
-
 net: net.img
-	@echo; echo waiting for client copy...
-	@sha1sum $^
-	@ls -al $^
-	until nc $(BHW) 31338 -q1 < $^; do \
-		echo timed out. trying again...; \
-		sleep 1; \
-	done
-	@ls -al $^
-	@echo; echo copied Biscuit image to $(BHW) ; echo
+	./net-helper.sh $^ $(BHW)
+
+BHW2 := bhw2.pdos.csail.mit.edu
+net2: net.img
+	./net-helper.sh $^ $(BHW2)
 
 $(GOBIN):
 	@echo; echo; echo; \
@@ -248,5 +243,5 @@ btest: btest.c
 	gcc -Os -m32 -I./ -o $@.elf $^ -nostdlib -nostdinc -e main -Ttext 0x7c00
 	objcopy -O binary -j.text $@.elf $@
 
-.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net linux net
+.PHONY: clean qemu qemu-gdb gqemu gqemux gqemu-gdb gqemux-gdb net linux net net2
 .PRECIOUS: stamp.py
