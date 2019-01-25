@@ -1205,6 +1205,10 @@ func (x *ixgbe_t) int_handler(vector msi.Msivec_t) {
 			if up && !rantest {
 				// 18.26.5.49 (bhw)
 				me := Ip4_t(0x121a0531)
+				if x.mac[3] == 0x51 {
+					// 18.26.4.54 (bhw2)
+					me = Ip4_t(0x121a0436)
+				}
 				x.ip = me
 				bnet.Nic_insert(me, x)
 
