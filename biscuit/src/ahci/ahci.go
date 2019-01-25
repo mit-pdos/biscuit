@@ -952,8 +952,12 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 	p := &ahci_port_t{}
 	p.cond_flush = sync.NewCond(p)
 	p.cond_queued = sync.NewCond(p)
-	a := ahci.bara + 0x100 + 0x80*pid
-	m := mem.Dmaplen32(uintptr(a), int(unsafe.Sizeof(*p)))
+	port_mmio_len := 0x80
+	a := ahci.bara + 0x100 + pid*port_mmio_len
+	if unsafe.Sizeof(port_reg_t{}) > uintptr(port_mmio_len) {
+		panic("port_reg_t larger than MMIO regs")
+	}
+	m := mem.Dmaplen32(uintptr(a), port_mmio_len)
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
 	if p.init() {
 		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
