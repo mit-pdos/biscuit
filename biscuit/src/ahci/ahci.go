@@ -56,6 +56,9 @@ func (bm *blockmem_t) Refup(pa mem.Pa_t) {
 
 // returns true if start is asynchronous
 func (ahci *ahci_disk_t) Start(req *fs.Bdev_req_t) bool {
+	if ahci.port == nil {
+		panic("nil port")
+	}
 	ahci.port.start(req)
 	return true
 }
@@ -74,10 +77,21 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 
 	d := &ahci_disk_t{}
 	d.tag = t
-	d.bara = pci.Pci_read(t, pci.BAR5, 4)
-	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
-	m := mem.Dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
+	barmask := int((1 << 13) - 1)
+	d.bara = pci.Pci_read(t, pci.BAR5, 4) & barmask
+	bus, dev, fnc := pci.Breakpcitag(t)
+	fmt.Printf("attach AHCI disk %#x on (%v:%v:%v), bara %#x\n", did, bus,
+	    dev, fnc, d.bara)
+	ahci_base_len := 0x1100
+	if uintptr(ahci_base_len) < unsafe.Sizeof(ahci_reg_t{}) {
+		panic("struct larger than MMIO regs")
+	}
+	m := mem.Dmaplen32(uintptr(d.bara), ahci_base_len)
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
+	if LD(&d.ahci.cap) & (1 << 31) == 0 {
+		panic("64bit addressess not supported")
+	}
+
 
 	vec := msi.Msivec_t(0)
 	msicap := 0x80
@@ -548,6 +562,9 @@ func (p *ahci_port_t) init() bool {
 	for cmdslot, _ := range p.cmdh {
 		v := &p.cmdt[cmdslot]
 		pa := mem.Physmem.Dmap_v2p((*mem.Pg_t)(unsafe.Pointer(v)))
+		if pa & ((1 << 7) - 1) != 0 {
+			panic("not 128 byte aligned")
+		}
 		p.cmdh[cmdslot].ctba = (uint64)(pa)
 	}
 
@@ -708,6 +725,9 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 	cmd := &p.cmdt[cmdslot]
 	slot := 0
 	for blk := blks.FrontBlock(); blk != nil; blk = blks.NextBlock() {
+		if uint64(blk.Pa) & 1 != 0 {
+			panic("whut")
+		}
 		ST64(&cmd.prdt[slot].dba, uint64(blk.Pa))
 		l := len(blk.Data)
 		if l != fs.BSIZE {
@@ -724,6 +744,7 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 		slot++
 	}
 	ST16(&p.cmdh[cmdslot].prdtl, uint16(blks.Len()))
+	ST(&p.cmdh[cmdslot].prdbc, 0)
 	return nbytes
 }
 
@@ -1075,7 +1096,61 @@ func (ahci *ahci_disk_t) int_handler(vec msi.Msivec_t) {
 	}
 }
 
+func _chk(_p interface{}, off, base uintptr) {
+	var p uintptr
+	switch v := _p.(type) {
+	case *uint16:
+		p = uintptr(unsafe.Pointer(v))
+	case *uint32:
+		p = uintptr(unsafe.Pointer(v))
+	case *uint64:
+		p = uintptr(unsafe.Pointer(v))
+	default:
+		panic("bad ptr")
+	}
+	diff := p - base
+	if diff != off {
+		fmt.Printf("%#x - %#x (%d) != %d\n", p, base, diff, off)
+		panic("struct padded?")
+	}
+}
+
+func ahci_verify() {
+	a := &ahci_reg_t{}
+	chk := func(p interface{}, off uintptr) {
+		base := uintptr(unsafe.Pointer(a))
+		_chk(p, off, base)
+	}
+	chk(&a.cap2, 0x24)
+}
+
+func port_verify() {
+	nport := &port_reg_t{}
+	chk := func(p interface{}, off uintptr) {
+		base := uintptr(unsafe.Pointer(nport))
+		_chk(p, off, base)
+	}
+	chk(&nport.cmd, 0x18)
+	chk(&nport.ssts, 0x28)
+	chk(&nport.sctl, 0x2c)
+	chk(&nport.serr, 0x30)
+}
+
+func ata_verify() {
+	f := &identify_device_t{}
+	chk := func(p interface{}, off uintptr) {
+		base := uintptr(unsafe.Pointer(f))
+		_chk(p, off, base)
+	}
+	chk(&f.features83, 83*2)
+	chk(&f.features86, 86*2)
+	chk(&f.features119, 119*2)
+}
+
 func Ahci_init() {
+	ahci_verify()
+	port_verify()
+	ata_verify()
 	pci.Pci_register_intel(pci.PCI_DEV_AHCI_BHW, attach_ahci)
 	pci.Pci_register_intel(pci.PCI_DEV_AHCI_BHW2, attach_ahci)
 	pci.Pci_register_intel(pci.PCI_DEV_AHCI_QEMU, attach_ahci)

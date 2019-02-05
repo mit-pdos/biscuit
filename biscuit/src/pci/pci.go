@@ -29,6 +29,9 @@ const (
 
 // width is width of the register in bytes
 func Pci_read(tag Pcitag_t, reg, width int) int {
+	if width <= 0 || (reg / 4 != (reg + width - 1) / 4) {
+		panic("read spans more than one reg")
+	}
 	enable := 1 << 31
 	rsh := reg % 4
 	r := reg - rsh
