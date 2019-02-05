@@ -1349,10 +1349,14 @@ func main() {
 
 	proc.Oom_init(thefs.Fs_evict)
 
-	exec := func(cmd ustr.Ustr, args []ustr.Ustr) {
+	exec := func(cmd ustr.Ustr, args ...string) {
 		fmt.Printf("start [%v %v]\n", cmd, args)
 		nargs := []ustr.Ustr{cmd}
-		nargs = append(nargs, args...)
+		uargs := make([]ustr.Ustr, len(args))
+		for i, _ := range args {
+			uargs[i] = ustr.Ustr(args[i])
+		}
+		nargs = append(nargs, uargs...)
 		defaultfds := []*fd.Fd_t{&fd_stdin, &fd_stdout, &fd_stderr}
 		p, ok := proc.Proc_new(cmd, fd.MkRootCwd(rf), defaultfds, sys)
 		if !ok {
@@ -1366,9 +1370,8 @@ func main() {
 		p.Sched_add(&tf, p.Tid0())
 	}
 
-	//exec("bin/lsh", nil)
-	exec(ustr.Ustr("bin/init"), nil)
-	//exec("bin/rs", []string{"/redis.conf"})
+	exec(ustr.Ustr("bin/init"))
+	//exec(ustr.Ustr("bin/init"), "-r")
 
 	res.Resend()
 	tinfo.ClearCurrent()

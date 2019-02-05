@@ -26,6 +26,23 @@ static void fexec(char * const args[])
 
 int main(int argc, char **argv)
 {
+	int rshd = 0;
+	int c;
+	while ((c = getopt(argc, argv, "r")) != -1) {
+		switch (c) {
+		default:
+			printf("bad option/arg\n");
+			break;
+		case 'r':
+			rshd = 1;
+			break;
+		}
+	}
+	argc -= optind;
+	argv += optind;
+	if (argc > 0)
+		printf("ignoring extra args\n");
+
 	printf("init starting...\n");
 
 	// create dev nodes
@@ -51,6 +68,16 @@ int main(int argc, char **argv)
 	fexec(largs);
 	char * const hargs [] = {"/bin/bmgc", "-h", "470", NULL};
 	fexec(hargs);
+	if (rshd) {
+		printf("starting rshd...\n");
+		pid_t rpid = fork();
+		if (rpid == 0) {
+			char * const rargs [] = {"/bin/rshd", NULL};
+			execv(rargs[0], rargs);
+			err(-1, "execv");
+		} else if (rpid == -1)
+			perror("execv");
+	}
 
 	for (;;) {
 		int pid = fork();
