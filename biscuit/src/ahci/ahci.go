@@ -56,6 +56,9 @@ func (bm *blockmem_t) Refup(pa mem.Pa_t) {
 
 // returns true if start is asynchronous
 func (ahci *ahci_disk_t) Start(req *fs.Bdev_req_t) bool {
+	if ahci.port == nil {
+		panic("nil port")
+	}
 	ahci.port.start(req)
 	return true
 }
@@ -74,10 +77,20 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 
 	d := &ahci_disk_t{}
 	d.tag = t
-	d.bara = pci.Pci_read(t, pci.BAR5, 4)
-	fmt.Printf("attach AHCI disk %#x tag %#x\n", did, d.tag)
-	m := mem.Dmaplen32(uintptr(d.bara), int(unsafe.Sizeof(*d)))
+	barmask := ^uintptr((1 << 4) - 1)
+	d.bara = uintptr(pci.Pci_read(t, pci.BAR5, 4)) & barmask
+	bus, dev, fnc := pci.Breakpcitag(t)
+	fmt.Printf("attach AHCI disk %#x on (%v:%v:%v), bara %#x\n", did, bus,
+	    dev, fnc, d.bara)
+	ahci_base_len := 0x1100
+	if uintptr(ahci_base_len) < unsafe.Sizeof(ahci_reg_t{}) {
+		panic("struct larger than MMIO regs")
+	}
+	m := mem.Dmaplen32(d.bara, ahci_base_len)
 	d.ahci = (*ahci_reg_t)(unsafe.Pointer(&(m[0])))
+	if LD(&d.ahci.cap) & (1 << 31) == 0 {
+		panic("64bit addressess not supported")
+	}
 
 	vec := msi.Msivec_t(0)
 	msicap := 0x80
@@ -155,12 +168,13 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 	SET(&d.ahci.ghc, AHCI_GHC_AE)
 
 	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f) + 1
-	fmt.Printf("AHCI: ahci %#x ncs %#x\n", d.ahci, d.ncs)
+	fmt.Printf("AHCI: ncs %#x\n", d.ncs)
 
 	for i := 0; i < 32; i++ {
 		if LD(&d.ahci.pi)&(1<<uint32(i)) != 0x0 {
-			d.probe_port(i)
-			break
+			if d.probe_port(i) {
+				break
+			}
 		}
 	}
 
@@ -205,7 +219,7 @@ type port_reg_t struct {
 }
 
 type ahci_disk_t struct {
-	bara     int
+	bara     uintptr
 	model    string
 	ahci     *ahci_reg_t
 	tag      pci.Pcitag_t
@@ -316,6 +330,7 @@ type ahci_port_t struct {
 	cond_flush  *sync.Cond
 	cond_queued *sync.Cond
 
+	hba_id   int
 	port      *port_reg_t
 	nslot     uint32
 	next_slot uint32
@@ -337,26 +352,30 @@ type ahci_port_t struct {
 	stat ahci_port_stat_t
 }
 
-type identify_device struct {
-	pad0          [10]uint16 // Words 0-9
+type identify_device_t struct {
+	_             [10]uint16 // Words 0-9
 	serial        [20]uint8  // Words 10-19
-	pad1          [3]uint16  // Words 20-22
+	_             [3]uint16  // Words 20-22
 	firmware      [8]uint8   // Words 23-26
 	model         [40]uint8  // Words 27-46
-	pad2          [13]uint16 // Words 47-59
+	_             [13]uint16 // Words 47-59
 	lba_sectors   uint32     // Words 60-61, assuming little-endian
-	pad3          [13]uint16 // Words 62-74
+	_             [13]uint16 // Words 62-74
 	queue_depth   uint16     // Word 75
 	sata_caps     uint16     // Word 76
-	pad4          [8]uint16  // Words 77-84
+	_             [6]uint16  // Words 77-82
+	features83    uint16     // Words 83
+	_             uint16     // Word 84
 	features85    uint16     // Word 85
 	features86    uint16     // Word 86
 	features87    uint16     // Word 87
 	udma_mode     uint16     // Word 88
-	pad5          [4]uint16  // Words 89-92
+	_             [4]uint16  // Words 89-92
 	hwreset       uint16     // Word 93
-	pad6          [6]uint16  // Words 94-99
-	lba48_sectors uint64     // Words 100-104, assuming little-endian
+	_             [6]uint16  // Words 94-99
+	lba48_sectors uint64     // Words 100-103, assuming little-endian
+	_             [15]uint16 // Words 104-118
+	features119   uint16     // Word 119
 }
 
 const (
@@ -367,7 +386,7 @@ const (
 
 	SATA_SIG_ATA = 0x00000101 // SATA drive
 
-	AHCI_GHC_AE uint32 = (1 << 31) // Use AHCI to communicat
+	AHCI_GHC_AE uint32 = (1 << 31) // Use AHCI to communicate
 	AHCI_GHC_IE uint32 = (1 << 1)  // Enable interrupts from AHCI
 
 	AHCI_PORT_CMD_ST     uint32 = (1 << 0)  // start
@@ -548,6 +567,9 @@ func (p *ahci_port_t) init() bool {
 	for cmdslot, _ := range p.cmdh {
 		v := &p.cmdt[cmdslot]
 		pa := mem.Physmem.Dmap_v2p((*mem.Pg_t)(unsafe.Pointer(v)))
+		if pa & ((1 << 7) - 1) != 0 {
+			panic("not 128 byte aligned")
+		}
 		p.cmdh[cmdslot].ctba = (uint64)(pa)
 	}
 
@@ -599,7 +621,7 @@ func swap(info []uint8) []uint8 {
 	return info
 }
 
-func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
+func (p *ahci_port_t) identify() (*identify_device_t, *string, bool) {
 	fis := &sata_fis_reg_h2d{}
 	fis.fis_type = SATA_FIS_TYPE_REG_H2D
 	fis.cflag = SATA_FIS_REG_CFLAG
@@ -618,13 +640,21 @@ func (p *ahci_port_t) identify() (*identify_device, *string, bool) {
 		return nil, nil, false
 	}
 
-	id := (*identify_device)(unsafe.Pointer(mem.Physmem.Dmap(b.Pa)))
+	id := (*identify_device_t)(unsafe.Pointer(mem.Physmem.Dmap(b.Pa)))
+	if (id.features87 >> 14) != 1 {
+		panic("ATA features87 invalid")
+	}
+	//fmt.Printf("words 82-83 valid: %v\n", (id.features83 >> 14) == 1)
+	//fmt.Printf("words 85-87 valid: %v\n", (id.features87 >> 14) == 1)
+	//fmt.Printf("words 119 valid:   %v\n", (id.features119 >> 14) == 1)
+	//fmt.Printf("features 83 : %#x, 48-bit lba: %v\n", id.features83,
+	//    (id.features83 & (1 << 10)) != 0)
 	if LD16(&id.features86)&IDE_FEATURE86_LBA48 == 0 {
 		fmt.Printf("AHCI: disk too small, driver requires LBA48\n")
 		return nil, nil, false
 	}
 
-	ret_id := &identify_device{}
+	ret_id := &identify_device_t{}
 	*ret_id = *id
 
 	p.pg_free(b.Pa)
@@ -708,6 +738,9 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 	cmd := &p.cmdt[cmdslot]
 	slot := 0
 	for blk := blks.FrontBlock(); blk != nil; blk = blks.NextBlock() {
+		if uint64(blk.Pa) & 1 != 0 {
+			panic("whut")
+		}
 		ST64(&cmd.prdt[slot].dba, uint64(blk.Pa))
 		l := len(blk.Data)
 		if l != fs.BSIZE {
@@ -724,6 +757,7 @@ func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
 		slot++
 	}
 	ST16(&p.cmdh[cmdslot].prdtl, uint16(blks.Len()))
+	ST(&p.cmdh[cmdslot].prdbc, 0)
 	return nbytes
 }
 
@@ -952,12 +986,13 @@ func (ahci *ahci_disk_t) enable_interrupt() {
 		LD(&ahci.ahci.ghc)&0x2, LD(&ahci.port.port.ie))
 }
 
-func (ahci *ahci_disk_t) probe_port(pid int) {
+func (ahci *ahci_disk_t) probe_port(pid int) bool {
 	p := &ahci_port_t{}
+	p.hba_id = pid
 	p.cond_flush = sync.NewCond(p)
 	p.cond_queued = sync.NewCond(p)
 	port_mmio_len := 0x80
-	a := ahci.bara + 0x100 + pid*port_mmio_len
+	a := ahci.bara + 0x100 + uintptr(pid*port_mmio_len)
 	if unsafe.Sizeof(port_reg_t{}) > uintptr(port_mmio_len) {
 		panic("port_reg_t larger than MMIO regs")
 	}
@@ -974,7 +1009,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 			fmt.Printf("AHCI: model %v sectors %#x\n", ahci.model, ahci.nsectors)
 			if id.sata_caps&IDE_SATA_NCQ_SUPPORTED == 0 {
 				fmt.Printf("AHCI: SATA Native Command Queuing not supported\n")
-				return
+				return false
 			}
 			p.nslot = uint32(1 + (id.queue_depth & IDE_SATA_NCQ_QUEUE_DEPTH))
 			fmt.Printf("AHCI: slots %v\n", p.nslot)
@@ -993,9 +1028,10 @@ func (ahci *ahci_disk_t) probe_port(pid int) {
 			ahci.clear_is()
 			ahci.enable_interrupt()
 			go p.queuemgr()
-			return // only one port
+			return true// only one port
 		}
 	}
+	return false
 }
 
 func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
@@ -1075,8 +1111,62 @@ func (ahci *ahci_disk_t) int_handler(vec msi.Msivec_t) {
 	}
 }
 
+func _chk(_p interface{}, off, base uintptr) {
+	var p uintptr
+	switch v := _p.(type) {
+	case *uint16:
+		p = uintptr(unsafe.Pointer(v))
+	case *uint32:
+		p = uintptr(unsafe.Pointer(v))
+	case *uint64:
+		p = uintptr(unsafe.Pointer(v))
+	default:
+		panic("bad ptr")
+	}
+	diff := p - base
+	if diff != off {
+		fmt.Printf("%#x - %#x (%d) != %d\n", p, base, diff, off)
+		panic("struct padded?")
+	}
+}
+
+func ahci_verify() {
+	a := &ahci_reg_t{}
+	chk := func(p interface{}, off uintptr) {
+		base := uintptr(unsafe.Pointer(a))
+		_chk(p, off, base)
+	}
+	chk(&a.cap2, 0x24)
+}
+
+func port_verify() {
+	nport := &port_reg_t{}
+	chk := func(p interface{}, off uintptr) {
+		base := uintptr(unsafe.Pointer(nport))
+		_chk(p, off, base)
+	}
+	chk(&nport.cmd, 0x18)
+	chk(&nport.ssts, 0x28)
+	chk(&nport.sctl, 0x2c)
+	chk(&nport.serr, 0x30)
+}
+
+func ata_verify() {
+	f := &identify_device_t{}
+	chk := func(p interface{}, off uintptr) {
+		base := uintptr(unsafe.Pointer(f))
+		_chk(p, off, base)
+	}
+	chk(&f.features83, 83*2)
+	chk(&f.features86, 86*2)
+	chk(&f.features119, 119*2)
+}
+
 func Ahci_init() {
-	pci.Pci_register(pci.PCI_DEV_AHCI_BHW, attach_ahci)
-	pci.Pci_register(pci.PCI_DEV_AHCI_BHW2, attach_ahci)
-	pci.Pci_register(pci.PCI_DEV_AHCI_QEMU, attach_ahci)
+	ahci_verify()
+	port_verify()
+	ata_verify()
+	pci.Pci_register_intel(pci.PCI_DEV_AHCI_BHW, attach_ahci)
+	pci.Pci_register_intel(pci.PCI_DEV_AHCI_BHW2, attach_ahci)
+	pci.Pci_register_intel(pci.PCI_DEV_AHCI_QEMU, attach_ahci)
 }

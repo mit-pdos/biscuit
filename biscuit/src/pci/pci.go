@@ -29,6 +29,9 @@ const (
 
 // width is width of the register in bytes
 func Pci_read(tag Pcitag_t, reg, width int) int {
+	if width <= 0 || (reg / 4 != (reg + width - 1) / 4) {
+		panic("read spans more than one reg")
+	}
 	enable := 1 << 31
 	rsh := reg % 4
 	r := reg - rsh
@@ -185,23 +188,24 @@ const (
 	PCI_DEV_X540T     = 0x1528
 	PCI_DEV_AHCI_QEMU = 0x2922
 	PCI_DEV_AHCI_BHW  = 0x3b22
-	PCI_DEV_AHCI_BHW2 = 0xa102
+	PCI_DEV_AHCI_BHWX = 0xa102
+	//PCI_DEV_AHCI_BHW2 = 0x8d02 // (0:31:2)
+	PCI_DEV_AHCI_BHW2 = 0x8d62 // (0:17:4)
 )
 
 // map from vendor ids to a map of device ids to attach functions
 var alldevs = map[int]map[int]func(int, int, Pcitag_t){
-	PCI_VEND_INTEL: {
-	// PCI_DEV_PIIX3 : attach_piix3,
-	// PCI_DEV_3400 : attach_3400,
-	//PCI_DEV_X540T:     attach_ixgbe,
-	//PCI_DEV_AHCI_QEMU: attach_ahci,
-	//PCI_DEV_AHCI_BHW:  attach_ahci,
-	},
 }
 
-func Pci_register(dev int, attach func(int, int, Pcitag_t)) {
-	alldevs[PCI_VEND_INTEL][dev] = attach
+func Pci_register(vendor, dev int, attach func(int, int, Pcitag_t)) {
+	if _, ok := alldevs[vendor]; !ok {
+		alldevs[vendor] = make(map[int]func(int, int, Pcitag_t))
+	}
+	alldevs[vendor][dev] = attach
+}
 
+func Pci_register_intel(dev int, attach func(int, int, Pcitag_t)) {
+	Pci_register(PCI_VEND_INTEL, dev, attach)
 }
 
 func pci_attach(vendorid, devid, bus, dev, fu int) {
