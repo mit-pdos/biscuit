@@ -426,7 +426,10 @@ func LD32(f *uint32) uint32 {
 }
 
 func ST(f *uint32, v uint32) {
-	atomic.StoreUint32(f, v)
+	// Serial ATA AHCI 1.3.1 spec, section 3: "locked access are not
+	// supported...indeterminite results may occur"
+	//atomic.StoreUint32(f, v)
+	runtime.Store32(f, v)
 }
 
 func ST16(f *uint16, v uint16) {
@@ -442,7 +445,8 @@ func LD16(f *uint16) uint16 {
 }
 
 func ST64(f *uint64, v uint64) {
-	atomic.StoreUint64(f, v)
+	//atomic.StoreUint64(f, v)
+	runtime.Store64(f, v)
 }
 
 func SET(f *uint32, v uint32) {

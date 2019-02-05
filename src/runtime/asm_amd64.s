@@ -572,6 +572,13 @@ TEXT ·Store32(SB), NOSPLIT, $0-16
 	MOVL	DX, (AX)
 	RET
 
+// Used to guarantee 64bit writes without the lock prefix
+TEXT ·Store64(SB), NOSPLIT, $0-16
+	MOVQ	addr+0(FP), AX
+	MOVQ	v+8(FP), DX
+	MOVQ	DX, (AX)
+	RET
+
 // void lidt(pdesc_t);
 TEXT ·lidt(SB), NOSPLIT, $0-16
 	// lidtq 8(%rsp)

@@ -420,6 +420,7 @@ func Rdtsc() uint64
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
 func Store32(*uint32, uint32)
+func Store64(*uint64, uint64)
 func stackcheck()
 func Sti()
 func _sysentry()
