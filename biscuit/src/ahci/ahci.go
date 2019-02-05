@@ -641,6 +641,14 @@ func (p *ahci_port_t) identify() (*identify_device_t, *string, bool) {
 	}
 
 	id := (*identify_device_t)(unsafe.Pointer(mem.Physmem.Dmap(b.Pa)))
+	if (id.features87 >> 14) != 1 {
+		panic("ATA features87 invalid")
+	}
+	//fmt.Printf("words 82-83 valid: %v\n", (id.features83 >> 14) == 1)
+	//fmt.Printf("words 85-87 valid: %v\n", (id.features87 >> 14) == 1)
+	//fmt.Printf("words 119 valid:   %v\n", (id.features119 >> 14) == 1)
+	//fmt.Printf("features 83 : %#x, 48-bit lba: %v\n", id.features83,
+	//    (id.features83 & (1 << 10)) != 0)
 	if LD16(&id.features86)&IDE_FEATURE86_LBA48 == 0 {
 		fmt.Printf("AHCI: disk too small, driver requires LBA48\n")
 		return nil, nil, false
