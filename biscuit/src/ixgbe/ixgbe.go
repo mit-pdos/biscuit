@@ -1896,5 +1896,5 @@ func (x *ixgbe_t) _dbc_init() {
 }
 
 func Ixgbe_init() {
-	pci.Pci_register(pci.PCI_DEV_X540T, attach_ixgbe)
+	pci.Pci_register_intel(pci.PCI_DEV_X540T, attach_ixgbe)
 }

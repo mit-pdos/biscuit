@@ -1076,7 +1076,7 @@ func (ahci *ahci_disk_t) int_handler(vec msi.Msivec_t) {
 }
 
 func Ahci_init() {
-	pci.Pci_register(pci.PCI_DEV_AHCI_BHW, attach_ahci)
-	pci.Pci_register(pci.PCI_DEV_AHCI_BHW2, attach_ahci)
-	pci.Pci_register(pci.PCI_DEV_AHCI_QEMU, attach_ahci)
+	pci.Pci_register_intel(pci.PCI_DEV_AHCI_BHW, attach_ahci)
+	pci.Pci_register_intel(pci.PCI_DEV_AHCI_BHW2, attach_ahci)
+	pci.Pci_register_intel(pci.PCI_DEV_AHCI_QEMU, attach_ahci)
 }
