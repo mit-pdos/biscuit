@@ -518,6 +518,13 @@ func icmp_daemon() {
 		reply.Crc()
 		txpkt := [][]uint8{reply.Hdrbytes(), echodata}
 		nic.Tx_ipv4(txpkt)
+		if len(origdata) >= 34 {
+			tmp := origdata[32:]
+			// use Linux's or OpenBSD's "ping -p beef" to trigger
+			if tmp[0] == 0xbe && tmp[1] == 0xef {
+				// ...
+			}
+		}
 	}
 }
 
