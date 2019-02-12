@@ -64,7 +64,7 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 		w1 := 0x10 + i*2
 		r1 := Apic.reg_read(w1)
 		// vector: 32 + pin number
-		r1 |= 32 + uint32(i)
+		r1 = defs.IRQ_BASE + uint32(i)
 		var islevel bool
 		var islow bool
 		if i < 16 {
@@ -108,7 +108,7 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 		// route to BSP
 		w2 := w1 + 1
 		r2 := Apic.reg_read(w2)
-		r2 |= bspid << 24
+		r2 = bspid << 24
 		Apic.reg_write(w2, r2)
 	}
 	//ap.dump()
