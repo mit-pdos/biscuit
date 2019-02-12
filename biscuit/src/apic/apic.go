@@ -5,10 +5,19 @@ import "runtime"
 import "sync/atomic"
 import "unsafe"
 
+import "defs"
 import "mem"
 import "util"
 
 var Bsp_apic_id int
+
+const apic_debug bool = false
+
+func dbg(f string, args...interface{}) {
+	if apic_debug {
+		fmt.Printf(f, args)
+	}
+}
 
 // these functions can only be used when interrupts are cleared
 //go:nosplit
@@ -20,6 +29,7 @@ func lap_id() int {
 
 func Bsp_init() {
 	Bsp_apic_id = lap_id()
+	dbg("BSP APIC ID: %#x\n", Bsp_apic_id)
 }
 
 var Apic apic_t
@@ -62,7 +72,7 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 
 	bspid := uint32(Bsp_apic_id)
 
-	//fmt.Printf("APIC ID:  %#x\n", Apic.reg_read(0))
+	dbg("APIC ID:  %#x\n", Apic.reg_read(0))
 	for i := 0; i < Apic.npins; i++ {
 		w1 := 0x10 + i*2
 		r1 := Apic.reg_read(w1)
@@ -190,13 +200,14 @@ func (ap *apic_t) eoi(irq int) {
 	if irq&^0xff != 0 {
 		panic("eio bad irq")
 	}
-	runtime.Store32(ap.regs.eoi, uint32(irq+32))
+	runtime.Store32(ap.regs.eoi, uint32(irq+defs.IRQ_BASE))
 }
 
 func (ap *apic_t) dump() {
 	if ap.npins == 0 {
 		return
 	}
+	fmt.Printf("APIC BASE: %p\n", ap.regs.sel)
 	for i := 0; i < ap.npins; i++ {
 		r1 := ap.reg_read(0x10 + i*2)
 		r2 := ap.reg_read(0x10 + i*2 + 1)

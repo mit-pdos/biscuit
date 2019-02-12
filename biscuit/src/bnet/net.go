@@ -451,7 +451,7 @@ var _rstchan chan rstmsg_t
 func rst_daemon() {
 	for rmsg := range _rstchan {
 		res.Kunresdebug()
-		res.Kresdebug(res.Onek, "icmp daemon")
+		res.Kresdebug(res.Onek, "rst daemon")
 		localip, routeip, err := Routetbl.Lookup(rmsg.k.rip)
 		if err != 0 {
 			continue

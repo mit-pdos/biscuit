@@ -670,6 +670,10 @@ func kbd_get(cnt int) ([]byte, defs.Err_t) {
 }
 
 func attach_devs() int {
+	// must occur before devices attach (drivers may use Bsp_apic_id to
+	// route interrupts to the BSP)
+	apic.Bsp_init()
+
 	ixgbe.Ixgbe_init()
 	ahci.Ahci_init()
 	ncpu := apic.Acpi_attach()
@@ -1297,7 +1301,6 @@ func main() {
 	//	}
 	//}
 
-	apic.Bsp_init()
 	physmem = mem.Phys_init()
 
 	go func() {

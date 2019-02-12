@@ -1,5 +1,7 @@
 package apic
 
+import "fmt"
+
 import "mem"
 import "util"
 
@@ -143,14 +145,18 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 				nover.level = true
 			}
 			apicret.overrides[dst] = nover
-			//fmt.Printf("IRQ OVERRIDE: %v -> %v (%v, %v)\n", src,
+			dbg("*** IRQ OVERRIDE: %v -> %v\n", src, dst)
+			//dbg("IRQ OVERRIDE: %v -> %v (%v, %v)\n", src,
 			//    dst, trig, active)
 		} else if m[0] == tiosapic {
-			//fmt.Printf("*** IO SAPIC\n")
+			dbg("*** IO SAPIC\n")
 		} else if m[0] == tlsapic {
-			//fmt.Printf("*** LOCAL SAPIC\n")
+			dbg("*** LOCAL SAPIC\n")
 		} else if m[0] == tpint {
-			//fmt.Printf("*** PLATFORM INT\n")
+			dbg("*** PLATFORM INT\n")
+		} else if m[0] == tapicaddr {
+			dbg("*** LAPIC ADDR OVERRIDE\n")
+			panic("should use lapic addr override")
 		}
 	}
 	return ncpu, apicret, ncpu != 0 && apicret.base != 0
