@@ -68,6 +68,7 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 		tioapic := uint8(1)
 		toverride := uint8(2)
 
+		tapicaddr := uint8(5)
 		tiosapic := uint8(6)
 		tlsapic := uint8(7)
 		tpint := uint8(8)
@@ -78,9 +79,24 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 				ncpu++
 			}
 		} else if m[0] == tioapic {
-			apicret.base = uintptr(util.Readn(m, 4, 4))
-			//fmt.Printf("IO APIC addr: %x\n", apicret.base)
-			//fmt.Printf("IO APIC IRQ start: %v\n", Readn(m, 4, 8))
+			// ACPI 5.2.12.5 (Interrupt Source Override Structure):
+			// It is assumed that the ISA interrupts will be
+			// identity-mapped into the first I/O APIC sources
+			// (unless an interrupt source override claims
+			// otherwise).
+			base := uintptr(util.Readn(m, 4, 4))
+			gsistart := uintptr(util.Readn(m, 4, 8))
+			if gsistart == 0 {
+				if apicret.base != 0 {
+					panic("IO APIC interrupt mappings overlap")
+				}
+				apicret.base = base
+			} else {
+				fmt.Printf("Ignoring IO APIC with base: %v\n",
+				    gsistart)
+			}
+			dbg("*** IO APIC addr: %x\n", base)
+			dbg("*** IO APIC IRQ start: %v\n", util.Readn(m, 4, 8))
 		} else if m[0] == toverride {
 			src := util.Readn(m, 1, 3)
 			dst := util.Readn(m, 4, 4)

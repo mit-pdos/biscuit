@@ -56,6 +56,9 @@ func (ap *apic_t) apic_init(aioapic acpi_ioapic_t) {
 
 	pinlast := (Apic.reg_read(1) >> 16) & 0xff
 	ap.npins = int(pinlast + 1)
+	if ap.npins < 24 {
+		panic("unexpectedly few pins on first IO APIC")
+	}
 
 	bspid := uint32(Bsp_apic_id)
 
