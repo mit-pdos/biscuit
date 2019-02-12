@@ -28,6 +28,7 @@ CS   := $(addprefix $(K)/,$(CS))
 PSRC := src/accnt/accnt.go \
 	src/ahci/ahci.go \
 	src/apic/apic.go \
+	src/apic/ioapic.go \
 	src/hashtable/hashtable.go \
 	src/bnet/net.go \
 	src/bpath/bpath.go \
