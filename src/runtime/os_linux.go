@@ -2021,7 +2021,7 @@ func lapic_setup(calibrate bool) {
 	_lapaddr = la
 
 	lver := rlap(LAPVER)
-	if lver < 0x10 {
+	if (lver & 0xff) < 0x10 {
 		pancake("82489dx not supported", uintptr(lver))
 	}
 
@@ -2092,6 +2092,9 @@ func lapic_setup(calibrate bool) {
 	if reg & (1 << 11) == 0 {
 		pancake("lapic disabled?", reg)
 	}
+	//if reg & (1 << 10) == 0 {
+	//	pmsg("x2APIC MODE ENABLED\n")
+	//}
 	if (reg >> 12) != 0xfee00 {
 		pancake("weird base addr?", reg >> 12)
 	}
