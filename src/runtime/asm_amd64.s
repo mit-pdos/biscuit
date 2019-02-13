@@ -1115,50 +1115,52 @@ TEXT ·mktrap(SB), NOSPLIT, $0-8
 
 //func Userrun_slow(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 //    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
-TEXT ·Userrun(SB), $0-0
-	CLI
-
-	SWAPGS
-	MOVQ	0(GS), R9
-	SWAPGS
-	//LEAQ	·cpus(SB), R9
-
-	MOVQ	0x18(SP), AX
-	CMPQ	0x28(R9), AX
-	JNE	out
-
-	MOVQ	0x8(SP), AX
-	MOVQ	0x8(AX), AX
-	CMPQ	0x30(R9), AX
-	JNE	out
-
-	MOVQ	0x8(SP), AX
-	CMPQ	0x38(R9), AX
-	JNE	out
-
-	MOVB	0x20(SP), AX
-	TESTB	AX, AX
-	JZ	out
-
-	MOVQ	ARG1(SP), BX
-	SUBQ	$5*8, SP
-	MOVQ	R9, 0x10(SP)
-	MOVB	AX, 0x8(SP)
-	MOVQ	BX, 0x0(SP)
-	CALL	·_Userrun(SB)
-	MOVQ	0x18(SP), AX
-	MOVQ	0x20(SP), BX
-
-	ADDQ	$5*8, SP
-	MOVQ	AX, 0x30(SP)
-	MOVQ	BX, 0x38(SP)
-	MOVQ	$0, 0x40(SP)
-	MOVQ	$0, 0x48(SP)
-	STI
-	RET
-out:
-	ADDQ	$8, SP
-	JMP	runtime·Userrun_slow(SB)
+// this code is brittle and, at the time this comment was written, broken;
+// saved in case i want the performance back some day
+//TEXT ·Userrun(SB), $0-0
+//	CLI
+//
+//	SWAPGS
+//	MOVQ	0(GS), R9
+//	SWAPGS
+//	//LEAQ	·cpus(SB), R9
+//
+//	MOVQ	0x18(SP), AX
+//	CMPQ	0x28(R9), AX
+//	JNE	out
+//
+//	MOVQ	0x8(SP), AX
+//	MOVQ	0x8(AX), AX
+//	CMPQ	0x30(R9), AX
+//	JNE	out
+//
+//	MOVQ	0x8(SP), AX
+//	CMPQ	0x38(R9), AX
+//	JNE	out
+//
+//	MOVB	0x20(SP), AX
+//	TESTB	AX, AX
+//	JZ	out
+//
+//	MOVQ	ARG1(SP), BX
+//	SUBQ	$5*8, SP
+//	MOVQ	R9, 0x10(SP)
+//	MOVB	AX, 0x8(SP)
+//	MOVQ	BX, 0x0(SP)
+//	CALL	·_Userrun(SB)
+//	MOVQ	0x18(SP), AX
+//	MOVQ	0x20(SP), BX
+//
+//	ADDQ	$5*8, SP
+//	MOVQ	AX, 0x30(SP)
+//	MOVQ	BX, 0x38(SP)
+//	MOVQ	$0, 0x40(SP)
+//	MOVQ	$0, 0x48(SP)
+//	STI
+//	RET
+//out:
+//	ADDQ	$8, SP
+//	JMP	runtime·Userrun_slow(SB)
 
 // if you change the number of arguments, you must adjust the stack offsets in
 // _sysentry and ·_userint.

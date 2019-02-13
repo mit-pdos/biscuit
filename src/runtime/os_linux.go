@@ -429,8 +429,8 @@ func trapret(*[TFSIZE]uintptr, uintptr)
 func _userint()
 func _userret()
 func _Userrun(*[TFSIZE]uintptr, bool, *cpu_t) (int, int)
-func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
-    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
+//func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
+//    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool)
 func Wrmsr(int, int)
 
 // adds src to dst
@@ -574,14 +574,14 @@ func CPUHint() int {
 
 //go:nowritebarrierrec
 //go:nosplit
-func Userrun_slow(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
+func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
     p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
 	// while other cpus execute user programs.
 	//entersyscall(0)
-	//Cli()
+	Cli()
 	//Slows++
 	cpu := _Gscpu()
 

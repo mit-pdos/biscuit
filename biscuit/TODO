@@ -1,2 +1,2 @@
 - fix syscall cpu tf/fxbuf bug
-- fix/remove syscall "fastpath" (broke it recently, fast path never taken)
+x fix/remove syscall "fastpath" (broke it recently, fast path never taken)
