@@ -15,7 +15,7 @@ const apic_debug bool = false
 
 func dbg(f string, args...interface{}) {
 	if apic_debug {
-		fmt.Printf(f, args)
+		fmt.Printf(f, args...)
 	}
 }
 

@@ -270,7 +270,7 @@ func mk_memlog(ls, ll int, bcache *bcache_t) *memlog_t {
 	ml := &memlog_t{}
 	ml.loglen = ll - LogOffset // first block of the log is commit block
 	ml.maxtrans = util.Min(ll/2, MaxDescriptor)
-	fmt.Printf("ll %d maxtrans %d\n", ll, ml.maxtrans)
+	fmt.Printf("FS log length %d, maxtrans %d\n", ll, ml.maxtrans)
 	if ml.maxtrans > MaxDescriptor {
 		panic("max trans too large")
 	}

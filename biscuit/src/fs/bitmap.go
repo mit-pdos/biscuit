@@ -156,7 +156,7 @@ func (alloc *bitmap_t) populateFreeMap() {
 		blk.Unlock()
 		alloc.storage.Relse(blk, "alloc apply")
 	}
-	fmt.Printf("freemap %d\n", len(alloc.freemap))
+	//fmt.Printf("freemap %d\n", len(alloc.freemap))
 }
 
 func (alloc *bitmap_t) FindFreeMap(opid opid_t) (int, defs.Err_t) {

@@ -18,6 +18,12 @@ import "stats"
 
 const ahci_debug = false
 
+func dbg(x string, args...interface{}) {
+	if ahci_debug {
+		fmt.Printf(x, args...)
+	}
+}
+
 //
 // AHCI from sv6 from HiStar.
 //
@@ -80,7 +86,7 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 	barmask := ^uintptr((1 << 4) - 1)
 	d.bara = uintptr(pci.Pci_read(t, pci.BAR5, 4)) & barmask
 	bus, dev, fnc := pci.Breakpcitag(t)
-	fmt.Printf("attach AHCI disk %#x on (%v:%v:%v), bara %#x\n", did, bus,
+	fmt.Printf("AHCI %x %x (%v:%v:%v), bara %#x\n", vid, did, bus,
 	    dev, fnc, d.bara)
 	ahci_base_len := 0x1100
 	if uintptr(ahci_base_len) < unsafe.Sizeof(ahci_reg_t{}) {
@@ -97,12 +103,14 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 	cap_entry := pci.Pci_read(d.tag, msicap, 4)
 	if cap_entry&0x1F != 0x5 {
 		fmt.Printf("AHCI: no MSI\n")
+		// this only works with bhw, but the driver uses MSI now; kill
+		// this code?
 		pci.IRQ_DISK = 11 // XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
 		pci.INT_DISK = defs.IRQ_BASE + pci.IRQ_DISK
 	} else { // enable MSI interrupts
 		vec = msi.Msi_alloc()
 
-		fmt.Printf("AHCI: msicap %#x MSI to vec %#x\n", cap_entry, vec)
+		dbg("AHCI: msicap %#x MSI to vec %#x\n", cap_entry, vec)
 
 		var is_64bit = false
 		if cap_entry&PCI_MSI_MCR_64BIT != 0 {
@@ -168,7 +176,7 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 	SET(&d.ahci.ghc, AHCI_GHC_AE)
 
 	d.ncs = ((LD(&d.ahci.cap) >> 8) & 0x1f) + 1
-	fmt.Printf("AHCI: ncs %#x\n", d.ncs)
+	dbg("AHCI: ncs %#x\n", d.ncs)
 
 	for i := 0; i < 32; i++ {
 		if LD(&d.ahci.pi)&(1<<uint32(i)) != 0x0 {
@@ -519,7 +527,7 @@ func (p *ahci_port_t) init() bool {
 
 		CLR(&p.port.cmd, AHCI_PORT_CMD_ST|AHCI_PORT_CMD_FRE)
 
-		fmt.Printf("AHCI: port active, clearing ..\n")
+		dbg("AHCI: port active, clearing ..\n")
 
 		c := 0
 		for LD(&p.port.cmd)&(AHCI_PORT_CMD_CR|AHCI_PORT_CMD_FR) != 0 {
@@ -551,7 +559,7 @@ func (p *ahci_port_t) init() bool {
 	// must be consecutive. pg_new() returns physical pages during boot
 	// consecutively (in increasing order).
 	n := int(unsafe.Sizeof(*p.cmdt))/mem.PGSIZE + 1
-	fmt.Printf("AHCI: size cmdt %v pages %v\n", unsafe.Sizeof(*p.cmdt), n)
+	dbg("AHCI: size cmdt %v pages %v\n", unsafe.Sizeof(*p.cmdt), n)
 	_, pa = p.pg_new()
 	pa1 := pa
 	for i := 1; i < n; i++ {
@@ -644,11 +652,11 @@ func (p *ahci_port_t) identify() (*identify_device_t, *string, bool) {
 	if (id.features87 >> 14) != 1 {
 		panic("ATA features87 invalid")
 	}
-	//fmt.Printf("words 82-83 valid: %v\n", (id.features83 >> 14) == 1)
-	//fmt.Printf("words 85-87 valid: %v\n", (id.features87 >> 14) == 1)
-	//fmt.Printf("words 119 valid:   %v\n", (id.features119 >> 14) == 1)
-	//fmt.Printf("features 83 : %#x, 48-bit lba: %v\n", id.features83,
-	//    (id.features83 & (1 << 10)) != 0)
+	dbg("words 82-83 valid: %v\n", (id.features83 >> 14) == 1)
+	dbg("words 85-87 valid: %v\n", (id.features87 >> 14) == 1)
+	dbg("words 119 valid:   %v\n", (id.features119 >> 14) == 1)
+	dbg("features 83 : %#x, 48-bit lba: %v\n", id.features83,
+	    (id.features83 & (1 << 10)) != 0)
 	if LD16(&id.features86)&IDE_FEATURE86_LBA48 == 0 {
 		fmt.Printf("AHCI: disk too small, driver requires LBA48\n")
 		return nil, nil, false
@@ -730,7 +738,7 @@ func (p *ahci_port_t) fill_fis(cmdslot int, fis *sata_fis_reg_h2d) {
 		ST(&p.cmdt[cmdslot].cfis[i], f[i])
 	}
 	ST16(&p.cmdh[cmdslot].flags, uint16(5))
-	// fmt.Printf("AHCI: fis %#x\n", fis)
+	// dbg("AHCI: fis %#x\n", fis)
 }
 
 func (p *ahci_port_t) fill_prd_v(cmdslot int, blks *fs.BlkList_t) uint64 {
@@ -803,9 +811,7 @@ func (p *ahci_port_t) queuemgr() {
 			}
 		}
 		if p.queued.Len() == 0 || !ok {
-			if ahci_debug {
-				fmt.Printf("queuemgr: go to sleep: %v %v\n", p.queued.Len(), ok)
-			}
+			dbg("queuemgr: go to sleep: %v %v\n", p.queued.Len(), ok)
 			p.cond_queued.Wait()
 		}
 	}
@@ -825,9 +831,7 @@ func (p *ahci_port_t) queue_coalesce(req *fs.Bdev_req_t) {
 			last := r.Blks.BackBlock()
 			first := req.Blks.FrontBlock()
 			if first.Block == last.Block+1 {
-				if ahci_debug {
-					fmt.Printf("collapse %d %d %d\n", first.Block, last.Block, r.Blks.Len())
-				}
+				dbg("collapse %d %d %d\n", first.Block, last.Block, r.Blks.Len())
 				p.stat.Ncoalesce++
 				r.Blks.Append(req.Blks)
 				ok = true
@@ -856,9 +860,7 @@ func (p *ahci_port_t) start(req *fs.Bdev_req_t) {
 		if ci == 0 { // && sact == 0 {
 			break
 		} else {
-			if ahci_debug {
-				fmt.Printf("flush: slots in progress %#x %#x\n", ci, sact)
-			}
+			dbg("flush: slots in progress %#x %#x\n", ci, sact)
 			p.nflush++
 			p.cond_flush.Wait()
 			p.nflush--
@@ -878,9 +880,7 @@ func (p *ahci_port_t) start(req *fs.Bdev_req_t) {
 	// Find slot; if none is available, return
 	s, ok := p.find_slot()
 	if !ok {
-		if ahci_debug {
-			fmt.Printf("AHCI start: queue for slot\n")
-		}
+		dbg("AHCI start: queue for slot\n")
 		p.queued.PushBack(req)
 		p.stat.Nnoslot++
 		return
@@ -905,10 +905,8 @@ func (p *ahci_port_t) startslot(req *fs.Bdev_req_t, s int) {
 		p.issue(s, nil, IDE_CMD_FLUSH_CACHE_EXT)
 	}
 	p.inflight[s] = req
-	if ahci_debug {
-		fmt.Printf("AHCI start: issued slot %v req %v sync %v ci %#x\n",
-			s, req.Cmd, req.Sync, LD(&p.port.ci))
-	}
+	dbg("AHCI start: issued slot %v req %v sync %v ci %#x\n",
+	    s, req.Cmd, req.Sync, LD(&p.port.ci))
 }
 
 // blks must be contiguous on disk (but not necessarily in memory)
@@ -955,10 +953,8 @@ func (p *ahci_port_t) issue(s int, blks *fs.BlkList_t, cmd uint8) {
 	if cmd == IDE_CMD_WRITE_DMA_EXT {
 		SET16(&p.cmdh[s].flags, AHCI_CMD_FLAGS_WRITE)
 	}
-	if ahci_debug {
-		fmt.Printf("cmdh: prdtl %#x flags %#x bc %v\n", LD16(&p.cmdh[s].prdtl),
-			LD16(&p.cmdh[s].flags), LD(&p.cmdh[s].prdbc))
-	}
+	dbg("cmdh: prdtl %#x flags %#x bc %v\n", LD16(&p.cmdh[s].prdtl),
+	    LD16(&p.cmdh[s].flags), LD(&p.cmdh[s].prdbc))
 
 	// issue command
 	ST(&p.port.ci, (1 << uint(s)))
@@ -972,17 +968,14 @@ func (ahci *ahci_disk_t) clear_is() {
 	// port interrupt: if any port interrupts happened in the mean
 	// time, the host interrupt bit will just get set again. */
 	SET(&ahci.ahci.is, (1 << uint32(ahci.portid)))
-	if ahci_debug {
-		fmt.Printf("clear_is: %v is %#x sact %#x gis %#x\n", ahci.portid,
-			LD(&ahci.port.port.is), LD(&ahci.port.port.sact),
-			LD(&ahci.ahci.is))
-	}
+	dbg("clear_is: %v is %#x sact %#x gis %#x\n", ahci.portid,
+	    LD(&ahci.port.port.is), LD(&ahci.port.port.sact), LD(&ahci.ahci.is))
 }
 
 func (ahci *ahci_disk_t) enable_interrupt() {
 	ST(&ahci.port.port.ie, AHCI_PORT_INTR_DEFAULT)
 	SET(&ahci.ahci.ghc, AHCI_GHC_IE)
-	fmt.Printf("AHCI: interrupts enabled ghc %#x ie %#x\n",
+	dbg("AHCI: interrupts enabled ghc %#x ie %#x\n",
 		LD(&ahci.ahci.ghc)&0x2, LD(&ahci.port.port.ie))
 }
 
@@ -999,20 +992,20 @@ func (ahci *ahci_disk_t) probe_port(pid int) bool {
 	m := mem.Dmaplen32(uintptr(a), port_mmio_len)
 	p.port = (*port_reg_t)(unsafe.Pointer(&(m[0])))
 	if p.init() {
-		fmt.Printf("AHCI SATA ATA port %v %#x\n", pid, p.port)
+		dbg("AHCI SATA ATA port %v %#x\n", pid, p.port)
 		ahci.port = p
 		ahci.portid = pid
 		id, m, ok := p.identify()
 		if ok {
 			ahci.model = *m
 			ahci.nsectors = LD64(&id.lba48_sectors)
-			fmt.Printf("AHCI: model %v sectors %#x\n", ahci.model, ahci.nsectors)
+			dbg("AHCI: model %v sectors %#x\n", ahci.model, ahci.nsectors)
 			if id.sata_caps&IDE_SATA_NCQ_SUPPORTED == 0 {
 				fmt.Printf("AHCI: SATA Native Command Queuing not supported\n")
 				return false
 			}
 			p.nslot = uint32(1 + (id.queue_depth & IDE_SATA_NCQ_QUEUE_DEPTH))
-			fmt.Printf("AHCI: slots %v\n", p.nslot)
+			dbg("AHCI: slots %v\n", p.nslot)
 			if p.nslot < ahci.ncs {
 				fmt.Printf("AHCI: NCQ queue depth limited to %d (out of %d)\n",
 					p.nslot, ahci.ncs)
@@ -1022,7 +1015,7 @@ func (ahci *ahci_disk_t) probe_port(pid int) bool {
 			_ = p.enable_write_cache()
 			_ = p.enable_read_ahead()
 			id, _, _ = p.identify()
-			fmt.Printf("AHCI: write cache %v read ahead %v\n",
+			dbg("AHCI: write cache %v read ahead %v\n",
 				LD16(&id.features85)&(1<<5) != 0,
 				LD16(&id.features85)&(1<<4) != 0)
 			ahci.clear_is()
@@ -1044,9 +1037,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 	for s := uint(0); s < 32; s++ {
 		if p.inflight[s] != nil && ci&(1<<s) == 0 {
 			int = true
-			if ahci_debug {
-				fmt.Printf("port_intr: slot %v interrupt\n", s)
-			}
+			dbg("port_intr: slot %v interrupt\n", s)
 			if p.inflight[s].Cmd == fs.BDEV_WRITE {
 				// page has been written, don't need a reference to it
 				// and can be removed from cache.
@@ -1055,9 +1046,7 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 				})
 			}
 			if p.inflight[s].Sync {
-				if ahci_debug {
-					fmt.Printf("port_intr: ack inflight %v\n", s)
-				}
+				dbg("port_intr: ack inflight %v\n", s)
 				// writing to channel while holding ahci lock, but should be ok
 				p.inflight[s].AckCh <- true
 
@@ -1068,15 +1057,13 @@ func (p *ahci_port_t) port_intr(ahci *ahci_disk_t) {
 
 			}
 			if p.nflush > 0 && p.queued.Len() == 0 {
-				if ahci_debug {
-					fmt.Printf("port_intr: wakeup sync %v\n", s)
-				}
+				dbg("port_intr: wakeup sync %v\n", s)
 				p.cond_flush.Signal()
 			}
 		}
 	}
-	if !int && ahci_debug {
-		fmt.Printf("?")
+	if !int {
+		dbg("?")
 	}
 	ahci.clear_is()
 }
@@ -1097,14 +1084,14 @@ func (ahci *ahci_disk_t) intr() {
 			ahci.port.port_intr(ahci)
 		}
 	}
-	if !int && ahci_debug {
-		fmt.Printf("!")
+	if !int {
+		dbg("!")
 	}
 }
 
 // Go routine for handling interrupts
 func (ahci *ahci_disk_t) int_handler(vec msi.Msivec_t) {
-	fmt.Printf("AHCI: interrupt handler running\n")
+	dbg("AHCI: interrupt handler running\n")
 	for {
 		runtime.IRQsched(uint(vec))
 		ahci.intr()
