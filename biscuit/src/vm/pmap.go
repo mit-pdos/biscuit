@@ -200,8 +200,8 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	_tlblock.Lock()
 	defer _tlblock.Unlock()
 
-	runtime.Tlbshoot.Waitfor = int64(Numcpus)
-	runtime.Tlbshoot.P_pmap = p_pmap
+	atomic.StoreInt64(&runtime.Tlbshoot.Waitfor, int64(Numcpus))
+	atomic.StoreUintptr(&runtime.Tlbshoot.P_pmap, p_pmap)
 
 	lapaddr := 0xfee00000
 	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))

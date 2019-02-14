@@ -2078,7 +2078,7 @@ func lapic_setup(calibrate bool) {
 	wlap(LAPICNT, _lapic_quantum)
 
 	maskint := uint32(1 << 16)
-	// mask cmci, lint[01], error, perf counters, and thermal sensor
+	// mask cmci, error, perf counters, and thermal sensor
 	wlap(LVCMCI,    maskint)
 	// unmask LINT0 and LINT1
 	wlap(LVINT0,    rlap(LVINT0) &^ maskint)
@@ -2465,10 +2465,10 @@ func trap(tf *[TFSIZE]uintptr) {
 		wakeup()
 		if !yielding {
 			lap_eoi()
-			if cpu.num == 0 {
-				//wakeup()
-				proftick()
-			}
+			//if cpu.num == 0 {
+			//	//wakeup()
+			//	proftick()
+			//}
 		}
 		// yieldy doesn't return
 		yieldy()
@@ -2803,6 +2803,7 @@ out:
 
 var _lastprof int
 
+// XXX remove this crap
 //go:nosplit
 func proftick() {
 	// goprofile period = 10ms

@@ -364,8 +364,17 @@ func cpus_start(ncpu, aplim int) {
 	// tell the cpus to carry on
 	atomic.StoreUintptr(&ss[sproceed], uintptr(apcnt))
 
+	// wait until all APs have configured their LAPICs, otherwise a CPU
+	// could send a TLB shootdown IPI before another CPU's LAPIC is
+	// configured. the result is a lost IPI, so the sender spins forever
+	// waiting for an unacknowledged TLB shootdown.
+	for atomic.LoadUint64(&_apready) < uint64(apcnt) {
+	}
+
 	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], apcnt)
 }
+
+var _apready uint64
 
 // myid is a logical id, not lapic id
 //go:nosplit
@@ -373,6 +382,7 @@ func ap_entry(myid uint) {
 
 	// myid starts from 1
 	runtime.Ap_setup(myid)
+	atomic.AddUint64(&_apready, 1)
 
 	// ints are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()
