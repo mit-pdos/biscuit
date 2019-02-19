@@ -529,6 +529,22 @@ func loping() {
 
 var _nflip int
 
+func lprint(name string, sl []uint64) {
+	fmt.Printf("%s\n", name)
+	for i, s := range sl {
+		if s != 0 {
+			fmt.Printf("   %3v: %6v\n", i, s)
+		}
+	}
+}
+
+func preset(n string, p *uint64) {
+	var t uint64
+	t = *p
+	*p = 0
+	fmt.Printf("%15s: %v\n", n, t)
+}
+
 func kbd_daemon(cons *cons_t, km map[int]byte) {
 	inb := runtime.Inb
 	start := make([]byte, 0, 10)
