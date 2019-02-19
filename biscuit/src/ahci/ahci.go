@@ -8,7 +8,6 @@ import "unsafe"
 import "container/list"
 
 import "apic"
-import "defs"
 
 import "fs"
 import "mem"
@@ -85,9 +84,6 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 	d.tag = t
 	barmask := ^uintptr((1 << 4) - 1)
 	d.bara = uintptr(pci.Pci_read(t, pci.BAR5, 4)) & barmask
-	bus, dev, fnc := pci.Breakpcitag(t)
-	fmt.Printf("AHCI %x %x (%v:%v:%v), bara %#x\n", vid, did, bus,
-	    dev, fnc, d.bara)
 	ahci_base_len := 0x1100
 	if uintptr(ahci_base_len) < unsafe.Sizeof(ahci_reg_t{}) {
 		panic("struct larger than MMIO regs")
@@ -102,11 +98,11 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 	msicap := 0x80
 	cap_entry := pci.Pci_read(d.tag, msicap, 4)
 	if cap_entry&0x1F != 0x5 {
-		fmt.Printf("AHCI: no MSI\n")
 		// this only works with bhw, but the driver uses MSI now; kill
 		// this code?
-		pci.IRQ_DISK = 11 // XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
-		pci.INT_DISK = defs.IRQ_BASE + pci.IRQ_DISK
+		//pci.IRQ_DISK = 11 // XXX pci_disk_interrupt_wiring(t) returns 23, but 11 works
+		//pci.INT_DISK = defs.IRQ_BASE + pci.IRQ_DISK
+		panic("AHCI: no MSI\n")
 	} else { // enable MSI interrupts
 		vec = msi.Msi_alloc()
 
@@ -172,6 +168,9 @@ func attach_ahci(vid, did int, t pci.Pcitag_t) {
 		}
 
 	}
+	bus, dev, fnc := pci.Breakpcitag(t)
+	fmt.Printf("AHCI %x %x (%v:%v:%v), bara %#x, MSI %v\n", vid, did, bus,
+	    dev, fnc, d.bara, vec)
 
 	SET(&d.ahci.ghc, AHCI_GHC_AE)
 
