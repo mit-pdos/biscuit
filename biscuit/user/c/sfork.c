@@ -114,21 +114,6 @@ void *mapper(void *n)
 
 #define SYSCALL_CLOBBERS "cc", "memory", "r9", "r10", "r11", "r12", "r13", \
 			 "r14", "r15"
-pid_t
-_getppid(void)
-{
-	pid_t ret;
-	asm volatile(
-		"movq	%%rsp, %%r10\n"
-		"leaq	2(%%rip), %%r11\n"
-		"sysenter\n"
-		: "=a"(ret)
-		: "0"(40ul)
-		: "cc", "memory", "r9", "r10", "r11", "edi", "esi", "edx", "ecx", "r8");
-	return ret;
-}
-
-
 void *igetpids(void *idp)
 {
 	pthread_barrier_wait(&bar);
@@ -148,13 +133,13 @@ void *igetpids(void *idp)
 	return (void *)total;
 }
 
-void *getpids(void *idp)
+void *getppids(void *idp)
 {
 	pthread_barrier_wait(&bar);
 
 	long total = 0;
 	while (!cease) {
-		_getppid();
+		getppid();
 		total++;
 	}
 	return (void *)total;
@@ -708,7 +693,7 @@ struct {
 	void (*end)(void);
 } bms[] = {
 	{"renames", 'r', crrename, NULL, NULL},
-	{"getpids", 'c', getpids, NULL, NULL},
+	{"getppids", 'c', getppids, NULL, NULL},
 	{"unix socket", 'u', sunsend, sunspawn, sunkill},
 	{"inline getpids", 'p', igetpids, NULL, NULL},
 	{"forkonly", 'k', forkonly, NULL, NULL},
