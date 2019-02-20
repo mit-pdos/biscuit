@@ -1654,7 +1654,8 @@ _fread1(void *dst, size_t left, FILE *f)
 		if (r < 0) {
 			f->error = errno;
 			return 0;
-		}
+		} else if (r == 0)
+			f->eof = 1;
 		return r;
 	}
 
