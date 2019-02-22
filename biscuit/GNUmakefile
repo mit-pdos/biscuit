@@ -61,7 +61,7 @@ CBINS := hello fault fork getpid fstest fswrite fsmkdir fscreat fsbigwrite \
 	  pipetest kill killtest mmaptest usertests thtests pthtests \
 	  mknodtest sockettest mv sleep time true init sync reboot ebizzy \
 	  uname pwd rmtree halp less lnc rshd bimage fweb fcgi stress \
-	  smallfile largefile cksum head goodcit mmapbench
+	  smallfile largefile cksum head goodcit mmapbench vary
 
 FSCPROGS := $(addprefix fsdir/bin/,$(CBINS))
 CPROGS := $(addprefix user/c/,$(CBINS))

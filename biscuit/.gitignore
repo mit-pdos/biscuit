@@ -81,6 +81,7 @@
 /user/c/cksum
 /user/c/head
 /user/c/goodcit
+/user/c/vary
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -90,6 +91,7 @@
 /user/cxx/linux/mail-deliver
 /user/cxx/linux/mailbench
 /user/cxx/sysroot
+/fsdir/bin/vary
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
