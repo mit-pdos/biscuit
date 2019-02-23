@@ -752,7 +752,7 @@ func hexdump(buf []uint8) {
 var prof = bprof_t{}
 
 func cpuidfamily() (uint, uint) {
-	_ax, _, _, _ := runtime.Cpuid(1, 0)
+	_ax, _, _, _ := cpuid(1, 0)
 	ax := uint(_ax)
 	model := (ax >> 4) & 0xf
 	family := (ax >> 8) & 0xf
@@ -770,8 +770,23 @@ func cpuidfamily() (uint, uint) {
 	return dispmodel, dispfamily
 }
 
+func cpuid(ax, cx uint32) (uint32, uint32, uint32, uint32) {
+	// Intel® Processor Identification and the CPUID Instruction: leafs
+	// greater than 0x80000000 are "extended", leafs less than 0x80000000
+	// are "basic".
+	getmax := uint32(0)
+	if ax >= 0x80000000 {
+		getmax = 0x80000000
+	}
+	maxax, _, _, _ := runtime.Cpuid(getmax, 0)
+	if ax > maxax {
+		panic(fmt.Sprintf("CPU leaf %#x unsupported", ax))
+	}
+	return runtime.Cpuid(ax, cx)
+}
+
 func cpuchk() {
-	_, _, _, dx := runtime.Cpuid(0x80000001, 0)
+	_, _, _, dx := cpuid(0x80000001, 0)
 	arch64 := uint32(1 << 29)
 	if dx&arch64 == 0 {
 		panic("not intel 64 arch?")
@@ -780,7 +795,7 @@ func cpuchk() {
 	rmodel, rfamily := cpuidfamily()
 	fmt.Printf("CPUID: family: %x, model: %x\n", rfamily, rmodel)
 
-	ax, _, cx, dx := runtime.Cpuid(1, 0)
+	ax, _, cx, dx := cpuid(1, 0)
 	stepping := ax & 0xf
 	oldp := rfamily == 6 && rmodel < 3 && stepping < 3
 	sep := uint32(1 << 11)
@@ -788,7 +803,7 @@ func cpuchk() {
 		panic("sysenter not supported")
 	}
 
-	_, _, _, dx = runtime.Cpuid(0x80000007, 0)
+	_, _, _, dx = cpuid(0x80000007, 0)
 	invartsc := uint32(1 << 8)
 	if dx&invartsc == 0 {
 		// no qemu CPUs support invariant tsc, but my hardware does...
@@ -806,7 +821,7 @@ func cpuchk() {
 		panic("no sse42")
 	}
 
-	_, bx, _, _ := runtime.Cpuid(0x7, 0)
+	_, bx, _, _ := cpuid(0x7, 0)
 	bmi1 := bx & 1 << 3 != 0
 	bmi2 := bx & 1 << 8 != 0
 	fmt.Printf("bmi1 %v, bmi2 %v\n", bmi1, bmi2)
@@ -921,13 +936,13 @@ func objresttest() {
 }
 
 func perfsetup() {
-	ax, bx, _, _ := runtime.Cpuid(0xa, 0)
+	ax, bx, _, _ := cpuid(0xa, 0)
 	perfv := ax & 0xff
 	npmc := (ax >> 8) & 0xff
 	pmcbits := (ax >> 16) & 0xff
 	pmebits := (ax >> 24) & 0xff
 	cyccnt := bx&1 == 0
-	_, _, cx, _ := runtime.Cpuid(0x1, 0)
+	_, _, cx, _ := cpuid(0x1, 0)
 	pdc := cx&(1<<15) != 0
 	if pdc && perfv >= 2 && perfv <= 3 && npmc >= 1 && pmebits >= 1 &&
 		cyccnt && pmcbits >= 32 {
@@ -1161,9 +1176,9 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 			ip.events[k] = v
 		}
 	}
-	_, _, ecx, _ := runtime.Cpuid(0x1, 0)
+	_, _, ecx, _ := cpuid(0x1, 0)
 	g1 := ecx&(1<<15) != 0
-	eax, _, _, _ := runtime.Cpuid(0xa, 0)
+	eax, _, _, _ := cpuid(0xa, 0)
 	archperfmonid := (eax & 0xff)
 	if archperfmonid >= 4 {
 		panic("PMC code supports legacy freeze only")
