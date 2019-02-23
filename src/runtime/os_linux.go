@@ -482,7 +482,7 @@ func (c *cpu_t) setthread(t *thread_t) {
 var Cpumhz uint
 var Pspercycle uint
 
-const MAXCPUS int = 32
+const MAXCPUS int = 64
 
 var cpus [MAXCPUS]cpu_t
 
