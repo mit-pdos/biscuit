@@ -66,14 +66,16 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 	for m := tbl[marrayoff:]; len(m) != 0; m = m[m[elen]:] {
 		// ACPI 5.2.12.2: each processor is required to have a LAPIC
 		// entry
-		tlapic := uint8(0)
-		tioapic := uint8(1)
-		toverride := uint8(2)
+		const tlapic uint8 = 0
+		const tioapic uint8 = 1
+		const toverride uint8 = 2
+		const tx2apic uint8 = 9
 
-		tapicaddr := uint8(5)
-		tiosapic := uint8(6)
-		tlsapic := uint8(7)
-		tpint := uint8(8)
+		const tapicaddr uint8 = 5
+		const tiosapic uint8 = 6
+		const tlsapic uint8 = 7
+		const tpint uint8 = 8
+
 		if m[0] == tlapic {
 			flags := util.Readn(m, 4, 4)
 			enabled := 1
@@ -157,6 +159,9 @@ func _acpi_madt(rsdt []uint8) (int, acpi_ioapic_t, bool) {
 		} else if m[0] == tapicaddr {
 			dbg("*** LAPIC ADDR OVERRIDE\n")
 			panic("should use lapic addr override")
+		} else if m[0] == tx2apic {
+			id := util.Readn(m, 4, 4)
+			dbg("*** X2APIC: %#x\n", id)
 		}
 	}
 	return ncpu, apicret, ncpu != 0 && apicret.base != 0

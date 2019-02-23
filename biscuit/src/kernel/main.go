@@ -28,6 +28,7 @@ import "stat"
 import "stats"
 import "tinfo"
 import "ustr"
+import "util"
 import "vm"
 
 const (
@@ -206,14 +207,11 @@ func cpus_stack_init(apcnt int, stackstart uintptr) {
 	}
 }
 
-func cpus_start(ncpu, aplim int) {
-	if aplim+1 >= 1<<8 {
+func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
+	if ncpu+1 >= 1<<8 {
 		fmt.Printf("Logical CPU IDs overflow 8 bits for PMC profiling\n")
 	}
-	runtime.GOMAXPROCS(1 + aplim)
 	apcnt := ncpu - 1
-
-	fmt.Printf("found %v CPUs\n", ncpu)
 
 	if apcnt == 0 {
 		fmt.Printf("uniprocessor\n")
@@ -353,38 +351,176 @@ func cpus_start(ncpu, aplim int) {
 	// wait a while for hopefully all APs to join.
 	time.Sleep(500 * time.Millisecond)
 	apcnt = int(atomic.LoadUintptr(&ss[sapcnt]))
-	if apcnt > aplim {
-		apcnt = aplim
+	if apcnt + 1 > runtime.MAXCPUS {
+		panic("fancy computer!")
 	}
-	set_cpucount(apcnt + 1)
 
-	// actually map the stacks for the CPUs that joined
+	// map the stacks for the CPUs that joined
 	cpus_stack_init(apcnt, stackstart)
 
-	// tell the cpus to carry on
+	// tell the CPUs to call ap_entry
 	atomic.StoreUintptr(&ss[sproceed], uintptr(apcnt))
+
+	// wait until all APs have added their APIC IDs, which we will use to
+	// determine which APs to enable. skip slot 0 since it belongs to the
+	// CPU executing this code, the BSP. in theory, we could get the APIC
+	// IDs from ACPI, but bhw2's MADT table only includes 8-bit IDs, not
+	// the 32-bit IDs.
+	//fmt.Printf("wait for %v IDs...\n", apcnt)
+	for i := 1; i < apcnt + 1; i++ {
+		// assumes no AP has an APIC ID of 0...
+		for atomic.LoadUint32(&_cpus.apicids[i]) == 0 {
+		}
+	}
+
+	topo_crunch(apcnt)
+
+	fmt.Printf("ACPI CPUs %v, found %v APs (%v hyperthreads) across %v " +
+	    "packages\n", ncpu, apcnt, _cpus.nhthreads, _cpus.npackages)
+	cpuperpack := (apcnt + 1)/_cpus.npackages
+	if !hyperthreads {
+		cpuperpack /= int(_cpus.htmask + 1)
+	}
+
+	hts := "with"
+	if !hyperthreads {
+		hts = "no"
+	}
+	fmt.Printf("Joining at most %v CPUs (%s hyperthreads) on %v packages \n",
+	    maxjoin, hts, util.Roundup(maxjoin, cpuperpack) / cpuperpack)
+
+	availaps := make(map[int]uint32)
+	for i := 1; i < apcnt + 1; i++ {
+		availaps[i] = _cpus.apicids[i]
+	}
+
+	joinedaps := 0
+	var joinmask uint64
+	for joinedaps < maxjoin - 1 && len(availaps) != 0 {
+		old := joinedaps
+		for lid, lapid := range availaps {
+			// enable hyper-threads?
+			if !hyperthreads && _cpus.htmask & lapid != 0 {
+				continue
+			}
+			// enable CPUs on packages in ascending order
+			pkg := int(lapid >> _cpus.packageshift)
+			if pkg != (joinedaps + 1) / cpuperpack {
+				continue
+			}
+			delete(availaps, lid)
+			joinmask |= 1 << uint(lid)
+			joinedaps++
+			break
+		}
+		if joinedaps == old {
+			fmt.Printf("\n*** FAILED to satisfy CPU config!\n\n")
+			break
+		}
+	}
+	atomic.StoreUint64(&_cpus.joincpus, joinmask)
 
 	// wait until all APs have configured their LAPICs, otherwise a CPU
 	// could send a TLB shootdown IPI before another CPU's LAPIC is
 	// configured. the result is a lost IPI, so the sender spins forever
 	// waiting for an unacknowledged TLB shootdown.
-	for atomic.LoadUint64(&_apready) < uint64(apcnt) {
+	for atomic.LoadUint64(&_cpus.apready) < uint64(joinedaps) {
 	}
 
-	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], apcnt)
+	set_cpucount(joinedaps + 1)
+
+	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], joinedaps)
 }
 
-var _apready uint64
+var _cpus struct {
+	// 32bits2xAPIC IDs, indexed by the corresponding CPU's (arbitrary)
+	// logical ID.
+	apicids		[runtime.MAXCPUS]uint32
+	// bit n of _joincpus is set iff CPU n is enabled
+	joincpus	uint64
+	apready		uint64
 
-// myid is a logical id, not lapic id
+	htmask		uint32
+	packagemask	uint32
+	packageshift	uint
+	npackages	int
+	nhthreads	int
+}
+
+func topo_crunch(apcnt int) {
+	leaf := uint32(0x1f)
+	if maxbasic, _, _, _ := cpuid(0, 0); leaf > maxbasic {
+		leaf = 0x0b
+	}
+	_, bx, _, _ := cpuid(leaf, 0)
+	if bx == 0 {
+		panic("extended topo leaf unsupported")
+	}
+
+	var shifts [6]uint32
+	var subleaf uint32
+	//names := []string{"", "SMT", "Core", "Module", "Tile", "Die"}
+	for tp := 1; tp != 0; subleaf++ {
+		ax, _, cx, _ := cpuid(leaf, subleaf)
+		// shift is the bit number of the most-significant bit that
+		// makes up the current type of an APIC ID.
+		shift := ax & 0x1f
+		tp = int((cx >> 8) & 0xff)
+		if tp >= len(shifts) {
+			panic("unexpected level type")
+		}
+		shifts[tp] = shift
+	}
+	if shifts[0] != 0 {
+		panic("shift for undefined type")
+	}
+
+	_cpus.htmask = ^(^uint32(0) << shifts[1])
+
+	var pkgshift uint32
+	for i := range shifts {
+		if shifts[i] > pkgshift {
+			pkgshift = shifts[i]
+		}
+		//fmt.Printf("\"%v\" shift: %v\n", names[i], shifts[i])
+	}
+	pkgmask := ^uint32(0) << pkgshift
+	packs := make(map[uint32]bool)
+	for i := 1; i < apcnt + 1; i++ {
+		id := _cpus.apicids[i]
+		packs[id & pkgmask] = true
+		if id & _cpus.htmask != 0 {
+			_cpus.nhthreads++
+		}
+	}
+	_cpus.packagemask = pkgmask
+	_cpus.packageshift = uint(pkgshift)
+	_cpus.npackages = len(packs)
+
+	//for i := 1; i < apcnt + 1; i++ {
+	//	id := _cpus.apicids[i]
+	//	fmt.Printf("%3v: %#x (%#x)\n", i, id, id & _cpus.packagemask)
+	//}
+}
+
+// myid is a logical ID starting from 1 (BSP's is 0), not LAPIC ID
 //go:nosplit
 func ap_entry(myid uint) {
+	_, _, _, apicid := runtime.Cpuid(0xb, 0)
+	//runtime.Pnum(int(apicid))
+	_cpus.apicids[myid] = apicid
 
-	// myid starts from 1
+	// all disabled CPUs loop forever here
+	mybit := uint64(1 << myid)
+	for atomic.LoadUint64(&_cpus.joincpus) & mybit == 0 {
+		runtime.Htpause()
+	}
+
 	runtime.Ap_setup(myid)
-	atomic.AddUint64(&_apready, 1)
+	// tell BSP this CPU's LAPIC is ready to receive IPIs
+	atomic.AddUint64(&_cpus.apready, 1)
 
-	// ints are still cleared. wait for timer int to enter scheduler
+	// interrupts are still cleared. wait for timer int to enter scheduler
 	fl := runtime.Pushcli()
 	fl |= defs.TF_FL_IF
 	runtime.Popcli(fl)
@@ -393,8 +529,9 @@ func ap_entry(myid uint) {
 }
 
 func set_cpucount(n int) {
-	vm.Numcpus = n
+	vm.Numtlbs = n
 	runtime.Setncpu(int32(n))
+	runtime.GOMAXPROCS(n)
 }
 
 func irq_unmask(irq int) {
@@ -1381,8 +1518,9 @@ func main() {
 	kbd_init()
 
 	// control CPUs
-	aplim := 3
-	cpus_start(ncpu, aplim)
+	maxcpus := 4
+	hypers := false
+	cpus_start(ncpu, maxcpus, hypers)
 	//runtime.SCenable = false
 
 	tinfo.SetCurrent(&tinfo.Tnote_t{})

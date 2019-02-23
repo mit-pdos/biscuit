@@ -391,7 +391,7 @@ func fxsave(*[FXREGS]uintptr)
 func _Gscpu() *cpu_t
 func gs_null()
 func gs_set(*cpu_t)
-func htpause()
+func Htpause()
 func invlpg(uintptr)
 func Inb(uint16) uint
 func Inl(int) int
@@ -1105,7 +1105,7 @@ func Splock(l *Spinlock_t) {
 			break
 		}
 		for l.v != 0 {
-			htpause()
+			Htpause()
 		}
 	}
 }

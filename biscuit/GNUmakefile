@@ -84,7 +84,10 @@ SKEL := fsdir
 SKELDEPS := $(shell find $(SKEL))
 
 CPUS := $(shell echo $${CPUS:-1})
+
 QOPTS := -m 8G -smp cpus=$(CPUS) -cpu Nehalem
+# for testing bhw2's configuration
+#QOPTS := -m 8G -cpu Nehalem -smp sockets=2,cores=10,threads=2
 
 OS := $(shell uname -s)
 

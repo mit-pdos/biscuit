@@ -761,7 +761,7 @@ TEXT getret(SB), NOSPLIT, $0-16
 	MOVQ	AX, ret+8(FP)
 	RET
 
-TEXT ·htpause(SB), NOSPLIT, $0-0
+TEXT ·Htpause(SB), NOSPLIT, $0-0
 	PAUSE
 	RET
 

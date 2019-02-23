@@ -189,18 +189,18 @@ func Ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
 	return doflush, true
 }
 
-var Numcpus int = 1
+var Numtlbs int = 1
 var _tlblock = sync.Mutex{}
 
 func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
-	if Numcpus == 1 {
+	if Numtlbs == 1 {
 		runtime.TLBflush()
 		return
 	}
 	_tlblock.Lock()
 	defer _tlblock.Unlock()
 
-	atomic.StoreInt64(&runtime.Tlbshoot.Waitfor, int64(Numcpus))
+	atomic.StoreInt64(&runtime.Tlbshoot.Waitfor, int64(Numtlbs))
 	atomic.StoreUintptr(&runtime.Tlbshoot.P_pmap, p_pmap)
 
 	lapaddr := 0xfee00000
