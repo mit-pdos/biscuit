@@ -68,6 +68,15 @@ static void usage(void)
 	exit(-1);
 }
 
+static void chtemp(void)
+{
+	char buf[] = "/tmp/dir.XXXXXX";
+	if (mkdtemp(buf) == NULL)
+		err(-1, "mkdtemp");
+	if (chdir(buf) == -1)
+		err(-1, "chdir");
+}
+
 int main(int argc, char **argv)
 {
 	char *secs = "5";
@@ -94,6 +103,8 @@ int main(int argc, char **argv)
 	argv += optind;
 	if (argc != 0)
 		usage();
+
+	chtemp();
 
 	for (;;) {
 		int sleeps = random() % 5;
