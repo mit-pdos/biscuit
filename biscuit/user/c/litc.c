@@ -2119,7 +2119,7 @@ memset(void *d, int c, size_t n)
 }
 
 int
-mkstemp(char *t)
+_mkstemp(char *t, int wantdir)
 {
 	// XXX
 	static uint seed;
@@ -2143,10 +2143,15 @@ mkstemp(char *t)
 				*e = 'a' + n;
 			e++;
 		}
-		int fd = open(t, O_RDWR | O_CREAT | O_EXCL, 0600);
-		if (fd != -1)
-			return fd;
-		else if (errno != EEXIST)
+		if (wantdir) {
+			if (mkdir(t, 0700) == 0)
+				return 0;
+		} else {
+			int fd = open(t, O_RDWR | O_CREAT | O_EXCL, 0600);
+			if (fd != -1)
+				return fd;
+		}
+		if (errno != EEXIST)
 			return -1;
 		else if (fails++ == 10)
 			return -1;
@@ -2154,6 +2159,20 @@ mkstemp(char *t)
 inval:
 	errno = EINVAL;
 	return -1;
+}
+
+int
+mkstemp(char *t)
+{
+	return _mkstemp(t, 0);
+}
+
+char *
+mkdtemp(char *t)
+{
+	if (_mkstemp(t, 1) != 0)
+		return NULL;
+	return t;
 }
 
 DIR *

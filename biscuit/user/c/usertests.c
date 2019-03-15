@@ -3394,6 +3394,20 @@ void mkstemptest(void)
 		errx(-1, "msg mismatch");
 	close(fd2);
 	close(fd);
+
+	snprintf(buf, sizeof(buf), "/tmp/dirXXXXXX");
+	if (mkdtemp(buf) == NULL)
+		err(-1, "mkdtemp");
+	struct stat st;
+	if (stat(buf, &st) == -1)
+		err(-1, "stat");
+	if (!S_ISDIR(st.st_mode))
+		errx(-1, "should be dir");
+	if (S_ISREG(st.st_mode))
+		errx(-1, "should be dir");
+	if (rmdir(buf) == -1)
+		err(-1, "rmdir");
+
 	printf("mkstemp test ok\n");
 }
 
