@@ -503,7 +503,8 @@ func topo_crunch(apcnt int) {
 	//}
 }
 
-// myid is a logical ID starting from 1 (BSP's is 0), not LAPIC ID
+// myid is a logical ID starting from 1 (BSP's is 0), not LAPIC ID. They are
+// not necessarily consecutive.
 //go:nosplit
 func ap_entry(myid uint) {
 	_, _, _, apicid := runtime.Cpuid(0xb, 0)
@@ -516,6 +517,9 @@ func ap_entry(myid uint) {
 		runtime.Htpause()
 	}
 
+	// The stack used by APs at this point is a function of myid and the
+	// the TSS setup code in Ap_setup determines the stack using myid in
+	// the same way. Thus the argument to Ap_setup must equal myid.
 	runtime.Ap_setup(myid)
 	// tell BSP this CPU's LAPIC is ready to receive IPIs
 	atomic.AddUint64(&_cpus.apready, 1)
