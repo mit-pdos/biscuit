@@ -666,9 +666,22 @@ func loping() {
 
 var _nflip int
 
-func lprint(name string, sl []uint64) {
+func lprint(name string, _sl interface{}) {
 	fmt.Printf("%s\n", name)
-	for i, s := range sl {
+	var dest []uint64
+	switch sl := _sl.(type) {
+	default:
+		fmt.Printf("** unhandled type\n")
+		return
+	case []uint64:
+		dest = sl
+	case []int:
+		dest = make([]uint64, len(sl))
+		for i := range sl {
+			dest[i] = uint64(sl[i])
+		}
+	}
+	for i, s := range dest {
 		if s != 0 {
 			fmt.Printf("   %3v: %6v\n", i, s)
 		}
