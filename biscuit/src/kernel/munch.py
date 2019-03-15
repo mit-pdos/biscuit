@@ -55,7 +55,7 @@ def openrips(fn):
     cpurips = {}
     # map of CPU ID -> list of lists of sample IP with return addresses
     cpubts = {}
-    for i in range(10):
+    for i in range(40):
         cpurips[i] = []
         cpubts[i] = []
     newbt = []
