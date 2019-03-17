@@ -62,3 +62,7 @@ Either unset GOPATH or set it explicitly, for example (assuming that your workin
 ```
 $ GOPATH=$(pwd) make qemu CPUS=2
 ```
+
+## Contributing
+
+Please feel free to hack on Biscuit! We're happy to accept contributions.
