@@ -646,29 +646,35 @@ static void *alloc(void *_a)
 
 static void *statty(void *_a)
 {
+	long me = (long)(uintptr_t)_a;
+
+	char stdir[64];
+	snprintf(stdir, sizeof stdir, "%ld", me);
+	if (mkdir(stdir, 0755) == -1)
+		err(-1, "mkdir");
+
+	char stfn[64];
+	snprintf(stfn, sizeof stfn, "%s/%ld", stdir, me);
+	int fd;
+	if ((fd = open(stfn, O_CREAT | O_WRONLY | O_EXCL, 0600)) == -1)
+		err(-1, "open");
+	close(fd);
+
 	long tot = 0;
 	pthread_barrier_wait(&bar);
 
 	struct stat st;
 	while (!cease) {
-		if (stat(STFN, &st) == -1)
+		if (stat(stfn, &st) == -1)
 			err(-1, "stat");
 		tot++;
 	}
-	return (void *)tot;
-}
 
-static void stat_st()
-{
-	if (mkdir(_ST1, 0755) == -1 && errno != EEXIST)
-		err(-1, "mkdir");
-	if (mkdir(_ST1 _ST2, 0755) == -1 && errno != EEXIST)
-		err(-1, "mkdir");
-	int fd;
-	if ((fd = open(STFN, O_CREAT | O_WRONLY, 0644)) == -1)
-		err(-1, "mkdir");
-	if (close(fd) == -1)
-		err(-1, "close");
+	if (unlink(stfn) == -1)
+		err(-1, "unlink");
+	if (rmdir(stdir) == -1)
+		err(-1, "rmdir");
+	return (void *)tot;
 }
 
 void *locks(void *_arg)
@@ -706,7 +712,7 @@ struct {
 	{"poll50", '5', poll50, NULL, NULL},
 	{"poll1", '1', poll1, NULL, NULL},
 	{"alloc", 'a', alloc, NULL, NULL},
-	{"stat", 'S', statty, stat_st, NULL},
+	{"stat", 'S', statty, NULL, NULL},
 	{"locks", 'l', locks, NULL, NULL},
 };
 

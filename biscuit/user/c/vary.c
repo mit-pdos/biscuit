@@ -3,8 +3,19 @@
 static long vmin = LONG_MAX, vmax = LONG_MIN;
 static long vtot, vn;
 
+static long
+nowms(void)
+{
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL))
+		err(-1, "gettimeofday");
+	return tv.tv_sec*1000 + tv.tv_usec/1000;
+}
+
 static void fexec(char * const args[])
 {
+	long st = nowms();
+
 	int p[2];
 	if (pipe(p) == -1)
 		err(-1, "pipe");
@@ -21,43 +32,44 @@ static void fexec(char * const args[])
 		execvp(args[0], args);
 		err(-1, "exec (%s)", args[0]);
 	default:
-		{
-		close(p[1]);
-		int status;
-		if (wait(&status) == -1)
-			err(-1, "wait");
-		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-			errx(-1, "child failed (%s) %d", args[0],
-			    WEXITSTATUS(status));
-		FILE *fop = fdopen(p[0], "r");
-		if (!fop)
-			err(-1, "fdopen");
+		break;
+	}
 
-		char buf[256];
-		while (fgets(buf, sizeof(buf), fop) != NULL) {
-			char *h;
-			const char * const pat = "ops: ";
-			if ((h = strstr(buf, pat)) != NULL) {
-				h += strlen(pat);
-				long t = strtol(h, NULL, 10);
-				vmin = (t < vmin) ? t : vmin;
-				vmax = (t > vmax) ? t : vmax;
-				vn++;
-				vtot += t;
-			}
-		}
-		if (ferror(fop))
-			err(-1, "ferror");
-		if (!feof(fop))
-			err(-1, "no eof?");
+	close(p[1]);
+	int status;
+	if (wait(&status) == -1)
+		err(-1, "wait");
+	if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		errx(-1, "child failed (%s) %d", args[0],
+		    WEXITSTATUS(status));
+	FILE *fop = fdopen(p[0], "r");
+	if (!fop)
+		err(-1, "fdopen");
 
-		fclose(fop);
-		close(p[0]);
-		printf("highest variance: %.3f (%ld / %ld), avg %.3f"
-		    " (%ld / %ld)\n", (double)vmax / vmin, vmax, vmin,
-		    (double)vtot / vn, vtot, vn);
+	char buf[256];
+	while (fgets(buf, sizeof(buf), fop) != NULL) {
+		char *h;
+		const char * const pat = "ops: ";
+		if ((h = strstr(buf, pat)) != NULL) {
+			h += strlen(pat);
+			long t = strtol(h, NULL, 10);
+			vmin = (t < vmin) ? t : vmin;
+			vmax = (t > vmax) ? t : vmax;
+			vn++;
+			vtot += t;
 		}
 	}
+	if (ferror(fop))
+		err(-1, "ferror");
+	if (!feof(fop))
+		err(-1, "no eof?");
+
+	fclose(fop);
+	close(p[0]);
+	printf("highest variance: %.3f (%ld / %ld), avg %.3f"
+	    " (%ld / %ld)\n", (double)vmax / vmin, vmax, vmin,
+	    (double)vtot / vn, vtot, vn);
+	printf("   (took %ld ms)\n", nowms() - st);
 }
 
 static void usage(void)
