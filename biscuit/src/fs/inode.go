@@ -214,7 +214,10 @@ func (imem *imemnode_t) Refup(s string) (uint32, bool) {
 func (imem *imemnode_t) Refdown(s string) bool {
 	v := imem.ref.Down()
 	if v == 0 && imem.links == 0 { // remove unlinked inodes from cache
-		imem.fs.icache.cache.Remove(int(imem.inum))
+		rem := imem.fs.icache.cache.Remove(int(imem.inum))
+		if !rem {
+			panic("huh")
+		}
 		return true
 	}
 	return false

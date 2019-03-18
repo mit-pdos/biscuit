@@ -121,6 +121,9 @@ func (c *cache_t) lookupinc(key int) (*Objref_t, bool) {
 		e := v.(*Objref_t)
 		refcnt := atomic.LoadUint32(&e.refcnt)
 		new := refcnt + 1
+		if refcnt & REMOVE != new & REMOVE {
+			panic("no")
+		}
 		if int(int32(refcnt)) < 0 {
 			//fmt.Printf("%v %#x\n", refcnt, refcnt)
 			panic("nuts")
