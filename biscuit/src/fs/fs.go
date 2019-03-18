@@ -1570,6 +1570,16 @@ func (fs *Fs_t) _fs_namei_locked(opid opid_t, paths ustr.Ustr, cwd *fd.Cwd_t) (*
 		idm = n
 		if lastc {
 			// ilookup_lockfree already locked n
+			if start != n {
+				if start.Refdown("") {
+					// unlucky; cwd unlinked out from under
+					// us
+					if n.iunlock_refdown("") {
+						panic("huh?")
+					}
+					return nil, start, -defs.ENOENT
+				}
+			}
 			return n, nil, 0
 		}
 		// "start" is the only imemnode whose refcount is incremented
