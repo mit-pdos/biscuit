@@ -82,6 +82,7 @@
 /user/c/head
 /user/c/goodcit
 /user/c/vary
+/user/c/pstat
 /user/cxx/mail-enqueue
 /user/cxx/mail-qman
 /user/cxx/mail-deliver
@@ -92,6 +93,7 @@
 /user/cxx/linux/mailbench
 /user/cxx/sysroot
 /fsdir/bin/vary
+/fsdir/bin/pstat
 /fsdir/bin/hello
 /fsdir/bin/fault
 /fsdir/bin/fork
