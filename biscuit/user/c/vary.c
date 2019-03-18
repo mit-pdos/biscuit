@@ -75,7 +75,8 @@ static void fexec(char * const args[])
 static void usage(void)
 {
 	printf("\n"
-		"usage: %s [-n threads] [-s seconds] [-b sfork benchmark]\n"
+		//"usage: %s [-n threads] [-s seconds] [-b sfork benchmark]\n"
+		"usage: %s [-n threads] [-s seconds] [-r runs]\n"
 		"\n", __progname);
 	exit(-1);
 }
@@ -93,9 +94,11 @@ int main(int argc, char **argv)
 {
 	char *secs = "5";
 	char *threads = "1";
-	char *bm = "c";
+	int runs = -1;
+	//char *bm = "c";
 	int c;
-	while ((c = getopt(argc, argv, "n:s:b:")) != -1) {
+	//while ((c = getopt(argc, argv, "n:s:b:")) != -1) {
+	while ((c = getopt(argc, argv, "n:s:r:")) != -1) {
 		switch (c) {
 		default:
 			usage();
@@ -103,8 +106,11 @@ int main(int argc, char **argv)
 		case 'n':
 			threads = optarg;
 			break;
-		case 'b':
-			bm = optarg;
+		//case 'b':
+		//	bm = optarg;
+		//	break;
+		case 'r':
+			runs = strtol(optarg, NULL, 0);
 			break;
 		case 's':
 			secs = optarg;
@@ -118,11 +124,16 @@ int main(int argc, char **argv)
 
 	chtemp();
 
-	for (;;) {
+	for (int r = 0;; r++) {
+		if (runs != -1 && r >= runs) {
+			printf("completed %d runs\n", r);
+			break;
+		}
 		int sleeps = random() % 5;
 		printf("%s threads, %s secs, sleep %d...\n", threads, secs, sleeps);
 		sleep(sleeps);
-		char * const args[] = {"sfork", "-s", secs, "-b", bm, threads, NULL};
+		//char * const args[] = {"sfork", "-s", secs, "-b", bm, threads, NULL};
+		char * const args[] = {"pstat", "-d", secs, "-n", threads, NULL};
 		fexec(args);
 	}
 
