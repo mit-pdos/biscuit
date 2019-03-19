@@ -133,7 +133,7 @@ int main(int argc, char **argv)
 		printf("%s threads, %s secs, sleep %d...\n", threads, secs, sleeps);
 		sleep(sleeps);
 		//char * const args[] = {"sfork", "-s", secs, "-b", bm, threads, NULL};
-		char * const args[] = {"pstat", "-d", secs, "-n", threads, NULL};
+		char * const args[] = {"pstat", "-s", secs, "-n", threads, NULL};
 		fexec(args);
 	}
 

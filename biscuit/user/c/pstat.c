@@ -15,7 +15,7 @@ usage(void)
 {
 	printf( "\n"
 		"Usage:\n"
-		"%s [-d sec] [-n nprocs]\n"
+		"%s [-s sec] [-n nprocs]\n"
 		"\n", __progname);
 	exit(-1);
 }
@@ -25,6 +25,12 @@ child(int me, int childin, int childout, int durationsec)
 {
 	char stdir[64];
 	snprintf(stdir, sizeof(stdir), "%d", me);
+	if (mkdir(stdir, 0700) == -1)
+		err(-1, "mkdir");
+
+	if (chdir(stdir) == -1)
+		err(-1, "chdir");
+
 	if (mkdir(stdir, 0700) == -1)
 		err(-1, "mkdir");
 
@@ -56,6 +62,10 @@ child(int me, int childin, int childout, int durationsec)
 		err(-1, "unlink");
 	if (rmdir(stdir) == -1)
 		err(-1, "rmdir");
+	if (chdir("../") == -1)
+		err(-1, "chdir");
+	if (rmdir(stdir) == -1)
+		err(-1, "rmdir");
 
 	exit(0);
 }
@@ -75,9 +85,9 @@ int main(int argc, char **argv)
 	int durationsec = 5;
 	int nprocs = 4;
 	int c;
-	while ((c = getopt(argc, argv, "n:d:")) != -1) {
+	while ((c = getopt(argc, argv, "n:s:")) != -1) {
 		switch (c) {
-		case 'd':
+		case 's':
 			durationsec = strtol(optarg, NULL, 0);
 			break;
 		case 'n':
