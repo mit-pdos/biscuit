@@ -1,6 +1,7 @@
 package proc
 
 import "sync"
+import "sync/atomic"
 
 import "fmt"
 import "runtime"
@@ -15,6 +16,7 @@ import "res"
 import "tinfo"
 import "ustr"
 import "vm"
+import "hashtable"
 
 // per-process limits
 type Ulimit_t struct {
@@ -71,7 +73,38 @@ type Proc_t struct {
 	Oomlink *Proc_t
 }
 
-var Allprocs = make(map[int]*Proc_t, limits.Syslimit.Sysprocs)
+type ptable_t struct {
+	ht	*hashtable.Hashtable_t
+}
+
+func (pt *ptable_t) Get(pid int32) (*Proc_t, bool) {
+	ret, ok := pt.ht.Get(pid)
+	if ok {
+		return ret.(*Proc_t), true
+	}
+	return nil, false
+}
+
+func (pt *ptable_t) Set(pid int32, p *Proc_t) {
+	pt.ht.Set(pid, p)
+}
+
+func (pt *ptable_t) Del(pid int32) {
+	pt.ht.Del(pid)
+}
+
+// Iter may execute concurrently with other lookups, inserts, and deletes
+func (pt *ptable_t) Iter(f func (int32, *Proc_t) bool) {
+	pt.ht.Iter(func (key, value interface{}) bool {
+		pid := key.(int32)
+		p := value.(*Proc_t)
+		return f(pid, p)
+	})
+}
+
+var Ptable = ptable_t {
+	ht: hashtable.MkHash(limits.Syslimit.Sysprocs),
+}
 
 func (p *Proc_t) Tid0() defs.Tid_t {
 	return p.tid0
@@ -664,23 +697,13 @@ func (p *Proc_t) Start_thread(t defs.Tid_t) bool {
 	return p.Mywait._start(int(t), false, p.Ulim.Noproc)
 }
 
-var Proclock = sync.Mutex{}
-
 func Proc_check(pid int) (*Proc_t, bool) {
-	Proclock.Lock()
-	p, ok := Allprocs[pid]
-	Proclock.Unlock()
+	p, ok := Ptable.Get(int32(pid))
 	return p, ok
 }
 
 func Proc_del(pid int) {
-	Proclock.Lock()
-	_, ok := Allprocs[pid]
-	if !ok {
-		panic("bad pid")
-	}
-	delete(Allprocs, pid)
-	Proclock.Unlock()
+	Ptable.Del(int32(pid))
 }
 
 var _deflimits = Ulimit_t{
@@ -697,28 +720,22 @@ var _deflimits = Ulimit_t{
 // returns the new proc and success; can fail if the system-wide limit of
 // procs/threads has been reached. the parent's fdtable must be locked.
 func Proc_new(name ustr.Ustr, cwd *fd.Cwd_t, fds []*fd.Fd_t, sys Syscall_i) (*Proc_t, bool) {
-	Proclock.Lock()
-
-	if nthreads >= int64(limits.Syslimit.Sysprocs) {
-		Proclock.Unlock()
+	if atomic.AddInt64(&nthreads, 1) >= int64(limits.Syslimit.Sysprocs) {
+		atomic.AddInt64(&nthreads, -1)
 		return nil, false
 	}
 
-	nthreads++
-
-	pid_cur++
-	np := pid_cur
-	pid_cur++
-	tid0 := defs.Tid_t(pid_cur)
-	if _, ok := Allprocs[np]; ok {
+	t0 := atomic.AddInt32(&atomic_pid, 2)
+	np := t0 - 1
+	tid0 := defs.Tid_t(t0)
+	if _, ok := Ptable.Get(np); ok {
 		panic("pid exists")
 	}
 	ret := &Proc_t{}
-	Allprocs[np] = ret
-	Proclock.Unlock()
+	Ptable.Set(np, ret)
 
 	ret.Name = name
-	ret.Pid = np
+	ret.Pid = int(np)
 	ret.Fds = make([]*fd.Fd_t, len(fds))
 	ret.fdstart = 3
 	for i := range fds {
@@ -762,29 +779,22 @@ func (p *Proc_t) Reap_doomed(tid defs.Tid_t) {
 
 // total number of all threads
 var nthreads int64
-var pid_cur int
+var atomic_pid int32
 
 // returns false if system-wide limit is hit.
 func tid_new() (defs.Tid_t, bool) {
-	Proclock.Lock()
-	defer Proclock.Unlock()
-	if nthreads > int64(limits.Syslimit.Sysprocs) {
+	if atomic.AddInt64(&nthreads, 1) > int64(limits.Syslimit.Sysprocs) {
+		atomic.AddInt64(&nthreads, -1)
 		return 0, false
 	}
-	nthreads++
-	pid_cur++
-	ret := pid_cur
-
+	ret := atomic.AddInt32(&atomic_pid, 1)
 	return defs.Tid_t(ret), true
 }
 
 func Tid_del() {
-	Proclock.Lock()
-	if nthreads == 0 {
+	if atomic.AddInt64(&nthreads, -1) < 0 {
 		panic("oh shite")
 	}
-	nthreads--
-	Proclock.Unlock()
 }
 
 func CurrentProc() *Proc_t {

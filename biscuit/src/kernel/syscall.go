@@ -4307,11 +4307,10 @@ func sys_info(p *proc.Proc_t, n int) int {
 	case defs.SINFO_PROCLIST:
 		//p.Vm.Vmregion.dump()
 		fmt.Printf("proc dump:\n")
-		proc.Proclock.Lock()
-		for i := range proc.Allprocs {
-			fmt.Printf("   %3v %v\n", proc.Allprocs[i].Pid, proc.Allprocs[i].Name)
-		}
-		proc.Proclock.Unlock()
+		proc.Ptable.Iter(func(_ int32, p *proc.Proc_t) bool {
+			fmt.Printf("   %3v %v\n", p.Pid, p.Name)
+			return false
+		})
 		ret = 0
 	}
 

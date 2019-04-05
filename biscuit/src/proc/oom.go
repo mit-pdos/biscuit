@@ -81,12 +81,11 @@ outter:
 func (o *oom_t) dispatch_peasant(need int) {
 	// the oom killer's memory use should have a small bound
 	var head *Proc_t
-	Proclock.Lock()
-	for _, p := range Allprocs {
+	Ptable.Iter(func (_ int32, p *Proc_t) bool {
 		p.Oomlink = head
 		head = p
-	}
-	Proclock.Unlock()
+		return false
+	})
 
 	var memmax int
 	var vic *Proc_t

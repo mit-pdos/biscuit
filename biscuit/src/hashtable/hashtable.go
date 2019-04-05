@@ -292,6 +292,10 @@ func equal(key1 interface{}, key2 interface{}) bool {
 		us1 := key1.(ustr.Ustr)
 		us2 := key2.(ustr.Ustr)
 		return us1.Eq(us2)
+	case int32:
+		n1 := int32(x)
+		n2 := key2.(int32)
+		return n1 == n2
 	case int:
 		n1 := int(x)
 		n2 := key2.(int)
