@@ -72,9 +72,9 @@ func Resend() {
 	if !Kernel {
 		return
 	}
-	//if !Lims {
-	//	return
-	//}
+	if !Lims {
+		return
+	}
 	runtime.Gresrelease()
 }
 
@@ -95,9 +95,9 @@ func Human(_bytes int) string {
 
 //func _reswait(c int, incremental, block bool) bool {
 func _reswait(want *Res_t, incremental, block bool) bool {
-	//if !Lims {
-	//	return true
-	//}
+	if !Lims {
+		return true
+	}
 	f := runtime.Greserve
 	for !f(want) {
 		//if time.Since(lastp) > time.Second {
@@ -140,9 +140,9 @@ func (ca *Cacheallocs_t) Shouldevict(want *Res_t) bool {
 	if !Kernel {
 		return false
 	}
-	//if !Lims {
-	//	return false
-	//}
+	if !Lims {
+		return false
+	}
 	//init := !ca.initted
 	//ca.initted = true
 	//return !runtime.Cacheres(res, init)
@@ -157,9 +157,9 @@ func Kreswait(want *Res_t, name string) {
 	if !Kernel {
 		return
 	}
-	//if !Lims {
-	//	return
-	//}
+	if !Lims {
+		return
+	}
 	for !runtime.Greserve(want) {
 		fmt.Printf("kernel thread \"%v\" waiting for hog to die...\n", name)
 		Kwaits++
@@ -176,9 +176,9 @@ func Kunres() int {
 	if !Kernel {
 		return 0
 	}
-	//if !Lims {
-	//	return 0
-	//}
+	if !Lims {
+		return 0
+	}
 	runtime.Gresrelease()
 	return 0
 }
