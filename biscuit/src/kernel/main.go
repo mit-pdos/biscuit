@@ -8,6 +8,7 @@ import "sync/atomic"
 import "sync"
 import "time"
 import "unsafe"
+import "sort"
 
 import "ahci"
 import "apic"
@@ -697,6 +698,28 @@ func preset(n string, p *uint64) {
 	t = *p
 	*p = 0
 	fmt.Printf("%15s: %v\n", n, t)
+}
+
+func tabdump() {
+	sort.Slice(runtime.Tab.Rows[:], func(i, j int) bool {
+		return runtime.Tab.Rows[i].Count >= runtime.Tab.Rows[j].Count
+	})
+	fmt.Printf("top contended locks (dropped: %v)\n", runtime.Tab.Dropped)
+	runtime.Tab.Dropped = 0
+	rows := runtime.Tab.Rows[:]
+	for ri := 0; ri < len(rows); ri++ {
+		if rows[ri].Count == 0 {
+			fmt.Printf("%v rows\n", ri)
+			break
+		}
+		if ri < 20 {
+			fmt.Printf("call %v (%v)\n", ri, rows[ri].Count)
+			for _, rip := range rows[ri].Rips {
+				fmt.Printf("    %#x\n", rip)
+			}
+		}
+	}
+	runtime.Tabclear()
 }
 
 func kbd_daemon(cons *cons_t, km map[int]byte) {

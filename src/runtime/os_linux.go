@@ -769,7 +769,52 @@ var Lost struct {
 	User uint
 }
 
-var Freq uint = 4000
+type Tab_t struct {
+	Rows [1000]struct {
+		Count	int
+		Rips	[8]uintptr
+	}
+	Dropped	int
+}
+
+var Tab Tab_t
+var _ztab Tab_t
+
+func (t *Tab_t) clear() {
+	*t = _ztab
+}
+
+func (t *Tab_t) add(prof []uintptr) {
+	if prof[0] == 0 {
+		panic("no")
+	}
+outter:
+	for ri := 0; ri < len(t.Rows); ri++ {
+		if t.Rows[ri].Rips[0] == 0 {
+			copy(t.Rows[ri].Rips[:], prof)
+			t.Rows[ri].Count = 1
+			return
+		}
+		ub := len(prof)
+		if tl := len(t.Rows[ri].Rips); tl < ub {
+			ub = tl
+		}
+		for i := 0; i < ub; i++ {
+			if t.Rows[ri].Rips[i] != prof[i] {
+				continue outter
+			}
+		}
+		t.Rows[ri].Count++
+		return
+	}
+	t.Dropped++
+}
+
+func Tabclear() {
+	Tab.clear()
+}
+
+var Freq uint = (1 << 40)
 
 func Bluh() {
 	if hackmode == 0 || dumrand(0, Freq) != 0 {
@@ -778,10 +823,12 @@ func Bluh() {
 	buf := make([]uintptr, 8)
 	got := callers(1, buf)
 	buf = buf[:got]
-	print("--\n")
-	for i := range buf {
-		print(hex(buf[i]), "\n")
-	}
+
+	Tab.add(buf)
+	//print("--\n")
+	//for i := range buf {
+	//	print(hex(buf[i]), "\n")
+	//}
 }
 
 //go:nosplit
