@@ -77,19 +77,78 @@ type Physmem_t struct {
 	startn uint32
 	// index into pgs of first free pg
 	freei uint32
+	freelen int32
 	pmaps uint32
+	// count of the number of page maps (pml4 pages) in the list, not total
+	// pages used in all page maps
+	pmaplen int32
 	sync.Mutex
 	Dmapinit bool
+	percpu [runtime.MAXCPUS]pcpuphys_t
+}
+
+type pcpuphys_t struct {
+	sync.Mutex
+	freei	uint32
+	freelen	int32
+	pmaps	uint32
+	// count of the number of page maps (pml4 pages) in the list, not total
+	// pages used in all page maps
+	pmaplen	int32
+	//_	[64]uint8
+}
+
+func (pc *pcpuphys_t) percpu_init() {
+	pc.freei = ^uint32(0)
+	pc.pmaps = ^uint32(0)
+	pc.freelen, pc.pmaplen = 0, 0
+}
+
+// returns true iff the page was added to the per-CPU free list
+func (phys *Physmem_t) _pcpu_put(idx uint32, ispmap bool) bool {
+	me := runtime.CPUHint()
+	mine := &phys.percpu[me]
+	var fl *uint32
+	var cnt *int32
+	if ispmap {
+		if mine.pmaplen >= 20 {
+			return false
+		}
+		fl = &mine.pmaps
+		cnt = &mine.pmaplen
+	} else {
+		if mine.freelen >= 100 {
+			return false
+		}
+		fl = &mine.freei
+		cnt = &mine.freelen
+	}
+	phys._phys_insert(fl, idx, mine, cnt)
+	return true
+}
+
+func (phys *Physmem_t) _pcpu_new(ispmap bool) (*Pg_t, Pa_t, bool) {
+	me := runtime.CPUHint()
+	mine := &phys.percpu[me]
+	fl := &mine.freei
+	cnt := &mine.freelen
+	if ispmap {
+		fl = &mine.pmaps
+		cnt = &mine.pmaplen
+	}
+	return phys._phys_new(fl, mine, cnt)
 }
 
 func (phys *Physmem_t) _refpg_new() (*Pg_t, Pa_t, bool) {
-	return phys._phys_new(&phys.freei)
+	if pg, p_pg, ok := phys._pcpu_new(false); ok {
+		return pg, p_pg, ok
+	}
+	return phys._phys_new(&phys.freei, phys, &phys.freelen)
 }
 
 func (phys *Physmem_t) Refcnt(p_pg Pa_t) int {
 	ref, _ := phys.Refaddr(p_pg)
-	c := atomic.AddInt32(ref, 1)
-	return int(c)
+	return int(atomic.LoadInt32(ref))
 }
 
 func (phys *Physmem_t) Refup(p_pg Pa_t) {
@@ -113,21 +172,8 @@ func (phys *Physmem_t) _refdec(p_pg Pa_t) (bool, uint32) {
 	return c == 0, idx
 }
 
-func (phys *Physmem_t) _reffree(idx uint32) {
-	phys.Lock()
-	onext := phys.freei
-	phys.Pgs[idx].nexti = onext
-	phys.freei = idx
-	phys.Unlock()
-}
-
 func (phys *Physmem_t) Refdown(p_pg Pa_t) bool {
-	// add to freelist?
-	if add, idx := phys._refdec(p_pg); add {
-		phys._reffree(idx)
-		return true
-	}
-	return false
+	return phys._phys_put(p_pg, false)
 }
 
 var Zeropg *Pg_t
@@ -155,22 +201,26 @@ func (phys *Physmem_t) Refpg_new_nozero() (*Pg_t, Pa_t, bool) {
 }
 
 func (phys *Physmem_t) Pmap_new() (*Pmap_t, Pa_t, bool) {
-	a, b, ok := phys._phys_new(&phys.pmaps)
-	if ok {
-		return pg2pmap(a), b, true
+	// first try pmap free lists
+	a, b, ok := phys._pcpu_new(true)
+	if !ok {
+		a, b, ok = phys._phys_new(&phys.pmaps, phys, &phys.pmaplen)
 	}
-	a, b, ok = phys.Refpg_new()
+	// fall back to page free lists
+	if !ok {
+		a, b, ok = phys.Refpg_new()
+	}
 	return pg2pmap(a), b, ok
 }
 
-func (phys *Physmem_t) _phys_new(fl *uint32) (*Pg_t, Pa_t, bool) {
+func (phys *Physmem_t) _phys_new(fl *uint32, lock sync.Locker, cnt *int32) (*Pg_t, Pa_t, bool) {
 	if !phys.Dmapinit {
 		panic("dmap not initted")
 	}
 
 	var p_pg Pa_t
 	var ok bool
-	phys.Lock()
+	lock.Lock()
 	ff := *fl
 	if ff != ^uint32(0) {
 		p_pg = Pa_t(ff+phys.startn) << PGSHIFT
@@ -179,26 +229,50 @@ func (phys *Physmem_t) _phys_new(fl *uint32) (*Pg_t, Pa_t, bool) {
 		if phys.Pgs[ff].Refcnt < 0 {
 			panic("negative ref count")
 		}
+		*cnt--
+		if *cnt < 0 {
+			panic("no")
+		}
 	}
-	phys.Unlock()
+	lock.Unlock()
 	if ok {
 		return phys.Dmap(p_pg), p_pg, true
 	}
 	return nil, 0, false
 }
 
-func (phys *Physmem_t) _phys_put(fl *uint32, p_pg Pa_t) {
-	if add, idx := phys._refdec(p_pg); add {
-		phys.Lock()
-		phys.Pgs[idx].nexti = *fl
-		*fl = idx
-		phys.Unlock()
+func (phys *Physmem_t) _phys_insert(fl *uint32, idx uint32, lock sync.Locker, cnt *int32) {
+	lock.Lock()
+	phys.Pgs[idx].nexti = *fl
+	*fl = idx
+	*cnt++
+	if *cnt < 0 {
+		panic("no")
 	}
+	lock.Unlock()
+}
+
+// returns true iff the p_pg was added to the free list
+func (phys *Physmem_t) _phys_put(p_pg Pa_t, ispmap bool) bool {
+	if add, idx := phys._refdec(p_pg); add {
+		if phys._pcpu_put(idx, ispmap) {
+			return true
+		}
+		fl := &phys.freei
+		cnt := &phys.freelen
+		if ispmap {
+			fl = &phys.pmaps
+			cnt = &phys.pmaplen
+		}
+		phys._phys_insert(fl, idx, phys, cnt)
+		return true
+	}
+	return false
 }
 
 // decrease ref count of pml4, freeing it if no CPUs have it loaded into cr3.
 func (phys *Physmem_t) Dec_pmap(p_pmap Pa_t) {
-	phys._phys_put(&phys.pmaps, p_pmap)
+	phys._phys_put(p_pmap, true)
 }
 
 // returns a page-aligned virtual address for the given physical address using
@@ -233,18 +307,31 @@ func (phys *Physmem_t) Dmap8(p Pa_t) []uint8 {
 	return bpg[off:]
 }
 
-func (phys *Physmem_t) Pgcount() (int, int) {
+func (phys *Physmem_t) Pgcount() (int, int, []int, []int) {
 	phys.Lock()
-	r1 := 0
-	for i := phys.freei; i != ^uint32(0); i = phys.Pgs[i].nexti {
-		r1++
-	}
-	r2 := phys.pmapcount()
+	r1 := int(phys.freelen)
+	r2 := phys.pmapcount(&phys.pmaps)
 	phys.Unlock()
-	return r1, r2
+
+	var pcpg []int
+	var pcpm []int
+	for i := range phys.percpu {
+		pc := &phys.percpu[i]
+		pc.Lock()
+		if pc.freelen | pc.pmaplen != 0 {
+			pcpg = append(pcpg, int(pc.freelen))
+			pml := phys.pmapcount(&pc.pmaps)
+			pcpm = append(pcpm, pml)
+		}
+		pc.Unlock()
+	}
+	return r1, r2, pcpg, pcpm
 }
 
 func (phys *Physmem_t) _pmcount(pml4 Pa_t, lev int) int {
+	if lev == 0 {
+		return 0
+	}
 	pg := pg2pmap(phys.Dmap(pml4))
 	ret := 0
 	for _, pte := range pg {
@@ -255,9 +342,9 @@ func (phys *Physmem_t) _pmcount(pml4 Pa_t, lev int) int {
 	return ret
 }
 
-func (phys *Physmem_t) pmapcount() int {
+func (phys *Physmem_t) pmapcount(fl *uint32) int {
 	c := 0
-	for ni := phys.pmaps; ni != ^uint32(0); ni = phys.Pgs[ni].nexti {
+	for ni := *fl; ni != ^uint32(0); ni = phys.Pgs[ni].nexti {
 		v := phys._pmcount(Pa_t(ni+phys.startn)<<PGSHIFT, 4)
 		c += v
 	}
@@ -283,6 +370,7 @@ func Phys_init() *Physmem_t {
 	fpgn := _pg2pgn(first)
 	phys.startn = fpgn
 	phys.freei = 0
+	phys.freelen = 1
 	phys.pmaps = ^uint32(0)
 	phys.Pgs[0].Refcnt = 0
 	phys.Pgs[0].nexti = ^uint32(0)
@@ -302,7 +390,11 @@ func Phys_init() *Physmem_t {
 		phys.Pgs[last].nexti = idx
 		phys.Pgs[idx].nexti = ^uint32(0)
 		last = idx
+		phys.freelen++
 	}
 	fmt.Printf("Reserved %v pages (%vMB)\n", respgs, respgs>>8)
+	for i := range phys.percpu {
+		phys.percpu[i].percpu_init()
+	}
 	return phys
 }

@@ -4302,8 +4302,12 @@ func sys_info(p *proc.Proc_t, n int) int {
 	case defs.SINFO_DOGC:
 		runtime.GC()
 		ret = 0
-		p1, p2 := physmem.Pgcount()
-		fmt.Printf("pgcount: %v, %v\n", p1, p2)
+		p1, p2, pcpg, pcpm := physmem.Pgcount()
+		fmt.Printf("global pgcount: %v, %v\n", p1, p2)
+		fmt.Printf("per-cpu free lists:\n")
+		for i := range pcpg {
+			fmt.Printf("   %4v, %4v\n", pcpg[i], pcpm[i])
+		}
 	case defs.SINFO_PROCLIST:
 		//p.Vm.Vmregion.dump()
 		fmt.Printf("proc dump:\n")

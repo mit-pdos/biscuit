@@ -27,6 +27,7 @@ type elem_t struct {
 type bucket_t struct {
 	sync.RWMutex
 	first *elem_t
+	//_	[64-2*8]uint8
 }
 
 func (b *bucket_t) len() int {
