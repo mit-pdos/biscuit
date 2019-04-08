@@ -362,6 +362,9 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 	// tell the CPUs to call ap_entry
 	atomic.StoreUintptr(&ss[sproceed], uintptr(apcnt))
 
+	// add CPU 0's APIC ID
+	_, _, _, apicid := runtime.Cpuid(0xb, 0)
+	_cpus.apicids[0] = apicid
 	// wait until all APs have added their APIC IDs, which we will use to
 	// determine which APs to enable. skip slot 0 since it belongs to the
 	// CPU executing this code, the BSP. in theory, we could get the APIC
@@ -487,7 +490,7 @@ func topo_crunch(apcnt int) {
 	}
 	pkgmask := ^uint32(0) << pkgshift
 	packs := make(map[uint32]bool)
-	for i := 1; i < apcnt + 1; i++ {
+	for i := 0; i < apcnt + 1; i++ {
 		id := _cpus.apicids[i]
 		packs[id & pkgmask] = true
 		if id & _cpus.htmask != 0 {
