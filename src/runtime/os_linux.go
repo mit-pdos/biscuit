@@ -2301,7 +2301,7 @@ var Tlbshoot struct {
 //go:nowritebarrierrec
 func tlb_shootdown() {
 	ct := Gscpu().mythread
-	if ct != nil && Rcr3() == Tlbshoot.P_pmap {
+	if Rcr3() == Tlbshoot.P_pmap {
 		// lazy way for now
 		Lcr3(Rcr3())
 		//start := tlbshoot_pg
