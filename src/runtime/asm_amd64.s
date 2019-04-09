@@ -579,6 +579,20 @@ TEXT ·Store64(SB), NOSPLIT, $0-16
 	MOVQ	DX, (AX)
 	RET
 
+TEXT ·Or64(SB), NOSPLIT, $0-16
+	MOVQ	ptr+0(FP), AX
+	MOVQ	val+8(FP), BX
+	LOCK
+	ORQ	BX, (AX)
+	RET
+
+TEXT ·And64(SB), NOSPLIT, $0-16
+	MOVQ	ptr+0(FP), AX
+	MOVQ	val+8(FP), BX
+	LOCK
+	ANDQ	BX, (AX)
+	RET
+
 // void lidt(pdesc_t);
 TEXT ·lidt(SB), NOSPLIT, $0-16
 	// lidtq 8(%rsp)

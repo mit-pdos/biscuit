@@ -415,12 +415,14 @@ func Rcr0() uintptr
 func Rcr2() uintptr
 func Rcr3() uintptr
 func Rcr4() uintptr
-func Rdmsr(int) int
+func Rdmsr(int) uintptr
 func Rdtsc() uint64
 func Sgdt(*uintptr)
 func Sidt(*uintptr)
 func Store32(*uint32, uint32)
 func Store64(*uint64, uint64)
+func Or64(*uint64, uint64)
+func And64(*uint64, uint64)
 func stackcheck()
 func Sti()
 func _sysentry()
@@ -575,7 +577,7 @@ func CPUHint() int {
 //go:nowritebarrierrec
 //go:nosplit
 func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
-    p_pmap uintptr, fastret bool, pmap_ref *int32) (int, int, uintptr, bool) {
+    p_pmap uintptr, fastret bool, pmap_ref *int32, tlb_ref *uint64) (int, int, uintptr, bool, uint64) {
 
 	// {enter,exit}syscall() may not be worth the overhead. i believe the
 	// only benefit for biscuit is that cpus running in the kernel could GC
@@ -584,6 +586,7 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 	Cli()
 	//Slows++
 	cpu := _Gscpu()
+	mynum := uint64(cpu.num)
 
 	var opmap uintptr
 	var dopdec bool
@@ -595,6 +598,7 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 		atomic.Xadd(dur, 1)
 		Lcr3(p_pmap)
 		cpu.shadowcr3 = p_pmap
+		Or64(tlb_ref, 1 << mynum)
 	}
 
 	// if doing a fast return after a syscall, we need to restore some user
@@ -625,7 +629,7 @@ func Userrun(tf *[TFSIZE]uintptr, fxbuf *[FXREGS]uintptr,
 
 	Sti()
 	//exitsyscall(0)
-	return intno, aux, opmap, dopdec
+	return intno, aux, opmap, dopdec, mynum
 }
 
 type nmiprof_t struct {
@@ -704,7 +708,7 @@ func _consumelbr() {
 	//l := 16 * 2
 	l := 0
 	for i := 0; i < lbrlen; i++ {
-		from := uintptr(Rdmsr(lastbranch_0_from_ip + i))
+		from := Rdmsr(lastbranch_0_from_ip + i)
 		mispred := uintptr(1 << 63)
 		if from & mispred != 0 {
 			l++
@@ -716,7 +720,7 @@ func _consumelbr() {
 	idx := int(atomic.Xadd64(&nmiprof.bufidx, int64(l)))
 	idx -= l
 	for i := 0; i < 16; i++ {
-		from := uintptr(Rdmsr(lastbranch_0_from_ip + i))
+		from := Rdmsr(lastbranch_0_from_ip + i)
 		Wrmsr(lastbranch_0_from_ip + i, 0)
 		mispred := uintptr(1 << 63)
 		if from & mispred == 0 {
@@ -2135,7 +2139,7 @@ func lapic_setup(calibrate bool) {
 	wlap(LVTHERMAL, maskint)
 
 	ia32_apic_base := 0x1b
-	reg := uintptr(Rdmsr(ia32_apic_base))
+	reg := Rdmsr(ia32_apic_base)
 	if reg & (1 << 11) == 0 {
 		pancake("lapic disabled?", reg)
 	}
@@ -2161,7 +2165,7 @@ func lapic_setup(calibrate bool) {
 //go:nowritebarrierrec
 func proc_setup() {
 	_userintaddr = funcPC(_userint)
-	_sigsimaddr = funcPC(sigsim)
+	//_sigsimaddr = funcPC(sigsim)
 
 	chksize(TFSIZE*8, unsafe.Sizeof(threads[0].tf))
 	// initialize the first thread: us
@@ -2291,28 +2295,35 @@ func TLBflush() {
 	Popcli(fl)
 }
 
-var Tlbshoot struct {
-	Waitfor	int64
+type Tlbstate_t struct {
 	P_pmap	uintptr
+	Cpum	uint64
+}
+
+var Tlbshoots struct {
+	States	[MAXCPUS]Tlbstate_t
 }
 
 // must be nosplit since called at interrupt time
 //go:nosplit
 //go:nowritebarrierrec
 func tlb_shootdown() {
-	ct := Gscpu().mythread
-	if Rcr3() == Tlbshoot.P_pmap {
-		// lazy way for now
-		Lcr3(Rcr3())
-		//start := tlbshoot_pg
-		//end := tlbshoot_pg + tlbshoot_count * PGSIZE
-		//for ; start < end; start += PGSIZE {
-		//	invlpg(start)
-		//}
-	}
-	v := atomic.Xaddint64(&Tlbshoot.Waitfor, -1)
-	if v < 0 {
-		pancake("shootwait < 0", uintptr(v))
+	cpu := Gscpu()
+	ct := cpu.mythread
+
+	flushed := false
+	mine := Rcr3()
+	memask := uint64(1 << cpu.num)
+	for i := range Tlbshoots.States {
+		st := &Tlbshoots.States[i]
+		pm := atomic.Loaduintptr(&st.P_pmap)
+		if pm != 0 {
+			Or64(&st.Cpum, memask)
+			if pm == mine && !flushed {
+				flushed = true
+				Lcr3(Rcr3())
+			}
+		}
 	}
 	sched_resume(ct)
 }
@@ -2326,7 +2337,6 @@ const (
 	TRAP_DISK	= (32 + 14)
 	TRAP_SPUR	= 64
 	TRAP_TLBSHOOT	= 70
-	TRAP_SIGRET	= 71
 	TRAP_PERFMASK	= 72
 	TRAP_YIELD	= 73
 )
@@ -2476,7 +2486,7 @@ func trap(tf *[TFSIZE]uintptr) {
 			ct.tf[TF_RAX] = trapno
 			ct.tf[TF_RBX] = Rcr2()
 			// XXXPANIC
-			if trapno == TRAP_YIELD || trapno == TRAP_SIGRET {
+			if trapno == TRAP_YIELD {
 				pancake("nyet", trapno)
 			}
 		} else {
@@ -2523,9 +2533,6 @@ func trap(tf *[TFSIZE]uintptr) {
 		// we vet out kernel mode CPU exceptions above must be from
 		// user program. thus return from Userrun() to kernel.
 		sched_run(ct)
-	} else if trapno == TRAP_SIGRET {
-		// does not return
-		sigret(ct)
 	} else if trapno == TRAP_PERFMASK {
 		lap_eoi()
 		perfmask()
@@ -2850,7 +2857,7 @@ out:
 
 var _lastprof int
 
-// XXX remove this crap
+// XXX remove signal emulation (old, used for go profiling) crap
 //go:nosplit
 func proftick() {
 	// goprofile period = 10ms
@@ -2961,29 +2968,6 @@ func mksig(t *thread_t, signo int32) {
 
 	t.tf[TF_RSP] = rsp
 	t.tf[TF_RIP] = _sigsimaddr
-}
-
-//go:nosplit
-func sigsim(signo int32, si unsafe.Pointer, ctx *ucontext_t) {
-	// the purpose of fakesig is to enter the runtime's usual signal
-	// handler from go code. the signal handler uses sys5abi, so fakesig
-	// converts between calling conventions.
-	fakesig(signo, nil, ctx)
-	mktrap(TRAP_SIGRET)
-}
-
-//go:nosplit
-func sigret(t *thread_t) {
-	if t.status != ST_RUNNING {
-		pancake("uh oh!", uintptr(t.status))
-	}
-	t.tf = t.sigtf
-	t.fx = t.sigfx
-	t.doingsig = 0
-	if t.status != ST_RUNNING {
-		pancake("wut", uintptr(t.status))
-	}
-	sched_run(t)
 }
 
 // if sigsim() is used to deliver signals other than SIGPROF, you will need to

@@ -435,10 +435,11 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 		// was interrupted by a timer interrupt/CPU exception vs a
 		// syscall.
 		refp, _ := mem.Physmem.Refaddr(p.Vm.P_pmap)
+		tlbp := mem.Physmem.Tlbaddr(p.Vm.P_pmap)
 		res.Resend()
 
-		intno, aux, op_pmap, odec := runtime.Userrun(tf, fxbuf,
-			uintptr(p.Vm.P_pmap), fastret, refp)
+		intno, aux, op_pmap, odec, cpunum := runtime.Userrun(tf, fxbuf,
+			uintptr(p.Vm.P_pmap), fastret, refp, tlbp)
 
 		// XXX debug
 		if tinfo.Current() != mynote {
@@ -459,7 +460,10 @@ func (p *Proc_t) run(tf *[defs.TFSIZE]uintptr, tid defs.Tid_t) {
 		// did we switch pmaps? if so, the old pmap may need to be
 		// freed.
 		if odec {
-			mem.Physmem.Dec_pmap(mem.Pa_t(op_pmap))
+			opmap := mem.Pa_t(op_pmap)
+			otlbp := mem.Physmem.Tlbaddr(opmap)
+			runtime.And64(otlbp, ^uint64(1 << cpunum))
+			mem.Physmem.Dec_pmap(opmap)
 		}
 	}
 	res.Resend()

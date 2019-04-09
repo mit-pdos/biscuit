@@ -214,6 +214,13 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 	}
 	apcnt := ncpu - 1
 
+	// add CPU 0's APIC ID
+	_, _, _, apicid := runtime.Cpuid(0xb, 0)
+	_cpus.apicids[0] = apicid
+	vm.Cpumap(func(num int) uint32 {
+		return _cpus.apicids[num]
+	})
+
 	if apcnt == 0 {
 		fmt.Printf("uniprocessor\n")
 		return
@@ -362,9 +369,6 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 	// tell the CPUs to call ap_entry
 	atomic.StoreUintptr(&ss[sproceed], uintptr(apcnt))
 
-	// add CPU 0's APIC ID
-	_, _, _, apicid := runtime.Cpuid(0xb, 0)
-	_cpus.apicids[0] = apicid
 	// wait until all APs have added their APIC IDs, which we will use to
 	// determine which APs to enable. skip slot 0 since it belongs to the
 	// CPU executing this code, the BSP. in theory, we could get the APIC
@@ -1017,14 +1021,6 @@ func cpuchk() {
 		panic("sysenter not supported")
 	}
 
-	_, _, _, dx = cpuid(0x80000007, 0)
-	invartsc := uint32(1 << 8)
-	if dx&invartsc == 0 {
-		// no qemu CPUs support invariant tsc, but my hardware does...
-		//panic("invariant tsc not supported")
-		fmt.Printf("invariant TSC not supported\n")
-	}
-
 	avx := cx & (1 << 28) != 0
 	sse3 := cx & (1 << 0) != 0
 	ssse3 := cx & (1 << 9) != 0
@@ -1033,6 +1029,23 @@ func cpuchk() {
 	fmt.Printf("sse3 %v, ssse3 %v, sse41 %v, sse42 %v, avx %v\n", sse3, ssse3, sse41, sse42, avx)
 	if !sse42 {
 		panic("no sse42")
+	}
+
+	_, _, cx, _ = cpuid(1, 0)
+	x2apic := cx & (1 << 21) != 0
+	ia32_apic_base_msr := 0x1b
+	apic := runtime.Rdmsr(ia32_apic_base_msr)
+	x2apic_en := apic & (1 << 10) != 0
+	if x2apic && x2apic_en {
+		panic("x2APIC mode enabled; fix IPI code to use 32 bit destinations")
+	}
+
+	_, _, _, dx = cpuid(0x80000007, 0)
+	invartsc := uint32(1 << 8)
+	if dx&invartsc == 0 {
+		// no qemu CPUs support invariant tsc, but my hardware does...
+		//panic("invariant tsc not supported")
+		fmt.Printf("invariant TSC not supported\n")
 	}
 
 	_, bx, _, _ := cpuid(0x7, 0)

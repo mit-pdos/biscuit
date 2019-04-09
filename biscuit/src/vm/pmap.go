@@ -5,6 +5,7 @@ import "fmt"
 import "sync"
 import "sync/atomic"
 import "runtime"
+import "math/bits"
 
 import "defs"
 import "mem"
@@ -190,18 +191,27 @@ func Ptefork(cpmap, ppmap *mem.Pmap_t, start, end int,
 }
 
 var Numtlbs int = 1
-var _tlblock = sync.Mutex{}
 
-func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
+var _tlbslocks [runtime.MAXCPUS]struct {
+	sync.Mutex
+	_ [64-8]uint8
+}
+
+func tlb_shootdown(p_pmap mem.Pa_t, tlb_ref *uint64, va uintptr, pgcount int) {
 	if Numtlbs == 1 {
 		runtime.TLBflush()
 		return
 	}
-	_tlblock.Lock()
-	defer _tlblock.Unlock()
+	stalecpus := atomic.LoadUint64(tlb_ref)
 
-	atomic.StoreInt64(&runtime.Tlbshoot.Waitfor, int64(Numtlbs))
-	atomic.StoreUintptr(&runtime.Tlbshoot.P_pmap, p_pmap)
+	me := runtime.CPUHint()
+	tlock := &_tlbslocks[me]
+	tlock.Lock()
+	defer tlock.Unlock()
+
+	mytlbs := &runtime.Tlbshoots.States[me]
+	mytlbs.Cpum = 0
+	atomic.StoreUintptr(&mytlbs.P_pmap, uintptr(p_pmap))
 
 	lapaddr := 0xfee00000
 	lap := (*[mem.PGSIZE / 4]uint32)(unsafe.Pointer(uintptr(lapaddr)))
@@ -221,16 +231,39 @@ func tlb_shootdown(p_pmap, va uintptr, pgcount int) {
 	}
 
 	tlbshootvec := 70
-	// broadcast shootdown
-	allandself := 2
-	low := ipilow(allandself, 0, tlbshootvec)
-	icrw(0, low)
+	// this code broadcasts a TLB shootdown
+	//allandself := 2
+	//low := ipilow(allandself, 0, tlbshootvec)
+	//icrw(0, low)
+
+	// targeted TLB shootdowns
+	low := ipilow(0, 0, tlbshootvec)
+	setbits := bits.OnesCount64(stalecpus)
+	did := 0
+	for i := 0; did < setbits; i++ {
+		if (1 << uint(i)) & stalecpus != 0 {
+			apicid := _numtoapicid(i)
+			icrw(apicid << 24, low)
+			did++
+			if did == setbits {
+				break
+			}
+		}
+	}
 
 	// if we make it here, the IPI must have been sent and thus we
 	// shouldn't spin in this loop for very long. this loop does not
 	// contain a stack check and thus cannot be preempted by the runtime.
-	for atomic.LoadInt64(&runtime.Tlbshoot.Waitfor) != 0 {
+
+	// due to a limitation of the current implementation, a CPU that
+	// receives the TLB shootdown IPI may not know which pmap the IPI was
+	// sent for. thus that CPU must acknowledge all outstanding TLB
+	// shootdowns. for this reason, Cpum may have more bits set than
+	// requested, so wait for at least those bits from the CPUs to which we
+	// sent shootdowns.
+	for atomic.LoadUint64(&mytlbs.Cpum) & stalecpus != stalecpus {
 	}
+	mytlbs.P_pmap = 0
 }
 
 var kplock = sync.Mutex{}

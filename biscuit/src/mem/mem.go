@@ -65,11 +65,19 @@ func (phys *Physmem_t) Refaddr(p_pg Pa_t) (*int32, uint32) {
 	return &phys.Pgs[idx].Refcnt, idx
 }
 
+func (phys *Physmem_t) Tlbaddr(p_pg Pa_t) *uint64 {
+	idx := _pg2pgn(p_pg) - phys.startn
+	return &phys.Pgs[idx].Cpumask
+}
+
 // can account for up to 16TB of mem
 type Physpg_t struct {
 	Refcnt int32
 	// index into pgs of next page on free list
 	nexti uint32
+	// Bitmask where bit n is set if CPU w/logical ID n loaded this page
+	// (which is a pmap) into its cr3 register
+	Cpumask uint64
 }
 
 type Physmem_t struct {

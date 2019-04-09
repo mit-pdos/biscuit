@@ -291,21 +291,33 @@ func (as *Vm_t) Unusedva_inner(startva, len int) int {
 	return ret
 }
 
+var _numtoapicid func(int) uint32
+
+func Cpumap(f func(int) uint32) {
+	_numtoapicid = f
+}
+
 func (as *Vm_t) Tlbshoot(startva uintptr, pgcount int) {
 	if pgcount == 0 {
 		return
 	}
 	as.Lockassert_pmap()
+	if _numtoapicid == nil {
+		panic("cpumap not initted")
+	}
+
 	// fast path: the pmap is loaded in exactly one CPU's cr3, and it
 	// happens to be this CPU. we detect that one CPU has the pmap loaded
 	// by a pmap ref count == 2 (1 for Proc_t ref, 1 for CPU).
 	p_pmap := as.P_pmap
 	refp, _ := mem.Physmem.Refaddr(p_pmap)
+	// XXX XXX XXX use Tlbaddr to implement Condflush more simply
 	if runtime.Condflush(refp, uintptr(p_pmap), startva, pgcount) {
 		return
 	}
+	tlbp := mem.Physmem.Tlbaddr(p_pmap)
 	// slow path, must send TLB shootdowns
-	tlb_shootdown(uintptr(as.P_pmap), startva, pgcount)
+	tlb_shootdown(as.P_pmap, tlbp, startva, pgcount)
 }
 
 // returns true if the fault was handled successfully
