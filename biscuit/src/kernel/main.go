@@ -674,19 +674,28 @@ func loping() {
 
 var _nflip int
 
-func lprint(name string, _sl interface{}) {
+func lprint(name string, _sl interface{}, clear bool) {
 	fmt.Printf("%s\n", name)
 	var dest []uint64
 	switch sl := _sl.(type) {
 	default:
-		fmt.Printf("** unhandled type\n")
+		fmt.Printf("** unhandled type: %T\n", sl)
 		return
 	case []uint64:
-		dest = sl
+		dest = make([]uint64, len(sl))
+		copy(dest, sl)
+		if clear {
+			for i := range sl {
+				sl[i] = 0
+			}
+		}
 	case []int:
 		dest = make([]uint64, len(sl))
 		for i := range sl {
 			dest[i] = uint64(sl[i])
+			if clear {
+				sl[i] = 0
+			}
 		}
 	}
 	for i, s := range dest {
@@ -748,9 +757,34 @@ func kbd_daemon(cons *cons_t, km map[int]byte) {
 				debug.SetTraceback("all")
 				panic("yahoo")
 			}
+		} else if c == '#' {
+			//proc.Dyump()
+			//preset("Fasts", &proc.Fasts)
+			//preset("Slows", &proc.Slows)
+			//lprint("Nirqs", stats.Nirqs[:])
+
+			fmt.Printf("toggle\n")
+			runtime.GCDebugToggle()
 		} else if c == '@' {
+			//bnet.Nic_enable = !bnet.Nic_enable
+			//fmt.Printf("NIC enable: %v\n", bnet.Nic_enable)
+			//tabdump()
+		} else if c == ')' {
 			runtime.Freq *= 2
 			fmt.Printf("freq: %v\n", runtime.Freq)
+			//mem.Thresh *= 2
+			//fmt.Printf("thresh: %v\n", mem.Thresh)
+		} else if c == '(' {
+			if runtime.Freq != 1 {
+				runtime.Freq /= 2
+			}
+			fmt.Printf("freq: %v\n", runtime.Freq)
+
+			//if mem.Thresh != 1 {
+			//	mem.Thresh /= 2
+			//}
+			//fmt.Printf("thresh: %v\n", mem.Thresh)
+
 			//proc.Lims = !proc.Lims
 			//fmt.Printf("Lims: %v\n", proc.Lims)
 
@@ -1516,6 +1550,7 @@ const diskfs = false
 
 func main() {
 	res.Kernel = true
+	//runtime.GCDebug(1)
 	// magic loop
 	//if rand.Int() != 0 {
 	//	for {
