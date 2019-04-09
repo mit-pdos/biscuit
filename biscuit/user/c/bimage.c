@@ -30,6 +30,16 @@ static int lstn(uint16_t lport)
 	return ret;
 }
 
+static ulong nowms(void)
+{
+	struct timeval t;
+	int ret;
+	if ((ret = gettimeofday(&t, NULL)) < 0)
+		err(-1, "gettimeofday");
+	// ms
+	return t.tv_sec * 1000 + t.tv_usec / 1000;
+}
+
 // latency debugging code
 //ulong allw[100];
 //
@@ -99,6 +109,7 @@ int main(int argc, char **argv)
 	char buf[blksz];
 	size_t did = 0;
 	int mb = 1;
+	ulong stms = nowms();
 	for (;;) {
 		ssize_t bs = 0;
 		ssize_t r = 0;
@@ -125,7 +136,10 @@ int main(int argc, char **argv)
 		err(-1, "close");
 	if (close(fd) == -1)
 		err(-1, "close");
-	fprintf(stderr, "wrote %zu bytes. rebooting.\n", did);
+	ulong elap = nowms() - stms;
+	double secs = (double)elap / 1000;
+	fprintf(stderr, "wrote %zu bytes (%.2fMB/s). rebooting.\n", did,
+	    (double)(did>>20)/secs);
 	reboot();
 	return 0;
 }

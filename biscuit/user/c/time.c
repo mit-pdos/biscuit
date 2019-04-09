@@ -1,6 +1,6 @@
 #include <litc.h>
 
-ulong now()
+ulong now(void)
 {
 	struct timeval t;
 	int ret;
