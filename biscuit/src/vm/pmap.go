@@ -223,11 +223,13 @@ func tlb_shootdown(p_pmap mem.Pa_t, tlb_ref *uint64, va uintptr, pgcount int) {
 		icrh := 0x310 / 4
 		icrl := 0x300 / 4
 		// use sync to guarantee order
+		fl := runtime.Pushcli()
 		atomic.StoreUint32(&lap[icrh], hi)
 		atomic.StoreUint32(&lap[icrl], low)
 		ipisent := uint32(1 << 12)
 		for atomic.LoadUint32(&lap[icrl])&ipisent != 0 {
 		}
+		runtime.Popcli(fl)
 	}
 
 	tlbshootvec := 70
@@ -245,9 +247,6 @@ func tlb_shootdown(p_pmap mem.Pa_t, tlb_ref *uint64, va uintptr, pgcount int) {
 			apicid := _numtoapicid(i)
 			icrw(apicid << 24, low)
 			did++
-			if did == setbits {
-				break
-			}
 		}
 	}
 
