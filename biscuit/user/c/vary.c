@@ -46,6 +46,7 @@ static void fexec(char * const args[])
 	if (!fop)
 		err(-1, "fdopen");
 
+	long this = -1;
 	char buf[256];
 	while (fgets(buf, sizeof(buf), fop) != NULL) {
 		char *h;
@@ -57,6 +58,7 @@ static void fexec(char * const args[])
 			vmax = (t > vmax) ? t : vmax;
 			vn++;
 			vtot += t;
+			this = t;
 		}
 	}
 	if (ferror(fop))
@@ -67,8 +69,11 @@ static void fexec(char * const args[])
 	fclose(fop);
 	close(p[0]);
 	printf("highest variance: %.3f (%ld / %ld), avg %.3f"
-	    " (%ld / %ld)\n", (double)vmax / vmin, vmax, vmin,
-	    (double)vtot / vn, vtot, vn);
+	    //" (%ld / %ld)\n",
+	    " (%ld)\n",
+	    (double)vmax / vmin, vmax, vmin, (double)vtot / vn,
+	    //vtot, vn);
+	    this);
 	printf("   (took %ld ms)\n", nowms() - st);
 }
 
