@@ -494,6 +494,7 @@ long sys_prof(long, long, long, long);
 #define		PROF_EV_L2_LD_HITS			(1ul << 9)
 	// "all iTLB misses that cause a page walk"
 #define		PROF_EV_ITLB_LOAD_MISS_ANY		(1ul << 10)
+#define		PROF_EV_CYCLES_STALLS_LDM_PENDING	(1ul << 11)
 
 // PMU event flags
 #define		PROF_EVF_OS		(1ul << 0)

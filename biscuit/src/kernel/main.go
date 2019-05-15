@@ -1190,23 +1190,26 @@ const (
 	// if you modify the order of these flags, you must update them in libc
 	// too.
 	// architectural
-	EV_UNHALTED_CORE_CYCLES pmevid_t = 1 << iota
-	EV_LLC_MISSES           pmevid_t = 1 << iota
-	EV_LLC_REFS             pmevid_t = 1 << iota
-	EV_BRANCH_INSTR_RETIRED pmevid_t = 1 << iota
-	EV_BRANCH_MISS_RETIRED  pmevid_t = 1 << iota
-	EV_INSTR_RETIRED        pmevid_t = 1 << iota
+	EV_UNHALTED_CORE_CYCLES pmevid_t = 1 << 0
+	EV_LLC_MISSES           pmevid_t = 1 << 1
+	EV_LLC_REFS             pmevid_t = 1 << 2
+	EV_BRANCH_INSTR_RETIRED pmevid_t = 1 << 3
+	EV_BRANCH_MISS_RETIRED  pmevid_t = 1 << 4
+	EV_INSTR_RETIRED        pmevid_t = 1 << 5
 	// non-architectural
 	// "all TLB misses that cause a page walk"
-	EV_DTLB_LOAD_MISS_ANY pmevid_t = 1 << iota
+	EV_DTLB_LOAD_MISS_ANY pmevid_t = 1 << 6
 	// "number of completed walks due to miss in sTLB"
-	EV_DTLB_LOAD_MISS_STLB pmevid_t = 1 << iota
+	EV_DTLB_LOAD_MISS_STLB pmevid_t = 1 << 7
 	// "retired stores that missed in the dTLB"
-	EV_STORE_DTLB_MISS pmevid_t = 1 << iota
-	EV_L2_LD_HITS      pmevid_t = 1 << iota
+	EV_STORE_DTLB_MISS pmevid_t = 1 << 8
+	EV_L2_LD_HITS      pmevid_t = 1 << 9
 	// "Counts the number of misses in all levels of the ITLB which causes
 	// a page walk."
-	EV_ITLB_LOAD_MISS_ANY pmevid_t = 1 << iota
+	EV_ITLB_LOAD_MISS_ANY pmevid_t = 1 << 10
+	// "Counts number of cycles nothing is executed on any execution port,
+	// while there was at least one pending demand load request."
+	EV_CYCLES_STALLS_LDM_PENDING pmevid_t = 1 << 11
 )
 
 type pmflag_t uint
@@ -1284,8 +1287,9 @@ type intelpmc_t struct {
 }
 
 type pmevent_t struct {
-	event int
-	umask int
+	event uint8
+	umask uint8
+	cmask uint8
 }
 
 func (ip *intelprof_t) _disableall() {
@@ -1319,8 +1323,8 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	usr := 1 << 16
 	os := 1 << 17
 	en := 1 << 22
-	event := ev.event
-	umask := ev.umask << 8
+	event := int(ev.event)
+	umask := int(ev.umask) << 8
 	v := umask | event | en
 	if pf&EVF_OS != 0 {
 		v |= os
@@ -1331,6 +1335,8 @@ func (ip *intelprof_t) _ev2msr(eid pmevid_t, pf pmflag_t) int {
 	if pf&(EVF_OS|EVF_USR) == 0 {
 		v |= os | usr
 	}
+	cmask := ev.cmask
+	v |= int(cmask) << 24
 	return v
 }
 
@@ -1372,37 +1378,50 @@ func (ip *intelprof_t) prof_init(npmc uint) {
 	ip.pmcs = make([]intelpmc_t, npmc)
 	// architectural events
 	ip.events = map[pmevid_t]pmevent_t{
-		EV_UNHALTED_CORE_CYCLES: {0x3c, 0},
-		EV_LLC_MISSES:           {0x2e, 0x41},
-		EV_LLC_REFS:             {0x2e, 0x4f},
-		EV_BRANCH_INSTR_RETIRED: {0xc4, 0x0},
-		EV_BRANCH_MISS_RETIRED:  {0xc5, 0x0},
-		EV_INSTR_RETIRED:        {0xc0, 0x0},
+		EV_UNHALTED_CORE_CYCLES: {0x3c, 0, 0x0},
+		EV_LLC_MISSES:           {0x2e, 0x41, 0x0},
+		EV_LLC_REFS:             {0x2e, 0x4f, 0x0},
+		EV_BRANCH_INSTR_RETIRED: {0xc4, 0x0, 0x0},
+		EV_BRANCH_MISS_RETIRED:  {0xc5, 0x0, 0x0},
+		EV_INSTR_RETIRED:        {0xc0, 0x0, 0x0},
 	}
 
 	_xeon5000 := map[pmevid_t]pmevent_t{
-		EV_DTLB_LOAD_MISS_ANY:  {0x08, 0x1},
-		EV_DTLB_LOAD_MISS_STLB: {0x08, 0x2},
-		EV_STORE_DTLB_MISS:     {0x0c, 0x1},
+		EV_DTLB_LOAD_MISS_ANY:  {0x08, 0x1, 0x0},
+		EV_DTLB_LOAD_MISS_STLB: {0x08, 0x2, 0x0},
+		EV_STORE_DTLB_MISS:     {0x0c, 0x1, 0x0},
 		// XXX following counts misses in "all levels of the iTLB which
 		// cause a page walk"; probably better to use (0xc8, 0x20)
 		// (event, umask) instead which counts instructions retired
 		// which "missed in the iTLB when the instruction was fetched"
-		EV_ITLB_LOAD_MISS_ANY: {0x85, 0x1},
+		EV_ITLB_LOAD_MISS_ANY: {0x85, 0x1, 0x0},
 		//EV_WTF1:
 		//    {0x49, 0x1},
 		//EV_WTF2:
 		//    {0x14, 0x2},
-		EV_L2_LD_HITS: {0x24, 0x1},
+		EV_L2_LD_HITS: {0x24, 0x1, 0x0},
+	}
+	_xeone5e7 := map[pmevid_t]pmevent_t{
+		// As of January 2019 version, Intel vol 3 doesn't have this
+		// event for CPU 06_afh (yet?); I found this event in Intel's
+		// perfmon database.
+		EV_CYCLES_STALLS_LDM_PENDING: {0xa3, 0x06, 0x06},
 	}
 
-	dispmodel, dispfamily := cpuidfamily()
-
-	if dispfamily == 0x6 && dispmodel == 0x1e {
-		for k, v := range _xeon5000 {
-			ip.events[k] = v
+	cpuevents := func(fam, mod uint, evs map[pmevid_t]pmevent_t) {
+		dispmodel, dispfamily := cpuidfamily()
+		if dispfamily == fam && dispmodel == mod {
+			fmt.Printf("Load CPU performance events for CPU %#x " +
+			    "%#x\n", fam, mod)
+			for k, v := range evs {
+				ip.events[k] = v
+			}
 		}
 	}
+
+	cpuevents(0x6, 0x1e, _xeon5000)
+	cpuevents(0x6, 0x4f, _xeone5e7)
+
 	_, _, ecx, _ := cpuid(0x1, 0)
 	g1 := ecx&(1<<15) != 0
 	eax, _, _, _ := cpuid(0xa, 0)

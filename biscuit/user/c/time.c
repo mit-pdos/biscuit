@@ -11,12 +11,31 @@ ulong now(void)
 	return t.tv_sec * 1000 + t.tv_usec / 1000;
 }
 
+static struct {
+	char *name;
+	long evid;
+	char *desc;
+} evs[] = {
+	{"cpu", PROF_EV_UNHALTED_CORE_CYCLES, "unhalted CPU cycles"},
+	{"binst", PROF_EV_BRANCH_INSTR_RETIRED, "branch instructions"},
+	{"bmiss", PROF_EV_BRANCH_MISS_RETIRED, "branch misses"},
+	{"llcmiss", PROF_EV_LLC_MISSES, "LLC references"},
+	{"llcref", PROF_EV_LLC_REFS, "LLC misses"},
+	{"dtlbmissl", PROF_EV_DTLB_LOAD_MISS_ANY, "dTLB load misses"},
+	{"dtlbmisss", PROF_EV_STORE_DTLB_MISS, "dTLB store misses"},
+	{"itlbmiss", PROF_EV_ITLB_LOAD_MISS_ANY, "iTLB misses"},
+	{"ins", PROF_EV_INSTR_RETIRED, "instructions retired"},
+	{"ldm_stalls", PROF_EV_CYCLES_STALLS_LDM_PENDING,
+	    "cycles w/idle execution ports and >0 outstanding loads"},
+};
+const int nevs = sizeof(evs)/sizeof(evs[0]);
+
 __attribute__((noreturn))
 void usage(char *pre)
 {
 	if (pre)
 		fprintf(stderr, "%s\n\n", pre);
-	errx(-1, "usage: %s [-bgr] [-sc pmf] [-e evt] [-i int] <command> "
+	fprintf(stderr, "usage: %s [-bgr] [-sc pmf] [-e evt] [-i int] <command> "
 	    "<arg1> ...\n"
 	         "\n"
 		 "-b     record backtrace; only used with -s\n"
@@ -35,18 +54,13 @@ void usage(char *pre)
 		 "       counting, -e may be specified more than once.\n"
 		 "evt    a string indicating which symbolic event the PMU\n"
 		 "       should monitor. valid strings are:\n"
-		 "       \"cpu\"     - unhalted cpu cycles\n"
-		 "       \"binst\"   - branch instructions\n"
-		 "       \"bmiss\"   - branch misses\n"
-		 "       \"llcref\" - LLC references\n"
-		 "       \"llcmiss\" - LLC misses\n"
-		 "       \"dtlbmissl\" - dTLB load misses\n"
-		 "       \"dtlbmisss\" - dTLB store misses\n"
-		 "       \"itlbmiss\" - iTLB misses\n"
-		 "       \"ins\" - instructions retired\n"
-		 "-i int sample after int PMU events. only used with -s.\n"
-		 "\n"
 		 , __progname);
+	for (int i = 0; i < nevs; i++)
+		fprintf(stderr, "    %10s - %s\n", evs[i].name,
+		    evs[i].desc);
+	fprintf(stderr, "-i int sample after int PMU events. only used with -s.\n"
+ 	    "\n");
+	exit(-1);
 }
 
 long ppmf(char *pmf)
@@ -63,21 +77,6 @@ long ppmf(char *pmf)
 
 long evtadd(char *evt)
 {
-	struct {
-		char *name;
-		long evid;
-	} evs[] = {
-		{"cpu", PROF_EV_UNHALTED_CORE_CYCLES},
-		{"binst", PROF_EV_BRANCH_INSTR_RETIRED},
-		{"bmiss", PROF_EV_BRANCH_MISS_RETIRED},
-		{"llcmiss", PROF_EV_LLC_MISSES},
-		{"llcref", PROF_EV_LLC_REFS},
-		{"dtlbmissl", PROF_EV_DTLB_LOAD_MISS_ANY},
-		{"dtlbmisss", PROF_EV_STORE_DTLB_MISS},
-		{"itlbmiss", PROF_EV_ITLB_LOAD_MISS_ANY},
-		{"ins", PROF_EV_INSTR_RETIRED},
-	};
-	const int nevs = sizeof(evs)/sizeof(evs[0]);
 	int i;
 	for (i = 0; i < nevs; i++) {
 		if (strcmp(evs[i].name, evt) != 0)
