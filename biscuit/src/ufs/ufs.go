@@ -227,7 +227,7 @@ func openDisk(d string) *ahci_disk_t {
 }
 
 func BootFS(dst string) *Ufs_t {
-	log.Printf("reboot %v ...\n", dst)
+	//log.Printf("reboot %v ...\n", dst)
 	ufs := &Ufs_t{}
 	ufs.ahci = openDisk(dst)
 	ufs.cwd = ufs.fs.MkRootCwd()
