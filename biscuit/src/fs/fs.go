@@ -309,10 +309,6 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 
 	fs.istats.Nrename.Inc()
 
-	// one rename at the time
-	_renamelock.Lock()
-	defer _renamelock.Unlock()
-
 	if fs_debug {
 		fmt.Printf("fs_rename: src %v dst %v %v\n", oldp, newp, cwd)
 	}
@@ -337,6 +333,13 @@ func (fs *Fs_t) Fs_op_rename(oldp, newp ustr.Ustr, cwd *fd.Cwd_t) ([]*imemnode_t
 	npar, dead, err := fs.fs_namei_locked(opid, ndirs, cwd, "")
 	if err != 0 {
 		return []*imemnode_t{opar, ochild}, dead, err
+	}
+
+	// prevent orphaned loops due to concurrent renames by serializing on
+	// this lock; only renames of directories need to be serialized.
+	if ochild.itype == I_DIR {
+		_renamelock.Lock()
+		defer _renamelock.Unlock()
 	}
 
 	// _isancestor unlocks npar during the walk. verify that ochild is not

@@ -427,11 +427,12 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 			if !hyperthreads && _cpus.htmask & lapid != 0 {
 				continue
 			}
-			// enable CPUs on packages in ascending order
 			var nextpkg int
 			if robin {
+				// split CPUs between packages
 				nextpkg = (joinedaps + 1) % _cpus.npackages
 			} else {
+				// enable CPUs on packages in ascending order
 				nextpkg = (joinedaps + 1) / cpuperpack
 			}
 			pkg := int(lapid >> _cpus.packageshift)
