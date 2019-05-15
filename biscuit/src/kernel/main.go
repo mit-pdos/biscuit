@@ -394,8 +394,22 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 	if !hyperthreads {
 		hts = "no"
 	}
-	fmt.Printf("Joining at most %v CPUs (%s hyperthreads) on %v packages \n",
-	    maxjoin, hts, util.Roundup(maxjoin, cpuperpack) / cpuperpack)
+
+	// join CPUs round-robin across packages?
+	const robin bool = true
+
+	totpacks := util.Roundup(maxjoin, cpuperpack) / cpuperpack
+	how := "colocated on"
+	if robin {
+		how = "split between"
+		if maxjoin > _cpus.npackages {
+			totpacks = _cpus.npackages
+		} else {
+			totpacks = maxjoin
+		}
+	}
+	fmt.Printf("Joining at most %v CPUs %s packages (%s hyperthreads) on %v packages\n",
+	    maxjoin, how, hts, totpacks)
 
 	availaps := make(map[int]uint32)
 	for i := 1; i < apcnt + 1; i++ {
@@ -404,6 +418,8 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 
 	joinedaps := 0
 	var joinmask uint64
+	// assumes BSP is on package 0
+	packs := map[int]int{int(_cpus.apicids[0] >> _cpus.packageshift): 1}
 	for joinedaps < maxjoin - 1 && len(availaps) != 0 {
 		old := joinedaps
 		for lid, lapid := range availaps {
@@ -412,10 +428,17 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 				continue
 			}
 			// enable CPUs on packages in ascending order
+			var nextpkg int
+			if robin {
+				nextpkg = (joinedaps + 1) % _cpus.npackages
+			} else {
+				nextpkg = (joinedaps + 1) / cpuperpack
+			}
 			pkg := int(lapid >> _cpus.packageshift)
-			if pkg != (joinedaps + 1) / cpuperpack {
+			if pkg != nextpkg {
 				continue
 			}
+			packs[pkg] = packs[pkg] + 1
 			delete(availaps, lid)
 			joinmask |= 1 << uint(lid)
 			joinedaps++
@@ -438,6 +461,10 @@ func cpus_start(ncpu int, maxjoin int, hyperthreads bool) {
 	set_cpucount(joinedaps + 1)
 
 	fmt.Printf("done! %v APs found (%v joined)\n", ss[sapcnt], joinedaps)
+	fmt.Printf("Package counts:\n")
+	for k, v := range packs {
+		fmt.Printf("%3v: %3v\n", k, v)
+	}
 }
 
 var _cpus struct {
