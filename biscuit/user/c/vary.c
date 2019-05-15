@@ -12,7 +12,32 @@ nowms(void)
 	return tv.tv_sec*1000 + tv.tv_usec/1000;
 }
 
-static void fexec(char * const args[])
+__attribute__((unused))
+static void fexec_nofail(char * const args[])
+{
+	const int check = 0;
+	switch (fork()) {
+	case -1:
+		err(-1, "fork (%s)", args[0]);
+	case 0:
+		execvp(args[0], args);
+		err(-1, "exec (%s)", args[0]);
+	default:
+		{
+		int status;
+		if (wait(&status) == -1)
+			err(-1, "wait");
+		if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+			if (check)
+				err(-1, "child failed (%s)", args[0]);
+			else
+				fprintf(stderr, "child failed (%s)\n", args[0]);
+		}
+		}
+	}
+}
+
+static void forkmeasure(char * const args[])
 {
 	long st = nowms();
 
@@ -51,6 +76,7 @@ static void fexec(char * const args[])
 	while (fgets(buf, sizeof(buf), fop) != NULL) {
 		char *h;
 		const char * const pat = "ops: ";
+		//const char * const pat = "messages/sec: ";
 		if ((h = strstr(buf, pat)) != NULL) {
 			h += strlen(pat);
 			long t = strtol(h, NULL, 10);
@@ -102,8 +128,7 @@ int main(int argc, char **argv)
 	int runs = -1;
 	//char *bm = "c";
 	int c;
-	//while ((c = getopt(argc, argv, "n:s:b:")) != -1) {
-	while ((c = getopt(argc, argv, "n:s:r:")) != -1) {
+	while ((c = getopt(argc, argv, "gn:s:r:")) != -1) {
 		switch (c) {
 		default:
 			usage();
@@ -134,12 +159,18 @@ int main(int argc, char **argv)
 			printf("completed %d runs\n", r);
 			break;
 		}
-		int sleeps = random() % 5;
-		printf("%s threads, %s secs, sleep %d...\n", threads, secs, sleeps);
-		sleep(sleeps);
-		//char * const args[] = {"sfork", "-s", secs, "-b", bm, threads, NULL};
+		//int sleeps = random() % 5;
+		printf("%s threads, %s secs\n", threads, secs);
+		//printf("%s threads, %s secs, sleep %d...\n", threads, secs, sleeps);
+		//sleep(sleeps);
+
 		char * const args[] = {"pstat", "-s", secs, "-n", threads, NULL};
-		fexec(args);
+		forkmeasure(args);
+
+		//char * const rmt[] = {"rmtree", "./", NULL};
+		//fexec_nofail(rmt);
+		//char * const args[] = {"parrun", "-d", secs, "-m", threads, NULL};
+		//forkmeasure(args);
 	}
 
 	return 0;
