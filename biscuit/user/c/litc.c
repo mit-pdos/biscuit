@@ -2409,14 +2409,21 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 		int sig = 1;
 		int precmode = 0;
 		int prec = 6;
+		int minwidth = 0;
 		while (!done && *fmt && !isspace(*fmt)) {
 			char t = *fmt;
 			fmt++;
-			if (isdigit(t) && precmode) {
+			if (isdigit(t) || t == '-') {
 				char *nend;
-				long newprec = strtol(fmt - 1, &nend, 10);
-				if (newprec > 0 || t == '0') {
-					prec = newprec;
+				long num = strtol(fmt - 1, &nend, 10);
+				if (precmode) {
+					if (num > 0 || t == '0') {
+						prec = num;
+						fmt = nend;
+						continue;
+					}
+				} else {
+					minwidth = num;
 					fmt = nend;
 					continue;
 				}
@@ -2527,8 +2534,19 @@ _vprintf(const char *fmt, va_list ap, char *dst, char *end)
 					done = 1;
 					break;
 				}
+				int slen = strlen(s);
+				if (minwidth > 0 && minwidth > slen)
+					minwidth -= slen;
+				else if (minwidth < 0 && -minwidth > slen)
+					minwidth += slen;
+				else
+					minwidth = 0;
+				for (; minwidth > 0; minwidth--)
+					dst += wc(dst, end, ' ');
 				while (*s && (!precmode || prec-- > 0))
 					dst += wc(dst, end, *s++);
+				for (; minwidth < 0; minwidth++)
+					dst += wc(dst, end, ' ');
 				done = 1;
 				break;
 			}
