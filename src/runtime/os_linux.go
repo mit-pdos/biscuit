@@ -1006,7 +1006,9 @@ func sc_setup() {
 	// set divisor latch bit to set divisor bytes
 	Outb(com1 + 3, 0x80)
 
-	// set both bytes for divisor baud rate
+	// set both bytes for divisor baud rate (the denominator in the
+	// expression below is the baud rate)
+	//Outb(com1 + 0, 115200/9600)
 	Outb(com1 + 0, 115200/115200)
 	Outb(com1 + 1, 0)
 
