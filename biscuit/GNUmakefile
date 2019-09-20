@@ -85,7 +85,11 @@ SKELDEPS := $(shell find $(SKEL))
 
 CPUS := $(shell echo $${CPUS:-1})
 
-QOPTS := -m 8G -smp cpus=$(CPUS) -cpu Nehalem
+# qemu-system-x86_64: cannot set up guest memory 'pc.ram': Cannot allocate memory
+# 内存调小即可
+
+QOPTS := -m 2G -smp cpus=$(CPUS) -cpu Nehalem
+
 # for testing bhw2's configuration
 #QOPTS := -m 8G -cpu Nehalem -smp sockets=2,cores=10,threads=2
 
