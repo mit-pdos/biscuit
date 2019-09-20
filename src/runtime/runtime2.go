@@ -335,6 +335,10 @@ type stack struct {
 	hi uintptr
 }
 
+//type G struct {
+//	*g
+//}
+
 type g struct {
 	// Stack parameters.
 	// stack describes the actual stack memory: [stack.lo, stack.hi).
